@@ -6,6 +6,8 @@
 
 - alias: Kasa-x86
 
+- license: BSD-3-Clause license
+
 
 
 ### Mecocoa's Memory map
