@@ -28,6 +28,8 @@ MOV SI, str_ciallo
 MOV AH, 0
 INT 80H
 
+PUSH DS
+
 ; Load the main program
 MOV SI, str_progload
 MOV AH, 0
@@ -36,7 +38,16 @@ MOV AX, 0x0200
 MOV ES, AX
 MOV DS, AX
 codefileLoad16 0,0,10
-JMP 0x0200:0x1
+
+; Run the main program
+CALL 0x0200:0x1
+
+POP DS
+
+; End of the environment
+MOV SI, str_endenv
+MOV AH, 0
+INT 80H
 
 DbgStop
 
@@ -56,7 +67,9 @@ IRET
 
 ; ---- DATA ----
 str_ciallo:
-	DB "Loading the kernel (Real Mode)...", 10, 13, 0
+	DB "Kernel (real-16)...", 10, 13, 0
 str_progload:
-	DB "Loading the main program...", 10, 13, 0
+	DB "Loading the kernel of protect-32...", 10, 13, 0
+str_endenv:
+	DB "End of the base environment.", 10, 13, 0
 Endf
