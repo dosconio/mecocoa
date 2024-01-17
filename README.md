@@ -59,21 +59,21 @@
 
 ## Mecocoa's Segment Map
 
-| Segment | Description                   |
-| ------- | ----------------------------- |
-| 00      | *null*                        |
-| 01      | 4G R0 DATA                    |
-| 02      | Kernel 32 CODE                |
-| 03      | 4K STACK                      |
-| 04      | B8000 VIDEO                   |
-| 05      | 32-Protect Routine            |
-| 06      | App (Loaded by ENTRY-MBR) TSS |
-| 07      | Shell (R3 B32) TSS            |
-| 08      | Shell (R3 B32) LDT            |
-| 09      |                               |
-| 0A      |                               |
-| 0B      |                               |
-| 0C      |                               |
+| Segment | Ring | Description                   |
+| ------- | ---- | ----------------------------- |
+| 00      |      | *null*                        |
+| 01      |      | 4G R0 DATA                    |
+| 02      |      | Kernel 32 CODE                |
+| 03      |      | 4K STACK                      |
+| 04      |      | B8000 VIDEO                   |
+| 05      |      | 32-Protect Routine            |
+| 06      |      | 32-Protect Call Gate          |
+| 07      |      | App (Loaded by ENTRY-MBR) TSS |
+| 08      |      | Shell (R3 B32) TSS            |
+| 09      |      | Shell (R3 B32) LDT            |
+| 0A      |      |                               |
+| 0B      |      |                               |
+| 0C      |      |                               |
 
 
 
@@ -100,13 +100,55 @@
 
 
 
+## Mecocoa's Interrupts for Real-16
+
+
+
+Note
+
+- The **function identification** is stored by register `AH`.
+
+
+
+80H Usual Interrupts
+
+- 00H Print string of ASCIZ, without changing colors
+
+    - INP DS:SI -> address of the string
+
+    - OUT *None*
+
+
+
+## Mecocoa's Interrupts for Protect-32
+
+Segment `8*05` 
+
+
+
+| Identification     | Function       | IO                    |
+| ------------------ | -------------- | --------------------- |
+| 00 R_Terminate     | Terminate back |                       |
+| 01 R_Print         | Print String   | DS:ESI → ASCIZ string |
+| 02 R_Malloc        |                |                       |
+| 03 R_Mfree         |                |                       |
+| 04 R_DiskReadLBA28 |                |                       |
+|                    |                |                       |
+|                    |                |                       |
+
+
+
 ## Mecocoa's Source Files
 
 (defaultly at least **Intel-386**)
 
 - `BOOT.a` bootstrap, which is different from the bootstrap collected in UNISYM. 
 - `Kernel.asm` 16-bit program, set up the environment and routines for 32-bit protected system. 
-- `test.asm` ~a console shell~.
+- `Kernel32.asm` 
+- `Shell32.asm` console shell in protect-32 mode. This is going to combinated with *COTLAB*.
+- `hello.asm` a demonstration sub-program which will be created by `Shell32.asm` .
+
+
 
 
 
