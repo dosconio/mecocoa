@@ -1,0 +1,6 @@
+; Mecocoa by @dosconio
+; Opensrc under BSD 3-Clause License
+;
+
+RotPrint EQU 1
+

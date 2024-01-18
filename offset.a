@@ -1,0 +1,34 @@
+; Mecocoa by @dosconio
+; Opensrc under BSD 3-Clause License
+;
+%if MEM_PAGED_ENABLE==1
+	THISF_ADR EQU 0x80002000
+	GDT_LDDR  EQU 0x80007080
+	PDT_LDDR  EQU 0x80005000
+%else
+	;{TODO} Consider the case
+	THISF_ADR EQU 0x00002000
+	GDT_LDDR  EQU 0x00007080
+%endif
+
+IDT_ADDR  EQU 0x0000; - Interrupt Descriptor Table
+PDT_ADDR  EQU 0x5000; - Global Page Directory Table
+GDT_ADDR  EQU 0x7080; - Global Descriptor Table
+KPT_ADDR  EQU 0x8000; - Kernel(Shell) Page Table
+
+SEG16_GDT EQU 0x0708
+SEG16_MAP EQU 0x070C; - Memory Bit Map
+STACK_LEN EQU 0x1000
+
+; ---- ---- Segment Selectors ---- ----
+
+SegNull   EQU (8*0)
+SegData   EQU (8*1)
+SegCode   EQU (8*2)
+SegStack  EQU (8*3)
+SegVideo  EQU (8*4)
+SegRot    EQU (8*5)
+SegGate   EQU (8*6)
+SegTSS    EQU (8*7)
+SegShell  EQU (8*8); TSS
+SegShellT EQU (8*9); LDT

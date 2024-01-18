@@ -3,13 +3,17 @@ vhd=E:\vhd.vhd
 vmbox=E:\software\vmbox\VBoxManage.exe
 vmname=Kasa
 
-run: ../_obj/boot.bin ../_obj/kernel.bin ../_obj/Kernel32.bin ../_obj/Shell32.bin ../_obj/hello.bin
+build: ../_obj/boot.bin ../_obj/kernel.bin ../_obj/Kernel32.bin ../_obj/Shell32.bin ../_obj/helloa.bin ../_obj/hellob.bin
 	ffset $(vhd) ../_obj/boot.bin 0
 	ffset $(vhd) ../_obj/kernel.bin 1
 	ffset $(vhd) ../_obj/Kernel32.bin 9
 	ffset $(vhd) ../_obj/Shell32.bin 20
-	ffset $(vhd) ../_obj/hello.bin 50
+	ffset $(vhd) ../_obj/helloa.bin 50
+	ffset $(vhd) ../_obj/hellob.bin 60
+
+run: build
 	$(vmbox) startvm $(vmname)
+
 ../_obj/boot.bin: BOOT.a
 	$(asm) BOOT.a -o ../_obj/boot.bin -I../unisym/inc/Kasha/n_
 ../_obj/kernel.bin: Kernel.asm
@@ -18,6 +22,8 @@ run: ../_obj/boot.bin ../_obj/kernel.bin ../_obj/Kernel32.bin ../_obj/Shell32.bi
 	$(asm) Kernel32.asm -o ../_obj/Kernel32.bin -I../unisym/inc/Kasha/n_
 ../_obj/Shell32.bin: Shell32.asm
 	$(asm) Shell32.asm -o ../_obj/Shell32.bin -I../unisym/inc/Kasha/n_
-../_obj/hello.bin: hello.asm
-	$(asm) hello.asm -o ../_obj/hello.bin -I../unisym/inc/Kasha/n_
+../_obj/helloa.bin: helloa.asm
+	$(asm) helloa.asm -o ../_obj/helloa.bin -I../unisym/inc/Kasha/n_
+../_obj/hellob.bin: hellob.asm
+	$(asm) hellob.asm -o ../_obj/hellob.bin -I../unisym/inc/Kasha/n_
 
