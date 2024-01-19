@@ -4,7 +4,38 @@
 F_GDTDptrStruct_32:
 	GDTDptrStruct EAX,EBX,ECX
 	RET
-
+F_TSSStruct3:
+	TSSStruct_Mecocoa
+	RET 4*1
+F_MemAllocSuperv:; DS:GlbArea ECX->EAX
+	PUSH EBX
+	OR ECX,ECX
+	JZ R_MemAllocS_End
+	MOV EAX,[SvpAllocPtr]
+	MOV EBX,EAX
+	ADD EBX,ECX
+	CMP EBX,0x7FFFF; demoPage {TODO ISSUE}
+	JBE R_MemAllocS_Next
+	XOR EAX,EAX
+	JMP R_MemAllocS_End
+	R_MemAllocS_Next:
+	ADD DWORD[SvpAllocPtr],ECX
+	DEC EBX
+	AND EBX,0xFFFFF000
+	R_MemAllocS_Loop:
+	CMP EBX,EAX
+	JB R_MemAllocS_End; E.G. 0x1000 < 0x1001
+	CALL RR_PageRegister
+	CMP EBX,0
+	JZ R_MemAllocS_End; demoPage {TODO ISSUE}
+	SUB EBX,0x1000
+	JMP R_MemAllocS_Loop
+	R_MemAllocS_End:
+	POP EBX
+	RET
+	RR_PageRegister:
+		PageRegister
+	RET
 
 ;[Routines protect-32 mode]
 APISymbolTable:; till Routine
@@ -28,21 +59,19 @@ APISymbolTable:; till Routine
 		DD R_PrintDwordCursor-__Routine
 		DW SegRot,0
 __Routine:
-RoutineGate:; EDI=FUNCTION
-	PUSHAD
+RoutineGate:; EDI=FUNCTION RoutIn:{DS=SegData}
+	; PUSHAD
 	PUSH DS
 	PUSH EAX
 	MOV EAX, SegData
-	MOV DS,EAX
-	POP EAX
-	MOV EAX, EDI
-	CMP DWORD[THISF_ADR+RoutineNo], EAX
+	MOV DS, EAX
+	CMP DWORD[THISF_ADR+RoutineNo], EDI
 	JB RoutineGateEnd
-	SHL EAX, 3; MUL8
-	CALL FAR [THISF_ADR+rot0000+EAX]
+	POP EAX
+	CALL FAR [THISF_ADR+rot0000+EDI*8]
 	RoutineGateEnd:
 	POP DS
-	POPAD
+	; POPAD
 	RETF
 R_Terminate:; 00 and other rontine point to here
 	;;	POP EDX; STORE
@@ -75,15 +104,40 @@ R_Print:
 	POP ES
 	RETF
 	ALIGN 16
-R_Malloc:; ecx=length ret"eax=start"
-	;;	PUSH DS
-	;;	MOV EAX,8*1
-	;;	MOV DS,EAX
-	;;	MOV EAX,[DS:THISF_ADR+RamAllocPtr]
-	;;	ADD DWORD[DS:THISF_ADR+RamAllocPtr],ECX
-	;;	POP DS
-	RETF
-	ALIGN 16
+R_Malloc:; ecx=length ret"eax=start" (user-area by manager)
+	; return [THISF_ADR+RamAllocPtr]++
+    PUSH EBX
+    OR ECX, ECX
+    JZ R_MemAlloc_End
+    MOV EAX, [THISF_ADR+UsrAllocPtr]
+    MOV EBX, EAX
+    ADD EBX, ECX
+    CMP EBX, 0x00400000; UserRight
+    JBE R_MemAlloc_Next
+    XOR EAX, EAX
+    JMP R_MemAlloc_End
+    R_MemAlloc_Next:
+    ADD DWORD[THISF_ADR+UsrAllocPtr], ECX
+    DEC EBX
+    AND EBX,0xFFFFF000
+
+    R_MemAlloc_Loop:
+        CMP EBX, EAX
+        JB R_MemAlloc_End
+        CALL RR_PageRegisterUser
+        CMP EBX, 0
+        JZ R_MemAlloc_End
+        SUB EBX, 0x1000
+        JMP R_MemAlloc_Loop
+
+    R_MemAlloc_End:
+    POP EBX
+	OR EAX, 0x80000000; Into Before Linear Address
+    RETF
+    RR_PageRegisterUser:
+        PageRegisterUser
+        RET
+    ALIGN 16
 R_Mfree:
 	;; ...
 	RETF
@@ -93,6 +147,7 @@ R_DiskReadLBA28:;eax=start, ds:ebx=buffer
 	RETF
 	ALIGN 16
 R_PrintDwordCursor:
+	PUSHAD
 	PUSH EAX
 	MOV EAX, SegVideo
 	MOV ES, EAX
@@ -104,6 +159,7 @@ R_PrintDwordCursor:
 	DbgEcho32 EDX, EAX
 	ADD AX,8
 	ConCursor AX
+	POPAD
 	RETF
 	ALIGN 16
 RoutineEnd:

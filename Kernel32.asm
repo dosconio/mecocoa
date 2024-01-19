@@ -8,9 +8,11 @@
 %include "debug.a"
 %include "video.a"
 %include "hdisk.a"
+%include "demos.a"
+%include "_debug.a"
 
 ; {Option Switch: 1 or others}
-IVT_TIMER_ENABLE EQU 1
+IVT_TIMER_ENABLE EQU 10
 MEM_PAGED_ENABLE EQU 1
 
 %include "offset.a" ; addresses and selectors
@@ -18,16 +20,13 @@ MEM_PAGED_ENABLE EQU 1
 
 [CPU 386]
 File
-
-CLI
-
-MOV [para_cs], CS
-MOV [para_ds], DS
-MOV WORD[quit_addr], quit
-
-MOV SI, msg
-MOV AH, 0
-INT 80H
+; Initial
+	MOV SI, msg
+	MOV AH, 0
+	INT 80H
+	MOV [para_cs], CS
+	MOV [para_ds], DS
+	MOV WORD[quit_addr], quit
 
 ; Paging keep(DS:0x0000)
 	PUSH DS
@@ -268,16 +267,51 @@ mainx:
 	SUB EBX, GDT_LDDR
 	DEC EBX
 	MOV DWORD[THISF_ADR+GDTPTR], GDT_LDDR+0x80
-	MOV WORD[THISF_ADR+GDTable], BX
+	MOV WORD[THISF_ADR+GDTable], 8*0x10-1;BX
 	LGDT [THISF_PH+GDTable]
 	MOV CX, SegTSS
 	LTR CX
 	ADD WORD[EAX+2], 1
+; Load Shell32
+	MOV ESI, THISF_ADR+msg_load_shell32
+	MOV EDI, RotPrint
+	CALL SegGate:0
+	PUSH DWORD 20
+	
+	;;; Check till here
+	CALL F_TSSStruct3
 
-STI
-mainloop: HLT
-	JMP mainloop
-DbgStop
+mov ecx, 160/4
+mov eax, 0x80100000
+Nihao:
+mov edx, [eax]
+mov edi, RotEchoDword
+call SegGate:0
+add eax, 4
+mov esi, THISF_ADR + msg_spaces
+mov edi, RotPrint
+call SegGate:0
+loop Nihao
+cli
+hlt
+db 0xe9
+dd -6
+
+msg_spaces: DB "        ",0
+
+
+; Load Subapp a and b
+	;;PUSH DWORD 50
+	;;CALL F_TSSStruct3
+	;;PUSH DWORD 60
+	;;CALL F_TSSStruct3
+; Enable Multi-tasks
+
+; Main loop
+	STI
+	HLT
+	DB 0xE9
+	DD -6; [32-b] mainloop: HLT, JMP mainloop
 
 ; Restore information then back to real-16 mode
 	;{TODO} Print quit message
@@ -290,53 +324,57 @@ DbgStop
 	MOV DS, BX
 	;
 	JMP FAR [DS:quit_addr]
+erro:
+	MOV ESI, msg_error
+	MOV EDI, RotPrint
+	CALL SegGate:0
 
 [BITS 16];--------------------------------
 quit:
-;{TODO Learn} Back to real-16 mode
-Addr20Disable; yo osdev.a
-; Return to real-16 mode
+;{TODO Learn} Return to real-16 mode
 	MOV SI, msg_return_to_real16
 	MOV AH, 0
 	INT 80H
+	Addr20Disable; yo osdev.a
 	;...
 ; Return to base environment
 	RETF
 
 ;[Procedure real-16 mode]
-; ---- Structure Segment Selector ----
-F_GDTDptrStruct:
+F_GDTDptrStruct:; Structure Segment Selector
 	%define _BSWAP_ALLOW_NOT
 	GDTDptrStruct EAX,EBX,ECX
 	RET
 
-quit_addr: DW 0
-para_cs: DW 0
-para_ds: DW 0
-GDTPTR: DD 0
-GDTDptr:
-GDTable:
-	DW 0
-	DD GDT_LDDR
-IVTDptr:
-	DW 0
-	DD IDT_ADDR
-msg: DB "Ciallo, Mecocoa~",10,13,0
-msg_paging: DB "Paging initializing...",10,13,0
-msg_setup_basic_gdt: DB "Setting up basic GDT...",10,13,0
-msg_return_to_real16: DB "Return to real-16 mode...",10,13,0
-msg_enter_32bit: DB "Enter 32-bit protected mode...",10,13,0
-msg_load_ivt: DB "Load IVT...",10,13,0
-msg_make_base_task: DB "Make base task...",10,13,0
-
-
-; msg_load_shell32: DB "Load Shell32...",10,13,0
-
-msg_quit_32bit: DB "Quit 32-bit protected mode...",10,13,0
-
-;
-msg_on_1s: DB "<Ring~> ",0
-
+;[Parameters]
+	SvpAllocPtr: DD 0x0000A000; Supervisor
+	UsrAllocPtr: DD 0x00100000
+	TSSNumb: DW 1
+	TSSCrt: DW 0; Kernel's=0
+	quit_addr: DW 0
+	para_cs: DW 0
+	para_ds: DW 0
+	GDTPTR: DD 0
+	GDTDptr:
+	GDTable:
+		DW 0
+		DD GDT_LDDR
+	IVTDptr:
+		DW 0
+		DD IDT_ADDR
+;[Data.Strings]
+	msg: DB "Ciallo, Mecocoa~",10,13,0
+	msg_paging: DB "Paging initializing...",10,13,0
+	msg_setup_basic_gdt: DB "Setting up basic GDT...",10,13,0
+	msg_return_to_real16: DB "Return to real-16 mode...",10,13,0
+	msg_enter_32bit: DB "Enter 32-bit protected mode...",10,13,0
+	msg_load_ivt: DB "Load IVT...",10,13,0
+	msg_make_base_task: DB "Make base task...",10,13,0
+	msg_load_shell32: DB "Load Shell32...",10,13,0
+	msg_quit_32bit: DB "Quit 32-bit protected mode...",10,13,0
+	;
+	msg_on_1s: DB "<Ring~> ",0
+	msg_error: DB "Error!",10,13,0
 [BITS 32]
 %include "kerrout32.a"; 32-bit kernel routines
 

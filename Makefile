@@ -21,7 +21,7 @@ bochs: build
 	$(asm) BOOT.a -o ../_obj/boot.bin -I../unisym/inc/Kasha/n_
 ../_obj/kernel.bin: Kernel.asm
 	$(asm) Kernel.asm -o ../_obj/kernel.bin -I../unisym/inc/Kasha/n_
-../_obj/Kernel32.bin: Kernel32.asm
+../_obj/Kernel32.bin: Kernel32.asm offset.a kerrout32.a routidx.a _debug.a
 	$(asm) Kernel32.asm -o ../_obj/Kernel32.bin -I../unisym/inc/Kasha/n_
 ../_obj/Shell32.bin: Shell32.asm
 	$(asm) Shell32.asm -o ../_obj/Shell32.bin -I../unisym/inc/Kasha/n_

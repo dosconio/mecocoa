@@ -13,6 +13,7 @@
 	GDT_LDDR  EQU 0x00007080
 %endif
 
+BaseLA    EQU 0x80002000; na TSSStruct_3 yo demos.a
 THISF_PH  EQU 0x2000
 
 IDT_ADDR  EQU 0x0000; - Interrupt Descriptor Table

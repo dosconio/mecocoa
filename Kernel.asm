@@ -15,6 +15,8 @@
 
 File
 
+CLI
+
 ; Set Stack, and Register the Interrupt Vector for 80H
 XOR AX, AX
 MOV ES, AX
