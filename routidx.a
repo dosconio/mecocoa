@@ -1,0 +1,10 @@
+; Mecocoa by @dosconio
+; Opensrc under BSD 3-Clause License
+;
+; Routine Indexes
+RotTerminal  EQU 0
+RotPrint     EQU 1
+RotMalloc    EQU 2
+RotMfree     EQU 3
+RotReaddisk  EQU 4
+RotEchoDword EQU 5

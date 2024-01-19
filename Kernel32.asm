@@ -14,7 +14,7 @@ IVT_TIMER_ENABLE EQU 1
 MEM_PAGED_ENABLE EQU 1
 
 %include "offset.a" ; addresses and selectors
-%include "routine.a"; index of routines
+%include "routidx.a"; index of routines
 
 [CPU 386]
 File
@@ -190,7 +190,6 @@ mainx:
 		MOV [ESI], EDX
 		ADD ESI,4
 		LOOP _IDTFill1
-	%if IVT_TIMER_ENABLE==1
 	; Setup timer
 	GateStruct Timer_70HINTHandler,SegCode,0x8E00; 32BIT R0
 	MOV [IDT_ADDR+8*0x70], EAX
@@ -200,6 +199,7 @@ mainx:
 	MOV EAX, ESI
 	MOV [THISF_ADR+IVTDptr], AX
 	LIDT [THISF_ADR+IVTDptr]
+	%if IVT_TIMER_ENABLE==1
 	; Enable 8259A
 	; ; Master PIC
 	MOV AL, 10001B; ICW1 {ICW1EN, EdgeTrigger, 8b-ADI, !Single, ICW4EN}
@@ -235,6 +235,45 @@ mainx:
 	PIC_CHECK:
 	%endif
 
+; Make base task (DS base = 0x00000000)
+	MOV ESI, THISF_ADR+msg_make_base_task
+	MOV EDI, RotPrint
+	CALL SegGate:0
+	; Continue GDT
+	MOV EBX, [THISF_ADR+GDTPTR]
+	MOV ECX, (0x10-0x07)*2; 0x10-0x07=0x09
+	_GDTDptrAppend_0:; 0x07~0x0F
+		MOV DWORD[EBX], 0
+		ADD EBX, 4
+		LOOP _GDTDptrAppend_0
+	MOV [THISF_ADR+GDTPTR], EBX
+	SUB EBX, (0x10-0x07)*2*4
+	; Kernel TSS and its GDTE 7
+	; ; use null LDT, or use zero-value LDT yo GDT
+	MOV EAX, TSS_LDDR
+	MOV DWORD[EAX], 0; Backlink
+	MOV ECX, CR0
+	MOV DWORD[EAX+28], ECX; CR0(PDBR)
+	MOV DWORD[EAX+96], 0; LDT
+	MOV WORD[EAX+100], 0; T=0 , is what ???
+	MOV WORD[EAX+102], 103; NO I/O BITMAP
+    PUSH EAX
+    PUSH EBX
+    MOV EBX,104-1
+    MOV ECX,0x00408900
+    CALL F_GDTDptrStruct_32
+    POP EBX
+    GDTDptrAppend EDX,EAX
+    POP EAX
+	SUB EBX, GDT_LDDR
+	DEC EBX
+	MOV DWORD[THISF_ADR+GDTPTR], GDT_LDDR+0x80
+	MOV WORD[THISF_ADR+GDTable], BX
+	LGDT [THISF_PH+GDTable]
+	MOV CX, SegTSS
+	LTR CX
+	ADD WORD[EAX+2], 1
+
 STI
 mainloop: HLT
 	JMP mainloop
@@ -256,15 +295,13 @@ DbgStop
 quit:
 ;{TODO Learn} Back to real-16 mode
 Addr20Disable; yo osdev.a
-
 ; Return to real-16 mode
-MOV SI, msg_return_to_real16
-MOV AH, 0
-INT 80H
-;...
-
+	MOV SI, msg_return_to_real16
+	MOV AH, 0
+	INT 80H
+	;...
 ; Return to base environment
-RETF
+	RETF
 
 ;[Procedure real-16 mode]
 ; ---- Structure Segment Selector ----
@@ -277,146 +314,31 @@ quit_addr: DW 0
 para_cs: DW 0
 para_ds: DW 0
 GDTPTR: DD 0
+GDTDptr:
 GDTable:
 	DW 0
 	DD GDT_LDDR
+IVTDptr:
+	DW 0
+	DD IDT_ADDR
 msg: DB "Ciallo, Mecocoa~",10,13,0
 msg_paging: DB "Paging initializing...",10,13,0
 msg_setup_basic_gdt: DB "Setting up basic GDT...",10,13,0
 msg_return_to_real16: DB "Return to real-16 mode...",10,13,0
 msg_enter_32bit: DB "Enter 32-bit protected mode...",10,13,0
 msg_load_ivt: DB "Load IVT...",10,13,0
+msg_make_base_task: DB "Make base task...",10,13,0
 
+
+; msg_load_shell32: DB "Load Shell32...",10,13,0
 
 msg_quit_32bit: DB "Quit 32-bit protected mode...",10,13,0
 
 ;
 msg_on_1s: DB "<Ring~> ",0
-;{TODO}
-GDTDptr: DW 0
-	DD 0
-IVTDptr: DW 0
-	DD IDT_ADDR
 
-;[Procedure protect-32 mode]
-[BITS 32];--------------------------------
-APISymbolTable:; till Routine
-	RoutineNo: DD (__Routine-rot0000)/8
-	rot0000:; Terminate
-		DD R_Terminate-__Routine
-		DW SegRot,0
-	rot0001:; PrintString (accept New Line)
-		DD R_Print-__Routine
-		DW SegRot,0
-	rot0002:; Malloc
-		DD R_Malloc-__Routine
-		DW SegRot,0
-	rot0003:; (waiting for adding)
-		DD R_Mfree-__Routine
-		DW SegRot,0
-	rot0004:; DiskReadLBA28
-		DD R_DiskReadLBA28-__Routine
-		DW SegRot,0
-__Routine:
-RoutineGate:; EDI=FUNCTION
-	PUSHAD
-	PUSH DS
-	PUSH EAX
-	MOV EAX, SegData
-	MOV DS,EAX
-	POP EAX
-	MOV EAX, EDI
-	CMP DWORD[THISF_ADR+RoutineNo], EAX
-	JB RoutineGateEnd
-	SHL EAX, 3; MUL8
-	CALL FAR [THISF_ADR+rot0000+EAX]
-	RoutineGateEnd:
-	POP DS
-	POPAD
-	RETF
-R_Terminate:; 00 and other rontine point to here
-	;;	POP EDX; STORE
-	;;	POP DS; STORE
-	;;	POPAD; STORE
-	;;	PUSHFD
-	;;	POP EDX
-	;;	TEST DX,0100_0000_0000_0000B
-	;;	JNZ NESTED_TASK
-	;;
-	;;	JMP SegTSS:0
-	;;	RETF
-	;;
-	;;	WaitRemoved: HLT
-	;;	JMP WaitRemoved
-	;;	NESTED_TASK: IRETD
-	RETF; for next calling the subapp
-	ALIGN 16
-R_Print:
-	PUSH ES
-	PUSH EAX
-	PUSH EBX
-	PUSH AX	
-	MOV EAX, SegVideo
-	MOV ES,EAX
-	POP AX
-	ConPrint ESI,~
-	POP EBX
-	POP EAX
-	POP ES
-	RETF
-	ALIGN 16
-R_Malloc:; ecx=length ret"eax=start"
-	;;	PUSH DS
-	;;	MOV EAX,8*1
-	;;	MOV DS,EAX
-	;;	MOV EAX,[DS:THISF_ADR+RamAllocPtr]
-	;;	ADD DWORD[DS:THISF_ADR+RamAllocPtr],ECX
-	;;	POP DS
-	RETF
-	ALIGN 16
-R_Mfree:
-	;; ...
-	RETF
-	ALIGN 16
-R_DiskReadLBA28:;eax=start, ds:ebx=buffer
-	;;	HdiskLoadLBA28 EAX,1 (unchecked)
-	RETF
-	ALIGN 16
-RoutineEnd:
-
-;[Interrupts protect-32 mode]
-Timer_70HINTHandler:
-	PUSHAD
-	PUSH DS
-	MOV AX, SegData
-	MOV DS, EAX
-	;{ISSUE} Why these codes make interrupt only once? --@dosconio 2024/Jan/17
-		; PUSH WORD SegData
-		; POP DS
-	MOV ESI, THISF_ADR+msg_on_1s
-	MOV EDI, 1
-	CALL SegGate:0
-	POP DS
-	;
-	MOV AL, 0x20; EOI
-	OUT 0xA0, AL; SLAVE
-	OUT 0x20, AL; MASTER
-	; OPEN NMI AFTER READ REG-C, OR ONLY INT ONCE
-	MOV AL, 0X0C
-	OUT 0X70, AL
-	IN AL, 0x71
-	POPAD
-	IRETD
-GeneralExceptionHandler:
-	;{TODO} Print exception message
-	DbgStop
-GeneralInterruptHandler:
-	PUSH EAX
-	MOV AL, 0x20; EOI
-	OUT 0xA0, AL; SLAVE
-	OUT 0x20, AL; MASTER
-	POP EAX
-	IRETD
+[BITS 32]
+%include "kerrout32.a"; 32-bit kernel routines
 
 Endf
 Endfile:

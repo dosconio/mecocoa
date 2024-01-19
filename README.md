@@ -10,7 +10,7 @@
 
 
 
-## Mecocoa's Memory Map
+## Memory Map
 
 ### Real-16 mode
 
@@ -37,12 +37,12 @@
 | Fizik Address (4M at least) | Paging Size (Total 1024) | Logic Address     | Detail                     |
 | --------------------------- | ------------------------ | ----------------- | -------------------------- |
 | 00000000~00000FFF           | 01                       |                   | IVT                        |
-| 00001000~00001FFF           | 01                       | 80001000~80001FFF | Kernel Leader              |
-| 00002000~00004FFF           | 03                       | 80002000~80004FFF | Kernel-16b→32b             |
+| 00001000~00001FFF           | 01 (1K)                  | 80001000~80001FFF | Kernel Leader              |
+| 00002000~00004FFF           | 03 (12K)                 | 80002000~80004FFF | Kernel-16b→32b             |
 | 00005000~00005FFF           | 01                       | FFFFF000~FFFFFFFF | PDT                        |
 | 00006000~00006FFF           | 01                       | 80006000~80006FFF | Stack                      |
 | 00007000~0000707F           | (128B)                   | 80007000~8000707F | Kernel TSS                 |
-| 00007080~00007FFF           | 01                       | 80007080~80007FFF | GDT                        |
+| 00007080~00007FFF           | 01 (496 GDTE)            | 80007080~80007FFF | GDT                        |
 |                             |                          |                   |                            |
 | 00008000~00008FFF           | 01                       | 80008000~80008FFF | PT for 0x80000000          |
 | 00009000~00009FFF           | 01                       | 80009000~80009FFF | PT for 0x00000000 for APP  |
@@ -80,50 +80,110 @@ A line stands 16k×2×16=512k=pow2(19)=0x80000;
 
 
 
-## Mecocoa's Segment Map
+## Segment Map
 
-| Segment | Ring | Description                   |
-| ------- | ---- | ----------------------------- |
-| 00      |      | *null*                        |
-| 01      |      | 4G R0 DATA                    |
-| 02      |      | Kernel 32 CODE                |
-| 03      |      | 4K STACK                      |
-| 04      |      | B8000 VIDEO                   |
-| 05      |      | 32-Protect Routine            |
-| 06      |      | 32-Protect Call Gate          |
-| 07      |      | App (Loaded by ENTRY-MBR) TSS |
-| 08      |      | Shell (R3 B32) TSS            |
-| 09      |      | Shell (R3 B32) LDT            |
-| 0A      |      |                               |
-| 0B      |      |                               |
-| 0C      |      |                               |
+| Segment (Hex)      | Ring | Description                      |
+| ------------------ | ---- | -------------------------------- |
+| 00 - 7080          | /    | *null*                           |
+| 01 - 7088          | 0    | 4G R0 DATA                       |
+| 02 - 7090          | 0    | Kernel 32 CODE                   |
+| 03 - 7098          | 0    | 4K STACK                         |
+| 04 - 70A0          | 0\*  | B8000 VIDEO                      |
+| 05 - 70A8          | 0    | 32-Protect Routine               |
+| 06 - 70B0          | 3    | 32-Protect Call Gate             |
+| 07 - 70B8          | 0    | Kernel (Loaded by ENTRY-MBR) TSS |
+| 08 - 70C0          | /    | *kept*                           |
+| 09 - 70C8          | /    | *kept*                           |
+| 0A - 70D0          | /    | *kept*                           |
+| 0B - 70D8          | /    | *kept*                           |
+| 0C - 70E0          | /    | *kept*                           |
+| 0D - 70E8          | /    | *kept*                           |
+| 0E - 70F0          | /    | *kept*                           |
+| 0F - 70F8          | /    | *kept*                           |
+| 10 - 7100          | 3    | Sub-app 0 TSS                    |
+| 11 - 7108          | 3    | Sub-app 0 LDT                    |
+| 12 - 7110          | 3    | Sub-app 1 TSS                    |
+| xx - 7100+8+*n*×10 | 3    | ... Sub-app *n* LDT              |
 
 
 
-## Mecocoa's Program Format
+## Program Format
 
 `0xCF` is related to her-date. 
 
-| **Sub-program header**                          | **After load**             |
-| ----------------------------------------------- | -------------------------- |
-| [ 2 byte ] – 0xCF,0x16(8086) or  0xCF,0x32(x86) | SIGPROC() to call far      |
-| [ 2 byte ] – LOAD SIZE (Limit 32MB )            | SIGPROC()                  |
-| [ 2 byte ] – SIGPROC() ADDRH/S                  | Code Segm                  |
-| [ 2  byte ] – SIGPROC() ADDRL/A                 | PROCESS  ID                |
-| [ 2  byte ] – NUMOF SYS-API NEEDED              | PROCESS  ID (up to 0xFFFF) |
-| [ 2  byte ] – *KEPT*                            | *KEPT*                     |
-| [ 4  byte ] – ENTRY() ADDR OF .CODE32/ALL16     | *KEPT*                     |
-| [8n  byte ] – SYS-API table                     | SYS-API  table(#)          |
-| [ 4  byte ] – Code addr                         | Code  Segm                 |
-| [ 4  byte ] – Code leng                         | *KEPT*                     |
-| [ 4  byte ] – Stak addr                         | Stak Segm                  |
-| [ 4  byte ] – Stak leng                         | *KEPT*                     |
-| [ 4  byte ] – Data addr                         | Data  Segm                 |
-| [ 4  byte ] – Data leng                         | *KEPT*                     |
+| **Sub-program header**                          | **After load**               |
+| ----------------------------------------------- | ---------------------------- |
+| [ 2 byte ] – 0xCF,0x16(8086) or  0xCF,0x32(x86) | SIGPROC() to call far        |
+| [ 2 byte ] – LOAD SIZE (Limit 32MB )            | SIGPROC()                    |
+| [ 2 byte ] – SIGPROC() ADDRH/S                  | Code Segm                    |
+| [ 2  byte ] – SIGPROC() ADDRL/A                 | PROCESS  ID                  |
+| [ 2  byte ] – NUMOF SYS-API NEEDED              | PROCESS  ID (up to 0xFFFF)   |
+| [ 2  byte ] – *KEPT*                            | *KEPT*                       |
+| [ 4  byte ] – ENTRY() ADDR OF .CODE32/ALL16     | *KEPT*                       |
+| <del>[8n  byte ] – SYS-API table</del>          | <del>SYS-API  table(#)</del> |
+| [ 4  byte ] – Code addr                         | Code  Segm                   |
+| [ 4  byte ] – Code leng                         | *KEPT*                       |
+| [ 4  byte ] – Stak addr                         | Stak Segm                    |
+| [ 4  byte ] – Stak leng                         | *KEPT*                       |
+| [ 4  byte ] – Data addr                         | Data  Segm                   |
+| [ 4  byte ] – Data leng                         | *KEPT*                       |
 
 
 
-## Mecocoa's Interrupts for Real-16
+|                |             |                    |      |            |            | *164     |
+| -------------- | ----------- | ------------------ | ---- | ---------- | ---------- | -------- |
+|                | LDTE:S3     |                    |      |            |            | *160     |
+|                |             |                    |      |            |            | *156     |
+|                | LDTE:S2     |                    |      |            |            | *152     |
+|                |             |                    |      |            |            | *148     |
+|                | LDTE:S1     |                    |      |            |            | *144     |
+|                |             |                    |      |            |            | *140     |
+|                | LDTE:S0     |                    |      |            |            | *136     |
+|                |             |                    |      |            |            | *132     |
+|                | LDTE:Ronl   |                    |      |            |            | *128     |
+|                |             |                    |      |            |            | 124      |
+|                | LDTE:Data   |                    |      |            |            | 120      |
+|                |             |                    |      |            |            | 116      |
+|                | LDTE:Code   |                    |      |            |            | 112      |
+|                |             |                    |      |            |            | 108      |
+|                | LDTE:Header |                    |      |            |            | 104      |
+| IOMap:103      | STRC[15,T]  |                    |      | 103        | STRC[15,T] | 100      |
+| #LDTLen        | LDTSel      |                    |      |            | 0          | 96       |
+|                | GS:RONL     | ConstStart         | ←    | 0          | GS         | 92       |
+|                | FS:ROUT3    | ConstLen(0:!Exist) | ←    |            | FS         | 88       |
+|                | DS:DATA     | DataStart          | ←    |            | DS         | 84       |
+|                | SS:STAK3    | DataLen(0:!Exist)  | ←    |            | SS         | 80       |
+|                | CS:CODE     | CodeStart          | ←    |            | CS         | 76       |
+|                | ES:HEADER   | CodeLen>0          | ←    |            | ES         | 72       |
+| EDI            | ←           |                    |      | EDI        | ←          | 68       |
+| ESI            | ←           |                    |      | ESI        | ←          | 64       |
+| EBP            | ←           |                    |      | EBP        | ←          | 60       |
+| ESP            | ←           | StakLen            | ←    | ESP        | ←          | 56       |
+| EBX            | ←           |                    |      | EBX        | ←          | 52       |
+| EDX            | ←           |                    |      | EDX        | ←          | 48       |
+| ECX            | ←           |                    |      | ECX        | ←          | 44       |
+| EAX            | ←           |                    |      | EAX        | ←          | 40       |
+| EFLAGS         | ←           |                    |      | EFLAGS     | ←          | 36       |
+| EIP            | ←           | Entry=EIP          | ←    | EIP        | ←          | 32       |
+| PDBR           | ←           |                    |      | PDBR       | ←          | 28       |
+| AdrPointerH    | SS2         |                    |      |            | SS2        | 24       |
+| ESP2           | ←           |                    |      | ESP2       | ←          | 20       |
+| AdrPointerL    | SS1         |                    |      |            | SS1        | 16       |
+| ESP1           | ←           |                    |      | ESP1       | ←          | 12       |
+| **TIMES**      | SS0         | 0x32DE             | Ring |            | SS0        | 8        |
+| ESP0           | ←           |                    |      | ESP0       | ←          | 4        |
+| CrtSubapp      | LastTSS     | LenToLoad          | ←    |            | 0          | 0        |
+| **LOADED:256** | ←           | **TOLOAD**         | ←    | **KERNEL** | ←          | *Offset* |
+
+
+
+**TIMES**: even for available and odd for busy. the number is added by 2 each executed.
+
+If length of a Code/Data segment is greater than 0x1_00000, the real length will be the times of 4K.
+
+
+
+## Interrupts for Real-16
 
 
 
@@ -143,25 +203,25 @@ Note
 
 
 
-## Mecocoa's Interrupts for Protect-32
+## Routines for Protect-32
 
 Segment `8*05` 
 
 
 
-| Identification     | Function       | IO                    |
-| ------------------ | -------------- | --------------------- |
-| 00 R_Terminate     | Terminate back |                       |
-| 01 R_Print         | Print String   | DS:ESI → ASCIZ string |
-| 02 R_Malloc        |                |                       |
-| 03 R_Mfree         |                |                       |
-| 04 R_DiskReadLBA28 |                |                       |
-|                    |                |                       |
-|                    |                |                       |
+| Identification        | Function         | IO                    |
+| --------------------- | ---------------- | --------------------- |
+| 00 R_Terminate        | Terminate back   |                       |
+| 01 R_Print            | Print String     | DS:ESI → ASCIZ string |
+| 02 R_Malloc           |                  |                       |
+| 03 R_Mfree            |                  |                       |
+| 04 R_DiskReadLBA28    |                  |                       |
+| 05 R_PrintDwordCursor | PrintDwordCursor |                       |
+|                       |                  |                       |
 
 
 
-## Mecocoa's Source Files
+## Source Files
 
 (defaultly at least **Intel-386**)
 

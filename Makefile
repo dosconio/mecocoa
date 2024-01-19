@@ -14,6 +14,9 @@ build: ../_obj/boot.bin ../_obj/kernel.bin ../_obj/Kernel32.bin ../_obj/Shell32.
 run: build
 	$(vmbox) startvm $(vmname)
 
+bochs: build
+	E:/software/Bochs-2.7/bochsdbg.exe -f e:/cnrv/bochsrc.bxrc
+
 ../_obj/boot.bin: BOOT.a
 	$(asm) BOOT.a -o ../_obj/boot.bin -I../unisym/inc/Kasha/n_
 ../_obj/kernel.bin: Kernel.asm

@@ -3,13 +3,17 @@
 ;
 %if MEM_PAGED_ENABLE==1
 	THISF_ADR EQU 0x80002000
-	GDT_LDDR  EQU 0x80007080
 	PDT_LDDR  EQU 0x80005000
+	TSS_LDDR  EQU 0x80007000
+	GDT_LDDR  EQU 0x80007080
+
 %else
 	;{TODO} Consider the case
 	THISF_ADR EQU 0x00002000
 	GDT_LDDR  EQU 0x00007080
 %endif
+
+THISF_PH  EQU 0x2000
 
 IDT_ADDR  EQU 0x0000; - Interrupt Descriptor Table
 PDT_ADDR  EQU 0x5000; - Global Page Directory Table
@@ -30,5 +34,5 @@ SegVideo  EQU (8*4)
 SegRot    EQU (8*5)
 SegGate   EQU (8*6)
 SegTSS    EQU (8*7)
-SegShell  EQU (8*8); TSS
-SegShellT EQU (8*9); LDT
+SegShell  EQU (8*0x10); TSS
+SegShellT EQU (8*0x11); LDT

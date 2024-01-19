@@ -1,0 +1,143 @@
+
+[BITS 32];--------------------------------
+;[Procedure protect-32 mode] (Near)
+F_GDTDptrStruct_32:
+	GDTDptrStruct EAX,EBX,ECX
+	RET
+
+
+;[Routines protect-32 mode]
+APISymbolTable:; till Routine
+	RoutineNo: DD (__Routine-rot0000)/8
+	rot0000:; Terminate
+		DD R_Terminate-__Routine
+		DW SegRot,0
+	rot0001:; PrintString (accept New Line)
+		DD R_Print-__Routine
+		DW SegRot,0
+	rot0002:; Malloc
+		DD R_Malloc-__Routine
+		DW SegRot,0
+	rot0003:; (waiting for adding)
+		DD R_Mfree-__Routine
+		DW SegRot,0
+	rot0004:; DiskReadLBA28
+		DD R_DiskReadLBA28-__Routine
+		DW SegRot,0
+	rot0005:; PrintDwordCursor
+		DD R_PrintDwordCursor-__Routine
+		DW SegRot,0
+__Routine:
+RoutineGate:; EDI=FUNCTION
+	PUSHAD
+	PUSH DS
+	PUSH EAX
+	MOV EAX, SegData
+	MOV DS,EAX
+	POP EAX
+	MOV EAX, EDI
+	CMP DWORD[THISF_ADR+RoutineNo], EAX
+	JB RoutineGateEnd
+	SHL EAX, 3; MUL8
+	CALL FAR [THISF_ADR+rot0000+EAX]
+	RoutineGateEnd:
+	POP DS
+	POPAD
+	RETF
+R_Terminate:; 00 and other rontine point to here
+	;;	POP EDX; STORE
+	;;	POP DS; STORE
+	;;	POPAD; STORE
+	;;	PUSHFD
+	;;	POP EDX
+	;;	TEST DX,0100_0000_0000_0000B
+	;;	JNZ NESTED_TASK
+	;;
+	;;	JMP SegTSS:0
+	;;	RETF
+	;;
+	;;	WaitRemoved: HLT
+	;;	JMP WaitRemoved
+	;;	NESTED_TASK: IRETD
+	RETF; for next calling the subapp
+	ALIGN 16
+R_Print:
+	PUSH ES
+	PUSH EAX
+	PUSH EBX
+	PUSH AX	
+	MOV EAX, SegVideo
+	MOV ES,EAX
+	POP AX
+	ConPrint ESI,~
+	POP EBX
+	POP EAX
+	POP ES
+	RETF
+	ALIGN 16
+R_Malloc:; ecx=length ret"eax=start"
+	;;	PUSH DS
+	;;	MOV EAX,8*1
+	;;	MOV DS,EAX
+	;;	MOV EAX,[DS:THISF_ADR+RamAllocPtr]
+	;;	ADD DWORD[DS:THISF_ADR+RamAllocPtr],ECX
+	;;	POP DS
+	RETF
+	ALIGN 16
+R_Mfree:
+	;; ...
+	RETF
+	ALIGN 16
+R_DiskReadLBA28:;eax=start, ds:ebx=buffer
+	HdiskLoadLBA28 EAX,1
+	RETF
+	ALIGN 16
+R_PrintDwordCursor:
+	PUSH EAX
+	MOV EAX, SegVideo
+	MOV ES, EAX
+	POP EAX
+	PUSH DX
+	ConCursor; Volatile{DX}
+	POP DX
+	AND EAX, 0xFFFF
+	DbgEcho32 EDX, EAX
+	ADD AX,8
+	ConCursor AX
+	RETF
+	ALIGN 16
+RoutineEnd:
+
+;[Interrupts protect-32 mode]
+Timer_70HINTHandler:
+	PUSHAD
+	PUSH DS
+	MOV AX, SegData
+	MOV DS, EAX
+	;{ISSUE} Why these codes make interrupt only once? --@dosconio 2024/Jan/17
+		; PUSH WORD SegData
+		; POP DS
+	MOV ESI, THISF_ADR+msg_on_1s
+	MOV EDI, 1
+	CALL SegGate:0
+	POP DS
+	;
+	MOV AL, 0x20; EOI
+	OUT 0xA0, AL; SLAVE
+	OUT 0x20, AL; MASTER
+	; OPEN NMI AFTER READ REG-C, OR ONLY INT ONCE
+	MOV AL, 0X0C
+	OUT 0X70, AL
+	IN AL, 0x71
+	POPAD
+	IRETD
+GeneralExceptionHandler:
+	;{TODO} Print exception message
+	DbgStop
+GeneralInterruptHandler:
+	PUSH EAX
+	MOV AL, 0x20; EOI
+	OUT 0xA0, AL; SLAVE
+	OUT 0x20, AL; MASTER
+	POP EAX
+	IRETD
