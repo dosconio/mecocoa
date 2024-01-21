@@ -6,14 +6,13 @@
 	PDT_LDDR  EQU 0x80005000
 	TSS_LDDR  EQU 0x80007000
 	GDT_LDDR  EQU 0x80007080
-
+	MAP_LDDR  EQU 0x80080000; Memory Allocation Map
 %else
 	;{TODO} Consider the case
 	THISF_ADR EQU 0x00002000
 	GDT_LDDR  EQU 0x00007080
 %endif
 
-BaseLA    EQU 0x80002000; na TSSStruct_3 yo demos.a
 THISF_PH  EQU 0x2000
 
 IDT_ADDR  EQU 0x0000; - Interrupt Descriptor Table
@@ -22,7 +21,7 @@ GDT_ADDR  EQU 0x7080; - Global Descriptor Table
 KPT_ADDR  EQU 0x8000; - Kernel(Shell) Page Table
 
 SEG16_GDT EQU 0x0708
-SEG16_MAP EQU 0x070C; - Memory Bit Map
+SEG16_MAP EQU 0x8000; - Memory Bit Map
 STACK_LEN EQU 0x1000
 
 ; ---- ---- Segment Selectors ---- ----

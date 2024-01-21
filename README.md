@@ -10,6 +10,28 @@
 
 
 
+## Component Kernel32
+
+
+
+### Variables
+
+
+
+| Identification | Initialization | Description |
+| -------------- | -------------- | ----------- |
+|                |                |             |
+|                |                |             |
+|                |                |             |
+|                |                |             |
+|                |                |             |
+|                |                |             |
+|                |                |             |
+
+
+
+
+
 ## Memory Map
 
 ### Real-16 mode
@@ -57,7 +79,6 @@
 
 
 
-
 #### Bitmap
 
 To register in GPDT and allocate room.
@@ -82,6 +103,8 @@ A line stands 16k×2×16=512k=pow2(19)=0x80000;
 
 ## Segment Map
 
+### Global
+
 | Segment (Hex)      | Ring | Description                      |
 | ------------------ | ---- | -------------------------------- |
 | 00 - 7080          | /    | *null*                           |
@@ -100,10 +123,25 @@ A line stands 16k×2×16=512k=pow2(19)=0x80000;
 | 0D - 70E8          | /    | *kept*                           |
 | 0E - 70F0          | /    | *kept*                           |
 | 0F - 70F8          | /    | *kept*                           |
-| 10 - 7100          | 3    | Sub-app 0 TSS                    |
-| 11 - 7108          | 3    | Sub-app 0 LDT                    |
-| 12 - 7110          | 3    | Sub-app 1 TSS                    |
-| xx - 7100+8+*n*×10 | 3    | ... Sub-app *n* LDT              |
+| 10 - 7100          | 3    | Sub-app 0 LDT                    |
+| 11 - 7108          | 3    | Sub-app 0 TSS                    |
+| 12 - 7110          | 3    | Sub-app 1 LDT                    |
+| xx - 7100+8+*n*×10 | 3    | ... Sub-app *n* TSS              |
+
+### Local
+
+| Segment (Hex) | Ring | Description |
+| ------------- | ---- | ----------- |
+| 00            | 3    | Header      |
+| 01            | 3    | Code        |
+| 02            | 3    | Data        |
+| 03            | 3    | Ronl        |
+| 04            | 3    | SS0 4k      |
+| 05            | 3    | SS1 4k      |
+| 06            | 3    | SS2 4k      |
+| 07            | 3    | SS3 4nk     |
+
+
 
 
 
@@ -130,50 +168,50 @@ A line stands 16k×2×16=512k=pow2(19)=0x80000;
 
 
 
-|                |             |                    |      |            |            | *164     |
-| -------------- | ----------- | ------------------ | ---- | ---------- | ---------- | -------- |
-|                | LDTE:S3     |                    |      |            |            | *160     |
-|                |             |                    |      |            |            | *156     |
-|                | LDTE:S2     |                    |      |            |            | *152     |
-|                |             |                    |      |            |            | *148     |
-|                | LDTE:S1     |                    |      |            |            | *144     |
-|                |             |                    |      |            |            | *140     |
-|                | LDTE:S0     |                    |      |            |            | *136     |
-|                |             |                    |      |            |            | *132     |
-|                | LDTE:Ronl   |                    |      |            |            | *128     |
-|                |             |                    |      |            |            | 124      |
-|                | LDTE:Data   |                    |      |            |            | 120      |
-|                |             |                    |      |            |            | 116      |
-|                | LDTE:Code   |                    |      |            |            | 112      |
-|                |             |                    |      |            |            | 108      |
-|                | LDTE:Header |                    |      |            |            | 104      |
-| IOMap:103      | STRC[15,T]  |                    |      | 103        | STRC[15,T] | 100      |
-| #LDTLen        | LDTSel      |                    |      |            | 0          | 96       |
-|                | GS:RONL     | ConstStart         | ←    | 0          | GS         | 92       |
-|                | FS:ROUT3    | ConstLen(0:!Exist) | ←    |            | FS         | 88       |
-|                | DS:DATA     | DataStart          | ←    |            | DS         | 84       |
-|                | SS:STAK3    | DataLen(0:!Exist)  | ←    |            | SS         | 80       |
-|                | CS:CODE     | CodeStart          | ←    |            | CS         | 76       |
-|                | ES:HEADER   | CodeLen>0          | ←    |            | ES         | 72       |
-| EDI            | ←           |                    |      | EDI        | ←          | 68       |
-| ESI            | ←           |                    |      | ESI        | ←          | 64       |
-| EBP            | ←           |                    |      | EBP        | ←          | 60       |
-| ESP            | ←           | StakLen            | ←    | ESP        | ←          | 56       |
-| EBX            | ←           |                    |      | EBX        | ←          | 52       |
-| EDX            | ←           |                    |      | EDX        | ←          | 48       |
-| ECX            | ←           |                    |      | ECX        | ←          | 44       |
-| EAX            | ←           |                    |      | EAX        | ←          | 40       |
-| EFLAGS         | ←           |                    |      | EFLAGS     | ←          | 36       |
-| EIP            | ←           | Entry=EIP          | ←    | EIP        | ←          | 32       |
-| PDBR           | ←           |                    |      | PDBR       | ←          | 28       |
-| AdrPointerH    | SS2         |                    |      |            | SS2        | 24       |
-| ESP2           | ←           |                    |      | ESP2       | ←          | 20       |
-| AdrPointerL    | SS1         |                    |      |            | SS1        | 16       |
-| ESP1           | ←           |                    |      | ESP1       | ←          | 12       |
-| **TIMES**      | SS0         | 0x32DE             | Ring |            | SS0        | 8        |
-| ESP0           | ←           |                    |      | ESP0       | ←          | 4        |
-| CrtSubapp      | LastTSS     | LenToLoad          | ←    |            | 0          | 0        |
-| **LOADED:256** | ←           | **TOLOAD**         | ←    | **KERNEL** | ←          | *Offset* |
+|                |             |                    |      |            |            | *164(Dec) |
+| -------------- | ----------- | ------------------ | ---- | ---------- | ---------- | --------- |
+|                | LDTE:S3     |                    |      |            |            | *160      |
+|                |             |                    |      |            |            | *156      |
+|                | LDTE:S2     |                    |      |            |            | *152      |
+|                |             |                    |      |            |            | *148      |
+|                | LDTE:S1     |                    |      |            |            | *144      |
+|                |             |                    |      |            |            | *140      |
+|                | LDTE:S0     |                    |      |            |            | *136      |
+|                |             |                    |      |            |            | *132      |
+|                | LDTE:Ronl   |                    |      |            |            | *128      |
+|                |             |                    |      |            |            | 124       |
+|                | LDTE:Data   |                    |      |            |            | 120       |
+|                |             |                    |      |            |            | 116       |
+|                | LDTE:Code   |                    |      |            |            | 112       |
+|                |             |                    |      |            |            | 108       |
+|                | LDTE:Header |                    |      |            |            | 104       |
+| IOMap:103      | STRC[15,T]  |                    |      | 103        | STRC[15,T] | 100       |
+| #LDTLen        | LDTSel      |                    |      |            | 0          | 96        |
+|                | GS:RONL     | ConstStart         | ←    | 0          | GS         | 92        |
+|                | FS:ROUT3    | ConstLen(0:!Exist) | ←    |            | FS         | 88        |
+|                | DS:DATA     | DataStart          | ←    |            | DS         | 84        |
+|                | SS:STAK3    | DataLen(0:!Exist)  | ←    |            | SS         | 80        |
+|                | CS:CODE     | CodeStart          | ←    |            | CS         | 76        |
+|                | ES:HEADER   | CodeLen>0          | ←    |            | ES         | 72        |
+| EDI            | ←           |                    |      | EDI        | ←          | 68        |
+| ESI            | ←           |                    |      | ESI        | ←          | 64        |
+| EBP            | ←           |                    |      | EBP        | ←          | 60        |
+| ESP            | ←           | StakLen            | ←    | ESP        | ←          | 56        |
+| EBX            | ←           |                    |      | EBX        | ←          | 52        |
+| EDX            | ←           |                    |      | EDX        | ←          | 48        |
+| ECX            | ←           |                    |      | ECX        | ←          | 44        |
+| EAX            | ←           |                    |      | EAX        | ←          | 40        |
+| EFLAGS         | ←           |                    |      | EFLAGS     | ←          | 36        |
+| EIP            | ←           | Entry=EIP          | ←    | EIP        | ←          | 32        |
+| PDBR           | ←           |                    |      | PDBR       | ←          | 28        |
+| AdrPointerH    | SS2         |                    |      |            | SS2        | 24        |
+| ESP2           | ←           |                    |      | ESP2       | ←          | 20        |
+| AdrPointerL    | SS1         |                    |      |            | SS1        | 16        |
+| ESP1           | ←           |                    |      | ESP1       | ←          | 12        |
+| **TIMES**      | SS0         | 0x32DE             | Ring |            | SS0        | 8         |
+| ESP0           | ←(Low P of) |                    |      | ESP0       | ←          | 4         |
+| CrtSubapp      | LastTSS     | LenToLoad          | ←    |            | 0          | 0         |
+| **LOADED:256** | High←Low    | **TOLOAD**         | ←    | **KERNEL** | ←          | *Offset*  |
 
 
 
@@ -209,15 +247,15 @@ Segment `8*05`
 
 
 
-| Identification        | Function         | IO                    |
-| --------------------- | ---------------- | --------------------- |
-| 00 R_Terminate        | Terminate back   |                       |
-| 01 R_Print            | Print String     | DS:ESI → ASCIZ string |
-| 02 R_Malloc           |                  |                       |
-| 03 R_Mfree            |                  |                       |
-| 04 R_DiskReadLBA28    |                  |                       |
-| 05 R_PrintDwordCursor | PrintDwordCursor |                       |
-|                       |                  |                       |
+| Identification        | Function         | IO                          |
+| --------------------- | ---------------- | --------------------------- |
+| 00 R_Terminate        | Terminate back   |                             |
+| 01 R_Print            | Print String     | DS:ESI → ASCIZ string       |
+| 02 R_Malloc           |                  |                             |
+| 03 R_Mfree            |                  |                             |
+| 04 R_DiskReadLBA28    |                  |                             |
+| 05 R_PrintDwordCursor | PrintDwordCursor | Show the hexadecimal of EDX |
+|                       |                  |                             |
 
 
 

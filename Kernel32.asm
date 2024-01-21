@@ -160,12 +160,17 @@ mainx:
 	MOV DS, EAX
 	MOV EAX, SegVideo
 	MOV ES, EAX
+	MOV FS, EAX
+	MOV GS, EAX
 	MOV EAX, SegStack
 	MOV SS, EAX
 	XOR ESP, ESP
+	LGDT [THISF_PH+GDTable]
 ; Trifle
 	; Transition for. Now remove it.
-	;MOV DWORD[PDT_LDDR], 0
+	;{TODO}MOV DWORD[PDT_LDDR], 0x0000067
+	OR DWORD[PDT_LDDR], 7
+	
 ; [Optional] Load IVT
 	MOV ESI, THISF_ADR+msg_load_ivt
 	MOV EDI, RotPrint
@@ -277,9 +282,19 @@ mainx:
 	MOV EDI, RotPrint
 	CALL SegGate:0
 	PUSH DWORD 20
-	
-	;;; Check till here
 	CALL F_TSSStruct3
+	; Echo User Area
+		MOV EDI, RotPrint
+		MOV ESI, THISF_ADR+msg_used_mem
+		CALL SegGate:0
+		MOV EDI, RotEchoDword
+		MOV EDX, [THISF_ADR+UsrAllocPtr]
+		CALL SegGate:0
+		MOV EDI, RotPrint
+		MOV ESI, THISF_ADR+msg_newline
+		CALL SegGate:0
+	;CALL 8*0x11:0x00000000; Nest-Run Shell
+	;JMP 8*0x11:0x00000000; Jump-Run Shell
 
 mov ecx, 160/4
 mov eax, 0x80100000
@@ -298,7 +313,8 @@ db 0xe9
 dd -6
 
 msg_spaces: DB "        ",0
-
+msg_used_mem: DB "Used Memory: ",0
+msg_newline: DB 10,13,0
 
 ; Load Subapp a and b
 	;;PUSH DWORD 50
@@ -375,6 +391,7 @@ F_GDTDptrStruct:; Structure Segment Selector
 	;
 	msg_on_1s: DB "<Ring~> ",0
 	msg_error: DB "Error!",10,13,0
+	msg_general_exception: DB "General Exception!",10,13,0
 [BITS 32]
 %include "kerrout32.a"; 32-bit kernel routines
 

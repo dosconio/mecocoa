@@ -8,7 +8,7 @@
 %include "demos.a"
 %include "osdev.a"
 Dem2Prog entry,CODE,CodeEnd,256,DATA,DataEnd,RONL,RonlEnd
-CallGate EQU 8*4+3
+SegGate EQU 8*6+3
 APIEndo:
 [SECTION CODE ALIGN=16 VSTART=0]
 rs EQU section.RONL.start
@@ -17,9 +17,9 @@ entry:
 	MOV ESI,rs
 	ADD ESI,EDX
 	MOV EDI,1
-	CALL CallGate:0
+	CALL SegGate:0
 	XOR EDI,EDI
-	CALL CallGate:0
+	CALL SegGate:0
 	POP EDX
 
     JMP entry; for next calling

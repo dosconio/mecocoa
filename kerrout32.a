@@ -9,33 +9,33 @@ F_TSSStruct3:
 	RET 4*1
 F_MemAllocSuperv:; DS:GlbArea ECX->EAX
 	PUSH EBX
-	OR ECX,ECX
+	OR ECX, ECX
 	JZ R_MemAllocS_End
-	MOV EAX,[SvpAllocPtr]
-	MOV EBX,EAX
-	ADD EBX,ECX
-	CMP EBX,0x7FFFF; demoPage {TODO ISSUE}
+	MOV EAX, [THISF_ADR+SvpAllocPtr]
+	MOV EBX, EAX
+	ADD EBX, ECX
+	CMP EBX, 0x7FFFF; demoPage {TODO ISSUE}
 	JBE R_MemAllocS_Next
-	XOR EAX,EAX
+	XOR EAX, EAX
 	JMP R_MemAllocS_End
 	R_MemAllocS_Next:
-	ADD DWORD[SvpAllocPtr],ECX
+	ADD DWORD[THISF_ADR+SvpAllocPtr], ECX
 	DEC EBX
-	AND EBX,0xFFFFF000
+	AND EBX, 0xFFFFF000
 	R_MemAllocS_Loop:
-	CMP EBX,EAX
-	JB R_MemAllocS_End; E.G. 0x1000 < 0x1001
-	CALL RR_PageRegister
-	CMP EBX,0
-	JZ R_MemAllocS_End; demoPage {TODO ISSUE}
-	SUB EBX,0x1000
-	JMP R_MemAllocS_Loop
+		CMP EBX, EAX
+		JB R_MemAllocS_End; E.G. 0x1000 < 0x1001
+		CALL RR_PageRegister
+		CMP EBX, 0
+		JZ R_MemAllocS_End
+		SUB EBX, 0x1000
+		JMP R_MemAllocS_Loop
 	R_MemAllocS_End:
 	POP EBX
 	RET
 	RR_PageRegister:
 		PageRegister
-	RET
+		RET
 
 ;[Routines protect-32 mode]
 APISymbolTable:; till Routine
@@ -74,20 +74,16 @@ RoutineGate:; EDI=FUNCTION RoutIn:{DS=SegData}
 	; POPAD
 	RETF
 R_Terminate:; 00 and other rontine point to here
-	;;	POP EDX; STORE
-	;;	POP DS; STORE
-	;;	POPAD; STORE
-	;;	PUSHFD
-	;;	POP EDX
-	;;	TEST DX,0100_0000_0000_0000B
-	;;	JNZ NESTED_TASK
-	;;
-	;;	JMP SegTSS:0
-	;;	RETF
-	;;
-	;;	WaitRemoved: HLT
-	;;	JMP WaitRemoved
-	;;	NESTED_TASK: IRETD
+	ADD ESP, 4+2
+	POP DS
+	PUSHFD
+	POP EDX
+	TEST DX, 0100_0000_0000_0000B
+	JNZ NESTED_TASK
+	JMP SegTSS:0
+	RETF
+	JMP GeneralExceptionHandler
+	NESTED_TASK: IRETD
 	RETF; for next calling the subapp
 	ALIGN 16
 R_Print:
@@ -120,7 +116,6 @@ R_Malloc:; ecx=length ret"eax=start" (user-area by manager)
     ADD DWORD[THISF_ADR+UsrAllocPtr], ECX
     DEC EBX
     AND EBX,0xFFFFF000
-
     R_MemAlloc_Loop:
         CMP EBX, EAX
         JB R_MemAlloc_End
@@ -132,10 +127,9 @@ R_Malloc:; ecx=length ret"eax=start" (user-area by manager)
 
     R_MemAlloc_End:
     POP EBX
-	OR EAX, 0x80000000; Into Before Linear Address
     RETF
     RR_PageRegisterUser:
-        PageRegisterUser
+        PageRegisterUserX
         RET
     ALIGN 16
 R_Mfree:
@@ -176,8 +170,19 @@ Timer_70HINTHandler:
 	MOV ESI, THISF_ADR+msg_on_1s
 	MOV EDI, 1
 	CALL SegGate:0
-	POP DS
 	;
+    ;;NOT BYTE[crtrun]
+    ;;CMP BYTE[crtrun], 0
+    ;;JZ RunSb2
+    ;;RunSb1:
+    ;;    CALL SegTSS1:0
+    ;;    RETF
+    ;;RunSb2:
+    ;;    CALL SegTSS2:0
+    ;;    RETF
+    ;;ALIGN 16
+	;
+	POP DS
 	MOV AL, 0x20; EOI
 	OUT 0xA0, AL; SLAVE
 	OUT 0x20, AL; MASTER
@@ -188,7 +193,11 @@ Timer_70HINTHandler:
 	POPAD
 	IRETD
 GeneralExceptionHandler:
-	;{TODO} Print exception message
+	MOV EAX, SegData
+	MOV DS, EAX
+	MOV ESI, THISF_ADR+msg_general_exception
+	MOV EDI, RotPrint
+	CALL SegGate:0
 	DbgStop
 GeneralInterruptHandler:
 	PUSH EAX
