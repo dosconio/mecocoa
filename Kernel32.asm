@@ -12,7 +12,7 @@
 %include "_debug.a"
 
 ; {Option Switch: 1 or others}
-IVT_TIMER_ENABLE EQU 10
+IVT_TIMER_ENABLE EQU 1
 MEM_PAGED_ENABLE EQU 1
 
 %include "offset.a" ; addresses and selectors
@@ -116,8 +116,8 @@ File
 		%if MEM_PAGED_ENABLE==1
 			OR DWORD[EBX-4], 0x80000000
 		%endif
-		; GDTE 04 Video display buffer 32K - 000B8000~000BFFFF (32KB) Ring(0)
-		GDTDptrAppend 0x0040920B,0x80007FFF
+		; GDTE 04 Video display buffer 32K - 000B8000~000BFFFF (32KB) Ring(3; 0)
+		GDTDptrAppend 0x0040F20B,0x80007FFF; 0x0040920B,0x80007FFF
 		%if MEM_PAGED_ENABLE==1
 			OR DWORD[EBX-4], 0x80000000
 		%endif
@@ -256,8 +256,8 @@ mainx:
 	; ; use null LDT, or use zero-value LDT yo GDT
 	MOV EAX, TSS_LDDR
 	MOV DWORD[EAX], 0; Backlink
-	MOV ECX, CR0
-	MOV DWORD[EAX+28], ECX; CR0(PDBR)
+	MOV ECX, CR3
+	MOV DWORD[EAX+28], ECX; CR3(PDBR)
 	MOV DWORD[EAX+96], 0; LDT
 	MOV WORD[EAX+100], 0; T=0 , is what ???
 	MOV WORD[EAX+102], 103; NO I/O BITMAP
@@ -293,28 +293,13 @@ mainx:
 		MOV EDI, RotPrint
 		MOV ESI, THISF_ADR+msg_newline
 		CALL SegGate:0
-	;CALL 8*0x11:0x00000000; Nest-Run Shell
-	;JMP 8*0x11:0x00000000; Jump-Run Shell
 
-mov ecx, 160/4
-mov eax, 0x80100000
-Nihao:
-mov edx, [eax]
-mov edi, RotEchoDword
-call SegGate:0
-add eax, 4
-mov esi, THISF_ADR + msg_spaces
-mov edi, RotPrint
-call SegGate:0
-loop Nihao
-cli
-hlt
-db 0xe9
-dd -6
-
-msg_spaces: DB "        ",0
-msg_used_mem: DB "Used Memory: ",0
-msg_newline: DB 10,13,0
+;
+	MOV ECX, 3
+	Try3:
+	CALL 8*0x11:0x00000000; Nest-Run Shell
+	JMP 8*0x11:0x00000000; Jump-Run Shell
+	LOOP Try3
 
 ; Load Subapp a and b
 	;;PUSH DWORD 50
@@ -379,6 +364,10 @@ F_GDTDptrStruct:; Structure Segment Selector
 		DW 0
 		DD IDT_ADDR
 ;[Data.Strings]
+	msg_spaces: DB "        ",0
+	msg_used_mem: DB "Used Memory: ",0
+	msg_newline: DB 10,13,0
+	;
 	msg: DB "Ciallo, Mecocoa~",10,13,0
 	msg_paging: DB "Paging initializing...",10,13,0
 	msg_setup_basic_gdt: DB "Setting up basic GDT...",10,13,0

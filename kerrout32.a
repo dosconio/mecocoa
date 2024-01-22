@@ -74,8 +74,6 @@ RoutineGate:; EDI=FUNCTION RoutIn:{DS=SegData}
 	; POPAD
 	RETF
 R_Terminate:; 00 and other rontine point to here
-	ADD ESP, 4+2
-	POP DS
 	PUSHFD
 	POP EDX
 	TEST DX, 0100_0000_0000_0000B
