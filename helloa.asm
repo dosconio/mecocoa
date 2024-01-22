@@ -7,19 +7,20 @@
 %include "debug.a"
 %include "demos.a"
 %include "osdev.a"
+%include "routidx.a"
 Dem2Prog entry,CODE,CodeEnd,256,DATA,DataEnd,RONL,RonlEnd
-CallGate EQU 8*4+3
+SegGate EQU 8*6+3
 APIEndo:
 [SECTION CODE ALIGN=16 VSTART=0]
 rs EQU section.RONL.start
 entry:
 	PUSH EDX; ADDR
-	MOV ESI,rs
-	ADD ESI,EDX
-	MOV EDI,1
-	CALL CallGate:0
-	XOR EDI,EDI
-	CALL CallGate:0
+	MOV ESI, rs
+	ADD ESI, EDX
+	MOV EDI, RotPrint
+	CALL SegGate:0
+	XOR EDI, EDI
+	CALL SegGate:0
 	POP EDX
 
     JMP entry; for next calling
@@ -31,4 +32,3 @@ DataEnd:
 str0: db "[Hello] ",0
 RonlEnd:
 Enddf
-

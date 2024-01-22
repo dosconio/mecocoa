@@ -127,7 +127,7 @@ R_Malloc:; ecx=length ret"eax=start" (user-area by manager)
     POP EBX
     RETF
     RR_PageRegisterUser:
-        PageRegisterUserX
+        PageRegisterUser
         RET
     ALIGN 16
 R_Mfree:
@@ -167,18 +167,17 @@ Timer_70HINTHandler:
 		; POP DS
 	MOV ESI, THISF_ADR+msg_on_1s
 	MOV EDI, 1
-	CALL SegGate:0
+	;;CALL SegGate:0
 	;
-    ;;NOT BYTE[crtrun]
-    ;;CMP BYTE[crtrun], 0
-    ;;JZ RunSb2
-    ;;RunSb1:
-    ;;    CALL SegTSS1:0
-    ;;    RETF
-    ;;RunSb2:
-    ;;    CALL SegTSS2:0
-    ;;    RETF
-    ;;ALIGN 16
+	CALL FAR [THISF_ADR+TSSCrt-4]
+	MOV AX, [THISF_ADR+TSSMax]
+	MOV BX, [THISF_ADR+TSSCrt]
+	ADD BX, 8*2
+	CMP BX, AX
+	JBE Timer_70HINTHandler_Next0
+	MOV BX, 8*0x11
+    Timer_70HINTHandler_Next0:
+	MOV WORD[THISF_ADR+TSSCrt], BX
 	;
 	POP DS
 	MOV AL, 0x20; EOI

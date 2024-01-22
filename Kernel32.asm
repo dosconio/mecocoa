@@ -283,33 +283,35 @@ mainx:
 	CALL SegGate:0
 	PUSH DWORD 20
 	CALL F_TSSStruct3
-	; Echo User Area
-		MOV EDI, RotPrint
-		MOV ESI, THISF_ADR+msg_used_mem
-		CALL SegGate:0
-		MOV EDI, RotEchoDword
-		MOV EDX, [THISF_ADR+UsrAllocPtr]
-		CALL SegGate:0
-		MOV EDI, RotPrint
-		MOV ESI, THISF_ADR+msg_newline
-		CALL SegGate:0
-
-;
-	MOV ECX, 3
-	Try3:
-	CALL 8*0x11:0x00000000; Nest-Run Shell
-	JMP 8*0x11:0x00000000; Jump-Run Shell
-	LOOP Try3
 
 ; Load Subapp a and b
-	;;PUSH DWORD 50
-	;;CALL F_TSSStruct3
-	;;PUSH DWORD 60
-	;;CALL F_TSSStruct3
+	PUSH DWORD 50
+	CALL F_TSSStruct3
+	PUSH DWORD 60
+	CALL F_TSSStruct3
+; Echo User Area
+	MOV EDI, RotPrint
+	MOV ESI, THISF_ADR+msg_used_mem
+	CALL SegGate:0
+	MOV EDI, RotEchoDword
+	MOV EDX, [THISF_ADR+UsrAllocPtr]
+	CALL SegGate:0
+	MOV EDI, RotPrint
+	MOV ESI, THISF_ADR+msg_newline
+	CALL SegGate:0
+;{TEST} issued
+	MOV ECX, 12
+	Shell32_Test:
+	;;CALL 8*0x11:0x00000000
+	MOV ESI, THISF_ADR+msg_newline
+	MOV EDI, RotPrint
+	CALL SegGate:0
+	;;LOOP Shell32_Test
 ; Enable Multi-tasks
-
-; Main loop
+	MOV WORD[THISF_ADR+TSSCrt], 8*0x11
+	MOV WORD[THISF_ADR+TSSMax], 8*(0x11+2*2); 3 tasks
 	STI
+; Main loop
 	HLT
 	DB 0xE9
 	DD -6; [32-b] mainloop: HLT, JMP mainloop
@@ -351,7 +353,10 @@ F_GDTDptrStruct:; Structure Segment Selector
 	SvpAllocPtr: DD 0x0000A000; Supervisor
 	UsrAllocPtr: DD 0x00100000
 	TSSNumb: DW 1
+		DD 0; of TSSCrt
 	TSSCrt: DW 0; Kernel's=0
+
+	TSSMax: DW 0
 	quit_addr: DW 0
 	para_cs: DW 0
 	para_ds: DW 0
