@@ -45,6 +45,8 @@ codefileLoad16 0,0,10
 CALL 0x0200:0x1
 
 POP DS
+MOV WORD [ES:80H*4+0], Ro_Print
+MOV WORD [ES:80H*4+2], DS
 
 ; End of the environment
 MOV SI, str_endenv

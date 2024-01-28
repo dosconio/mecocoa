@@ -1,6 +1,5 @@
 ; Mecocoa by @dosconio
 ; Opensrc under BSD 3-Clause License
-; - loaded at `0x2000`
 ; Enter 32-bit protected mode and print a message
 
 %include "pseudo.a"
@@ -21,12 +20,14 @@ MEM_PAGED_ENABLE EQU 1
 [CPU 386]
 File
 ; Initial
+	CLI
 	MOV SI, msg
 	MOV AH, 0
 	INT 80H
 	MOV [para_cs], CS
 	MOV [para_ds], DS
-	MOV WORD[quit_addr], quit
+	MOV [para_ss], SS
+	MOV [para_sp], SP
 
 ; Paging keep(DS:0x0000)
 	PUSH DS
@@ -56,7 +57,7 @@ File
 		XOR DI, DI
 		MOV BYTE[ES:DI], 0xFF
 		INC DI
-		MOV BYTE[ES:DI], 0xC0
+		MOV BYTE[ES:DI], 0b00000011
 		INC DI
 		; Kernel Area
 		MOV CX, (16-2)/2
@@ -153,9 +154,10 @@ File
 	MOV CR0, EAX
 	JMP DWORD SegCode: mainx
 
-[BITS 32];--------------------------------
+[BITS 32]
 mainx:
 ; Load segment registers
+	CLI; {REASSURE}
 	MOV EAX, SegData
 	MOV DS, EAX
 	MOV EAX, SegVideo
@@ -278,16 +280,20 @@ mainx:
 	LTR CX
 	ADD WORD[EAX+2], 1
 ; Load Shell32
+	MOV WORD[THISF_ADR+TSSCrt], 8*0x11
+	MOV WORD[THISF_ADR+TSSMax], 8*0x11
 	MOV ESI, THISF_ADR+msg_load_shell32
 	MOV EDI, RotPrint
 	CALL SegGate:0
 	PUSH DWORD 20
 	CALL F_TSSStruct3
-
 ; Load Subapp a and b
 	PUSH DWORD 50
+	ADD WORD[THISF_ADR+TSSMax], 2*8; {LDT+TSS}*8
 	CALL F_TSSStruct3
+	;
 	PUSH DWORD 60
+	ADD WORD[THISF_ADR+TSSMax], 2*8; {LDT+TSS}*8
 	CALL F_TSSStruct3
 ; Echo User Area
 	MOV EDI, RotPrint
@@ -299,48 +305,59 @@ mainx:
 	MOV EDI, RotPrint
 	MOV ESI, THISF_ADR+msg_newline
 	CALL SegGate:0
-;{TEST} issued
-	MOV ECX, 12
-	Shell32_Test:
-	;;CALL 8*0x11:0x00000000
-	MOV ESI, THISF_ADR+msg_newline
-	MOV EDI, RotPrint
-	CALL SegGate:0
-	;;LOOP Shell32_Test
 ; Enable Multi-tasks
-	MOV WORD[THISF_ADR+TSSCrt], 8*0x11
-	MOV WORD[THISF_ADR+TSSMax], 8*(0x11+2*2); 3 tasks
-	STI
+	;;STI
 ; Main loop
-	HLT
-	DB 0xE9
-	DD -6; [32-b] mainloop: HLT, JMP mainloop
+	MOV ECX, 500
+	Shell32_Test:
+	CALL 8*0x11:0x00000000; After CLI before you try this
+	MOV EDI, RotPrint
+	MOV ESI, THISF_ADR+msg
+	CALL SegGate:0
+	; LOOP Shell32_Test	
+; 
+	;;HLT
+	;;DB 0xE9
+	;;DD -6; [32-b] mainloop: HLT, JMP mainloop
 
 ; Restore information then back to real-16 mode
-	;{TODO} Print quit message
-	MOV BX, [para_ds]
+	CLI
+	MOV EDI, RotPrint
+	MOV ESI, THISF_ADR+msg_quit_32bit
+	CALL SegGate:0
+	MOV BX, [THISF_ADR+para_ds]
 	;
+	MOV AX, SegData
+	MOV ES, AX
+	MOV FS, AX
+	MOV GS, AX
+	AND DWORD[0x80007090+4], 0x0FBFFFFF; Code Segment
+	AND DWORD[0x80007098+4], 0x0F30FFFF; Stak Segment
+	AND DWORD[0x80007098+0], 0xFFFF0000; Stak Segment
+	MOV EAX, SegStack
+	MOV SS, EAX
+	JMP DWORD SegCode:Realto
+[BITS 16]
+	Realto:
 	MOV EAX, CR0
 	AND EAX, 0x7FFFFFFE; clear PE bit and PG bit
 	MOV CR0, EAX
-	;
-	MOV DS, BX
-	;
-	JMP FAR [DS:quit_addr]
-erro:
-	MOV ESI, msg_error
+	JMP WORD SEG16_LOD:quit; 16-bit instruction	
+erro:;{TODO}
 	MOV EDI, RotPrint
+	MOV ESI, THISF_ADR+msg_error
 	CALL SegGate:0
-
-[BITS 16];--------------------------------
 quit:
-;{TODO Learn} Return to real-16 mode
-	MOV SI, msg_return_to_real16
-	MOV AH, 0
-	INT 80H
+; Return to real-16 mode
+	; Initialize
+	MOV DS, BX
+	XOR BX, BX
+	MOV ES, BX
+	MOV BX, [para_ss]
+	MOV SS, BX
+	MOV SP, [para_sp]
 	Addr20Disable; yo osdev.a
-	;...
-; Return to base environment
+	; Return to base environment
 	RETF
 
 ;[Procedure real-16 mode]
@@ -357,9 +374,10 @@ F_GDTDptrStruct:; Structure Segment Selector
 	TSSCrt: DW 0; Kernel's=0
 
 	TSSMax: DW 0
-	quit_addr: DW 0
 	para_cs: DW 0
 	para_ds: DW 0
+	para_ss: DW 0
+	para_sp: DW 0
 	GDTPTR: DD 0
 	GDTDptr:
 	GDTable:
@@ -376,7 +394,6 @@ F_GDTDptrStruct:; Structure Segment Selector
 	msg: DB "Ciallo, Mecocoa~",10,13,0
 	msg_paging: DB "Paging initializing...",10,13,0
 	msg_setup_basic_gdt: DB "Setting up basic GDT...",10,13,0
-	msg_return_to_real16: DB "Return to real-16 mode...",10,13,0
 	msg_enter_32bit: DB "Enter 32-bit protected mode...",10,13,0
 	msg_load_ivt: DB "Load IVT...",10,13,0
 	msg_make_base_task: DB "Make base task...",10,13,0

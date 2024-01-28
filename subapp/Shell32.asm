@@ -29,6 +29,6 @@ CodeEnd:
 dd 0
 DataEnd:
 [SECTION RONL ALIGN=16 VSTART=0]
-str0: db "[Shell] ",0
+str0: db 10,13,"[Shell] ",10,13,0
 RonlEnd:
 Enddf

@@ -20,6 +20,7 @@ PDT_ADDR  EQU 0x5000; - Global Page Directory Table
 GDT_ADDR  EQU 0x7080; - Global Descriptor Table
 KPT_ADDR  EQU 0x8000; - Kernel(Shell) Page Table
 
+SEG16_LOD EQU 0x0200; - loaded at `0x2000`
 SEG16_GDT EQU 0x0708
 SEG16_MAP EQU 0x8000; - Memory Bit Map
 STACK_LEN EQU 0x1000
