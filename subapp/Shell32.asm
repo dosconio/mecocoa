@@ -26,9 +26,14 @@ entry:
     JMP entry; for next calling
 CodeEnd:
 [SECTION DATA ALIGN=16 VSTART=0]
-dd 0
+DD 0
 DataEnd:
 [SECTION RONL ALIGN=16 VSTART=0]
-str0: db 10,13,"[Shell] ",10,13,0
+str0: 
+	%ifdef _FLOPPY
+	DB 10,13,"[FShell]",10,13,0
+	%else; other disk
+	DB 10,13,"[DShell]",10,13,0
+	%endif
 RonlEnd:
 Enddf

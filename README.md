@@ -42,7 +42,17 @@
 
 00500~005FF COMMON BUF
 
-00600~00FFF STACK (2.5 KB)
+00600~007FF BUFFER FOR *FAT INDEX* 
+
+
+
+00800~009FF EXTEND BUFFER FOR *FAT INDEX* 
+
+00A00~00BFF EXTEND STACK
+
+00C00~00FFF REAL STACK (1 KB)
+
+
 
 01000~07BFF 16 KERNEL (27 KB) from Disk Sec 01
 
@@ -58,7 +68,9 @@
 
 | Fizik Address (4M at least) | Paging Size (Total 1024) | Logic Address     | Detail                     |
 | --------------------------- | ------------------------ | ----------------- | -------------------------- |
-| 00000000~00000FFF           | 01                       |                   | IVT                        |
+| 00000000~000003FF           | 00                       |                   | IVT Page (Realors)         |
+|                             |                          |                   | ...                        |
+| 00000800~00000FFF           | 01                       |                   | IVT Page (Selectors)       |
 | 00001000~00001FFF           | 01 (1K)                  | 80001000~80001FFF | Kernel Leader              |
 | 00002000~00004FFF           | 03 (12K)                 | 80002000~80004FFF | Kernel-16b→32b             |
 | 00005000~00005FFF           | 01                       | FFFFF000~FFFFFFFF | PDT                        |
@@ -70,12 +82,16 @@
 | 00009000~00009FFF           | 01                       | 80009000~80009FFF | PT for 0x00000000 for APP  |
 | 0000A000~0007FFFF           | 118                      | 80009000~8007FFFF | **free** Kernel Area       |
 | 00080000~0009FFFF           | 32                       | 80080000~8009FFFF | Page Allocating Bitmap     |
-| 000A0000~000FFFFF           | 96                       |                   | *BIOS Reflect*             |
+| ***Upper Reflect Area***    |                          |                   |                            |
+| 000A0000~000BFFFF           | 96                       |                   | Video Display Memory       |
+| 000C0000~000C7FFF           | ↑                        |                   | Video BIOS                 |
+| 000C8000~000EFFFF           | ↑                        |                   | BIOS Expansions            |
+| 000F0000~000FFFFF           | ↑                        |                   | Mainboard BIOS             |
 | *000B8000~000BFFFF*         |                          | 800B8000~800B9000 | Video Display Buffer 32K   |
-| 000C0000~000FFFFF           |                          |                   |                            |
+| ***User Area***             |                          |                   |                            |
 | 00100000~00400000           | 768                      | 00000000~00300000 | **free** User Area         |
 | *00100000~0010007F*         | (128B)                   | 00000000~00000080 | ArnHeaderCompatibleWithTSS |
-|                             |                          |                   |                            |
+|                             |                          |                   | ...                        |
 
 
 

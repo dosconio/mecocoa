@@ -13,7 +13,7 @@
 %include "debug.a"
 %include "demos.a"
 
-File
+Fent
 
 CLI
 
@@ -68,6 +68,8 @@ Ro_Print:
 	ConPrint SI, ~
 	POPAD
 IRET
+
+TIMES 0x512-($-$$) DB 0;{TEST}
 
 ; ---- DATA ----
 str_ciallo:
