@@ -403,7 +403,7 @@ F_GDTDptrStruct:; Structure Segment Selector
 	msg_on_1s: DB "<Ring~> ",0
 	msg_error: DB "Error!",10,13,0
 	msg_general_exception: DB "General Exception!",10,13,0
-[BITS 32]
+;[BITS 32]
 %include "kerrout32.a"; 32-bit kernel routines
 
 Endf

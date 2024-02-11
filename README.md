@@ -1,12 +1,10 @@
 # Mecocoa
 
-- type: Operating System
-
-- domain: mecocoa.org
-
-- alias: Kasa-x86
-
-- license: BSD-3-Clause license
+- **type**: Operating System
+- **domain**: mecocoa.org
+- **alias**: Kasa-x86
+- **license**: BSD-3-Clause license
+- **by**: @dosconio
 
 
 
@@ -18,15 +16,15 @@
 
 
 
-| Identification | Initialization | Description |
-| -------------- | -------------- | ----------- |
-|                |                |             |
-|                |                |             |
-|                |                |             |
-|                |                |             |
-|                |                |             |
-|                |                |             |
-|                |                |             |
+| Identification | Address | Initialization | Description |
+| -------------- | ------- | -------------- | ----------- |
+|                |         |                |             |
+|                |         |                |             |
+|                |         |                |             |
+|                |         |                |             |
+|                |         |                |             |
+|                |         |                |             |
+|                |         |                |             |
 
 
 
@@ -34,68 +32,54 @@
 
 ## Memory Map
 
-### Real-16 mode
 
-00000~003FF IVT
 
-00400~004FF BIOS DATA
-
-00500~005FF COMMON BUF
-
-00600~007FF BUFFER FOR *FAT INDEX* 
+**Kasha Memline 2024AD**
 
 
 
-00800~009FF EXTEND BUFFER FOR *FAT INDEX* 
+| Fizik Address                         | Pages         | Type                  | Detail 32                                          |
+| ------------------------------------- | ------------- | --------------------- | -------------------------------------------------- |
+| 00000000~000003FF                     | 00            | fixed                 | IVT Page (Realors)                                 |
+| 00000400~000004FF                     | 00            | fixed                 | BIOS Data Area                                     |
+| 00000500~000005FF                     | 00            | fixed                 | KASHA Data Area                                    |
+| 00000600~000007FF                     | 00            | fixed                 | Kernel Stack (DF=1)                                |
+| 00000800~00000FFF                     | 01            | TDM                   | `R16` Kernel Buffer <br>`P32` IVT Page (Selectors) |
+| ***Kernel Area***                     |               |                       |                                                    |
+| 00001000~00001FFF                     | 01            | resident since kernel | PT for High Reflect (00000000~003FFFFF)            |
+| 00002000~00002FFF                     | 01            | resident              | PDT for Kernel                                     |
+| 00003000~00003FFF                     | 01            | fixed                 | Stack                                              |
+| 00004000~0000407F                     | 00            | resident              | TSS for Shell Real-16                              |
+| 00004080~000040FF                     | 00            | resident              | TSS for Shell Prot-32                              |
+| 00004100~00004FFF                     | 01 (480 GDTE) | resident              | GDT                                                |
+| 00005000~0000FFFF                     | 11            | resident              | Kernel (Real-16 + Prot-32)                         |
+| 00010000~0005FFFF                     | 80            | active                | **Least User Area**                                |
+| 00060000~0007FFFF                     | 32            | fixed                 | Page Allocating Bitmap                             |
+| 00080000~0009FFFF                     | 32            | fixed                 | Extended BIOS Data Area                            |
+| ***Upper Reflect Area*** (Over 640KB) |               |                       |                                                    |
+| 000A0000~000BFFFF                     | 96            | fixed                 | Video Display Memory                               |
+| 000C0000~000C7FFF                     | ↑             | fixed                 | Video BIOS                                         |
+| 000C8000~000EFFFF                     | ↑             | fixed                 | BIOS Expansions                                    |
+| 000F0000~000FFFFF                     | ↑             | fixed                 | Mainboard BIOS                                     |
+| *000B8000~000BFFFF*                   |               | fixed                 | Video Display Buffer 32K                           |
+| ***User Area***                       |               |                       |                                                    |
+| 00100000~00400000                     | 768           |                       | Extend-32 User Area                                |
+|                                       |               |                       | ...                                                |
 
-00A00~00BFF EXTEND STACK
+- **TDM** abbreviation of time-division multiplexing.
+- **Least Phyzical Memory** 4M.
+- **Total Size of Pages** 1024.
+- **High Reflect** Linear Address = Logical Address - 0x80000000 (Logical Address >= 0x80000000)
+- Kernel will always give IP to shell after finishing its work.
 
-00C00~00FFF REAL STACK (1 KB)
+**Special** 
 
-
-
-01000~07BFF 16 KERNEL (27 KB) from Disk Sec 01
-
-07C00~9FFFF 16 SHELL
-
-31.5K(7E00h)~640K RAM
-
-\* At the beginning of kernel16 is a memory size check. The size of SHELL16 plus 7C00 mustn’t be less than total memory size.
-
-
-
-### Protect-32 mode
-
-| Fizik Address (4M at least) | Paging Size (Total 1024) | Logic Address     | Detail                     |
-| --------------------------- | ------------------------ | ----------------- | -------------------------- |
-| 00000000~000003FF           | 00                       |                   | IVT Page (Realors)         |
-|                             |                          |                   | ...                        |
-| 00000800~00000FFF           | 01                       |                   | IVT Page (Selectors)       |
-| 00001000~00001FFF           | 01 (1K)                  | 80001000~80001FFF | Kernel Leader              |
-| 00002000~00004FFF           | 03 (12K)                 | 80002000~80004FFF | Kernel-16b→32b             |
-| 00005000~00005FFF           | 01                       | FFFFF000~FFFFFFFF | PDT                        |
-| 00006000~00006FFF           | 01                       | 80006000~80006FFF | Stack                      |
-| 00007000~0000707F           | (128B)                   | 80007000~8000707F | Kernel TSS                 |
-| 00007080~00007FFF           | 01 (496 GDTE)            | 80007080~80007FFF | GDT                        |
-|                             |                          |                   |                            |
-| 00008000~00008FFF           | 01                       | 80008000~80008FFF | PT for 0x80000000          |
-| 00009000~00009FFF           | 01                       | 80009000~80009FFF | PT for 0x00000000 for APP  |
-| 0000A000~0007FFFF           | 118                      | 80009000~8007FFFF | **free** Kernel Area       |
-| 00080000~0009FFFF           | 32                       | 80080000~8009FFFF | Page Allocating Bitmap     |
-| ***Upper Reflect Area***    |                          |                   |                            |
-| 000A0000~000BFFFF           | 96                       |                   | Video Display Memory       |
-| 000C0000~000C7FFF           | ↑                        |                   | Video BIOS                 |
-| 000C8000~000EFFFF           | ↑                        |                   | BIOS Expansions            |
-| 000F0000~000FFFFF           | ↑                        |                   | Mainboard BIOS             |
-| *000B8000~000BFFFF*         |                          | 800B8000~800B9000 | Video Display Buffer 32K   |
-| ***User Area***             |                          |                   |                            |
-| 00100000~00400000           | 768                      | 00000000~00300000 | **free** User Area         |
-| *00100000~0010007F*         | (128B)                   | 00000000~00000080 | ArnHeaderCompatibleWithTSS |
-|                             |                          |                   | ...                        |
+- FFC00000~FFFFEFFF → PTs
+- FFFFF000~FFFFFFFF → 00005000~00005FFF (PDT)
 
 
 
-#### Bitmap
+### Bitmap
 
 To register in GPDT and allocate room.
 

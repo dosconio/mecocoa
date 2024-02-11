@@ -1,100 +1,115 @@
-### BSD3-Opensrc Mecocoa @dosconio ###
-# Build Requirements: Unisym Kit and Windows Host System
+# ASCII Makefile TAB4 LF
+# Attribute: Ubuntu
+# LastCheck: 20240210
+# AllAuthor: @dosconio
+# ModuTitle: Build for Mecocoa
+# Copyright: Dosconio Mecocoa, BCD License Version 3
 
-asm=aasm
-vhd=E:\vhd.vhd
-vmbox=E:\software\vmbox\VBoxManage.exe
-bochd=E:\software\Bochs-2.7\bochsdbg.exe
+asm  = ~/_bin/aasm #OPT: aasm
+ccc  = gcc -c -fno-builtin -nostdinc -nostdlib -fno-stack-protector\
+ -fno-exceptions -fno-strict-aliasing -fno-omit-frame-pointer\
+ -fno-leading-underscore # -fno-rtti
+outf = ../_bin/mecca.img
+link = ld #OPT E:\tmp\CPOSIX\bin\ld.gold.exe
 
-vmname=Kasa
-vmnamf=Kasaf
+asmattr = -I../unisym/inc/Kasha/n_ -I../unisym/inc/naasm/n_ -I./include/
 
-asmattr=-I../unisym/inc/Kasha/n_ -I../unisym/inc/naasm/n_ -I./include/ -I./kernel/
+### Virtual Machine
+# vhd=E:\vhd.vhd
+# vmbox=E:\software\vmbox\VBoxManage.exe
+vmname = Kasa
+vmnamf = Kasaf
+# bochd=E:\software\Bochs-2.7\bochsdbg.exe
 
-
-flat: build
-	#{todo} mecca.vhd
-	@echo "Building Flat Version ..."
-	@ffset $(vhd) ../_obj/boot.bin 0
-	@ffset $(vhd) ../_obj/kernel.bin 1
-	@ffset $(vhd) ../_obj/Kernel32.bin 9
-	@ffset $(vhd) ../_obj/Shell32.bin 20
-	@ffset $(vhd) ../_obj/helloa.bin 50
-	@ffset $(vhd) ../_obj/hellob.bin 60
-
+# flat: build
+# 	#{todo} mecca.vhd
+# 	@echo "Building Flat Version ..."
+# 	@ffset $(vhd) ../_obj/boot.bin 0
+# 	# @ffset $(vhd) ../_obj/kernel.bin 1
+# 	@ffset $(vhd) ../_obj/KER.APP 1
+# 	@ffset $(vhd) ../_obj/Kernel32.bin 9
+# 	@ffset $(vhd) ../_obj/Shell32.bin 20
+# 	@ffset $(vhd) ../_obj/helloa.bin 50
+# 	@ffset $(vhd) ../_obj/hellob.bin 60
 floppy: buildf
-	@echo "Building Floppy Version ..."
-	@dd if=../_obj/boot.f.bin of=../_bin/mecca.img bs=512 count=1 conv=notrunc
-	#{TEMP} Add Kernel.bin into .img manually
-	#{TEMP} Kernel32 and Subapps on Hdisk
-	##-sudo mkdir /mnt/floppy/
+	@dd if=../_obj/boot.fin of=${outf} bs=512 count=1 conv=notrunc
+	-sudo mkdir /mnt/floppy/
+	-@sudo mount -o loop ${outf} /mnt/floppy/
+	-@sudo cp ../_obj/KER.APP /mnt/floppy/KER.APP
+	-@sudo umount /mnt/floppy/
+	@echo "Finish : Imagining Floppy Version ."
 
-init:
-	# Initialize the output image file
-	-rm ../_bin/mecca.img
-	@dd if=/dev/zero of=../_bin/mecca.img bs=512 count=2880
+init: # for floppy
+	-@rm ${outf}
+	@dd if=/dev/zero of=${outf} bs=512 count=2880
+	@echo "Initial: Now the floppy version can be made."
+
+init0: # for general disk
 	@$(vmbox) closemedium disk ../_bin/mecca.vhd --delete
-	#-rm ../_bin/mecca.vhd
+	@-rm ../_bin/mecca.vhd
 	@$(vmbox) createhd --filename ../_bin/mecca.vhd --format VHD --size 4 --variant Fixed
+	@echo "Initial: Now the pure-flat disks versions can be made."
 
-###
+new: uninstall clean init floppy
+
+### Virtual Machine
 
 run: flat
 	$(vmbox) startvm $(vmname)
-
 runf: floppy
 	$(vmbox) startvm $(vmnamf)
 
 bochs: flat
 	-$(bochd) -f e:/cnrv/bochsrc.bxrc
-
 bochf: floppy
 	-$(bochd) -f e:/cnrv/bochsrcf.bxrc
 
 ###
 
-build: ../_obj/boot.bin ../_obj/kernel.bin ../_obj/Kernel32.bin ../_obj/Shell32.bin ../_obj/helloa.bin ../_obj/hellob.bin
-	@echo "Building Components ..."
-
-buildf: ../_obj/boot.f.bin ../_obj/kernel.f.bin ../_obj/Kernel32.bin ../_obj/Shell32.bin ../_obj/helloa.bin ../_obj/hellob.bin
-	@echo "Building Components for Floppy ..."
+build:
+	#
+buildf: ../_obj/boot.fin ../_obj/KER.APP
+	@echo "Finish: Building Floppy Version."
 
 ###
 
-../_obj/boot.bin: ../unisym/demo/osdev/bootstrap/bootfka.a
-	$(asm) ../unisym/demo/osdev/bootstrap/bootfka.a -o ../_obj/boot.bin ${asmattr}
-../_obj/boot.f.bin: ../unisym/demo/osdev/bootstrap/bootfka.a
-	$(asm) ../unisym/demo/osdev/bootstrap/bootfka.a -o ../_obj/boot.f.bin ${asmattr} -D_FLOPPY
+../_obj/headelf: ./drivers/filesys/headelf.asm
+	$(asm) $< -o $@ ${asmattr}
 
-# kernel.bin(Normal), KER.APP(Floppy Identifier)
-../_obj/kernel.bin: ./kernel/Kernel.asm
-	$(asm) ./kernel/Kernel.asm -o ../_obj/kernel.bin ${asmattr}
-../_obj/kernel.f.bin: ./kernel/Kernel.asm
-	$(asm) ./kernel/Kernel.asm -o ../_obj/kernel.f.bin ${asmattr} -D_FLOPPY
+../_obj/boot.fin: ../unisym/demo/osdev/bootstrap/bootfka.a
+	@echo "Build  : Boot"
+	@$(asm) $< -o $@ ${asmattr} -D_FLOPPY
 
-../_obj/Kernel32.bin: ./kernel/Kernel32.asm ./include/offset.a ./kernel/kerrout32.a ./include/routidx.a ./kernel/_debug.a
-	$(asm) ./kernel/Kernel32.asm -o ../_obj/Kernel32.bin ${asmattr}
+../_obj/KER.APP: ../_obj/headelf ../_obj/helloc.obj ../_obj/hellod.obj
+	@echo "Build  : Kernel"
+	@$(link) -s -T ./cokasha/kernel.ld -e bbbb -m elf_i386 -o $@ ../_obj/helloc.obj ../_obj/hellod.obj #-Ttext 0x5000
+	@dd if=../_obj/headelf of=${@} bs=16 conv=notrunc #@ffset $@ ../_obj/headelf 0
 
-../_obj/Shell32.bin: ./subapp/Shell32.asm
-	$(asm) ./subapp/Shell32.asm -o ../_obj/Shell32.bin ${asmattr}
+# ../_obj/Shell32.bin: ./subapps/Shell32.asm
+# 	$(asm) $< -o $@ ${asmattr}
+# 
+# ../_obj/helloa.bin: ./subapps/helloa.asm
+# 	$(asm) $< -o $@ ${asmattr}
+# 
+# ../_obj/hellob.bin: ./subapps/hellob.asm
+# 	$(asm) $< -o $@ ${asmattr}
 
-../_obj/helloa.bin: ./subapp/helloa.asm
-	$(asm) ./subapp/helloa.asm -o ../_obj/helloa.bin ${asmattr}
+../_obj/helloc.obj: ./subapps/helloc.asm
+	@echo "Build  : Kernel/HelloC"
+	@$(asm) $< -o $@ -felf
 
-../_obj/hellob.bin: ./subapp/hellob.asm
-	$(asm) ./subapp/hellob.asm -o ../_obj/hellob.bin ${asmattr}
+../_obj/hellod.obj: ./subapps/hellod.c
+	@echo "Build  : Kernel/HelloD"
+	@${ccc} $< -o $@ -m16
 
 ###
 
 clean:
-	-rm ../_obj/boot.bin
-	-rm ../_obj/boot.f.bin
-	-rm ../_obj/kernel.bin
-	-rm ../_obj/kernel.f.bin
-	-rm ../_obj/Kernel32.bin
-	-rm ../_obj/Shell32.bin
-	-rm ../_obj/helloa.bin
-	-rm ../_obj/hellob.bin
+	-@rm ../_obj/boot.fin
+	-@rm ../_obj/headelf
+	-@rm ../_obj/helloc.obj
+	-@rm ../_obj/hellod.obj
+	-@rm ../_obj/KER.APP
 
-
-
+uninstall:
+	-sudo rm -rf /mnt/floppy
