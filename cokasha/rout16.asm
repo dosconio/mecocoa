@@ -1,6 +1,6 @@
 ; ASCII NASM TAB4 CRLF
 ; Attribute: CPU(x86)
-; LastCheck: 20240208
+; LastCheck: 20240211
 ; AllAuthor: @dosconio
 ; ModuTitle: 16-bit Routine for Kernel
 ; Copyright: Dosconio Mecocoa, BSD 3-Clause License

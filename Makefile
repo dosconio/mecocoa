@@ -10,6 +10,8 @@ ccc  = gcc -c -fno-builtin -nostdinc -nostdlib -fno-stack-protector\
  -fno-exceptions -fno-strict-aliasing -fno-omit-frame-pointer\
  -fno-leading-underscore # -fno-rtti
 outf = ../_bin/mecca.img
+dbgdir = /mnt/hgfs/share/123
+dstdir = E:/share/123
 link = ld #OPT E:\tmp\CPOSIX\bin\ld.gold.exe
 
 asmattr = -I../unisym/inc/Kasha/n_ -I../unisym/inc/naasm/n_ -I./include/
@@ -19,7 +21,7 @@ asmattr = -I../unisym/inc/Kasha/n_ -I../unisym/inc/naasm/n_ -I./include/
 # vmbox=E:\software\vmbox\VBoxManage.exe
 vmname = Kasa
 vmnamf = Kasaf
-# bochd=E:\software\Bochs-2.7\bochsdbg.exe
+bochd=E:/software/Bochs-2.7/bochsdbg.exe
 
 # flat: build
 # 	#{todo} mecca.vhd
@@ -36,6 +38,7 @@ floppy: buildf
 	-sudo mkdir /mnt/floppy/
 	-@sudo mount -o loop ${outf} /mnt/floppy/
 	-@sudo cp ../_obj/KER.APP /mnt/floppy/KER.APP
+	-@sudo cp ./LICENSE /mnt/floppy/TEST.TXT
 	-@sudo umount /mnt/floppy/
 	@echo "Finish : Imagining Floppy Version ."
 
@@ -50,7 +53,12 @@ init0: # for general disk
 	@$(vmbox) createhd --filename ../_bin/mecca.vhd --format VHD --size 4 --variant Fixed
 	@echo "Initial: Now the pure-flat disks versions can be made."
 
-new: uninstall clean init floppy
+new: uninstall clean init mdrivers floppy
+	cp ${outf} ${dbgdir}/mecca.img
+	perl ./configs/bochsdbg.pl > ${dbgdir}/bochsrc.bxrc
+	@echo "You can now debug in bochs with the following command:"
+	@echo ${bochd} -f ${dstdir}/bochsrc.bxrc
+
 
 ### Virtual Machine
 
@@ -71,6 +79,9 @@ build:
 buildf: ../_obj/boot.fin ../_obj/KER.APP
 	@echo "Finish: Building Floppy Version."
 
+mdrivers:
+	$(asm) ../unisym/lib/asm/x86.16/filesys/FAT12.asm -o ../_obj/FAT12_R16.obj ${asmattr} -felf
+
 ###
 
 ../_obj/headelf: ./drivers/filesys/headelf.asm
@@ -80,9 +91,13 @@ buildf: ../_obj/boot.fin ../_obj/KER.APP
 	@echo "Build  : Boot"
 	@$(asm) $< -o $@ ${asmattr} -D_FLOPPY
 
-../_obj/KER.APP: ../_obj/headelf ../_obj/helloc.obj ../_obj/hellod.obj
+# Kernel
+../_obj/kernel.obj: ./cokasha/kernel.asm
+	@$(asm) $< -o $@ ${asmattr} -D_FLOPPY -felf
+../_obj/KER.APP: ../_obj/headelf ../_obj/kernel.obj #../_obj/helloc.obj ../_obj/hellod.obj
 	@echo "Build  : Kernel"
-	@$(link) -s -T ./cokasha/kernel.ld -e bbbb -m elf_i386 -o $@ ../_obj/helloc.obj ../_obj/hellod.obj #-Ttext 0x5000
+	$(link) -s -T ./cokasha/kernel.ld -e HerMain -m elf_i386 -o $@ ../_obj/kernel.obj \
+		../_obj/FAT12_R16.obj #../_obj/helloc.obj ../_obj/hellod.obj #-Ttext 0x5000
 	@dd if=../_obj/headelf of=${@} bs=16 conv=notrunc #@ffset $@ ../_obj/headelf 0
 
 # ../_obj/Shell32.bin: ./subapps/Shell32.asm

@@ -1,5 +1,5 @@
-; ASCII NASM TAB4 CRLF
-; Attribute: CPU(x86)
+; ASCII NASM0207 TAB4 CRLF
+; Attribute: CPU(x86) File(HerELF)
 ; LastCheck: 20240208
 ; AllAuthor: @dosconio
 ; ModuTitle: Kernel: Loader of Environment, Library and Shell
@@ -10,54 +10,78 @@
 %include "debug.a"
 %include "demos.a"
 
-Fent
+GLOBAL HerMain
+
+EXTERN ReadFileFFAT12
+
+ADDR_STACKTOP EQU 0x4000
+
+; {Option Switch: 1 or others}
+IVT_TIMER_ENABLE EQU 1
+MEM_PAGED_ENABLE EQU 1
+
+[CPU 386]
+DB "DOSCONIO"
 [BITS 16]
 ; ---- ---- ---- ---- CODE ---- ---- ---- ----
-DefineStack16 0x4000/16, 0
-XOR AX, AX
-MOV ES, AX
-MOV AX, CS
-MOV DS, AX
-
+section .text
+HerMain:
+; Initialize 16-Bit Real Mode
+	DefineStack16 0, ADDR_STACKTOP
+	XOR AX, AX
+	MOV ES, AX
+	MOV AX, CS
+	MOV DS, AX
 ; Load IVT-Real
-MOV WORD [ES:80H*4+0], Ro_Print
-MOV WORD [ES:80H*4+2], CS
-
+	MOV WORD [ES:80H*4+0], Ro_Print
+	MOV WORD [ES:80H*4+2], CS
 ; Get and Check Memory Size (>= 4MB)
+	;
+; Load and Run Shell
+	PUSH DS
+	MOV SI, str_progload
+	MOV AH, 0
+	INT 80H
+	MOV AX, 0x0200
+	MOV ES, AX
+	MOV DS, AX
+	;;codefileLoad16 0,0,10
+	;;CALL 0x0200:0x1
+	POP DS
 
-PUSH DS
 
-; Load the main program
-MOV SI, str_progload
-MOV AH, 0
-INT 80H
-MOV AX, 0x0200
-MOV ES, AX
-MOV DS, AX
-codefileLoad16 0,0,10
 
-; Run the main program
-CALL 0x0200:0x1
+; Main
+	MOV AX, 0
+	MOV ES, AX
+	PUSH WORD 0x9000; Buffer
+	PUSH WORD test_filename
+	PUSH WORD 0x9400
+	CALL ReadFileFFAT12
 
-POP DS
-MOV WORD [ES:80H*4+0], Ro_Print
-MOV WORD [ES:80H*4+2], DS
-
-; End
-MOV SI, str_endenv
-MOV AH, 0
-INT 80H
-DbgStop
+; Endo
+	MOV SI, str_endenv
+	MOV AH, 0
+	INT 80H
+	DbgStop
 ; ---- ---- ---- ---- RO16 ---- ---- ---- ----
 %include "cokasha/rout16.asm"
 ; ---- ---- ---- ---- DATA ---- ---- ---- ----
+section .data
 str_progload:
-	DB "Loading the shell of real-16...", 10, 13, 0
+	DB "Loading the shell of real-16"
+	%ifdef _FLOPPY
+		DB "(F)"
+	%endif
+	DB "...", 10, 13, 0
 str_endenv:
 	DB "End of the soft environment.", 10, 13, 0
+test_filename:
+	DB "TEST    TXT"
+
 
 ; ---- ---- ---- ---- KERNEL 32 ---- ---- ---- ----
 ALIGN 32
 [BITS 32]
 
-Endf
+; Endf

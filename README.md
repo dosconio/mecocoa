@@ -8,24 +8,17 @@
 
 
 
-## Component Kernel32
+## Components
 
 
 
-### Variables
-
-
-
-| Identification | Address | Initialization | Description |
-| -------------- | ------- | -------------- | ----------- |
-|                |         |                |             |
-|                |         |                |             |
-|                |         |                |             |
-|                |         |                |             |
-|                |         |                |             |
-|                |         |                |             |
-|                |         |                |             |
-
+| Program        | Format     | Description |
+| -------------- | ---------- | ----------- |
+| USYM BOOT      | FLAT A     |             |
+| Kernel         | HerELF A+C |             |
+| Shell16        | ELF C      |             |
+| Shell32 (COTL) | ELF C++    |             |
+|                |            |             |
 
 
 
@@ -76,6 +69,22 @@
 
 - FFC00000~FFFFEFFF → PTs
 - FFFFF000~FFFFFFFF → 00005000~00005FFF (PDT)
+
+### Variables
+
+
+
+| Identification | Address | Initialization | Description |
+| -------------- | ------- | -------------- | ----------- |
+|                |         |                |             |
+|                |         |                |             |
+|                |         |                |             |
+|                |         |                |             |
+|                |         |                |             |
+|                |         |                |             |
+|                |         |                |             |
+
+
 
 
 

@@ -10,14 +10,10 @@
 %include "demos.a"
 %include "_debug.a"
 
-; {Option Switch: 1 or others}
-IVT_TIMER_ENABLE EQU 1
-MEM_PAGED_ENABLE EQU 1
-
 %include "offset.a" ; addresses and selectors
 %include "routidx.a"; index of routines
 
-[CPU 386]
+
 File
 ; Initial
 	CLI
