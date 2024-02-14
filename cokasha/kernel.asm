@@ -13,6 +13,7 @@
 GLOBAL HerMain
 
 EXTERN ReadFileFFAT12
+EXTERN LoadFileMELF
 
 ADDR_STACKTOP EQU 0x4000
 
@@ -55,10 +56,12 @@ HerMain:
 	MOV AX, 0
 	MOV ES, AX
 	PUSH WORD 0x9000; Buffer
-	PUSH WORD test_filename
+	PUSH WORD str_shell16;{TODO} if not found
 	PUSH WORD 0x9400
 	CALL ReadFileFFAT12
-
+	CALL LoadFileMELF; make use of the stack
+	ADD SP, 6
+	CALL AX
 ; Endo
 	MOV SI, str_endenv
 	MOV AH, 0
@@ -76,9 +79,10 @@ str_progload:
 	DB "...", 10, 13, 0
 str_endenv:
 	DB "End of the soft environment.", 10, 13, 0
-test_filename:
+str_test_filename:
 	DB "TEST    TXT"
-
+str_shell16:
+	DB "SHL16   APP"
 
 ; ---- ---- ---- ---- KERNEL 32 ---- ---- ---- ----
 ALIGN 32

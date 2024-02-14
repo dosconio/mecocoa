@@ -12,9 +12,10 @@ ccc  = gcc -c -fno-builtin -nostdinc -nostdlib -fno-stack-protector\
 outf = ../_bin/mecca.img
 dbgdir = /mnt/hgfs/share/123
 dstdir = E:/share/123
+unidir = /mnt/hgfs/unisym
 link = ld #OPT E:\tmp\CPOSIX\bin\ld.gold.exe
 
-asmattr = -I../unisym/inc/Kasha/n_ -I../unisym/inc/naasm/n_ -I./include/
+asmattr = -I${unidir}/inc/Kasha/n_ -I${unidir}/inc/naasm/n_ -I./include/
 
 ### Virtual Machine
 # vhd=E:\vhd.vhd
@@ -34,17 +35,18 @@ bochd=E:/software/Bochs-2.7/bochsdbg.exe
 # 	@ffset $(vhd) ../_obj/helloa.bin 50
 # 	@ffset $(vhd) ../_obj/hellob.bin 60
 floppy: buildf
-	@dd if=../_obj/boot.fin of=${outf} bs=512 count=1 conv=notrunc
-	-sudo mkdir /mnt/floppy/
+	@dd if=../_obj/boot.fin of=${outf} bs=512 count=1 conv=notrunc 2>>/dev/null
+	-@sudo mkdir /mnt/floppy/
 	-@sudo mount -o loop ${outf} /mnt/floppy/
 	-@sudo cp ../_obj/KER.APP /mnt/floppy/KER.APP
 	-@sudo cp ./LICENSE /mnt/floppy/TEST.TXT
+	-@sudo cp ../_obj/SHL16.APP /mnt/floppy/SHL16.APP
 	-@sudo umount /mnt/floppy/
 	@echo "Finish : Imagining Floppy Version ."
 
 init: # for floppy
 	-@rm ${outf}
-	@dd if=/dev/zero of=${outf} bs=512 count=2880
+	@dd if=/dev/zero of=${outf} bs=512 count=2880 2>>/dev/null
 	@echo "Initial: Now the floppy version can be made."
 
 init0: # for general disk
@@ -54,8 +56,8 @@ init0: # for general disk
 	@echo "Initial: Now the pure-flat disks versions can be made."
 
 new: uninstall clean init mdrivers floppy
-	cp ${outf} ${dbgdir}/mecca.img
-	perl ./configs/bochsdbg.pl > ${dbgdir}/bochsrc.bxrc
+	@cp ${outf} ${dbgdir}/mecca.img
+	@perl ./configs/bochsdbg.pl > ${dbgdir}/bochsrc.bxrc
 	@echo "You can now debug in bochs with the following command:"
 	@echo ${bochd} -f ${dstdir}/bochsrc.bxrc
 
@@ -76,18 +78,20 @@ bochf: floppy
 
 build:
 	#
-buildf: ../_obj/boot.fin ../_obj/KER.APP
-	@echo "Finish: Building Floppy Version."
+buildf: ../_obj/boot.fin ../_obj/KER.APP ../_obj/SHL16.APP
+	@echo "Finish : Building Floppy Version."
 
 mdrivers:
-	$(asm) ../unisym/lib/asm/x86.16/filesys/FAT12.asm -o ../_obj/FAT12_R16.obj ${asmattr} -felf
+	@echo "Build  : Drivers except libraries"
+	@$(asm) ${unidir}/lib/asm/x86.16/filesys/FAT12.asm -o ../_obj/FAT12_R16.obj ${asmattr} -felf
+	@$(asm) ${unidir}/lib/asm/x86.16/filefmt/ELF.asm   -o ../_obj/ELF_R16.obj   ${asmattr} -felf
 
 ###
 
 ../_obj/headelf: ./drivers/filesys/headelf.asm
-	$(asm) $< -o $@ ${asmattr}
+	@$(asm) $< -o $@ ${asmattr}
 
-../_obj/boot.fin: ../unisym/demo/osdev/bootstrap/bootfka.a
+../_obj/boot.fin: ${unidir}/demo/osdev/bootstrap/bootfka.a
 	@echo "Build  : Boot"
 	@$(asm) $< -o $@ ${asmattr} -D_FLOPPY
 
@@ -96,9 +100,18 @@ mdrivers:
 	@$(asm) $< -o $@ ${asmattr} -D_FLOPPY -felf
 ../_obj/KER.APP: ../_obj/headelf ../_obj/kernel.obj #../_obj/helloc.obj ../_obj/hellod.obj
 	@echo "Build  : Kernel"
-	$(link) -s -T ./cokasha/kernel.ld -e HerMain -m elf_i386 -o $@ ../_obj/kernel.obj \
-		../_obj/FAT12_R16.obj #../_obj/helloc.obj ../_obj/hellod.obj #-Ttext 0x5000
-	@dd if=../_obj/headelf of=${@} bs=16 conv=notrunc #@ffset $@ ../_obj/headelf 0
+	@$(link) -s -T ./cokasha/kernel.ld -e HerMain -m elf_i386 -o $@ \
+		../_obj/kernel.obj ../_obj/FAT12_R16.obj ../_obj/ELF_R16.obj \
+		#../_obj/helloc.obj ../_obj/hellod.obj #-Ttext 0x5000
+	@dd if=../_obj/headelf of=${@} bs=16 conv=notrunc 2>>/dev/null #@ffset $@ ../_obj/headelf 0 
+
+../_obj/SHL16.APP: ./coshell/shell16.c ./drivers/library/libdbg.asm
+	@echo "Build  : Shell16"
+	@${ccc} $< -o ../_obj/shell16.obj -m16
+	@${asm} ./drivers/library/libdbg.asm -o ../_obj/libdbg.obj ${asmattr} -felf
+	@$(link) -s -T ./coshell/shell16.ld -e main -m elf_i386 -o $@ \
+		../_obj/shell16.obj ../_obj/libdbg.obj
+
 
 # ../_obj/Shell32.bin: ./subapps/Shell32.asm
 # 	$(asm) $< -o $@ ${asmattr}
@@ -125,6 +138,9 @@ clean:
 	-@rm ../_obj/helloc.obj
 	-@rm ../_obj/hellod.obj
 	-@rm ../_obj/KER.APP
+	-@rm ../_obj/shell16.obj
+	-@rm ../_obj/libdbg.obj
+	-@rm ../_obj/SHL16.APP
 
 uninstall:
-	-sudo rm -rf /mnt/floppy
+	-@sudo rm -rf /mnt/floppy

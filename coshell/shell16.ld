@@ -1,9 +1,8 @@
 SECTIONS
 {
-  . = 0x8000;
+  . = 0xB000;
   .text : {*(.text)}
-  . = 0x6000;
-  # escape USYM's 7C00
+  . = 0xC000;
   .data : {*(.data)}
   .bss : {*(.bss)}
 }
