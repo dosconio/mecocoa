@@ -13,8 +13,10 @@ IRET
 
 Ro_Print:
 	PUSHAD
+	PUSH ES
 	MOV AX, 0xB800
 	MOV ES, AX
 	ConPrint SI, ~
+	POP ES
 	POPAD
 IRET

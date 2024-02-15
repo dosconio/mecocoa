@@ -24,16 +24,6 @@ vmname = Kasa
 vmnamf = Kasaf
 bochd=E:/software/Bochs-2.7/bochsdbg.exe
 
-# flat: build
-# 	#{todo} mecca.vhd
-# 	@echo "Building Flat Version ..."
-# 	@ffset $(vhd) ../_obj/boot.bin 0
-# 	# @ffset $(vhd) ../_obj/kernel.bin 1
-# 	@ffset $(vhd) ../_obj/KER.APP 1
-# 	@ffset $(vhd) ../_obj/Kernel32.bin 9
-# 	@ffset $(vhd) ../_obj/Shell32.bin 20
-# 	@ffset $(vhd) ../_obj/helloa.bin 50
-# 	@ffset $(vhd) ../_obj/hellob.bin 60
 floppy: buildf
 	@dd if=../_obj/boot.fin of=${outf} bs=512 count=1 conv=notrunc 2>>/dev/null
 	-@sudo mkdir /mnt/floppy/
@@ -41,6 +31,7 @@ floppy: buildf
 	-@sudo cp ../_obj/KER.APP /mnt/floppy/KER.APP
 	-@sudo cp ./LICENSE /mnt/floppy/TEST.TXT
 	-@sudo cp ../_obj/SHL16.APP /mnt/floppy/SHL16.APP
+	-@sudo cp ../_obj/SHL32.APP /mnt/floppy/SHL32.APP
 	-@sudo umount /mnt/floppy/
 	@echo "Finish : Imagining Floppy Version ."
 
@@ -78,13 +69,14 @@ bochf: floppy
 
 build:
 	#
-buildf: ../_obj/boot.fin ../_obj/KER.APP ../_obj/SHL16.APP
+buildf: ../_obj/boot.fin ../_obj/KER.APP ../_obj/SHL16.APP ../_obj/SHL32.APP
 	@echo "Finish : Building Floppy Version."
 
 mdrivers:
 	@echo "Build  : Drivers except libraries"
-	@$(asm) ${unidir}/lib/asm/x86.16/filesys/FAT12.asm -o ../_obj/FAT12_R16.obj ${asmattr} -felf
-	@$(asm) ${unidir}/lib/asm/x86.16/filefmt/ELF.asm   -o ../_obj/ELF_R16.obj   ${asmattr} -felf
+	@$(asm) ${unidir}/lib/asm/x86.16/filesys/FAT12.asm     -o ../_obj/FAT12_R16.obj ${asmattr} -felf
+	@$(asm) ${unidir}/lib/asm/x86.16/filefmt/ELF.asm       -o ../_obj/ELF_R16.obj   ${asmattr} -felf
+	@$(asm) ${unidir}/lib/asm/x86/interrupt/x86_i8259A.asm -o ../_obj/8259Ax86.obj  ${asmattr} -felf
 
 ###
 
@@ -102,7 +94,7 @@ mdrivers:
 	@echo "Build  : Kernel"
 	@$(link) -s -T ./cokasha/kernel.ld -e HerMain -m elf_i386 -o $@ \
 		../_obj/kernel.obj ../_obj/FAT12_R16.obj ../_obj/ELF_R16.obj \
-		#../_obj/helloc.obj ../_obj/hellod.obj #-Ttext 0x5000
+		../_obj/8259Ax86.obj #../_obj/helloc.obj ../_obj/hellod.obj #-Ttext 0x5000
 	@dd if=../_obj/headelf of=${@} bs=16 conv=notrunc 2>>/dev/null #@ffset $@ ../_obj/headelf 0 
 
 ../_obj/SHL16.APP: ./coshell/shell16.c ./drivers/library/libdbg.asm
@@ -112,13 +104,18 @@ mdrivers:
 	@$(link) -s -T ./coshell/shell16.ld -e main -m elf_i386 -o $@ \
 		../_obj/shell16.obj ../_obj/libdbg.obj
 
+../_obj/SHL32.APP: ./coshell/shell32.c
+	@echo "Build  : Shell32"
+	@${ccc} $< -o ../_obj/shell32.obj -m32
+	@$(link) -s -T ./coshell/shell32.ld -e main -m elf_i386 -o $@ \
+		../_obj/shell32.obj
 
 # ../_obj/Shell32.bin: ./subapps/Shell32.asm
 # 	$(asm) $< -o $@ ${asmattr}
-# 
+
 # ../_obj/helloa.bin: ./subapps/helloa.asm
 # 	$(asm) $< -o $@ ${asmattr}
-# 
+
 # ../_obj/hellob.bin: ./subapps/hellob.asm
 # 	$(asm) $< -o $@ ${asmattr}
 
@@ -135,12 +132,17 @@ mdrivers:
 clean:
 	-@rm ../_obj/boot.fin
 	-@rm ../_obj/headelf
-	-@rm ../_obj/helloc.obj
-	-@rm ../_obj/hellod.obj
+	-@rm ../_obj/kernel.obj
+	-@rm ../_obj/FAT12_R16.obj
+	-@rm ../_obj/ELF_R16.obj
+	-@rm ../_obj/8259Ax86.obj
 	-@rm ../_obj/KER.APP
 	-@rm ../_obj/shell16.obj
 	-@rm ../_obj/libdbg.obj
 	-@rm ../_obj/SHL16.APP
-
+	-@rm ../_obj/shell32.obj
+	-@rm ../_obj/SHL32.APP
+#	-@rm ../_obj/helloc.obj
+#	-@rm ../_obj/hellod.obj
 uninstall:
 	-@sudo rm -rf /mnt/floppy

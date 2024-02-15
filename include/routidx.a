@@ -1,7 +1,10 @@
-; Mecocoa by @dosconio
-; Opensrc under BSD 3-Clause License
-;
-; Routine Indexes
+; ASCII NASM0207 TAB4 CRLF
+; Attribute: Include()
+; LastCheck: 20240215
+; AllAuthor: @dosconio
+; ModuTitle: Routine 32-bit Catalog
+; Copyright: Dosconio Mecocoa, BSD 3-Clause License
+
 RotTerminal  EQU 0
 RotPrint     EQU 1
 RotMalloc    EQU 2

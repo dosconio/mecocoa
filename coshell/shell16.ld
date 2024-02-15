@@ -1,8 +1,9 @@
+# LF
 SECTIONS
 {
-  . = 0xB000;
+  . = 0xA000;
   .text : {*(.text)}
-  . = 0xC000;
+  . = 0x8000;
   .data : {*(.data)}
   .bss : {*(.bss)}
 }
