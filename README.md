@@ -46,6 +46,10 @@
 | 00004080~000040FF                     | 00            | resident              | TSS for Shell Prot-32                              |
 | 00004100~00004FFF                     | 01 (480 GDTE) | resident              | GDT                                                |
 | 00005000~0000FFFF                     | 11            | resident              | Kernel (Real-16 + Prot-32)                         |
+| ====5000~====57FF                     |               |                       | Kernel.Data                                        |
+| ====5800~====7BFF                     |               |                       | Kernel.Code                                        |
+| ====8000~====9FFF                     |               |                       | Shell16.Data                                       |
+| ====A000~====FFFF                     |               |                       | Shell16.Code                                       |
 | 00010000~0005FFFF                     | 80            | active                | **Least User Area**                                |
 | 00060000~0007FFFF                     | 32            | fixed                 | Page Allocating Bitmap                             |
 | 00080000~0009FFFF                     | 32            | fixed                 | Extended BIOS Data Area                            |
@@ -110,6 +114,25 @@ A line stands 16k×2×16=512k=pow2(19)=0x80000;
 
 
 
+### Kasha Area
+
+
+
+| Offset 500~5FF | Object              | Description |
+| -------------- | ------------------- | ----------- |
+| 00 word        | IP of Prot-32 Entry |             |
+| 02 word        | CS of Prot-32 Entry |             |
+| 04 word        | GDT32 Length        |             |
+| 06 dword       | GDT32 Address       |             |
+| 0A word        | IVT32 Length        |             |
+| 0C dword       | IVT32 Address       |             |
+| 10 qword       | zero                |             |
+| 18             |                     |             |
+|                |                     |             |
+|                |                     |             |
+
+
+
 ## Segment Map
 
 ### Global
@@ -117,11 +140,11 @@ A line stands 16k×2×16=512k=pow2(19)=0x80000;
 | Segment (Hex)      | Ring | Description                      |
 | ------------------ | ---- | -------------------------------- |
 | 00 - 7080          | /    | *null*                           |
-| 01 - 7088          | 0    | 4G R0 DATA                       |
-| 02 - 7090          | 0    | Kernel 32 CODE                   |
-| 03 - 7098          | 0    | 4K STACK                         |
+| 01 - 7088          | 0    | 4G R0 32 DATA and STAK           |
+| 02 - 7090          | 0    | 4G R0 32 CODE                    |
+| 03 - 7098          | 0    | <del>4K STACK</del> but not use  |
 | 04 - 70A0          | 0\*  | B8000 VIDEO                      |
-| 05 - 70A8          | 0    | 32-Protect Routine               |
+| 05 - 70A8          | 0    | <del>32-Protect Routine</del>    |
 | 06 - 70B0          | 3    | 32-Protect Call Gate             |
 | 07 - 70B8          | 0    | Kernel (Loaded by ENTRY-MBR) TSS |
 | 08 - 70C0          | /    | *kept*                           |

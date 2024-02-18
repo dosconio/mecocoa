@@ -10,67 +10,15 @@
 %include "osdev.a"
 %include "video.a"
 %include "demos.a"
+%include "cokasha/kernel.inc"
+; ---- ---- Routine Indexes ---- ----
+%include "routidx.a"
+; ---- ---- {Option Switch: 1 or others} ---- ----
+IVT_TIMER_ENABLE EQU 1
+MEM_PAGED_ENABLE EQU 1
 
 GLOBAL HerMain
 GLOBAL ModeProt32
-
-EXTERN ReadFileFFAT12
-EXTERN LoadFileMELF
-
-EXTERN _LoadFileMELF
-EXTERN i8259A_Init32
-
-%macro rprint 1
-	MOV SI, %1
-	MOV AH, 0
-	INT 80H
-%endmacro
-
-%macro rcpgates 0-1 EDI; kernel copy gates
-	%%lup:
-	MOV [%1], EAX
-	ADD EDI, 4
-	MOV [%1], EDX
-	ADD EDI, 4
-	LOOP %%lup
-%endmacro
-
-;{TODO} Use dynamic but static loading method;
-ADDR_KERNELBF EQU 0x0800
-ADDR_IDT32  EQU 0x0800; - Interrupt Descriptor Table
-ADDR_STATICLD EQU 0x1000
-KPT_ADDR      EQU 0x1000; - Kernel(Shell) Page Table
-PDT_ADDR      EQU 0x2000; - Shell Page Directory Table
-ADDR_STACKTOP EQU 0x4000
-ADDR_TSS16    EQU 0x4000
-ADDR_TSS32    EQU 0x4080
-ADDR_GDT      EQU 0x4100
-SEGM_BITMAP   EQU 0x6000; - Memory Bit Map
-
-GDTDptr   EQU 0x0504
-IVTDptr   EQU 0x050A
-
-Linear EQU 0x80000000
-
-; ---- ---- Segment Selectors ---- ----
-
-SegNull   EQU (8*0)
-SegData   EQU (8*1)
-SegCode   EQU (8*2)
-SegStack  EQU (8*3)
-SegVideo  EQU (8*4)
-SegRot    EQU (8*5)
-SegGate   EQU (8*6)
-SegTSS    EQU (8*7)
-SegShell  EQU (8*0x10); TSS
-SegShellT EQU (8*0x11); LDT
-
-; ---- ---- Routine Indexes ---- ----
-%include "routidx.a"
-
-; ---- ---- {Option Switch: 1 or others} ---- ----
-IVT_TIMER_ENABLE EQU 0
-MEM_PAGED_ENABLE EQU 1
 
 [CPU 386]
 DB "DOSCONIO"
@@ -126,6 +74,7 @@ ModeProt32:
 	PUSH WORD str_shell32;{TODO} if not found
 	PUSH WORD 0x2000; ES
 	CALL ReadFileFFAT12
+	CALL FloppyMotorOff; ---- NEED NOT Floppy SINCE NOW ----
 	ADD SP, 6
 	POP ES
 ; Save state of Real-16 Shell and Enter Prot-32 Paged Flat Mode,
@@ -234,10 +183,10 @@ backinit:
 	MOV SS, BX
 	AND ESP, 0x0000FFFF
 	Addr20Disable; yo osdev.a
-	MOV WORD[0x050A], 0x3FF
-	MOV DWORD[0x050C], 0x00000000
-	lidt [0x050A]; zero
-	rprint str_endenv_dbg
+	MOV WORD[IVTDptr], 0x3FF
+	MOV DWORD[IVTDptr+2], 0x00000000
+	lidt [IVTDptr]; zero
+	rprint str_endenv
 	DbgStop
 	;JMP HerMain or ?
 ; ---- ---- ---- ---- RO16 ---- ---- ---- ----
@@ -319,13 +268,24 @@ mainx:
 	MOV CX, SegTSS
 	LTR CX
 	ADD WORD[EAX+2], 1; state
+; [Debug Area]
+	JMP .load.shell32
+	EXTERN _curset
+	EXTERN _curget
+	CALL _curget
+	ADD EAX, 2
+	PUSH EAX
+	CALL _curset
+	POP EAX
+	DbgStop
 ; Mainx - Load and Run Shell-Prot32
+.load.shell32
 	MOV EDI, RotPrint
 	MOV ESI, str_load_shell32+Linear
 	CALL SegGate:0
 	PUSH DWORD 0x12000
-	CALL _LoadFileMELF; make use of the stack
-	CALL EAX
+	CALL _LoadFileMELF
+	CALL EAX; then return real-16
 ;;	MOV WORD[THISF_ADR+TSSCrt], 8*0x11
 ;;	MOV WORD[THISF_ADR+TSSMax], 8*0x11
 ;;	MOV ESI, THISF_ADR+msg_load_shell32
@@ -360,13 +320,6 @@ mainx:
 ;;	; LOOP Shell32_Test
 ; Enable Multi-tasks
 	;;STI
-; {OPT TEST} Return Real-16 Mode
-	JMP ReturnReal16
-	;STI
-	HLT
-	DB 0xE9
-	DD -6; [32-b] mainloop: HLT, JMP mainloop
-DbgStop
 ReturnReal16:
 	CLI
 	MOV EDI, RotPrint
@@ -391,53 +344,53 @@ ReturnReal16:
 %include "cokasha/rout32.asm"
 ; ---- ---- ---- ---- DATA ---- ---- ---- ----
 section .data
-str_progload:
-	DB "Loading the shell of real-16"
-	%ifdef _FLOPPY
-		DB "(F)"
-	%endif
-	DB "...", 10, 13, 0
-str_endenv:
-	DB "End of the soft environment.", 10, 13, 0
-str_endenv_dbg:
-	DB "End of debug!", 10, 13, 0
-str_test_filename:
-	DB "TEST    TXT"
-str_shell16:
-	DB "SHL16   APP"
-str_shell32:
-	DB "SHL32   APP"
-str_enter_32bit:
-	DB "Entering 32-bit protected mode...",10,13,0
-str_load_ivt:
-	DB "Loading IVT32...",10,13,0
-str_enable_i8259a:
-	DB "Enabling i8259A...",10,13,0
-str_load_shell32:
-	DB "Loading the shell of real-32",10,13,0
-str_used_mem:
-	DB "Used Memory: ",0
-str_newline:
-	DB 10,13,0
-str_quit_32bit:
-	DB "Quit 32-bit protected mode...",10,13,0
+	str_progload:
+		DB "Loading the shell of real-16"
+		%ifdef _FLOPPY
+			DB "(F)"
+		%endif
+		DB "...", 10, 13, 0
+	str_endenv:
+		DB "End of the soft environment.", 10, 13, 0
+	str_endenv_dbg:
+		DB "End of debug!", 10, 13, 0
+	str_test_filename:
+		DB "TEST    TXT"
+	str_shell16:
+		DB "SHL16   APP"
+	str_shell32:
+		DB "SHL32   APP"
+	str_enter_32bit:
+		DB "Entering 32-bit protected mode...",10,13,0
+	str_load_ivt:
+		DB "Loading IVT32...",10,13,0
+	str_enable_i8259a:
+		DB "Enabling i8259A...",10,13,0
+	str_load_shell32:
+		DB "Loading the shell of prot-32",10,13,0
+	str_used_mem:
+		DB "Used Memory: ",0
+	str_newline:
+		DB 10,13,0
+	str_quit_32bit:
+		DB "Quit 32-bit protected mode...",10,13,0
 
-msg_spaces:
-	DB "        ",0
-msg_on_1s:
-	DB "<Ring~> ",0
-msg_general_exception:
-	DB "General Exception!",10,13,0
-msg_error:
-	DB "Error!",10,13,0
-
-GDTPTR: DD 0
-SvpAllocPtr: DD 0x0000A000;(to cancel this) Supervisor
-UsrAllocPtr: DD 0x00100000
-TSSNumb: DW 1
-	DD 0; of TSSCrt
-TSSCrt: DW 0; Kernel's=0
-TSSMax: DW 0
+	msg_spaces:
+		DB "        ",0
+	msg_on_1s:
+		DB "<Ring~> ",0
+	msg_general_exception:
+		DB "General Exception!",10,13,0
+	msg_error:
+		DB "Error!",10,13,0
+	;
+	GDTPTR: DD 0
+	SvpAllocPtr: DD 0x0000A000;(to cancel this) Supervisor
+	UsrAllocPtr: DD 0x00100000
+	TSSNumb: DW 1
+		DD 0; of TSSCrt
+	TSSCrt: DW 0; Kernel's=0
+	TSSMax: DW 0
 
 ; ---- ---- ---- ---- KERNEL 32 ---- ---- ---- ----
 ALIGN 32
