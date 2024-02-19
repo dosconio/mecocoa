@@ -291,11 +291,11 @@ F_MemAllocSuperv:; DS:GlbArea ECX->EAX
 ;[Routines protect-32 mode]
 APISymbolTable:; till Routine
 	RoutineNo: DD (__Routine-rot0000)/8
-	rot0000:; Terminate
-		DD R_Terminate+Linear
-		DW SegCode,0
-	rot0001:; PrintString (accept New Line)
+	rot0000:; PrintString (accept New Line)
 		DD R_Print+Linear
+		DW SegCode,0
+	rot0001:; PrintDwordCursor
+		DD R_PrintDwordCursor+Linear
 		DW SegCode,0
 	rot0002:; Malloc
 		DD R_Malloc+Linear
@@ -306,11 +306,10 @@ APISymbolTable:; till Routine
 	rot0004:; DiskReadLBA28
 		DD R_DiskReadLBA28+Linear
 		DW SegCode,0
-	rot0005:; PrintDwordCursor
-		DD R_PrintDwordCursor+Linear
-		DW SegCode,0
 __Routine:
 RoutineGate:; EDI=FUNCTION RoutIn:{DS=SegData}
+	CMP EDI, [RoutineNo+Linear]
+	JAE R_Terminate
 	CALL FAR [(rot0000+Linear)+EDI*8]
 	RETF
 R_Terminate:; 00 and other rontine point to here
@@ -324,18 +323,14 @@ R_Terminate:; 00 and other rontine point to here
 	NESTED_TASK: IRETD
 	RETF; for next calling the subapp
 	ALIGN 16
+; ----
 R_Print:
-	PUSH ES
-	PUSH EAX
-	PUSH EBX
-	PUSH AX	
-	MOV EAX, SegVideo
-	MOV ES,EAX
-	POP AX
-	ConPrint ESI,~
-	POP EBX
-	POP EAX
-	POP ES
+	PUSHAD
+	PUSH DWORD ~0
+	PUSH ESI
+	CALL DWORD _outtxt
+	ADD ESP, 4*2
+	POPAD
 	RETF
 	ALIGN 16
 R_Malloc:; ecx=length ret"eax=start" (user-area by manager)
@@ -379,19 +374,11 @@ R_DiskReadLBA28:;eax=start, ds:ebx=buffer
 ;	RETF
 ;	ALIGN 16
 R_PrintDwordCursor:
-;	PUSHAD
-;	PUSH EAX
-;	MOV EAX, SegVideo
-;	MOV ES, EAX
-;	POP EAX
-;	PUSH DX
-;	ConCursor; Volatile{DX}
-;	POP DX
-;	AND EAX, 0xFFFF
-;	DbgEcho32 EDX, EAX
-;	ADD AX,8
-;	ConCursor AX
-;	POPAD
+	PUSHAD
+	PUSH EDX
+	CALL DWORD _outi32hex
+	POP EDX
+	POPAD
 	RETF
 	ALIGN 16
 RoutineEnd:

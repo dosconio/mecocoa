@@ -7,7 +7,7 @@
 %include "debug.a"
 %include "demos.a"
 %include "osdev.a"
-%include "routidx.a"
+
 Dem2Prog entry,CODE,CodeEnd,256,DATA,DataEnd,RONL,RonlEnd
 SegGate EQU 8*6+3
 APIEndo:

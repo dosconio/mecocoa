@@ -1,6 +1,6 @@
 ; ASCII NASM0207 TAB4 CRLF
 ; Attribute: CPU(x86) File(HerELF)
-; LastCheck: 20240208
+; LastCheck: 20240219
 ; AllAuthor: @dosconio
 ; ModuTitle: Kernel: Loader of Environment, Library and Shell
 ; Copyright: Dosconio Mecocoa, BSD 3-Clause License
@@ -11,11 +11,19 @@
 %include "video.a"
 %include "demos.a"
 %include "cokasha/kernel.inc"
-; ---- ---- Routine Indexes ---- ----
-%include "routidx.a"
 ; ---- ---- {Option Switch: 1 or others} ---- ----
 IVT_TIMER_ENABLE EQU 1
 MEM_PAGED_ENABLE EQU 1
+
+EXTERN ReadFileFFAT12
+EXTERN LoadFileMELF
+EXTERN FloppyMotorOff
+EXTERN PAGE_INIT
+
+EXTERN _LoadFileMELF
+EXTERN i8259A_Init32
+EXTERN _outtxt
+EXTERN _outi32hex
 
 GLOBAL HerMain
 GLOBAL ModeProt32
@@ -34,7 +42,7 @@ HerMain:; assure CS,DS,ES,SS equal zero
 	MOV AX, CS
 	MOV DS, AX
 ; Load IVT-Real
-	MOV WORD [ES:80H*4+0], Ro_Print
+	MOV WORD [ES:80H*4+0], Routint16
 	MOV WORD [ES:80H*4+2], CS
 ; Get and Check Memory Size (>= 4MB)
 	;
@@ -79,53 +87,13 @@ ModeProt32:
 	POP ES
 ; Save state of Real-16 Shell and Enter Prot-32 Paged Flat Mode,
 ;     then Load and Run Shell-Prot32. Will not return in this procedure.
+	rprinti32 .ento.prep.32
 	rprint str_enter_32bit
+.ento.prep.32:
 	CLI
 	CLD
 ; Paging
-	; Clear GPDT to make use of Protect
-	XOR EAX, EAX
-	MOV CX, 1024; GPDT_NUM (1024*4=4KB)
-	MOV DI, PDT_ADDR
-	REP STOSD
-	; last - Index GPDT self
-	MOV DWORD[PDT_ADDR+0x1000-4], PDT_ADDR|3; US=S RW P 00005000~00005FFF FFFFF000~FFFFFFFF
-	; Global PgTable
-	MOV DWORD[PDT_ADDR+0x1000/2], KPT_ADDR|3; US=S RW P 00008000~00008FFF 80008000~80008FFF
-	; Transition also as
-	MOV DWORD[PDT_ADDR], KPT_ADDR|3
-	; Fill Bitmap
-		PUSH ES
-		MOV AX, SEGM_BITMAP
-		MOV ES, AX
-		XOR DI, DI
-		; Kernel Area
-		MOV CX, 16/4
-		XOR EAX, EAX
-		REP STOSD
-		MOV BYTE[ES:0], 0b11111111
-		MOV BYTE[ES:1], 0b00000011
-		; BIOS Area
-		MOV CX, 16/4
-		NOT EAX; 0xFFFF
-		REP STOSD
-		; User Area
-		MOV CX, 16*6/4
-		NOT EAX; 0
-		REP STOSD
-		; Omit the higher (00400000~FFFFFFFF)
-		POP ES
-	; Fill Kernel PgTable
-	MOV DI, KPT_ADDR
-	MOV CX, 0x100; 0~0x100'000 , last one: 0x83fc:0x000ff003
-	MOV EAX, 3; US=S RW P
-	loop_fill_kpt:
-		STOSD
-		ADD EAX, 0x1000; 4MB
-		LOOP loop_fill_kpt
-	; Apply
-	MOV EAX, PDT_ADDR
-	MOV CR3, EAX
+	CALL PAGE_INIT
 ; Setup basic GDT
 	MOV EBX, ADDR_GDT
 	; GDTE 00 NULL
@@ -171,10 +139,6 @@ backpoint:
 	AND EAX, 0x7FFFFFFE; clear PE bit and PG bit
 	MOV CR0, EAX
 	JMP WORD 0:backinit; 16-bit instruction	
-erro:
-	MOV EDI, RotPrint
-	MOV ESI, msg_error
-	CALL SegGate:0
 backinit:
 	; Initialize
 	MOV DS, BX
@@ -191,7 +155,7 @@ backinit:
 	;JMP HerMain or ?
 ; ---- ---- ---- ---- RO16 ---- ---- ---- ----
 %include "cokasha/rout16.asm"
-; ---- ---- ---- ---- RO16 ---- ---- ---- ----
+; ---- ---- ---- ---- CODEX ---- ---- ---- ----
 [BITS 32]
 mainx:
 ; Load segment registers
@@ -207,10 +171,14 @@ mainx:
 	LGDT [GDTDptr+Linear]
 	CLI; re-sure
 ; [Optional] Load IVT
-	MOV ESI, str_load_ivt+Linear
+	MOV EDI, RotEchoDword
+	MOV EDX, .load.IVT
+	CALL SegGate:0
 	MOV EDI, RotPrint
+	MOV ESI, str_load_ivt+Linear
 	CALL SegGate:0
 	; The former 20 is for exceptions
+.load.IVT:
 	GateStruct GeneralExceptionHandler,SegCode,0x8E00; 32BIT R0
 	MOV EDI, ADDR_IDT32+Linear
 	MOV ECX, 20; 20*8=0x0A0
@@ -279,7 +247,7 @@ mainx:
 	POP EAX
 	DbgStop
 ; Mainx - Load and Run Shell-Prot32
-.load.shell32
+.load.shell32:
 	MOV EDI, RotPrint
 	MOV ESI, str_load_shell32+Linear
 	CALL SegGate:0
@@ -361,9 +329,9 @@ section .data
 	str_shell32:
 		DB "SHL32   APP"
 	str_enter_32bit:
-		DB "Entering 32-bit protected mode...",10,13,0
+		DB " - Entering 32-bit protected mode...",10,13,0
 	str_load_ivt:
-		DB "Loading IVT32...",10,13,0
+		DB " - Loading IVT32...",10,13,0
 	str_enable_i8259a:
 		DB "Enabling i8259A...",10,13,0
 	str_load_shell32:

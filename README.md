@@ -1,10 +1,17 @@
+---
+dg-publish: true
+dg-home: true
+her-note: false
+---
+
+
 # Mecocoa
 
 - **type**: Operating System
 - **domain**: mecocoa.org
+- **repository** : [GitHub](https://github.com/dosconio/mecocoa)  @dosconio
 - **alias**: Kasa-x86
 - **license**: BSD-3-Clause license
-- **by**: @dosconio
 
 
 
@@ -17,7 +24,7 @@
 | USYM BOOT      | FLAT A     |             |
 | Kernel         | HerELF A+C |             |
 | Shell16        | ELF C      |             |
-| Shell32 (COTL) | ELF C++    |             |
+| Shell32 | ELF C++    | (to COTLAB)            |
 |                |            |             |
 
 
@@ -46,10 +53,10 @@
 | 00004080~000040FF                     | 00            | resident              | TSS for Shell Prot-32                              |
 | 00004100~00004FFF                     | 01 (480 GDTE) | resident              | GDT                                                |
 | 00005000~0000FFFF                     | 11            | resident              | Kernel (Real-16 + Prot-32)                         |
-| ====5000~====57FF                     |               |                       | Kernel.Data                                        |
-| ====5800~====7BFF                     |               |                       | Kernel.Code                                        |
-| ====8000~====9FFF                     |               |                       | Shell16.Data                                       |
-| ====A000~====FFFF                     |               |                       | Shell16.Code                                       |
+| `====5000~====57FF`                      |               |                       | Kernel.Data                                        |
+| `====5800~====7BFF`                      |               |                       | Kernel.Code                                        |
+| `====8000~====9FFF`                      |               |                       | Shell16.Data                                       |
+| `====A000~====FFFF`                      |               |                       | Shell16.Code                                       |
 | 00010000~0005FFFF                     | 80            | active                | **Least User Area**                                |
 | 00060000~0007FFFF                     | 32            | fixed                 | Page Allocating Bitmap                             |
 | 00080000~0009FFFF                     | 32            | fixed                 | Extended BIOS Data Area                            |
@@ -279,35 +286,21 @@ Segment `8*05`
 
 
 
-| Identification        | Function         | IO                          |
-| --------------------- | ---------------- | --------------------------- |
-| 00 R_Terminate        | Terminate back   |                             |
-| 01 R_Print            | Print String     | DS:ESI → ASCIZ string       |
-| 02 R_Malloc           |                  |                             |
-| 03 R_Mfree            |                  |                             |
-| 04 R_DiskReadLBA28    |                  |                             |
-| 05 R_PrintDwordCursor | PrintDwordCursor | Show the hexadecimal of EDX |
-|                       |                  |                             |
+| Identification     | Function         | IO                          |
+| ------------------ | ---------------- | --------------------------- |
+| `ELSE` RotTerminal   | Terminate back   |                             |
+| `00` RotPrint        | Print String     | DS:ESI → ASCIZ string       |
+| `01` RotEchoDword    | PrintDwordCursor | Show the hexadecimal of EDX |
+| 02 R_Malloc        |                  |                             |
+| 03 R_Mfree         |                  |                             |
+| 04 R_DiskReadLBA28 |                  |                             |
+|                    |                  |                             |
+|                    |                  |                             |
 
 
 
 ## Source Files
 
-(defaultly at least **Intel-386**)
-
-- `BOOT.a` bootstrap, which is different from the bootstrap collected in UNISYM. 
-- `Kernel.asm` 16-bit program, set up the environment and routines for 32-bit protected system. 
-- `Kernel32.asm` 
-- `Shell32.asm` console shell in protect-32 mode. This is going to combinated with *COTLAB*.
-- `hello.asm` a demonstration sub-program which will be created by `Shell32.asm` .
-
-
-
-
-
-
-
-
-
+(default, at least **Intel-386**)
 
 

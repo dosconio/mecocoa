@@ -3,6 +3,7 @@
 // LastCheck: 20240216
 // AllAuthor: @dosconio
 // ModuTitle: Shell Flat Prot-32
+// Copyright: Dosconio Mecocoa, BSD 3-Clause License
 
 //{TODO} to be COTLAB.
 
@@ -20,6 +21,7 @@ static void init() {
 }
 
 int main(void) {
+	while (true) wait();
 	init();
 	outs("Hello, " _CONCOL_DarkIoWhite "\nworld!\n");
 	outc('\r');

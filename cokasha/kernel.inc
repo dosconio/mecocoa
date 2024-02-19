@@ -1,15 +1,13 @@
 ; CRLF
 
-EXTERN ReadFileFFAT12
-EXTERN LoadFileMELF
-EXTERN FloppyMotorOff
-
-EXTERN _LoadFileMELF
-EXTERN i8259A_Init32
-
 %macro rprint 1
 	MOV SI, %1
 	MOV AH, 0
+	INT 80H
+%endmacro
+%macro rprinti32 1
+	MOV EDX, %1
+	MOV AH, 1
 	INT 80H
 %endmacro
 
@@ -51,3 +49,11 @@ SegGate   EQU (8*6)
 SegTSS    EQU (8*7)
 SegShell  EQU (8*0x10); TSS
 SegShellT EQU (8*0x11); LDT
+
+RotTerminal  EQU -1
+RotPrint     EQU 0
+RotEchoDword EQU 1
+RotMalloc    EQU 2
+RotMfree     EQU 3
+RotReaddisk  EQU 4
+

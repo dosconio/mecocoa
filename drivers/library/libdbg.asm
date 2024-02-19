@@ -15,10 +15,10 @@ Dbg_Func:
     RET
 
 ReturnModeProt32:
-	;{TODO}
+	;{TODO} Store and Restore
 	JMP FAR [0x0500]
 
 section .data
 str_test_message:
-	DB "TEST MEG!", 10, 13, 0
+	DB "Kernel 16: Trying to enter Flat-32...", 10, 13, 0
 

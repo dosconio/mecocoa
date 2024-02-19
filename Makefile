@@ -1,5 +1,5 @@
 # ASCII Makefile TAB4 LF
-# Attribute: Ubuntu
+# Attribute: Ubuntu(64)
 # LastCheck: 20240210
 # AllAuthor: @dosconio
 # ModuTitle: Build for Mecocoa
@@ -22,19 +22,19 @@ cc32 = gcc -m32 -c -fno-builtin -fleading-underscore -fno-pic\
 cx32 = g++ -m32 -c -fno-builtin -fleading-underscore -fno-pic\
  -fno-stack-protector -I/mnt/hgfs/unisym/inc/cpp -D_Linux
 outf = mcca.img
+# vhd=E:\vhd.vhd
 dbgdir = /mnt/hgfs/_bin/mecocoa
 dstdir = E:/PROJ/SVGN/_bin/mecocoa
 unidir = /mnt/hgfs/unisym
 link = ld #OPT E:\tmp\CPOSIX\bin\ld.gold.exe
 
 KernelExt = ../_obj/FAT12_R16.obj ../_obj/ELF_R16.obj ../_obj/8259Ax86.obj \
-		../_obj/floppy.obj ../_obj/iop.obj ../_obj/conio32.obj #../_obj/manage.obj
+		../_obj/floppy.obj ../_obj/iop.obj ../_obj/conio32.obj ../_obj/page.obj #../_obj/manage.obj
 Shell32Ext = ../_obj/manage.obj ../_obj/conio32.obj ../_obj/iop.obj
 
 # conio32 DEPEND-ON iop.obj
 
 ### Virtual Machine
-# vhd=E:\vhd.vhd
 # vmbox=E:\software\vmbox\VBoxManage.exe
 vmname = Kasa
 vmnamf = Kasaf
@@ -104,7 +104,8 @@ mdrivers:
 	@$(asmf) ${unidir}/lib/asm/x86/disk/floppy.asm          -o ../_obj/floppy.obj   
 	@$(asmf) ${unidir}/lib/asm/x86/inst/ioport.asm          -o ../_obj/iop.obj      
 	@$(asmf) ${unidir}/lib/asm/x86/inst/manage.x86.asm      -o ../_obj/manage.obj
-	@$(cc32) ./drivers/conio/conio32.c -o ../_obj/conio32.obj
+	@$(cc32) ./drivers/conio/conio32.c   -o ../_obj/conio32.obj
+	@$(asmf) ./drivers/memory/paging.asm -o ../_obj/page.obj
 
 ###
 
