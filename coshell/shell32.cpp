@@ -14,15 +14,18 @@ extern "C" {
 	#include "../include/conio32.h"
 }
 
-static void init() {
+static void init(int cls) {
+	if (cls)
+	{
+		scrrol(25);// clear screen 80x25
+		curset(0);
+	}
 	InterruptEnable();
-	scrrol(25);// clear screen 80x25
-	curset(0);
 }
 
 int main(void) {
-	while (true) wait();
-	init();
+	//while (true) wait();
+	init(0);
 	outs("Hello, " _CONCOL_DarkIoWhite "\nworld!\n");
 	outc('\r');
 	while (true) wait();

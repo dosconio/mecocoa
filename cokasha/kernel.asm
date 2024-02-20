@@ -4,6 +4,7 @@
 ; AllAuthor: @dosconio
 ; ModuTitle: Kernel: Loader of Environment, Library and Shell
 ; Copyright: Dosconio Mecocoa, BSD 3-Clause License
+; NegaiMap : { USYM --> Mecocoa --> USYM --> Any OS }
 
 %include "pseudo.a"
 %include "debug.a"
@@ -12,8 +13,6 @@
 %include "demos.a"
 %include "cokasha/kernel.inc"
 ; ---- ---- {Option Switch: 1 or others} ---- ----
-IVT_TIMER_ENABLE EQU 1
-MEM_PAGED_ENABLE EQU 1
 
 EXTERN ReadFileFFAT12
 EXTERN LoadFileMELF
@@ -21,7 +20,7 @@ EXTERN FloppyMotorOff
 EXTERN PAGE_INIT
 
 EXTERN _LoadFileMELF
-EXTERN i8259A_Init32
+EXTERN _InterruptInitialize
 EXTERN _outtxt
 EXTERN _outi32hex
 
@@ -29,6 +28,7 @@ GLOBAL HerMain
 GLOBAL ModeProt32
 
 [CPU 386]
+%define _BSWAP_ALLOW_NOT;{TOBE} Limit since which?
 DB "DOSCONIO"
 [BITS 16]
 ; ---- ---- ---- ---- CODE ---- ---- ---- ----
@@ -104,14 +104,10 @@ ModeProt32:
 	GDTDptrAppend 0x00CF9A00,0x0000FFFF
 	; GDTE 03 32-b Stack - 00003000~00003FFF (4KB) ; register but not use 
 	GDTDptrAppend 0x00CF9600,0x4000FFFE
-	%if MEM_PAGED_ENABLE!=0
-		OR DWORD[EBX-4], Linear
-	%endif
+	OR DWORD[EBX-4], Linear
 	; GDTE 04 Video display buffer 32K - 000B8000~000BFFFF (32KB) Ring(3; 0)
 	GDTDptrAppend 0x0040F20B,0x80007FFF; 0x0040920B,0x80007FFF
-	%if MEM_PAGED_ENABLE!=0
-		OR DWORD[EBX-4], Linear
-	%endif
+	OR DWORD[EBX-4], Linear
 	; GDTE 05 32PE ROUTINE (cancelled)
 	ADD EBX, 8
 	; GDTE 06 32PE CALL GATE
@@ -170,40 +166,10 @@ mainx:
 	OR ESP, Linear
 	LGDT [GDTDptr+Linear]
 	CLI; re-sure
-; [Optional] Load IVT
-	MOV EDI, RotEchoDword
-	MOV EDX, .load.IVT
-	CALL SegGate:0
-	MOV EDI, RotPrint
-	MOV ESI, str_load_ivt+Linear
-	CALL SegGate:0
-	; The former 20 is for exceptions
-.load.IVT:
-	GateStruct GeneralExceptionHandler,SegCode,0x8E00; 32BIT R0
-	MOV EDI, ADDR_IDT32+Linear
-	MOV ECX, 20; 20*8=0x0A0
-	rcpgates
-	; Then for interruption (256-20)
-	GateStruct GeneralInterruptHandler,SegCode,0x8E00; 32BIT R0
-	MOV ECX,256-20; 256*8=0x800
-	rcpgates
-	; Setup timer
-	GateStruct Timer_70HINTHandler,SegCode,0x8E00; 32BIT R0
-	MOV [ADDR_IDT32+8*0x70], EAX
-	MOV [ADDR_IDT32+8*0x70+4], EDX
-	; Load IDT
-	SUB EDI, ADDR_IDT32+Linear+1
-	MOV EAX, EDI
-	MOV  WORD[IVTDptr+Linear], AX
-	MOV DWORD[IVTDptr+Linear+2], ADDR_IDT32
-	LIDT [IVTDptr+Linear]
-	%if IVT_TIMER_ENABLE!=0
-	; Enable 8259A
-	MOV EDI, RotPrint
-	MOV ESI, str_enable_i8259a+Linear
-	CALL SegGate:0
-	CALL DWORD i8259A_Init32
-	%endif
+; Setting up Interrupts
+	xprinti32
+	xprint str_load_ivt
+	CALL DWORD _InterruptInitialize; i8259A_Init32
 ; Make base task
 	; Continue GDT
 	XOR EAX, EAX
@@ -224,7 +190,8 @@ mainx:
     PUSH EDI; into EBX
     MOV EBX,104-1
     MOV ECX,0x00408900
-    CALL F_GDTDptrStruct_32
+	MOV EDI, RotDptrStruct
+	CALL SegGate:0
     POP EBX
     GDTDptrAppend EDX,EAX
     POP EAX
@@ -236,7 +203,7 @@ mainx:
 	MOV CX, SegTSS
 	LTR CX
 	ADD WORD[EAX+2], 1; state
-; [Debug Area]
+;{} [Debug Area]
 	JMP .load.shell32
 	EXTERN _curset
 	EXTERN _curget
@@ -248,9 +215,7 @@ mainx:
 	DbgStop
 ; Mainx - Load and Run Shell-Prot32
 .load.shell32:
-	MOV EDI, RotPrint
-	MOV ESI, str_load_shell32+Linear
-	CALL SegGate:0
+	xprint str_load_shell32
 	PUSH DWORD 0x12000
 	CALL _LoadFileMELF
 	CALL EAX; then return real-16
@@ -290,9 +255,7 @@ mainx:
 	;;STI
 ReturnReal16:
 	CLI
-	MOV EDI, RotPrint
-	MOV ESI, str_quit_32bit+Linear
-	CALL SegGate:0
+	xprint str_quit_32bit
 	;
 	MOV DWORD[0x0510], 0
 	MOV DWORD[0x0514], 0
@@ -331,9 +294,7 @@ section .data
 	str_enter_32bit:
 		DB " - Entering 32-bit protected mode...",10,13,0
 	str_load_ivt:
-		DB " - Loading IVT32...",10,13,0
-	str_enable_i8259a:
-		DB "Enabling i8259A...",10,13,0
+		DB " - Setting up Interrupts...",10,13,0
 	str_load_shell32:
 		DB "Loading the shell of prot-32",10,13,0
 	str_used_mem:
@@ -345,10 +306,8 @@ section .data
 
 	msg_spaces:
 		DB "        ",0
-	msg_on_1s:
-		DB "<Ring~> ",0
-	msg_general_exception:
-		DB "General Exception!",10,13,0
+
+
 	msg_error:
 		DB "Error!",10,13,0
 	;

@@ -5,10 +5,21 @@
 	MOV AH, 0
 	INT 80H
 %endmacro
+%macro xprint 1
+	MOV EDI, RotPrint
+	MOV ESI, (%1)+Linear
+	CALL SegGate:0
+%endmacro
+
 %macro rprinti32 1
 	MOV EDX, %1
 	MOV AH, 1
 	INT 80H
+%endmacro
+%macro xprinti32 0-1 $
+	MOV EDI, RotEchoDword
+	MOV EDX, %1
+	CALL SegGate:0
 %endmacro
 
 %macro rcpgates 0-1 EDI; kernel copy gates
@@ -50,10 +61,11 @@ SegTSS    EQU (8*7)
 SegShell  EQU (8*0x10); TSS
 SegShellT EQU (8*0x11); LDT
 
-RotTerminal  EQU -1
-RotPrint     EQU 0
-RotEchoDword EQU 1
-RotMalloc    EQU 2
-RotMfree     EQU 3
-RotReaddisk  EQU 4
+RotTerminal   EQU -1
+RotPrint      EQU 0
+RotEchoDword  EQU 1
+RotMalloc     EQU 2
+RotMfree      EQU 3
+RotReaddisk   EQU 4
+RotDptrStruct EQU 0x10
 

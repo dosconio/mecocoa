@@ -28,11 +28,14 @@ dstdir = E:/PROJ/SVGN/_bin/mecocoa
 unidir = /mnt/hgfs/unisym
 link = ld #OPT E:\tmp\CPOSIX\bin\ld.gold.exe
 
-KernelExt = ../_obj/FAT12_R16.obj ../_obj/ELF_R16.obj ../_obj/8259Ax86.obj \
-		../_obj/floppy.obj ../_obj/iop.obj ../_obj/conio32.obj ../_obj/page.obj #../_obj/manage.obj
+KernelExt = ../_obj/FAT12_R16.obj ../_obj/ELF_R16.obj  ../_obj/handler.obj\
+		../_obj/floppy.obj ../_obj/iop.obj ../_obj/conio32.obj ../_obj/page.obj \
+		../_obj/i8259A.obj ../_obj/rtclock.obj ../_obj/manage.obj
 Shell32Ext = ../_obj/manage.obj ../_obj/conio32.obj ../_obj/iop.obj
 
 # conio32 DEPEND-ON iop.obj
+# i8259 DEPEND-ON RTC, Handler, conio
+# RTC DEPEND-ON i8259, conio
 
 ### Virtual Machine
 # vmbox=E:\software\vmbox\VBoxManage.exe
@@ -100,12 +103,14 @@ mdrivers:
 	@echo "Build  : Drivers except libraries"
 	@$(asmf) ${unidir}/lib/asm/x86/filesys/FAT12.asm        -o ../_obj/FAT12_R16.obj
 	@$(asmf) ${unidir}/lib/asm/x86/filefmt/ELF.asm          -o ../_obj/ELF_R16.obj  
-	@$(asmf) ${unidir}/lib/asm/x86/interrupt/x86_i8259A.asm -o ../_obj/8259Ax86.obj 
 	@$(asmf) ${unidir}/lib/asm/x86/disk/floppy.asm          -o ../_obj/floppy.obj   
 	@$(asmf) ${unidir}/lib/asm/x86/inst/ioport.asm          -o ../_obj/iop.obj      
 	@$(asmf) ${unidir}/lib/asm/x86/inst/manage.x86.asm      -o ../_obj/manage.obj
-	@$(cc32) ./drivers/conio/conio32.c   -o ../_obj/conio32.obj
-	@$(asmf) ./drivers/memory/paging.asm -o ../_obj/page.obj
+	@$(cc32) ./drivers/conio/conio32.c    -o ../_obj/conio32.obj
+	@$(cc32) ./drivers/interrupt/i8259A.c -o ../_obj/i8259A.obj
+	@$(cc32) ./drivers/toki/RTC.c         -o ../_obj/rtclock.obj
+	@$(asmf) ./drivers/memory/paging.asm  -o ../_obj/page.obj
+	@$(asmf) ./drivers/handler.asm        -o ../_obj/handler.obj
 
 ###
 

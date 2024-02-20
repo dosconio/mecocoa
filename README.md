@@ -295,7 +295,7 @@ Segment `8*05`
 | 03 R_Mfree         |                  |                             |
 | 04 R_DiskReadLBA28 |                  |                             |
 |                    |                  |                             |
-|                    |                  |                             |
+| `10`                     |                  | EDX:EAX<<<A(Addr)B(Len)C(Prop)                            |
 
 
 
