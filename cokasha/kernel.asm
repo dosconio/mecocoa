@@ -204,6 +204,8 @@ mainx:
 	LTR CX
 	ADD WORD[EAX+2], 1; state
 ;{} [Debug Area]
+	UD2
+	DbgStop
 	JMP .load.shell32
 	EXTERN _curset
 	EXTERN _curget

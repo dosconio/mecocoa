@@ -9,6 +9,8 @@
 #ifndef _INC_CONIO32
 #define _INC_CONIO32
 
+#include <../c/alice.h>
+
 #define outpb OUT_b
 #define outpw OUT_w
 #define innpb IN_b

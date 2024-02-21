@@ -15,6 +15,13 @@ extern void Handexc_General();
 extern void Handint_General();
 extern void Handint_RTC();
 
+extern void Handexc_6_Invalid_Opcode();
+
+dword MccaExceptTable[20] = {
+	0,0,0,0,0,0,
+	(dword)Handexc_6_Invalid_Opcode,
+};
+
 void i8259A_init(const struct _i8259A_ICW *inf)
 {
 	word port = inf->port;
@@ -43,14 +50,17 @@ _NOT_ABSTRACTED void InterruptInitialize()
 		.ICW4.Not8b = 1,
 	};
 	gate_t gate;
+	stduint i = 0;
 	//{TEMP} Omit Add `Linear`
 	// The former 20 is for exceptions
 	GateStructInterruptR0(&gate, (dword)Handexc_General, SegCode, 0);
-	for (stduint i = 0; i < 20; i++)
+	for (; i < 20; i++)
 		((gate_t *)ADDR_IDT32)[i] = gate;
+	((gate_t *)ADDR_IDT32)[6] = *GateStructInterruptR0(
+			&gate, MccaExceptTable[6], SegCode, 0);// UD2
 	// Then for interruption (256-20)
 	GateStructInterruptR0(&gate, (dword)Handint_General, SegCode, 0);
-	for (stduint i = 20; i < 256; i++)
+	for (; i < 256; i++)
 		((gate_t *)ADDR_IDT32)[i] = gate;
 	// RTC
 	((gate_t *)ADDR_IDT32)[PORT_RTC] = *GateStructInterruptR0(

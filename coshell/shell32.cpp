@@ -28,6 +28,6 @@ int main(void) {
 	init(0);
 	outs("Hello, " _CONCOL_DarkIoWhite "\nworld!\n");
 	outc('\r');
-	while (true) wait();
+	//while (true) wait();
 	return 0;
 }

@@ -28,7 +28,8 @@ dstdir = E:/PROJ/SVGN/_bin/mecocoa
 unidir = /mnt/hgfs/unisym
 link = ld #OPT E:\tmp\CPOSIX\bin\ld.gold.exe
 
-KernelExt = ../_obj/FAT12_R16.obj ../_obj/ELF_R16.obj  ../_obj/handler.obj\
+KernelExt = ../_obj/FAT12_R16.obj ../_obj/ELF_R16.obj \
+		../_obj/handler.obj ../_obj/handauf.obj \
 		../_obj/floppy.obj ../_obj/iop.obj ../_obj/conio32.obj ../_obj/page.obj \
 		../_obj/i8259A.obj ../_obj/rtclock.obj ../_obj/manage.obj
 Shell32Ext = ../_obj/manage.obj ../_obj/conio32.obj ../_obj/iop.obj
@@ -111,6 +112,7 @@ mdrivers:
 	@$(cc32) ./drivers/toki/RTC.c         -o ../_obj/rtclock.obj
 	@$(asmf) ./drivers/memory/paging.asm  -o ../_obj/page.obj
 	@$(asmf) ./drivers/handler.asm        -o ../_obj/handler.obj
+	@$(cc32) ./drivers/handler.c          -o ../_obj/handauf.obj
 
 ###
 
