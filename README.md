@@ -125,18 +125,20 @@ A line stands 16k×2×16=512k=pow2(19)=0x80000;
 
 
 
-| Offset 500~5FF | Object              | Description |
-| -------------- | ------------------- | ----------- |
-| 00 word        | IP of Prot-32 Entry |             |
-| 02 word        | CS of Prot-32 Entry |             |
-| 04 word        | GDT32 Length        |             |
-| 06 dword       | GDT32 Address       |             |
-| 0A word        | IVT32 Length        |             |
-| 0C dword       | IVT32 Address       |             |
-| 10 qword       | zero                |             |
-| 18             |                     |             |
-|                |                     |             |
-|                |                     |             |
+| Offset 500~5FF | Object | Description |
+| ---- | ---- | ---- |
+| 00 word | IP of Prot-32 Entry |  |
+| 02 word | CS of Prot-32 Entry |  |
+| 04 word | GDT32 Length |  |
+| 06 dword | GDT32 Address |  |
+| 0A word | IVT32 Length |  |
+| 0C dword | IVT32 Address |  |
+| 10 qword | zero |  |
+| 18 dword | CurrentScreenMode |  |
+| 1C dword | ConsoleForeColor (BackColor) |  |
+| 20 dowrd | ConsoleDefaultColor (PenColor) |  |
+|  |  |  |
+|  |  |  |
 
 
 

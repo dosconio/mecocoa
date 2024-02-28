@@ -11,15 +11,40 @@
 #include "../../cokasha/kernel.h"
 #include <x86/x86.h>
 
-extern void Handexc_General();
+extern void Handexc_Else();
 extern void Handint_General();
 extern void Handint_RTC();
 
+extern void Handexc_0_Divide_By_Zero();
+extern void Handexc_1_Step();
+extern void Handexc_2_NMI();
+extern void Handexc_3_Breakpoint();
+extern void Handexc_4_Overflow();
+extern void Handexc_5_Bound();
 extern void Handexc_6_Invalid_Opcode();
+extern void Handexc_7_Coprocessor_Not_Available();
+extern void Handexc_8_Double_Fault();
+extern void Handexc_9_Coprocessor_Segment_Overrun();
+extern void Handexc_A_Invalid_TSS();
+extern void Handexc_E_Page_Fault();
 
-dword MccaExceptTable[20] = {
-	0,0,0,0,0,0,
+dword MccaExceptTable[0x20] = {
+	(dword)Handexc_0_Divide_By_Zero,
+	(dword)Handexc_1_Step,
+	(dword)Handexc_2_NMI,
+	(dword)Handexc_3_Breakpoint,
+	(dword)Handexc_4_Overflow,
+	(dword)Handexc_5_Bound,
 	(dword)Handexc_6_Invalid_Opcode,
+	(dword)Handexc_7_Coprocessor_Not_Available,
+	(dword)Handexc_8_Double_Fault,
+	(dword)Handexc_9_Coprocessor_Segment_Overrun,
+	(dword)Handexc_A_Invalid_TSS,
+	0,// B
+	0,// C
+	0,// D
+	(dword)Handexc_E_Page_Fault,
+	// ...
 };
 
 void i8259A_init(const struct _i8259A_ICW *inf)
@@ -53,11 +78,12 @@ _NOT_ABSTRACTED void InterruptInitialize()
 	stduint i = 0;
 	//{TEMP} Omit Add `Linear`
 	// The former 20 is for exceptions
-	GateStructInterruptR0(&gate, (dword)Handexc_General, SegCode, 0);
-	for (; i < 20; i++)
-		((gate_t *)ADDR_IDT32)[i] = gate;
-	((gate_t *)ADDR_IDT32)[6] = *GateStructInterruptR0(
-			&gate, MccaExceptTable[6], SegCode, 0);// UD2
+	GateStructInterruptR0(&gate, (dword)Handexc_Else, SegCode, 0);
+	for (; i < 20; i++)// assume not from 0 for each routine
+		if (MccaExceptTable[i])
+			GateStructInterruptR0(((gate_t *)ADDR_IDT32) + i, MccaExceptTable[i], SegCode, 0);
+		else
+			((gate_t *)ADDR_IDT32)[i] = gate;
 	// Then for interruption (256-20)
 	GateStructInterruptR0(&gate, (dword)Handint_General, SegCode, 0);
 	for (; i < 256; i++)

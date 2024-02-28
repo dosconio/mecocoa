@@ -35,7 +35,9 @@ static char *ExceptionDescription[] =
 
 void Handexc(sdword iden, dword para)
 {
-	if (iden < 0)// do not have para
+	if (iden >= 0x20)
+		outs("#ELSE");
+	else if (iden < 0)// do not have para
 	{
 		iden =~ iden;
 		outs(ExceptionDescription[iden]);

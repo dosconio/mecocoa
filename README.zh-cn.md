@@ -1,22 +1,22 @@
-# Mecocoa�����ļ����ĵ���
+# Mecocoa（中文简体文档）
 
-- ���ͣ� ����ϵͳ
+- 类型： 操作系统
 
-- ��վ�� mecocoa.org
+- 网站： mecocoa.org
 
-- ������ Kasa-x86
+- 别名： Kasa-x86
 
-- ��ԴЭ�飺 BSD-3-Clause license
+- 开源协议： BSD-3-Clause license
 
-## Mecocoa's ���� 16λʵ��ַģʽ ���ж�
+## Mecocoa's 用于 16位实地址模式 的中断
 
-ע��
-- ���ܺŷ��� AH �Ĵ���
+注：
+- 功能号放于 AH 寄存器
 
-80H ��׼�ж�
-- 00H �ڵ�ǰ��괦��ʾ ASCIZ �ַ����������ı���������ģʽ��
-	- ���� DS:SI �ַ�����ַ
-	- ��� ��
+80H 标准中断
+- 00H 在当前光标处显示 ASCIZ 字符串，不更改背景（简易模式）
+	- 输入 DS:SI 字符串地址
+	- 输出 无
 
 
 

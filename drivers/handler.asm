@@ -7,7 +7,6 @@
 
 %include "debug.a"
 
-GLOBAL _Handexc_General
 GLOBAL _Handint_General
 
 GLOBAL _Handexc_0_Divide_By_Zero
@@ -22,6 +21,7 @@ GLOBAL _Handexc_8_Double_Fault
 GLOBAL _Handexc_9_Coprocessor_Segment_Overrun
 GLOBAL _Handexc_A_Invalid_TSS
 GLOBAL _Handexc_E_Page_Fault
+GLOBAL _Handexc_Else
 
 GLOBAL _Handint_CLK
 EXTERN _Hand_CLK
@@ -220,6 +220,9 @@ _Handexc_G_x87_FPU_Floating_Point_Error:
 	NOT EDX; No parameter
 	JMP _Handexc_General
 
+_Handexc_Else:
+	MOV EDX, 0x20
+	; JMP _Handexc_General
 _Handexc_General:
 	MOV EAX, SegData
 	MOV DS, EAX
