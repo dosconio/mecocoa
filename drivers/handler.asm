@@ -27,8 +27,6 @@ GLOBAL _Handint_CLK
 EXTERN _Hand_CLK
 ;{MORE}
 
-GLOBAL _Handint_RTC
-
 EXTERN _Handexc
 
 %include "cokasha/kernel.inc"
@@ -80,42 +78,6 @@ _Handint_PRT:; IRQ 7 by 0x27
 	calli _Hand_PRT; Printer
 
 ;
-
-_Handint_RTC:; 0x70 Device by 0xA0
-	PUSHAD
-;	PUSH DS
-;	MOV AX, SegData
-;	MOV DS, EAX
-;	;{ISSUE} Why these codes make interrupt only once? --@dosconio 2024/Jan/17
-;		; PUSH WORD SegData
-;		; POP DS
-;	MOV ESI, THISF_ADR+msg_on_1s
-;	MOV EDI, 1
-;	;;CALL SegGate:0
-;	;
-;	CALL FAR [THISF_ADR+TSSCrt-4]
-;	MOV AX, [THISF_ADR+TSSMax]
-;	MOV BX, [THISF_ADR+TSSCrt]
-;	ADD BX, 8*2
-;	CMP BX, AX
-;	JBE Timer_70HINTHandler_Next0
-;	MOV BX, 8*0x11
-;	Timer_70HINTHandler_Next0:
-;	MOV WORD[THISF_ADR+TSSCrt], BX
-;	;
-;	POP DS
-	MOV EDI, RotPrint
-	MOV ESI, msg_on_1s+Linear
-	CALL SegGate:0
-	MOV AL, 0x20; EOI
-	OUT 0xA0, AL; SLAVE
-	OUT 0x20, AL; MASTER
-	; OPEN NMI AFTER READ REG-C, OR ONLY INT ONCE
-	MOV AL, 0X0C
-	OUT 0X70, AL
-	IN AL, 0x71
-	POPAD
-	IRETD
 
 _Handint_IRQ9:
 	calli _Hand_IRQ9
@@ -239,8 +201,6 @@ _Handint_General:
 	IRETD
 
 section .data
-	msg_on_1s:
-		DB "<Ring~> ",0
 	msg_general_exception:
 		DB "General Exception!",10,13,0
 

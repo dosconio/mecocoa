@@ -11,8 +11,10 @@
 
 #include <../c/alice.h>
 
+#define outpi// Out to Port's Pin
 #define outpb OUT_b
 #define outpw OUT_w
+#define innpi// In from Port's Pin
 #define innpb IN_b
 #define innpw IN_w
 

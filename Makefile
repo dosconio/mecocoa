@@ -28,11 +28,12 @@ dstdir = E:/PROJ/SVGN/_bin/mecocoa
 unidir = /mnt/hgfs/unisym
 link = ld #OPT E:\tmp\CPOSIX\bin\ld.gold.exe
 
-KernelExt = ../_obj/FAT12_R16.obj ../_obj/ELF_R16.obj \
+InstExt = ../_obj/iop.obj ../_obj/manage.obj ../_obj/interrupt.obj ../_obj/stack.obj
+KernelExt = $(InstExt) ../_obj/FAT12_R16.obj ../_obj/ELF_R16.obj \
 		../_obj/handler.obj ../_obj/handauf.obj \
-		../_obj/floppy.obj ../_obj/iop.obj ../_obj/conio32.obj ../_obj/page.obj \
-		../_obj/i8259A.obj ../_obj/rtclock.obj ../_obj/manage.obj
-Shell32Ext = ../_obj/manage.obj ../_obj/conio32.obj ../_obj/iop.obj
+		../_obj/floppy.obj  ../_obj/conio32.obj ../_obj/page.obj \
+		../_obj/i8259A.obj  ../_obj/rtclock.obj
+Shell32Ext = $(InstExt) ../_obj/conio32.obj  # no using interrupt.obj
 
 # conio32 DEPEND-ON iop.obj
 # i8259 DEPEND-ON RTC, Handler, conio
@@ -106,7 +107,9 @@ mdrivers:
 	@$(asmf) ${unidir}/lib/asm/x86/filefmt/ELF.asm          -o ../_obj/ELF_R16.obj  
 	@$(asmf) ${unidir}/lib/asm/x86/disk/floppy.asm          -o ../_obj/floppy.obj   
 	@$(asmf) ${unidir}/lib/asm/x86/inst/ioport.asm          -o ../_obj/iop.obj      
-	@$(asmf) ${unidir}/lib/asm/x86/inst/manage.x86.asm      -o ../_obj/manage.obj
+	@$(asmf) ${unidir}/lib/asm/x86/inst/manage.asm      -o ../_obj/manage.obj
+	@$(asmf) ${unidir}/lib/asm/x86/inst/interrupt.asm       -o ../_obj/interrupt.obj
+	@$(asmf) ${unidir}/lib/asm/x86/inst/stack.asm           -o ../_obj/stack.obj
 	@$(cc32) ./drivers/conio/conio32.c    -o ../_obj/conio32.obj
 	@$(cc32) ./drivers/interrupt/i8259A.c -o ../_obj/i8259A.obj
 	@$(cc32) ./drivers/toki/RTC.c         -o ../_obj/rtclock.obj

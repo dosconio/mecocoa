@@ -8,6 +8,8 @@
 #include "../cokasha/kernel.h"
 #include "../include/conio32.h"
 #include <x86/x86.h>
+#include <x86/interface.x86.h>
+#include <driver/i8259A.h>
 
 static char *ExceptionDescription[] = 
 {
@@ -49,4 +51,18 @@ void Handexc(sdword iden, dword para)
 		outi32hex(para);	
 	}
 	outs("\x0A\x0D");
+}
+
+void Handint_RTC()
+{
+	//{TODO} Magic Port
+	pushad();
+	outs("<Ring~> ");
+	outpb(0xA0, EOI);// slave
+	outpb(0x20, EOI);// master
+	// OPEN NMI AFTER READ REG-C, OR ONLY INT ONCE
+	outpb(0x70, 0x0C);
+	innpb(0x71);
+	popad();
+	returni();
 }
