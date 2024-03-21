@@ -5,7 +5,7 @@
 // ModuTitle: RTC 0x70 - PIC 0xA0 
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 
-#include "../../include/i8259A.h"
+#include "../../include/interrupt.h"
 #include "../../include/RTC.h"
 
 void RTC_Init()

@@ -7,25 +7,20 @@
 
 //{TODO} to be COTLAB. Jump to here as console.
 
-#define wait() HALT()
-
-extern "C" {
-	#include <../c/x86/interface.x86.h>
-	#include "../include/conio32.h"
-}
-
-static void init(int cls);
+#include "shell32.h"
 
 int main(void) {
-	//while (true) wait();
-	init(0);
-	outs("Hello, " _CONCOL_DarkIoWhite "\nworld!\n");
-	outc('\r');
-	while (true) wait();
+	// while (true) wait();
+	init(1);
+	outs("Hello, " _CONCOL_DarkIoWhite "\nworld!\n\r");
+	while (true) {
+		delay001s();
+		outs("<Ring~> ");
+	}
 	return 0;
 }
 
-static void init(int cls) {
+static void init(bool cls) {
 	if (cls)
 	{
 		scrrol(25);// clear screen 80x25

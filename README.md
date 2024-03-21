@@ -137,7 +137,7 @@ A line stands 16k×2×16=512k=pow2(19)=0x80000;
 | 18 dword | CurrentScreenMode |  |
 | 1C dword | ConsoleForeColor (BackColor) |  |
 | 20 dowrd | ConsoleDefaultColor (PenColor) |  |
-|  |  |  |
+| 24 dword | Count : Rotate Seconds | 0->FFFFFFFF->0->... |
 |  |  |  |
 
 

@@ -48,7 +48,7 @@ void Handexc(sdword iden, dword para)
 	{
 		outs(ExceptionDescription[iden]);
 		outs(" : ");
-		outi32hex(para);	
+		outi32hex(para);
 	}
 	outs("\x0A\x0D");
 }
@@ -56,9 +56,10 @@ void Handexc(sdword iden, dword para)
 void Handint_RTC()
 {
 	//{TODO} Magic Port
+	// auto push flag by intterrupt module
 	pushad();
-	outs("<Ring~> ");
-	outpb(0xA0, EOI);// slave
+	G_CountSeconds++;
+	outpb(0xA0, EOI); // slaver
 	outpb(0x20, EOI);// master
 	// OPEN NMI AFTER READ REG-C, OR ONLY INT ONCE
 	outpb(0x70, 0x0C);

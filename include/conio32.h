@@ -10,13 +10,8 @@
 #define _INC_CONIO32
 
 #include <../c/alice.h>
+#include <../c/x86/port.h>
 
-#define outpi// Out to Port's Pin
-#define outpb OUT_b
-#define outpw OUT_w
-#define innpi// In from Port's Pin
-#define innpb IN_b
-#define innpw IN_w
 
 void curset(word posi);
 word curget(void);

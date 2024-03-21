@@ -1,6 +1,6 @@
 # ASCII Makefile TAB4 LF
 # Attribute: Ubuntu(64)
-# LastCheck: 20240210
+# LastCheck: 20240320
 # AllAuthor: @dosconio
 # ModuTitle: Build for Mecocoa
 # Copyright: Dosconio Mecocoa, BCD License Version 3
@@ -26,18 +26,19 @@ outf = mcca.img
 dbgdir = /mnt/hgfs/_bin/mecocoa
 dstdir = E:/PROJ/SVGN/_bin/mecocoa
 unidir = /mnt/hgfs/unisym
+libcdir = $(unidir)/lib/c
+libadir = $(unidir)/lib/asm
 link = ld #OPT E:\tmp\CPOSIX\bin\ld.gold.exe
 
-InstExt = ../_obj/iop.obj ../_obj/manage.obj ../_obj/interrupt.obj ../_obj/stack.obj
-KernelExt = $(InstExt) ../_obj/FAT12_R16.obj ../_obj/ELF_R16.obj \
-		../_obj/handler.obj ../_obj/handauf.obj \
-		../_obj/floppy.obj  ../_obj/conio32.obj ../_obj/page.obj \
-		../_obj/i8259A.obj  ../_obj/rtclock.obj
-Shell32Ext = $(InstExt) ../_obj/conio32.obj  # no using interrupt.obj
+InstExt = -L/mnt/hgfs/_bin -lmx86
+KernelExt = ../_obj/handler.obj ../_obj/handauf.obj ../_obj/conio32.obj ../_obj/page.obj \
+		  ../_obj/rtclock.obj ../_obj/interrupt.obj
+Shell32Ext = ../_obj/conio32.obj
 
 # conio32 DEPEND-ON iop.obj
 # i8259 DEPEND-ON RTC, Handler, conio
 # RTC DEPEND-ON i8259, conio
+# ...
 
 ### Virtual Machine
 # vmbox=E:\software\vmbox\VBoxManage.exe
@@ -103,19 +104,12 @@ buildf: ../_obj/boot.fin ../_obj/KER.APP ../_obj/SHL16.APP ../_obj/SHL32.APP
 
 mdrivers:
 	@echo "Build  : Drivers except libraries"
-	@$(asmf) ${unidir}/lib/asm/x86/filesys/FAT12.asm        -o ../_obj/FAT12_R16.obj
-	@$(asmf) ${unidir}/lib/asm/x86/filefmt/ELF.asm          -o ../_obj/ELF_R16.obj  
-	@$(asmf) ${unidir}/lib/asm/x86/disk/floppy.asm          -o ../_obj/floppy.obj   
-	@$(asmf) ${unidir}/lib/asm/x86/inst/ioport.asm          -o ../_obj/iop.obj      
-	@$(asmf) ${unidir}/lib/asm/x86/inst/manage.asm      -o ../_obj/manage.obj
-	@$(asmf) ${unidir}/lib/asm/x86/inst/interrupt.asm       -o ../_obj/interrupt.obj
-	@$(asmf) ${unidir}/lib/asm/x86/inst/stack.asm           -o ../_obj/stack.obj
-	@$(cc32) ./drivers/conio/conio32.c    -o ../_obj/conio32.obj
-	@$(cc32) ./drivers/interrupt/i8259A.c -o ../_obj/i8259A.obj
-	@$(cc32) ./drivers/toki/RTC.c         -o ../_obj/rtclock.obj
-	@$(asmf) ./drivers/memory/paging.asm  -o ../_obj/page.obj
-	@$(asmf) ./drivers/handler.asm        -o ../_obj/handler.obj
-	@$(cc32) ./drivers/handler.c          -o ../_obj/handauf.obj
+	@$(cc32) ./drivers/conio/conio32.c          -o ../_obj/conio32.obj
+	@$(cc32) ./drivers/interrupt/interrupt.c    -o ../_obj/interrupt.obj
+	@$(cc32) ./drivers/toki/RTC.c               -o ../_obj/rtclock.obj
+	@$(asmf) ./drivers/memory/paging.asm        -o ../_obj/page.obj
+	@$(asmf) ./drivers/handler.asm              -o ../_obj/handler.obj
+	@$(cc32) ./drivers/handler.c                -o ../_obj/handauf.obj
 
 ###
 
@@ -131,7 +125,7 @@ mdrivers:
 	@$(asm) $< -o $@ -D_FLOPPY -felf
 ../_obj/KER.APP: ../_obj/headelf ../_obj/kernel.obj #../_obj/helloc.obj ../_obj/hellod.obj
 	@echo "Build  : Kernel"
-	@$(link) -s -T ./cokasha/kernel.ld -e HerMain -m elf_i386 -o $@ ../_obj/kernel.obj ${KernelExt}
+	@$(link) -s -T ./cokasha/kernel.ld -e HerMain -m elf_i386 -o $@ ../_obj/kernel.obj ${KernelExt} $(InstExt)
 	@dd if=../_obj/headelf of=${@} bs=16 conv=notrunc 2>>/dev/null #@ffset $@ ../_obj/headelf 0 
 
 ../_obj/SHL16.APP: ./coshell/shell16.c ./drivers/library/libdbg.asm
@@ -145,7 +139,7 @@ mdrivers:
 	@echo "Build  : Shell32"
 	@${cx32} ${<} -o ../_obj/shell32.obj
 	@$(link) -s -T ./coshell/shell32.ld -e _main -m elf_i386 -o $@ \
-		../_obj/shell32.obj ${Shell32Ext}
+		../_obj/shell32.obj ${Shell32Ext} $(InstExt)
 
 # ../_obj/helloa.bin: ./subapps/helloa.asm
 # 	$(asm) $< -o $@
