@@ -7,7 +7,7 @@
 // BaseOn   : */n_video.a
 //{TEMP} To be abstracted into unisym.
 #include <alice.h>
-#include "../../include/conio32.h"
+#include "../../include/console.h"
 #include <x86/interface.x86.h>
 
 //

@@ -10,7 +10,7 @@
 #define _INC_I8259A
 
 
-#include "conio32.h"
+#include "console.h"
 #include "driver/i8259A.h"
 
 #define _i8259A_MAS     0X20

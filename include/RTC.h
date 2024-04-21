@@ -10,7 +10,7 @@
 
 #include <alice.h>
 #include <x86/interface.x86.h>
-#include "conio32.h"
+#include "console.h"
 
 #define PORT_RTC 0x70
 

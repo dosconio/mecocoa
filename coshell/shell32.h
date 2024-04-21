@@ -8,7 +8,7 @@
 extern "C" {
 	#include <../c/x86/interface.x86.h>
 	#include <../c/x86/x86.h>
-	#include "../include/conio32.h"
+	#include "../include/console.h"
 }
 
 static void init(bool cls);

@@ -7,20 +7,22 @@
 
 # not suitable to use $(subst ...)
 
-.PHONY: new clean uninstall init init0 mdrivers floppy flat buildf build\
-	newx
+.PHONY: new uninstall clean init mdrivers floppy buildf newx min\
+	init0 build #<- Harddisk Version
+	
 
 asmattr = -I${unidir}/inc/Kasha/n_ -I${unidir}/inc/naasm/n_ -I./include/
 asm  = /mnt/hgfs/_bin/ELF64/aasm ${asmattr} #OPT: aasm
 asmf = ${asm} -felf 
 dasm = ndisasm #-u -o EntryPoint -e EntryAddress
+cdef = -D_MCCAx86 -D_ARC_x86=5
 ccc  = gcc -c -fno-builtin -nostdinc -nostdlib -fno-stack-protector\
  -fno-exceptions -fno-strict-aliasing -fno-omit-frame-pointer\
- -fno-leading-underscore -I/mnt/hgfs/unisym/inc/c -D_Linux# -fno-rtti
+ -fno-leading-underscore -I/mnt/hgfs/unisym/inc/c $(cdef) # -fno-rtti
 cc32 = gcc -m32 -c -fno-builtin -fleading-underscore -fno-pic\
- -fno-stack-protector -I/mnt/hgfs/unisym/inc/c -D_Linux
+ -fno-stack-protector -I/mnt/hgfs/unisym/inc/c $(cdef)
 cx32 = g++ -m32 -c -fno-builtin -fleading-underscore -fno-pic\
- -fno-stack-protector -I/mnt/hgfs/unisym/inc/cpp -D_Linux
+ -fno-stack-protector -I/mnt/hgfs/unisym/inc/cpp $(cdef)
 outf = mcca.img
 # vhd=E:\vhd.vhd
 dbgdir = /mnt/hgfs/_bin/mecocoa
@@ -31,14 +33,9 @@ libadir = $(unidir)/lib/asm
 link = ld #OPT E:\tmp\CPOSIX\bin\ld.gold.exe
 
 InstExt = -L/mnt/hgfs/_bin -lmx86
-KernelExt = ../_obj/handler.obj ../_obj/handauf.obj ../_obj/conio32.obj ../_obj/page.obj \
+KernelExt = ../_obj/handler.obj ../_obj/handauf.obj ../_obj/console.obj ../_obj/page.obj \
 		  ../_obj/rtclock.obj ../_obj/interrupt.obj
-Shell32Ext = ../_obj/conio32.obj
-
-# conio32 DEPEND-ON iop.obj
-# i8259 DEPEND-ON RTC, Handler, conio
-# RTC DEPEND-ON i8259, conio
-# ...
+Shell32Ext = ../_obj/console.obj ../_obj/task.obj
 
 ### Virtual Machine
 # vmbox=E:\software\vmbox\VBoxManage.exe
@@ -74,21 +71,15 @@ new: uninstall clean init mdrivers floppy
 	@echo
 	@echo "You can now debug in bochs with the following command:"
 	@echo ${bochd} -f ${dstdir}/bochsrc.bxrc
-
+min: # minimum version
 
 ### Virtual Machine (not PHONY)
 
-run: flat
+vmbox: floppy
 	$(vmbox) startvm $(vmname)
-runf: floppy
-	$(vmbox) startvm $(vmnamf)
-
-bochs: flat
-	-$(bochd) -f e:/cnrv/bochsrc.bxrc
-bochf: floppy
+bochs: floppy
 	-$(bochd) -f e:/cnrv/bochsrcf.bxrc
-
-qemud:
+qemu-cd:
 	$(qemu) -hda ${dbgdir}/${outf} -boot d -cdrom ${dbgdir}/${outf} #{to test}
 qemu:
 	${qemu} -fda ${dbgdir}/${outf} -boot order=a
@@ -97,19 +88,20 @@ newx: new qemu
 
 ###
 
-build:
+build: # Harddisk and CD version
 	#
 buildf: ../_obj/boot.fin ../_obj/KER.APP ../_obj/SHL16.APP ../_obj/SHL32.APP
 	@echo "Finish : Building Floppy Version."
 
 mdrivers:
 	@echo "Build  : Drivers except libraries"
-	@$(cc32) ./drivers/conio/conio32.c          -o ../_obj/conio32.obj
+	@$(cc32) ./drivers/conio/console.c          -o ../_obj/console.obj
 	@$(cc32) ./drivers/interrupt/interrupt.c    -o ../_obj/interrupt.obj
 	@$(cc32) ./drivers/toki/RTC.c               -o ../_obj/rtclock.obj
 	@$(asmf) ./drivers/memory/paging.asm        -o ../_obj/page.obj
 	@$(asmf) ./drivers/handler.asm              -o ../_obj/handler.obj
 	@$(cc32) ./drivers/handler.c                -o ../_obj/handauf.obj
+	@$(cc32) ./drivers/task/task.c              -o ../_obj/task.obj
 
 ###
 

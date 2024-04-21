@@ -1,5 +1,10 @@
 
+#include "../c/task.h"
 
+int task_test()
+{
+	TaskStateSegmentSet(0);
+}
 
 /*
 F_TSSStruct3:

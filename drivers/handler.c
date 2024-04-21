@@ -6,7 +6,7 @@
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 
 #include "../cokasha/kernel.h"
-#include "../include/conio32.h"
+#include "../include/console.h"
 #include <x86/x86.h>
 #include <x86/interface.x86.h>
 #include <driver/i8259A.h>
