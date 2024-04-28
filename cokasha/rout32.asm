@@ -13,7 +13,8 @@ APISymbolTable:; till Routine
 	rot0002: defrotx R_Malloc; Malloc
 	rot0003: defrotx R_Mfree; Mfree (waiting for adding)
 	rot0004: defrotx R_DiskReadLBA28; DiskReadLBA28
-	TIMES 11*2 DD 0;5,6,7,8,9,A,B,C,D,E,F
+	TIMES 10*2 DD 0;5,6,7,8,9,A,B,C,D,E
+	rot000F: defrotx R_Terminate;
 	rot0010: defrotx R_DescriptorStructure; DescriptorStructure
 __Routine:
 RoutineGate:; EDI=FUNCTION RoutIn:{DS=SegData}

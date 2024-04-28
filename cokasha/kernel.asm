@@ -82,9 +82,39 @@ ModeProt32:
 	PUSH WORD str_shell32;{TODO} if not found
 	PUSH WORD 0x2000; ES
 	CALL ReadFileFFAT12
-	CALL FloppyMotorOff; ---- NEED NOT Floppy SINCE NOW ----
 	ADD SP, 6
 	POP ES
+;{TEMP} Load Hello-A 0x32000
+	PUSH ES
+	MOV AX, 0x3000
+	MOV ES, AX
+	PUSH WORD 0;
+	PUSH WORD str_helloa
+	PUSH WORD 0x2000;
+	CALL ReadFileFFAT12
+	ADD SP, 6
+	POP ES
+;{TEMP} Load Hello-B 0x36000
+	PUSH ES
+	MOV AX, 0x3000
+	MOV ES, AX
+	PUSH WORD 0;
+	PUSH WORD str_hellob
+	PUSH WORD 0x6000;
+	CALL ReadFileFFAT12
+	ADD SP, 6
+	POP ES
+;{TEMP} Load Hello-B 0x3A000
+	PUSH ES
+	MOV AX, 0x3000
+	MOV ES, AX
+	PUSH WORD 0;
+	PUSH WORD str_helloc
+	PUSH WORD 0xA000;
+	CALL ReadFileFFAT12
+	ADD SP, 6
+	POP ES
+CALL FloppyMotorOff; ---- NEED NOT Floppy SINCE NOW ----
 ; Save state of Real-16 Shell and Enter Prot-32 Paged Flat Mode,
 ;     then Load and Run Shell-Prot32. Will not return in this procedure.
 	rprinti32 .ento.prep.32
@@ -285,6 +315,12 @@ section .data
 		DB "SHL16   APP"
 	str_shell32:
 		DB "SHL32   APP"
+	str_helloa:
+		DB "HELLOA  APP"
+	str_hellob:
+		DB "HELLOB  APP"
+	str_helloc:
+		DB "HELLOC  APP"
 	str_enter_32bit:
 		DB " - Entering 32-bit protected mode...",10,13,0
 	str_load_ivt:

@@ -11,7 +11,7 @@
 
 
 #include "console.h"
-#include "driver/i8259A.h"
+#include "c/driver/i8259A.h"
 
 #define _i8259A_MAS     0X20
 #define _i8259A_SLV     0XA0

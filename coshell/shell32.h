@@ -5,10 +5,17 @@
 
 #define wait() HALT()
 
-extern "C" {
-	#include <../c/x86/interface.x86.h>
-	#include <../c/x86/x86.h>
-	#include "../include/console.h"
-}
+#include "cpp/cinc"
+#include <c/x86/x86.h>
+#include <c/format/ELF.h>
+#include <c/task.h>
+#include <c/stdinc.h>
+#include "../include/console.h"
+#include "cpp/cinc"
 
 static void init(bool cls);
+
+extern "C" {
+	stduint MccaAlocGDT(void);
+	stduint MccaLoadGDT(void);
+}

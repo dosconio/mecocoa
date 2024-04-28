@@ -7,9 +7,8 @@
 
 #include "../cokasha/kernel.h"
 #include "../include/console.h"
-#include <x86/x86.h>
-#include <x86/interface.x86.h>
-#include <driver/i8259A.h>
+#include <c/x86/x86.h>
+#include <c/driver/i8259A.h>
 
 static char *ExceptionDescription[] = 
 {

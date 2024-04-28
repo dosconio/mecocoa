@@ -6,9 +6,9 @@
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 // BaseOn   : */n_video.a
 //{TEMP} To be abstracted into unisym.
-#include <alice.h>
-#include "../../include/console.h"
-#include <x86/interface.x86.h>
+#include <c/alice.h>
+#include "../include/console.h"
+#include <c/x86/x86.h>
 
 //
 static byte* const _VideoBuf = (unsigned char*)0x800B8000;

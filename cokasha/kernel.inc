@@ -61,11 +61,13 @@ SegTSS    EQU (8*7)
 SegShell  EQU (8*0x10); TSS
 SegShellT EQU (8*0x11); LDT
 
-RotTerminal   EQU -1
+;RotTerminal   EQU -1
 RotPrint      EQU 0
 RotEchoDword  EQU 1
 RotMalloc     EQU 2
 RotMfree      EQU 3
 RotReaddisk   EQU 4
+
+RotTerminal   EQU 0x0F
 RotDptrStruct EQU 0x10
 

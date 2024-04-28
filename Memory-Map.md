@@ -51,6 +51,44 @@ her-note: false
 - FFC00000~FFFFEFFF → PTs
 - FFFFF000~FFFFFFFF → 00005000~00005FFF (PDT)
 
+**Detail**
+
+{TEMP}
+
+10000 -> Buffer
+
+12000 Shell32 Raw File
+
+- Shell32 Data: 0x21000 -> 0x22000
+- Shell32 Code: 0x22000 -> 0x24000
+- SubappA Data: 0x24000 -> 0x25000
+- SubappA Code: 0x25000 -> 0x26000
+- SubappB Data: 0x26000 -> 0x27000
+- SubappB Code: 0x27000 -> 0x28000
+- SubappC Data: 0x28000 -> 0x29000
+- SubappC Code: 0x29000 -> 0x2A000
+
+
+
+
+//{TODO} combinate TSS and LDT and others into "Task Block"
+- SubappA LDT: 0x2A000 -> 0x2A100
+- SubappA TSS: 0x2A100 -> 0x2A200
+- SubappB LDT: 0x2A200 -> 0x2A300
+- SubappB TSS: 0x2A300 -> 0x2A400
+- SubappC LDT: 0x2A400 -> 0x2A500
+- SubappC TSS: 0x2A500 -> 0x2A600
+
+- SubappA Stak0: 0x2C000 -> 0x2C200
+- SubappA Stak1: 0x2C200 -> 0x2C400
+- SubappA Stak2: 0x2C400 -> 0x2C600
+- SubappA Stak3: 0x2C600 -> 0x2C800
+
+
+- SubappABC Raw: 0x30000 -> 
+
+
+
 ### Variables
 
 

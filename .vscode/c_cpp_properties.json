@@ -3,7 +3,7 @@
         {
             "name": "Linux",
             "includePath": [
-                "/mnt/hgfs/unisym/inc/c",
+                "/mnt/hgfs/unisym/inc",
                 "${workspaceFolder}/**"
             ],
             "defines": [

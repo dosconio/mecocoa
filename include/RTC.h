@@ -5,11 +5,13 @@
 // ModuTitle: RTC - PIC 0xA0 
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 
+//{TODO} upgrade into UNISYM
+
 #ifndef _INC_RealtimeClock
 #define _INC_RealtimeClock
 
-#include <alice.h>
-#include <x86/interface.x86.h>
+#include <c/alice.h>
+#include <c/x86/x86.h>
 #include "console.h"
 
 #define PORT_RTC 0x70

@@ -9,7 +9,7 @@
 #include "../../include/interrupt.h"
 #include "../../include/RTC.h"
 #include "../../cokasha/kernel.h"
-#include <x86/x86.h>
+#include <c/x86/x86.h>
 
 extern void Handexc_Else();
 extern void Handint_General();

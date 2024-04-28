@@ -9,8 +9,8 @@
 #ifndef _INC_CONSOLE
 #define _INC_CONSOLE
 
-#include <../c/consio.h>
-#include <../c/port.h>
+#include <c/consio.h>
+#include <c/port.h>
 
 #define _CONCOL_DarkIoWhite "\xFF\x70"
 
