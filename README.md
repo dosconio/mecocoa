@@ -12,12 +12,13 @@ her-note: false
 - **repository** : [GitHub](https://github.com/dosconio/mecocoa)  @dosconio
 - **alias**: Kasa-x86
 - **license**: BSD-3-Clause license
+- **architecture**: x86, RISC-V-64
 
 
 
 ## Components
 
-
+A module can exist as multi-language versions, like `.h&.inc`, or `.c&.cpp&.rs`
 
 | Program        | Format     | Description |
 | -------------- | ---------- | ----------- |

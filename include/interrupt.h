@@ -10,12 +10,10 @@
 #define _INC_I8259A
 
 
+#include <c/stdinc.h>
 #include "console.h"
 #include "c/driver/i8259A.h"
-
-#define _i8259A_MAS     0X20
-#define _i8259A_SLV     0XA0
-#define _i8259A_SLV_IMR 0XA1
+#include "c/driver/RealtimeClock.h"
 
 _NOT_ABSTRACTED void InterruptInitialize();
 
