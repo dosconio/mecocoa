@@ -50,29 +50,30 @@ section .text
 ; ---- Master PIC Device
 
 _Handint_CLK:; IRQ 0 by 0x20
-	calli _Hand_CLK
+	calli _Hand_CLK; Clock
 
 _Handint_KBD:; IRQ 1 by 0x21
-	calli _Hand_KBD
+	calli _Hand_KBD; Keyboard
 
 _Handint_CAS:; IRQ 2 by 0x22
-	calli _Hand_CAS
+	calli _Hand_CAS; Cascade
 
 _Handint_MOU:; IRQ 3 by 0x23
 	calli _Hand_MOU;?
-	; Second Serial?
+	; Second Serial ?
+	; default ethernet interrupt vector ?
+	; RS232 interrupt vector for port 2 ?
 
 _Handint_COM1:; IRQ 4 by 0x24
 	calli _Hand_COM1;?
 	; First Serial?
+	; RS232 interrupt vector for port 1 ?
 
 _Handint_COM2:; IRQ 5 by 0x25
-	calli _Hand_COM2;?
-	; XT Winchester?
+	calli _Hand_COM2; XT Winchester
 
 _Handint_LPT1:; IRQ 6 by 0x26
-	calli _Hand_LPT1;?
-	; Floppy?
+	calli _Hand_LPT1; Floppy
 
 _Handint_PRT:; IRQ 7 by 0x27
 	calli _Hand_PRT; Printer
@@ -98,7 +99,7 @@ _Handint_IRQ13:
 
 _Handint_IRQ14:
 	calli _Hand_IRQ14
-	; AT Winchester?
+	; AT Winchester
 
 _Handint_IRQ15:
 	calli _Hand_IRQ15

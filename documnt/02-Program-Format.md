@@ -3,6 +3,10 @@ dg-publish: true
 her-note: false
 ---
 
+current: make use of ELF. The below are outdated.
+
+---
+
 The current version, please to see in `unisym/*/task.h` .
 
 This is the old version.
@@ -60,8 +64,8 @@ This is the old version.
 | EBX            | ←           |                    |      | EBX        | ←          | 52        |
 | EDX            | ←           |                    |      | EDX        | ←          | 48        |
 | ECX            | ←           |                    |      | ECX        | ←          | 44        |
-| EAX            | ←           |                    |      | EAX        | ←          | 40        |
-| EFLAGS         | ←           |                    |      | EFLAGS     | ←          | 36        |
+| EAX            | ←(PUSHAD)           |                    |      | EAX        | ←          | 40        |
+| EFLAGS         | ←(PUSHFD)           |                    |      | EFLAGS     | ←          | 36        |
 | EIP            | ←           | Entry=EIP          | ←    | EIP        | ←          | 32        |
 | PDBR           | ←           |                    |      | PDBR       | ←          | 28        |
 | AdrPointerH    | SS2         |                    |      |            | SS2        | 24        |

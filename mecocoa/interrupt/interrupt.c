@@ -7,7 +7,6 @@
 // BaseOn   : unisym/lib/asm/x86/interrupt/x86_i8259A.asm
 
 #include "../../include/interrupt.h"
-#include "../../include/RTC.h"
 #include "../../mecocoa/kernel.h"
 #include <c/stdinc.h>
 

@@ -29,10 +29,11 @@ libadir = $(unidir)/lib/asm
 link = ld #OPT E:\tmp\CPOSIX\bin\ld.gold.exe
 
 InstExt = -L/mnt/hgfs/_bin -lmx86
-KernelExt = ../_obj/rout16.obj ../_obj/rout32.obj ../_obj/handler.obj ../_obj/handauf.obj ../_obj/console.obj ../_obj/page.obj \
-		    ../_obj/interrupt.obj
+KernelExt = ../_obj/rout16.obj  ../_obj/handler.obj ../_obj/handauf.obj ../_obj/console.obj ../_obj/page.obj \
+		    ../_obj/interrupt.obj ../_obj/memasm.obj $(Rout32Obj)
+Rout32Obj = ../_obj/rout32.obj ../_obj/memcpl.obj
 Shell16Ext = ../_obj/rout16.obj
-Shell32Ext = ../_obj/console.obj ../_obj/codebug.obj ../_obj/rout32.obj
+Shell32Ext = ../_obj/console.obj ../_obj/codebug.obj $(Rout32Obj)
 
 ### Virtual Machine
 # vmbox=E:\software\vmbox\VBoxManage.exe
@@ -104,6 +105,9 @@ mdrivers:
 	@$(asmf) ./mecocoa/handler/handler.asm      -o ../_obj/handler.obj
 	@$(cc32) ./mecocoa/handler/handler.c        -o ../_obj/handauf.obj
 	@$(asmf) ./cocheck/codebug.asm              -o ../_obj/codebug.obj
+	@$(asmf) ./mecocoa/memory/memoman.asm       -o ../_obj/memasm.obj
+	@$(cc32) ./mecocoa/memory/memoman.c         -o ../_obj/memcpl.obj
+
 
 ###
 
@@ -160,6 +164,8 @@ clean:
 	-@rm ../_obj/SHL16.APP
 	-@rm ../_obj/shell32.obj
 	-@rm ../_obj/SHL32.APP
+	-@rm ../_obj/memasm.obj
+	-@rm ../_obj/memcpl.obj
 
 uninstall:
 	-@sudo rm -rf /mnt/floppy

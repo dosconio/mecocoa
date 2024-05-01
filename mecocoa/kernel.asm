@@ -29,6 +29,7 @@ GLOBAL ModeProt32
 %define _BSWAP_ALLOW_NOT;{TOBE} Limit since which?
 DB "DOSCONIO"
 [BITS 16]
+KernelSymbols
 ; ---- ---- ---- ---- CODE ---- ---- ---- ----
 section .text
 ; ENTRY 0x5808
@@ -48,7 +49,9 @@ HerMain:; assure CS,DS,ES,SS equal zero
 	;{}
 	MOV WORD[0x0500], ModeProt32
 	MOV WORD[0x0502], CS
-; TSS Real-16 Store
+; Memory management and TSS Real-16 Store
+	MOV WORD[0x052A], 0x8000
+	MOV DWORD[0x052C], 0x00010000
 	MOV [ADDR_TSS16+72], ES
 	MOV [ADDR_TSS16+76], CS
 	MOV [ADDR_TSS16+80], SS
@@ -59,6 +62,11 @@ HerMain:; assure CS,DS,ES,SS equal zero
 ; Main - Load and Run Shell-Real16
 	PUSH DS
 	rprint str_progload
+	MOV ECX, 0x1000;{TEMP}
+	CALL MemAllocSuperv
+	CALL MemAllocSuperv
+	CMP EAX, 0x8000+0x1000
+	JNZ Endo_Kernel_Real16
 	PUSH WORD ADDR_KERNELBF; Buffer
 	PUSH WORD str_shell16;{TODO} if not found
 	PUSH WORD ADDR_STATICLD
@@ -68,7 +76,7 @@ HerMain:; assure CS,DS,ES,SS equal zero
 	CALL AX
 	POP DS
 	; Shell Real-16 Return then shutdown
-; Endo
+Endo_Kernel_Real16:
 	rprint str_endenv
 	DbgStop
 ModeProt32:
@@ -232,49 +240,26 @@ mainx:
 	LTR CX
 	ADD WORD[EAX+2], 1; state
 ;{} [Debug Area]
-	JMP .load.shell32
-	
+	JMP mainx.load.shell32
+Abort_Kernel_Flap32:
 	DbgStop
 ; Mainx - Load and Run Shell-Prot32
-.load.shell32:
+mainx.load.shell32:
+	xprinti32
 	xprint str_load_shell32
+	; Buffer Area
+	MOV EDI, RotMalloc
+	MOV ECX, 0x10000; buffer and Shell32
+	CALL SegGate:0
+	MOV EBX, DWORD[0x8000052C]; dbg
+	CMP EAX, 0x10000
+	JNZ Abort_Kernel_Flap32; abort
+	POP EAX
+	; Load Shell32
 	PUSH DWORD 0x12000
 	CALL _LoadFileMELF
-	CALL EAX; then return real-16
-;;	MOV WORD[THISF_ADR+TSSCrt], 8*0x11
-;;	MOV WORD[THISF_ADR+TSSMax], 8*0x11
-;;	MOV ESI, THISF_ADR+msg_load_shell32
-;;	MOV EDI, RotPrint
-;;	CALL SegGate:0
-;;	PUSH DWORD 20
-;;	CALL F_TSSStruct3
-; {OPT TEST} Load Subapp a and b
-;;	PUSH DWORD 50
-;;	ADD WORD[THISF_ADR+TSSMax], 2*8; {LDT+TSS}*8
-;;	CALL F_TSSStruct3
-;;	PUSH DWORD 60
-;;	ADD WORD[THISF_ADR+TSSMax], 2*8; {LDT+TSS}*8
-;;	CALL F_TSSStruct3
-; {OPT TEST} Echo User Area
-;;	MOV EDI, RotPrint
-;;	MOV ESI, THISF_ADR+msg_used_mem
-;;	CALL SegGate:0
-;;	MOV EDI, RotEchoDword
-;;	MOV EDX, [THISF_ADR+UsrAllocPtr]
-;;	CALL SegGate:0
-;;	MOV EDI, RotPrint
-;;	MOV ESI, THISF_ADR+msg_newline
-;;	CALL SegGate:0
-; {OPT TEST} Main loop
-;;	MOV ECX, 500
-;;	Shell32_Test:
-;;	CALL 8*0x11:0x00000000; After CLI before you try this
-;;	MOV EDI, RotPrint
-;;	MOV ESI, THISF_ADR+msg
-;;	CALL SegGate:0
-;;	; LOOP Shell32_Test
-; Enable Multi-tasks
-	;;STI
+	CALL EAX; return then return real-16
+
 ReturnReal16:
 	CLI
 	xprint str_quit_32bit
@@ -324,7 +309,7 @@ section .data
 	str_load_ivt:
 		DB " - Setting up Interrupts...",10,13,0
 	str_load_shell32:
-		DB "Loading the shell of prot-32",10,13,0
+		DB " - Loading the shell of prot-32",10,13,0
 	str_used_mem:
 		DB "Used Memory: ",0
 	str_newline:

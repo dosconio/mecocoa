@@ -7,18 +7,19 @@ GLOBAL RoutineGate
 %include "mecocoa/kernel.inc"
 %include "include/console.inc"
 [CPU 586]
+KernelSymbols
 [BITS 32]
 
+; return the index but how many GDTs.
 _MccaLoadGDT:
-	; load GDT and return the numbers of GDT
 	MOVZX EAX, WORD[0x80000500+0x4]
 	INC EAX
 	SHR EAX, 3 ; 
+	DEC EAX
 	LGDT [0x80000500+0x4]
 RET
 
 _MccaAlocGDT:
-	; return the numbers of GDT
 	ADD WORD[0x80000500+0x4], 8
 JMP _MccaLoadGDT
 
@@ -69,35 +70,10 @@ R_Print:
 	ALIGN 16
 R_Malloc:; ecx=length ret"eax=start" (user-area by manager)
 	; return [THISF_ADR+RamAllocPtr]++
-;	PUSH EBX
-;	OR ECX, ECX
-;	JZ R_MemAlloc_End
-;	MOV EAX, [THISF_ADR+UsrAllocPtr]
-;	MOV EBX, EAX
-;	ADD EBX, ECX
-;	CMP EBX, 0x00400000; UserRight
-;	JBE R_MemAlloc_Next
-;	XOR EAX, EAX
-;	JMP R_MemAlloc_End
-;	R_MemAlloc_Next:
-;	ADD DWORD[THISF_ADR+UsrAllocPtr], ECX
-;	DEC EBX
-;	AND EBX,0xFFFFF000
-;	R_MemAlloc_Loop:
-;		CMP EBX, EAX
-;		JB R_MemAlloc_End
-;		CALL RR_PageRegisterUser
-;		CMP EBX, 0
-;		JZ R_MemAlloc_End
-;		SUB EBX, 0x1000
-;		JMP R_MemAlloc_Loop
-;
-;	R_MemAlloc_End:
-;	POP EBX
-;	RETF
-;	RR_PageRegisterUser:
-;		PageRegisterUser
-;		RET
+	PUSH ECX
+	CALL _memalloc
+	POP ECX
+	RETF
 	ALIGN 16
 R_Mfree:
 	;; ...

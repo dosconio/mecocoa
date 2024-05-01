@@ -8,6 +8,7 @@
 //{TODO} to be COTLAB. Jump to here as console.
 
 #include "shell32.h"
+#include "mecocoa.h"
 
 int main(void) {
 	init(true);
@@ -30,57 +31,86 @@ static void init(bool cls) {
 	}
 	// create tasks of HelloX subapps.
 	if (1) {
+		memalloc(0xA000);// store programs
 		stduint n;// how many PHBlock loaded
 		void *hello_entries[3]; // Hello-A -B -C
 
+		//{TODO} dynamically allocate memory for Task
 		outs("Setup Hello-A, entry:");
 		n = ELF32_LoadExecFromMemory((pureptr_t)0x32000, &hello_entries[0]);
-		dword helloa_esps[] = {0x2C200,0x2C400,0x2C600,0x2C800};
-		Task3FromELF32((TSS_t*)0x2A100,
-			*((descriptor_t**)0x80000506), (MccaAlocGDT()-1), // LDT
-			(descriptor_t *)0x2A000,
-			(void *)0x32000, 8*7, helloa_esps);
-		GlobalDescriptor32Set(&(*((descriptor_t**)0x80000506))[MccaAlocGDT()-1],
-			0x2A100, 103, 9, // 9: 386TSS
-			0, 0 /* is_sys */, 1 /* 32-b */, 0 /* not-4k */
-		);// TSS [0x00408900]
+		TaskFlat_t helloa = {
+			.LDTSelector = MccaAlocGDT(),
+			.TSSSelector = MccaAlocGDT(),
+			.parent = 8 * 7,
+			.LDT = (descriptor_t *)memalloc(0x100),
+			.TSS = (TSS_t *)memalloc(0x100),
+			.ring = 3,
+			.esp0 = (dword)memalloc(0x200)+0x200,
+			.esp1 = (dword)memalloc(0x200)+0x200,
+			.esp2 = (dword)memalloc(0x200)+0x200,
+			.esp3 = (dword)memalloc(0x200)+0x200,
+			.entry = (dword)hello_entries[0],
+		};
+		TaskFlatRegister(&helloa, MccaGDT);
 		outi32hex((stduint)hello_entries[0]); outs("\n\r");
 
 		outs("Setup Hello-B, entry:");
 		n = ELF32_LoadExecFromMemory((pureptr_t)0x36000, &hello_entries[1]);
-		dword hellob_esps[] = {0x2C800,0x2CA00,0x2CC00,0x2CE00};
-		Task3FromELF32((TSS_t*)0x2A300,
-			*((descriptor_t**)0x80000506), (MccaAlocGDT()-1), // LDT
-			(descriptor_t *)0x2A200,
-			(void *)0x36000, 8*7, hellob_esps);
-		GlobalDescriptor32Set(&(*((descriptor_t**)0x80000506))[MccaAlocGDT()-1],
-			0x2A300, 103, 9, // 9: 386TSS
-			0, 0 /* is_sys */, 1 /* 32-b */, 0 /* not-4k */
-		);// TSS [0x00408900]
+		TaskFlat_t hellob = {
+			.LDTSelector = MccaAlocGDT(),
+			.TSSSelector = MccaAlocGDT(),
+			.parent = 8 * 7,
+			.LDT = (descriptor_t *)memalloc(0x100),
+			.TSS = (TSS_t *)memalloc(0x100),
+			.ring = 3,
+			.esp0 = (dword)memalloc(0x200)+0x200,
+			.esp1 = (dword)memalloc(0x200)+0x200,
+			.esp2 = (dword)memalloc(0x200)+0x200,
+			.esp3 = (dword)memalloc(0x200)+0x200,
+			.entry = (dword)hello_entries[1],
+		};
+		TaskFlatRegister(&hellob, MccaGDT);
 		outi32hex((stduint)hello_entries[1]); outs("\n\r");
 
 		outs("Setup Hello-C, entry:");
 		n = ELF32_LoadExecFromMemory((pureptr_t)0x3A000, &hello_entries[2]);
-		dword helloc_esps[] = {0x2D200,0x2D400,0x2D600,0x2D800};
-		Task3FromELF32((TSS_t*)0x2A500,
-			*((descriptor_t**)0x80000506), (MccaAlocGDT()-1), // LDT
-			(descriptor_t *)0x2A400,
-			(void *)0x3A000, 8*7, helloc_esps);
-		GlobalDescriptor32Set(&(*((descriptor_t**)0x80000506))[MccaAlocGDT()-1],
-			0x2A500, 103, 9, // 9: 386TSS
-			0, 0 /* is_sys */, 1 /* 32-b */, 0 /* not-4k */
-		);// TSS [0x00408900]
+		TaskFlat_t helloc = {
+			.LDTSelector = MccaAlocGDT(),
+			.TSSSelector = MccaAlocGDT(),
+			.parent = 8 * 7,
+			.LDT = (descriptor_t *)memalloc(0x100),
+			.TSS = (TSS_t *)memalloc(0x100),
+			.ring = 3,
+			.esp0 = (dword)memalloc(0x200)+0x200,
+			.esp1 = (dword)memalloc(0x200)+0x200,
+			.esp2 = (dword)memalloc(0x200)+0x200,
+			.esp3 = (dword)memalloc(0x200)+0x200,
+			.entry = (dword)hello_entries[2],
+		};
+		TaskFlatRegister(&helloc, MccaGDT);
 		outi32hex((stduint)hello_entries[2]); outs("\n\r");
 
 		if (0) dbgfn();
-		jmpFar(0, (0x10 + 1) << 3); // TSS
-		jmpFar(0, (0x10 + 1) << 3); // TSS
-		CallFar(0, (0x10 + 1) << 3);
-		CallFar(0, (0x10 + 1) << 3);
-		CallFar(0, (0x12 + 1) << 3);
-		CallFar(0, (0x12 + 1) << 3);
-		CallFar(0, (0x14 + 1) << 3);
-		CallFar(0, (0x14 + 1) << 3);
+		// then you can jmpFar or CallFar one's TSS
 	}
+	if (true) {
+		outs("\n\rMemory Bitmap with 16:");
+		outi16hex(*(word *)0x8000052A);
+		outs(" 32:");
+		outi32hex(*(dword *)0x8000052C);
+		byte *memmap_ptr = (byte *)0x60000;
+		for (stduint i = 0; i < 64; i++) {
+			if (!(i % 16)) {
+				outs("\n\r");
+				outi32hex(0x0008000 * i);// 0x00080000 * (i / 16)
+				outs(" ");
+			}
+			outi8hex(memmap_ptr[i]);
+			outc(' ');
+		}
+		outs("\n\r");
+	}
+	
+
 	InterruptEnable();
 }

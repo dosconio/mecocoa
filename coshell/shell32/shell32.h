@@ -15,6 +15,6 @@
 static void init(bool cls);
 
 extern "C" {
-	stduint MccaAlocGDT(void);
-	stduint MccaLoadGDT(void);
+	word MccaAlocGDT(void);
+	word MccaLoadGDT(void);
 }

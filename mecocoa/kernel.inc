@@ -45,8 +45,11 @@ SEGM_BITMAP   EQU 0x6000; - Memory Bit Map
 
 GDTDptr   EQU 0x0504
 IVTDptr   EQU 0x050A
+MemSptr   EQU 0x052A
 
 Linear EQU 0x80000000
+
+SYS_MEM_POINTER EQU 0x8000052A; uint16
 
 ; ---- ---- Segment Selectors ---- ----
 
@@ -70,4 +73,9 @@ RotReaddisk   EQU 4
 
 RotTerminal   EQU 0x0F
 RotDptrStruct EQU 0x10
+
+%macro KernelSymbols 0
+EXTERN MemAllocSuperv
+EXTERN _memalloc
+%endmacro
 
