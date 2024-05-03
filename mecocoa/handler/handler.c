@@ -5,10 +5,7 @@
 // ModuTitle: Handler
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 
-#include "../kernel.h"
-#include "console.h"
-#include <c/stdinc.h>
-#include <c/driver/i8259A.h>
+#include "interrupt.h"
 
 static char *ExceptionDescription[] = 
 {
@@ -52,6 +49,11 @@ void Handexc(sdword iden, dword para)
 	outs("\x0A\x0D");
 }
 
+// Current logic
+// (1) do the main
+// (2) renew i8259
+// (3) renew the interrupt source
+
 void Handint_RTC()
 {
 	//{TODO} Magic Port
@@ -63,6 +65,17 @@ void Handint_RTC()
 	// OPEN NMI AFTER READ REG-C, OR ONLY INT ONCE
 	outpb(0x70, 0x0C);
 	innpb(0x71);
+	popad();
+	returni();
+}
+
+void Handint_Keyboard()
+{
+	pushad();
+	outc('*');
+	outpb(0xA0, EOI); // slaver
+	outpb(0x20, EOI);// master
+	innpb(PORT_KBD_BUFFER);
 	popad();
 	returni();
 }

@@ -10,15 +10,18 @@
 #include "shell32.h"
 #include "mecocoa.h"
 
+// debug
+word tasks[3];
+
 int main(void) {
 	init(true);
-	outs("Hello, " _CONCOL_DarkIoWhite "\nworld!\n\r");
+	outs("Hello, " _CONCOL_DarkIoWhite "\b\nworld!\n\r");
 	int crttask = 0;
-	while (true) {
+	for (int i = 0; i < 12; i++) {
 		delay001s();
-		CallFar(0, (0x11 + (((crttask++) % 3)<<1)) << 3);
-		// outs("<Ring~> ");
+		CallFar(0, tasks[i % numsof(tasks)] << 3);
 	}
+	return 0xFEDC3210;
 	while (true) wait();
 }
 
@@ -32,71 +35,27 @@ static void init(bool cls) {
 	// create tasks of HelloX subapps.
 	if (1) {
 		memalloc(0xA000);// store programs
-		stduint n;// how many PHBlock loaded
-		void *hello_entries[3]; // Hello-A -B -C
 
 		//{TODO} dynamically allocate memory for Task
 		outs("Setup Hello-A, entry:");
-		n = ELF32_LoadExecFromMemory((pureptr_t)0x32000, &hello_entries[0]);
-		TaskFlat_t helloa = {
-			.LDTSelector = MccaAlocGDT(),
-			.TSSSelector = MccaAlocGDT(),
-			.parent = 8 * 7,
-			.LDT = (descriptor_t *)memalloc(0x100),
-			.TSS = (TSS_t *)memalloc(0x100),
-			.ring = 3,
-			.esp0 = (dword)memalloc(0x200)+0x200,
-			.esp1 = (dword)memalloc(0x200)+0x200,
-			.esp2 = (dword)memalloc(0x200)+0x200,
-			.esp3 = (dword)memalloc(0x200)+0x200,
-			.entry = (dword)hello_entries[0],
-		};
-		TaskFlatRegister(&helloa, MccaGDT);
-		outi32hex((stduint)hello_entries[0]); outs("\n\r");
-
+		tasks[0] = UserTaskLoadFromELF32((pureptr_t)0x32000);
+		outi32hex(getTaskEntry(tasks[0])); outs("\n\r");
+		
 		outs("Setup Hello-B, entry:");
-		n = ELF32_LoadExecFromMemory((pureptr_t)0x36000, &hello_entries[1]);
-		TaskFlat_t hellob = {
-			.LDTSelector = MccaAlocGDT(),
-			.TSSSelector = MccaAlocGDT(),
-			.parent = 8 * 7,
-			.LDT = (descriptor_t *)memalloc(0x100),
-			.TSS = (TSS_t *)memalloc(0x100),
-			.ring = 3,
-			.esp0 = (dword)memalloc(0x200)+0x200,
-			.esp1 = (dword)memalloc(0x200)+0x200,
-			.esp2 = (dword)memalloc(0x200)+0x200,
-			.esp3 = (dword)memalloc(0x200)+0x200,
-			.entry = (dword)hello_entries[1],
-		};
-		TaskFlatRegister(&hellob, MccaGDT);
-		outi32hex((stduint)hello_entries[1]); outs("\n\r");
+		tasks[1] = UserTaskLoadFromELF32((pureptr_t)0x36000);
+		outi32hex(getTaskEntry(tasks[1])); outs("\n\r");
 
 		outs("Setup Hello-C, entry:");
-		n = ELF32_LoadExecFromMemory((pureptr_t)0x3A000, &hello_entries[2]);
-		TaskFlat_t helloc = {
-			.LDTSelector = MccaAlocGDT(),
-			.TSSSelector = MccaAlocGDT(),
-			.parent = 8 * 7,
-			.LDT = (descriptor_t *)memalloc(0x100),
-			.TSS = (TSS_t *)memalloc(0x100),
-			.ring = 3,
-			.esp0 = (dword)memalloc(0x200)+0x200,
-			.esp1 = (dword)memalloc(0x200)+0x200,
-			.esp2 = (dword)memalloc(0x200)+0x200,
-			.esp3 = (dword)memalloc(0x200)+0x200,
-			.entry = (dword)hello_entries[2],
-		};
-		TaskFlatRegister(&helloc, MccaGDT);
-		outi32hex((stduint)hello_entries[2]); outs("\n\r");
+		tasks[2] = UserTaskLoadFromELF32((pureptr_t)0x3A000);
+		outi32hex(getTaskEntry(tasks[2])); outs("\n\r");
 
 		if (0) dbgfn();
 		// then you can jmpFar or CallFar one's TSS
 	}
 	if (true) {
-		outs("\n\rMemory Bitmap with 16:");
+		outs("\n\r\x02Memory Bitmap with 16:\x01");
 		outi16hex(*(word *)0x8000052A);
-		outs(" 32:");
+		outs(", 32:\x01");
 		outi32hex(*(dword *)0x8000052C);
 		byte *memmap_ptr = (byte *)0x60000;
 		for (stduint i = 0; i < 64; i++) {

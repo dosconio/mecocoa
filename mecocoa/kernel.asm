@@ -259,7 +259,9 @@ mainx.load.shell32:
 	PUSH DWORD 0x12000
 	CALL _LoadFileMELF
 	CALL EAX; return then return real-16
-
+	xprint str_return_from_shell32
+	xprinti32 EAX
+	xprint str_newline
 ReturnReal16:
 	CLI
 	xprint str_quit_32bit
@@ -310,6 +312,8 @@ section .data
 		DB " - Setting up Interrupts...",10,13,0
 	str_load_shell32:
 		DB " - Loading the shell of prot-32",10,13,0
+	str_return_from_shell32:
+		DB 10,13,"Shell32 return: ",0
 	str_used_mem:
 		DB "Used Memory: ",0
 	str_newline:

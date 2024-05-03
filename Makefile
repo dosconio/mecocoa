@@ -8,7 +8,7 @@
 # not suitable to use $(subst ...)
 
 .PHONY: new uninstall clean init mdrivers floppy buildf newx min\
-	init0 build #<- Harddisk Version
+	init0 build new-r newx-r #<- Harddisk Version
 
 asmattr = -I$(unidir)/inc/Kasha/n_ -I$(unidir)/inc/naasm/n_ -I./include/
 asm  = /mnt/hgfs/_bin/ELF64/aasm $(asmattr) 
@@ -31,9 +31,9 @@ link = ld #OPT E:\tmp\CPOSIX\bin\ld.gold.exe
 InstExt = -L/mnt/hgfs/_bin -lmx86
 KernelExt = ../_obj/rout16.obj  ../_obj/handler.obj ../_obj/handauf.obj ../_obj/console.obj ../_obj/page.obj \
 		    ../_obj/interrupt.obj ../_obj/memasm.obj $(Rout32Obj)
-Rout32Obj = ../_obj/rout32.obj ../_obj/memcpl.obj
+Rout32Obj = ../_obj/rout32.obj ../_obj/memcpl.obj 
 Shell16Ext = ../_obj/rout16.obj
-Shell32Ext = ../_obj/console.obj ../_obj/codebug.obj $(Rout32Obj)
+Shell32Ext = ../_obj/console.obj ../_obj/codebug.obj $(Rout32Obj) ../_obj/task.obj
 
 ### Virtual Machine
 # vmbox=E:\software\vmbox\VBoxManage.exe
@@ -107,6 +107,7 @@ mdrivers:
 	@$(asmf) ./cocheck/codebug.asm              -o ../_obj/codebug.obj
 	@$(asmf) ./mecocoa/memory/memoman.asm       -o ../_obj/memasm.obj
 	@$(cc32) ./mecocoa/memory/memoman.c         -o ../_obj/memcpl.obj
+	@$(cc32) ./mecocoa/multask/multask.c        -o ../_obj/task.obj
 
 
 ###
@@ -152,6 +153,12 @@ helloc: ./subapps/helloc/helloc.cpp
 	@$(cx32) $< -o ../_obj/helloc.obj
 	@$(link) -s -T ./subapps/helloc/helloc.ld -m elf_i386 -o ../_obj/helloc.app\
 	 ../_obj/helloc.obj ../_obj/helloa.elf
+
+new-r:
+	make -f mecocoa/makefil/riscv64.make new
+
+newx-r:
+	make -f mecocoa/makefil/riscv64.make newx
 
 ###
 

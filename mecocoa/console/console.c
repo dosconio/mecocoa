@@ -69,8 +69,17 @@ void outtxt(const char* str, dword len)
 		case '\r':
 			posi -= posi % _BytesPerLine; //= posi / _BytesPerLine * _BytesPerLine;
 			break;
-		case '\n':
+		case '\n':// down
 			posi += _BytesPerLine;
+			break;
+		case '\b':// left
+			posi -= 2;
+			break;
+		case '\x01':// next
+			posi += 2;
+			break;
+		case '\x02':// up
+			posi -= _BytesPerLine;
 			break;
 		default:
 			_VideoBuf[posi++] = chr;

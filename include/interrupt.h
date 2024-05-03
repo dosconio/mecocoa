@@ -11,9 +11,11 @@
 
 
 #include <c/stdinc.h>
+#include "../mecocoa/kernel.h"
 #include "console.h"
 #include "c/driver/i8259A.h"
 #include "c/driver/RealtimeClock.h"
+#include "c/driver/keyboard.h"
 
 _NOT_ABSTRACTED void InterruptInitialize();
 

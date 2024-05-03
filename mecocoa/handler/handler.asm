@@ -47,13 +47,13 @@ EXTERN _Handexc
 
 section .text
 
-; ---- Master PIC Device
+; ---- Master PIC Device ----
 
 _Handint_CLK:; IRQ 0 by 0x20
 	calli _Hand_CLK; Clock
 
-_Handint_KBD:; IRQ 1 by 0x21
-	calli _Hand_KBD; Keyboard
+;_Handint_KBD:; IRQ 1 by 0x21
+	; see handler.c
 
 _Handint_CAS:; IRQ 2 by 0x22
 	calli _Hand_CAS; Cascade
@@ -78,7 +78,8 @@ _Handint_LPT1:; IRQ 6 by 0x26
 _Handint_PRT:; IRQ 7 by 0x27
 	calli _Hand_PRT; Printer
 
-;
+;_Handint_RTC:; IRQ 8 by 0x70
+	; see handler.c
 
 _Handint_IRQ9:
 	calli _Hand_IRQ9

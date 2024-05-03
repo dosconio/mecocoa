@@ -73,20 +73,8 @@ her-note: false
 
 
 //{TODO} combinate TSS and LDT and others into "Task Block"
-- SubappA LDT: 0x2A000 -> 0x2A100
-- SubappA TSS: 0x2A100 -> 0x2A200
-- SubappB LDT: 0x2A200 -> 0x2A300
-- SubappB TSS: 0x2A300 -> 0x2A400
-- SubappC LDT: 0x2A400 -> 0x2A500
-- SubappC TSS: 0x2A500 -> 0x2A600
-
-- SubappA Stak0: 0x2C000 -> 0x2C200
-- SubappA Stak1: 0x2C200 -> 0x2C400
-- SubappA Stak2: 0x2C400 -> 0x2C600
-- SubappA Stak3: 0x2C600 -> 0x2C800
-
-
-- SubappABC Raw: 0x30000 -> 
+//{TEMP} TSS and LDT 0x2xxxx
+//{TEMP} SubappABC Raw: 0x30000 -> 
 
 
 ### Memory Bitmap
@@ -133,6 +121,7 @@ Address: 0x500 ~ 0x5FF
 | 28 word | Count: Rotate Millisecond |  |  |
 | 2A word | Simple Kernel Memory Pointer | 0x8000 | 0x0000 for full |
 | 2C dword | Simple User Memory Pointer | 0x00010000 | 0x00000000 for full |
+| 30 dword | Global Keyword Queue |  | putptr+getptr+data |
 
 ### Global Segment
 

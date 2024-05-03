@@ -8,11 +8,12 @@
 
 #include "../../include/interrupt.h"
 #include "../../mecocoa/kernel.h"
-#include <c/stdinc.h>
+#include "mecocoa.h"
 
 extern void Handexc_Else();
 extern void Handint_General();
 extern void Handint_RTC();
+extern void Handint_Keyboard();
 
 extern void Handexc_0_Divide_By_Zero();
 extern void Handexc_1_Step();
@@ -66,21 +67,24 @@ _NOT_ABSTRACTED void InterruptInitialize()
 	};
 	gate_t gate;
 	stduint i = 0;
-	//{TEMP} Omit Add `Linear`
+	//{TEMP} no check for Add `Linear`
 	// The former 20 is for exceptions
 	GateStructInterruptR0(&gate, (dword)Handexc_Else, SegCode, 0);
 	for (; i < 20; i++)// assume not from 0 for each routine
 		if (MccaExceptTable[i])
-			GateStructInterruptR0(((gate_t *)ADDR_IDT32) + i, MccaExceptTable[i], SegCode, 0);
+			GateStructInterruptR0(MccaIDTable + i, MccaExceptTable[i], SegCode, 0);
 		else
-			((gate_t *)ADDR_IDT32)[i] = gate;
+			MccaIDTable[i] = gate;
 	// Then for interruption (256-20)
 	GateStructInterruptR0(&gate, (dword)Handint_General, SegCode, 0);
 	for (; i < 256; i++)
-		((gate_t *)ADDR_IDT32)[i] = gate;
+		MccaIDTable[i] = gate;
 	// RTC
-	((gate_t *)ADDR_IDT32)[PORT_RTC] = *GateStructInterruptR0(
+	MccaIDTable[PORT_RTC] = *GateStructInterruptR0(
 			&gate, (dword)Handint_RTC, SegCode, 0);
+	// Keyboard
+	MccaIDTable[PORT_KBD] = *GateStructInterruptR0(
+			&gate, (dword)Handint_Keyboard, SegCode, 0);
 	// LIDT
 	*(word *)(IVTDptr + Linear) = 256 * sizeof(gate_t) - 1;
 	*(dword *)(IVTDptr + Linear + 2) = ADDR_IDT32;

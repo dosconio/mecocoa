@@ -4,8 +4,7 @@ dg-home: true
 her-note: false
 ---
 
-
-# Mecocoa
+# Mecocoa ![LOGO](./rsource/logo/MCCA20240501.png) 
 
 - **type**: Operating System
 - **domain**: [mecocoa.org](http://mecocoa.org/) 
@@ -25,9 +24,21 @@ A module can exist as multi-language versions, like `.h&.inc`, or `.c&.cpp&.rs`
 | Kernel | ELF A+C | Real16->Flap32 |  |
 | Shell16 | ELF C | Real-16 |  |
 | Shell32 | ELF C++ | Flap-32 | (to COTLAB) |
-|  |  |  |  |
 
-
+| Root Folder | Description |
+|-|-|
+|cocheck||
+|coshell||
+|depends|Dependence besides [UNISYM](http://unisym.org) |
+|include||
+|mecocoa||
+|rsource||
+|userkit||
+|configs||
+|demonst||
+|documnt||
+|license||
+|subapps||
 
 ## [01-Memory-Map](documnt/01-Memory-Map.md) 
 
