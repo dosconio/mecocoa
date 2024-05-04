@@ -13,6 +13,6 @@
 #include <c/port.h>
 
 #define _CONCOL_DarkIoWhite "\xFF\x70"
-
+#define _CONCOL_None "\xFF\xFF"
 
 #endif

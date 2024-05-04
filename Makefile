@@ -8,7 +8,7 @@
 # not suitable to use $(subst ...)
 
 .PHONY: new uninstall clean init mdrivers floppy buildf newx min\
-	init0 build new-r newx-r #<- Harddisk Version
+	init0 build new-r newx-r dbg-r #<- Harddisk Version
 
 asmattr = -I$(unidir)/inc/Kasha/n_ -I$(unidir)/inc/naasm/n_ -I./include/
 asm  = /mnt/hgfs/_bin/ELF64/aasm $(asmattr) 
@@ -159,7 +159,9 @@ new-r:
 
 newx-r:
 	make -f mecocoa/makefil/riscv64.make newx
-
+dbg-r:
+	make -f mecocoa/makefil/riscv64.make debug
+	make -f mecocoa/makefil/riscv64.make dbgend
 ###
 
 clean:

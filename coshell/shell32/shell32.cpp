@@ -8,14 +8,13 @@
 //{TODO} to be COTLAB. Jump to here as console.
 
 #include "shell32.h"
-#include "mecocoa.h"
 
 // debug
 word tasks[3];
 
 int main(void) {
 	init(true);
-	outs("Hello, " _CONCOL_DarkIoWhite "\b\nworld!\n\r");
+	outs("Hello, " _CONCOL_DarkIoWhite "\b\nworld" _CONCOL_None "!\n\r");
 	int crttask = 0;
 	for (int i = 0; i < 12; i++) {
 		delay001s();
@@ -36,7 +35,7 @@ static void init(bool cls) {
 	if (1) {
 		memalloc(0xA000);// store programs
 
-		//{TODO} dynamically allocate memory for Task
+		//{TODO} UserTaskLoadFromFilename
 		outs("Setup Hello-A, entry:");
 		tasks[0] = UserTaskLoadFromELF32((pureptr_t)0x32000);
 		outi32hex(getTaskEntry(tasks[0])); outs("\n\r");

@@ -10,6 +10,8 @@
 #define _INC_MECOCOA
 
 #include <c/stdinc.h>
+#include <c/format/ELF.h>
+#include <c/task.h>
 
 #undef memalloc
 
@@ -17,18 +19,19 @@
 #define MccaIDT (*(descriptor_t**)0x8000050C) //{TODO} Mecocoa::IDT in C++
 #define MccaIDTable ((gate_t *)0x80000800)
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-	void *memalloc(stduint size);
 
-
-	// multask.h
-	word UserTaskLoadFromELF32(pureptr_t rawdata);
-#ifdef __cplusplus
-}
-#endif
+void *memalloc(stduint size);
 
 #define getTaskEntry(task) (((TSS_t*)DescriptorBaseGet(&MccaGDT[task]))->EIP)
+
+// ---- kernel for shell: multask.h ----
+word UserTaskLoadFromELF32(pureptr_t rawdata);
+
+// ---- console.h ----
+
+// ---- interrupt.h ----
+
+
+
 
 #endif

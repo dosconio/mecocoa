@@ -60,9 +60,10 @@ void outtxt(const char* str, dword len)
 		switch (chr)
 		{
 		case (byte)'\xFF':// 20240217-ALICE's FF Method
-			attr_enable = 1;
-			if (len && (attr = *str++))
-				attr_enable = 1, len--;
+			if (len && (*str == '\xFF'))
+				attr_enable = !attr_enable, len--, str++;
+			else if (len && (attr = *str))
+				attr_enable = 1, len--, str++;
 			else
 				chr = 0;
 			break;

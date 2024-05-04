@@ -1,4 +1,4 @@
-# TAB LF
+# ASCII LINK-SCRIPT TAB4 LF
 SECTIONS
 {
 	#{TEMP} use 0x10000 to load shell32

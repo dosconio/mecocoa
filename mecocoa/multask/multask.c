@@ -10,6 +10,9 @@
 #include <c/format/ELF.h>
 #include "mecocoa.h"
 
+word MccaAlocGDT(void);
+word MccaLoadGDT(void);
+
 //{GROWING}
 // User task: Ring-3
 // return: TSS of the new task
@@ -33,6 +36,7 @@ word UserTaskLoadFromELF32(pureptr_t rawdata)
 	};
 	TaskFlatRegister(&task, MccaGDT);
 	//{TODO} PDBR
+	// PagTable={UsrPart: UsrSegLimit=0x80000000 without KrnPart}
 	return task.TSSSelector;
 }
 
