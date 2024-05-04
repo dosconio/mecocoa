@@ -155,15 +155,18 @@ helloc: ./subapps/helloc/helloc.cpp
 	 ../_obj/helloc.obj ../_obj/helloa.elf
 
 new-r:
-	make -f mecocoa/makefil/riscv64.make new
+	@make -f mecocoa/makefil/riscv64.make new
 
 newx-r:
-	make -f mecocoa/makefil/riscv64.make newx
+	-make -f mecocoa/makefil/riscv64.make clean
+	@make -f mecocoa/makefil/riscv64.make newx LOG=trace
 dbg-r:
-	make -f mecocoa/makefil/riscv64.make debug
-	make -f mecocoa/makefil/riscv64.make dbgend
+	@make -f mecocoa/makefil/riscv64.make debug
+	@make -f mecocoa/makefil/riscv64.make dbgend
 ###
 
+all: new new-r
+	@echo "Finish : All Finished"
 clean:
 	-@rm ../_obj/boot.fin
 	-@rm ../_obj/kernel.obj
@@ -175,6 +178,7 @@ clean:
 	-@rm ../_obj/SHL32.APP
 	-@rm ../_obj/memasm.obj
 	-@rm ../_obj/memcpl.obj
+	make -f mecocoa/makefil/riscv64.make clean
 
 uninstall:
 	-@sudo rm -rf /mnt/floppy

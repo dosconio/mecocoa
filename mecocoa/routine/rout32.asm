@@ -43,9 +43,19 @@ APISymbolTable:; till Routine, also as ABI
 	rot0010: defrotx R_DescriptorStructure; DescriptorStructure
 __Routine:
 RoutineGate:; EDI=FUNCTION RoutIn:{DS=SegData}
+	PUSH DS
+	PUSH ES
+	PUSH AX
+	MOV AX, SegData
+	MOV DS, AX
+	MOV ES, AX
+	POP AX
+	; keep FS and GS
 	CMP EDI, [RoutineNo+Linear]
 	JAE R_Terminate
 	CALL FAR [(rot0000+Linear)+EDI*8]
+	POP ES
+	POP DS
 	RETF
 R_Terminate:; 00 and other rontine point to here
 	PUSHFD

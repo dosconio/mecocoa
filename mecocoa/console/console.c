@@ -10,6 +10,7 @@
 #include "../include/console.h"
 #include <c/stdinc.h>
 
+
 //
 static byte* const _VideoBuf = (unsigned char*)0x800B8000;
 const static word _CharsPerLine = 80;
@@ -18,6 +19,9 @@ const static word _LinesPerScreen = 25;
 const static word _ScreenSize = _BytesPerLine * _LinesPerScreen;
 
 static char _tab_dec2hex[] = {'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'};
+
+static byte attr;
+static byte attr_enable;
 
 void curset(word posi)
 {
@@ -54,18 +58,13 @@ void outtxt(const char* str, dword len)
 {
 	word posi = curget()*2;
 	byte chr;
-	byte attr = 0;
-	byte attr_enable = 0;
+
 	while ((len--) && (chr = (byte)*str++)) {
 		switch (chr)
 		{
 		case (byte)'\xFF':// 20240217-ALICE's FF Method
-			if (len && (*str == '\xFF'))
-				attr_enable = !attr_enable, len--, str++;
-			else if (len && (attr = *str))
-				attr_enable = 1, len--, str++;
-			else
-				chr = 0;
+			if (len)
+				attr = *str++, attr_enable = (attr != (byte)'\xFF'), len--;
 			break;
 		case '\r':
 			posi -= posi % _BytesPerLine; //= posi / _BytesPerLine * _BytesPerLine;
@@ -99,48 +98,3 @@ void outtxt(const char* str, dword len)
 	curset(posi/2);
 }
 
-void outc(const char chr)
-{
-	outtxt(&chr, 1);
-}
-
-//{TEMP} always align to right
-void outi8hex(const byte inp)
-{
-	byte val = inp;
-	char buf[2];
-	for (stduint i = 0; i < 2; i++)
-	{
-		buf[1 - i] = _tab_dec2hex[val & 0xF];
-		val >>= 4;
-	}
-	outtxt(buf, 2);
-}
-
-// Replacement of DbgEcho16
-void outi16hex(const word inp)
-{
-	word val = inp;
-	char buf[4];
-	for (stduint i = 0; i < 4; i++)
-	{
-		buf[3 - i] = _tab_dec2hex[val & 0xF];
-		val >>= 4;
-	}
-	outtxt(buf, 4);
-}
-
-// Replacement of DbgEcho32
-void outi32hex(const dword inp)
-{
-	dword val = inp;
-	char buf[8];
-	for (stduint i = 0; i < 8; i++)
-	{
-		buf[7 - i] = _tab_dec2hex[val & 0xF];
-		val >>= 4;
-	}
-	outtxt(buf, 8);
-}
-
-void outf(const char *str, ...);

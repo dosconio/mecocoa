@@ -7,7 +7,7 @@
 
 # ! current path still be same with main `Makefile`
 
-.PHONY: ciallo new newx debug dbgend clean
+.PHONY: ciallo lib new newx debug dbgend clean
 
 ARCH = riscv64
 THIS := $(ARCH)
@@ -34,11 +34,13 @@ HEADER_DEP = $(addsuffix .d, $(basename $(C_OBJS)))
 
 -include $(HEADER_DEP)
 
+INCLUDEFLAG = -I$(THIS) -Iinclude -I/mnt/hgfs/unisym/inc
 CFLAG = -Wall -Werror -O -fno-omit-frame-pointer -ggdb
 CFLAG += -MD
 CFLAG += -mcmodel=medany
 CFLAG += -ffreestanding -fno-common -nostdlib -mno-relax
-CFLAG += -I$(THIS)
+CFLAG += $(INCLUDEFLAG)
+CFLAG += -D_RiscV64 -D_MCCA="RiscV64"
 CFLAG += $(shell $(CC) -fno-stack-protector -E -x c /dev/null >/dev/null 2>&1 && echo -fno-stack-protector)
 
 # LOG ?= error
@@ -72,11 +74,13 @@ LDFLAG = -z max-page-size=4096
 
 $(AS_OBJS): $(BUILDDIR)/$(THIS)/%.o : $(THIS)/%.S
 	@mkdir -p $(@D)
-	$(CC) $(CFLAG) -c $< -o $@
+	@echo "Compile: $<"
+	@$(CC) $(CFLAG) -c $< -o $@
 
 $(C_OBJS): $(BUILDDIR)/$(THIS)/%.o : $(THIS)/%.c  $(BUILDDIR)/$(THIS)/%.d
 	@mkdir -p $(@D)
-	$(CC) $(CFLAG) -c $< -o $@
+	@echo "Compile: $<"
+	@$(CC) $(CFLAG) -c $< -o $@
 
 $(HEADER_DEP): $(BUILDDIR)/$(THIS)/%.d : $(THIS)/%.c
 	@mkdir -p $(@D)
@@ -92,15 +96,21 @@ QEMUOPTS = \
 	-machine virt \
 	-bios $(BOOTLOADER) \
 	-kernel $(OUTF)
+LIBS = $(BUILDDIR)/$(THIS)/consio.o
 
 ciallo:
 	@echo "Mecocoa Risc-V64"
+	@echo "Lglevel: $(LOG)"
 
-new: ciallo $(OBJS)
-	$(LD) $(LDFLAG) -T $(THIS)/kernel.ld -o $(OUTF) $(OBJS)
-	$(OBJDUMP) -S $(OUTF) > $(OUTF).asm
-	$(OBJDUMP) -t $(OUTF) | sed '1,/SYMBOL TABLE/d; s/ .* / /; /^$$/d' > $(OUTF).sym
-	@echo 'Build  : Finish'
+lib:
+	@echo 'Build  : UNISYM for $(ARCH)'
+	@$(CC) $(CFLAG) -c /mnt/hgfs/unisym/lib/c/consio.c -o $(BUILDDIR)/$(THIS)/consio.o
+new: ciallo lib $(OBJS)
+	@echo 'Link   : $(OUTF)'
+	@$(LD) $(LDFLAG) -T $(THIS)/kernel.ld -o $(OUTF) $(OBJS) $(LIBS)
+	@$(OBJDUMP) -S $(OUTF) > $(OUTF).asm
+	@$(OBJDUMP) -t $(OUTF) | sed '1,/SYMBOL TABLE/d; s/ .* / /; /^$$/d' > $(OUTF).sym
+	@echo 'Build  : Finish Mecocoa $(ARCH)'
 
 newx: new $(OUTF)
 	$(QEMU) $(QEMUOPTS)
@@ -109,16 +119,16 @@ QEMUGDB = $(shell if $(QEMU) -help | grep -q '^-gdb'; \
 	then echo "-gdb tcp::15234"; \
 	else echo "-s -p 15234"; fi)
 
-debug: new cocheck/riscv64.gdbinit
+debug: new configs/riscv64.gdbinit
 	$(QEMU) $(QEMUOPTS) -S $(QEMUGDB) &
 	sleep 1
-	$(GDB) --init-command=cocheck/riscv64.gdbinit
+	$(GDB) --init-command=configs/riscv64.gdbinit
 
 dbgend:
 	sudo lsof -i tcp:15234 # sudo kill -9 46080
 
 clean:
-	#rm -rf $(BUILDDIR)
+	rm -rf $(BUILDDIR)/$(ARCH)
 
 
 

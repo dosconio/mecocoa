@@ -10,9 +10,24 @@
 #define _INC_CONSOLE
 
 #include <c/consio.h>
+
+#if defined(_RiscV64)
+
+enum CON_FORECOLOR {
+	CON_FORE_RED = 31,
+	CON_FORE_GREEN = 32,
+	CON_FORE_BLUE = 34,
+	CON_FORE_GRAY = 90,
+	CON_FORE_YELLOW = 93,
+};
+
+
+#else
+
 #include <c/port.h>
 
-#define _CONCOL_DarkIoWhite "\xFF\x70"
-#define _CONCOL_None "\xFF\xFF"
+#define CON_DarkIoWhite "\xFF\x70"
+#define CON_None "\xFF\xFF"
 
+#endif
 #endif

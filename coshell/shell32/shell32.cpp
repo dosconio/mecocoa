@@ -14,7 +14,7 @@ word tasks[3];
 
 int main(void) {
 	init(true);
-	outs("Hello, " _CONCOL_DarkIoWhite "\b\nworld" _CONCOL_None "!\n\r");
+	outsfmt("Ciallo, " CON_DarkIoWhite "\b\n%d-%d-%d" CON_None "!\n\r", 2024, 5, 4);
 	int crttask = 0;
 	for (int i = 0; i < 12; i++) {
 		delay001s();
