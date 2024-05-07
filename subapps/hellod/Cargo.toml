@@ -1,8 +1,25 @@
+cargo-features = ["profile-rustflags"] # "edition2021"
+
 [package]
 name = "hellod"
 version = "0.1.0"
 edition = "2021"
+authors = ["dosconio <dosconyo@gmail.com>"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+rustflags = ["-C", "link-arg=-L/mnt/hgfs/_bin/mecocoa",
+	"-C", "link-arg=/mnt/hgfs/_bin/mecocoa/libmccausr-x86.a",
+#	"-C", "link-arg=-T/home/ayano/mecocoa/subapps/hellod/hellod.ld" # If add this, it will bad!
+	] # no use '-lmccausr-x86' for '/usr/bin/ld: skipping incompatible'... why?
+
 [dependencies]
+
+#[unstable]
+#build-std = ["core", "compiler_builtins", "alloc"]
+

@@ -7,8 +7,8 @@
 
 [BITS 32]
 GLOBAL _start
-GLOBAL _sysouts
-GLOBAL _sysquit
+EXTERN _sysouts
+EXTERN _sysquit
 
 section .text
 _start:
@@ -20,25 +20,6 @@ _reentry:
 	CALL SegGate|3:0
 	MOV ESI, str1
 	JMP _reentry
-
-_sysouts:
-	PUSH EBP
-	MOV EBP, ESP
-	PUSH ESI
-	PUSH EDI
-	MOV ESI, [EBP+4*2]
-	MOV EDI, RotPrint
-	CALL SegGate|3:0
-	POP EDI
-	POP ESI
-	MOV ESP, EBP
-	POP EBP
-RET
-
-_sysquit:
-	MOV EDI, RotTerminal
-	CALL SegGate|3:0
-RET
 
 section .data
 str0: db "(HelloA)",0

@@ -69,7 +69,7 @@ her-note: false
 - SubappC Data: 0x28000 -> 0x29000
 - SubappC Code: 0x29000 -> 0x2A000
 
-
+0x50000 TEMP PT (0x40'0000)
 
 
 //{TODO} combinate TSS and LDT and others into "Task Block"

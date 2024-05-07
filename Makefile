@@ -9,23 +9,23 @@
 
 .PHONY: new uninstall clean init mdrivers floppy buildf newx min\
 	init0 build new-r newx-r dbg-r #<- Harddisk Version
+dbgdir = /mnt/hgfs/_bin/mecocoa
+dstdir = E:/PROJ/SVGN/_bin/mecocoa
+unidir = /mnt/hgfs/unisym
+libcdir = $(unidir)/lib/c
+libadir = $(unidir)/lib/asm
 
 asmattr = -I$(unidir)/inc/Kasha/n_ -I$(unidir)/inc/naasm/n_ -I./include/
 asm  = /mnt/hgfs/_bin/ELF64/aasm $(asmattr) 
 asmf = $(asm) -felf -Iinclude/
 dasm = ndisasm #-u -o EntryPoint -e EntryAddress
-cdef = -D_MCCAx86 -D_ARC_x86=5 -I/mnt/hgfs/unisym/inc -Iinclude -fno-builtin -fno-stack-protector
+cdef = -D_MCCAx86 -D_ARC_x86=5 -I$(unidir)/inc -Iinclude -fno-builtin -fno-stack-protector
 ccc  = gcc -c -nostdinc -nostdlib -fno-exceptions -fno-strict-aliasing\
  -fno-omit-frame-pointer -fno-leading-underscore $(cdef) # -fno-rtti
 cc32 = gcc -m32 -c -fleading-underscore -fno-pic $(cdef)
 cx32 = g++ -m32 -c -fleading-underscore -fno-pic $(cdef)
 outf = mcca.img
 # vhd=E:\vhd.vhd
-dbgdir = /mnt/hgfs/_bin/mecocoa
-dstdir = E:/PROJ/SVGN/_bin/mecocoa
-unidir = /mnt/hgfs/unisym
-libcdir = $(unidir)/lib/c
-libadir = $(unidir)/lib/asm
 link = ld #OPT E:\tmp\CPOSIX\bin\ld.gold.exe
 
 InstExt = -L/mnt/hgfs/_bin -lmx86
@@ -44,7 +44,7 @@ qemu = qemu-system-x86_64
 
 floppy: buildf
 	@dd if=../_obj/boot.fin of=$(dbgdir)/$(outf) bs=512 count=1 conv=notrunc 2>>/dev/null
-	-@sudo mkdir /mnt/floppy/
+	-@sudo mkdir -p /mnt/floppy/
 	-@sudo mount -o loop $(dbgdir)/$(outf) /mnt/floppy/
 	-@sudo cp ../_obj/KER.APP /mnt/floppy/KER.APP
 	-@sudo cp ./LICENSE /mnt/floppy/TEST.TXT
@@ -53,6 +53,7 @@ floppy: buildf
 	@sudo cp ../_obj/helloa.app /mnt/floppy/HELLOA.APP
 	@sudo cp ../_obj/hellob.app /mnt/floppy/HELLOB.APP
 	@sudo cp ../_obj/helloc.app /mnt/floppy/HELLOC.APP
+	@sudo cp /home/ayano/mecocoa/subapps/hellod/target/cargo-i686/release/hellod /mnt/floppy/HELLOD.APP
 	-@sudo umount /mnt/floppy/
 	@echo "Finish : Imagining Floppy Version ."
 
@@ -88,7 +89,7 @@ qemu:
 newx: new qemu
 
 lib:
-	cd /mnt/hgfs/unisym && make mx86
+	cd $(unidir) && make mx86
 
 ###
 
@@ -123,6 +124,7 @@ mdrivers:
 	@$(asmf) ./mecocoa/routine/rout32.asm -o ../_obj/rout32.obj
 	@echo "Build  : Kernel"
 	@$(asm) $< -o ../_obj/kernel.obj -D_FLOPPY -felf
+	@$(cc32) ./mecocoa/kernel-x86-m32.c -o ../_obj/kernel-x86-m32.obj
 	@$(link) -s -T ./mecocoa/kernel.ld -e HerMain -m elf_i386 -o $@ ../_obj/kernel.obj $(KernelExt) $(InstExt)
 
 ../_obj/SHL16.APP: ./coshell/shell16/shell16.c
@@ -137,22 +139,27 @@ mdrivers:
 	@$(link) -s -T ./coshell/shell32/shell32.ld -e _main -m elf_i386 -o $@ \
 		../_obj/shell32.obj $(Shell32Ext) $(InstExt)
 
-subapp: helloa hellob helloc
+#{TOIN} subapps/
+subapp: helloa hellob helloc hellod
 	@echo "Build  : Subapps Finished"
 helloa: ./subapps/helloa/helloa.asm
 	@echo "Build  : Subapps/helloa"
 	@$(asmf) $< -o ../_obj/helloa.elf
-	@$(link) -s -T ./subapps/helloa/helloa.ld -e _start -m elf_i386 -o ../_obj/helloa.app ../_obj/helloa.elf
+	@$(link) -s -T ./subapps/helloa/helloa.ld -e _start -m elf_i386 -o ../_obj/helloa.app ../_obj/helloa.elf -L/mnt/hgfs/_bin/mecocoa -lmccausr-x86
 hellob: ./subapps/hellob/hellob.c
 	@echo "Build  : Subapps/hellob"
 	@$(cc32) $< -o ../_obj/hellob.obj
 	@$(link) -s -T ./subapps/hellob/hellob.ld -m elf_i386 -o ../_obj/hellob.app\
-	 ../_obj/hellob.obj ../_obj/helloa.elf
+	 ../_obj/hellob.obj -L/mnt/hgfs/_bin/mecocoa -lmccausr-x86
 helloc: ./subapps/helloc/helloc.cpp
 	@echo "Build  : Subapps/helloc"
 	@$(cx32) $< -o ../_obj/helloc.obj
 	@$(link) -s -T ./subapps/helloc/helloc.ld -m elf_i386 -o ../_obj/helloc.app\
-	 ../_obj/helloc.obj ../_obj/helloa.elf
+	 ../_obj/helloc.obj -L/mnt/hgfs/_bin/mecocoa -lmccausr-x86
+hellod:
+	@echo "Build  : Subapps/hellod"
+	@cd subapps/hellod/ && cargo build --release --target ../../configs/Rust/target/cargo-i686.json
+
 
 new-r:
 	@make -f mecocoa/makefil/riscv64.make new
@@ -164,18 +171,26 @@ dbg-r:
 	@make -f mecocoa/makefil/riscv64.make debug
 	@make -f mecocoa/makefil/riscv64.make dbgend
 ###
+usrlib:
+	-@rm -rf ../_obj/mccausr/*
+	@mkdir -p ../_obj/mccausr
+	@$(asmf) ./userkit/lib/cocoapp.asm -o ../_obj/mccausr/mccausr.obj
+	-rm -rf /mnt/hgfs/_bin/mecocoa/libmccausr-x86.a
+	ar -rcs /mnt/hgfs/_bin/mecocoa/libmccausr-x86.a ../_obj/mccausr/*
 
 all: new new-r
 	@echo "Finish : All Finished"
 clean:
 	-@rm ../_obj/boot.fin
 	-@rm ../_obj/kernel.obj
+	-@rm ../_obj/kernel-x86-m32.obj
 	-@rm $(KernelExt)
 	-@rm ../_obj/KER.APP
 	-@rm ../_obj/shell16.obj
 	-@rm ../_obj/SHL16.APP
 	-@rm ../_obj/shell32.obj
 	-@rm ../_obj/SHL32.APP
+	@#cd subapps/hellod/ && cargo clean
 	-@rm ../_obj/memasm.obj
 	-@rm ../_obj/memcpl.obj
 	make -f mecocoa/makefil/riscv64.make clean

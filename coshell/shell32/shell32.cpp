@@ -2,7 +2,7 @@
 // Attribute: 
 // LastCheck: 20240216
 // AllAuthor: @dosconio
-// ModuTitle: Shell Flat Prot-32
+// ModuTitle: Shell Flap-32
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 
 //{TODO} to be COTLAB. Jump to here as console.
@@ -10,7 +10,7 @@
 #include "shell32.h"
 
 // debug
-word tasks[3];
+word tasks[4];
 
 int main(void) {
 	init(true);
@@ -47,6 +47,16 @@ static void init(bool cls) {
 		outs("Setup Hello-C, entry:");
 		tasks[2] = UserTaskLoadFromELF32((pureptr_t)0x3A000);
 		outi32hex(getTaskEntry(tasks[2])); outs("\n\r");
+
+		//{TEMP for Rust's linking} 0x3FFF'F000~0x3FFF'FFFF at 0x5'0000
+		*(dword *)0x50000 = 7 | 0x00400000;
+		*(dword *)0x50004 = 7 | 0x00401000;
+		*(dword *)0x50008 = 7 | 0x00402000;
+		*(dword *)0x80002004 = 7 | 0x50000;
+
+		outs("Setup Hello-D, entry:");
+		tasks[3] = UserTaskLoadFromELF32((pureptr_t)0x44000);
+		outi32hex(getTaskEntry(tasks[3])); outs("\n\r");
 
 		if (0) dbgfn();
 		// then you can jmpFar or CallFar one's TSS

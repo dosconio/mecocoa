@@ -110,13 +110,23 @@ ModeProt32:
 	CALL ReadFileFFAT12
 	ADD SP, 6
 	POP ES
-;{TEMP} Load Hello-B 0x3A000
+;{TEMP} Load Hello-C 0x3A000
 	PUSH ES
 	MOV AX, 0x3000
 	MOV ES, AX
 	PUSH WORD 0;
 	PUSH WORD str_helloc
 	PUSH WORD 0xA000;
+	CALL ReadFileFFAT12
+	ADD SP, 6
+	POP ES
+;{TEMP} Load Hello-D 0x44000 (problem!)
+	PUSH ES
+	MOV AX, 0x4000
+	MOV ES, AX
+	PUSH WORD 0;{TEMP} Buffer
+	PUSH WORD str_hellod
+	PUSH WORD 0x4000;
 	CALL ReadFileFFAT12
 	ADD SP, 6
 	POP ES
@@ -171,7 +181,7 @@ backpoint:
 	AND EAX, 0x7FFFFFFE; clear PE bit and PG bit
 	MOV CR0, EAX
 	JMP WORD 0:backinit; 16-bit instruction	
-backinit:
+backinit:;{TODO} return shell16 to process
 	; Initialize
 	MOV DS, BX
 	XOR BX, BX
@@ -306,6 +316,8 @@ section .data
 		DB "HELLOB  APP"
 	str_helloc:
 		DB "HELLOC  APP"
+	str_hellod:
+		DB "HELLOD  APP"
 	str_enter_32bit:
 		DB " - Entering 32-bit protected mode...",10,13,0
 	str_load_ivt:
