@@ -1,4 +1,4 @@
-// ASCII C++ TAB4 CRLF
+// ASCII C++ TAB4 LF
 // LastCheck: 20240504
 // AllAuthor: @dosconio
 // ModuTitle: Logging for Mecocoa riscv-64

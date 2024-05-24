@@ -1,4 +1,9 @@
 // ASCII GNU-ASM TAB4 LF
+// LastCheck: 20240523
+// AllAuthor: @dosconio
+// ModuTitle: Mecocoa riscv-64
+// Copyright: Dosconio Mecocoa, BSD 3-Clause License
+
 // succeed from RustSBI
 	.section .text.entry
 	.globl _entry

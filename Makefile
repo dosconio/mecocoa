@@ -9,17 +9,20 @@
 
 .PHONY: new uninstall clean init mdrivers floppy buildf newx min\
 	init0 build new-r newx-r dbg-r #<- Harddisk Version
+ulibpath?=/mnt/hgfs/unisym/lib
+uincpath?=/mnt/hgfs/unisym/inc
+ubinpath?=/mnt/hgfs/unisym/bin
 dbgdir = /mnt/hgfs/_bin/mecocoa
 dstdir = E:/PROJ/SVGN/_bin/mecocoa
 unidir = /mnt/hgfs/unisym
 libcdir = $(unidir)/lib/c
 libadir = $(unidir)/lib/asm
 
-asmattr = -I$(unidir)/inc/Kasha/n_ -I$(unidir)/inc/naasm/n_ -I./include/
+asmattr = -I$(uincpath)/Kasha/n_ -I$(uincpath)/naasm/n_ -I./include/
 asm  = /mnt/hgfs/_bin/ELF64/aasm $(asmattr) 
 asmf = $(asm) -felf -Iinclude/
 dasm = ndisasm #-u -o EntryPoint -e EntryAddress
-cdef = -D_MCCAx86 -D_ARC_x86=5 -I$(unidir)/inc -Iinclude -fno-builtin -fno-stack-protector
+cdef = -D_MCCAx86 -D_ARC_x86=5 -I$(uincpath) -Iinclude -fno-builtin -fno-stack-protector
 ccc  = gcc -c -nostdinc -nostdlib -fno-exceptions -fno-strict-aliasing\
  -fno-omit-frame-pointer -fno-leading-underscore $(cdef) # -fno-rtti
 cc32 = gcc -m32 -c -fleading-underscore -fno-pic $(cdef)
@@ -41,6 +44,8 @@ vmname = Kasa
 vmnamf = Kasaf
 bochd = E:/software/Bochs-2.7/bochsdbg.exe
 qemu = qemu-system-x86_64
+
+
 
 floppy: buildf
 	@dd if=../_obj/boot.fin of=$(dbgdir)/$(outf) bs=512 count=1 conv=notrunc 2>>/dev/null
@@ -160,17 +165,24 @@ hellod:
 	@echo "Build  : Subapps/hellod"
 	@cd subapps/hellod/ && cargo build --release --target ../../configs/Rust/target/cargo-i686.json
 
+r64:
+	python3 mecocoa/makefil/riscv64-link.py
+	python3 mecocoa/makefil/riscv64-pack.py
 
-new-r:
+new-r: r64
 	@make -f mecocoa/makefil/riscv64.make new
 
-newx-r:
-	-make -f mecocoa/makefil/riscv64.make clean
+newx-r: r64
+	#-make -f mecocoa/makefil/riscv64.make clean
 	@make -f mecocoa/makefil/riscv64.make newx LOG=trace
 dbg-r:
 	@make -f mecocoa/makefil/riscv64.make debug
 	@make -f mecocoa/makefil/riscv64.make dbgend
 ###
+config:
+	@echo "ULIB $(ulibpath)"
+	@echo "UINC $(uincpath)"
+	@echo "UBIN $(ubinpath)"
 usrlib:
 	-@rm -rf ../_obj/mccausr/*
 	@mkdir -p ../_obj/mccausr

@@ -1,4 +1,4 @@
-// ASCII NASM0207 TAB4 CRLF
+// ASCII NASM0207 TAB4 LF
 // Attribute: CPU(x86) File(HerELF)
 // LastCheck: 20240219
 // AllAuthor: @dosconio

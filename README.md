@@ -50,5 +50,11 @@ A module can exist as multi-language versions, like `.h&.inc`, or `.c&.cpp&.rs`
 
 ## [05-Subapps-and-Development](documnt/05-Subapps-and-Development.md) 
 
+## 06-Glossary
 
+### Architecture
+
+- `x86`
+- `r64` RISC-V64
+- `m64` *kept for Dinah* 
 

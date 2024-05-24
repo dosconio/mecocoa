@@ -1,6 +1,7 @@
 .todo/
 .obsidian/
-.vscode/
+.vscode/settings.json
 depends/
 Cargo.lock
 subapps/hellod/target/
+link_app.S

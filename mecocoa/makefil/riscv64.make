@@ -35,7 +35,7 @@ HEADER_DEP = $(addsuffix .d, $(basename $(C_OBJS)))
 -include $(HEADER_DEP)
 
 INCLUDEFLAG = -I$(THIS) -Iinclude -I/mnt/hgfs/unisym/inc
-CFLAG = -Wall -Werror -O -fno-omit-frame-pointer -ggdb
+CFLAG = -Wall -Wno-error -O -fno-omit-frame-pointer -ggdb
 CFLAG += -MD
 CFLAG += -mcmodel=medany
 CFLAG += -ffreestanding -fno-common -nostdlib -mno-relax
@@ -107,7 +107,7 @@ lib:
 	@$(CC) $(CFLAG) -c /mnt/hgfs/unisym/lib/c/consio.c -o $(BUILDDIR)/$(THIS)/consio.o
 new: ciallo lib $(OBJS)
 	@echo 'Link   : $(OUTF)'
-	@$(LD) $(LDFLAG) -T $(THIS)/kernel.ld -o $(OUTF) $(OBJS) $(LIBS)
+	@$(LD) $(LDFLAG) -T ../_obj/mcca/$(THIS)/kernel.ld -o $(OUTF) $(OBJS) $(LIBS)
 	@$(OBJDUMP) -S $(OUTF) > $(OUTF).asm
 	@$(OBJDUMP) -t $(OUTF) | sed '1,/SYMBOL TABLE/d; s/ .* / /; /^$$/d' > $(OUTF).sym
 	@echo 'Build  : Finish Mecocoa $(ARCH)'

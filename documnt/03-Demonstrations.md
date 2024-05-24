@@ -5,7 +5,8 @@ her-note: false
 
 | Name | Language | Description |
 | ---- | ---- | ---- |
-| EasyOs | C++ | You can directly manage from Protected 32-bit mode with C++. |
+| EasyOS | C++ | You can directly manage from Flap-32 mode with C++ or other ELF-supported languages. |
+|  |  |  |
 |  |  |  |
 
 

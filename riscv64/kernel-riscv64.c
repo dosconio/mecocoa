@@ -4,27 +4,18 @@
 // ModuTitle: Mecocoa riscv-64
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 
-#ifndef _RiscV64
-#define _RiscV64
-#endif
 #include "log.h"
+#include "trap.h"
 #include "console.h"
-
-extern char s_text[];
-extern char e_text[];
-extern char s_rodata[];
-extern char e_rodata[];
-extern char s_data[];
-extern char e_data[];
-extern char s_bss[];
-extern char e_bss[];
+#include "appload-riscv64.h"
+#include "kernel-riscv64.h"
 
 int threadid()
 {
 	return 0;
 }
 
-void main()
+void init()
 {
 	// clear bss
 	for (char* p = s_bss; p < e_bss; ++p)
@@ -40,7 +31,14 @@ void main()
 	log_warn("sbss : %p", s_bss);
 	log_error("ebss : %p", e_bss);
 	log_trace("Oyasminasaiii~");
-	if (1) shutdown(); else log_panic("ALL DONE");
-	while (1);
+}
+
+void main()
+{
+	init();
+	trap_init();
+	loader_init();
+	run_next_app();
+	if (1) shutdown(); else log_panic("ALL DONE"); while (1);
 }
 

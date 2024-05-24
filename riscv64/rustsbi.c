@@ -1,4 +1,4 @@
-// ASCII C++ TAB4 CRLF
+// ASCII C++ TAB4 LF
 // LastCheck: 20240505
 // AllAuthor: @dosconio
 // ModuTitle: RustSBI Interface
