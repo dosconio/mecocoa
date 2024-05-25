@@ -6,7 +6,7 @@
 #ifndef _RiscV64
 #define _RiscV64
 #endif
-#include "log.h"
+#include "logging.h"
 #include "console.h"
 #include <stdarg.h>
 

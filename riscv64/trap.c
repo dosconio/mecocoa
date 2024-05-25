@@ -3,11 +3,14 @@
 // AllAuthor: @dosconio
 // ModuTitle: Trap for Mecocoa riscv-64
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
+#ifndef _OPT_RISCV64
+#define _OPT_RISCV64
+#endif
 
 #include "trap.h"
-#include "log.h"
+#include "logging.h"
 #include "appload-riscv64.h"
-#include "rout64-riscv64.h"
+#include "../mecocoa/routine/rout64.h"
 
 #define PG_SIZE 4096 // bytes per page
 #define PG_SHIFT 12 // bits of offset within a page
@@ -36,15 +39,15 @@ void usertrap(struct trapframe *trapframe)
 	if (cause == UserEnvCall) {
 		trapframe->epc += 4;
 		syscall();
-		return usertrapret(trapframe, (uint64)boot_stack_top);
+		return ReturnTrapFromU(trapframe);
 	}
 	switch (cause) {
-	case StoreMisaligned:
-	case StorePageFault:
-	case LoadMisaligned:
-	case LoadPageFault:
 	case InstructionMisaligned:
+	case LoadMisaligned:
+	case StoreMisaligned:
 	case InstructionPageFault:
+	case LoadPageFault:
+	case StorePageFault:
 		log_error("%d in application, bad addr = %p, bad instruction = %p, core "
 		       "dumped.",
 		       cause, getSTVAL(), trapframe->epc);
@@ -58,7 +61,6 @@ void usertrap(struct trapframe *trapframe)
 		       getSTVAL(), getSEPC());
 		break;
 	}
-	log_info("switch to next app");
 	run_next_app();
 	outs("ALL DONE\n");
 	shutdown();
@@ -67,10 +69,10 @@ void usertrap(struct trapframe *trapframe)
 //
 // return to user space
 //
-void usertrapret(struct trapframe *trapframe, uint64 kstack)
+void ReturnTrapFromU(struct trapframe *trapframe)
 {
 	trapframe->kernel_satp = getSATP(); // kernel page table
-	trapframe->kernel_sp = kstack + PG_SIZE; // process's kernel stack
+	trapframe->kernel_sp = (uint64)boot_stack_top + PG_SIZE; // process's kernel stack
 	trapframe->kernel_trap = (uint64)usertrap;
 	trapframe->kernel_hartid = getTP(); // hartid for cpuid()
 

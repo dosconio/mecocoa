@@ -4,7 +4,7 @@
 // ModuTitle: Mecocoa riscv-64
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 
-#include "log.h"
+#include "logging.h"
 #include "trap.h"
 #include "console.h"
 #include "appload-riscv64.h"
@@ -30,7 +30,6 @@ void init()
 	log_info("edata: %p", e_data);
 	log_warn("sbss : %p", s_bss);
 	log_error("ebss : %p", e_bss);
-	log_trace("Oyasminasaiii~");
 }
 
 void main()
@@ -39,6 +38,6 @@ void main()
 	trap_init();
 	loader_init();
 	run_next_app();
-	if (1) shutdown(); else log_panic("ALL DONE"); while (1);
+	if (0) shutdown(); else log_panic("ALL DONE"); while (1);
 }
 

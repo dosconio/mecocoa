@@ -6,7 +6,7 @@
 
 int main()
 {
-	int make_fail = 1;
+	int make_fail = 0;
 	puts("[subapp0] Yahoo");
 	switch (make_fail)
 	{

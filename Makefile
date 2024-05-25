@@ -170,7 +170,7 @@ new-r:
 	@clear & make -f makefil/riscv64.make new
 
 newx-r: 
-	#-make -f makefil/riscv64.make clean
+	@make -f makefil/riscv64.make clean
 	@clear & make -f makefil/riscv64.make newx LOG=trace
 dbg-r:
 	@make -f makefil/riscv64.make debug

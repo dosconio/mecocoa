@@ -4,26 +4,29 @@
 // AllAuthor: @dosconio
 // ModuTitle: Routine for Mecocoa riscv-64
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
+#ifndef _OPT_RISCV64
+#define _OPT_RISCV64
+#endif
 
-#include "rout64-riscv64.h"
+#include "../mecocoa/routine/rout64.h"
 #include "appload-riscv64.h"
 #include "trap.h"
+#include "logging.h"
 #include "rustsbi.h"
 #include <c/consio.h>
 
 uint64 sys_write(int fd, char *str, unsigned len)
 {
 	// debugf("sys_write fd = %d str = %x, len = %d", fd, str, len);
-	if (fd != _STD_OUT)
-		return -1;
-	for (int i = 0; i < len; ++i)
-		outc(str[i]);
+	if (fd == _STD_OUT)
+		outtxt(str, len);
+	else len = 0;
 	return len;
 }
 
 __attribute__((noreturn)) void sys_exit(int code)
 {
-	// debugf("sysexit(%d)", code);
+	log_info("sysexit(%d)", code);
 	run_next_app();
 	outs("Oyasminasaiii~\n");
 	shutdown();
@@ -49,7 +52,7 @@ void syscall()
 		// __builtin_unreachable();
 	default:
 		ret = -1;
-		//{TODO ERR}
+		log_panic("Unknown syscall");
 		while (1);
 	}
 	trapframe->a0 = ret;

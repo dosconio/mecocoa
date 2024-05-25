@@ -90,8 +90,10 @@ static inline long __syscall6(long n, long a, long b, long c, long d, long e,
 
 
 // ---- ---- ---- ----
-
-#include "../../riscv64/rout64-riscv64.h"
+#ifndef _OPT_RISCV64
+#define _OPT_RISCV64
+#endif
+#include "../../mecocoa/routine/rout64.h"
 
 #ifndef __scc
 #define __scc(X) ((long)(X))

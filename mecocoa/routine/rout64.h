@@ -10,11 +10,9 @@
 
 #include <c/stdinc.h>
 
-//{TODO} mccall(opt, ...)
-
 void syscall();
 
-// ---- ---- ---- ----
+#if defined(_OPT_RISCV64)// ---- ---- ---- ----
 
 #define SYS_io_setup 0
 #define SYS_io_destroy 1
@@ -329,5 +327,7 @@ void syscall();
 #define SYS_condvar_create 471
 #define SYS_condvar_signal 472
 #define SYS_condvar_wait 473
+
+#endif
 
 #endif
