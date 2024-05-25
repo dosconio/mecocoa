@@ -165,19 +165,16 @@ hellod:
 	@echo "Build  : Subapps/hellod"
 	@cd subapps/hellod/ && cargo build --release --target ../../configs/Rust/target/cargo-i686.json
 
-r64:
-	python3 mecocoa/makefil/riscv64-link.py
-	python3 mecocoa/makefil/riscv64-pack.py
+new-r: 
+	@make -f makefil/riscv64.make clean
+	@clear & make -f makefil/riscv64.make new
 
-new-r: r64
-	@make -f mecocoa/makefil/riscv64.make new
-
-newx-r: r64
-	#-make -f mecocoa/makefil/riscv64.make clean
-	@make -f mecocoa/makefil/riscv64.make newx LOG=trace
+newx-r: 
+	#-make -f makefil/riscv64.make clean
+	@clear & make -f makefil/riscv64.make newx LOG=trace
 dbg-r:
-	@make -f mecocoa/makefil/riscv64.make debug
-	@make -f mecocoa/makefil/riscv64.make dbgend
+	@make -f makefil/riscv64.make debug
+	@make -f makefil/riscv64.make dbgend
 ###
 config:
 	@echo "ULIB $(ulibpath)"
@@ -193,19 +190,7 @@ usrlib:
 all: new new-r
 	@echo "Finish : All Finished"
 clean:
-	-@rm ../_obj/boot.fin
-	-@rm ../_obj/kernel.obj
-	-@rm ../_obj/kernel-x86-m32.obj
-	-@rm $(KernelExt)
-	-@rm ../_obj/KER.APP
-	-@rm ../_obj/shell16.obj
-	-@rm ../_obj/SHL16.APP
-	-@rm ../_obj/shell32.obj
-	-@rm ../_obj/SHL32.APP
-	@#cd subapps/hellod/ && cargo clean
-	-@rm ../_obj/memasm.obj
-	-@rm ../_obj/memcpl.obj
-	make -f mecocoa/makefil/riscv64.make clean
+	-@rm -rf ../_obj/mcca
 
 uninstall:
 	-@sudo rm -rf /mnt/floppy
