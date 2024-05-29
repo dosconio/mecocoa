@@ -7,6 +7,7 @@
 
 //{TODO} to be COTLAB. Jump to here as console.
 
+#include "arc-x86.h"
 #include "shell32.h"
 
 // debug
@@ -16,8 +17,8 @@ int main(void) {
 	init(true);
 	outsfmt("Ciallo, " CON_DarkIoWhite "\b\n%d-%d-%d" CON_None "!\n\r", 2024, 5, 4);
 	int crttask = 0;
-	for (int i = 0; i < 12; i++) {
-		delay001s();
+	for (int i = 0; i < 8; i++) {
+		for0 (i, 500) delay001ms(); // half of delay001s();
 		CallFar(0, tasks[i % numsof(tasks)] << 3);
 	}
 	return 0xFEDC3210;

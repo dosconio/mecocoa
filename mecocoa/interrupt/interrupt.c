@@ -6,12 +6,14 @@
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 // BaseOn   : unisym/lib/asm/x86/interrupt/x86_i8259A.asm
 
+#include "arc-x86.h"
 #include "../../include/interrupt.h"
 #include "../../mecocoa/kernel.h"
 #include "mecocoa.h"
 
 extern void Handexc_Else();
 extern void Handint_General();
+extern void Handint_CLK();
 extern void Handint_RTC();
 extern void Handint_Keyboard();
 
@@ -79,8 +81,11 @@ _NOT_ABSTRACTED void InterruptInitialize()
 	GateStructInterruptR0(&gate, (dword)Handint_General, SegCode, 0);
 	for (; i < 256; i++)
 		MccaIDTable[i] = gate;
+	// Clock (PIT)
+	MccaIDTable[PORT_PIT] = *GateStructInterruptR0(
+			&gate, (dword)Handint_CLK, SegCode, 0);
 	// RTC
-	MccaIDTable[PORT_RTC] = *GateStructInterruptR0(
+	if (0) MccaIDTable[PORT_RTC] = *GateStructInterruptR0(
 			&gate, (dword)Handint_RTC, SegCode, 0);
 	// Keyboard
 	MccaIDTable[PORT_KBD] = *GateStructInterruptR0(
@@ -92,5 +97,6 @@ _NOT_ABSTRACTED void InterruptInitialize()
 	// Enable 8259A
 	i8259A_init(&Mas);
 	i8259A_init(&Slv);
-	RTC_Init();
+	if (0) RTC_Init();
+	PIT_Init();
 }

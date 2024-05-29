@@ -191,6 +191,7 @@ all: new new-r
 	@echo "Finish : All Finished"
 clean:
 	-@rm -rf ../_obj/mcca
+	-@rm ../_obj/*
 
 uninstall:
 	-@sudo rm -rf /mnt/floppy

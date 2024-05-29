@@ -43,6 +43,7 @@ HEADER_DEP = $(addsuffix .d, $(basename $(C_OBJS)))
 INCLUDEFLAG = -I$(THIS) -Iinclude -I/mnt/hgfs/unisym/inc
 CFLAG = -Wall -Wno-error -O -fno-omit-frame-pointer -ggdb
 #CFLAG += -MD
+#CFLAG += -nostdinc
 CFLAG += -mcmodel=medany
 CFLAG += -ffreestanding -fno-common -nostdlib -mno-relax
 CFLAG += $(INCLUDEFLAG)
@@ -97,7 +98,7 @@ $(LIB_C_OBJS): $(BUILDDIR)/ukit-r64/%.o : userkit/lib/%.c
 $(APP_C_OBJS): $(BUILDDIR)/$(THIS)/elf/%.app : subapps/$(ARCH)/%.c
 	@mkdir -p $(@D)
 	@echo "Subapps: $(CRT)"
-	@$(CC) -Wall -fno-omit-frame-pointer -mcmodel=medany -ffreestanding -fno-common -nostdlib -mno-relax $(INCLUDEFLAG) -D_OPT_RISCV64 -D_MCCA="_OPT_RISCV64" $<  -o  $(BUILDDIR)/$(THIS)/elf/$(CRT).app -L$(BUILDDIR) -luk$(ARCH) -Tuserkit/uk-$(ARCH).ld
+	@$(CC) -Wall -nostdinc -fno-omit-frame-pointer -mcmodel=medany -ffreestanding -fno-common -nostdlib -mno-relax $(INCLUDEFLAG) -D_OPT_RISCV64 -D_MCCA="_OPT_RISCV64" $<  -o  $(BUILDDIR)/$(THIS)/elf/$(CRT).app -L$(BUILDDIR) -luk$(ARCH) -Tuserkit/uk-$(ARCH).ld
 	@$(OBJCOPY) $(BUILDDIR)/$(THIS)/elf/$(CRT).app --strip-all -O binary $(BUILDDIR)/$(THIS)/app/$(CRT).bin
 
 $(HEADER_DEP): $(BUILDDIR)/$(THIS)/%.d : $(THIS)/%.c

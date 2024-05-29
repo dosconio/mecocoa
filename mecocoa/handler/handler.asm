@@ -49,11 +49,10 @@ section .text
 
 ; ---- Master PIC Device ----
 
-_Handint_CLK:; IRQ 0 by 0x20
-	calli _Hand_CLK; Clock
-
+;[see handler.c]
+;_Handint_CLK:; IRQ 0 by 0x20
 ;_Handint_KBD:; IRQ 1 by 0x21
-	; see handler.c
+
 
 _Handint_CAS:; IRQ 2 by 0x22
 	calli _Hand_CAS; Cascade

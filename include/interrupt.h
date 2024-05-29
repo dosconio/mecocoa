@@ -14,6 +14,7 @@
 #include "../mecocoa/kernel.h"
 #include "console.h"
 #include "c/driver/i8259A.h"
+#include "c/driver/PIT.h"
 #include "c/driver/RealtimeClock.h"
 #include "c/driver/keyboard.h"
 

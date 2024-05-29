@@ -13,6 +13,7 @@
 #define GDTDptr        0x0504
 #define IVTDptr        0x050A
 #define G_CountSeconds (*(dword*)0x0524)
+#define G_CountMiSeconds (*(word*)0x0528)
 
 #define Linear 0x80000000
 

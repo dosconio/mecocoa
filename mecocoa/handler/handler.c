@@ -54,6 +54,21 @@ void Handexc(sdword iden, dword para)
 // (2) renew i8259
 // (3) renew the interrupt source
 
+void Handint_CLK()
+{
+	//{TODO} Magic Port
+	// auto push flag by intterrupt module
+	pushad();
+	G_CountMiSeconds += 10;// 10ms, for freq 100Hz
+	while (G_CountMiSeconds >= 1000) {
+		G_CountMiSeconds -= 1000;
+		G_CountSeconds++;
+	}
+	outpb(0x20, EOI);// master
+	popad();
+	returni();
+}
+
 void Handint_RTC()
 {
 	//{TODO} Magic Port
