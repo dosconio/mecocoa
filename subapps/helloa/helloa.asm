@@ -21,7 +21,7 @@ _reentry:
 	MOV ESI, str1
 	MOV EDI, RotPrint
 	CALL SegGate|3:0
-	MOV EDX, 500; 500ms
+	MOV ECX, 500; 500ms
 	MOV EDI, RotSysDelay
 	CALL SegGate|3:0
 	; JMP $

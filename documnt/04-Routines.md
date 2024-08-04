@@ -36,7 +36,7 @@ Gate Segment `8*05`
 | 03 R_Mfree              |                  |                                |
 | 04 R_DiskReadLBA28      |                  |                                |
 | 05                      |                  |                                |
-| 06 R_SysDelay           | Delay in ms      | EDX=ms Interrupt Dependent     |
+| 06 R_SysDelay           | Delay in ms      | ECX=ms Interrupt Dependent     |
 |                         |                  |                                |
 |                         |                  |                                |
 | `10`                    |                  | EDX:EAX<<<A(Addr)B(Len)C(Prop) |

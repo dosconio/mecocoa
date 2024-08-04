@@ -19,7 +19,7 @@ use core::panic::PanicInfo;
 extern "C" {
 	fn _sysinit();
     fn _sysouts(str: *const u8);
-	fn _sysdelay(u16_ms: u32);
+	fn _sysdelay(ms: u32);
     fn _sysquit();
 }
 
@@ -37,7 +37,7 @@ pub extern "C" fn _start() -> ! {
 		_sysquit();	
     	loop {
         _sysouts("D\0".as_ptr());
-        _sysdelay(500);
+        _sysdelay(250);
 		}
 	}
 }

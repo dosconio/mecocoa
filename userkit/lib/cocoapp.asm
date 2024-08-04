@@ -36,7 +36,7 @@ RET
 _sysdelay:
 	PUSH EBP
 	MOV EBP, ESP
-	MOV EDX, [EBP+4*2]
+	MOV ECX, [EBP+4*2]
 	MOV EDI, RotSysDelay
 	CALL SegGate|3:0
 	MOV ESP, EBP

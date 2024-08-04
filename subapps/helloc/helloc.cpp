@@ -9,7 +9,7 @@ int main()
 	sysquit();
 	while (1) {
 		sysouts("C");
-		sysdelay(2000);
+		sysdelay(1000);
 	}
 }
 

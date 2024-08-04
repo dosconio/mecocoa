@@ -106,13 +106,21 @@ R_PrintDwordCursor:
 	ALIGN 16
 R_SysDelay:
 	PUSHAD
-	MOVZX EAX, WORD[0x80000528]
+	MOVZX EBX, WORD[0x80000528]; origin ms
+	MOV   ESI, [0x80000524]; origin second
 	_wait_loop:
-		HLT
-		MOVZX EBX, WORD[0x80000528] ; ms
-		SUB BX, AX
-		CMP EBX, EDX
-		JB _wait_loop
+		;STI
+		;HLT
+		MOV   EAX, [0x80000524]; second
+		SUB   EAX, ESI
+		MOV   EDX, 1000
+		MUL   EDX
+		MOVZX EDX, WORD[0x80000528] ; ms
+		ADD   EAX, EDX
+		SUB   EAX, EBX
+		; now EAX store the ms of seconds
+		CMP   EAX, ECX
+		JB    _wait_loop
 	POPAD
 	RETF
 	ALIGN 16
