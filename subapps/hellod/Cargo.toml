@@ -13,9 +13,9 @@ panic = "abort"
 
 [profile.release]
 panic = "abort"
-rustflags = ["-C", "link-arg=-L/mnt/hgfs/_bin/mecocoa",
-	"-C", "link-arg=/mnt/hgfs/_bin/mecocoa/libmccausr-x86.a",
-#	"-C", "link-arg=-T/home/ayano/mecocoa/subapps/hellod/hellod.ld" # If add this, it will bad!
+rustflags = ["-C", "link-arg=-L/mnt/hgfs/SVGN/_bin/mecocoa",
+	"-C", "link-arg=/mnt/hgfs/SVGN/_bin/mecocoa/libmccausr-x86.a",
+#	"-C", "link-arg=-T/mnt/hgfs/SVGN/mecocoa/subapps/hellod/hellod.ld" # If add this, it will bad!
 	] # no use '-lmccausr-x86' for '/usr/bin/ld: skipping incompatible'... why?
 
 [dependencies]

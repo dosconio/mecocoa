@@ -7,10 +7,17 @@
 [CPU 586]
 %include "mecocoa/kernel.inc"
 
+GLOBAL _sysinit
 GLOBAL _sysouts
+GLOBAL _sysdelay
 GLOBAL _sysquit
 
 section .text
+
+_sysinit:
+	MOV EDI, RotInitialize
+	CALL SegGate|3:0
+RET
 
 _sysouts:
 	PUSH EBP
@@ -24,6 +31,16 @@ _sysouts:
 	POP ESI
 	MOV ESP, EBP
 	POP EBP
+RET
+
+_sysdelay:
+	PUSH EBP
+	MOV EBP, ESP
+	MOV EDX, [EBP+4*2]
+	MOV EDI, RotSysDelay
+	CALL SegGate|3:0
+	MOV ESP, EBP
+	POP EBP	
 RET
 
 _sysquit:

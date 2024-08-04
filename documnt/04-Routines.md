@@ -27,15 +27,19 @@ Note
 
 Gate Segment `8*05` 
 
-| Identification     | Function         | IO                          |
-| ------------------ | ---------------- | --------------------------- |
-| `ELSE` RotTerminal   | Terminate back   |                             |
-| `00` RotPrint        | Print String     | DS:ESI → ASCIZ string       |
-| `01` RotEchoDword    | PrintDwordCursor | Show the hexadecimal of EDX |
-| 02 R_Malloc        |                  |                             |
-| 03 R_Mfree         |                  |                             |
-| 04 R_DiskReadLBA28 |                  |                             |
-|                    |                  |                             |
-| `10`                     |                  | EDX:EAX<<<A(Addr)B(Len)C(Prop)                            |
+| Identification          | Function         | IO                             |
+| ----------------------- | ---------------- | ------------------------------ |
+| `ELSE` RotTerminal      | Terminate back   |                                |
+| `00` RotPrint           | Print String     | DS:ESI → ASCIZ string          |
+| `01` RotEchoDword       | PrintDwordCursor | Show the hexadecimal of EDX    |
+| 02 R_Malloc             |                  |                                |
+| 03 R_Mfree              |                  |                                |
+| 04 R_DiskReadLBA28      |                  |                                |
+| 05                      |                  |                                |
+| 06 R_SysDelay           | Delay in ms      | EDX=ms Interrupt Dependent     |
+|                         |                  |                                |
+|                         |                  |                                |
+| `10`                    |                  | EDX:EAX<<<A(Addr)B(Len)C(Prop) |
+| 11 R_TEMP_OpenInterrupt |                  | (System Leak Point **TODO**)   |
 
 

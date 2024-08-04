@@ -38,10 +38,13 @@ APISymbolTable:; till Routine, also as ABI
 	rot0002: defrotx R_Malloc; Malloc
 	rot0003: defrotx R_Mfree; Mfree (waiting for adding)
 	rot0004: defrotx R_DiskReadLBA28; DiskReadLBA28
-	TIMES 10*2 DD 0;5,6,7,8,9,A,B,C,D,E
+	rot0005: dd      0,0
+	rot0006: defrotx R_SysDelay
+	TIMES 8*2 DD 0; 7,8,9,A,B,C,D,E
 	rot000F: defrotx R_Terminate;
 	rot0010: defrotx R_DescriptorStructure; DescriptorStructure
-__Routine:
+	rot0011: defrotx R_TEMP_OpenInterrupt
+__Routine: 
 RoutineGate:; EDI=FUNCTION RoutIn:{DS=SegData}
 	PUSH DS
 	PUSH ES
@@ -101,12 +104,28 @@ R_PrintDwordCursor:
 	POPAD
 	RETF
 	ALIGN 16
-
+R_SysDelay:
+	PUSHAD
+	MOVZX EAX, WORD[0x80000528]
+	_wait_loop:
+		HLT
+		MOVZX EBX, WORD[0x80000528] ; ms
+		SUB BX, AX
+		CMP EBX, EDX
+		JB _wait_loop
+	POPAD
+	RETF
+	ALIGN 16
 
 R_DescriptorStructure:
 	GDTDptrStruct EAX,EBX,ECX
 	RETF
 	ALIGN 16
+R_TEMP_OpenInterrupt:
+	STI
+	RETF
+	ALIGN 16
+
 
 RoutineEnd:
 

@@ -11,8 +11,9 @@
 
 ARCH = riscv64
 THIS := $(ARCH)
-OUTD = /mnt/hgfs/_bin/mecocoa# Output Directory
+OUTD = /mnt/hgfs/SVGN/_bin/mecocoa# Output Directory
 OUTF = $(OUTD)/mcca-$(ARCH)# Output File
+objdir=~/_obj
 
 KitPrefix = $(ARCH)-unknown-elf-# their rules
 CC = $(KitPrefix)gcc# contain AS
@@ -124,19 +125,19 @@ ciallo:
 lib: $(LIB_C_OBJS)
 	@-rm  -f   $(BUILDDIR)/libuk$(ARCH).a
 	@echo 'Build  : User libraries for $(ARCH)'
-	@mkdir -p ../_obj/mcca/$(ARCH)/elf
-	@mkdir -p ../_obj/mcca/$(ARCH)/app
+	@mkdir -p $(objdir)/mcca/$(ARCH)/elf
+	@mkdir -p $(objdir)/mcca/$(ARCH)/app
 	@$(CC) -c userkit/uk-$(ARCH).S -o $(BUILDDIR)/ukit-r64/_uk_.o
 	@$(AR) rcs $(BUILDDIR)/libuk$(ARCH).a $(BUILDDIR)/ukit-r64/*.o
 	@echo 'Build  : Kernel libraries for $(ARCH)'
 	@$(CC) $(CFLAG) -c /mnt/hgfs/unisym/lib/c/consio.c -o $(BUILDDIR)/$(THIS)/consio.o
 sub: $(APP_C_OBJS)
-	@mkdir -p ../_obj/mcca/riscv64
+	@mkdir -p $(objdir)/mcca/riscv64
 	@python3 makefil/riscv64-link.py
 	@python3 makefil/riscv64-pack.py
 new: ciallo lib sub $(OBJS)
 	@echo 'Link   : $(OUTF)'
-	@$(LD) $(LDFLAG) -T ../_obj/mcca/$(THIS)/kernel.ld -o $(OUTF) $(OBJS) $(LIBS)
+	@$(LD) $(LDFLAG) -T $(objdir)/mcca/$(THIS)/kernel.ld -o $(OUTF) $(OBJS) $(LIBS)
 	@$(OBJDUMP) -S $(OUTF) > $(OUTF).asm
 	@$(OBJDUMP) -t $(OUTF) | sed '1,/SYMBOL TABLE/d; s/ .* / /; /^$$/d' > $(OUTF).sym
 	@echo 'Build  : Finish Mecocoa $(ARCH)'

@@ -11,22 +11,20 @@
 #include "shell32.h"
 
 // debug
-word tasks[4];
+word tasks[1 + 1 + 4];
 
 int main(void) {
 	init(true);
 	outsfmt("Ciallo, " CON_DarkIoWhite "\b\n%d-%d-%d" CON_None "!\n\r", 2024, 5, 4);
 	int crttask = 0;
-	for (int i = 0; i < 8; i++) {
-		for0 (i, 500) delay001ms(); // half of delay001s();
-		CallFar(0, tasks[i % numsof(tasks)] << 3);
-	}
-	return 0xFEDC3210;
+	ReadyFlag1 |= ReadyFlag1_MASK_SwitchTask;
 	while (true) wait();
 }
 
 extern "C" void dbgfn();
 static void init(bool cls) {
+	ReadyFlag1 = 0;
+
 	if (cls)
 	{
 		scrrol(25);// clear screen 80x25
@@ -36,18 +34,18 @@ static void init(bool cls) {
 	if (1) {
 		memalloc(0xA000);// store programs
 
+		TasksAvailableSelectors = tasks;
+		tasks[0] = 4;
+		//tasks[1] = 7;// this
 		//{TODO} UserTaskLoadFromFilename
-		outs("Setup Hello-A, entry:");
-		tasks[0] = UserTaskLoadFromELF32((pureptr_t)0x32000);
-		outi32hex(getTaskEntry(tasks[0])); outs("\n\r");
+		outs("Setup Hello-A\n\r");
+		tasks[1] = UserTaskLoadFromELF32((pureptr_t)0x32000);
 		
-		outs("Setup Hello-B, entry:");
-		tasks[1] = UserTaskLoadFromELF32((pureptr_t)0x36000);
-		outi32hex(getTaskEntry(tasks[1])); outs("\n\r");
+		outs("Setup Hello-B\n\r");
+		tasks[2] = UserTaskLoadFromELF32((pureptr_t)0x36000);
 
-		outs("Setup Hello-C, entry:");
-		tasks[2] = UserTaskLoadFromELF32((pureptr_t)0x3A000);
-		outi32hex(getTaskEntry(tasks[2])); outs("\n\r");
+		outs("Setup Hello-C\n\r");
+		tasks[3] = UserTaskLoadFromELF32((pureptr_t)0x3A000);
 
 		//{TEMP for Rust's linking} 0x3FFF'F000~0x3FFF'FFFF at 0x5'0000
 		*(dword *)0x50000 = 7 | 0x00400000;
@@ -55,9 +53,8 @@ static void init(bool cls) {
 		*(dword *)0x50008 = 7 | 0x00402000;
 		*(dword *)0x80002004 = 7 | 0x50000;
 
-		outs("Setup Hello-D, entry:");
-		tasks[3] = UserTaskLoadFromELF32((pureptr_t)0x44000);
-		outi32hex(getTaskEntry(tasks[3])); outs("\n\r");
+		outs("Setup Hello-D\n\r");
+		tasks[4] = UserTaskLoadFromELF32((pureptr_t)0x44000);
 
 		if (0) dbgfn();
 		// then you can jmpFar or CallFar one's TSS
@@ -79,7 +76,5 @@ static void init(bool cls) {
 		}
 		outs("\n\r");
 	}
-	
-
 	InterruptEnable();
 }

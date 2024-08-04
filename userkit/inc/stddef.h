@@ -3,9 +3,6 @@
 
 #include <c/stdinc.h>
 
-/* Represents true-or-false values */
-typedef int bool;
-
 /* *
  * Pointers and addresses are 32 bits long.
  * We use pointer types to represent addresses,

@@ -6,7 +6,7 @@
 
 import os
 
-TARGET_DIR = "../_obj/mcca/riscv64/app/"
+TARGET_DIR = "/home/ayano/_obj/mcca/riscv64/app/"
 OUTPUT_IDN = "riscv64/link_app.S"
 
 if __name__ == '__main__':

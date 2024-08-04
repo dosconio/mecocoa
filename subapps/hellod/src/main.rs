@@ -17,7 +17,9 @@ use core::panic::PanicInfo;
 
 //#[link(name = "mccausr-x86", kind = "static")]
 extern "C" {
+	fn _sysinit();
     fn _sysouts(str: *const u8);
+	fn _sysdelay(u16_ms: u32);
     fn _sysquit();
 }
 
@@ -29,8 +31,13 @@ fn panic(info: &PanicInfo) -> ! {
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
-    unsafe{ loop {
-        _sysouts("<HelloD>\0".as_ptr());
-        _sysquit();
-    }}
+	unsafe {
+		_sysinit();
+		_sysouts("(D)\0".as_ptr());
+		_sysquit();	
+    	loop {
+        _sysouts("D\0".as_ptr());
+        _sysdelay(500);
+		}
+	}
 }

@@ -6,56 +6,33 @@
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 // BaseOn   : */n_video.a
 //{TEMP} To be abstracted into unisym.
-#include <c/alice.h>
+
 #include "../include/console.h"
 #include <c/stdinc.h>
+#include <c/board/IBM.h>
 
-
-//
-static byte* const _VideoBuf = (unsigned char*)0x800B8000;
+static byte* const _VideoBuf = (byte*)_VIDEO_ADDR_BUFFER + 0x80000000;
 const static word _CharsPerLine = 80;
 const static word _BytesPerLine = _CharsPerLine * 2;
 const static word _LinesPerScreen = 25;
 const static word _ScreenSize = _BytesPerLine * _LinesPerScreen;
 
-static char _tab_dec2hex[] = {'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'};
-
-static byte attr;
-static byte attr_enable;
-
-void curset(word posi)
-{
-	outpb(0x03D4, 0x0E);
-	outpb(0x03D5, posi>>8);
-	outpb(0x03D4, 0x0F);
-	outpb(0x03D5, posi&0xFF);
-}
-
-word curget(void)
-{
-	word ret;
-	outpb(0x03D4, 0x0E);
-	ret = innpb(0x03D5) << 8;
-	outpb(0x03D4, 0x0F);
-	ret |= innpb(0x03D5);
-	return ret;
-}
-
 void scrrol(word lines)
 {
 	if (!lines) return;
-	if (lines > _LinesPerScreen) lines = _LinesPerScreen;
+	MIN(lines, _LinesPerScreen);
 	word *sors = (word *)_VideoBuf + _CharsPerLine * lines;// Add for Pointer!
 	word *dest = (word *)_VideoBuf;
-	stduint i = 0;
-	for (i = 0; i < _ScreenSize - _BytesPerLine * lines; i += 2)
-		*dest++ = *sors++;// -TODO> memset
-	for (; i < _ScreenSize; i += 2)
-		*dest++ = 0x0720;//{TEMP} the new lines are of 'white on black' color
+	forp (dest, _CharsPerLine * (_LinesPerScreen - lines)) *dest = *sors++;
+	forp (dest, _CharsPerLine * lines) 
+		*dest = 0x0720;//{TEMP} the new lines are of 'white on black' color
 }
 
 void outtxt(const char* str, dword len)
 {
+	static byte attr = 0;
+	static byte attr_enable = 0;
+
 	word posi = curget()*2;
 	byte chr;
 

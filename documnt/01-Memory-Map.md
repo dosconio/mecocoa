@@ -8,38 +8,38 @@ her-note: false
 
 
 
-| Fizik Address | Pages | Type | Detail 32 |
-| ---- | ---- | ---- | ---- |
-| 00000000~000003FF | 00 | fixed | IVT Page (Realors) |
-| 00000400~000004FF | 00 | fixed | BIOS Data Area |
-| 00000500~000005FF | 00 | fixed | KASHA Data Area |
-| 00000600~000007FF | 00 | fixed | Kernel Stack (DF=1) |
-| 00000800~00000FFF | 01 | TDM | `R16` Kernel Buffer <br>`P32` IVT Page (Selectors) |
-| ***Kernel Area*** |  |  |  |
-| 00001000~00001FFF | 01 | resident since kernel | PT for High Reflect (00000000~003FFFFF) |
-| 00002000~00002FFF | 01 | resident | PDT for Kernel |
-| 00003000~00003FFF | 01 | fixed | Stack |
-| 00004000~0000407F | 00 | resident | TSS for Shell Real-16 |
-| 00004080~000040FF | 00 | resident | TSS for Shell Prot-32 |
-| 00004100~00004FFF | 01 (480 GDTE) | resident | GDT |
-| 00005000~0000FFFF | 11 | resident | Kernel (Real-16 + Flap-32) |
-| >00005000~000057FF |  |  | Kernel.Data |
-| >00005800~00007BFF |  |  | Kernel.Code |
-| >00008000~00009FFF |  |  | Shell16.Data |
-| >0000A000~0000BFFF |  |  | Shell16.Code |
-| >0000C000~0000FFFF |  |  | Rest Kernel Area |
-| 00010000~0005FFFF | 80 | active | **Least User Area** |
-| 00060000~0007FFFF | 32 | fixed | Page Allocating Bitmap |
-| 00080000~0009FFFF | 32 | fixed | Extended BIOS Data Area |
-| ***Upper Reflect Area*** (Over 640KB) |  |  |  |
-| 000A0000~000BFFFF | 96 | fixed | Video Display Memory |
-| 000C0000~000C7FFF | ↑ | fixed | Video BIOS |
-| 000C8000~000EFFFF | ↑ | fixed | BIOS Expansions |
-| 000F0000~000FFFFF | ↑ | fixed | Mainboard BIOS |
-| *000B8000~000BFFFF* |  | fixed | Video Display Buffer 32K |
-| ***User Area*** |  |  |  |
-| 00100000~00400000 | 768 |  | Extend-32 User Area |
-|  |  |  | ... |
+| Fizik Address                         | Pages         | Type                  | Detail 32                                          |
+| ------------------------------------- | ------------- | --------------------- | -------------------------------------------------- |
+| 00000000~000003FF                     | 00            | fixed                 | IVT Page (Realors)                                 |
+| 00000400~000004FF                     | 00            | fixed                 | BIOS Data Area                                     |
+| 00000500~000005FF                     | 00            | fixed                 | KASHA Data Area                                    |
+| 00000600~000007FF                     | 00            | fixed                 | Kernel Stack (DF=1)                                |
+| 00000800~00000FFF                     | 01            | TDM                   | `R16` Kernel Buffer <br>`P32` IVT Page (Selectors) |
+| ***Kernel Area***                     |               |                       |                                                    |
+| 00001000~00001FFF                     | 01            | resident since kernel | PT for High Reflect (00000000~003FFFFF)            |
+| 00002000~00002FFF                     | 01            | resident              | PDT for Kernel                                     |
+| 00003000~00003FFF                     | 01            | fixed                 | Stack                                              |
+| 00004000~0000407F                     | 00            | resident              | TSS for Shell Real-16                              |
+| 00004080~000040FF                     | 00            | resident              | TSS for Shell Prot-32                              |
+| 00004100~00004FFF                     | 01 (480 GDTE) | resident              | GDT                                                |
+| 00005000~0000FFFF                     | 11            | resident              | Kernel (Real-16 + Flap-32)                         |
+| >00005000~000057FF                    |               |                       | Kernel.Data                                        |
+| >00005800~00007BFF                    |               |                       | Kernel.Code                                        |
+| >00008000~00009FFF                    |               |                       | Shell16.Data                                       |
+| >0000A000~0000BFFF                    |               |                       | Shell16.Code                                       |
+| >0000C000~0000FFFF                    |               |                       | Rest Kernel Area                                   |
+| 00010000~0005FFFF                     | 80            | active                | **Least User Area**                                |
+| 00060000~0007FFFF                     | 32            | fixed                 | Page Allocating Bitmap                             |
+| 00080000~0009FFFF                     | 32            | fixed                 | Extended BIOS Data Area                            |
+| ***Upper Reflect Area*** (Over 640KB) |               |                       |                                                    |
+| 000A0000~000BFFFF                     | 96            | fixed                 | Video Display Memory                               |
+| 000C0000~000C7FFF                     | ↑             | fixed                 | Video BIOS                                         |
+| 000C8000~000EFFFF                     | ↑             | fixed                 | BIOS Expansions                                    |
+| 000F0000~000FFFFF                     | ↑             | fixed                 | Mainboard BIOS                                     |
+| *000B8000~000BFFFF*                   |               | fixed                 | Video Display Buffer 32K                           |
+| ***User Area***                       |               |                       |                                                    |
+| 00100000~00400000                     | 768           |                       | Extend-32 User Area                                |
+|                                       |               |                       | ...                                                |
 
 - **TDM** abbreviation of time-division multiplexing.
 - **Least Phyzical Memory** 4M.
@@ -105,23 +105,25 @@ A line stands 16k×2×16=512k=pow2(19)=0x80000;
 Address: 0x500 ~ 0x5FF
 
 
-| Offset | Object | Initialization | Description |
-| ---- | ---- | ---- | ---- |
-| 00 word | IP of Prot-32 Entry |  |  |
-| 02 word | CS of Prot-32 Entry |  |  |
-| 04 word | GDT32 Length |  |  |
-| 06 dword | GDT32 Address |  |  |
-| 0A word | IVT32 Length |  |  |
-| 0C dword | IVT32 Address |  |  |
-| 10 qword | zero |  |  |
-| 18 dword | CurrentScreenMode |  |  |
-| 1C dword | ConsoleForeColor (BackColor) |  |  |
-| 20 dowrd | ConsoleDefaultColor (PenColor) |  |  |
-| 24 dword | Count : Rotate Seconds |  | 0->FFFFFFFF->0->... |
-| 28 word | Count: Rotate Millisecond |  |  |
-| 2A word | Simple Kernel Memory Pointer | 0x8000 | 0x0000 for full |
-| 2C dword | Simple User Memory Pointer | 0x00010000 | 0x00000000 for full |
-| 30 dword | Global Keyword Queue |  | putptr+getptr+data |
+| Offset   | Object                         | Initialization | Description                   |
+| -------- | ------------------------------ | -------------- | ----------------------------- |
+| 00 word  | IP of Prot-32 Entry            |                |                               |
+| 02 word  | CS of Prot-32 Entry            |                |                               |
+| 04 word  | GDT32 Length                   |                |                               |
+| 06 dword | GDT32 Address                  |                |                               |
+| 0A word  | IVT32 Length                   |                |                               |
+| 0C dword | IVT32 Address                  |                |                               |
+| 10 qword | zero                           |                |                               |
+| 18 dword | CurrentScreenMode              |                |                               |
+| 1C dword | ConsoleForeColor (BackColor)   |                |                               |
+| 20 dowrd | ConsoleDefaultColor (PenColor) |                |                               |
+| 24 dword | Count : Rotate Seconds         |                | 0->FFFFFFFF->0->...           |
+| 28 word  | Count: Rotate Millisecond      |                |                               |
+| 2A word  | Simple Kernel Memory Pointer   | 0x8000         | 0x0000 for full               |
+| 2C dword | Simple User Memory Pointer     | 0x00010000     | 0x00000000 for full           |
+| 30 dword | Global Keyword Queue           |                | putptr+getptr+data            |
+| 34 dword | ReadyFlag1                     |                | MSB `31:SwitchTaskReady,` LSB |
+| 38 dword | TasksAvailableSelectorsPointer |                | First One is the numbers      |
 
 ### Global Segment
 

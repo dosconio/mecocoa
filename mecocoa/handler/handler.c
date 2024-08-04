@@ -5,7 +5,9 @@
 // ModuTitle: Handler
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 
+#include "arc-x86.h"
 #include "interrupt.h"
+#include "mecocoa.h"
 
 static char *ExceptionDescription[] = 
 {
@@ -59,14 +61,24 @@ void Handint_CLK()
 	//{TODO} Magic Port
 	// auto push flag by intterrupt module
 	pushad();
-	G_CountMiSeconds += 10;// 10ms, for freq 100Hz
-	while (G_CountMiSeconds >= 1000) {
+	
+	G_CountMiSeconds += 1;// 10ms, for freq 100Hz
+	if (G_CountMiSeconds >= 1000) do {
 		G_CountMiSeconds -= 1000;
 		G_CountSeconds++;
+		outpb(0x20, EOI);// master
+		
+		hand_cycle_1s();
+		//{TODO} Stack Pointer Balance Experiment
+		// InterruptDisable(); while(1);
+		popad();
+		returni();
+	} while (0);// (G_CountMiSeconds >= 1000);
+	else {
+		outpb(0x20, EOI);// master
+		popad();
+		returni();
 	}
-	outpb(0x20, EOI);// master
-	popad();
-	returni();
 }
 
 void Handint_RTC()

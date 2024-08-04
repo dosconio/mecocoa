@@ -9,7 +9,7 @@
 import os
 
 TARGET_DIR = "subapps/riscv64/"
-LINKER_OUT = "../_obj/mcca/riscv64/kernel.ld"
+LINKER_OUT = "/home/ayano/_obj/mcca/riscv64/kernel.ld"
 
 if __name__ == '__main__':
     f = open(LINKER_OUT, mode="w")

@@ -70,9 +70,12 @@ RotEchoDword  EQU 1
 RotMalloc     EQU 2
 RotMfree      EQU 3
 RotReaddisk   EQU 4
-
+;...
+RotSysDelay   EQU 6
+;...
 RotTerminal   EQU 0x0F
 RotDptrStruct EQU 0x10
+RotInitialize EQU 0x11
 
 %macro KernelSymbols 0
 EXTERN MemAllocSuperv

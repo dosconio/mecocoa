@@ -1,16 +1,15 @@
 #include <c/stdinc.h>
 #include "../../include/console.h"
-
-void sysouts(const char *str);
-void sysquit(void);
+#include "../../userkit/inc/ukitinc.h"
 
 int main()
 {
-	sysouts("(HelloB)");
+	sysinit();
+	sysouts("(B)");
 	sysquit();
-	re_entry:
-	sysouts("[HelloB]");
-	sysquit();
-	goto re_entry;
+	while (1) {
+		sysouts("B");
+		sysdelay(250);
+	}
 }
 

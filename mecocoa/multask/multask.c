@@ -35,6 +35,7 @@ word UserTaskLoadFromELF32(pureptr_t rawdata)
 		.entry = (dword)entry,
 	};
 	TaskFlatRegister(&task, MccaGDT);
+	task.TSS->EFLAGS |= 0x20;// IF
 	//{TODO} PDBR
 	// PagTable={UsrPart: UsrSegLimit=0x80000000 without KrnPart}
 	return task.TSSSelector;

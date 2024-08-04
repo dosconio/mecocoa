@@ -1,17 +1,15 @@
-#include <cpp/cinc>
 #include <c/stdinc.h>
 #include "../../include/console.h"
-void sysouts(const char *str);
-void sysquit(void);
-#include <cpp/cinc>
+#include "../../userkit/inc/ukitinc.h"
 
 int main()
 {
-	sysouts("(HelloC)");
+	sysinit();
+	sysouts("(C)");
 	sysquit();
-	re_entry:
-	sysouts("[HelloC]");
-	sysquit();
-	goto re_entry;
+	while (1) {
+		sysouts("C");
+		sysdelay(2000);
+	}
 }
 

@@ -31,10 +31,9 @@ void* memalloc(stduint size)
 			*MemUptr = 0x00100000;
 		return MemUptrAdvance(size);
 	}
-	else if (*MemUptr >= 0x00100000)
-	{
+	// assert (*MemUptr >= 0x00100000)
+	if (*MemUptr + size < 0x00400000)
 		return MemUptrAdvance(size);
-	}
 	else return 0;
 }
 

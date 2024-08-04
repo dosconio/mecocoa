@@ -11,11 +11,11 @@
 #include "../../mecocoa/kernel.h"
 #include "mecocoa.h"
 
-extern void Handexc_Else();
-extern void Handint_General();
-extern void Handint_CLK();
-extern void Handint_RTC();
-extern void Handint_Keyboard();
+symbol_t Handexc_Else;
+symbol_t Handint_General;
+symbol_t Handint_CLK;
+symbol_t Handint_RTC;
+symbol_t Handint_Keyboard;
 
 extern void Handexc_0_Divide_By_Zero();
 extern void Handexc_1_Step();

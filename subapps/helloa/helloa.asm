@@ -7,21 +7,27 @@
 
 [BITS 32]
 GLOBAL _start
-EXTERN _sysouts
-EXTERN _sysquit
 
 section .text
 _start:
+	MOV EDI, RotInitialize
+	CALL SegGate|3:0
 	MOV ESI, str0
-_reentry:
 	MOV EDI, RotPrint
 	CALL SegGate|3:0
 	MOV EDI, RotTerminal
 	CALL SegGate|3:0
+_reentry:
 	MOV ESI, str1
+	MOV EDI, RotPrint
+	CALL SegGate|3:0
+	MOV EDX, 500; 500ms
+	MOV EDI, RotSysDelay
+	CALL SegGate|3:0
+	; JMP $
 	JMP _reentry
 
 section .data
-str0: db "(HelloA)",0
-str1: db "[HelloA]",0
+str0: db "(A)",0
+str1: db "A",0
 
