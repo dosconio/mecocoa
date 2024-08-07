@@ -28,7 +28,7 @@
 #ifdef _INC_CPP
 extern "C" 
 #endif
-void hand_cycle_1s();
+void hand_cycle_50ms();
 
 void *memalloc(stduint size);
 

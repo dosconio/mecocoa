@@ -63,22 +63,20 @@ void Handint_CLK()
 	pushad();
 	
 	G_CountMiSeconds += 1;// 10ms, for freq 100Hz
+	if (!(G_CountMiSeconds % 50)) {
+		outpb(0x20, EOI);// master
+		hand_cycle_50ms();
+	}
 	if (G_CountMiSeconds >= 1000) do {
 		G_CountMiSeconds -= 1000;
 		G_CountSeconds++;
 		outpb(0x20, EOI);// master
-		
-		hand_cycle_1s();
-		//{TODO} Stack Pointer Balance Experiment
-		// InterruptDisable(); while(1);
-		popad();
-		returni();
 	} while (0);// (G_CountMiSeconds >= 1000);
 	else {
 		outpb(0x20, EOI);// master
-		popad();
-		returni();
 	}
+	popad();
+	returni();
 }
 
 void Handint_RTC()

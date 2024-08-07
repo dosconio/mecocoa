@@ -20,7 +20,7 @@ extern "C" {
 	fn _sysinit();
     fn _sysouts(str: *const u8);
 	fn _sysdelay(ms: u32);
-    fn _sysquit();
+    fn _sysquit(retval: i32);
 }
 
 #[allow(unused_variables)]  
@@ -33,11 +33,10 @@ fn panic(info: &PanicInfo) -> ! {
 pub extern "C" fn _start() -> ! {
 	unsafe {
 		_sysinit();
-		_sysouts("(D)\0".as_ptr());
-		_sysquit();	
-    	loop {
-        _sysouts("D\0".as_ptr());
-        _sysdelay(250);
+		loop {
+			_sysouts("D \0".as_ptr());
+			// _sysdelay(500);
+			_sysquit(0);
 		}
 	}
 }

@@ -15,8 +15,8 @@ GLOBAL _sysquit
 section .text
 
 _sysinit:
-	MOV EDI, RotInitialize
-	CALL SegGate|3:0
+	;MOV EDI, RotInitialize
+	;CALL SegGate|3:0
 RET
 
 _sysouts:
@@ -44,7 +44,13 @@ _sysdelay:
 RET
 
 _sysquit:
+	PUSH EBP
+	MOV EBP, ESP
+	PUSH EAX
+	MOV EAX, [EBP+4*2]
 	MOV EDI, RotTerminal
 	CALL SegGate|3:0
+	POP EAX
+	POP EBP
 RET
 

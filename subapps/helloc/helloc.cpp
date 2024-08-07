@@ -4,12 +4,9 @@
 
 int main()
 {
-	sysinit();
-	sysouts("(C)");
-	sysquit();
-	while (1) {
+	while (true) {
 		sysouts("C");
-		sysdelay(1000);
+		sysdelay(500);
 	}
 }
 

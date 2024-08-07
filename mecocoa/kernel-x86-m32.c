@@ -11,7 +11,7 @@
 #include "arc-x86.h"
 #include "mecocoa.h"
 
-void hand_cycle_1s() {
+void hand_cycle_50ms() {
 	static byte i = ~0;
 	const word limit = TasksAvailableSelectors[0];
 	if (!(ReadyFlag1 & ReadyFlag1_MASK_SwitchTask)) return;

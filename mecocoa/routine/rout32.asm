@@ -60,7 +60,7 @@ RoutineGate:; EDI=FUNCTION RoutIn:{DS=SegData}
 	POP ES
 	POP DS
 	RETF
-R_Terminate:; 00 and other rontine point to here
+R_Terminate:; (EAX zo ret-val)
 	PUSHFD
 	POP EDX
 	TEST DX, 0100_0000_0000_0000B

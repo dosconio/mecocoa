@@ -4,12 +4,7 @@
 
 int main()
 {
-	sysinit();
-	sysouts("(B)");
-	sysquit();
-	while (1) {
-		sysouts("B");
-		sysdelay(250);
-	}
+	sysouts("B");
+	sysdelay(500);
 }
 

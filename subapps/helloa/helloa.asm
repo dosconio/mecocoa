@@ -6,28 +6,22 @@
 %include "mecocoa/kernel.inc"
 
 [BITS 32]
-GLOBAL _start
+EXTERN _entry
+GLOBAL _main
 
 section .text
-_start:
+_main:
 	MOV EDI, RotInitialize
 	CALL SegGate|3:0
-	MOV ESI, str0
-	MOV EDI, RotPrint
-	CALL SegGate|3:0
-	MOV EDI, RotTerminal
-	CALL SegGate|3:0
-_reentry:
 	MOV ESI, str1
 	MOV EDI, RotPrint
 	CALL SegGate|3:0
 	MOV ECX, 500; 500ms
 	MOV EDI, RotSysDelay
 	CALL SegGate|3:0
-	; JMP $
-	JMP _reentry
+	MOV EAX, 0
+	RET
 
 section .data
-str0: db "(A)",0
 str1: db "A",0
 

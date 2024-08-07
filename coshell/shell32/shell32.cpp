@@ -18,7 +18,9 @@ int main(void) {
 	outsfmt("Ciallo, " CON_DarkIoWhite "\b\n%d-%d-%d" CON_None "!\n\r", 2024, 5, 4);
 	int crttask = 0;
 	ReadyFlag1 |= ReadyFlag1_MASK_SwitchTask;
-	while (true) wait();
+	while (true) wait(); // hand_cycle_50ms();//{TODO} sysyield: switch task auto
+	//{TODO} Task Manager;
+	//{TODO} Check Quit-Code
 }
 
 extern "C" void dbgfn();

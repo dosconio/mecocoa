@@ -9,6 +9,10 @@
 
 .PHONY: ciallo lib sub new newx debug dbgend clean
 
+uincpath=/mnt/hgfs/unisym/inc
+ulibpath=/mnt/hgfs/unisym/lib
+ubinpath=/mnt/hgfs/SVGN/_bin
+
 ARCH = riscv64
 THIS := $(ARCH)
 OUTD = /mnt/hgfs/SVGN/_bin/mecocoa# Output Directory
@@ -41,7 +45,7 @@ HEADER_DEP = $(addsuffix .d, $(basename $(C_OBJS)))
 
 -include $(HEADER_DEP)
 
-INCLUDEFLAG = -I$(THIS) -Iinclude -I/mnt/hgfs/unisym/inc
+INCLUDEFLAG = -I$(THIS) -Iinclude -I$(uincpath)
 CFLAG = -Wall -Wno-error -O -fno-omit-frame-pointer -ggdb
 #CFLAG += -MD
 #CFLAG += -nostdinc
@@ -130,7 +134,7 @@ lib: $(LIB_C_OBJS)
 	@$(CC) -c userkit/uk-$(ARCH).S -o $(BUILDDIR)/ukit-r64/_uk_.o
 	@$(AR) rcs $(BUILDDIR)/libuk$(ARCH).a $(BUILDDIR)/ukit-r64/*.o
 	@echo 'Build  : Kernel libraries for $(ARCH)'
-	@$(CC) $(CFLAG) -c /mnt/hgfs/unisym/lib/c/consio.c -o $(BUILDDIR)/$(THIS)/consio.o
+	@$(CC) $(CFLAG) -c $(ulibpath)/c/consio.c -o $(BUILDDIR)/$(THIS)/consio.o
 sub: $(APP_C_OBJS)
 	@mkdir -p $(objdir)/mcca/riscv64
 	@python3 makefil/riscv64-link.py

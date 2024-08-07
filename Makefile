@@ -25,11 +25,11 @@ asmattr = -I$(uincpath)/Kasha/n_ -I$(uincpath)/naasm/n_ -I./include/
 asm  = $(ubinpath)/ELF64/aasm $(asmattr) 
 asmf = $(asm) -felf -Iinclude/
 dasm = ndisasm #-u -o EntryPoint -e EntryAddress
-cdef = -D_MCCAx86 -D_ARC_x86=5 -I$(uincpath) -Iinclude -fno-builtin -fno-stack-protector
+cdef = -I$(uincpath) -Iinclude -fno-builtin -fno-stack-protector
 ccc  = gcc -c -nostdinc -nostdlib -fno-exceptions -fno-strict-aliasing\
- -fno-omit-frame-pointer -fno-leading-underscore $(cdef) # -fno-rtti
-cc32 = gcc -m32 -c -fleading-underscore -fno-pic $(cdef)
-cx32 = g++ -m32 -c -fleading-underscore -fno-pic $(cdef)
+ -fno-omit-frame-pointer -fno-leading-underscore $(cdef) -D_MCCA=0x8616
+cc32 = gcc -m32 -D_MCCA=0x8632 -c -fleading-underscore -fno-pic $(cdef)
+cx32 = g++ -m32 -D_MCCA=0x8632 -c -fleading-underscore -fno-pic $(cdef)
 outf = mcca.img
 # vhd=E:\vhd.vhd
 link = ld #OPT E:\tmp\CPOSIX\bin\ld.gold.exe
@@ -78,7 +78,7 @@ init0: # for general disk
 	@$(vmbox) createhd --filename ../_bin/mcca.vhd --format VHD --size 4 --variant Fixed
 	@echo "Initial: Now the pure-flat disks versions can be made."
 
-new: uninstall clean init mdrivers subapp floppy 
+new: uninstall clean usrlib init mdrivers subapp floppy 
 	@perl ./configs/bochsdbg.pl > $(dbgdir)/bochsrc.bxrc
 	@echo
 	@echo "You can now debug in bochs with the following command:"
@@ -94,7 +94,7 @@ bochs: floppy
 qemu-cd:
 	$(qemu) -hda $(dbgdir)/$(outf) -boot d -cdrom $(dbgdir)/$(outf} #{to test}
 qemu:
-	$(qemu) -drive format=raw,file=$(dbgdir)/$(outf),if=floppy -boot order=a
+	$(qemu) -drive format=raw,file=$(dbgdir)/$(outf),if=floppy -boot order=a -m 32M
 
 newx: new qemu
 
@@ -110,15 +110,15 @@ buildf: $(objpath)/boot.fin $(objpath)/KER.APP $(objpath)/SHL16.APP $(objpath)/S
 
 mdrivers:
 	@echo "Build  : Drivers except libraries"
-	@$(cc32) ./mecocoa/graphic.c                -o $(objpath)/console.obj
-	@$(cc32) ./mecocoa/handler/interrupt.c      -o $(objpath)/interrupt.obj
-	@$(asmf) ./mecocoa/memory/paging.asm        -o $(objpath)/page.obj
-	@$(asmf) ./mecocoa/handler/handler.asm      -o $(objpath)/handler.obj
-	@$(cc32) ./mecocoa/handler/handler.c        -o $(objpath)/handauf.obj
-	@$(asmf) ./cocheck/codebug.asm              -o $(objpath)/codebug.obj
-	@$(asmf) ./mecocoa/memory/memoman.asm       -o $(objpath)/memasm.obj
-	@$(cc32) ./mecocoa/memory/memoman.c         -o $(objpath)/memcpl.obj
-	@$(cc32) ./mecocoa/multask/multask.c        -o $(objpath)/task.obj
+	@$(cc32) ./mecocoa/graphic.c           -o $(objpath)/console.obj
+	@$(cc32) ./mecocoa/handler/interrupt.c -o $(objpath)/interrupt.obj
+	@$(asmf) ./mecocoa/memory/paging.asm   -o $(objpath)/page.obj
+	@$(asmf) ./mecocoa/handler/handler.asm -o $(objpath)/handler.obj
+	@$(cc32) ./mecocoa/handler/handler.c   -o $(objpath)/handauf.obj
+	@$(asmf) ./cocheck/codebug.asm         -o $(objpath)/codebug.obj
+	@$(asmf) ./mecocoa/memory/memoman.asm  -o $(objpath)/memasm.obj
+	@$(cc32) ./mecocoa/memory/memoman.c    -o $(objpath)/memcpl.obj
+	@$(cc32) ./mecocoa/multask/multask.c   -o $(objpath)/task.obj
 
 
 ###
@@ -155,17 +155,24 @@ subapp: helloa hellob helloc hellod
 helloa: ./subapps/helloa/helloa.asm
 	@echo "Build  : Subapps/helloa"
 	@$(asmf) $< -o $(objpath)/helloa.elf
-	@$(link) -s -T ./subapps/helloa/helloa.ld -e _start -m elf_i386 -o $(objpath)/helloa.app $(objpath)/helloa.elf -L$(ubinpath)/mecocoa -lmccausr-x86
+	@$(cc32) userkit/startup_mecocoa.c -o $(objpath)/startup.obj
+	@$(link) -s -T ./subapps/helloa/helloa.ld -m elf_i386 -o $(objpath)/helloa.app\
+	 $(objpath)/helloa.elf $(objpath)/startup.obj -e _entry \
+	 -L$(ubinpath)/mecocoa -lmccausr-x86
 hellob: ./subapps/hellob/hellob.c
 	@echo "Build  : Subapps/hellob"
 	@$(cc32) $< -o $(objpath)/hellob.obj
+	@$(cc32) userkit/startup_mecocoa.c -o $(objpath)/startup.obj
 	@$(link) -s -T ./subapps/hellob/hellob.ld -m elf_i386 -o $(objpath)/hellob.app\
-	 $(objpath)/hellob.obj -L$(ubinpath)/mecocoa -lmccausr-x86
+	 $(objpath)/hellob.obj $(objpath)/startup.obj -e _entry \
+	 -L$(ubinpath)/mecocoa -lmccausr-x86
 helloc: ./subapps/helloc/helloc.cpp
 	@echo "Build  : Subapps/helloc"
 	@$(cx32) $< -o $(objpath)/helloc.obj
+	@$(cc32) userkit/startup_mecocoa.c -o $(objpath)/startup.obj
 	@$(link) -s -T ./subapps/helloc/helloc.ld -m elf_i386 -o $(objpath)/helloc.app\
-	 $(objpath)/helloc.obj -L$(ubinpath)/mecocoa -lmccausr-x86
+	 $(objpath)/helloc.obj $(objpath)/startup.obj -e _entry \
+	 -L$(ubinpath)/mecocoa -lmccausr-x86
 hellod:
 	@echo "Build  : Subapps/hellod"
 	@cd subapps/hellod/ && cargo build --release --target ../../configs/Rust/target/cargo-i686.json
