@@ -52,7 +52,7 @@ CFLAG = -Wall -Wno-error -O -fno-omit-frame-pointer -ggdb
 CFLAG += -mcmodel=medany
 CFLAG += -ffreestanding -fno-common -nostdlib -mno-relax
 CFLAG += $(INCLUDEFLAG)
-CFLAG += -D_OPT_RISCV64 -D_MCCA="_OPT_RISCV64"
+CFLAG += -D_OPT_RISCV64 -D_MCCA="_OPT_RISCV64" -D__BITS__=64 -D_USE_VT100 -D_DEBUG
 CFLAG += $(shell $(CC) -fno-stack-protector -E -x c /dev/null >/dev/null 2>&1 && echo -fno-stack-protector)
 
 # LOG ?= error
@@ -120,7 +120,7 @@ QEMUOPTS = \
 	-machine virt \
 	-bios $(BOOTLOADER) \
 	-kernel $(OUTF)
-LIBS = $(BUILDDIR)/$(THIS)/consio.o
+LIBS = $(BUILDDIR)/$(THIS)/inn_*.o
 
 ciallo:
 	@echo "Mecocoa Risc-V64"
@@ -134,7 +134,10 @@ lib: $(LIB_C_OBJS)
 	@$(CC) -c userkit/uk-$(ARCH).S -o $(BUILDDIR)/ukit-r64/_uk_.o
 	@$(AR) rcs $(BUILDDIR)/libuk$(ARCH).a $(BUILDDIR)/ukit-r64/*.o
 	@echo 'Build  : Kernel libraries for $(ARCH)'
-	@$(CC) $(CFLAG) -c $(ulibpath)/c/consio.c -o $(BUILDDIR)/$(THIS)/consio.o
+	@$(CC) $(CFLAG) -c $(ulibpath)/c/mcore.c -o $(BUILDDIR)/$(THIS)/inn_microcore.o
+	@$(CC) $(CFLAG) -c $(ulibpath)/c/consio.c -o $(BUILDDIR)/$(THIS)/inn_consio.o
+	@$(CC) $(CFLAG) -c $(ulibpath)/c/debug.c -o $(BUILDDIR)/$(THIS)/inn_debug.o
+	@$(CC) $(CFLAG) -c $(ulibpath)/c/console/conformat.c -o $(BUILDDIR)/$(THIS)/inn_conformat.o
 sub: $(APP_C_OBJS)
 	@mkdir -p $(objdir)/mcca/riscv64
 	@python3 makefil/riscv64-link.py

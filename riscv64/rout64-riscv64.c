@@ -52,7 +52,7 @@ void syscall()
 		// __builtin_unreachable();
 	default:
 		ret = -1;
-		log_panic("Unknown syscall");
+		log_panic("Unknown syscall", 0);
 		while (1);
 	}
 	trapframe->a0 = ret;

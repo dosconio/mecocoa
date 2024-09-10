@@ -17,11 +17,19 @@ int threadid()
 
 void init()
 {
+	_pref_pani = "[PANIC !]";
+	_pref_erro = "[ERROR  ]";
+	_pref_warn = "[WARN   ]";
+	_pref_info = "[INFORMA]";
+	_pref_dbug = "[DEBUG  ]";
+	_pref_trac = "[TRACE  ]";
+
+
 	// clear bss
 	for (char* p = s_bss; p < e_bss; ++p)
 		*p = 0;
-	outsfmt("\n");
-	outsfmt("Ciallo!\n");
+
+	log_trace("Ciallo!", 0);
 	log_error("stext: %p", s_text);
 	log_warn("etext: %p", e_text);
 	log_info("sroda: %p", s_rodata);
@@ -37,7 +45,8 @@ void main()
 	init();
 	trap_init();
 	loader_init();
+	if (0) log_panic("test", 0);
 	run_next_app();
-	if (0) shutdown(); else log_panic("ALL DONE"); while (1);
+	if (0) shutdown(); else log_panic("ALL DONE", 0); while (1);
 }
 

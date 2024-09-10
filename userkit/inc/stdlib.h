@@ -33,7 +33,4 @@ extern char *basename(char *);
 		      a, b);
 #endif
 
-void srand(int s);
-uint32 rand();
-
 #endif //__STDLIB_H__

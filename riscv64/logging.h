@@ -8,6 +8,7 @@
 #define _MCCA_LOG
 
 #include <c/consio.h>
+
 extern int threadid();
 extern void shutdown();
 
@@ -51,11 +52,39 @@ extern void shutdown();
 
 #endif // _LOG_LEVEL_TRACE
 
-void log_error(const char *fmt, ...);
-void log_warn(const char *fmt, ...);
-void log_info(const char *fmt, ...);
-void log_debug(const char *fmt, ...);
-void log_trace(const char *fmt, ...);
+//: You need a occupier if no parameters after fmt
+
+#if !defined(USE_LOG_ERROR)
+#define log_error(fmt,...)
+#else
+#define log_error(fmt,...) printlog(_LOG_ERROR, "TID %d: " fmt, threadid(), __VA_ARGS__)
+#endif
+
+#if !defined(USE_LOG_WARN)
+#define log_warn(fmt,...)
+#else
+#define log_warn(fmt,...) printlog(_LOG_WARN, "TID %d: " fmt, threadid(), __VA_ARGS__)
+#endif
+
+#if !defined(USE_LOG_INFO)
+#define log_info(fmt,...)
+#else
+#define log_info(fmt,...) printlog(_LOG_INFO, "TID %d: " fmt, threadid(), __VA_ARGS__)
+#endif
+
+#if !defined(USE_LOG_DEBUG)
+#define log_debug(fmt,...)
+#else
+#define log_debug(fmt,...) printlog(_LOG_DEBUG, "TID %d: " fmt, threadid(), __VA_ARGS__)
+#endif
+
+#if !defined(USE_LOG_TRACE)
+#define log_trace(fmt,...)
+#else
+#define log_trace(fmt,...) printlog(_LOG_TRACE, "TID %d: " fmt, threadid(), __VA_ARGS__)
+#endif
+
 void log_panic(const char *fmt, ...);
+#define log_panic(a,...) log_panic("TID %d: " a,threadid(),__VA_ARGS__)
 
 #endif

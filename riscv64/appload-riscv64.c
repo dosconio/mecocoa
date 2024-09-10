@@ -17,7 +17,7 @@ extern char _app_num[], // [number of apps, offsets of apps]
 void loader_init()
 {
 	if ((uint64)ekernel >= BASE_ADDRESS) {
-		log_panic("kernel too large...\n");
+		log_panic("kernel too large...\n", 0);
 	}
 	app_info_ptr = (uint64 *)_app_num;
 	app_cur = -1;

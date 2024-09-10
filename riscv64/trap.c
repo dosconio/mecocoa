@@ -33,7 +33,7 @@ void trap_init(void)
 void usertrap(struct trapframe *trapframe)
 {
 	if ((getSSTATUS() & _SSTATUS_SPP) != 0)
-		log_panic("usertrap: not from user mode");
+		log_panic("usertrap: not from user mode", 0);
 
 	uint64 cause = getSCAUSE();
 	if (cause == UserEnvCall) {
