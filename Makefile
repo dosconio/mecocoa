@@ -10,15 +10,11 @@
 .PHONY: new uninstall clean init mdrivers floppy buildf newx min\
 	init0 build new-r newx-r dbg-r #<- Harddisk Version
 
-uincpath=/mnt/hgfs/unisym/inc
-ulibpath=/mnt/hgfs/unisym/lib
-ubinpath=/mnt/hgfs/SVGN/_bin
-
 dbgdir = $(ubinpath)/mecocoa
 dstdir = E:/PROJ/SVGN/_bin/mecocoa
-unidir = /mnt/hgfs/unisym
-libcdir = $(unidir)/lib/c
-libadir = $(unidir)/lib/asm
+unidir = $(ulibpath)/..
+libcdir = $(ulibpath)/c
+libadir = $(ulibpath)/asm
 objpath = /home/ayano/_obj/mccax86
 
 asmattr = -I$(uincpath)/Kasha/n_ -I$(uincpath)/naasm/n_ -I./include/
@@ -39,7 +35,7 @@ KernelExt = $(objpath)/rout16.obj  $(objpath)/handler.obj $(objpath)/handauf.obj
 		    $(objpath)/interrupt.obj $(objpath)/memasm.obj $(Rout32Obj) $(objpath)/kernel-x86-m32.obj
 Rout32Obj = $(objpath)/rout32.obj $(objpath)/memcpl.obj 
 Shell16Ext = $(objpath)/rout16.obj
-Shell32Ext = $(objpath)/console.obj $(objpath)/codebug.obj $(Rout32Obj) $(objpath)/task.obj
+Shell32Ext = $(objpath)/console.obj $(objpath)/codebug.obj $(Rout32Obj) $(objpath)/task.obj $(objpath)/kernel-x86-m32.obj
 
 ### Virtual Machine
 # vmbox=E:\software\vmbox\VBoxManage.exe
@@ -92,7 +88,7 @@ vmbox: floppy
 bochs: floppy
 	-$(bochd) -f e:/cnrv/bochsrcf.bxrc
 qemu-cd:
-	$(qemu) -hda $(dbgdir)/$(outf) -boot d -cdrom $(dbgdir)/$(outf} #{to test}
+	$(qemu) -hda $(dbgdir)/$(outf) -boot d -cdrom $(dbgdir)/$(outf) #{to test}
 qemu:
 	$(qemu) -drive format=raw,file=$(dbgdir)/$(outf),if=floppy -boot order=a -m 32M
 
@@ -123,7 +119,7 @@ mdrivers:
 
 ###
 
-$(objpath)/boot.fin: $(unidir)/demo/osdev/bootstrap/bootfka.a
+$(objpath)/boot.fin: $(unidir)/demo/osdev/bootstrap/bootfka.asm
 	@echo "Build  : Boot"
 	@$(asm) $< -o $@ -D_FLOPPY
 
@@ -175,7 +171,7 @@ helloc: ./subapps/helloc/helloc.cpp
 	 -L$(ubinpath)/mecocoa -lmccausr-x86
 hellod:
 	@echo "Build  : Subapps/hellod"
-	@cd subapps/hellod/ && cargo build --release --target ../../configs/Rust/target/cargo-i686.json
+	@cd subapps/hellod/ && cargo build --release
 
 new-r: 
 	@make -f makefil/riscv64.make clean
@@ -195,6 +191,7 @@ config:
 usrlib:
 	-@rm -rf $(objpath)/mccausr/*
 	@mkdir -p $(objpath)/mccausr
+	@mkdir -p $(ubinpath)/mecocoa
 	@$(asmf) ./userkit/lib/cocoapp.asm -o $(objpath)/mccausr/mccausr.obj
 	-rm -rf $(ubinpath)/mecocoa/libmccausr-x86.a
 	ar -rcs $(ubinpath)/mecocoa/libmccausr-x86.a $(objpath)/mccausr/*
@@ -202,7 +199,8 @@ usrlib:
 all: new new-r
 	@echo "Finish : All Finished"
 clean:
-	-@rm -rf $(objpath)/*
+	-rm -rf $(objpath)/*
+	cd subapps/hellod/ && cargo clean
 
 uninstall:
 	-@sudo rm -rf /mnt/floppy

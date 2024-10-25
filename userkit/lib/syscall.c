@@ -72,7 +72,7 @@ int exec(const char *name, char **argv)
 
 sint64 get_mtime()
 {
-	TimeVal time;
+	timeval_t time;
 	int err = sys_get_time(&time, 0);
 	if (err == 0) {
 		return (time.sec * 1000 + time.usec / 1000);
@@ -81,7 +81,7 @@ sint64 get_mtime()
 	return -1;
 }
 
-int sys_get_time(TimeVal *ts, int tz)
+int sys_get_time(timeval_t *ts, int tz)
 {
 	return syscall(SYS_gettimeofday, ts, tz);
 }

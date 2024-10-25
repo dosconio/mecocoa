@@ -16,4 +16,14 @@ extern char e_data[];
 extern char s_bss[];
 extern char e_bss[];
 
+// timer related
+#include <c/datime.h>
+#define TICKS_PER_SEC 100
+#define CPU_FREQ 12500000 // QEMU
+
+uint64 get_cycle();
+void timer_init();
+void set_next_timer();
+
+
 #endif

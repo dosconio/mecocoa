@@ -34,8 +34,9 @@ int main()
 		pow[index] = (last * P) % MOD;
 		if ((i % 10000) == 0) {
 			printf("%d^%d=%d\n", P, i, pow[index]);
+			sleep(500);
 		}
 	}
-	puts("Test power OK!");
+	puts("[subapp1] Test power OK!");
 	return 0;
 }

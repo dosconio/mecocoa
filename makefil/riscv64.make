@@ -9,13 +9,9 @@
 
 .PHONY: ciallo lib sub new newx debug dbgend clean
 
-uincpath=/mnt/hgfs/unisym/inc
-ulibpath=/mnt/hgfs/unisym/lib
-ubinpath=/mnt/hgfs/SVGN/_bin
-
 ARCH = riscv64
 THIS := $(ARCH)
-OUTD = /mnt/hgfs/SVGN/_bin/mecocoa# Output Directory
+OUTD = $(ubinpath)/mecocoa# Output Directory
 OUTF = $(OUTD)/mcca-$(ARCH)# Output File
 objdir=~/_obj
 
@@ -103,7 +99,8 @@ $(LIB_C_OBJS): $(BUILDDIR)/ukit-r64/%.o : userkit/lib/%.c
 $(APP_C_OBJS): $(BUILDDIR)/$(THIS)/elf/%.app : subapps/$(ARCH)/%.c
 	@mkdir -p $(@D)
 	@echo "Subapps: $(CRT)"
-	@$(CC) -Wall -nostdinc -fno-omit-frame-pointer -mcmodel=medany -ffreestanding -fno-common -nostdlib -mno-relax $(INCLUDEFLAG) -D_OPT_RISCV64 -D_MCCA="_OPT_RISCV64" $<  -o  $(BUILDDIR)/$(THIS)/elf/$(CRT).app -L$(BUILDDIR) -luk$(ARCH) -Tuserkit/uk-$(ARCH).ld
+	@$(CC) -Wall -fno-omit-frame-pointer -mcmodel=medany -ffreestanding -fno-common -nostdlib -mno-relax \
+	 $(INCLUDEFLAG) -D_OPT_RISCV64 -D_MCCA="_OPT_RISCV64" $<  -o  $(BUILDDIR)/$(THIS)/elf/$(CRT).app -L$(BUILDDIR) -luk$(ARCH) -Tuserkit/uk-$(ARCH).ld
 	@$(OBJCOPY) $(BUILDDIR)/$(THIS)/elf/$(CRT).app --strip-all -O binary $(BUILDDIR)/$(THIS)/app/$(CRT).bin
 
 $(HEADER_DEP): $(BUILDDIR)/$(THIS)/%.d : $(THIS)/%.c

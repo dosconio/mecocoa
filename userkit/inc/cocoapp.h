@@ -11,6 +11,7 @@
 
 // Define platform before
 #include <c/stdinc.h>
+#include <c/datime.h>
 #include "stddef.h"
 
 int open(const char *, int);
@@ -25,7 +26,7 @@ int fork();
 int exec(const char *, char **);
 int waitpid(int, int *);
 sint64 get_mtime();
-int sys_get_time(TimeVal *ts,
+int sys_get_time(timeval_t *ts,
 		 int tz); // syscall ID: 169; tz 表示时区，这里无需考虑，始终为0;
 // 返回值：正确返回 0，错误返回 -1。
 int sys_task_info(TaskInfo *ti);

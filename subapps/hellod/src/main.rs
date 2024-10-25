@@ -34,8 +34,8 @@ pub extern "C" fn _start() -> ! {
 	unsafe {
 		_sysinit();
 		loop {
-			_sysouts("D \0".as_ptr());
-			// _sysdelay(500);
+			_sysouts("(D)\n\r\0".as_ptr());
+			_sysdelay(5000);
 			_sysquit(0);
 		}
 	}

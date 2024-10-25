@@ -1,5 +1,5 @@
 
-ulib=/mnt/hgfs/unisym
+ulib=$(ulibpath)/..
 
 all: clean # just-print-Hello
 	g++ -c core.cpp -o core.obj -m32 -fleading-underscore -fno-pic

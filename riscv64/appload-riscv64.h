@@ -10,8 +10,9 @@
 #include <c/proctrl/RISCV/riscv64.h>// style(gene-3)
 #include "../mecocoa/kernel.h"
 
+int finished();
 void loader_init();
-int run_next_app();
+int run_all_app();
 
 #define BASE_ADDRESS (0x80400000)
 #define MAX_APP_SIZE (0x20000)

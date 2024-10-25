@@ -295,6 +295,7 @@ void syscall();
 #define SYS_rseq 293
 #define SYS_kexec_file_load 294
 
+//{TODO} uC LAB1: need to define SYS_task_info here
 
 #define SYS_spawn 400
 #define SYS_mailread 401

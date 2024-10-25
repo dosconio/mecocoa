@@ -37,3 +37,8 @@ void shutdown()
 {
 	sbicall(SBI_SHUTDOWN, 0, 0, 0);
 }
+
+void set_timer(uint64 stime)
+{
+	sbicall(SBI_SET_TIMER, stime, 0, 0);
+}

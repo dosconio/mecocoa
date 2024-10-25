@@ -4,7 +4,7 @@
 
 int main()
 {
-	sysouts("B");
-	sysdelay(500);
+	sysouts("(B)");
+	sysdelay(5000);
 }
 

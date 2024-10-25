@@ -20,12 +20,6 @@ typedef stdsint ssize_t;
 
 typedef int pid_t;
 
-#define va_start(ap, last) (__builtin_va_start(ap, last))
-#define va_arg(ap, type) (__builtin_va_arg(ap, type))
-#define va_end(ap) (__builtin_va_end(ap))
-#define va_copy(d, s) (__builtin_va_copy(d, s))
-typedef __builtin_va_list va_list;
-
 #define O_RDONLY 0x000
 #define O_WRONLY 0x001
 #define O_RDWR 0x002 // 可读可写
@@ -37,11 +31,6 @@ typedef __builtin_va_list va_list;
 #define AT_FDCWD -100
 
 #define MAX_SYSCALL_NUM 500
-
-typedef struct {
-	uint64 sec; // 自 Unix 纪元起的秒数
-	uint64 usec; // 微秒数
-} TimeVal;
 
 typedef struct {
 	uint64 dev; // 文件所在磁盘驱动器号，不考虑

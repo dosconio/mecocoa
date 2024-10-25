@@ -129,7 +129,7 @@ R_DescriptorStructure:
 	GDTDptrStruct EAX,EBX,ECX
 	RETF
 	ALIGN 16
-R_TEMP_OpenInterrupt:
+R_TEMP_OpenInterrupt:; historical remaint, now no one using
 	STI
 	RETF
 	ALIGN 16

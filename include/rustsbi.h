@@ -23,6 +23,7 @@ typedef enum SBI_Identifiers
 void sysoutc(int);
 int sysgetc();
 void shutdown();
+void set_timer(uint64 stime);
 
 #endif
 

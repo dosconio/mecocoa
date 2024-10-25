@@ -4,9 +4,7 @@
 
 int main()
 {
-	while (true) {
-		sysouts("C");
-		sysdelay(500);
-	}
+	sysouts("(C)");
+	sysdelay(5000);
 }
 

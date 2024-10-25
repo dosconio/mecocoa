@@ -5,7 +5,7 @@
 // ModuTitle: Shell Flap-32
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 
-//{TODO} to be COTLAB. Jump to here as console.
+//{TODO} spilt into kernel and COTLAB. Jump to here as console.
 
 #include "arc-x86.h"
 #include "shell32.h"
@@ -18,7 +18,9 @@ int main(void) {
 	outsfmt("Ciallo, " CON_DarkIoWhite "\b\n%d-%d-%d" CON_None "!\n\r", 2024, 5, 4);
 	int crttask = 0;
 	ReadyFlag1 |= ReadyFlag1_MASK_SwitchTask;
-	while (true) wait(); // hand_cycle_50ms();//{TODO} sysyield: switch task auto
+	while (true) wait();
+	
+	//{TODO} sysyield: switch task auto
 	//{TODO} Task Manager;
 	//{TODO} Check Quit-Code
 }

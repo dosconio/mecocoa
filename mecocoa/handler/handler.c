@@ -8,6 +8,7 @@
 #include "arc-x86.h"
 #include "interrupt.h"
 #include "mecocoa.h"
+#include <c/driver/keyboard.h>
 
 static char *ExceptionDescription[] = 
 {
@@ -96,11 +97,25 @@ void Handint_RTC()
 
 void Handint_Keyboard()
 {
+	byte loc_buf[3];
+	static int pref_e0 = 0;
 	pushad();
-	outc('*');
 	outpb(0xA0, EOI); // slaver
 	outpb(0x20, EOI);// master
-	innpb(PORT_KBD_BUFFER);
+	loc_buf[0] = innpb(PORT_KBD_BUFFER);
+	if (loc_buf[0] == 0xE0)
+		pref_e0 = 1;
+	else if (loc_buf[0] < 0x80) { // key down
+		//loc_buf[0] = _tab_keycode2ascii[loc_buf[0]].ascii_usual;
+		loc_buf[0] = '*';
+		if (loc_buf[0] > 1) {
+			outsfmt("%c", loc_buf[0]);
+		}
+		//outsfmt("<%x>", &_tab_keycode2ascii);
+		//outsfmt("<%x>", 0x10);
+		//outidec(0x10, 16, 1);
+		_TEMP pref_e0 = 0;
+	}
 	popad();
 	returni();
 }

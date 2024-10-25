@@ -11,17 +11,17 @@ GLOBAL _main
 
 section .text
 _main:
-	MOV EDI, RotInitialize
-	CALL SegGate|3:0
-	MOV ESI, str1
-	MOV EDI, RotPrint
-	CALL SegGate|3:0
-	MOV ECX, 500; 500ms
+	; [Print a string]
+	 MOV ESI, str1
+	 MOV EDI, RotPrint
+	 CALL SegGate|3:0
+	; [Delay in ms]
+	MOV ECX, 5000; 5 seconds
 	MOV EDI, RotSysDelay
 	CALL SegGate|3:0
 	MOV EAX, 0
 	RET
 
 section .data
-str1: db "A",0
+str1: db "(A)",0
 

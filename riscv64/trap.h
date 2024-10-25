@@ -77,6 +77,6 @@ enum Interrupt {
 };
 
 void trap_init();
-void ReturnTrapFromU(struct trapframe *trapframe);
+void ReturnTrapFromU();
 
 #endif // TRAP_H

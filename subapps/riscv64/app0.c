@@ -8,6 +8,8 @@ int main()
 {
 	int make_fail = 0;
 	puts("[subapp0] Yahoo");
+	sleep(1000);
+	puts("[subapp0] Yahoo 1s");
 	switch (make_fail)
 	{
 	case 1:

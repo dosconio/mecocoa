@@ -5,7 +5,10 @@ build-std-features = ["compiler-builtins-mem"]
 
 [build]
 # points to file in project root
-#target = "..."
+target = "../../configs/Rust/target/cargo-i686.json"
+
+[target.i686-unknown-none]
+#rustflags = [ "-Clink-arg=-T....ld", "-Cforce-frame-pointers=yes" ]
 
 [net]
 git-fetch-with-cli = true

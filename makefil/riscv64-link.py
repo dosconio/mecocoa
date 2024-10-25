@@ -9,13 +9,14 @@
 import os
 
 TARGET_DIR = "subapps/riscv64/"
-LINKER_OUT = "/home/ayano/_obj/mcca/riscv64/kernel.ld"
+LINKER_OUT = os.getenv("uobjpath") + "/mcca/riscv64/kernel.ld"
 
 if __name__ == '__main__':
     f = open(LINKER_OUT, mode="w")
     apps = os.listdir(TARGET_DIR)
     f.write(
 '''/* ASCII LINK-SCRIPT TAB4 LF
+** Generator: riscv64-link.py
 */
 OUTPUT_ARCH(riscv)
 ENTRY(_entry)

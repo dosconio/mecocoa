@@ -7,46 +7,57 @@
 #include "appload-riscv64.h"
 #include "trap.h"
 #include "logging.h"
+#include "process-riscv64.h"
 #include <c/ustring.h>
 
-static int app_cur, app_num;
+static int app_num;
 static uint64 *app_info_ptr;
 extern char _app_num[], // [number of apps, offsets of apps]
-	userret[], boot_stack_top[], ekernel[];
+	ekernel[];
 
+// Count finished programs. If all apps exited, shutdown.
+int finished()
+{
+	static int fin = 0;
+	if (++fin >= app_num)
+		log_panic("all apps over", 0);
+	return 0;
+}
+
+// Get user progs' infomation through pre-defined symbol in `link_app.S`
 void loader_init()
 {
-	if ((uint64)ekernel >= BASE_ADDRESS) {
+	if (_IMM(ekernel) >= BASE_ADDRESS) {
 		log_panic("kernel too large...\n", 0);
 	}
 	app_info_ptr = (uint64 *)_app_num;
-	app_cur = -1;
 	app_num = *app_info_ptr;
+	app_info_ptr++;
 }
 
 _ALIGN(4096) char user_stack[USER_STACK_SIZE];
 _ALIGN(4096) char trap_page[TRAP_PAGE_SIZE];
 
-int load_app(uint64 *info)
+int load_app(int n, uint64* info)
 {
-	uint64 start = info[0], end = info[1], length = end - start;
-	MemSet((void *)BASE_ADDRESS, 0, MAX_APP_SIZE);
-	MemAbsolute((void *)BASE_ADDRESS, (void *)start, length);// load app fixed place
+	uint64 start = info[n], end = info[n + 1], length = end - start;
+	MemSet((void*)BASE_ADDRESS + n * MAX_APP_SIZE, 0, MAX_APP_SIZE);
+	MemAbsolute((void*)BASE_ADDRESS + n * MAX_APP_SIZE, (void*)start, length);// load app fixed place
 	return length;
 }
 
-int run_next_app()
+int run_all_app()
 {
-	Letvar(trapframe, struct trapframe *, trap_page);
-	app_cur++;
-	app_info_ptr++;
-	if (app_cur >= app_num)
-		return -1;
-	uint64 length = load_app(app_info_ptr);
-	log_debug("load and run app %d, range = [%p, %p)", app_cur, *app_info_ptr, *app_info_ptr + length);
-	MemSet(trapframe, 0, 4096);
-	trapframe->epc = BASE_ADDRESS;
-	trapframe->sp = (uint64)user_stack + USER_STACK_SIZE;
-	ReturnTrapFromU(trapframe);
+	for (int i = 0; i < app_num; ++i) {
+		struct proc* p = allocproc();
+		struct trapframe* trapframe = p->trapframe;
+		load_app(i, app_info_ptr);
+		uint64 entry = BASE_ADDRESS + i * MAX_APP_SIZE;
+		log_trace("load app %d at %p", i, entry);
+		trapframe->epc = entry;
+		trapframe->sp = (uint64)p->ustack + USER_STACK_SIZE;
+		p->state = RUNNABLE;
+		//{TODO} uC LAB1 initialize new fields of proc here
+	}
 	return 0;
 }
