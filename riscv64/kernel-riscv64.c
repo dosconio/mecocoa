@@ -10,21 +10,23 @@
 #include "appload-riscv64.h"
 #include "process-riscv64.h"
 #include "kernel-riscv64.h"
+#include <c/ustring.h>
 
-
+int* this_panic(void* _serious, ...);
+int* befo_logging(void* v, ...);
 void init()
 {
-	_pref_pani = "[PANIC !]";
-	_pref_erro = "[ERROR  ]";
-	_pref_warn = "[WARN   ]";
-	_pref_info = "[INFORMA]";
-	_pref_dbug = "[DEBUG  ]";
-	_pref_trac = "[TRACE  ]";
+	_pref_pani = "[panic !]";
+	_pref_erro = "[error  ]";
+	_pref_warn = "[warn   ]";
+	_pref_info = "[inform ]";
+	_pref_dbug = "[debug  ]";
+	_pref_trac = "[trace  ]";
+	_call_serious = this_panic;
+	_befo_logging = befo_logging;
 
-
-	// clear bss
-	for (char* p = s_bss; p < e_bss; ++p)
-		*p = 0;
+	//: if add this, uniLog won't work
+	if (0) MemSet(s_bss, 0, e_bss - s_bss);// clear bss
 	// do not use threadid here
 }
 
@@ -36,7 +38,26 @@ void main()
 	trap_init();
 	timer_init();
 	run_all_app();
-	log_info("start scheduler!", 0);
+	log_info("start scheduler~");
 	scheduler();
+	log_panic("unreached!!!");
+}
+
+_TEMP void* malloc(stduint n) { return (void*)(n - n); }
+
+int* this_panic(void* _serious, ...) {
+	Letvar(serious, loglevel_t, _serious);
+	switch (serious)
+	{
+	case _LOG_PANIC:
+		shutdown();
+		break;
+	default: break;
+	}
+	return NULL;
+}
+int* befo_logging(void* v, ...) {
+	outsfmt("TID(%d) ", threadid());
+	return NULL;
 }
 

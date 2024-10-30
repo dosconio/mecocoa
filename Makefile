@@ -200,7 +200,14 @@ all: new new-r
 	@echo "Finish : All Finished"
 clean:
 	-rm -rf $(objpath)/*
+	-rm -rf /home/ayano/_obj/mcca/*
 	cd subapps/hellod/ && cargo clean
+
+dev-x86:
+	echo TODO make vscode config for x86
+
+dev-r64:
+	echo TODO make vscode config for riscv64
 
 uninstall:
 	-@sudo rm -rf /mnt/floppy

@@ -21,7 +21,8 @@ struct proc idle;
 
 int threadid()
 {
-	return curr_proc()->pid;
+	struct proc* p = curr_proc();
+	return p ? p->pid : 0;
 }
 
 struct proc* curr_proc()

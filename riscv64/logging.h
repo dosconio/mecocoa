@@ -52,39 +52,40 @@ extern void shutdown();
 
 #endif // _LOG_LEVEL_TRACE
 
-//: You need a occupier if no parameters after fmt
+#define deflog(x) Letpara(paras, fmt);printlogx(x, fmt, paras)
 
-#if !defined(USE_LOG_ERROR)
-#define log_error(fmt,...)
-#else
-#define log_error(fmt,...) printlog(_LOG_ERROR, "TID %d: " fmt, threadid(), __VA_ARGS__)
+inline static void log_error(rostr fmt, ...) {
+#if defined(USE_LOG_ERROR)
+	deflog(_LOG_ERROR);
 #endif
+}
 
-#if !defined(USE_LOG_WARN)
-#define log_warn(fmt,...)
-#else
-#define log_warn(fmt,...) printlog(_LOG_WARN, "TID %d: " fmt, threadid(), __VA_ARGS__)
+inline static void log_warn(rostr fmt, ...) {
+#if defined(USE_LOG_WARN)
+	deflog(_LOG_WARN);
 #endif
+}
 
-#if !defined(USE_LOG_INFO)
-#define log_info(fmt,...)
-#else
-#define log_info(fmt,...) printlog(_LOG_INFO, "TID %d: " fmt, threadid(), __VA_ARGS__)
+inline static void log_info(rostr fmt, ...) {
+#if defined(USE_LOG_INFO)
+	deflog(_LOG_INFO);
 #endif
+}
 
-#if !defined(USE_LOG_DEBUG)
-#define log_debug(fmt,...)
-#else
-#define log_debug(fmt,...) printlog(_LOG_DEBUG, "TID %d: " fmt, threadid(), __VA_ARGS__)
+inline static void log_debug(rostr fmt, ...) {
+#if defined(USE_LOG_DEBUG)
+	deflog(_LOG_DEBUG);
 #endif
+}
 
-#if !defined(USE_LOG_TRACE)
-#define log_trace(fmt,...)
-#else
-#define log_trace(fmt,...) printlog(_LOG_TRACE, "TID %d: " fmt, threadid(), __VA_ARGS__)
+inline static void log_trace(rostr fmt, ...) {
+#if defined(USE_LOG_TRACE)
+	deflog(_LOG_TRACE);
 #endif
+}
 
-void log_panic(const char *fmt, ...);
-#define log_panic(a,...) log_panic("TID %d: " a,threadid(),__VA_ARGS__)
+inline static void log_panic(rostr fmt, ...) {
+	deflog(_LOG_PANIC);
+}
 
 #endif

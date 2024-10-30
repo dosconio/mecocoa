@@ -75,7 +75,7 @@ sint64 get_mtime()
 	timeval_t time;
 	int err = sys_get_time(&time, 0);
 	if (err == 0) {
-		return (time.sec * 1000 + time.usec / 1000);
+		return (time.sec * 1000 + time.mic / 1000);
 	}
 	// get_time should never failed.
 	return -1;

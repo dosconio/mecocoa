@@ -13,7 +13,7 @@ ARCH = riscv64
 THIS := $(ARCH)
 OUTD = $(ubinpath)/mecocoa# Output Directory
 OUTF = $(OUTD)/mcca-$(ARCH)# Output File
-objdir=~/_obj
+objdir=$(uobjpath)
 
 KitPrefix = $(ARCH)-unknown-elf-# their rules
 CC = $(KitPrefix)gcc# contain AS
@@ -26,7 +26,7 @@ COPY = cp
 GDB = $(KitPrefix)gdb
 
 #20240504 do not use '~/' or makefile will say `doesn't match the target pattern`
-BUILDDIR = /home/ayano/_obj/mcca
+BUILDDIR = $(objdir)/mcca
 C_SRCS = $(wildcard $(THIS)/*.c)
 AS_SRCS = $(wildcard $(THIS)/*.S)
 LIB_C_SRCS = $(wildcard userkit/lib/*.c)
