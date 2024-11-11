@@ -2,7 +2,7 @@
 // Attribute: 
 // LastCheck: 20240218
 // AllAuthor: @dosconio
-// ModuTitle: Demonstration - Programming by ELF32-C++ directly
+// ModuTitle: Demonstration - ELF32-C++ x86 Bare-Metal
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 
 extern "C" void start() {
@@ -11,5 +11,5 @@ extern "C" void start() {
 	{
 		vdobf[i * 2] = "Hello World!"[i];
 	}
-	while (1);
+	while (true) {}
 }

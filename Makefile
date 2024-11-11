@@ -44,10 +44,8 @@ vmnamf = Kasaf
 bochd = E:/software/Bochs-2.7/bochsdbg.exe
 qemu = qemu-system-x86_64
 
-
-
 floppy: buildf
-	@dd if=$(objpath)/boot.fin of=$(dbgdir)/$(outf) bs=512 count=1 conv=notrunc 2>>/dev/null
+	@dd if=$(ubinpath)/boot-x86.bin of=$(dbgdir)/$(outf) bs=512 count=1 conv=notrunc 2>>/dev/null
 	-@sudo mkdir -p /mnt/floppy/
 	-@sudo mount -o loop $(dbgdir)/$(outf) /mnt/floppy/
 	-@sudo cp $(objpath)/KER.APP /mnt/floppy/KER.APP
@@ -101,7 +99,7 @@ lib:
 
 build: # Harddisk and CD version
 	#
-buildf: $(objpath)/boot.fin $(objpath)/KER.APP $(objpath)/SHL16.APP $(objpath)/SHL32.APP
+buildf: $(objpath)/KER.APP $(objpath)/SHL16.APP $(objpath)/SHL32.APP
 	@echo "Finish : Building Floppy Version."
 
 mdrivers:
@@ -116,15 +114,8 @@ mdrivers:
 	@$(cc32) ./mecocoa/memory/memoman.c    -o $(objpath)/memcpl.obj
 	@$(cc32) ./mecocoa/multask/multask.c   -o $(objpath)/task.obj
 
-
-###
-
-$(objpath)/boot.fin: $(unidir)/demo/osdev/bootstrap/bootfka.asm
-	@echo "Build  : Boot"
-	@$(asm) $< -o $@ -D_FLOPPY
-
 # Kernel
-$(objpath)/KER.APP: ./mecocoa/kernel.asm
+$(objpath)/KER.APP: ./mulmode/real16/successor-x86.asm
 	@echo "Build  : Routines of Kernel"
 	@$(asmf) ./mecocoa/routine/rout16.asm -o $(objpath)/rout16.obj
 	@$(asmf) ./mecocoa/routine/rout32.asm -o $(objpath)/rout32.obj
@@ -174,15 +165,15 @@ hellod:
 	@cd subapps/hellod/ && cargo build --release
 
 new-r: 
-	@make -f makefil/riscv64.make clean
-	@clear & make -f makefil/riscv64.make new
+	@make -f configs/makefil/riscv64.make clean
+	@clear & make -f configs/makefil/riscv64.make new
 
 newx-r: 
-	@make -f makefil/riscv64.make clean
-	@clear & make -f makefil/riscv64.make newx LOG=trace
+	@make -f configs/makefil/riscv64.make clean
+	@clear & make -f configs/makefil/riscv64.make newx LOG=trace
 dbg-r:
-	@make -f makefil/riscv64.make debug
-	@make -f makefil/riscv64.make dbgend
+	@make -f configs/makefil/riscv64.make debug
+	@make -f configs/makefil/riscv64.make dbgend
 ###
 config:
 	@echo "ULIB $(ulibpath)"

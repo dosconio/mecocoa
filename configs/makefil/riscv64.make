@@ -137,8 +137,8 @@ lib: $(LIB_C_OBJS)
 	@$(CC) $(CFLAG) -c $(ulibpath)/c/console/conformat.c -o $(BUILDDIR)/$(THIS)/inn_conformat.o
 sub: $(APP_C_OBJS)
 	@mkdir -p $(objdir)/mcca/riscv64
-	@python3 makefil/riscv64-link.py
-	@python3 makefil/riscv64-pack.py
+	@python3 configs/makefil/riscv64-link.py
+	@python3 configs/makefil/riscv64-pack.py
 new: ciallo lib sub $(OBJS)
 	@echo 'Link   : $(OUTF)'
 	@$(LD) $(LDFLAG) -T $(objdir)/mcca/$(THIS)/kernel.ld -o $(OUTF) $(OBJS) $(LIBS)

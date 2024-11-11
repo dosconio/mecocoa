@@ -12,8 +12,8 @@
 
 struct proc pool[NPROC];
 char kstack[NPROC][PAGE_SIZE];
-__attribute__((aligned(4096))) char ustack[NPROC][PAGE_SIZE];
-__attribute__((aligned(4096))) char trapframe[NPROC][PAGE_SIZE];
+_ALIGN(4096) char ustack[NPROC][PAGE_SIZE];
+_ALIGN(4096) char trapframe[NPROC][PAGE_SIZE];
 
 extern char boot_stack_top[];
 struct proc* current_proc;

@@ -35,9 +35,6 @@ void loader_init()
 	app_info_ptr++;
 }
 
-_ALIGN(4096) char user_stack[USER_STACK_SIZE];
-_ALIGN(4096) char trap_page[TRAP_PAGE_SIZE];
-
 int load_app(int n, uint64* info)
 {
 	uint64 start = info[n], end = info[n + 1], length = end - start;

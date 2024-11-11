@@ -5,3 +5,4 @@ depends/
 Cargo.lock
 subapps/hellod/target/
 link_app.S
+*.obj
