@@ -9,6 +9,8 @@ GLOBAL Dbg_Func
 GLOBAL ReturnModeProt32
 GLOBAL Routint16
 
+EXTERN ReadFileFFAT12
+
 %include "video.a"
 %include "debug.a"
 [CPU 386]
@@ -28,7 +30,7 @@ ReturnModeProt32:
 
 ; ---- ROUTINE 80H ----
 Routint16:
-	CMP AH, 2
+	CMP AH, (_r16_prints-_r16_table)/2
 	JAE _r16__none
 	MOVZX BX, AH
 	SHL BX, 1
@@ -38,6 +40,7 @@ _r16__none:
 _r16_table:
 	DW _r16_prints
 	DW _r16_printi32
+	DW _r16_floloadfat
 ;      ---- 00 Print String without attribute ---- << SI
 _r16_prints:
 	PUSHAD
@@ -49,7 +52,7 @@ _r16_prints:
 	POPAD
 	IRET
 _r16_printi32:
-;      ---- 00 Print Integer u32 without attribute ---- << EDX
+;      ---- 01 Print Integer u32 without attribute ---- << EDX
 	PUSHAD
 	PUSH ES
 	MOV AX, 0xB800
@@ -63,6 +66,25 @@ _r16_printi32:
 	SHR EAX, 1
 	ADD AX,8
 	ConCursor AX
+	POP ES
+	POPAD
+	IRET
+_r16_floloadfat:
+;      ---- 02 Load File from FAT12 Floppy ---- << DS:SI(Filename-addr), ES:DI(Dest-addr)
+	PUSHAD
+	PUSH ES
+	PUSH DS
+	MOV EAX, EDI
+	SHR EAX, 4
+	MOV ES, AX
+	XOR AX, AX
+	MOV DS, AX
+	PUSH 0x800; Mecocoa Buffer
+	PUSH SI
+	PUSH WORD 0
+	CALL ReadFileFFAT12
+	ADD SP, 2*3
+	POP DS
 	POP ES
 	POPAD
 	IRET

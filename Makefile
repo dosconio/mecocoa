@@ -11,7 +11,7 @@
 	init0 build new-r newx-r dbg-r #<- Harddisk Version
 
 dbgdir = $(ubinpath)/mecocoa
-dstdir = E:/PROJ/SVGN/_bin/mecocoa
+dstdir = E:/_bin/mecocoa
 unidir = $(ulibpath)/..
 libcdir = $(ulibpath)/c
 libadir = $(ulibpath)/asm
@@ -128,7 +128,7 @@ $(objpath)/SHL16.APP: ./coshell/shell16/shell16.c
 	@echo "Build  : Shell16"
 	@$(ccc) $< -o $(objpath)/shell16.obj -m16
 	@$(link) -s -T ./coshell/shell16/shell16.ld -e main -m elf_i386 -o $@ \
-		$(objpath)/shell16.obj $(Shell16Ext)
+		$(objpath)/shell16.obj $(Shell16Ext) $(InstExt)
 
 $(objpath)/SHL32.APP: ./coshell/shell32/shell32.cpp
 	@echo "Build  : Shell32"
@@ -192,7 +192,7 @@ all: new new-r
 clean:
 	-rm -rf $(objpath)/*
 	-rm -rf /home/ayano/_obj/mcca/*
-	cd subapps/hellod/ && cargo clean
+	#cd subapps/hellod/ && cargo clean
 
 dev-x86:
 	echo TODO make vscode config for x86

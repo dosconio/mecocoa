@@ -22,7 +22,7 @@ her-note: false
 | 00004000~0000407F                     | 00            | resident              | TSS for Shell Real-16                              |
 | 00004080~000040FF                     | 00            | resident              | TSS for Shell Prot-32                              |
 | 00004100~00004FFF                     | 01 (480 GDTE) | resident              | GDT                                                |
-| 00005000~0000FFFF                     | 11            | resident              | Kernel (Real-16 + Flap-32)                         |
+| 00004000~0000FFFF                     | 11            | resident              | Kernel (Real-16 + Flap-32)                         |
 | >00005000~000057FF                    |               |                       | Kernel.Data                                        |
 | >00005800~00007BFF                    |               |                       | Kernel.Code                                        |
 | >00008000~00009FFF                    |               |                       | Shell16.Data                                       |

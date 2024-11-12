@@ -12,7 +12,6 @@
 %include "mecocoa/kernel.inc"
 ; ---- ---- {Option Switch: 1 or others} ---- ----
 
-EXTERN ReadFileFFAT12
 EXTERN LoadFileMELF
 EXTERN FloppyMotorOff
 EXTERN PAGE_INIT
@@ -67,12 +66,11 @@ HerMain:; assure CS,DS,ES,SS equal zero
 	CALL MemAllocSuperv
 	CMP EAX, 0x8000+0x1000
 	JNZ Endo_Kernel_Real16
-	PUSH WORD ADDR_KERNELBF; Buffer
-	PUSH WORD str_shell16;{TODO} if not found
+	; Load File
+	loadfat ADDR_STATICLD, str_shell16
 	PUSH WORD ADDR_STATICLD
-	CALL ReadFileFFAT12
-	CALL LoadFileMELF; make use of the stack
-	ADD SP, 6
+	CALL LoadFileMELF
+	ADD SP, 2
 	CALL AX
 	POP DS
 	; Shell Real-16 Return then shutdown
@@ -81,55 +79,11 @@ Endo_Kernel_Real16:
 	DbgStop
 ModeProt32:
 ;{TEMP} Load Shell-32 here, for there are no Read Floppy Code in 32-bit
-	PUSH ES
-	MOV AX, 0x1000
-	MOV ES, AX
-	PUSH WORD 0; ES:Buffer
-	PUSH WORD str_shell32;{TODO} if not found
-	PUSH WORD 0x2000; ES
-	CALL ReadFileFFAT12
-	ADD SP, 6
-	POP ES
-;{TEMP} Load Hello-A 0x32000
-	PUSH ES
-	MOV AX, 0x3000
-	MOV ES, AX
-	PUSH WORD 0;
-	PUSH WORD str_helloa
-	PUSH WORD 0x2000;
-	CALL ReadFileFFAT12
-	ADD SP, 6
-	POP ES
-;{TEMP} Load Hello-B 0x36000
-	PUSH ES
-	MOV AX, 0x3000
-	MOV ES, AX
-	PUSH WORD 0;
-	PUSH WORD str_hellob
-	PUSH WORD 0x6000;
-	CALL ReadFileFFAT12
-	ADD SP, 6
-	POP ES
-;{TEMP} Load Hello-C 0x3A000
-	PUSH ES
-	MOV AX, 0x3000
-	MOV ES, AX
-	PUSH WORD 0;
-	PUSH WORD str_helloc
-	PUSH WORD 0xA000;
-	CALL ReadFileFFAT12
-	ADD SP, 6
-	POP ES
-;{TEMP} Load Hello-D 0x44000 (problem!)
-	PUSH ES
-	MOV AX, 0x4000
-	MOV ES, AX
-	PUSH WORD 0;{TEMP} Buffer
-	PUSH WORD str_hellod
-	PUSH WORD 0x4000;
-	CALL ReadFileFFAT12
-	ADD SP, 6
-	POP ES
+	loadfat 0x12000, str_shell32
+	loadfat 0x32000, str_helloa
+	loadfat 0x36000, str_hellob
+	loadfat 0x3A000, str_helloc
+	loadfat 0x44000, str_hellod
 CALL FloppyMotorOff; ---- NEED NOT Floppy SINCE NOW ----
 ; Save state of Real-16 Shell and Enter Prot-32 Paged Flat Mode,
 ;     then Load and Run Shell-Prot32. Will not return in this procedure.
@@ -332,11 +286,8 @@ section .data
 		DB 10,13,0
 	str_quit_32bit:
 		DB "Quit 32-bit protected mode...",10,13,0
-
 	msg_spaces:
 		DB "        ",0
-
-
 	msg_error:
 		DB "Error!",10,13,0
 	;

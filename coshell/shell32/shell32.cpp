@@ -14,6 +14,7 @@
 word tasks[1 + 1 + 4];
 
 int main(void) {
+	return 0x20021104;
 	init(true);
 	outsfmt("Ciallo, " CON_DarkIoWhite "\b\n%d-%d-%d" CON_None "!\n\r", 2024, 5, 4);
 	int crttask = 0;

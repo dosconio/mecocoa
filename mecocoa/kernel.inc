@@ -22,6 +22,13 @@
 	CALL SegGate:0
 %endmacro
 
+%macro loadfat 2; (ES:DI, DS:SI)
+	MOV AH, 2
+	MOV EDI, %1
+	MOV SI, %2
+	INT 80H
+%endmacro
+
 %macro rcpgates 0-1 EDI; kernel copy gates
 	%%lup:
 	MOV [%1], EAX

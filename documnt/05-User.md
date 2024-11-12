@@ -3,6 +3,25 @@ dg-publish: true
 her-note: false
 ---
 
+| Name | Language |
+| ---- | ---- |
+| helloa | ANY [^1] |
+| hellob | C |
+| helloc | C++ |
+| hellod | Rust |
+|  |  |
+|  |  |
+|  |  |
+| hellow | Magice |
+|  |  |
+
+RISCV64:
+- Address `0x80400000`
+
+
+### Program Format
+
+
 current: make use of ELF. The below are outdated.
 
 ---
@@ -83,3 +102,6 @@ This is the old version.
 
 If length of a Code/Data segment is greater than 0x1_00000, the real length will be the times of 4K.
 
+<!-- -->
+
+[^1]:  "ANY" is AASM or NASM or YASM.
