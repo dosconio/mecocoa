@@ -36,7 +36,8 @@ void outtxt(const char* str, dword len)
 	word posi = curget()*2;
 	byte chr;
 
-	while ((len--) && (chr = (byte)*str++)) {
+	for0(i, len) {
+		chr = (byte)*str++;
 		switch (chr)
 		{
 		case (byte)'\xFF':// 20240217-ALICE's FF Method
@@ -72,6 +73,7 @@ void outtxt(const char* str, dword len)
 			posi -= _BytesPerLine;
 		}
 	}
-	curset(posi/2);
+	curset(posi / 2);
+	_crt_out_cnt += len;
 }
 

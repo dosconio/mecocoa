@@ -10,8 +10,9 @@
 void outtxt(const char* str, dword len)
 {
 	char ch;
-	while (len-- && (ch = *str++))
-		sysoutc(ch);
+	for0 (i, len)
+		sysoutc(*str++);
+	_crt_out_cnt += len;
 }
 
 void curset(word posi) {}
