@@ -1,0 +1,5 @@
+--dosconio, 20250102
+	Cancel Original Mixed Mode "real16 --call-> flap32 --ret-> real16 --> shut_off" . 
+	Now this is only a DOS.
+	In fact, it is easy to transfer to flap32 in real16.
+	she is going to realize it.

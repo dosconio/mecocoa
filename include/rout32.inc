@@ -1,3 +1,0 @@
-EXTERN _MccaLoadGDT
-EXTERN _MccaAlocGDT
-EXTERN RoutineGate

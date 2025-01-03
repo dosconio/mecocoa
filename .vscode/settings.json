@@ -1,0 +1,12 @@
+{
+	"files.associations": {
+		"*.A": "assembly",
+		"*.a": "nasm",
+		"*.asm": "nasm",
+		"*.make": "makefile",
+		"appload-riscv64.h": "c",
+		"kernel-riscv64.h": "c",
+		"logging.h": "c",
+		"trap.h": "c"
+	}
+}

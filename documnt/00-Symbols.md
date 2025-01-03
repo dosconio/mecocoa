@@ -4,10 +4,19 @@ her-note: false
 ---
 
 
+
+
 # Common
 
-# x86
+`board-architecture-mode`
 
 
-# r64
+# x86 (i686)
+
+
+# x64 (amd64)
+
+# ac7 (armv7 cortex-A7)
+
+# r64 (riscv-64)
 

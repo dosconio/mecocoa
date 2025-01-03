@@ -8,8 +8,7 @@
             ],
             "defines": [
                 "_MCCA",
-                // "_MCCAx86",
-                // "_ARC_x86=5",
+                "_ARC_x86=5"
             ],
             "compilerPath": "/usr/bin/gcc",
             "cStandard": "c99",
