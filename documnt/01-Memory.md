@@ -9,7 +9,7 @@ her-note: false
 | `00000000`~`000003FF`                 | Kept                     |
 | `00000400`~`000004FF`                 | BIOS Data Area           |
 | `00000500`~`000005FF`                 | KASHA Data Area          |
-| `00000600`~`000007FF`                 | Kernel Stack (DF=1)      |
+| `00000600`~`000007FF`                 | GDT                      |
 | `00000800`~`00000FFF`                 | IVT Page (Selectors)     |
 | ***Kernel Area***                     |                          |
 | `00001000`~`00007BFF`                 | area kernel              |
@@ -55,25 +55,21 @@ A line stands 16k×2×16=512k=pow2(19)=0x80000;
 
 Address: 0x500 ~ 0x5FF
 
-| Offset   | Object                         | Initialization | Description                   |
-| -------- | ------------------------------ | -------------- | ----------------------------- |
-| 00 word  | IP of Prot-32 Entry            |                |                               |
-| 02 word  | CS of Prot-32 Entry            |                |                               |
-| 04 word  | GDT32 Length                   |                |                               |
-| 06 dword | GDT32 Address                  |                |                               |
-| 0A word  | IVT32 Length                   |                |                               |
-| 0C dword | IVT32 Address                  |                |                               |
-| 10 qword | zero                           |                |                               |
-| 18 dword | CurrentScreenMode              |                |                               |
-| 1C dword | ConsoleForeColor (BackColor)   |                |                               |
-| 20 dowrd | ConsoleDefaultColor (PenColor) |                |                               |
-| 24 dword | Count : Rotate Seconds         |                | 0->FFFFFFFF->0->...           |
-| 28 word  | Count: Rotate Millisecond      |                |                               |
-| 2A word  | Simple Kernel Memory Pointer   | 0x8000         | 0x0000 for full               |
-| 2C dword | Simple User Memory Pointer     | 0x00010000     | 0x00000000 for full           |
-| 30 dword | Global Keyword Queue           |                | putptr+getptr+data            |
-| 34 dword | ReadyFlag1                     |                | MSB `31:SwitchTaskReady,` LSB |
-| 38 dword | TasksAvailableSelectorsPointer |                | First One is the numbers      |
+| Offset   | Object                         | Initialization | Description              |
+| -------- | ------------------------------ | -------------- | ------------------------ |
+| 00 word  | IP of Prot-32 Entry            |                |                          |
+| 02 word  | CS of Prot-32 Entry            |                |                          |
+| 04 word  | GDT32 Length                   |                |                          |
+| 06 dword | GDT32 Address                  |                |                          |
+| 0A word  | IVT32 Length                   |                |                          |
+| 0C dword | IVT32 Address                  |                |                          |
+| 10 qword | zero                           |                |                          |
+| 18 dword | CurrentScreenMode              |                |                          |
+| 1C dword | ConsoleForeColor (BackColor)   |                |                          |
+| 20 dowrd | ConsoleDefaultColor (PenColor) |                |                          |
+| 24 dword | Count : Rotate Seconds         |                | 0->FFFFFFFF->0->...      |
+| 28 dword | Count: Rotate Millisecond      |                |                          |
+
 
 ### Global Segment
 

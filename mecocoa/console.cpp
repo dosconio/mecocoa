@@ -26,7 +26,7 @@ void scrrol(word lines)
 		*dest = 0x0720;//{TEMP} the new lines are of 'white on black' color
 }
 
-void outtxt(const char* str, dword len) {
+void outtxt(const char* str, stduint len) {
 	static byte attr = 0;
 	static byte attr_enable = 0;
 

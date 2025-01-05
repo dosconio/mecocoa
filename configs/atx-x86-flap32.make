@@ -22,13 +22,16 @@ ker_obj=$(uobjpath)/$(arch).obj
 
 cppfile=$(wildcard mecocoa/*.cpp)
 cppobjs=$(patsubst %cpp, %o, $(cppfile))
+
+
 #@ld $(ker_obj) $(uobjpath)/mcca-$(arch)/* -s -T prehost/$(arch)/$(arch).ld -L$(ubinpath) -lm32d -m elf_i386 -o $(ubinpath)/$(arch).elf
+## -fno-exceptions to avoid __Unwind_Resume
+
 build: clean $(cppobjs)
-	@$(CX) prehost/$(arch)/$(arch).cpp -o $(ker_obj)
+	@$(CX) prehost/$(arch)/$(arch).cpp -o $(ker_obj) -fno-exceptions
 	# after-host...
-	@g++ $(ker_obj) $(uobjpath)/mcca-$(arch)/* -fno-pic -nostartfiles \
-		-T prehost/$(arch)/$(arch).ld -L$(ubinpath) -lm32d -m32 -lstdc++ -static \
-		-o $(ubinpath)/$(arch).elf
+	@g++ -o $(ubinpath)/$(arch).elf $(ker_obj) $(uobjpath)/mcca-$(arch)/* -fno-pic \
+		-T prehost/$(arch)/$(arch).ld -L$(ubinpath) -static -lm32d -m32 -lstdc++ -nostartfiles
 	@dd if=/dev/zero of=$(outs) bs=512 count=2880 2>>/dev/null
 	@dd if=$(boot)   of=$(outs) bs=512 count=1 conv=notrunc 2>>/dev/null
 	@sudo mount -o loop $(outs) $(mnts)
@@ -41,7 +44,7 @@ build: clean $(cppobjs)
 
 run: build
 	sudo $(qemu) -drive format=raw,file=$(outs),if=floppy \
-		-boot order=a
+		-boot order=a -m 32
 
 clean:
 	@-rm $(uobjpath)/mcca-$(arch)/*
