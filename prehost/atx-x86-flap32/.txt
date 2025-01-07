@@ -1,2 +1,4 @@
-[list]
-atx-x86-flap32.cpp|->	KEX.APP 
+[order]
+unisym.boot.x86
+atx-x86-flap32.loader.cpp|->	KEX.APP 
+atx-x86-flap32.cpp|-------->	kernel 

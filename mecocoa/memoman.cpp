@@ -35,16 +35,26 @@ _TEMP void* Memory::physical_allocate(usize siz) {
 
 extern "C" {
 	// linear allocator
+	stduint strlen(const char* ptr) { return StrLength(ptr); }
 	void* malloc(size_t size) {
 		Console.FormatShow("malloc(%[u])\n\r", size);
+		return nullptr;
 	}
 	void* calloc(size_t nmemb, size_t size) {
 		Console.FormatShow("calloc(%[u])\n\r", nmemb * size);
+		return nullptr;
 	}
 	void free(void* ptr) {
 		Console.FormatShow("free(0x%[32H])\n\r", ptr);
 	}
 	void memf(void* ptr) { free(ptr); }
+	void* memset(void* str, int c, size_t n) {
+		return MemSet(str, c, n);
+	}
 }
 
 #endif
+
+/*
+delete (void*) new int;
+*/

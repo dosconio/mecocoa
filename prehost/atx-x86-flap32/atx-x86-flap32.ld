@@ -9,11 +9,25 @@ SECTIONS
 {
 	. = 0x1E00;
 	.text : {*(.text)}
-	.data : {*(.data)}
+	.data : {
+		*(.data)
+		*(.note.gnu.build-id)
+		*(.got)
+		*(.init_array)
+		*(.eh_frame)
+	}
 	.bss : {
-		_BSS_ENTO = .;
+		BSS_ENTO = .;
 		*(.bss)
-		_BSS_ENDO = .;
+		BSS_ENDO = .;
 	}
 	.rodata : {*(.rodata)}
+
+	/* Remove information from the compiler libraries */
+	/DISCARD/ :
+	{
+		libc.a ( * )
+		libm.a ( * )
+		libgcc.a ( * )
+	}
 }

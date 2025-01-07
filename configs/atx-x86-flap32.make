@@ -1,6 +1,5 @@
 # ASCII Makefile TAB4 LF
-# Attribute: Ubuntu(64)
-# LastCheck: 20240320
+# Attribute: Ubuntu(64) Shell(Bash)
 # AllAuthor: @dosconio
 # ModuTitle: Build for Mecocoa
 # Copyright: Dosconio Mecocoa, BCD License Version 3
@@ -12,45 +11,49 @@ dstdir=E:/_bin/mecocoa
 outs=$(ubinpath)/mecocoa/$(iden)
 mnts=/mnt/floppy
 arch=atx-x86-flap32
+flag=-D_MCCA=0x8632 -D_ARC_x86=5
 
 qemu=qemu-system-x86_64
 bochd=E:/software/Bochs-2.7/bochsdbg.exe
 
-CX=g++ -I$(uincpath) -c -D_MCCA -D_ARC_x86=5 -m32 -fleading-underscore -fno-pic -frtti -std=c++2a
+CXF=-fno-rtti -fno-exceptions -fno-unwind-tables -static -nostdlib#-nodefaultlibs #
+CX=g++ -I$(uincpath) -c $(flag) -m32 $(CXF) -std=c++2a -Wno-builtin-declaration-mismatch
 
-ker_obj=$(uobjpath)/$(arch).obj 
+ker_mod=$(uobjpath)/mcca-$(arch)/*
 
 cppfile=$(wildcard mecocoa/*.cpp)
 cppobjs=$(patsubst %cpp, %o, $(cppfile))
-
-
-#@ld $(ker_obj) $(uobjpath)/mcca-$(arch)/* -s -T prehost/$(arch)/$(arch).ld -L$(ubinpath) -lm32d -m elf_i386 -o $(ubinpath)/$(arch).elf
-## -fno-exceptions to avoid __Unwind_Resume
+sudokey=k
 
 build: clean $(cppobjs)
-	@$(CX) prehost/$(arch)/$(arch).cpp -o $(ker_obj) -fno-exceptions
-	# after-host...
-	@g++ -o $(ubinpath)/$(arch).elf $(ker_obj) $(uobjpath)/mcca-$(arch)/* -fno-pic \
-		-T prehost/$(arch)/$(arch).ld -L$(ubinpath) -static -lm32d -m32 -lstdc++ -nostartfiles
+	@echo "MK mecocoa $(arch)"
+	g++ -I$(uincpath) $(flag) -m32 $(ker_mod) prehost/$(arch)/$(arch).loader.cpp -o $(ubinpath)/$(arch).elf -L$(ubinpath) -lm32d $(CXF) \
+		-T prehost/$(arch)/$(arch).ld  \
+		-nostartfiles -Os
+	strip --strip-all $(ubinpath)/$(arch).elf
+	#{TODO} main kernel here
 	@dd if=/dev/zero of=$(outs) bs=512 count=2880 2>>/dev/null
 	@dd if=$(boot)   of=$(outs) bs=512 count=1 conv=notrunc 2>>/dev/null
-	@sudo mount -o loop $(outs) $(mnts)
-	@sudo cp $(ubinpath)/$(arch).elf $(mnts)/KEX.OBJ
-	@sudo umount $(mnts)
+	@echo $(sudokey) | sudo mount -o loop $(outs) $(mnts)
+	@echo $(sudokey) | sudo cp $(ubinpath)/$(arch).elf $(mnts)/KEX.OBJ
+	@echo $(sudokey) | sudo umount $(mnts)
 	@perl configs/$(arch).bochsdbg.pl > $(ubinpath)/mecocoa/bochsrc.bxrc
 	@echo
-	@echo "You can now debug in bochs with the following command:"
+	@echo "You can now debug in bochs with the command:"
 	@echo $(bochd) -f $(dstdir)/bochsrc.bxrc
 
 run: build
-	sudo $(qemu) -drive format=raw,file=$(outs),if=floppy \
+	@sudo $(qemu) \
+		-drive format=raw,file=$(outs),if=floppy \
+		-drive file=$(ubinpath)/fixed.vhd,format=raw \
 		-boot order=a -m 32
 
 clean:
-	@-rm $(uobjpath)/mcca-$(arch)/*
+	@clear
+	@-rm $(uobjpath)/mcca-$(arch)/* 1>/dev/null
 
 %.o: %.cpp
 	@mkdir $(uobjpath)/mcca-$(arch) -p
-	@echo "CX $(<)"
-	@$(CX) $< -o $(uobjpath)/mcca-$(arch)/$(notdir $@) || ret 1 "!! Panic When: $(CC) $(attr) -c $< -o $(dest_obj)/$(cplpref)$(notdir $@)"
+	@echo "CX $(notdir $<)"
+	@$(CX) $< -o $(uobjpath)/mcca-$(arch)/$(notdir $@) -Os
 

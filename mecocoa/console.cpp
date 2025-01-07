@@ -38,8 +38,9 @@ void outtxt(const char* str, stduint len) {
 		switch (chr)
 		{
 		case (byte)'\xFF':// 20240217-ALICE's FF Method
-			if (len)
-				attr = *str++, attr_enable = (attr != (byte)'\xFF'), len--;
+			attr = *str++;
+			attr_enable = (attr != (byte)'\xFF');
+			_LIMIT--;
 			break;
 		case '\r':
 			posi -= posi % _BytesPerLine; //= posi / _BytesPerLine * _BytesPerLine;
