@@ -5,18 +5,17 @@
 // ModuTitle: Demonstration - ELF32-C++ x86 Bare-Metal
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 #define _STYLE_RUST
-#include <stddef.h>
+#define _DEBUG
 #include <new>
-#include <c/stdinc.h>
 #include <c/consio.h>
 #include <c/cpuid.h>
 #include <c/graphic/color.h>
 #include <c/format/FAT12.h>
 #include <c/format/ELF.h>
+#include <c/storage/harddisk.h>
 #include <c/datime.h>
 #include <c/proctrl/x86/x86.h>
 #include <cpp/string>
-#include <stdnoreturn.h>
 #include "../../include/memoman.hpp"
 
 #include "../../include/atx-x86-flap32.hpp"
@@ -55,34 +54,38 @@ void temp_init() {
 	new (&ker_buf) String(_buf, byteof(_buf));
 	mecocoa_global = (mecocoa_global_t*)0x500;
 	//
-	_physical_allocate = Memory::physical_allocate;
+	_logstyle = _LOG_STYLE_NONE;
+	_pref_info = "[Mecocoa] ";
 }
 
+statin void _start_assert() {
+	if (byteof(mecocoa_global_t) > 0x100) {
+		Console.FormatShow("Mcc Globl: %d bytes over size\n\r", byteof(mecocoa_global_t));
+		loop;
+	}
+}
 
 _sign_entry() {
 	__asm("movl $0x1E00, %esp");// mov esp, 0x1E00; set stack
 	clear_bss();
 	temp_init();
+	_start_assert();
+
+	// Set Console Style
 	Console.FormatShow("\xFF\x07");
+
+	// Show CPU Info
 	Console.FormatShow("CPU Brand: %s\n\r", text_brand());
 
-	// Check Memory size and update allocator
-	Console.FormatShow("Mem Avail: %s\n\r", text_memavail());
-	Console.FormatShow("Mcc Globl: %d (0x%x/0x100) bytes\n\r",
-		byteof(mecocoa_global_t), byteof(mecocoa_global_t));
-
-	// Read a Kernel.Elf (~>30KB)
-	__asm("push %ecx");
-	__asm("push %ebx");
-	__asm("mov $0x100000, %ebx");
-	__asm("mov $0, %eax");
-	__asm("mov $1, %ecx");
-	__asm("call HdiskLBA28Load");
-	__asm("pop %ebx");
-	__asm("pop %ecx");
-
-	for0p(byte, p, 0x100000, 0x200) Console.FormatShow("%[8H] ", *p);
-	//{TODO} HDISK + FAT + ELF
+	// Read Kernel.Elf (~>30KB)
+	//{TODO FAT for HDISK} HDISK + FAT + ELF
+	void (*entry_kernel)();
+	printlog(_LOG_INFO, "Loading Kernel...");
+	Harddisk_t hdisk(Harddisk_t::HarddiskType::LBA28);
+	for0(i, 128) hdisk.Read(i, (void*)(0x100000 + 512 * i));// 64KB
+	ELF32_LoadExecFromMemory((void*)0x100000, (void**)&entry_kernel);
+	printlog(_LOG_INFO, "Loading Kernel from %[32H]", entry_kernel);
+	entry_kernel();
 
 	__asm("cli \n hlt");
 }

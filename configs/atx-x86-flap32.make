@@ -26,16 +26,22 @@ cppobjs=$(patsubst %cpp, %o, $(cppfile))
 sudokey=k
 
 build: clean $(cppobjs)
+	@echo "MK mecocoa $(arch) loader"
+	g++ -I$(uincpath) $(flag) -m32 $(ker_mod) prehost/$(arch)/$(arch).loader.cpp -o $(ubinpath)/$(arch).loader.elf -L$(ubinpath) -lm32d $(CXF) \
+		-T prehost/$(arch)/$(arch).loader.ld  \
+		-nostartfiles -Os
+	strip --strip-all $(ubinpath)/$(arch).loader.elf
 	@echo "MK mecocoa $(arch)"
-	g++ -I$(uincpath) $(flag) -m32 $(ker_mod) prehost/$(arch)/$(arch).loader.cpp -o $(ubinpath)/$(arch).elf -L$(ubinpath) -lm32d $(CXF) \
+	g++ -I$(uincpath) $(flag) -m32 $(ker_mod) prehost/$(arch)/$(arch).cpp -o $(ubinpath)/$(arch).elf -L$(ubinpath) -lm32d $(CXF) \
 		-T prehost/$(arch)/$(arch).ld  \
 		-nostartfiles -Os
 	strip --strip-all $(ubinpath)/$(arch).elf
+	ffset $(ubinpath)/fixed.vhd $(ubinpath)/$(arch).elf 0
 	#{TODO} main kernel here
 	@dd if=/dev/zero of=$(outs) bs=512 count=2880 2>>/dev/null
 	@dd if=$(boot)   of=$(outs) bs=512 count=1 conv=notrunc 2>>/dev/null
 	@echo $(sudokey) | sudo mount -o loop $(outs) $(mnts)
-	@echo $(sudokey) | sudo cp $(ubinpath)/$(arch).elf $(mnts)/KEX.OBJ
+	@echo $(sudokey) | sudo cp $(ubinpath)/$(arch).loader.elf $(mnts)/KEX.OBJ
 	@echo $(sudokey) | sudo umount $(mnts)
 	@perl configs/$(arch).bochsdbg.pl > $(ubinpath)/mecocoa/bochsrc.bxrc
 	@echo

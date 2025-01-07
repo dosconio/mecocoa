@@ -14,47 +14,16 @@ her-note: false
 - **architecture**: Intel-x86(586+), RISC-V-64
 
 
-## 00-Components
+**Architecture** : `board-architecture-mode`
 
-A module can exist as multi-language versions, like `.h&.inc`, or `.c&.cpp&.rs`
+CISC
+- `x86` Intel x86
+- `x64` AMD64
 
-| Program   | Format  | Environment    | Description |
-| --------- | ------- | -------------- | ----------- |
-| USYM BOOT | FLAT A  | 386+           |             |
-| Kernel    | ELF A+C | Real16->Flap32 |             |
-| Shell16   | ELF C   | Real-16        |             |
-| Shell32   | ELF C++ | Flap-32        | (to COTLAB) |
-
-| Root Folder | Description                                    |
-| ----------- | ---------------------------------------------- |
-| cocheck     |                                                |
-| coshell     |                                                |
-| depends     | Dependence besides [UNISYM](http://unisym.org) |
-| include     |                                                |
-| mecocoa     |                                                |
-| rsource     |                                                |
-| userkit     |                                                |
-| configs     |                                                |
-| demonst     |                                                |
-| documnt     |                                                |
-| license     |                                                |
-| subapps     |                                                |
-
-## [01-Memory](documnt/01-Memory.md) 
-
-## [02-Timelogic](documnt/02-Timelogic.md)
-
-## [03-Demonstrations](documnt/03-Demonstrations.md) 
-
-## [04-Routines](documnt/04-Routines.md)
-
-## [05-User](documnt/05-User.md)
-
-## 06-Glossary
-
-### Architecture
-
-- `x86`
+RISC
 - `r64` RISC-V64
+- `ac7` ARMv7 Cortex-A7
+
+MISC
 - `m64` *kept for Dinah* 
 
