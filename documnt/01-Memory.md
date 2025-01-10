@@ -13,8 +13,8 @@ her-note: false
 | `00000800`~`00000FFF`                 | IVT Page (Selectors)       |
 | ***Kernel Area***                     |                            |
 | `00001000`~`00007BFF`                 | kernel loader / area basic |
-| `00007C00`~`00007DFF`                 | bootstrap kept             |
-| `00007E00`~`0007FFFF`                 | area basic                 |
+| `00007000`~`00007FFF`                 | stack                      |
+| `00008000`~`0007FFFF`                 | area basic / kernel        |
 | `00080000`~`0009FFFF`                 | Extended BIOS Data Area    |
 | ***Upper Reflect Area*** (Over 640KB) |                            |
 | `000A0000`~`000BFFFF`                 | Video Display Memory       |
@@ -28,28 +28,6 @@ her-note: false
 $Least Size = area_0 + area_1 = 0x06C00 + 0x78200 = 0x7E000$
 
 so 1M physical memory required at least.  
-
-### Memory Bitmap
-
-{TODO} 重新计算
-
-```
-00000000 FF 00 00 00-00 00 00 00=00 00 00 00-00 00 00 00
-00080000 FF FF FF FF-FF FF FF FF=FF FF FF FF-FF FF FF FF
-00100000 00 00 00 00-00 00 00 00=00 00 00 00-00 00 00 00
-00180000 00 00 00 00-00 00 00 00=00 00 00 00-00 00 00 00
-00200000 00 00 00 00-00 00 00 00=00 00 00 00-00 00 00 00
-00280000 00 00 00 00-00 00 00 00=00 00 00 00-00 00 00 00
-00300000 00 00 00 00-00 00 00 00=00 00 00 00-00 00 00 00
-00380000 00 00 00 00-00 00 00 00=00 00 00 00-00 00 00 00
-00400000 FF FF FF FF... 
-```
-
-A digit stands 4×4k=16k(0x4000);
-
-A line stands 16k×2×16=512k=pow2(19)=0x80000;
-
-
 
 ### Variables
 

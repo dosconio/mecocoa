@@ -1,10 +1,12 @@
-#include <c/stdinc.h>
-#include "../../include/console.h"
-#include "../../userkit/inc/ukitinc.h"
+//#include <c/stdinc.h>
+//#include "../../include/console.h"
+#include "../../accmlib/inc/aaaaa.h"
 
 int main()
 {
-	sysouts("(B)");
-	sysdelay(5000);
+	while (1) {
+		sysouts("B");
+		sysdelay(500000);// 0.5s
+	}
 }
 

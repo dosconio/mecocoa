@@ -3,25 +3,28 @@
 ;
 ; subprogram of Shell in 32-bit protected mode
 
-%include "mecocoa/kernel.inc"
+;%include "mecocoa/kernel.inc"
 
 [BITS 32]
-EXTERN _entry
-GLOBAL _main
+GLOBAL main
 
 section .text
-_main:
-	; [Print a string]
-	 MOV ESI, str1
-	 MOV EDI, RotPrint
-	 CALL SegGate|3:0
-	; [Delay in ms]
-	MOV ECX, 5000; 5 seconds
-	MOV EDI, RotSysDelay
-	CALL SegGate|3:0
-	MOV EAX, 0
-	RET
+main:
+	; [Print Char]
+	MOV DWORD[0x500], 0x00
+	MOV DWORD[0x504], 'A'
+	CALL 8*3|3:0
+	; [Delay 1000ms]
+	MOV EAX, DWORD[0x518]
+	MOV [tmp], EAX
+	loops:
+	MOV EAX, DWORD[0x518]
+	CMP EAX, [tmp]
+	JZ loops
+		JMP main
+MOV EAX, 0
+RET
 
 section .data
-str1: db "(A)",0
+tmp: dd 0
 

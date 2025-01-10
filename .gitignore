@@ -1,4 +1,4 @@
 .obsidian/
 Cargo.lock
 subapps/hellod/target/
-
+*.o

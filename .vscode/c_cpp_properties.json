@@ -7,7 +7,7 @@
                 "${workspaceFolder}/**"
             ],
             "defines": [
-                "_MCCA",
+                "_MCCA=0x8632",
                 "_ARC_x86=5"
             ],
             "compilerPath": "/usr/bin/gcc",
