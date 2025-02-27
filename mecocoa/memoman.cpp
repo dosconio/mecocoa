@@ -52,9 +52,11 @@ void* Memory::physical_allocate(usize siz) {
 	else if (usize(p_ext) + siz <= 0x00100000 + Memory::areax_size) {
 		void* ret = p_ext;
 		p_ext += siz;
+		if (opt_info) printlog(_LOG_INFO, "malloc_hig(0x%[32H], %[u])", ret, siz);
 		//{} Pag-map
 		return ret;
 	}
+	//{} try swap
 	return nullptr;
 }
 
@@ -96,7 +98,7 @@ _TEMP void page_init() {
 	__asm("or   $0x80000000, %eax\n");// enable paging
 	__asm("movl %eax, %cr0\n");
 	rostr test_page = (rostr)"\xFF\x70[Mecocoa]\xFF\x02 Paging Test OK!\xFF\x07" + 0x80000000;
-	if (opt_test) Console.FormatShow("%s\n\r", test_page);
+	if (opt_test) Console.OutFormat("%s\n\r", test_page);
 }
 
 // ----
@@ -105,15 +107,15 @@ extern "C" {
 	// linear allocator
 	stduint strlen(const char* ptr) { return StrLength(ptr); }
 	void* malloc(size_t size) {
-		Console.FormatShow("malloc(%[u])\n\r", size);
+		Console.OutFormat("malloc(%[u])\n\r", size);
 		return nullptr;
 	}
 	void* calloc(size_t nmemb, size_t size) {
-		Console.FormatShow("calloc(%[u])\n\r", nmemb * size);
+		Console.OutFormat("calloc(%[u])\n\r", nmemb * size);
 		return nullptr;
 	}
 	void free(void* ptr) {
-		Console.FormatShow("free(0x%[32H])\n\r", ptr);
+		Console.OutFormat("free(0x%[32H])\n\r", ptr);
 	}
 	void memf(void* ptr) { free(ptr); }
 	void* memset(void* str, int c, size_t n) {

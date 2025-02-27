@@ -14,14 +14,18 @@ main:
 	MOV DWORD[0x500], 0x00
 	MOV DWORD[0x504], 'A'
 	CALL 8*3|3:0
-	; [Delay 1000ms]
-	MOV EAX, DWORD[0x518]
+	; [Delay 10s]
+	loop0:
+		MOV EAX, DWORD[0x518]
+		ADD EAX, 100
+		CMP EAX, 100
+		JB loop0
 	MOV [tmp], EAX
 	loops:
-	MOV EAX, DWORD[0x518]
-	CMP EAX, [tmp]
-	JZ loops
-		JMP main
+		MOV EAX, DWORD[0x518]
+		CMP EAX, [tmp]
+		JB loops
+	JMP main
 MOV EAX, 0
 RET
 

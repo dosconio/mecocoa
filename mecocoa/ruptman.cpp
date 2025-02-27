@@ -48,7 +48,7 @@ void ERQ_Handler(sdword iden, dword para) {
 		if (!first_done) {
 			first_done = true;
 			rostr test_page = (rostr)"\xFF\x70[Mecocoa]\xFF\x02 Exception #UD Test OK!\xFF\x07" + 0x80000000;
-			if (opt_test) Console.FormatShow("%s\n\r", test_page);
+			if (opt_test) Console.OutFormat("%s\n\r", test_page);
 		}
 		else {
 			printlog(_LOG_FATAL, " %s", ExceptionDescription[iden]);// no-para

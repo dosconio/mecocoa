@@ -81,10 +81,9 @@ _sign_entry() {
 	printlog(_LOG_WARN, "   It isn't friendly to develop a kernel in pure C++ (GNU g++).");
 
 	// Show CPU Info
-	Console.FormatShow("CPU Brand: %s\n\r", text_brand());
-
+	Console.OutFormat("CPU Brand: %s\n\r", text_brand());
 	// Check Memory size and update allocator
-	Console.FormatShow("Mem Avail: %s\n\r", Memory::text_memavail(ker_buf));
+	Console.OutFormat("Mem Avail: %s\n\r", Memory::text_memavail(ker_buf));
 
 	// Align Memory and Keep a page for REAL 16 below 0x10000
 	printlog(_LOG_INFO, "Mem Throw: 0x%[32H]", Memory::align_basic_4k());
@@ -116,7 +115,7 @@ _sign_entry() {
 
 	//{TODO} Switch Graphic Mode
 	if (opt_test) __asm("call SwitchReal16");
-	if (opt_test) Console.FormatShow("\xFF\x70[Mecocoa]\xFF\x02 Real16 Switched Test OK!\xFF\x07\n\r");
+	if (opt_test) Console.OutFormat("\xFF\x70[Mecocoa]\xFF\x02 Real16 Switched Test OK!\xFF\x07\n\r");
 	
 	// GIC.enAble();
 
@@ -132,12 +131,13 @@ _sign_entry() {
 	ELF32_LoadExecFromMemory((void*)0x100000, (void**)&entry_temp);
 	printlog(_LOG_INFO, "Load Subappa at 0x%[32H]", entry_temp);
 	TaskRegister((void*)entry_temp);
+	//{!} Memory is used out!
 
 	if (false) CallFar(0, 8 * 9);// manually schedule
 	if (false) { CallFar(0, 8 * 9); jmpFar(0, 8 * 9); }// re-entry test
 
 	syscall(syscall_t::OUTC, 1, 'O');
-	Console.FormatShow("hayouuu~!\n\r");
+	Console.OutFormat("hayouuu~!\n\r");
 	GIC.enAble();
 	// Done
 	loop HALT();

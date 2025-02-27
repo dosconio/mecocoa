@@ -32,13 +32,13 @@ build: clean $(cppobjs)
 	@echo "MK mecocoa $(arch) real16 support"
 	aasm prehost/$(arch)/atx-x86-real16.asm -felf -o $(uobjpath)/mcca-$(arch)/mcca-$(arch)-elf16.o
 	@echo "MK mecocoa $(arch) loader"
-	g++ -I$(uincpath) $(flag) -m32 prehost/$(arch)/$(arch).loader.cpp -o $(ubinpath)/$(elf_loader) -L$(ubinpath) -lm32d $(CXF) \
+	g++ -I$(uincpath) $(flag) -m32 prehost/$(arch)/$(arch).loader.cpp prehost/$(arch)/$(arch).auf.cpp -o $(ubinpath)/$(elf_loader) -L$(ubinpath) -lm32d $(CXF) \
 		-T prehost/$(arch)/$(arch).loader.ld  \
 		-nostartfiles -Os
 	strip --strip-all $(ubinpath)/$(elf_loader)
 	@echo "MK mecocoa $(arch)"
 	@$(CX) -c prehost/$(arch)/$(arch).cpp -o $(ubinpath)/mcca-$(arch)-main.elf
-	g++ -I$(uincpath) $(flag) -m32 $(ker_mod) prehost/$(arch)/$(arch).cpp -o $(ubinpath)/$(elf_kernel) -L$(ubinpath) -lm32d $(CXF) \
+	g++ -I$(uincpath) $(flag) -m32 $(ker_mod) prehost/$(arch)/$(arch).cpp prehost/$(arch)/$(arch).auf.cpp -o $(ubinpath)/$(elf_kernel) -L$(ubinpath) -lm32d $(CXF) \
 		-T prehost/$(arch)/$(arch).ld  \
 		-nostartfiles -O0
 	strip --strip-all $(ubinpath)/$(elf_kernel)

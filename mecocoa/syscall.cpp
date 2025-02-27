@@ -16,6 +16,7 @@ use crate uni;
 Handler_t syscalls[_TEMP 1];
 
 //{TODO} Syscall class
+//{TODO} Use callgate-para (but register nor kernel-area) to pass parameters
 
 void call_gate() { // noreturn
 	__asm("push %ds; push %es; push %fs; push %gs");
@@ -38,7 +39,7 @@ void call_gate() { // noreturn
 			mecocoa_global->syspara_2 == 'S' &&
 			mecocoa_global->syspara_3 == 'T') {
 			rostr test_msg = "\xFF\x70[Mecocoa]\xFF\x02 Syscalls Test OK!\xFF\x07";
-			Console.FormatShow("%s\n\r", test_msg + 0x80000000);
+			Console.OutFormat("%s\n\r", test_msg + 0x80000000);
 		}
 		break;
 	default:
