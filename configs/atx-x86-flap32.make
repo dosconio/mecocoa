@@ -40,7 +40,8 @@ build: clean $(cppobjs)
 	@$(CX) -c prehost/$(arch)/$(arch).cpp -o $(ubinpath)/mcca-$(arch)-main.elf
 	g++ -I$(uincpath) $(flag) -m32 $(ker_mod) prehost/$(arch)/$(arch).cpp prehost/$(arch)/$(arch).auf.cpp -o $(ubinpath)/$(elf_kernel) -L$(ubinpath) -lm32d $(CXF) \
 		-T prehost/$(arch)/$(arch).ld  \
-		-nostartfiles -O0
+		-nostartfiles -O0 \
+		-Wl,-Map=$(ubinpath)/$(elf_kernel).map
 	strip --strip-all $(ubinpath)/$(elf_kernel)
 	ffset $(ubinpath)/fixed.vhd $(ubinpath)/$(elf_kernel) 0
 	#{TODO} main kernel here

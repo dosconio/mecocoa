@@ -11,8 +11,13 @@ her-note: false
 - **repository** : [GitHub](https://github.com/dosconio/mecocoa)  @dosconio
 - **license**: BSD-3-Clause license
 
+**Dependence** :
+- Ubuntu (Dev.Env)
+- GCC and GLIBC
+- QEMU, or x86 native virtual machines
 
 **Architecture** : `board-architecture-mode`
+
 
 CISC `VMBox/VMware/Bochs/QEMU/TODO(Simics,Wel)`
 - `x86` Intel x86
