@@ -55,13 +55,15 @@ build: clean $(cppobjs)
 	#
 	mkdir $(uobjpath)/accm-$(arch) -p
 	aasm -felf accmlib/others.asm -o accmlib/oth.o
-	cd accmlib && gcc -c *.c -m32 -nostdlib  -fno-pic -static 
+	cd accmlib && gcc -c *.c -m32 -nostdlib  -fno-pic -static -I$(uincpath) -D_ACCM=0x8632
 	#
+	echo MK subappa
 	aasm -felf subapps/helloa/helloa.asm -o subapps/helloa/helloa.o
 	ld   -s -T subapps/helloa/helloa.ld -m elf_i386 -o $(uobjpath)/accm-$(arch)/a subapps/helloa/helloa.o accmlib/*.o
 	ffset $(ubinpath)/fixed.vhd $(uobjpath)/accm-$(arch)/a 256
 	#
-	gcc subapps/hellob/*.c accmlib/*.o -o $(uobjpath)/accm-$(arch)/b -T subapps/hellob/hellob.ld -m32 -nostdlib  -fno-pic -static 
+	echo MK subappb
+	gcc subapps/hellob/*.c accmlib/*.o -o $(uobjpath)/accm-$(arch)/b -T subapps/hellob/hellob.ld -m32 -nostdlib  -fno-pic -static -I$(uincpath) -D_ACCM=0x8632
 	ffset $(ubinpath)/fixed.vhd $(uobjpath)/accm-$(arch)/b 128
 	#
 	@echo

@@ -13,8 +13,8 @@ main:
 	MOV EAX, DWORD[0x518]
 	MOV [tmp], EAX
 	; [Print Char]
-	MOV DWORD[0x500], 0x00
-	MOV DWORD[0x504], 'A'
+	MOV EAX, 0x00
+	MOV ECX, 'A'
 	INT 0x81; CALL 8*3|3:0
 	; [Delay 2s]
 	loop0:

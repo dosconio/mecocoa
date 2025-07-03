@@ -86,7 +86,7 @@ word GDT_Alloc();
 extern "C" void call_gate();
 extern "C" void call_intr();
 extern "C" void* call_gate_entry();
-void syscall(syscall_t callid, stduint paracnt = 0, ...);
+void syscall(syscall_t callid, ...);
 
 // taskman
 word TaskRegister(void* entry);

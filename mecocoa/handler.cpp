@@ -46,6 +46,7 @@ void Handint_PIT()
 		time_slice = 0;
 		static unsigned i = 0;
 		if (false) printlog(_LOG_TRACE, "switch task %d", (i+1) % numsof(TasksAvailableSelectors));
+		//{} if (i % numsof(TasksAvailableSelectors) == 1) Console.OutFormat("-");
 		jmpFar(0, TasksAvailableSelectors[(++i) % numsof(TasksAvailableSelectors)]);
 	}
 	__asm("pop  %edi; pop  %esi; pop  %edx; pop  %ecx; pop  %ebx; pop  %eax;");

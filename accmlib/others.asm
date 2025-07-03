@@ -13,6 +13,12 @@ GLOBAL syscall
 section .text
 
 syscall:
+	PUSHAD
+	MOV EAX, [ESP + 4*(1+8+0)]
+	MOV ECX, [ESP + 4*(1+8+1)]
+	MOV EDX, [ESP + 4*(1+8+2)]
+	MOV EBX, [ESP + 4*(1+8+3)]
 	CALL 8*3|3:0
+	POPAD;{TODO} PROC RETURN VALUE
 RET
 

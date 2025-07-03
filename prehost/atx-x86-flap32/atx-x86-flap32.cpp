@@ -97,7 +97,7 @@ _sign_entry() {
 	// GDT and TSS
 	GDT_Init();
 	if (opt_info) printlog(_LOG_INFO, "GDT Globl: 0x%[32H]", mecocoa_global->gdt_ptr);
-	if (opt_test) syscall(syscall_t::TEST, 4, 'T', 'E', 'S', 'T');
+	if (opt_test) syscall(syscall_t::TEST, (stduint)'T', (stduint)'E', (stduint)'S');
 	krnl_tss.CR3 = (dword)Paging::page_directory;
 	krnl_tss.LDTDptr = 0;
 	krnl_tss.STRC_15_T = 0;
@@ -139,8 +139,9 @@ _sign_entry() {
 	if (false) CallFar(0, 8 * 9);// manually schedule
 	if (false) { CallFar(0, 8 * 9); jmpFar(0, 8 * 9); }// re-entry test
 
-	syscall(syscall_t::OUTC, 1, 'O');
+	syscall(syscall_t::OUTC, 'O');
 	Console.OutFormat("hayouuu~!\n\r");
+
 	GIC.enAble();
 	// Done
 	loop HALT();

@@ -5,8 +5,9 @@
 int main()
 {
 	while (1) {
-		sysouts("B");
-		sysdelay(100 * 1000000);// 10s
+		sysouts("(B");
+		sysdelay(5 * 1000000);// 5s
+		sysouts(")");
 	}
 }
 
