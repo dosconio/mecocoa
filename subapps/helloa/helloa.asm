@@ -10,21 +10,18 @@ GLOBAL main
 
 section .text
 main:
+	MOV EAX, DWORD[0x518]
+	MOV [tmp], EAX
 	; [Print Char]
 	MOV DWORD[0x500], 0x00
 	MOV DWORD[0x504], 'A'
-	CALL 8*3|3:0
-	; [Delay 10s]
+	INT 0x81; CALL 8*3|3:0
+	; [Delay 2s]
 	loop0:
-		MOV EAX, DWORD[0x518]
-		ADD EAX, 100
-		CMP EAX, 100
+		MOV EAX, [0x518]
+		SUB EAX, [tmp]
+		CMP EAX, 2
 		JB loop0
-	MOV [tmp], EAX
-	loops:
-		MOV EAX, DWORD[0x518]
-		CMP EAX, [tmp]
-		JB loops
 	JMP main
 MOV EAX, 0
 RET

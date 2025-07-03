@@ -7,8 +7,8 @@
 
 iden=mccax86.img
 boot=$(ubinpath)/boot-x86.bin
-dstdir=E:/_bin/mecocoa
-outs=$(ubinpath)/mecocoa/$(iden)
+dstdir=D:/bin/I686/mecocoa
+outs=$(ubinpath)/I686/mecocoa/$(iden)
 mnts=/mnt/floppy
 arch=atx-x86-flap32
 flag=-D_MCCA=0x8632 -D_ARC_x86=5
@@ -47,10 +47,11 @@ build: clean $(cppobjs)
 	#{TODO} main kernel here
 	@dd if=/dev/zero of=$(outs) bs=512 count=2880 2>>/dev/null
 	@dd if=$(boot)   of=$(outs) bs=512 count=1 conv=notrunc 2>>/dev/null
-	@echo $(sudokey) | sudo mount -o loop $(outs) $(mnts)
-	@echo $(sudokey) | sudo cp $(ubinpath)/$(elf_loader) $(mnts)/KEX.OBJ
-	@echo $(sudokey) | sudo umount $(mnts)
-	@perl configs/$(arch).bochsdbg.pl > $(ubinpath)/mecocoa/bochsrc.bxrc
+	@echo $(sudokey) | sudo -S mkdir -p $(mnts)
+	@echo $(sudokey) | sudo -S mount -o loop $(outs) $(mnts)
+	@echo $(sudokey) | sudo -S cp $(ubinpath)/$(elf_loader) $(mnts)/KEX.OBJ
+	@echo $(sudokey) | sudo -S umount $(mnts)
+	@perl configs/$(arch).bochsdbg.pl > $(ubinpath)/I686/mecocoa/bochsrc.bxrc
 	#
 	mkdir $(uobjpath)/accm-$(arch) -p
 	aasm -felf accmlib/others.asm -o accmlib/oth.o

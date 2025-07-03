@@ -18,14 +18,11 @@ Handler_t syscalls[_TEMP 1];
 //{TODO} Syscall class
 //{TODO} Use callgate-para (but register nor kernel-area) to pass parameters
 
-void call_gate() { // noreturn
-	__asm("push %ds; push %es; push %fs; push %gs");
-	__asm("mov  $8*1, %eax");
-	__asm("mov %eax, %ds; mov %eax, %es; mov %eax, %fs; mov %eax, %gs");
-	const syscall_t callid = *(syscall_t*)mglb(&mecocoa_global->syscall_id);
+static void call_body(const syscall_t callid, ...) {
+	Letpara(paras, callid);
 	switch (callid) {
 	case syscall_t::OUTC:
-		outtxt((rostr)&mecocoa_global->syspara_0, 1);
+		outtxt((rostr)&mecocoa_global->syspara_0, 1);//{TODO}
 		break;
 	case syscall_t::EXIT:
 		TaskReturn();
@@ -33,7 +30,7 @@ void call_gate() { // noreturn
 	case syscall_t::TIME:
 		
 		break;
-	case syscall_t::TEST:
+	case syscall_t::TEST://{TODO}
 		if (mecocoa_global->syspara_0 == 'T' &&
 			mecocoa_global->syspara_1 == 'E' &&
 			mecocoa_global->syspara_2 == 'S' &&
@@ -46,12 +43,30 @@ void call_gate() { // noreturn
 		printlog(_LOG_ERROR, "Bad syscall: 0x%[32H]", _IMM(callid));
 		break;
 	}
+}
+
+void call_gate() { // noreturn
+	__asm("push %ds; push %es; push %fs; push %gs");
+	__asm("mov  $8*1, %eax");
+	__asm("mov %eax, %ds; mov %eax, %es; mov %eax, %fs; mov %eax, %gs");
+	call_body(*(syscall_t*)mglb(&mecocoa_global->syscall_id));
 	__asm("pop  %gs; pop %fs; pop %es; pop %ds");
 	__asm("mov  %ebp, %esp");
 	__asm("pop  %ebp      ");
 	__asm("jmp returnfar");
 	__asm("callgate_endo:");
 	loop;
+}
+
+void call_intr() {
+	__asm("push %ds; push %es; push %fs; push %gs");
+	__asm("mov  $8*1, %eax");
+	__asm("mov %eax, %ds; mov %eax, %es; mov %eax, %fs; mov %eax, %gs");
+	call_body(*(syscall_t*)mglb(&mecocoa_global->syscall_id));
+	__asm("pop  %gs; pop %fs; pop %es; pop %ds");
+	__asm("mov  %ebp, %esp");
+	__asm("pop  %ebp      ");
+	__asm("iret");// iretd
 }
 
 void* call_gate_entry() {

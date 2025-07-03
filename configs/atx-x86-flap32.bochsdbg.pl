@@ -7,7 +7,8 @@
 # Copyright: Dosconio Mecocoa, BCD License Version 3
 
 # Windows Environment
-
+# my $ubin = $ENV{'ubinpath'}; #TODO
+#TODO mov in Linux env
 $a = "E:/software/Bochs-2.7/";
 $floimg = "E:/_bin/mecocoa/mccax86.img";
 

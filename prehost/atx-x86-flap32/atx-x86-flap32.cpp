@@ -72,6 +72,8 @@ void krnl_init() {
 	_start_assert();
 }
 
+#define IRQ_SYSCALL 0x81// leave 0x80 for unix-like syscall
+
 // in future, some may be abstracted into mecocoa/mccaker.cpp
 _sign_entry() {
 	__asm("movl $0x8000, %esp");// mov esp, 0x1E00; set stack
@@ -111,6 +113,7 @@ _sign_entry() {
 	GIC[IRQ_PIT].setRange((dword)Handint_PIT, SegCode); PIT_Init();
 	GIC[IRQ_RTC].setRange((dword)Handint_RTC, SegCode); RTC_Init();
 	GIC[IRQ_Keyboard].setRange((dword)Handint_KBD, SegCode);
+	GIC[IRQ_SYSCALL].setRange((dword)call_intr, SegCode); GIC[IRQ_SYSCALL].DPL = 3;
 	if (opt_test) __asm("ud2");
 
 	//{TODO} Switch Graphic Mode
