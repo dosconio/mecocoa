@@ -21,6 +21,9 @@ _TEMP stduint TasksAvailableSelectors[3]{
 	SegTSS, 8 * 9, 8 * 11
 };
 
+
+extern BareConsole* BCONS0;// TTY0
+
 // or make into "{callback(); iret();}"
 void Handint_PIT()
 {
@@ -75,7 +78,13 @@ void Handint_RTC()
 	__asm("iret");
 }
 
-void Handint_KBD() // Keyboard
+_TEMP
+word kbd_buf[64];// HIG:STATE, LOW:ASCII
+unsigned kbd_buf_p = 0;
+
+
+static keyboard_state_t kbd_state = { 0 };
+void Handint_KBD() // Keyboard: move to buffer and deal with global state
 {
 	__asm("push %eax; push %ebx; push %ecx; push %edx; push %esi; push %edi;");
 	byte loc_buf[3];
@@ -84,7 +93,17 @@ void Handint_KBD() // Keyboard
 	outpb(0x20, ' '); // master
 	loc_buf[0] = innpb(PORT_KBD_BUFFER);
 	if (loc_buf[0] == 0xE0)
+	{
+		//{} invalid for VMware
 		pref_e0 = 1;
+		loc_buf[1] = innpb(PORT_KBD_BUFFER);
+		if (loc_buf[1] == 0x48 && BCONS0->crtline > 0) {// UP
+			BCONS0->setStartLine(--BCONS0->crtline);
+		}
+		else if (loc_buf[1] == 0x50 && BCONS0->crtline < BCONS0->area_total.y - BCONS0->area_show.height) {// DOWN
+			BCONS0->setStartLine(++BCONS0->crtline);
+		}
+	}
 	else if (loc_buf[0] < 0x80) { // key down
 		loc_buf[0] = _tab_keycode2ascii[loc_buf[0]].ascii_usual;
 		if (loc_buf[0] > 1) {

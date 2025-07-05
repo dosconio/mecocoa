@@ -6,6 +6,7 @@
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 #define _STYLE_RUST
 #define _DEBUG
+#include <c/consio.h>
 #include <c/format/ELF.h>
 #include <c/format/FAT12.h>
 #include <c/proctrl/x86/x86.h>
@@ -21,11 +22,15 @@ void temp_init() {
 }
 
 //{TODO FAT for HDISK} HDISK + FAT + ELF with fixed name "kernel-atx-x86"
+
+BareConsole* BCONS0;// TTY0
 _sign_entry() {
 	__asm("movl $0x1E00, %esp");// mov esp, 0x1E00; set stack
 	clear_bss();
 	temp_init();
 	void (*entry_kernel)();
+	BareConsole Console(80, 50, 0xB8000); BCONS0 = &Console;
+	Console.setShowY(0, 25);
 	printlog(_LOG_INFO, "Loading Kernel...");
 	Harddisk_t hdisk(Harddisk_t::HarddiskType::LBA28);
 	for0(i, 128) hdisk.Read(i, (void*)(0x100000 + 512 * i));// 64KB

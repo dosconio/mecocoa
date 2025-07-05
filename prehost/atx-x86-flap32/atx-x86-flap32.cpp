@@ -74,11 +74,26 @@ void krnl_init() {
 
 #define IRQ_SYSCALL 0x81// leave 0x80 for unix-like syscall
 
+BareConsole* BCONS0;// TTY0
+
+void task_tty() {
+	//{TODO} ring1
+
+
+
+
+
+}
+
 // in future, some may be abstracted into mecocoa/mccaker.cpp
 _sign_entry() {
 	__asm("movl $0x8000, %esp");// mov esp, 0x1E00; set stack
 	Memory::clear_bss();
 	krnl_init();
+
+	BareConsole Console(80, 50, 0xB8000); BCONS0 = &Console;
+	Console.setShowY(0, 25);
+
 	if (opt_info) printlog(_LOG_INFO, "Kernel Loaded!");
 	printlog(_LOG_WARN, "   It isn't friendly to develop a kernel in pure C++ (GNU g++).");
 
@@ -142,12 +157,12 @@ _sign_entry() {
 	syscall(syscall_t::OUTC, 'O');
 	Console.OutFormat("hayouuu~!\n\r");
 
-	BareConsole tty0(80, 50, 0x800B8000);
-	tty0.setShowY(0, 25);
-	tty0.OutFormat("Hello TTY0\n\r");
-	for0 (i, 30) tty0.OutFormat("Current Line is %u\n\r", tty0.crtline);
+	
+	//Console.setStartPosition(0);
+	//outtxt("nihao\n\r", 7);
+	//syscall(syscall_t::OUTC, 'H');
 
-	BareConsole::setStartPosition(0);
+	//loop;
 
 	GIC.enAble();
 	auto crt = mecocoa_global->system_time.sec;
@@ -155,7 +170,7 @@ _sign_entry() {
 	loop{
 		if (mecocoa_global->system_time.sec != crt) {
 			crt = mecocoa_global->system_time.sec;
-			//Console.OutFormat("%u ", crt);
+			Console.OutFormat(" CrtLine=%u \n\r", Console.crtline);
 		}
 		stduint newesp; __asm("mov %%esp, %0" : "=r"(newesp));
 		if (newesp != esp) {
