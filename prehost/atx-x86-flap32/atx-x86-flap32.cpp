@@ -142,7 +142,27 @@ _sign_entry() {
 	syscall(syscall_t::OUTC, 'O');
 	Console.OutFormat("hayouuu~!\n\r");
 
+	BareConsole tty0(80, 50, 0x800B8000);
+	tty0.setShowY(0, 25);
+	tty0.OutFormat("Hello TTY0\n\r");
+	for0 (i, 30) tty0.OutFormat("Current Line is %u\n\r", tty0.crtline);
+
+	BareConsole::setStartPosition(0);
+
 	GIC.enAble();
+	auto crt = mecocoa_global->system_time.sec;
+	stduint esp; __asm("mov %%esp, %0" : "=r"(esp));
+	loop{
+		if (mecocoa_global->system_time.sec != crt) {
+			crt = mecocoa_global->system_time.sec;
+			//Console.OutFormat("%u ", crt);
+		}
+		stduint newesp; __asm("mov %%esp, %0" : "=r"(newesp));
+		if (newesp != esp) {
+			Console.OutFormat("ESP: %u\n\r", newesp);
+			esp = newesp;
+		}
+	}
 	// Done
 	loop HALT();
 }

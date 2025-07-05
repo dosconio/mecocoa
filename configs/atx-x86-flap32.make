@@ -71,7 +71,7 @@ build: clean $(cppobjs)
 	@echo $(bochd) -f $(dstdir)/bochsrc.bxrc
 
 run: build
-	@sudo $(qemu) \
+	@$(qemu) \
 		-drive format=raw,file=$(outs),if=floppy \
 		-drive file=$(ubinpath)/fixed.vhd,format=raw \
 		-boot order=a -m 32

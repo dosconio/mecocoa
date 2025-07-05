@@ -20,7 +20,7 @@ main:
 	loop0:
 		MOV EAX, [0x518]
 		SUB EAX, [tmp]
-		CMP EAX, 2
+		CMP EAX, 1
 		JB loop0
 	JMP main
 MOV EAX, 0

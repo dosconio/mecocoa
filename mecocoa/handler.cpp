@@ -30,7 +30,7 @@ void Handint_PIT()
 	mecocoa_global->system_time.mic += 1000;// 1k us = 1ms
 	if (mecocoa_global->system_time.mic >= 1000000) {
 		mecocoa_global->system_time.mic -= 1000000;
-		mecocoa_global->system_time.sec++;
+		// mecocoa_global->system_time.sec++;
 	}
 	static unsigned time = 0;
 	time++;
@@ -42,11 +42,11 @@ void Handint_PIT()
 	outpb(0x20, ' ' /*EOI*/);// master
 	static unsigned time_slice = 0;
 	time_slice++;
-	if (time_slice >= 20) { // switch task
+	if (time_slice >= 50) { // switch task
 		time_slice = 0;
 		static unsigned i = 0;
 		if (false) printlog(_LOG_TRACE, "switch task %d", (i+1) % numsof(TasksAvailableSelectors));
-		//{} if (i % numsof(TasksAvailableSelectors) == 1) Console.OutFormat("-");
+		//{} if (i % numsof(TasksAvailableSelectors) == 0) Console.OutFormat("-");
 		jmpFar(0, TasksAvailableSelectors[(++i) % numsof(TasksAvailableSelectors)]);
 	}
 	__asm("pop  %edi; pop  %esi; pop  %edx; pop  %ecx; pop  %ebx; pop  %eax;");
@@ -60,6 +60,7 @@ void Handint_RTC()
 	// auto push flag by interrupt module
 	__asm("push %eax; push %ebx; push %ecx; push %edx; push %esi; push %edi;");
 	static unsigned time = 0;
+	mecocoa_global->system_time.sec++;
 	if (1) {
 		Letvar(p, char*, 0xB8003);
 		*p ^= 0x70;// make it blink

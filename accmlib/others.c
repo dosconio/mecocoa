@@ -1,5 +1,5 @@
 #include "inc/aaaaa.h"
-volatile unsigned* const callid = (volatile unsigned*)0x0000500;// 0x80000500;
+volatile static unsigned* const callid = (volatile unsigned*)0x0000500;// 0x80000500;
 void sysouts(const char* str) {
 	while (*str)
 	{
@@ -15,7 +15,7 @@ void sysquit(int code) {
 void sysdelay(unsigned dword) {
 	unsigned last_tick = callid[0x1C / 4];
 	unsigned last_sec = callid[0x18 / 4];
-	while (callid[0x1C / 4] - last_tick + (callid[0x18 / 4] - last_sec) * 1000000 < dword) {
+	while (callid[0x1C / 4] - last_tick + (callid[0x18 / 4] - last_sec) * 1000000 <= dword) {
 		if (dword >= 1000000 && callid[0x18 / 4] > last_sec) {
 			last_sec++;
 			dword -= 1000000;
