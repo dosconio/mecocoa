@@ -69,6 +69,8 @@ extern tmp48be_t tmp48_be;
 extern bool opt_info;
 extern bool opt_test;
 
+extern BareConsole* BCONS0;
+
 // handler
 extern "C" void Handint_PIT();
 extern "C" void Handint_RTC();
@@ -86,7 +88,11 @@ word GDT_Alloc();
 extern "C" void call_gate();
 extern "C" void call_intr();
 extern "C" void* call_gate_entry();
-void syscall(syscall_t callid, ...);
+stduint syscall(syscall_t callid, ...);
 
 // taskman
+
+extern "C" bool task_switch_enable;
+extern "C" stduint cpu0_task;
+
 word TaskRegister(void* entry);

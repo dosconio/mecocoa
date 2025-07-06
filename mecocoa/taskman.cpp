@@ -15,6 +15,9 @@
 use crate uni;
 #ifdef _ARC_x86 // x86:
 
+bool task_switch_enable = true;
+stduint cpu0_task;
+
 word TaskRegister(void* entry)
 {
 	char* page = (char*)Memory::physical_allocate(0x1000);

@@ -75,6 +75,7 @@ void krnl_init() {
 #define IRQ_SYSCALL 0x81// leave 0x80 for unix-like syscall
 
 BareConsole* BCONS0;// TTY0
+byte BUF_BCONS0[byteof(BareConsole)];
 
 void task_tty() {
 	//{TODO} ring1
@@ -91,7 +92,8 @@ _sign_entry() {
 	Memory::clear_bss();
 	krnl_init();
 
-	BareConsole Console(80, 50, 0xB8000); BCONS0 = &Console;
+	BCONS0 = new (BUF_BCONS0) BareConsole(80, 50, 0xB8000);
+	BareConsole& Console = *BCONS0;
 	Console.setShowY(0, 25);
 
 	if (opt_info) printlog(_LOG_INFO, "Kernel Loaded!");
@@ -157,12 +159,13 @@ _sign_entry() {
 	syscall(syscall_t::OUTC, 'O');
 	Console.OutFormat("hayouuu~!\n\r");
 
-	
+	syscall(syscall_t::TEST, (stduint)'T', (stduint)'E', (stduint)'S');
 	//Console.setStartPosition(0);
 	//outtxt("nihao\n\r", 7);
 	//syscall(syscall_t::OUTC, 'H');
 
 	//loop;
+	ploginfo("PID of Kernel is %u\n\r", syscall(syscall_t::TEST, (stduint)'T', (stduint)'E', (stduint)'S'));
 
 	GIC.enAble();
 	auto crt = mecocoa_global->system_time.sec;

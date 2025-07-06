@@ -47,10 +47,11 @@ void Handint_PIT()
 	time_slice++;
 	if (time_slice >= 50) { // switch task
 		time_slice = 0;
-		static unsigned i = 0;
-		if (false) printlog(_LOG_TRACE, "switch task %d", (i+1) % numsof(TasksAvailableSelectors));
-		//{} if (i % numsof(TasksAvailableSelectors) == 0) Console.OutFormat("-");
-		jmpFar(0, TasksAvailableSelectors[(++i) % numsof(TasksAvailableSelectors)]);
+		if (task_switch_enable) {
+			++cpu0_task %= numsof(TasksAvailableSelectors);
+			if (false) printlog(_LOG_TRACE, "switch task %d", cpu0_task);
+			jmpFar(0, TasksAvailableSelectors[cpu0_task]);
+		}
 	}
 	__asm("pop  %edi; pop  %esi; pop  %edx; pop  %ecx; pop  %ebx; pop  %eax;");
 	__asm("leave");

@@ -11,6 +11,8 @@ void sysquit(int code) {
 	syscall(0x02, nil, nil, nil);
 }
 
+void sysinnc() {}
+
 //{} with retval
 void sysdelay(unsigned dword) {
 	unsigned last_tick = callid[0x1C / 4];
@@ -21,4 +23,8 @@ void sysdelay(unsigned dword) {
 			dword -= 1000000;
 		}
 	}
+}
+
+stduint systest(unsigned t, unsigned e, unsigned s) {
+	syscall(0xFF, t, e, s);
 }

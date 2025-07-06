@@ -9,6 +9,16 @@ int main()
 		//sysdelay(2 * 1000000);// 2s
 		//for0(i, 0x8000) for0(j, 0x1000) ;
 		unsigned last_sec = callid[0x18 / 4];
+		unsigned id = systest('T', 'E', 'S');
+		//sysouts("B");
+
+		if (id == 1) {
+			sysouts("subappb systest OK!\n\r");
+		}
+		else {
+			sysouts("subappb systest failed!\n\r");
+		}
+
 		stduint esp; __asm__("mov %%esp, %0" : "=r"(esp));
 		while (1) {
 			volatile int a = 0x45;
