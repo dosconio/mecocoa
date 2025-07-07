@@ -69,7 +69,7 @@ extern tmp48be_t tmp48_be;
 extern bool opt_info;
 extern bool opt_test;
 
-extern BareConsole* BCONS0;
+
 
 // handler
 extern "C" void Handint_PIT();
@@ -79,7 +79,7 @@ extern "C" void Handint_KBD();
 // memoman
 #include "memoman.hpp"
 
-// [x86] segmman
+// [x86]
 void GDT_Init();
 word GDT_GetNumber();
 word GDT_Alloc();
@@ -96,3 +96,23 @@ extern "C" bool task_switch_enable;
 extern "C" stduint cpu0_task;
 
 word TaskRegister(void* entry);
+
+// [service] console
+
+extern BareConsole* BCONS0;
+
+struct MccaTTYCon : public BareConsole {
+	static byte current_screen_TTY;
+	//
+
+	static void cons_init();
+	static void serv_cons_loop();
+	static void current_switch(byte id);
+	//
+	MccaTTYCon(stduint columns, stduint lines_total, stduint topln) : BareConsole(columns, lines_total, 0xB8000, topln) {}
+	//{} I&O Buf
+
+	
+};
+extern MccaTTYCon* ttycons[4];
+

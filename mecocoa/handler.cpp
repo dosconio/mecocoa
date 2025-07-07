@@ -99,15 +99,27 @@ void Handint_KBD() // Keyboard: move to buffer and deal with global state
 		pref_e0 = 1;
 		loc_buf[1] = innpb(PORT_KBD_BUFFER);
 		if (loc_buf[1] == 0x48 && BCONS0->crtline > 0) {// UP
+			BCONS0->auto_incbegaddr = 0;
 			BCONS0->setStartLine(--BCONS0->crtline);
 		}
 		else if (loc_buf[1] == 0x50 && BCONS0->crtline < BCONS0->area_total.y - BCONS0->area_show.height) {// DOWN
+			BCONS0->auto_incbegaddr = 0;
 			BCONS0->setStartLine(++BCONS0->crtline);
 		}
 	}
 	else if (loc_buf[0] < 0x80) { // key down
-		loc_buf[0] = _tab_keycode2ascii[loc_buf[0]].ascii_usual;
-		if (loc_buf[0] > 1) {
+		;
+		if (loc_buf[0] == 1)// TTY0 ESC
+		{
+			MccaTTYCon::current_switch(0);
+		}
+		else if (loc_buf[0] == 0x3B) // TTY1 F1
+			MccaTTYCon::current_switch(1);
+		else if (loc_buf[0] == 0x3C) // TTY2 F2
+			MccaTTYCon::current_switch(2);
+		else if (loc_buf[0] == 0x3D) // TTY3 F3
+			MccaTTYCon::current_switch(3);
+		else if ((loc_buf[0] = _tab_keycode2ascii[loc_buf[0]].ascii_usual) && loc_buf[0] > 1) {
 			outsfmt("%c", loc_buf[0]);
 		}
 	}

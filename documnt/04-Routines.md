@@ -3,6 +3,13 @@ dg-publish: true
 her-note: false
 ---
 
+20250707のAzusa(ArinaMgk) decided:
+- Kernel  Ring0
+- Service Ring1 (aka. Driver)
+- Module  Ring2
+- Subapp  Ring3
+
+
 ## Routines for Flap-32
 
 Gate Segment `8*03` and Interrupt 81H.

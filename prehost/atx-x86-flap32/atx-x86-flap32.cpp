@@ -74,8 +74,7 @@ void krnl_init() {
 
 #define IRQ_SYSCALL 0x81// leave 0x80 for unix-like syscall
 
-BareConsole* BCONS0;// TTY0
-byte BUF_BCONS0[byteof(BareConsole)];
+
 
 void task_tty() {
 	//{TODO} ring1
@@ -91,10 +90,7 @@ _sign_entry() {
 	__asm("movl $0x8000, %esp");// mov esp, 0x1E00; set stack
 	Memory::clear_bss();
 	krnl_init();
-
-	BCONS0 = new (BUF_BCONS0) BareConsole(80, 50, 0xB8000);
-	BareConsole& Console = *BCONS0;
-	Console.setShowY(0, 25);
+	MccaTTYCon::cons_init();
 
 	if (opt_info) printlog(_LOG_INFO, "Kernel Loaded!");
 	printlog(_LOG_WARN, "   It isn't friendly to develop a kernel in pure C++ (GNU g++).");
@@ -159,21 +155,27 @@ _sign_entry() {
 	syscall(syscall_t::OUTC, 'O');
 	Console.OutFormat("hayouuu~!\n\r");
 
-	syscall(syscall_t::TEST, (stduint)'T', (stduint)'E', (stduint)'S');
-	//Console.setStartPosition(0);
-	//outtxt("nihao\n\r", 7);
-	//syscall(syscall_t::OUTC, 'H');
+	// MccaTTYCon::current_switch(1);
+	ttycons[0]->OutFormat("HelloTTY%d\n\r", 0);
+	ttycons[1]->OutFormat("HelloTTY%d\n\r", 1);
+	ttycons[2]->OutFormat("HelloTTY%d\n\r", 2);
+	ttycons[3]->OutFormat("HelloTTY%d\n\r", 3);
+	MccaTTYCon::current_switch(0);
 
-	//loop;
-	ploginfo("PID of Kernel is %u\n\r", syscall(syscall_t::TEST, (stduint)'T', (stduint)'E', (stduint)'S'));
+
+	// __asm("hlt");
 
 	GIC.enAble();
+	loop{
+		__asm("hlt");
+	}
+		
 	auto crt = mecocoa_global->system_time.sec;
 	stduint esp; __asm("mov %%esp, %0" : "=r"(esp));
 	loop{
 		if (mecocoa_global->system_time.sec != crt) {
 			crt = mecocoa_global->system_time.sec;
-			Console.OutFormat(" CrtLine=%u \n\r", Console.crtline);
+			Console.OutFormat(" CrtLine=%u \n\r", BCONS0->crtline);
 		}
 		stduint newesp; __asm("mov %%esp, %0" : "=r"(newesp));
 		if (newesp != esp) {
