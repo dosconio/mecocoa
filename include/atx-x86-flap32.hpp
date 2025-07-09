@@ -1,5 +1,6 @@
 #include <c/datime.h>
 #include <c/graphic/color.h>
+#include <c/driver/keyboard.h>
 
 #define statin static inline
 #define _sign_entry() extern "C" void _start()
@@ -74,7 +75,9 @@ extern bool opt_test;
 // handler
 extern "C" void Handint_PIT();
 extern "C" void Handint_RTC();
+
 extern "C" void Handint_KBD();
+extern OstreamTrait* kbd_out;
 
 // memoman
 #include "memoman.hpp"
@@ -110,9 +113,28 @@ struct MccaTTYCon : public BareConsole {
 	static void current_switch(byte id);
 	//
 	MccaTTYCon(stduint columns, stduint lines_total, stduint topln) : BareConsole(columns, lines_total, 0xB8000, topln) {}
-	//{} I&O Buf
+	//[TEMP] no output buffer, user library can make it in their level.
+	char inn_buf[64]; char* _Comment(W) p = inn_buf; char* _Comment(R) q = 0;
+	inline bool is_full() const { return q && p == q; }
+	inline bool is_empty() const { return q == nullptr; }
+	int get_inn() {
+		if (is_empty()) return -1;
+		int ret = (unsigned)*q++;
+		if (q >= inn_buf + byteof(inn_buf)) q = inn_buf;
+		if (p == q) q = nullptr, p = inn_buf;
+		return ret;
+	}
+	bool put_inn(char c) {
+		if (is_full()) return false;
+		if (q == nullptr) q = p;
+		*p++ = c;
+		if (p >= inn_buf + byteof(inn_buf)) p = inn_buf;
+		return true;
+	}
+	//
+	bool last_E0 = false;
 
-	
+
 };
 extern MccaTTYCon* ttycons[4];
 

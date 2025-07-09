@@ -24,7 +24,7 @@ int main()
 			volatile int a = 0x45;
 			if (callid[0x18 / 4] != last_sec) {
 				last_sec = callid[0x18 / 4];
-				sysouts("B");
+				// sysouts("B");
 			}
 			stduint newesp; __asm__("mov %%esp, %0" : "=r"(newesp));
 			if (newesp != esp) {

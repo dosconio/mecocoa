@@ -167,6 +167,7 @@ _sign_entry() {
 
 	GIC.enAble();
 	loop{
+		MccaTTYCon::serv_cons_loop();
 		__asm("hlt");
 	}
 		

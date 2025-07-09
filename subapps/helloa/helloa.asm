@@ -15,7 +15,7 @@ main:
 	; [Print Char]
 	MOV EAX, 0x00
 	MOV ECX, 'A'
-	INT 0x81; CALL 8*3|3:0
+	;;INT 0x81; CALL 8*3|3:0
 	; [Delay 2s]
 	loop0:
 		MOV EAX, [0x518]
