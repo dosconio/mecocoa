@@ -73,8 +73,6 @@ void krnl_init() {
 
 #define IRQ_SYSCALL 0x81// leave 0x80 for unix-like syscall
 
-void a(char ch) { Console.OutChar(ch); }
-
 // in future, some may be abstracted into mecocoa/mccaker.cpp
 _sign_entry() {
 	__asm("movl $0x8000, %esp");// mov esp, 0x1E00; set stack
@@ -122,7 +120,7 @@ _sign_entry() {
 	if (opt_test) __asm("ud2");
 
 	//{TODO} Switch Graphic Mode
-	if (opt_test) __asm("call SwitchReal16");
+	if (opt_test && 0) __asm("call SwitchReal16");
 	if (opt_test) Console.OutFormat("\xFF\x70[Mecocoa]\xFF\x02 Real16 Switched Test OK!\xFF\x07\n\r");
 	
 	// Service

@@ -65,9 +65,14 @@ void MccaTTYCon::cons_init()
 }
 
 void a(char ch);
+
+
+
 void _Comment(R1) MccaTTYCon::serv_cons_loop()
 {
-	// __asm("cli");
+	//*(char*)0xB8000 = 'a';
+	//outc('a');
+	// while (1);
 	// while (true) a('a');
 	while (true) for0(i, 4) {
 		MccaTTYCon& tty = *ttycons[i];
@@ -89,9 +94,7 @@ void _Comment(R1) MccaTTYCon::serv_cons_loop()
 				byte c = _tab_keycode2ascii[keycode].ascii_usual;
 				if (c > 1)
 				{
-					// a(c);
-					// tty.OutChar(c);// this may access High Ring (R0) and make #UD (actually #GP)
-					syscall(syscall_t::OUTC, c);
+					tty.OutChar(c);
 				}
 			}
 			tty.last_E0 = keycode == 0xE0;

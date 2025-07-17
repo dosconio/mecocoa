@@ -142,6 +142,7 @@ ProcessBlock* TaskRegister(void* entry, byte ring)
 	}
 
 	TSS->EFLAGS |= 0x0200;// IF
+	TSS->EFLAGS |= _IMM1 << 12;
 	TSS->CR3 = _TEMP _IMM(Paging::page_directory);
 	//{TODO} PDBR PagTable={UsrPart: UsrSegLimit=0x80000000 without KrnPart}
 	TaskAdd(pb);
