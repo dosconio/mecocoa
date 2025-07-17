@@ -17,8 +17,8 @@ use crate uni;
 //{TOFIX} _pushad _popad _returni
 // no-pic
 
-_TEMP stduint TasksAvailableSelectors[3]{
-	SegTSS, 8 * 9, 8 * 11
+_TEMP stduint TasksAvailableSelectors[4]{
+	SegTSS, 8 * 9, 8 * 11, 8 * 13
 };
 
 
@@ -30,6 +30,7 @@ void Handint_PIT()
 	// auto push flag by intterrupt module
 	// 1000Hz
 	__asm("push %eax; push %ebx; push %ecx; push %edx; push %esi; push %edi;");
+
 	mecocoa_global->system_time.mic += 1000;// 1k us = 1ms
 	if (mecocoa_global->system_time.mic >= 1000000) {
 		mecocoa_global->system_time.mic -= 1000000;
@@ -49,10 +50,12 @@ void Handint_PIT()
 		time_slice = 0;
 		if (task_switch_enable) {
 			++cpu0_task %= numsof(TasksAvailableSelectors);
+			// ++cpu0_task %= 2;
 			if (false) printlog(_LOG_TRACE, "switch task %d", cpu0_task);
 			jmpFar(0, TasksAvailableSelectors[cpu0_task]);
 		}
 	}
+	endo:
 	__asm("pop  %edi; pop  %esi; pop  %edx; pop  %ecx; pop  %ebx; pop  %eax;");
 	__asm("leave");
 	__asm("iret");

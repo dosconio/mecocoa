@@ -1,3 +1,4 @@
+#include <c/task.h>
 #include <c/datime.h>
 #include <c/graphic/color.h>
 #include <c/driver/keyboard.h>
@@ -98,7 +99,15 @@ stduint syscall(syscall_t callid, ...);
 extern "C" bool task_switch_enable;
 extern "C" stduint cpu0_task;
 
-word TaskRegister(void* entry);
+// = TaskBlock = ThreadBlock
+struct _Comment(Kernel) ProcessBlock {
+	TSS_t TSS;
+	stduint kept_intermap[1];
+	word focus_tty_id;
+};
+ProcessBlock* TaskRegister(void* entry, byte ring);
+stduint TaskAdd(ProcessBlock* task);
+ProcessBlock* TaskGet(stduint taskid);
 
 // [service] console
 

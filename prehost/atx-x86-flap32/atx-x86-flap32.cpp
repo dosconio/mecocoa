@@ -7,7 +7,6 @@
 #define _STYLE_RUST
 #define _DEBUG
 #include <new>
-#include <c/task.h>
 #include <c/cpuid.h>
 #include <c/consio.h>
 #include <cpp/string>
@@ -29,9 +28,9 @@ stduint tmp;
 }
 tmp48le_t tmp48_le;
 tmp48be_t tmp48_be;
-static TSS_t krnl_tss;
+static ProcessBlock krnl_tss;
 void (*entry_temp)();
-static TSS_t tss_a, tss_b;
+
 
 int* kernel_fail(loglevel_t serious) {
 	if (serious == _LOG_FATAL) {
@@ -74,16 +73,7 @@ void krnl_init() {
 
 #define IRQ_SYSCALL 0x81// leave 0x80 for unix-like syscall
 
-
-
-void task_tty() {
-	//{TODO} ring1
-
-
-
-
-
-}
+void a(char ch) { Console.OutChar(ch); }
 
 // in future, some may be abstracted into mecocoa/mccaker.cpp
 _sign_entry() {
@@ -111,11 +101,13 @@ _sign_entry() {
 	GDT_Init();
 	if (opt_info) printlog(_LOG_INFO, "GDT Globl: 0x%[32H]", mecocoa_global->gdt_ptr);
 	if (opt_test) syscall(syscall_t::TEST, (stduint)'T', (stduint)'E', (stduint)'S');
-	krnl_tss.CR3 = (dword)Paging::page_directory;
-	krnl_tss.LDTDptr = 0;
-	krnl_tss.STRC_15_T = 0;
-	krnl_tss.IO_MAP = sizeof(TSS_t) - 1;
-	mecocoa_global->gdt_ptr->tss.setRange((dword)&krnl_tss, sizeof(TSS_t) - 1);
+	krnl_tss.TSS.CR3 = (dword)Paging::page_directory;
+	krnl_tss.TSS.LDTDptr = 0;
+	krnl_tss.TSS.STRC_15_T = 0;
+	krnl_tss.TSS.IO_MAP = sizeof(TSS_t) - 1;
+	krnl_tss.focus_tty_id = 0;
+	mecocoa_global->gdt_ptr->tss.setRange((dword)&krnl_tss.TSS, sizeof(TSS_t) - 1);
+	TaskAdd(&krnl_tss);
 	__asm("mov $8*5, %eax; ltr %ax");
 	printlog(_LOG_INFO, "SEGM: There are %d GDTs.", GDT_GetNumber());
 
@@ -133,20 +125,23 @@ _sign_entry() {
 	if (opt_test) __asm("call SwitchReal16");
 	if (opt_test) Console.OutFormat("\xFF\x70[Mecocoa]\xFF\x02 Real16 Switched Test OK!\xFF\x07\n\r");
 	
-	// GIC.enAble();
+	// Service
+	TaskRegister((void*)&MccaTTYCon::serv_cons_loop, 1);
 
 	//{TODO} Load Shell (FAT + ELF)
+	stduint&& bufsize = 512 * 64;
+	void* load_buffer = Memory::physical_allocate(bufsize);
 	Harddisk_t hdisk(Harddisk_t::HarddiskType::LBA28);
 	// subappb
-	for0(i, 64) hdisk.Read(i + 128, (void*)(0x100000 + 512 * (i)));
-	ELF32_LoadExecFromMemory((void*)0x100000, (void**)&entry_temp);
+	for0(i, 64) hdisk.Read(i + 128, (void*)((char*)load_buffer + 512 * (i)));
+	ELF32_LoadExecFromMemory((void*)load_buffer, (void**)&entry_temp);
 	printlog(_LOG_INFO, "Load Subappb at 0x%[32H]", entry_temp);
-	TaskRegister((void*)entry_temp);
+	TaskRegister((void*)entry_temp, 3)->focus_tty_id = 2;
 	// subappa
-	for0(i, 64) hdisk.Read(i + 256, (void*)(0x100000 + 512 * (i)));
-	ELF32_LoadExecFromMemory((void*)0x100000, (void**)&entry_temp);
+	for0(i, 64) hdisk.Read(i + 256, (void*)((char*)load_buffer + 512 * (i)));
+	ELF32_LoadExecFromMemory((void*)load_buffer, (void**)&entry_temp);
 	printlog(_LOG_INFO, "Load Subappa at 0x%[32H]", entry_temp);
-	TaskRegister((void*)entry_temp);
+	TaskRegister((void*)entry_temp, 3)->focus_tty_id = 1;
 	//{!} Memory is used out!
 
 	if (false) CallFar(0, 8 * 9);// manually schedule
@@ -162,12 +157,13 @@ _sign_entry() {
 	ttycons[3]->OutFormat("HelloTTY%d\n\r", 3);
 	MccaTTYCon::current_switch(0);
 
-
-	// __asm("hlt");
-
+	//__asm("hlt");
 	GIC.enAble();
+	// GIC.enAble(false);
+	// GIC.enAble(false);
+	// CallFar(0, 8 * 9);
 	loop{
-		MccaTTYCon::serv_cons_loop();
+		//MccaTTYCon::serv_cons_loop();
 		__asm("hlt");
 	}
 		

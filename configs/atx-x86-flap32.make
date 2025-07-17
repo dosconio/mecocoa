@@ -14,7 +14,7 @@ arch=atx-x86-flap32
 flag=-D_MCCA=0x8632 -D_ARC_x86=5
 
 qemu=qemu-system-x86_64
-bochd=E:/software/Bochs-2.7/bochsdbg.exe
+bochd=C:/Soft/Bochs-2.7/bochsdbg.exe
 
 CXF=-fno-rtti -fno-exceptions -fno-unwind-tables -static -nostdlib -fno-pic #-nodefaultlibs #
 CXW=-Wno-builtin-declaration-mismatch -Wno-volatile

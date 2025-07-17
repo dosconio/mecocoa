@@ -86,8 +86,8 @@ _TEMP void page_init() {
 	for0(i, 0x400)// kernel linearea 0x00000000 ~ 0x00400000
 		pdt[0][i].setMode(true, true, _TEMP true, i << 12);
 		// pdt[0][i].setMode(true, true, false, i << 12);
-	// pdt[0x3FF][0x3FF].setMode(true, true, false, _IMM(Paging::page_directory));// make loop PDT and do not unisym's
-	pdt[0x3FF][0x3FF].setMode(true, true, _TEMP true, _IMM(Paging::page_directory));// make loop PDT and do not unisym's
+	pdt[0x3FF][0x3FF].setMode(true, true, false, _IMM(Paging::page_directory));// make loop PDT and do not unisym's
+	// for(i, 0x400) pdt[0x3FF][...] Page Tables
 	for0(i, 0x400)// global linearea 0x80000000 ~ 0x80400000
 		pdt[0x200][i].setMode(true, true, true, i << 12);
 	//

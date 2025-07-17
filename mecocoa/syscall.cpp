@@ -41,6 +41,9 @@ static const byte syscall_paracnts[0x100] = {
 	3, //TEST // FXH
 };
 static stduint call_body(const syscall_t callid, ...) {
+	auto task_switch_enable_old = task_switch_enable;//{TODO} {MUTEX for multi-Proc}
+	task_switch_enable = false;
+	//
 	Letpara(paras, callid);
 	stduint para[3];
 	stduint ret = 0;
@@ -49,12 +52,15 @@ static stduint call_body(const syscall_t callid, ...) {
 	for0(i, pcnt) {
 		para[i] = para_next(paras, stduint);
 	}
-	auto task_switch_enable_old = task_switch_enable;//{MUTEX for multi-Proc}
 	switch (callid) {
-	case syscall_t::OUTC:
-		outtxt((rostr)&para[0], 1);
+	case syscall_t::OUTC: {
+		ProcessBlock* pb = TaskGet(cpu0_task);
+		task_switch_enable = task_switch_enable_old;
+		ttycons[pb->focus_tty_id]->OutChar(para[0]);
 		break;
+	}
 	case syscall_t::EXIT:
+		task_switch_enable = task_switch_enable_old;
 		TaskReturn();
 		break;
 	case syscall_t::TIME:
@@ -62,7 +68,6 @@ static stduint call_body(const syscall_t callid, ...) {
 		break;
 	case syscall_t::TEST:
 		//{TODO} ISSUE 20250706 Each time subapp (Ring3) print %d or other integer by outsfmt() will panic, but OutInteger() or Kernel Ring0 is OK.
-		task_switch_enable = false;
 		if (para[0] == 'T' && para[1] == 'E' && para[2] == 'S') {
 			rostr test_msg = "Syscalls Test OK!";
 			Console.OutFormat("\xFF\x70[Mecocoa]\xFF\x02 PID");
@@ -75,12 +80,13 @@ static stduint call_body(const syscall_t callid, ...) {
 				para[0], para[1], para[2]);
 		}
 		ret = cpu0_task;
-		task_switch_enable = task_switch_enable_old;//{MUTEX for multi-Proc}
+		task_switch_enable = task_switch_enable_old;
 		return ret; break;
-	default:
+		default:
 		printlog(_LOG_ERROR, "Bad syscall: 0x%[32H]", _IMM(callid));
 		break;
 	}
+	task_switch_enable = task_switch_enable_old;//{MUTEX for multi-Proc}
 	return 0;
 }
 

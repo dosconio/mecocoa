@@ -8,11 +8,11 @@ int main()
 	while (1) {
 		//sysdelay(2 * 1000000);// 2s
 		//for0(i, 0x8000) for0(j, 0x1000) ;
-		unsigned last_sec = callid[0x18 / 4];
+		unsigned last_sec = callid[0x18 / 4] + 5;
 		unsigned id = systest('T', 'E', 'S');
 		//sysouts("B");
 
-		if (id == 1) {
+		if (id == 2) {
 			sysouts("subappb systest OK!\n\r");
 		}
 		else {
@@ -22,9 +22,9 @@ int main()
 		stduint esp; __asm__("mov %%esp, %0" : "=r"(esp));
 		while (1) {
 			volatile int a = 0x45;
-			if (callid[0x18 / 4] != last_sec) {
-				last_sec = callid[0x18 / 4];
-				// sysouts("B");
+			if (callid[0x18 / 4] == last_sec) {
+				last_sec = callid[0x18 / 4] + 5;
+				sysouts("B");
 			}
 			stduint newesp; __asm__("mov %%esp, %0" : "=r"(newesp));
 			if (newesp != esp) {
