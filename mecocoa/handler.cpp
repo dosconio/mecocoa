@@ -49,8 +49,8 @@ void Handint_PIT()
 	if (time_slice >= 20) { // switch task
 		time_slice = 0;
 		if (task_switch_enable) {
-			++cpu0_task %= numsof(TasksAvailableSelectors);
-			// ++cpu0_task %= 2;
+			// ++cpu0_task %= numsof(TasksAvailableSelectors);
+			cpu0_task %= 2;cpu0_task++;
 			if (false) printlog(_LOG_TRACE, "switch task %d", cpu0_task);
 			jmpFar(0, TasksAvailableSelectors[cpu0_task]);
 		}

@@ -115,11 +115,11 @@ extern BareConsole* BCONS0;
 
 struct MccaTTYCon : public BareConsole {
 	static byte current_screen_TTY;
-	//
-
 	static void cons_init();
 	static void serv_cons_loop();
 	static void current_switch(byte id);
+	//
+	bool last_e0 = false;
 	//
 	MccaTTYCon(stduint columns, stduint lines_total, stduint topln) : BareConsole(columns, lines_total, 0xB8000, topln) {}
 	//[TEMP] no output buffer, user library can make it in their level.
@@ -142,8 +142,6 @@ struct MccaTTYCon : public BareConsole {
 	}
 	//
 	bool last_E0 = false;
-
-
 };
 extern MccaTTYCon* ttycons[4];
 
