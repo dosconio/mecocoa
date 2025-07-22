@@ -21,12 +21,12 @@ struct mec_gdt {
 	descriptor_t data_r3;
 };// on global linear area
 struct mecocoa_global_t {
-	dword syscall_id; // 0x00
-	stduint syspara_0;// 0x04
-	stduint syspara_1;// 0x08
-	stduint syspara_2;// 0x0c
-	stduint syspara_3;// 0x10
-	stduint syspara_4;// 0x14 -> Extern Parameters { other_cnt; other_paras... }
+	_Comment(TODEL) dword syscall_id; // 0x00
+	_Comment(TODEL) stduint syspara_0;// 0x04
+	_Comment(TODEL) stduint syspara_1;// 0x08
+	_Comment(TODEL) stduint syspara_2;// 0x0c
+	_Comment(TODEL) stduint syspara_3;// 0x10
+	_Comment(TODEL) stduint syspara_4;// 0x14 -> Extern Parameters { other_cnt; other_paras... }
 	volatile timeval_t system_time;// 0x18
 	word gdt_len;
 	mec_gdt* gdt_ptr;
@@ -97,17 +97,34 @@ stduint syscall(syscall_t callid, ...);
 // taskman
 
 extern "C" bool task_switch_enable;
-extern "C" stduint cpu0_task;
 
 // = TaskBlock = ThreadBlock
 struct _Comment(Kernel) ProcessBlock {
+	static stduint cpu_proc_number;
+	static stduint cpu0_task;
+	static void* table_ready;
+	static void* table_pends;
+
+	descriptor_t LDT[0x100 / byteof(descriptor_t)];
 	TSS_t TSS;
 	stduint kept_intermap[1];
 	word focus_tty_id;
+
+	// state
+	enum class State : byte {
+		Running = 0,
+		Ready,
+		Pended,
+		Uninit,
+		Exited,
+	} state = State::Uninit;
+	bool is_suspend = false;// to Disk
+	//{TODO} suspend information
+
 };
 ProcessBlock* TaskRegister(void* entry, byte ring);
 stduint TaskAdd(ProcessBlock* task);
-ProcessBlock* TaskGet(stduint taskid);
+ProcessBlock* TaskGet(stduint taskid);// get task block by its id
 
 // [service] console
 

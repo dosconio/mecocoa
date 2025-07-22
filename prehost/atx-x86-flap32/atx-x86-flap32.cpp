@@ -99,11 +99,13 @@ _sign_entry() {
 	GDT_Init();
 	if (opt_info) printlog(_LOG_INFO, "GDT Globl: 0x%[32H]", mecocoa_global->gdt_ptr);
 	if (opt_test) syscall(syscall_t::TEST, (stduint)'T', (stduint)'E', (stduint)'S');
+	new (&krnl_tss) ProcessBlock;
 	krnl_tss.TSS.CR3 = (dword)Paging::page_directory;
 	krnl_tss.TSS.LDTDptr = 0;
 	krnl_tss.TSS.STRC_15_T = 0;
 	krnl_tss.TSS.IO_MAP = sizeof(TSS_t) - 1;
 	krnl_tss.focus_tty_id = 0;
+	krnl_tss.state = ProcessBlock::State::Running;
 	mecocoa_global->gdt_ptr->tss.setRange((dword)&krnl_tss.TSS, sizeof(TSS_t) - 1);
 	TaskAdd(&krnl_tss);
 	__asm("mov $8*5, %eax; ltr %ax");

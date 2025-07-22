@@ -6,6 +6,7 @@
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 #define _STYLE_RUST
 #define _DEBUG
+#include <new>
 #include <c/task.h>
 #include <c/consio.h>
 #include <cpp/interrupt>
@@ -16,7 +17,7 @@ use crate uni;
 #ifdef _ARC_x86 // x86:
 
 bool task_switch_enable = true;
-stduint cpu0_task;
+stduint ProcessBlock::cpu0_task;
 
 _TEMP
 ProcessBlock* pblocks[8]; stduint pnumber = 0;
@@ -48,14 +49,14 @@ ProcessBlock* TaskRegister(void* entry, byte ring)
 	// word ring = 3;
 	word parent = 8 * 7;// Kernel Task
 
-	char* page = (char*)Memory::physical_allocate(0x2000);
 	word LDTSelector = GDT_Alloc() / 8;
 	word TSSSelector = GDT_Alloc() / 8;
 	outsfmt("LDTSel %d, TSSSel %d\n\r", LDTSelector, TSSSelector);
-	auto LDT = (descriptor_t*)(page);// (0x100);
+	char* page = (char*)Memory::physical_allocate(0x2000);
+	ProcessBlock* pb = (ProcessBlock*)(page); new (pb) ProcessBlock();
+	descriptor_t* LDT = (descriptor_t*)(pb->LDT);
 	descriptor_t* GDT = (descriptor_t*)mecocoa_global->gdt_ptr;
 
-	ProcessBlock* pb = (ProcessBlock*)(page + 0x100);// (0x100);
 	TSS_t* TSS = &pb->TSS;
 	TSS->LastTSS = 0;// parent;
 	TSS->NextTSS = 0;

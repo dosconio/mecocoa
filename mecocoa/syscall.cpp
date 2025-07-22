@@ -54,7 +54,7 @@ static stduint call_body(const syscall_t callid, ...) {
 	}
 	switch (callid) {
 	case syscall_t::OUTC: {
-		ProcessBlock* pb = TaskGet(cpu0_task);
+		ProcessBlock* pb = TaskGet(ProcessBlock::cpu0_task);
 		task_switch_enable = task_switch_enable_old;
 		ttycons[pb->focus_tty_id]->OutChar(para[0]);
 		break;
@@ -71,7 +71,7 @@ static stduint call_body(const syscall_t callid, ...) {
 		if (para[0] == 'T' && para[1] == 'E' && para[2] == 'S') {
 			rostr test_msg = "Syscalls Test OK!";
 			Console.OutFormat("\xFF\x70[Mecocoa]\xFF\x02 PID");
-			Console.OutInteger(cpu0_task, +10);
+			Console.OutInteger(ProcessBlock::cpu0_task, +10);
 			Console.OutFormat(": %s\xFF\x07\n\r", test_msg + 0x80000000);
 		}
 		else {
@@ -79,7 +79,7 @@ static stduint call_body(const syscall_t callid, ...) {
 			Console.OutFormat("%s %x %x %x\n\r", test_msg + 0x80000000,
 				para[0], para[1], para[2]);
 		}
-		ret = cpu0_task;
+		ret = ProcessBlock::cpu0_task;
 		task_switch_enable = task_switch_enable_old;
 		return ret; break;
 		default:
