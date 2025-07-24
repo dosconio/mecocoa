@@ -75,23 +75,23 @@ rostr Memory::text_memavail(uni::String& ker_buf) {
 
 // ---- Paging ----
 
-Paging kernel_paging;
+Paging* kernel_paging;
 extern stduint tmp;
 
 _TEMP void page_init() {
-	Paging::page_directory = (PageDirectory*)Memory::physical_allocate(0x1000);
-	kernel_paging.Reset();
-	PageDirectory& pdt = *Paging::page_directory;
+	kernel_paging = (Paging*)Memory::physical_allocate(byteof(Paging));
+	kernel_paging->Reset();
+	PageDirectory& pdt = kernel_paging->page_directory;
 	//
 	for0(i, 0x400)// kernel linearea 0x00000000 ~ 0x00400000
-		pdt[0][i].setMode(true, true, _TEMP true, i << 12);
+		kernel_paging->setMode(pdt[0][i], true, true, _TEMP true, i << 12);
 		// pdt[0][i].setMode(true, true, false, i << 12);
-	pdt[0x3FF][0x3FF].setMode(true, true, false, _IMM(Paging::page_directory));// make loop PDT and do not unisym's
+	kernel_paging->setMode(pdt[0x3FF][0x3FF], true, true, false, _IMM(&kernel_paging->page_directory));// make loop PDT and do not unisym's
 	// for(i, 0x400) pdt[0x3FF][...] Page Tables
 	for0(i, 0x400)// global linearea 0x80000000 ~ 0x80400000
-		pdt[0x200][i].setMode(true, true, true, i << 12);
+		kernel_paging->setMode(pdt[0x200][i], true, true, true, i << 12);
 	//
-	tmp = _IMM(Paging::page_directory);
+	tmp = _IMM(kernel_paging);
 	__asm("movl tmp, %eax\n");
 	__asm("movl %eax, %cr3\n");
 	__asm("movl %cr0, %eax\n");

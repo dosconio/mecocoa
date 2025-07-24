@@ -83,6 +83,8 @@ extern OstreamTrait* kbd_out;
 // memoman
 #include "memoman.hpp"
 
+extern Paging* kernel_paging;// cpu0 running
+
 // [x86]
 void GDT_Init();
 word GDT_GetNumber();

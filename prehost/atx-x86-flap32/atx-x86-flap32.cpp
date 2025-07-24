@@ -100,7 +100,7 @@ _sign_entry() {
 	if (opt_info) printlog(_LOG_INFO, "GDT Globl: 0x%[32H]", mecocoa_global->gdt_ptr);
 	if (opt_test) syscall(syscall_t::TEST, (stduint)'T', (stduint)'E', (stduint)'S');
 	new (&krnl_tss) ProcessBlock;
-	krnl_tss.TSS.CR3 = (dword)Paging::page_directory;
+	krnl_tss.TSS.CR3 = _IMM(&kernel_paging->page_directory);
 	krnl_tss.TSS.LDTDptr = 0;
 	krnl_tss.TSS.STRC_15_T = 0;
 	krnl_tss.TSS.IO_MAP = sizeof(TSS_t) - 1;
