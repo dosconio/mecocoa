@@ -49,13 +49,11 @@ void switch_task() {
 }
 
 
-// or make into "{callback(); iret();}"
+
 void Handint_PIT()
 {
 	// auto push flag by intterrupt module
 	// 1000Hz
-	__asm("push %eax; push %ebx; push %ecx; push %edx; push %esi; push %edi;");
-
 	mecocoa_global->system_time.mic += 1000;// 1k us = 1ms
 	if (mecocoa_global->system_time.mic >= 1000000) {
 		mecocoa_global->system_time.mic -= 1000000;
@@ -68,7 +66,7 @@ void Handint_PIT()
 		Letvar(p, char*, 0xB8001);
 		*p ^= 0x70;// make it blink
 	}
-	outpb(0x20, ' ' /*EOI*/);// master
+	//outpb(0x20, ' ' /*EOI*/);// master
 	static unsigned time_slice = 0;
 	time_slice++;
 	if (time_slice >= 20) { // switch task
@@ -77,45 +75,25 @@ void Handint_PIT()
 			switch_task();
 		}
 	}
-	endo:
-	__asm("pop  %edi; pop  %esi; pop  %edx; pop  %ecx; pop  %ebx; pop  %eax;");
-	__asm("leave");
-	__asm("iret");
 }
 
 void Handint_RTC()
 {
 	// 1Hz
 	// auto push flag by interrupt module
-	__asm("push %eax; push %ebx; push %ecx; push %edx; push %esi; push %edi;");
-	static unsigned time = 0;
+	// OPEN NMI AFTER READ REG-C, OR ONLY INT ONCE
+	outpb(0x70, 0x0C);
+	innpb(0x71);
 	mecocoa_global->system_time.sec++;
 	if (1) {
 		Letvar(p, char*, 0xB8003);
 		*p ^= 0x70;// make it blink
 	}
-	outpb(0xA0, ' '); // slaver
-	outpb(0x20, ' '); // master
-	// OPEN NMI AFTER READ REG-C, OR ONLY INT ONCE
-	outpb(0x70, 0x0C);
-	innpb(0x71);
-	__asm("pop  %edi; pop  %esi; pop  %edx; pop  %ecx; pop  %ebx; pop  %eax;");
-	__asm("leave");
-	__asm("iret");
 }
 
 OstreamTrait* kbd_out;
-void Handint_KBD() // Keyboard: move to buffer and deal with global state
-{
-	__asm("push %eax; push %ebx; push %ecx; push %edx; push %esi; push %edi;");
-	char ch = innpb(PORT_KBD_BUFFER);
-	// outsfmt("[%[8H]]", ch);
-	asserv(kbd_out)->OutChar(ch);
-	outpb(0xA0, ' '); // slaver
-	outpb(0x20, ' '); // master
-	__asm("pop  %edi; pop  %esi; pop  %edx; pop  %ecx; pop  %ebx; pop  %eax;");
-	__asm("leave");
-	__asm("iret");
+void Handint_KBD() {
+	asserv(kbd_out)->OutChar(innpb(PORT_KBD_BUFFER));
 }
 
 #endif
@@ -149,7 +127,10 @@ static rostr ExceptionDescription[] = {
 void ERQ_Handler(sdword iden, dword para) {
 	bool have_para = true;
 	if (iden < 0)// do not have para
+	{
 		iden = ~iden;
+		have_para = false;
+	}
 	if (iden >= 0x20)
 		printlog(_LOG_FATAL, "#ELSE");
 	switch (iden) {

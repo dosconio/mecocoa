@@ -31,7 +31,7 @@ struct mecocoa_global_t {
 	word gdt_len;
 	mec_gdt* gdt_ptr;
 	word ivt_len;
-	dword ivt_ptr;
+	_Comment(TODEL) dword ivt_ptr;
 	// 0x10
 	qword zero;
 	dword current_screen_mode;
@@ -62,9 +62,9 @@ enum class syscall_t : stduint {
 #define mapglb(x) (*(usize*)&(x) |= 0x80000000)
 #define mglb(x) (_IMM(x) | 0x80000000)
 
+//{TODEL}
 struct __attribute__((packed)) tmp48le_t { uint16 u_16fore; uint32 u_32back; };
 struct __attribute__((packed)) tmp48be_t { uint32 u_32fore; uint16 u_16back; };
-
 extern tmp48le_t tmp48_le;
 extern tmp48be_t tmp48_be;
 
@@ -74,9 +74,11 @@ extern bool opt_test;
 
 
 // handler
+extern "C" void Handint_PIT_Entry();
 extern "C" void Handint_PIT();
+extern "C" void Handint_RTC_Entry();
 extern "C" void Handint_RTC();
-
+extern "C" void Handint_KBD_Entry();
 extern "C" void Handint_KBD();
 extern OstreamTrait* kbd_out;
 

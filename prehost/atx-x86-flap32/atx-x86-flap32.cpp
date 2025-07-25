@@ -85,18 +85,18 @@ _sign_entry() {
 
 	// Show CPU Info
 	Console.OutFormat("CPU Brand: %s\n\r", text_brand());
+	
 	// Check Memory size and update allocator
 	Console.OutFormat("Mem Avail: %s\n\r", Memory::text_memavail(ker_buf));
 
 	// Align Memory and Keep a page for REAL 16 below 0x10000
 	printlog(_LOG_INFO, "Mem Throw: 0x%[32H]", Memory::align_basic_4k());
-	void* p_real16 {Memory::physical_allocate(0x1000)};
 
 	// Kernel Paging
 	page_init();
-	
 	// GDT and TSS
 	GDT_Init();
+
 	if (opt_info) printlog(_LOG_INFO, "GDT Globl: 0x%[32H]", mecocoa_global->gdt_ptr);
 	if (opt_test) syscall(syscall_t::TEST, (stduint)'T', (stduint)'E', (stduint)'S');
 	new (&krnl_tss) ProcessBlock;
@@ -112,13 +112,13 @@ _sign_entry() {
 	printlog(_LOG_INFO, "SEGM: There are %d GDTs.", GDT_GetNumber());
 
 	// IVT and Device
-	InterruptControl GIC(mecocoa_global->ivt_ptr = mglb(0x800));// linear but not physical
+	InterruptControl GIC(_IMM(0x800));// linear but not physical
 	GIC.Reset(SegCode);
-	if (opt_info) printlog(_LOG_INFO, "IDT Globl: 0x%[32H]", &GIC);
-	GIC[IRQ_PIT].setRange((dword)Handint_PIT, SegCode); PIT_Init();
-	GIC[IRQ_RTC].setRange((dword)Handint_RTC, SegCode); RTC_Init();
-	GIC[IRQ_Keyboard].setRange((dword)Handint_KBD, SegCode);
-	GIC[IRQ_SYSCALL].setRange((dword)call_intr, SegCode); GIC[IRQ_SYSCALL].DPL = 3;
+	GIC[IRQ_PIT].setRange(_IMM(Handint_PIT_Entry), SegCode); PIT_Init();
+	GIC[IRQ_RTC].setRange(_IMM(Handint_RTC_Entry), SegCode); RTC_Init();
+	GIC[IRQ_Keyboard].setRange(_IMM(Handint_KBD_Entry), SegCode);
+	GIC[IRQ_SYSCALL].setRange(_IMM(call_intr), SegCode); GIC[IRQ_SYSCALL].DPL = 3;
+	if (false && opt_info) printlog(_LOG_INFO, "IDT Globl: 0x%[32H]", &GIC);
 	if (opt_test) __asm("ud2");
 
 	//{TODO} Switch Graphic Mode
@@ -157,8 +157,8 @@ _sign_entry() {
 	ttycons[3]->OutFormat("HelloTTY%d\n\r", 3);
 	MccaTTYCon::current_switch(0);
 
-	//__asm("hlt");
 	GIC.enAble();
+
 	loop{
 		__asm("hlt");
 	}

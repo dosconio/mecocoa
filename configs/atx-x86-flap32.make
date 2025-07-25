@@ -13,7 +13,7 @@ mnts=/mnt/floppy
 arch=atx-x86-flap32
 flag=-D_MCCA=0x8632 -D_ARC_x86=5
 
-qemu=qemu-system-x86_64
+qemu=qemu-system-i386
 bochd=C:/Soft/Bochs-2.7/bochsdbg.exe
 
 CXF=-fno-rtti -fno-exceptions -fno-unwind-tables -static -nostdlib -fno-pic #-nodefaultlibs #
@@ -30,7 +30,7 @@ elf_kernel=mcca-$(arch).elf
 
 build: clean $(cppobjs)
 	@echo "MK mecocoa $(arch) real16 support"
-	aasm prehost/$(arch)/atx-x86-real16.asm -felf -o $(uobjpath)/mcca-$(arch)/mcca-$(arch)-elf16.o
+	aasm prehost/$(arch)/atx-x86-cppweaks.asm -felf -o $(uobjpath)/mcca-$(arch)/mcca-$(arch)-elf16.o
 	@echo "MK mecocoa $(arch) loader"
 	g++ -I$(uincpath) $(flag) -m32 prehost/$(arch)/$(arch).loader.cpp prehost/$(arch)/$(arch).auf.cpp -o $(ubinpath)/$(elf_loader) -L$(ubinpath) -lm32d $(CXF) \
 		-T prehost/$(arch)/$(arch).loader.ld  \

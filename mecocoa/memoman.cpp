@@ -45,14 +45,14 @@ void* Memory::physical_allocate(usize siz) {
 	if (p_basic + siz <= (void*)0x7000) {
 		void* ret = p_basic;
 		p_basic += siz;
-		if (opt_info) printlog(_LOG_INFO, "malloc_low(0x%[32H], %[u])", ret, siz);
+		// if (opt_info) printlog(_LOG_INFO, "malloc_low(0x%[32H], %[u])", ret, siz);
 		//{} Pag-map for linear_allocate
 		return ret;
 	}
 	else if (usize(p_ext) + siz <= 0x00100000 + Memory::areax_size) {
 		void* ret = p_ext;
 		p_ext += siz;
-		if (opt_info) printlog(_LOG_INFO, "malloc_hig(0x%[32H], %[u])", ret, siz);
+		// if (opt_info) printlog(_LOG_INFO, "malloc_hig(0x%[32H], %[u])", ret, siz);
 		//{} Pag-map for linear_allocate
 		return ret;
 	}

@@ -74,7 +74,7 @@ ProcessBlock* TaskRegister(void* entry, byte ring)
 		pb->paging.Reset();
 		TSS->CR3 = _IMM(pb->paging.page_directory);
 		pb->paging.MapWeak(0x00000000, 0x00000000, 0x00400000, true, _Comment(R0) true);//{TEMP}
-		pb->paging.MapWeak(0x80000000, 0x00000000, 0x00400000, true, _Comment(R0) false);
+		pb->paging.MapWeak(0x80000000, 0x00000000, 0x00400000, true, _Comment(R0) false);// include IDT
 	}
 
 	TSS->EIP = _IMM(entry);
