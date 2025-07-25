@@ -46,7 +46,6 @@ ProcessBlock* pblocks[8]; stduint pnumber = 0;
 */
 ProcessBlock* TaskRegister(void* entry, byte ring)
 {
-	// word ring = 3;
 	word parent = 8 * 7;// Kernel Task
 
 	word LDTSelector = GDT_Alloc() / 8;
@@ -69,7 +68,15 @@ ProcessBlock* TaskRegister(void* entry, byte ring)
 	TSS->ESP2 = (dword)(page + 0x1800) + 0x400;
 	TSS->SS2 = 8 * 6 + 4 + 2;// 4:LDT 8*6:SS2 2:Ring2
 	TSS->Padding2 = 0;
-	TSS->CR3 = getCR3(); //{TODO} general paging mechanism
+
+	TSS->CR3 = getCR3();
+	_TEMP if (ring == 3) {
+		pb->paging.Reset();
+		TSS->CR3 = _IMM(pb->paging.page_directory);
+		pb->paging.MapWeak(0x00000000, 0x00000000, 0x00400000, true, _Comment(R0) true);//{TEMP}
+		pb->paging.MapWeak(0x80000000, 0x00000000, 0x00400000, true, _Comment(R0) false);
+	}
+
 	TSS->EIP = _IMM(entry);
 	TSS->EFLAGS = getEflags();
 	TSS->EAX = TSS->ECX = TSS->EDX = TSS->EBX = TSS->EBP = TSS->ESI = TSS->EDI = 0;
@@ -144,8 +151,6 @@ ProcessBlock* TaskRegister(void* entry, byte ring)
 
 	TSS->EFLAGS |= 0x0200;// IF
 	if (ring <= 1) TSS->EFLAGS |= _IMM1 << 12;
-	TSS->CR3 = _TEMP _IMM(&kernel_paging->page_directory);
-	//{TODO} PDBR PagTable={UsrPart: UsrSegLimit=0x80000000 without KrnPart}
 	TaskAdd(pb);
 	return pb;
 }

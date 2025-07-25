@@ -24,6 +24,31 @@ _TEMP stduint TasksAvailableSelectors[4]{
 
 extern BareConsole* BCONS0;// TTY0
 
+void switch_task() {
+	task_switch_enable = false;//{TODO} Lock
+	auto pb_src = TaskGet(ProcessBlock::cpu0_task);
+
+	++ProcessBlock::cpu0_task %= numsof(TasksAvailableSelectors);
+	// ProcessBlock::cpu0_task %= 2;ProcessBlock::cpu0_task++;
+
+	if (false) printlog(_LOG_TRACE, "switch task %d", ProcessBlock::cpu0_task);
+	auto pb_des = TaskGet(ProcessBlock::cpu0_task);
+
+	if (pb_des->state == ProcessBlock::State::Uninit)
+		pb_des->state = ProcessBlock::State::Ready;
+	if (pb_src->state == ProcessBlock::State::Running && (
+		pb_des->state == ProcessBlock::State::Ready)) {
+		pb_src->state = ProcessBlock::State::Ready;
+		pb_des->state = ProcessBlock::State::Running;
+	}
+	else {
+		plogerro("task switch error.");
+	}
+	task_switch_enable = true;//{TODO} Unlock
+	jmpFar(0, TasksAvailableSelectors[ProcessBlock::cpu0_task]);
+}
+
+
 // or make into "{callback(); iret();}"
 void Handint_PIT()
 {
@@ -49,27 +74,7 @@ void Handint_PIT()
 	if (time_slice >= 20) { // switch task
 		time_slice = 0;
 		if (task_switch_enable) {
-			task_switch_enable = false;//{TODO} Lock
-			auto pb_src = TaskGet(ProcessBlock::cpu0_task);
-
-			// ++cpu0_task %= numsof(TasksAvailableSelectors);
-			ProcessBlock::cpu0_task %= 2;ProcessBlock::cpu0_task++;
-			
-			if (false) printlog(_LOG_TRACE, "switch task %d", ProcessBlock::cpu0_task);
-			auto pb_des = TaskGet(ProcessBlock::cpu0_task);
-
-			if (pb_des->state == ProcessBlock::State::Uninit)
-				pb_des->state = ProcessBlock::State::Ready;
-			if (pb_src->state == ProcessBlock::State::Running && (
-				pb_des->state == ProcessBlock::State::Ready)) {
-				pb_src->state = ProcessBlock::State::Ready;
-				pb_des->state = ProcessBlock::State::Running;
-			}
-			else {
-				plogerro("task switch error.");
-			}
-			task_switch_enable = true;//{TODO} Unlock
-			jmpFar(0, TasksAvailableSelectors[ProcessBlock::cpu0_task]);
+			switch_task();
 		}
 	}
 	endo:

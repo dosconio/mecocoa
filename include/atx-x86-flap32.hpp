@@ -83,7 +83,7 @@ extern OstreamTrait* kbd_out;
 // memoman
 #include "memoman.hpp"
 
-extern Paging* kernel_paging;// cpu0 running
+extern Paging kernel_paging;// cpu0 running
 
 // [x86]
 void GDT_Init();
@@ -107,6 +107,7 @@ struct _Comment(Kernel) ProcessBlock {
 	static void* table_ready;
 	static void* table_pends;
 
+	Paging paging;
 	descriptor_t LDT[0x100 / byteof(descriptor_t)];
 	TSS_t TSS;
 	stduint kept_intermap[1];
