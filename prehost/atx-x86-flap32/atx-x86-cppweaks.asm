@@ -53,35 +53,73 @@ EXTERN Handint_RTC
 GLOBAL Handint_KBD_Entry
 EXTERN Handint_KBD
 
+GLOBAL ConvertStackPointer
+
+
+%macro PG_PUSH 0
+	MOV EAX, CR3
+	PUSH EAX
+	CMP EAX, 0x00001000
+	JE  %%ENDO
+	CALL ConvertStackPointer
+	MOV EBX, 0x00001000
+	MOV CR3, EBX
+	MOV ESP, EAX
+	%%ENDO:
+%endmacro
+%macro PG_POP 0
+	POP EAX
+	MOV CR3, EAX
+%endmacro
+
+ConvertStackPointer:; (EAX)->Phyzik(EAX)
+	MOV EBX, ESP
+	SHR EBX, 22; 22 for L1P_ID
+	MOV EAX, [EAX + EBX * 4]
+	AND EAX, 0xFFFFF000
+	MOV EBX, ESP
+	SHR EBX, 12; 12 for L0P_ID
+	AND EBX, 0x3FF
+	MOV EAX, [EAX + EBX * 4]
+	AND EAX, 0xFFFFF000
+	MOV EBX, ESP
+	AND EBX, 0xFFF
+	OR  EAX, EBX
+	ADD EAX, 4; Skip Ret-address
+	RET
+	; no use kernel stack
+
 Handint_PIT_Entry:
-	PUSH EBP
-	MOV EBP, ESP
+	ENTER 0,0
 	PUSHAD
 	MOV AL, ' '
 	OUT 0x20, AL
-	CALL Handint_PIT
+	PG_PUSH
+	CALL Handint_PIT; +0x80000000;{} AASM not-support CALL Label|0x80000000, so this or CALL EAX
+	PG_POP
 	POPAD
 	LEAVE
 	IRETD
 Handint_RTC_Entry:
-	PUSH EBP
-	MOV EBP, ESP
+	ENTER 0,0
 	PUSHAD
 	MOV AL, ' '
 	OUT 0xA0, AL
 	OUT 0x20, AL
+	PG_PUSH
 	CALL Handint_RTC
+	PG_POP
 	POPAD
 	LEAVE
 	IRETD
 Handint_KBD_Entry:
-	PUSH EBP
-	MOV EBP, ESP
-	;ENTER 0,0
+	ENTER 0,0
 	PUSHAD
 	MOV AL, ' '
 	OUT 0x20, AL
+	PG_PUSH
 	CALL Handint_KBD
+	PG_POP
 	POPAD
 	LEAVE
 	IRETD

@@ -45,14 +45,14 @@ void* Memory::physical_allocate(usize siz) {
 	if (p_basic + siz <= (void*)0x7000) {
 		void* ret = p_basic;
 		p_basic += siz;
-		// if (opt_info) printlog(_LOG_INFO, "malloc_low(0x%[32H], %[u])", ret, siz);
+		if (opt_info) printlog(_LOG_INFO, "malloc_low(0x%[32H], %[u])", ret, siz);
 		//{} Pag-map for linear_allocate
 		return ret;
 	}
 	else if (usize(p_ext) + siz <= 0x00100000 + Memory::areax_size) {
 		void* ret = p_ext;
 		p_ext += siz;
-		// if (opt_info) printlog(_LOG_INFO, "malloc_hig(0x%[32H], %[u])", ret, siz);
+		if (opt_info) printlog(_LOG_INFO, "malloc_hig(0x%[32H], %[u])", ret, siz);
 		//{} Pag-map for linear_allocate
 		return ret;
 	}
@@ -79,7 +79,7 @@ Paging kernel_paging;
 extern stduint tmp;
 
 _TEMP void page_init() {
-	kernel_paging.Reset();
+	kernel_paging.Reset();// should take 0x1000
 	kernel_paging.MapWeak(0x00000000, 0x00000000, 0x00400000, true, _Comment(R0) true);//{TODO} false
 	kernel_paging.MapWeak(0xFFFFF000, _IMM(kernel_paging.page_directory), 0x00001000, false, _Comment(R0) true);// make loop PDT and do not unisym's
 	// for(i, 0x400) pdt[0x3FF][...] Page Tables

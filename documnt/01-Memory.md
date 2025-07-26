@@ -12,6 +12,7 @@ her-note: false
 | `00000600`~`000007FF`                 | GDT                        |
 | `00000800`~`00000FFF`                 | IVT Page (Selectors)       |
 | ***Kernel Area***                     |                            |
+| `00001000`~`00001FFF`                 | Global 2GB PDT             |
 | `00001000`~`00007BFF`                 | kernel loader / area basic |
 | `00007000`~`00007FFF`                 | stack                      |
 | `00008000`~`0007FFFF`                 | area basic / kernel        |
