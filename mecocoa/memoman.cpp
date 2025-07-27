@@ -54,6 +54,7 @@ void* Memory::physical_allocate(usize siz) {
 		p_ext += siz;
 		if (opt_info) printlog(_LOG_INFO, "malloc_hig(0x%[32H], %[u])", ret, siz);
 		//{} Pag-map for linear_allocate
+		//{} Add Kernel and Each App's PDT
 		return ret;
 	}
 	//{} try swap
@@ -80,8 +81,8 @@ extern stduint tmp;
 
 _TEMP void page_init() {
 	kernel_paging.Reset();// should take 0x1000
-	kernel_paging.MapWeak(0x00000000, 0x00000000, 0x00400000, true, _Comment(R0) true);//{TODO} false
-	kernel_paging.MapWeak(0xFFFFF000, _IMM(kernel_paging.page_directory), 0x00001000, false, _Comment(R0) true);// make loop PDT and do not unisym's
+	kernel_paging.MapWeak(0x00000000, 0x00000000, 0x00400000, true, _Comment(R0 TOD) true);//{TODO} false
+	kernel_paging.MapWeak(0xFFFFF000, _IMM(kernel_paging.page_directory), 0x00001000, false, _Comment(R0) false);// make loop PDT and do not unisym's
 	// for(i, 0x400) pdt[0x3FF][...] Page Tables
 	kernel_paging.MapWeak(0x80000000, 0x00000000, 0x00400000, true, _Comment(R0) false);
 	//

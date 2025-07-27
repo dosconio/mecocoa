@@ -8,10 +8,12 @@ int main()
 	while (1) {
 		//sysdelay(2 * 1000000);// 2s
 		//for0(i, 0x8000) for0(j, 0x1000) ;
-		unsigned last_sec = callid[0x18 / 4];
+		while (1);
 		unsigned id = systest('T', 'E', 'S');
+		sysouts("B");
+		
+		unsigned last_sec = callid[0x18 / 4];
 		//sysouts("B");
-
 		if (id == 2) {
 			sysouts("subappb systest OK!\n\r");
 		}

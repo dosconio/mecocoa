@@ -60,7 +60,7 @@ statin void _start_assert() {
 
 void krnl_init() {
 	new (&ker_buf) String(_buf, byteof(_buf));
-	(*mecocoa_global).gdt_ptr = (mec_gdt*)0x600;
+	(*mecocoa_global).gdt_ptr = (mec_gdt*)0x80000600;
 	mecocoa_global->system_time.sec = 0;
 	mecocoa_global->system_time.mic = 0;
 	//
@@ -72,6 +72,13 @@ void krnl_init() {
 }
 
 #define IRQ_SYSCALL 0x81// leave 0x80 for unix-like syscall
+
+void xxx() //dbg
+{
+	jmpFar(0, 8 * 11);
+}
+
+_ESYM_C void RETONLY();
 
 // in future, some may be abstracted into mecocoa/mccaker.cpp
 _sign_entry() {
@@ -112,7 +119,7 @@ _sign_entry() {
 	printlog(_LOG_INFO, "SEGM: There are %d GDTs.", GDT_GetNumber());
 
 	// IVT and Device
-	InterruptControl GIC(_IMM(0x800));// linear but not physical
+	InterruptControl GIC(_IMM(0x80000800));// linear but not physical
 	GIC.Reset(SegCode);
 	GIC[IRQ_PIT].setRange(_IMM(Handint_PIT_Entry), SegCode); PIT_Init();
 	GIC[IRQ_RTC].setRange(_IMM(Handint_RTC_Entry), SegCode); RTC_Init();
@@ -124,7 +131,9 @@ _sign_entry() {
 	//{TODO} Switch Graphic Mode
 	if (opt_test && 0) __asm("call SwitchReal16");
 	if (opt_test) Console.OutFormat("\xFF\x70[Mecocoa]\xFF\x02 Real16 Switched Test OK!\xFF\x07\n\r");
-	
+
+	GIC.enAble();
+
 	// Service
 	TaskRegister((void*)&MccaTTYCon::serv_cons_loop, 1);
 
@@ -133,14 +142,15 @@ _sign_entry() {
 	void* load_buffer = Memory::physical_allocate(bufsize);
 	Harddisk_t hdisk(Harddisk_t::HarddiskType::LBA28);
 	// subappb
+	printlog(_LOG_INFO, "Loading Subappb");
 	for0(i, 64) hdisk.Read(i + 128, (void*)((char*)load_buffer + 512 * (i)));
-	ELF32_LoadExecFromMemory((void*)load_buffer, (void**)&entry_temp);
-	printlog(_LOG_INFO, "Load Subappb at 0x%[32H]", entry_temp);
-	TaskRegister((void*)entry_temp, 3)->focus_tty_id = 2;
+	TaskLoad(NULL _TEMP, load_buffer, 3)->focus_tty_id = 2;
+	// ELF32_LoadExecFromMemory((void*)load_buffer, (void**)&entry_temp);
+	// TaskRegister((void*)entry_temp, 3)->focus_tty_id = 1;
 	// subappa
+	printlog(_LOG_INFO, "Loading Subappa");
 	for0(i, 64) hdisk.Read(i + 256, (void*)((char*)load_buffer + 512 * (i)));
 	ELF32_LoadExecFromMemory((void*)load_buffer, (void**)&entry_temp);
-	printlog(_LOG_INFO, "Load Subappa at 0x%[32H]", entry_temp);
 	TaskRegister((void*)entry_temp, 3)->focus_tty_id = 1;
 	//{!} Memory is used out!
 
@@ -157,8 +167,18 @@ _sign_entry() {
 	ttycons[3]->OutFormat("HelloTTY%d\n\r", 3);
 	MccaTTYCon::current_switch(0);
 
-	GIC.enAble();
+	// task_switch_enable = false;
+	// InterruptEnable();
 
+	for (stduint i = 0x0; i < 256; i++) {
+		GateStructInterruptR0(&GIC[i], 0x80000000 + _IMM(RETONLY), SegCode, 0);
+	}
+
+	// InterruptEnable();
+	// __asm("mov $0x6000, %eax");
+	// __asm("mov %eax, %cr3");
+	// while (1);
+	xxx();
 	loop{
 		__asm("hlt");
 	}

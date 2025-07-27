@@ -54,6 +54,7 @@ GLOBAL Handint_KBD_Entry
 EXTERN Handint_KBD
 
 GLOBAL ConvertStackPointer
+GLOBAL RETONLY
 
 
 %macro PG_PUSH 0
@@ -122,4 +123,12 @@ Handint_KBD_Entry:
 	PG_POP
 	POPAD
 	LEAVE
+	IRETD
+
+RETONLY:
+	PUSH EAX
+	MOV AL, ' '
+	OUT 0xA0, AL
+	OUT 0x20, AL
+	POP EAX
 	IRETD

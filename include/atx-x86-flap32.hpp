@@ -2,6 +2,7 @@
 #include <c/datime.h>
 #include <c/graphic/color.h>
 #include <c/driver/keyboard.h>
+#include <cpp/trait/BlockTrait.hpp>
 
 #define statin static inline
 #define _sign_entry() extern "C" void _start()
@@ -127,7 +128,10 @@ struct _Comment(Kernel) ProcessBlock {
 	//{TODO} suspend information
 
 };
+
 ProcessBlock* TaskRegister(void* entry, byte ring);
+ProcessBlock* TaskLoad(BlockTrait* source, void* addr, byte ring);//{TODO} for existing R1
+
 stduint TaskAdd(ProcessBlock* task);
 ProcessBlock* TaskGet(stduint taskid);// get task block by its id
 

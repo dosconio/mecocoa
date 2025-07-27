@@ -126,6 +126,7 @@ static rostr ExceptionDescription[] = {
 
 void ERQ_Handler(sdword iden, dword para) {
 	bool have_para = true;
+	dword tmp;
 	if (iden < 0)// do not have para
 	{
 		iden = ~iden;
@@ -148,6 +149,12 @@ void ERQ_Handler(sdword iden, dword para) {
 		}
 		break;
 	}
+	case ERQ_Page_Fault:
+		__asm("mov %cr2, %eax");
+		__asm("mov %%eax, %0" : "=m" (tmp));
+		printlog(_LOG_FATAL, have_para ? "%s with 0x%[32H], vaddr: 0x%[32H]" : "%s",
+			ExceptionDescription[iden], para, tmp); // printlog will call halt machine
+		break;
 	default:
 		printlog(_LOG_FATAL, have_para ? "%s with 0x%[32H]" : "%s",
 			ExceptionDescription[iden], para); // printlog will call halt machine
