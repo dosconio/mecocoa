@@ -57,6 +57,9 @@ enum class syscall_t : stduint {
 	INNC = 0x01, //{TODO} getchar (fmt, ...)
 	EXIT = 0x02, // exit (code)
 	TIME = 0x03, //{TODO} gettick (&us, optional &s)
+	REST = 0x04, // halt
+
+
 	TEST = 0xFF,
 };
 
@@ -86,13 +89,6 @@ extern OstreamTrait* kbd_out;
 // memoman
 #include "memoman.hpp"
 
-extern Paging kernel_paging;// cpu0 running
-
-// [x86]
-void GDT_Init();
-word GDT_GetNumber();
-word GDT_Alloc();
-
 // syscall
 extern "C" void call_gate();
 extern "C" void call_intr();
@@ -107,6 +103,7 @@ extern "C" bool task_switch_enable;
 struct _Comment(Kernel) ProcessBlock {
 	static stduint cpu_proc_number;
 	static stduint cpu0_task;
+	static stduint cpu0_rest;
 	static void* table_ready;
 	static void* table_pends;
 
@@ -134,6 +131,9 @@ ProcessBlock* TaskLoad(BlockTrait* source, void* addr, byte ring);//{TODO} for e
 
 stduint TaskAdd(ProcessBlock* task);
 ProcessBlock* TaskGet(stduint taskid);// get task block by its id
+
+void switch_task();
+void switch_halt();
 
 // [service] console
 

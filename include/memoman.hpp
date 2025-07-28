@@ -38,5 +38,11 @@ public:
 
 extern void page_init();
 
+extern Paging kernel_paging;// cpu0 running
+
+// [x86]
+void GDT_Init();
+word GDT_GetNumber();
+word GDT_Alloc();
 
 #endif

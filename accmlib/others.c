@@ -1,17 +1,30 @@
 #include "inc/aaaaa.h"
 volatile static unsigned* const callid = (volatile unsigned*)0x0000500;// 0x80000500;
-void sysouts(const char* str) {
+void sysouts(const char* str)// 0
+{
 	while (*str)
 	{
 		syscall(0x00, (stduint)*str, nil, nil);
 		str++;
 	}
 }
-void sysquit(int code) {
+void sysinnc()// 1
+{
+}
+void sysquit(int code)// 2
+{
 	syscall(0x02, nil, nil, nil);
 }
 
-void sysinnc() {}
+stduint syssecond()// 3
+{
+	return syscall(0x03, nil, nil, nil);
+}
+
+void sysrest()// 4
+{
+	syscall(0x04, nil, nil, nil);
+}
 
 //{} with retval
 void sysdelay(unsigned dword) {
@@ -25,6 +38,7 @@ void sysdelay(unsigned dword) {
 	}
 }
 
-stduint systest(unsigned t, unsigned e, unsigned s) {
+stduint systest(unsigned t, unsigned e, unsigned s)// FF
+{
 	syscall(0xFF, t, e, s);
 }

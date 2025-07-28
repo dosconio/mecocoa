@@ -146,14 +146,13 @@ _sign_entry() {
 	printlog(_LOG_INFO, "Loading Subappb");
 	for0(i, 64) hdisk.Read(i + 128, (void*)((char*)load_buffer + 512 * (i)));
 	TaskLoad(NULL _TEMP, load_buffer, 3)->focus_tty_id = 2;
-	// ELF32_LoadExecFromMemory((void*)load_buffer, (void**)&entry_temp);
-	// TaskRegister((void*)entry_temp, 3)->focus_tty_id = 1;
 	// subappa
 	printlog(_LOG_INFO, "Loading Subappa");
 	for0(i, 64) hdisk.Read(i + 256, (void*)((char*)load_buffer + 512 * (i)));
-	ELF32_LoadExecFromMemory((void*)load_buffer, (void**)&entry_temp);
-	TaskRegister((void*)entry_temp, 3)->focus_tty_id = 1;
-	//{!} Memory is used out!
+	TaskLoad(NULL _TEMP, load_buffer, 3)->focus_tty_id = 1;
+	// ELF32_LoadExecFromMemory((void*)load_buffer, (void**)&entry_temp);
+	// TaskRegister((void*)entry_temp, 3)->focus_tty_id = 1;
+
 
 	if (false) CallFar(0, 8 * 9);// manually schedule
 	if (false) { CallFar(0, 8 * 9); jmpFar(0, 8 * 9); }// re-entry test

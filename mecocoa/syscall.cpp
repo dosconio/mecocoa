@@ -21,8 +21,9 @@ static const byte syscall_paracnts[0x100] = {
 	1, //OUTC
 	3, //INNC
 	0, //EXIT
-	0, //TIME
-	0,0,0,0, 0,0,0,0,0,0,0,0,// 0XH
+	0, //TIME ret(second)
+	0, //REST
+	0,0,0, 0,0,0,0,0,0,0,0,// 0XH
 	0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,// 1XH
 	0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,// 2XH
 	0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,// 3XH
@@ -64,8 +65,24 @@ static stduint call_body(const syscall_t callid, ...) {
 		TaskReturn();
 		break;
 	case syscall_t::TIME:
-
+		task_switch_enable = task_switch_enable_old;
+		return mecocoa_global->system_time.sec;
 		break;
+	case syscall_t::REST:
+		// __asm("hlt");// will block here a long time
+		switch_halt();
+		// __asm("cli;hlt;");
+		// __asm("sti");
+		// return 0;
+		break;
+		
+
+
+
+
+
+
+
 	case syscall_t::TEST:
 		//{TODO} ISSUE 20250706 Each time subapp (Ring3) print %d or other integer by outsfmt() will panic, but OutInteger() or Kernel Ring0 is OK.
 		if (para[0] == 'T' && para[1] == 'E' && para[2] == 'S') {
@@ -90,9 +107,10 @@ static stduint call_body(const syscall_t callid, ...) {
 	return 0;
 }
 
+
 void call_gate() { // noreturn
 	stduint para[4];// a c d b
-	__asm("push %ds; push %es; push %fs; push %gs");
+	//__asm("push %ds; push %es; push %fs; push %gs");
 	__asm("mov  %%eax, %0" : "=m"(para[0]));
 	__asm("mov  %%ecx, %0" : "=m"(para[1]));
 	__asm("mov  %%edx, %0" : "=m"(para[2]));
@@ -103,9 +121,11 @@ void call_gate() { // noreturn
 	__asm("push %ebp");
 	__asm("push %esi");
 	__asm("push %edi");
-	__asm("mov  $8*1, %eax");
-	__asm("mov %eax, %ds; mov %eax, %es; mov %eax, %fs; mov %eax, %gs");
+	__asm("call PG_PUSH");
+	//__asm("mov  $8*1, %eax");
+	//__asm("mov %eax, %ds; mov %eax, %es; mov %eax, %fs; mov %eax, %gs");
 	stduint ret = call_body((syscall_t)para[0], para[1], para[2], para[3]);
+	__asm("call PG_POP");
 	__asm("mov  %0, %%eax" : : "m"(ret));
 	__asm("pop %edi");// popad
 	__asm("pop %esi");
@@ -113,7 +133,7 @@ void call_gate() { // noreturn
 	__asm("pop %edx");
 	__asm("pop %ecx");
 	__asm("pop %ebx");
-	__asm("pop  %gs; pop %fs; pop %es; pop %ds");
+	//__asm("pop  %gs; pop %fs; pop %es; pop %ds");
 	__asm("mov  %ebp, %esp");
 	__asm("pop  %ebp      ");
 	__asm("jmp returnfar");
@@ -123,17 +143,30 @@ void call_gate() { // noreturn
 
 void call_intr() {
 	stduint para[4];// a c d b
-	__asm("push %ds; push %es; push %fs; push %gs");
+	// __asm("push %ds; push %es; push %fs; push %gs");
 	__asm("mov  %%eax, %0" : "=m"(para[0]));
 	__asm("mov  %%ecx, %0" : "=m"(para[1]));
 	__asm("mov  %%edx, %0" : "=m"(para[2]));
 	__asm("mov  %%ebx, %0" : "=m"(para[3]));
-	__asm("pushal");// pushad
-	__asm("mov  $8*1, %eax");
-	__asm("mov %eax, %ds; mov %eax, %es; mov %eax, %fs; mov %eax, %gs");
-	call_body((syscall_t)para[0], para[1], para[2], para[3]);
-	__asm("popal");// popad
-	__asm("pop  %gs; pop %fs; pop %es; pop %ds");
+	__asm("push %ebx");// pushad
+	__asm("push %ecx");
+	__asm("push %edx");
+	__asm("push %ebp");
+	__asm("push %esi");
+	__asm("push %edi");
+	__asm("call PG_PUSH");
+	// __asm("mov  $8*1, %eax");
+	// __asm("mov %eax, %ds; mov %eax, %es; mov %eax, %fs; mov %eax, %gs");
+	stduint ret = call_body((syscall_t)para[0], para[1], para[2], para[3]);
+	__asm("call PG_POP");
+	__asm("mov  %0, %%eax" : : "m"(ret));
+	__asm("pop %edi");// popad
+	__asm("pop %esi");
+	__asm("pop %ebp");
+	__asm("pop %edx");
+	__asm("pop %ecx");
+	__asm("pop %ebx");
+	// __asm("pop  %gs; pop %fs; pop %es; pop %ds");
 	__asm("mov  %ebp, %esp");
 	__asm("pop  %ebp      ");
 	__asm("iretl");// iretd

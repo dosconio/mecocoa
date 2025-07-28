@@ -60,7 +60,7 @@ build: clean $(cppobjs)
 	#
 	echo MK subappa
 	aasm -felf subapps/helloa/helloa.asm -o subapps/helloa/helloa.o
-	ld   -s -T subapps/helloa/helloa.ld -m elf_i386 -o $(uobjpath)/accm-$(arch)/a subapps/helloa/helloa.o accmlib/*.o
+	ld   -s -m elf_i386 -o $(uobjpath)/accm-$(arch)/a subapps/helloa/helloa.o accmlib/*.o
 	ffset $(ubinpath)/fixed.vhd $(uobjpath)/accm-$(arch)/a 256
 	#
 	echo MK subappb

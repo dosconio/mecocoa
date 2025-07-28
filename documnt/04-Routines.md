@@ -25,13 +25,18 @@ Rule
 
 `enum class syscall_t`
 
-| Identification | Function            | IO        | Description            |
-| -------------- | ------------------- | --------- | ---------------------- |
-| OUTC           | putchar current tty | (char)    |                        |
-| INNC           | getchar             | ()→word   | 高字节包含键盘状态<br>TODO      |
-| EXIT           | terminate program   | (code)    |                        |
-| TIME           | gettick             | ()→second | TODO                   |
-| TEST           | testing             | (T,E,S)   | 输入TES则反馈成功，并标注是哪个进程导致的 |
+| No. | Identification | Function            | IO        | Description            |
+| --- | -------------- | ------------------- | --------- | ---------------------- |
+| 0   | OUTC           | putchar current tty | (char)    |                        |
+| 1   | INNC           | getchar             | ()→word   | 高字节包含键盘状态<br>TODO      |
+| 2   | EXIT           | terminate program   | (code)    |                        |
+| 3   | TIME           | syssecond           | ()→second | 获取秒数                   |
+| 4   | REST           | haverest            |           | HLT 直到下一次中断发生          |
+|     |                |                     |           |                        |
+|     |                |                     |           |                        |
+|     |                |                     |           |                        |
+|     |                |                     |           |                        |
+| FF  | TEST           | testing             | (T,E,S)   | 输入TES则反馈成功，并标注是哪个进程导致的 |
 
 
 

@@ -19,9 +19,69 @@ use crate uni;
 
 bool task_switch_enable = true;
 stduint ProcessBlock::cpu0_task;
+stduint ProcessBlock::cpu0_rest;
 
 _TEMP
 ProcessBlock* pblocks[8]; stduint pnumber = 0;
+
+
+
+_TEMP stduint TasksAvailableSelectors[4]{
+	SegTSS, 8 * 9, 8 * 11, 8 * 13
+};
+void switch_halt() {
+	if (ProcessBlock::cpu0_task == 0) {
+		return;
+	}
+	ProcessBlock::cpu0_rest = ProcessBlock::cpu0_task;
+	auto pb_src = TaskGet(ProcessBlock::cpu0_task);
+	auto pb_des = TaskGet(0);
+	// printlog(_LOG_TRACE, "switch halt");
+	if (pb_des->state == ProcessBlock::State::Uninit)
+		pb_des->state = ProcessBlock::State::Ready;
+	if (pb_src->state == ProcessBlock::State::Running && (
+		pb_des->state == ProcessBlock::State::Ready)) {
+		pb_src->state = ProcessBlock::State::Ready;
+		pb_des->state = ProcessBlock::State::Running;
+	}
+	else {
+		plogerro("task halt error.");
+	}
+	ProcessBlock::cpu0_task = 0;// kernel
+	task_switch_enable = true;
+	//
+	pb_src->TSS.PDBR = getCR3();// CR3 will not save in TSS? -- phina, 20250728
+	jmpFar(0, SegTSS);
+}
+
+// by only PIT
+void switch_task() {
+	task_switch_enable = false;//{TODO} Lock
+	auto pb_src = TaskGet(ProcessBlock::cpu0_task);
+
+	if (ProcessBlock::cpu0_rest) {
+		ProcessBlock::cpu0_task = (ProcessBlock::cpu0_rest + 1) % numsof(TasksAvailableSelectors);
+		ProcessBlock::cpu0_rest = 0;
+	}
+	else ++ProcessBlock::cpu0_task %= numsof(TasksAvailableSelectors);
+	// ProcessBlock::cpu0_task %= 2;ProcessBlock::cpu0_task++;
+
+	// printlog(_LOG_TRACE, "switch task %d", ProcessBlock::cpu0_task);
+	auto pb_des = TaskGet(ProcessBlock::cpu0_task);
+
+	if (pb_des->state == ProcessBlock::State::Uninit)
+		pb_des->state = ProcessBlock::State::Ready;
+	if (pb_src->state == ProcessBlock::State::Running && (
+		pb_des->state == ProcessBlock::State::Ready)) {
+		pb_src->state = ProcessBlock::State::Ready;
+		pb_des->state = ProcessBlock::State::Running;
+	}
+	else {
+		plogerro("task switch error.");
+	}
+	task_switch_enable = true;//{TODO} Unlock
+	jmpFar(0, TasksAvailableSelectors[ProcessBlock::cpu0_task]);
+}
 
 // LocaleDescriptor32SetFromELF32
 // 0
@@ -229,8 +289,8 @@ ProcessBlock* TaskLoad(BlockTrait* source, void* addr, byte ring)
 			TaskLoad_Carry((char*)ph->p_vaddr, ph->p_memsz, (char*)addr + ph->p_offset, pb->paging);
 		}
 	}
-	outsfmt("LDTSel %d, TSSSel %d, Entry 0x%[32H] Phy 0x%[32H], CR3=0x%[32H]\n\r",
-		LDTSelector, TSSSelector,
+	outsfmt("TSS %d at 0x%[32H], Entry 0x%[32H]->0x%[32H], CR3=0x%[32H]\n\r",
+		TSSSelector, page,
 		header->e_entry, pb->paging[header->e_entry],
 		TSS->CR3);
 
@@ -257,7 +317,7 @@ ProcessBlock* TaskLoad(BlockTrait* source, void* addr, byte ring)
 	case 2: TSS->ESP = TSS->ESP2;
 		break;
 	default: 
-	case 3: TSS->ESP = (dword)(page + 0x1C00) + 0x400;
+	case 3: TSS->ESP = (dword)(page + 0x1C00) + 0x400 - 0x10;
 		break;
 	}
 	//{TODO} allow IOMap Version
