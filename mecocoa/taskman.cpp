@@ -206,14 +206,17 @@ ProcessBlock* TaskLoad(BlockTrait* source, void* addr, byte ring)
 	pb->paging.Reset();
 	TSS->CR3 = _IMM(pb->paging.page_directory);
 
+	// keep 0x00000000 default empty page
 	pb->paging.Map(0x00001000, _IMM(page), allocsize, true, _Comment(R3) true);
 
 	pb->paging.Map(0x80000000, 0x00000000, 0x00400000, true, _Comment(R0) false);// should include LDT
 
-	//{WHY!!!}
-	// pb->paging.MapWeak(0x00000000, 0, 0x00020000, true, _Comment(R0) false);
-	// pb->paging.MapWeak(0x00000000, 0, 0x00100000, true, _Comment(R0) true);
-	// pb->paging.MapWeak(0x00000000, 0, 0x00200000, true, _Comment(R0) false);
+	//{WHY!!!} Found should include LDT. Do "JMP-TSS" need keep it, and its PDT?
+	// pb->paging.MapWeak(0x00108000, 0x00108000, 0x00002000, true, _Comment(R0) false);
+	pb->paging.MapWeak(_IMM(page), _IMM(page), allocsize, true, _Comment(R0) false);
+	//{TODO} using DIY switch procedure but J-TSS
+	//{ASSUME} no conflict with:
+
 
 	Letvar(header, struct ELF_Header_t*, addr);
 	TSS->EIP = 0x10C146;//_IMM(header->e_entry);
@@ -222,6 +225,7 @@ ProcessBlock* TaskLoad(BlockTrait* source, void* addr, byte ring)
 		Letvar(ph, struct ELF_PHT_t*, (byte*)addr + header->e_phoff + header->e_phentsize * i);
 		if (ph->p_type == PT_LOAD)//{TEMP}VAddress
 		{
+			//{TODO} RW of ph->p_flags;
 			TaskLoad_Carry((char*)ph->p_vaddr, ph->p_memsz, (char*)addr + ph->p_offset, pb->paging);
 		}
 	}

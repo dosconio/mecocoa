@@ -42,7 +42,7 @@ usize Memory::evaluate_size() {
 // Page size at least
 void* Memory::physical_allocate(usize siz) {
 	if (siz & 0xFFF) siz = (siz & ~_IMM(0xFFF)) + 0x1000;
-	if (p_basic + siz <= (void*)0x7000) {
+	if (p_basic + siz <= (void*)0x6000) {
 		void* ret = p_basic;
 		p_basic += siz;
 		if (opt_info) printlog(_LOG_INFO, "malloc_low(0x%[32H], %[u])", ret, siz);

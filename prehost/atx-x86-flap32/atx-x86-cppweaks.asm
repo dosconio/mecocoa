@@ -54,81 +54,100 @@ GLOBAL Handint_KBD_Entry
 EXTERN Handint_KBD
 
 GLOBAL ConvertStackPointer
-GLOBAL RETONLY
+GLOBAL PG_PUSH, PG_POP
 
 
-%macro PG_PUSH 0
-	MOV EAX, CR3
+PG_PUSH:
+	POP ESI
+	MOV EAX, DS
 	PUSH EAX
-	CMP EAX, 0x00001000
-	JE  %%ENDO
-	CALL ConvertStackPointer
-	MOV EBX, 0x00001000
-	MOV CR3, EBX
-	MOV ESP, EAX
-	%%ENDO:
-%endmacro
-%macro PG_POP 0
-	POP EAX
+	MOV EAX, SS
+	PUSH EAX
+	;
+	MOV EAX, 8 * 1
+	MOV DS, EAX
+	MOV ES, EAX
+	MOV FS, EAX
+	MOV GS, EAX
+	MOV SS, EAX
+	;
+	MOV EDX, CR3
+	MOV ECX, ESP
+	SUB ECX, 4 * 3; ecx and edx and ebp
+	PUSH EDX
+	PUSH ECX
+		PUSH EBP
+	MOV EAX, 0x00001000
 	MOV CR3, EAX
-%endmacro
+	;MOV ESP, 0x7000; INTERRUPT STACK
+	CALL ConvertStackPointer
+	MOV ESP, EAX
+		MOV ECX, EBP
+		CALL ConvertStackPointer
+		MOV EBP, EAX
+	PUSH ESI
+	RET
+PG_POP:
+	POP ESI
+	    POP EBX
+	POP ECX
+	POP EDX
+	ADD ECX, 4 * (2+1)
+	MOV CR3, EDX
+	MOV ESP, ECX
+	POP EAX
+	MOV SS, EAX
+	POP EAX
+	MOV DS, EAX
+	MOV ES, EAX
+	MOV FS, EAX
+	MOV GS, EAX
+	PUSH ESI
+	RET
 
-ConvertStackPointer:; (EAX)->Phyzik(EAX)
-	MOV EBX, ESP
+ConvertStackPointer:; (ECX:ESP, EDX:CR3)->ESP
+	MOV EBX, ECX
 	SHR EBX, 22; 22 for L1P_ID
-	MOV EAX, [EAX + EBX * 4]
+	MOV EAX, [EDX + EBX * 4]
 	AND EAX, 0xFFFFF000
-	MOV EBX, ESP
+	MOV EBX, ECX
 	SHR EBX, 12; 12 for L0P_ID
 	AND EBX, 0x3FF
 	MOV EAX, [EAX + EBX * 4]
 	AND EAX, 0xFFFFF000
-	MOV EBX, ESP
+	MOV EBX, ECX
 	AND EBX, 0xFFF
 	OR  EAX, EBX
-	ADD EAX, 4; Skip Ret-address
+	; ADD EAX, 4; Skip Ret-address
 	RET
 	; no use kernel stack
 
 Handint_PIT_Entry:
-	ENTER 0,0
 	PUSHAD
+	CALL PG_PUSH
 	MOV AL, ' '
 	OUT 0x20, AL
-	PG_PUSH
-	CALL Handint_PIT; +0x80000000;{} AASM not-support CALL Label|0x80000000, so this or CALL EAX
-	PG_POP
+	CALL Handint_PIT
+	CALL PG_POP
 	POPAD
-	LEAVE
 	IRETD
 Handint_RTC_Entry:
-	ENTER 0,0
 	PUSHAD
+	CALL PG_PUSH
 	MOV AL, ' '
 	OUT 0xA0, AL
 	OUT 0x20, AL
-	PG_PUSH
 	CALL Handint_RTC
-	PG_POP
+	CALL PG_POP
 	POPAD
-	LEAVE
 	IRETD
 Handint_KBD_Entry:
-	ENTER 0,0
 	PUSHAD
+	CALL PG_PUSH
 	MOV AL, ' '
 	OUT 0x20, AL
-	PG_PUSH
 	CALL Handint_KBD
-	PG_POP
+	CALL PG_POP
 	POPAD
-	LEAVE
 	IRETD
 
-RETONLY:
-	PUSH EAX
-	MOV AL, ' '
-	OUT 0xA0, AL
-	OUT 0x20, AL
-	POP EAX
-	IRETD

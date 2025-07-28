@@ -124,9 +124,28 @@ static rostr ExceptionDescription[] = {
 	"#XF SIMD Floating-Point Exception"
 };
 
+_ESYM_C void PG_PUSH(), PG_POP();
+
 void ERQ_Handler(sdword iden, dword para) {
 	bool have_para = true;
 	dword tmp;
+	dword regs[6];
+	__asm("mov %%eax, %0" : "=m" (regs[0]));
+	__asm("mov %%ebx, %0" : "=m" (regs[1]));
+	__asm("mov %%ecx, %0" : "=m" (regs[2]));
+	__asm("mov %%edx, %0" : "=m" (regs[3]));
+	__asm("mov %%esi, %0" : "=m" (regs[4]));
+	__asm("mov %%edi, %0" : "=m" (regs[5]));
+	PG_PUSH();
+	__asm("mov %0, %%eax" : "=m" (regs[0]));
+	__asm("mov %0, %%ebx" : "=m" (regs[1]));
+	__asm("mov %0, %%ecx" : "=m" (regs[2]));
+	__asm("mov %0, %%edx" : "=m" (regs[3]));
+	__asm("mov %0, %%esi" : "=m" (regs[4]));
+	__asm("mov %0, %%edi" : "=m" (regs[5]));
+	
+	// __asm("mov %cr3, %eax");
+	//__asm("mov %%eax, %0" : "=m" (cr3));
 	if (iden < 0)// do not have para
 	{
 		iden = ~iden;
@@ -160,6 +179,7 @@ void ERQ_Handler(sdword iden, dword para) {
 			ExceptionDescription[iden], para); // printlog will call halt machine
 		break;
 	}
+	PG_POP();
 }
 
 #endif

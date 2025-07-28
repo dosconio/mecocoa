@@ -4,27 +4,28 @@ her-note: false
 ---
 
 
-| Fizik Address                         | Detail 32                  |
-| ------------------------------------- | -------------------------- |
-| `00000000`~`000003FF`                 | Kept                       |
-| `00000400`~`000004FF`                 | BIOS Data Area             |
-| `00000500`~`000005FF`                 | KASHA Data Area            |
-| `00000600`~`000007FF`                 | GDT                        |
-| `00000800`~`00000FFF`                 | IVT Page (Selectors)       |
-| ***Kernel Area***                     |                            |
-| `00001000`~`00001FFF`                 | Global 2GB PDT             |
-| `00001000`~`00007BFF`                 | kernel loader / area basic |
-| `00007000`~`00007FFF`                 | stack                      |
-| `00008000`~`0007FFFF`                 | area basic / kernel        |
-| `00080000`~`0009FFFF`                 | Extended BIOS Data Area    |
-| ***Upper Reflect Area*** (Over 640KB) |                            |
-| `000A0000`~`000BFFFF`                 | Video Display Memory       |
-| `000C0000`~`000C7FFF`                 | Video BIOS                 |
-| `000C8000`~`000EFFFF`                 | BIOS Expansions            |
-| `000F0000`~`000FFFFF`                 | Mainboard BIOS             |
-| > `000B8000~000BFFFF`                 | Video Display Buffer 32K   |
-| ***User Area***                       |                            |
-| 00100000~FFFFFFFF                     | area optional              |
+| Fizik Address                         | Detail 32                         |
+| ------------------------------------- | --------------------------------- |
+| `00000000`~`000003FF`                 | Kept                              |
+| `00000400`~`000004FF`                 | BIOS Data Area                    |
+| `00000500`~`000005FF`                 | KASHA Data Area                   |
+| `00000600`~`000007FF`                 | GDT                               |
+| `00000800`~`00000FFF`                 | IVT Page (Selectors)              |
+| ***Kernel Area***                     |                                   |
+| `00001000`~`00001FFF`                 | Global 2GB PDT                    |
+| `00001000`~`00005FFF`                 | kernel loader / area basic        |
+| `00006000`~`00006FFF`                 | INTERRUPT STACK and ker-ext-stack |
+| `00007000`~`00007FFF`                 | kernel body stack                 |
+| `00008000`~`0007FFFF`                 | area basic / kernel               |
+| `00080000`~`0009FFFF`                 | Extended BIOS Data Area           |
+| ***Upper Reflect Area*** (Over 640KB) |                                   |
+| `000A0000`~`000BFFFF`                 | Video Display Memory              |
+| `000C0000`~`000C7FFF`                 | Video BIOS                        |
+| `000C8000`~`000EFFFF`                 | BIOS Expansions                   |
+| `000F0000`~`000FFFFF`                 | Mainboard BIOS                    |
+| > `000B8000~000BFFFF`                 | Video Display Buffer 32K          |
+| ***User Area***                       |                                   |
+| 00100000~FFFFFFFF                     | area optional                     |
 
 $Least Size = area_0 + area_1 = 0x06C00 + 0x78200 = 0x7E000$
 

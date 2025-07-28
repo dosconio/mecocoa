@@ -64,7 +64,7 @@ build: clean $(cppobjs)
 	ffset $(ubinpath)/fixed.vhd $(uobjpath)/accm-$(arch)/a 256
 	#
 	echo MK subappb
-	gcc subapps/hellob/*.c accmlib/*.o -o $(uobjpath)/accm-$(arch)/b -T subapps/hellob/hellob.ld -m32 -nostdlib  -fno-pic -static -I$(uincpath) -D_ACCM=0x8632
+	gcc subapps/hellob/*.c accmlib/*.o -o $(uobjpath)/accm-$(arch)/b -m32 -nostdlib  -fno-pic -static -I$(uincpath) -D_ACCM=0x8632
 	ffset $(ubinpath)/fixed.vhd $(uobjpath)/accm-$(arch)/b 128
 	#
 	@echo

@@ -8,8 +8,15 @@ int main()
 	while (1) {
 		//sysdelay(2 * 1000000);// 2s
 		//for0(i, 0x8000) for0(j, 0x1000) ;
-		while (1);
+		char arr[16];
+		while (1) {
+			for0a(i, arr) {
+				arr[i]++;
+			}
+		}
 		unsigned id = systest('T', 'E', 'S');
+
+
 		sysouts("B");
 		
 		unsigned last_sec = callid[0x18 / 4];

@@ -79,6 +79,7 @@ void xxx() //dbg
 }
 
 _ESYM_C void RETONLY();
+extern "C" void General_IRQHandler();
 
 // in future, some may be abstracted into mecocoa/mccaker.cpp
 _sign_entry() {
@@ -121,10 +122,10 @@ _sign_entry() {
 	// IVT and Device
 	InterruptControl GIC(_IMM(0x80000800));// linear but not physical
 	GIC.Reset(SegCode);
-	GIC[IRQ_PIT].setRange(_IMM(Handint_PIT_Entry), SegCode); PIT_Init();
-	GIC[IRQ_RTC].setRange(_IMM(Handint_RTC_Entry), SegCode); RTC_Init();
-	GIC[IRQ_Keyboard].setRange(_IMM(Handint_KBD_Entry), SegCode);
-	GIC[IRQ_SYSCALL].setRange(_IMM(call_intr), SegCode); GIC[IRQ_SYSCALL].DPL = 3;
+	GIC[IRQ_PIT].setRange(mglb(Handint_PIT_Entry), SegCode); PIT_Init();
+	GIC[IRQ_RTC].setRange(mglb(Handint_RTC_Entry), SegCode); RTC_Init();
+	GIC[IRQ_Keyboard].setRange(mglb(Handint_KBD_Entry), SegCode);
+	GIC[IRQ_SYSCALL].setRange(mglb(call_intr), SegCode); GIC[IRQ_SYSCALL].DPL = 3;
 	if (false && opt_info) printlog(_LOG_INFO, "IDT Globl: 0x%[32H]", &GIC);
 	if (opt_test) __asm("ud2");
 
@@ -160,7 +161,6 @@ _sign_entry() {
 	syscall(syscall_t::OUTC, 'O');
 	Console.OutFormat("hayouuu~!\n\r");
 
-	// MccaTTYCon::current_switch(1);
 	ttycons[0]->OutFormat("HelloTTY%d\n\r", 0);
 	ttycons[1]->OutFormat("HelloTTY%d\n\r", 1);
 	ttycons[2]->OutFormat("HelloTTY%d\n\r", 2);
@@ -168,17 +168,10 @@ _sign_entry() {
 	MccaTTYCon::current_switch(0);
 
 	// task_switch_enable = false;
-	// InterruptEnable();
 
-	for (stduint i = 0x0; i < 256; i++) {
-		GateStructInterruptR0(&GIC[i], 0x80000000 + _IMM(RETONLY), SegCode, 0);
-	}
-
-	// InterruptEnable();
-	// __asm("mov $0x6000, %eax");
-	// __asm("mov %eax, %cr3");
+	InterruptEnable();
 	// while (1);
-	xxx();
+	// xxx();
 	loop{
 		__asm("hlt");
 	}
@@ -186,10 +179,6 @@ _sign_entry() {
 	auto crt = mecocoa_global->system_time.sec;
 	stduint esp; __asm("mov %%esp, %0" : "=r"(esp));
 	loop{
-		if (mecocoa_global->system_time.sec != crt) {
-			crt = mecocoa_global->system_time.sec;
-			Console.OutFormat(" CrtLine=%u \n\r", BCONS0->crtline);
-		}
 		stduint newesp; __asm("mov %%esp, %0" : "=r"(newesp));
 		if (newesp != esp) {
 			Console.OutFormat("ESP: %u\n\r", newesp);
