@@ -25,18 +25,18 @@ Rule
 
 `enum class syscall_t`
 
-| No. | Identification | Function            | IO        | Description            |
-| --- | -------------- | ------------------- | --------- | ---------------------- |
-| 0   | OUTC           | putchar current tty | (char)    |                        |
-| 1   | INNC           | getchar             | ()→word   | 高字节包含键盘状态<br>TODO      |
-| 2   | EXIT           | terminate program   | (code)    |                        |
-| 3   | TIME           | syssecond           | ()→second | 获取秒数                   |
-| 4   | REST           | haverest            |           | HLT 直到下一次中断发生          |
-|     |                |                     |           |                        |
-|     |                |                     |           |                        |
-|     |                |                     |           |                        |
-|     |                |                     |           |                        |
-| FF  | TEST           | testing             | (T,E,S)   | 输入TES则反馈成功，并标注是哪个进程导致的 |
+| No. | Identification | Function  | IO                | Description                          |
+| --- | -------------- | --------- | ----------------- | ------------------------------------ |
+| 0   | OUTC           |           | (char)            | putchar current tty                  |
+| 1   | INNC           |           | (block_mode)→word | getchar<br>高字节包含键盘状态<br>**TODO**     |
+| 2   | EXIT           |           | (code)            | terminate program<br>uncheck for new |
+| 3   | TIME           | syssecond | ()→second         | 获取秒数                                 |
+| 4   | REST           | sysrest   |                   | HLT 直到下一次中断发生                        |
+| 5   | COMM           | syscomm   |                   |                                      |
+|     |                |           |                   |                                      |
+|     |                |           |                   |                                      |
+|     |                |           |                   |                                      |
+| FF  | TEST           |           | (T,E,S)           | 输入TES则反馈成功，并标注是哪个进程导致的               |
 
 
 

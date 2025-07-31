@@ -1,7 +1,7 @@
 // ASCII g++ TAB4 LF
 // Attribute: 
 // LastCheck: 20240218
-// AllAuthor: @dosconio
+// AllAuthor: @dosconio, @ArinaMgk
 // ModuTitle: Demonstration - ELF32-C++ x86 Bare-Metal
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 #define _STYLE_RUST
@@ -106,7 +106,7 @@ _sign_entry() {
 	GDT_Init();
 
 	if (opt_info) printlog(_LOG_INFO, "GDT Globl: 0x%[32H]", mecocoa_global->gdt_ptr);
-	if (opt_test) syscall(syscall_t::TEST, (stduint)'T', (stduint)'E', (stduint)'S');
+	// if (opt_test) syscall(syscall_t::TEST, (stduint)'T', (stduint)'E', (stduint)'S');
 	new (&krnl_tss) ProcessBlock;
 	krnl_tss.TSS.CR3 = getCR3();
 	krnl_tss.TSS.LDTDptr = 0;
@@ -150,8 +150,11 @@ _sign_entry() {
 	printlog(_LOG_INFO, "Loading Subappa");
 	for0(i, 64) hdisk.Read(i + 256, (void*)((char*)load_buffer + 512 * (i)));
 	TaskLoad(NULL _TEMP, load_buffer, 3)->focus_tty_id = 1;
-	// ELF32_LoadExecFromMemory((void*)load_buffer, (void**)&entry_temp);
-	// TaskRegister((void*)entry_temp, 3)->focus_tty_id = 1;
+	// subappc
+	printlog(_LOG_INFO, "Loading Subappc");
+	for0(i, 64) hdisk.Read(i + 192, (void*)((char*)load_buffer + 512 * (i)));
+	TaskLoad(NULL _TEMP, load_buffer, 3)->focus_tty_id = 3;
+
 
 
 	if (false) CallFar(0, 8 * 9);// manually schedule

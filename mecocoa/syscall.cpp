@@ -1,7 +1,7 @@
 // ASCII g++ TAB4 LF
 // Attribute: 
 // LastCheck: 20240218
-// AllAuthor: @dosconio
+// AllAuthor: @dosconio, @ArinaMgk
 // ModuTitle: Demonstration - ELF32-C++ x86 Bare-Metal
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 #define _STYLE_RUST
@@ -20,10 +20,11 @@ Handler_t syscalls[_TEMP 1];
 static const byte syscall_paracnts[0x100] = {
 	1, //OUTC
 	3, //INNC
-	0, //EXIT
+	1, //EXIT
 	0, //TIME ret(second)
 	0, //REST
-	0,0,0, 0,0,0,0,0,0,0,0,// 0XH
+	3, //COMM
+	0,0, 0,0,0,0,0,0,0,0,// 0XH
 	0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,// 1XH
 	0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,// 2XH
 	0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,// 3XH
@@ -56,12 +57,15 @@ static stduint call_body(const syscall_t callid, ...) {
 	switch (callid) {
 	case syscall_t::OUTC: {
 		ProcessBlock* pb = TaskGet(ProcessBlock::cpu0_task);
-		task_switch_enable = task_switch_enable_old;
 		ttycons[pb->focus_tty_id]->OutChar(para[0]);
 		break;
 	}
+	case syscall_t::INNC: _TODO
+		// Read from its TTY
+		break;
 	case syscall_t::EXIT:
 		task_switch_enable = task_switch_enable_old;
+		__asm("mov %0, %%eax" : : "m"(para[0]));//{unchk};
 		TaskReturn();
 		break;
 	case syscall_t::TIME:
@@ -69,14 +73,37 @@ static stduint call_body(const syscall_t callid, ...) {
 		return mecocoa_global->system_time.sec;
 		break;
 	case syscall_t::REST:
+	case_syscall_t_REST:
 		// __asm("hlt");// will block here a long time
+		// plogwarn("have a rest");
 		switch_halt();
-		// __asm("cli;hlt;");
-		// __asm("sti");
-		// return 0;
 		break;
-		
-
+	case syscall_t::COMM:// (mode, obj, vaddr msg)
+	{
+		// assert(!src && src < numsof(Tasks));
+		//{}INTERRUPT src == ~1
+		ProcessBlock* pb = TaskGet(ProcessBlock::cpu0_task);
+		if (para[0] == 0b01) { // SEND
+			ploginfo("%d wanna send to %d", pb->getID(), para[1]);
+			ret = msg_send(pb, (para[1]), (CommMsg*)para[2]);
+			// TaskGet(2)->Unblock(ProcessBlock::BlockReason::BR_RecvMsg);
+		}
+		else if (para[0] == 0b10) { // RECV
+			ploginfo("%d wanna recv fo %d", pb->getID(), para[1]);
+			ret = msg_recv(pb, (para[1]), (CommMsg*)para[2]);
+			// TaskGet(2)->Block(ProcessBlock::BlockReason::BR_RecvMsg);
+		}
+		else {
+			printlog(_LOG_ERROR, "Bad `mode` of syscall 0x%[32H]", _IMM(callid));
+		}
+		if (pb->state == ProcessBlock::State::Pended) {
+			// goto case_syscall_t_REST;
+			// while (pb->state == ProcessBlock::State::Pended);
+			switch_halt();
+			// ploginfo("wake!!!");
+		}
+		break;
+	}
 
 
 
@@ -104,28 +131,25 @@ static stduint call_body(const syscall_t callid, ...) {
 		break;
 	}
 	task_switch_enable = task_switch_enable_old;//{MUTEX for multi-Proc}
-	return 0;
+	return ret;
 }
 
 
 void call_gate() { // noreturn
 	stduint para[4];// a c d b
-	//__asm("push %ds; push %es; push %fs; push %gs");
 	__asm("mov  %%eax, %0" : "=m"(para[0]));
 	__asm("mov  %%ecx, %0" : "=m"(para[1]));
 	__asm("mov  %%edx, %0" : "=m"(para[2]));
 	__asm("mov  %%ebx, %0" : "=m"(para[3]));
-	__asm("push %ebx");// pushad
-	__asm("push %ecx");
-	__asm("push %edx");
-	__asm("push %ebp");
-	__asm("push %esi");
-	__asm("push %edi");
+	__asm("push %ebx;push %ecx;push %edx;push %ebp;push %esi;push %edi;cli;");
 	__asm("call PG_PUSH");
-	//__asm("mov  $8*1, %eax");
-	//__asm("mov %eax, %ds; mov %eax, %es; mov %eax, %fs; mov %eax, %gs");
+	//auto task_switch_enable_old = task_switch_enable;//{TODO} {MUTEX for multi-Proc}
+	//task_switch_enable = false;
+	//ProcessBlock* pb_src = TaskGet(ProcessBlock::cpu0_task);
+	//task_switch_enable = task_switch_enable_old;
 	stduint ret = call_body((syscall_t)para[0], para[1], para[2], para[3]);
 	__asm("call PG_POP");
+	// pb_src->TSS.PDBR = getCR3();
 	__asm("mov  %0, %%eax" : : "m"(ret));
 	__asm("pop %edi");// popad
 	__asm("pop %esi");
@@ -133,9 +157,9 @@ void call_gate() { // noreturn
 	__asm("pop %edx");
 	__asm("pop %ecx");
 	__asm("pop %ebx");
-	//__asm("pop  %gs; pop %fs; pop %es; pop %ds");
 	__asm("mov  %ebp, %esp");
 	__asm("pop  %ebp      ");
+	__asm("sti");
 	__asm("jmp returnfar");
 	__asm("callgate_endo:");
 	loop;
@@ -143,20 +167,12 @@ void call_gate() { // noreturn
 
 void call_intr() {
 	stduint para[4];// a c d b
-	// __asm("push %ds; push %es; push %fs; push %gs");
 	__asm("mov  %%eax, %0" : "=m"(para[0]));
 	__asm("mov  %%ecx, %0" : "=m"(para[1]));
 	__asm("mov  %%edx, %0" : "=m"(para[2]));
 	__asm("mov  %%ebx, %0" : "=m"(para[3]));
-	__asm("push %ebx");// pushad
-	__asm("push %ecx");
-	__asm("push %edx");
-	__asm("push %ebp");
-	__asm("push %esi");
-	__asm("push %edi");
+	__asm("push %ebx;push %ecx;push %edx;push %ebp;push %esi;push %edi;");
 	__asm("call PG_PUSH");
-	// __asm("mov  $8*1, %eax");
-	// __asm("mov %eax, %ds; mov %eax, %es; mov %eax, %fs; mov %eax, %gs");
 	stduint ret = call_body((syscall_t)para[0], para[1], para[2], para[3]);
 	__asm("call PG_POP");
 	__asm("mov  %0, %%eax" : : "m"(ret));
@@ -166,7 +182,6 @@ void call_intr() {
 	__asm("pop %edx");
 	__asm("pop %ecx");
 	__asm("pop %ebx");
-	// __asm("pop  %gs; pop %fs; pop %es; pop %ds");
 	__asm("mov  %ebp, %esp");
 	__asm("pop  %ebp      ");
 	__asm("iretl");// iretd

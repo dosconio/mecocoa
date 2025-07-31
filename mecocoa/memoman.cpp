@@ -1,6 +1,6 @@
 // ASCII g++ TAB4 LF
 // Attribute: 
-// AllAuthor: @dosconio
+// AllAuthor: @dosconio, @ArinaMgk
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 #define _STYLE_RUST
 #define _DEBUG

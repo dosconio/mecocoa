@@ -67,6 +67,10 @@ build: clean $(cppobjs)
 	gcc subapps/hellob/*.c accmlib/*.o -o $(uobjpath)/accm-$(arch)/b -m32 -nostdlib  -fno-pic -static -I$(uincpath) -D_ACCM=0x8632
 	ffset $(ubinpath)/fixed.vhd $(uobjpath)/accm-$(arch)/b 128
 	#
+	echo MK subappc
+	g++ subapps/helloc/* accmlib/*.o -o $(uobjpath)/accm-$(arch)/c -m32 -nostdlib  -fno-pic -static -I$(uincpath) -D_ACCM=0x8632
+	ffset $(ubinpath)/fixed.vhd $(uobjpath)/accm-$(arch)/c 192
+	#
 	@echo
 	@echo "You can now debug in bochs with the command:"
 	@echo $(bochd) -f $(dstdir)/bochsrc.bxrc

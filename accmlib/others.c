@@ -1,5 +1,6 @@
 #include "inc/aaaaa.h"
 volatile static unsigned* const callid = (volatile unsigned*)0x0000500;// 0x80000500;
+
 void sysouts(const char* str)// 0
 {
 	while (*str)
@@ -25,6 +26,13 @@ void sysrest()// 4
 {
 	syscall(0x04, nil, nil, nil);
 }
+
+void syscomm(int send_recv, stduint obj, struct CommMsg* msg)
+{
+	syscall(0x05, send_recv ? 0b01 : 0b10, obj, _IMM(msg));
+}
+
+
 
 //{} with retval
 void sysdelay(unsigned dword) {

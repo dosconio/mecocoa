@@ -1,7 +1,7 @@
 // ASCII g++ TAB4 LF
 // Attribute: 
 // LastCheck: 20240218
-// AllAuthor: @dosconio
+// AllAuthor: @dosconio, @ArinaMgk
 // ModuTitle: Demonstration - ELF32-C++ x86 Bare-Metal
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 #define _STYLE_RUST
@@ -24,10 +24,17 @@ stduint ProcessBlock::cpu0_rest;
 _TEMP
 ProcessBlock* pblocks[8]; stduint pnumber = 0;
 
+/*
+0 Kernel
+1 Con Task
+2 AppB
+3 AppA
+4 AppC
+*/
 
 
-_TEMP stduint TasksAvailableSelectors[4]{
-	SegTSS, 8 * 9, 8 * 11, 8 * 13
+_TEMP stduint TasksAvailableSelectors[5]{
+	SegTSS, 8 * 9, 8 * 11, 8 * 13, 8 * 15
 };
 void switch_halt() {
 	if (ProcessBlock::cpu0_task == 0) {
@@ -39,9 +46,10 @@ void switch_halt() {
 	// printlog(_LOG_TRACE, "switch halt");
 	if (pb_des->state == ProcessBlock::State::Uninit)
 		pb_des->state = ProcessBlock::State::Ready;
-	if (pb_src->state == ProcessBlock::State::Running && (
+	if ((pb_src->state == ProcessBlock::State::Running || pb_src->state == ProcessBlock::State::Pended) && (
 		pb_des->state == ProcessBlock::State::Ready)) {
-		pb_src->state = ProcessBlock::State::Ready;
+		if (pb_src->state == ProcessBlock::State::Running)
+			pb_src->state = ProcessBlock::State::Ready;
 		pb_des->state = ProcessBlock::State::Running;
 	}
 	else {
@@ -50,8 +58,11 @@ void switch_halt() {
 	ProcessBlock::cpu0_task = 0;// kernel
 	task_switch_enable = true;
 	//
+	stduint save = pb_src->TSS.PDBR;
 	pb_src->TSS.PDBR = getCR3();// CR3 will not save in TSS? -- phina, 20250728
 	jmpFar(0, SegTSS);
+	pb_src->TSS.PDBR = save;
+	// while (1);
 }
 
 // by only PIT
@@ -59,25 +70,26 @@ void switch_task() {
 	task_switch_enable = false;//{TODO} Lock
 	auto pb_src = TaskGet(ProcessBlock::cpu0_task);
 
-	if (ProcessBlock::cpu0_rest) {
+	do if (ProcessBlock::cpu0_rest) {
 		ProcessBlock::cpu0_task = (ProcessBlock::cpu0_rest + 1) % numsof(TasksAvailableSelectors);
 		ProcessBlock::cpu0_rest = 0;
+		if (ProcessBlock::cpu0_task == 0) ProcessBlock::cpu0_task++;
 	}
 	else ++ProcessBlock::cpu0_task %= numsof(TasksAvailableSelectors);
-	// ProcessBlock::cpu0_task %= 2;ProcessBlock::cpu0_task++;
+	while (TaskGet(ProcessBlock::cpu0_task)->state == ProcessBlock::State::Pended);//{TEMP}
 
 	// printlog(_LOG_TRACE, "switch task %d", ProcessBlock::cpu0_task);
 	auto pb_des = TaskGet(ProcessBlock::cpu0_task);
 
 	if (pb_des->state == ProcessBlock::State::Uninit)
 		pb_des->state = ProcessBlock::State::Ready;
-	if (pb_src->state == ProcessBlock::State::Running && (
+	if ((pb_src->state == ProcessBlock::State::Running) && (
 		pb_des->state == ProcessBlock::State::Ready)) {
 		pb_src->state = ProcessBlock::State::Ready;
 		pb_des->state = ProcessBlock::State::Running;
 	}
 	else {
-		plogerro("task switch error.");
+		printlog(_LOG_FATAL, "task switch error (PID%u, State%u).", pb_des->getID(), _IMM(pb_des->state));
 	}
 	task_switch_enable = true;//{TODO} Unlock
 	jmpFar(0, TasksAvailableSelectors[ProcessBlock::cpu0_task]);
@@ -230,7 +242,7 @@ static void TaskLoad_Carry(char* vaddr, stduint length, char* phy_src, Paging& p
 		stduint phy;
 		if (!page->isPresent(pg)) {
 			phy = _IMM(Memory::physical_allocate(0x1000));
-			ploginfo("mapping %[32H] -> %[32H]", v_start1, phy);
+			// ploginfo("mapping %[32H] -> %[32H]", v_start1, phy);
 			pg.Map(v_start1, phy, 0x1000, true, true);
 			if (!page->getEntry(pg)->P)//(!page.isPresent(pg))
 			{
@@ -350,6 +362,8 @@ ProcessBlock* TaskLoad(BlockTrait* source, void* addr, byte ring)
 	return pb;
 }
 
+// ---- MANAGE ----
+
 stduint TaskAdd(ProcessBlock* task) {
 	pblocks[pnumber++] = task;
 	return pnumber - 1;
@@ -358,5 +372,151 @@ stduint TaskAdd(ProcessBlock* task) {
 ProcessBlock* TaskGet(stduint taskid) {
 	return pblocks[taskid];
 }
+
+stduint ProcessBlock::getID()
+{
+	for0a(i, pblocks) if(pblocks[i] == this) return i;
+	return 0;
+}
+
+// ---- COMMUNICATION ----
+// ---- ---- CommMsg.type
+#define HARDRUPT 1
+
+// ---- ---- <stduint> fo
+#define ANYPROC (_IMM0)
+#define INTRUPT (~_IMM0)
+static bool msg_send_will_deadlock(ProcessBlock* fo, ProcessBlock* to)
+{
+	// e.g. A->B->C->A
+	ProcessBlock* crt = to;
+	while (true) {
+		if (crt->block_reason == ProcessBlock::BR_SendMsg) {
+			if (crt->send_to_whom == fo->getID()) {
+				plogerro("deadlock %[32H]<-...->%[32H]", fo->getID(), crt->getID());
+				return true;
+			}
+			if (!crt->send_to_whom) break;
+			crt = TaskGet(crt->send_to_whom);
+		}
+		else break;
+	}
+	return false;
+}
+int msg_send(ProcessBlock* fo, stduint too, _Comment(vaddr) CommMsg* msg)
+{
+	if (!too) return 2;
+	auto to = TaskGet(too);
+	if (msg_send_will_deadlock(fo, to)) {
+		plogerro("msg_send_will_deadlock");
+		return -1;
+	}
+
+	if ((to->block_reason == ProcessBlock::BR_RecvMsg) &&
+		(to->recv_fo_whom == fo->getID() || to->recv_fo_whom == ANYPROC)) {
+		// assert to.unsolved_msg && msg
+		stduint leng = *(stduint*)fo->paging[_IMM(&msg->data.length)];
+		CommMsg* msg_fo = (CommMsg*)fo->paging[_IMM(msg)];
+		void* addr_fo = (void*)msg_fo->data.address;
+		CommMsg* msg_to = (CommMsg*)to->paging[_IMM(to->unsolved_msg)];
+		void* addr_to = (void*)msg_to->data.address;
+		// ploginfo("---> %[32H] %[32H] CR3=%[32H]", fo->paging[_IMM(msg)], _IMM(msg), fo->paging.page_directory);
+		// MemCopyP(to->unsolved_msg, to->paging, msg, fo->paging, leng);
+		MemCopyP(addr_to, to->paging, addr_fo, fo->paging, leng);
+		ploginfo("MemCopyP(%[32H], ..., %[32H], ..., %d)", addr_to, addr_fo, leng);
+		to->unsolved_msg = NULL;
+		to->recv_fo_whom = nil;
+		to->Unblock(ProcessBlock::BR_RecvMsg);
+		// assert fo & to: block_reason, unsolved_msg, recv_fo_whom, send_to_whom
+	}
+	else {
+		fo->Block(ProcessBlock::BR_SendMsg);
+		fo->send_to_whom = too;// to->getID();
+		fo->unsolved_msg = msg;
+		// proc sending queue
+		if (!to->queue_send_queuehead) to->queue_send_queuehead = fo->getID(); else {
+			ProcessBlock* crt = to;
+			while (crt->queue_send_queuenext) {
+				crt = TaskGet(crt->queue_send_queuenext);
+				if (!crt) { plogerro("Loss of ProcessBlock since qsend %[32H]", too); return 1; }
+			}
+			crt->queue_send_queuenext = fo->getID();
+		}
+		fo->queue_send_queuenext = nil;// keep this at tail
+	}
+	return 0;
+}
+int msg_recv(ProcessBlock* to, stduint foo, _Comment(vaddr) CommMsg* msg)
+{
+	_Comment(Proc - Interrupt) if ((to->wait_rupt_no) && (foo == ANYPROC || foo == INTRUPT)) {
+		CommMsg tmp_msg{ 0 };
+		tmp_msg.type = HARDRUPT;
+		MemCopyP(msg, to->paging, &tmp_msg, kernel_paging, sizeof(tmp_msg));//{TODO}
+		to->wait_rupt_no = nil;
+		return 0;
+	}
+	bool determined = false;
+	ProcessBlock* prev;
+	if (foo == ANYPROC) {
+		if (to->queue_send_queuehead) {
+			foo = to->queue_send_queuehead;
+			determined = true;
+		}
+	}
+	else {
+		ProcessBlock* fo = TaskGet(foo);
+		if (fo->block_reason == ProcessBlock::BR_SendMsg &&
+			fo->send_to_whom == to->getID()) {
+			ProcessBlock* crt = TaskGet(to->queue_send_queuehead);
+			while (crt) {
+				if (crt->getID() == foo) {
+					// foo = crt->getID();
+					determined = true; break;
+				}
+				prev = crt;
+				crt = TaskGet(crt->queue_send_queuenext);
+			}
+		}
+	}
+
+	if (determined) {
+		ProcessBlock* fo = TaskGet(foo);
+		if (foo == to->queue_send_queuehead) {
+			to->queue_send_queuehead = to->queue_send_queuenext;
+			fo->queue_send_queuenext = nil;
+		}
+		else {
+			if (!prev) { plogerro("!prev in %s", __FUNCIDEN__); return 1; }
+			prev->queue_send_queuenext = fo->queue_send_queuenext;// A->[B]->C => A->C
+			fo->queue_send_queuenext = nil;
+		}
+		//
+		CommMsg* msg_fo = (CommMsg*)fo->paging[_IMM(fo->unsolved_msg)];
+		stduint leng0 = msg_fo->data.length;
+		void* addr_fo = (void*)msg_fo->data.address;
+		CommMsg* msg_to = (CommMsg*)to->paging[_IMM(msg)];
+		stduint leng1 = msg_to->data.length;
+		void* addr_to = (void*)msg_to->data.address;
+		//
+		ploginfo("MemCopyP(%[32H], ..., %[32H], ..., minof(%d,%d)", addr_to, addr_fo, leng0, leng1);
+		MemCopyP(addr_to, to->paging, addr_fo, fo->paging, minof(leng0, leng1));
+		fo->unsolved_msg = NULL;
+		fo->send_to_whom = nil;
+		fo->Unblock(ProcessBlock::BR_SendMsg);
+	}
+	else { // block self to wait for msg
+		ploginfo("PID%u: BLOC[RECV]", to->getID());
+		to->Block(ProcessBlock::BR_RecvMsg);
+		to->unsolved_msg = msg;
+		to->recv_fo_whom = foo;
+	}
+	return 0;
+}
+
+
+
+
+
+
 
 #endif
