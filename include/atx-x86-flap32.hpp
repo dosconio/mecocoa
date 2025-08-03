@@ -11,6 +11,8 @@
 
 use crate uni;
 
+#define bda ((BIOS_DataArea*)0x400)
+
 struct mec_gdt {
 	descriptor_t null;
 	descriptor_t data;

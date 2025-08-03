@@ -423,7 +423,7 @@ int msg_send(ProcessBlock* fo, stduint too, _Comment(vaddr) CommMsg* msg)
 		// ploginfo("---> %[32H] %[32H] CR3=%[32H]", fo->paging[_IMM(msg)], _IMM(msg), fo->paging.page_directory);
 		// MemCopyP(to->unsolved_msg, to->paging, msg, fo->paging, leng);
 		MemCopyP(addr_to, to->paging, addr_fo, fo->paging, leng);
-		ploginfo("MemCopyP(%[32H], ..., %[32H], ..., %d)", addr_to, addr_fo, leng);
+		// ploginfo("MemCopyP(%[32H], ..., %[32H], ..., %d)", addr_to, addr_fo, leng);
 		to->unsolved_msg = NULL;
 		to->recv_fo_whom = nil;
 		to->Unblock(ProcessBlock::BR_RecvMsg);
@@ -498,14 +498,14 @@ int msg_recv(ProcessBlock* to, stduint foo, _Comment(vaddr) CommMsg* msg)
 		stduint leng1 = msg_to->data.length;
 		void* addr_to = (void*)msg_to->data.address;
 		//
-		ploginfo("MemCopyP(%[32H], ..., %[32H], ..., minof(%d,%d)", addr_to, addr_fo, leng0, leng1);
+		// ploginfo("MemCopyP(%[32H], ..., %[32H], ..., minof(%d,%d)", addr_to, addr_fo, leng0, leng1);
 		MemCopyP(addr_to, to->paging, addr_fo, fo->paging, minof(leng0, leng1));
 		fo->unsolved_msg = NULL;
 		fo->send_to_whom = nil;
 		fo->Unblock(ProcessBlock::BR_SendMsg);
 	}
 	else { // block self to wait for msg
-		ploginfo("PID%u: BLOC[RECV]", to->getID());
+		// ploginfo("PID%u: BLOC[RECV]", to->getID());
 		to->Block(ProcessBlock::BR_RecvMsg);
 		to->unsolved_msg = msg;
 		to->recv_fo_whom = foo;

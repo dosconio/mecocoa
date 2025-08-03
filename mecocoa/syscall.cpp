@@ -73,9 +73,7 @@ static stduint call_body(const syscall_t callid, ...) {
 		return mecocoa_global->system_time.sec;
 		break;
 	case syscall_t::REST:
-	case_syscall_t_REST:
-		// __asm("hlt");// will block here a long time
-		// plogwarn("have a rest");
+	// case_syscall_t_REST:
 		switch_halt();
 		break;
 	case syscall_t::COMM:// (mode, obj, vaddr msg)
@@ -84,12 +82,12 @@ static stduint call_body(const syscall_t callid, ...) {
 		//{}INTERRUPT src == ~1
 		ProcessBlock* pb = TaskGet(ProcessBlock::cpu0_task);
 		if (para[0] == 0b01) { // SEND
-			ploginfo("%d wanna send to %d", pb->getID(), para[1]);
+			// ploginfo("%d wanna send to %d", pb->getID(), para[1]);
 			ret = msg_send(pb, (para[1]), (CommMsg*)para[2]);
 			// TaskGet(2)->Unblock(ProcessBlock::BlockReason::BR_RecvMsg);
 		}
 		else if (para[0] == 0b10) { // RECV
-			ploginfo("%d wanna recv fo %d", pb->getID(), para[1]);
+			// ploginfo("%d wanna recv fo %d", pb->getID(), para[1]);
 			ret = msg_recv(pb, (para[1]), (CommMsg*)para[2]);
 			// TaskGet(2)->Block(ProcessBlock::BlockReason::BR_RecvMsg);
 		}
@@ -98,9 +96,7 @@ static stduint call_body(const syscall_t callid, ...) {
 		}
 		if (pb->state == ProcessBlock::State::Pended) {
 			// goto case_syscall_t_REST;
-			// while (pb->state == ProcessBlock::State::Pended);
 			switch_halt();
-			// ploginfo("wake!!!");
 		}
 		break;
 	}

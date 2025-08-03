@@ -73,11 +73,6 @@ void krnl_init() {
 
 #define IRQ_SYSCALL 0x81// leave 0x80 for unix-like syscall
 
-void xxx() //dbg
-{
-	jmpFar(0, 8 * 11);
-}
-
 _ESYM_C void RETONLY();
 extern "C" void General_IRQHandler();
 
@@ -141,7 +136,7 @@ _sign_entry() {
 	//{TODO} Load Shell (FAT + ELF)
 	stduint&& bufsize = 512 * 64;
 	void* load_buffer = Memory::physical_allocate(bufsize);
-	Harddisk_t hdisk(Harddisk_t::HarddiskType::LBA28);
+	Harddisk_PATA hdisk(Harddisk_PATA::HarddiskType::LBA28);
 	// subappb
 	printlog(_LOG_INFO, "Loading Subappb");
 	for0(i, 64) hdisk.Read(i + 128, (void*)((char*)load_buffer + 512 * (i)));
@@ -155,8 +150,6 @@ _sign_entry() {
 	for0(i, 64) hdisk.Read(i + 192, (void*)((char*)load_buffer + 512 * (i)));
 	TaskLoad(NULL _TEMP, load_buffer, 3)->focus_tty_id = 3;
 
-
-
 	if (false) CallFar(0, 8 * 9);// manually schedule
 	if (false) { CallFar(0, 8 * 9); jmpFar(0, 8 * 9); }// re-entry test
 
@@ -169,11 +162,10 @@ _sign_entry() {
 	ttycons[3]->OutFormat("HelloTTY%d\n\r", 3);
 	MccaTTYCon::current_switch(0);
 
-	// task_switch_enable = false;
+	
+	Console.OutFormat("hdisk_number: 0x%[32H] %u\n\r", &bda->hdisk_number ,bda->hdisk_number);
 
 	InterruptEnable();
-	// while (1);
-	// xxx();
 	loop{
 		__asm("hlt");
 	}

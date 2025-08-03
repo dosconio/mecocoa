@@ -86,11 +86,11 @@ KeyboardBridge kbdbridge;
 
 void MccaTTYCon::cons_init()
 {
-	BCONS0 = new (BUF_BCONS0) MccaTTYCon(80, 24, 0); BCONS0->setShowY(0, 24);
+	BCONS0 = new (BUF_BCONS0) MccaTTYCon(bda->screen_columns, 24, 0); BCONS0->setShowY(0, 24);
 	//
-	BCONS1 = new (BUF_BCONS1) MccaTTYCon(80, 50, 1 * 50); BCONS1->setShowY(0, 25);
-	BCONS2 = new (BUF_BCONS2) MccaTTYCon(80, 50, 2 * 50); BCONS2->setShowY(0, 25);
-	BCONS3 = new (BUF_BCONS3) MccaTTYCon(80, 50, 3 * 50); BCONS3->setShowY(0, 25);
+	BCONS1 = new (BUF_BCONS1) MccaTTYCon(bda->screen_columns, 50, 1 * 50); BCONS1->setShowY(0, 25);
+	BCONS2 = new (BUF_BCONS2) MccaTTYCon(bda->screen_columns, 50, 2 * 50); BCONS2->setShowY(0, 25);
+	BCONS3 = new (BUF_BCONS3) MccaTTYCon(bda->screen_columns, 50, 3 * 50); BCONS3->setShowY(0, 25);
 	ttycons[0] = (MccaTTYCon*)BCONS0;
 	ttycons[1] = (MccaTTYCon*)BCONS1;
 	ttycons[2] = (MccaTTYCon*)BCONS2;
