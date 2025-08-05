@@ -21,6 +21,7 @@ int main(int argc, char** argv)
 		while (1) {
 			sysrest();
 			stduint now = syssecond();
+			/*
 			if (now == 1 && stage == 0) {
 				syscomm(0, 4, &msg);// sync
 
@@ -43,7 +44,16 @@ int main(int argc, char** argv)
 				}
 				stage = 2;
 			}
+			*/
+			if (now) {
+				msg.src = msg.type = 0;
+				syscomm(0, 0, &msg);// sync
+				if (msg.src == 112 && msg.type == 1) {
+					sysouts("(RTC!)");
+				}
+			}
 			if (now >= 3 + last_sec) {
+
 				sysouts("B");
 				last_sec = now;
 			}

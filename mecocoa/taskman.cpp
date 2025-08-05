@@ -403,6 +403,24 @@ static bool msg_send_will_deadlock(ProcessBlock* fo, ProcessBlock* to)
 	}
 	return false;
 }
+
+void rupt_proc(stduint pid, stduint rupt_no)
+{
+	auto task = TaskGet(pid);
+	if ((_IMM(task->block_reason) & _IMM(ProcessBlock::BlockReason::BR_RecvMsg)) &&
+		(task->recv_fo_whom == ANYPROC || task->recv_fo_whom == INTRUPT)) {
+		ploginfo("INT-MSG: RUPT-PROC");
+		CommMsg tmp_msg{ 0 };
+		tmp_msg.type = HARDRUPT;
+		MemCopyP(task->unsolved_msg, task->paging, &tmp_msg, kernel_paging, sizeof(tmp_msg));
+		task->wait_rupt_no = nil;
+		task->Unblock(ProcessBlock::BlockReason::BR_RecvMsg);
+	}
+	else {
+		task->wait_rupt_no = rupt_no;
+	}
+}
+
 int msg_send(ProcessBlock* fo, stduint too, _Comment(vaddr) CommMsg* msg)
 {
 	if (!too) return 2;
@@ -451,8 +469,10 @@ int msg_recv(ProcessBlock* to, stduint foo, _Comment(vaddr) CommMsg* msg)
 	_Comment(Proc - Interrupt) if ((to->wait_rupt_no) && (foo == ANYPROC || foo == INTRUPT)) {
 		CommMsg tmp_msg{ 0 };
 		tmp_msg.type = HARDRUPT;
-		MemCopyP(msg, to->paging, &tmp_msg, kernel_paging, sizeof(tmp_msg));//{TODO}
+		tmp_msg.src = to->wait_rupt_no;
+		MemCopyP(msg, to->paging, &tmp_msg, kernel_paging, sizeof(tmp_msg));
 		to->wait_rupt_no = nil;
+		ploginfo("INT-MSG: RECV-MSG");
 		return 0;
 	}
 	bool determined = false;

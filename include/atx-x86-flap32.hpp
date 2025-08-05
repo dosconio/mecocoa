@@ -79,7 +79,7 @@ extern bool opt_test;
 
 
 
-// handler
+// ---- handler
 extern "C" void Handint_PIT_Entry();
 extern "C" void Handint_PIT();
 extern "C" void Handint_RTC_Entry();
@@ -88,7 +88,7 @@ extern "C" void Handint_KBD_Entry();
 extern "C" void Handint_KBD();
 extern OstreamTrait* kbd_out;
 
-// memoman
+// ---- memoman
 #include "memoman.hpp"
 
 // syscall
@@ -97,7 +97,7 @@ extern "C" void call_intr();
 extern "C" void* call_gate_entry();
 stduint syscall(syscall_t callid, ...);
 
-// taskman
+// ---- taskman
 
 extern "C" bool task_switch_enable;
 
@@ -180,7 +180,10 @@ void switch_halt();
 int msg_send(ProcessBlock* fo, stduint to, _Comment(vaddr) CommMsg* msg);
 int msg_recv(ProcessBlock* to, stduint fo, _Comment(vaddr) CommMsg* msg);
 
-// [service] console
+void rupt_proc(stduint pid, stduint rupt_no);
+
+
+// ---- [service] console
 
 extern BareConsole* BCONS0;
 

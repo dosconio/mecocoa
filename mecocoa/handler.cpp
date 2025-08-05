@@ -14,17 +14,6 @@
 use crate uni;
 #ifdef _ARC_x86 // x86:
 
-//{TOFIX} _pushad _popad _returni
-// no-pic
-
-
-
-extern BareConsole* BCONS0;// TTY0
-
-
-
-
-
 void Handint_PIT()
 {
 	// auto push flag by intterrupt module
@@ -64,6 +53,8 @@ void Handint_RTC()
 		Letvar(p, char*, 0xB8003);
 		*p ^= 0x70;// make it blink
 	}
+
+	rupt_proc(2, IRQ_RTC);
 }
 
 OstreamTrait* kbd_out;
