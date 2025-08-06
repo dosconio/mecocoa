@@ -32,7 +32,7 @@ _sign_entry() {
 	BareConsole Console(80, 50, 0xB8000); BCONS0 = &Console;
 	Console.setShowY(0, 25);
 	printlog(_LOG_INFO, "Loading Kernel...");
-	Harddisk_PATA hdisk(Harddisk_PATA::HarddiskType::LBA28);
+	Harddisk_PATA hdisk(0);
 	for0(i, 128) hdisk.Read(i, (void*)(0x100000 + 512 * i));// 64KB
 	ELF32_LoadExecFromMemory((void*)0x100000, (void**)&entry_kernel);
 	printlog(_LOG_INFO, "Transfer to Kernel at 0x%[32H]", entry_kernel);

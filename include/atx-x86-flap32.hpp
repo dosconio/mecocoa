@@ -86,6 +86,8 @@ extern "C" void Handint_RTC_Entry();
 extern "C" void Handint_RTC();
 extern "C" void Handint_KBD_Entry();
 extern "C" void Handint_KBD();
+extern "C" void Handint_HDD_Entry();
+extern "C" void Handint_HDD();
 extern OstreamTrait* kbd_out;
 
 // ---- memoman
@@ -182,6 +184,14 @@ int msg_recv(ProcessBlock* to, stduint fo, _Comment(vaddr) CommMsg* msg);
 
 void rupt_proc(stduint pid, stduint rupt_no);
 
+enum {
+	Task_Kernel,
+	Task_Con_Serv,
+	Task_Hdd_Serv,
+	Task_AppB,
+	Task_AppA,
+	Task_AppC,
+};
 
 // ---- [service] console
 
@@ -218,4 +228,9 @@ struct MccaTTYCon : public BareConsole {
 	bool last_E0 = false;
 };
 extern MccaTTYCon* ttycons[4];
+
+// ---- [service] fileman
+
+void DSK_Init();
+void serv_file_loop();
 

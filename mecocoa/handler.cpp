@@ -54,13 +54,15 @@ void Handint_RTC()
 		*p ^= 0x70;// make it blink
 	}
 
-	rupt_proc(2, IRQ_RTC);
+	// rupt_proc(2, IRQ_RTC);
 }
 
 OstreamTrait* kbd_out;
 void Handint_KBD() {
 	asserv(kbd_out)->OutChar(innpb(PORT_KBD_BUFFER));
 }
+
+// void Handint_HDD()...
 
 #endif
 #ifdef _ARC_x86 // x86:

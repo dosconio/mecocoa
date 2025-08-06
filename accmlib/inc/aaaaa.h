@@ -1,4 +1,17 @@
 #include "c/stdinc.h"
+
+#define sysrecv(pid,msg) syscomm(0,pid,msg)
+#define syssend(pid,msg) syscomm(1,pid,msg)
+
+enum {
+	Task_Kernel,
+	Task_Con_Serv,
+	Task_Hdd_Serv,
+	Task_AppB,
+	Task_AppA,
+	Task_AppC,
+};
+
 #ifdef _INC_CPP
 extern "C" {
 #endif

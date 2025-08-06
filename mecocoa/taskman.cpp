@@ -24,17 +24,8 @@ stduint ProcessBlock::cpu0_rest;
 _TEMP
 ProcessBlock* pblocks[8]; stduint pnumber = 0;
 
-/*
-0 Kernel
-1 Con Task
-2 AppB
-3 AppA
-4 AppC
-*/
-
-
-_TEMP stduint TasksAvailableSelectors[5]{
-	SegTSS, 8 * 9, 8 * 11, 8 * 13, 8 * 15
+_TEMP stduint TasksAvailableSelectors[6]{
+	SegTSS, 8 * 9, 8 * 11, 8 * 13, 8 * 15, 8 * 17
 };
 void switch_halt() {
 	if (ProcessBlock::cpu0_task == 0) {
@@ -186,6 +177,9 @@ ProcessBlock* TaskRegister(void* entry, byte ring)
 		TSS->CR3 = _IMM(pb->paging.page_directory);
 		pb->paging.MapWeak(0x00000000, 0x00000000, 0x00400000, true, _Comment(R0) true);//{TEMP}
 		pb->paging.MapWeak(0x80000000, 0x00000000, 0x00080000, true, _Comment(R0) false);// 0x80 pages
+	}
+	else {
+		pb->paging.page_directory = (PageDirectory*)TSS->CR3;
 	}
 
 	TSS->EIP = _IMM(entry);
@@ -409,7 +403,7 @@ void rupt_proc(stduint pid, stduint rupt_no)
 	auto task = TaskGet(pid);
 	if ((_IMM(task->block_reason) & _IMM(ProcessBlock::BlockReason::BR_RecvMsg)) &&
 		(task->recv_fo_whom == ANYPROC || task->recv_fo_whom == INTRUPT)) {
-		ploginfo("INT-MSG: RUPT-PROC");
+		// ploginfo("INT-MSG: RUPT-PROC");
 		CommMsg tmp_msg{ 0 };
 		tmp_msg.type = HARDRUPT;
 		MemCopyP(task->unsolved_msg, task->paging, &tmp_msg, kernel_paging, sizeof(tmp_msg));
@@ -438,10 +432,10 @@ int msg_send(ProcessBlock* fo, stduint too, _Comment(vaddr) CommMsg* msg)
 		void* addr_fo = (void*)msg_fo->data.address;
 		CommMsg* msg_to = (CommMsg*)to->paging[_IMM(to->unsolved_msg)];
 		void* addr_to = (void*)msg_to->data.address;
-		// ploginfo("---> %[32H] %[32H] CR3=%[32H]", fo->paging[_IMM(msg)], _IMM(msg), fo->paging.page_directory);
-		// MemCopyP(to->unsolved_msg, to->paging, msg, fo->paging, leng);
-		MemCopyP(addr_to, to->paging, addr_fo, fo->paging, leng);
-		// ploginfo("MemCopyP(%[32H], ..., %[32H], ..., %d)", addr_to, addr_fo, leng);
+		// ploginfo("MemCopyP %[32H], ..., %[32H], ..., %d)", addr_to, addr_fo, leng);
+		if (leng) MemCopyP(addr_to, to->paging, addr_fo, fo->paging, leng);
+		msg_to->type = msg_fo->type;
+		msg_to->src = fo->getID();
 		to->unsolved_msg = NULL;
 		to->recv_fo_whom = nil;
 		to->Unblock(ProcessBlock::BR_RecvMsg);
@@ -472,7 +466,7 @@ int msg_recv(ProcessBlock* to, stduint foo, _Comment(vaddr) CommMsg* msg)
 		tmp_msg.src = to->wait_rupt_no;
 		MemCopyP(msg, to->paging, &tmp_msg, kernel_paging, sizeof(tmp_msg));
 		to->wait_rupt_no = nil;
-		ploginfo("INT-MSG: RECV-MSG");
+		// ploginfo("INT-MSG: RECV-MSG");
 		return 0;
 	}
 	bool determined = false;
@@ -518,8 +512,11 @@ int msg_recv(ProcessBlock* to, stduint foo, _Comment(vaddr) CommMsg* msg)
 		stduint leng1 = msg_to->data.length;
 		void* addr_to = (void*)msg_to->data.address;
 		//
-		// ploginfo("MemCopyP(%[32H], ..., %[32H], ..., minof(%d,%d)", addr_to, addr_fo, leng0, leng1);
-		MemCopyP(addr_to, to->paging, addr_fo, fo->paging, minof(leng0, leng1));
+		// ploginfo("MemCopyP %[32H], ..., %[32H], ..., minof(%d,%d)", addr_to, addr_fo, leng0, leng1);
+		stduint leng = minof(leng0, leng1);
+		if (leng) MemCopyP(addr_to, to->paging, addr_fo, fo->paging, leng);
+		msg_to->type = msg_fo->type;
+		msg_to->src = foo;
 		fo->unsolved_msg = NULL;
 		fo->send_to_whom = nil;
 		fo->Unblock(ProcessBlock::BR_SendMsg);

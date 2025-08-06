@@ -52,6 +52,8 @@ GLOBAL Handint_RTC_Entry
 EXTERN Handint_RTC
 GLOBAL Handint_KBD_Entry
 EXTERN Handint_KBD
+GLOBAL Handint_HDD_Entry
+EXTERN Handint_HDD
 
 GLOBAL ConvertStackPointer
 GLOBAL PG_PUSH, PG_POP
@@ -147,6 +149,16 @@ Handint_KBD_Entry:
 	MOV AL, ' '
 	OUT 0x20, AL
 	CALL Handint_KBD
+	CALL PG_POP
+	POPAD
+	IRETD
+Handint_HDD_Entry:
+	PUSHAD
+	CALL PG_PUSH
+	MOV AL, ' '
+	OUT 0xA0, AL
+	OUT 0x20, AL
+	CALL Handint_HDD
 	CALL PG_POP
 	POPAD
 	IRETD

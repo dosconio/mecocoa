@@ -1,7 +1,7 @@
 // ASCII g++ TAB4 LF
 // Attribute: 
 // LastCheck: 20240218
-// AllAuthor: @dosconio
+// AllAuthor: @dosconio, @ArinaMgk
 // ModuTitle: [Service] Console - ELF32-C++ x86 Bare-Metal
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 #define _STYLE_RUST
