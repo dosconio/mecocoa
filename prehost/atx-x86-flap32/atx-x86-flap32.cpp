@@ -93,7 +93,8 @@ _sign_entry() {
 	Console.OutFormat("Mem Avail: %s\n\r", Memory::text_memavail(ker_buf));
 
 	// Align Memory and Keep a page for REAL 16 below 0x10000
-	printlog(_LOG_INFO, "Mem Throw: 0x%[32H]", Memory::align_basic_4k());
+	Memory::align_basic_4k();
+	// printlog(_LOG_INFO, "Mem Throw: 0x%[32H]", Memory::align_basic_4k());
 
 	// Kernel Paging
 	page_init();

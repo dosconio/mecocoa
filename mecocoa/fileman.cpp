@@ -82,7 +82,7 @@ static void print_identify_info(uint16* hdinfo)
 	outsfmt("[Hrddisk] LBA48: %s\n\r", (cmd_set_supported & 0x0400) ? "Supported" : "No");
 
 	int sectors = ((int)hdinfo[61] << 16) + hdinfo[60];
-	outsfmt("[Hrddisk] Size : %dMB\n\r", sectors * 512 / 1000000);
+	outsfmt("[Hrddisk] Size : %lf MB\n\r", (double)sectors * 512 / 1024 / 1024);// care for #NM FPU Loss
 }
 static void hd_report(Harddisk_PATA& hd) {
 	HdiskCommand cmd;

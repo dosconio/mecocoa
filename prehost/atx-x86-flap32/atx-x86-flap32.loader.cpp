@@ -22,6 +22,7 @@ void temp_init() {
 }
 
 //{TODO FAT for HDISK} HDISK + FAT + ELF with fixed name "kernel-atx-x86"
+//{TODO} make lighter boot for Partition Table
 
 BareConsole* BCONS0;// TTY0
 _sign_entry() {

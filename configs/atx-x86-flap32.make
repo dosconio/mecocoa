@@ -78,8 +78,13 @@ build: clean $(cppobjs)
 run: build
 	@$(qemu) \
 		-drive format=raw,file=$(outs),if=floppy \
-		-drive file=$(ubinpath)/fixed.vhd,format=raw \
-		-boot order=a -m 32
+		-boot order=a -m 32 \
+		-drive file=$(ubinpath)/fixed.vhd,format=vpc,if=none,id=disk0 \
+		-device ide-hd,drive=disk0,bus=ide.0,unit=0 \
+		-drive file=$(ubinpath)/fixed2.vhd,format=vpc,if=none,id=disk1 \
+		-device ide-hd,drive=disk1,bus=ide.0,unit=1
+# 		-drive file=$(ubinpath)/fixed.vhd,format=raw
+
 
 clean:
 	@clear

@@ -136,6 +136,17 @@ void ERQ_Handler(sdword iden, dword para) {
 		}
 		break;
 	}
+	case ERQ_Coprocessor_Not_Available:
+		// needed by jmp-TSS method
+		__asm("mov %cr0, %eax");
+		__asm("mov %%eax, %0" : "=m" (tmp));
+		if (!(tmp & 0b1110)) {
+			printlog(_LOG_FATAL, " %s", ExceptionDescription[iden]);// no-para
+		}
+		__asm("mov %cr0, %eax");
+		__asm("and $0xFFFFFFF1, %eax");// TS(3) EM(2) MP(1)
+		__asm("mov %eax, %cr0");// enable FPU/MMX/SSE
+		break;
 	case ERQ_Page_Fault:
 		__asm("mov %cr2, %eax");
 		__asm("mov %%eax, %0" : "=m" (tmp));
