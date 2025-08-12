@@ -7,9 +7,12 @@ enum {
 	Task_Kernel,
 	Task_Con_Serv,
 	Task_Hdd_Serv,
+	Task_FileSys,
 	Task_AppB,
 	Task_AppA,
 	Task_AppC,
+	//
+	TaskCount
 };
 
 #ifdef _INC_CPP

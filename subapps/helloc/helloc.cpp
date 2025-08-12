@@ -28,14 +28,13 @@ int main(int argc, char** argv)
 				//syssend(Task_AppB, &msg);// sync
 			}
 		}
-		{
-			struct CommMsg msg0 = { 0 };
-			stduint tmp;
-			msg0.address = _IMM(&tmp); msg0.length = sizeof(tmp);
-			msg0.type = 0;
-			syssend(Task_Hdd_Serv, &msg);
-			// syssend(Task_Hdd_Serv, &msg);
-		}
+		// {
+		// 	struct CommMsg msg0 = { 0 };
+		// 	stduint tmp;
+		// 	msg0.address = _IMM(&tmp); msg0.length = sizeof(tmp);
+		// 	msg0.type = 0;
+		// 	syssend(Task_FileSys, &msg);
+		// }
 		while (1) {
 			stduint now = syssecond();
 			sysrest();

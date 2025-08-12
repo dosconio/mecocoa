@@ -121,7 +121,7 @@ _sign_entry() {
 	GIC[IRQ_PIT].setRange(mglb(Handint_PIT_Entry), SegCode); PIT_Init();
 	GIC[IRQ_RTC].setRange(mglb(Handint_RTC_Entry), SegCode); RTC_Init();
 	GIC[IRQ_Keyboard].setRange(mglb(Handint_KBD_Entry), SegCode);
-	GIC[IRQ_ATA_DISK0].setRange(mglb(Handint_HDD_Entry), SegCode); DSK_Init();
+	GIC[IRQ_ATA_DISK0].setRange(mglb(Handint_HDD_Entry), SegCode); DEV_Init();
 	GIC[IRQ_SYSCALL].setRange(mglb(call_intr), SegCode); GIC[IRQ_SYSCALL].DPL = 3;
 	if (false && opt_info) printlog(_LOG_INFO, "IDT Globl: 0x%[32H]", &GIC);
 	if (opt_test) __asm("ud2");
@@ -134,6 +134,7 @@ _sign_entry() {
 
 	// Service
 	TaskRegister((void*)&MccaTTYCon::serv_cons_loop, 1);
+	TaskRegister((void*)&serv_dev_hd_loop, 1);
 	TaskRegister((void*)&serv_file_loop, 1);
 
 

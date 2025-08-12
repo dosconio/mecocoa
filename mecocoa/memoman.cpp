@@ -137,8 +137,8 @@ static const uint32 gdt_magic[] = {
 	0x00000000, 0x00000000, // call
 	0x0000FFFF, 0x000F9A00, // code-16
 	0x00000000, 0x00008900, // tss
-	0x0000FFFF, 0x00CFFA00, // code r3
-	0x0000FFFF, 0x00CFF200, // data r3
+	// 0x0000FFFF, 0x00CFFA00, // code r3
+	// 0x0000FFFF, 0x00CFF200, // data r3
 };
 
 //{TODO} make into a class

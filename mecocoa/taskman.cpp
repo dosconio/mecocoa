@@ -23,10 +23,8 @@ stduint ProcessBlock::cpu0_rest;
 
 _TEMP
 ProcessBlock* pblocks[8]; stduint pnumber = 0;
+stduint TaskNumber = TaskCount;
 
-_TEMP stduint TasksAvailableSelectors[6]{
-	SegTSS, 8 * 9, 8 * 11, 8 * 13, 8 * 15, 8 * 17
-};
 void switch_halt() {
 	if (ProcessBlock::cpu0_task == 0) {
 		return;
@@ -62,11 +60,11 @@ void switch_task() {
 	auto pb_src = TaskGet(ProcessBlock::cpu0_task);
 
 	do if (ProcessBlock::cpu0_rest) {
-		ProcessBlock::cpu0_task = (ProcessBlock::cpu0_rest + 1) % numsof(TasksAvailableSelectors);
+		ProcessBlock::cpu0_task = (ProcessBlock::cpu0_rest + 1) % TaskNumber;
 		ProcessBlock::cpu0_rest = 0;
 		if (ProcessBlock::cpu0_task == 0) ProcessBlock::cpu0_task++;
 	}
-	else ++ProcessBlock::cpu0_task %= numsof(TasksAvailableSelectors);
+	else ++ProcessBlock::cpu0_task %= TaskNumber;
 	while (TaskGet(ProcessBlock::cpu0_task)->state == ProcessBlock::State::Pended);//{TEMP}
 
 	// printlog(_LOG_TRACE, "switch task %d", ProcessBlock::cpu0_task);
@@ -83,7 +81,7 @@ void switch_task() {
 		printlog(_LOG_FATAL, "task switch error (PID%u, State%u).", pb_des->getID(), _IMM(pb_des->state));
 	}
 	task_switch_enable = true;//{TODO} Unlock
-	jmpFar(0, TasksAvailableSelectors[ProcessBlock::cpu0_task]);
+	jmpFar(0, SegTSS + 16 * ProcessBlock::cpu0_task);
 }
 
 // LocaleDescriptor32SetFromELF32
@@ -378,8 +376,7 @@ stduint ProcessBlock::getID()
 #define HARDRUPT 1
 
 // ---- ---- <stduint> fo
-#define ANYPROC (_IMM0)
-#define INTRUPT (~_IMM0)
+
 static bool msg_send_will_deadlock(ProcessBlock* fo, ProcessBlock* to)
 {
 	// e.g. A->B->C->A
@@ -512,7 +509,7 @@ int msg_recv(ProcessBlock* to, stduint foo, _Comment(vaddr) CommMsg* msg)
 		stduint leng1 = msg_to->data.length;
 		void* addr_to = (void*)msg_to->data.address;
 		//
-		// ploginfo("MemCopyP %[32H], ..., %[32H], ..., minof(%d,%d)", addr_to, addr_fo, leng0, leng1);
+		// ploginfo("RECV-MemCopyP %[32H], ..., %[32H], ..., minof(%d,%d)", addr_to, addr_fo, leng0, leng1);
 		stduint leng = minof(leng0, leng1);
 		if (leng) MemCopyP(addr_to, to->paging, addr_fo, fo->paging, leng);
 		msg_to->type = msg_fo->type;
