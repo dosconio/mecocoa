@@ -23,6 +23,7 @@ struct HD_Info {
 static HD_Info hd_info[4] = { 0 };//{TEMP} 0:0 0:1 1:0 1:1
 static bool hd_info_valid[4] = { 0 };
 static char* single_sector = NULL;
+bool task_run = false;
 
 void fileman_hd() {
 	for0a(i, disks) {
@@ -55,16 +56,63 @@ static void hd_int_wait() {
 	CommMsg msg;
 	syscall(syscall_t::COMM, 0b10, INTRUPT, &msg);
 }
-/* (NO INT-WAIT)
+
 namespace uni {
 	bool Harddisk_PATA::Read(stduint BlockIden, void* Dest) {
-		
+		if (task_run) {
+			usize sect_nr = BlockIden;
+			HdiskCommand cmd;
+			cmd.feature = 0;
+			cmd.count = 1;// number of sectors
+			for0(i, 3) cmd.LBA[i] = (sect_nr >> (i * 8));
+			cmd.device = MAKE_DEVICE_REG(1, getLowID(), (sect_nr >> 24) & 0xF);
+			cmd.command = ATA_READ;
+			lock = 0;
+			Harddisk_PATA::Hdisk_OUT(&cmd, hd_cmd_wait);
+			if (true) {
+				hd_int_wait();
+				IN_wn(REG_DATA, (word*)Dest, Block_Size);
+				// slice.length--;
+			}
+		}
+		else {
+			stduint C, B;
+			__asm volatile("mov %%ecx, %0" : "=r" (C));// will break GNU stack judge: __asm ("push %ecx");
+			__asm volatile("mov %%ebx, %0" : "=r" (B));// will break GNU stack judge: __asm ("push %ebx");
+			__asm volatile("mov %0, %%ebx" : : "r" _IMM(Dest));// gcc use mov %eax->%ebx to assign
+			__asm volatile("mov %0, %%eax": : "r" (BlockIden));
+			__asm volatile("mov $1, %ecx");
+			__asm volatile("call HdiskLBA28Load");
+			__asm volatile("mov %0, %%ebx" : : "r" (B));// rather __asm ("pop %ebx");
+			__asm volatile("mov %0, %%ecx" : : "r" (C));// rather __asm ("pop %ecx");
+		}
+		return true;
 	}
 	bool Harddisk_PATA::Write(stduint BlockIden, const void* Sors) {
-		
+		if (task_run) {
+			usize sect_nr = BlockIden;
+			HdiskCommand cmd;
+			cmd.feature = 0;
+			cmd.count = 1;// number of sectors
+			for0(i, 3) cmd.LBA[i] = (sect_nr >> (i * 8));
+			cmd.device = MAKE_DEVICE_REG(1, getLowID(), (sect_nr >> 24) & 0xF);
+			cmd.command = ATA_WRITE;
+			lock = 0;
+			Harddisk_PATA::Hdisk_OUT(&cmd, hd_cmd_wait);
+			if (true) {
+				if (!waitfor(STATUS_DRQ, STATUS_DRQ, HD_TIMEOUT)) {
+					return false;
+				}
+				OUT_wn(REG_DATA, (word*)Sors, Block_Size);
+				hd_int_wait();
+				// slice.length--;
+			}
+		}
+		else return false;
+		return true;
 	}
 }
-*/
+
 
 struct iden_info_ascii {
 	int idx;
@@ -79,20 +127,11 @@ struct iden_info_ascii {
 	dev / NR_PRIM_PER_DRIVE : \
 	(dev - MINOR_hd1a) / NR_SUB_PER_DRIVE)
 
+
+static void hd_read(Harddisk_PATA& hd, Slice slice, stduint pg_task = nil);
 static void get_partition_table(Harddisk_PATA& drv, unsigned partable_sectposi, PartitionTableX86* pt)
 {
-	HdiskCommand cmd;
-	cmd.feature = 0;
-	cmd.count = 1;
-	cmd.LBA[0] = partable_sectposi;
-	cmd.LBA[1] = partable_sectposi >> 8;
-	cmd.LBA[2] = partable_sectposi >> 16;
-	cmd.device = MAKE_DEVICE_REG(1, drv.getLowID(), (partable_sectposi >> 24) & 0xF);
-	cmd.command = ATA_READ;
-	lock = 0;
-	Harddisk_PATA::Hdisk_OUT(&cmd, hd_cmd_wait);
-	hd_int_wait();
-	IN_wn(REG_DATA, (word*)single_sector, drv.Block_Size);
+	drv.Read(partable_sectposi, single_sector);
 	MemCopyN(pt, single_sector + PARTITION_TABLE_OFFSET, sizeof(*pt) * NR_PART_PER_DRIVE);
 }
 
@@ -207,7 +246,7 @@ static void hd_close(Harddisk_PATA& hd) { // 0x02
 	hd_info_valid[hd.getHigID() * 2 + hd.getLowID()] = false;
 }
 
-static void hd_read(Harddisk_PATA& hd, Slice slice, stduint pg_task)
+static void hd_read(Harddisk_PATA& hd, Slice slice, stduint pg_task)// 0x03
 {
 	usize sect_nr = slice.address;
 	HdiskCommand cmd;
@@ -265,6 +304,7 @@ static void hd_write(Harddisk_PATA& hd, Slice slice, stduint pg_task)
 static stduint args[4];
 void serv_dev_hd_loop()
 {
+	task_run = true;
 	// Console.OutFormat("hdisk_number: 0x%[32H] %u\n\r", &bda->hdisk_number ,bda->hdisk_number);
 	if (_IMM(&bda->hdisk_number) != 0x475) {
 		plogerro("Invalid BIOS_DataArea");

@@ -2,6 +2,7 @@
 #include <c/datime.h>
 #include <c/graphic/color.h>
 #include <c/driver/keyboard.h>
+#include <c/storage/harddisk.h>
 #include <cpp/trait/BlockTrait.hpp>
 
 #define statin static inline
@@ -166,3 +167,9 @@ enum MajorDevice {
 #define DEV_MINOR(x)        (x & 0xFF)
 #define    MINOR_hd1a       0x10// should greater than MAX_PRIM
 #define    MINOR_hd2a       (MINOR_hd1a+NR_SUB_PER_PART)
+
+struct Harddisk_PATA_Paged : public Harddisk_PATA {
+	Harddisk_PATA_Paged(byte id = 0, HarddiskType type = HarddiskType::ATA) : Harddisk_PATA(id, type) {}
+	virtual bool Read(stduint BlockIden, void* Dest);
+	virtual bool Write(stduint BlockIden, const void* Sors);
+};

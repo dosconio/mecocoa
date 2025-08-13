@@ -49,6 +49,29 @@ void DEV_Init()
 
 static bool hd_info_valid = false;
 
+bool Harddisk_PATA_Paged::Read(stduint BlockIden, void* Dest) {
+	stduint to_args[2];
+	struct CommMsg msg { .data = { .address = _IMM(to_args), .length = byteof(to_args) } };
+	struct CommMsg data_msg { .data = { .address = _IMM(Dest), .length = Block_Size } };
+	msg.type = 0x03;// read
+	to_args[0] = getLowID();
+	to_args[1] = BlockIden;
+	syscall(syscall_t::COMM, COMM_SEND, Task_Hdd_Serv, &msg);
+	syscall(syscall_t::COMM, COMM_RECV, Task_Hdd_Serv, &data_msg);
+	return true;
+}
+bool Harddisk_PATA_Paged::Write(stduint BlockIden, const void* Sors) {
+	stduint to_args[2];
+	struct CommMsg msg { .data = { .address = _IMM(to_args), .length = byteof(to_args) } };
+	struct CommMsg data_msg { .data = { .address = _IMM(Sors), .length = Block_Size } };
+	msg.type = 0x04;// write
+	to_args[0] = getLowID();
+	to_args[1] = BlockIden;
+	syscall(syscall_t::COMM, COMM_SEND, Task_Hdd_Serv, &msg);
+	syscall(syscall_t::COMM, COMM_SEND, Task_Hdd_Serv, &data_msg);
+	return true;
+}
+
 void serv_file_loop()
 {
 	buffer = (byte*)Memory::physical_allocate(0x1000);
@@ -75,23 +98,14 @@ void serv_file_loop()
 			syscall(syscall_t::COMM, COMM_SEND, Task_Hdd_Serv, &msg);
 			#endif
 
-			#if 1// read & write
-			msg.type = 0x03;// read
-			to_args[0] = 0x01;
-			to_args[1] = 0x01;// sector
-			msg.data.length = 2 * sizeof(stduint);
-			syscall(syscall_t::COMM, COMM_SEND, Task_Hdd_Serv, &msg);
-			syscall(syscall_t::COMM, COMM_RECV, Task_Hdd_Serv, &data_msg);
+			#if 0// read & write
+			Harddisk_PATA_Paged(1).Read(1, buffer);
 			for0(i, 16) outsfmt("%[8H] ", buffer[i]);
 			outsfmt("\n\r");
 			for0(i, 3) buffer[i]++;
-			msg.type = 0x04;// write
-			syscall(syscall_t::COMM, COMM_SEND, Task_Hdd_Serv, &msg);
-			syscall(syscall_t::COMM, COMM_SEND, Task_Hdd_Serv, &data_msg);
+			Harddisk_PATA_Paged(1).Write(1, buffer);
 			for0(i, 3) buffer[i] = 0;
-			msg.type = 0x03;// read
-			syscall(syscall_t::COMM, COMM_SEND, Task_Hdd_Serv, &msg);
-			syscall(syscall_t::COMM, COMM_RECV, Task_Hdd_Serv, &data_msg);
+			Harddisk_PATA_Paged(1).Read(1, buffer);
 			for0(i, 16) outsfmt("%[8H] ", buffer[i]);
 			outsfmt("\n\r");
 			#endif

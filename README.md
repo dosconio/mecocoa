@@ -20,14 +20,21 @@ her-note: false
 
 
 CISC `VMBox/VMware/Bochs/QEMU/TODO(Simics,Wel)`
-- `x86` Intel x86
+- `x86` Intel x86 (8086 -> i686+)
 	- dev-env `[native x64+multilib]* (Ubuntu 11.4.0-1ubuntu1~22.04) 11.4.0`
+	- run: 
+		- virtual: VMware, VMBox, Bochs, qemu-system-i386
 - `x64` AMD64
 
 RISC `Fizik`
+- `r32` RISC-V32
+	- run
+		- virtual: qemu-system-riscv32
 - `r64` RISC-V64
 - `ac7` ARMv7 Cortex-A7
 	- dev-env `arm-none-eabi-* (Arm GNU Toolchain 12.2.MPACBTI-Rel1 (Build arm-12-mpacbti.34)) 12.2.1 20230214`
+	- run
+		- phyzikl: ...
 
 MISC
 - `m64` *kept for Dinah* 

@@ -11,7 +11,7 @@ int main(int argc, char** argv)
 		struct CommMsg msg;
 		msg.address = _IMM(&tmp); msg.length = sizeof(tmp);
 		sysouts("B");
-		if (id == 3) {
+		if (id == Task_AppB) {
 			sysouts("subappb systest OK!\n\r");
 		}
 		else {
