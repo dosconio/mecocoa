@@ -168,7 +168,10 @@ void partition(unsigned device, bool primary_but_logical = true) {
 			hdi.logical[dev_nr].address = s + part_tbl[0].lba_start;
 			hdi.logical[dev_nr].length = part_tbl[0].lba_count;
 			s = ext_start_sect + part_tbl[1].lba_start;
-			if (part_tbl[1].type == NO_PART) break;
+			if (part_tbl[1].type == NO_PART) {
+				// ploginfo("end loop at %u", i);
+				break;
+			}
 		}
 	}
 }
@@ -186,12 +189,12 @@ static void print_identify_info(uint16* hdinfo, const Harddisk_PATA& hd)
 			s[i * 2] = *p++;
 		}
 		s[i * 2] = 0;
-		outsfmt("[Hrddisk] %s: %s\n\r", iinfo[k].desc, s);
+		if (_TEMP false) outsfmt("[Hrddisk] %s: %s\n\r", iinfo[k].desc, s);
 	}
 
 	int capabilities = hdinfo[49];
 	int cmd_set_supported = hdinfo[83];
-	outsfmt("[Hrddisk] LBA  : %s\n\r",
+	if (_TEMP false) outsfmt("[Hrddisk] LBA  : %s\n\r",
 		(capabilities & 0x0200) ? (cmd_set_supported & 0x0400) ? "Supported LBA48" : "Supported" : "No");
 
 	int sectors = ((int)hdinfo[61] << 16) + hdinfo[60];
@@ -236,7 +239,7 @@ static void hd_open(Harddisk_PATA& hd) { // 0x00
 	if (!hd_info_valid[hd.getHigID() * 2 + hd.getLowID()]) {
 		if (_TEMP hd.getID() == 0x01) {
 			partition(hd.getID() * (NR_PART_PER_DRIVE + 1));
-			print_hdinfo(hd);
+			if (0) print_hdinfo(hd);
 		}
 		hd_info_valid[hd.getHigID() * 2 + hd.getLowID()] = true;
 	}
@@ -300,6 +303,24 @@ static void hd_write(Harddisk_PATA& hd, Slice slice, stduint pg_task)
 	}
 }
 
+static void GetPartitionSlice(Harddisk_PATA& hd, unsigned device, stduint pg_task)
+{
+	//{} hd_info_valid
+	Slice* retp;
+	HD_Info& hdinfo = hd_info[hd.getHigID() * 2 + hd.getLowID()];
+	retp = device < NR_PRIM_PER_DRIVE ?
+	&hdinfo.primary[device % NR_PRIM_PER_DRIVE] :
+	&hdinfo.logical[(device - NR_PRIM_PER_DRIVE) % NR_SUB_PER_DRIVE];
+	// if (retp->length && device >= NR_PRIM_PER_DRIVE)
+	// 	ploginfo("[Hrddisk] GetPartitionSlice(%u -> log[%u])", device, (device - NR_PRIM_PER_DRIVE) % NR_SUB_PER_DRIVE);
+	Slice ret = *retp;
+	CommMsg msg{
+		.data = {.address = _IMM(&ret), .length = byteof(ret) },
+		// .type = 0, .src = Task_Hdd_Serv
+	};
+	syscall(syscall_t::COMM, COMM_SEND, pg_task, &msg);
+	// ploginfo("[Hrddisk] GetPartitionSlice %u %u", ret.address, ret.length);
+}
 
 static stduint args[4];
 void serv_dev_hd_loop()
@@ -335,13 +356,16 @@ void serv_dev_hd_loop()
 			break;
 		case 3:// READ[diskno, lba]
 			slice.address = (usize)args[1];
-			ploginfo("[Hrddisk] device %u: read %u", (unsigned)(byte)args[0], slice.address);
+			// ploginfo("[Hrddisk] device %u: read %u", (unsigned)(byte)args[0], slice.address);
 			hd_read(*disks[(byte)args[0]], slice, msg.src);
 			break;
 		case 4:// WRITE[diskno, lba]
 			slice.address = (usize)args[1];
-			ploginfo("[Hrddisk] device %u: write %u", (unsigned)(byte)args[0], slice.address);
+			// ploginfo("[Hrddisk] device %u: write %u", (unsigned)(byte)args[0], slice.address);
 			hd_write(*disks[(byte)args[0]], slice, msg.src);
+			break;
+		case 5:// GetPartitionSlice aka geometry (device 0 for all, 1~4 for primary, 5+ for logical)
+			GetPartitionSlice(*disks[(byte)args[0]], args[1], msg.src);
 			break;
 
 

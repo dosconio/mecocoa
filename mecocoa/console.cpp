@@ -14,6 +14,8 @@
 use crate uni;
 #ifdef _ARC_x86 // x86:
 
+
+
 byte MccaTTYCon::current_screen_TTY = 0;
 
 BareConsole* BCONS0;// TTY0

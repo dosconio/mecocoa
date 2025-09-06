@@ -150,7 +150,7 @@ ProcessBlock* TaskRegister(void* entry, byte ring)
 
 	word LDTSelector = GDT_Alloc() / 8;
 	word TSSSelector = GDT_Alloc() / 8;
-	outsfmt("LDTSel %d, TSSSel %d\n\r", LDTSelector, TSSSelector);
+	// outsfmt("LDTSel %d, TSSSel %d\n\r", LDTSelector, TSSSelector);
 	char* page = (char*)Memory::physical_allocate(0x2000);
 	ProcessBlock* pb = (ProcessBlock*)(page); new (pb) ProcessBlock();
 	descriptor_t* LDT = (descriptor_t*)(pb->LDT);
@@ -195,6 +195,12 @@ ProcessBlock* TaskRegister(void* entry, byte ring)
 	case 3: TSS->ESP = (dword)(page + 0x1C00) + 0x400;
 		break;
 	}
+
+	outsfmt("TSS %d at 0x%[32H], Entry 0x%[32H]->0x%[32H], SP=0x%[32H]\n\r",
+		TSSSelector, page,
+		entry, pb->paging[_IMM(entry)],
+		TSS->ESP);
+
 	//{TODO} allow IOMap Version
 	TSS->ES = 8*2 + 0b100 + ring;
 	TSS->Padding3 = 0;
