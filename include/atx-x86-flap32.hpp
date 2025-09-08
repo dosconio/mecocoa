@@ -59,12 +59,6 @@ enum class syscall_t : stduint {
 #define mapglb(x) (*(usize*)&(x) |= 0x80000000)
 #define mglb(x) (_IMM(x) | 0x80000000)
 
-//{TODEL}
-struct __attribute__((packed)) tmp48le_t { uint16 u_16fore; uint32 u_32back; };
-struct __attribute__((packed)) tmp48be_t { uint32 u_32fore; uint16 u_16back; };
-extern tmp48le_t tmp48_le;
-extern tmp48be_t tmp48_be;
-
 extern bool opt_info;
 extern bool opt_test;
 

@@ -91,15 +91,6 @@ static Slice HD_GetPartEntry(Harddisk_PATA_Paged& pata, usize device)
 	return part_entry;
 }
 
-void FFFF() {
-	int h = 1;
-	h++;
-}
-void GGGG() {
-	for0(i,45)
-		FFFF();
-	//!!! If there are 45 FFFF();, it will be crashed. Why? --Phina.
-}
 
 void serv_file_loop()
 {
@@ -194,12 +185,11 @@ void serv_file_loop()
 				IDE0_1.Write(1, buffer);
 				// - Debug show
 				if (_TEMP 1) {
-					outsfmt("[mkfs] disk0:1: superblock 0x%[32H]\n\r", (total.address + 1) * IDE0_1.Block_Size);
-					GGGG();
-					// outsfmt("[mkfs] disk0:1: inode-map 0x%[32H]\n\r", (total.address + 1 + 1) * IDE0_1.Block_Size);
-					// outsfmt("[mkfs] disk0:1: sectormap 0x%[32H]\n\r", (total.address + 1 + 1 + sb.entity.nr_imap_sects) * IDE0_1.Block_Size);
-					// outsfmt("[mkfs] disk0:1:    inodes 0x%[32H]\n\r", (total.address + 1 + 1 + sb.entity.nr_imap_sects + sb.entity.nr_smap_sects) * IDE0_1.Block_Size);
-					// outsfmt("[mkfs] disk0:1:   sectors 0x%[32H]\n\r", (total.address + sb.entity.n_1st_sect) * IDE0_1.Block_Size);
+					outsfmt("[mkfs] disk0:1: superbloc 0x%[32H]\n\r", (total.address + 1) * IDE0_1.Block_Size);
+					outsfmt("[mkfs] disk0:1: inode-map 0x%[32H]\n\r", (total.address + 1 + 1) * IDE0_1.Block_Size);
+					outsfmt("[mkfs] disk0:1: sectormap 0x%[32H]\n\r", (total.address + 1 + 1 + sb.entity.nr_imap_sects) * IDE0_1.Block_Size);
+					outsfmt("[mkfs] disk0:1:    inodes 0x%[32H]\n\r", (total.address + 1 + 1 + sb.entity.nr_imap_sects + sb.entity.nr_smap_sects) * IDE0_1.Block_Size);
+					outsfmt("[mkfs] disk0:1:   sectors 0x%[32H]\n\r", (total.address + sb.entity.n_1st_sect) * IDE0_1.Block_Size);
 				}
 				// - Create the inode map
 				MemSet(buffer, 0x00, IDE0_1.Block_Size);
@@ -232,7 +222,6 @@ void serv_file_loop()
 				usize sec = 2 + sb.entity.nr_imap_sects;
 				IDE0_1.Write(sec++, buffer);
 				MemSet(buffer, 0x00, IDE0_1.Block_Size);// rest sectors
-				break;;;;;;;;;
 				while (sec < 2 + sb.entity.nr_smap_sects) {
 					IDE0_1.Write(sec++, buffer);
 				}

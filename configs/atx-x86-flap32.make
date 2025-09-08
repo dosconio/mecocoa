@@ -32,7 +32,8 @@ build: clean $(cppobjs)
 	@echo "MK mecocoa $(arch) real16 support"
 	aasm prehost/$(arch)/atx-x86-cppweaks.asm -felf -o $(uobjpath)/mcca-$(arch)/mcca-$(arch)-elf16.o
 	@echo "MK mecocoa $(arch) loader"
-	g++ -I$(uincpath) $(flag) -m32 prehost/$(arch)/$(arch).loader.cpp prehost/$(arch)/$(arch).auf.cpp -o $(ubinpath)/$(elf_loader) -L$(ubinpath) -lm32d $(CXF) \
+	g++ -I$(uincpath) $(flag) -m32 prehost/$(arch)/$(arch).loader.cpp prehost/$(arch)/$(arch).auf.cpp $(uobjpath)/CGWin32/_ae_manage.o\
+		-o $(ubinpath)/$(elf_loader) -L$(ubinpath) -lm32d $(CXF) \
 		-T prehost/$(arch)/$(arch).loader.ld  \
 		-nostartfiles -Os
 	strip --strip-all $(ubinpath)/$(elf_loader)
@@ -44,6 +45,7 @@ build: clean $(cppobjs)
 		-Wl,-Map=$(ubinpath)/$(elf_kernel).map
 	strip --strip-all $(ubinpath)/$(elf_kernel)
 	ffset $(ubinpath)/fixed.vhd $(ubinpath)/$(elf_kernel) 0
+	# dd if=$(ubinpath)/$(elf_kernel) of=$(ubinpath)/fixed.vhd bs=1 conv=notrunc
 	#{TODO} main kernel here
 	@dd if=/dev/zero of=$(outs) bs=512 count=2880 2>>/dev/null
 	@dd if=$(boot)   of=$(outs) bs=512 count=1 conv=notrunc 2>>/dev/null
@@ -65,11 +67,11 @@ build: clean $(cppobjs)
 	#
 	echo MK subappb
 	gcc subapps/hellob/*.c accmlib/*.o -o $(uobjpath)/accm-$(arch)/b -m32 -nostdlib  -fno-pic -static -I$(uincpath) -D_ACCM=0x8632
-	ffset $(ubinpath)/fixed.vhd $(uobjpath)/accm-$(arch)/b 128
+	ffset $(ubinpath)/fixed.vhd $(uobjpath)/accm-$(arch)/b 384
 	#
 	echo MK subappc
 	g++ subapps/helloc/* accmlib/*.o -o $(uobjpath)/accm-$(arch)/c -m32 -nostdlib  -fno-pic -static -I$(uincpath) -D_ACCM=0x8632
-	ffset $(ubinpath)/fixed.vhd $(uobjpath)/accm-$(arch)/c 192
+	ffset $(ubinpath)/fixed.vhd $(uobjpath)/accm-$(arch)/c 512
 	#
 	@echo
 	@echo "You can now debug in bochs with the command:"

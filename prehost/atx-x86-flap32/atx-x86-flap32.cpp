@@ -26,8 +26,7 @@ _ESYM_C{
 char _buf[65]; String ker_buf;
 stduint tmp;
 }
-tmp48le_t tmp48_le;
-tmp48be_t tmp48_be;
+
 static ProcessBlock krnl_tss;
 void (*entry_temp)();
 
@@ -77,8 +76,12 @@ _ESYM_C void RETONLY();
 extern "C" void General_IRQHandler();
 
 // in future, some may be abstracted into mecocoa/mccaker.cpp
+void MAIN();
 _sign_entry() {
-	__asm("movl $0x8000, %esp");// mov esp, 0x1E00; set stack
+	__asm("movl $0x7FF0, %esp");// mov esp, 0x1E00; set stack
+	MAIN();
+}
+void MAIN() {
 	Memory::clear_bss();
 	krnl_init();
 	MccaTTYCon::cons_init();
@@ -146,7 +149,7 @@ _sign_entry() {
 	Harddisk_PATA hdisk(0);
 	// subappb
 	printlog(_LOG_INFO, "Loading Subappb");
-	for0(i, 64) hdisk.Read(i + 128, (void*)((char*)load_buffer + 512 * (i)));
+	for0(i, 64) hdisk.Read(i + 384, (void*)((char*)load_buffer + 512 * (i)));
 	TaskLoad(NULL _TEMP, load_buffer, 3)->focus_tty_id = 2;
 	// subappa
 	printlog(_LOG_INFO, "Loading Subappa");
@@ -154,7 +157,7 @@ _sign_entry() {
 	TaskLoad(NULL _TEMP, load_buffer, 3)->focus_tty_id = 1;
 	// subappc
 	printlog(_LOG_INFO, "Loading Subappc");
-	for0(i, 64) hdisk.Read(i + 192, (void*)((char*)load_buffer + 512 * (i)));
+	for0(i, 64) hdisk.Read(i + 512, (void*)((char*)load_buffer + 512 * (i)));
 	TaskLoad(NULL _TEMP, load_buffer, 3)->focus_tty_id = 3;
 
 	if (false) CallFar(0, 8 * 9);// manually schedule

@@ -149,10 +149,8 @@ static const uint32 gdt_magic[] = {
 void GDT_Init() {
 	MemCopyN(mecocoa_global->gdt_ptr, gdt_magic, sizeof(gdt_magic));
 	mecocoa_global->gdt_ptr->rout.setModeCall(_IMM(call_gate_entry()) | 0x80000000, SegCode);// 8*3 Call Gate
-	tmp48_le = { mecocoa_global->gdt_len = sizeof(mec_gdt) - 1 , _IMM(mecocoa_global->gdt_ptr) };// physical address
-	__asm("lgdt tmp48_le");
-	tmp48_be = { _IMM(&new_lgdt) , SegCode };
-	__asm("ljmp *tmp48_be");
+	loadGDT(_IMM(mecocoa_global->gdt_ptr), mecocoa_global->gdt_len = sizeof(mec_gdt) - 1);// physical address
+	jmpFar(_IMM(new_lgdt), SegCode);
 	__asm("new_lgdt: mov $8, %eax;");
 	__asm("mov %eax, %ds; mov %eax, %es; mov %eax, %fs; mov %eax, %gs; mov %eax, %ss;");
 }
@@ -164,8 +162,7 @@ word GDT_GetNumber() {
 // allocate and apply, return the allocated number
 word GDT_Alloc() {
 	word ret = mecocoa_global->gdt_len + 1;
-	tmp48_le = { mecocoa_global->gdt_len += 8 , _IMM(mecocoa_global->gdt_ptr) };
-	__asm("lgdt tmp48_le");
+	loadGDT(_IMM(mecocoa_global->gdt_ptr), mecocoa_global->gdt_len += 8);
 	return ret;
 }
 
