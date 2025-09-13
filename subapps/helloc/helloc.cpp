@@ -42,11 +42,17 @@ int main(int argc, char** argv)
 				sysouts("C");
 				last_sec = now;
 			}
+			if (now > 3) {
+				stduint ok = syscall(0x6, _IMM("/a.txt"), 0x1234, nil);// open -> desc
+				sysouts(ok ? "\n\rfin open\n\r" : "\n\rfail open\n\r");
+				break;
+
+			}
 		}
 
 
 		
-
+		while (1) sysrest();;
 	}
 }
 

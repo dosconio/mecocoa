@@ -1,7 +1,11 @@
 // minix-like
+#ifndef FILESYS_HPP_
+#define FILESYS_HPP_
 #define _STYLE_RUST
 #include "cpp/trait/StorageTrait.hpp"
 #include "cpp/trait/FilesysTrait.hpp"
+
+#include "fileman.hpp"
 
 using namespace uni;
 
@@ -77,6 +81,35 @@ public:
 	
 };
 
+struct FileDescriptor {
+	i32 fd_mode;// RW
+	u64 fd_pos;
+	inode* fd_inode;
+};
+
 
 #define	INVALID_INODE		0
 #define	ROOT_INODE		1
+
+/* INODE::i_mode (octal, lower 12 bits reserved) */
+#define I_TYPE_MASK     0170000
+#define I_REGULAR       0100000
+#define I_BLOCK_SPECIAL 0060000
+#define I_DIRECTORY     0040000
+#define I_CHAR_SPECIAL  0020000
+#define I_NAMED_PIPE	0010000
+
+#define	MAKE_DEV(a,b)		((a << 4) | b)
+
+void make_filesys(Harddisk_PATA_Paged& ide, byte* buffer);
+
+bool strip_path(char* filename, const char* pathname, struct inode** ppinode);
+
+struct FilesysOrange {
+	StorageTrait* storage;
+	FilesysOrange(StorageTrait& s) {
+		storage = &s;
+	}
+};
+
+#endif

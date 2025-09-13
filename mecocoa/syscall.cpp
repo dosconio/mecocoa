@@ -18,13 +18,16 @@ Handler_t syscalls[_TEMP 1];
 //{TODO} Syscall class
 //{TODO} Use callgate-para (but register nor kernel-area) to pass parameters
 static const byte syscall_paracnts[0x100] = {
-	1, //OUTC
-	3, //INNC
-	1, //EXIT
-	0, //TIME ret(second)
-	0, //REST
-	3, //COMM
-	0,0, 0,0,0,0,0,0,0,0,// 0XH
+	// ---- 0x0X ----
+	1, //0x00 OUTC
+	3, //0x01 INNC
+	1, //0x02 EXIT
+	0, //0x03 TIME ->(second)
+	0, //0x04 REST
+	3, //0x05 COMM
+	2, //0x06 OPEN (pathname,flags)->(success)
+	0, 0,0,0,0,0,0,0,0,// 0XH
+	// ---- 0x1X ----
 	0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,// 1XH
 	0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,// 2XH
 	0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,// 3XH
@@ -42,6 +45,28 @@ static const byte syscall_paracnts[0x100] = {
 	0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,
 	3, //TEST // FXH
 };
+
+static stduint syscall_06_open(stduint* paras, ProcessBlock* pb)
+{
+	stduint open_buf[1];
+	byte pathname[byteof(stduint) * 4 - 2];
+	CommMsg msg{
+		.data = {.address = _IMM(&pathname), .length = sizeof(pathname) },
+		.type = 0x02,// open
+	};
+	pathname[0] = paras[1];
+	MemCopyP(pathname + 1, kernel_paging, (void*)paras[0], pb->paging, byteof(pathname));//{TODO} StrCopyP
+	syscall(syscall_t::COMM, COMM_SEND, Task_FileSys, &msg);
+	msg.data.address = _IMM(open_buf);
+	msg.data.length = sizeof(stduint);
+	syscall(syscall_t::COMM, COMM_RECV, Task_FileSys, &msg);
+	if (open_buf[0]) {
+		plogerro("open file failed");
+		return 0;// no descriptor
+	}
+	return _TEMP 1;
+}
+
 static stduint call_body(const syscall_t callid, ...) {
 	auto task_switch_enable_old = task_switch_enable;//{TODO} {MUTEX for multi-Proc}
 	task_switch_enable = false;
@@ -100,8 +125,8 @@ static stduint call_body(const syscall_t callid, ...) {
 		}
 		break;
 	}
-
-
+	case syscall_t::OPEN:// (str, uint)->(uint)
+		return syscall_06_open(para, TaskGet(ProcessBlock::cpu0_task));
 
 
 
@@ -122,8 +147,8 @@ static stduint call_body(const syscall_t callid, ...) {
 		ret = ProcessBlock::cpu0_task;
 		task_switch_enable = task_switch_enable_old;
 		return ret; break;
-		default:
-		printlog(_LOG_ERROR, "Bad syscall: 0x%[32H]", _IMM(callid));
+	default:
+		printlog(_LOG_ERROR, "Unimplemented syscall: 0x%[32H]", _IMM(callid));
 		break;
 	}
 	task_switch_enable = task_switch_enable_old;//{MUTEX for multi-Proc}

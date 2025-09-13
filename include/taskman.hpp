@@ -1,3 +1,9 @@
+
+#ifndef TASKMAN_HPP_
+#define TASKMAN_HPP_
+
+#include "fileman.hpp"
+
 extern "C" bool task_switch_enable;
 
 struct CommMsg {
@@ -6,6 +12,7 @@ struct CommMsg {
 	stduint src;// use if type is HARDRUPT
 };
 
+class FileDescriptor;
 // = TaskBlock = ThreadBlock
 struct _Comment(Kernel) ProcessBlock {
 	static stduint cpu_proc_number;
@@ -57,6 +64,9 @@ struct _Comment(Kernel) ProcessBlock {
 	stduint queue_send_queuehead;// 0 for none
 	stduint queue_send_queuenext;
 
+	// File
+	FileDescriptor* pfiles[_TEMP 4];
+
 
 
 	bool is_suspend = false;// to Disk
@@ -95,3 +105,5 @@ enum {
 
 #define ANYPROC (_IMM0)
 #define INTRUPT (~_IMM0)
+
+#endif

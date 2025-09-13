@@ -52,7 +52,6 @@ void DEV_Init()
 static bool hd_info_valid = false;
 
 #define NR_CONSOLES	4
-#define	NR_DEFAULT_FILE_SECTS 2048 // 1MB, ROOT Directory Record File
 
 bool Harddisk_PATA_Paged::Read(stduint BlockIden, void* Dest) {
 	stduint to_args[2];
@@ -77,12 +76,12 @@ bool Harddisk_PATA_Paged::Write(stduint BlockIden, const void* Sors) {
 	return true;
 }
 
-static Slice HD_GetPartEntry(Harddisk_PATA_Paged& pata, usize device)
+Slice Harddisk_PATA_Paged::GetPartEntry(usize device)
 {
 	stduint to_args[2];
 	struct CommMsg msg { .data = { .address = _IMM(to_args), .length = byteof(to_args) } };
 	msg.type = 0x05;
-	to_args[0] = pata.getID();
+	to_args[0] = self.getID();
 	to_args[1] = device;
 	syscall(syscall_t::COMM, COMM_SEND, Task_Hdd_Serv, &msg);
 	Slice part_entry = { 0 };
@@ -91,6 +90,18 @@ static Slice HD_GetPartEntry(Harddisk_PATA_Paged& pata, usize device)
 	return part_entry;
 }
 
+
+
+// e.g. create_file("/hello", 0);
+static inode* create_file(rostr path, int flags)
+{
+	char filename[_TEMP 20];
+	inode* dir_inode;
+	if (strip_path(filename, path, &dir_inode) != 0) return NULL;
+
+
+	return _TEMP 0;
+}
 
 void serv_file_loop()
 {
@@ -104,6 +115,7 @@ void serv_file_loop()
 	msg.data.length = 0;
 	data_msg.data.address = _IMM(buffer);
 	data_msg.data.length = 0x1000;
+	Harddisk_PATA_Paged IDE0_1(0x0001);
 	while (true) {
 		switch (msg.type)
 		{
@@ -155,85 +167,36 @@ void serv_file_loop()
 			#endif
 
 			// mkfs
-			if (1) {
-				Harddisk_PATA_Paged IDE0_1(0x0001);
-				//
-				Slice total = HD_GetPartEntry(IDE0_1, 0);
-				// outsfmt("[mkfs] disk0:1: 0x%[32H] began %u secs\n\r", total.address * IDE0_1.Block_Size, total.length);
-
-				int &&bits_per_sect = IDE0_1.Block_Size * _BYTE_BITS_;
-				// - Write a super block to sector 1.
-				super_block sb;
-				sb.entity.magic = MAGIC_V1;
-				sb.entity.nr_inodes = bits_per_sect;
-				sb.entity.nr_inode_sects = sb.entity.nr_inodes * INODE_SIZE / IDE0_1.Block_Size;
-				sb.entity.nr_sects = total.length;
-				sb.entity.nr_imap_sects  = 1;
-				sb.entity.nr_smap_sects  = sb.entity.nr_sects / bits_per_sect + 1;
-				sb.entity.n_1st_sect = 1 + 1 +   /* boot sector & super block */
-					sb.entity.nr_imap_sects + sb.entity.nr_smap_sects + sb.entity.nr_inode_sects;
-				sb.entity.root_inode = ROOT_INODE;
-				sb.entity.inode_size = INODE_SIZE;
-				sb.entity.inode_isize_off = offsof(inode, entity.i_size);//(int)&x.i_size - (int)&x; after inode x;
-				sb.entity.inode_start_off= offsof(inode, entity.i_start_sect);
-				sb.entity.dir_ent_size = DIR_ENTRY_SIZE;
-				sb.entity.dir_ent_inode_off = offsof(dir_entry,inode_nr);
-				sb.entity.dir_ent_fname_off = offsof(dir_entry, name);
-				//
-				MemSet(buffer, 0x90, IDE0_1.Block_Size);
-				MemCopyN(buffer, &sb, SUPER_BLOCK_SIZE);
-				IDE0_1.Write(1, buffer);
-				// - Debug show
-				if (_TEMP 1) {
-					outsfmt("[mkfs] disk0:1: superbloc 0x%[32H]\n\r", (total.address + 1) * IDE0_1.Block_Size);
-					outsfmt("[mkfs] disk0:1: inode-map 0x%[32H]\n\r", (total.address + 1 + 1) * IDE0_1.Block_Size);
-					outsfmt("[mkfs] disk0:1: sectormap 0x%[32H]\n\r", (total.address + 1 + 1 + sb.entity.nr_imap_sects) * IDE0_1.Block_Size);
-					outsfmt("[mkfs] disk0:1:    inodes 0x%[32H]\n\r", (total.address + 1 + 1 + sb.entity.nr_imap_sects + sb.entity.nr_smap_sects) * IDE0_1.Block_Size);
-					outsfmt("[mkfs] disk0:1:   sectors 0x%[32H]\n\r", (total.address + sb.entity.n_1st_sect) * IDE0_1.Block_Size);
-				}
-				// - Create the inode map
-				MemSet(buffer, 0x00, IDE0_1.Block_Size);
-				buffer[0] = 0b00111111;// LE Style
-				// bit 0 reserved
-				// bit 1 first inode, for root `/`
-				// bit 2 /dev_tty0
-				// bit 3 /dev_tty1
-				// bit 4 /dev_tty2
-				// bit 5 /dev_tty3
-				IDE0_1.Write(2, buffer);
-				// - Create the sector map
-				MemSet(buffer, 0x00, IDE0_1.Block_Size);
-				int nr_sects = NR_DEFAULT_FILE_SECTS + 1;// 1 for root `/`
-				byte* bufptr = buffer;
-
-				// _ASM("mov %esp, %eax");
-				// _ASM("mov %%eax, %0" : "=r"(hhhh[0]));
-				// outsfmt("current stack ptr: %[32H]\n\r", hhhh[0]);
-
-				//! nr_sects usually< 512*_BYTE_BITS_
-				while (nr_sects >= _BYTE_BITS_) {
-					*bufptr++ = ~(byte)0;
-					nr_sects -= _BYTE_BITS_;
-				}
-				while (nr_sects) {
-					nr_sects--;
-					*bufptr |= _IMM1 << nr_sects;
-				}
-				usize sec = 2 + sb.entity.nr_imap_sects;
-				IDE0_1.Write(sec++, buffer);
-				MemSet(buffer, 0x00, IDE0_1.Block_Size);// rest sectors
-				while (sec < 2 + sb.entity.nr_smap_sects) {
-					IDE0_1.Write(sec++, buffer);
-				}
-				// - Create the inodes of the files
-				// - Create `/', the root directory
-				
-			}
+			if (0) {
+				make_filesys(IDE0_1, buffer);
+			}//{} unchk
 
 			ploginfo("TESTING FILEMAN FINISHED");
 			break;
 		case 1:// HARDRUPT (usercall-forbidden)
 			break;
+		case 2:// OPEN
+		{
+			ploginfo("[fileman] open %s with %[32H]", 1 + (byte*)to_args, ((byte*)to_args)[0]);
+			CommMsg msg_back;
+			stduint ret;
+			msg_back.data.address = _IMM(&ret);
+			msg_back.data.length = sizeof(ret);
+			syscall(syscall_t::COMM, COMM_SEND, msg.src, &msg_back);
+			//{}
+			break;
+		}
+		case 3:// CLOSE
+			//{}
+			break;
+		case 4:// READ
+			//{}
+			break;
+		case 5:// WRITE
+			//{}
+			break;
+		// ... ...
+
 		default:
 			plogerro("Bad TYPE in %s %s", __FILE__, __FUNCIDEN__);
 			break;

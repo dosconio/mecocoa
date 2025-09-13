@@ -22,7 +22,7 @@ CX=g++ -I$(uincpath) -c $(flag) -m32 $(CXF) $(CXW) -std=c++2a
 
 ker_mod=$(uobjpath)/mcca-$(arch)/*
 
-cppfile=$(wildcard mecocoa/*.cpp)
+cppfile=$(wildcard mecocoa/*.cpp) $(wildcard filesys/*.cpp)
 cppobjs=$(patsubst %cpp, %o, $(cppfile))
 sudokey=k
 elf_loader=mcca-$(arch).loader.elf
