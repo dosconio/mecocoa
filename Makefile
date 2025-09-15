@@ -1,6 +1,12 @@
+# ASCII Makefile TAB4 LF
+# Attribute: Ubuntu(64) Shell(Bash)
+# AllAuthor: @ArinaMgk (Phina.net)
+# ModuTitle: Build for Mecocoa
+# Copyright: Dosconio Mecocoa, BCD License Version 3
 
-
-# e.g., use `make run arch=a` to assign arch
+# Use `make run arch=a` to assign arch, or export arch for global environmental variable
+### atx-x86-flap32
+### qemuvirt-r32
 arch?=atx-x86-flap32
 
 build:
@@ -10,6 +16,7 @@ run:
 	@make -f configs/$(arch).make run --silent
 
 clean:
+	@make -f configs/$(arch).make clean --silent
 
 read:
 	readelf -a $(ubinpath)/$(arch).elf
@@ -26,3 +33,15 @@ run-r32:
 	@arch=$(FLAG_RV32) make -f configs/$(FLAG_RV32).make run --silent
 lib-r32:
 	# _TODO cd $(ulibpath)/.. && make mr32 -j
+
+
+###
+
+.PHONY : lib-all
+lib-all: lib lib-r32
+
+.PHONY : build-all
+build-all: build build-r32
+
+.PHONY : all
+all: lib-all build-all

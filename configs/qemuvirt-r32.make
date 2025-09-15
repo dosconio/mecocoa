@@ -9,9 +9,9 @@ RM = rm -rf
 
 # (GNU)
 GPREF   = riscv64-unknown-elf-
-CFLAGS += -nostdlib -fno-builtin -g -Wall
+CFLAGS += -nostdlib -fno-builtin -g -Wall -Wno-unused-variable -Wno-unused-function -Wno-parentheses
 CFLAGS += -march=rv32g -mabi=ilp32
-CFLAGS += -I$(uincpath) -D_MCCA=0x1032 -D_OPT_RISCV32 # 1032 for RV32
+CFLAGS += -I$(uincpath) -D_MCCA=0x1032 -D_HIS_IMPLEMENT# 1032 for RV32
 G_DBG   = gdb-multiarch
 CC      = ${GPREF}gcc
 CX      = ${GPREF}g++
@@ -29,13 +29,15 @@ LDFLAGS = -T prehost/$(arch)/$(arch).ld
 #
 asmfile=$(wildcard prehost/$(arch)/*.S)
 asmobjs=$(patsubst %S, %o, $(asmfile))
-cppfile=$(wildcard prehost/$(arch)/*.cpp)
+cppfile=$(wildcard prehost/$(arch)/*.cpp) $(ulibpath)/cpp/Device/UART.cpp $(ulibpath)/cpp/stream.cpp
 cppobjs=$(patsubst %cpp, %o, $(cppfile))
+cplfile=$(ulibpath)/c/mcore.c
+cplobjs=$(patsubst %c, %o, $(cplfile))
 
 elf_kernel=mcca-$(arch).elf
 
 .PHONY : build
-build: clean $(asmobjs) $(cppobjs)
+build: clean $(asmobjs) $(cppobjs) $(cplobjs)
 	#echo [building] MCCA for $(arch)
 	@echo MK $(elf_kernel)
 	@perl configs/qemuvirt-r32.pl > prehost/$(arch)/$(arch).ld
@@ -48,14 +50,15 @@ build: clean $(asmobjs) $(cppobjs)
 run: build
 	@echo [ running] MCCA for $(arch)
 	@echo "( Press ^A and then X to exit QEMU )"
-	@${QEMU} -M ? | grep virt >/dev/null || exit
 	@${QEMU} ${QFLAGS} -kernel $(ubinpath)/${elf_kernel}
+# 	@${QEMU} -M ? | grep virt >/dev/null || exit
+
 
 #{TODO} debug
 
 .PHONY : clean
 clean:
-	@clear
+	@echo ---- Mecocoa $(arch) ----#[clearing]
 	${RM} $(uobjpath)/mcca-$(arch)/*
 	@${MKDIR} $(uobjpath)/mcca-$(arch)
 
@@ -63,6 +66,13 @@ clean:
 	echo AS $(notdir $<)
 	${CC} ${CFLAGS} -c -o $(uobjpath)/mcca-$(arch)/$(notdir $@) $<
 
+%.o: %.c
+	echo CC $(notdir $<)
+	${CC} ${CFLAGS} -c -o $(uobjpath)/mcca-$(arch)/$(notdir $@) $<
+
 %.o: %.cpp
 	echo CX $(notdir $<)
-	${CX} ${CFLAGS} -c -o $(uobjpath)/mcca-$(arch)/$(notdir $@) $<
+	${CX} -c -o $(uobjpath)/mcca-$(arch)/$(notdir $@) $<\
+		${CFLAGS} -fno-rtti
+
+

@@ -44,7 +44,7 @@ build: clean $(cppobjs)
 		-nostartfiles -O0 \
 		-Wl,-Map=$(ubinpath)/$(elf_kernel).map
 	strip --strip-all $(ubinpath)/$(elf_kernel)
-	ffset $(ubinpath)/fixed.vhd $(ubinpath)/$(elf_kernel) 0
+	ffset $(ubinpath)/fixed.vhd $(ubinpath)/$(elf_kernel) 0 > /dev/null
 	# dd if=$(ubinpath)/$(elf_kernel) of=$(ubinpath)/fixed.vhd bs=1 conv=notrunc
 	#{TODO} main kernel here
 	@dd if=/dev/zero of=$(outs) bs=512 count=2880 2>>/dev/null
@@ -53,25 +53,25 @@ build: clean $(cppobjs)
 	@echo $(sudokey) | sudo -S mount -o loop $(outs) $(mnts)
 	@echo $(sudokey) | sudo -S cp $(ubinpath)/$(elf_loader) $(mnts)/KEX.OBJ
 	@echo $(sudokey) | sudo -S umount $(mnts)
-	@echo
 	@perl configs/$(arch).bochsdbg.pl > $(ubinpath)/I686/mecocoa/bochsrc.bxrc
 	#
 	mkdir $(uobjpath)/accm-$(arch) -p
 	aasm -felf accmlib/others.asm -o accmlib/oth.o
 	cd accmlib && gcc -c *.c -m32 -nostdlib  -fno-pic -static -I$(uincpath) -D_ACCM=0x8632
+	#{TEMP} Fixed position write
 	#
 	echo MK subappa
 	aasm -felf subapps/helloa/helloa.asm -o subapps/helloa/helloa.o
 	ld   -s -m elf_i386 -o $(uobjpath)/accm-$(arch)/a subapps/helloa/helloa.o accmlib/*.o
-	ffset $(ubinpath)/fixed.vhd $(uobjpath)/accm-$(arch)/a 256
+	ffset $(ubinpath)/fixed.vhd $(uobjpath)/accm-$(arch)/a 256 > /dev/null
 	#
 	echo MK subappb
 	gcc subapps/hellob/*.c accmlib/*.o -o $(uobjpath)/accm-$(arch)/b -m32 -nostdlib  -fno-pic -static -I$(uincpath) -D_ACCM=0x8632
-	ffset $(ubinpath)/fixed.vhd $(uobjpath)/accm-$(arch)/b 384
+	ffset $(ubinpath)/fixed.vhd $(uobjpath)/accm-$(arch)/b 384 > /dev/null
 	#
 	echo MK subappc
 	g++ subapps/helloc/* accmlib/*.o -o $(uobjpath)/accm-$(arch)/c -m32 -nostdlib  -fno-pic -static -I$(uincpath) -D_ACCM=0x8632
-	ffset $(ubinpath)/fixed.vhd $(uobjpath)/accm-$(arch)/c 512
+	ffset $(ubinpath)/fixed.vhd $(uobjpath)/accm-$(arch)/c 512 > /dev/null
 	#
 	@echo
 	@echo "You can now debug in bochs with the command:"
@@ -89,7 +89,7 @@ run: build
 
 
 clean:
-	@clear
+	@echo ---- Mecocoa $(arch) ----#[clearing]
 	@-rm $(uobjpath)/mcca-$(arch)/* 1>/dev/null
 
 %.o: %.cpp
