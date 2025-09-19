@@ -6,14 +6,13 @@
 
 #include <c/stdinc.h>
 //
-inline void* operator new(stduint, void* __p) { return __p; }// #include <new>
 #include <cpp/Device/UART>
 
 using namespace uni;
 
 void _global_object_init() {
 	new (&UART0) UART_t(0, 115200);
-
+	
 }
 
 extern "C"
@@ -23,6 +22,9 @@ void _entry()
 	//[!] cannot use FLOATING operation (why)
 	UART0.setMode(115200);
 	UART0.OutFormat("%s\n", "Hello Mcca-RV32~ =OwO=");
+
+	
+
 	while (1);
 }
 

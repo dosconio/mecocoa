@@ -10,5 +10,7 @@
  */
 #define MAXNUM_CPU 8
 
+#define LENGTH_RAM 128*1024*1024
+
 
 #endif /* _QEMU_VIRT_RISCV32_DEF_ */

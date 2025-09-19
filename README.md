@@ -23,14 +23,18 @@ Format `board-architecture-mode`
 
 CISC `VMBox/VMware/Bochs/QEMU/TODO(Simics,Wel)`
 - `x86` Intel x86 (8086 -> i686+)
-	- CLI, Paging, Multitask, Syscall, {RTC,PIT,KBD}
+	- BIOS(MBR), CLI, Paging, Multitask, Syscall, {RTC,PIT,KBD}
 	- dev-env `[native x64+multilib]* (Ubuntu 11.4.0-1ubuntu1~22.04) 11.4.0`
 	- **run**
 		- **virtual**: VMware, VMBox, Bochs, qemu-system-i386
 	- **build**
 		- `make lib`; `make` `make run`
 - `x64` AMD64
-
+	- BIOS(UEFI)
+	- dev-env `[native x64+multilib]* (Ubuntu 11.4.0-1ubuntu1~22.04) 11.4.0`
+	- **run**
+		- **virtual**: qemu-system-x86_64
+	
 RISC `Fizik`
 - `r32` RISC-V32
 	- CLI

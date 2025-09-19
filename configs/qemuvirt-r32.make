@@ -9,7 +9,7 @@ RM = rm -rf
 
 # (GNU)
 GPREF   = riscv64-unknown-elf-
-CFLAGS += -nostdlib -fno-builtin -g -Wall -Wno-unused-variable -Wno-unused-function -Wno-parentheses
+CFLAGS += -nostdlib -fno-builtin  -Wall -Wno-unused-variable -Wno-unused-function -Wno-parentheses # -g
 CFLAGS += -march=rv32g -mabi=ilp32
 CFLAGS += -I$(uincpath) -D_MCCA=0x1032 -D_HIS_IMPLEMENT# 1032 for RV32
 G_DBG   = gdb-multiarch
@@ -25,7 +25,8 @@ QBOARD = virt
 QFLAGS = -nographic -smp 1 -machine $(QBOARD) -bios none
 
 #
-LDFLAGS = -T prehost/$(arch)/$(arch).ld
+LDFILE  = prehost/$(arch)/$(arch).ld
+LDFLAGS = -T $(LDFILE) 
 #
 asmfile=$(wildcard prehost/$(arch)/*.S)
 asmobjs=$(patsubst %S, %o, $(asmfile))
@@ -40,7 +41,8 @@ elf_kernel=mcca-$(arch).elf
 build: clean $(asmobjs) $(cppobjs) $(cplobjs)
 	#echo [building] MCCA for $(arch)
 	@echo MK $(elf_kernel)
-	@perl configs/qemuvirt-r32.pl > prehost/$(arch)/$(arch).ld
+	@perl configs/qemuvirt-r32.pl > $(LDFILE).ignore
+	@${CC} -E -P -x c ${CFLAGS} $(LDFILE).ignore > $(LDFILE)
 	@${CC} ${CFLAGS} ${LDFLAGS} -o $(ubinpath)/${elf_kernel} $(uobjpath)/mcca-$(arch)/* # keep entry (not only code segment) at 0x80000000
 	# @${CC} ${CFLAGS} ${LDFLAGS} -o $(ubinpath)/${elf_kernel} prehost/$(arch)/*.S $(uobjpath)/mcca-$(arch)/*
 	# readelf -h $ubinpath/mcca-qemuvirt-r32.elf| grep Entry

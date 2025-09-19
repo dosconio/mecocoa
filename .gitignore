@@ -2,3 +2,4 @@
 Cargo.lock
 subapps/hellod/target/
 *.o
+*.ignore

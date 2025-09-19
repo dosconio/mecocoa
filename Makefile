@@ -6,6 +6,7 @@
 
 # Use `make run arch=a` to assign arch, or export arch for global environmental variable
 ### atx-x86-flap32
+### atx-x64-uefi64
 ### qemuvirt-r32
 arch?=atx-x86-flap32
 
