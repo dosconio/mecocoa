@@ -1,4 +1,7 @@
-typedef unsigned short CHAR16;
+// ---- OUTDATED, Please use atx-x64-uefi64-loader/* ----
+#include <cpp/unisym>
+
+typedef uint16 CHAR16;
 typedef unsigned long long EFI_STATUS;
 typedef void *EFI_HANDLE;
 
@@ -26,7 +29,7 @@ EFI_STATUS EfiMain(EFI_HANDLE        ImageHandle,
 	return 0;
 }
 
-/* AASM
+/* AASM : ~ -f win64 -o $@ $<
 bits 64
 section .text
 
@@ -44,4 +47,10 @@ align 8
 .msg:
 	dw __utf16__("Hello, world!"), 0
 
+*/
+/*
+	@echo MK $(arch) loader
+	$(clang) $(CFLAGS) -target x86_64-pc-win32-coff -o $(uobjpath)/$(arch).loader.o -c prehost/$(arch)/$(arch).loader.cpp \
+		-fno-rtti -fno-exceptions -fno-unwind-tables -static -nostdlib -fno-pic
+	lld-link-14 /subsystem:efi_application /entry:EfiMain /out:$(ubinpath)/AMD64/loader.efi $(uobjpath)/$(arch).loader.o
 */

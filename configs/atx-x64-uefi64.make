@@ -60,7 +60,7 @@ $(ubinpath)/$(arch).img: loader
 .PHONY : loader
 loader:
 	@echo MK $(arch) loader
-	$(clang) -target x86_64-pc-win32-coff -o $(uobjpath)/$(arch).loader.o -c prehost/$(arch)/$(arch).loader.cpp \
+	$(clang) $(CFLAGS) -target x86_64-pc-win32-coff -o $(uobjpath)/$(arch).loader.o -c prehost/$(arch)/$(arch).loader.cpp \
 		-fno-rtti -fno-exceptions -fno-unwind-tables -static -nostdlib -fno-pic
 	lld-link-14 /subsystem:efi_application /entry:EfiMain /out:$(ubinpath)/AMD64/loader.efi $(uobjpath)/$(arch).loader.o
 
