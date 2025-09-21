@@ -15,6 +15,11 @@ her-note: false
 - Ubuntu (Dev.Env)
 - GCC and GLIBC
 - QEMU, or x86 native virtual machines
+- EDK2
+	- git clone https://github.com/tianocore/edk2.git
+	- git checkout edk2-stable202502 # edk2-stable202208
+	- git submodule update --init --recursive
+	- make -C /home/phina/soft/edk2/BaseTools/Source/C
 
 ## Architecture
 

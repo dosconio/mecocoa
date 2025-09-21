@@ -57,12 +57,15 @@ $(ubinpath)/$(arch).img: loader
 	qemu-img create -f raw $@ 100M > /dev/null
 	mkfs.fat -n 'MECOCOA ' -s 2 -f 2 -R 32 -F 32 $@ > /dev/null
 
+edkdir=/home/phina/soft/edk2
 .PHONY : loader
 loader:
 	@echo MK $(arch) loader
-	$(clang) $(CFLAGS) -target x86_64-pc-win32-coff -o $(uobjpath)/$(arch).loader.o -c prehost/$(arch)/$(arch).loader.cpp \
-		-fno-rtti -fno-exceptions -fno-unwind-tables -static -nostdlib -fno-pic
-	lld-link-14 /subsystem:efi_application /entry:EfiMain /out:$(ubinpath)/AMD64/loader.efi $(uobjpath)/$(arch).loader.o
+	mkdir -p $(edkdir)/MccaLoaderPkg
+	cp prehost/$(arch)/$(arch).loader/*    $(edkdir)/MccaLoaderPkg/
+	cp prehost/$(arch)/$(arch).loader.cfg  $(edkdir)/Conf/target.txt
+	cd $(edkdir) && bash $(ulibpath)/../../mecocoa/prehost/$(arch)/$(arch).loader/build.sh
+	cp $(edkdir)/Build/MccaLoaderX64/DEBUG_CLANGDWARF/X64/Loader.efi $(ubinpath)/AMD64/loader.efi
 
 .PHONY : run
 run: build

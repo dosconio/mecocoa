@@ -4,7 +4,9 @@
             "name": "Linux",
             "includePath": [
                 "${uincpath}",
-                "${workspaceFolder}/**"
+                "${workspaceFolder}/**",
+
+                "~/soft/edk2/MdePkg/Include"
             ],
             "defines": [
                 // "_MCCA=0x8632",
