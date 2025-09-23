@@ -6,11 +6,13 @@
                 "${uincpath}",
                 "${workspaceFolder}/**",
 
-                "~/soft/edk2/MdePkg/Include"
+                "~/soft/edk2/MdePkg/Include",
+                "~/soft/edk2/MdePkg/Include/X64"
             ],
             "defines": [
                 // "_MCCA=0x8632",
-				"_MCCA=0x1032",
+				// "_MCCA=0x1032",
+                "_MCCA=0x8664",
                 "_ARC_x86=5"
             ],
             "compilerPath": "${ubinpath}/AMD64/Win64/bin/gcc.exe",
