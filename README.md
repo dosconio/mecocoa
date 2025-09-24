@@ -35,7 +35,7 @@ CISC `VMBox/VMware/Bochs/QEMU/TODO(Simics,Wel)`
 	- **build**
 		- `make lib`; `make` `make run`
 - `x64` AMD64
-	- UEFI,
+	- UEFI, GUI
 	- dev-env `[native x64+multilib]* (Ubuntu 11.4.0-1ubuntu1~22.04) 11.4.0`
 	- **run**
 		- **virtual**: qemu-system-x86_64

@@ -9,8 +9,8 @@ RM = rm -rf
 
 # (GNU)
 GPREF   = #riscv64-unknown-elf-
-CFLAGS += -nostdlib -fno-builtin -Wall # -Wno-unused-variable -Wno-unused-function -Wno-parentheses # -g
-CFLAGS += --static #-march=rv32g -mabi=ilp32
+CFLAGS += -nostdlib -fno-builtin -Wall -z norelro -fno-pie
+CFLAGS += --static -ffreestanding -mno-red-zone -fno-exceptions -fno-rtti #-march=rv32g -mabi=ilp32
 CFLAGS += -I$(uincpath) -D_MCCA=0x8664 -D_HIS_IMPLEMENT
 G_DBG   = gdb-multiarch
 CC      = ${GPREF}gcc
@@ -45,8 +45,8 @@ clang=clang-14
 build: clean $(ubinpath)/$(arch).img # $(asmobjs) $(cppobjs) $(cplobjs)
 	#echo [building] MCCA for $(arch)
 	@echo MK $(elf_kernel)
-	g++ $(CFLAGS) -std=c++17 -m64 -O2 -ffreestanding -mno-red-zone -fno-exceptions -fno-rtti  \
-		prehost/$(arch)/$(arch).cpp -T prehost/$(arch)/$(arch).ld -o ~/_obj/$(elf_kernel) -z norelro
+	g++ $(CFLAGS) -std=c++17 -m64 -O2 \
+		prehost/$(arch)/$(arch).cpp -T prehost/$(arch)/$(arch).ld -o ~/_obj/$(elf_kernel) 
 	prehost/$(arch)/script-adapt.sh ~/_obj/$(elf_kernel) $(ubinpath)/$(elf_kernel)
 	@sudo mkdir -p $(mntdir)
 	@sudo mount -o loop $(ubinpath)/$(arch).img $(mntdir)
