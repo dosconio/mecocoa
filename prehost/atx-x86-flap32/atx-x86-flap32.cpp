@@ -130,9 +130,20 @@ void MAIN() {
 	if (opt_test) __asm("ud2");
 
 	//{TODO} Switch Graphic Mode
-	if (opt_test && 0) __asm("call SwitchReal16");
+	if (opt_test) __asm("call SwitchReal16");
 	if (opt_test) Console.OutFormat("\xFF\x70[Mecocoa]\xFF\x02 Real16 Switched Test OK!\xFF\x07\n\r");
 
+	byte* p = (byte*)0xA0000;
+	for0(i, 800 * 3)* p++ = 0xFF;
+	p += 800 * 3 * 3;
+	for0(i, 800) { *p++ = 0xFF;  *p++ = 0x00; *p++ = 0x00; }// G
+	p += 800 * 3 * 3;
+	for0(i, 800) { *p++ = 0x00;  *p++ = 0xFF; *p++ = 0x00; }// B
+	p += 800 * 3 * 3;
+	for0(i, 800) { *p++ = 0x00;  *p++ = 0x00; *p++ = 0xFF; }// R
+
+
+	loop _ASM ("hlt");
 	GIC.enAble();
 
 	// Service

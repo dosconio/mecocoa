@@ -31,7 +31,7 @@ CISC `VMBox/VMware/Bochs/QEMU/TODO(Simics,Wel)`
 	- BIOS(MBR), CLI, Paging, Multitask, Syscall, {RTC,PIT,KBD}
 	- dev-env `[native x64+multilib]* (Ubuntu 11.4.0-1ubuntu1~22.04) 11.4.0`
 	- **run**
-		- **virtual**: VMware, VMBox, Bochs, qemu-system-i386
+		- **virtual**: VMware, VMBox, Bochs, qemu-system-i386(9.2.4)
 	- **build**
 		- `make lib`; `make` `make run`
 - `x64` AMD64

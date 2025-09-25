@@ -30,7 +30,7 @@ elf_kernel=mcca-$(arch).elf
 
 build: clean $(cppobjs)
 	@echo "MK mecocoa $(arch) real16 support"
-	aasm prehost/$(arch)/atx-x86-cppweaks.asm -felf -o $(uobjpath)/mcca-$(arch)/mcca-$(arch)-elf16.o
+	aasm -I$(uincpath)/Kasha/n_ -I$(uincpath)/naasm/n_ prehost/$(arch)/atx-x86-cppweaks.asm -felf -o $(uobjpath)/mcca-$(arch)/mcca-$(arch)-elf16.o
 	@echo "MK mecocoa $(arch) loader"
 	g++ -I$(uincpath) $(flag) -m32 prehost/$(arch)/$(arch).loader.cpp prehost/$(arch)/$(arch).auf.cpp $(uobjpath)/CGWin32/_ae_manage.o\
 		-o $(ubinpath)/$(elf_loader) -L$(ubinpath) -lm32d $(CXF) \

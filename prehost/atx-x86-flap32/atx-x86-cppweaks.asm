@@ -5,12 +5,19 @@
 ; ModuTitle: Demonstration - ELF32-C++ x86 Bare-Metal
 ; Copyright: Dosconio Mecocoa, BSD 3-Clause License
 
+%include "osdev.a"
+
 GLOBAL SwitchReal16
 
 ;{TODO} UNISYM BIOS Real16 and its ld. Then we can call it. (`00080000`~`0009FFFF`)
 ;{TODO} Link this below 0x10000
 
 ;{UNFINISHED}
+INTTBL_8616: DW 256 * 8 - 1; READONLY
+	DD 0
+INTTBL_8632: DW 0
+	DD 0
+
 SwitchReal16:
 	[BITS 32]
 	; flap32 -> real16
@@ -18,6 +25,8 @@ SwitchReal16:
 	JMP DWORD 8*4:PointReal16;{} can do this directly
 	[BITS 16]
 	PointReal16:
+		SIDT [INTTBL_8632]
+		LIDT [INTTBL_8616]
 		MOV EAX, CR0
 		AND EAX, 0x7FFFFFFE
 		MOV CR0, EAX
@@ -29,11 +38,14 @@ SwitchReal16:
 		MOV ES, AX
 		MOV FS, AX
 		MOV GS, AX
+		Addr20Disable
+		CALL SwitchVideoMode
 
 	MOV EAX, CR0
 	OR EAX, 0x80000001
 	MOV CR0, EAX
 	JMP WORD 8*2:PointBack32
+	Addr20Enable
 	[BITS 32]
 	PointBack32:
 		MOV EAX, 8*1
@@ -43,6 +55,23 @@ SwitchReal16:
 		MOV GS, AX
 		MOV SS, AX
 		POPAD
+		LIDT [INTTBL_8632]
+	RET
+
+[BITS 16]
+SwitchVideoMode:
+	MOV AX, 0xB800
+	MOV ES, AX
+	MOV BYTE [ES:0], 'X'
+	; MOV AX, 0x006a
+	; INT 0x10
+		MOV AX, 0x7800
+		MOV ES, AX
+		XOR DI, DI
+		MOV AX, 0x4F02
+		MOV BX, 0x4115
+		INT 0x10
+	; HLT
 	RET
 
 [BITS 32]

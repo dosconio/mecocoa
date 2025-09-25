@@ -16,7 +16,8 @@ her-note: false
 | `00001000`~`00005FFF`                 | kernel loader / area basic        |
 | `00006000`~`00006FFF`                 | INTERRUPT STACK and ker-ext-stack |
 | `00007000`~`00007FFF`                 | kernel body stack                 |
-| `00008000`~`0007FFFF`                 | area basic / kernel               |
+| `00008000`~`00077FFF`                 | area basic / kernel               |
+| `00078000`~`0007FFFF`                 | TEMP                              |
 | `00080000`~`0009FFFF`                 | Extended BIOS Data Area           |
 | ***Upper Reflect Area*** (Over 640KB) |                                   |
 | `000A0000`~`000BFFFF`                 | Video Display Memory              |
