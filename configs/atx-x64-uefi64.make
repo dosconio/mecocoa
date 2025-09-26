@@ -9,9 +9,10 @@ RM = rm -rf
 
 # (GNU)
 GPREF   = #riscv64-unknown-elf-
-CFLAGS += -nostdlib -fno-builtin -Wall -z norelro -fno-pie
-CFLAGS += --static -ffreestanding -mno-red-zone -fno-exceptions -fno-rtti #-march=rv32g -mabi=ilp32
+CFLAGS += -nostdlib -fno-builtin -Wall -z norelro # -fno-pie
+CFLAGS += --static -fno-rtti -mno-red-zone -fno-exceptions #  -ffreestanding
 CFLAGS += -I$(uincpath) -D_MCCA=0x8664 -D_HIS_IMPLEMENT
+CFLAGS += -Wno-strict-aliasing 
 G_DBG   = gdb-multiarch
 CC      = ${GPREF}gcc
 CX      = ${GPREF}g++
@@ -45,9 +46,12 @@ clang=clang-14
 build: clean $(ubinpath)/$(arch).img # $(asmobjs) $(cppobjs) $(cplobjs)
 	#echo [building] MCCA for $(arch)
 	@echo MK $(elf_kernel)
-	g++ $(CFLAGS) -std=c++17 -m64 -O2 \
-		prehost/$(arch)/$(arch).cpp -T prehost/$(arch)/$(arch).ld -o ~/_obj/$(elf_kernel) 
-	prehost/$(arch)/script-adapt.sh ~/_obj/$(elf_kernel) $(ubinpath)/$(elf_kernel)
+	g++ $(CFLAGS) -std=c++17 -m64 -O0 \
+	 	prehost/$(arch)/$(arch).cpp -T prehost/$(arch)/$(arch).ld -o $(ubinpath)/$(elf_kernel)\
+		-O2 -Wall -g -ffreestanding -mno-red-zone -fno-exceptions -fno-rtti -std=c++17\
+		$(ulibpath)/cpp/Device/Video.cpp
+
+	# OUTDATED # prehost/$(arch)/script-adapt.sh ~/_obj/$(elf_kernel) $(ubinpath)/$(elf_kernel)
 	@sudo mkdir -p $(mntdir)
 	@sudo mount -o loop $(ubinpath)/$(arch).img $(mntdir)
 	@sudo mkdir -p $(mntdir)/EFI/BOOT

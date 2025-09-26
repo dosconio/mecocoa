@@ -130,8 +130,11 @@ void MAIN() {
 	if (opt_test) __asm("ud2");
 
 	//{TODO} Switch Graphic Mode
-	if (opt_test) __asm("call SwitchReal16");
-	if (opt_test) Console.OutFormat("\xFF\x70[Mecocoa]\xFF\x02 Real16 Switched Test OK!\xFF\x07\n\r");
+	__asm("call SwitchReal16");
+	//{TODO} VideoConsole - 4 TTYs & Redirect
+	//{TODO} Code Adapt for
+	//{TODO} PS2/USB Mouse
+	if (_TODO 0) Console.OutFormat("\xFF\x70[Mecocoa]\xFF\x02 Real16 Switched Test OK!\xFF\x07\n\r");
 
 	byte* p = (byte*)0xA0000;
 	for0(i, 800 * 3)* p++ = 0xFF;
