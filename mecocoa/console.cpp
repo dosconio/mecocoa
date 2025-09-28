@@ -6,14 +6,14 @@
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 #define _STYLE_RUST
 #define _DEBUG
-#include <new>
+
 #include <c/consio.h>
 #include <c/driver/keyboard.h>
-#include "../include/atx-x86-flap32.hpp"
 
 use crate uni;
 #ifdef _ARC_x86 // x86:
-
+#include "../include/atx-x86-flap32.hpp"
+#include <cpp/Device/_Video.hpp>
 
 
 byte MccaTTYCon::current_screen_TTY = 0;
@@ -86,6 +86,60 @@ struct KeyboardBridge : public OstreamTrait // // scan code set 1
 };
 KeyboardBridge kbdbridge;
 
+
+
+
+
+
+class GloScreen : public VideoControlInterface {
+public:
+	inline uint8& Locate(const Point& disp) const {
+		// uint32 base = *(volatile uint32*)(0x78000 + 0x28);
+		return *((uint8*)(0xFD000000) + disp.x * 3 + disp.y * 3 * 800 _Comment(width));// without boundary check
+		// 0xFD000000  default
+		// 0xFC000000  -device VGA,vgamem_mb=32
+		// 0xF8000000  -device VGA,vgamem_mb=64
+	}
+public:
+	virtual ~GloScreen() = default;
+	GloScreen() {}
+	virtual void SetCursor(const Point& disp) const override;
+	virtual Point GetCursor() const override;
+
+	// without boundary check
+	virtual void DrawPoint(const Point& disp, Color color) const override;
+	virtual void DrawRectangle(const Rectangle& rect) const override;
+
+	//
+	virtual void DrawFont(const Point& disp, const DisplayFont& font) const override;
+	virtual Color GetColor(Point p) const override;
+};
+void GloScreen::SetCursor(const Point& disp) const { _TODO; }// MAYBE unused
+Point GloScreen::GetCursor() const { _TODO return {0, 0}; }// MAYBE unused
+void GloScreen::DrawPoint(const Point& disp, Color color) const {
+	uint8* p = &Locate(disp);
+	*p++ = color.b;
+	*p++ = color.g;
+	*p++ = color.r;
+}
+void GloScreen::DrawRectangle(const Rectangle& rect) const {
+	uint8* p = &Locate(rect.getVertex());
+	for0(y, rect.height) {
+		uint8* pp = p;
+		for0(x, rect.width) {
+			*pp++ = rect.color.b;
+			*pp++ = rect.color.g;
+			*pp++ = rect.color.r;
+		}
+		p += 800 * 3;//{} 800x600
+	}
+}
+void GloScreen::DrawFont(const Point& disp, const DisplayFont& font) const {
+	_TODO;
+}
+Color GloScreen::GetColor(Point p) const {
+	return cast<Color>(Locate(p));
+}
 void MccaTTYCon::cons_init()
 {
 	BCONS0 = new (BUF_BCONS0) MccaTTYCon(bda->screen_columns, 24, 0); BCONS0->setShowY(0, 24);
@@ -100,6 +154,56 @@ void MccaTTYCon::cons_init()
 	//
 	new (&kbdbridge) KeyboardBridge();// C++ Bare Programming
 	kbd_out = &kbdbridge;
+
+	// ABOVE are OUTDATED
+
+	//{TODO} Switch Graphic Mode
+	__asm("call SwitchReal16");
+	//{TODO} VideoConsole - 4 TTYs & Redirect
+	//{TODO} Code Adapt for
+	//{TODO} PS2/USB Mouse
+	// Console.OutFormat("\xFF\x70[Mecocoa]\xFF\x02 Real16 Switched Test OK!\xFF\x07\n\r");
+
+	// byte* p = (byte*)0xA0000;
+	// for0(i, 800 * 3)* p++ = 0xFF;
+	// p += 800 * 3 * 3;
+	// for0(i, 800) { *p++ = 0xFF;  *p++ = 0x00; *p++ = 0x00; }// G
+	// p += 800 * 3 * 3;
+	// for0(i, 800) { *p++ = 0x00;  *p++ = 0xFF; *p++ = 0x00; }// B
+	// p += 800 * 3 * 3;
+	// for0(i, 800) { *p++ = 0x00;  *p++ = 0x00; *p++ = 0xFF; }// R
+
+	GloScreen wholescreen0;
+	VideoConsole vcon0(wholescreen0, { 800,600 });
+	// uint8* ppp = (uint8*)0xFD000000 + 800 * 3 * 500 + 10 * 3;
+	// for0(y, 10) {
+	// 	uint8* pp = ppp;
+	// 	for0(x, 10) {
+	// 		*pp++ = 0xFF;
+	// 		*pp++ = 0xFF;
+	// 		*pp++ = 0xFF;
+	// 	}
+	// 	ppp += 800 * 3;// 800x600
+	// }
+
+
+	wholescreen0.DrawRectangle(Rectangle(Point(0, 0), Size2(800, 600), 0xDD0022));
+	vcon0.OutFormat("Ciallo\n\r %u", 2025);
+
+	// uint32 base = *(volatile uint32*)(0x78000 + 0x28);
+	// outsfmt("base: 0x%[32H]\n\r", base);
+
+	// outsfmt("     00 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F\n\r");
+	// char* __p = (char*)0x78000;
+	// for0(j, 10) {
+	// 	outsfmt("%[16H] ", j << 4);
+	// 	for0(i, 16) {
+	// 		outsfmt("%[8H] ", *__p++);
+	// 	}
+	// 	outsfmt("\n\r");
+	// }
+
+	loop _ASM ("hlt");
 }
 
 

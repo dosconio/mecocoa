@@ -1,7 +1,7 @@
 
 #define _STYLE_RUST
 #define _DEBUG
-#include <new>
+
 #include <c/consio.h>
 #include <c/storage/harddisk.h>
 #include "../include/atx-x86-flap32.hpp"

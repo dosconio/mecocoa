@@ -5,13 +5,16 @@
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 #define _STYLE_RUST
 #define _DEBUG
-#include <new>
+
 #include <c/consio.h>
 #include <c/storage/harddisk.h>
+
+
+use crate uni;
+#ifdef _ARC_x86 // x86:
 #include "../include/atx-x86-flap32.hpp"
 #include "cpp/Device/Storage/HD-DEPEND.h"
 
-use crate uni;
 
 Harddisk_PATA* disks[2];
 static char hdd_buf[byteof(**disks) * numsof(disks)];
@@ -375,3 +378,5 @@ void serv_dev_hd_loop()
 		}
 	}
 }
+
+#endif

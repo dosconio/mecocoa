@@ -5,11 +5,11 @@
 #define _STYLE_RUST
 #define _DEBUG
 #include <c/consio.h>
-#include "../include/atx-x86-flap32.hpp"
 
 
 use crate uni;
 #ifdef _ARC_x86 // x86:
+#include "../include/atx-x86-flap32.hpp"
 
 Letvar(Memory::p_basic, byte*, 0x1000); //.. 0x7000
 Letvar(Memory::p_ext, byte*, mem_area_exten_beg);
@@ -82,9 +82,11 @@ extern stduint tmp;
 _TEMP void page_init() {
 	kernel_paging.Reset();// should take 0x1000
 	kernel_paging.MapWeak(0x00000000, 0x00000000, 0x00400000, true, _Comment(R0 TOD) true);//{TODO} false
-	kernel_paging.MapWeak(0xFFFFF000, _IMM(kernel_paging.page_directory), 0x00001000, false, _Comment(R0) false);// make loop PDT and do not unisym's
+	// kernel_paging.MapWeak(0xFFFFF000, _IMM(kernel_paging.page_directory), 0x00001000, false, _Comment(R0) false);// make loop PDT and do not unisym's
 	// for(i, 0x400) pdt[0x3FF][...] Page Tables
 	kernel_paging.MapWeak(0x80000000, 0x00000000, 0x00400000, true, _Comment(R0) false);
+	
+	kernel_paging.MapWeak(0xFD000000, 0xFD000000, 800 * 600 * 3 + 0x1000, true, _Comment(R0) false);// VGA
 	//
 	tmp = _IMM(kernel_paging.page_directory);
 	__asm("movl tmp, %eax\n");

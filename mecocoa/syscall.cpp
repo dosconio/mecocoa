@@ -8,10 +8,10 @@
 #define _DEBUG
 #include <c/consio.h>
 #include <c/driver/keyboard.h>
-#include "../include/atx-x86-flap32.hpp"
 
 use crate uni;
 #ifdef _ARC_x86 // x86:
+#include "../include/atx-x86-flap32.hpp"
 
 Handler_t syscalls[_TEMP 1];
 

@@ -22,18 +22,12 @@ extern "C" //__attribute__((ms_abi))
 void _entry(const UefiData& uefi_data)
 {
 	MemSet(&BSS_ENTO, &BSS_ENDO - &BSS_ENTO, 0);
-
 	config_graph = uefi_data;
+	Size2 screen_size(uefi_data.horizontal_resolution, uefi_data.vertical_resolution);
 
 	GloScreenARGB8888 vga_ARGB8888;
 	GloScreenABGR8888 vga_ABGR8888;
 	VideoControlInterface* screen;
-
-	auto ppp = ((uint32*)uefi_data.frame_buffer);
-	ppp += uefi_data.pixels_per_scan_line * 16;
-	if (uefi_data.pixel_format == PixelFormat::ARGB8888) for0(i, uefi_data.pixels_per_scan_line) {
-		ppp[i] = 0xFFFFFFFF;
-	}
 
 	switch (uefi_data.pixel_format) {
 	case PixelFormat::ARGB8888:
@@ -46,21 +40,22 @@ void _entry(const UefiData& uefi_data)
 		loop _ASM("hlt");
 	}
 
+
 	VideoControlBlock* p_vcb = new (_b_vcb) VideoControlBlock\
 		((pureptr_t)uefi_data.frame_buffer, *screen);
+	p_vcb->setMode(uefi_data.pixel_format, screen_size.x, screen_size.y);
 
-	p_vcb->Draw(Rectangle(
-		Point(0, 0),
-		Size2(uefi_data.horizontal_resolution, uefi_data.vertical_resolution),
-		Color::White
-	));
+	VideoConsole vcon(*screen, screen_size);
+	vcon.OutFormat("Ciallo~ \n\r %u", 2025);
 
-	p_vcb->setMode(uefi_data.pixel_format,
-		uefi_data.horizontal_resolution,
-		uefi_data.vertical_resolution
-	);
+	//p_vcb->Draw(Rectangle(
+	//	Point(0, 0),
+	//	Size2(uefi_data.horizontal_resolution, uefi_data.vertical_resolution),
+	//	Color::White
+	//));
 
-	p_vcb->Draw(Rectangle(Point(100, 100), Size2(600, 100), Color::Red));
+
+
 	loop _ASM("hlt");
 }
 
@@ -81,7 +76,7 @@ void GloScreenARGB8888::DrawFont(const Point& disp, const DisplayFont& font) con
 	_TODO;
 }
 Color GloScreenARGB8888::GetColor(Point p) const {
-	//return cast<Color>(Locate(p));
+	return cast<Color>(Locate(p));
 }
 
 

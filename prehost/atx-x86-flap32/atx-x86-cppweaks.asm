@@ -44,8 +44,8 @@ SwitchReal16:
 	MOV EAX, CR0
 	OR EAX, 0x80000001
 	MOV CR0, EAX
-	JMP WORD 8*2:PointBack32
 	Addr20Enable
+	JMP WORD 8*2:PointBack32
 	[BITS 32]
 	PointBack32:
 		MOV EAX, 8*1
@@ -67,12 +67,20 @@ SwitchVideoMode:
 	; INT 0x10
 		MOV AX, 0x7800
 		MOV ES, AX
-		XOR DI, DI
+		XOR DI, DI; 0x00078000
+		; Seek
+		MOV AX, 0x4F01
+		MOV CX, 0x0115        ; mode = 0x115 (800x600, 24bpp)
+		INT 0x10
+		CMP AX, 0x004F
+		JNE SwitchVideoModeFail
+		; Set Mode
 		MOV AX, 0x4F02
 		MOV BX, 0x4115
 		INT 0x10
 	; HLT
 	RET
+	SwitchVideoModeFail: HLT
 
 [BITS 32]
 GLOBAL Handint_PIT_Entry

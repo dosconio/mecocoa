@@ -6,16 +6,15 @@
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 #define _STYLE_RUST
 #define _DEBUG
-#include <new>
 #include <c/task.h>
 #include <c/consio.h>
 #include <cpp/interrupt>
 #include <c/format/ELF.h>
 #include <c/driver/keyboard.h>
-#include "../include/atx-x86-flap32.hpp"
 
 use crate uni;
 #ifdef _ARC_x86 // x86:
+#include "../include/atx-x86-flap32.hpp"
 
 bool task_switch_enable = true;
 stduint ProcessBlock::cpu0_task;

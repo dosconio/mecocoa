@@ -6,7 +6,7 @@
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 #define _STYLE_RUST
 #define _DEBUG
-#include <new>
+
 #include <c/cpuid.h>
 #include <c/consio.h>
 #include <cpp/string>
@@ -84,26 +84,9 @@ _sign_entry() {
 void MAIN() {
 	Memory::clear_bss();
 	krnl_init();
-	MccaTTYCon::cons_init();
-
-	if (opt_info) printlog(_LOG_INFO, "Kernel Loaded!");
-	printlog(_LOG_WARN, "   It isn't friendly to develop a kernel in pure C++ (GNU g++).");
-
-	// Show CPU Info
-	Console.OutFormat("CPU Brand: %s\n\r", text_brand());
-	
-	// Check Memory size and update allocator
-	Console.OutFormat("Mem Avail: %s\n\r", Memory::text_memavail(ker_buf));
-
-	// Align Memory and Keep a page for REAL 16 below 0x10000
 	Memory::align_basic_4k();
-	// printlog(_LOG_INFO, "Mem Throw: 0x%[32H]", Memory::align_basic_4k());
-
-	// Kernel Paging
 	page_init();
-	// GDT and TSS
 	GDT_Init();
-
 	if (opt_info) printlog(_LOG_INFO, "GDT Globl: 0x%[32H]", mecocoa_global->gdt_ptr);
 	// if (opt_test) syscall(syscall_t::TEST, (stduint)'T', (stduint)'E', (stduint)'S');
 	new (&krnl_tss) ProcessBlock;
@@ -116,7 +99,6 @@ void MAIN() {
 	mecocoa_global->gdt_ptr->tss.setRange((dword)&krnl_tss.TSS, sizeof(TSS_t) - 1);
 	TaskAdd(&krnl_tss);
 	__asm("mov $8*5, %eax; ltr %ax");
-	printlog(_LOG_INFO, "SEGM: There are %d GDTs.", GDT_GetNumber());
 
 	// IVT and Device
 	InterruptControl GIC(_IMM(0x80000800));// linear but not physical
@@ -126,27 +108,22 @@ void MAIN() {
 	GIC[IRQ_Keyboard].setRange(mglb(Handint_KBD_Entry), SegCode);
 	GIC[IRQ_ATA_DISK0].setRange(mglb(Handint_HDD_Entry), SegCode); DEV_Init();
 	GIC[IRQ_SYSCALL].setRange(mglb(call_intr), SegCode); GIC[IRQ_SYSCALL].DPL = 3;
-	if (false && opt_info) printlog(_LOG_INFO, "IDT Globl: 0x%[32H]", &GIC);
+	
+	MccaTTYCon::cons_init();
 	if (opt_test) __asm("ud2");
 
-	//{TODO} Switch Graphic Mode
-	__asm("call SwitchReal16");
-	//{TODO} VideoConsole - 4 TTYs & Redirect
-	//{TODO} Code Adapt for
-	//{TODO} PS2/USB Mouse
-	if (_TODO 0) Console.OutFormat("\xFF\x70[Mecocoa]\xFF\x02 Real16 Switched Test OK!\xFF\x07\n\r");
+	printlog(_LOG_WARN, "   It isn't friendly to develop a kernel in pure C++ (GNU g++).");
 
-	byte* p = (byte*)0xA0000;
-	for0(i, 800 * 3)* p++ = 0xFF;
-	p += 800 * 3 * 3;
-	for0(i, 800) { *p++ = 0xFF;  *p++ = 0x00; *p++ = 0x00; }// G
-	p += 800 * 3 * 3;
-	for0(i, 800) { *p++ = 0x00;  *p++ = 0xFF; *p++ = 0x00; }// B
-	p += 800 * 3 * 3;
-	for0(i, 800) { *p++ = 0x00;  *p++ = 0x00; *p++ = 0xFF; }// R
+	// Show CPU Info
+	Console.OutFormat("CPU Brand: %s\n\r", text_brand());
+	
+	// Check Memory size and update allocator
+	Console.OutFormat("Mem Avail: %s\n\r", Memory::text_memavail(ker_buf));
 
 
-	loop _ASM ("hlt");
+
+
+
 	GIC.enAble();
 
 	// Service
@@ -212,3 +189,5 @@ extern "C" { void* __dso_handle = 0; }
 extern "C" { void __cxa_atexit(void) {} }
 extern "C" { void __gxx_personality_v0(void) {} }
 extern "C" { void __stack_chk_fail(void) {} }
+void operator delete(void*) {}
+void operator delete(void* ptr, unsigned size) noexcept { _TODO }

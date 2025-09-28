@@ -9,10 +9,11 @@ RM = rm -rf
 
 # (GNU)
 GPREF   = #riscv64-unknown-elf-
-CFLAGS += -nostdlib -fno-builtin -Wall -z norelro # -fno-pie
-CFLAGS += --static -fno-rtti -mno-red-zone -fno-exceptions #  -ffreestanding
+CFLAGS += -nostdlib -fno-builtin -z norelro # -Wall -fno-pie
+CFLAGS += --static -mno-red-zone -fno-exceptions -ffreestanding
 CFLAGS += -I$(uincpath) -D_MCCA=0x8664 -D_HIS_IMPLEMENT
-CFLAGS += -Wno-strict-aliasing 
+CFLAGS += -fno-strict-aliasing
+XFLAGS  = $(CFLAGS) -fno-rtti
 G_DBG   = gdb-multiarch
 CC      = ${GPREF}gcc
 CX      = ${GPREF}g++
@@ -29,27 +30,33 @@ QFLAGS = -drive file=$(ubinpath)/AMD64/OVMF/OVMF_CODE.fd,format=raw,if=pflash -d
 LDFILE  = prehost/$(arch)/$(arch).ld
 LDFLAGS = -T $(LDFILE) 
 #
-asmfile=$(wildcard prehost/$(arch)/*.S)
-asmobjs=$(patsubst %S, %o, $(asmfile))
-cppfile=$(wildcard prehost/$(arch)/*.cpp) #$(ulibpath)/cpp/Device/UART.cpp $(ulibpath)/cpp/stream.cpp
-cppobjs=$(patsubst %cpp, %o, $(cppfile))
-cplfile=$(ulibpath)/c/mcore.c
-cplobjs=$(patsubst %c, %o, $(cplfile))
+asmfile=
 
+cppfile=$(wildcard mecocoa/*.cpp) \
+	$(ulibpath)/cpp/stream.cpp \
+	$(ulibpath)/cpp/Device/Video.cpp \
+	$(ulibpath)/cpp/Device/Video-VideoConsole.cpp \
+
+cplfile=$(ulibpath)/c/mcore.c\
+	$(ulibpath)/c/data/font/font-16x8.c \
+	$(ulibpath)/c/data/font/font-8x5.c \
+
+
+asmobjs=$(patsubst %S, %o, $(asmfile))
+cppobjs=$(patsubst %cpp, %o, $(cppfile))
+cplobjs=$(patsubst %c, %o, $(cplfile))
 elf_kernel=mcca-$(arch).elf
 
 mntdir=/mnt/mcca-$(arch)
-
 clang=clang-14
 
 .PHONY : build
-build: clean $(ubinpath)/$(arch).img # $(asmobjs) $(cppobjs) $(cplobjs)
+build: clean $(ubinpath)/$(arch).img $(asmobjs) $(cppobjs) $(cplobjs)
 	#echo [building] MCCA for $(arch)
 	@echo MK $(elf_kernel)
-	g++ $(CFLAGS) -std=c++17 -m64 -O0 \
-	 	prehost/$(arch)/$(arch).cpp -T prehost/$(arch)/$(arch).ld -o $(ubinpath)/$(elf_kernel)\
-		-O2 -Wall -g -ffreestanding -mno-red-zone -fno-exceptions -fno-rtti -std=c++17\
-		$(ulibpath)/cpp/Device/Video.cpp
+	$(CX) $(XFLAGS) -std=c++17 -m64 -O0 \
+	 	prehost/$(arch)/$(arch).cpp -T prehost/$(arch)/$(arch).ld -o $(ubinpath)/$(elf_kernel) \
+		$(uobjpath)/mcca-$(arch)/*
 
 	# OUTDATED # prehost/$(arch)/script-adapt.sh ~/_obj/$(elf_kernel) $(ubinpath)/$(elf_kernel)
 	@sudo mkdir -p $(mntdir)
@@ -115,7 +122,6 @@ clean:
 
 %.o: %.cpp
 	echo CX $(notdir $<)
-	${CX} -c -o $(uobjpath)/mcca-$(arch)/$(notdir $@) $<\
-		${CFLAGS} -fno-rtti
+	${CX} ${XFLAGS} -c -o $(uobjpath)/mcca-$(arch)/$(notdir $@) $<
 
 
