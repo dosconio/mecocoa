@@ -82,7 +82,8 @@ static stduint call_body(const syscall_t callid, ...) {
 	switch (callid) {
 	case syscall_t::OUTC: {
 		ProcessBlock* pb = TaskGet(ProcessBlock::cpu0_task);
-		ttycons[pb->focus_tty_id]->OutChar(para[0]);
+		// ttycons[pb->focus_tty_id]->OutChar(para[0]);
+		_TEMP if (!pb->focus_tty_id) outc(para[0]);
 		break;
 	}
 	case syscall_t::INNC: _TODO
@@ -135,12 +136,12 @@ static stduint call_body(const syscall_t callid, ...) {
 		//{TODO} ISSUE 20250706 Each time subapp (Ring3) print %d or other integer by outsfmt() will panic, but OutInteger() or Kernel Ring0 is OK.
 		if (para[0] == 'T' && para[1] == 'E' && para[2] == 'S') {
 			rostr test_msg = "Syscalls Test OK!";
-			Console.OutFormat("\xFF\x70[Mecocoa]\xFF\x02 PID");
+			Console.OutFormat("\xFF\x07[Mecocoa]\xFF\x72 PID");
 			Console.OutInteger(ProcessBlock::cpu0_task, +10);
-			Console.OutFormat(": %s\xFF\x07\n\r", test_msg + 0x80000000);
+			Console.OutFormat(": %s\xFF\x70\n\r", test_msg + 0x80000000);
 		}
 		else {
-			rostr test_msg = "\xFF\x70[Mecocoa]\xFF\x04 Syscalls Test FAIL!\xFF\x07";
+			rostr test_msg = "\xFF\x07[Mecocoa]\xFF\x74 Syscalls Test FAIL!\xFF\x70";
 			Console.OutFormat("%s %x %x %x\n\r", test_msg + 0x80000000,
 				para[0], para[1], para[2]);
 		}

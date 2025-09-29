@@ -24,13 +24,13 @@ void temp_init() {
 //{TODO FAT for HDISK} HDISK + FAT + ELF with fixed name "kernel-atx-x86"
 //{TODO} make lighter boot for Partition Table
 
-BareConsole* BCONS0;// TTY0
+OstreamTrait* con0_out;// TTY0
 _sign_entry() {
 	__asm("movl $0x1E00, %esp");// mov esp, 0x1E00; set stack
 	clear_bss();
 	temp_init();
 	void (*entry_kernel)();
-	BareConsole Console(80, 50, 0xB8000); BCONS0 = &Console;
+	BareConsole Console(80, 50, 0xB8000); con0_out = &Console;
 	Console.setShowY(0, 25);
 	printlog(_LOG_INFO, "Loading Kernel...");
 	Harddisk_PATA hdisk(0);

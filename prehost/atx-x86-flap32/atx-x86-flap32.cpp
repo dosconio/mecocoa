@@ -75,6 +75,8 @@ void krnl_init() {
 _ESYM_C void RETONLY();
 extern "C" void General_IRQHandler();
 
+bool ento_gui = false;
+
 // in future, some may be abstracted into mecocoa/mccaker.cpp
 void MAIN();
 _sign_entry() {
@@ -84,6 +86,7 @@ _sign_entry() {
 void MAIN() {
 	Memory::clear_bss();
 	krnl_init();
+	Memory::text_memavail(ker_buf);
 	Memory::align_basic_4k();
 	page_init();
 	GDT_Init();
@@ -114,15 +117,8 @@ void MAIN() {
 
 	printlog(_LOG_WARN, "   It isn't friendly to develop a kernel in pure C++ (GNU g++).");
 
-	// Show CPU Info
+	Console.OutFormat("Mem Avail: %s\n\r", ker_buf.reference());
 	Console.OutFormat("CPU Brand: %s\n\r", text_brand());
-	
-	// Check Memory size and update allocator
-	Console.OutFormat("Mem Avail: %s\n\r", Memory::text_memavail(ker_buf));
-
-
-
-
 
 	GIC.enAble();
 
@@ -130,9 +126,6 @@ void MAIN() {
 	TaskRegister((void*)&MccaTTYCon::serv_cons_loop, 1);
 	TaskRegister((void*)&serv_dev_hd_loop, 1);
 	TaskRegister((void*)&serv_file_loop, 1);
-
-
-
 
 	//{TODO} Load Shell (FAT + ELF)
 	stduint&& bufsize = 512 * 64;
@@ -149,7 +142,7 @@ void MAIN() {
 	// subappc
 	printlog(_LOG_INFO, "Loading Subappc");
 	for0(i, 64) hdisk.Read(i + 512, (void*)((char*)load_buffer + 512 * (i)));
-	TaskLoad(NULL _TEMP, load_buffer, 3)->focus_tty_id = 3;
+	TaskLoad(NULL _TEMP, load_buffer, 3)->focus_tty_id = 0;
 
 	if (false) CallFar(0, 8 * 9);// manually schedule
 	if (false) { CallFar(0, 8 * 9); jmpFar(0, 8 * 9); }// re-entry test
@@ -157,18 +150,20 @@ void MAIN() {
 	syscall(syscall_t::OUTC, 'O');
 	Console.OutFormat("hayouuu~!\n\r");
 
-	ttycons[0]->OutFormat("HelloTTY%d\n\r", 0);
-	ttycons[1]->OutFormat("HelloTTY%d\n\r", 1);
-	ttycons[2]->OutFormat("HelloTTY%d\n\r", 2);
-	ttycons[3]->OutFormat("HelloTTY%d\n\r", 3);
-	MccaTTYCon::current_switch(0);
-
-	
-	
+	// ttycons[0]->OutFormat("HelloTTY%d\n\r", 0);
+	// ttycons[1]->OutFormat("HelloTTY%d\n\r", 1);
+	// ttycons[2]->OutFormat("HelloTTY%d\n\r", 2);
+	// ttycons[3]->OutFormat("HelloTTY%d\n\r", 3);
+	// MccaTTYCon::current_switch(0);
 
 	InterruptEnable();
+	auto lastsec = mecocoa_global->system_time.sec;
 	loop{
 		__asm("hlt");
+	if (mecocoa_global->system_time.sec != lastsec) {
+		lastsec = mecocoa_global->system_time.sec;
+		// outc('T');
+	}
 	}
 		
 	auto crt = mecocoa_global->system_time.sec;

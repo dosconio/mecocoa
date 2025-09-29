@@ -329,13 +329,13 @@ static stduint args[4];
 void serv_dev_hd_loop()
 {
 	task_run = true;
-	// Console.OutFormat("hdisk_number: 0x%[32H] %u\n\r", &bda->hdisk_number ,bda->hdisk_number);
 	if (_IMM(&bda->hdisk_number) != 0x475) {
 		plogerro("Invalid BIOS_DataArea");
 		while (1);
 	}
+	
+	// while (1);
 	Console.OutFormat("[Hrddisk] detect %u disks\n\r", bda->hdisk_number);
-
 	struct CommMsg msg;
 	msg.data.address = _IMM(args);
 	msg.data.length = sizeof(args);

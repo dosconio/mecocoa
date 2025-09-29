@@ -23,7 +23,6 @@ void _entry(const UefiData& uefi_data)
 {
 	MemSet(&BSS_ENTO, &BSS_ENDO - &BSS_ENTO, 0);
 	config_graph = uefi_data;
-	Size2 screen_size(uefi_data.horizontal_resolution, uefi_data.vertical_resolution);
 
 	GloScreenARGB8888 vga_ARGB8888;
 	GloScreenABGR8888 vga_ABGR8888;
@@ -41,22 +40,27 @@ void _entry(const UefiData& uefi_data)
 	}
 
 
+	Size2 screen_size(uefi_data.horizontal_resolution, uefi_data.vertical_resolution);
+	Rectangle screen0_win(Point(0, 0), screen_size, Color::White);
 	VideoControlBlock* p_vcb = new (_b_vcb) VideoControlBlock\
 		((pureptr_t)uefi_data.frame_buffer, *screen);
 	p_vcb->setMode(uefi_data.pixel_format, screen_size.x, screen_size.y);
 
-	VideoConsole vcon(*screen, screen_size);
-	vcon.OutFormat("Ciallo~ \n\r %u", 2025);
-
-	//p_vcb->Draw(Rectangle(
-	//	Point(0, 0),
-	//	Size2(uefi_data.horizontal_resolution, uefi_data.vertical_resolution),
-	//	Color::White
-	//));
-
+	VideoConsole vcon0(*screen, screen0_win);
+	vcon0.backcolor = Color::White;
+	vcon0.forecolor = Color::Black;
+	vcon0.Clear();
+	vcon0.OutFormat("Ciallo\n\r %lf", 2025.09);
 
 
 	loop _ASM("hlt");
+}
+
+uint32& GloScreenARGB8888::Locate(const Point& disp) const {
+	return *((uint32*)(config_graph.frame_buffer) + disp.x + disp.y * config_graph.pixels_per_scan_line);
+}
+uint32& GloScreenABGR8888::Locate(const Point& disp) const {
+	return *((uint32*)(config_graph.frame_buffer) + disp.x + disp.y * config_graph.pixels_per_scan_line);
 }
 
 void GloScreenARGB8888::SetCursor(const Point& disp) const { _TODO; }// MAYBE unused

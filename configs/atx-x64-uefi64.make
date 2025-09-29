@@ -49,6 +49,7 @@ elf_kernel=mcca-$(arch).elf
 
 mntdir=/mnt/mcca-$(arch)
 clang=clang-14
+sudokey=k
 
 .PHONY : build
 build: clean $(ubinpath)/$(arch).img $(asmobjs) $(cppobjs) $(cplobjs)
@@ -59,7 +60,7 @@ build: clean $(ubinpath)/$(arch).img $(asmobjs) $(cppobjs) $(cplobjs)
 		$(uobjpath)/mcca-$(arch)/*
 
 	# OUTDATED # prehost/$(arch)/script-adapt.sh ~/_obj/$(elf_kernel) $(ubinpath)/$(elf_kernel)
-	@sudo mkdir -p $(mntdir)
+	@echo $(sudokey) | sudo mkdir -p $(mntdir)
 	@sudo mount -o loop $(ubinpath)/$(arch).img $(mntdir)
 	@sudo mkdir -p $(mntdir)/EFI/BOOT
 	@sudo cp $(ubinpath)/AMD64/loader.efi $(mntdir)/EFI/BOOT/BOOTX64.EFI

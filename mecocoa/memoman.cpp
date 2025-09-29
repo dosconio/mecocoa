@@ -86,7 +86,7 @@ _TEMP void page_init() {
 	// for(i, 0x400) pdt[0x3FF][...] Page Tables
 	kernel_paging.MapWeak(0x80000000, 0x00000000, 0x00400000, true, _Comment(R0) false);
 	
-	kernel_paging.MapWeak(0xFD000000, 0xFD000000, 800 * 600 * 3 + 0x1000, true, _Comment(R0) false);// VGA
+	
 	//
 	tmp = _IMM(kernel_paging.page_directory);
 	__asm("movl tmp, %eax\n");
@@ -94,7 +94,7 @@ _TEMP void page_init() {
 	__asm("movl %cr0, %eax\n");
 	__asm("or   $0x80000000, %eax\n");// enable paging
 	__asm("movl %eax, %cr0\n");
-	rostr test_page = (rostr)"\xFF\x70[Mecocoa]\xFF\x02 Paging Test OK!\xFF\x07" + 0x80000000;
+	rostr test_page = (rostr)"\xFF\x07[Mecocoa]\xFF\x72 Paging Test OK!\xFF\x70" + 0x80000000;
 	if (opt_test) Console.OutFormat("%s\n\r", test_page);
 }
 

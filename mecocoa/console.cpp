@@ -7,16 +7,24 @@
 #define _STYLE_RUST
 #define _DEBUG
 
+#define _INC_MEMCOPY_INLINE
+
 #include <c/consio.h>
 #include <c/driver/keyboard.h>
 
 use crate uni;
 #ifdef _ARC_x86 // x86:
 #include "../include/atx-x86-flap32.hpp"
-#include <cpp/Device/_Video.hpp>
+#include "../include/console.hpp"
 
 
 byte MccaTTYCon::current_screen_TTY = 0;
+
+// consider CLI and GUI
+OstreamTrait* tty0_out;
+OstreamTrait* tty1_out;
+OstreamTrait* tty2_out;
+OstreamTrait* tty3_out;
 
 BareConsole* BCONS0;// TTY0
 static BareConsole* BCONS1;// TTY1
@@ -26,8 +34,12 @@ byte BUF_BCONS0[byteof(MccaTTYCon)];
 byte BUF_BCONS1[byteof(MccaTTYCon)];
 byte BUF_BCONS2[byteof(MccaTTYCon)];
 byte BUF_BCONS3[byteof(MccaTTYCon)];
-
 MccaTTYCon* ttycons[4];
+//
+byte BUF_VCI[sizeof(GloScreen)];
+byte BUF_CONS0[sizeof(VideoConsole)];
+VideoConsole* vcon0; OstreamTrait* con0_out;
+
 
 keyboard_state_t kbd_state = { 0 };
 
@@ -88,32 +100,15 @@ KeyboardBridge kbdbridge;
 
 
 
+// [QEMU] Video Address
+// 0xFD000000  default
+// 0xFC000000  -device VGA,vgamem_mb=32
+// 0xF8000000  -device VGA,vgamem_mb=64 ...
 
-
-
-class GloScreen : public VideoControlInterface {
-public:
-	inline uint8& Locate(const Point& disp) const {
-		// uint32 base = *(volatile uint32*)(0x78000 + 0x28);
-		return *((uint8*)(0xFD000000) + disp.x * 3 + disp.y * 3 * 800 _Comment(width));// without boundary check
-		// 0xFD000000  default
-		// 0xFC000000  -device VGA,vgamem_mb=32
-		// 0xF8000000  -device VGA,vgamem_mb=64
-	}
-public:
-	virtual ~GloScreen() = default;
-	GloScreen() {}
-	virtual void SetCursor(const Point& disp) const override;
-	virtual Point GetCursor() const override;
-
-	// without boundary check
-	virtual void DrawPoint(const Point& disp, Color color) const override;
-	virtual void DrawRectangle(const Rectangle& rect) const override;
-
-	//
-	virtual void DrawFont(const Point& disp, const DisplayFont& font) const override;
-	virtual Color GetColor(Point p) const override;
-};
+uint8& GloScreen::Locate(const Point& disp) const {
+	uint32 base = *(volatile uint32*)(0x78000 + 0x28);
+	return *((uint8*)(base) + disp.x * 3 + disp.y * 3 * 800 _Comment(width));// without boundary check
+}
 void GloScreen::SetCursor(const Point& disp) const { _TODO; }// MAYBE unused
 Point GloScreen::GetCursor() const { _TODO return {0, 0}; }// MAYBE unused
 void GloScreen::DrawPoint(const Point& disp, Color color) const {
@@ -124,12 +119,31 @@ void GloScreen::DrawPoint(const Point& disp, Color color) const {
 }
 void GloScreen::DrawRectangle(const Rectangle& rect) const {
 	uint8* p = &Locate(rect.getVertex());
+	uint8 comm[3 * 4] = {
+		rect.color.b, rect.color.g, rect.color.r,
+		rect.color.b, rect.color.g, rect.color.r,
+		rect.color.b, rect.color.g, rect.color.r,
+		rect.color.b, rect.color.g, rect.color.r,
+	};
+	uint32 (*com)[3] = (uint32(*)[3])comm;
 	for0(y, rect.height) {
-		uint8* pp = p;
-		for0(x, rect.width) {
-			*pp++ = rect.color.b;
-			*pp++ = rect.color.g;
-			*pp++ = rect.color.r;
+		union {
+			uint8* pp8;
+			uint32* pp32;
+		};
+		pp8 = p;
+		for0r(x, rect.width) {
+			if (!(_IMM(pp8) & 0b11) && x >= 12) {
+				pp32[0] = treat<uint32>(&comm[4 * 0]);
+				pp32[1] = treat<uint32>(&comm[4 * 1]);
+				pp32[2] = treat<uint32>(&comm[4 * 2]);
+				x -= 3 - 1;
+				pp8 += 12;
+				continue;
+			}
+			*pp8++ = rect.color.b;
+			*pp8++ = rect.color.g;
+			*pp8++ = rect.color.r;
 		}
 		p += 800 * 3;//{} 800x600
 	}
@@ -140,6 +154,7 @@ void GloScreen::DrawFont(const Point& disp, const DisplayFont& font) const {
 Color GloScreen::GetColor(Point p) const {
 	return cast<Color>(Locate(p));
 }
+extern bool ento_gui;
 void MccaTTYCon::cons_init()
 {
 	BCONS0 = new (BUF_BCONS0) MccaTTYCon(bda->screen_columns, 24, 0); BCONS0->setShowY(0, 24);
@@ -159,55 +174,38 @@ void MccaTTYCon::cons_init()
 
 	//{TODO} Switch Graphic Mode
 	__asm("call SwitchReal16");
+	ento_gui = true;
+	uint32 vga_addr = *(uint32*)(0x78000 + 0x28);
+	kernel_paging.MapWeak(vga_addr, vga_addr, 800 * 600 * 3 + 0x1000, true, _Comment(R0) false);// VGA
+
 	//{TODO} VideoConsole - 4 TTYs & Redirect
 	//{TODO} Code Adapt for
 	//{TODO} PS2/USB Mouse
-	// Console.OutFormat("\xFF\x70[Mecocoa]\xFF\x02 Real16 Switched Test OK!\xFF\x07\n\r");
-
-	// byte* p = (byte*)0xA0000;
-	// for0(i, 800 * 3)* p++ = 0xFF;
-	// p += 800 * 3 * 3;
-	// for0(i, 800) { *p++ = 0xFF;  *p++ = 0x00; *p++ = 0x00; }// G
-	// p += 800 * 3 * 3;
-	// for0(i, 800) { *p++ = 0x00;  *p++ = 0xFF; *p++ = 0x00; }// B
-	// p += 800 * 3 * 3;
-	// for0(i, 800) { *p++ = 0x00;  *p++ = 0x00; *p++ = 0xFF; }// R
-
-	GloScreen wholescreen0;
-	VideoConsole vcon0(wholescreen0, { 800,600 });
-	// uint8* ppp = (uint8*)0xFD000000 + 800 * 3 * 500 + 10 * 3;
-	// for0(y, 10) {
-	// 	uint8* pp = ppp;
-	// 	for0(x, 10) {
-	// 		*pp++ = 0xFF;
-	// 		*pp++ = 0xFF;
-	// 		*pp++ = 0xFF;
-	// 	}
-	// 	ppp += 800 * 3;// 800x600
-	// }
-
-
-	wholescreen0.DrawRectangle(Rectangle(Point(0, 0), Size2(800, 600), 0xDD0022));
-	vcon0.OutFormat("Ciallo\n\r %u", 2025);
-
-	// uint32 base = *(volatile uint32*)(0x78000 + 0x28);
-	// outsfmt("base: 0x%[32H]\n\r", base);
-
-	// outsfmt("     00 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F\n\r");
-	// char* __p = (char*)0x78000;
-	// for0(j, 10) {
-	// 	outsfmt("%[16H] ", j << 4);
-	// 	for0(i, 16) {
-	// 		outsfmt("%[8H] ", *__p++);
-	// 	}
-	// 	outsfmt("\n\r");
-	// }
-
-	loop _ASM ("hlt");
+	//{TODO} BUFFER : vcon-buff
+	
+	// TTY0 background one (TODO: BUFFER and {clear;reflush})
+	new (BUF_VCI) GloScreen();
+	Rectangle screen0_win(Point(0, 0), Size2(800, 600), Color::White);
+	vcon0 = new (BUF_CONS0) VideoConsole(treat<GloScreen>(BUF_VCI), screen0_win);
+	con0_out = vcon0;
+	vcon0->forecolor = Color::Black;
+	vcon0->Clear();
+	Console.OutFormat("\xFF\x07[Mecocoa]\xFF\x72 Real16 Switched Test OK!\xFF\x70\n\r");
+	
+	// TTY1 window form (TODO)
+	// TTY2 window form (TODO)
+	// TTY3 window form (TODO)
 }
 
 
 static void tty_parse(MccaTTYCon& tty, byte keycode, keyboard_state_t state) { // // scan code set 1
+	if (ento_gui) {
+		return;
+		if (&tty == ttycons[0]) {
+			_TODO
+		}
+	}
+	_TODO
 	if (tty.last_E0) {
 		if (keycode == 0x49 && tty.crtline > 0) { // PgUp
 			tty.auto_incbegaddr = 0;
@@ -258,6 +256,7 @@ static void tty_parse(MccaTTYCon& tty, byte keycode, keyboard_state_t state) { /
 
 void _Comment(R1) MccaTTYCon::serv_cons_loop()
 {
+	while(1); _TODO
 	//*(char*)0xB8000 = 'a';
 	//outc('a');
 	// while (1);
@@ -302,6 +301,19 @@ void MccaTTYCon::current_switch(byte id) {
 	for0(i, 4) ttycons[i]->auto_incbegaddr = false;
 	ttycons[id]->auto_incbegaddr = true;
 
+}
+
+void memdump(_TODO)
+{
+	// outsfmt("     00 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F\n\r");
+	// char* __p = (char*)0x78000;
+	// for0(j, 10) {
+	// 	outsfmt("%[16H] ", j << 4);
+	// 	for0(i, 16) {
+	// 		outsfmt("%[8H] ", *__p++);
+	// 	}
+	// 	outsfmt("\n\r");
+	// }
 }
 
 

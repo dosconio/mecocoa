@@ -28,7 +28,9 @@ void Handint_PIT()
 	if (time >= 1000) {
 		time = 0;
 		Letvar(p, char*, 0xB8001);
-		*p ^= 0x70;// make it blink
+		// *p ^= 0x70;// make it blink
+		mecocoa_global->system_time.sec++;//{TEMP} help RTC
+		outc('>');
 	}
 	//outpb(0x20, ' ' /*EOI*/);// master
 	static unsigned time_slice = 0;
@@ -48,13 +50,16 @@ void Handint_RTC()
 	// OPEN NMI AFTER READ REG-C, OR ONLY INT ONCE
 	outpb(0x70, 0x0C);
 	innpb(0x71);
-	mecocoa_global->system_time.sec++;
+	// mecocoa_global->system_time.sec++;
+	//{why}
+
 	if (1) {
 		Letvar(p, char*, 0xB8003);
-		*p ^= 0x70;// make it blink
+		// *p ^= 0x70;// make it blink
+		outc('>');
 	}
 
-	// rupt_proc(2, IRQ_RTC);
+	rupt_proc(2, IRQ_RTC);
 }
 
 OstreamTrait* kbd_out;
@@ -128,7 +133,7 @@ void ERQ_Handler(sdword iden, dword para) {
 		static bool first_done = false;
 		if (!first_done) {
 			first_done = true;
-			rostr test_page = (rostr)"\xFF\x70[Mecocoa]\xFF\x02 Exception #UD Test OK!\xFF\x07" + 0x80000000;
+			rostr test_page = (rostr)"\xFF\x07[Mecocoa]\xFF\x72 Exception #UD Test OK!\xFF\x70" + 0x80000000;
 			if (opt_test) Console.OutFormat("%s\n\r", test_page);
 		}
 		else {
