@@ -29,8 +29,8 @@ void Handint_PIT()
 		time = 0;
 		Letvar(p, char*, 0xB8001);
 		// *p ^= 0x70;// make it blink
-		mecocoa_global->system_time.sec++;//{TEMP} help RTC
-		outc('>');
+		// mecocoa_global->system_time.sec++;//{TEMP} help RTC
+		// outc('>');
 	}
 	//outpb(0x20, ' ' /*EOI*/);// master
 	static unsigned time_slice = 0;
@@ -50,8 +50,7 @@ void Handint_RTC()
 	// OPEN NMI AFTER READ REG-C, OR ONLY INT ONCE
 	outpb(0x70, 0x0C);
 	innpb(0x71);
-	// mecocoa_global->system_time.sec++;
-	//{why}
+	mecocoa_global->system_time.sec++;
 
 	if (1) {
 		Letvar(p, char*, 0xB8003);

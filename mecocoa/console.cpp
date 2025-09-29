@@ -7,8 +7,6 @@
 #define _STYLE_RUST
 #define _DEBUG
 
-#define _INC_MEMCOPY_INLINE
-
 #include <c/consio.h>
 #include <c/driver/keyboard.h>
 
@@ -98,16 +96,19 @@ struct KeyboardBridge : public OstreamTrait // // scan code set 1
 };
 KeyboardBridge kbdbridge;
 
-
+#define TEMP_AREA 0x78000
 
 // [QEMU] Video Address
 // 0xFD000000  default
 // 0xFC000000  -device VGA,vgamem_mb=32
 // 0xF8000000  -device VGA,vgamem_mb=64 ...
 
+ModeInfoBlock* video_info;
+
 uint8& GloScreen::Locate(const Point& disp) const {
-	uint32 base = *(volatile uint32*)(0x78000 + 0x28);
-	return *((uint8*)(base) + disp.x * 3 + disp.y * 3 * 800 _Comment(width));// without boundary check
+	return *((uint8*)(video_info->PhysBasePtr) +
+		(disp.x * video_info->BitsPerPixel >> 3) +
+		disp.y * video_info->BytesPerScanLine);// without boundary check
 }
 void GloScreen::SetCursor(const Point& disp) const { _TODO; }// MAYBE unused
 Point GloScreen::GetCursor() const { _TODO return {0, 0}; }// MAYBE unused
@@ -117,7 +118,7 @@ void GloScreen::DrawPoint(const Point& disp, Color color) const {
 	*p++ = color.g;
 	*p++ = color.r;
 }
-void GloScreen::DrawRectangle(const Rectangle& rect) const {
+void GloScreen::DrawRectangle(const Rectangle& rect) const {// RGB 24bpp only
 	uint8* p = &Locate(rect.getVertex());
 	uint8 comm[3 * 4] = {
 		rect.color.b, rect.color.g, rect.color.r,
@@ -145,7 +146,7 @@ void GloScreen::DrawRectangle(const Rectangle& rect) const {
 			*pp8++ = rect.color.g;
 			*pp8++ = rect.color.r;
 		}
-		p += 800 * 3;//{} 800x600
+		p += video_info->BytesPerScanLine;
 	}
 }
 void GloScreen::DrawFont(const Point& disp, const DisplayFont& font) const {
@@ -157,6 +158,7 @@ Color GloScreen::GetColor(Point p) const {
 extern bool ento_gui;
 void MccaTTYCon::cons_init()
 {
+	video_info = (uni::ModeInfoBlock *)Memory::physical_allocate(0x1000);
 	BCONS0 = new (BUF_BCONS0) MccaTTYCon(bda->screen_columns, 24, 0); BCONS0->setShowY(0, 24);
 	//
 	BCONS1 = new (BUF_BCONS1) MccaTTYCon(bda->screen_columns, 50, 1 * 50); BCONS1->setShowY(0, 25);
@@ -172,20 +174,27 @@ void MccaTTYCon::cons_init()
 
 	// ABOVE are OUTDATED
 
-	//{TODO} Switch Graphic Mode
+	//{TODO} Switch Graphic Mode: Multimodes
 	__asm("call SwitchReal16");
 	ento_gui = true;
-	uint32 vga_addr = *(uint32*)(0x78000 + 0x28);
-	kernel_paging.MapWeak(vga_addr, vga_addr, 800 * 600 * 3 + 0x1000, true, _Comment(R0) false);// VGA
+	MemCopyN(video_info, (pureptr_t)TEMP_AREA, offsetof(ModeInfoBlock, ReservedTail));
+	kernel_paging.MapWeak(
+		video_info->PhysBasePtr,
+		video_info->PhysBasePtr,
+		video_info->BytesPerScanLine * video_info->YResolution,
+		true, _Comment(R0) false
+	);// VGA
 
-	//{TODO} VideoConsole - 4 TTYs & Redirect
-	//{TODO} Code Adapt for
 	//{TODO} PS2/USB Mouse
 	//{TODO} BUFFER : vcon-buff
 	
 	// TTY0 background one (TODO: BUFFER and {clear;reflush})
 	new (BUF_VCI) GloScreen();
-	Rectangle screen0_win(Point(0, 0), Size2(800, 600), Color::White);
+	Rectangle screen0_win(
+		Point(nil, nil),
+		Size2(video_info->XResolution, video_info->YResolution),
+		Color::White
+	);
 	vcon0 = new (BUF_CONS0) VideoConsole(treat<GloScreen>(BUF_VCI), screen0_win);
 	con0_out = vcon0;
 	vcon0->forecolor = Color::Black;

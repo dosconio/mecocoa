@@ -103,6 +103,8 @@ void MAIN() {
 	TaskAdd(&krnl_tss);
 	__asm("mov $8*5, %eax; ltr %ax");
 
+	MccaTTYCon::cons_init();// located here, for  INT-10H may influence PIC
+
 	// IVT and Device
 	InterruptControl GIC(_IMM(0x80000800));// linear but not physical
 	GIC.Reset(SegCode);
@@ -112,10 +114,9 @@ void MAIN() {
 	GIC[IRQ_ATA_DISK0].setRange(mglb(Handint_HDD_Entry), SegCode); DEV_Init();
 	GIC[IRQ_SYSCALL].setRange(mglb(call_intr), SegCode); GIC[IRQ_SYSCALL].DPL = 3;
 	
-	MccaTTYCon::cons_init();
 	if (opt_test) __asm("ud2");
 
-	printlog(_LOG_WARN, "   It isn't friendly to develop a kernel in pure C++ (GNU g++).");
+	printlog(_LOG_WARN, " It isn't friendly to develop a kernel by pure C++.");
 
 	Console.OutFormat("Mem Avail: %s\n\r", ker_buf.reference());
 	Console.OutFormat("CPU Brand: %s\n\r", text_brand());
