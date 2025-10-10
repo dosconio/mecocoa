@@ -5,6 +5,7 @@
 // ModuTitle: Demonstration - ELF32-C++ x86 Bare-Metal
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 #define _STYLE_RUST
+#undef _DEBUG
 #define _DEBUG
 #include <c/consio.h>
 #include <cpp/interrupt>
@@ -55,7 +56,7 @@ void Handint_RTC()
 	if (1) {
 		Letvar(p, char*, 0xB8003);
 		// *p ^= 0x70;// make it blink
-		outc('>');
+		// outc('>');
 	}
 
 	rupt_proc(2, IRQ_RTC);

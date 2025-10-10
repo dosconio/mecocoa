@@ -11,7 +11,7 @@ RM = rm -rf
 GPREF   = #riscv64-unknown-elf-
 CFLAGS += -nostdlib -fno-builtin -z norelro # -Wall -fno-pie
 CFLAGS += --static -mno-red-zone -fno-exceptions -ffreestanding
-CFLAGS += -I$(uincpath) -D_MCCA=0x8664 -D_HIS_IMPLEMENT
+CFLAGS += -I$(uincpath) -D_MCCA=0x8664 -D_HIS_IMPLEMENT -D_DEBUG
 CFLAGS += -fno-strict-aliasing
 XFLAGS  = $(CFLAGS) -fno-rtti
 G_DBG   = gdb-multiarch
@@ -38,8 +38,10 @@ cppfile=$(wildcard mecocoa/*.cpp) \
 	$(ulibpath)/cpp/Device/Video-VideoConsole.cpp \
 
 cplfile=$(ulibpath)/c/mcore.c\
-	$(ulibpath)/c/data/font/font-16x8.c \
+	$(ulibpath)/c/debug.c \
+	$(ulibpath)/c/console/conformat.c \
 	$(ulibpath)/c/data/font/font-8x5.c \
+	$(ulibpath)/c/data/font/font-16x8.c \
 
 
 asmobjs=$(patsubst %S, %o, $(asmfile))

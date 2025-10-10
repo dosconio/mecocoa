@@ -7,6 +7,7 @@
 
 %include "osdev.a"
 
+GLOBAL VideoModeVal
 GLOBAL SwitchReal16
 
 ;{TODO} UNISYM BIOS Real16 and its ld. Then we can call it. (`00080000`~`0009FFFF`)
@@ -59,28 +60,35 @@ SwitchReal16:
 	RET
 
 [BITS 16]
+VideoModeVal: DW 0; IN(mode) OUT(0 for good), should below 0x10000
 SwitchVideoMode:
 	MOV AX, 0xB800
 	MOV ES, AX
 	MOV BYTE [ES:0], 'X'
-	; MOV AX, 0x006a
-	; INT 0x10
 		MOV AX, 0x7800
 		MOV ES, AX
 		XOR DI, DI; 0x00078000
 		; Seek
-		MOV AX, 0x4F01
-		MOV CX, 0x0115        ; mode = 0x115 (800x600, 24bpp)
+		MOV AX, 0x4F01; VBE function: Get ModeInfo
+		MOV CX, [VideoModeVal]
 		INT 0x10
 		CMP AX, 0x004F
 		JNE SwitchVideoModeFail
 		; Set Mode
+		XOR AX, AX
+		MOV DS, AX
 		MOV AX, 0x4F02
-		MOV BX, 0x4115
+		MOV BX, [VideoModeVal]
+		OR  BX, 0x4000
 		INT 0x10
+		MOV WORD[VideoModeVal], 0
 	; HLT
 	RET
-	SwitchVideoModeFail: HLT
+	SwitchVideoModeFail:
+		XOR AX, AX
+		MOV DS, AX
+		MOV WORD[VideoModeVal], 1
+		RET
 
 [BITS 32]
 GLOBAL Handint_PIT_Entry

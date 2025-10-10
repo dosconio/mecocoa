@@ -3,6 +3,7 @@
 // AllAuthor: @dosconio, @ArinaMgk
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 #define _STYLE_RUST
+#undef _DEBUG
 #define _DEBUG
 #include <c/consio.h>
 

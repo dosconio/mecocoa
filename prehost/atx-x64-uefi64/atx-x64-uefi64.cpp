@@ -13,7 +13,10 @@ using namespace uni;
 #include "../../include/atx-x64-uefi64.hpp"
 
 
-byte _b_vcb[byteof(VideoControlBlock)];
+static byte _b_vcb[byteof(VideoControlBlock)];
+
+static byte _b_vcon0[byteof(VideoConsole)];
+VideoConsole* vcon0;
 
 extern "C" byte BSS_ENTO, BSS_ENDO;
 FrameBufferConfig config_graph;
@@ -46,15 +49,21 @@ void _entry(const UefiData& uefi_data)
 		((pureptr_t)uefi_data.frame_buffer, *screen);
 	p_vcb->setMode(uefi_data.pixel_format, screen_size.x, screen_size.y);
 
-	VideoConsole vcon0(*screen, screen0_win);
-	vcon0.backcolor = Color::White;
-	vcon0.forecolor = Color::Black;
-	vcon0.Clear();
-	vcon0.OutFormat("Ciallo\n\r %lf", 2025.09);
+	vcon0 = new (_b_vcon0) VideoConsole(*screen, screen0_win);
+	vcon0->backcolor = Color::White;
+	vcon0->forecolor = Color::Black;
+	vcon0->Clear();
+	ploginfo("Ciallo %lf", 2025.09);
 
 
 	loop _ASM("hlt");
 }
+
+// console.cpp
+void outtxt(const char* str, stduint len) {
+	vcon0->out(str, len);
+}
+
 
 uint32& GloScreenARGB8888::Locate(const Point& disp) const {
 	return *((uint32*)(config_graph.frame_buffer) + disp.x + disp.y * config_graph.pixels_per_scan_line);

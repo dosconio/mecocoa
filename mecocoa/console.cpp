@@ -5,6 +5,7 @@
 // ModuTitle: [Service] Console - ELF32-C++ x86 Bare-Metal
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 #define _STYLE_RUST
+#undef _DEBUG
 #define _DEBUG
 
 #include <c/consio.h>
@@ -155,6 +156,19 @@ void GloScreen::DrawFont(const Point& disp, const DisplayFont& font) const {
 Color GloScreen::GetColor(Point p) const {
 	return cast<Color>(Locate(p));
 }
+
+class Graphic {
+public:
+	static bool setMode(VideoMode vmode);
+};
+_ESYM_C word VideoModeVal;
+bool Graphic::setMode(VideoMode vmode) {
+	VideoModeVal = _IMM(vmode);
+	__asm("call SwitchReal16");
+	MemCopyN(video_info, (pureptr_t)TEMP_AREA, offsetof(ModeInfoBlock, ReservedTail));
+	return !VideoModeVal;
+}
+
 extern bool ento_gui;
 void MccaTTYCon::cons_init()
 {
@@ -174,10 +188,9 @@ void MccaTTYCon::cons_init()
 
 	// ABOVE are OUTDATED
 
-	//{TODO} Switch Graphic Mode: Multimodes
-	__asm("call SwitchReal16");
+	if (!Graphic::setMode(VideoMode::RGB888_800x600))
+		plogerro("Switch to GUI.");
 	ento_gui = true;
-	MemCopyN(video_info, (pureptr_t)TEMP_AREA, offsetof(ModeInfoBlock, ReservedTail));
 	kernel_paging.MapWeak(
 		video_info->PhysBasePtr,
 		video_info->PhysBasePtr,
@@ -266,19 +279,16 @@ static void tty_parse(MccaTTYCon& tty, byte keycode, keyboard_state_t state) { /
 void _Comment(R1) MccaTTYCon::serv_cons_loop()
 {
 	while(1); _TODO
-	//*(char*)0xB8000 = 'a';
-	//outc('a');
-	// while (1);
-	// while (true) a('a');
-	struct element { byte ch; byte attr; };
-	Letvar(Ribbon, element*, (0xB8000 + 80 * 2 * 24));
-	Ribbon[0].ch = '^';
-	Ribbon[1].ch = '-';
-	Ribbon[2].ch = '+';
 
-	Ribbon[77].ch = '+';
-	Ribbon[78].ch = '-';
-	Ribbon[79].ch = '^';
+	// struct element { byte ch; byte attr; };
+	// Letvar(Ribbon, element*, (0xB8000 + 80 * 2 * 24));
+	// Ribbon[0].ch = '^';
+	// Ribbon[1].ch = '-';
+	// Ribbon[2].ch = '+';
+
+	// Ribbon[77].ch = '+';
+	// Ribbon[78].ch = '-';
+	// Ribbon[79].ch = '^';
 
 	while (true) {
 		for0(i, 4) {
@@ -288,15 +298,15 @@ void _Comment(R1) MccaTTYCon::serv_cons_loop()
 				tty_parse(tty, ch, kbd_state);
 			}
 		}
-		if (current_screen_TTY == 0) {
-			// Render the bottom ribbon
-			Ribbon[0].attr = kbd_state.l_ctrl ? 0x70 : 0x07;
-			Ribbon[1].attr = kbd_state.l_shift ? 0x70 : 0x07;
-			Ribbon[2].attr = kbd_state.l_alt ? 0x70 : 0x07;
-			Ribbon[77].attr = kbd_state.r_alt ? 0x70 : 0x07;
-			Ribbon[78].attr = kbd_state.r_shift ? 0x70 : 0x07;
-			Ribbon[79].attr = kbd_state.r_ctrl ? 0x70 : 0x07;
-		}
+		// if (current_screen_TTY == 0) {
+		// 	// Render the bottom ribbon
+		// 	Ribbon[0].attr = kbd_state.l_ctrl ? 0x70 : 0x07;
+		// 	Ribbon[1].attr = kbd_state.l_shift ? 0x70 : 0x07;
+		// 	Ribbon[2].attr = kbd_state.l_alt ? 0x70 : 0x07;
+		// 	Ribbon[77].attr = kbd_state.r_alt ? 0x70 : 0x07;
+		// 	Ribbon[78].attr = kbd_state.r_shift ? 0x70 : 0x07;
+		// 	Ribbon[79].attr = kbd_state.r_ctrl ? 0x70 : 0x07;
+		// }
 	}
 }
 

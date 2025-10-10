@@ -27,32 +27,34 @@ Format `board-architecture-mode`
 
 
 CISC `VMBox/VMware/Bochs/QEMU/TODO(Simics,Wel)`
-- `x86` Intel x86 (8086 -> i686+)
+- `x86 0x8632` Intel x86 (8086 -> i686+)
 	- BIOS(MBR), CLI, Paging, Multitask, Syscall, {RTC,PIT,KBD}
 	- dev-env `[native x64+multilib]* (Ubuntu 11.4.0-1ubuntu1~22.04) 11.4.0`
 	- **run**
 		- **virtual**: VMware, VMBox, Bochs, qemu-system-i386(9.2.4)
 	- **build**
 		- `make lib`; `make` `make run`
-- `x64` AMD64
+- `x64 0x8664` AMD64
 	- UEFI, GUI
 	- dev-env `[native x64+multilib]* (Ubuntu 11.4.0-1ubuntu1~22.04) 11.4.0`
 	- **run**
 		- **virtual**: qemu-system-x86_64
+	- **build**
+		- `arch=atx-x64-uefi64 make`
 	
 RISC `Fizik`
-- `r32` RISC-V32
+- `r32 0x1032` RISC-V32
 	- CLI
 	- **run**
 		- **virtual**: qemu-system-riscv32
 	- **build**
 		- `make lib-r32`; `make build-r32` `make run-r32`
-- `r64` RISC-V64
-- `ac7` ARMv7 Cortex-A7
+- `r64 0x1064` RISC-V64
+- `ac7 0x2007` ARMv7 Cortex-A7
 	- dev-env `arm-none-eabi-* (Arm GNU Toolchain 12.2.MPACBTI-Rel1 (Build arm-12-mpacbti.34)) 12.2.1 20230214`
 	- **run**
 		- **phyzikl**: ...
 
 MISC
-- `m64` *kept for Dinah* 
+- `m64 0x0064` *kept for Dinah* 
 
