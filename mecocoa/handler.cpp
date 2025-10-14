@@ -29,11 +29,14 @@ void Handint_PIT()
 	time++;
 	if (time >= 1000) {
 		time = 0;
-		Letvar(p, char*, 0xB8001);
-		*p ^= 0x70;// make it blink
-		// mecocoa_global->system_time.sec++;//{TEMP} help RTC
-		// outc('>');
-		blink2();
+		// mecocoa_global->system_time.sec++;//{TEMP} help RTC	
+		if (!ento_gui) {
+			Letvar(p, char*, 0xB8001);
+			*p ^= 0x70;// make it blink
+		}
+		else {
+			blink2();
+		}
 	}
 	static unsigned time_slice = 0;
 	time_slice++;
@@ -55,12 +58,11 @@ void Handint_RTC()
 	innpb(0x71);
 	mecocoa_global->system_time.sec++;
 
-	if (1) {
+	if (!ento_gui) {
 		Letvar(p, char*, 0xB8003);
 		*p ^= 0x70;// make it blink
-		// outc('>');
-		blink();
 	}
+	else blink();
 	rupt_proc(2, IRQ_RTC);
 }
 

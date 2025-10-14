@@ -44,6 +44,7 @@ int main(int argc, char** argv)
 				last_sec = now;
 			}
 			if (now > 3) {
+				sysouts("Try Opening file\n\r");
 				stduint ok = syscall(0x6, _IMM("/a.txt"), 0x1234, nil);// open -> desc
 				sysouts(ok ? "\n\rfin open\n\r" : "\n\rfail open\n\r");
 				break;

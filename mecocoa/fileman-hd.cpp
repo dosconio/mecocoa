@@ -75,6 +75,9 @@ namespace uni {
 			Harddisk_PATA::Hdisk_OUT(&cmd, hd_cmd_wait);
 			if (true) {
 				hd_int_wait();
+				if (!waitfor(STATUS_DRQ, STATUS_DRQ, HD_TIMEOUT)) {
+					return false;
+				}
 				IN_wn(REG_DATA, (word*)Dest, Block_Size);
 				// slice.length--;
 			}
@@ -264,15 +267,22 @@ static void hd_read(Harddisk_PATA& hd, Slice slice, stduint pg_task)// 0x03
 	cmd.command = ATA_READ;
 	lock = 0;
 	Harddisk_PATA::Hdisk_OUT(&cmd, hd_cmd_wait);
+
 	CommMsg msg;
 	msg.type = 0;
 	msg.src = Task_Hdd_Serv;
 	msg.data.address = _IMM(single_sector);
 	msg.data.length = hd.Block_Size;
+
 	while (slice.length) {
 		hd_int_wait();
+		if (!waitfor(STATUS_DRQ, STATUS_DRQ, HD_TIMEOUT)) {
+			plogerro("hd writing error.");
+			return;
+		}
 		IN_wn(REG_DATA, (word*)single_sector, hd.Block_Size);
 		if (pg_task) syscall(syscall_t::COMM, COMM_SEND, pg_task, &msg);
+		// syssend(pg_task, single_sector, hd.Block_Size, 0);
 		slice.length--;
 		// dst += hd.Block_Size;
 	}
@@ -289,21 +299,25 @@ static void hd_write(Harddisk_PATA& hd, Slice slice, stduint pg_task)
 	cmd.command = ATA_WRITE;
 	lock = 0;
 	Harddisk_PATA::Hdisk_OUT(&cmd, hd_cmd_wait);
+
 	CommMsg msg;
 	msg.type = 0;
 	msg.src = Task_Hdd_Serv;
 	msg.data.address = _IMM(single_sector);
 	msg.data.length = hd.Block_Size;
+	
 	while (slice.length) {
 		if (!waitfor(STATUS_DRQ, STATUS_DRQ, HD_TIMEOUT)) {
 			plogerro("hd writing error.");
 			return;
 		}
 		if (pg_task) syscall(syscall_t::COMM, COMM_RECV, pg_task, &msg);
+		// sysrecv(pg_task, single_sector, hd.Block_Size);
 		OUT_wn(REG_DATA, (word*)single_sector, hd.Block_Size);
 		hd_int_wait();
 		slice.length--;
 		// src += hd.Block_Size;
+		// ploginfo("%s OK", __FUNCIDEN__);
 	}
 }
 

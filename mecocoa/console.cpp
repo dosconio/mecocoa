@@ -197,13 +197,14 @@ void MccaTTYCon::cons_init()
 	new (&kbdbridge) KeyboardBridge();// C++ Bare Programming
 	kbd_out = &kbdbridge;
 
-	con0_out = BCONS0;
-
-	// return;
 	// ABOVE are OUTDATED
 
 	if (!Graphic::setMode(VideoMode::RGB888_800x600))
+	{
+		con0_out = BCONS0;
 		plogerro("Switch to GUI.");
+		return;
+	}
 	ento_gui = true;
 	kernel_paging.MapWeak(
 		video_info->PhysBasePtr,

@@ -63,7 +63,7 @@ enum class syscall_t : stduint {
 extern bool opt_info;
 extern bool opt_test;
 
-
+extern bool ento_gui;
 
 // ---- handler
 extern "C" void Handint_PIT_Entry();
@@ -90,6 +90,28 @@ stduint syscall(syscall_t callid, ...);
 
 // ---- taskman
 #include "taskman.hpp"
+
+//!{do not use! why?}
+inline static stduint syssend(stduint to_whom, const void* msgaddr, stduint bytlen, stduint type = 0)
+{
+	struct CommMsg msg { nil };
+	msg.data.address = _IMM(msgaddr);
+	msg.data.length = bytlen;
+	msg.type = type;
+	return syscall(syscall_t::COMM, COMM_SEND, to_whom, &msg);
+}
+inline static stduint sysrecv(stduint fo_whom, void* msgaddr, stduint bytlen, stduint* type = NULL, stduint* src = NULL)
+{
+	struct CommMsg msg { nil };
+	msg.data.address = _IMM(msgaddr);
+	msg.data.length = bytlen;
+	if (type) msg.type = *type;
+	if (src) msg.src = *src;
+	stduint ret = syscall(syscall_t::COMM, COMM_RECV, fo_whom, &msg);
+	if (type) *type = msg.type;
+	if (src) *src = msg.src;
+	return ret;
+}
 
 // ---- [service] console
 
