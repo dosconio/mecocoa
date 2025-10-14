@@ -170,6 +170,17 @@ bool Graphic::setMode(VideoMode vmode) {
 }
 
 extern bool ento_gui;
+void blink() {
+	static bool b = false;
+	treat<GloScreen>(BUF_VCI).DrawRectangle(Rectangle(Point(0, 0), Size2(8, 16), b ? Color::Black : Color::White));
+	b = !b;
+}
+void blink2() {
+	static bool b = false;
+	treat<GloScreen>(BUF_VCI).DrawRectangle(Rectangle(Point(8, 0), Size2(8, 16), b ? Color::Black : Color::White));
+	b = !b;
+}
+
 void MccaTTYCon::cons_init()
 {
 	video_info = (uni::ModeInfoBlock *)Memory::physical_allocate(0x1000);
@@ -186,6 +197,9 @@ void MccaTTYCon::cons_init()
 	new (&kbdbridge) KeyboardBridge();// C++ Bare Programming
 	kbd_out = &kbdbridge;
 
+	con0_out = BCONS0;
+
+	// return;
 	// ABOVE are OUTDATED
 
 	if (!Graphic::setMode(VideoMode::RGB888_800x600))
@@ -212,7 +226,7 @@ void MccaTTYCon::cons_init()
 	con0_out = vcon0;
 	vcon0->forecolor = Color::Black;
 	vcon0->Clear();
-	Console.OutFormat("\xFF\x07[Mecocoa]\xFF\x72 Real16 Switched Test OK!\xFF\x70\n\r");
+	Console.OutFormat("\xFF\x70[Mecocoa]\xFF\x27 Real16 Switched Test OK!\xFF\x07\n\r");
 	
 	// TTY1 window form (TODO)
 	// TTY2 window form (TODO)

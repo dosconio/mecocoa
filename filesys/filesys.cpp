@@ -126,50 +126,43 @@ void make_filesys(Harddisk_PATA_Paged& ide, byte* buffer)
 
 inode* root_inode;
 
-#if 0// _TODO
 // In Orange'S FS v1.0
 //{make sense of this}
-int search_file(char* path)
+int search_file(char* path, char* const buffer_sector)
 {
 	int i, j;
-
-	char filename[_TEMP 20];
-	MemSet(filename, 0, MAX_FILENAME_LEN);
+	char filename[MAX_FILENAME_LEN + 1] = { 0 };
 	struct inode * dir_inode;
 	if (strip_path(filename, path, &dir_inode) != 0)
 		return 0;
-
-	if (filename[0] == 0)	/* path: "/" */
+	if (filename[0] == 0)	// path: "/"
 		return dir_inode->i_num;
 
+	ploginfo("search_file: disk %u with path %s", dir_inode->i_dev, path);
+	StorageTrait* disk = IndexDisk(dir_inode->i_dev);
+	if (!disk) {
+		return 0;// not found
+	}
 	// Search the dir for the file.
 	int dir_blk0_nr = dir_inode->entity.i_start_sect;
-	int nr_dir_blks = (dir_inode->entity.i_size + SECTOR_SIZE - 1) / SECTOR_SIZE;
-	int nr_dir_entries =
-	  dir_inode->entity.i_size / DIR_ENTRY_SIZE; /**
-					       * including unused slots
-					       * (the file has been deleted
-					       * but the slot is still there)
-					       */
+	int nr_dir_blks = (dir_inode->entity.i_size + disk->Block_Size - 1) / disk->Block_Size;
+	int nr_dir_entries = dir_inode->entity.i_size / DIR_ENTRY_SIZE; // including unused slots (the file has been deleted but the slot is still there)
 	int m = 0;
-	struct dir_entry * pde;
+	struct dir_entry* pde;
 	for (i = 0; i < nr_dir_blks; i++) {
-		RD_SECT(dir_inode->i_dev, dir_blk0_nr + i);
-		pde = (struct dir_entry *)fsbuf;
-		for (j = 0; j < SECTOR_SIZE / DIR_ENTRY_SIZE; j++,pde++) {
-			if (memcmp(filename, pde->name, MAX_FILENAME_LEN) == 0)
+		disk->Read(dir_blk0_nr + i, buffer_sector);
+		pde = (struct dir_entry *)buffer_sector;
+		for (j = 0; j < disk->Block_Size / DIR_ENTRY_SIZE; j++,pde++) {
+			if (MemCompare(filename, pde->name, MAX_FILENAME_LEN) == 0)
 				return pde->inode_nr;
 			if (++m > nr_dir_entries)
 				break;
 		}
-		if (m > nr_dir_entries) /* all entries have been iterated */
+		if (m > nr_dir_entries) // all entries have been iterated
 			break;
 	}
-
-	
 	return 0;// not found
 }
-#endif
 
 // In Orange'S FS v1.0
 // * e.g. After stip_path(filename, "/blah", ppinode) finishes, we get:
@@ -188,7 +181,7 @@ bool strip_path(char* filename, const char* pathname, struct inode** ppinode)
 		    return false;
 		}
 		*t++ = *s++;
-		if (t - filename >= _TEMP(20) - 1) break;
+		if (t - filename >= MAX_FILENAME_LEN - 1) break;
 	}
 	*t = 0;
 	*ppinode = root_inode;

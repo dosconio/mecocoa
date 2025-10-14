@@ -60,11 +60,11 @@ void switch_task() {
 	auto pb_src = TaskGet(ProcessBlock::cpu0_task);
 
 	do if (ProcessBlock::cpu0_rest) {
-		ProcessBlock::cpu0_task = (ProcessBlock::cpu0_rest + 1) % TaskNumber;
+		ProcessBlock::cpu0_task = (ProcessBlock::cpu0_rest + 1) % pnumber;
 		ProcessBlock::cpu0_rest = 0;
 		if (ProcessBlock::cpu0_task == 0) ProcessBlock::cpu0_task++;
 	}
-	else ++ProcessBlock::cpu0_task %= TaskNumber;
+	else ++ProcessBlock::cpu0_task %= pnumber;
 	while (TaskGet(ProcessBlock::cpu0_task)->state == ProcessBlock::State::Pended);//{TEMP}
 
 	// printlog(_LOG_TRACE, "switch task %d", ProcessBlock::cpu0_task);
@@ -86,15 +86,15 @@ void switch_task() {
 
 // LocaleDescriptor32SetFromELF32
 // 0
-// 1 code: 00000000\~7FFFFFFF
-// 2 data: 00000000\~7FFFFFFF
+// 1 code: 00000000\~FFFFFFFF
+// 2 data: 00000000\~FFFFFFFF
 // 3
 // 4 ss-0: 00000000\~FFFFFFFF
 // 5 ss-1: 00000000\~FFFFFFFF
 // 6 ss-2: 00000000\~FFFFFFFF
 // 7 ss-3: 00000000\~7FFFFFFF
-#define FLAT_CODE_R3_PROP 0x00C7FA00
-#define FLAT_DATA_R3_PROP 0x00C7F200
+#define FLAT_CODE_R3_PROP 0x00CFFA00
+#define FLAT_DATA_R3_PROP 0x00CFF200
 #define FLAT_DATA_R2_PROP 0x00CFD200
 #define FLAT_DATA_R1_PROP 0x00CFB200
 #define FLAT_DATA_R0_PROP 0x00CF9200
@@ -196,7 +196,7 @@ ProcessBlock* TaskRegister(void* entry, byte ring)
 		break;
 	}
 
-	outsfmt("TSS %d at 0x%[32H], Entry 0x%[32H]->0x%[32H], SP=0x%[32H]\n\r",
+	if (false) outsfmt("TSS %d at 0x%[32H], Entry 0x%[32H]->0x%[32H], SP=0x%[32H]\n\r",
 		TSSSelector, page,
 		entry, pb->paging[_IMM(entry)],
 		TSS->ESP);
@@ -299,7 +299,7 @@ ProcessBlock* TaskLoad(BlockTrait* source, void* addr, byte ring)
 			TaskLoad_Carry((char*)ph->p_vaddr, ph->p_memsz, (char*)addr + ph->p_offset, pb->paging);
 		}
 	}
-	outsfmt("TSS %d at 0x%[32H], Entry 0x%[32H]->0x%[32H], CR3=0x%[32H]\n\r",
+	if (false) outsfmt("TSS %d at 0x%[32H], Entry 0x%[32H]->0x%[32H], CR3=0x%[32H]\n\r",
 		TSSSelector, page,
 		header->e_entry, pb->paging[header->e_entry],
 		TSS->CR3);

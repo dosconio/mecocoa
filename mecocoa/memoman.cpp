@@ -95,7 +95,7 @@ _TEMP void page_init() {
 	__asm("movl %cr0, %eax\n");
 	__asm("or   $0x80000000, %eax\n");// enable paging
 	__asm("movl %eax, %cr0\n");
-	rostr test_page = (rostr)"\xFF\x07[Mecocoa]\xFF\x72 Paging Test OK!\xFF\x70" + 0x80000000;
+	rostr test_page = (rostr)"\xFF\x70[Mecocoa]\xFF\x27 Paging Test OK!\xFF\x07" + 0x80000000;
 	if (opt_test) Console.OutFormat("%s\n\r", test_page);
 }
 

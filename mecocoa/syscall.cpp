@@ -61,8 +61,8 @@ static stduint syscall_06_open(stduint* paras, ProcessBlock* pb)
 	msg.data.address = _IMM(open_buf);
 	msg.data.length = sizeof(stduint);
 	syscall(syscall_t::COMM, COMM_RECV, Task_FileSys, &msg);
-	if (open_buf[0]) {
-		plogerro("open file failed");
+	if (cast<stdsint>(open_buf[0]) < 0) {
+		plogerro("open file failed: %d", open_buf[0]);
 		return 0;// no descriptor
 	}
 	return _TEMP 1;
@@ -137,12 +137,12 @@ static stduint call_body(const syscall_t callid, ...) {
 		//{TODO} ISSUE 20250706 Each time subapp (Ring3) print %d or other integer by outsfmt() will panic, but OutInteger() or Kernel Ring0 is OK.
 		if (para[0] == 'T' && para[1] == 'E' && para[2] == 'S') {
 			rostr test_msg = "Syscalls Test OK!";
-			Console.OutFormat("\xFF\x07[Mecocoa]\xFF\x72 PID");
+			Console.OutFormat("\xFF\x70[Mecocoa]\xFF\x27 PID");
 			Console.OutInteger(ProcessBlock::cpu0_task, +10);
-			Console.OutFormat(": %s\xFF\x70\n\r", test_msg + 0x80000000);
+			Console.OutFormat(": %s\xFF\x07\n\r", test_msg + 0x80000000);
 		}
 		else {
-			rostr test_msg = "\xFF\x07[Mecocoa]\xFF\x74 Syscalls Test FAIL!\xFF\x70";
+			rostr test_msg = "\xFF\x70[Mecocoa]\xFF\x47 Syscalls Test FAIL!\xFF\x07";
 			Console.OutFormat("%s %x %x %x\n\r", test_msg + 0x80000000,
 				para[0], para[1], para[2]);
 		}
@@ -164,7 +164,8 @@ void call_gate() { // noreturn
 	__asm("mov  %%ecx, %0" : "=m"(para[1]));
 	__asm("mov  %%edx, %0" : "=m"(para[2]));
 	__asm("mov  %%ebx, %0" : "=m"(para[3]));
-	__asm("push %ebx;push %ecx;push %edx;push %ebp;push %esi;push %edi;cli;");
+	__asm("push %ebx;push %ecx;push %edx;push %ebp;push %esi;push %edi;");
+	__asm("cli");
 	__asm("call PG_PUSH");
 	//auto task_switch_enable_old = task_switch_enable;//{TODO} {MUTEX for multi-Proc}
 	//task_switch_enable = false;

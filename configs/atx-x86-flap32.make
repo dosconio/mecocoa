@@ -76,6 +76,7 @@ build: clean $(cppobjs)
 	@echo
 	@echo "You can now debug in bochs with the command:"
 	@echo $(bochd) -f $(dstdir)/bochsrc.bxrc
+	@echo C:/Soft/Bochs-3.0/bochs.exe -f $(dstdir)/bochsrc.bxrc -debugger
 
 run: build
 	@$(qemu) \

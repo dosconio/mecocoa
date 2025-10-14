@@ -105,6 +105,13 @@ static inode* create_file(rostr path, int flags)
 	return _TEMP 0;
 }
 
+static stdsint do_open(rostr pathname, int flags, ProcessBlock& process) {
+	int fd = -1;
+
+
+	return _TODO - 1;
+}
+
 void serv_file_loop()
 {
 	buffer = (byte*)Memory::physical_allocate(0x1000);
@@ -125,49 +132,6 @@ void serv_file_loop()
 			ploginfo("TESTING FILEMAN");
 			syscall(syscall_t::COMM, COMM_SEND, Task_Hdd_Serv, &msg);
 
-			#if 0// close
-			msg.type = 0x02;// close
-			to_args[0] = 0x01;
-			msg.data.length = 1;
-			syscall(syscall_t::COMM, COMM_SEND, Task_Hdd_Serv, &msg);
-			#endif
-
-			#if 0// read & write
-			Harddisk_PATA_Paged(1).Read(1, buffer);
-			for0(i, 16) outsfmt("%[8H] ", buffer[i]);
-			outsfmt("\n\r");
-			for0(i, 3) buffer[i]++;
-			Harddisk_PATA_Paged(1).Write(1, buffer);
-			for0(i, 3) buffer[i] = 0;
-			Harddisk_PATA_Paged(1).Read(1, buffer);
-			for0(i, 16) outsfmt("%[8H] ", buffer[i]);
-			outsfmt("\n\r");
-			#endif
-
-			#if 0
-			msg.type = 0x05;
-			msg.data.length = 2 * sizeof(stduint);
-			to_args[0] = 0x0001;// IDE 0:1
-			for0 (i, NR_PRIM_PER_DRIVE + NR_SUB_PER_DRIVE) {
-				to_args[1] = i;
-				syscall(syscall_t::COMM, COMM_SEND, Task_Hdd_Serv, &msg);
-				Slice part_entry = {0};
-				CommMsg msg1{ .data = {.address = _IMM(&part_entry), .length = sizeof(part_entry)} };
-				syscall(syscall_t::COMM, COMM_RECV, Task_Hdd_Serv, &msg1);
-				if (part_entry.length) {
-					outsfmt("> %[8H]: %u..%u\n\r",
-						i < 5 ? i : 0x10 + ((i - NR_PRIM_PER_DRIVE)),
-						part_entry.address, part_entry.address + part_entry.length);
-				}
-				else if (i >= 5) {
-					i += 0x10 - 5;
-					i /= 0x10;
-					i *= 0x10;
-					i += 5 - 1;
-				}
-			}
-			#endif
-
 			// mkfs
 			if (0) {
 				make_filesys(IDE0_1, buffer);
@@ -179,13 +143,18 @@ void serv_file_loop()
 			break;
 		case 2:// OPEN
 		{
+			// open a file and return the file descriptor
 			ploginfo("[fileman] open %s with %[32H]", 1 + (byte*)to_args, ((byte*)to_args)[0]);
 			CommMsg msg_back;
 			stduint ret;
 			msg_back.data.address = _IMM(&ret);
 			msg_back.data.length = sizeof(ret);
+			ret = static_cast<stduint>(do_open(
+				(rostr)to_args,
+				((byte*)to_args)[0],
+				*TaskGet(_TODO _TODO _TODO 0)
+			));
 			syscall(syscall_t::COMM, COMM_SEND, msg.src, &msg_back);
-			//{}
 			break;
 		}
 		case 3:// CLOSE

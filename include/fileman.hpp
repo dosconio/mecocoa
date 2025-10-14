@@ -1,6 +1,10 @@
 #ifndef FILEMAN_HPP_
 #define FILEMAN_HPP_
 
+// drive  0:0=h[0]                0:1=h[5]
+// device     h[1~4]                  h[6~9]
+// subdev 0~15/16~31/32~47/48~63  64~...
+
 bool waitfor(int mask, int val, int timeout_second);
 
 #define MAX_DRIVES 2 // only for primary IDE
@@ -40,5 +44,15 @@ struct Harddisk_PATA_Paged : public Harddisk_PATA {
 	virtual bool Write(stduint BlockIden, const void* Sors);
 	Slice GetPartEntry(usize device);
 };
+
+extern Harddisk_PATA* disks[MAX_DRIVES];
+
+// for IDE0:0 and IDE0:1
+// Should be done by syscall. But here is linked as one program
+inline static Harddisk_PATA* IndexDisk(unsigned dev) {
+	unsigned drv_id = dev / NR_SUB_PER_DRIVE;
+	if (drv_id >= MAX_DRIVES) return NULL;
+	return disks[drv_id];
+}
 
 #endif

@@ -47,7 +47,7 @@ struct inode {
 		u8	_unused[16]; /**< Stuff for alignment */
 	} entity;
 	// the following items are only present in memory
-	int	i_dev;
+	int	i_dev;      // 0xAABB, e.g. 0x0100 for IDE1:0(maybe CD-ROM)// h[0] h[1~4][a~...], h[5], h[6~9][a~...]
 	int	i_cnt;		/**< How many procs share this inode  */
 	int	i_num;		/**< inode nr.  */
 };

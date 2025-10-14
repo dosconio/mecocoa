@@ -108,6 +108,7 @@ void MAIN() {
 	// IVT and Device
 	InterruptControl GIC(_IMM(0x80000800));// linear but not physical
 	GIC.Reset(SegCode);
+	GIC.enAble();
 	GIC[IRQ_PIT].setRange(mglb(Handint_PIT_Entry), SegCode); PIT_Init();
 	GIC[IRQ_RTC].setRange(mglb(Handint_RTC_Entry), SegCode); RTC_Init();
 	GIC[IRQ_Keyboard].setRange(mglb(Handint_KBD_Entry), SegCode);
@@ -121,7 +122,6 @@ void MAIN() {
 	Console.OutFormat("Mem Avail: %s\n\r", ker_buf.reference());
 	Console.OutFormat("CPU Brand: %s\n\r", text_brand());
 
-	GIC.enAble();
 
 	// Service
 	TaskRegister((void*)&MccaTTYCon::serv_cons_loop, 1);
@@ -145,11 +145,12 @@ void MAIN() {
 	for0(i, 64) hdisk.Read(i + 512, (void*)((char*)load_buffer + 512 * (i)));
 	TaskLoad(NULL _TEMP, load_buffer, 3)->focus_tty_id = 0;
 
-	if (false) CallFar(0, 8 * 9);// manually schedule
-	if (false) { CallFar(0, 8 * 9); jmpFar(0, 8 * 9); }// re-entry test
+	// if (false) { CallFar(0, 8 * 9); jmpFar(0, 8 * 9); }// re-entry test
 
 	syscall(syscall_t::OUTC, 'O');
 	Console.OutFormat("hayouuu~!\n\r");
+
+	// Console.OutFormat("IMR 0x%[8H] 0x%[8H]\n\r", innpb(_i8259A_MAS_IMR), innpb(_i8259A_SLV_IMR));
 
 	// ttycons[0]->OutFormat("HelloTTY%d\n\r", 0);
 	// ttycons[1]->OutFormat("HelloTTY%d\n\r", 1);

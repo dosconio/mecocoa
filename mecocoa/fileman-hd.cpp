@@ -17,7 +17,7 @@ use crate uni;
 #include "cpp/Device/Storage/HD-DEPEND.h"
 
 
-Harddisk_PATA* disks[2];
+Harddisk_PATA* disks[2];// referenced
 static char hdd_buf[byteof(**disks) * numsof(disks)];
 
 struct HD_Info {
@@ -49,7 +49,7 @@ void Handint_HDD()// HDD Master
 	innpb(REG_STATUS);
 	if (lock) return;
 	lock = 1;
-	rupt_proc(Task_Hdd_Serv, IRQ_ATA_DISK0);
+		rupt_proc(Task_Hdd_Serv, IRQ_ATA_DISK0);
 }
 
 static bool hd_cmd_wait() {
@@ -335,7 +335,6 @@ void serv_dev_hd_loop()
 		while (1);
 	}
 	
-	// while (1);
 	Console.OutFormat("[Hrddisk] detect %u disks\n\r", bda->hdisk_number);
 	struct CommMsg msg;
 	msg.data.address = _IMM(args);

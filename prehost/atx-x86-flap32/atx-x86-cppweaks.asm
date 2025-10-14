@@ -181,11 +181,11 @@ Handint_PIT_Entry:
 Handint_RTC_Entry:
 	PUSHAD
 	CALL PG_PUSH
+	CALL Handint_RTC
+	CALL PG_POP
 	MOV AL, ' '
 	OUT 0xA0, AL
 	OUT 0x20, AL
-	CALL Handint_RTC
-	CALL PG_POP
 	POPAD
 	IRETD
 Handint_KBD_Entry:
@@ -200,11 +200,11 @@ Handint_KBD_Entry:
 Handint_HDD_Entry:
 	PUSHAD
 	CALL PG_PUSH
+	CALL Handint_HDD
+	CALL PG_POP
 	MOV AL, ' '
 	OUT 0xA0, AL
 	OUT 0x20, AL
-	CALL Handint_HDD
-	CALL PG_POP
 	POPAD
 	IRETD
 
