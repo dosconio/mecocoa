@@ -32,7 +32,9 @@ void switch_halt() {
 	ProcessBlock::cpu0_rest = ProcessBlock::cpu0_task;
 	auto pb_src = TaskGet(ProcessBlock::cpu0_task);
 	auto pb_des = TaskGet(0);
-	// printlog(_LOG_TRACE, "switch halt");
+	// stduint esp = 0;
+	// _ASM("movl %%esp, %0" : "=r"(esp));
+	// ploginfo("switch halt %d->0, esp: %[32H]", ProcessBlock::cpu0_task, esp);
 	if (pb_des->state == ProcessBlock::State::Uninit)
 		pb_des->state = ProcessBlock::State::Ready;
 	if ((pb_src->state == ProcessBlock::State::Running || pb_src->state == ProcessBlock::State::Pended) && (
@@ -59,15 +61,22 @@ void switch_task() {
 	task_switch_enable = false;//{TODO} Lock
 	auto pb_src = TaskGet(ProcessBlock::cpu0_task);
 
+	stduint cpu0_new = ProcessBlock::cpu0_task;
 	do if (ProcessBlock::cpu0_rest) {
-		ProcessBlock::cpu0_task = (ProcessBlock::cpu0_rest + 1) % pnumber;
+		cpu0_new = (ProcessBlock::cpu0_rest + 1) % pnumber;
 		ProcessBlock::cpu0_rest = 0;
-		if (ProcessBlock::cpu0_task == 0) ProcessBlock::cpu0_task++;
+		if (cpu0_new == 0) {
+			cpu0_new++;
+		}
 	}
-	else ++ProcessBlock::cpu0_task %= pnumber;
-	while (TaskGet(ProcessBlock::cpu0_task)->state == ProcessBlock::State::Pended);//{TEMP}
-
-	// printlog(_LOG_TRACE, "switch task %d", ProcessBlock::cpu0_task);
+	else {
+		++cpu0_new %= pnumber;
+	}
+	while (cpu0_new == ProcessBlock::cpu0_task || _TEMP TaskGet(cpu0_new)->state == ProcessBlock::State::Pended);
+	// stduint esp = 0;
+	// _ASM("movl %%esp, %0" : "=r"(esp));
+	// ploginfo("switch task %d->%d, esp: %[32H]", ProcessBlock::cpu0_task, cpu0_new, esp);
+	ProcessBlock::cpu0_task = cpu0_new;
 	auto pb_des = TaskGet(ProcessBlock::cpu0_task);
 
 	if (pb_des->state == ProcessBlock::State::Uninit)
@@ -78,7 +87,7 @@ void switch_task() {
 		pb_des->state = ProcessBlock::State::Running;
 	}
 	else {
-		printlog(_LOG_FATAL, "task switch error (PID%u, State%u).", pb_des->getID(), _IMM(pb_des->state));
+		printlog(_LOG_FATAL, "task switch error (PID%u, State%u, PCnt%u).", pb_des->getID(), _IMM(pb_des->state), pnumber);
 	}
 	task_switch_enable = true;//{TODO} Unlock
 	jmpFar(0, SegTSS + 16 * ProcessBlock::cpu0_task);
@@ -435,7 +444,7 @@ int msg_send(ProcessBlock* fo, stduint too, _Comment(vaddr) CommMsg* msg)
 		void* addr_fo = (void*)msg_fo->data.address;
 		CommMsg* msg_to = (CommMsg*)to->paging[_IMM(to->unsolved_msg)];
 		void* addr_to = (void*)msg_to->data.address;
-		ploginfo("MemCopyP %[32H], ..., %[32H], ..., %d)", addr_to, addr_fo, leng);
+		// ploginfo("MemCopyP %[32H], ..., %[32H], ..., %d)", addr_to, addr_fo, leng);/////
 		if (leng) MemCopyP(addr_to, to->paging, addr_fo, fo->paging, leng);
 		msg_to->type = msg_fo->type;
 		msg_to->src = fo->getID();
@@ -515,7 +524,7 @@ int msg_recv(ProcessBlock* to, stduint foo, _Comment(vaddr) CommMsg* msg)
 		stduint leng1 = msg_to->data.length;
 		void* addr_to = (void*)msg_to->data.address;
 		//
-		ploginfo("RECV-MemCopyP %[32H], ..., %[32H], ..., minof(%d,%d)", addr_to, addr_fo, leng0, leng1);
+		// ploginfo("RECV-MemCopyP %[32H], ..., %[32H], ..., minof(%d,%d)", addr_to, addr_fo, leng0, leng1);/////
 		stduint leng = minof(leng0, leng1);
 		if (leng) MemCopyP(addr_to, to->paging, addr_fo, fo->paging, leng);
 		msg_to->type = msg_fo->type;

@@ -21,6 +21,7 @@ void make_filesys(Harddisk_PATA_Paged& ide, byte* buffer)
 {
 	bool state = false;
 	//
+	ploginfo("making FS on IDE%u", ide.getLowID());
 	Slice total = ide.GetPartEntry(0);
 	// outsfmt("[mkfs]  0x%[32H] began %u secs\n\r", total.address * ide.Block_Size, total.length);
 
@@ -48,7 +49,7 @@ void make_filesys(Harddisk_PATA_Paged& ide, byte* buffer)
 	ide.Write(1, buffer);
 	// - Debug show
 	if (_TEMP 1) {
-		outsfmt("[mkfs] for IDE%u;%u\n\r", ide.getHigID(), ide.getLowID());
+		outsfmt("[mkfs] for IDE%u:%u\n\r", ide.getHigID(), ide.getLowID());
 		outsfmt("[mkfs]  superbloc 0x%[32H]\n\r", (total.address + 1) * ide.Block_Size);
 		outsfmt("[mkfs]  inode-map 0x%[32H]\n\r", (total.address + 1 + 1) * ide.Block_Size);
 		outsfmt("[mkfs]  sectormap 0x%[32H]\n\r", (total.address + 1 + 1 + sb.entity.nr_imap_sects) * ide.Block_Size);
@@ -85,6 +86,7 @@ void make_filesys(Harddisk_PATA_Paged& ide, byte* buffer)
 	MemSet(buffer, 0x00, ide.Block_Size);// rest sectors
 	byte _dbg_sec_fill_time = 1;
 	while (sec < sec_start + sb.entity.nr_smap_sects) {
+		// ploginfo("write %u", sec);
 		state = ide.Write(sec++, buffer);
 		_dbg_sec_fill_time++;
 		outsfmt(">");

@@ -60,7 +60,7 @@ bool Harddisk_PATA_Paged::Read(stduint BlockIden, void* Dest) {
 	struct CommMsg msg { .data = { .address = _IMM(to_args), .length = byteof(to_args) } };
 	struct CommMsg data_msg { .data = { .address = _IMM(Dest), .length = Block_Size } };
 	msg.type = 0x03;// read
-	to_args[0] = getLowID();
+	to_args[0] = getLowID();//{}
 	to_args[1] = BlockIden;
 	syscall(syscall_t::COMM, COMM_SEND, Task_Hdd_Serv, &msg);
 	syscall(syscall_t::COMM, COMM_RECV, Task_Hdd_Serv, &data_msg);
@@ -71,7 +71,7 @@ bool Harddisk_PATA_Paged::Write(stduint BlockIden, const void* Sors) {
 	struct CommMsg msg { .data = { .address = _IMM(to_args), .length = byteof(to_args) } };
 	struct CommMsg data_msg { .data = { .address = _IMM(Sors), .length = Block_Size } };
 	msg.type = 0x04;// write
-	to_args[0] = getLowID();
+	to_args[0] = getLowID();//{}
 	to_args[1] = BlockIden;
 	syscall(syscall_t::COMM, COMM_SEND, Task_Hdd_Serv, &msg);
 	syscall(syscall_t::COMM, COMM_SEND, Task_Hdd_Serv, &data_msg);
@@ -116,24 +116,26 @@ void serv_file_loop()
 {
 	buffer = (byte*)Memory::physical_allocate(0x1000);
 	ploginfo("%s", __FUNCIDEN__);
-	struct CommMsg msg;
+	// struct CommMsg msg;
 	struct CommMsg data_msg;
 	stduint to_args[4];
-	msg.type = 0;
-	msg.data.address = _IMM(to_args);
-	msg.data.length = 0;
+	// msg.type = 0;
+	// msg.data.address = _IMM(to_args);
+	// msg.data.length = byteof(to_args);
 	data_msg.data.address = _IMM(buffer);
 	data_msg.data.length = 0x1000;
 	Harddisk_PATA_Paged IDE0_1(0x0001);
+	stduint sig_type = 0, sig_src;
 	while (true) {
-		switch (msg.type)
+		switch (sig_type)
 		{
 		case 0:// TEST (no-feedback)
 			ploginfo("TESTING FILEMAN");
-			syscall(syscall_t::COMM, COMM_SEND, Task_Hdd_Serv, &msg);
+			// syscall(syscall_t::COMM, COMM_SEND, Task_Hdd_Serv, &msg);
+			syssend(Task_Hdd_Serv, to_args, byteof(to_args), 0);
 
 			// mkfs
-			if (0) {
+			if (1) {
 				make_filesys(IDE0_1, buffer);
 			}//{} unchk
 
@@ -154,7 +156,7 @@ void serv_file_loop()
 				((byte*)to_args)[0],
 				*TaskGet(_TODO _TODO _TODO 0)
 			));
-			syscall(syscall_t::COMM, COMM_SEND, msg.src, &msg_back);
+			syscall(syscall_t::COMM, COMM_SEND, sig_src, &msg_back);
 			break;
 		}
 		case 3:// CLOSE
@@ -172,7 +174,10 @@ void serv_file_loop()
 			plogerro("Bad TYPE in %s %s", __FILE__, __FUNCIDEN__);
 			break;
 		}
-		syscall(syscall_t::COMM, COMM_RECV, 0, &msg);
+		// syscall(syscall_t::COMM, COMM_RECV, 0, &msg);
+		// msg.data.address = _IMM(to_args);
+		// msg.data.length = byteof(to_args);
+		sysrecv(ANYPROC, to_args, byteof(to_args), &sig_type, &sig_src);
 	}
 }
 

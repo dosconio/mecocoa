@@ -62,6 +62,7 @@ static void hd_int_wait() {
 }
 
 namespace uni {
+	__attribute__((optimize("O0")))// NO OPTIMIZE
 	bool Harddisk_PATA::Read(stduint BlockIden, void* Dest) {
 		if (task_run) {
 			usize sect_nr = BlockIden;
@@ -356,6 +357,8 @@ void serv_dev_hd_loop()
 	Slice slice;
 	slice.length = 1;
 	while (true) {
+		msg.data.address = _IMM(args);
+		msg.data.length = sizeof(args);
 		syscall(syscall_t::COMM, COMM_RECV, 0, &msg);
 		switch (msg.type)
 		{

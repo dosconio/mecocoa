@@ -34,9 +34,18 @@ _sign_entry() {
 	Console.setShowY(0, 25);
 	printlog(_LOG_INFO, "Loading Kernel...");
 	Harddisk_PATA hdisk(0);
-	for0(i, 256) hdisk.Read(i, (void*)(0x100000 + 512 * i));// 128 KB
+	hdisk.Read(0, (void*)(0x100000));
+	if (1) {
+		struct ELF_Header_t* header = (struct ELF_Header_t*)0x100000;
+		ploginfo("Entry : %[32H]", header->e_entry);
+	}
+	for1(i, 255) hdisk.Read(i, (void*)(0x100000 + 512 * i));// 128 KB
 	ELF32_LoadExecFromMemory((void*)0x100000, (void**)&entry_kernel);
 	printlog(_LOG_INFO, "Transfer to Kernel at 0x%[32H]", entry_kernel);
+	if (!entry_kernel) {
+		printlog(_LOG_WARN, "Kernel not found");
+		return;
+	}
 	entry_kernel();// noreturn
 }
 

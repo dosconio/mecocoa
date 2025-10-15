@@ -39,7 +39,7 @@ enum MajorDevice {
 #define    MINOR_hd2a       (MINOR_hd1a+NR_SUB_PER_PART)
 
 struct Harddisk_PATA_Paged : public Harddisk_PATA {
-	Harddisk_PATA_Paged(byte id = 0, HarddiskType type = HarddiskType::ATA) : Harddisk_PATA(id, type) {}
+	Harddisk_PATA_Paged(byte _id = 0, HarddiskType type = HarddiskType::ATA) : Harddisk_PATA(_id, type) {}
 	virtual bool Read(stduint BlockIden, void* Dest);
 	virtual bool Write(stduint BlockIden, const void* Sors);
 	Slice GetPartEntry(usize device);

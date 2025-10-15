@@ -128,6 +128,9 @@ void MAIN() {
 	TaskRegister((void*)&serv_dev_hd_loop, 1);
 	TaskRegister((void*)&serv_file_loop, 1);
 
+	// InterruptEnable();
+	// while (1);
+
 	//{TODO} Load Shell (FAT + ELF)
 	stduint&& bufsize = 512 * 64;
 	void* load_buffer = Memory::physical_allocate(bufsize);
@@ -147,7 +150,7 @@ void MAIN() {
 
 	// if (false) { CallFar(0, 8 * 9); jmpFar(0, 8 * 9); }// re-entry test
 
-	syscall(syscall_t::OUTC, 'O');
+	syscall(syscall_t::OUTC, 'O');// with effect InterruptEnable();
 	Console.OutFormat("hayouuu~!\n\r");
 
 	// Console.OutFormat("IMR 0x%[8H] 0x%[8H]\n\r", innpb(_i8259A_MAS_IMR), innpb(_i8259A_SLV_IMR));
@@ -158,7 +161,7 @@ void MAIN() {
 	// ttycons[3]->OutFormat("HelloTTY%d\n\r", 3);
 	// MccaTTYCon::current_switch(0);
 
-	InterruptEnable();
+	
 	auto lastsec = mecocoa_global->system_time.sec;
 	loop{
 		__asm("hlt");
