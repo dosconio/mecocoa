@@ -444,6 +444,7 @@ int msg_send(ProcessBlock* fo, stduint too, _Comment(vaddr) CommMsg* msg)
 		void* addr_fo = (void*)msg_fo->data.address;
 		CommMsg* msg_to = (CommMsg*)to->paging[_IMM(to->unsolved_msg)];
 		void* addr_to = (void*)msg_to->data.address;
+		MIN(leng, msg_to->data.length);
 		// ploginfo("MemCopyP %[32H], ..., %[32H], ..., %d)", addr_to, addr_fo, leng);/////
 		if (leng) MemCopyP(addr_to, to->paging, addr_fo, fo->paging, leng);
 		msg_to->type = msg_fo->type;

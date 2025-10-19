@@ -112,4 +112,6 @@ struct FilesysOrange {
 	}
 };
 
+int search_file(rostr path, char* const buffer_sector);
+
 #endif

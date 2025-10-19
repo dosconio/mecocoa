@@ -268,13 +268,6 @@ static void hd_read(Harddisk_PATA& hd, Slice slice, stduint pg_task)// 0x03
 	cmd.command = ATA_READ;
 	lock = 0;
 	Harddisk_PATA::Hdisk_OUT(&cmd, hd_cmd_wait);
-
-	CommMsg msg;
-	msg.type = 0;
-	msg.src = Task_Hdd_Serv;
-	msg.data.address = _IMM(single_sector);
-	msg.data.length = hd.Block_Size;
-
 	while (slice.length) {
 		hd_int_wait();
 		if (!waitfor(STATUS_DRQ, STATUS_DRQ, HD_TIMEOUT)) {
@@ -282,8 +275,7 @@ static void hd_read(Harddisk_PATA& hd, Slice slice, stduint pg_task)// 0x03
 			return;
 		}
 		IN_wn(REG_DATA, (word*)single_sector, hd.Block_Size);
-		if (pg_task) syscall(syscall_t::COMM, COMM_SEND, pg_task, &msg);
-		// syssend(pg_task, single_sector, hd.Block_Size, 0);
+		if (pg_task) syssend(pg_task, single_sector, hd.Block_Size, 0);
 		slice.length--;
 		// dst += hd.Block_Size;
 	}
@@ -300,20 +292,12 @@ static void hd_write(Harddisk_PATA& hd, Slice slice, stduint pg_task)
 	cmd.command = ATA_WRITE;
 	lock = 0;
 	Harddisk_PATA::Hdisk_OUT(&cmd, hd_cmd_wait);
-
-	CommMsg msg;
-	msg.type = 0;
-	msg.src = Task_Hdd_Serv;
-	msg.data.address = _IMM(single_sector);
-	msg.data.length = hd.Block_Size;
-	
 	while (slice.length) {
 		if (!waitfor(STATUS_DRQ, STATUS_DRQ, HD_TIMEOUT)) {
 			plogerro("hd writing error.");
 			return;
 		}
-		if (pg_task) syscall(syscall_t::COMM, COMM_RECV, pg_task, &msg);
-		// sysrecv(pg_task, single_sector, hd.Block_Size);
+		if (pg_task) sysrecv(pg_task, single_sector, hd.Block_Size);
 		OUT_wn(REG_DATA, (word*)single_sector, hd.Block_Size);
 		hd_int_wait();
 		slice.length--;
@@ -333,11 +317,7 @@ static void GetPartitionSlice(Harddisk_PATA& hd, unsigned device, stduint pg_tas
 	// if (retp->length && device >= NR_PRIM_PER_DRIVE)
 	// 	ploginfo("[Hrddisk] GetPartitionSlice(%u -> log[%u])", device, (device - NR_PRIM_PER_DRIVE) % NR_SUB_PER_DRIVE);
 	Slice ret = *retp;
-	CommMsg msg{
-		.data = {.address = _IMM(&ret), .length = byteof(ret) },
-		// .type = 0, .src = Task_Hdd_Serv
-	};
-	syscall(syscall_t::COMM, COMM_SEND, pg_task, &msg);
+	syssend(pg_task, &ret, byteof(ret));
 	// ploginfo("[Hrddisk] GetPartitionSlice %u %u", ret.address, ret.length);
 }
 
@@ -351,41 +331,37 @@ void serv_dev_hd_loop()
 	}
 	
 	Console.OutFormat("[Hrddisk] detect %u disks\n\r", bda->hdisk_number);
-	struct CommMsg msg;
-	msg.data.address = _IMM(args);
-	msg.data.length = sizeof(args);
 	Slice slice;
 	slice.length = 1;
+	stduint sig_type = 0, sig_src;
 	while (true) {
-		msg.data.address = _IMM(args);
-		msg.data.length = sizeof(args);
-		syscall(syscall_t::COMM, COMM_RECV, 0, &msg);
-		switch (msg.type)
+		sysrecv(ANYPROC, sliceof(args), &sig_type, &sig_src);
+		switch ((FiledevMsg)sig_type)
 		{
-		case 0:// TEST (no-feedback)
+		case FiledevMsg::TEST:// (no-feedback)
 			for0(i, bda->hdisk_number) {
 				Console.OutFormat("[Hrddisk] %u:%u:\n\r", i / MAX_DRIVES, i % MAX_DRIVES);
 				hd_open(*disks[i]);
 			}
 			break;
-		case 1:// HARDRUPT (usercall-forbidden)
+		case FiledevMsg::RUPT:// (usercall-forbidden)
 			break;
-		case 2:// CLOSE[diskno]
+		case FiledevMsg::CLOSE:// [diskno]
 			ploginfo("[Hrddisk] close %u", (unsigned)(byte)args[0]);
 			hd_close(*disks[(byte)args[0]]);// assert msg.data.length == 0
 			break;
-		case 3:// READ[diskno, lba]
+		case FiledevMsg::READ:// [diskno, lba]
 			slice.address = (usize)args[1];
 			// ploginfo("[Hrddisk] device %u: read %u", (unsigned)(byte)args[0], slice.address);
-			hd_read(*disks[(byte)args[0]], slice, msg.src);
+			hd_read(*disks[(byte)args[0]], slice, sig_src);
 			break;
-		case 4:// WRITE[diskno, lba]
+		case FiledevMsg::WRITE:// [diskno, lba]
 			slice.address = (usize)args[1];
 			// ploginfo("[Hrddisk] device %u: write %u", (unsigned)(byte)args[0], slice.address);
-			hd_write(*disks[(byte)args[0]], slice, msg.src);
+			hd_write(*disks[(byte)args[0]], slice, sig_src);
 			break;
-		case 5:// GetPartitionSlice aka geometry (device 0 for all, 1~4 for primary, 5+ for logical)
-			GetPartitionSlice(*disks[(byte)args[0]], args[1], msg.src);
+		case FiledevMsg::GETPS:// (device 0 for all, 1~4 for primary, 5+ for logical)
+			GetPartitionSlice(*disks[(byte)args[0]], args[1], sig_src);
 			break;
 
 

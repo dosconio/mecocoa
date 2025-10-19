@@ -21,6 +21,8 @@ use crate uni;
 // device h[0] h[1~4][a~...], h[5], h[6~9][a~...]
 
 static byte* buffer = nil;
+file_desc* f_desc_table = nil;
+stduint f_desc_table_count = 0;
 
 static stduint dev_drv_map[] = {
 	nil, // ZERO
@@ -57,24 +59,18 @@ static bool hd_info_valid = false;
 
 bool Harddisk_PATA_Paged::Read(stduint BlockIden, void* Dest) {
 	stduint to_args[2];
-	struct CommMsg msg { .data = { .address = _IMM(to_args), .length = byteof(to_args) } };
-	struct CommMsg data_msg { .data = { .address = _IMM(Dest), .length = Block_Size } };
-	msg.type = 0x03;// read
-	to_args[0] = getLowID();//{}
+	to_args[0] = getLowID();//{} ide00 ide01
 	to_args[1] = BlockIden;
-	syscall(syscall_t::COMM, COMM_SEND, Task_Hdd_Serv, &msg);
-	syscall(syscall_t::COMM, COMM_RECV, Task_Hdd_Serv, &data_msg);
+	syssend(Task_Hdd_Serv, sliceof(to_args), _IMM(FiledevMsg::READ));
+	sysrecv(Task_Hdd_Serv, Dest, Block_Size);
 	return true;
 }
 bool Harddisk_PATA_Paged::Write(stduint BlockIden, const void* Sors) {
 	stduint to_args[2];
-	struct CommMsg msg { .data = { .address = _IMM(to_args), .length = byteof(to_args) } };
-	struct CommMsg data_msg { .data = { .address = _IMM(Sors), .length = Block_Size } };
-	msg.type = 0x04;// write
-	to_args[0] = getLowID();//{}
+	to_args[0] = getLowID();//{} ide00 ide01
 	to_args[1] = BlockIden;
-	syscall(syscall_t::COMM, COMM_SEND, Task_Hdd_Serv, &msg);
-	syscall(syscall_t::COMM, COMM_SEND, Task_Hdd_Serv, &data_msg);
+	syssend(Task_Hdd_Serv, sliceof(to_args), _IMM(FiledevMsg::WRITE));
+	syssend(Task_Hdd_Serv, Sors, Block_Size);
 	return true;
 }
 
@@ -105,8 +101,52 @@ static inode* create_file(rostr path, int flags)
 	return _TEMP 0;
 }
 
-static stdsint do_open(rostr pathname, int flags, ProcessBlock& process) {
+static stdsint do_open(rostr pathname, int flags, ProcessBlock& process, char* buffer) {
 	int fd = -1;
+	// find a available fileslot
+	for0a(i, process.pfiles) {
+		if (!process.pfiles[i]) {
+			fd = i;
+			break;
+		}
+	}
+	if (fd == -1) {
+		plogwarn("no file slot available");
+		return -1;
+	}
+	// find a free slot in f_desc_table
+	file_desc* pfd = NULL;
+	if (f_desc_table_count >= 0x1000 / sizeof(file_desc)) {
+		plogwarn("no file desc slot available");
+		return -1;
+	}
+	pfd = &f_desc_table[f_desc_table_count++];
+
+	int inode_nr = search_file(pathname, buffer);
+
+	struct inode* pin = 0;
+	if (flags & O_CREAT) {
+		if (inode_nr) {
+			ploginfo("file `%s' exists", pathname);
+			return -1;
+		}
+		else {
+			pin = create_file(pathname, flags);
+		}
+	}
+	else if (flags & O_RDWR) {
+		char filename[MAX_FILENAME_LEN] = {0};
+		struct inode * dir_inode;
+		if (strip_path(filename, pathname, &dir_inode) != 0)
+			return -1;
+		///////pin = get_inode(dir_inode->i_dev, inode_nr);
+	}
+	else {
+		plogwarn("bad flags");
+		return -1;
+	}
+
+	/// ...
 
 
 	return _TODO - 1;
@@ -114,49 +154,41 @@ static stdsint do_open(rostr pathname, int flags, ProcessBlock& process) {
 
 void serv_file_loop()
 {
+	f_desc_table = (file_desc*)Memory::physical_allocate(0x1000);
+	f_desc_table_count = nil;
 	buffer = (byte*)Memory::physical_allocate(0x1000);
 	ploginfo("%s", __FUNCIDEN__);
-	// struct CommMsg msg;
-	struct CommMsg data_msg;
-	stduint to_args[4];
-	// msg.type = 0;
-	// msg.data.address = _IMM(to_args);
-	// msg.data.length = byteof(to_args);
-	data_msg.data.address = _IMM(buffer);
-	data_msg.data.length = 0x1000;
+	stduint to_args[8];// 8*4=32 bytes
 	Harddisk_PATA_Paged IDE0_1(0x0001);
 	stduint sig_type = 0, sig_src;
+
 	while (true) {
 		switch (sig_type)
 		{
 		case 0:// TEST (no-feedback)
-			ploginfo("TESTING FILEMAN");
-			// syscall(syscall_t::COMM, COMM_SEND, Task_Hdd_Serv, &msg);
-			syssend(Task_Hdd_Serv, to_args, byteof(to_args), 0);
-
-			// mkfs
-			if (1) {
+			// plogtrac("TESTING FILEMAN");
+			syssend(Task_Hdd_Serv, &to_args, 0, _IMM(FiledevMsg::TEST));
+			if (0)
 				make_filesys(IDE0_1, buffer);
-			}//{} unchk
-
 			ploginfo("TESTING FILEMAN FINISHED");
 			break;
-		case 1:// HARDRUPT (usercall-forbidden)
+		case 1:// HARDRUPT (usercall-forbidden&meaningless)
 			break;
 		case 2:// OPEN
 		{
 			// open a file and return the file descriptor
-			ploginfo("[fileman] open %s with %[32H]", 1 + (byte*)to_args, ((byte*)to_args)[0]);
-			CommMsg msg_back;
+			ploginfo("[fileman] PID %u open %s with %[32H]", to_args[1], &to_args[2], to_args[0]);
+			// BYTE 0~ 3 : flags
+			// BYTE 4~ 7 : processid
+			// BYTE 8~31 : filename
 			stduint ret;
-			msg_back.data.address = _IMM(&ret);
-			msg_back.data.length = sizeof(ret);
 			ret = static_cast<stduint>(do_open(
-				(rostr)to_args,
-				((byte*)to_args)[0],
-				*TaskGet(_TODO _TODO _TODO 0)
-			));
-			syscall(syscall_t::COMM, COMM_SEND, sig_src, &msg_back);
+				(rostr)&to_args[2],
+				to_args[0],
+				*TaskGet(to_args[1]),
+				(char*)buffer
+				));
+			syssend(sig_src, &ret, sizeof(ret), 0);
 			break;
 		}
 		case 3:// CLOSE
@@ -174,9 +206,6 @@ void serv_file_loop()
 			plogerro("Bad TYPE in %s %s", __FILE__, __FUNCIDEN__);
 			break;
 		}
-		// syscall(syscall_t::COMM, COMM_RECV, 0, &msg);
-		// msg.data.address = _IMM(to_args);
-		// msg.data.length = byteof(to_args);
 		sysrecv(ANYPROC, to_args, byteof(to_args), &sig_type, &sig_src);
 	}
 }

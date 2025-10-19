@@ -47,20 +47,22 @@ static const byte syscall_paracnts[0x100] = {
 	3, //TEST // FXH
 };
 
-static stduint syscall_06_open(stduint* paras, ProcessBlock* pb)
+static stduint syscall_06_open(stduint* paras, stduint pid)
 {
+	plogtrac("%s", __FUNCIDEN__);
 	stduint open_buf[1];
-	byte pathname[byteof(stduint) * 4 - 2];
-	CommMsg msg{
-		.data = {.address = _IMM(&pathname), .length = sizeof(pathname) },
-		.type = 0x02,// open
-	};
-	pathname[0] = paras[1];
-	MemCopyP(pathname + 1, kernel_paging, (void*)paras[0], pb->paging, byteof(pathname));//{TODO} StrCopyP
-	syscall(syscall_t::COMM, COMM_SEND, Task_FileSys, &msg);
-	msg.data.address = _IMM(open_buf);
-	msg.data.length = sizeof(stduint);
-	syscall(syscall_t::COMM, COMM_RECV, Task_FileSys, &msg);
+	ProcessBlock* pb = TaskGet(pid);
+	struct {
+		stduint flag;
+		stduint pid;
+		char filename[sizeof(stduint) * (8 - 2)];
+	} open_msg;
+	open_msg.flag = paras[1];
+	open_msg.pid = pid;
+	auto len = StrCopyP(open_msg.filename, kernel_paging, (rostr)paras[0], pb->paging, byteof(open_msg.filename) - 1);
+	ploginfo("StrCopyN %u chars", len);
+	syssend(Task_FileSys, &open_msg, sizeof(open_msg), 0x02);
+	sysrecv(Task_FileSys, open_buf, byteof(open_buf));
 	if (cast<stdsint>(open_buf[0]) < 0) {
 		plogerro("open file failed: %d", open_buf[0]);
 		return 0;// no descriptor
@@ -109,14 +111,11 @@ static stduint call_body(const syscall_t callid, ...) {
 		//{}INTERRUPT src == ~1
 		ProcessBlock* pb = TaskGet(ProcessBlock::cpu0_task);
 		if (para[0] == 0b01) { // SEND
-			// ploginfo("%d wanna send to %d", pb->getID(), para[1]);
 			ret = msg_send(pb, (para[1]), (CommMsg*)para[2]);
-			// TaskGet(2)->Unblock(ProcessBlock::BlockReason::BR_RecvMsg);
 		}
 		else if (para[0] == 0b10) { // RECV
 			// ploginfo("%d wanna recv fo %d", pb->getID(), para[1]);
 			ret = msg_recv(pb, (para[1]), (CommMsg*)para[2]);
-			// TaskGet(2)->Block(ProcessBlock::BlockReason::BR_RecvMsg);
 		}
 		else {
 			printlog(_LOG_ERROR, "Bad `mode` of syscall 0x%[32H]", _IMM(callid));
@@ -128,7 +127,7 @@ static stduint call_body(const syscall_t callid, ...) {
 		break;
 	}
 	case syscall_t::OPEN:// (str, uint)->(uint)
-		return syscall_06_open(para, TaskGet(ProcessBlock::cpu0_task));
+		return syscall_06_open(para, ProcessBlock::cpu0_task);
 
 
 

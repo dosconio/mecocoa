@@ -55,4 +55,16 @@ inline static Harddisk_PATA* IndexDisk(unsigned dev) {
 	return disks[drv_id];
 }
 
+enum class FiledevMsg {
+	TEST,
+	RUPT,
+	CLOSE,
+	READ,
+	WRITE,
+	GETPS,// GetPartitionSlice aka geometry
+};
+
+#define	O_CREAT 0b01
+#define	O_RDWR  0b10
+
 #endif

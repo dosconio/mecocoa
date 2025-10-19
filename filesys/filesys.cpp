@@ -21,7 +21,7 @@ void make_filesys(Harddisk_PATA_Paged& ide, byte* buffer)
 {
 	bool state = false;
 	//
-	ploginfo("making FS on IDE%u", ide.getLowID());
+	ploginfo("making FS on IDE%u (buffer %[32H])", ide.getLowID(), buffer);
 	Slice total = ide.GetPartEntry(0);
 	// outsfmt("[mkfs]  0x%[32H] began %u secs\n\r", total.address * ide.Block_Size, total.length);
 
@@ -44,6 +44,7 @@ void make_filesys(Harddisk_PATA_Paged& ide, byte* buffer)
 	sb.entity.dir_ent_inode_off = offsof(dir_entry, inode_nr);
 	sb.entity.dir_ent_fname_off = offsof(dir_entry, name);
 	//
+
 	MemSet(buffer, 0x90, ide.Block_Size);
 	MemCopyN(buffer, &sb, SUPER_BLOCK_SIZE);
 	ide.Write(1, buffer);
@@ -130,7 +131,7 @@ inode* root_inode;
 
 // In Orange'S FS v1.0
 //{make sense of this}
-int search_file(char* path, char* const buffer_sector)
+int search_file(rostr path, char* const buffer_sector)
 {
 	int i, j;
 	char filename[MAX_FILENAME_LEN + 1] = { 0 };
