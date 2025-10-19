@@ -4,13 +4,18 @@
             "name": "Linux",
             "includePath": [
                 "${uincpath}",
-                "${workspaceFolder}/**"
+                "${workspaceFolder}/**",
+
+                "~/soft/edk2/MdePkg/Include",
+                "~/soft/edk2/MdePkg/Include/X64"
             ],
             "defines": [
                 "_MCCA=0x8632",
+				// "_MCCA=0x1032",
+                // "_MCCA=0x8664",
                 "_ARC_x86=5"
             ],
-            "compilerPath": "/usr/bin/gcc",
+            "compilerPath": "${ubinpath}/AMD64/Win64/bin/gcc.exe",
             "cStandard": "c99",
             "cppStandard": "c++11",
             "intelliSenseMode": "linux-gcc-x86"

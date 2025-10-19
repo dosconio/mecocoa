@@ -3,20 +3,41 @@ dg-publish: true
 her-note: false
 ---
 
-## Routines for Real-16
+20250707のAzusa(ArinaMgk) decided:
+- Kernel  Ring0
+- Service Ring1 (aka. Driver)
+- Module  Ring2
+- Subapp  Ring3
 
-80H Usual Interrupts
-- cancelled
 
 ## Routines for Flap-32
 
-Gate Segment `8*03` 
+Gate Segment `8*03` and Interrupt 81H.
 
-| Identification     | Function       | IO                 |
-| ------------------ | -------------- | ------------------ |
-| `ELSE` RotTerminal | Terminate back |                    |
-| `00` RotFormatShow |                | ESI → ASCIZ string |
-| `01` RotFormatRead |                |                    |
+Rule
+- Input
+	- EAX syscall-id
+	- ECX para 1
+	- EDX para 2
+	- EBX para 3
+- Output
+	- 
+
+`enum class syscall_t`
+
+| No. | Identification | Function  | IO                | Description                          |
+| --- | -------------- | --------- | ----------------- | ------------------------------------ |
+| 0   | OUTC           |           | (char)            | putchar current tty                  |
+| 1   | INNC           |           | (block_mode)→word | getchar<br>高字节包含键盘状态<br>**TODO**     |
+| 2   | EXIT           |           | (code)            | terminate program<br>uncheck for new |
+| 3   | TIME           | syssecond | ()→second         | 获取秒数                                 |
+| 4   | REST           | sysrest   |                   | HLT 直到下一次中断发生                        |
+| 5   | COMM           | syscomm   |                   |                                      |
+|     |                |           |                   |                                      |
+|     |                |           |                   |                                      |
+|     |                |           |                   |                                      |
+| FF  | TEST           |           | (T,E,S)           | 输入TES则反馈成功，并标注是哪个进程导致的               |
+
 
 
 

@@ -1,6 +1,6 @@
 
 #ENTRY(_start)
-BASE_ADDRESS = 0x8002C000;
+BASE_ADDRESS = 0x800000;
 SECTIONS
 {
 	/* Load the kernel at this address: "." means the current address */

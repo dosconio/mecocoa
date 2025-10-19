@@ -1,15 +1,16 @@
 // ASCII g++ TAB4 LF
 // Attribute: 
-// AllAuthor: @dosconio
+// AllAuthor: @dosconio, @ArinaMgk
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 #define _STYLE_RUST
+#undef _DEBUG
 #define _DEBUG
 #include <c/consio.h>
-#include "../include/atx-x86-flap32.hpp"
 
 
 use crate uni;
 #ifdef _ARC_x86 // x86:
+#include "../include/atx-x86-flap32.hpp"
 
 Letvar(Memory::p_basic, byte*, 0x1000); //.. 0x7000
 Letvar(Memory::p_ext, byte*, mem_area_exten_beg);
@@ -42,18 +43,19 @@ usize Memory::evaluate_size() {
 // Page size at least
 void* Memory::physical_allocate(usize siz) {
 	if (siz & 0xFFF) siz = (siz & ~_IMM(0xFFF)) + 0x1000;
-	if (p_basic + siz <= (void*)0x7000) {
+	if (p_basic + siz <= (void*)0x6000) {
 		void* ret = p_basic;
 		p_basic += siz;
-		if (opt_info) printlog(_LOG_INFO, "malloc_low(0x%[32H], %[u])", ret, siz);
-		//{} Pag-map
+		// if (opt_info) printlog(_LOG_INFO, "malloc_low(0x%[32H], %[u])", ret, siz);
+		//{} Pag-map for linear_allocate
 		return ret;
 	}
 	else if (usize(p_ext) + siz <= 0x00100000 + Memory::areax_size) {
 		void* ret = p_ext;
 		p_ext += siz;
-		if (opt_info) printlog(_LOG_INFO, "malloc_hig(0x%[32H], %[u])", ret, siz);
-		//{} Pag-map
+		// if (opt_info) printlog(_LOG_INFO, "malloc_hig(0x%[32H], %[u])", ret, siz);
+		//{} Pag-map for linear_allocate
+		//{} Add Kernel and Each App's PDT
 		return ret;
 	}
 	//{} try swap
@@ -79,25 +81,21 @@ Paging kernel_paging;
 extern stduint tmp;
 
 _TEMP void page_init() {
-	Paging::page_directory = (PageDirectory*)Memory::physical_allocate(0x1000);
-	kernel_paging.Reset();
-	PageDirectory& pdt = *Paging::page_directory;
+	kernel_paging.Reset();// should take 0x1000
+	kernel_paging.MapWeak(0x00000000, 0x00000000, 0x00400000, true, _Comment(R0 TOD) true);//{TODO} false
+	// kernel_paging.MapWeak(0xFFFFF000, _IMM(kernel_paging.page_directory), 0x00001000, false, _Comment(R0) false);// make loop PDT and do not unisym's
+	// for(i, 0x400) pdt[0x3FF][...] Page Tables
+	kernel_paging.MapWeak(0x80000000, 0x00000000, 0x00400000, true, _Comment(R0) false);
+	
+	
 	//
-	for0(i, 0x400)// kernel linearea 0x00000000 ~ 0x00400000
-		pdt[0][i].setMode(true, true, _TEMP true, i << 12);
-		// pdt[0][i].setMode(true, true, false, i << 12);
-	// pdt[0x3FF][0x3FF].setMode(true, true, false, _IMM(Paging::page_directory));// make loop PDT and do not unisym's
-	pdt[0x3FF][0x3FF].setMode(true, true, _TEMP true, _IMM(Paging::page_directory));// make loop PDT and do not unisym's
-	for0(i, 0x400)// global linearea 0x80000000 ~ 0x80400000
-		pdt[0x200][i].setMode(true, true, true, i << 12);
-	//
-	tmp = _IMM(Paging::page_directory);
+	tmp = _IMM(kernel_paging.page_directory);
 	__asm("movl tmp, %eax\n");
 	__asm("movl %eax, %cr3\n");
 	__asm("movl %cr0, %eax\n");
 	__asm("or   $0x80000000, %eax\n");// enable paging
 	__asm("movl %eax, %cr0\n");
-	rostr test_page = (rostr)"\xFF\x70[Mecocoa]\xFF\x02 Paging Test OK!\xFF\x07" + 0x80000000;
+	rostr test_page = (rostr)"\xFF\x70[Mecocoa]\xFF\x27 Paging Test OK!\xFF\x07" + 0x80000000;
 	if (opt_test) Console.OutFormat("%s\n\r", test_page);
 }
 
@@ -128,3 +126,47 @@ extern "C" {
 /*
 delete (void*) new int;
 */
+
+// ---- x86 ----
+
+#ifdef _ARC_x86 // x86:
+
+extern "C" void new_lgdt();
+
+static const uint32 gdt_magic[] = {
+	0x00000000, 0x00000000, // null
+	0x0000FFFF, 0x00CF9300, // data
+	0x0000FFFF, 0x00CF9B00, // code
+	0x00000000, 0x00000000, // call
+	0x0000FFFF, 0x000F9A00, // code-16
+	0x00000000, 0x00008900, // tss
+	// 0x0000FFFF, 0x00CFFA00, // code r3
+	// 0x0000FFFF, 0x00CFF200, // data r3
+};
+
+//{TODO} make into a class
+// 8*0 Null   , 8*1 Code R0, 8*2 Data R0, 8*3 Gate R3
+// 8*4 Co16   , 8*5 TSS    , 8*6 Codu R3, 8*7 Datu R3 (-u User)
+// Other TSS ... pass 8*(6,7)
+// previous GDT may be broken, omit __asm("sgdt _buf");
+void GDT_Init() {
+	MemCopyN(mecocoa_global->gdt_ptr, gdt_magic, sizeof(gdt_magic));
+	mecocoa_global->gdt_ptr->rout.setModeCall(_IMM(call_gate_entry()) | 0x80000000, SegCode);// 8*3 Call Gate
+	loadGDT(_IMM(mecocoa_global->gdt_ptr), mecocoa_global->gdt_len = sizeof(mec_gdt) - 1);// physical address
+	jmpFar(_IMM(new_lgdt), SegCode);
+	__asm("new_lgdt: mov $8, %eax;");
+	__asm("mov %eax, %ds; mov %eax, %es; mov %eax, %fs; mov %eax, %gs; mov %eax, %ss;");
+}
+
+word GDT_GetNumber() {
+	return (mecocoa_global->gdt_len + 1) / 8;
+}
+
+// allocate and apply, return the allocated number
+word GDT_Alloc() {
+	word ret = mecocoa_global->gdt_len + 1;
+	loadGDT(_IMM(mecocoa_global->gdt_ptr), mecocoa_global->gdt_len += 8);
+	return ret;
+}
+
+#endif

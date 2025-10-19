@@ -7,6 +7,9 @@
 		"appload-riscv64.h": "c",
 		"kernel-riscv64.h": "c",
 		"logging.h": "c",
-		"trap.h": "c"
+		"trap.h": "c",
+		"uefi.h": "c",
+		"uefibasetype.h": "c",
+		"base.h": "c"
 	}
 }
