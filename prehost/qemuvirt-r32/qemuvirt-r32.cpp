@@ -21,8 +21,11 @@ void _entry()
 	_global_object_init();
 	//[!] cannot use FLOATING operation (why)
 	UART0.setMode(115200);
+	#if _MCCA == 0x1064
+	UART0.OutFormat("%s\n", "Hello Mcca-RV64~ =OwO=");
+	#else
 	UART0.OutFormat("%s\n", "Hello Mcca-RV32~ =OwO=");
-
+	#endif
 	
 
 	while (1);

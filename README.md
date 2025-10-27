@@ -49,7 +49,7 @@ RISC `Fizik`
 		- **virtual**: qemu-system-riscv32
 	- **build**
 		- `make lib-r32`; `make build-r32` `make run-r32`
-- `r64 0x1064` RISC-V64
+- `r64 0x1064` RISC-V64, like `r32`
 - `ac7 0x2007` ARMv7 Cortex-A7
 	- dev-env `arm-none-eabi-* (Arm GNU Toolchain 12.2.MPACBTI-Rel1 (Build arm-12-mpacbti.34)) 12.2.1 20230214`
 	- **run**
