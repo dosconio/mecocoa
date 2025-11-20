@@ -21,10 +21,14 @@ her-note: false
 	- git submodule update --init --recursive
 	- make -C /home/phina/soft/edk2/BaseTools/Source/C
 
+## Requirement
+
+Hardware
+- Processor with functions of Paging and Interrupt
+
 ## Architecture
 
 Format `board-architecture-mode`
-
 
 CISC `VMBox/VMware/Bochs/QEMU/TODO(Simics,Wel)`
 - `x86 0x8632` Intel x86 (8086 -> i686+)
