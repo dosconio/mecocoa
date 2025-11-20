@@ -21,10 +21,14 @@ her-note: false
 	- git submodule update --init --recursive
 	- make -C /home/phina/soft/edk2/BaseTools/Source/C
 
+## Requirement
+
+Hardware
+- Processor with functions of Paging and Interrupt
+
 ## Architecture
 
 Format `board-architecture-mode`
-
 
 CISC `VMBox/VMware/Bochs/QEMU/TODO(Simics,Wel)`
 - `x86 0x8632` Intel x86 (8086 -> i686+)
@@ -49,7 +53,7 @@ RISC `Fizik`
 		- **virtual**: qemu-system-riscv32
 	- **build**
 		- `make lib-r32`; `make build-r32` `make run-r32`
-- `r64 0x1064` RISC-V64
+- `r64 0x1064` RISC-V64, like `r32`
 - `ac7 0x2007` ARMv7 Cortex-A7
 	- dev-env `arm-none-eabi-* (Arm GNU Toolchain 12.2.MPACBTI-Rel1 (Build arm-12-mpacbti.34)) 12.2.1 20230214`
 	- **run**

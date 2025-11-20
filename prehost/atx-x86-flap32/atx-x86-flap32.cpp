@@ -77,6 +77,14 @@ extern "C" void General_IRQHandler();
 
 bool ento_gui = false;
 
+void Cache() {
+	_ASM("mov %cr0, %eax");
+	_ASM("btr $29, %eax");// NW
+	_ASM("btr $30, %eax");// CD
+	_ASM("mov %eax, %cr0");
+}
+#define Cache() ((stduint(*)())Cache)()
+
 // in future, some may be abstracted into mecocoa/mccaker.cpp
 void MAIN();
 _sign_entry() {
@@ -103,6 +111,9 @@ void MAIN() {
 	TaskAdd(&krnl_tss);
 	__asm("mov $8*5, %eax; ltr %ax");
 
+	// Enable x86 Cache
+	Cache();
+
 	MccaTTYCon::cons_init();// located here, for  INT-10H may influence PIC
 
 	// IVT and Device
@@ -121,7 +132,6 @@ void MAIN() {
 
 	Console.OutFormat("Mem Avail: %s\n\r", ker_buf.reference());
 	Console.OutFormat("CPU Brand: %s\n\r", text_brand());
-
 
 	// Service
 	TaskRegister((void*)&MccaTTYCon::serv_cons_loop, 1);
