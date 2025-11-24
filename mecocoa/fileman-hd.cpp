@@ -119,6 +119,11 @@ namespace uni {
 		else return false;
 		return true;
 	}
+
+	// Use after print_identify_info
+	stduint Harddisk_PATA::getUnits() {
+		return hd_info[getHigID() * 2 + getLowID()].primary[0].length;
+	}
 }
 
 
@@ -131,11 +136,6 @@ struct iden_info_ascii {
 	{27, 40, "Model"} // Model number in ASCII
 };
 
-#define	DRV_OF_DEV(dev) (dev <= MAX_PRIM ? \
-	dev / NR_PRIM_PER_DRIVE : \
-	(dev - MINOR_hd1a) / NR_SUB_PER_DRIVE)
-
-
 static void hd_read(Harddisk_PATA& hd, Slice slice, stduint pg_task = nil);
 static void get_partition_table(Harddisk_PATA& drv, unsigned partable_sectposi, PartitionTableX86* pt)
 {
@@ -143,14 +143,18 @@ static void get_partition_table(Harddisk_PATA& drv, unsigned partable_sectposi, 
 	MemCopyN(pt, single_sector + PARTITION_TABLE_OFFSET, sizeof(*pt) * NR_PART_PER_DRIVE);
 }
 
+// Part Type
 #define NO_PART 0x00
 #define EX_PART 0x05
+
 #define ORANGES_PART 0x99// use its method
 
+// Initialize HD_Info
 void partition(unsigned device, bool primary_but_logical = true) {
 	unsigned drive = DRV_OF_DEV(device);
 	HD_Info& hdi = hd_info[drive];
-	PartitionTableX86* part_tbl = (PartitionTableX86*)single_sector;
+	ploginfo("%s: drive%u", __FUNCIDEN__, drive);
+	Letvar(part_tbl, PartitionTableX86*, single_sector);
 	if (primary_but_logical) {
 		get_partition_table(*disks[drive], 0, part_tbl);
 		int nr_prim_parts = 0;
@@ -185,7 +189,7 @@ void partition(unsigned device, bool primary_but_logical = true) {
 }
 
 
-static void print_identify_info(uint16* hdinfo, const Harddisk_PATA& hd)
+static void print_identify_info(uint16* hdinfo, Harddisk_PATA& hd)
 {
 	int i, k;
 	char s[64];
@@ -197,16 +201,16 @@ static void print_identify_info(uint16* hdinfo, const Harddisk_PATA& hd)
 			s[i * 2] = *p++;
 		}
 		s[i * 2] = 0;
-		if (_TEMP false) outsfmt("[Hrddisk] %s: %s\n\r", iinfo[k].desc, s);
+		if (false) outsfmt("[Hrddisk] %s: %s\n\r", iinfo[k].desc, s);
 	}
 
 	int capabilities = hdinfo[49];
 	int cmd_set_supported = hdinfo[83];
-	if (_TEMP false) outsfmt("[Hrddisk] LBA  : %s\n\r",
+	if (false) outsfmt("[Hrddisk] LBA  : %s\n\r",
 		(capabilities & 0x0200) ? (cmd_set_supported & 0x0400) ? "Supported LBA48" : "Supported" : "No");
 
 	int sectors = ((int)hdinfo[61] << 16) + hdinfo[60];
-	outsfmt("[Hrddisk] Size : %lf MB\n\r", (double)sectors* hd.getUnits() / 1024 / 1024);// care for #NM FPU Loss
+	outsfmt("[Hrddisk] Size : %lf MB\n\r", (double)sectors * hd.Block_Size / 1024 / 1024);// care for #NM FPU Loss
 
 	hd_info[hd.getHigID() * 2 + hd.getLowID()].primary[0].address = nil;
 	hd_info[hd.getHigID() * 2 + hd.getLowID()].primary[0].length = sectors;
@@ -215,6 +219,7 @@ static void print_identify_info(uint16* hdinfo, const Harddisk_PATA& hd)
 void print_hdinfo(Harddisk_PATA& hd)
 {
 	HD_Info& hdinfo = hd_info[hd.getHigID() * 2 + hd.getLowID()];
+	Console.OutFormat("driver %u:%u\n\r", hd.getHigID(), hd.getLowID());
 	Console.OutFormat("device LBA\n\r");
 	for0(i, NR_PART_PER_DRIVE + 1) {
 		if (hdinfo.primary[i].length) {
@@ -240,6 +245,7 @@ static void hd_open(Harddisk_PATA& hd) { // 0x00
 	cmd.command = ATA_IDENTIFY;
 	cmd.device = MAKE_DEVICE_REG(0, hd.getLowID(), 0);
 	lock = 0;
+	ploginfo("hd_open: %u, bs=%u", hd.getLowID(), hd.Block_Size);
 	Harddisk_PATA::Hdisk_OUT(&cmd, hd_cmd_wait);
 	hd_int_wait();
 	IN_wn(REG_DATA, (word*)single_sector, hd.Block_Size);
@@ -247,7 +253,7 @@ static void hd_open(Harddisk_PATA& hd) { // 0x00
 	if (!hd_info_valid[hd.getHigID() * 2 + hd.getLowID()]) {
 		if (_TEMP hd.getID() == 0x01) {
 			partition(hd.getID() * (NR_PART_PER_DRIVE + 1));
-			if (0) print_hdinfo(hd);
+			if (1) print_hdinfo(hd);
 		}
 		hd_info_valid[hd.getHigID() * 2 + hd.getLowID()] = true;
 	}
@@ -292,6 +298,7 @@ static void hd_write(Harddisk_PATA& hd, Slice slice, stduint pg_task)
 	cmd.command = ATA_WRITE;
 	lock = 0;
 	Harddisk_PATA::Hdisk_OUT(&cmd, hd_cmd_wait);
+	// ploginfo("fileman-hd %u write sector %u", hd.getID(), sect_nr);
 	while (slice.length) {
 		if (!waitfor(STATUS_DRQ, STATUS_DRQ, HD_TIMEOUT)) {
 			plogerro("hd writing error.");
@@ -306,21 +313,23 @@ static void hd_write(Harddisk_PATA& hd, Slice slice, stduint pg_task)
 	}
 }
 
-static void GetPartitionSlice(Harddisk_PATA& hd, unsigned device, stduint pg_task)
+static void GetPartitionSlice(unsigned device, stduint pg_task)
 {
 	//{} hd_info_valid
 	Slice* retp;
+	Harddisk_PATA& hd = *disks[DRV_OF_DEV(device)];
 	HD_Info& hdinfo = hd_info[hd.getHigID() * 2 + hd.getLowID()];
-	retp = device < NR_PRIM_PER_DRIVE ?
-	&hdinfo.primary[device % NR_PRIM_PER_DRIVE] :
-	&hdinfo.logical[(device - NR_PRIM_PER_DRIVE) % NR_SUB_PER_DRIVE];
-	// if (retp->length && device >= NR_PRIM_PER_DRIVE)
-	// 	ploginfo("[Hrddisk] GetPartitionSlice(%u -> log[%u])", device, (device - NR_PRIM_PER_DRIVE) % NR_SUB_PER_DRIVE);
+	retp = device < MINOR_hd1a ?
+		&hdinfo.primary[device % NR_PRIM_PER_DRIVE] :
+		&hdinfo.logical[(device - MINOR_hd1a) % NR_SUB_PER_DRIVE];
 	Slice ret = *retp;
 	syssend(pg_task, &ret, byteof(ret));
-	// ploginfo("[Hrddisk] GetPartitionSlice %u %u", ret.address, ret.length);
+	// ploginfo("[Hrddisk] %s dev%u->di%u : %u..%u", __FUNCIDEN__,
+	//	device, DRV_OF_DEV(device),
+	//	retp->address, retp->address + retp->length);
 }
 
+//// ---- ---- SERVICE ---- ---- ////
 static stduint args[4];
 void serv_dev_hd_loop()
 {
@@ -361,7 +370,7 @@ void serv_dev_hd_loop()
 			hd_write(*disks[(byte)args[0]], slice, sig_src);
 			break;
 		case FiledevMsg::GETPS:// (device 0 for all, 1~4 for primary, 5+ for logical)
-			GetPartitionSlice(*disks[(byte)args[0]], args[1], sig_src);
+			GetPartitionSlice(args[0], sig_src);
 			break;
 
 

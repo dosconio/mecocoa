@@ -4,6 +4,11 @@
 # ModuTitle: Startup
 # Copyright: Dosconio Mecocoa, BSD 3-Clause License
 #include "../../include/qemuvirt-r64.def.h"
+#define LOAD		ld
+#define STORE		sd
+#define SIZE_REG	8
+#define SIZE_PTR .dword
+
 
 .equ	STACK_SIZE, 1024
 

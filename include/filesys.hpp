@@ -32,12 +32,19 @@ struct super_block {
 	// the following item(s) are only present in memory
 	int	sb_dev; 	/**< the super block's home device: where it's from */
 };
-
 #define	SUPER_BLOCK_SIZE sizeof(super_block::super_block_entity) // for storage
 
 struct inode {
 	struct inode_entity {
 		u32	i_mode; /**< Accsess mode. type of file */
+			/* INODE::i_mode (octal, lower 12 bits reserved) */
+			#define I_TYPE_MASK     0170000
+			#define I_REGULAR       0100000
+			#define I_BLOCK_SPECIAL 0060000
+			#define I_DIRECTORY     0040000
+			#define I_CHAR_SPECIAL  0020000
+			#define I_NAMED_PIPE	0010000
+
 		u32	i_size; // File size. If size < (nr_sects * SECTOR_SIZE) : the rest bytes are wasted and reserved for later writing
 
 		//{} a slice
@@ -47,9 +54,9 @@ struct inode {
 		u8	_unused[16]; /**< Stuff for alignment */
 	} entity;
 	// the following items are only present in memory
-	int	i_dev;      // 0xAABB, e.g. 0x0100 for IDE1:0(maybe CD-ROM)// h[0] h[1~4][a~...], h[5], h[6~9][a~...]
+	int	i_dev;      // 
 	int	i_cnt;		/**< How many procs share this inode  */
-	int	i_num;		/**< inode nr.  */
+	int	i_num;		/**< inode nr. (S.N.) */
 };
 
 #define	INODE_SIZE sizeof(inode::inode_entity) // for storage
@@ -59,59 +66,103 @@ struct dir_entry {
 	int  inode_nr;		/**< inode nr. */
 	char name[MAX_FILENAME_LEN];	/**< Filename */
 };
-
 #define	DIR_ENTRY_SIZE sizeof(dir_entry) // for storage
 
-struct file_desc {
-	int fd_mode; /**< R or W */
-	int fd_pos; /**< Current position for R/W. */
-	struct inode* fd_inode; /**< Ptr to the i-node */
-};
 
-
-class FilesysMinix : public FilesysTrait
+class OrangesFs : public FilesysTrait
 {
-	
+public:
+	char* buffer_sector;
+	unsigned partid;
+	//
+	OrangesFs(unsigned dev, char* buffer);
+	virtual bool makefs() override;
+	virtual bool loadfs() override;
+	// `exinfo` is the return-inode
+	// using: create_file("/hello", 0);
+	virtual bool create(rostr fullpath, stduint flags, stduint* exinfo, rostr linkdest = 0) override;
+	virtual bool remove() override;// remove file/folder
+	virtual bool search(rostr fullpath, stduint* retback) override;// retback is the fd
+	virtual bool proper() override;// set proper
+	virtual bool enumer() override;
+	virtual bool readfl() override;// read file
+	virtual bool writfl() override;// write file
+
+	// // //
+	// Read superblock from the given device then write it into a free superblock[] slot.
+	void read_superblock ();
+	//
+	super_block* get_superblock();
+	// Get the inode ptr of given inode nr. A cache -- inode_table[] -- is maintained to make things faster. If the inode requested is already there, just return it. Otherwise the inode will be read from the disk.
+
+	inode* get_inode(stduint inod_idx);
+	// Decrease the reference nr of a slot in inode_table[]. When the nr reaches zero, it means the inode is not used any more and can be overwritten by a new inode.
+	static void put_inode(inode* pinode);
+	// Write the inode back to the disk. Commonly invoked as soon as the inode is changed.
+	void sync_inode(inode* p);
+	// // //
+protected:
+	//
+	inline char* read_sector(stduint sect_nr) {
+		bool state = storage->Read(sect_nr, buffer_sector);
+		return state ? buffer_sector : 0;
+	}
+	inline char* write_sector(stduint sect_nr) {
+		bool state = storage->Write(sect_nr, buffer_sector);
+		return state ? buffer_sector : 0;
+	}
+
+	// Generate a new i-node and write it to disk.
+	// [para] inode_nr    I-node nr.
+	// [para] start_sect  Start sector of the file pointed by the new i-node.
+	//{unchk}
+	inode* new_inode(stduint inode_nr, stduint start_sect);
+	// Write a new entry into the directory.
+	// [para] dir_inode  I-node of the directory. 
+	// [para] inode_nr   I-node nr of the new file.
+	// [para] filename   Filename of the new file. 
+	//{unchk}
+	void new_direntry(inode* dir_inode, int inode_nr, char* filename);
+
+	//// ---- ---- SEC-MAP ---- ---- ////
+
+	// Allocate a bit in inode-map
+	// return inode_nr;
+	//{unchk}
+	stduint alloc_imap_bit();
+	// Allocate a bit in sector-map.
+	// @return  The 1st sector nr allocated.
+	//{unchk}
+	int alloc_smap_bit(int nr_sects_to_alloc);
+
 
 public:
-	FilesysMinix(StorageTrait& s) {
-		storage = &s;
-	}
+
+	byte _buf_part[sizeof(Partition)];
+
+public: //{BELOW} need(?) consider ring-calling
+
+	// Return NULL if device is invalid or not-OFs
+	static OrangesFs* (*IndexOFs)(unsigned device);
+	// Return NULL if device is invalid
+	static FilesysTrait* (*IndexFs)(unsigned device);
 
 	
 };
+typedef OrangesFs FilesysMinix;
 
-struct FileDescriptor {
-	i32 fd_mode;// RW
-	u64 fd_pos;
-	inode* fd_inode;
-};
+//// ---- ---- . ---- ---- ////
+
+#define	NR_FILES	64
+#define	NR_FILE_DESC	64	/* FIXME */
+#define	NR_INODE	64	/* FIXME */
+#define	NR_SUPER_BLOCK	8
 
 
-#define	INVALID_INODE		0
-#define	ROOT_INODE		1
+#define	is_special(m)	((((m) & I_TYPE_MASK) == I_BLOCK_SPECIAL) ||	\
+			 (((m) & I_TYPE_MASK) == I_CHAR_SPECIAL))
 
-/* INODE::i_mode (octal, lower 12 bits reserved) */
-#define I_TYPE_MASK     0170000
-#define I_REGULAR       0100000
-#define I_BLOCK_SPECIAL 0060000
-#define I_DIRECTORY     0040000
-#define I_CHAR_SPECIAL  0020000
-#define I_NAMED_PIPE	0010000
+#define	NR_DEFAULT_FILE_SECTS	2048 /* 2048 * 512 = 1MB */
 
-#define	MAKE_DEV(a,b)		((a << 4) | b)
-
-void make_filesys(Harddisk_PATA_Paged& ide, byte* buffer);
-
-bool strip_path(char* filename, const char* pathname, struct inode** ppinode);
-
-struct FilesysOrange {
-	StorageTrait* storage;
-	FilesysOrange(StorageTrait& s) {
-		storage = &s;
-	}
-};
-
-int search_file(rostr path, char* const buffer_sector);
 
 #endif

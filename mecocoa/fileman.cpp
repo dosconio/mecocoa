@@ -21,7 +21,7 @@ use crate uni;
 // device h[0] h[1~4][a~...], h[5], h[6~9][a~...]
 
 static byte* buffer = nil;
-file_desc* f_desc_table = nil;
+FileDescriptor* f_desc_table = nil;
 stduint f_desc_table_count = 0;
 
 static stduint dev_drv_map[] = {
@@ -57,6 +57,15 @@ static bool hd_info_valid = false;
 
 #define NR_CONSOLES	4
 
+//// ---- ---- Partition & Harddisk_PATA_Paged Agent ---- ---- ////
+
+void Partition::renew_slice() {
+	stduint args[1];
+	args[0] = self.device;
+	syssend(Task_Hdd_Serv, sliceof(args), _IMM(FiledevMsg::GETPS));
+	sysrecv(Task_Hdd_Serv, &self.slice, sizeof(self.slice));
+}
+
 bool Harddisk_PATA_Paged::Read(stduint BlockIden, void* Dest) {
 	stduint to_args[2];
 	to_args[0] = getLowID();//{} ide00 ide01
@@ -65,6 +74,12 @@ bool Harddisk_PATA_Paged::Read(stduint BlockIden, void* Dest) {
 	sysrecv(Task_Hdd_Serv, Dest, Block_Size);
 	return true;
 }
+bool Partition::Read(stduint BlockIden, void* Dest) {
+	if (!slice.address && !slice.length) renew_slice();
+	// ONLY for IDE00 and IDE01
+	return Harddisk_PATA_Paged(DRV_OF_DEV(self.device)).Read(BlockIden + slice.address, Dest);
+}
+
 bool Harddisk_PATA_Paged::Write(stduint BlockIden, const void* Sors) {
 	stduint to_args[2];
 	to_args[0] = getLowID();//{} ide00 ide01
@@ -73,33 +88,75 @@ bool Harddisk_PATA_Paged::Write(stduint BlockIden, const void* Sors) {
 	syssend(Task_Hdd_Serv, Sors, Block_Size);
 	return true;
 }
+bool Partition::Write(stduint BlockIden, const void* Sors) {
+	if (!slice.address && !slice.length) renew_slice();
+	// ONLY for IDE00 and IDE01
+	return Harddisk_PATA_Paged(DRV_OF_DEV(self.device)).Write(BlockIden + slice.address, Sors);
+}
 
-Slice Harddisk_PATA_Paged::GetPartEntry(usize device)
+//// ---- ---- fs-irrelavant interface ---- ---- ////
+
+extern inode* root_inode;
+extern inode* inode_table;
+
+extern super_block superblocks[NR_SUPER_BLOCK];//{TEMP} in Static segment, should be managed in heap
+
+OrangesFs* pfs; const usize ROOT_DEV = MINOR_hd6a; 
+
+static OrangesFs* IndexOFs(unsigned dev) {
+	return ROOT_DEV == dev ? pfs : NULL;
+} OrangesFs* (*OrangesFs::IndexOFs)(unsigned) = IndexOFs;
+
+static FilesysTrait* IndexFs(unsigned dev) {
+	return ROOT_DEV == dev ? pfs : NULL;
+} FilesysTrait* (*OrangesFs::IndexFs)(unsigned) = IndexFs;
+
+
+
+
+
+// Return success.
+// * e.g. After strip_path(filename, "/blah", ppinode):
+// *      - filename: "blah"
+// *      - *ppinode: root_inode
+bool strip_path(char* filename, const char* pathname, inode** ppinode)
 {
-	stduint to_args[2];
-	struct CommMsg msg { .data = { .address = _IMM(to_args), .length = byteof(to_args) } };
-	msg.type = 0x05;
-	to_args[0] = self.getID();
-	to_args[1] = device;
-	syscall(syscall_t::COMM, COMM_SEND, Task_Hdd_Serv, &msg);
-	Slice part_entry = { 0 };
-	CommMsg msg1{ .data = {.address = _IMM(&part_entry), .length = sizeof(part_entry) } };
-	syscall(syscall_t::COMM, COMM_RECV, Task_Hdd_Serv, &msg1);
-	return part_entry;
+	const char* s = pathname;
+	char* t = filename;
+	//{} assert
+	if (*s == '/') s++;
+	while (*s) {
+		if (*s == '/') {
+			//{TEMP} at most one `/' preceding a filename
+			return false;
+		}
+		*t++ = *s++;
+		if (t - filename >= MAX_FILENAME_LEN - 1) break;
+	}
+	*t = 0;
+	*ppinode = root_inode;
+	return true;
+}
+
+static inode* create_file(rostr path, stduint flags)
+{
+	_TEMP;
+	inode* ret;
+	bool state = pfs->create(path, flags, (stduint*)&ret);
+	return state ? ret : NULL;
+}
+
+static stduint search_file(rostr path)
+{
+	_TEMP;
+	stduint ret = 0;
+	bool state = pfs->search(path, &ret);
+	return state ? ret : nil;
 }
 
 
+//// ---- ---- SYSCALL ---- ---- ////
 
-// e.g. create_file("/hello", 0);
-static inode* create_file(rostr path, int flags)
-{
-	char filename[_TEMP 20];
-	inode* dir_inode;
-	if (strip_path(filename, path, &dir_inode) != 0) return NULL;
-
-
-	return _TEMP 0;
-}
 
 static stdsint do_open(rostr pathname, int flags, ProcessBlock& process, char* buffer) {
 	int fd = -1;
@@ -115,52 +172,146 @@ static stdsint do_open(rostr pathname, int flags, ProcessBlock& process, char* b
 		return -1;
 	}
 	// find a free slot in f_desc_table
-	file_desc* pfd = NULL;
-	if (f_desc_table_count >= 0x1000 / sizeof(file_desc)) {
+	FileDescriptor* pfd = NULL;
+	if (f_desc_table_count >= 0x1000 / sizeof(FileDescriptor)) {
 		plogwarn("no file desc slot available");
 		return -1;
 	}
 	pfd = &f_desc_table[f_desc_table_count++];
-
-	int inode_nr = search_file(pathname, buffer);
-
-	struct inode* pin = 0;
+	stduint inode_nr = search_file(pathname);
+	inode* pin = 0;
 	if (flags & O_CREAT) {
 		if (inode_nr) {
-			ploginfo("file `%s' exists", pathname);
+			ploginfo("file `%s' exists: %u", pathname, inode_nr);
 			return -1;
 		}
 		else {
+			ploginfo("creating file...");
 			pin = create_file(pathname, flags);
+			ploginfo("creating file finish");
 		}
 	}
 	else if (flags & O_RDWR) {
 		char filename[MAX_FILENAME_LEN] = {0};
 		struct inode * dir_inode;
-		if (strip_path(filename, pathname, &dir_inode) != 0)
+		if (!strip_path(filename, pathname, &dir_inode)) {
+			plogwarn("bad filepath");
 			return -1;
-		///////pin = get_inode(dir_inode->i_dev, inode_nr);
+		}
+		pin = IndexOFs(dir_inode->i_dev)->get_inode(inode_nr);//{!} NULL-chk
 	}
 	else {
 		plogwarn("bad flags");
 		return -1;
 	}
+	if (pin) {
+		// connects proc with FileDescriptorriptor
+		process.pfiles[fd] = pfd;
+		/* connects FileDescriptorriptor with inode */
+		pfd->fd_inode = pin;
+		pfd->fd_mode = flags;
+		// pfd->fd_cnt = 1;
+		pfd->fd_pos = 0;
 
-	/// ...
+		int imode = pin->entity.i_mode & I_TYPE_MASK;
 
-
-	return _TODO - 1;
+		if (imode == I_CHAR_SPECIAL) {
+			plogerro("!!! unfinished in %s", __FUNCIDEN__);
+			//MESSAGE driver_msg;
+			//driver_msg.type = DEV_OPEN;
+			//int dev = pin->entity.i_start_sect;
+			//driver_msg.DEVICE = MINOR(dev);
+			//assert(MAJOR(dev) == 4);
+			//assert(dd_map[MAJOR(dev)].driver_nr != INVALID_DRIVER);
+			//send_recv(BOTH, dd_map[MAJOR(dev)].driver_nr, &driver_msg);
+		}
+		else if (imode == I_DIRECTORY) {
+			if (pin->i_num == ROOT_INODE); else
+				plogerro("%s %d", __FILE__, __LINE__);
+		}
+		else {
+			if (pin->entity.i_mode == I_REGULAR); else
+				plogerro("%s %d", __FILE__, __LINE__);
+		}
+	}
+	else {
+		plogwarn("!pin");
+		return -1;
+	}
+	ploginfo("do_open %s with fd %d", pathname, fd);
+	return fd;
 }
+int do_close(ProcessBlock& process, int fid)
+{
+	int fd = fid;
+	OrangesFs::put_inode(process.pfiles[fd]->fd_inode);
+	process.pfiles[fd]->fd_inode = 0;
+	process.pfiles[fd] = 0;
+	ploginfo("do_close %d", fd);
+	return 0;
+}
+//int do_lseek()
+//{
+//	int fd = fs_msg.FD;
+//	int off = fs_msg.OFFSET;
+//	int whence = fs_msg.WHENCE;
+//
+//	int pos = pcaller->filp[fd]->fd_pos;
+//	int f_size = pcaller->filp[fd]->fd_inode->i_size;
+//
+//	switch (whence) {
+//	case SEEK_SET:
+//		pos = off;
+//		break;
+//	case SEEK_CUR:
+//		pos += off;
+//		break;
+//	case SEEK_END:
+//		pos = f_size + off;
+//		break;
+//	default:
+//		return -1;
+//		break;
+//	}
+//	if ((pos > f_size) || (pos < 0)) {
+//		return -1;
+//	}
+//	pcaller->filp[fd]->fd_pos = pos;
+//	return pos;
+//}
+
+//// ---- ---- SERVICE ---- ---- ////
+char _buf_OFs[byteof(OrangesFs)];
 
 void serv_file_loop()
 {
-	f_desc_table = (file_desc*)Memory::physical_allocate(0x1000);
+	// Manually Initialize
+	{
+		OrangesFs::IndexOFs = IndexOFs;
+		OrangesFs::IndexFs = IndexFs;
+	}
+	f_desc_table = (FileDescriptor*)Memory::physical_allocate(0x1000);
 	f_desc_table_count = nil;
 	buffer = (byte*)Memory::physical_allocate(0x1000);
+	//
+	stduint&& inode_table_size = vaultAlignHexpow(0x1000, sizeof(inode) * NR_INODE);
+	inode_table = (inode*)Memory::physical_allocate(inode_table_size);
+	MemSet(inode_table, 0, sizeof(inode) * NR_INODE);
+	//
+	NR_FILE_DESC;
+	//{TODO}
+	//
+	NR_SUPER_BLOCK;
+	for0(i, 8) superblocks[i] = { 0 };//{why} MemSet here will BOOM!
+	//
 	ploginfo("%s", __FUNCIDEN__);
 	stduint to_args[8];// 8*4=32 bytes
-	Harddisk_PATA_Paged IDE0_1(0x0001);
+	
 	stduint sig_type = 0, sig_src;
+	
+	super_block* sb;
+
+	pfs = new (_buf_OFs) OrangesFs(ROOT_DEV, (char*)buffer);
 
 	while (true) {
 		switch (sig_type)
@@ -168,8 +319,10 @@ void serv_file_loop()
 		case 0:// TEST (no-feedback)
 			// plogtrac("TESTING FILEMAN");
 			syssend(Task_Hdd_Serv, &to_args, 0, _IMM(FiledevMsg::TEST));
-			if (0)
-				make_filesys(IDE0_1, buffer);
+			if (1)
+				pfs->makefs();
+			pfs->loadfs();
+			root_inode = pfs->get_inode(ROOT_INODE);
 			ploginfo("TESTING FILEMAN FINISHED");
 			break;
 		case 1:// HARDRUPT (usercall-forbidden&meaningless)
@@ -187,7 +340,7 @@ void serv_file_loop()
 				to_args[0],
 				*TaskGet(to_args[1]),
 				(char*)buffer
-				));
+			));
 			syssend(sig_src, &ret, sizeof(ret), 0);
 			break;
 		}

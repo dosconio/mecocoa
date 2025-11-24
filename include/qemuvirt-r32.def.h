@@ -3,7 +3,10 @@
 
 // QEMU RISC-V Virt machine with 16550a UART and VirtIO MMIO
 
-/* 
+#define MCAUSE_MASK_INTERRUPT	(reg_t)0x80000000
+#define MCAUSE_MASK_ECODE	(reg_t)0x7FFFFFFF
+
+/*
  * maximum number of CPUs
  * see https://github.com/qemu/qemu/blob/master/include/hw/riscv/virt.h
  * #define VIRT_CPUS_MAX 8

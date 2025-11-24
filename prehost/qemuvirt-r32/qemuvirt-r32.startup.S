@@ -4,6 +4,14 @@
 # ModuTitle: Startup
 # Copyright: Dosconio Mecocoa, BSD 3-Clause License
 #include "../../include/qemuvirt-r32.def.h"
+#define LOAD		lw
+#define STORE		sw
+#define SIZE_REG	4
+#define SIZE_PTR .word
+# using:
+# .section .rodata
+# .global HEAP_START
+#    HEAP_START: SIZE_PTR _heap_start
 
 .equ	STACK_SIZE, 1024
 

@@ -45,8 +45,11 @@ int main(int argc, char** argv)
 			}
 			if (now > 3) {
 				sysouts("Try Opening file\n\r");
-				stduint ok = syscall(0x6, _IMM("/a.txt"), 0x1234, nil);// open -> desc
-				sysouts(ok ? "\n\rfin open\n\r" : "\n\rfail open\n\r");
+				stduint ok = syscall(0x6, _IMM("/a.txt"), 0b01, nil);// open -> desc
+				sysouts(ok ? "Fin open\n\r" : "Fail open\n\r");
+				sysouts("Try Opening file Again\n\r");
+				ok = syscall(0x6, _IMM("/a.txt"), 0b01, nil);// open -> desc
+				sysouts(!ok ? "Fin check\n\r" : "Fail check\n\r");
 				break;
 
 			}

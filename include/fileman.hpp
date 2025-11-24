@@ -1,11 +1,13 @@
 #ifndef FILEMAN_HPP_
 #define FILEMAN_HPP_
 
-// drive  0:0=h[0]                0:1=h[5]
-// device     h[1~4]                  h[6~9]
-// subdev 0~15/16~31/32~47/48~63  64~...
+// The version just consider primary IDE
 
 bool waitfor(int mask, int val, int timeout_second);
+
+#define	DRV_OF_DEV(dev) (dev <= MAX_PRIM ? \
+	dev / NR_PRIM_PER_DRIVE : \
+	(dev - MINOR_hd1a) / NR_SUB_PER_DRIVE)
 
 #define MAX_DRIVES 2 // only for primary IDE
 #define NR_PART_PER_DRIVE    4 // 4 primary partitions per drive
@@ -16,6 +18,13 @@ bool waitfor(int mask, int val, int timeout_second);
 
 #define MAX_PRIM        (MAX_DRIVES * NR_PRIM_PER_DRIVE - 1) // 9. prim_dev ranges in hd[0-9] (h[0] h[1~4], h[5], h[6~9])
 #define MAX_SUBPARTITIONS    (NR_SUB_PER_DRIVE * MAX_DRIVES)
+
+#define MINOR_hd1a       0x10// should greater than MAX_PRIM
+#define MINOR_hd2a       (MINOR_hd1a+NR_SUB_PER_PART)
+#define MINOR_hd3a       (MINOR_hd1a+NR_SUB_PER_PART*2)
+#define MINOR_hd4a       (MINOR_hd1a+NR_SUB_PER_PART*3)
+#define MINOR_hd5a       (MINOR_hd1a+NR_SUB_PER_DRIVE)
+#define MINOR_hd6a       (MINOR_hd1a+NR_SUB_PER_DRIVE+NR_SUB_PER_PART*1)
 
 void DEV_Init();
 void serv_dev_hd_loop();
@@ -31,21 +40,39 @@ enum MajorDevice {
 	//
 	DEV_MAX
 };
-#define DEV_MAJOR_SHIFT     8
-#define DEV_MAKE_DEV(a,b)   ((a << DEV_MAJOR_SHIFT) | b)
-#define DEV_MAJOR(x)        ((x >> DEV_MAJOR_SHIFT) & 0xFF)
-#define DEV_MINOR(x)        (x & 0xFF)
-#define    MINOR_hd1a       0x10// should greater than MAX_PRIM
-#define    MINOR_hd2a       (MINOR_hd1a+NR_SUB_PER_PART)
+
+
 
 struct Harddisk_PATA_Paged : public Harddisk_PATA {
 	Harddisk_PATA_Paged(byte _id = 0, HarddiskType type = HarddiskType::ATA) : Harddisk_PATA(_id, type) {}
 	virtual bool Read(stduint BlockIden, void* Dest);
 	virtual bool Write(stduint BlockIden, const void* Sors);
-	Slice GetPartEntry(usize device);
+};
+extern Harddisk_PATA* disks[MAX_DRIVES];
+
+struct Partition : public StorageTrait
+{
+	int device;
+	Slice slice = {0};
+	//
+	Partition(int dev) : device(dev) { Block_Size = _TEMP 512; }
+	virtual bool Read(stduint BlockIden, void* Dest) override;
+	virtual bool Write(stduint BlockIden, const void* Sors) override;
+	virtual stduint getUnits() override {
+		if (!slice.address && !slice.length) renew_slice();
+		return slice.length;
+	}
+	Slice getSlice() {
+		if (!slice.address && !slice.length) renew_slice();
+		return slice;
+	}
+	virtual int operator[](uint64 bytid) override { _TODO return 0; }
+	//
+protected:
+	
+	void renew_slice();
 };
 
-extern Harddisk_PATA* disks[MAX_DRIVES];
 
 // for IDE0:0 and IDE0:1
 // Should be done by syscall. But here is linked as one program
@@ -66,5 +93,19 @@ enum class FiledevMsg {
 
 #define	O_CREAT 0b01
 #define	O_RDWR  0b10
+
+struct inode;
+struct FileDescriptor {
+	int fd_mode; /**< R or W */
+	int fd_pos; /**< Current position for R/W. */
+	inode* fd_inode; /**< Ptr to the i-node */
+};
+
+#define	INVALID_INODE 0
+#define	ROOT_INODE    1
+
+#define	MAKE_DEV(a,b)		((a << 4) | b)
+
+bool strip_path(char* filename, const char* pathname, inode** ppinode);
 
 #endif
