@@ -175,7 +175,7 @@ bool OrangesFs::search(rostr path, stduint* retback) {
 		asserv(retback)[0] = dir_inode->i_num;
 		return true;
 	}
-	ploginfo("%s: dev %u with path %s", __FUNCIDEN__, dir_inode->i_dev, path);
+	// ploginfo("%s: dev %u with path %s", __FUNCIDEN__, dir_inode->i_dev, path);
 	OrangesFs* fs = IndexOFs(dir_inode->i_dev);
 	if (!fs) fs = this;
 	// Search the dir for the file.

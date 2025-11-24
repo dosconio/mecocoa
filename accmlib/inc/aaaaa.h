@@ -38,7 +38,14 @@ extern "C" {
 	void sysquit(int code);
 
 	stduint systest(unsigned t, unsigned e, unsigned s);
-	
+
+	// return negative if failed
+	int sys_createfil(rostr fullpath);
+	//
+	int sysopen(rostr fullpath);
+	// return nil for success
+	int sysclose(int fd);
+
 #ifdef _INC_CPP
 }
 #endif

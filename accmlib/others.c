@@ -50,3 +50,18 @@ stduint systest(unsigned t, unsigned e, unsigned s)// FF
 {
 	syscall(0xFF, t, e, s);
 }
+
+int sys_createfil(rostr fullpath)
+{
+	stduint r = syscall(0x6, _IMM(fullpath), 0b01, nil);// open -> desc
+	return *(int*)&r;
+}
+
+int sysopen(rostr fullpath) {
+	stduint r = syscall(0x6, _IMM(fullpath), 0b10, nil);// open -> desc
+	return *(int*)&r;
+}
+int sysclose(int fd) {
+	return syscall(0x7, fd, nil, nil);
+}
+

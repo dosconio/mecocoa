@@ -158,7 +158,7 @@ static stduint search_file(rostr path)
 //// ---- ---- SYSCALL ---- ---- ////
 
 
-static stdsint do_open(rostr pathname, int flags, ProcessBlock& process, char* buffer) {
+static stdsint do_open(ProcessBlock& process, rostr pathname, int flags) {
 	int fd = -1;
 	// find a available fileslot
 	for0a(i, process.pfiles) {
@@ -244,6 +244,10 @@ static stdsint do_open(rostr pathname, int flags, ProcessBlock& process, char* b
 int do_close(ProcessBlock& process, int fid)
 {
 	int fd = fid;
+	if (!process.pfiles[fd]) {
+		ploginfo("do_close %d skip", fd);
+		return 1;
+	}
 	OrangesFs::put_inode(process.pfiles[fd]->fd_inode);
 	process.pfiles[fd]->fd_inode = 0;
 	process.pfiles[fd] = 0;
@@ -285,6 +289,7 @@ char _buf_OFs[byteof(OrangesFs)];
 
 void serv_file_loop()
 {
+	ploginfo("%s", __FUNCIDEN__);
 	// Manually Initialize
 	{
 		OrangesFs::IndexOFs = IndexOFs;
@@ -304,22 +309,17 @@ void serv_file_loop()
 	NR_SUPER_BLOCK;
 	for0(i, 8) superblocks[i] = { 0 };//{why} MemSet here will BOOM!
 	//
-	ploginfo("%s", __FUNCIDEN__);
 	stduint to_args[8];// 8*4=32 bytes
-	
 	stduint sig_type = 0, sig_src;
-	
 	super_block* sb;
-
 	pfs = new (_buf_OFs) OrangesFs(ROOT_DEV, (char*)buffer);
-
 	while (true) {
 		switch (sig_type)
 		{
 		case 0:// TEST (no-feedback)
 			// plogtrac("TESTING FILEMAN");
 			syssend(Task_Hdd_Serv, &to_args, 0, _IMM(FiledevMsg::TEST));
-			if (1)
+			if (0)
 				pfs->makefs();
 			pfs->loadfs();
 			root_inode = pfs->get_inode(ROOT_INODE);
@@ -336,17 +336,20 @@ void serv_file_loop()
 			// BYTE 8~31 : filename
 			stduint ret;
 			ret = static_cast<stduint>(do_open(
-				(rostr)&to_args[2],
-				to_args[0],
 				*TaskGet(to_args[1]),
-				(char*)buffer
+				(rostr)&to_args[2],
+				to_args[0]
 			));
 			syssend(sig_src, &ret, sizeof(ret), 0);
 			break;
 		}
-		case 3:// CLOSE
-			//{}
+		case 3:// CLOSE -> 0 for success
+		{
+			stduint ret;
+			ret = do_close(*TaskGet(to_args[1]), to_args[0]);
+			syssend(sig_src, &ret, sizeof(ret), 0);
 			break;
+		}
 		case 4:// READ
 			//{}
 			break;

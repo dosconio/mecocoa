@@ -26,8 +26,9 @@ static const byte syscall_paracnts[0x100] = {
 	0, //0x03 TIME ->(second)
 	0, //0x04 REST
 	3, //0x05 COMM
-	2, //0x06 OPEN (pathname,flags)->(success)
-	0, 0,0,0,0,0,0,0,0,// 0XH
+	2, //0x06 OPEN (pathname,flags)->(>= 0 if success)
+	1, //0x07 CLOS
+	0,0,0,0,0,0,0,0,// 0XH
 	// ---- 0x1X ----
 	0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,// 1XH
 	0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,// 2XH
@@ -60,14 +61,27 @@ static stduint syscall_06_open(stduint* paras, stduint pid)
 	open_msg.flag = paras[1];
 	open_msg.pid = pid;
 	auto len = StrCopyP(open_msg.filename, kernel_paging, (rostr)paras[0], pb->paging, byteof(open_msg.filename) - 1);
-	ploginfo("StrCopyN %u chars", len);
+	// ploginfo("StrCopyN %u chars", len);
 	syssend(Task_FileSys, &open_msg, sizeof(open_msg), 0x02);
 	sysrecv(Task_FileSys, open_buf, byteof(open_buf));
 	if (cast<stdsint>(open_buf[0]) < 0) {
-		plogerro("open file failed: %d", open_buf[0]);
-		return 0;// no descriptor
+		open_buf[0] = ~_IMM0;// no descriptor
 	}
-	return _TEMP 1;
+	ploginfo("open file: 0x%[32H]", open_buf[0]);
+	return open_buf[0];
+}
+
+static stduint syscall_07_close(stduint* paras, stduint pid) {
+	stduint open_buf[1];
+	struct {
+		stduint fd;
+		stduint pid;
+	} open_msg;
+	open_msg.fd = paras[0];
+	open_msg.pid = pid;
+	syssend(Task_FileSys, &open_msg, sizeof(open_msg), 0x03);
+	sysrecv(Task_FileSys, open_buf, byteof(open_buf));
+	return open_buf[0];// 0 for success
 }
 
 static stduint call_body(const syscall_t callid, ...) {
@@ -128,7 +142,8 @@ static stduint call_body(const syscall_t callid, ...) {
 	}
 	case syscall_t::OPEN:// (str, uint)->(uint)
 		return syscall_06_open(para, ProcessBlock::cpu0_task);
-
+	case syscall_t::CLOS:
+		return syscall_07_close(para, ProcessBlock::cpu0_task);
 
 
 
