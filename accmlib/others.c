@@ -64,4 +64,10 @@ int sysopen(rostr fullpath) {
 int sysclose(int fd) {
 	return syscall(0x7, fd, nil, nil);
 }
-
+stduint sysread(int fd, void* buf, stduint size)
+{
+	return syscall(0x8, fd, _IMM(buf), size);
+}
+stduint syswrite(int fd, void* buf, stduint size) {
+	return syscall(0x9, fd, _IMM(buf), size);
+}

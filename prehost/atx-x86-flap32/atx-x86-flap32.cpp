@@ -65,7 +65,8 @@ void krnl_init() {
 	//
 	_physical_allocate = Memory::physical_allocate;
 	_logstyle = _LOG_STYLE_NONE;
-	_pref_info = "[Mecocoa] ";
+	_pref_info = "[Mecocoa]";
+	_pref_warn = _pref_info;
 	_call_serious = (_tocall_ft)kernel_fail;//{TODO} DbgStop
 	_start_assert();
 }
@@ -128,7 +129,7 @@ void MAIN() {
 	
 	if (opt_test) __asm("ud2");
 
-	printlog(_LOG_WARN, " It isn't friendly to develop a kernel by pure C++.");
+	// printlog(_LOG_WARN, " It isn't friendly to develop a kernel by pure C++.");
 
 	Console.OutFormat("Mem Avail: %s\n\r", ker_buf.reference());
 	Console.OutFormat("CPU Brand: %s\n\r", text_brand());

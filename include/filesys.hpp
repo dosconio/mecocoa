@@ -115,24 +115,20 @@ protected:
 	// Generate a new i-node and write it to disk.
 	// [para] inode_nr    I-node nr.
 	// [para] start_sect  Start sector of the file pointed by the new i-node.
-	//{unchk}
 	inode* new_inode(stduint inode_nr, stduint start_sect);
 	// Write a new entry into the directory.
 	// [para] dir_inode  I-node of the directory. 
 	// [para] inode_nr   I-node nr of the new file.
 	// [para] filename   Filename of the new file. 
-	//{unchk}
 	void new_direntry(inode* dir_inode, int inode_nr, char* filename);
 
 	//// ---- ---- SEC-MAP ---- ---- ////
 
 	// Allocate a bit in inode-map
 	// return inode_nr;
-	//{unchk}
 	stduint alloc_imap_bit();
 	// Allocate a bit in sector-map.
 	// @return  The 1st sector nr allocated.
-	//{unchk}
 	int alloc_smap_bit(int nr_sects_to_alloc);
 
 

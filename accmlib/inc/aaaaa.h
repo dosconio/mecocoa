@@ -45,6 +45,10 @@ extern "C" {
 	int sysopen(rostr fullpath);
 	// return nil for success
 	int sysclose(int fd);
+	//
+	stduint sysread(int fd, void* buf, stduint size);
+	//
+	stduint syswrite(int fd, void* buf, stduint size);
 
 #ifdef _INC_CPP
 }

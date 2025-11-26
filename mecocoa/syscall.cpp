@@ -26,9 +26,11 @@ static const byte syscall_paracnts[0x100] = {
 	0, //0x03 TIME ->(second)
 	0, //0x04 REST
 	3, //0x05 COMM
-	2, //0x06 OPEN (pathname,flags)->(>= 0 if success)
-	1, //0x07 CLOS
-	0,0,0,0,0,0,0,0,// 0XH
+	2, //0x06 OPEN (pathname,flags)->(fd: < 0 if not success)
+	1, //0x07 CLOS (fd)
+	4, //0x08 READ (fd, slice.addr, slice.len) ->(bytes_done)
+	4, //0x09 WRIT (fd, slice.addr, slice.len) ->(bytes_done)
+	0,0,0,0,0,0,// 0XH
 	// ---- 0x1X ----
 	0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,// 1XH
 	0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,// 2XH
@@ -84,12 +86,13 @@ static stduint syscall_07_close(stduint* paras, stduint pid) {
 	return open_buf[0];// 0 for success
 }
 
+
 static stduint call_body(const syscall_t callid, ...) {
 	auto task_switch_enable_old = task_switch_enable;//{TODO} {MUTEX for multi-Proc}
 	task_switch_enable = false;
 	//
 	Letpara(paras, callid);
-	stduint para[3];
+	stduint para[3] = {0xF1, 0xF8, 0xFA};// magic for debug
 	stduint ret = 0;
 	if (_IMM(callid) >= numsof(syscall_paracnts)) return ~_IMM0;
 	byte pcnt = syscall_paracnts[_IMM(callid)];
@@ -144,7 +147,18 @@ static stduint call_body(const syscall_t callid, ...) {
 		return syscall_06_open(para, ProcessBlock::cpu0_task);
 	case syscall_t::CLOS:
 		return syscall_07_close(para, ProcessBlock::cpu0_task);
-
+	case syscall_t::READ:
+	case syscall_t::WRIT:
+	{
+		stduint open_buf[4];
+		open_buf[0] = para[0];// fid
+		open_buf[1] = para[1];// addr
+		open_buf[2] = para[2];// len
+		open_buf[3] = ProcessBlock::cpu0_task;
+		syssend(Task_FileSys, open_buf, byteof(open_buf), _IMM(callid) - _IMM(syscall_t::READ) + _IMM(FilemanMsg::READ));
+		sysrecv(Task_FileSys, open_buf, byteof(open_buf[0]));
+		return open_buf[0];// 0 for success
+	}
 
 
 	case syscall_t::TEST:

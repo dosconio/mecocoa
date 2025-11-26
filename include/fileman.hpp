@@ -89,6 +89,15 @@ enum class FiledevMsg {
 	READ,
 	WRITE,
 	GETPS,// GetPartitionSlice aka geometry
+};// for fileman-hd
+
+enum class FilemanMsg {
+	TEST,
+	RUPT,
+	OPEN,
+	CLOSE,
+	READ,
+	WRITE,
 };
 
 #define	O_CREAT 0b01
@@ -104,7 +113,7 @@ struct FileDescriptor {
 #define	INVALID_INODE 0
 #define	ROOT_INODE    1
 
-#define	MAKE_DEV(a,b)		((a << 4) | b)
+#define	MAKE_DEV(a,b)		((a << 16) | b)
 
 bool strip_path(char* filename, const char* pathname, inode** ppinode);
 

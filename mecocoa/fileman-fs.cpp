@@ -211,7 +211,6 @@ bool OrangesFs::writfl() {return _TODO false;}
 //// ---- ---- SUPERBLOCK ---- ---- ////
 super_block superblocks[NR_SUPER_BLOCK];//{TEMP} in Static segment, should be managed in heap
 
-//{unchk}
 void OrangesFs::read_superblock()
 {
 	ploginfo("read super block of device %d", partid);
@@ -228,7 +227,6 @@ void OrangesFs::read_superblock()
 	// unexpected reachable
 	plogerro("No free super block slot");
 }
-//{unchk}
 super_block* OrangesFs::get_superblock() {
 	for0(i, NR_SUPER_BLOCK) {
 		if (superblocks[i].sb_dev == partid)
@@ -243,7 +241,6 @@ super_block* OrangesFs::get_superblock() {
 //// ---- ---- INODE ---- ---- ////
 inode* inode_table;// cnt NR_INODE
 // 
-//{unchk}
 inode* OrangesFs::get_inode(stduint inod_idx)
 {
 	if (!inod_idx) return 0;
@@ -284,7 +281,6 @@ inode* OrangesFs::get_inode(stduint inod_idx)
 	return q;
 }
 
-//{unchk}
 void OrangesFs::put_inode(inode * pinode)
 {
 	if (pinode->i_cnt > 0); else {
@@ -294,7 +290,6 @@ void OrangesFs::put_inode(inode * pinode)
 	pinode->i_cnt--;
 }
 
-//{unchk}
 void OrangesFs::sync_inode(inode* p)
 {
 	inode* pinode;

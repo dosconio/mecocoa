@@ -52,8 +52,10 @@ enum class syscall_t : stduint {
 	TIME = 0x03, // getsecond
 	REST = 0x04, // halt
 	COMM = 0x05, // communicate: send or receive
-	OPEN = 0x06, // open file
+	OPEN = 0x06, // open  file
 	CLOS = 0x07, // close file                    // (fd)->0
+	READ = 0x08, // read  file               // (fd, addr, len)
+	WRIT = 0x09, // write file               // (fd, addr, len)
 
 	TEST = 0xFF,
 };

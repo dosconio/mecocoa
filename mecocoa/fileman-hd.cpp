@@ -34,15 +34,11 @@ void fileman_hd() {
 		disks[i] = new (hdd_buf + i * byteof(**disks)) Harddisk_PATA(i);
 	}
 	disks[0]->setInterrupt(NULL);
-	single_sector = (char*)malloc(0x1000);
+	single_sector = (char*)Memory::physical_allocate(0x1000);
 }
 
 
 static byte lock = 1;
-
-
-#define	MAKE_DEVICE_REG(lba,drv,lba_highest) (((lba) << 6) | ((drv) << 4) | ((lba_highest) & 0xF) | 0xA0)
-
 
 void Handint_HDD()// HDD Master
 {
@@ -153,7 +149,7 @@ static void get_partition_table(Harddisk_PATA& drv, unsigned partable_sectposi, 
 void partition(unsigned device, bool primary_but_logical = true) {
 	unsigned drive = DRV_OF_DEV(device);
 	HD_Info& hdi = hd_info[drive];
-	ploginfo("%s: drive%u", __FUNCIDEN__, drive);
+	// ploginfo("%s: drive%u", __FUNCIDEN__, drive);
 	Letvar(part_tbl, PartitionTableX86*, single_sector);
 	if (primary_but_logical) {
 		get_partition_table(*disks[drive], 0, part_tbl);
@@ -188,7 +184,7 @@ void partition(unsigned device, bool primary_but_logical = true) {
 	}
 }
 
-
+//{} -> load_disk_info
 static void print_identify_info(uint16* hdinfo, Harddisk_PATA& hd)
 {
 	int i, k;
@@ -210,13 +206,13 @@ static void print_identify_info(uint16* hdinfo, Harddisk_PATA& hd)
 		(capabilities & 0x0200) ? (cmd_set_supported & 0x0400) ? "Supported LBA48" : "Supported" : "No");
 
 	int sectors = ((int)hdinfo[61] << 16) + hdinfo[60];
-	outsfmt("[Hrddisk] Size : %lf MB\n\r", (double)sectors * hd.Block_Size / 1024 / 1024);// care for #NM FPU Loss
+	// outsfmt("[Hrddisk] Size : %lf MB\n\r", (double)sectors * hd.Block_Size / 1024 / 1024);// care for #NM FPU Loss
 
 	hd_info[hd.getHigID() * 2 + hd.getLowID()].primary[0].address = nil;
 	hd_info[hd.getHigID() * 2 + hd.getLowID()].primary[0].length = sectors;
 }
 
-void print_hdinfo(Harddisk_PATA& hd)
+inline static void print_hdinfo(Harddisk_PATA& hd)
 {
 	HD_Info& hdinfo = hd_info[hd.getHigID() * 2 + hd.getLowID()];
 	Console.OutFormat("driver %u:%u\n\r", hd.getHigID(), hd.getLowID());
@@ -245,7 +241,7 @@ static void hd_open(Harddisk_PATA& hd) { // 0x00
 	cmd.command = ATA_IDENTIFY;
 	cmd.device = MAKE_DEVICE_REG(0, hd.getLowID(), 0);
 	lock = 0;
-	ploginfo("hd_open: %u, bs=%u", hd.getLowID(), hd.Block_Size);
+	// ploginfo("hd_open: %u, bs=%u", hd.getLowID(), hd.Block_Size);
 	Harddisk_PATA::Hdisk_OUT(&cmd, hd_cmd_wait);
 	hd_int_wait();
 	IN_wn(REG_DATA, (word*)single_sector, hd.Block_Size);
@@ -253,7 +249,7 @@ static void hd_open(Harddisk_PATA& hd) { // 0x00
 	if (!hd_info_valid[hd.getHigID() * 2 + hd.getLowID()]) {
 		if (_TEMP hd.getID() == 0x01) {
 			partition(hd.getID() * (NR_PART_PER_DRIVE + 1));
-			if (1) print_hdinfo(hd);
+			// if (1) print_hdinfo(hd);
 		}
 		hd_info_valid[hd.getHigID() * 2 + hd.getLowID()] = true;
 	}
@@ -339,7 +335,7 @@ void serv_dev_hd_loop()
 		while (1);
 	}
 	
-	Console.OutFormat("[Hrddisk] detect %u disks\n\r", bda->hdisk_number);
+	// Console.OutFormat("[Hrddisk] detect %u disks\n\r", bda->hdisk_number);
 	Slice slice;
 	slice.length = 1;
 	stduint sig_type = 0, sig_src;
@@ -349,8 +345,8 @@ void serv_dev_hd_loop()
 		{
 		case FiledevMsg::TEST:// (no-feedback)
 			for0(i, bda->hdisk_number) {
-				Console.OutFormat("[Hrddisk] %u:%u:\n\r", i / MAX_DRIVES, i % MAX_DRIVES);
 				hd_open(*disks[i]);
+				Console.OutFormat("[Hrddisk] Detect Disk on IDE%u:%u : %u MB\n\r", i / MAX_DRIVES, i % MAX_DRIVES, _IMM(disks[i]->getUnits() * disks[i]->Block_Size) >> 20);
 			}
 			break;
 		case FiledevMsg::RUPT:// (usercall-forbidden)

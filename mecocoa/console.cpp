@@ -293,20 +293,17 @@ static void tty_parse(MccaTTYCon& tty, byte keycode, keyboard_state_t state) { /
 
 void _Comment(R1) MccaTTYCon::serv_cons_loop()
 {
-	while(1); _TODO
-
 	// struct element { byte ch; byte attr; };
 	// Letvar(Ribbon, element*, (0xB8000 + 80 * 2 * 24));
 	// Ribbon[0].ch = '^';
 	// Ribbon[1].ch = '-';
 	// Ribbon[2].ch = '+';
-
 	// Ribbon[77].ch = '+';
 	// Ribbon[78].ch = '-';
 	// Ribbon[79].ch = '^';
 
 	while (true) {
-		for0(i, 4) {
+		if (!ento_gui) for0(i, 4) {
 			MccaTTYCon& tty = *ttycons[i];
 			int ch;
 			while (-1 != (ch = tty.get_inn())) {
