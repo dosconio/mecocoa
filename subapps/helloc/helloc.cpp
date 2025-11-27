@@ -11,47 +11,27 @@ int main(int argc, char** argv)
 			stduint now = syssecond();
 			if (now >= 6) break;
 		}
+		rostr files[] = { "/file1", "/file2", "/file3" };// dev_tty0
+		rostr filer[] = { "/file1", "/file2", "/file0", "/dev_tty0" };
+		int fd;
+		int ok;
 		while (1) {
-			
 			sysrest();
 			//
-			int fd;
-			int ok;
-			const char filename[] = "/a2.txt";
-			const char writebuf[] = "phina";
-			char read_buf[10];
-			//// create
-			//ok = sys_createfil(filename);
-			//sysouts("[1] ");
-			//sysouts(ok >= 0 ? "Fin create\n\r" : "Fail create\n\r");
-			// open
-			fd = sysopen(filename);
-			sysouts("[2] ");
-			sysouts(fd >= 0 ? "Fin open\n\r" : "Fail open\n\r");
-			// write
-			ok = syswrite(fd, (void*)writebuf, 6);
-			sysouts("[3] ");
-			sysouts(ok == 6 ? "Fin write\n\r" : "Fail write\n\r");
-			// close
-			ok = sysclose(fd);
-			sysouts("[4] ");
-			sysouts(ok == 0 ? "Fin close\n\r" : "Fail close\n\r");
-			// open
-			fd = sysopen(filename);
-			sysouts("[5] ");
-			sysouts(fd >= 0 ? "Fin open\n\r" : "Fail open\n\r");
-			// read
-			ok = sysread(fd, (void*)read_buf, 6);
-			sysouts("[6] ");
-			if (read_buf[0] == 'p' && read_buf[1] == 'h' && read_buf[2] == 'i' && read_buf[3] == 'n' && read_buf[4] == 'a' && read_buf[5] == '\0') {
-				sysouts("Fin read\n\r");
-			} else {
-				sysouts("Fail read\n\r");
+			for0a(i, files) {
+				fd = sys_createfil(files[i]);
+				sysouts(fd >= 0 ? "Fin  create " : "Fail create ");
+				sysouts(files[i]);
+				sysouts("\n\r");
+				sysclose(fd);
 			}
-			// close
-			ok = sysclose(fd);
-			sysouts("[7] ");
-			sysouts(ok == 0 ? "Fin close\n\r" : "Fail close\n\r");
+			for0a(i, filer) {
+				ok = !sys_removefil(filer[i]);
+				sysouts(ok ? "Fin  remove " : "Fail remove ");
+				sysouts(filer[i]);
+				sysouts("\n\r");
+			}
+
 			//
 			break;
 		}

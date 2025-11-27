@@ -30,7 +30,8 @@ static const byte syscall_paracnts[0x100] = {
 	1, //0x07 CLOS (fd)
 	4, //0x08 READ (fd, slice.addr, slice.len) ->(bytes_done)
 	4, //0x09 WRIT (fd, slice.addr, slice.len) ->(bytes_done)
-	0,0,0,0,0,0,// 0XH
+	1, //0x0A DELF (pathname)
+	0,0,0,0,0,// 0XH
 	// ---- 0x1X ----
 	0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,// 1XH
 	0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,// 2XH
@@ -52,7 +53,7 @@ static const byte syscall_paracnts[0x100] = {
 
 static stduint syscall_06_open(stduint* paras, stduint pid)
 {
-	plogtrac("%s", __FUNCIDEN__);
+	// plogtrac("%s", __FUNCIDEN__);
 	stduint open_buf[1];
 	ProcessBlock* pb = TaskGet(pid);
 	struct {
@@ -69,7 +70,7 @@ static stduint syscall_06_open(stduint* paras, stduint pid)
 	if (cast<stdsint>(open_buf[0]) < 0) {
 		open_buf[0] = ~_IMM0;// no descriptor
 	}
-	ploginfo("open file: 0x%[32H]", open_buf[0]);
+	// ploginfo("open file: 0x%[32H]", open_buf[0]);
 	return open_buf[0];
 }
 
@@ -156,6 +157,16 @@ static stduint call_body(const syscall_t callid, ...) {
 		open_buf[2] = para[2];// len
 		open_buf[3] = ProcessBlock::cpu0_task;
 		syssend(Task_FileSys, open_buf, byteof(open_buf), _IMM(callid) - _IMM(syscall_t::READ) + _IMM(FilemanMsg::READ));
+		sysrecv(Task_FileSys, open_buf, byteof(open_buf[0]));
+		return open_buf[0];// 0 for success
+	}
+	case syscall_t::DELF:// (usr filename) --> (pid, filename[7]...) --> (!success)
+	{
+		stduint open_buf[(8)];
+		ProcessBlock* pb = TaskGet(ProcessBlock::cpu0_task);
+		open_buf[0] = ProcessBlock::cpu0_task;
+		StrCopyP((char*)&open_buf[1], kernel_paging, (rostr)para[0], pb->paging, byteof(stduint) * 7 - 1);
+		syssend(Task_FileSys, open_buf, byteof(open_buf), _IMM(FilemanMsg::REMOVE));
 		sysrecv(Task_FileSys, open_buf, byteof(open_buf[0]));
 		return open_buf[0];// 0 for success
 	}

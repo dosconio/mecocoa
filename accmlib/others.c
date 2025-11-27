@@ -71,3 +71,8 @@ stduint sysread(int fd, void* buf, stduint size)
 stduint syswrite(int fd, void* buf, stduint size) {
 	return syscall(0x9, fd, _IMM(buf), size);
 }
+
+int sys_removefil(rostr fullpath)
+{
+	return syscall(0xA, _IMM(fullpath), nil, nil);
+}

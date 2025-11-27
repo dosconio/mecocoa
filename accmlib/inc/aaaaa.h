@@ -49,6 +49,8 @@ extern "C" {
 	stduint sysread(int fd, void* buf, stduint size);
 	//
 	stduint syswrite(int fd, void* buf, stduint size);
+	// return nil for success
+	int sys_removefil(rostr fullpath);
 
 #ifdef _INC_CPP
 }

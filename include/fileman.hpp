@@ -98,6 +98,7 @@ enum class FilemanMsg {
 	CLOSE,
 	READ,
 	WRITE,
+	REMOVE,
 };
 
 #define	O_CREAT 0b01

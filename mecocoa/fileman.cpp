@@ -284,9 +284,7 @@ static stdsint do_open(ProcessBlock& process, rostr pathname, int flags) {
 			return -1;
 		}
 		else {
-			ploginfo("creating file...");
 			pin = create_file(pathname, flags);
-			ploginfo("creating file finish");
 		}
 	}
 	else if (flags & O_RDWR) {
@@ -336,7 +334,7 @@ static stdsint do_open(ProcessBlock& process, rostr pathname, int flags) {
 		plogwarn("!pin");
 		return -1;
 	}
-	ploginfo("do_open %s with fd %d", pathname, fd);
+	// ploginfo("do_open %s with fd %d", pathname, fd);
 	return fd;
 }
 int do_close(ProcessBlock& process, int fid)
@@ -385,6 +383,11 @@ int do_close(ProcessBlock& process, int fid)
 //// ---- ---- SERVICE ---- ---- ////
 char _buf_OFs[byteof(OrangesFs)];
 
+stduint serv_file_loop_remove(stduint pid, rostr filename) {
+	_TEMP;
+	pid;
+	return pfs->remove(filename) ? 0 : -1;
+}
 void serv_file_loop()
 {
 	// ploginfo("%s", __FUNCIDEN__);
@@ -412,6 +415,8 @@ void serv_file_loop()
 	super_block* sb;
 	pfs = new (_buf_OFs) OrangesFs(ROOT_DEV, (char*)buffer);
 
+	stduint retval[1];
+
 	bool ready = false;
 	while (true) {
 		switch ((FilemanMsg)sig_type)
@@ -419,7 +424,7 @@ void serv_file_loop()
 		case FilemanMsg::TEST:// (no-feedback)
 			// plogtrac("TESTING FILEMAN");
 			syssend(Task_Hdd_Serv, &to_args, 0, _IMM(FiledevMsg::TEST));
-			if (0)
+			if (1)
 				pfs->makefs();
 			ready = pfs->loadfs();
 			root_inode = pfs->get_inode(ROOT_INODE);
@@ -430,7 +435,7 @@ void serv_file_loop()
 		case FilemanMsg::OPEN://
 		{
 			// open a file and return the file descriptor
-			ploginfo("[fileman] PID %u open %s with %[32H]", to_args[1], &to_args[2], to_args[0]);
+			// ploginfo("[fileman] PID %u open %s with %[32H]", to_args[1], &to_args[2], to_args[0]);
 			// BYTE 0~ 3 : flags
 			// BYTE 4~ 7 : processid
 			// BYTE 8~31 : filename
@@ -450,12 +455,18 @@ void serv_file_loop()
 			syssend(sig_src, &ret, sizeof(ret), 0);
 			break;
 		}
-		case  FilemanMsg::READ://
-		case  FilemanMsg::WRITE://
+		case FilemanMsg::READ://
+		case FilemanMsg::WRITE://
 		{
 			stduint ret = do_rdwt((FilemanMsg)sig_type == FilemanMsg::WRITE,
 				to_args[0], Slice{ to_args[1], to_args[2] }, to_args[3]);
 			syssend(sig_src, &ret, sizeof(ret));
+			break;
+		}
+		case FilemanMsg::REMOVE:// --> (pid, filename[7]...) --> (!success)
+		{
+			retval[0] = serv_file_loop_remove(to_args[0], (rostr)&to_args[1]);
+			syssend(sig_src, &retval, sizeof(retval[0]));
 			break;
 		}
 		// ... ...

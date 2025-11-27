@@ -72,7 +72,7 @@ struct dir_entry {
 class OrangesFs : public FilesysTrait
 {
 public:
-	char* buffer_sector;
+	byte* buffer_sector;
 	unsigned partid;
 	//
 	OrangesFs(unsigned dev, char* buffer);
@@ -81,7 +81,9 @@ public:
 	// `exinfo` is the return-inode
 	// using: create_file("/hello", 0);
 	virtual bool create(rostr fullpath, stduint flags, stduint* exinfo, rostr linkdest = 0) override;
-	virtual bool remove() override;// remove file/folder
+	// clear the i-node in inode_array[] although it is not really needed.
+	// don't clear the data bytes so the file is recoverable.
+	virtual bool remove(rostr pathname) override;// remove file/folder
 	virtual bool search(rostr fullpath, stduint* retback) override;// retback is the fd
 	virtual bool proper() override;// set proper
 	virtual bool enumer() override;
@@ -103,11 +105,11 @@ public:
 	// // //
 protected:
 	//
-	inline char* read_sector(stduint sect_nr) {
+	inline byte* read_sector(stduint sect_nr) {
 		bool state = storage->Read(sect_nr, buffer_sector);
 		return state ? buffer_sector : 0;
 	}
-	inline char* write_sector(stduint sect_nr) {
+	inline byte* write_sector(stduint sect_nr) {
 		bool state = storage->Write(sect_nr, buffer_sector);
 		return state ? buffer_sector : 0;
 	}

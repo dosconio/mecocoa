@@ -48,14 +48,15 @@ enum {
 enum class syscall_t : stduint {
 	OUTC = 0x00, // putchar
 	INNC = 0x01, //{TODO} getchar (block_mode)
-	EXIT = 0x02, // exit                          // (code)
+	EXIT = 0x02, // exit                       // (code)
 	TIME = 0x03, // getsecond
 	REST = 0x04, // halt
-	COMM = 0x05, // communicate: send or receive
-	OPEN = 0x06, // open  file
-	CLOS = 0x07, // close file                    // (fd)->0
-	READ = 0x08, // read  file               // (fd, addr, len)
-	WRIT = 0x09, // write file               // (fd, addr, len)
+	COMM = 0x05, // communicate: send/receive
+	OPEN = 0x06, // open   file
+	CLOS = 0x07, // close  file                // (fd)->0
+	READ = 0x08, // read   file                // (fd, addr, len)
+	WRIT = 0x09, // write  file                // (fd, addr, len)
+	DELF = 0x0A, // remove file
 
 	TEST = 0xFF,
 };

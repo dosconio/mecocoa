@@ -18,7 +18,7 @@ inode* root_inode;
 OrangesFs::OrangesFs(unsigned dev, char* buffer) {
 	new (&self._buf_part) Partition(dev);
 	storage = (Partition*)&self._buf_part;
-	buffer_sector = buffer;
+	buffer_sector = (byte*)buffer;
 	partid = dev;
 }
 
@@ -161,7 +161,186 @@ bool OrangesFs::create(rostr fullpath, stduint flags, stduint* exinfo, rostr lin
 	return true;
 }
 
-bool OrangesFs::remove() { return _TODO false; }
+bool OrangesFs::remove(rostr pathname) {
+	// 1. reset in inode-map
+	// 2. reset in sector-map
+	// 3. reset inode in inode_array
+	// 4. remove entry in root `/`
+	//
+	// ploginfo("%s: %s", __FUNCIDEN__, pathname);
+
+	if (StrCompare(pathname , "/") == 0) {
+		plogerro("FS:do_unlink():: cannot unlink the root");
+		return false;
+	}
+
+	stduint inode_nr;
+	search(pathname, &inode_nr);
+	if (inode_nr == INVALID_INODE) {	/* file not found */
+		plogerro("%s: search_file() returns invalid inode: %s", __FUNCIDEN__, pathname);
+		return false;
+	}
+
+	char filename[_TEMP 20] = { 0 };
+	inode * dir_inode;
+	if (!strip_path(filename, pathname, &dir_inode))
+		return false;
+
+	OrangesFs* fs_dir = IndexOFs(dir_inode->i_dev);
+	struct inode* pin = fs_dir->get_inode(inode_nr);
+	OrangesFs* fs = IndexOFs(dir_inode->i_dev);
+
+	if (pin->entity.i_mode != I_REGULAR) { /* can only remove regular files */
+		plogerro("cannot remove file %s, because it is not a regular file.", pathname);
+		return false;
+	}
+	
+
+	if (pin->i_cnt > 1) {	/* the file was opened */
+		plogerro("cannot remove file %s, because pin->i_cnt is %d.", pathname, pin->i_cnt);
+		return false;
+	}
+
+	struct super_block * sb = fs->get_superblock();
+
+	// free the bit in i-map
+	int byte_idx = inode_nr / 8;
+	int bit_idx = inode_nr % 8;
+	if (byte_idx < fs->storage->Block_Size); else// we have only one i-map sector
+	{
+		plogerro("PANIC %s:%u", __FILE__, __LINE__);
+		return false;	
+	}
+	// read sector 2 (skip bootsect and superblk):
+	fs->read_sector(2);
+	if (fs->buffer_sector[byte_idx % fs->storage->Block_Size] & (1 << bit_idx)); else {
+		plogerro("PANIC %s:%u", __FILE__, __LINE__);
+		return false;
+	}
+	fs->buffer_sector[byte_idx % fs->storage->Block_Size] &= ~(1 << bit_idx);
+	fs->write_sector(2);
+
+	/**************************/
+	/* free the bits in s-map */
+	/* (from ORANGES)
+	 *           bit_idx: bit idx in the entire i-map
+	 *     ... ____|____
+	 *                  \        .-- byte_cnt: how many bytes between
+	 *                   \      |              the first and last byte
+	 *        +-+-+-+-+-+-+-+-+ V +-+-+-+-+-+-+-+-+
+	 *    ... | | | | | |*|*|*|...|*|*|*|*| | | | |
+	 *        +-+-+-+-+-+-+-+-+   +-+-+-+-+-+-+-+-+
+	 *         0 1 2 3 4 5 6 7     0 1 2 3 4 5 6 7
+	 *  ...__/
+	 *      byte_idx: byte idx in the entire i-map
+	 */
+	bit_idx  = pin->entity.i_start_sect - sb->entity.n_1st_sect + 1;
+	byte_idx = bit_idx / 8;
+	int bits_left = pin->entity.i_nr_sects;
+	int byte_cnt = (bits_left - (8 - (bit_idx % 8))) / 8;
+
+	// current sector nr.
+	int s = 2  /* 2: bootsect + superblk */
+		+ sb->entity.nr_imap_sects + byte_idx / fs->storage->Block_Size;
+
+	fs->read_sector(s);
+
+	int i;
+	/* clear the first byte */
+	for (i = bit_idx % 8; (i < 8) && bits_left; i++,bits_left--) {
+		if ((fs->buffer_sector[byte_idx % fs->storage->Block_Size] >> i & 1) == 1); else {
+			plogerro("PANIC %s:%u", __FILE__, __LINE__);
+			return false;
+		}
+		fs->buffer_sector[byte_idx % fs->storage->Block_Size] &= ~(1 << i);
+	}
+
+	/* clear bytes from the second byte to the second to last */
+	int k;
+	i = (byte_idx % fs->storage->Block_Size) + 1;	/* the second byte */
+	for (k = 0; k < byte_cnt; k++,i++,bits_left-=8) {
+		if (i == fs->storage->Block_Size) {
+			i = 0;
+			fs->write_sector(s);
+			fs->read_sector(++s);
+		}
+		if (fs->buffer_sector[i] == 0xFF); else {
+			plogerro("PANIC %s:%u fs->buffer_sector[i]=%[8H]", __FILE__, __LINE__,
+				fs->buffer_sector[i]);
+			return false;
+		}
+		fs->buffer_sector[i] = 0;
+	}
+
+	// clear the last byte
+	if (i == fs->storage->Block_Size) {
+	i = 0;
+		fs->write_sector(s);
+		fs->read_sector(++s);
+	}
+	unsigned char mask = ~((unsigned char)(~0) << bits_left);
+	if ((fs->buffer_sector[i] & mask) == mask); else {
+		plogerro("PANIC %s:%u", __FILE__, __LINE__);
+		return false;
+	}
+	fs->buffer_sector[i] &= (~0) << bits_left;
+	fs->write_sector(s);
+
+	// clear the i-node itself
+	pin->entity.i_mode = 0;
+	pin->entity.i_size = 0;
+	pin->entity.i_start_sect = 0;
+	pin->entity.i_nr_sects = 0;
+	fs->sync_inode(pin);
+	// release slot in inode_table[]
+	put_inode(pin);
+
+	// set the inode-nr to 0 in the directory entry
+	int dir_blk0_nr = dir_inode->entity.i_start_sect;
+	int nr_dir_blks = (dir_inode->entity.i_size + fs->storage->Block_Size) / fs->storage->Block_Size;
+	int nr_dir_entries =
+		dir_inode->entity.i_size / DIR_ENTRY_SIZE; // including unused slots (the file has been deleted but the slot is still there)
+	int m = 0;
+	struct dir_entry * pde = 0;
+	int flg = 0;
+	int dir_size = 0;
+
+	for (i = 0; i < nr_dir_blks; i++) {
+		fs_dir->read_sector(dir_blk0_nr + i);
+
+		pde = (dir_entry *)fs_dir->buffer_sector;
+		int j;
+		for (j = 0; j < fs->storage->Block_Size / DIR_ENTRY_SIZE; j++,pde++) {
+			if (++m > nr_dir_entries)
+				break;
+
+			if (pde->inode_nr == inode_nr) {
+				/* pde->inode_nr = 0; */
+				MemSet(pde, 0, DIR_ENTRY_SIZE);
+				fs_dir->write_sector(dir_blk0_nr + i);
+				flg = 1;
+				break;
+			}
+
+			if (pde->inode_nr != INVALID_INODE)
+				dir_size += DIR_ENTRY_SIZE;
+		}
+
+		if (m > nr_dir_entries || /* all entries have been iterated OR */
+		    flg) /* file is found */
+			break;
+	}
+	if (flg); else {
+		plogerro("PANIC %s:%u", __FILE__, __LINE__);
+		return false;
+	}
+	if (m == nr_dir_entries) { /* the file is the last one in the dir */
+		dir_inode->entity.i_size = dir_size;
+		sync_inode(dir_inode);
+	}
+	ploginfo("%s endo", __FUNCIDEN__);
+	return true;
+}
 
 
 bool OrangesFs::search(rostr path, stduint* retback) {
