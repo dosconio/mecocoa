@@ -26,17 +26,8 @@ struct HD_Info {
 };
 static HD_Info hd_info[4] = { 0 };//{TEMP} 0:0 0:1 1:0 1:1
 static bool hd_info_valid[4] = { 0 };
-static char* single_sector = NULL;
+static char* single_sector = NULL;// file-hd used buffer
 bool task_run = false;
-
-void fileman_hd() {
-	for0a(i, disks) {
-		disks[i] = new (hdd_buf + i * byteof(**disks)) Harddisk_PATA(i);
-	}
-	disks[0]->setInterrupt(NULL);
-	single_sector = (char*)Memory::physical_allocate(0x1000);
-}
-
 
 static byte lock = 1;
 
@@ -51,70 +42,21 @@ void Handint_HDD()// HDD Master
 static bool hd_cmd_wait() {
 	return waitfor(STATUS_BSY, 0, HD_TIMEOUT / 1000);
 }
-
 static void hd_int_wait() {
 	CommMsg msg;
 	syscall(syscall_t::COMM, 0b10, INTRUPT, &msg);
 }
+static void hd_rw_foreback() { lock = 0; }
+
+void fileman_hd() {
+	for0a(i, disks) {
+		disks[i] = new (hdd_buf + i * byteof(**disks)) Harddisk_PATA(i);
+	}
+	disks[0]->setInterrupt(NULL);
+	single_sector = (char*)Memory::physical_allocate(0x1000);
+}
 
 namespace uni {
-	__attribute__((optimize("O0")))// NO OPTIMIZE
-	bool Harddisk_PATA::Read(stduint BlockIden, void* Dest) {
-		if (task_run) {
-			usize sect_nr = BlockIden;
-			HdiskCommand cmd;
-			cmd.feature = 0;
-			cmd.count = 1;// number of sectors
-			for0(i, 3) cmd.LBA[i] = (sect_nr >> (i * 8));
-			cmd.device = MAKE_DEVICE_REG(1, getLowID(), (sect_nr >> 24) & 0xF);
-			cmd.command = ATA_READ;
-			lock = 0;
-			Harddisk_PATA::Hdisk_OUT(&cmd, hd_cmd_wait);
-			if (true) {
-				hd_int_wait();
-				if (!waitfor(STATUS_DRQ, STATUS_DRQ, HD_TIMEOUT)) {
-					return false;
-				}
-				IN_wn(REG_DATA, (word*)Dest, Block_Size);
-				// slice.length--;
-			}
-		}
-		else {
-			stduint C, B;
-			__asm volatile("mov %%ecx, %0" : "=r" (C));// will break GNU stack judge: __asm ("push %ecx");
-			__asm volatile("mov %%ebx, %0" : "=r" (B));// will break GNU stack judge: __asm ("push %ebx");
-			__asm volatile("mov %0, %%ebx" : : "r" _IMM(Dest));// gcc use mov %eax->%ebx to assign
-			__asm volatile("mov %0, %%eax": : "r" (BlockIden));
-			__asm volatile("mov $1, %ecx");
-			__asm volatile("call HdiskLBA28Load");
-			__asm volatile("mov %0, %%ebx" : : "r" (B));// rather __asm ("pop %ebx");
-			__asm volatile("mov %0, %%ecx" : : "r" (C));// rather __asm ("pop %ecx");
-		}
-		return true;
-	}
-	bool Harddisk_PATA::Write(stduint BlockIden, const void* Sors) {
-		if (task_run) {
-			usize sect_nr = BlockIden;
-			HdiskCommand cmd;
-			cmd.feature = 0;
-			cmd.count = 1;// number of sectors
-			for0(i, 3) cmd.LBA[i] = (sect_nr >> (i * 8));
-			cmd.device = MAKE_DEVICE_REG(1, getLowID(), (sect_nr >> 24) & 0xF);
-			cmd.command = ATA_WRITE;
-			lock = 0;
-			Harddisk_PATA::Hdisk_OUT(&cmd, hd_cmd_wait);
-			if (true) {
-				if (!waitfor(STATUS_DRQ, STATUS_DRQ, HD_TIMEOUT)) {
-					return false;
-				}
-				OUT_wn(REG_DATA, (word*)Sors, Block_Size);
-				hd_int_wait();
-				// slice.length--;
-			}
-		}
-		else return false;
-		return true;
-	}
 
 	// Use after print_identify_info
 	stduint Harddisk_PATA::getUnits() {
@@ -132,7 +74,6 @@ struct iden_info_ascii {
 	{27, 40, "Model"} // Model number in ASCII
 };
 
-static void hd_read(Harddisk_PATA& hd, Slice slice, stduint pg_task = nil);
 static void get_partition_table(Harddisk_PATA& drv, unsigned partable_sectposi, PartitionTableX86* pt)
 {
 	drv.Read(partable_sectposi, single_sector);
@@ -259,55 +200,7 @@ static void hd_close(Harddisk_PATA& hd) { // 0x02
 	hd_info_valid[hd.getHigID() * 2 + hd.getLowID()] = false;
 }
 
-static void hd_read(Harddisk_PATA& hd, Slice slice, stduint pg_task)// 0x03
-{
-	usize sect_nr = slice.address;
-	HdiskCommand cmd;
-	cmd.feature = 0;
-	cmd.count = slice.length;// number of sectors
-	for0(i, 3) cmd.LBA[i] = (sect_nr >> (i * 8));
-	cmd.device	= MAKE_DEVICE_REG(1, hd.getLowID(), (sect_nr >> 24) & 0xF);
-	cmd.command = ATA_READ;
-	lock = 0;
-	Harddisk_PATA::Hdisk_OUT(&cmd, hd_cmd_wait);
-	while (slice.length) {
-		hd_int_wait();
-		if (!waitfor(STATUS_DRQ, STATUS_DRQ, HD_TIMEOUT)) {
-			plogerro("hd writing error.");
-			return;
-		}
-		IN_wn(REG_DATA, (word*)single_sector, hd.Block_Size);
-		if (pg_task) syssend(pg_task, single_sector, hd.Block_Size, 0);
-		slice.length--;
-		// dst += hd.Block_Size;
-	}
-}
 
-static void hd_write(Harddisk_PATA& hd, Slice slice, stduint pg_task)
-{
-	usize sect_nr = slice.address;
-	HdiskCommand cmd;
-	cmd.feature = 0;
-	cmd.count = slice.length;// number of sectors
-	for0(i, 3) cmd.LBA[i] = (sect_nr >> (i * 8));
-	cmd.device	= MAKE_DEVICE_REG(1, hd.getLowID(), (sect_nr >> 24) & 0xF);
-	cmd.command = ATA_WRITE;
-	lock = 0;
-	Harddisk_PATA::Hdisk_OUT(&cmd, hd_cmd_wait);
-	// ploginfo("fileman-hd %u write sector %u", hd.getID(), sect_nr);
-	while (slice.length) {
-		if (!waitfor(STATUS_DRQ, STATUS_DRQ, HD_TIMEOUT)) {
-			plogerro("hd writing error.");
-			return;
-		}
-		if (pg_task) sysrecv(pg_task, single_sector, hd.Block_Size);
-		OUT_wn(REG_DATA, (word*)single_sector, hd.Block_Size);
-		hd_int_wait();
-		slice.length--;
-		// src += hd.Block_Size;
-		// ploginfo("%s OK", __FUNCIDEN__);
-	}
-}
 
 static void GetPartitionSlice(unsigned device, stduint pg_task)
 {
@@ -327,17 +220,25 @@ static void GetPartitionSlice(unsigned device, stduint pg_task)
 
 //// ---- ---- SERVICE ---- ---- ////
 static stduint args[4];
+bool fileman_hd_ready = false;
 void serv_dev_hd_loop()
 {
+	
 	task_run = true;
 	if (_IMM(&bda->hdisk_number) != 0x475) {
 		plogerro("Invalid BIOS_DataArea");
 		while (1);
 	}
+
+	for0a(i, disks) {
+		disks[i]->fn_cmd_wait = hd_cmd_wait;
+		disks[i]->fn_int_wait = hd_int_wait;
+		disks[i]->fn_lup_wait = waitfor;
+		disks[i]->fn_feedback = hd_rw_foreback;
+		disks[i]->react_type = Harddisk_PATA::ReactType::Rupt;
+	}
 	
 	// Console.OutFormat("[Hrddisk] detect %u disks\n\r", bda->hdisk_number);
-	Slice slice;
-	slice.length = 1;
 	stduint sig_type = 0, sig_src;
 	while (true) {
 		sysrecv(ANYPROC, sliceof(args), &sig_type, &sig_src);
@@ -348,6 +249,7 @@ void serv_dev_hd_loop()
 				hd_open(*disks[i]);
 				Console.OutFormat("[Hrddisk] Detect Disk on IDE%u:%u : %u MB\n\r", i / MAX_DRIVES, i % MAX_DRIVES, _IMM(disks[i]->getUnits() * disks[i]->Block_Size) >> 20);
 			}
+			fileman_hd_ready = true;
 			break;
 		case FiledevMsg::RUPT:// (usercall-forbidden)
 			break;
@@ -356,14 +258,14 @@ void serv_dev_hd_loop()
 			hd_close(*disks[(byte)args[0]]);// assert msg.data.length == 0
 			break;
 		case FiledevMsg::READ:// [diskno, lba]
-			slice.address = (usize)args[1];
-			// ploginfo("[Hrddisk] device %u: read %u", (unsigned)(byte)args[0], slice.address);
-			hd_read(*disks[(byte)args[0]], slice, sig_src);
+			// ploginfo("[Hrddisk] device %u: read %u", args[0], args[1]);
+			disks[args[0]]->Read(args[1], single_sector);
+			if (sig_src) syssend(sig_src, single_sector, disks[args[0]]->Block_Size);
 			break;
 		case FiledevMsg::WRITE:// [diskno, lba]
-			slice.address = (usize)args[1];
 			// ploginfo("[Hrddisk] device %u: write %u", (unsigned)(byte)args[0], slice.address);
-			hd_write(*disks[(byte)args[0]], slice, sig_src);
+			if (sig_src) sysrecv(sig_src, single_sector, disks[args[0]]->Block_Size);
+			disks[args[0]]->Write(args[1], single_sector);
 			break;
 		case FiledevMsg::GETPS:// (device 0 for all, 1~4 for primary, 5+ for logical)
 			GetPartitionSlice(args[0], sig_src);

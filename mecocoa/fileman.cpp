@@ -49,7 +49,7 @@ OrangesFs* pfs; const usize ROOT_DEV = MINOR_hd6a;
 //// //// ---- //// ////
 
 
-bool waitfor(int mask, int val, int timeout_second)// return seccess
+bool waitfor(stduint mask, stduint val, stduint timeout_second)// return seccess
 {
 	int t = syscall(syscall_t::TIME);
 	while (((syscall(syscall_t::TIME) - t)) < timeout_second)
@@ -388,9 +388,9 @@ stduint serv_file_loop_remove(stduint pid, rostr filename) {
 	pid;
 	return pfs->remove(filename) ? 0 : -1;
 }
+extern bool fileman_hd_ready;
 void serv_file_loop()
 {
-	// ploginfo("%s", __FUNCIDEN__);
 	// Manually Initialize
 	{
 		OrangesFs::IndexOFs = IndexOFs;
@@ -399,6 +399,7 @@ void serv_file_loop()
 	f_desc_table = (FileDescriptor*)Memory::physical_allocate(0x1000);
 	f_desc_table_count = nil;
 	::buffer = (byte*)Memory::physical_allocate(FSBUF_SIZE);
+	ploginfo("%s, buffer %[32H]", __FUNCIDEN__, ::buffer);
 	//
 	stduint&& inode_table_size = vaultAlignHexpow(0x1000, sizeof(inode) * NR_INODE);
 	inode_table = (inode*)Memory::physical_allocate(inode_table_size);
@@ -413,7 +414,7 @@ void serv_file_loop()
 	stduint to_args[8];// 8*4=32 bytes
 	stduint sig_type = 0, sig_src;
 	super_block* sb;
-	pfs = new (_buf_OFs) OrangesFs(ROOT_DEV, (char*)buffer);
+	pfs = new (_buf_OFs) OrangesFs(ROOT_DEV, (char*)::buffer);
 
 	stduint retval[1];
 
@@ -424,8 +425,8 @@ void serv_file_loop()
 		case FilemanMsg::TEST:// (no-feedback)
 			// plogtrac("TESTING FILEMAN");
 			syssend(Task_Hdd_Serv, &to_args, 0, _IMM(FiledevMsg::TEST));
-			if (1)
-				pfs->makefs();
+			while (!fileman_hd_ready);
+			if (1) pfs->makefs();
 			ready = pfs->loadfs();
 			root_inode = pfs->get_inode(ROOT_INODE);
 			if (ready) Console.OutFormat("%s", "[Fileman] File system is ready.\n\r");

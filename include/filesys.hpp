@@ -92,7 +92,7 @@ public:
 
 	// // //
 	// Read superblock from the given device then write it into a free superblock[] slot.
-	void read_superblock ();
+	void read_superblock();
 	//
 	super_block* get_superblock();
 	// Get the inode ptr of given inode nr. A cache -- inode_table[] -- is maintained to make things faster. If the inode requested is already there, just return it. Otherwise the inode will be read from the disk.

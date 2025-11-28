@@ -3,7 +3,7 @@
 
 // The version just consider primary IDE
 
-bool waitfor(int mask, int val, int timeout_second);
+bool waitfor(stduint mask, stduint val, stduint timeout_second);
 
 #define	DRV_OF_DEV(dev) (dev <= MAX_PRIM ? \
 	dev / NR_PRIM_PER_DRIVE : \
