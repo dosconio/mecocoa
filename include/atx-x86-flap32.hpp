@@ -58,6 +58,8 @@ enum class syscall_t : stduint {
 	WRIT = 0x09, // write  file                // (fd, addr, len)
 	DELF = 0x0A, // remove file
 
+	TMSG = 0x0F, // try message
+
 	TEST = 0xFF,
 };
 
@@ -89,13 +91,11 @@ extern "C" void call_intr();
 extern "C" void* call_gate_entry();
 stduint syscall(syscall_t callid, ...);
 
-#define COMM_RECV 0b10
-#define COMM_SEND 0b01
-
 // ---- taskman
 #include "taskman.hpp"
 
-//!{do not use! why?}
+#define COMM_RECV 0b10
+#define COMM_SEND 0b01
 inline static stduint syssend(stduint to_whom, const void* msgaddr, stduint bytlen, stduint type = 0)
 {
 	struct CommMsg msg { nil };
@@ -118,41 +118,11 @@ inline static stduint sysrecv(stduint fo_whom, void* msgaddr, stduint bytlen, st
 }
 
 // ---- [service] console
-
-extern BareConsole* BCONS0;
-
-struct MccaTTYCon : public BareConsole {
-	static byte current_screen_TTY;
-	static void cons_init();
-	static void serv_cons_loop();
-	static void current_switch(byte id);
-	//
-	bool last_e0 = false;
-	//
-	MccaTTYCon(stduint columns, stduint lines_total, stduint topln) : BareConsole(columns, lines_total, 0xB8000, topln) {}
-	//[TEMP] no output buffer, user library can make it in their level.
-	char inn_buf[64]; char* _Comment(W) p = inn_buf; char* _Comment(R) q = 0;
-	inline bool is_full() const { return q && p == q; }
-	inline bool is_empty() const { return q == nullptr; }
-	int get_inn() {
-		if (is_empty()) return -1;
-		int ret = (unsigned)*q++;
-		if (q >= inn_buf + byteof(inn_buf)) q = inn_buf;
-		if (p == q) q = nullptr, p = inn_buf;
-		return ret;
-	}
-	bool put_inn(char c) {
-		if (is_full()) return false;
-		if (q == nullptr) q = p;
-		*p++ = c;
-		if (p >= inn_buf + byteof(inn_buf)) p = inn_buf;
-		return true;
-	}
-	//
-	bool last_E0 = false;
-};
-extern MccaTTYCon* ttycons[4];
+#include "console.hpp"
+void serv_cons_loop();
 
 // ---- [service] fileman
 #include "fileman.hpp"
+void serv_dev_hd_loop();
+void serv_file_loop();
 

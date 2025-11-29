@@ -23,7 +23,7 @@ static const byte syscall_paracnts[0x100] = {
 	1, //0x00 OUTC
 	3, //0x01 INNC
 	1, //0x02 EXIT
-	0, //0x03 TIME ->(second)
+	0, //0x03 TIME ()->(second)
 	0, //0x04 REST
 	3, //0x05 COMM
 	2, //0x06 OPEN (pathname,flags)->(fd: < 0 if not success)
@@ -31,7 +31,8 @@ static const byte syscall_paracnts[0x100] = {
 	4, //0x08 READ (fd, slice.addr, slice.len) ->(bytes_done)
 	4, //0x09 WRIT (fd, slice.addr, slice.len) ->(bytes_done)
 	1, //0x0A DELF (pathname)
-	0,0,0,0,0,// 0XH
+	0,0,0,0,
+	0, //0x0F TMSG ()->(msg_unsovled)
 	// ---- 0x1X ----
 	0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,// 1XH
 	0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,// 2XH
@@ -103,7 +104,7 @@ static stduint call_body(const syscall_t callid, ...) {
 	switch (callid) {
 	case syscall_t::OUTC: {
 		ProcessBlock* pb = TaskGet(ProcessBlock::cpu0_task);
-		// ttycons[pb->focus_tty_id]->OutChar(para[0]);
+		// bcons[pb->focus_tty_id]->OutChar(para[0]);
 		_TEMP if (!pb->focus_tty_id) outc(para[0]);
 		break;
 	}
@@ -170,6 +171,14 @@ static stduint call_body(const syscall_t callid, ...) {
 		sysrecv(Task_FileSys, open_buf, byteof(open_buf[0]));
 		return open_buf[0];// 0 for success
 	}
+
+
+	case syscall_t::TMSG:
+	{
+		ProcessBlock* pb = TaskGet(ProcessBlock::cpu0_task);
+		return pb->queue_send_queuehead ? _TEMP 1 : 0;
+	}
+
 
 
 	case syscall_t::TEST:

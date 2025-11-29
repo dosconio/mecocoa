@@ -27,15 +27,11 @@ static stduint dev_drv_map[] = {
 	nil, // {} Floppy
 	nil, // {} CDROM
 	Task_Hdd_Serv, // {} Hard Disk
-	nil, // {} TTY
+	nil, // {} 4 TTY
 	nil, // {} SCSI Disk
 	
 };
-inline static stduint get_drv_pid(u32 dev) {
-	// 0b1111 is for
-	u32 drv = dev >> 16;
-	return drv;
-}
+
 
 //// ---- ---- fs-irrelavant interface ---- ---- ////
 
@@ -97,19 +93,15 @@ stduint do_rdwt(bool wr_type, stduint fid, Slice slice, stduint pid)
 	}
 	int imode = pin->entity.i_mode & I_TYPE_MASK;
 	if (imode == I_CHAR_SPECIAL) {
-		//int t = fs_msg.type == READ ? DEV_READ : DEV_WRITE;
-		//fs_msg.type = t;
-		//int dev = pin->i_start_sect;
-		//assert(MAJOR(dev) == 4);
-		//fs_msg.DEVICE	= MINOR(dev);
-		//fs_msg.BUF	= buf;
-		//fs_msg.CNT	= len;
-		//fs_msg.PROC_NR	= src;
-		//assert(dd_map[MAJOR(dev)].driver_nr != INVALID_DRIVER);
-		//send_recv(BOTH, dd_map[MAJOR(dev)].driver_nr, &fs_msg);
-		//assert(fs_msg.CNT == len);
-		//return fs_msg.CNT;
-		_TODO return 0;
+		// ploginfo("do_rdwt: %[32H] %[32H]", slice.address, slice.length);
+		stduint msg[4];
+		msg[0] = pin->entity.i_start_sect;// dev
+		msg[1] = slice.address;
+		msg[2] = slice.length;
+		msg[3] = pid;
+		syssend(Task_Con_Serv, msg, byteof(msg), wr_type ? 2 : 1);
+		sysrecv(Task_Con_Serv, &msg[0], byteof(msg[0]));
+		return msg[0];
 	}
 	else {
 		Partition part(pin->i_dev);
@@ -312,14 +304,9 @@ static stdsint do_open(ProcessBlock& process, rostr pathname, int flags) {
 		int imode = pin->entity.i_mode & I_TYPE_MASK;
 
 		if (imode == I_CHAR_SPECIAL) {
-			plogerro("!!! unfinished in %s", __FUNCIDEN__);
-			//MESSAGE driver_msg;
-			//driver_msg.type = DEV_OPEN;
-			//int dev = pin->entity.i_start_sect;
-			//driver_msg.DEVICE = MINOR(dev);
-			//assert(MAJOR(dev) == 4);
-			//assert(dd_map[MAJOR(dev)].driver_nr != INVALID_DRIVER);
-			//send_recv(BOTH, dd_map[MAJOR(dev)].driver_nr, &driver_msg);
+			// dev = pin->entity.i_start_sect
+			// send_recv(BOTH, dd_map[MAJOR(dev)].driver_nr, &driver_msg{OPEN, MINOR(dev)});
+			//{TODO} check dev and optional activate
 		}
 		else if (imode == I_DIRECTORY) {
 			if (pin->i_num == ROOT_INODE); else
@@ -426,7 +413,7 @@ void serv_file_loop()
 			// plogtrac("TESTING FILEMAN");
 			syssend(Task_Hdd_Serv, &to_args, 0, _IMM(FiledevMsg::TEST));
 			while (!fileman_hd_ready);
-			if (1) pfs->makefs();
+			if (0) pfs->makefs();
 			ready = pfs->loadfs();
 			root_inode = pfs->get_inode(ROOT_INODE);
 			if (ready) Console.OutFormat("%s", "[Fileman] File system is ready.\n\r");

@@ -27,8 +27,7 @@ bool waitfor(stduint mask, stduint val, stduint timeout_second);
 #define MINOR_hd6a       (MINOR_hd1a+NR_SUB_PER_DRIVE+NR_SUB_PER_PART*1)
 
 void DEV_Init();
-void serv_dev_hd_loop();
-void serv_file_loop();
+
 
 enum MajorDevice {
 	DEV_NULL = 0,
@@ -115,6 +114,11 @@ struct FileDescriptor {
 #define	ROOT_INODE    1
 
 #define	MAKE_DEV(a,b)		((a << 16) | b)
+inline static stduint get_drv_pid(u32 dev) {
+	// 0b1111 is for
+	u32 drv = dev >> 16;
+	return drv;
+}
 
 bool strip_path(char* filename, const char* pathname, inode** ppinode);
 

@@ -16,28 +16,47 @@ use crate uni;
 #include "../include/atx-x86-flap32.hpp"
 #include "../include/console.hpp"
 
+// ---- ---- TTY ---- ----
 
-byte MccaTTYCon::current_screen_TTY = 0;
-
+// each barecon: ----
+static bool last_E0s[TTY_NUMBER] = { false, false, false, false };
+// each con:
+typedef char innQueueBuf[64];
+static innQueueBuf _BUF_innQueues[TTY_NUMBER];
+// total:
+static byte current_screen_TTY = 0;
+// consider CLI
+byte BUF_BCONS0[byteof(BareConsole)]; BareConsole* BCONS0;// TTY0
+byte BUF_BCONS1[byteof(BareConsole)]; static BareConsole* BCONS1;// TTY1
+byte BUF_BCONS2[byteof(BareConsole)]; static BareConsole* BCONS2;// TTY2
+byte BUF_BCONS3[byteof(BareConsole)]; static BareConsole* BCONS3;// TTY3
+BareConsole* bcons[TTY_NUMBER];
+// consider GUI
+byte BUF_VCI[sizeof(GloScreen)];
+byte BUF_CONS0[sizeof(VideoConsole)]; VideoConsole* vcon0;
+VideoConsole* vcons[TTY_NUMBER];
 // consider CLI and GUI
+OstreamTrait* con0_out;
 OstreamTrait* tty0_out;
 OstreamTrait* tty1_out;
 OstreamTrait* tty2_out;
 OstreamTrait* tty3_out;
+unsigned IndexTTY(pureptr_t addr) {
+	for0a(i, bcons) {
+		if (bcons[i] && bcons[i] == addr) return i;
+	}
+	for0a(i, vcons) {
+		if (vcons[i] && vcons[i] == addr) return i;
+	}
+	return TTY_NUMBER;// fail
+}
+inline static OstreamTrait* LocateTTY(stduint tty_id) {
+	OstreamTrait* ttyout = ento_gui ? dynamic_cast<OstreamTrait*>(vcons[tty_id]) : dynamic_cast<OstreamTrait*>(bcons[tty_id]);
+	return ttyout;
+}
+// ---- ---- ---- ----
 
-BareConsole* BCONS0;// TTY0
-static BareConsole* BCONS1;// TTY1
-static BareConsole* BCONS2;// TTY2
-static BareConsole* BCONS3;// TTY3
-byte BUF_BCONS0[byteof(MccaTTYCon)];
-byte BUF_BCONS1[byteof(MccaTTYCon)];
-byte BUF_BCONS2[byteof(MccaTTYCon)];
-byte BUF_BCONS3[byteof(MccaTTYCon)];
-MccaTTYCon* ttycons[4];
-//
-byte BUF_VCI[sizeof(GloScreen)];
-byte BUF_CONS0[sizeof(VideoConsole)];
-VideoConsole* vcon0; OstreamTrait* con0_out;
+
 
 
 keyboard_state_t kbd_state = { 0 };
@@ -57,16 +76,16 @@ struct KeyboardBridge : public OstreamTrait // // scan code set 1
 			switch (byte ch = str[i]) {
 			// TTYs
 			case 0x01:
-				MccaTTYCon::current_switch(0);// TTY0 ESC
+				bcons[0]->doshow(); // TTY0 ESC
 				break;
 			case 0x3B:
-				MccaTTYCon::current_switch(1); // TTY1 F1
+				bcons[1]->doshow(); // TTY1 F1
 				break;
 			case 0x3C:
-				MccaTTYCon::current_switch(2); // TTY2 F2
+				bcons[2]->doshow(); // TTY2 F2
 				break;
 			case 0x3D:
-				MccaTTYCon::current_switch(3); // TTY3 F3
+				bcons[3]->doshow(); // TTY3 F3
 				break;
 				// Ctrls(^), Shifts(-), Alts(+), Wins(~)
 			case 0x1D: case 0x1D + 0x80:// L-Ctrl
@@ -87,7 +106,7 @@ struct KeyboardBridge : public OstreamTrait // // scan code set 1
 			case 0x46:// ScrollLock
 				kbd_state.lock_scroll = !kbd_state.lock_scroll; setLED(); break;
 			default:
-				ttycons[MccaTTYCon::current_screen_TTY]->put_inn(ch);
+				bcons[current_screen_TTY]->input_queue.OutChar(ch);
 				break;
 			}
 			last_E0 = ((byte)str[i] == 0xE0);
@@ -181,18 +200,27 @@ void blink2() {
 	b = !b;
 }
 
-void MccaTTYCon::cons_init()
+void cons_init()
 {
-	video_info = (uni::ModeInfoBlock *)Memory::physical_allocate(0x1000);
-	BCONS0 = new (BUF_BCONS0) MccaTTYCon(bda->screen_columns, 24, 0); BCONS0->setShowY(0, 24);
+	// Manually Initialize
+	for0a(i, last_E0s) {
+		last_E0s[i] = false;
+	}
+
+	video_info = (uni::ModeInfoBlock*)Memory::physical_allocate(0x1000);
+	BCONS0 = new (BUF_BCONS0) BareConsole(bda->screen_columns, 24, 0xB8000, 0 * 50); BCONS0->setShowY(0, 24);
+	BCONS1 = new (BUF_BCONS1) BareConsole(bda->screen_columns, 50, 0xB8000, 1 * 50); BCONS1->setShowY(0, 25);
+	BCONS2 = new (BUF_BCONS2) BareConsole(bda->screen_columns, 50, 0xB8000, 2 * 50); BCONS2->setShowY(0, 25);
+	BCONS3 = new (BUF_BCONS3) BareConsole(bda->screen_columns, 50, 0xB8000, 3 * 50); BCONS3->setShowY(0, 25);
+	
+	bcons[0] = BCONS0; new (&BCONS0->input_queue) QueueLimited((Slice) { _IMM(_BUF_innQueues[0]), byteof(_BUF_innQueues[0]) });
+	bcons[1] = BCONS1; new (&BCONS1->input_queue) QueueLimited((Slice) { _IMM(_BUF_innQueues[1]), byteof(_BUF_innQueues[1]) });
+	bcons[2] = BCONS2; new (&BCONS2->input_queue) QueueLimited((Slice) { _IMM(_BUF_innQueues[2]), byteof(_BUF_innQueues[2]) });
+	bcons[3] = BCONS3; new (&BCONS3->input_queue) QueueLimited((Slice) { _IMM(_BUF_innQueues[3]), byteof(_BUF_innQueues[3]) });
 	//
-	BCONS1 = new (BUF_BCONS1) MccaTTYCon(bda->screen_columns, 50, 1 * 50); BCONS1->setShowY(0, 25);
-	BCONS2 = new (BUF_BCONS2) MccaTTYCon(bda->screen_columns, 50, 2 * 50); BCONS2->setShowY(0, 25);
-	BCONS3 = new (BUF_BCONS3) MccaTTYCon(bda->screen_columns, 50, 3 * 50); BCONS3->setShowY(0, 25);
-	ttycons[0] = (MccaTTYCon*)BCONS0;
-	ttycons[1] = (MccaTTYCon*)BCONS1;
-	ttycons[2] = (MccaTTYCon*)BCONS2;
-	ttycons[3] = (MccaTTYCon*)BCONS3;
+	for0a(i, vcons) {
+		vcons[i] = NULL;
+	}
 	//
 	new (&kbdbridge) KeyboardBridge();// C++ Bare Programming
 	kbd_out = &kbdbridge;
@@ -224,6 +252,8 @@ void MccaTTYCon::cons_init()
 		Color::White
 	);
 	vcon0 = new (BUF_CONS0) VideoConsole(treat<GloScreen>(BUF_VCI), screen0_win);
+	vcons[0] = vcon0;
+	//
 	con0_out = vcon0;
 	vcon0->forecolor = Color::Black;
 	vcon0->Clear();
@@ -235,37 +265,33 @@ void MccaTTYCon::cons_init()
 }
 
 
-static void tty_parse(MccaTTYCon& tty, byte keycode, keyboard_state_t state) { // // scan code set 1
-	if (ento_gui) {
-		return;
-		if (&tty == ttycons[0]) {
-			_TODO
-		}
-	}
-	_TODO
-	if (tty.last_E0) {
-		if (keycode == 0x49 && tty.crtline > 0) { // PgUp
-			tty.auto_incbegaddr = 0;
-			tty.setStartLine(--tty.crtline + tty.topline);
-		}
-		else if (keycode == 0x51 && tty.crtline < tty.area_total.y - tty.area_show.height) { // PgDn
-			tty.auto_incbegaddr = 0;
-			tty.setStartLine(++tty.crtline + tty.topline);
-		}
+
+static void tty_parse(stduint tty_id, byte keycode, keyboard_state_t state) { // // scan code set 1
+	BareConsole* ttycon = bcons[tty_id];
+	OstreamTrait* ttyout = LocateTTY(tty_id);
+	if (last_E0s[tty_id]) {
+		if (!ento_gui && keycode == 0x49 && ttycon->crtline > 0) { // PgUp
+			ttycon->auto_incbegaddr = 0;
+			ttycon->setStartLine(--ttycon->crtline + ttycon->topline);
+		}//{TODO} Adapt Vcon
+		else if (!ento_gui && keycode == 0x51 && ttycon->crtline < ttycon->area_total.y - ttycon->area_show.height) { // PgDn
+			ttycon->auto_incbegaddr = 0;
+			ttycon->setStartLine(++ttycon->crtline + ttycon->topline);
+		}//{TODO} Adapt Vcon
 		else if (keycode == 0x35) // Pad /
 		{
-			tty.OutChar('/');
+			ttyout->OutChar('/');
 		}
 		else if (keycode == 0x1C) // Pad ENTER
 		{
-			tty.OutChar('\n');
-			tty.OutChar('\r');
+			ttyout->OutChar('\n');
+			ttyout->OutChar('\r');
 		}
 	}
 	else if (Rangein(keycode, 0x47, 0x54)) {
 		byte c = (state.lock_number) ? _tab_keycode2ascii[keycode].ascii_shift : _tab_keycode2ascii[keycode].ascii_usual;
 		if (c > 1)
-			tty.OutChar(c);
+			ttyout->OutChar(c);
 	}
 	else if (keycode < 0x80) { // KEYDOWN
 		byte c = _tab_keycode2ascii[keycode].ascii_usual;
@@ -279,74 +305,95 @@ static void tty_parse(MccaTTYCon& tty, byte keycode, keyboard_state_t state) { /
 		{
 			//{} wait app get the char
 
-			tty.OutChar(c);
-			if (c == '\n') tty.OutChar('\r');
+			ttyout->OutChar(c);
+			if (c == '\n') ttyout->OutChar('\r');
 			else if (c == '\b') {
-				tty.OutChar(' ');
-				tty.OutChar('\b');
+				ttyout->OutChar(' ');
+				ttyout->OutChar('\b');
 			}
 			//{TODO} Menus, TAB, Arrows, PrtSc, Pause, Ins, Home, Del, End
 		}
 	}
-	tty.last_E0 = keycode == 0xE0;
+	last_E0s[tty_id] = keycode == 0xE0;
 }
 
-void _Comment(R1) MccaTTYCon::serv_cons_loop()
+char* cons_buffer;
+void _Comment(R1) serv_cons_loop()
 {
-	// struct element { byte ch; byte attr; };
-	// Letvar(Ribbon, element*, (0xB8000 + 80 * 2 * 24));
-	// Ribbon[0].ch = '^';
-	// Ribbon[1].ch = '-';
-	// Ribbon[2].ch = '+';
-	// Ribbon[77].ch = '+';
-	// Ribbon[78].ch = '-';
-	// Ribbon[79].ch = '^';
+	cons_buffer = (char*)Memory::physical_allocate(0x1000);
+	// BCON:
+	struct element { byte ch; byte attr; };
+	Letvar(Ribbon, element*, (0xB8000 + 80 * 2 * 24));
+	Ribbon[0].ch = '^';
+	Ribbon[1].ch = '-';
+	Ribbon[2].ch = '+';
+	Ribbon[77].ch = '+';
+	Ribbon[78].ch = '-';
+	Ribbon[79].ch = '^';
 
+	stduint sig_type = 0, sig_src, ret;
+	stduint to_args[4];
+
+	int ch;
+	//{TEMP} only a TTY0(VCON)
 	while (true) {
-		if (!ento_gui) for0(i, 4) {
-			MccaTTYCon& tty = *ttycons[i];
-			int ch;
-			while (-1 != (ch = tty.get_inn())) {
-				tty_parse(tty, ch, kbd_state);
+		for0(i, ento_gui ? 1 : 4) {
+			while (-1 != (ch = bcons[i]->input_queue.inn())) {
+				tty_parse(i, ch, kbd_state);
 			}
 		}
-		// if (current_screen_TTY == 0) {
-		// 	// Render the bottom ribbon
-		// 	Ribbon[0].attr = kbd_state.l_ctrl ? 0x70 : 0x07;
-		// 	Ribbon[1].attr = kbd_state.l_shift ? 0x70 : 0x07;
-		// 	Ribbon[2].attr = kbd_state.l_alt ? 0x70 : 0x07;
-		// 	Ribbon[77].attr = kbd_state.r_alt ? 0x70 : 0x07;
-		// 	Ribbon[78].attr = kbd_state.r_shift ? 0x70 : 0x07;
-		// 	Ribbon[79].attr = kbd_state.r_ctrl ? 0x70 : 0x07;
-		// }
+		// Render the bottom ribbon
+		if (!ento_gui && current_screen_TTY == 0) {
+			Ribbon[0].attr = kbd_state.l_ctrl ? 0x70 : 0x07;
+			Ribbon[1].attr = kbd_state.l_shift ? 0x70 : 0x07;
+			Ribbon[2].attr = kbd_state.l_alt ? 0x70 : 0x07;
+			Ribbon[77].attr = kbd_state.r_alt ? 0x70 : 0x07;
+			Ribbon[78].attr = kbd_state.r_shift ? 0x70 : 0x07;
+			Ribbon[79].attr = kbd_state.r_ctrl ? 0x70 : 0x07;
+		}
+		// Process potential message
+		if (syscall(syscall_t::TMSG)) {
+			sysrecv(ANYPROC, to_args, byteof(to_args), &sig_type, &sig_src);
+			ProcessBlock* pb = TaskGet(to_args[3]);
+			switch (sig_type) {
+			case 1: // R (dev, addr, len, pid)
+				//{UNCHK}
+				//{} Read from kbdbuffer
+				// syssend(sig_src, &ret, sizeof(ret), 0);
+				break;
+			case 2: // W (dev, addr, len, pid)
+				ret = StrCopyP(cons_buffer, kernel_paging,
+					(char*)to_args[1], pb->paging, to_args[2]);
+				// if (get_drv_pid(to_args[0]) == 4)
+				if ((0xFF & to_args[0]) == 0) {
+					
+					LocateTTY(0xFF & to_args[0])->out(cons_buffer, ret);
+				}
+				syssend(sig_src, &ret, sizeof(ret), 0);
+				break;
+			default:
+				plogerro("Unknown syscall type %u", sig_type);
+				break;
+			}
+		}
+		syscall(syscall_t::REST);
 	}
 }
 
-void MccaTTYCon::current_switch(byte id) {
-	if (id > 3 || id == current_screen_TTY) return;
-	ttycons[current_screen_TTY]->last_curposi = curget();
-	ttycons[id]->setStartLine(ttycons[id]->topline + ttycons[id]->crtline);
+void uni::BareConsole::doshow() {
+	unsigned id = IndexTTY(this);
+	if (id == current_screen_TTY) return;
+	if (id > 3) {
+		plogerro("TTY Id %u", id);
+		return;
+	}
+	bcons[current_screen_TTY]->last_curposi = curget();
+	bcons[id]->setStartLine(topline + crtline);
 	current_screen_TTY = id;
-	curset(ttycons[id]->last_curposi);
+	curset(bcons[id]->last_curposi);
 	//
-	for0(i, 4) ttycons[i]->auto_incbegaddr = false;
-	ttycons[id]->auto_incbegaddr = true;
-
+	for0(i, 4) bcons[i]->auto_incbegaddr = false;
+	bcons[id]->auto_incbegaddr = true;
 }
-
-void memdump(_TODO)
-{
-	// outsfmt("     00 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F\n\r");
-	// char* __p = (char*)0x78000;
-	// for0(j, 10) {
-	// 	outsfmt("%[16H] ", j << 4);
-	// 	for0(i, 16) {
-	// 		outsfmt("%[8H] ", *__p++);
-	// 	}
-	// 	outsfmt("\n\r");
-	// }
-}
-
-
 
 #endif

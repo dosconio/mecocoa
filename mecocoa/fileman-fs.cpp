@@ -35,7 +35,7 @@ bool OrangesFs::makefs() {
 	BlockTrait& part = *storage;
 	byte* buffer = (byte*)buffer_sector;
 	//
-	ploginfo("making OrangesFs on part%u (buffer %[32H])", partid, buffer);
+	Console.OutFormat("[Hrddisk] Making OrangesFs on part%u (buffer %[32H])", partid, buffer);
 
 	const int bits_per_sect = part.Block_Size * _BYTE_BITS_;
 	// - Write a super block to sector 1.
@@ -91,11 +91,11 @@ bool OrangesFs::makefs() {
 		// ploginfo("write %u", sec);
 		state = part.Write(sec++, buffer);
 		_dbg_sec_fill_time++;
-		outsfmt(">");
+		// outsfmt(">");
 		if (!state) plogerro("mkfs: failed to RW.");
 	}
 	outsfmt("\n\r");
-	ploginfo("fill the  sectormap %u times", _dbg_sec_fill_time);
+	// ploginfo("fill the  sectormap %u times", _dbg_sec_fill_time);
 	// - Create the inodes of the files
 	//   (now rw-buffer is empty)
 	Letvar(pnod, inode::inode_entity*, buffer);

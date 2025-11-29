@@ -17,7 +17,14 @@ public:\
 #include <cpp/Device/_Video.hpp>
 
 #if _MCCA==0x8632
+#define TTY_NUMBER 4
 defVconIface(GloScreen, uint8);
+extern BareConsole* BCONS0;
+extern BareConsole* BCONS[TTY_NUMBER];
+
+void cons_init();
+
+
 #elif _MCCA==0x8664
 defVconIface(GloScreenARGB8888, uint32);
 defVconIface(GloScreenABGR8888, uint32);

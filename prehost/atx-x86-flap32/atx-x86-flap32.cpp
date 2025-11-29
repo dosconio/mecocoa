@@ -115,7 +115,7 @@ void MAIN() {
 	// Enable x86 Cache
 	Cache();
 
-	MccaTTYCon::cons_init();// located here, for  INT-10H may influence PIC
+	cons_init();// located here, for  INT-10H may influence PIC
 
 	// IVT and Device
 	InterruptControl GIC(_IMM(0x80000800));// linear but not physical
@@ -135,7 +135,7 @@ void MAIN() {
 	Console.OutFormat("CPU Brand: %s\n\r", text_brand());
 
 	// Service
-	TaskRegister((void*)&MccaTTYCon::serv_cons_loop, 1);
+	TaskRegister((void*)&serv_cons_loop, 1);
 	TaskRegister((void*)&serv_dev_hd_loop, 1);
 	TaskRegister((void*)&serv_file_loop, 1);
 
@@ -166,11 +166,11 @@ void MAIN() {
 
 	// Console.OutFormat("IMR 0x%[8H] 0x%[8H]\n\r", innpb(_i8259A_MAS_IMR), innpb(_i8259A_SLV_IMR));
 
-	// ttycons[0]->OutFormat("HelloTTY%d\n\r", 0);
-	// ttycons[1]->OutFormat("HelloTTY%d\n\r", 1);
-	// ttycons[2]->OutFormat("HelloTTY%d\n\r", 2);
-	// ttycons[3]->OutFormat("HelloTTY%d\n\r", 3);
-	// MccaTTYCon::current_switch(0);
+	// bcons[0]->OutFormat("HelloTTY%d\n\r", 0);
+	// bcons[1]->OutFormat("HelloTTY%d\n\r", 1);
+	// bcons[2]->OutFormat("HelloTTY%d\n\r", 2);
+	// bcons[3]->OutFormat("HelloTTY%d\n\r", 3);
+	// MccaTTYCon::current_switch(0); --> doshow()
 
 	
 	auto lastsec = mecocoa_global->system_time.sec;
