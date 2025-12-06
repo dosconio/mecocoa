@@ -34,6 +34,8 @@ public:
 	static rostr text_memavail(uni::String& ker_buf);
 };
 
+
+
 //
 
 extern void page_init();

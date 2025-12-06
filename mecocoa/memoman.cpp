@@ -144,10 +144,7 @@ static const uint32 gdt_magic[] = {
 	// 0x0000FFFF, 0x00CFF200, // data r3
 };
 
-//{TODO} make into a class
-// 8*0 Null   , 8*1 Code R0, 8*2 Data R0, 8*3 Gate R3
-// 8*4 Co16   , 8*5 TSS    , 8*6 Codu R3, 8*7 Datu R3 (-u User)
-// Other TSS ... pass 8*(6,7)
+
 // previous GDT may be broken, omit __asm("sgdt _buf");
 void GDT_Init() {
 	MemCopyN(mecocoa_global->gdt_ptr, gdt_magic, sizeof(gdt_magic));
@@ -168,5 +165,8 @@ word GDT_Alloc() {
 	loadGDT(_IMM(mecocoa_global->gdt_ptr), mecocoa_global->gdt_len += 8);
 	return ret;
 }
+
+// No dynamic core
+
 
 #endif

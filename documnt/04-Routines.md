@@ -21,22 +21,22 @@ Rule
 	- EDX para 2
 	- EBX para 3
 - Output
-	- 
+	- EAX
 
 `enum class syscall_t`
 
-| No. | Identification | Function  | IO                | Description                          |
-| --- | -------------- | --------- | ----------------- | ------------------------------------ |
-| 0   | OUTC           |           | (char)            | putchar current tty                  |
-| 1   | INNC           |           | (block_mode)→word | getchar<br>高字节包含键盘状态<br>**TODO**     |
-| 2   | EXIT           |           | (code)            | terminate program<br>uncheck for new |
-| 3   | TIME           | syssecond | ()→second         | 获取秒数                                 |
-| 4   | REST           | sysrest   |                   | HLT 直到下一次中断发生                        |
-| 5   | COMM           | syscomm   |                   |                                      |
-|     |                |           |                   |                                      |
-|     |                |           |                   |                                      |
-|     |                |           |                   |                                      |
-| FF  | TEST           |           | (T,E,S)           | 输入TES则反馈成功，并标注是哪个进程导致的               |
+| No. | Identification | Function  | IO                | Description                               |
+| --- | -------------- | --------- | ----------------- | ----------------------------------------- |
+| 00  | OUTC           |           | (char)            | putchar current tty                       |
+| 01  | INNC           |           | (block_mode)→word | getchar<br>高字节包含键盘状态<br>**TODO**          |
+| 02  | EXIT           |           | (code)            | terminate program<br>uncheck for new      |
+| 03  | TIME           | syssecond | ()→second         | 获取秒数                                      |
+| 04  | REST           | sysrest   |                   | HLT 直到下一次中断发生                             |
+| 05  | COMM           | syscomm   |                   | communication: send/receive<br>同步(阻塞)收发信息 |
+|     |                |           |                   |                                           |
+|     |                |           |                   |                                           |
+|     |                |           |                   |                                           |
+| FF  | TEST           |           | ('T','E','S')→pid | 输入TES则反馈成功，并标注是哪个进程导致的                    |
 
 
 

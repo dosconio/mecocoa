@@ -5,31 +5,36 @@ void sysouts(const char* str)// 0
 {
 	while (*str)
 	{
-		syscall(0x00, (stduint)*str, nil, nil);
+		syscall(OUTC, (stduint)*str, nil, nil);
 		str++;
 	}
+	// [Other Method]
+	//    fd = sysopen("/dev_tty0");
+	//    syswrite(fd, (void*)"Hello CCCCC!\n\r", 15);
+	//    sysclose(fd);
 }
 void sysinnc()// 1
 {
+	_TODO INNC;
 }
 void sysquit(int code)// 2
 {
-	syscall(0x02, nil, nil, nil);
+	syscall(EXIT, nil, nil, nil);
 }
 
 stduint syssecond()// 3
 {
-	return syscall(0x03, nil, nil, nil);
+	return syscall(TIME, nil, nil, nil);
 }
 
 void sysrest()// 4
 {
-	syscall(0x04, nil, nil, nil);
+	syscall(REST, nil, nil, nil);
 }
 
 void syscomm(int send_recv, stduint obj, struct CommMsg* msg)
 {
-	syscall(0x05, send_recv ? 0b01 : 0b10, obj, _IMM(msg));
+	syscall(COMM, send_recv ? 0b01 : 0b10, obj, _IMM(msg));
 }
 
 
@@ -53,26 +58,31 @@ stduint systest(unsigned t, unsigned e, unsigned s)// FF
 
 int sys_createfil(rostr fullpath)
 {
-	stduint r = syscall(0x6, _IMM(fullpath), 0b01, nil);// open -> desc
+	stduint r = syscall(OPEN, _IMM(fullpath), 0b01, nil);// open -> desc
 	return *(int*)&r;
 }
 
 int sysopen(rostr fullpath) {
-	stduint r = syscall(0x6, _IMM(fullpath), 0b10, nil);// open -> desc
+	stduint r = syscall(OPEN, _IMM(fullpath), 0b10, nil);// open -> desc
 	return *(int*)&r;
 }
 int sysclose(int fd) {
-	return syscall(0x7, fd, nil, nil);
+	return syscall(CLOS, fd, nil, nil);
 }
 stduint sysread(int fd, void* buf, stduint size)
 {
-	return syscall(0x8, fd, _IMM(buf), size);
+	return syscall(READ, fd, _IMM(buf), size);
 }
 stduint syswrite(int fd, void* buf, stduint size) {
-	return syscall(0x9, fd, _IMM(buf), size);
+	return syscall(WRIT, fd, _IMM(buf), size);
 }
 
 int sys_removefil(rostr fullpath)
 {
-	return syscall(0xA, _IMM(fullpath), nil, nil);
+	return syscall(DELF, _IMM(fullpath), nil, nil);
 }
+
+int fork() {
+    return syscall(FORK, nil, nil, nil);
+}
+

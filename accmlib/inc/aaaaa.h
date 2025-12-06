@@ -1,27 +1,18 @@
 #include "c/stdinc.h"
+#include "../../include/syscall.hpp"
 
 #define sysrecv(pid,msg) syscomm(0,pid,msg)
 #define syssend(pid,msg) syscomm(1,pid,msg)
 
-#define OUTC 0x00
-#define INNC 0x01
-#define EXIT 0x02
-#define TIME 0x03
-#define REST 0x04
-#define COMM 0x05
-#define OPEN 0x06
-#define CLOS 0x07
-#define READ 0x08
-#define WRIT 0x09
-#define DELF 0x0A
 
+//{TEMP}
 enum {
 	Task_Kernel,
 	Task_Con_Serv,
 	Task_Hdd_Serv,
 	Task_FileSys,
-	Task_AppB,
-	Task_AppA,
+	Task_TaskMan,
+	Task_Init,
 	Task_AppC,
 	//
 	TaskCount
@@ -51,7 +42,7 @@ extern "C" {
 
 	stduint systest(unsigned t, unsigned e, unsigned s);
 
-	// return negative if failed
+	// return negative if failed. Create and Open
 	int sys_createfil(rostr fullpath);
 	//
 	int sysopen(rostr fullpath);
@@ -63,6 +54,9 @@ extern "C" {
 	stduint syswrite(int fd, void* buf, stduint size);
 	// return nil for success
 	int sys_removefil(rostr fullpath);
+
+	// ---- POSIX:unistd ---- //
+	int fork();
 
 #ifdef _INC_CPP
 }

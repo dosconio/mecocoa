@@ -26,6 +26,22 @@ struct _Comment(Kernel) ProcessBlock {
 	TSS_t TSS;// aka state-frame
 	stduint kept_intermap[1];
 	word focus_tty_id;
+	stduint processor_id;// running on which cpu core
+
+	// before syscall
+	stduint before_syscall_eax;
+	stduint before_syscall_ecx;
+	stduint before_syscall_edx;
+	stduint before_syscall_ebx;
+	stduint before_syscall_ebp;
+	stduint before_syscall_esi;
+	stduint before_syscall_edi;
+	stduint before_syscall_data_pointer;// esp
+	stduint before_syscall_code_pointer;
+	//
+	Slice load_slices[8];// at most 8 slices, app-relative logical address
+
+	//{} threads
 
 	// state
 	enum class State : byte {
@@ -76,6 +92,11 @@ struct _Comment(Kernel) ProcessBlock {
 
 };
 
+enum class TaskmanMsg {
+	TEST,
+	FORK,
+};
+
 ProcessBlock* TaskRegister(void* entry, byte ring);
 ProcessBlock* TaskLoad(BlockTrait* source, void* addr, byte ring);//{TODO} for existing R1
 
@@ -96,14 +117,38 @@ enum {
 	Task_Con_Serv,
 	Task_Hdd_Serv,
 	Task_FileSys,
-	Task_AppB,
-	Task_AppA,
+	Task_TaskMan,
+	Task_Init,
 	Task_AppC,
 	//
 	TaskCount
 };
 
+
 #define ANYPROC (_IMM0)
 #define INTRUPT (~_IMM0)
+
+#define COMM_RECV 0b10
+#define COMM_SEND 0b01
+inline static stduint syssend(stduint to_whom, const void* msgaddr, stduint bytlen, stduint type = 0)
+{
+	struct CommMsg msg { nil };
+	msg.data.address = _IMM(msgaddr);
+	msg.data.length = bytlen;
+	msg.type = type;
+	return syscall(syscall_t::COMM, COMM_SEND, to_whom, &msg);
+}
+inline static stduint sysrecv(stduint fo_whom, void* msgaddr, stduint bytlen, stduint* type = NULL, stduint* src = NULL)
+{
+	struct CommMsg msg { nil };
+	msg.data.address = _IMM(msgaddr);
+	msg.data.length = bytlen;
+	if (type) msg.type = *type;
+	if (src) msg.src = *src;
+	stduint ret = syscall(syscall_t::COMM, COMM_RECV, fo_whom, &msg);
+	if (type) *type = msg.type;
+	if (src) *src = msg.src;
+	return ret;
+}
 
 #endif

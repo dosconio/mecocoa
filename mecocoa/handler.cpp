@@ -170,5 +170,7 @@ void ERQ_Handler(sdword iden, dword para) {
 	PG_POP();
 }
 
+// No dynamic core
+
 #endif
 

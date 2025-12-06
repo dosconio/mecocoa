@@ -334,7 +334,7 @@ int do_close(ProcessBlock& process, int fid)
 	OrangesFs::put_inode(process.pfiles[fd]->fd_inode);
 	process.pfiles[fd]->fd_inode = 0;
 	process.pfiles[fd] = 0;
-	ploginfo("do_close %d", fd);
+	// ploginfo("do_close %d", fd);
 	return 0;
 }
 //int do_lseek()
@@ -376,6 +376,7 @@ stduint serv_file_loop_remove(stduint pid, rostr filename) {
 	return pfs->remove(filename) ? 0 : -1;
 }
 extern bool fileman_hd_ready;
+bool flag_ready_fileman = false;
 void serv_file_loop()
 {
 	// Manually Initialize
@@ -410,13 +411,12 @@ void serv_file_loop()
 		switch ((FilemanMsg)sig_type)
 		{
 		case FilemanMsg::TEST:// (no-feedback)
-			// plogtrac("TESTING FILEMAN");
-			syssend(Task_Hdd_Serv, &to_args, 0, _IMM(FiledevMsg::TEST));
 			while (!fileman_hd_ready);
-			if (0) pfs->makefs();
+			if (1) pfs->makefs();
 			ready = pfs->loadfs();
 			root_inode = pfs->get_inode(ROOT_INODE);
 			if (ready) Console.OutFormat("%s", "[Fileman] File system is ready.\n\r");
+			flag_ready_fileman = true;
 			break;
 		case FilemanMsg::RUPT:// (usercall-forbidden&meaningless)
 			break;
@@ -464,6 +464,7 @@ void serv_file_loop()
 			break;
 		}
 		sysrecv(ANYPROC, to_args, byteof(to_args), &sig_type, &sig_src);
+		// plogwarn("Fileman: get from %d", sig_src);
 	}
 }
 

@@ -241,7 +241,6 @@ void serv_dev_hd_loop()
 	// Console.OutFormat("[Hrddisk] detect %u disks\n\r", bda->hdisk_number);
 	stduint sig_type = 0, sig_src;
 	while (true) {
-		sysrecv(ANYPROC, sliceof(args), &sig_type, &sig_src);
 		switch ((FiledevMsg)sig_type)
 		{
 		case FiledevMsg::TEST:// (no-feedback)
@@ -276,6 +275,7 @@ void serv_dev_hd_loop()
 			plogerro("Bad TYPE in %s %s", __FILE__, __FUNCIDEN__);
 			break;
 		}
+		sysrecv(ANYPROC, sliceof(args), &sig_type, &sig_src);
 	}
 }
 

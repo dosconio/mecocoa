@@ -3,12 +3,17 @@ dg-publish: true
 her-note: false
 ---
 
-Since 20250102 (TODO):
+Since 20250102:
 
 ```
-x86 (atx)-> {
-	
-}
+[qemuvirt-r32/64]
+VIRT -> rv-kernel
+
+[atx-x64-uefi64]
+UEFI -> x64-kernel
+
+[atx-x86-flap32]
+BIOS -> uni.bootx86(floppy) -> x86-loader(floppy) -> x86-kernel(hdisk0:0)
 
 ```
 

@@ -43,25 +43,10 @@ enum {
 	SegTSS = 8 * 5,
 	// SegCodeR3 = 8 * 6,
 	// SegDataR3 = 8 * 7,
+	// LDT_App1, TSS_App1, LDT_App2, TSS_App2, ...
 };
 
-enum class syscall_t : stduint {
-	OUTC = 0x00, // putchar
-	INNC = 0x01, //{TODO} getchar (block_mode)
-	EXIT = 0x02, // exit                       // (code)
-	TIME = 0x03, // getsecond
-	REST = 0x04, // halt
-	COMM = 0x05, // communicate: send/receive
-	OPEN = 0x06, // open   file
-	CLOS = 0x07, // close  file                // (fd)->0
-	READ = 0x08, // read   file                // (fd, addr, len)
-	WRIT = 0x09, // write  file                // (fd, addr, len)
-	DELF = 0x0A, // remove file
 
-	TMSG = 0x0F, // try message
-
-	TEST = 0xFF,
-};
 
 #define mapglb(x) (*(usize*)&(x) |= 0x80000000)
 #define mglb(x) (_IMM(x) | 0x80000000)
@@ -84,8 +69,10 @@ extern OstreamTrait* kbd_out;
 
 // ---- memoman
 #include "memoman.hpp"
+#define PAGE_SIZE 0x1000 // lev-0-page
 
 // ---- syscall
+#include "syscall.hpp"
 extern "C" void call_gate();
 extern "C" void call_intr();
 extern "C" void* call_gate_entry();
@@ -93,29 +80,7 @@ stduint syscall(syscall_t callid, ...);
 
 // ---- taskman
 #include "taskman.hpp"
-
-#define COMM_RECV 0b10
-#define COMM_SEND 0b01
-inline static stduint syssend(stduint to_whom, const void* msgaddr, stduint bytlen, stduint type = 0)
-{
-	struct CommMsg msg { nil };
-	msg.data.address = _IMM(msgaddr);
-	msg.data.length = bytlen;
-	msg.type = type;
-	return syscall(syscall_t::COMM, COMM_SEND, to_whom, &msg);
-}
-inline static stduint sysrecv(stduint fo_whom, void* msgaddr, stduint bytlen, stduint* type = NULL, stduint* src = NULL)
-{
-	struct CommMsg msg { nil };
-	msg.data.address = _IMM(msgaddr);
-	msg.data.length = bytlen;
-	if (type) msg.type = *type;
-	if (src) msg.src = *src;
-	stduint ret = syscall(syscall_t::COMM, COMM_RECV, fo_whom, &msg);
-	if (type) *type = msg.type;
-	if (src) *src = msg.src;
-	return ret;
-}
+void serv_task_loop();
 
 // ---- [service] console
 #include "console.hpp"

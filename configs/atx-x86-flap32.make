@@ -24,6 +24,7 @@ ker_mod=$(uobjpath)/mcca-$(arch)/*
 
 cppfile=$(wildcard mecocoa/*.cpp) $(wildcard filesys/*.cpp)
 cppobjs=$(patsubst %cpp, %o, $(cppfile))
+
 sudokey=k
 elf_loader=mcca-$(arch).loader.elf
 elf_kernel=mcca-$(arch).elf
@@ -56,27 +57,30 @@ build: clean $(cppobjs)
 	@perl configs/$(arch).bochsdbg.pl > $(ubinpath)/I686/mecocoa/bochsrc.bxrc
 	#
 	mkdir $(uobjpath)/accm-$(arch) -p
-	aasm -felf accmlib/others.asm -o accmlib/oth.o
-	cd accmlib && gcc -c *.c -m32 -nostdlib  -fno-pic -static -I$(uincpath) -D_ACCM=0x8632
-	#{TEMP} Fixed position write
+	arch=$(arch) make -f configs/$(arch).accm.make
 	#
-	echo MK subappa
-	aasm -felf subapps/helloa/helloa.asm -o subapps/helloa/helloa.o
-	ld   -s -m elf_i386 -o $(uobjpath)/accm-$(arch)/a subapps/helloa/helloa.o accmlib/*.o
-	ffset $(ubinpath)/fixed.vhd $(uobjpath)/accm-$(arch)/a 256 > /dev/null
-	#
-	echo MK subappb
-	gcc subapps/hellob/*.c accmlib/*.o -o $(uobjpath)/accm-$(arch)/b -m32 -nostdlib  -fno-pic -static -I$(uincpath) -D_ACCM=0x8632
-	ffset $(ubinpath)/fixed.vhd $(uobjpath)/accm-$(arch)/b 384 > /dev/null
+	echo MK appinit
+	g++ subapps/appinit.cpp $(uobjpath)/accm-$(arch)/*.o -o $(uobjpath)/sapp-$(arch)/init -m32 -nostdlib  -fno-pic -static -I$(uincpath) -D_ACCM=0x8632
+	ffset $(ubinpath)/fixed.vhd $(uobjpath)/sapp-$(arch)/init 256 > /dev/null
 	#
 	echo MK subappc
-	g++ subapps/helloc/* accmlib/*.o -o $(uobjpath)/accm-$(arch)/c -m32 -nostdlib  -fno-pic -static -I$(uincpath) -D_ACCM=0x8632
-	ffset $(ubinpath)/fixed.vhd $(uobjpath)/accm-$(arch)/c 512 > /dev/null
+	g++ subapps/helloc/* $(uobjpath)/accm-$(arch)/*.o -o $(uobjpath)/sapp-$(arch)/c -m32 -nostdlib  -fno-pic -static -I$(uincpath) -D_ACCM=0x8632
+	ffset $(ubinpath)/fixed.vhd $(uobjpath)/sapp-$(arch)/c 512 > /dev/null
 	#
 	@echo
 	@echo "You can now debug in bochs with the command:"
 	@echo $(bochd) -f $(dstdir)/bochsrc.bxrc
 	@echo C:/Soft/Bochs-3.0/bochs.exe -f $(dstdir)/bochsrc.bxrc -debugger
+
+subappa:
+	echo MK subappa
+	aasm -felf subapps/helloa/helloa.asm -o subapps/helloa/helloa.o
+	ld   -s -m elf_i386 -o $(uobjpath)/app-$(arch)/a subapps/helloa/helloa.o accmlib/*.o
+	ffset $(ubinpath)/fixed.vhd $(uobjpath)/app-$(arch)/a 256 > /dev/null
+subappb:
+	echo MK subappb
+	gcc subapps/hellob/*.c accmlib/*.o -o $(uobjpath)/app-$(arch)/b -m32 -nostdlib  -fno-pic -static -I$(uincpath) -D_ACCM=0x8632
+	ffset $(ubinpath)/fixed.vhd $(uobjpath)/app-$(arch)/b 384 > /dev/null
 
 run: build
 	@$(qemu) \

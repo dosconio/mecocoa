@@ -200,6 +200,8 @@ void blink2() {
 	b = !b;
 }
 
+//// ---- ---- STATIC CORE ---- ---- ////
+
 void cons_init()
 {
 	// Manually Initialize
@@ -266,6 +268,8 @@ void cons_init()
 
 
 
+
+//// ---- ---- DYNAMIC CORE ---- ---- ////
 static void tty_parse(stduint tty_id, byte keycode, keyboard_state_t state) { // // scan code set 1
 	BareConsole* ttycon = bcons[tty_id];
 	OstreamTrait* ttyout = LocateTTY(tty_id);
@@ -317,6 +321,7 @@ static void tty_parse(stduint tty_id, byte keycode, keyboard_state_t state) { //
 	last_E0s[tty_id] = keycode == 0xE0;
 }
 
+bool work_console = false;
 char* cons_buffer;
 void _Comment(R1) serv_cons_loop()
 {
@@ -335,6 +340,9 @@ void _Comment(R1) serv_cons_loop()
 	stduint to_args[4];
 
 	int ch;
+
+	work_console = true;
+
 	//{TEMP} only a TTY0(VCON)
 	while (true) {
 		for0(i, ento_gui ? 1 : 4) {
@@ -365,6 +373,7 @@ void _Comment(R1) serv_cons_loop()
 				ret = StrCopyP(cons_buffer, kernel_paging,
 					(char*)to_args[1], pb->paging, to_args[2]);
 				// if (get_drv_pid(to_args[0]) == 4)
+				//{TODO} 0x1000 and to_args[2]
 				if ((0xFF & to_args[0]) == 0) {
 					
 					LocateTTY(0xFF & to_args[0])->out(cons_buffer, ret);
@@ -379,6 +388,8 @@ void _Comment(R1) serv_cons_loop()
 		syscall(syscall_t::REST);
 	}
 }
+
+//// ---- ---- Bottom Impl ---- ---- ////
 
 void uni::BareConsole::doshow() {
 	unsigned id = IndexTTY(this);

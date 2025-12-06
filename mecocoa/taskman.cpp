@@ -16,14 +16,20 @@
 use crate uni;
 #ifdef _ARC_x86 // x86:
 #include "../include/atx-x86-flap32.hpp"
+#include "../include/filesys.hpp"
 
-bool task_switch_enable = true;
+bool task_switch_enable = true;//{} spinlk
 stduint ProcessBlock::cpu0_task;
 stduint ProcessBlock::cpu0_rest;
 
 _TEMP
-ProcessBlock* pblocks[8]; stduint pnumber = 0;
+ProcessBlock* pblocks[16]; stduint pnumber = 0;
 stduint TaskNumber = TaskCount;
+
+//// ---- ---- SCHEDULE ---- ---- ////
+
+#define T_pid2tss(pid) (SegTSS + 16 * pid)
+#define T_tss2pid(tssid) ((tssid - SegTSS) / 16)
 
 void switch_halt() {
 	if (ProcessBlock::cpu0_task == 0) {
@@ -56,8 +62,12 @@ void switch_halt() {
 	// while (1);
 }
 
+
 // by only PIT
 void switch_task() {
+	if (ProcessBlock::cpu0_task == TaskCount) return;
+
+
 	task_switch_enable = false;//{TODO} Lock
 	auto pb_src = TaskGet(ProcessBlock::cpu0_task);
 
@@ -73,6 +83,10 @@ void switch_task() {
 		++cpu0_new %= pnumber;
 	}
 	while (cpu0_new == ProcessBlock::cpu0_task || _TEMP TaskGet(cpu0_new)->state == ProcessBlock::State::Pended);
+	// if (cpu0_new == TaskCount) {
+		// ploginfo("%[32H] -- %[32H] %[32H]", &XXXXX, TaskGet(TaskCount)->TSS.ESP, TaskGet(TaskCount-1)->TSS.ESP);
+		// XXXXX();
+	// }
 	// stduint esp = 0;
 	// _ASM("movl %%esp, %0" : "=r"(esp));
 	// ploginfo("switch task %d->%d, esp: %[32H]", ProcessBlock::cpu0_task, cpu0_new, esp);
@@ -90,8 +104,11 @@ void switch_task() {
 		printlog(_LOG_FATAL, "task switch error (PID%u, State%u, PCnt%u).", pb_des->getID(), _IMM(pb_des->state), pnumber);
 	}
 	task_switch_enable = true;//{TODO} Unlock
-	jmpFar(0, SegTSS + 16 * ProcessBlock::cpu0_task);
+	jmpFar(0, T_pid2tss(ProcessBlock::cpu0_task));
 }
+
+//// ---- ---- x86 ITEM ---- ---- ////
+
 
 // LocaleDescriptor32SetFromELF32
 // 0
@@ -153,28 +170,31 @@ static void make_LDT(dword* ldt_alias, byte ring) {
 	*/
 }
 
+//// ---- ---- REGISTER ---- ---- ////
+
+
 ProcessBlock* TaskRegister(void* entry, byte ring)
 {
-	word parent = 8 * 7;// Kernel Task
+	word parent = SegTSS;// Kernel Task
 
 	word LDTSelector = GDT_Alloc() / 8;
 	word TSSSelector = GDT_Alloc() / 8;
 	// outsfmt("LDTSel %d, TSSSel %d\n\r", LDTSelector, TSSSelector);
-	char* page = (char*)Memory::physical_allocate(0x2000);
+	char* page = (char*)Memory::physical_allocate(0x3000);
 	ProcessBlock* pb = (ProcessBlock*)(page); new (pb) ProcessBlock();
 	descriptor_t* LDT = (descriptor_t*)(pb->LDT);
 	descriptor_t* GDT = (descriptor_t*)mecocoa_global->gdt_ptr;
 
 	TSS_t* TSS = &pb->TSS;
-	TSS->LastTSS = 0;// parent;
+	TSS->LastTSS = parent;
 	TSS->NextTSS = 0;
-	TSS->ESP0 = (dword)(page + 0x1000) + 0x400;
+	TSS->ESP0 = (dword)(page + 0x1000) + 0x800;
 	TSS->SS0 = 8 * 4 + 4 + 0;// 4:LDT 8*4:SS0 0:Ring0 
 	TSS->Padding0 = 0;
-	TSS->ESP1 = (dword)(page + 0x1400) + 0x400;
+	TSS->ESP1 = (dword)(page + 0x1400) + 0x800;
 	TSS->SS1 = 8 * 5 + 4 + 1;// 4:LDT 8*5:SS1 1:Ring1
 	TSS->Padding1 = 0;
-	TSS->ESP2 = (dword)(page + 0x1800) + 0x400;
+	TSS->ESP2 = (dword)(page + 0x1800) + 0x800;
 	TSS->SS2 = 8 * 6 + 4 + 2;// 4:LDT 8*6:SS2 2:Ring2
 	TSS->Padding2 = 0;
 
@@ -201,9 +221,10 @@ ProcessBlock* TaskRegister(void* entry, byte ring)
 	case 2: TSS->ESP = TSS->ESP2;
 		break;
 	default: 
-	case 3: TSS->ESP = (dword)(page + 0x1C00) + 0x400;
+	case 3: TSS->ESP = (dword)(page + 0x2800) + 0x800;
 		break;
 	}
+	//{} stack over-check - single segment
 
 	if (false) outsfmt("TSS %d at 0x%[32H], Entry 0x%[32H]->0x%[32H], SP=0x%[32H]\n\r",
 		TSSSelector, page,
@@ -266,46 +287,53 @@ static void TaskLoad_Carry(char* vaddr, stduint length, char* phy_src, Paging& p
 
 ProcessBlock* TaskLoad(BlockTrait* source, void* addr, byte ring)
 {
-	_TODO source; sizeof(Paging);
-	word parent = 8 * 7;// Kernel Task
-
+	_TODO source;//{TODO} (,mem,ring) ==> (fs_fullpath, ring)
+	stduint stack_size = PAGE_SIZE;
+	word parent = SegTSS;// Kernel Task
+	//
 	word LDTSelector = GDT_Alloc() / 8;
 	word TSSSelector = GDT_Alloc() / 8;
-	stduint allocsize = 0x2000;
+	stduint allocsize = vaultAlignHexpow(0x1000, sizeof(ProcessBlock)) + 0x4000 _Comment(STACK);
 	char* page = (char*)Memory::physical_allocate(allocsize);
 	ProcessBlock* pb = (ProcessBlock*)(page); new (pb) ProcessBlock();
 	descriptor_t* LDT = (descriptor_t*)(pb->LDT);
 	descriptor_t* GDT = (descriptor_t*)mecocoa_global->gdt_ptr;
 
 	TSS_t* TSS = &pb->TSS;
-	TSS->LastTSS = 0;// parent;
+	TSS->LastTSS = parent;
 	TSS->NextTSS = 0;
 
-	// CR3
+	// ---- CR3 Mapping ---- //
+	// keep 0x00000000 default empty page
 	pb->paging.Reset();
 	TSS->CR3 = _IMM(pb->paging.page_directory);
-
-	// keep 0x00000000 default empty page
-	pb->paging.Map(0x00001000, _IMM(page), allocsize, true, _Comment(R3) true);
-
-	pb->paging.Map(0x80000000, 0x00000000, 0x00400000, true, _Comment(R0) false);// should include LDT
-
-	//{WHY!!!} Found should include LDT. Do "JMP-TSS" need keep it, and its PDT?
-	// pb->paging.MapWeak(0x00108000, 0x00108000, 0x00002000, true, _Comment(R0) false);
+	pb->paging.Map(0x00001000, _IMM(page), allocsize, true, _Comment(R3) true);// PB&STACK
+	stduint kernel_size = _TEMP 0x00400000;
+	pb->paging.Map(0x80000000, 0x00000000, kernel_size, true, _Comment(R0) false);// should include LDT
+	// [PHINA]: should include LDT in Paging if use jmp-tss
+	#if 1 // may conflict
 	pb->paging.MapWeak(_IMM(page), _IMM(page), allocsize, true, _Comment(R0) false);
-	//{TODO} using DIY switch procedure but J-TSS
-	//{ASSUME} no conflict with:
+	#endif
 
 
 	Letvar(header, struct ELF_Header_t*, addr);
 	TSS->EIP = 0x10C146;//_IMM(header->e_entry);
 	TSS->EIP = _IMM(header->e_entry);
+	stduint load_slice_p = 0;
 	for0(i, header->e_phnum) {
 		Letvar(ph, struct ELF_PHT_t*, (byte*)addr + header->e_phoff + header->e_phentsize * i);
-		if (ph->p_type == PT_LOAD)//{TEMP}VAddress
+		if (ph->p_type == PT_LOAD && ph->p_memsz)//{TEMP}VAddress
 		{
 			//{TODO} RW of ph->p_flags;
 			TaskLoad_Carry((char*)ph->p_vaddr, ph->p_memsz, (char*)addr + ph->p_offset, pb->paging);
+			if (load_slice_p < numsof(pb->load_slices)) {
+				pb->load_slices[load_slice_p].address = ph->p_vaddr;
+				pb->load_slices[load_slice_p].length = ph->p_memsz;
+				load_slice_p++;
+			}
+			else {
+				plogwarn("[pid %u] LoadSlice Overflow", T_tss2pid(TSSSelector * 8));
+			}
 		}
 	}
 	if (false) outsfmt("TSS %d at 0x%[32H], Entry 0x%[32H]->0x%[32H], CR3=0x%[32H]\n\r",
@@ -313,18 +341,18 @@ ProcessBlock* TaskLoad(BlockTrait* source, void* addr, byte ring)
 		header->e_entry, pb->paging[header->e_entry],
 		TSS->CR3);
 
-	page = (char*)0x00001000;
-	
-	TSS->ESP0 = (dword)(page + 0x1000) + 0x400;
+	// ---- Stack and Gen.Regis ---- //
+	page = (char*)0x1000 + vaultAlignHexpow(0x1000, sizeof(ProcessBlock));
+	TSS->ESP0 = (dword)(page + stack_size * 1) - 0x10;
 	TSS->SS0 = 8 * 4 + 4 + 0;// 4:LDT 8*4:SS0 0:Ring0 
 	TSS->Padding0 = 0;
-	TSS->ESP1 = (dword)(page + 0x1400) + 0x400;
+	TSS->ESP1 = (dword)(page + stack_size * 2) - 0x10;
 	TSS->SS1 = 8 * 5 + 4 + 1;// 4:LDT 8*5:SS1 1:Ring1
 	TSS->Padding1 = 0;
-	TSS->ESP2 = (dword)(page + 0x1800) + 0x400;
+	TSS->ESP2 = (dword)(page + stack_size * 3) - 0x10;
 	TSS->SS2 = 8 * 6 + 4 + 2;// 4:LDT 8*6:SS2 2:Ring2
 	TSS->Padding2 = 0;
-
+	//
 	TSS->EFLAGS = getEflags();
 	TSS->EAX = TSS->ECX = TSS->EDX = TSS->EBX = TSS->EBP = TSS->ESI = TSS->EDI = 0;
 	switch (ring)
@@ -336,9 +364,10 @@ ProcessBlock* TaskLoad(BlockTrait* source, void* addr, byte ring)
 	case 2: TSS->ESP = TSS->ESP2;
 		break;
 	default: 
-	case 3: TSS->ESP = (dword)(page + 0x1C00) + 0x400 - 0x10;
+	case 3: TSS->ESP = (dword)(page + stack_size * 4) - 0x10;
 		break;
 	}
+	//{TODO} Stack Over Check - single segment
 	//{TODO} allow IOMap Version
 	TSS->ES = 8*2 + 0b100 + ring;
 	TSS->Padding3 = 0;
@@ -363,11 +392,110 @@ ProcessBlock* TaskLoad(BlockTrait* source, void* addr, byte ring)
 
 	make_LDT((dword*)LDT, ring);
 
-	TSS->EFLAGS |= 0x0200;// IF
+	cast<REG_FLAG_t>(TSS->EFLAGS).IF = 1;
 	if (ring <= 1) TSS->EFLAGS |= _IMM1 << 12;
 	TaskAdd(pb);
 	return pb;
 }
+
+
+// return pid of child (zero if no child or failure)
+static stduint task_fork(ProcessBlock* fo)
+{
+	// 1. Copy the PB
+	// 2. Copy segmants and stack
+	// 3. FS Operation
+	stduint stack_size = PAGE_SIZE;
+	word parent = T_pid2tss(fo->getID());
+	word LDTSelector = GDT_Alloc() / 8;
+	word TSSSelector = GDT_Alloc() / 8;
+	stduint allocsize = vaultAlignHexpow(PAGE_SIZE, sizeof(ProcessBlock)) + stack_size * 4 _Comment(STACK);
+	char* page = (char*)Memory::physical_allocate(allocsize);
+
+	ProcessBlock* pb = (ProcessBlock*)(page); new (pb) ProcessBlock();
+	descriptor_t* LDT = (descriptor_t*)(pb->LDT);
+	descriptor_t* GDT = (descriptor_t*)mecocoa_global->gdt_ptr;
+	Letvar(fo_code, descriptor_t*, &fo->LDT[2]);
+	stduint ring = fo_code->DPL;
+	TSS_t* TSS = &pb->TSS;
+	*TSS = fo->TSS;
+	TSS->LastTSS = parent;
+	TSS->NextTSS = 0;
+	TSS->LDTDptr = LDTSelector * 8 + 3;
+	//
+	TSS->EAX = nil; // return from fork()
+	TSS->ECX = fo->before_syscall_ecx;
+	TSS->EDX = fo->before_syscall_edx;
+	TSS->EBX = fo->before_syscall_ebx;
+	TSS->ESI = fo->before_syscall_esi;
+	TSS->EDI = fo->before_syscall_edi;
+	TSS->EBP = fo->before_syscall_ebp;
+	TSS->EIP = fo->before_syscall_code_pointer;
+	if (ring) TSS->ESP = fo->before_syscall_data_pointer;
+	// ploginfo("set eip=%[32H] esp=%[32H] EBP=%[32H]", TSS->EIP, TSS->ESP, TSS->EBP);
+
+	// ---- Copy CR3 Mapping ---- //
+	// - Segments Mapping with coping
+	// - Kernel-Area Mapping
+	// - (TODO) Heap Area Mapping
+	pb->paging.Reset();
+	TSS->CR3 = _IMM(pb->paging.page_directory);
+	pb->paging.Map(0x00001000, _IMM(page), allocsize, true, _Comment(R3) true);// PB&STACK
+	for0a(i, fo->load_slices) {
+		if (!fo->load_slices[i].length) break;
+		pb->load_slices[i] = fo->load_slices[i];
+		// plogwarn("copy-slice %[32H]-%[32H]", fo->load_slices[i].address, fo->load_slices[i].address + fo->load_slices[i].length);
+		stduint appendix = fo->load_slices[i].address & _IMM(PAGE_SIZE - 1);
+		stduint pagesize = vaultAlignHexpow(PAGE_SIZE, fo->load_slices[i].length + appendix);
+		stduint newaddr = (stduint)Memory::physical_allocate(pagesize);
+		stduint mapsrc = fo->load_slices[i].address & ~_IMM(PAGE_SIZE - 1);
+		pb->paging.Map(mapsrc, newaddr, pagesize, _TEMP true, true);//{} Map and allocation
+		MemCopyP((char*)mapsrc + appendix, pb->paging,
+			(void*)fo->load_slices[i].address, fo->paging,
+			fo->load_slices[i].length + appendix);
+	}
+	stduint kernel_size = _TEMP 0x00400000;
+	pb->paging.Map(0x80000000, 0x00000000, kernel_size, true, _Comment(R0) false);// should include LDT
+	// [PHINA]: should include LDT in Paging if use jmp-tss
+	#if 1 // may conflict
+	pb->paging.MapWeak(_IMM(page), _IMM(page), allocsize, true, _Comment(R0) false);
+	#endif
+
+	// ---- Stack and Gen.Regis ---- //
+	page = (char*)0x1000 + vaultAlignHexpow(PAGE_SIZE, sizeof(ProcessBlock));
+	TSS->ESP0 = (dword)(page + stack_size * 1) - 0x10;
+	MemCopyP(page, pb->paging, page, fo->paging, stack_size * 4);
+	TSS->SS0 = 8 * 4 + 4 + 0;// 4:LDT 8*4:SS0 0:Ring0 
+	TSS->SS1 = 8 * 5 + 4 + 1;// 4:LDT 8*5:SS1 1:Ring1
+	TSS->SS2 = 8 * 6 + 4 + 2;// 4:LDT 8*6:SS2 2:Ring2
+	//
+	TSS->ES = 8 * 2 + 0b100 + ring;
+	TSS->CS = 8*1 + 0b100 + ring;
+	TSS->SS = 8*(4+ring) + 0b100 + ring;
+	TSS->DS = TSS->ES;
+	TSS->FS = TSS->ES;
+	TSS->GS = TSS->ES;
+
+	// Then register LDT in GDT, do not add 0x80000000
+	GlobalDescriptor32Set(&GDT[LDTSelector], _IMM(LDT) + 0x80000000, TSS->LDTLength, _Dptr_LDT, 0, 0 /* is_sys */, 1 /* 32-b */, 0 /* not-4k */	);// [0x00408200]
+	GlobalDescriptor32Set(&GDT[TSSSelector], _IMM(TSS), sizeof(TSS_t)-1, _Dptr_TSS386_Available, 0, 0 /* is_sys */, 1 /* 32-b */, 0 /* not-4k */ );// TSS [0x00408900]
+
+
+	make_LDT((dword*)LDT, ring);
+
+	// ---- File ---- //
+	for0a(i, pb->pfiles) if (pb->pfiles[i]) {
+		pb->pfiles[i] = fo->pfiles[i];
+		pb->pfiles[i]->fd_inode->i_cnt++;
+	}
+
+	cast<REG_FLAG_t>(TSS->EFLAGS).IF = true;
+	if (ring <= 1) TSS->EFLAGS |= _IMM1 << 12;
+
+	TaskAdd(pb);
+	return TSSSelector * 8;
+}
+
 
 // ---- MANAGE ----
 
@@ -420,12 +548,16 @@ void rupt_proc(stduint pid, stduint rupt_no)
 		tmp_msg.type = HARDRUPT;
 		MemCopyP(task->unsolved_msg, task->paging, &tmp_msg, kernel_paging, sizeof(tmp_msg));
 		task->wait_rupt_no = nil;
+		task->unsolved_msg = NULL;
 		task->Unblock(ProcessBlock::BlockReason::BR_RecvMsg);
 	}
 	else {
 		task->wait_rupt_no = rupt_no;
 	}
 }
+
+//// ---- ---- SYSCOMM ---- ---- ////
+
 
 int msg_send(ProcessBlock* fo, stduint too, _Comment(vaddr) CommMsg* msg)
 {
@@ -457,15 +589,24 @@ int msg_send(ProcessBlock* fo, stduint too, _Comment(vaddr) CommMsg* msg)
 	else {
 		fo->Block(ProcessBlock::BR_SendMsg);
 		fo->send_to_whom = too;// to->getID();
+		if (fo->unsolved_msg) plogwarn("unsolved_msg");
 		fo->unsolved_msg = msg;
 		// proc sending queue
 		if (!to->queue_send_queuehead) to->queue_send_queuehead = fo->getID(); else {
-			ProcessBlock* crt = to;
+			ProcessBlock* crt = TaskGet(to->queue_send_queuehead);
 			while (crt->queue_send_queuenext) {
 				crt = TaskGet(crt->queue_send_queuenext);
 				if (!crt) { plogerro("Loss of ProcessBlock since qsend %[32H]", too); return 1; }
 			}
 			crt->queue_send_queuenext = fo->getID();
+			//plogwarn(">>> %u (+=) %u->%u", crt->getID(), fo->getID(), too);
+			//{
+			//	for0(i, pnumber) {
+			//		Console.OutFormat("-- %u: (%u:%u) head %u, next %u, send_to_whom\n\r",
+			//			i, pblocks[i]->state, pblocks[i]->block_reason,
+			//			pblocks[i]->queue_send_queuehead, pblocks[i]->queue_send_queuenext);
+			//	}
+			//}
 		}
 		fo->queue_send_queuenext = nil;// keep this at tail
 	}
@@ -491,16 +632,18 @@ int msg_recv(ProcessBlock* to, stduint foo, _Comment(vaddr) CommMsg* msg)
 		}
 	}
 	else {
+		// ploginfo("%u -> %u", foo, to->getID());
 		ProcessBlock* fo = TaskGet(foo);
 		if (fo->block_reason == ProcessBlock::BR_SendMsg &&
 			fo->send_to_whom == to->getID()) {
 			ProcessBlock* crt = TaskGet(to->queue_send_queuehead);
-			while (crt) {
+			while (crt->getID()) {
 				if (crt->getID() == foo) {
 					// foo = crt->getID();
 					determined = true; break;
 				}
 				prev = crt;
+				if (!crt->queue_send_queuenext) break;
 				crt = TaskGet(crt->queue_send_queuenext);
 			}
 		}
@@ -509,7 +652,7 @@ int msg_recv(ProcessBlock* to, stduint foo, _Comment(vaddr) CommMsg* msg)
 	if (determined) {
 		ProcessBlock* fo = TaskGet(foo);
 		if (foo == to->queue_send_queuehead) {
-			to->queue_send_queuehead = to->queue_send_queuenext;
+			to->queue_send_queuehead = fo->queue_send_queuenext;
 			fo->queue_send_queuenext = nil;
 		}
 		else {
@@ -537,6 +680,7 @@ int msg_recv(ProcessBlock* to, stduint foo, _Comment(vaddr) CommMsg* msg)
 	else { // block self to wait for msg
 		// ploginfo("PID%u: BLOC[RECV]", to->getID());
 		to->Block(ProcessBlock::BR_RecvMsg);
+		if (to->unsolved_msg) plogwarn("unsolved_msg");
 		to->unsolved_msg = msg;
 		to->recv_fo_whom = foo;
 	}
@@ -545,8 +689,30 @@ int msg_recv(ProcessBlock* to, stduint foo, _Comment(vaddr) CommMsg* msg)
 
 
 
+//// ---- ---- SERVICE ---- ---- ////
 
-
+void _Comment(R1) serv_task_loop()
+{
+	stduint to_args[8];// 8*4=32 bytes
+	stduint sig_type = 0, sig_src, ret;
+	while (true) {
+		switch ((TaskmanMsg)sig_type)
+		{
+		case TaskmanMsg::TEST:
+			// Nothing
+			break;
+		case TaskmanMsg::FORK: // (pid)
+			// ploginfo("Taskman fork: %u", to_args[0]);
+			ret = task_fork(TaskGet(to_args[0]));
+			syssend(sig_src, &ret, sizeof(ret), 0);
+			break;
+		default:
+			plogerro("Bad TYPE in %s %s", __FILE__, __FUNCIDEN__);
+			break;
+		}
+		sysrecv(ANYPROC, to_args, byteof(to_args), &sig_type, &sig_src);
+	}
+}
 
 
 #endif

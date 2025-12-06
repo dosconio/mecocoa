@@ -76,8 +76,13 @@ void krnl_init() {
 _ESYM_C void RETONLY();
 extern "C" void General_IRQHandler();
 
+extern ProcessBlock* pblocks[16]; extern stduint pnumber;
+
+
+
 bool ento_gui = false;
 
+//{INTO} Cache Devices
 void Cache() {
 	_ASM("mov %cr0, %eax");
 	_ASM("btr $29, %eax");// NW
@@ -138,6 +143,7 @@ void MAIN() {
 	TaskRegister((void*)&serv_cons_loop, 1);
 	TaskRegister((void*)&serv_dev_hd_loop, 1);
 	TaskRegister((void*)&serv_file_loop, 1);
+	TaskRegister((void*)&serv_task_loop, 0);// GDT operation
 
 	// InterruptEnable();
 	// while (1);
@@ -146,14 +152,13 @@ void MAIN() {
 	stduint&& bufsize = 512 * 64;
 	void* load_buffer = Memory::physical_allocate(bufsize);
 	Harddisk_PATA hdisk(0);
-	// subappb
-	printlog(_LOG_INFO, "Loading Subappb");
-	for0(i, 64) hdisk.Read(i + 384, (void*)((char*)load_buffer + 512 * (i)));
-	TaskLoad(NULL _TEMP, load_buffer, 3)->focus_tty_id = 2;
-	// subappa
-	printlog(_LOG_INFO, "Loading Subappa");
+
+	
+	// appinit
+	printlog(_LOG_INFO, "Loading Appinit");
 	for0(i, 64) hdisk.Read(i + 256, (void*)((char*)load_buffer + 512 * (i)));
-	TaskLoad(NULL _TEMP, load_buffer, 3)->focus_tty_id = 1;
+	TaskLoad(NULL _TEMP, load_buffer, 3)->focus_tty_id = 0;
+
 	// subappc
 	printlog(_LOG_INFO, "Loading Subappc");
 	for0(i, 64) hdisk.Read(i + 512, (void*)((char*)load_buffer + 512 * (i)));
@@ -180,11 +185,23 @@ void MAIN() {
 		lastsec = mecocoa_global->system_time.sec;
 		// outc('T');
 	}
+	#if 1
+	if (lastsec == 8) {
+		for0(i, pnumber) {
+			Console.OutFormat("-- %u: (%u:%u) head %u, next %u, send_to_whom\n\r",
+				i, pblocks[i]->state, pblocks[i]->block_reason,
+				pblocks[i]->queue_send_queuehead, pblocks[i]->queue_send_queuenext);
+		}
+		break;
+	}
+	#endif
 	}
 		
 	auto crt = mecocoa_global->system_time.sec;
 	stduint esp; __asm("mov %%esp, %0" : "=r"(esp));
 	loop{
+		__asm("hlt");
+
 		stduint newesp; __asm("mov %%esp, %0" : "=r"(newesp));
 		if (newesp != esp) {
 			Console.OutFormat("ESP: %u\n\r", newesp);
