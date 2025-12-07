@@ -55,11 +55,10 @@ void switch_halt() {
 	ProcessBlock::cpu0_task = 0;// kernel
 	task_switch_enable = true;
 	//
-	stduint save = pb_src->TSS.PDBR;
-	pb_src->TSS.PDBR = getCR3();// CR3 will not save in TSS? -- phina, 20250728
-	jmpFar(0, SegTSS);
-	pb_src->TSS.PDBR = save;
-	// while (1);
+	//stduint save = pb_src->TSS.PDBR;
+	//pb_src->TSS.PDBR = getCR3();// CR3 will not save in TSS? -- phina, 20250728
+	jmpTask(SegTSS/*, T_pid2tss(ProcessBlock::cpu0_rest)*/);
+	//pb_src->TSS.PDBR = save;
 }
 
 
@@ -69,6 +68,7 @@ void switch_task() {
 
 
 	task_switch_enable = false;//{TODO} Lock
+	stduint last_proc = ProcessBlock::cpu0_task;
 	auto pb_src = TaskGet(ProcessBlock::cpu0_task);
 
 	stduint cpu0_new = ProcessBlock::cpu0_task;
@@ -104,7 +104,7 @@ void switch_task() {
 		printlog(_LOG_FATAL, "task switch error (PID%u, State%u, PCnt%u).", pb_des->getID(), _IMM(pb_des->state), pnumber);
 	}
 	task_switch_enable = true;//{TODO} Unlock
-	jmpFar(0, T_pid2tss(ProcessBlock::cpu0_task));
+	jmpTask(T_pid2tss(ProcessBlock::cpu0_task)/*, T_pid2tss(last_proc)*/);
 }
 
 //// ---- ---- x86 ITEM ---- ---- ////
@@ -311,7 +311,7 @@ ProcessBlock* TaskLoad(BlockTrait* source, void* addr, byte ring)
 	stduint kernel_size = _TEMP 0x00400000;
 	pb->paging.Map(0x80000000, 0x00000000, kernel_size, true, _Comment(R0) false);// should include LDT
 	// [PHINA]: should include LDT in Paging if use jmp-tss
-	#if 1 // may conflict
+	#if 0 // may conflict
 	pb->paging.MapWeak(_IMM(page), _IMM(page), allocsize, true, _Comment(R0) false);
 	#endif
 
@@ -388,7 +388,7 @@ ProcessBlock* TaskLoad(BlockTrait* source, void* addr, byte ring)
 
 	// Then register LDT in GDT, do not add 0x80000000
 	GlobalDescriptor32Set(&GDT[LDTSelector], _IMM(LDT) + 0x80000000, TSS->LDTLength, _Dptr_LDT, 0, 0 /* is_sys */, 1 /* 32-b */, 0 /* not-4k */	);// [0x00408200]
-	GlobalDescriptor32Set(&GDT[TSSSelector], _IMM(TSS), sizeof(TSS_t)-1, _Dptr_TSS386_Available, 0, 0 /* is_sys */, 1 /* 32-b */, 0 /* not-4k */ );// TSS [0x00408900]
+	GlobalDescriptor32Set(&GDT[TSSSelector], _IMM(TSS) + 0x80000000, sizeof(TSS_t)-1, _Dptr_TSS386_Available, 0, 0 /* is_sys */, 1 /* 32-b */, 0 /* not-4k */ );// TSS [0x00408900]
 
 	make_LDT((dword*)LDT, ring);
 
@@ -457,7 +457,7 @@ static stduint task_fork(ProcessBlock* fo)
 	stduint kernel_size = _TEMP 0x00400000;
 	pb->paging.Map(0x80000000, 0x00000000, kernel_size, true, _Comment(R0) false);// should include LDT
 	// [PHINA]: should include LDT in Paging if use jmp-tss
-	#if 1 // may conflict
+	#if 0 // may conflict
 	pb->paging.MapWeak(_IMM(page), _IMM(page), allocsize, true, _Comment(R0) false);
 	#endif
 
@@ -478,7 +478,7 @@ static stduint task_fork(ProcessBlock* fo)
 
 	// Then register LDT in GDT, do not add 0x80000000
 	GlobalDescriptor32Set(&GDT[LDTSelector], _IMM(LDT) + 0x80000000, TSS->LDTLength, _Dptr_LDT, 0, 0 /* is_sys */, 1 /* 32-b */, 0 /* not-4k */	);// [0x00408200]
-	GlobalDescriptor32Set(&GDT[TSSSelector], _IMM(TSS), sizeof(TSS_t)-1, _Dptr_TSS386_Available, 0, 0 /* is_sys */, 1 /* 32-b */, 0 /* not-4k */ );// TSS [0x00408900]
+	GlobalDescriptor32Set(&GDT[TSSSelector], _IMM(TSS) + 0x80000000, sizeof(TSS_t)-1, _Dptr_TSS386_Available, 0, 0 /* is_sys */, 1 /* 32-b */, 0 /* not-4k */ );// TSS [0x00408900]
 
 
 	make_LDT((dword*)LDT, ring);
@@ -577,7 +577,7 @@ int msg_send(ProcessBlock* fo, stduint too, _Comment(vaddr) CommMsg* msg)
 		CommMsg* msg_to = (CommMsg*)to->paging[_IMM(to->unsolved_msg)];
 		void* addr_to = (void*)msg_to->data.address;
 		MIN(leng, msg_to->data.length);
-		// ploginfo("MemCopyP %[32H], ..., %[32H], ..., %d)", addr_to, addr_fo, leng);/////
+		// ploginfo("SEND-MemCopyP %[32H], ..., %[32H], ..., %d)", addr_to, addr_fo, leng);/////
 		if (leng) MemCopyP(addr_to, to->paging, addr_fo, fo->paging, leng);
 		msg_to->type = msg_fo->type;
 		msg_to->src = fo->getID();

@@ -387,7 +387,7 @@ void serv_file_loop()
 	f_desc_table = (FileDescriptor*)Memory::physical_allocate(0x1000);
 	f_desc_table_count = nil;
 	::buffer = (byte*)Memory::physical_allocate(FSBUF_SIZE);
-	ploginfo("%s, buffer %[32H]", __FUNCIDEN__, ::buffer);
+	// ploginfo("%s, buffer %[32H]", __FUNCIDEN__, ::buffer);
 	//
 	stduint&& inode_table_size = vaultAlignHexpow(0x1000, sizeof(inode) * NR_INODE);
 	inode_table = (inode*)Memory::physical_allocate(inode_table_size);

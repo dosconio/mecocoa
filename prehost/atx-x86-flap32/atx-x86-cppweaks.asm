@@ -165,6 +165,7 @@ ConvertStackPointer:; (ECX:ESP, EDX:CR3)->ESP
 	MOV EBX, ECX
 	AND EBX, 0xFFF
 	OR  EAX, EBX
+	OR  EAX, 0x8000_0000; MCCA Design
 	; ADD EAX, 4; Skip Ret-address
 	RET
 	; no use kernel stack
