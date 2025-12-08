@@ -65,7 +65,7 @@ void switch_halt() {
 // by only PIT
 void switch_task() {
 	if (ProcessBlock::cpu0_task == TaskCount) return;
-
+	using PBS = ProcessBlock::State;
 
 	task_switch_enable = false;//{TODO} Lock
 	stduint last_proc = ProcessBlock::cpu0_task;
@@ -82,29 +82,20 @@ void switch_task() {
 	else {
 		++cpu0_new %= pnumber;
 	}
-	while (cpu0_new == ProcessBlock::cpu0_task || _TEMP TaskGet(cpu0_new)->state == ProcessBlock::State::Pended);
-	// if (cpu0_new == TaskCount) {
-		// ploginfo("%[32H] -- %[32H] %[32H]", &XXXXX, TaskGet(TaskCount)->TSS.ESP, TaskGet(TaskCount-1)->TSS.ESP);
-		// XXXXX();
-	// }
-	// stduint esp = 0;
-	// _ASM("movl %%esp, %0" : "=r"(esp));
-	// ploginfo("switch task %d->%d, esp: %[32H]", ProcessBlock::cpu0_task, cpu0_new, esp);
+	while (cpu0_new == ProcessBlock::cpu0_task || (TaskGet(cpu0_new)->state != PBS::Ready && TaskGet(cpu0_new)->state != PBS::Uninit));
 	ProcessBlock::cpu0_task = cpu0_new;
 	auto pb_des = TaskGet(ProcessBlock::cpu0_task);
 
-	if (pb_des->state == ProcessBlock::State::Uninit)
-		pb_des->state = ProcessBlock::State::Ready;
-	if ((pb_src->state == ProcessBlock::State::Running) && (
-		pb_des->state == ProcessBlock::State::Ready)) {
-		pb_src->state = ProcessBlock::State::Ready;
-		pb_des->state = ProcessBlock::State::Running;
+	if (pb_des->state == PBS::Uninit) pb_des->state = PBS::Ready;
+	if ((pb_src->state == PBS::Running) && (pb_des->state == PBS::Ready)) {
+		pb_src->state = PBS::Ready;
+		pb_des->state = PBS::Running;
 	}
 	else {
 		printlog(_LOG_FATAL, "task switch error (PID%u, State%u, PCnt%u).", pb_des->getID(), _IMM(pb_des->state), pnumber);
 	}
 	task_switch_enable = true;//{TODO} Unlock
-	jmpTask(T_pid2tss(ProcessBlock::cpu0_task)/*, T_pid2tss(last_proc)*/);
+	jmpTask(T_pid2tss(ProcessBlock::cpu0_task));
 }
 
 //// ---- ---- x86 ITEM ---- ---- ////
@@ -497,6 +488,84 @@ static stduint task_fork(ProcessBlock* fo)
 }
 
 
+static void cleanup(stduint pid)
+{
+	// MESSAGE msg2parent;
+	// msg2parent.type = SYSCALL_RET;
+	// msg2parent.PID = proc2pid(proc);
+	// msg2parent.STATUS = proc->exit_status;
+	// send_recv(SEND, proc->p_parent, &msg2parent);
+	// proc->p_flags = FREE_SLOT;
+	TaskGet(pid)->state = ProcessBlock::State::Invalid;
+	TaskGet(pid)->TSS.LastTSS = 0;
+}
+inline static bool is_waiting(ProcessBlock* p) {
+	return p->state == ProcessBlock::State::Pended &&
+		(_IMM(p->block_reason) & _IMM(ProcessBlock::BlockReason::BR_Waiting));
+}
+static void task_exit(stduint pid, stduint status)
+{
+	ProcessBlock* p = TaskGet(pid);
+	auto parent_pid = T_tss2pid(p->TSS.LastTSS);
+	ProcessBlock* pparent = TaskGet(parent_pid);
+	stduint args[2] = { pid, status };
+
+	// : fileman
+	for0(i, numsof(p->pfiles)) if (p->pfiles[i]) {
+		p->pfiles[i]->fd_inode->i_cnt--;
+		p->pfiles[i] = 0;
+	}
+
+	//{} free_mem(pid);
+
+	p->exit_status = status;
+
+	using PBS = ProcessBlock::State;
+	if (is_waiting(pparent)) {
+		// cast<stduint>(pparent->block_reason) &= ~_IMM(ProcessBlock::BlockReason::BR_Waiting);
+		pparent->Unblock(ProcessBlock::BlockReason::BR_Waiting);
+		// ploginfo("sending to parent %u", parent_pid);
+		syssend(parent_pid, &args, sizeof(args));
+		cleanup(pid);
+	}
+	else {
+		p->state = PBS::Hanging;
+	}
+	// if the proc has any child, make INIT the new parent, (or kill all the children >_<)
+	for1(i, pnumber - 1) if (auto taski = TaskGet(i)) if (T_tss2pid(taski->TSS.LastTSS) == pid) {
+		taski->TSS.LastTSS = T_pid2tss(Task_Init);
+		if (is_waiting(TaskGet(Task_Init)) && taski->state == PBS::Hanging) {
+			// cast<stduint>(pparent->block_reason) &= ~_IMM(ProcessBlock::BlockReason::BR_Waiting);
+			pparent->Unblock(ProcessBlock::BlockReason::BR_Waiting);
+			syssend(Task_Init, &args, sizeof(args));
+			cleanup(i);
+		}
+	}
+}
+
+static stduint task_wait(stduint pid, stduint* usrarea_state)
+{
+	stduint children = 0;
+	for1(i, pnumber - 1) if (auto taski = TaskGet(i)) if (T_tss2pid(taski->TSS.LastTSS) == pid) {
+		children++;
+		if (taski->state == ProcessBlock::State::Hanging) {
+			stduint args[2] = { pid, taski->exit_status };
+			cleanup(i);
+			children = i;
+			syssend(pid, args, sizeof(args));// return 0
+			return i;
+		}
+	}
+	if (children) {// no child is HANGING
+		ProcessBlock* pb = TaskGet(pid);
+		// cast<stduint>(pb->block_reason) |= _IMM(ProcessBlock::BlockReason::BR_Waiting);
+		pb->Block(ProcessBlock::BlockReason::BR_Waiting);
+	}
+	else { // no any child
+		syssend(pid, &children, sizeof(children));// return 0
+	}
+}
+
 // ---- MANAGE ----
 
 stduint TaskAdd(ProcessBlock* task) {
@@ -568,7 +637,7 @@ int msg_send(ProcessBlock* fo, stduint too, _Comment(vaddr) CommMsg* msg)
 		return -1;
 	}
 
-	if ((to->block_reason == ProcessBlock::BR_RecvMsg) &&
+	if ((_IMM(to->block_reason) & _IMM(ProcessBlock::BR_RecvMsg)) &&
 		(to->recv_fo_whom == fo->getID() || to->recv_fo_whom == ANYPROC)) {
 		// assert to.unsolved_msg && msg
 		stduint leng = *(stduint*)fo->paging[_IMM(&msg->data.length)];
@@ -701,10 +770,18 @@ void _Comment(R1) serv_task_loop()
 		case TaskmanMsg::TEST:
 			// Nothing
 			break;
+		case TaskmanMsg::EXIT: // (pid, state)
+			ploginfo("Taskman exit: %u %u", to_args[0], to_args[1]);
+			task_exit(to_args[0], to_args[1]);
+			break;
 		case TaskmanMsg::FORK: // (pid)
 			// ploginfo("Taskman fork: %u", to_args[0]);
 			ret = task_fork(TaskGet(to_args[0]));
-			syssend(sig_src, &ret, sizeof(ret), 0);
+			syssend(sig_src, &ret, sizeof(ret));
+			break;
+		case TaskmanMsg::WAIT: // (pid, &usr:state) -> (child_pid)
+			// ploginfo("Taskman wait: %u %x", to_args[0], to_args[1]);
+			task_wait(to_args[0], (stduint*)to_args[1]);
 			break;
 		default:
 			plogerro("Bad TYPE in %s %s", __FILE__, __FUNCIDEN__);

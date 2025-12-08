@@ -27,8 +27,9 @@ struct _Comment(Kernel) ProcessBlock {
 	stduint kept_intermap[1];
 	word focus_tty_id;
 	stduint processor_id;// running on which cpu core
+	stduint exit_status;
 
-	// before syscall
+	// before syscall, for `fork`
 	stduint before_syscall_eax;
 	stduint before_syscall_ecx;
 	stduint before_syscall_edx;
@@ -50,6 +51,9 @@ struct _Comment(Kernel) ProcessBlock {
 		Pended,
 		Uninit,
 		Exited,
+		// Waiting,// call wait()
+		Hanging,// aka Zobmie, call exit()
+		Invalid,
 	} state = State::Uninit;
 
 	enum BlockReason : byte {
@@ -57,6 +61,7 @@ struct _Comment(Kernel) ProcessBlock {
 		BR_Interrupt = 0b1,
 		BR_SendMsg = 0b10,
 		BR_RecvMsg = 0b100,
+		BR_Waiting = 0b1000,
 	} block_reason = BlockReason::BR_None;
 	inline void Block(BlockReason reason) {
 		state = State::Pended;
@@ -94,7 +99,9 @@ struct _Comment(Kernel) ProcessBlock {
 
 enum class TaskmanMsg {
 	TEST,
+	EXIT,
 	FORK,
+	WAIT,
 };
 
 ProcessBlock* TaskRegister(void* entry, byte ring);

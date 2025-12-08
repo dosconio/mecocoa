@@ -23,7 +23,7 @@ enum
 	DELF = 0x0A, // remove file
 	//=0x0B{} proper&enumer
 	//=0x0C{} 
-	//=0x0D{} 
+	WAIT = 0x0D, // wait             // (&status) -> pid
 	FORK = 0x0E, // unix.fork        // () -> pid
 	TMSG = 0x0F, // try message
 

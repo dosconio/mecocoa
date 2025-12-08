@@ -22,7 +22,7 @@ static const byte syscall_paracnts[0x100] = {
 	// ---- 0x0X ----
 	1, //0x00 OUTC
 	3, //0x01 INNC
-	1, //0x02 EXIT
+	1, //0x02 EXIT (code)
 	0, //0x03 TIME ()->(second)
 	0, //0x04 REST
 	3, //0x05 COMM
@@ -31,7 +31,9 @@ static const byte syscall_paracnts[0x100] = {
 	4, //0x08 READ (fd, slice.addr, slice.len) ->(bytes_done)
 	4, //0x09 WRIT (fd, slice.addr, slice.len) ->(bytes_done)
 	1, //0x0A DELF (pathname)
-	0,0,0,
+	0, //KEPT for advanced file op.
+	0,
+	1, //0x0D WAIT (&state)->(pid)
 	0, //0x0E FORK ()->(child_pid for parent and nil for child)
 	0, //0x0F TMSG ()->(msg_unsovled)
 	// ---- 0x1X ----
@@ -126,10 +128,14 @@ static stduint call_body(const syscall_t callid, ...) {
 		//{TODO}
 		break;
 	case syscall_t::EXIT:
-		// task_switch_enable = task_switch_enable_old;//{} 
-		__asm("mov %0, %%eax" : : "m"(para[0]));//{unchk};
-		TaskReturn();
+	{
+		// __asm("mov %0, %%eax" : : "m"(para[0])); TaskReturn();
+		para[1] = para[0];
+		para[0] = caller_pid;
+		syssend(Task_TaskMan, para, byteof(para), _IMM(TaskmanMsg::EXIT));
+		// unreachable
 		break;
+	}
 	case syscall_t::TIME:
 		ret = mecocoa_global->system_time.sec;
 		break;
@@ -198,7 +204,20 @@ static stduint call_body(const syscall_t callid, ...) {
 		break;
 	}
 
-
+	case syscall_t::WAIT:
+	{
+		// ploginfo("syscall wait");
+		stduint tmp[2];
+		para[1] = para[0];
+		para[0] = caller_pid;
+		syssend(Task_TaskMan, para, byteof(para), _IMM(TaskmanMsg::WAIT));
+		sysrecv(Task_TaskMan, tmp, byteof(tmp));// (pid, state)
+		ret = tmp[0];// pid
+		if (ret && para[1]) {
+			MemCopyP((void*)para[1], TaskGet(caller_pid)->paging, &tmp[1], kernel_paging, byteof(stduint));
+		}
+		break;
+	}
 	case syscall_t::FORK:
 	{
 		// ploginfo("syscall fork");

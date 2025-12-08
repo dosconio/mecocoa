@@ -57,6 +57,8 @@ extern "C" {
 
 	// ---- POSIX:unistd ---- //
 	int fork();
+	[[noreturn]] void exit(int status); 
+	int _Comment(pid) wait(int* status);
 
 #ifdef _INC_CPP
 }

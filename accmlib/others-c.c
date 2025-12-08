@@ -17,9 +17,9 @@ void sysinnc()// 1
 {
 	_TODO INNC;
 }
-void sysquit(int code)// 2
+void exit(int code)// 2
 {
-	syscall(EXIT, nil, nil, nil);
+	syscall(EXIT, code, nil, nil);
 }
 
 stduint syssecond()// 3
@@ -81,7 +81,10 @@ int sys_removefil(rostr fullpath)
 {
 	return syscall(DELF, _IMM(fullpath), nil, nil);
 }
-
+int _Comment(pid) wait(int* status)
+{
+	return syscall(WAIT, _IMM(status), nil, nil);
+}
 int fork() {
     return syscall(FORK, nil, nil, nil);
 }
