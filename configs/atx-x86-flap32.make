@@ -57,20 +57,23 @@ build: clean $(cppobjs)
 	@perl configs/$(arch).bochsdbg.pl > $(ubinpath)/I686/mecocoa/bochsrc.bxrc
 	#
 	mkdir $(uobjpath)/accm-$(arch) -p
-	arch=$(arch) make -f configs/$(arch).accm.make
+	# make -f accmlib/accmx86.make
 	#
 	echo MK appinit
-	g++ subapps/appinit.cpp $(uobjpath)/accm-$(arch)/*.o -o $(uobjpath)/sapp-$(arch)/init -m32 -nostdlib  -fno-pic -static -I$(uincpath) -D_ACCM=0x8632
+	g++ -o $(uobjpath)/sapp-$(arch)/init subapps/appinit.cpp -m32 -nostdlib  -fno-pic -static -I$(uincpath) -D_ACCM=0x8632 -L$(uobjpath)/accm-$(arch) -l$(arch)
 	ffset $(ubinpath)/fixed.vhd $(uobjpath)/sapp-$(arch)/init 256 > /dev/null
 	#
 	echo MK subappc
-	g++ subapps/helloc/* $(uobjpath)/accm-$(arch)/*.o -o $(uobjpath)/sapp-$(arch)/c -m32 -nostdlib  -fno-pic -static -I$(uincpath) -D_ACCM=0x8632
+	g++ subapps/helloc/* -o $(uobjpath)/sapp-$(arch)/c -m32 -nostdlib  -fno-pic -static -I$(uincpath) -D_ACCM=0x8632 -L$(uobjpath)/accm-$(arch) -l$(arch)
 	ffset $(ubinpath)/fixed.vhd $(uobjpath)/sapp-$(arch)/c 512 > /dev/null
 	#
 	@echo
 	@echo "You can now debug in bochs with the command:"
 	@echo $(bochd) -f $(dstdir)/bochsrc.bxrc
 	@echo C:/Soft/Bochs-3.0/bochs.exe -f $(dstdir)/bochsrc.bxrc -debugger
+
+accm:
+	make -f accmlib/accmx86.make
 
 subappa:
 	echo MK subappa

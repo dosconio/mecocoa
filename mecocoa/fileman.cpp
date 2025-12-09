@@ -279,8 +279,14 @@ static stdsint do_open(ProcessBlock& process, rostr pathname, int flags) {
 			pin = create_file(pathname, flags);
 		}
 	}
-	else if (flags & O_RDWR) {
-		char filename[MAX_FILENAME_LEN] = {0};
+	else if (flags & O_RDWR) { // file exists
+		if ((flags & O_CREAT) && (!(flags & O_TRUNC))) {
+			// assert(flags == (O_RDWR | O_CREAT));
+			ploginfo("{FS} file exists: %s\n", pathname);
+			return -1;
+		}
+		//
+		char filename[MAX_FILENAME_LEN] = { 0 };
 		struct inode * dir_inode;
 		if (!strip_path(filename, pathname, &dir_inode)) {
 			plogwarn("bad filepath");
@@ -292,6 +298,13 @@ static stdsint do_open(ProcessBlock& process, rostr pathname, int flags) {
 		plogwarn("bad flags");
 		return -1;
 	}
+	//
+	if (flags & O_TRUNC) {
+		if(pin); else plogerro("%s %d", __FILE__, __LINE__);
+		pin->entity.i_size = 0;
+		pfs->sync_inode(pin);
+	}
+	//
 	if (pin) {
 		// connects proc with FileDescriptorriptor
 		process.pfiles[fd] = pfd;

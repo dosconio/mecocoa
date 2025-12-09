@@ -100,8 +100,9 @@ enum class FilemanMsg {
 	REMOVE,
 };
 
-#define	O_CREAT 0b01
-#define	O_RDWR  0b10
+#define	O_CREAT  0b001
+#define	O_RDWR   0b010
+#define	O_TRUNC  0b100 // truncate file
 
 struct inode;
 struct FileDescriptor {

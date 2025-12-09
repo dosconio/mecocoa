@@ -23,6 +23,7 @@ static bool last_E0s[TTY_NUMBER] = { false, false, false, false };
 // each con:
 typedef char innQueueBuf[64];
 static innQueueBuf _BUF_innQueues[TTY_NUMBER];
+stduint tty_crt_blocked_appid[4];// 0 if no app
 // total:
 static byte current_screen_TTY = 0;
 // consider CLI

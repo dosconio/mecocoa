@@ -13,7 +13,7 @@
 #include <cpp/interrupt>
 #include <c/format/ELF.h>
 #include <c/driver/PIT.h>
-#include <c/format/FAT12.h>
+#include <c/format/filesys/FAT12.h>
 #include <c/proctrl/x86/x86.h>
 #include <c/storage/harddisk.h>
 #include <c/driver/RealtimeClock.h>

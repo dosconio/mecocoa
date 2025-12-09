@@ -21,7 +21,7 @@ Handler_t syscalls[_TEMP 1];
 static const byte syscall_paracnts[0x100] = {
 	// ---- 0x0X ----
 	1, //0x00 OUTC
-	3, //0x01 INNC
+	0, //0x01 INNC ()->[blocked]ASCII
 	1, //0x02 EXIT (code)
 	0, //0x03 TIME ()->(second)
 	0, //0x04 REST

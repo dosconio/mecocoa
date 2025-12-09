@@ -8,7 +8,7 @@
 #define _DEBUG
 #include <c/consio.h>
 #include <c/format/ELF.h>
-#include <c/format/FAT12.h>
+#include <c/format/filesys/FAT12.h>
 #include <c/proctrl/x86/x86.h>
 #include <c/storage/harddisk.h>
 #include "../../include/atx-x86-flap32.hpp"
