@@ -56,12 +56,13 @@ struct _Comment(Kernel) ProcessBlock {
 		Invalid,
 	} state = State::Uninit;
 
-	enum BlockReason : byte {
+	enum BlockReason : uint32 {
 		BR_None = 0,
 		BR_Interrupt = 0b1,
 		BR_SendMsg = 0b10,
 		BR_RecvMsg = 0b100,
 		BR_Waiting = 0b1000,
+		BR_exInnc = 0b10000,
 	} block_reason = BlockReason::BR_None;
 	inline void Block(BlockReason reason) {
 		state = State::Pended;
@@ -102,6 +103,7 @@ enum class TaskmanMsg {
 	EXIT,
 	FORK,
 	WAIT,
+	EXEC,
 };
 
 ProcessBlock* TaskRegister(void* entry, byte ring);

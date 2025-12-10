@@ -37,7 +37,8 @@ static const byte syscall_paracnts[0x100] = {
 	0, //0x0E FORK ()->(child_pid for parent and nil for child)
 	0, //0x0F TMSG ()->(msg_unsovled)
 	// ---- 0x1X ----
-	0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,// 1XH
+	2, //0x10 EXEC (pathname, argv)->(0 for success)
+	0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,// 1XH
 	0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,// 2XH
 	0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,// 3XH
 	0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,// 4XH
@@ -94,6 +95,8 @@ static stduint syscall_07_close(stduint* paras, stduint pid) {
 	return open_buf[0];// 0 for success
 }
 
+
+
 extern bool fileman_hd_ready;
 static stduint call_body(const syscall_t callid, ...) {
 	auto task_switch_enable_old = task_switch_enable;//{TODO} {spinlk for multi-Proc}
@@ -123,10 +126,17 @@ static stduint call_body(const syscall_t callid, ...) {
 		if (ch_tse) task_switch_enable = task_switch_enable_old;
 		break;
 	}
-	case syscall_t::INNC: _TODO
-		// Read from its TTY
-		//{TODO}
+	case syscall_t::INNC:// ()->ASCII
+	{
+		// Read from its TTY, return -1 if the TTY is occupied.
+		stduint p[4];
+		p[0] = _TODO _TEMP 0;// dev
+		p[3] = caller_pid;// pid
+		syssend(Task_Con_Serv, p, byteof(p), 3);
+		sysrecv(Task_Con_Serv, &ret, byteof(ret));
+		// ploginfo("INNC: %d", ret);
 		break;
+	}
 	case syscall_t::EXIT:
 	{
 		// __asm("mov %0, %%eax" : : "m"(para[0])); TaskReturn();
@@ -230,6 +240,12 @@ static stduint call_body(const syscall_t callid, ...) {
 	{
 		ProcessBlock* pb = TaskGet(caller_pid);
 		ret = pb->queue_send_queuehead ? _TEMP 1 : 0;
+		break;
+	}
+	case syscall_t::EXEC:
+	{
+		plogerro("Please send to Task_TaskMan");
+		// ret = execv((const char*)para[0], (char**)para[1]);
 		break;
 	}
 

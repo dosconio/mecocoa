@@ -30,7 +30,7 @@ all: delall $(asmobjs) $(cplobjs) $(cppobjs)
 delall:
 	mkdir $(uobjpath)/accm-$(arch) -p
 	@-rm ${dest_obj}/lib$(arch).a
-	# rm -rf $(uobjpath)/accm-$(arch)/*
+	@-rm -rf $(uobjpath)/accm-$(arch)/*
 
 %.o: %.asm
 	@echo "AS $(<)"

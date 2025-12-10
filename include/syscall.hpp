@@ -26,6 +26,7 @@ enum
 	WAIT = 0x0D, // wait             // (&status) -> pid
 	FORK = 0x0E, // unix.fork        // () -> pid
 	TMSG = 0x0F, // try message
+	EXEC = 0x10, // exec             // (path, argv) -> 0[success]
 
 	TEST = 0xFF,
 };

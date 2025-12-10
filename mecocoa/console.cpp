@@ -271,9 +271,10 @@ void cons_init()
 
 
 //// ---- ---- DYNAMIC CORE ---- ---- ////
-static void tty_parse(stduint tty_id, byte keycode, keyboard_state_t state) { // // scan code set 1
+
+static stduint tty_parse(stduint tty_id, byte keycode, keyboard_state_t state, OstreamTrait* ttyout) { // // scan code set 1
 	BareConsole* ttycon = bcons[tty_id];
-	OstreamTrait* ttyout = LocateTTY(tty_id);
+	// OstreamTrait* ttyout = LocateTTY(tty_id);
 	if (last_E0s[tty_id]) {
 		if (!ento_gui && keycode == 0x49 && ttycon->crtline > 0) { // PgUp
 			ttycon->auto_incbegaddr = 0;
@@ -285,18 +286,18 @@ static void tty_parse(stduint tty_id, byte keycode, keyboard_state_t state) { //
 		}//{TODO} Adapt Vcon
 		else if (keycode == 0x35) // Pad /
 		{
-			ttyout->OutChar('/');
+			return '/';//ttyout->OutChar('/');
 		}
 		else if (keycode == 0x1C) // Pad ENTER
 		{
-			ttyout->OutChar('\n');
-			ttyout->OutChar('\r');
+			//ttyout->OutChar('\n');
+			//ttyout->OutChar('\r');
+			return '\n';// process as \n\r
 		}
 	}
 	else if (Rangein(keycode, 0x47, 0x54)) {
 		byte c = (state.lock_number) ? _tab_keycode2ascii[keycode].ascii_shift : _tab_keycode2ascii[keycode].ascii_usual;
-		if (c > 1)
-			ttyout->OutChar(c);
+		if (c > 1) return c;// ttyout->OutChar(c);
 	}
 	else if (keycode < 0x80) { // KEYDOWN
 		byte c = _tab_keycode2ascii[keycode].ascii_usual;
@@ -310,16 +311,17 @@ static void tty_parse(stduint tty_id, byte keycode, keyboard_state_t state) { //
 		{
 			//{} wait app get the char
 
-			ttyout->OutChar(c);
-			if (c == '\n') ttyout->OutChar('\r');
-			else if (c == '\b') {
-				ttyout->OutChar(' ');
-				ttyout->OutChar('\b');
-			}
+			return c;//ttyout->OutChar(c);
+			//if (c == '\n') ttyout->OutChar('\r');
+			//else if (c == '\b') {
+			//	ttyout->OutChar(' ');
+			//	ttyout->OutChar('\b');
+			//}
 			//{TODO} Menus, TAB, Arrows, PrtSc, Pause, Ins, Home, Del, End
 		}
 	}
 	last_E0s[tty_id] = keycode == 0xE0;
+	return 0x80;
 }
 
 bool work_console = false;
@@ -345,12 +347,21 @@ void _Comment(R1) serv_cons_loop()
 	work_console = true;
 
 	//{TEMP} only a TTY0(VCON)
+	using BR = ProcessBlock::BlockReason;
 	while (true) {
-		for0(i, ento_gui ? 1 : 4) {
-			while (-1 != (ch = bcons[i]->input_queue.inn())) {
-				tty_parse(i, ch, kbd_state);
+		// for0(i, ento_gui ? 1 : 4) while (-1 != (ch = bcons[i]->input_queue.inn())) tty_parse(i, ch, kbd_state, &console_agents[i]);
+		for0a(i, tty_crt_blocked_appid) if (-1 != (ch = bcons[i]->input_queue.inn())) if (stduint pid = tty_crt_blocked_appid[i]) {
+			if (ch <= 0 || ch >= 0x80) break;
+			if (_IMM(TaskGet(pid)->block_reason) && _IMM(BR::BR_exInnc)) {
+				TaskGet(pid)->Unblock(BR::BR_exInnc);
+				
+				tty_crt_blocked_appid[i] = nil;
+				stdsint val = tty_parse(i, ch, kbd_state, NULL);
+				syssend(pid, &val, byteof(val));
 			}
+			else plogerro("error! %s %u", __FUNCIDEN__, __LINE__);
 		}
+
 		// Render the bottom ribbon
 		if (!ento_gui && current_screen_TTY == 0) {
 			Ribbon[0].attr = kbd_state.l_ctrl ? 0x70 : 0x07;
@@ -365,21 +376,33 @@ void _Comment(R1) serv_cons_loop()
 			sysrecv(ANYPROC, to_args, byteof(to_args), &sig_type, &sig_src);
 			ProcessBlock* pb = TaskGet(to_args[3]);
 			switch (sig_type) {
+			case 0: break;
 			case 1: // R (dev, addr, len, pid)
-				//{UNCHK}
-				//{} Read from kbdbuffer
-				// syssend(sig_src, &ret, sizeof(ret), 0);
+				to_args[0] &= _IMM1S(dev_domain_bits) - 1;
+				//{TODO}
 				break;
 			case 2: // W (dev, addr, len, pid)
 				ret = StrCopyP(cons_buffer, kernel_paging,
 					(char*)to_args[1], pb->paging, to_args[2]);
 				// if (get_drv_pid(to_args[0]) == 4)
 				//{TODO} 0x1000 and to_args[2]
-				if ((0xFF & to_args[0]) == 0) {
+				if (((_IMM1S(dev_domain_bits) - 1) & to_args[0]) == 0) {
 					
 					LocateTTY(0xFF & to_args[0])->out(cons_buffer, ret);
 				}
 				syssend(sig_src, &ret, sizeof(ret), 0);
+				break;
+			case 3: // (dev,.,., pid) noreturn
+				// ReadChar(ASCII): normal \n \r ...
+				to_args[0] &= _IMM1S(dev_domain_bits) - 1;
+				if (!tty_crt_blocked_appid[to_args[0]]) {
+					tty_crt_blocked_appid[to_args[0]] = to_args[3];
+					pb->Block(BR::BR_exInnc);
+				}
+				else {
+					ret = ~_IMM0;
+					syssend(sig_src, &ret, sizeof(ret), 0);
+				}
 				break;
 			default:
 				plogerro("Unknown syscall type %u", sig_type);

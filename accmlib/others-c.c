@@ -13,9 +13,9 @@ void sysouts(const char* str)// 0
 	//    syswrite(fd, (void*)"Hello CCCCC!\n\r", 15);
 	//    sysclose(fd);
 }
-void sysinnc()// 1
+int sysinnc()// 1
 {
-	_TODO INNC;
+	return syscall(INNC, nil, nil, nil);
 }
 void exit(int code)// 2
 {
@@ -36,7 +36,28 @@ void syscomm(int send_recv, stduint obj, struct CommMsg* msg)
 {
 	syscall(COMM, send_recv ? 0b01 : 0b10, obj, _IMM(msg));
 }
-
+//{unchk}
+stduint msgsend(stduint to_whom, const void* msgaddr, stduint bytlen, stduint type)
+{
+	struct CommMsg msg;
+	msg.address = _IMM(msgaddr);
+	msg.length = bytlen;
+	msg.type = type;
+	syscall(COMM, 0b01, to_whom, _IMM(&msg));
+}
+//{unchk}
+stduint msgrecv(stduint fo_whom, void* msgaddr, stduint bytlen, stduint* type, stduint* src)
+{
+	struct CommMsg msg = { nil };
+	msg.address = _IMM(msgaddr);
+	msg.length = bytlen;
+	if (type) msg.type = *type;
+	if (src) msg.src = *src;
+	stduint ret = syscall(COMM, 0b10, fo_whom, &msg);
+	if (type) *type = msg.type;
+	if (src) *src = msg.src;
+	return ret;
+}
 
 
 //{} with retval
@@ -87,5 +108,51 @@ int _Comment(pid) wait(int* status)
 }
 int fork() {
     return syscall(FORK, nil, nil, nil);
+}
+
+static int execv(const char* path, char* argv[]);
+static int execl(const char* path, const char* arg, ...)
+{
+	va_list parg = (va_list)(&arg);
+	char **p = (char**)parg;
+	return execv(path, p);
+}
+#define PROC_ORIGIN_STACK 128
+static int execv(const char* path, char* argv[])
+{
+	stduint args[4];
+	stdsint ret;
+	char** p = argv;
+	char arg_stack[PROC_ORIGIN_STACK];
+	int stack_len = 0;
+
+	while(*p++) {
+		if (stack_len + 2 * sizeof(char*) < PROC_ORIGIN_STACK); else {
+			plogerro("panic %s:%u", __FUNCIDEN__, __LINE__);
+		}
+		stack_len += sizeof(char*);
+	}
+
+	*((int*)(&arg_stack[stack_len])) = 0;
+	stack_len += sizeof(char*);
+
+	char ** q = (char**)arg_stack;
+	for (p = argv; *p != 0; p++) {
+		*q++ = &arg_stack[stack_len];
+		if (stack_len + StrLength(*p) + 1 < PROC_ORIGIN_STACK); else {
+			plogerro("panic %s:%u", __FUNCIDEN__, __LINE__);
+		}
+		StrCopy(&arg_stack[stack_len], *p);
+		stack_len += StrLength(*p);
+		arg_stack[stack_len] = 0;
+		stack_len++;
+	}
+
+	args[1] = path;
+	args[2] = arg_stack;
+	args[3] = stack_len;
+	msgsend(Task_TaskMan, args, sizeof(args), 4);
+	msgrecv(Task_TaskMan, &ret, sizeof(ret), nil, nil);
+	return ret;
 }
 

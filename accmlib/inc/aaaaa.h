@@ -26,6 +26,7 @@ extern "C" {
 	//void syscall(stduint p0, stduint p1 = 0, stduint p2 = 0, stduint p3 = 0);
 	//
 	void sysouts(const char* str);// 00
+	int sysinnc();// 01
 	stduint syssecond();// 03
 	void sysrest();// 04
 
@@ -57,7 +58,7 @@ extern "C" {
 
 	// ---- POSIX:unistd ---- //
 	int fork();
-	[[noreturn]] void exit(int status); 
+	[[noreturn]] void exit(int status); // 02
 	int _Comment(pid) wait(int* status);
 
 #ifdef _INC_CPP

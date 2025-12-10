@@ -56,11 +56,8 @@ build: clean $(cppobjs)
 	@echo $(sudokey) | sudo -S umount $(mnts)
 	@perl configs/$(arch).bochsdbg.pl > $(ubinpath)/I686/mecocoa/bochsrc.bxrc
 	#
-	mkdir $(uobjpath)/accm-$(arch) -p
-	# make -f accmlib/accmx86.make
-	#
 	echo MK appinit
-	g++ -o $(uobjpath)/sapp-$(arch)/init subapps/appinit.cpp -m32 -nostdlib  -fno-pic -static -I$(uincpath) -D_ACCM=0x8632 -L$(uobjpath)/accm-$(arch) -l$(arch)
+	g++ -I$(uincpath) -m32 $(CXF) $(CXW) -o $(uobjpath)/sapp-$(arch)/init subapps/appinit.cpp -m32 -nostdlib  -fno-pic -static -I$(uincpath) -D_ACCM=0x8632 -L$(uobjpath)/accm-$(arch) -l$(arch)
 	ffset $(ubinpath)/fixed.vhd $(uobjpath)/sapp-$(arch)/init 256 > /dev/null
 	#
 	echo MK subappc
@@ -68,6 +65,7 @@ build: clean $(cppobjs)
 	ffset $(ubinpath)/fixed.vhd $(uobjpath)/sapp-$(arch)/c 512 > /dev/null
 	#
 	@echo
+	@echo Run \"make -f accmlib/accmx86.make\" to build accm-x86
 	@echo "You can now debug in bochs with the command:"
 	@echo $(bochd) -f $(dstdir)/bochsrc.bxrc
 	@echo C:/Soft/Bochs-3.0/bochs.exe -f $(dstdir)/bochsrc.bxrc -debugger

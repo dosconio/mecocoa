@@ -114,10 +114,11 @@ struct FileDescriptor {
 #define	INVALID_INODE 0
 #define	ROOT_INODE    1
 
-#define	MAKE_DEV(a,b)		((a << 16) | b)
+#define dev_domain_bits 16
+#define	MAKE_DEV(a,b)		((a << dev_domain_bits) | b)
 inline static stduint get_drv_pid(u32 dev) {
 	// 0b1111 is for
-	u32 drv = dev >> 16;
+	u32 drv = dev >> dev_domain_bits;
 	return drv;
 }
 
