@@ -13,9 +13,10 @@
 #include <cpp/interrupt>
 #include <c/format/ELF.h>
 #include <c/driver/PIT.h>
-#include <c/format/filesys/FAT12.h>
+#include <c/driver/mouse.h>
 #include <c/proctrl/x86/x86.h>
 #include <c/storage/harddisk.h>
+#include <c/format/filesys/FAT12.h>
 #include <c/driver/RealtimeClock.h>
 #include "../../include/atx-x86-flap32.hpp"
 
@@ -78,7 +79,7 @@ extern "C" void General_IRQHandler();
 
 extern ProcessBlock* pblocks[16]; extern stduint pnumber;
 
-
+extern QueueLimited* queue_mouse;
 
 bool ento_gui = false;
 
@@ -128,7 +129,8 @@ void MAIN() {
 	GIC.enAble();
 	GIC[IRQ_PIT].setRange(mglb(Handint_PIT_Entry), SegCode); PIT_Init();
 	GIC[IRQ_RTC].setRange(mglb(Handint_RTC_Entry), SegCode); RTC_Init();
-	GIC[IRQ_Keyboard].setRange(mglb(Handint_KBD_Entry), SegCode);
+	GIC[IRQ_Keyboard].setRange(mglb(Handint_KBD_Entry), SegCode); Keyboard_Init();
+	GIC[IRQ_PS2_Mouse].setRange(mglb(Handint_MOU_Entry), SegCode); Mouse_Init();
 	GIC[IRQ_ATA_DISK0].setRange(mglb(Handint_HDD_Entry), SegCode); DEV_Init();
 	GIC[IRQ_SYSCALL].setRange(mglb(call_intr), SegCode); GIC[IRQ_SYSCALL].DPL = 3;
 	
@@ -185,7 +187,7 @@ void MAIN() {
 		lastsec = mecocoa_global->system_time.sec;
 		// outc('T');
 	}
-	#if 1
+	#if 0
 	if (lastsec == 8) {
 		for0(i, pnumber) {
 			Console.OutFormat("-- %u: (%u:%u) head %u, next %u, send_to_whom\n\r",

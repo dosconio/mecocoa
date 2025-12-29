@@ -1,4 +1,5 @@
 #include "inc/aaaaa.h"
+#include "c/ustring.h"
 volatile static unsigned* const callid = (volatile unsigned*)0x0000500;// 0x80000500;
 
 void sysouts(const char* str)// 0

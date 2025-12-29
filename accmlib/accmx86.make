@@ -16,7 +16,7 @@ cppobjs=$(patsubst %cpp, %o, $(cppfile))
 
 dest_obj=$(uobjpath)/accm-$(arch)
 COMWAN = -Wno-builtin-declaration-mismatch
-COMFLG = -m32 -static -fno-builtin -nostdlib -O3 $(COMWAN)
+COMFLG = -m32 -static -fno-builtin -nostdlib -fno-stack-protector -O3 $(COMWAN)
 CC=gcc $(COMFLG)
 CX=g++ $(COMFLG) -std=c++2a -fno-exceptions  -fno-unwind-tables -fno-rtti -Wno-volatile
 LD=ld -m elf_i386

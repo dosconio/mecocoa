@@ -16,7 +16,8 @@ flag=-D_MCCA=0x8632 -D_ARC_x86=5
 qemu=qemu-system-i386
 bochd=C:/Soft/Bochs-2.7/bochsdbg.exe
 
-CXF=-fno-rtti -fno-exceptions -fno-unwind-tables -static -nostdlib -fno-pic #-nodefaultlibs #
+CXF=-fno-rtti -fno-exceptions -fno-unwind-tables -static -nostdlib -fno-pic -fno-stack-protector #-nodefaultlibs #
+# -fno-stack-protector: avoid undefined reference to `__stack_chk_fail_local'
 CXW=-Wno-builtin-declaration-mismatch -Wno-volatile
 CX=g++ -I$(uincpath) -c $(flag) -m32 $(CXF) $(CXW) -std=c++2a 
 
@@ -33,7 +34,7 @@ build: clean $(cppobjs)
 	@echo "MK mecocoa $(arch) real16 support"
 	aasm -I$(uincpath)/Kasha/n_ -I$(uincpath)/naasm/n_ prehost/$(arch)/atx-x86-cppweaks.asm -felf -o $(uobjpath)/mcca-$(arch)/mcca-$(arch)-elf16.o
 	@echo "MK mecocoa $(arch) loader"
-	g++ -I$(uincpath) $(flag) -m32 prehost/$(arch)/$(arch).loader.cpp prehost/$(arch)/$(arch).auf.cpp $(uobjpath)/CGWin32/_ae_manage.o\
+	g++ -I$(uincpath) $(flag) -m32 prehost/$(arch)/$(arch).loader.cpp prehost/$(arch)/$(arch).auf.cpp $(uobjpath)/CGMin32/_ae_manage.o\
 		-o $(ubinpath)/$(elf_loader) -L$(ubinpath) -lm32d $(CXF) \
 		-T prehost/$(arch)/$(arch).loader.ld  \
 		-nostartfiles -Os

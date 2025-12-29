@@ -9,6 +9,7 @@
 #define _DEBUG
 #include <c/consio.h>
 #include <cpp/interrupt>
+#include <c/driver/mouse.h>
 #include <c/driver/keyboard.h>
 
 use crate uni;
@@ -67,8 +68,38 @@ void Handint_RTC()
 }
 
 OstreamTrait* kbd_out;
+QueueLimited* queue_mouse;
 void Handint_KBD() {
 	asserv(kbd_out)->OutChar(innpb(PORT_KBD_BUFFER));
+}
+static bool fa_mouse = false;
+static byte mouse_buf[4] = { 0 };
+static void process_mouse(byte ch) {
+	mouse_buf[mouse_buf[3]++] = ch;
+	mouse_buf[3] %= 3;
+	if (!mouse_buf[3]) {
+		outsfmt(" %[8H]-%[8H]-%[8H] ", mouse_buf[0], mouse_buf[1], mouse_buf[2]);
+	}
+	else if (mouse_buf[3] == 1) {
+		MouseMessage& mm = *(MouseMessage*)mouse_buf;
+		if (!mm.HIGH) mouse_buf[3] = 0;
+	}
+}
+void Handint_MOU() {
+	byte state = innpb(KEYBOARD_CMD);
+	if (state & 0x20); else return;//{} check AUX, give KBD
+	byte ch = innpb(PORT_KBD_BUFFER);
+	// if (ch != (byte)0xFA)// 0xFA is ready signal
+	if (!fa_mouse && ch == (byte)0xFA) {
+		fa_mouse = true;
+		return;
+	}
+	process_mouse(ch);// asserv(queue_mouse)->OutChar(ch);
+	while ((innpb(KEYBOARD_CMD) & 0x21) == 0x21)// 0x01 for OBF, 0x20 for AUX
+	{
+		process_mouse(innpb(PORT_KBD_BUFFER));
+	}
+	// ! XX-7F-81 problem
 }
 
 // void Handint_HDD()...

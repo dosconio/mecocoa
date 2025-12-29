@@ -91,12 +91,19 @@ SwitchVideoMode:
 		RET
 
 [BITS 32]
+; 0x20
 GLOBAL Handint_PIT_Entry
 EXTERN Handint_PIT
-GLOBAL Handint_RTC_Entry
-EXTERN Handint_RTC
+; 0x21
 GLOBAL Handint_KBD_Entry
 EXTERN Handint_KBD
+; 0x70
+GLOBAL Handint_RTC_Entry
+EXTERN Handint_RTC
+; 0x74 Mouse
+GLOBAL Handint_MOU_Entry
+EXTERN Handint_MOU
+; 0x76 0x77
 GLOBAL Handint_HDD_Entry
 EXTERN Handint_HDD
 
@@ -179,6 +186,16 @@ Handint_PIT_Entry:
 	CALL PG_POP
 	POPAD
 	IRETD
+Handint_KBD_Entry:
+	PUSHAD
+	CALL PG_PUSH
+	MOV AL, ' '
+	OUT 0x20, AL
+	CALL Handint_KBD
+	CALL PG_POP
+	POPAD
+	IRETD
+; ---- SLAVE BELOW ----
 Handint_RTC_Entry:
 	PUSHAD
 	CALL PG_PUSH
@@ -189,13 +206,14 @@ Handint_RTC_Entry:
 	OUT 0x20, AL
 	POPAD
 	IRETD
-Handint_KBD_Entry:
+Handint_MOU_Entry:
 	PUSHAD
 	CALL PG_PUSH
-	MOV AL, ' '
-	OUT 0x20, AL
-	CALL Handint_KBD
+	CALL Handint_MOU
 	CALL PG_POP
+	MOV AL, ' '
+	OUT 0xA0, AL
+	OUT 0x20, AL
 	POPAD
 	IRETD
 Handint_HDD_Entry:

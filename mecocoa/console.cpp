@@ -9,6 +9,7 @@
 #define _DEBUG
 
 #include <c/consio.h>
+#include <c/driver/mouse.h>
 #include <c/driver/keyboard.h>
 
 use crate uni;
@@ -57,7 +58,7 @@ inline static OstreamTrait* LocateTTY(stduint tty_id) {
 }
 // ---- ---- ---- ----
 
-
+extern QueueLimited* queue_mouse;
 
 
 keyboard_state_t kbd_state = { 0 };
@@ -201,6 +202,7 @@ void blink2() {
 	b = !b;
 }
 
+byte _BUF_QueueMouse[byteof(QueueLimited)];
 //// ---- ---- STATIC CORE ---- ---- ////
 
 void cons_init()
@@ -209,6 +211,9 @@ void cons_init()
 	for0a(i, last_E0s) {
 		last_E0s[i] = false;
 	}
+	void* pointer_mouse = Memory::physical_allocate(0x1000);
+	Slice mouse_slice{ _IMM(pointer_mouse), byteof(0x1000) };
+	queue_mouse = new (_BUF_QueueMouse) QueueLimited(mouse_slice);
 
 	video_info = (uni::ModeInfoBlock*)Memory::physical_allocate(0x1000);
 	BCONS0 = new (BUF_BCONS0) BareConsole(bda->screen_columns, 24, 0xB8000, 0 * 50); BCONS0->setShowY(0, 24);
@@ -265,6 +270,9 @@ void cons_init()
 	// TTY1 window form (TODO)
 	// TTY2 window form (TODO)
 	// TTY3 window form (TODO)
+
+	
+
 }
 
 
@@ -326,9 +334,11 @@ static stduint tty_parse(stduint tty_id, byte keycode, keyboard_state_t state, O
 
 bool work_console = false;
 char* cons_buffer;
+// static byte mouse_buf[4];
 void _Comment(R1) serv_cons_loop()
 {
 	cons_buffer = (char*)Memory::physical_allocate(0x1000);
+	// mouse_buf[3] = 0;
 	// BCON:
 	struct element { byte ch; byte attr; };
 	Letvar(Ribbon, element*, (0xB8000 + 80 * 2 * 24));
@@ -349,6 +359,26 @@ void _Comment(R1) serv_cons_loop()
 	//{TEMP} only a TTY0(VCON)
 	using BR = ProcessBlock::BlockReason;
 	while (true) {
+		// if (queue_mouse && !queue_mouse->is_empty()) {
+		// 	while ((ch = queue_mouse->inn()) >= 0) {
+		// 		mouse_buf[mouse_buf[3]++] = ch;
+		// 		mouse_buf[3] %= 3;
+		// 		if (!mouse_buf[3]) {
+		// 			sizeof(MouseMessage);// 3
+		// 			outsfmt(" %[8H]-%[8H]-%[8H] ", mouse_buf[0], mouse_buf[1], mouse_buf[2]);
+		// 			MouseMessage& mm = *(MouseMessage*)mouse_buf;
+		// 			if (!ento_gui) {
+		// 				// Ribbon[3].ch = !mm.X ? ' ' : mm.DirX ? '<' : '>';
+		// 				if (mm.X) Ribbon[3].ch = mm.DirX ? '<' : '>';
+		// 				// Ribbon[4].ch = !mm.Y ? ' ' : mm.DirY ? '^' : 'v';
+		// 				if (mm.Y) Ribbon[4].ch = !mm.DirY ? '^' : 'v';
+		// 				Ribbon[5].ch = mm.BtnLeft ? 'L' : 'l';
+		// 				Ribbon[6].ch = mm.BtnMiddle ? 'M' : 'm';
+		// 				Ribbon[7].ch = mm.BtnRight ? 'R' : 'r';
+		// 			}
+		// 		}
+		// 	}
+		// }
 		// for0(i, ento_gui ? 1 : 4) while (-1 != (ch = bcons[i]->input_queue.inn())) tty_parse(i, ch, kbd_state, &console_agents[i]);
 		for0a(i, tty_crt_blocked_appid) if (-1 != (ch = bcons[i]->input_queue.inn())) if (stduint pid = tty_crt_blocked_appid[i]) {
 			if (ch <= 0 || ch >= 0x80) break;

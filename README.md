@@ -33,11 +33,12 @@ Format `board-architecture-mode`
 CISC `VMBox/VMware/Bochs/QEMU/TODO(Simics,Wel)`
 - `x86 0x8632` Intel x86 (8086 -> i686+)
 	- BIOS(MBR), CLI, Paging, Multitask, Syscall, {RTC,PIT,KBD}
-	- dev-env `[native x64+multilib]* (Ubuntu 11.4.0-1ubuntu1~22.04) 11.4.0`
+	- dev-env `[native x64+multilib]* (Ubuntu 11.4.0-1ubuntu1~22.04) 11.4.0`, qemu 9.2.4
 	- **run**
 		- **virtual**: VMware, VMBox, Bochs, qemu-system-i386(9.2.4)
 	- **build**
 		- `make lib`; `make` `make run`
+	- **mode**: *real16*, *flap32*, *long64*(IA-32e, if CPU support)(TODO)
 - `x64 0x8664` AMD64
 	- UEFI, GUI
 	- dev-env `[native x64+multilib]* (Ubuntu 11.4.0-1ubuntu1~22.04) 11.4.0`
@@ -45,6 +46,7 @@ CISC `VMBox/VMware/Bochs/QEMU/TODO(Simics,Wel)`
 		- **virtual**: qemu-system-x86_64
 	- **build**
 		- `arch=atx-x64-uefi64 make`
+	- **mode**: long64
 	
 RISC `Fizik`
 - `r32 0x1032` RISC-V32
