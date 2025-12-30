@@ -16,7 +16,7 @@ cppobjs=$(patsubst %cpp, %o, $(cppfile))
 
 dest_obj=$(uobjpath)/accm-$(arch)
 COMWAN = -Wno-builtin-declaration-mismatch
-COMFLG = -m32 -static -fno-builtin -nostdlib -fno-stack-protector -O3 $(COMWAN)
+COMFLG = -m32 -mno-sse -mno-sse2 -mno-sse3 -mno-ssse3 -mno-sse4 -static -fno-builtin -nostdlib -fno-stack-protector  -O3 $(COMWAN)
 CC=gcc $(COMFLG)
 CX=g++ $(COMFLG) -std=c++2a -fno-exceptions  -fno-unwind-tables -fno-rtti -Wno-volatile
 LD=ld -m elf_i386
@@ -34,7 +34,7 @@ delall:
 
 %.o: %.asm
 	@echo "AS $(<)"
-	@${AASM} -felf ${attr} -I$(uincpath)/Kasha/n_ -I$(uincpath)/naasm/n_ $(<) -o $(dest_obj)/$(asmpref)$(notdir $(@))
+	@${AASM} -felf ${attr} $(<) -o $(dest_obj)/$(asmpref)$(notdir $(@))
 
 %.o: %.c
 	@echo "CC $(<)"

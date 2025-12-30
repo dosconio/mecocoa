@@ -54,7 +54,7 @@ stduint msgrecv(stduint fo_whom, void* msgaddr, stduint bytlen, stduint* type, s
 	msg.length = bytlen;
 	if (type) msg.type = *type;
 	if (src) msg.src = *src;
-	stduint ret = syscall(COMM, 0b10, fo_whom, &msg);
+	stduint ret = syscall(COMM, 0b10, fo_whom, _IMM(&msg));
 	if (type) *type = msg.type;
 	if (src) *src = msg.src;
 	return ret;
@@ -114,8 +114,8 @@ int fork() {
 static int execv(const char* path, char* argv[]);
 static int execl(const char* path, const char* arg, ...)
 {
-	va_list parg = (va_list)(&arg);
-	char **p = (char**)parg;
+	//va_list parg = (va_list)(&arg);
+	char **p = (char**)&arg;
 	return execv(path, p);
 }
 #define PROC_ORIGIN_STACK 128
@@ -149,8 +149,8 @@ static int execv(const char* path, char* argv[])
 		stack_len++;
 	}
 
-	args[1] = path;
-	args[2] = arg_stack;
+	args[1] = _IMM(path);
+	args[2] = _IMM(arg_stack);
 	args[3] = stack_len;
 	msgsend(Task_TaskMan, args, sizeof(args), 4);
 	msgrecv(Task_TaskMan, &ret, sizeof(ret), nil, nil);

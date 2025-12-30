@@ -25,6 +25,9 @@ read:
 lib:
 	cd $(ulibpath)/.. && make mx86 -j
 
+run-only:
+	@make -f configs/$(arch).make run-only --silent
+
 ###
 FLAG_RV32=qemuvirt-r32
 

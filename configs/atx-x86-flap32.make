@@ -11,13 +11,14 @@ dstdir=D:/bin/I686/mecocoa
 outs=$(ubinpath)/I686/mecocoa/$(iden)
 mnts=/mnt/floppy
 arch=atx-x86-flap32
-flag=-D_MCCA=0x8632 -D_ARC_x86=5
+flag=-D_MCCA=0x8632 -D_ARC_x86=5  -mno-sse -mno-sse2 -mno-sse3 -mno-ssse3 -mno-sse4
 
 qemu=qemu-system-i386
 bochd=C:/Soft/Bochs-2.7/bochsdbg.exe
 
 CXF=-fno-rtti -fno-exceptions -fno-unwind-tables -static -nostdlib -fno-pic -fno-stack-protector #-nodefaultlibs #
 # -fno-stack-protector: avoid undefined reference to `__stack_chk_fail_local'
+# -mno-*sse*          : movdqa-series need more setting
 CXW=-Wno-builtin-declaration-mismatch -Wno-volatile
 CX=g++ -I$(uincpath) -c $(flag) -m32 $(CXF) $(CXW) -std=c++2a 
 
@@ -32,7 +33,7 @@ elf_kernel=mcca-$(arch).elf
 
 build: clean $(cppobjs)
 	@echo "MK mecocoa $(arch) real16 support"
-	aasm -I$(uincpath)/Kasha/n_ -I$(uincpath)/naasm/n_ prehost/$(arch)/atx-x86-cppweaks.asm -felf -o $(uobjpath)/mcca-$(arch)/mcca-$(arch)-elf16.o
+	aasm prehost/$(arch)/atx-x86-cppweaks.asm -felf -o $(uobjpath)/mcca-$(arch)/mcca-$(arch)-elf16.o
 	@echo "MK mecocoa $(arch) loader"
 	g++ -I$(uincpath) $(flag) -m32 prehost/$(arch)/$(arch).loader.cpp prehost/$(arch)/$(arch).auf.cpp $(uobjpath)/CGMin32/_ae_manage.o\
 		-o $(ubinpath)/$(elf_loader) -L$(ubinpath) -lm32d $(CXF) \
@@ -56,20 +57,23 @@ build: clean $(cppobjs)
 	@echo $(sudokey) | sudo -S cp $(ubinpath)/$(elf_loader) $(mnts)/KEX.OBJ
 	@echo $(sudokey) | sudo -S umount $(mnts)
 	@perl configs/$(arch).bochsdbg.pl > $(ubinpath)/I686/mecocoa/bochsrc.bxrc
+	@perl configs/$(arch).bochsdbg-lin.pl > $(ubinpath)/I686/mecocoa/bochsrc-lin.bxrc
 	#
 	echo MK appinit
-	g++ -I$(uincpath) -m32 $(CXF) $(CXW) -o $(uobjpath)/sapp-$(arch)/init subapps/appinit.cpp -m32 -nostdlib  -fno-pic -static -I$(uincpath) -D_ACCM=0x8632 -L$(uobjpath)/accm-$(arch) -l$(arch)
+	g++ -I$(uincpath) $(flag) -m32 $(CXF) $(CXW) -std=c++2a \
+		-o $(uobjpath)/sapp-$(arch)/init subapps/appinit.cpp -L$(uobjpath)/accm-$(arch) -l$(arch)
 	ffset $(ubinpath)/fixed.vhd $(uobjpath)/sapp-$(arch)/init 256 > /dev/null
 	#
 	echo MK subappc
-	g++ subapps/helloc/* -o $(uobjpath)/sapp-$(arch)/c -m32 -nostdlib  -fno-pic -static -I$(uincpath) -D_ACCM=0x8632 -L$(uobjpath)/accm-$(arch) -l$(arch)
+	g++ -I$(uincpath) $(flag) -m32 $(CXF) $(CXW) -std=c++2a \
+		subapps/helloc/* -o $(uobjpath)/sapp-$(arch)/c  -L$(uobjpath)/accm-$(arch) -l$(arch)
 	ffset $(ubinpath)/fixed.vhd $(uobjpath)/sapp-$(arch)/c 512 > /dev/null
 	#
 	@echo
 	@echo Run \"make -f accmlib/accmx86.make\" to build accm-x86
 	@echo "You can now debug in bochs with the command:"
 	@echo $(bochd) -f $(dstdir)/bochsrc.bxrc
-	@echo C:/Soft/Bochs-3.0/bochs.exe -f $(dstdir)/bochsrc.bxrc -debugger
+	@echo bochs -f $(ubinpath)/I686/mecocoa/bochsrc-lin.bxrc -debugger
 
 accm:
 	make -f accmlib/accmx86.make

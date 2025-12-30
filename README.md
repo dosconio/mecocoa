@@ -26,14 +26,17 @@ her-note: false
 Hardware
 - Processor with functions of Paging and Interrupt
 
+Development-Environment
+- `(Stable)` Ubuntu 22.04, gcc 11.4.0, qemu 9.2.4
+- `(Newest)` ArchLinux, gcc, qemu
+
 ## Architecture
 
 Format `board-architecture-mode`
 
 CISC `VMBox/VMware/Bochs/QEMU/TODO(Simics,Wel)`
 - `x86 0x8632` Intel x86 (8086 -> i686+)
-	- BIOS(MBR), CLI, Paging, Multitask, Syscall, {RTC,PIT,KBD}
-	- dev-env `[native x64+multilib]* (Ubuntu 11.4.0-1ubuntu1~22.04) 11.4.0`, qemu 9.2.4
+	- BIOS(MBR), CLI, Paging, Multitask, Syscall, {RTC,PIT,KBD,PS2-MOUSE}
 	- **run**
 		- **virtual**: VMware, VMBox, Bochs, qemu-system-i386(9.2.4)
 	- **build**
@@ -41,7 +44,6 @@ CISC `VMBox/VMware/Bochs/QEMU/TODO(Simics,Wel)`
 	- **mode**: *real16*, *flap32*, *long64*(IA-32e, if CPU support)(TODO)
 - `x64 0x8664` AMD64
 	- UEFI, GUI
-	- dev-env `[native x64+multilib]* (Ubuntu 11.4.0-1ubuntu1~22.04) 11.4.0`
 	- **run**
 		- **virtual**: qemu-system-x86_64
 	- **build**

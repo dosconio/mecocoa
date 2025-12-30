@@ -26,6 +26,7 @@ int run(char* cmd)
 			argv[argc++] = s;
 			*p = 0;
 		}
+		if (argc >= numsof(argv)) break;
 	} while (ch);
 	argv[argc] = 0;
 	//
@@ -38,6 +39,7 @@ int run(char* cmd)
 	//	}
 	//	else execv(argv[0], argv);
 	//
+	return _TEMP 0;
 }
 
 int main(int argc, char** argv)
