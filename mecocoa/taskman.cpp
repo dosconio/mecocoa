@@ -435,15 +435,16 @@ static stduint task_fork(ProcessBlock* fo)
 	for0a(i, fo->load_slices) {
 		if (!fo->load_slices[i].length) break;
 		pb->load_slices[i] = fo->load_slices[i];
-		// plogwarn("copy-slice %[32H]-%[32H]", fo->load_slices[i].address, fo->load_slices[i].address + fo->load_slices[i].length);
 		stduint appendix = fo->load_slices[i].address & _IMM(PAGE_SIZE - 1);
 		stduint pagesize = vaultAlignHexpow(PAGE_SIZE, fo->load_slices[i].length + appendix);
 		stduint newaddr = (stduint)Memory::physical_allocate(pagesize);
 		stduint mapsrc = fo->load_slices[i].address & ~_IMM(PAGE_SIZE - 1);
-		pb->paging.Map(mapsrc, newaddr, pagesize, _TEMP true, true);//{} Map and allocation
+		// ploginfo("fork.map: 0x%x->0x%x(0x%x)", mapsrc, newaddr, pagesize);
+		pb->paging.Map(mapsrc, newaddr, pagesize, _TEMP true, true);// Map and allocation
+		// ploginfo("memcpyp: %x+%x, ., %x, ., %x", mapsrc, appendix, fo->load_slices[i].address, fo->load_slices[i].length);
 		MemCopyP((char*)mapsrc + appendix, pb->paging,
 			(void*)fo->load_slices[i].address, fo->paging,
-			fo->load_slices[i].length + appendix);
+			fo->load_slices[i].length);
 	}
 	stduint kernel_size = _TEMP 0x00400000;
 	pb->paging.Map(0x80000000, 0x00000000, kernel_size, true, _Comment(R0) false);// should include LDT
