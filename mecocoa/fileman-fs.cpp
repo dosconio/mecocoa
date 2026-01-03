@@ -1,4 +1,5 @@
 // The mature filesys and management are contained by unisym.
+//{TODO} make this into FilesysMinix into UNIS
 // Current: Orange'S FS v1.0
 #define _STYLE_RUST
 #define _DEBUG
@@ -29,7 +30,7 @@ OrangesFs::OrangesFs(unsigned dev, char* buffer) {
  *    inodes == total.address + 1 + 1 + sb.entity.nr_imap_sects + sb.entity.nr_smap_sects) * part.Block_Size
  * sectors == total.address + sb.entity.n_1st_sect) * part.Block_Size
 */
-bool OrangesFs::makefs() {
+bool OrangesFs::makefs(rostr vol_label /* unused */, void* moreinfo /* unused */) {
 	//
 	bool state = false;
 	BlockTrait& part = *storage;
@@ -129,7 +130,7 @@ bool OrangesFs::makefs() {
 	return state;
 }
 
-bool OrangesFs::loadfs() {
+bool OrangesFs::loadfs(void* moreinfo /* unused */) {
 	read_superblock();
 	super_block* sb = get_superblock();
 	if (sb->entity.magic == MAGIC_V1); else
@@ -140,7 +141,7 @@ bool OrangesFs::loadfs() {
 	return true;
 }
 
-bool OrangesFs::create(rostr fullpath, stduint flags, stduint* exinfo, rostr linkdest) {
+bool OrangesFs::create(rostr fullpath, stduint flags, void* exinfo, rostr linkdest) {
 	//[unused] linkdest
 	char filename[_TEMP 20] = { 0 };
 	inode* dir_inode;
@@ -157,7 +158,7 @@ bool OrangesFs::create(rostr fullpath, stduint flags, stduint* exinfo, rostr lin
 	int free_sect_nr = fs->alloc_smap_bit(NR_DEFAULT_FILE_SECTS);
 	struct inode *newino = fs->new_inode(inode_nr, free_sect_nr);
 	fs->new_direntry(dir_inode, newino->i_num, filename);
-	asserv(exinfo)[0] = (stduint)newino;
+	asserv(cast<stduint*>(exinfo))[0] = (stduint)newino;
 	return true;
 }
 
@@ -343,16 +344,17 @@ bool OrangesFs::remove(rostr pathname) {
 }
 
 
-bool OrangesFs::search(rostr path, stduint* retback) {
+void* OrangesFs::search(rostr path, void* moreinfo) {
+	stduint* retback = (stduint*)moreinfo;
 	int i, j;
 	char filename[MAX_FILENAME_LEN + 1] = { 0 };
 	struct inode * dir_inode;
 	if (!strip_path(filename, path, &dir_inode))
-		return false;
+		return NULL;
 	if (filename[0] == 0)	// path: "/"
 	{
 		asserv(retback)[0] = dir_inode->i_num;
-		return true;
+		return None;
 	}
 	// ploginfo("%s: dev %u with path %s", __FUNCIDEN__, dir_inode->i_dev, path);
 	OrangesFs* fs = IndexOFs(dir_inode->i_dev);
@@ -370,7 +372,7 @@ bool OrangesFs::search(rostr path, stduint* retback) {
 			if (MemCompare(filename, pde->name, MAX_FILENAME_LEN) == 0)
 			{
 				asserv(retback)[0] = pde->inode_nr;
-				return true;
+				return None;
 			}
 			if (++m > nr_dir_entries)
 				break;
@@ -378,13 +380,13 @@ bool OrangesFs::search(rostr path, stduint* retback) {
 		if (m > nr_dir_entries) // all entries have been iterated
 			break;
 	}
-	return false;
+	return NULL;
 }
 
-bool OrangesFs::proper() {return _TODO false;}
-bool OrangesFs::enumer() {return _TODO false;}
-bool OrangesFs::readfl() {return _TODO false;}
-bool OrangesFs::writfl() {return _TODO false;}
+bool OrangesFs::proper(rostr path, stduint cmd, const void* moreinfo) {return _TODO false;}
+bool OrangesFs::enumer(void* dir_handler, stduint index, void* info) {return _TODO false;}
+stduint OrangesFs::readfl(void* fil_handler, Slice file_slice, byte* dst) {return _TODO false;}
+stduint OrangesFs::writfl(void* fil_handler, Slice file_slice, const byte* src) {return _TODO false;}
 
 
 //// ---- ---- SUPERBLOCK ---- ---- ////

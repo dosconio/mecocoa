@@ -5,6 +5,7 @@
 
 bool waitfor(stduint mask, stduint val, stduint timeout_second);
 
+// for 2 disks
 #define	DRV_OF_DEV(dev) (dev <= MAX_PRIM ? \
 	dev / NR_PRIM_PER_DRIVE : \
 	(dev - MINOR_hd1a) / NR_SUB_PER_DRIVE)
@@ -19,12 +20,27 @@ bool waitfor(stduint mask, stduint val, stduint timeout_second);
 #define MAX_PRIM        (MAX_DRIVES * NR_PRIM_PER_DRIVE - 1) // 9. prim_dev ranges in hd[0-9] (h[0] h[1~4], h[5], h[6~9])
 #define MAX_SUBPARTITIONS    (NR_SUB_PER_DRIVE * MAX_DRIVES)
 
+// 0:0
 #define MINOR_hd1a       0x10// should greater than MAX_PRIM
 #define MINOR_hd2a       (MINOR_hd1a+NR_SUB_PER_PART)
 #define MINOR_hd3a       (MINOR_hd1a+NR_SUB_PER_PART*2)
 #define MINOR_hd4a       (MINOR_hd1a+NR_SUB_PER_PART*3)
+// 0:1
 #define MINOR_hd5a       (MINOR_hd1a+NR_SUB_PER_DRIVE)
 #define MINOR_hd6a       (MINOR_hd1a+NR_SUB_PER_DRIVE+NR_SUB_PER_PART*1)
+#define MINOR_hd7a       (MINOR_hd1a+NR_SUB_PER_DRIVE+NR_SUB_PER_PART*2)
+#define MINOR_hd8a       (MINOR_hd1a+NR_SUB_PER_DRIVE+NR_SUB_PER_PART*3)
+#define DEVS_PER2D       (MINOR_hd1a+NR_SUB_PER_DRIVE*2)
+// 1:0
+#define MINOR_hd9a       (DEVS_PER2D*1 + MINOR_hd1a + NR_SUB_PER_PART*0)
+
+/* 2disc-group method
+fixed2.vhd1        0x01
+    fixed2.vhd2    0x02
+    ├─fixed2.vhd5  0x20
+    ├─fixed2.vhd6  0x21
+    └─fixed2.vhd7  0x22
+*/
 
 void DEV_Init();
 
@@ -76,7 +92,7 @@ protected:
 // for IDE0:0 and IDE0:1
 // Should be done by syscall. But here is linked as one program
 inline static Harddisk_PATA* IndexDisk(unsigned dev) {
-	unsigned drv_id = dev / NR_SUB_PER_DRIVE;
+	unsigned drv_id = DRV_OF_DEV(dev);
 	if (drv_id >= MAX_DRIVES) return NULL;
 	return disks[drv_id];
 }

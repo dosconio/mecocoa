@@ -16,7 +16,7 @@
 #include <c/driver/mouse.h>
 #include <c/proctrl/x86/x86.h>
 #include <c/storage/harddisk.h>
-#include <c/format/filesys/FAT12.h>
+#include <c/format/filesys/FAT.h>
 #include <c/driver/RealtimeClock.h>
 #include "../../include/atx-x86-flap32.hpp"
 

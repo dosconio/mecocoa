@@ -14,6 +14,7 @@
 #include "cpp/Device/Storage/HD-DEPEND.h"
 
 #include "../include/filesys.hpp"
+#include <c/format/filesys/FAT.h>
 
 use crate uni;
 
@@ -41,6 +42,7 @@ extern inode* inode_table;
 extern super_block superblocks[NR_SUPER_BLOCK];//{TEMP} in Static segment, should be managed in heap
 
 OrangesFs* pfs; const usize ROOT_DEV = MINOR_hd6a; 
+FilesysFAT* pfs_fat0; const usize ROOT_DEV_FAT0 = MINOR_hd6a + 2; 
 
 //// //// ---- //// ////
 
@@ -63,6 +65,10 @@ void DEV_Init()
 - TEST
 - RUPT
 */
+
+static void empty_func(...) {
+
+}
 
 static bool hd_info_valid = false;
 
@@ -171,11 +177,16 @@ bool Harddisk_PATA_Paged::Read(stduint BlockIden, void* Dest) {
 	sysrecv(Task_Hdd_Serv, Dest, Block_Size);
 	return true;
 }
+
 bool Partition::Read(stduint BlockIden, void* Dest) {
 	if (!slice.address && !slice.length) renew_slice();
-	// ONLY for IDE00 and IDE01
+	// ONLY for IDE0.0 and IDE0.1
+	//!!!{why} if delete the below line, it won't work
+	if (BlockIden == ~0) empty_func("read %u:%u", DRV_OF_DEV(self.device), DRV_OF_DEV(self.device));
+	// ploginfo("read %u:%u", DRV_OF_DEV(self.device), BlockIden + slice.address);
 	return Harddisk_PATA_Paged(DRV_OF_DEV(self.device)).Read(BlockIden + slice.address, Dest);
 }
+
 
 bool Harddisk_PATA_Paged::Write(stduint BlockIden, const void* Sors) {
 	stduint to_args[2];
@@ -232,7 +243,7 @@ static inode* create_file(rostr path, stduint flags)
 {
 	_TEMP;
 	inode* ret;
-	bool state = pfs->create(path, flags, (stduint*)&ret);
+	bool state = pfs->create(path, flags, &ret);
 	return state ? ret : NULL;
 }
 
@@ -350,8 +361,8 @@ int do_close(ProcessBlock& process, int fid)
 	// ploginfo("do_close %d", fd);
 	return 0;
 }
-//int do_lseek()
-//{
+int do_lseek()
+{
 //	int fd = fs_msg.FD;
 //	int off = fs_msg.OFFSET;
 //	int whence = fs_msg.WHENCE;
@@ -378,10 +389,11 @@ int do_close(ProcessBlock& process, int fid)
 //	}
 //	pb->pfiles[fd]->fd_pos = pos;
 //	return pos;
-//}
+}
 
 //// ---- ---- SERVICE ---- ---- ////
 char _buf_OFs[byteof(OrangesFs)];
+char _buf_FATs[byteof(FilesysFAT)];
 
 stduint serv_file_loop_remove(stduint pid, rostr filename) {
 	_TEMP;
@@ -390,6 +402,9 @@ stduint serv_file_loop_remove(stduint pid, rostr filename) {
 }
 extern bool fileman_hd_ready;
 bool flag_ready_fileman = false;
+byte buf_tmp0[32];
+
+static FAT_FileHandle filhan;
 void serv_file_loop()
 {
 	// Manually Initialize
@@ -414,10 +429,16 @@ void serv_file_loop()
 	//
 	stduint to_args[8];// 8*4=32 bytes
 	stduint sig_type = 0, sig_src;
-	super_block* sb;
+	
 	pfs = new (_buf_OFs) OrangesFs(ROOT_DEV, (char*)::buffer);
+	Partition part_fat0(ROOT_DEV_FAT0);
+	pfs_fat0 = new (_buf_FATs) FilesysFAT(32, part_fat0, ::buffer, ROOT_DEV_FAT0);
 
 	stduint retval[1];
+
+
+	FAT_FileHandle* han;
+	stduint a[] = { _IMM(&filhan) };
 
 	bool ready = false;
 	while (true) {
@@ -425,9 +446,27 @@ void serv_file_loop()
 		{
 		case FilemanMsg::TEST:// (no-feedback)
 			while (!fileman_hd_ready);
-			if (1) pfs->makefs();
+
+			if (0) pfs->makefs(NULL);
 			ready = pfs->loadfs();
 			root_inode = pfs->get_inode(ROOT_INODE);
+
+			ready = pfs_fat0->loadfs();
+			if (ready) {
+				Console.OutFormat("%s", "[Fileman] FAT file system is ready.\n\r");
+			}
+			else Console.OutFormat("[Fileman] FAT file system is not ready (%u).\n\r", pfs_fat0->error_number);
+			
+			han = (FAT_FileHandle*)pfs_fat0->search("yano.txt", &a);
+			Console.OutFormat("[Fileman] FAT search %[x].\n\r", han);
+			Console.OutFormat("[Fileman] Filesize %u.\n\r", han->size);
+			if (han) {
+				stduint size = pfs_fat0->readfl(han, Slice{ 0,32 }, buf_tmp0);
+				Console.OutFormat("[Fileman] FAT readfl %ubytes.\n\r", size);
+				for0(i, size) Console.OutFormat(buf_tmp0[i] ? " %c " : " 0x%[8H] ", buf_tmp0[i]);
+				Console.OutFormat("\n\r");
+			}
+
 			if (ready) Console.OutFormat("%s", "[Fileman] File system is ready.\n\r");
 			flag_ready_fileman = true;
 			break;

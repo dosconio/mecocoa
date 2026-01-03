@@ -44,7 +44,7 @@ build: clean $(cppobjs)
 	@$(CX) -c prehost/$(arch)/$(arch).cpp -o $(ubinpath)/mcca-$(arch)-main.elf
 	g++ -I$(uincpath) $(flag) -m32 $(ker_mod) prehost/$(arch)/$(arch).cpp prehost/$(arch)/$(arch).auf.cpp -o $(ubinpath)/$(elf_kernel) -L$(ubinpath) -lm32d $(CXF) \
 		-T prehost/$(arch)/$(arch).ld  \
-		-nostartfiles -O0 \
+		-nostartfiles -Os \
 		-Wl,-Map=$(ubinpath)/$(elf_kernel).map
 	strip --strip-all $(ubinpath)/$(elf_kernel)
 	ffset $(ubinpath)/fixed.vhd $(ubinpath)/$(elf_kernel) 0 > /dev/null
@@ -88,14 +88,16 @@ subappb:
 	gcc subapps/hellob/*.c accmlib/*.o -o $(uobjpath)/app-$(arch)/b -m32 -nostdlib  -fno-pic -static -I$(uincpath) -D_ACCM=0x8632
 	ffset $(ubinpath)/fixed.vhd $(uobjpath)/app-$(arch)/b 384 > /dev/null
 
-run: build
-	@$(qemu) \
+run: build run-only
+run-only:
+	$(qemu) \
 		-drive format=raw,file=$(outs),if=floppy \
 		-boot order=a -m 32\
 		-drive file=$(ubinpath)/fixed.vhd,format=vpc,if=none,id=disk0 \
 		-device ide-hd,drive=disk0,bus=ide.0,unit=0 \
 		-drive file=$(ubinpath)/fixed2.vhd,format=vpc,if=none,id=disk1 \
-		-device ide-hd,drive=disk1,bus=ide.0,unit=1
+		-device ide-hd,drive=disk1,bus=ide.0,unit=1 \
+		-enable-kvm -cpu host
 # 		-drive file=$(ubinpath)/fixed.vhd,format=raw
 
 

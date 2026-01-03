@@ -76,19 +76,19 @@ public:
 	unsigned partid;
 	//
 	OrangesFs(unsigned dev, char* buffer);
-	virtual bool makefs() override;
-	virtual bool loadfs() override;
+	virtual bool makefs(rostr vol_label, void* moreinfo = 0) override;
+	virtual bool loadfs(void* moreinfo = 0) override;
 	// `exinfo` is the return-inode
 	// using: create_file("/hello", 0);
-	virtual bool create(rostr fullpath, stduint flags, stduint* exinfo, rostr linkdest = 0) override;
+	virtual bool create(rostr fullpath, stduint flags, void* exinfo, rostr linkdest = 0) override;
 	// clear the i-node in inode_array[] although it is not really needed.
 	// don't clear the data bytes so the file is recoverable.
 	virtual bool remove(rostr pathname) override;// remove file/folder
-	virtual bool search(rostr fullpath, stduint* retback) override;// retback is the fd
-	virtual bool proper() override;// set proper
-	virtual bool enumer() override;
-	virtual bool readfl() override;// read file
-	virtual bool writfl() override;// write file
+	virtual void* search(rostr fullpath, void* moreinfo) override;// retback is the fd
+	virtual bool proper(rostr path, stduint cmd, const void* moreinfo = 0) override;// set proper
+	virtual bool enumer(void* dir_handler, stduint index, void* info) override;
+	virtual stduint readfl(void* fil_handler, Slice file_slice, byte* dst) override;// read file
+	virtual stduint writfl(void* fil_handler, Slice file_slice, const byte* src) override;// write file
 
 	// // //
 	// Read superblock from the given device then write it into a free superblock[] slot.
