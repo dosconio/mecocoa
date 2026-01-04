@@ -80,9 +80,7 @@ static void get_partition_table(Harddisk_PATA& drv, unsigned partable_sectposi, 
 	MemCopyN(pt, single_sector + PARTITION_TABLE_OFFSET, sizeof(*pt) * NR_PART_PER_DRIVE);
 }
 
-// Part Type
-#define NO_PART 0x00
-#define EX_PART 0x05
+
 
 #define ORANGES_PART 0x99// use its method
 

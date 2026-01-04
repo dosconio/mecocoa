@@ -19,7 +19,7 @@
 use crate uni;
 
 static byte* buffer = nil;
-#define FSBUF_SIZE 0x1000
+#define FSBUF_SIZE 0x8000
 FileDescriptor* f_desc_table = nil;
 stduint f_desc_table_count = 0;
 
@@ -41,8 +41,10 @@ extern inode* inode_table;
 
 extern super_block superblocks[NR_SUPER_BLOCK];//{TEMP} in Static segment, should be managed in heap
 
-OrangesFs* pfs; const usize ROOT_DEV = MINOR_hd6a; 
-FilesysFAT* pfs_fat0; const usize ROOT_DEV_FAT0 = MINOR_hd6a + 2; 
+static OrangesFs* pfs;
+static const usize ROOT_DEV = MINOR_hd6a;
+static FilesysFAT* pfs_fat0;
+static const usize ROOT_DEV_FAT0 = MINOR_hd6a + 2;
 
 //// //// ---- //// ////
 
@@ -66,9 +68,7 @@ void DEV_Init()
 - RUPT
 */
 
-static void empty_func(...) {
 
-}
 
 static bool hd_info_valid = false;
 
@@ -110,7 +110,8 @@ stduint do_rdwt(bool wr_type, stduint fid, Slice slice, stduint pid)
 		return msg[0];
 	}
 	else {
-		Partition part(pin->i_dev);
+		Harddisk_PATA_Paged hdd(DRV_OF_DEV(pin->i_dev));
+		DiscPartition part(hdd, pin->i_dev);
 		const stduint blksize = part.Block_Size;
 		// assert
 		if (pin->entity.i_mode == I_REGULAR || pin->entity.i_mode == I_DIRECTORY); else {
@@ -162,7 +163,7 @@ stduint do_rdwt(bool wr_type, stduint fid, Slice slice, stduint pid)
 
 //// ---- ---- Partition & Harddisk_PATA_Paged Agent ---- ---- ////
 
-void Partition::renew_slice() {
+void DiscPartition::renew_slice() {
 	stduint args[1];
 	args[0] = self.device;
 	syssend(Task_Hdd_Serv, sliceof(args), _IMM(FiledevMsg::GETPS));
@@ -177,17 +178,6 @@ bool Harddisk_PATA_Paged::Read(stduint BlockIden, void* Dest) {
 	sysrecv(Task_Hdd_Serv, Dest, Block_Size);
 	return true;
 }
-
-bool Partition::Read(stduint BlockIden, void* Dest) {
-	if (!slice.address && !slice.length) renew_slice();
-	// ONLY for IDE0.0 and IDE0.1
-	//!!!{why} if delete the below line, it won't work
-	if (BlockIden == ~0) empty_func("read %u:%u", DRV_OF_DEV(self.device), DRV_OF_DEV(self.device));
-	// ploginfo("read %u:%u", DRV_OF_DEV(self.device), BlockIden + slice.address);
-	return Harddisk_PATA_Paged(DRV_OF_DEV(self.device)).Read(BlockIden + slice.address, Dest);
-}
-
-
 bool Harddisk_PATA_Paged::Write(stduint BlockIden, const void* Sors) {
 	stduint to_args[2];
 	to_args[0] = getLowID();//{} ide00 ide01
@@ -196,11 +186,7 @@ bool Harddisk_PATA_Paged::Write(stduint BlockIden, const void* Sors) {
 	syssend(Task_Hdd_Serv, Sors, Block_Size);
 	return true;
 }
-bool Partition::Write(stduint BlockIden, const void* Sors) {
-	if (!slice.address && !slice.length) renew_slice();
-	// ONLY for IDE00 and IDE01
-	return Harddisk_PATA_Paged(DRV_OF_DEV(self.device)).Write(BlockIden + slice.address, Sors);
-}
+
 
 //// ---- ---- fs-irrelavant interface ---- ---- ////
 
@@ -361,8 +347,9 @@ int do_close(ProcessBlock& process, int fid)
 	// ploginfo("do_close %d", fd);
 	return 0;
 }
-int do_lseek()
+stdsint do_lseek()
 {
+	stdsint pos;
 //	int fd = fs_msg.FD;
 //	int off = fs_msg.OFFSET;
 //	int whence = fs_msg.WHENCE;
@@ -388,7 +375,7 @@ int do_lseek()
 //		return -1;
 //	}
 //	pb->pfiles[fd]->fd_pos = pos;
-//	return pos;
+	return pos;
 }
 
 //// ---- ---- SERVICE ---- ---- ////
@@ -402,9 +389,10 @@ stduint serv_file_loop_remove(stduint pid, rostr filename) {
 }
 extern bool fileman_hd_ready;
 bool flag_ready_fileman = false;
-byte buf_tmp0[32];
+
 
 static FAT_FileHandle filhan;
+// static FAT_DirInfo filinf;
 void serv_file_loop()
 {
 	// Manually Initialize
@@ -415,6 +403,8 @@ void serv_file_loop()
 	f_desc_table = (FileDescriptor*)Memory::physical_allocate(0x1000);
 	f_desc_table_count = nil;
 	::buffer = (byte*)Memory::physical_allocate(FSBUF_SIZE);
+	stduint&& bufsize = 512 * 64;// 32K
+	void* load_buffer = Memory::physical_allocate(bufsize);
 	// ploginfo("%s, buffer %[32H]", __FUNCIDEN__, ::buffer);
 	//
 	stduint&& inode_table_size = vaultAlignHexpow(0x1000, sizeof(inode) * NR_INODE);
@@ -429,16 +419,19 @@ void serv_file_loop()
 	//
 	stduint to_args[8];// 8*4=32 bytes
 	stduint sig_type = 0, sig_src;
-	
-	pfs = new (_buf_OFs) OrangesFs(ROOT_DEV, (char*)::buffer);
-	Partition part_fat0(ROOT_DEV_FAT0);
+
+	Harddisk_PATA_Paged hdd(0x01);
+
+	pfs = new (_buf_OFs) OrangesFs(hdd, ::buffer, ROOT_DEV);
+	DiscPartition part_fat0(hdd, ROOT_DEV_FAT0);
 	pfs_fat0 = new (_buf_FATs) FilesysFAT(32, part_fat0, ::buffer, ROOT_DEV_FAT0);
+	pfs_fat0->buffer_fatable = (byte*)Memory::physical_allocate(0x1000);
 
 	stduint retval[1];
 
 
 	FAT_FileHandle* han;
-	stduint a[] = { _IMM(&filhan) };
+	stduint a[2] = { _IMM(&filhan)/*, _IMM(&filinf) */ };
 
 	bool ready = false;
 	while (true) {
@@ -456,16 +449,23 @@ void serv_file_loop()
 				Console.OutFormat("%s", "[Fileman] FAT file system is ready.\n\r");
 			}
 			else Console.OutFormat("[Fileman] FAT file system is not ready (%u).\n\r", pfs_fat0->error_number);
-			
-			han = (FAT_FileHandle*)pfs_fat0->search("yano.txt", &a);
-			Console.OutFormat("[Fileman] FAT search %[x].\n\r", han);
-			Console.OutFormat("[Fileman] Filesize %u.\n\r", han->size);
-			if (han) {
-				stduint size = pfs_fat0->readfl(han, Slice{ 0,32 }, buf_tmp0);
-				Console.OutFormat("[Fileman] FAT readfl %ubytes.\n\r", size);
-				for0(i, size) Console.OutFormat(buf_tmp0[i] ? " %c " : " 0x%[8H] ", buf_tmp0[i]);
-				Console.OutFormat("\n\r");
+
+			han = (FAT_FileHandle*)pfs_fat0->search("/", &a);
+			pfs_fat0->enumer(han, NULL);
+
+			// appinit
+			printlog(_LOG_INFO, "Loading Appinit");
+			if (han = (FAT_FileHandle*)pfs_fat0->search("init", &a)) {
+				pfs_fat0->readfl(han, Slice{ 0,han->size }, (byte*)load_buffer);
 			}
+			TaskLoad(NULL _TEMP, load_buffer, 3)->focus_tty_id = 0;
+
+			// subappc
+			printlog(_LOG_INFO, "Loading Subappc");
+			if (han = (FAT_FileHandle*)pfs_fat0->search("c", &a)) {
+				pfs_fat0->readfl(han, Slice{ 0,han->size }, (byte*)load_buffer);
+			}
+			TaskLoad(NULL _TEMP, load_buffer, 3)->focus_tty_id = 0;
 
 			if (ready) Console.OutFormat("%s", "[Fileman] File system is ready.\n\r");
 			flag_ready_fileman = true;
@@ -510,7 +510,15 @@ void serv_file_loop()
 			break;
 		}
 		// ... ...
+		
+		case FilemanMsg::TEMP:
+		{
+			ploginfo("- %s", to_args[0]);
+			syssend(sig_src, &retval, sizeof(retval[0]));
+			break;
+		}
 
+		// ... ...
 		default:
 			plogerro("Bad TYPE in %s %s", __FILE__, __FUNCIDEN__);
 			break;

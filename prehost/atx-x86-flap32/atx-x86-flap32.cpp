@@ -92,6 +92,10 @@ void Cache() {
 }
 #define Cache() ((stduint(*)())Cache)()
 
+//{TODO} Get dev from DL...
+static FilesysFAT* pfs_fat0;
+static const usize ROOT_DEV_FAT0 = MINOR_hd6a + 2;
+
 // in future, some may be abstracted into mecocoa/mccaker.cpp
 void MAIN();
 _sign_entry() {
@@ -144,42 +148,12 @@ void MAIN() {
 	// Service
 	TaskRegister((void*)&serv_cons_loop, 1);
 	TaskRegister((void*)&serv_dev_hd_loop, 1);
-	TaskRegister((void*)&serv_file_loop, 1);
+	TaskRegister((void*)&serv_file_loop, 0);
 	TaskRegister((void*)&serv_task_loop, 0);// GDT operation
-
-	// InterruptEnable();
-	// while (1);
-
-	//{TODO} Load Shell (FAT + ELF)
-	stduint&& bufsize = 512 * 64;
-	void* load_buffer = Memory::physical_allocate(bufsize);
-	Harddisk_PATA hdisk(0);
-
-	
-	// appinit
-	printlog(_LOG_INFO, "Loading Appinit");
-	for0(i, 64) hdisk.Read(i + 256, (void*)((char*)load_buffer + 512 * (i)));
-	TaskLoad(NULL _TEMP, load_buffer, 3)->focus_tty_id = 0;
-
-	// subappc
-	printlog(_LOG_INFO, "Loading Subappc");
-	for0(i, 64) hdisk.Read(i + 512, (void*)((char*)load_buffer + 512 * (i)));
-	TaskLoad(NULL _TEMP, load_buffer, 3)->focus_tty_id = 0;
-
-	// if (false) { CallFar(0, 8 * 9); jmpFar(0, 8 * 9); }// re-entry test
 
 	syscall(syscall_t::OUTC, 'O');// with effect InterruptEnable();
 	Console.OutFormat("hayouuu~!\n\r");
 
-	// Console.OutFormat("IMR 0x%[8H] 0x%[8H]\n\r", innpb(_i8259A_MAS_IMR), innpb(_i8259A_SLV_IMR));
-
-	// bcons[0]->OutFormat("HelloTTY%d\n\r", 0);
-	// bcons[1]->OutFormat("HelloTTY%d\n\r", 1);
-	// bcons[2]->OutFormat("HelloTTY%d\n\r", 2);
-	// bcons[3]->OutFormat("HelloTTY%d\n\r", 3);
-	// MccaTTYCon::current_switch(0); --> doshow()
-
-	
 	auto lastsec = mecocoa_global->system_time.sec;
 	loop{
 		__asm("hlt");

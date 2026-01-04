@@ -16,10 +16,10 @@ use crate uni;
 
 inode* root_inode;
 
-OrangesFs::OrangesFs(unsigned dev, char* buffer) {
-	new (&self._buf_part) Partition(dev);
-	storage = (Partition*)&self._buf_part;
-	buffer_sector = (byte*)buffer;
+OrangesFs::OrangesFs(StorageTrait& s, byte* buffer, unsigned dev) {
+	new (&self._buf_part) DiscPartition(s, dev);
+	storage = (DiscPartition*)&self._buf_part;
+	buffer_sector = buffer;
 	partid = dev;
 }
 
@@ -383,8 +383,8 @@ void* OrangesFs::search(rostr path, void* moreinfo) {
 	return NULL;
 }
 
-bool OrangesFs::proper(rostr path, stduint cmd, const void* moreinfo) {return _TODO false;}
-bool OrangesFs::enumer(void* dir_handler, stduint index, void* info) {return _TODO false;}
+bool OrangesFs::proper(void* handler, stduint cmd, const void* moreinfo) {return _TODO false;}
+bool OrangesFs::enumer(void* dir_handler, _tocall_ft _fn) {return _TODO false;}
 stduint OrangesFs::readfl(void* fil_handler, Slice file_slice, byte* dst) {return _TODO false;}
 stduint OrangesFs::writfl(void* fil_handler, Slice file_slice, const byte* src) {return _TODO false;}
 

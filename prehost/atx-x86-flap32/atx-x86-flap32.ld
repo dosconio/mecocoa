@@ -1,4 +1,4 @@
-ENTRY(_start) /* -e _start */
+ENTRY(entry_address_tag_start) /* ENTRY(_start) */ /* -e _start */
 
 MEMORY
 {

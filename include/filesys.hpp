@@ -75,7 +75,7 @@ public:
 	byte* buffer_sector;
 	unsigned partid;
 	//
-	OrangesFs(unsigned dev, char* buffer);
+	OrangesFs(StorageTrait& s, byte* buffer, unsigned dev);
 	virtual bool makefs(rostr vol_label, void* moreinfo = 0) override;
 	virtual bool loadfs(void* moreinfo = 0) override;
 	// `exinfo` is the return-inode
@@ -85,8 +85,8 @@ public:
 	// don't clear the data bytes so the file is recoverable.
 	virtual bool remove(rostr pathname) override;// remove file/folder
 	virtual void* search(rostr fullpath, void* moreinfo) override;// retback is the fd
-	virtual bool proper(rostr path, stduint cmd, const void* moreinfo = 0) override;// set proper
-	virtual bool enumer(void* dir_handler, stduint index, void* info) override;
+	virtual bool proper(void* handler, stduint cmd, const void* moreinfo = 0) override;// set proper
+	virtual bool enumer(void* dir_handler, _tocall_ft _fn) override;
 	virtual stduint readfl(void* fil_handler, Slice file_slice, byte* dst) override;// read file
 	virtual stduint writfl(void* fil_handler, Slice file_slice, const byte* src) override;// write file
 
@@ -136,7 +136,7 @@ protected:
 
 public:
 
-	byte _buf_part[sizeof(Partition)];
+	byte _buf_part[sizeof(DiscPartition)];
 
 public: //{BELOW} need(?) consider ring-calling
 

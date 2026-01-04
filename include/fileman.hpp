@@ -65,30 +65,6 @@ struct Harddisk_PATA_Paged : public Harddisk_PATA {
 };
 extern Harddisk_PATA* disks[MAX_DRIVES];
 
-struct Partition : public StorageTrait
-{
-	int device;
-	Slice slice = {0};
-	//
-	Partition(int dev) : device(dev) { Block_Size = _TEMP 512; }
-	virtual bool Read(stduint BlockIden, void* Dest) override;
-	virtual bool Write(stduint BlockIden, const void* Sors) override;
-	virtual stduint getUnits() override {
-		if (!slice.address && !slice.length) renew_slice();
-		return slice.length;
-	}
-	Slice getSlice() {
-		if (!slice.address && !slice.length) renew_slice();
-		return slice;
-	}
-	virtual int operator[](uint64 bytid) override { _TODO return 0; }
-	//
-protected:
-	
-	void renew_slice();
-};
-
-
 // for IDE0:0 and IDE0:1
 // Should be done by syscall. But here is linked as one program
 inline static Harddisk_PATA* IndexDisk(unsigned dev) {
@@ -114,6 +90,8 @@ enum class FilemanMsg {
 	READ,
 	WRITE,
 	REMOVE,
+
+	TEMP,
 };
 
 #define	O_CREAT  0b001

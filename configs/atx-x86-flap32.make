@@ -31,6 +31,14 @@ sudokey=k
 elf_loader=mcca-$(arch).loader.elf
 elf_kernel=mcca-$(arch).elf
 
+# cfdisk of fixed2.vhd
+# Device          Boot     Start      End  Sectors   Size  Id Type
+# fixed2.vhd1               2048     4096     2049     1M  83 Linux           
+# fixed2.vhd2               4097   163295   159199  77.7M   5 Extended
+# ├─fixed2.vhd5   *         8192    16384     8193     4M  99 unknown
+# ├─fixed2.vhd6            18433    32768    14336     7M  83 Linux
+# └─fixed2.vhd7            34817   163295   128479  62.7M   c W95 FAT32 (LBA)
+
 build: clean $(cppobjs)
 	@echo "MK mecocoa $(arch) real16 support"
 	aasm prehost/$(arch)/atx-x86-cppweaks.asm -felf -o $(uobjpath)/mcca-$(arch)/mcca-$(arch)-elf16.o
@@ -38,18 +46,16 @@ build: clean $(cppobjs)
 	g++ -I$(uincpath) $(flag) -m32 prehost/$(arch)/$(arch).loader.cpp prehost/$(arch)/$(arch).auf.cpp $(uobjpath)/CGMin32/_ae_manage.o\
 		-o $(ubinpath)/$(elf_loader) -L$(ubinpath) -lm32d $(CXF) \
 		-T prehost/$(arch)/$(arch).loader.ld  \
-		-nostartfiles -Os
+		-nostartfiles -Os \
+		-Wl,-Map=$(ubinpath)/$(elf_loader).map
 	strip --strip-all $(ubinpath)/$(elf_loader)
 	@echo "MK mecocoa $(arch)"
-	@$(CX) -c prehost/$(arch)/$(arch).cpp -o $(ubinpath)/mcca-$(arch)-main.elf
-	g++ -I$(uincpath) $(flag) -m32 $(ker_mod) prehost/$(arch)/$(arch).cpp prehost/$(arch)/$(arch).auf.cpp -o $(ubinpath)/$(elf_kernel) -L$(ubinpath) -lm32d $(CXF) \
+	$(CX) prehost/$(arch)/grubhead.S -o $(uobjpath)/mcca-$(arch).grub.o
+	g++ -I$(uincpath) $(flag) -m32 $(uobjpath)/mcca-$(arch).grub.o $(ker_mod) prehost/$(arch)/$(arch).cpp prehost/$(arch)/$(arch).auf.cpp -o $(ubinpath)/$(elf_kernel) -L$(ubinpath) -lm32d $(CXF) \
 		-T prehost/$(arch)/$(arch).ld  \
 		-nostartfiles -Os \
 		-Wl,-Map=$(ubinpath)/$(elf_kernel).map
 	strip --strip-all $(ubinpath)/$(elf_kernel)
-	ffset $(ubinpath)/fixed.vhd $(ubinpath)/$(elf_kernel) 0 > /dev/null
-	# dd if=$(ubinpath)/$(elf_kernel) of=$(ubinpath)/fixed.vhd bs=1 conv=notrunc
-	#{TODO} main kernel here
 	@dd if=/dev/zero of=$(outs) bs=512 count=2880 2>>/dev/null
 	@dd if=$(boot)   of=$(outs) bs=512 count=1 conv=notrunc 2>>/dev/null
 	@echo $(sudokey) | sudo -S mkdir -p $(mnts)
@@ -62,18 +68,25 @@ build: clean $(cppobjs)
 	echo MK appinit
 	g++ -I$(uincpath) $(flag) -m32 $(CXF) $(CXW) -std=c++2a \
 		-o $(uobjpath)/sapp-$(arch)/init subapps/appinit.cpp -L$(uobjpath)/accm-$(arch) -l$(arch)
-	ffset $(ubinpath)/fixed.vhd $(uobjpath)/sapp-$(arch)/init 256 > /dev/null
-	#
 	echo MK subappc
 	g++ -I$(uincpath) $(flag) -m32 $(CXF) $(CXW) -std=c++2a \
 		subapps/helloc/* -o $(uobjpath)/sapp-$(arch)/c  -L$(uobjpath)/accm-$(arch) -l$(arch)
-	ffset $(ubinpath)/fixed.vhd $(uobjpath)/sapp-$(arch)/c 512 > /dev/null
+	# --- write out ---
+	@echo $(sudokey) | sudo -S kpartx -av $(ubinpath)/fixed2.vhd  >/dev/null # ls /dev/mapper/loop*p* && sudo mkfs.vfat -F 32 -n "DATA" /dev/mapper/loop*p7
+	@echo $(sudokey) | sudo -S mount /dev/mapper/loop*p7 $(mnts) #sudo fsck.vfat -v /dev/mapper/loop0p7 # fdisk # blkid
+	@echo $(sudokey) | sudo -S cp $(ubinpath)/$(elf_kernel)     $(mnts)/mx86.elf
+	@echo $(sudokey) | sudo -S cp $(ubinpath)/$(elf_kernel)     /boot/mx86.elf
+	@echo $(sudokey) | sudo -S cp $(uobjpath)/sapp-$(arch)/init $(mnts)/init
+	@echo $(sudokey) | sudo -S cp $(uobjpath)/sapp-$(arch)/c    $(mnts)/c
+	@tree $(mnts) -s
+	@echo $(sudokey) | sudo -S umount $(mnts)
+	@echo $(sudokey) | sudo -S kpartx -dv $(ubinpath)/fixed2.vhd >/dev/null
 	#
 	@echo
 	@echo Run \"make -f accmlib/accmx86.make\" to build accm-x86
 	@echo "You can now debug in bochs with the command:"
-	@echo $(bochd) -f $(dstdir)/bochsrc.bxrc
-	@echo bochs -f $(ubinpath)/I686/mecocoa/bochsrc-lin.bxrc -debugger
+	@echo "  " $(bochd) -f $(dstdir)/bochsrc.bxrc
+	@echo "  " bochs -f $(ubinpath)/I686/mecocoa/bochsrc-lin.bxrc -debugger
 
 accm:
 	make -f accmlib/accmx86.make
@@ -82,11 +95,11 @@ subappa:
 	echo MK subappa
 	aasm -felf subapps/helloa/helloa.asm -o subapps/helloa/helloa.o
 	ld   -s -m elf_i386 -o $(uobjpath)/app-$(arch)/a subapps/helloa/helloa.o accmlib/*.o
-	ffset $(ubinpath)/fixed.vhd $(uobjpath)/app-$(arch)/a 256 > /dev/null
+	# ...
 subappb:
 	echo MK subappb
 	gcc subapps/hellob/*.c accmlib/*.o -o $(uobjpath)/app-$(arch)/b -m32 -nostdlib  -fno-pic -static -I$(uincpath) -D_ACCM=0x8632
-	ffset $(ubinpath)/fixed.vhd $(uobjpath)/app-$(arch)/b 384 > /dev/null
+	# ...
 
 run: build run-only
 run-only:
