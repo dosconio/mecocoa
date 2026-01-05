@@ -28,19 +28,15 @@ void temp_init() {
 OstreamTrait* con0_out;// TTY0
 
 #define ROOT_DEV_FAT0 (MINOR_hd6a + 2)
-#define single_sector ((byte*)0x100000)
+#define single_sector  ((byte*)0x100000)
+#define fatable_sector ((byte*)0x101000)
 #define hdinfo_addr   0x110000
 static FAT_FileHandle filhan;
 Harddisk_PATA* pdisk;
-void partition(uni::Harddisk_PATA& drv, unsigned device, bool primary_but_logical = true);
-struct HD_Info {
-    Slice primary[NR_PRIM_PER_DRIVE];
-    Slice logical[NR_SUB_PER_DRIVE];
-};
 
-_sign_entry() {
-	__asm("movl $0x1E00, %esp");// mov esp, 0x1E00; set stack
-	clear_bss();
+
+
+void body() {
 	temp_init();
 	void (*entry_kernel)();
 	BareConsole Console(80, 50, 0xB8000); con0_out = &Console;
@@ -50,12 +46,12 @@ _sign_entry() {
 	pdisk = &hdisk;
 
 	DiscPartition part_fat0(hdisk, ROOT_DEV_FAT0);
-	FilesysFAT pfs_fat0(32, part_fat0, (byte*)0x101000, ROOT_DEV_FAT0);
-	pfs_fat0.buffer_fatable = (byte*)0x800;
+	FilesysFAT pfs_fat0(32, part_fat0, single_sector, ROOT_DEV_FAT0);
+	pfs_fat0.buffer_fatable = fatable_sector;
 	
 	stduint a[2] = { _IMM(&filhan)/*, _IMM(&filinf) */ };
 	MemSet((void*)hdinfo_addr, 0, sizeof(HD_Info));
-	partition(hdisk, 5);
+	part_fat0.Partition(*(HD_Info*)hdinfo_addr, single_sector, 5);
 
 	HD_Info& hdi = *(HD_Info*)hdinfo_addr;
 	if (!pfs_fat0.loadfs()) {
@@ -74,50 +70,13 @@ _sign_entry() {
 	}
 	entry_kernel();// noreturn
 }
+_sign_entry() {
+	__asm("movl $0x200000, %esp");
+	clear_bss();
+	body();
+}
 
 
-//{TODO} into unisym
-static void get_partition_table(Harddisk_PATA& drv, unsigned partable_sectposi, PartitionTableX86* pt)
-{
-	drv.Read(partable_sectposi, single_sector);
-	MemCopyN(pt, single_sector + PARTITION_TABLE_OFFSET, sizeof(*pt) * NR_PART_PER_DRIVE);
-}
-void partition(uni::Harddisk_PATA &drv, unsigned device, bool primary_but_logical) {
-	unsigned drive = DRV_OF_DEV(device);
-	HD_Info& hdi = *(HD_Info*)hdinfo_addr;
-	// ploginfo("%s: drive%u", __FUNCIDEN__, drive);
-	Letvar(part_tbl, PartitionTableX86*, single_sector);
-	if (primary_but_logical) {
-		get_partition_table(drv, 0, part_tbl);
-		int nr_prim_parts = 0;
-		for0 (i, NR_PART_PER_DRIVE) {
-			if (part_tbl[i].type == NO_PART) 
-				continue;
-			nr_prim_parts++;
-			hdi.primary[i + 1].address = part_tbl[i].lba_start;
-			hdi.primary[i + 1].length = part_tbl[i].lba_count;
-			if (part_tbl[i].type == EX_PART)
-				partition(drv, device + i + 1, false);
-		}
-		// assert(nr_prim_parts != 0);
-	}
-	else {
-		int j = device % NR_PRIM_PER_DRIVE; /* 1~4 */
-		int ext_start_sect = hdi.primary[j].address;
-		int s = ext_start_sect;
-		int nr_1st_sub = (j - 1) * NR_SUB_PER_PART; /* 0/16/32/48 */
-		for0 (i, NR_SUB_PER_PART) {
-			int dev_nr = nr_1st_sub + i;/* 0~15/16~31/32~47/48~63 */
-			get_partition_table(drv, s, part_tbl);
-			hdi.logical[dev_nr].address = s + part_tbl[0].lba_start;
-			hdi.logical[dev_nr].length = part_tbl[0].lba_count;
-			s = ext_start_sect + part_tbl[1].lba_start;
-			if (part_tbl[1].type == NO_PART) {
-				break;
-			}
-		}
-	}
-}
 void DiscPartition::renew_slice()
 {
 	Slice* retp;

@@ -440,7 +440,7 @@ void serv_file_loop()
 		case FilemanMsg::TEST:// (no-feedback)
 			while (!fileman_hd_ready);
 
-			if (0) pfs->makefs(NULL);
+			if (1) pfs->makefs(NULL);
 			ready = pfs->loadfs();
 			root_inode = pfs->get_inode(ROOT_INODE);
 
@@ -452,20 +452,23 @@ void serv_file_loop()
 
 			han = (FAT_FileHandle*)pfs_fat0->search("/", &a);
 			pfs_fat0->enumer(han, NULL);
-
 			// appinit
-			printlog(_LOG_INFO, "Loading Appinit");
+			printlog(_LOG_INFO, "Loading Appinit -> %x", load_buffer);
 			if (han = (FAT_FileHandle*)pfs_fat0->search("init", &a)) {
-				pfs_fat0->readfl(han, Slice{ 0,han->size }, (byte*)load_buffer);
+				if (pfs_fat0->readfl(han, Slice{ 0,han->size }, (byte*)load_buffer))
+					TaskLoad(NULL _TEMP, load_buffer, 3)->focus_tty_id = 0;
+				else plogerro("Init: Fail to load");
 			}
-			TaskLoad(NULL _TEMP, load_buffer, 3)->focus_tty_id = 0;
+			else plogerro("Init: Not found");
 
 			// subappc
 			printlog(_LOG_INFO, "Loading Subappc");
 			if (han = (FAT_FileHandle*)pfs_fat0->search("c", &a)) {
-				pfs_fat0->readfl(han, Slice{ 0,han->size }, (byte*)load_buffer);
+				if (pfs_fat0->readfl(han, Slice{ 0,han->size }, (byte*)load_buffer))
+					TaskLoad(NULL _TEMP, load_buffer, 3)->focus_tty_id = 0;
+				else plogerro("C: Fail to load");
 			}
-			TaskLoad(NULL _TEMP, load_buffer, 3)->focus_tty_id = 0;
+			else plogerro("C: Not found");
 
 			if (ready) Console.OutFormat("%s", "[Fileman] File system is ready.\n\r");
 			flag_ready_fileman = true;

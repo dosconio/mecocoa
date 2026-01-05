@@ -13,7 +13,10 @@ VIRT -> rv-kernel
 UEFI -> x64-kernel
 
 [atx-x86-flap32]
-BIOS -> uni.bootx86(floppy) -> x86-loader(floppy) -> x86-kernel(hdisk0:0)
+BIOS -> uni.bootx86(floppy) -> x86-loader(floppy) -> x86-kernel(hdisk0:1)
+
+Grub -----------> mx86-kernel
+Unib -> loader -> mx86-kernel
 
 ```
 

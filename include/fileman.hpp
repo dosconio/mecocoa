@@ -1,6 +1,7 @@
 #ifndef FILEMAN_HPP_
 #define FILEMAN_HPP_
 
+#include <cpp/trait/StorageTrait.hpp>
 // The version just consider primary IDE
 
 bool waitfor(stduint mask, stduint val, stduint timeout_second);
@@ -11,11 +12,6 @@ bool waitfor(stduint mask, stduint val, stduint timeout_second);
 	(dev - MINOR_hd1a) / NR_SUB_PER_DRIVE)
 
 #define MAX_DRIVES 2 // only for primary IDE
-#define NR_PART_PER_DRIVE    4 // 4 primary partitions per drive
-#define NR_SUB_PER_PART     16 // 16 logical partitions per primary partition
-
-#define NR_SUB_PER_DRIVE    (NR_SUB_PER_PART * NR_PART_PER_DRIVE)// 64
-#define NR_PRIM_PER_DRIVE    (NR_PART_PER_DRIVE + 1) // 5
 
 #define MAX_PRIM        (MAX_DRIVES * NR_PRIM_PER_DRIVE - 1) // 9. prim_dev ranges in hd[0-9] (h[0] h[1~4], h[5], h[6~9])
 #define MAX_SUBPARTITIONS    (NR_SUB_PER_DRIVE * MAX_DRIVES)

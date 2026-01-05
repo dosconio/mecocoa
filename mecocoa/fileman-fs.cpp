@@ -394,7 +394,7 @@ super_block superblocks[NR_SUPER_BLOCK];//{TEMP} in Static segment, should be ma
 
 void OrangesFs::read_superblock()
 {
-	ploginfo("read super block of device %d", partid);
+	// ploginfo("read super block of device %d", partid);
 	read_sector(1);
 	for0(i, NR_SUPER_BLOCK) {// find a free slot in super_block
 		if (superblocks[i].sb_dev == MajorDevice::DEV_NULL)

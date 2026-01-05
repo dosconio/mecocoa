@@ -20,10 +20,6 @@ use crate uni;
 Harddisk_PATA* disks[2];// referenced
 static char hdd_buf[byteof(**disks) * numsof(disks)];
 
-struct HD_Info {
-    Slice primary[NR_PRIM_PER_DRIVE];
-    Slice logical[NR_SUB_PER_DRIVE];
-};
 static HD_Info hd_info[4] = { 0 };//{TEMP} 0:0 0:1 1:0 1:1
 static bool hd_info_valid[4] = { 0 };
 static char* single_sector = NULL;// file-hd used buffer
@@ -74,56 +70,13 @@ struct iden_info_ascii {
 	{27, 40, "Model"} // Model number in ASCII
 };
 
-static void get_partition_table(Harddisk_PATA& drv, unsigned partable_sectposi, PartitionTableX86* pt)
-{
-	drv.Read(partable_sectposi, single_sector);
-	MemCopyN(pt, single_sector + PARTITION_TABLE_OFFSET, sizeof(*pt) * NR_PART_PER_DRIVE);
-}
 
 
 
 #define ORANGES_PART 0x99// use its method
 
 // Initialize HD_Info
-void partition(unsigned device, bool primary_but_logical = true) {
-	unsigned drive = DRV_OF_DEV(device);
-	HD_Info& hdi = hd_info[drive];
-	// ploginfo("%s: drive%u", __FUNCIDEN__, drive);
-	Letvar(part_tbl, PartitionTableX86*, single_sector);
-	if (primary_but_logical) {
-		get_partition_table(*disks[drive], 0, part_tbl);
-		int nr_prim_parts = 0;
-		for0 (i, NR_PART_PER_DRIVE) {
-			if (part_tbl[i].type == NO_PART) 
-				continue;
-			nr_prim_parts++;
-			hdi.primary[i + 1].address = part_tbl[i].lba_start;
-			hdi.primary[i + 1].length = part_tbl[i].lba_count;
-			if (part_tbl[i].type == EX_PART)
-				partition(device + i + 1, false);
-		}
-		// assert(nr_prim_parts != 0);
-	}
-	else {
-		int j = device % NR_PRIM_PER_DRIVE; /* 1~4 */
-		int ext_start_sect = hdi.primary[j].address;
-		int s = ext_start_sect;
-		int nr_1st_sub = (j - 1) * NR_SUB_PER_PART; /* 0/16/32/48 */
-		for0 (i, NR_SUB_PER_PART) {
-			int dev_nr = nr_1st_sub + i;/* 0~15/16~31/32~47/48~63 */
-			get_partition_table(*disks[drive], s, part_tbl);
-			hdi.logical[dev_nr].address = s + part_tbl[0].lba_start;
-			hdi.logical[dev_nr].length = part_tbl[0].lba_count;
-			s = ext_start_sect + part_tbl[1].lba_start;
-			if (part_tbl[1].type == NO_PART) {
-				// ploginfo("end loop at %u", i);
-				break;
-			}
-		}
-	}
-}
 
-//{} -> load_disk_info
 static void print_identify_info(uint16* hdinfo, Harddisk_PATA& hd)
 {
 	int i, k;
@@ -176,21 +129,24 @@ inline static void print_hdinfo(Harddisk_PATA& hd)
 }
 
 static void hd_open(Harddisk_PATA& hd) { // 0x00
+	byte low_id = hd.getLowID();
 	HdiskCommand cmd;
 	cmd.command = ATA_IDENTIFY;
-	cmd.device = MAKE_DEVICE_REG(0, hd.getLowID(), 0);
+	cmd.device = MAKE_DEVICE_REG(0, low_id, 0);
 	lock = 0;
-	// ploginfo("hd_open: %u, bs=%u", hd.getLowID(), hd.Block_Size);
+	// ploginfo("hd_open: %u, bs=%u", low_id, hd.Block_Size);
 	Harddisk_PATA::Hdisk_OUT(&cmd, hd_cmd_wait);
 	hd_int_wait();
 	IN_wn(REG_DATA, (word*)single_sector, hd.Block_Size);
 	print_identify_info((uint16*)single_sector, hd);
-	if (!hd_info_valid[hd.getHigID() * 2 + hd.getLowID()]) {
+	if (!hd_info_valid[hd.getHigID() * 2 + low_id]) {
 		if (_TEMP hd.getID() == 0x01) {
-			partition(hd.getID() * (NR_PART_PER_DRIVE + 1));
+			DiscPartition dpart(hd, NR_PRIM_PER_DRIVE * low_id);
+			HD_Info& hdi = hd_info[hd.getHigID() * 2 + low_id];
+			dpart.Partition(hdi, (byte*)single_sector, NR_PRIM_PER_DRIVE * low_id);
 			// if (1) print_hdinfo(hd);
 		}
-		hd_info_valid[hd.getHigID() * 2 + hd.getLowID()] = true;
+		hd_info_valid[hd.getHigID() * 2 + low_id] = true;
 	}
 }
 

@@ -109,8 +109,6 @@ void MAIN() {
 	Memory::align_basic_4k();
 	page_init();
 	GDT_Init();
-	if (opt_info) printlog(_LOG_INFO, "GDT Globl: 0x%[32H]", mecocoa_global->gdt_ptr);
-	// if (opt_test) syscall(syscall_t::TEST, (stduint)'T', (stduint)'E', (stduint)'S');
 	new (&krnl_tss) ProcessBlock;
 	krnl_tss.TSS.CR3 = getCR3();
 	krnl_tss.TSS.LDTDptr = 0;
@@ -124,9 +122,9 @@ void MAIN() {
 
 	// Enable x86 Cache
 	Cache();
-
+	
 	cons_init();// located here, for  INT-10H may influence PIC
-
+	
 	// IVT and Device
 	InterruptControl GIC(_IMM(0x80000800));// linear but not physical
 	GIC.Reset(SegCode);
@@ -144,23 +142,18 @@ void MAIN() {
 
 	Console.OutFormat("Mem Avail: %s\n\r", ker_buf.reference());
 	Console.OutFormat("CPU Brand: %s\n\r", text_brand());
-
+	
 	// Service
 	TaskRegister((void*)&serv_cons_loop, 1);
 	TaskRegister((void*)&serv_dev_hd_loop, 1);
 	TaskRegister((void*)&serv_file_loop, 0);
 	TaskRegister((void*)&serv_task_loop, 0);// GDT operation
-
 	syscall(syscall_t::OUTC, 'O');// with effect InterruptEnable();
 	Console.OutFormat("hayouuu~!\n\r");
+	
+	//! auto lastsec = mecocoa_global->system_time.sec;
+	loop __asm("hlt");
 
-	auto lastsec = mecocoa_global->system_time.sec;
-	loop{
-		__asm("hlt");
-	if (mecocoa_global->system_time.sec != lastsec) {
-		lastsec = mecocoa_global->system_time.sec;
-		// outc('T');
-	}
 	#if 0
 	if (lastsec == 8) {
 		for0(i, pnumber) {
@@ -171,17 +164,13 @@ void MAIN() {
 		break;
 	}
 	#endif
-	}
-		
-	auto crt = mecocoa_global->system_time.sec;
+
 	stduint esp; __asm("mov %%esp, %0" : "=r"(esp));
 	loop{
 		__asm("hlt");
-
 		stduint newesp; __asm("mov %%esp, %0" : "=r"(newesp));
 		if (newesp != esp) {
-			Console.OutFormat("ESP: %u\n\r", newesp);
-			esp = newesp;
+			Console.OutFormat("ESP: %u\n\r", esp = newesp);
 		}
 	}
 	// Done
