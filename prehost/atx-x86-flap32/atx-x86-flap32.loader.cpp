@@ -8,9 +8,9 @@
 #define _DEBUG
 #include <c/consio.h>
 #include <c/format/ELF.h>
-#include <c/format/filesys/FAT.h>
 #include <c/proctrl/x86/x86.h>
 #include <c/storage/harddisk.h>
+#include <c/format/filesys/FAT.h>
 #include "cpp/Device/Storage/HD-DEPEND.h"
 #include "../../include/atx-x86-flap32.hpp"
 
@@ -86,6 +86,11 @@ void DiscPartition::renew_slice()
 		&hdinfo.logical[(device - MINOR_hd1a) % NR_SUB_PER_DRIVE];//{} 2 disks
 	self.slice = *retp;
 }
+
+// to be thin, redefine to avoid including unisym's version:
+stduint FilesysFAT::writfl(void* fil_handler, Slice file_slice, const byte* sors) { return nil; }
+bool FilesysFAT::remove(rostr pathname) { return false; }
+bool FilesysFAT::create(rostr fullpath, stduint flags, void* exinfo, rostr linkdest) { return false; }
 
 extern "C" { void* __dso_handle = 0; }
 extern "C" { void __cxa_atexit(void) {} }

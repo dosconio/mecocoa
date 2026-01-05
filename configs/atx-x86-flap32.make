@@ -40,16 +40,16 @@ elf_kernel=mcca-$(arch).elf
 # └─fixed2.vhd7            34817   163295   128479  62.7M   c W95 FAT32 (LBA)
 
 build: clean $(cppobjs)
-	@echo "MK mecocoa $(arch) real16 support"
+	@echo "MK $(arch) real16 support"
 	aasm prehost/$(arch)/atx-x86-cppweaks.asm -felf -o $(uobjpath)/mcca-$(arch)/mcca-$(arch)-elf16.o
-	@echo "MK mecocoa $(arch) loader"
+	@echo "MK $(arch) loader"
 	g++ -I$(uincpath) $(flag) -m32 prehost/$(arch)/$(arch).loader.cpp prehost/$(arch)/$(arch).auf.cpp $(uobjpath)/CGMin32/_ae_manage.o\
 		-o $(ubinpath)/$(elf_loader) -L$(ubinpath) -lm32d $(CXF) \
 		-T prehost/$(arch)/$(arch).loader.ld  \
 		-nostartfiles -O1 \
 		-Wl,-Map=$(ubinpath)/$(elf_loader).map
 	strip --strip-all $(ubinpath)/$(elf_loader)
-	@echo "MK mecocoa $(arch)"
+	@echo "MK $(arch)"
 	$(CX) prehost/$(arch)/grubhead.S -o $(uobjpath)/mcca-$(arch).grub.o
 	g++ -I$(uincpath) $(flag) -m32 $(uobjpath)/mcca-$(arch).grub.o $(ker_mod) prehost/$(arch)/$(arch).cpp prehost/$(arch)/$(arch).auf.cpp -o $(ubinpath)/$(elf_kernel) -L$(ubinpath) -lm32d $(CXF) \
 		-T prehost/$(arch)/$(arch).ld  \
@@ -75,7 +75,6 @@ build: clean $(cppobjs)
 	@echo $(sudokey) | sudo -S kpartx -av $(ubinpath)/fixed2.vhd  >/dev/null # ls /dev/mapper/loop*p* && sudo mkfs.vfat -F 32 -n "DATA" /dev/mapper/loop*p7
 	@echo $(sudokey) | sudo -S mount /dev/mapper/loop*p7 $(mnts) #sudo fsck.vfat -v /dev/mapper/loop0p7 # fdisk # blkid
 	@echo $(sudokey) | sudo -S cp $(ubinpath)/$(elf_kernel)     $(mnts)/mx86.elf
-	@echo $(sudokey) | sudo -S cp $(ubinpath)/$(elf_kernel)     /boot/mx86.elf
 	@echo $(sudokey) | sudo -S cp $(uobjpath)/sapp-$(arch)/init $(mnts)/init
 	@echo $(sudokey) | sudo -S cp $(uobjpath)/sapp-$(arch)/c    $(mnts)/c
 	@tree $(mnts) -s
@@ -87,6 +86,9 @@ build: clean $(cppobjs)
 	@echo "You can now debug in bochs with the command:"
 	@echo "  " $(bochd) -f $(dstdir)/bochsrc.bxrc
 	@echo "  " bochs -f $(ubinpath)/I686/mecocoa/bochsrc-lin.bxrc -debugger
+
+install:
+	@echo $(sudokey) | sudo -S cp $(ubinpath)/$(elf_kernel)     /boot/mx86.elf
 
 accm:
 	make -f accmlib/accmx86.make
@@ -111,7 +113,6 @@ run-only:
 		-drive file=$(ubinpath)/fixed2.vhd,format=vpc,if=none,id=disk1 \
 		-device ide-hd,drive=disk1,bus=ide.0,unit=1 \
 		-enable-kvm -cpu host
-# 		-drive file=$(ubinpath)/fixed.vhd,format=raw
 
 
 clean:
