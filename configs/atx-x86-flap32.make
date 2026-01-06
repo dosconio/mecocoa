@@ -39,7 +39,9 @@ elf_kernel=mcca-$(arch).elf
 # ├─fixed2.vhd6            18433    32768    14336     7M  83 Linux
 # └─fixed2.vhd7            34817   163295   128479  62.7M   c W95 FAT32 (LBA)
 
-build: clean $(cppobjs)
+.PHONY: build install lib accm run clean
+
+build: clean lib $(cppobjs)
 	@echo "MK $(arch) real16 support"
 	aasm prehost/$(arch)/atx-x86-cppweaks.asm -felf -o $(uobjpath)/mcca-$(arch)/mcca-$(arch)-elf16.o
 	@echo "MK $(arch) loader"
@@ -89,6 +91,9 @@ build: clean $(cppobjs)
 
 install:
 	@echo $(sudokey) | sudo -S cp $(ubinpath)/$(elf_kernel)     /boot/mx86.elf
+
+lib:
+	cd $(ulibpath)/.. && make mx86 -j
 
 accm:
 	make -f accmlib/accmx86.make

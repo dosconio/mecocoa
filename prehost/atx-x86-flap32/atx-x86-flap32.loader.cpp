@@ -39,7 +39,7 @@ Harddisk_PATA* pdisk;
 void body() {
 	temp_init();
 	void (*entry_kernel)();
-	BareConsole Console(80, 50, 0xB8000); con0_out = &Console;
+	BareConsole Console(80, 50, _VIDEO_ADDR_BUFFER); con0_out = &Console;
 	Console.setShowY(0, 25);
 	printlog(_LOG_INFO, "Loading Kernel...");
 	Harddisk_PATA hdisk(0x01);

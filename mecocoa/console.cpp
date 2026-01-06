@@ -216,10 +216,10 @@ void cons_init()
 	queue_mouse = new (_BUF_QueueMouse) QueueLimited(mouse_slice);
 
 	video_info = (uni::ModeInfoBlock*)Memory::physical_allocate(0x1000);
-	BCONS0 = new (BUF_BCONS0) BareConsole(bda->screen_columns, 24, 0xB8000, 0 * 50); BCONS0->setShowY(0, 24);
-	BCONS1 = new (BUF_BCONS1) BareConsole(bda->screen_columns, 50, 0xB8000, 1 * 50); BCONS1->setShowY(0, 25);
-	BCONS2 = new (BUF_BCONS2) BareConsole(bda->screen_columns, 50, 0xB8000, 2 * 50); BCONS2->setShowY(0, 25);
-	BCONS3 = new (BUF_BCONS3) BareConsole(bda->screen_columns, 50, 0xB8000, 3 * 50); BCONS3->setShowY(0, 25);
+	BCONS0 = new (BUF_BCONS0) BareConsole(bda->screen_columns, 24, _VIDEO_ADDR_BUFFER, 0 * 50); BCONS0->setShowY(0, 24);
+	BCONS1 = new (BUF_BCONS1) BareConsole(bda->screen_columns, 50, _VIDEO_ADDR_BUFFER, 1 * 50); BCONS1->setShowY(0, 25);
+	BCONS2 = new (BUF_BCONS2) BareConsole(bda->screen_columns, 50, _VIDEO_ADDR_BUFFER, 2 * 50); BCONS2->setShowY(0, 25);
+	BCONS3 = new (BUF_BCONS3) BareConsole(bda->screen_columns, 50, _VIDEO_ADDR_BUFFER, 3 * 50); BCONS3->setShowY(0, 25);
 	
 	bcons[0] = BCONS0; new (&BCONS0->input_queue) QueueLimited((Slice) { _IMM(_BUF_innQueues[0]), byteof(_BUF_innQueues[0]) });
 	bcons[1] = BCONS1; new (&BCONS1->input_queue) QueueLimited((Slice) { _IMM(_BUF_innQueues[1]), byteof(_BUF_innQueues[1]) });
@@ -341,7 +341,7 @@ void _Comment(R1) serv_cons_loop()
 	// mouse_buf[3] = 0;
 	// BCON:
 	struct element { byte ch; byte attr; };
-	Letvar(Ribbon, element*, (0xB8000 + 80 * 2 * 24));
+	Letvar(Ribbon, element*, (_VIDEO_ADDR_BUFFER + 80 * 2 * 24));
 	Ribbon[0].ch = '^';
 	Ribbon[1].ch = '-';
 	Ribbon[2].ch = '+';

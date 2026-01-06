@@ -35,8 +35,8 @@ Development-Environment
 Format `board-architecture-mode`
 
 CISC `VMBox/VMware/Bochs/QEMU/TODO(Simics,Wel)`
-- `x86 0x8632` Intel x86 (8086 -> i686+)
-	- BIOS(MBR), CLI, Paging, Multitask, Syscall, {RTC,PIT,KBD,PS2-MOUSE}
+- `x86 0x8632` Intel x86/64 (8086 -> i686+)
+	- BIOS(MBR), CLI, Paging, Multitask, Syscall
 	- **run**
 		- **virtual**: VMware, VMBox, Bochs, qemu-system-i386(9.2.4)
 	- **build**
