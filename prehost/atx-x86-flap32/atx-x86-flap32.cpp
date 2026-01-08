@@ -14,6 +14,7 @@
 #include <c/format/ELF.h>
 #include <c/driver/PIT.h>
 #include <c/driver/mouse.h>
+#include <c/driver/timer.h>
 #include <c/proctrl/x86/x86.h>
 #include <c/storage/harddisk.h>
 #include <c/format/filesys/FAT.h>
@@ -43,7 +44,9 @@ int* kernel_fail(loglevel_t serious) {
 statin rostr text_brand() {
 	CpuBrand(ker_buf.reflect());
 	ker_buf.reflect()[_CPU_BRAND_SIZE] = 0;
-	return ker_buf.reference();
+	const char* ret = ker_buf.reference();
+	while (*ret == ' ') ret++;
+	return ret;
 }
 
 statin void _start_assert() {
@@ -141,8 +144,15 @@ void MAIN() {
 	// printlog(_LOG_WARN, " It isn't friendly to develop a kernel by pure C++.");
 
 	Console.OutFormat("Mem Avail: %s\n\r", ker_buf.reference());
+
 	Console.OutFormat("CPU Brand: %s\n\r", text_brand());
-	
+
+	tm datime; CMOS_Readtime(&datime);
+	Console.OutFormat("Date Time: %d/%d/%d %d:%d:%d\n\r",
+		datime.tm_year, datime.tm_mon, datime.tm_mday,
+		datime.tm_hour, datime.tm_min, datime.tm_sec
+	);
+
 	// Service
 	TaskRegister((void*)&serv_cons_loop, 1);
 	TaskRegister((void*)&serv_dev_hd_loop, 1);

@@ -22,7 +22,7 @@ her-note: false
 - [ ] 动态加载中断例程/服务
 - [ ] 外设实现 RuptTrait --> Mecocoa.DeviceTrait
 實用性
-- [ ] GRUB引導修复
+- [ ] GRUB引導修复 after ext 文件系統支持後
 內存管理（關鍵）
 - [ ] memoman mempool （mempool需要自举）
 - [ ] paging deep-copy heap
@@ -43,4 +43,4 @@ her-note: false
 
 - UNISYM
 - Teaching video of : https://github.com/StevenBaby/onix，學習內容如下
-	- 
+	- 037 时间

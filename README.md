@@ -21,6 +21,10 @@ her-note: false
 	- git submodule update --init --recursive
 	- make -C /home/phina/soft/edk2/BaseTools/Source/C
 
+**Branch**
+	- `main`/master: add new features and test for UNISYM.
+	- `tutorial` (TODO)
+
 ## Requirement
 
 Hardware
