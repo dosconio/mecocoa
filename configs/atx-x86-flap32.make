@@ -11,16 +11,17 @@ dstdir=D:/bin/I686/mecocoa
 outs=$(ubinpath)/I686/mecocoa/$(iden)
 mnts=/mnt/floppy
 arch=atx-x86-flap32
-flag=-D_MCCA=0x8632 -D_ARC_x86=5  -mno-sse -mno-sse2 -mno-sse3 -mno-ssse3 -mno-sse4
+flag=-D_MCCA=0x8632 -D_ARC_x86=5 -D_DEBUG 
 
-qemu=qemu-system-i386
+qemu=qemu-system-x86_64 # i386
 bochd=C:/Soft/Bochs-2.7/bochsdbg.exe
 
-CXF=-fno-rtti -fno-exceptions -fno-unwind-tables -static -nostdlib -fno-pic -fno-stack-protector #-nodefaultlibs #
-# -fno-stack-protector: avoid undefined reference to `__stack_chk_fail_local'
-# -mno-*sse*          : movdqa-series need more setting
+COMWAN = -Wno-builtin-declaration-mismatch
+CXF1=-m32 -mno-red-zone -mno-sse -mno-sse2 -mno-sse3 -mno-ssse3 -mno-sse4 # -mgeneral-regs-only
+CXF2=-fno-stack-protector -fno-pic -fno-exceptions -fno-unwind-tables -fno-builtin
+CXF=$(CXF1) $(CXF2) -fno-rtti -static -nostdlib $(COMWAN)
 CXW=-Wno-builtin-declaration-mismatch -Wno-volatile
-CX=g++ -I$(uincpath) -c $(flag) -m32 $(CXF) $(CXW) -std=c++2a 
+CX=g++ -I$(uincpath) -c $(flag) $(CXF) $(CXW) -std=c++2a
 
 ker_mod=$(uobjpath)/mcca-$(arch)/*
 
@@ -48,7 +49,7 @@ build: clean lib $(cppobjs)
 	g++ -I$(uincpath) $(flag) -m32 prehost/$(arch)/$(arch).loader.cpp prehost/$(arch)/$(arch).auf.cpp $(uobjpath)/CGMin32/_ae_manage.o\
 		-o $(ubinpath)/$(elf_loader) -L$(ubinpath) -lm32d $(CXF) \
 		-T prehost/$(arch)/$(arch).loader.ld  \
-		-nostartfiles -O1 \
+		-nostartfiles -O0 \
 		-Wl,-Map=$(ubinpath)/$(elf_loader).map
 	strip --strip-all $(ubinpath)/$(elf_loader)
 	@echo "MK $(arch)"
@@ -57,7 +58,7 @@ build: clean lib $(cppobjs)
 		-T prehost/$(arch)/$(arch).ld  \
 		-nostartfiles -O0 \
 		-Wl,-Map=$(ubinpath)/$(elf_kernel).map
-	strip --strip-all $(ubinpath)/$(elf_kernel)
+	#strip --strip-all $(ubinpath)/$(elf_kernel)
 	@dd if=/dev/zero of=$(outs) bs=512 count=2880 2>>/dev/null
 	@dd if=$(boot)   of=$(outs) bs=512 count=1 conv=notrunc 2>>/dev/null
 	@echo $(sudokey) | sudo -S mkdir -p $(mnts)

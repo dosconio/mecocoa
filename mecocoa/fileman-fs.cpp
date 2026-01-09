@@ -2,8 +2,6 @@
 //{TODO} make this into FilesysMinix into UNIS
 // Current: Orange'S FS v1.0
 #define _STYLE_RUST
-#define _DEBUG
-
 #ifdef _ARC_x86 // x86:
 #include <c/consio.h>
 #include <c/storage/harddisk.h>

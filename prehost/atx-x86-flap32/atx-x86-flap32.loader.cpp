@@ -5,7 +5,7 @@
 // ModuTitle: Demonstration - ELF32-C++ x86 Bare-Metal
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 #define _STYLE_RUST
-#define _DEBUG
+
 #include <c/consio.h>
 #include <c/format/ELF.h>
 #include <c/proctrl/x86/x86.h>

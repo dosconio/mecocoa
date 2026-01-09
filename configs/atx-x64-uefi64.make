@@ -4,6 +4,8 @@
 # ModuTitle: Build for Mecocoa
 # Copyright: Dosconio Mecocoa, BCD License Version 3
 
+arch?=atx-x64-uefi64
+
 MKDIR = mkdir -p
 RM = rm -rf
 
@@ -68,14 +70,16 @@ build: clean $(ubinpath)/$(arch).img $(asmobjs) $(cppobjs) $(cplobjs)
 	@sudo cp $(ubinpath)/AMD64/loader.efi $(mntdir)/EFI/BOOT/BOOTX64.EFI
 	@sudo cp $(ubinpath)/$(elf_kernel) $(mntdir)/kernel.elf
 	tree $(mntdir)
-	#cp to other file
 	@sudo umount $(mntdir)
+	# update
+	qemu-img convert -f raw -O vpc $(ubinpath)/$(arch).img $(ubinpath)/$(arch).vhd
 
 
 $(ubinpath)/$(arch).img: loader
 	@echo MK DISK IMAGE
 	qemu-img create -f raw $@ 100M > /dev/null
 	mkfs.fat -n 'MECOCOA ' -s 2 -f 2 -R 32 -F 32 $@ > /dev/null
+
 
 edkdir=/home/phina/soft/edk2
 .PHONY : loader

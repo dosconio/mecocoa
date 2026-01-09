@@ -12,6 +12,7 @@
 #define STACK_SIZE                      0x4000
 	.text
 .global entry_address_tag_start
+.global _start_eax, _start_ebx
 multiboot_header:
 	/*  Align 64 bits boundary. */
 	.align  8
@@ -39,6 +40,8 @@ end_tag_start:
 end_tag_end:
 multiboot_header_end:
 multiboot_entry:
+	movl    %eax, _start_eax
+	movl    %ebx, _start_ebx
 	/*  Initialize the stack pointer. */
 	movl    $(stack + STACK_SIZE), %esp
 	/*  Reset EFLAGS. */
@@ -49,10 +52,13 @@ multiboot_entry:
 	/*  Push the magic value. */
 	pushl   %eax
 	/*  Now enter the C main function... */
+	call    EXT_C(call_constructors)
 	call    EXT_C(_start)
 loop:   hlt
 	jmp     loop
 	.comm   stack, STACK_SIZE
+_start_eax: .long 0
+_start_ebx: .long 0
 
 /* grub.cfg
  ...timeout=5

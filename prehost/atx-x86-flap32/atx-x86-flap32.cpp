@@ -5,7 +5,6 @@
 // ModuTitle: Demonstration - ELF32-C++ x86 Bare-Metal
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 #define _STYLE_RUST
-#define _DEBUG
 
 #include <c/cpuid.h>
 #include <c/consio.h>
@@ -21,12 +20,16 @@
 #include <c/driver/RealtimeClock.h>
 #include "../../include/atx-x86-flap32.hpp"
 
+_ESYM_C Handler_t __init_array_start[];
+_ESYM_C Handler_t __init_array_end[];
+
 bool opt_info = true;
 bool opt_test = true;
 
 _ESYM_C{
 char _buf[65]; String ker_buf;
 stduint tmp;
+extern uint32 _start_eax, _start_ebx;
 }
 
 static ProcessBlock krnl_tss;
@@ -48,6 +51,12 @@ statin rostr text_brand() {
 	while (*ret == ' ') ret++;
 	return ret;
 }
+
+struct A {
+	int h;
+	A(int hh) : h(hh) {}
+};
+A aa(123);
 
 statin void _start_assert() {
 	if (byteof(mecocoa_global_t) > 0x100) {
@@ -143,9 +152,13 @@ void MAIN() {
 
 	// printlog(_LOG_WARN, " It isn't friendly to develop a kernel by pure C++.");
 
+	Console.OutFormat("Def Param: A=0x%[x], B=0x%[x]\n\r", _start_eax, _start_ebx);
+
 	Console.OutFormat("Mem Avail: %s\n\r", ker_buf.reference());
 
 	Console.OutFormat("CPU Brand: %s\n\r", text_brand());
+	Console.OutFormat("Try C++No: %d\n\r", aa.h);/////////
+
 
 	tm datime; CMOS_Readtime(&datime);
 	Console.OutFormat("Date Time: %d/%d/%d %d:%d:%d\n\r",
@@ -188,9 +201,14 @@ void MAIN() {
 }
 // assert_stack() = assert(%%esp == 0x8000);
 
-extern "C" { void* __dso_handle = 0; }
-extern "C" { void __cxa_atexit(void) {} }
-extern "C" { void __gxx_personality_v0(void) {} }
-extern "C" { void __stack_chk_fail(void) {} }
+
+_ESYM_C void call_constructors() {
+	for (Handler_t* func = __init_array_start; func != __init_array_end; func++) (*func)();
+}
+
+_ESYM_C { void* __dso_handle = 0; }
+_ESYM_C { void __cxa_atexit(void) {} }
+_ESYM_C { void __gxx_personality_v0(void) {} }
+_ESYM_C { void __stack_chk_fail(void) {} }
 void operator delete(void*) {}
 void operator delete(void* ptr, unsigned size) noexcept { _TODO }

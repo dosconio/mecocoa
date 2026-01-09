@@ -8,12 +8,16 @@ MEMORY
 SECTIONS
 {
 	. = 0x8000;
+	/*
+	.multiboot : {
+		*(.multiboot)
+	}
+	*/
 	.text : {*(.text)}
 	.data : {
 		*(.data)
 		*(.note.gnu.build-id)
 		*(.got)
-		*(.init_array)
 		*(.eh_frame)
 	}
 	.bss : {
@@ -22,7 +26,14 @@ SECTIONS
 		BSS_ENDO = .;
 	}
 	.rodata : {*(.rodata)}
-
+	/* C++ only */
+	. = ALIGN(8);
+	__init_array_start = .;
+	.init_array : {
+		KEEP(*(SORT(.init_array.*)))
+		KEEP(*(.init_array))
+	}
+	__init_array_end = .;
 	/* Remove information from the compiler libraries */
 	/DISCARD/ :
 	{

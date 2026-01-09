@@ -3,6 +3,7 @@ dg-publish: true
 her-note: false
 ---
 
+一些版本的编译器对 C、C++ 混合链接的支持不好。
 
 ...
 ✔️ 20251208 exit() wait() 
@@ -22,7 +23,7 @@ her-note: false
 - [ ] 动态加载中断例程/服务
 - [ ] 外设实现 RuptTrait --> Mecocoa.DeviceTrait
 實用性
-- [ ] GRUB引導修复 after ext 文件系統支持後
+- [ ] GRUB引導修复 after extN&scsi 支持後
 內存管理（關鍵）
 - [ ] memoman mempool （mempool需要自举）
 - [ ] paging deep-copy heap
