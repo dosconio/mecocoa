@@ -1,4 +1,4 @@
-ENTRY(entry_address_tag_start) /* ENTRY(_start) */ /* -e _start */
+ENTRY(multiboot_entry) /* ENTRY(_start) */ /* -e _start */
 
 MEMORY
 {

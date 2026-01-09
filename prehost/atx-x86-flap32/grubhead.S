@@ -8,10 +8,8 @@
 # define EXT_C(sym)                     sym
 #endif
 
-/*  The size of our stack (16KB). */
-#define STACK_SIZE                      0x4000
 	.text
-.global entry_address_tag_start
+.global multiboot_entry
 .global _start_eax, _start_ebx
 multiboot_header:
 	/*  Align 64 bits boundary. */
@@ -43,7 +41,7 @@ multiboot_entry:
 	movl    %eax, _start_eax
 	movl    %ebx, _start_ebx
 	/*  Initialize the stack pointer. */
-	movl    $(stack + STACK_SIZE), %esp
+	movl    $0x7FF0, %esp
 	/*  Reset EFLAGS. */
 	pushl   $0
 	popf
@@ -56,7 +54,7 @@ multiboot_entry:
 	call    EXT_C(_start)
 loop:   hlt
 	jmp     loop
-	.comm   stack, STACK_SIZE
+	# .comm   stack, STACK_SIZE
 _start_eax: .long 0
 _start_ebx: .long 0
 

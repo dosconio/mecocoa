@@ -68,7 +68,10 @@ void body() {
 		printlog(_LOG_WARN, "Kernel not found");
 		return;
 	}
-	entry_kernel();// noreturn
+	_ASM volatile ("movl %0, %%edx": : "r"(entry_kernel));
+	_ASM volatile ("movl $0x46494E41, %eax");// LE FINA
+	_ASM volatile ("jmp  *%edx");
+	// entry_kernel();// noreturn
 }
 _sign_entry() {
 	__asm("movl $0x200000, %esp");

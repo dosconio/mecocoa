@@ -22,8 +22,7 @@ her-note: false
 - [ ] 从裸机程式轉作業系統 —— exec 并激活 shell
 - [ ] 动态加载中断例程/服务
 - [ ] 外设实现 RuptTrait --> Mecocoa.DeviceTrait
-實用性
-- [ ] GRUB引導修复 after extN&scsi 支持後
+
 內存管理（關鍵）
 - [ ] memoman mempool （mempool需要自举）
 - [ ] paging deep-copy heap

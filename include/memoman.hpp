@@ -19,6 +19,7 @@ public:
 	static byte* p_basic;
 	static byte* p_ext;
 	static usize areax_size;
+	static Slice avail_slices[4];
 public:
 	static void clear_bss() { MemSet(&BSS_ENTO, &BSS_ENDO - &BSS_ENTO, 0); }
 	static usize align_basic_4k() {
@@ -32,6 +33,7 @@ public:
 	_TEMP static usize evaluate_size();
 	static void* physical_allocate(usize siz);
 	static rostr text_memavail(uni::String& ker_buf);
+	static bool init(stduint eax, byte* ebx);
 };
 
 

@@ -181,8 +181,11 @@ public:
 	static bool setMode(VideoMode vmode);
 };
 _ESYM_C word VideoModeVal;
+_ESYM_C Handler_t SwitchVideoMode;
+_ESYM_C word SW16_FUNCTION;
 bool Graphic::setMode(VideoMode vmode) {
 	VideoModeVal = _IMM(vmode);
+	SW16_FUNCTION = _IMM(&SwitchVideoMode);
 	__asm("call SwitchReal16");
 	MemCopyN(video_info, (pureptr_t)TEMP_AREA, offsetof(ModeInfoBlock, ReservedTail));
 	return !VideoModeVal;

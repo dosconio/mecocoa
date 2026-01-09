@@ -438,7 +438,7 @@ void serv_file_loop()
 		{
 		case FilemanMsg::TEST:// (no-feedback)
 			while (!fileman_hd_ready);
-
+			
 			if (1) pfs->makefs(NULL);
 			ready = pfs->loadfs();
 			root_inode = pfs->get_inode(ROOT_INODE);

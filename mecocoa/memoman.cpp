@@ -10,10 +10,16 @@
 use crate uni;
 #ifdef _ARC_x86 // x86:
 #include "../include/atx-x86-flap32.hpp"
+#include "../prehost/atx-x86-flap32/multiboot2.h"
+
+_ESYM_C{
+	extern uint32 _start_eax, _start_ebx;
+}
 
 Letvar(Memory::p_basic, byte*, 0x1000); //.. 0x7000
 Letvar(Memory::p_ext, byte*, mem_area_exten_beg);
 usize Memory::areax_size = 0;
+Slice Memory::avail_slices[4]{0};
 
 // need not Bitmap
 namespace uni {
@@ -72,6 +78,82 @@ rostr Memory::text_memavail(uni::String& ker_buf) {
 	}
 	ker_buf.Format(level ? "%d %cB" : "0x%[32H] B", mem, unit[level]);
 	return ker_buf.reference();
+}
+
+
+_PACKED(struct) memory_info_entry {
+	uint64 addr;
+	uint64 len;
+	uint32 type;// 1 for avail, 2 for not
+};// ARDS
+_ESYM_C{
+	extern memory_info_entry MemoryListData[20];
+}
+
+//{unchk}
+static stduint parse_grub(stduint addr)
+{
+	stduint count = 0;
+	stduint size = *(uint32*)addr;
+	multiboot_tag* tag = (multiboot_tag*)(addr + 8);
+	while (tag->type != MULTIBOOT_TAG_TYPE_END)
+	{
+		if (tag->type == MULTIBOOT_TAG_TYPE_MMAP)
+			break;
+		tag = (multiboot_tag*)(_IMM(tag) + ((tag->size + 7) & ~7));
+	}
+	//
+	multiboot_tag_mmap* mtag = (multiboot_tag_mmap*)tag;
+	multiboot_mmap_entry* entry = mtag->entries;
+	while ((u32)entry < (u32)tag + tag->size)
+	{
+		// outsfmt("[Memoman] base 0x%[x]..0x%[x] : %d\n\r", (u32)entry->addr, (u32)entry->addr + (u32)entry->len, (u32)entry->type);
+		count++;
+		// if (entry->type == MULTIBOOT_MEMORY_AVAILABLE && entry->len > memory_size)
+		// {
+		// 	memory_base = (u32)entry->addr;
+		// 	memory_size = (u32)entry->len;
+		// }
+		entry = (multiboot_mmap_entry*)((u32)entry + mtag->entry_size);
+	}
+	return count;
+}
+static stduint parse_norm(stduint addr) {
+	memory_info_entry* entry = (memory_info_entry*)addr;
+	stduint count = 0;
+	stduint picked = 0;
+	for0(i, numsof(MemoryListData)) {
+		if (!entry->addr && !entry->len) break;
+		count++;
+		// outsfmt("[Memoman] 0x%[64H]..0x%[64H] : 0x%x\n\r", entry->addr, entry->addr + entry->len, entry->type);
+		if (entry->type == 1) {
+			Memory::avail_slices[picked].address = entry->addr;
+			Memory::avail_slices[picked].length = entry->len;
+			picked++;
+		}
+		entry++;
+	}
+	return count;
+}
+
+_ESYM_C Handler_t MemoryList;
+_ESYM_C word SW16_FUNCTION;
+bool Memory::init(stduint eax, byte* ebx) {
+	// make available memory into a group of slices
+	switch (_start_eax)
+	{
+	case 'FINA':// from loader
+		SW16_FUNCTION = _IMM(&MemoryList);
+		__asm("call SwitchReal16");
+		parse_norm(_IMM(MemoryListData));
+		break;
+	case MULTIBOOT2_BOOTLOADER_MAGIC:
+		parse_grub(_start_ebx);
+		break;
+	default:
+		return false;
+	}
+	return true;
 }
 
 // ---- Paging ----

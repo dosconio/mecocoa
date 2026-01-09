@@ -20,7 +20,7 @@ COMWAN = -Wno-builtin-declaration-mismatch
 CXF1=-m32 -mno-red-zone -mno-sse -mno-sse2 -mno-sse3 -mno-ssse3 -mno-sse4 # -mgeneral-regs-only
 CXF2=-fno-stack-protector -fno-pic -fno-exceptions -fno-unwind-tables -fno-builtin
 CXF=$(CXF1) $(CXF2) -fno-rtti -static -nostdlib $(COMWAN)
-CXW=-Wno-builtin-declaration-mismatch -Wno-volatile
+CXW=-Wno-builtin-declaration-mismatch -Wno-volatile -Wno-multichar
 CX=g++ -I$(uincpath) -c $(flag) $(CXF) $(CXW) -std=c++2a
 
 ker_mod=$(uobjpath)/mcca-$(arch)/*
@@ -29,8 +29,8 @@ cppfile=$(wildcard mecocoa/*.cpp) $(wildcard filesys/*.cpp)
 cppobjs=$(patsubst %cpp, %o, $(cppfile))
 
 sudokey=k
-elf_loader=mcca-$(arch).loader.elf
-elf_kernel=mcca-$(arch).elf
+elf_loader=I686/mecocoa/mcca-$(arch).loader.elf
+elf_kernel=I686/mecocoa/mcca-$(arch).elf
 
 # cfdisk of fixed2.vhd
 # Device          Boot     Start      End  Sectors   Size  Id Type
@@ -58,7 +58,7 @@ build: clean lib $(cppobjs)
 		-T prehost/$(arch)/$(arch).ld  \
 		-nostartfiles -O0 \
 		-Wl,-Map=$(ubinpath)/$(elf_kernel).map
-	#strip --strip-all $(ubinpath)/$(elf_kernel)
+	strip --strip-all $(ubinpath)/$(elf_kernel)
 	@dd if=/dev/zero of=$(outs) bs=512 count=2880 2>>/dev/null
 	@dd if=$(boot)   of=$(outs) bs=512 count=1 conv=notrunc 2>>/dev/null
 	@echo $(sudokey) | sudo -S mkdir -p $(mnts)

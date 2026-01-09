@@ -14,6 +14,7 @@
 #include <c/driver/PIT.h>
 #include <c/driver/mouse.h>
 #include <c/driver/timer.h>
+#include <cpp/Device/Cache>
 #include <c/proctrl/x86/x86.h>
 #include <c/storage/harddisk.h>
 #include <c/format/filesys/FAT.h>
@@ -52,11 +53,6 @@ statin rostr text_brand() {
 	return ret;
 }
 
-struct A {
-	int h;
-	A(int hh) : h(hh) {}
-};
-A aa(123);
 
 statin void _start_assert() {
 	if (byteof(mecocoa_global_t) > 0x100) {
@@ -71,6 +67,7 @@ statin void _start_assert() {
 }
 
 void krnl_init() {
+	Memory::clear_bss();
 	new (&ker_buf) String(_buf, byteof(_buf));
 	(*mecocoa_global).gdt_ptr = (mec_gdt*)0x80000600;
 	mecocoa_global->system_time.sec = 0;
@@ -82,6 +79,7 @@ void krnl_init() {
 	_pref_warn = _pref_info;
 	_call_serious = (_tocall_ft)kernel_fail;//{TODO} DbgStop
 	_start_assert();
+	Memory::text_memavail(ker_buf); Memory::align_basic_4k();
 }
 
 #define IRQ_SYSCALL 0x81// leave 0x80 for unix-like syscall
@@ -95,32 +93,11 @@ extern QueueLimited* queue_mouse;
 
 bool ento_gui = false;
 
-//{INTO} Cache Devices
-void Cache() {
-	_ASM("mov %cr0, %eax");
-	_ASM("btr $29, %eax");// NW
-	_ASM("btr $30, %eax");// CD
-	_ASM("mov %eax, %cr0");
-}
-#define Cache() ((stduint(*)())Cache)()
-
 //{TODO} Get dev from DL...
 static FilesysFAT* pfs_fat0;
 static const usize ROOT_DEV_FAT0 = MINOR_hd6a + 2;
 
-// in future, some may be abstracted into mecocoa/mccaker.cpp
-void MAIN();
-_sign_entry() {
-	__asm("movl $0x7FF0, %esp");// mov esp, 0x1E00; set stack
-	MAIN();
-}
-void MAIN() {
-	Memory::clear_bss();
-	krnl_init();
-	Memory::text_memavail(ker_buf);
-	Memory::align_basic_4k();
-	page_init();
-	GDT_Init();
+static void kernel_task_init() {
 	new (&krnl_tss) ProcessBlock;
 	krnl_tss.TSS.CR3 = getCR3();
 	krnl_tss.TSS.LDTDptr = 0;
@@ -131,10 +108,24 @@ void MAIN() {
 	mecocoa_global->gdt_ptr->tss.setRange((dword)&krnl_tss.TSS, sizeof(TSS_t) - 1);
 	TaskAdd(&krnl_tss);
 	__asm("mov $8*5, %eax; ltr %ax");
+}
 
-	// Enable x86 Cache
-	Cache();
-	
+bool mem_ready = false;
+_sign_entry() {
+	// Memory
+	krnl_init();// blind using memory
+	page_init();
+	GDT_Init();
+	mem_ready = Memory::init(_start_eax, (byte*)_start_ebx);
+	if (!mem_ready) {
+		cons_init();
+		Console.OutFormat("Def Param: A=0x%[x], B=0x%[x]\n\r", _start_eax, _start_ebx);
+		plogerro("Unknown boot source.");
+		_ASM("HLT");
+	}
+	Cache_t::enAble();
+
+	kernel_task_init();
 	cons_init();// located here, for  INT-10H may influence PIC
 	
 	// IVT and Device
@@ -149,23 +140,19 @@ void MAIN() {
 	GIC[IRQ_SYSCALL].setRange(mglb(call_intr), SegCode); GIC[IRQ_SYSCALL].DPL = 3;
 	
 	if (opt_test) __asm("ud2");
-
+	
 	// printlog(_LOG_WARN, " It isn't friendly to develop a kernel by pure C++.");
-
-	Console.OutFormat("Def Param: A=0x%[x], B=0x%[x]\n\r", _start_eax, _start_ebx);
 
 	Console.OutFormat("Mem Avail: %s\n\r", ker_buf.reference());
 
 	Console.OutFormat("CPU Brand: %s\n\r", text_brand());
-	Console.OutFormat("Try C++No: %d\n\r", aa.h);/////////
-
 
 	tm datime; CMOS_Readtime(&datime);
 	Console.OutFormat("Date Time: %d/%d/%d %d:%d:%d\n\r",
 		datime.tm_year, datime.tm_mon, datime.tm_mday,
 		datime.tm_hour, datime.tm_min, datime.tm_sec
 	);
-
+	
 	// Service
 	TaskRegister((void*)&serv_cons_loop, 1);
 	TaskRegister((void*)&serv_dev_hd_loop, 1);
@@ -173,6 +160,11 @@ void MAIN() {
 	TaskRegister((void*)&serv_task_loop, 0);// GDT operation
 	syscall(syscall_t::OUTC, 'O');// with effect InterruptEnable();
 	Console.OutFormat("hayouuu~!\n\r");
+
+	for0a(i, Memory::avail_slices) {
+		if (!Memory::avail_slices[i].address && !Memory::avail_slices[i].length) break;
+		outsfmt("[Memoman] 0x%[x]..0x%[x] \n\r", Memory::avail_slices[i].address, Memory::avail_slices[i].address + Memory::avail_slices[i].length);
+	}
 	
 	//! auto lastsec = mecocoa_global->system_time.sec;
 	loop __asm("hlt");
@@ -210,5 +202,6 @@ _ESYM_C { void* __dso_handle = 0; }
 _ESYM_C { void __cxa_atexit(void) {} }
 _ESYM_C { void __gxx_personality_v0(void) {} }
 _ESYM_C { void __stack_chk_fail(void) {} }
+void* operator new(size_t h) { return 0; }
 void operator delete(void*) {}
 void operator delete(void* ptr, unsigned size) noexcept { _TODO }

@@ -7,17 +7,23 @@
 
 %include "osdev.a"
 
-GLOBAL VideoModeVal
 GLOBAL SwitchReal16
+GLOBAL SW16_FUNCTION
+;
+GLOBAL VideoModeVal
+GLOBAL SwitchVideoMode
+;
+GLOBAL MemoryList
+GLOBAL MemoryListData
 
 ;{TODO} UNISYM BIOS Real16 and its ld. Then we can call it. (`00080000`~`0009FFFF`)
-;{TODO} Link this below 0x10000
+; Link this below 0x10000
 
-;{UNFINISHED}
 INTTBL_8616: DW 256 * 8 - 1; READONLY
 	DD 0
 INTTBL_8632: DW 0
 	DD 0
+SW16_FUNCTION: DW 0
 
 SwitchReal16:
 	[BITS 32]
@@ -40,10 +46,10 @@ SwitchReal16:
 		MOV FS, AX
 		MOV GS, AX
 		Addr20Disable
-		CALL SwitchVideoMode
+		CALL [SW16_FUNCTION]
 
 	MOV EAX, CR0
-	OR EAX, 0x80000001
+	OR  EAX, 0x80000001
 	MOV CR0, EAX
 	Addr20Enable
 	JMP WORD 8*2:PointBack32
@@ -89,6 +95,32 @@ SwitchVideoMode:
 		MOV DS, AX
 		MOV WORD[VideoModeVal], 1
 		RET
+
+MemoryList:
+	XOR EBX, EBX
+	MOV EDI, MemoryListData
+	_MemoryList_Loop:
+		MOV EAX, 0xE820
+		MOV ECX, 20
+		MOV EDX, 0x534D4150; SMAP
+		INT 0x15
+		JC  _MemoryList_Fail
+		ADD EDI, ECX
+		CMP EBX, 0
+		JNE _MemoryList_Loop
+	_MemoryList_Fail:
+	RET
+
+MemoryListData: TIMES 20*5 DD 0
+
+
+
+
+
+
+
+
+; Link this below or above 0x10000
 
 [BITS 32]
 ; 0x20

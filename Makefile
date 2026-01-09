@@ -17,6 +17,7 @@ run:
 	@make -f configs/$(arch).make run --silent
 
 clean:
+	cd $(ulibpath)/.. && make clean
 	@make -f configs/$(arch).make clean --silent
 
 read:
