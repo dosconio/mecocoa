@@ -16,11 +16,13 @@ extern "C" byte BSS_ENTO, BSS_ENDO;
 class Memory {
 // area-basic: 0x7E00 .. 0x80000
 // area-exten: mem_area_exten_beg .. mem_area_exten_beg + areax_size
-public:
+public: // previously used
 	static byte* p_basic;
 	static byte* p_ext;
 	static usize total_mem;
 	static usize areax_size;
+public:
+	static usize avail_pointer;// to the lowest available page
 	static Slice avail_slices[4];
 	//
 	static Bitmap* pagebmap;// 0x100000 pages / 8 bpB = 0x20000 bytes
@@ -45,8 +47,6 @@ public:
 extern void dump_avail_memory();
 
 //
-
-extern void page_init();
 
 extern Paging kernel_paging;// cpu0 running
 

@@ -8,7 +8,7 @@ int main(int argc, char** argv)
 		unsigned id = systest('T', 'E', 'S');
 		sysouts("C");
 		while (1) {
-
+			sysrest();
 		}
 		while (1) sysrest();
 	}

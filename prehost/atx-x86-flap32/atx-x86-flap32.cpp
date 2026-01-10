@@ -30,7 +30,6 @@ bool opt_test = true;
 
 _ESYM_C{
 char _buf[65]; String ker_buf;
-stduint tmp;
 extern uint32 _start_eax, _start_ebx;
 }
 
@@ -82,6 +81,14 @@ void krnl_init() {
 	_start_assert();
 	Memory::pagebmap = 0;
 	Memory::text_memavail(ker_buf); Memory::align_basic_4k();
+	// Paging
+	kernel_paging.Reset();// should take 0x1000
+	kernel_paging.MapWeak(0x00000000, 0x00000000, 0x00400000, true, _Comment(R0) true);
+	kernel_paging.MapWeak(0x80000000, 0x00000000, 0x00400000, true, _Comment(R0) false);
+	setCR3(_IMM(kernel_paging.page_directory));
+	PagingEnable();
+	rostr test_page = (rostr)"\xFF\x70[Mecocoa]\xFF\x27 Paging Test OK!\xFF\x07" + 0x80000000;
+	if (opt_test) Console.OutFormat("%s\n\r", test_page);
 }
 
 extern ProcessBlock* pblocks[16]; extern stduint pnumber;
@@ -102,7 +109,6 @@ static void kernel_task_init() {
 _sign_entry() {
 	// Memory
 	krnl_init();// blind using memory
-	page_init();
 	GDT_Init();
 	cons_init();// located here, for  INT-10H may influence PIC
 	if (!Memory::init(_start_eax, (byte*)_start_ebx)) {
@@ -126,8 +132,6 @@ _sign_entry() {
 	GIC[IRQ_SYSCALL].setRange(mglb(call_intr), SegCode); GIC[IRQ_SYSCALL].DPL = 3;
 	
 	if (opt_test) __asm("ud2");
-	
-	// printlog(_LOG_WARN, " It isn't friendly to develop a kernel by pure C++.");
 
 	Console.OutFormat("Mem Avail: %s\n\r", ker_buf.reference());
 

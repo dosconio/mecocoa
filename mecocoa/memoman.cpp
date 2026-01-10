@@ -14,15 +14,12 @@ use crate uni;
 // for x86, one slice should begin with 0x100000 (above F000:FFFF)
 // for x86, only consider single paging method
 
-_ESYM_C{
-	extern uint32 _start_eax, _start_ebx;
-}
-
 Letvar(Memory::p_basic, byte*, 0x1000); //.. 0x7000
 Letvar(Memory::p_ext, byte*, mem_area_exten_beg);
 stduint Memory::total_mem = 0;
 usize Memory::areax_size = 0;
 Slice Memory::avail_slices[4]{ 0 };
+usize Memory::avail_pointer = 0xFFFFFFFF;
 Bitmap* Memory::pagebmap = NULL;
 
 byte _BUF_pagebmap[sizeof(Bitmap)];
@@ -52,32 +49,56 @@ usize Memory::evaluate_size() {
 }
 
 bool map_ready = false;
-// Page size at least
+// Allocate Physical-Continuous Memory
+// unit: x86 Page 0x1000
 static void add_range(stduint head_pos, stduint last_pos, bool what);
 void* Memory::physical_allocate(usize siz) {
-	//{TODO} allocate according to mbitmap after it inited
-	//
 	if (siz & 0xFFF) siz = (siz & ~_IMM(0xFFF)) + 0x1000;
-	if (p_basic + siz <= (void*)0x6000) {
-		void* ret = p_basic;
-		p_basic += siz;
-		// if (opt_info) printlog(_LOG_INFO, "malloc_low(0x%[32H], %[u])", ret, siz);
-		//{} Pag-map for linear_allocate
-		return ret;
-	}
-	else if (usize(p_ext) + siz <= 0x00100000 + Memory::areax_size) {
-		void* ret = p_ext;
-		if (map_ready) {
-			add_range(_IMM(p_ext) >> 12, (_IMM(p_ext) + siz) >> 12, false);
+	void* ret = nil;
+	if (map_ready) {
+		// find a available page in bitmap
+		siz >>= 12;
+		if (!avail_pointer) {
+			plogerro("no avail page");
+			return nullptr;
 		}
-		p_ext += siz;
-		// if (opt_info) printlog(_LOG_INFO, "malloc_hig(0x%[32H], %[u])", ret, siz);
-		//{} Pag-map for linear_allocate
-		//{} Add Kernel and Each App's PDT
-		return ret;
+		stduint sum_cont = 0;
+		stduint sum_beg = avail_pointer;
+		for (stduint p = avail_pointer; p < 0x2000 * 8; ) {
+			if (Memory::pagebmap->bitof(p)) {
+				if (!sum_cont) sum_beg = p;
+				sum_cont++;
+				if (sum_cont >= siz) break;
+			}
+			else {
+				sum_cont = 0;
+			}
+		}
+		if (!(sum_cont >= siz)) {
+			plogerro("no avail pages");
+			return nullptr;
+		}
+		ret = (void*)(sum_beg << 12);
+		add_range(sum_beg, sum_beg + siz, false);
+		kernel_paging.MapWeak(_IMM(ret), _IMM(ret), siz << 12, true, true);
+		// printlog(_LOG_INFO, "malloc(0x%[32H], %[x])", ret, siz << 12);
 	}
-	//{} try swap
-	return nullptr;
+	else { // not support pg-mapping
+		if (p_basic + siz <= (void*)0x6000) {
+			void* ret = p_basic;
+			p_basic += siz;
+			return ret;
+		}
+		else if (usize(p_ext) + siz <= 0x00100000 + Memory::areax_size) {
+			void* ret = p_ext;
+			if (map_ready) {
+				add_range(_IMM(p_ext) >> 12, (_IMM(p_ext) + siz) >> 12, false);
+			}
+			p_ext += siz;
+			return ret;
+		}
+	}
+	return ret;
 }
 
 rostr Memory::text_memavail(uni::String& ker_buf) {
@@ -155,29 +176,47 @@ _ESYM_C word SW16_FUNCTION;
 _ESYM_C Handler_t FILE_ENDO;
 
 // e.g. add_range(0x1, 0x2) ofr 0x1000 ~ 0x1FFF
+static void update_avail_pointer(stduint head_pos, stduint last_pos, bool what) {
+	// ploginfo("update_avail_pointer(0x%[32H], 0x%[32H], %d)", head_pos, last_pos, what);
+	if (what) {
+		MIN(Memory::avail_pointer, head_pos);
+	}
+	else if (Memory::avail_pointer == head_pos) {
+		Memory::avail_pointer = last_pos;
+		while (!Memory::pagebmap->bitof(Memory::avail_pointer)) {
+			Memory::avail_pointer++;
+			if (Memory::avail_pointer >= (Memory::pagebmap->size * _BYTE_BITS_)) {
+				plogerro("Memory is all used");
+				return;
+			}
+		}
+	}
+}
 static void add_range(stduint head_pos, stduint last_pos, bool what) {
 	// if (!map_ready) ploginfo("add_range(0x%[32H], 0x%[32H])", head_pos, last_pos);
 	if (head_pos >= last_pos || head_pos >= 0x2000 * 8 || last_pos >= 0x2000 * 8) return;
 	stduint times = last_pos - head_pos;
-	while (times && (head_pos & 0b111)) {
-		Memory::pagebmap->setof(head_pos, what);
-		head_pos++;
+	stduint curr_pos = head_pos;
+	while (times && (curr_pos & 0b111)) {
+		Memory::pagebmap->setof(curr_pos, what);
+		curr_pos++;
 		times--;
 	}
 	while (times >= _BYTE_BITS_) {
-		cast<byte*>(Memory::pagebmap->offs)[head_pos / _BYTE_BITS_] = what ? 0xFF : 0x00;
-		head_pos += _BYTE_BITS_;
+		cast<byte*>(Memory::pagebmap->offs)[curr_pos / _BYTE_BITS_] = what ? 0xFF : 0x00;
+		curr_pos += _BYTE_BITS_;
 		times -= _BYTE_BITS_;
 	}
 	while (times) {
-		Memory::pagebmap->setof(head_pos, what);
-		head_pos++;
+		Memory::pagebmap->setof(curr_pos, what);
+		curr_pos++;
 		times--;
 	}
+	update_avail_pointer(head_pos, last_pos, what);
 }
 bool Memory::init(stduint eax, byte* ebx) {
 	// make available memory into a group of slices
-	switch (_start_eax)
+	switch (eax)
 	{
 	case 'FINA':// from loader
 		SW16_FUNCTION = _IMM(&MemoryList);
@@ -185,7 +224,7 @@ bool Memory::init(stduint eax, byte* ebx) {
 		parse_norm(_IMM(MemoryListData));
 		break;
 	case MULTIBOOT2_BOOTLOADER_MAGIC:
-		parse_grub(_start_ebx);
+		parse_grub(_IMM(ebx));
 		break;
 	default:
 		return false;
@@ -256,6 +295,7 @@ bool Memory::init(stduint eax, byte* ebx) {
 			add_range(Memory::avail_slices[i].address >> 12, slice_endpoint >> 12, true);
 		}
 	}
+	add_range(0x80, 0xA0, false);// Extended BIOS Data Area
 	map_ready = true;
 	return true;
 }
@@ -278,32 +318,15 @@ void dump_avail_memory()
 			}
 		}
 	}
+	if (last_stat == 1) {
+		outsfmt("- 0x%[x]..0x%[x] \n\r", last_index * 0x1000, 0x2000 * 0x1000);
+	}
 }
 
 
 // ---- Paging ----
 
 Paging kernel_paging;
-extern stduint tmp;
-
-_TEMP void page_init() {
-	kernel_paging.Reset();// should take 0x1000
-	kernel_paging.MapWeak(0x00000000, 0x00000000, 0x00400000, true, _Comment(R0 TOD) true);//{TODO} false
-	// kernel_paging.MapWeak(0xFFFFF000, _IMM(kernel_paging.page_directory), 0x00001000, false, _Comment(R0) false);// make loop PDT and do not unisym's
-	// for(i, 0x400) pdt[0x3FF][...] Page Tables
-	kernel_paging.MapWeak(0x80000000, 0x00000000, 0x00400000, true, _Comment(R0) false);
-	
-	
-	//
-	tmp = _IMM(kernel_paging.page_directory);
-	__asm("movl tmp, %eax\n");
-	__asm("movl %eax, %cr3\n");
-	__asm("movl %cr0, %eax\n");
-	__asm("or   $0x80000000, %eax\n");// enable paging
-	__asm("movl %eax, %cr0\n");
-	rostr test_page = (rostr)"\xFF\x70[Mecocoa]\xFF\x27 Paging Test OK!\xFF\x07" + 0x80000000;
-	if (opt_test) Console.OutFormat("%s\n\r", test_page);
-}
 
 // ----
 
