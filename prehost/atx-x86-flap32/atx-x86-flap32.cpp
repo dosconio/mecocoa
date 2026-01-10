@@ -17,6 +17,7 @@
 #include <cpp/Device/Cache>
 #include <c/proctrl/x86/x86.h>
 #include <c/storage/harddisk.h>
+#include <cpp/Device/Buzzer.hpp>
 #include <c/format/filesys/FAT.h>
 #include <c/driver/RealtimeClock.h>
 #include "../../include/atx-x86-flap32.hpp"
@@ -79,23 +80,11 @@ void krnl_init() {
 	_pref_warn = _pref_info;
 	_call_serious = (_tocall_ft)kernel_fail;//{TODO} DbgStop
 	_start_assert();
+	Memory::pagebmap = 0;
 	Memory::text_memavail(ker_buf); Memory::align_basic_4k();
 }
 
-#define IRQ_SYSCALL 0x81// leave 0x80 for unix-like syscall
-
-_ESYM_C void RETONLY();
-extern "C" void General_IRQHandler();
-
 extern ProcessBlock* pblocks[16]; extern stduint pnumber;
-
-extern QueueLimited* queue_mouse;
-
-bool ento_gui = false;
-
-//{TODO} Get dev from DL...
-static FilesysFAT* pfs_fat0;
-static const usize ROOT_DEV_FAT0 = MINOR_hd6a + 2;
 
 static void kernel_task_init() {
 	new (&krnl_tss) ProcessBlock;
@@ -110,24 +99,21 @@ static void kernel_task_init() {
 	__asm("mov $8*5, %eax; ltr %ax");
 }
 
-bool mem_ready = false;
 _sign_entry() {
 	// Memory
 	krnl_init();// blind using memory
 	page_init();
 	GDT_Init();
-	mem_ready = Memory::init(_start_eax, (byte*)_start_ebx);
-	if (!mem_ready) {
-		cons_init();
+	cons_init();// located here, for  INT-10H may influence PIC
+	if (!Memory::init(_start_eax, (byte*)_start_ebx)) {
 		Console.OutFormat("Def Param: A=0x%[x], B=0x%[x]\n\r", _start_eax, _start_ebx);
-		plogerro("Unknown boot source.");
+		plogerro("Unknown boot source or memory too complex.");
 		_ASM("HLT");
 	}
+	Memory::text_memavail(ker_buf);
 	Cache_t::enAble();
-
 	kernel_task_init();
-	cons_init();// located here, for  INT-10H may influence PIC
-	
+
 	// IVT and Device
 	InterruptControl GIC(_IMM(0x80000800));// linear but not physical
 	GIC.Reset(SegCode);
@@ -159,13 +145,11 @@ _sign_entry() {
 	TaskRegister((void*)&serv_file_loop, 0);
 	TaskRegister((void*)&serv_task_loop, 0);// GDT operation
 	syscall(syscall_t::OUTC, 'O');// with effect InterruptEnable();
-	Console.OutFormat("hayouuu~!\n\r");
-
-	for0a(i, Memory::avail_slices) {
-		if (!Memory::avail_slices[i].address && !Memory::avail_slices[i].length) break;
-		outsfmt("[Memoman] 0x%[x]..0x%[x] \n\r", Memory::avail_slices[i].address, Memory::avail_slices[i].address + Memory::avail_slices[i].length);
-	}
+	Console.OutFormat("hayouuu~!\a\n\r");
 	
+	dump_avail_memory();
+
+
 	//! auto lastsec = mecocoa_global->system_time.sec;
 	loop __asm("hlt");
 
@@ -202,6 +186,5 @@ _ESYM_C { void* __dso_handle = 0; }
 _ESYM_C { void __cxa_atexit(void) {} }
 _ESYM_C { void __gxx_personality_v0(void) {} }
 _ESYM_C { void __stack_chk_fail(void) {} }
-void* operator new(size_t h) { return 0; }
 void operator delete(void*) {}
 void operator delete(void* ptr, unsigned size) noexcept { _TODO }

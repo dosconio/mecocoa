@@ -11,6 +11,8 @@ use crate uni;
 #ifdef _ARC_x86 // x86:
 #include "../include/atx-x86-flap32.hpp"
 #include "../prehost/atx-x86-flap32/multiboot2.h"
+// for x86, one slice should begin with 0x100000 (above F000:FFFF)
+// for x86, only consider single paging method
 
 _ESYM_C{
 	extern uint32 _start_eax, _start_ebx;
@@ -18,8 +20,12 @@ _ESYM_C{
 
 Letvar(Memory::p_basic, byte*, 0x1000); //.. 0x7000
 Letvar(Memory::p_ext, byte*, mem_area_exten_beg);
+stduint Memory::total_mem = 0;
 usize Memory::areax_size = 0;
-Slice Memory::avail_slices[4]{0};
+Slice Memory::avail_slices[4]{ 0 };
+Bitmap* Memory::pagebmap = NULL;
+
+byte _BUF_pagebmap[sizeof(Bitmap)];
 
 // need not Bitmap
 namespace uni {
@@ -45,8 +51,12 @@ usize Memory::evaluate_size() {
 	return mem_area_exten_beg + areax_size;
 }
 
+bool map_ready = false;
 // Page size at least
+static void add_range(stduint head_pos, stduint last_pos, bool what);
 void* Memory::physical_allocate(usize siz) {
+	//{TODO} allocate according to mbitmap after it inited
+	//
 	if (siz & 0xFFF) siz = (siz & ~_IMM(0xFFF)) + 0x1000;
 	if (p_basic + siz <= (void*)0x6000) {
 		void* ret = p_basic;
@@ -57,6 +67,9 @@ void* Memory::physical_allocate(usize siz) {
 	}
 	else if (usize(p_ext) + siz <= 0x00100000 + Memory::areax_size) {
 		void* ret = p_ext;
+		if (map_ready) {
+			add_range(_IMM(p_ext) >> 12, (_IMM(p_ext) + siz) >> 12, false);
+		}
 		p_ext += siz;
 		// if (opt_info) printlog(_LOG_INFO, "malloc_hig(0x%[32H], %[u])", ret, siz);
 		//{} Pag-map for linear_allocate
@@ -68,7 +81,7 @@ void* Memory::physical_allocate(usize siz) {
 }
 
 rostr Memory::text_memavail(uni::String& ker_buf) {
-	usize mem = evaluate_size();
+	usize mem = Memory::total_mem ? Memory::total_mem : evaluate_size();
 	char unit[]{ ' ', 'K', 'M', 'G', 'T' };
 	int level = 0;
 	// assert mem != 0
@@ -90,7 +103,7 @@ _ESYM_C{
 	extern memory_info_entry MemoryListData[20];
 }
 
-//{unchk}
+//{unchk} {TODO}
 static stduint parse_grub(stduint addr)
 {
 	stduint count = 0;
@@ -129,6 +142,7 @@ static stduint parse_norm(stduint addr) {
 		if (entry->type == 1) {
 			Memory::avail_slices[picked].address = entry->addr;
 			Memory::avail_slices[picked].length = entry->len;
+			Memory::total_mem += entry->len;
 			picked++;
 		}
 		entry++;
@@ -138,6 +152,29 @@ static stduint parse_norm(stduint addr) {
 
 _ESYM_C Handler_t MemoryList;
 _ESYM_C word SW16_FUNCTION;
+_ESYM_C Handler_t FILE_ENDO;
+
+// e.g. add_range(0x1, 0x2) ofr 0x1000 ~ 0x1FFF
+static void add_range(stduint head_pos, stduint last_pos, bool what) {
+	// if (!map_ready) ploginfo("add_range(0x%[32H], 0x%[32H])", head_pos, last_pos);
+	if (head_pos >= last_pos || head_pos >= 0x2000 * 8 || last_pos >= 0x2000 * 8) return;
+	stduint times = last_pos - head_pos;
+	while (times && (head_pos & 0b111)) {
+		Memory::pagebmap->setof(head_pos, what);
+		head_pos++;
+		times--;
+	}
+	while (times >= _BYTE_BITS_) {
+		cast<byte*>(Memory::pagebmap->offs)[head_pos / _BYTE_BITS_] = what ? 0xFF : 0x00;
+		head_pos += _BYTE_BITS_;
+		times -= _BYTE_BITS_;
+	}
+	while (times) {
+		Memory::pagebmap->setof(head_pos, what);
+		head_pos++;
+		times--;
+	}
+}
 bool Memory::init(stduint eax, byte* ebx) {
 	// make available memory into a group of slices
 	switch (_start_eax)
@@ -153,8 +190,96 @@ bool Memory::init(stduint eax, byte* ebx) {
 	default:
 		return false;
 	}
+	// reduce the area that the kernel used
+	stduint kernel_end = _IMM(&FILE_ENDO);
+	kernel_end = vaultAlignHexpow(0x1000, kernel_end);
+	Slice& slice = Memory::avail_slices[0];
+
+	// ceil base and floor length
+	slice.length = floorAlign(0x1000, slice.length);
+	while ((slice.address || slice.length) && slice.address < kernel_end) {
+		// ---------------  section
+		// ....---------     kernel
+		if (slice.address + slice.length <= kernel_end) {
+			for0(i, numsof(Memory::avail_slices) - 1) {
+				Memory::avail_slices[i] = Memory::avail_slices[i + 1];
+			}
+			Memory::avail_slices[numsof(Memory::avail_slices) - 1].address = 0;
+			Memory::avail_slices[numsof(Memory::avail_slices) - 1].length = 0;
+		}
+		else {
+			stduint diff = slice.address + slice.length - kernel_end;
+			slice.address = kernel_end;
+			slice.length = diff;
+		}
+	}
+	Slice empty_slice = { 0,0 };
+	for0(i, numsof(Memory::avail_slices)) {
+		if (!Memory::avail_slices[i].address && !Memory::avail_slices[i].length) break;
+		Memory::avail_slices[i].address = vaultAlign(0x1000, Memory::avail_slices[i].address);
+		Memory::avail_slices[i].length = floorAlign(0x1000, Memory::avail_slices[i].length);
+		if (!Memory::avail_slices[i].length) {
+			for (unsigned j = i; j < numsof(Memory::avail_slices); j++) {
+				Memory::avail_slices[j] = j + 1 < numsof(Memory::avail_slices) ? Memory::avail_slices[j + 1] : empty_slice;
+			}
+			i--;
+		}
+	}
+	// create and init mbitmap
+	stduint mapsize = 0x20000;
+	void* mapaddr;
+	if (slice.address + slice.length <= 0x00100000 && slice.length > mapsize) {
+		mapaddr = (pureptr_t)slice.address;
+		slice.address += mapsize;
+		slice.length -= mapsize;
+	} // consider into kernel
+	else {
+		mapaddr = Memory::physical_allocate(mapsize);
+	}
+	MemSet(mapaddr, 0, mapsize);
+	Memory::pagebmap = new (_BUF_pagebmap) Bitmap(mapaddr, mapsize);
+	// fill the mbitmap
+	// * here
+	// - physical_allocate (which be with pagemap)
+	// - free [TODO]
+	// cons_init();
+	for0(i, numsof(Memory::avail_slices)) {
+		stduint slice_endpoint = Memory::avail_slices[i].address + Memory::avail_slices[i].length;
+		if (!Memory::avail_slices[i].address && !Memory::avail_slices[i].length) break;
+		if (Memory::avail_slices[i].address == 0x100000) {
+			if (_IMM(Memory::p_ext) >= slice_endpoint) {
+				return false;
+			}
+			add_range(_IMM(Memory::p_ext) >> 12, slice_endpoint >> 12, true);
+		}
+		else {
+			add_range(Memory::avail_slices[i].address >> 12, slice_endpoint >> 12, true);
+		}
+	}
+	map_ready = true;
 	return true;
 }
+
+void dump_avail_memory()
+{
+	bool last_stat = false;
+	stduint last_index = 0;
+	outsfmt("[Memoman] dump avail memory:\n\r");
+	for0(i, 0x2000 * 8) {
+		bool b = Memory::pagebmap->bitof(i);
+		if (b != last_stat) {
+			if (!last_stat) {
+				last_index = i;
+				last_stat = b;
+			}
+			else {
+				outsfmt("- 0x%[x]..0x%[x] \n\r", last_index * 0x1000, i * 0x1000);
+				last_stat = b;
+			}
+		}
+	}
+}
+
 
 // ---- Paging ----
 
@@ -184,7 +309,6 @@ _TEMP void page_init() {
 
 extern "C" {
 	// linear allocator
-	stduint strlen(const char* ptr) { return StrLength(ptr); }
 	void* malloc(size_t size) {
 		Console.OutFormat("malloc(%[u])\n\r", size);
 		return nullptr;
@@ -197,16 +321,9 @@ extern "C" {
 		Console.OutFormat("free(0x%[32H])\n\r", ptr);
 	}
 	void memf(void* ptr) { free(ptr); }
-	void* memset(void* str, int c, size_t n) {
-		return MemSet(str, c, n);
-	}
 }
 
 #endif
-
-/*
-delete (void*) new int;
-*/
 
 // ---- x86 ----
 

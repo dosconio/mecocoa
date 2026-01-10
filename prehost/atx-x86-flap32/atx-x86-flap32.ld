@@ -41,4 +41,5 @@ SECTIONS
 		libm.a ( * )
 		libgcc.a ( * )
 	}
+	FILE_ENDO = .;
 }

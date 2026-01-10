@@ -191,7 +191,7 @@ bool Graphic::setMode(VideoMode vmode) {
 	return !VideoModeVal;
 }
 
-extern bool ento_gui;
+bool ento_gui = false;
 void blink() {
 	static bool b = false;
 	treat<GloScreen>(BUF_VCI).DrawRectangle(Rectangle(Point(0, 0), Size2(8, 16), b ? Color::Black : Color::White));

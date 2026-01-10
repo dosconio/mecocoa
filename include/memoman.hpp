@@ -4,6 +4,7 @@
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 #define _STYLE_RUST
 #include <c/stdinc.h>
+#include <c/bitmap.h>
 #include <c/system/paging.h>
 #include <cpp/string>
 
@@ -18,8 +19,11 @@ class Memory {
 public:
 	static byte* p_basic;
 	static byte* p_ext;
+	static usize total_mem;
 	static usize areax_size;
 	static Slice avail_slices[4];
+	//
+	static Bitmap* pagebmap;// 0x100000 pages / 8 bpB = 0x20000 bytes
 public:
 	static void clear_bss() { MemSet(&BSS_ENTO, &BSS_ENDO - &BSS_ENTO, 0); }
 	static usize align_basic_4k() {
@@ -37,6 +41,8 @@ public:
 };
 
 
+
+extern void dump_avail_memory();
 
 //
 

@@ -27,11 +27,10 @@ her-note: false
 - [ ] memoman mempool （mempool需要自举）
 - [ ] paging deep-copy heap
 文件系統
-- [ ] F_H -> Hh💿h💾 (RW 四个盘)
+- [ ] F_H -> H(h💿h💾) (RW 4个硬, 1个软)
 - [ ] Debug all interfaces in the fs-trait : FAT32 Single-dir
 - [ ] Support FAT32 Multilevel-dir
-- [ ] MinixFS 与多FS动态绑定挂载
-- [ ] 实现多FS、动态绑定 FS与lsblk
+- [ ] MinixFS 与多FS动态绑定挂载与lsblk
 - [ ] ofs/fatXX mkfs&writef&... 独立工具
 系統接口
 - [ ] syscall: yield, 非阻塞 getchar

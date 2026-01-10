@@ -75,6 +75,8 @@ extern OstreamTrait* kbd_out;
 
 // ---- syscall
 #include "syscall.hpp"
+#define IRQ_SYSCALL 0x81// leave 0x80 for unix-like syscall
+
 extern "C" void call_gate();
 extern "C" void call_intr();
 extern "C" void* call_gate_entry();
