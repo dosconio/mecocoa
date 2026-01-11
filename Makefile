@@ -16,6 +16,9 @@ build:
 run:
 	@make -f configs/$(arch).make run --silent
 
+debug:
+	@make -f configs/$(arch).make debug
+
 clean:
 	cd $(ulibpath)/.. && make clean
 	@make -f configs/$(arch).make clean --silent

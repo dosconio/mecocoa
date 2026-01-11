@@ -1,8 +1,12 @@
+my $arch = $ARGV[0] || 'r32';
+
 print 'OUTPUT_ARCH( "riscv" )
-#include "../../include/qemuvirt-r64.def.h"
+';
 
+print "#include \"../../include/qemuvirt-$arch.def.h\" /* The file is gen by qemuvirt-$arch.pl */ \n";
+
+print '
 ENTRY( _start )
-
 
 MEMORY {
 	ram   (wxa!ri) : ORIGIN = 0x80000000, LENGTH = LENGTH_RAM
@@ -15,7 +19,7 @@ print "SECTIONS {\n";
 
 print "	.text : {\n";
 print "		PROVIDE(_text_start = .); /* as if exists `void* _text_start;` */ \n";
-print "		$ENV{'uobjpath'}/mcca-qemuvirt-r64/qemuvirt-r64.startup.o(.text)\n";
+print "		$ENV{'uobjpath'}/mcca-qemuvirt-$arch/qemuvirt-$arch.startup.o(.text)\n";
 print '
 		*(.text .text.*)
 		PROVIDE(_text_end = .);
@@ -33,6 +37,15 @@ print '
 		*(.sdata .sdata.*)
 		*(.data .data.*)
 		PROVIDE(_data_end = .);
+	} >ram
+
+	/* C++ only */
+	. = ALIGN(8);
+	.init_array : {
+		__init_array_start = .;
+		KEEP(*(SORT(.init_array.*)))
+		KEEP(*(.init_array))
+		__init_array_end = .;
 	} >ram
 
 	.bss :{

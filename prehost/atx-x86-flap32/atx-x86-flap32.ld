@@ -28,12 +28,12 @@ SECTIONS
 	.rodata : {*(.rodata)}
 	/* C++ only */
 	. = ALIGN(8);
-	__init_array_start = .;
 	.init_array : {
+	__init_array_start = .;
 		KEEP(*(SORT(.init_array.*)))
 		KEEP(*(.init_array))
-	}
 	__init_array_end = .;
+	}
 	/* Remove information from the compiler libraries */
 	/DISCARD/ :
 	{

@@ -26,11 +26,15 @@ QFLAGS = -nographic -smp 1 -machine $(QBOARD) -bios none
 
 #
 LDFILE  = prehost/$(arch)/$(arch).ld
-LDFLAGS = -T $(LDFILE) 
+LDFLAGS = -T $(LDFILE).ignore
 #
 asmfile=$(wildcard prehost/$(arch)/*.S)
 asmobjs=$(patsubst %S, %o, $(asmfile))
-cppfile=$(wildcard prehost/qemuvirt-r32/*.cpp) $(ulibpath)/cpp/Device/UART.cpp $(ulibpath)/cpp/stream.cpp
+cppfile=$(wildcard prehost/qemuvirt-r32/*.cpp) \
+	$(ulibpath)/cpp/lango/lango-cpp.cpp \
+	$(ulibpath)/cpp/stream.cpp \
+	$(ulibpath)/cpp/Device/UART.cpp \
+	
 cppobjs=$(patsubst %cpp, %o, $(cppfile))
 cplfile=$(ulibpath)/c/mcore.c
 cplobjs=$(patsubst %c, %o, $(cplfile))
@@ -41,8 +45,9 @@ elf_kernel=mcca-$(arch).elf
 build: clean $(asmobjs) $(cppobjs) $(cplobjs)
 	#echo [building] MCCA for $(arch)
 	@echo MK $(elf_kernel)
-	@perl configs/qemuvirt-r64.pl > $(LDFILE).ignore
+	@perl configs/qemuvirt-riscv.pl r64 > $(LDFILE).ignore
 	@${CC} -E -P -x c ${CFLAGS} $(LDFILE).ignore > $(LDFILE)
+	@mv $(LDFILE) $(LDFILE).ignore
 	@${CC} ${CFLAGS} ${LDFLAGS} -o $(ubinpath)/${elf_kernel} $(uobjpath)/mcca-$(arch)/*
 	# readelf -h $ubinpath/mcca-qemuvirt-r64.elf| grep Entry
 	# bin_kernel : ${OBJCOPY} -O binary ${elf_kernel} ${BIN}

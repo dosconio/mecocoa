@@ -36,23 +36,25 @@ Development-Environment
 
 ## Architecture
 
-Format `board-architecture-mode`
+Format $board-architecture(-mode)$
 
 CISC `VMBox/VMware/Bochs/QEMU/TODO(Simics,Wel)`
 - `x86 0x8632` Intel x86/64 (8086 -> i686+)
-	- BIOS(MBR), CLI, Paging, Multitask, Syscall
+	- BIOS, CLI, Paging, Multitask, Syscall
 	- **run**
 		- **virtual**: VMware, VMBox, Bochs, qemu-system-i386(9.2.4)
 	- **build**
 		- `make lib`; `make` `make run`
-	- **mode**: *real16*, *flap32*, *long64*(IA-32e, if CPU support)(TODO)
+	- **mode**: *real16*, *flap32*
 - `x64 0x8664` AMD64
-	- UEFI, GUI
+	- ① LONG: BIOS(TODO) 
+	- ② UEFI: UEFI,GUI
 	- **run**
 		- **virtual**: qemu-system-x86_64
 	- **build**
+		- `arch=atx-x64-long64 make`
 		- `arch=atx-x64-uefi64 make`
-	- **mode**: long64
+	- **mode**: *long64*(IA-32e, if CPU support)
 	
 RISC `Fizik`
 - `r32 0x1032` RISC-V32

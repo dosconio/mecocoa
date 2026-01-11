@@ -21,6 +21,10 @@ VideoConsole* vcon0;
 extern "C" byte BSS_ENTO, BSS_ENDO;
 FrameBufferConfig config_graph;
 
+const int kMouseCursorWidth = 15;
+const int kMouseCursorHeight = 24;
+extern char mouse_cursor_shape[kMouseCursorHeight][kMouseCursorWidth + 1];
+
 extern "C" //__attribute__((ms_abi))
 void _entry(const UefiData& uefi_data)
 {
@@ -54,6 +58,17 @@ void _entry(const UefiData& uefi_data)
 	vcon0->forecolor = Color::Black;
 	vcon0->Clear();
 	ploginfo("Ciallo %lf", 2025.09);
+
+	for (int dy = 0; dy < kMouseCursorHeight; ++dy) {
+		for (int dx = 0; dx < kMouseCursorWidth; ++dx) {
+			if (mouse_cursor_shape[dy][dx] == '@') {
+				p_vcb->Draw(Point(200 + dx, 100 + dy), Color(0xFF000000));
+			}
+			else if (mouse_cursor_shape[dy][dx] == '.') {
+				p_vcb->Draw(Point(200 + dx, 100 + dy), Color(0xFFFFFFFF));
+			}
+		}
+	}
 
 
 	loop _ASM("hlt");

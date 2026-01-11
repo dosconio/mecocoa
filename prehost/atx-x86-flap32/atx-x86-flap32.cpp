@@ -22,9 +22,6 @@
 #include <c/driver/RealtimeClock.h>
 #include "../../include/atx-x86-flap32.hpp"
 
-_ESYM_C Handler_t __init_array_start[];
-_ESYM_C Handler_t __init_array_end[];
-
 bool opt_info = true;
 bool opt_test = true;
 
@@ -87,8 +84,9 @@ void krnl_init() {
 	kernel_paging.MapWeak(0x80000000, 0x00000000, 0x00400000, true, _Comment(R0) false);
 	setCR3(_IMM(kernel_paging.page_directory));
 	PagingEnable();
-	rostr test_page = (rostr)"\xFF\x70[Mecocoa]\xFF\x27 Paging Test OK!\xFF\x07" + 0x80000000;
-	if (opt_test) Console.OutFormat("%s\n\r", test_page);
+	// rostr test_page = (rostr)"\xFF\x70[Mecocoa]\xFF\x27 Paging Test OK!\xFF\x07" + 0x80000000;
+	// if (opt_test) Console.OutFormat("%s\n\r", test_page);
+	GDT_Init();
 }
 
 extern ProcessBlock* pblocks[16]; extern stduint pnumber;
@@ -109,7 +107,6 @@ static void kernel_task_init() {
 _sign_entry() {
 	// Memory
 	krnl_init();// blind using memory
-	GDT_Init();
 	cons_init();// located here, for  INT-10H may influence PIC
 	if (!Memory::init(_start_eax, (byte*)_start_ebx)) {
 		Console.OutFormat("Def Param: A=0x%[x], B=0x%[x]\n\r", _start_eax, _start_ebx);
@@ -150,7 +147,7 @@ _sign_entry() {
 	TaskRegister((void*)&serv_task_loop, 0);// GDT operation
 	syscall(syscall_t::OUTC, 'O');// with effect InterruptEnable();
 	Console.OutFormat("hayouuu~!\a\n\r");
-	
+
 	dump_avail_memory();
 
 
@@ -180,11 +177,6 @@ _sign_entry() {
 	loop HALT();
 }
 // assert_stack() = assert(%%esp == 0x8000);
-
-
-_ESYM_C void call_constructors() {
-	for (Handler_t* func = __init_array_start; func != __init_array_end; func++) (*func)();
-}
 
 _ESYM_C { void* __dso_handle = 0; }
 _ESYM_C { void __cxa_atexit(void) {} }

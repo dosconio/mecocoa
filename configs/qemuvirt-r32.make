@@ -9,9 +9,10 @@ RM = rm -rf
 
 # (GNU)
 GPREF   = riscv64-unknown-elf-
-CFLAGS += -nostdlib -fno-builtin  -Wall -Wno-unused-variable -Wno-unused-function -Wno-parentheses # -g
+CFLAGS += -nostdlib -fno-builtin -Wall -Wno-unused-variable -Wno-unused-function -Wno-parentheses
 CFLAGS += -march=rv32g -mabi=ilp32
 CFLAGS += -I$(uincpath) -D_MCCA=0x1032 -D_HIS_IMPLEMENT# 1032 for RV32
+CFLAGS += -g
 G_DBG   = gdb-multiarch
 CC      = ${GPREF}gcc
 CX      = ${GPREF}g++
@@ -19,18 +20,23 @@ OBJCOPY = ${GPREF}objcopy
 OBJDUMP = ${GPREF}objdump
 
 # (QEMU)
+CORES  = 1
 QARCH  = riscv32
 QEMU   = qemu-system-$(QARCH)
 QBOARD = virt
-QFLAGS = -nographic -smp 1 -machine $(QBOARD) -bios none
+QFLAGS = -nographic -smp $(CORES) -machine $(QBOARD) -bios none
 
 #
 LDFILE  = prehost/$(arch)/$(arch).ld
-LDFLAGS = -T $(LDFILE) 
+LDFLAGS = -T $(LDFILE).ignore
 #
 asmfile=$(wildcard prehost/$(arch)/*.S)
 asmobjs=$(patsubst %S, %o, $(asmfile))
-cppfile=$(wildcard prehost/$(arch)/*.cpp) $(ulibpath)/cpp/Device/UART.cpp $(ulibpath)/cpp/stream.cpp
+cppfile=$(wildcard prehost/$(arch)/*.cpp) \
+	$(ulibpath)/cpp/lango/lango-cpp.cpp \
+	$(ulibpath)/cpp/stream.cpp \
+	$(ulibpath)/cpp/Device/UART.cpp \
+
 cppobjs=$(patsubst %cpp, %o, $(cppfile))
 cplfile=$(ulibpath)/c/mcore.c
 cplobjs=$(patsubst %c, %o, $(cplfile))
@@ -41,10 +47,12 @@ elf_kernel=mcca-$(arch).elf
 build: clean $(asmobjs) $(cppobjs) $(cplobjs)
 	#echo [building] MCCA for $(arch)
 	@echo MK $(elf_kernel)
-	@perl configs/qemuvirt-r32.pl > $(LDFILE).ignore
+	@perl configs/qemuvirt-riscv.pl r32 > $(LDFILE).ignore
 	@${CC} -E -P -x c ${CFLAGS} $(LDFILE).ignore > $(LDFILE)
-	@${CC} ${CFLAGS} ${LDFLAGS} -o $(ubinpath)/${elf_kernel} $(uobjpath)/mcca-$(arch)/* # keep entry (not only code segment) at 0x80000000
-	# @${CC} ${CFLAGS} ${LDFLAGS} -o $(ubinpath)/${elf_kernel} prehost/$(arch)/*.S $(uobjpath)/mcca-$(arch)/*
+	@mv $(LDFILE) $(LDFILE).ignore
+# keep entry (not only code segment) at 0x80000000
+	@${CC} ${CFLAGS} ${LDFLAGS} -o $(ubinpath)/${elf_kernel} $(uobjpath)/mcca-$(arch)/* \
+		-Wl,-Map=$(ubinpath)/$(elf_kernel).map
 	# readelf -h $ubinpath/mcca-qemuvirt-r32.elf| grep Entry
 	# bin_kernel : ${OBJCOPY} -O binary ${elf_kernel} ${BIN}
 
@@ -52,11 +60,14 @@ build: clean $(asmobjs) $(cppobjs) $(cplobjs)
 run: build
 	@echo [ running] MCCA for $(arch)
 	@echo "( Press ^A and then X to exit QEMU )"
-	@${QEMU} ${QFLAGS} -kernel $(ubinpath)/${elf_kernel}
+	${QEMU} ${QFLAGS} -kernel $(ubinpath)/${elf_kernel}
 # 	@${QEMU} -M ? | grep virt >/dev/null || exit
 
 
-#{TODO} debug
+debug: build
+	# sudo lsof -t -i :1234 | xargs sudo kill -9
+	@${QEMU} ${QFLAGS} -kernel $(ubinpath)/${elf_kernel} -s -S &
+	@${G_DBG} $(ubinpath)/${elf_kernel} -q -x configs/qemuvirt-rv.gdbinit
 
 .PHONY : clean
 clean:
@@ -74,7 +85,7 @@ clean:
 
 %.o: %.cpp
 	echo CX $(notdir $<)
-	${CX} -c -o $(uobjpath)/mcca-$(arch)/$(notdir $@) $<\
-		${CFLAGS} -fno-rtti
+	${CX} ${CFLAGS} -c -o $(uobjpath)/mcca-$(arch)/$(notdir $@) $< \
+		-fno-rtti
 
 
