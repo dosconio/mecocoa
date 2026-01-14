@@ -12,41 +12,6 @@
 
 use crate uni;
 
-#if defined(_MCCA) && ((_MCCA & 0xFF00) == 0x8600)
-
-const Color kDesktopBGColor = 0xFF2D76ED;
-const Color kDesktopFGColor = Color::White;
-
-const int kMouseCursorWidth = 15;
-const int kMouseCursorHeight = 24;
-char mouse_cursor_shape[kMouseCursorHeight][kMouseCursorWidth + 1] = {
-	"@              ",
-	"@@             ",
-	"@.@            ",
-	"@..@           ",
-	"@...@          ",
-	"@....@         ",
-	"@.....@        ",
-	"@......@       ",
-	"@.......@      ",
-	"@........@     ",
-	"@.........@    ",
-	"@..........@   ",
-	"@...........@  ",
-	"@............@ ",
-	"@......@@@@@@@@",
-	"@.....@        ",
-	"@....@         ",
-	"@...@          ",
-	"@..@           ",
-	"@.@            ",
-	"@@             ",
-	"@              ",
-	"               ",
-	"               ",
-};
-#endif
-
 #ifdef _ARC_x86 // x86:
 #include "../include/atx-x86-flap32.hpp"
 #include "../include/console.hpp"

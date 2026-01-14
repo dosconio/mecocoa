@@ -50,7 +50,7 @@ CISC `VMBox/VMware/Bochs/QEMU/TODO(Simics,Wel)`
 	- ① LONG: BIOS(TODO) 
 	- ② UEFI: UEFI,GUI
 	- **run**
-		- **virtual**: qemu-system-x86_64
+		- **virtual**: VMware(!Mouse), VMBox(!Mouse), qemu-system-x86_64
 	- **build**
 		- `arch=atx-x64-long64 make`
 		- `arch=atx-x64-uefi64 make`

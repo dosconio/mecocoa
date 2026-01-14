@@ -11,11 +11,11 @@ RM = rm -rf
 
 # (GNU)
 GPREF   = #riscv64-unknown-elf-
-CFLAGS += -nostdlib -fno-builtin -z norelro # -Wall -fno-pie
-CFLAGS += --static -mno-red-zone -fno-exceptions -ffreestanding
+CFLAGS += -nostdlib -fno-builtin -z norelro -nostdlib -fno-builtin
+CFLAGS += --static -mno-red-zone -m64  -O0
 CFLAGS += -I$(uincpath) -D_MCCA=0x8664 -D_HIS_IMPLEMENT -D_DEBUG
-CFLAGS += -fno-strict-aliasing
-XFLAGS  = $(CFLAGS) -fno-rtti
+CFLAGS += -fno-strict-aliasing -fno-exceptions -ffreestanding # -Wall -fno-pie
+XFLAGS  = $(CFLAGS) -fno-rtti -std=c++23
 G_DBG   = gdb-multiarch
 CC      = ${GPREF}gcc
 CX      = ${GPREF}g++
@@ -32,12 +32,16 @@ QFLAGS = -drive file=$(ubinpath)/AMD64/OVMF/OVMF_CODE.fd,format=raw,if=pflash -d
 LDFILE  = prehost/$(arch)/$(arch).ld
 LDFLAGS = -T $(LDFILE) 
 #
-asmfile=
+asmfile=$(ulibpath)/asm/x64/inst/ioport.asm \
 
 cppfile=$(wildcard mecocoa/*.cpp) \
 	$(ulibpath)/cpp/stream.cpp \
-	$(ulibpath)/cpp/Device/Video.cpp \
-	$(ulibpath)/cpp/Device/Video-VideoConsole.cpp \
+	$(ulibpath)/cpp/Device/Bus/PCI.cpp \
+	$(ulibpath)/cpp/Device/USB/USB-Device.cpp \
+	$(ulibpath)/cpp/Device/USB/xHCI/xHCI.cpp \
+	$(ulibpath)/cpp/Device/Keyboard.cpp \
+	$(ulibpath)/cpp/Device/Mouse.cpp \
+	$(ulibpath)/cpp/Device/Video.cpp $(ulibpath)/cpp/Device/Video-VideoConsole.cpp \
 
 cplfile=$(ulibpath)/c/mcore.c\
 	$(ulibpath)/c/debug.c \
@@ -46,7 +50,7 @@ cplfile=$(ulibpath)/c/mcore.c\
 	$(ulibpath)/c/data/font/font-16x8.c \
 
 
-asmobjs=$(patsubst %S, %o, $(asmfile))
+asmobjs=$(patsubst %asm, %o, $(asmfile))
 cppobjs=$(patsubst %cpp, %o, $(cppfile))
 cplobjs=$(patsubst %c, %o, $(cplfile))
 elf_kernel=mcca-$(arch).elf
@@ -59,18 +63,18 @@ sudokey=k
 build: clean $(ubinpath)/$(arch).img $(asmobjs) $(cppobjs) $(cplobjs)
 	#echo [building] MCCA for $(arch)
 	@echo MK $(elf_kernel)
-	$(CX) $(XFLAGS) -std=c++17 -m64 -O0 \
+	$(CX) $(XFLAGS) \
 	 	prehost/$(arch)/$(arch).cpp -T prehost/$(arch)/$(arch).ld -o $(ubinpath)/$(elf_kernel) \
 		$(uobjpath)/mcca-$(arch)/*
 
 	# OUTDATED # prehost/$(arch)/script-adapt.sh ~/_obj/$(elf_kernel) $(ubinpath)/$(elf_kernel)
-	@echo $(sudokey) | sudo mkdir -p $(mntdir)
-	@sudo mount -o loop $(ubinpath)/$(arch).img $(mntdir)
-	@sudo mkdir -p $(mntdir)/EFI/BOOT
-	@sudo cp $(ubinpath)/AMD64/loader.efi $(mntdir)/EFI/BOOT/BOOTX64.EFI
-	@sudo cp $(ubinpath)/$(elf_kernel) $(mntdir)/kernel.elf
+	@echo $(sudokey) | sudo -S mkdir -p $(mntdir)
+	@echo $(sudokey) | sudo -S mount -o loop $(ubinpath)/$(arch).img $(mntdir)
+	@echo $(sudokey) | sudo -S mkdir -p $(mntdir)/EFI/BOOT
+	@echo $(sudokey) | sudo -S cp $(ubinpath)/AMD64/loader.efi $(mntdir)/EFI/BOOT/BOOTX64.EFI
+	@echo $(sudokey) | sudo -S cp $(ubinpath)/$(elf_kernel) $(mntdir)/kernel.elf
 	tree $(mntdir)
-	@sudo umount $(mntdir)
+	@echo $(sudokey) | sudo -S umount $(mntdir)
 	# update
 	qemu-img convert -f raw -O vpc $(ubinpath)/$(arch).img $(ubinpath)/$(arch).vhd
 
@@ -91,7 +95,7 @@ loader:
 	cd $(edkdir) && bash $(ulibpath)/../../mecocoa/prehost/$(arch)/$(arch).loader/build.sh
 	cp $(edkdir)/Build/MccaLoaderX64/DEBUG_CLANGDWARF/X64/Loader.efi $(ubinpath)/AMD64/loader.efi
 
-.PHONY : run
+.PHONY : run run-only
 run: build
 	@echo [ running] MCCA for $(arch)
 	@${QEMU} \
@@ -104,11 +108,22 @@ run: build
 		-monitor stdio \
 		-m 1G # -enable-kvm
 	@echo
-	@sudo mount -o loop $(ubinpath)/$(arch).img $(mntdir)
+	@echo 'Mount the image:' 
+	@echo '  mount -o loop $(ubinpath)/$(arch).img $(mntdir)'
+	@echo $(sudokey) | sudo -S mount -o loop $(ubinpath)/$(arch).img $(mntdir)
 	tree $(mntdir)
-	@sudo umount $(mntdir)
+	@echo $(sudokey) | sudo -S umount $(mntdir)
 	@echo
-
+run-only:
+	@${QEMU} \
+	    -drive if=pflash,format=raw,readonly=on,file=$(ubinpath)/AMD64/OVMF/OVMF_CODE.fd \
+		-drive if=pflash,format=raw,file=$(ubinpath)/AMD64/OVMF/OVMF_VARS.fd \
+		-drive if=ide,index=0,media=disk,format=raw,file=$(ubinpath)/$(arch).img \
+		-device nec-usb-xhci,id=xhci \
+		-device usb-mouse \
+		-device usb-kbd \
+		-monitor stdio \
+		-m 1G # -enable-kvm
 
 #{TODO} debug
 
@@ -118,6 +133,10 @@ clean:
 	${RM} $(uobjpath)/mcca-$(arch)/*
 	${RM} $(ubinpath)/$(arch).img
 	@${MKDIR} $(uobjpath)/mcca-$(arch)
+
+%.o: %.asm
+	echo AS $(notdir $<)
+	aasm -f elf64 -o $(uobjpath)/mcca-$(arch)/$(notdir $@) $<
 
 %.o: %.S
 	echo AS $(notdir $<)

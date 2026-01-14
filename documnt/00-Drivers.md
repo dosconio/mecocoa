@@ -15,6 +15,8 @@ her-note: false
 - **KBD** Keyboard and **MOU** PS/2-Mouse
 - IDE Disk
 
+- Bus: **PCI**
+
 ### TODO
 
 - Floppy

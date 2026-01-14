@@ -4,8 +4,13 @@
 // ModuTitle: Kernel
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 #define _STYLE_RUST
+#include <new>
 #include <cpp/unisym>
+#include <c/driver/mouse.h>// qemu only
 #include <cpp/Device/_Video.hpp>
+#include <cpp/Device/Bus/PCI.hpp>
+#include <cpp/Device/USB/xHCI/xHCI.hpp>
+// #include <cpp/Device/USB/USB-Header.hpp>
 
 
 using namespace uni;
@@ -24,6 +29,57 @@ FrameBufferConfig config_graph;
 const int kMouseCursorWidth = 15;
 const int kMouseCursorHeight = 24;
 extern char mouse_cursor_shape[kMouseCursorHeight][kMouseCursorWidth + 1];
+
+void _() {
+	innpd(0);
+}
+
+Cursor* mouse_cursor;
+void MouseObserver(int8 displacement_x, int8 displacement_y) {
+	// ploginfo("mov (%d, %d)", displacement_x, displacement_y);
+	mouse_cursor->MoveRelative({ displacement_x, displacement_y });
+}
+
+// ---- USB Driver
+alignas(64) uint8_t memory_pool[kMemoryPoolSize];
+uintptr_t alloc_ptr = reinterpret_cast<uintptr_t>(memory_pool);
+void* AllocMem(size_t size, unsigned int alignment, unsigned int boundary) {
+	if (alignment > 0) {
+		alloc_ptr = ceilAlign(alignment, alloc_ptr);
+	}
+	if (boundary > 0) {
+		auto next_boundary = ceilAlign(boundary, alloc_ptr); 
+		if (next_boundary < alloc_ptr + size) {
+			alloc_ptr = next_boundary;
+		}
+	}
+	if (uintptr_t(memory_pool) + kMemoryPoolSize < alloc_ptr + size) {
+		return nullptr;
+	}
+	auto p = alloc_ptr;
+	alloc_ptr += size;
+	return reinterpret_cast<void*>(p);
+}
+
+void SwitchEhci2Xhci(PCI& pci, const PCI::Device& xhc_dev) {
+	bool intel_ehc_exist = false;
+	for0 (i, pci.num_device) {
+		if (pci.devices[i].class_code.Match(0x0cu, 0x03u, 0x20u) /* EHCI */ &&
+			0x8086 == pci.read_vendor_id(pci.devices[i])) {
+			intel_ehc_exist = true;
+			break;
+		}
+	}
+	if (!intel_ehc_exist) {
+		return;
+	}
+	uint32_t superspeed_ports = pci.read_config_register(xhc_dev, 0xdc); // USB3PRM
+	pci.write_config_register(xhc_dev, 0xd8, superspeed_ports); // USB3_PSSEN
+	uint32_t ehci2xhci_ports = pci.read_config_register(xhc_dev, 0xd4); // XUSB2PRM
+	pci.write_config_register(xhc_dev, 0xd0, ehci2xhci_ports); // XUSB2PR
+	ploginfo("%s: SS = %02, xHCI = %02x\n", __FUNCIDEN__, superspeed_ports, ehci2xhci_ports);
+}
+
 
 extern "C" //__attribute__((ms_abi))
 void _entry(const UefiData& uefi_data)
@@ -59,17 +115,74 @@ void _entry(const UefiData& uefi_data)
 	vcon0->Clear();
 	ploginfo("Ciallo %lf", 2025.09);
 
-	for (int dy = 0; dy < kMouseCursorHeight; ++dy) {
-		for (int dx = 0; dx < kMouseCursorWidth; ++dx) {
-			if (mouse_cursor_shape[dy][dx] == '@') {
-				p_vcb->Draw(Point(200 + dx, 100 + dy), Color(0xFF000000));
-			}
-			else if (mouse_cursor_shape[dy][dx] == '.') {
-				p_vcb->Draw(Point(200 + dx, 100 + dy), Color(0xFFFFFFFF));
+	PCI pci;
+	uint64_t xhc_mmio_base = nil;
+	auto err = pci.scan_all_bus();
+	vcon0->OutFormat("[Devices] (%s) PCI: Detect %u devices.\n\r", err.Name(), pci.num_device);
+
+	// seek an Intel xHC
+	PCI::Device* xhc_dev = nullptr;
+	bool found_usbmouse = false;
+	for0(i, pci.num_device) {
+		const auto& dev = pci.devices[i];
+		auto vendor_id = pci.read_vendor_id(dev);
+		if (!found_usbmouse && pci.devices[i].class_code.Match(ClassCodeGroup_xHC)) {
+			xhc_dev = &pci.devices[i];
+			if (0x8086 == vendor_id) {
+				found_usbmouse = true;
 			}
 		}
+		auto class_code = pci.read_class_code(dev.bus, dev.device, dev.function);
+		//
+		vcon0->OutFormat("%[8H].%[8H].%[8H]: vend 0x%[16H], class 0x%[32H], head 0x%[8H]\n\r",
+			dev.bus, dev.device, dev.function, vendor_id, class_code, dev.header_type);
+	}
+	// get xHC memory base address
+	if (xhc_dev) {
+		ploginfo("xHC has been found: %[8H].%[8H].%[8H]", xhc_dev->bus, xhc_dev->device, xhc_dev->function);
+		auto xhc_bar = pci.ReadBar(*xhc_dev, 0);
+		if (!xhc_bar.pvalue) {
+			plogerro("xHC BAR0 is not valid.");
+		}
+		xhc_mmio_base = *xhc_bar.pvalue & ~_IMM(0xF);
+		ploginfo("xHC mmio_base = 0x%[x]", xhc_mmio_base);
 	}
 
+	Cursor cursor{
+		&p_vcb->getVCI(), Color::White, {300, 200}
+	};
+	mouse_cursor = &cursor;
+
+	//
+	if (xhc_mmio_base) {
+		usb::xhci::Controller xhc{ xhc_mmio_base };
+		if (0x8086 == pci.read_vendor_id(*xhc_dev)) {
+			SwitchEhci2Xhci(pci, *xhc_dev);
+		}
+		{
+			auto err = xhc.Initialize();
+			ploginfo("xhc.Initialize: %s", err.Name());
+		}
+		ploginfo("xHC starting");
+		xhc.Run();
+		// 
+		usb::HIDMouseDriver::default_observer = MouseObserver;
+		for (int i = 1; i <= xhc.MaxPorts(); ++i) {
+			auto port = xhc.PortAt(i);
+			ploginfo("Port %d: IsConnected=%d", i, port.IsConnected());
+			if (port.IsConnected()) {
+			if (auto err = ConfigurePort(xhc, port)) {
+				plogerro("failed to configure port: %s at %s:%d", err.Name(), err.File(), err.Line());
+				continue;
+			}
+			}
+		}
+
+		loop if (auto err = usb::xhci::ProcessEvent(xhc)) {
+			plogerro("Error while ProcessEvent: %s at %s:%d", err.Name(), err.File(), err.Line());
+		}
+
+	}
 
 	loop _ASM("hlt");
 }
@@ -97,7 +210,6 @@ void GloScreenARGB8888::DrawRectangle(const Rectangle& rect) const {
 	for0(y, rect.height) {
 		for0(x, rect.width) p[x] = rect.color.val;// cast<uint32>(rect.color);
 		p += config_graph.pixels_per_scan_line;
-		//cast<byte*>(p) += config.pixels_per_scan_line;
 	}
 }
 void GloScreenARGB8888::DrawFont(const Point& disp, const DisplayFont& font) const {
@@ -145,13 +257,24 @@ Color GloScreenABGR8888::GetColor(Point p) const {
 	return color;
 }
 
-
+extern "C" { void* __dso_handle = 0; }
+extern "C" { void __cxa_atexit(void) {} }
 void operator delete(void*) {}
 void operator delete(void* ptr, unsigned long size) noexcept { _TODO }
+void operator delete(void* ptr, unsigned long size, std::align_val_t) noexcept { ::operator delete(ptr, size); }
 _ESYM_C void __cxa_pure_virtual(void) {}
+void std::__throw_bad_function_call(void) {
+	plogerro("%s", __FUNCIDEN__); loop;
+}
 _ESYM_C void* memset(void* dest, int val, size_t count) {
 	auto d = (byte*)dest;
 	for0(i, count) d[i] = (byte)val;
 	return dest;
+}
+_ESYM_C char* memmove(char* dest, const char* sors, size_t width) {
+	return MemAbsolute(dest, sors, width);
+}
+_ESYM_C void abort(void) {
+	plogerro("%s", __FUNCIDEN__); loop;
 }
 

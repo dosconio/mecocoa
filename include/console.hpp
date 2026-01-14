@@ -16,6 +16,7 @@ public:\
 
 #include <cpp/Device/_Video.hpp>
 
+// ---- ---- ---- ---- X86 ---- ---- ---- ---- //
 #if _MCCA==0x8632
 #define TTY_NUMBER 4
 defVconIface(GloScreen, uint8);
@@ -24,10 +25,24 @@ extern BareConsole* BCONS[TTY_NUMBER];
 
 void cons_init();
 
-
+// ---- ---- ---- ---- X64 ---- ---- ---- ---- //
 #elif _MCCA==0x8664
 defVconIface(GloScreenARGB8888, uint32);
 defVconIface(GloScreenABGR8888, uint32);
+
+class Cursor {
+public:
+	Cursor(VideoControlInterface* writer, Color erase_color, Point initial_position);
+	void MoveRelative(Size2dif displacement);
+private:
+	VideoControlInterface* pixel_writer_ = nullptr;
+	Color erase_color_;
+	Point position_;
+};
+
+
+
+
 #endif
 
 #endif
