@@ -128,6 +128,7 @@ _ESYM_C{
 static stduint parse_grub(stduint addr)
 {
 	stduint count = 0;
+	stduint picked = 0;
 	stduint size = *(uint32*)addr;
 	multiboot_tag* tag = (multiboot_tag*)(addr + 8);
 	while (tag->type != MULTIBOOT_TAG_TYPE_END)
@@ -143,12 +144,14 @@ static stduint parse_grub(stduint addr)
 	{
 		// outsfmt("[Memoman] base 0x%[x]..0x%[x] : %d\n\r", (u32)entry->addr, (u32)entry->addr + (u32)entry->len, (u32)entry->type);
 		count++;
-		// if (entry->type == MULTIBOOT_MEMORY_AVAILABLE && entry->len > memory_size)
-		// {
-		// 	memory_base = (u32)entry->addr;
-		// 	memory_size = (u32)entry->len;
-		// }
-		entry = (multiboot_mmap_entry*)((u32)entry + mtag->entry_size);
+		if (entry->type == MULTIBOOT_MEMORY_AVAILABLE && entry->len > 0)
+		{
+			Memory::avail_slices[picked].address = (u32)entry->addr;
+			Memory::avail_slices[picked].length = (u32)entry->len;
+			Memory::total_mem += entry->len;
+			picked++;
+		}
+		cast<stduint>(entry) += mtag->entry_size;
 	}
 	return count;
 }

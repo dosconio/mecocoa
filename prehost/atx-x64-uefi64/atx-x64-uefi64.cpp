@@ -4,8 +4,8 @@
 // ModuTitle: Kernel
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 #define _STYLE_RUST
-#include <new>
 #include <cpp/unisym>
+#include <cpp/interrupt>
 #include <c/driver/mouse.h>// qemu only
 #include <cpp/Device/_Video.hpp>
 #include <cpp/Device/Bus/PCI.hpp>
@@ -26,19 +26,20 @@ VideoConsole* vcon0;
 extern "C" byte BSS_ENTO, BSS_ENDO;
 FrameBufferConfig config_graph;
 
-const int kMouseCursorWidth = 15;
-const int kMouseCursorHeight = 24;
-extern char mouse_cursor_shape[kMouseCursorHeight][kMouseCursorWidth + 1];
-
-void _() {
-	innpd(0);
-}
-
 Cursor* mouse_cursor;
 void MouseObserver(int8 displacement_x, int8 displacement_y) {
 	// ploginfo("mov (%d, %d)", displacement_x, displacement_y);
 	mouse_cursor->MoveRelative({ displacement_x, displacement_y });
 }
+
+// ---- Interrupt
+alignas(64) gate_t idt[256];
+struct InterruptVector {
+	enum Number {
+		xHCI = 0x40,
+	};
+};
+
 
 // ---- USB Driver
 alignas(64) uint8_t memory_pool[kMemoryPoolSize];
@@ -80,6 +81,31 @@ void SwitchEhci2Xhci(PCI& pci, const PCI::Device& xhc_dev) {
 	ploginfo("%s: SS = %02, xHCI = %02x\n", __FUNCIDEN__, superspeed_ports, ehci2xhci_ports);
 }
 
+usb::xhci::Controller* xhc;
+
+_ESYM_C void General_IRQHandler(InterruptFrame* frame);
+__attribute__((interrupt, target("general-regs-only")))
+void IntHandlerXHCI(InterruptFrame* frame) {
+	// while(1);
+	// ploginfo("rupt!");
+	while (xhc->PrimaryEventRing()->HasFront()) {
+		if (auto err = ProcessEvent(*xhc)) {
+			plogerro("Error while ProcessEvent: %s at %s:%d", err.Name(), err.File(), err.Line());
+		}
+	}
+	sendEOI();
+}
+
+void EnableLocalAPIC() {
+    // SVR
+    volatile uint32_t* svr = reinterpret_cast<volatile uint32_t*>(0xFEE000F0);
+    uint32_t value = *svr;
+    // set Bit 8 (Enable) and Bits 0-7 (Spurious Vector = 0xFF)
+    value |= 0x100; // Bit 8: Software Enable
+    value |= 0xFF;  // Vector 0xFF for spurious interrupts
+    *svr = value;
+    // ploginfo("Local APIC Software Enabled via SVR.");
+}
 
 extern "C" //__attribute__((ms_abi))
 void _entry(const UefiData& uefi_data)
@@ -115,6 +141,10 @@ void _entry(const UefiData& uefi_data)
 	vcon0->Clear();
 	ploginfo("Ciallo %lf", 2025.09);
 
+	// IVT and Device
+	InterruptControl GIC(_IMM(idt));
+	// EnableLocalAPIC();
+
 	PCI pci;
 	uint64_t xhc_mmio_base = nil;
 	auto err = pci.scan_all_bus();
@@ -146,6 +176,23 @@ void _entry(const UefiData& uefi_data)
 		}
 		xhc_mmio_base = *xhc_bar.pvalue & ~_IMM(0xF);
 		ploginfo("xHC mmio_base = 0x%[x]", xhc_mmio_base);
+		// setting interrupt of xHC
+		//{TODO}  use GIC
+		const uint16 cs = getCS();
+		for0(i, 0x1000 / sizeof(gate_t)) {
+			auto& idt_entry = idt[i];
+			idt_entry.setModeRupt(reinterpret_cast<uint64>(General_IRQHandler), cs);
+		}
+		auto& xchi_idt_entry = idt[InterruptVector::xHCI];
+		xchi_idt_entry.setModeRupt(reinterpret_cast<uint64>(IntHandlerXHCI), cs);
+		loadIDT(_IMM(idt), sizeof(idt) - 1);
+		// config MSI
+		const uint8_t bsp_local_apic_id = treat<uint32>(0xfee00020) >> 24;// or STI is useless -- Phina 20260117
+		pci.configure_MSI_fixed_destination(
+			*xhc_dev, bsp_local_apic_id,
+			PCI::MSITriggerMode::Level,
+			PCI::MSIDeliveryMode::Fixed,
+			InterruptVector::xHCI, 0);
 	}
 
 	Cursor cursor{
@@ -177,11 +224,15 @@ void _entry(const UefiData& uefi_data)
 			}
 			}
 		}
+		::xhc = &xhc;
+		enInterrupt(true);
+		
 
-		loop if (auto err = usb::xhci::ProcessEvent(xhc)) {
-			plogerro("Error while ProcessEvent: %s at %s:%d", err.Name(), err.File(), err.Line());
-		}
-
+		// ploginfo("Kernel Ready");
+		// loop if (auto err = usb::xhci::ProcessEvent(xhc)) {
+		// 	plogerro("Error while ProcessEvent: %s at %s:%d", err.Name(), err.File(), err.Line());
+		// }
+		loop;
 	}
 
 	loop _ASM("hlt");
@@ -193,69 +244,7 @@ void outtxt(const char* str, stduint len) {
 }
 
 
-uint32& GloScreenARGB8888::Locate(const Point& disp) const {
-	return *((uint32*)(config_graph.frame_buffer) + disp.x + disp.y * config_graph.pixels_per_scan_line);
-}
-uint32& GloScreenABGR8888::Locate(const Point& disp) const {
-	return *((uint32*)(config_graph.frame_buffer) + disp.x + disp.y * config_graph.pixels_per_scan_line);
-}
 
-void GloScreenARGB8888::SetCursor(const Point& disp) const { _TODO; }// MAYBE unused
-Point GloScreenARGB8888::GetCursor() const { _TODO return {0, 0}; }// MAYBE unused
-void GloScreenARGB8888::DrawPoint(const Point& disp, Color color) const {
-	Locate(disp) = cast<uint32>(color);
-}
-void GloScreenARGB8888::DrawRectangle(const Rectangle& rect) const {
-	uint32* p = &Locate(rect.getVertex());
-	for0(y, rect.height) {
-		for0(x, rect.width) p[x] = rect.color.val;// cast<uint32>(rect.color);
-		p += config_graph.pixels_per_scan_line;
-	}
-}
-void GloScreenARGB8888::DrawFont(const Point& disp, const DisplayFont& font) const {
-	_TODO;
-}
-Color GloScreenARGB8888::GetColor(Point p) const {
-	return cast<Color>(Locate(p));
-}
-
-
-
-void GloScreenABGR8888::SetCursor(const Point& disp) const { _TODO; }// MAYBE unused
-Point GloScreenABGR8888::GetCursor() const { _TODO return { 0, 0 }; }// MAYBE unused
-void GloScreenABGR8888::DrawPoint(const Point& disp, Color color) const {
-	uint32 val = 
-		(_IMM(color.r) << 0) |
-		(_IMM(color.g) << 8) |
-		(_IMM(color.b) << 16) |
-		(_IMM(color.a) << 24);
-	Locate(disp) = val;
-}
-void GloScreenABGR8888::DrawRectangle(const Rectangle& rect) const {
-	uint32 val;
-	val = (_IMM(rect.color.r) << 0)
-		| (_IMM(rect.color.g) << 8)
-		| (_IMM(rect.color.b) << 16)
-		| (_IMM(rect.color.a) << 24);
-	uint32* p = &Locate(rect.getVertex());
-	for0(y, rect.height) {
-		for0(x, rect.width) p[x] = val;
-		//cast<byte*>(p) += config.pixels_per_scan_line;
-		p += config_graph.pixels_per_scan_line;
-	}
-}
-void GloScreenABGR8888::DrawFont(const Point& disp, const DisplayFont& font) const {
-	_TODO;
-}
-Color GloScreenABGR8888::GetColor(Point p) const {
-	Color color;
-	uint32 val = Locate(p);
-	color.r = (val >> 0) & 0xFF;
-	color.g = (val >> 8) & 0xFF;
-	color.b = (val >> 16) & 0xFF;
-	color.a = (val >> 24) & 0xFF;
-	return color;
-}
 
 extern "C" { void* __dso_handle = 0; }
 extern "C" { void __cxa_atexit(void) {} }

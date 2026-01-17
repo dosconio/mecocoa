@@ -200,7 +200,7 @@ ProcessBlock* TaskRegister(void* entry, byte ring)
 	}
 
 	TSS->EIP = _IMM(entry);
-	TSS->EFLAGS = getEflags();
+	TSS->EFLAGS = getFlags();
 	TSS->EAX = TSS->ECX = TSS->EDX = TSS->EBX = TSS->EBP = TSS->ESI = TSS->EDI = 0;
 	switch (ring)
 	{
@@ -343,7 +343,7 @@ ProcessBlock* TaskLoad(BlockTrait* source, void* addr, byte ring)
 	TSS->SS2 = 8 * 6 + 4 + 2;// 4:LDT 8*6:SS2 2:Ring2
 	TSS->Padding2 = 0;
 	//
-	TSS->EFLAGS = getEflags();
+	TSS->EFLAGS = getFlags();
 	TSS->EAX = TSS->ECX = TSS->EDX = TSS->EBX = TSS->EBP = TSS->ESI = TSS->EDI = 0;
 	switch (ring)
 	{

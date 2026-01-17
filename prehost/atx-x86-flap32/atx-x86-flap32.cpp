@@ -118,7 +118,7 @@ _sign_entry() {
 	kernel_task_init();
 
 	// IVT and Device
-	InterruptControl GIC(_IMM(0x80000800));// linear but not physical
+	InterruptControl GIC(_IMM(0x80000800));
 	GIC.Reset(SegCode);
 	GIC.enAble();
 	GIC[IRQ_PIT].setRange(mglb(Handint_PIT_Entry), SegCode); PIT_Init();

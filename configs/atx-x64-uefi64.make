@@ -33,9 +33,12 @@ LDFILE  = prehost/$(arch)/$(arch).ld
 LDFLAGS = -T $(LDFILE) 
 #
 asmfile=$(ulibpath)/asm/x64/inst/ioport.asm \
+	$(ulibpath)/asm/x64/inst/manage.asm \
+	$(ulibpath)/asm/x64/inst/interrupt.asm
 
 cppfile=$(wildcard mecocoa/*.cpp) \
 	$(ulibpath)/cpp/stream.cpp \
+	$(ulibpath)/cpp/interrupt.cpp \
 	$(ulibpath)/cpp/Device/Bus/PCI.cpp \
 	$(ulibpath)/cpp/Device/USB/USB-Device.cpp \
 	$(ulibpath)/cpp/Device/USB/xHCI/xHCI.cpp \
@@ -62,10 +65,15 @@ sudokey=k
 .PHONY : build
 build: clean $(ubinpath)/$(arch).img $(asmobjs) $(cppobjs) $(cplobjs)
 	#echo [building] MCCA for $(arch)
+# 	@echo AR $(elf_kernel)
+# 	@ar -rcs $(uobjpath)/mcca-$(arch)/lib$(elf_kernel).a $(uobjpath)/mcca-$(arch)/*
 	@echo MK $(elf_kernel)
 	$(CX) $(XFLAGS) \
-	 	prehost/$(arch)/$(arch).cpp -T prehost/$(arch)/$(arch).ld -o $(ubinpath)/$(elf_kernel) \
+		prehost/$(arch)/$(arch).cpp -T prehost/$(arch)/$(arch).ld -o $(ubinpath)/$(elf_kernel) \
+		-Wl,-Map=$(ubinpath)/$(elf_kernel).map \
 		$(uobjpath)/mcca-$(arch)/*
+#		-L $(uobjpath)/mcca-$(arch) -l$(elf_kernel)
+		
 
 	# OUTDATED # prehost/$(arch)/script-adapt.sh ~/_obj/$(elf_kernel) $(ubinpath)/$(elf_kernel)
 	@echo $(sudokey) | sudo -S mkdir -p $(mntdir)
@@ -136,7 +144,7 @@ clean:
 
 %.o: %.asm
 	echo AS $(notdir $<)
-	aasm -f elf64 -o $(uobjpath)/mcca-$(arch)/$(notdir $@) $<
+	aasm -f elf64 -o $(uobjpath)/mcca-$(arch)/_ae_$(notdir $@) $<
 
 %.o: %.S
 	echo AS $(notdir $<)

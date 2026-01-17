@@ -33,7 +33,7 @@ byte BUF_BCONS2[byteof(BareConsole)]; static BareConsole* BCONS2;// TTY2
 byte BUF_BCONS3[byteof(BareConsole)]; static BareConsole* BCONS3;// TTY3
 BareConsole* bcons[TTY_NUMBER];
 // consider GUI
-byte BUF_VCI[sizeof(GloScreen)];
+byte BUF_VCI[sizeof(GloScreenRGB888)];
 byte BUF_CONS0[sizeof(VideoConsole)]; VideoConsole* vcon0;
 VideoConsole* vcons[TTY_NUMBER];
 // consider CLI and GUI
@@ -126,61 +126,6 @@ KeyboardBridge kbdbridge;
 
 ModeInfoBlock* video_info;
 
-uint8& GloScreen::Locate(const Point& disp) const {
-	return *((uint8*)(video_info->PhysBasePtr) +
-		(disp.x * video_info->BitsPerPixel >> 3) +
-		disp.y * video_info->BytesPerScanLine);// without boundary check
-}
-void GloScreen::SetCursor(const Point& disp) const { _TODO; }// MAYBE unused
-Point GloScreen::GetCursor() const { _TODO return {0, 0}; }// MAYBE unused
-void GloScreen::DrawPoint(const Point& disp, Color color) const {
-	uint8* p = &Locate(disp);
-	*p++ = color.b;
-	*p++ = color.g;
-	*p++ = color.r;
-}
-void GloScreen::DrawRectangle(const Rectangle& rect) const {// RGB 24bpp only
-	uint8* p = &Locate(rect.getVertex());
-	uint8 comm[3 * 4] = {
-		rect.color.b, rect.color.g, rect.color.r,
-		rect.color.b, rect.color.g, rect.color.r,
-		rect.color.b, rect.color.g, rect.color.r,
-		rect.color.b, rect.color.g, rect.color.r,
-	};
-	uint32 (*com)[3] = (uint32(*)[3])comm;
-	for0(y, rect.height) {
-		union {
-			uint8* pp8;
-			uint32* pp32;
-		};
-		pp8 = p;
-		for0r(x, rect.width) {
-			if (!(_IMM(pp8) & 0b11) && x >= 12) {
-				pp32[0] = treat<uint32>(&comm[4 * 0]);
-				pp32[1] = treat<uint32>(&comm[4 * 1]);
-				pp32[2] = treat<uint32>(&comm[4 * 2]);
-				x -= 3 - 1;
-				pp8 += 12;
-				continue;
-			}
-			*pp8++ = rect.color.b;
-			*pp8++ = rect.color.g;
-			*pp8++ = rect.color.r;
-		}
-		p += video_info->BytesPerScanLine;
-	}
-}
-void GloScreen::DrawFont(const Point& disp, const DisplayFont& font) const {
-	_TODO;
-}
-Color GloScreen::GetColor(Point p) const {
-	return cast<Color>(Locate(p));
-}
-
-class Graphic {
-public:
-	static bool setMode(VideoMode vmode);
-};
 _ESYM_C word VideoModeVal;
 _ESYM_C Handler_t SwitchVideoMode;
 _ESYM_C word SW16_FUNCTION;
@@ -195,12 +140,12 @@ bool Graphic::setMode(VideoMode vmode) {
 bool ento_gui = false;
 void blink() {
 	static bool b = false;
-	treat<GloScreen>(BUF_VCI).DrawRectangle(Rectangle(Point(0, 0), Size2(8, 16), b ? Color::Black : Color::White));
+	treat<GloScreenRGB888>(BUF_VCI).DrawRectangle(Rectangle(Point(0, 0), Size2(8, 16), b ? Color::Black : Color::White));
 	b = !b;
 }
 void blink2() {
 	static bool b = false;
-	treat<GloScreen>(BUF_VCI).DrawRectangle(Rectangle(Point(8, 0), Size2(8, 16), b ? Color::Black : Color::White));
+	treat<GloScreenRGB888>(BUF_VCI).DrawRectangle(Rectangle(Point(8, 0), Size2(8, 16), b ? Color::Black : Color::White));
 	b = !b;
 }
 
@@ -255,13 +200,13 @@ void cons_init()
 	//{TODO} BUFFER : vcon-buff
 	
 	// TTY0 background one (TODO: BUFFER and {clear;reflush})
-	new (BUF_VCI) GloScreen();
+	new (BUF_VCI) GloScreenRGB888();
 	Rectangle screen0_win(
 		Point(nil, nil),
 		Size2(video_info->XResolution, video_info->YResolution),
 		Color::White
 	);
-	vcon0 = new (BUF_CONS0) VideoConsole(treat<GloScreen>(BUF_VCI), screen0_win);
+	vcon0 = new (BUF_CONS0) VideoConsole(treat<GloScreenRGB888>(BUF_VCI), screen0_win);
 	vcons[0] = vcon0;
 	//
 	con0_out = vcon0;

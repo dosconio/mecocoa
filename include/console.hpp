@@ -19,9 +19,14 @@ public:\
 // ---- ---- ---- ---- X86 ---- ---- ---- ---- //
 #if _MCCA==0x8632
 #define TTY_NUMBER 4
-defVconIface(GloScreen, uint8);
+defVconIface(GloScreenRGB888, uint8);
 extern BareConsole* BCONS0;
 extern BareConsole* BCONS[TTY_NUMBER];
+
+class Graphic {
+public:
+	static bool setMode(VideoMode vmode);
+};
 
 void cons_init();
 
