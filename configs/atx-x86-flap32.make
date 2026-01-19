@@ -13,7 +13,7 @@ mnts=/mnt/floppy
 arch=atx-x86-flap32
 flag=-D_MCCA=0x8632 -D_ARC_x86=5 -D_DEBUG 
 
-qemu=qemu-system-x86_64 # i386
+qemu=qemu-system-i386
 bochd=C:/Soft/Bochs-2.7/bochsdbg.exe
 
 COMWAN = -Wno-builtin-declaration-mismatch

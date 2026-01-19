@@ -5,6 +5,8 @@
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 #define _STYLE_RUST
 #include <cpp/unisym>
+//
+#include <cpp/queue>
 #include <cpp/interrupt>
 #include <c/driver/mouse.h>// qemu only
 #include <cpp/Device/_Video.hpp>
@@ -25,6 +27,14 @@ VideoConsole* vcon0;
 
 extern "C" byte BSS_ENTO, BSS_ENDO;
 FrameBufferConfig config_graph;
+
+struct Message {
+	enum Type {
+		RUPT_xHCI,
+	} type;
+};
+Queue<Message>* message_queue;
+static Message _BUF_Message[32];
 
 Cursor* mouse_cursor;
 void MouseObserver(int8 displacement_x, int8 displacement_y) {
@@ -86,31 +96,17 @@ usb::xhci::Controller* xhc;
 _ESYM_C void General_IRQHandler(InterruptFrame* frame);
 __attribute__((interrupt, target("general-regs-only")))
 void IntHandlerXHCI(InterruptFrame* frame) {
-	// while(1);
-	// ploginfo("rupt!");
-	while (xhc->PrimaryEventRing()->HasFront()) {
-		if (auto err = ProcessEvent(*xhc)) {
-			plogerro("Error while ProcessEvent: %s at %s:%d", err.Name(), err.File(), err.Line());
-		}
-	}
+	asserv(message_queue)->Enqueue(Message{ Message::RUPT_xHCI });
 	sendEOI();
 }
 
-void EnableLocalAPIC() {
-    // SVR
-    volatile uint32_t* svr = reinterpret_cast<volatile uint32_t*>(0xFEE000F0);
-    uint32_t value = *svr;
-    // set Bit 8 (Enable) and Bits 0-7 (Spurious Vector = 0xFF)
-    value |= 0x100; // Bit 8: Software Enable
-    value |= 0xFF;  // Vector 0xFF for spurious interrupts
-    *svr = value;
-    // ploginfo("Local APIC Software Enabled via SVR.");
-}
 
 extern "C" //__attribute__((ms_abi))
 void _entry(const UefiData& uefi_data)
 {
 	MemSet(&BSS_ENTO, &BSS_ENDO - &BSS_ENTO, 0);
+	_preprocess();
+
 	config_graph = uefi_data;
 
 	GloScreenARGB8888 vga_ARGB8888;
@@ -142,8 +138,12 @@ void _entry(const UefiData& uefi_data)
 	ploginfo("Ciallo %lf", 2025.09);
 
 	// IVT and Device
-	InterruptControl GIC(_IMM(idt));
-	// EnableLocalAPIC();
+	InterruptControl APIC(_IMM(idt));
+	APIC.Reset(getCS());
+
+	// Message Queue
+	Queue<Message> msg_queue(_BUF_Message, numsof(_BUF_Message));
+	::message_queue = &msg_queue;
 
 	PCI pci;
 	uint64_t xhc_mmio_base = nil;
@@ -177,17 +177,12 @@ void _entry(const UefiData& uefi_data)
 		xhc_mmio_base = *xhc_bar.pvalue & ~_IMM(0xF);
 		ploginfo("xHC mmio_base = 0x%[x]", xhc_mmio_base);
 		// setting interrupt of xHC
-		//{TODO}  use GIC
-		const uint16 cs = getCS();
-		for0(i, 0x1000 / sizeof(gate_t)) {
-			auto& idt_entry = idt[i];
-			idt_entry.setModeRupt(reinterpret_cast<uint64>(General_IRQHandler), cs);
-		}
+		//{TODO}  use APIC
 		auto& xchi_idt_entry = idt[InterruptVector::xHCI];
-		xchi_idt_entry.setModeRupt(reinterpret_cast<uint64>(IntHandlerXHCI), cs);
+		xchi_idt_entry.setModeRupt(reinterpret_cast<uint64>(IntHandlerXHCI), getCS());
 		loadIDT(_IMM(idt), sizeof(idt) - 1);
 		// config MSI
-		const uint8_t bsp_local_apic_id = treat<uint32>(0xfee00020) >> 24;// or STI is useless -- Phina 20260117
+		const uint8_t bsp_local_apic_id = treat<uint32>_IMM(0xFEE00020) >> 24;// or STI is useless -- Phina 20260117
 		pci.configure_MSI_fixed_destination(
 			*xhc_dev, bsp_local_apic_id,
 			PCI::MSITriggerMode::Level,
@@ -214,28 +209,46 @@ void _entry(const UefiData& uefi_data)
 		xhc.Run();
 		// 
 		usb::HIDMouseDriver::default_observer = MouseObserver;
-		for (int i = 1; i <= xhc.MaxPorts(); ++i) {
+		for1 (i, xhc.MaxPorts()) {
 			auto port = xhc.PortAt(i);
-			ploginfo("Port %d: IsConnected=%d", i, port.IsConnected());
+			// ploginfo("Port %d: IsConnected=%d", i, port.IsConnected());
 			if (port.IsConnected()) {
-			if (auto err = ConfigurePort(xhc, port)) {
-				plogerro("failed to configure port: %s at %s:%d", err.Name(), err.File(), err.Line());
-				continue;
-			}
+				if (auto err = ConfigurePort(xhc, port)) {
+					plogerro("Failed to configure port: %s at %s:%d", err.Name(), err.File(), err.Line());
+					continue;                                                                                                                
+				}
 			}
 		}
 		::xhc = &xhc;
-		enInterrupt(true);
+		APIC.enAble(true);
 		
 
-		// ploginfo("Kernel Ready");
-		// loop if (auto err = usb::xhci::ProcessEvent(xhc)) {
-		// 	plogerro("Error while ProcessEvent: %s at %s:%d", err.Name(), err.File(), err.Line());
-		// }
-		loop;
+		ploginfo("Kernel Ready");
 	}
 
-	loop _ASM("hlt");
+	while (true) {
+		APIC.enAble(false);
+		if (!message_queue->Count()) {
+			APIC.enAble(true);
+			HALT();
+			continue;
+		}
+		Message msg;
+		message_queue->Dequeue(msg);
+		APIC.enAble(true);
+		switch (msg.type) {
+		case Message::RUPT_xHCI:
+			while (xhc->PrimaryEventRing()->HasFront()) {
+				if (auto err = ProcessEvent(*xhc)) {
+					plogerro("Error while ProcessEvent: %s at %s:%d", err.Name(), err.File(), err.Line());
+				}
+			}
+			break;
+		default:
+			plogerro("Unknown message type: %d", msg.type);
+			break;
+		}
+	}
 }
 
 // console.cpp

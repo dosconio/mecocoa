@@ -120,7 +120,7 @@ _sign_entry() {
 	// IVT and Device
 	InterruptControl GIC(_IMM(0x80000800));
 	GIC.Reset(SegCode);
-	GIC.enAble();
+	GIC.Init();
 	GIC[IRQ_PIT].setRange(mglb(Handint_PIT_Entry), SegCode); PIT_Init();
 	GIC[IRQ_RTC].setRange(mglb(Handint_RTC_Entry), SegCode); RTC_Init();
 	GIC[IRQ_Keyboard].setRange(mglb(Handint_KBD_Entry), SegCode); Keyboard_Init();
@@ -145,6 +145,8 @@ _sign_entry() {
 	TaskRegister((void*)&serv_dev_hd_loop, 1);
 	TaskRegister((void*)&serv_file_loop, 0);
 	TaskRegister((void*)&serv_task_loop, 0);// GDT operation
+
+	// GIC.enAble();
 	syscall(syscall_t::OUTC, 'O');// with effect InterruptEnable();
 	Console.OutFormat("hayouuu~!\a\n\r");
 

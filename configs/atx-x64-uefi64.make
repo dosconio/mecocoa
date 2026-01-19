@@ -39,6 +39,7 @@ asmfile=$(ulibpath)/asm/x64/inst/ioport.asm \
 cppfile=$(wildcard mecocoa/*.cpp) \
 	$(ulibpath)/cpp/stream.cpp \
 	$(ulibpath)/cpp/interrupt.cpp \
+	$(ulibpath)/cpp/lango/lango-cpp.cpp \
 	$(ulibpath)/cpp/Device/Bus/PCI.cpp \
 	$(ulibpath)/cpp/Device/USB/USB-Device.cpp \
 	$(ulibpath)/cpp/Device/USB/xHCI/xHCI.cpp \

@@ -8,6 +8,7 @@
 #include <c/proctrl/RISCV/riscv.h>
 #include "../../include/qemuvirt-riscv.hpp"
 //
+#include <cpp/interrupt>
 #include <cpp/Device/UART>
 
 using namespace uni;
@@ -17,20 +18,85 @@ void schedule();
 void user_task0(void);
 void user_task1(void);
 
+_ESYM_C void trap_vector();
+void external_interrupt_handler();
+
+_ESYM_C
+stduint trap_handler(stduint epc, stduint cause)
+{
+	stduint return_pc = epc;
+	stduint cause_code = cause & MCAUSE_MASK_ECODE;
+	if (cause & MCAUSE_MASK_INTERRUPT) {
+		/* Asynchronous trap - interrupt */
+		switch (cause_code) {
+		case 3:
+			plogwarn("software interruption!\n");
+			break;
+		case 7:
+			plogwarn("timer interruption!");
+			break;
+		case 11:
+			ploginfo("external interruption!");
+			external_interrupt_handler();
+			break;
+		default:
+			plogwarn("Unknown async exception! Code = 0x%[x]", cause_code);
+			break;
+		}
+	} else { // Synchronous trap - exception
+		plogerro("Sync exceptions! Code = 0x%[x]", cause_code);
+		//return_pc += sizeof(stduint);// if skip the instruction which cause the exception
+		// Test: *(int *)0x00000000 = 100; // #7 Store/AMO access fault
+		// Test: a = *(int *)0x00000000;   // #5 Load access fault
+		while (1);
+	}
+	return return_pc;
+}
+
+void external_interrupt_handler()
+{
+	Request_t irq = InterruptControl::getLastRequest();
+	if (irq == IRQ_UART0) {
+		int ch;
+		UART0 >> ch;
+		UART0 << ch;
+	}
+	else if (irq) {
+		plogerro("not considered interrupt %d\n", irq);
+	}
+	if (irq) {
+		InterruptControl::setLastRequest(irq);
+	}
+}
+
 extern "C"
 void _entry()
 {
 	_preprocess();
 	//[!] cannot use FLOATING operation (why)
 	UART0.setMode(115200);
-	UART0.OutFormat("Hello Mcca-RV%u~ =OwO=\n", __BITS__);
+	ploginfo("Hello Mcca-RV%u~ =OwO=", __BITS__);
 
+	// Interrupt
+	InterruptControl PLIC _IMM(trap_vector);
+	PLIC.Reset();
+
+	UART0.enInterrupt();
+	UART0.setInterruptPriority(1, nil);
+
+	PLIC.enAble(true);
+
+	// Task
 	setMSCRATCH(0);
 	task_create(user_task0);
 	task_create(user_task1);
 	schedule();
 
 	while (1);
+}
+_ESYM_C
+void outtxt(const char* str, stduint len) {
+	for0(i, len) UART0.OutChar(str[i]);
 }
 
 _ESYM_C void switch_to(TaskContext *next);

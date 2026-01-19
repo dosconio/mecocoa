@@ -11,7 +11,7 @@ RM = rm -rf
 GPREF   = riscv64-unknown-elf-
 CFLAGS += -nostdlib -fno-builtin  -Wall -Wno-unused-variable -Wno-unused-function -Wno-parentheses # -g
 CFLAGS += -march=rv64g -mabi=lp64 -mcmodel=medany
-CFLAGS += -I$(uincpath) -D_MCCA=0x1064 -D_HIS_IMPLEMENT# 1064 for RV64
+CFLAGS += -I$(uincpath) -D_MCCA=0x1064 -D_HIS_IMPLEMENT -D_DEBUG # 1064 for RV64
 G_DBG   = gdb-multiarch
 CC      = ${GPREF}gcc
 CX      = ${GPREF}g++
@@ -33,10 +33,15 @@ asmobjs=$(patsubst %S, %o, $(asmfile))
 cppfile=$(wildcard prehost/qemuvirt-r32/*.cpp) \
 	$(ulibpath)/cpp/lango/lango-cpp.cpp \
 	$(ulibpath)/cpp/stream.cpp \
+	$(ulibpath)/cpp/interrupt.cpp \
+	$(ulibpath)/cpp/Device/PLIC.cpp \
 	$(ulibpath)/cpp/Device/UART.cpp \
 	
 cppobjs=$(patsubst %cpp, %o, $(cppfile))
-cplfile=$(ulibpath)/c/mcore.c
+cplfile=$(ulibpath)/c/mcore.c \
+	$(ulibpath)/c/debug.c \
+	$(ulibpath)/c/console/conformat.c \
+
 cplobjs=$(patsubst %c, %o, $(cplfile))
 
 elf_kernel=mcca-$(arch).elf

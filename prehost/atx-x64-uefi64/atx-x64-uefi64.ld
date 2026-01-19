@@ -37,4 +37,13 @@ SECTIONS
 	.rodata : {
 		*(.rodata)
 	} > RAM :rodata
+
+	/* C++ only */
+	. = ALIGN(8);
+	.init_array : {
+	__init_array_start = .;
+		KEEP(*(SORT(.init_array.*)))
+		KEEP(*(.init_array))
+	__init_array_end = .;
+	} > RAM :data
 }

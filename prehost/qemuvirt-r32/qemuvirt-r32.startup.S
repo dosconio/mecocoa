@@ -36,6 +36,30 @@ park:
 	WFI 	#== x86: HLT
 	J		park
 
+# ---- ---- HANDLER ---- ----
+
+# in machine mode
+.globl trap_vector
+# the trap vector base address must always be aligned on a 4-byte boundary
+.balign 4
+trap_vector:
+	# save context(registers).
+	csrrw	t6, mscratch, t6    # xchg t6 and mscratch
+	reg_save t6
+	# save the actual t6 register, which we swapped into mscratch
+	mv	t5, t6                  # t5 points to the context of current task
+	csrr	t6, mscratch        # read t6 back from mscratch
+	STORE	t6, 30*SIZE_REG(t5) # save t6 with t5 as base
+	csrw	mscratch, t5        # restore the context pointer into mscratch
+	# call the C trap handler
+	csrr	a0, mepc
+	csrr	a1, mcause
+	call	trap_handler # return the return address via a0
+	csrw	mepc, a0
+	csrr	t6, mscratch # restore context(registers).
+	reg_restore t6
+	mret
+
 # ---- ---- TASKMAN ---- ----
 
 # ---- void switch_to(struct context *next);
