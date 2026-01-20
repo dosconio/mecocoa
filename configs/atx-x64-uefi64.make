@@ -66,9 +66,8 @@ sudokey=k
 
 .PHONY : build
 build: clean $(ubinpath)/$(arch).img $(asmobjs) $(cppobjs) $(cplobjs)
-	#echo [building] MCCA for $(arch)
-	@echo AR $(elf_kernel)
-	@ar -rcs $(uobjpath)/mcca-$(arch)/lib$(elf_kernel).a $(uobjpath)/mcca-$(arch)/*
+# 	@echo AR $(elf_kernel)
+# 	@ar -rcs $(uobjpath)/mcca-$(arch)/lib$(elf_kernel).a $(uobjpath)/mcca-$(arch)/*
 	@echo MK $(elf_kernel)
 	$(CX) $(XFLAGS) \
 		-T prehost/$(arch)/$(arch).ld -o $(ubinpath)/$(elf_kernel) \

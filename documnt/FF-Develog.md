@@ -47,7 +47,7 @@ qemu-system
 🈚️ qemu-system-avr
 🈚️ qemu-system-cris
 🈚️ qemu-system-hppa
-✅ qemu-system-i386
+✅ qemu-system-i386          atx-flap32
 🈚️ qemu-system-loongarch64
 🈚️ qemu-system-m68k
 🈚️ qemu-system-microblaze
@@ -60,8 +60,8 @@ qemu-system
 🈚️ qemu-system-or1k
 🈚️ qemu-system-ppc
 🈚️ qemu-system-ppc64
-✅ qemu-system-riscv32
-✅ qemu-system-riscv64
+✅ qemu-system-riscv32       virt
+✅ qemu-system-riscv64       virt
 🈚️ qemu-system-rx
 🈚️ qemu-system-s390x
 🈚️ qemu-system-sh4
@@ -69,7 +69,7 @@ qemu-system
 🈚️ qemu-system-sparc
 🈚️ qemu-system-sparc64
 🈚️ qemu-system-tricore
-✅ qemu-system-x86_64
+✅ qemu-system-x86_64        atx-(uefi,long)
 🈚️ qemu-system-xtensa
 🈚️ qemu-system-xtensaeb
 ```

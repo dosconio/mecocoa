@@ -17,30 +17,34 @@ statin void clear_bss() { MemSet(&BSS_ENTO, &BSS_ENDO - &BSS_ENTO, 0); }
 
 void temp_init() {
 	_logstyle = _LOG_STYLE_NONE;
-	_pref_info = "[Mecocoa] ";
+	_pref_info = "[Mecocoa]";
 }
-
-// HDISK + FAT + ELF with fixed name "mx86.elf"
-//{TODO} make lighter boot for Partition Table
 
 OstreamTrait* con0_out;// TTY0
 
+// use before loading elf-kernel
 #define ROOT_DEV_FAT0 (MINOR_hd6a + 2)
-#define single_sector  ((byte*)0x100000)
-#define fatable_sector ((byte*)0x101000)
-#define hdinfo_addr   0x110000
+#define single_sector  ((byte*)0x8000)
+#define fatable_sector ((byte*)0x9000)
+#define hdinfo_addr    ((byte*)0xA000)
+#define kernel_addr    ((byte*)0x100000)
+#define paging_addr    ((byte*)0x200000)
+
 static FAT_FileHandle filhan;
 Harddisk_PATA* pdisk;
 
 _ESYM_C uint64 GDT64[]{
 	nil,
-	0x0000920000000000ull,// data 64, +RW
+	0x000F92000000FFFFull,// data 64, +RW
 	0x0020980000000000ull,// code 64,   X
 };// no address and limit for x64
 
+_ESYM_C void B32_LoadMod64();
+_ESYM_C void (*entry_kernel)() = nullptr;
+
 void body() {
+	bool support_ia32e = false;
 	temp_init();
-	void (*entry_kernel)();
 	BareConsole Console(80, 50, _VIDEO_ADDR_BUFFER); con0_out = &Console;
 	Console.setShowY(0, 25);
 	printlog(_LOG_INFO, "Loading Kernel...");
@@ -59,16 +63,28 @@ void body() {
 	if (!pfs_fat0.loadfs()) {
 		plogerro("FAT0 loadfs failed"); _ASM("hlt");
 	}
-
+	
+	// HDISK + FAT + ELF
 	// if   mx64.elf exists, load, switch to IA-32e and transfer to mx64.elf
 	// elif mx86.elf exists, load, transfer to mx86.elf
-
-	if (FAT_FileHandle* han = (FAT_FileHandle*)pfs_fat0.search("mx86.elf", &a)) {
-		printlog(_LOG_INFO, "Found: flap32");
-		pfs_fat0.readfl(han, Slice{ 0,han->size }, (byte*)0x120000);
+	support_ia32e = IfSupport_IA32E();
+	ploginfo("[IA32E] %s", support_ia32e ? "Supported" : "No");
+	if (support_ia32e && pfs_fat0.search("mx64.elf", &a)) {
+		printlog(_LOG_INFO, "Found: long64");
+		pfs_fat0.readfl(&filhan, Slice{ 0,filhan.size }, kernel_addr);
 	}
-	
-	ELF32_LoadExecFromMemory((void*)0x120000, (void**)&entry_kernel);
+	else if (pfs_fat0.search("mx86.elf", &a)) {
+		printlog(_LOG_INFO, "Found: flap32");
+		support_ia32e = false;
+		pfs_fat0.readfl(&filhan, Slice{ 0,filhan.size }, kernel_addr);
+	}
+	else {
+		printlog(_LOG_ERROR, "Kernel not found");
+		_ASM("HLT");
+	}
+
+	if (!support_ia32e) ELF32_LoadExecFromMemory(kernel_addr, (void**)&entry_kernel);
+	else ELF64_LoadExecFromMemory(kernel_addr, (void**)&entry_kernel);
 	printlog(_LOG_INFO, "Transfer to Kernel at 0x%[32H]", entry_kernel);
 
 	if (!entry_kernel) {
@@ -77,15 +93,23 @@ void body() {
 	}
 
 	// (noreturn) switch to IA-32e or not
-
-	// _ASM("HLT");
+	if (support_ia32e) {
+		// Make Temp Paging
+		Letvar(paging, uint64*, paging_addr);
+		paging[0x800 / sizeof(uint64)] = paging[0] = _IMM(paging_addr) + 0x1007;
+		paging[0x1000 / sizeof(uint64)] = _IMM(paging_addr) + 0x2007;
+		for0(i, 6) paging[0x2000 / sizeof(uint64) + i] = 0x200000 * i + 0x83;
+		B32_LoadMod64();
+		_ASM("HLT");
+	}
 
 	_ASM volatile ("movl %0, %%edx": : "r"(entry_kernel));
 	_ASM volatile ("movl $0x46494E41, %eax");// LE FINA
 	_ASM volatile ("jmp  *%edx");// entry_kernel();// noreturn
 }
+
 _sign_entry() {
-	__asm("movl $0x200000, %esp");
+	__asm("movl $0x70000, %esp");
 	clear_bss();
 	body();
 }

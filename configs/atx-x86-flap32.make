@@ -13,7 +13,7 @@ mnts=/mnt/floppy
 arch=atx-x86-flap32
 flag=-D_MCCA=0x8632 -D_ARC_x86=5 -D_DEBUG 
 
-qemu=qemu-system-i386
+qemu=qemu-system-i386 # not support ia32e
 bochd=C:/Soft/Bochs-2.7/bochsdbg.exe
 
 COMWAN = -Wno-builtin-declaration-mismatch
@@ -44,14 +44,18 @@ elf_kernel=I686/mecocoa/mcca-$(arch).elf
 
 build: clean lib $(cppobjs)
 	@echo "MK $(arch) real16 support"
-	aasm prehost/$(arch)/atx-x86-cppweaks.asm -felf -o $(uobjpath)/mcca-$(arch)/mcca-$(arch)-elf16.o
+	aasm prehost/$(arch)/atx-x86-cppweaks.asm -felf   -o $(uobjpath)/mcca-$(arch)/mcca-$(arch)-elf16.o
+	aasm prehost/$(arch)/atx-x86-loader.asm -felf     -o $(uobjpath)/mcca-$(arch)/mcca-$(arch)-elf64.o
 	@echo "MK $(arch) loader"
-	g++ -I$(uincpath) $(flag) -m32 prehost/$(arch)/$(arch).loader.cpp prehost/$(arch)/$(arch).auf.cpp $(uobjpath)/CGMin32/_ae_manage.o\
+	g++ -I$(uincpath) $(flag) -m32 prehost/$(arch)/$(arch).loader.cpp \
+		prehost/$(arch)/$(arch).auf.cpp $(uobjpath)/mcca-$(arch)/mcca-$(arch)-elf64.o $(uobjpath)/CGMin32/_ae_manage.o\
 		-o $(ubinpath)/$(elf_loader) -L$(ubinpath) -lm32d $(CXF) \
 		-T prehost/$(arch)/$(arch).loader.ld  \
 		-nostartfiles -O0 \
 		-Wl,-Map=$(ubinpath)/$(elf_loader).map
 	strip --strip-all $(ubinpath)/$(elf_loader)
+	rm $(uobjpath)/mcca-$(arch)/mcca-$(arch)-elf64.o
+	#
 	@echo "MK $(arch)"
 	$(CX) prehost/$(arch)/grubhead.S -o $(uobjpath)/mcca-$(arch).grub.o
 	g++ -I$(uincpath) $(flag) -m32 $(uobjpath)/mcca-$(arch).grub.o $(ker_mod) prehost/$(arch)/$(arch).cpp prehost/$(arch)/$(arch).auf.cpp -o $(ubinpath)/$(elf_kernel) -L$(ubinpath) -lm32d $(CXF) \
@@ -114,7 +118,7 @@ run-only:
 	$(qemu) \
 		-drive format=raw,file=$(outs),if=floppy \
 		-boot order=a -m 32\
-		-drive file=$(ubinpath)/fixed.vhd,format=vpc,if=none,id=disk0 \
+		-drive file=$(ubinpath)/fixed1.vhd,format=vpc,if=none,id=disk0 \
 		-device ide-hd,drive=disk0,bus=ide.0,unit=0 \
 		-drive file=$(ubinpath)/fixed2.vhd,format=vpc,if=none,id=disk1 \
 		-device ide-hd,drive=disk1,bus=ide.0,unit=1 \
@@ -122,7 +126,7 @@ run-only:
 		-enable-kvm -cpu host || $(qemu) \
 		-drive format=raw,file=$(outs),if=floppy \
 		-boot order=a -m 32\
-		-drive file=$(ubinpath)/fixed.vhd,format=vpc,if=none,id=disk0 \
+		-drive file=$(ubinpath)/fixed1.vhd,format=vpc,if=none,id=disk0 \
 		-device ide-hd,drive=disk0,bus=ide.0,unit=0 \
 		-drive file=$(ubinpath)/fixed2.vhd,format=vpc,if=none,id=disk1 \
 		-device ide-hd,drive=disk1,bus=ide.0,unit=1 \

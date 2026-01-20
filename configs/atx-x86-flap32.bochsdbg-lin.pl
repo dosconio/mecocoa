@@ -25,7 +25,7 @@ print "vgaromimage: file=\"${a}VGABIOS-lgpl-latest.bin\"\n";
 print "# Disk\n";
 print "floppya: type=1_44, 1_44=\"${floimg}\", status=inserted, write_protected=0\n";
 print "ata0: enabled=true, ioaddr1=0x1f0, ioaddr2=0x3f0, irq=14\n";
-print "ata0-master: type=disk, path=\"${ubinpath}/fixed.vhd\", mode=flat, cylinders=32, heads=2, spt=32, sect_size=512, model=\"Generic 1234\", biosdetect=auto, translation=lba\n";
+print "ata0-master: type=disk, path=\"${ubinpath}/fixed1.vhd\", mode=flat, cylinders=32, heads=2, spt=32, sect_size=512, model=\"Generic 1234\", biosdetect=auto, translation=lba\n";
 print "ata0-slave: type=disk, path=\"${ubinpath}/fixed2.vhd\", mode=flat, cylinders=162, heads=16, spt=32, sect_size=512, model=\"Generic 1234\", biosdetect=auto, translation=lba\n";
 
 print "# Bootstrap\n";
