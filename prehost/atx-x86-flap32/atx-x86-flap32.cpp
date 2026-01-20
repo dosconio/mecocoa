@@ -119,14 +119,14 @@ _sign_entry() {
 
 	// IVT and Device
 	InterruptControl GIC(_IMM(0x80000800));
-	GIC.Reset(SegCode);
+	GIC.Reset(SegCo32);
 	GIC.Init();
-	GIC[IRQ_PIT].setRange(mglb(Handint_PIT_Entry), SegCode); PIT_Init();
-	GIC[IRQ_RTC].setRange(mglb(Handint_RTC_Entry), SegCode); RTC_Init();
-	GIC[IRQ_Keyboard].setRange(mglb(Handint_KBD_Entry), SegCode); Keyboard_Init();
-	GIC[IRQ_PS2_Mouse].setRange(mglb(Handint_MOU_Entry), SegCode); Mouse_Init();
-	GIC[IRQ_ATA_DISK0].setRange(mglb(Handint_HDD_Entry), SegCode); DEV_Init();
-	GIC[IRQ_SYSCALL].setRange(mglb(call_intr), SegCode); GIC[IRQ_SYSCALL].DPL = 3;
+	GIC[IRQ_PIT].setRange(mglb(Handint_PIT_Entry), SegCo32); PIT_Init();
+	GIC[IRQ_RTC].setRange(mglb(Handint_RTC_Entry), SegCo32); RTC_Init();
+	GIC[IRQ_Keyboard].setRange(mglb(Handint_KBD_Entry), SegCo32); Keyboard_Init();
+	GIC[IRQ_PS2_Mouse].setRange(mglb(Handint_MOU_Entry), SegCo32); Mouse_Init();
+	GIC[IRQ_ATA_DISK0].setRange(mglb(Handint_HDD_Entry), SegCo32); DEV_Init();
+	GIC[IRQ_SYSCALL].setRange(mglb(call_intr), SegCo32); GIC[IRQ_SYSCALL].DPL = 3;
 	
 	if (opt_test) __asm("ud2");
 

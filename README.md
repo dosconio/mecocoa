@@ -44,7 +44,8 @@ CISC `VMBox/VMware/Bochs/QEMU/TODO(Simics,Wel)`
 	- **run**
 		- **virtual**: VMware, VMBox, Bochs, qemu-system-i386(9.2.4)
 	- **build**
-		- `make lib`; `make` `make run`
+		- `make` -> mx32.elf
+		- `make install -f configs/atx-x86-flap32.make` for grub bootstraps
 	- **mode**: *real16*, *flap32*
 - `x64 0x8664` AMD64
 	- ① LONG: BIOS(TODO) 
@@ -52,9 +53,9 @@ CISC `VMBox/VMware/Bochs/QEMU/TODO(Simics,Wel)`
 	- **run**
 		- **virtual**: VMware(!Mouse), VMBox(!Mouse), qemu-system-x86_64
 	- **build**
-		- `arch=atx-x64-long64 make`
-		- `arch=atx-x64-uefi64 make`
-	- **mode**: *long64*(IA-32e, if CPU support)
+		- `arch=atx-x64-long64 make` -> mx64.elf
+		- `arch=atx-x64-uefi64 make` -> ux64.elf
+	- **mode**: *long64*(IA-32e, not IA-64, if CPU support)
 	
 RISC `Fizik`
 - `r32 0x1032` RISC-V32

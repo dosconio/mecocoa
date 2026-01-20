@@ -7,8 +7,6 @@
 
 #define statin static inline
 #define _sign_entry() extern "C" void _start()
-// #define _sign_entry() int main()
-// #define _sign_entry() extern "C" void start()
 
 use crate uni;
 
@@ -34,26 +32,11 @@ struct mecocoa_global_t {
 };
 statin mecocoa_global_t* mecocoa_global{ (mecocoa_global_t*)0x500 };
 
-enum {
-	SegNull = 8 * 0,
-	SegData = 8 * 1,// R3 is OK
-	SegCode = 8 * 2,
-	SegCall = 8 * 3,
-	SegCo16 = 8 * 4,
-	SegTSS = 8 * 5,
-	// SegCodeR3 = 8 * 6,
-	// SegDataR3 = 8 * 7,
-	// LDT_App1, TSS_App1, LDT_App2, TSS_App2, ...
-};
-
-
-
 #define mapglb(x) (*(usize*)&(x) |= 0x80000000)
 #define mglb(x) (_IMM(x) | 0x80000000)
 
 extern bool opt_info;
 extern bool opt_test;
-
 extern bool ento_gui;
 
 // ---- handler

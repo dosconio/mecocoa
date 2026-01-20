@@ -69,7 +69,7 @@ void Handint_RTC()
 OstreamTrait* kbd_out;
 QueueLimited* queue_mouse;
 void Handint_KBD() {
-	asserv(kbd_out)->OutChar(innpb(PORT_KBD_BUFFER));
+	asserv(kbd_out)->OutChar(innpb(PORT_KEYBOARD_DAT));
 }
 static bool fa_mouse = false;
 static byte mouse_buf[4] = { 0 };
@@ -85,18 +85,18 @@ static void process_mouse(byte ch) {
 	}
 }
 void Handint_MOU() {
-	byte state = innpb(KEYBOARD_CMD);
+	byte state = innpb(PORT_KEYBOARD_CMD);
 	if (state & 0x20); else return;//{} check AUX, give KBD
-	byte ch = innpb(PORT_KBD_BUFFER);
+	byte ch = innpb(PORT_KEYBOARD_DAT);
 	// if (ch != (byte)0xFA)// 0xFA is ready signal
 	if (!fa_mouse && ch == (byte)0xFA) {
 		fa_mouse = true;
 		return;
 	}
 	process_mouse(ch);// asserv(queue_mouse)->OutChar(ch);
-	while ((innpb(KEYBOARD_CMD) & 0x21) == 0x21)// 0x01 for OBF, 0x20 for AUX
+	while ((innpb(PORT_KEYBOARD_CMD) & 0x21) == 0x21)// 0x01 for OBF, 0x20 for AUX
 	{
-		process_mouse(innpb(PORT_KBD_BUFFER));
+		process_mouse(innpb(PORT_KEYBOARD_DAT));
 	}
 	// ! XX-7F-81 problem
 }

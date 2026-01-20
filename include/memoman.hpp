@@ -8,6 +8,33 @@
 #include <c/system/paging.h>
 #include <cpp/string>
 
+#if (_MCCA & 0xFF00) == 0x8600
+
+/*
+*  00 NULL
+*  01 Data 16/32/64
+*  02 Code 32
+*  03 Call
+*  04 Code 16
+*  05 Code 64
+*  .. TSS and LDT
+*/
+enum {
+	SegNull = 8 * 0,
+	SegData = 8 * 1,
+	SegCo32 = 8 * 2,
+	SegCall = 8 * 3,
+	SegCo16 = 8 * 4,
+	#if __BITS__ == 64
+	SegCo64 = 8 * 5,
+	#elif __BITS__ == 32
+	SegTSS = 8 * 5,
+	// LDT_App1, TSS_App1, LDT_App2, TSS_App2, ...
+	#endif
+};
+
+#endif
+
 #ifdef _ARC_x86 // x86 and ... 32bit
 
 extern "C" byte BSS_ENTO, BSS_ENDO;

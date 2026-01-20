@@ -26,7 +26,7 @@ static byte _b_vcon0[byteof(VideoConsole)];
 VideoConsole* vcon0;
 
 extern "C" byte BSS_ENTO, BSS_ENDO;
-FrameBufferConfig config_graph;
+
 
 struct Message {
 	enum Type {
@@ -100,13 +100,57 @@ void IntHandlerXHCI(InterruptFrame* frame) {
 	sendEOI();
 }
 
+alignas(16) byte kernel_stack[1024 * 1024];
 
-extern "C" //__attribute__((ms_abi))
-void _entry(const UefiData& uefi_data)
-{
+UefiData uefi_data;
+MemoryMap memory_map;
+
+FrameBufferConfig config_graph;
+
+_ESYM_C void init(const UefiData& uefi_data_ref, const MemoryMap& memory_map_ref) {
+	uefi_data = uefi_data_ref;
+	memory_map = memory_map_ref;
 	MemSet(&BSS_ENTO, &BSS_ENDO - &BSS_ENTO, 0);
 	_preprocess();
+}
 
+// ---- Paging
+/** @brief 静的に確保するPageDirectoryの個数
+ *
+ * この定数は SetupIdentityPageMap で使用される．
+ * 1 つのPageDirectoryには 512 個の 2MiB ページを設定できるので，
+ * kPageDirectoryCount x 1GiB の仮想アドレスがマッピングされることになる．
+ */
+const size_t kPageDirectoryCount = 64;
+
+namespace {
+	const uint64_t kPageSize4K = 4096;
+	const uint64_t kPageSize2M = 512 * kPageSize4K;
+	const uint64_t kPageSize1G = 512 * kPageSize2M;
+	//
+	alignas(kPageSize4K) std::array<uint64_t, 512> pml4_table;
+	alignas(kPageSize4K) std::array<uint64_t, 512> pdp_table;
+	alignas(kPageSize4K) std::array<std::array<uint64_t, 512>, kPageDirectoryCount> page_directory;
+}
+
+void SetupIdentityPageTable() {
+	pml4_table[0] = reinterpret_cast<uint64_t>(&pdp_table[0]) | 0x003;
+	for (int i_pdpt = 0; i_pdpt < page_directory.size(); ++i_pdpt) {
+		pdp_table[i_pdpt] = reinterpret_cast<uint64_t>(&page_directory[i_pdpt]) | 0x003;
+		for (int i_pd = 0; i_pd < 512; ++i_pd) {
+			page_directory[i_pdpt][i_pd] = i_pdpt * kPageSize1G + i_pd * kPageSize2M | 0x083;
+		}
+	}
+	setCR3(_IMM(&pml4_table[0]));
+}
+
+// ---- Kernel
+
+extern "C" //__attribute__((ms_abi))
+void mecocoa()
+{
+	stduint rsp;
+	_ASM("mov %%rsp, %0" : "=r"(rsp));
 	config_graph = uefi_data;
 
 	GloScreenARGB8888 vga_ARGB8888;
@@ -114,12 +158,8 @@ void _entry(const UefiData& uefi_data)
 	VideoControlInterface* screen;
 
 	switch (uefi_data.pixel_format) {
-	case PixelFormat::ARGB8888:
-		screen = (&vga_ARGB8888);
-		break;
-	case PixelFormat::ABGR8888:
-		screen = &vga_ABGR8888;
-		break;
+	case PixelFormat::ARGB8888: screen = &vga_ARGB8888; break;
+	case PixelFormat::ABGR8888: screen = &vga_ABGR8888; break;
 	default:
 		loop _ASM("hlt");
 	}
@@ -135,11 +175,29 @@ void _entry(const UefiData& uefi_data)
 	vcon0->backcolor = Color::White;
 	vcon0->forecolor = Color::Black;
 	vcon0->Clear();
-	ploginfo("Ciallo %lf", 2025.09);
+	ploginfo("Ciallo %lf, rsp=%[x]", 2025.09, rsp);
+
+	// Platform and Memory
+	GDT_Init();
+	setDSAll(0);
+	setCSSS(SegCo64, SegData);
+	SetupIdentityPageTable();
+	for (uintptr_t iter = reinterpret_cast<uintptr_t>(memory_map.buffer);
+		iter < reinterpret_cast<uintptr_t>(memory_map.buffer) + memory_map.map_size;
+		iter += memory_map.descriptor_size) {
+		auto desc = reinterpret_cast<MemoryDescriptor*>(iter);
+		if (MemIsAvailable((MemoryType)desc->type)) {
+			// ploginfo("type = %u, %[x]..%[x], attr=0x%[x]",
+			// 	desc->type,
+			// 	desc->physical_start,
+			// 	desc->physical_start + desc->number_of_pages * 4096,
+			// 	desc->attribute);
+		}
+	}
 
 	// IVT and Device
 	InterruptControl APIC(_IMM(idt));
-	APIC.Reset(getCS());
+	APIC.Reset(SegCo64);
 
 	// Message Queue
 	Queue<Message> msg_queue(_BUF_Message, numsof(_BUF_Message));
@@ -179,7 +237,7 @@ void _entry(const UefiData& uefi_data)
 		// setting interrupt of xHC
 		//{TODO}  use APIC
 		auto& xchi_idt_entry = idt[InterruptVector::xHCI];
-		xchi_idt_entry.setModeRupt(reinterpret_cast<uint64>(IntHandlerXHCI), getCS());
+		xchi_idt_entry.setModeRupt(reinterpret_cast<uint64>(IntHandlerXHCI), SegCo64);
 		loadIDT(_IMM(idt), sizeof(idt) - 1);
 		// config MSI
 		const uint8_t bsp_local_apic_id = treat<uint32>_IMM(0xFEE00020) >> 24;// or STI is useless -- Phina 20260117

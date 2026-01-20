@@ -13,7 +13,7 @@ RM = rm -rf
 GPREF   = #riscv64-unknown-elf-
 CFLAGS += -nostdlib -fno-builtin -z norelro -nostdlib -fno-builtin
 CFLAGS += --static -mno-red-zone -m64  -O0
-CFLAGS += -I$(uincpath) -D_MCCA=0x8664 -D_HIS_IMPLEMENT -D_DEBUG
+CFLAGS += -I$(uincpath) -D_MCCA=0x8664 -D_MUEFI -D_HIS_IMPLEMENT -D_DEBUG
 CFLAGS += -fno-strict-aliasing -fno-exceptions -ffreestanding # -Wall -fno-pie
 XFLAGS  = $(CFLAGS) -fno-rtti -std=c++23
 G_DBG   = gdb-multiarch
@@ -34,7 +34,8 @@ LDFLAGS = -T $(LDFILE)
 #
 asmfile=$(ulibpath)/asm/x64/inst/ioport.asm \
 	$(ulibpath)/asm/x64/inst/manage.asm \
-	$(ulibpath)/asm/x64/inst/interrupt.asm
+	$(ulibpath)/asm/x64/inst/interrupt.asm \
+	prehost/$(arch)/atx-x64.asm
 
 cppfile=$(wildcard mecocoa/*.cpp) \
 	$(ulibpath)/cpp/stream.cpp \
@@ -66,14 +67,16 @@ sudokey=k
 .PHONY : build
 build: clean $(ubinpath)/$(arch).img $(asmobjs) $(cppobjs) $(cplobjs)
 	#echo [building] MCCA for $(arch)
-# 	@echo AR $(elf_kernel)
-# 	@ar -rcs $(uobjpath)/mcca-$(arch)/lib$(elf_kernel).a $(uobjpath)/mcca-$(arch)/*
+	@echo AR $(elf_kernel)
+	@ar -rcs $(uobjpath)/mcca-$(arch)/lib$(elf_kernel).a $(uobjpath)/mcca-$(arch)/*
 	@echo MK $(elf_kernel)
 	$(CX) $(XFLAGS) \
-		prehost/$(arch)/$(arch).cpp -T prehost/$(arch)/$(arch).ld -o $(ubinpath)/$(elf_kernel) \
+		-T prehost/$(arch)/$(arch).ld -o $(ubinpath)/$(elf_kernel) \
 		-Wl,-Map=$(ubinpath)/$(elf_kernel).map \
-		$(uobjpath)/mcca-$(arch)/*
-#		-L $(uobjpath)/mcca-$(arch) -l$(elf_kernel)
+		prehost/$(arch)/$(arch).cpp \
+		$(uobjpath)/mcca-$(arch)/*.o \
+
+# 		-L $(uobjpath)/mcca-$(arch) -l$(elf_kernel)
 		
 
 	# OUTDATED # prehost/$(arch)/script-adapt.sh ~/_obj/$(elf_kernel) $(ubinpath)/$(elf_kernel)

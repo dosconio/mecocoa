@@ -2,12 +2,12 @@ ENTRY(_start) /* -e _start */
 
 MEMORY
 {
-	RAM1 (rwx) : ORIGIN = 0x1E00, LENGTH = 0x5E00 /* .. 0x7C00 */
+	RAM1 (rwx) : ORIGIN = 0x1000, LENGTH = 0x6C00 /* .. 0x7C00 */
 }
 
 SECTIONS
 {
-	. = 0x1E00;
+	. = 0x1000;
 	.text : {*(.text)}
 	.data : {
 		*(.data)

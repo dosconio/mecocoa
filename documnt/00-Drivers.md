@@ -17,6 +17,10 @@ her-note: false
 
 - Bus: **PCI**
 
+## RV qemuvirt
+
+- UART
+
 ### TODO
 
 - Floppy

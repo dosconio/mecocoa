@@ -375,9 +375,9 @@ _ESYM_C EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image_handle, EFI_SYSTEM_TABLE* Sy
 
 	
 	
-	typedef void (*entry_t)(UefiData*);
+	typedef void (*entry_t)(UefiData*, const struct MemoryMap*);
 	//((entry_t)entry_addr)(gop->Mode->FrameBufferBase, gop->Mode->FrameBufferSize);
-	((entry_t)entry_addr)(&config);
+	((entry_t)entry_addr)(&config, &memmap);
 
 	SystemTable->ConOut->OutputString(SystemTable->ConOut, L"\n\rOyasuminasaiii~\n\r");// Unreachable
 	while (1);

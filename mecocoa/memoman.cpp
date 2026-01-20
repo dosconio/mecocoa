@@ -351,7 +351,7 @@ extern "C" {
 
 #endif
 
-// ---- x86 ----
+// ---- GDT ----
 
 #ifdef _ARC_x86 // x86:
 
@@ -359,8 +359,8 @@ extern "C" void new_lgdt();
 
 static const uint32 gdt_magic[] = {
 	0x00000000, 0x00000000, // null
-	0x0000FFFF, 0x00CF9300, // data
-	0x0000FFFF, 0x00CF9B00, // code
+	0x0000FFFF, 0x00CF9200, // data
+	0x0000FFFF, 0x00CF9A00, // code
 	0x00000000, 0x00000000, // call
 	0x0000FFFF, 0x000F9A00, // code-16
 	0x00000000, 0x00008900, // tss
@@ -372,9 +372,9 @@ static const uint32 gdt_magic[] = {
 // previous GDT may be broken, omit __asm("sgdt _buf");
 void GDT_Init() {
 	MemCopyN(mecocoa_global->gdt_ptr, gdt_magic, sizeof(gdt_magic));
-	mecocoa_global->gdt_ptr->rout.setModeCall(_IMM(call_gate_entry()) | 0x80000000, SegCode);// 8*3 Call Gate
+	mecocoa_global->gdt_ptr->rout.setModeCall(_IMM(call_gate_entry()) | 0x80000000, SegCo32);// 8*3 Call Gate
 	loadGDT(_IMM(mecocoa_global->gdt_ptr), mecocoa_global->gdt_len = sizeof(mec_gdt) - 1);// physical address
-	jmpFar(_IMM(new_lgdt), SegCode);
+	jmpFar(_IMM(new_lgdt), SegCo32);
 	__asm("new_lgdt: mov $8, %eax;");
 	__asm("mov %eax, %ds; mov %eax, %es; mov %eax, %fs; mov %eax, %gs; mov %eax, %ss;");
 }
@@ -391,6 +391,23 @@ word GDT_Alloc() {
 }
 
 // No dynamic core
+
+#elif defined(_MCCA) && _MCCA == 0x8664
+
+static descriptor_t GDT64[16];
+static unsigned number_of_GDT64 = 6;
+
+void GDT_Init() {
+	GDT64[0]._data = nil;
+	Descriptor64SetData(&GDT64[1], (_CPU_descriptor_type)0x2, 0);// +RW
+	GDT64[1].setRange(0, 0xFFFFF);
+	//
+	Descriptor64SetCode(&GDT64[5], (_CPU_descriptor_type)10, 0);// ~XR
+	//
+	// ploginfo("GDT64[1] = 0x%[64H]", GDT64[1]._data);
+	// ploginfo("GDT64[5] = 0x%[64H]", GDT64[5]._data);
+	loadGDT(_IMM(&GDT64), sizeof(GDT64) * number_of_GDT64 - 1);
+}
 
 
 #endif

@@ -1,8 +1,6 @@
 // ASCII g++ TAB4 LF
-// Attribute: 
-// LastCheck: 20240218
-// AllAuthor: @dosconio
-// ModuTitle: Demonstration - ELF32-C++ x86 Bare-Metal
+// Docutitle: Loader for FLAP32 or LONG64
+// Codifiers: @dosconio, @ArinaMgk
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 #define _STYLE_RUST
 
@@ -34,7 +32,11 @@ OstreamTrait* con0_out;// TTY0
 static FAT_FileHandle filhan;
 Harddisk_PATA* pdisk;
 
-
+_ESYM_C uint64 GDT64[]{
+	nil,
+	0x0000920000000000ull,// data 64, +RW
+	0x0020980000000000ull,// code 64,   X
+};// no address and limit for x64
 
 void body() {
 	temp_init();
@@ -57,7 +59,12 @@ void body() {
 	if (!pfs_fat0.loadfs()) {
 		plogerro("FAT0 loadfs failed"); _ASM("hlt");
 	}
+
+	// if   mx64.elf exists, load, switch to IA-32e and transfer to mx64.elf
+	// elif mx86.elf exists, load, transfer to mx86.elf
+
 	if (FAT_FileHandle* han = (FAT_FileHandle*)pfs_fat0.search("mx86.elf", &a)) {
+		printlog(_LOG_INFO, "Found: flap32");
 		pfs_fat0.readfl(han, Slice{ 0,han->size }, (byte*)0x120000);
 	}
 	
@@ -68,10 +75,14 @@ void body() {
 		printlog(_LOG_WARN, "Kernel not found");
 		return;
 	}
+
+	// (noreturn) switch to IA-32e or not
+
+	// _ASM("HLT");
+
 	_ASM volatile ("movl %0, %%edx": : "r"(entry_kernel));
 	_ASM volatile ("movl $0x46494E41, %eax");// LE FINA
-	_ASM volatile ("jmp  *%edx");
-	// entry_kernel();// noreturn
+	_ASM volatile ("jmp  *%edx");// entry_kernel();// noreturn
 }
 _sign_entry() {
 	__asm("movl $0x200000, %esp");
