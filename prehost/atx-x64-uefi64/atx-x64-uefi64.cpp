@@ -187,11 +187,11 @@ void mecocoa()
 		iter += memory_map.descriptor_size) {
 		auto desc = reinterpret_cast<MemoryDescriptor*>(iter);
 		if (MemIsAvailable((MemoryType)desc->type)) {
-			// ploginfo("type = %u, %[x]..%[x], attr=0x%[x]",
-			// 	desc->type,
-			// 	desc->physical_start,
-			// 	desc->physical_start + desc->number_of_pages * 4096,
-			// 	desc->attribute);
+			ploginfo("type = %u, %[x]..%[x], attr=0x%[x]",
+				desc->type,
+				desc->physical_start,
+				desc->physical_start + desc->number_of_pages * 4096,
+				desc->attribute);
 		}
 	}
 

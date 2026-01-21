@@ -124,33 +124,19 @@ void switch_task() {
 */
 
 
-static void make_LDT(dword* ldt_alias, byte ring) {
-	//{TODO} Dynamic Stack Area
-	ldt_alias[0] = 0x00000000;
-	ldt_alias[1] = 0x00000000;
-
-	ldt_alias[2] = 0x0000FFFF;
-	ldt_alias[3] = FLAT_CODE_R3_PROP;
-	descriptor_t* code = (descriptor_t*)&ldt_alias[2];
-	code->DPL = ring;
-
-	ldt_alias[4] = 0x0000FFFF;
-	ldt_alias[5] = FLAT_DATA_R3_PROP;
-	descriptor_t* data = (descriptor_t*)&ldt_alias[4];
-	data->DPL = ring;
-
-	// kept for RONL
-	ldt_alias[6] = 0x00000000;
-	ldt_alias[7] = 0x00000000;
-
-	ldt_alias[8] = 0x0000FFFF;
-	ldt_alias[9] = FLAT_DATA_R0_PROP;
-	ldt_alias[10] = 0x0000FFFF;
-	ldt_alias[11] = FLAT_DATA_R1_PROP;
-	ldt_alias[12] = 0x0000FFFF;
-	ldt_alias[13] = FLAT_DATA_R2_PROP;
-	ldt_alias[14] = 0x0000FFFF;
-	ldt_alias[15] = FLAT_DATA_R3_PROP;
+static void make_LDT(descriptor_t* ldt_alias, byte ring) {
+	ldt_alias[0]._data = 0;
+	// code32
+	ldt_alias[1]._data = (uint64(FLAT_CODE_R3_PROP) << 32) | 0x0000FFFF;
+	ldt_alias[1].DPL = ring;
+	// data
+	ldt_alias[2]._data = (uint64(FLAT_DATA_R3_PROP) << 32) | 0x0000FFFF;
+	ldt_alias[2].DPL = ring;
+	ldt_alias[3]._data = 0;// kept for RONL
+	ldt_alias[4]._data = (uint64(FLAT_DATA_R0_PROP) << 32) | 0x0000FFFF;
+	ldt_alias[5]._data = (uint64(FLAT_DATA_R1_PROP) << 32) | 0x0000FFFF;
+	ldt_alias[6]._data = (uint64(FLAT_DATA_R2_PROP) << 32) | 0x0000FFFF;
+	ldt_alias[7]._data = (uint64(FLAT_DATA_R3_PROP) << 32) | 0x0000FFFF;
 	// EXPERIENCE: Although the stack segment is not Expand-down, the ESP always decreases. The property of GDTE is just for boundary check.
 	/*
 	normal stack:
@@ -191,12 +177,12 @@ ProcessBlock* TaskRegister(void* entry, byte ring)
 	TSS->CR3 = getCR3();
 	_TEMP if (ring == 3) {
 		pb->paging.Reset();
-		TSS->CR3 = _IMM(pb->paging.page_directory);
+		TSS->CR3 = _IMM(pb->paging.root_level_page);
 		pb->paging.MapWeak(0x00000000, 0x00000000, 0x00400000, true, _Comment(R0) true);//{TEMP}
 		pb->paging.MapWeak(0x80000000, 0x00000000, 0x00080000, true, _Comment(R0) false);// 0x80 pages
 	}
 	else {
-		pb->paging.page_directory = (PageDirectory*)TSS->CR3;
+		pb->paging.root_level_page = (PageDirectory*)TSS->CR3;
 	}
 
 	TSS->EIP = _IMM(entry);
@@ -242,7 +228,7 @@ ProcessBlock* TaskRegister(void* entry, byte ring)
 	Descriptor32Set(&GDT[LDTSelector], _IMM(LDT), TSS->LDTLength, _Dptr_LDT, 0, 0 /* is_sys */, 1 /* 32-b */, 0 /* not-4k */	);// [0x00408200]
 	Descriptor32Set(&GDT[TSSSelector], _IMM(TSS), sizeof(TSS_t)-1, _Dptr_TSS386_Available, 0, 0 /* is_sys */, 1 /* 32-b */, 0 /* not-4k */ );// TSS [0x00408900]
 
-	make_LDT((dword*)LDT, ring);
+	make_LDT(LDT, ring);
 
 	TSS->EFLAGS |= 0x0200;// IF
 	if (ring <= 1) TSS->EFLAGS |= _IMM1 << 12;
@@ -296,7 +282,7 @@ ProcessBlock* TaskLoad(BlockTrait* source, void* addr, byte ring)
 	// ---- CR3 Mapping ---- //
 	// keep 0x00000000 default empty page
 	pb->paging.Reset();
-	TSS->CR3 = _IMM(pb->paging.page_directory);
+	TSS->CR3 = _IMM(pb->paging.root_level_page);
 	pb->paging.Map(0x00001000, _IMM(page), allocsize, true, _Comment(R3) true);// PB&STACK
 	stduint kernel_size = _TEMP 0x00400000;
 	pb->paging.Map(0x80000000, 0x00000000, kernel_size, true, _Comment(R0) false);// should include LDT
@@ -380,7 +366,7 @@ ProcessBlock* TaskLoad(BlockTrait* source, void* addr, byte ring)
 	Descriptor32Set(&GDT[LDTSelector], _IMM(LDT) + 0x80000000, TSS->LDTLength, _Dptr_LDT, 0, 0 /* is_sys */, 1 /* 32-b */, 0 /* not-4k */	);// [0x00408200]
 	Descriptor32Set(&GDT[TSSSelector], _IMM(TSS) + 0x80000000, sizeof(TSS_t)-1, _Dptr_TSS386_Available, 0, 0 /* is_sys */, 1 /* 32-b */, 0 /* not-4k */ );// TSS [0x00408900]
 
-	make_LDT((dword*)LDT, ring);
+	make_LDT(LDT, ring);
 
 	cast<REG_FLAG_t>(TSS->EFLAGS).IF = 1;
 	if (ring <= 1) TSS->EFLAGS |= _IMM1 << 12;
@@ -429,7 +415,7 @@ static stduint task_fork(ProcessBlock* fo)
 	// - Kernel-Area Mapping
 	// - (TODO) Heap Area Mapping
 	pb->paging.Reset();
-	TSS->CR3 = _IMM(pb->paging.page_directory);
+	TSS->CR3 = _IMM(pb->paging.root_level_page);
 	pb->paging.Map(0x00001000, _IMM(page), allocsize, true, _Comment(R3) true);// PB&STACK
 	for0a(i, fo->load_slices) {
 		if (!fo->load_slices[i].length) break;
@@ -472,7 +458,7 @@ static stduint task_fork(ProcessBlock* fo)
 	Descriptor32Set(&GDT[TSSSelector], _IMM(TSS) + 0x80000000, sizeof(TSS_t)-1, _Dptr_TSS386_Available, 0, 0 /* is_sys */, 1 /* 32-b */, 0 /* not-4k */ );// TSS [0x00408900]
 
 
-	make_LDT((dword*)LDT, ring);
+	make_LDT(LDT, ring);
 
 	// ---- File ---- //
 	for0a(i, pb->pfiles) if (pb->pfiles[i]) {
@@ -486,6 +472,17 @@ static stduint task_fork(ProcessBlock* fo)
 	TaskAdd(pb);
 	return TSSSelector * 8;
 }
+
+/* dump
+
+for0(i, pnumber) {
+	Console.OutFormat("-- %u: (%u:%u) head %u, next %u, send_to_whom\n\r",
+		i, pblocks[i]->state, pblocks[i]->block_reason,
+		pblocks[i]->queue_send_queuehead, pblocks[i]->queue_send_queuenext);
+}
+break;
+
+*/
 
 
 static void cleanup(stduint pid)

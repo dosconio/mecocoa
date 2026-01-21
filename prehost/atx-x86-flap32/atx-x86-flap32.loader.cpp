@@ -33,21 +33,21 @@ OstreamTrait* con0_out;// TTY0
 static FAT_FileHandle filhan;
 Harddisk_PATA* pdisk;
 
-_ESYM_C uint64 GDT64[]{
+uint64 GDT64[]{
 	nil,
 	0x000F92000000FFFFull,// data 64, +RW
 	0x0020980000000000ull,// code 64,   X
 };// no address and limit for x64
 
+_ESYM_C void B32_LoadKer32();
 _ESYM_C void B32_LoadMod64();
-_ESYM_C void (*entry_kernel)() = nullptr;
+void (*entry_kernel)() = nullptr;
 
 void body() {
 	bool support_ia32e = false;
 	temp_init();
 	BareConsole Console(80, 50, _VIDEO_ADDR_BUFFER); con0_out = &Console;
 	Console.setShowY(0, 25);
-	printlog(_LOG_INFO, "Loading Kernel...");
 	Harddisk_PATA hdisk(0x01);
 	pdisk = &hdisk;
 
@@ -102,10 +102,7 @@ void body() {
 		B32_LoadMod64();
 		_ASM("HLT");
 	}
-
-	_ASM volatile ("movl %0, %%edx": : "r"(entry_kernel));
-	_ASM volatile ("movl $0x46494E41, %eax");// LE FINA
-	_ASM volatile ("jmp  *%edx");// entry_kernel();// noreturn
+	else B32_LoadKer32();
 }
 
 _sign_entry() {

@@ -2,12 +2,12 @@ ENTRY(_entry)
 
 MEMORY
 {
-	RAM1 (rwx) : ORIGIN = 0x8000, LENGTH = 0x70000 /* 0x7E00 .. 0x70000 */
+	RAM1 (rwx) : ORIGIN = 0x10000, LENGTH = 0x70000 /* 0x10000 .. 0x80000 */
 }
 
 SECTIONS
 {
-	. = 0x8000;
+	. = 0x10000;
 	/*
 	.multiboot : {
 		*(.multiboot)

@@ -22,6 +22,7 @@ her-note: false
 - [ ] 从裸机程式轉作業系統 —— exec 并激活 shell
 - [ ] 动态加载中断例程/服务
 - [ ] 外设实现 RuptTrait --> Mecocoa.DeviceTrait
+- [ ] Long64, 0x8000~0xFFFF 放置 R16&F32 代码 && 模式切换
 
 內存管理（關鍵）
 - [ ] memoman mempool （mempool需要自举）
@@ -79,3 +80,6 @@ qemu-system
 - UNISYM
 - Teaching video of : https://github.com/StevenBaby/onix，學習內容如下
 	- 037 时间
+- Teaching video of : https://github.com/Minep/lunaix-os，學習內容如下
+	- 暂无
+	

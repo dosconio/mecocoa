@@ -21,6 +21,7 @@ struct _Comment(Kernel) ProcessBlock {
 	static void* table_ready;
 	static void* table_pends;
 
+	//{} Mempool mempool;
 	Paging paging;
 	descriptor_t LDT[0x100 / byteof(descriptor_t)];
 	TSS_t TSS;// aka state-frame

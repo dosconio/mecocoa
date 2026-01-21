@@ -44,10 +44,15 @@ B32_LoadMod64:
 	BTS EAX, 31
 	MOV CR0, EAX
 	;
-	MOV EAX, 0x46494E41
+	MOV EAX, 'FINA'
 	JMP FAR [KernelJump]
-RET
 
+GLOBAL B32_LoadKer32
+B32_LoadKer32:
+	POP EAX; no return
+	MOV EDX, [entry_kernel]
+	MOV EAX, 'FINA'
+	JMP EDX
 
 [section .data]
 

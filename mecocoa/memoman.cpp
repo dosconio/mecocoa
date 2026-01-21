@@ -221,7 +221,7 @@ bool Memory::init(stduint eax, byte* ebx) {
 	// make available memory into a group of slices
 	switch (eax)
 	{
-	case 'FINA':// from loader
+	case 'ANIF':// from loader
 		SW16_FUNCTION = _IMM(&MemoryList);
 		__asm("call SwitchReal16");
 		parse_norm(_IMM(MemoryListData));

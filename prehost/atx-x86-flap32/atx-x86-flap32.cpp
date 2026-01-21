@@ -82,7 +82,7 @@ void krnl_init() {
 	kernel_paging.Reset();// should take 0x1000
 	kernel_paging.MapWeak(0x00000000, 0x00000000, 0x00400000, true, _Comment(R0) true);
 	kernel_paging.MapWeak(0x80000000, 0x00000000, 0x00400000, true, _Comment(R0) false);
-	setCR3(_IMM(kernel_paging.page_directory));
+	setCR3(_IMM(kernel_paging.root_level_page));
 	PagingEnable();
 	// rostr test_page = (rostr)"\xFF\x70[Mecocoa]\xFF\x27 Paging Test OK!\xFF\x07" + 0x80000000;
 	// if (opt_test) Console.OutFormat("%s\n\r", test_page);
@@ -152,29 +152,6 @@ _sign_entry() {
 
 	dump_avail_memory();
 
-
-	//! auto lastsec = mecocoa_global->system_time.sec;
-	loop __asm("hlt");
-
-	#if 0
-	if (lastsec == 8) {
-		for0(i, pnumber) {
-			Console.OutFormat("-- %u: (%u:%u) head %u, next %u, send_to_whom\n\r",
-				i, pblocks[i]->state, pblocks[i]->block_reason,
-				pblocks[i]->queue_send_queuehead, pblocks[i]->queue_send_queuenext);
-		}
-		break;
-	}
-	#endif
-
-	stduint esp; __asm("mov %%esp, %0" : "=r"(esp));
-	loop{
-		__asm("hlt");
-		stduint newesp; __asm("mov %%esp, %0" : "=r"(newesp));
-		if (newesp != esp) {
-			Console.OutFormat("ESP: %u\n\r", esp = newesp);
-		}
-	}
 	// Done
 	loop HALT();
 }
