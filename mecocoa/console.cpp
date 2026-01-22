@@ -77,16 +77,16 @@ struct KeyboardBridge : public OstreamTrait // // scan code set 1
 			switch (byte ch = str[i]) {
 			// TTYs
 			case 0x01:
-				bcons[0]->doshow(); // TTY0 ESC
+				bcons[0]->doshow(0); // TTY0 ESC
 				break;
 			case 0x3B:
-				bcons[1]->doshow(); // TTY1 F1
+				bcons[1]->doshow(0); // TTY1 F1
 				break;
 			case 0x3C:
-				bcons[2]->doshow(); // TTY2 F2
+				bcons[2]->doshow(0); // TTY2 F2
 				break;
 			case 0x3D:
-				bcons[3]->doshow(); // TTY3 F3
+				bcons[3]->doshow(0); // TTY3 F3
 				break;
 				// Ctrls(^), Shifts(-), Alts(+), Wins(~)
 			case 0x1D: case 0x1D + 0x80:// L-Ctrl
@@ -172,6 +172,15 @@ void cons_init()
 	bcons[1] = BCONS1; new (&BCONS1->input_queue) QueueLimited((Slice) { _IMM(_BUF_innQueues[1]), byteof(_BUF_innQueues[1]) });
 	bcons[2] = BCONS2; new (&BCONS2->input_queue) QueueLimited((Slice) { _IMM(_BUF_innQueues[2]), byteof(_BUF_innQueues[2]) });
 	bcons[3] = BCONS3; new (&BCONS3->input_queue) QueueLimited((Slice) { _IMM(_BUF_innQueues[3]), byteof(_BUF_innQueues[3]) });
+
+	auto po = floorAlign(bda->screen_columns, curget()) + 1;
+	if (po >= bda->screen_columns * 23) {
+		Letvar(p, word*, _VIDEO_ADDR_BUFFER);
+		for0(i, bda->screen_columns * 25) {
+			p[i] = 0x0700;
+		}
+	}
+	else BCONS0->last_curposi = po;
 	//
 	for0a(i, vcons) {
 		vcons[i] = NULL;
@@ -212,7 +221,7 @@ void cons_init()
 	con0_out = vcon0;
 	vcon0->forecolor = Color::Black;
 	vcon0->Clear();
-	Console.OutFormat("\xFF\x70[Mecocoa]\xFF\x27 Real16 Switched Test OK!\xFF\x07\n\r");
+	// Console.OutFormat("\xFF\x70[Mecocoa]\xFF\x27 Real16 Switched Test OK!\xFF\x07\n\r");
 	
 	// TTY1 window form (TODO)
 	// TTY2 window form (TODO)
@@ -392,7 +401,7 @@ void _Comment(R1) serv_cons_loop()
 
 //// ---- ---- Bottom Impl ---- ---- ////
 
-void uni::BareConsole::doshow() {
+void uni::BareConsole::doshow(void *_) {
 	unsigned id = IndexTTY(this);
 	if (id == current_screen_TTY) return;
 	if (id > 3) {

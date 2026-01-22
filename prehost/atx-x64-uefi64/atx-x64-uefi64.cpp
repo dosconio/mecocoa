@@ -25,9 +25,6 @@ static byte _b_vcb[byteof(VideoControlBlock)];
 static byte _b_vcon0[byteof(VideoConsole)];
 VideoConsole* vcon0;
 
-extern "C" byte BSS_ENTO, BSS_ENDO;
-
-
 struct Message {
 	enum Type {
 		RUPT_xHCI,
@@ -110,7 +107,7 @@ FrameBufferConfig config_graph;
 _ESYM_C void init(const UefiData& uefi_data_ref, const MemoryMap& memory_map_ref) {
 	uefi_data = uefi_data_ref;
 	memory_map = memory_map_ref;
-	MemSet(&BSS_ENTO, &BSS_ENDO - &BSS_ENTO, 0);
+	Memory::clear_bss();
 	_preprocess();
 }
 
@@ -170,6 +167,7 @@ void mecocoa()
 	VideoControlBlock* p_vcb = new (_b_vcb) VideoControlBlock\
 		((pureptr_t)uefi_data.frame_buffer, *screen);
 	p_vcb->setMode(uefi_data.pixel_format, screen_size.x, screen_size.y);
+	LayerManager layman(screen);
 
 	vcon0 = new (_b_vcon0) VideoConsole(*screen, screen0_win);
 	vcon0->backcolor = Color::White;
@@ -179,21 +177,9 @@ void mecocoa()
 
 	// Platform and Memory
 	GDT_Init();
-	setDSAll(0);
-	setCSSS(SegCo64, SegData);
 	SetupIdentityPageTable();
-	for (uintptr_t iter = reinterpret_cast<uintptr_t>(memory_map.buffer);
-		iter < reinterpret_cast<uintptr_t>(memory_map.buffer) + memory_map.map_size;
-		iter += memory_map.descriptor_size) {
-		auto desc = reinterpret_cast<MemoryDescriptor*>(iter);
-		if (MemIsAvailable((MemoryType)desc->type)) {
-			ploginfo("type = %u, %[x]..%[x], attr=0x%[x]",
-				desc->type,
-				desc->physical_start,
-				desc->physical_start + desc->number_of_pages * 4096,
-				desc->attribute);
-		}
-	}
+	Memory::initialize('UEFI', (byte*)(&memory_map));
+	Memory::pagebmap->dump_avail_memory();
 
 	// IVT and Device
 	InterruptControl APIC(_IMM(idt));
@@ -222,8 +208,8 @@ void mecocoa()
 		}
 		auto class_code = pci.read_class_code(dev.bus, dev.device, dev.function);
 		//
-		vcon0->OutFormat("%[8H].%[8H].%[8H]: vend 0x%[16H], class 0x%[32H], head 0x%[8H]\n\r",
-			dev.bus, dev.device, dev.function, vendor_id, class_code, dev.header_type);
+		// vcon0->OutFormat("%[8H].%[8H].%[8H]: vend 0x%[16H], class 0x%[32H], head 0x%[8H]\n\r",
+		// 	dev.bus, dev.device, dev.function, vendor_id, class_code, dev.header_type);
 	}
 	// get xHC memory base address
 	if (xhc_dev) {
@@ -279,7 +265,12 @@ void mecocoa()
 		}
 		::xhc = &xhc;
 		APIC.enAble(true);
-		
+
+		void* ll = mem.allocate(0x1000);
+		ploginfo("ll=%[x]", ll);
+		ll = mem.allocate(0x1000);
+		ploginfo("ll=%[x]", ll);
+
 
 		ploginfo("Kernel Ready");
 	}
@@ -319,9 +310,7 @@ void outtxt(const char* str, stduint len) {
 
 extern "C" { void* __dso_handle = 0; }
 extern "C" { void __cxa_atexit(void) {} }
-void operator delete(void*) {}
-void operator delete(void* ptr, unsigned long size) noexcept { _TODO }
-void operator delete(void* ptr, unsigned long size, std::align_val_t) noexcept { ::operator delete(ptr, size); }
+
 _ESYM_C void __cxa_pure_virtual(void) {}
 void std::__throw_bad_function_call(void) {
 	plogerro("%s", __FUNCIDEN__); loop;

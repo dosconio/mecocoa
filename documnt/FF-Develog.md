@@ -23,6 +23,8 @@ her-note: false
 - [ ] 动态加载中断例程/服务
 - [ ] 外设实现 RuptTrait --> Mecocoa.DeviceTrait
 - [ ] Long64, 0x8000~0xFFFF 放置 R16&F32 代码 && 模式切换
+- [ ] Realtimable Design
+- [ ] Loader: Keyboard chosing one of kernel
 
 內存管理（關鍵）
 - [ ] memoman mempool （mempool需要自举）

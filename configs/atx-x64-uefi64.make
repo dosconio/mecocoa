@@ -15,6 +15,7 @@ CFLAGS += -nostdlib -fno-builtin -z norelro -nostdlib -fno-builtin
 CFLAGS += --static -mno-red-zone -m64  -O0
 CFLAGS += -I$(uincpath) -D_MCCA=0x8664 -D_MUEFI -D_HIS_IMPLEMENT -D_DEBUG
 CFLAGS += -fno-strict-aliasing -fno-exceptions -ffreestanding # -Wall -fno-pie
+CFLAGS += -Wno-multichar
 XFLAGS  = $(CFLAGS) -fno-rtti -std=c++23
 G_DBG   = gdb-multiarch
 CC      = ${GPREF}gcc

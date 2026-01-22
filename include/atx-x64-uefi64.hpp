@@ -8,8 +8,6 @@
 
 // others
 
-extern FrameBufferConfig config_graph;
-
 struct MemoryMap {
 	stduint buffer_size;
 	void*   buffer;

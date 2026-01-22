@@ -50,6 +50,7 @@ multiboot_entry:
 	/*  Push the magic value. */
 	pushl   %eax
 	/*  Now enter the C main function... */
+	call    EXT_C(_ZN6Memory9clear_bssEv) # Memory::clear_bss
 	call    EXT_C(_preprocess)
 	call    EXT_C(_start)
 loop:   hlt

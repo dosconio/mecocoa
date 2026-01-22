@@ -12,7 +12,7 @@
 #include "cpp/Device/Storage/HD-DEPEND.h"
 #include "../../include/atx-x86-flap32.hpp"
 
-extern "C" byte BSS_ENTO, BSS_ENDO;
+
 statin void clear_bss() { MemSet(&BSS_ENTO, &BSS_ENDO - &BSS_ENTO, 0); }
 
 void temp_init() {
@@ -28,6 +28,8 @@ OstreamTrait* con0_out;// TTY0
 #define fatable_sector ((byte*)0x9000)
 #define hdinfo_addr    ((byte*)0xA000)
 #define kernel_addr    ((byte*)0x100000)
+
+// temp
 #define paging_addr    ((byte*)0x200000)
 
 static FAT_FileHandle filhan;

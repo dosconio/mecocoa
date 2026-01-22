@@ -1,6 +1,4 @@
-// ASCII g++ TAB4 LF
-// Attribute: 
-// LastCheck: 20240218
+// UTF-8 g++ TAB4 LF 
 // AllAuthor: @dosconio, @ArinaMgk
 // ModuTitle: Demonstration - ELF32-C++ x86 Bare-Metal
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
@@ -25,10 +23,11 @@
 bool opt_info = true;
 bool opt_test = true;
 
-_ESYM_C{
-char _buf[65]; String ker_buf;
+
+char _buf[64];
+String ker_buf(_buf, byteof(_buf));
 extern uint32 _start_eax, _start_ebx;
-}
+
 
 static ProcessBlock krnl_tss;
 void (*entry_temp)();
@@ -64,8 +63,6 @@ statin void _start_assert() {
 }
 
 void krnl_init() {
-	Memory::clear_bss();
-	new (&ker_buf) String(_buf, byteof(_buf));
 	(*mecocoa_global).gdt_ptr = (mec_gdt*)0x80000600;
 	mecocoa_global->system_time.sec = 0;
 	mecocoa_global->system_time.mic = 0;
@@ -78,7 +75,7 @@ void krnl_init() {
 	_start_assert();
 	Memory::pagebmap = 0;
 	Memory::text_memavail(ker_buf); Memory::align_basic_4k();
-	// Paging
+	// ---- Paging
 	kernel_paging.Reset();// should take 0x1000
 	kernel_paging.MapWeak(0x00000000, 0x00000000, 0x00400000, true, _Comment(R0) true);
 	kernel_paging.MapWeak(0x80000000, 0x00000000, 0x00400000, true, _Comment(R0) false);
@@ -104,6 +101,45 @@ static void kernel_task_init() {
 	__asm("mov $8*5, %eax; ltr %ax");
 }
 
+static inline void VConSetBackcolor(OstreamTrait* o, Color bkcolor) {
+	byte buf[4] = { "\xFE" };
+	buf[1] = bkcolor.b;
+	buf[2] = bkcolor.g;
+	buf[3] = bkcolor.r;
+	o->out((rostr)buf, 4);
+}
+void mecfetch() {
+	const rostr blue = ento_gui ? "\xFE\xF8\xC8\x58" : "\xFF\x30";
+	const rostr pink = ento_gui ? "\xFE\xB8\xA8\xF8" : "\xFF\x50";
+	const rostr white = ento_gui ? "\xFE\xFF\xFF\xFF" : "\xFF\x70";
+	const unsigned attrl = ento_gui ? 4 : 2;
+	const unsigned width = ento_gui ? 48 : 16;
+	const unsigned height = ento_gui ? 3 : 1;
+	// draw a 🏳️‍⚧️ flag
+	Console.out(blue, attrl);
+	for0(j, height) { for0(i, width) Console.OutChar(' '); Console.OutFormat("\n\r"); }
+	Console.out(pink, attrl);
+	for0(j, height) { for0(i, width) Console.OutChar(' '); Console.OutFormat("\n\r"); }
+	Console.out(white, attrl);
+	for0(j, height) { for0(i, width) Console.OutChar(' '); Console.OutFormat("\n\r"); }
+	Console.out(pink, attrl);
+	for0(j, height) { for0(i, width) Console.OutChar(' '); Console.OutFormat("\n\r"); }
+	Console.out(blue, attrl);
+	for0(j, height) { for0(i, width) Console.OutChar(' '); Console.OutFormat("\n\r"); }
+	Console.out("\xFF\xFF", 2);
+
+	Console.OutFormat("Mem Avail: %s\n\r", ker_buf.reference());
+
+	Console.OutFormat("CPU Brand: %s\n\r", text_brand());
+
+	tm datime; CMOS_Readtime(&datime);
+	Console.OutFormat("Date Time: %d/%d/%d %d:%d:%d\n\r",
+		datime.tm_year, datime.tm_mon, datime.tm_mday,
+		datime.tm_hour, datime.tm_min, datime.tm_sec
+	);
+
+}// like neofetch
+
 _sign_entry() {
 	// Memory
 	krnl_init();// blind using memory
@@ -128,17 +164,9 @@ _sign_entry() {
 	GIC[IRQ_ATA_DISK0].setRange(mglb(Handint_HDD_Entry), SegCo32); DEV_Init();
 	GIC[IRQ_SYSCALL].setRange(mglb(call_intr), SegCo32); GIC[IRQ_SYSCALL].DPL = 3;
 	
-	if (opt_test) __asm("ud2");
+	mecfetch();
+	// if (opt_test) __asm("ud2");
 
-	Console.OutFormat("Mem Avail: %s\n\r", ker_buf.reference());
-
-	Console.OutFormat("CPU Brand: %s\n\r", text_brand());
-
-	tm datime; CMOS_Readtime(&datime);
-	Console.OutFormat("Date Time: %d/%d/%d %d:%d:%d\n\r",
-		datime.tm_year, datime.tm_mon, datime.tm_mday,
-		datime.tm_hour, datime.tm_min, datime.tm_sec
-	);
 	
 	// Service
 	TaskRegister((void*)&serv_cons_loop, 1);
@@ -150,7 +178,7 @@ _sign_entry() {
 	syscall(syscall_t::OUTC, 'O');// with effect InterruptEnable();
 	Console.OutFormat("hayouuu~!\a\n\r");
 
-	dump_avail_memory();
+	Memory::pagebmap->dump_avail_memory();
 
 	// Done
 	loop HALT();

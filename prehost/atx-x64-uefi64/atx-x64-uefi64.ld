@@ -16,6 +16,7 @@ PHDRS
 SECTIONS
 {
 	. = 0x100000;
+	FILE_ENTO = .;
 	.text : {
 		*(.text)
 	} > RAM :text
@@ -46,4 +47,5 @@ SECTIONS
 		KEEP(*(.init_array))
 	__init_array_end = .;
 	} > RAM :data
+	FILE_ENDO = .;
 }

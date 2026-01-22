@@ -7,6 +7,21 @@
 #include <c/bitmap.h>
 #include <c/system/paging.h>
 #include <cpp/string>
+#include <cpp/trait/MallocTrait.hpp>
+
+struct BmMemoman : public Bitmap {
+	static bool map_ready;
+	usize avail_pointer = ~_IMM0;// to the lowest available page
+	BmMemoman(pureptr_t offs, stduint size) : Bitmap(offs, size) {}
+	//
+	// e.g. add_range(0x1, 0x2) ofr 0x1000 ~ 0x1FFF
+	void update_avail_pointer(stduint head_pos, stduint last_pos, bool what);
+	//
+	void add_range(stduint head_pos, stduint last_pos, bool what);
+	//
+	void dump_avail_memory();
+};
+
 
 #if (_MCCA & 0xFF00) == 0x8600
 
@@ -33,28 +48,40 @@ enum {
 	#endif
 };
 
-#endif
+extern byte BSS_ENTO, BSS_ENDO;
 
-#ifdef _ARC_x86 // x86 and ... 32bit
-
-extern "C" byte BSS_ENTO, BSS_ENDO;
-
+#if _MCCA == 0x8632
 #define mem_area_exten_beg 0x00100000
-class Memory {
 // area-basic: 0x7E00 .. 0x80000
 // area-exten: mem_area_exten_beg .. mem_area_exten_beg + areax_size
+#endif
+
+#endif
+
+
+
+
+
+// class Memory
+#ifdef _ARC_x86 // x86 and ... 32bit
+
+class Memory {
 public: // previously used
 	static byte* p_basic;
 	static byte* p_ext;
 	static usize total_mem;
 	static usize areax_size;
 public:
-	static usize avail_pointer;// to the lowest available page
-	static Slice avail_slices[4];
-	//
-	static Bitmap* pagebmap;// 0x100000 pages / 8 bpB = 0x20000 bytes
+	static BmMemoman* pagebmap;// [single for 4G] 0x100000 pages / 8 bpB = 0x20000 bytes
+
+
+	
 public:
-	static void clear_bss() { MemSet(&BSS_ENTO, &BSS_ENDO - &BSS_ENTO, 0); }
+	static void clear_bss();
+	static bool init(stduint eax, byte* ebx);
+	
+public:
+	static Slice avail_slices[4];
 	static usize align_basic_4k() {
 		usize& uaddr = *(usize*)&p_basic;
 		usize last = uaddr;
@@ -66,20 +93,37 @@ public:
 	_TEMP static usize evaluate_size();
 	static void* physical_allocate(usize siz);
 	static rostr text_memavail(uni::String& ker_buf);
-	static bool init(stduint eax, byte* ebx);
+
+	static void* allocate(stduint siz);
+	static bool deallocate(void* ptr, stduint size _Comment(zero_for_block));
+
 };
 
+#elif _MCCA == 0x8664
+// {TEMP} 0x00000000_00000000..0x00000001_00000000
+class Memory : public trait::Malloc
+{
+public:
+	static BmMemoman* pagebmap;// 1 map, manage first 4G
+public:
+	static void clear_bss();
+	static bool initialize(stduint eax, byte* ebx);
+public:// trait
+	virtual void* allocate(stduint size);
+	virtual bool deallocate(void* ptr, stduint size = 0 _Comment(zero_for_block));
+};
+extern Memory mem;
+#endif
 
+// ---- PAGING ----
 
-extern void dump_avail_memory();
+extern Paging kernel_paging;
 
-//
-
-extern Paging kernel_paging;// cpu0 running
-
-// [x86]
+// ---- SEGMENT ----
+#if (_MCCA & 0xFF00) == 0x8600
 void GDT_Init();
+#ifdef _ARC_x86
 word GDT_GetNumber();
 word GDT_Alloc();
-
+#endif
 #endif

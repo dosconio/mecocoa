@@ -27,7 +27,7 @@ setCSSS:
 		POP RBP
 RET
 
-global setDSAll  ; void setDSAll(uint16 value);
+GLOBAL setDSAll  ; void setDSAll(uint16 value);
 setDSAll:
 	MOV DS, DI
 	MOV ES, DI
