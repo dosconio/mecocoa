@@ -35,14 +35,18 @@ void cons_init();
 defVconIface(GloScreenARGB8888, uint32);
 defVconIface(GloScreenABGR8888, uint32);
 
-class Cursor {
+class Cursor: public SheetTrait
+{
 public:
-	Cursor(VideoControlInterface* writer, Color erase_color, Point initial_position);
-	void MoveRelative(Size2dif displacement);
-private:
+	virtual void doshow(void* _) override {
+		
+	}
+	virtual void onrupt(SheetEvent event, Point rel_p, ...) override {}
+public:
+	Cursor(VideoControlInterface* writer) : pixel_writer_{ writer } {}
+	void setSheet(LayerManager& layman, const Point& vertex);
+public:
 	VideoControlInterface* pixel_writer_ = nullptr;
-	Color erase_color_;
-	Point position_;
 };
 
 

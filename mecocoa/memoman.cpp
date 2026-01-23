@@ -39,7 +39,7 @@ void BmMemoman::update_avail_pointer(stduint head_pos, stduint last_pos, bool wh
 }
 void BmMemoman::add_range(stduint head_pos, stduint last_pos, bool what) {
 	// if (!map_ready) ploginfo("add_range(0x%[32H], 0x%[32H])", head_pos, last_pos);
-	if (head_pos >= last_pos || head_pos >= 0x2000 * 8 || last_pos >= 0x2000 * 8) return;
+	if (head_pos >= last_pos || head_pos >= 0x100000 || last_pos >= 0x100000) return;
 	stduint times = last_pos - head_pos;
 	stduint curr_pos = head_pos;
 	while (times && (curr_pos & 0b111)) {
@@ -64,7 +64,7 @@ void BmMemoman::dump_avail_memory()
 	bool last_stat = false;
 	stduint last_index = 0;
 	outsfmt("[Memoman] dump avail memory:\n\r");
-	for0(i, 0x2000 * 8) {
+	for0(i, 0x10000) {
 		bool b = this->bitof(i);
 		if (b != last_stat) {
 			if (!last_stat) {
@@ -351,6 +351,7 @@ static void parse_uefi(const MemoryMap& memory_map) {
 		BM_FFFF.setof(i, b);
 	}
 	Memory::pagebmap->add_range(0, 0x10, false);
+	Memory::pagebmap->add_range(0x80, 0x100, false);// BIOS and Upper Memory Area
 }
 bool Memory::initialize(stduint eax, byte* ebx) {
 	void* mapaddr = mapping_4G;
@@ -390,7 +391,7 @@ void* Memory::allocate(stduint siz) {
 	}
 	stduint sum_cont = 0;
 	stduint sum_beg = Memory::pagebmap->avail_pointer;
-	for (stduint p = Memory::pagebmap->avail_pointer; p < 0x2000 * 8; ) {
+	for (stduint p = Memory::pagebmap->avail_pointer; p < 0x100000; p++) {
 		if (Memory::pagebmap->bitof(p)) {
 			if (!sum_cont) sum_beg = p;
 			sum_cont++;
@@ -405,6 +406,7 @@ void* Memory::allocate(stduint siz) {
 		return nullptr;
 	}
 	ret = (void*)(sum_beg << 12);
+	// ploginfo("malc %x %x %[x]", sum_beg, sum_beg + siz, ret);
 	Memory::pagebmap->add_range(sum_beg, sum_beg + siz, false);
 
 	#if _MCCA == 0x8632

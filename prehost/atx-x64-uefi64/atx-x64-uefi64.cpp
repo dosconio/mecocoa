@@ -34,9 +34,11 @@ Queue<Message>* message_queue;
 static Message _BUF_Message[32];
 
 Cursor* mouse_cursor;
+LayerManager* global_layman;
 void MouseObserver(int8 displacement_x, int8 displacement_y) {
 	// ploginfo("mov (%d, %d)", displacement_x, displacement_y);
-	mouse_cursor->MoveRelative({ displacement_x, displacement_y });
+	// mouse_cursor->MoveRelative({ displacement_x,displacement_y });
+	asserv(global_layman)->Domove(mouse_cursor, { displacement_x,displacement_y });
 }
 
 // ---- Interrupt
@@ -142,12 +144,20 @@ void SetupIdentityPageTable() {
 }
 
 // ---- Kernel
-
 extern "C" //__attribute__((ms_abi))
 void mecocoa()
 {
 	stduint rsp;
 	_ASM("mov %%rsp, %0" : "=r"(rsp));
+
+	// Platform and Memory
+	GDT_Init();
+	SetupIdentityPageTable();
+	Memory::initialize('UEFI', (byte*)(&memory_map));
+	
+
+	// cons_init
+
 	config_graph = uefi_data;
 
 	GloScreenARGB8888 vga_ARGB8888;
@@ -158,28 +168,38 @@ void mecocoa()
 	case PixelFormat::ARGB8888: screen = &vga_ARGB8888; break;
 	case PixelFormat::ABGR8888: screen = &vga_ABGR8888; break;
 	default:
-		loop _ASM("hlt");
+		loop HALT();
 	}
-
 
 	Size2 screen_size(uefi_data.horizontal_resolution, uefi_data.vertical_resolution);
 	Rectangle screen0_win(Point(0, 0), screen_size, Color::White);
 	VideoControlBlock* p_vcb = new (_b_vcb) VideoControlBlock\
 		((pureptr_t)uefi_data.frame_buffer, *screen);
 	p_vcb->setMode(uefi_data.pixel_format, screen_size.x, screen_size.y);
-	LayerManager layman(screen);
+	LayerManager layman(screen, screen0_win); global_layman = &layman;
+
+	Cursor cursor{ &p_vcb->getVCI() };
+	mouse_cursor = &cursor;
+	cursor.setSheet(layman, { 300,200 });
+
 
 	vcon0 = new (_b_vcon0) VideoConsole(*screen, screen0_win);
 	vcon0->backcolor = Color::White;
 	vcon0->forecolor = Color::Black;
+	const stduint vcon0_bufsize = screen0_win.width * screen0_win.height * sizeof(Color);
+	Color* vcon0_buf = (Color*)mem.allocate(vcon0_bufsize);
+	layman.Append(vcon0);
+	vcon0->InitializeSheet(layman, screen0_win.getVertex(), screen0_win.getSize(), vcon0_buf);
+	vcon0->setModeBuffer(vcon0_buf);
 	vcon0->Clear();
+
 	ploginfo("Ciallo %lf, rsp=%[x]", 2025.09, rsp);
 
-	// Platform and Memory
-	GDT_Init();
-	SetupIdentityPageTable();
-	Memory::initialize('UEFI', (byte*)(&memory_map));
+	
+	vcon0->OutFormat("[Console] Video Memory at %[x]\r\n", uefi_data.frame_buffer);
+	vcon0->OutFormat("[Memoman] Allocate 0x%[x] bytes for vcon0 at %[x]\r\n", vcon0_bufsize, vcon0_buf);
 	Memory::pagebmap->dump_avail_memory();
+
 
 	// IVT and Device
 	InterruptControl APIC(_IMM(idt));
@@ -188,6 +208,8 @@ void mecocoa()
 	// Message Queue
 	Queue<Message> msg_queue(_BUF_Message, numsof(_BUF_Message));
 	::message_queue = &msg_queue;
+
+
 
 	PCI pci;
 	uint64_t xhc_mmio_base = nil;
@@ -234,10 +256,7 @@ void mecocoa()
 			InterruptVector::xHCI, 0);
 	}
 
-	Cursor cursor{
-		&p_vcb->getVCI(), Color::White, {300, 200}
-	};
-	mouse_cursor = &cursor;
+
 
 	//
 	if (xhc_mmio_base) {
@@ -265,13 +284,16 @@ void mecocoa()
 		}
 		::xhc = &xhc;
 		APIC.enAble(true);
+		//
+		
 
-		void* ll = mem.allocate(0x1000);
-		ploginfo("ll=%[x]", ll);
-		ll = mem.allocate(0x1000);
-		ploginfo("ll=%[x]", ll);
+		// void* ll = mem.allocate(0x1000);
+		// ploginfo("ll=%[x]", ll);
+		// ll = mem.allocate(0x1000);
+		// ploginfo("ll=%[x]", ll);
 
 
+		ploginfo("There are %[u] layers", layman.Count());
 		ploginfo("Kernel Ready");
 	}
 

@@ -13,6 +13,12 @@ use crate uni;
 #include <c/driver/keyboard.h>
 #include "../include/console.hpp"
 
+#if _MCCA == 0x8632
+#include "../include/atx-x86-flap32.hpp"
+#elif _MCCA == 0x8664
+#include "../include/atx-x64-uefi64.hpp"
+#include "../prehost/atx-x64-uefi64/atx-x64-uefi64.loader/loader-graph.h"
+#endif
 
 #if defined(_MCCA) && ((_MCCA & 0xFF00) == 0x8600)
 
@@ -104,54 +110,25 @@ Color GloScreenRGB888::GetColor(Point p) const {
 }
 
 #elif __BITS__ == 64
-#include "../prehost/atx-x64-uefi64/atx-x64-uefi64.loader/loader-graph.h"
 
-void DrawMouseCursor(VideoControlInterface* p_vcb, Point position) {
+void Cursor::setSheet(LayerManager& layman, const Point& vertex) {
+	sheet_buffer = (Color*)mem.allocate(kMouseCursorWidth * kMouseCursorHeight * sizeof(Color));
+	auto p = sheet_buffer;
 	for0(dy, kMouseCursorHeight) for0(dx, kMouseCursorWidth) {
 		if (mouse_cursor_shape[dy][dx] == '@') {
-			p_vcb->DrawPoint(Point(position.x + dx, position.y + dy), Color(0xFF000000));
+			*p++ = 0xFF000000;// Point(position.x + dx, position.y + dy)
 		}
 		else if (mouse_cursor_shape[dy][dx] == '.') {
-			p_vcb->DrawPoint(Point(position.x + dx, position.y + dy), Color(0xFFFFFFFF));
+			*p++ = 0x7FFFFFFF;
+		}
+		else {
+			*p++ = 0x00FFFFFF;
 		}
 	}
+	//
+	layman.Append(this);
+	InitializeSheet(layman, vertex, { kMouseCursorWidth,kMouseCursorHeight }, sheet_buffer);
 }
-
-void EraseMouseCursor(VideoControlInterface* p_vcb, Point position, Color erase_color) {
-	for0(dy, kMouseCursorHeight) for0(dx, kMouseCursorWidth) {
-		if (mouse_cursor_shape[dy][dx] != ' ') {
-			p_vcb->DrawPoint(Point(position.x + dx, position.y + dy), erase_color);
-		}
-	}
-}
-
-Cursor::Cursor(VideoControlInterface* writer, Color erase_color, Point initial_position)
-	: pixel_writer_{ writer }, erase_color_{ erase_color }, position_{ initial_position }
-{
-	DrawMouseCursor(pixel_writer_, position_);
-}
-
-void Cursor::MoveRelative(Size2dif displacement)
-{
-	// ploginfo("%d %d %d %d", position_.x, position_.y, displacement.x, displacement.y);
-	EraseMouseCursor(pixel_writer_, position_, erase_color_);
-	stdsint _x = position_.x; _x += displacement.x;
-	stdsint _y = position_.y; _y += displacement.y;
-	if (displacement.x >= 0) {
-		position_.x = minof(800, _x);//{TODO} 800x600
-	}
-	else {
-		position_.x = maxof(0, _x);
-	}
-	if (displacement.y >= 0) {
-		position_.y = minof(600, _y);//{TODO} 800x600
-	}
-	else {
-		position_.y = maxof(0, _y);
-	}
-	DrawMouseCursor(pixel_writer_, position_);
-}
-
 
 extern FrameBufferConfig config_graph;
 

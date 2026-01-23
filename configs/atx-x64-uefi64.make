@@ -39,6 +39,7 @@ asmfile=$(ulibpath)/asm/x64/inst/ioport.asm \
 	prehost/$(arch)/atx-x64.asm
 
 cppfile=$(wildcard mecocoa/*.cpp) \
+	$(ulibpath)/cpp/color.cpp \
 	$(ulibpath)/cpp/stream.cpp \
 	$(ulibpath)/cpp/interrupt.cpp \
 	$(ulibpath)/cpp/lango/lango-cpp.cpp \
