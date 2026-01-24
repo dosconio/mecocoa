@@ -16,6 +16,29 @@ public:\
 
 #include <cpp/Device/_Video.hpp>
 
+#if (_MCCA & 0xFF00) == 0x8600
+extern LayerManager* global_layman;
+#endif
+
+// Cursor
+#if (_MCCA & 0xFF00) == 0x8600
+class Cursor: public SheetTrait
+{
+public:
+	virtual void doshow(void* _) override {
+		
+	}
+	virtual void onrupt(SheetEvent event, Point rel_p, ...) override {}
+public:
+	static Cursor* global_cursor;
+public:
+	Cursor(VideoControlInterface* writer) : SheetTrait(), pixel_writer_{ writer } {}
+	void setSheet(LayerManager& layman, const Point& vertex);
+public:
+	VideoControlInterface* pixel_writer_ = nullptr;
+};
+#endif
+
 // ---- ---- ---- ---- X86 ---- ---- ---- ---- //
 #if _MCCA==0x8632
 #define TTY_NUMBER 4
@@ -29,27 +52,12 @@ public:
 };
 
 void cons_init();
+void cons_graf();
 
 // ---- ---- ---- ---- X64 ---- ---- ---- ---- //
 #elif _MCCA==0x8664
 defVconIface(GloScreenARGB8888, uint32);
 defVconIface(GloScreenABGR8888, uint32);
-
-class Cursor: public SheetTrait
-{
-public:
-	virtual void doshow(void* _) override {
-		
-	}
-	virtual void onrupt(SheetEvent event, Point rel_p, ...) override {}
-public:
-	Cursor(VideoControlInterface* writer) : pixel_writer_{ writer } {}
-	void setSheet(LayerManager& layman, const Point& vertex);
-public:
-	VideoControlInterface* pixel_writer_ = nullptr;
-};
-
-
 
 
 #endif

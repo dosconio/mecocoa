@@ -123,6 +123,22 @@ void switch_task() {
 * 0x1C00 Stack R3
 */
 
+static ProcessBlock krnl_tss_cpu0;
+void Taskman::Initialize(stduint cpuid) {
+	if (cpuid == 0) {
+		new (&krnl_tss_cpu0) ProcessBlock;
+		krnl_tss_cpu0.TSS.CR3 = getCR3();
+		krnl_tss_cpu0.TSS.LDTDptr = 0;
+		krnl_tss_cpu0.TSS.STRC_15_T = 0;
+		krnl_tss_cpu0.TSS.IO_MAP = sizeof(TSS_t) - 1;
+		krnl_tss_cpu0.focus_tty_id = 0;
+		krnl_tss_cpu0.state = ProcessBlock::State::Running;
+		mecocoa_global->gdt_ptr->tss.setRange((dword)&krnl_tss_cpu0.TSS, sizeof(TSS_t) - 1);
+		TaskAdd(&krnl_tss_cpu0);
+		__asm("mov $8*5, %eax; ltr %ax");
+	}
+}
+
 
 static void make_LDT(descriptor_t* ldt_alias, byte ring) {
 	ldt_alias[0]._data = 0;

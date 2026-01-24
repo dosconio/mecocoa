@@ -28,8 +28,6 @@ char _buf[64];
 String ker_buf(_buf, byteof(_buf));
 extern uint32 _start_eax, _start_ebx;
 
-
-static ProcessBlock krnl_tss;
 void (*entry_temp)();
 
 
@@ -88,26 +86,6 @@ void krnl_init() {
 
 extern ProcessBlock* pblocks[16]; extern stduint pnumber;
 
-static void kernel_task_init() {
-	new (&krnl_tss) ProcessBlock;
-	krnl_tss.TSS.CR3 = getCR3();
-	krnl_tss.TSS.LDTDptr = 0;
-	krnl_tss.TSS.STRC_15_T = 0;
-	krnl_tss.TSS.IO_MAP = sizeof(TSS_t) - 1;
-	krnl_tss.focus_tty_id = 0;
-	krnl_tss.state = ProcessBlock::State::Running;
-	mecocoa_global->gdt_ptr->tss.setRange((dword)&krnl_tss.TSS, sizeof(TSS_t) - 1);
-	TaskAdd(&krnl_tss);
-	__asm("mov $8*5, %eax; ltr %ax");
-}
-
-static inline void VConSetBackcolor(OstreamTrait* o, Color bkcolor) {
-	byte buf[4] = { "\xFE" };
-	buf[1] = bkcolor.b;
-	buf[2] = bkcolor.g;
-	buf[3] = bkcolor.r;
-	o->out((rostr)buf, 4);
-}
 void mecfetch() {
 	const rostr blue = ento_gui ? "\xFE\xF8\xC8\x58" : "\xFF\x30";
 	const rostr pink = ento_gui ? "\xFE\xB8\xA8\xF8" : "\xFF\x50";
@@ -141,17 +119,17 @@ void mecfetch() {
 }// like neofetch
 
 _sign_entry() {
-	// Memory
 	krnl_init();// blind using memory
 	cons_init();// located here, for  INT-10H may influence PIC
-	if (!Memory::init(_start_eax, (byte*)_start_ebx)) {
+	if (!Memory::initialize(_start_eax, (byte*)_start_ebx)) {
 		Console.OutFormat("Def Param: A=0x%[x], B=0x%[x]\n\r", _start_eax, _start_ebx);
 		plogerro("Unknown boot source or memory too complex.");
 		_ASM("HLT");
 	}
+	
 	Memory::text_memavail(ker_buf);
 	Cache_t::enAble();
-	kernel_task_init();
+	Taskman::Initialize();
 
 	// IVT and Device
 	InterruptControl GIC(_IMM(0x80000800));
@@ -163,7 +141,14 @@ _sign_entry() {
 	GIC[IRQ_PS2_Mouse].setRange(mglb(Handint_MOU_Entry), SegCo32); Mouse_Init();
 	GIC[IRQ_ATA_DISK0].setRange(mglb(Handint_HDD_Entry), SegCo32); DEV_Init();
 	GIC[IRQ_SYSCALL].setRange(mglb(call_intr), SegCo32); GIC[IRQ_SYSCALL].DPL = 3;
-	
+
+	// _ASM("mov %cr0, %eax;");
+	// _ASM("or $0x20, %eax;");
+	// __asm("and $0xFFFFFFF1, %eax");// TS(3) EM(2) MP(1)
+	// _ASM("mov %eax, %cr0;");
+
+	cons_graf();
+
 	mecfetch();
 	// if (opt_test) __asm("ud2");
 

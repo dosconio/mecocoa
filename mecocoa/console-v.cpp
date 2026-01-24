@@ -20,7 +20,7 @@ use crate uni;
 #include "../prehost/atx-x64-uefi64/atx-x64-uefi64.loader/loader-graph.h"
 #endif
 
-#if defined(_MCCA) && ((_MCCA & 0xFF00) == 0x8600)
+#if (_MCCA & 0xFF00) == 0x8600
 
 const Color kDesktopBGColor = 0xFF2D76ED;
 const Color kDesktopFGColor = Color::White;
@@ -53,6 +53,25 @@ char mouse_cursor_shape[kMouseCursorHeight][kMouseCursorWidth + 1] = {
 	"               ",
 	"               ",
 };
+
+void Cursor::setSheet(LayerManager& layman, const Point& vertex) {
+	sheet_buffer = (Color*)mem.allocate(kMouseCursorWidth * kMouseCursorHeight * sizeof(Color));
+	auto p = sheet_buffer;
+	for0(dy, kMouseCursorHeight) for0(dx, kMouseCursorWidth) {
+		if (mouse_cursor_shape[dy][dx] == '@') {
+			*p++ = 0xFF000000;// Point(position.x + dx, position.y + dy)
+		}
+		else if (mouse_cursor_shape[dy][dx] == '.') {
+			*p++ = 0x7FFFFFFF;
+		}
+		else {
+			*p++ = 0x00FFFFFF;
+		}
+	}
+	//
+	InitializeSheet(layman, vertex, { kMouseCursorWidth,kMouseCursorHeight }, sheet_buffer);
+	layman.Append(this);
+}
 
 #if __BITS__ == 32
 
@@ -110,25 +129,6 @@ Color GloScreenRGB888::GetColor(Point p) const {
 }
 
 #elif __BITS__ == 64
-
-void Cursor::setSheet(LayerManager& layman, const Point& vertex) {
-	sheet_buffer = (Color*)mem.allocate(kMouseCursorWidth * kMouseCursorHeight * sizeof(Color));
-	auto p = sheet_buffer;
-	for0(dy, kMouseCursorHeight) for0(dx, kMouseCursorWidth) {
-		if (mouse_cursor_shape[dy][dx] == '@') {
-			*p++ = 0xFF000000;// Point(position.x + dx, position.y + dy)
-		}
-		else if (mouse_cursor_shape[dy][dx] == '.') {
-			*p++ = 0x7FFFFFFF;
-		}
-		else {
-			*p++ = 0x00FFFFFF;
-		}
-	}
-	//
-	layman.Append(this);
-	InitializeSheet(layman, vertex, { kMouseCursorWidth,kMouseCursorHeight }, sheet_buffer);
-}
 
 extern FrameBufferConfig config_graph;
 

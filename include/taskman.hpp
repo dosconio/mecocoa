@@ -12,6 +12,11 @@ struct CommMsg {
 	stduint src;// use if type is HARDRUPT
 };
 
+class Taskman {
+public:
+	static void Initialize(stduint cpuid = 0);
+};
+
 class FileDescriptor;
 // = TaskBlock = ThreadBlock
 struct _Comment(Kernel) ProcessBlock {

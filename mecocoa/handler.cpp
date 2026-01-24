@@ -86,7 +86,8 @@ static void process_mouse(byte ch) {
 		if (last_status != next_status ||
 			absof(next_msecond - last_msecond) > 10000 && mouse_acc.x && mouse_acc.y)
 		{
-			outsfmt(" %c(%d,%d) ", last_status != next_status ? '~' : ' ', mouse_acc.x, mouse_acc.y);
+			// outsfmt(" %c(%d,%d) ", last_status != next_status ? '~' : ' ', mouse_acc.x, mouse_acc.y);
+			asserv(global_layman)->Domove(Cursor::global_cursor, mouse_acc);//{TEMP}
 			mouse_acc.x = 0;
 			mouse_acc.y = 0;
 			last_status = next_status;
@@ -94,7 +95,7 @@ static void process_mouse(byte ch) {
 		}
 		else {
 			mouse_acc.x += cast<char>(mouse_buf[1]);
-			mouse_acc.y += cast<char>(mouse_buf[2]);
+			mouse_acc.y += -cast<char>(mouse_buf[2]);
 		}
 	}
 	else if (mouse_buf[3] == 1) {
@@ -127,7 +128,7 @@ void Handint_MOU() {
 
 static rostr ExceptionDescription[] = {
 	"#DE Divide Error",
-	"#DB Step (reserved)",
+	"#DB Step",
 	"#NMI",
 	"#BP Breakpoint",
 	"#OF Overflow",
@@ -136,7 +137,7 @@ static rostr ExceptionDescription[] = {
 	"#NM Device Not Available",
 	//
 	"#DF Double Fault",
-	"Cooperative Processor Segment Overrun (reserved)",
+	"Cooperative Processor Segment Overrun",
 	"#TS Invalid TSS",
 	"#NP Segment Not Present",
 	"#SS Stack-Segment Fault",
@@ -144,7 +145,7 @@ static rostr ExceptionDescription[] = {
 	"#PF Page Fault",
 	"(Intel reserved)",
 	//
-	"#MF x87 FPU Floating-Point Error (reserved)",
+	"#MF x87 FPU Floating-Point Error",
 	"#AC Alignment Check",
 	"#MC Machine-Check",
 	"#XF SIMD Floating-Point Exception"

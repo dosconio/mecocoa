@@ -4,11 +4,13 @@
 // ModuTitle: Kernel
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 #define _STYLE_RUST
+#define _HIS_TIME_H
 #include <cpp/unisym>
 //
 #include <cpp/queue>
 #include <cpp/interrupt>
 #include <c/driver/mouse.h>// qemu only
+#include <c/driver/timer.h>
 #include <cpp/Device/_Video.hpp>
 #include <cpp/Device/Bus/PCI.hpp>
 #include <cpp/Device/USB/xHCI/xHCI.hpp>
@@ -150,6 +152,8 @@ void mecocoa()
 	stduint rsp;
 	_ASM("mov %%rsp, %0" : "=r"(rsp));
 
+	lapic_timer.Reset();
+	lapic_timer.Ento();
 	// Platform and Memory
 	GDT_Init();
 	SetupIdentityPageTable();
@@ -284,18 +288,14 @@ void mecocoa()
 		}
 		::xhc = &xhc;
 		APIC.enAble(true);
+		stduint elapsed_span = lapic_timer.Read();
+		lapic_timer.Endo();
 		//
 		
 
-		// void* ll = mem.allocate(0x1000);
-		// ploginfo("ll=%[x]", ll);
-		// ll = mem.allocate(0x1000);
-		// ploginfo("ll=%[x]", ll);
-
-
 		ploginfo("There are %[u] layers, f=%[x], l=%[x]", layman.Count(), layman.subf, layman.subl);
 		// ploginfo("l_left=%[x]", layman.subl->sheet_pleft);
-		ploginfo("Kernel Ready");
+		ploginfo("Kernel Ready in 0x%[x] ticks", elapsed_span);
 	}
 
 	while (true) {

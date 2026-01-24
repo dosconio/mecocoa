@@ -9,12 +9,18 @@
 #include <c/consio.h>
 #include <c/driver/mouse.h>
 #include <c/driver/keyboard.h>
-
+#include <cpp/Device/_Video.hpp>
 use crate uni;
-
 #ifdef _ARC_x86 // x86:
 #include "../include/atx-x86-flap32.hpp"
+#elif _MCCA == 0x8664
+#include "../include/atx-x64-uefi64.hpp"
+#endif
 #include "../include/console.hpp"
+
+Cursor* Cursor::global_cursor = nullptr;
+
+#ifdef _ARC_x86 // x86:
 
 // ---- ---- TTY ---- ----
 
@@ -33,7 +39,7 @@ byte BUF_BCONS2[byteof(BareConsole)]; static BareConsole* BCONS2;// TTY2
 byte BUF_BCONS3[byteof(BareConsole)]; static BareConsole* BCONS3;// TTY3
 BareConsole* bcons[TTY_NUMBER];
 // consider GUI
-byte BUF_VCI[sizeof(GloScreenRGB888)];
+VideoControlInterface* tty0_vci; byte BUF_VCI[sizeof(GloScreenRGB888)];
 byte BUF_CONS0[sizeof(VideoConsole)]; VideoConsole* vcon0;
 VideoConsole* vcons[TTY_NUMBER];
 // consider CLI and GUI
@@ -152,6 +158,7 @@ void blink2() {
 byte _BUF_QueueMouse[byteof(QueueLimited)];
 //// ---- ---- STATIC CORE ---- ---- ////
 
+static Rectangle screen0_win;
 void cons_init()
 {
 	// Manually Initialize
@@ -189,7 +196,7 @@ void cons_init()
 	new (&kbdbridge) KeyboardBridge();// C++ Bare Programming
 	kbd_out = &kbdbridge;
 
-	// ABOVE are OUTDATED
+	// primary graphic
 
 	if (!Graphic::setMode(VideoMode::RGB888_800x600))
 	{
@@ -205,12 +212,9 @@ void cons_init()
 		true, _Comment(R0) false
 	);// VGA
 
-	//{TODO} PS2/USB Mouse
-	//{TODO} BUFFER : vcon-buff
-	
 	// TTY0 background one (TODO: BUFFER and {clear;reflush})
-	new (BUF_VCI) GloScreenRGB888();
-	Rectangle screen0_win(
+	tty0_vci = new (BUF_VCI) GloScreenRGB888();
+	screen0_win = Rectangle(
 		Point(nil, nil),
 		Size2(video_info->XResolution, video_info->YResolution),
 		Color::White
@@ -219,18 +223,34 @@ void cons_init()
 	vcons[0] = vcon0;
 	//
 	con0_out = vcon0;
+	vcon0->backcolor = Color::White;
 	vcon0->forecolor = Color::Black;
 	vcon0->Clear();
 	// Console.OutFormat("\xFF\x70[Mecocoa]\xFF\x27 Real16 Switched Test OK!\xFF\x07\n\r");
 	
-	// TTY1 window form (TODO)
-	// TTY2 window form (TODO)
-	// TTY3 window form (TODO)
-
-	
+	// TTY1~3 window form are inited from cons_graf()
 
 }
+LayerManager* global_layman; byte _BUF_layman[byteof(LayerManager)];
+byte _BUF_cursor[byteof(Cursor)];
+void cons_graf() {
+	if (!ento_gui) return;
+	global_layman = new (_BUF_layman) LayerManager(tty0_vci, screen0_win);
 
+	// cursor
+	Cursor::global_cursor = new (_BUF_cursor)Cursor{ tty0_vci };
+	const Point cursor_pos = { 300,200 };
+	Cursor::global_cursor->setSheet(*global_layman, cursor_pos);
+
+	// vcon0
+	const stduint vcon0_size = video_info->XResolution * video_info->YResolution * sizeof(Color);
+	Color* vcon0_buf = (Color*)mem.allocate(vcon0_size);
+	// ploginfo("VideoConsole0 buffer at 0x%[x]..0x%[x]", vcon0_buf, _IMM(vcon0_buf) + vcon0_size);
+	global_layman->Append(vcon0);
+	vcon0->InitializeSheet(*global_layman, screen0_win.getVertex(), screen0_win.getSize(), vcon0_buf);
+	vcon0->setModeBuffer(vcon0_buf);
+	vcon0->Clear();
+}
 
 
 

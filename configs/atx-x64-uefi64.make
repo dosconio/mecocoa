@@ -13,7 +13,7 @@ RM = rm -rf
 GPREF   = #riscv64-unknown-elf-
 CFLAGS += -nostdlib -fno-builtin -z norelro -nostdlib -fno-builtin
 CFLAGS += --static -mno-red-zone -m64  -O0
-CFLAGS += -I$(uincpath) -D_MCCA=0x8664 -D_MUEFI -D_HIS_IMPLEMENT -D_DEBUG
+CFLAGS += -I$(uincpath) -D_MCCA=0x8664 -D_UEFI -D_HIS_IMPLEMENT -D_DEBUG
 CFLAGS += -fno-strict-aliasing -fno-exceptions -ffreestanding # -Wall -fno-pie
 CFLAGS += -Wno-multichar
 XFLAGS  = $(CFLAGS) -fno-rtti -std=c++23
@@ -47,6 +47,7 @@ cppfile=$(wildcard mecocoa/*.cpp) \
 	$(ulibpath)/cpp/Device/USB/USB-Device.cpp \
 	$(ulibpath)/cpp/Device/USB/xHCI/xHCI.cpp \
 	$(ulibpath)/cpp/Device/Keyboard.cpp \
+	$(ulibpath)/cpp/Device/Timer.cpp \
 	$(ulibpath)/cpp/Device/Mouse.cpp \
 	$(ulibpath)/cpp/Device/Video.cpp $(ulibpath)/cpp/Device/Video-VideoConsole.cpp \
 
