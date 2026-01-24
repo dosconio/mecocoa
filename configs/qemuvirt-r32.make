@@ -38,6 +38,7 @@ cppfile=$(wildcard prehost/$(arch)/*.cpp) \
 	$(ulibpath)/cpp/interrupt.cpp \
 	$(ulibpath)/cpp/Device/PLIC.cpp \
 	$(ulibpath)/cpp/Device/UART.cpp \
+	$(ulibpath)/cpp/Device/Timer.cpp \
 
 cppobjs=$(patsubst %cpp, %o, $(cppfile))
 cplfile=$(ulibpath)/c/mcore.c \

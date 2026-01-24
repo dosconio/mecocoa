@@ -36,7 +36,8 @@ cppfile=$(wildcard prehost/qemuvirt-r32/*.cpp) \
 	$(ulibpath)/cpp/interrupt.cpp \
 	$(ulibpath)/cpp/Device/PLIC.cpp \
 	$(ulibpath)/cpp/Device/UART.cpp \
-	
+	$(ulibpath)/cpp/Device/Timer.cpp \
+
 cppobjs=$(patsubst %cpp, %o, $(cppfile))
 cplfile=$(ulibpath)/c/mcore.c \
 	$(ulibpath)/c/debug.c \

@@ -10,6 +10,7 @@
 //
 #include <cpp/interrupt>
 #include <cpp/Device/UART>
+#include <c/driver/timer.h>
 
 using namespace uni;
 
@@ -20,6 +21,7 @@ void user_task1(void);
 
 _ESYM_C void trap_vector();
 void external_interrupt_handler();
+extern void timer_handler(void);
 
 _ESYM_C
 stduint trap_handler(stduint epc, stduint cause)
@@ -30,10 +32,13 @@ stduint trap_handler(stduint epc, stduint cause)
 		/* Asynchronous trap - interrupt */
 		switch (cause_code) {
 		case 3:
-			plogwarn("software interruption!\n");
+			ploginfo("software interruption!\n");
+			clint.MSIP(getMHARTID(), MSIP_Type::AckRupt);
+			schedule();
 			break;
 		case 7:
-			plogwarn("timer interruption!");
+			ploginfo("timer interruption!");
+			timer_handler();
 			break;
 		case 11:
 			ploginfo("external interruption!");
@@ -69,10 +74,21 @@ void external_interrupt_handler()
 	}
 }
 
+uint64 _tick;
+uint64 last_schepoint;
+void timer_handler()
+{
+	_tick++;
+	UART0.OutFormat("tick: %d\n", _tick);
+	last_schepoint += TIMER_INTERVAL;
+	clint.Load(getMHARTID(), last_schepoint);
+	schedule();
+}
+
+
 extern "C"
 void _entry()
 {
-	_preprocess();
 	//[!] cannot use FLOATING operation (why)
 	UART0.setMode(115200);
 	ploginfo("Hello Mcca-RV%u~ =OwO=", __BITS__);
@@ -86,8 +102,13 @@ void _entry()
 
 	PLIC.enAble(true);
 
+	last_schepoint = clint.Read() + TIMER_INTERVAL;
+	clint.Load(getMHARTID(), last_schepoint);
+	clint.enInterrupt();
+
 	// Task
 	setMSCRATCH(0);
+	setMIE(getMIE() | _MIE_MSIE);// software interrupts
 	task_create(user_task0);
 	task_create(user_task1);
 	schedule();
@@ -135,7 +156,7 @@ int task_create(void (*start_routin)(void))
 {
 	if (_top < MAX_TASKS) {
 		ctx_tasks[_top].sp = (stduint) &task_stack[_top][STACK_SIZE];
-		ctx_tasks[_top].ra = (stduint) start_routin;
+		ctx_tasks[_top].pc = (stduint) start_routin;
 		_top++;
 		return 0;
 	} else {
@@ -145,7 +166,7 @@ int task_create(void (*start_routin)(void))
 
 void task_yield()
 {
-	schedule();
+	clint.MSIP(getMHARTID(), MSIP_Type::SofRupt);
 }
 
 void task_delay(volatile int count)
@@ -159,10 +180,11 @@ void task_delay(volatile int count)
 void user_task0(void)
 {
 	UART0.OutFormat("Task 0: Created!\n");
+	task_yield();
+	UART0.OutFormat("Task 0: Yield Back!\n");
 	while (1) {
 		UART0.OutFormat("Task 0: Running...\n");
 		task_delay(DELAY);
-		task_yield();
 	}
 }
 
@@ -172,7 +194,6 @@ void user_task1(void)
 	while (1) {
 		UART0.OutFormat("Task 1: Running...\n");
 		task_delay(DELAY);
-		task_yield();
 	}
 }
 

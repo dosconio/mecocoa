@@ -29,8 +29,16 @@ _start:
 	SLLI	t0, t0, 10		# shl: mul the hart id by 1024
 	LA		sp, stacks + STACK_SIZE
 	ADD		sp, sp, t0		# move hart-loc stack pointer to its stack space
-	# Enter the kernel
-	J		_entry
+	# ---- mstatus ----
+	# schedule() in kernel will call MRET to switch to the first task, so parepare mstatus here.
+	# ASSUME: that the initial value of mstatus is zero.
+	# Set mstatus.MPP  to 3, so run in Machine mode after MRET.
+	# Set mstatus.MPIE to 1, so MRET will enable the interrupt.
+	li	t0, 3 << 11 | 1 << 7
+	csrs	mstatus, t0
+	#{} INIT_BSS
+	CALL	_preprocess
+	J		_entry          # Enter the kernel
 
 park:
 	WFI 	#== x86: HLT
@@ -47,9 +55,11 @@ trap_vector:
 	csrrw	t6, mscratch, t6    # xchg t6 and mscratch
 	reg_save t6
 	# save the actual t6 register, which we swapped into mscratch
-	mv	t5, t6                  # t5 points to the context of current task
+	mv		t5, t6              # t5 points to the context of current task
 	csrr	t6, mscratch        # read t6 back from mscratch
 	STORE	t6, 30*SIZE_REG(t5) # save t6 with t5 as base
+	csrr	a0, mepc
+	STORE	a0, 31*SIZE_REG(t5) # save mepc to context of current task
 	csrw	mscratch, t5        # restore the context pointer into mscratch
 	# call the C trap handler
 	csrr	a0, mepc
@@ -67,20 +77,13 @@ trap_vector:
 .globl switch_to
 .balign 4
 switch_to:
-	csrrw	t6, mscratch, t6	# swap t6 and mscratch
-	# Note: the first time switch_to() is called, mscratch is initialized as zero (in sched_init())
-	beqz	t6, 1f
-	reg_save t6
-	# Save the actual t6 register, which we swapped into mscratch
-	mv		t5, t6				# t5 points to the context of current task
-	csrr	t6, mscratch		# read t6 back from mscratch
-	STORE	t6, 30*SIZE_REG(t5)	# save t6 with t5 as base
-1:
 	csrw	mscratch, a0		# switch mscratch to point to the context of the next task
+	LOAD	a1, 31*SIZE_REG(a0) # set mepc to the pc of the next task
+	csrw	mepc, a1
 	# Restore all GP registers
 	mv		t6, a0
 	reg_restore t6
-	ret
+	mret # will enable global interrupt
 
 .balign 16 # rv'sp must be 16-byte aligned
 stacks:

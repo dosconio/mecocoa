@@ -293,7 +293,8 @@ void mecocoa()
 		// ploginfo("ll=%[x]", ll);
 
 
-		ploginfo("There are %[u] layers", layman.Count());
+		ploginfo("There are %[u] layers, f=%[x], l=%[x]", layman.Count(), layman.subf, layman.subl);
+		// ploginfo("l_left=%[x]", layman.subl->sheet_pleft);
 		ploginfo("Kernel Ready");
 	}
 

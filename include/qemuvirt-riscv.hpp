@@ -36,6 +36,8 @@ struct TaskContext {
 	stduint t4;
 	stduint t5;
 	stduint t6;
+	//
+	stduint pc;// offset 31*__BITS__
 };
 
 
