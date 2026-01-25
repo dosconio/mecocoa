@@ -145,6 +145,8 @@ void SetupIdentityPageTable() {
 	setCR3(_IMM(&pml4_table[0]));
 }
 
+
+
 // ---- Kernel
 extern "C" //__attribute__((ms_abi))
 void mecocoa()
@@ -207,7 +209,7 @@ void mecocoa()
 
 	// IVT and Device
 	InterruptControl APIC(_IMM(idt));
-	APIC.Reset(SegCo64);
+	APIC.Reset(SegCo64, 0x00000000);
 
 	// Message Queue
 	Queue<Message> msg_queue(_BUF_Message, numsof(_BUF_Message));
@@ -247,10 +249,7 @@ void mecocoa()
 		xhc_mmio_base = *xhc_bar.pvalue & ~_IMM(0xF);
 		ploginfo("xHC mmio_base = 0x%[x]", xhc_mmio_base);
 		// setting interrupt of xHC
-		//{TODO}  use APIC
-		auto& xchi_idt_entry = idt[InterruptVector::xHCI];
-		xchi_idt_entry.setModeRupt(reinterpret_cast<uint64>(IntHandlerXHCI), SegCo64);
-		loadIDT(_IMM(idt), sizeof(idt) - 1);
+		APIC[InterruptVector::xHCI].setModeRupt(reinterpret_cast<uint64>(IntHandlerXHCI), SegCo64);
 		// config MSI
 		const uint8_t bsp_local_apic_id = treat<uint32>_IMM(0xFEE00020) >> 24;// or STI is useless -- Phina 20260117
 		pci.configure_MSI_fixed_destination(
@@ -320,6 +319,11 @@ void mecocoa()
 			plogerro("Unknown message type: %d", msg.type);
 			break;
 		}
+
+		// uint32 i = 0;
+		// uint32 k = 2;
+		// uint32 j = k / i;
+
 	}
 }
 

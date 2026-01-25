@@ -135,7 +135,7 @@ void Taskman::Initialize(stduint cpuid) {
 		krnl_tss_cpu0.state = ProcessBlock::State::Running;
 		mecocoa_global->gdt_ptr->tss.setRange((dword)&krnl_tss_cpu0.TSS, sizeof(TSS_t) - 1);
 		TaskAdd(&krnl_tss_cpu0);
-		__asm("mov $8*5, %eax; ltr %ax");
+		loadTask(SegTSS);
 	}
 }
 

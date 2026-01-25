@@ -24,7 +24,7 @@ _ESYM_C Handler_t FILE_ENTO, FILE_ENDO;
 #if (_MCCA & 0xFF00) == 0x8600
 Memory mem;
 BmMemoman* Memory::pagebmap = NULL;
-bool BmMemoman::map_ready = false;
+bool map_ready = false;
 #endif
 
 // - Memory::clear_bss
@@ -68,7 +68,7 @@ usize Memory::evaluate_size() {
 void* Memory::physical_allocate(usize siz) {
 	if (siz & 0xFFF) siz = (siz & ~_IMM(0xFFF)) + 0x1000;
 	void* ret = nil;
-	if (BmMemoman::map_ready) {
+	if (map_ready) {
 		ret = mem.allocate(siz);
 	}
 	else { // not support pg-mapping
@@ -79,7 +79,7 @@ void* Memory::physical_allocate(usize siz) {
 		}
 		else if (usize(p_ext) + siz <= 0x00100000 + Memory::areax_size) {
 			void* ret = p_ext;
-			if (BmMemoman::map_ready) {
+			if (map_ready) {
 				Memory::pagebmap->add_range(_IMM(p_ext) >> 12, (_IMM(p_ext) + siz) >> 12, false);
 			}
 			p_ext += siz;
@@ -113,7 +113,7 @@ void* (*uni::_physical_allocate)(stduint size) = 0;
 #endif
 
 void* Memory::allocate(stduint siz) {
-	if (!BmMemoman::map_ready) return nullptr;
+	if (!map_ready) return nullptr;
 	if (siz & 0xFFF) siz = (siz & ~_IMM(0xFFF)) + 0x1000;
 	void* ret = nil;
 	// find a available page in bitmap
@@ -170,6 +170,7 @@ static const uint32 gdt_magic[] = {
 	0x0000FFFF, 0x00CF9A00, // code
 	0x00000000, 0x00000000, // call
 	0x0000FFFF, 0x000F9A00, // code-16
+	0x00000000, 0x00209800, // code-64
 	0x00000000, 0x00008900, // tss
 	// 0x0000FFFF, 0x00CFFA00, // code r3
 	// 0x0000FFFF, 0x00CFF200, // data r3

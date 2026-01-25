@@ -16,7 +16,7 @@ GLOBAL SwitchVideoMode
 GLOBAL MemoryList
 GLOBAL MemoryListData
 
-;{TODO} UNISYM BIOS Real16 and its ld. Then we can call it. (`00080000`~`0009FFFF`)
+; UNISYM BIOS Real16 and its ld. Then we can call it. (`00080000`~`0009FFFF`)
 ; Link this below 0x10000
 
 INTTBL_8616: DW 256 * 8 - 1; READONLY
@@ -114,12 +114,6 @@ MemoryList:
 MemoryListData: TIMES 20*5 DD 0
 
 
-
-
-
-
-
-
 ; Link this below or above 0x10000
 
 [BITS 32]
@@ -139,8 +133,7 @@ EXTERN Handint_MOU
 GLOBAL Handint_HDD_Entry
 EXTERN Handint_HDD
 
-GLOBAL ConvertStackPointer
-GLOBAL PG_PUSH, PG_POP
+EXTERN PG_PUSH, PG_POP
 
 GLOBAL RefreshGDT
 RefreshGDT:
@@ -156,72 +149,6 @@ RefreshGDT:
 	PUSH EAX
 RETF
 RefreshGDT_NEXT: RET
-
-PG_PUSH:
-	POP ESI
-	MOV EAX, DS
-	PUSH EAX
-	MOV EAX, SS
-	PUSH EAX
-	;
-	MOV EAX, 8 * 1
-	MOV DS, EAX
-	MOV ES, EAX
-	MOV FS, EAX
-	MOV GS, EAX
-	MOV SS, EAX
-	;
-	MOV EDX, CR3
-	MOV ECX, ESP
-	SUB ECX, 4 * 3; ecx and edx and ebp
-	PUSH EDX
-	PUSH ECX
-		PUSH EBP
-	MOV EAX, 0x00001000
-	MOV CR3, EAX
-	;MOV ESP, 0x7000; INTERRUPT STACK
-	CALL ConvertStackPointer
-	MOV ESP, EAX
-		MOV ECX, EBP
-		CALL ConvertStackPointer
-		MOV EBP, EAX
-	PUSH ESI
-	RET
-PG_POP:
-	POP ESI
-	    POP EBX
-	POP ECX
-	POP EDX
-	ADD ECX, 4 * (2+1)
-	MOV CR3, EDX
-	MOV ESP, ECX
-	POP EAX
-	MOV SS, EAX
-	POP EAX
-	MOV DS, EAX
-	MOV ES, EAX
-	MOV FS, EAX
-	MOV GS, EAX
-	PUSH ESI
-	RET
-
-ConvertStackPointer:; (ECX:ESP, EDX:CR3)->ESP
-	MOV EBX, ECX
-	SHR EBX, 22; 22 for L1P_ID
-	MOV EAX, [EDX + EBX * 4]
-	AND EAX, 0xFFFFF000
-	MOV EBX, ECX
-	SHR EBX, 12; 12 for L0P_ID
-	AND EBX, 0x3FF
-	MOV EAX, [EAX + EBX * 4]
-	AND EAX, 0xFFFFF000
-	MOV EBX, ECX
-	AND EBX, 0xFFF
-	OR  EAX, EBX
-	OR  EAX, 0x8000_0000; MCCA Design
-	; ADD EAX, 4; Skip Ret-address
-	RET
-	; no use kernel stack
 
 Handint_PIT_Entry:
 	PUSHAD

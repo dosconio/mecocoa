@@ -17,7 +17,8 @@ struct mec_gdt {
 	descriptor_t data;
 	descriptor_t code;
 	gate_t rout;
-	descriptor_t code16;
+	descriptor_t co16;
+	descriptor_t co64;
 	descriptor_t tss;
 	// descriptor_t code_r3;
 	// descriptor_t data_r3;

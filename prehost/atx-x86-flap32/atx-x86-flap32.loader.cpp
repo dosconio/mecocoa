@@ -36,9 +36,12 @@ static FAT_FileHandle filhan;
 Harddisk_PATA* pdisk;
 
 uint64 GDT64[]{
-	nil,
-	0x000F92000000FFFFull,// data 64, +RW
-	0x0020980000000000ull,// code 64,   X
+	0x0000000000000000ull,//(SegNull)
+	0x000F92000000FFFFull,//(SegData)
+	0x0000000000000000ull,//(SegCo32)
+	0x0000000000000000ull,//(SegCall)
+	0x0000000000000000ull,//(SegCo16)
+	0x0020980000000000ull,//(SegCo64)
 };// no address and limit for x64
 
 _ESYM_C void B32_LoadKer32();

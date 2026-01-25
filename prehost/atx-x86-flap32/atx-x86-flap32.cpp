@@ -66,9 +66,6 @@ void krnl_init() {
 	mecocoa_global->system_time.mic = 0;
 	//
 	_physical_allocate = Memory::physical_allocate;
-	_logstyle = _LOG_STYLE_NONE;
-	_pref_info = "[Mecocoa]";
-	_pref_warn = _pref_info;
 	_call_serious = (_tocall_ft)kernel_fail;//{TODO} DbgStop
 	_start_assert();
 	Memory::pagebmap = 0;
@@ -133,7 +130,7 @@ _sign_entry() {
 
 	// IVT and Device
 	InterruptControl GIC(_IMM(0x80000800));
-	GIC.Reset(SegCo32);
+	GIC.Reset(SegCo32, 0x80000000);
 	GIC.Init();
 	GIC[IRQ_PIT].setRange(mglb(Handint_PIT_Entry), SegCo32); PIT_Init();
 	GIC[IRQ_RTC].setRange(mglb(Handint_RTC_Entry), SegCo32); RTC_Init();
@@ -150,7 +147,7 @@ _sign_entry() {
 	cons_graf();
 
 	mecfetch();
-	// if (opt_test) __asm("ud2");
+	if (opt_test) __asm("ud2");
 
 	
 	// Service

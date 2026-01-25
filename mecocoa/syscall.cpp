@@ -121,7 +121,7 @@ static stduint call_body(const syscall_t callid, ...) {
 	case syscall_t::OUTC: {
 		ProcessBlock* pb = TaskGet(caller_pid);
 		// bcons[pb->focus_tty_id]->OutChar(para[0]);
-		_TEMP if (!pb->focus_tty_id) outc(para[0]);
+		_TEMP if (!pb->focus_tty_id) {outc(para[0]); outc('\0');}
 		if (ch_tse) task_switch_enable = task_switch_enable_old;
 		break;
 	}

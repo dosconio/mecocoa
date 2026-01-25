@@ -9,9 +9,15 @@
 
 using namespace uni;
 
+// _ESYM_C void CallCo16();
+
 _ESYM_C void
 _entry() {
 	Letvar(p, uint8*, 0xB8000);
-	*p = 'R';
+	*p++ = 'R';
+	*p++ = 0x07;
+	
+	// CallCo16();
+
 	while (1);
 }

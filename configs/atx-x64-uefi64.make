@@ -36,6 +36,7 @@ LDFLAGS = -T $(LDFILE)
 asmfile=$(ulibpath)/asm/x64/inst/ioport.asm \
 	$(ulibpath)/asm/x64/inst/manage.asm \
 	$(ulibpath)/asm/x64/inst/interrupt.asm \
+	$(ulibpath)/asm/x64/interrupt/ruptable.asm \
 	prehost/$(arch)/atx-x64.asm
 
 cppfile=$(wildcard mecocoa/*.cpp) \
@@ -43,6 +44,8 @@ cppfile=$(wildcard mecocoa/*.cpp) \
 	$(ulibpath)/cpp/stream.cpp \
 	$(ulibpath)/cpp/interrupt.cpp \
 	$(ulibpath)/cpp/lango/lango-cpp.cpp \
+	$(ulibpath)/cpp/dat-block/bmmemoman.cpp \
+	\
 	$(ulibpath)/cpp/Device/Bus/PCI.cpp \
 	$(ulibpath)/cpp/Device/USB/USB-Device.cpp \
 	$(ulibpath)/cpp/Device/USB/xHCI/xHCI.cpp \
@@ -150,7 +153,7 @@ clean:
 
 %.o: %.asm
 	echo AS $(notdir $<)
-	aasm -f elf64 -o $(uobjpath)/mcca-$(arch)/_ae_$(notdir $@) $<
+	aasm -f elf64 -o $(uobjpath)/mcca-$(arch)/_ae_$(notdir $@) $<  -D_MCCA=0x8664
 
 %.o: %.S
 	echo AS $(notdir $<)

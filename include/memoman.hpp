@@ -9,18 +9,7 @@
 #include <cpp/string>
 #include <cpp/trait/MallocTrait.hpp>
 
-struct BmMemoman : public Bitmap {
-	static bool map_ready;
-	usize avail_pointer = ~_IMM0;// to the lowest available page
-	BmMemoman(pureptr_t offs, stduint size) : Bitmap(offs, size) {}
-	//
-	// e.g. add_range(0x1, 0x2) ofr 0x1000 ~ 0x1FFF
-
-	void add_range(stduint head_pos, stduint last_pos, bool what);
-	//
-	void dump_avail_memory();
-};
-
+extern bool map_ready;
 
 #if (_MCCA & 0xFF00) == 0x8600
 
@@ -39,12 +28,9 @@ enum {
 	SegCo32 = 8 * 2,
 	SegCall = 8 * 3,
 	SegCo16 = 8 * 4,
-	#if __BITS__ == 64
 	SegCo64 = 8 * 5,
-	#elif __BITS__ == 32
-	SegTSS = 8 * 5,
-	// LDT_App1, TSS_App1, LDT_App2, TSS_App2, ...
-	#endif
+	SegTSS = 8 * 6,
+	// flap32: LDT_App1, TSS_App1, LDT_App2, TSS_App2, ...
 };
 
 extern byte BSS_ENTO, BSS_ENDO;

@@ -124,8 +124,14 @@ void Handint_MOU() {
 // void Handint_HDD()...
 
 #endif
-#ifdef _ARC_x86 // x86:
 
+
+
+
+
+// ---- ---- ---- ---- EXCEPTION ---- ---- ---- ---- //
+
+#if (_MCCA & 0xFF00) == 0x8600
 static rostr ExceptionDescription[] = {
 	"#DE Divide Error",
 	"#DB Step",
@@ -135,52 +141,36 @@ static rostr ExceptionDescription[] = {
 	"#BR BOUND Range Exceeded",
 	"#UD Invalid Opcode",
 	"#NM Device Not Available",
-	//
 	"#DF Double Fault",
-	"Cooperative Processor Segment Overrun",
+	"#   Cooperative Processor Segment Overrun",
 	"#TS Invalid TSS",
 	"#NP Segment Not Present",
 	"#SS Stack-Segment Fault",
 	"#GP General Protection",
 	"#PF Page Fault",
-	"(Intel reserved)",
-	//
+	"#   (Intel reserved)",
+	// 0x10
 	"#MF x87 FPU Floating-Point Error",
 	"#AC Alignment Check",
 	"#MC Machine-Check",
-	"#XF SIMD Floating-Point Exception"
+	"#XM SIMD Floating-Point Exception"
 };
+#endif
 
-_ESYM_C void PG_PUSH(), PG_POP();
 
-void ERQ_Handler(sdword iden, dword para) {
-	bool have_para = true;
+#if (_MCCA & 0xFF00) == 0x8600
+
+_ESYM_C
+void exception_handler(sdword iden, dword para) {
+	const bool have_para = iden >= 0;
+	if (iden < 0) iden = ~iden;
+
 	dword tmp;
-	dword regs[6];
-	__asm("mov %%eax, %0" : "=m" (regs[0]));
-	__asm("mov %%ebx, %0" : "=m" (regs[1]));
-	__asm("mov %%ecx, %0" : "=m" (regs[2]));
-	__asm("mov %%edx, %0" : "=m" (regs[3]));
-	__asm("mov %%esi, %0" : "=m" (regs[4]));
-	__asm("mov %%edi, %0" : "=m" (regs[5]));
-	PG_PUSH();
-	__asm("mov %0, %%eax" : "=m" (regs[0]));
-	__asm("mov %0, %%ebx" : "=m" (regs[1]));
-	__asm("mov %0, %%ecx" : "=m" (regs[2]));
-	__asm("mov %0, %%edx" : "=m" (regs[3]));
-	__asm("mov %0, %%esi" : "=m" (regs[4]));
-	__asm("mov %0, %%edi" : "=m" (regs[5]));
-	
-	// __asm("mov %cr3, %eax");
-	//__asm("mov %%eax, %0" : "=m" (cr3));
-	if (iden < 0)// do not have para
-	{
-		iden = ~iden;
-		have_para = false;
-	}
 	if (iden >= 0x20)
-		printlog(_LOG_FATAL, "#ELSE");
+		printlog(_LOG_FATAL, "#ELSE %x %x", iden, para);
 	switch (iden) {
+		#if _MCCA == 0x8632
+
 	case ERQ_Invalid_Opcode:
 	{
 		// first #UD is for TEST
@@ -188,7 +178,7 @@ void ERQ_Handler(sdword iden, dword para) {
 		if (!first_done) {
 			first_done = true;
 			rostr test_page = (rostr)"\xFF\x70[Mecocoa]\xFF\x27 Exception #UD Test OK!\xFF\x07" + 0x80000000;
-			if (opt_test) Console.OutFormat("%s\n\r", test_page);
+			Console.OutFormat("%s\n\r", test_page);
 		}
 		else {
 			printlog(_LOG_FATAL, " %s", ExceptionDescription[iden]);// no-para
@@ -212,12 +202,13 @@ void ERQ_Handler(sdword iden, dword para) {
 		printlog(_LOG_FATAL, have_para ? "%s with 0x%[32H], vaddr: 0x%[32H]" : "%s",
 			ExceptionDescription[iden], para, tmp); // printlog will call halt machine
 		break;
+
+		#endif
 	default:
 		printlog(_LOG_FATAL, have_para ? "%s with 0x%[32H]" : "%s",
 			ExceptionDescription[iden], para); // printlog will call halt machine
 		break;
 	}
-	PG_POP();
 }
 
 // No dynamic core

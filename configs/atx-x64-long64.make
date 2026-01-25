@@ -33,10 +33,11 @@ QBOARD = atx
 LDFILE  = prehost/$(arch)/$(arch).ld
 LDFLAGS = -T $(LDFILE) 
 #
-asmfile=#$(ulibpath)/asm/x64/inst/ioport.asm \
+asmfile=prehost/$(arch)/atx-x64.asm \
+#$(ulibpath)/asm/x64/inst/ioport.asm \
 # 	$(ulibpath)/asm/x64/inst/manage.asm \
 # 	$(ulibpath)/asm/x64/inst/interrupt.asm \
-# 	prehost/$(arch)/atx-x64.asm
+
 
 cppfile=#$(wildcard mecocoa/*.cpp) \
 # 	$(ulibpath)/cpp/stream.cpp \

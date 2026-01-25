@@ -92,7 +92,7 @@ bool Memory::initialize(stduint eax, byte* ebx) {
 		}
 	}
 	Memory::pagebmap->add_range(0x80, 0xA0, false);// Extended BIOS Data Area
-	BmMemoman::map_ready = true;
+	map_ready = true;
 	return true;
 }
 #elif _MCCA == 0x8664
@@ -112,7 +112,7 @@ bool Memory::initialize(stduint eax, byte* ebx) {
 	default:
 		return false;
 	}
-	BmMemoman::map_ready = true;
+	map_ready = true;
 	return true;
 }
 #endif
