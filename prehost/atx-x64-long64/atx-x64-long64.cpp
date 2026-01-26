@@ -13,13 +13,16 @@
 using namespace uni;
 
 _ESYM_C stduint CallCo16(stduint func);
+enum {
+	R16FN_SMAP = 0,
+};
 
 _ESYM_C
 void mecocoa() {
 	Letvar(p, uint16*, 0xB8000);
 	*p++ = 'R' | 0x0700;
 	
-	if (Memory::initialize('ANIF', (byte*)(CallCo16(0))))
+	if (Memory::initialize('ANIF', (byte*)(CallCo16(R16FN_SMAP))))
 		*p++ = 'X' | 0x0700;
 
 	while (1);

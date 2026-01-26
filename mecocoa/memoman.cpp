@@ -41,27 +41,6 @@ Letvar(Memory::p_basic, byte*, 0x1000); //.. 0x7000
 Letvar(Memory::p_ext, byte*, mem_area_exten_beg);
 stduint Memory::total_mem = 0;
 usize Memory::areax_size = 0;
-Slice Memory::avail_slices[4]{ 0 };
-
-usize Memory::evaluate_size() {
-	// TEMP check 0x00100000~0x80000000, 2-power size.
-	volatile union { word* _p; usize _i; } p;
-	p._i = mem_area_exten_beg;
-	*p._p = 0x5AA5;
-	if (*p._p == 0x5AA5) do {
-		p._i = p._i << 1;
-		*(p._p - 1) = 0x1227;
-		// printlog(_LOG_INFO, "%s at %[32H]", __FUNCIDEN__, p._p - 1);
-		if (*(p._p - 1) != 0x1227)
-		{
-			p._i = p._i >> 1;
-			break;
-		}
-	} while (p._i < 0x80000000);
-	areax_size = p._i - mem_area_exten_beg;
-	return mem_area_exten_beg + areax_size;
-}
-
 
 // Allocate Physical-Continuous Memory
 // unit: x86 Page 0x1000
@@ -77,29 +56,13 @@ void* Memory::physical_allocate(usize siz) {
 			p_basic += siz;
 			return ret;
 		}
-		else if (usize(p_ext) + siz <= 0x00100000 + Memory::areax_size) {
+		else {
 			void* ret = p_ext;
-			if (map_ready) {
-				Memory::pagebmap->add_range(_IMM(p_ext) >> 12, (_IMM(p_ext) + siz) >> 12, false);
-			}
 			p_ext += siz;
 			return ret;
 		}
 	}
 	return ret;
-}
-
-rostr Memory::text_memavail(uni::String& ker_buf) {
-	usize mem = Memory::total_mem ? Memory::total_mem : evaluate_size();
-	char unit[]{ ' ', 'K', 'M', 'G', 'T' };
-	int level = 0;
-	// assert mem != 0
-	while (!(mem % 1024)) {
-		level++;
-		mem /= 1024;
-	}
-	ker_buf.Format(level ? "%d %cB" : "0x%[32H] B", mem, unit[level]);
-	return ker_buf.reference();
 }
 
 #endif

@@ -69,7 +69,6 @@ void krnl_init() {
 	_call_serious = (_tocall_ft)kernel_fail;//{TODO} DbgStop
 	_start_assert();
 	Memory::pagebmap = 0;
-	Memory::text_memavail(ker_buf); Memory::align_basic_4k();
 	// ---- Paging
 	kernel_paging.Reset();// should take 0x1000
 	kernel_paging.MapWeak(0x00000000, 0x00000000, 0x00400000, true, _Comment(R0) true);
@@ -103,7 +102,7 @@ void mecfetch() {
 	for0(j, height) { for0(i, width) Console.OutChar(' '); Console.OutFormat("\n\r"); }
 	Console.out("\xFF\xFF", 2);
 
-	Console.OutFormat("Mem Avail: %s\n\r", ker_buf.reference());
+	// Console.OutFormat("Mem Avail: %s\n\r", ker_buf.reference());
 
 	Console.OutFormat("CPU Brand: %s\n\r", text_brand());
 
@@ -124,10 +123,8 @@ _sign_entry() {
 		_ASM("HLT");
 	}
 	
-	Memory::text_memavail(ker_buf);
 	Cache_t::enAble();
 	Taskman::Initialize();
-
 	// IVT and Device
 	InterruptControl GIC(_IMM(0x80000800));
 	GIC.Reset(SegCo32, 0x80000000);
@@ -148,6 +145,7 @@ _sign_entry() {
 
 	mecfetch();
 	if (opt_test) __asm("ud2");
+	
 
 	
 	// Service

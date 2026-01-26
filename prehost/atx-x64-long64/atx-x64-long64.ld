@@ -8,6 +8,7 @@ MEMORY
 SECTIONS
 {
 	. = 0x10000;
+	FILE_ENTO = .;
 	/*
 	.multiboot : {
 		*(.multiboot)

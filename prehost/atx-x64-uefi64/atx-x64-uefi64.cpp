@@ -200,6 +200,7 @@ void mecocoa()
 	vcon0->Clear();
 
 	ploginfo("Ciallo %lf, rsp=%[x]", 2025.09, rsp);
+	ploginfo("Memory Slices at %[x]", memory_map.buffer);
 
 	
 	vcon0->OutFormat("[Console] Video Memory at %[x]\r\n", uefi_data.frame_buffer);

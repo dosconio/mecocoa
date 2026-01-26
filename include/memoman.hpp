@@ -55,25 +55,11 @@ public: // previously used
 	static usize areax_size;
 	#endif
 public:
-	#if _MCCA == 0x8632
-	static Slice avail_slices[4];
-	static usize align_basic_4k() {
-		usize& uaddr = *(usize*)&p_basic;
-		usize last = uaddr;
-		if (uaddr & 0xFFF) {
-			uaddr = (uaddr & ~_IMM(0xFFF)) + 0x1000;
-		}
-		return uaddr - last;
-	}
-	_TEMP static usize evaluate_size();
-	static void* physical_allocate(usize siz);
-	static rostr text_memavail(uni::String& ker_buf);
-	#endif
-public:
 	static BmMemoman* pagebmap;// 1 map for first 4G, 0x100000 pages / 8 bpB = 0x20000 bytes
-public:
+	public:
 	static void clear_bss();
 	static bool initialize(stduint eax, byte* ebx);
+	static void* physical_allocate(usize siz);
 public:// trait
 	virtual void* allocate(stduint size);
 	virtual bool deallocate(void* ptr, stduint size = 0 _Comment(zero_for_block));
