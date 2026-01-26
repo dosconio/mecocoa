@@ -17,25 +17,25 @@ public:\
 #include <cpp/Device/_Video.hpp>
 
 #if (_MCCA & 0xFF00) == 0x8600
-extern LayerManager* global_layman;
+extern uni::LayerManager* global_layman;
 #endif
 
 // Cursor
 #if (_MCCA & 0xFF00) == 0x8600
-class Cursor: public SheetTrait
+class Cursor: public uni::SheetTrait
 {
 public:
 	virtual void doshow(void* _) override {
 		
 	}
-	virtual void onrupt(SheetEvent event, Point rel_p, ...) override {}
+	virtual void onrupt(uni::SheetEvent event, Point rel_p, ...) override {}
 public:
 	static Cursor* global_cursor;
 public:
-	Cursor(VideoControlInterface* writer) : SheetTrait(), pixel_writer_{ writer } {}
+	Cursor(uni::VideoControlInterface* writer) : uni::SheetTrait(), pixel_writer_{ writer } {}
 	void setSheet(LayerManager& layman, const Point& vertex);
 public:
-	VideoControlInterface* pixel_writer_ = nullptr;
+	uni::VideoControlInterface* pixel_writer_ = nullptr;
 };
 #endif
 

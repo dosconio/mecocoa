@@ -17,6 +17,7 @@ CFLAGS += -nostdlib -fno-builtin -z norelro -nostdlib -fno-builtin
 CFLAGS += --static -mno-red-zone -m64  -O0
 CFLAGS += -I$(uincpath) -D_MCCA=0x8664 -D_HIS_IMPLEMENT -D_DEBUG
 CFLAGS += -fno-strict-aliasing -fno-exceptions -ffreestanding # -Wall -fno-pie
+CFLAGS += -Wno-multichar
 XFLAGS  = $(CFLAGS) -fno-rtti -std=c++23
 G_DBG   = gdb-multiarch
 CC      = ${GPREF}gcc
@@ -33,26 +34,26 @@ QBOARD = atx
 LDFILE  = prehost/$(arch)/$(arch).ld
 LDFLAGS = -T $(LDFILE) 
 #
-asmfile=prehost/$(arch)/atx-x64.asm \
-#$(ulibpath)/asm/x64/inst/ioport.asm \
-# 	$(ulibpath)/asm/x64/inst/manage.asm \
-# 	$(ulibpath)/asm/x64/inst/interrupt.asm \
+asmfile=prehost/atx-x64-uefi64/atx-x64.asm\
+	$(ulibpath)/asm/x64/inst/ioport.asm \
+	$(ulibpath)/asm/x64/inst/manage.asm \
+	$(ulibpath)/asm/x64/inst/interrupt.asm \
 
 
-cppfile=#$(wildcard mecocoa/*.cpp) \
-# 	$(ulibpath)/cpp/stream.cpp \
+cppfile=$(wildcard mecocoa/*.cpp)\
+	$(ulibpath)/cpp/color.cpp \
+	$(ulibpath)/cpp/stream.cpp \
+	$(ulibpath)/cpp/lango/lango-cpp.cpp \
+	$(ulibpath)/cpp/dat-block/bmmemoman.cpp \
 # 	$(ulibpath)/cpp/interrupt.cpp \
-# 	$(ulibpath)/cpp/lango/lango-cpp.cpp \
-# 	$(ulibpath)/cpp/Device/Bus/PCI.cpp \
-# 	$(ulibpath)/cpp/Device/USB/USB-Device.cpp \
-# 	$(ulibpath)/cpp/Device/USB/xHCI/xHCI.cpp \
-# 	$(ulibpath)/cpp/Device/Keyboard.cpp \
-# 	$(ulibpath)/cpp/Device/Mouse.cpp \
-# 	$(ulibpath)/cpp/Device/Video.cpp $(ulibpath)/cpp/Device/Video-VideoConsole.cpp \
+
+
+
+	
 
 cplfile=$(ulibpath)/c/mcore.c\
-# 	$(ulibpath)/c/debug.c \
-# 	$(ulibpath)/c/console/conformat.c \
+	$(ulibpath)/c/debug.c \
+	$(ulibpath)/c/console/conformat.c \
 # 	$(ulibpath)/c/data/font/font-8x5.c \
 # 	$(ulibpath)/c/data/font/font-16x8.c \
 
@@ -61,12 +62,15 @@ asmobjs=$(patsubst %asm, %o, $(asmfile))
 cppobjs=$(patsubst %cpp, %o, $(cppfile))
 cplobjs=$(patsubst %c, %o, $(cplfile))
 elf_kernel=AMD64/mecocoa/mcca-$(arch).elf
+bin_ladder=AMD64/mecocoa/ladder
 
 mntdir=/mnt/mcca-$(arch)
 sudokey=k
 
 .PHONY : build
 build: clean $(asmobjs) $(cppobjs) $(cplobjs)
+	@echo MK $(arch) ladder
+	aasm -o $(ubinpath)/$(bin_ladder) prehost/$(arch)/atx-x64-ladder.asm -Iinclude/
 	@echo MK $(elf_kernel)
 	$(CX) $(XFLAGS) $(LDFLAGS) \
 		-o $(ubinpath)/$(elf_kernel) \
@@ -77,6 +81,7 @@ build: clean $(asmobjs) $(cppobjs) $(cplobjs)
 	@echo $(sudokey) | sudo -S kpartx -av $(ubinpath)/fixed1.vhd  >/dev/null # ls /dev/mapper/loop*p* && sudo mkfs.vfat -F 32 -n "DATA" /dev/mapper/loop*p7
 	@echo $(sudokey) | sudo -S mount /dev/mapper/loop*p7 $(mnts) #sudo fsck.vfat -v /dev/mapper/loop0p7 # fdisk # blkid
 	@echo $(sudokey) | sudo -S cp $(ubinpath)/$(elf_kernel)     $(mnts)/mx64.elf
+	@echo $(sudokey) | sudo -S cp $(ubinpath)/$(bin_ladder)     $(mnts)/ladder
 	@echo $(sudokey) | sudo -S umount $(mnts)
 	@echo $(sudokey) | sudo -S kpartx -dv $(ubinpath)/fixed1.vhd >/dev/null
 #

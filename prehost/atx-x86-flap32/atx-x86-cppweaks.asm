@@ -6,6 +6,9 @@
 ; Copyright: Dosconio Mecocoa, BSD 3-Clause License
 
 %include "osdev.a"
+%include "ladder.a"
+
+SegData EQU 8*1
 
 GLOBAL SwitchReal16
 GLOBAL SW16_FUNCTION
@@ -19,51 +22,31 @@ GLOBAL MemoryListData
 ; UNISYM BIOS Real16 and its ld. Then we can call it. (`00080000`~`0009FFFF`)
 ; Link this below 0x10000
 
-INTTBL_8616: DW 256 * 8 - 1; READONLY
+INTTBL_8616: DW 256 * 4 - 1; READONLY
 	DD 0
 INTTBL_8632: DW 0
 	DD 0
 SW16_FUNCTION: DW 0
 
+[BITS 32]
 SwitchReal16:
-	[BITS 32]
 	; flap32 -> real16
 	PUSHAD
 	JMP DWORD 8*4:PointReal16;{} can do this directly
-	[BITS 16]
-	PointReal16:
-		SIDT [INTTBL_8632]
-		LIDT [INTTBL_8616]
-		MOV EAX, CR0
-		AND EAX, 0x7FFFFFFE
-		MOV CR0, EAX
-		JMP WORD 0:PointReal16_switch_CS
-	PointReal16_switch_CS:
-		MOV AX, 0
-		MOV SS, AX
-		MOV DS, AX
-		MOV ES, AX
-		MOV FS, AX
-		MOV GS, AX
-		Addr20Disable
-		CALL [SW16_FUNCTION]
-
+[BITS 16]
+	EnterCo16
+	CALL [SW16_FUNCTION]
 	MOV EAX, CR0
 	OR  EAX, 0x80000001
 	MOV CR0, EAX
 	Addr20Enable
 	JMP WORD 8*2:PointBack32
-	[BITS 32]
-	PointBack32:
-		MOV EAX, 8*1
-		MOV DS, AX
-		MOV ES, AX
-		MOV FS, AX
-		MOV GS, AX
-		MOV SS, AX
-		POPAD
-		LIDT [INTTBL_8632]
-	RET
+[BITS 32]
+PointBack32:
+	LoadDataSegs SegData
+	POPAD
+	LIDT [INTTBL_8632]
+RET
 
 [BITS 16]
 VideoModeVal: DW 0; IN(mode) OUT(0 for good), should below 0x10000
@@ -137,12 +120,7 @@ EXTERN PG_PUSH, PG_POP
 
 GLOBAL RefreshGDT
 RefreshGDT:
-	MOV EAX, 8*1
-	MOV DS, EAX
-	MOV ES, EAX
-	MOV FS, EAX
-	MOV GS, EAX
-	MOV SS, EAX
+	LoadDataSegs SegData
 	MOV EAX, 8*2
 	PUSH EAX
 	MOV EAX, RefreshGDT_NEXT

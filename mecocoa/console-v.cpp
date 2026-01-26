@@ -16,7 +16,7 @@ use crate uni;
 #if _MCCA == 0x8632
 #include "../include/atx-x86-flap32.hpp"
 #elif _MCCA == 0x8664
-#include "../include/atx-x64-uefi64.hpp"
+#include "../include/atx-x64.hpp"
 #include "../prehost/atx-x64-uefi64/atx-x64-uefi64.loader/loader-graph.h"
 #endif
 
@@ -128,7 +128,7 @@ Color GloScreenRGB888::GetColor(Point p) const {
 	return cast<Color>(Locate(p));
 }
 
-#elif __BITS__ == 64
+#elif __BITS__ == 64 && defined(_UEFI)
 
 extern FrameBufferConfig config_graph;
 

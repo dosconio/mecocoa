@@ -17,7 +17,7 @@ _ESYM_C Handler_t FILE_ENTO, FILE_ENDO;
 // for x86, only consider single paging method
 
 #elif _MCCA == 0x8664
-#include "../include/atx-x64-uefi64.hpp"
+#include "../include/atx-x64.hpp"
 
 #endif
 
@@ -234,7 +234,7 @@ _ESYM_C void* calloc(size_t nmemb, size_t size) {
 	Console.OutFormat("calloc(%[u])\n\r", nmemb * size);
 	return nullptr;
 }
-#elif _MCCA == 0x8664
+#elif _MCCA == 0x8664 && defined(_UEFI)
 void operator delete(void*) {}
 void operator delete(void* ptr, unsigned long size) noexcept { _TODO }
 void operator delete(void* ptr, unsigned long size, std::align_val_t) noexcept { ::operator delete(ptr, size); }

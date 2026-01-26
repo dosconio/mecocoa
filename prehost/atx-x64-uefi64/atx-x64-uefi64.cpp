@@ -11,7 +11,7 @@
 #include <cpp/interrupt>
 #include <c/driver/mouse.h>// qemu only
 #include <c/driver/timer.h>
-#include <cpp/Device/_Video.hpp>
+
 #include <cpp/Device/Bus/PCI.hpp>
 #include <cpp/Device/USB/xHCI/xHCI.hpp>
 // #include <cpp/Device/USB/USB-Header.hpp>
@@ -19,7 +19,7 @@
 
 using namespace uni;
 #include "atx-x64-uefi64.loader/loader-graph.h"
-#include "../../include/atx-x64-uefi64.hpp"
+#include "../../include/atx-x64.hpp"
 
 
 static byte _b_vcb[byteof(VideoControlBlock)];
@@ -297,6 +297,8 @@ void mecocoa()
 		ploginfo("Kernel Ready in 0x%[x] ticks", elapsed_span);
 	}
 
+	_ASM("UD2");
+
 	while (true) {
 		APIC.enAble(false);
 		if (!message_queue->Count()) {
@@ -320,9 +322,7 @@ void mecocoa()
 			break;
 		}
 
-		// uint32 i = 0;
-		// uint32 k = 2;
-		// uint32 j = k / i;
+		
 
 	}
 }

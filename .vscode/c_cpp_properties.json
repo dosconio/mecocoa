@@ -12,7 +12,7 @@
             "defines": [
 				"_DEBUG",
                 // "_MCCA=0x8632","_ARC_x86=5",
-                "_MCCA=0x8664",
+                "_MCCA=0x8664","_UEFI",
 				// "_MCCA=0x1032",
                 
             ],

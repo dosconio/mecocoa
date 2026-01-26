@@ -169,22 +169,22 @@ void exception_handler(sdword iden, dword para) {
 	if (iden >= 0x20)
 		printlog(_LOG_FATAL, "#ELSE %x %x", iden, para);
 	switch (iden) {
-		#if _MCCA == 0x8632
-
-	case ERQ_Invalid_Opcode:
+	case ERQ_Invalid_Opcode:// 6
 	{
 		// first #UD is for TEST
 		static bool first_done = false;
 		if (!first_done) {
 			first_done = true;
-			rostr test_page = (rostr)"\xFF\x70[Mecocoa]\xFF\x27 Exception #UD Test OK!\xFF\x07" + 0x80000000;
-			Console.OutFormat("%s\n\r", test_page);
+			rostr test_page = (rostr)"\xFF\x70[Mecocoa]\xFF\x27 Exception #UD Test OK!\xFF\x07";
+			outsfmt("%s\n\r", test_page);
 		}
 		else {
 			printlog(_LOG_FATAL, " %s", ExceptionDescription[iden]);// no-para
 		}
 		break;
 	}
+
+		#if _MCCA == 0x8632
 	case ERQ_Coprocessor_Not_Available:
 		// needed by jmp-TSS method
 		__asm("mov %cr0, %eax");
@@ -196,14 +196,13 @@ void exception_handler(sdword iden, dword para) {
 		__asm("and $0xFFFFFFF1, %eax");// TS(3) EM(2) MP(1)
 		__asm("mov %eax, %cr0");// enable FPU/MMX/SSE
 		break;
+		#endif
+
 	case ERQ_Page_Fault:
-		__asm("mov %cr2, %eax");
-		__asm("mov %%eax, %0" : "=m" (tmp));
 		printlog(_LOG_FATAL, have_para ? "%s with 0x%[32H], vaddr: 0x%[32H]" : "%s",
-			ExceptionDescription[iden], para, tmp); // printlog will call halt machine
+			ExceptionDescription[iden], para, getCR2()); // printlog will call halt machine
 		break;
 
-		#endif
 	default:
 		printlog(_LOG_FATAL, have_para ? "%s with 0x%[32H]" : "%s",
 			ExceptionDescription[iden], para); // printlog will call halt machine

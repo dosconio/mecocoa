@@ -153,7 +153,7 @@ clean:
 
 %.o: %.asm
 	echo AS $(notdir $<)
-	aasm -f elf64 -o $(uobjpath)/mcca-$(arch)/_ae_$(notdir $@) $<  -D_MCCA=0x8664
+	aasm -f elf64 -o $(uobjpath)/mcca-$(arch)/_ae_$(notdir $@) $<  -D_MCCA=0x8664 -D_UEFI
 
 %.o: %.S
 	echo AS $(notdir $<)

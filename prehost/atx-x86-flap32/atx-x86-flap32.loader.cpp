@@ -24,10 +24,10 @@ OstreamTrait* con0_out;// TTY0
 
 // use before loading elf-kernel
 #define ROOT_DEV_FAT0 (MINOR_hd6a + 2)
-#define single_sector  ((byte*)0x8000)
-#define fatable_sector ((byte*)0x9000)
-#define hdinfo_addr    ((byte*)0xA000)
-#define kernel_addr    ((byte*)0x100000)
+#define single_sector  ((byte*)0x100000)
+#define fatable_sector ((byte*)0x101000)
+#define hdinfo_addr    ((byte*)0x102000)
+#define kernel_addr    ((byte*)0x103000)
 
 // temp
 #define paging_addr    ((byte*)0x200000)
@@ -37,10 +37,10 @@ Harddisk_PATA* pdisk;
 
 uint64 GDT64[]{
 	0x0000000000000000ull,//(SegNull)
-	0x000F92000000FFFFull,//(SegData)
-	0x0000000000000000ull,//(SegCo32)
+	0x00CF92000000FFFFull,//(SegData)
+	0x00CF9A000000FFFFull,//(SegCo32)
 	0x0000000000000000ull,//(SegCall)
-	0x0000000000000000ull,//(SegCo16)
+	0x000F9A000000FFFFull,//(SegCo16)
 	0x0020980000000000ull,//(SegCo64)
 };// no address and limit for x64
 
@@ -86,6 +86,13 @@ void body() {
 	else {
 		printlog(_LOG_ERROR, "Kernel not found");
 		_ASM("HLT");
+	}
+
+	if (support_ia32e) {
+		if (pfs_fat0.search("ladder", &a)) {
+			pfs_fat0.readfl(&filhan, Slice{ 0,filhan.size }, 0x8000_addr);
+		}
+		else plogerro("No ladder for x64l");
 	}
 
 	if (!support_ia32e) ELF32_LoadExecFromMemory(kernel_addr, (void**)&entry_kernel);

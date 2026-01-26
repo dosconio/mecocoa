@@ -16,7 +16,9 @@ _ESYM_C Handler_t FILE_ENTO, FILE_ENDO;
 // for x86, only consider single paging method
 
 #elif _MCCA == 0x8664
-#include "../include/atx-x64-uefi64.hpp"
+
+#include "../include/atx-x64.hpp"
+
 
 #endif
 
@@ -28,10 +30,11 @@ _PACKED(struct) memory_info_entry {
 };// ARDS
 #if (_MCCA & 0xFF00) == 0x8600
 byte _BUF_pagebmap[sizeof(BmMemoman)];
-#ifdef _UEFI
-const stduint mapsize = 0x20000;
-static byte mapping_4G[mapsize];
-#endif 
+
+const stduint bmapsize = 0x100000 / 8;
+// 0x0000000000000000 .. 0x0000000100000000
+byte memoman_4G_00000000[bmapsize];
+
 #endif
 #if _MCCA == 0x8632
 extern Handler_t MemoryList;
@@ -45,6 +48,7 @@ static stduint parse_grub(stduint addr);
 #elif _MCCA == 0x8664
 //
 static void parse_uefi(const MemoryMap& memory_map);
+
 #endif
 #if _MCCA == 0x8632
 bool Memory::initialize(stduint eax, byte* ebx) {
@@ -97,15 +101,17 @@ bool Memory::initialize(stduint eax, byte* ebx) {
 }
 #elif _MCCA == 0x8664
 bool Memory::initialize(stduint eax, byte* ebx) {
-	void* mapaddr = mapping_4G;
-	MemSet(mapaddr, 0, mapsize);
-	Memory::pagebmap = new (_BUF_pagebmap) BmMemoman(mapaddr, mapsize);
+	void* mapaddr = memoman_4G_00000000;
+	MemSet(mapaddr, 0, bmapsize);
+	Memory::pagebmap = new (_BUF_pagebmap) BmMemoman(mapaddr, bmapsize);
 	// fill the mbitmap
 	// * here
 	// - physical_allocate (which be with pagemap)
 	// - free [TODO]
 	switch (eax)
 	{
+	// case 'ANIF':
+	// 	break;
 	case 'UEFI':
 		parse_uefi(*reinterpret_cast<MemoryMap*>(ebx));
 		break;
@@ -212,6 +218,7 @@ static stduint parse_grub(stduint addr)
 }
 
 #elif _MCCA == 0x8664
+
 
 static void parse_uefi(const MemoryMap& memory_map) {
 	byte bmap_FFFF[2];// 0x10 pages / 8 = 2

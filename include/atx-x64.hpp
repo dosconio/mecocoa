@@ -1,12 +1,13 @@
+#ifndef _MCCA_x64
+#define _MCCA_x64
+
+#include <cpp/unisym>
+using namespace uni;
+#include <cpp/Device/_Video.hpp>
 #include "console.hpp"
 #include "memoman.hpp"
 
-#ifndef _MCCA_UEFI64
-#define _MCCA_UEFI64
-
-
-
-// others
+// UEFI
 
 struct MemoryMap {
 	stduint buffer_size;

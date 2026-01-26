@@ -14,7 +14,7 @@ use crate uni;
 #ifdef _ARC_x86 // x86:
 #include "../include/atx-x86-flap32.hpp"
 #elif _MCCA == 0x8664
-#include "../include/atx-x64-uefi64.hpp"
+#include "../include/atx-x64.hpp"
 #endif
 #include "../include/console.hpp"
 
