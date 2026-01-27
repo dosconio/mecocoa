@@ -13,15 +13,15 @@ RM = rm -rf
 
 # (GNU)
 GPREF   = #riscv64-unknown-elf-
-CFLAGS += -nostdlib -fno-builtin -z norelro -nostdlib -fno-builtin
+CFLAGS += -z norelro -nostdlib -fno-builtin
 CFLAGS += --static -mno-red-zone -m64  -O0
 CFLAGS += -I$(uincpath) -D_MCCA=0x8664 -D_HIS_IMPLEMENT -D_DEBUG
-CFLAGS += -fno-strict-aliasing -fno-exceptions -ffreestanding # -Wall -fno-pie
+CFLAGS += -fno-strict-aliasing -fno-exceptions -fno-stack-protector # -Wall -fno-pie
 CFLAGS += -Wno-multichar
 XFLAGS  = $(CFLAGS) -fno-rtti -std=c++23
 G_DBG   = gdb-multiarch
-CC      = ${GPREF}gcc
-CX      = ${GPREF}g++
+CC      = ${GPREF}gcc 
+CX      = ${GPREF}g++ -std=c++2a
 OBJCOPY = ${GPREF}objcopy
 OBJDUMP = ${GPREF}objdump
 
@@ -42,9 +42,11 @@ asmfile=prehost/atx-x64-uefi64/atx-x64.asm\
 
 cppfile=$(wildcard mecocoa/*.cpp)\
 	$(ulibpath)/cpp/color.cpp \
+	$(ulibpath)/cpp/consio.cpp \
 	$(ulibpath)/cpp/stream.cpp \
 	$(ulibpath)/cpp/lango/lango-cpp.cpp \
 	$(ulibpath)/cpp/dat-block/bmmemoman.cpp \
+	$(ulibpath)/cpp/Device/Buzzer.cpp \
 # 	$(ulibpath)/cpp/interrupt.cpp \
 
 
@@ -53,6 +55,7 @@ cppfile=$(wildcard mecocoa/*.cpp)\
 
 cplfile=$(ulibpath)/c/mcore.c\
 	$(ulibpath)/c/debug.c \
+	$(ulibpath)/c/consio.c \
 	$(ulibpath)/c/console/conformat.c \
 # 	$(ulibpath)/c/data/font/font-8x5.c \
 # 	$(ulibpath)/c/data/font/font-16x8.c \
@@ -121,14 +124,14 @@ clean:
 
 %.o: %.S
 	echo AS $(notdir $<)
-	${CC} ${CFLAGS} -c -o $(uobjpath)/mcca-$(arch)/$(notdir $@) $<
+	${CC} ${CFLAGS} -c -o $(uobjpath)/mcca-$(arch)/_as_$(notdir $@) $<
 
 %.o: %.c
 	echo CC $(notdir $<)
-	${CC} ${CFLAGS} -c -o $(uobjpath)/mcca-$(arch)/$(notdir $@) $<
+	${CC} ${CFLAGS} -c -o $(uobjpath)/mcca-$(arch)/_cc_$(notdir $@) $<
 
 %.o: %.cpp
 	echo CX $(notdir $<)
-	${CX} ${XFLAGS} -c -o $(uobjpath)/mcca-$(arch)/$(notdir $@) $<
+	${CX} ${XFLAGS} -c -o $(uobjpath)/mcca-$(arch)/_cx_$(notdir $@) $<
 
 

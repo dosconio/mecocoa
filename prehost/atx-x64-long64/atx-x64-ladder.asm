@@ -11,6 +11,7 @@ SegCo16 EQU 8*4
 SegCo64 EQU 8*5
 
 ADDR_PARA0 EQU 0x500
+ADDR_PARA1 EQU 0x502
 
 
 [BITS 32]
@@ -68,6 +69,7 @@ PointBack32:
 	POPAD
 	POP EAX
 	MOV [KernelJump], EAX
+	POP EAX
 	MOVZX EAX, WORD[ADDR_PARA0]
 JMP FAR [KernelJump]
 
@@ -75,10 +77,11 @@ JMP FAR [KernelJump]
 FUNC_CNTS EQU 0x2
 ; FUNCTIONS
 ; 0x00 MemoryList(->addr)
-; 0x01 SwitchVideoMode(mode->succ)
+; 0x01 SwitchVideoMode(mode->addr)
+; 0x02 VideoModeList()
 FUNC_TABLE:
 DW MemoryList
-DW 0
+DW SwitchVideoMode
 
 KernelJump:
 	DD  0
@@ -107,3 +110,30 @@ MemoryList:
 		JNE _MemoryList_Loop
 	_MemoryList_Fail:
 	RET
+
+[BITS 16]
+CrtVideoInfo: TIMES 256 DB 0
+SwitchVideoMode:
+	XOR AX, AX
+	MOV ES, AX
+	MOV DI, CrtVideoInfo
+	; Seek
+	MOV AX, 0x4F01; VBE function: Get ModeInfo
+	MOV CX, [ADDR_PARA1]
+	INT 0x10
+	CMP AX, 0x004F
+	JNE SwitchVideoModeFail
+	; Set Mode
+	XOR AX, AX
+	MOV DS, AX
+	MOV AX, 0x4F02
+	MOV BX, [ADDR_PARA1]
+	OR  BX, 0x4000
+	INT 0x10
+	MOV WORD[ADDR_PARA0], CrtVideoInfo
+RET
+SwitchVideoModeFail:
+	XOR AX, AX
+	MOV DS, AX
+	MOV WORD[ADDR_PARA0], 0
+RET

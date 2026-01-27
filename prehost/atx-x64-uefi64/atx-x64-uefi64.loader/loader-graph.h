@@ -11,6 +11,20 @@ struct FrameBufferConfig {
 	enum PixelFormat pixel_format;
 };
 
-typedef struct FrameBufferConfig UefiData;
+#ifndef _INC_CPP
+struct MemoryMap {
+	UINTN  buffer_size;
+	VOID*  buffer;
+	UINTN  map_size;
+	UINTN  map_key;
+	UINTN  descriptor_size;
+	UINT32 descriptor_version;
+};
+#endif
+
+typedef struct {
+	struct FrameBufferConfig frame_buffer_config;
+	struct MemoryMap memory_map;
+} UefiData;
 
 #endif

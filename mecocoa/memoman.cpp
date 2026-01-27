@@ -26,6 +26,9 @@ Memory mem;
 BmMemoman* Memory::pagebmap = NULL;
 bool map_ready = false;
 #endif
+#ifdef _UEFI
+
+#endif
 
 // - Memory::clear_bss
 #if (_MCCA & 0xFF00) == 0x8600

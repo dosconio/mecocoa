@@ -7,6 +7,16 @@ using namespace uni;
 #include "console.hpp"
 #include "memoman.hpp"
 
+
+// LONG
+
+#define bda ((BIOS_DataArea*)0x400)
+
+_ESYM_C stduint CallCo16(stduint func);
+enum {
+	R16FN_SMAP = 0,
+};
+
 // UEFI
 
 struct MemoryMap {

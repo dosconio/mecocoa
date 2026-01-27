@@ -45,15 +45,6 @@ enum PixelFormat {
 
 unsigned f();
 
-struct MemoryMap {
-	UINTN  buffer_size;
-	VOID*  buffer;
-	UINTN  map_size;
-	UINTN  map_key;
-	UINTN  descriptor_size;
-	UINT32 descriptor_version;
-};
-
 EFI_STATUS GetMemoryMap(struct MemoryMap* map) {
 	if (map->buffer == NULL) {
 		return EFI_BUFFER_TOO_SMALL;
@@ -303,11 +294,11 @@ _ESYM_C EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image_handle, EFI_SYSTEM_TABLE* Sy
 		gop->Mode->FrameBufferSize);
 
 	struct FrameBufferConfig config = {
-	  (UINT8*)gop->Mode->FrameBufferBase,
-	  gop->Mode->Info->PixelsPerScanLine,
-	  gop->Mode->Info->HorizontalResolution,
-	  gop->Mode->Info->VerticalResolution,
-	  0
+		(UINT8*)gop->Mode->FrameBufferBase,
+		gop->Mode->Info->PixelsPerScanLine,
+		gop->Mode->Info->HorizontalResolution,
+		gop->Mode->Info->VerticalResolution,
+		0
 	};
 	switch (gop->Mode->Info->PixelFormat) {
 	case PixelRedGreenBlueReserved8BitPerColor:
@@ -373,11 +364,12 @@ _ESYM_C EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image_handle, EFI_SYSTEM_TABLE* Sy
 		}
 	}
 
-	
-	
-	typedef void (*entry_t)(UefiData*, const struct MemoryMap*);
-	//((entry_t)entry_addr)(gop->Mode->FrameBufferBase, gop->Mode->FrameBufferSize);
-	((entry_t)entry_addr)(&config, &memmap);
+	typedef void (*entry_t)(UefiData*);
+	UefiData uefi_data;
+	uefi_data.frame_buffer_config = config;
+	uefi_data.memory_map = memmap;
+
+	((entry_t)entry_addr)(&uefi_data);
 
 	SystemTable->ConOut->OutputString(SystemTable->ConOut, L"\n\rOyasuminasaiii~\n\r");// Unreachable
 	while (1);

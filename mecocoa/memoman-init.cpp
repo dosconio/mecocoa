@@ -100,7 +100,9 @@ bool Memory::initialize(stduint eax, byte* ebx) {
 		false
 	);// kernel
 	Memory::pagebmap->add_range(0, 0x10, false);
-	Memory::pagebmap->add_range(0x80, 0x100, false);// BIOS and Upper Memory Area
+	Memory::pagebmap->add_range(0x78, 0x100, false);
+	// - 0x78000~0x7FFFF Video Modes List
+	// - 0x80000~0xFFFFF BIOS and Upper Memory Area
 	map_ready = true;
 	return true;
 }

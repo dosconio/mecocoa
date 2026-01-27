@@ -16,10 +16,8 @@
 #include <cpp/Device/USB/xHCI/xHCI.hpp>
 // #include <cpp/Device/USB/USB-Header.hpp>
 
-
-using namespace uni;
-#include "atx-x64-uefi64.loader/loader-graph.h"
 #include "../../include/atx-x64.hpp"
+#include "atx-x64-uefi64.loader/loader-graph.h"
 
 
 static byte _b_vcb[byteof(VideoControlBlock)];
@@ -44,7 +42,6 @@ void MouseObserver(int8 displacement_x, int8 displacement_y) {
 }
 
 // ---- Interrupt
-alignas(64) gate_t idt[256];
 struct InterruptVector {
 	enum Number {
 		xHCI = 0x40,
@@ -104,16 +101,9 @@ void IntHandlerXHCI(InterruptFrame* frame) {
 alignas(16) byte kernel_stack[1024 * 1024];
 
 UefiData uefi_data;
-MemoryMap memory_map;
+FrameBufferConfig config_graph;// current video mode
 
-FrameBufferConfig config_graph;
 
-_ESYM_C void init(const UefiData& uefi_data_ref, const MemoryMap& memory_map_ref) {
-	uefi_data = uefi_data_ref;
-	memory_map = memory_map_ref;
-	Memory::clear_bss();
-	_preprocess();
-}
 
 // ---- Paging
 /** @brief 静的に確保するPageDirectoryの個数
@@ -148,40 +138,42 @@ void SetupIdentityPageTable() {
 
 
 // ---- Kernel
+
 extern "C" //__attribute__((ms_abi))
-void mecocoa()
+void mecocoa(const UefiData& uefi_data_ref)
 {
 	stduint rsp;
 	_ASM("mov %%rsp, %0" : "=r"(rsp));
+	uefi_data = uefi_data_ref;
 
 	lapic_timer.Reset();
 	lapic_timer.Ento();
 	// Platform and Memory
 	GDT_Init();
 	SetupIdentityPageTable();
-	Memory::initialize('UEFI', (byte*)(&memory_map));
+	Memory::initialize('UEFI', (byte*)(&uefi_data.memory_map));
 	
 
 	// cons_init
 
-	config_graph = uefi_data;
+	config_graph = uefi_data.frame_buffer_config;
 
 	GloScreenARGB8888 vga_ARGB8888;
 	GloScreenABGR8888 vga_ABGR8888;
 	VideoControlInterface* screen;
 
-	switch (uefi_data.pixel_format) {
+	switch (uefi_data.frame_buffer_config.pixel_format) {
 	case PixelFormat::ARGB8888: screen = &vga_ARGB8888; break;
 	case PixelFormat::ABGR8888: screen = &vga_ABGR8888; break;
 	default:
 		loop HALT();
 	}
 
-	Size2 screen_size(uefi_data.horizontal_resolution, uefi_data.vertical_resolution);
+	Size2 screen_size(uefi_data.frame_buffer_config.horizontal_resolution, uefi_data.frame_buffer_config.vertical_resolution);
 	Rectangle screen0_win(Point(0, 0), screen_size, Color::White);
 	VideoControlBlock* p_vcb = new (_b_vcb) VideoControlBlock\
-		((pureptr_t)uefi_data.frame_buffer, *screen);
-	p_vcb->setMode(uefi_data.pixel_format, screen_size.x, screen_size.y);
+		((pureptr_t)uefi_data.frame_buffer_config.frame_buffer, *screen);
+	p_vcb->setMode(uefi_data.frame_buffer_config.pixel_format, screen_size.x, screen_size.y);
 	LayerManager layman(screen, screen0_win); global_layman = &layman;
 
 	Cursor cursor{ &p_vcb->getVCI() };
@@ -200,16 +192,15 @@ void mecocoa()
 	vcon0->Clear();
 
 	ploginfo("Ciallo %lf, rsp=%[x]", 2025.09, rsp);
-	ploginfo("Memory Slices at %[x]", memory_map.buffer);
 
 	
-	vcon0->OutFormat("[Console] Video Memory at %[x]\r\n", uefi_data.frame_buffer);
+	vcon0->OutFormat("[Console] Video Memory at %[x]\r\n", uefi_data.frame_buffer_config.frame_buffer);
 	vcon0->OutFormat("[Memoman] Allocate 0x%[x] bytes for vcon0 at %[x]\r\n", vcon0_bufsize, vcon0_buf);
 	Memory::pagebmap->dump_avail_memory();
 
 
 	// IVT and Device
-	InterruptControl APIC(_IMM(idt));
+	InterruptControl APIC(_IMM(mem.allocate(256 * sizeof(gate_t))));
 	APIC.Reset(SegCo64, 0x00000000);
 
 	// Message Queue

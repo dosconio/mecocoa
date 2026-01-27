@@ -10,27 +10,20 @@
 #include <c/bitmap.h>
 #include <c/consio.h>
 
-using namespace uni;
-
-_ESYM_C stduint CallCo16(stduint func);
-enum {
-	R16FN_SMAP = 0,
-};
+void cons_init();
 
 _ESYM_C
 void mecocoa() {
-	Letvar(p, uint16*, 0xB8000);
-	*p++ = 'R' | 0x0700;
+	if (!Memory::initialize('ANIF', (byte*)(CallCo16(R16FN_SMAP))))
+		HALT();
 	
-	if (Memory::initialize('ANIF', (byte*)(CallCo16(R16FN_SMAP))))
-		*p++ = 'X' | 0x0700;
+	cons_init();
+	Console.OutFormat("Ciallo~\r\n");
 
-	while (1);
+	Memory::pagebmap->dump_avail_memory();
+
+	loop HALT();
 }
 
-//
-
-void outtxt(const char* str, stduint len) {
-	///
-}
-
+//{FUTURE}
+// - treat<uint16>(0x502ull) = 0x180; CallCo16(1);

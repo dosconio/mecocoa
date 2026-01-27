@@ -437,4 +437,18 @@ void uni::BareConsole::doshow(void *_) {
 	bcons[id]->auto_incbegaddr = true;
 }
 
+#elif _MCCA == 0x8664 && !defined(_UEFI)
+
+byte BUF_BCONS0[byteof(BareConsole)]; BareConsole* BCONS0;// TTY0
+
+OstreamTrait* con0_out;
+
+void cons_init() {
+	BCONS0 = new (BUF_BCONS0) BareConsole(bda->screen_columns, 24, _VIDEO_ADDR_BUFFER, 0 * 50); BCONS0->setShowY(0, 24);
+	BCONS0->Scroll(24);
+	con0_out = BCONS0;
+}
+
 #endif
+
+

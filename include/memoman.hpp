@@ -33,6 +33,22 @@ enum {
 	// flap32: LDT_App1, TSS_App1, LDT_App2, TSS_App2, ...
 };
 
+_PACKED(struct) VideoInfoEntry {
+	uint16 mode;// 0x00
+	uint16 width;// 0x02
+	uint16 height;// 0x04
+	union {
+		uint16 bitmode;// 0x06
+		struct {
+			uint8 B_bytes : 4;// 0x06
+			uint8 G_bytes : 4;
+			uint8 R_bytes : 4;// 0x07
+			uint8 A_bytes : 4;
+		};
+	};
+};// RGB Direct Mode Only
+
+
 extern byte BSS_ENTO, BSS_ENDO;
 
 #if _MCCA == 0x8632
