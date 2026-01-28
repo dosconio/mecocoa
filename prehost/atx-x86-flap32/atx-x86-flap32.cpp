@@ -154,6 +154,13 @@ _sign_entry() {
 	TaskRegister((void*)&serv_file_loop, 0);
 	TaskRegister((void*)&serv_task_loop, 0);// GDT operation
 
+	call_ladder(2);// list video modes
+	for (VideoInfoEntry* vie = (VideoInfoEntry*)0x78000; _IMM(vie) < 0x80000; vie++) {
+		if (!vie->mode) break;
+		bool condition = vie->bitmode == 0x8888;
+		if (condition) ploginfo("mode %[16H], %ux%u, ARGB:%[16H]", vie->mode, vie->width, vie->height, vie->bitmode);
+	} 
+
 	// GIC.enAble();
 	syscall(syscall_t::OUTC, 'O');// with effect InterruptEnable();
 	Console.OutFormat("hayouuu~!\a\n\r");

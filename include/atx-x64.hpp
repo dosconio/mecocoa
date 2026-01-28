@@ -8,14 +8,9 @@ using namespace uni;
 #include "memoman.hpp"
 
 
-// LONG
+// LONG AND UEFI
 
-#define bda ((BIOS_DataArea*)0x400)
 
-_ESYM_C stduint CallCo16(stduint func);
-enum {
-	R16FN_SMAP = 0,
-};
 
 // UEFI
 

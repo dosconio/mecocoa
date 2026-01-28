@@ -26,13 +26,29 @@ _start:
 	SLLI	t0, t0, 10		# shl: mul the hart id by 1024
 	LA		sp, stacks + STACK_SIZE
 	ADD		sp, sp, t0		# move hart-loc stack pointer to its stack space
+# .ifdef CONFIG_SYSCALL
+	# https://lore.kernel.org/qemu-devel/20201223192553.332508-1-atish.patra@wdc.com/
+	# For qemu version >= 6.0, exception would be raised if no PMP enty is
+	# configured. So just configure one entny, which allows all the whole
+	# 32-bits physical address range is R/W/X.
+	# Details please refer to
+	# https://gitlab.com/qemu-project/qemu/-/issues/585 or
+	# https://gitee.com/unicornx/riscv-operating-system-mooc/issues/I441IC (in chinese)
+	# So it's just a temporary workaround till now to not block people who
+	# want to try newer qemu (>= 6.0).
+	li      t0, 0xffffffff
+	csrw    pmpaddr0, t0
+	li      t0, 0xf
+	csrw    pmpcfg0, t0
+# .endif
 	# ---- mstatus ----
 	# schedule() in kernel will call MRET to switch to the first task, so parepare mstatus here.
 	# ASSUME: that the initial value of mstatus is zero.
 	# Set mstatus.MPP  to 3, so run in Machine mode after MRET.
 	# Set mstatus.MPIE to 1, so MRET will enable the interrupt.
-	li	t0, 3 << 11 | 1 << 7
-	csrs	mstatus, t0
+	#{TODO} set according to ctx.ring
+	li	t0, 3 << 11
+	csrc	mstatus, t0
 	#{} INIT_BSS
 	CALL	_preprocess
 	J		_entry          # Enter the kernel
@@ -61,6 +77,7 @@ trap_vector:
 	# call the C trap handler
 	csrr	a0, mepc
 	csrr	a1, mcause
+	csrr	a2, mscratch
 	call	trap_handler # return the return address via a0
 	csrw	mepc, a0
 	csrr	t6, mscratch # restore context(registers).
@@ -81,6 +98,17 @@ switch_to:
 	mv		t6, a0
 	reg_restore t6
 	mret
+
+#{TOMOVE}
+# ---- ---- USER SYSCALL ---- ----
+
+.global gethid
+gethid:
+	li a7, 1 # #define SYS_GETCOREID	1
+	ecall
+	ret
+
+#
 
 .balign 16 # rv'sp must be 16-byte aligned
 stacks:

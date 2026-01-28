@@ -132,15 +132,10 @@ KeyboardBridge kbdbridge;
 
 ModeInfoBlock* video_info;
 
-_ESYM_C word VideoModeVal;
-_ESYM_C Handler_t SwitchVideoMode;
-_ESYM_C word SW16_FUNCTION;
 bool Graphic::setMode(VideoMode vmode) {
-	VideoModeVal = _IMM(vmode);
-	SW16_FUNCTION = _IMM(&SwitchVideoMode);
-	__asm("call SwitchReal16");
-	MemCopyN(video_info, (pureptr_t)TEMP_AREA, offsetof(ModeInfoBlock, ReservedTail));
-	return !VideoModeVal;
+	uint32 addr = call_ladder(R16FN_VMOD, _IMM(vmode));
+	if (addr) MemCopyN(video_info, (pureptr_t)addr, offsetof(ModeInfoBlock, ReservedTail));
+	return addr;
 }
 
 bool ento_gui = false;

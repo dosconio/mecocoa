@@ -22,9 +22,10 @@ void user_task1(void);
 _ESYM_C void trap_vector();
 void external_interrupt_handler();
 extern void timer_handler(void);
+void syscall(TaskContext* cxt);
 
 _ESYM_C
-stduint trap_handler(stduint epc, stduint cause)
+stduint trap_handler(stduint epc, stduint cause, TaskContext* cxt)
 {
 	stduint return_pc = epc;
 	stduint cause_code = cause & MCAUSE_MASK_ECODE;
@@ -48,12 +49,21 @@ stduint trap_handler(stduint epc, stduint cause)
 			plogwarn("Unknown async exception! Code = 0x%[x]", cause_code);
 			break;
 		}
-	} else { // Synchronous trap - exception
-		plogerro("Sync exceptions! Code = 0x%[x]", cause_code);
-		//return_pc += sizeof(stduint);// if skip the instruction which cause the exception
-		// Test: *(int *)0x00000000 = 100; // #7 Store/AMO access fault
-		// Test: a = *(int *)0x00000000;   // #5 Load access fault
-		while (1);
+	}
+	else { // Synchronous trap - exception
+		switch (cause_code) {
+		case 8:
+			ploginfo("System call from U-mode!\n");
+			syscall(cxt);
+			return_pc += 4;
+			break;
+		default:
+			plogerro("Sync exceptions! Code = 0x%[x]", cause_code);
+			//return_pc += sizeof(stduint);// if skip the instruction which cause the exception
+			// Test: *(int *)0x00000000 = 100; // #7 Store/AMO access fault
+			// Test: a = *(int *)0x00000000;   // #5 Load access fault
+			while (1);
+		}
 	}
 	return return_pc;
 }
@@ -83,6 +93,37 @@ void timer_handler()
 	last_schepoint += TIMER_INTERVAL;
 	clint.Load(getMHARTID(), last_schepoint);
 	schedule();
+}
+
+// syscall
+
+#define SYS_GETCOREID	1
+
+int sys_gethid(unsigned int *ptr_hid)
+{
+	UART0.OutFormat("--> sys_gethid, arg0 = %[x]\n", ptr_hid);
+	if (ptr_hid == NULL) {
+		return -1;
+	} else {
+		*ptr_hid = getMHARTID();
+		return 0;
+	}
+}
+
+void syscall(TaskContext* cxt)
+{
+	uint32_t syscall_num = cxt->a7;
+
+	switch (syscall_num) {
+	case SYS_GETCOREID:
+		cxt->a0 = sys_gethid((unsigned int *)(cxt->a0));
+		break;
+	default:
+		UART0.OutFormat("Unknown syscall no: %d\n", syscall_num);
+		cxt->a0 = -1;
+	}
+
+	return;
 }
 
 
@@ -175,13 +216,26 @@ void task_delay(volatile int count)
 	while (count--);
 }
 
+// ---- ---- USER BEG ---- ----
+
+
 #define DELAY 4000
 
+_ESYM_C
+stduint gethid(unsigned int* ptr_hid);
 void user_task0(void)
 {
+	unsigned int hid = -1;
 	UART0.OutFormat("Task 0: Created!\n");
-	task_yield();
+	// task_yield(); <--- seem a privileged code
 	UART0.OutFormat("Task 0: Yield Back!\n");
+	int ret = -1;
+	ret = gethid(&hid);
+	if (!ret) {
+		UART0.OutFormat("system call returned!, hart id is %d\n", hid);
+	} else {
+		UART0.OutFormat("gethid() failed, return: %d\n", ret);
+	}
 	while (1) {
 		UART0.OutFormat("Task 0: Running...\n");
 		task_delay(DELAY);
@@ -196,6 +250,8 @@ void user_task1(void)
 		task_delay(DELAY);
 	}
 }
+
+// ---- ---- USER END ---- ----
 
 extern "C" { void* __dso_handle = 0; }
 extern "C" { void __cxa_atexit(void) {} }

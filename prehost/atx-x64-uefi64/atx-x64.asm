@@ -3,6 +3,7 @@
 
 EXTERN kernel_stack
 
+EXTERN EnableSSE
 EXTERN _ZN6Memory9clear_bssEv
 EXTERN _preprocess
 
@@ -17,6 +18,7 @@ SegCo32 EQU 8*2
 _entry:
     MOV  RSP, kernel_stack + 1024*1024
 	PUSH RDI
+	CALL EnableSSE
 	CALL _ZN6Memory9clear_bssEv; Memory::clear_bss
 	CALL _preprocess
 	POP  RDI
@@ -26,6 +28,7 @@ _entry:
 %else
 _entry:
 	MOV  RSP, 0x7FF0
+	CALL EnableSSE
 	CALL _ZN6Memory9clear_bssEv; Memory::clear_bss
 	CALL _preprocess
 	CALL mecocoa

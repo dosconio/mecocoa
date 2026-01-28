@@ -184,21 +184,15 @@ void exception_handler(sdword iden, dword para) {
 		break;
 	}
 
-		#if _MCCA == 0x8632
-	case ERQ_Coprocessor_Not_Available:
+	case ERQ_Coprocessor_Not_Available:// 7
 		// needed by jmp-TSS method
-		__asm("mov %cr0, %eax");
-		__asm("mov %%eax, %0" : "=m" (tmp));
-		if (!(tmp & 0b1110)) {
+		if (!(getCR0() & 0b1110)) {
 			printlog(_LOG_FATAL, " %s", ExceptionDescription[iden]);// no-para
 		}
-		__asm("mov %cr0, %eax");
-		__asm("and $0xFFFFFFF1, %eax");// TS(3) EM(2) MP(1)
-		__asm("mov %eax, %cr0");// enable FPU/MMX/SSE
+		EnableSSE();
 		break;
-		#endif
 
-	case ERQ_Page_Fault:
+	case ERQ_Page_Fault:// 14
 		printlog(_LOG_FATAL, have_para ? "%s with 0x%[32H], vaddr: 0x%[32H]" : "%s",
 			ExceptionDescription[iden], para, getCR2()); // printlog will call halt machine
 		break;

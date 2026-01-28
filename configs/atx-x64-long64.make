@@ -35,6 +35,7 @@ LDFILE  = prehost/$(arch)/$(arch).ld
 LDFLAGS = -T $(LDFILE) 
 #
 asmfile=prehost/atx-x64-uefi64/atx-x64.asm\
+	$(ulibpath)/asm/x64/sysman.asm \
 	$(ulibpath)/asm/x64/inst/ioport.asm \
 	$(ulibpath)/asm/x64/inst/manage.asm \
 	$(ulibpath)/asm/x64/inst/interrupt.asm \
@@ -73,7 +74,7 @@ sudokey=k
 .PHONY : build
 build: clean $(asmobjs) $(cppobjs) $(cplobjs)
 	@echo MK $(arch) ladder
-	aasm -o $(ubinpath)/$(bin_ladder) prehost/$(arch)/atx-x64-ladder.asm -Iinclude/
+	aasm -o $(ubinpath)/$(bin_ladder) prehost/atx-x86-flap32/atx-ladder.asm -Iinclude/ -D_MCCA=0x8664
 	@echo MK $(elf_kernel)
 	$(CX) $(XFLAGS) $(LDFLAGS) \
 		-o $(ubinpath)/$(elf_kernel) \
@@ -120,7 +121,7 @@ clean:
 
 %.o: %.asm
 	echo AS $(notdir $<)
-	aasm -f elf64 -o $(uobjpath)/mcca-$(arch)/_ae_$(notdir $@) $<
+	aasm -f elf64      -o $(uobjpath)/mcca-$(arch)/_ae_$(notdir $@) $< -D_MCCA=0x8664
 
 %.o: %.S
 	echo AS $(notdir $<)

@@ -14,7 +14,7 @@ void cons_init();
 
 _ESYM_C
 void mecocoa() {
-	if (!Memory::initialize('ANIF', (byte*)(CallCo16(R16FN_SMAP))))
+	if (!Memory::initialize('ANIF', NULL))
 		HALT();
 	
 	cons_init();

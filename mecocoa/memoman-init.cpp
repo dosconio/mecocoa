@@ -44,8 +44,6 @@ static stduint parse_norm(stduint addr);
 
 
 #if _MCCA == 0x8632
-extern Handler_t MemoryList;
-extern word SW16_FUNCTION;
 
 static stduint parse_grub(stduint addr);
 
@@ -67,10 +65,8 @@ bool Memory::initialize(stduint eax, byte* ebx) {
 	switch (eax)
 	{
 	case 'ANIF':
-		#if _MCCA == 0x8632
-		SW16_FUNCTION = _IMM(&MemoryList);
-		__asm("call SwitchReal16");
-		ebx = (byte*)MemoryListData;
+		#ifndef _UEFI
+		ebx = (byte*)(stduint)call_ladder(R16FN_SMAP);
 		#endif
 		parse_norm(_IMM(ebx));
 		break;

@@ -37,6 +37,7 @@ asmfile=$(ulibpath)/asm/x64/inst/ioport.asm \
 	$(ulibpath)/asm/x64/inst/manage.asm \
 	$(ulibpath)/asm/x64/inst/interrupt.asm \
 	$(ulibpath)/asm/x64/interrupt/ruptable.asm \
+	$(ulibpath)/asm/x64/sysman.asm \
 	prehost/$(arch)/atx-x64.asm
 
 cppfile=$(wildcard mecocoa/*.cpp) \
@@ -153,18 +154,18 @@ clean:
 
 %.o: %.asm
 	echo AS $(notdir $<)
-	aasm -f elf64 -o $(uobjpath)/mcca-$(arch)/_ae_$(notdir $@) $<  -D_MCCA=0x8664 -D_UEFI
+	aasm -f elf64      -o $(uobjpath)/mcca-$(arch)/_ae_$(notdir $@) $< -D_MCCA=0x8664 -D_UEFI
 
 %.o: %.S
 	echo AS $(notdir $<)
-	${CC} ${CFLAGS} -c -o $(uobjpath)/mcca-$(arch)/$(notdir $@) $<
+	${CC} ${CFLAGS} -c -o $(uobjpath)/mcca-$(arch)/_as_$(notdir $@) $<
 
 %.o: %.c
 	echo CC $(notdir $<)
-	${CC} ${CFLAGS} -c -o $(uobjpath)/mcca-$(arch)/$(notdir $@) $<
+	${CC} ${CFLAGS} -c -o $(uobjpath)/mcca-$(arch)/_cc_$(notdir $@) $<
 
 %.o: %.cpp
 	echo CX $(notdir $<)
-	${CX} ${XFLAGS} -c -o $(uobjpath)/mcca-$(arch)/$(notdir $@) $<
+	${CX} ${XFLAGS} -c -o $(uobjpath)/mcca-$(arch)/_cx_$(notdir $@) $<
 
 

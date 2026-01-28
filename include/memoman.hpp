@@ -33,6 +33,22 @@ enum {
 	// flap32: LDT_App1, TSS_App1, LDT_App2, TSS_App2, ...
 };
 
+#define bda ((BIOS_DataArea*)0x400)
+
+_ESYM_C stduint CallCo16(stduint func);
+inline static uint16 call_ladder(uint16 func, uint16 para1 = 0, uint16 para2 = 0, uint16 para3 = 0) {
+	Letvar(p, volatile uint16*, 0x500);
+	p[1] = para1;
+	p[2] = para2;
+	p[3] = para3;
+	CallCo16(func);
+	return *p;
+}
+enum {
+	R16FN_SMAP = 0,// (->addr)
+	R16FN_VMOD = 1,// (mode->addr)
+};
+
 _PACKED(struct) VideoInfoEntry {
 	uint16 mode;// 0x00
 	uint16 width;// 0x02
