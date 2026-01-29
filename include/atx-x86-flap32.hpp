@@ -21,7 +21,6 @@ extern "C" void Handint_MOU_Entry();
 extern "C" void Handint_MOU();
 extern "C" void Handint_HDD_Entry();
 extern "C" void Handint_HDD();
-extern OstreamTrait* kbd_out;
 
 // ---- memoman
 #include "memoman.hpp"

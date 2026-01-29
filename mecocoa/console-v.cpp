@@ -22,9 +22,6 @@ use crate uni;
 
 #if (_MCCA & 0xFF00) == 0x8600
 
-const Color kDesktopBGColor = 0xFF2D76ED;
-const Color kDesktopFGColor = Color::White;
-
 const int kMouseCursorWidth = 15;
 const int kMouseCursorHeight = 24;
 char mouse_cursor_shape[kMouseCursorHeight][kMouseCursorWidth + 1] = {
@@ -73,7 +70,8 @@ void Cursor::setSheet(LayerManager& layman, const Point& vertex) {
 	layman.Append(this);
 }
 
-#if __BITS__ == 32
+// GloScreen
+#if 0// GloScreenRGB888
 
 extern ModeInfoBlock* video_info;
 
@@ -128,16 +126,17 @@ Color GloScreenRGB888::GetColor(Point p) const {
 	return cast<Color>(Locate(p));
 }
 
-#elif __BITS__ == 64 && defined(_UEFI)
+#elif (_MCCA & 0xFF00) == 0x8600
 
-extern FrameBufferConfig config_graph;
 
+inline static stduint VCI_LimitX() { return global_layman.window.width; }
 uint32& GloScreenARGB8888::Locate(const Point& disp) const {
-	return *((uint32*)(config_graph.frame_buffer) + disp.x + disp.y * config_graph.pixels_per_scan_line);
+	return *((uint32*)(global_layman.video_memory) + disp.x + disp.y * VCI_LimitX());
 }
 uint32& GloScreenABGR8888::Locate(const Point& disp) const {
-	return *((uint32*)(config_graph.frame_buffer) + disp.x + disp.y * config_graph.pixels_per_scan_line);
+	return *((uint32*)(global_layman.video_memory) + disp.x + disp.y * VCI_LimitX());
 }
+
 
 void GloScreenARGB8888::SetCursor(const Point& disp) const { _TODO; }// MAYBE unused
 Point GloScreenARGB8888::GetCursor() const { _TODO return {0, 0}; }// MAYBE unused
@@ -148,7 +147,7 @@ void GloScreenARGB8888::DrawRectangle(const Rectangle& rect) const {
 	uint32* p = &Locate(rect.getVertex());
 	for0(y, rect.height) {
 		for0(x, rect.width) p[x] = rect.color.val;// cast<uint32>(rect.color);
-		p += config_graph.pixels_per_scan_line;
+		p += VCI_LimitX();
 	}
 }
 void GloScreenARGB8888::DrawFont(const Point& disp, const DisplayFont& font) const {
@@ -180,7 +179,7 @@ void GloScreenABGR8888::DrawRectangle(const Rectangle& rect) const {
 	for0(y, rect.height) {
 		for0(x, rect.width) p[x] = val;
 		//cast<byte*>(p) += config.pixels_per_scan_line;
-		p += config_graph.pixels_per_scan_line;
+		p += VCI_LimitX();
 	}
 }
 void GloScreenABGR8888::DrawFont(const Point& disp, const DisplayFont& font) const {

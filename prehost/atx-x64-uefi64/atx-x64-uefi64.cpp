@@ -23,7 +23,7 @@
 static byte _b_vcb[byteof(VideoControlBlock)];
 
 static byte _b_vcon0[byteof(VideoConsole)];
-VideoConsole* vcon0;
+extern VideoConsole* vcon0;
 
 struct Message {
 	enum Type {
@@ -33,12 +33,12 @@ struct Message {
 Queue<Message>* message_queue;
 static Message _BUF_Message[32];
 
-Cursor* mouse_cursor;
-LayerManager* global_layman;
+
+
 void MouseObserver(int8 displacement_x, int8 displacement_y) {
 	// ploginfo("mov (%d, %d)", displacement_x, displacement_y);
 	// mouse_cursor->MoveRelative({ displacement_x,displacement_y });
-	asserv(global_layman)->Domove(mouse_cursor, { displacement_x,displacement_y });
+	if (Cursor::global_cursor) global_layman.Domove(Cursor::global_cursor, { displacement_x,displacement_y });
 }
 
 // ---- Interrupt
@@ -101,9 +101,6 @@ void IntHandlerXHCI(InterruptFrame* frame) {
 alignas(16) byte kernel_stack[1024 * 1024];
 
 UefiData uefi_data;
-FrameBufferConfig config_graph;// current video mode
-
-
 
 // ---- Paging
 /** @brief 静的に確保するPageDirectoryの個数
@@ -135,7 +132,7 @@ void SetupIdentityPageTable() {
 	setCR3(_IMM(&pml4_table[0]));
 }
 
-
+extern OstreamTrait* con0_out;
 
 // ---- Kernel
 
@@ -153,51 +150,11 @@ void mecocoa(const UefiData& uefi_data_ref)
 	SetupIdentityPageTable();
 	Memory::initialize('UEFI', (byte*)(&uefi_data.memory_map));
 	
-
-	// cons_init
-
-	config_graph = uefi_data.frame_buffer_config;
-
-	GloScreenARGB8888 vga_ARGB8888;
-	GloScreenABGR8888 vga_ABGR8888;
-	VideoControlInterface* screen;
-
-	switch (uefi_data.frame_buffer_config.pixel_format) {
-	case PixelFormat::ARGB8888: screen = &vga_ARGB8888; break;
-	case PixelFormat::ABGR8888: screen = &vga_ABGR8888; break;
-	default:
-		loop HALT();
-	}
-
-	Size2 screen_size(uefi_data.frame_buffer_config.horizontal_resolution, uefi_data.frame_buffer_config.vertical_resolution);
-	Rectangle screen0_win(Point(0, 0), screen_size, Color::White);
-	VideoControlBlock* p_vcb = new (_b_vcb) VideoControlBlock\
-		((pureptr_t)uefi_data.frame_buffer_config.frame_buffer, *screen);
-	p_vcb->setMode(uefi_data.frame_buffer_config.pixel_format, screen_size.x, screen_size.y);
-	LayerManager layman(screen, screen0_win); global_layman = &layman;
-
-	Cursor cursor{ &p_vcb->getVCI() };
-	mouse_cursor = &cursor;
-	cursor.setSheet(layman, { 300,200 });
-
-
-	vcon0 = new (_b_vcon0) VideoConsole(*screen, screen0_win);
-	vcon0->backcolor = Color::White;
-	vcon0->forecolor = Color::Black;
-	const stduint vcon0_bufsize = screen0_win.width * screen0_win.height * sizeof(Color);
-	Color* vcon0_buf = (Color*)mem.allocate(vcon0_bufsize);
-	layman.Append(vcon0);
-	vcon0->InitializeSheet(layman, screen0_win.getVertex(), screen0_win.getSize(), vcon0_buf);
-	vcon0->setModeBuffer(vcon0_buf);
-	vcon0->Clear();
+	cons_init();
 
 	ploginfo("Ciallo %lf, rsp=%[x]", 2025.09, rsp);
 
-	
-	vcon0->OutFormat("[Console] Video Memory at %[x]\r\n", uefi_data.frame_buffer_config.frame_buffer);
-	vcon0->OutFormat("[Memoman] Allocate 0x%[x] bytes for vcon0 at %[x]\r\n", vcon0_bufsize, vcon0_buf);
 	Memory::pagebmap->dump_avail_memory();
-
 
 	// IVT and Device
 	InterruptControl APIC(_IMM(mem.allocate(256 * sizeof(gate_t))));
@@ -284,7 +241,7 @@ void mecocoa(const UefiData& uefi_data_ref)
 		//
 		
 
-		ploginfo("There are %[u] layers, f=%[x], l=%[x]", layman.Count(), layman.subf, layman.subl);
+		ploginfo("There are %[u] layers, f=%[x], l=%[x]", global_layman.Count(), global_layman.subf, global_layman.subl);
 		// ploginfo("l_left=%[x]", layman.subl->sheet_pleft);
 		ploginfo("Kernel Ready in 0x%[x] ticks", elapsed_span);
 	}
@@ -317,11 +274,6 @@ void mecocoa(const UefiData& uefi_data_ref)
 		
 
 	}
-}
-
-// console.cpp
-void outtxt(const char* str, stduint len) {
-	vcon0->out(str, len);
 }
 
 

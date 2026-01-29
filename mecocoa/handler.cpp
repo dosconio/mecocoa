@@ -66,10 +66,10 @@ void Handint_RTC()
 	rupt_proc(2, IRQ_RTC);
 }
 
-OstreamTrait* kbd_out;
+extern KeyboardBridge kbdbridge;
 QueueLimited* queue_mouse;
 void Handint_KBD() {
-	asserv(kbd_out)->OutChar(innpb(PORT_KEYBOARD_DAT));
+	kbdbridge.OutChar(innpb(PORT_KEYBOARD_DAT));
 }
 static bool fa_mouse = false;
 static byte mouse_buf[4] = { 0 };
@@ -87,7 +87,7 @@ static void process_mouse(byte ch) {
 			absof(next_msecond - last_msecond) > 10000 && mouse_acc.x && mouse_acc.y)
 		{
 			// outsfmt(" %c(%d,%d) ", last_status != next_status ? '~' : ' ', mouse_acc.x, mouse_acc.y);
-			asserv(global_layman)->Domove(Cursor::global_cursor, mouse_acc);//{TEMP}
+			if (Cursor::global_cursor) global_layman.Domove(Cursor::global_cursor, mouse_acc);//{TEMP}
 			mouse_acc.x = 0;
 			mouse_acc.y = 0;
 			last_status = next_status;

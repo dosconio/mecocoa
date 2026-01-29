@@ -20,7 +20,7 @@ use crate uni;
 
 Cursor* Cursor::global_cursor = nullptr;
 
-#ifdef _ARC_x86 // x86:
+#if (_MCCA & 0xFF00) == 0x8600
 
 // ---- ---- TTY ---- ----
 
@@ -29,230 +29,58 @@ static bool last_E0s[TTY_NUMBER] = { false, false, false, false };
 // each con:
 typedef char innQueueBuf[64];
 static innQueueBuf _BUF_innQueues[TTY_NUMBER];
-stduint tty_crt_blocked_appid[4];// 0 if no app
+stduint tty_crt_blocked_appid[TTY_NUMBER];// 0 if no app
 // total:
-static byte current_screen_TTY = 0;
+byte current_screen_TTY = 0;
 // consider CLI
-byte BUF_BCONS0[byteof(BareConsole)]; BareConsole* BCONS0;// TTY0
-byte BUF_BCONS1[byteof(BareConsole)]; static BareConsole* BCONS1;// TTY1
-byte BUF_BCONS2[byteof(BareConsole)]; static BareConsole* BCONS2;// TTY2
-byte BUF_BCONS3[byteof(BareConsole)]; static BareConsole* BCONS3;// TTY3
-BareConsole* bcons[TTY_NUMBER];
+BareConsole Bcons[TTY_NUMBER];// TTY 0~3 and their buffer
 // consider GUI
-VideoControlInterface* tty0_vci; byte BUF_VCI[sizeof(GloScreenRGB888)];
 byte BUF_CONS0[sizeof(VideoConsole)]; VideoConsole* vcon0;
 VideoConsole* vcons[TTY_NUMBER];
-// consider CLI and GUI
+byte _BUF_cursor[byteof(Cursor)];
+// global
+bool ento_gui = false;
 OstreamTrait* con0_out;
-OstreamTrait* tty0_out;
-OstreamTrait* tty1_out;
-OstreamTrait* tty2_out;
-OstreamTrait* tty3_out;
+#ifndef _UEFI
+GloScreenARGB8888 local_vci;
+#else
+GloScreenARGB8888 vga_ARGB8888;
+GloScreenABGR8888 vga_ABGR8888;
+#endif
+byte _BUF_QueueMouse[byteof(QueueLimited)];
+
 unsigned IndexTTY(pureptr_t addr) {
-	for0a(i, bcons) {
-		if (bcons[i] && bcons[i] == addr) return i;
+	for0a(i, Bcons) {
+		if (&Bcons[i] == addr) return i;
 	}
 	for0a(i, vcons) {
 		if (vcons[i] && vcons[i] == addr) return i;
 	}
 	return TTY_NUMBER;// fail
 }
-inline static OstreamTrait* LocateTTY(stduint tty_id) {
-	OstreamTrait* ttyout = ento_gui ? dynamic_cast<OstreamTrait*>(vcons[tty_id]) : dynamic_cast<OstreamTrait*>(bcons[tty_id]);
-	return ttyout;
-}
-// ---- ---- ---- ----
-
-extern QueueLimited* queue_mouse;
 
 
-keyboard_state_t kbd_state = { 0 };
-
-static void setLED() {
-	KbdSetLED((_IMM(kbd_state.lock_caps) << 2) | (_IMM(kbd_state.lock_number) << 1) | _IMM(kbd_state.lock_scroll));
-}
-
-struct KeyboardBridge : public OstreamTrait // // scan code set 1
-{
-	virtual int out(const char* str, stduint len) override {
-		// skip F4~F12,Q~Z,Menu,MAIN(except CapsLock,Ctrls,Shifts,Alts,Wins)
-		// skip PgUp, PgDn.  BUT PrtSc, ScrollLock, Pause, Insert, Home, Delete, End
-		// skip Arrows, PadKeys
-		static bool last_E0 = false;
-		for0(i, len) {
-			switch (byte ch = str[i]) {
-			// TTYs
-			case 0x01:
-				bcons[0]->doshow(0); // TTY0 ESC
-				break;
-			case 0x3B:
-				bcons[1]->doshow(0); // TTY1 F1
-				break;
-			case 0x3C:
-				bcons[2]->doshow(0); // TTY2 F2
-				break;
-			case 0x3D:
-				bcons[3]->doshow(0); // TTY3 F3
-				break;
-				// Ctrls(^), Shifts(-), Alts(+), Wins(~)
-			case 0x1D: case 0x1D + 0x80:// L-Ctrl
-				(last_E0 ? kbd_state.r_ctrl : kbd_state.l_ctrl) = !(ch & 0x80); break;
-			case 0x2A: case 0x2A + 0x80:// L-Shift
-				kbd_state.l_shift = !(ch & 0x80); break;
-			case 0x36: case 0x36 + 0x80:// R-Shift
-				kbd_state.r_shift = !(ch & 0x80); break;
-			case 0x38: case 0x38 + 0x80:// L-Alt
-				(last_E0 ? kbd_state.r_alt : kbd_state.l_alt) = !(ch & 0x80); break;
-				//
-				//{TODO} Wins
-				// Locks
-			case 0x3A:// CapsLock
-				kbd_state.lock_caps = !kbd_state.lock_caps; setLED(); break;
-			case 0x45:// NumLock
-				kbd_state.lock_number = !kbd_state.lock_number; setLED(); break;
-			case 0x46:// ScrollLock
-				kbd_state.lock_scroll = !kbd_state.lock_scroll; setLED(); break;
-			default:
-				bcons[current_screen_TTY]->input_queue.OutChar(ch);
-				break;
-			}
-			last_E0 = ((byte)str[i] == 0xE0);
-		}
-		return 0;
-	}
-};
-KeyboardBridge kbdbridge;
-
-#define TEMP_AREA 0x78000
-
-// [QEMU] Video Address
-// 0xFD000000  default
-// 0xFC000000  -device VGA,vgamem_mb=32
-// 0xF8000000  -device VGA,vgamem_mb=64 ...
-
-ModeInfoBlock* video_info;
-
-bool Graphic::setMode(VideoMode vmode) {
-	uint32 addr = call_ladder(R16FN_VMOD, _IMM(vmode));
-	if (addr) MemCopyN(video_info, (pureptr_t)addr, offsetof(ModeInfoBlock, ReservedTail));
-	return addr;
-}
-
-bool ento_gui = false;
+#ifndef _UEFI
 void blink() {
 	static bool b = false;
-	treat<GloScreenRGB888>(BUF_VCI).DrawRectangle(Rectangle(Point(0, 0), Size2(8, 16), b ? Color::Black : Color::White));
+	local_vci.DrawRectangle(Rectangle(Point(0, 0), Size2(8, 16), b ? Color::Black : Color::White));
 	b = !b;
 }
 void blink2() {
 	static bool b = false;
-	treat<GloScreenRGB888>(BUF_VCI).DrawRectangle(Rectangle(Point(8, 0), Size2(8, 16), b ? Color::Black : Color::White));
+	local_vci.DrawRectangle(Rectangle(Point(8, 0), Size2(8, 16), b ? Color::Black : Color::White));
 	b = !b;
 }
+#endif
 
-byte _BUF_QueueMouse[byteof(QueueLimited)];
-//// ---- ---- STATIC CORE ---- ---- ////
-
-static Rectangle screen0_win;
-void cons_init()
-{
-	// Manually Initialize
-	for0a(i, last_E0s) {
-		last_E0s[i] = false;
-	}
-	void* pointer_mouse = Memory::physical_allocate(0x1000);
-	Slice mouse_slice{ _IMM(pointer_mouse), byteof(0x1000) };
-	queue_mouse = new (_BUF_QueueMouse) QueueLimited(mouse_slice);
-
-	video_info = (uni::ModeInfoBlock*)Memory::physical_allocate(0x1000);
-	BCONS0 = new (BUF_BCONS0) BareConsole(bda->screen_columns, 24, _VIDEO_ADDR_BUFFER, 0 * 50); BCONS0->setShowY(0, 24);
-	BCONS1 = new (BUF_BCONS1) BareConsole(bda->screen_columns, 50, _VIDEO_ADDR_BUFFER, 1 * 50); BCONS1->setShowY(0, 25);
-	BCONS2 = new (BUF_BCONS2) BareConsole(bda->screen_columns, 50, _VIDEO_ADDR_BUFFER, 2 * 50); BCONS2->setShowY(0, 25);
-	BCONS3 = new (BUF_BCONS3) BareConsole(bda->screen_columns, 50, _VIDEO_ADDR_BUFFER, 3 * 50); BCONS3->setShowY(0, 25);
-	
-	bcons[0] = BCONS0; new (&BCONS0->input_queue) QueueLimited((Slice) { _IMM(_BUF_innQueues[0]), byteof(_BUF_innQueues[0]) });
-	bcons[1] = BCONS1; new (&BCONS1->input_queue) QueueLimited((Slice) { _IMM(_BUF_innQueues[1]), byteof(_BUF_innQueues[1]) });
-	bcons[2] = BCONS2; new (&BCONS2->input_queue) QueueLimited((Slice) { _IMM(_BUF_innQueues[2]), byteof(_BUF_innQueues[2]) });
-	bcons[3] = BCONS3; new (&BCONS3->input_queue) QueueLimited((Slice) { _IMM(_BUF_innQueues[3]), byteof(_BUF_innQueues[3]) });
-
-	auto po = floorAlign(bda->screen_columns, curget()) + 1;
-	if (po >= bda->screen_columns * 23) {
-		Letvar(p, word*, _VIDEO_ADDR_BUFFER);
-		for0(i, bda->screen_columns * 25) {
-			p[i] = 0x0700;
-		}
-	}
-	else BCONS0->last_curposi = po;
-	//
-	for0a(i, vcons) {
-		vcons[i] = NULL;
-	}
-	//
-	new (&kbdbridge) KeyboardBridge();// C++ Bare Programming
-	kbd_out = &kbdbridge;
-
-	// primary graphic
-
-	if (!Graphic::setMode(VideoMode::RGB888_800x600))
-	{
-		con0_out = BCONS0;
-		plogerro("Switch to GUI.");
-		return;
-	}
-	ento_gui = true;
-	kernel_paging.MapWeak(
-		video_info->PhysBasePtr,
-		video_info->PhysBasePtr,
-		video_info->BytesPerScanLine * video_info->YResolution,
-		true, _Comment(R0) false
-	);// VGA
-
-	// TTY0 background one (TODO: BUFFER and {clear;reflush})
-	tty0_vci = new (BUF_VCI) GloScreenRGB888();
-	screen0_win = Rectangle(
-		Point(nil, nil),
-		Size2(video_info->XResolution, video_info->YResolution),
-		Color::White
-	);
-	vcon0 = new (BUF_CONS0) VideoConsole(treat<GloScreenRGB888>(BUF_VCI), screen0_win);
-	vcons[0] = vcon0;
-	//
-	con0_out = vcon0;
-	vcon0->backcolor = Color::White;
-	vcon0->forecolor = Color::Black;
-	vcon0->Clear();
-	// Console.OutFormat("\xFF\x70[Mecocoa]\xFF\x27 Real16 Switched Test OK!\xFF\x07\n\r");
-	
-	// TTY1~3 window form are inited from cons_graf()
-
-}
-LayerManager* global_layman; byte _BUF_layman[byteof(LayerManager)];
-byte _BUF_cursor[byteof(Cursor)];
-void cons_graf() {
-	if (!ento_gui) return;
-	global_layman = new (_BUF_layman) LayerManager(tty0_vci, screen0_win);
-
-	// cursor
-	Cursor::global_cursor = new (_BUF_cursor)Cursor{ tty0_vci };
-	const Point cursor_pos = { 300,200 };
-	Cursor::global_cursor->setSheet(*global_layman, cursor_pos);
-
-	// vcon0
-	const stduint vcon0_size = video_info->XResolution * video_info->YResolution * sizeof(Color);
-	Color* vcon0_buf = (Color*)mem.allocate(vcon0_size);
-	// ploginfo("VideoConsole0 buffer at 0x%[x]..0x%[x]", vcon0_buf, _IMM(vcon0_buf) + vcon0_size);
-	global_layman->Append(vcon0);
-	vcon0->InitializeSheet(*global_layman, screen0_win.getVertex(), screen0_win.getSize(), vcon0_buf);
-	vcon0->setModeBuffer(vcon0_buf);
-	vcon0->Clear();
-}
-
+#endif
 
 
 //// ---- ---- DYNAMIC CORE ---- ---- ////
+#ifdef _ARC_x86 // x86:
 
 static stduint tty_parse(stduint tty_id, byte keycode, keyboard_state_t state, OstreamTrait* ttyout) { // // scan code set 1
-	BareConsole* ttycon = bcons[tty_id];
+	BareConsole* ttycon = &Bcons[tty_id];
 	// OstreamTrait* ttyout = LocateTTY(tty_id);
 	if (last_E0s[tty_id]) {
 		if (!ento_gui && keycode == 0x49 && ttycon->crtline > 0) { // PgUp
@@ -305,7 +133,11 @@ static stduint tty_parse(stduint tty_id, byte keycode, keyboard_state_t state, O
 
 bool work_console = false;
 char* cons_buffer;
-// static byte mouse_buf[4];
+extern keyboard_state_t kbd_state;
+inline static OstreamTrait* LocateTTY(stduint tty_id) {
+	OstreamTrait* ttyout = ento_gui ? dynamic_cast<OstreamTrait*>(vcons[tty_id]) : dynamic_cast<OstreamTrait*>(&Bcons[tty_id]);
+	return ttyout;
+}
 void _Comment(R1) serv_cons_loop()
 {
 	cons_buffer = (char*)Memory::physical_allocate(0x1000);
@@ -330,28 +162,7 @@ void _Comment(R1) serv_cons_loop()
 	//{TEMP} only a TTY0(VCON)
 	using BR = ProcessBlock::BlockReason;
 	while (true) {
-		// if (queue_mouse && !queue_mouse->is_empty()) {
-		// 	while ((ch = queue_mouse->inn()) >= 0) {
-		// 		mouse_buf[mouse_buf[3]++] = ch;
-		// 		mouse_buf[3] %= 3;
-		// 		if (!mouse_buf[3]) {
-		// 			sizeof(MouseMessage);// 3
-		// 			outsfmt(" %[8H]-%[8H]-%[8H] ", mouse_buf[0], mouse_buf[1], mouse_buf[2]);
-		// 			MouseMessage& mm = *(MouseMessage*)mouse_buf;
-		// 			if (!ento_gui) {
-		// 				// Ribbon[3].ch = !mm.X ? ' ' : mm.DirX ? '<' : '>';
-		// 				if (mm.X) Ribbon[3].ch = mm.DirX ? '<' : '>';
-		// 				// Ribbon[4].ch = !mm.Y ? ' ' : mm.DirY ? '^' : 'v';
-		// 				if (mm.Y) Ribbon[4].ch = !mm.DirY ? '^' : 'v';
-		// 				Ribbon[5].ch = mm.BtnLeft ? 'L' : 'l';
-		// 				Ribbon[6].ch = mm.BtnMiddle ? 'M' : 'm';
-		// 				Ribbon[7].ch = mm.BtnRight ? 'R' : 'r';
-		// 			}
-		// 		}
-		// 	}
-		// }
-		// for0(i, ento_gui ? 1 : 4) while (-1 != (ch = bcons[i]->input_queue.inn())) tty_parse(i, ch, kbd_state, &console_agents[i]);
-		for0a(i, tty_crt_blocked_appid) if (-1 != (ch = bcons[i]->input_queue.inn())) if (stduint pid = tty_crt_blocked_appid[i]) {
+		for0a(i, tty_crt_blocked_appid) if (-1 != (ch = Bcons[i].input_queue.inn())) if (stduint pid = tty_crt_blocked_appid[i]) {
 			if (ch <= 0 || ch >= 0x80) break;
 			if (_IMM(TaskGet(pid)->block_reason) && _IMM(BR::BR_exInnc)) {
 				TaskGet(pid)->Unblock(BR::BR_exInnc);
@@ -416,6 +227,103 @@ void _Comment(R1) serv_cons_loop()
 
 //// ---- ---- Bottom Impl ---- ---- ////
 
+void uni::BareConsole::doshow(void* _) {}
+
+#endif
+
+//// ---- ---- STATIC CORE ---- ---- ////
+LayerManager global_layman;
+#if ((_MCCA & 0xFF00) == 0x8600)
+#if defined(_UEFI) && _MCCA == 0x8664
+extern UefiData uefi_data;
+#endif
+void cons_init() {
+	Bcons[0].Reset(bda->screen_columns, 24, _VIDEO_ADDR_BUFFER, 0 * 50); Bcons[0].setShowY(0, 24);
+	con0_out = &Bcons[0];
+	for1(i, TTY_NUMBER - 1) {
+		Bcons[i].Reset(bda->screen_columns, 50, _VIDEO_ADDR_BUFFER, i * 50); Bcons[i].setShowY(0, 25);
+	}
+	for0(i, TTY_NUMBER) {
+		new (&Bcons[i].input_queue) QueueLimited((Slice) { _IMM(_BUF_innQueues[i]), byteof(_BUF_innQueues[i]) });
+	}
+
+	// try first 800xN ARGB8888 Mode
+	uint16 vmod_default = nil;
+	#if !defined(_UEFI)
+	call_ladder(R16FN_LSVM);// list video modes
+	for (auto vie = (VideoInfoEntry*)0x78000; _IMM(vie) < 0x80000; vie++) {
+		if (!vie->mode) break;
+		// ploginfo("mode %[16H], %ux%u, ARGB:%[16H]", vie->mode, vie->width, vie->height, vie->bitmode);
+		if (vie->bitmode == 0x8888 && vie->width == 800) {
+			vmod_default = vie->mode;
+			break;
+		}
+	}
+	#else
+	vmod_default = 0xFFFF;
+	#endif
+	ento_gui = vmod_default;
+	if (!vmod_default) {
+		Bcons[0].Scroll(24);
+		plogwarn("There is no default 800xN-8888 Video Mode");
+		return;
+	}
+
+	// config layman
+	#if !defined(_UEFI)
+	auto addr = (ModeInfoBlock*)_IMM(call_ladder(R16FN_VMOD, vmod_default));
+	Rectangle screen0_win{ Point(0,0), Size2(addr->XResolution, addr->YResolution), Color::Black };
+	global_layman.Reset(&local_vci, screen0_win);
+	global_layman.video_mode = vmod_default;
+	global_layman.video_memory = addr->PhysBasePtr;
+	global_layman.pixel_fmt = PixelFormat::ARGB8888;
+	#else
+	Rectangle screen0_win{ Point(0,0), Size2(uefi_data.frame_buffer_config.horizontal_resolution, uefi_data.frame_buffer_config.vertical_resolution), Color::Black };
+	VideoControlInterface* screen;
+	switch (uefi_data.frame_buffer_config.pixel_format) {
+	case PixelFormat::ARGB8888: screen = &vga_ARGB8888;
+		new (screen) GloScreenARGB8888();
+		break;
+	case PixelFormat::ABGR8888: screen = &vga_ABGR8888;
+		new (screen) GloScreenABGR8888();
+		break;
+	default:
+		loop HALT();
+	}
+	global_layman.Reset(screen, screen0_win);
+	global_layman.video_mode = vmod_default;
+	global_layman.video_memory = (stduint)uefi_data.frame_buffer_config.frame_buffer;
+	global_layman.pixel_fmt = uefi_data.frame_buffer_config.pixel_format;
+	#endif
+	const stduint vcon0_size = global_layman.window.getArea() * sizeof(Color);
+	//{TODO} Mapping
+	#if _MCCA == 0x8632
+	kernel_paging.MapWeak(
+		global_layman.video_memory,
+		global_layman.video_memory,
+		vcon0_size,
+		true, _Comment(R0) false
+	);// VGA
+	#endif
+
+	// cursor
+	Cursor::global_cursor = new (_BUF_cursor)Cursor{ &global_layman.getVCI() };
+	const Point cursor_pos = { 300,200 };
+	Cursor::global_cursor->setSheet(global_layman, cursor_pos);
+
+	// vcon0
+	vcon0 = new (BUF_CONS0) VideoConsole(&global_layman.getVCI(), screen0_win);
+	vcon0->backcolor = Color::White;
+	vcon0->forecolor = Color::Black;
+	auto vcon0_buf = (Color*)mem.allocate(vcon0_size);
+	global_layman.Append(vcon0);
+	vcon0->InitializeSheet(global_layman, screen0_win.getVertex(), screen0_win.getSize(), vcon0_buf);
+	vcon0->setModeBuffer(vcon0_buf);
+	vcon0->Clear();
+	con0_out = vcons[0] = vcon0;
+}
+/* 4 BCON TTY
+
 void uni::BareConsole::doshow(void *_) {
 	unsigned id = IndexTTY(this);
 	if (id == current_screen_TTY) return;
@@ -432,17 +340,7 @@ void uni::BareConsole::doshow(void *_) {
 	bcons[id]->auto_incbegaddr = true;
 }
 
-#elif _MCCA == 0x8664 && !defined(_UEFI)
-
-byte BUF_BCONS0[byteof(BareConsole)]; BareConsole* BCONS0;// TTY0
-
-OstreamTrait* con0_out;
-
-void cons_init() {
-	BCONS0 = new (BUF_BCONS0) BareConsole(bda->screen_columns, 24, _VIDEO_ADDR_BUFFER, 0 * 50); BCONS0->setShowY(0, 24);
-	BCONS0->Scroll(24);
-	con0_out = BCONS0;
-}
+*/
 
 #endif
 

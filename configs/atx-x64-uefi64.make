@@ -42,6 +42,7 @@ asmfile=$(ulibpath)/asm/x64/inst/ioport.asm \
 
 cppfile=$(wildcard mecocoa/*.cpp) \
 	$(ulibpath)/cpp/color.cpp \
+	$(ulibpath)/cpp/consio.cpp \
 	$(ulibpath)/cpp/stream.cpp \
 	$(ulibpath)/cpp/interrupt.cpp \
 	$(ulibpath)/cpp/lango/lango-cpp.cpp \
@@ -56,7 +57,9 @@ cppfile=$(wildcard mecocoa/*.cpp) \
 	$(ulibpath)/cpp/Device/Video.cpp $(ulibpath)/cpp/Device/Video-VideoConsole.cpp \
 
 cplfile=$(ulibpath)/c/mcore.c\
+	$(ulibpath)/c/consio.c \
 	$(ulibpath)/c/debug.c \
+	$(ulibpath)/c/driver/keyboard.c \
 	$(ulibpath)/c/console/conformat.c \
 	$(ulibpath)/c/data/font/font-8x5.c \
 	$(ulibpath)/c/data/font/font-16x8.c \

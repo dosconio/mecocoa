@@ -76,7 +76,9 @@ void setCSSS(uint16 cs, uint16 ss);
 _ESYM_C
 void setDSAll(uint16 value);
 
-
+#ifdef _UEFI
+#include "../prehost/atx-x64-uefi64/atx-x64-uefi64.loader/loader-graph.h"
+#endif
 
 
 #endif // _MCCA_UEFI64

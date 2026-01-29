@@ -18,7 +18,7 @@ CFLAGS += --static -mno-red-zone -m64  -O0
 CFLAGS += -I$(uincpath) -D_MCCA=0x8664 -D_HIS_IMPLEMENT -D_DEBUG
 CFLAGS += -fno-strict-aliasing -fno-exceptions -fno-stack-protector # -Wall -fno-pie
 CFLAGS += -Wno-multichar
-XFLAGS  = $(CFLAGS) -fno-rtti -std=c++23
+XFLAGS  = $(CFLAGS) -fno-rtti -fno-use-cxa-atexit -std=c++23
 G_DBG   = gdb-multiarch
 CC      = ${GPREF}gcc 
 CX      = ${GPREF}g++ -std=c++2a
@@ -48,18 +48,17 @@ cppfile=$(wildcard mecocoa/*.cpp)\
 	$(ulibpath)/cpp/lango/lango-cpp.cpp \
 	$(ulibpath)/cpp/dat-block/bmmemoman.cpp \
 	$(ulibpath)/cpp/Device/Buzzer.cpp \
+	$(ulibpath)/cpp/Device/Video.cpp $(ulibpath)/cpp/Device/Video-VideoConsole.cpp \
 # 	$(ulibpath)/cpp/interrupt.cpp \
 
-
-
-	
 
 cplfile=$(ulibpath)/c/mcore.c\
 	$(ulibpath)/c/debug.c \
 	$(ulibpath)/c/consio.c \
 	$(ulibpath)/c/console/conformat.c \
-# 	$(ulibpath)/c/data/font/font-8x5.c \
-# 	$(ulibpath)/c/data/font/font-16x8.c \
+	$(ulibpath)/c/driver/keyboard.c \
+	$(ulibpath)/c/data/font/font-8x5.c \
+	$(ulibpath)/c/data/font/font-16x8.c \
 
 
 asmobjs=$(patsubst %asm, %o, $(asmfile))

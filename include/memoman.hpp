@@ -47,6 +47,7 @@ inline static uint16 call_ladder(uint16 func, uint16 para1 = 0, uint16 para2 = 0
 enum {
 	R16FN_SMAP = 0,// (->addr)
 	R16FN_VMOD = 1,// (mode->addr)
+	R16FN_LSVM = 2,// list vmodes to 0x78000 (->)
 };
 
 _PACKED(struct) VideoInfoEntry {

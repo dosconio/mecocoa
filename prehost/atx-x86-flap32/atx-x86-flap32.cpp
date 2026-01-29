@@ -115,14 +115,15 @@ void mecfetch() {
 }// like neofetch
 
 _sign_entry() {
-	krnl_init();// blind using memory
-	cons_init();// located here, for  INT-10H may influence PIC
+	krnl_init();// using memory blindly
 	if (!Memory::initialize(_start_eax, (byte*)_start_ebx)) {
-		Console.OutFormat("Def Param: A=0x%[x], B=0x%[x]\n\r", _start_eax, _start_ebx);
-		plogerro("Unknown boot source or memory too complex.");
+		// Console.OutFormat("Def Param: A=0x%[x], B=0x%[x]\n\r", _start_eax, _start_ebx);
+		// plogerro("Unknown boot source or memory too complex.");
 		_ASM("HLT");
 	}
+	cons_init();// located here, for  INT-10H may influence PIC
 	
+
 	Cache_t::enAble();
 	Taskman::Initialize();
 	// IVT and Device
@@ -136,12 +137,6 @@ _sign_entry() {
 	GIC[IRQ_ATA_DISK0].setRange(mglb(Handint_HDD_Entry), SegCo32); DEV_Init();
 	GIC[IRQ_SYSCALL].setRange(mglb(call_intr), SegCo32); GIC[IRQ_SYSCALL].DPL = 3;
 
-	// _ASM("mov %cr0, %eax;");
-	// _ASM("or $0x20, %eax;");
-	// __asm("and $0xFFFFFFF1, %eax");// TS(3) EM(2) MP(1)
-	// _ASM("mov %eax, %cr0;");
-
-	cons_graf();
 
 	mecfetch();
 	if (opt_test) __asm("ud2");
@@ -154,13 +149,6 @@ _sign_entry() {
 	TaskRegister((void*)&serv_file_loop, 0);
 	TaskRegister((void*)&serv_task_loop, 0);// GDT operation
 
-	call_ladder(2);// list video modes
-	for (VideoInfoEntry* vie = (VideoInfoEntry*)0x78000; _IMM(vie) < 0x80000; vie++) {
-		if (!vie->mode) break;
-		bool condition = vie->bitmode == 0x8888;
-		if (condition) ploginfo("mode %[16H], %ux%u, ARGB:%[16H]", vie->mode, vie->width, vie->height, vie->bitmode);
-	} 
-
 	// GIC.enAble();
 	syscall(syscall_t::OUTC, 'O');// with effect InterruptEnable();
 	Console.OutFormat("hayouuu~!\a\n\r");
@@ -172,8 +160,6 @@ _sign_entry() {
 }
 // assert_stack() = assert(%%esp == 0x8000);
 
-_ESYM_C { void* __dso_handle = 0; }
-_ESYM_C { void __cxa_atexit(void) {} }
 _ESYM_C { void __gxx_personality_v0(void) {} }
 _ESYM_C { void __stack_chk_fail(void) {} }
 void operator delete(void*) {}

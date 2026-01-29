@@ -3,8 +3,8 @@
 
 // without boundary check
 #define defVconIface(cname,unit) class cname : public VideoControlInterface {\
-	unit& Locate(const Point& disp) const;\
 public:\
+	unit& Locate(const Point& disp) const;\
 	virtual ~cname() = default; cname() {}\
 	virtual void SetCursor(const Point& disp) const override;\
 	virtual Point GetCursor() const override;\
@@ -17,7 +17,14 @@ public:\
 #include <cpp/Device/_Video.hpp>
 
 #if (_MCCA & 0xFF00) == 0x8600
-extern uni::LayerManager* global_layman;
+extern uni::LayerManager global_layman;
+#endif
+
+#if (_MCCA & 0xFF00) == 0x8600
+struct KeyboardBridge : public OstreamTrait // // scan code set 1
+{
+	virtual int out(const char* str, stduint len) override;
+};
 #endif
 
 // Cursor
@@ -39,26 +46,15 @@ public:
 };
 #endif
 
-// ---- ---- ---- ---- X86 ---- ---- ---- ---- //
-#if _MCCA==0x8632
+
+#if (_MCCA & 0xFF00) == 0x8600
 #define TTY_NUMBER 4
-defVconIface(GloScreenRGB888, uint8);
-extern BareConsole* BCONS0;
-extern BareConsole* BCONS[TTY_NUMBER];
 
-class Graphic {
-public:
-	static bool setMode(VideoMode vmode);
-};
-
-void cons_init();
-void cons_graf();
-
-// ---- ---- ---- ---- X64 ---- ---- ---- ---- //
-#elif _MCCA==0x8664
+// defVconIface(GloScreenRGB888, uint8);
 defVconIface(GloScreenARGB8888, uint32);
 defVconIface(GloScreenABGR8888, uint32);
 
+void cons_init();
 
 #endif
 

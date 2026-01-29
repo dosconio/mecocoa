@@ -200,10 +200,12 @@ _ESYM_C void* calloc(size_t nmemb, size_t size) {
 	Console.OutFormat("calloc(%[u])\n\r", nmemb * size);
 	return nullptr;
 }
-#elif _MCCA == 0x8664 && defined(_UEFI)
+#elif _MCCA == 0x8664
 void operator delete(void*) {}
 void operator delete(void* ptr, unsigned long size) noexcept { _TODO }
+#if defined(_UEFI)
 void operator delete(void* ptr, unsigned long size, std::align_val_t) noexcept { ::operator delete(ptr, size); }
+#endif
 #endif
 _ESYM_C void free(void* ptr) {
 	#if _MCCA == 0x8632

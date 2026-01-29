@@ -27,6 +27,7 @@ SECTIONS
 		BSS_ENDO = .;
 	}
 	.rodata : {*(.rodata)}
+	
 	/* C++ only */
 	. = ALIGN(8);
 	.init_array : {
@@ -35,5 +36,13 @@ SECTIONS
 		KEEP(*(.init_array))
 	__init_array_end = .;
 	}
+	.fini_array :
+	{
+		__fini_array_start = .;
+		KEEP (*(SORT(.fini_array.*)))
+		KEEP (*(.fini_array))
+		__fini_array_end = .;
+	}
+
 	FILE_ENDO = .;
 }
