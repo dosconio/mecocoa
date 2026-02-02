@@ -29,7 +29,9 @@ enum {
 	SegCall = 8 * 3,
 	SegCo16 = 8 * 4,
 	SegCo64 = 8 * 5,
-	SegTSS = 8 * 6,
+	SegDaR3 = 8 * 6,
+	SegCoR3 = 8 * 7,
+	SegTSS0 = 8 * 8,
 	// flap32: LDT_App1, TSS_App1, LDT_App2, TSS_App2, ...
 };
 

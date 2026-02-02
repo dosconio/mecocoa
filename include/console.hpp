@@ -54,6 +54,8 @@ public:
 defVconIface(GloScreenARGB8888, uint32);
 defVconIface(GloScreenABGR8888, uint32);
 
+extern bool ento_gui;
+
 void cons_init();
 
 #endif

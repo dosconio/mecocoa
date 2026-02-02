@@ -12,7 +12,9 @@ GPREF   = riscv64-unknown-elf-
 CFLAGS += -nostdlib -fno-builtin -Wall -Wno-unused-variable -Wno-unused-function -Wno-parentheses
 CFLAGS += -march=rv32g -mabi=ilp32
 CFLAGS += -I$(uincpath) -D_MCCA=0x1032 -D_HIS_IMPLEMENT -D_DEBUG # 1032 for RV32
+CFLAGS += -fno-strict-aliasing -fno-exceptions -fno-stack-protector # -Wall -fno-pie
 CFLAGS += -g
+XFLAGS  = $(CFLAGS) -fno-rtti -fno-use-cxa-atexit
 G_DBG   = gdb-multiarch
 CC      = ${GPREF}gcc
 CX      = ${GPREF}g++
@@ -57,7 +59,7 @@ build: clean $(asmobjs) $(cppobjs) $(cplobjs)
 	@${CC} -E -P -x c ${CFLAGS} $(LDFILE).ignore > $(LDFILE)
 	@mv $(LDFILE) $(LDFILE).ignore
 # keep entry (not only code segment) at 0x80000000
-	@${CC} ${CFLAGS} ${LDFLAGS} -o $(ubinpath)/${elf_kernel} $(uobjpath)/mcca-$(arch)/* \
+	@${CC} ${XFLAGS} ${LDFLAGS} -o $(ubinpath)/${elf_kernel} $(uobjpath)/mcca-$(arch)/* \
 		-Wl,-Map=$(ubinpath)/$(elf_kernel).map
 	# readelf -h $ubinpath/mcca-qemuvirt-r32.elf| grep Entry
 	# bin_kernel : ${OBJCOPY} -O binary ${elf_kernel} ${BIN}
@@ -91,7 +93,7 @@ clean:
 
 %.o: %.cpp
 	echo CX $(notdir $<)
-	${CX} ${CFLAGS} -c -o $(uobjpath)/mcca-$(arch)/$(notdir $@) $< \
+	${CX} ${XFLAGS} -c -o $(uobjpath)/mcca-$(arch)/$(notdir $@) $< \
 		-fno-rtti
 
 

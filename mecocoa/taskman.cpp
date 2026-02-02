@@ -27,8 +27,8 @@ stduint TaskNumber = TaskCount;
 
 //// ---- ---- SCHEDULE ---- ---- ////
 
-#define T_pid2tss(pid) (SegTSS + 16 * pid)
-#define T_tss2pid(tssid) ((tssid - SegTSS) / 16)
+#define T_pid2tss(pid) (SegTSS0 + 16 * pid)
+#define T_tss2pid(tssid) ((tssid - SegTSS0) / 16)
 
 void switch_halt() {
 	if (ProcessBlock::cpu0_task == 0) {
@@ -56,7 +56,7 @@ void switch_halt() {
 	//
 	//stduint save = pb_src->TSS.PDBR;
 	//pb_src->TSS.PDBR = getCR3();// CR3 will not save in TSS? -- phina, 20250728
-	jmpTask(SegTSS/*, T_pid2tss(ProcessBlock::cpu0_rest)*/);
+	jmpTask(SegTSS0/*, T_pid2tss(ProcessBlock::cpu0_rest)*/);
 	//pb_src->TSS.PDBR = save;
 }
 
@@ -135,7 +135,7 @@ void Taskman::Initialize(stduint cpuid) {
 		krnl_tss_cpu0.state = ProcessBlock::State::Running;
 		mecocoa_global->gdt_ptr->tss.setRange((dword)&krnl_tss_cpu0.TSS, sizeof(TSS_t) - 1);
 		TaskAdd(&krnl_tss_cpu0);
-		loadTask(SegTSS);
+		loadTask(SegTSS0);
 	}
 }
 
@@ -167,7 +167,7 @@ static void make_LDT(descriptor_t* ldt_alias, byte ring) {
 
 ProcessBlock* TaskRegister(void* entry, byte ring)
 {
-	word parent = SegTSS;// Kernel Task
+	word parent = SegTSS0;// Kernel Task
 
 	word LDTSelector = GDT_Alloc() / 8;
 	word TSSSelector = GDT_Alloc() / 8;
@@ -281,7 +281,7 @@ ProcessBlock* TaskLoad(BlockTrait* source, void* addr, byte ring)
 {
 	_TODO source;//{TODO} (,mem,ring) ==> (fs_fullpath, ring)
 	stduint stack_size = PAGE_SIZE;
-	word parent = SegTSS;// Kernel Task
+	word parent = SegTSS0;// Kernel Task
 	//
 	word LDTSelector = GDT_Alloc() / 8;
 	word TSSSelector = GDT_Alloc() / 8;

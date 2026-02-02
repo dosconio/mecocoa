@@ -7,9 +7,13 @@
 #define _STYLE_RUST
 #include "../../include/atx-x64.hpp"
 
+// x86: GDT, PG, MEM (for ladder auto-enable PG)
+// x64: GDT, MEM, PG
+
 _ESYM_C void mecocoa() {
+	GDT_Init();
 	if (!Memory::initialize('ANIF', NULL)) HALT();
-	//{TODO} GDT, PAGE
+	//{TODO} PAGE
 	auto paging_addr = mem.allocate(0x1000 * 5);
 	Letvar(paging, uint64*, paging_addr);
 	paging[0x800 / sizeof(uint64)] = paging[0] = _IMM(paging_addr) + 0x1007;

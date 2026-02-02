@@ -16,10 +16,10 @@ CFLAGS += --static -mno-red-zone -m64  -O0
 CFLAGS += -I$(uincpath) -D_MCCA=0x8664 -D_UEFI -D_HIS_IMPLEMENT -D_DEBUG
 CFLAGS += -fno-strict-aliasing -fno-exceptions -ffreestanding # -Wall -fno-pie
 CFLAGS += -Wno-multichar
-XFLAGS  = $(CFLAGS) -fno-rtti -std=c++23
+XFLAGS  = $(CFLAGS) -fno-rtti -fno-use-cxa-atexit
 G_DBG   = gdb-multiarch
 CC      = ${GPREF}gcc
-CX      = ${GPREF}g++
+CX      = ${GPREF}g++ -std=c++23
 OBJCOPY = ${GPREF}objcopy
 OBJDUMP = ${GPREF}objdump
 
@@ -34,6 +34,7 @@ LDFILE  = prehost/$(arch)/$(arch).ld
 LDFLAGS = -T $(LDFILE) 
 #
 asmfile=$(ulibpath)/asm/x64/inst/ioport.asm \
+	$(ulibpath)/asm/x64/cpuid.asm \
 	$(ulibpath)/asm/x64/inst/manage.asm \
 	$(ulibpath)/asm/x64/inst/interrupt.asm \
 	$(ulibpath)/asm/x64/interrupt/ruptable.asm \
@@ -44,6 +45,7 @@ cppfile=$(wildcard mecocoa/*.cpp) \
 	$(ulibpath)/cpp/color.cpp \
 	$(ulibpath)/cpp/consio.cpp \
 	$(ulibpath)/cpp/stream.cpp \
+	$(ulibpath)/cpp/string.cpp \
 	$(ulibpath)/cpp/interrupt.cpp \
 	$(ulibpath)/cpp/lango/lango-cpp.cpp \
 	$(ulibpath)/cpp/dat-block/bmmemoman.cpp \
@@ -63,6 +65,9 @@ cplfile=$(ulibpath)/c/mcore.c\
 	$(ulibpath)/c/console/conformat.c \
 	$(ulibpath)/c/data/font/font-8x5.c \
 	$(ulibpath)/c/data/font/font-16x8.c \
+	$(ulibpath)/c/ustring/astring/StrHeap.c \
+	$(ulibpath)/c/ustring/astring/salc.c \
+	$(ulibpath)/c/ustring/bstring/bstring.c \
 
 
 asmobjs=$(patsubst %asm, %o, $(asmfile))

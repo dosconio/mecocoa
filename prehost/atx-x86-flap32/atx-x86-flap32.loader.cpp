@@ -139,7 +139,3 @@ stduint FilesysFAT::writfl(void* fil_handler, Slice file_slice, const byte* sors
 bool FilesysFAT::remove(rostr pathname) { return false; }
 bool FilesysFAT::create(rostr fullpath, stduint flags, void* exinfo, rostr linkdest) { return false; }
 
-extern "C" { void* __dso_handle = 0; }
-extern "C" { void __cxa_atexit(void) {} }
-extern "C" { void __gxx_personality_v0(void) {} }
-extern "C" { void __stack_chk_fail(void) {} }

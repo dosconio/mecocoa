@@ -140,15 +140,15 @@ extern "C" //__attribute__((ms_abi))
 void mecocoa(const UefiData& uefi_data_ref)
 {
 	stduint rsp;
-	_ASM("mov %%rsp, %0" : "=r"(rsp));
 	uefi_data = uefi_data_ref;
+	_ASM("mov %%rsp, %0" : "=r"(rsp));
 
 	lapic_timer.Reset();
 	lapic_timer.Ento();
-	// Platform and Memory
+	
 	GDT_Init();
+	if (!Memory::initialize('UEFI', (byte*)(&uefi_data.memory_map))) HALT();
 	SetupIdentityPageTable();
-	Memory::initialize('UEFI', (byte*)(&uefi_data.memory_map));
 	
 	cons_init();
 
@@ -277,10 +277,6 @@ void mecocoa(const UefiData& uefi_data_ref)
 }
 
 
-
-
-extern "C" { void* __dso_handle = 0; }
-extern "C" { void __cxa_atexit(void) {} }
 
 _ESYM_C void __cxa_pure_virtual(void) {}
 void std::__throw_bad_function_call(void) {

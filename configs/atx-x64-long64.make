@@ -35,6 +35,7 @@ LDFILE  = prehost/$(arch)/$(arch).ld
 LDFLAGS = -T $(LDFILE) 
 #
 asmfile=prehost/atx-x64-uefi64/atx-x64.asm\
+	$(ulibpath)/asm/x64/cpuid.asm \
 	$(ulibpath)/asm/x64/sysman.asm \
 	$(ulibpath)/asm/x64/inst/ioport.asm \
 	$(ulibpath)/asm/x64/inst/manage.asm \
@@ -45,6 +46,7 @@ cppfile=$(wildcard mecocoa/*.cpp)\
 	$(ulibpath)/cpp/color.cpp \
 	$(ulibpath)/cpp/consio.cpp \
 	$(ulibpath)/cpp/stream.cpp \
+	$(ulibpath)/cpp/string.cpp \
 	$(ulibpath)/cpp/lango/lango-cpp.cpp \
 	$(ulibpath)/cpp/dat-block/bmmemoman.cpp \
 	$(ulibpath)/cpp/Device/Buzzer.cpp \
@@ -59,6 +61,9 @@ cplfile=$(ulibpath)/c/mcore.c\
 	$(ulibpath)/c/driver/keyboard.c \
 	$(ulibpath)/c/data/font/font-8x5.c \
 	$(ulibpath)/c/data/font/font-16x8.c \
+	$(ulibpath)/c/ustring/astring/StrHeap.c \
+	$(ulibpath)/c/ustring/astring/salc.c \
+	$(ulibpath)/c/ustring/bstring/bstring.c \
 
 
 asmobjs=$(patsubst %asm, %o, $(asmfile))

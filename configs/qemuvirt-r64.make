@@ -12,6 +12,8 @@ GPREF   = riscv64-unknown-elf-
 CFLAGS += -nostdlib -fno-builtin  -Wall -Wno-unused-variable -Wno-unused-function -Wno-parentheses # -g
 CFLAGS += -march=rv64g -mabi=lp64 -mcmodel=medany
 CFLAGS += -I$(uincpath) -D_MCCA=0x1064 -D_HIS_IMPLEMENT -D_DEBUG # 1064 for RV64
+CFLAGS += -fno-strict-aliasing -fno-exceptions -fno-stack-protector # -Wall -fno-pie
+XFLAGS  = $(CFLAGS) -fno-rtti -fno-use-cxa-atexit
 G_DBG   = gdb-multiarch
 CC      = ${GPREF}gcc
 CX      = ${GPREF}g++
@@ -54,7 +56,7 @@ build: clean $(asmobjs) $(cppobjs) $(cplobjs)
 	@perl configs/qemuvirt-riscv.pl r64 > $(LDFILE).ignore
 	@${CC} -E -P -x c ${CFLAGS} $(LDFILE).ignore > $(LDFILE)
 	@mv $(LDFILE) $(LDFILE).ignore
-	@${CC} ${CFLAGS} ${LDFLAGS} -o $(ubinpath)/${elf_kernel} $(uobjpath)/mcca-$(arch)/*
+	@${CC} ${XFLAGS} ${LDFLAGS} -o $(ubinpath)/${elf_kernel} $(uobjpath)/mcca-$(arch)/*
 	# readelf -h $ubinpath/mcca-qemuvirt-r64.elf| grep Entry
 	# bin_kernel : ${OBJCOPY} -O binary ${elf_kernel} ${BIN}
 
@@ -84,6 +86,6 @@ clean:
 %.o: %.cpp
 	echo CX $(notdir $<)
 	${CX} -c -o $(uobjpath)/mcca-$(arch)/$(notdir $@) $<\
-		${CFLAGS} -fno-rtti
+		${XFLAGS} -fno-rtti
 
 

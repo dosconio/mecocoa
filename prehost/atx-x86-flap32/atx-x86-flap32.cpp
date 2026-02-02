@@ -3,8 +3,6 @@
 // ModuTitle: Demonstration - ELF32-C++ x86 Bare-Metal
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 #define _STYLE_RUST
-
-#include <c/cpuid.h>
 #include <c/consio.h>
 #include <cpp/string>
 #include <cpp/interrupt>
@@ -14,69 +12,19 @@
 #include <c/driver/timer.h>
 #include <cpp/Device/Cache>
 #include <c/proctrl/x86/x86.h>
-#include <c/storage/harddisk.h>
-#include <cpp/Device/Buzzer.hpp>
 #include <c/format/filesys/FAT.h>
 #include <c/driver/RealtimeClock.h>
 #include "../../include/atx-x86-flap32.hpp"
 
-bool opt_info = true;
-bool opt_test = true;
-
-
-char _buf[64];
-String ker_buf(_buf, byteof(_buf));
-extern uint32 _start_eax, _start_ebx;
-
-void (*entry_temp)();
-
-
-int* kernel_fail(loglevel_t serious) {
-	if (serious == _LOG_FATAL) {
-		outsfmt("\n\rKernel panic!\n\r");
-		__asm("cli; hlt");
-	}
-	return nullptr;
-}
-
-statin rostr text_brand() {
-	CpuBrand(ker_buf.reflect());
-	ker_buf.reflect()[_CPU_BRAND_SIZE] = 0;
-	const char* ret = ker_buf.reference();
-	while (*ret == ' ') ret++;
-	return ret;
-}
-
-
-statin void _start_assert() {
-	if (byteof(mecocoa_global_t) > 0x100) {
-		printlog(_LOG_FATAL, "mecocoa_global_t: %d bytes over size\n\r", byteof(mecocoa_global_t)); loop;
-	}
-	if (byteof(gate_t) != 8 || byteof(GateInterrupt) != 8) {
-		printlog(_LOG_FATAL, "gate_t: %d bytes over size\n\r", byteof(gate_t)); loop;
-	}
-	if (byteof(TSS_t) != 104) {
-		printlog(_LOG_FATAL, "TSS: %d bytes over size\n\r", byteof(TSS_t)); loop;
-	}
-}
-
 void krnl_init() {
-	(*mecocoa_global).gdt_ptr = (mec_gdt*)0x80000600;
-	mecocoa_global->system_time.sec = 0;
-	mecocoa_global->system_time.mic = 0;
-	//
-	_physical_allocate = Memory::physical_allocate;
 	_call_serious = (_tocall_ft)kernel_fail;//{TODO} DbgStop
-	_start_assert();
-	Memory::pagebmap = 0;
 	// ---- Paging
+	_physical_allocate = Memory::physical_allocate;
 	kernel_paging.Reset();// should take 0x1000
 	kernel_paging.MapWeak(0x00000000, 0x00000000, 0x00400000, true, _Comment(R0) true);
 	kernel_paging.MapWeak(0x80000000, 0x00000000, 0x00400000, true, _Comment(R0) false);
 	setCR3(_IMM(kernel_paging.root_level_page));
 	PagingEnable();
-	// rostr test_page = (rostr)"\xFF\x70[Mecocoa]\xFF\x27 Paging Test OK!\xFF\x07" + 0x80000000;
-	// if (opt_test) Console.OutFormat("%s\n\r", test_page);
 	GDT_Init();
 }
 
@@ -114,13 +62,10 @@ void mecfetch() {
 
 }// like neofetch
 
+extern uint32 _start_eax, _start_ebx;
 _sign_entry() {
 	krnl_init();// using memory blindly
-	if (!Memory::initialize(_start_eax, (byte*)_start_ebx)) {
-		// Console.OutFormat("Def Param: A=0x%[x], B=0x%[x]\n\r", _start_eax, _start_ebx);
-		// plogerro("Unknown boot source or memory too complex.");
-		_ASM("HLT");
-	}
+	if (!Memory::initialize(_start_eax, (byte*)_start_ebx)) HALT();
 	cons_init();// located here, for  INT-10H may influence PIC
 	
 
@@ -139,9 +84,7 @@ _sign_entry() {
 
 
 	mecfetch();
-	if (opt_test) __asm("ud2");
-	
-
+	__asm("ud2");
 	
 	// Service
 	TaskRegister((void*)&serv_cons_loop, 1);
@@ -158,9 +101,3 @@ _sign_entry() {
 	// Done
 	loop HALT();
 }
-// assert_stack() = assert(%%esp == 0x8000);
-
-_ESYM_C { void __gxx_personality_v0(void) {} }
-_ESYM_C { void __stack_chk_fail(void) {} }
-void operator delete(void*) {}
-void operator delete(void* ptr, unsigned size) noexcept { _TODO }
