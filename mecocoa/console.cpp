@@ -10,6 +10,7 @@
 #include <c/driver/mouse.h>
 #include <c/driver/keyboard.h>
 #include <cpp/Device/_Video.hpp>
+#include <cpp/Witch/Form.hpp>
 use crate uni;
 #ifdef _ARC_x86 // x86:
 #include "../include/atx-x86-flap32.hpp"
@@ -237,6 +238,9 @@ LayerManager global_layman;
 #if defined(_UEFI) && _MCCA == 0x8664
 extern UefiData uefi_data;
 #endif
+
+::uni::Witch::Form form0;
+
 void cons_init() {
 	Bcons[0].Reset(bda->screen_columns, 24, _VIDEO_ADDR_BUFFER, 0 * 50); Bcons[0].setShowY(0, 24);
 	con0_out = &Bcons[0];
@@ -281,12 +285,8 @@ void cons_init() {
 	Rectangle screen0_win{ Point(0,0), Size2(uefi_data.frame_buffer_config.horizontal_resolution, uefi_data.frame_buffer_config.vertical_resolution), Color::Black };
 	VideoControlInterface* screen;
 	switch (uefi_data.frame_buffer_config.pixel_format) {
-	case PixelFormat::ARGB8888: screen = &vga_ARGB8888;
-		new (screen) GloScreenARGB8888();
-		break;
-	case PixelFormat::ABGR8888: screen = &vga_ABGR8888;
-		new (screen) GloScreenABGR8888();
-		break;
+	case PixelFormat::ARGB8888: screen = &vga_ARGB8888; break;
+	case PixelFormat::ABGR8888: screen = &vga_ABGR8888; break;
 	default:
 		loop HALT();
 	}
@@ -311,14 +311,21 @@ void cons_init() {
 	const Point cursor_pos = { 300,200 };
 	Cursor::global_cursor->setSheet(global_layman, cursor_pos);
 
+	// [demo] window
+	if (1) {
+		Rectangle rect{ Point(200, 40), Size2(160, 80) };
+		form0.setSheet(global_layman, rect);
+		global_layman.Append(&form0);
+	}
+
 	// vcon0
 	vcon0 = new (BUF_CONS0) VideoConsole(&global_layman.getVCI(), screen0_win);
 	vcon0->backcolor = Color::White;
 	vcon0->forecolor = Color::Black;
 	auto vcon0_buf = (Color*)mem.allocate(vcon0_size);
-	global_layman.Append(vcon0);
 	vcon0->InitializeSheet(global_layman, screen0_win.getVertex(), screen0_win.getSize(), vcon0_buf);
 	vcon0->setModeBuffer(vcon0_buf);
+	global_layman.Append(vcon0);
 	vcon0->Clear();
 	con0_out = vcons[0] = vcon0;
 }

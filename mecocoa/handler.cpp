@@ -63,7 +63,6 @@ void Handint_RTC()
 		*p ^= 0x70;// make it blink
 	}
 	else blink();
-	rupt_proc(2, IRQ_RTC);
 }
 
 extern KeyboardBridge kbdbridge;

@@ -30,7 +30,7 @@ void Handint_HDD()// HDD Master
 	innpb(REG_STATUS);
 	if (lock) return;
 	lock = 1;
-		rupt_proc(Task_Hdd_Serv, IRQ_ATA_DISK0);
+	rupt_proc(Task_Hdd_Serv, IRQ_ATA_DISK0);
 }
 
 static bool hd_cmd_wait() {

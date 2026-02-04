@@ -49,6 +49,7 @@ cppfile=$(wildcard mecocoa/*.cpp)\
 	$(ulibpath)/cpp/string.cpp \
 	$(ulibpath)/cpp/lango/lango-cpp.cpp \
 	$(ulibpath)/cpp/dat-block/bmmemoman.cpp \
+	$(ulibpath)/cpp/Witch/Form.cpp \
 	$(ulibpath)/cpp/Device/Buzzer.cpp \
 	$(ulibpath)/cpp/Device/Video.cpp $(ulibpath)/cpp/Device/Video-VideoConsole.cpp \
 # 	$(ulibpath)/cpp/interrupt.cpp \

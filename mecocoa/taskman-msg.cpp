@@ -1,8 +1,8 @@
 // ASCII g++ TAB4 LF
 // Attribute: 
 // LastCheck: 20240218
-// AllAuthor: @dosconio, @ArinaMgk
-// ModuTitle: Demonstration - ELF32-C++ x86 Bare-Metal
+// Codifiers: @dosconio, @ArinaMgk
+// Docutitle: Demonstration - ELF32-C++ x86 Bare-Metal
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 #define _STYLE_RUST
 
@@ -54,6 +54,7 @@ static bool msg_send_will_deadlock(ProcessBlock* fo, ProcessBlock* to)
 
 int msg_send(ProcessBlock* fo, stduint too, _Comment(vaddr) CommMsg* msg)
 {
+	_TEMP _ASM("cli");
 	if (!too) return 2;
 	auto to = TaskGet(too);
 	if (msg_send_will_deadlock(fo, to)) {
@@ -82,7 +83,7 @@ int msg_send(ProcessBlock* fo, stduint too, _Comment(vaddr) CommMsg* msg)
 	else {
 		fo->Block(ProcessBlock::BR_SendMsg);
 		fo->send_to_whom = too;// to->getID();
-		if (fo->unsolved_msg) plogwarn("unsolved_msg");
+		if (fo->unsolved_msg) plogwarn("unsolved_msg when send");
 		fo->unsolved_msg = msg;
 		// proc sending queue
 		if (!to->queue_send_queuehead) to->queue_send_queuehead = fo->getID(); else {
@@ -107,6 +108,8 @@ int msg_send(ProcessBlock* fo, stduint too, _Comment(vaddr) CommMsg* msg)
 }
 int msg_recv(ProcessBlock* to, stduint foo, _Comment(vaddr) CommMsg* msg)
 {
+	_TEMP _ASM("cli");
+
 	_Comment(Proc - Interrupt) if ((to->wait_rupt_no) && (foo == ANYPROC || foo == INTRUPT)) {
 		CommMsg tmp_msg{ 0 };
 		tmp_msg.type = HARDRUPT;
@@ -117,7 +120,7 @@ int msg_recv(ProcessBlock* to, stduint foo, _Comment(vaddr) CommMsg* msg)
 		return 0;
 	}
 	bool determined = false;
-	ProcessBlock* prev;
+	ProcessBlock* prev = nullptr;
 	if (foo == ANYPROC) {
 		if (to->queue_send_queuehead) {
 			foo = to->queue_send_queuehead;
@@ -150,7 +153,7 @@ int msg_recv(ProcessBlock* to, stduint foo, _Comment(vaddr) CommMsg* msg)
 		}
 		else {
 			if (!prev) { plogerro("!prev in %s", __FUNCIDEN__); return 1; }
-			prev->queue_send_queuenext = fo->queue_send_queuenext;// A->[B]->C => A->C
+			asserv(prev)->queue_send_queuenext = fo->queue_send_queuenext;// A->[B]->C => A->C
 			fo->queue_send_queuenext = nil;
 		}
 		//
@@ -173,7 +176,7 @@ int msg_recv(ProcessBlock* to, stduint foo, _Comment(vaddr) CommMsg* msg)
 	else { // block self to wait for msg
 		// ploginfo("PID%u: BLOC[RECV]", to->getID());
 		to->Block(ProcessBlock::BR_RecvMsg);
-		if (to->unsolved_msg) plogwarn("unsolved_msg");
+		if (to->unsolved_msg) plogwarn("pid%u, unsolved_msg when recv", to->getID());
 		to->unsolved_msg = msg;
 		to->recv_fo_whom = foo;
 	}

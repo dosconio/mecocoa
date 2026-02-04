@@ -12,9 +12,9 @@ RM = rm -rf
 # (GNU)
 GPREF   = #riscv64-unknown-elf-
 CFLAGS += -nostdlib -fno-builtin -z norelro -nostdlib -fno-builtin
-CFLAGS += --static -mno-red-zone -m64  -O0
+CFLAGS += --static -mno-red-zone -m64
 CFLAGS += -I$(uincpath) -D_MCCA=0x8664 -D_UEFI -D_HIS_IMPLEMENT -D_DEBUG
-CFLAGS += -fno-strict-aliasing -fno-exceptions -ffreestanding # -Wall -fno-pie
+CFLAGS += -fno-strict-aliasing -fno-exceptions # -Wall -fno-pie
 CFLAGS += -Wno-multichar
 XFLAGS  = $(CFLAGS) -fno-rtti -fno-use-cxa-atexit
 G_DBG   = gdb-multiarch
@@ -49,6 +49,7 @@ cppfile=$(wildcard mecocoa/*.cpp) \
 	$(ulibpath)/cpp/interrupt.cpp \
 	$(ulibpath)/cpp/lango/lango-cpp.cpp \
 	$(ulibpath)/cpp/dat-block/bmmemoman.cpp \
+	$(ulibpath)/cpp/Witch/Form.cpp \
 	\
 	$(ulibpath)/cpp/Device/Bus/PCI.cpp \
 	$(ulibpath)/cpp/Device/USB/USB-Device.cpp \

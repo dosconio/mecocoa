@@ -25,7 +25,6 @@ SECTIONS
 		*(.data)
 		*(.note.gnu.build-id)
 		*(.got)
-		*(.init_array)
 		*(.eh_frame)
 	} > RAM :data
 	

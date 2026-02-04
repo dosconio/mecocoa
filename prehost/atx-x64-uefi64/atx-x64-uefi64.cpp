@@ -242,7 +242,6 @@ void mecocoa(const UefiData& uefi_data_ref)
 		
 
 		ploginfo("There are %[u] layers, f=%[x], l=%[x]", global_layman.Count(), global_layman.subf, global_layman.subl);
-		// ploginfo("l_left=%[x]", layman.subl->sheet_pleft);
 		ploginfo("Kernel Ready in 0x%[x] ticks", elapsed_span);
 	}
 
