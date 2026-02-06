@@ -3,6 +3,8 @@
 // ModuTitle: Demonstration - ELF32-C++ x86 Bare-Metal
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 #define _STYLE_RUST
+#define _HER_TIME_H
+
 #include <c/consio.h>
 #include <cpp/string>
 #include <cpp/interrupt>

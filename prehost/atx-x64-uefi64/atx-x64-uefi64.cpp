@@ -4,42 +4,15 @@
 // ModuTitle: Kernel
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 #define _STYLE_RUST
-#define _HIS_TIME_H
 #include <cpp/unisym>
-//
-#include <cpp/queue>
 #include <cpp/interrupt>
 #include <c/driver/mouse.h>// qemu only
 #include <c/driver/timer.h>
-
 #include <cpp/Device/Bus/PCI.hpp>
 #include <cpp/Device/USB/xHCI/xHCI.hpp>
-// #include <cpp/Device/USB/USB-Header.hpp>
-
 #include "../../include/atx-x64.hpp"
-#include "atx-x64-uefi64.loader/loader-graph.h"
 
-
-static byte _b_vcb[byteof(VideoControlBlock)];
-
-static byte _b_vcon0[byteof(VideoConsole)];
 extern VideoConsole* vcon0;
-
-struct Message {
-	enum Type {
-		RUPT_xHCI,
-	} type;
-};
-Queue<Message>* message_queue;
-static Message _BUF_Message[32];
-
-
-
-void MouseObserver(int8 displacement_x, int8 displacement_y) {
-	// ploginfo("mov (%d, %d)", displacement_x, displacement_y);
-	// mouse_cursor->MoveRelative({ displacement_x,displacement_y });
-	if (Cursor::global_cursor) global_layman.Domove(Cursor::global_cursor, { displacement_x,displacement_y });
-}
 
 // ---- Interrupt
 struct InterruptVector {
@@ -69,34 +42,16 @@ void* AllocMem(size_t size, unsigned int alignment, unsigned int boundary) {
 	alloc_ptr += size;
 	return reinterpret_cast<void*>(p);
 }
-
-void SwitchEhci2Xhci(PCI& pci, const PCI::Device& xhc_dev) {
-	bool intel_ehc_exist = false;
-	for0 (i, pci.num_device) {
-		if (pci.devices[i].class_code.Match(0x0cu, 0x03u, 0x20u) /* EHCI */ &&
-			0x8086 == pci.read_vendor_id(pci.devices[i])) {
-			intel_ehc_exist = true;
-			break;
-		}
-	}
-	if (!intel_ehc_exist) {
-		return;
-	}
-	uint32_t superspeed_ports = pci.read_config_register(xhc_dev, 0xdc); // USB3PRM
-	pci.write_config_register(xhc_dev, 0xd8, superspeed_ports); // USB3_PSSEN
-	uint32_t ehci2xhci_ports = pci.read_config_register(xhc_dev, 0xd4); // XUSB2PRM
-	pci.write_config_register(xhc_dev, 0xd0, ehci2xhci_ports); // XUSB2PR
-	ploginfo("%s: SS = %02, xHCI = %02x\n", __FUNCIDEN__, superspeed_ports, ehci2xhci_ports);
+void* usb::HIDMouseDriver::operator new(size_t size) {
+	return AllocMem(sizeof(HIDMouseDriver), 0, 0);
 }
 
-usb::xhci::Controller* xhc;
-
-_ESYM_C void General_IRQHandler(InterruptFrame* frame);
-__attribute__((interrupt, target("general-regs-only")))
-void IntHandlerXHCI(InterruptFrame* frame) {
-	asserv(message_queue)->Enqueue(Message{ Message::RUPT_xHCI });
-	sendEOI();
+void usb::HIDMouseDriver::operator delete(void* ptr) noexcept {
+	// FreeMem(ptr);
 }
+
+PCI pci;
+byte _BUF_xhc[sizeof(usb::xhci::Controller)];
 
 alignas(16) byte kernel_stack[1024 * 1024];
 
@@ -126,7 +81,7 @@ void SetupIdentityPageTable() {
 	for (int i_pdpt = 0; i_pdpt < page_directory.size(); ++i_pdpt) {
 		pdp_table[i_pdpt] = reinterpret_cast<uint64_t>(&page_directory[i_pdpt]) | 0x003;
 		for (int i_pd = 0; i_pd < 512; ++i_pd) {
-			page_directory[i_pdpt][i_pd] = i_pdpt * kPageSize1G + i_pd * kPageSize2M | 0x083;
+			page_directory[i_pdpt][i_pd] = i_pdpt * kPageSize1G + i_pd * kPageSize2M | 0x093;// 0x83 for cacheable
 		}
 	}
 	setCR3(_IMM(&pml4_table[0]));
@@ -143,9 +98,6 @@ void mecocoa(const UefiData& uefi_data_ref)
 	uefi_data = uefi_data_ref;
 	_ASM("mov %%rsp, %0" : "=r"(rsp));
 
-	lapic_timer.Reset();
-	lapic_timer.Ento();
-	
 	GDT_Init();
 	if (!Memory::initialize('UEFI', (byte*)(&uefi_data.memory_map))) HALT();
 	SetupIdentityPageTable();
@@ -154,124 +106,54 @@ void mecocoa(const UefiData& uefi_data_ref)
 
 	ploginfo("Ciallo %lf, rsp=%[x]", 2025.09, rsp);
 
-	Memory::pagebmap->dump_avail_memory();
+	lapic_timer.Reset();
+	lapic_timer.Ento();
+
 
 	// IVT and Device
 	InterruptControl APIC(_IMM(mem.allocate(256 * sizeof(gate_t))));
 	APIC.Reset(SegCo64, 0x00000000);
 
-	// Message Queue
-	Queue<Message> msg_queue(_BUF_Message, numsof(_BUF_Message));
-	::message_queue = &msg_queue;
-
-
-
-	PCI pci;
-	uint64_t xhc_mmio_base = nil;
-	auto err = pci.scan_all_bus();
-	vcon0->OutFormat("[Devices] (%s) PCI: Detect %u devices.\n\r", err.Name(), pci.num_device);
-
-	// seek an Intel xHC
-	PCI::Device* xhc_dev = nullptr;
-	bool found_usbmouse = false;
-	for0(i, pci.num_device) {
-		const auto& dev = pci.devices[i];
-		auto vendor_id = pci.read_vendor_id(dev);
-		if (!found_usbmouse && pci.devices[i].class_code.Match(ClassCodeGroup_xHC)) {
-			xhc_dev = &pci.devices[i];
-			if (0x8086 == vendor_id) {
-				found_usbmouse = true;
-			}
-		}
-		auto class_code = pci.read_class_code(dev.bus, dev.device, dev.function);
-		//
-		// vcon0->OutFormat("%[8H].%[8H].%[8H]: vend 0x%[16H], class 0x%[32H], head 0x%[8H]\n\r",
-		// 	dev.bus, dev.device, dev.function, vendor_id, class_code, dev.header_type);
+	usb::xhci::Controller& xhc = *reinterpret_cast<usb::xhci::Controller*>(_BUF_xhc);
+	if (!PCI_Init(pci)) {
+		plogerro("No devices on PCI or PCI init failed.");
 	}
-	// get xHC memory base address
-	if (xhc_dev) {
-		ploginfo("xHC has been found: %[8H].%[8H].%[8H]", xhc_dev->bus, xhc_dev->device, xhc_dev->function);
-		auto xhc_bar = pci.ReadBar(*xhc_dev, 0);
-		if (!xhc_bar.pvalue) {
-			plogerro("xHC BAR0 is not valid.");
-		}
-		xhc_mmio_base = *xhc_bar.pvalue & ~_IMM(0xF);
-		ploginfo("xHC mmio_base = 0x%[x]", xhc_mmio_base);
-		// setting interrupt of xHC
-		APIC[InterruptVector::xHCI].setModeRupt(reinterpret_cast<uint64>(IntHandlerXHCI), SegCo64);
-		// config MSI
-		const uint8_t bsp_local_apic_id = treat<uint32>_IMM(0xFEE00020) >> 24;// or STI is useless -- Phina 20260117
-		pci.configure_MSI_fixed_destination(
-			*xhc_dev, bsp_local_apic_id,
-			PCI::MSITriggerMode::Level,
-			PCI::MSIDeliveryMode::Fixed,
-			InterruptVector::xHCI, 0);
+	APIC[IRQ_xHCI].setModeRupt(reinterpret_cast<uint64>(Handint_XHCI), SegCo64); usb::HIDMouseDriver::default_observer = hand_mouse;
+	if (auto xhc_dev = Mouse_Init_USB(pci, &xhc)) {
+		ploginfo("xHC-USB-Mouse has been found: %[8H].%[8H].%[8H]", xhc_dev->bus, xhc_dev->device, xhc_dev->function);
 	}
 
-
-
-	//
-	if (xhc_mmio_base) {
-		usb::xhci::Controller xhc{ xhc_mmio_base };
-		if (0x8086 == pci.read_vendor_id(*xhc_dev)) {
-			SwitchEhci2Xhci(pci, *xhc_dev);
-		}
-		{
-			auto err = xhc.Initialize();
-			ploginfo("xhc.Initialize: %s", err.Name());
-		}
-		ploginfo("xHC starting");
-		xhc.Run();
-		// 
-		usb::HIDMouseDriver::default_observer = MouseObserver;
-		for1 (i, xhc.MaxPorts()) {
-			auto port = xhc.PortAt(i);
-			// ploginfo("Port %d: IsConnected=%d", i, port.IsConnected());
-			if (port.IsConnected()) {
-				if (auto err = ConfigurePort(xhc, port)) {
-					plogerro("Failed to configure port: %s at %s:%d", err.Name(), err.File(), err.Line());
-					continue;                                                                                                                
-				}
-			}
-		}
-		::xhc = &xhc;
-		APIC.enAble(true);
-		stduint elapsed_span = lapic_timer.Read();
-		lapic_timer.Endo();
-		//
-		
-
-		ploginfo("There are %[u] layers, f=%[x], l=%[x]", global_layman.Count(), global_layman.subf, global_layman.subl);
-		ploginfo("Kernel Ready in 0x%[x] ticks", elapsed_span);
-	}
+	Memory::pagebmap->dump_avail_memory();
 
 	_ASM("UD2");
 
+	APIC.enAble(true);
+	stduint elapsed_span = lapic_timer.Read();
+	lapic_timer.Endo();
+	//
+	ploginfo("There are %[u] layers, f=%[x], l=%[x]", global_layman.Count(), global_layman.subf, global_layman.subl);
+	ploginfo("Kernel Ready in 0x%[x] ticks", elapsed_span);
+
 	while (true) {
 		APIC.enAble(false);
-		if (!message_queue->Count()) {
+		if (!message_queue.Count()) {
 			APIC.enAble(true);
 			HALT();
 			continue;
 		}
-		Message msg;
-		message_queue->Dequeue(msg);
+		SysMessage msg;
+		message_queue.Dequeue(msg);
 		APIC.enAble(true);
 		switch (msg.type) {
-		case Message::RUPT_xHCI:
-			while (xhc->PrimaryEventRing()->HasFront()) {
-				if (auto err = ProcessEvent(*xhc)) {
-					plogerro("Error while ProcessEvent: %s at %s:%d", err.Name(), err.File(), err.Line());
-				}
+		case SysMessage::RUPT_xHCI:
+			if (auto err = xhc.ProcessEvents()) {
+				plogerro("Error while ProcessEvent: %s at %s:%d", err.Name(), err.File(), err.Line());
 			}
 			break;
 		default:
 			plogerro("Unknown message type: %d", msg.type);
 			break;
 		}
-
-		
-
 	}
 }
 

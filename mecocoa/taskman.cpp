@@ -11,8 +11,14 @@
 #include <cpp/interrupt>
 #include <c/format/ELF.h>
 #include <c/driver/keyboard.h>
+#include "../include/taskman.hpp"
 
 use crate uni;
+
+static SysMessage _BUF_Message[64];
+Queue<SysMessage> message_queue(_BUF_Message, numsof(_BUF_Message));
+
+
 #ifdef _ARC_x86 // x86:
 #include "../include/atx-x86-flap32.hpp"
 #include "../include/filesys.hpp"
@@ -687,7 +693,7 @@ stduint ProcessBlock::getID()
 
 //// ---- ---- SERVICE ---- ---- ////
 
-void _Comment(R1) serv_task_loop()
+void _Comment(R0) serv_task_loop()
 {
 	stduint to_args[8];// 8*4=32 bytes
 	stduint sig_type = 0, sig_src, ret;

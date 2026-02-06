@@ -5,7 +5,7 @@
 // ModuTitle: [Service] Console - ELF32-C++ x86 Bare-Metal
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 #define _STYLE_RUST
-#define _HIS_TIME_H
+
 #include <c/consio.h>
 #include <c/driver/mouse.h>
 #include <c/driver/keyboard.h>
@@ -20,6 +20,10 @@ use crate uni;
 #include "../include/console.hpp"
 
 Cursor* Cursor::global_cursor = nullptr;
+SheetTrait* Cursor::moving_sheet = nullptr;
+bool Cursor::mouse_btnl_dn = false;
+bool Cursor::mouse_btnm_dn = false;
+bool Cursor::mouse_btnr_dn = false;
 
 #if (_MCCA & 0xFF00) == 0x8600
 
@@ -240,6 +244,7 @@ extern UefiData uefi_data;
 #endif
 
 ::uni::Witch::Form form0;
+static const char form0_title_text[] = "Ciallo~>v<";
 
 void cons_init() {
 	Bcons[0].Reset(bda->screen_columns, 24, _VIDEO_ADDR_BUFFER, 0 * 50); Bcons[0].setShowY(0, 24);
@@ -314,7 +319,8 @@ void cons_init() {
 	// [demo] window
 	if (1) {
 		Rectangle rect{ Point(200, 40), Size2(160, 80) };
-		form0.setSheet(global_layman, rect);
+		new (&form0.Title) String((char*)form0_title_text, sizeof(form0_title_text));
+		form0.setSheet(global_layman, rect, (Color*)mem.allocate(rect.getArea() * sizeof(Color)));
 		global_layman.Append(&form0);
 	}
 

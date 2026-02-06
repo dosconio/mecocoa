@@ -2,6 +2,7 @@
 #define FILEMAN_HPP_
 
 #include <cpp/trait/StorageTrait.hpp>
+#include <c/storage/harddisk.h>
 // The version just consider primary IDE
 
 bool waitfor(stduint mask, stduint val, stduint timeout_second);
@@ -54,16 +55,16 @@ enum MajorDevice {
 
 
 
-struct Harddisk_PATA_Paged : public Harddisk_PATA {
+struct Harddisk_PATA_Paged : public uni::Harddisk_PATA {
 	Harddisk_PATA_Paged(byte _id = 0, HarddiskType type = HarddiskType::ATA) : Harddisk_PATA(_id, type) {}
 	virtual bool Read(stduint BlockIden, void* Dest);
 	virtual bool Write(stduint BlockIden, const void* Sors);
 };
-extern Harddisk_PATA* disks[MAX_DRIVES];
+extern uni::Harddisk_PATA* disks[MAX_DRIVES];
 
 // for IDE0:0 and IDE0:1
 // Should be done by syscall. But here is linked as one program
-inline static Harddisk_PATA* IndexDisk(unsigned dev) {
+inline static uni::Harddisk_PATA* IndexDisk(unsigned dev) {
 	unsigned drv_id = DRV_OF_DEV(dev);
 	if (drv_id >= MAX_DRIVES) return NULL;
 	return disks[drv_id];

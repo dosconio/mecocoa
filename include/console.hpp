@@ -15,6 +15,7 @@ public:\
 };
 
 #include <cpp/Device/_Video.hpp>
+#include <c/driver/mouse.h>
 
 #if (_MCCA & 0xFF00) == 0x8600
 extern uni::LayerManager global_layman;
@@ -32,12 +33,14 @@ struct KeyboardBridge : public OstreamTrait // // scan code set 1
 class Cursor: public uni::SheetTrait
 {
 public:
-	virtual void doshow(void* _) override {
-		
-	}
+	virtual void doshow(void* _) override;
 	virtual void onrupt(uni::SheetEvent event, Point rel_p, ...) override {}
-public:
+public:// single instance
 	static Cursor* global_cursor;
+	static SheetTrait* moving_sheet;
+	static bool mouse_btnl_dn;
+	static bool mouse_btnm_dn;
+	static bool mouse_btnr_dn;
 public:
 	Cursor(uni::VideoControlInterface* writer) : uni::SheetTrait(), pixel_writer_{ writer } {}
 	void setSheet(LayerManager& layman, const Point& vertex);
@@ -57,6 +60,8 @@ defVconIface(GloScreenABGR8888, uint32);
 extern bool ento_gui;
 
 void cons_init();
+
+void hand_mouse(MouseMessage mmsg);
 
 #endif
 

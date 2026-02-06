@@ -2,10 +2,10 @@
 // Attribute: 
 // LastCheck: 20240218
 // AllAuthor: @dosconio, @ArinaMgk
-// ModuTitle: [Service] Console - ELF32-C++ x86 Bare-Metal
+// ModuTitle: [Service] Console - Video and Mouse
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 #define _STYLE_RUST
-#define _HIS_TIME_H
+
 #include <cpp/unisym>
 use crate uni;
 #include <c/consio.h>
@@ -51,9 +51,9 @@ char mouse_cursor_shape[kMouseCursorHeight][kMouseCursorWidth + 1] = {
 	"               ",
 };
 
-void Cursor::setSheet(LayerManager& layman, const Point& vertex) {
-	sheet_buffer = (Color*)mem.allocate(kMouseCursorWidth * kMouseCursorHeight * sizeof(Color));
-	auto p = sheet_buffer;
+void Cursor::doshow(void* _) {
+	auto p = _ ? (Color*)_ : sheet_buffer;
+	if (!p) return;
 	for0(dy, kMouseCursorHeight) for0(dx, kMouseCursorWidth) {
 		if (mouse_cursor_shape[dy][dx] == '@') {
 			*p++ = 0xFF000000;// Point(position.x + dx, position.y + dy)
@@ -65,10 +65,66 @@ void Cursor::setSheet(LayerManager& layman, const Point& vertex) {
 			*p++ = 0x00FFFFFF;
 		}
 	}
-	//
+}
+
+void Cursor::setSheet(LayerManager& layman, const Point& vertex) {
+	sheet_buffer = (Color*)mem.allocate(kMouseCursorWidth * kMouseCursorHeight * sizeof(Color));
+	doshow(sheet_buffer);
 	InitializeSheet(layman, vertex, { kMouseCursorWidth,kMouseCursorHeight }, sheet_buffer);
 	layman.Append(this);
 }
+
+
+
+// hand_mouse
+void hand_mouse(MouseMessage mmsg) {
+	// ploginfo("hand_mouse (%d, %d)", displacement_x, displacement_y);
+	byte change_btns = 0;// 0RML0RML
+	if (Cursor::mouse_btnl_dn != mmsg.BtnLeft) change_btns |= 0b001;
+	if (Cursor::mouse_btnm_dn != mmsg.BtnMiddle) change_btns |= 0b010;
+	if (Cursor::mouse_btnr_dn != mmsg.BtnRight) change_btns |= 0b100;
+	if (mmsg.BtnLeft) change_btns |= 0b00010000;
+	if (mmsg.BtnMiddle) change_btns |= 0b00100000;
+	if (mmsg.BtnRight) change_btns |= 0b01000000;
+
+	if ((change_btns & 0b1) && !mmsg.BtnLeft) {
+		Cursor::moving_sheet = nullptr;
+	}
+	
+	Cursor::mouse_btnl_dn = mmsg.BtnLeft;
+	Cursor::mouse_btnm_dn = mmsg.BtnMiddle;
+	Cursor::mouse_btnr_dn = mmsg.BtnRight;
+	Point cursor_p = Cursor::global_cursor->sheet_area.getVertex();
+
+	// normal layers
+	SheetTrait* sheet = nullptr;
+	if ((change_btns & 0b111) && (sheet = global_layman.getTop(cursor_p, 1))) {
+		cursor_p -= sheet->sheet_area.getVertex();
+		sheet->onrupt(SheetEvent::onClick, cursor_p, change_btns);
+	}
+
+	// cursor layer
+	if ((mmsg.X || mmsg.Y))
+		global_layman.Domove(Cursor::global_cursor, { mmsg.X,mmsg.Y });
+	if (Cursor::moving_sheet) {
+		global_layman.Domove(Cursor::moving_sheet, { mmsg.X,mmsg.Y });
+	}
+}
+
+
+
+// ---- ---- ---- ---- . ---- ---- ---- ----
+
+void LayerManager::Dorupt(SheetTrait* who, SheetEvent event, Point rel_p, para_list args) {
+	if (event == SheetEvent::onClick) {
+		byte state = para_next(args, unsigned);
+		if ((state & 0b10001) == 0b10001) {
+			Cursor::moving_sheet = who;
+		}
+	}
+}
+
+// ---- ---- ---- ---- . ---- ---- ---- ----
 
 // GloScreen
 #if 0// GloScreenRGB888

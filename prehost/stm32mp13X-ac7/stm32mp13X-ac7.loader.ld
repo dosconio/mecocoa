@@ -3,7 +3,7 @@
 ENTRY(Reset_Handler)
 
 _Min_Heap_Size = 0x200;     /* required amount of heap  */
-_Min_Stack_Size = 0x400;    /* required amount of stack */
+_Min_Stack_Size = 0x1000;    /* required amount of stack */
 
 TTB_L1_SIZE = 16384;        /* MMU Level 1 Translation table size */
 TTB_L2_SIZE = 1024;         /* MMU Level 2 Translation table size */
@@ -18,7 +18,7 @@ MEMORY {
 
 /* Select Memory in which code has to be placed and offset of code from start of this memory */ 
 
-REGION_ALIAS("RAM", SYSRAM_BASE);/* or DDR_BASE */
+REGION_ALIAS("RAM", SYSRAM_BASE);/* SYSRAM_BASE or DDR_BASE */
 START_OFFSET = 0x00;
 
 /* Code Memory */

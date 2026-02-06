@@ -4,7 +4,7 @@
 // ModuTitle: [Service] Console - ELF32-C++ x86 Bare-Metal
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 #define _STYLE_RUST
-#define _HIS_TIME_H
+
 #include <cpp/unisym>
 use crate uni;
 #include <c/cpuid.h>

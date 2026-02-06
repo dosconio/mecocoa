@@ -194,8 +194,8 @@ _ESYM_C void* calloc(size_t nmemb, size_t size) {
 	// Console.OutFormat("calloc(%[u])\n\r", nmemb * size);
 	return nullptr;
 }
-
 void operator delete(void*) {}
+void operator delete[](void*) {}
 void operator delete(void* ptr, stduint size) noexcept { _TODO }
 #if defined(_UEFI)
 void operator delete(void* ptr, stduint size, std::align_val_t) noexcept { ::operator delete(ptr, size); }

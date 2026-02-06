@@ -2,12 +2,28 @@
 #ifndef TASKMAN_HPP_
 #define TASKMAN_HPP_
 
+#include <cpp/queue>
+#include <c/system/paging.h>
+#include <c/task.h>
+#include "syscall.hpp"
+
+struct SysMessage {
+	enum Type {
+		RUPT_xHCI,
+	} type;
+};
+extern uni::Queue<SysMessage> message_queue;
+
+
+
+
+#if _MCCA == 0x8632
 #include "fileman.hpp"
 
 extern "C" bool task_switch_enable;
 
 struct CommMsg {
-	Slice data;
+	uni::Slice data;
 	stduint type;
 	stduint src;// use if type is HARDRUPT
 };
@@ -27,7 +43,7 @@ struct _Comment(Kernel) ProcessBlock {
 	static void* table_pends;
 
 	//{} Mempool mempool;
-	Paging paging;
+	uni::Paging paging;
 	descriptor_t LDT[0x100 / byteof(descriptor_t)];
 	TSS_t TSS;// aka state-frame
 	stduint kept_intermap[1];
@@ -46,7 +62,7 @@ struct _Comment(Kernel) ProcessBlock {
 	stduint before_syscall_data_pointer;// esp
 	stduint before_syscall_code_pointer;
 	//
-	Slice load_slices[8];// at most 8 slices, app-relative logical address
+	uni::Slice load_slices[8];// at most 8 slices, app-relative logical address
 
 	//{} threads
 
@@ -113,7 +129,7 @@ enum class TaskmanMsg {
 };
 
 ProcessBlock* TaskRegister(void* entry, byte ring);
-ProcessBlock* TaskLoad(BlockTrait* source, void* addr, byte ring);//{TODO} for existing R1
+ProcessBlock* TaskLoad(uni::BlockTrait* source, void* addr, byte ring);//{TODO} for existing R1
 
 stduint TaskAdd(ProcessBlock* task);
 ProcessBlock* TaskGet(stduint taskid);// get task block by its id
@@ -165,5 +181,6 @@ inline static stduint sysrecv(stduint fo_whom, void* msgaddr, stduint bytlen, st
 	if (src) *src = msg.src;
 	return ret;
 }
+#endif
 
 #endif

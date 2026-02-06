@@ -4,12 +4,15 @@
 // AllAuthor: @dosconio, @ArinaMgk
 // ModuTitle: Demonstration - ELF32-C++ x86 Bare-Metal
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
+#ifndef _STYLE_RUST
 #define _STYLE_RUST
+#endif
 
 #include <c/consio.h>
 #include <cpp/interrupt>
 #include <c/driver/mouse.h>
 #include <c/driver/keyboard.h>
+#include "../include/taskman.hpp"
 
 use crate uni;
 #ifdef _ARC_x86 // x86:
@@ -122,6 +125,14 @@ void Handint_MOU() {
 
 // void Handint_HDD()...
 
+#elif defined(_UEFI)
+
+__attribute__((interrupt, target("general-regs-only")))
+void Handint_XHCI(InterruptFrame* frame) {
+	message_queue.Enqueue(SysMessage{ SysMessage::RUPT_xHCI });
+	sendEOI();
+}
+
 #endif
 
 
@@ -204,6 +215,42 @@ void exception_handler(sdword iden, dword para) {
 }
 
 // No dynamic core
+
+#elif defined(_MPU_STM32MP13)// Thumb
+
+
+_ESYM_C
+void Default_Handler(void) {
+	erro("");
+}
+
+// Internal References
+_ESYM_C void Vectors(void) __attribute__((naked, section("RESET")));
+_ESYM_C void Reset_Handler(void) __attribute__((naked, target("arm")));
+
+// ExcRupt Handler
+_ESYM_C void Undef_Handler(void) __attribute__((weak, alias("Default_Handler")));
+_ESYM_C void SVC_Handler(void) __attribute__((weak, alias("Default_Handler")));
+_ESYM_C void PAbt_Handler(void) __attribute__((weak, alias("Default_Handler")));
+_ESYM_C void DAbt_Handler(void) __attribute__((weak, alias("Default_Handler")));
+_ESYM_C void Rsvd_Handler(void) __attribute__((weak, alias("Default_Handler")));
+_ESYM_C void IRQ_Handler(void) __attribute__((weak, alias("Default_Handler")));
+_ESYM_C void FIQ_Handler(void) __attribute__((weak, alias("Default_Handler")));
+
+_ESYM_C
+void Vectors(void) {
+	__asm__ volatile(
+		".align 7                                         \n"
+		"LDR    PC, =Reset_Handler                        \n"
+		"LDR    PC, =Undef_Handler                        \n"
+		"LDR    PC, =SVC_Handler                          \n"
+		"LDR    PC, =PAbt_Handler                         \n"
+		"LDR    PC, =DAbt_Handler                         \n"
+		"LDR    PC, =Rsvd_Handler                         \n"
+		"LDR    PC, =IRQ_Handler                          \n"
+		"LDR    PC, =FIQ_Handler                          \n"
+		);
+}
 
 #endif
 

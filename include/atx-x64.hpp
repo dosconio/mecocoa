@@ -7,7 +7,7 @@ using namespace uni;
 #include <cpp/Device/_Video.hpp>
 #include "console.hpp"
 #include "memoman.hpp"
-
+#include "taskman.hpp"
 
 // LONG AND UEFI
 
@@ -34,6 +34,12 @@ struct mecocoa_global_t {
 	mec_gdt* gdt_ptr;
 };
 inline static mecocoa_global_t* mecocoa_global{ (mecocoa_global_t*)0x500 };
+
+// ---- handler
+
+void Handint_XHCI(InterruptFrame* frame);
+
+
 
 // UEFI
 

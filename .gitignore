@@ -3,3 +3,9 @@ Cargo.lock
 subapps/hellod/target/
 *.o
 *.ignore
+
+# STM32 CubeIDE
+Result/
+Debug/
+ImageHeader/
+language.settings.xml
