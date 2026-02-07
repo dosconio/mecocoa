@@ -31,7 +31,25 @@ QFLAGS = -drive file=$(ubinpath)/AMD64/OVMF/OVMF_CODE.fd,format=raw,if=pflash -d
 
 #
 LDFILE  = prehost/$(arch)/$(arch).ld
-LDFLAGS = -T $(LDFILE) 
+LDFLAGS = -T $(LDFILE)
+
+
+asmpref=_ae_
+cplpref=_cc_
+cpppref=_cx_
+dest_obj=$(uobjpath)/mcca-$(arch)
+define asm_to_o
+$(dest_obj)/$(asmpref)$(notdir $(1:.asm=.o)): $(1)
+endef
+define c_to_o
+$(dest_obj)/$(cplpref)$(notdir $(1:.c=.o)): $(1)
+endef
+define cpp_to_o
+$(dest_obj)/$(cpppref)$(notdir $(1:.cpp=.o)): $(1)
+endef
+
+
+
 #
 asmfile=$(ulibpath)/asm/x64/inst/ioport.asm \
 	$(ulibpath)/asm/x64/cpuid.asm \
@@ -70,10 +88,9 @@ cplfile=$(ulibpath)/c/mcore.c\
 	$(ulibpath)/c/ustring/astring/salc.c \
 	$(ulibpath)/c/ustring/bstring/bstring.c \
 
-
-asmobjs=$(patsubst %asm, %o, $(asmfile))
-cppobjs=$(patsubst %cpp, %o, $(cppfile))
-cplobjs=$(patsubst %c, %o, $(cplfile))
+asmobjs=$(addprefix $(dest_obj)/$(asmpref),$(patsubst %asm,%o,$(notdir $(asmfile))))
+cppobjs=$(addprefix $(dest_obj)/$(cpppref),$(patsubst %cpp,%o,$(notdir $(cppfile))))
+cplobjs=$(addprefix $(dest_obj)/$(cplpref),$(patsubst %c,%o,$(notdir $(cplfile))))
 elf_kernel=mcca-$(arch).elf
 
 mntdir=/mnt/mcca-$(arch)
@@ -157,24 +174,25 @@ run-only:
 .PHONY : clean
 clean:
 	@echo ---- Mecocoa $(arch) ----#[clearing]
-	${RM} $(uobjpath)/mcca-$(arch)/*
+# 	${RM} $(uobjpath)/mcca-$(arch)/*
 	${RM} $(ubinpath)/$(arch).img
 	@${MKDIR} $(uobjpath)/mcca-$(arch)
 
-%.o: %.asm
-	echo AS $(notdir $<)
-	aasm -f elf64      -o $(uobjpath)/mcca-$(arch)/_ae_$(notdir $@) $< -D_MCCA=0x8664 -D_UEFI
+$(foreach src,$(asmfile),$(eval $(call asm_to_o,$(src))))
+$(foreach src,$(cplfile),$(eval $(call c_to_o,$(src))))
+$(foreach src,$(cppfile),$(eval $(call cpp_to_o,$(src))))
 
-%.o: %.S
+_ae_%.o:
 	echo AS $(notdir $<)
-	${CC} ${CFLAGS} -c -o $(uobjpath)/mcca-$(arch)/_as_$(notdir $@) $<
+	aasm -f elf64      -o $@ $< -D_MCCA=0x8664 -D_UEFI -MD $(patsubst %.o,%.d,$@)
 
-%.o: %.c
+_cc_%.o:
 	echo CC $(notdir $<)
-	${CC} ${CFLAGS} -c -o $(uobjpath)/mcca-$(arch)/_cc_$(notdir $@) $<
+	${CC} ${CFLAGS} -c -o $@ $< -MMD -MF $(patsubst %.o,%.d,$@) -MT $@
 
-%.o: %.cpp
+_cx_%.o:
 	echo CX $(notdir $<)
-	${CX} ${XFLAGS} -c -o $(uobjpath)/mcca-$(arch)/_cx_$(notdir $@) $<
+	${CX} ${XFLAGS} -c -o $@ $< -MMD -MF $(patsubst %.o,%.d,$@) -MT $@
 
+-include $(dest_obj)/*.d
 

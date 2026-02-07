@@ -94,9 +94,11 @@ extern OstreamTrait* con0_out;
 extern "C" //__attribute__((ms_abi))
 void mecocoa(const UefiData& uefi_data_ref)
 {
+	#ifdef _UEFI
 	stduint rsp;
 	uefi_data = uefi_data_ref;
 	_ASM("mov %%rsp, %0" : "=r"(rsp));
+	#endif
 
 	GDT_Init();
 	if (!Memory::initialize('UEFI', (byte*)(&uefi_data.memory_map))) HALT();
@@ -104,10 +106,10 @@ void mecocoa(const UefiData& uefi_data_ref)
 	
 	cons_init();
 
+	#ifdef _UEFI
 	ploginfo("Ciallo %lf, rsp=%[x]", 2025.09, rsp);
+	#endif
 
-	lapic_timer.Reset();
-	lapic_timer.Ento();
 
 
 	// IVT and Device
@@ -118,10 +120,15 @@ void mecocoa(const UefiData& uefi_data_ref)
 	if (!PCI_Init(pci)) {
 		plogerro("No devices on PCI or PCI init failed.");
 	}
-	APIC[IRQ_xHCI].setModeRupt(reinterpret_cast<uint64>(Handint_XHCI), SegCo64); usb::HIDMouseDriver::default_observer = hand_mouse;
+	APIC[IRQ_xHCI].setModeRupt(reinterpret_cast<uint64>(Handint_XHCI), SegCo64);
+	//[USB Mouse]
+	usb::HIDMouseDriver::default_observer = hand_mouse;
 	if (auto xhc_dev = Mouse_Init_USB(pci, &xhc)) {
 		ploginfo("xHC-USB-Mouse has been found: %[8H].%[8H].%[8H]", xhc_dev->bus, xhc_dev->device, xhc_dev->function);
 	}
+	//[LAPIC]
+	lapic_timer.Reset();
+	lapic_timer.Ento();
 
 	Memory::pagebmap->dump_avail_memory();
 

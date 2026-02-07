@@ -38,14 +38,14 @@
 			<locationURI>PARENT-3-PROJECT_LOC/mecocoa/handler.cpp</locationURI>
 		</link>
 		<link>
+			<name>Source/stm32mp13X-ac7.cpp</name>
+			<type>1</type>
+			<locationURI>PARENT-1-PROJECT_LOC/stm32mp13X-ac7.cpp</locationURI>
+		</link>
+		<link>
 			<name>Source/stm32mp13X-ac7.loader.asm.S</name>
 			<type>1</type>
 			<locationURI>PARENT-1-PROJECT_LOC/stm32mp13X-ac7.loader.asm.S</locationURI>
-		</link>
-		<link>
-			<name>Source/stm32mp13X-ac7.loader.cpp</name>
-			<type>1</type>
-			<locationURI>PARENT-1-PROJECT_LOC/stm32mp13X-ac7.loader.cpp</locationURI>
 		</link>
 	</linkedResources>
 </projectDescription>

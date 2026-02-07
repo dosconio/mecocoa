@@ -13,7 +13,7 @@
 P	0x1	fsbl-openbl	Binary	none	0x0			STM32PRGFW_UTIL_MP13xx_CP_Serial_Boot.stm32
 P	0x3	fsbl-extfl	Binary	none	0x0			SD_Ext_Loader.bin
 P	0x4	fsbl-app	Binary	mmc0	0x0000080	LOADER.stm32
-P	0x5	fsbl-app	Binary	mmc0	0x0000500	LOADER.stm32
+P	0x5	fsbl-app	Binary	mmc0	0x0000500	KERNEL.stm32
  * */
 
 #define BOARD_DETAIL "5DAE7" // STM32MP135-DAE7
@@ -38,28 +38,32 @@ static bool init();
 
 void hand() { LED.Toggle(); }
 
-uint32 Buffer0[512*2*2/4];
+uint32 Buffer0[512/sizeof(uint32)];
 
 fn main() -> int {
 	if (!init()) loop;
 	GPIOA[3].enInterrupt();
-	//GPIOI[0].enInterrupt();
-	Circle circ(Point(200,200), 200);
+
+	Circle circ(Point(200, 200), 200);
 	Rectangle scrn_rect(Point(0, 0), Size2(800, 480), Color::AliceBlue);
-//	LCD.Draw(scrn_rect);
+
 	LTDC[1].DrawRectangle(scrn_rect);
-//	VConsole.OutFormat("Ciallo %[32H]", 0x4567);
 
-	SDCard1.Read(0x400, Buffer0);
-	VConsole.OutFormat(" --- ", 0, 0);
-	for(int i=0; i< 16; i++) VConsole.OutFormat(" {%x}", *((char*)Buffer0 + i), 0);
-	VConsole.OutFormat(" - ", 0, 0);
-	for0(i,512) *((char*)Buffer0 + 512 + i) = i;
-	SDCard1.Write(0x400, (char*)Buffer0 + 512);
-	SDCard1.Read(0x400, Buffer0);
-	VConsole.OutFormat(" --- ", 0, 0);
-	for(int i=0; i< 64; i++) VConsole.OutFormat(" {%x}", *((char*)Buffer0 + i), 0);
-
+	SDCard1.Read(0x500, Buffer0);
+	VConsole.OutFormat("Magic: 0x%[32H] (0x324D5453)\r\n", Buffer0[0]);
+	VConsole.OutFormat("Binln: 0x%[32H]\r\n", Buffer0[0x48/4] - 512);
+	VConsole.OutFormat("Entry: 0x%[32H]\r\n", Buffer0[0x50/4]);
+	uint32 times = Buffer0[0x48/4] - 512;
+	uint32* p = (uint32*)Buffer0[0x50/4];
+	times = floorAlign(512, times);// floor eat first sector
+	times /= 512;
+	for1(i, times) {
+		// VConsole.OutFormat("load %u -> %[32H]\r\n", 0x500 + i, p);
+		SDCard1.Read(0x500 + i, p);
+		cast<stduint>(p) += 512;
+	}
+	Handler_t kernel = (Handler_t)Buffer0[0x50/4];
+	kernel();
 	loop {
 		LED.Toggle();
 		SysDelay(250);
@@ -99,9 +103,8 @@ static bool init() {
 	if (LTDC.getFrequency() != 33e6) return false;// 33MHz
 	LTDC.setMode(Color::Black);
 	{
-		LTDC_LAYER_t::LayerPara lpara;
+		LTDC_LAYER_t::LayerPara lpara{};
 		LTDC_LAYER_t::layer_param_refer(&lpara);
-		lpara.roleaddr;
 		asrtret(LTDC[0].setMode(lpara));
 	}
 	// EXTI

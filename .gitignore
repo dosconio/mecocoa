@@ -7,5 +7,7 @@ subapps/hellod/target/
 # STM32 CubeIDE
 Result/
 Debug/
-ImageHeader/
+prehost/stm32mp13X-ac7/ImageHeader/EL3_Launcher/
+prehost/stm32mp13X-ac7/ImageHeader/exe.win-amd64-2.7/
+ImageHeader/e*
 language.settings.xml
