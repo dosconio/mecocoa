@@ -5,7 +5,6 @@
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 #define _STYLE_RUST
 #include <cpp/unisym>
-#include <cpp/interrupt>
 #include <c/driver/mouse.h>// qemu only
 #include <c/driver/timer.h>
 #include <cpp/Device/Bus/PCI.hpp>
@@ -81,7 +80,7 @@ void SetupIdentityPageTable() {
 	for (int i_pdpt = 0; i_pdpt < page_directory.size(); ++i_pdpt) {
 		pdp_table[i_pdpt] = reinterpret_cast<uint64_t>(&page_directory[i_pdpt]) | 0x003;
 		for (int i_pd = 0; i_pd < 512; ++i_pd) {
-			page_directory[i_pdpt][i_pd] = i_pdpt * kPageSize1G + i_pd * kPageSize2M | 0x093;// 0x83 for cacheable
+			page_directory[i_pdpt][i_pd] = i_pdpt * kPageSize1G + i_pd * kPageSize2M | 0x083;// 0x83 for cacheable
 		}
 	}
 	setCR3(_IMM(&pml4_table[0]));
@@ -100,6 +99,7 @@ void mecocoa(const UefiData& uefi_data_ref)
 	_ASM("mov %%rsp, %0" : "=r"(rsp));
 	#endif
 
+	_call_serious = (_tocall_ft)kernel_fail;//{TODO} DbgStop
 	GDT_Init();
 	if (!Memory::initialize('UEFI', (byte*)(&uefi_data.memory_map))) HALT();
 	SetupIdentityPageTable();
@@ -120,29 +120,30 @@ void mecocoa(const UefiData& uefi_data_ref)
 	if (!PCI_Init(pci)) {
 		plogerro("No devices on PCI or PCI init failed.");
 	}
-	APIC[IRQ_xHCI].setModeRupt(reinterpret_cast<uint64>(Handint_XHCI), SegCo64);
+	APIC[IRQ_xHCI].setModeRupt(_IMM(Handint_XHCI), SegCo64);
 	//[USB Mouse]
 	usb::HIDMouseDriver::default_observer = hand_mouse;
 	if (auto xhc_dev = Mouse_Init_USB(pci, &xhc)) {
 		ploginfo("xHC-USB-Mouse has been found: %[8H].%[8H].%[8H]", xhc_dev->bus, xhc_dev->device, xhc_dev->function);
 	}
 	//[LAPIC]
-	lapic_timer.Reset();
-	lapic_timer.Ento();
+	APIC[IRQ_LAPICTimer].setModeRupt(_IMM(Handint_LAPICT), SegCo64);
+	lapic_timer.Reset(0x1000000u);// 10ms qemu
 
-	Memory::pagebmap->dump_avail_memory();
-
-	_ASM("UD2");
+	tryUD();
 
 	APIC.enAble(true);
-	stduint elapsed_span = lapic_timer.Read();
-	lapic_timer.Endo();
-	//
+
+	// State
+	Memory::pagebmap->dump_avail_memory();
 	ploginfo("There are %[u] layers, f=%[x], l=%[x]", global_layman.Count(), global_layman.subf, global_layman.subl);
-	ploginfo("Kernel Ready in 0x%[x] ticks", elapsed_span);
 
 	while (true) {
 		APIC.enAble(false);
+		auto crt_tick = tick;
+		if (!(crt_tick % 50)) {
+			ploginfo("tick=%[u]", crt_tick);
+		}
 		if (!message_queue.Count()) {
 			APIC.enAble(true);
 			HALT();
@@ -156,6 +157,9 @@ void mecocoa(const UefiData& uefi_data_ref)
 			if (auto err = xhc.ProcessEvents()) {
 				plogerro("Error while ProcessEvent: %s at %s:%d", err.Name(), err.File(), err.Line());
 			}
+			break;
+		case SysMessage::RUPT_LAPICT:
+			// ploginfo("Timer Rupt!");
 			break;
 		default:
 			plogerro("Unknown message type: %d", msg.type);

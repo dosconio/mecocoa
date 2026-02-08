@@ -14,14 +14,14 @@ RM = rm -rf
 # (GNU)
 GPREF   = #riscv64-unknown-elf-
 CFLAGS += -z norelro -nostdlib -fno-builtin
-CFLAGS += --static -mno-red-zone -m64  -O0
+CFLAGS += --static -mno-red-zone -m64  -mno-sse -mno-sse2 -mno-avx -mno-avx2 
 CFLAGS += -I$(uincpath) -D_MCCA=0x8664 -D_HIS_IMPLEMENT -D_DEBUG
-CFLAGS += -fno-strict-aliasing -fno-exceptions -fno-stack-protector # -Wall -fno-pie
-CFLAGS += -Wno-multichar
-XFLAGS  = $(CFLAGS) -fno-rtti -fno-use-cxa-atexit -std=c++23
+CFLAGS += -fno-strict-aliasing -fno-exceptions -fno-stack-protector
+CFLAGS += -Wextra -Wno-multichar
+XFLAGS  = $(CFLAGS) -fno-rtti -fno-use-cxa-atexit
 G_DBG   = gdb-multiarch
-CC      = ${GPREF}gcc 
-CX      = ${GPREF}g++ -std=c++2a
+CC      = ${GPREF}gcc -O2
+CX      = ${GPREF}g++ -O2 -std=c++2a
 OBJCOPY = ${GPREF}objcopy
 OBJDUMP = ${GPREF}objdump
 
@@ -55,19 +55,19 @@ asmfile=prehost/atx-x64-uefi64/atx-x64.asm\
 	$(ulibpath)/asm/x64/inst/ioport.asm \
 	$(ulibpath)/asm/x64/inst/manage.asm \
 	$(ulibpath)/asm/x64/inst/interrupt.asm \
-
+	$(ulibpath)/asm/x64/interrupt/ruptable.asm \
 
 cppfile=$(wildcard mecocoa/*.cpp)\
 	$(ulibpath)/cpp/color.cpp \
 	$(ulibpath)/cpp/consio.cpp \
 	$(ulibpath)/cpp/stream.cpp \
 	$(ulibpath)/cpp/string.cpp \
+	$(ulibpath)/cpp/interrupt.cpp \
 	$(ulibpath)/cpp/lango/lango-cpp.cpp \
 	$(ulibpath)/cpp/dat-block/bmmemoman.cpp \
 	$(ulibpath)/cpp/Witch/Form.cpp \
 	$(ulibpath)/cpp/Device/Buzzer.cpp \
 	$(ulibpath)/cpp/Device/Video.cpp $(ulibpath)/cpp/Device/Video-VideoConsole.cpp \
-# 	$(ulibpath)/cpp/interrupt.cpp \
 
 
 cplfile=$(ulibpath)/c/mcore.c\

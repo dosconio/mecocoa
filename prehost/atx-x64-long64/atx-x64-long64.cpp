@@ -25,7 +25,14 @@ _ESYM_C void mecocoa() {
 	setCR3 _IMM(paging_addr);
 
 	cons_init();
+
+	// IVT and Device
+	InterruptControl APIC(_IMM(mem.allocate(256 * sizeof(gate_t))));
+	APIC.Reset(SegCo64, 0x00000000);
+
 	Console.OutFormat("Ciallo~\r\n");
+
+	tryUD();
 
 	Memory::pagebmap->dump_avail_memory();
 

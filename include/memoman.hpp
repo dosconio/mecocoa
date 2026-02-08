@@ -38,6 +38,7 @@ enum {
 #define bda ((BIOS_DataArea*)0x400)
 
 _ESYM_C stduint CallCo16(stduint func);
+__attribute__((optimize("O0")))
 inline static uint16 call_ladder(uint16 func, uint16 para1 = 0, uint16 para2 = 0, uint16 para3 = 0) {
 	Letvar(p, volatile uint16*, 0x500);
 	p[1] = para1;
@@ -96,8 +97,8 @@ public:
 	static bool initialize(stduint eax, byte* ebx);
 	static void* physical_allocate(usize siz);
 public:// trait
-	virtual void* allocate(stduint size);
-	virtual bool deallocate(void* ptr, stduint size = 0 _Comment(zero_for_block));
+	virtual void* allocate(stduint size, stduint alignment = 0) override;
+	virtual bool deallocate(void* ptr, stduint size = 0 _Comment(zero_for_block)) override;
 };
 extern Memory mem;
 #endif

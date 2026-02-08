@@ -127,9 +127,20 @@ void Handint_MOU() {
 
 #elif defined(_UEFI)
 
-__attribute__((interrupt, target("general-regs-only")))
+volatile timeval system_time = {};
+
+volatile stduint tick = 0;
+
+__attribute__((interrupt, target("general-regs-only"), optimize("O0")))
 void Handint_XHCI(InterruptFrame* frame) {
 	message_queue.Enqueue(SysMessage{ SysMessage::RUPT_xHCI });
+	sendEOI();
+}
+__attribute__((interrupt, target("general-regs-only"), optimize("O0")))
+void Handint_LAPICT(InterruptFrame* frame) {
+	// message_queue.Enqueue(SysMessage{ SysMessage::RUPT_LAPICT });
+	// mecocoa_global->system_time.mic;
+	tick = tick + 1;// ++
 	sendEOI();
 }
 
@@ -171,6 +182,7 @@ static rostr ExceptionDescription[] = {
 #if (_MCCA & 0xFF00) == 0x8600
 
 _ESYM_C
+__attribute__((target("general-regs-only"), optimize("O0")))
 void exception_handler(sdword iden, dword para) {
 	const bool have_para = iden >= 0;
 	if (iden < 0) iden = ~iden;
@@ -190,6 +202,7 @@ void exception_handler(sdword iden, dword para) {
 		}
 		else {
 			printlog(_LOG_FATAL, " %s", ExceptionDescription[iden]);// no-para
+			__asm("cli; hlt");
 		}
 		break;
 	}
@@ -210,6 +223,7 @@ void exception_handler(sdword iden, dword para) {
 	default:
 		printlog(_LOG_FATAL, have_para ? "%s with 0x%[32H]" : "%s",
 			ExceptionDescription[iden], para); // printlog will call halt machine
+		__asm("cli; hlt");
 		break;
 	}
 }

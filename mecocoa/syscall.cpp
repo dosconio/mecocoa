@@ -97,6 +97,7 @@ static stduint syscall_07_close(stduint* paras, stduint pid) {
 
 
 extern bool fileman_hd_ready;
+__attribute__((optimize("O0")))
 static stduint call_body(const syscall_t callid, ...) {
 	auto task_switch_enable_old = task_switch_enable;//{TODO} {spinlk for multi-Proc}
 	task_switch_enable = false;
@@ -275,6 +276,8 @@ static stduint call_body(const syscall_t callid, ...) {
 }
 
 static int hh;
+
+__attribute__((optimize("O0")))
 void call_gate() { // noreturn
 	// here stack top: TOP >>> 0x0804923d (CLogaddr: +0x4(%ebp))  0x0000000f (CSeg)  0x00005f44 (DLogaddr)  0x0000003f (DSeg)
 	stduint para[4];// a c d b
@@ -343,7 +346,7 @@ void call_gate() { // noreturn
 	__asm("callgate_endo:");
 	loop;
 }
-
+__attribute__((optimize("O0")))
 void call_intr() {
 	stduint para[4];// a c d b
 	__asm("mov  %%eax, %0" : "=m"(para[0]));
@@ -369,7 +372,7 @@ void call_intr() {
 void* call_gate_entry() {
 	return (void*)call_gate;
 }
-
+__attribute__((optimize("O0")))
 static stduint syscall0(syscall_t callid) {
 	stduint ret;
 	__asm("mov  %0, %%eax" : : "m"(callid));
@@ -377,6 +380,7 @@ static stduint syscall0(syscall_t callid) {
 	__asm("mov  %%eax, %0" : "=m"(ret));
 	return ret;
 }
+__attribute__((optimize("O0")))
 static stduint syscall1(syscall_t callid, stduint para1) {
 	stduint ret;
 	__asm("mov  %0, %%eax" : : "m"(callid));
@@ -385,6 +389,7 @@ static stduint syscall1(syscall_t callid, stduint para1) {
 	__asm("mov  %%eax, %0" : "=m"(ret));
 	return ret;
 }
+__attribute__((optimize("O0")))
 static stduint syscall2(syscall_t callid, stduint para1, stduint para2) {
 	stduint ret;
 	__asm("mov  %0, %%eax" : : "m"(callid));
@@ -394,6 +399,7 @@ static stduint syscall2(syscall_t callid, stduint para1, stduint para2) {
 	__asm("mov  %%eax, %0" : "=m"(ret));
 	return ret;
 }
+__attribute__((optimize("O0")))
 static stduint syscall3(syscall_t callid, stduint para1, stduint para2, stduint para3) {
 	stduint ret;
 	__asm("mov  %0, %%eax" : : "m"(callid));
@@ -404,7 +410,7 @@ static stduint syscall3(syscall_t callid, stduint para1, stduint para2, stduint 
 	__asm("mov  %%eax, %0" : "=m"(ret));
 	return ret;
 }
-
+__attribute__((optimize("O0")))
 stduint syscall(syscall_t callid, ...) {
 	// GCC style
 	Letpara(paras, callid);

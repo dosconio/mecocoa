@@ -89,4 +89,7 @@ setDSAll:
 	MOV GS, DI
 	RET
 
-
+GLOBAL tryUD:
+tryUD:
+	UD2
+	RET

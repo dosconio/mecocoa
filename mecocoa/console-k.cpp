@@ -24,7 +24,7 @@ use crate uni;
 extern BareConsole Bcons[TTY_NUMBER];
 extern byte current_screen_TTY;
 
-keyboard_state_t kbd_state = { 0 };
+keyboard_state_t kbd_state = {};
 
 static void setLED() {
 	KbdSetLED((_IMM(kbd_state.lock_caps) << 2) | (_IMM(kbd_state.lock_number) << 1) | _IMM(kbd_state.lock_scroll));

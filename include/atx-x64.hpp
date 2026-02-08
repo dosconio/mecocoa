@@ -4,6 +4,7 @@
 #include <cpp/unisym>
 using namespace uni;
 #include <c/datime.h>
+#include <cpp/interrupt>
 #include <cpp/Device/_Video.hpp>
 #include "console.hpp"
 #include "memoman.hpp"
@@ -35,9 +36,23 @@ struct mecocoa_global_t {
 };
 inline static mecocoa_global_t* mecocoa_global{ (mecocoa_global_t*)0x500 };
 
+// ---- asm
+
+_ESYM_C void tryUD();
+
+// ---- sysinfo
+
+int* kernel_fail(loglevel_t serious);
+rostr text_brand();
+
 // ---- handler
 
+// volatile timeval system_time;
+
+extern volatile stduint tick;
+
 void Handint_XHCI(InterruptFrame* frame);
+void Handint_LAPICT(InterruptFrame* frame);
 
 
 

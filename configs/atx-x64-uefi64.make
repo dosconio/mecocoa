@@ -12,14 +12,14 @@ RM = rm -rf
 # (GNU)
 GPREF   = #riscv64-unknown-elf-
 CFLAGS += -nostdlib -fno-builtin -z norelro -nostdlib -fno-builtin
-CFLAGS += --static -mno-red-zone -m64
+CFLAGS += --static -mno-red-zone -m64  -mno-sse -mno-sse2 -mno-avx -mno-avx2 -msoft-float # for exception no XMM...
 CFLAGS += -I$(uincpath) -D_MCCA=0x8664 -D_UEFI -D_HIS_IMPLEMENT -D_DEBUG
-CFLAGS += -fno-strict-aliasing -fno-exceptions # -Wall -fno-pie
-CFLAGS += -Wno-multichar
+CFLAGS += -fno-strict-aliasing -fno-exceptions
+CFLAGS += -Wextra -Wno-multichar
 XFLAGS  = $(CFLAGS) -fno-rtti -fno-use-cxa-atexit
 G_DBG   = gdb-multiarch
-CC      = ${GPREF}gcc
-CX      = ${GPREF}g++ -std=c++23
+CC      = ${GPREF}gcc -O2
+CX      = ${GPREF}g++ -O2 -std=c++23
 OBJCOPY = ${GPREF}objcopy
 OBJDUMP = ${GPREF}objdump
 

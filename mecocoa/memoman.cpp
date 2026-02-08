@@ -78,7 +78,7 @@ void* Memory::physical_allocate(usize siz) {
 void* (*uni::_physical_allocate)(stduint size) = 0;
 #endif
 
-void* Memory::allocate(stduint siz) {
+void* Memory::allocate(stduint siz, stduint alignment) {
 	if (!map_ready) return nullptr;
 	if (siz & 0xFFF) siz = (siz & ~_IMM(0xFFF)) + 0x1000;
 	void* ret = nil;
@@ -147,6 +147,7 @@ uint64 GDT_LIST[]{
 #if (_MCCA & 0xFF00) == 0x8600
 _ESYM_C void RefreshGDT();
 // previous GDT may be broken, omit __asm("sgdt _buf");
+
 void GDT_Init() {
 	(*mecocoa_global).gdt_ptr = (mec_gdt*)mglb(0x600);
 	MemCopyN(mecocoa_global->gdt_ptr, GDT_LIST, sizeof(GDT_LIST));
@@ -197,6 +198,7 @@ _ESYM_C void* calloc(size_t nmemb, size_t size) {
 void operator delete(void*) {}
 void operator delete[](void*) {}
 void operator delete(void* ptr, stduint size) noexcept { _TODO }
+void operator delete[](void*, stduint size) { _TODO }
 #if defined(_UEFI)
 void operator delete(void* ptr, stduint size, std::align_val_t) noexcept { ::operator delete(ptr, size); }
 #endif

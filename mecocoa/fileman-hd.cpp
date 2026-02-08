@@ -141,7 +141,7 @@ static void hd_open(Harddisk_PATA& hd) { // 0x00
 		if (_TEMP hd.getID() == 0x01) {
 			DiscPartition dpart(hd, NR_PRIM_PER_DRIVE * low_id);
 			HD_Info& hdi = hd_info[hd.getHigID() * 2 + low_id];
-			dpart.Partition(hdi, (byte*)single_sector, NR_PRIM_PER_DRIVE * low_id);
+			DiscPartition::Partition(hd, hdi, (byte*)single_sector, NR_PRIM_PER_DRIVE * low_id);
 			// if (1) print_hdinfo(hd);
 		}
 		hd_info_valid[hd.getHigID() * 2 + low_id] = true;

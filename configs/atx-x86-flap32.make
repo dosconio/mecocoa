@@ -44,9 +44,9 @@ elf_kernel=I686/mecocoa/mcca-$(arch).elf
 
 build: clean lib $(cppobjs)
 	@echo "MK $(arch) real16 support"
-	aasm prehost/$(arch)/atx-x86-cppweaks.asm -felf   -o $(uobjpath)/mcca-$(arch)/mcca-$(arch)-elf16.o  -Iinclude/
-	aasm prehost/$(arch)/atx-ladder.asm       -felf   -o $(uobjpath)/mcca-$(arch)/mcca-$(arch)-ladder.o -Iinclude/ -D_MCCA=0x8632
-	aasm prehost/$(arch)/atx-x86-loader.asm -felf     -o $(uobjpath)/mcca-$(arch)/mcca-$(arch)-elf64.o
+	aasm prehost/$(arch)/atx-x86.asm        -felf   -o $(uobjpath)/mcca-$(arch)/mcca-$(arch)-elf16.o  -Iinclude/
+	aasm prehost/$(arch)/atx-ladder.asm     -felf   -o $(uobjpath)/mcca-$(arch)/mcca-$(arch)-ladder.o -Iinclude/ -D_MCCA=0x8632
+	aasm prehost/$(arch)/atx-x86-loader.asm -felf   -o $(uobjpath)/mcca-$(arch)/mcca-$(arch)-elf64.o
 	@echo "MK $(arch) loader"
 	g++ -I$(uincpath) $(flag) -m32 prehost/$(arch)/$(arch).loader.cpp \
 		prehost/$(arch)/$(arch).auf.cpp $(uobjpath)/mcca-$(arch)/mcca-$(arch)-elf64.o $(uobjpath)/CGMin32/_ae_manage.o\

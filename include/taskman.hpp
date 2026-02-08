@@ -10,6 +10,7 @@
 struct SysMessage {
 	enum Type {
 		RUPT_xHCI,
+		RUPT_LAPICT,
 	} type;
 };
 extern uni::Queue<SysMessage> message_queue;
