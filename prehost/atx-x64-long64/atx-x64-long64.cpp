@@ -25,6 +25,9 @@ _ESYM_C void mecocoa() {
 	setCR3 _IMM(paging_addr);
 
 	cons_init();
+	//{} Cache_t::enAble();
+	Taskman::Initialize();
+
 
 	// IVT and Device
 	InterruptControl APIC(_IMM(mem.allocate(256 * sizeof(gate_t))));

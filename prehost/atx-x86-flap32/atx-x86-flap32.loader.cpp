@@ -9,7 +9,6 @@
 #include <c/proctrl/x86/x86.h>
 #include <c/storage/harddisk.h>
 #include <c/format/filesys/FAT.h>
-#include "cpp/Device/Storage/HD-DEPEND.h"
 #include "../../include/atx-x86-flap32.hpp"
 
 
@@ -52,6 +51,7 @@ void body() {
 	BareConsole Console(80, 50, _VIDEO_ADDR_BUFFER); con0_out = &Console;
 	Console.setShowY(0, 25);
 	Harddisk_PATA hdisk(0x01);
+	hdisk.Reset();
 
 	MemSet((void*)hdinfo_addr, 0, sizeof(HD_Info));
 	DiscPartition::Partition(hdisk, *(HD_Info*)hdinfo_addr, single_sector, 5);

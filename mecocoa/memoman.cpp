@@ -139,7 +139,13 @@ uint64 GDT_LIST[]{
 	0x00CFF2000000FFFFull,//(Rg3Data) Ring3
 	0x00CFFA000000FFFFull,//(Rg3Code) Ring3
 	0x0000000000000000ull,//(SegCall) Ring3
+	#if __BITS__ == 64
+	0x0000000000000000ull,
+	#endif
 	0x0000890000000000ull,//(SegTTS0) Ring0
+	#if __BITS__ == 64
+	0x0000000000000000ull,
+	#endif
 };// no address and limit for x64
 
 #endif

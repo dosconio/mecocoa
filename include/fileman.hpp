@@ -5,7 +5,7 @@
 #include <c/storage/harddisk.h>
 // The version just consider primary IDE
 
-bool waitfor(stduint mask, stduint val, stduint timeout_second);
+bool waitfor(uni::Harddisk_PATA* hdd, stduint mask, stduint val, stduint timeout_second);
 
 // for 2 disks
 #define	DRV_OF_DEV(dev) (dev <= MAX_PRIM ? \

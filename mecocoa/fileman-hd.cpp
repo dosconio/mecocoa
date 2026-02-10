@@ -12,7 +12,6 @@
 use crate uni;
 #ifdef _ARC_x86 // x86:
 #include "../include/atx-x86-flap32.hpp"
-#include "cpp/Device/Storage/HD-DEPEND.h"
 
 
 Harddisk_PATA* disks[2];// referenced
@@ -27,14 +26,16 @@ static byte lock = 1;
 
 void Handint_HDD()// HDD Master
 {
-	innpb(REG_STATUS);
+	disks[0]->getStatus();// innpb(REG_STATUS);
 	if (lock) return;
 	lock = 1;
 	rupt_proc(Task_Hdd_Serv, IRQ_ATA_DISK0);
 }
 
-static bool hd_cmd_wait() {
-	return waitfor(STATUS_BSY, 0, HD_TIMEOUT / 1000);
+#define	STATUS_BSY	0x80
+#define	HD_TIMEOUT		10000	/* in millisec */
+static bool hd_cmd_wait(Harddisk_PATA* hdd) {
+	return waitfor(hdd, STATUS_BSY, 0, HD_TIMEOUT / 1000);
 }
 static void hd_int_wait() {
 	CommMsg msg;
@@ -126,6 +127,8 @@ inline static void print_hdinfo(Harddisk_PATA& hd)
 	}
 }
 
+enum { REG_DATA = 0 };
+//{TODO} into harddisk.cpp:Open()
 static void hd_open(Harddisk_PATA& hd) { // 0x00
 	byte low_id = hd.getLowID();
 	HdiskCommand cmd;
@@ -133,9 +136,9 @@ static void hd_open(Harddisk_PATA& hd) { // 0x00
 	cmd.device = MAKE_DEVICE_REG(0, low_id, 0);
 	lock = 0;
 	// ploginfo("hd_open: %u, bs=%u", low_id, hd.Block_Size);
-	Harddisk_PATA::Hdisk_OUT(&cmd, hd_cmd_wait);
+	hd.Hdisk_OUT(&cmd);
 	hd_int_wait();
-	IN_wn(REG_DATA, (word*)single_sector, hd.Block_Size);
+	IN_wn(0x1F0 + REG_DATA, (word*)single_sector, hd.Block_Size);
 	print_identify_info((uint16*)single_sector, hd);
 	if (!hd_info_valid[hd.getHigID() * 2 + low_id]) {
 		if (_TEMP hd.getID() == 0x01) {

@@ -10,7 +10,6 @@
 
 #ifdef _ARC_x86 // x86:
 #include "../include/atx-x86-flap32.hpp"
-#include "cpp/Device/Storage/HD-DEPEND.h"
 
 #include "../include/filesys.hpp"
 #include <c/format/filesys/FAT.h>
@@ -48,11 +47,11 @@ static const usize ROOT_DEV_FAT0 = MINOR_hd6a + 2;
 //// //// ---- //// ////
 
 
-bool waitfor(stduint mask, stduint val, stduint timeout_second)// return seccess
+bool waitfor(Harddisk_PATA* hdd, stduint mask, stduint val, stduint timeout_second)// return seccess
 {
 	int t = syscall(syscall_t::TIME);
 	while (((syscall(syscall_t::TIME) - t)) < timeout_second)
-		if ((innpb(REG_STATUS) & mask) == val)
+		if ((hdd->getStatus() & mask) == val)
 			return 1;
 	return 0;
 }

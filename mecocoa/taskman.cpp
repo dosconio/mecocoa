@@ -38,6 +38,8 @@ void Taskman::Initialize(stduint cpuid) {
 		krnl_tss_cpu0.TSS.IO_MAP = sizeof(TSS_t) - 1;
 		krnl_tss_cpu0.focus_tty_id = 0;
 		krnl_tss_cpu0.state = ProcessBlock::State::Running;
+		// Type = 10x1 + L=0 +  D/B=0 + 16B  64-bit TSS
+		//             + L=1 OR D/B=1       32-bit TSS
 		mecocoa_global->gdt_ptr->tss.setRange(_IMM(PCU_CORES_TSS[0]), sizeof(TSS_t) - 1);
 		Taskman::Append(&krnl_tss_cpu0);
 		loadTask(SegTSS0);
@@ -56,12 +58,9 @@ void Taskman::Initialize(stduint cpuid) {
 		addr->RSP0 = _IMM(mem.allocate(0x1000));
 		addr++;
 	}
-	// mecocoa_global->gdt_ptr->tss.setRange(_IMM(PCU_CORES_TSS[0]), sizeof(TSS_t) - 1);
+	mecocoa_global->gdt_ptr->tss.setRange(_IMM(PCU_CORES_TSS[0]), sizeof(TSS_t) - 1);
 	//{} Taskman::Append(&krnl_tss_cpu0);
 	loadTask(SegTSS0);
-
-	sizeof(descriptor_t);
-	sizeof(gate_t);
 }
 
 #endif
