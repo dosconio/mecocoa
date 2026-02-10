@@ -49,11 +49,11 @@ bool OrangesFs::makefs(rostr vol_label /* unused */, void* moreinfo /* unused */
 		sb.entity.nr_imap_sects + sb.entity.nr_smap_sects + sb.entity.nr_inode_sects;
 	sb.entity.root_inode = ROOT_INODE;
 	sb.entity.inode_size = INODE_SIZE;
-	sb.entity.inode_isize_off = offsof(inode, entity.i_size);//(int)&x.i_size - (int)&x; after inode x;
-	sb.entity.inode_start_off = offsof(inode, entity.i_start_sect);
+	sb.entity.inode_isize_off = offsetof(inode, entity.i_size);//(int)&x.i_size - (int)&x; after inode x;
+	sb.entity.inode_start_off = offsetof(inode, entity.i_start_sect);
 	sb.entity.dir_ent_size = DIR_ENTRY_SIZE;
-	sb.entity.dir_ent_inode_off = offsof(dir_entry, inode_nr);
-	sb.entity.dir_ent_fname_off = offsof(dir_entry, name);
+	sb.entity.dir_ent_inode_off = offsetof(dir_entry, inode_nr);
+	sb.entity.dir_ent_fname_off = offsetof(dir_entry, name);
 	//
 	MemSet(buffer, 0x90, part.Block_Size);
 	MemCopyN(buffer, &sb, SUPER_BLOCK_SIZE);

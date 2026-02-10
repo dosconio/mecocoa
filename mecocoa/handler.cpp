@@ -11,6 +11,7 @@
 #include <c/consio.h>
 #include <cpp/interrupt>
 #include <c/driver/mouse.h>
+#include <c/driver/timer.h>
 #include <c/driver/keyboard.h>
 #include "../include/taskman.hpp"
 

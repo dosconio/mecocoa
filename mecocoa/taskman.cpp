@@ -1,6 +1,4 @@
 // ASCII g++ TAB4 LF
-// Attribute: 
-// LastCheck: 20240218
 // AllAuthor: @dosconio, @ArinaMgk
 // ModuTitle: Demonstration - ELF32-C++ x86 Bare-Metal
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
@@ -14,94 +12,67 @@
 #include "../include/taskman.hpp"
 
 use crate uni;
+#ifdef _ARC_x86 // x86:
+#include "../include/atx-x86-flap32.hpp"
+#elif _MCCA == 0x8664
+#include "../include/atx-x64.hpp"
+#endif
 
 static SysMessage _BUF_Message[64];
 Queue<SysMessage> message_queue(_BUF_Message, numsof(_BUF_Message));
 
+#if (_MCCA & 0xFF00) == 0x8600
+#if _MCCA == 0x8632
+
+//{TODO} Soft Switch
+
+static ProcessBlock krnl_tss_cpu0;
+void Taskman::Initialize(stduint cpuid) {
+	if (cpuid == 0) {
+		PCU_CORES_TSS[0] = &krnl_tss_cpu0.TSS;
+		//
+		new (&krnl_tss_cpu0) ProcessBlock;
+		krnl_tss_cpu0.TSS.CR3 = getCR3();
+		krnl_tss_cpu0.TSS.LDTDptr = 0;
+		krnl_tss_cpu0.TSS.STRC_15_T = 0;
+		krnl_tss_cpu0.TSS.IO_MAP = sizeof(TSS_t) - 1;
+		krnl_tss_cpu0.focus_tty_id = 0;
+		krnl_tss_cpu0.state = ProcessBlock::State::Running;
+		mecocoa_global->gdt_ptr->tss.setRange(_IMM(PCU_CORES_TSS[0]), sizeof(TSS_t) - 1);
+		Taskman::Append(&krnl_tss_cpu0);
+		loadTask(SegTSS0);
+	}
+}
+
+#elif _MCCA == 0x8664
+
+void Taskman::Initialize(stduint cpuid) {
+	if (cpuid || PCU_CORES_TSS[0]) return; // already initialized
+	PCU_CORES = PCU_CORES_MAX;
+	auto addr = (TSS_t*)mem.allocate(sizeof(TSS_t) * PCU_CORES);
+	MemSet(addr, 0, sizeof(TSS_t) * PCU_CORES);
+	for0(i, PCU_CORES) {
+		PCU_CORES_TSS[i] = addr;
+		addr->RSP0 = _IMM(mem.allocate(0x1000));
+		addr++;
+	}
+	// mecocoa_global->gdt_ptr->tss.setRange(_IMM(PCU_CORES_TSS[0]), sizeof(TSS_t) - 1);
+	//{} Taskman::Append(&krnl_tss_cpu0);
+	loadTask(SegTSS0);
+
+	sizeof(descriptor_t);
+	sizeof(gate_t);
+}
+
+#endif
+#endif
 
 #ifdef _ARC_x86 // x86:
-#include "../include/atx-x86-flap32.hpp"
 #include "../include/filesys.hpp"
 
 bool task_switch_enable = true;//{} spinlk
 stduint ProcessBlock::cpu0_task;
 stduint ProcessBlock::cpu0_rest;
-
-_TEMP
-ProcessBlock* pblocks[16]; stduint pnumber = 0;
-stduint TaskNumber = TaskCount;
-
-//// ---- ---- SCHEDULE ---- ---- ////
-
-#define T_pid2tss(pid) (SegTSS0 + 16 * pid)
-#define T_tss2pid(tssid) ((tssid - SegTSS0) / 16)
-
-void switch_halt() {
-	if (ProcessBlock::cpu0_task == 0) {
-		return;
-	}
-	ProcessBlock::cpu0_rest = ProcessBlock::cpu0_task;
-	auto pb_src = TaskGet(ProcessBlock::cpu0_task);
-	auto pb_des = TaskGet(0);
-	// stduint esp = 0;
-	// _ASM("movl %%esp, %0" : "=r"(esp));
-	// ploginfo("switch halt %d->0, esp: %[32H]", ProcessBlock::cpu0_task, esp);
-	if (pb_des->state == ProcessBlock::State::Uninit)
-		pb_des->state = ProcessBlock::State::Ready;
-	if ((pb_src->state == ProcessBlock::State::Running || pb_src->state == ProcessBlock::State::Pended) && (
-		pb_des->state == ProcessBlock::State::Ready)) {
-		if (pb_src->state == ProcessBlock::State::Running)
-			pb_src->state = ProcessBlock::State::Ready;
-		pb_des->state = ProcessBlock::State::Running;
-	}
-	else {
-		plogerro("task halt error.");
-	}
-	ProcessBlock::cpu0_task = 0;// kernel
-	task_switch_enable = true;
-	//
-	//stduint save = pb_src->TSS.PDBR;
-	//pb_src->TSS.PDBR = getCR3();// CR3 will not save in TSS? -- phina, 20250728
-	jmpTask(SegTSS0/*, T_pid2tss(ProcessBlock::cpu0_rest)*/);
-	//pb_src->TSS.PDBR = save;
-}
-
-
-// by only PIT
-void switch_task() {
-	if (ProcessBlock::cpu0_task == TaskCount) return;
-	using PBS = ProcessBlock::State;
-
-	task_switch_enable = false;//{TODO} Lock
-	stduint last_proc = ProcessBlock::cpu0_task;
-	auto pb_src = TaskGet(ProcessBlock::cpu0_task);
-
-	stduint cpu0_new = ProcessBlock::cpu0_task;
-	do if (ProcessBlock::cpu0_rest) {
-		cpu0_new = (ProcessBlock::cpu0_rest + 1) % pnumber;
-		ProcessBlock::cpu0_rest = 0;
-		if (cpu0_new == 0) {
-			cpu0_new++;
-		}
-	}
-	else {
-		++cpu0_new %= pnumber;
-	}
-	while (cpu0_new == ProcessBlock::cpu0_task || (TaskGet(cpu0_new)->state != PBS::Ready && TaskGet(cpu0_new)->state != PBS::Uninit));
-	ProcessBlock::cpu0_task = cpu0_new;
-	auto pb_des = TaskGet(ProcessBlock::cpu0_task);
-
-	if (pb_des->state == PBS::Uninit) pb_des->state = PBS::Ready;
-	if ((pb_src->state == PBS::Running) && (pb_des->state == PBS::Ready)) {
-		pb_src->state = PBS::Ready;
-		pb_des->state = PBS::Running;
-	}
-	else {
-		printlog(_LOG_FATAL, "task switch error (PID%u, State%u, PCnt%u).", pb_des->getID(), _IMM(pb_des->state), pnumber);
-	}
-	task_switch_enable = true;//{TODO} Unlock
-	jmpTask(T_pid2tss(ProcessBlock::cpu0_task));
-}
 
 //// ---- ---- x86 ITEM ---- ---- ////
 
@@ -129,21 +100,7 @@ void switch_task() {
 * 0x1C00 Stack R3
 */
 
-static ProcessBlock krnl_tss_cpu0;
-void Taskman::Initialize(stduint cpuid) {
-	if (cpuid == 0) {
-		new (&krnl_tss_cpu0) ProcessBlock;
-		krnl_tss_cpu0.TSS.CR3 = getCR3();
-		krnl_tss_cpu0.TSS.LDTDptr = 0;
-		krnl_tss_cpu0.TSS.STRC_15_T = 0;
-		krnl_tss_cpu0.TSS.IO_MAP = sizeof(TSS_t) - 1;
-		krnl_tss_cpu0.focus_tty_id = 0;
-		krnl_tss_cpu0.state = ProcessBlock::State::Running;
-		mecocoa_global->gdt_ptr->tss.setRange((dword)&krnl_tss_cpu0.TSS, sizeof(TSS_t) - 1);
-		TaskAdd(&krnl_tss_cpu0);
-		loadTask(SegTSS0);
-	}
-}
+
 
 
 static void make_LDT(descriptor_t* ldt_alias, byte ring) {
@@ -254,7 +211,7 @@ ProcessBlock* TaskRegister(void* entry, byte ring)
 
 	TSS->EFLAGS |= 0x0200;// IF
 	if (ring <= 1) TSS->EFLAGS |= _IMM1 << 12;
-	TaskAdd(pb);
+	Taskman::Append(pb);
 	return pb;
 }
 
@@ -392,7 +349,7 @@ ProcessBlock* TaskLoad(BlockTrait* source, void* addr, byte ring)
 
 	cast<REG_FLAG_t>(TSS->EFLAGS).IF = 1;
 	if (ring <= 1) TSS->EFLAGS |= _IMM1 << 12;
-	TaskAdd(pb);
+	Taskman::Append(pb);
 	return pb;
 }
 
@@ -491,7 +448,7 @@ static stduint task_fork(ProcessBlock* fo)
 	cast<REG_FLAG_t>(TSS->EFLAGS).IF = true;
 	if (ring <= 1) TSS->EFLAGS |= _IMM1 << 12;
 
-	TaskAdd(pb);
+	Taskman::Append(pb);
 	return TSSSelector * 8;
 }
 
@@ -551,7 +508,7 @@ static void task_exit(stduint pid, stduint status)
 		p->state = PBS::Hanging;
 	}
 	// if the proc has any child, make INIT the new parent, (or kill all the children >_<)
-	for1(i, pnumber - 1) if (auto taski = TaskGet(i)) if (T_tss2pid(taski->TSS.LastTSS) == pid) {
+	for1(i, Taskman::pnumber - 1) if (auto taski = TaskGet(i)) if (T_tss2pid(taski->TSS.LastTSS) == pid) {
 		taski->TSS.LastTSS = T_pid2tss(Task_Init);
 		if (is_waiting(TaskGet(Task_Init)) && taski->state == PBS::Hanging) {
 			// cast<stduint>(pparent->block_reason) &= ~_IMM(ProcessBlock::BlockReason::BR_Waiting);
@@ -565,7 +522,7 @@ static void task_exit(stduint pid, stduint status)
 static stduint task_wait(stduint pid, stduint* usrarea_state)
 {
 	stduint children = 0;
-	for1(i, pnumber - 1) if (auto taski = TaskGet(i)) if (T_tss2pid(taski->TSS.LastTSS) == pid) {
+	for1(i, Taskman::pnumber - 1) if (auto taski = TaskGet(i)) if (T_tss2pid(taski->TSS.LastTSS) == pid) {
 		children++;
 		if (taski->state == ProcessBlock::State::Hanging) {
 			stduint args[2] = { pid, taski->exit_status };
@@ -671,20 +628,11 @@ stduint task_exec(stduint pid, void* fullpath, void* argstack, stduint stacklen)
 
 
 
-// ---- MANAGE ----
 
-stduint TaskAdd(ProcessBlock* task) {
-	pblocks[pnumber++] = task;
-	return pnumber - 1;
-}
-
-ProcessBlock* TaskGet(stduint taskid) {
-	return pblocks[taskid];
-}
 
 stduint ProcessBlock::getID()
 {
-	for0a(i, pblocks) if(pblocks[i] == this) return i;
+	for0a(i, Taskman::pblocks) if(Taskman::pblocks[i] == this) return i;
 	return 0;
 }
 

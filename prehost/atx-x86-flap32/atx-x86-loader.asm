@@ -10,9 +10,9 @@
 EXTERN GDT64
 EXTERN entry_kernel
 
-SegData EQU 1
-SegCo64 EQU 5
-SegCount EQU 6
+SegData EQU 8*1
+SegCo64 EQU 8*4
+SegCount EQU 5
 
 [section .text]
 
@@ -24,7 +24,7 @@ B32_LoadMod64:
 	MOV DWORD[GdtPtr64+2], GDT64
 	DB  0x66
 	LGDT [GdtPtr64]
-	MOV	AX,	8*SegData
+	MOV	AX,	SegData
 	MOV	DS,	AX
 	MOV	ES,	AX
 	MOV	FS,	AX
@@ -65,4 +65,4 @@ GdtPtr64:
 	DQ  0
 KernelJump:
 	DD  0
-	DW  8*SegCo64
+	DW  SegCo64

@@ -9,6 +9,7 @@
 %include "ladder.a"
 
 SegData EQU 8*1
+SegCo32 EQU 8*3
 
 [BITS 32]
 ; 0x20
@@ -32,7 +33,7 @@ EXTERN PG_PUSH, PG_POP
 GLOBAL RefreshGDT
 RefreshGDT:
 	LoadDataSegs SegData
-	MOV EAX, 8*2
+	MOV EAX, SegCo32
 	PUSH EAX
 	MOV EAX, RefreshGDT_NEXT
 	PUSH EAX

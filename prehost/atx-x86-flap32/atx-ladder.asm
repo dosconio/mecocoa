@@ -10,9 +10,9 @@ ORG 0x8000
 %endif
 
 SegData EQU 8*1
-SegCo32 EQU 8*2
-SegCo16 EQU 8*4
-SegCo64 EQU 8*5
+SegCo16 EQU 8*2
+SegCo32 EQU 8*3
+SegCo64 EQU 8*4
 
 ADDR_PARA0 EQU 0x500
 ADDR_PARA1 EQU 0x502
@@ -86,7 +86,7 @@ CallCo16:
 	MOV WORD[0x500], AX
 	; flap32 -> real16
 	PUSHAD
-	JMP DWORD 8*4:PointReal16;{} can do this directly
+	JMP DWORD SegCo16:PointReal16
 [BITS 16]
 	EnterCo16
 	MOV AX, [ADDR_PARA0]
@@ -102,7 +102,7 @@ CallCo16:
 	OR  EAX, 0x80000001
 	MOV CR0, EAX
 	Addr20Enable
-	JMP WORD 8*2:PointBack32
+	JMP WORD SegCo32:PointBack32
 [BITS 32]
 PointBack32:
 	LoadDataSegs SegData

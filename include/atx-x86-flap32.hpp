@@ -49,29 +49,5 @@ void serv_file_loop();
 
 // ----
 
-struct mec_gdt {
-	descriptor_t null;
-	descriptor_t data;
-	descriptor_t code;
-	gate_t rout;
-	descriptor_t co16;
-	descriptor_t co64;
-	descriptor_t dar3;
-	descriptor_t cor3;
-	descriptor_t tss;
-	// descriptor_t code_r3;
-	// descriptor_t data_r3;
-};// on global linear area
-struct mecocoa_global_t {
-	uint16 ADDR_PARA0;
-	uint16 ADDR_PARA1;
-	uint16 ADDR_PARA2;
-	uint16 ADDR_PARA3;
-	volatile timeval_t system_time;
-	word gdt_len;
-	mec_gdt* gdt_ptr;
-};
-statin mecocoa_global_t* mecocoa_global{ (mecocoa_global_t*)0x500 };
-
 #define mapglb(x) (*(usize*)&(x) |= 0x80000000)
 #define mglb(x) (_IMM(x) | 0x80000000)

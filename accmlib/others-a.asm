@@ -12,6 +12,8 @@ GLOBAL syscall
 
 section .text
 
+SegCall EQU 8*7
+
 syscall:
 	;PUSHAD
 	PUSH EBX
@@ -24,7 +26,7 @@ syscall:
 	MOV ECX, [ESP + 4*(1+6+1)]
 	MOV EDX, [ESP + 4*(1+6+2)]
 	MOV EBX, [ESP + 4*(1+6+3)]
-	CALL 8*3|3:0
+	CALL SegCall|3:0
 	;POPAD;{TODO} PROC RETURN VALUE
 	POP EBP
 	POP EDI

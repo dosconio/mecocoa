@@ -69,10 +69,9 @@ _sign_entry() {
 	krnl_init();// using memory blindly
 	if (!Memory::initialize(_start_eax, (byte*)_start_ebx)) HALT();
 	cons_init();// located here, for  INT-10H may influence PIC
-	
-
 	Cache_t::enAble();
 	Taskman::Initialize();
+
 	// IVT and Device
 	InterruptControl GIC(_IMM(0x80000800));
 	GIC.Reset(SegCo32, 0x80000000);

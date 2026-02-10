@@ -15,8 +15,37 @@ struct SysMessage {
 };
 extern uni::Queue<SysMessage> message_queue;
 
+// >= 1
+#ifndef PCU_CORES_MAX
+#define PCU_CORES_MAX 16
+#endif
+
+#if (_MCCA & 0xFF00) == 0x8600
+
+extern TSS_t* PCU_CORES_TSS[PCU_CORES_MAX];
+
+class ProcessBlock;
+class Taskman {
+public:
+	static ProcessBlock* pblocks[16];
+	static stduint pnumber;
+	static stduint PCU_CORES;
+public:
+	static auto
+		Initialize(stduint cpuid = 0) -> void;
+	static auto
+		Append(ProcessBlock* task) -> bool;
+	static auto
+		Locate(stduint taskid) -> ProcessBlock*;
+};
 
 
+#if _MCCA == 0x8632
+#define T_pid2tss(pid) (SegTSS0 + 16 * pid)
+#define T_tss2pid(tssid) ((tssid - SegTSS0) / 16)
+#endif
+
+#endif
 
 #if _MCCA == 0x8632
 #include "fileman.hpp"
@@ -29,10 +58,7 @@ struct CommMsg {
 	stduint src;// use if type is HARDRUPT
 };
 
-class Taskman {
-public:
-	static void Initialize(stduint cpuid = 0);
-};
+
 
 class FileDescriptor;
 // = TaskBlock = ThreadBlock
@@ -132,8 +158,7 @@ enum class TaskmanMsg {
 ProcessBlock* TaskRegister(void* entry, byte ring);
 ProcessBlock* TaskLoad(uni::BlockTrait* source, void* addr, byte ring);//{TODO} for existing R1
 
-stduint TaskAdd(ProcessBlock* task);
-ProcessBlock* TaskGet(stduint taskid);// get task block by its id
+inline ProcessBlock* TaskGet(stduint taskid) { return Taskman::Locate(taskid); }
 
 void switch_task();
 void switch_halt();

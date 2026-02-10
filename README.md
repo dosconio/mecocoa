@@ -28,7 +28,9 @@ her-note: false
 ## Requirement
 
 Hardware
-- Processor with functions of Paging and Interrupt
+- Processor
+	- Interrupt
+	-    Paging: Or the dynamic_loading will be disabled, macro-kernel RTOS only.
 
 Development-Environment
 - `(Stable)` Ubuntu 22.04, gcc 11.4.0, qemu 9.2.4
@@ -69,6 +71,7 @@ RISC `Fizik`
 	- dev-env `arm-none-eabi-* (Arm GNU Toolchain 12.2.MPACBTI-Rel1 (Build arm-12-mpacbti.34)) 12.2.1 20230214`
 	- **run**
 		- **phyzikl**: ...
+- `ac7m 0x2017` Armv7-M Cortex-M7
 
 MISC
 - `m64 0x0064` *kept for Dinah* 

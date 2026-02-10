@@ -133,12 +133,12 @@ Paging kernel_paging;
 uint64 GDT_LIST[]{
 	0x0000000000000000ull,//(SegNull) Ring0
 	0x00CF92000000FFFFull,//(SegData) Ring0
-	0x00CF9A000000FFFFull,//(SegCo32) Ring0
-	0x0000000000000000ull,//(SegCall) Ring3
 	0x000F9A000000FFFFull,//(SegCo16) Ring0
+	0x00CF9A000000FFFFull,//(SegCo32) Ring0
 	0x0020980000000000ull,//(SegCo64) Ring0
-	0x00CFF2000000FFFFull,//(SegData) Ring3
+	0x00CFF2000000FFFFull,//(Rg3Data) Ring3
 	0x00CFFA000000FFFFull,//(Rg3Code) Ring3
+	0x0000000000000000ull,//(SegCall) Ring3
 	0x0000890000000000ull,//(SegTTS0) Ring0
 };// no address and limit for x64
 
@@ -174,13 +174,6 @@ word GDT_Alloc() {
 	return ret;
 }
 #endif
-
-/*
-GDT64[0]._data = nil;
-Descriptor64SetData(&GDT64[SegData >> 3], (_CPU_descriptor_type)0x2, 0);// +RW
-GDT64[1].setRange(0, 0xFFFFF);
-Descriptor64SetCode(&GDT64[SegCo64 >> 3], (_CPU_descriptor_type)10, 0);// ~XR
-*/
 
 // ---- STDLIB ----
 

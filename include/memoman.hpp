@@ -13,29 +13,45 @@ extern bool map_ready;
 
 #if (_MCCA & 0xFF00) == 0x8600
 
-/*
-*  00 NULL
-*  01 Data 16/32/64
-*  02 Code 32
-*  03 Call
-*  04 Code 16
-*  05 Code 64
-*  .. TSS and LDT
-*/
+struct mec_gdt {
+	descriptor_t null;
+	descriptor_t data;
+	descriptor_t code;
+	descriptor_t co16;
+	descriptor_t co64;
+	descriptor_t dar3;
+	descriptor_t cor3;
+	//
+	gate_t rout;
+	_CPU_descriptor_tss tss;// cpu0
+};// on global linear area
+
 enum {
 	SegNull = 8 * 0,
 	SegData = 8 * 1,
-	SegCo32 = 8 * 2,
-	SegCall = 8 * 3,
-	SegCo16 = 8 * 4,
-	SegCo64 = 8 * 5,
-	SegDaR3 = 8 * 6,
-	SegCoR3 = 8 * 7,
-	SegTSS0 = 8 * 8,
+	SegCo16 = 8 * 2,
+	SegCo32 = 8 * 3,
+	SegCo64 = 8 * 4,
+	SegDaR3 = 8 * 5,
+	SegCoR3 = 8 * 6,
+	//
+	SegCall = offsetof(mec_gdt, rout),
+	SegTSS0 = offsetof(mec_gdt, tss),
 	// flap32: LDT_App1, TSS_App1, LDT_App2, TSS_App2, ...
 };
 
+struct mecocoa_global_t {
+	uint16 ADDR_PARA0;
+	uint16 ADDR_PARA1;
+	uint16 ADDR_PARA2;
+	uint16 ADDR_PARA3;
+	volatile timeval_t system_time;
+	word gdt_len;
+	mec_gdt* gdt_ptr;
+};
 #define bda ((BIOS_DataArea*)0x400)
+inline static mecocoa_global_t* mecocoa_global{ (mecocoa_global_t*)0x500 };
+#define ADDR_BIOS_GDT 0x600// Migrate if over 0x400
 
 _ESYM_C stduint CallCo16(stduint func);
 __attribute__((optimize("O0")))
