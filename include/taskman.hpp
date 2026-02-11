@@ -77,6 +77,7 @@ struct _Comment(Kernel) ProcessBlock {
 	word focus_tty_id;
 	stduint processor_id;// running on which cpu core
 	stduint exit_status;
+	//{} Mempool heappool
 
 	// before syscall, for `fork`
 	stduint before_syscall_eax;

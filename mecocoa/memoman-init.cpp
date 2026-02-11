@@ -5,6 +5,7 @@
 #define _STYLE_RUST
 
 #include <c/consio.h>
+#include <c/mempool.h>
 
 use crate uni;
 
@@ -32,6 +33,7 @@ _PACKED(struct) memory_info_entry {
 byte _BUF_pagebmap[sizeof(BmMemoman)];
 
 extern memory_info_entry MemoryListData[20];
+extern Mempool mempool;
 
 const stduint bmapsize = 0x100000 / 8;
 
@@ -100,6 +102,9 @@ bool Memory::initialize(stduint eax, byte* ebx) {
 	// - 0x78000~0x7FFFF Video Modes List
 	// - 0x80000~0xFFFFF BIOS and Upper Memory Area
 	map_ready = true;
+	const unsigned mempool_len0 = 0x4000;
+	uni_default_allocator;//{TODO}
+	mempool.Reset(Slice{ _IMM(mem.allocate(mempool_len0)), mempool_len0 });
 	return true;
 }
 #endif

@@ -105,6 +105,8 @@ void mecocoa(const UefiData& uefi_data_ref)
 	SetupIdentityPageTable();
 	
 	cons_init();
+	//{} Cache_t::enAble();
+	Taskman::Initialize();
 
 	#ifdef _UEFI
 	ploginfo("Ciallo %lf, rsp=%[x]", 2025.09, rsp);
@@ -131,6 +133,10 @@ void mecocoa(const UefiData& uefi_data_ref)
 	lapic_timer.Reset(0x1000000u);// 10ms qemu
 
 	tryUD();
+
+	pureptr_t ptr;
+	delete (ptr = new int);
+	ploginfo("[Mempool] I try a new int, and it was at %[x]", ptr);
 
 	APIC.enAble(true);
 

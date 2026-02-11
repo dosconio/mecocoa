@@ -4,6 +4,7 @@
 #include <cpp/unisym>
 using namespace uni;
 #include <c/datime.h>
+#include <c/mempool.h>
 #include <cpp/interrupt>
 #include <cpp/Device/_Video.hpp>
 #include "console.hpp"

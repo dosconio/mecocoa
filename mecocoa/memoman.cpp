@@ -5,6 +5,7 @@
 #define _STYLE_RUST
 
 #include <c/consio.h>
+#include <c/mempool.h>
 
 use crate uni;
 
@@ -25,9 +26,8 @@ _ESYM_C Handler_t FILE_ENTO, FILE_ENDO;
 Memory mem;
 BmMemoman* Memory::pagebmap = NULL;
 bool map_ready = false;
-#endif
-#ifdef _UEFI
 
+Mempool mempool = {};
 #endif
 
 // - Memory::clear_bss
@@ -187,16 +187,29 @@ word GDT_Alloc() {
 
 // linear allocator
 _ESYM_C void* malloc(size_t size) {
-	// Console.OutFormat("malloc(%[u])\n\r", size);
-	return nullptr;
+	return (mempool.allocate(size));
 }
 _ESYM_C void* calloc(size_t nmemb, size_t size) {
-	// Console.OutFormat("calloc(%[u])\n\r", nmemb * size);
-	return nullptr;
+	void* ret = malloc(nmemb * size);
+	if (ret) MemSet(ret, nmemb * size, 0);
+	return ret;
 }
-void operator delete(void*) {}
+void* operator new(size_t size) {
+	return malc(size);
+}
+void* operator new[](size_t size) {
+	return malc(size);
+}
+void operator delete(void* p) {
+	if (mempool.deallocate(p))
+		;// ploginfo("del OK");
+	else
+		plogerro("del BAD");
+}
 void operator delete[](void*) {}
-void operator delete(void* ptr, stduint size) noexcept { _TODO }
+void operator delete(void* ptr, stduint size) noexcept {
+	if (!mempool.deallocate(ptr, size)) plogerro("del BAD");
+}
 void operator delete[](void*, stduint size) { _TODO }
 #if defined(_UEFI)
 void operator delete(void* ptr, stduint size, std::align_val_t) noexcept { ::operator delete(ptr, size); }

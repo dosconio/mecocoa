@@ -105,7 +105,7 @@ static bool init() {
 	{
 		LTDC_LAYER_t::LayerPara lpara{};
 		LTDC_LAYER_t::layer_param_refer(&lpara);
-		asrtret(LTDC[0].setMode(lpara));
+		asrtret(LTDC[1].setMode(lpara));
 	}
 	// EXTI
 	GPIOA[3].setMode(GPIORupt::Anyedge);// USART2_RX

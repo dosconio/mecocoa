@@ -86,7 +86,11 @@ _sign_entry() {
 
 	mecfetch();
 	__asm("ud2");
-	
+
+	pureptr_t ptr;
+	delete (ptr = new int);
+	ploginfo("[Mempool] I try a new int, and it was at %[x]", ptr);
+
 	// Service
 	TaskRegister((void*)&serv_cons_loop, 1);
 	TaskRegister((void*)&serv_dev_hd_loop, 1);

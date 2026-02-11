@@ -6,7 +6,7 @@ her-note: false
 
 # Mecocoa ![LOGO](./rsource/logo/MCCA20240501.png) 
 
-- **type**: Operating System
+- **type**: Operating System (Distributed)
 - **domain**: [mecocoa.org](http://mecocoa.org/) 
 - **repository** : [GitHub](https://github.com/dosconio/mecocoa)  @dosconio
 - **license**: BSD-3-Clause license
