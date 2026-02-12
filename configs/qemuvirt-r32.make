@@ -34,7 +34,7 @@ LDFLAGS = -T $(LDFILE).ignore
 #
 asmfile=$(wildcard prehost/$(arch)/*.S)
 asmobjs=$(patsubst %S, %o, $(asmfile))
-cppfile=$(wildcard prehost/$(arch)/*.cpp) \
+cppfile=$(wildcard prehost/$(arch)/*.cpp) $(wildcard mecocoa/*.cpp) \
 	$(ulibpath)/cpp/lango/lango-cpp.cpp \
 	$(ulibpath)/cpp/stream.cpp \
 	$(ulibpath)/cpp/interrupt.cpp \

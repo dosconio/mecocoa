@@ -10,12 +10,18 @@
 
 #include <c/consio.h>
 #include <cpp/interrupt>
+#include <cpp/Device/UART>
 #include <c/driver/mouse.h>
 #include <c/driver/timer.h>
 #include <c/driver/keyboard.h>
 #include "../include/taskman.hpp"
 
 use crate uni;
+#if (_MCCA & 0xFF00) == 0x1000// RV
+#include <c/proctrl/RISCV/riscv.h>
+#include "../include/qemuvirt-riscv.hpp"
+#endif
+
 #ifdef _ARC_x86 // x86:
 #include "../include/atx-x86-flap32.hpp"
 
@@ -132,6 +138,8 @@ volatile timeval system_time = {};
 
 volatile stduint tick = 0;
 
+// Dchain 
+
 __attribute__((interrupt, target("general-regs-only"), optimize("O0")))
 void Handint_XHCI(InterruptFrame* frame) {
 	message_queue.Enqueue(SysMessage{ SysMessage::RUPT_xHCI });
@@ -230,6 +238,76 @@ void exception_handler(sdword iden, dword para) {
 }
 
 // No dynamic core
+
+#elif (_MCCA & 0xFF00) == 0x1000// RV
+
+
+void external_interrupt_handler();
+extern void timer_handler(void);
+void syscall(TaskContext* cxt);
+void schedule();
+
+_ESYM_C
+stduint trap_handler(stduint epc, stduint cause, TaskContext* cxt)
+{
+	stduint return_pc = epc;
+	stduint cause_code = cause & MCAUSE_MASK_ECODE;
+	if (cause & MCAUSE_MASK_INTERRUPT) {
+		/* Asynchronous trap - interrupt */
+		switch (cause_code) {
+		case 3:
+			ploginfo("software interruption!\n");
+			clint.MSIP(getMHARTID(), MSIP_Type::AckRupt);
+			schedule();
+			break;
+		case 7:
+			ploginfo("timer interruption!");
+			timer_handler();
+			break;
+		case 11:
+			ploginfo("external interruption!");
+			external_interrupt_handler();
+			break;
+		default:
+			plogwarn("Unknown async exception! Code = 0x%[x]", cause_code);
+			break;
+		}
+	}
+	else { // Synchronous trap - exception
+		switch (cause_code) {
+		case 8:
+			ploginfo("System call from U-mode!\n");
+			syscall(cxt);
+			return_pc += 4;
+			break;
+		default:
+			plogerro("Sync exceptions! Code = 0x%[x]", cause_code);
+			//return_pc += sizeof(stduint);// if skip the instruction which cause the exception
+			// Test: *(int *)0x00000000 = 100; // #7 Store/AMO access fault
+			// Test: a = *(int *)0x00000000;   // #5 Load access fault
+			while (1);
+		}
+	}
+	return return_pc;
+}
+
+void external_interrupt_handler()
+{
+	Request_t irq = InterruptControl::getLastRequest();
+	if (irq == IRQ_UART0) {
+		int ch;
+		UART0 >> ch;
+		UART0 << ch;
+	}
+	else if (irq) {
+		plogerro("not considered interrupt %d\n", irq);
+	}
+	if (irq) {
+		InterruptControl::setLastRequest(irq);
+	}
+}
+
+
 
 #elif defined(_MPU_STM32MP13)// Thumb
 

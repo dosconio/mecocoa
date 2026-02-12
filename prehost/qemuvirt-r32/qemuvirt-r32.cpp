@@ -19,70 +19,9 @@ void schedule();
 void user_task0(void);
 void user_task1(void);
 
+// inc: handler:
+
 _ESYM_C void trap_vector();
-void external_interrupt_handler();
-extern void timer_handler(void);
-void syscall(TaskContext* cxt);
-
-_ESYM_C
-stduint trap_handler(stduint epc, stduint cause, TaskContext* cxt)
-{
-	stduint return_pc = epc;
-	stduint cause_code = cause & MCAUSE_MASK_ECODE;
-	if (cause & MCAUSE_MASK_INTERRUPT) {
-		/* Asynchronous trap - interrupt */
-		switch (cause_code) {
-		case 3:
-			ploginfo("software interruption!\n");
-			clint.MSIP(getMHARTID(), MSIP_Type::AckRupt);
-			schedule();
-			break;
-		case 7:
-			ploginfo("timer interruption!");
-			timer_handler();
-			break;
-		case 11:
-			ploginfo("external interruption!");
-			external_interrupt_handler();
-			break;
-		default:
-			plogwarn("Unknown async exception! Code = 0x%[x]", cause_code);
-			break;
-		}
-	}
-	else { // Synchronous trap - exception
-		switch (cause_code) {
-		case 8:
-			ploginfo("System call from U-mode!\n");
-			syscall(cxt);
-			return_pc += 4;
-			break;
-		default:
-			plogerro("Sync exceptions! Code = 0x%[x]", cause_code);
-			//return_pc += sizeof(stduint);// if skip the instruction which cause the exception
-			// Test: *(int *)0x00000000 = 100; // #7 Store/AMO access fault
-			// Test: a = *(int *)0x00000000;   // #5 Load access fault
-			while (1);
-		}
-	}
-	return return_pc;
-}
-
-void external_interrupt_handler()
-{
-	Request_t irq = InterruptControl::getLastRequest();
-	if (irq == IRQ_UART0) {
-		int ch;
-		UART0 >> ch;
-		UART0 << ch;
-	}
-	else if (irq) {
-		plogerro("not considered interrupt %d\n", irq);
-	}
-	if (irq) {
-		InterruptControl::setLastRequest(irq);
-	}
-}
 
 uint64 _tick;
 uint64 last_schepoint;
@@ -258,3 +197,5 @@ extern "C" void __cxa_pure_virtual() {
 	while (1);
 }
 extern "C" void *memset(void *str, int c, size_t n) { return MemSet(str, c, n); }
+
+void operator delete[](void*) {}

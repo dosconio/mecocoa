@@ -19,14 +19,13 @@ use crate uni;
 #endif
 
 #if (_MCCA & 0xFF00) == 0x8600
-
 TSS_t* PCU_CORES_TSS[PCU_CORES_MAX] = {};
+#endif
 
 ProcessBlock* Taskman::pblocks[16] = {};
 stduint Taskman::pnumber = 0;
 stduint Taskman::PCU_CORES = 0;
 
-#endif
 
 
 bool Taskman::Append(ProcessBlock* task) {

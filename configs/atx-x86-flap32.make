@@ -69,6 +69,7 @@ build: clean lib $(cppobjs)
 	@echo $(sudokey) | sudo -S mkdir -p $(mnts)
 	@echo $(sudokey) | sudo -S mount -o loop $(outs) $(mnts)
 	@echo $(sudokey) | sudo -S cp $(ubinpath)/$(elf_loader) $(mnts)/KEX.OBJ
+	@tree $(mnts) -s
 	@echo $(sudokey) | sudo -S umount $(mnts)
 	@perl configs/$(arch).bochsdbg.pl > $(ubinpath)/I686/mecocoa/bochsrc.bxrc
 	@perl configs/$(arch).bochsdbg-lin.pl > $(ubinpath)/I686/mecocoa/bochsrc-lin.bxrc

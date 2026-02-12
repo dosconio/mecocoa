@@ -32,7 +32,7 @@ LDFLAGS = -T $(LDFILE).ignore
 #
 asmfile=$(wildcard prehost/$(arch)/*.S)
 asmobjs=$(patsubst %S, %o, $(asmfile))
-cppfile=$(wildcard prehost/qemuvirt-r32/*.cpp) \
+cppfile=$(wildcard prehost/qemuvirt-r32/*.cpp) $(wildcard mecocoa/*.cpp) \
 	$(ulibpath)/cpp/lango/lango-cpp.cpp \
 	$(ulibpath)/cpp/stream.cpp \
 	$(ulibpath)/cpp/interrupt.cpp \

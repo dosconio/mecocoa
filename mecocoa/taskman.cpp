@@ -226,7 +226,7 @@ static void TaskLoad_Carry(char* vaddr, stduint length, char* phy_src, Paging& p
 			phy = _IMM(Memory::physical_allocate(0x1000));
 			// ploginfo("mapping %[32H] -> %[32H]", v_start1, phy);
 			pg.Map(v_start1, phy, 0x1000, true, true);
-			if (!page->getEntry(pg)->P)//(!page.isPresent(pg))
+			if (!page->getEntry(pg)->isPresent())
 			{
 				plogerro("Mapping failed %[32H] -> %[32H], entry%[32H]", v_start1, phy, page);
 			}

@@ -19,13 +19,14 @@ use crate uni;
 #endif
 #include "../include/console.hpp"
 
+
+#if (_MCCA & 0xFF00) == 0x8600
+
 Cursor* Cursor::global_cursor = nullptr;
 SheetTrait* Cursor::moving_sheet = nullptr;
 bool Cursor::mouse_btnl_dn = false;
 bool Cursor::mouse_btnm_dn = false;
 bool Cursor::mouse_btnr_dn = false;
-
-#if (_MCCA & 0xFF00) == 0x8600
 
 // ---- ---- TTY ---- ----
 

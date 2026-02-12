@@ -66,6 +66,7 @@ cppfile=$(wildcard mecocoa/*.cpp) \
 	$(ulibpath)/cpp/string.cpp \
 	$(ulibpath)/cpp/interrupt.cpp \
 	$(ulibpath)/cpp/lango/lango-cpp.cpp \
+	$(ulibpath)/cpp/grp-base/bstring.cpp \
 	$(ulibpath)/cpp/dat-block/bmmemoman.cpp \
 	$(ulibpath)/cpp/dat-block/mempool.cpp \
 	$(ulibpath)/cpp/Witch/Form.cpp \
@@ -79,7 +80,6 @@ cppfile=$(wildcard mecocoa/*.cpp) \
 	$(ulibpath)/cpp/Device/Video.cpp $(ulibpath)/cpp/Device/Video-VideoConsole.cpp \
 
 cplfile=$(ulibpath)/c/mcore.c\
-	$(ulibpath)/c/consio.c \
 	$(ulibpath)/c/debug.c \
 	$(ulibpath)/c/driver/keyboard.c \
 	$(ulibpath)/c/console/conformat.c \
@@ -87,7 +87,7 @@ cplfile=$(ulibpath)/c/mcore.c\
 	$(ulibpath)/c/data/font/font-16x8.c \
 	$(ulibpath)/c/ustring/astring/StrHeap.c \
 	$(ulibpath)/c/ustring/astring/salc.c \
-	$(ulibpath)/c/ustring/bstring/bstring.c \
+
 
 asmobjs=$(addprefix $(dest_obj)/$(asmpref),$(patsubst %asm,%o,$(notdir $(asmfile))))
 cppobjs=$(addprefix $(dest_obj)/$(cpppref),$(patsubst %cpp,%o,$(notdir $(cppfile))))

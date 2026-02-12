@@ -20,11 +20,16 @@ extern uni::Queue<SysMessage> message_queue;
 #define PCU_CORES_MAX 16
 #endif
 
+class ProcessBlock;
 #if (_MCCA & 0xFF00) == 0x8600
-
 extern TSS_t* PCU_CORES_TSS[PCU_CORES_MAX];
 
-class ProcessBlock;
+#if _MCCA == 0x8632
+#define T_pid2tss(pid) (SegTSS0 + 16 * pid)
+#define T_tss2pid(tssid) ((tssid - SegTSS0) / 16)
+#endif
+#endif
+
 class Taskman {
 public:
 	static ProcessBlock* pblocks[16];
@@ -39,13 +44,6 @@ public:
 		Locate(stduint taskid) -> ProcessBlock*;
 };
 
-
-#if _MCCA == 0x8632
-#define T_pid2tss(pid) (SegTSS0 + 16 * pid)
-#define T_tss2pid(tssid) ((tssid - SegTSS0) / 16)
-#endif
-
-#endif
 
 #if _MCCA == 0x8632
 #include "fileman.hpp"

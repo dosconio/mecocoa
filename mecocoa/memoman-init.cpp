@@ -111,7 +111,7 @@ bool Memory::initialize(stduint eax, byte* ebx) {
 
 
 // ---- parse* ---- //
-
+#if (_MCCA & 0xFF00) == 0x8600
 static stduint parse_norm(stduint addr) {
 	memory_info_entry* entry = (memory_info_entry*)addr;
 	stduint count = 0;
@@ -132,6 +132,7 @@ static stduint parse_norm(stduint addr) {
 	#endif
 	return count;
 }
+#endif
 
 #if _MCCA == 0x8632
 

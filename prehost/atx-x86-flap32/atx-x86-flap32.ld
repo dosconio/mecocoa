@@ -14,7 +14,7 @@ SECTIONS
 		*(.multiboot)
 	}
 	*/
-	.text : {*(.text)}
+	.text : { *(.text .text.*) }
 	.data : {
 		*(.data)
 		*(.note.gnu.build-id)
