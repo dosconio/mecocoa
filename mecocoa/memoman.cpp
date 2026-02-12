@@ -122,9 +122,7 @@ bool Memory::deallocate(void* ptr, stduint size _Comment(zero_for_block)) {
 
 // ---- PAGING ----
 
-#ifdef _ARC_x86
 Paging kernel_paging;
-#endif
 
 // ---- SEGMENT ----
 

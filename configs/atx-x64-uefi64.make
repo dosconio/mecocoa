@@ -69,6 +69,7 @@ cppfile=$(wildcard mecocoa/*.cpp) \
 	$(ulibpath)/cpp/grp-base/bstring.cpp \
 	$(ulibpath)/cpp/dat-block/bmmemoman.cpp \
 	$(ulibpath)/cpp/dat-block/mempool.cpp \
+	$(ulibpath)/cpp/system/paging.cpp \
 	$(ulibpath)/cpp/Witch/Form.cpp \
 	\
 	$(ulibpath)/cpp/Device/Bus/PCI.cpp \

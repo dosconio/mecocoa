@@ -18,18 +18,6 @@
 #include <c/driver/RealtimeClock.h>
 #include "../../include/atx-x86-flap32.hpp"
 
-void krnl_init() {
-	_call_serious = (_tocall_ft)kernel_fail;//{TODO} DbgStop
-	// ---- Paging
-	_physical_allocate = Memory::physical_allocate;
-	kernel_paging.Reset();// should take 0x1000
-	kernel_paging.MapWeak(0x00000000, 0x00000000, 0x00400000, true, _Comment(R0) true);
-	kernel_paging.MapWeak(0x80000000, 0x00000000, 0x00400000, true, _Comment(R0) false);
-	setCR3(_IMM(kernel_paging.root_level_page));
-	PagingEnable();
-	GDT_Init();
-}
-
 extern ProcessBlock* pblocks[16]; extern stduint pnumber;
 
 void mecfetch() {
@@ -66,7 +54,7 @@ void mecfetch() {
 
 extern uint32 _start_eax, _start_ebx;
 _sign_entry() {
-	krnl_init();// using memory blindly
+	_call_serious = (_tocall_ft)kernel_fail;
 	if (!Memory::initialize(_start_eax, (byte*)_start_ebx)) HALT();
 	cons_init();// located here, for  INT-10H may influence PIC
 	Cache_t::enAble();

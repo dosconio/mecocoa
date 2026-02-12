@@ -61,6 +61,16 @@ static void parse_uefi(const MemoryMap& memory_map);
 // - allocate (which be with pagemap)
 // - free (which be with unmap) [TODO]
 bool Memory::initialize(stduint eax, byte* ebx) {
+	#if _MCCA == 0x8632
+	_physical_allocate = Memory::physical_allocate;
+	kernel_paging.Reset();// should take 0x1000
+	kernel_paging.MapWeak(0x00000000, 0x00000000, 0x00400000, true, _Comment(R0) true);
+	kernel_paging.MapWeak(0x80000000, 0x00000000, 0x00400000, true, _Comment(R0) false);
+	setCR3(_IMM(kernel_paging.root_level_page));
+	PagingEnable();
+	#endif
+	GDT_Init();
+
 	void* mapaddr = memoman_4G_00000000;
 	MemSet(mapaddr, 0, bmapsize);
 	Memory::pagebmap = new (_BUF_pagebmap) BmMemoman(mapaddr, bmapsize);
@@ -102,9 +112,24 @@ bool Memory::initialize(stduint eax, byte* ebx) {
 	// - 0x78000~0x7FFFF Video Modes List
 	// - 0x80000~0xFFFFF BIOS and Upper Memory Area
 	map_ready = true;
+
+	uni_default_allocator = &mem;
+	// mempool (kernel heap)
 	const unsigned mempool_len0 = 0x4000;
-	uni_default_allocator;//{TODO}
 	mempool.Reset(Slice{ _IMM(mem.allocate(mempool_len0)), mempool_len0 });
+
+	// paging
+	//{TEMP}
+	#if _MCCA == 0x8664
+	kernel_paging.Reset();
+	kernel_paging.Map(0x00000000, 0x00000000, 0x100000000ULL * 16,
+		21, PGPROP_present | PGPROP_writable
+	);// pgsize 30 may be bad for Bochs, QEMU need map many times of 4G
+	setCR3 _IMM(kernel_paging.root_level_page);
+
+	#endif
+
+
 	return true;
 }
 #endif

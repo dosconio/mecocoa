@@ -56,36 +56,6 @@ alignas(16) byte kernel_stack[1024 * 1024];
 
 UefiData uefi_data;
 
-// ---- Paging
-/** @brief 静的に確保するPageDirectoryの個数
- *
- * この定数は SetupIdentityPageMap で使用される．
- * 1 つのPageDirectoryには 512 個の 2MiB ページを設定できるので，
- * kPageDirectoryCount x 1GiB の仮想アドレスがマッピングされることになる．
- */
-const size_t kPageDirectoryCount = 64;
-
-namespace {
-	const uint64_t kPageSize4K = 4096;
-	const uint64_t kPageSize2M = 512 * kPageSize4K;
-	const uint64_t kPageSize1G = 512 * kPageSize2M;
-	//
-	alignas(kPageSize4K) std::array<uint64_t, 512> pml4_table;
-	alignas(kPageSize4K) std::array<uint64_t, 512> pdp_table;
-	alignas(kPageSize4K) std::array<std::array<uint64_t, 512>, kPageDirectoryCount> page_directory;
-}
-
-void SetupIdentityPageTable() {
-	pml4_table[0] = reinterpret_cast<uint64_t>(&pdp_table[0]) | 0x003;
-	for (int i_pdpt = 0; i_pdpt < page_directory.size(); ++i_pdpt) {
-		pdp_table[i_pdpt] = reinterpret_cast<uint64_t>(&page_directory[i_pdpt]) | 0x003;
-		for (int i_pd = 0; i_pd < 512; ++i_pd) {
-			page_directory[i_pdpt][i_pd] = i_pdpt * kPageSize1G + i_pd * kPageSize2M | 0x083;// 0x83 for cacheable
-		}
-	}
-	setCR3(_IMM(&pml4_table[0]));
-}
-
 extern OstreamTrait* con0_out;
 
 // ---- Kernel
@@ -100,9 +70,9 @@ void mecocoa(const UefiData& uefi_data_ref)
 	#endif
 
 	_call_serious = (_tocall_ft)kernel_fail;//{TODO} DbgStop
-	GDT_Init();
+	
 	if (!Memory::initialize('UEFI', (byte*)(&uefi_data.memory_map))) HALT();
-	SetupIdentityPageTable();
+
 	
 	cons_init();
 	//{} Cache_t::enAble();
