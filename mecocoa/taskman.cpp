@@ -2,21 +2,14 @@
 // AllAuthor: @dosconio, @ArinaMgk
 // ModuTitle: Demonstration - ELF32-C++ x86 Bare-Metal
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
-#define _STYLE_RUST
+#include "../include/mecocoa.hpp"
 
 #include <c/task.h>
-#include <c/consio.h>
 #include <cpp/interrupt>
 #include <c/format/ELF.h>
 #include <c/driver/keyboard.h>
 #include "../include/taskman.hpp"
 
-use crate uni;
-#ifdef _ARC_x86 // x86:
-#include "../include/atx-x86-flap32.hpp"
-#elif _MCCA == 0x8664
-#include "../include/atx-x64.hpp"
-#endif
 
 static SysMessage _BUF_Message[64];
 Queue<SysMessage> message_queue(_BUF_Message, numsof(_BUF_Message));

@@ -98,11 +98,14 @@ void mecocoa(const UefiData& uefi_data_ref)
 	if (auto xhc_dev = Mouse_Init_USB(pci, &xhc)) {
 		ploginfo("xHC-USB-Mouse has been found: %[8H].%[8H].%[8H]", xhc_dev->bus, xhc_dev->device, xhc_dev->function);
 	}
-	//[LAPIC]
+	//[TIM.LAPIC]
 	APIC[IRQ_LAPICTimer].setModeRupt(_IMM(Handint_LAPICT), SegCo64);
 	lapic_timer.Reset(0x1000000u);// 10ms qemu
+	SysTimer::Initialize();
 
 	tryUD();
+	SysTimer::Append(100, 0);
+	SysTimer::Append(250, 1);
 
 	pureptr_t ptr;
 	delete (ptr = new int);
@@ -111,8 +114,10 @@ void mecocoa(const UefiData& uefi_data_ref)
 	APIC.enAble(true);
 
 	// State
-	Memory::pagebmap->dump_avail_memory();
-	ploginfo("There are %[u] layers, f=%[x], l=%[x]", global_layman.Count(), global_layman.subf, global_layman.subl);
+	if (0) {
+		Memory::pagebmap->dump_avail_memory();
+		ploginfo("[Console] There are %[u] layers, f=%[x], l=%[x]", global_layman.Count(), global_layman.subf, global_layman.subl);
+	}
 
 	while (true) {
 		APIC.enAble(false);
@@ -134,8 +139,10 @@ void mecocoa(const UefiData& uefi_data_ref)
 				plogerro("Error while ProcessEvent: %s at %s:%d", err.Name(), err.File(), err.Line());
 			}
 			break;
-		case SysMessage::RUPT_LAPICT:
-			// ploginfo("Timer Rupt!");
+		case SysMessage::RUPT_TIMER:
+			ploginfo("Timer %llu Rupt! tick = %llu", msg.args.timer.iden, msg.args.timer.timeout);
+			if (msg.args.timer.iden == 0)
+				SysTimer::Append(msg.args.timer.timeout + 100, 0);
 			break;
 		default:
 			plogerro("Unknown message type: %d", msg.type);

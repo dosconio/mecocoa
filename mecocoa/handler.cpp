@@ -1,79 +1,16 @@
 // ASCII g++ TAB4 LF
-// Attribute: 
-// LastCheck: 20240218
 // AllAuthor: @dosconio, @ArinaMgk
 // ModuTitle: Demonstration - ELF32-C++ x86 Bare-Metal
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
-#ifndef _STYLE_RUST
-#define _STYLE_RUST
-#endif
+#include "../include/mecocoa.hpp"
 
-#include <c/consio.h>
 #include <cpp/interrupt>
 #include <cpp/Device/UART>
 #include <c/driver/mouse.h>
 #include <c/driver/timer.h>
 #include <c/driver/keyboard.h>
-#include "../include/taskman.hpp"
-
-use crate uni;
-#if (_MCCA & 0xFF00) == 0x1000// RV
-#include <c/proctrl/RISCV/riscv.h>
-#include "../include/qemuvirt-riscv.hpp"
-#endif
 
 #ifdef _ARC_x86 // x86:
-#include "../include/atx-x86-flap32.hpp"
-
-void blink2();
-void Handint_PIT()
-{
-	// auto push flag by intterrupt module
-	// 1000Hz
-	mecocoa_global->system_time.mic += 1000;// 1k us = 1ms
-	if (mecocoa_global->system_time.mic >= 1000000) {
-		mecocoa_global->system_time.mic -= 1000000;
-		// mecocoa_global->system_time.sec++;
-	}
-	static unsigned time = 0;
-	time++;
-	if (time >= 1000) {
-		time = 0;
-		// mecocoa_global->system_time.sec++;//{TEMP} help RTC	
-		if (!ento_gui) {
-			Letvar(p, char*, 0xB8001);
-			*p ^= 0x70;// make it blink
-		}
-		else {
-			blink2();
-		}
-	}
-	static unsigned time_slice = 0;
-	time_slice++;
-	if (time_slice >= 20) { // switch task
-		time_slice = 0;
-		if (task_switch_enable) {
-			switch_task();
-		}
-	}
-}
-
-void blink();
-void Handint_RTC()
-{
-	// 1Hz
-	// auto push flag by interrupt module
-	// OPEN NMI AFTER READ REG-C, OR ONLY INT ONCE
-	outpb(IRQ_RTC, 0x0C);
-	innpb(0x71);
-	mecocoa_global->system_time.sec++;
-
-	if (!ento_gui) {
-		Letvar(p, char*, 0xB8003);
-		*p ^= 0x70;// make it blink
-	}
-	else blink();
-}
 
 extern KeyboardBridge kbdbridge;
 QueueLimited* queue_mouse;
@@ -134,28 +71,13 @@ void Handint_MOU() {
 
 #elif defined(_UEFI)
 
-volatile timeval system_time = {};
-
-volatile stduint tick = 0;
-
-// Dchain 
-
 __attribute__((interrupt, target("general-regs-only"), optimize("O0")))
 void Handint_XHCI(InterruptFrame* frame) {
 	message_queue.Enqueue(SysMessage{ SysMessage::RUPT_xHCI });
 	sendEOI();
 }
-__attribute__((interrupt, target("general-regs-only"), optimize("O0")))
-void Handint_LAPICT(InterruptFrame* frame) {
-	// message_queue.Enqueue(SysMessage{ SysMessage::RUPT_LAPICT });
-	// mecocoa_global->system_time.mic;
-	tick = tick + 1;// ++
-	sendEOI();
-}
 
 #endif
-
-
 
 
 

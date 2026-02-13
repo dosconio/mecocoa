@@ -1,17 +1,12 @@
 // ASCII g++ TAB4 LF
-// Attribute: 
-// LastCheck: 20240218
 // Codifiers: @dosconio, @ArinaMgk
 // Docutitle: Demonstration - ELF32-C++ x86 Bare-Metal
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
-#define _STYLE_RUST
+#include "../include/mecocoa.hpp"
 
 #include <c/task.h>
-#include <c/consio.h>
 
-use crate uni;
 #ifdef _ARC_x86 // x86:
-#include "../include/atx-x86-flap32.hpp"
 
 #define HARDRUPT 1
 

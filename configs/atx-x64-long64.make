@@ -63,6 +63,7 @@ cppfile=$(wildcard mecocoa/*.cpp)\
 	$(ulibpath)/cpp/stream.cpp \
 	$(ulibpath)/cpp/string.cpp \
 	$(ulibpath)/cpp/interrupt.cpp \
+	$(ulibpath)/cpp/nodes/dnode.cpp $(wildcard $(ulibpath)/cpp/nodes/dnode/*.cpp) \
 	$(ulibpath)/cpp/lango/lango-cpp.cpp \
 	$(ulibpath)/cpp/grp-base/bstring.cpp \
 	$(ulibpath)/cpp/dat-block/bmmemoman.cpp \
@@ -75,6 +76,7 @@ cppfile=$(wildcard mecocoa/*.cpp)\
 
 cplfile=$(ulibpath)/c/mcore.c\
 	$(ulibpath)/c/debug.c \
+	$(wildcard $(ulibpath)/c/dnode/*.c) \
 	$(ulibpath)/c/console/conformat.c \
 	$(ulibpath)/c/driver/keyboard.c \
 	$(ulibpath)/c/data/font/font-8x5.c \

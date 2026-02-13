@@ -1,27 +1,12 @@
 // ASCII g++ TAB4 LF
-// Attribute: 
 // AllAuthor: @dosconio, @ArinaMgk
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
-#define _STYLE_RUST
+#include "../include/mecocoa.hpp"
 
 #include <c/consio.h>
 #include <c/mempool.h>
 
-use crate uni;
-
 _ESYM_C Handler_t FILE_ENTO, FILE_ENDO;
-#if _MCCA == 0x8632
-#include "../include/atx-x86-flap32.hpp"
-#include "../prehost/atx-x86-flap32/multiboot2.h"
-// for x86, one slice should begin with 0x100000 (above F000:FFFF)
-// for x86, only consider single paging method
-
-#elif _MCCA == 0x8664
-
-#include "../include/atx-x64.hpp"
-
-
-#endif
 
 //
 _PACKED(struct) memory_info_entry {

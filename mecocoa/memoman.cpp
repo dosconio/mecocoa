@@ -1,26 +1,13 @@
 // ASCII g++ TAB4 LF
-// Attribute: 
 // AllAuthor: @dosconio, @ArinaMgk
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
-#define _STYLE_RUST
+#include "../include/mecocoa.hpp"
+// for x86, one slice should begin with 0x100000 (above F000:FFFF)
 
-#include <c/consio.h>
 #include <c/mempool.h>
-
-use crate uni;
 
 _ESYM_C Handler_t FILE_ENTO, FILE_ENDO;
 
-#if _MCCA == 0x8632
-#include "../include/atx-x86-flap32.hpp"
-#include "../prehost/atx-x86-flap32/multiboot2.h"
-// for x86, one slice should begin with 0x100000 (above F000:FFFF)
-// for x86, only consider single paging method
-
-#elif _MCCA == 0x8664
-#include "../include/atx-x64.hpp"
-
-#endif
 
 #if (_MCCA & 0xFF00) == 0x8600
 Memory mem;
@@ -185,7 +172,9 @@ word GDT_Alloc() {
 
 // linear allocator
 _ESYM_C void* malloc(size_t size) {
-	return (mempool.allocate(size));
+	auto ret = (mempool.allocate(size));
+	printlog(ret ? _LOG_INFO: _LOG_ERROR, "malloc %u at 0x%[x]", size, ret);
+	return ret;
 }
 _ESYM_C void* calloc(size_t nmemb, size_t size) {
 	void* ret = malloc(nmemb * size);
@@ -199,13 +188,11 @@ void* operator new[](size_t size) {
 	return malc(size);
 }
 void operator delete(void* p) {
-	if (mempool.deallocate(p))
-		;// ploginfo("del OK");
-	else
-		plogerro("del BAD");
+	free(p);
 }
 void operator delete[](void*) {}
 void operator delete(void* ptr, stduint size) noexcept {
+	ploginfo("del OK");
 	if (!mempool.deallocate(ptr, size)) plogerro("del BAD");
 }
 void operator delete[](void*, stduint size) { _TODO }
@@ -213,10 +200,9 @@ void operator delete[](void*, stduint size) { _TODO }
 void operator delete(void* ptr, stduint size, std::align_val_t) noexcept { ::operator delete(ptr, size); }
 #endif
 //
-_ESYM_C void free(void* ptr) {
-	#if _MCCA == 0x8632
-	Console.OutFormat("free(0x%[32H])\n\r", ptr);
-	#endif
+_ESYM_C void free(void* p) {
+	bool a = (mempool.deallocate(p));
+	printlog(a ? _LOG_INFO: _LOG_ERROR, "mfree 0x%[x]", p);
 }
 _ESYM_C void memf(void* ptr) { free(ptr); }
 #endif

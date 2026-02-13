@@ -1,23 +1,14 @@
 // ASCII g++ TAB4 LF
-// Attribute: 
-// LastCheck: 20240218
 // AllAuthor: @dosconio, @ArinaMgk
 // ModuTitle: [Service] Console - ELF32-C++ x86 Bare-Metal
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
-#define _STYLE_RUST
+#include "../include/mecocoa.hpp"
 
-#include <c/consio.h>
 #include <c/driver/mouse.h>
 #include <c/driver/keyboard.h>
 #include <cpp/Device/_Video.hpp>
 #include <cpp/Witch/Form.hpp>
-use crate uni;
-#ifdef _ARC_x86 // x86:
-#include "../include/atx-x86-flap32.hpp"
-#elif _MCCA == 0x8664
-#include "../include/atx-x64.hpp"
-#endif
-#include "../include/console.hpp"
+
 
 
 #if (_MCCA & 0xFF00) == 0x8600

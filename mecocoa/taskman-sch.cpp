@@ -1,22 +1,14 @@
 // ASCII g++ TAB4 LF
 // AllAuthor: @ArinaMgk
-// ModuTitle: Demonstration - ELF32-C++ x86 Bare-Metal
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
-#define _STYLE_RUST
+#include "../include/mecocoa.hpp"
 
 #include <c/task.h>
-#include <c/consio.h>
 #include <cpp/interrupt>
 #include <c/format/ELF.h>
 #include <c/driver/keyboard.h>
 #include "../include/taskman.hpp"
 
-use crate uni;
-#ifdef _ARC_x86 // x86:
-#include "../include/atx-x86-flap32.hpp"
-#elif _MCCA == 0x8664
-#include "../include/atx-x64.hpp"
-#endif
 
 #if (_MCCA & 0xFF00) == 0x8600
 TSS_t* PCU_CORES_TSS[PCU_CORES_MAX] = {};

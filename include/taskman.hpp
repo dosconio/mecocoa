@@ -7,13 +7,26 @@
 #include <c/task.h>
 #include "syscall.hpp"
 
+struct MsgTimer {
+	stduint timeout;
+	stduint iden;
+	_tocall_ft hand;// Realtime Hook
+};
 struct SysMessage {
 	enum Type {
 		RUPT_xHCI,
-		RUPT_LAPICT,
+		RUPT_TIMER,
 	} type;
+	union {
+		struct MsgTimer timer;
+	} args;
 };
 extern uni::Queue<SysMessage> message_queue;
+
+struct SysTimer {
+	static void Initialize();
+	static void Append(stduint timeout, stduint iden, _tocall_ft hand = 0);
+};
 
 // >= 1
 #ifndef PCU_CORES_MAX
