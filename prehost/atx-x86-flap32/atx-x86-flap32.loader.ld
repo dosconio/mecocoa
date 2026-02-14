@@ -8,20 +8,20 @@ MEMORY
 SECTIONS
 {
 	. = 0x1000;
-	.text : { *(.text .text.*) }
+	.text : { *(.text .text.*) } > RAM1
 	.data : {
 		*(.data)
 		*(.note.gnu.build-id)
 		*(.got)
 		*(.init_array)
 		*(.eh_frame)
-	}
+	}> RAM1
 	.bss : {
 		BSS_ENTO = .;
 		*(.bss)
 		BSS_ENDO = .;
-	}
-	.rodata : {*(.rodata)}
+	}> RAM1
+	.rodata : {*(.rodata)}> RAM1
 
 
 }

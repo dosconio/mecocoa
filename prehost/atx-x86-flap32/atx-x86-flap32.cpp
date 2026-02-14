@@ -54,7 +54,7 @@ void mecfetch() {
 
 extern uint32 _start_eax, _start_ebx;
 _sign_entry() {
-	_call_serious = (_tocall_ft)kernel_fail;
+	_call_serious = kernel_fail;
 	if (!Memory::initialize(_start_eax, (byte*)_start_ebx)) HALT();
 	cons_init();// located here, for  INT-10H may influence PIC
 	Cache_t::enAble();

@@ -7,6 +7,7 @@
 #include <cpp/unisym>
 #include <c/driver/mouse.h>// qemu only
 #include <c/driver/timer.h>
+#include <cpp/Device/ACPI.hpp>
 #include <cpp/Device/Bus/PCI.hpp>
 #include <cpp/Device/USB/xHCI/xHCI.hpp>
 #include "../../include/atx-x64.hpp"
@@ -69,7 +70,7 @@ void mecocoa(const UefiData& uefi_data_ref)
 	_ASM("mov %%rsp, %0" : "=r"(rsp));
 	#endif
 
-	_call_serious = (_tocall_ft)kernel_fail;//{TODO} DbgStop
+	_call_serious = kernel_fail;
 	
 	if (!Memory::initialize('UEFI', (byte*)(&uefi_data.memory_map))) HALT();
 
@@ -93,19 +94,22 @@ void mecocoa(const UefiData& uefi_data_ref)
 		plogerro("No devices on PCI or PCI init failed.");
 	}
 	APIC[IRQ_xHCI].setModeRupt(_IMM(Handint_XHCI), SegCo64);
+	//[TIM.LAPIC] -> sys-delay
+	ACPI::Assert(*(const ACPI::RSDP*)uefi_data.acpi_table);
+	APIC[IRQ_LAPICTimer].setModeRupt(_IMM(Handint_LAPICT), SegCo64);
+	lapic_timer.Reset();
+	lapic_timer.Reset(lapic_timer.Frequency / SysTickFreq);
+	SysTimer::Initialize();
 	//[USB Mouse]
 	usb::HIDMouseDriver::default_observer = hand_mouse;
 	if (auto xhc_dev = Mouse_Init_USB(pci, &xhc)) {
 		ploginfo("xHC-USB-Mouse has been found: %[8H].%[8H].%[8H]", xhc_dev->bus, xhc_dev->device, xhc_dev->function);
 	}
-	//[TIM.LAPIC]
-	APIC[IRQ_LAPICTimer].setModeRupt(_IMM(Handint_LAPICT), SegCo64);
-	lapic_timer.Reset(0x1000000u);// 10ms qemu
-	SysTimer::Initialize();
 
 	tryUD();
-	SysTimer::Append(100, 0);
+	// try priority_queue Dchain
 	SysTimer::Append(250, 1);
+	SysTimer::Append(100, 0);
 
 	pureptr_t ptr;
 	delete (ptr = new int);
@@ -114,17 +118,14 @@ void mecocoa(const UefiData& uefi_data_ref)
 	APIC.enAble(true);
 
 	// State
-	if (0) {
+	if (1) {
 		Memory::pagebmap->dump_avail_memory();
 		ploginfo("[Console] There are %[u] layers, f=%[x], l=%[x]", global_layman.Count(), global_layman.subf, global_layman.subl);
 	}
 
 	while (true) {
 		APIC.enAble(false);
-		auto crt_tick = tick;
-		if (!(crt_tick % 50)) {
-			ploginfo("tick=%[u]", crt_tick);
-		}
+		// auto crt_tick = tick;
 		if (!message_queue.Count()) {
 			APIC.enAble(true);
 			HALT();
@@ -142,7 +143,11 @@ void mecocoa(const UefiData& uefi_data_ref)
 		case SysMessage::RUPT_TIMER:
 			ploginfo("Timer %llu Rupt! tick = %llu", msg.args.timer.iden, msg.args.timer.timeout);
 			if (msg.args.timer.iden == 0)
+			{
+				APIC.enAble(false);
 				SysTimer::Append(msg.args.timer.timeout + 100, 0);
+				APIC.enAble(true);
+			}
 			break;
 		default:
 			plogerro("Unknown message type: %d", msg.type);

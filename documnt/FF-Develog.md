@@ -23,11 +23,9 @@ her-note: false
 - [ ] 动态加载中断例程/服务
 - [ ] 外设实现 RuptTrait --> Mecocoa.DeviceTrait
 - [ ] Long64, 0x8000~0xFFFF 放置 R16&F32 代码 && 模式切换
-- [ ] Realtimable Design
 - [ ] Loader: Keyboard chosing one of kernel
 
 內存管理（關鍵）
-- [ ] memoman mempool （mempool需要自举）
 - [ ] paging deep-copy heap
 文件系統
 - [ ] F_H -> H(h💿h💾) (RW 4个硬, 1个软)
@@ -39,12 +37,14 @@ her-note: false
 - [ ] syscall: yield, 非阻塞 getchar
 介面渲染
 - [ ] 4 Buffered VCon
+综合
+- [ ] 选项、微/宏模块剪裁能力
 
 # Base
 
 qemu-system
 ```
-🈚️ qemu-system-aarch64
+✅ qemu-system-aarch64       virt
 🈚️ qemu-system-alpha
 🈚️ qemu-system-arm
 🈚️ qemu-system-avr

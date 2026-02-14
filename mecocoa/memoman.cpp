@@ -15,6 +15,9 @@ BmMemoman* Memory::pagebmap = NULL;
 bool map_ready = false;
 
 Mempool mempool = {};
+#if 0 // for small flash board
+#define mempool (*pmempool)
+#endif
 #endif
 
 // - Memory::clear_bss
@@ -173,12 +176,13 @@ word GDT_Alloc() {
 // linear allocator
 _ESYM_C void* malloc(size_t size) {
 	auto ret = (mempool.allocate(size));
-	printlog(ret ? _LOG_INFO: _LOG_ERROR, "malloc %u at 0x%[x]", size, ret);
+	if (!ret)
+		printlog(ret ? _LOG_INFO : _LOG_ERROR, "malloc %u at 0x%[x]", size, ret);
 	return ret;
 }
 _ESYM_C void* calloc(size_t nmemb, size_t size) {
 	void* ret = malloc(nmemb * size);
-	if (ret) MemSet(ret, nmemb * size, 0);
+	if (ret) MemSet(ret, 0, nmemb * size);
 	return ret;
 }
 void* operator new(size_t size) {
@@ -202,7 +206,7 @@ void operator delete(void* ptr, stduint size, std::align_val_t) noexcept { ::ope
 //
 _ESYM_C void free(void* p) {
 	bool a = (mempool.deallocate(p));
-	printlog(a ? _LOG_INFO: _LOG_ERROR, "mfree 0x%[x]", p);
+	// printlog(a ? _LOG_INFO: _LOG_ERROR, "mfree 0x%[x]", p);
 }
 _ESYM_C void memf(void* ptr) { free(ptr); }
 #endif

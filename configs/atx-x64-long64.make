@@ -12,7 +12,7 @@ MKDIR = mkdir -p
 RM = rm -rf
 
 # (GNU)
-GPREF   = #riscv64-unknown-elf-
+GPREF   = x86_64-linux-gnu-
 CFLAGS += -z norelro -nostdlib -fno-builtin
 CFLAGS += --static -mno-red-zone -m64  -mno-sse -mno-sse2 -mno-avx -mno-avx2 
 CFLAGS += -I$(uincpath) -D_MCCA=0x8664 -D_HIS_IMPLEMENT -D_DEBUG

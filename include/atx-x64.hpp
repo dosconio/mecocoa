@@ -17,10 +17,12 @@ _ESYM_C void tryUD();
 
 // ---- sysinfo
 
-int* kernel_fail(loglevel_t serious);
+int* kernel_fail(void* serious, ...);
 rostr text_brand();
 
 // ---- handler
+
+#define SysTickFreq 100 // 100Hz
 
 // volatile timeval system_time;
 

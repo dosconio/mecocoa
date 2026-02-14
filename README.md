@@ -6,9 +6,10 @@ her-note: false
 
 # Mecocoa ![LOGO](./rsource/logo/MCCA20240501.png) 
 
-- **type**: Operating System (Distributed)
-- **domain**: [mecocoa.org](http://mecocoa.org/) 
-- **repository** : [GitHub](https://github.com/dosconio/mecocoa)  @dosconio
+- **project**: Operating System (Distributed)
+- **domains**: [mecocoa.org](http://mecocoa.org/) 
+- **feature**: Distributed, Realtime(by SysTimer)
+- **reposit** : [GitHub](https://github.com/dosconio/mecocoa)  @dosconio
 - **license**: BSD-3-Clause license
 
 **Dependence** :
@@ -40,39 +41,44 @@ Development-Environment
 
 Format $board-architecture(-mode)$
 
-CISC `VMBox/VMware/Bochs/QEMU/TODO(Simics,Wel)`
-- `x86 0x8632` Intel x86/64 (8086 -> i686+)
-	- BIOS, CLI, Paging, Multitask, Syscall
-	- **run**
-		- **virtual**: VMware, VMBox, Bochs, qemu-system-i386(9.2.4)
-	- **build**
-		- `make` -> mx32.elf
-		- `make install -f configs/atx-x86-flap32.make` for grub bootstraps
-	- **mode**: *real16*, *flap32*
-- `x64 0x8664` AMD64
-	- ① LONG: BIOS(TODO) 
-	- ② UEFI: UEFI,GUI
-	- **run**
-		- **virtual**: VMware(!Mouse), VMBox(!Mouse), qemu-system-x86_64
-	- **build**
-		- `arch=atx-x64-long64 make` -> mx64.elf
-		- `arch=atx-x64-uefi64 make` -> ux64.elf
-	- **mode**: *long64*(IA-32e, not IA-64, if CPU support)
-	
-RISC `Fizik`
-- `r32 0x1032` RISC-V32
-	- CLI
-	- **run**
-		- **virtual**: qemu-system-riscv32
-	- **build**
-		- `make lib-r32`; `make build-r32` `make run-r32`
-- `r64 0x1064` RISC-V64, like `r32`
-- `ac7 0x2007` ARMv7 Cortex-A7
-	- dev-env `arm-none-eabi-* (Arm GNU Toolchain 12.2.MPACBTI-Rel1 (Build arm-12-mpacbti.34)) 12.2.1 20230214`
-	- **run**
-		- **phyzikl**: ...
-- `ac7m 0x2017` Armv7-M Cortex-M7
 
-MISC
-- `m64 0x0064` *kept for Dinah* 
+|MAGIC     |IDEN           |ISA  |ARCH        |CHIP       |BOARD      |
+|----------|---------------|-----|------------|-----------|------------
+|0x    0064|kept for Dinah |MISC |/           |/          |/          |
+|0x    8664|atx-x64-long64 |amd64|amd64       |/          |aTX        |
+|0x    8664|atx-x64-uefi64 |amd64|amd64       |/          |aTX        |
+|0x    8632|atx-x86-flap32 |ix86 |i586+       |/          |aTX        |
+|0x    2064|qemuvirt-a64   |armvN|/           |-cpu max   |QEMU-virt  |
+|0x    1032|qemuvirt-r32   |riscv|/           |/          |QEMU-virt  |
+|0x    1064|qemuvirt-r64   |riscv|/           |/          |QEMU-virt  |
+|0x10532064|raspi3-ac53    |armv7|cortex-a53  |BCM2837    |RasPi3-B   |
+|0x1A072032|stm32h743X-ac7m|armv7|cortex-m7   |STM32H743x |?          |
+|0x10072032|stm32mp13X-ac7 |armv7|cortex-a7   |STM32MP13x |ATK-DLMP135|
 
+
+* (MAGIC) ARM
+	* Cortex-A occupy 0x100020nn~0x199920nn
+	* Cortex-R is 0x1Bnn20nn
+* (ISA) x86&64 modes: real16 <=> flap32 <=> long64, uefi64. No IA-64
+* (board) aTX for IBM, ATX, ITX ...
+
+Kernel Name:
+- mx86.elf
+- mx64.elf
+- ux64.elf
+
+## Toolchain
+
+Build
+- `arm-none-eabi-* (Arm GNU Toolchain 12.2.MPACBTI-Rel1 (Build arm-12-mpacbti.34)) 12.2.1 20230214`
+
+Build Example:
+- `x86` Intel x86/64 (i586+)
+	- `make` -> mx32.elf
+	- `make install -f configs/atx-x86-flap32.make` for grub bootstraps
+- `x64` AMD64 (IA-32e)
+	- `arch=atx-x64-long64 make` -> mx64.elf
+	- `arch=atx-x64-uefi64 make` -> ux64.elf
+
+Emulate
+- VMware, VMBox, Bochs, QEMU-system-i386(9.2.4), TODO(Simics,Wel)

@@ -58,44 +58,26 @@ EFI_STATUS GetMemoryMap(struct MemoryMap* map) {
 		&map->descriptor_version);
 }
 
-#define casitem(x) case x: return L#x
+#define casitem(x) case x: return L ## #x;
 const CHAR16* GetMemoryTypeUnicode(EFI_MEMORY_TYPE type) {
 	switch (type) {
-	// casitem(EfiReservedMemoryType);
-	// casitem(EfiLoaderCode);
-	// casitem(EfiLoaderData);
-	// casitem(EfiBootServicesCode);
-	// casitem(EfiBootServicesData);
-	// casitem(EfiRuntimeServicesCode);
-	// casitem(EfiRuntimeServicesData);
-	// casitem(EfiConventionalMemory);
-	// casitem(EfiUnusableMemory);
-	// casitem(EfiACPIReclaimMemory);
-	// casitem(EfiACPIMemoryNVS);
-	// casitem(EfiMemoryMappedIO);
-	// casitem(EfiMemoryMappedIOPortSpace);
-	// casitem(EfiPalCode);
-	// casitem(EfiPersistentMemory);
-	// casitem(EfiMaxMemoryType);
-	// ---- Compiler does not support this macro ----
-    case EfiReservedMemoryType: return L"EfiReservedMemoryType";
-    case EfiLoaderCode: return L"EfiLoaderCode";
-    case EfiLoaderData: return L"EfiLoaderData";
-    case EfiBootServicesCode: return L"EfiBootServicesCode";
-    case EfiBootServicesData: return L"EfiBootServicesData";
-    case EfiRuntimeServicesCode: return L"EfiRuntimeServicesCode";
-    case EfiRuntimeServicesData: return L"EfiRuntimeServicesData";
-    case EfiConventionalMemory: return L"EfiConventionalMemory";
-    case EfiUnusableMemory: return L"EfiUnusableMemory";
-    case EfiACPIReclaimMemory: return L"EfiACPIReclaimMemory";
-    case EfiACPIMemoryNVS: return L"EfiACPIMemoryNVS";
-    case EfiMemoryMappedIO: return L"EfiMemoryMappedIO";
-    case EfiMemoryMappedIOPortSpace: return L"EfiMemoryMappedIOPortSpace";
-    case EfiPalCode: return L"EfiPalCode";
-    case EfiPersistentMemory: return L"EfiPersistentMemory";
-    case EfiMaxMemoryType: return L"EfiMaxMemoryType";
-	//
-    default: return L"InvalidMemoryType";
+	casitem(EfiReservedMemoryType);
+	casitem(EfiLoaderCode);
+	casitem(EfiLoaderData);
+	casitem(EfiBootServicesCode);
+	casitem(EfiBootServicesData);
+	casitem(EfiRuntimeServicesCode);
+	casitem(EfiRuntimeServicesData);
+	casitem(EfiConventionalMemory);
+	casitem(EfiUnusableMemory);
+	casitem(EfiACPIReclaimMemory);
+	casitem(EfiACPIMemoryNVS);
+	casitem(EfiMemoryMappedIO);
+	casitem(EfiMemoryMappedIOPortSpace);
+	casitem(EfiPalCode);
+	casitem(EfiPersistentMemory);
+	casitem(EfiMaxMemoryType);
+	default: return L"InvalidMemoryType";
   }
 }
 
@@ -351,7 +333,6 @@ _ESYM_C EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image_handle, EFI_SYSTEM_TABLE* Sy
 	expect(status, L"Failed to free pool");
 
 	Print(L"Kernel entry address: 0x%0lx\n", entry_addr);
-// entry_addr = 0x101000;
 
 	_Comment(exit bs) {
 		EFI_STATUS status;
@@ -364,10 +345,21 @@ _ESYM_C EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image_handle, EFI_SYSTEM_TABLE* Sy
 		}
 	}
 
+	// get acpi table for init LAPIC Timer
+	VOID* acpi_table = NULL;
+	for0 (i, SystemTable->NumberOfTableEntries) {
+		if (CompareGuid(&gEfiAcpiTableGuid,
+			&SystemTable->ConfigurationTable[i].VendorGuid)) {
+			acpi_table = SystemTable->ConfigurationTable[i].VendorTable;
+			break;
+		}
+	}
+
 	typedef void (*entry_t)(UefiData*);
 	UefiData uefi_data;
 	uefi_data.frame_buffer_config = config;
 	uefi_data.memory_map = memmap;
+	uefi_data.acpi_table = acpi_table;
 
 	((entry_t)entry_addr)(&uefi_data);
 

@@ -10,7 +10,7 @@ MKDIR = mkdir -p
 RM = rm -rf
 
 # (GNU)
-GPREF   = #riscv64-unknown-elf-
+GPREF   = x86_64-linux-gnu-
 CFLAGS += -nostdlib -fno-builtin -z norelro -nostdlib -fno-builtin
 CFLAGS += --static -mno-red-zone -m64  -mno-sse -mno-sse2 -mno-avx -mno-avx2 -msoft-float # for exception no XMM...
 CFLAGS += -I$(uincpath) -D_MCCA=0x8664 -D_UEFI -D_HIS_IMPLEMENT -D_DEBUG
@@ -77,6 +77,7 @@ cppfile=$(wildcard mecocoa/*.cpp) \
 	$(ulibpath)/cpp/Device/USB/USB-Device.cpp \
 	$(ulibpath)/cpp/Device/USB/xHCI/xHCI.cpp \
 	$(ulibpath)/cpp/Device/Keyboard.cpp \
+	$(ulibpath)/cpp/Device/ACPI.cpp \
 	$(ulibpath)/cpp/Device/Timer.cpp \
 	$(ulibpath)/cpp/Device/Mouse.cpp \
 	$(ulibpath)/cpp/Device/Video.cpp $(ulibpath)/cpp/Device/Video-VideoConsole.cpp \

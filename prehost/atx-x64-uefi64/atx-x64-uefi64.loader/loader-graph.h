@@ -25,6 +25,7 @@ struct MemoryMap {
 typedef struct {
 	struct FrameBufferConfig frame_buffer_config;
 	struct MemoryMap memory_map;
+	pureptr_t acpi_table;
 } UefiData;
 
 #endif

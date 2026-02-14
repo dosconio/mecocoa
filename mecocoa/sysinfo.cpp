@@ -17,7 +17,8 @@ char _buf[64];
 String ker_buf(_buf, byteof(_buf));
 extern uint32 _start_eax, _start_ebx;
 
-int* kernel_fail(loglevel_t serious) {
+int* kernel_fail(void* _serious, ...) {
+	Letvar(serious, loglevel_t, _IMM(_serious));
 	if (serious == _LOG_FATAL) {
 		outsfmt("\n\rKernel panic!\n\r");
 		__asm("cli; hlt");
