@@ -74,8 +74,8 @@ cppfile=$(wildcard mecocoa/*.cpp) \
 	$(ulibpath)/cpp/Witch/Form.cpp \
 	\
 	$(ulibpath)/cpp/Device/Bus/PCI.cpp \
-	$(ulibpath)/cpp/Device/USB/USB-Device.cpp \
-	$(ulibpath)/cpp/Device/USB/xHCI/xHCI.cpp \
+	$(wildcard $(ulibpath)/cpp/Device/USB/*.cpp) \
+	$(wildcard $(ulibpath)/cpp/Device/USB/xHCI/*.cpp) \
 	$(ulibpath)/cpp/Device/Keyboard.cpp \
 	$(ulibpath)/cpp/Device/ACPI.cpp \
 	$(ulibpath)/cpp/Device/Timer.cpp \

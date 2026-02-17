@@ -32,6 +32,14 @@ $Least Size = area_0 + area_1 = 0x06C00 + 0x78200 = 0x7E000$
 
 so 1M physical memory required at least.  
 
+## Kernel Mapping
+
+x86
+	0xFFC00.000 4M HugePage
+x64
+	0xFFFF.FFFFC...1G HugePage
+
+
 ### Variables
 
 Address: 0x500 ~ 0x5FF

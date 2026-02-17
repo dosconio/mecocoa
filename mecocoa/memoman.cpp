@@ -68,7 +68,8 @@ void* Memory::physical_allocate(usize siz) {
 void* (*uni::_physical_allocate)(stduint size) = 0;
 #endif
 
-void* Memory::allocate(stduint siz, stduint alignment) {
+void* Memory::allocate(stduint siz, stduint alignment, stduint boundary) {
+	(void)boundary;
 	if (!map_ready) return nullptr;
 	if (siz & 0xFFF) siz = (siz & ~_IMM(0xFFF)) + 0x1000;
 	void* ret = nil;

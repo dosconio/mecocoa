@@ -5,7 +5,7 @@ her-note: false
 
 # Driver
 
-## x86/64
+## x86/x64l
 
 - CRT Video (by BIOS)
 - Interrupt 8259 **PIC**
@@ -15,7 +15,11 @@ her-note: false
 - **KBD** Keyboard and **MOU** PS/2-Mouse
 - IDE Disk
 
+## x64u
+
 - Bus: **PCI**
+- LAPIC Timer and ACPI PM Timer
+- **KBD** USB-Keyboard and **MOU** USB-Mouse
 
 ## RV qemuvirt
 
@@ -25,3 +29,4 @@ her-note: false
 
 - Floppy
 - Network
+- APIC

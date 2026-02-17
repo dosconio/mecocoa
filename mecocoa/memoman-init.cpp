@@ -102,6 +102,7 @@ bool Memory::initialize(stduint eax, byte* ebx) {
 	// mempool (kernel heap)
 	const unsigned mempool_len0 = 0x4000;
 	mempool.Reset(Slice{ _IMM(mem.allocate(mempool_len0)), mempool_len0 });
+	uni_hostenv_allocator = &mempool;
 
 	// paging
 	//{TEMP}

@@ -14,50 +14,15 @@
 
 extern VideoConsole* vcon0;
 
-// ---- Interrupt
-struct InterruptVector {
-	enum Number {
-		xHCI = 0x40,
-	};
-};
-
-
-// ---- USB Driver
-alignas(64) uint8_t memory_pool[kMemoryPoolSize];
-uintptr_t alloc_ptr = reinterpret_cast<uintptr_t>(memory_pool);
-void* AllocMem(size_t size, unsigned int alignment, unsigned int boundary) {
-	if (alignment > 0) {
-		alloc_ptr = ceilAlign(alignment, alloc_ptr);
-	}
-	if (boundary > 0) {
-		auto next_boundary = ceilAlign(boundary, alloc_ptr); 
-		if (next_boundary < alloc_ptr + size) {
-			alloc_ptr = next_boundary;
-		}
-	}
-	if (uintptr_t(memory_pool) + kMemoryPoolSize < alloc_ptr + size) {
-		return nullptr;
-	}
-	auto p = alloc_ptr;
-	alloc_ptr += size;
-	return reinterpret_cast<void*>(p);
-}
-void* usb::HIDMouseDriver::operator new(size_t size) {
-	return AllocMem(sizeof(HIDMouseDriver), 0, 0);
-}
-
-void usb::HIDMouseDriver::operator delete(void* ptr) noexcept {
-	// FreeMem(ptr);
-}
-
 PCI pci;
-byte _BUF_xhc[sizeof(usb::xhci::Controller)];
+byte _BUF_xhc[sizeof(uni::device::SpaceUSB3::HostController)];
 
 alignas(16) byte kernel_stack[1024 * 1024];
 
 UefiData uefi_data;
 
 extern OstreamTrait* con0_out;
+extern Mempool mempool;
 
 // ---- Kernel
 
@@ -73,6 +38,8 @@ void mecocoa(const UefiData& uefi_data_ref)
 	_call_serious = kernel_fail;
 	
 	if (!Memory::initialize('UEFI', (byte*)(&uefi_data.memory_map))) HALT();
+	const unsigned mempool_len1 = 0x20000;
+	mempool.Append(Slice{ _IMM(mem.allocate(mempool_len1)), mempool_len1 });
 
 	
 	cons_init();
@@ -89,7 +56,7 @@ void mecocoa(const UefiData& uefi_data_ref)
 	InterruptControl APIC(_IMM(mem.allocate(256 * sizeof(gate_t))));
 	APIC.Reset(SegCo64, 0x00000000);
 
-	usb::xhci::Controller& xhc = *reinterpret_cast<usb::xhci::Controller*>(_BUF_xhc);
+	auto& xhc = *reinterpret_cast<uni::device::SpaceUSB3::HostController*>(_BUF_xhc);
 	if (!PCI_Init(pci)) {
 		plogerro("No devices on PCI or PCI init failed.");
 	}
@@ -100,16 +67,16 @@ void mecocoa(const UefiData& uefi_data_ref)
 	lapic_timer.Reset();
 	lapic_timer.Reset(lapic_timer.Frequency / SysTickFreq);
 	SysTimer::Initialize();
-	//[USB Mouse]
-	usb::HIDMouseDriver::default_observer = hand_mouse;
+	//[USB Mouse&Keyboard]
+	uni::device::SpaceUSB::HIDMouseDriver::default_observer = hand_mouse;
 	if (auto xhc_dev = Mouse_Init_USB(pci, &xhc)) {
 		ploginfo("xHC-USB-Mouse has been found: %[8H].%[8H].%[8H]", xhc_dev->bus, xhc_dev->device, xhc_dev->function);
 	}
 
 	tryUD();
 	// try priority_queue Dchain
-	SysTimer::Append(250, 1);
-	SysTimer::Append(100, 0);
+	// SysTimer::Append(250, 1);
+	// SysTimer::Append(100, 0);
 
 	pureptr_t ptr;
 	delete (ptr = new int);

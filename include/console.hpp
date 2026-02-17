@@ -62,6 +62,8 @@ extern bool ento_gui;
 void cons_init();
 
 void hand_mouse(MouseMessage mmsg);
+void hand_kboard(MouseMessage mmsg);
+
 
 #endif
 

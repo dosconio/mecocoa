@@ -69,4 +69,13 @@ int KeyboardBridge::out(const char* str, stduint len) {
 	return 0;
 }
 
+#ifdef _UEFI
+void hand_kboard(MouseMessage mmsg) {
+	// Message msg{Message::kKeyPush};
+	// msg.arg.keyboard.keycode = keycode;
+	// msg.arg.keyboard.ascii = keycode_map[keycode];
+	// msg_queue.push_back(msg);
+}
+#endif
+
 #endif

@@ -113,7 +113,7 @@ public:
 	static bool initialize(stduint eax, byte* ebx);
 	static void* physical_allocate(usize siz);
 public:// trait
-	virtual void* allocate(stduint size, stduint alignment = 0) override;
+	virtual void* allocate(stduint size, stduint alignment = 0, stduint boundary = 0) override;
 	virtual bool deallocate(void* ptr, stduint size = 0 _Comment(zero_for_block)) override;
 };
 extern Memory mem;
