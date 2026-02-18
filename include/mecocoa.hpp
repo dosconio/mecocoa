@@ -15,3 +15,8 @@ use crate uni;
 #include <c/proctrl/RISCV/riscv.h>
 #include "../include/qemuvirt-riscv.hpp"
 #endif
+
+// ---- handler ----
+#if _MCCA == 0x8664 && defined(_UEFI)
+extern InterruptControl IC;
+#endif

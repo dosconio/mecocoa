@@ -10,6 +10,10 @@
 #include <c/driver/timer.h>
 #include <c/driver/keyboard.h>
 
+#if _MCCA == 0x8664 && defined(_UEFI)
+InterruptControl IC = { nil };
+#endif
+
 #ifdef _ARC_x86 // x86:
 
 extern KeyboardBridge kbdbridge;

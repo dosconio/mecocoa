@@ -7,6 +7,8 @@
 #include <c/task.h>
 #include "syscall.hpp"
 
+void serv_sysmsg();
+
 struct MsgTimer {
 	stduint timeout;
 	stduint iden;
@@ -16,9 +18,11 @@ struct SysMessage {
 	enum Type {
 		RUPT_xHCI,
 		RUPT_TIMER,
+		RUPT_KBD,
 	} type;
 	union {
 		struct MsgTimer timer;
+		keyboard_event_t kbd_event;
 	} args;
 };
 extern uni::Queue<SysMessage> message_queue;

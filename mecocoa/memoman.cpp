@@ -182,6 +182,7 @@ _ESYM_C void* malloc(size_t size) {
 	return ret;
 }
 _ESYM_C void* calloc(size_t nmemb, size_t size) {
+	// ploginfo("calloc %u %u", nmemb, size);
 	void* ret = malloc(nmemb * size);
 	if (ret) MemSet(ret, 0, nmemb * size);
 	return ret;

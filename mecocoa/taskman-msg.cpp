@@ -6,6 +6,51 @@
 
 #include <c/task.h>
 
+#if _MCCA == 0x8664 && defined(_UEFI)
+extern byte _BUF_xhc[];
+#endif
+
+void _Comment(R0) serv_sysmsg() {
+	#if _MCCA == 0x8664 && defined(_UEFI)
+	while (true) {
+		IC.enAble(false);
+		// auto crt_tick = tick;
+		if (!message_queue.Count()) {
+			IC.enAble(true);
+			HALT();
+			continue;
+		}
+		SysMessage msg;
+		message_queue.Dequeue(msg);
+		IC.enAble(true);
+
+		auto& xhc = *reinterpret_cast<uni::device::SpaceUSB3::HostController*>(_BUF_xhc);
+		switch (msg.type) {
+		case SysMessage::RUPT_xHCI:
+			if (auto err = xhc.ProcessEvents()) {
+				plogerro("Error while ProcessEvent: %s at %s:%d", err.Name(), err.File(), err.Line());
+			}
+			break;
+		case SysMessage::RUPT_TIMER:
+			ploginfo("Timer %llu Rupt! tick = %llu", msg.args.timer.iden, msg.args.timer.timeout);
+			if (msg.args.timer.iden == 0)
+			{
+				IC.enAble(false);
+				SysTimer::Append(msg.args.timer.timeout + 100, 0);
+				IC.enAble(true);
+			}
+			break;
+		case SysMessage::RUPT_KBD:
+			ploginfo("Kbd %[32H]", msg.args.kbd_event);
+			break;
+		default:
+			plogerro("Unknown message type: %d", msg.type);
+			break;
+		}
+	}
+	#endif
+}
+
 #ifdef _ARC_x86 // x86:
 
 #define HARDRUPT 1
