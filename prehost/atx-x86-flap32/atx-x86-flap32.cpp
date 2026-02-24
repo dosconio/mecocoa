@@ -56,6 +56,8 @@ extern uint32 _start_eax, _start_ebx;
 _sign_entry() {
 	_call_serious = kernel_fail;
 	if (!Memory::initialize(_start_eax, (byte*)_start_ebx)) HALT();
+	const unsigned mempool_lenN = 0x20000;
+	mempool.Append(Slice{ _IMM(mem.allocate(mempool_lenN)), mempool_lenN });
 	cons_init();// located here, for  INT-10H may influence PIC
 	Cache_t::enAble();
 	Taskman::Initialize();

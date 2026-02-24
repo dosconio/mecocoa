@@ -4,7 +4,6 @@
 #include "../include/mecocoa.hpp"
 
 #include <c/consio.h>
-#include <c/mempool.h>
 
 _ESYM_C Handler_t FILE_ENTO, FILE_ENDO;
 

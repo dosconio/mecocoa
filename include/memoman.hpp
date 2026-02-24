@@ -5,6 +5,7 @@
 #define _STYLE_RUST
 #include <c/stdinc.h>
 #include <c/bitmap.h>
+#include <c/mempool.h>
 #include <c/system/paging.h>
 #include <cpp/string>
 #include <cpp/trait/MallocTrait.hpp>
@@ -86,6 +87,8 @@ _PACKED(struct) VideoInfoEntry {
 
 
 extern byte BSS_ENTO, BSS_ENDO;
+
+extern uni::Mempool mempool;
 
 #if _MCCA == 0x8632
 #define mem_area_exten_beg 0x00100000

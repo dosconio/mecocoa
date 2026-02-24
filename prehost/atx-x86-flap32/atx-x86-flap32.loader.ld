@@ -1,4 +1,4 @@
-ENTRY(_start) /* -e _start */
+ENTRY(multiboot_entry) /* -e _start */
 
 MEMORY
 {
@@ -13,7 +13,6 @@ SECTIONS
 		*(.data)
 		*(.note.gnu.build-id)
 		*(.got)
-		*(.init_array)
 		*(.eh_frame)
 	}> RAM1
 	.bss : {
@@ -23,5 +22,13 @@ SECTIONS
 	}> RAM1
 	.rodata : {*(.rodata)}> RAM1
 
+	/* C++ only */
+	. = ALIGN(8);
+	.init_array : {
+	__init_array_start = .;
+		KEEP(*(SORT(.init_array.*)))
+		KEEP(*(.init_array))
+	__init_array_end = .;
+	}> RAM1
 
 }

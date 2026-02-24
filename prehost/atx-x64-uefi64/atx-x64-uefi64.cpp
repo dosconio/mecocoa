@@ -21,7 +21,6 @@ alignas(16) byte kernel_stack[1024 * 1024];
 UefiData uefi_data;
 
 extern OstreamTrait* con0_out;
-extern Mempool mempool;
 
 // ---- Kernel
 

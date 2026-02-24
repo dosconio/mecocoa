@@ -6,6 +6,7 @@
 
 #include <c/driver/mouse.h>
 #include <c/driver/keyboard.h>
+#include <cpp/Witch/Control/Control-TextBox.hpp>
 #include "../include/console.hpp"
 
 
@@ -21,6 +22,10 @@ static void setLED() {
 }
 
 
+
+#ifdef _UEFI
+// uint32
+#elif (_MCCA) == 0x8632
 KeyboardBridge kbdbridge;
 int KeyboardBridge::out(const char* str, stduint len) {
 	// skip F4~F12,Q~Z,Menu,MAIN(except CapsLock,Ctrls,Shifts,Alts,Wins)
@@ -44,13 +49,13 @@ int KeyboardBridge::out(const char* str, stduint len) {
 			break;
 			// Ctrls(^), Shifts(-), Alts(+), Wins(~)
 		case 0x1D: case 0x1D + 0x80:// L-Ctrl
-			(last_E0 ? kbd_state.r_ctrl : kbd_state.l_ctrl) = !(ch & 0x80); break;
+			(last_E0 ? kbd_state.mod.r_ctrl : kbd_state.mod.l_ctrl) = !(ch & 0x80); break;
 		case 0x2A: case 0x2A + 0x80:// L-Shift
-			kbd_state.l_shift = !(ch & 0x80); break;
+			kbd_state.mod.l_shift = !(ch & 0x80); break;
 		case 0x36: case 0x36 + 0x80:// R-Shift
-			kbd_state.r_shift = !(ch & 0x80); break;
+			kbd_state.mod.r_shift = !(ch & 0x80); break;
 		case 0x38: case 0x38 + 0x80:// L-Alt
-			(last_E0 ? kbd_state.r_alt : kbd_state.l_alt) = !(ch & 0x80); break;
+			(last_E0 ? kbd_state.mod.r_alt : kbd_state.mod.l_alt) = !(ch & 0x80); break;
 			//
 			//{TODO} Wins
 			// Locks
@@ -68,8 +73,28 @@ int KeyboardBridge::out(const char* str, stduint len) {
 	}
 	return 0;
 }
+#endif
 
 #ifdef _UEFI
+extern const char key_map[256], key_map_shift[256];//{TEMP}
+extern uni::witch::control::TextBox* ptext_1;
+void sysmsg_kbd(keyboard_event_t kbd_event) {
+	if (!kbd_event.keycode) {
+		kbd_state.mod = kbd_event.mod;
+	}
+	else if (0) {
+		
+	}// locks
+	else {
+		auto ch = (kbd_event.mod.l_shift || kbd_event.mod.r_shift ? key_map_shift : key_map)[kbd_event.keycode];
+		if (kbd_event.method == keyboard_event_t::method_t::keydown)
+		{
+			// ploginfo("%c", ch);// only for ENUS-kbd
+			ptext_1->text << ch;
+			ptext_1->doshow(0);
+		}
+	}
+}
 void hand_kboard(keyboard_event_t  kmsg) {
 	SysMessage msg;
 	msg.type = SysMessage::RUPT_KBD;

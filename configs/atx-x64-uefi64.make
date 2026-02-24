@@ -86,7 +86,6 @@ cplfile=$(ulibpath)/c/mcore.c\
 	$(ulibpath)/c/debug.c \
 	$(wildcard $(ulibpath)/c/dnode/*.c) \
 	$(ulibpath)/c/driver/keyboard.c \
-	$(ulibpath)/c/console/conformat.c \
 	$(ulibpath)/c/data/font/font-8x5.c \
 	$(ulibpath)/c/data/font/font-16x8.c \
 	$(ulibpath)/c/ustring/astring/StrHeap.c \

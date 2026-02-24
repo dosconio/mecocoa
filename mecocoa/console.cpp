@@ -8,6 +8,8 @@
 #include <c/driver/keyboard.h>
 #include <cpp/Device/_Video.hpp>
 #include <cpp/Witch/Form.hpp>
+#include <cpp/Witch/Control/Control-Label.hpp>
+#include <cpp/Witch/Control/Control-TextBox.hpp>
 
 
 
@@ -106,9 +108,9 @@ static stduint tty_parse(stduint tty_id, byte keycode, keyboard_state_t state, O
 	else if (keycode < 0x80) { // KEYDOWN
 		byte c = _tab_keycode2ascii[keycode].ascii_usual;
 		if (Ranglin(c, 'a', 26))
-			c = (state.lock_caps ^ (state.l_shift || state.r_shift)) ?
+			c = (state.lock_caps ^ (state.mod.l_shift || state.mod.r_shift)) ?
 			_tab_keycode2ascii[keycode].ascii_shift : _tab_keycode2ascii[keycode].ascii_usual;
-		else c = (state.l_shift || state.r_shift) ?
+		else c = (state.mod.l_shift || state.mod.r_shift) ?
 			_tab_keycode2ascii[keycode].ascii_shift : _tab_keycode2ascii[keycode].ascii_usual;
 
 		if (c > 1)
@@ -173,12 +175,12 @@ void _Comment(R1) serv_cons_loop()
 
 		// Render the bottom ribbon
 		if (!ento_gui && current_screen_TTY == 0) {
-			Ribbon[0].attr = kbd_state.l_ctrl ? 0x70 : 0x07;
-			Ribbon[1].attr = kbd_state.l_shift ? 0x70 : 0x07;
-			Ribbon[2].attr = kbd_state.l_alt ? 0x70 : 0x07;
-			Ribbon[77].attr = kbd_state.r_alt ? 0x70 : 0x07;
-			Ribbon[78].attr = kbd_state.r_shift ? 0x70 : 0x07;
-			Ribbon[79].attr = kbd_state.r_ctrl ? 0x70 : 0x07;
+			Ribbon[0].attr = kbd_state.mod.l_ctrl ? 0x70 : 0x07;
+			Ribbon[1].attr = kbd_state.mod.l_shift ? 0x70 : 0x07;
+			Ribbon[2].attr = kbd_state.mod.l_alt ? 0x70 : 0x07;
+			Ribbon[77].attr = kbd_state.mod.r_alt ? 0x70 : 0x07;
+			Ribbon[78].attr = kbd_state.mod.r_shift ? 0x70 : 0x07;
+			Ribbon[79].attr = kbd_state.mod.r_ctrl ? 0x70 : 0x07;
 		}
 		// Process potential message
 		if (syscall(syscall_t::TMSG)) {
@@ -235,8 +237,11 @@ LayerManager global_layman;
 extern UefiData uefi_data;
 #endif
 
-::uni::Witch::Form form0;
+::uni::Witch::Form form0, form1;
 static const char form0_title_text[] = "Ciallo~>v<";
+static const char form1_title_text[] = "Test TextBox";
+
+uni::witch::control::TextBox* ptext_1;
 
 void cons_init() {
 	Bcons[0].Reset(bda->screen_columns, 24, _VIDEO_ADDR_BUFFER, 0 * 50); Bcons[0].setShowY(0, 24);
@@ -311,9 +316,27 @@ void cons_init() {
 	// [demo] window
 	if (1) {
 		Rectangle rect{ Point(200, 40), Size2(160, 80) };
+		// Label
+		auto plabel = new uni::witch::control::Label("QwQ~");
+		plabel->sheet_area = Rectangle(Point(0, 0), Size2(8 * 5, 16));
+		plabel->doshow(0);
+
 		new (&form0.Title) String((char*)form0_title_text, sizeof(form0_title_text));
+		form0.AppendControl(plabel);
 		form0.setSheet(global_layman, rect, (Color*)mem.allocate(rect.getArea() * sizeof(Color)));
 		global_layman.Append(&form0);
+	}
+	if (1) {
+		Rectangle rect{ Point(220, 140), Size2(160, 80) };
+		auto ptext = new uni::witch::control::TextBox();
+		ptext->sheet_area = Rectangle(Point(2, 2), Size2(8 * 18, 25));
+		ptext->doshow(0);
+		ptext_1 = ptext;
+
+		new (&form1.Title) String((char*)form1_title_text, sizeof(form1_title_text));
+		form1.AppendControl(ptext);
+		form1.setSheet(global_layman, rect, (Color*)mem.allocate(rect.getArea() * sizeof(Color)));
+		global_layman.Append(&form1);
 	}
 
 	// vcon0

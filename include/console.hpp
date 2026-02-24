@@ -21,7 +21,7 @@ public:\
 extern uni::LayerManager global_layman;
 #endif
 
-#if (_MCCA & 0xFF00) == 0x8600
+#if _MCCA == 0x8632
 struct KeyboardBridge : public OstreamTrait // // scan code set 1
 {
 	virtual int out(const char* str, stduint len) override;

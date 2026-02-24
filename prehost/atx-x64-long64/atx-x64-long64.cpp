@@ -12,6 +12,8 @@
 
 _ESYM_C void mecocoa() {
 	if (!Memory::initialize('ANIF', NULL)) HALT();
+	const unsigned mempool_lenN = 0x20000;
+	mempool.Append(Slice{ _IMM(mem.allocate(mempool_lenN)), mempool_lenN });
 	
 	cons_init();
 	//{} Cache_t::enAble();

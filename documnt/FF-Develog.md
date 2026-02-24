@@ -50,7 +50,7 @@ qemu-system
 🈚️ qemu-system-avr
 🈚️ qemu-system-cris
 🈚️ qemu-system-hppa
-✅ qemu-system-i386          atx-flap32
+✅ qemu-system-i386          atx-flap{uni&loader, grub}
 🈚️ qemu-system-loongarch64
 🈚️ qemu-system-m68k
 🈚️ qemu-system-microblaze
@@ -72,7 +72,7 @@ qemu-system
 🈚️ qemu-system-sparc
 🈚️ qemu-system-sparc64
 🈚️ qemu-system-tricore
-✅ qemu-system-x86_64        atx-(uefi,long)
+✅ qemu-system-x86_64        atx-(uefi,long{{uni,grub}&loader})
 🈚️ qemu-system-xtensa
 🈚️ qemu-system-xtensaeb
 ```

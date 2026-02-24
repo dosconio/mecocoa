@@ -48,7 +48,8 @@ build: clean lib $(cppobjs)
 	aasm prehost/$(arch)/atx-ladder.asm     -felf   -o $(uobjpath)/mcca-$(arch)/mcca-$(arch)-ladder.o -Iinclude/ -D_MCCA=0x8632
 	aasm prehost/$(arch)/atx-x86-loader.asm -felf   -o $(uobjpath)/mcca-$(arch)/mcca-$(arch)-elf64.o
 	@echo "MK $(arch) loader"
-	g++ -I$(uincpath) $(flag) -m32 prehost/$(arch)/$(arch).loader.cpp \
+	$(CX) prehost/$(arch)/grubhead.S -o $(uobjpath)/mcca-$(arch).grub.o
+	g++ -I$(uincpath) $(flag) -m32 $(uobjpath)/mcca-$(arch).grub.o prehost/$(arch)/$(arch).loader.cpp \
 		prehost/$(arch)/$(arch).auf.cpp $(uobjpath)/mcca-$(arch)/mcca-$(arch)-elf64.o $(uobjpath)/CGMin32/_ae_manage.o\
 		-o $(ubinpath)/$(elf_loader) -L$(ubinpath) -lm32d $(CXF) \
 		-T prehost/$(arch)/$(arch).loader.ld  \
@@ -58,7 +59,6 @@ build: clean lib $(cppobjs)
 	rm $(uobjpath)/mcca-$(arch)/mcca-$(arch)-elf64.o
 	#
 	@echo "MK $(arch)"
-	$(CX) prehost/$(arch)/grubhead.S -o $(uobjpath)/mcca-$(arch).grub.o
 	g++ -I$(uincpath) $(flag) -m32 $(uobjpath)/mcca-$(arch).grub.o $(ker_mod) prehost/$(arch)/$(arch).cpp prehost/$(arch)/$(arch).auf.cpp -o $(ubinpath)/$(elf_kernel) -L$(ubinpath) -lm32d $(CXF) \
 		-T prehost/$(arch)/$(arch).ld  \
 		-nostartfiles -O0 \

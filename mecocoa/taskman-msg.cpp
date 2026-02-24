@@ -5,11 +5,14 @@
 #include "../include/mecocoa.hpp"
 
 #include <c/task.h>
+#include <cpp/Witch/Control/Control-TextBox.hpp>
 
 #if _MCCA == 0x8664 && defined(_UEFI)
 extern byte _BUF_xhc[];
+extern uni::witch::control::TextBox* ptext_1;
 #endif
 
+void sysmsg_kbd(keyboard_event_t kbd_event);
 void _Comment(R0) serv_sysmsg() {
 	#if _MCCA == 0x8664 && defined(_UEFI)
 	while (true) {
@@ -41,7 +44,8 @@ void _Comment(R0) serv_sysmsg() {
 			}
 			break;
 		case SysMessage::RUPT_KBD:
-			ploginfo("Kbd %[32H]", msg.args.kbd_event);
+			// ploginfo("Kbd %[32H]", msg.args.kbd_event);
+			sysmsg_kbd(msg.args.kbd_event);
 			break;
 		default:
 			plogerro("Unknown message type: %d", msg.type);

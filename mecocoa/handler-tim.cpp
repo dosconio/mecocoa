@@ -8,6 +8,7 @@
 #include <cpp/interrupt>
 #include <cpp/Device/UART>
 #include <c/driver/timer.h>
+#include <c/delay.h>
 #include "../include/taskman.hpp"
 
 // ---- ---- Timer ---- ---- //
@@ -35,6 +36,14 @@ void SysTimer::Append(stduint timeout, stduint iden, _tocall_ft hand) {
 	// ploginfo("SysTimer::Append %u, now %u timers", timeout, TimerManager.Count());
 }
 
+#if _MCCA == 0x8664 && defined(_UEFI)
+
+void delay001ms(void) {
+	_TODO
+}
+#endif
+
+// ---- ---- Rupt ---- ---- //
 
 #if _MCCA == 0x8632
 

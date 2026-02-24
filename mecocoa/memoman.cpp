@@ -4,8 +4,6 @@
 #include "../include/mecocoa.hpp"
 // for x86, one slice should begin with 0x100000 (above F000:FFFF)
 
-#include <c/mempool.h>
-
 _ESYM_C Handler_t FILE_ENTO, FILE_ENDO;
 
 

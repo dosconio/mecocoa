@@ -45,7 +45,6 @@ cppfile=$(wildcard prehost/$(arch)/*.cpp) $(wildcard mecocoa/*.cpp) \
 cppobjs=$(patsubst %cpp, %o, $(cppfile))
 cplfile=$(ulibpath)/c/mcore.c \
 	$(ulibpath)/c/debug.c \
-	$(ulibpath)/c/console/conformat.c \
 
 cplobjs=$(patsubst %c, %o, $(cplfile))
 

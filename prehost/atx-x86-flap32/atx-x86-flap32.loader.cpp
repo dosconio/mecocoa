@@ -12,7 +12,7 @@
 #include "../../include/atx-x86-flap32.hpp"
 
 
-statin void clear_bss() { MemSet(&BSS_ENTO, &BSS_ENDO - &BSS_ENTO, 0); }
+void Memory::clear_bss() { MemSet(&BSS_ENTO, &BSS_ENDO - &BSS_ENTO, 0); }
 
 void temp_init() {
 	_logstyle = _LOG_STYLE_NONE;
@@ -117,7 +117,6 @@ void body() {
 
 _sign_entry() {
 	__asm("movl $0x70000, %esp");
-	clear_bss();
 	body();
 }
 
