@@ -5,6 +5,7 @@
 #include "../include/mecocoa.hpp"
 
 #include <c/task.h>
+#include <cpp/Witch/Control/Control-Label.hpp>
 #include <cpp/Witch/Control/Control-TextBox.hpp>
 
 #if _MCCA == 0x8664 && defined(_UEFI)
@@ -12,7 +13,8 @@ extern byte _BUF_xhc[];
 extern uni::witch::control::TextBox* ptext_1;
 #endif
 
-void sysmsg_kbd(keyboard_event_t kbd_event);
+extern NormalTaskContext task_b_ctx, task_kernel_ctx;
+extern void sysmsg_kbd(keyboard_event_t kbd_event);
 void _Comment(R0) serv_sysmsg() {
 	#if _MCCA == 0x8664 && defined(_UEFI)
 	while (true) {
@@ -20,6 +22,7 @@ void _Comment(R0) serv_sysmsg() {
 		// auto crt_tick = tick;
 		if (!message_queue.Count()) {
 			IC.enAble(true);
+			SwitchTaskContext(&task_b_ctx, &task_kernel_ctx);
 			HALT();
 			continue;
 		}
@@ -39,7 +42,7 @@ void _Comment(R0) serv_sysmsg() {
 			if (msg.args.timer.iden == 0)
 			{
 				IC.enAble(false);
-				SysTimer::Append(msg.args.timer.timeout + 100, 0);
+				SysTimer::Append(100, 0);
 				IC.enAble(true);
 			}
 			break;

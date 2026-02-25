@@ -110,6 +110,7 @@ public: // previously used
 	static usize areax_size;
 	#endif
 public:
+	static stduint total_memsize;
 	static BmMemoman* pagebmap;// 1 map for first 4G, 0x100000 pages / 8 bpB = 0x20000 bytes
 	public:
 	static void clear_bss();

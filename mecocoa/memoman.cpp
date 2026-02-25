@@ -10,6 +10,7 @@ _ESYM_C Handler_t FILE_ENTO, FILE_ENDO;
 #if (_MCCA & 0xFF00) == 0x8600
 Memory mem;
 BmMemoman* Memory::pagebmap = NULL;
+stduint Memory::total_memsize = 0;
 bool map_ready = false;
 
 Mempool mempool = {};

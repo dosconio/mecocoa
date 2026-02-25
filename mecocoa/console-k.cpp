@@ -82,6 +82,7 @@ void sysmsg_kbd(keyboard_event_t kbd_event) {
 	if (!kbd_event.keycode) {
 		kbd_state.mod = kbd_event.mod;
 	}
+	else if (0);
 	else if (0) {
 		
 	}// locks
@@ -89,8 +90,15 @@ void sysmsg_kbd(keyboard_event_t kbd_event) {
 		auto ch = (kbd_event.mod.l_shift || kbd_event.mod.r_shift ? key_map_shift : key_map)[kbd_event.keycode];
 		if (kbd_event.method == keyboard_event_t::method_t::keydown)
 		{
-			// ploginfo("%c", ch);// only for ENUS-kbd
-			ptext_1->text << ch;
+			// only for ENUS-kbd
+			if (ch == '\b') {
+				auto str = ptext_1->text.reflect();
+				if (*str) {// ASCIZ
+					ptext_1->text[-1] = 0;
+					ptext_1->text.Refresh();
+				}
+			}
+			else ptext_1->text << ch;
 			ptext_1->doshow(0);
 		}
 	}

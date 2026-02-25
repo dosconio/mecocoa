@@ -32,7 +32,7 @@ void SysTimer::Initialize() {
 }
 
 void SysTimer::Append(stduint timeout, stduint iden, _tocall_ft hand) {
-	TimerManager.Append(new MsgTimer{ timeout, iden, hand });
+	TimerManager.Append(new MsgTimer{ tick + timeout, iden, hand });
 	// ploginfo("SysTimer::Append %u, now %u timers", timeout, TimerManager.Count());
 }
 

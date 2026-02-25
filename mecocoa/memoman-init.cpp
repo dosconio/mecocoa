@@ -86,6 +86,7 @@ bool Memory::initialize(stduint eax, byte* ebx) {
 		bool b = Memory::pagebmap->bitof(i);
 		BM_FFFF.setof(i, b);
 	}
+	Memory::total_memsize = Memory::pagebmap->Count();
 	Memory::pagebmap->add_range(
 		floorAlign(0x1000, _IMM(&FILE_ENTO)) >> 12,
 		vaultAlign(0x1000, _IMM(&FILE_ENDO)) >> 12,

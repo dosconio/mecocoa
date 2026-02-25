@@ -241,6 +241,7 @@ extern UefiData uefi_data;
 static const char form0_title_text[] = "Ciallo~>v<";
 static const char form1_title_text[] = "Test TextBox";
 
+uni::witch::control::Label* plabel_1;
 uni::witch::control::TextBox* ptext_1;
 
 void cons_init() {
@@ -320,6 +321,7 @@ void cons_init() {
 		auto plabel = new uni::witch::control::Label("QwQ~");
 		plabel->sheet_area = Rectangle(Point(0, 0), Size2(8 * 5, 16));
 		plabel->doshow(0);
+		plabel_1 = plabel;
 
 		new (&form0.Title) String((char*)form0_title_text, sizeof(form0_title_text));
 		form0.AppendControl(plabel);

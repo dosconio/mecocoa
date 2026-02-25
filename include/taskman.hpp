@@ -3,6 +3,7 @@
 #define TASKMAN_HPP_
 
 #include <cpp/queue>
+#include <cpp/Device/_Timer.hpp>
 #include <c/system/paging.h>
 #include <c/task.h>
 #include "syscall.hpp"
@@ -26,11 +27,6 @@ struct SysMessage {
 	} args;
 };
 extern uni::Queue<SysMessage> message_queue;
-
-struct SysTimer {
-	static void Initialize();
-	static void Append(stduint timeout, stduint iden, _tocall_ft hand = 0);
-};
 
 // >= 1
 #ifndef PCU_CORES_MAX

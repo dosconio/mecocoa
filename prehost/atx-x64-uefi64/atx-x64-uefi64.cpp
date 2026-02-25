@@ -10,6 +10,7 @@
 #include <cpp/Device/ACPI.hpp>
 #include <cpp/Device/Bus/PCI.hpp>
 #include <cpp/Device/USB/xHCI/xHCI.hpp>
+#include <cpp/Witch/Control/Control-Label.hpp>
 
 extern VideoConsole* vcon0;
 
@@ -21,6 +22,22 @@ alignas(16) byte kernel_stack[1024 * 1024];
 UefiData uefi_data;
 
 extern OstreamTrait* con0_out;
+
+
+
+alignas(16) NormalTaskContext task_b_ctx, task_kernel_ctx;
+stduint _TEMP task_id = 0;
+
+void TaskB() {
+	ploginfo("TaskB");
+	while (1) {
+		auto crt_tick = tick;
+		extern uni::witch::control::Label* plabel_1;
+		plabel_1->text = String::newFormat("t%u", crt_tick);
+		plabel_1->doshow(0);
+		SwitchTaskContext(&task_kernel_ctx, &task_b_ctx);
+	}
+}
 
 // ---- Kernel
 
@@ -76,6 +93,22 @@ void mecocoa(const UefiData& uefi_data_ref)
 	// try priority_queue Dchain
 	SysTimer::Append(250, 1);
 	SysTimer::Append(100, 0);
+
+	// demo multitask
+	MemSet(&task_b_ctx, 0, sizeof(task_b_ctx));
+	task_b_ctx.IP = reinterpret_cast<uint64_t>(TaskB);
+	task_b_ctx.DI = 1;
+	task_b_ctx.SI = 42;
+	task_b_ctx.CR3 = getCR3();
+	task_b_ctx.FLAG = 0x202;
+	task_b_ctx.CS = SegCo64;
+	task_b_ctx.DS = SegData;
+	task_b_ctx.ES = SegData;
+	task_b_ctx.FS = SegData;
+	task_b_ctx.GS = SegData;
+	task_b_ctx.SS = SegData;
+	task_b_ctx.SP = (_IMM(new byte[1024] + 1024) & ~0xflu) - 8;
+	*reinterpret_cast<uint32_t*>(&task_b_ctx.floating_point_context[24]) = 0x1f80;
 
 	IC.enAble(true);
 

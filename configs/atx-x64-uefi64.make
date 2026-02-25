@@ -56,6 +56,7 @@ asmfile=$(ulibpath)/asm/x64/inst/ioport.asm \
 	$(ulibpath)/asm/x64/inst/manage.asm \
 	$(ulibpath)/asm/x64/inst/interrupt.asm \
 	$(ulibpath)/asm/x64/interrupt/ruptable.asm \
+	$(ulibpath)/asm/x64/task.asm \
 	$(ulibpath)/asm/x64/sysman.asm \
 	prehost/$(arch)/atx-x64.asm
 
