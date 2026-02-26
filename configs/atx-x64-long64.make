@@ -50,6 +50,7 @@ endef
 
 #
 asmfile=prehost/atx-x64-uefi64/atx-x64.asm\
+	$(ulibpath)/asm/x64/task.asm \
 	$(ulibpath)/asm/x64/cpuid.asm \
 	$(ulibpath)/asm/x64/sysman.asm \
 	$(ulibpath)/asm/x64/inst/ioport.asm \

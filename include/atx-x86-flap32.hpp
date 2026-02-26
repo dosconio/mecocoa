@@ -12,7 +12,7 @@ use crate uni;
 
 // ---- sysinfo
 
-int* kernel_fail(void* serious, ...);
+void kernel_fail(void* serious, ...);
 rostr text_brand();
 
 // ---- handler

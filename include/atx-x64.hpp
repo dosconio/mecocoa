@@ -4,6 +4,7 @@
 #include <cpp/unisym>
 using namespace uni;
 #include <c/datime.h>
+#include <c/dnode.h>
 #include <cpp/interrupt>
 #include <cpp/Device/_Video.hpp>
 #include "console.hpp"
@@ -16,7 +17,7 @@ _ESYM_C void tryUD();
 
 // ---- sysinfo
 
-int* kernel_fail(void* serious, ...);
+void kernel_fail(void* serious, ...);
 rostr text_brand();
 
 // ---- handler

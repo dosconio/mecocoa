@@ -41,6 +41,10 @@ void Taskman::Initialize(stduint cpuid) {
 
 #elif _MCCA == 0x8664
 
+static int ProcCmp(pureptr_t a, pureptr_t b) {
+	return treat<ProcessBlock>(((Dnode*)a)->offs).pid -
+		treat<ProcessBlock>(((Dnode*)b)->offs).pid;
+}
 void Taskman::Initialize(stduint cpuid) {
 	if (cpuid || PCU_CORES_TSS[0]) return; // already initialized
 	PCU_CORES = PCU_CORES_MAX;
@@ -52,11 +56,69 @@ void Taskman::Initialize(stduint cpuid) {
 		addr++;
 	}
 	mecocoa_global->gdt_ptr->tss.setRange(_IMM(PCU_CORES_TSS[0]), sizeof(TSS_t) - 1);
-	//{} Taskman::Append(&krnl_tss_cpu0);
+	min_available_left = chain.Append(AllocateTask());
 	loadTask(SegTSS0);
+	//
+	pcurrent[cpuid] = 0;// kernel
+	//
+	chain.Compare_f = ProcCmp;
+	min_available_pid = 1;
+
 }
 
 #endif
+#endif
+
+// ---- TaskRegister ----
+#if _MCCA == 0x8664
+auto Taskman::AllocateTask() -> ProcessBlock* {
+	// auto ppb = zalcof(ProcessBlock);
+	auto ppb = (ProcessBlock*)mem.allocate(sizeof(ProcessBlock), 4);
+	MemSet(ppb, 0, sizeof(ProcessBlock));
+	if (!ppb) {
+		plogerro("Taskman::AllocateTask() failed");
+		return nullptr;
+	}
+	return ppb;
+}
+
+ProcessBlock* Taskman::Create(void* entry, byte ring)
+{
+	auto ppb = AllocateTask();
+	if (!ppb) return nullptr;
+	ppb->pid = min_available_pid;
+	auto nod = chain.Append(ppb, false, min_available_left);
+	stduint las = min_available_pid;
+	Dnode* lasn = nod;
+	while (nod = nod->next) {
+		stduint _new = treat<ProcessBlock>(((Dnode*)nod->offs)->offs).pid;
+		if (_new == las + 1) {
+			lasn = nod;
+			las = _new;
+		}
+		else min_available_pid = las + 1;
+	}
+	auto& new_ctx = ppb->context;
+	new_ctx.IP = _IMM(entry);
+	new_ctx.DI = 0;// para0
+	new_ctx.SI = 0;// para1
+	new_ctx.CR3 = getCR3();
+	new_ctx.FLAG = 0x202;
+	new_ctx.CS = SegCo64;
+	new_ctx.DS = SegData;
+	new_ctx.ES = SegData;
+	new_ctx.FS = SegData;
+	new_ctx.GS = SegData;
+	new_ctx.SS = SegData;
+	auto stack = mem.allocate(DEFAULT_STACK_SIZE);
+	const stduint stack_top = _IMM(stack) + DEFAULT_STACK_SIZE;
+	new_ctx.SP = (stack_top & ~0xFlu) - 8;
+	new_ctx.RING = ring;
+	treat<uint32>(&new_ctx.floating_point_context[24]) = 0x1F80;// ban all MXCSR exception
+	ppb->stack_size = DEFAULT_STACK_SIZE;
+	ppb->stack_lineaddr = (byte*)stack _TEMP;
+	return ppb;
+}
 #endif
 
 #ifdef _ARC_x86 // x86:

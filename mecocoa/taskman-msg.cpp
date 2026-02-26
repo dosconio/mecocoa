@@ -13,8 +13,9 @@ extern byte _BUF_xhc[];
 extern uni::witch::control::TextBox* ptext_1;
 #endif
 
-extern NormalTaskContext task_b_ctx, task_kernel_ctx;
+
 extern void sysmsg_kbd(keyboard_event_t kbd_event);
+extern uni::Dchain TimerManager;
 void _Comment(R0) serv_sysmsg() {
 	#if _MCCA == 0x8664 && defined(_UEFI)
 	while (true) {
@@ -22,7 +23,7 @@ void _Comment(R0) serv_sysmsg() {
 		// auto crt_tick = tick;
 		if (!message_queue.Count()) {
 			IC.enAble(true);
-			SwitchTaskContext(&task_b_ctx, &task_kernel_ctx);
+			// SwitchTaskContext(&task_b_ctx, &task_kernel_ctx);
 			HALT();
 			continue;
 		}
@@ -38,7 +39,7 @@ void _Comment(R0) serv_sysmsg() {
 			}
 			break;
 		case SysMessage::RUPT_TIMER:
-			ploginfo("Timer %llu Rupt! tick = %llu", msg.args.timer.iden, msg.args.timer.timeout);
+			ploginfo("Timer %llu Rupt! tick = %llu, tim = %u", msg.args.timer.iden, msg.args.timer.timeout, TimerManager.Count());
 			if (msg.args.timer.iden == 0)
 			{
 				IC.enAble(false);
@@ -140,14 +141,6 @@ int msg_send(ProcessBlock* fo, stduint too, _Comment(vaddr) CommMsg* msg)
 				if (!crt) { plogerro("Loss of ProcessBlock since qsend %[32H]", too); return 1; }
 			}
 			crt->queue_send_queuenext = fo->getID();
-			//plogwarn(">>> %u (+=) %u->%u", crt->getID(), fo->getID(), too);
-			//{
-			//	for0(i, pnumber) {
-			//		Console.OutFormat("-- %u: (%u:%u) head %u, next %u, send_to_whom\n\r",
-			//			i, pblocks[i]->state, pblocks[i]->block_reason,
-			//			pblocks[i]->queue_send_queuehead, pblocks[i]->queue_send_queuenext);
-			//	}
-			//}
 		}
 		fo->queue_send_queuenext = nil;// keep this at tail
 	}

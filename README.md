@@ -67,6 +67,11 @@ Kernel Name:
 - mx64.elf
 - ux64.elf
 
+## Configuration
+
+- arch
+- **macro** PCU_CORES_MAX
+
 ## Toolchain
 
 Build

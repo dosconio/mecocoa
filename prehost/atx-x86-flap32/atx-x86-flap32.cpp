@@ -18,8 +18,6 @@
 #include <c/driver/RealtimeClock.h>
 #include "../../include/atx-x86-flap32.hpp"
 
-extern ProcessBlock* pblocks[16]; extern stduint pnumber;
-
 void mecfetch() {
 	const rostr blue = ento_gui ? "\xFE\xF8\xC8\x58" : "\xFF\x30";
 	const rostr pink = ento_gui ? "\xFE\xB8\xA8\xF8" : "\xFF\x50";

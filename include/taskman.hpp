@@ -33,7 +33,6 @@ extern uni::Queue<SysMessage> message_queue;
 #define PCU_CORES_MAX 16
 #endif
 
-class ProcessBlock;
 #if (_MCCA & 0xFF00) == 0x8600
 extern TSS_t* PCU_CORES_TSS[PCU_CORES_MAX];
 
@@ -43,18 +42,53 @@ extern TSS_t* PCU_CORES_TSS[PCU_CORES_MAX];
 #endif
 #endif
 
-class Taskman {
+#if (_MCCA & 0xFF00) == 0x8600
+
+#if _MCCA == 0x8664
+class _Comment(Kernel) ProcessBlock {
 public:
-	static ProcessBlock* pblocks[16];
+	alignas(16) NormalTaskContext context;
+	stduint pid;
+public:
+	stduint stack_size;
+	byte* stack_lineaddr;
+};
+#else
+
+class ProcessBlock;
+
+#endif
+
+#endif
+
+class Taskman {
+	static const stduint DEFAULT_STACK_SIZE = 0x1000;
+public://[TORM] x86 TEMP use
+	static ProcessBlock* pblocks[16];// all tasks
 	static stduint pnumber;
+
+public:
 	static stduint PCU_CORES;
+	static stduint pcurrent[PCU_CORES_MAX];
+public:// Gen.2
+	// Gen.1: fixed ProcessBlock* pblocks[16] and stduint pnumber
+	static Dchain chain;// [ArrayT] ordered by pid
+	static stduint min_available_pid;// in chain
+	static Dnode* min_available_left;// in chain
 public:
 	static auto
 		Initialize(stduint cpuid = 0) -> void;
-	static auto
+	static auto//[outdated]: update it 
 		Append(ProcessBlock* task) -> bool;
-	static auto
+	static auto//[outdated]: update it 
 		Locate(stduint taskid) -> ProcessBlock*;
+	static auto Schedule() -> void;// Timer using
+public:
+	static auto
+		Create(void* entry, byte ring) -> ProcessBlock*;// newProcess
+protected:
+	static auto// return a all-zero ProcessBlock
+		AllocateTask() -> ProcessBlock*;
 };
 
 

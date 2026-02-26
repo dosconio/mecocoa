@@ -2,12 +2,8 @@
 // AllAuthor: @ArinaMgk
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 #include "../include/mecocoa.hpp"
-
-#include <c/task.h>
-#include <cpp/interrupt>
 #include <c/format/ELF.h>
 #include <c/driver/keyboard.h>
-#include "../include/taskman.hpp"
 
 
 #if (_MCCA & 0xFF00) == 0x8600
@@ -16,8 +12,13 @@ TSS_t* PCU_CORES_TSS[PCU_CORES_MAX] = {};
 
 ProcessBlock* Taskman::pblocks[16] = {};
 stduint Taskman::pnumber = 0;
-stduint Taskman::PCU_CORES = 0;
 
+Dchain Taskman::chain = { DnodeHeapFreeSimple };;// ordered by pid
+stduint Taskman::min_available_pid;// in chain
+Dnode* Taskman::min_available_left;;
+
+stduint Taskman::PCU_CORES = 0;
+stduint Taskman::pcurrent[PCU_CORES_MAX];
 
 
 bool Taskman::Append(ProcessBlock* task) {
@@ -28,6 +29,23 @@ bool Taskman::Append(ProcessBlock* task) {
 ProcessBlock* Taskman::Locate(stduint taskid) {
 	return Taskman::pblocks[taskid];
 }
+
+#if _MCCA == 0x8664
+extern NormalTaskContext task_b_ctx, task_kernel_ctx;
+// auto Taskman::Schedule(void* timeout, ...)->decltype(Schedule(timeout))
+auto Taskman::Schedule()->decltype(Schedule())
+{
+	stduint cnt = Taskman::chain.Count();
+	if (cnt <= 1) return;
+	stduint cpuid = _TEMP 0;
+	auto cpu_old = Taskman::pcurrent[cpuid];
+	auto cpu_new = Taskman::pcurrent[cpuid];
+	cpu_new = (1 + cpu_new) % cnt;
+	Taskman::pcurrent[cpuid] = cpu_new;
+	SwitchTaskContext(&treat<ProcessBlock>(chain[cpu_new]->offs).context,
+		&treat<ProcessBlock>(chain[cpu_old]->offs).context);
+}
+#endif
 
 #ifdef _ARC_x86 // x86:
 

@@ -3,13 +3,10 @@
 // ModuTitle: Demonstration - ELF32-C++ x86 Bare-Metal
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 #include "../include/mecocoa.hpp"
-
-#include <c/dnode.h>
-#include <cpp/interrupt>
 #include <cpp/Device/UART>
 #include <c/driver/timer.h>
 #include <c/delay.h>
-#include "../include/taskman.hpp"
+
 
 // ---- ---- Timer ---- ---- //
 
@@ -17,22 +14,19 @@ volatile timeval_t system_time = {};
 
 volatile stduint tick = 0;
 
-static void TimerFree(pureptr_t inp) {
-	Letvar(nod, Dnode*, inp);
-	memf(nod->offs);
-}
 static int TimerCmp(pureptr_t a, pureptr_t b) {
 	return treat<MsgTimer>(((Dnode*)a)->offs).timeout -
 		treat<MsgTimer>(((Dnode*)b)->offs).timeout;
 }
-Dchain TimerManager = { TimerFree };
+Dchain TimerManager = { DnodeHeapFreeSimple };
 
 void SysTimer::Initialize() {
 	TimerManager.Compare_f = TimerCmp;
 }
 
 void SysTimer::Append(stduint timeout, stduint iden, _tocall_ft hand) {
-	TimerManager.Append(new MsgTimer{ tick + timeout, iden, hand });
+	auto n = TimerManager.Append(new MsgTimer{ tick + timeout, iden, hand });
+	if (!n) plogerro("SysTimer::Append failed");
 	// ploginfo("SysTimer::Append %u, now %u timers", timeout, TimerManager.Count());
 }
 
@@ -102,19 +96,22 @@ void Handint_RTC()
 __attribute__((interrupt, target("general-regs-only")))
 void Handint_LAPICT(InterruptFrame* frame) {
 	tick = tick + 1;// mecocoa_global->system_time.mic++
+	sendEOI();
 	while (TimerManager.Root()) {
-		auto& crt = treat<MsgTimer>(TimerManager.Root()->offs);
+		auto crt = treat<MsgTimer>(TimerManager.Root()->offs);
 		if (tick >= crt.timeout) {
+			TimerManager.Remove(TimerManager.Root());
 			if (crt.hand)
 				crt.hand((pureptr_t)crt.timeout, crt.iden);// realtime process
 			else {
 				message_queue.Enqueue(SysMessage{ SysMessage::RUPT_TIMER, crt });
 			}
-			TimerManager.Remove(TimerManager.Root());
 		}
 		else break;
 	}
-	sendEOI();
+	if (!(tick % 4)) {
+		Taskman::Schedule();
+	}// 25 Hz
 }
 #endif
 
