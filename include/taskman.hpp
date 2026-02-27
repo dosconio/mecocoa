@@ -63,9 +63,6 @@ class ProcessBlock;
 
 class Taskman {
 	static const stduint DEFAULT_STACK_SIZE = 0x1000;
-public://[TORM] x86 TEMP use
-	static ProcessBlock* pblocks[16];// all tasks
-	static stduint pnumber;
 
 public:
 	static stduint PCU_CORES;
@@ -78,9 +75,9 @@ public:// Gen.2
 public:
 	static auto
 		Initialize(stduint cpuid = 0) -> void;
-	static auto//[outdated]: update it 
+	static auto
 		Append(ProcessBlock* task) -> bool;
-	static auto//[outdated]: update it 
+	static auto
 		Locate(stduint taskid) -> ProcessBlock*;
 	static auto Schedule() -> void;// Timer using
 public:
@@ -113,6 +110,8 @@ struct _Comment(Kernel) ProcessBlock {
 	static stduint cpu0_rest;
 	static void* table_ready;
 	static void* table_pends;
+
+	stduint pid; // PID added for gen.2
 
 	//{} Mempool mempool;
 	uni::Paging paging;
@@ -170,16 +169,16 @@ struct _Comment(Kernel) ProcessBlock {
 	}
 
 	CommMsg* unsolved_msg;
-	stduint send_to_whom;// 0 for none (cannot comm with base-kernel)
-	stduint recv_fo_whom;// 0 for ANY
+	ProcessBlock* send_to_whom;// nullptr for none (cannot comm with base-kernel)
+	ProcessBlock* recv_fo_whom;// nullptr for ANY
 	stduint wait_rupt_no;// equals vector plus one. 0 for none, 1 for ZeroException...
 
 	// if B->A, C->A. Then
 	// A.qhead = B
 	// B.qnext = C
 	// C.qnext = none
-	stduint queue_send_queuehead;// 0 for none
-	stduint queue_send_queuenext;
+	ProcessBlock* queue_send_queuehead;// nullptr for none
+	ProcessBlock* queue_send_queuenext;
 
 	// File
 	FileDescriptor* pfiles[_TEMP 4];
@@ -189,7 +188,7 @@ struct _Comment(Kernel) ProcessBlock {
 	bool is_suspend = false;// to Disk
 	//{TODO} suspend information
 
-	stduint getID();
+	stduint getID() { return pid; }
 
 };
 

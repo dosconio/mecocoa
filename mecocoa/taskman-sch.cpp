@@ -10,9 +10,6 @@
 TSS_t* PCU_CORES_TSS[PCU_CORES_MAX] = {};
 #endif
 
-ProcessBlock* Taskman::pblocks[16] = {};
-stduint Taskman::pnumber = 0;
-
 Dchain Taskman::chain = { DnodeHeapFreeSimple };;// ordered by pid
 stduint Taskman::min_available_pid;// in chain
 Dnode* Taskman::min_available_left;;
@@ -22,12 +19,28 @@ stduint Taskman::pcurrent[PCU_CORES_MAX];
 
 
 bool Taskman::Append(ProcessBlock* task) {
-	pblocks[pnumber++] = task;
-	return pnumber - 1;
+	task->pid = min_available_pid;
+	auto nod = chain.Append(task, false, min_available_left);
+	stduint las = min_available_pid;
+	Dnode* lasn = nod;
+	while (nod = nod->next) {
+		stduint _new = ((ProcessBlock*)(nod->offs))->pid;
+		if (_new == las + 1) {
+			lasn = nod;
+			las = _new;
+		}
+		else break;
+	}
+	min_available_pid = las + 1;
+	return true;
 }
 
 ProcessBlock* Taskman::Locate(stduint taskid) {
-	return Taskman::pblocks[taskid];
+	for (auto nod = chain.Root(); nod; nod = nod->next) {
+		auto task = cast<ProcessBlock*>(nod->offs);
+		if (task->pid == taskid) return task;
+	}
+	return nullptr;
 }
 
 #if _MCCA == 0x8664
@@ -90,20 +103,37 @@ void switch_task() {
 	stduint last_proc = ProcessBlock::cpu0_task;
 	auto pb_src = TaskGet(ProcessBlock::cpu0_task);
 
+	Dnode* crt_node = nullptr;
+	for (auto nod = Taskman::chain.Root(); nod; nod = nod->next) {
+		if (((ProcessBlock*)(nod->offs))->pid == ProcessBlock::cpu0_task) {
+			crt_node = nod;
+			break;
+		}
+	}
+
 	stduint cpu0_new = ProcessBlock::cpu0_task;
 	do if (ProcessBlock::cpu0_rest) {
-		cpu0_new = (ProcessBlock::cpu0_rest + 1) % Taskman::pnumber;
+		crt_node = Taskman::chain.Root();
+		while (crt_node && ((ProcessBlock*)(crt_node->offs))->pid != ProcessBlock::cpu0_rest) crt_node = crt_node->next;
+		
+		crt_node = crt_node ? crt_node->next : Taskman::chain.Root();
+		if (!crt_node) crt_node = Taskman::chain.Root();
+
+		cpu0_new = crt_node ? ((ProcessBlock*)(crt_node->offs))->pid : 0;
 		ProcessBlock::cpu0_rest = 0;
 		if (cpu0_new == 0) {
-			cpu0_new++;
+			crt_node = crt_node->next ? crt_node->next : Taskman::chain.Root();
+			cpu0_new = crt_node ? ((ProcessBlock*)(crt_node->offs))->pid : 0;
 		}
 	}
 	else {
-		++cpu0_new %= Taskman::pnumber;
+		crt_node = crt_node ? crt_node->next : Taskman::chain.Root();
+		if (!crt_node) crt_node = Taskman::chain.Root();
+		cpu0_new = crt_node ? cast<ProcessBlock*>(crt_node->offs)->pid : 0;
 	}
-	while (cpu0_new == ProcessBlock::cpu0_task || (TaskGet(cpu0_new)->state != PBS::Ready && TaskGet(cpu0_new)->state != PBS::Uninit));
+	while (cpu0_new == ProcessBlock::cpu0_task || (cast<ProcessBlock*>(crt_node->offs)->state != PBS::Ready && cast<ProcessBlock*>(crt_node->offs)->state != PBS::Uninit));
 	ProcessBlock::cpu0_task = cpu0_new;
-	auto pb_des = TaskGet(ProcessBlock::cpu0_task);
+	auto pb_des = cast<ProcessBlock*>(crt_node->offs);
 
 	if (pb_des->state == PBS::Uninit) pb_des->state = PBS::Ready;
 	if ((pb_src->state == PBS::Running) && (pb_des->state == PBS::Ready)) {
@@ -111,7 +141,7 @@ void switch_task() {
 		pb_des->state = PBS::Running;
 	}
 	else {
-		printlog(_LOG_FATAL, "task switch error (PID%u, State%u, PCnt%u).", pb_des->getID(), _IMM(pb_des->state), Taskman::pnumber);
+		printlog(_LOG_FATAL, "task switch error (PID%u, State%u, PCnt%u).", pb_des->getID(), _IMM(pb_des->state), Taskman::chain.Count());
 	}
 	task_switch_enable = true;//{TODO} Unlock
 	jmpTask(T_pid2tss(ProcessBlock::cpu0_task));

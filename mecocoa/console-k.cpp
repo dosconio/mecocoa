@@ -21,88 +21,124 @@ static void setLED() {
 	KbdSetLED((_IMM(kbd_state.lock_caps) << 2) | (_IMM(kbd_state.lock_number) << 1) | _IMM(kbd_state.lock_scroll));
 }
 
-
-
 #ifdef _UEFI
 // uint32
 #elif (_MCCA) == 0x8632
+extern const char key_map[256], key_map_shift[256];
 KeyboardBridge kbdbridge;
 int KeyboardBridge::out(const char* str, stduint len) {
-	// skip F4~F12,Q~Z,Menu,MAIN(except CapsLock,Ctrls,Shifts,Alts,Wins)
-	// skip PgUp, PgDn.  BUT PrtSc, ScrollLock, Pause, Insert, Home, Delete, End
-	// skip Arrows, PadKeys
 	static bool last_E0 = false;
+	extern const byte key_ps2set1_usb[128];
+	extern const uint8_t key_ps2set1_usb_E0[128];
+
 	for0(i, len) {
-		switch (byte ch = str[i]) {
-		// TTYs
-		case 0x01:
-			// bcons[0]->doshow(0); // TTY0 ESC
-			break;
-		case 0x3B:
-			// bcons[1]->doshow(0); // TTY1 F1
-			break;
-		case 0x3C:
-			// bcons[2]->doshow(0); // TTY2 F2
-			break;
-		case 0x3D:
-			// bcons[3]->doshow(0); // TTY3 F3
-			break;
-			// Ctrls(^), Shifts(-), Alts(+), Wins(~)
-		case 0x1D: case 0x1D + 0x80:// L-Ctrl
-			(last_E0 ? kbd_state.mod.r_ctrl : kbd_state.mod.l_ctrl) = !(ch & 0x80); break;
-		case 0x2A: case 0x2A + 0x80:// L-Shift
-			kbd_state.mod.l_shift = !(ch & 0x80); break;
-		case 0x36: case 0x36 + 0x80:// R-Shift
-			kbd_state.mod.r_shift = !(ch & 0x80); break;
-		case 0x38: case 0x38 + 0x80:// L-Alt
-			(last_E0 ? kbd_state.mod.r_alt : kbd_state.mod.l_alt) = !(ch & 0x80); break;
-			//
-			//{TODO} Wins
-			// Locks
-		case 0x3A:// CapsLock
-			kbd_state.lock_caps = !kbd_state.lock_caps; setLED(); break;
-		case 0x45:// NumLock
-			kbd_state.lock_number = !kbd_state.lock_number; setLED(); break;
-		case 0x46:// ScrollLock
-			kbd_state.lock_scroll = !kbd_state.lock_scroll; setLED(); break;
-		default:
-			Bcons[current_screen_TTY].input_queue.OutChar(ch);
-			break;
+		byte ch = str[i];
+		if (ch == 0xE0) {
+			last_E0 = true;
+			continue;
 		}
-		last_E0 = ((byte)str[i] == 0xE0);
+
+		keyboard_event_t event = {};
+		event.mod = kbd_state.mod;
+		event.method = (ch & 0x80) ? keyboard_event_t::method_t::keyup : keyboard_event_t::method_t::keydown;
+		
+		byte scancode = ch & 0x7F;
+		byte vkc = 0;
+
+		if (last_E0) {
+			vkc = key_ps2set1_usb_E0[scancode];
+			last_E0 = false;
+		} else {
+			vkc = key_ps2set1_usb[scancode];
+		}
+
+		if (vkc) {
+			event.keycode = vkc;
+			// Update Modifiers Inline
+			if (vkc >= 0xE0 && vkc <= 0xE7) {
+				byte bit = 1 << (vkc - 0xE0);
+				if (event.method == keyboard_event_t::method_t::keydown) {
+					kbd_state.mod_val |= bit;
+				} else {
+					kbd_state.mod_val &= ~bit;
+				}
+				event.mod = kbd_state.mod;
+			}
+			
+			// x86 Routing Implementation Native to Bare-Metal
+			if (event.method == keyboard_event_t::method_t::keydown && event.keycode == 0x39) { // CapsLock
+				kbd_state.lock_caps = !kbd_state.lock_caps; setLED();
+			}
+			else if (event.method == keyboard_event_t::method_t::keydown && event.keycode == 0x53) { // NumLock
+				kbd_state.lock_number = !kbd_state.lock_number; setLED();
+			}
+			else if (event.method == keyboard_event_t::method_t::keydown && event.keycode == 0x47) { // ScrollLock
+				kbd_state.lock_scroll = !kbd_state.lock_scroll; setLED();
+			}
+			else if (event.method == keyboard_event_t::method_t::keydown) {
+				auto ascii_ch = (kbd_state.mod.l_shift || kbd_state.mod.r_shift ? key_map_shift : key_map)[event.keycode];
+				if (!ascii_ch && kbd_state.lock_number && event.keycode >= 0x59 && event.keycode <= 0x63) {
+					ascii_ch = key_map_shift[event.keycode];
+				}
+
+				BareConsole* ttycon = &Bcons[current_screen_TTY];
+				if (event.keycode == 0x4B && ttycon->crtline > 0) { // PgUp -> PageUp VKC
+					ttycon->auto_incbegaddr = 0;
+					ttycon->setStartLine(--ttycon->crtline + ttycon->topline);
+				}
+				else if (event.keycode == 0x4E && ttycon->crtline < ttycon->area_total.y - ttycon->area_show.height) { // PgDn -> PageDown VKC
+					ttycon->auto_incbegaddr = 0;
+					ttycon->setStartLine(++ttycon->crtline + ttycon->topline);
+				}
+				else if (ascii_ch) {
+					ttycon->input_queue.OutChar(ascii_ch);
+				}
+			}
+		}
 	}
 	return 0;
 }
 #endif
 
 #ifdef _UEFI
-extern const char key_map[256], key_map_shift[256];//{TEMP}
+extern const char key_map[256], key_map_shift[256];
 extern uni::witch::control::TextBox* ptext_1;
+
 void sysmsg_kbd(keyboard_event_t kbd_event) {
 	if (!kbd_event.keycode) {
 		kbd_state.mod = kbd_event.mod;
 	}
-	else if (0);
-	else if (0) {
+	else if (kbd_event.method == keyboard_event_t::method_t::keydown && kbd_event.keycode == 0x39) { // CapsLock
+		kbd_state.lock_caps = !kbd_state.lock_caps; setLED();
+	}
+	else if (kbd_event.method == keyboard_event_t::method_t::keydown && kbd_event.keycode == 0x53) { // NumLock
+		kbd_state.lock_number = !kbd_state.lock_number; setLED();
+	}
+	else if (kbd_event.method == keyboard_event_t::method_t::keydown && kbd_event.keycode == 0x47) { // ScrollLock
+		kbd_state.lock_scroll = !kbd_state.lock_scroll; setLED();
+	}
+	else if (kbd_event.method == keyboard_event_t::method_t::keydown) {
+		auto ch = (kbd_state.mod.l_shift || kbd_state.mod.r_shift ? key_map_shift : key_map)[kbd_event.keycode];
+		if (!ch && kbd_state.lock_number && kbd_event.keycode >= 0x59 && kbd_event.keycode <= 0x63) {
+			// NumPad adjustments
+			ch = key_map_shift[kbd_event.keycode];
+		}
 		
-	}// locks
-	else {
-		auto ch = (kbd_event.mod.l_shift || kbd_event.mod.r_shift ? key_map_shift : key_map)[kbd_event.keycode];
-		if (kbd_event.method == keyboard_event_t::method_t::keydown)
-		{
-			// only for ENUS-kbd
-			if (ch == '\b') {
+		// UEFI GUI specific implementation
+		if (ch == '\b') {
+			if (ptext_1) {
 				auto str = ptext_1->text.reflect();
-				if (*str) {// ASCIZ
+				if (*str) {
 					ptext_1->text[-1] = 0;
 					ptext_1->text.Refresh();
 				}
 			}
-			else ptext_1->text << ch;
-			ptext_1->doshow(0);
 		}
+		else if (ptext_1 && ch) ptext_1->text << ch;
+		if (ptext_1) ptext_1->doshow(0);
 	}
 }
+
 void hand_kboard(keyboard_event_t  kmsg) {
 	SysMessage msg;
 	msg.type = SysMessage::RUPT_KBD;

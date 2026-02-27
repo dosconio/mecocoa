@@ -34,6 +34,7 @@ void Taskman::Initialize(stduint cpuid) {
 		// Type = 10x1 + L=0 +  D/B=0 + 16B  64-bit TSS
 		//             + L=1 OR D/B=1       32-bit TSS
 		mecocoa_global->gdt_ptr->tss.setRange(_IMM(PCU_CORES_TSS[0]), sizeof(TSS_t) - 1);
+		min_available_pid = 0;
 		Taskman::Append(&krnl_tss_cpu0);
 		loadTask(SegTSS0);
 	}
@@ -86,18 +87,7 @@ ProcessBlock* Taskman::Create(void* entry, byte ring)
 {
 	auto ppb = AllocateTask();
 	if (!ppb) return nullptr;
-	ppb->pid = min_available_pid;
-	auto nod = chain.Append(ppb, false, min_available_left);
-	stduint las = min_available_pid;
-	Dnode* lasn = nod;
-	while (nod = nod->next) {
-		stduint _new = treat<ProcessBlock>(((Dnode*)nod->offs)->offs).pid;
-		if (_new == las + 1) {
-			lasn = nod;
-			las = _new;
-		}
-		else min_available_pid = las + 1;
-	}
+	Append(ppb);
 	auto& new_ctx = ppb->context;
 	new_ctx.IP = _IMM(entry);
 	new_ctx.DI = 0;// para0
@@ -508,11 +498,14 @@ static stduint task_fork(ProcessBlock* fo)
 
 /* dump
 
-for0(i, pnumber) {
-	Console.OutFormat("-- %u: (%u:%u) head %u, next %u, send_to_whom\n\r",
-		i, pblocks[i]->state, pblocks[i]->block_reason,
-		pblocks[i]->queue_send_queuehead, pblocks[i]->queue_send_queuenext);
-}
+	auto nod = Taskman::chain.root_node;
+	while (nod) {
+		auto pblock = (ProcessBlock*)nod->offs;
+		Console.OutFormat("-- %u: (%u:%u) head %u, next %u, send_to_whom\n\r",
+			pblock->pid, pblock->state, pblock->block_reason,
+			pblock->queue_send_queuehead, pblock->queue_send_queuenext);
+		nod = nod->next;
+	}
 break;
 
 */
@@ -562,28 +555,37 @@ static void task_exit(stduint pid, stduint status)
 		p->state = PBS::Hanging;
 	}
 	// if the proc has any child, make INIT the new parent, (or kill all the children >_<)
-	for1(i, Taskman::pnumber - 1) if (auto taski = TaskGet(i)) if (T_tss2pid(taski->TSS.LastTSS) == pid) {
-		taski->TSS.LastTSS = T_pid2tss(Task_Init);
-		if (is_waiting(TaskGet(Task_Init)) && taski->state == PBS::Hanging) {
-			// cast<stduint>(pparent->block_reason) &= ~_IMM(ProcessBlock::BlockReason::BR_Waiting);
-			pparent->Unblock(ProcessBlock::BlockReason::BR_Waiting);
-			syssend(Task_Init, &args, sizeof(args));
-			cleanup(i);
+	auto nod = Taskman::chain.Root();
+	while (nod) {
+		auto taski = (ProcessBlock*)nod->offs;
+		if (taski->pid && T_tss2pid(taski->TSS.LastTSS) == pid) {
+			taski->TSS.LastTSS = T_pid2tss(Task_Init);
+			if (is_waiting(TaskGet(Task_Init)) && taski->state == PBS::Hanging) {
+				// cast<stduint>(pparent->block_reason) &= ~_IMM(ProcessBlock::BlockReason::BR_Waiting);
+				pparent->Unblock(ProcessBlock::BlockReason::BR_Waiting);
+				syssend(Task_Init, &args, sizeof(args));
+				cleanup(taski->pid);
+			}
 		}
+		nod = nod->next;
 	}
 }
 
 static stduint task_wait(stduint pid, stduint* usrarea_state)
 {
 	stduint children = 0;
-	for1(i, Taskman::pnumber - 1) if (auto taski = TaskGet(i)) if (T_tss2pid(taski->TSS.LastTSS) == pid) {
-		children++;
-		if (taski->state == ProcessBlock::State::Hanging) {
-			stduint args[2] = { pid, taski->exit_status };
-			cleanup(i);
-			children = i;
-			syssend(pid, args, sizeof(args));// return 0
-			return i;
+	for(auto nod = Taskman::chain.Root(); nod; nod = nod->next) {
+		auto taski = (ProcessBlock*)nod->offs;
+		if (taski->pid && T_tss2pid(taski->TSS.LastTSS) == pid) {
+			children++;
+			if (taski->state == ProcessBlock::State::Hanging) {
+				stduint args[2] = { pid, taski->exit_status };
+				stduint child_pid = taski->pid;
+				cleanup(child_pid);
+				children = child_pid;
+				syssend(pid, args, sizeof(args));// return 0
+				return child_pid;
+			}
 		}
 	}
 	if (children) {// no child is HANGING
@@ -679,17 +681,6 @@ stduint task_exec(stduint pid, void* fullpath, void* argstack, stduint stacklen)
 */
 	return 0;
 }
-
-
-
-
-
-stduint ProcessBlock::getID()
-{
-	for0a(i, Taskman::pblocks) if(Taskman::pblocks[i] == this) return i;
-	return 0;
-}
-
 
 
 

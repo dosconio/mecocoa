@@ -67,7 +67,7 @@ void rupt_proc(stduint pid, stduint rupt_no)
 {
 	auto task = TaskGet(pid);
 	if ((_IMM(task->block_reason) & _IMM(ProcessBlock::BlockReason::BR_RecvMsg)) &&
-		(task->recv_fo_whom == ANYPROC || task->recv_fo_whom == INTRUPT)) {
+		((stduint)task->recv_fo_whom == ANYPROC || (stduint)task->recv_fo_whom == INTRUPT)) {
 		// ploginfo("INT-MSG: RUPT-PROC");
 		CommMsg tmp_msg{ 0 };
 		tmp_msg.type = HARDRUPT;
@@ -88,12 +88,12 @@ static bool msg_send_will_deadlock(ProcessBlock* fo, ProcessBlock* to)
 	ProcessBlock* crt = to;
 	while (true) {
 		if (crt->block_reason == ProcessBlock::BR_SendMsg) {
-			if (crt->send_to_whom == fo->getID()) {
+			if (crt->send_to_whom == fo) {
 				plogerro("deadlock %[32H]<-...->%[32H]", fo->getID(), crt->getID());
 				return true;
 			}
 			if (!crt->send_to_whom) break;
-			crt = TaskGet(crt->send_to_whom);
+			crt = crt->send_to_whom;
 		}
 		else break;
 	}
@@ -111,7 +111,7 @@ int msg_send(ProcessBlock* fo, stduint too, _Comment(vaddr) CommMsg* msg)
 	}
 
 	if ((_IMM(to->block_reason) & _IMM(ProcessBlock::BR_RecvMsg)) &&
-		(to->recv_fo_whom == fo->getID() || to->recv_fo_whom == ANYPROC)) {
+		(to->recv_fo_whom == fo || (stduint)to->recv_fo_whom == ANYPROC)) {
 		// assert to.unsolved_msg && msg
 		stduint leng = *(stduint*)fo->paging[_IMM(&msg->data.length)];
 		CommMsg* msg_fo = (CommMsg*)fo->paging[_IMM(msg)];
@@ -124,25 +124,25 @@ int msg_send(ProcessBlock* fo, stduint too, _Comment(vaddr) CommMsg* msg)
 		msg_to->type = msg_fo->type;
 		msg_to->src = fo->getID();
 		to->unsolved_msg = NULL;
-		to->recv_fo_whom = nil;
+		to->recv_fo_whom = nullptr;
 		to->Unblock(ProcessBlock::BR_RecvMsg);
 		// assert fo & to: block_reason, unsolved_msg, recv_fo_whom, send_to_whom
 	}
 	else {
 		fo->Block(ProcessBlock::BR_SendMsg);
-		fo->send_to_whom = too;// to->getID();
+		fo->send_to_whom = to;
 		if (fo->unsolved_msg) plogwarn("unsolved_msg when send");
 		fo->unsolved_msg = msg;
 		// proc sending queue
-		if (!to->queue_send_queuehead) to->queue_send_queuehead = fo->getID(); else {
-			ProcessBlock* crt = TaskGet(to->queue_send_queuehead);
+		if (!to->queue_send_queuehead) to->queue_send_queuehead = fo; else {
+			ProcessBlock* crt = to->queue_send_queuehead;
 			while (crt->queue_send_queuenext) {
-				crt = TaskGet(crt->queue_send_queuenext);
+				crt = crt->queue_send_queuenext;
 				if (!crt) { plogerro("Loss of ProcessBlock since qsend %[32H]", too); return 1; }
 			}
-			crt->queue_send_queuenext = fo->getID();
+			crt->queue_send_queuenext = fo;
 		}
-		fo->queue_send_queuenext = nil;// keep this at tail
+		fo->queue_send_queuenext = nullptr;// keep this at tail
 	}
 	return 0;
 }
@@ -161,40 +161,39 @@ int msg_recv(ProcessBlock* to, stduint foo, _Comment(vaddr) CommMsg* msg)
 	}
 	bool determined = false;
 	ProcessBlock* prev = nullptr;
+	ProcessBlock* fo = nullptr;
 	if (foo == ANYPROC) {
 		if (to->queue_send_queuehead) {
-			foo = to->queue_send_queuehead;
+			fo = to->queue_send_queuehead;
+			foo = fo->getID();
 			determined = true;
 		}
 	}
 	else {
 		// ploginfo("%u -> %u", foo, to->getID());
-		ProcessBlock* fo = TaskGet(foo);
+		fo = TaskGet(foo);
 		if (fo->block_reason == ProcessBlock::BR_SendMsg &&
-			fo->send_to_whom == to->getID()) {
-			ProcessBlock* crt = TaskGet(to->queue_send_queuehead);
-			while (crt->getID()) {
-				if (crt->getID() == foo) {
-					// foo = crt->getID();
+			fo->send_to_whom == to) {
+			ProcessBlock* crt = to->queue_send_queuehead;
+			while (crt) {
+				if (crt == fo) {
 					determined = true; break;
 				}
 				prev = crt;
-				if (!crt->queue_send_queuenext) break;
-				crt = TaskGet(crt->queue_send_queuenext);
+				crt = crt->queue_send_queuenext;
 			}
 		}
 	}
 
 	if (determined) {
-		ProcessBlock* fo = TaskGet(foo);
-		if (foo == to->queue_send_queuehead) {
+		if (fo == to->queue_send_queuehead) {
 			to->queue_send_queuehead = fo->queue_send_queuenext;
-			fo->queue_send_queuenext = nil;
+			fo->queue_send_queuenext = nullptr;
 		}
 		else {
 			if (!prev) { plogerro("!prev in %s", __FUNCIDEN__); return 1; }
 			asserv(prev)->queue_send_queuenext = fo->queue_send_queuenext;// A->[B]->C => A->C
-			fo->queue_send_queuenext = nil;
+			fo->queue_send_queuenext = nullptr;
 		}
 		//
 		CommMsg* msg_fo = (CommMsg*)fo->paging[_IMM(fo->unsolved_msg)];
@@ -210,7 +209,7 @@ int msg_recv(ProcessBlock* to, stduint foo, _Comment(vaddr) CommMsg* msg)
 		msg_to->type = msg_fo->type;
 		msg_to->src = foo;
 		fo->unsolved_msg = NULL;
-		fo->send_to_whom = nil;
+		fo->send_to_whom = nullptr;
 		fo->Unblock(ProcessBlock::BR_SendMsg);
 	}
 	else { // block self to wait for msg
@@ -218,7 +217,7 @@ int msg_recv(ProcessBlock* to, stduint foo, _Comment(vaddr) CommMsg* msg)
 		to->Block(ProcessBlock::BR_RecvMsg);
 		if (to->unsolved_msg) plogwarn("pid%u, unsolved_msg when recv", to->getID());
 		to->unsolved_msg = msg;
-		to->recv_fo_whom = foo;
+		to->recv_fo_whom = (foo == ANYPROC || foo == INTRUPT) ? (ProcessBlock*)foo : TaskGet(foo);
 	}
 	return 0;
 }

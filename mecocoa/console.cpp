@@ -24,7 +24,7 @@ bool Cursor::mouse_btnr_dn = false;
 // ---- ---- TTY ---- ----
 
 // each barecon: ----
-static bool last_E0s[TTY_NUMBER] = { false, false, false, false };
+
 // each con:
 typedef char innQueueBuf[64];
 static innQueueBuf _BUF_innQueues[TTY_NUMBER];
@@ -78,58 +78,6 @@ void blink2() {
 //// ---- ---- DYNAMIC CORE ---- ---- ////
 #ifdef _ARC_x86 // x86:
 
-static stduint tty_parse(stduint tty_id, byte keycode, keyboard_state_t state, OstreamTrait* ttyout) { // // scan code set 1
-	BareConsole* ttycon = &Bcons[tty_id];
-	// OstreamTrait* ttyout = LocateTTY(tty_id);
-	if (last_E0s[tty_id]) {
-		if (!ento_gui && keycode == 0x49 && ttycon->crtline > 0) { // PgUp
-			ttycon->auto_incbegaddr = 0;
-			ttycon->setStartLine(--ttycon->crtline + ttycon->topline);
-		}//{TODO} Adapt Vcon
-		else if (!ento_gui && keycode == 0x51 && ttycon->crtline < ttycon->area_total.y - ttycon->area_show.height) { // PgDn
-			ttycon->auto_incbegaddr = 0;
-			ttycon->setStartLine(++ttycon->crtline + ttycon->topline);
-		}//{TODO} Adapt Vcon
-		else if (keycode == 0x35) // Pad /
-		{
-			return '/';//ttyout->OutChar('/');
-		}
-		else if (keycode == 0x1C) // Pad ENTER
-		{
-			//ttyout->OutChar('\n');
-			//ttyout->OutChar('\r');
-			return '\n';// process as \n\r
-		}
-	}
-	else if (Rangein(keycode, 0x47, 0x54)) {
-		byte c = (state.lock_number) ? _tab_keycode2ascii[keycode].ascii_shift : _tab_keycode2ascii[keycode].ascii_usual;
-		if (c > 1) return c;// ttyout->OutChar(c);
-	}
-	else if (keycode < 0x80) { // KEYDOWN
-		byte c = _tab_keycode2ascii[keycode].ascii_usual;
-		if (Ranglin(c, 'a', 26))
-			c = (state.lock_caps ^ (state.mod.l_shift || state.mod.r_shift)) ?
-			_tab_keycode2ascii[keycode].ascii_shift : _tab_keycode2ascii[keycode].ascii_usual;
-		else c = (state.mod.l_shift || state.mod.r_shift) ?
-			_tab_keycode2ascii[keycode].ascii_shift : _tab_keycode2ascii[keycode].ascii_usual;
-
-		if (c > 1)
-		{
-			//{} wait app get the char
-
-			return c;//ttyout->OutChar(c);
-			//if (c == '\n') ttyout->OutChar('\r');
-			//else if (c == '\b') {
-			//	ttyout->OutChar(' ');
-			//	ttyout->OutChar('\b');
-			//}
-			//{TODO} Menus, TAB, Arrows, PrtSc, Pause, Ins, Home, Del, End
-		}
-	}
-	last_E0s[tty_id] = keycode == 0xE0;
-	return 0x80;
-}
-
 bool work_console = false;
 char* cons_buffer;
 extern keyboard_state_t kbd_state;
@@ -162,12 +110,11 @@ void _Comment(R1) serv_cons_loop()
 	using BR = ProcessBlock::BlockReason;
 	while (true) {
 		for0a(i, tty_crt_blocked_appid) if (-1 != (ch = Bcons[i].input_queue.inn())) if (stduint pid = tty_crt_blocked_appid[i]) {
-			if (ch <= 0 || ch >= 0x80) break;
 			if (_IMM(TaskGet(pid)->block_reason) && _IMM(BR::BR_exInnc)) {
 				TaskGet(pid)->Unblock(BR::BR_exInnc);
 				
 				tty_crt_blocked_appid[i] = nil;
-				stdsint val = tty_parse(i, ch, kbd_state, NULL);
+				stdsint val = ch; // The character is already translated through sysmsg_kbd and input_queue
 				syssend(pid, &val, byteof(val));
 			}
 			else plogerro("error! %s %u", __FUNCIDEN__, __LINE__);

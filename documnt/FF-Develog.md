@@ -35,8 +35,6 @@ her-note: false
 - [ ] ofs/fatXX mkfs&writef&... 独立工具
 系統接口
 - [ ] syscall: yield, 非阻塞 getchar
-介面渲染
-- [ ] 4 Buffered VCon
 综合
 - [ ] 选项、微/宏模块剪裁能力
 
