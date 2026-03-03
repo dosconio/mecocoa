@@ -136,6 +136,13 @@ void sysmsg_kbd(keyboard_event_t kbd_event) {
 		}
 		else if (ptext_1 && ch) ptext_1->text << ch;
 		if (ptext_1) ptext_1->doshow(0);
+
+		// ----
+
+		// test taskman
+		// now the task 1 should at ready queue.
+		if (ch == 'S') Taskman::DequeueReady(&treat<ProcessBlock>(Taskman::chain[1]->offs));
+		else if (ch == 'R') Taskman::EnqueueReady(&treat<ProcessBlock>(Taskman::chain[1]->offs));
 	}
 }
 

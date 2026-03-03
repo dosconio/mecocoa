@@ -109,15 +109,10 @@ void _Comment(R1) serv_cons_loop()
 	//{TEMP} only a TTY0(VCON)
 	using BR = ProcessBlock::BlockReason;
 	while (true) {
-		for0a(i, tty_crt_blocked_appid) if (-1 != (ch = Bcons[i].input_queue.inn())) if (stduint pid = tty_crt_blocked_appid[i]) {
-			if (_IMM(TaskGet(pid)->block_reason) && _IMM(BR::BR_exInnc)) {
-				TaskGet(pid)->Unblock(BR::BR_exInnc);
-				
-				tty_crt_blocked_appid[i] = nil;
-				stdsint val = ch; // The character is already translated through sysmsg_kbd and input_queue
-				syssend(pid, &val, byteof(val));
-			}
-			else plogerro("error! %s %u", __FUNCIDEN__, __LINE__);
+		for0a(i, tty_crt_blocked_appid) if (stduint pid = tty_crt_blocked_appid[i]) if (-1 != (ch = Bcons[i].input_queue.inn())) {
+			tty_crt_blocked_appid[i] = nil;
+			stdsint val = ch; // The character is already translated through sysmsg_kbd and input_queue
+			 syssend(pid, &val, byteof(val));
 		}
 
 		// Render the bottom ribbon
@@ -155,7 +150,6 @@ void _Comment(R1) serv_cons_loop()
 				to_args[0] &= _IMM1S(dev_domain_bits) - 1;
 				if (!tty_crt_blocked_appid[to_args[0]]) {
 					tty_crt_blocked_appid[to_args[0]] = to_args[3];
-					pb->Block(BR::BR_exInnc);
 				}
 				else {
 					ret = ~_IMM0;

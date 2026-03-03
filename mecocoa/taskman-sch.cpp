@@ -32,6 +32,8 @@ bool Taskman::Append(ProcessBlock* task) {
 		else break;
 	}
 	min_available_pid = las + 1;
+	task->state = ProcessBlock::State::Ready;
+	EnqueueReady(task);
 	return true;
 }
 
@@ -48,105 +50,144 @@ extern NormalTaskContext task_b_ctx, task_kernel_ctx;
 // auto Taskman::Schedule(void* timeout, ...)->decltype(Schedule(timeout))
 auto Taskman::Schedule()->decltype(Schedule())
 {
-	stduint cnt = Taskman::chain.Count();
-	if (cnt <= 1) return;
 	stduint cpuid = _TEMP 0;
-	auto cpu_old = Taskman::pcurrent[cpuid];
-	auto cpu_new = Taskman::pcurrent[cpuid];
-	cpu_new = (1 + cpu_new) % cnt;
-	Taskman::pcurrent[cpuid] = cpu_new;
-	SwitchTaskContext(&treat<ProcessBlock>(chain[cpu_new]->offs).context,
-		&treat<ProcessBlock>(chain[cpu_old]->offs).context);
+	auto old_pb = PickNext();
+	if (!old_pb) return; // No task ready
+	
+	// Timeslice management (A-Type context)
+	if (old_pb->priority >= 0) {
+		if (old_pb->time_slice > 0) {
+			old_pb->time_slice--;
+			return; // Continue same task
+		} else {
+			Taskman::DequeueReady(old_pb);
+			
+			// Enqueue to Expired Queue for Epoch A-Type Scheduling
+			Taskman::EnqueueExpired(old_pb); 
+			
+			// Allocation mapping:
+			// < 0 (RT)     => 4 slices
+			// 0..3         => 4 slices
+			// 4..7         => 3 slices
+			// 8..11        => 2 slices
+			// 12..15       => 1 slice
+			if (old_pb->priority <= 3) old_pb->time_slice = 4;
+			else if (old_pb->priority <= 7) old_pb->time_slice = 3;
+			else if (old_pb->priority <= 11) old_pb->time_slice = 2;
+			else old_pb->time_slice = 1;
+		}
+	} else {
+		// RT management (B-Type)
+		if (old_pb->time_slice > 0) {
+			old_pb->time_slice--;
+			return; // Continue same task
+		} else {
+			Taskman::DequeueReady(old_pb);
+			Taskman::EnqueueReady(old_pb); // Re-queue at tail (Round-Robin for same RT priority)
+			old_pb->time_slice = 4; // RT tasks also get 4 slices to avoid hogging forever if yielding is missed
+		}
+	}
+
+	auto new_pb = PickNext();
+	if (!new_pb || new_pb == old_pb) return;
+	// ploginfo("switch %d->%d", old_pb->pid, new_pb->pid);
+	SwitchTaskContext(&new_pb->context, &old_pb->context);
 }
 #endif
 
 #ifdef _ARC_x86 // x86:
 
-//{TODEL}
-void switch_halt() {
-	if (ProcessBlock::cpu0_task == 0) {
-		return;
-	}
-	ProcessBlock::cpu0_rest = ProcessBlock::cpu0_task;
-	auto pb_src = TaskGet(ProcessBlock::cpu0_task);
-	auto pb_des = TaskGet(0);
-	// stduint esp = 0;
-	// _ASM("movl %%esp, %0" : "=r"(esp));
-	// ploginfo("switch halt %d->0, esp: %[32H]", ProcessBlock::cpu0_task, esp);
-	if (pb_des->state == ProcessBlock::State::Uninit)
-		pb_des->state = ProcessBlock::State::Ready;
-	if ((pb_src->state == ProcessBlock::State::Running || pb_src->state == ProcessBlock::State::Pended) && (
-		pb_des->state == ProcessBlock::State::Ready)) {
-		if (pb_src->state == ProcessBlock::State::Running)
-			pb_src->state = ProcessBlock::State::Ready;
-		pb_des->state = ProcessBlock::State::Running;
-	}
-	else {
-		plogerro("task halt error.");
-	}
-	ProcessBlock::cpu0_task = 0;// kernel
-	task_switch_enable = true;
-	//
-	//stduint save = pb_src->TSS.PDBR;
-	//pb_src->TSS.PDBR = getCR3();// CR3 will not save in TSS? -- phina, 20250728
-	jmpTask(SegTSS0/*, T_pid2tss(ProcessBlock::cpu0_rest)*/);
-	//pb_src->TSS.PDBR = save;
-}
+/**
+ * Mecocoa O(1) Priority Scheduler
+ * 
+ * B-Type (Real-Time): priority -16 ~ -1
+ *  - Enqueued strictly to the `priority_queues` (Active Queue).
+ *  - When time-slice expires, it is re-enqueued to the Active Queue tail.
+ *  - High priority tasks will infinitely starve lower priority tasks as long as they demand CPU.
+ * 
+ * A-Type (Time-Slice): priority 0 ~ 15
+ *  - Implements an Epoch-based Active/Expired Queue Mechanism.
+ *  - Enqueued initially to the `priority_queues` (Active Queue).
+ *  - When time-slice expires, it is enqueued to the `expired_queues` (Expired Queue).
+ *  - Expired tasks CANNOT be scheduled until the entire Active Queue for A-Type tasks is empty.
+ *  - Once empty, PickNext() triggers an Epoch Swap (Active <-> Expired), restoring all A-Type tasks.
+ *  - This guarantees macro-level CPU share without starvation while maintaining strict micro-level preemption.
+ */
 
-
-// by only PIT
+// before calling, the task may be pended
 void switch_task() {
-	if (ProcessBlock::cpu0_task == TaskCount) return;
 	using PBS = ProcessBlock::State;
 
 	task_switch_enable = false;//{TODO} Lock
-	stduint last_proc = ProcessBlock::cpu0_task;
+
 	auto pb_src = TaskGet(ProcessBlock::cpu0_task);
+	if (!pb_src) pb_src = TaskGet(0); // fallback
 
-	Dnode* crt_node = nullptr;
-	for (auto nod = Taskman::chain.Root(); nod; nod = nod->next) {
-		if (((ProcessBlock*)(nod->offs))->pid == ProcessBlock::cpu0_task) {
-			crt_node = nod;
-			break;
+	// Timeslice management for current task
+	if (pb_src->state == PBS::Running) {
+		if (pb_src->priority >= 0) {
+			if (pb_src->time_slice > 0) {
+				pb_src->time_slice--;
+				task_switch_enable = true;
+				return; // Continue same task
+			} else {
+				Taskman::DequeueReady(pb_src);
+				pb_src->state = PBS::Ready;
+				
+				// Enqueue to Expired Queue for Epoch A-Type Scheduling
+				Taskman::EnqueueExpired(pb_src); 
+				
+				// Allocation mapping:
+				if (pb_src->priority <= 3) pb_src->time_slice = 4;
+				else if (pb_src->priority <= 7) pb_src->time_slice = 3;
+				else if (pb_src->priority <= 11) pb_src->time_slice = 2;
+				else pb_src->time_slice = 1;
+			}
+		} else {
+			// RT management (B-Type)
+			if (pb_src->time_slice > 0) {
+				pb_src->time_slice--;
+				task_switch_enable = true;
+				return; // Continue same task
+			} else {
+				Taskman::DequeueReady(pb_src);
+				pb_src->state = PBS::Ready;
+				Taskman::EnqueueReady(pb_src); // Re-queue at tail (Round-Robin for same RT priority)
+				pb_src->time_slice = 4; // RT tasks also get 4 slices
+			}
 		}
+	} else if (pb_src->state != PBS::Ready && pb_src->state != PBS::Uninit) {
+		// e.g. Pended or Hanging, already handled by DequeueReady elsewhere or below
+	} else if (pb_src->state == PBS::Ready) {
+		// Nothing special, already in queue
 	}
 
-	stduint cpu0_new = ProcessBlock::cpu0_task;
-	do if (ProcessBlock::cpu0_rest) {
-		crt_node = Taskman::chain.Root();
-		while (crt_node && ((ProcessBlock*)(crt_node->offs))->pid != ProcessBlock::cpu0_rest) crt_node = crt_node->next;
-		
-		crt_node = crt_node ? crt_node->next : Taskman::chain.Root();
-		if (!crt_node) crt_node = Taskman::chain.Root();
+	auto pb_des = Taskman::PickNext();
+	
+	// If no task is ready, fallback to idle/kernel
+	if (!pb_des) pb_des = TaskGet(0);
+	
+	if (pb_des == pb_src) {
+		if (pb_src->state == PBS::Ready) pb_src->state = PBS::Running;
+		task_switch_enable = true;
+		return;
+	}
 
-		cpu0_new = crt_node ? ((ProcessBlock*)(crt_node->offs))->pid : 0;
-		ProcessBlock::cpu0_rest = 0;
-		if (cpu0_new == 0) {
-			crt_node = crt_node->next ? crt_node->next : Taskman::chain.Root();
-			cpu0_new = crt_node ? ((ProcessBlock*)(crt_node->offs))->pid : 0;
-		}
-	}
-	else {
-		crt_node = crt_node ? crt_node->next : Taskman::chain.Root();
-		if (!crt_node) crt_node = Taskman::chain.Root();
-		cpu0_new = crt_node ? cast<ProcessBlock*>(crt_node->offs)->pid : 0;
-	}
-	while (cpu0_new == ProcessBlock::cpu0_task || (cast<ProcessBlock*>(crt_node->offs)->state != PBS::Ready && cast<ProcessBlock*>(crt_node->offs)->state != PBS::Uninit));
-	ProcessBlock::cpu0_task = cpu0_new;
-	auto pb_des = cast<ProcessBlock*>(crt_node->offs);
+	ProcessBlock::cpu0_task = pb_des->pid;
 
 	if (pb_des->state == PBS::Uninit) pb_des->state = PBS::Ready;
 	if ((pb_src->state == PBS::Running) && (pb_des->state == PBS::Ready)) {
 		pb_src->state = PBS::Ready;
+		pb_des->state = PBS::Running;
+	} else if (pb_des->state == PBS::Ready) {
 		pb_des->state = PBS::Running;
 	}
 	else {
 		printlog(_LOG_FATAL, "task switch error (PID%u, State%u, PCnt%u).", pb_des->getID(), _IMM(pb_des->state), Taskman::chain.Count());
 	}
 	task_switch_enable = true;//{TODO} Unlock
+	// ploginfo("switch task %d->%d", pb_src->pid, pb_des->pid);
 	jmpTask(T_pid2tss(ProcessBlock::cpu0_task));
 }
-
-
 
 #endif

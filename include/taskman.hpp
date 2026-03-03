@@ -42,57 +42,11 @@ extern TSS_t* PCU_CORES_TSS[PCU_CORES_MAX];
 #endif
 #endif
 
-#if (_MCCA & 0xFF00) == 0x8600
-
-#if _MCCA == 0x8664
-class _Comment(Kernel) ProcessBlock {
-public:
-	alignas(16) NormalTaskContext context;
-	stduint pid;
-public:
-	stduint stack_size;
-	byte* stack_lineaddr;
-};
-#else
-
-class ProcessBlock;
-
-#endif
-
-#endif
-
-class Taskman {
-	static const stduint DEFAULT_STACK_SIZE = 0x1000;
-
-public:
-	static stduint PCU_CORES;
-	static stduint pcurrent[PCU_CORES_MAX];
-public:// Gen.2
-	// Gen.1: fixed ProcessBlock* pblocks[16] and stduint pnumber
-	static Dchain chain;// [ArrayT] ordered by pid
-	static stduint min_available_pid;// in chain
-	static Dnode* min_available_left;// in chain
-public:
-	static auto
-		Initialize(stduint cpuid = 0) -> void;
-	static auto
-		Append(ProcessBlock* task) -> bool;
-	static auto
-		Locate(stduint taskid) -> ProcessBlock*;
-	static auto Schedule() -> void;// Timer using
-public:
-	static auto
-		Create(void* entry, byte ring) -> ProcessBlock*;// newProcess
-protected:
-	static auto// return a all-zero ProcessBlock
-		AllocateTask() -> ProcessBlock*;
-};
-
-
-#if _MCCA == 0x8632
-#include "fileman.hpp"
-
-extern "C" bool task_switch_enable;
+// Message
+static constexpr const stduint ANYPROC = (_IMM0);
+static constexpr const stduint INTRUPT = (~_IMM0);
+static constexpr const stduint COMM_RECV = 0b10;
+static constexpr const stduint COMM_SEND = 0b01;
 
 struct CommMsg {
 	uni::Slice data;
@@ -100,18 +54,59 @@ struct CommMsg {
 	stduint src;// use if type is HARDRUPT
 };
 
-
-
+// Process
+#if (_MCCA & 0xFF00) == 0x8600
 class FileDescriptor;
-// = TaskBlock = ThreadBlock
-struct _Comment(Kernel) ProcessBlock {
+class _Comment(Kernel) ProcessBlock {
+public:
+	alignas(16) NormalTaskContext context;// advanced TSS_t
+	stduint pid;
+	inline stduint getID() { return pid; }
+public:
+	stduint stack_size;
+	byte* stack_lineaddr;
+	sint8 priority = 0; // -16..-1 (Realtime RT) and 0..15 (Timeslice)
+	uint8 time_slice = 0; // execution time left for timeslice mode
+	bool is_expired = false; // true if task has expended its timeslice in the current epoch
+public _Comment(State):
+	enum class State : byte {
+		Running = 0,
+		Ready,
+		Pended,
+		Uninit,
+		Exited,
+		// Waiting,// call wait()
+		Hanging,// aka Zobmie, call exit()
+		Invalid,
+	} state = State::Uninit;
+	enum BlockReason : uint32 {
+		BR_None = 0,
+		BR_SendMsg = 0b10,
+		BR_RecvMsg = 0b100,
+		BR_Waiting = 0b1000,
+	} block_reason = BlockReason::BR_None;
+	void Block(BlockReason reason);
+	void Unblock(BlockReason reason);
+	ProcessBlock* queue_state_prev = nullptr, * queue_state_next = nullptr;// for ready queue
+public: // _Comment(Syscomm)
+	CommMsg* unsolved_msg = nullptr;
+	ProcessBlock* send_to_whom = nullptr;// nullptr for none (cannot comm with base-kernel)
+	ProcessBlock* recv_fo_whom = nullptr;// nullptr for ANY
+	stduint wait_rupt_no = 0;// equals vector plus one. 0 for none, 1 for ZeroException...
+	// if B->A, C->A. Then: A.qhead = B, B.qnext = C, C.qnext = none
+	ProcessBlock* queue_send_queuehead = nullptr;// nullptr for none
+	ProcessBlock* queue_send_queuenext = nullptr;
+public: // _Comment(Thread)
+public: // _Comment(Interface);
+	enum class InterfaceType : byte {
+		POSIX,
+		Win32,
+	} interface_type = InterfaceType::POSIX;
+public:// old design: have not updated completely
+	#if _MCCA == 0x8632
 	static stduint cpu_proc_number;
 	static stduint cpu0_task;
 	static stduint cpu0_rest;
-	static void* table_ready;
-	static void* table_pends;
-
-	stduint pid; // PID added for gen.2
 
 	//{} Mempool mempool;
 	uni::Paging paging;
@@ -136,61 +131,62 @@ struct _Comment(Kernel) ProcessBlock {
 	//
 	uni::Slice load_slices[8];// at most 8 slices, app-relative logical address
 
-	//{} threads
-
-	// state
-	enum class State : byte {
-		Running = 0,
-		Ready,
-		Pended,
-		Uninit,
-		Exited,
-		// Waiting,// call wait()
-		Hanging,// aka Zobmie, call exit()
-		Invalid,
-	} state = State::Uninit;
-
-	enum BlockReason : uint32 {
-		BR_None = 0,
-		BR_Interrupt = 0b1,
-		BR_SendMsg = 0b10,
-		BR_RecvMsg = 0b100,
-		BR_Waiting = 0b1000,
-		BR_exInnc = 0b10000,
-	} block_reason = BlockReason::BR_None;
-	inline void Block(BlockReason reason) {
-		state = State::Pended;
-		block_reason = BlockReason(block_reason | reason);
-	}
-	inline void Unblock(BlockReason reason) {
-		block_reason = BlockReason(block_reason & ~reason);
-		if (block_reason == BlockReason::BR_None)
-			state = State::Ready;
-	}
-
-	CommMsg* unsolved_msg;
-	ProcessBlock* send_to_whom;// nullptr for none (cannot comm with base-kernel)
-	ProcessBlock* recv_fo_whom;// nullptr for ANY
-	stduint wait_rupt_no;// equals vector plus one. 0 for none, 1 for ZeroException...
-
-	// if B->A, C->A. Then
-	// A.qhead = B
-	// B.qnext = C
-	// C.qnext = none
-	ProcessBlock* queue_send_queuehead;// nullptr for none
-	ProcessBlock* queue_send_queuenext;
-
 	// File
 	FileDescriptor* pfiles[_TEMP 4];
-
-
-
-	bool is_suspend = false;// to Disk
-	//{TODO} suspend information
-
-	stduint getID() { return pid; }
-
+	#endif
 };
+#endif
+
+class Taskman {
+	static const stduint DEFAULT_STACK_SIZE = 0x1000;
+
+public:
+	static stduint PCU_CORES;
+	static stduint pcurrent[PCU_CORES_MAX];
+public:// Gen.2
+	// Gen.1: fixed ProcessBlock* pblocks[16] and stduint pnumber
+	static Dchain chain;// [ArrayT] ordered by pid
+	static stduint min_available_pid;// in chain
+	static Dnode* min_available_left;// in chain
+public:
+	static auto
+		Initialize(stduint cpuid = 0) -> void;
+	static auto
+		Append(ProcessBlock* task) -> bool;
+	static auto
+		Locate(stduint taskid) -> ProcessBlock*;
+public:
+	static auto
+		Create(void* entry, byte ring) -> ProcessBlock*;// newProcess
+public:// schedule
+	static auto Schedule() -> void;// Timer using
+	struct ReadyQueue {
+		ProcessBlock* head, * tail;
+		// 0..15 (aka -16 .. -1): Realtime (B-Type), schedule higher priority strictly first. Default: 4 slices
+		// 16..31 (aka 0 .. 15): Timeslice (A-Type), Active/Expired queues mechanism for guaranteed epoch access.
+		// Slice scale: 0~3 => 4 | 4~7 => 3 | 8~11 => 2 | 12~15 => 1
+	};
+	static ReadyQueue priority_queues[32];
+	static ReadyQueue expired_queues[32];
+	static unsigned int ready_bitmap;
+	static unsigned int expired_bitmap;
+
+	static void EnqueueReady(ProcessBlock* pb);
+	static void DequeueReady(ProcessBlock* pb);
+	static void EnqueueExpired(ProcessBlock* pb);
+	static ProcessBlock* PickNext();
+protected:
+	static auto// return a all-zero ProcessBlock
+		AllocateTask() -> ProcessBlock*;
+};
+
+
+
+
+#if _MCCA == 0x8632
+#include "fileman.hpp"
+
+extern "C" bool task_switch_enable;
 
 enum class TaskmanMsg {
 	TEST,
@@ -206,7 +202,6 @@ ProcessBlock* TaskLoad(uni::BlockTrait* source, void* addr, byte ring);//{TODO} 
 inline ProcessBlock* TaskGet(stduint taskid) { return Taskman::Locate(taskid); }
 
 void switch_task();
-void switch_halt();
 
 // return zero for success
 int msg_send(ProcessBlock* fo, stduint to, _Comment(vaddr) CommMsg* msg);
@@ -227,11 +222,7 @@ enum {
 };
 
 
-#define ANYPROC (_IMM0)
-#define INTRUPT (~_IMM0)
 
-#define COMM_RECV 0b10
-#define COMM_SEND 0b01
 inline static stduint syssend(stduint to_whom, const void* msgaddr, stduint bytlen, stduint type = 0)
 {
 	struct CommMsg msg { nil };

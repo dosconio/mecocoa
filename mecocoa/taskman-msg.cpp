@@ -131,7 +131,7 @@ int msg_send(ProcessBlock* fo, stduint too, _Comment(vaddr) CommMsg* msg)
 	else {
 		fo->Block(ProcessBlock::BR_SendMsg);
 		fo->send_to_whom = to;
-		if (fo->unsolved_msg) plogwarn("unsolved_msg when send");
+		if (fo->unsolved_msg) plogwarn("pid%u, unsolved_msg when send(%u)(%u)", fo->getID(), too, 0);
 		fo->unsolved_msg = msg;
 		// proc sending queue
 		if (!to->queue_send_queuehead) to->queue_send_queuehead = fo; else {
@@ -215,7 +215,7 @@ int msg_recv(ProcessBlock* to, stduint foo, _Comment(vaddr) CommMsg* msg)
 	else { // block self to wait for msg
 		// ploginfo("PID%u: BLOC[RECV]", to->getID());
 		to->Block(ProcessBlock::BR_RecvMsg);
-		if (to->unsolved_msg) plogwarn("pid%u, unsolved_msg when recv", to->getID());
+		if (to->unsolved_msg) plogwarn("pid%u, unsolved_msg when recv(%u)(%u)", to->getID(), foo, 0);
 		to->unsolved_msg = msg;
 		to->recv_fo_whom = (foo == ANYPROC || foo == INTRUPT) ? (ProcessBlock*)foo : TaskGet(foo);
 	}

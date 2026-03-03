@@ -151,7 +151,7 @@ static stduint call_body(const syscall_t callid, ...) {
 		break;
 	case syscall_t::REST:
 	// case_syscall_t_REST:
-		switch_halt();
+		switch_task();
 		if (ch_tse) task_switch_enable = task_switch_enable_old;
 		break;
 	case syscall_t::COMM:// (mode, obj, vaddr msg)
@@ -174,7 +174,7 @@ static stduint call_body(const syscall_t callid, ...) {
 		
 		if (pb->state == ProcessBlock::State::Pended) {
 			// goto case_syscall_t_REST;
-			switch_halt();
+			switch_task();
 		}
 		if (ch_tse) task_switch_enable = task_switch_enable_old;
 		break;

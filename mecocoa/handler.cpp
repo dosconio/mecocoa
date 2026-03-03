@@ -151,8 +151,8 @@ void exception_handler(sdword iden, dword para) {
 		break;
 
 	case ERQ_Page_Fault:// 14
-		printlog(_LOG_FATAL, have_para ? "%s with 0x%[x], vaddr: 0x%[x]" : "%s",
-			ExceptionDescription[iden], para, getCR2()); // printlog will call halt machine
+		printlog(_LOG_FATAL, have_para ? "%s with 0x%[x], vaddr=0x%[x], CR3=0x%[x]" : "%s",
+			ExceptionDescription[iden], para, getCR2(), getCR3()); // printlog will call halt machine
 		break;
 
 	default:

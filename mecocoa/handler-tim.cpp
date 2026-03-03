@@ -66,7 +66,7 @@ void Handint_PIT()
 	}
 	static unsigned time_slice = 0;
 	time_slice++;
-	if (time_slice >= 20) { // switch task
+	if (time_slice >= 4) { // switch task
 		time_slice = 0;
 		if (task_switch_enable) {
 			switch_task();
@@ -109,9 +109,7 @@ void Handint_LAPICT(InterruptFrame* frame) {
 		}
 		else break;
 	}
-	if (!(tick % 4)) {
-		Taskman::Schedule();
-	}// 25 Hz
+	Taskman::Schedule();
 }
 #endif
 

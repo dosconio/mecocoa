@@ -10,9 +10,123 @@
 #include <c/driver/keyboard.h>
 #include "../include/taskman.hpp"
 
-
 static SysMessage _BUF_Message[64];
 Queue<SysMessage> message_queue(_BUF_Message, numsof(_BUF_Message));
+
+Taskman::ReadyQueue Taskman::priority_queues[32] = {};
+Taskman::ReadyQueue Taskman::expired_queues[32] = {};
+unsigned int Taskman::ready_bitmap = 0;
+unsigned int Taskman::expired_bitmap = 0;
+
+void Taskman::EnqueueReady(ProcessBlock* pb) {
+	if (pb->state != ProcessBlock::State::Ready && pb->state != ProcessBlock::State::Running) return;
+	int idx = pb->priority + 16;
+	if (idx < 0) idx = 0;
+	if (idx > 31) idx = 31;
+	
+	pb->queue_state_next = nullptr;
+	if (priority_queues[idx].tail) {
+		priority_queues[idx].tail->queue_state_next = pb;
+		pb->queue_state_prev = priority_queues[idx].tail;
+		priority_queues[idx].tail = pb;
+	} else {
+		priority_queues[idx].head = priority_queues[idx].tail = pb;
+		pb->queue_state_prev = nullptr;
+	}
+	ready_bitmap |= (1U << idx);
+}
+
+void Taskman::EnqueueExpired(ProcessBlock* pb) {
+	if (pb->state != ProcessBlock::State::Ready && pb->state != ProcessBlock::State::Running) return;
+	int idx = pb->priority + 16;
+	if (idx < 0) idx = 0;
+	if (idx > 31) idx = 31;
+	
+	pb->is_expired = true;
+	
+	pb->queue_state_next = nullptr;
+	if (expired_queues[idx].tail) {
+		expired_queues[idx].tail->queue_state_next = pb;
+		pb->queue_state_prev = expired_queues[idx].tail;
+		expired_queues[idx].tail = pb;
+	} else {
+		expired_queues[idx].head = expired_queues[idx].tail = pb;
+		pb->queue_state_prev = nullptr;
+	}
+	expired_bitmap |= (1U << idx);
+}
+
+void Taskman::DequeueReady(ProcessBlock* pb) {
+	int idx = pb->priority + 16;
+	if (idx < 0) idx = 0;
+	if (idx > 31) idx = 31;
+
+	bool in_active = false;
+	bool in_expired = false;
+
+	if (priority_queues[idx].head == pb) { 
+		in_active = true; 
+		priority_queues[idx].head = pb->queue_state_next; 
+	} else if (expired_queues[idx].head == pb) { 
+		in_expired = true; 
+		expired_queues[idx].head = pb->queue_state_next; 
+	} else {
+		if (priority_queues[idx].tail == pb) in_active = true;
+		else if (expired_queues[idx].tail == pb) in_expired = true;
+	}
+
+	if (pb->queue_state_prev) pb->queue_state_prev->queue_state_next = pb->queue_state_next;
+	if (pb->queue_state_next) pb->queue_state_next->queue_state_prev = pb->queue_state_prev;
+
+	if (in_active && priority_queues[idx].tail == pb) priority_queues[idx].tail = pb->queue_state_prev;
+	if (in_expired && expired_queues[idx].tail == pb) expired_queues[idx].tail = pb->queue_state_prev;
+
+	pb->queue_state_prev = pb->queue_state_next = nullptr;
+
+	if (in_active && !priority_queues[idx].head) ready_bitmap &= ~(1U << idx);
+	if (in_expired && !expired_queues[idx].head) expired_bitmap &= ~(1U << idx);
+}
+
+ProcessBlock* Taskman::PickNext() {
+	// If the A-Type TS segment (bits 16-31) is empty in Ready, but populated in Expired, Swap!
+	if ((ready_bitmap & 0xFFFF0000) == 0 && (expired_bitmap & 0xFFFF0000) != 0) {
+		for (int i = 16; i < 32; i++) {
+			priority_queues[i] = expired_queues[i];
+			expired_queues[i].head = expired_queues[i].tail = nullptr;
+			
+			// Reset is_expired flag for all tasks in the new epoch
+			ProcessBlock* node = priority_queues[i].head;
+			while (node) {
+				node->is_expired = false;
+				node = node->queue_state_next;
+			}
+		}
+		ready_bitmap |= (expired_bitmap & 0xFFFF0000);
+		expired_bitmap &= 0x0000FFFF;
+	}
+
+	if (!ready_bitmap) return nullptr;
+	uint32 idx = __builtin_ctz(ready_bitmap);
+	return priority_queues[idx].head;
+}
+
+void ProcessBlock::Block(BlockReason reason) {
+	if (state == State::Ready || state == State::Running) Taskman::DequeueReady(this);
+	state = State::Pended;
+	block_reason = BlockReason(block_reason | reason);
+}
+
+void ProcessBlock::Unblock(BlockReason reason) {
+	block_reason = BlockReason(block_reason & ~reason);
+	if (block_reason == BlockReason::BR_None) {
+		state = State::Ready;//{} else panic...
+		if (this->is_expired) {
+			Taskman::EnqueueExpired(this);
+		} else {
+			Taskman::EnqueueReady(this);
+		}
+	}
+}
 
 #if (_MCCA & 0xFF00) == 0x8600
 #if _MCCA == 0x8632
@@ -30,12 +144,12 @@ void Taskman::Initialize(stduint cpuid) {
 		krnl_tss_cpu0.TSS.STRC_15_T = 0;
 		krnl_tss_cpu0.TSS.IO_MAP = sizeof(TSS_t) - 1;
 		krnl_tss_cpu0.focus_tty_id = 0;
-		krnl_tss_cpu0.state = ProcessBlock::State::Running;
 		// Type = 10x1 + L=0 +  D/B=0 + 16B  64-bit TSS
 		//             + L=1 OR D/B=1       32-bit TSS
 		mecocoa_global->gdt_ptr->tss.setRange(_IMM(PCU_CORES_TSS[0]), sizeof(TSS_t) - 1);
 		min_available_pid = 0;
 		Taskman::Append(&krnl_tss_cpu0);
+		krnl_tss_cpu0.state = ProcessBlock::State::Running;
 		loadTask(SegTSS0);
 	}
 }
@@ -57,7 +171,10 @@ void Taskman::Initialize(stduint cpuid) {
 		addr++;
 	}
 	mecocoa_global->gdt_ptr->tss.setRange(_IMM(PCU_CORES_TSS[0]), sizeof(TSS_t) - 1);
-	min_available_left = chain.Append(AllocateTask());
+	auto kernel_task = AllocateTask();
+	min_available_left = chain.Append(kernel_task);
+	kernel_task->state = ProcessBlock::State::Running;
+	Taskman::EnqueueReady(kernel_task);
 	loadTask(SegTSS0);
 	//
 	pcurrent[cpuid] = 0;// kernel
@@ -195,6 +312,8 @@ ProcessBlock* TaskRegister(void* entry, byte ring)
 	TSS->Padding1 = 0;
 	TSS->ESP2 = (dword)(page + 0x1800) + 0x800;
 	TSS->SS2 = 8 * 6 + 4 + 2;// 4:LDT 8*6:SS2 2:Ring2
+	pb->priority = (ring == 3) ? 4 : 0;
+	pb->time_slice = (ring == 3) ? 3 : 4;
 	TSS->Padding2 = 0;
 
 	TSS->CR3 = getCR3();
@@ -310,7 +429,7 @@ ProcessBlock* TaskLoad(BlockTrait* source, void* addr, byte ring)
 	stduint kernel_size = _TEMP 0x00400000;
 	pb->paging.Map(0x80000000, 0x00000000, kernel_size, true, _Comment(R0) false);// should include LDT
 	// [PHINA]: should include LDT in Paging if use jmp-tss
-	#if 0 // may conflict
+	#if 1 // may conflict
 	pb->paging.MapWeak(_IMM(page), _IMM(page), allocsize, true, _Comment(R0) false);
 	#endif
 
@@ -354,6 +473,9 @@ ProcessBlock* TaskLoad(BlockTrait* source, void* addr, byte ring)
 	//
 	TSS->EFLAGS = getFlags();
 	TSS->EAX = TSS->ECX = TSS->EDX = TSS->EBX = TSS->EBP = TSS->ESI = TSS->EDI = 0;
+	pb->priority = (ring == 3) ? 4 : 0;
+	pb->time_slice = (ring == 3) ? 3 : 4;
+
 	switch (ring)
 	{
 	case 0: TSS->ESP = TSS->ESP0;
@@ -411,7 +533,8 @@ static stduint task_fork(ProcessBlock* fo)
 	stduint allocsize = vaultAlignHexpow(PAGE_SIZE, sizeof(ProcessBlock)) + stack_size * 4 _Comment(STACK);
 	char* page = (char*)Memory::physical_allocate(allocsize);
 
-	ProcessBlock* pb = (ProcessBlock*)(page); new (pb) ProcessBlock();
+	ProcessBlock* pb = (ProcessBlock*)(page);
+	MemSet(pb, 0, sizeof(ProcessBlock)); new (pb) ProcessBlock();
 	descriptor_t* LDT = (descriptor_t*)(pb->LDT);
 	descriptor_t* GDT = (descriptor_t*)mecocoa_global->gdt_ptr;
 	Letvar(fo_code, descriptor_t*, &fo->LDT[2]);
@@ -457,9 +580,11 @@ static stduint task_fork(ProcessBlock* fo)
 	stduint kernel_size = _TEMP 0x00400000;
 	pb->paging.Map(0x80000000, 0x00000000, kernel_size, true, _Comment(R0) false);// should include LDT
 	// [PHINA]: should include LDT in Paging if use jmp-tss
-	#if 0 // may conflict
+	#if 1 // may conflict
 	pb->paging.MapWeak(_IMM(page), _IMM(page), allocsize, true, _Comment(R0) false);
 	#endif
+	pb->priority = fo->priority;
+	pb->time_slice = fo->time_slice;
 
 	// ---- Stack and Gen.Regis ---- //
 	page = (char*)0x1000 + vaultAlignHexpow(PAGE_SIZE, sizeof(ProcessBlock));
@@ -489,7 +614,7 @@ static stduint task_fork(ProcessBlock* fo)
 		pb->pfiles[i]->fd_inode->i_cnt++;
 	}
 
-	cast<REG_FLAG_t>(TSS->EFLAGS).IF = true;
+	// cast<REG_FLAG_t>(TSS->EFLAGS).IF = true;
 	if (ring <= 1) TSS->EFLAGS |= _IMM1 << 12;
 
 	Taskman::Append(pb);
@@ -519,6 +644,7 @@ static void cleanup(stduint pid)
 	// msg2parent.STATUS = proc->exit_status;
 	// send_recv(SEND, proc->p_parent, &msg2parent);
 	// proc->p_flags = FREE_SLOT;
+	Taskman::DequeueReady(TaskGet(pid));
 	TaskGet(pid)->state = ProcessBlock::State::Invalid;
 	TaskGet(pid)->TSS.LastTSS = 0;
 }
@@ -552,6 +678,7 @@ static void task_exit(stduint pid, stduint status)
 		cleanup(pid);
 	}
 	else {
+		Taskman::DequeueReady(p);
 		p->state = PBS::Hanging;
 	}
 	// if the proc has any child, make INIT the new parent, (or kill all the children >_<)
