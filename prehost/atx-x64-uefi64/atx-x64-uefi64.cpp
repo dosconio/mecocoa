@@ -19,9 +19,6 @@ alignas(16) byte kernel_stack[1024 * 1024];
 
 UefiData uefi_data;
 
-
-alignas(16) NormalTaskContext task_b_ctx, task_kernel_ctx;
-
 void TaskB() {
 	ploginfo("TaskB");
 	stduint cnt = 0;

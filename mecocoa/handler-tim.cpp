@@ -7,7 +7,6 @@
 #include <c/driver/timer.h>
 #include <c/delay.h>
 
-
 // ---- ---- Timer ---- ---- //
 
 volatile timeval_t system_time = {};
@@ -39,6 +38,34 @@ void delay001ms(void) {
 
 // ---- ---- Rupt ---- ---- //
 
+extern bool ento_gui;
+extern uni::LayerManager global_layman;
+extern VideoControlInterface* real_pvci;
+
+inline void RenderFrameFlush() {
+	if (ento_gui && global_layman.pvci && global_layman.is_dirty) {
+		static uint64 last_flush_time = 0;
+		if (tick - last_flush_time >= 5) { // 100 FPS target (10ms)
+			global_layman.is_dirty = false;
+			SysMessage msg;
+			msg.type = SysMessage::RUPT_FLUSH;
+			msg.args.rect.x = global_layman.dirty_area.x;
+			msg.args.rect.y = global_layman.dirty_area.y;
+			msg.args.rect.w = global_layman.dirty_area.width;
+			msg.args.rect.h = global_layman.dirty_area.height;
+			global_layman.dirty_area = {};
+			global_layman.is_dirty = false;
+#if _MCCA == 0x8664
+			message_queue.Enqueue(msg);
+#elif _MCCA == 0x8632
+			if (real_pvci) real_pvci->DrawPoints(msg.args.rect.toRectangle(), global_layman.sheet_buffer);
+#endif
+
+			last_flush_time = tick;
+		}
+	}
+}
+
 #if _MCCA == 0x8632
 
 void blink2();
@@ -53,6 +80,7 @@ void Handint_PIT()
 	}
 	static unsigned time = 0;
 	time++;
+	tick++;
 	if (time >= 1000) {
 		time = 0;
 		// mecocoa_global->system_time.sec++;//{TEMP} help RTC	
@@ -69,9 +97,12 @@ void Handint_PIT()
 	if (time_slice >= 4) { // switch task
 		time_slice = 0;
 		if (task_switch_enable) {
-			switch_task();
+			Taskman::Schedule();
 		}
 	}
+	#if _GUI_DOUBLE_BUFFER
+	RenderFrameFlush();
+	#endif
 }
 
 void blink();
@@ -109,6 +140,10 @@ void Handint_LAPICT(InterruptFrame* frame) {
 		}
 		else break;
 	}
+	#if _GUI_DOUBLE_BUFFER
+	RenderFrameFlush();
+	#endif
+
 	Taskman::Schedule();
 }
 #endif

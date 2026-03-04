@@ -12,6 +12,7 @@ public:\
 	virtual void DrawRectangle(const Rectangle& rect) const override;\
 	virtual void DrawFont(const Point& disp, const DisplayFont& font) const override;\
 	virtual Color GetColor(Point p) const override;\
+	virtual void DrawPoints(const Rectangle& rect, const Color* base) const override;\
 };
 
 #include <cpp/Device/_Video.hpp>

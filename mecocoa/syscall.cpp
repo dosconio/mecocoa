@@ -103,7 +103,7 @@ static stduint call_body(const syscall_t callid, ...) {
 	task_switch_enable = false;
 	bool ch_tse = task_switch_enable_old == true;
 	// for
-	// - ProcessBlock::cpu0_task
+	// - Taskman::pcurrent[pcurrent::getID()];
 	//
 	Letpara(paras, callid);
 	stduint para[3] = {0xF1, 0xF8, 0xFA};// magic for debug
@@ -113,7 +113,7 @@ static stduint call_body(const syscall_t callid, ...) {
 	for0(i, pcnt) {
 		para[i] = para_next(paras, stduint);
 	}
-	stduint caller_pid = ProcessBlock::cpu0_task;
+	stduint caller_pid = Taskman::CurrentPID();
 	byte flg = syscall_delayflgs[_IMM(callid) / _BYTE_BITS_];
 	if (!(flg & _IMM1S(_IMM(callid) & 0b111)) && ch_tse) {
 		task_switch_enable = task_switch_enable_old;
@@ -151,7 +151,7 @@ static stduint call_body(const syscall_t callid, ...) {
 		break;
 	case syscall_t::REST:
 	// case_syscall_t_REST:
-		switch_task();
+		Taskman::Schedule(true);
 		if (ch_tse) task_switch_enable = task_switch_enable_old;
 		break;
 	case syscall_t::COMM:// (mode, obj, vaddr msg)
@@ -174,7 +174,7 @@ static stduint call_body(const syscall_t callid, ...) {
 		
 		if (pb->state == ProcessBlock::State::Pended) {
 			// goto case_syscall_t_REST;
-			switch_task();
+			Taskman::Schedule(true);
 		}
 		if (ch_tse) task_switch_enable = task_switch_enable_old;
 		break;
@@ -303,8 +303,8 @@ void call_gate() { // noreturn
 	__asm("mov  %%eax, %0" : "=m"(dlogadd));
 	__asm("push %ebx;push %ecx;push %edx;push %ebp;push %esi;push %edi;");
 	__asm("call PG_PUSH");
-	auto pb = TaskGet(ProcessBlock::cpu0_task);
-	if (ProcessBlock::cpu0_task && pb) {
+	auto pb = TaskGet(Taskman::CurrentPID());
+	if (Taskman::CurrentPID() && pb) {
 		if (!pb->before_syscall_data_pointer) {
 			pb->before_syscall_data_pointer = dlogadd;// sp
 			dlogadd = nil;
@@ -322,12 +322,12 @@ void call_gate() { // noreturn
 		}
 	}
 	__asm("sti");
-	// if (ProcessBlock::cpu0_task == Task_Init) {
+	// if (CurrentPID() == Task_Init) {
 	// 	plogwarn("d=%[32H] c=%[32H]", pb->before_syscall_data_pointer, pb->before_syscall_code_pointer);
 	// }
 	stduint ret = call_body((syscall_t)para[0], para[1], para[2], para[3]);
 	__asm("cli");
-	pb = TaskGet(ProcessBlock::cpu0_task);
+	pb = TaskGet(Taskman::CurrentPID());
 	if (!dlogadd) pb->before_syscall_data_pointer = nil;
 	if (!clogadd) pb->before_syscall_code_pointer = nil;
 	__asm("call PG_POP");

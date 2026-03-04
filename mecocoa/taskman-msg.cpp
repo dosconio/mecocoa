@@ -16,6 +16,9 @@ extern uni::witch::control::TextBox* ptext_1;
 
 extern void sysmsg_kbd(keyboard_event_t kbd_event);
 extern uni::Dchain TimerManager;
+extern bool ento_gui;
+extern uni::LayerManager global_layman;
+extern uni::VideoControlInterface* real_pvci;
 void _Comment(R0) serv_sysmsg() {
 	#if _MCCA == 0x8664 && defined(_UEFI)
 	while (true) {
@@ -50,6 +53,12 @@ void _Comment(R0) serv_sysmsg() {
 		case SysMessage::RUPT_KBD:
 			// ploginfo("Kbd %[32H]", msg.args.kbd_event);
 			sysmsg_kbd(msg.args.kbd_event);
+			break;
+		case SysMessage::RUPT_FLUSH:
+			if (ento_gui && real_pvci && global_layman.sheet_buffer) {
+				if (msg.args.rect.w > 0 && msg.args.rect.h > 0)
+					real_pvci->DrawPoints(msg.args.rect.toRectangle(), global_layman.sheet_buffer);
+			}
 			break;
 		default:
 			plogerro("Unknown message type: %d", msg.type);

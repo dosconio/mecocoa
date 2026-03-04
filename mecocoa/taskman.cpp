@@ -13,148 +13,8 @@
 static SysMessage _BUF_Message[64];
 Queue<SysMessage> message_queue(_BUF_Message, numsof(_BUF_Message));
 
-Taskman::ReadyQueue Taskman::priority_queues[32] = {};
-Taskman::ReadyQueue Taskman::expired_queues[32] = {};
-unsigned int Taskman::ready_bitmap = 0;
-unsigned int Taskman::expired_bitmap = 0;
-
-void Taskman::EnqueueReady(ProcessBlock* pb) {
-	if (pb->state != ProcessBlock::State::Ready && pb->state != ProcessBlock::State::Running) return;
-	int idx = pb->priority + 16;
-	if (idx < 0) idx = 0;
-	if (idx > 31) idx = 31;
-	
-	pb->queue_state_next = nullptr;
-	if (priority_queues[idx].tail) {
-		priority_queues[idx].tail->queue_state_next = pb;
-		pb->queue_state_prev = priority_queues[idx].tail;
-		priority_queues[idx].tail = pb;
-	} else {
-		priority_queues[idx].head = priority_queues[idx].tail = pb;
-		pb->queue_state_prev = nullptr;
-	}
-	ready_bitmap |= (1U << idx);
-}
-
-void Taskman::EnqueueExpired(ProcessBlock* pb) {
-	if (pb->state != ProcessBlock::State::Ready && pb->state != ProcessBlock::State::Running) return;
-	int idx = pb->priority + 16;
-	if (idx < 0) idx = 0;
-	if (idx > 31) idx = 31;
-	
-	pb->is_expired = true;
-	
-	pb->queue_state_next = nullptr;
-	if (expired_queues[idx].tail) {
-		expired_queues[idx].tail->queue_state_next = pb;
-		pb->queue_state_prev = expired_queues[idx].tail;
-		expired_queues[idx].tail = pb;
-	} else {
-		expired_queues[idx].head = expired_queues[idx].tail = pb;
-		pb->queue_state_prev = nullptr;
-	}
-	expired_bitmap |= (1U << idx);
-}
-
-void Taskman::DequeueReady(ProcessBlock* pb) {
-	int idx = pb->priority + 16;
-	if (idx < 0) idx = 0;
-	if (idx > 31) idx = 31;
-
-	bool in_active = false;
-	bool in_expired = false;
-
-	if (priority_queues[idx].head == pb) { 
-		in_active = true; 
-		priority_queues[idx].head = pb->queue_state_next; 
-	} else if (expired_queues[idx].head == pb) { 
-		in_expired = true; 
-		expired_queues[idx].head = pb->queue_state_next; 
-	} else {
-		if (priority_queues[idx].tail == pb) in_active = true;
-		else if (expired_queues[idx].tail == pb) in_expired = true;
-	}
-
-	if (pb->queue_state_prev) pb->queue_state_prev->queue_state_next = pb->queue_state_next;
-	if (pb->queue_state_next) pb->queue_state_next->queue_state_prev = pb->queue_state_prev;
-
-	if (in_active && priority_queues[idx].tail == pb) priority_queues[idx].tail = pb->queue_state_prev;
-	if (in_expired && expired_queues[idx].tail == pb) expired_queues[idx].tail = pb->queue_state_prev;
-
-	pb->queue_state_prev = pb->queue_state_next = nullptr;
-
-	if (in_active && !priority_queues[idx].head) ready_bitmap &= ~(1U << idx);
-	if (in_expired && !expired_queues[idx].head) expired_bitmap &= ~(1U << idx);
-}
-
-ProcessBlock* Taskman::PickNext() {
-	// If the A-Type TS segment (bits 16-31) is empty in Ready, but populated in Expired, Swap!
-	if ((ready_bitmap & 0xFFFF0000) == 0 && (expired_bitmap & 0xFFFF0000) != 0) {
-		for (int i = 16; i < 32; i++) {
-			priority_queues[i] = expired_queues[i];
-			expired_queues[i].head = expired_queues[i].tail = nullptr;
-			
-			// Reset is_expired flag for all tasks in the new epoch
-			ProcessBlock* node = priority_queues[i].head;
-			while (node) {
-				node->is_expired = false;
-				node = node->queue_state_next;
-			}
-		}
-		ready_bitmap |= (expired_bitmap & 0xFFFF0000);
-		expired_bitmap &= 0x0000FFFF;
-	}
-
-	if (!ready_bitmap) return nullptr;
-	uint32 idx = __builtin_ctz(ready_bitmap);
-	return priority_queues[idx].head;
-}
-
-void ProcessBlock::Block(BlockReason reason) {
-	if (state == State::Ready || state == State::Running) Taskman::DequeueReady(this);
-	state = State::Pended;
-	block_reason = BlockReason(block_reason | reason);
-}
-
-void ProcessBlock::Unblock(BlockReason reason) {
-	block_reason = BlockReason(block_reason & ~reason);
-	if (block_reason == BlockReason::BR_None) {
-		state = State::Ready;//{} else panic...
-		if (this->is_expired) {
-			Taskman::EnqueueExpired(this);
-		} else {
-			Taskman::EnqueueReady(this);
-		}
-	}
-}
 
 #if (_MCCA & 0xFF00) == 0x8600
-#if _MCCA == 0x8632
-
-//{TODO} Soft Switch
-
-static ProcessBlock krnl_tss_cpu0;
-void Taskman::Initialize(stduint cpuid) {
-	if (cpuid == 0) {
-		PCU_CORES_TSS[0] = &krnl_tss_cpu0.TSS;
-		//
-		new (&krnl_tss_cpu0) ProcessBlock;
-		krnl_tss_cpu0.TSS.CR3 = getCR3();
-		krnl_tss_cpu0.TSS.LDTDptr = 0;
-		krnl_tss_cpu0.TSS.STRC_15_T = 0;
-		krnl_tss_cpu0.TSS.IO_MAP = sizeof(TSS_t) - 1;
-		krnl_tss_cpu0.focus_tty_id = 0;
-		// Type = 10x1 + L=0 +  D/B=0 + 16B  64-bit TSS
-		//             + L=1 OR D/B=1       32-bit TSS
-		mecocoa_global->gdt_ptr->tss.setRange(_IMM(PCU_CORES_TSS[0]), sizeof(TSS_t) - 1);
-		min_available_pid = 0;
-		Taskman::Append(&krnl_tss_cpu0);
-		krnl_tss_cpu0.state = ProcessBlock::State::Running;
-		loadTask(SegTSS0);
-	}
-}
-
-#elif _MCCA == 0x8664
 
 static int ProcCmp(pureptr_t a, pureptr_t b) {
 	return treat<ProcessBlock>(((Dnode*)a)->offs).pid -
@@ -167,9 +27,15 @@ void Taskman::Initialize(stduint cpuid) {
 	MemSet(addr, 0, sizeof(TSS_t) * PCU_CORES);
 	for0(i, PCU_CORES) {
 		PCU_CORES_TSS[i] = addr;
+		#if _MCCA == 0x8664
 		addr->RSP0 = _IMM(mem.allocate(0x1000));
+		#else
+		addr->ESP0 = _IMM(mem.allocate(0x1000));
+		#endif
 		addr++;
 	}
+	// Type = 10x1 + L=0 +  D/B=0 + 16B  64-bit TSS
+	//             + L=1 OR D/B=1        32-bit TSS
 	mecocoa_global->gdt_ptr->tss.setRange(_IMM(PCU_CORES_TSS[0]), sizeof(TSS_t) - 1);
 	auto kernel_task = AllocateTask();
 	min_available_left = chain.Append(kernel_task);
@@ -185,10 +51,9 @@ void Taskman::Initialize(stduint cpuid) {
 }
 
 #endif
-#endif
 
-// ---- TaskRegister ----
-#if _MCCA == 0x8664
+// ---- . ----
+
 auto Taskman::AllocateTask() -> ProcessBlock* {
 	// auto ppb = zalcof(ProcessBlock);
 	auto ppb = (ProcessBlock*)mem.allocate(sizeof(ProcessBlock), 4);
@@ -200,6 +65,7 @@ auto Taskman::AllocateTask() -> ProcessBlock* {
 	return ppb;
 }
 
+#if _MCCA == 0x8664
 ProcessBlock* Taskman::Create(void* entry, byte ring)
 {
 	auto ppb = AllocateTask();
@@ -232,8 +98,6 @@ ProcessBlock* Taskman::Create(void* entry, byte ring)
 #include "../include/filesys.hpp"
 
 bool task_switch_enable = true;//{} spinlk
-stduint ProcessBlock::cpu0_task;
-stduint ProcessBlock::cpu0_rest;
 
 //// ---- ---- x86 ITEM ---- ---- ////
 
@@ -260,9 +124,6 @@ stduint ProcessBlock::cpu0_rest;
 * 0x1800 Stack R2
 * 0x1C00 Stack R3
 */
-
-
-
 
 static void make_LDT(descriptor_t* ldt_alias, byte ring) {
 	ldt_alias[0]._data = 0;
@@ -321,7 +182,7 @@ ProcessBlock* TaskRegister(void* entry, byte ring)
 		pb->paging.Reset();
 		TSS->CR3 = _IMM(pb->paging.root_level_page);
 		pb->paging.MapWeak(0x00000000, 0x00000000, 0x00400000, true, _Comment(R0) true);//{TEMP}
-		pb->paging.MapWeak(0x80000000, 0x00000000, 0x00080000, true, _Comment(R0) false);// 0x80 pages
+		pb->paging.MapWeak(0x80000000, 0x00000000, 0x08000000, true, _Comment(R0) false);// 0x80 pages
 	}
 	else {
 		pb->paging.root_level_page = (PageDirectory*)TSS->CR3;
@@ -427,7 +288,8 @@ ProcessBlock* TaskLoad(BlockTrait* source, void* addr, byte ring)
 	TSS->CR3 = _IMM(pb->paging.root_level_page);
 	pb->paging.Map(0x00001000, _IMM(page), allocsize, true, _Comment(R3) true);// PB&STACK
 	stduint kernel_size = _TEMP 0x00400000;
-	pb->paging.Map(0x80000000, 0x00000000, kernel_size, true, _Comment(R0) false);// should include LDT
+	pb->paging.Map(0x80000000, 0x00000000, 0x04000000, true, _Comment(R0) false);// should include LDT
+	// pb->paging.Map(0x80000000, 0x00000000, kernel_size, true, _Comment(R0) false);// should include LDT
 	// [PHINA]: should include LDT in Paging if use jmp-tss
 	#if 1 // may conflict
 	pb->paging.MapWeak(_IMM(page), _IMM(page), allocsize, true, _Comment(R0) false);

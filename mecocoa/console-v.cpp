@@ -202,6 +202,15 @@ void GloScreenARGB8888::DrawFont(const Point& disp, const DisplayFont& font) con
 Color GloScreenARGB8888::GetColor(Point p) const {
 	return cast<Color>(Locate(p));
 }
+void GloScreenARGB8888::DrawPoints(const Rectangle& rect, const Color* base) const {
+	uint32* p = &Locate(rect.getVertex());
+	const Color* pbase = base + rect.y * VCI_LimitX() + rect.x;
+	for0(y, rect.height) {
+		for0(x, rect.width) p[x] = pbase[x].val;
+		p += VCI_LimitX();
+		pbase += VCI_LimitX();
+	}
+}
 
 
 
@@ -239,6 +248,9 @@ Color GloScreenABGR8888::GetColor(Point p) const {
 	color.b = (val >> 16) & 0xFF;
 	color.a = (val >> 24) & 0xFF;
 	return color;
+}
+void GloScreenABGR8888::DrawPoints(const Rectangle& rect, const Color* base) const {
+	
 }
 
 

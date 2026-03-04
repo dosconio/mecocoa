@@ -20,3 +20,14 @@ use crate uni;
 #if _MCCA == 0x8664 && defined(_UEFI)
 extern InterruptControl IC;
 #endif
+
+#define _GUI_DOUBLE_BUFFER 1
+
+// ---- unsolved ----
+
+//{unsolved} x8632
+#if _MCCA == 0x8632
+#undef _GUI_DOUBLE_BUFFER
+#define _GUI_DOUBLE_BUFFER 0
+#endif
+

@@ -48,8 +48,8 @@ bool Memory::initialize(stduint eax, byte* ebx) {
 	#if _MCCA == 0x8632
 	_physical_allocate = Memory::physical_allocate;
 	kernel_paging.Reset();// should take 0x1000
-	kernel_paging.MapWeak(0x00000000, 0x00000000, 0x00400000, true, _Comment(R0) true);
-	kernel_paging.MapWeak(0x80000000, 0x00000000, 0x00400000, true, _Comment(R0) false);
+	kernel_paging.Map(0x00000000, 0x00000000, 0x04000000, true, _Comment(R0) true);
+	kernel_paging.Map(0x80000000, 0x00000000, 0x04000000, true, _Comment(R0) false);
 	setCR3(_IMM(kernel_paging.root_level_page));
 	PagingEnable();
 	#endif

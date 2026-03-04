@@ -46,6 +46,7 @@ GloScreenARGB8888 local_vci;
 GloScreenARGB8888 vga_ARGB8888;
 GloScreenABGR8888 vga_ABGR8888;
 #endif
+VideoControlInterface* real_pvci = nullptr;
 byte _BUF_QueueMouse[byteof(QueueLimited)];
 
 unsigned IndexTTY(pureptr_t addr) {
@@ -124,6 +125,7 @@ void _Comment(R1) serv_cons_loop()
 			Ribbon[78].attr = kbd_state.mod.r_shift ? 0x70 : 0x07;
 			Ribbon[79].attr = kbd_state.mod.r_ctrl ? 0x70 : 0x07;
 		}
+
 		// Process potential message
 		if (syscall(syscall_t::TMSG)) {
 			sysrecv(ANYPROC, to_args, byteof(to_args), &sig_type, &sig_src);
@@ -248,6 +250,26 @@ void cons_init() {
 		vcon0_size,
 		true, _Comment(R0) false
 	);// VGA
+	#endif
+
+	// Double Buffer
+	#if _GUI_DOUBLE_BUFFER
+	global_layman.sheet_buffer = (Color*)mem.allocate(vcon0_size);
+	if (!global_layman.sheet_buffer) {
+		plogerro("Failed to allocate back buffer for Layman");
+	} else {
+		global_layman.sheet_area = screen0_win;
+		for0(i, global_layman.window.getArea()) {
+			global_layman.sheet_buffer[i] = Color::Black;
+		}
+		// Redirect global_layman's VCI to point to our back-buffer
+		extern VideoControlInterface* real_pvci;
+		real_pvci = global_layman.pvci;
+		// Allocate a static VCI for the back-buffer
+		static byte _BUF_VCI[sizeof(VideoControlInterfaceMARGB8888)];
+		VideoControlInterfaceMARGB8888* back_vci = new (_BUF_VCI) VideoControlInterfaceMARGB8888(global_layman.sheet_buffer, screen0_win.getSize());
+		global_layman.pvci = back_vci;
+	}
 	#endif
 
 	// cursor

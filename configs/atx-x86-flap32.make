@@ -115,24 +115,21 @@ subappb:
 	gcc subapps/hellob/*.c accmlib/*.o -o $(uobjpath)/app-$(arch)/b -m32 -nostdlib  -fno-pic -static -I$(uincpath) -D_ACCM=0x8632
 	# ...
 
+qemu_args=\
+	-drive format=raw,file=$(outs),if=floppy \
+	-boot order=a -m 1G\
+	-drive file=$(ubinpath)/fixed1.vhd,format=vpc,if=none,id=disk0 \
+	-device ide-hd,drive=disk0,bus=ide.0,unit=0 \
+	-drive file=$(ubinpath)/fixed2.vhd,format=vpc,if=none,id=disk1 \
+	-device ide-hd,drive=disk1,bus=ide.0,unit=1 \
+	-audiodev pa,id=speaker -machine pcspk-audiodev=speaker \
+
 run: build run-only
 run-only:
 	$(qemu) \
-		-drive format=raw,file=$(outs),if=floppy \
-		-boot order=a -m 32\
-		-drive file=$(ubinpath)/fixed1.vhd,format=vpc,if=none,id=disk0 \
-		-device ide-hd,drive=disk0,bus=ide.0,unit=0 \
-		-drive file=$(ubinpath)/fixed2.vhd,format=vpc,if=none,id=disk1 \
-		-device ide-hd,drive=disk1,bus=ide.0,unit=1 \
-		-audiodev pa,id=speaker -machine pcspk-audiodev=speaker \
+		$(qemu_args) \
 		-enable-kvm -cpu host || $(qemu) \
-		-drive format=raw,file=$(outs),if=floppy \
-		-boot order=a -m 32\
-		-drive file=$(ubinpath)/fixed1.vhd,format=vpc,if=none,id=disk0 \
-		-device ide-hd,drive=disk0,bus=ide.0,unit=0 \
-		-drive file=$(ubinpath)/fixed2.vhd,format=vpc,if=none,id=disk1 \
-		-device ide-hd,drive=disk1,bus=ide.0,unit=1 \
-		-audiodev dsound,id=speaker -machine pcspk-audiodev=speaker
+		$(qemu_args)
 
 clean:
 	@echo ---- Mecocoa $(arch) ----#[clearing]

@@ -121,7 +121,7 @@ run: build run-only
 run-only:
 	$(QEMU) \
 		-drive format=raw,file=$(outs),if=floppy \
-		-boot order=a -m 256\
+		-boot order=a -m 1G\
 		-drive file=$(ubinpath)/fixed2.vhd,format=vpc,if=none,id=disk0 \
 		-device ide-hd,drive=disk0,bus=ide.0,unit=0 \
 		-drive file=$(ubinpath)/fixed1.vhd,format=vpc,if=none,id=disk1 \
@@ -129,7 +129,7 @@ run-only:
 		-audiodev pa,id=speaker -machine pcspk-audiodev=speaker \
 		-enable-kvm -cpu host || $(QEMU) \
 		-drive format=raw,file=$(outs),if=floppy \
-		-boot order=a -m 256\
+		-boot order=a -m 1G\
 		-drive file=$(ubinpath)/fixed2.vhd,format=vpc,if=none,id=disk0 \
 		-device ide-hd,drive=disk0,bus=ide.0,unit=0 \
 		-drive file=$(ubinpath)/fixed1.vhd,format=vpc,if=none,id=disk1 \

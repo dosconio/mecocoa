@@ -18,6 +18,121 @@ stduint Taskman::PCU_CORES = 0;
 stduint Taskman::pcurrent[PCU_CORES_MAX];
 
 
+Taskman::ReadyQueue Taskman::priority_queues[32] = {};
+Taskman::ReadyQueue Taskman::expired_queues[32] = {};
+unsigned int Taskman::ready_bitmap = 0;
+unsigned int Taskman::expired_bitmap = 0;
+
+void Taskman::EnqueueReady(ProcessBlock* pb) {
+	if (pb->state != ProcessBlock::State::Ready && pb->state != ProcessBlock::State::Running) return;
+	int idx = pb->priority + 16;
+	if (idx < 0) idx = 0;
+	if (idx > 31) idx = 31;
+	
+	pb->queue_state_next = nullptr;
+	if (priority_queues[idx].tail) {
+		priority_queues[idx].tail->queue_state_next = pb;
+		pb->queue_state_prev = priority_queues[idx].tail;
+		priority_queues[idx].tail = pb;
+	} else {
+		priority_queues[idx].head = priority_queues[idx].tail = pb;
+		pb->queue_state_prev = nullptr;
+	}
+	ready_bitmap |= (1U << idx);
+}
+
+void Taskman::EnqueueExpired(ProcessBlock* pb) {
+	if (pb->state != ProcessBlock::State::Ready && pb->state != ProcessBlock::State::Running) return;
+	int idx = pb->priority + 16;
+	if (idx < 0) idx = 0;
+	if (idx > 31) idx = 31;
+	
+	pb->is_expired = true;
+	
+	pb->queue_state_next = nullptr;
+	if (expired_queues[idx].tail) {
+		expired_queues[idx].tail->queue_state_next = pb;
+		pb->queue_state_prev = expired_queues[idx].tail;
+		expired_queues[idx].tail = pb;
+	} else {
+		expired_queues[idx].head = expired_queues[idx].tail = pb;
+		pb->queue_state_prev = nullptr;
+	}
+	expired_bitmap |= (1U << idx);
+}
+
+void Taskman::DequeueReady(ProcessBlock* pb) {
+	int idx = pb->priority + 16;
+	if (idx < 0) idx = 0;
+	if (idx > 31) idx = 31;
+
+	bool in_active = false;
+	bool in_expired = false;
+
+	if (priority_queues[idx].head == pb) { 
+		in_active = true; 
+		priority_queues[idx].head = pb->queue_state_next; 
+	} else if (expired_queues[idx].head == pb) { 
+		in_expired = true; 
+		expired_queues[idx].head = pb->queue_state_next; 
+	} else {
+		if (priority_queues[idx].tail == pb) in_active = true;
+		else if (expired_queues[idx].tail == pb) in_expired = true;
+	}
+
+	if (pb->queue_state_prev) pb->queue_state_prev->queue_state_next = pb->queue_state_next;
+	if (pb->queue_state_next) pb->queue_state_next->queue_state_prev = pb->queue_state_prev;
+
+	if (in_active && priority_queues[idx].tail == pb) priority_queues[idx].tail = pb->queue_state_prev;
+	if (in_expired && expired_queues[idx].tail == pb) expired_queues[idx].tail = pb->queue_state_prev;
+
+	pb->queue_state_prev = pb->queue_state_next = nullptr;
+
+	if (in_active && !priority_queues[idx].head) ready_bitmap &= ~(1U << idx);
+	if (in_expired && !expired_queues[idx].head) expired_bitmap &= ~(1U << idx);
+}
+
+ProcessBlock* Taskman::PickNext() {
+	// If the A-Type TS segment (bits 16-31) is empty in Ready, but populated in Expired, Swap!
+	if ((ready_bitmap & 0xFFFF0000) == 0 && (expired_bitmap & 0xFFFF0000) != 0) {
+		for (int i = 16; i < 32; i++) {
+			priority_queues[i] = expired_queues[i];
+			expired_queues[i].head = expired_queues[i].tail = nullptr;
+			
+			// Reset is_expired flag for all tasks in the new epoch
+			ProcessBlock* node = priority_queues[i].head;
+			while (node) {
+				node->is_expired = false;
+				node = node->queue_state_next;
+			}
+		}
+		ready_bitmap |= (expired_bitmap & 0xFFFF0000);
+		expired_bitmap &= 0x0000FFFF;
+	}
+
+	if (!ready_bitmap) return nullptr;
+	uint32 idx = __builtin_ctz(ready_bitmap);
+	return priority_queues[idx].head;
+}
+
+void ProcessBlock::Block(BlockReason reason) {
+	if (state == State::Ready || state == State::Running) Taskman::DequeueReady(this);
+	state = State::Pended;
+	block_reason = BlockReason(block_reason | reason);
+}
+
+void ProcessBlock::Unblock(BlockReason reason) {
+	block_reason = BlockReason(block_reason & ~reason);
+	if (block_reason == BlockReason::BR_None) {
+		state = State::Ready;//{} else panic...
+		if (this->is_expired) {
+			Taskman::EnqueueExpired(this);
+		} else {
+			Taskman::EnqueueReady(this);
+		}
+	}
+}
+
 bool Taskman::Append(ProcessBlock* task) {
 	task->pid = min_available_pid;
 	auto nod = chain.Append(task, false, min_available_left);
@@ -45,57 +160,53 @@ ProcessBlock* Taskman::Locate(stduint taskid) {
 	return nullptr;
 }
 
-#if _MCCA == 0x8664
-extern NormalTaskContext task_b_ctx, task_kernel_ctx;
-// auto Taskman::Schedule(void* timeout, ...)->decltype(Schedule(timeout))
-auto Taskman::Schedule()->decltype(Schedule())
-{
-	stduint cpuid = _TEMP 0;
-	auto old_pb = PickNext();
-	if (!old_pb) return; // No task ready
-	
+static auto
+ifContinueProcess(ProcessBlock* old_pb) -> bool {
+	using PBS = ProcessBlock::State;
 	// Timeslice management (A-Type context)
-	if (old_pb->priority >= 0) {
-		if (old_pb->time_slice > 0) {
-			old_pb->time_slice--;
-			return; // Continue same task
+	if (old_pb->state == PBS::Running) {
+		if (old_pb->priority >= 0) {
+			if (old_pb->time_slice > 0) {
+				old_pb->time_slice--;
+				return true; // Continue same task
+			} else {
+				Taskman::DequeueReady(old_pb);
+				old_pb->state = PBS::Ready;
+				
+				// Enqueue to Expired Queue for Epoch A-Type Scheduling
+				Taskman::EnqueueExpired(old_pb); 
+				
+				// Allocation mapping:
+				// < 0 (RT)     => 4 slices
+				// 0..3         => 4 slices
+				// 4..7         => 3 slices
+				// 8..11        => 2 slices
+				// 12..15       => 1 slice
+				if (old_pb->priority <= 3) old_pb->time_slice = 4;
+				else if (old_pb->priority <= 7) old_pb->time_slice = 3;
+				else if (old_pb->priority <= 11) old_pb->time_slice = 2;
+				else old_pb->time_slice = 1;
+			}
 		} else {
-			Taskman::DequeueReady(old_pb);
-			
-			// Enqueue to Expired Queue for Epoch A-Type Scheduling
-			Taskman::EnqueueExpired(old_pb); 
-			
-			// Allocation mapping:
-			// < 0 (RT)     => 4 slices
-			// 0..3         => 4 slices
-			// 4..7         => 3 slices
-			// 8..11        => 2 slices
-			// 12..15       => 1 slice
-			if (old_pb->priority <= 3) old_pb->time_slice = 4;
-			else if (old_pb->priority <= 7) old_pb->time_slice = 3;
-			else if (old_pb->priority <= 11) old_pb->time_slice = 2;
-			else old_pb->time_slice = 1;
+			// RT management (B-Type)
+			if (old_pb->time_slice > 0) {
+				old_pb->time_slice--;
+				return true; // Continue same task
+			} else {
+				Taskman::DequeueReady(old_pb);
+				old_pb->state = PBS::Ready;
+				Taskman::EnqueueReady(old_pb); // Re-queue at tail (Round-Robin for same RT priority)
+				old_pb->time_slice = 4; // RT tasks also get 4 slices to avoid hogging forever if yielding is missed
+			}
 		}
-	} else {
-		// RT management (B-Type)
-		if (old_pb->time_slice > 0) {
-			old_pb->time_slice--;
-			return; // Continue same task
-		} else {
-			Taskman::DequeueReady(old_pb);
-			Taskman::EnqueueReady(old_pb); // Re-queue at tail (Round-Robin for same RT priority)
-			old_pb->time_slice = 4; // RT tasks also get 4 slices to avoid hogging forever if yielding is missed
-		}
+	} else if (old_pb && old_pb->state != PBS::Ready && old_pb->state != PBS::Uninit) {
+		// e.g. Pended or Hanging, already handled by DequeueReady elsewhere or below
+	} else if (old_pb && old_pb->state == PBS::Ready) {
+		// Nothing special, already in queue
 	}
-
-	auto new_pb = PickNext();
-	if (!new_pb || new_pb == old_pb) return;
-	// ploginfo("switch %d->%d", old_pb->pid, new_pb->pid);
-	SwitchTaskContext(&new_pb->context, &old_pb->context);
+	return false;
 }
-#endif
 
-#ifdef _ARC_x86 // x86:
 
 /**
  * Mecocoa O(1) Priority Scheduler
@@ -115,79 +226,54 @@ auto Taskman::Schedule()->decltype(Schedule())
  */
 
 // before calling, the task may be pended
-void switch_task() {
+// auto Taskman::Schedule(void* timeout, ...)->decltype(Schedule(timeout))
+#if (_MCCA & 0xFF00) == 0x8600
+auto Taskman::Schedule(bool omit_slice)->decltype(Schedule())
+{
 	using PBS = ProcessBlock::State;
-
-	task_switch_enable = false;//{TODO} Lock
-
-	auto pb_src = TaskGet(ProcessBlock::cpu0_task);
-	if (!pb_src) pb_src = TaskGet(0); // fallback
-
-	// Timeslice management for current task
-	if (pb_src->state == PBS::Running) {
-		if (pb_src->priority >= 0) {
-			if (pb_src->time_slice > 0) {
-				pb_src->time_slice--;
-				task_switch_enable = true;
-				return; // Continue same task
-			} else {
-				Taskman::DequeueReady(pb_src);
-				pb_src->state = PBS::Ready;
-				
-				// Enqueue to Expired Queue for Epoch A-Type Scheduling
-				Taskman::EnqueueExpired(pb_src); 
-				
-				// Allocation mapping:
-				if (pb_src->priority <= 3) pb_src->time_slice = 4;
-				else if (pb_src->priority <= 7) pb_src->time_slice = 3;
-				else if (pb_src->priority <= 11) pb_src->time_slice = 2;
-				else pb_src->time_slice = 1;
-			}
-		} else {
-			// RT management (B-Type)
-			if (pb_src->time_slice > 0) {
-				pb_src->time_slice--;
-				task_switch_enable = true;
-				return; // Continue same task
-			} else {
-				Taskman::DequeueReady(pb_src);
-				pb_src->state = PBS::Ready;
-				Taskman::EnqueueReady(pb_src); // Re-queue at tail (Round-Robin for same RT priority)
-				pb_src->time_slice = 4; // RT tasks also get 4 slices
-			}
-		}
-	} else if (pb_src->state != PBS::Ready && pb_src->state != PBS::Uninit) {
-		// e.g. Pended or Hanging, already handled by DequeueReady elsewhere or below
-	} else if (pb_src->state == PBS::Ready) {
-		// Nothing special, already in queue
-	}
-
-	auto pb_des = Taskman::PickNext();
-	
-	// If no task is ready, fallback to idle/kernel
-	if (!pb_des) pb_des = TaskGet(0);
-	
-	if (pb_des == pb_src) {
-		if (pb_src->state == PBS::Ready) pb_src->state = PBS::Running;
-		task_switch_enable = true;
+	#if _MCCA == 0x8632
+	task_switch_enable = false;//{TODO} Lock, cpu0
+	#endif
+	stduint cpuid = getID();
+	auto old_pb = Taskman::Locate(CurrentPID());
+	if (!old_pb) {
+		plogerro("Taskman::Schedule: No current task found for CPU %d", cpuid);
 		return;
 	}
-
-	ProcessBlock::cpu0_task = pb_des->pid;
-
-	if (pb_des->state == PBS::Uninit) pb_des->state = PBS::Ready;
-	if ((pb_src->state == PBS::Running) && (pb_des->state == PBS::Ready)) {
-		pb_src->state = PBS::Ready;
-		pb_des->state = PBS::Running;
-	} else if (pb_des->state == PBS::Ready) {
-		pb_des->state = PBS::Running;
+	if (ifContinueProcess(old_pb)) {
+		#if _MCCA == 0x8632
+		task_switch_enable = true;
+		#endif
+		return;
 	}
-	else {
-		printlog(_LOG_FATAL, "task switch error (PID%u, State%u, PCnt%u).", pb_des->getID(), _IMM(pb_des->state), Taskman::chain.Count());
+	auto new_pb = PickNext();
+	if (!new_pb) new_pb = Taskman::Locate(0);
+	if (new_pb == old_pb) {
+		if (old_pb->state == PBS::Ready) old_pb->state = PBS::Running;
+		#if _MCCA == 0x8632
+		task_switch_enable = true;
+		#endif
+		return;
 	}
+	CurrentPID() = new_pb->pid;
+	if (new_pb->state == PBS::Uninit) new_pb->state = PBS::Ready;
+	if (old_pb->state == PBS::Running && new_pb->state == PBS::Ready) {
+		old_pb->state = PBS::Ready;
+		new_pb->state = PBS::Running;
+	} else if (new_pb->state == PBS::Ready) {
+		new_pb->state = PBS::Running;
+	} else {
+		printlog(_LOG_FATAL, "task switch error (PID%u, State%u, PCnt%u).", new_pb->getID(), _IMM(new_pb->state), Taskman::chain.Count());
+	}
+
+	// ploginfo("switch %d->%d", old_pb->pid, new_pb->pid);
+	#if _MCCA == 0x8632
 	task_switch_enable = true;//{TODO} Unlock
-	// ploginfo("switch task %d->%d", pb_src->pid, pb_des->pid);
-	jmpTask(T_pid2tss(ProcessBlock::cpu0_task));
+	jmpTask(T_pid2tss(CurrentPID()));//[outdated]
+	#else
+	SwitchTaskContext(&new_pb->context, &old_pb->context);
+	#endif
 }
-
 #endif
+
+

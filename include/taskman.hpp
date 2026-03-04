@@ -15,15 +15,21 @@ struct MsgTimer {
 	stduint iden;
 	_tocall_ft hand;// Realtime Hook
 };
+struct MccaRectangle {
+	stduint x, y, w, h;
+	auto toRectangle() -> uni::Rectangle { return Rectangle(Point2(x, y), Size2(w, h)); }
+};
 struct SysMessage {
 	enum Type {
 		RUPT_xHCI,
 		RUPT_TIMER,
 		RUPT_KBD,
+		RUPT_FLUSH,
 	} type;
 	union {
 		struct MsgTimer timer;
 		keyboard_event_t kbd_event;
+		MccaRectangle rect;// RUPT_FLUSH
 	} args;
 };
 extern uni::Queue<SysMessage> message_queue;
@@ -105,8 +111,6 @@ public: // _Comment(Interface);
 public:// old design: have not updated completely
 	#if _MCCA == 0x8632
 	static stduint cpu_proc_number;
-	static stduint cpu0_task;
-	static stduint cpu0_rest;
 
 	//{} Mempool mempool;
 	uni::Paging paging;
@@ -148,6 +152,9 @@ public:// Gen.2
 	static Dchain chain;// [ArrayT] ordered by pid
 	static stduint min_available_pid;// in chain
 	static Dnode* min_available_left;// in chain
+public:// for local core
+	static stduint getID() { return _TEMP 0; }// get core id
+	static stduint& CurrentPID() { return pcurrent[getID()]; }// get core id
 public:
 	static auto
 		Initialize(stduint cpuid = 0) -> void;
@@ -159,7 +166,7 @@ public:
 	static auto
 		Create(void* entry, byte ring) -> ProcessBlock*;// newProcess
 public:// schedule
-	static auto Schedule() -> void;// Timer using
+	static auto Schedule(bool omit_slice = false) -> void;// Timer using
 	struct ReadyQueue {
 		ProcessBlock* head, * tail;
 		// 0..15 (aka -16 .. -1): Realtime (B-Type), schedule higher priority strictly first. Default: 4 slices
@@ -200,8 +207,6 @@ ProcessBlock* TaskRegister(void* entry, byte ring);
 ProcessBlock* TaskLoad(uni::BlockTrait* source, void* addr, byte ring);//{TODO} for existing R1
 
 inline ProcessBlock* TaskGet(stduint taskid) { return Taskman::Locate(taskid); }
-
-void switch_task();
 
 // return zero for success
 int msg_send(ProcessBlock* fo, stduint to, _Comment(vaddr) CommMsg* msg);
