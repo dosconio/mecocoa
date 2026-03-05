@@ -49,10 +49,10 @@ ADDR_PARA1 EQU 0x502
 	MOV AX, [BX]
 	CALL AX
 B16_NEXT:
+	Addr20Enable
 	MOV EAX, CR0
 	BTS EAX, 0
 	MOV CR0, EAX
-	Addr20Enable
 	JMP WORD SegCo32:PointBack32
 [BITS 32]
 PointBack32:
@@ -78,14 +78,25 @@ PointBack32:
 JMP FAR [KernelJump]
 
 %elif _MCCA == 0x8632
+OLD_STACK: DD 0
 
 [BITS 32]
 GLOBAL CallCo16
 CallCo16:
-	MOV EAX, [ESP+4*1]
-	MOV WORD[0x500], AX
+	MOV [OLD_STACK], ESP
+	; MOV EAX, [ESP+4*1]
+	MOV ESP, 0x7FF0
+	; MOV WORD[0x500], AX
 	; flap32 -> real16
 	PUSHAD
+	XOR EAX, EAX
+	XOR EBX, EBX
+	XOR ECX, ECX
+	XOR EDX, EDX
+	XOR ESI, ESI
+	XOR EDI, EDI
+	XOR EBP, EBP
+	CLD
 	JMP DWORD SegCo16:PointReal16
 [BITS 16]
 	EnterCo16
@@ -98,16 +109,18 @@ CallCo16:
 	MOV AX, [BX]
 	CALL AX
 	B16_NEXT:
+	Addr20Enable
 	MOV EAX, CR0
 	OR  EAX, 0x80000001
 	MOV CR0, EAX
-	Addr20Enable
 	JMP WORD SegCo32:PointBack32
 [BITS 32]
 PointBack32:
 	LoadDataSegs SegData
+	AND ESP, 0x0000FFFF
 	POPAD
 	LIDT [INTTBL_8632]
+	MOV ESP, [OLD_STACK]
 RET
 
 %endif
@@ -202,6 +215,8 @@ VideoModeList:; -> 0x78000
 		JZ  VideoModeListFin
 		PUSH SI
 		;
+		XOR AX, AX
+		MOV ES, AX
 		MOV AX, 0x4F01; VBE function: Get ModeInfo
 		MOV DI, CrtVideoInfo
 		INT 0x10
@@ -221,7 +236,7 @@ VideoModeList:; -> 0x78000
 		JNZ  VideoModeListNext
 		; log
 		MOV BX, [VideoModeListPointer]
-		MOV AX, [FS:SI]
+		MOV AX, CX;[FS:SI]
 		MOV [GS:BX], AX
 		MOV AX, [CrtVideoInfo + 0x12]; XResolution
 		MOV [GS:BX+2], AX
@@ -249,3 +264,5 @@ VideoModeListFin0:
 	POP SI
 VideoModeListFin:
 	RET
+GLOBAL _LADDER_ENDO
+_LADDER_ENDO:

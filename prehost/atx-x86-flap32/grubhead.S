@@ -41,7 +41,12 @@ multiboot_entry:
 	movl    %eax, _start_eax
 	movl    %ebx, _start_ebx
 	/*  Initialize the stack pointer. */
+	#ifdef _LOADER
 	movl    $0x7FF0, %esp
+	#else
+	# movl    $0x7000, %esp
+	movl    $(kernel_stack + 1024*4), %esp
+	#endif
 	/*  Reset EFLAGS. */
 	pushl   $0
 	popf

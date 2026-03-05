@@ -43,22 +43,42 @@ extern uni::LayerManager global_layman;
 extern VideoControlInterface* real_pvci;
 
 inline void RenderFrameFlush() {
+	if (!enable_dubuffer) return;
 	if (ento_gui && global_layman.pvci && global_layman.is_dirty) {
 		static uint64 last_flush_time = 0;
 		if (tick - last_flush_time >= 5) { // 100 FPS target (10ms)
 			global_layman.is_dirty = false;
 			SysMessage msg;
 			msg.type = SysMessage::RUPT_FLUSH;
-			msg.args.rect.x = global_layman.dirty_area.x;
-			msg.args.rect.y = global_layman.dirty_area.y;
-			msg.args.rect.w = global_layman.dirty_area.width;
-			msg.args.rect.h = global_layman.dirty_area.height;
+			// Safely clamp coordinates assuming entirely garbage values
+			stdsint x = global_layman.dirty_area.x;
+			stdsint y = global_layman.dirty_area.y;
+			stdsint w = global_layman.dirty_area.width;
+			stdsint h = global_layman.dirty_area.height;
+			
+			if (x < 0) { w += x; x = 0; }
+			if (y < 0) { h += y; y = 0; }
+			
+			stdsint max_w = global_layman.window.width - x;
+			stdsint max_h = global_layman.window.height - y;
+
+			if (w > max_w) w = max_w;
+			if (h > max_h) h = max_h;
+
+			if (w < 0) w = 0;
+			if (h < 0) h = 0;
+
+			msg.args.rect.x = x;
+			msg.args.rect.y = y;
+			msg.args.rect.w = w;
+			msg.args.rect.h = h;
 			global_layman.dirty_area = {};
 			global_layman.is_dirty = false;
 #if _MCCA == 0x8664
 			message_queue.Enqueue(msg);
 #elif _MCCA == 0x8632
-			if (real_pvci) real_pvci->DrawPoints(msg.args.rect.toRectangle(), global_layman.sheet_buffer);
+			if (real_pvci && w > 0 && h > 0)
+				real_pvci->DrawPoints(msg.args.rect.toRectangle(), global_layman.sheet_buffer);
 #endif
 
 			last_flush_time = tick;
@@ -94,15 +114,15 @@ void Handint_PIT()
 	}
 	static unsigned time_slice = 0;
 	time_slice++;
+	#if _GUI_DOUBLE_BUFFER
+	RenderFrameFlush();
+	#endif
 	if (time_slice >= 4) { // switch task
 		time_slice = 0;
 		if (task_switch_enable) {
 			Taskman::Schedule();
 		}
 	}
-	#if _GUI_DOUBLE_BUFFER
-	RenderFrameFlush();
-	#endif
 }
 
 void blink();

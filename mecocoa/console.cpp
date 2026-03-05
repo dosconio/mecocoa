@@ -39,6 +39,7 @@ VideoConsole* vcons[TTY_NUMBER];
 byte _BUF_cursor[byteof(Cursor)];
 // global
 bool ento_gui = false;
+bool enable_dubuffer = false;
 OstreamTrait* con0_out;
 #ifndef _UEFI
 GloScreenARGB8888 local_vci;
@@ -187,6 +188,31 @@ static const char form1_title_text[] = "Test TextBox";
 uni::witch::control::Label* plabel_1;
 uni::witch::control::TextBox* ptext_1;
 
+void enable_2buffer() {
+	// Double Buffer
+	//{} put off
+	#if _GUI_DOUBLE_BUFFER
+	auto vcon0_size = global_layman.window.getArea() * sizeof(Color);
+	global_layman.sheet_buffer = (Color*)mem.allocate(vcon0_size);
+	if (!global_layman.sheet_buffer) {
+		plogerro("Failed to allocate back buffer for Layman");
+	} else {
+		global_layman.sheet_area = global_layman.window;
+		for0(i, global_layman.window.getArea()) {
+			global_layman.sheet_buffer[i] = Color::Black;
+		}
+		// Redirect global_layman's VCI to point to our back-buffer
+		extern VideoControlInterface* real_pvci;
+		real_pvci = global_layman.pvci;
+		// Allocate a static VCI for the back-buffer
+		static byte _BUF_VCI[sizeof(VideoControlInterfaceMARGB8888)];
+		VideoControlInterfaceMARGB8888* back_vci = new (_BUF_VCI) VideoControlInterfaceMARGB8888(global_layman.sheet_buffer, global_layman.window.getSize());
+		global_layman.pvci = back_vci;
+	}
+	enable_dubuffer = true;
+	#endif
+}
+
 void cons_init() {
 	Bcons[0].Reset(bda->screen_columns, 24, _VIDEO_ADDR_BUFFER, 0 * 50); Bcons[0].setShowY(0, 24);
 	con0_out = &Bcons[0];
@@ -244,32 +270,12 @@ void cons_init() {
 	const stduint vcon0_size = global_layman.window.getArea() * sizeof(Color);
 	//{TODO} Mapping
 	#if _MCCA == 0x8632
-	kernel_paging.MapWeak(
+	kernel_paging.Map(
 		global_layman.video_memory,
 		global_layman.video_memory,
 		vcon0_size,
 		true, _Comment(R0) false
 	);// VGA
-	#endif
-
-	// Double Buffer
-	#if _GUI_DOUBLE_BUFFER
-	global_layman.sheet_buffer = (Color*)mem.allocate(vcon0_size);
-	if (!global_layman.sheet_buffer) {
-		plogerro("Failed to allocate back buffer for Layman");
-	} else {
-		global_layman.sheet_area = screen0_win;
-		for0(i, global_layman.window.getArea()) {
-			global_layman.sheet_buffer[i] = Color::Black;
-		}
-		// Redirect global_layman's VCI to point to our back-buffer
-		extern VideoControlInterface* real_pvci;
-		real_pvci = global_layman.pvci;
-		// Allocate a static VCI for the back-buffer
-		static byte _BUF_VCI[sizeof(VideoControlInterfaceMARGB8888)];
-		VideoControlInterfaceMARGB8888* back_vci = new (_BUF_VCI) VideoControlInterfaceMARGB8888(global_layman.sheet_buffer, screen0_win.getSize());
-		global_layman.pvci = back_vci;
-	}
 	#endif
 
 	// cursor

@@ -23,6 +23,9 @@ clean:
 	cd $(ulibpath)/.. && make clean
 	@make -f configs/$(arch).make clean --silent
 
+pack:
+	@make -f configs/$(arch).make pack --silent
+
 read:
 	readelf -a $(ubinpath)/$(arch).elf
 

@@ -202,6 +202,10 @@ void GloScreenARGB8888::DrawFont(const Point& disp, const DisplayFont& font) con
 Color GloScreenARGB8888::GetColor(Point p) const {
 	return cast<Color>(Locate(p));
 }
+
+#if defined(_MCCA) && ((_MCCA & 0xFF00) == 0x8600)
+__attribute__((target("general-regs-only")))
+#endif
 void GloScreenARGB8888::DrawPoints(const Rectangle& rect, const Color* base) const {
 	uint32* p = &Locate(rect.getVertex());
 	const Color* pbase = base + rect.y * VCI_LimitX() + rect.x;

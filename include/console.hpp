@@ -59,8 +59,10 @@ defVconIface(GloScreenARGB8888, uint32);
 defVconIface(GloScreenABGR8888, uint32);
 
 extern bool ento_gui;
+extern bool enable_dubuffer;
 
 void cons_init();
+void enable_2buffer();
 
 void hand_mouse(MouseMessage mmsg);
 void hand_kboard(keyboard_event_t mmsg);

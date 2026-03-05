@@ -23,11 +23,3 @@ extern InterruptControl IC;
 
 #define _GUI_DOUBLE_BUFFER 1
 
-// ---- unsolved ----
-
-//{unsolved} x8632
-#if _MCCA == 0x8632
-#undef _GUI_DOUBLE_BUFFER
-#define _GUI_DOUBLE_BUFFER 0
-#endif
-

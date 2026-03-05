@@ -41,6 +41,9 @@ void Taskman::Initialize(stduint cpuid) {
 	min_available_left = chain.Append(kernel_task);
 	kernel_task->state = ProcessBlock::State::Running;
 	Taskman::EnqueueReady(kernel_task);
+
+	//!!! grub will crash HERE!
+	
 	loadTask(SegTSS0);
 	//
 	pcurrent[cpuid] = 0;// kernel
@@ -440,7 +443,8 @@ static stduint task_fork(ProcessBlock* fo)
 			fo->load_slices[i].length);
 	}
 	stduint kernel_size = _TEMP 0x00400000;
-	pb->paging.Map(0x80000000, 0x00000000, kernel_size, true, _Comment(R0) false);// should include LDT
+	pb->paging.Map(0x80000000, 0x00000000, 0x8000000, true, _Comment(R0) false);// should include LDT
+	//[TODO] pb->paging.Map(0x80000000, 0x00000000, kernel_size, true, _Comment(R0) false);// should include LDT
 	// [PHINA]: should include LDT in Paging if use jmp-tss
 	#if 1 // may conflict
 	pb->paging.MapWeak(_IMM(page), _IMM(page), allocsize, true, _Comment(R0) false);

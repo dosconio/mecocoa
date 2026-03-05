@@ -18,6 +18,11 @@
 #include <c/driver/RealtimeClock.h>
 #include "../../include/atx-x86-flap32.hpp"
 
+_ESYM_C
+{
+	alignas(16) byte kernel_stack[4 * 1024] = {};
+}
+
 void mecfetch() {
 	const rostr blue = ento_gui ? "\xFE\xF8\xC8\x58" : "\xFF\x30";
 	const rostr pink = ento_gui ? "\xFE\xB8\xA8\xF8" : "\xFF\x50";
@@ -56,10 +61,10 @@ _sign_entry() {
 	if (!Memory::initialize(_start_eax, (byte*)_start_ebx)) HALT();
 	const unsigned mempool_lenN = 0x20000;
 	mempool.Append(Slice{ _IMM(mem.allocate(mempool_lenN)), mempool_lenN });
+	mempool.Append(Slice{ _IMM(mem.allocate(mempool_lenN)), mempool_lenN });
 	cons_init();// located here, for  INT-10H may influence PIC
 	Cache_t::enAble();
 	Taskman::Initialize();
-
 	// IVT and Device
 	InterruptControl GIC(_IMM(0x80000800));
 	GIC.Reset(SegCo32, 0x80000000);
@@ -72,7 +77,7 @@ _sign_entry() {
 	GIC[IRQ_SYSCALL].setRange(mglb(call_intr), SegCo32); GIC[IRQ_SYSCALL].DPL = 3;
 
 
-	mecfetch();
+	// mecfetch();
 	__asm("ud2");
 
 	ploginfo("[Memoman] total memory %[x]", Memory::total_memsize);

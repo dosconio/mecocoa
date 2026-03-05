@@ -43,16 +43,9 @@ void* Memory::physical_allocate(usize siz) {
 		ret = mem.allocate(siz);
 	}
 	else { // not support pg-mapping
-		if (p_basic + siz <= (void*)0x6000) {
-			void* ret = p_basic;
-			p_basic += siz;
-			return ret;
-		}
-		else {
-			void* ret = p_ext;
-			p_ext += siz;
-			return ret;
-		}
+		void* ret = p_ext;
+		p_ext += siz;
+		return ret;
 	}
 	return ret;
 }

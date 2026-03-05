@@ -58,6 +58,7 @@ _ESYM_C stduint CallCo16(stduint func);
 __attribute__((optimize("O0")))
 inline static uint16 call_ladder(uint16 func, uint16 para1 = 0, uint16 para2 = 0, uint16 para3 = 0) {
 	Letvar(p, volatile uint16*, 0x500);
+	p[0] = func;
 	p[1] = para1;
 	p[2] = para2;
 	p[3] = para3;
@@ -91,7 +92,7 @@ extern byte BSS_ENTO, BSS_ENDO;
 extern uni::Mempool mempool;
 
 #if _MCCA == 0x8632
-#define mem_area_exten_beg 0x00100000
+#define mem_area_exten_beg 0x00101000
 // area-basic: 0x7E00 .. 0x80000
 // area-exten: mem_area_exten_beg .. mem_area_exten_beg + areax_size
 #endif

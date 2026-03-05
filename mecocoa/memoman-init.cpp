@@ -45,19 +45,21 @@ static void parse_uefi(const MemoryMap& memory_map);
 // - allocate (which be with pagemap)
 // - free (which be with unmap) [TODO]
 bool Memory::initialize(stduint eax, byte* ebx) {
+	void* mapaddr = memoman_4G_00000000;
+	MemSet(mapaddr, 0, bmapsize);
+	Memory::pagebmap = new (_BUF_pagebmap) BmMemoman(mapaddr, bmapsize);
+
 	#if _MCCA == 0x8632
+	if (eax == MULTIBOOT2_BOOTLOADER_MAGIC) { parse_grub(_IMM(ebx)); }
 	_physical_allocate = Memory::physical_allocate;
-	kernel_paging.Reset();// should take 0x1000
-	kernel_paging.Map(0x00000000, 0x00000000, 0x04000000, true, _Comment(R0) true);
-	kernel_paging.Map(0x80000000, 0x00000000, 0x04000000, true, _Comment(R0) false);
+	MemSet(kernel_paging.root_level_page = (PageDirectory*)0x100000, 0, 0x1000);// kernel_paging.Reset();
+	kernel_paging.Map(0x00000000, 0x00000000, 0x10000000, true, _Comment(R0) true);
+	kernel_paging.Map(0x80000000, 0x00000000, 0x10000000, true, _Comment(R0) false);
 	setCR3(_IMM(kernel_paging.root_level_page));
 	PagingEnable();
 	#endif
 	GDT_Init();
 
-	void* mapaddr = memoman_4G_00000000;
-	MemSet(mapaddr, 0, bmapsize);
-	Memory::pagebmap = new (_BUF_pagebmap) BmMemoman(mapaddr, bmapsize);
 	switch (eax)
 	{
 	case 'ANIF':
@@ -68,7 +70,7 @@ bool Memory::initialize(stduint eax, byte* ebx) {
 		break;
 		#if _MCCA == 0x8632
 	case MULTIBOOT2_BOOTLOADER_MAGIC:
-		parse_grub(_IMM(ebx));
+		// parse_grub(_IMM(ebx));
 		break;
 		#endif
 
@@ -173,6 +175,10 @@ static stduint parse_grub(stduint addr)
 		}
 		cast<stduint>(entry) += mtag->entry_size;
 	}
+	// #if _MCCA == 0x8632
+	// stduint end = vaultAlign(0x1000, _IMM(Memory::p_ext)) >> 12;
+	// Memory::pagebmap->add_range(mem_area_exten_beg >> 12, end, false);
+	// #endif
 	return count;
 }
 

@@ -14,7 +14,11 @@ SECTIONS
 		*(.multiboot)
 	}
 	*/
-	.text : { *(.text .text.*) }
+	.text : {
+		*mcca-atx-x86-flap32.grub.o(.text .text.*)
+		*mcca-atx-x86-flap32-ladder.o(.text .text.*)
+		*(.text .text.*)
+	}
 	.data : {
 		*(.data)
 		*(.note.gnu.build-id)
