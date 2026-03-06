@@ -112,7 +112,7 @@ bool Memory::initialize(stduint eax, byte* ebx) {
 	kernel_paging.Reset();
 	kernel_paging.Map(0x00000000, 0x00000000, 0x100000000ULL * 16,
 		21, PGPROP_present | PGPROP_writable
-	);// pgsize 30 may be bad for Bochs, QEMU need map many times of 4G
+	);// pgsize 30 may be bad for Bochs; QEMU need map many times of 4G
 	setCR3 _IMM(kernel_paging.root_level_page);
 
 	#endif

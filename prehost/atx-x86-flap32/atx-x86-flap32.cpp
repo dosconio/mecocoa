@@ -77,7 +77,7 @@ _sign_entry() {
 	GIC[IRQ_SYSCALL].setRange(mglb(call_intr), SegCo32); GIC[IRQ_SYSCALL].DPL = 3;
 
 
-	// mecfetch();
+	mecfetch();
 	__asm("ud2");
 
 	ploginfo("[Memoman] total memory %[x]", Memory::total_memsize);

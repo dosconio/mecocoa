@@ -34,9 +34,8 @@ _ESYM_C void mecocoa() {
 	ploginfo("[Mempool] I try a new int, and it was at %[x]", ptr);
 	ploginfo("[ Paging] ROOT PT at %[x]", kernel_paging.root_level_page);
 
-	// enable_2buffer();
-	// extern VideoControlInterface* real_pvci;
-	// real_pvci->DrawPoints(global_layman.window, global_layman.sheet_buffer);
+	extern VideoControlInterface* real_pvci;
+	real_pvci->DrawPoints(global_layman.window, global_layman.sheet_buffer);
 
 	loop HALT();
 }

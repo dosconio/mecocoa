@@ -65,6 +65,7 @@ void Cursor::setSheet(LayerManager& layman, const Point& vertex) {
 }
 
 
+static SheetTrait* last_click_sheet = nullptr;// mark the focused window
 
 // hand_mouse
 void hand_mouse(MouseMessage mmsg) {
@@ -90,7 +91,31 @@ void hand_mouse(MouseMessage mmsg) {
 	SheetTrait* sheet = nullptr;
 	if ((change_btns & 0b111) && (sheet = global_layman.getTop(cursor_p, 1))) {
 		cursor_p -= sheet->sheet_area.getVertex();
+		if (last_click_sheet && last_click_sheet != sheet) {
+			last_click_sheet->onrupt(SheetEvent::onLeave, Point(0, 0), 1);
+		}
 		sheet->onrupt(SheetEvent::onClick, cursor_p, change_btns);
+		last_click_sheet = sheet;
+
+		// Move window to the front (Layer 1, just behind Cursor)
+		Nnode* target = &sheet->refSheetNode();
+		if (target != global_layman.subf->next && target != global_layman.subl) {
+			// Nchain::Exchange
+			Nnode* prev = target->left;
+			Nnode* next = target->next;
+			if (prev) prev->next = next;
+			if (next) next->left = prev;
+
+			Nnode* top = global_layman.subf;
+			Nnode* sec = top->next;
+
+			target->left = top;
+			target->next = sec;
+			top->next = target;
+			if (sec) sec->left = target;
+
+			global_layman.AddDirty(sheet->sheet_area);
+		}
 	}
 
 	// cursor layer

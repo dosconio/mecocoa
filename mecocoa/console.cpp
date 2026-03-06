@@ -182,8 +182,6 @@ extern UefiData uefi_data;
 #endif
 
 ::uni::Witch::Form form0, form1;
-static const char form0_title_text[] = "Ciallo~>v<";
-static const char form1_title_text[] = "Test TextBox";
 
 uni::witch::control::Label* plabel_1;
 uni::witch::control::TextBox* ptext_1;
@@ -292,7 +290,7 @@ void cons_init() {
 		plabel->doshow(0);
 		plabel_1 = plabel;
 
-		new (&form0.Title) String((char*)form0_title_text, sizeof(form0_title_text));
+		form0.Title = "Ciallo~>v<";// new (&form0.Title) String((char*)form0_title_text, sizeof(form0_title_text));
 		form0.AppendControl(plabel);
 		form0.setSheet(global_layman, rect, (Color*)mem.allocate(rect.getArea() * sizeof(Color)));
 		global_layman.Append(&form0);
@@ -304,7 +302,7 @@ void cons_init() {
 		ptext->doshow(0);
 		ptext_1 = ptext;
 
-		new (&form1.Title) String((char*)form1_title_text, sizeof(form1_title_text));
+		form1.Title = "Test TextBox";
 		form1.AppendControl(ptext);
 		form1.setSheet(global_layman, rect, (Color*)mem.allocate(rect.getArea() * sizeof(Color)));
 		global_layman.Append(&form1);
@@ -318,6 +316,9 @@ void cons_init() {
 	vcon0->InitializeSheet(global_layman, screen0_win.getVertex(), screen0_win.getSize(), vcon0_buf);
 	vcon0->setModeBuffer(vcon0_buf);
 	global_layman.Append(vcon0);
+
+	enable_2buffer();
+
 	vcon0->Clear();
 	con0_out = vcons[0] = vcon0;
 }
