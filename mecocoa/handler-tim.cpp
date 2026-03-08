@@ -44,6 +44,7 @@ extern VideoControlInterface* real_pvci;
 
 inline void RenderFrameFlush() {
 	if (!enable_dubuffer) return;
+	global_layman.CheckTimers(tick);
 	if (ento_gui && global_layman.pvci && global_layman.is_dirty) {
 		static uint64 last_flush_time = 0;
 		if (tick - last_flush_time >= 5) { // 100 FPS target (10ms)

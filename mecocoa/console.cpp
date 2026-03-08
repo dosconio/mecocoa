@@ -306,6 +306,7 @@ void cons_init() {
 		form1.AppendControl(ptext);
 		form1.setSheet(global_layman, rect, (Color*)mem.allocate(rect.getArea() * sizeof(Color)));
 		global_layman.Append(&form1);
+		ptext->Start();
 	}
 
 	// vcon0

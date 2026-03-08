@@ -43,7 +43,7 @@ void _Comment(R0) serv_sysmsg() {
 			break;
 		case SysMessage::RUPT_TIMER:
 			ploginfo("Timer %llu Rupt! tick = %llu, tim = %u", msg.args.timer.iden, msg.args.timer.timeout, TimerManager.Count());
-			if (msg.args.timer.iden == 0)
+			if (0 && msg.args.timer.iden == 0)
 			{
 				IC.enAble(false);
 				SysTimer::Append(100, 0);

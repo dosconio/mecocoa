@@ -132,7 +132,7 @@ void hand_mouse(MouseMessage mmsg) {
 
 void LayerManager::Dorupt(SheetTrait* who, SheetEvent event, Point rel_p, para_list args) {
 	if (event == SheetEvent::onClick) {
-		byte state = para_next(args, unsigned);
+		byte state = para_next(args, stduint);
 		if ((state & 0b10001) == 0b10001) {
 			Cursor::moving_sheet = who;
 		}

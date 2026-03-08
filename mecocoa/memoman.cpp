@@ -188,7 +188,9 @@ void* operator new[](size_t size) {
 void operator delete(void* p) {
 	free(p);
 }
-void operator delete[](void*) {}
+void operator delete[](void* p) {
+	free(p);
+}
 void operator delete(void* ptr, stduint size) noexcept {
 	ploginfo("del OK");
 	if (!mempool.deallocate(ptr, size)) plogerro("del BAD");
