@@ -114,7 +114,7 @@ void hand_mouse(MouseMessage mmsg) {
 			top->next = target;
 			if (sec) sec->left = target;
 
-			global_layman.AddDirty(sheet->sheet_area);
+			global_layman.Update(NULL, sheet->sheet_area);
 		}
 	}
 

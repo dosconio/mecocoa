@@ -106,16 +106,6 @@ lib:
 accm:
 	make -f accmlib/accmx86.make
 
-subappa:
-	echo MK subappa
-	aasm -felf subapps/helloa/helloa.asm -o subapps/helloa/helloa.o
-	ld   -s -m elf_i386 -o $(uobjpath)/app-$(arch)/a subapps/helloa/helloa.o accmlib/*.o
-	# ...
-subappb:
-	echo MK subappb
-	gcc subapps/hellob/*.c accmlib/*.o -o $(uobjpath)/app-$(arch)/b -m32 -nostdlib  -fno-pic -static -I$(uincpath) -D_ACCM=0x8632
-	# ...
-
 qemu_args=\
 	-drive format=raw,file=$(outs),if=floppy \
 	-boot order=a -m 1G\
@@ -123,7 +113,6 @@ qemu_args=\
 	-device ide-hd,drive=disk0,bus=ide.0,unit=0 \
 	-drive file=$(ubinpath)/fixed2.vhd,format=vpc,if=none,id=disk1 \
 	-device ide-hd,drive=disk1,bus=ide.0,unit=1 \
-	-audiodev pa,id=speaker -machine pcspk-audiodev=speaker \
 
 pack: build
 	cd $(ubinpath) && ./_mk_mcca.sh
@@ -131,9 +120,9 @@ pack: build
 run: build run-only
 run-only:
 	$(qemu) \
-		$(qemu_args) \
+		$(qemu_args) -audiodev pa,id=speaker -machine pcspk-audiodev=speaker \
 		-enable-kvm -cpu host || $(qemu) \
-		$(qemu_args)
+		$(qemu_args) -audiodev dsound,id=speaker -machine pcspk-audiodev=speaker
 
 clean:
 	@echo ---- Mecocoa $(arch) ----#[clearing]

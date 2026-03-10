@@ -197,6 +197,72 @@ const CHAR16* GetPixelFormatUnicode(EFI_GRAPHICS_PIXEL_FORMAT fmt) {
 	}
 }
 
+// ---- FAT Fs ----
+
+EFI_STATUS ReadFile(EFI_FILE_PROTOCOL* file, VOID** buffer) {
+	EFI_STATUS status;
+	UINTN file_info_size = sizeof(EFI_FILE_INFO) + sizeof(CHAR16) * 12;
+	UINT8 file_info_buffer[file_info_size];
+	status = file->GetInfo(
+		file, &gEfiFileInfoGuid,
+		&file_info_size, file_info_buffer);
+	if (EFI_ERROR(status)) {
+		return status;
+	}
+	EFI_FILE_INFO* file_info = (EFI_FILE_INFO*)file_info_buffer;
+	UINTN file_size = file_info->FileSize;
+	status = gBS->AllocatePool(EfiLoaderData, file_size, buffer);
+	if (EFI_ERROR(status)) {
+		return status;
+	}
+	return file->Read(file, &file_size, *buffer);
+}
+
+EFI_STATUS OpenBlockIoProtocolForLoadedImage(EFI_HANDLE image_handle, EFI_BLOCK_IO_PROTOCOL** block_io) {
+	EFI_STATUS status;
+	EFI_LOADED_IMAGE_PROTOCOL* loaded_image;
+
+	status = gBS->OpenProtocol(
+		image_handle,
+		&gEfiLoadedImageProtocolGuid,
+		(VOID**)&loaded_image,
+		image_handle,
+		NULL,
+		EFI_OPEN_PROTOCOL_BY_HANDLE_PROTOCOL);
+	if (EFI_ERROR(status)) {
+		return status;
+	}
+	status = gBS->OpenProtocol(
+		loaded_image->DeviceHandle,
+		&gEfiBlockIoProtocolGuid,
+		(VOID**)block_io,
+		image_handle, // agent handle
+		NULL,
+		EFI_OPEN_PROTOCOL_BY_HANDLE_PROTOCOL);
+
+	return status;
+}
+
+EFI_STATUS ReadBlocks(
+	EFI_BLOCK_IO_PROTOCOL* block_io, UINT32 media_id,
+	UINTN read_bytes, VOID** buffer) {
+	EFI_STATUS status;
+
+	status = gBS->AllocatePool(EfiLoaderData, read_bytes, buffer);
+	if (EFI_ERROR(status)) {
+		return status;
+	}
+
+	status = block_io->ReadBlocks(
+		block_io,
+		media_id,
+		0, // start LBA
+		read_bytes,
+		*buffer);
+
+	return status;
+}
+
 // ---- ELF64 ----
 
 // #@@range_begin(calc_addr_func)
@@ -231,6 +297,8 @@ void CopyLoadSegments(Elf64_Ehdr* ehdr) {
 
 #define expect(status,str) if (EFI_ERROR(status))\
 	{ Print(L"%s: %r at loader.c(%u)\n", str, status, __LINE__); while (1); }
+
+#define path_fatvhd L"\\kerdisk.fat"
 
 _ESYM_C EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image_handle, EFI_SYSTEM_TABLE* SystemTable) {
 	Print((const CHAR16*)L"Ciallo, Mecocoa~ __BITS=%u\n", sizeof(void*) << 3);
@@ -300,21 +368,9 @@ _ESYM_C EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image_handle, EFI_SYSTEM_TABLE* Sy
 		root_dir, &kernel_file, L"\\kernel.elf",
 		EFI_FILE_MODE_READ, 0);
 	expect(status, L"Failed to open file '\\kernel.elf'");
-	UINTN file_info_size = sizeof(EFI_FILE_INFO) + sizeof(CHAR16) * 12;
-	UINT8 file_info_buffer[file_info_size];
-	status = kernel_file->GetInfo(
-		kernel_file, &gEfiFileInfoGuid,
-		&file_info_size, file_info_buffer);
-	expect(status, L"Failed to get file information");
-	EFI_FILE_INFO* file_info = (EFI_FILE_INFO*)file_info_buffer;
-	UINTN kernel_file_size = file_info->FileSize;
-
-	//EFI_PHYSICAL_ADDRESS kernel_base_addr = 0x100000;
 	VOID* kernel_buffer;
-	status = gBS->AllocatePool(EfiLoaderData, kernel_file_size, &kernel_buffer);
-	expect(status, L"Failed to allocate pool");
-	status = kernel_file->Read(kernel_file, &kernel_file_size, (VOID*)kernel_buffer);
-	expect(status, L"Error");
+	status = ReadFile(kernel_file, &kernel_buffer);
+	expect(status, L"Failed to load kernel");
 	
 
 
@@ -331,6 +387,41 @@ _ESYM_C EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image_handle, EFI_SYSTEM_TABLE* Sy
 	Print(L"Kernel: 0x%0lx - 0x%0lx\n", kernel_first_addr, kernel_last_addr);
 	status = gBS->FreePool(kernel_buffer);
 	expect(status, L"Failed to free pool");
+
+	_Comment(load fatvhd)
+	VOID* volume_image;
+
+	EFI_FILE_PROTOCOL* volume_file;
+	status = root_dir->Open(root_dir, &volume_file, path_fatvhd, EFI_FILE_MODE_READ, 0);
+	if (status == EFI_SUCCESS) {
+		status = ReadFile(volume_file, &volume_image);
+		if (EFI_ERROR(status)) {
+			Print(L"failed to read volume file: %r", status);
+			while (1) __asm__("hlt");
+		}
+	}
+	else {
+		EFI_BLOCK_IO_PROTOCOL* block_io;
+		status = OpenBlockIoProtocolForLoadedImage(image_handle, &block_io);
+		if (EFI_ERROR(status)) {
+			Print(L"failed to open Block I/O Protocol: %r\n", status);
+			while (1) __asm__("hlt");
+		}
+		EFI_BLOCK_IO_MEDIA* media = block_io->Media;
+		UINTN volume_bytes = (UINTN)media->BlockSize * (media->LastBlock + 1);
+		if (volume_bytes > 16 * 1024 * 1024) {
+			volume_bytes = 16 * 1024 * 1024;
+		}// 16MB
+		Print(L"Reading %lu bytes (Present %d, BlockSize %u, LastBlock %u)\n",
+			volume_bytes, media->MediaPresent, media->BlockSize, media->LastBlock);
+
+		status = ReadBlocks(block_io, media->MediaId, volume_bytes, &volume_image);
+		if (EFI_ERROR(status)) {
+			Print(L"failed to read blocks: %r\n", status);
+			while (1) __asm__("hlt");
+		}
+	}
+
 
 	Print(L"Kernel entry address: 0x%0lx\n", entry_addr);
 
@@ -360,6 +451,7 @@ _ESYM_C EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image_handle, EFI_SYSTEM_TABLE* Sy
 	uefi_data.frame_buffer_config = config;
 	uefi_data.memory_map = memmap;
 	uefi_data.acpi_table = acpi_table;
+	uefi_data.fatvhd_addr = (pureptr_t)volume_image;
 
 	((entry_t)entry_addr)(&uefi_data);
 

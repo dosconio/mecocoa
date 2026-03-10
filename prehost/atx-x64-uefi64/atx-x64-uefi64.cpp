@@ -87,6 +87,17 @@ void mecocoa(const UefiData& uefi_data_ref)
 	SysTimer::Append(100, 0);
 	// SysTimer::Append(2, 0, Taskman::Schedule);
 
+	if (uint8* fatvhd_addr = (uint8*)uefi_data.fatvhd_addr) // test reading fatvhd
+	{
+		for (size_t i = 0; i < 16; i++) {
+			outsfmt("%[16H]:", i * 16);
+			for (size_t j = 0; j < 16; j++) {
+				outsfmt(" %[8H]", *fatvhd_addr++);
+			}
+			outsfmt("\n\r");
+		}
+	}
+
 	IC.enAble(true);
 
 	if (1) {

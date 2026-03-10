@@ -181,10 +181,11 @@ LayerManager global_layman;
 extern UefiData uefi_data;
 #endif
 
-::uni::Witch::Form form0, form1;
+::uni::Witch::Form form0, form1, form2;
 
 uni::witch::control::Label* plabel_1;
 uni::witch::control::TextBox* ptext_1;
+VideoConsole* pcon_1;
 
 void enable_2buffer() {
 	// Double Buffer
@@ -296,7 +297,7 @@ void cons_init() {
 		global_layman.Append(&form0);
 	}
 	if (1) {
-		Rectangle rect{ Point(220, 140), Size2(160, 80) };
+		Rectangle rect{ Point(400, 40), Size2(160, 80) };
 		auto ptext = new uni::witch::control::TextBox();
 		ptext->sheet_area = Rectangle(Point(2, 2), Size2(8 * 18, 25));
 		ptext->doshow(0);
@@ -305,14 +306,32 @@ void cons_init() {
 		form1.Title = "Test TextBox";
 		form1.AppendControl(ptext);
 		form1.setSheet(global_layman, rect, (Color*)mem.allocate(rect.getArea() * sizeof(Color)));
+		form1.setFocus(ptext);
 		global_layman.Append(&form1);
 		ptext->Start();
 	}
+	if (1) {
+		Rectangle rect{ Point(150, 160), Size2(480, 320) };
+		auto pcon = new VideoConsole(NULL,
+			Rectangle(Point(2, 2), Size2(470, 310)),
+				Color::White, Color::Black
+		);
+		auto vcon_buf = (Color*)mem.allocate(pcon->window.getArea() * sizeof(Color));
+		pcon->InitializeSheet(global_layman, pcon->window.getVertex(), pcon->window.getSize(), vcon_buf);
+		pcon->setModeBuffer(vcon_buf);
+		pcon_1 = pcon;
+		pcon->Clear();
+
+		form2.Title = "Console";
+		form2.AppendControl(pcon);
+		form2.setSheet(global_layman, rect, (Color*)mem.allocate(rect.getArea() * sizeof(Color)));
+		form2.setFocus(pcon);
+		global_layman.Append(&form2);
+		pcon->Start();
+	}
 
 	// vcon0
-	vcon0 = new (BUF_CONS0) VideoConsole(&global_layman.getVCI(), screen0_win);
-	vcon0->backcolor = Color::White;
-	vcon0->forecolor = Color::Black;
+	vcon0 = new (BUF_CONS0) VideoConsole(&global_layman.getVCI(), screen0_win, Color::Black, Color::White);
 	auto vcon0_buf = (Color*)mem.allocate(vcon0_size);
 	vcon0->InitializeSheet(global_layman, screen0_win.getVertex(), screen0_win.getSize(), vcon0_buf);
 	vcon0->setModeBuffer(vcon0_buf);

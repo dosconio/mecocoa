@@ -48,7 +48,7 @@ define cpp_to_o
 $(dest_obj)/$(cpppref)$(notdir $(1:.cpp=.o)): $(1)
 endef
 
-
+archdir=$(ubinpath)/AMD64/mecocoa
 
 #
 asmfile=$(ulibpath)/asm/x64/inst/ioport.asm \
@@ -98,35 +98,33 @@ cppobjs=$(addprefix $(dest_obj)/$(cpppref),$(patsubst %cpp,%o,$(notdir $(cppfile
 cplobjs=$(addprefix $(dest_obj)/$(cplpref),$(patsubst %c,%o,$(notdir $(cplfile))))
 elf_kernel=mcca-$(arch).elf
 
-mntdir=/mnt/mcca-$(arch)
+mntdir=/mnt/floppy
 clang=clang-14
 sudokey=k
 
 .PHONY : build
-build: clean $(ubinpath)/$(arch).img $(asmobjs) $(cppobjs) $(cplobjs)
-# 	@echo AR $(elf_kernel)
-# 	@ar -rcs $(uobjpath)/mcca-$(arch)/lib$(elf_kernel).a $(uobjpath)/mcca-$(arch)/*
+build: clean $(archdir)/kerdisk.fat $(ubinpath)/$(arch).img $(asmobjs) $(cppobjs) $(cplobjs)
 	@echo MK $(elf_kernel)
 	$(CX) $(XFLAGS) \
 		-T prehost/$(arch)/$(arch).ld -o $(ubinpath)/$(elf_kernel) \
 		-Wl,-Map=$(ubinpath)/$(elf_kernel).map \
 		prehost/$(arch)/$(arch).cpp \
 		$(uobjpath)/mcca-$(arch)/*.o \
-
-# 		-L $(uobjpath)/mcca-$(arch) -l$(elf_kernel)
-		
-
 	# OUTDATED # prehost/$(arch)/script-adapt.sh ~/_obj/$(elf_kernel) $(ubinpath)/$(elf_kernel)
 	@echo $(sudokey) | sudo -S mkdir -p $(mntdir)
 	@echo $(sudokey) | sudo -S mount -o loop $(ubinpath)/$(arch).img $(mntdir)
 	@echo $(sudokey) | sudo -S mkdir -p $(mntdir)/EFI/BOOT
 	@echo $(sudokey) | sudo -S cp $(ubinpath)/AMD64/loader.efi $(mntdir)/EFI/BOOT/BOOTX64.EFI
 	@echo $(sudokey) | sudo -S cp $(ubinpath)/$(elf_kernel) $(mntdir)/kernel.elf
+	@echo $(sudokey) | sudo -S cp $(archdir)/kerdisk.fat $(mntdir)/
 	tree $(mntdir)
 	@echo $(sudokey) | sudo -S umount $(mntdir)
 	# update
 	qemu-img convert -f raw -O vpc $(ubinpath)/$(arch).img $(ubinpath)/$(arch).vhd
 
+$(archdir)/kerdisk.fat:
+	dd if=/dev/zero of=$@ bs=1M count=32
+	mkfs.fat -n 'MECOCOA2' -s 2 -f 2 -R 32 -F 32 $@
 
 $(ubinpath)/$(arch).img: loader
 	@echo MK DISK IMAGE
@@ -145,17 +143,18 @@ loader:
 	cp $(edkdir)/Build/MccaLoaderX64/DEBUG_CLANGDWARF/X64/Loader.efi $(ubinpath)/AMD64/loader.efi
 
 .PHONY : run run-only
+qemu_args=\
+	-drive if=pflash,format=raw,readonly=on,file=$(ubinpath)/AMD64/OVMF/OVMF_CODE.fd \
+	-drive if=pflash,format=raw,file=$(ubinpath)/AMD64/OVMF/OVMF_VARS.fd \
+	-drive if=ide,index=0,media=disk,format=raw,file=$(ubinpath)/$(arch).img \
+	-device nec-usb-xhci,id=xhci \
+	-device usb-mouse \
+	-device usb-kbd \
+	-monitor stdio \
+
 run: build
 	@echo [ running] MCCA for $(arch)
-	@${QEMU} \
-	    -drive if=pflash,format=raw,readonly=on,file=$(ubinpath)/AMD64/OVMF/OVMF_CODE.fd \
-		-drive if=pflash,format=raw,file=$(ubinpath)/AMD64/OVMF/OVMF_VARS.fd \
-		-drive if=ide,index=0,media=disk,format=raw,file=$(ubinpath)/$(arch).img \
-		-device nec-usb-xhci,id=xhci \
-		-device usb-mouse \
-		-device usb-kbd \
-		-monitor stdio \
-		-m 1G # -enable-kvm
+	@${QEMU} $(qemu_args) -m 1G -enable-kvm || ${QEMU} $(qemu_args) -m 1G
 	@echo
 	@echo 'Mount the image:' 
 	@echo '  mount -o loop $(ubinpath)/$(arch).img $(mntdir)'
@@ -164,15 +163,7 @@ run: build
 	@echo $(sudokey) | sudo -S umount $(mntdir)
 	@echo
 run-only:
-	@${QEMU} \
-	    -drive if=pflash,format=raw,readonly=on,file=$(ubinpath)/AMD64/OVMF/OVMF_CODE.fd \
-		-drive if=pflash,format=raw,file=$(ubinpath)/AMD64/OVMF/OVMF_VARS.fd \
-		-drive if=ide,index=0,media=disk,format=raw,file=$(ubinpath)/$(arch).img \
-		-device nec-usb-xhci,id=xhci \
-		-device usb-mouse \
-		-device usb-kbd \
-		-monitor stdio \
-		-m 1G # -enable-kvm
+	@${QEMU} $(qemu_args) -m 1G -enable-kvm || ${QEMU} $(qemu_args) -m 1G
 
 #{TODO} debug
 
@@ -180,6 +171,7 @@ run-only:
 clean:
 	@echo ---- Mecocoa $(arch) ----#[clearing]
 # 	${RM} $(uobjpath)/mcca-$(arch)/*
+	${RM} $(archdir)/kerdisk.fat
 	${RM} $(ubinpath)/$(arch).img
 	@${MKDIR} $(uobjpath)/mcca-$(arch)
 

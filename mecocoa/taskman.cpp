@@ -42,8 +42,6 @@ void Taskman::Initialize(stduint cpuid) {
 	kernel_task->state = ProcessBlock::State::Running;
 	Taskman::EnqueueReady(kernel_task);
 
-	//!!! grub will crash HERE!
-	
 	loadTask(SegTSS0);
 	//
 	pcurrent[cpuid] = 0;// kernel

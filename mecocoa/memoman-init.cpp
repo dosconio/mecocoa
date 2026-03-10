@@ -98,6 +98,13 @@ bool Memory::initialize(stduint eax, byte* ebx) {
 	Memory::pagebmap->add_range(0x78, 0x100, false);
 	// - 0x78000~0x7FFFF Video Modes List
 	// - 0x80000~0xFFFFF BIOS and Upper Memory Area
+	
+	// Protect Kernel PageDirectory and dynamically populated PageTables
+	#if _MCCA == 0x8632
+	stduint end_ext = vaultAlign(0x1000, _IMM(Memory::p_ext)) >> 12;
+	Memory::pagebmap->add_range(0x100000 >> 12, end_ext, false);
+	#endif
+
 	map_ready = true;
 
 	uni_default_allocator = &mem;
@@ -139,10 +146,6 @@ static stduint parse_norm(stduint addr) {
 		}
 		entry++;
 	}
-	#if _MCCA == 0x8632
-	stduint end = vaultAlign(0x1000, _IMM(Memory::p_ext)) >> 12;
-	Memory::pagebmap->add_range(mem_area_exten_beg >> 12, end, false);
-	#endif
 	return count;
 }
 #endif
@@ -175,10 +178,6 @@ static stduint parse_grub(stduint addr)
 		}
 		cast<stduint>(entry) += mtag->entry_size;
 	}
-	// #if _MCCA == 0x8632
-	// stduint end = vaultAlign(0x1000, _IMM(Memory::p_ext)) >> 12;
-	// Memory::pagebmap->add_range(mem_area_exten_beg >> 12, end, false);
-	// #endif
 	return count;
 }
 
