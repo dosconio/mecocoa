@@ -8,6 +8,7 @@
 #include <c/driver/mouse.h>// qemu only
 #include <c/driver/timer.h>
 #include <cpp/Device/ACPI.hpp>
+#include <c/format/filesys/FAT.h>
 #include <cpp/Device/Bus/PCI.hpp>
 #include <cpp/Device/USB/xHCI/xHCI.hpp>
 #include <cpp/Witch/Control/Control-Label.hpp>
@@ -85,16 +86,31 @@ void mecocoa(const UefiData& uefi_data_ref)
 	// try priority_queue Dchain
 	SysTimer::Append(250, 1);
 	SysTimer::Append(100, 0);
-	// SysTimer::Append(2, 0, Taskman::Schedule);
 
-	if (uint8* fatvhd_addr = (uint8*)uefi_data.fatvhd_addr) // test reading fatvhd
-	{
-		for (size_t i = 0; i < 16; i++) {
-			outsfmt("%[16H]:", i * 16);
-			for (size_t j = 0; j < 16; j++) {
-				outsfmt(" %[8H]", *fatvhd_addr++);
+	//{} "ls /"
+	//{} "cat a.txt"
+	if (1) {
+		MemoryBlockDevice memdev({ _IMM(uefi_data.fatvhd_addr), 32 * 1024 * 1024 }, (byte*)mem.allocate(512));
+		FilesysFAT fatvhd(32, memdev, (byte*)mem.allocate(512));
+		FAT_FileHandle* han;
+		FAT_FileHandle filhan;
+		stduint a[2] = { _IMM(&filhan)/*, _IMM(&filinf) */ };
+		if (!fatvhd.loadfs()) {
+			plogerro("FATVHD loadfs failed");
+		}
+		else {
+			han = (FAT_FileHandle*)fatvhd.search("/", &a);
+			fatvhd.enumer(han, NULL);
+			if (han = (FAT_FileHandle*)fatvhd.search("a.txt", &a)) {
+				byte* buf = new byte[32];//[han->size];
+				if (fatvhd.readfl(han, Slice{ 0,32 }, buf))
+				{
+					buf[31] = 0;
+					outsfmt("[a.txt]\n\r%s\n\r", buf);
+				}
+				else plogerro("a.txt: Fail to load");
+				delete[] buf;
 			}
-			outsfmt("\n\r");
 		}
 	}
 

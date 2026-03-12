@@ -49,14 +49,16 @@ bool Memory::initialize(stduint eax, byte* ebx) {
 	MemSet(mapaddr, 0, bmapsize);
 	Memory::pagebmap = new (_BUF_pagebmap) BmMemoman(mapaddr, bmapsize);
 
+	// x64 has default paging now
 	#if _MCCA == 0x8632
 	if (eax == MULTIBOOT2_BOOTLOADER_MAGIC) { parse_grub(_IMM(ebx)); }
 	_physical_allocate = Memory::physical_allocate;
-	MemSet(kernel_paging.root_level_page = (PageDirectory*)0x100000, 0, 0x1000);// kernel_paging.Reset();
-	kernel_paging.Map(0x00000000, 0x00000000, 0x10000000, true, _Comment(R0) true);
-	kernel_paging.Map(0x80000000, 0x00000000, 0x10000000, true, _Comment(R0) false);
+	MemSet(kernel_paging.root_level_page = (PageEntry*)0x100000, 0, 0x1000);// kernel_paging.Reset();
+	kernel_paging.Map(0x00000000, 0x00000000, 0x10000000, 12, PGPROP_present | PGPROP_writable | PGPROP_user_access);
+	kernel_paging.Map(0x80000000, 0x00000000, 0x10000000, 12, PGPROP_present | PGPROP_writable);
 	setCR3(_IMM(kernel_paging.root_level_page));
 	PagingEnable();
+	// GDT_Init();
 	#endif
 	GDT_Init();
 
@@ -114,14 +116,13 @@ bool Memory::initialize(stduint eax, byte* ebx) {
 	uni_hostenv_allocator = &mempool;
 
 	// paging
-	//{TEMP}
 	#if _MCCA == 0x8664
 	kernel_paging.Reset();
 	kernel_paging.Map(0x00000000, 0x00000000, 0x100000000ULL * 16,
 		21, PGPROP_present | PGPROP_writable
 	);// pgsize 30 may be bad for Bochs; QEMU need map many times of 4G
 	setCR3 _IMM(kernel_paging.root_level_page);
-
+	// GDT_Init();
 	#endif
 
 

@@ -422,7 +422,7 @@ void serv_file_loop()
 
 	pfs = new (_buf_OFs) OrangesFs(hdd, ::buffer, ROOT_DEV);
 	DiscPartition part_fat0(hdd, ROOT_DEV_FAT0);
-	pfs_fat0 = new (_buf_FATs) FilesysFAT(32, part_fat0, ::buffer, ROOT_DEV_FAT0);
+	pfs_fat0 = new (_buf_FATs) FilesysFAT(32, part_fat0, ::buffer);
 	pfs_fat0->buffer_fatable = (byte*)Memory::physical_allocate(0x1000);
 
 	stduint retval[1];

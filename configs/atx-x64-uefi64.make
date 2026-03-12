@@ -51,14 +51,15 @@ endef
 archdir=$(ubinpath)/AMD64/mecocoa
 
 #
-asmfile=$(ulibpath)/asm/x64/inst/ioport.asm \
+asmfile=prehost/$(arch)/atx-x64.asm\
+	$(ulibpath)/asm/x64/task.asm \
 	$(ulibpath)/asm/x64/cpuid.asm \
+	$(ulibpath)/asm/x64/sysman.asm \
+	$(ulibpath)/asm/x64/inst/ioport.asm \
 	$(ulibpath)/asm/x64/inst/manage.asm \
 	$(ulibpath)/asm/x64/inst/interrupt.asm \
 	$(ulibpath)/asm/x64/interrupt/ruptable.asm \
-	$(ulibpath)/asm/x64/task.asm \
-	$(ulibpath)/asm/x64/sysman.asm \
-	prehost/$(arch)/atx-x64.asm
+	
 
 cppfile=$(wildcard mecocoa/*.cpp) \
 	$(ulibpath)/cpp/color.cpp \
@@ -66,31 +67,32 @@ cppfile=$(wildcard mecocoa/*.cpp) \
 	$(ulibpath)/cpp/stream.cpp \
 	$(ulibpath)/cpp/string.cpp \
 	$(ulibpath)/cpp/interrupt.cpp \
-	$(ulibpath)/cpp/nodes/dnode.cpp $(wildcard $(ulibpath)/cpp/nodes/dnode/*.cpp) \
+	$(ulibpath)/cpp/Witch/Form.cpp \
+	$(ulibpath)/cpp/system/paging.cpp \
 	$(ulibpath)/cpp/lango/lango-cpp.cpp \
 	$(ulibpath)/cpp/grp-base/bstring.cpp \
-	$(ulibpath)/cpp/dat-block/bmmemoman.cpp \
 	$(ulibpath)/cpp/dat-block/mempool.cpp \
-	$(ulibpath)/cpp/system/paging.cpp \
-	$(ulibpath)/cpp/Witch/Form.cpp \
+	$(ulibpath)/cpp/dat-block/bmmemoman.cpp \
+	$(ulibpath)/cpp/nodes/dnode.cpp $(wildcard $(ulibpath)/cpp/nodes/dnode/*.cpp) \
+	$(ulibpath)/cpp/filesystem/FAT.cpp $(wildcard $(ulibpath)/cpp/filesystem/FAT/*.cpp) \
 	\
-	$(ulibpath)/cpp/Device/Bus/PCI.cpp \
-	$(wildcard $(ulibpath)/cpp/Device/USB/*.cpp) \
-	$(wildcard $(ulibpath)/cpp/Device/USB/xHCI/*.cpp) \
-	$(ulibpath)/cpp/Device/Keyboard.cpp \
 	$(ulibpath)/cpp/Device/ACPI.cpp \
+	$(ulibpath)/cpp/Device/Bus/PCI.cpp \
+	$(ulibpath)/cpp/Device/Keyboard.cpp \
 	$(ulibpath)/cpp/Device/Timer.cpp \
 	$(ulibpath)/cpp/Device/Mouse.cpp \
 	$(ulibpath)/cpp/Device/Video.cpp $(ulibpath)/cpp/Device/Video-VideoConsole.cpp \
+	$(wildcard $(ulibpath)/cpp/Device/USB/*.cpp) $(wildcard $(ulibpath)/cpp/Device/USB/xHCI/*.cpp) \
 
 cplfile=$(ulibpath)/c/mcore.c\
 	$(ulibpath)/c/debug.c \
-	$(wildcard $(ulibpath)/c/dnode/*.c) \
 	$(ulibpath)/c/driver/keyboard.c \
+	$(ulibpath)/c/auxiliary/toxxxer.c \
 	$(ulibpath)/c/data/font/font-8x5.c \
 	$(ulibpath)/c/data/font/font-16x8.c \
-	$(ulibpath)/c/ustring/astring/StrHeap.c \
+	$(wildcard $(ulibpath)/c/dnode/*.c) \
 	$(ulibpath)/c/ustring/astring/salc.c \
+	$(ulibpath)/c/ustring/astring/StrHeap.c \
 
 
 asmobjs=$(addprefix $(dest_obj)/$(asmpref),$(patsubst %asm,%o,$(notdir $(asmfile))))
@@ -112,6 +114,10 @@ build: clean $(archdir)/kerdisk.fat $(ubinpath)/$(arch).img $(asmobjs) $(cppobjs
 		$(uobjpath)/mcca-$(arch)/*.o \
 	# OUTDATED # prehost/$(arch)/script-adapt.sh ~/_obj/$(elf_kernel) $(ubinpath)/$(elf_kernel)
 	@echo $(sudokey) | sudo -S mkdir -p $(mntdir)
+	@echo $(sudokey) | sudo -S mount -o loop $(archdir)/kerdisk.fat $(mntdir)
+	@echo $(sudokey) | sudo -S cp Makefile $(mntdir)/a.txt
+	tree $(mntdir)
+	@echo $(sudokey) | sudo -S umount $(mntdir)
 	@echo $(sudokey) | sudo -S mount -o loop $(ubinpath)/$(arch).img $(mntdir)
 	@echo $(sudokey) | sudo -S mkdir -p $(mntdir)/EFI/BOOT
 	@echo $(sudokey) | sudo -S cp $(ubinpath)/AMD64/loader.efi $(mntdir)/EFI/BOOT/BOOTX64.EFI

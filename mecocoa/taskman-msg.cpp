@@ -122,16 +122,19 @@ int msg_send(ProcessBlock* fo, stduint too, _Comment(vaddr) CommMsg* msg)
 	if ((_IMM(to->block_reason) & _IMM(ProcessBlock::BR_RecvMsg)) &&
 		(to->recv_fo_whom == fo || (stduint)to->recv_fo_whom == ANYPROC)) {
 		// assert to.unsolved_msg && msg
-		stduint leng = *(stduint*)fo->paging[_IMM(&msg->data.length)];
-		CommMsg* msg_fo = (CommMsg*)fo->paging[_IMM(msg)];
-		void* addr_fo = (void*)msg_fo->data.address;
-		CommMsg* msg_to = (CommMsg*)to->paging[_IMM(to->unsolved_msg)];
-		void* addr_to = (void*)msg_to->data.address;
-		MIN(leng, msg_to->data.length);
+		void* pg_leng = fo->paging[_IMM(&msg->data.length)];
+		stduint leng = _IMM(pg_leng) != ~_IMM0 ? *(stduint*)pg_leng : 0;
+		void* pg_msg_fo = fo->paging[_IMM(msg)];
+		CommMsg* msg_fo = _IMM(pg_msg_fo) != ~_IMM0 ? (CommMsg*)pg_msg_fo : nullptr;
+		void* addr_fo = msg_fo ? (void*)msg_fo->data.address : nullptr;
+		void* pg_msg_to = to->paging[_IMM(to->unsolved_msg)];
+		CommMsg* msg_to = _IMM(pg_msg_to) != ~_IMM0 ? (CommMsg*)pg_msg_to : nullptr;
+		void* addr_to = msg_to ? (void*)msg_to->data.address : nullptr;
+		if (msg_to) MIN(leng, msg_to->data.length);
 		// ploginfo("SEND-MemCopyP %[32H], ..., %[32H], ..., %d)", addr_to, addr_fo, leng);
 		if (leng) MemCopyP(addr_to, to->paging, addr_fo, fo->paging, leng);
-		msg_to->type = msg_fo->type;
-		msg_to->src = fo->getID();
+		if (msg_to && msg_fo) msg_to->type = msg_fo->type;
+		if (msg_to) msg_to->src = fo->getID();
 		to->unsolved_msg = NULL;
 		to->recv_fo_whom = nullptr;
 		to->Unblock(ProcessBlock::BR_RecvMsg);
@@ -205,18 +208,20 @@ int msg_recv(ProcessBlock* to, stduint foo, _Comment(vaddr) CommMsg* msg)
 			fo->queue_send_queuenext = nullptr;
 		}
 		//
-		CommMsg* msg_fo = (CommMsg*)fo->paging[_IMM(fo->unsolved_msg)];
-		stduint leng0 = msg_fo->data.length;
-		void* addr_fo = (void*)msg_fo->data.address;
-		CommMsg* msg_to = (CommMsg*)to->paging[_IMM(msg)];
-		stduint leng1 = msg_to->data.length;
-		void* addr_to = (void*)msg_to->data.address;
+		void* pg_msg_fo = fo->paging[_IMM(fo->unsolved_msg)];
+		CommMsg* msg_fo = _IMM(pg_msg_fo) != ~_IMM0 ? (CommMsg*)pg_msg_fo : nullptr;
+		stduint leng0 = msg_fo ? msg_fo->data.length : 0;
+		void* addr_fo = msg_fo ? (void*)msg_fo->data.address : nullptr;
+		void* pg_msg_to = to->paging[_IMM(msg)];
+		CommMsg* msg_to = _IMM(pg_msg_to) != ~_IMM0 ? (CommMsg*)pg_msg_to : nullptr;
+		stduint leng1 = msg_to ? msg_to->data.length : 0;
+		void* addr_to = msg_to ? (void*)msg_to->data.address : nullptr;
 		//
 		// ploginfo("RECV-MemCopyP %[32H], ..., %[32H], ..., minof(%d,%d)", addr_to, addr_fo, leng0, leng1);
 		stduint leng = minof(leng0, leng1);
 		if (leng) MemCopyP(addr_to, to->paging, addr_fo, fo->paging, leng);
-		msg_to->type = msg_fo->type;
-		msg_to->src = foo;
+		if (msg_to && msg_fo) msg_to->type = msg_fo->type;
+		if (msg_to) msg_to->src = foo;
 		fo->unsolved_msg = NULL;
 		fo->send_to_whom = nullptr;
 		fo->Unblock(ProcessBlock::BR_SendMsg);

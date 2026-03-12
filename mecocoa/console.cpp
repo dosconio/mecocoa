@@ -273,7 +273,7 @@ void cons_init() {
 		global_layman.video_memory,
 		global_layman.video_memory,
 		vcon0_size,
-		true, _Comment(R0) false
+		12, PGPROP_present | PGPROP_writable
 	);// VGA
 	#endif
 
@@ -310,7 +310,7 @@ void cons_init() {
 		global_layman.Append(&form1);
 		ptext->Start();
 	}
-	if (1) {
+	if (0) {
 		Rectangle rect{ Point(150, 160), Size2(480, 320) };
 		auto pcon = new VideoConsole(NULL,
 			Rectangle(Point(2, 2), Size2(470, 310)),

@@ -182,11 +182,11 @@ ProcessBlock* TaskRegister(void* entry, byte ring)
 	_TEMP if (ring == 3) {
 		pb->paging.Reset();
 		TSS->CR3 = _IMM(pb->paging.root_level_page);
-		pb->paging.MapWeak(0x00000000, 0x00000000, 0x00400000, true, _Comment(R0) true);//{TEMP}
-		pb->paging.MapWeak(0x80000000, 0x00000000, 0x08000000, true, _Comment(R0) false);// 0x80 pages
+		pb->paging.Map(0x00000000, 0x00000000, 0x00400000, 12, PGPROP_present | PGPROP_writable | PGPROP_user_access | PGPROP_weak);//{TEMP}
+		pb->paging.Map(0x80000000, 0x00000000, 0x08000000, 12, PGPROP_present | PGPROP_writable | PGPROP_weak);// 0x80 pages
 	}
 	else {
-		pb->paging.root_level_page = (PageDirectory*)TSS->CR3;
+		pb->paging.root_level_page = (PageEntry*)TSS->CR3;
 	}
 
 	TSS->EIP = _IMM(entry);
@@ -208,7 +208,7 @@ ProcessBlock* TaskRegister(void* entry, byte ring)
 
 	if (false) outsfmt("TSS %d at 0x%[32H], Entry 0x%[32H]->0x%[32H], SP=0x%[32H]\n\r",
 		TSSSelector, page,
-		entry, pb->paging[_IMM(entry)],
+		entry, pb->paging.getEntry(_IMM(entry)) ? _IMM(pb->paging.getEntry(_IMM(entry))->address) << 12 : 0,
 		TSS->ESP);
 
 	//{TODO} allow IOMap Version
@@ -246,18 +246,19 @@ static void TaskLoad_Carry(char* vaddr, stduint length, char* phy_src, Paging& p
 	stduint compensation = _IMM(vaddr) & 0xFFF;
 	stduint v_start1 = _IMM(vaddr) & ~_IMM(0xFFF);
 	for0 (i, (length + compensation + 0xFFF) / 0x1000) {
-		auto page = pg.IndexPage _IMM(v_start1);
+		auto page_entry = pg.getEntry(_IMM(v_start1));
 		stduint phy;
-		if (!page->isPresent(pg)) {
+		if (_IMM(page_entry) == ~_IMM0 || !page_entry->isPresent()) {
 			phy = _IMM(Memory::physical_allocate(0x1000));
 			// ploginfo("mapping %[32H] -> %[32H]", v_start1, phy);
-			pg.Map(v_start1, phy, 0x1000, true, true);
-			if (!page->getEntry(pg)->isPresent())
+			pg.Map(v_start1, phy, 0x1000, 12, PGPROP_present | PGPROP_writable | PGPROP_user_access);
+			page_entry = pg.getEntry(_IMM(v_start1));
+			if (_IMM(page_entry) == ~_IMM0 || !page_entry->isPresent())
 			{
-				plogerro("Mapping failed %[32H] -> %[32H], entry%[32H]", v_start1, phy, page);
+				plogerro("Mapping failed %[32H] -> %[32H], entry%[32H]", v_start1, phy, page_entry);
 			}
 		}
-		else phy = _IMM(page->getEntry(pg)->address) << 12;
+		else phy = _IMM(page_entry->address) << 12;
 		MemCopyN((void*)(phy + compensation), phy_src, 0x1000 - compensation);
 		phy_src += 0x1000 - compensation;
 		v_start1 += 0x1000;
@@ -287,13 +288,13 @@ ProcessBlock* TaskLoad(BlockTrait* source, void* addr, byte ring)
 	// keep 0x00000000 default empty page
 	pb->paging.Reset();
 	TSS->CR3 = _IMM(pb->paging.root_level_page);
-	pb->paging.Map(0x00001000, _IMM(page), allocsize, true, _Comment(R3) true);// PB&STACK
+	pb->paging.Map(0x00001000, _IMM(page), allocsize, 12, PGPROP_present | PGPROP_writable | PGPROP_user_access);// PB&STACK
 	stduint kernel_size = _TEMP 0x00400000;
-	pb->paging.Map(0x80000000, 0x00000000, 0x04000000, true, _Comment(R0) false);// should include LDT
+	pb->paging.Map(0x80000000, 0x00000000, 0x04000000, 12, PGPROP_present | PGPROP_writable);// should include LDT
 	// pb->paging.Map(0x80000000, 0x00000000, kernel_size, true, _Comment(R0) false);// should include LDT
 	// [PHINA]: should include LDT in Paging if use jmp-tss
 	#if 1 // may conflict
-	pb->paging.MapWeak(_IMM(page), _IMM(page), allocsize, true, _Comment(R0) false);
+	pb->paging.Map(_IMM(page), _IMM(page), allocsize, 12, PGPROP_present | PGPROP_writable | PGPROP_weak);
 	#endif
 
 
@@ -319,7 +320,7 @@ ProcessBlock* TaskLoad(BlockTrait* source, void* addr, byte ring)
 	}
 	if (false) outsfmt("TSS %d at 0x%[32H], Entry 0x%[32H]->0x%[32H], CR3=0x%[32H]\n\r",
 		TSSSelector, page,
-		header->e_entry, pb->paging[header->e_entry],
+		header->e_entry, pb->paging.getEntry(header->e_entry) ? _IMM(pb->paging.getEntry(header->e_entry)->address) << 12 : 0,
 		TSS->CR3);
 
 	// ---- Stack and Gen.Regis ---- //
@@ -425,7 +426,7 @@ static stduint task_fork(ProcessBlock* fo)
 	// - (TODO) Heap Area Mapping
 	pb->paging.Reset();
 	TSS->CR3 = _IMM(pb->paging.root_level_page);
-	pb->paging.Map(0x00001000, _IMM(page), allocsize, true, _Comment(R3) true);// PB&STACK
+	pb->paging.Map(0x00001000, _IMM(page), allocsize, 12, PGPROP_present | PGPROP_writable | PGPROP_user_access);// PB&STACK
 	for0a(i, fo->load_slices) {
 		if (!fo->load_slices[i].length) break;
 		pb->load_slices[i] = fo->load_slices[i];
@@ -434,18 +435,18 @@ static stduint task_fork(ProcessBlock* fo)
 		stduint newaddr = (stduint)Memory::physical_allocate(pagesize);
 		stduint mapsrc = fo->load_slices[i].address & ~_IMM(PAGE_SIZE - 1);
 		// ploginfo("fork.map: 0x%x->0x%x(0x%x)", mapsrc, newaddr, pagesize);
-		pb->paging.Map(mapsrc, newaddr, pagesize, _TEMP true, true);// Map and allocation
+		pb->paging.Map(mapsrc, newaddr, pagesize, 12, _TEMP PGPROP_present | PGPROP_writable | PGPROP_user_access);// Map and allocation
 		// ploginfo("memcpyp: %x+%x, ., %x, ., %x", mapsrc, appendix, fo->load_slices[i].address, fo->load_slices[i].length);
 		MemCopyP((char*)mapsrc + appendix, pb->paging,
 			(void*)fo->load_slices[i].address, fo->paging,
 			fo->load_slices[i].length);
 	}
 	stduint kernel_size = _TEMP 0x00400000;
-	pb->paging.Map(0x80000000, 0x00000000, 0x8000000, true, _Comment(R0) false);// should include LDT
+	pb->paging.Map(0x80000000, 0x00000000, 0x8000000, 12, PGPROP_present | PGPROP_writable);// should include LDT
 	//[TODO] pb->paging.Map(0x80000000, 0x00000000, kernel_size, true, _Comment(R0) false);// should include LDT
 	// [PHINA]: should include LDT in Paging if use jmp-tss
 	#if 1 // may conflict
-	pb->paging.MapWeak(_IMM(page), _IMM(page), allocsize, true, _Comment(R0) false);
+	pb->paging.Map(_IMM(page), _IMM(page), allocsize, 12, PGPROP_present | PGPROP_writable | PGPROP_weak);
 	#endif
 	pb->priority = fo->priority;
 	pb->time_slice = fo->time_slice;

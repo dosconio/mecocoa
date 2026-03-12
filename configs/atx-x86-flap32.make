@@ -32,6 +32,9 @@ sudokey=k
 elf_loader=I686/mecocoa/mcca-$(arch).loader.elf
 elf_kernel=I686/mecocoa/mcca-$(arch).elf
 
+# ln -s /mnt/hgfs/her /her
+uherpath=/her
+
 # cfdisk of fixed2.vhd
 # Device          Boot     Start      End  Sectors   Size  Id Type
 # fixed2.vhd1               2048     4096     2049     1M  83 Linux           
@@ -76,8 +79,8 @@ build: clean lib $(cppobjs)
 	@perl configs/$(arch).bochsdbg-lin.pl > $(ubinpath)/I686/mecocoa/bochsrc-lin.bxrc
 	#
 	echo MK appinit
-	g++ -I$(uincpath) $(flag) -m32 $(CXF) $(CXW) -std=c++2a \
-		-o $(uobjpath)/sapp-$(arch)/init subapps/appinit.cpp -L$(uobjpath)/accm-$(arch) -l$(arch)
+	g++ -I$(uincpath) -Iaccmlib $(flag) -m32 $(CXF) $(CXW) -std=c++2a \
+		-o $(uobjpath)/sapp-$(arch)/init $(uherpath)/COTLAB/src/cotlab.cpp -L$(uobjpath)/accm-$(arch) -l$(arch)
 	echo MK subappc
 	g++ -I$(uincpath) $(flag) -m32 $(CXF) $(CXW) -std=c++2a \
 		subapps/helloc/* -o $(uobjpath)/sapp-$(arch)/c  -L$(uobjpath)/accm-$(arch) -l$(arch)

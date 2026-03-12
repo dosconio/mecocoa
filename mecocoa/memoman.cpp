@@ -92,7 +92,7 @@ void* Memory::allocate(stduint siz, stduint alignment, stduint boundary) {
 	Memory::pagebmap->add_range(sum_beg, sum_beg + siz, false);
 
 	#if _MCCA == 0x8632
-	kernel_paging.MapWeak(_IMM(ret), _IMM(ret), siz << 12, true, true);
+	kernel_paging.Map(_IMM(ret), _IMM(ret), siz << 12, 12, PGPROP_present | PGPROP_writable | PGPROP_user_access | PGPROP_weak);
 	#endif
 
 	// printlog(_LOG_INFO, "malloc(0x%[32H], %[x])", ret, siz << 12);

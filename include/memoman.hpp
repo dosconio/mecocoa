@@ -46,6 +46,7 @@ struct mecocoa_global_t {
 	uint16 ADDR_PARA1;
 	uint16 ADDR_PARA2;
 	uint16 ADDR_PARA3;
+	stduint kernel_cr3;// offset 0x10
 	volatile timeval_t system_time;
 	word gdt_len;
 	mec_gdt* gdt_ptr;
