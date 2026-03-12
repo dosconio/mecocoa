@@ -273,7 +273,7 @@ void cons_init() {
 		global_layman.video_memory,
 		global_layman.video_memory,
 		vcon0_size,
-		12, PGPROP_present | PGPROP_writable
+		PAGESIZE_4KB, PGPROP_present | PGPROP_writable
 	);// VGA
 	#endif
 

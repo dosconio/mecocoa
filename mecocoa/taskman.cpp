@@ -182,8 +182,8 @@ ProcessBlock* TaskRegister(void* entry, byte ring)
 	_TEMP if (ring == 3) {
 		pb->paging.Reset();
 		TSS->CR3 = _IMM(pb->paging.root_level_page);
-		pb->paging.Map(0x00000000, 0x00000000, 0x00400000, 12, PGPROP_present | PGPROP_writable | PGPROP_user_access | PGPROP_weak);//{TEMP}
-		pb->paging.Map(0x80000000, 0x00000000, 0x08000000, 12, PGPROP_present | PGPROP_writable | PGPROP_weak);// 0x80 pages
+		pb->paging.Map(0x00000000, 0x00000000, 0x00400000, PAGESIZE_4KB, PGPROP_present | PGPROP_writable | PGPROP_user_access | PGPROP_weak);//{TEMP}
+		pb->paging.Map(0x80000000, 0x00000000, 0x08000000, PAGESIZE_4KB, PGPROP_present | PGPROP_writable | PGPROP_weak);// 0x80 pages
 	}
 	else {
 		pb->paging.root_level_page = (PageEntry*)TSS->CR3;
@@ -251,7 +251,7 @@ static void TaskLoad_Carry(char* vaddr, stduint length, char* phy_src, Paging& p
 		if (_IMM(page_entry) == ~_IMM0 || !page_entry->isPresent()) {
 			phy = _IMM(Memory::physical_allocate(0x1000));
 			// ploginfo("mapping %[32H] -> %[32H]", v_start1, phy);
-			pg.Map(v_start1, phy, 0x1000, 12, PGPROP_present | PGPROP_writable | PGPROP_user_access);
+			pg.Map(v_start1, phy, 0x1000, PAGESIZE_4KB, PGPROP_present | PGPROP_writable | PGPROP_user_access);
 			page_entry = pg.getEntry(_IMM(v_start1));
 			if (_IMM(page_entry) == ~_IMM0 || !page_entry->isPresent())
 			{
@@ -288,13 +288,13 @@ ProcessBlock* TaskLoad(BlockTrait* source, void* addr, byte ring)
 	// keep 0x00000000 default empty page
 	pb->paging.Reset();
 	TSS->CR3 = _IMM(pb->paging.root_level_page);
-	pb->paging.Map(0x00001000, _IMM(page), allocsize, 12, PGPROP_present | PGPROP_writable | PGPROP_user_access);// PB&STACK
+	pb->paging.Map(0x00001000, _IMM(page), allocsize, PAGESIZE_4KB, PGPROP_present | PGPROP_writable | PGPROP_user_access);// PB&STACK
 	stduint kernel_size = _TEMP 0x00400000;
-	pb->paging.Map(0x80000000, 0x00000000, 0x04000000, 12, PGPROP_present | PGPROP_writable);// should include LDT
+	pb->paging.Map(0x80000000, 0x00000000, 0x04000000, PAGESIZE_4KB, PGPROP_present | PGPROP_writable);// should include LDT
 	// pb->paging.Map(0x80000000, 0x00000000, kernel_size, true, _Comment(R0) false);// should include LDT
 	// [PHINA]: should include LDT in Paging if use jmp-tss
 	#if 1 // may conflict
-	pb->paging.Map(_IMM(page), _IMM(page), allocsize, 12, PGPROP_present | PGPROP_writable | PGPROP_weak);
+	pb->paging.Map(_IMM(page), _IMM(page), allocsize, PAGESIZE_4KB, PGPROP_present | PGPROP_writable | PGPROP_weak);
 	#endif
 
 
@@ -426,7 +426,7 @@ static stduint task_fork(ProcessBlock* fo)
 	// - (TODO) Heap Area Mapping
 	pb->paging.Reset();
 	TSS->CR3 = _IMM(pb->paging.root_level_page);
-	pb->paging.Map(0x00001000, _IMM(page), allocsize, 12, PGPROP_present | PGPROP_writable | PGPROP_user_access);// PB&STACK
+	pb->paging.Map(0x00001000, _IMM(page), allocsize, PAGESIZE_4KB, PGPROP_present | PGPROP_writable | PGPROP_user_access);// PB&STACK
 	for0a(i, fo->load_slices) {
 		if (!fo->load_slices[i].length) break;
 		pb->load_slices[i] = fo->load_slices[i];
@@ -435,18 +435,18 @@ static stduint task_fork(ProcessBlock* fo)
 		stduint newaddr = (stduint)Memory::physical_allocate(pagesize);
 		stduint mapsrc = fo->load_slices[i].address & ~_IMM(PAGE_SIZE - 1);
 		// ploginfo("fork.map: 0x%x->0x%x(0x%x)", mapsrc, newaddr, pagesize);
-		pb->paging.Map(mapsrc, newaddr, pagesize, 12, _TEMP PGPROP_present | PGPROP_writable | PGPROP_user_access);// Map and allocation
+		pb->paging.Map(mapsrc, newaddr, pagesize, PAGESIZE_4KB, _TEMP PGPROP_present | PGPROP_writable | PGPROP_user_access);// Map and allocation
 		// ploginfo("memcpyp: %x+%x, ., %x, ., %x", mapsrc, appendix, fo->load_slices[i].address, fo->load_slices[i].length);
 		MemCopyP((char*)mapsrc + appendix, pb->paging,
 			(void*)fo->load_slices[i].address, fo->paging,
 			fo->load_slices[i].length);
 	}
 	stduint kernel_size = _TEMP 0x00400000;
-	pb->paging.Map(0x80000000, 0x00000000, 0x8000000, 12, PGPROP_present | PGPROP_writable);// should include LDT
+	pb->paging.Map(0x80000000, 0x00000000, 0x8000000, PAGESIZE_4KB, PGPROP_present | PGPROP_writable);// should include LDT
 	//[TODO] pb->paging.Map(0x80000000, 0x00000000, kernel_size, true, _Comment(R0) false);// should include LDT
 	// [PHINA]: should include LDT in Paging if use jmp-tss
 	#if 1 // may conflict
-	pb->paging.Map(_IMM(page), _IMM(page), allocsize, 12, PGPROP_present | PGPROP_writable | PGPROP_weak);
+	pb->paging.Map(_IMM(page), _IMM(page), allocsize, PAGESIZE_4KB, PGPROP_present | PGPROP_writable | PGPROP_weak);
 	#endif
 	pb->priority = fo->priority;
 	pb->time_slice = fo->time_slice;

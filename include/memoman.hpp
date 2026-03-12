@@ -132,6 +132,7 @@ extern Paging kernel_paging;
 // ---- SEGMENT ----
 #if (_MCCA & 0xFF00) == 0x8600
 void GDT_Init();
+void GDT_Next();
 #ifdef _ARC_x86
 word GDT_GetNumber();
 word GDT_Alloc();

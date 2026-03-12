@@ -92,7 +92,7 @@ void* Memory::allocate(stduint siz, stduint alignment, stduint boundary) {
 	Memory::pagebmap->add_range(sum_beg, sum_beg + siz, false);
 
 	#if _MCCA == 0x8632
-	kernel_paging.Map(_IMM(ret), _IMM(ret), siz << 12, 12, PGPROP_present | PGPROP_writable | PGPROP_user_access | PGPROP_weak);
+	kernel_paging.Map(_IMM(ret), _IMM(ret), siz << 12, PAGESIZE_4KB, PGPROP_present | PGPROP_writable | PGPROP_user_access | PGPROP_weak);
 	#endif
 
 	// printlog(_LOG_INFO, "malloc(0x%[32H], %[x])", ret, siz << 12);
@@ -136,12 +136,22 @@ _ESYM_C void RefreshGDT();
 // previous GDT may be broken, omit __asm("sgdt _buf");
 
 void GDT_Init() {
-	(*mecocoa_global).gdt_ptr = (mec_gdt*)mglb(0x600);
+	(*mecocoa_global).gdt_ptr = (mec_gdt*)(0x600);
 	MemCopyN(mecocoa_global->gdt_ptr, GDT_LIST, sizeof(GDT_LIST));
 	#if _MCCA == 0x8632
-	mecocoa_global->gdt_ptr->rout.setModeCall(_IMM(call_gate_entry()) | 0x80000000, SegCo32);// 8*3 Call Gate
+	mecocoa_global->gdt_ptr->rout.setModeCall(mglb(call_gate_entry()), SegCo32);// 8*3 Call Gate
 	#endif
-	loadGDT(_IMM(mecocoa_global->gdt_ptr), mecocoa_global->gdt_len = sizeof(mec_gdt) - 1);// physical address
+	loadGDT(_IMM(mecocoa_global->gdt_ptr), mecocoa_global->gdt_len = sizeof(mec_gdt) - 1);
+	#if _MCCA == 0x8632
+	RefreshGDT();
+	#elif _MCCA == 0x8664
+	setDSAll(SegData);
+	setCSSS(SegCo64, SegData);
+	#endif
+}
+void GDT_Next() {
+	(*mecocoa_global).gdt_ptr = (mec_gdt*)mglb(0x600);
+	loadGDT(_IMM(mecocoa_global->gdt_ptr), mecocoa_global->gdt_len = sizeof(mec_gdt) - 1);
 	#if _MCCA == 0x8632
 	RefreshGDT();
 	#elif _MCCA == 0x8664

@@ -17,8 +17,8 @@ qemu=qemu-system-i386 # not support ia32e
 bochd=C:/Soft/Bochs-2.7/bochsdbg.exe
 
 COMWAN = -Wno-builtin-declaration-mismatch
-CXF1=-m32 -mno-red-zone -mno-sse -mno-sse2 -mno-sse3 -mno-ssse3 -mno-sse4 # -mgeneral-regs-only
-CXF2=-fno-stack-protector -fno-pic -fno-exceptions -fno-unwind-tables -fno-builtin
+CXF1=-m32 -mno-red-zone -mno-sse -mno-sse2 -mno-sse3 -mno-ssse3 -mno-sse4
+CXF2=-fno-stack-protector -fno-pic -fno-exceptions -fno-unwind-tables -fno-builtin -fno-strict-aliasing
 CXF=$(CXF1) $(CXF2) -fno-rtti -fno-use-cxa-atexit -static -nostdlib $(COMWAN)
 CXW=-Wno-builtin-declaration-mismatch -Wno-volatile -Wno-multichar
 CX=g++ -I$(uincpath) -c $(flag) $(CXF) $(CXW) -std=c++2a
@@ -134,5 +134,5 @@ clean:
 %.o: %.cpp
 	@mkdir $(uobjpath)/mcca-$(arch) -p
 	@echo "CX $(notdir $<)"
-	@$(CX) $< -o $(uobjpath)/mcca-$(arch)/$(notdir $@) -O0 #-Os
+	@$(CX) $< -o $(uobjpath)/mcca-$(arch)/$(notdir $@) -O0
 

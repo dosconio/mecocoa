@@ -54,11 +54,11 @@ bool Memory::initialize(stduint eax, byte* ebx) {
 	if (eax == MULTIBOOT2_BOOTLOADER_MAGIC) { parse_grub(_IMM(ebx)); }
 	_physical_allocate = Memory::physical_allocate;
 	MemSet(kernel_paging.root_level_page = (PageEntry*)0x100000, 0, 0x1000);// kernel_paging.Reset();
-	kernel_paging.Map(0x00000000, 0x00000000, 0x10000000, 12, PGPROP_present | PGPROP_writable | PGPROP_user_access);
-	kernel_paging.Map(0x80000000, 0x00000000, 0x10000000, 12, PGPROP_present | PGPROP_writable);
+	kernel_paging.Map(0x00000000, 0x00000000, 0x10000000, PAGESIZE_4MB, PGPROP_present | PGPROP_writable | PGPROP_user_access);// 4MB
+	kernel_paging.Map(0x80000000, 0x00000000, 0x10000000, PAGESIZE_4MB, PGPROP_present | PGPROP_writable);
+	setCR4(getCR4() | 0x10);// CR4.PSE
 	setCR3(_IMM(kernel_paging.root_level_page));
 	PagingEnable();
-	// GDT_Init();
 	#endif
 	GDT_Init();
 
@@ -119,11 +119,16 @@ bool Memory::initialize(stduint eax, byte* ebx) {
 	#if _MCCA == 0x8664
 	kernel_paging.Reset();
 	kernel_paging.Map(0x00000000, 0x00000000, 0x100000000ULL * 16,
-		21, PGPROP_present | PGPROP_writable
+		PAGESIZE_2MB, PGPROP_present | PGPROP_writable
 	);// pgsize 30 may be bad for Bochs; QEMU need map many times of 4G
+	kernel_paging.Map(0xFFFFFFFFC0000000ull,
+		0x0000000000000000ull,
+		0x40000000ull,
+		PAGESIZE_2MB, PGPROP_present | PGPROP_writable
+	);// High Part
 	setCR3 _IMM(kernel_paging.root_level_page);
-	// GDT_Init();
 	#endif
+	GDT_Next();
 
 
 	return true;

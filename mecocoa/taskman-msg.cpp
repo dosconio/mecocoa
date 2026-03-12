@@ -78,7 +78,7 @@ void rupt_proc(stduint pid, stduint rupt_no)
 	if ((_IMM(task->block_reason) & _IMM(ProcessBlock::BlockReason::BR_RecvMsg)) &&
 		((stduint)task->recv_fo_whom == ANYPROC || (stduint)task->recv_fo_whom == INTRUPT)) {
 		// ploginfo("INT-MSG: RUPT-PROC");
-		CommMsg tmp_msg{ 0 };
+		CommMsg tmp_msg = { };
 		tmp_msg.type = HARDRUPT;
 		MemCopyP(task->unsolved_msg, task->paging, &tmp_msg, kernel_paging, sizeof(tmp_msg));
 		task->wait_rupt_no = nil;

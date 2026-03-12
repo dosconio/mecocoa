@@ -101,6 +101,6 @@ void setDSAll(uint16 value);
 #include "../prehost/atx-x64-uefi64/atx-x64-uefi64.loader/loader-graph.h"
 #endif
 
-#define mglb(x) (_IMM(x))
+#define mglb(x) (_IMM(x) | 0xFFFFFFFFC0000000ull)
 
 #endif // _MCCA_UEFI64
