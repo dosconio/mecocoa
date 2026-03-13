@@ -148,6 +148,7 @@ bool Taskman::Append(ProcessBlock* task) {
 	}
 	min_available_pid = las + 1;
 	task->state = ProcessBlock::State::Ready;
+	min_available_left = nod;
 	EnqueueReady(task);
 	return true;
 }
@@ -237,7 +238,8 @@ auto Taskman::Schedule(bool omit_slice)->decltype(Schedule())
 	stduint cpuid = getID();
 	auto old_pb = Taskman::Locate(CurrentPID());
 	if (!old_pb) {
-		plogerro("Taskman::Schedule: No current task found for CPU %d", cpuid);
+		plogerro("Taskman::Schedule: No current task found for CPU %d (crtpid=%u)", cpuid, CurrentPID());
+		HALT();
 		return;
 	}
 	if (ifContinueProcess(old_pb)) {

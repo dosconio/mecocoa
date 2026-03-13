@@ -48,6 +48,8 @@ void mecocoa(const UefiData& uefi_data_ref)
 	const unsigned mempool_lenN = 0x20000;
 	mempool.Append(Slice{ _IMM(mem.allocate(mempool_lenN)), mempool_lenN });
 	mempool.Append(Slice{ _IMM(mem.allocate(mempool_lenN)), mempool_lenN });
+	mempool.Append(Slice{ _IMM(mem.allocate(mempool_lenN)), mempool_lenN });
+	mempool.Append(Slice{ _IMM(mem.allocate(mempool_lenN)), mempool_lenN });
 
 	
 	cons_init();
@@ -59,17 +61,17 @@ void mecocoa(const UefiData& uefi_data_ref)
 	#endif
 
 	// IVT and Device
-	new (&IC) InterruptControl(_IMM(mem.allocate(256 * sizeof(gate_t))));
-	IC.Reset(SegCo64, 0x00000000);
+	new (&IC) InterruptControl(mglb(mem.allocate(256 * sizeof(gate_t))));
+	IC.Reset(SegCo64, 0xFFFFFFFFC0000000ull);
 
 	auto& xhc = *reinterpret_cast<uni::device::SpaceUSB3::HostController*>(_BUF_xhc);
 	if (!PCI_Init(pci)) {
 		plogerro("No devices on PCI or PCI init failed.");
 	}
-	IC[IRQ_xHCI].setModeRupt(_IMM(Handint_XHCI), SegCo64);
+	IC[IRQ_xHCI].setModeRupt(mglb(Handint_XHCI), SegCo64);
 	//[TIM.LAPIC] -> sys-delay
 	ACPI::Assert(*(const ACPI::RSDP*)uefi_data.acpi_table);
-	IC[IRQ_LAPICTimer].setModeRupt(_IMM(Handint_LAPICT), SegCo64);
+	IC[IRQ_LAPICTimer].setModeRupt(mglb(Handint_LAPICT), SegCo64);
 	lapic_timer.Reset();
 	lapic_timer.Reset(lapic_timer.Frequency / SysTickFreq);
 	SysTimer::Initialize();
@@ -101,14 +103,15 @@ void mecocoa(const UefiData& uefi_data_ref)
 		else {
 			han = (FAT_FileHandle*)fatvhd.search("/", &a);
 			fatvhd.enumer(han, NULL);
-			if (han = (FAT_FileHandle*)fatvhd.search("a.txt", &a)) {
-				byte* buf = new byte[32];//[han->size];
-				if (fatvhd.readfl(han, Slice{ 0,32 }, buf))
+			if (han = (FAT_FileHandle*)fatvhd.search("appa.elf", &a)) {
+				byte* buf = new byte[han->size];
+				if (fatvhd.readfl(han, Slice{ 0,han->size }, buf))
 				{
-					buf[31] = 0;
-					outsfmt("[a.txt]\n\r%s\n\r", buf);
+					auto pb = TaskLoad(NULL, buf, 3);
+					Taskman::Append(pb);
+					// SwitchTaskContext(&pb->context, &Taskman::Locate(Taskman::CurrentPID())->context);
 				}
-				else plogerro("a.txt: Fail to load");
+				else plogerro("appa.elf: Fail to load");
 				delete[] buf;
 			}
 		}

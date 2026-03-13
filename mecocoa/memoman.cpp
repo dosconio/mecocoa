@@ -40,7 +40,7 @@ void* Memory::physical_allocate(usize siz) {
 	if (siz & 0xFFF) siz = (siz & ~_IMM(0xFFF)) + 0x1000;
 	void* ret = nil;
 	if (map_ready) {
-		ret = mem.allocate(siz);
+		ret = mem.allocate(siz, 12);
 	}
 	else { // not support pg-mapping
 		void* ret = p_ext;
@@ -118,7 +118,7 @@ uint64 GDT_LIST[]{
 	0x00CF9A000000FFFFull,//(SegCo32) Ring0
 	0x0020980000000000ull,//(SegCo64) Ring0
 	0x00CFF2000000FFFFull,//(Rg3Data) Ring3
-	0x00CFFA000000FFFFull,//(Rg3Code) Ring3
+	0x0020FA0000000000ull,//(Rg3Code) Ring3
 	0x0000000000000000ull,//(SegCall) Ring3
 	#if __BITS__ == 64
 	0x0000000000000000ull,

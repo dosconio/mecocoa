@@ -2,10 +2,12 @@
 #ifndef TASKMAN_HPP_
 #define TASKMAN_HPP_
 
-#include <cpp/queue>
-#include <cpp/Device/_Timer.hpp>
-#include <c/system/paging.h>
 #include <c/task.h>
+#include <cpp/queue>
+#include <c/system/paging.h>
+#include <cpp/Device/_Timer.hpp>
+#include <cpp/trait/BlockTrait.hpp>
+
 #include "syscall.hpp"
 
 void serv_sysmsg();
@@ -108,19 +110,21 @@ public: // _Comment(Interface);
 		POSIX,
 		Win32,
 	} interface_type = InterfaceType::POSIX;
+public:
+	uni::Paging paging;
+	//{} Mempool heappool
+public: // _Comment(Taskman);
+	uni::Slice load_slices[8];// at most 8 slices, app-relative logical address
+	
 public:// old design: have not updated completely
 	#if _MCCA == 0x8632
-	static stduint cpu_proc_number;
 
-	//{} Mempool mempool;
-	uni::Paging paging;
 	descriptor_t LDT[0x100 / byteof(descriptor_t)];
 	TSS_t TSS;// aka state-frame
 	stduint kept_intermap[1];
 	word focus_tty_id;
 	stduint processor_id;// running on which cpu core
 	stduint exit_status;
-	//{} Mempool heappool
 
 	// before syscall, for `fork`
 	stduint before_syscall_eax;
@@ -133,7 +137,6 @@ public:// old design: have not updated completely
 	stduint before_syscall_data_pointer;// esp
 	stduint before_syscall_code_pointer;
 	//
-	uni::Slice load_slices[8];// at most 8 slices, app-relative logical address
 
 	// File
 	FileDescriptor* pfiles[_TEMP 4];
@@ -182,7 +185,7 @@ public:// schedule
 	static void DequeueReady(ProcessBlock* pb);
 	static void EnqueueExpired(ProcessBlock* pb);
 	static ProcessBlock* PickNext();
-protected:
+public:
 	static auto// return a all-zero ProcessBlock
 		AllocateTask() -> ProcessBlock*;
 };
@@ -204,7 +207,15 @@ enum class TaskmanMsg {
 };
 
 ProcessBlock* TaskRegister(void* entry, byte ring);
+
+#endif
+#if (_MCCA & 0xFF00) == 0x8600
+
 ProcessBlock* TaskLoad(uni::BlockTrait* source, void* addr, byte ring);//{TODO} for existing R1
+
+#endif
+#if _MCCA == 0x8632
+
 
 inline ProcessBlock* TaskGet(stduint taskid) { return Taskman::Locate(taskid); }
 

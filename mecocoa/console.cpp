@@ -337,7 +337,9 @@ void cons_init() {
 	vcon0->setModeBuffer(vcon0_buf);
 	global_layman.Append(vcon0);
 
+	#if _GUI_DOUBLE_BUFFER
 	enable_2buffer();
+	#endif
 
 	vcon0->Clear();
 	con0_out = vcons[0] = vcon0;

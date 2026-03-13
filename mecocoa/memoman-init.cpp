@@ -109,6 +109,10 @@ bool Memory::initialize(stduint eax, byte* ebx) {
 
 	map_ready = true;
 
+	#if 1
+	Memory::pagebmap->add_range(0x10000 >> 12, 0x20000 >> 12, false);
+	#endif
+
 	uni_default_allocator = &mem;
 	// mempool (kernel heap)
 	const unsigned mempool_len0 = 0x4000;
@@ -121,7 +125,7 @@ bool Memory::initialize(stduint eax, byte* ebx) {
 	kernel_paging.Map(0x00000000, 0x00000000, 0x100000000ULL * 16,
 		PAGESIZE_2MB, PGPROP_present | PGPROP_writable
 	);// pgsize 30 may be bad for Bochs; QEMU need map many times of 4G
-	kernel_paging.Map(0xFFFFFFFFC0000000ull,
+	kernel_paging.Map(0x0000FFFFC0000000ull, // 0xFFFFFFFFC0000000ull,
 		0x0000000000000000ull,
 		0x40000000ull,
 		PAGESIZE_2MB, PGPROP_present | PGPROP_writable

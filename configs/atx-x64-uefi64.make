@@ -115,7 +115,10 @@ build: clean $(archdir)/kerdisk.fat $(ubinpath)/$(arch).img $(asmobjs) $(cppobjs
 	# OUTDATED # prehost/$(arch)/script-adapt.sh ~/_obj/$(elf_kernel) $(ubinpath)/$(elf_kernel)
 	@echo $(sudokey) | sudo -S mkdir -p $(mntdir)
 	@echo $(sudokey) | sudo -S mount -o loop $(archdir)/kerdisk.fat $(mntdir)
-	@echo $(sudokey) | sudo -S cp Makefile $(mntdir)/a.txt
+	mkdir -p $(uobjpath)/app-$(arch)
+	aasm subapps/helloa/helloa-x64.asm -felf64 -o subapps/helloa/helloa-x64.o
+	ld   -s -m elf_x86_64 -o $(uobjpath)/app-$(arch)/a subapps/helloa/helloa-x64.o -Ttext-segment=0x10000
+	@echo $(sudokey) | sudo -S cp $(uobjpath)/app-$(arch)/a $(mntdir)/appa.elf
 	tree $(mntdir)
 	@echo $(sudokey) | sudo -S umount $(mntdir)
 	@echo $(sudokey) | sudo -S mount -o loop $(ubinpath)/$(arch).img $(mntdir)
@@ -157,6 +160,7 @@ qemu_args=\
 	-device usb-mouse \
 	-device usb-kbd \
 	-monitor stdio \
+	-no-reboot -no-shutdown  \
 
 run: build
 	@echo [ running] MCCA for $(arch)

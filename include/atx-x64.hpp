@@ -8,7 +8,11 @@ using namespace uni;
 #include <cpp/interrupt>
 #include <cpp/Device/_Video.hpp>
 #include "console.hpp"
+
+
 #include "memoman.hpp"
+#define PAGE_SIZE 0x1000 // lev-0-page
+
 #include "taskman.hpp"
 
 // ---- asm
