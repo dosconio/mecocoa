@@ -117,7 +117,7 @@ build: clean $(archdir)/kerdisk.fat $(ubinpath)/$(arch).img $(asmobjs) $(cppobjs
 	@echo $(sudokey) | sudo -S mount -o loop $(archdir)/kerdisk.fat $(mntdir)
 	mkdir -p $(uobjpath)/app-$(arch)
 	aasm subapps/helloa/helloa-x64.asm -felf64 -o subapps/helloa/helloa-x64.o
-	ld   -s -m elf_x86_64 -o $(uobjpath)/app-$(arch)/a subapps/helloa/helloa-x64.o -Ttext-segment=0x10000
+	ld   -s -m elf_x86_64 -o $(uobjpath)/app-$(arch)/a subapps/helloa/helloa-x64.o -Ttext-segment=0x10000 -e main # elf_i386
 	@echo $(sudokey) | sudo -S cp $(uobjpath)/app-$(arch)/a $(mntdir)/appa.elf
 	tree $(mntdir)
 	@echo $(sudokey) | sudo -S umount $(mntdir)

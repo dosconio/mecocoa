@@ -10,8 +10,8 @@
 EXTERN GDT64
 EXTERN entry_kernel
 
-SegData EQU 8*1
-SegCo64 EQU 8*4
+SegCo64 EQU 8*2
+SegData EQU 8*3
 SegCount EQU 5
 
 [section .text]

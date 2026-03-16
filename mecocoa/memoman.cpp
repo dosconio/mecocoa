@@ -113,10 +113,10 @@ Paging kernel_paging;
 
 uint64 GDT_LIST[]{
 	0x0000000000000000ull,//(SegNull) Ring0
-	0x00CF92000000FFFFull,//(SegData) Ring0
 	0x000F9A000000FFFFull,//(SegCo16) Ring0
-	0x00CF9A000000FFFFull,//(SegCo32) Ring0
 	0x0020980000000000ull,//(SegCo64) Ring0
+	0x00CF92000000FFFFull,//(SegData) Ring0
+	0x00CF9A000000FFFFull,//(SegCo32) Ring0
 	0x00CFF2000000FFFFull,//(Rg3Data) Ring3
 	0x0020FA0000000000ull,//(Rg3Code) Ring3
 	0x0000000000000000ull,//(SegCall) Ring3
@@ -139,7 +139,7 @@ void GDT_Init() {
 	(*mecocoa_global).gdt_ptr = (mec_gdt*)(0x600);
 	MemCopyN(mecocoa_global->gdt_ptr, GDT_LIST, sizeof(GDT_LIST));
 	#if _MCCA == 0x8632
-	mecocoa_global->gdt_ptr->rout.setModeCall(mglb(call_gate_entry()), SegCo32);// 8*3 Call Gate
+	mecocoa_global->gdt_ptr->rout.setModeCall(mglb(call_gate_entry()), SegCo32);
 	#endif
 	loadGDT(_IMM(mecocoa_global->gdt_ptr), mecocoa_global->gdt_len = sizeof(mec_gdt) - 1);
 	#if _MCCA == 0x8632

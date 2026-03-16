@@ -75,8 +75,8 @@ void Handint_MOU() {
 
 #elif defined(_UEFI)
 
-__attribute__((interrupt, target("general-regs-only"), optimize("O0")))
-void Handint_XHCI(InterruptFrame* frame) {
+__attribute__((target("general-regs-only"), optimize("O0")))
+void Handint_XHCI() {
 	message_queue.Enqueue(SysMessage{ SysMessage::RUPT_xHCI });
 	sendEOI();
 }

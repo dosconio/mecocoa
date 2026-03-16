@@ -444,3 +444,17 @@ stduint syscall(syscall_t callid, ...) {
 // No dynamic core
 
 #endif
+
+#if _MCCA == 0x8664
+static void
+sysc_try(stduint ch);
+_ESYM_C stduint SYSCALL_TABLE[] = {
+	_IMM(sysc_try),// OUTC
+};
+
+static
+void sysc_try(stduint ch) {// OUTC
+	outc(ch);
+}
+
+#endif

@@ -11,6 +11,7 @@
 
 #include "../include/taskman.hpp"
 
+void* higher_stacks[PCU_CORES_MAX];// when 1 core 1 stack
 static SysMessage _BUF_Message[64];
 Queue<SysMessage> message_queue(_BUF_Message, numsof(_BUF_Message));
 
@@ -29,15 +30,19 @@ void Taskman::Initialize(stduint cpuid) {
 	for0(i, PCU_CORES) {
 		PCU_CORES_TSS[i] = addr;
 		#if _MCCA == 0x8664
-		addr->RSP0 = _IMM(mem.allocate(0x1000));
+		higher_stacks[i] = (mem.allocate(0x1000, PAGESIZE_4KB));
+		addr->RSP0 = 0xFFFFFFFFC0001000ull + HIGHER_STACK_SIZE - 8;// for user-app in cpu0
 		#else
 		addr->ESP0 = _IMM(mem.allocate(0x1000));
 		#endif
 		addr++;
 	}
+	//{TODO} Map more cores, cpu1 at 0x0000FFFFFFFF8000ull...
+	kernel_paging.Map(0x0000FFFFFFFFF000ull, _IMM(higher_stacks[0]), 0x1000, PAGESIZE_4KB, PGPROP_present | PGPROP_writable);// High Part
+	
 	// Type = 10x1 + L=0 +  D/B=0 + 16B  64-bit TSS
 	//             + L=1 OR D/B=1        32-bit TSS
-	mecocoa_global->gdt_ptr->tss.setRange(_IMM(PCU_CORES_TSS[0]), sizeof(TSS_t) - 1);
+	mecocoa_global->gdt_ptr->tss.setRange(mglb(PCU_CORES_TSS[0]), sizeof(TSS_t) - 1);
 	auto kernel_task = AllocateTask();
 	min_available_left = chain.Append(kernel_task);
 	kernel_task->state = ProcessBlock::State::Running;
@@ -304,20 +309,18 @@ ProcessBlock* TaskLoad(BlockTrait* source, void* addr, byte ring)
 	#else
 	pb->context.CR3 = _IMM(pb->paging.root_level_page);
 	pb->paging.Map(0x00001000, _IMM(stack), 0x4000, PAGESIZE_4KB, PGPROP_present | PGPROP_writable | PGPROP_user_access);// PB&STACK
-	pb->paging.Map(0, 0, 0x1000ull, PAGESIZE_4KB, PGPROP_present | PGPROP_writable);
-	pb->paging.Map(0x20000, 0x20000,
-		0x3E0000ull,
-		PAGESIZE_4KB, PGPROP_present | PGPROP_writable
-	);
-	pb->paging.Map(0x400000, 0x400000,
-		0x400000000ull,
-		PAGESIZE_2MB, PGPROP_present | PGPROP_writable
-	);
+
 	pb->paging.Map(0x0000FFFFC0000000ull,
 		0x0000000000000000ull,
-		0x40000000ull,
+		0x40000000ull - _IMM1S(PAGESIZE_2MB),
 		PAGESIZE_2MB, PGPROP_present | PGPROP_writable
 	);// High Part
+	//{TODO} Map more cores, cpu1 at 0x0000FFFFFFFF8000ull...
+	pb->stack_levladdr = (byte*)mem.allocate(HIGHER_STACK_SIZE, 12);
+	pb->paging.Map(0xFFFFFFFFC0001000ull, _IMM(pb->stack_levladdr), // _IMM(higher_stacks[0]),
+		HIGHER_STACK_SIZE, PAGESIZE_4KB, PGPROP_present | PGPROP_writable
+	);// High Part. overlap with kernel 0..4KB
+	pb->paging.Map(0x0000FFFFFFFFF000ull, _IMM(higher_stacks[0]), 0x1000, PAGESIZE_4KB, PGPROP_present | PGPROP_writable);// High Part
 	#endif
 
 	Letvar(header, struct ELF_Header_t*, addr);
@@ -365,7 +368,7 @@ ProcessBlock* TaskLoad(BlockTrait* source, void* addr, byte ring)
 	TSS->EFLAGS = getFlags();
 	// TSS->EAX = TSS->ECX = TSS->EDX = TSS->EBX = TSS->EBP = TSS->ESI = TSS->EDI = 0;
 	#else
-	pb->context.SP = (_IMM(stack + stack_size * 1) & ~0xFlu) - 8;
+	pb->context.SP = (_IMM(stack + 0x4000) & ~0xFlu) - 8;// single stack
 	pb->context.SS = SegDaR3 | ring;
 	pb->context.FLAG = 0x202;
 	#endif

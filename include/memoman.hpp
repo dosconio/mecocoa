@@ -16,10 +16,10 @@ extern bool map_ready;
 
 struct mec_gdt {
 	descriptor_t null;
-	descriptor_t data;
-	descriptor_t code;
 	descriptor_t co16;
 	descriptor_t co64;
+	descriptor_t data;
+	descriptor_t code;// 32
 	descriptor_t dar3;
 	descriptor_t cor3;
 	//
@@ -29,10 +29,10 @@ struct mec_gdt {
 
 enum {
 	SegNull = 8 * 0,
-	SegData = 8 * 1,
-	SegCo16 = 8 * 2,
-	SegCo32 = 8 * 3,
-	SegCo64 = 8 * 4,
+	SegCo16 = 8 * 1,
+	SegCo64 = 8 * 2,
+	SegData = 8 * 3,
+	SegCo32 = 8 * 4,
 	SegDaR3 = 8 * 5,
 	SegCoR3 = 8 * 6,
 	//
@@ -41,18 +41,22 @@ enum {
 	// flap32: LDT_App1, TSS_App1, LDT_App2, TSS_App2, ...
 };
 
-struct mecocoa_global_t {
+_PACKED(struct) mecocoa_global_t {
 	uint16 ADDR_PARA0;
 	uint16 ADDR_PARA1;
 	uint16 ADDR_PARA2;
 	uint16 ADDR_PARA3;
-	stduint kernel_cr3;// offset 0x10
-	volatile timeval_t system_time;
-	word gdt_len;
+	stduint kernel_cr3;// offset 0x08
+	uint16 padding0;
+	uint16 gdt_len;
 	mec_gdt* gdt_ptr;
+	volatile timeval_t system_time;//{TORM}
 };
+
 #define bda ((BIOS_DataArea*)0x400)
-inline static mecocoa_global_t* mecocoa_global{ (mecocoa_global_t*)0x500 };
+#define mcca_glblk 0x500
+
+inline static mecocoa_global_t* mecocoa_global{ (mecocoa_global_t*)mcca_glblk };
 #define ADDR_BIOS_GDT 0x600// Migrate if over 0x400
 
 _ESYM_C stduint CallCo16(stduint func);

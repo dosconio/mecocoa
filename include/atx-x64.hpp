@@ -32,9 +32,11 @@ rostr text_brand();
 
 extern volatile stduint tick;
 
-void Handint_XHCI(InterruptFrame* frame);
-void Handint_LAPICT(InterruptFrame* frame);
-
+_ESYM_C{
+	void Handint_SYSCALL_Entry(), Handint_SYSCALL();
+	void Handint_XHCI_Entry(), Handint_XHCI();
+	void Handint_LAPICT_Entry(), Handint_LAPICT();
+}
 
 
 // UEFI

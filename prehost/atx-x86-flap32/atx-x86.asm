@@ -8,8 +8,8 @@
 %include "osdev.a"
 %include "ladder.a"
 
-SegData EQU 8*1
-SegCo32 EQU 8*3
+SegData EQU 8*3
+SegCo32 EQU 8*4
 
 [BITS 32]
 ; 0x20

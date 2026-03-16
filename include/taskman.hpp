@@ -41,6 +41,8 @@ extern uni::Queue<SysMessage> message_queue;
 #define PCU_CORES_MAX 16
 #endif
 
+#define HIGHER_STACK_SIZE 0x4000
+
 #if (_MCCA & 0xFF00) == 0x8600
 extern TSS_t* PCU_CORES_TSS[PCU_CORES_MAX];
 
@@ -73,6 +75,7 @@ public:
 public:
 	stduint stack_size;
 	byte* stack_lineaddr;
+	byte* stack_levladdr;
 	sint8 priority = 0; // -16..-1 (Realtime RT) and 0..15 (Timeslice)
 	uint8 time_slice = 0; // execution time left for timeslice mode
 	bool is_expired = false; // true if task has expended its timeslice in the current epoch

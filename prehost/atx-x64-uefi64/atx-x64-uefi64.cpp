@@ -64,14 +64,20 @@ void mecocoa(const UefiData& uefi_data_ref)
 	new (&IC) InterruptControl(mglb(mem.allocate(256 * sizeof(gate_t))));
 	IC.Reset(SegCo64, 0xFFFFFFFFC0000000ull);
 
+	// Syscall
+	setMSR(x86MSR::EFER, 0x0501);
+	setMSR(x86MSR::LSTAR, mglb(Handint_SYSCALL_Entry));
+	setMSR(x86MSR::STAR, (_IMM(SegCo64) << 32) | (_IMM(SegCo32 | 3) << 48));
+	setMSR(x86MSR::FMASK, 0x200);
+	// Deivce Driver
 	auto& xhc = *reinterpret_cast<uni::device::SpaceUSB3::HostController*>(_BUF_xhc);
 	if (!PCI_Init(pci)) {
 		plogerro("No devices on PCI or PCI init failed.");
 	}
-	IC[IRQ_xHCI].setModeRupt(mglb(Handint_XHCI), SegCo64);
+	IC[IRQ_xHCI].setModeRupt(mglb(Handint_XHCI_Entry), SegCo64);
 	//[TIM.LAPIC] -> sys-delay
 	ACPI::Assert(*(const ACPI::RSDP*)uefi_data.acpi_table);
-	IC[IRQ_LAPICTimer].setModeRupt(mglb(Handint_LAPICT), SegCo64);
+	IC[IRQ_LAPICTimer].setModeRupt(mglb(Handint_LAPICT_Entry), SegCo64);
 	lapic_timer.Reset();
 	lapic_timer.Reset(lapic_timer.Frequency / SysTickFreq);
 	SysTimer::Initialize();
@@ -109,7 +115,6 @@ void mecocoa(const UefiData& uefi_data_ref)
 				{
 					auto pb = TaskLoad(NULL, buf, 3);
 					Taskman::Append(pb);
-					// SwitchTaskContext(&pb->context, &Taskman::Locate(Taskman::CurrentPID())->context);
 				}
 				else plogerro("appa.elf: Fail to load");
 				delete[] buf;

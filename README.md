@@ -37,6 +37,16 @@ Development-Environment
 - `(Stable)` Ubuntu 22.04, gcc 11.4.0, qemu 9.2.4
 - `(Newest)` ArchLinux, gcc, qemu
 
+## Programming
+
+The master uses m/unic/c++, `mulango` provides other implementations
+- `c++` modcpp or stlcpp(stdcpp)
+- `d`
+- `kotlin`
+- `rust`
+
+
+
 ## Architecture
 
 Format $board-architecture(-mode)$

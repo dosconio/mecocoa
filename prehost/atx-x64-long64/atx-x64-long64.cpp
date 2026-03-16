@@ -40,3 +40,5 @@ _ESYM_C void mecocoa() {
 	loop HALT();
 }
 
+void Handint_XHCI() {}
+void Handint_LAPICT() {}

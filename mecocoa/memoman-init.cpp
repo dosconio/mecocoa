@@ -127,10 +127,11 @@ bool Memory::initialize(stduint eax, byte* ebx) {
 	);// pgsize 30 may be bad for Bochs; QEMU need map many times of 4G
 	kernel_paging.Map(0x0000FFFFC0000000ull, // 0xFFFFFFFFC0000000ull,
 		0x0000000000000000ull,
-		0x40000000ull,
+		0x40000000ull - _IMM1S(PAGESIZE_2MB),
 		PAGESIZE_2MB, PGPROP_present | PGPROP_writable
 	);// High Part
 	setCR3 _IMM(kernel_paging.root_level_page);
+	mecocoa_global->kernel_cr3 = _IMM(kernel_paging.root_level_page);
 	#endif
 	GDT_Next();
 

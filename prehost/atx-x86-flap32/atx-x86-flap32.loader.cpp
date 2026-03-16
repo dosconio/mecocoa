@@ -35,10 +35,10 @@ static FAT_FileHandle filhan;
 
 uint64 GDT64[]{
 	0x0000000000000000ull,//(SegNull) Ring0
-	0x00CF92000000FFFFull,//(SegData) Ring0
 	0x000F9A000000FFFFull,//(SegCo16) Ring0
-	0x00CF9A000000FFFFull,//(SegCo32) Ring0
 	0x0020980000000000ull,//(SegCo64) Ring0
+	0x00CF92000000FFFFull,//(SegData) Ring0
+	0x00CF9A000000FFFFull,//(SegCo32) Ring0
 };// no address and limit for x64
 
 _ESYM_C void B32_LoadKer32();

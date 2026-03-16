@@ -145,8 +145,8 @@ void Handint_RTC()
 
 #endif
 #if _MCCA == 0x8664 && defined(_UEFI)
-__attribute__((interrupt, target("general-regs-only")))
-void Handint_LAPICT(InterruptFrame* frame) {
+__attribute__((/*interrupt, */target("general-regs-only")))// the stack is ready
+void Handint_LAPICT(/*InterruptFrame* frame*/) {
 	tick = tick + 1;// mecocoa_global->system_time.mic++
 	sendEOI();
 	while (TimerManager.Root()) {
