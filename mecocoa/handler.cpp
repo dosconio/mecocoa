@@ -119,6 +119,8 @@ static rostr ExceptionDescription[] = {
 _ESYM_C
 __attribute__((target("general-regs-only"), optimize("O0")))
 void exception_handler(sdword iden, dword para) {
+	stduint r15;
+	_ASM("mov %%r15, %0" : "=r"(r15));
 	const bool have_para = iden >= 0;
 	if (iden < 0) iden = ~iden;
 
@@ -152,7 +154,7 @@ void exception_handler(sdword iden, dword para) {
 
 	case ERQ_Page_Fault:// 14
 		printlog(_LOG_FATAL, have_para ? "%s with 0x%[x], vaddr=0x%[x], CR3=0x%[x]" : "%s",
-			ExceptionDescription[iden], para, getCR2(), getCR3()); // printlog will call halt machine
+			ExceptionDescription[iden], para, getCR2(), r15); // printlog will call halt machine
 		break;
 
 	default:

@@ -74,7 +74,7 @@ public:
 	inline stduint getID() { return pid; }
 public:
 	stduint stack_size;
-	byte* stack_lineaddr;
+	byte* stack_lineaddr;// bottom of stack
 	byte* stack_levladdr;
 	sint8 priority = 0; // -16..-1 (Realtime RT) and 0..15 (Timeslice)
 	uint8 time_slice = 0; // execution time left for timeslice mode

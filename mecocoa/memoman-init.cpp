@@ -109,10 +109,6 @@ bool Memory::initialize(stduint eax, byte* ebx) {
 
 	map_ready = true;
 
-	#if 1
-	Memory::pagebmap->add_range(0x10000 >> 12, 0x20000 >> 12, false);
-	#endif
-
 	uni_default_allocator = &mem;
 	// mempool (kernel heap)
 	const unsigned mempool_len0 = 0x4000;

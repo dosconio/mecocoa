@@ -40,7 +40,7 @@ byte _BUF_cursor[byteof(Cursor)];
 // global
 bool ento_gui = false;
 bool enable_dubuffer = false;
-OstreamTrait* con0_out;
+OstreamTrait* con0_out = 0;
 #ifndef _UEFI
 GloScreenARGB8888 local_vci;
 #else
@@ -214,7 +214,7 @@ void enable_2buffer() {
 
 void cons_init() {
 	Bcons[0].Reset(bda->screen_columns, 24, _VIDEO_ADDR_BUFFER, 0 * 50); Bcons[0].setShowY(0, 24);
-	con0_out = &Bcons[0];
+	con0_out = 0;// &Bcons[0];
 	for1(i, TTY_NUMBER - 1) {
 		Bcons[i].Reset(bda->screen_columns, 50, _VIDEO_ADDR_BUFFER, i * 50); Bcons[i].setShowY(0, 25);
 	}

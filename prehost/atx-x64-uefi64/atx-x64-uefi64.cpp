@@ -98,8 +98,10 @@ void mecocoa(const UefiData& uefi_data_ref)
 	//{} "ls /"
 	//{} "cat a.txt"
 	if (1) {
-		MemoryBlockDevice memdev({ _IMM(uefi_data.fatvhd_addr), 32 * 1024 * 1024 }, (byte*)mem.allocate(512));
-		FilesysFAT fatvhd(32, memdev, (byte*)mem.allocate(512));
+		auto memdev_buffer = new byte[512*2];
+		auto fat_buffer = new byte[512*2];
+		MemoryBlockDevice memdev({ _IMM(uefi_data.fatvhd_addr), 32 * 1024 * 1024 }, memdev_buffer);
+		FilesysFAT fatvhd(32, memdev, fat_buffer);
 		FAT_FileHandle* han;
 		FAT_FileHandle filhan;
 		stduint a[2] = { _IMM(&filhan)/*, _IMM(&filinf) */ };
@@ -117,9 +119,11 @@ void mecocoa(const UefiData& uefi_data_ref)
 					Taskman::Append(pb);
 				}
 				else plogerro("appa.elf: Fail to load");
-				delete[] buf;
+				mempool.deallocate(buf); // delete[] buf;
 			}
 		}
+		free(memdev_buffer);
+		free(fat_buffer);
 	}
 
 	IC.enAble(true);

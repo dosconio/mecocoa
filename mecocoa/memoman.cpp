@@ -193,6 +193,7 @@ void* operator new(size_t size) {
 	return malc(size);
 }
 void* operator new[](size_t size) {
+	// ploginfo("new[] %u", size);
 	return malc(size);
 }
 void operator delete(void* p) {
@@ -202,10 +203,11 @@ void operator delete[](void* p) {
 	free(p);
 }
 void operator delete(void* ptr, stduint size) noexcept {
-	ploginfo("del OK");
 	if (!mempool.deallocate(ptr, size)) plogerro("del BAD");
 }
-void operator delete[](void*, stduint size) { _TODO }
+void operator delete[](void* ptr, stduint size) {
+	::operator delete(ptr, size);
+}
 #if defined(_UEFI)
 void operator delete(void* ptr, stduint size, std::align_val_t) noexcept { ::operator delete(ptr, size); }
 #endif

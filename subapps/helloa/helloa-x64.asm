@@ -10,6 +10,7 @@ GLOBAL main
 
 section .text
 main:
+	push rax
 	mov rdi, 'Q'
 	call test_syscall
 	mov rdi, 'w'

@@ -64,7 +64,7 @@ void Taskman::Initialize(stduint cpuid) {
 
 auto Taskman::AllocateTask() -> ProcessBlock* {
 	// auto ppb = zalcof(ProcessBlock);
-	auto ppb = (ProcessBlock*)mem.allocate(sizeof(ProcessBlock), 4);
+	auto ppb = (ProcessBlock*)mempool.allocate(sizeof(ProcessBlock), 4);
 	MemSet(ppb, 0, sizeof(ProcessBlock));
 	if (!ppb) {
 		plogerro("Taskman::AllocateTask() failed");
@@ -90,7 +90,7 @@ ProcessBlock* Taskman::Create(void* entry, byte ring)
 	new_ctx.FS = SegData;
 	new_ctx.GS = SegData;
 	new_ctx.SS = SegData;
-	auto stack = mem.allocate(DEFAULT_STACK_SIZE);
+	auto stack = mempool.allocate(DEFAULT_STACK_SIZE, 12);
 	const stduint stack_top = _IMM(stack) + DEFAULT_STACK_SIZE;
 	new_ctx.SP = (stack_top & ~0xFlu) - 8;
 	new_ctx.RING = ring;
@@ -261,7 +261,7 @@ static void TaskLoad_Carry(char* vaddr, stduint length, char* phy_src, Paging& p
 		auto page_entry = pg.getEntry(_IMM(v_start1));
 		stduint phy;
 		if (_IMM(page_entry) == ~_IMM0 || !page_entry->isPresent()) {
-			phy = _IMM(mem.allocate(0x1000, 12));
+			phy = _IMM(mempool.allocate(0x1000, 12));
 			// ploginfo("mapping %[x] -> %[x]", v_start1, phy);
 			pg.Map(v_start1, phy, 0x1000, PAGESIZE_4KB, PGPROP_present | PGPROP_writable | PGPROP_user_access);
 			page_entry = pg.getEntry(_IMM(v_start1));
@@ -285,7 +285,7 @@ ProcessBlock* TaskLoad(BlockTrait* source, void* addr, byte ring)
 	word parent = SegTSS0;// Kernel Task
 	//
 	ProcessBlock* pb = Taskman::AllocateTask();//(nullptr, ring);
-	char* stack = (char*)mem.allocate(0x4000 _Comment(STACK), 12);
+	char* stack = (char*)mempool.allocate(0x4000 _Comment(STACK), 12);
 	#if _MCCA == 0x8632
 	word LDTSelector = GDT_Alloc() / 8;
 	word TSSSelector = GDT_Alloc() / 8;
@@ -316,7 +316,7 @@ ProcessBlock* TaskLoad(BlockTrait* source, void* addr, byte ring)
 		PAGESIZE_2MB, PGPROP_present | PGPROP_writable
 	);// High Part
 	//{TODO} Map more cores, cpu1 at 0x0000FFFFFFFF8000ull...
-	pb->stack_levladdr = (byte*)mem.allocate(HIGHER_STACK_SIZE, 12);
+	pb->stack_levladdr = (byte*)mempool.allocate(HIGHER_STACK_SIZE, 12);
 	pb->paging.Map(0xFFFFFFFFC0001000ull, _IMM(pb->stack_levladdr), // _IMM(higher_stacks[0]),
 		HIGHER_STACK_SIZE, PAGESIZE_4KB, PGPROP_present | PGPROP_writable
 	);// High Part. overlap with kernel 0..4KB
