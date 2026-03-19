@@ -39,7 +39,7 @@ Development-Environment
 
 ## Programming
 
-The master uses m/unic/c++, `mulango` provides other implementations
+The master uses magice and unic/c++, `mulango` provides other implementations
 - `c++` modcpp or stlcpp(stdcpp)
 - `d`
 - `kotlin`

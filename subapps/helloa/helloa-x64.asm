@@ -5,6 +5,9 @@
 
 ;%include "mecocoa/kernel.inc"
 
+SYSC_OUTC EQU 0x80000000
+SYSC_EXIT EQU 0x80000002
+
 [BITS 64]
 GLOBAL main
 
@@ -12,15 +15,19 @@ section .text
 main:
 	push rax
 	mov rdi, 'Q'
-	call test_syscall
+	call outc
 	mov rdi, 'w'
-	call test_syscall
+	call outc
 	mov rdi, 'Q'
-	call test_syscall
-	lup: jmp lup
+	call outc
+	mov rdi, 0x0D000721
+	mov eax, SYSC_EXIT
+	syscall
+	lup: jmp lup; unreachable
 
-test_syscall:; syscall; RIP->RCX,FLAG->R11; SystemV&Linux RDI RSI RDX RCX->R10 R8 R9
-	mov eax, 0x80000000; OUTC(CHR)
+outc:; syscall; RIP->RCX,FLAG->R11; SystemV&Linux RDI RSI RDX RCX->R10 R8 R9
+	mov eax, SYSC_OUTC; OUTC(CHR)
+	mov rsi, 0
 	mov r10, rcx
 	syscall
 ret

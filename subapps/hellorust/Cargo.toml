@@ -1,7 +1,7 @@
 cargo-features = ["profile-rustflags"] # "edition2021"
 
 [package]
-name = "hellod"
+name = "hellorust"
 version = "0.1.1"
 edition = "2021"
 authors = ["dosconio <dosconyo@gmail.com>"]

@@ -28,6 +28,11 @@ void Taskman::EnqueueReady(ProcessBlock* pb) {
 	int idx = pb->priority + 16;
 	if (idx < 0) idx = 0;
 	if (idx > 31) idx = 31;
+
+	if (pb->queue_state_next != nullptr || pb->queue_state_prev != nullptr || priority_queues[idx].head == pb) {
+		return;// duplicate check
+	}
+
 	
 	pb->queue_state_next = nullptr;
 	if (priority_queues[idx].tail) {
@@ -242,7 +247,7 @@ auto Taskman::Schedule(bool omit_slice)->decltype(Schedule())
 		HALT();
 		return;
 	}
-	if (ifContinueProcess(old_pb)) {
+	if (!omit_slice && ifContinueProcess(old_pb)) {
 		#if _MCCA == 0x8632
 		task_switch_enable = true;
 		#endif

@@ -37,8 +37,10 @@ void Taskman::Initialize(stduint cpuid) {
 		#endif
 		addr++;
 	}
+	#if _MCCA == 0x8664
 	//{TODO} Map more cores, cpu1 at 0x0000FFFFFFFF8000ull...
 	kernel_paging.Map(0x0000FFFFFFFFF000ull, _IMM(higher_stacks[0]), 0x1000, PAGESIZE_4KB, PGPROP_present | PGPROP_writable);// High Part
+	#endif
 	
 	// Type = 10x1 + L=0 +  D/B=0 + 16B  64-bit TSS
 	//             + L=1 OR D/B=1        32-bit TSS
@@ -100,6 +102,24 @@ ProcessBlock* Taskman::Create(void* entry, byte ring)
 	#endif
 	Append(ppb);
 	return ppb;
+}
+
+bool Taskman::ExitCurrent(stduint code) {
+	auto pid = CurrentPID();
+	ploginfo("AppExit: %[u] with code 0x%[x]", pid, code);
+
+	// Ver 1
+	// _ASM("STI");
+	// loop HALT();
+
+	// Ver 2
+	auto pb = Locate(pid);
+	DequeueReady(pb);
+	pb->Block(ProcessBlock::BlockReason::BR_Waiting);
+	Schedule(true);
+	//{} Add to zombie vector
+
+	return true;
 }
 
 #ifdef _ARC_x86 // x86:

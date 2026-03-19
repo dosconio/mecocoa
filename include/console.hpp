@@ -18,6 +18,8 @@ public:\
 #include <cpp/Device/_Video.hpp>
 #include <c/driver/mouse.h>
 
+extern Dchain ttys;
+
 #if (_MCCA & 0xFF00) == 0x8600
 extern uni::LayerManager global_layman;
 #endif

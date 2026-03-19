@@ -1,17 +1,14 @@
 // ASCII g++ TAB4 LF
-// Attribute: 
-// LastCheck: 20240218
 // AllAuthor: @dosconio, @ArinaMgk
-// ModuTitle: Demonstration - ELF32-C++ x86 Bare-Metal
+// ModuTitle: Syscalls
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
-#define _STYLE_RUST
+#include "../include/mecocoa.hpp"
 
-#include <c/consio.h>
 #include <c/driver/keyboard.h>
 
-use crate uni;
+#define DEFSYSC static stdsint
+
 #ifdef _ARC_x86 // x86:
-#include "../include/atx-x86-flap32.hpp"
 
 Handler_t syscalls[_TEMP 1];
 
@@ -95,7 +92,7 @@ static stduint syscall_07_close(stduint* paras, stduint pid) {
 }
 
 
-
+DEFSYSC sysc_OUTC(stduint ch, stduint len);
 extern bool fileman_hd_ready;
 __attribute__((optimize("O0")))
 static stduint call_body(const syscall_t callid, ...) {
@@ -120,9 +117,7 @@ static stduint call_body(const syscall_t callid, ...) {
 	}
 	switch (callid) {
 	case syscall_t::OUTC: {
-		ProcessBlock* pb = TaskGet(caller_pid);
-		// bcons[pb->focus_tty_id]->OutChar(para[0]);
-		_TEMP if (!pb->focus_tty_id) {outc(para[0]); outc('\0');}
+		sysc_OUTC(para[0], 0/*para[1]*/);
 		if (ch_tse) task_switch_enable = task_switch_enable_old;
 		break;
 	}
@@ -445,16 +440,41 @@ stduint syscall(syscall_t callid, ...) {
 
 #endif
 
-#if _MCCA == 0x8664
-static void
-sysc_try(stduint ch);
+#if (_MCCA & 0xFF00) == 0x8600
+
+DEFSYSC sysc_OUTC(stduint ch, stduint len);
+DEFSYSC sysc_EXIT(stduint code);
 _ESYM_C stduint SYSCALL_TABLE[] = {
-	_IMM(sysc_try),// OUTC
+	_IMM(sysc_OUTC),// OUTC(ch/str, strlen) | strlen: 0 for single char
+	0,// INNC(else_blocked)
+	_IMM(sysc_EXIT),// EXIT(code)
 };
 
-static
-void sysc_try(stduint ch) {// OUTC
-	outc(ch);
+DEFSYSC sysc_OUTC(stduint ch, stduint len) {// OUTC
+	if (auto pid = Taskman::Locate(Taskman::CurrentPID())) {
+		auto con = cast<Console_t*>(ttys[pid->focus_tty_id]->offs);//{} assert...
+		if (con) {
+			if (len) {
+				con->out((rostr)ch, len);
+			}
+			else {
+				con->OutChar(ch);
+			}
+			con->OutChar(nil);
+			return 0;
+		}
+		else plogerro("sysc_try: null console");
+	}
+	else plogerro("sysc_try: null task");
+	return -1;
+}
+
+// sysc_INNC
+
+DEFSYSC sysc_EXIT(stduint code) {
+	// IC.enAble(false);
+	Taskman::ExitCurrent(code);
+	plogerro("sysc_EXIT");// unreachable
 }
 
 #endif

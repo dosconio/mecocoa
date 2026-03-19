@@ -117,13 +117,15 @@ void mecocoa(const UefiData& uefi_data_ref)
 				{
 					auto pb = TaskLoad(NULL, buf, 3);
 					Taskman::Append(pb);
+					pb->focus_tty_id = 0;
+					ttys[0]->type = pb->getID();
 				}
 				else plogerro("appa.elf: Fail to load");
-				mempool.deallocate(buf); // delete[] buf;
+				delete[] buf;
 			}
 		}
-		free(memdev_buffer);
-		free(fat_buffer);
+		delete[] (memdev_buffer);
+		delete[] (fat_buffer);
 	}
 
 	IC.enAble(true);

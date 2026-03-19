@@ -118,14 +118,14 @@ public:
 	//{} Mempool heappool
 public: // _Comment(Taskman);
 	uni::Slice load_slices[8];// at most 8 slices, app-relative logical address
-	
+public: // _Comment(Console);
+	uint32 focus_tty_id;
 public:// old design: have not updated completely
 	#if _MCCA == 0x8632
 
 	descriptor_t LDT[0x100 / byteof(descriptor_t)];
 	TSS_t TSS;// aka state-frame
 	stduint kept_intermap[1];
-	word focus_tty_id;
 	stduint processor_id;// running on which cpu core
 	stduint exit_status;
 
@@ -171,6 +171,8 @@ public:
 public:
 	static auto
 		Create(void* entry, byte ring) -> ProcessBlock*;// newProcess
+	static auto
+		ExitCurrent(stduint code) -> bool;
 public:// schedule
 	static auto Schedule(bool omit_slice = false) -> void;// Timer using
 	struct ReadyQueue {

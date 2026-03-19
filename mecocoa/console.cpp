@@ -23,6 +23,8 @@ bool Cursor::mouse_btnr_dn = false;
 
 // ---- ---- TTY ---- ----
 
+Dchain ttys = { nullptr };// offs->Ostream*, type->pid
+
 // each barecon: ----
 
 // each con:
@@ -83,10 +85,7 @@ void blink2() {
 bool work_console = false;
 char* cons_buffer;
 extern keyboard_state_t kbd_state;
-inline static OstreamTrait* LocateTTY(stduint tty_id) {
-	OstreamTrait* ttyout = ento_gui ? dynamic_cast<OstreamTrait*>(vcons[tty_id]) : dynamic_cast<OstreamTrait*>(&Bcons[tty_id]);
-	return ttyout;
-}
+
 void _Comment(R1) serv_cons_loop()
 {
 	cons_buffer = (char*)Memory::physical_allocate(0x1000);
@@ -144,7 +143,7 @@ void _Comment(R1) serv_cons_loop()
 				//{TODO} 0x1000 and to_args[2]
 				if (((_IMM1S(dev_domain_bits) - 1) & to_args[0]) == 0) {
 					
-					LocateTTY(0xFF & to_args[0])->out(cons_buffer, ret);
+					// LocateTTY(0xFF & to_args[0])->out(cons_buffer, ret);
 				}
 				syssend(sig_src, &ret, sizeof(ret), 0);
 				break;
@@ -214,7 +213,7 @@ void enable_2buffer() {
 
 void cons_init() {
 	Bcons[0].Reset(bda->screen_columns, 24, _VIDEO_ADDR_BUFFER, 0 * 50); Bcons[0].setShowY(0, 24);
-	con0_out = 0;// &Bcons[0];
+	con0_out = 0;
 	for1(i, TTY_NUMBER - 1) {
 		Bcons[i].Reset(bda->screen_columns, 50, _VIDEO_ADDR_BUFFER, i * 50); Bcons[i].setShowY(0, 25);
 	}
@@ -239,6 +238,7 @@ void cons_init() {
 	#endif
 	ento_gui = vmod_default;
 	if (!vmod_default) {
+		con0_out = &Bcons[0];
 		Bcons[0].Scroll(24);
 		plogwarn("There is no default 800xN-8888 Video Mode");
 		return;
@@ -310,10 +310,10 @@ void cons_init() {
 		global_layman.Append(&form1);
 		ptext->Start();
 	}
-	if (0) {
+	if (1) {
 		Rectangle rect{ Point(150, 160), Size2(480, 320) };
 		auto pcon = new VideoConsole(NULL,
-			Rectangle(Point(2, 2), Size2(470, 310)),
+			Rectangle(Point(2, 2), Size2(470, 290)),
 				Color::White, Color::Black
 		);
 		auto vcon_buf = (Color*)mem.allocate(pcon->window.getArea() * sizeof(Color));
@@ -328,6 +328,8 @@ void cons_init() {
 		form2.setFocus(pcon);
 		global_layman.Append(&form2);
 		pcon->Start();
+
+		ttys.Append(dynamic_cast<Console_t*>(pcon));
 	}
 
 	// vcon0

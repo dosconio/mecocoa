@@ -120,7 +120,11 @@ _ESYM_C
 __attribute__((target("general-regs-only"), optimize("O0")))
 void exception_handler(sdword iden, dword para) {
 	stduint r15;
+	#if _MCCA == 0x8664
 	_ASM("mov %%r15, %0" : "=r"(r15));
+	#else
+	_ASM("mov %%edi, %0" : "=r"(r15));
+	#endif
 	const bool have_para = iden >= 0;
 	if (iden < 0) iden = ~iden;
 
