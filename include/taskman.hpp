@@ -103,6 +103,9 @@ public _Comment(State):
 	void Block(BlockReason reason);
 	void Unblock(BlockReason reason);
 	ProcessBlock* queue_state_prev = nullptr, * queue_state_next = nullptr;// for ready queue
+	//
+	stduint processor_id;// running on which cpu core
+	stduint exit_status;
 public: // _Comment(Syscomm)
 	CommMsg* unsolved_msg = nullptr;
 	ProcessBlock* send_to_whom = nullptr;// nullptr for none (cannot comm with base-kernel)
@@ -130,23 +133,9 @@ public:// old design: have not updated completely
 
 	descriptor_t LDT[0x100 / byteof(descriptor_t)];
 	TSS_t TSS;// aka state-frame
-	stduint kept_intermap[1];
-	stduint processor_id;// running on which cpu core
-	stduint exit_status;
 
-	// before syscall, for `fork`
-	stduint before_syscall_eax;
-	stduint before_syscall_ecx;
-	stduint before_syscall_edx;
-	stduint before_syscall_ebx;
-	stduint before_syscall_ebp;
-	stduint before_syscall_esi;
-	stduint before_syscall_edi;
-	stduint before_syscall_data_pointer;// esp
-	stduint before_syscall_code_pointer;
-	//
 
-	// File
+public: // _Comment(Fileman);
 	FileDescriptor* pfiles[_TEMP 4];
 	#endif
 };

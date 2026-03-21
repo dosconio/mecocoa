@@ -312,7 +312,7 @@ ProcessBlock* TaskLoad(BlockTrait* source, void* addr, byte ring)
 	// pb->paging.Map(0x80000000, 0x00000000, kernel_size, true, _Comment(R0) false);// should include LDT
 	#else
 	pb->context.CR3 = _IMM(pb->paging.root_level_page);
-	pb->paging.Map(0x00001000, _IMM(stack), pb->stack_size, PAGESIZE_4KB, PGPROP_present | PGPROP_writable | PGPROP_user_access);
+	pb->paging.Map(0x00001000, _IMM(stack_norm), pb->stack_size, PAGESIZE_4KB, PGPROP_present | PGPROP_writable | PGPROP_user_access);
 
 	pb->paging.Map(0x0000FFFFC0000000ull,
 		0x0000000000000000ull,
@@ -435,7 +435,7 @@ ProcessBlock* TaskLoad(BlockTrait* source, void* addr, byte ring)
 #ifdef _ARC_x86
 
 // return pid of child (zero if no child or failure)
-static stduint task_fork(ProcessBlock* fo)
+static stduint task_fork(ProcessBlock* fo, const CallgateFrame* frame)
 {
 	//{TODO} check undone and duplicate operations
 	// 1. Copy the PB
@@ -505,7 +505,7 @@ static stduint task_fork(ProcessBlock* fo)
 	//
 	TSS->ES = 8 * 2 + 0b100 + ring;
 	TSS->CS = 8 * 1 + 0b100 + ring;
-	TSS->SS = 8 * (4 + ring) + 0b100 + ring;
+	TSS->SS = 8 * (4 + ring) + 0b100 + ring;// ss0
 	TSS->DS = TSS->ES;
 	TSS->FS = TSS->ES;
 	TSS->GS = TSS->ES;
@@ -520,14 +520,14 @@ static stduint task_fork(ProcessBlock* fo)
 	// 	TSS->ESP = fo->TSS.ESP - _IMM(fo->stack_levladdr) + _IMM(pb->stack_levladdr);
 
 	TSS->EAX = nil; // return from fork()
-	TSS->ECX = fo->before_syscall_ecx;
-	TSS->EDX = fo->before_syscall_edx;
-	TSS->EBX = fo->before_syscall_ebx;
-	TSS->ESI = fo->before_syscall_esi;
-	TSS->EDI = fo->before_syscall_edi;
-	TSS->EBP = fo->before_syscall_ebp;
-	TSS->EIP = fo->before_syscall_code_pointer;
-	if (ring) TSS->ESP = fo->before_syscall_data_pointer;
+	TSS->ECX = frame->cx;
+	TSS->EDX = frame->dx;
+	TSS->EBX = frame->bx;
+	TSS->ESI = frame->si;
+	TSS->EDI = frame->di;
+	TSS->EBP = frame->bp;
+	TSS->EIP = frame->ip;
+	TSS->ESP = frame->sp0;
 
 	//	
 
@@ -753,9 +753,9 @@ void _Comment(R0) serv_task_loop()
 			ploginfo("Taskman exit: %u %u", to_args[0], to_args[1]);
 			task_exit(to_args[0], to_args[1]);
 			break;
-		case TaskmanMsg::FORK: // (pid)
+		case TaskmanMsg::FORK: // (pid, cframe)
 			// ploginfo("Taskman fork: %u", to_args[0]);
-			ret = task_fork(TaskGet(to_args[0]));
+			ret = task_fork(TaskGet(to_args[0]), (CallgateFrame*)to_args[1]);
 			syssend(sig_src, &ret, sizeof(ret));
 			break;
 		case TaskmanMsg::WAIT: // (pid, &usr:state) -> (child_pid)

@@ -1,20 +1,15 @@
 // ASCII g++ TAB4 LF
-// Attribute: 
 // AllAuthor: @ArinaMgk
 // ModuTitle: [Service] File Manage - ELF32-C++ x86 Bare-Metal
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
-#define _STYLE_RUST
+#include "../include/mecocoa.hpp"
 
-#include <c/consio.h>
 #include <c/storage/harddisk.h>
 
 #ifdef _ARC_x86 // x86:
-#include "../include/atx-x86-flap32.hpp"
-
 #include "../include/filesys.hpp"
 #include <c/format/filesys/FAT.h>
 
-use crate uni;
 
 static byte* buffer = nil;
 #define FSBUF_SIZE 0x8000

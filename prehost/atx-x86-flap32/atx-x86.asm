@@ -12,6 +12,51 @@ SegData EQU 8*3
 SegCo32 EQU 8*4
 
 [BITS 32]
+
+GLOBAL Handint_SYSCALL_Entry
+EXTERN Handint_SYSCALL
+Handint_SYSCALL_Entry:
+	PUSHFD
+	CLI
+	PUSHAD
+	CALL PG_PUSH; leave 20 bytes
+	LEA EAX, [ESP + 20]
+	PUSH EAX
+	CALL Handint_SYSCALL
+	ADD ESP, 4
+	MOV [ESP + 48], EAX;// write back
+	CALL PG_POP
+	POPAD
+	POPFD; STI
+RETF
+
+GLOBAL Handint_INTCALL_Entry
+Handint_INTCALL_Entry:
+
+
+;	stduint para[4];// a c d b
+;	__asm("mov  %%eax, %0" : "=m"(para[0]));
+;	__asm("mov  %%ecx, %0" : "=m"(para[1]));
+;	__asm("mov  %%edx, %0" : "=m"(para[2]));
+;	__asm("mov  %%ebx, %0" : "=m"(para[3]));
+;	__asm("push %ebx;push %ecx;push %edx;push %ebp;push %esi;push %edi;");
+;	__asm("call PG_PUSH");
+;	// stduint ret = call_body((syscall_t)para[0], para[1], para[2], para[3]);
+;	stduint ret;
+;
+;	__asm("call PG_POP");
+;	__asm("mov  %0, %%eax" : : "m"(ret));
+;	__asm("pop %edi");// popad
+;	__asm("pop %esi");
+;	__asm("pop %ebp");
+;	__asm("pop %edx");
+;	__asm("pop %ecx");
+;	__asm("pop %ebx");
+;	__asm("mov  %ebp, %esp");
+;	__asm("pop  %ebp      ");
+IRETD
+
+[BITS 32]
 ; 0x20
 GLOBAL Handint_PIT_Entry
 EXTERN Handint_PIT

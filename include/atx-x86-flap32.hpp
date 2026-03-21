@@ -8,8 +8,6 @@
 #define statin static inline
 #define _sign_entry() extern "C" void _start()
 
-use crate uni;
-
 // ---- sysinfo
 
 void kernel_fail(void* serious, ...);

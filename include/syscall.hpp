@@ -35,9 +35,10 @@ enum
 
 #ifdef _MCCA
 
-_ESYM_C void call_gate();
-_ESYM_C void call_intr();
-_ESYM_C void* call_gate_entry();
+_ESYM_C void Handint_SYSCALL_Entry();
+_ESYM_C void Handint_INTCALL_Entry();
+_ESYM_C stduint Handint_SYSCALL(CallgateFrame* frame);
+
 stduint syscall(syscall_t callid, ...);
 
 #endif

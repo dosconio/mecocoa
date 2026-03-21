@@ -94,22 +94,22 @@ static stduint syscall_07_close(stduint* paras, stduint pid) {
 
 DEFSYSC sysc_OUTC(stduint ch, stduint len);
 extern bool fileman_hd_ready;
+
 __attribute__((optimize("O0")))
-static stduint call_body(const syscall_t callid, ...) {
+stduint Handint_SYSCALL(CallgateFrame* frame) {
 	auto task_switch_enable_old = task_switch_enable;//{TODO} {spinlk for multi-Proc}
 	task_switch_enable = false;
 	bool ch_tse = task_switch_enable_old == true;
-	// for
-	// - Taskman::pcurrent[pcurrent::getID()];
-	//
-	Letpara(paras, callid);
-	stduint para[3] = {0xF1, 0xF8, 0xFA};// magic for debug
+	// Letpara(paras, callid);
+	auto callid = (syscall_t)frame->ax;
+	stduint para[3] = { frame->cx, frame->dx, frame->bx };
+	stduint msgbuf[4] = {};
 	stduint ret = 0;
-	if (_IMM(callid) >= numsof(syscall_paracnts)) return ~_IMM0;
-	byte pcnt = syscall_paracnts[_IMM(callid)];
-	for0(i, pcnt) {
-		para[i] = para_next(paras, stduint);
-	}
+	// if (_IMM(callid) >= numsof(syscall_paracnts)) return ~_IMM0;
+	// byte pcnt = syscall_paracnts[_IMM(callid)];
+	// for0(i, pcnt) {
+	// 	para[i] = para_next(paras, stduint);
+	// }
 	stduint caller_pid = Taskman::CurrentPID();
 	byte flg = syscall_delayflgs[_IMM(callid) / _BYTE_BITS_];
 	if (!(flg & _IMM1S(_IMM(callid) & 0b111)) && ch_tse) {
@@ -226,8 +226,9 @@ static stduint call_body(const syscall_t callid, ...) {
 	case syscall_t::FORK:
 	{
 		// ploginfo("syscall fork");
-		ret = caller_pid;
-		syssend(Task_TaskMan, &ret, byteof(ret), _IMM(TaskmanMsg::FORK));
+		msgbuf[0] = caller_pid;
+		msgbuf[1] = _IMM(frame);
+		syssend(Task_TaskMan, sliceof(msgbuf), _IMM(TaskmanMsg::FORK));
 		sysrecv(Task_TaskMan, &ret, byteof(ret));
 		break;
 	}
@@ -270,103 +271,6 @@ static stduint call_body(const syscall_t callid, ...) {
 	return ret;
 }
 
-static int hh;
-
-__attribute__((optimize("O0")))
-void call_gate() { // noreturn
-	// here stack top: TOP >>> 0x0804923d (CLogaddr: +0x4(%ebp))  0x0000000f (CSeg)  0x00005f44 (DLogaddr)  0x0000003f (DSeg)
-	stduint para[4];// a c d b
-	stduint bp, si, di;
-	stduint clogadd, dlogadd;// ip and sp
-	//  612:	55                   	push   %ebp <- 0(ebp)
-	//  613:	89 e5                	mov    %esp,%ebp
-	//  615:	53                   	push   %ebx
-	//  616:	83 ec 24             	sub    ...,%esp
-	__asm("cli");
-	__asm("mov  %%eax, %0" : "=m"(para[0]));
-	__asm("mov  %%ecx, %0" : "=m"(para[1]));
-	__asm("mov  %%edx, %0" : "=m"(para[2]));
-	__asm("mov  %%ebx, %0" : "=m"(para[3]));
-	__asm("mov  %%esi, %0" : "=m"(si));
-	__asm("mov  %%edi, %0" : "=m"(di));
-	__asm("mov  +0x0(%ebp), %eax");
-	__asm("mov  %%eax, %0" : "=m"(bp));
-	//{} only when ring-switch that exists. Omit when ring0 call.
-	__asm("mov  +0x4(%ebp), %eax");
-	__asm("mov  %%eax, %0" : "=m"(clogadd));
-	__asm("mov  +0xC(%ebp), %eax");
-	__asm("mov  %%eax, %0" : "=m"(dlogadd));
-	__asm("push %ebx;push %ecx;push %edx;push %ebp;push %esi;push %edi;");
-	__asm("call PG_PUSH");
-	auto pb = TaskGet(Taskman::CurrentPID());
-	if (Taskman::CurrentPID() && pb) {
-		if (!pb->before_syscall_data_pointer) {
-			pb->before_syscall_data_pointer = dlogadd;// sp
-			dlogadd = nil;
-		}//{} only when ring-switch that exists. Omit when ring0 call.
-		if (!pb->before_syscall_code_pointer) {
-			pb->before_syscall_eax = para[0];
-			pb->before_syscall_ecx = para[1];
-			pb->before_syscall_edx = para[2];
-			pb->before_syscall_ebx = para[3];
-			pb->before_syscall_esi = si;
-			pb->before_syscall_edi = di;
-			pb->before_syscall_ebp = bp;
-			pb->before_syscall_code_pointer = clogadd;
-			clogadd = nil;
-		}
-	}
-	__asm("sti");
-	// if (CurrentPID() == Task_Init) {
-	// 	plogwarn("d=%[32H] c=%[32H]", pb->before_syscall_data_pointer, pb->before_syscall_code_pointer);
-	// }
-	stduint ret = call_body((syscall_t)para[0], para[1], para[2], para[3]);
-	__asm("cli");
-	pb = TaskGet(Taskman::CurrentPID());
-	if (!dlogadd) pb->before_syscall_data_pointer = nil;
-	if (!clogadd) pb->before_syscall_code_pointer = nil;
-	__asm("call PG_POP");
-	// pb_src->TSS.PDBR = getCR3();
-	__asm("mov  %0, %%eax" : : "m"(ret));
-	__asm("pop %edi");// popad
-	__asm("pop %esi");
-	__asm("pop %ebp");
-	__asm("pop %edx");
-	__asm("pop %ecx");
-	__asm("pop %ebx");
-	__asm("mov  %ebp, %esp");
-	__asm("pop  %ebp      ");
-	__asm("sti");
-	__asm("jmp returnfar");
-	__asm("callgate_endo:");
-	loop;
-}
-__attribute__((optimize("O0")))
-void call_intr() {
-	stduint para[4];// a c d b
-	__asm("mov  %%eax, %0" : "=m"(para[0]));
-	__asm("mov  %%ecx, %0" : "=m"(para[1]));
-	__asm("mov  %%edx, %0" : "=m"(para[2]));
-	__asm("mov  %%ebx, %0" : "=m"(para[3]));
-	__asm("push %ebx;push %ecx;push %edx;push %ebp;push %esi;push %edi;");
-	__asm("call PG_PUSH");
-	stduint ret = call_body((syscall_t)para[0], para[1], para[2], para[3]);
-	__asm("call PG_POP");
-	__asm("mov  %0, %%eax" : : "m"(ret));
-	__asm("pop %edi");// popad
-	__asm("pop %esi");
-	__asm("pop %ebp");
-	__asm("pop %edx");
-	__asm("pop %ecx");
-	__asm("pop %ebx");
-	__asm("mov  %ebp, %esp");
-	__asm("pop  %ebp      ");
-	__asm("iretl");// iretd
-}
-
-void* call_gate_entry() {
-	return (void*)call_gate;
-}
 __attribute__((optimize("O0")))
 static stduint syscall0(syscall_t callid) {
 	stduint ret;

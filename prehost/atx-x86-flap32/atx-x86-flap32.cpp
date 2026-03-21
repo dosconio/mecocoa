@@ -71,7 +71,7 @@ _sign_entry() {
 	IC[IRQ_Keyboard].setRange(mglb(Handint_KBD_Entry), SegCo32); Keyboard_Init();
 	IC[IRQ_PS2_Mouse].setRange(mglb(Handint_MOU_Entry), SegCo32); Mouse_Init();
 	IC[IRQ_ATA_DISK0].setRange(mglb(Handint_HDD_Entry), SegCo32); DEV_Init();
-	IC[IRQ_SYSCALL].setRange(mglb(call_intr), SegCo32); IC[IRQ_SYSCALL].DPL = 3;
+	IC[IRQ_SYSCALL].setRange(mglb(Handint_INTCALL_Entry), SegCo32); IC[IRQ_SYSCALL].DPL = 3;
 
 
 	mecfetch();
@@ -86,8 +86,8 @@ _sign_entry() {
 	Taskman::Create((void*)&serv_file_loop, 0);
 	Taskman::Create((void*)&serv_task_loop, 0);// GDT operation
 
-	// GIC.enAble();
-	syscall(syscall_t::OUTC, 'O');// with effect InterruptEnable();
+	IC.enAble();
+	syscall(syscall_t::OUTC, 'O');
 	Console.OutFormat("hayouuu~!\a\n\r");
 
 	Memory::pagebmap->dump_avail_memory();

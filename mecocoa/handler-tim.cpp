@@ -101,7 +101,7 @@ void Handint_PIT()
 	}
 	static unsigned time = 0;
 	time++;
-	tick++;
+	if (time % 10 == 0) tick++;
 	if (time >= 1000) {
 		time = 0;
 		// mecocoa_global->system_time.sec++;//{TEMP} help RTC	

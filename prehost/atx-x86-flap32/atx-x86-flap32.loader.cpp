@@ -2,14 +2,12 @@
 // Docutitle: Loader for FLAP32 or LONG64
 // Codifiers: @dosconio, @ArinaMgk
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
-#define _STYLE_RUST
+#include "../../include/mecocoa.hpp"
 
-#include <c/consio.h>
 #include <c/format/ELF.h>
-#include <c/proctrl/x86/x86.h>
 #include <c/storage/harddisk.h>
 #include <c/format/filesys/FAT.h>
-#include "../../include/atx-x86-flap32.hpp"
+
 
 
 void Memory::clear_bss() { MemSet(&BSS_ENTO, &BSS_ENDO - &BSS_ENTO, 0); }

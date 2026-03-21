@@ -4,7 +4,6 @@
 #include "../include/mecocoa.hpp"
 
 #include <c/cpuid.h>
-#include <c/consio.h>
 #include <c/driver/mouse.h>
 #include <c/driver/keyboard.h>
 #include "../include/console.hpp"

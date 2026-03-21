@@ -1,8 +1,9 @@
 #ifndef _STYLE_RUST
 #define _STYLE_RUST
 #endif
+#if _MCCA == 0x8632
 #define _HER_TIME_H
-
+#endif
 
 #include <c/consio.h>
 #include <c/datime.h>
@@ -24,9 +25,5 @@ extern InterruptControl IC;
 // ---- . ----
 
 #define _GUI_DOUBLE_BUFFER 1// or the anime is disabled
-
-
-#undef _GUI_DOUBLE_BUFFER
-#define _GUI_DOUBLE_BUFFER 0
 
 
