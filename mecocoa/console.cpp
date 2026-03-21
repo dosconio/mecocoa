@@ -23,7 +23,8 @@ bool Cursor::mouse_btnr_dn = false;
 
 // ---- ---- TTY ---- ----
 
-Dchain ttys = { nullptr };// offs->Ostream*, type->pid
+Dchain ttys = { nullptr };// offs->Ostream*, type->B/V
+Dchain vttys = { nullptr };// offs->Ostream*, type->pid
 
 // each barecon: ----
 
@@ -36,8 +37,6 @@ byte current_screen_TTY = 0;
 // consider CLI
 BareConsole Bcons[TTY_NUMBER];// TTY 0~3 and their buffer
 // consider GUI
-byte BUF_CONS0[sizeof(VideoConsole)]; VideoConsole* vcon0;
-VideoConsole* vcons[TTY_NUMBER];
 byte _BUF_cursor[byteof(Cursor)];
 // global
 bool ento_gui = false;
@@ -51,17 +50,6 @@ GloScreenABGR8888 vga_ABGR8888;
 #endif
 VideoControlInterface* real_pvci = nullptr;
 byte _BUF_QueueMouse[byteof(QueueLimited)];
-
-unsigned IndexTTY(pureptr_t addr) {
-	for0a(i, Bcons) {
-		if (&Bcons[i] == addr) return i;
-	}
-	for0a(i, vcons) {
-		if (vcons[i] && vcons[i] == addr) return i;
-	}
-	return TTY_NUMBER;// fail
-}
-
 
 #ifndef _UEFI
 void blink() {
@@ -113,7 +101,7 @@ void _Comment(R1) serv_cons_loop()
 		for0a(i, tty_crt_blocked_appid) if (stduint pid = tty_crt_blocked_appid[i]) if (-1 != (ch = Bcons[i].input_queue.inn())) {
 			tty_crt_blocked_appid[i] = nil;
 			stdsint val = ch; // The character is already translated through sysmsg_kbd and input_queue
-			 syssend(pid, &val, byteof(val));
+			syssend(pid, &val, byteof(val));
 		}
 
 		// Render the bottom ribbon
@@ -158,6 +146,10 @@ void _Comment(R1) serv_cons_loop()
 					syssend(sig_src, &ret, sizeof(ret), 0);
 				}
 				break;
+
+			
+
+
 			default:
 				plogerro("Unknown syscall type %u", sig_type);
 				break;
@@ -240,6 +232,7 @@ void cons_init() {
 	if (!vmod_default) {
 		con0_out = &Bcons[0];
 		Bcons[0].Scroll(24);
+		for0a(i, Bcons) ttys.Append(dynamic_cast<Console_t*>(&Bcons[i]));
 		plogwarn("There is no default 800xN-8888 Video Mode");
 		return;
 	}
@@ -267,7 +260,7 @@ void cons_init() {
 	global_layman.pixel_fmt = uefi_data.frame_buffer_config.pixel_format;
 	#endif
 	const stduint vcon0_size = global_layman.window.getArea() * sizeof(Color);
-	//{TODO} Mapping
+	//
 	#if _MCCA == 0x8632
 	kernel_paging.Map(
 		global_layman.video_memory,
@@ -329,11 +322,11 @@ void cons_init() {
 		global_layman.Append(&form2);
 		pcon->Start();
 
-		ttys.Append(dynamic_cast<Console_t*>(pcon));
+		vttys.Append(dynamic_cast<Console_t*>(pcon));
 	}
 
-	// vcon0
-	vcon0 = new (BUF_CONS0) VideoConsole(&global_layman.getVCI(), screen0_win, Color::Black, Color::White);
+	// main screen
+	auto vcon0 = new VideoConsole(&global_layman.getVCI(), screen0_win, Color::Black, Color::White);
 	auto vcon0_buf = (Color*)mem.allocate(vcon0_size);
 	vcon0->InitializeSheet(global_layman, screen0_win.getVertex(), screen0_win.getSize(), vcon0_buf);
 	vcon0->setModeBuffer(vcon0_buf);
@@ -344,7 +337,10 @@ void cons_init() {
 	#endif
 
 	vcon0->Clear();
-	con0_out = vcons[0] = vcon0;
+	con0_out = vcon0;
+
+	//{} Register global_layman as tty[0]
+	// default tty are all bcon
 }
 /* 4 BCON TTY
 

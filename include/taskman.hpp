@@ -4,6 +4,7 @@
 
 #include <c/task.h>
 #include <cpp/queue>
+#include <c/driver/mouse.h>
 #include <c/system/paging.h>
 #include <cpp/Device/_Timer.hpp>
 #include <cpp/trait/BlockTrait.hpp>
@@ -25,11 +26,13 @@ struct SysMessage {
 	enum Type {
 		RUPT_xHCI,
 		RUPT_TIMER,
+		RUPT_MOUSE,
 		RUPT_KBD,
 		RUPT_FLUSH,
 	} type;
 	union {
 		struct MsgTimer timer;
+		MouseMessage mou_event;
 		keyboard_event_t kbd_event;
 		MccaRectangle rect;// RUPT_FLUSH
 	} args;
@@ -74,8 +77,9 @@ public:
 	inline stduint getID() { return pid; }
 public:
 	stduint stack_size;
-	byte* stack_lineaddr;// bottom of stack
-	byte* stack_levladdr;
+	byte* stack_lineaddr;// [linear] ring3 bottom of stack
+	// stack_levladdr: use phyzik. Because 0xFFFFFFFFC0001000ull or 0xFFC00000 is mapped to this.
+	byte* stack_levladdr;// [phyzik] ring0, may be 0 or same with stack_lineaddr for ring0 task 
 	sint8 priority = 0; // -16..-1 (Realtime RT) and 0..15 (Timeslice)
 	uint8 time_slice = 0; // execution time left for timeslice mode
 	bool is_expired = false; // true if task has expended its timeslice in the current epoch
@@ -120,6 +124,7 @@ public: // _Comment(Taskman);
 	uni::Slice load_slices[8];// at most 8 slices, app-relative logical address
 public: // _Comment(Console);
 	uint32 focus_tty_id;
+	SheetTrait* pforms[_TEMP 4] = {};// should registered in global_layman
 public:// old design: have not updated completely
 	#if _MCCA == 0x8632
 
@@ -211,8 +216,6 @@ enum class TaskmanMsg {
 	EXEC,
 };
 
-ProcessBlock* TaskRegister(void* entry, byte ring);
-
 #endif
 #if (_MCCA & 0xFF00) == 0x8600
 
@@ -233,6 +236,7 @@ void rupt_proc(stduint pid, stduint rupt_no);
 enum {
 	Task_Kernel,
 	Task_Con_Serv,
+	Task_ConsoleVideo,// [inner of Task_Con_Serv] manage mice and GUI
 	Task_Hdd_Serv,
 	Task_FileSys,
 	Task_TaskMan,

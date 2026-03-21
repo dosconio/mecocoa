@@ -125,8 +125,70 @@ void hand_mouse(MouseMessage mmsg) {
 		global_layman.Domove(Cursor::moving_sheet, { mmsg.X,mmsg.Y });
 	}
 }
+/* used sum's code
+static Size2dif mouse_acc(0, 0);
+static byte last_status = 0;
+static byte next_status = 0;
+static stduint last_msecond = 0;
+	mouse_buf[mouse_buf[3]++] = ch;
+	mouse_buf[3] %= 3;
+	if (!mouse_buf[3]) {
+		auto next_msecond = mecocoa_global->system_time.mic;
+		if (last_status != next_status ||
+			absof(next_msecond - last_msecond) > 10000 && mouse_acc.x && mouse_acc.y)
+		{
+			// outsfmt(" %c(%d,%d) ", last_status != next_status ? '~' : ' ', mouse_acc.x, mouse_acc.y);
+			// if (Cursor::global_cursor) global_layman.Domove(Cursor::global_cursor, mouse_acc);
+			
+			mouse_acc.x = 0;
+			mouse_acc.y = 0;
+			last_status = next_status;
+			last_msecond = next_msecond;
+		}
+		else {
+			mouse_acc.x += cast<char>(mouse_buf[1]);
+			mouse_acc.y += -cast<char>(mouse_buf[2]);
+		}
+	}
+	else if (mouse_buf[3] == 1) {
+		MouseMessage& mm = *(MouseMessage*)mouse_buf;
+		if (!mm.HIGH) mouse_buf[3] = 0;
+		// next_status = mouse_buf[0] & 0b111;
+	}
+*/
 
 
+// ---- ---- ---- ---- . ---- ---- ---- ----
+
+static SysMessage _BUF_Message_Conv[64];
+uni::Queue<SysMessage> message_queue_conv(_BUF_Message_Conv, numsof(_BUF_Message_Conv));
+void serv_conv_loop() {
+	SysMessage msg;// Inner Module Message System
+	#if (_MCCA == 0x8632)
+	while (true) {
+		IC.enAble(false);
+		if (!message_queue_conv.Count()) {
+			IC.enAble(true);
+			Taskman::Schedule(true);// yield
+			continue;
+		}
+		message_queue_conv.Dequeue(msg);
+		IC.enAble(true);
+		//
+		switch (msg.type) {
+		case SysMessage::RUPT_MOUSE:
+			hand_mouse(msg.args.mou_event);
+			break;
+		default:
+			plogerro("%s Unknown message type: %d", __FUNCIDEN__, msg.type);
+			break;
+		}
+
+	}
+	#else
+	loop;
+	#endif
+}
 
 // ---- ---- ---- ---- . ---- ---- ---- ----
 

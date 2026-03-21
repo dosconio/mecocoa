@@ -8,50 +8,37 @@
 #include <cpp/Device/UART>
 #include <c/driver/mouse.h>
 #include <c/driver/timer.h>
-#include <c/driver/keyboard.h>
 
 #if _MCCA == 0x8664 && defined(_UEFI)
 InterruptControl IC = { nil };
+#else
+InterruptControl IC = { mglb(0x800) };
 #endif
 
 #ifdef _ARC_x86 // x86:
 
 extern KeyboardBridge kbdbridge;
+extern uni::Queue<SysMessage> message_queue_conv;
+static bool fa_mouse = false;
+static byte mouse_buf[4] = { 0 };
 QueueLimited* queue_mouse;
 void Handint_KBD() {
 	kbdbridge.OutChar(innpb(PORT_KEYBOARD_DAT));
 }
-static bool fa_mouse = false;
-static byte mouse_buf[4] = { 0 };
-static Size2dif mouse_acc(0, 0);
-static byte last_status = 0;
-static byte next_status = 0;
-static stduint last_msecond = 0;
 static void process_mouse(byte ch) {
 	mouse_buf[mouse_buf[3]++] = ch;
 	mouse_buf[3] %= 3;
+	MouseMessage& mm = *(MouseMessage*)mouse_buf;
 	if (!mouse_buf[3]) {
-		// outsfmt(" %[8H]-%[8H]-%[8H] ", mouse_buf[0], mouse_buf[1], mouse_buf[2]);
-		auto next_msecond = mecocoa_global->system_time.mic;
-		if (last_status != next_status ||
-			absof(next_msecond - last_msecond) > 10000 && mouse_acc.x && mouse_acc.y)
-		{
-			// outsfmt(" %c(%d,%d) ", last_status != next_status ? '~' : ' ', mouse_acc.x, mouse_acc.y);
-			if (Cursor::global_cursor) global_layman.Domove(Cursor::global_cursor, mouse_acc);//{TEMP}
-			mouse_acc.x = 0;
-			mouse_acc.y = 0;
-			last_status = next_status;
-			last_msecond = next_msecond;
-		}
-		else {
-			mouse_acc.x += cast<char>(mouse_buf[1]);
-			mouse_acc.y += -cast<char>(mouse_buf[2]);
-		}
+		SysMessage smsg{
+			.type = SysMessage::RUPT_MOUSE,
+		};
+		mm.Y = -mm.Y;
+		smsg.args.mou_event = mm,
+		message_queue_conv.Enqueue(smsg);
 	}
 	else if (mouse_buf[3] == 1) {
-		MouseMessage& mm = *(MouseMessage*)mouse_buf;
 		if (!mm.HIGH) mouse_buf[3] = 0;
-		next_status = mouse_buf[0] & 0b111;
 	}
 }
 void Handint_MOU() {
@@ -68,7 +55,6 @@ void Handint_MOU() {
 	{
 		process_mouse(innpb(PORT_KEYBOARD_DAT));
 	}
-	// ! XX-7F-81 problem
 }
 
 // void Handint_HDD()...

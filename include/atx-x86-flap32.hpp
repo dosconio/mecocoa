@@ -41,6 +41,7 @@ void serv_task_loop();
 // ---- [service] console
 #include "console.hpp"
 void serv_cons_loop();
+void serv_conv_loop();
 
 // ---- [service] fileman
 #include "fileman.hpp"

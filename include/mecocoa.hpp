@@ -1,6 +1,8 @@
 #ifndef _STYLE_RUST
 #define _STYLE_RUST
 #endif
+#define _HER_TIME_H
+
 
 #include <c/consio.h>
 #include <c/datime.h>
@@ -17,9 +19,9 @@ use crate uni;
 #endif
 
 // ---- handler ----
-#if _MCCA == 0x8664 && defined(_UEFI)
 extern InterruptControl IC;
-#endif
+
+// ---- . ----
 
 #define _GUI_DOUBLE_BUFFER 1// or the anime is disabled
 

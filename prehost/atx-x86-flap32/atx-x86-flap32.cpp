@@ -2,8 +2,7 @@
 // AllAuthor: @dosconio, @ArinaMgk
 // ModuTitle: Demonstration - ELF32-C++ x86 Bare-Metal
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
-#define _STYLE_RUST
-#define _HER_TIME_H
+#include "../../include/mecocoa.hpp"
 
 #include <c/consio.h>
 #include <cpp/string>
@@ -13,10 +12,8 @@
 #include <c/driver/mouse.h>
 #include <c/driver/timer.h>
 #include <cpp/Device/Cache>
-#include <c/proctrl/x86/x86.h>
 #include <c/format/filesys/FAT.h>
 #include <c/driver/RealtimeClock.h>
-#include "../../include/atx-x86-flap32.hpp"
 
 _ESYM_C
 {
@@ -62,19 +59,19 @@ _sign_entry() {
 	const unsigned mempool_lenN = 0x20000;
 	mempool.Append(Slice{ _IMM(mem.allocate(mempool_lenN)), mempool_lenN });
 	mempool.Append(Slice{ _IMM(mem.allocate(mempool_lenN)), mempool_lenN });
+	mempool.Append(Slice{ _IMM(mem.allocate(mempool_lenN)), mempool_lenN });
 	cons_init();// located here, for  INT-10H may influence PIC
 	Cache_t::enAble();
 	Taskman::Initialize();
 	// IVT and Device
-	InterruptControl GIC(_IMM(0x80000800));
-	GIC.Reset(SegCo32, 0x80000000);
-	GIC.Init();
-	GIC[IRQ_PIT].setRange(mglb(Handint_PIT_Entry), SegCo32); PIT_Init();
-	GIC[IRQ_RTC].setRange(mglb(Handint_RTC_Entry), SegCo32); RTC_Init();
-	GIC[IRQ_Keyboard].setRange(mglb(Handint_KBD_Entry), SegCo32); Keyboard_Init();
-	GIC[IRQ_PS2_Mouse].setRange(mglb(Handint_MOU_Entry), SegCo32); Mouse_Init();
-	GIC[IRQ_ATA_DISK0].setRange(mglb(Handint_HDD_Entry), SegCo32); DEV_Init();
-	GIC[IRQ_SYSCALL].setRange(mglb(call_intr), SegCo32); GIC[IRQ_SYSCALL].DPL = 3;
+	IC.Reset(SegCo32, 0x80000000);
+	IC.Init();
+	IC[IRQ_PIT].setRange(mglb(Handint_PIT_Entry), SegCo32); PIT_Init();
+	IC[IRQ_RTC].setRange(mglb(Handint_RTC_Entry), SegCo32); RTC_Init();
+	IC[IRQ_Keyboard].setRange(mglb(Handint_KBD_Entry), SegCo32); Keyboard_Init();
+	IC[IRQ_PS2_Mouse].setRange(mglb(Handint_MOU_Entry), SegCo32); Mouse_Init();
+	IC[IRQ_ATA_DISK0].setRange(mglb(Handint_HDD_Entry), SegCo32); DEV_Init();
+	IC[IRQ_SYSCALL].setRange(mglb(call_intr), SegCo32); IC[IRQ_SYSCALL].DPL = 3;
 
 
 	mecfetch();
@@ -83,10 +80,11 @@ _sign_entry() {
 	ploginfo("[Memoman] total memory %[x]", Memory::total_memsize);
 
 	// Service
-	TaskRegister((void*)&serv_cons_loop, 1);
-	TaskRegister((void*)&serv_dev_hd_loop, 1);
-	TaskRegister((void*)&serv_file_loop, 0);
-	TaskRegister((void*)&serv_task_loop, 0);// GDT operation
+	Taskman::Create((void*)&serv_cons_loop, 1);
+	Taskman::Create((void*)&serv_conv_loop, 0);
+	Taskman::Create((void*)&serv_dev_hd_loop, 1);
+	Taskman::Create((void*)&serv_file_loop, 0);
+	Taskman::Create((void*)&serv_task_loop, 0);// GDT operation
 
 	// GIC.enAble();
 	syscall(syscall_t::OUTC, 'O');// with effect InterruptEnable();

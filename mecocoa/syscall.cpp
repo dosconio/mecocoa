@@ -442,9 +442,10 @@ stduint syscall(syscall_t callid, ...) {
 
 #if (_MCCA & 0xFF00) == 0x8600
 
+_ESYM_C stduint SYSCALL_TABLE[];
 DEFSYSC sysc_OUTC(stduint ch, stduint len);
 DEFSYSC sysc_EXIT(stduint code);
-_ESYM_C stduint SYSCALL_TABLE[] = {
+stduint SYSCALL_TABLE[] = {
 	_IMM(sysc_OUTC),// OUTC(ch/str, strlen) | strlen: 0 for single char
 	0,// INNC(else_blocked)
 	_IMM(sysc_EXIT),// EXIT(code)
@@ -452,7 +453,7 @@ _ESYM_C stduint SYSCALL_TABLE[] = {
 
 DEFSYSC sysc_OUTC(stduint ch, stduint len) {// OUTC
 	if (auto pid = Taskman::Locate(Taskman::CurrentPID())) {
-		auto con = cast<Console_t*>(ttys[pid->focus_tty_id]->offs);//{} assert...
+		auto con = cast<Console_t*>(vttys[pid->focus_tty_id]->offs);//{} assert...
 		if (con) {
 			if (len) {
 				con->out((rostr)ch, len);
@@ -474,7 +475,8 @@ DEFSYSC sysc_OUTC(stduint ch, stduint len) {// OUTC
 DEFSYSC sysc_EXIT(stduint code) {
 	// IC.enAble(false);
 	Taskman::ExitCurrent(code);
-	plogerro("sysc_EXIT");// unreachable
+	printlog(_LOG_FATAL, "sysc_EXIT");// unreachable
+	return -1;
 }
 
 #endif
