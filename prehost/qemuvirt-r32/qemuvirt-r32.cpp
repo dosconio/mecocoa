@@ -1,14 +1,9 @@
 // ASCII GAS/RISCV64 TAB4 LF
-// Attribute: 
 // AllAuthor: @ArinaMgk
 // ModuTitle: Kernel
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
+#include "../../include/mecocoa.hpp"
 
-#include <c/stdinc.h>
-#include <c/proctrl/RISCV/riscv.h>
-#include "../../include/qemuvirt-riscv.hpp"
-//
-#include <cpp/interrupt>
 #include <cpp/Device/UART>
 #include <c/driver/timer.h>
 
@@ -18,10 +13,6 @@ int task_create(void (*start_routin)());
 void schedule();
 void user_task0(void);
 void user_task1(void);
-
-// inc: handler:
-
-_ESYM_C void trap_vector();
 
 uint64 _tick;
 uint64 last_schepoint;
@@ -65,7 +56,6 @@ void syscall(TaskContext* cxt)
 	return;
 }
 
-
 extern "C"
 void _entry()
 {
@@ -74,13 +64,12 @@ void _entry()
 	ploginfo("Hello Mcca-RV%u~ =OwO=", __BITS__);
 
 	// Interrupt
-	InterruptControl PLIC _IMM(trap_vector);
-	PLIC.Reset();
+	IC.Reset();
 
 	UART0.enInterrupt();
 	UART0.setInterruptPriority(1, nil);
 
-	PLIC.enAble(true);
+	IC.enAble(true);
 
 	last_schepoint = clint.Read() + TIMER_INTERVAL;
 	clint.Load(getMHARTID(), last_schepoint);
@@ -197,5 +186,23 @@ extern "C" void __cxa_pure_virtual() {
 	while (1);
 }
 extern "C" void *memset(void *str, int c, size_t n) { return MemSet(str, c, n); }
-
-void operator delete[](void*) {}
+_ESYM_C unsigned int __ctzsi2(unsigned int x)
+{
+	if (x == 0) return 32;
+	unsigned int n = 0;
+	while ((x & 1) == 0) {
+		n++;
+		x >>= 1;
+	}
+	return n;
+}
+_ESYM_C unsigned int __ctzdi2(unsigned long x)
+{
+	if (x == 0) return 64;
+	unsigned int n = 0;
+	while ((x & 1) == 0) {
+		n++;
+		x >>= 1;
+	}
+	return n;
+}

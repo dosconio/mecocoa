@@ -281,6 +281,8 @@ auto Taskman::Schedule(bool omit_slice)->decltype(Schedule())
 	SwitchTaskContext(&new_pb->context, &old_pb->context);
 	#endif
 }
+#else
+auto Taskman::Schedule(bool omit_slice)->decltype(Schedule()) { }
 #endif
 
 

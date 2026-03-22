@@ -116,6 +116,7 @@ static void make_LDT(descriptor_t* ldt_alias, byte ring) {
 }
 
 #endif
+
 ProcessBlock* Taskman::Create(void* entry, byte ring)
 {
 	auto ppb = AllocateTask();
@@ -140,7 +141,7 @@ ProcessBlock* Taskman::Create(void* entry, byte ring)
 	treat<uint32>(&new_ctx.floating_point_context[24]) = 0x1F80;// ban all MXCSR exception
 	ppb->stack_size = DEFAULT_STACK_SIZE;
 	ppb->stack_lineaddr = (byte*)stack _TEMP;
-	#else
+	#elif _MCCA == 0x8632
 	//
 	word parent = SegTSS0;// Kernel Task
 

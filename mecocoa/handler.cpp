@@ -11,8 +11,11 @@
 
 #if _MCCA == 0x8664 && defined(_UEFI)
 InterruptControl IC = { nil };
-#else
+#elif (_MCCA & 0xFF00) == 0x8600
 InterruptControl IC = { mglb(0x800) };
+#elif (_MCCA & 0xFF00) == 0x1000
+_ESYM_C Handler_t trap_vector;
+InterruptControl IC = { _IMM(&trap_vector) };
 #endif
 
 #ifdef _ARC_x86 // x86:

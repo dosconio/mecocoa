@@ -19,7 +19,7 @@ print "SECTIONS {\n";
 
 print "	.text : {\n";
 print "		PROVIDE(_text_start = .); /* as if exists `void* _text_start;` */ \n";
-print "		$ENV{'uobjpath'}/mcca-qemuvirt-$arch/qemuvirt-$arch.startup.o(.text)\n";
+print "		$ENV{'uobjpath'}/mcca-qemuvirt-$arch/_ag_qemuvirt-$arch.startup.o(.text)\n";
 print '
 		*(.text .text.*)
 		PROVIDE(_text_end = .);

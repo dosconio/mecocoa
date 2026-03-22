@@ -25,27 +25,6 @@ extern "C" void Handint_MOU();
 extern "C" void Handint_HDD_Entry();
 extern "C" void Handint_HDD();
 
-// ---- memoman
-#include "memoman.hpp"
-#define PAGE_SIZE 0x1000 // lev-0-page
-
-// ---- syscall
-#include "syscall.hpp"
-
-// ---- taskman
-#include "taskman.hpp"
-void serv_task_loop();
-
-// ---- [service] console
-#include "console.hpp"
-void serv_cons_loop();
-void serv_conv_loop();
-
-// ---- [service] fileman
-#include "fileman.hpp"
-void serv_dev_hd_loop();
-void serv_file_loop();
-
 // ----
 
 #define mapglb(x) (*(usize*)&(x) |= 0x80000000)

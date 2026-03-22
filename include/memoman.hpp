@@ -10,6 +10,11 @@
 #include <cpp/string>
 #include <cpp/trait/MallocTrait.hpp>
 
+#ifndef __MEMOMAN_HPP__
+#define __MEMOMAN_HPP__
+
+#define PAGE_SIZE 0x1000 // lev-0-page
+
 extern bool map_ready;
 
 #if (_MCCA & 0xFF00) == 0x8600
@@ -91,17 +96,15 @@ _PACKED(struct) VideoInfoEntry {
 	};
 };// RGB Direct Mode Only
 
-
-extern byte BSS_ENTO, BSS_ENDO;
-
-extern uni::Mempool mempool;
-
 #if _MCCA == 0x8632
 #define mem_area_exten_beg 0x00101000
 // area-basic: 0x7E00 .. 0x80000
 // area-exten: mem_area_exten_beg .. mem_area_exten_beg + areax_size
 #endif
 #endif
+
+extern byte BSS_ENTO, BSS_ENDO;
+extern uni::Mempool mempool;
 
 // class Memory
 #if (_MCCA & 0xFF00) == 0x8600
@@ -142,3 +145,5 @@ word GDT_GetNumber();
 word GDT_Alloc();
 #endif
 #endif
+
+#endif // __MEMOMAN_HPP__

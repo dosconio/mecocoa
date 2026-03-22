@@ -33,7 +33,7 @@ enum
 
 #define IRQ_SYSCALL 0x81// leave 0x80 for unix-like syscall
 
-#ifdef _MCCA
+#if (_MCCA & 0xFF00) == 0x8600
 
 _ESYM_C void Handint_SYSCALL_Entry();
 _ESYM_C void Handint_INTCALL_Entry();

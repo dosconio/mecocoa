@@ -68,7 +68,7 @@ struct CommMsg {
 };
 
 // Process
-#if (_MCCA & 0xFF00) == 0x8600
+#if 1
 class FileDescriptor;
 class _Comment(Kernel) ProcessBlock {
 public:

@@ -7,6 +7,7 @@
 
 #include <c/consio.h>
 #include <c/datime.h>
+#include <cpp/interrupt>
 
 use crate uni;
 #if _MCCA == 0x8632
@@ -17,6 +18,23 @@ use crate uni;
 #elif (_MCCA & 0xFF00) == 0x1000// RV
 #include <c/proctrl/RISCV/riscv.h>
 #include "../include/qemuvirt-riscv.hpp"
+#endif
+
+#include "memoman.hpp"
+#include "syscall.hpp"
+#include "taskman.hpp"
+void serv_task_loop();
+
+#if _MCCA == 0x8632
+// ---- [service] console
+#include "console.hpp"
+void serv_cons_loop();
+void serv_conv_loop();
+
+// ---- [service] fileman
+#include "fileman.hpp"
+void serv_dev_hd_loop();
+void serv_file_loop();
 #endif
 
 // ---- handler ----

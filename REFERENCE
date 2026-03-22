@@ -1,6 +1,8 @@
 - x86汇编语言从实地址模式到保护模式
 - Orange'S
+- Implementation of A 64 - bit OS
+- 0 kara no OS
 
 
 [ ] 30日OS自作入门
-[ ] rCore / uCore
+[ ] rCore / uCore / ArceOS

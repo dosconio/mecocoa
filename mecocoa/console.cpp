@@ -166,8 +166,8 @@ void uni::BareConsole::doshow(void* _) {}
 #endif
 
 //// ---- ---- STATIC CORE ---- ---- ////
-LayerManager global_layman;
 #if ((_MCCA & 0xFF00) == 0x8600)
+LayerManager global_layman;
 #if defined(_UEFI) && _MCCA == 0x8664
 extern UefiData uefi_data;
 #endif

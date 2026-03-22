@@ -13,10 +13,10 @@ BmMemoman* Memory::pagebmap = NULL;
 stduint Memory::total_memsize = 0;
 bool map_ready = false;
 
+#endif
 Mempool mempool = {};
 #if 0 // for small flash board
 #define mempool (*pmempool)
-#endif
 #endif
 
 // - Memory::clear_bss
@@ -174,7 +174,7 @@ word GDT_Alloc() {
 
 // ---- STDLIB ----
 
-#if (_MCCA & 0xFF00) == 0x8600
+#if 1
 
 // linear allocator
 _ESYM_C void* malloc(size_t size) {
