@@ -1,51 +1,49 @@
 #ifndef _QEMU_VIRT_RISCV_
 #define _QEMU_VIRT_RISCV_
+#ifndef _DEV_GNU_AS
 #include <c/stdinc.h>
-// ---- ---- ---- ---- board-independent ---- ---- ---- ----
-
-struct TaskContext {
-	// ignore x0
-	stduint ra;
-	stduint sp;
-	stduint gp;
-	stduint tp;
-	stduint t0;
-	stduint t1;
-	stduint t2;
-	stduint s0;
-	stduint s1;
-	stduint a0;
-	stduint a1;
-	stduint a2;
-	stduint a3;
-	stduint a4;
-	stduint a5;
-	stduint a6;
-	stduint a7;
-	stduint s2;
-	stduint s3;
-	stduint s4;
-	stduint s5;
-	stduint s6;
-	stduint s7;
-	stduint s8;
-	stduint s9;
-	stduint s10;
-	stduint s11;
-	stduint t3;
-	stduint t4;
-	stduint t5;
-	stduint t6;
-	//
-	stduint pc;// offset 31*__BITS__
-};
-
+#endif
 
 // ---- ---- ---- ---- qemuvirt ---- ---- ---- ----
 #if __BITS__==32
-#include "qemuvirt-r32.def.h"
+// QEMU RISC-V Virt machine with 16550a UART and VirtIO MMIO
+
+#define MCAUSE_MASK_INTERRUPT _IMM(0x80000000)
+#define MCAUSE_MASK_ECODE     _IMM(0x7FFFFFFF)
+
+#define LOAD		lw
+#define STORE		sw
+#define SIZE_REG	4
+#define SIZE_PTR .word
+
 #elif __BITS__==64
-#include "qemuvirt-r64.def.h"
+// QEMU RISC-V Virt machine with 16550a UART and VirtIO MMIO
+
+#define MCAUSE_MASK_INTERRUPT _IMM(0x8000000000000000)
+#define MCAUSE_MASK_ECODE     _IMM(0x7FFFFFFFFFFFFFFF)
+
+#define LOAD		ld
+#define STORE		sd
+#define SIZE_REG	8
+#define SIZE_PTR .dword
+
+#endif
+
+/*
+ * maximum number of CPUs
+ * see https://github.com/qemu/qemu/blob/master/include/hw/riscv/virt.h
+ * #define VIRT_CPUS_MAX 8
+ */
+#define MAXNUM_CPU 8
+
+#define LENGTH_RAM 128*1024*1024
+
+#ifndef _DEV_GNU_AS
+
+// handler
+extern uint64 last_schepoint;
+extern void timer_handler(void);
+
 #endif
 
 #endif

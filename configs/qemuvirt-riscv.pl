@@ -3,7 +3,7 @@ my $arch = $ARGV[0] || 'r32';
 print 'OUTPUT_ARCH( "riscv" )
 ';
 
-print "#include \"../../include/qemuvirt-$arch.def.h\" /* The file is gen by qemuvirt-$arch.pl */ \n";
+print "#include \"../../include/qemuvirt-riscv.hpp\" /* The file is gen by qemuvirt-riscv.pl */ \n";
 
 print '
 ENTRY( _start )
@@ -19,7 +19,7 @@ print "SECTIONS {\n";
 
 print "	.text : {\n";
 print "		PROVIDE(_text_start = .); /* as if exists `void* _text_start;` */ \n";
-print "		$ENV{'uobjpath'}/mcca-qemuvirt-$arch/_ag_qemuvirt-$arch.startup.o(.text)\n";
+print "		$ENV{'uobjpath'}/mcca-qemuvirt-$arch/_ag_qemuvirt-rv.startup.o(.text)\n";
 print '
 		*(.text .text.*)
 		PROVIDE(_text_end = .);
@@ -59,8 +59,8 @@ print '
 	PROVIDE(_memory_start = ORIGIN(ram));
 	PROVIDE(_memory_end = ORIGIN(ram) + LENGTH(ram));
 
-	PROVIDE(_heap_start = _bss_end);
-	PROVIDE(_heap_size = _memory_end - _heap_start);
+	PROVIDE(_heap_ento = _bss_end);
+	PROVIDE(_heap_endo = _memory_end);
 
 ';
 

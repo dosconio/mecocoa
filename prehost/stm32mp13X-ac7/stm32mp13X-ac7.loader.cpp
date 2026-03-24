@@ -70,6 +70,8 @@ fn main() -> int {
 	}
 }
 
+extern VideoConsole VConsole;
+uni::OstreamTrait* con0_out;
 static bool init() {
 	auto spd = GPIOSpeed::Veryhigh;
 	if (!init_specific() || !init_clock()) return false;
@@ -107,6 +109,8 @@ static bool init() {
 		LTDC_LAYER_t::layer_param_refer(&lpara);
 		asrtret(LTDC[1].setMode(lpara));
 	}
+	con0_out = &VConsole;
+
 	// EXTI
 	GPIOA[3].setMode(GPIORupt::Anyedge);// USART2_RX
 	GPIOG[10].setMode(GPIOMode::OUT_PushPull);// FDCAN1_TX
@@ -214,9 +218,7 @@ _ESYM_C void assert_failed(void) { erro(); }
 VideoConsole VConsole(&LTDC[1], Rectangle(Point(0, 0), Size2(800,480)));
 
 void LTDC_LAYER_t::DrawFont(const Point& disp, const DisplayFont& font) const {}
-void outtxt(const char* str, stduint len) {
-	for0(i, len) VConsole.OutChar(str[i]);
-}
+
 void erro(const char*) {
 	loop{
 		LED.Toggle();

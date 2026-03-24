@@ -7,13 +7,13 @@
 #include <c/driver/timer.h>
 #include <c/delay.h>
 
+volatile timeval_t system_time = {};
+volatile stduint tick = 0;
+
 // ---- ---- Timer ---- ---- //
 
 #if (_MCCA & 0xFF00) == 0x8600
 
-volatile timeval_t system_time = {};
-
-volatile stduint tick = 0;
 
 static int TimerCmp(pureptr_t a, pureptr_t b) {
 	return treat<MsgTimer>(((Dnode*)a)->offs).timeout -
@@ -174,4 +174,17 @@ void Handint_LAPICT(/*InterruptFrame* frame*/) {
 	Taskman::Schedule();
 }
 #endif
+#if (_MCCA & 0xFF00) == 0x1000
 
+uint64 last_schepoint;
+_TEMP void schedule();
+void timer_handler()
+{
+	tick++;
+	// ploginfo("tick: %d\n", tick);
+	last_schepoint += TIMER_INTERVAL;
+	clint.Load(getMHARTID(), last_schepoint);
+	schedule();
+}
+
+#endif

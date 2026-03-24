@@ -142,11 +142,9 @@ bool Taskman::Append(ProcessBlock* task) {
 	task->pid = min_available_pid;
 	auto nod = chain.Append(task, false, min_available_left);
 	stduint las = min_available_pid;
-	Dnode* lasn = nod;
 	while (nod = nod->next) {
 		stduint _new = ((ProcessBlock*)(nod->offs))->pid;
 		if (_new == las + 1) {
-			lasn = nod;
 			las = _new;
 		}
 		else break;

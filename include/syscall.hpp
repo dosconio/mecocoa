@@ -28,7 +28,22 @@ enum
 	TMSG = 0x0F, // try message
 	EXEC = 0x10, // exec             // (path, argv) -> 0[success]
 
+	GET_CORE_ID,
+
+
 	TEST = 0xFF,
+};
+
+enum
+	#ifdef _INC_CPP
+	class
+	#endif
+	syscall_POSIX_t
+	#ifdef _INC_CPP
+	: stduint
+	#endif
+{
+
 };
 
 #define IRQ_SYSCALL 0x81// leave 0x80 for unix-like syscall
@@ -40,6 +55,12 @@ _ESYM_C void Handint_INTCALL_Entry();
 _ESYM_C stduint Handint_SYSCALL(CallgateFrame* frame);
 
 stduint syscall(syscall_t callid, ...);
+
+#elif (_MCCA & 0xFF00) == 0x1000
+
+struct NormalTaskContext;
+void syscall(NormalTaskContext* cxt);
+
 
 #endif
 

@@ -6,25 +6,22 @@
 
 _ESYM_C Handler_t FILE_ENTO, FILE_ENDO;
 
-
-#if (_MCCA & 0xFF00) == 0x8600
 Memory mem;
 BmMemoman* Memory::pagebmap = NULL;
 stduint Memory::total_memsize = 0;
 bool map_ready = false;
 
-#endif
+
 Mempool mempool = {};
 #if 0 // for small flash board
 #define mempool (*pmempool)
 #endif
 
 // - Memory::clear_bss
-#if (_MCCA & 0xFF00) == 0x8600
 void Memory::clear_bss() {
 	MemSet(&BSS_ENTO, &BSS_ENDO - &BSS_ENTO, 0);
 }
-#endif
+
 
 
 // ---- x86 ----
@@ -101,6 +98,13 @@ void* Memory::allocate(stduint siz, stduint alignment, stduint boundary) {
 bool Memory::deallocate(void* ptr, stduint size _Comment(zero_for_block)) {
 	_TODO return false;
 }
+
+#else 
+
+void* Memory::allocate(stduint siz, stduint alignment, stduint boundary) { _TODO return nullptr; }
+
+bool Memory::deallocate(void* ptr, stduint size _Comment(zero_for_block)) { _TODO return false; }
+
 #endif
 
 // ---- PAGING ----
@@ -120,6 +124,7 @@ uint64 GDT_LIST[]{
 	0x00CFF2000000FFFFull,//(Rg3Data) Ring3
 	0x0020FA0000000000ull,//(Rg3Code) Ring3
 	0x0000000000000000ull,//(SegCall) Ring3
+	0x0000000000000000ull,//(SegGldt) Ring3
 	#if __BITS__ == 64
 	0x0000000000000000ull,
 	#endif

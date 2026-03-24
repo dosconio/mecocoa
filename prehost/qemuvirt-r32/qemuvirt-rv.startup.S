@@ -3,13 +3,12 @@
 # AllAuthor: @ArinaMgk
 # ModuTitle: Startup
 # Copyright: Dosconio Mecocoa, BSD 3-Clause License
-#include "../../include/qemuvirt-r64.def.h"
-#define LOAD		ld
-#define STORE		sd
-#define SIZE_REG	8
-#define SIZE_PTR .dword
+#include "../../include/qemuvirt-riscv.hpp"
 #include "../qemuvirt-r32/qemuvirt.hs"
-
+# using:
+# .section .rodata
+# .global HEAP_START
+#    HEAP_START: SIZE_PTR _heap_start
 
 .equ	STACK_SIZE, 1024
 
@@ -41,14 +40,6 @@ _start:
 	li      t0, 0xf
 	csrw    pmpcfg0, t0
 # .endif
-	# ---- mstatus ----
-	# schedule() in kernel will call MRET to switch to the first task, so parepare mstatus here.
-	# ASSUME: that the initial value of mstatus is zero.
-	# Set mstatus.MPP  to 3, so run in Machine mode after MRET.
-	# Set mstatus.MPIE to 1, so MRET will enable the interrupt.
-	#{TODO} set according to ctx.ring
-	li	t0, 3 << 11
-	csrc	mstatus, t0
 	#{} INIT_BSS
 	CALL	_preprocess
 	J		_entry          # Enter the kernel
@@ -59,12 +50,12 @@ park:
 
 # ---- ---- HANDLER ---- ----
 
-# in machine mode
+# in machine mode, PG is disabled
 .globl trap_vector
-# the trap vector base address must always be aligned on a 4-byte boundary
 .balign 4
 trap_vector:
 	# save context(registers).
+	# mscratch now holds the original t6 (points to the NormalTaskContext of the current task)
 	csrrw	t6, mscratch, t6    # xchg t6 and mscratch
 	reg_save t6
 	# save the actual t6 register, which we swapped into mscratch
@@ -72,8 +63,16 @@ trap_vector:
 	csrr	t6, mscratch        # read t6 back from mscratch
 	STORE	t6, 30*SIZE_REG(t5) # save t6 with t5 as base
 	csrr	a0, mepc
-	STORE	a0, 31*SIZE_REG(t5) # save mepc to context of current task
-	csrw	mscratch, t5        # restore the context pointer into mscratch
+	STORE	a0, 31*SIZE_REG(t5)
+	csrr	a0, mstatus
+	STORE	a0, 32*SIZE_REG(t5)
+	csrr	a0, satp
+	STORE	a0, 33*SIZE_REG(t5)
+
+	la      sp, kernel_stack_top_cpu0
+
+	# restore the context pointer into mscratch
+	csrw	mscratch, t5
 	# call the C trap handler
 	csrr	a0, mepc
 	csrr	a1, mcause
@@ -81,6 +80,11 @@ trap_vector:
 	call	trap_handler # return the return address via a0
 	csrw	mepc, a0
 	csrr	t6, mscratch # restore context(registers).
+
+	# TEMP 
+	LOAD    t0, 31*SIZE_REG(t6)
+	csrw    mepc, t0
+
 	reg_restore t6
 	mret
 
@@ -91,20 +95,29 @@ trap_vector:
 .globl switch_to
 .balign 4
 switch_to:
-	csrw	mscratch, a0		# switch mscratch to point to the context of the next task
-	LOAD	a1, 31*SIZE_REG(a0) # set mepc to the pc of the next task
-	csrw	mepc, a1
+	csrw	mscratch, a0		# mscratch -> context of the next task
+
+	LOAD    t0, 33*SIZE_REG(a0)
+	csrw    satp, t0
+	sfence.vma zero, zero       # Flush TLB immediately after changing satp
+
+	# Restore Privilege & Execution State
+	LOAD    t0, 32*SIZE_REG(a0)
+	csrw    mstatus, t0         # Restores MPP (Next mode: M, S, or U)
+
+	LOAD	t0, 31*SIZE_REG(a0) # set mepc to the pc of the next task
+	csrw	mepc, t0
 	# Restore all GP registers
 	mv		t6, a0
 	reg_restore t6
-	mret
+	mret # will enable global interrupt
 
 #{TOMOVE}
 # ---- ---- USER SYSCALL ---- ----
 
 .global gethid
 gethid:
-	li a7, 1 # #define SYS_GETCOREID	1
+	li a7, 0x11 # #define SYS_GETCOREID	1
 	ecall
 	ret
 
@@ -113,4 +126,7 @@ gethid:
 .balign 16 # rv'sp must be 16-byte aligned
 stacks:
 	.skip	STACK_SIZE * MAXNUM_CPU # for all the harts stacks
+kernel_stack:
+	.skip	0x1000 * 1 # for all the harts stacks
+kernel_stack_top_cpu0:
 	.end #EOF

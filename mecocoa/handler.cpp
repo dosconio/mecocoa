@@ -164,12 +164,10 @@ void exception_handler(sdword iden, dword para) {
 
 
 void external_interrupt_handler();
-extern void timer_handler(void);
-void syscall(TaskContext* cxt);
 void schedule();
 
 _ESYM_C
-stduint trap_handler(stduint epc, stduint cause, TaskContext* cxt)
+stduint trap_handler(stduint epc, stduint cause, NormalTaskContext* cxt)
 {
 	stduint return_pc = epc;
 	stduint cause_code = cause & MCAUSE_MASK_ECODE;
@@ -199,6 +197,7 @@ stduint trap_handler(stduint epc, stduint cause, TaskContext* cxt)
 		case 8:
 			ploginfo("System call from U-mode!\n");
 			syscall(cxt);
+			cxt->mepc += 4;
 			return_pc += 4;
 			break;
 		default:

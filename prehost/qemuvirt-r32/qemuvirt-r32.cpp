@@ -7,61 +7,24 @@
 #include <cpp/Device/UART>
 #include <c/driver/timer.h>
 
-using namespace uni;
+OstreamTrait* con0_out = &UART0;
 
-int task_create(void (*start_routin)());
+int task_create(void (*start_routin)(), int ring = 0/*0u 1s 3m*/);
 void schedule();
 void user_task0(void);
 void user_task1(void);
 
-uint64 _tick;
-uint64 last_schepoint;
-void timer_handler()
-{
-	_tick++;
-	UART0.OutFormat("tick: %d\n", _tick);
-	last_schepoint += TIMER_INTERVAL;
-	clint.Load(getMHARTID(), last_schepoint);
-	schedule();
-}
 
-// syscall
-
-#define SYS_GETCOREID	1
-
-int sys_gethid(unsigned int *ptr_hid)
-{
-	UART0.OutFormat("--> sys_gethid, arg0 = %[x]\n", ptr_hid);
-	if (ptr_hid == NULL) {
-		return -1;
-	} else {
-		*ptr_hid = getMHARTID();
-		return 0;
-	}
-}
-
-void syscall(TaskContext* cxt)
-{
-	uint32_t syscall_num = cxt->a7;
-
-	switch (syscall_num) {
-	case SYS_GETCOREID:
-		cxt->a0 = sys_gethid((unsigned int *)(cxt->a0));
-		break;
-	default:
-		UART0.OutFormat("Unknown syscall no: %d\n", syscall_num);
-		cxt->a0 = -1;
-	}
-
-	return;
-}
-
-extern "C"
+_ESYM_C
 void _entry()
 {
 	//[!] cannot use FLOATING operation (why)
 	UART0.setMode(115200);
 	ploginfo("Hello Mcca-RV%u~ =OwO=", __BITS__);
+	if (!Memory::initialize('ANIF', NULL)) {
+		printlog(_LOG_FATAL, "Memory Initialize Failed.");
+		loop HALT();
+	}
 
 	// Interrupt
 	IC.Reset();
@@ -84,12 +47,8 @@ void _entry()
 
 	while (1);
 }
-_ESYM_C
-void outtxt(const char* str, stduint len) {
-	for0(i, len) UART0.OutChar(str[i]);
-}
 
-_ESYM_C void switch_to(TaskContext *next);
+_ESYM_C void switch_to(NormalTaskContext *next);
 
 #define MAX_TASKS 10
 #define STACK_SIZE 1024
@@ -98,7 +57,7 @@ _ESYM_C void switch_to(TaskContext *next);
  * is always 16-byte aligned.
  */
 uint8_t __attribute__((aligned(16))) task_stack[MAX_TASKS][STACK_SIZE];
-TaskContext ctx_tasks[MAX_TASKS];
+NormalTaskContext ctx_tasks[MAX_TASKS];
 
 static int _top = 0;
 static int _current = -1;
@@ -109,7 +68,7 @@ void schedule()
 		return;
 	}
 	_current = (_current + 1) % _top;
-	TaskContext *next = &(ctx_tasks[_current]);
+	NormalTaskContext *next = &(ctx_tasks[_current]);
 	switch_to(next);
 }
 
@@ -121,11 +80,13 @@ void schedule()
  * 	0: success
  * 	-1: if error occured
  */
-int task_create(void (*start_routin)(void))
+int task_create(void (*start_routin)(void), int ring)
 {
 	if (_top < MAX_TASKS) {
 		ctx_tasks[_top].sp = (stduint) &task_stack[_top][STACK_SIZE];
-		ctx_tasks[_top].pc = (stduint) start_routin;
+		ctx_tasks[_top].mepc = (stduint)start_routin;
+		ctx_tasks[_top].mstatus = (ring << 11) | _MSTATUS_MPIE;// 0 or 1 or 3
+		// ctx->satp = 0;
 		_top++;
 		return 0;
 	} else {

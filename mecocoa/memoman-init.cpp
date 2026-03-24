@@ -13,10 +13,9 @@ _PACKED(struct) memory_info_entry {
 	uint64 len;
 	uint32 type;// 1 for avail, 2 for not
 };// ARDS
-#if (_MCCA & 0xFF00) == 0x8600
+
 byte _BUF_pagebmap[sizeof(BmMemoman)];
 
-extern memory_info_entry MemoryListData[20];
 extern Mempool mempool;
 
 const stduint bmapsize = 0x100000 / 8;
@@ -24,6 +23,8 @@ const stduint bmapsize = 0x100000 / 8;
 // 0x0000000000000000 .. 0x0000000100000000
 byte memoman_4G_00000000[bmapsize];
 
+#if (_MCCA & 0xFF00) == 0x8600
+extern memory_info_entry MemoryListData[20];
 //
 static stduint parse_norm(stduint addr);
 #endif
@@ -39,11 +40,12 @@ static void parse_uefi(const MemoryMap& memory_map);
 
 #endif
 
-#if (_MCCA & 0xFF00) == 0x8600
-// fill the mbitmap
+
+// **initialize**: fill the mbitmap
 // - init
 // - allocate (which be with pagemap)
 // - free (which be with unmap) [TODO]
+#if (_MCCA & 0xFF00) == 0x8600
 bool Memory::initialize(stduint eax, byte* ebx) {
 	void* mapaddr = memoman_4G_00000000;
 	MemSet(mapaddr, 0, bmapsize);
@@ -131,6 +133,27 @@ bool Memory::initialize(stduint eax, byte* ebx) {
 	#endif
 	GDT_Next();
 
+
+	return true;
+}
+
+#elif (_MCCA & 0xFF00) == 0x1000
+_ESYM_C void _heap_ento(), _heap_endo();
+bool Memory::initialize(stduint eax, byte* ebx) {
+	stduint beg = vaultAlign(0x1000, _IMM(_heap_ento)) >> 12;
+	stduint end = floorAlign(0x1000, _IMM(_heap_endo)) >> 12;
+	end &= 0xFFFFFFFFul;
+	Memory::total_memsize = (end - beg) << 12;
+	void* mapaddr = memoman_4G_00000000;
+	MemSet(mapaddr, 0, bmapsize);
+	Memory::pagebmap = new (_BUF_pagebmap) BmMemoman(mapaddr, bmapsize);
+	Memory::pagebmap->add_range(beg, end, true);
+
+	// Mempool
+	uni_default_allocator = &mem;
+	const unsigned mempool_len0 = 0x10000;
+	mempool.Reset(Slice{ _IMM(mem.allocate(mempool_len0)), mempool_len0 });
+	uni_hostenv_allocator = &mempool;
 
 	return true;
 }

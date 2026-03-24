@@ -60,6 +60,7 @@ cppfile=$(wildcard prehost/$(arch)/*.cpp) $(wildcard mecocoa/*.cpp) \
 	$(ulibpath)/cpp/Device/Timer.cpp \
 	$(ulibpath)/cpp/lango/lango-cpp.cpp \
 	$(ulibpath)/cpp/dat-block/mempool.cpp \
+	$(ulibpath)/cpp/dat-block/bmmemoman.cpp \
 	$(ulibpath)/cpp/nodes/dnode.cpp $(wildcard $(ulibpath)/cpp/nodes/dnode/*.cpp) \
 
 cplfile=$(ulibpath)/c/mcore.c \
@@ -79,7 +80,7 @@ build: clean $(asmobjs) $(cppobjs) $(cplobjs)
 	#echo [building] MCCA for $(arch)
 	@echo MK $(elf_kernel)
 	@perl configs/qemuvirt-riscv.pl r32 > $(LDFILE).ignore
-	@${CC} -E -P -x c ${CFLAGS} $(LDFILE).ignore > $(LDFILE)
+	@${CC} -E -P -x c ${CFLAGS} $(LDFILE).ignore -D_DEV_GNU_AS -D__BITS__=32 > $(LDFILE)
 	@mv $(LDFILE) $(LDFILE).ignore
 # keep entry (not only code segment) at 0x80000000
 	@${CC} ${XFLAGS} ${LDFLAGS} -o $(ubinpath)/${elf_kernel} $(uobjpath)/mcca-$(arch)/*.o \
@@ -112,7 +113,7 @@ $(foreach src,$(cppfile),$(eval $(call cpp_to_o,$(src))))
 
 _ag_%.o:
 	echo AS $(notdir $<)
-	${CC} ${CFLAGS} -c -o $@ $< -MMD -MF $(patsubst %.o,%.d,$@) -MT $@
+	${CC} ${CFLAGS} -c -o $@ $< -MMD -MF $(patsubst %.o,%.d,$@) -MT $@ -D_DEV_GNU_AS -D__BITS__=32
 
 _cc_%.o:
 	echo CC $(notdir $<)

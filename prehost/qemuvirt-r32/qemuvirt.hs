@@ -10,6 +10,8 @@
 .macro reg_save base
 	STORE ra,   0*SIZE_REG(\base)
 	STORE sp,   1*SIZE_REG(\base)
+	STORE gp,   2*SIZE_REG(\base)
+	STORE tp,   3*SIZE_REG(\base)
 	STORE t0,   4*SIZE_REG(\base)
 	STORE t1,   5*SIZE_REG(\base)
 	STORE t2,   6*SIZE_REG(\base)
@@ -36,9 +38,7 @@
 	STORE t3,  27*SIZE_REG(\base)
 	STORE t4,  28*SIZE_REG(\base)
 	STORE t5,  29*SIZE_REG(\base)
-	# we don't save t6 here, due to we have used
-	# it as base, we have to save t6 in an extra step
-	# outside of reg_save
+	# No saving t6 as base, we have to save t6 in an extra step  outside of reg_save
 .endm
 
 # restore all General-Purpose(GP) registers from the context
@@ -49,6 +49,8 @@
 .macro reg_restore base
 	LOAD ra,   0*SIZE_REG(\base)
 	LOAD sp,   1*SIZE_REG(\base)
+	LOAD gp,   2*SIZE_REG(\base)
+	LOAD tp,   3*SIZE_REG(\base)
 	LOAD t0,   4*SIZE_REG(\base)
 	LOAD t1,   5*SIZE_REG(\base)
 	LOAD t2,   6*SIZE_REG(\base)

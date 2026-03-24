@@ -50,8 +50,8 @@ extern uni::Queue<SysMessage> message_queue;
 extern TSS_t* PCU_CORES_TSS[PCU_CORES_MAX];
 
 #if _MCCA == 0x8632
-#define T_pid2tss(pid) (SegTSS0 + 16 * pid)
-#define T_tss2pid(tssid) ((tssid - SegTSS0) / 16)
+#define T_pid2tss(pid) (SegTSS0 + 8 * pid)
+#define T_tss2pid(tssid) ((tssid - SegTSS0) / 8)
 #endif
 #endif
 
@@ -75,6 +75,7 @@ public:
 	alignas(16) NormalTaskContext context;// advanced TSS_t
 	stduint pid;
 	inline stduint getID() { return pid; }
+	stduint ring;
 public:
 	stduint stack_size;
 	byte* stack_lineaddr;// [linear] ring3 bottom of stack
@@ -122,7 +123,7 @@ public: // _Comment(Interface);
 	} interface_type = InterfaceType::POSIX;
 public:
 	uni::Paging paging;
-	//{} Mempool heappool
+	//{} Mempool heappool// should store linear address 
 public: // _Comment(Taskman);
 	uni::Slice load_slices[8];// at most 8 slices, app-relative logical address
 public: // _Comment(Console);
@@ -163,6 +164,9 @@ public:
 	static auto
 		Locate(stduint taskid) -> ProcessBlock*;
 public:
+	// ring:
+	// - Intel: 0 1 2 3
+	// - RISCV: Mach3 Supe1 User0
 	static auto
 		Create(void* entry, byte ring) -> ProcessBlock*;// newProcess
 	static auto

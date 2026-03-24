@@ -29,6 +29,7 @@ struct mec_gdt {
 	descriptor_t cor3;
 	//
 	gate_t rout;
+	descriptor_t ldt;
 	_CPU_descriptor_tss tss;// cpu0
 };// on global linear area
 
@@ -42,6 +43,7 @@ enum {
 	SegCoR3 = 8 * 6,
 	//
 	SegCall = offsetof(mec_gdt, rout),
+	SegGLDT = offsetof(mec_gdt, ldt),
 	SegTSS0 = offsetof(mec_gdt, tss),
 	// flap32: LDT_App1, TSS_App1, LDT_App2, TSS_App2, ...
 };
@@ -107,7 +109,7 @@ extern byte BSS_ENTO, BSS_ENDO;
 extern uni::Mempool mempool;
 
 // class Memory
-#if (_MCCA & 0xFF00) == 0x8600
+#if 1
 // {TEMP} 0x00000000_00000000..0x00000001_00000000
 class Memory : public trait::Malloc
 {

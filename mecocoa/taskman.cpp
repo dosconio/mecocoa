@@ -16,6 +16,12 @@ static SysMessage _BUF_Message[64];
 Queue<SysMessage> message_queue(_BUF_Message, numsof(_BUF_Message));
 
 
+#if _MCCA == 0x8632
+constexpr unsigned ldt_entry_cnt = 8;
+alignas(16) static descriptor_t _LDT[ldt_entry_cnt];
+static void make_LDT(descriptor_t* ldt_alias, byte ring);
+#endif
+
 #if (_MCCA & 0xFF00) == 0x8600
 
 static int ProcCmp(pureptr_t a, pureptr_t b) {
@@ -40,7 +46,15 @@ void Taskman::Initialize(stduint cpuid) {
 	#if _MCCA == 0x8664
 	//{TODO} Map more cores, cpu1 at 0x0000FFFFFFFF8000ull...
 	kernel_paging.Map(0x0000FFFFFFFFF000ull, _IMM(higher_stacks[0]), 0x1000, PAGESIZE_4KB, PGPROP_present | PGPROP_writable);// High Part
+	
+	#elif _MCCA == 0x8632
+	make_LDT(_LDT, 3);
+	const auto LDTLength = sizeof(_LDT) - 1;
+	descriptor_t* const GDT = (descriptor_t*)mecocoa_global->gdt_ptr;
+	Descriptor32Set(&GDT[SegGLDT / 8], mglb(&_LDT), LDTLength, _Dptr_LDT, 0, 0 /* is_sys */, 1 /* 32-b */, 0 /* not-4k */);// [0x00408200]
+
 	#endif
+	// x64 do not use LDT
 	
 	// Type = 10x1 + L=0 +  D/B=0 + 16B  64-bit TSS
 	//             + L=1 OR D/B=1        32-bit TSS
@@ -76,42 +90,15 @@ auto Taskman::AllocateTask() -> ProcessBlock* {
 }
 
 #if _MCCA == 0x8632
-// LocaleDescriptor32SetFromELF32
-// 0
-// 1 code: 00000000\~FFFFFFFF
-// 2 data: 00000000\~FFFFFFFF
-// 3
-// 4 ss-0: 00000000\~FFFFFFFF
-// 5 ss-1: 00000000\~FFFFFFFF
-// 6 ss-2: 00000000\~FFFFFFFF
-// 7 ss-3: 00000000\~7FFFFFFF
 #define FLAT_CODE_R3_PROP 0x00CFFA00
 #define FLAT_DATA_R3_PROP 0x00CFF200
-#define FLAT_DATA_R2_PROP 0x00CFD200
-#define FLAT_DATA_R1_PROP 0x00CFB200
-#define FLAT_DATA_R0_PROP 0x00CF9200
-/*
-* 0x0000 Local Descriptor Table
-* 0x0100 Process Control Block
-* 0x1000 Stack R0
-* 0x1400 Stack R1
-* 0x1800 Stack R2
-* 0x1C00 Stack R3
-*/
-
 static void make_LDT(descriptor_t* ldt_alias, byte ring) {
-	ldt_alias[0]._data = 0;
-	// code32
-	ldt_alias[1]._data = (uint64(FLAT_CODE_R3_PROP) << 32) | 0x0000FFFF;
-	ldt_alias[1].DPL = ring;
-	// data
-	ldt_alias[2]._data = (uint64(FLAT_DATA_R3_PROP) << 32) | 0x0000FFFF;
-	ldt_alias[2].DPL = ring;
-	ldt_alias[3]._data = 0;// kept for RONL
-	ldt_alias[4]._data = (uint64(FLAT_DATA_R0_PROP) << 32) | 0x0000FFFF;
-	ldt_alias[5]._data = (uint64(FLAT_DATA_R1_PROP) << 32) | 0x0000FFFF;
-	ldt_alias[6]._data = (uint64(FLAT_DATA_R2_PROP) << 32) | 0x0000FFFF;
-	ldt_alias[7]._data = (uint64(FLAT_DATA_R3_PROP) << 32) | 0x0000FFFF;
+	for0(i, 4) {
+		ldt_alias[i]._data = (uint64(FLAT_CODE_R3_PROP) << 32) | 0x0000FFFF;
+		ldt_alias[i].DPL = i;
+		ldt_alias[i + 4]._data = (uint64(FLAT_DATA_R3_PROP) << 32) | 0x0000FFFF;
+		ldt_alias[i + 4].DPL = i;
+	}
 	// EXPERIENCE: Although the stack segment is not Expand-down, the ESP always decreases. The property of GDTE is just for boundary check.
 }
 
@@ -139,15 +126,15 @@ ProcessBlock* Taskman::Create(void* entry, byte ring)
 	new_ctx.SP = (stack_top & ~0xFlu) - 8;
 	new_ctx.RING = ring;
 	treat<uint32>(&new_ctx.floating_point_context[24]) = 0x1F80;// ban all MXCSR exception
+	ppb->ring = ring;
 	ppb->stack_size = DEFAULT_STACK_SIZE;
 	ppb->stack_lineaddr = (byte*)stack _TEMP;
 	#elif _MCCA == 0x8632
 	//
 	word parent = SegTSS0;// Kernel Task
 
-	word LDTSelector = GDT_Alloc() / 8;
 	word TSSSelector = GDT_Alloc() / 8;//{TODO} - One Global LDT
-	// outsfmt("LDTSel %d, TSSSel %d\n\r", LDTSelector, TSSSelector);
+	ppb->ring = ring;
 	ppb->stack_size = 0x1000;
 	ppb->stack_lineaddr = (byte*)mempool.allocate(ppb->stack_size, 12);
 	ppb->stack_levladdr = ring ? (byte*)mempool.allocate(ppb->stack_size, 12) : ppb->stack_lineaddr;
@@ -188,11 +175,11 @@ ProcessBlock* Taskman::Create(void* entry, byte ring)
 	//{} stack over-check - single segment
 
 	// now not allow IOMap
-	TSS->ES = 8*2 + 0b100 + ring;
+	TSS->ES = 8 * 7 + 0b100 + ring;
 	TSS->Padding3 = 0;
-	TSS->CS = 8*1 + 0b100 + ring;
+	TSS->CS = ring ? 8 * ring + 0b100 + ring : SegCo32;
 	TSS->Padding4 = 0;
-	TSS->SS = 8*(4+ring) + 0b100 + ring;
+	TSS->SS = 8 * (4 + ring) + 0b100 + ring;
 	TSS->Padding5 = 0;
 	TSS->DS = TSS->ES;
 	TSS->Padding6 = 0;
@@ -200,15 +187,13 @@ ProcessBlock* Taskman::Create(void* entry, byte ring)
 	TSS->Padding7 = 0;
 	TSS->GS = TSS->ES;
 	TSS->Padding8 = 0;
-	TSS->LDTDptr = (LDTSelector * 8) + 3; // LDT yo GDT
+	TSS->LDTDptr = SegGLDT + ring; // LDT yo GDT
 	TSS->LDTLength = 8 * 8 - 1;
 	TSS->STRC_15_T = 0;
 	TSS->IO_MAP = sizeof(TSS_t) - 1; // TaskFlat->IOMap? TaskFlat->IOMap-TSS: sizeof(TSS_t)-1;
-	// Then register LDT in GDT
-	Descriptor32Set(&GDT[LDTSelector], _IMM(LDT), TSS->LDTLength, _Dptr_LDT, 0, 0 /* is_sys */, 1 /* 32-b */, 0 /* not-4k */	);// [0x00408200]
+
 	Descriptor32Set(&GDT[TSSSelector], _IMM(TSS), sizeof(TSS_t)-1, _Dptr_TSS386_Available, 0, 0 /* is_sys */, 1 /* 32-b */, 0 /* not-4k */ );// TSS [0x00408900]
 
-	make_LDT(LDT, ring);
 
 	cast<REG_FLAG_t>(TSS->EFLAGS).IF = 1;
 	cast<REG_FLAG_t>(TSS->EFLAGS).IOPL = 0x1;
@@ -253,6 +238,18 @@ static void TaskLoad_Carry(char* vaddr, stduint length, char* phy_src, Paging& p
 	// if page !exist, map it; write it.
 	stduint compensation = _IMM(vaddr) & 0xFFF;
 	stduint v_start1 = _IMM(vaddr) & ~_IMM(0xFFF);
+	if (_IMM(vaddr) < 0x10000) {
+		plogerro("TaskLoad_Carry");
+	}
+	#if _MCCA == 0x8632
+	if (_IMM(vaddr) >= 0x80000000) {
+		plogerro("TaskLoad_Carry");
+	}
+	#elif _MCCA == 0x8664
+	if (_IMM(vaddr) >= 0xFFFFC0000000) {
+		plogerro("TaskLoad_Carry");
+	}
+	#endif
 	// ploginfo("TaskLoad_Carry(%[x], %[x], %[x])  pg(%[x])", vaddr, length, phy_src, pg);
 	for0(i, (length + compensation + 0xFFF) / 0x1000) {
 		auto page_entry = pg.getEntry(_IMM(v_start1));
@@ -281,6 +278,7 @@ ProcessBlock* TaskLoad(BlockTrait* source, void* addr, byte ring)
 	word parent = SegTSS0;// Kernel Task
 	//
 	ProcessBlock* pb = Taskman::AllocateTask();
+	pb->ring = ring;
 	
 	pb->stack_size = 0x4000;
 	auto stack_norm = (byte*)mempool.allocate(pb->stack_size, 12);
@@ -290,7 +288,6 @@ ProcessBlock* TaskLoad(BlockTrait* source, void* addr, byte ring)
 
 	
 	#if _MCCA == 0x8632
-	word LDTSelector = GDT_Alloc() / 8;
 	word TSSSelector = GDT_Alloc() / 8;
 	descriptor_t* LDT = (descriptor_t*)(pb->LDT);
 	descriptor_t* GDT = (descriptor_t*)mecocoa_global->gdt_ptr;
@@ -389,11 +386,11 @@ ProcessBlock* TaskLoad(BlockTrait* source, void* addr, byte ring)
 	//{TODO} Stack Over Check - single segment
 	//{TODO} allow IOMap Version
 	#if _MCCA == 0x8632
-	TSS->ES = 8 * 2 + 0b100 + ring;
+	TSS->ES = 8 * 7 + 0b100 + ring;
 	TSS->Padding3 = 0;
-	TSS->CS = 8*1 + 0b100 + ring;
+	TSS->CS = ring ? 8 * ring + 0b100 + ring : SegCo32;
 	TSS->Padding4 = 0;
-	TSS->SS = 8*(4+ring) + 0b100 + ring;
+	TSS->SS = 8 * (4 + ring) + 0b100 + ring;
 	TSS->Padding5 = 0;
 	TSS->DS = TSS->ES;
 	TSS->Padding6 = 0;
@@ -401,16 +398,12 @@ ProcessBlock* TaskLoad(BlockTrait* source, void* addr, byte ring)
 	TSS->Padding7 = 0;
 	TSS->GS = TSS->ES;
 	TSS->Padding8 = 0;
-	TSS->LDTDptr = (LDTSelector * 8) + 3; // LDT yo GDT
+	TSS->LDTDptr = SegGLDT + ring; // LDT yo GDT
 	TSS->LDTLength = 8 * 8 - 1;
 	TSS->STRC_15_T = 0;
 	TSS->IO_MAP = sizeof(TSS_t) - 1; // TaskFlat->IOMap? TaskFlat->IOMap-TSS: sizeof(TSS_t)-1;
 
-	// Then register LDT in GDT, do not add 0x80000000
-	Descriptor32Set(&GDT[LDTSelector], _IMM(LDT) + 0x80000000, TSS->LDTLength, _Dptr_LDT, 0, 0 /* is_sys */, 1 /* 32-b */, 0 /* not-4k */	);// [0x00408200]
 	Descriptor32Set(&GDT[TSSSelector], _IMM(TSS) + 0x80000000, sizeof(TSS_t)-1, _Dptr_TSS386_Available, 0, 0 /* is_sys */, 1 /* 32-b */, 0 /* not-4k */ );// TSS [0x00408900]
-
-	make_LDT(LDT, ring);
 
 	cast<REG_FLAG_t>(TSS->EFLAGS).IF = 1;
 	if (ring <= 1) TSS->EFLAGS |= _IMM1 << 12;
@@ -446,8 +439,7 @@ static stduint task_fork(ProcessBlock* fo, const CallgateFrame* frame)
 
 	ProcessBlock* pb = Taskman::AllocateTask();
 
-	Letvar(fo_code, descriptor_t*, &fo->LDT[2]);
-	auto ring = fo_code->DPL;
+	auto ring = fo->ring;
 
 	pb->stack_size = fo->stack_size;
 	auto stack_norm = (byte*)mempool.allocate(pb->stack_size, 12);
@@ -455,16 +447,15 @@ static stduint task_fork(ProcessBlock* fo, const CallgateFrame* frame)
 	pb->stack_lineaddr = (byte*)0x1000;
 	pb->stack_levladdr = stack_ring;
 
-	word LDTSelector = GDT_Alloc() / 8;//{TEMP}
 	word TSSSelector = GDT_Alloc() / 8;//{TEMP}
-	descriptor_t* LDT = (descriptor_t*)(pb->LDT);
+
 	descriptor_t* GDT = (descriptor_t*)mecocoa_global->gdt_ptr;
 	TSS_t* TSS = &pb->TSS;
 	*TSS = fo->TSS;
 	TSS->LastTSS = parent;
 	TSS->NextTSS = 0;
 	//
-	TSS->LDTDptr = LDTSelector * 8 + 3;
+	TSS->LDTDptr = SegGLDT + ring;
 
 	// ---- Copy CR3 Mapping ---- //
 	// - Segments Mapping with coping
@@ -504,8 +495,8 @@ static stduint task_fork(ProcessBlock* fo, const CallgateFrame* frame)
 	TSS->SS1 = 8 * 5 + 4 + 1;// 4:LDT 8*5:SS1 1:Ring1
 	TSS->SS2 = 8 * 6 + 4 + 2;// 4:LDT 8*6:SS2 2:Ring2
 	//
-	TSS->ES = 8 * 2 + 0b100 + ring;
-	TSS->CS = 8 * 1 + 0b100 + ring;
+	TSS->ES = 8 * 7 + 0b100 + ring;
+	TSS->CS = ring ? 8 * ring + 0b100 + ring : SegCo32;
 	TSS->SS = 8 * (4 + ring) + 0b100 + ring;// ss0
 	TSS->DS = TSS->ES;
 	TSS->FS = TSS->ES;
@@ -532,11 +523,7 @@ static stduint task_fork(ProcessBlock* fo, const CallgateFrame* frame)
 
 	//	
 
-	// Then register LDT in GDT, do not add 0x80000000
-	Descriptor32Set(&GDT[LDTSelector], _IMM(LDT) + 0x80000000, TSS->LDTLength, _Dptr_LDT, 0, 0 /* is_sys */, 1 /* 32-b */, 0 /* not-4k */	);// [0x00408200]
 	Descriptor32Set(&GDT[TSSSelector], _IMM(TSS) + 0x80000000, sizeof(TSS_t)-1, _Dptr_TSS386_Available, 0, 0 /* is_sys */, 1 /* 32-b */, 0 /* not-4k */ );// TSS [0x00408900]
-
-	make_LDT(LDT, ring);
 
 	// ---- File ---- //
 	for0a(i, pb->pfiles) if (pb->pfiles[i]) {

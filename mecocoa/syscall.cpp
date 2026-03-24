@@ -4,6 +4,7 @@
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 #include "../include/mecocoa.hpp"
 
+#include <cpp/Device/UART>
 #include <c/driver/keyboard.h>
 
 #define DEFSYSC static stdsint
@@ -272,39 +273,12 @@ stduint Handint_SYSCALL(CallgateFrame* frame) {
 }
 
 __attribute__((optimize("O0")))
-static stduint syscall0(syscall_t callid) {
-	stduint ret;
-	__asm("mov  %0, %%eax" : : "m"(callid));
-	CallFar(0, SegCall);
-	__asm("mov  %%eax, %0" : "=m"(ret));
-	return ret;
-}
-__attribute__((optimize("O0")))
-static stduint syscall1(syscall_t callid, stduint para1) {
-	stduint ret;
-	__asm("mov  %0, %%eax" : : "m"(callid));
-	__asm("mov  %0, %%ecx" : : "m"(para1));
-	CallFar(0, SegCall);
-	__asm("mov  %%eax, %0" : "=m"(ret));
-	return ret;
-}
-__attribute__((optimize("O0")))
-static stduint syscall2(syscall_t callid, stduint para1, stduint para2) {
-	stduint ret;
-	__asm("mov  %0, %%eax" : : "m"(callid));
-	__asm("mov  %0, %%ecx" : : "m"(para1));
-	__asm("mov  %0, %%edx" : : "m"(para2));
-	CallFar(0, SegCall);
-	__asm("mov  %%eax, %0" : "=m"(ret));
-	return ret;
-}
-__attribute__((optimize("O0")))
 static stduint syscall3(syscall_t callid, stduint para1, stduint para2, stduint para3) {
 	stduint ret;
-	__asm("mov  %0, %%eax" : : "m"(callid));
-	__asm("mov  %0, %%ecx" : : "m"(para1));
-	__asm("mov  %0, %%edx" : : "m"(para2));
 	__asm("mov  %0, %%ebx" : : "m"(para3));
+	__asm("mov  %0, %%edx" : : "m"(para2));
+	__asm("mov  %0, %%ecx" : : "m"(para1));
+	__asm("mov  %0, %%eax" : : "m"(callid));
 	CallFar(0, SegCall);
 	__asm("mov  %%eax, %0" : "=m"(ret));
 	return ret;
@@ -313,31 +287,11 @@ __attribute__((optimize("O0")))
 stduint syscall(syscall_t callid, ...) {
 	// GCC style
 	Letpara(paras, callid);
-	stduint p1, p2, p3;
-	switch (syscall_paracnts[_IMM(callid)])
-	{
-	case 0:
-		return syscall0(callid);
-		break;
-	case 1:
-		p1 = para_next(paras, stduint);
-		return syscall1(callid, p1);
-		break;
-	case 2:
-		p1 = para_next(paras, stduint);
-		p2 = para_next(paras, stduint);
-		return syscall2(callid, p1, p2);
-		break;
-	case 3:
-		p1 = para_next(paras, stduint);
-		p2 = para_next(paras, stduint);
-		p3 = para_next(paras, stduint);
-		return syscall3(callid, p1, p2, p3);
-		break;
-	default:
-		break;
+	stduint p[3] = { };
+	for0(i, syscall_paracnts[_IMM(callid)]) {
+		p[i] = para_next(paras, stduint);
 	}
-	return ~_IMM0;
+	return syscall3(callid, p[0], p[1], p[2]);
 }
 
 // No dynamic core
@@ -382,5 +336,37 @@ DEFSYSC sysc_EXIT(stduint code) {
 	printlog(_LOG_FATAL, "sysc_EXIT");// unreachable
 	return -1;
 }
+
+#endif
+
+#if (_MCCA & 0xFF00) == 0x1000
+
+static int sys_gethid(unsigned int *ptr_hid)
+{
+	ploginfo("--> sys_gethid, arg0 = %[x]\n", ptr_hid);
+	if (ptr_hid == NULL) {
+		return -1;
+	} else {
+		*ptr_hid = getMHARTID();
+		return 0;
+	}
+}
+
+void syscall(NormalTaskContext* cxt)
+{
+	auto syscall_num = (syscall_t)cxt->a7;
+
+	switch (syscall_num) {
+	case syscall_t::GET_CORE_ID:
+		cxt->a0 = sys_gethid((unsigned int *)(cxt->a0));
+		break;
+	default:
+		UART0.OutFormat("Unknown syscall no: %d\n", syscall_num);
+		cxt->a0 = -1;
+	}
+
+	return;
+}
+
 
 #endif
