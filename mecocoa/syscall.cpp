@@ -343,7 +343,7 @@ DEFSYSC sysc_EXIT(stduint code) {
 
 static int sys_gethid(unsigned int *ptr_hid)
 {
-	ploginfo("--> sys_gethid, arg0 = %[x]\n", ptr_hid);
+	ploginfo("--> sys_gethid, arg0 = %[x]", ptr_hid);
 	if (ptr_hid == NULL) {
 		return -1;
 	} else {

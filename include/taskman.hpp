@@ -91,7 +91,6 @@ public _Comment(State):
 		Pended,
 		Uninit,
 		Exited,
-		// Waiting,// call wait()
 		Hanging,// aka Zobmie, call exit()
 		Invalid,
 	} state = State::Uninit;
@@ -132,7 +131,6 @@ public: // _Comment(Console);
 public:// old design: have not updated completely
 	#if _MCCA == 0x8632
 
-	descriptor_t LDT[0x100 / byteof(descriptor_t)];
 	TSS_t TSS;// aka state-frame
 
 

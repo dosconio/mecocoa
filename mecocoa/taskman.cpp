@@ -19,16 +19,26 @@ Queue<SysMessage> message_queue(_BUF_Message, numsof(_BUF_Message));
 #if _MCCA == 0x8632
 constexpr unsigned ldt_entry_cnt = 8;
 alignas(16) static descriptor_t _LDT[ldt_entry_cnt];
-static void make_LDT(descriptor_t* ldt_alias, byte ring);
+#define FLAT_CODE_R3_PROP 0x00CFFA00
+#define FLAT_DATA_R3_PROP 0x00CFF200
+static void make_LDT(descriptor_t* ldt_alias, byte ring) {
+	for0(i, 4) {
+		ldt_alias[i]._data = (uint64(FLAT_CODE_R3_PROP) << 32) | 0x0000FFFF;
+		ldt_alias[i].DPL = i;
+		ldt_alias[i + 4]._data = (uint64(FLAT_DATA_R3_PROP) << 32) | 0x0000FFFF;
+		ldt_alias[i + 4].DPL = i;
+	}
+	// : Although the stack segment is not Expand-down, the ESP always decreases.
+}
 #endif
 
-#if (_MCCA & 0xFF00) == 0x8600
 
 static int ProcCmp(pureptr_t a, pureptr_t b) {
 	return treat<ProcessBlock>(((Dnode*)a)->offs).pid -
-		treat<ProcessBlock>(((Dnode*)b)->offs).pid;
+	treat<ProcessBlock>(((Dnode*)b)->offs).pid;
 }
 void Taskman::Initialize(stduint cpuid) {
+	#if (_MCCA & 0xFF00) == 0x8600
 	if (cpuid || PCU_CORES_TSS[0]) return; // already initialized
 	PCU_CORES = PCU_CORES_MAX;
 	auto addr = (TSS_t*)mem.allocate(sizeof(TSS_t) * PCU_CORES);
@@ -47,34 +57,40 @@ void Taskman::Initialize(stduint cpuid) {
 	//{TODO} Map more cores, cpu1 at 0x0000FFFFFFFF8000ull...
 	kernel_paging.Map(0x0000FFFFFFFFF000ull, _IMM(higher_stacks[0]), 0x1000, PAGESIZE_4KB, PGPROP_present | PGPROP_writable);// High Part
 	
-	#elif _MCCA == 0x8632
+	#elif _MCCA == 0x8632// x64 do not use LDT
 	make_LDT(_LDT, 3);
 	const auto LDTLength = sizeof(_LDT) - 1;
 	descriptor_t* const GDT = (descriptor_t*)mecocoa_global->gdt_ptr;
 	Descriptor32Set(&GDT[SegGLDT / 8], mglb(&_LDT), LDTLength, _Dptr_LDT, 0, 0 /* is_sys */, 1 /* 32-b */, 0 /* not-4k */);// [0x00408200]
-
 	#endif
-	// x64 do not use LDT
+	
 	
 	// Type = 10x1 + L=0 +  D/B=0 + 16B  64-bit TSS
 	//             + L=1 OR D/B=1        32-bit TSS
 	mecocoa_global->gdt_ptr->tss.setRange(mglb(PCU_CORES_TSS[0]), sizeof(TSS_t) - 1);
+	loadTask(SegTSS0);
+
+	#endif// (_MCCA & 0xFF00) == 0x8600
+
+	// register kernel as pid 0
 	auto kernel_task = AllocateTask();
 	min_available_left = chain.Append(kernel_task);
 	kernel_task->state = ProcessBlock::State::Running;
 	kernel_task->paging.root_level_page = kernel_paging.root_level_page;
 	Taskman::EnqueueReady(kernel_task);
-
-	loadTask(SegTSS0);
-	//
-	pcurrent[cpuid] = 0;// kernel
+	pcurrent[cpuid] = 0;
 	//
 	chain.Compare_f = ProcCmp;
 	min_available_pid = 1;
 
-}
+	#if (_MCCA & 0xFF00) == 0x1000
+	setMSCRATCH _IMM(&kernel_task->context);
+	setMIE(getMIE() | _MIE_MSIE);// software interrupts
+	kernel_task->priority = 0;
+	kernel_task->time_slice = 4;
+	#endif
 
-#endif
+}
 
 // ---- . ----
 
@@ -89,20 +105,6 @@ auto Taskman::AllocateTask() -> ProcessBlock* {
 	return ppb;
 }
 
-#if _MCCA == 0x8632
-#define FLAT_CODE_R3_PROP 0x00CFFA00
-#define FLAT_DATA_R3_PROP 0x00CFF200
-static void make_LDT(descriptor_t* ldt_alias, byte ring) {
-	for0(i, 4) {
-		ldt_alias[i]._data = (uint64(FLAT_CODE_R3_PROP) << 32) | 0x0000FFFF;
-		ldt_alias[i].DPL = i;
-		ldt_alias[i + 4]._data = (uint64(FLAT_DATA_R3_PROP) << 32) | 0x0000FFFF;
-		ldt_alias[i + 4].DPL = i;
-	}
-	// EXPERIENCE: Although the stack segment is not Expand-down, the ESP always decreases. The property of GDTE is just for boundary check.
-}
-
-#endif
 
 ProcessBlock* Taskman::Create(void* entry, byte ring)
 {
@@ -139,7 +141,6 @@ ProcessBlock* Taskman::Create(void* entry, byte ring)
 	ppb->stack_lineaddr = (byte*)mempool.allocate(ppb->stack_size, 12);
 	ppb->stack_levladdr = ring ? (byte*)mempool.allocate(ppb->stack_size, 12) : ppb->stack_lineaddr;
 
-	descriptor_t* LDT = (descriptor_t*)(ppb->LDT);
 	descriptor_t* GDT = (descriptor_t*)mecocoa_global->gdt_ptr;
 
 	TSS_t* TSS = &ppb->TSS;
@@ -199,7 +200,14 @@ ProcessBlock* Taskman::Create(void* entry, byte ring)
 	cast<REG_FLAG_t>(TSS->EFLAGS).IOPL = 0x1;
 
 	if (0) outsfmt("TSS %d at 0x%[x], SP=0x%[32H]\n\r", TSSSelector, ppb->stack_lineaddr, TSS->ESP);
+	#elif (_MCCA & 0xFF00) == 0x1000
+	auto& ctx = ppb->context;
+	ctx.sp = (stduint)mempool.allocate(DEFAULT_STACK_SIZE, 12) + DEFAULT_STACK_SIZE - 0x10;
+	ctx.mepc = _IMM(entry);
+	ctx.mstatus = (ring << 11) | _MSTATUS_MPIE;// 0 or 1 or 3
 
+	ppb->priority = (ring == 0) ? 12 : 0;
+	ppb->time_slice = (ring == 0) ? 0 : 2;
 	#endif
 	Append(ppb);
 	return ppb;
@@ -209,14 +217,14 @@ bool Taskman::ExitCurrent(stduint code) {
 	auto pid = CurrentPID();
 	ploginfo("AppExit: %[u] with code 0x%[x]", pid, code);
 
-	// Ver 1
+	// [r] Ver 1
 	// _ASM("STI");
 	// loop HALT();
 
-	// Ver 2
+	// [r] Ver 2
 	auto pb = Locate(pid);
 	DequeueReady(pb);
-	pb->Block(ProcessBlock::BlockReason::BR_Waiting);
+	pb->state = ProcessBlock::State::Hanging;
 	Schedule(true);
 	//{} Add to zombie vector
 
@@ -289,7 +297,6 @@ ProcessBlock* TaskLoad(BlockTrait* source, void* addr, byte ring)
 	
 	#if _MCCA == 0x8632
 	word TSSSelector = GDT_Alloc() / 8;
-	descriptor_t* LDT = (descriptor_t*)(pb->LDT);
 	descriptor_t* GDT = (descriptor_t*)mecocoa_global->gdt_ptr;
 	TSS_t* TSS = &pb->TSS;
 	TSS->LastTSS = parent;

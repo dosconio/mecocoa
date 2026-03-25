@@ -177,14 +177,13 @@ void Handint_LAPICT(/*InterruptFrame* frame*/) {
 #if (_MCCA & 0xFF00) == 0x1000
 
 uint64 last_schepoint;
-_TEMP void schedule();
 void timer_handler()
 {
 	tick++;
 	// ploginfo("tick: %d\n", tick);
 	last_schepoint += TIMER_INTERVAL;
 	clint.Load(getMHARTID(), last_schepoint);
-	schedule();
+	Taskman::Schedule();
 }
 
 #endif

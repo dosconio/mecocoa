@@ -164,7 +164,6 @@ void exception_handler(sdword iden, dword para) {
 
 
 void external_interrupt_handler();
-void schedule();
 
 _ESYM_C
 stduint trap_handler(stduint epc, stduint cause, NormalTaskContext* cxt)
@@ -175,9 +174,9 @@ stduint trap_handler(stduint epc, stduint cause, NormalTaskContext* cxt)
 		/* Asynchronous trap - interrupt */
 		switch (cause_code) {
 		case 3:
-			ploginfo("software interruption!\n");
+			ploginfo("software interruption!");
 			clint.MSIP(getMHARTID(), MSIP_Type::AckRupt);
-			schedule();
+			Taskman::Schedule(true);
 			break;
 		case 7:
 			ploginfo("timer interruption!");
@@ -195,7 +194,7 @@ stduint trap_handler(stduint epc, stduint cause, NormalTaskContext* cxt)
 	else { // Synchronous trap - exception
 		switch (cause_code) {
 		case 8:
-			ploginfo("System call from U-mode!\n");
+			ploginfo("System call from U-mode!");
 			syscall(cxt);
 			cxt->mepc += 4;
 			return_pc += 4;

@@ -90,11 +90,11 @@ trap_vector:
 
 # ---- ---- TASKMAN ---- ----
 
-# ---- void switch_to(struct context *next);
+# ---- void DirectTaskContext(struct context *next);
 # a0: pointer to the context of the next task
-.globl switch_to
+.globl DirectTaskContext
 .balign 4
-switch_to:
+DirectTaskContext:
 	csrw	mscratch, a0		# mscratch -> context of the next task
 
 	LOAD    t0, 33*SIZE_REG(a0)

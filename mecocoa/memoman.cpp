@@ -52,14 +52,17 @@ void* Memory::physical_allocate(usize siz) {
 
 // ---- INTERFACE ----
 
-#if (_MCCA & 0xFF00) == 0x8600
+#if 1
 #if _MCCA == 0x8632
 void* (*uni::_physical_allocate)(stduint size) = 0;
 #endif
 
 void* Memory::allocate(stduint siz, stduint alignment, stduint boundary) {
 	(void)boundary;
-	if (!map_ready) return nullptr;
+	if (!map_ready) {
+		plogerro("no pg-mapping");
+		return nullptr;
+	}
 	if (siz & 0xFFF) siz = (siz & ~_IMM(0xFFF)) + 0x1000;
 	void* ret = nil;
 	// find a available page in bitmap
@@ -85,12 +88,7 @@ void* Memory::allocate(stduint siz, stduint alignment, stduint boundary) {
 		return nullptr;
 	}
 	ret = (void*)(sum_beg << 12);
-	// ploginfo("malc %x %x %[x]", sum_beg, sum_beg + siz, ret);
 	Memory::pagebmap->add_range(sum_beg, sum_beg + siz, false);
-
-	#if _MCCA == 0x8632
-	kernel_paging.Map(_IMM(ret), _IMM(ret), siz << 12, PAGESIZE_4KB, PGPROP_present | PGPROP_writable | PGPROP_user_access | PGPROP_weak);
-	#endif
 
 	// printlog(_LOG_INFO, "malloc(0x%[32H], %[x])", ret, siz << 12);
 	return ret;
@@ -98,12 +96,6 @@ void* Memory::allocate(stduint siz, stduint alignment, stduint boundary) {
 bool Memory::deallocate(void* ptr, stduint size _Comment(zero_for_block)) {
 	_TODO return false;
 }
-
-#else 
-
-void* Memory::allocate(stduint siz, stduint alignment, stduint boundary) { _TODO return nullptr; }
-
-bool Memory::deallocate(void* ptr, stduint size _Comment(zero_for_block)) { _TODO return false; }
 
 #endif
 

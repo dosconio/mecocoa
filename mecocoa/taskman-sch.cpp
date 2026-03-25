@@ -186,10 +186,7 @@ ifContinueProcess(ProcessBlock* old_pb) -> bool {
 				// 4..7         => 3 slices
 				// 8..11        => 2 slices
 				// 12..15       => 1 slice
-				if (old_pb->priority <= 3) old_pb->time_slice = 4;
-				else if (old_pb->priority <= 7) old_pb->time_slice = 3;
-				else if (old_pb->priority <= 11) old_pb->time_slice = 2;
-				else old_pb->time_slice = 1;
+				old_pb->time_slice = 3 - (old_pb->priority >> 2);
 			}
 		} else {
 			// RT management (B-Type)
@@ -230,8 +227,7 @@ ifContinueProcess(ProcessBlock* old_pb) -> bool {
  */
 
 // before calling, the task may be pended
-// auto Taskman::Schedule(void* timeout, ...)->decltype(Schedule(timeout))
-#if (_MCCA & 0xFF00) == 0x8600
+#if 1
 auto Taskman::Schedule(bool omit_slice)->decltype(Schedule())
 {
 	using PBS = ProcessBlock::State;
@@ -241,15 +237,24 @@ auto Taskman::Schedule(bool omit_slice)->decltype(Schedule())
 	stduint cpuid = getID();
 	auto old_pb = Taskman::Locate(CurrentPID());
 	if (!old_pb) {
-		plogerro("Taskman::Schedule: No current task found for CPU %d (crtpid=%u)", cpuid, CurrentPID());
+		plogerro("Taskman:Schedule: No current task found for CPU %d (crtpid=%u)", cpuid, CurrentPID());
 		HALT();
 		return;
 	}
-	if (!omit_slice && ifContinueProcess(old_pb)) {
-		#if _MCCA == 0x8632
-		task_switch_enable = true;
-		#endif
-		return;
+	if (!omit_slice) {
+		if (ifContinueProcess(old_pb)) {
+			#if _MCCA == 0x8632
+			task_switch_enable = true;
+			#endif
+			return;
+		}
+	}
+	else {
+		if (old_pb->state == PBS::Running) {
+			Taskman::DequeueReady(old_pb);
+			old_pb->state = PBS::Ready;
+			Taskman::EnqueueExpired(old_pb);
+		}
 	}
 	auto new_pb = PickNext();
 	if (!new_pb) new_pb = Taskman::Locate(0);
@@ -275,8 +280,10 @@ auto Taskman::Schedule(bool omit_slice)->decltype(Schedule())
 	#if _MCCA == 0x8632
 	task_switch_enable = true;//{TODO} Unlock
 	jmpTask(T_pid2tss(CurrentPID()));//[outdated]
-	#else
+	#elif _MCCA == 0x8664
 	SwitchTaskContext(&new_pb->context, &old_pb->context);
+	#elif (_MCCA & 0xFF00) == 0x1000
+	DirectTaskContext(&new_pb->context);
 	#endif
 }
 #else

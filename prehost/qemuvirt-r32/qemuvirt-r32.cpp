@@ -9,88 +9,42 @@
 
 OstreamTrait* con0_out = &UART0;
 
-int task_create(void (*start_routin)(), int ring = 0/*0u 1s 3m*/);
-void schedule();
 void user_task0(void);
 void user_task1(void);
 
+constexpr inline static stduint operator "" Baud(unsigned long long i) { return i; }
 
 _ESYM_C
 void _entry()
 {
 	//[!] cannot use FLOATING operation (why)
-	UART0.setMode(115200);
+	UART0.setMode(115200Baud);
 	ploginfo("Hello Mcca-RV%u~ =OwO=", __BITS__);
 	if (!Memory::initialize('ANIF', NULL)) {
 		printlog(_LOG_FATAL, "Memory Initialize Failed.");
 		loop HALT();
 	}
+	const unsigned mempool_lenN = 0x20000;
+	mempool.Append(Slice{ _IMM(mem.allocate(mempool_lenN)), mempool_lenN });
+	//{} Cache_t::enAble();
+	Taskman::Initialize();
 
-	// Interrupt
 	IC.Reset();
-
+	// UART0
 	UART0.enInterrupt();
 	UART0.setInterruptPriority(1, nil);
-
-	IC.enAble(true);
-
+	// CLINT Clock
 	last_schepoint = clint.Read() + TIMER_INTERVAL;
 	clint.Load(getMHARTID(), last_schepoint);
 	clint.enInterrupt();
+	
+	Taskman::Create((void*)user_task0, 0);
+	Taskman::Create((void*)user_task1, 0);
 
-	// Task
-	setMSCRATCH(0);
-	setMIE(getMIE() | _MIE_MSIE);// software interrupts
-	task_create(user_task0);
-	task_create(user_task1);
-	schedule();
-
-	while (1);
-}
-
-_ESYM_C void switch_to(NormalTaskContext *next);
-
-#define MAX_TASKS 10
-#define STACK_SIZE 1024
-/*
- * In the standard RISC-V calling convention, the stack pointer sp
- * is always 16-byte aligned.
- */
-uint8_t __attribute__((aligned(16))) task_stack[MAX_TASKS][STACK_SIZE];
-NormalTaskContext ctx_tasks[MAX_TASKS];
-
-static int _top = 0;
-static int _current = -1;
-
-void schedule()
-{
-	if (_top <= 0) {
-		return;
-	}
-	_current = (_current + 1) % _top;
-	NormalTaskContext *next = &(ctx_tasks[_current]);
-	switch_to(next);
-}
-
-/*
- * DESCRIPTION
- * 	Create a task.
- * 	- start_routin: task routine entry
- * RETURN VALUE
- * 	0: success
- * 	-1: if error occured
- */
-int task_create(void (*start_routin)(void), int ring)
-{
-	if (_top < MAX_TASKS) {
-		ctx_tasks[_top].sp = (stduint) &task_stack[_top][STACK_SIZE];
-		ctx_tasks[_top].mepc = (stduint)start_routin;
-		ctx_tasks[_top].mstatus = (ring << 11) | _MSTATUS_MPIE;// 0 or 1 or 3
-		// ctx->satp = 0;
-		_top++;
-		return 0;
-	} else {
-		return -1;
+	IC.enAble(true);
+	while (1) {
+		UART0.OutFormat("Task K: Running...\n");
+		clint.MSIP(getMHARTID(), MSIP_Type::SofRupt);// Bad Method: Taskman::Schedule(true)
 	}
 }
 

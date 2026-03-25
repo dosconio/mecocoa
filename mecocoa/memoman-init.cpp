@@ -148,6 +148,7 @@ bool Memory::initialize(stduint eax, byte* ebx) {
 	MemSet(mapaddr, 0, bmapsize);
 	Memory::pagebmap = new (_BUF_pagebmap) BmMemoman(mapaddr, bmapsize);
 	Memory::pagebmap->add_range(beg, end, true);
+	map_ready = true;
 
 	// Mempool
 	uni_default_allocator = &mem;
