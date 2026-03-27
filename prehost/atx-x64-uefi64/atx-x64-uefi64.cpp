@@ -45,13 +45,12 @@ void mecocoa(const UefiData& uefi_data_ref)
 	_call_serious = kernel_fail;
 	
 	if (!Memory::initialize('UEFI', (byte*)(&uefi_data.memory_map))) HALT();
-	const unsigned mempool_lenN = 0x20000;
+	const unsigned mempool_lenN = 0x40000;
 	mempool.Append(Slice{ _IMM(mem.allocate(mempool_lenN)), mempool_lenN });
 	mempool.Append(Slice{ _IMM(mem.allocate(mempool_lenN)), mempool_lenN });
 	mempool.Append(Slice{ _IMM(mem.allocate(mempool_lenN)), mempool_lenN });
 	mempool.Append(Slice{ _IMM(mem.allocate(mempool_lenN)), mempool_lenN });
 
-	
 	cons_init();
 	//{} Cache_t::enAble();
 	Taskman::Initialize();
@@ -102,6 +101,7 @@ void mecocoa(const UefiData& uefi_data_ref)
 		auto fat_buffer = new byte[512*2];
 		MemoryBlockDevice memdev({ _IMM(uefi_data.fatvhd_addr), 32 * 1024 * 1024 }, memdev_buffer);
 		FilesysFAT fatvhd(32, memdev, fat_buffer);
+		fatvhd.buffer_fatable = new byte[512];
 		FAT_FileHandle* han;
 		FAT_FileHandle filhan;
 		stduint a[2] = { _IMM(&filhan)/*, _IMM(&filinf) */ };
@@ -112,18 +112,16 @@ void mecocoa(const UefiData& uefi_data_ref)
 			han = (FAT_FileHandle*)fatvhd.search("/", &a);
 			fatvhd.enumer(han, NULL);
 			if (han = (FAT_FileHandle*)fatvhd.search("appa.elf", &a)) {
-				byte* buf = new byte[han->size];
-				if (fatvhd.readfl(han, Slice{ 0,han->size }, buf))
-				{
-					auto pb = TaskLoad(NULL, buf, 3);
+				FileBlockBridge loop_device(&fatvhd, han, han->size, 512);
+				if (auto pb = Taskman::CreateELF(&loop_device, 3)) {
 					Taskman::Append(pb);
 					pb->focus_tty_id = 0;
 					vttys[0]->type = pb->getID();
 				}
-				else plogerro("appa.elf: Fail to load");
-				delete[] buf;
+				else plogerro("appa.elf: Fail to parse or load ELF");
 			}
 		}
+		delete[] (fatvhd.buffer_fatable);
 		delete[] (memdev_buffer);
 		delete[] (fat_buffer);
 	}
@@ -138,7 +136,7 @@ void mecocoa(const UefiData& uefi_data_ref)
 	serv_sysmsg();
 }
 
-
+void DiscPartition::renew_slice() {}
 
 _ESYM_C void __cxa_pure_virtual(void) {}
 void std::__throw_bad_function_call(void) {

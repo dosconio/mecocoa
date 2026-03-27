@@ -4,8 +4,7 @@
 // Docutitle: Kernel
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 // led by bootx64 and atx-x86-flap32.loader; we do not mix long64 and uefi64
-#define _STYLE_RUST
-#include "../../include/atx-x64.hpp"
+#include "../../include/mecocoa.hpp"
 
 // x86: GDT, PG, MEM (for ladder auto-enable PG)
 // x64: GDT, MEM, PG

@@ -88,7 +88,7 @@ _sign_entry() {
 
 	IC.enAble();
 	syscall(syscall_t::OUTC, 'O');
-	Console.OutFormat("hayouuu~!\a\n\r");
+	Console.OutFormat("hayouuu~!\n\r");
 
 	Memory::pagebmap->dump_avail_memory();
 

@@ -250,11 +250,10 @@ auto Taskman::Schedule(bool omit_slice)->decltype(Schedule())
 		}
 	}
 	else {
-		if (old_pb->state == PBS::Running) {
-			Taskman::DequeueReady(old_pb);
-			old_pb->state = PBS::Ready;
-			Taskman::EnqueueExpired(old_pb);
-		}
+		auto s = old_pb->state;
+		Taskman::DequeueReady(old_pb);
+		old_pb->state = PBS::Ready;
+		if (s == PBS::Running || s == PBS::Ready) Taskman::EnqueueExpired(old_pb);
 	}
 	auto new_pb = PickNext();
 	if (!new_pb) new_pb = Taskman::Locate(0);

@@ -165,8 +165,10 @@ public:
 	// ring:
 	// - Intel: 0 1 2 3
 	// - RISCV: Mach3 Supe1 User0
-	static auto
-		Create(void* entry, byte ring) -> ProcessBlock*;// newProcess
+	static auto// newProcess (BIN)
+		Create(void* entry, byte ring) -> ProcessBlock*;
+	static auto// newProcess (ELF)
+		CreateELF(BlockTrait* source, byte ring) -> ProcessBlock*;
 	static auto
 		ExitCurrent(stduint code) -> bool;
 public:// schedule
@@ -208,14 +210,9 @@ enum class TaskmanMsg {
 };
 
 #endif
-#if (_MCCA & 0xFF00) == 0x8600
 
-ProcessBlock* TaskLoad(uni::BlockTrait* source, void* addr, byte ring);//{TODO} for existing R1
 
-#endif
 #if _MCCA == 0x8632
-
-
 inline ProcessBlock* TaskGet(stduint taskid) { return Taskman::Locate(taskid); }
 
 // return zero for success

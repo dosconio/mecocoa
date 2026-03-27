@@ -105,7 +105,20 @@ auto Taskman::AllocateTask() -> ProcessBlock* {
 	return ppb;
 }
 
-
+static stduint _Taskman_Create_Paging(ProcessBlock *ppb, byte ring) {
+	#if _MCCA == 0x8632
+	if (ring == 3) {
+		ppb->paging.Reset();
+		ppb->paging.Map(0x00000000, 0x00000000, 0x00400000, PAGESIZE_4KB, PGPROP_present | PGPROP_writable | PGPROP_user_access | PGPROP_weak);//{TEMP}
+		ppb->paging.Map(0x80000000, 0x00000000, 0x08000000, PAGESIZE_4KB, PGPROP_present | PGPROP_writable | PGPROP_weak);// 0x80 pages
+	}
+	else {
+		ppb->paging.root_level_page = (PageEntry*)getCR3();
+	}
+	return _IMM(ppb->paging.root_level_page);
+	#endif
+	return nil;
+}
 ProcessBlock* Taskman::Create(void* entry, byte ring)
 {
 	auto ppb = AllocateTask();
@@ -148,26 +161,15 @@ ProcessBlock* Taskman::Create(void* entry, byte ring)
 	TSS->NextTSS = 0;
 	TSS->ESP0 = (dword)(ppb->stack_levladdr) + 0xFF0;
 	TSS->SS0 = 8 * 4 + 4 + 0;// 4:LDT 8*4:SS0 0:Ring0 
-	TSS->Padding0 = 0;
 	TSS->ESP1 = (dword)(ppb->stack_levladdr) + 0xFF0;
 	TSS->SS1 = 8 * 5 + 4 + 1;// 4:LDT 8*5:SS1 1:Ring1
-	TSS->Padding1 = 0;
 	TSS->ESP2 = (dword)(ppb->stack_levladdr) + 0xFF0;
 	TSS->SS2 = 8 * 6 + 4 + 2;// 4:LDT 8*6:SS2 2:Ring2
 
 	ppb->priority = (ring == 3) ? 4 : 0;
 	ppb->time_slice = (ring == 3) ? 3 : 4;
-	TSS->Padding2 = 0;
 
-	if (ring == 3) {
-		ppb->paging.Reset();
-		ppb->paging.Map(0x00000000, 0x00000000, 0x00400000, PAGESIZE_4KB, PGPROP_present | PGPROP_writable | PGPROP_user_access | PGPROP_weak);//{TEMP}
-		ppb->paging.Map(0x80000000, 0x00000000, 0x08000000, PAGESIZE_4KB, PGPROP_present | PGPROP_writable | PGPROP_weak);// 0x80 pages
-	}
-	else {
-		ppb->paging.root_level_page = (PageEntry*)getCR3();
-	}
-	TSS->CR3 = _IMM(ppb->paging.root_level_page);
+	TSS->CR3 = _Taskman_Create_Paging(ppb, ring);
 
 	TSS->EIP = _IMM(entry);
 	TSS->EFLAGS = getFlags();
@@ -177,17 +179,11 @@ ProcessBlock* Taskman::Create(void* entry, byte ring)
 
 	// now not allow IOMap
 	TSS->ES = 8 * 7 + 0b100 + ring;
-	TSS->Padding3 = 0;
 	TSS->CS = ring ? 8 * ring + 0b100 + ring : SegCo32;
-	TSS->Padding4 = 0;
 	TSS->SS = 8 * (4 + ring) + 0b100 + ring;
-	TSS->Padding5 = 0;
 	TSS->DS = TSS->ES;
-	TSS->Padding6 = 0;
 	TSS->FS = TSS->ES;
-	TSS->Padding7 = 0;
 	TSS->GS = TSS->ES;
-	TSS->Padding8 = 0;
 	TSS->LDTDptr = SegGLDT + ring; // LDT yo GDT
 	TSS->LDTLength = 8 * 8 - 1;
 	TSS->STRC_15_T = 0;
@@ -206,85 +202,88 @@ ProcessBlock* Taskman::Create(void* entry, byte ring)
 	ctx.mepc = _IMM(entry);
 	ctx.mstatus = (ring << 11) | _MSTATUS_MPIE;// 0 or 1 or 3
 
+	if (ring == 0) {
+		_TODO
+	}
+
 	ppb->priority = (ring == 0) ? 12 : 0;
 	ppb->time_slice = (ring == 0) ? 0 : 2;
 	#endif
 	Append(ppb);
 	return ppb;
 }
-
-bool Taskman::ExitCurrent(stduint code) {
-	auto pid = CurrentPID();
-	ploginfo("AppExit: %[u] with code 0x%[x]", pid, code);
-
-	// [r] Ver 1
-	// _ASM("STI");
-	// loop HALT();
-
-	// [r] Ver 2
-	auto pb = Locate(pid);
-	DequeueReady(pb);
-	pb->state = ProcessBlock::State::Hanging;
-	Schedule(true);
-	//{} Add to zombie vector
-
-	return true;
-}
-
-#ifdef _ARC_x86 // x86:
-#include "../include/filesys.hpp"
-bool task_switch_enable = true;//{} spinlk
-#endif
-
-
-
-#if (_MCCA & 0xFF00) == 0x8600
-
-
-static void TaskLoad_Carry(char* vaddr, stduint length, char* phy_src, Paging& pg)
-{
+static void _CreateELF_Carry(char* vaddr, stduint mem_length, BlockTrait* source, stduint file_offset, stduint file_size, Paging& pg, byte* buffer) {
 	// if page !exist, map it; write it.
 	stduint compensation = _IMM(vaddr) & 0xFFF;
 	stduint v_start1 = _IMM(vaddr) & ~_IMM(0xFFF);
 	if (_IMM(vaddr) < 0x10000) {
-		plogerro("TaskLoad_Carry");
+		plogerro("_CreateELF_Carry");
 	}
 	#if _MCCA == 0x8632
 	if (_IMM(vaddr) >= 0x80000000) {
-		plogerro("TaskLoad_Carry");
+		plogerro("_CreateELF_Carry");
 	}
 	#elif _MCCA == 0x8664
 	if (_IMM(vaddr) >= 0xFFFFC0000000) {
-		plogerro("TaskLoad_Carry");
+		plogerro("_CreateELF_Carry");
 	}
 	#endif
-	// ploginfo("TaskLoad_Carry(%[x], %[x], %[x])  pg(%[x])", vaddr, length, phy_src, pg);
-	for0(i, (length + compensation + 0xFFF) / 0x1000) {
+	// ploginfo("_CreateELF_Carry(%[x], %[x], %[x])  pg(%[x])", vaddr, length, phy_src, pg);
+	stduint bytes_read = 0; 
+	for0(i, (mem_length + compensation + 0xFFF) / 0x1000) {
 		auto page_entry = pg.getEntry(_IMM(v_start1));
 		stduint phy;
+		
 		if (_IMM(page_entry) == ~_IMM0 || !page_entry->isPresent()) {
 			phy = _IMM(mempool.allocate(0x1000, 12));
-			// ploginfo("mapping %[x] -> %[x]", v_start1, phy);
 			pg.Map(v_start1, phy, 0x1000, PAGESIZE_4KB, PGPROP_present | PGPROP_writable | PGPROP_user_access);
 			page_entry = pg.getEntry(_IMM(v_start1));
-			if (_IMM(page_entry) == ~_IMM0 || !page_entry->isPresent())
-			{
-				plogerro("Mapping failed %[x] -> %[x], entry%[x]", v_start1, phy, page_entry);
+			if (_IMM(page_entry) == ~_IMM0 || !page_entry->isPresent()) {
+				plogerro("Mapping failed %[x] -> %[x]", v_start1, phy);
 			}
 		}
-		else phy = _IMM(page_entry->address) << 12;
-		MemCopyN((void*)(phy + compensation), phy_src, 0x1000 - compensation);
-		phy_src += 0x1000 - compensation;
+		else phy = page_entry->getAddress();
+
+		stduint chunk_size = 0x1000 - compensation;
+		if (chunk_size > mem_length - bytes_read) {
+			chunk_size = mem_length - bytes_read; 
+		}
+
+		stduint phy_dest = phy + compensation;
+
+		// xDATA or BSS 
+		if (bytes_read >= file_size) {
+			MemSet((void*)phy_dest, 0, chunk_size);
+		} 
+		else {
+			stduint copy_size = chunk_size;
+			if (bytes_read + chunk_size > file_size) {
+				copy_size = file_size - bytes_read;
+				MemSet((void*)(phy_dest + copy_size), 0, chunk_size - copy_size);
+			}
+			auto ret = source->Read(file_offset + bytes_read, (void*)phy_dest, copy_size, buffer);
+			if (ret != copy_size) {
+				plogwarn("%s %u: Read failed", __FUNCIDEN__, __LINE__);
+			}
+		}
+
+		bytes_read += chunk_size;
 		v_start1 += 0x1000;
-		compensation = 0;
+		compensation = 0; 
 	}
 }
+ProcessBlock* Taskman::CreateELF(BlockTrait* source, byte ring) {
+	#if (_MCCA & 0xFF00) == 0x8600
+	auto block_buffer = new byte[512];
+	struct ELF_Header_t header;
+	source->Read(0, &header, sizeof(header), block_buffer);
+	if (MemCompare((const char*)header.e_ident, "\x7F""ELF", 4)) {
+		delete[] block_buffer;
+		plogerro("%s: Invalid ELF File Magic Number", __FUNCIDEN__);
+		return nullptr;
+	}
 
-ProcessBlock* TaskLoad(BlockTrait* source, void* addr, byte ring)
-{
-	_TODO source;//{TODO} (,mem,ring) ==> (fs_fullpath, ring)
 	word parent = SegTSS0;// Kernel Task
-	//
 	ProcessBlock* pb = Taskman::AllocateTask();
 	pb->ring = ring;
 	
@@ -332,36 +331,31 @@ ProcessBlock* TaskLoad(BlockTrait* source, void* addr, byte ring)
 	pb->paging.Map(0x0000FFFFFFFFF000ull, _IMM(higher_stacks[0]), 0x1000, PAGESIZE_4KB, PGPROP_present | PGPROP_writable);// High Part
 	#endif
 
-	Letvar(header, struct ELF_Header_t*, addr);
 	#if _MCCA == 0x8632
-	TSS->EIP = _IMM(header->e_entry);
+	TSS->EIP = _IMM(header.e_entry);
 	#else
-	pb->context.IP = _IMM(header->e_entry);
+	pb->context.IP = _IMM(header.e_entry);
 	#endif
 	stduint load_slice_p = 0;
-	for0(i, header->e_phnum) {
-		Letvar(ph, struct ELF_PHT_t*, (byte*)addr + header->e_phoff + header->e_phentsize * i);
-		if (ph->p_type == PT_LOAD && ph->p_memsz)//{TEMP}VAddress
+	for0(i, header.e_phnum) {
+		struct ELF_PHT_t ph;
+		stduint ph_offset = header.e_phoff + header.e_phentsize * i;
+		source->Read(ph_offset, &ph, sizeof(ph), block_buffer);
+		if (ph.p_type == PT_LOAD && ph.p_memsz) 
 		{
-			//{TODO} RW of ph->p_flags;
-			TaskLoad_Carry((char*)ph->p_vaddr, ph->p_memsz, (char*)addr + ph->p_offset, pb->paging);
+			_CreateELF_Carry((char*)ph.p_vaddr, ph.p_memsz, source, ph.p_offset, ph.p_filesz, pb->paging, block_buffer);
 			if (load_slice_p < numsof(pb->load_slices)) {
-				pb->load_slices[load_slice_p].address = ph->p_vaddr;
-				pb->load_slices[load_slice_p].length = ph->p_memsz;
+				pb->load_slices[load_slice_p].address = ph.p_vaddr;
+				pb->load_slices[load_slice_p].length = ph.p_memsz;
 				load_slice_p++;
 			}
 			else {
-				plogwarn("[] TaskLoad LoadSlice Overflow");
+				plogwarn("[Taskman] CreateELF LoadSlice Overflow");
 			}
 		}
 	}
-	#if _MCCA == 0x8632
-	if (false) outsfmt("TSS %d, Entry 0x%[32H]->0x%[32H], CR3=0x%[32H]\n\r",
-		TSSSelector,
-		header->e_entry, pb->paging.getEntry(header->e_entry) ? _IMM(pb->paging.getEntry(header->e_entry)->address) << 12 : 0,
-		TSS->CR3);
-	#endif
-	
+	delete[] block_buffer;
+
 	// ---- Stack and Gen.Regis ---- //
 	//{TEMP} ring1~3: use self paging and 0x1000
 	const stduint stack_loc_top = _IMM(pb->stack_lineaddr) + pb->stack_size;
@@ -369,13 +363,10 @@ ProcessBlock* TaskLoad(BlockTrait* source, void* addr, byte ring)
 	#if _MCCA == 0x8632
 	TSS->ESP0 = stack_lev_top - 0x10;
 	TSS->SS0 = 8 * 4 + 4 + 0;// 4:LDT 8*4:SS0 0:Ring0 
-	TSS->Padding0 = 0;
 	TSS->ESP1 = stack_lev_top - 0x10;
 	TSS->SS1 = 8 * 5 + 4 + 1;// 4:LDT 8*5:SS1 1:Ring1
-	TSS->Padding1 = 0;
 	TSS->ESP2 = stack_lev_top - 0x10;
 	TSS->SS2 = 8 * 6 + 4 + 2;// 4:LDT 8*6:SS2 2:Ring2
-	TSS->Padding2 = 0;
 	TSS->EFLAGS = getFlags();
 	// TSS->EAX = TSS->ECX = TSS->EDX = TSS->EBX = TSS->EBP = TSS->ESI = TSS->EDI = 0;
 	#else
@@ -394,17 +385,11 @@ ProcessBlock* TaskLoad(BlockTrait* source, void* addr, byte ring)
 	//{TODO} allow IOMap Version
 	#if _MCCA == 0x8632
 	TSS->ES = 8 * 7 + 0b100 + ring;
-	TSS->Padding3 = 0;
 	TSS->CS = ring ? 8 * ring + 0b100 + ring : SegCo32;
-	TSS->Padding4 = 0;
 	TSS->SS = 8 * (4 + ring) + 0b100 + ring;
-	TSS->Padding5 = 0;
 	TSS->DS = TSS->ES;
-	TSS->Padding6 = 0;
 	TSS->FS = TSS->ES;
-	TSS->Padding7 = 0;
 	TSS->GS = TSS->ES;
-	TSS->Padding8 = 0;
 	TSS->LDTDptr = SegGLDT + ring; // LDT yo GDT
 	TSS->LDTLength = 8 * 8 - 1;
 	TSS->STRC_15_T = 0;
@@ -415,11 +400,11 @@ ProcessBlock* TaskLoad(BlockTrait* source, void* addr, byte ring)
 	cast<REG_FLAG_t>(TSS->EFLAGS).IF = 1;
 	if (ring <= 1) TSS->EFLAGS |= _IMM1 << 12;
 	#else
-	pb->context.CS = SegCoR3 | 3;
-	pb->context.DS = SegDaR3 | 3;
-	pb->context.ES = SegDaR3 | 3;
-	pb->context.FS = SegDaR3 | 3;
-	pb->context.GS = SegDaR3 | 3;
+	pb->context.CS = SegCoR3 | ring;
+	pb->context.DS = SegDaR3 | ring;
+	pb->context.ES = SegDaR3 | ring;
+	pb->context.FS = SegDaR3 | ring;
+	pb->context.GS = SegDaR3 | ring;
 	pb->context.RING = ring;
 	treat<uint32>(&pb->context.floating_point_context[24]) = 0x1F80;// ban all MXCSR exception
 	pb->stack_size = 0x4000;
@@ -430,9 +415,33 @@ ProcessBlock* TaskLoad(BlockTrait* source, void* addr, byte ring)
 	Taskman::Append(pb);
 	#endif
 	return pb;
+	#endif
 }
 
+bool Taskman::ExitCurrent(stduint code) {
+	auto pid = CurrentPID();
+	ploginfo("AppExit: %[u] with code 0x%[x]", pid, code);
+
+	// [r] Ver 1
+	// _ASM("STI");
+	// loop HALT();
+
+	// [r] Ver 2
+	auto pb = Locate(pid);
+	pb->state = ProcessBlock::State::Hanging;
+	Schedule(true);
+	//{} Add to zombie vector
+
+	return true;
+}
+
+#ifdef _ARC_x86 // x86:
+#include "../include/filesys.hpp"
+bool task_switch_enable = true;//{} spinlk
 #endif
+
+
+
 #ifdef _ARC_x86
 
 // return pid of child (zero if no child or failure)

@@ -77,6 +77,7 @@ cppfile=$(wildcard mecocoa/*.cpp) \
 	$(ulibpath)/cpp/filesystem/FAT.cpp $(wildcard $(ulibpath)/cpp/filesystem/FAT/*.cpp) \
 	\
 	$(ulibpath)/cpp/Device/ACPI.cpp \
+	$(ulibpath)/cpp/Device/Storage.cpp \
 	$(ulibpath)/cpp/Device/Bus/PCI.cpp \
 	$(ulibpath)/cpp/Device/Keyboard.cpp \
 	$(ulibpath)/cpp/Device/Timer.cpp \

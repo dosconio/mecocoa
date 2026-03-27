@@ -65,8 +65,8 @@ qemu-system
 🈚️ qemu-system-or1k
 🈚️ qemu-system-ppc
 🈚️ qemu-system-ppc64
-✅ qemu-system-riscv32       virt
-✅ qemu-system-riscv64       virt
+✅ qemu-system-riscv32       virt(noSBI)
+✅ qemu-system-riscv64       virt(noSBI)
 🈚️ qemu-system-rx
 🈚️ qemu-system-s390x
 🈚️ qemu-system-sh4

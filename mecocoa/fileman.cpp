@@ -396,9 +396,6 @@ void serv_file_loop()
 	f_desc_table = (FileDescriptor*)Memory::physical_allocate(0x1000);
 	f_desc_table_count = nil;
 	::buffer = (byte*)Memory::physical_allocate(FSBUF_SIZE);
-	stduint&& bufsize = 512 * 64;// 32K
-	void* load_buffer = Memory::physical_allocate(bufsize);
-	// ploginfo("%s, buffer %[32H]", __FUNCIDEN__, ::buffer);
 	//
 	stduint&& inode_table_size = vaultAlignHexpow(0x1000, sizeof(inode) * NR_INODE);
 	inode_table = (inode*)Memory::physical_allocate(inode_table_size);
@@ -446,10 +443,10 @@ void serv_file_loop()
 			han = (FAT_FileHandle*)pfs_fat0->search("/", &a);
 			pfs_fat0->enumer(han, NULL);
 			// appinit
-			printlog(_LOG_INFO, "Loading Appinit -> %x", load_buffer);
 			if (han = (FAT_FileHandle*)pfs_fat0->search("init", &a)) {
-				if (pfs_fat0->readfl(han, Slice{ 0,han->size }, (byte*)load_buffer))
-					TaskLoad(NULL _TEMP, load_buffer, 3)->focus_tty_id = 0;
+				FileBlockBridge loop_device(pfs_fat0, han, han->size, 512);
+				if (auto task = Taskman::CreateELF(&loop_device, 3))
+					task->focus_tty_id = 0;
 				else plogerro("Init: Fail to load");
 			}
 			else plogerro("Init: Not found");
@@ -457,8 +454,9 @@ void serv_file_loop()
 			// subappc
 			printlog(_LOG_INFO, "Loading Subappc");
 			if (han = (FAT_FileHandle*)pfs_fat0->search("c", &a)) {
-				if (pfs_fat0->readfl(han, Slice{ 0,han->size }, (byte*)load_buffer))
-					TaskLoad(NULL _TEMP, load_buffer, 3)->focus_tty_id = 0;
+				FileBlockBridge loop_device(pfs_fat0, han, han->size, 512);
+				if (auto task = Taskman::CreateELF(&loop_device, 3))
+					task->focus_tty_id = 0;
 				else plogerro("C: Fail to load");
 			}
 			else plogerro("C: Not found");
