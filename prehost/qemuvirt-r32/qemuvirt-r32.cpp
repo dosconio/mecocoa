@@ -14,6 +14,8 @@ void user_task1(void);
 
 constexpr inline static stduint operator "" Baud(unsigned long long i) { return i; }
 
+#define TIMER_INTERVAL (CLINT_TIMEBASE_FREQ/100) // 100Hz
+
 _ESYM_C
 void _entry()
 {
@@ -45,6 +47,7 @@ void _entry()
 	while (1) {
 		UART0.OutFormat("Task K: Running...\n");
 		clint.MSIP(getMHARTID(), MSIP_Type::SofRupt);// Bad Method: Taskman::Schedule(true)
+		HALT();
 	}
 }
 
@@ -96,6 +99,10 @@ void user_task1(void)
 
 // ---- ---- USER END ---- ----
 
+static const byte _FOLLOW_VHD[] = {
+#embed "qemuvirt.hs"
+};
+static_assert(sizeof(_FOLLOW_VHD) > 0);
 
 extern "C" void __cxa_pure_virtual() {
 	while (1);

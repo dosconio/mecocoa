@@ -174,12 +174,12 @@ stduint trap_handler(stduint epc, stduint cause, NormalTaskContext* cxt)
 		/* Asynchronous trap - interrupt */
 		switch (cause_code) {
 		case 3:
-			ploginfo("software interruption!");
+			// ploginfo("software interruption!");
 			clint.MSIP(getMHARTID(), MSIP_Type::AckRupt);
 			Taskman::Schedule(true);
 			break;
 		case 7:
-			ploginfo("timer interruption!");
+			// ploginfo("timer interruption!");
 			timer_handler();
 			break;
 		case 11:

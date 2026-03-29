@@ -175,6 +175,7 @@ void Handint_LAPICT(/*InterruptFrame* frame*/) {
 }
 #endif
 #if (_MCCA & 0xFF00) == 0x1000
+#define TIMER_INTERVAL (CLINT_TIMEBASE_FREQ/100) // 100Hz
 
 uint64 last_schepoint;
 void timer_handler()

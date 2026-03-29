@@ -6,6 +6,8 @@
 // led by bootx64 and atx-x86-flap32.loader; we do not mix long64 and uefi64
 #include "../../include/mecocoa.hpp"
 
+#include "cpp/trait/StorageTrait.hpp"
+
 // x86: GDT, PG, MEM (for ladder auto-enable PG)
 // x64: GDT, MEM, PG
 
@@ -40,6 +42,8 @@ _ESYM_C void mecocoa() {
 
 	loop HALT();
 }
+
+void DiscPartition::renew_slice() {}
 
 void Handint_XHCI() {}
 void Handint_LAPICT() {}

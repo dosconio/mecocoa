@@ -11,7 +11,7 @@ RM = rm -rf
 GPREF   = riscv64-unknown-elf-
 CFLAGS += -nostdlib -fno-builtin -Wall -Wno-unused-variable -Wno-unused-function -Wno-parentheses
 CFLAGS += -march=rv32g -mabi=ilp32
-CFLAGS += -I$(uincpath) -D_MCCA=0x1032 -D_OPT_RISCV32 -D_HIS_IMPLEMENT -D_DEBUG
+CFLAGS += -I$(uincpath) -D_MCCA=0x1032 -D_OPT_RISCV32 -D_DEBUG
 CFLAGS += -fno-strict-aliasing -fno-exceptions -fno-stack-protector
 CFLAGS += -g
 XFLAGS  = $(CFLAGS) -fno-rtti -fno-use-cxa-atexit

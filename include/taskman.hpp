@@ -122,7 +122,7 @@ public: // _Comment(Interface);
 	} interface_type = InterfaceType::POSIX;
 public:
 	uni::Paging paging;
-	//{} Mempool heappool// should store linear address 
+	//{} Mempool heappool// should store linear address | setbreak
 public: // _Comment(Taskman);
 	uni::Slice load_slices[8];// at most 8 slices, app-relative logical address
 public: // _Comment(Console);

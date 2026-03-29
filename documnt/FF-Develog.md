@@ -46,7 +46,7 @@ x64约束
 
 qemu-system
 ```
-✅ qemu-system-aarch64       virt
+✅ qemu-system-aarch64       virt, raspi3b
 🈚️ qemu-system-alpha
 🈚️ qemu-system-arm
 🈚️ qemu-system-avr

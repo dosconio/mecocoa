@@ -16,7 +16,7 @@ GPREF   = aarch64-none-elf-
 CFLAGS += # -z norelro  # hosted compiler option
 CFLAGS += -nostdlib -fno-builtin
 CFLAGS += --static #-mno-red-zone -mcpu=max
-CFLAGS += -I$(uincpath) -D_MCCA=0x2064 -D_HIS_IMPLEMENT -D_DEBUG
+CFLAGS += -I$(uincpath) -D_MCCA=0x2064 -D_DEBUG
 CFLAGS += -fno-strict-aliasing -fno-exceptions -fno-stack-protector
 CFLAGS += -Wextra -Wno-multichar
 XFLAGS  = $(CFLAGS) -fno-rtti -fno-use-cxa-atexit

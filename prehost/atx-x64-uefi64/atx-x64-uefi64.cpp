@@ -147,6 +147,7 @@ _ESYM_C void* memset(void* dest, int val, size_t count) {
 	for0(i, count) d[i] = (byte)val;
 	return dest;
 }
+_ESYM_C void* memchr(const void* s, int c, size_t n) { return (void*)MemIndexByte((const char*)s, c, n); }
 _ESYM_C char* memmove(char* dest, const char* sors, size_t width) {
 	return MemAbsolute(dest, sors, width);
 }

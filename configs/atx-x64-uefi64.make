@@ -11,10 +11,10 @@ RM = rm -rf
 
 # (GNU)
 GPREF   = x86_64-linux-gnu-
-CFLAGS += -nostdlib -fno-builtin -z norelro -nostdlib -fno-builtin
+CFLAGS += -nostdlib -fno-builtin -z norelro
 CFLAGS += --static -mno-red-zone -m64  -mno-sse -mno-sse2 -mno-avx -mno-avx2 -msoft-float
-CFLAGS += -I$(uincpath) -D_MCCA=0x8664 -D_UEFI -D_HIS_IMPLEMENT -D_DEBUG
-CFLAGS += -fno-strict-aliasing -fno-exceptions
+CFLAGS += -I$(uincpath) -D_MCCA=0x8664 -D_UEFI -D_DEBUG
+CFLAGS += -fno-strict-aliasing -fno-exceptions -fno-stack-protector
 CFLAGS += -Wextra -Wno-multichar
 XFLAGS  = $(CFLAGS) -fno-rtti -fno-use-cxa-atexit
 G_DBG   = gdb-multiarch

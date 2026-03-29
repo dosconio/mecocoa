@@ -15,7 +15,7 @@ RM = rm -rf
 GPREF   = x86_64-linux-gnu-
 CFLAGS += -z norelro -nostdlib -fno-builtin
 CFLAGS += --static -mno-red-zone -m64  -mno-sse -mno-sse2 -mno-avx -mno-avx2 
-CFLAGS += -I$(uincpath) -D_MCCA=0x8664 -D_HIS_IMPLEMENT -D_DEBUG
+CFLAGS += -I$(uincpath) -D_MCCA=0x8664 -D_DEBUG
 CFLAGS += -fno-strict-aliasing -fno-exceptions -fno-stack-protector
 CFLAGS += -Wextra -Wno-multichar
 XFLAGS  = $(CFLAGS) -fno-rtti -fno-use-cxa-atexit
@@ -72,6 +72,7 @@ cppfile=$(wildcard mecocoa/*.cpp)\
 	$(ulibpath)/cpp/system/paging.cpp \
 	$(ulibpath)/cpp/Witch/Form.cpp \
 	$(ulibpath)/cpp/Device/Buzzer.cpp \
+	$(ulibpath)/cpp/Device/Storage.cpp \
 	$(ulibpath)/cpp/Device/Video.cpp $(ulibpath)/cpp/Device/Video-VideoConsole.cpp \
 
 

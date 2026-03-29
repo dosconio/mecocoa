@@ -77,7 +77,6 @@ void Taskman::Initialize(stduint cpuid) {
 	min_available_left = chain.Append(kernel_task);
 	kernel_task->state = ProcessBlock::State::Running;
 	kernel_task->paging.root_level_page = kernel_paging.root_level_page;
-	Taskman::EnqueueReady(kernel_task);
 	pcurrent[cpuid] = 0;
 	//
 	chain.Compare_f = ProcCmp;
@@ -86,10 +85,10 @@ void Taskman::Initialize(stduint cpuid) {
 	#if (_MCCA & 0xFF00) == 0x1000
 	setMSCRATCH _IMM(&kernel_task->context);
 	setMIE(getMIE() | _MIE_MSIE);// software interrupts
-	kernel_task->priority = 0;
+	kernel_task->priority = 12;
 	kernel_task->time_slice = 4;
 	#endif
-
+	Taskman::EnqueueReady(kernel_task);
 }
 
 // ---- . ----
@@ -206,8 +205,8 @@ ProcessBlock* Taskman::Create(void* entry, byte ring)
 		_TODO
 	}
 
-	ppb->priority = (ring == 0) ? 12 : 0;
-	ppb->time_slice = (ring == 0) ? 0 : 2;
+	ppb->priority = (ring == 0) ? 3 : 0;
+	ppb->time_slice = (ring == 0) ? 3 : 4;
 	#endif
 	Append(ppb);
 	return ppb;
