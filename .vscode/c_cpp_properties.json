@@ -12,11 +12,11 @@
             "defines": [
 				"_DEBUG",
                 // "_MCCA=0x8632","_ARC_x86=5",
-                "_MCCA=0x1064",
+                "_MCCA=0x1064","_ARC_RISCV_64",
 				"_UEFI",
 				// "_MCCA=0x1032",
 				// "_MPU_STM32MP13"
-                
+                "_POSI_"
             ],
             "compilerPath": "${ubinpath}/AMD64/Win64/bin/gcc.exe",
             "cStandard": "c99",

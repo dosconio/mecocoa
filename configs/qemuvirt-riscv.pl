@@ -19,9 +19,8 @@ print "SECTIONS {\n";
 
 print "	.text : {\n";
 print "		PROVIDE(_text_start = .); /* as if exists `void* _text_start;` */ \n";
-print "		$ENV{'uobjpath'}/mcca-qemuvirt-$arch/_ag_qemuvirt-rv.startup.o(.text)\n";
 print '
-		*(.text .text.*)
+		*(.text.boot .text .text.*)
 		PROVIDE(_text_end = .);
 	} >ram
 

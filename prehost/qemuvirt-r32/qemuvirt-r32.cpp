@@ -6,23 +6,29 @@
 
 #include <cpp/Device/UART>
 #include <c/driver/timer.h>
+#include <c/format/filesys/FAT.h>
 
 OstreamTrait* con0_out = &UART0;
 
-void user_task0(void);
-void user_task1(void);
-
-constexpr inline static stduint operator "" Baud(unsigned long long i) { return i; }
+constexpr inline static stduint operator ""_Baud(unsigned long long i) { return i; }
 
 #define TIMER_INTERVAL (CLINT_TIMEBASE_FREQ/100) // 100Hz
+
+static const byte _FOLLOW_VHD[] = {
+	#if __BITS__ == 32
+	#embed "fatvhd.ignore"
+	#elif __BITS__ == 64
+	#embed "../qemuvirt-r64/fatvhd.ignore"
+	#endif
+};
+static_assert(sizeof(_FOLLOW_VHD) > 0);
 
 _ESYM_C
 void _entry()
 {
-	//[!] cannot use FLOATING operation (why)
-	UART0.setMode(115200Baud);
-	ploginfo("Hello Mcca-RV%u~ =OwO=", __BITS__);
-	if (!Memory::initialize('ANIF', NULL)) {
+	UART0.setMode(115200_Baud);
+	ploginfo("Hello Mcca-RV%u~ =OwO= %lf", __BITS__, 2026.03);
+	if (!Memory::initialize(0, NULL)) {
 		printlog(_LOG_FATAL, "Memory Initialize Failed.");
 		loop HALT();
 	}
@@ -35,15 +41,47 @@ void _entry()
 	// UART0
 	UART0.enInterrupt();
 	UART0.setInterruptPriority(1, nil);
+
+	ploginfo("FATVHD Size: %[x]", sizeof(_FOLLOW_VHD));
+	if (1) {
+		auto memdev_buffer = new byte[512*2];
+		auto fat_buffer = new byte[512*2];
+		MemoryBlockDevice memdev({ _IMM(_FOLLOW_VHD), sizeof(_FOLLOW_VHD) }, memdev_buffer);
+		FilesysFAT fatvhd(32, memdev, fat_buffer);
+		fatvhd.buffer_fatable = new byte[512];
+		FAT_FileHandle* han;
+		FAT_FileHandle filhan;
+		stduint a[2] = { _IMM(&filhan)/*, _IMM(&filinf) */ };
+		if (!fatvhd.loadfs()) {
+			plogerro("FATVHD loadfs failed");
+		}
+		else {
+			han = (FAT_FileHandle*)fatvhd.search("/", &a);
+			fatvhd.enumer(han, NULL);
+			if (han = (FAT_FileHandle*)fatvhd.search("lpa.elf", &a)) {
+				FileBlockBridge loop_device(&fatvhd, han, han->size, 512);
+				// plogwarn("size: %[x]", han->size);
+				if (auto pb = Taskman::CreateELF(&loop_device, RING_U)) {
+					Taskman::Append(pb);
+				}
+				else plogerro("appa.elf: Fail to parse or load ELF");
+			}
+			else plogerro("lpa.elf: Not found");
+		}
+		delete[] (fatvhd.buffer_fatable);
+		delete[] (memdev_buffer);
+		delete[] (fat_buffer);
+	}
+
+	if (Taskman::chain.Count() <= 1) {
+		ploginfo("Nothing to do.");
+		HALT();//{} shutdown
+	}
+	IC.enAble(true);
 	// CLINT Clock
 	last_schepoint = clint.Read() + TIMER_INTERVAL;
 	clint.Load(getMHARTID(), last_schepoint);
 	clint.enInterrupt();
-	
-	Taskman::Create((void*)user_task0, 0);
-	Taskman::Create((void*)user_task1, 0);
-
-	IC.enAble(true);
 	while (1) {
 		UART0.OutFormat("Task K: Running...\n");
 		clint.MSIP(getMHARTID(), MSIP_Type::SofRupt);// Bad Method: Taskman::Schedule(true)
@@ -51,58 +89,7 @@ void _entry()
 	}
 }
 
-void task_yield()
-{
-	clint.MSIP(getMHARTID(), MSIP_Type::SofRupt);
-}
-
-void task_delay(volatile int count)
-{
-	count *= 50000;
-	while (count--);
-}
-
-// ---- ---- USER BEG ---- ----
-
-
-#define DELAY 4000
-
-_ESYM_C
-stduint gethid(unsigned int* ptr_hid);
-void user_task0(void)
-{
-	unsigned int hid = -1;
-	UART0.OutFormat("Task 0: Created!\n");
-	// task_yield(); <--- seem a privileged code
-	UART0.OutFormat("Task 0: Yield Back!\n");
-	int ret = -1;
-	ret = gethid(&hid);
-	if (!ret) {
-		UART0.OutFormat("system call returned!, hart id is %d\n", hid);
-	} else {
-		UART0.OutFormat("gethid() failed, return: %d\n", ret);
-	}
-	while (1) {
-		UART0.OutFormat("Task 0: Running...\n");
-		task_delay(DELAY);
-	}
-}
-
-void user_task1(void)
-{
-	UART0.OutFormat("Task 1: Created!\n");
-	while (1) {
-		UART0.OutFormat("Task 1: Running...\n");
-		task_delay(DELAY);
-	}
-}
-
-// ---- ---- USER END ---- ----
-
-static const byte _FOLLOW_VHD[] = {
-#embed "qemuvirt.hs"
-};
-static_assert(sizeof(_FOLLOW_VHD) > 0);
+void DiscPartition::renew_slice() {}
 
 extern "C" void __cxa_pure_virtual() {
 	while (1);

@@ -1,41 +1,24 @@
 #include "c/stdinc.h"
-#include "../../include/syscall.hpp"
+#include "c/datype/ruststyle.h"
+#ifdef _INC_CPP
+using namespace uni;
+#endif
+// #include "../../include/syscall.hpp"
+#include "../../include/taskman.hpp"
 
 #define sysrecv(pid,msg) syscomm(0,pid,msg)
 #define syssend(pid,msg) syscomm(1,pid,msg)
-
-
-//{TEMP}
-enum {
-	Task_Kernel,
-	Task_Con_Serv,
-	Task_Hdd_Serv,
-	Task_FileSys,
-	Task_TaskMan,
-	Task_Init,
-	Task_AppC,
-	//
-	TaskCount
-};
 
 #ifdef _INC_CPP
 extern "C" {
 #endif
 	int main(int argc, char** argv);
-	stduint syscall(stduint p0, stduint p1, stduint p2, stduint p3);
-	//void syscall(stduint p0, stduint p1 = 0, stduint p2 = 0, stduint p3 = 0);
 	//
 	void sysouts(const char* str);// 00
 	int sysinnc();// 01
 	stduint syssecond();// 03
 	void sysrest();// 04
 
-	struct CommMsg {
-		stduint address;
-		stduint length;
-		stduint type;
-		stduint src;// use if type is HARDRUPT
-	};
 	void syscomm(int send_recv, stduint obj, struct CommMsg* msg);// 05
 
 	void sysdelay(unsigned dword);
@@ -55,6 +38,8 @@ extern "C" {
 	stduint syswrite(int fd, void* buf, stduint size);
 	// return nil for success
 	int sys_removefil(rostr fullpath);
+
+	stduint get_core_id(unsigned int* ptr_hid);
 
 	// ---- POSIX:unistd ---- //
 	int fork();

@@ -14,7 +14,7 @@
 
 .global	_start
 
-.text
+.section .text.boot
 
 _start:
 	# only use single hart(core), park harts with id != 0
@@ -25,6 +25,8 @@ _start:
 	SLLI	t0, t0, 10		# shl: mul the hart id by 1024
 	LA		sp, stacks + STACK_SIZE
 	ADD		sp, sp, t0		# move hart-loc stack pointer to its stack space
+	li      t0, 0x2000      # mstatus.FS [14:13] : Floating-point state
+    csrs    mstatus, t0     # 
 # .ifdef CONFIG_SYSCALL
 	# https://lore.kernel.org/qemu-devel/20201223192553.332508-1-atish.patra@wdc.com/
 	# For qemu version >= 6.0, exception would be raised if no PMP enty is
@@ -111,15 +113,6 @@ DirectTaskContext:
 	mv		t6, a0
 	reg_restore t6
 	mret # will enable global interrupt
-
-#{TOMOVE}
-# ---- ---- USER SYSCALL ---- ----
-
-.global gethid
-gethid:
-	li a7, 0x11 # #define SYS_GETCOREID	1
-	ecall
-	ret
 
 #
 

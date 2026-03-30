@@ -3,7 +3,7 @@ arch=atx-x86-flap32
 attr = -D_DEBUG -D_ACCM=0x8632 -I$(uincpath)
 
 asmpref=_ae_
-asmfile=$(wildcard $(ulibpath)/asm/x86/*.asm) $(wildcard $(ulibpath)/asm/x86/**/*.asm) $(wildcard accmlib/*.asm)
+asmfile=$(wildcard $(ulibpath)/asm/x86/*.asm) $(wildcard $(ulibpath)/asm/x86/**/*.asm) $(wildcard accmlib/x86/*.asm)
 asmobjs=$(patsubst %asm, %o, $(asmfile))
 
 cplpref=_cc_
@@ -11,7 +11,7 @@ cplfile=$(wildcard $(ulibpath)/c/*.c) $(wildcard accmlib/*.c)
 cplobjs=$(patsubst %c, %o, $(cplfile))
 
 cpppref=_cx_
-cppfile=$(wildcard $(ulibpath)/cpp/*.cpp)
+cppfile=$(wildcard $(ulibpath)/cpp/*.cpp) $(wildcard accmlib/*.cpp)
 cppobjs=$(patsubst %cpp, %o, $(cppfile))
 
 dest_obj=$(uobjpath)/accm-$(arch)

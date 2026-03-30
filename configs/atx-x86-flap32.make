@@ -53,7 +53,7 @@ build: clean lib $(cppobjs)
 	@echo "MK $(arch) loader"
 	$(CX) prehost/$(arch)/grubhead.S -o $(uobjpath)/mcca-$(arch).grub.o -D_LOADER
 	g++ -I$(uincpath) $(flag) -m32 $(uobjpath)/mcca-$(arch).grub.o prehost/$(arch)/$(arch).loader.cpp \
-		prehost/$(arch)/$(arch).auf.cpp $(uobjpath)/mcca-$(arch)/mcca-$(arch)-elf64.o $(uobjpath)/CGMin32/_ae_manage.o\
+		prehost/_auxiliary.cpp $(uobjpath)/mcca-$(arch)/mcca-$(arch)-elf64.o $(uobjpath)/CGMin32/_ae_manage.o\
 		-o $(ubinpath)/$(elf_loader) -L$(ubinpath) -lm32d $(CXF) \
 		-T prehost/$(arch)/$(arch).loader.ld  \
 		-nostartfiles -O0 \
@@ -63,7 +63,7 @@ build: clean lib $(cppobjs)
 	#
 	@echo "MK $(arch)"
 	$(CX) prehost/$(arch)/grubhead.S -o $(uobjpath)/mcca-$(arch).grub.o
-	g++ -I$(uincpath) $(flag) -m32 $(uobjpath)/mcca-$(arch).grub.o $(ker_mod) prehost/$(arch)/$(arch).cpp prehost/$(arch)/$(arch).auf.cpp -o $(ubinpath)/$(elf_kernel) -L$(ubinpath) -lm32d $(CXF) \
+	g++ -I$(uincpath) $(flag) -m32 $(uobjpath)/mcca-$(arch).grub.o $(ker_mod) prehost/$(arch)/$(arch).cpp prehost/_auxiliary.cpp -o $(ubinpath)/$(elf_kernel) -L$(ubinpath) -lm32d $(CXF) \
 		-T prehost/$(arch)/$(arch).ld  \
 		-nostartfiles -O0 \
 		-Wl,-Map=$(ubinpath)/$(elf_kernel).map

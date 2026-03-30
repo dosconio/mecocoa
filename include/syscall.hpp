@@ -43,11 +43,12 @@ enum
 	: stduint
 	#endif
 {
-
+	_
 };
 
 #define IRQ_SYSCALL 0x81// leave 0x80 for unix-like syscall
 
+#ifndef _ACCM
 #if (_MCCA & 0xFF00) == 0x8600
 
 _ESYM_C void Handint_SYSCALL_Entry();
@@ -62,6 +63,9 @@ struct NormalTaskContext;
 void syscall(NormalTaskContext* cxt);
 
 
+#endif
+#else
+_ESYM_C stduint syscall(syscall_t callid, stduint p1 = 0, stduint p2 = 0, stduint p3 = 0);// MCCA 4 PARA SYSC
 #endif
 
 #endif

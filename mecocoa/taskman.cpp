@@ -165,9 +165,6 @@ ProcessBlock* Taskman::Create(void* entry, byte ring)
 	TSS->ESP2 = (dword)(ppb->stack_levladdr) + 0xFF0;
 	TSS->SS2 = 8 * 6 + 4 + 2;// 4:LDT 8*6:SS2 2:Ring2
 
-	ppb->priority = (ring == 3) ? 4 : 0;
-	ppb->time_slice = (ring == 3) ? 3 : 4;
-
 	TSS->CR3 = _Taskman_Create_Paging(ppb, ring);
 
 	TSS->EIP = _IMM(entry);
@@ -198,16 +195,17 @@ ProcessBlock* Taskman::Create(void* entry, byte ring)
 	#elif (_MCCA & 0xFF00) == 0x1000
 	auto& ctx = ppb->context;
 	ctx.sp = (stduint)mempool.allocate(DEFAULT_STACK_SIZE, 12) + DEFAULT_STACK_SIZE - 0x10;
-	ctx.mepc = _IMM(entry);
-	ctx.mstatus = (ring << 11) | _MSTATUS_MPIE;// 0 or 1 or 3
+	ctx.IP = _IMM(entry);
+	ctx.mstatus = (ring << 11) | _MSTATUS_MPIE;
 
 	if (ring == 0) {
-		_TODO
+		_TODO// Paging
 	}
 
-	ppb->priority = (ring == 0) ? 3 : 0;
-	ppb->time_slice = (ring == 0) ? 3 : 4;
 	#endif
+
+	ppb->priority = (ring == RING_U) ? 3 : 0;
+	ppb->time_slice = (ring == RING_U) ? 3 : 4;
 	Append(ppb);
 	return ppb;
 }
@@ -216,16 +214,20 @@ static void _CreateELF_Carry(char* vaddr, stduint mem_length, BlockTrait* source
 	stduint compensation = _IMM(vaddr) & 0xFFF;
 	stduint v_start1 = _IMM(vaddr) & ~_IMM(0xFFF);
 	if (_IMM(vaddr) < 0x10000) {
-		plogerro("_CreateELF_Carry");
+		plogerro("_CreateELF_Carry: vaddr is too low");
 	}
-	#if _MCCA == 0x8632
+	#if _MCCA == 0x8632 || _MCCA == 0x1032
 	if (_IMM(vaddr) >= 0x80000000) {
 		plogerro("_CreateELF_Carry");
 	}
 	#elif _MCCA == 0x8664
-	if (_IMM(vaddr) >= 0xFFFFC0000000) {
+	if (_IMM(vaddr) >= 0xFFFFC0000000ull) {
 		plogerro("_CreateELF_Carry");
 	}
+	#elif _MCCA == 0x1064
+    if (_IMM(vaddr) >= 0x4000000000ull) { 
+        plogerro("_CreateELF_Carry: vaddr out of RV64 Sv39 user space");
+    }
 	#endif
 	// ploginfo("_CreateELF_Carry(%[x], %[x], %[x])  pg(%[x])", vaddr, length, phy_src, pg);
 	stduint bytes_read = 0; 
@@ -272,7 +274,7 @@ static void _CreateELF_Carry(char* vaddr, stduint mem_length, BlockTrait* source
 	}
 }
 ProcessBlock* Taskman::CreateELF(BlockTrait* source, byte ring) {
-	#if (_MCCA & 0xFF00) == 0x8600
+	#if (_MCCA & 0xFF00) == 0x8600 || (_MCCA & 0xFF00) == 0x1000
 	auto block_buffer = new byte[512];
 	struct ELF_Header_t header;
 	source->Read(0, &header, sizeof(header), block_buffer);
@@ -282,7 +284,9 @@ ProcessBlock* Taskman::CreateELF(BlockTrait* source, byte ring) {
 		return nullptr;
 	}
 
+	#if (_MCCA & 0xFF00) == 0x8600
 	word parent = SegTSS0;// Kernel Task
+	#endif
 	ProcessBlock* pb = Taskman::AllocateTask();
 	pb->ring = ring;
 	
@@ -313,7 +317,7 @@ ProcessBlock* Taskman::CreateELF(BlockTrait* source, byte ring) {
 	// pb->paging.Map(0xFFF..., _IMM(pb->stack_levladdr), pb->stack_size, PAGESIZE_4KB, PGPROP_present | PGPROP_writable);
 	pb->paging.Map(0x80000000, 0x00000000, 0x04000000, PAGESIZE_4KB, PGPROP_present | PGPROP_writable);// should include LDT
 	// pb->paging.Map(0x80000000, 0x00000000, kernel_size, true, _Comment(R0) false);// should include LDT
-	#else
+	#elif _MCCA == 0x8664
 	pb->context.CR3 = _IMM(pb->paging.root_level_page);
 	pb->paging.Map(0x00001000, _IMM(stack_norm), pb->stack_size, PAGESIZE_4KB, PGPROP_present | PGPROP_writable | PGPROP_user_access);
 
@@ -328,6 +332,22 @@ ProcessBlock* Taskman::CreateELF(BlockTrait* source, byte ring) {
 		HIGHER_STACK_SIZE, PAGESIZE_4KB, PGPROP_present | PGPROP_writable
 	);// High Part. overlap with kernel 0..4KB
 	pb->paging.Map(0x0000FFFFFFFFF000ull, _IMM(higher_stacks[0]), 0x1000, PAGESIZE_4KB, PGPROP_present | PGPROP_writable);// High Part
+	#elif _MCCA == 0x1032 || _MCCA == 0x1064
+	auto make_satp = [](void* root_page_ptr) -> stduint {
+		if (!root_page_ptr) return 0;
+		stduint ppn = _IMM(root_page_ptr) >> 12;
+		#if _MCCA == 0x1032
+		return (1ULL << 31) | ppn; // Sv32 Mode
+		#elif _MCCA == 0x1064
+		return (8ULL << 60) | ppn; // Sv39 Mode
+		#else
+		return ppn; // Bare Mode (No translation)
+		#endif
+		};
+	pb->context.satp = make_satp(pb->paging.root_level_page);
+	pb->paging.Map(0x00001000, _IMM(stack_norm), pb->stack_size, PAGESIZE_4KB, PGPROP_present | PGPROP_writable | PGPROP_user_access);
+	// M-MCCA need not map kernel
+	// S-MCCA need map kernel (TODO)
 	#endif
 
 	#if _MCCA == 0x8632
@@ -356,7 +376,8 @@ ProcessBlock* Taskman::CreateELF(BlockTrait* source, byte ring) {
 	delete[] block_buffer;
 
 	// ---- Stack and Gen.Regis ---- //
-	//{TEMP} ring1~3: use self paging and 0x1000
+	//{TODO} Stack Over Check - single segment
+	//{TODO} allow IOMap Version
 	const stduint stack_loc_top = _IMM(pb->stack_lineaddr) + pb->stack_size;
 	const stduint stack_lev_top = _TEMP 0x1000 + pb->stack_size * 2;
 	#if _MCCA == 0x8632
@@ -366,23 +387,11 @@ ProcessBlock* Taskman::CreateELF(BlockTrait* source, byte ring) {
 	TSS->SS1 = 8 * 5 + 4 + 1;// 4:LDT 8*5:SS1 1:Ring1
 	TSS->ESP2 = stack_lev_top - 0x10;
 	TSS->SS2 = 8 * 6 + 4 + 2;// 4:LDT 8*6:SS2 2:Ring2
-	TSS->EFLAGS = getFlags();
-	// TSS->EAX = TSS->ECX = TSS->EDX = TSS->EBX = TSS->EBP = TSS->ESI = TSS->EDI = 0;
-	#else
-	pb->context.SP = (stack_loc_top & ~0xFlu) - 8;// single stack
-	pb->context.SS = SegDaR3 | ring;
-	pb->context.FLAG = 0x202;
-	#endif
-	pb->priority = (ring == 3) ? 4 : 0;
-	pb->time_slice = (ring == 3) ? 3 : 4;
-
-	#if _MCCA == 0x8632
+	TSS->EFLAGS = 2;
+	cast<REG_FLAG_t>(TSS->EFLAGS).IF = 1;
+	if (ring <= 1) TSS->EFLAGS |= _IMM1 << 12;
+	//
 	TSS->ESP = ring ? stack_loc_top - 0x10 : TSS->ESP0/* unchk ring0: should paging with kernel.cr3 ? */;
-	#endif
-
-	//{TODO} Stack Over Check - single segment
-	//{TODO} allow IOMap Version
-	#if _MCCA == 0x8632
 	TSS->ES = 8 * 7 + 0b100 + ring;
 	TSS->CS = ring ? 8 * ring + 0b100 + ring : SegCo32;
 	TSS->SS = 8 * (4 + ring) + 0b100 + ring;
@@ -393,12 +402,14 @@ ProcessBlock* Taskman::CreateELF(BlockTrait* source, byte ring) {
 	TSS->LDTLength = 8 * 8 - 1;
 	TSS->STRC_15_T = 0;
 	TSS->IO_MAP = sizeof(TSS_t) - 1; // TaskFlat->IOMap? TaskFlat->IOMap-TSS: sizeof(TSS_t)-1;
-
+	//
 	Descriptor32Set(&GDT[TSSSelector], _IMM(TSS) + 0x80000000, sizeof(TSS_t)-1, _Dptr_TSS386_Available, 0, 0 /* is_sys */, 1 /* 32-b */, 0 /* not-4k */ );// TSS [0x00408900]
 
-	cast<REG_FLAG_t>(TSS->EFLAGS).IF = 1;
-	if (ring <= 1) TSS->EFLAGS |= _IMM1 << 12;
-	#else
+
+	#elif _MCCA == 0x8664
+	pb->context.SP = (stack_loc_top & ~0xFlu) - 8;// single stack
+	pb->context.SS = SegDaR3 | ring;
+	pb->context.FLAG = 0x202;
 	pb->context.CS = SegCoR3 | ring;
 	pb->context.DS = SegDaR3 | ring;
 	pb->context.ES = SegDaR3 | ring;
@@ -406,9 +417,17 @@ ProcessBlock* Taskman::CreateELF(BlockTrait* source, byte ring) {
 	pb->context.GS = SegDaR3 | ring;
 	pb->context.RING = ring;
 	treat<uint32>(&pb->context.floating_point_context[24]) = 0x1F80;// ban all MXCSR exception
-	pb->stack_size = 0x4000;
-	pb->stack_lineaddr = (byte*)0x1000;// stack*4
+
+	#elif _MCCA == 0x1032 || _MCCA == 0x1064
+	constexpr stduint floating_support = (1 << 13);
+	pb->context.sp = (stack_loc_top & ~0xFlu);
+	pb->context.IP = _IMM(header.e_entry);
+	pb->context.mstatus = (ring << 11) | floating_support | _MSTATUS_MPIE;
+
 	#endif
+
+	pb->priority = (ring == RING_U) ? 4 : 0;
+	pb->time_slice = (ring == RING_U) ? 3 : 4;
 
 	#if _MCCA == 0x8632
 	Taskman::Append(pb);

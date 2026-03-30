@@ -11,6 +11,19 @@
 
 #include "syscall.hpp"
 
+enum {
+	Task_Kernel,
+	Task_Con_Serv,
+	Task_ConsoleVideo,// [inner of Task_Con_Serv] manage mice and GUI
+	Task_Hdd_Serv,
+	Task_FileSys,
+	Task_TaskMan,
+	Task_Init,
+	Task_AppC,
+	//
+	TaskCount
+};
+
 void serv_sysmsg();
 
 struct MsgTimer {
@@ -47,6 +60,21 @@ extern uni::Queue<SysMessage> message_queue;
 #define HIGHER_STACK_SIZE 0x4000
 
 #if (_MCCA & 0xFF00) == 0x8600
+enum {
+	RING_M = 0,
+	RING_S = 1,
+	RING_U = 3,
+};
+#elif (_MCCA & 0xFF00) == 0x1000// RISCV
+enum {
+	RING_M = 3,
+	RING_S = 1,
+	RING_U = 0,
+};
+#endif
+
+
+#if (_MCCA & 0xFF00) == 0x8600
 extern TSS_t* PCU_CORES_TSS[PCU_CORES_MAX];
 
 #if _MCCA == 0x8632
@@ -68,7 +96,7 @@ struct CommMsg {
 };
 
 // Process
-#if 1
+#ifndef _ACCM
 class FileDescriptor;
 class _Comment(Kernel) ProcessBlock {
 public:
@@ -140,6 +168,7 @@ public: // _Comment(Fileman);
 };
 #endif
 
+#ifndef _ACCM
 class Taskman {
 	static const stduint DEFAULT_STACK_SIZE = 0x1000;
 
@@ -192,7 +221,7 @@ public:
 	static auto// return a all-zero ProcessBlock
 		AllocateTask() -> ProcessBlock*;
 };
-
+#endif
 
 
 
@@ -220,21 +249,6 @@ int msg_send(ProcessBlock* fo, stduint to, _Comment(vaddr) CommMsg* msg);
 int msg_recv(ProcessBlock* to, stduint fo, _Comment(vaddr) CommMsg* msg);
 
 void rupt_proc(stduint pid, stduint rupt_no);
-
-enum {
-	Task_Kernel,
-	Task_Con_Serv,
-	Task_ConsoleVideo,// [inner of Task_Con_Serv] manage mice and GUI
-	Task_Hdd_Serv,
-	Task_FileSys,
-	Task_TaskMan,
-	Task_Init,
-	Task_AppC,
-	//
-	TaskCount
-};
-
-
 
 inline static stduint syssend(stduint to_whom, const void* msgaddr, stduint bytlen, stduint type = 0)
 {

@@ -194,7 +194,7 @@ stduint trap_handler(stduint epc, stduint cause, NormalTaskContext* cxt)
 	else { // Synchronous trap - exception
 		switch (cause_code) {
 		case 8:
-			ploginfo("System call from U-mode!");
+			// ploginfo("System call from U-mode!");
 			syscall(cxt);
 			cxt->mepc += 4;
 			return_pc += 4;

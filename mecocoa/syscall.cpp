@@ -298,7 +298,7 @@ stduint syscall(syscall_t callid, ...) {
 
 #endif
 
-#if (_MCCA & 0xFF00) == 0x8600
+#if (_MCCA & 0xFF00) == 0x8600 || (_MCCA & 0xFF00) == 0x1000
 
 _ESYM_C stduint SYSCALL_TABLE[];
 DEFSYSC sysc_OUTC(stduint ch, stduint len);
@@ -310,6 +310,14 @@ stduint SYSCALL_TABLE[] = {
 };
 
 DEFSYSC sysc_OUTC(stduint ch, stduint len) {// OUTC
+	#if (_MCCA & 0xFF00) == 0x1000//{TEMP}
+	if (len) {
+		UART0.out((rostr)ch, len);
+	}
+	else {
+		UART0.OutChar(ch);
+	}
+	#else
 	if (auto pid = Taskman::Locate(Taskman::CurrentPID())) {
 		auto con = cast<Console_t*>(vttys[pid->focus_tty_id]->offs);//{} assert...
 		if (con) {
@@ -325,6 +333,7 @@ DEFSYSC sysc_OUTC(stduint ch, stduint len) {// OUTC
 		else plogerro("sysc_try: null console");
 	}
 	else plogerro("sysc_try: null task");
+	#endif
 	return -1;
 }
 
@@ -343,11 +352,14 @@ DEFSYSC sysc_EXIT(stduint code) {
 
 static int sys_gethid(unsigned int *ptr_hid)
 {
-	ploginfo("--> sys_gethid, arg0 = %[x]", ptr_hid);
+	auto pid = Taskman::Locate(Taskman::CurrentPID());
+	auto pa = (stduint*)pid->paging[_IMM(ptr_hid)];
+	ploginfo("--> sys_gethid, arg0 = LA %[x] PA %[x]", ptr_hid, pa);
+	if (_IMM(pa) == ~_IMM0) return -1;
 	if (ptr_hid == NULL) {
 		return -1;
 	} else {
-		*ptr_hid = getMHARTID();
+		*pa = getMHARTID();
 		return 0;
 	}
 }
@@ -357,6 +369,9 @@ void syscall(NormalTaskContext* cxt)
 	auto syscall_num = (syscall_t)cxt->a7;
 
 	switch (syscall_num) {
+	case syscall_t::OUTC:
+		sysc_OUTC(cxt->a0, cxt->a1);
+		break;
 	case syscall_t::GET_CORE_ID:
 		cxt->a0 = sys_gethid((unsigned int *)(cxt->a0));
 		break;

@@ -24,7 +24,7 @@ OBJDUMP = ${GPREF}objdump
 QARCH  = riscv64
 QEMU   = qemu-system-$(QARCH)
 QBOARD = virt
-QFLAGS = -nographic -smp 1 -machine $(QBOARD) -bios none
+QFLAGS = -smp 1 -machine $(QBOARD) -bios none
 
 #
 LDFILE  = prehost/$(arch)/$(arch).ld
@@ -47,7 +47,7 @@ endef
 
 #
 asmfile=$(wildcard prehost/qemuvirt-r32/*.S)
-cppfile=$(wildcard prehost/qemuvirt-r32/*.cpp) $(wildcard mecocoa/*.cpp) \
+cppfile=$(wildcard prehost/qemuvirt-r32/*.cpp) $(wildcard mecocoa/*.cpp) prehost/_auxiliary.cpp \
 	$(ulibpath)/cpp/sort.cpp \
 	$(ulibpath)/cpp/consio.cpp \
 	$(ulibpath)/cpp/stream.cpp \
@@ -56,13 +56,16 @@ cppfile=$(wildcard prehost/qemuvirt-r32/*.cpp) $(wildcard mecocoa/*.cpp) \
 	$(ulibpath)/cpp/Device/UART.cpp \
 	$(ulibpath)/cpp/Device/Timer.cpp \
 	$(ulibpath)/cpp/system/paging.cpp \
+	$(ulibpath)/cpp/Device/Storage.cpp \
 	$(ulibpath)/cpp/lango/lango-cpp.cpp \
 	$(ulibpath)/cpp/dat-block/mempool.cpp \
 	$(ulibpath)/cpp/dat-block/bmmemoman.cpp \
 	$(ulibpath)/cpp/nodes/dnode.cpp $(wildcard $(ulibpath)/cpp/nodes/dnode/*.cpp) \
+	$(ulibpath)/cpp/filesystem/FAT.cpp $(wildcard $(ulibpath)/cpp/filesystem/FAT/*.cpp) \
 
 cplfile=$(ulibpath)/c/mcore.c \
 	$(ulibpath)/c/debug.c \
+	$(ulibpath)/c/auxiliary/toxxxer.c \
 	$(wildcard $(ulibpath)/c/dnode/*.c) \
 	$(ulibpath)/c/ustring/astring/salc.c \
 	$(ulibpath)/c/ustring/astring/StrHeap.c \
@@ -74,30 +77,61 @@ cplobjs=$(addprefix $(dest_obj)/$(cplpref),$(patsubst %c,%o,$(notdir $(cplfile))
 
 elf_kernel=mcca-$(arch).elf
 
+archdir=$(ubinpath)/RISCV64/mecocoa
+mntdir=/mnt/floppy
+clang=clang-14
+sudokey=k
+
 .PHONY : build
-build: clean $(asmobjs) $(cppobjs) $(cplobjs)
+build: clean prehost/$(arch)/fatvhd.ignore $(asmobjs) $(cppobjs) $(cplobjs)
 	#echo [building] MCCA for $(arch)
 	@echo MK $(elf_kernel)
 	@perl configs/qemuvirt-riscv.pl r64 > $(LDFILE).ignore
-	@${CC} -E -P -x c ${CFLAGS} $(LDFILE).ignore -D_DEV_GNU_AS -D__BITS__=32 > $(LDFILE)
+	@${CC} -E -P -x c ${CFLAGS} $(LDFILE).ignore -D_DEV_GNU_AS -D__BITS__=64 > $(LDFILE)
 	@mv $(LDFILE) $(LDFILE).ignore
 	@${CC} ${XFLAGS} ${LDFLAGS} -o $(ubinpath)/${elf_kernel} $(uobjpath)/mcca-$(arch)/*.o
 	# readelf -h $ubinpath/mcca-qemuvirt-r64.elf| grep Entry
 	# bin_kernel : ${OBJCOPY} -O binary ${elf_kernel} ${BIN}
+	@echo
+	@echo Run \"make -f accmlib/accmrv64.make\" to build accm-r64
 
-.PHONY : run
+$(uobjpath)/sapp-$(arch)/loop_print_a:
+	$(MKDIR) $(uobjpath)/sapp-$(arch)
+	echo MK subapps/_basic/loop_print_a.cpp
+	@${CX} ${XFLAGS} subapps/_basic/loop_print_a.cpp -o $(uobjpath)/sapp-$(arch)/loop_print_a  -L$(uobjpath)/accm-riscv64 -lriscv64
+$(archdir)/kerdisk.fat: $(uobjpath)/sapp-$(arch)/loop_print_a
+	$(MKDIR) $(archdir)
+	dd if=/dev/zero of=$@ bs=1M count=1
+	mkfs.fat -n 'MECOCOA2' -s 2 -f 2 -R 32 -F 32 $@
+	@echo $(sudokey) | sudo -S mkdir -p $(mntdir)
+	@echo $(sudokey) | sudo -S mount -o loop $(archdir)/kerdisk.fat $(mntdir)
+	@echo $(sudokey) | sudo -S cp $(uobjpath)/sapp-$(arch)/loop_print_a $(mntdir)/lpa.elf
+	tree $(mntdir)
+	@echo $(sudokey) | sudo -S umount $(mntdir)
+prehost/$(arch)/fatvhd.ignore: $(archdir)/kerdisk.fat
+	cp $(archdir)/kerdisk.fat prehost/$(arch)/fatvhd.ignore
+
+.PHONY : run run-only debug
 run: build
 	@echo [ running] MCCA for $(arch)
 	@echo "( Press ^A and then X to exit QEMU )"
-	@${QEMU} ${QFLAGS} -kernel $(ubinpath)/${elf_kernel}
+	${QEMU} ${QFLAGS} -nographic -kernel $(ubinpath)/${elf_kernel}
+# 	@${QEMU} -M ? | grep virt >/dev/null || exit
+run-only:
+	${QEMU} ${QFLAGS} -kernel $(ubinpath)/${elf_kernel}
 
 
-#{TODO} debug
+debug: build
+	# sudo lsof -t -i :1234 | xargs sudo kill -9
+	@${QEMU} ${QFLAGS} -nographic -kernel $(ubinpath)/${elf_kernel} -s -S &
+	@${G_DBG} $(ubinpath)/${elf_kernel} -q -x configs/qemuvirt-rv.gdbinit
+
 
 .PHONY : clean
 clean:
 	@echo ---- Mecocoa $(arch) ----#[clearing]
 # 	${RM} $(uobjpath)/mcca-$(arch)/*
+	${RM} $(archdir)/kerdisk.fat
 	@${MKDIR} $(uobjpath)/mcca-$(arch)
 
 $(foreach src,$(asmfile),$(eval $(call asm_to_o,$(src))))
