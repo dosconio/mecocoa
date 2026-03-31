@@ -30,12 +30,11 @@ use crate uni;
 #include "syscall.hpp"
 #include "taskman.hpp"
 void serv_task_loop();
-
-#if _MCCA == 0x8632
-// ---- [service] console
 #include "console.hpp"
 void serv_cons_loop();
 void serv_conv_loop();
+
+#if _MCCA == 0x8632
 
 // ---- [service] fileman
 #include "fileman.hpp"
@@ -48,6 +47,8 @@ extern InterruptControl IC;
 
 // ---- . ----
 
-#define _GUI_DOUBLE_BUFFER 1// or the anime is disabled
+#define _GUI_ENABLE 1
+// double buffer, or the anime is disabled
+#define _GUI_DOUBLE_BUFFER 1
 
 

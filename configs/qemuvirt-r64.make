@@ -8,7 +8,7 @@ MKDIR = mkdir -p
 RM = rm -rf
 
 # (GNU)
-GPREF   = riscv64-unknown-elf-
+GPREF   = riscv64-elf-
 CFLAGS += -nostdlib -fno-builtin  -Wall -Wno-unused-variable -Wno-unused-function -Wno-parentheses # -g
 CFLAGS += -march=rv64g -mabi=lp64 -mcmodel=medany
 CFLAGS += -I$(uincpath) -D_MCCA=0x1064 -D_OPT_RISCV64 -D_DEBUG

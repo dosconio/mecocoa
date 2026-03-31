@@ -15,7 +15,7 @@ cppobjs=$(patsubst %cpp, %o, $(cppfile))
 
 dest_obj=$(uobjpath)/accm-$(arch)
 
-GPREF   = riscv64-unknown-elf-
+GPREF   = riscv64-elf-
 CFLAGS += -nostdlib -fno-builtin -Wall -Wno-unused-variable -Wno-unused-function -Wno-parentheses
 CFLAGS += -march=rv64g -mabi=lp64
 CFLAGS += -I$(uincpath) -D_ACCM=0x1064 -D_OPT_RISCV64 -D_DEBUG

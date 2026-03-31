@@ -9,6 +9,7 @@
 #include <cpp/Witch/Control/Control-TextBox.hpp>
 #include "../include/console.hpp"
 
+extern const char key_map[256], key_map_shift[256];
 
 #if (_MCCA & 0xFF00) == 0x8600
 
@@ -24,7 +25,6 @@ static void setLED() {
 #ifdef _UEFI
 // uint32
 #elif (_MCCA) == 0x8632
-extern const char key_map[256], key_map_shift[256];
 KeyboardBridge kbdbridge;
 int KeyboardBridge::out(const char* str, stduint len) {
 	static bool last_E0 = false;
@@ -101,7 +101,6 @@ int KeyboardBridge::out(const char* str, stduint len) {
 #endif
 
 #ifdef _UEFI
-extern const char key_map[256], key_map_shift[256];
 extern uni::witch::control::TextBox* ptext_1;
 
 void sysmsg_kbd(keyboard_event_t kbd_event) {

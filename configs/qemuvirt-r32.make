@@ -8,7 +8,7 @@ MKDIR = mkdir -p
 RM = rm -rf
 
 # (GNU)
-GPREF   = riscv64-unknown-elf-
+GPREF   = riscv64-elf-
 CFLAGS += -nostdlib -fno-builtin -Wall -Wno-unused-variable -Wno-unused-function -Wno-parentheses
 CFLAGS += -march=rv32g -mabi=ilp32
 CFLAGS += -I$(uincpath) -D_MCCA=0x1032 -D_OPT_RISCV32 -D_DEBUG
@@ -85,7 +85,7 @@ clang=clang-14
 sudokey=k
 
 .PHONY : build
-build: clean $(archdir)/kerdisk.fat $(asmobjs) $(cppobjs) $(cplobjs)
+build: clean prehost/$(arch)/fatvhd.ignore $(asmobjs) $(cppobjs) $(cplobjs)
 	#echo [building] MCCA for $(arch)
 	@echo MK $(elf_kernel)
 	@perl configs/qemuvirt-riscv.pl r32 > $(LDFILE).ignore

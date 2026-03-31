@@ -37,6 +37,62 @@ static int ProcCmp(pureptr_t a, pureptr_t b) {
 	return treat<ProcessBlock>(((Dnode*)a)->offs).pid -
 	treat<ProcessBlock>(((Dnode*)b)->offs).pid;
 }
+
+#if   _MCCA == 0x8632
+#define _NORMAL_RINGSTACK         0xFFC01000ull
+#elif _MCCA == 0x8664
+#define _NORMAL_RINGSTACK 0xFFFFFFFFC0001000ull
+#endif
+
+static void _Mapping_Core_Stack(Paging& paging) {
+	#if _MCCA == 0x8632
+	//{TODO} Map more cores, cpu1 at 0x0000FFFFFFFF8000ull...
+	paging.Map(0xFFFFF000u, _IMM(higher_stacks[0]), 0x1000, PAGESIZE_4KB, PGPROP_present | PGPROP_writable);// High Part
+
+	#elif _MCCA == 0x8664
+	//{TODO} Map more cores, cpu1 at 0x0000FFFFFFFF8000ull...
+	paging.Map(0x0000FFFFFFFFF000ull, _IMM(higher_stacks[0]), 0x1000, PAGESIZE_4KB, PGPROP_present | PGPROP_writable);// High Part
+	
+	#endif
+}
+static stduint _Taskman_Create_Paging(ProcessBlock *ppb, byte ring, stduint stack_norm) {
+	// [PHINA]: should include LDT in Paging if use jmp-tss: pb->paging.Map(_IMM(page), _IMM(page), allocsize, PAGESIZE_4KB, PGPROP_present | PGPROP_writable);
+	// keep 0x00000000 default empty page
+	#if (_MCCA & 0xFF00) == 0x8600
+	if (ring == 3) {
+		ppb->paging.Reset();
+		// stack
+		ppb->paging.Map(_IMM(ppb->stack_lineaddr), (stack_norm), ppb->stack_size, PAGESIZE_4KB, PGPROP_present | PGPROP_writable | PGPROP_user_access);
+		ppb->paging.Map(_NORMAL_RINGSTACK, _IMM(ppb->stack_levladdr), ppb->stack_size, PAGESIZE_4KB, PGPROP_present | PGPROP_writable);
+		//
+		#if   _MCCA == 0x8632
+		ppb->paging.Map(0x80000000, 0x00000000, 0x04000000, PAGESIZE_4KB, PGPROP_present | PGPROP_writable);
+		// pb->paging.Map(0x80000000, 0x00000000, kernel_size, true, _Comment(R0) false);// should include LDT
+		#elif _MCCA == 0x8664
+		ppb->paging.Map(0x0000FFFFC0000000ull,
+			0x0000000000000000ull, 0x1000,
+			PAGESIZE_4KB, PGPROP_present | PGPROP_writable
+		);
+		ppb->paging.Map(0x0000FFFFC0010000ull,
+			0x0000000000010000ull, _IMM1S(PAGESIZE_2MB) - 0x10000,
+			PAGESIZE_4KB, PGPROP_present | PGPROP_writable
+		);
+		ppb->paging.Map(0x0000FFFFC0000000ull + _IMM1S(PAGESIZE_2MB),
+			0x0000000000000000ull + _IMM1S(PAGESIZE_2MB),
+			0x40000000ull - 2 * _IMM1S(PAGESIZE_2MB),
+			PAGESIZE_2MB, PGPROP_present | PGPROP_writable
+		);// High Part
+		#endif
+
+		_Mapping_Core_Stack(ppb->paging);
+	}
+	else {
+		ppb->paging.root_level_page = (PageEntry*)getCR3();
+	}
+	return _IMM(ppb->paging.root_level_page);
+	#endif
+	return nil;
+}
 void Taskman::Initialize(stduint cpuid) {
 	#if (_MCCA & 0xFF00) == 0x8600
 	if (cpuid || PCU_CORES_TSS[0]) return; // already initialized
@@ -45,30 +101,49 @@ void Taskman::Initialize(stduint cpuid) {
 	MemSet(addr, 0, sizeof(TSS_t) * PCU_CORES);
 	for0(i, PCU_CORES) {
 		PCU_CORES_TSS[i] = addr;
-		#if _MCCA == 0x8664
 		higher_stacks[i] = (mem.allocate(0x1000, PAGESIZE_4KB));
-		addr->RSP0 = 0xFFFFFFFFC0001000ull + HIGHER_STACK_SIZE - 8;// for user-app in cpu0
+		#if _MCCA == 0x8664
+		addr->RSP0 = _NORMAL_RINGSTACK + HIGHER_STACK_SIZE - 8;// for user-app in cpu0
 		#else
 		addr->ESP0 = _IMM(mem.allocate(0x1000));
 		#endif
 		addr++;
+		//{} TEMP GDT_Alloc and tss.setRange
+		if (i == 0)
+		{
+			mecocoa_global->gdt_ptr->tss.setRange(mglb(PCU_CORES_TSS[i]), sizeof(TSS_t) - 1);
+			#if _MCCA == 0x8632
+			const stduint stack_lev_top = _NORMAL_RINGSTACK + HIGHER_STACK_SIZE;
+			PCU_CORES_TSS[i]->ESP0 = stack_lev_top - 0x10;
+			PCU_CORES_TSS[i]->SS0 = SegData;
+			PCU_CORES_TSS[i]->ESP1 = stack_lev_top - 0x10;
+			PCU_CORES_TSS[i]->SS1 = 8 * 5 + 4 + 1;// 4:LDT 8*5:SS1 1:Ring1
+			PCU_CORES_TSS[i]->ESP2 = stack_lev_top - 0x10;
+			PCU_CORES_TSS[i]->SS2 = 8 * 6 + 4 + 2;// 4:LDT 8*6:SS2 2:Ring2
+			//
+			PCU_CORES_TSS[i]->LDTDptr = SegGLDT + 3; // LDT yo GDT
+			PCU_CORES_TSS[i]->LDTLength = 8 * 8 - 1;
+			PCU_CORES_TSS[i]->STRC_15_T = 0;
+			PCU_CORES_TSS[i]->IO_MAP = sizeof(TSS_t) - 1;
+			#endif
+		}
 	}
-	#if _MCCA == 0x8664
-	//{TODO} Map more cores, cpu1 at 0x0000FFFFFFFF8000ull...
-	kernel_paging.Map(0x0000FFFFFFFFF000ull, _IMM(higher_stacks[0]), 0x1000, PAGESIZE_4KB, PGPROP_present | PGPROP_writable);// High Part
+	_Mapping_Core_Stack(kernel_paging);
 	
-	#elif _MCCA == 0x8632// x64 do not use LDT
+	
+	#if _MCCA == 0x8632// TEMP x64 do not use LDT (no R1 and R2)
+	kernel_paging.Map(_NORMAL_RINGSTACK, (stduint)mem.allocate(HIGHER_STACK_SIZE), HIGHER_STACK_SIZE, PAGESIZE_4KB, PGPROP_present | PGPROP_writable);
 	make_LDT(_LDT, 3);
 	const auto LDTLength = sizeof(_LDT) - 1;
 	descriptor_t* const GDT = (descriptor_t*)mecocoa_global->gdt_ptr;
-	Descriptor32Set(&GDT[SegGLDT / 8], mglb(&_LDT), LDTLength, _Dptr_LDT, 0, 0 /* is_sys */, 1 /* 32-b */, 0 /* not-4k */);// [0x00408200]
+	Descriptor32Set(&GDT[SegGLDT / 8], mglb(&_LDT), LDTLength, _Dptr_LDT, 0, 0 /* is_sys */, 1 /* 32-b */, 0 /* not-4k */);
 	#endif
 	
-	
-	// Type = 10x1 + L=0 +  D/B=0 + 16B  64-bit TSS
-	//             + L=1 OR D/B=1        32-bit TSS
-	mecocoa_global->gdt_ptr->tss.setRange(mglb(PCU_CORES_TSS[0]), sizeof(TSS_t) - 1);
 	loadTask(SegTSS0);
+
+	#if _MCCA == 0x8632
+	_ASM("LLDT %w0" : : "r"(SegGLDT) : "memory");
+	#endif
 
 	#endif// (_MCCA & 0xFF00) == 0x8600
 
@@ -104,94 +179,54 @@ auto Taskman::AllocateTask() -> ProcessBlock* {
 	return ppb;
 }
 
-static stduint _Taskman_Create_Paging(ProcessBlock *ppb, byte ring) {
-	#if _MCCA == 0x8632
-	if (ring == 3) {
-		ppb->paging.Reset();
-		ppb->paging.Map(0x00000000, 0x00000000, 0x00400000, PAGESIZE_4KB, PGPROP_present | PGPROP_writable | PGPROP_user_access | PGPROP_weak);//{TEMP}
-		ppb->paging.Map(0x80000000, 0x00000000, 0x08000000, PAGESIZE_4KB, PGPROP_present | PGPROP_writable | PGPROP_weak);// 0x80 pages
-	}
-	else {
-		ppb->paging.root_level_page = (PageEntry*)getCR3();
-	}
-	return _IMM(ppb->paging.root_level_page);
-	#endif
-	return nil;
+#if (_MCCA & 0xFF00) == 0x8600
+static stduint getCS(stduint ring) {
+	if (!ring) return (__BITS__ == 64 ? SegCo64 : SegCo32);
+	if (ring == 3) return SegCoR3 | ring;
+	else return 8 * (ring) + 0b100 | ring;
 }
+static stduint getSS(stduint ring) {
+	if (!ring) return SegData;
+	if (ring == 3) return SegDaR3 | ring;
+	else return 8 * (4 + ring) + 0b100 + ring;
+}
+#endif
 ProcessBlock* Taskman::Create(void* entry, byte ring)
 {
 	auto ppb = AllocateTask();
 	if (!ppb) return nullptr;
-	#if _MCCA == 0x8664
+	ppb->ring = ring;
+	ppb->parent_id = Task_Kernel;
+	#if (_MCCA & 0xFF00) == 0x8600
+	ppb->paging.root_level_page = (PageEntry *)getCR3();
 	auto& new_ctx = ppb->context;
 	new_ctx.IP = _IMM(entry);
-	new_ctx.DI = 0;// para0
-	new_ctx.SI = 0;// para1
+	new_ctx.DI = 0;// x64 para0
+	new_ctx.SI = 0;// x64 para1
 	new_ctx.CR3 = getCR3();
-	new_ctx.FLAG = 0x202;
-	new_ctx.CS = SegCo64;
-	new_ctx.DS = SegData;
-	new_ctx.ES = SegData;
-	new_ctx.FS = SegData;
-	new_ctx.GS = SegData;
-	new_ctx.SS = SegData;
-	auto stack = mempool.allocate(DEFAULT_STACK_SIZE, 12);
-	const stduint stack_top = _IMM(stack) + DEFAULT_STACK_SIZE;
-	new_ctx.SP = (stack_top & ~0xFlu) - 8;
+	REG_FLAG_t flag = {};
+	flag._r1 = 1, flag.IF = 1, flag.IOPL = 0x1;
+	new_ctx.FLAG = cast<stduint>(flag);
+	new_ctx.CS = getCS(ring);
+	new_ctx.DS = SegDaR3 | ring;
+	new_ctx.ES = new_ctx.DS;
+	new_ctx.FS = new_ctx.DS;
+	new_ctx.GS = new_ctx.DS;
+	new_ctx.SS = getSS(ring);
 	new_ctx.RING = ring;
 	treat<uint32>(&new_ctx.floating_point_context[24]) = 0x1F80;// ban all MXCSR exception
 	ppb->ring = ring;
 	ppb->stack_size = DEFAULT_STACK_SIZE;
-	ppb->stack_lineaddr = (byte*)stack _TEMP;
-	#elif _MCCA == 0x8632
-	//
-	word parent = SegTSS0;// Kernel Task
-
-	word TSSSelector = GDT_Alloc() / 8;//{TODO} - One Global LDT
-	ppb->ring = ring;
-	ppb->stack_size = 0x1000;
 	ppb->stack_lineaddr = (byte*)mempool.allocate(ppb->stack_size, 12);
-	ppb->stack_levladdr = ring ? (byte*)mempool.allocate(ppb->stack_size, 12) : ppb->stack_lineaddr;
+	ppb->stack_levladdr = ring != RING_M ? (byte*)mempool.allocate(ppb->stack_size, 12) : ppb->stack_lineaddr;
+	const stduint stack_top = _IMM(ppb->stack_lineaddr) + DEFAULT_STACK_SIZE;
+	new_ctx.SP = (stack_top & ~0xFlu) - 8;
 
-	descriptor_t* GDT = (descriptor_t*)mecocoa_global->gdt_ptr;
+	// TSS->CR3 = _Taskman_Create_Paging(ppb, ring, _IMM(ppb->stack_lineaddr));
+	// if (ring == RING_U) {
+	// 	ppb->paging.Map(0x00010000, 0x00010000, 0x003F0000, PAGESIZE_4KB, PGPROP_present | PGPROP_writable | PGPROP_user_access | PGPROP_weak);
+	// }
 
-	TSS_t* TSS = &ppb->TSS;
-	TSS->LastTSS = parent;
-	TSS->NextTSS = 0;
-	TSS->ESP0 = (dword)(ppb->stack_levladdr) + 0xFF0;
-	TSS->SS0 = 8 * 4 + 4 + 0;// 4:LDT 8*4:SS0 0:Ring0 
-	TSS->ESP1 = (dword)(ppb->stack_levladdr) + 0xFF0;
-	TSS->SS1 = 8 * 5 + 4 + 1;// 4:LDT 8*5:SS1 1:Ring1
-	TSS->ESP2 = (dword)(ppb->stack_levladdr) + 0xFF0;
-	TSS->SS2 = 8 * 6 + 4 + 2;// 4:LDT 8*6:SS2 2:Ring2
-
-	TSS->CR3 = _Taskman_Create_Paging(ppb, ring);
-
-	TSS->EIP = _IMM(entry);
-	TSS->EFLAGS = getFlags();
-	TSS->EAX = TSS->ECX = TSS->EDX = TSS->EBX = TSS->EBP = TSS->ESI = TSS->EDI = 0;
-	TSS->ESP = ring ? _IMM(ppb->stack_lineaddr + 0xFF0) : TSS->ESP0;
-	//{} stack over-check - single segment
-
-	// now not allow IOMap
-	TSS->ES = 8 * 7 + 0b100 + ring;
-	TSS->CS = ring ? 8 * ring + 0b100 + ring : SegCo32;
-	TSS->SS = 8 * (4 + ring) + 0b100 + ring;
-	TSS->DS = TSS->ES;
-	TSS->FS = TSS->ES;
-	TSS->GS = TSS->ES;
-	TSS->LDTDptr = SegGLDT + ring; // LDT yo GDT
-	TSS->LDTLength = 8 * 8 - 1;
-	TSS->STRC_15_T = 0;
-	TSS->IO_MAP = sizeof(TSS_t) - 1; // TaskFlat->IOMap? TaskFlat->IOMap-TSS: sizeof(TSS_t)-1;
-
-	Descriptor32Set(&GDT[TSSSelector], _IMM(TSS), sizeof(TSS_t)-1, _Dptr_TSS386_Available, 0, 0 /* is_sys */, 1 /* 32-b */, 0 /* not-4k */ );// TSS [0x00408900]
-
-
-	cast<REG_FLAG_t>(TSS->EFLAGS).IF = 1;
-	cast<REG_FLAG_t>(TSS->EFLAGS).IOPL = 0x1;
-
-	if (0) outsfmt("TSS %d at 0x%[x], SP=0x%[32H]\n\r", TSSSelector, ppb->stack_lineaddr, TSS->ESP);
 	#elif (_MCCA & 0xFF00) == 0x1000
 	auto& ctx = ppb->context;
 	ctx.sp = (stduint)mempool.allocate(DEFAULT_STACK_SIZE, 12) + DEFAULT_STACK_SIZE - 0x10;
@@ -283,56 +318,23 @@ ProcessBlock* Taskman::CreateELF(BlockTrait* source, byte ring) {
 		plogerro("%s: Invalid ELF File Magic Number", __FUNCIDEN__);
 		return nullptr;
 	}
-
-	#if (_MCCA & 0xFF00) == 0x8600
-	word parent = SegTSS0;// Kernel Task
-	#endif
+	
 	ProcessBlock* pb = Taskman::AllocateTask();
 	pb->ring = ring;
-	
-	pb->stack_size = 0x4000;
+	pb->parent_id = Task_Kernel;
+
+	pb->stack_size = HIGHER_STACK_SIZE;
 	auto stack_norm = (byte*)mempool.allocate(pb->stack_size, 12);
 	auto stack_ring = ring ? (byte*)mempool.allocate(pb->stack_size, 12) : stack_norm;
 	pb->stack_lineaddr = (byte*)0x1000;
 	pb->stack_levladdr = stack_ring;
 
-	
-	#if _MCCA == 0x8632
-	word TSSSelector = GDT_Alloc() / 8;
-	descriptor_t* GDT = (descriptor_t*)mecocoa_global->gdt_ptr;
-	TSS_t* TSS = &pb->TSS;
-	TSS->LastTSS = parent;
-	TSS->NextTSS = 0;
-	#endif
-
 	// ---- CR3 Mapping ---- //
-	// [PHINA]: should include LDT in Paging if use jmp-tss: pb->paging.Map(_IMM(page), _IMM(page), allocsize, PAGESIZE_4KB, PGPROP_present | PGPROP_writable);
-	// keep 0x00000000 default empty page
-	pb->paging.Reset();
 	stduint kernel_size = _TEMP 0x00400000;
-	#if _MCCA == 0x8632
-	TSS->CR3 = _IMM(pb->paging.root_level_page);
-	pb->paging.Map(_IMM(pb->stack_lineaddr), _IMM(stack_norm), pb->stack_size, PAGESIZE_4KB, PGPROP_present | PGPROP_writable | PGPROP_user_access);
-	pb->paging.Map(0x1000 + 0x4000, _IMM(pb->stack_levladdr), pb->stack_size, PAGESIZE_4KB, PGPROP_present | PGPROP_writable);// !!!  TEMP !!!!
-	// pb->paging.Map(0xFFF..., _IMM(pb->stack_levladdr), pb->stack_size, PAGESIZE_4KB, PGPROP_present | PGPROP_writable);
-	pb->paging.Map(0x80000000, 0x00000000, 0x04000000, PAGESIZE_4KB, PGPROP_present | PGPROP_writable);// should include LDT
-	// pb->paging.Map(0x80000000, 0x00000000, kernel_size, true, _Comment(R0) false);// should include LDT
-	#elif _MCCA == 0x8664
-	pb->context.CR3 = _IMM(pb->paging.root_level_page);
-	pb->paging.Map(0x00001000, _IMM(stack_norm), pb->stack_size, PAGESIZE_4KB, PGPROP_present | PGPROP_writable | PGPROP_user_access);
-
-	pb->paging.Map(0x0000FFFFC0000000ull,
-		0x0000000000000000ull,
-		0x40000000ull - _IMM1S(PAGESIZE_2MB),
-		PAGESIZE_2MB, PGPROP_present | PGPROP_writable
-	);// High Part
-	//{TODO} Map more cores, cpu1 at 0x0000FFFFFFFF8000ull...
-	pb->stack_levladdr = (byte*)mempool.allocate(HIGHER_STACK_SIZE, 12);
-	pb->paging.Map(0xFFFFFFFFC0001000ull, _IMM(pb->stack_levladdr), // _IMM(higher_stacks[0]),
-		HIGHER_STACK_SIZE, PAGESIZE_4KB, PGPROP_present | PGPROP_writable
-	);// High Part. overlap with kernel 0..4KB
-	pb->paging.Map(0x0000FFFFFFFFF000ull, _IMM(higher_stacks[0]), 0x1000, PAGESIZE_4KB, PGPROP_present | PGPROP_writable);// High Part
+	#if (_MCCA & 0xFF00) == 0x8600
+	pb->context.CR3 = _Taskman_Create_Paging(pb, ring, _IMM(stack_norm));
 	#elif _MCCA == 0x1032 || _MCCA == 0x1064
+	pb->paging.Reset();
 	auto make_satp = [](void* root_page_ptr) -> stduint {
 		if (!root_page_ptr) return 0;
 		stduint ppn = _IMM(root_page_ptr) >> 12;
@@ -350,11 +352,8 @@ ProcessBlock* Taskman::CreateELF(BlockTrait* source, byte ring) {
 	// S-MCCA need map kernel (TODO)
 	#endif
 
-	#if _MCCA == 0x8632
-	TSS->EIP = _IMM(header.e_entry);
-	#else
 	pb->context.IP = _IMM(header.e_entry);
-	#endif
+
 	stduint load_slice_p = 0;
 	for0(i, header.e_phnum) {
 		struct ELF_PHT_t ph;
@@ -376,41 +375,17 @@ ProcessBlock* Taskman::CreateELF(BlockTrait* source, byte ring) {
 	delete[] block_buffer;
 
 	// ---- Stack and Gen.Regis ---- //
-	//{TODO} Stack Over Check - single segment
-	//{TODO} allow IOMap Version
 	const stduint stack_loc_top = _IMM(pb->stack_lineaddr) + pb->stack_size;
-	const stduint stack_lev_top = _TEMP 0x1000 + pb->stack_size * 2;
-	#if _MCCA == 0x8632
-	TSS->ESP0 = stack_lev_top - 0x10;
-	TSS->SS0 = 8 * 4 + 4 + 0;// 4:LDT 8*4:SS0 0:Ring0 
-	TSS->ESP1 = stack_lev_top - 0x10;
-	TSS->SS1 = 8 * 5 + 4 + 1;// 4:LDT 8*5:SS1 1:Ring1
-	TSS->ESP2 = stack_lev_top - 0x10;
-	TSS->SS2 = 8 * 6 + 4 + 2;// 4:LDT 8*6:SS2 2:Ring2
-	TSS->EFLAGS = 2;
-	cast<REG_FLAG_t>(TSS->EFLAGS).IF = 1;
-	if (ring <= 1) TSS->EFLAGS |= _IMM1 << 12;
-	//
-	TSS->ESP = ring ? stack_loc_top - 0x10 : TSS->ESP0/* unchk ring0: should paging with kernel.cr3 ? */;
-	TSS->ES = 8 * 7 + 0b100 + ring;
-	TSS->CS = ring ? 8 * ring + 0b100 + ring : SegCo32;
-	TSS->SS = 8 * (4 + ring) + 0b100 + ring;
-	TSS->DS = TSS->ES;
-	TSS->FS = TSS->ES;
-	TSS->GS = TSS->ES;
-	TSS->LDTDptr = SegGLDT + ring; // LDT yo GDT
-	TSS->LDTLength = 8 * 8 - 1;
-	TSS->STRC_15_T = 0;
-	TSS->IO_MAP = sizeof(TSS_t) - 1; // TaskFlat->IOMap? TaskFlat->IOMap-TSS: sizeof(TSS_t)-1;
-	//
-	Descriptor32Set(&GDT[TSSSelector], _IMM(TSS) + 0x80000000, sizeof(TSS_t)-1, _Dptr_TSS386_Available, 0, 0 /* is_sys */, 1 /* 32-b */, 0 /* not-4k */ );// TSS [0x00408900]
+	
 
+	#if (_MCCA & 0xFF00) == 0x8600
 
-	#elif _MCCA == 0x8664
 	pb->context.SP = (stack_loc_top & ~0xFlu) - 8;// single stack
-	pb->context.SS = SegDaR3 | ring;
-	pb->context.FLAG = 0x202;
-	pb->context.CS = SegCoR3 | ring;
+	pb->context.SS = getSS(ring);
+	REG_FLAG_t flag = {};
+	flag._r1 = 1, flag.IF = 1, flag.IOPL = (ring <= 1 ? 0x1u : 0u);
+	pb->context.FLAG = cast<stduint>(flag);
+	pb->context.CS = getCS(ring);
 	pb->context.DS = SegDaR3 | ring;
 	pb->context.ES = SegDaR3 | ring;
 	pb->context.FS = SegDaR3 | ring;
@@ -461,45 +436,35 @@ bool task_switch_enable = true;//{} spinlk
 
 
 #ifdef _ARC_x86
-
-// return pid of child (zero if no child or failure)
+// CreateFork
 static stduint task_fork(ProcessBlock* fo, const CallgateFrame* frame)
 {
-	//{TODO} check undone and duplicate operations
+	// check undone and duplicate operations
 	// 1. Copy the PB
 	// 2. Copy segmants and stack
 	// 3. FS Operation
-	word parent = T_pid2tss(fo->getID());
 
 	ProcessBlock* pb = Taskman::AllocateTask();
+	if (!pb) return 0;
 
 	auto ring = fo->ring;
+	pb->ring = ring;
+	pb->parent_id = fo->getID();
 
+	// ---- Stack ---- //
 	pb->stack_size = fo->stack_size;
 	auto stack_norm = (byte*)mempool.allocate(pb->stack_size, 12);
 	auto stack_ring = ring ? (byte*)mempool.allocate(pb->stack_size, 12) : stack_norm;
-	pb->stack_lineaddr = (byte*)0x1000;
+	pb->stack_lineaddr = fo->stack_lineaddr;
 	pb->stack_levladdr = stack_ring;
-
-	word TSSSelector = GDT_Alloc() / 8;//{TEMP}
-
-	descriptor_t* GDT = (descriptor_t*)mecocoa_global->gdt_ptr;
-	TSS_t* TSS = &pb->TSS;
-	*TSS = fo->TSS;
-	TSS->LastTSS = parent;
-	TSS->NextTSS = 0;
-	//
-	TSS->LDTDptr = SegGLDT + ring;
 
 	// ---- Copy CR3 Mapping ---- //
 	// - Segments Mapping with coping
 	// - Kernel-Area Mapping
 	// - (TODO) Heap Area Mapping
-	pb->paging.Reset();
-	TSS->CR3 = _IMM(pb->paging.root_level_page);
+	pb->context = fo->context;
 	//{TEMP} use simple method
-	pb->paging.Map(_IMM(pb->stack_lineaddr), _IMM(stack_norm), pb->stack_size, PAGESIZE_4KB, PGPROP_present | PGPROP_writable | PGPROP_user_access);
-	pb->paging.Map(0x1000 + 0x4000, _IMM(pb->stack_levladdr), pb->stack_size, PAGESIZE_4KB, PGPROP_present | PGPROP_writable);// !!!  TEMP !!!!
+	pb->context.CR3 = _Taskman_Create_Paging(pb, ring, _IMM(stack_norm));
 	for0a(i, fo->load_slices) {
 		if (!fo->load_slices[i].length) break;
 		pb->load_slices[i] = fo->load_slices[i];
@@ -514,7 +479,6 @@ static stduint task_fork(ProcessBlock* fo, const CallgateFrame* frame)
 			(void*)fo->load_slices[i].address, fo->paging,
 			fo->load_slices[i].length);
 	}
-	pb->paging.Map(0x80000000, 0x00000000, 0x8000000, PAGESIZE_4KB, PGPROP_present | PGPROP_writable);// should include LDT
 
 	pb->priority = fo->priority;
 	pb->time_slice = fo->time_slice;
@@ -522,42 +486,26 @@ static stduint task_fork(ProcessBlock* fo, const CallgateFrame* frame)
 	// ---- Stack and Gen.Regis ---- //
 	const stduint stack_loc_top = _IMM(pb->stack_lineaddr) + pb->stack_size;
 	const stduint stack_lev_top = _TEMP 0x1000 + pb->stack_size * 2;
-	TSS->ESP0 = stack_lev_top - 0x10;
-	TSS->ESP1 = stack_lev_top - 0x10;
-	TSS->ESP2 = stack_lev_top - 0x10;
-	TSS->SS0 = 8 * 4 + 4 + 0;// 4:LDT 8*4:SS0 0:Ring0 
-	TSS->SS1 = 8 * 5 + 4 + 1;// 4:LDT 8*5:SS1 1:Ring1
-	TSS->SS2 = 8 * 6 + 4 + 2;// 4:LDT 8*6:SS2 2:Ring2
 	//
-	TSS->ES = 8 * 7 + 0b100 + ring;
-	TSS->CS = ring ? 8 * ring + 0b100 + ring : SegCo32;
-	TSS->SS = 8 * (4 + ring) + 0b100 + ring;// ss0
-	TSS->DS = TSS->ES;
-	TSS->FS = TSS->ES;
-	TSS->GS = TSS->ES;
+	pb->context.ES = SegDaR3 | ring;
+	pb->context.CS = getCS(ring);
+	pb->context.SS = getSS(ring);
+	pb->context.DS = pb->context.ES;
+	pb->context.FS = pb->context.ES;
+	pb->context.GS = pb->context.ES;
 	
 	MemCopyP(pb->stack_lineaddr, pb->paging, fo->stack_lineaddr, fo->paging, pb->stack_size);
 	MemCopyP(pb->stack_levladdr, kernel_paging, fo->stack_levladdr, kernel_paging, pb->stack_size);
 
-	// Adapt BP (C++) and SP
-	// if (TSS->EBP > 0x80000000)
-	// 	TSS->EBP = fo->TSS.EBP - _IMM(fo->stack_levladdr) + _IMM(pb->stack_levladdr);
-	// if (ring)
-	// 	TSS->ESP = fo->TSS.ESP - _IMM(fo->stack_levladdr) + _IMM(pb->stack_levladdr);
-
-	TSS->EAX = nil; // return from fork()
-	TSS->ECX = frame->cx;
-	TSS->EDX = frame->dx;
-	TSS->EBX = frame->bx;
-	TSS->ESI = frame->si;
-	TSS->EDI = frame->di;
-	TSS->EBP = frame->bp;
-	TSS->EIP = frame->ip;
-	TSS->ESP = frame->sp0;
-
-	//	
-
-	Descriptor32Set(&GDT[TSSSelector], _IMM(TSS) + 0x80000000, sizeof(TSS_t)-1, _Dptr_TSS386_Available, 0, 0 /* is_sys */, 1 /* 32-b */, 0 /* not-4k */ );// TSS [0x00408900]
+	pb->context.AX = nil; // return from fork()
+	pb->context.CX = frame->cx;
+	pb->context.DX = frame->dx;
+	pb->context.BX = frame->bx;
+	pb->context.SI = frame->si;
+	pb->context.DI = frame->di;
+	pb->context.BP = frame->bp;
+	pb->context.IP = frame->ip;
+	pb->context.SP = frame->sp0;
 
 	// ---- File ---- //
 	for0a(i, pb->pfiles) if (pb->pfiles[i]) {
@@ -566,7 +514,7 @@ static stduint task_fork(ProcessBlock* fo, const CallgateFrame* frame)
 	}
 
 	Taskman::Append(pb);
-	return TSSSelector * 8;
+	return pb->getID();
 }
 
 /* dump
@@ -594,7 +542,7 @@ static void cleanup(stduint pid)
 	// proc->p_flags = FREE_SLOT;
 	Taskman::DequeueReady(TaskGet(pid));
 	TaskGet(pid)->state = ProcessBlock::State::Invalid;
-	TaskGet(pid)->TSS.LastTSS = 0;
+	// TaskGet(pid)->TSS.LastTSS = 0;
 }
 inline static bool is_waiting(ProcessBlock* p) {
 	return p->state == ProcessBlock::State::Pended &&
@@ -603,7 +551,7 @@ inline static bool is_waiting(ProcessBlock* p) {
 static void task_exit(stduint pid, stduint status)
 {
 	ProcessBlock* p = TaskGet(pid);
-	auto parent_pid = T_tss2pid(p->TSS.LastTSS);
+	auto parent_pid = p->parent_id;
 	ProcessBlock* pparent = TaskGet(parent_pid);
 	stduint args[2] = { pid, status };
 
@@ -633,8 +581,8 @@ static void task_exit(stduint pid, stduint status)
 	auto nod = Taskman::chain.Root();
 	while (nod) {
 		auto taski = (ProcessBlock*)nod->offs;
-		if (taski->pid && T_tss2pid(taski->TSS.LastTSS) == pid) {
-			taski->TSS.LastTSS = T_pid2tss(Task_Init);
+		if (taski->pid && taski->parent_id == pid) {
+			taski->parent_id = (Task_Init);
 			if (is_waiting(TaskGet(Task_Init)) && taski->state == PBS::Hanging) {
 				// cast<stduint>(pparent->block_reason) &= ~_IMM(ProcessBlock::BlockReason::BR_Waiting);
 				pparent->Unblock(ProcessBlock::BlockReason::BR_Waiting);
@@ -651,7 +599,7 @@ static stduint task_wait(stduint pid, stduint* usrarea_state)
 	stduint children = 0;
 	for(auto nod = Taskman::chain.Root(); nod; nod = nod->next) {
 		auto taski = (ProcessBlock*)nod->offs;
-		if (taski->pid && T_tss2pid(taski->TSS.LastTSS) == pid) {
+		if (taski->pid && taski->parent_id == pid) {
 			children++;
 			if (taski->state == ProcessBlock::State::Hanging) {
 				stduint args[2] = { pid, taski->exit_status };

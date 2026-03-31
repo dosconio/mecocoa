@@ -11,7 +11,7 @@ cplfile=$(wildcard $(ulibpath)/c/*.c) $(wildcard accmlib/*.c)
 cplobjs=$(patsubst %c, %o, $(cplfile))
 
 cpppref=_cx_
-cppfile=$(wildcard $(ulibpath)/cpp/*.cpp) $(wildcard accmlib/*.cpp)
+cppfile=$(wildcard $(ulibpath)/cpp/*.cpp) $(wildcard accmlib/*.cpp) prehost/_auxiliary.cpp
 cppobjs=$(patsubst %cpp, %o, $(cppfile))
 
 dest_obj=$(uobjpath)/accm-$(arch)

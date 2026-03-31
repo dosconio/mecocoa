@@ -21,14 +21,18 @@ bool Cursor::mouse_btnl_dn = false;
 bool Cursor::mouse_btnm_dn = false;
 bool Cursor::mouse_btnr_dn = false;
 
-// ---- ---- TTY ---- ----
+#endif
+
+
+#if 1 // ---- ---- TTY ---- ----
 
 Dchain ttys = { nullptr };// offs->Ostream*, type->B/V
 Dchain vttys = { nullptr };// offs->Ostream*, type->pid
 
-// each barecon: ----
+#endif
 
-// each con:
+#if (_MCCA & 0xFF00) == 0x8600
+
 typedef char innQueueBuf[64];
 static innQueueBuf _BUF_innQueues[TTY_NUMBER];
 stduint tty_crt_blocked_appid[TTY_NUMBER];// 0 if no app
@@ -218,6 +222,9 @@ void cons_init() {
 	#if !defined(_UEFI)
 	call_ladder(R16FN_LSVM);// list video modes
 	for (auto vie = (VideoInfoEntry*)0x78000; _IMM(vie) < 0x80000; vie++) {
+		#if !_GUI_ENABLE
+		break;
+		#endif
 		if (!vie->mode) break;
 		// ploginfo("mode %[16H], %ux%u, ARGB:%[16H]", vie->mode, vie->width, vie->height, vie->bitmode);
 		if (vie->bitmode == 0x8888 && vie->width == 800) {
@@ -233,6 +240,7 @@ void cons_init() {
 		con0_out = &Bcons[0];
 		Bcons[0].Scroll(24);
 		for0a(i, Bcons) ttys.Append(dynamic_cast<Console_t*>(&Bcons[i]));
+		for0a(i, Bcons) vttys.Append(dynamic_cast<Console_t*>(&Bcons[i]));
 		plogwarn("There is no default 800xN-8888 Video Mode");
 		return;
 	}

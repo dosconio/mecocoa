@@ -137,6 +137,8 @@ void GDT_Init() {
 	MemCopyN(mecocoa_global->gdt_ptr, GDT_LIST, sizeof(GDT_LIST));
 	#if _MCCA == 0x8632
 	mecocoa_global->gdt_ptr->rout.setModeCall(mglb(Handint_SYSCALL_Entry), SegCo32);
+	mecocoa_global->gdt_ptr->cor3 = mecocoa_global->gdt_ptr->code;
+	mecocoa_global->gdt_ptr->cor3.DPL = 3;
 	#endif
 	loadGDT(_IMM(mecocoa_global->gdt_ptr), mecocoa_global->gdt_len = sizeof(mec_gdt) - 1);
 	#if _MCCA == 0x8632

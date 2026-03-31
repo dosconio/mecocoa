@@ -77,10 +77,6 @@ enum {
 #if (_MCCA & 0xFF00) == 0x8600
 extern TSS_t* PCU_CORES_TSS[PCU_CORES_MAX];
 
-#if _MCCA == 0x8632
-#define T_pid2tss(pid) (SegTSS0 + 8 * pid)
-#define T_tss2pid(tssid) ((tssid - SegTSS0) / 8)
-#endif
 #endif
 
 // Message
@@ -102,6 +98,7 @@ class _Comment(Kernel) ProcessBlock {
 public:
 	alignas(16) NormalTaskContext context;// advanced TSS_t
 	stduint pid;
+	stduint parent_id;
 	inline stduint getID() { return pid; }
 	stduint ring;
 public:
@@ -156,15 +153,8 @@ public: // _Comment(Taskman);
 public: // _Comment(Console);
 	uint32 focus_tty_id;
 	SheetTrait* pforms[_TEMP 4] = {};// should registered in global_layman
-public:// old design: have not updated completely
-	#if _MCCA == 0x8632
-
-	TSS_t TSS;// aka state-frame
-
-
 public: // _Comment(Fileman);
 	FileDescriptor* pfiles[_TEMP 4];
-	#endif
 };
 #endif
 
@@ -198,6 +188,8 @@ public:
 		Create(void* entry, byte ring) -> ProcessBlock*;
 	static auto// newProcess (ELF)
 		CreateELF(BlockTrait* source, byte ring) -> ProcessBlock*;
+	static auto// newProcess
+		CreateFork(ProcessBlock* parent) -> ProcessBlock*;
 	static auto
 		ExitCurrent(stduint code) -> bool;
 public:// schedule

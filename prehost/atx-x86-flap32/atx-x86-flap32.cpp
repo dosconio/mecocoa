@@ -80,14 +80,14 @@ _sign_entry() {
 	ploginfo("[Memoman] total memory %[x]", Memory::total_memsize);
 
 	// Service
-	Taskman::Create((void*)&serv_cons_loop, 1);
+	Taskman::Create((void*)&serv_cons_loop, 0);
 	Taskman::Create((void*)&serv_conv_loop, 0);
-	Taskman::Create((void*)&serv_dev_hd_loop, 1);
+	Taskman::Create((void*)&serv_dev_hd_loop, 0);
 	Taskman::Create((void*)&serv_file_loop, 0);
-	Taskman::Create((void*)&serv_task_loop, 0);// GDT operation
+	Taskman::Create((void*)&serv_task_loop, 0);
 
 	IC.enAble();
-	syscall(syscall_t::OUTC, 'O');
+	syscall(syscall_t::OUTC, 'O', 0);
 	Console.OutFormat("hayouuu~!\n\r");
 
 	Memory::pagebmap->dump_avail_memory();

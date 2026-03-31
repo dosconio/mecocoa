@@ -226,7 +226,7 @@ ifContinueProcess(ProcessBlock* old_pb) -> bool {
  *  - This guarantees macro-level CPU share without starvation while maintaining strict micro-level preemption.
  */
 
-// before calling, the task may be pended
+ // before calling, the task may be pended
 #if 1
 auto Taskman::Schedule(bool omit_slice)->decltype(Schedule())
 {
@@ -277,9 +277,10 @@ auto Taskman::Schedule(bool omit_slice)->decltype(Schedule())
 
 	// ploginfo("switch %d->%d", old_pb->pid, new_pb->pid);
 	#if _MCCA == 0x8632
-	task_switch_enable = true;//{TODO} Unlock
-	jmpTask(T_pid2tss(CurrentPID()));//[outdated]
-	#elif _MCCA == 0x8664
+	task_switch_enable = true;//{TODO} X86 Unlock
+	#endif
+
+	#if (_MCCA & 0xFF00) == 0x8600
 	SwitchTaskContext(&new_pb->context, &old_pb->context);
 	#elif (_MCCA & 0xFF00) == 0x1000
 	DirectTaskContext(&new_pb->context);

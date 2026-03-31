@@ -1,5 +1,6 @@
 #include "inc/aaaaa.h"
 #include "c/ustring.h"
+#include "c/consio.h"
 volatile static unsigned* const callid = (volatile unsigned*)0x0000500;// 0x80000500;
 
 #if (_ACCM & 0xFF00) == 0x1000
@@ -9,18 +10,20 @@ stduint syscall(syscall_t callid, stduint p1, stduint p2, stduint p3) {
 }
 #endif
 
+void outtxt(const char* str, stduint len) {
+	syscall(syscall_t::OUTC, (stduint)str, len, nil);
+}
 void sysouts(const char* str)// 0
 {
-	while (*str)
-	{
-		syscall(syscall_t::OUTC, (stduint)*str, nil, nil);
-		str++;
-	}
+	auto len = StrLength(str);
+	if (!len) return;
+	syscall(syscall_t::OUTC, (stduint)str, len, nil);
 	// [Other Method]
 	//    fd = sysopen("/dev_tty0");
 	//    syswrite(fd, (void*)"Hello CCCCC!\n\r", 15);
 	//    sysclose(fd);
 }
+
 int sysinnc()// 1
 {
 	return syscall(syscall_t::INNC, nil, nil, nil);
@@ -172,4 +175,7 @@ static int execv(const char* path, char* argv[])
 	msgrecv(Task_TaskMan, &ret, sizeof(ret), nil, nil);
 	return ret;
 }
+
+
+_ESYM_C void free(void* ptr) {}
 

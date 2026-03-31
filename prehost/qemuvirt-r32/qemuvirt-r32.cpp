@@ -41,6 +41,7 @@ void _entry()
 	// UART0
 	UART0.enInterrupt();
 	UART0.setInterruptPriority(1, nil);
+	vttys.Append(dynamic_cast<Console_t*>(&Console));
 
 	ploginfo("FATVHD Size: %[x]", sizeof(_FOLLOW_VHD));
 	if (1) {
@@ -64,7 +65,7 @@ void _entry()
 				if (auto pb = Taskman::CreateELF(&loop_device, RING_U)) {
 					Taskman::Append(pb);
 				}
-				else plogerro("appa.elf: Fail to parse or load ELF");
+				else plogerro("lpa.elf: Fail to parse or load ELF");
 			}
 			else plogerro("lpa.elf: Not found");
 		}

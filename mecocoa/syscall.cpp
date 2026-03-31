@@ -17,7 +17,7 @@ Handler_t syscalls[_TEMP 1];
 //{TODO} Use callgate-para (but register nor kernel-area) to pass parameters
 static const byte syscall_paracnts[0x100] = {
 	// ---- 0x0X ----
-	1, //0x00 OUTC
+	2, //0x00 OUTC
 	0, //0x01 INNC ()->[blocked]ASCII
 	1, //0x02 EXIT (code)
 	0, //0x03 TIME ()->(second)
@@ -118,7 +118,7 @@ stduint Handint_SYSCALL(CallgateFrame* frame) {
 	}
 	switch (callid) {
 	case syscall_t::OUTC: {
-		sysc_OUTC(para[0], 0/*para[1]*/);
+		sysc_OUTC(para[0], para[1]);
 		if (ch_tse) task_switch_enable = task_switch_enable_old;
 		break;
 	}
@@ -310,7 +310,7 @@ stduint SYSCALL_TABLE[] = {
 };
 
 DEFSYSC sysc_OUTC(stduint ch, stduint len) {// OUTC
-	#if (_MCCA & 0xFF00) == 0x1000//{TEMP}
+	#if 0
 	if (len) {
 		UART0.out((rostr)ch, len);
 	}
@@ -322,7 +322,18 @@ DEFSYSC sysc_OUTC(stduint ch, stduint len) {// OUTC
 		auto con = cast<Console_t*>(vttys[pid->focus_tty_id]->offs);//{} assert...
 		if (con) {
 			if (len) {
-				con->out((rostr)ch, len);
+				while (len) {
+					stduint crt_len = 0x1000 - (ch & 0xFFF);
+					if (len < crt_len) crt_len = len;
+					auto pa = pid->paging[ch];
+					if (_IMM(pa) == ~_IMM0) {
+						plogerro("OUTC");
+						return -1;
+					}
+					con->out((rostr)pa, crt_len);
+					ch += crt_len;
+					len -= crt_len;
+				}
 			}
 			else {
 				con->OutChar(ch);
@@ -330,7 +341,7 @@ DEFSYSC sysc_OUTC(stduint ch, stduint len) {// OUTC
 			con->OutChar(nil);
 			return 0;
 		}
-		else plogerro("sysc_try: null console");
+		else plogerro("sysc_try: null console, id = %u", pid->focus_tty_id);
 	}
 	else plogerro("sysc_try: null task");
 	#endif
