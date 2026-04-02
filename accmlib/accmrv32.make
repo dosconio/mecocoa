@@ -15,7 +15,14 @@ cppobjs=$(patsubst %cpp, %o, $(cppfile))
 
 dest_obj=$(uobjpath)/accm-$(arch)
 
-GPREF   = riscv64-elf-
+RISCV_ELF_EXISTS := $(shell command -v riscv64-elf-gcc 2>/dev/null)
+RISCV_UNKNOWN_EXISTS := $(shell command -v riscv64-unknown-elf-gcc 2>/dev/null)
+ifeq ($(RISCV_ELF_EXISTS),)
+    GPREF := riscv64-unknown-elf-
+else
+    GPREF := riscv64-elf-
+endif
+
 CFLAGS += -fno-builtin -Wall -Wno-unused-variable -Wno-unused-function -Wno-parentheses
 CFLAGS += -march=rv32g -mabi=ilp32
 CFLAGS += -I$(uincpath) -D_ACCM=0x1032 -D_OPT_RISCV32 -D_DEBUG

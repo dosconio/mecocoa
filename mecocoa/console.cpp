@@ -312,7 +312,7 @@ void cons_init() {
 		ptext->Start();
 	}
 	if (1) {
-		Rectangle rect{ Point(150, 160), Size2(480, 320) };
+		Rectangle rect{ Point(250, 160), Size2(480, 320) };
 		auto pcon = new VideoConsole(NULL,
 			Rectangle(Point(2, 2), Size2(470, 290)),
 				Color::White, Color::Black

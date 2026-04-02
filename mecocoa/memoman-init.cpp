@@ -95,7 +95,7 @@ bool Memory::initialize(stduint eax, byte* ebx) {
 	Memory::total_memsize = Memory::pagebmap->Count();
 	Memory::pagebmap->add_range(
 		floorAlign(0x1000, _IMM(&FILE_ENTO)) >> 12,
-		vaultAlign(0x1000, _IMM(&FILE_ENDO)) >> 12,
+		(vaultAlign(0x1000, _IMM(&FILE_ENDO)) >> 12) + 1,
 		false
 	);// kernel
 	Memory::pagebmap->add_range(0, 0x10, false);

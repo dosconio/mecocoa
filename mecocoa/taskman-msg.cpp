@@ -33,7 +33,6 @@ void _Comment(R0) serv_sysmsg() {
 		SysMessage msg;
 		message_queue.Dequeue(msg);
 		IC.enAble(true);
-
 		auto& xhc = *reinterpret_cast<uni::device::SpaceUSB3::HostController*>(_BUF_xhc);
 		switch (msg.type) {
 		case SysMessage::RUPT_xHCI:

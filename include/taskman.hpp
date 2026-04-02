@@ -13,11 +13,11 @@
 
 enum {
 	Task_Kernel,
+	Task_TaskMan,
 	Task_Con_Serv,
 	Task_ConsoleVideo,// [inner of Task_Con_Serv] manage mice and GUI
 	Task_Hdd_Serv,
 	Task_FileSys,
-	Task_TaskMan,
 	Task_Init,
 	Task_AppC,
 	//
@@ -94,6 +94,7 @@ struct CommMsg {
 // Process
 #ifndef _ACCM
 class FileDescriptor;
+class CallgateFrame;
 class _Comment(Kernel) ProcessBlock {
 public:
 	alignas(16) NormalTaskContext context;// advanced TSS_t
@@ -189,7 +190,8 @@ public:
 	static auto// newProcess (ELF)
 		CreateELF(BlockTrait* source, byte ring) -> ProcessBlock*;
 	static auto// newProcess
-		CreateFork(ProcessBlock* parent) -> ProcessBlock*;
+		CreateFork(ProcessBlock* parent, const CallgateFrame* frame) -> ProcessBlock*;
+	
 	static auto
 		ExitCurrent(stduint code) -> bool;
 public:// schedule
@@ -215,13 +217,6 @@ public:
 };
 #endif
 
-
-
-#if _MCCA == 0x8632
-#include "fileman.hpp"
-
-extern "C" bool task_switch_enable;
-
 enum class TaskmanMsg {
 	TEST,
 	EXIT,
@@ -230,10 +225,16 @@ enum class TaskmanMsg {
 	EXEC,
 };
 
-#endif
 
 
 #if _MCCA == 0x8632
+#include "fileman.hpp"
+
+extern "C" bool task_switch_enable;
+#endif
+
+
+#if 1
 inline ProcessBlock* TaskGet(stduint taskid) { return Taskman::Locate(taskid); }
 
 // return zero for success
@@ -244,20 +245,20 @@ void rupt_proc(stduint pid, stduint rupt_no);
 
 inline static stduint syssend(stduint to_whom, const void* msgaddr, stduint bytlen, stduint type = 0)
 {
-	struct CommMsg msg { nil };
+	struct CommMsg msg = { };
 	msg.data.address = _IMM(msgaddr);
 	msg.data.length = bytlen;
 	msg.type = type;
-	return syscall(syscall_t::COMM, COMM_SEND, to_whom, &msg);
+	return syscall(syscall_t::COMM, COMM_SEND, to_whom, _IMM(&msg));
 }
 inline static stduint sysrecv(stduint fo_whom, void* msgaddr, stduint bytlen, stduint* type = NULL, stduint* src = NULL)
 {
-	struct CommMsg msg { nil };
+	struct CommMsg msg = { };
 	msg.data.address = _IMM(msgaddr);
 	msg.data.length = bytlen;
 	if (type) msg.type = *type;
 	if (src) msg.src = *src;
-	stduint ret = syscall(syscall_t::COMM, COMM_RECV, fo_whom, &msg);
+	stduint ret = syscall(syscall_t::COMM, COMM_RECV, fo_whom, _IMM(&msg));
 	if (type) *type = msg.type;
 	if (src) *src = msg.src;
 	return ret;

@@ -164,6 +164,7 @@ void exception_handler(sdword iden, dword para) {
 
 
 void external_interrupt_handler();
+void syscall_body(NormalTaskContext* cxt);
 
 _ESYM_C
 stduint trap_handler(stduint epc, stduint cause, NormalTaskContext* cxt)
@@ -195,7 +196,7 @@ stduint trap_handler(stduint epc, stduint cause, NormalTaskContext* cxt)
 		switch (cause_code) {
 		case 8:
 			// ploginfo("System call from U-mode!");
-			syscall(cxt);
+			syscall_body(cxt);
 			cxt->mepc += 4;
 			return_pc += 4;
 			break;

@@ -23,15 +23,21 @@ UefiData uefi_data;
 void TaskB() {
 	ploginfo("TaskB");
 	stduint cnt = 0;
+	extern uni::witch::control::Label* plabel_1;
 	while (1) {
-		extern uni::witch::control::Label* plabel_1;
+		// IC.enAble(false);
 		plabel_1->text = String::newFormat("t%u", cnt++);
 		plabel_1->doshow(0);
+		// IC.enAble(true);
 		HALT(); // SwitchTaskContext(&task_kernel_ctx, &task_b_ctx);
 	}
 }
 
 // ---- Kernel
+_PACKED(struct) Header {
+	stduint size;
+	stduint prop;
+};
 
 extern "C" //__attribute__((ms_abi))
 void mecocoa(const UefiData& uefi_data_ref)
@@ -50,6 +56,7 @@ void mecocoa(const UefiData& uefi_data_ref)
 	mempool.Append(Slice{ _IMM(mem.allocate(mempool_lenN)), mempool_lenN });
 	mempool.Append(Slice{ _IMM(mem.allocate(mempool_lenN)), mempool_lenN });
 	mempool.Append(Slice{ _IMM(mem.allocate(mempool_lenN)), mempool_lenN });
+
 
 	cons_init();
 	//{} Cache_t::enAble();
@@ -88,6 +95,9 @@ void mecocoa(const UefiData& uefi_data_ref)
 	}
 
 	tryUD();
+
+	// Service
+	Taskman::Create((void*)&serv_task_loop, RING_M);
 	Taskman::Create((pureptr_t)TaskB, 0);
 
 	// try priority_queue Dchain
@@ -97,14 +107,14 @@ void mecocoa(const UefiData& uefi_data_ref)
 	//{} "ls /"
 	//{} "cat a.txt"
 	if (1) {
-		auto memdev_buffer = new byte[512*2];
-		auto fat_buffer = new byte[512*2];
+		auto memdev_buffer = new byte[512];// new(std::align_val_t(64))
+		auto fat_buffer = new byte[512];
 		MemoryBlockDevice memdev({ _IMM(uefi_data.fatvhd_addr), 32 * 1024 * 1024 }, memdev_buffer);
-		FilesysFAT fatvhd(32, memdev, fat_buffer);
-		fatvhd.buffer_fatable = new byte[512];
+		FilesysFAT fatvhd(32, memdev, fat_buffer, NULL);
+		fatvhd.buffer_fatable = new byte[memdev.Block_Size];
 		FAT_FileHandle* han;
 		FAT_FileHandle filhan;
-		stduint a[2] = { _IMM(&filhan)/*, _IMM(&filinf) */ };
+		stduint a[2] = { _IMM(&filhan), 0 /*, _IMM(&filinf) */ };
 		if (!fatvhd.loadfs()) {
 			plogerro("FATVHD loadfs failed");
 		}
@@ -113,7 +123,7 @@ void mecocoa(const UefiData& uefi_data_ref)
 			fatvhd.enumer(han, NULL);
 			if (han = (FAT_FileHandle*)fatvhd.search("appa.elf", &a)) {
 				FileBlockBridge loop_device(&fatvhd, han, han->size, 512);
-				if (auto pb = Taskman::CreateELF(&loop_device, 3)) {
+				if (auto pb = Taskman::CreateELF(&loop_device, RING_U)) {
 					Taskman::Append(pb);
 					pb->focus_tty_id = 0;
 					vttys[0]->type = pb->getID();
@@ -126,10 +136,12 @@ void mecocoa(const UefiData& uefi_data_ref)
 		delete[] (fat_buffer);
 	}
 
-	IC.enAble(true);
+	// IC.enAble(true);
+
+	syscall(syscall_t::OUTC, (usize)"Ohayou\n\r", 8);
 
 	if (1) {
-		Memory::pagebmap->dump_avail_memory();
+		// Memory::pagebmap->dump_avail_memory();
 		ploginfo("[Console] There are %[u] layers, f=%[x], l=%[x]", global_layman.Count(), global_layman.subf, global_layman.subl);
 	}
 

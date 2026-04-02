@@ -3,6 +3,7 @@
 // ModuTitle: Demonstration - ELF32-C++ x86 Bare-Metal
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 #include "../include/mecocoa.hpp"
+#include "../include/filesys.hpp"
 
 #include <c/task.h>
 #include <cpp/interrupt>
@@ -52,7 +53,10 @@ static void _Mapping_Core_Stack(Paging& paging) {
 	#elif _MCCA == 0x8664
 	//{TODO} Map more cores, cpu1 at 0x0000FFFFFFFF8000ull...
 	paging.Map(0x0000FFFFFFFFF000ull, _IMM(higher_stacks[0]), 0x1000, PAGESIZE_4KB, PGPROP_present | PGPROP_writable);// High Part
-	
+
+	#elif (_MCCA & 0xFF00) == 0x1000
+	// M-MCCA need not map kernel
+	// S-MCCA need map kernel (TODO)
 	#endif
 }
 static stduint _Taskman_Create_Paging(ProcessBlock *ppb, byte ring, stduint stack_norm) {
@@ -90,6 +94,13 @@ static stduint _Taskman_Create_Paging(ProcessBlock *ppb, byte ring, stduint stac
 		ppb->paging.root_level_page = (PageEntry*)getCR3();
 	}
 	return _IMM(ppb->paging.root_level_page);
+
+	#elif (_MCCA & 0xFF00) == 0x1000
+	ppb->paging.Reset();
+	// stack
+	ppb->paging.Map(_IMM(ppb->stack_lineaddr), _IMM(stack_norm), ppb->stack_size, PAGESIZE_4KB, PGPROP_present | PGPROP_writable | PGPROP_user_access);
+	return ppb->paging.MakeSATP();
+
 	#endif
 	return nil;
 }
@@ -190,6 +201,21 @@ static stduint getSS(stduint ring) {
 	if (ring == 3) return SegDaR3 | ring;
 	else return 8 * (4 + ring) + 0b100 + ring;
 }
+static void SetSegment(NormalTaskContext* ntc) {
+	REG_FLAG_t flag = {};
+	flag._r1 = 1, flag.IF = 1, flag.IOPL = (ntc->RING == 1 ? 0x1u : 0u);
+	ntc->FLAG = cast<stduint>(flag);
+	ntc->CS = getCS(ntc->RING);
+	ntc->SS = getSS(ntc->RING);
+	#if _MCCA == 0x8632
+	ntc->DS = ntc->SS;
+	ntc->ES = ntc->SS;
+	ntc->FS = ntc->SS;
+	ntc->GS = ntc->SS;
+	#elif _MCCA == 0x8664
+	ntc->DS = ntc->ES = ntc->FS = ntc->GS = nil;
+	#endif
+}
 #endif
 ProcessBlock* Taskman::Create(void* entry, byte ring)
 {
@@ -201,21 +227,10 @@ ProcessBlock* Taskman::Create(void* entry, byte ring)
 	ppb->paging.root_level_page = (PageEntry *)getCR3();
 	auto& new_ctx = ppb->context;
 	new_ctx.IP = _IMM(entry);
-	new_ctx.DI = 0;// x64 para0
-	new_ctx.SI = 0;// x64 para1
 	new_ctx.CR3 = getCR3();
-	REG_FLAG_t flag = {};
-	flag._r1 = 1, flag.IF = 1, flag.IOPL = 0x1;
-	new_ctx.FLAG = cast<stduint>(flag);
-	new_ctx.CS = getCS(ring);
-	new_ctx.DS = SegDaR3 | ring;
-	new_ctx.ES = new_ctx.DS;
-	new_ctx.FS = new_ctx.DS;
-	new_ctx.GS = new_ctx.DS;
-	new_ctx.SS = getSS(ring);
 	new_ctx.RING = ring;
+	SetSegment(&ppb->context);
 	treat<uint32>(&new_ctx.floating_point_context[24]) = 0x1F80;// ban all MXCSR exception
-	ppb->ring = ring;
 	ppb->stack_size = DEFAULT_STACK_SIZE;
 	ppb->stack_lineaddr = (byte*)mempool.allocate(ppb->stack_size, 12);
 	ppb->stack_levladdr = ring != RING_M ? (byte*)mempool.allocate(ppb->stack_size, 12) : ppb->stack_lineaddr;
@@ -233,7 +248,7 @@ ProcessBlock* Taskman::Create(void* entry, byte ring)
 	ctx.IP = _IMM(entry);
 	ctx.mstatus = (ring << 11) | _MSTATUS_MPIE;
 
-	if (ring == 0) {
+	if (ring == RING_U) {
 		_TODO// Paging
 	}
 
@@ -334,22 +349,7 @@ ProcessBlock* Taskman::CreateELF(BlockTrait* source, byte ring) {
 	#if (_MCCA & 0xFF00) == 0x8600
 	pb->context.CR3 = _Taskman_Create_Paging(pb, ring, _IMM(stack_norm));
 	#elif _MCCA == 0x1032 || _MCCA == 0x1064
-	pb->paging.Reset();
-	auto make_satp = [](void* root_page_ptr) -> stduint {
-		if (!root_page_ptr) return 0;
-		stduint ppn = _IMM(root_page_ptr) >> 12;
-		#if _MCCA == 0x1032
-		return (1ULL << 31) | ppn; // Sv32 Mode
-		#elif _MCCA == 0x1064
-		return (8ULL << 60) | ppn; // Sv39 Mode
-		#else
-		return ppn; // Bare Mode (No translation)
-		#endif
-		};
-	pb->context.satp = make_satp(pb->paging.root_level_page);
-	pb->paging.Map(0x00001000, _IMM(stack_norm), pb->stack_size, PAGESIZE_4KB, PGPROP_present | PGPROP_writable | PGPROP_user_access);
-	// M-MCCA need not map kernel
-	// S-MCCA need map kernel (TODO)
+	pb->context.satp = _Taskman_Create_Paging(pb, ring, _IMM(stack_norm));
 	#endif
 
 	pb->context.IP = _IMM(header.e_entry);
@@ -379,19 +379,10 @@ ProcessBlock* Taskman::CreateELF(BlockTrait* source, byte ring) {
 	
 
 	#if (_MCCA & 0xFF00) == 0x8600
-
-	pb->context.SP = (stack_loc_top & ~0xFlu) - 8;// single stack
-	pb->context.SS = getSS(ring);
-	REG_FLAG_t flag = {};
-	flag._r1 = 1, flag.IF = 1, flag.IOPL = (ring <= 1 ? 0x1u : 0u);
-	pb->context.FLAG = cast<stduint>(flag);
-	pb->context.CS = getCS(ring);
-	pb->context.DS = SegDaR3 | ring;
-	pb->context.ES = SegDaR3 | ring;
-	pb->context.FS = SegDaR3 | ring;
-	pb->context.GS = SegDaR3 | ring;
 	pb->context.RING = ring;
+	pb->context.SP = (stack_loc_top & ~0xFlu) - 8;// single stack
 	treat<uint32>(&pb->context.floating_point_context[24]) = 0x1F80;// ban all MXCSR exception
+	SetSegment(&pb->context);
 
 	#elif _MCCA == 0x1032 || _MCCA == 0x1064
 	constexpr stduint floating_support = (1 << 13);
@@ -411,45 +402,19 @@ ProcessBlock* Taskman::CreateELF(BlockTrait* source, byte ring) {
 	#endif
 }
 
-bool Taskman::ExitCurrent(stduint code) {
-	auto pid = CurrentPID();
-	ploginfo("AppExit: %[u] with code 0x%[x]", pid, code);
-
-	// [r] Ver 1
-	// _ASM("STI");
-	// loop HALT();
-
-	// [r] Ver 2
-	auto pb = Locate(pid);
-	pb->state = ProcessBlock::State::Hanging;
-	Schedule(true);
-	//{} Add to zombie vector
-
-	return true;
-}
-
-#ifdef _ARC_x86 // x86:
-#include "../include/filesys.hpp"
-bool task_switch_enable = true;//{} spinlk
-#endif
-
-
-
-#ifdef _ARC_x86
-// CreateFork
-static stduint task_fork(ProcessBlock* fo, const CallgateFrame* frame)
-{
-	// check undone and duplicate operations
-	// 1. Copy the PB
-	// 2. Copy segmants and stack
-	// 3. FS Operation
-
+ProcessBlock* Taskman::CreateFork(ProcessBlock* fo, const CallgateFrame* frame) {
 	ProcessBlock* pb = Taskman::AllocateTask();
 	if (!pb) return 0;
 
 	auto ring = fo->ring;
 	pb->ring = ring;
 	pb->parent_id = fo->getID();
+
+	#if _MCCA == 0x8632
+	// check undone and duplicate operations
+	// 1. Context
+	// 2. Copy segmants and stack
+	// 3. FS Operation
 
 	// ---- Stack ---- //
 	pb->stack_size = fo->stack_size;
@@ -514,23 +479,33 @@ static stduint task_fork(ProcessBlock* fo, const CallgateFrame* frame)
 	}
 
 	Taskman::Append(pb);
-	return pb->getID();
+	return pb;
+
+	#else
+	return nullptr;
+	#endif
 }
 
-/* dump
 
-	auto nod = Taskman::chain.root_node;
-	while (nod) {
-		auto pblock = (ProcessBlock*)nod->offs;
-		Console.OutFormat("-- %u: (%u:%u) head %u, next %u, send_to_whom\n\r",
-			pblock->pid, pblock->state, pblock->block_reason,
-			pblock->queue_send_queuehead, pblock->queue_send_queuenext);
-		nod = nod->next;
-	}
-break;
+bool Taskman::ExitCurrent(stduint code) {
+	auto pid = CurrentPID();
+	ploginfo("AppExit: %[u] with code 0x%[x]", pid, code);
 
-*/
+	// [r] Ver 1
+	// _ASM("STI");
+	// loop HALT();
 
+	// [r] Ver 2
+	auto pb = Locate(pid);
+	pb->state = ProcessBlock::State::Hanging;
+	Schedule(true);
+	//{} Add to zombie vector
+
+	return true;
+}
+
+
+#ifdef _ARC_x86
 
 static void cleanup(stduint pid)
 {
@@ -705,27 +680,33 @@ stduint task_exec(stduint pid, void* fullpath, void* argstack, stduint stacklen)
 	return 0;
 }
 
-
+#endif
 
 //// ---- ---- SERVICE ---- ---- ////
+#if (_MCCA & 0xFF00) == 0x8600
 
 void _Comment(R0) serv_task_loop()
 {
 	stduint to_args[8];// 8*4=32 bytes
 	stduint sig_type = 0, sig_src, ret;
+	ploginfo("Taskman Service Start");
 	while (true) {
 		switch ((TaskmanMsg)sig_type)
 		{
 		case TaskmanMsg::TEST:
 			// Nothing
 			break;
+		#ifdef _ARC_x86
 		case TaskmanMsg::EXIT: // (pid, state)
 			ploginfo("Taskman exit: %u %u", to_args[0], to_args[1]);
 			task_exit(to_args[0], to_args[1]);
 			break;
 		case TaskmanMsg::FORK: // (pid, cframe)
 			// ploginfo("Taskman fork: %u", to_args[0]);
-			ret = task_fork(TaskGet(to_args[0]), (CallgateFrame*)to_args[1]);
+			if (1) {
+				auto child_ppb = Taskman::CreateFork(TaskGet(to_args[0]), (CallgateFrame*)to_args[1]);
+				ret = child_ppb ? child_ppb->getID() : ~_IMM0;
+			}
 			syssend(sig_src, &ret, sizeof(ret));
 			break;
 		case TaskmanMsg::WAIT: // (pid, &usr:state) -> (child_pid)
@@ -737,6 +718,7 @@ void _Comment(R0) serv_task_loop()
 			ret = task_exec(to_args[0], (void*)to_args[1], (void*)to_args[2], to_args[3]);
 			syssend(sig_src, &ret, sizeof(ret));
 			break;
+		#endif
 
 		default:
 			plogerro("Bad TYPE in %s %s", __FILE__, __FUNCIDEN__);
@@ -745,6 +727,5 @@ void _Comment(R0) serv_task_loop()
 		sysrecv(ANYPROC, to_args, byteof(to_args), &sig_type, &sig_src);
 	}
 }
-
 
 #endif

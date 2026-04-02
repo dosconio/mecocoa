@@ -55,8 +55,6 @@ _ESYM_C void Handint_SYSCALL_Entry();
 _ESYM_C void Handint_INTCALL_Entry();
 _ESYM_C stduint Handint_SYSCALL(CallgateFrame* frame);
 
-stduint syscall(syscall_t callid, ...);
-
 #elif (_MCCA & 0xFF00) == 0x1000
 
 struct NormalTaskContext;
@@ -65,7 +63,7 @@ void syscall(NormalTaskContext* cxt);
 
 #endif
 #else
-_ESYM_C stduint syscall(syscall_t callid, stduint p1 = 0, stduint p2 = 0, stduint p3 = 0);// MCCA 4 PARA SYSC
 #endif
+_ESYM_C stduint syscall(syscall_t callid, stduint p1 = 0, stduint p2 = 0, stduint p3 = 0);// MCCA 4 PARA SYSC
 
 #endif

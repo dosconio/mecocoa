@@ -272,34 +272,13 @@ stduint Handint_SYSCALL(CallgateFrame* frame) {
 	return ret;
 }
 
-__attribute__((optimize("O0")))
-static stduint syscall3(syscall_t callid, stduint para1, stduint para2, stduint para3) {
-	stduint ret;
-	__asm("mov  %0, %%ebx" : : "m"(para3));
-	__asm("mov  %0, %%edx" : : "m"(para2));
-	__asm("mov  %0, %%ecx" : : "m"(para1));
-	__asm("mov  %0, %%eax" : : "m"(callid));
-	CallFar(0, SegCall);
-	__asm("mov  %%eax, %0" : "=m"(ret));
-	return ret;
-}
-__attribute__((optimize("O0")))
-stduint syscall(syscall_t callid, ...) {
-	// GCC style
-	Letpara(paras, callid);
-	stduint p[3] = { };
-	for0(i, syscall_paracnts[_IMM(callid)]) {
-		p[i] = para_next(paras, stduint);
-	}
-	return syscall3(callid, p[0], p[1], p[2]);
-}
-
-// No dynamic core
 
 #endif
 
-#if (_MCCA & 0xFF00) == 0x8600 || (_MCCA & 0xFF00) == 0x1000
 
+
+
+#if (_MCCA & 0xFF00) == 0x8600 || (_MCCA & 0xFF00) == 0x1000
 _ESYM_C stduint SYSCALL_TABLE[];
 DEFSYSC sysc_OUTC(stduint ch, stduint len);
 DEFSYSC sysc_EXIT(stduint code);
@@ -308,6 +287,27 @@ stduint SYSCALL_TABLE[] = {
 	0,// INNC(else_blocked)
 	_IMM(sysc_EXIT),// EXIT(code)
 };
+
+__attribute__((optimize("O0")))
+stduint syscall(syscall_t callid, stduint para1, stduint para2, stduint para3) {
+	stduint ret;
+	#if   _MCCA == 0x8632
+	__asm("mov  %0, %%ebx" : : "m"(para3));
+	__asm("mov  %0, %%edx" : : "m"(para2));
+	__asm("mov  %0, %%ecx" : : "m"(para1));
+	__asm("mov  %0, %%eax" : : "m"(callid));
+	CallFar(0, SegCall);
+	__asm("mov  %%eax, %0" : "=m"(ret));
+	#elif _MCCA == 0x8664
+	if (_IMM(callid) >= numsof(SYSCALL_TABLE)) {
+		plogerro("syscall: callid out of range");
+		loop HALT();
+	}
+	return reinterpret_cast<stdsint(*)(stduint, stduint, stduint)>(SYSCALL_TABLE[_IMM(callid)])(para1, para2, para3);
+	#endif
+	return ret;
+}
+
 
 DEFSYSC sysc_OUTC(stduint ch, stduint len) {// OUTC
 	#if 0
@@ -375,7 +375,7 @@ static int sys_gethid(unsigned int *ptr_hid)
 	}
 }
 
-void syscall(NormalTaskContext* cxt)
+void syscall_body(NormalTaskContext* cxt)
 {
 	auto syscall_num = (syscall_t)cxt->a7;
 

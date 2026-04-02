@@ -45,14 +45,14 @@ void _entry()
 
 	ploginfo("FATVHD Size: %[x]", sizeof(_FOLLOW_VHD));
 	if (1) {
-		auto memdev_buffer = new byte[512*2];
-		auto fat_buffer = new byte[512*2];
+		auto memdev_buffer = new byte[512];
+		auto fat_buffer = new byte[512];
 		MemoryBlockDevice memdev({ _IMM(_FOLLOW_VHD), sizeof(_FOLLOW_VHD) }, memdev_buffer);
-		FilesysFAT fatvhd(32, memdev, fat_buffer);
+		FilesysFAT fatvhd(32, memdev, fat_buffer, NULL);
 		fatvhd.buffer_fatable = new byte[512];
 		FAT_FileHandle* han;
 		FAT_FileHandle filhan;
-		stduint a[2] = { _IMM(&filhan)/*, _IMM(&filinf) */ };
+		stduint a[2] = { _IMM(&filhan), 0/*, _IMM(&filinf) */ };
 		if (!fatvhd.loadfs()) {
 			plogerro("FATVHD loadfs failed");
 		}
@@ -69,9 +69,9 @@ void _entry()
 			}
 			else plogerro("lpa.elf: Not found");
 		}
-		delete[] (fatvhd.buffer_fatable);
-		delete[] (memdev_buffer);
-		delete[] (fat_buffer);
+		mempool.deallocate(fatvhd.buffer_fatable);
+		mempool.deallocate(memdev_buffer);
+		mempool.deallocate(fat_buffer);
 	}
 
 	if (Taskman::chain.Count() <= 1) {

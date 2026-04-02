@@ -43,13 +43,14 @@ void mecfetch() {
 	// Console.OutFormat("Mem Avail: %s\n\r", ker_buf.reference());
 
 	Console.OutFormat("CPU Brand: %s\n\r", text_brand());
-
+	
 	tm datime; CMOS_Readtime(&datime);
 	Console.OutFormat("Date Time: %d/%d/%d %d:%d:%d\n\r",
 		datime.tm_year, datime.tm_mon, datime.tm_mday,
 		datime.tm_hour, datime.tm_min, datime.tm_sec
 	);
-
+	
+	Console.OutFormat("Total Mem: %[x]\n\r", Memory::total_memsize);
 }// like neofetch
 
 extern uint32 _start_eax, _start_ebx;
@@ -77,14 +78,12 @@ _sign_entry() {
 	mecfetch();
 	__asm("ud2");
 
-	ploginfo("[Memoman] total memory %[x]", Memory::total_memsize);
-
 	// Service
+	Taskman::Create((void*)&serv_task_loop, 0);
 	Taskman::Create((void*)&serv_cons_loop, 0);
 	Taskman::Create((void*)&serv_conv_loop, 0);
 	Taskman::Create((void*)&serv_dev_hd_loop, 0);
 	Taskman::Create((void*)&serv_file_loop, 0);
-	Taskman::Create((void*)&serv_task_loop, 0);
 
 	IC.enAble();
 	syscall(syscall_t::OUTC, 'O', 0);

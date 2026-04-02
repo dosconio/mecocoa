@@ -9,6 +9,9 @@
 #if (_MCCA & 0xFF00) == 0x8600
 TSS_t* PCU_CORES_TSS[PCU_CORES_MAX] = {};
 #endif
+#ifdef _ARC_x86 // x86:
+bool task_switch_enable = true;//{} spinlk
+#endif
 
 Dchain Taskman::chain = { DnodeHeapFreeSimple };;// ordered by pid
 stduint Taskman::min_available_pid;// in chain

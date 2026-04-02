@@ -56,8 +56,7 @@ void body() {
 	// HD_Info& hdi = *(HD_Info*)hdinfo_addr;
 
 	DiscPartition part_fat0(hdisk, ROOT_DEV_FAT0);
-	FilesysFAT pfs_fat0(32, part_fat0, single_sector);
-	pfs_fat0.buffer_fatable = fatable_sector;
+	FilesysFAT pfs_fat0(32, part_fat0, single_sector, fatable_sector);
 	
 	stduint a[2] = { _IMM(&filhan)/*, _IMM(&filinf) */ };
 

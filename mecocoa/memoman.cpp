@@ -2,6 +2,7 @@
 // AllAuthor: @dosconio, @ArinaMgk
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 #include "../include/mecocoa.hpp"
+#include "c/arith.h"
 // for x86, one slice should begin with 0x100000 (above F000:FFFF)
 
 _ESYM_C Handler_t FILE_ENTO, FILE_ENDO;
@@ -195,6 +196,10 @@ void* operator new[](size_t size) {
 	// ploginfo("new[] %u", size);
 	return malc(size);
 }
+void* operator new[](size_t size, std::align_val_t ali) {
+	auto bit = intlog2_iexpo _IMM(ali);
+	return mempool.allocate(size, bit);
+}
 void operator delete(void* p) {
 	free(p);
 }
@@ -213,7 +218,7 @@ void operator delete(void* ptr, stduint size, std::align_val_t) noexcept { ::ope
 //
 _ESYM_C void free(void* p) {
 	bool a = (mempool.deallocate(p));
-	// printlog(a ? _LOG_INFO: _LOG_ERROR, "mfree 0x%[x]", p);
+	if (!a) printlog(a ? _LOG_INFO: _LOG_ERROR, "mfree 0x%[x]", p);
 }
 _ESYM_C void memf(void* ptr) { free(ptr); }
 #endif

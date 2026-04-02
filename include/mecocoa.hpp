@@ -43,12 +43,14 @@ void serv_file_loop();
 #endif
 
 // ---- handler ----
+#if (_MCCA & 0xFF00) == 0x1000 || (_MCCA & 0xFF00) == 0x8600
 extern InterruptControl IC;
+#endif
 
 // ---- . ----
 
 #define _GUI_ENABLE 1
 // double buffer, or the anime is disabled
-#define _GUI_DOUBLE_BUFFER 1
+#define _GUI_DOUBLE_BUFFER 0
 
 

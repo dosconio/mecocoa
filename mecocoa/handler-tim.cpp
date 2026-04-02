@@ -61,10 +61,10 @@ inline void RenderFrameFlush() {
 			stdsint y = global_layman.dirty_area.y;
 			stdsint w = global_layman.dirty_area.width;
 			stdsint h = global_layman.dirty_area.height;
-			
+
 			if (x < 0) { w += x; x = 0; }
 			if (y < 0) { h += y; y = 0; }
-			
+
 			stdsint max_w = global_layman.window.width - x;
 			stdsint max_h = global_layman.window.height - y;
 
@@ -80,12 +80,12 @@ inline void RenderFrameFlush() {
 			msg.args.rect.h = h;
 			global_layman.dirty_area = {};
 			global_layman.is_dirty = false;
-#if _MCCA == 0x8664
+			#if _MCCA == 0x8664
 			message_queue.Enqueue(msg);
-#elif _MCCA == 0x8632
+			#elif _MCCA == 0x8632
 			if (real_pvci && w > 0 && h > 0)
 				real_pvci->DrawPoints(msg.args.rect.toRectangle(), global_layman.sheet_buffer);
-#endif
+			#endif
 
 			last_flush_time = tick;
 		}

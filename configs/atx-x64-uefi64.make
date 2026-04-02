@@ -12,7 +12,8 @@ RM = rm -rf
 # (GNU)
 GPREF   = x86_64-linux-gnu-
 CFLAGS += -nostdlib -fno-builtin -z norelro
-CFLAGS += --static -mno-red-zone -m64  -mno-sse -mno-sse2 -mno-avx -mno-avx2 -msoft-float
+CFLAGS += --static -mno-red-zone -m64  -mno-sse -mno-sse2 -mno-avx -mno-avx2
+# -msoft-float
 CFLAGS += -I$(uincpath) -D_MCCA=0x8664 -D_UEFI -D_DEBUG
 CFLAGS += -fno-strict-aliasing -fno-exceptions -fno-stack-protector
 CFLAGS += -Wextra -Wno-multichar

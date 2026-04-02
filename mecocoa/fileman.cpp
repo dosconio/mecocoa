@@ -414,14 +414,13 @@ void serv_file_loop()
 
 	pfs = new (_buf_OFs) OrangesFs(hdd, ::buffer, ROOT_DEV);
 	DiscPartition part_fat0(hdd, ROOT_DEV_FAT0);
-	pfs_fat0 = new (_buf_FATs) FilesysFAT(32, part_fat0, ::buffer);
-	pfs_fat0->buffer_fatable = (byte*)Memory::physical_allocate(0x1000);
+	pfs_fat0 = new (_buf_FATs) FilesysFAT(32, part_fat0, ::buffer, (byte*)Memory::physical_allocate(0x1000));
 
 	stduint retval[1];
 
 
 	FAT_FileHandle* han;
-	stduint a[2] = { _IMM(&filhan)/*, _IMM(&filinf) */ };
+	stduint a[2] = { _IMM(&filhan), 0/*, _IMM(&filinf) */ };
 
 	bool ready = false;
 	while (true) {
