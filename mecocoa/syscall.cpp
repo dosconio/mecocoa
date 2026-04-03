@@ -11,47 +11,6 @@
 
 #ifdef _ARC_x86 // x86:
 
-Handler_t syscalls[_TEMP 1];
-
-//{TODO} Syscall class
-//{TODO} Use callgate-para (but register nor kernel-area) to pass parameters
-static const byte syscall_paracnts[0x100] = {
-	// ---- 0x0X ----
-	2, //0x00 OUTC
-	0, //0x01 INNC ()->[blocked]ASCII
-	1, //0x02 EXIT (code)
-	0, //0x03 TIME ()->(second)
-	0, //0x04 REST
-	3, //0x05 COMM
-	2, //0x06 OPEN (pathname,flags)->(fd: < 0 if not success)
-	1, //0x07 CLOS (fd)
-	4, //0x08 READ (fd, slice.addr, slice.len) ->(bytes_done)
-	4, //0x09 WRIT (fd, slice.addr, slice.len) ->(bytes_done)
-	1, //0x0A DELF (pathname)
-	0, //KEPT for advanced file op.
-	0,
-	1, //0x0D WAIT (&state)->(pid)
-	0, //0x0E FORK ()->(child_pid for parent and nil for child)
-	0, //0x0F TMSG ()->(msg_unsovled)
-	// ---- 0x1X ----
-	2, //0x10 EXEC (pathname, argv)->(0 for success)
-	0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,// 1XH
-	0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,// 2XH
-	0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,// 3XH
-	0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,// 4XH
-	0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,// 5XH
-	0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,// 6XH
-	0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,// 7XH
-	0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,//	8XH
-	0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,// 9XH
-	0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,// AXH
-	0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,// BXH
-	0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,// CXH
-	0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,// DXH
-	0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,// EXH
-	0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,
-	3, //TEST // FXH
-};
 static const byte syscall_delayflgs[0x100 / _BYTE_BITS_] = {
 	0b00110001, 0b00000000, // 0x0X
 };
@@ -101,18 +60,14 @@ stduint Handint_SYSCALL(CallgateFrame* frame) {
 	auto task_switch_enable_old = task_switch_enable;//{TODO} {spinlk for multi-Proc}
 	task_switch_enable = false;
 	bool ch_tse = task_switch_enable_old == true;
-	// Letpara(paras, callid);
 	auto callid = (syscall_t)frame->ax;
 	stduint para[3] = { frame->cx, frame->dx, frame->bx };
 	stduint msgbuf[4] = {};
 	stduint ret = 0;
-	// if (_IMM(callid) >= numsof(syscall_paracnts)) return ~_IMM0;
-	// byte pcnt = syscall_paracnts[_IMM(callid)];
-	// for0(i, pcnt) {
-	// 	para[i] = para_next(paras, stduint);
-	// }
 	stduint caller_pid = Taskman::CurrentPID();
 	byte flg = syscall_delayflgs[_IMM(callid) / _BYTE_BITS_];
+
+	char ch;
 	if (!(flg & _IMM1S(_IMM(callid) & 0b111)) && ch_tse) {
 		task_switch_enable = task_switch_enable_old;
 	}
@@ -122,15 +77,19 @@ stduint Handint_SYSCALL(CallgateFrame* frame) {
 		if (ch_tse) task_switch_enable = task_switch_enable_old;
 		break;
 	}
-	case syscall_t::INNC:// ()->ASCII
+	case syscall_t::INNC:// Read from its TTY, return -1 if the TTY is occupied
 	{
-		// Read from its TTY, return -1 if the TTY is occupied.
-		stduint p[4];
-		p[0] = _TODO _TEMP 0;// dev
-		p[3] = caller_pid;// pid
-		syssend(Task_Con_Serv, p, byteof(p), 3);
-		sysrecv(Task_Con_Serv, &ret, byteof(ret));
-		// ploginfo("INNC: %d", ret);
+		//{} Create buffer for each vtty; focused_tty; tty[0] is desk-back
+		auto ppb = Taskman::Locate(caller_pid);
+		if (para[0]) {
+			msgbuf[3] = caller_pid;// pid
+			syssend(Task_Console, sliceof(msgbuf), _IMM(ConsoleMsg::INNC));
+			sysrecv(Task_Console, &ret, byteof(ret));
+		}
+		else if (ppb->focus_tty && -1 != (ch = VTTY_INNQ(ppb->focus_tty)->inn())) {
+			return ch;
+		}
+		else ret = ~_IMM0;
 		break;
 	}
 	case syscall_t::EXIT:
@@ -139,6 +98,7 @@ stduint Handint_SYSCALL(CallgateFrame* frame) {
 		para[1] = para[0];
 		para[0] = caller_pid;
 		syssend(Task_TaskMan, para, byteof(para), _IMM(TaskmanMsg::EXIT));
+		sysrecv(Task_TaskMan, &ret, byteof(ret));
 		// unreachable
 		break;
 	}
@@ -152,24 +112,18 @@ stduint Handint_SYSCALL(CallgateFrame* frame) {
 		break;
 	case syscall_t::COMM:// (mode, obj, vaddr msg)
 	{
-
 		// assert(!src && src < numsof(Tasks));
-		//{}INTERRUPT src == ~1
 		ProcessBlock* pb = TaskGet(caller_pid);
-		if (para[0] == 0b01) { // SEND
+		if (para[0] & 0b01) { // SEND
 			// ploginfo("%d --> %d", pb->getID(), para[1]);
 			ret = msg_send(pb, (para[1]), (CommMsg*)para[2]);
 		}
-		else if (para[0] == 0b10) { // RECV
+		if (para[0] & 0b10) { // RECV
 			// if (para[1] && para[1] != ~_IMM0) ploginfo("%d <-- %d", pb->getID(), para[1]);
 			ret = msg_recv(pb, (para[1]), (CommMsg*)para[2]);
 		}
-		else {
-			printlog(_LOG_ERROR, "Bad `mode` of syscall 0x%[32H]", _IMM(callid));
-		}
 		
 		if (pb->state == ProcessBlock::State::Pended) {
-			// goto case_syscall_t_REST;
 			Taskman::Schedule(true);
 		}
 		if (ch_tse) task_switch_enable = task_switch_enable_old;
@@ -319,7 +273,7 @@ DEFSYSC sysc_OUTC(stduint ch, stduint len) {// OUTC
 	}
 	#else
 	if (auto pid = Taskman::Locate(Taskman::CurrentPID())) {
-		auto con = cast<Console_t*>(vttys[pid->focus_tty_id]->offs);//{} assert...
+		auto con = pid->focus_tty ? (Console_t*)cast<Dnode*>(pid->focus_tty)->offs : 0;
 		if (con) {
 			if (len) {
 				while (len) {
@@ -341,7 +295,7 @@ DEFSYSC sysc_OUTC(stduint ch, stduint len) {// OUTC
 			con->OutChar(nil);
 			return 0;
 		}
-		else plogerro("sysc_try: null console, id = %u", pid->focus_tty_id);
+		else plogerro("sysc_try: null console, id = %u", pid->focus_tty);
 	}
 	else plogerro("sysc_try: null task");
 	#endif

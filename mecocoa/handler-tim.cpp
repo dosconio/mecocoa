@@ -132,23 +132,6 @@ void Handint_PIT()
 	}
 }
 
-void blink();
-void Handint_RTC()
-{
-	// 1Hz
-	// auto push flag by interrupt module
-	// OPEN NMI AFTER READ REG-C, OR ONLY INT ONCE
-	outpb(IRQ_RTC, 0x0C);
-	innpb(0x71);
-	mecocoa_global->system_time.sec++;
-
-	if (!ento_gui) {
-		Letvar(p, char*, 0xB8003);
-		*p ^= 0x70;// make it blink
-	}
-	else blink();
-}
-
 #endif
 #if _MCCA == 0x8664 && defined(_UEFI)
 __attribute__((/*interrupt, */target("general-regs-only")))// the stack is ready

@@ -13,7 +13,6 @@
 #include <c/driver/timer.h>
 #include <cpp/Device/Cache>
 #include <c/format/filesys/FAT.h>
-#include <c/driver/RealtimeClock.h>
 
 _ESYM_C
 {
@@ -40,8 +39,6 @@ void mecfetch() {
 	for0(j, height) { for0(i, width) Console.OutChar(' '); Console.OutFormat("\n\r"); }
 	Console.out("\xFF\xFF", 2);
 
-	// Console.OutFormat("Mem Avail: %s\n\r", ker_buf.reference());
-
 	Console.OutFormat("CPU Brand: %s\n\r", text_brand());
 	
 	tm datime; CMOS_Readtime(&datime);
@@ -50,10 +47,11 @@ void mecfetch() {
 		datime.tm_hour, datime.tm_min, datime.tm_sec
 	);
 	
-	Console.OutFormat("Total Mem: %[x]\n\r", Memory::total_memsize);
+	Console.OutFormat("Avail Mem: %[x]\n\r", Memory::total_memsize);
 }// like neofetch
 
 extern uint32 _start_eax, _start_ebx;
+extern RMOD_LIST __init_rmod_ento[], __init_rmod_endo[];
 _sign_entry() {
 	_call_serious = kernel_fail;
 	if (!Memory::initialize(_start_eax, (byte*)_start_ebx)) HALT();
@@ -67,8 +65,9 @@ _sign_entry() {
 	// IVT and Device
 	IC.Reset(SegCo32, 0x80000000);
 	IC.Init();
+	for (auto func = __init_rmod_ento; func < __init_rmod_endo; func++) (func->init)();
+
 	IC[IRQ_PIT].setRange(mglb(Handint_PIT_Entry), SegCo32); PIT_Init();
-	IC[IRQ_RTC].setRange(mglb(Handint_RTC_Entry), SegCo32); RTC_Init();
 	IC[IRQ_Keyboard].setRange(mglb(Handint_KBD_Entry), SegCo32); Keyboard_Init();
 	IC[IRQ_PS2_Mouse].setRange(mglb(Handint_MOU_Entry), SegCo32); Mouse_Init();
 	IC[IRQ_ATA_DISK0].setRange(mglb(Handint_HDD_Entry), SegCo32); DEV_Init();

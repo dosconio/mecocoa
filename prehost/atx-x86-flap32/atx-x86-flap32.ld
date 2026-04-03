@@ -32,6 +32,14 @@ SECTIONS
 	}
 	.rodata : {*(.rodata)}
 	
+	/* MACRO-CORE */
+	. = ALIGN(8);
+	.init.rmod : {
+		__init_rmod_ento = .;
+		KEEP(*(SORT(.init.rmod.*)))
+		KEEP(*(.init.rmod))
+		__init_rmod_endo = .;
+	}
 	/* C++ only */
 	. = ALIGN(8);
 	.init_array : {

@@ -125,7 +125,7 @@ void mecocoa(const UefiData& uefi_data_ref)
 				FileBlockBridge loop_device(&fatvhd, han, han->size, 512);
 				if (auto pb = Taskman::CreateELF(&loop_device, RING_U)) {
 					Taskman::Append(pb);
-					pb->focus_tty_id = 0;
+					// pb->focus_tty_id = 0;{} TODO
 					vttys[0]->type = pb->getID();
 				}
 				else plogerro("appa.elf: Fail to parse or load ELF");

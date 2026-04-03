@@ -10,28 +10,29 @@ enum
 	: stduint
 	#endif
 {
-	OUTC = 0x00, // putchar
-	INNC = 0x01, //{TODO} getchar
-	EXIT = 0x02, // exit             // (code)
-	TIME = 0x03, // getsecond
-	REST = 0x04, // halt
-	COMM = 0x05, // sync communicate
-	OPEN = 0x06, // open   file
-	CLOS = 0x07, // close  file      // (fd)-> 0
-	READ = 0x08, // read   file      // (fd, addr, len)
-	WRIT = 0x09, // write  file      // (fd, addr, len)
-	DELF = 0x0A, // remove file
+	OUTC = 0x00, // outstr (chr/str, len)->0  | x86 x64 rv
+	INNC = 0x01, // innstr (blocked)->ASCII>0 | x86
+	EXIT = 0x02, // exit   (code)             | x86
+	TIME = 0x03, // getsec (0sec/1ms)->second | x86(half)
+	REST = 0x04, // halt   (time 0-for-yeild) | x86(half)
+	COMM = 0x05, // syncom (...)              | x86
+	OPEN = 0x06, // open   (path,flags)>=0    | x86
+	CLOS = 0x07, // close  (fd)->0            | x86
+	READ = 0x08, // read   (fd, adr, len)->len| x86
+	WRIT = 0x09, // write  (fd, adr, len)->len| x86
+	DELF = 0x0A, // remove (pathname)->?      | x86
 	//=0x0B{} proper&enumer
 	//=0x0C{} 
-	WAIT = 0x0D, // wait             // (&status) -> pid
-	FORK = 0x0E, // unix.fork        // () -> pid
-	TMSG = 0x0F, // try message
-	EXEC = 0x10, // exec             // (path, argv) -> 0[success]
+	WAIT = 0x0D, // wait   (&status)->pid     | x86
+	FORK = 0x0E, // U.fork ()->pid            | x86
+	TMSG = 0x0F, // trymsg ()->(msg_unsovled) | x86
+	EXEC = 0x10, // exec   (path, argstr)->0  | 
+	MALC = 0x11, // malloc (pages)->addr>0    | 
 
-	GET_CORE_ID,
+	GET_CORE_ID, // | rv
 
 
-	TEST = 0xFF,
+	TEST = 0xFF, // (T,E,S)->0 | x86
 };
 
 enum

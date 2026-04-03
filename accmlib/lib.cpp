@@ -26,7 +26,7 @@ void sysouts(const char* str)// 0
 
 int sysinnc()// 1
 {
-	return syscall(syscall_t::INNC, nil, nil, nil);
+	return syscall(syscall_t::INNC, 1, nil, nil);
 }
 
 _ESYM_C

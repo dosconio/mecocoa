@@ -25,7 +25,7 @@ CX=g++ -I$(uincpath) -c $(flag) $(CXF) $(CXW) -std=c++2a
 
 ker_mod=$(uobjpath)/mcca-$(arch)/*
 
-cppfile=$(wildcard mecocoa/*.cpp) $(wildcard filesys/*.cpp)
+cppfile=$(wildcard mecocoa/*.cpp) $(wildcard devdriv/*.cpp) $(wildcard devdriv/**/*.cpp)
 cppobjs=$(patsubst %cpp, %o, $(cppfile))
 
 sudokey=k

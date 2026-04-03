@@ -81,17 +81,30 @@ int KeyboardBridge::out(const char* str, stduint len) {
 					ascii_ch = key_map_shift[event.keycode];
 				}
 
-				BareConsole* ttycon = &Bcons[current_screen_TTY];
+				BareConsole* ttycon = dynamic_cast<BareConsole*>((OstreamTrait*)ttys[current_screen_TTY]->offs);
+				auto p_vtty = vttys[current_screen_TTY];
+				if (!ttycon) {
+					plogerro("assert ttycons");
+					loop HALT();
+				}
+				if (!p_vtty) {
+					plogerro("assert p_vtty");
+					loop HALT();
+				}
 				if (event.keycode == 0x4B && ttycon->crtline > 0) { // PgUp -> PageUp VKC
+					#if !_GUI_ENABLE
 					ttycon->auto_incbegaddr = 0;
 					ttycon->setStartLine(--ttycon->crtline + ttycon->topline);
+					#endif
 				}
 				else if (event.keycode == 0x4E && ttycon->crtline < ttycon->area_total.y - ttycon->area_show.height) { // PgDn -> PageDown VKC
+					#if !_GUI_ENABLE
 					ttycon->auto_incbegaddr = 0;
 					ttycon->setStartLine(++ttycon->crtline + ttycon->topline);
+					#endif
 				}
 				else if (ascii_ch) {
-					ttycon->input_queue.OutChar(ascii_ch);
+					VTTY_INNQ(p_vtty)->OutChar(ascii_ch);
 				}
 			}
 		}

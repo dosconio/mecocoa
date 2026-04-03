@@ -26,17 +26,40 @@ bool Cursor::mouse_btnr_dn = false;
 
 #if 1 // ---- ---- TTY ---- ----
 
-Dchain ttys = { nullptr };// offs->Ostream*, type->B/V
-Dchain vttys = { nullptr };// offs->Ostream*, type->pid
+Dchain ttys = { nullptr };// offs->ConT*, type->B/V
+static void VTTY_Free(pureptr_t inp) {
+	Letvar(nod, Dnode*, inp);
+	// skip offs
+	auto& block = *(vtty_type_t*)nod->type;
+	if (block.innput_queue.slice.address) {
+		delete (byte*)block.innput_queue.slice.address;
+	}
+	if (block.output_queue.slice.address) {
+		_TODO
+	}
+	memf((void*)nod->type);
+}
+Dnode* VTTY_Append(Console_t* con) {
+	if (!con) {
+		plogerro("%s: You may lose impl Console_t for con", __FUNCIDEN__);
+		return nullptr;
+	}
+	auto p = vttys.Append(con);
+	if (!p) return nullptr;
+	const stduint SIZE_INN_BUF = 64;
+	auto p_innbuf = new byte[SIZE_INN_BUF];
+	p->type = _IMM(new vtty_type_t(0, QueueLimited({_IMM(p_innbuf), SIZE_INN_BUF}), QueueLimited({0, 0})));
+	return p;
+}
+Dchain vttys = { VTTY_Free };// offs->ConT*, type->vtty_type_t
 
 #endif
 
 #if (_MCCA & 0xFF00) == 0x8600
 
-typedef char innQueueBuf[64];
-static innQueueBuf _BUF_innQueues[TTY_NUMBER];
-stduint tty_crt_blocked_appid[TTY_NUMBER];// 0 if no app
-// total:
+stduint tty_crt_blocked_appid[TTY_NUMBER];//{TEMP} 0 if no app
+Vector blocked_vtty;
+// total: may need change after Remove
 byte current_screen_TTY = 0;
 // consider CLI
 BareConsole Bcons[TTY_NUMBER];// TTY 0~3 and their buffer
@@ -102,13 +125,22 @@ void _Comment(R1) serv_cons_loop()
 	//{TEMP} only a TTY0(VCON)
 	using BR = ProcessBlock::BlockReason;
 	while (true) {
-		for0a(i, tty_crt_blocked_appid) if (stduint pid = tty_crt_blocked_appid[i]) if (-1 != (ch = Bcons[i].input_queue.inn())) {
-			tty_crt_blocked_appid[i] = nil;
-			stdsint val = ch; // The character is already translated through sysmsg_kbd and input_queue
-			syssend(pid, &val, byteof(val));
+		////{TEMP} single blocked --> blocked_vtty
+		if (stduint pid = tty_crt_blocked_appid[0]) {
+			tty_crt_blocked_appid[0] = nil;
+			auto ppb = Taskman::Locate(pid);
+			if (!ppb) {
+				plogerro("%s", __FUNCIDEN__);
+				continue;
+			}
+			if (ppb->focus_tty && -1 != (ch = VTTY_INNQ(ppb->focus_tty)->inn())) {
+				stdsint val = ch; // The character is already translated through sysmsg_kbd
+				syssend(pid, &val, byteof(val));
+			}
 		}
 
 		// Render the bottom ribbon
+		#if !_GUI_ENABLE
 		if (!ento_gui && current_screen_TTY == 0) {
 			Ribbon[0].attr = kbd_state.mod.l_ctrl ? 0x70 : 0x07;
 			Ribbon[1].attr = kbd_state.mod.l_shift ? 0x70 : 0x07;
@@ -117,18 +149,19 @@ void _Comment(R1) serv_cons_loop()
 			Ribbon[78].attr = kbd_state.mod.r_shift ? 0x70 : 0x07;
 			Ribbon[79].attr = kbd_state.mod.r_ctrl ? 0x70 : 0x07;
 		}
+		#endif
 
 		// Process potential message
 		if (syscall(syscall_t::TMSG)) {
 			sysrecv(ANYPROC, to_args, byteof(to_args), &sig_type, &sig_src);
 			ProcessBlock* pb = TaskGet(to_args[3]);
-			switch (sig_type) {
-			case 0: break;
-			case 1: // R (dev, addr, len, pid)
+			switch (ConsoleMsg(sig_type)) {
+			case ConsoleMsg::TEST: break;
+			case ConsoleMsg::READ:
 				to_args[0] &= _IMM1S(dev_domain_bits) - 1;
 				//{TODO}
 				break;
-			case 2: // W (dev, addr, len, pid)
+			case ConsoleMsg::WRIT:
 				ret = StrCopyP(cons_buffer, kernel_paging,
 					(char*)to_args[1], pb->paging, to_args[2]);
 				// if (get_drv_pid(to_args[0]) == 4)
@@ -139,17 +172,20 @@ void _Comment(R1) serv_cons_loop()
 				}
 				syssend(sig_src, &ret, sizeof(ret), 0);
 				break;
-			case 3: // (dev,.,., pid) noreturn
+			case ConsoleMsg::INNC:
+			{
 				// ReadChar(ASCII): normal \n \r ...
+				ProcessBlock* pb = TaskGet(to_args[3]);
 				to_args[0] &= _IMM1S(dev_domain_bits) - 1;
-				if (!tty_crt_blocked_appid[to_args[0]]) {
-					tty_crt_blocked_appid[to_args[0]] = to_args[3];
+				if (!tty_crt_blocked_appid[0]) {
+					tty_crt_blocked_appid[0] = to_args[3];
 				}
 				else {
 					ret = ~_IMM0;
 					syssend(sig_src, &ret, sizeof(ret), 0);
 				}
 				break;
+			}
 
 			
 
@@ -213,9 +249,6 @@ void cons_init() {
 	for1(i, TTY_NUMBER - 1) {
 		Bcons[i].Reset(bda->screen_columns, 50, _VIDEO_ADDR_BUFFER, i * 50); Bcons[i].setShowY(0, 25);
 	}
-	for0(i, TTY_NUMBER) {
-		new (&Bcons[i].input_queue) QueueLimited((Slice) { _IMM(_BUF_innQueues[i]), byteof(_BUF_innQueues[i]) });
-	}
 
 	// try first 800xN ARGB8888 Mode
 	uint16 vmod_default = nil;
@@ -240,7 +273,7 @@ void cons_init() {
 		con0_out = &Bcons[0];
 		Bcons[0].Scroll(24);
 		for0a(i, Bcons) ttys.Append(dynamic_cast<Console_t*>(&Bcons[i]));
-		for0a(i, Bcons) vttys.Append(dynamic_cast<Console_t*>(&Bcons[i]));
+		for0a(i, Bcons) VTTY_Append((&Bcons[i]));
 		plogwarn("There is no default 800xN-8888 Video Mode");
 		return;
 	}
@@ -330,7 +363,7 @@ void cons_init() {
 		global_layman.Append(&form2);
 		pcon->Start();
 
-		vttys.Append(dynamic_cast<Console_t*>(pcon));
+		VTTY_Append((pcon));
 	}
 
 	// main screen
@@ -339,6 +372,7 @@ void cons_init() {
 	vcon0->InitializeSheet(global_layman, screen0_win.getVertex(), screen0_win.getSize(), vcon0_buf);
 	vcon0->setModeBuffer(vcon0_buf);
 	global_layman.Append(vcon0);
+	////{} VTTY_Append()
 
 	#if _GUI_DOUBLE_BUFFER
 	enable_2buffer();

@@ -19,6 +19,26 @@ public:\
 #include <c/driver/mouse.h>
 
 extern Dchain ttys, vttys;
+struct vtty_type_t {
+	stduint blocked_pid;
+	QueueLimited innput_queue;
+	QueueLimited output_queue;
+};
+Dnode* VTTY_Append(Console_t* con);
+inline static QueueLimited* VTTY_INNQ(Dnode* nod) {
+	if (!nod || !nod->type) return nullptr;
+	auto& block = *(vtty_type_t*)nod->type;
+	return &block.innput_queue;
+}
+
+enum class ConsoleMsg {
+	TEST,
+	READ,// R (dev, addr, len, pid)
+	WRIT,// W (dev, addr, len, pid)
+	INNC,//   (., ., ., pid) noreturn
+};
+
+
 
 #if (_MCCA & 0xFF00) == 0x8600
 extern uni::LayerManager global_layman;

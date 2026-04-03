@@ -154,7 +154,7 @@ int msg_send(ProcessBlock* fo, stduint too, _Comment(vaddr) CommMsg* msg)
 			crt->queue_send_queuenext = fo;
 		}
 		fo->queue_send_queuenext = nullptr;// keep this at tail
-		// Taskman::Schedule(true);
+		Taskman::Schedule(true);
 	}
 	return 0;
 }
@@ -181,7 +181,7 @@ int msg_recv(ProcessBlock* to, stduint foo, _Comment(vaddr) CommMsg* msg)
 			determined = true;
 		}
 	}
-	else {// if (foo != INTRUPT)???
+	else if (foo != INTRUPT) {
 		// ploginfo("%u -> %u", foo, to->getID());
 		fo = TaskGet(foo);
 		if (fo->block_reason == ProcessBlock::BR_SendMsg &&
@@ -232,7 +232,7 @@ int msg_recv(ProcessBlock* to, stduint foo, _Comment(vaddr) CommMsg* msg)
 		if (to->unsolved_msg) plogwarn("pid%u, unsolved_msg when recv(%u)(%u)", to->getID(), foo, 0);
 		to->unsolved_msg = msg;
 		to->recv_fo_whom = (foo == ANYPROC || foo == INTRUPT) ? (ProcessBlock*)foo : TaskGet(foo);
-		// Taskman::Schedule(true);
+		Taskman::Schedule(true);
 	}
 	return 0;
 }

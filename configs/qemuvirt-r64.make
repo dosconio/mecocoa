@@ -101,10 +101,11 @@ build: clean prehost/$(arch)/fatvhd.ignore $(asmobjs) $(cppobjs) $(cplobjs)
 	@echo
 	@echo Run \"make -f accmlib/accmrv64.make\" to build accm-r64
 
-$(uobjpath)/sapp-$(arch)/loop_print_a:
+$(uobjpath)/sapp-$(arch)/loop_print_a: subapps/_basic/loop_print_a.cpp
 	$(MKDIR) $(uobjpath)/sapp-$(arch)
-	echo MK subapps/_basic/loop_print_a.cpp
-	@${CX} ${XFLAGS} subapps/_basic/loop_print_a.cpp -o $(uobjpath)/sapp-$(arch)/loop_print_a  -L$(uobjpath)/accm-riscv64 -lriscv64
+	echo MK $<
+	@${CX} ${XFLAGS} $< -o $(uobjpath)/sapp-$(arch)/loop_print_a \
+		-L$(uobjpath)/accm-riscv64 -lriscv64 -T accmlib/accmrv.ld
 $(archdir)/kerdisk.fat: $(uobjpath)/sapp-$(arch)/loop_print_a
 	$(MKDIR) $(archdir)
 	dd if=/dev/zero of=$@ bs=1M count=1

@@ -47,6 +47,11 @@ void serv_file_loop();
 extern InterruptControl IC;
 #endif
 
+struct RMOD_LIST {
+	Handler_t init;
+	stduint keep[3];
+};
+
 // ---- . ----
 
 #define _GUI_ENABLE 1

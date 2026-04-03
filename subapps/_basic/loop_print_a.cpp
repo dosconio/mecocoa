@@ -16,14 +16,15 @@ auto main(int argc, char** argv) -> int
 	sysouts("Task 0: Created!\n");
 	int ret = -1;
 	ret = get_core_id(&hid);
-	if (!ret) {
-		sysouts("system call returned!, hart id is %d\n");
-	} else {
-		sysouts("gethid() failed, return: %d\n");
-	}
+	Console.OutFormat("gethid() return: %d\n", ret);
 	while (1) {
 		sysouts("Task 0: Running...\n");
 		task_delay(DELAY);
 	}
 }
 
+#if (_MCCA & 0xFF00) == 0x1000
+extern "C" void *memset(void *str, int c, size_t n) { return MemSet(str, c, n); }
+
+
+#endif

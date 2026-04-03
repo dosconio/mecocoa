@@ -98,8 +98,8 @@ stduint do_rdwt(bool wr_type, stduint fid, Slice slice, stduint pid)
 		msg[1] = slice.address;
 		msg[2] = slice.length;
 		msg[3] = pid;
-		syssend(Task_Con_Serv, msg, byteof(msg), wr_type ? 2 : 1);
-		sysrecv(Task_Con_Serv, &msg[0], byteof(msg[0]));
+		syssend(Task_Console, msg, byteof(msg), wr_type ? 2 : 1);
+		sysrecv(Task_Console, &msg[0], byteof(msg[0]));
 		return msg[0];
 	}
 	else {
@@ -445,7 +445,7 @@ void serv_file_loop()
 			if (han = (FAT_FileHandle*)pfs_fat0->search("init", &a)) {
 				FileBlockBridge loop_device(pfs_fat0, han, han->size, 512);
 				if (auto task = Taskman::CreateELF(&loop_device, 3))
-					task->focus_tty_id = 0;
+					task->focus_tty = vttys[0];
 				else plogerro("Init: Fail to load");
 			}
 			else plogerro("Init: Not found");
@@ -455,7 +455,7 @@ void serv_file_loop()
 			if (han = (FAT_FileHandle*)pfs_fat0->search("c", &a)) {
 				FileBlockBridge loop_device(pfs_fat0, han, han->size, 512);
 				if (auto task = Taskman::CreateELF(&loop_device, 3))
-					task->focus_tty_id = 0;
+					task->focus_tty = vttys[0];
 				else plogerro("C: Fail to load");
 			}
 			else plogerro("C: Not found");

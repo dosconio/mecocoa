@@ -41,7 +41,9 @@ void _entry()
 	// UART0
 	UART0.enInterrupt();
 	UART0.setInterruptPriority(1, nil);
-	vttys.Append(dynamic_cast<Console_t*>(&Console));
+	VTTY_Append((&Console));
+
+	// Taskman::Create((void*)&serv_task_loop, RING_M);
 
 	ploginfo("FATVHD Size: %[x]", sizeof(_FOLLOW_VHD));
 	if (1) {
@@ -69,9 +71,9 @@ void _entry()
 			}
 			else plogerro("lpa.elf: Not found");
 		}
-		mempool.deallocate(fatvhd.buffer_fatable);
-		mempool.deallocate(memdev_buffer);
-		mempool.deallocate(fat_buffer);
+		delete[](fatvhd.buffer_fatable);
+		delete[](memdev_buffer);
+		delete[](fat_buffer);
 	}
 
 	if (Taskman::chain.Count() <= 1) {
@@ -84,7 +86,7 @@ void _entry()
 	clint.Load(getMHARTID(), last_schepoint);
 	clint.enInterrupt();
 	while (1) {
-		UART0.OutFormat("Task K: Running...\n");
+		// UART0.OutFormat("Task K: Running...\n");
 		clint.MSIP(getMHARTID(), MSIP_Type::SofRupt);// Bad Method: Taskman::Schedule(true)
 		HALT();
 	}

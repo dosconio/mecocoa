@@ -14,8 +14,8 @@
 enum {
 	Task_Kernel,
 	Task_TaskMan,
-	Task_Con_Serv,
-	Task_ConsoleVideo,// [inner of Task_Con_Serv] manage mice and GUI
+	Task_Console,
+	Task_ConsoleVideo,// [inner of Task_Console] manage mice and GUI
 	Task_Hdd_Serv,
 	Task_FileSys,
 	Task_Init,
@@ -105,7 +105,7 @@ public:
 public:
 	stduint stack_size;
 	byte* stack_lineaddr;// [linear] ring3 bottom of stack
-	// stack_levladdr: use phyzik. Because 0xFFFFFFFFC0001000ull or 0xFFC00000 is mapped to this.
+	// stack_levladdr: use phyzik. Because 0xFFFFFFFFC0001000ull or 0xFFC01000 is mapped to this.
 	byte* stack_levladdr;// [phyzik] ring0, may be 0 or same with stack_lineaddr for ring0 task 
 	sint8 priority = 0; // -16..-1 (Realtime RT) and 0..15 (Timeslice)
 	uint8 time_slice = 0; // execution time left for timeslice mode
@@ -143,16 +143,18 @@ public: // _Comment(Syscomm)
 public: // _Comment(Thread)
 public: // _Comment(Interface);
 	enum class InterfaceType : byte {
+		MCCA4,
 		POSIX,
 		Win32,
-	} interface_type = InterfaceType::POSIX;
+	} interface_type = InterfaceType::MCCA4;
 public:
 	uni::Paging paging;
-	//{} Mempool heappool// should store linear address | setbreak
+	stduint heaptop = 0;
+	stduint heapbtm = 0;// norm: max seg + 0x10000
 public: // _Comment(Taskman);
 	uni::Slice load_slices[8];// at most 8 slices, app-relative logical address
 public: // _Comment(Console);
-	uint32 focus_tty_id;
+	Dnode* focus_tty = nullptr;
 	SheetTrait* pforms[_TEMP 4] = {};// should registered in global_layman
 public: // _Comment(Fileman);
 	FileDescriptor* pfiles[_TEMP 4];
@@ -234,7 +236,7 @@ extern "C" bool task_switch_enable;
 #endif
 
 
-#if 1
+#ifndef _ACCM
 inline ProcessBlock* TaskGet(stduint taskid) { return Taskman::Locate(taskid); }
 
 // return zero for success
@@ -262,6 +264,11 @@ inline static stduint sysrecv(stduint fo_whom, void* msgaddr, stduint bytlen, st
 	if (type) *type = msg.type;
 	if (src) *src = msg.src;
 	return ret;
+}
+inline static stduint syssdrv(stduint whom, void* msgaddr, stduint bytlen, stduint* type = NULL)
+{
+	auto a = syssend(whom, msgaddr, bytlen, type ? *type : 0);
+	return sysrecv(whom, msgaddr, bytlen, type);
 }
 #endif
 

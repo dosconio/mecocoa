@@ -376,7 +376,6 @@ ProcessBlock* Taskman::CreateELF(BlockTrait* source, byte ring) {
 
 	// ---- Stack and Gen.Regis ---- //
 	const stduint stack_loc_top = _IMM(pb->stack_lineaddr) + pb->stack_size;
-	
 
 	#if (_MCCA & 0xFF00) == 0x8600
 	pb->context.RING = ring;
@@ -486,7 +485,7 @@ ProcessBlock* Taskman::CreateFork(ProcessBlock* fo, const CallgateFrame* frame) 
 	#endif
 }
 
-
+//{} called by Taskman
 bool Taskman::ExitCurrent(stduint code) {
 	auto pid = CurrentPID();
 	ploginfo("AppExit: %[u] with code 0x%[x]", pid, code);
@@ -509,15 +508,28 @@ bool Taskman::ExitCurrent(stduint code) {
 
 static void cleanup(stduint pid)
 {
-	// MESSAGE msg2parent;
-	// msg2parent.type = SYSCALL_RET;
-	// msg2parent.PID = proc2pid(proc);
-	// msg2parent.STATUS = proc->exit_status;
-	// send_recv(SEND, proc->p_parent, &msg2parent);
-	// proc->p_flags = FREE_SLOT;
-	Taskman::DequeueReady(TaskGet(pid));
-	TaskGet(pid)->state = ProcessBlock::State::Invalid;
-	// TaskGet(pid)->TSS.LastTSS = 0;
+	// Resources
+	// - paging
+	// - message
+	// - files open
+	// - heaps, stacks
+	#if defined(_DEBUG) && defined(_MCCA) && (_MCCA & 0xFF00) == 0x8600
+	auto flag = getFlags();
+	if (flag & 0x200) InterruptDisable();
+	#endif
+	auto ppb = TaskGet(pid);
+	ploginfo("cleaning %u", pid);
+	Taskman::DequeueReady(ppb);
+	//
+	ppb->paging.~Paging();
+	//{} msg
+	//{} files
+	//{} h&s
+	ppb->state = ProcessBlock::State::Invalid;
+	Taskman::chain.Remove(ppb);
+	#if defined(_DEBUG) && defined(_MCCA) && (_MCCA & 0xFF00) == 0x8600
+	setFlags(flag);
+	#endif
 }
 inline static bool is_waiting(ProcessBlock* p) {
 	return p->state == ProcessBlock::State::Pended &&
@@ -546,6 +558,9 @@ static void task_exit(stduint pid, stduint status)
 		pparent->Unblock(ProcessBlock::BlockReason::BR_Waiting);
 		// ploginfo("sending to parent %u", parent_pid);
 		syssend(parent_pid, &args, sizeof(args));
+		cleanup(pid);
+	}
+	else if (!p->parent_id) {
 		cleanup(pid);
 	}
 	else {
@@ -683,7 +698,7 @@ stduint task_exec(stduint pid, void* fullpath, void* argstack, stduint stacklen)
 #endif
 
 //// ---- ---- SERVICE ---- ---- ////
-#if (_MCCA & 0xFF00) == 0x8600
+#if (_MCCA & 0xFF00) == 0x8600 || (_MCCA & 0xFF00) == 0x1000
 
 void _Comment(R0) serv_task_loop()
 {
