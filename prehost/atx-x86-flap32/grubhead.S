@@ -60,7 +60,10 @@ multiboot_entry:
 	call    EXT_C(_start)
 loop:   hlt
 	jmp     loop
-	# .comm   stack, STACK_SIZE
+
+.section .bss, "aw", @nobits
+
+# .comm   stack, STACK_SIZE
 _start_eax: .long 0
 _start_ebx: .long 0
 
@@ -72,3 +75,8 @@ menuentry 'Mx86' {
 	boot
 }
 */
+#ifndef _LOADER
+.balign 16
+.global kernel_stack
+kernel_stack: .space 0x1000
+#endif

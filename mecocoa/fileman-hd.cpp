@@ -124,7 +124,7 @@ enum { REG_DATA = 0 };
 //{TODO} into harddisk.cpp:Open()
 static void hd_open(Harddisk_PATA& hd) { // 0x00
 	byte low_id = hd.getLowID();
-	HdiskCommand cmd;
+	HdiskCommand cmd = {};
 	cmd.command = ATA_IDENTIFY;
 	cmd.device = MAKE_DEVICE_REG(0, low_id, 0);
 	lock = 0;

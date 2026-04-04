@@ -1,6 +1,7 @@
 // ASCII g++ TAB4 LF
 // AllAuthor: @dosconio, @ArinaMgk
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
+// #pragma GCC optimize("O2")
 #include "../include/mecocoa.hpp"
 
 #include <c/cpuid.h>

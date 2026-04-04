@@ -385,7 +385,7 @@ stduint OrangesFs::writfl(void* fil_handler, Slice file_slice, const byte* src) 
 
 
 //// ---- ---- SUPERBLOCK ---- ---- ////
-super_block superblocks[NR_SUPER_BLOCK];//{TEMP} in Static segment, should be managed in heap
+alignas(16) super_block superblocks[NR_SUPER_BLOCK];//{TEMP} in Static segment, should be managed in heap
 
 void OrangesFs::read_superblock()
 {

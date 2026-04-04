@@ -43,7 +43,7 @@ void _entry()
 	UART0.setInterruptPriority(1, nil);
 	VTTY_Append((&Console));
 
-	// Taskman::Create((void*)&serv_task_loop, RING_M);
+	Taskman::Create((void*)&serv_task_loop, RING_M);
 
 	ploginfo("FATVHD Size: %[x]", sizeof(_FOLLOW_VHD));
 	if (1) {

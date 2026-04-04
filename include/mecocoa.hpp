@@ -8,6 +8,7 @@
 #include <c/consio.h>
 #include <c/datime.h>
 #include <cpp/interrupt>
+#include <cpp/vector>
 
 use crate uni;
 #if _MCCA == 0x8632
@@ -49,13 +50,16 @@ extern InterruptControl IC;
 
 struct RMOD_LIST {
 	Handler_t init;
-	stduint keep[3];
-};
+	rostr name;
+	stduint keep[2];
+};// unload irq dep ...
 
 // ---- . ----
 
+//
 #define _GUI_ENABLE 1
 // double buffer, or the anime is disabled
 #define _GUI_DOUBLE_BUFFER 0
-
+// print logo 🏳️‍⚧️
+#define _GUI_LOGO 0
 

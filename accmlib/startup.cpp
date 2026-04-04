@@ -1,5 +1,5 @@
 #include "inc/aaaaa.h"
-#if (_MCCA & 0xFF00) == 0x8600
+#if (_ACCM & 0xFF00) == 0x8600
 _ESYM_C
 void _start() {
 	//{} bss...

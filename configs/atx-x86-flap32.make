@@ -16,10 +16,9 @@ flag=-D_MCCA=0x8632 -D_ARC_x86=5 -D_DEBUG
 qemu=qemu-system-i386 # not support ia32e
 bochd=C:/Soft/Bochs-2.7/bochsdbg.exe
 
-COMWAN = -Wno-builtin-declaration-mismatch
 CXF1=-m32 -mno-red-zone -mno-sse -mno-sse2 -mno-sse3 -mno-ssse3 -mno-sse4
-CXF2=-fno-stack-protector -fno-pic -fno-exceptions -fno-unwind-tables -fno-builtin -fno-strict-aliasing
-CXF=$(CXF1) $(CXF2) -fno-rtti -fno-use-cxa-atexit -static -nostdlib $(COMWAN)
+CXF2=-ffreestanding -fno-omit-frame-pointer -fno-stack-protector -fno-pic -fno-exceptions -fno-unwind-tables -fno-builtin -fno-strict-aliasing
+CXF=$(CXF1) $(CXF2) -fno-rtti -fno-use-cxa-atexit -static -nostdlib 
 CXW=-Wno-builtin-declaration-mismatch -Wno-volatile -Wno-multichar
 CX=g++ -I$(uincpath) -c $(flag) $(CXF) $(CXW) -std=c++2a
 
@@ -56,7 +55,7 @@ build: clean lib $(cppobjs)
 		prehost/_auxiliary.cpp $(uobjpath)/mcca-$(arch)/mcca-$(arch)-elf64.o $(uobjpath)/CGMin32/_ae_manage.o\
 		-o $(ubinpath)/$(elf_loader) -L$(ubinpath) -lm32d $(CXF) \
 		-T prehost/$(arch)/$(arch).loader.ld  \
-		-nostartfiles -O0 \
+		-nostartfiles -O2 \
 		-Wl,-Map=$(ubinpath)/$(elf_loader).map
 	strip --strip-all $(ubinpath)/$(elf_loader)
 	rm $(uobjpath)/mcca-$(arch)/mcca-$(arch)-elf64.o
@@ -65,7 +64,7 @@ build: clean lib $(cppobjs)
 	$(CX) prehost/$(arch)/grubhead.S -o $(uobjpath)/mcca-$(arch).grub.o
 	g++ -I$(uincpath) $(flag) -m32 $(uobjpath)/mcca-$(arch).grub.o $(ker_mod) prehost/$(arch)/$(arch).cpp prehost/_auxiliary.cpp -o $(ubinpath)/$(elf_kernel) -L$(ubinpath) -lm32d $(CXF) \
 		-T prehost/$(arch)/$(arch).ld  \
-		-nostartfiles -O0 \
+		-nostartfiles -O2 \
 		-Wl,-Map=$(ubinpath)/$(elf_kernel).map
 	strip --strip-all $(ubinpath)/$(elf_kernel)
 	@dd if=/dev/zero of=$(outs) bs=512 count=2880 2>>/dev/null
@@ -117,10 +116,10 @@ qemu_args=\
 	-drive file=$(ubinpath)/fixed2.vhd,format=vpc,if=none,id=disk1 \
 	-device ide-hd,drive=disk1,bus=ide.0,unit=1 \
 
-pack: build
+pack:
 	cd $(ubinpath) && ./_mk_mcca.sh
 
-run: build run-only
+run: build pack run-only
 run-only:
 	$(qemu) \
 		$(qemu_args) -audiodev pa,id=speaker -machine pcspk-audiodev=speaker \

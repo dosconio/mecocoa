@@ -1,7 +1,8 @@
 // UTF-8 g++ TAB4 LF 
-// AllAuthor: @dosconio, @ArinaMgk
-// ModuTitle: Demonstration - ELF32-C++ x86 Bare-Metal
+// AllAuthor: @ArinaMgk
+// ModuTitle: RTC
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
+
 #include "../../include/mecocoa.hpp"
 #include <c/driver/RealtimeClock.h>
 
@@ -12,6 +13,7 @@ _ESYM_C void R_RTC_INIT();
 __attribute__((section(".init.rmod")))
 RMOD_LIST RMOD_LIST_RTC{
 	.init = R_RTC_INIT,
+	.name = "RTC",
 };
 #endif
 

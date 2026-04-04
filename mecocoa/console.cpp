@@ -4,9 +4,6 @@
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 #include "../include/mecocoa.hpp"
 
-#include <c/driver/mouse.h>
-#include <c/driver/keyboard.h>
-#include <cpp/Device/_Video.hpp>
 #include <cpp/Witch/Form.hpp>
 #include <cpp/Witch/Control/Control-Label.hpp>
 #include <cpp/Witch/Control/Control-TextBox.hpp>
@@ -48,7 +45,7 @@ Dnode* VTTY_Append(Console_t* con) {
 	if (!p) return nullptr;
 	const stduint SIZE_INN_BUF = 64;
 	auto p_innbuf = new byte[SIZE_INN_BUF];
-	p->type = _IMM(new vtty_type_t(0, QueueLimited({_IMM(p_innbuf), SIZE_INN_BUF}), QueueLimited({0, 0})));
+	p->type = _IMM(new vtty_type_t({ 0, QueueLimited({_IMM(p_innbuf), SIZE_INN_BUF}), QueueLimited({0, 0}) }));
 	return p;
 }
 Dchain vttys = { VTTY_Free };// offs->ConT*, type->vtty_type_t
@@ -57,10 +54,11 @@ Dchain vttys = { VTTY_Free };// offs->ConT*, type->vtty_type_t
 
 #if (_MCCA & 0xFF00) == 0x8600
 
-stduint tty_crt_blocked_appid[TTY_NUMBER];//{TEMP} 0 if no app
-Vector blocked_vtty;
+Vector<stduint> blocked_vtty_pid;
 // total: may need change after Remove
 byte current_screen_TTY = 0;
+
+
 // consider CLI
 BareConsole Bcons[TTY_NUMBER];// TTY 0~3 and their buffer
 // consider GUI
@@ -76,7 +74,7 @@ GloScreenARGB8888 vga_ARGB8888;
 GloScreenABGR8888 vga_ABGR8888;
 #endif
 VideoControlInterface* real_pvci = nullptr;
-byte _BUF_QueueMouse[byteof(QueueLimited)];
+
 
 #ifndef _UEFI
 void blink() {
@@ -97,10 +95,17 @@ void blink2() {
 //// ---- ---- DYNAMIC CORE ---- ---- ////
 #ifdef _ARC_x86 // x86:
 
-bool work_console = false;
 char* cons_buffer;
 extern keyboard_state_t kbd_state;
 
+static bool ifContainBlockedTTY(ProcessBlock* ppb) {
+	for0(i, blocked_vtty_pid.Count()) {
+		if (Taskman::Locate(blocked_vtty_pid[i])->focus_tty == ppb->focus_tty) {
+			return true;
+		}
+	}
+	return false;
+}// To OPTIMIZE
 void _Comment(R1) serv_cons_loop()
 {
 	cons_buffer = (char*)Memory::physical_allocate(0x1000);
@@ -120,14 +125,9 @@ void _Comment(R1) serv_cons_loop()
 
 	int ch;
 
-	work_console = true;
-
-	//{TEMP} only a TTY0(VCON)
 	using BR = ProcessBlock::BlockReason;
 	while (true) {
-		////{TEMP} single blocked --> blocked_vtty
-		if (stduint pid = tty_crt_blocked_appid[0]) {
-			tty_crt_blocked_appid[0] = nil;
+		for0 (i, blocked_vtty_pid.Count()) if (stduint pid = blocked_vtty_pid[i]) {
 			auto ppb = Taskman::Locate(pid);
 			if (!ppb) {
 				plogerro("%s", __FUNCIDEN__);
@@ -135,6 +135,7 @@ void _Comment(R1) serv_cons_loop()
 			}
 			if (ppb->focus_tty && -1 != (ch = VTTY_INNQ(ppb->focus_tty)->inn())) {
 				stdsint val = ch; // The character is already translated through sysmsg_kbd
+				blocked_vtty_pid.Remove(i);
 				syssend(pid, &val, byteof(val));
 			}
 		}
@@ -176,9 +177,8 @@ void _Comment(R1) serv_cons_loop()
 			{
 				// ReadChar(ASCII): normal \n \r ...
 				ProcessBlock* pb = TaskGet(to_args[3]);
-				to_args[0] &= _IMM1S(dev_domain_bits) - 1;
-				if (!tty_crt_blocked_appid[0]) {
-					tty_crt_blocked_appid[0] = to_args[3];
+				if (!ifContainBlockedTTY(pb)) {
+					blocked_vtty_pid.Append(pb->getID());
 				}
 				else {
 					ret = ~_IMM0;
@@ -311,6 +311,13 @@ void cons_init() {
 	);// VGA
 	#endif
 
+	// main screen
+	auto vcon0 = new VideoConsole(&global_layman.getVCI(), screen0_win, Color::Black, Color::White);
+	auto vcon0_buf = (Color*)mem.allocate(vcon0_size);
+	vcon0->InitializeSheet(global_layman, screen0_win.getVertex(), screen0_win.getSize(), vcon0_buf);
+	vcon0->setModeBuffer(vcon0_buf);
+	VTTY_Append(vcon0);
+
 	// cursor
 	Cursor::global_cursor = new (_BUF_cursor)Cursor{ &global_layman.getVCI() };
 	const Point cursor_pos = { 300,200 };
@@ -366,13 +373,7 @@ void cons_init() {
 		VTTY_Append((pcon));
 	}
 
-	// main screen
-	auto vcon0 = new VideoConsole(&global_layman.getVCI(), screen0_win, Color::Black, Color::White);
-	auto vcon0_buf = (Color*)mem.allocate(vcon0_size);
-	vcon0->InitializeSheet(global_layman, screen0_win.getVertex(), screen0_win.getSize(), vcon0_buf);
-	vcon0->setModeBuffer(vcon0_buf);
 	global_layman.Append(vcon0);
-	////{} VTTY_Append()
 
 	#if _GUI_DOUBLE_BUFFER
 	enable_2buffer();
@@ -380,6 +381,7 @@ void cons_init() {
 
 	vcon0->Clear();
 	con0_out = vcon0;
+	current_screen_TTY = _TEMP 1;
 
 	//{} Register global_layman as tty[0]
 	// default tty are all bcon

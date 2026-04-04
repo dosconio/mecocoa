@@ -372,8 +372,8 @@ stdsint do_lseek()
 }
 
 //// ---- ---- SERVICE ---- ---- ////
-char _buf_OFs[byteof(OrangesFs)];
-char _buf_FATs[byteof(FilesysFAT)];
+alignas(OrangesFs) char _buf_OFs[byteof(OrangesFs)];
+alignas(FilesysFAT) char _buf_FATs[byteof(FilesysFAT)];
 
 stduint serv_file_loop_remove(stduint pid, rostr filename) {
 	_TEMP;
@@ -445,7 +445,7 @@ void serv_file_loop()
 			if (han = (FAT_FileHandle*)pfs_fat0->search("init", &a)) {
 				FileBlockBridge loop_device(pfs_fat0, han, han->size, 512);
 				if (auto task = Taskman::CreateELF(&loop_device, 3))
-					task->focus_tty = vttys[0];
+					task->focus_tty = vttys[1];
 				else plogerro("Init: Fail to load");
 			}
 			else plogerro("Init: Not found");
@@ -455,7 +455,7 @@ void serv_file_loop()
 			if (han = (FAT_FileHandle*)pfs_fat0->search("c", &a)) {
 				FileBlockBridge loop_device(pfs_fat0, han, han->size, 512);
 				if (auto task = Taskman::CreateELF(&loop_device, 3))
-					task->focus_tty = vttys[0];
+					task->focus_tty = vttys[1];
 				else plogerro("C: Fail to load");
 			}
 			else plogerro("C: Not found");

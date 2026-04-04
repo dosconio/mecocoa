@@ -22,9 +22,9 @@ OstreamTrait* con0_out;// TTY0
 // use before loading elf-kernel
 #define ROOT_DEV_FAT0 (MINOR_hd6a + 2)
 #define single_sector  ((byte*)0x100000)
-#define fatable_sector ((byte*)0x101000)
-#define hdinfo_addr    ((byte*)0x102000)
-#define kernel_addr    ((byte*)0x103000)
+#define fatable_sector ((byte*)0x100200)
+#define hdinfo_addr    ((byte*)0x100400)
+#define kernel_addr    ((byte*)0x101000)
 
 // temp
 #define paging_addr    ((byte*)0x200000)
@@ -54,16 +54,13 @@ void body() {
 	MemSet((void*)hdinfo_addr, 0, sizeof(HD_Info));
 	DiscPartition::Partition(hdisk, *(HD_Info*)hdinfo_addr, single_sector, 5);
 	// HD_Info& hdi = *(HD_Info*)hdinfo_addr;
-
 	DiscPartition part_fat0(hdisk, ROOT_DEV_FAT0);
 	FilesysFAT pfs_fat0(32, part_fat0, single_sector, fatable_sector);
-	
-	stduint a[2] = { _IMM(&filhan)/*, _IMM(&filinf) */ };
-
+	stduint p_filinf = 0;
+	stduint a[2] = { _IMM(&filhan), p_filinf };
 	if (!pfs_fat0.loadfs()) {
 		plogerro("FAT0 loadfs failed"); _ASM("hlt");
 	}
-	
 	// HDISK + FAT + ELF
 	// if   mx64.elf exists, load, switch to IA-32e and transfer to mx64.elf
 	// elif mx86.elf exists, load, transfer to mx86.elf
@@ -89,7 +86,6 @@ void body() {
 		}
 		else plogerro("No ladder for x64l");
 	}
-
 	if (!support_ia32e) ELF32_LoadExecFromMemory(kernel_addr, (void**)&entry_kernel);
 	else ELF64_LoadExecFromMemory(kernel_addr, (void**)&entry_kernel);
 	printlog(_LOG_INFO, "Transfer to Kernel at 0x%[32H]", entry_kernel);

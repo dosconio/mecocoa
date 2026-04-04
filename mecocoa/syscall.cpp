@@ -87,7 +87,7 @@ stduint Handint_SYSCALL(CallgateFrame* frame) {
 			sysrecv(Task_Console, &ret, byteof(ret));
 		}
 		else if (ppb->focus_tty && -1 != (ch = VTTY_INNQ(ppb->focus_tty)->inn())) {
-			return ch;
+			ret = ch;
 		}
 		else ret = ~_IMM0;
 		break;
@@ -258,6 +258,16 @@ stduint syscall(syscall_t callid, stduint para1, stduint para2, stduint para3) {
 		loop HALT();
 	}
 	return reinterpret_cast<stdsint(*)(stduint, stduint, stduint)>(SYSCALL_TABLE[_IMM(callid)])(para1, para2, para3);
+	#elif (_MCCA & 0xFF00) == 0x1000
+	void syscall_body(NormalTaskContext * cxt);
+	auto ppb = Taskman::Locate(Taskman::CurrentPID());
+	auto& cxt = ppb->context;
+	cxt.a7 = _IMM(callid);
+	cxt.a0 = para1;
+	cxt.a1 = para2;
+	cxt.a2 = para3;
+	syscall_body(&cxt);
+	ret = cxt.a0;
 	#endif
 	return ret;
 }
@@ -273,8 +283,8 @@ DEFSYSC sysc_OUTC(stduint ch, stduint len) {// OUTC
 	}
 	#else
 	if (auto pid = Taskman::Locate(Taskman::CurrentPID())) {
-		auto con = pid->focus_tty ? (Console_t*)cast<Dnode*>(pid->focus_tty)->offs : 0;
-		if (con) {
+		if (auto con = pid->focus_tty ? (Console_t*)cast<Dnode*>(pid->focus_tty)->offs : 0)
+		{
 			if (len) {
 				while (len) {
 					stduint crt_len = 0x1000 - (ch & 0xFFF);
@@ -295,7 +305,7 @@ DEFSYSC sysc_OUTC(stduint ch, stduint len) {// OUTC
 			con->OutChar(nil);
 			return 0;
 		}
-		else plogerro("sysc_try: null console, id = %u", pid->focus_tty);
+		else plogerro("sysc_OUTC: pid = %u", pid->getID());
 	}
 	else plogerro("sysc_try: null task");
 	#endif
@@ -341,7 +351,8 @@ void syscall_body(NormalTaskContext* cxt)
 		cxt->a0 = sys_gethid((unsigned int *)(cxt->a0));
 		break;
 	default:
-		UART0.OutFormat("Unknown syscall no: %d\n", syscall_num);
+		plogerro("Unknown syscall no: %d", syscall_num);
+		loop HALT();
 		cxt->a0 = -1;
 	}
 

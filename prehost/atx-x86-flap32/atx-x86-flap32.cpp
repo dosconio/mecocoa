@@ -8,16 +8,10 @@
 #include <cpp/string>
 #include <cpp/interrupt>
 #include <c/format/ELF.h>
-#include <c/driver/PIT.h>
 #include <c/driver/mouse.h>
 #include <c/driver/timer.h>
 #include <cpp/Device/Cache>
 #include <c/format/filesys/FAT.h>
-
-_ESYM_C
-{
-	alignas(16) byte kernel_stack[4 * 1024] = {};
-}
 
 void mecfetch() {
 	const rostr blue = ento_gui ? "\xFE\xF8\xC8\x58" : "\xFF\x30";
@@ -26,7 +20,8 @@ void mecfetch() {
 	const unsigned attrl = ento_gui ? 4 : 2;
 	const unsigned width = ento_gui ? 48 : 16;
 	const unsigned height = ento_gui ? 3 : 1;
-	// draw a 🏳️‍⚧️ flag
+
+	#if _GUI_LOGO
 	Console.out(blue, attrl);
 	for0(j, height) { for0(i, width) Console.OutChar(' '); Console.OutFormat("\n\r"); }
 	Console.out(pink, attrl);
@@ -38,6 +33,7 @@ void mecfetch() {
 	Console.out(blue, attrl);
 	for0(j, height) { for0(i, width) Console.OutChar(' '); Console.OutFormat("\n\r"); }
 	Console.out("\xFF\xFF", 2);
+	#endif
 
 	Console.OutFormat("CPU Brand: %s\n\r", text_brand());
 	
@@ -67,7 +63,6 @@ _sign_entry() {
 	IC.Init();
 	for (auto func = __init_rmod_ento; func < __init_rmod_endo; func++) (func->init)();
 
-	IC[IRQ_PIT].setRange(mglb(Handint_PIT_Entry), SegCo32); PIT_Init();
 	IC[IRQ_Keyboard].setRange(mglb(Handint_KBD_Entry), SegCo32); Keyboard_Init();
 	IC[IRQ_PS2_Mouse].setRange(mglb(Handint_MOU_Entry), SegCo32); Mouse_Init();
 	IC[IRQ_ATA_DISK0].setRange(mglb(Handint_HDD_Entry), SegCo32); DEV_Init();

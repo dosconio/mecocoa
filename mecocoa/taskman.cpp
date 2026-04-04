@@ -12,6 +12,9 @@
 
 #include "../include/taskman.hpp"
 
+// #pragma GCC push_options
+// #pragma GCC optimize("O2")
+
 void* higher_stacks[PCU_CORES_MAX];// when 1 core 1 stack
 static SysMessage _BUF_Message[64];
 Queue<SysMessage> message_queue(_BUF_Message, numsof(_BUF_Message));
@@ -174,6 +177,7 @@ void Taskman::Initialize(stduint cpuid) {
 	kernel_task->priority = 12;
 	kernel_task->time_slice = 4;
 	#endif
+	kernel_task->focus_tty = vttys[0];
 	Taskman::EnqueueReady(kernel_task);
 }
 
@@ -256,6 +260,7 @@ ProcessBlock* Taskman::Create(void* entry, byte ring)
 
 	ppb->priority = (ring == RING_U) ? 3 : 0;
 	ppb->time_slice = (ring == RING_U) ? 3 : 4;
+	ppb->focus_tty = vttys[0];
 	Append(ppb);
 	return ppb;
 }
@@ -393,6 +398,7 @@ ProcessBlock* Taskman::CreateELF(BlockTrait* source, byte ring) {
 
 	pb->priority = (ring == RING_U) ? 4 : 0;
 	pb->time_slice = (ring == RING_U) ? 3 : 4;
+	pb->focus_tty = vttys[0];
 
 	#if _MCCA == 0x8632
 	Taskman::Append(pb);
@@ -446,6 +452,7 @@ ProcessBlock* Taskman::CreateFork(ProcessBlock* fo, const CallgateFrame* frame) 
 
 	pb->priority = fo->priority;
 	pb->time_slice = fo->time_slice;
+	pb->focus_tty = fo->focus_tty;
 
 	// ---- Stack and Gen.Regis ---- //
 	const stduint stack_loc_top = _IMM(pb->stack_lineaddr) + pb->stack_size;
@@ -697,16 +704,22 @@ stduint task_exec(stduint pid, void* fullpath, void* argstack, stduint stacklen)
 
 #endif
 
+
+// #pragma GCC pop_options
+
+
 //// ---- ---- SERVICE ---- ---- ////
 #if (_MCCA & 0xFF00) == 0x8600 || (_MCCA & 0xFF00) == 0x1000
-
+#if _MCCA == 0x8600
+__attribute__((optimize("O0")))
+#endif
 void _Comment(R0) serv_task_loop()
 {
-	stduint to_args[8];// 8*4=32 bytes
-	stduint sig_type = 0, sig_src, ret;
+	volatile stduint to_args[8] = {};// 8*4=32 bytes
+	volatile stduint sig_type = 0, sig_src = 0, ret = 0;
 	ploginfo("Taskman Service Start");
 	while (true) {
-		switch ((TaskmanMsg)sig_type)
+		switch (static_cast<TaskmanMsg>(sig_type))
 		{
 		case TaskmanMsg::TEST:
 			// Nothing
@@ -722,7 +735,7 @@ void _Comment(R0) serv_task_loop()
 				auto child_ppb = Taskman::CreateFork(TaskGet(to_args[0]), (CallgateFrame*)to_args[1]);
 				ret = child_ppb ? child_ppb->getID() : ~_IMM0;
 			}
-			syssend(sig_src, &ret, sizeof(ret));
+			syssend(sig_src, (void*)&ret, sizeof(ret));
 			break;
 		case TaskmanMsg::WAIT: // (pid, &usr:state) -> (child_pid)
 			// ploginfo("Taskman wait: %u %x", to_args[0], to_args[1]);
@@ -731,15 +744,15 @@ void _Comment(R0) serv_task_loop()
 		case TaskmanMsg::EXEC:// (pid, &usr:fullpath, &usr:argstack, stacklen) -> 0(success)
 			to_args[0] = sig_src;
 			ret = task_exec(to_args[0], (void*)to_args[1], (void*)to_args[2], to_args[3]);
-			syssend(sig_src, &ret, sizeof(ret));
+			syssend(sig_src, (void*)&ret, sizeof(ret));
 			break;
 		#endif
 
 		default:
-			plogerro("Bad TYPE in %s %s", __FILE__, __FUNCIDEN__);
+			plogerro("Bad TYPE %u in %s %s", sig_type, __FILE__, __FUNCIDEN__);
 			break;
 		}
-		sysrecv(ANYPROC, to_args, byteof(to_args), &sig_type, &sig_src);
+		sysrecv(ANYPROC, (void*)to_args, byteof(to_args), (stduint *)&sig_type, (stduint *)&sig_src);
 	}
 }
 

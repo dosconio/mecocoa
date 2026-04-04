@@ -219,7 +219,7 @@ public:
 };
 #endif
 
-enum class TaskmanMsg {
+enum class TaskmanMsg : stduint {
 	TEST,
 	EXIT,
 	FORK,
