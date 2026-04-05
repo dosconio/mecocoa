@@ -23,6 +23,8 @@ bool Cursor::mouse_btnr_dn = false;
 
 #if 1 // ---- ---- TTY ---- ----
 
+// vtty0: global_ground
+// vtty1: form1...
 Dchain ttys = { nullptr };// offs->ConT*, type->B/V
 static void VTTY_Free(pureptr_t inp) {
 	Letvar(nod, Dnode*, inp);
@@ -244,8 +246,8 @@ void enable_2buffer() {
 }
 
 void cons_init() {
-	Bcons[0].Reset(bda->screen_columns, 24, _VIDEO_ADDR_BUFFER, 0 * 50); Bcons[0].setShowY(0, 24);
 	con0_out = 0;
+	Bcons[0].Reset(bda->screen_columns, 24, _VIDEO_ADDR_BUFFER, 0 * 50); Bcons[0].setShowY(0, 24);
 	for1(i, TTY_NUMBER - 1) {
 		Bcons[i].Reset(bda->screen_columns, 50, _VIDEO_ADDR_BUFFER, i * 50); Bcons[i].setShowY(0, 25);
 	}
@@ -383,7 +385,6 @@ void cons_init() {
 	con0_out = vcon0;
 	current_screen_TTY = _TEMP 1;
 
-	//{} Register global_layman as tty[0]
 	// default tty are all bcon
 }
 /* 4 BCON TTY

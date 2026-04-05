@@ -7,9 +7,47 @@
 #include <c/cpuid.h>
 #include <c/driver/mouse.h>
 #include <c/driver/keyboard.h>
+#include <c/driver/RealtimeClock.h>
 #include "../include/console.hpp"
 
+String dump_availmem();
+void mecfetch() {
+	#if ((_MCCA & 0xFF00) == 0x8600)
+	const rostr blue = ento_gui ? "\xFE\xF8\xC8\x58" : "\xFF\x30";
+	const rostr pink = ento_gui ? "\xFE\xB8\xA8\xF8" : "\xFF\x50";
+	const rostr white = ento_gui ? "\xFE\xFF\xFF\xFF" : "\xFF\x70";
+	const unsigned attrl = ento_gui ? 4 : 2;
+	const unsigned width = ento_gui ? 48 : 16;
+	const unsigned height = ento_gui ? 3 : 1;
 
+	#if _GUI_LOGO
+	Console.out(blue, attrl);
+	for0(j, height) { for0(i, width) Console.OutChar(' '); Console.OutFormat("\n\r"); }
+	Console.out(pink, attrl);
+	for0(j, height) { for0(i, width) Console.OutChar(' '); Console.OutFormat("\n\r"); }
+	Console.out(white, attrl);
+	for0(j, height) { for0(i, width) Console.OutChar(' '); Console.OutFormat("\n\r"); }
+	Console.out(pink, attrl);
+	for0(j, height) { for0(i, width) Console.OutChar(' '); Console.OutFormat("\n\r"); }
+	Console.out(blue, attrl);
+	for0(j, height) { for0(i, width) Console.OutChar(' '); Console.OutFormat("\n\r"); }
+	Console.out("\xFF\xFF", 2);
+	#endif
+
+	Console.OutFormat("CPU Brand: %s\n\r", text_brand());
+
+	tm datime = {};
+	#if _MCCA == 0x8632 //((_MCCA & 0xFF00) == 0x8600)
+	CMOS_Readtime(&datime);
+	#endif
+	Console.OutFormat("Date Time: %d/%d/%d %d:%d:%d\n\r",
+		datime.tm_year, datime.tm_mon, datime.tm_mday,
+		datime.tm_hour, datime.tm_min, datime.tm_sec
+	);
+	#endif
+
+	Console.OutFormat("Avail Mem: %s\n\r", dump_availmem().reference());
+}// like neofetch
 
 #if ((_MCCA & 0xFF00) == 0x8600)
 
@@ -34,3 +72,21 @@ rostr text_brand() {
 }
 
 #endif
+
+String dump_availmem() {
+	double mem = Memory::total_memsize;
+	char unit[]{ ' ', 'K', 'M', 'G', 'T' };
+	int level = 0;
+	// assert mem != 0
+	while (mem > 1024) {
+		level++;
+		mem /= 1024;
+	}
+	mem *= 100;
+	mem = (int)mem;
+	mem /= 100;
+	String ret;
+	if (level) ret.Format("%lf %cB", mem, unit[level]);
+	else ret.Format("0x%[x] B", Memory::total_memsize);
+	return ret;
+}

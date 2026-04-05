@@ -1,9 +1,8 @@
 #ifndef _STYLE_RUST
 #define _STYLE_RUST
 #endif
-#if _MCCA == 0x8632
 #define _HER_TIME_H
-#endif
+#define _TIME_H	1
 
 #include <c/consio.h>
 #include <c/datime.h>
@@ -53,6 +52,8 @@ struct RMOD_LIST {
 	rostr name;
 	stduint keep[2];
 };// unload irq dep ...
+
+void mecfetch();
 
 // ---- . ----
 

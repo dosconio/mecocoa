@@ -57,6 +57,7 @@ cppfile=$(wildcard prehost/qemuvirt-r32/*.cpp) $(wildcard mecocoa/*.cpp) prehost
 	$(ulibpath)/cpp/sort.cpp \
 	$(ulibpath)/cpp/consio.cpp \
 	$(ulibpath)/cpp/stream.cpp \
+	$(ulibpath)/cpp/string.cpp \
 	$(ulibpath)/cpp/interrupt.cpp \
 	$(ulibpath)/cpp/Device/PLIC.cpp \
 	$(ulibpath)/cpp/Device/UART.cpp \
@@ -64,6 +65,7 @@ cppfile=$(wildcard prehost/qemuvirt-r32/*.cpp) $(wildcard mecocoa/*.cpp) prehost
 	$(ulibpath)/cpp/system/paging.cpp \
 	$(ulibpath)/cpp/Device/Storage.cpp \
 	$(ulibpath)/cpp/lango/lango-cpp.cpp \
+	$(ulibpath)/cpp/grp-base/bstring.cpp \
 	$(ulibpath)/cpp/dat-block/mempool.cpp \
 	$(ulibpath)/cpp/dat-block/bmmemoman.cpp \
 	$(ulibpath)/cpp/nodes/dnode.cpp $(wildcard $(ulibpath)/cpp/nodes/dnode/*.cpp) \

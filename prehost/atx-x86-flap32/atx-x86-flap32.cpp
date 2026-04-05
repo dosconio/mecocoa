@@ -4,57 +4,18 @@
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 #include "../../include/mecocoa.hpp"
 
-#include <c/consio.h>
-#include <cpp/string>
-#include <cpp/interrupt>
 #include <c/format/ELF.h>
 #include <c/driver/mouse.h>
 #include <c/driver/timer.h>
 #include <cpp/Device/Cache>
 #include <c/format/filesys/FAT.h>
 
-void mecfetch() {
-	const rostr blue = ento_gui ? "\xFE\xF8\xC8\x58" : "\xFF\x30";
-	const rostr pink = ento_gui ? "\xFE\xB8\xA8\xF8" : "\xFF\x50";
-	const rostr white = ento_gui ? "\xFE\xFF\xFF\xFF" : "\xFF\x70";
-	const unsigned attrl = ento_gui ? 4 : 2;
-	const unsigned width = ento_gui ? 48 : 16;
-	const unsigned height = ento_gui ? 3 : 1;
-
-	#if _GUI_LOGO
-	Console.out(blue, attrl);
-	for0(j, height) { for0(i, width) Console.OutChar(' '); Console.OutFormat("\n\r"); }
-	Console.out(pink, attrl);
-	for0(j, height) { for0(i, width) Console.OutChar(' '); Console.OutFormat("\n\r"); }
-	Console.out(white, attrl);
-	for0(j, height) { for0(i, width) Console.OutChar(' '); Console.OutFormat("\n\r"); }
-	Console.out(pink, attrl);
-	for0(j, height) { for0(i, width) Console.OutChar(' '); Console.OutFormat("\n\r"); }
-	Console.out(blue, attrl);
-	for0(j, height) { for0(i, width) Console.OutChar(' '); Console.OutFormat("\n\r"); }
-	Console.out("\xFF\xFF", 2);
-	#endif
-
-	Console.OutFormat("CPU Brand: %s\n\r", text_brand());
-	
-	tm datime; CMOS_Readtime(&datime);
-	Console.OutFormat("Date Time: %d/%d/%d %d:%d:%d\n\r",
-		datime.tm_year, datime.tm_mon, datime.tm_mday,
-		datime.tm_hour, datime.tm_min, datime.tm_sec
-	);
-	
-	Console.OutFormat("Avail Mem: %[x]\n\r", Memory::total_memsize);
-}// like neofetch
 
 extern uint32 _start_eax, _start_ebx;
 extern RMOD_LIST __init_rmod_ento[], __init_rmod_endo[];
 _sign_entry() {
 	_call_serious = kernel_fail;
 	if (!Memory::initialize(_start_eax, (byte*)_start_ebx)) HALT();
-	const unsigned mempool_lenN = 0x20000;
-	mempool.Append(Slice{ _IMM(mem.allocate(mempool_lenN)), mempool_lenN });
-	mempool.Append(Slice{ _IMM(mem.allocate(mempool_lenN)), mempool_lenN });
-	mempool.Append(Slice{ _IMM(mem.allocate(mempool_lenN)), mempool_lenN });
 	cons_init();// located here, for  INT-10H may influence PIC
 	Cache_t::enAble();
 	Taskman::Initialize();
@@ -67,7 +28,6 @@ _sign_entry() {
 	IC[IRQ_PS2_Mouse].setRange(mglb(Handint_MOU_Entry), SegCo32); Mouse_Init();
 	IC[IRQ_ATA_DISK0].setRange(mglb(Handint_HDD_Entry), SegCo32); DEV_Init();
 	IC[IRQ_SYSCALL].setRange(mglb(Handint_INTCALL_Entry), SegCo32); IC[IRQ_SYSCALL].DPL = 3;
-
 
 	mecfetch();
 	__asm("ud2");
@@ -82,8 +42,6 @@ _sign_entry() {
 	IC.enAble();
 	syscall(syscall_t::OUTC, 'O', 0);
 	Console.OutFormat("hayouuu~!\n\r");
-
-	Memory::pagebmap->dump_avail_memory();
 
 	// Done
 	loop HALT();

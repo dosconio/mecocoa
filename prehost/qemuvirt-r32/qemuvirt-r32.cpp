@@ -32,8 +32,6 @@ void _entry()
 		printlog(_LOG_FATAL, "Memory Initialize Failed.");
 		loop HALT();
 	}
-	const unsigned mempool_lenN = 0x20000;
-	mempool.Append(Slice{ _IMM(mem.allocate(mempool_lenN)), mempool_lenN });
 	//{} Cache_t::enAble();
 	Taskman::Initialize();
 

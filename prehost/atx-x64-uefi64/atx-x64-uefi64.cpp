@@ -34,10 +34,6 @@ void TaskB() {
 }
 
 // ---- Kernel
-_PACKED(struct) Header {
-	stduint size;
-	stduint prop;
-};
 
 extern "C" //__attribute__((ms_abi))
 void mecocoa(const UefiData& uefi_data_ref)
@@ -51,13 +47,6 @@ void mecocoa(const UefiData& uefi_data_ref)
 	_call_serious = kernel_fail;
 	
 	if (!Memory::initialize('UEFI', (byte*)(&uefi_data.memory_map))) HALT();
-	const unsigned mempool_lenN = 0x40000;
-	mempool.Append(Slice{ _IMM(mem.allocate(mempool_lenN)), mempool_lenN });
-	mempool.Append(Slice{ _IMM(mem.allocate(mempool_lenN)), mempool_lenN });
-	mempool.Append(Slice{ _IMM(mem.allocate(mempool_lenN)), mempool_lenN });
-	mempool.Append(Slice{ _IMM(mem.allocate(mempool_lenN)), mempool_lenN });
-
-
 	cons_init();
 	//{} Cache_t::enAble();
 	Taskman::Initialize();
@@ -135,8 +124,6 @@ void mecocoa(const UefiData& uefi_data_ref)
 		delete[] (memdev_buffer);
 		delete[] (fat_buffer);
 	}
-
-	// IC.enAble(true);
 
 	syscall(syscall_t::OUTC, (usize)"Ohayou\n\r", 8);
 
