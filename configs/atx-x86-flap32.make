@@ -119,7 +119,7 @@ qemu_args=\
 pack:
 	cd $(ubinpath) && ./_mk_mcca.sh
 
-run: build pack run-only
+run: build run-only
 run-only:
 	$(qemu) \
 		$(qemu_args) -audiodev pa,id=speaker -machine pcspk-audiodev=speaker \

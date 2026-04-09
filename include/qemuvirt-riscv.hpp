@@ -40,9 +40,6 @@
 
 #ifndef _DEV_GNU_AS
 
-class NormalTaskContext;
-_ESYM_C void DirectTaskContext(NormalTaskContext* next);
-
 // handler
 extern uint64 last_schepoint;
 extern void timer_handler(void);

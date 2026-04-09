@@ -41,7 +41,12 @@ void _entry()
 	UART0.setInterruptPriority(1, nil);
 	VTTY_Append((&Console));
 
+	if (1) {
+		plogwarn("stack_size=%u", offsetof(ProcessBlock, stack_size));
+		plogwarn("stack_levladdr=%u", offsetof(ProcessBlock, stack_levladdr));
+	}
 	Taskman::Create((void*)&serv_task_loop, RING_M);
+	Taskman::Create((void*)&serv_cons_loop, RING_M);
 
 	ploginfo("FATVHD Size: %[x]", sizeof(_FOLLOW_VHD));
 	if (1) {
@@ -95,7 +100,8 @@ void DiscPartition::renew_slice() {}
 extern "C" void __cxa_pure_virtual() {
 	while (1);
 }
-extern "C" void *memset(void *str, int c, size_t n) { return MemSet(str, c, n); }
+extern "C" void* memcpy(void* dest, const void* sors, size_t n) { return MemCopyN(dest, sors, n); }
+extern "C" void* memset(void* str, int c, size_t n) { return MemSet(str, c, n); }
 _ESYM_C unsigned int __ctzsi2(unsigned int x)
 {
 	if (x == 0) return 32;

@@ -144,7 +144,7 @@ $(ubinpath)/$(arch).img: loader
 	mkfs.fat -n 'MECOCOA ' -s 2 -f 2 -R 32 -F 32 $@ > /dev/null
 
 
-edkdir=/home/phina/soft/edk2
+edkdir=/home/$(USER)/soft/edk2
 .PHONY : loader
 loader:
 	@echo MK $(arch) loader

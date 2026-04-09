@@ -21,7 +21,7 @@ CFLAGS += -I$(uincpath) -D_MCCA=0x1032 -D_OPT_RISCV32 -D_DEBUG
 CFLAGS += -fno-strict-aliasing -fno-exceptions -fno-stack-protector
 CFLAGS += -g
 XFLAGS  = $(CFLAGS) -fno-rtti -fno-use-cxa-atexit
-G_DBG   = gdb-multiarch
+G_DBG   = gdb
 CC      = ${GPREF}gcc -O2
 CX      = ${GPREF}g++ -O2
 OBJCOPY = ${GPREF}objcopy
@@ -107,18 +107,18 @@ build: clean prehost/$(arch)/fatvhd.ignore $(asmobjs) $(cppobjs) $(cplobjs)
 	@echo
 	@echo Run \"make -f accmlib/accmrv32.make\" to build accm-r32
 
-$(uobjpath)/sapp-$(arch)/loop_print_a: subapps/_basic/loop_print_a.cpp
+$(uobjpath)/sapp-$(arch)/loop_echo: subapps/_basic/loop_echo.cpp
 	$(MKDIR) $(uobjpath)/sapp-$(arch)
-	echo MK subapps/_basic/loop_print_a.cpp
-	@${CX} ${XFLAGS} $< prehost/_auxiliary.cpp -o $(uobjpath)/sapp-$(arch)/loop_print_a  \
+	echo MK subapps/_basic/loop_echo.cpp
+	@${CX} ${XFLAGS} $< prehost/_auxiliary.cpp -o $(uobjpath)/sapp-$(arch)/loop_echo  \
 		-L$(uobjpath)/accm-riscv32 -lriscv32 -T accmlib/accmrv.ld
-$(archdir)/kerdisk.fat: $(uobjpath)/sapp-$(arch)/loop_print_a
+$(archdir)/kerdisk.fat: $(uobjpath)/sapp-$(arch)/loop_echo
 	$(MKDIR) $(archdir)
 	dd if=/dev/zero of=$@ bs=1M count=1
 	mkfs.fat -n 'MECOCOA2' -s 2 -f 2 -R 32 -F 32 $@
 	@echo $(sudokey) | sudo -S mkdir -p $(mntdir)
 	@echo $(sudokey) | sudo -S mount -o loop $(archdir)/kerdisk.fat $(mntdir)
-	@echo $(sudokey) | sudo -S cp $(uobjpath)/sapp-$(arch)/loop_print_a $(mntdir)/lpa.elf
+	@echo $(sudokey) | sudo -S cp $(uobjpath)/sapp-$(arch)/loop_echo $(mntdir)/lpa.elf
 	tree $(mntdir)
 	@echo $(sudokey) | sudo -S umount $(mntdir)
 prehost/$(arch)/fatvhd.ignore: $(archdir)/kerdisk.fat

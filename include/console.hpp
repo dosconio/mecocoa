@@ -38,7 +38,7 @@ enum class ConsoleMsg {
 	INNC,//   (., ., ., pid) noreturn
 };
 
-
+extern unsigned current_screen_TTY;// focus
 
 #if (_MCCA & 0xFF00) == 0x8600
 extern uni::LayerManager global_layman;

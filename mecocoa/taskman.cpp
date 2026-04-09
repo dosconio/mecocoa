@@ -102,11 +102,14 @@ static stduint _Taskman_Create_Paging(ProcessBlock *ppb, byte ring, stduint stac
 	ppb->paging.Reset();
 	// stack
 	ppb->paging.Map(_IMM(ppb->stack_lineaddr), _IMM(stack_norm), ppb->stack_size, PAGESIZE_4KB, PGPROP_present | PGPROP_writable | PGPROP_user_access);
+	ppb->paging.Map(0x80000000, 0x80000000, 0x01000000, PAGESIZE_4KB, 
+                PGPROP_present | PGPROP_writable);
 	return ppb->paging.MakeSATP();
 
 	#endif
 	return nil;
 }
+extern stduint kernel_stack_top_cpu0[];
 void Taskman::Initialize(stduint cpuid) {
 	#if (_MCCA & 0xFF00) == 0x8600
 	if (cpuid || PCU_CORES_TSS[0]) return; // already initialized
@@ -174,9 +177,10 @@ void Taskman::Initialize(stduint cpuid) {
 	#if (_MCCA & 0xFF00) == 0x1000
 	setMSCRATCH _IMM(&kernel_task->context);
 	setMIE(getMIE() | _MIE_MSIE);// software interrupts
+	kernel_task->context.kernel_sp = (usize)kernel_stack_top_cpu0;
+	#endif
 	kernel_task->priority = 12;
 	kernel_task->time_slice = 4;
-	#endif
 	kernel_task->focus_tty = vttys[0];
 	Taskman::EnqueueReady(kernel_task);
 }
@@ -192,6 +196,18 @@ auto Taskman::AllocateTask() -> ProcessBlock* {
 		return nullptr;
 	}
 	return ppb;
+}
+
+void Taskman::DumpTask(ProcessBlock* pb) {
+	#if (_MCCA & 0xFF00) == 0x1000
+	auto ctx = &pb->context;
+	ploginfo("=== Context [%d] at %[x] ===", pb->getID(), pb);
+    ploginfo("  ra : %[x]  sp : %[x]  gp : %[x]  tp : %[x]", ctx->ra, ctx->sp, ctx->gp, ctx->tp);
+    ploginfo("  a0 : %[x]  a1 : %[x]  a7 : %[x]  s0 : %[x]", ctx->a0, ctx->a1, ctx->a7, ctx->s0);
+    ploginfo("  mepc: %[x]  mstatus: %[x]  satp: %[x]", ctx->mepc, ctx->mstatus, ctx->satp);
+    ploginfo("  ksp : %[x]", ctx->kernel_sp);
+	ploginfo("========================================");
+	#endif
 }
 
 #if (_MCCA & 0xFF00) == 0x8600
@@ -247,10 +263,13 @@ ProcessBlock* Taskman::Create(void* entry, byte ring)
 	// }
 
 	#elif (_MCCA & 0xFF00) == 0x1000
+	ppb->stack_size = DEFAULT_STACK_SIZE;
+	ppb->stack_levladdr = (byte*)mempool.allocate(ppb->stack_size, PAGESIZE_4KB);
 	auto& ctx = ppb->context;
 	ctx.sp = (stduint)mempool.allocate(DEFAULT_STACK_SIZE, 12) + DEFAULT_STACK_SIZE - 0x10;
 	ctx.IP = _IMM(entry);
 	ctx.mstatus = (ring << 11) | _MSTATUS_MPIE;
+	ctx.kernel_sp = _IMM(ppb->stack_levladdr) + ppb->stack_size - 0x10;
 
 	if (ring == RING_U) {
 		_TODO// Paging
@@ -344,8 +363,8 @@ ProcessBlock* Taskman::CreateELF(BlockTrait* source, byte ring) {
 	pb->parent_id = Task_Kernel;
 
 	pb->stack_size = HIGHER_STACK_SIZE;
-	auto stack_norm = (byte*)mempool.allocate(pb->stack_size, 12);
-	auto stack_ring = ring ? (byte*)mempool.allocate(pb->stack_size, 12) : stack_norm;
+	auto stack_norm = (byte*)mempool.allocate(pb->stack_size, PAGESIZE_4KB);
+	auto stack_ring = ring != RING_M ? (byte*)mempool.allocate(pb->stack_size, PAGESIZE_4KB) : stack_norm;
 	pb->stack_lineaddr = (byte*)0x1000;
 	pb->stack_levladdr = stack_ring;
 
@@ -390,9 +409,11 @@ ProcessBlock* Taskman::CreateELF(BlockTrait* source, byte ring) {
 
 	#elif _MCCA == 0x1032 || _MCCA == 0x1064
 	constexpr stduint floating_support = (1 << 13);
-	pb->context.sp = (stack_loc_top & ~0xFlu);
+	pb->context.sp = (stack_loc_top & ~0xFlu) - 0x10;
 	pb->context.IP = _IMM(header.e_entry);
 	pb->context.mstatus = (ring << 11) | floating_support | _MSTATUS_MPIE;
+	pb->context.kernel_sp = _IMM(pb->stack_levladdr) + pb->stack_size - 0x10;
+	plogwarn("=%x %x %x", pb->stack_size, stack_norm + pb->stack_size - 0x10, pb->context.kernel_sp);
 
 	#endif
 
@@ -524,7 +545,7 @@ static void cleanup(stduint pid)
 	auto flag = getFlags();
 	if (flag & 0x200) InterruptDisable();
 	#endif
-	auto ppb = TaskGet(pid);
+	auto ppb = Taskman::Locate(pid);
 	ploginfo("cleaning %u", pid);
 	Taskman::DequeueReady(ppb);
 	//
@@ -544,9 +565,9 @@ inline static bool is_waiting(ProcessBlock* p) {
 }
 static void task_exit(stduint pid, stduint status)
 {
-	ProcessBlock* p = TaskGet(pid);
+	ProcessBlock* p = Taskman::Locate(pid);
 	auto parent_pid = p->parent_id;
-	ProcessBlock* pparent = TaskGet(parent_pid);
+	ProcessBlock* pparent = Taskman::Locate(parent_pid);
 	stduint args[2] = { pid, status };
 
 	// : fileman
@@ -580,7 +601,7 @@ static void task_exit(stduint pid, stduint status)
 		auto taski = (ProcessBlock*)nod->offs;
 		if (taski->pid && taski->parent_id == pid) {
 			taski->parent_id = (Task_Init);
-			if (is_waiting(TaskGet(Task_Init)) && taski->state == PBS::Hanging) {
+			if (is_waiting(Taskman::Locate(Task_Init)) && taski->state == PBS::Hanging) {
 				// cast<stduint>(pparent->block_reason) &= ~_IMM(ProcessBlock::BlockReason::BR_Waiting);
 				pparent->Unblock(ProcessBlock::BlockReason::BR_Waiting);
 				syssend(Task_Init, &args, sizeof(args));
@@ -609,7 +630,7 @@ static stduint task_wait(stduint pid, stduint* usrarea_state)
 		}
 	}
 	if (children) {// no child is HANGING
-		ProcessBlock* pb = TaskGet(pid);
+		ProcessBlock* pb = Taskman::Locate(pid);
 		// cast<stduint>(pb->block_reason) |= _IMM(ProcessBlock::BlockReason::BR_Waiting);
 		pb->Block(ProcessBlock::BlockReason::BR_Waiting);
 	}
@@ -732,7 +753,7 @@ void _Comment(R0) serv_task_loop()
 		case TaskmanMsg::FORK: // (pid, cframe)
 			// ploginfo("Taskman fork: %u", to_args[0]);
 			if (1) {
-				auto child_ppb = Taskman::CreateFork(TaskGet(to_args[0]), (CallgateFrame*)to_args[1]);
+				auto child_ppb = Taskman::CreateFork(Taskman::Locate(to_args[0]), (CallgateFrame*)to_args[1]);
 				ret = child_ppb ? child_ppb->getID() : ~_IMM0;
 			}
 			syssend(sig_src, (void*)&ret, sizeof(ret));

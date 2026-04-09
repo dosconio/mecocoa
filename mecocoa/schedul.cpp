@@ -281,12 +281,13 @@ auto Taskman::Schedule(bool omit_slice)->decltype(Schedule())
 	// ploginfo("switch %d->%d", old_pb->pid, new_pb->pid);
 	#if _MCCA == 0x8632
 	task_switch_enable = true;//{TODO} X86 Unlock
+	#elif (_MCCA & 0xFF00) == 0x1000
 	#endif
 
 	#if (_MCCA & 0xFF00) == 0x8600
 	SwitchTaskContext(&new_pb->context, &old_pb->context);
 	#elif (_MCCA & 0xFF00) == 0x1000
-	DirectTaskContext(&new_pb->context);
+	SwitchTaskContext(&new_pb->context, &old_pb->context);
 	#endif
 }
 #else

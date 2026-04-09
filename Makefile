@@ -46,10 +46,20 @@ lib-r32:
 ###
 
 .PHONY : lib-all
-lib-all: lib lib-r32
-
-.PHONY : build-all
-build-all: build build-r32
+lib-all:
+	make -f accmlib/accmrv32.make
+	make -f accmlib/accmrv64.make
+	make -f accmlib/accmx86.make
 
 .PHONY : all
-all: lib-all build-all
+all: lib-all
+	#
+	make arch=atx-x86-flap32
+	make arch=atx-x64-uefi64
+	make arch=atx-x64-long64
+	#
+	make arch=raspi3-ac53
+	make arch=qemuvirt-a64
+	#
+	make arch=qemuvirt-r32
+	make arch=qemuvirt-r64

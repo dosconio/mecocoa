@@ -129,6 +129,7 @@ void mecocoa(const UefiData& uefi_data_ref)
 
 	if (1) {
 		// Memory::pagebmap->dump_avail_memory();
+		mempool.dump_available();
 		ploginfo("[Console] There are %[u] layers, f=%[x], l=%[x]", global_layman.Count(), global_layman.subf, global_layman.subl);
 	}
 

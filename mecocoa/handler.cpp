@@ -184,7 +184,7 @@ stduint trap_handler(stduint epc, stduint cause, NormalTaskContext* cxt)
 			timer_handler();
 			break;
 		case 11:
-			ploginfo("external interruption!");
+			// ploginfo("external interruption!");
 			external_interrupt_handler();
 			break;
 		default:
@@ -217,7 +217,19 @@ void external_interrupt_handler()
 	if (irq == IRQ_UART0) {
 		int ch;
 		UART0 >> ch;
-		UART0 << ch;
+		// UART0 << ch;
+		
+		auto p_vtty = vttys[current_screen_TTY];
+		if (!p_vtty) {
+			plogerro("assert p_vtty");
+		}
+		if (ch == '\r') ch = '\n';
+		else if (ch == 127) {
+			VTTY_INNQ(p_vtty)->OutChar('\b');
+			VTTY_INNQ(p_vtty)->OutChar(' ');
+			ch = '\b';
+		}
+		VTTY_INNQ(p_vtty)->OutChar(ch);
 	}
 	else if (irq) {
 		plogerro("not considered interrupt %d\n", irq);

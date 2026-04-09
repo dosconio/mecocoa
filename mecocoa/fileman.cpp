@@ -74,7 +74,7 @@ stduint do_rdwt(bool wr_type, stduint fid, Slice slice, stduint pid)
 {
 	// ploginfo("%s user(0x%[32H], %u) fid(%u)", __FUNCIDEN__, slice.address, slice.length, fid);
 	//
-	ProcessBlock* pb = TaskGet(pid);
+	ProcessBlock* pb = Taskman::Locate(pid);
 	// assert
 	if (fid < NR_FILE_DESC && buffer && pfs); else {
 		plogerro("PANIC @ %s:%u", __FILE__, __LINE__);
@@ -474,7 +474,7 @@ void serv_file_loop()
 			// BYTE 8~31 : filename
 			stduint ret;
 			ret = static_cast<stduint>(do_open(
-				*TaskGet(to_args[1]),
+				*Taskman::Locate(to_args[1]),
 				(rostr)&to_args[2],
 				to_args[0]
 			));
@@ -484,7 +484,7 @@ void serv_file_loop()
 		case FilemanMsg::CLOSE:// -> 0 for success
 		{
 			stduint ret;
-			ret = do_close(*TaskGet(to_args[1]), to_args[0]);
+			ret = do_close(*Taskman::Locate(to_args[1]), to_args[0]);
 			syssend(sig_src, &ret, sizeof(ret), 0);
 			break;
 		}

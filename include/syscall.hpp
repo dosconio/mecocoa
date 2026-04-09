@@ -11,11 +11,11 @@ enum
 	#endif
 {
 	OUTC = 0x00, // outstr (chr/str, len)->0  | x86 x64 rv
-	INNC = 0x01, // innstr (blocked)->ASCII>0 | x86
+	INNC = 0x01, // innstr (blocked)->ASCII>0 | x86 rv
 	EXIT = 0x02, // exit   (code)             | x86
 	TIME = 0x03, // getsec (0sec/1ms)->second | x86(half)
 	REST = 0x04, // halt   (time 0-for-yeild) | x86(half)
-	COMM = 0x05, // syncom (...)              | x86
+	COMM = 0x05, // syncom (mod, obj, &msg)   | x86 rv
 	OPEN = 0x06, // open   (path,flags)>=0    | x86
 	CLOS = 0x07, // close  (fd)->0            | x86
 	READ = 0x08, // read   (fd, adr, len)->len| x86
@@ -25,7 +25,7 @@ enum
 	//=0x0C{} 
 	WAIT = 0x0D, // wait   (&status)->pid     | x86
 	FORK = 0x0E, // U.fork ()->pid            | x86
-	TMSG = 0x0F, // trymsg ()->(msg_unsovled) | x86
+	TMSG = 0x0F, // trymsg ()->(msg_unsovled) | x86 rv
 	EXEC = 0x10, // exec   (path, argstr)->0  | 
 	MALC = 0x11, // malloc (pages)->addr>0    | 
 

@@ -50,6 +50,7 @@ bool Memory::initialize(stduint eax, byte* ebx) {
 	void* mapaddr = memoman_4G_00000000;
 	MemSet(mapaddr, 0, bmapsize);
 	Memory::pagebmap = new (_BUF_pagebmap) BmMemoman(mapaddr, bmapsize);
+	mempool.Reset();
 
 	// x64 has default paging now
 	#if _MCCA == 0x8632
@@ -114,7 +115,7 @@ bool Memory::initialize(stduint eax, byte* ebx) {
 	uni_default_allocator = &mem;
 	// mempool (kernel heap)
 	const unsigned mempool_len0 = 0x4000;
-	mempool.Reset(Slice{ _IMM(mem.allocate(mempool_len0)), mempool_len0 });
+	mempool.Append(Slice{ _IMM(mem.allocate(mempool_len0)), mempool_len0 });
 	uni_hostenv_allocator = &mempool;
 
 	// paging
@@ -222,10 +223,13 @@ static void parse_uefi(const MemoryMap& memory_map) {
 	for (stduint iter = _IMM(memory_map.buffer); iter < top; iter += memory_map.descriptor_size) {
 		auto desc = reinterpret_cast<MemoryDescriptor*>(iter);
 		if (MemIsAvailable((MemoryType)desc->type)) {
-			if (desc->physical_start + desc->number_of_pages * 4096 >= 0x100000000ULL) break;
-			stduint beg = vaultAlign(0x1000, desc->physical_start) >> 12;
-			Memory::pagebmap->add_range(beg, beg + desc->number_of_pages, true);
 			// ploginfo("type = %u, %[x]..%[x], attr=0x%[x]", desc->type, desc->physical_start, desc->physical_start + desc->number_of_pages * 4096, desc->attribute);
+			stduint beg = vaultAlign(0x1000, desc->physical_start) >> 12;
+			if (desc->physical_start + desc->number_of_pages * 4096 >= 0x100000000ULL) {
+				ploginfo("Memory %[x] .. %[x] over 4G", desc->physical_start, desc->physical_start + desc->number_of_pages * 4096);
+				mempool.Append(Slice{ _IMM(desc->physical_start), desc->number_of_pages * 4096 });
+			}
+			else Memory::pagebmap->add_range(beg, beg + desc->number_of_pages, true);
 		}
 	}
 	Memory::pagebmap->add_range(_IMM(memory_map.buffer) >> 12, vaultAlign(0x1000, top) >> 12, false);

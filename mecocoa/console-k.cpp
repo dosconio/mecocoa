@@ -14,7 +14,6 @@ extern const char key_map[256], key_map_shift[256];
 #if (_MCCA & 0xFF00) == 0x8600
 
 extern BareConsole Bcons[TTY_NUMBER];
-extern byte current_screen_TTY;
 
 keyboard_state_t kbd_state = {};
 

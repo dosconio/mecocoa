@@ -5,6 +5,7 @@
 #include "../include/mecocoa.hpp"
 
 #include <cpp/Device/UART>
+#include <c/driver/timer.h>
 #include <c/driver/keyboard.h>
 
 #define DEFSYSC static stdsint
@@ -19,7 +20,7 @@ static stduint syscall_06_open(stduint* paras, stduint pid)
 {
 	// plogtrac("%s", __FUNCIDEN__);
 	stduint open_buf[1];
-	ProcessBlock* pb = TaskGet(pid);
+	ProcessBlock* pb = Taskman::Locate(pid);
 	struct {
 		stduint flag;
 		stduint pid;
@@ -53,6 +54,8 @@ static stduint syscall_07_close(stduint* paras, stduint pid) {
 
 
 DEFSYSC sysc_OUTC(stduint ch, stduint len);
+DEFSYSC sysc_COMM(ProcessBlock* pb, stduint to, stduint op, CommMsg* msg);
+DEFSYSC sysc_INNC(stduint blocked);
 extern bool fileman_hd_ready;
 
 __attribute__((optimize("O0")))
@@ -73,25 +76,13 @@ stduint Handint_SYSCALL(CallgateFrame* frame) {
 	}
 	switch (callid) {
 	case syscall_t::OUTC: {
-		sysc_OUTC(para[0], para[1]);
+		ret = sysc_OUTC(para[0], para[1]);
 		if (ch_tse) task_switch_enable = task_switch_enable_old;
 		break;
 	}
-	case syscall_t::INNC:// Read from its TTY, return -1 if the TTY is occupied
-	{
-		//{} Create buffer for each vtty; focused_tty; tty[0] is desk-back
-		auto ppb = Taskman::Locate(caller_pid);
-		if (para[0]) {
-			msgbuf[3] = caller_pid;// pid
-			syssend(Task_Console, sliceof(msgbuf), _IMM(ConsoleMsg::INNC));
-			sysrecv(Task_Console, &ret, byteof(ret));
-		}
-		else if (ppb->focus_tty && -1 != (ch = VTTY_INNQ(ppb->focus_tty)->inn())) {
-			ret = ch;
-		}
-		else ret = ~_IMM0;
+	case syscall_t::INNC:
+		ret = sysc_INNC(para[0]);
 		break;
-	}
 	case syscall_t::EXIT:
 	{
 		// __asm("mov %0, %%eax" : : "m"(para[0])); TaskReturn();
@@ -112,20 +103,7 @@ stduint Handint_SYSCALL(CallgateFrame* frame) {
 		break;
 	case syscall_t::COMM:// (mode, obj, vaddr msg)
 	{
-		// assert(!src && src < numsof(Tasks));
-		ProcessBlock* pb = TaskGet(caller_pid);
-		if (para[0] & 0b01) { // SEND
-			// ploginfo("%d --> %d", pb->getID(), para[1]);
-			ret = msg_send(pb, (para[1]), (CommMsg*)para[2]);
-		}
-		if (para[0] & 0b10) { // RECV
-			// if (para[1] && para[1] != ~_IMM0) ploginfo("%d <-- %d", pb->getID(), para[1]);
-			ret = msg_recv(pb, (para[1]), (CommMsg*)para[2]);
-		}
-		
-		if (pb->state == ProcessBlock::State::Pended) {
-			Taskman::Schedule(true);
-		}
+		ret = sysc_COMM(Taskman::Locate(caller_pid), para[1], para[0], (CommMsg*)para[2]);
 		if (ch_tse) task_switch_enable = task_switch_enable_old;
 		break;
 	}
@@ -155,7 +133,7 @@ stduint Handint_SYSCALL(CallgateFrame* frame) {
 	case syscall_t::DELF:// (usr filename) --> (pid, filename[7]...) --> (!success)
 	{
 		stduint open_buf[(8)];
-		ProcessBlock* pb = TaskGet(caller_pid);
+		ProcessBlock* pb = Taskman::Locate(caller_pid);
 		open_buf[0] = caller_pid;
 		StrCopyP((char*)&open_buf[1], kernel_paging, (rostr)para[0], pb->paging, byteof(stduint) * 7 - 1);
 		syssend(Task_FileSys, open_buf, byteof(open_buf), _IMM(FilemanMsg::REMOVE));
@@ -174,7 +152,7 @@ stduint Handint_SYSCALL(CallgateFrame* frame) {
 		sysrecv(Task_TaskMan, tmp, byteof(tmp));// (pid, state)
 		ret = tmp[0];// pid
 		if (ret && para[1]) {
-			MemCopyP((void*)para[1], TaskGet(caller_pid)->paging, &tmp[1], kernel_paging, byteof(stduint));
+			MemCopyP((void*)para[1], Taskman::Locate(caller_pid)->paging, &tmp[1], kernel_paging, byteof(stduint));
 		}
 		break;
 	}
@@ -189,8 +167,8 @@ stduint Handint_SYSCALL(CallgateFrame* frame) {
 	}
 	case syscall_t::TMSG:
 	{
-		ProcessBlock* pb = TaskGet(caller_pid);
-		ret = pb->queue_send_queuehead ? _TEMP 1 : 0;
+		ProcessBlock* pb = Taskman::Locate(caller_pid);
+		ret = _IMM(pb->queue_send_queuehead);
 		break;
 	}
 	case syscall_t::EXEC:
@@ -312,7 +290,23 @@ DEFSYSC sysc_OUTC(stduint ch, stduint len) {// OUTC
 	return -1;
 }
 
-// sysc_INNC
+DEFSYSC sysc_INNC(stduint blocked) {
+	usize ret = ~_IMM0;
+	usize msgbuf[4];
+	int ch = -1;
+	// Read from its TTY, return -1 if the TTY is occupied
+	auto ppb = Taskman::Locate(Taskman::CurrentPID());
+	if (blocked) {
+		msgbuf[3] = ppb->getID();
+		ppb->paging_redirect = nil;
+		syssend(Task_Console, sliceof(msgbuf), _IMM(ConsoleMsg::INNC));//
+		sysrecv(Task_Console, &ret, byteof(ret));// need Context
+	}
+	else if (ppb->focus_tty && -1 != (ch = VTTY_INNQ(ppb->focus_tty)->inn())) {
+		ret = ch;
+	}
+	return ret;
+}
 
 DEFSYSC sysc_EXIT(stduint code) {
 	// IC.enAble(false);
@@ -321,15 +315,40 @@ DEFSYSC sysc_EXIT(stduint code) {
 	return -1;
 }
 
+DEFSYSC sysc_COMM(ProcessBlock *pb, stduint to, stduint op, CommMsg* msg) {
+	usize ret;
+	if (op & 0b01) { // SEND
+		// ploginfo("%d --> %d: 0x%[x]", pb->getID(), to, msg);
+		if (ret = msg_send(pb, to, msg)) return ret;
+	}
+	if (op & 0b10) { // RECV
+		// if (to && to != ~_IMM0) ploginfo("%d <-- %d", pb->getID(), to);
+		ret = msg_recv(pb, to, msg);
+	}
+	if (op & 0b11); else {
+		plogerro("Invalid op %x", op);
+		return 0xF0F0;
+	}
+	if (pb->state == ProcessBlock::State::Pended) {
+		Taskman::Schedule(true);
+	}
+	return ret;
+}
+
+DEFSYSC sysc_TMSG() {
+	ProcessBlock* pb = Taskman::Locate(Taskman::CurrentPID());
+	return _IMM(pb->queue_send_queuehead);
+}
+
 #endif
 
 #if (_MCCA & 0xFF00) == 0x1000
 
-static int sys_gethid(unsigned int *ptr_hid)
+static int sysc_GETCID(unsigned int *ptr_hid)
 {
 	auto pid = Taskman::Locate(Taskman::CurrentPID());
 	auto pa = (stduint*)pid->paging[_IMM(ptr_hid)];
-	ploginfo("--> sys_gethid, arg0 = LA %[x] PA %[x]", ptr_hid, pa);
+	ploginfo("--> sysc_GETCID, arg0 = LA %[x] PA %[x]", ptr_hid, pa);
 	if (_IMM(pa) == ~_IMM0) return -1;
 	if (ptr_hid == NULL) {
 		return -1;
@@ -345,10 +364,22 @@ void syscall_body(NormalTaskContext* cxt)
 
 	switch (syscall_num) {
 	case syscall_t::OUTC:
-		sysc_OUTC(cxt->a0, cxt->a1);
+		cxt->a0 = sysc_OUTC(cxt->a0, cxt->a1);
+		break;
+	case syscall_t::INNC:
+		cxt->a0 = sysc_INNC(cxt->a0);
+		break;
+	case syscall_t::REST://{TEMP} (half)
+		clint.MSIP(getMHARTID(), MSIP_Type::SofRupt);
+		break;
+	case syscall_t::COMM:
+		cxt->a0 = sysc_COMM(Taskman::Locate(Taskman::CurrentPID()), cxt->a1, cxt->a0, (CommMsg*)cxt->a2);
+		break;
+	case syscall_t::TMSG:
+		cxt->a0 = sysc_TMSG();
 		break;
 	case syscall_t::GET_CORE_ID:
-		cxt->a0 = sys_gethid((unsigned int *)(cxt->a0));
+		cxt->a0 = sysc_GETCID((unsigned int *)(cxt->a0));
 		break;
 	default:
 		plogerro("Unknown syscall no: %d", syscall_num);

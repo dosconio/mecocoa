@@ -54,12 +54,11 @@ Dchain vttys = { VTTY_Free };// offs->ConT*, type->vtty_type_t
 
 #endif
 
-#if (_MCCA & 0xFF00) == 0x8600
-
 Vector<stduint> blocked_vtty_pid;
 // total: may need change after Remove
-byte current_screen_TTY = 0;
+unsigned current_screen_TTY = 0;
 
+#if (_MCCA & 0xFF00) == 0x8600
 
 // consider CLI
 BareConsole Bcons[TTY_NUMBER];// TTY 0~3 and their buffer
@@ -95,7 +94,7 @@ void blink2() {
 
 
 //// ---- ---- DYNAMIC CORE ---- ---- ////
-#ifdef _ARC_x86 // x86:
+#if 1
 
 char* cons_buffer;
 extern keyboard_state_t kbd_state;
@@ -110,6 +109,7 @@ static bool ifContainBlockedTTY(ProcessBlock* ppb) {
 }// To OPTIMIZE
 void _Comment(R1) serv_cons_loop()
 {
+	#ifdef _ARC_x86 // x86:
 	cons_buffer = (char*)Memory::physical_allocate(0x1000);
 	// mouse_buf[3] = 0;
 	// BCON:
@@ -121,13 +121,13 @@ void _Comment(R1) serv_cons_loop()
 	Ribbon[77].ch = '+';
 	Ribbon[78].ch = '-';
 	Ribbon[79].ch = '^';
+	#endif
 
-	stduint sig_type = 0, sig_src, ret;
-	stduint to_args[4];
+	volatile stduint sig_type = 0, sig_src, ret;
+	volatile stduint to_args[4];
 
 	int ch;
 
-	using BR = ProcessBlock::BlockReason;
 	while (true) {
 		for0 (i, blocked_vtty_pid.Count()) if (stduint pid = blocked_vtty_pid[i]) {
 			auto ppb = Taskman::Locate(pid);
@@ -143,6 +143,7 @@ void _Comment(R1) serv_cons_loop()
 		}
 
 		// Render the bottom ribbon
+		#ifdef _ARC_x86 // x86:
 		#if !_GUI_ENABLE
 		if (!ento_gui && current_screen_TTY == 0) {
 			Ribbon[0].attr = kbd_state.mod.l_ctrl ? 0x70 : 0x07;
@@ -153,13 +154,16 @@ void _Comment(R1) serv_cons_loop()
 			Ribbon[79].attr = kbd_state.mod.r_ctrl ? 0x70 : 0x07;
 		}
 		#endif
+		#endif
 
 		// Process potential message
 		if (syscall(syscall_t::TMSG)) {
-			sysrecv(ANYPROC, to_args, byteof(to_args), &sig_type, &sig_src);
-			ProcessBlock* pb = TaskGet(to_args[3]);
+			sysrecv(ANYPROC, (void*)to_args, byteof(to_args), (usize*)&sig_type, (usize*)&sig_src);
+			ProcessBlock* pb = Taskman::Locate(to_args[3]);
 			switch (ConsoleMsg(sig_type)) {
 			case ConsoleMsg::TEST: break;
+
+			#ifdef _ARC_x86 // x86:
 			case ConsoleMsg::READ:
 				to_args[0] &= _IMM1S(dev_domain_bits) - 1;
 				//{TODO}
@@ -173,18 +177,20 @@ void _Comment(R1) serv_cons_loop()
 					
 					// LocateTTY(0xFF & to_args[0])->out(cons_buffer, ret);
 				}
-				syssend(sig_src, &ret, sizeof(ret), 0);
+				syssend(sig_src, (void*)&ret, sizeof(ret), 0);
 				break;
+			#endif
+
 			case ConsoleMsg::INNC:
 			{
 				// ReadChar(ASCII): normal \n \r ...
-				ProcessBlock* pb = TaskGet(to_args[3]);
+				ProcessBlock* pb = Taskman::Locate(to_args[3]);
 				if (!ifContainBlockedTTY(pb)) {
 					blocked_vtty_pid.Append(pb->getID());
 				}
 				else {
 					ret = ~_IMM0;
-					syssend(sig_src, &ret, sizeof(ret), 0);
+					syssend(sig_src, (void*)&ret, sizeof(ret), 0);
 				}
 				break;
 			}
@@ -200,8 +206,10 @@ void _Comment(R1) serv_cons_loop()
 		syscall(syscall_t::REST);
 	}
 }
+#endif
 
 //// ---- ---- Bottom Impl ---- ---- ////
+#ifdef _ARC_x86 // x86:
 
 void uni::BareConsole::doshow(void* _) {}
 

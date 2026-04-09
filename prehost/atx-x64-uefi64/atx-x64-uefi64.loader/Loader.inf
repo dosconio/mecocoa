@@ -9,8 +9,8 @@
 #  VALID_ARCHITECTURES           = X64
 
 [Sources]
-  /mnt/hgfs/her/mecocoa/prehost/atx-x64-uefi64/atx-x64-uefi64.loader/loader.c
-  /mnt/hgfs/her/mecocoa/prehost/atx-x64-uefi64/atx-x64-uefi64.loader.cpp
+  /her/mecocoa/prehost/atx-x64-uefi64/atx-x64-uefi64.loader/loader.c
+  /her/mecocoa/prehost/atx-x64-uefi64/atx-x64-uefi64.loader.cpp
 
 [Packages]
   MdePkg/MdePkg.dec

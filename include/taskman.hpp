@@ -140,6 +140,7 @@ public: // _Comment(Syscomm)
 	// if B->A, C->A. Then: A.qhead = B, B.qnext = C, C.qnext = none
 	ProcessBlock* queue_send_queuehead = nullptr;// nullptr for none
 	ProcessBlock* queue_send_queuenext = nullptr;
+	Paging* paging_redirect = nullptr;
 public: // _Comment(Thread)
 public: // _Comment(Interface);
 	enum class InterfaceType : byte {
@@ -216,6 +217,8 @@ public:// schedule
 public:
 	static auto// return a all-zero ProcessBlock
 		AllocateTask() -> ProcessBlock*;
+	static void
+		DumpTask(ProcessBlock*);
 };
 #endif
 
@@ -237,7 +240,6 @@ extern "C" bool task_switch_enable;
 
 
 #ifndef _ACCM
-inline ProcessBlock* TaskGet(stduint taskid) { return Taskman::Locate(taskid); }
 
 // return zero for success
 int msg_send(ProcessBlock* fo, stduint to, _Comment(vaddr) CommMsg* msg);
