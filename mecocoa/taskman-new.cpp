@@ -466,7 +466,7 @@ ProcessBlock* Taskman::CreateFork(ProcessBlock* fo, const CallgateFrame* frame) 
 	// ---- File ---- //
 	for0a(i, pb->pfiles) if (pb->pfiles[i]) {
 		pb->pfiles[i] = fo->pfiles[i];
-		pb->pfiles[i]->fd_inode->i_cnt++;
+		pb->pfiles[i]->vfile->f_inode->ref_count++;
 	}
 
 	Taskman::Append(pb);

@@ -95,7 +95,7 @@ bool Taskman::Exit(ProcessBlock* p, stdsint exit_code)
 
 	// : fileman
 	for0(i, numsof(p->pfiles)) if (p->pfiles[i]) {
-		p->pfiles[i]->fd_inode->i_cnt--;
+		p->pfiles[i]->vfile->f_inode->ref_count--;
 		p->pfiles[i] = 0;
 	}
 

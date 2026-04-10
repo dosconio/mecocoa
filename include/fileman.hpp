@@ -94,10 +94,11 @@ enum class FilemanMsg {
 #define	O_TRUNC  0b100 // truncate file
 
 struct inode;
+namespace uni { struct vfs_file; }
 struct FileDescriptor {
 	int fd_mode; /**< R or W */
 	int fd_pos; /**< Current position for R/W. */
-	inode* fd_inode; /**< Ptr to the i-node */
+	uni::vfs_file* vfile; /**< Ptr to the VFS file */
 };
 
 #define	INVALID_INODE 0

@@ -5,11 +5,30 @@
 #ifdef _ARC_x86 // x86:
 #include <c/storage/harddisk.h>
 
-#include "../include/filesys.hpp"
+#include "../include/orangesfs.hpp"
 
 use crate uni;
 
 inode* root_inode;
+
+bool strip_path(char* filename, const char* pathname, inode** ppinode)
+{
+	const char* s = pathname;
+	char* t = filename;
+	//{} assert
+	if (*s == '/') s++;
+	while (*s) {
+		if (*s == '/') {
+			//{TEMP} at most one `/' preceding a filename
+			return false;
+		}
+		*t++ = *s++;
+		if (t - filename >= MAX_FILENAME_LEN - 1) break;
+	}
+	*t = 0;
+	*ppinode = root_inode;
+	return true;
+}
 
 OrangesFs::OrangesFs(StorageTrait& s, byte* buffer, unsigned dev) {
 	new (&self._buf_part) DiscPartition(s, dev);
@@ -57,13 +76,9 @@ bool OrangesFs::makefs(rostr vol_label /* unused */, void* moreinfo /* unused */
 	part.Write(1, buffer);
 	// - Create the inode map
 	MemSet(buffer, 0x00, part.Block_Size);
-	buffer[0] = 0b00111111;// LE Style
+	buffer[0] = 0b00000011;// LE Style
 	// bit 0 reserved
 	// bit 1 first inode, for root `/`
-	// bit 2 `/dev_tty0`
-	// bit 3 `/dev_tty1`
-	// bit 4 `/dev_tty2`
-	// bit 5 `/dev_tty3`
 	part.Write(2, buffer);
 	// - Create the sector map
 	MemSet(buffer, 0x00, part.Block_Size);
@@ -97,29 +112,15 @@ bool OrangesFs::makefs(rostr vol_label /* unused */, void* moreinfo /* unused */
 	Letvar(pnod, inode::inode_entity*, buffer);
 	// --- inode of root `/`
 	pnod->i_mode = I_DIRECTORY;
-	pnod->i_size = DIR_ENTRY_SIZE * 5;// ., /dev_tty0, /dev_tty1, /dev_tty2, /dev_tty3
+	pnod->i_size = DIR_ENTRY_SIZE * 1;// .
 	pnod->i_start_sect = sb.entity.n_1st_sect;
 	pnod->i_nr_sects = NR_DEFAULT_FILE_SECTS;
-	// --- inode of ttyN
-	for0(i, 4) {
-		pnod++;
-		pnod->i_mode = I_CHAR_SPECIAL;
-		pnod->i_size = 0;// ., /dev_tty0, /dev_tty1, /dev_tty2, /dev_tty3
-		pnod->i_start_sect = MAKE_DEV(DEV_TTY, i);
-		pnod->i_nr_sects = 0;
-	}
 	state = part.Write(sec++, buffer);
 	// - Create `/', the root directory
 	MemSet(buffer, 0x00, part.Block_Size);
 	Letvar(pde, dir_entry*, buffer);
 	pde->inode_nr = 1;
 	StrCopy(pde->name, ".");
-	//   (ttyN)
-	for0(i, 4) {
-		pde++;
-		pde->inode_nr = 2 + i;
-		String(pde->name, byteof(pde->name)).Format("dev_tty%u", i);// sprintf
-	}
 	state = part.Write(sb.entity.n_1st_sect, buffer);
 	if (!state) plogerro("mkfs: failed to RW.");
 	return state;
@@ -128,12 +129,11 @@ bool OrangesFs::makefs(rostr vol_label /* unused */, void* moreinfo /* unused */
 bool OrangesFs::loadfs(void* moreinfo /* unused */) {
 	read_superblock();
 	super_block* sb = get_superblock();
-	if (sb->entity.magic == MAGIC_V1); else
-	{
-		plogerro("[OrangesFs] Bad Magic-num Check");
-		return false;
+	if (sb && sb->entity.magic == MAGIC_V1) {
+		return true;
 	}
-	return true;
+	if (sb) sb->sb_dev = MajorDevice::DEV_NULL;
+	return false;
 }
 
 bool OrangesFs::create(rostr fullpath, stduint flags, void* exinfo, rostr linkdest) {
@@ -389,8 +389,14 @@ alignas(16) super_block superblocks[NR_SUPER_BLOCK];//{TEMP} in Static segment, 
 
 void OrangesFs::read_superblock()
 {
-	// ploginfo("read super block of device %d", partid);
-	read_sector(1);
+	for0(i, NR_SUPER_BLOCK) {
+		if (superblocks[i].sb_dev == partid) return;
+	}
+
+	for0(bsec_i, 512) buffer_sector[bsec_i] = 0; // clear to prevent read caching leaks
+
+	if (!read_sector(1)) return;
+
 	for0(i, NR_SUPER_BLOCK) {// find a free slot in super_block
 		if (superblocks[i].sb_dev == MajorDevice::DEV_NULL)
 		{
@@ -400,7 +406,6 @@ void OrangesFs::read_superblock()
 			return;
 		}
 	}
-	// unexpected reachable
 	plogerro("No free super block slot");
 }
 super_block* OrangesFs::get_superblock() {
@@ -408,8 +413,6 @@ super_block* OrangesFs::get_superblock() {
 		if (superblocks[i].sb_dev == partid)
 			return &superblocks[i];
 	}
-	// unexpected reachable
-	plogerro("superblock of device %d not found.\n", partid);
 	return NULL;
 }
 

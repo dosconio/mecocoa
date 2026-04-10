@@ -7,9 +7,11 @@
 #include <c/storage/harddisk.h>
 
 #ifdef _ARC_x86 // x86:
-#include "../include/filesys.hpp"
+#include "../include/orangesfs.hpp"
 #include <c/format/filesys/FAT.h>
+#include "../include/filesys.hpp"
 
+using namespace uni;
 
 static byte* buffer = nil;
 #define FSBUF_SIZE 0x8000
@@ -34,10 +36,7 @@ extern inode* inode_table;
 
 extern super_block superblocks[NR_SUPER_BLOCK];//{TEMP} in Static segment, should be managed in heap
 
-static OrangesFs* pfs;
-static const usize ROOT_DEV = MINOR_hd6a;
-static FilesysFAT* pfs_fat0;
-static const usize ROOT_DEV_FAT0 = MINOR_hd6a + 2;
+// Hardcoded parts removed. We use VFS now.
 
 //// //// ---- //// ////
 
@@ -48,85 +47,23 @@ static bool hd_info_valid = false;
 
 stduint do_rdwt(bool wr_type, stduint fid, Slice slice, stduint pid)
 {
-	// ploginfo("%s user(0x%[32H], %u) fid(%u)", __FUNCIDEN__, slice.address, slice.length, fid);
-	//
 	ProcessBlock* pb = Taskman::Locate(pid);
-	// assert
-	if (fid < NR_FILE_DESC && buffer && pfs); else {
-		plogerro("PANIC @ %s:%u", __FILE__, __LINE__);
-		return 0;
-	}
-	if (!(pb->pfiles[fid]->fd_mode & O_RDWR))
-		return 0;
-	int pos = pb->pfiles[fid]->fd_pos;
-	struct inode * pin = pb->pfiles[fid]->fd_inode;
-	// assert
-	if (pin >= &inode_table[0] && pin < &inode_table[NR_INODE]); else {
-		plogerro("PANIC @ %s:%u. %[32H]<=%[32H]<%[32H]", __FILE__, __LINE__,
-			 &inode_table[0], pin, &inode_table[NR_INODE]);
-		return 0;
-	}
-	int imode = pin->entity.i_mode & I_TYPE_MASK;
-	if (imode == I_CHAR_SPECIAL) {
-		// ploginfo("do_rdwt: %[32H] %[32H]", slice.address, slice.length);
-		stduint msg[4];
-		msg[0] = pin->entity.i_start_sect;// dev
-		msg[1] = slice.address;
-		msg[2] = slice.length;
-		msg[3] = pid;
-		syssend(Task_Console, msg, byteof(msg), wr_type ? 2 : 1);
-		sysrecv(Task_Console, &msg[0], byteof(msg[0]));
-		return msg[0];
-	}
-	else {
-		Harddisk_PATA_Paged hdd(DRV_OF_DEV(pin->i_dev));
-		DiscPartition part(hdd, pin->i_dev);
-		const stduint blksize = part.Block_Size;
-		// assert
-		if (pin->entity.i_mode == I_REGULAR || pin->entity.i_mode == I_DIRECTORY); else {
-			plogerro("PANIC @ %s:%u", __FILE__, __LINE__);
-			return 0;
-		}
-		int pos_end;
-		if (!wr_type)
-			pos_end = minof(pos + slice.length, pin->entity.i_size);
-		else // write
-			pos_end = minof(pos + slice.length, pin->entity.i_nr_sects * blksize);
+	if (fid >= NR_FILE_DESC || !pb->pfiles[fid] || !pb->pfiles[fid]->vfile) return 0;
+	if (!(pb->pfiles[fid]->fd_mode & O_RDWR)) return 0;
+	
+	vfs_file* file = pb->pfiles[fid]->vfile;
+	file->f_pos = pb->pfiles[fid]->fd_pos; // sync pos 
 
-		int off = pos % blksize;
-		int rw_sect_min = pin->entity.i_start_sect + (pos / blksize);
-		int rw_sect_max = pin->entity.i_start_sect + (pos_end / blksize);
-		int chunk = minof(rw_sect_max - rw_sect_min + 1,
-				FSBUF_SIZE / blksize);
-
-		int bytes_rw = 0;
-		int bytes_left = slice.length;
-		int i;
-		for (i = rw_sect_min; i <= rw_sect_max; i += chunk) {
-			/* read/write this amount of bytes every time */
-			int bytes = minof(bytes_left, chunk * blksize - off);
-			for0(j, chunk) part.Read(i + j, ::buffer);
-			if (!wr_type) { // READ
-				MemCopyP((void*)(slice.address + bytes_rw), pb->paging,
-					::buffer + off, kernel_paging, bytes);
-			}
-			else { // WRIT (Read first because the write can begin at any position)
-				MemCopyP(::buffer + off, kernel_paging,
-					(void*)(slice.address + bytes_rw), pb->paging, bytes);
-				for0(j, chunk) part.Write(i + j, ::buffer);
-			}
-			off = 0;
-			bytes_rw += bytes;
-			pb->pfiles[fid]->fd_pos += bytes;
-			bytes_left -= bytes;
-		}
-
-		if (pb->pfiles[fid]->fd_pos > pin->entity.i_size) {
-			pin->entity.i_size = pb->pfiles[fid]->fd_pos;// update inode::size
-			pfs->sync_inode(pin);// write the updated i-node back to disk
-		}
-		return bytes_rw;
+	int bytes;
+	if (wr_type) {
+		bytes = vfs_write(file, (const void*)slice.address, slice.length);
+	} else {
+		bytes = vfs_read(file, (void*)slice.address, slice.length);
 	}
+	if (bytes > 0) {
+		pb->pfiles[fid]->fd_pos += bytes;
+	}
+	return bytes > 0 ? bytes : 0;
 }
 
 
@@ -160,54 +97,22 @@ bool Harddisk_PATA_Paged::Write(stduint BlockIden, const void* Sors) {
 //// ---- ---- fs-irrelavant interface ---- ---- ////
 
 static OrangesFs* IndexOFs(unsigned dev) {
-	return ROOT_DEV == dev ? pfs : NULL;
+	// To be deprecated in fully abstract VFS
+	return NULL;
 } OrangesFs* (*OrangesFs::IndexOFs)(unsigned) = IndexOFs;
 
 static FilesysTrait* IndexFs(unsigned dev) {
-	return ROOT_DEV == dev ? pfs : NULL;
+	return NULL;
 } FilesysTrait* (*OrangesFs::IndexFs)(unsigned) = IndexFs;
 
 
 
 
 
-// Return success.
-// * e.g. After strip_path(filename, "/blah", ppinode):
-// *      - filename: "blah"
-// *      - *ppinode: root_inode
-bool strip_path(char* filename, const char* pathname, inode** ppinode)
-{
-	const char* s = pathname;
-	char* t = filename;
-	//{} assert
-	if (*s == '/') s++;
-	while (*s) {
-		if (*s == '/') {
-			//{TEMP} at most one `/' preceding a filename
-			return false;
-		}
-		*t++ = *s++;
-		if (t - filename >= MAX_FILENAME_LEN - 1) break;
-	}
-	*t = 0;
-	*ppinode = root_inode;
-	return true;
-}
-
-static inode* create_file(rostr path, stduint flags)
-{
-	_TEMP;
-	inode* ret;
-	bool state = pfs->create(path, flags, &ret);
-	return state ? ret : NULL;
-}
-
 static stduint search_file(rostr path)
 {
-	_TEMP;
-	stduint ret = 0;
-	bool state = pfs->search(path, &ret);
-	return state ? ret : nil;
+	vfs_dentry* entry = vfs_namei(path);
+	return entry ? (stduint)entry->d_inode->internal_handler : nil;
 }
 
 
@@ -234,75 +139,18 @@ static stdsint do_open(ProcessBlock& process, rostr pathname, int flags) {
 		return -1;
 	}
 	pfd = &f_desc_table[f_desc_table_count++];
-	stduint inode_nr = search_file(pathname);
-	inode* pin = 0;
-	if (flags & O_CREAT) {
-		if (inode_nr) {
-			ploginfo("file `%s' exists: %u", pathname, inode_nr);
-			return -1;
-		}
-		else {
-			pin = create_file(pathname, flags);
-		}
-	}
-	else if (flags & O_RDWR) { // file exists
-		if ((flags & O_CREAT) && (!(flags & O_TRUNC))) {
-			// assert(flags == (O_RDWR | O_CREAT));
-			ploginfo("{FS} file exists: %s\n", pathname);
-			return -1;
-		}
-		//
-		char filename[MAX_FILENAME_LEN] = { 0 };
-		struct inode * dir_inode;
-		if (!strip_path(filename, pathname, &dir_inode)) {
-			plogwarn("bad filepath");
-			return -1;
-		}
-		pin = IndexOFs(dir_inode->i_dev)->get_inode(inode_nr);//{!} NULL-chk
-	}
-	else {
-		plogwarn("bad flags");
-		return -1;
-	}
-	//
-	if (flags & O_TRUNC) {
-		if(pin); else plogerro("%s %d", __FILE__, __LINE__);
-		pin->entity.i_size = 0;
-		pfs->sync_inode(pin);
-	}
-	//
-	if (pin) {
-		// connects proc with FileDescriptorriptor
-		process.pfiles[fd] = pfd;
-		/* connects FileDescriptorriptor with inode */
-		pfd->fd_inode = pin;
-		pfd->fd_mode = flags;
-		// pfd->fd_cnt = 1;
-		pfd->fd_pos = 0;
-
-		int imode = pin->entity.i_mode & I_TYPE_MASK;
-
-		if (imode == I_CHAR_SPECIAL) {
-			// dev = pin->entity.i_start_sect
-			// send_recv(BOTH, dd_map[MAJOR(dev)].driver_nr, &driver_msg{OPEN, MINOR(dev)});
-			//{TODO} check dev and optional activate
-		}
-		else if (imode == I_DIRECTORY) {
-			if (pin->i_num == ROOT_INODE); else
-				plogerro("%s %d", __FILE__, __LINE__);
-		}
-		else {
-			if (pin->entity.i_mode == I_REGULAR); else
-				plogerro("%s %d", __FILE__, __LINE__);
-		}
-	}
-	else {
-		plogwarn("!pin");
-		return -1;
-	}
-	// ploginfo("do_open %s with fd %d", pathname, fd);
+	
+	vfs_file* file = nullptr;
+	int ret = vfs_open(pathname, flags, &file);
+	if (ret < 0 || !file) return -1;
+	
+	process.pfiles[fd] = pfd;
+	pfd->vfile = file;
+	pfd->fd_mode = flags;
+	pfd->fd_pos = 0;
 	return fd;
 }
+
 int do_close(ProcessBlock& process, int fid)
 {
 	int fd = fid;
@@ -310,10 +158,9 @@ int do_close(ProcessBlock& process, int fid)
 		ploginfo("do_close %d skip", fd);
 		return 1;
 	}
-	OrangesFs::put_inode(process.pfiles[fd]->fd_inode);
-	process.pfiles[fd]->fd_inode = 0;
+	vfs_close(process.pfiles[fd]->vfile);
+	process.pfiles[fd]->vfile = 0;
 	process.pfiles[fd] = 0;
-	// ploginfo("do_close %d", fd);
 	return 0;
 }
 stdsint do_lseek()
@@ -352,16 +199,10 @@ alignas(OrangesFs) char _buf_OFs[byteof(OrangesFs)];
 alignas(FilesysFAT) char _buf_FATs[byteof(FilesysFAT)];
 
 stduint serv_file_loop_remove(stduint pid, rostr filename) {
-	_TEMP;
-	pid;
-	return pfs->remove(filename) ? 0 : -1;
+	return vfs_remove(filename) ? 0 : -1;
 }
 extern bool fileman_hd_ready;
 bool flag_ready_fileman = false;
-
-
-static FAT_FileHandle filhan;
-// static FAT_DirInfo filinf;
 
 
 void serv_file_loop()
@@ -385,20 +226,49 @@ void serv_file_loop()
 	NR_SUPER_BLOCK;
 	for0(i, 8) superblocks[i] = { 0 };//{why} MemSet here will BOOM!
 	//
+	//
 	stduint to_args[8];// 8*4=32 bytes
 	stduint sig_type = 0, sig_src;
 
 	Harddisk_PATA_Paged hdd(0x01);
 
-	pfs = new (_buf_OFs) OrangesFs(hdd, ::buffer, ROOT_DEV);
-	DiscPartition part_fat0(hdd, ROOT_DEV_FAT0);
-	pfs_fat0 = new (_buf_FATs) FilesysFAT(32, part_fat0, ::buffer, (byte*)Memory::physical_allocate(0x1000));
+	// VFS Registrations
+	file_system_type fs_oranges = { "orangesfs", [](StorageTrait& storage, stduint dev) -> FilesysTrait* {
+		DiscPartition part(storage, dev);
+		if (part.getSlice().length == 0) return nullptr;
+
+		OrangesFs* fs = new OrangesFs(storage, ::buffer, dev);
+		((DiscPartition*)fs->storage)->getSlice(); // Initialize internal slice
+		if (fs->loadfs()) return fs;
+		
+		delete fs;
+		return nullptr;
+	}, nullptr };
+	register_filesystem(&fs_oranges);
+
+static FilesysFAT* pfs_fat0 = nullptr;
+
+	file_system_type fs_fat = { "fat32", [](StorageTrait& storage, stduint dev) -> FilesysTrait* {
+		DiscPartition part(storage, dev);
+		if (part.getSlice().length == 0) return nullptr;
+		
+		DiscPartition* p_part = new DiscPartition(storage, dev);
+		p_part->getSlice(); // Initialize internal slice
+		byte* fat_buf = new byte[0x1000];
+		FilesysFAT* fs = new FilesysFAT(32, *p_part, ::buffer, fat_buf);
+		if (fs->loadfs()) {
+			if (!pfs_fat0) pfs_fat0 = fs;
+			return fs;
+		}
+		
+		delete fs;
+		delete p_part;
+		delete[] fat_buf;
+		return nullptr;
+	}, nullptr };
+	register_filesystem(&fs_fat);
 
 	stduint retval[1];
-
-
-	FAT_FileHandle* han;
-	stduint a[2] = { _IMM(&filhan), 0/*, _IMM(&filinf) */ };
 
 	bool ready = false;
 	while (true) {
@@ -407,38 +277,58 @@ void serv_file_loop()
 		case FilemanMsg::TEST:// (no-feedback)
 			while (!fileman_hd_ready);
 			
-			if (1) pfs->makefs(NULL);
-			ready = pfs->loadfs();
-			root_inode = pfs->get_inode(ROOT_INODE);
-
-			ready = pfs_fat0->loadfs();
-			if (ready) {
-				Console.OutFormat("%s", "[Fileman] FAT file system is ready.\n\r");
+			Console.OutFormat("%s", "[Fileman] Subsystem initializing...\n\r");
+			vfs_init();
+			devfs_register_and_mount();
+			
+			// Auto Mount Probe
+			extern bool ento_gui;
+			for (int dev = 0x10; dev <= MINOR_hd6a + 0x0F; dev++) { // Scan typical devs up to logical drives
+				// Format OrangesFS on hd6a as before if needed:
+				if (dev == MINOR_hd6a) { 
+					OrangesFs* temp = new OrangesFs(hdd, ::buffer, dev);
+					temp->makefs(NULL);
+					delete temp;
+				}
+				
+				char mnt_path[16];
+				String(mnt_path, sizeof(mnt_path)).Format("/mnt%d", dev);
+				
+				if (vfs_mount(hdd, dev, dev == MINOR_hd6a ? "/oranges" : mnt_path)) {
+					Console.OutFormat("[Fileman] Mounted dev %d\n\r", dev);
+				}
 			}
-			else Console.OutFormat("[Fileman] FAT file system is not ready (%u).\n\r", pfs_fat0->error_number);
 
-			han = (FAT_FileHandle*)pfs_fat0->search("/", &a);
-			pfs_fat0->enumer(han, NULL);
-			// appinit
-			if (han = (FAT_FileHandle*)pfs_fat0->search("init", &a)) {
-				FileBlockBridge loop_device(pfs_fat0, han, han->size, 512);
-				if (auto task = Taskman::CreateELF(&loop_device, 3))
-					task->focus_tty = vttys[ento_gui ? 1 : 0];
-				else plogerro("Init: Fail to load");
-			}
-			else plogerro("Init: Not found");
+			vfs_tree();
 
-			// subappc
-			printlog(_LOG_INFO, "Loading Subappc");
-			if (han = (FAT_FileHandle*)pfs_fat0->search("c", &a)) {
-				FileBlockBridge loop_device(pfs_fat0, han, han->size, 512);
-				if (auto task = Taskman::CreateELF(&loop_device, 3))
-					task->focus_tty = vttys[ento_gui ? 1 : 0];
-				else plogerro("C: Fail to load");
-			}
-			else plogerro("C: Not found");
+			if (pfs_fat0) {
+				FAT_FileHandle han_buf;
+				stduint a[] = { (stduint)&han_buf , 0 };
+				FAT_FileHandle* han = (FAT_FileHandle*)pfs_fat0->search("/", &a);
+				if (han) pfs_fat0->enumer(han, NULL);
+				// appinit
+				if (han = (FAT_FileHandle*)pfs_fat0->search("init", &a)) {
+					FileBlockBridge loop_device(pfs_fat0, han, han->size, 512);
+					if (auto task = Taskman::CreateELF(&loop_device, 3))
+						task->focus_tty = vttys[ento_gui ? 1 : 0];
+					else plogerro("Init: Fail to load");
+				}
+				else plogerro("Init: Not found");
 
-			if (ready) Console.OutFormat("%s", "[Fileman] File system is ready.\n\r");
+				// subappc
+				printlog(_LOG_INFO, "Loading Subappc");
+				if (han = (FAT_FileHandle*)pfs_fat0->search("c", &a)) {
+					FileBlockBridge loop_device(pfs_fat0, han, han->size, 512);
+					if (auto task = Taskman::CreateELF(&loop_device, 3))
+						task->focus_tty = vttys[ento_gui ? 1 : 0];
+					else plogerro("C: Fail to load");
+				}
+				else plogerro("C: Not found");
+			} else plogwarn("FAT0 not found, skipping app load at startup");
+
+			// Subapps loading logic handled here if they were registered in VFS
+			// ... 
+			
 			flag_ready_fileman = true;
 			break;
 		case FilemanMsg::RUPT:// (usercall-forbidden&meaningless)

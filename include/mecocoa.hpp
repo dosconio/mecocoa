@@ -1,3 +1,6 @@
+#ifndef MECOCOA_HPP_
+#define MECOCOA_HPP_
+
 #ifndef _STYLE_RUST
 #define _STYLE_RUST
 #endif
@@ -33,14 +36,10 @@ void serv_task_loop();
 #include "console.hpp"
 void serv_cons_loop();
 void serv_graf_loop();
-
-#if _MCCA == 0x8632
-
-// ---- [service] fileman
 #include "fileman.hpp"
 void serv_dev_hd_loop();
 void serv_file_loop();
-#endif
+
 
 // ---- handler ----
 #if (_MCCA & 0xFF00) == 0x1000 || (_MCCA & 0xFF00) == 0x8600
@@ -64,3 +63,4 @@ void mecfetch();
 // print logo 🏳️‍⚧️
 #define _GUI_LOGO 0
 
+#endif // MECOCOA_HPP_
