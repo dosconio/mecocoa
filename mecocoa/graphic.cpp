@@ -125,45 +125,16 @@ void hand_mouse(MouseMessage mmsg) {
 		global_layman.Domove(Cursor::moving_sheet, { mmsg.X,mmsg.Y });
 	}
 }
-/* used sum's code
-static Size2dif mouse_acc(0, 0);
-static byte last_status = 0;
-static byte next_status = 0;
-static stduint last_msecond = 0;
-	mouse_buf[mouse_buf[3]++] = ch;
-	mouse_buf[3] %= 3;
-	if (!mouse_buf[3]) {
-		auto next_msecond = mecocoa_global->system_time.mic;
-		if (last_status != next_status ||
-			absof(next_msecond - last_msecond) > 10000 && mouse_acc.x && mouse_acc.y)
-		{
-			// outsfmt(" %c(%d,%d) ", last_status != next_status ? '~' : ' ', mouse_acc.x, mouse_acc.y);
-			// if (Cursor::global_cursor) global_layman.Domove(Cursor::global_cursor, mouse_acc);
-			
-			mouse_acc.x = 0;
-			mouse_acc.y = 0;
-			last_status = next_status;
-			last_msecond = next_msecond;
-		}
-		else {
-			mouse_acc.x += cast<char>(mouse_buf[1]);
-			mouse_acc.y += -cast<char>(mouse_buf[2]);
-		}
-	}
-	else if (mouse_buf[3] == 1) {
-		MouseMessage& mm = *(MouseMessage*)mouse_buf;
-		if (!mm.HIGH) mouse_buf[3] = 0;
-		// next_status = mouse_buf[0] & 0b111;
-	}
-*/
-
 
 // ---- ---- ---- ---- . ---- ---- ---- ----
 
 static SysMessage _BUF_Message_Conv[64];
 uni::Queue<SysMessage> message_queue_conv(_BUF_Message_Conv, numsof(_BUF_Message_Conv));
-void serv_conv_loop() {
+void serv_graf_loop() {
 	SysMessage msg;// Inner Module Message System
+	#if _GUI_ENABLE == 0
+	loop HALT();
+	#endif
 	#if (_MCCA == 0x8632)
 	while (true) {
 		IC.enAble(false);
@@ -347,4 +318,56 @@ void GloScreenABGR8888::DrawPoints(const Rectangle& rect, const Color* base) con
 
 #endif
 
+#endif
+
+// Double Buffer
+#if (_MCCA & 0xFF00) == 0x8600
+extern bool ento_gui;
+extern uni::LayerManager global_layman;
+extern VideoControlInterface* real_pvci;
+extern volatile stduint tick;
+inline void RenderFrameFlush() {
+	if (!enable_dubuffer) return;
+	global_layman.CheckTimers(tick);
+	if (ento_gui && global_layman.pvci && global_layman.is_dirty) {
+		static uint64 last_flush_time = 0;
+		if (tick - last_flush_time >= 5) { // 100 FPS target (10ms)
+			global_layman.is_dirty = false;
+			SysMessage msg;
+			msg.type = SysMessage::RUPT_FLUSH;
+			// Safely clamp coordinates assuming entirely garbage values
+			stdsint x = global_layman.dirty_area.x;
+			stdsint y = global_layman.dirty_area.y;
+			stdsint w = global_layman.dirty_area.width;
+			stdsint h = global_layman.dirty_area.height;
+
+			if (x < 0) { w += x; x = 0; }
+			if (y < 0) { h += y; y = 0; }
+
+			stdsint max_w = global_layman.window.width - x;
+			stdsint max_h = global_layman.window.height - y;
+
+			if (w > max_w) w = max_w;
+			if (h > max_h) h = max_h;
+
+			if (w < 0) w = 0;
+			if (h < 0) h = 0;
+
+			msg.args.rect.x = x;
+			msg.args.rect.y = y;
+			msg.args.rect.w = w;
+			msg.args.rect.h = h;
+			global_layman.dirty_area = {};
+			global_layman.is_dirty = false;
+			#if _MCCA == 0x8664
+			message_queue.Enqueue(msg);
+			#elif _MCCA == 0x8632
+			if (real_pvci && w > 0 && h > 0)
+				real_pvci->DrawPoints(msg.args.rect.toRectangle(), global_layman.sheet_buffer);
+			#endif
+
+			last_flush_time = tick;
+		}
+	}
+}
 #endif

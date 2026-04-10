@@ -23,6 +23,7 @@ static const byte _FOLLOW_VHD[] = {
 };
 static_assert(sizeof(_FOLLOW_VHD) > 0);
 
+extern uint64 last_schepoint;
 _ESYM_C
 void _entry()
 {
@@ -41,7 +42,7 @@ void _entry()
 	UART0.setInterruptPriority(1, nil);
 	VTTY_Append((&Console));
 
-	if (1) {
+	if constexpr(0) {
 		plogwarn("stack_size=%u", offsetof(ProcessBlock, stack_size));
 		plogwarn("stack_levladdr=%u", offsetof(ProcessBlock, stack_levladdr));
 	}
@@ -96,29 +97,3 @@ void _entry()
 }
 
 void DiscPartition::renew_slice() {}
-
-extern "C" void __cxa_pure_virtual() {
-	while (1);
-}
-extern "C" void* memcpy(void* dest, const void* sors, size_t n) { return MemCopyN(dest, sors, n); }
-extern "C" void* memset(void* str, int c, size_t n) { return MemSet(str, c, n); }
-_ESYM_C unsigned int __ctzsi2(unsigned int x)
-{
-	if (x == 0) return 32;
-	unsigned int n = 0;
-	while ((x & 1) == 0) {
-		n++;
-		x >>= 1;
-	}
-	return n;
-}
-_ESYM_C unsigned int __ctzdi2(unsigned long x)
-{
-	if (x == 0) return 64;
-	unsigned int n = 0;
-	while ((x & 1) == 0) {
-		n++;
-		x >>= 1;
-	}
-	return n;
-}

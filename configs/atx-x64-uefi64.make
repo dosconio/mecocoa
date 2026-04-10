@@ -62,7 +62,9 @@ asmfile=prehost/$(arch)/atx-x64.asm\
 	$(ulibpath)/asm/x64/interrupt/ruptable.asm \
 	
 
-cppfile=$(wildcard mecocoa/*.cpp) \
+cppfile=$(wildcard mecocoa/*.cpp) prehost/_auxiliary.cpp \
+	devdriv/timer/timer-lapic.cpp devdriv/kboard.cpp \
+	\
 	$(ulibpath)/cpp/color.cpp \
 	$(ulibpath)/cpp/consio.cpp \
 	$(ulibpath)/cpp/stream.cpp \

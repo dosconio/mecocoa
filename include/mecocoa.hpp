@@ -32,7 +32,7 @@ use crate uni;
 void serv_task_loop();
 #include "console.hpp"
 void serv_cons_loop();
-void serv_conv_loop();
+void serv_graf_loop();
 
 #if _MCCA == 0x8632
 

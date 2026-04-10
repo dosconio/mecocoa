@@ -57,7 +57,7 @@ struct inode {
 	int	i_dev;      // 
 	int	i_cnt;		/**< How many procs share this inode  */
 	int	i_num;		/**< inode nr. (S.N.) */
-};
+};// minix only
 
 #define	INODE_SIZE sizeof(inode::inode_entity) // for storage
 #define	MAX_FILENAME_LEN 12

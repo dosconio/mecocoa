@@ -1,10 +1,10 @@
 // ASCII g++ TAB4 LF
 // AllAuthor: @dosconio, @ArinaMgk
-// ModuTitle: Demonstration - ELF32-C++ x86 Bare-Metal
+// ModuTitle: Handler and Soft Timer
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 #include "../include/mecocoa.hpp"
 
-#include <cpp/interrupt>
+#include <c/delay.h>
 #include <cpp/Device/UART>
 #include <c/driver/mouse.h>
 #include <c/driver/timer.h>
@@ -14,55 +14,11 @@ InterruptControl IC = { nil };
 #elif (_MCCA & 0xFF00) == 0x8600
 InterruptControl IC = { mglb(0x800) };
 #elif (_MCCA & 0xFF00) == 0x1000
-_ESYM_C Handler_t trap_vector;
-InterruptControl IC = { _IMM(&trap_vector) };
+_ESYM_C Handler_t trap_vector[];
+InterruptControl IC = { _IMM(trap_vector) };
 #endif
 
-#ifdef _ARC_x86 // x86:
-
-extern KeyboardBridge kbdbridge;
-extern uni::Queue<SysMessage> message_queue_conv;
-static bool fa_mouse = false;
-static byte mouse_buf[4] = { 0 };
-QueueLimited* queue_mouse;
-void Handint_KBD() {
-	kbdbridge.OutChar(innpb(PORT_KEYBOARD_DAT));
-}
-static void process_mouse(byte ch) {
-	mouse_buf[mouse_buf[3]++] = ch;
-	mouse_buf[3] %= 3;
-	MouseMessage& mm = *(MouseMessage*)mouse_buf;
-	if (!mouse_buf[3]) {
-		SysMessage smsg{
-			.type = SysMessage::RUPT_MOUSE,
-		};
-		mm.Y = -mm.Y;
-		smsg.args.mou_event = mm,
-		message_queue_conv.Enqueue(smsg);
-	}
-	else if (mouse_buf[3] == 1) {
-		if (!mm.HIGH) mouse_buf[3] = 0;
-	}
-}
-void Handint_MOU() {
-	byte state = innpb(PORT_KEYBOARD_CMD);
-	if (state & 0x20); else return;//{} check AUX, give KBD
-	byte ch = innpb(PORT_KEYBOARD_DAT);
-	// if (ch != (byte)0xFA)// 0xFA is ready signal
-	if (!fa_mouse && ch == (byte)0xFA) {
-		fa_mouse = true;
-		return;
-	}
-	process_mouse(ch);// asserv(queue_mouse)->OutChar(ch);
-	while ((innpb(PORT_KEYBOARD_CMD) & 0x21) == 0x21)// 0x01 for OBF, 0x20 for AUX
-	{
-		process_mouse(innpb(PORT_KEYBOARD_DAT));
-	}
-}
-
-// void Handint_HDD()...
-
-#elif defined(_UEFI)
+#if defined(_UEFI)// x64 only
 
 __attribute__((target("general-regs-only"), optimize("O0")))
 void Handint_XHCI() {
@@ -73,6 +29,38 @@ void Handint_XHCI() {
 #endif
 
 
+// ---- ---- ---- ---- SOFT-TIM ---- ---- ---- ---- //
+
+volatile timeval_t system_time = {};
+volatile stduint tick = 0;
+
+#if (_MCCA & 0xFF00) == 0x8600
+
+
+static int TimerCmp(pureptr_t a, pureptr_t b) {
+	return treat<MsgTimer>(((Dnode*)a)->offs).timeout -
+		treat<MsgTimer>(((Dnode*)b)->offs).timeout;
+}
+Dchain TimerManager = { DnodeHeapFreeSimple };
+
+void SysTimer::Initialize() {
+	TimerManager.Compare_f = TimerCmp;
+}
+
+void SysTimer::Append(stduint timeout, stduint iden, _tocall_ft hand) {
+	auto n = TimerManager.Append(new MsgTimer{ tick + timeout, iden, hand });
+	if (!n) plogerro("SysTimer::Append failed");
+	// ploginfo("SysTimer::Append %u, now %u timers", timeout, TimerManager.Count());
+}
+
+#endif
+
+#if _MCCA == 0x8664 && defined(_UEFI)
+
+void delay001ms(void) {
+	_TODO
+}
+#endif
 
 // ---- ---- ---- ---- EXCEPTION ---- ---- ---- ---- //
 
@@ -162,6 +150,9 @@ void exception_handler(sdword iden, dword para) {
 
 #elif (_MCCA & 0xFF00) == 0x1000// RV
 
+#define TIMER_INTERVAL (CLINT_TIMEBASE_FREQ/100) // 100Hz
+
+uint64 last_schepoint;
 
 void external_interrupt_handler();
 void syscall_body(NormalTaskContext* cxt);
@@ -180,8 +171,11 @@ stduint trap_handler(stduint epc, stduint cause, NormalTaskContext* cxt)
 			Taskman::Schedule(true);
 			break;
 		case 7:
-			// ploginfo("timer interruption!");
-			timer_handler();
+			// ploginfo("timer interruption!"); // timer_handler();
+			tick++;
+			last_schepoint += TIMER_INTERVAL;
+			clint.Load(getMHARTID(), last_schepoint);
+			Taskman::Schedule();
 			break;
 		case 11:
 			// ploginfo("external interruption!");

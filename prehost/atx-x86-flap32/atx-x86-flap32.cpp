@@ -22,11 +22,10 @@ _sign_entry() {
 	// IVT and Device
 	IC.Reset(SegCo32, 0x80000000);
 	IC.Init();
-	for (auto func = __init_rmod_ento; func < __init_rmod_endo; func++) (func->init)();
-
-	IC[IRQ_Keyboard].setRange(mglb(Handint_KBD_Entry), SegCo32); Keyboard_Init();
-	IC[IRQ_PS2_Mouse].setRange(mglb(Handint_MOU_Entry), SegCo32); Mouse_Init();
-	IC[IRQ_ATA_DISK0].setRange(mglb(Handint_HDD_Entry), SegCo32); DEV_Init();
+	for (auto func = __init_rmod_ento; func < __init_rmod_endo; func++) {
+		ploginfo("Loading %s", func->name);
+		(func->init)();
+	}
 	IC[IRQ_SYSCALL].setRange(mglb(Handint_INTCALL_Entry), SegCo32); IC[IRQ_SYSCALL].DPL = 3;
 
 	mecfetch();
@@ -35,7 +34,7 @@ _sign_entry() {
 	// Service
 	Taskman::Create((void*)&serv_task_loop, 0);
 	Taskman::Create((void*)&serv_cons_loop, 0);
-	Taskman::Create((void*)&serv_conv_loop, 0);
+	Taskman::Create((void*)&serv_graf_loop, 0);
 	Taskman::Create((void*)&serv_dev_hd_loop, 0);
 	Taskman::Create((void*)&serv_file_loop, 0);
 

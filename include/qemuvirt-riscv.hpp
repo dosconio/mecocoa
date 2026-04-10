@@ -38,12 +38,6 @@
 
 #define LENGTH_RAM 128*1024*1024
 
-#ifndef _DEV_GNU_AS
 
-// handler
-extern uint64 last_schepoint;
-extern void timer_handler(void);
-
-#endif
 
 #endif

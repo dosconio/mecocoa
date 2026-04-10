@@ -1,0 +1,240 @@
+// UTF-8 g++ TAB4 LF 
+// AllAuthor: @ArinaMgk
+// ModuTitle: Disk - PATA
+// Copyright: Dosconio Mecocoa, BSD 3-Clause License
+
+#include "../../include/mecocoa.hpp"
+#include <c/storage/harddisk.h>
+
+_ESYM_C void R_HDD_INIT();
+
+#if _MCCA == 0x8632
+#if 1
+__attribute__((section(".init.rmod")))
+RMOD_LIST RMOD_LIST_HDD{
+	.init = R_HDD_INIT,
+	.name = "DISK-PATA",
+};
+#endif
+
+Harddisk_PATA* disks[2];// referenced
+static char hdd_buf[byteof(**disks) * numsof(disks)];
+static byte lock = 1;
+static char* single_sector = NULL;// file-hd used buffer
+
+void R_HDD_INIT() {
+	IC[IRQ_ATA_DISK0].setRange(mglb(Handint_HDD_Entry), SegCo32);
+	for0a(i, disks) {
+		disks[i] = new (hdd_buf + i * byteof(**disks)) Harddisk_PATA(i);
+	}
+	disks[0]->setInterrupt(NULL);
+	if (!single_sector) single_sector = new char[0x1000];
+}
+
+void Handint_HDD()// HDD Master
+{
+	disks[0]->getStatus();// innpb(REG_STATUS);
+	if (lock) return;
+	lock = 1;
+	rupt_proc(Task_Hdd_Serv, IRQ_ATA_DISK0);
+}
+
+//
+
+static HD_Info hd_info[4] = { 0 };//{TEMP} 0:0 0:1 1:0 1:1
+static bool hd_info_valid[4] = { 0 };
+bool task_run = false;
+
+#define	STATUS_BSY	0x80
+#define	HD_TIMEOUT		10000	/* in millisec */
+
+static bool waitfor(Harddisk_PATA* hdd, stduint mask, stduint val, stduint timeout_second)// return seccess
+{
+	int t = syscall(syscall_t::TIME);
+	while (((syscall(syscall_t::TIME) - t)) < timeout_second)
+		if ((hdd->getStatus() & mask) == val)
+			return 1;
+	return 0;
+}
+static bool hd_cmd_wait(Harddisk_PATA* hdd) {
+	return waitfor(hdd, STATUS_BSY, 0, HD_TIMEOUT / 1000);
+}
+static void hd_int_wait() {
+	CommMsg msg;
+	syscall(syscall_t::COMM, 0b10, INTRUPT, _IMM(&msg));
+}
+static void hd_rw_foreback() { lock = 0; }
+
+// Use after print_identify_info
+stduint uni::Harddisk_PATA::getUnits() {
+	return hd_info[getHigID() * 2 + getLowID()].primary[0].length;
+}
+
+struct iden_info_ascii {
+	int idx;
+	int len;
+	rostr desc;
+} iinfo[] = {
+	{10, 20, "HD SN"}, // Serial number in ASCII
+	{27, 40, "Model"}, // Model number in ASCII
+};
+
+// Initialize HD_Info
+static void print_identify_info(uint16* hdinfo, Harddisk_PATA& hd)
+{
+	int i, k;
+	char s[64];
+
+	for0a(k, iinfo) {
+		char* p = (char*)&hdinfo[iinfo[k].idx];
+		for (i = 0; i < iinfo[k].len / 2; i++) {
+			s[i * 2 + 1] = *p++;
+			s[i * 2] = *p++;
+		}
+		s[i * 2] = 0;
+		if (false) outsfmt("[Hrddisk] %s: %s\n\r", iinfo[k].desc, s);
+	}
+
+	int capabilities = hdinfo[49];
+	int cmd_set_supported = hdinfo[83];
+	if (false) outsfmt("[Hrddisk] LBA  : %s\n\r",
+		(capabilities & 0x0200) ? (cmd_set_supported & 0x0400) ? "Supported LBA48" : "Supported" : "No");
+
+	int sectors = ((int)hdinfo[61] << 16) + hdinfo[60];
+	// outsfmt("[Hrddisk] Size : %lf MB\n\r", (double)sectors * hd.Block_Size / 1024 / 1024);// care for #NM FPU Loss
+
+	hd_info[hd.getHigID() * 2 + hd.getLowID()].primary[0].address = nil;
+	hd_info[hd.getHigID() * 2 + hd.getLowID()].primary[0].length = sectors;
+}
+
+inline static void print_hdinfo(Harddisk_PATA& hd)
+{
+	HD_Info& hdinfo = hd_info[hd.getHigID() * 2 + hd.getLowID()];
+	Console.OutFormat("driver %u:%u\n\r", hd.getHigID(), hd.getLowID());
+	Console.OutFormat("device LBA\n\r");
+	for0(i, NR_PART_PER_DRIVE + 1) {
+		if (hdinfo.primary[i].length) {
+			Console.OutFormat("%u      %u..%u\n\r", i,
+				hdinfo.primary[i].address,
+				hdinfo.primary[i].address + hdinfo.primary[i].length
+			);
+		}
+		if (i) for0(j, NR_SUB_PER_PART) {
+			unsigned jj = j + NR_SUB_PER_PART * (i - 1);
+			if (hdinfo.logical[jj].length) {
+				Console.OutFormat("%u      %u..%u\n\r", jj,
+					hdinfo.logical[jj].address,
+					hdinfo.logical[jj].address + hdinfo.logical[jj].length
+				);
+			}
+		}
+	}
+}
+
+enum { REG_DATA = 0 };
+//{TODO} into harddisk.cpp:Open()
+static void hd_open(Harddisk_PATA& hd) { // 0x00
+	byte low_id = hd.getLowID();
+	HdiskCommand cmd = {};
+	cmd.command = ATA_IDENTIFY;
+	cmd.device = MAKE_DEVICE_REG(0, low_id, 0);
+	lock = 0;
+	// ploginfo("hd_open: %u, bs=%u", low_id, hd.Block_Size);
+	hd.Hdisk_OUT(&cmd);
+	hd_int_wait();
+	IN_wn(0x1F0 + REG_DATA, (word*)single_sector, hd.Block_Size);
+	print_identify_info((uint16*)single_sector, hd);
+	if (!hd_info_valid[hd.getHigID() * 2 + low_id]) {
+		if (_TEMP hd.getID() == 0x01) {
+			DiscPartition dpart(hd, NR_PRIM_PER_DRIVE * low_id);
+			HD_Info& hdi = hd_info[hd.getHigID() * 2 + low_id];
+			DiscPartition::Partition(hd, hdi, (byte*)single_sector, NR_PRIM_PER_DRIVE * low_id);
+			// if (1) print_hdinfo(hd);
+		}
+		hd_info_valid[hd.getHigID() * 2 + low_id] = true;
+	}
+}
+
+static void hd_close(Harddisk_PATA& hd) { // 0x02
+	hd_info_valid[hd.getHigID() * 2 + hd.getLowID()] = false;
+}
+
+static void GetPartitionSlice(unsigned device, stduint pg_task)
+{
+	//{} hd_info_valid
+	Slice* retp;
+	Harddisk_PATA& hd = *disks[DRV_OF_DEV(device)];
+	HD_Info& hdinfo = hd_info[hd.getHigID() * 2 + hd.getLowID()];
+	retp = device < MINOR_hd1a ?
+		&hdinfo.primary[device % NR_PRIM_PER_DRIVE] :
+		&hdinfo.logical[(device - MINOR_hd1a) % NR_SUB_PER_DRIVE];//{} 2 disks
+	Slice ret = *retp;
+	syssend(pg_task, &ret, byteof(ret));
+	// ploginfo("[Hrddisk] %s dev%u->di%u : %u..%u", __FUNCIDEN__,
+	//	device, DRV_OF_DEV(device),
+	//	retp->address, retp->address + retp->length);
+}
+
+//// ---- ---- SERVICE ---- ---- ////
+static stduint args[4];
+bool fileman_hd_ready = false;
+void serv_dev_hd_loop()
+{
+	
+	task_run = true;
+	if (_IMM(&bda->hdisk_number) != 0x475) {
+		plogerro("Invalid BIOS_DataArea");
+		while (1);
+	}
+
+	for0a(i, disks) {
+		disks[i]->fn_cmd_wait = hd_cmd_wait;
+		disks[i]->fn_int_wait = hd_int_wait;
+		disks[i]->fn_lup_wait = waitfor;
+		disks[i]->fn_feedback = hd_rw_foreback;
+		disks[i]->react_type = Harddisk_PATA::ReactType::Rupt;
+	}
+	
+	// Console.OutFormat("[Hrddisk] detect %u disks\n\r", bda->hdisk_number);
+	stduint sig_type = 0, sig_src;
+	while (true) {
+		switch ((FiledevMsg)sig_type)
+		{
+		case FiledevMsg::TEST:// (no-feedback)
+			for0(i, bda->hdisk_number) {
+				hd_open(*disks[i]);
+				Console.OutFormat("[Hrddisk] Detect Disk on IDE%u:%u : %u MB\n\r", i / MAX_DRIVES, i % MAX_DRIVES, _IMM(disks[i]->getUnits() * disks[i]->Block_Size) >> 20);
+			}
+			fileman_hd_ready = true;
+			break;
+		case FiledevMsg::RUPT:// (usercall-forbidden)
+			break;
+		case FiledevMsg::CLOSE:// [diskno]
+			ploginfo("[Hrddisk] close %u", (unsigned)(byte)args[0]);
+			hd_close(*disks[(byte)args[0]]);// assert msg.data.length == 0
+			break;
+		case FiledevMsg::READ:// [diskno, lba]
+			// ploginfo("[Hrddisk] device %u: read %u", args[0], args[1]);
+			disks[args[0]]->Read(args[1], single_sector);
+			if (sig_src) syssend(sig_src, single_sector, disks[args[0]]->Block_Size);
+			break;
+		case FiledevMsg::WRITE:// [diskno, lba]
+			// ploginfo("[Hrddisk] device %u: write %u", (unsigned)(byte)args[0], slice.address);
+			if (sig_src) sysrecv(sig_src, single_sector, disks[args[0]]->Block_Size);
+			disks[args[0]]->Write(args[1], single_sector);
+			break;
+		case FiledevMsg::GETPS:// (device 0 for all, 1~4 for primary, 5+ for logical)
+			GetPartitionSlice(args[0], sig_src);
+			break;
+
+
+		default:
+			plogerro("Bad TYPE in %s %s", __FILE__, __FUNCIDEN__);
+			break;
+		}
+		sysrecv(ANYPROC, sliceof(args), &sig_type, &sig_src);
+	}
+}
+
+
+#endif

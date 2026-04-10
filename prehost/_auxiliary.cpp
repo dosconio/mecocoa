@@ -1,4 +1,22 @@
-#include <stdint.h>
+#define _STYLE_RUST
+#include <c/ustring.h>
+
+namespace std { void __throw_bad_function_call(void); }
+
+_ESYM_C void __cxa_pure_virtual(void) {}
+void std::__throw_bad_function_call(void) {
+	plogerro("%s", __FUNCIDEN__); loop;
+}
+
+_ESYM_C void* memcpy(void* dest, const void* sors, size_t n) { return MemCopyN(dest, sors, n); }
+_ESYM_C void* memset(void* str, int c, size_t n) { return MemSet(str, c, n); }
+_ESYM_C void* memchr(const void* s, int c, size_t n) { return (void*)MemIndexByte((const char*)s, c, n); }
+_ESYM_C char* memmove(char* dest, const char* sors, size_t width) {
+	return MemAbsolute(dest, sors, width);
+}
+_ESYM_C void abort(void) {
+	plogerro("%s", __FUNCIDEN__); loop;
+}
 
 // may no use
 extern "C"
@@ -53,3 +71,25 @@ uint64_t __umoddi3(uint64_t n, uint64_t d) {
     }
     return r;
 }
+
+_ESYM_C unsigned int __ctzsi2(unsigned int x)
+{
+	if (x == 0) return 32;
+	unsigned int n = 0;
+	while ((x & 1) == 0) {
+		n++;
+		x >>= 1;
+	}
+	return n;
+}
+_ESYM_C unsigned int __ctzdi2(unsigned long x)
+{
+	if (x == 0) return 64;
+	unsigned int n = 0;
+	while ((x & 1) == 0) {
+		n++;
+		x >>= 1;
+	}
+	return n;
+}
+

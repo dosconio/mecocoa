@@ -120,6 +120,10 @@ public _Comment(State):
 		Hanging,// aka Zobmie, call exit()
 		Invalid,
 	} state = State::Uninit;
+	inline bool isWaiting() {
+		return state == ProcessBlock::State::Pended &&
+			(_IMM(block_reason) & _IMM(ProcessBlock::BlockReason::BR_Waiting));
+	}
 	enum BlockReason : uint32 {
 		BR_None = 0,
 		BR_SendMsg = 0b10,
@@ -190,13 +194,20 @@ public:
 	// - RISCV: Mach3 Supe1 User0
 	static auto// newProcess (BIN)
 		Create(void* entry, byte ring) -> ProcessBlock*;
+	static auto _TODO// newProcess (auto check)
+		CreateFormat(BlockTrait* source, byte ring) -> ProcessBlock*;
 	static auto// newProcess (ELF)
 		CreateELF(BlockTrait* source, byte ring) -> ProcessBlock*;
 	static auto// newProcess
 		CreateFork(ProcessBlock* parent, const CallgateFrame* frame) -> ProcessBlock*;
 	
 	static auto
-		ExitCurrent(stduint code) -> bool;
+		ExitCurrent(stduint code) -> bool;// call by syscall but taskman
+public:// taskman
+	static bool
+		Exit(ProcessBlock* pb, stdsint exit_code);
+	static auto
+		Wait(ProcessBlock* pb) -> stdsint;
 public:// schedule
 	static auto Schedule(bool omit_slice = false) -> void;// Timer using
 	struct ReadyQueue {

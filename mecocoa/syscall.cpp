@@ -56,6 +56,7 @@ static stduint syscall_07_close(stduint* paras, stduint pid) {
 DEFSYSC sysc_OUTC(stduint ch, stduint len);
 DEFSYSC sysc_COMM(ProcessBlock* pb, stduint to, stduint op, CommMsg* msg);
 DEFSYSC sysc_INNC(stduint blocked);
+DEFSYSC sysc_EXIT(stduint code);
 extern bool fileman_hd_ready;
 
 __attribute__((optimize("O0")))
@@ -85,12 +86,7 @@ stduint Handint_SYSCALL(CallgateFrame* frame) {
 		break;
 	case syscall_t::EXIT:
 	{
-		// __asm("mov %0, %%eax" : : "m"(para[0])); TaskReturn();
-		para[1] = para[0];
-		para[0] = caller_pid;
-		syssend(Task_TaskMan, para, byteof(para), _IMM(TaskmanMsg::EXIT));
-		sysrecv(Task_TaskMan, &ret, byteof(ret));
-		// unreachable
+		sysc_EXIT(para[0]); loop;
 		break;
 	}
 	case syscall_t::TIME:
@@ -232,7 +228,7 @@ stduint syscall(syscall_t callid, stduint para1, stduint para2, stduint para3) {
 	__asm("mov  %%eax, %0" : "=m"(ret));
 	#elif _MCCA == 0x8664
 	if (_IMM(callid) >= numsof(SYSCALL_TABLE)) {
-		plogerro("syscall: callid out of range");
+		plogerro("syscall: callid out of range: %u", callid);
 		loop HALT();
 	}
 	return reinterpret_cast<stdsint(*)(stduint, stduint, stduint)>(SYSCALL_TABLE[_IMM(callid)])(para1, para2, para3);
@@ -311,7 +307,7 @@ DEFSYSC sysc_INNC(stduint blocked) {
 DEFSYSC sysc_EXIT(stduint code) {
 	// IC.enAble(false);
 	Taskman::ExitCurrent(code);
-	printlog(_LOG_FATAL, "sysc_EXIT");// unreachable
+	printlog(_LOG_FATAL, "sysc_EXIT unreachable");// unreachable
 	return -1;
 }
 
@@ -368,6 +364,9 @@ void syscall_body(NormalTaskContext* cxt)
 		break;
 	case syscall_t::INNC:
 		cxt->a0 = sysc_INNC(cxt->a0);
+		break;
+	case syscall_t::EXIT:
+		sysc_EXIT(cxt->a0); loop;
 		break;
 	case syscall_t::REST://{TEMP} (half)
 		clint.MSIP(getMHARTID(), MSIP_Type::SofRupt);

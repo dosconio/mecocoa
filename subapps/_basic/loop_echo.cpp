@@ -9,9 +9,3 @@ auto main(int argc, char** argv) -> int
 		if (ch != -1) Console.OutChar(ch);
 	}
 }
-
-#if (_MCCA & 0xFF00) == 0x1000
-extern "C" void *memset(void *str, int c, size_t n) { return MemSet(str, c, n); }
-
-
-#endif

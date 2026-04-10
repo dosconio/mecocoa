@@ -284,11 +284,7 @@ auto Taskman::Schedule(bool omit_slice)->decltype(Schedule())
 	#elif (_MCCA & 0xFF00) == 0x1000
 	#endif
 
-	#if (_MCCA & 0xFF00) == 0x8600
 	SwitchTaskContext(&new_pb->context, &old_pb->context);
-	#elif (_MCCA & 0xFF00) == 0x1000
-	SwitchTaskContext(&new_pb->context, &old_pb->context);
-	#endif
 }
 #else
 auto Taskman::Schedule(bool omit_slice)->decltype(Schedule()) { }

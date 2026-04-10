@@ -42,31 +42,7 @@ static const usize ROOT_DEV_FAT0 = MINOR_hd6a + 2;
 //// //// ---- //// ////
 
 
-bool waitfor(Harddisk_PATA* hdd, stduint mask, stduint val, stduint timeout_second)// return seccess
-{
-	int t = syscall(syscall_t::TIME);
-	while (((syscall(syscall_t::TIME) - t)) < timeout_second)
-		if ((hdd->getStatus() & mask) == val)
-			return 1;
-	return 0;
-}
-void fileman_hd();
-void DEV_Init()
-{
-	// 1 Initialize dev_ifs
-	fileman_hd();
-}
-/* DEVICE * MSG **
-- TEST
-- RUPT
-*/
-
-
-
 static bool hd_info_valid = false;
-
-//{} to use
-#define NR_CONSOLES	4
 
 //// ---- ---- Kernel-Internal [R0/R1] ---- ---- ////
 
@@ -386,6 +362,8 @@ bool flag_ready_fileman = false;
 
 static FAT_FileHandle filhan;
 // static FAT_DirInfo filinf;
+
+
 void serv_file_loop()
 {
 	// Manually Initialize
@@ -445,7 +423,7 @@ void serv_file_loop()
 			if (han = (FAT_FileHandle*)pfs_fat0->search("init", &a)) {
 				FileBlockBridge loop_device(pfs_fat0, han, han->size, 512);
 				if (auto task = Taskman::CreateELF(&loop_device, 3))
-					task->focus_tty = vttys[1];
+					task->focus_tty = vttys[ento_gui ? 1 : 0];
 				else plogerro("Init: Fail to load");
 			}
 			else plogerro("Init: Not found");
@@ -455,7 +433,7 @@ void serv_file_loop()
 			if (han = (FAT_FileHandle*)pfs_fat0->search("c", &a)) {
 				FileBlockBridge loop_device(pfs_fat0, han, han->size, 512);
 				if (auto task = Taskman::CreateELF(&loop_device, 3))
-					task->focus_tty = vttys[1];
+					task->focus_tty = vttys[ento_gui ? 1 : 0];
 				else plogerro("C: Fail to load");
 			}
 			else plogerro("C: Not found");
