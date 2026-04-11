@@ -20,7 +20,7 @@ void temp_init() {
 OstreamTrait* con0_out;// TTY0
 
 // use before loading elf-kernel
-#define ROOT_DEV_FAT0 (MINOR_hd6a + 2)
+#define ROOT_DEV_FAT0 (MINOR_hd2a + 2)
 #define single_sector  ((byte*)0x100000)
 #define fatable_sector ((byte*)0x100200)
 #define hdinfo_addr    ((byte*)0x100400)
@@ -48,7 +48,7 @@ void body() {
 	temp_init();
 	BareConsole Console(80, 50, _VIDEO_ADDR_BUFFER); con0_out = &Console;
 	Console.setShowY(0, 25);
-	Harddisk_PATA hdisk(0x01);
+	Harddisk_PATA hdisk(DRV_OF_DEV(ROOT_DEV_FAT0));
 	hdisk.Reset();
 
 	MemSet((void*)hdinfo_addr, 0, sizeof(HD_Info));

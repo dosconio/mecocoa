@@ -27,15 +27,17 @@ auto Taskman::AllocateTask() -> ProcessBlock* {
 }
 
 void Taskman::DumpTask(ProcessBlock* pb) {
-	#if (_MCCA & 0xFF00) == 0x1000
 	auto ctx = &pb->context;
 	ploginfo("=== Context [%d] at %[x] ===", pb->getID(), pb);
+	ploginfo(" (%u:%u) head %u, next %u, send_to_whom",
+		pb->state, pb->block_reason, pb->queue_send_queuehead, pb->queue_send_queuenext);
+	#if (_MCCA & 0xFF00) == 0x1000
     ploginfo("  ra : %[x]  sp : %[x]  gp : %[x]  tp : %[x]", ctx->ra, ctx->sp, ctx->gp, ctx->tp);
     ploginfo("  a0 : %[x]  a1 : %[x]  a7 : %[x]  s0 : %[x]", ctx->a0, ctx->a1, ctx->a7, ctx->s0);
     ploginfo("  mepc: %[x]  mstatus: %[x]  satp: %[x]", ctx->mepc, ctx->mstatus, ctx->satp);
     ploginfo("  ksp : %[x]", ctx->kernel_sp);
-	ploginfo("========================================");
 	#endif
+	ploginfo("========================================");
 }
 
 

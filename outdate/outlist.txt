@@ -1,4 +1,4 @@
 filename    module    state
 [Outdated Module List]----
-fileman-fs  OrangesFS (kept till MinixFS done)
+fileman-fs  OrangesFS removed
 

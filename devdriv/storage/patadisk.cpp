@@ -145,12 +145,11 @@ static void hd_open(Harddisk_PATA& hd) { // 0x00
 	IN_wn(0x1F0 + REG_DATA, (word*)single_sector, hd.Block_Size);
 	print_identify_info((uint16*)single_sector, hd);
 	if (!hd_info_valid[hd.getHigID() * 2 + low_id]) {
-		if (_TEMP hd.getID() == 0x01) {
-			DiscPartition dpart(hd, NR_PRIM_PER_DRIVE * low_id);
-			HD_Info& hdi = hd_info[hd.getHigID() * 2 + low_id];
-			DiscPartition::Partition(hd, hdi, (byte*)single_sector, NR_PRIM_PER_DRIVE * low_id);
-			// if (1) print_hdinfo(hd);
-		}
+		// if (_TEMP hd.getID() == 0x01) {
+		DiscPartition dpart(hd, NR_PRIM_PER_DRIVE * low_id);
+		HD_Info& hdi = hd_info[hd.getHigID() * 2 + low_id];
+		DiscPartition::Partition(hd, hdi, (byte*)single_sector, NR_PRIM_PER_DRIVE * low_id);
+		// if (1) print_hdinfo(hd);
 		hd_info_valid[hd.getHigID() * 2 + low_id] = true;
 	}
 }

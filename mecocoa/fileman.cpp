@@ -7,7 +7,7 @@
 #include <c/storage/harddisk.h>
 
 #ifdef _ARC_x86 // x86:
-#include "../include/orangesfs.hpp"
+#include <c/format/filesys.h>
 #include <c/format/filesys/FAT.h>
 #include "../include/filesys.hpp"
 
@@ -31,16 +31,6 @@ static stduint dev_drv_map[] = {
 
 //// ---- ---- fs-irrelavant interface ---- ---- ////
 
-extern inode* root_inode;
-extern inode* inode_table;
-
-extern super_block superblocks[NR_SUPER_BLOCK];//{TEMP} in Static segment, should be managed in heap
-
-// Hardcoded parts removed. We use VFS now.
-
-//// //// ---- //// ////
-
-
 static bool hd_info_valid = false;
 
 //// ---- ---- Kernel-Internal [R0/R1] ---- ---- ////
@@ -48,7 +38,7 @@ static bool hd_info_valid = false;
 stduint do_rdwt(bool wr_type, stduint fid, Slice slice, stduint pid)
 {
 	ProcessBlock* pb = Taskman::Locate(pid);
-	if (fid >= NR_FILE_DESC || !pb->pfiles[fid] || !pb->pfiles[fid]->vfile) return 0;
+	if (!pb->pfiles[fid] || !pb->pfiles[fid]->vfile) return 0;
 	if (!(pb->pfiles[fid]->fd_mode & O_RDWR)) return 0;
 	
 	vfs_file* file = pb->pfiles[fid]->vfile;
@@ -92,23 +82,6 @@ bool Harddisk_PATA_Paged::Write(stduint BlockIden, const void* Sors) {
 	syssend(Task_Hdd_Serv, Sors, Block_Size);
 	return true;
 }
-
-
-//// ---- ---- fs-irrelavant interface ---- ---- ////
-
-static OrangesFs* IndexOFs(unsigned dev) {
-	// To be deprecated in fully abstract VFS
-	return NULL;
-} OrangesFs* (*OrangesFs::IndexOFs)(unsigned) = IndexOFs;
-
-static FilesysTrait* IndexFs(unsigned dev) {
-	return NULL;
-} FilesysTrait* (*OrangesFs::IndexFs)(unsigned) = IndexFs;
-
-
-
-
-
 static stduint search_file(rostr path)
 {
 	vfs_dentry* entry = vfs_namei(path);
@@ -195,7 +168,6 @@ stdsint do_lseek()
 }
 
 //// ---- ---- SERVICE ---- ---- ////
-alignas(OrangesFs) char _buf_OFs[byteof(OrangesFs)];
 
 stduint serv_file_loop_remove(stduint pid, rostr filename) {
 	return vfs_remove(filename) ? 0 : -1;
@@ -204,61 +176,39 @@ extern bool fileman_hd_ready;
 bool flag_ready_fileman = false;
 
 
-void serv_file_loop()
+void serv_file_loop()// for IDE 0:0, 0:1
 {
-	// Manually Initialize
-	{
-		OrangesFs::IndexOFs = IndexOFs;
-		OrangesFs::IndexFs = IndexFs;
-	}
 	f_desc_table = (FileDescriptor*)Memory::physical_allocate(0x1000);
 	f_desc_table_count = nil;
 	::buffer = (byte*)Memory::physical_allocate(FSBUF_SIZE);
-	//
-	stduint&& inode_table_size = vaultAlignHexpow(0x1000, sizeof(inode) * NR_INODE);
-	inode_table = (inode*)Memory::physical_allocate(inode_table_size);
-	MemSet(inode_table, 0, sizeof(inode) * NR_INODE);
-	//
-	NR_FILE_DESC;
-	//{TODO}
-	//
-	NR_SUPER_BLOCK;
-	for0(i, 8) superblocks[i] = { 0 };//{why} MemSet here will BOOM!
-	//
+
 	//
 	stduint to_args[8];// 8*4=32 bytes
 	stduint sig_type = 0, sig_src;
 
-	Harddisk_PATA_Paged hdd(0x01);
+	Harddisk_PATA_Paged hdds[] { 0x00, 0x01 };
 
-	// VFS Registrations
-	file_system_type fs_oranges = { "orangesfs", [](StorageTrait& storage, stduint dev) -> FilesysTrait* {
-		DiscPartition part(storage, dev);
-		if (part.getSlice().length == 0 || part.getSlice().sys_id != 0x99) return nullptr;
-
-		OrangesFs* fs = new OrangesFs(storage, ::buffer, dev);
-		((DiscPartition*)fs->storage)->getSlice(); // Initialize internal slice
-		if (fs->loadfs()) return fs;
-		
-		delete fs;
-		return nullptr;
-	}, nullptr };
-	register_filesystem(&fs_oranges);
-
+	// VFS Registrations: FAT12/16/32 only
 	static FilesysFAT* pfs_fat0 = nullptr;
 
-	file_system_type fs_fat = { "fat32", [](StorageTrait& storage, stduint dev) -> FilesysTrait* {
+	file_system_type fs_fat = { "fat", [](StorageTrait& storage, stduint dev) -> FilesysTrait* {
 		DiscPartition part(storage, dev);
 		if (part.getSlice().length == 0) return nullptr;
 		byte sys_id = part.getSlice().sys_id;
-		if (sys_id != 0x01 && sys_id != 0x06 && sys_id != 0x0B && sys_id != 0x0C) return nullptr;
+		// Determine FAT sub-type from partition sys_id
+		int fat_ver;
+		if      (sys_id == FILESYS_FAT12)     fat_ver = 12;
+		else if (sys_id == FILESYS_FAT16)     fat_ver = 16;
+		else if (sys_id == FILESYS_FAT32_CHS) fat_ver = 32;
+		else if (sys_id == FILESYS_FAT32_LBA) fat_ver = 32;
+		else return nullptr; // not a FAT partition
 		
 		DiscPartition* p_part = new DiscPartition(storage, dev);
-		p_part->getSlice(); // Initialize internal slice
+		p_part->getSlice(); // initialize internal slice
 		byte* fat_buf = new byte[0x1000];
-		FilesysFAT* fs = new FilesysFAT(32, *p_part, ::buffer, fat_buf);
+		FilesysFAT* fs = new FilesysFAT(fat_ver, *p_part, ::buffer, fat_buf);
 		if (fs->loadfs()) {
-			if (!pfs_fat0) pfs_fat0 = fs;
+			if (fat_ver == 32 && !pfs_fat0) pfs_fat0 = fs;
 			return fs;
 		}
 		
@@ -286,23 +236,14 @@ void serv_file_loop()
 			extern bool ento_gui;
 			for (int dev = 0x10; dev <= MINOR_hd6a + 0x0F; dev++) { // Scan typical devs up to logical drives
 				// Probe partition type via MBR sys_id to avoid blind loadfs() attempts
-				DiscPartition part(hdd, dev);
+				DiscPartition part(hdds[DRV_OF_DEV(dev)], dev);
 				byte sys_id = part.getSlice().sys_id;
 				if (sys_id == 0x00) continue; // empty/unpartitioned, skip
 
 				char mnt_path[16];
+				String(mnt_path, sizeof(mnt_path)).Format("/mnt%d", dev);
 
-				if (sys_id == 0x99) {
-					// OrangesFS: format/initialize before mount, use fixed path
-					OrangesFs* temp = new OrangesFs(hdd, ::buffer, dev);
-					temp->makefs(NULL);
-					delete temp;
-					String(mnt_path, sizeof(mnt_path)).Format("/oranges");
-				} else {
-					String(mnt_path, sizeof(mnt_path)).Format("/mnt%d", dev);
-				}
-
-				if (vfs_mount(hdd, dev, mnt_path)) {
+				if (vfs_mount(hdds[DRV_OF_DEV(dev)], dev, mnt_path)) {
 					Console.OutFormat("[Fileman] Mounted dev %d (sys_id=0x%x)\n\r", dev, sys_id);
 				}
 			}
