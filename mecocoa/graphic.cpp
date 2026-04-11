@@ -326,7 +326,7 @@ extern bool ento_gui;
 extern uni::LayerManager global_layman;
 extern VideoControlInterface* real_pvci;
 extern volatile stduint tick;
-inline void RenderFrameFlush() {
+void RenderFrameFlush() {
 	if (!enable_dubuffer) return;
 	global_layman.CheckTimers(tick);
 	if (ento_gui && global_layman.pvci && global_layman.is_dirty) {

@@ -116,7 +116,7 @@ _sign_entry() {
 
 void DiscPartition::renew_slice()
 {
-	Slice* retp;
+	uni::PartitionSlice* retp;
 	HD_Info& hdinfo = *(HD_Info*)hdinfo_addr;
 	retp = device < MINOR_hd1a ?
 		&hdinfo.primary[device % NR_PRIM_PER_DRIVE] :

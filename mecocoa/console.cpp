@@ -226,7 +226,6 @@ extern UefiData uefi_data;
 
 uni::witch::control::Label* plabel_1;
 uni::witch::control::TextBox* ptext_1;
-VideoConsole* pcon_1;
 
 void enable_2buffer() {
 	// Double Buffer
@@ -363,17 +362,19 @@ void cons_init() {
 	}
 	if (1) {
 		Rectangle rect{ Point(250, 160), Size2(480, 320) };
-		auto pcon = new VideoConsole(NULL,
+		auto pcon = new VideoConsole2(NULL,
 			Rectangle(Point(2, 2), Size2(470, 290)),
-				Color::White, Color::Black
+				Color::Black, 0xFFFCEAF1
 		);
-		auto vcon_buf = (Color*)mem.allocate(pcon->window.getArea() * sizeof(Color));
-		pcon->InitializeSheet(global_layman, pcon->window.getVertex(), pcon->window.getSize(), vcon_buf);
-		pcon->setModeBuffer(vcon_buf);
-		pcon_1 = pcon;
+		// auto vcon_buf = (Color*)mem.allocate(pcon->window.getArea() * sizeof(Color));// Vcon Gen1
+		auto text_buf = (BufferChar*)mem.allocate(pcon->getCols() * pcon->getRows() * sizeof(BufferChar));
+		auto line_buf = (Color*)mem.allocate(pcon->getLineBufferSize() * sizeof(Color));
+		pcon->setBuffers(nullptr, text_buf, line_buf);
+		pcon->InitializeSheet(global_layman, pcon->window.getVertex(), pcon->window.getSize());
+		// pcon->setModeBuffer(vcon_buf); Vcon Gen1
 		pcon->Clear();
 
-		form2.Title = "Console";
+		form2.Title = "Console-Gen2";
 		form2.AppendControl(pcon);
 		form2.setSheet(global_layman, rect, (Color*)mem.allocate(rect.getArea() * sizeof(Color)));
 		form2.setFocus(pcon);

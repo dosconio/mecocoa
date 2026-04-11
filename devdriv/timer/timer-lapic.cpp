@@ -8,6 +8,7 @@
 
 #if _MCCA == 0x8664 && defined(_UEFI)
 extern Dchain TimerManager;
+void RenderFrameFlush();
 
 __attribute__((/*interrupt, */target("general-regs-only")))// the stack is ready
 void Handint_LAPICT(/*InterruptFrame* frame*/) {

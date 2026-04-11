@@ -196,7 +196,6 @@ stdsint do_lseek()
 
 //// ---- ---- SERVICE ---- ---- ////
 alignas(OrangesFs) char _buf_OFs[byteof(OrangesFs)];
-alignas(FilesysFAT) char _buf_FATs[byteof(FilesysFAT)];
 
 stduint serv_file_loop_remove(stduint pid, rostr filename) {
 	return vfs_remove(filename) ? 0 : -1;
@@ -235,7 +234,7 @@ void serv_file_loop()
 	// VFS Registrations
 	file_system_type fs_oranges = { "orangesfs", [](StorageTrait& storage, stduint dev) -> FilesysTrait* {
 		DiscPartition part(storage, dev);
-		if (part.getSlice().length == 0) return nullptr;
+		if (part.getSlice().length == 0 || part.getSlice().sys_id != 0x99) return nullptr;
 
 		OrangesFs* fs = new OrangesFs(storage, ::buffer, dev);
 		((DiscPartition*)fs->storage)->getSlice(); // Initialize internal slice
@@ -246,11 +245,13 @@ void serv_file_loop()
 	}, nullptr };
 	register_filesystem(&fs_oranges);
 
-static FilesysFAT* pfs_fat0 = nullptr;
+	static FilesysFAT* pfs_fat0 = nullptr;
 
 	file_system_type fs_fat = { "fat32", [](StorageTrait& storage, stduint dev) -> FilesysTrait* {
 		DiscPartition part(storage, dev);
 		if (part.getSlice().length == 0) return nullptr;
+		byte sys_id = part.getSlice().sys_id;
+		if (sys_id != 0x01 && sys_id != 0x06 && sys_id != 0x0B && sys_id != 0x0C) return nullptr;
 		
 		DiscPartition* p_part = new DiscPartition(storage, dev);
 		p_part->getSlice(); // Initialize internal slice
@@ -284,18 +285,25 @@ static FilesysFAT* pfs_fat0 = nullptr;
 			// Auto Mount Probe
 			extern bool ento_gui;
 			for (int dev = 0x10; dev <= MINOR_hd6a + 0x0F; dev++) { // Scan typical devs up to logical drives
-				// Format OrangesFS on hd6a as before if needed:
-				if (dev == MINOR_hd6a) { 
+				// Probe partition type via MBR sys_id to avoid blind loadfs() attempts
+				DiscPartition part(hdd, dev);
+				byte sys_id = part.getSlice().sys_id;
+				if (sys_id == 0x00) continue; // empty/unpartitioned, skip
+
+				char mnt_path[16];
+
+				if (sys_id == 0x99) {
+					// OrangesFS: format/initialize before mount, use fixed path
 					OrangesFs* temp = new OrangesFs(hdd, ::buffer, dev);
 					temp->makefs(NULL);
 					delete temp;
+					String(mnt_path, sizeof(mnt_path)).Format("/oranges");
+				} else {
+					String(mnt_path, sizeof(mnt_path)).Format("/mnt%d", dev);
 				}
-				
-				char mnt_path[16];
-				String(mnt_path, sizeof(mnt_path)).Format("/mnt%d", dev);
-				
-				if (vfs_mount(hdd, dev, dev == MINOR_hd6a ? "/oranges" : mnt_path)) {
-					Console.OutFormat("[Fileman] Mounted dev %d\n\r", dev);
+
+				if (vfs_mount(hdd, dev, mnt_path)) {
+					Console.OutFormat("[Fileman] Mounted dev %d (sys_id=0x%x)\n\r", dev, sys_id);
 				}
 			}
 

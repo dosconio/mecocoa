@@ -73,7 +73,7 @@ cppfile=$(wildcard mecocoa/*.cpp)\
 	$(ulibpath)/cpp/Witch/Form.cpp \
 	$(ulibpath)/cpp/Device/Buzzer.cpp \
 	$(ulibpath)/cpp/Device/Storage.cpp \
-	$(ulibpath)/cpp/Device/Video.cpp $(ulibpath)/cpp/Device/Video-VideoConsole.cpp \
+	$(ulibpath)/cpp/Device/Video.cpp $(ulibpath)/cpp/Device/Video-VideoConsole2.cpp \
 
 
 cplfile=$(ulibpath)/c/mcore.c\

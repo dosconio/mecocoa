@@ -276,7 +276,7 @@ DEFSYSC sysc_OUTC(stduint ch, stduint len) {// OUTC
 			else {
 				con->OutChar(ch);
 			}
-			con->OutChar(nil);
+			// con->OutChar(nil);
 			return 0;
 		}
 		else plogerro("sysc_OUTC: pid = %u", pid->getID());

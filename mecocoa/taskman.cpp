@@ -137,7 +137,7 @@ stdsint Taskman::Wait(ProcessBlock* pb)
 {
 	const auto pid = pb->getID();
 	stduint children = 0;
-	for(auto nod = Taskman::chain.Root(); nod; nod = nod->next) {
+	for (auto nod = Taskman::chain.Root(); nod; nod = nod->next) {
 		auto taski = (ProcessBlock*)nod->offs;
 		if (taski->pid && taski->parent_id == pid) {
 			children++;

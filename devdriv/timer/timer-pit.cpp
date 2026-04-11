@@ -24,6 +24,7 @@ void R_PIT_INIT() {
 
 extern volatile stduint tick;
 void blink2();
+void RenderFrameFlush();
 void Handint_PIT()
 {
 	// auto push flag by intterrupt module

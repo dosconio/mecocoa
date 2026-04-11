@@ -162,13 +162,13 @@ static void hd_close(Harddisk_PATA& hd) { // 0x02
 static void GetPartitionSlice(unsigned device, stduint pg_task)
 {
 	//{} hd_info_valid
-	Slice* retp;
+	uni::PartitionSlice* retp;
 	Harddisk_PATA& hd = *disks[DRV_OF_DEV(device)];
 	HD_Info& hdinfo = hd_info[hd.getHigID() * 2 + hd.getLowID()];
 	retp = device < MINOR_hd1a ?
 		&hdinfo.primary[device % NR_PRIM_PER_DRIVE] :
 		&hdinfo.logical[(device - MINOR_hd1a) % NR_SUB_PER_DRIVE];//{} 2 disks
-	Slice ret = *retp;
+	uni::PartitionSlice ret = *retp;
 	syssend(pg_task, &ret, byteof(ret));
 	// ploginfo("[Hrddisk] %s dev%u->di%u : %u..%u", __FUNCIDEN__,
 	//	device, DRV_OF_DEV(device),

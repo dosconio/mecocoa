@@ -59,7 +59,7 @@ void mecfetch();
 //
 #define _GUI_ENABLE 1
 // double buffer, or the anime is disabled
-#define _GUI_DOUBLE_BUFFER 0
+#define _GUI_DOUBLE_BUFFER 1
 // print logo 🏳️‍⚧️
 #define _GUI_LOGO 0
 

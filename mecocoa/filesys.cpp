@@ -190,11 +190,10 @@ bool vfs_mount_fs(FilesysTrait* fs, file_system_type* type, const char* target_p
 
 bool vfs_mount(StorageTrait& storage, stduint dev, const char* target_path) {
 	for (file_system_type* fs_type = registered_filesystems; fs_type; fs_type = fs_type->next) {
+		// probe() checks sys_id and calls loadfs() internally; non-null means ready to mount
 		FilesysTrait* fs = fs_type->probe(storage, dev);
 		if (fs) {
-			if (fs->loadfs()) {
-				return vfs_mount_fs(fs, fs_type, target_path);
-			}
+			return vfs_mount_fs(fs, fs_type, target_path);
 		}
 	}
 	return false;
