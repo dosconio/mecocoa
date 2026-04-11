@@ -266,7 +266,7 @@ void serv_file_loop()// for IDE 0:0, 0:1
 
 				// subappc
 				printlog(_LOG_INFO, "Loading Subappc");
-				if (han = (FAT_FileHandle*)pfs_fat0->search("c", &a)) {
+				if (han = (FAT_FileHandle*)pfs_fat0->search("/apps/c", &a)) {
 					FileBlockBridge loop_device(pfs_fat0, han, han->size, 512);
 					if (auto task = Taskman::CreateELF(&loop_device, 3))
 						task->focus_tty = vttys[ento_gui ? 1 : 0];

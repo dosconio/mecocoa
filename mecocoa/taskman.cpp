@@ -10,6 +10,39 @@
 // #pragma GCC push_options
 // #pragma GCC optimize("O2")
 
+namespace uni {
+	template <>
+	bool Queue<SysMessage>::Enqueue(const SysMessage& item) {
+		if (item.type == SysMessage::RUPT_MOUSE && !isEmpty()) {
+			// Locate the tail pointer (the last written element, handling ring buffer wrap-around)
+			SysMessage* tail = (p == offss) ? (offss + limit - 1) : (p - 1);
+
+			if (tail->type == SysMessage::RUPT_MOUSE) {
+				// Check if button states are identical (ensures correct logic for dragging operations)
+				if (tail->args.mou_event.BtnLeft == item.args.mou_event.BtnLeft &&
+					tail->args.mou_event.BtnRight == item.args.mou_event.BtnRight &&
+					tail->args.mou_event.BtnMiddle == item.args.mou_event.BtnMiddle)
+				{
+					int new_x = tail->args.mou_event.X + item.args.mou_event.X;
+					int new_y = tail->args.mou_event.Y + item.args.mou_event.Y;
+					// Prevent overflow/wrap-around if the accumulated value exceeds the int8 range (-128 to 127)
+					if (new_x >= -128 && new_x <= 127 && new_y >= -128 && new_y <= 127) {
+						tail->args.mou_event.X = (int8)new_x;
+						tail->args.mou_event.Y = (int8)new_y;
+						tail->args.mou_event.DirX = (new_x < 0) ? 1 : 0;
+						tail->args.mou_event.DirY = (new_y < 0) ? 1 : 0;
+						return true;
+					}
+				}
+			}
+		}
+		if (isFull()) return false;
+		if (q == nullptr) q = p;
+		*p++ = item;
+		if (p >= offss + limit) p = offss;
+		return true;
+	}
+}
 static SysMessage _BUF_Message[64];
 Queue<SysMessage> message_queue(_BUF_Message, numsof(_BUF_Message));
 

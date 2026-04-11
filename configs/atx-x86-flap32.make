@@ -88,7 +88,8 @@ build: clean lib $(cppobjs)
 	@echo $(sudokey) | sudo -S mount /dev/mapper/loop*p7 $(mnts) #sudo fsck.vfat -v /dev/mapper/loop0p7 # fdisk # blkid
 	@echo $(sudokey) | sudo -S cp $(ubinpath)/$(elf_kernel)     $(mnts)/mx86.elf
 	@echo $(sudokey) | sudo -S cp $(uobjpath)/sapp-$(arch)/init $(mnts)/init
-	@echo $(sudokey) | sudo -S cp $(uobjpath)/sapp-$(arch)/c    $(mnts)/c
+	@echo $(sudokey) | sudo -S mkdir -p $(mnts)/apps
+	@echo $(sudokey) | sudo -S cp $(uobjpath)/sapp-$(arch)/c    $(mnts)/apps/c
 	@tree $(mnts) -s
 	@echo $(sudokey) | sudo -S umount $(mnts)
 	@echo $(sudokey) | sudo -S kpartx -dv $(ubinpath)/fixed2.vhd >/dev/null

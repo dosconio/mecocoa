@@ -321,10 +321,13 @@ void cons_init() {
 	#endif
 
 	// main screen
-	auto vcon0 = new VideoConsole(&global_layman.getVCI(), screen0_win, Color::Black, Color::White);
-	auto vcon0_buf = (Color*)mem.allocate(vcon0_size);
-	vcon0->InitializeSheet(global_layman, screen0_win.getVertex(), screen0_win.getSize(), vcon0_buf);
-	vcon0->setModeBuffer(vcon0_buf);
+	auto vcon0 = new VideoConsole2(&global_layman.getVCI(), screen0_win, Color::Black, Color::White);
+	// auto vcon0_buf = (Color*)mem.allocate(vcon0_size);
+	vcon0->setBuffers(nullptr,
+		new BufferChar[vcon0->getCols() * vcon0->getRows()],
+		new Color[vcon0->getLineBufferSize()]
+	);
+	vcon0->InitializeSheet(global_layman, screen0_win.getVertex(), screen0_win.getSize());
 	VTTY_Append(vcon0);
 
 	// cursor
