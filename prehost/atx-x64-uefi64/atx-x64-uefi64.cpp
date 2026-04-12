@@ -103,14 +103,14 @@ void mecocoa(const UefiData& uefi_data_ref)
 		fatvhd.buffer_fatable = new byte[memdev.Block_Size];
 		FAT_FileHandle* han;
 		FAT_FileHandle filhan;
-		stduint a[2] = { _IMM(&filhan), 0 /*, _IMM(&filinf) */ };
+		FilesysSearchArgs args = { &filhan, nullptr, nullptr, nullptr };
 		if (!fatvhd.loadfs()) {
 			plogerro("FATVHD loadfs failed");
 		}
 		else {
-			han = (FAT_FileHandle*)fatvhd.search("/", &a);
+			han = (FAT_FileHandle*)fatvhd.search("/", &args);
 			fatvhd.enumer(han, NULL);
-			if (han = (FAT_FileHandle*)fatvhd.search("appa.elf", &a)) {
+			if (han = (FAT_FileHandle*)fatvhd.search("appa.elf", &args)) {
 				FileBlockBridge loop_device(&fatvhd, han, han->size, 512);
 				if (auto pb = Taskman::CreateELF(&loop_device, RING_U)) {
 					Taskman::Append(pb);

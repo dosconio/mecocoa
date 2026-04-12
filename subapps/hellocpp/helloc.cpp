@@ -8,12 +8,12 @@ int main(int argc, char** argv)
 {
 	unsigned id = systest('T', 'E', 'S');
 	outsfmt("C(%d)\n\r", 1);
-/*unchked
-	outsfmt("Testing VFS sysopen & sys_createfil...\n\r");
+/*
+	rostr filename = "/mnt33/testvfs.txt";
 	
-	int fd = sysopen("/oranges/testvfs.txt");
+	int fd = sysopen(filename);
 	if (fd < 0) {
-		fd = sys_createfil("/oranges/testvfs.txt");
+		fd = sys_createfil(filename);
 	}
 
 	if (fd >= 0) {
@@ -23,7 +23,7 @@ int main(int argc, char** argv)
 		sysclose(fd);
 		
 		outsfmt("Writing success. Reading back...\n\r");
-		fd = sysopen("/oranges/testvfs.txt");
+		fd = sysopen(filename);
 		if (fd >= 0) {
 			char buf[32] = {0};
 			sysread(fd, buf, 24);
@@ -34,8 +34,7 @@ int main(int argc, char** argv)
 		outsfmt("Open failed with code %d\n\r", fd);
 	}
 	
-	sysquit(0);
-	*/
+*/
 	return 0;
 }
 

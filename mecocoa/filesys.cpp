@@ -52,7 +52,7 @@ public:
 	virtual bool loadfs(void* moreinfo = 0) override { return true; }
 	virtual bool create(rostr fullpath, stduint flags, void* exinfo, rostr linkdest = 0) override { return false; }
 	virtual bool remove(rostr pathname) override { return false; }
-	virtual void* search(rostr fullpath, void* moreinfo) override { return nullptr; }
+	virtual void* search(rostr fullpath, FilesysSearchArgs* args) override { return nullptr; }
 	virtual bool proper(void* handler, stduint cmd, const void* moreinfo = 0) override { return false; }
 	virtual bool enumer(void* dir_handler, _tocall_ft _fn) override { return false; }
 	virtual stduint readfl(void* fil_handler, Slice file_slice, byte* dst) override { return 0; }
@@ -109,21 +109,60 @@ static vfs_dentry* lookup_dentry(vfs_dentry* dir, const char* name, int len) {
 	return nullptr;
 }
 
+struct vfs_lookup_ctx {
+	vfs_dentry* current;
+	vfs_super_block* sb;
+	bool found_mount_point;
+};
 
+static stduint vfs_on_search_segment(void* handle, const char* name, stduint is_dir, stduint size, void* user_data) {
+	vfs_lookup_ctx* ctx = (vfs_lookup_ctx*)user_data;
+	if (!ctx || !ctx->current || !name) return 0;
+
+	vfs_dentry* next_d = lookup_dentry(ctx->current, name, StrLength(name));
+	if (!next_d) {
+		next_d = alloc_dentry(ctx->current, name);
+		if (!next_d) return 0;
+		vfs_inode* new_inod = alloc_inode(ctx->sb);
+		if (!new_inod) return 0;
+
+		new_inod->i_size = (stduint)size;
+		new_inod->i_mode = (is_dir != 0) ? I_DIRECTORY : I_REGULAR;
+		
+		byte* saved_h = new byte[128];
+		if (saved_h) {
+			MemCopyN(saved_h, handle, 128);
+			new_inod->internal_handler = saved_h;
+		}
+		
+		next_d->d_inode = new_inod;
+	}
+	ctx->current = next_d;
+	// Handle mount point crossing during delegation
+	if (ctx->current->d_mounts) {
+		ctx->current = ctx->current->d_mounts;
+		ctx->sb = ctx->current->d_inode->i_sb;
+		ctx->found_mount_point = true;
+		return 0; // Stop delegating to the old FS, we've crossed a mount point boundary
+	}
+	return 1; // Continue search
+}
+
+// rely FAT
 vfs_dentry* vfs_namei(const char* pathname) {
 	if (!pathname || pathname[0] == '\0') return nullptr;
 	
 	vfs_dentry* current = vfs_root;
+	char inner_path[256] = ""; // Path relative to the current mount point
+	
 	if (pathname[0] == '/') {
 		pathname++;
 	}
 	
 	while(*pathname) {
-		// Skip consecutive '/'
 		while(*pathname == '/') pathname++;
 		if (*pathname == '\0') break;
 		
-		// Find next component
 		const char* next_slash = pathname;
 		while(*next_slash && *next_slash != '/') next_slash++;
 		
@@ -134,21 +173,52 @@ vfs_dentry* vfs_namei(const char* pathname) {
 		part[len] = '\0';
 		
 		vfs_dentry* next_d = lookup_dentry(current, part, len);
+		
 		if (!next_d) {
-			// Not in cache. Delegating to underlying FS would be implemented here in future.
-			return nullptr; // Not found
+			// DELEGATION MODE:
+			// If we hit a cache miss within a physical FS, delegate the ENTIRE remainder
+			vfs_dentry* real_current = current;
+			if (real_current->d_inode && real_current->d_inode->i_sb && real_current->d_inode->i_sb->fs && real_current->d_inode->i_sb->fs != &global_rootfs_driver) {
+				FilesysTrait* fs = real_current->d_inode->i_sb->fs;
+				
+				byte h_buf[128];
+				vfs_lookup_ctx ctx = { current, real_current->d_inode->i_sb, false };
+				FilesysSearchArgs args = { h_buf, nullptr, vfs_on_search_segment, &ctx };
+				
+				char full_remainder[256];
+				if (inner_path[0]) String(full_remainder, 256).Format("%s/%s", inner_path, pathname);
+				else String(full_remainder, 256).Format("/%s", pathname);
+				
+				if (fs->search(full_remainder, &args)) {
+					// fs->search successfully resolved the path (or partial path) through callbacks
+					// ctx.current already points to the leaf or the mount point root
+					vfs_dentry* final_d = ctx.current;
+					return (final_d && final_d->d_mounts) ? final_d->d_mounts : final_d;
+				}
+				return nullptr;
+			}
 		}
 		
-		// MOUNT POINT CROSSING:
+		if (!next_d) return nullptr;
+		
+		// Crossing mount point for the NEXT iteration
 		if (next_d->d_mounts) {
-			next_d = next_d->d_mounts; // Traverse down the mount point
+			current = next_d->d_mounts;
+			inner_path[0] = '\0'; // New FS root
+		} else {
+			current = next_d;
+			stduint cur_ilen = StrLength(inner_path);
+			if (cur_ilen + len + 2 < 256) {
+				if (cur_ilen > 0) inner_path[cur_ilen++] = '/';
+				MemCopyN(inner_path + cur_ilen, part, len);
+				inner_path[cur_ilen + len] = '\0';
+			}
 		}
 		
-		current = next_d;
 		pathname = next_slash;
 	}
 	
-	return current;
+	return (current && current->d_mounts) ? current->d_mounts : current;
 }
 
 
@@ -199,10 +269,72 @@ bool vfs_mount(StorageTrait& storage, stduint dev, const char* target_path) {
 	return false;
 }
 
+struct PathHarvest {
+	char name[256];
+	bool is_dir;
+	PathHarvest* next;
+};
+
+static PathHarvest** g_harvest_tail = nullptr;
+
+static void tree_callback(void* is_dir, void* name) {
+	if (!g_harvest_tail) return;
+	PathHarvest* n = new PathHarvest;
+	if (!n) return;
+	StrCopy(n->name, (const char*)name);
+	n->is_dir = (bool)(stduint)is_dir;
+	n->next = nullptr;
+	*g_harvest_tail = n;
+	g_harvest_tail = &n->next;
+}
+
+void vfs_tree_physical(FilesysTrait* fs, const char* path, int depth) {
+	if (depth > 6) return; // Hard depth limit for kernel stack safety
+
+	PathHarvest* head = nullptr;
+	PathHarvest** old_tail = g_harvest_tail;
+	g_harvest_tail = &head;
+
+	// Use temporary stack buffer for search handle to avoid persistent memory leak
+	byte h_buf[128];
+	FilesysSearchArgs args = { h_buf, nullptr, nullptr, nullptr };
+	void* handler = fs->search(path, &args);
+	if (handler) {
+		fs->enumer(handler, (_tocall_ft)tree_callback);
+	}
+
+	g_harvest_tail = old_tail; // Restore global state for recursion safety
+
+	PathHarvest* curr = head;
+	int count = 0;
+	while (curr) {
+		if (++count > 100) break; // Avoid infinite traversal on garbage partitions
+		if (StrCompare(curr->name, ".") && StrCompare(curr->name, "..")) {
+			for (int i = 0; i < depth; i++) Console.OutFormat("  ");
+			Console.OutFormat("|- %s\n\r", curr->name);
+
+			if (curr->is_dir) {
+				char* subpath = new char[512];
+				if (subpath) {
+					if (!StrCompare(path, "/")) {
+						String(subpath, 512).Format("/%s", curr->name);
+					} else {
+						String(subpath, 512).Format("%s/%s", path, curr->name);
+					}
+					vfs_tree_physical(fs, subpath, depth + 1);
+					delete[] subpath;
+				}
+			}
+		}
+		PathHarvest* next = curr->next;
+		delete curr;
+		curr = next;
+	}
+}
+
 void vfs_tree_node(vfs_dentry* node, int depth) {
 	if (!node) return;
 	
-	// Print indentation
 	for (int i = 0; i < depth; i++) {
 		Console.OutFormat("  ");
 	}
@@ -215,7 +347,11 @@ void vfs_tree_node(vfs_dentry* node, int depth) {
 		}
 		Console.OutFormat(" (Mount: %s)\n\r", type_name);
 		
-		// Hide the structural duplicate mount root node, recurse directly to its contents! (Linux behavior)
+		// Recurse into physical filesystem if mounted
+		if (node->d_mounts->d_inode && node->d_mounts->d_inode->i_sb && node->d_mounts->d_inode->i_sb->fs) {
+			vfs_tree_physical(node->d_mounts->d_inode->i_sb->fs, "/", depth + 1);
+		}
+
 		vfs_tree_node(node->d_mounts->d_first_child, depth + 1);
 	} else {
 		Console.OutFormat("\n\r");
@@ -267,7 +403,10 @@ int vfs_write(vfs_file* file, const void* buf, stduint count) {
 }
 
 int vfs_close(vfs_file* file) {
-	file->f_inode = nullptr;
+	if (file) {
+		file->f_inode = nullptr;
+		delete file;
+	}
 	return 0;
 }
 
@@ -310,7 +449,7 @@ bool DevFs::makefs(rostr vol_label, void* moreinfo) { return true; }
 bool DevFs::loadfs(void* moreinfo) { return true; }
 bool DevFs::create(rostr fullpath, stduint flags, void* exinfo, rostr linkdest) { return false; }
 bool DevFs::remove(rostr pathname) { return false; }
-void* DevFs::search(rostr fullpath, void* moreinfo) { return nullptr; }
+void* DevFs::search(rostr fullpath, FilesysSearchArgs* args) { return nullptr; }
 bool DevFs::proper(void* handler, stduint cmd, const void* moreinfo) { return false; }
 bool DevFs::enumer(void* dir_handler, _tocall_ft _fn) { return false; }
 

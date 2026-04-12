@@ -105,13 +105,19 @@ static stdsint do_open(ProcessBlock& process, rostr pathname, int flags) {
 		plogwarn("no file slot available");
 		return -1;
 	}
-	// find a free slot in f_desc_table
+	// find a free slot in f_desc_table (reuse empty slots)
 	FileDescriptor* pfd = NULL;
-	if (f_desc_table_count >= 0x1000 / sizeof(FileDescriptor)) {
+	for (int i = 0; i < 0x1000 / sizeof(FileDescriptor); i++) {
+		if (f_desc_table[i].vfile == nullptr) {
+			pfd = &f_desc_table[i];
+			if (i >= f_desc_table_count) f_desc_table_count = i + 1;
+			break;
+		}
+	}
+	if (!pfd) {
 		plogwarn("no file desc slot available");
 		return -1;
 	}
-	pfd = &f_desc_table[f_desc_table_count++];
 	
 	vfs_file* file = nullptr;
 	int ret = vfs_open(pathname, flags, &file);
@@ -132,8 +138,8 @@ int do_close(ProcessBlock& process, int fid)
 		return 1;
 	}
 	vfs_close(process.pfiles[fd]->vfile);
-	process.pfiles[fd]->vfile = 0;
-	process.pfiles[fd] = 0;
+	process.pfiles[fd]->vfile = nullptr; // Mark as free for reuse!
+	process.pfiles[fd] = nullptr;
 	return 0;
 }
 stdsint do_lseek()
@@ -226,6 +232,7 @@ void serv_file_loop()// for IDE 0:0, 0:1
 		switch ((FilemanMsg)sig_type)
 		{
 		case FilemanMsg::TEST:// (no-feedback)
+		{
 			while (!fileman_hd_ready);
 			
 			Console.OutFormat("%s", "[Fileman] Subsystem initializing...\n\r");
@@ -250,36 +257,47 @@ void serv_file_loop()// for IDE 0:0, 0:1
 
 			vfs_tree();
 
+			// Function to load and execute an ELF task from a VFS path
+			auto load_vfs_app = [&](const char* path, const char* label) {
+				vfs_dentry* d = vfs_namei(path);
+				if (d && d->d_inode && d->d_inode->i_sb && d->d_inode->i_sb->fs) {
+					FileBlockBridge loop_device(d->d_inode->i_sb->fs, d->d_inode->internal_handler, d->d_inode->i_size, 512);
+					if (auto task = Taskman::CreateELF(&loop_device, 3)) {
+						task->focus_tty = vttys[ento_gui ? 1 : 0];
+						printlog(_LOG_INFO, "Loaded %s from %s", label, path);
+					}
+					else plogerro("%s: ELF Load Fail", label);
+				}
+				else plogwarn("%s: Not found at %s", label, path);
+				};
+
 			if (pfs_fat0) {
 				FAT_FileHandle han_buf;
-				stduint a[] = { (stduint)&han_buf , 0 };
-				FAT_FileHandle* han = (FAT_FileHandle*)pfs_fat0->search("/", &a);
-				if (han) pfs_fat0->enumer(han, NULL);
-				// appinit
-				if (han = (FAT_FileHandle*)pfs_fat0->search("init", &a)) {
-					FileBlockBridge loop_device(pfs_fat0, han, han->size, 512);
+				FilesysSearchArgs args = { &han_buf, nullptr, nullptr, nullptr };
+				void* han = pfs_fat0->search("/", &args);
+
+				// appinit (legacy method)
+				if (han = pfs_fat0->search("init", &args)) {
+					FileBlockBridge loop_device(pfs_fat0, han, ((FAT_FileHandle*)han)->size, 512);
 					if (auto task = Taskman::CreateELF(&loop_device, 3))
 						task->focus_tty = vttys[ento_gui ? 1 : 0];
 					else plogerro("Init: Fail to load");
 				}
 				else plogerro("Init: Not found");
 
-				// subappc
-				printlog(_LOG_INFO, "Loading Subappc");
-				if (han = (FAT_FileHandle*)pfs_fat0->search("/apps/c", &a)) {
-					FileBlockBridge loop_device(pfs_fat0, han, han->size, 512);
-					if (auto task = Taskman::CreateELF(&loop_device, 3))
-						task->focus_tty = vttys[ento_gui ? 1 : 0];
-					else plogerro("C: Fail to load");
-				}
-				else plogerro("C: Not found");
-			} else plogwarn("FAT0 not found, skipping app load at startup");
+			 // subappc (VFS absolute path method)
+				load_vfs_app("/mnt34/apps/c", "Subappc");
+			}
+			else {
+				plogwarn("No FAT filesystem found to load default apps.");
+			}
 
 			// Subapps loading logic handled here if they were registered in VFS
 			// ... 
-			
+
 			flag_ready_fileman = true;
 			break;
+		}
 		case FilemanMsg::RUPT:// (usercall-forbidden&meaningless)
 			break;
 		case FilemanMsg::OPEN://
@@ -320,7 +338,7 @@ void serv_file_loop()// for IDE 0:0, 0:1
 			break;
 		}
 		// ... ...
-		
+
 		case FilemanMsg::TEMP:
 		{
 			ploginfo("- %s", to_args[0]);

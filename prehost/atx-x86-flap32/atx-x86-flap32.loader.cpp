@@ -56,8 +56,7 @@ void body() {
 	// HD_Info& hdi = *(HD_Info*)hdinfo_addr;
 	DiscPartition part_fat0(hdisk, ROOT_DEV_FAT0);
 	FilesysFAT pfs_fat0(32, part_fat0, single_sector, fatable_sector);
-	stduint p_filinf = 0;
-	stduint a[2] = { _IMM(&filhan), p_filinf };
+	FilesysSearchArgs args = { &filhan, nullptr, nullptr, nullptr };
 	if (!pfs_fat0.loadfs()) {
 		plogerro("FAT0 loadfs failed"); _ASM("hlt");
 	}
@@ -66,11 +65,11 @@ void body() {
 	// elif mx86.elf exists, load, transfer to mx86.elf
 	support_ia32e = IfSupport_IA32E();
 	ploginfo("[IA32E] %s", support_ia32e ? "Supported" : "No");
-	if (support_ia32e && pfs_fat0.search("mx64.elf", &a)) {
+	if (support_ia32e && pfs_fat0.search("mx64.elf", &args)) {
 		printlog(_LOG_INFO, "Found: long64");
 		pfs_fat0.readfl(&filhan, Slice{ 0,filhan.size }, kernel_addr);
 	}
-	else if (pfs_fat0.search("mx86.elf", &a)) {
+	else if (pfs_fat0.search("mx86.elf", &args)) {
 		printlog(_LOG_INFO, "Found: flap32");
 		support_ia32e = false;
 		pfs_fat0.readfl(&filhan, Slice{ 0,filhan.size }, kernel_addr);
@@ -81,7 +80,7 @@ void body() {
 	}
 
 	if (support_ia32e) {
-		if (pfs_fat0.search("ladder", &a)) {
+		if (pfs_fat0.search("ladder", &args)) {
 			pfs_fat0.readfl(&filhan, Slice{ 0,filhan.size }, 0x8000_addr);
 		}
 		else plogerro("No ladder for x64l");
