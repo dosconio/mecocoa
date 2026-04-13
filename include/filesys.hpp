@@ -82,41 +82,35 @@ struct vfs_file {
 	stduint f_mode;               // Open mode (R/W/A etc)
 };
 
+// Virtual File System
+class Filesys {
+public:
+	//
+	static void Initialize();
+	// General Path creation (for files)
+	static vfs_dentry* Create(const char* pathname, stduint mode);
+	// Display the hierarchy of the virtual file system (VFS tree)
+	static void Tree();
+	// Register a file system driver
+	static void Register(file_system_type* fs_type);
+	// Probe a partition and if successful, mount it at the target path
+	static bool Mount(StorageTrait& storage, stduint dev, const char* target_path);
+	// General path resolution: find dentry for a given path
+	static vfs_dentry* Index(const char* pathname);
 
-// -------------------------------------------------------------
-// VFS Core API
-// -------------------------------------------------------------
+	friend void devfs_register_and_mount();
+protected:
+	// Explicitly mount an instantiated FS to a path (used by DevFs and RootFs)
+	static bool MountFilesys(FilesysTrait* fs, file_system_type* type, const char* target_path);
 
-// Initialize VFS (called during system boot)
-void vfs_init();
+public:
+	static int Open(const char* pathname, int flags, vfs_file** out_file);
+	static int Read(vfs_file* file, void* buf, stduint count);
+	static int Write(vfs_file* file, const void* buf, stduint count);
+	static int Close(vfs_file* file);
+	static int Remove(const char* pathname);
+};
 
-// Register a file system driver
-void register_filesystem(file_system_type* fs_type);
-
-// Probe a partition and if successful, mount it at the target path
-bool vfs_mount(StorageTrait& storage, stduint dev, const char* target_path);
-
-// Explicitly mount an instantiated FS to a path (used by DevFs and RootFs)
-bool vfs_mount_fs(FilesysTrait* fs, file_system_type* type, const char* target_path);
-
-// Display the hierarchy of the virtual file system (VFS tree)
-void vfs_tree();
-
-// General path resolution: find dentry for a given path
-vfs_dentry* vfs_namei(const char* pathname);
-
-// General Path creation (for files)
-vfs_dentry* vfs_create(const char* pathname, stduint mode);
-
-// -------------------------------------------------------------
-// File Operations API for User Programs / Syscalls
-// -------------------------------------------------------------
-
-int vfs_open(const char* pathname, int flags, vfs_file** out_file);
-int vfs_read(vfs_file* file, void* buf, stduint count);
-int vfs_write(vfs_file* file, const void* buf, stduint count);
-int vfs_close(vfs_file* file);
-int vfs_remove(const char* pathname);
 
 // -------------------------------------------------------------
 // DevFs / Pure Memory Device File System

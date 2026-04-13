@@ -4,12 +4,17 @@
 
 using namespace uni;
 
+// mnt33 fat16
+// mnt34 fat32
+
 int main(int argc, char** argv)
 {
 	unsigned id = systest('T', 'E', 'S');
 	outsfmt("C(%d)\n\r", 1);
-/*
-	rostr filename = "/mnt33/testvfs.txt";
+
+	#if 1
+	sys_removefil("/mnt33/test4.txt");
+	rostr filename = "/mnt33/owo.txt";
 	
 	int fd = sysopen(filename);
 	if (fd < 0) {
@@ -21,8 +26,7 @@ int main(int argc, char** argv)
 		const char* msg = "Hello from Mecocoa VFS!\n";
 		syswrite(fd, (void*)msg, 24);
 		sysclose(fd);
-		
-		outsfmt("Writing success. Reading back...\n\r");
+
 		fd = sysopen(filename);
 		if (fd >= 0) {
 			char buf[32] = {0};
@@ -33,8 +37,8 @@ int main(int argc, char** argv)
 	} else {
 		outsfmt("Open failed with code %d\n\r", fd);
 	}
-	
-*/
+	#endif
+
 	return 0;
 }
 

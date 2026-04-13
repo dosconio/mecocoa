@@ -221,6 +221,10 @@ void serv_dev_hd_loop()
 			// ploginfo("[Hrddisk] device %u: write %u", (unsigned)(byte)args[0], slice.address);
 			if (sig_src) sysrecv(sig_src, single_sector, disks[args[0]]->Block_Size);
 			disks[args[0]]->Write(args[1], single_sector);
+			if (sig_src) {
+				stduint ack = 1;
+				syssend(sig_src, &ack, sizeof(ack));
+			}
 			break;
 		case FiledevMsg::GETPS:// (device 0 for all, 1~4 for primary, 5+ for logical)
 			GetPartitionSlice(args[0], sig_src);

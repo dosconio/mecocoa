@@ -63,7 +63,7 @@ static RootFs global_rootfs_driver;
 alignas(16) byte buf_root_sb[sizeof(vfs_super_block)];
 
 
-void vfs_init() {
+void Filesys::Initialize() {
 	vfs_root = alloc_dentry(nullptr, "/");
 	vfs_super_block* root_sb = new (buf_root_sb) vfs_super_block();
 	root_sb->fs = &global_rootfs_driver;
@@ -91,7 +91,7 @@ void vfs_init() {
 	}
 }
 
-void register_filesystem(file_system_type* fs_type) {
+void Filesys::Register(file_system_type* fs_type) {
 	fs_type->next = registered_filesystems;
 	registered_filesystems = fs_type;
 }
@@ -148,8 +148,8 @@ static stduint vfs_on_search_segment(void* handle, const char* name, stduint is_
 	return 1; // Continue search
 }
 
-// rely FAT
-vfs_dentry* vfs_namei(const char* pathname) {
+
+vfs_dentry* Filesys::Index(const char* pathname) {
 	if (!pathname || pathname[0] == '\0') return nullptr;
 	
 	vfs_dentry* current = vfs_root;
@@ -222,8 +222,8 @@ vfs_dentry* vfs_namei(const char* pathname) {
 }
 
 
-bool vfs_mount_fs(FilesysTrait* fs, file_system_type* type, const char* target_path) {
-	vfs_dentry* target = vfs_namei(target_path);
+bool Filesys::MountFilesys(FilesysTrait* fs, file_system_type* type, const char* target_path) {
+	vfs_dentry* target = Filesys::Index(target_path);
 	if (!target) {
 		// We can create the mount point in rootfs if it doesn't exist
 		if (target_path[0] == '/') {
@@ -258,12 +258,12 @@ bool vfs_mount_fs(FilesysTrait* fs, file_system_type* type, const char* target_p
 }
 
 
-bool vfs_mount(StorageTrait& storage, stduint dev, const char* target_path) {
+bool Filesys::Mount(StorageTrait& storage, stduint dev, const char* target_path) {
 	for (file_system_type* fs_type = registered_filesystems; fs_type; fs_type = fs_type->next) {
 		// probe() checks sys_id and calls loadfs() internally; non-null means ready to mount
 		FilesysTrait* fs = fs_type->probe(storage, dev);
 		if (fs) {
-			return vfs_mount_fs(fs, fs_type, target_path);
+			return Filesys::MountFilesys(fs, fs_type, target_path);
 		}
 	}
 	return false;
@@ -361,30 +361,103 @@ void vfs_tree_node(vfs_dentry* node, int depth) {
 	vfs_tree_node(node->d_next_sibling, depth);
 }
 
-void vfs_tree() {
+void Filesys::Tree() {
 	Console.OutFormat("VFS Virtual Tree Structure:\n\r");
 	vfs_tree_node(vfs_root, 0);
 }
 
-int vfs_open(const char* pathname, int flags, vfs_file** out_file) {
-	vfs_dentry* dentry = vfs_namei(pathname);
-	if (!dentry) {
-		return -1;
+int Filesys::Open(const char* pathname, int flags, vfs_file** out_file) {
+	vfs_dentry* dentry = Filesys::Index(pathname);
+
+	if (!dentry || !dentry->d_inode) {
+		// File does not exist. Check if we need to create it.
+		if (flags & O_CREAT) {
+			// Extract parent directory path
+			char dir_path[256] = { 0 };
+			const char* last_slash = pathname;
+
+			for (const char* p = pathname; *p; p++) {
+				if (*p == '/') last_slash = p;
+			}
+
+			if (last_slash == pathname) {
+				if (pathname[0] == '/') StrCopy(dir_path, "/");
+				else StrCopy(dir_path, "/"); // Fallback to root
+			}
+			else {
+				stduint len = last_slash - pathname;
+				if (len == 0) len = 1; // Preserve root '/'
+				MemCopyN(dir_path, pathname, len);
+				dir_path[len] = '\0';
+			}
+
+			// Locate parent directory to find the target physical filesystem
+			vfs_dentry* parent_dentry = Filesys::Index(dir_path);
+			if (!parent_dentry || !parent_dentry->d_inode || !parent_dentry->d_inode->i_sb) {
+				plogwarn("Parent directory not found for creation: %s", dir_path);
+				return -1;
+			}
+
+			FilesysTrait* fs = parent_dentry->d_inode->i_sb->fs;
+			if (!fs) return -1;
+
+			// Construct the new dentry for the Virtual File System properly
+			const char* fname = last_slash;
+			if (*fname == '/') fname++;
+
+			// Delegate the creation to the physical filesystem
+			// Pass the physical handler of the parent directory
+			void* new_inode_ptr = parent_dentry->d_inode->internal_handler;
+
+			// Strip VFS absolute path: Pass ONLY the pure filename to the physical FS
+			if (!fs->create(fname, flags, &new_inode_ptr, nullptr)) {
+				plogwarn("Physical filesystem failed to create file: %s", pathname);
+				return -1;
+			}
+
+			// Use alloc_dentry to link the new file into the VFS directory tree
+			dentry = alloc_dentry(parent_dentry, fname);
+
+			// Use alloc_inode to create a proper Virtual Inode with a valid Superblock (i_sb)
+			vfs_inode* new_vfs_inode = alloc_inode(parent_dentry->d_inode->i_sb);
+			new_vfs_inode->i_mode = I_REGULAR;
+			new_vfs_inode->i_size = 0;
+
+			// SECURE BRIDGE: Save the physical handler into internal_handler
+			new_vfs_inode->internal_handler = new_inode_ptr;
+
+			dentry->d_inode = new_vfs_inode;
+
+		}
+		else {
+			// File not found and O_CREAT is not specified
+			return -1;
+		}
 	}
-	
-	if (!dentry->d_inode) return -1;
-	
+	else {
+		// File already exists
+		if (flags & O_CREAT) {
+			ploginfo("file `%s' exists", pathname);
+			return -1;
+		}
+
+		if (flags & O_TRUNC) {
+			// Handle truncation logic
+			dentry->d_inode->i_size = 0;
+		}
+	}
+
 	vfs_file* file = new vfs_file();
 	file->f_dentry = dentry;
 	file->f_inode = dentry->d_inode;
 	file->f_pos = 0;
 	file->f_mode = flags;
-	
+
 	if (out_file) *out_file = file;
-	return 0; // standard descriptor num would be assigned by the process context
+	return 0;
 }
 
-int vfs_read(vfs_file* file, void* buf, stduint count) {
+int Filesys::Read(vfs_file* file, void* buf, stduint count) {
 	if (!file || !file->f_inode || !file->f_inode->i_sb) return -1;
 	FilesysTrait* fs = file->f_inode->i_sb->fs;
 	
@@ -393,29 +466,57 @@ int vfs_read(vfs_file* file, void* buf, stduint count) {
 	return bytes;
 }
 
-int vfs_write(vfs_file* file, const void* buf, stduint count) {
+int Filesys::Write(vfs_file* file, const void* buf, stduint count) {
 	if (!file || !file->f_inode || !file->f_inode->i_sb) return -1;
 	FilesysTrait* fs = file->f_inode->i_sb->fs;
-	
+
 	stduint bytes = fs->writfl(file->f_inode->internal_handler, Slice{ file->f_pos, count }, (const byte*)buf);
 	file->f_pos += bytes;
+	if (file->f_pos > file->f_inode->i_size) {
+		file->f_inode->i_size = file->f_pos;
+	}
 	return bytes;
 }
 
-int vfs_close(vfs_file* file) {
+int Filesys::Close(vfs_file* file) {
 	if (file) {
+		if (file->f_inode && file->f_pos > file->f_inode->i_size) {
+			file->f_inode->i_size = file->f_pos;
+		}
 		file->f_inode = nullptr;
 		delete file;
 	}
 	return 0;
 }
 
-int vfs_remove(const char* pathname) {
-	vfs_dentry* dentry = vfs_namei(pathname);
+int Filesys::Remove(const char* pathname) {
+	vfs_dentry* dentry = Filesys::Index(pathname);
 	if (!dentry || !dentry->d_inode || !dentry->d_inode->i_sb) return -1;
+
 	FilesysTrait* fs = dentry->d_inode->i_sb->fs;
 	if (fs) {
-		return fs->remove(pathname) ? 0 : -1;
+		// Reconstruct relative path for the physical filesystem
+		char rel_path[256];
+		rel_path[0] = '\0';
+		vfs_dentry* curr = dentry;
+
+		// Traverse upward until the mount point root (where d_parent is nullptr)
+		while (curr && curr->d_parent) {
+			char temp[256];
+			StrCopy(temp, rel_path);
+
+			// Prepend current directory/file name
+			String(rel_path, 256).Format("/%s%s", curr->d_name, temp);
+			curr = curr->d_parent;
+		}
+
+		// Handle root edge-case
+		if (rel_path[0] == '\0') {
+			StrCopy(rel_path, "/");
+		}
+
+		// Pass the pure relative path to the underlying physical FS
+		return fs->remove(rel_path) ? 0 : -1;
 	}
 	return -1;
 }
@@ -428,9 +529,9 @@ int vfs_remove(const char* pathname) {
 DevFs global_devfs;
 
 void devfs_register_and_mount() {
-	vfs_mount_fs(&global_devfs, nullptr, "/dev");
+	Filesys::MountFilesys(&global_devfs, nullptr, "/dev");
 	
-	vfs_dentry* dev_dir = vfs_namei("/dev");
+	vfs_dentry* dev_dir = Filesys::Index("/dev");
 	if (dev_dir) {
 		// within DevFs, create dentries for /dev/tty0 to /dev/tty3
 		for (int i = 0; i < 4; i++) {

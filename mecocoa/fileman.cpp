@@ -38,22 +38,58 @@ static bool hd_info_valid = false;
 stduint do_rdwt(bool wr_type, stduint fid, Slice slice, stduint pid)
 {
 	ProcessBlock* pb = Taskman::Locate(pid);
-	if (!pb->pfiles[fid] || !pb->pfiles[fid]->vfile) return 0;
-	if (!(pb->pfiles[fid]->fd_mode & O_RDWR)) return 0;
+	if (!pb || !pb->pfiles[fid] || !pb->pfiles[fid]->vfile) return 0;
+	if (wr_type) {
+		if (!(pb->pfiles[fid]->fd_mode & O_RDWR)) return 0;
+	}
 	
 	vfs_file* file = pb->pfiles[fid]->vfile;
 	file->f_pos = pb->pfiles[fid]->fd_pos; // sync pos 
 
-	int bytes;
-	if (wr_type) {
-		bytes = vfs_write(file, (const void*)slice.address, slice.length);
-	} else {
-		bytes = vfs_read(file, (void*)slice.address, slice.length);
+	int total_bytes = 0;
+	int bytes_left = slice.length;
+	stduint curr_addr = slice.address;
+
+	// Loop to process data in chunks due to kernel buffer size limits
+	// and to safely transfer data across different address spaces.
+	while (bytes_left > 0) {
+		// Calculate the chunk size for this iteration
+		int chunk = minof(bytes_left, FSBUF_SIZE);
+		int bytes_processed = 0;
+
+		if (wr_type) {
+			MemCopyP(::buffer, kernel_paging, (void*)curr_addr, pb->paging, chunk);
+			bytes_processed = Filesys::Write(file, ::buffer, chunk);
+		}
+		else {
+			bytes_processed = Filesys::Read(file, ::buffer, chunk);
+			if (bytes_processed > 0) {
+				MemCopyP((void*)curr_addr, pb->paging, ::buffer, kernel_paging, bytes_processed);
+			}
+		}
+
+		// Break if error occurred or EOF reached
+		if (bytes_processed <= 0) {
+			break;
+		}
+
+		// Update tracking variables and file descriptors
+		total_bytes += bytes_processed;
+		curr_addr += bytes_processed;
+		bytes_left -= bytes_processed;
+		pb->pfiles[fid]->fd_pos += bytes_processed;
+		
+		// Update the underlying VFS file position 
+		file->f_pos = pb->pfiles[fid]->fd_pos;
+
+		// If the processed bytes are less than the chunk requested, 
+		// we likely hit the end of the file.
+		if (bytes_processed < chunk) {
+			break;
+		}
 	}
-	if (bytes > 0) {
-		pb->pfiles[fid]->fd_pos += bytes;
-	}
-	return bytes > 0 ? bytes : 0;
+
+	return total_bytes > 0 ? total_bytes : 0;
 }
 
 
@@ -80,11 +116,12 @@ bool Harddisk_PATA_Paged::Write(stduint BlockIden, const void* Sors) {
 	to_args[1] = BlockIden;
 	syssend(Task_Hdd_Serv, sliceof(to_args), _IMM(FiledevMsg::WRITE));
 	syssend(Task_Hdd_Serv, Sors, Block_Size);
+	sysrecv(Task_Hdd_Serv, &to_args, sizeof(to_args));
 	return true;
 }
 static stduint search_file(rostr path)
 {
-	vfs_dentry* entry = vfs_namei(path);
+	vfs_dentry* entry = Filesys::Index(path);
 	return entry ? (stduint)entry->d_inode->internal_handler : nil;
 }
 
@@ -120,8 +157,12 @@ static stdsint do_open(ProcessBlock& process, rostr pathname, int flags) {
 	}
 	
 	vfs_file* file = nullptr;
-	int ret = vfs_open(pathname, flags, &file);
-	if (ret < 0 || !file) return -1;
+	int ret = Filesys::Open(pathname, flags, &file);
+	
+	if (ret < 0 || !file) {
+		// plogwarn("pathname %s failed to %s", pathname, (flags & O_RDWR) ? "open" : "create");
+		return -1;
+	}
 	
 	process.pfiles[fd] = pfd;
 	pfd->vfile = file;
@@ -137,7 +178,7 @@ int do_close(ProcessBlock& process, int fid)
 		ploginfo("do_close %d skip", fd);
 		return 1;
 	}
-	vfs_close(process.pfiles[fd]->vfile);
+	Filesys::Close(process.pfiles[fd]->vfile);
 	process.pfiles[fd]->vfile = nullptr; // Mark as free for reuse!
 	process.pfiles[fd] = nullptr;
 	return 0;
@@ -176,7 +217,7 @@ stdsint do_lseek()
 //// ---- ---- SERVICE ---- ---- ////
 
 stduint serv_file_loop_remove(stduint pid, rostr filename) {
-	return vfs_remove(filename) ? 0 : -1;
+	return Filesys::Remove(filename) ? 0 : -1;
 }
 extern bool fileman_hd_ready;
 bool flag_ready_fileman = false;
@@ -197,7 +238,7 @@ void serv_file_loop()// for IDE 0:0, 0:1
 	// VFS Registrations: FAT12/16/32 only
 	static FilesysFAT* pfs_fat0 = nullptr;
 
-	file_system_type fs_fat = { "fat", [](StorageTrait& storage, stduint dev) -> FilesysTrait* {
+file_system_type fs_fat = { "fat", [](StorageTrait& storage, stduint dev) -> FilesysTrait* {
 		DiscPartition part(storage, dev);
 		if (part.getSlice().length == 0) return nullptr;
 		byte sys_id = part.getSlice().sys_id;
@@ -211,19 +252,26 @@ void serv_file_loop()// for IDE 0:0, 0:1
 		
 		DiscPartition* p_part = new DiscPartition(storage, dev);
 		p_part->getSlice(); // initialize internal slice
+		
+		stduint sec_size = p_part->Block_Size > 0 ? p_part->Block_Size : 512;
+		byte* fat_sec_buf = new byte[sec_size];
 		byte* fat_buf = new byte[0x1000];
-		FilesysFAT* fs = new FilesysFAT(fat_ver, *p_part, ::buffer, fat_buf);
+		
+		FilesysFAT* fs = new FilesysFAT(fat_ver, *p_part, fat_sec_buf, fat_buf);
+		
 		if (fs->loadfs()) {
-			if (fat_ver == 32 && !pfs_fat0) pfs_fat0 = fs;
+			if (fs->fat_type == 32 && !pfs_fat0) pfs_fat0 = fs;
 			return fs;
 		}
 		
+		// Clean up dynamically allocated buffers on failure to prevent memory leaks
 		delete fs;
 		delete p_part;
 		delete[] fat_buf;
+		delete[] fat_sec_buf; 
 		return nullptr;
 	}, nullptr };
-	register_filesystem(&fs_fat);
+	Filesys::Register(&fs_fat);
 
 	stduint retval[1];
 
@@ -236,7 +284,7 @@ void serv_file_loop()// for IDE 0:0, 0:1
 			while (!fileman_hd_ready);
 			
 			Console.OutFormat("%s", "[Fileman] Subsystem initializing...\n\r");
-			vfs_init();
+			Filesys::Initialize();
 			devfs_register_and_mount();
 			
 			// Auto Mount Probe
@@ -247,19 +295,16 @@ void serv_file_loop()// for IDE 0:0, 0:1
 				byte sys_id = part.getSlice().sys_id;
 				if (sys_id == 0x00) continue; // empty/unpartitioned, skip
 
-				char mnt_path[16];
-				String(mnt_path, sizeof(mnt_path)).Format("/mnt%d", dev);
-
-				if (vfs_mount(hdds[DRV_OF_DEV(dev)], dev, mnt_path)) {
+				if (Filesys::Mount(hdds[DRV_OF_DEV(dev)], dev, String::newFormat("/mnt%d", dev).reference())) {
 					Console.OutFormat("[Fileman] Mounted dev %d (sys_id=0x%x)\n\r", dev, sys_id);
 				}
 			}
 
-			vfs_tree();
+			Filesys::Tree();
 
 			// Function to load and execute an ELF task from a VFS path
 			auto load_vfs_app = [&](const char* path, const char* label) {
-				vfs_dentry* d = vfs_namei(path);
+				vfs_dentry* d = Filesys::Index(path);
 				if (d && d->d_inode && d->d_inode->i_sb && d->d_inode->i_sb->fs) {
 					FileBlockBridge loop_device(d->d_inode->i_sb->fs, d->d_inode->internal_handler, d->d_inode->i_size, 512);
 					if (auto task = Taskman::CreateELF(&loop_device, 3)) {
@@ -326,6 +371,7 @@ void serv_file_loop()// for IDE 0:0, 0:1
 		case FilemanMsg::READ://
 		case FilemanMsg::WRITE://
 		{
+			// ploginfo("[fileman] rdwt %d %d %d", to_args[0], to_args[1], to_args[2]);
 			stduint ret = do_rdwt((FilemanMsg)sig_type == FilemanMsg::WRITE,
 				to_args[0], Slice{ to_args[1], to_args[2] }, to_args[3]);
 			syssend(sig_src, &ret, sizeof(ret));

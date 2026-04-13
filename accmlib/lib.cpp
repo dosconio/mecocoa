@@ -94,9 +94,14 @@ stduint systest(unsigned t, unsigned e, unsigned s)// FF
 
 int sys_createfil(rostr fullpath)
 {
-	stduint r = syscall(syscall_t::OPEN, _IMM(fullpath), 0b01, nil);// open -> desc
+	stduint r = syscall(syscall_t::OPEN, _IMM(fullpath), O_CREAT | O_RDWR, nil);// open -> desc
 	return *(int*)&r;
 }
+/*
+int sys_mkdir(rostr path) {
+    return syscall(syscall_t::OPEN, _IMM(path), 0b1001, nil);
+}
+*/
 
 int sysopen(rostr fullpath) {
 	stduint r = syscall(syscall_t::OPEN, _IMM(fullpath), 0b10, nil);// open -> desc
