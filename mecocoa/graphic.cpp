@@ -9,8 +9,7 @@
 #include "../include/console.hpp"
 
 
-
-#if (_MCCA & 0xFF00) == 0x8600
+#if _GUI_ENABLE
 
 const int kMouseCursorWidth = 15;
 const int kMouseCursorHeight = 24;
@@ -126,6 +125,17 @@ void hand_mouse(MouseMessage mmsg) {
 	}
 }
 
+void LayerManager::Dorupt(SheetTrait* who, SheetEvent event, Point rel_p, para_list args) {
+	if (event == SheetEvent::onClick) {
+		byte state = para_next(args, stduint);
+		if ((state & 0b10001) == 0b10001) {
+			Cursor::moving_sheet = who;
+		}
+	}
+}
+
+#endif
+
 // ---- ---- ---- ---- . ---- ---- ---- ----
 
 static SysMessage _BUF_Message_Conv[64];
@@ -133,7 +143,7 @@ uni::Queue<SysMessage> message_queue_conv(_BUF_Message_Conv, numsof(_BUF_Message
 void serv_graf_loop() {
 	SysMessage msg;// Inner Module Message System
 	#if _GUI_ENABLE == 0
-	loop HALT();
+	loop Taskman::Schedule(true);// yield
 	#endif
 	#if (_MCCA == 0x8632)
 	while (true) {
@@ -159,17 +169,6 @@ void serv_graf_loop() {
 	#else
 	loop;
 	#endif
-}
-
-// ---- ---- ---- ---- . ---- ---- ---- ----
-
-void LayerManager::Dorupt(SheetTrait* who, SheetEvent event, Point rel_p, para_list args) {
-	if (event == SheetEvent::onClick) {
-		byte state = para_next(args, stduint);
-		if ((state & 0b10001) == 0b10001) {
-			Cursor::moving_sheet = who;
-		}
-	}
 }
 
 // ---- ---- ---- ---- . ---- ---- ---- ----
@@ -318,7 +317,6 @@ void GloScreenABGR8888::DrawPoints(const Rectangle& rect, const Color* base) con
 
 #endif
 
-#endif
 
 // Double Buffer
 #if (_MCCA & 0xFF00) == 0x8600

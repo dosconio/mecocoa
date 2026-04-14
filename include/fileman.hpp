@@ -52,12 +52,6 @@ enum MajorDevice {
 };
 
 
-
-struct Harddisk_PATA_Paged : public uni::Harddisk_PATA {
-	Harddisk_PATA_Paged(byte _id = 0, HarddiskType type = HarddiskType::ATA) : Harddisk_PATA(_id, type) {}
-	virtual bool Read(stduint BlockIden, void* Dest);
-	virtual bool Write(stduint BlockIden, const void* Sors);
-};
 extern uni::Harddisk_PATA* disks[MAX_DRIVES];
 
 // for IDE0:0 and IDE0:1

@@ -64,4 +64,9 @@ void mecfetch();
 // print logo 🏳️‍⚧️
 #define _GUI_LOGO 0
 
+#if (_MCCA & 0xFF00) == 0x1000
+#undef _GUI_ENABLE
+#define _GUI_ENABLE 0
+#endif
+
 #endif // MECOCOA_HPP_

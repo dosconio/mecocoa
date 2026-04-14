@@ -40,7 +40,5 @@ _ESYM_C void mecocoa() {
 	loop HALT();
 }
 
-void DiscPartition::renew_slice() {}
-
 void Handint_XHCI() {}
 void Handint_LAPICT() {}

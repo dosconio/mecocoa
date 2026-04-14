@@ -135,5 +135,3 @@ void mecocoa(const UefiData& uefi_data_ref)
 
 	serv_sysmsg();
 }
-
-void DiscPartition::renew_slice() {}

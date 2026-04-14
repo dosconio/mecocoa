@@ -5,6 +5,7 @@
 
 #include "../../include/mecocoa.hpp"
 #include <c/storage/harddisk.h>
+#include <c/format/filesys.h>
 
 _ESYM_C void R_HDD_INIT();
 
@@ -146,7 +147,7 @@ static void hd_open(Harddisk_PATA& hd) { // 0x00
 	print_identify_info((uint16*)single_sector, hd);
 	if (!hd_info_valid[hd.getHigID() * 2 + low_id]) {
 		// if (_TEMP hd.getID() == 0x01) {
-		DiscPartition dpart(hd, NR_PRIM_PER_DRIVE * low_id);
+		// DiscPartition dpart(hd, NR_PRIM_PER_DRIVE * low_id);
 		HD_Info& hdi = hd_info[hd.getHigID() * 2 + low_id];
 		DiscPartition::Partition(hd, hdi, (byte*)single_sector, NR_PRIM_PER_DRIVE * low_id);
 		// if (1) print_hdinfo(hd);
@@ -158,6 +159,13 @@ static void hd_close(Harddisk_PATA& hd) { // 0x02
 	hd_info_valid[hd.getHigID() * 2 + hd.getLowID()] = false;
 }
 
+static uni::PartitionSlice _LOCAL_GetPartitionSlice(unsigned device) {
+	Harddisk_PATA& hd = *disks[DRV_OF_DEV(device)];
+	HD_Info& hdinfo = hd_info[hd.getHigID() * 2 + hd.getLowID()];
+	return device < MINOR_hd1a ?
+		hdinfo.primary[device % NR_PRIM_PER_DRIVE] :
+		hdinfo.logical[(device - MINOR_hd1a) % NR_SUB_PER_DRIVE];//{} 2 disks
+}
 static void GetPartitionSlice(unsigned device, stduint pg_task)
 {
 	//{} hd_info_valid
@@ -174,9 +182,48 @@ static void GetPartitionSlice(unsigned device, stduint pg_task)
 	//	retp->address, retp->address + retp->length);
 }
 
+PartitionSlice Harddisk_PATA::getSlice(stduint dev) {
+	return _LOCAL_GetPartitionSlice(dev);
+}
+
+struct Harddisk_PATA_Paged : public uni::Harddisk_PATA {
+	Harddisk_PATA_Paged(byte _id = 0, HarddiskType type = HarddiskType::ATA) : Harddisk_PATA(_id, type) {}
+	virtual bool Read(stduint BlockIden, void* Dest);
+	virtual bool Write(stduint BlockIden, const void* Sors);
+};
+bool Harddisk_PATA_Paged::Read(stduint BlockIden, void* Dest) {
+	if (Taskman::CurrentPID() == Task_Hdd_Serv) {
+		return Harddisk_PATA::Read(BlockIden, Dest);
+	}
+	stduint to_args[2];
+	to_args[0] = getLowID();
+	to_args[1] = BlockIden;
+	syssend(Task_Hdd_Serv, sliceof(to_args), _IMM(FiledevMsg::READ));
+	sysrecv(Task_Hdd_Serv, Dest, Block_Size);
+	return true;
+}
+
+bool Harddisk_PATA_Paged::Write(stduint BlockIden, const void* Sors) {
+	if (Taskman::CurrentPID() == Task_Hdd_Serv) {
+		return Harddisk_PATA::Write(BlockIden, Sors);
+	}
+	stduint to_args[2];
+	to_args[0] = getLowID();
+	to_args[1] = BlockIden;
+	syssend(Task_Hdd_Serv, sliceof(to_args), _IMM(FiledevMsg::WRITE));
+	syssend(Task_Hdd_Serv, Sors, Block_Size);
+	sysrecv(Task_Hdd_Serv, &to_args, sizeof(to_args)); 
+	
+	return true;
+}
+
 //// ---- ---- SERVICE ---- ---- ////
 static stduint args[4];
 bool fileman_hd_ready = false;
+Harddisk_PATA_Paged* paged_disks[2];
+
+String* plab = nullptr;
+int fat_time = 0;
 void serv_dev_hd_loop()
 {
 	
@@ -193,9 +240,15 @@ void serv_dev_hd_loop()
 		disks[i]->fn_feedback = hd_rw_foreback;
 		disks[i]->react_type = Harddisk_PATA::ReactType::Rupt;
 	}
+	// Initialize the paged proxy disks
+	for0a(i, paged_disks) {
+		paged_disks[i] = new Harddisk_PATA_Paged(i);
+	}
 	
 	// Console.OutFormat("[Hrddisk] detect %u disks\n\r", bda->hdisk_number);
 	stduint sig_type = 0, sig_src;
+	String lab_fat;
+	String lab;
 	while (true) {
 		switch ((FiledevMsg)sig_type)
 		{
@@ -203,6 +256,29 @@ void serv_dev_hd_loop()
 			for0(i, bda->hdisk_number) {
 				hd_open(*disks[i]);
 				Console.OutFormat("[Hrddisk] Detect Disk on IDE%u:%u : %u MB\n\r", i / MAX_DRIVES, i % MAX_DRIVES, _IMM(disks[i]->getUnits() * disks[i]->Block_Size) >> 20);
+			}
+
+			for (int dev = 1; dev < NR_SUB_PER_DRIVE * bda->hdisk_number; dev++) { // Scan typical devs up to logical drives
+				// Probe partition type via MBR sys_id to avoid blind loadfs() attempts
+				if (dev < 0x10) {
+					if (Ranglin(dev, 1, 4) || Ranglin(dev, 6, 4)); else continue;
+				}
+				else {
+
+				}
+				byte sys_id = _LOCAL_GetPartitionSlice(dev).sys_id;
+				if (sys_id == 0x00) continue; // empty/unpartitioned, skip
+				else if (sys_id == FILESYS_EXT) continue;
+				lab = String::newFormat("/mnt%d", dev);
+				ploginfo("[Hrddisk] probe dev%u: %x", dev, sys_id);
+				if (auto fs = Filesys::Mount(*paged_disks[DRV_OF_DEV(dev)], dev, lab.reference())) {
+					if (!StrCompare(fs->name, "fat")) {
+						fat_time++;
+						if (fat_time == 2) {
+							lab_fat = lab; plab = &lab_fat;
+						}
+					}
+				}
 			}
 			fileman_hd_ready = true;
 			break;

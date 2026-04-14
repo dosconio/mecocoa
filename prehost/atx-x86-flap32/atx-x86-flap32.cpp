@@ -19,6 +19,8 @@ _sign_entry() {
 	cons_init();// located here, for  INT-10H may influence PIC
 	Cache_t::enAble();
 	Taskman::Initialize();
+	Filesys::Initialize();
+
 	// IVT and Device
 	IC.Reset(SegCo32, 0x80000000);
 	IC.Init();
@@ -35,12 +37,15 @@ _sign_entry() {
 	Taskman::Create((void*)&serv_task_loop, 0);
 	Taskman::Create((void*)&serv_cons_loop, 0);
 	Taskman::Create((void*)&serv_graf_loop, 0);
-	Taskman::Create((void*)&serv_dev_hd_loop, 0);
 	Taskman::Create((void*)&serv_file_loop, 0);
+	//
+	Taskman::Create((void*)&serv_dev_hd_loop, 0);
 
 	IC.enAble();
 	syscall(syscall_t::OUTC, 'O', 0);
 	Console.OutFormat("hayouuu~!\n\r");
+
+	// Filesys::Tree();
 
 	// Done
 	loop HALT();

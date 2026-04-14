@@ -35,6 +35,7 @@ void _entry()
 	}
 	//{} Cache_t::enAble();
 	Taskman::Initialize();
+	Filesys::Initialize();
 
 	IC.Reset();
 	// UART0
@@ -48,6 +49,10 @@ void _entry()
 	}
 	Taskman::Create((void*)&serv_task_loop, RING_M);
 	Taskman::Create((void*)&serv_cons_loop, RING_M);
+	Taskman::Create((void*)&serv_graf_loop, RING_M);
+	Taskman::Create((void*)&serv_file_loop, RING_M);
+
+	Filesys::Tree();
 
 	ploginfo("FATVHD Size: %[x]", sizeof(_FOLLOW_VHD));
 	if (1) {
@@ -95,5 +100,3 @@ void _entry()
 		HALT();
 	}
 }
-
-void DiscPartition::renew_slice() {}

@@ -112,15 +112,15 @@ _sign_entry() {
 	body();
 }
 
-
-void DiscPartition::renew_slice()
-{
-	uni::PartitionSlice* retp;
+static uni::PartitionSlice _LOCAL_GetPartitionSlice(unsigned device) {
+	Harddisk_PATA& hd = *disks[DRV_OF_DEV(device)];
 	HD_Info& hdinfo = *(HD_Info*)hdinfo_addr;
-	retp = device < MINOR_hd1a ?
-		&hdinfo.primary[device % NR_PRIM_PER_DRIVE] :
-		&hdinfo.logical[(device - MINOR_hd1a) % NR_SUB_PER_DRIVE];//{} 2 disks
-	self.slice = *retp;
+	return device < MINOR_hd1a ?
+		hdinfo.primary[device % NR_PRIM_PER_DRIVE] :
+		hdinfo.logical[(device - MINOR_hd1a) % NR_SUB_PER_DRIVE];//{} 2 disks
+}
+PartitionSlice Harddisk_PATA::getSlice(stduint dev) {
+	return _LOCAL_GetPartitionSlice(dev);
 }
 
 // to be thin, redefine to avoid including unisym's version:

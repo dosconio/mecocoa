@@ -123,6 +123,8 @@ void _Comment(R1) serv_cons_loop()
 	Ribbon[79].ch = '^';
 	#endif
 
+	devfs_register_and_mount();
+
 	volatile stduint sig_type = 0, sig_src, ret;
 	volatile stduint to_args[4];
 

@@ -168,7 +168,7 @@ vfs_dentry* Filesys::Index(const char* pathname) {
 	while(*pathname) {
 		while(*pathname == '/') pathname++;
 		if (*pathname == '\0') break;
-		
+
 		const char* next_slash = pathname;
 		while(*next_slash && *next_slash != '/') next_slash++;
 		
@@ -177,7 +177,7 @@ vfs_dentry* Filesys::Index(const char* pathname) {
 		if (len >= VFS_MAX_FILENAME) len = VFS_MAX_FILENAME - 1;
 		MemCopyN(part, pathname, len);
 		part[len] = '\0';
-		
+
 		vfs_dentry* next_d = lookup_dentry(current, part, len);
 		
 		if (!next_d) {
@@ -186,18 +186,18 @@ vfs_dentry* Filesys::Index(const char* pathname) {
 			vfs_dentry* real_current = current;
 			if (real_current->d_inode && real_current->d_inode->i_sb && real_current->d_inode->i_sb->fs && real_current->d_inode->i_sb->fs != &global_rootfs_driver) {
 				FilesysTrait* fs = real_current->d_inode->i_sb->fs;
-				
+
 				byte h_buf[128];
 				vfs_lookup_ctx ctx = { current, real_current->d_inode->i_sb, false };
 				FilesysSearchArgs args = { h_buf, nullptr, vfs_on_search_segment, &ctx };
-				
-				char full_remainder[256];
-				if (inner_path[0]) String(full_remainder, 256).Format("%s/%s", inner_path, pathname);
-				else String(full_remainder, 256).Format("/%s", pathname);
-				
-				if (fs->search(full_remainder, &args)) {
+
+				String full_remainder;
+				if (inner_path[0]) full_remainder.Format("%s/%s", inner_path, pathname);
+				else full_remainder.Format("/%s", pathname);
+
+				if (fs->search(full_remainder.reference(), &args)) {
 					// fs->search successfully resolved the path (or partial path) through callbacks
-					// ctx.current already points to the leaf or the mount point root
+							// ctx.current already points to the leaf or the mount point root
 					vfs_dentry* final_d = ctx.current;
 					return (final_d && final_d->d_mounts) ? final_d->d_mounts : final_d;
 				}
@@ -314,7 +314,27 @@ void vfs_tree_physical(FilesysTrait* fs, const char* path, int depth) {
 	PathHarvest* curr = head;
 	int count = 0;
 	while (curr) {
-		if (++count > 100) break; // Avoid infinite traversal on garbage partitions
+		PathHarvest* next = curr->next;
+
+		// If we exceed display limit, DO NOT break immediately. 
+		// We MUST continue iterating just to delete the remaining nodes to prevent memory leak!
+		if (++count > 100) {
+			plogwarn("vfs_tree_physical: Exceeded display limit\n\r");
+			delete curr;
+			curr = next;
+			continue;
+		}
+
+		// Trim trailing spaces for FAT 8.3 compatibility
+		// FAT returns names like ".       ". We must trim to "." before comparing
+		int nlen = 0;
+		while (curr->name[nlen] != '\0') nlen++;
+		while (nlen > 0 && curr->name[nlen - 1] == ' ') {
+			curr->name[nlen - 1] = '\0';
+			nlen--;
+		}
+
+		// Now it safely filters out "." and ".."
 		if (StrCompare(curr->name, ".") && StrCompare(curr->name, "..")) {
 			for (int i = 0; i < depth; i++) Console.OutFormat("  ");
 			Console.OutFormat("|- %s\n\r", curr->name);
@@ -324,7 +344,8 @@ void vfs_tree_physical(FilesysTrait* fs, const char* path, int depth) {
 				if (subpath) {
 					if (!StrCompare(path, "/")) {
 						String(subpath, 512).Format("/%s", curr->name);
-					} else {
+					}
+					else {
 						String(subpath, 512).Format("%s/%s", path, curr->name);
 					}
 					vfs_tree_physical(fs, subpath, depth + 1);
@@ -332,7 +353,8 @@ void vfs_tree_physical(FilesysTrait* fs, const char* path, int depth) {
 				}
 			}
 		}
-		PathHarvest* next = curr->next;
+
+		// Safely delete processed node
 		delete curr;
 		curr = next;
 	}
@@ -352,7 +374,6 @@ void vfs_tree_node(vfs_dentry* node, int depth) {
 			type_name = node->d_mounts->d_inode->i_sb->type->name;
 		}
 		Console.OutFormat(" (Mount: %s)\n\r", type_name);
-		
 		// Recurse into physical filesystem if mounted
 		if (node->d_mounts->d_inode && node->d_mounts->d_inode->i_sb && node->d_mounts->d_inode->i_sb->fs) {
 			vfs_tree_physical(node->d_mounts->d_inode->i_sb->fs, "/", depth + 1);
@@ -590,10 +611,12 @@ file_system_type fs_fat = { "fat", [](StorageTrait& storage, stduint dev) -> Fil
 		byte sys_id = part.getSlice().sys_id;
 		// Determine FAT sub-type from partition sys_id
 		int fat_ver;
-		if (sys_id == FILESYS_FAT12)          fat_ver = 12;
-		else if (sys_id == FILESYS_FAT16)     fat_ver = 16;
-		else if (sys_id == FILESYS_FAT32_CHS) fat_ver = 32;
-		else if (sys_id == FILESYS_FAT32_LBA) fat_ver = 32;
+		if (sys_id == FILESYS_FAT12)           fat_ver = 12;
+		else if (sys_id == FILESYS_FAT16_CHS)  fat_ver = 16;
+		else if (sys_id == FILESYS_FAT16_CHSX) fat_ver = 16;
+		else if (sys_id == FILESYS_FAT16_LBA)  fat_ver = 16;
+		else if (sys_id == FILESYS_FAT32_CHS)  fat_ver = 32;
+		else if (sys_id == FILESYS_FAT32_LBA)  fat_ver = 32;
 		else return nullptr; // not a FAT partition
 
 		DiscPartition* p_part = new DiscPartition(storage, dev);

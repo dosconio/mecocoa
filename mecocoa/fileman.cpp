@@ -10,48 +10,9 @@ static byte* buffer = nil;
 FileDescriptor* f_desc_table = nil;
 stduint f_desc_table_count = 0;
 
-/* MOUNT
-	Task_Hdd_Serv, // ZERO
-	nil, // {} Floppy
-	nil, // {} CDROM
-	Task_Hdd_Serv, // {} Hard Disk
-	nil, // {} 4 TTY
-	nil, // {} SCSI Disk
-**/
-
+//// ---- ---- SYSCALL ---- ---- ////
 #ifdef _ARC_x86 // x86:
 
-//// ---- ---- Partition & Harddisk_PATA_Paged Agent ---- ---- ////
-
-//{TEMP} only PATA
-
-void DiscPartition::renew_slice() {
-	stduint args[1];
-	args[0] = self.device;
-	syssend(Task_Hdd_Serv, sliceof(args), _IMM(FiledevMsg::GETPS));
-	sysrecv(Task_Hdd_Serv, &self.slice, sizeof(self.slice));
-}
-
-bool Harddisk_PATA_Paged::Read(stduint BlockIden, void* Dest) {
-	stduint to_args[2];
-	to_args[0] = getLowID();//{} ide00 ide01
-	to_args[1] = BlockIden;
-	syssend(Task_Hdd_Serv, sliceof(to_args), _IMM(FiledevMsg::READ));
-	sysrecv(Task_Hdd_Serv, Dest, Block_Size);
-	return true;
-}
-bool Harddisk_PATA_Paged::Write(stduint BlockIden, const void* Sors) {
-	stduint to_args[2];
-	to_args[0] = getLowID();//{} ide00 ide01
-	to_args[1] = BlockIden;
-	syssend(Task_Hdd_Serv, sliceof(to_args), _IMM(FiledevMsg::WRITE));
-	syssend(Task_Hdd_Serv, Sors, Block_Size);
-	sysrecv(Task_Hdd_Serv, &to_args, sizeof(to_args));
-	return true;
-}
-
-
-//// ---- ---- SYSCALL ---- ---- ////
 
 //
 //{TODO} relative path
@@ -199,10 +160,8 @@ stdsint do_lseek(stduint pid, int fd, stdsint off, int whence) {
 		return -1;
 	}
 
-	// strictly prevent seeking past EOF in your OS, 
-	if (pos > f_size) {
-		pos = f_size; 
-	}
+	// strictly prevent seeking past EOF in your OS
+	MIN(pos, f_size);
 
 	// Update position in both the process file descriptor and the VFS file object
 	pb->pfiles[fd]->fd_pos = pos;
@@ -215,53 +174,37 @@ stdsint do_lseek(stduint pid, int fd, stdsint off, int whence) {
 
 
 extern bool fileman_hd_ready;
+extern String* plab;
+#endif
 
-
+#if 1
 void serv_file_loop()// for IDE 0:0, 0:1
 {
-	f_desc_table = (FileDescriptor*)Memory::physical_allocate(0x1000);
+	f_desc_table = (FileDescriptor*)new byte[0x1000];
 	f_desc_table_count = nil;
-	::buffer = (byte*)Memory::physical_allocate(FSBUF_SIZE);
+	::buffer = new byte[FSBUF_SIZE];
 	//
 	stduint to_args[8];// 8*4=32 bytes
 	stduint sig_type = 0, sig_src;
-	Harddisk_PATA_Paged hdds[] { 0x00, 0x01 };
 	stduint retval[1];
 
-	bool ready = false;
 	while (true) {
 		switch ((FilemanMsg)sig_type)
 		{
+		#ifdef _ARC_x86
 		case FilemanMsg::TEST:// (no-feedback)
 		{
-			Filesys::Initialize();
-			devfs_register_and_mount();
 
-			_TEMP while (!fileman_hd_ready);
+			//{} Man by COnsole
+			// devfs_register_and_mount();
 
 			extern bool ento_gui;
-			int fat_time = 0;
-			String lab, lab_fat;
-			for (int dev = 0x10; dev <= MINOR_hd6a + 0x0F; dev++) { // Scan typical devs up to logical drives
-				// Probe partition type via MBR sys_id to avoid blind loadfs() attempts
-				DiscPartition part(hdds[DRV_OF_DEV(dev)], dev);
-				byte sys_id = part.getSlice().sys_id;
-				if (sys_id == 0x00) continue; // empty/unpartitioned, skip
-				lab = String::newFormat("/mnt%d", dev);
-				if (auto fs = Filesys::Mount(hdds[DRV_OF_DEV(dev)], dev, lab.reference())) {
-					if (!StrCompare(fs->name, "fat")) {
-						fat_time++;
-						lab_fat = lab;
-					}
-				}
-			}
-
-			Filesys::Tree();
-
-			if (fat_time >= 2) {
+			_TEMP while (!fileman_hd_ready);
+			// Filesys::Tree();
+			if (plab) {
 				IC.enAble(false);
-				Taskman::CreateFile((lab + "/init").reference(), 3, Task_Kernel)->focus_tty = vttys[ento_gui ? 1 : 0];
-				Taskman::CreateFile((lab + "/apps/c").reference(), 3, Task_Kernel)->focus_tty = vttys[ento_gui ? 1 : 0];
+				Taskman::CreateFile((*plab + "/init").reference(), 3, Task_Kernel)->focus_tty = vttys[ento_gui ? 1 : 0];
+				Taskman::CreateFile((*plab + "/apps/c").reference(), 3, Task_Kernel)->focus_tty = vttys[ento_gui ? 1 : 0];
 				IC.enAble();
 			}
 			else plogerro("No fs for INIT");
@@ -309,7 +252,7 @@ void serv_file_loop()// for IDE 0:0, 0:1
 			syssend(sig_src, &retval, sizeof(retval[0]));
 			break;
 		}
-
+		#endif
 		// ... ...
 		default:
 			plogerro("Bad TYPE in %s %s", __FILE__, __FUNCIDEN__);
