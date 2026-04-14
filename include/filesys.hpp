@@ -94,7 +94,8 @@ public:
 	// Register a file system driver
 	static void Register(file_system_type* fs_type);
 	// Probe a partition and if successful, mount it at the target path
-	static bool Mount(StorageTrait& storage, stduint dev, const char* target_path);
+	static file_system_type*
+		Mount(StorageTrait& storage, stduint dev, const char* target_path);
 	// General path resolution: find dentry for a given path
 	static vfs_dentry* Index(const char* pathname);
 
@@ -108,7 +109,7 @@ public:
 	static int Read(vfs_file* file, void* buf, stduint count);
 	static int Write(vfs_file* file, const void* buf, stduint count);
 	static int Close(vfs_file* file);
-	static int Remove(const char* pathname);
+	static bool Remove(const char* pathname);
 };
 
 

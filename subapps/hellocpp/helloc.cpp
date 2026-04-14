@@ -13,7 +13,7 @@ int main(int argc, char** argv)
 	outsfmt("C(%d)\n\r", 1);
 
 	#if 1
-	sys_removefil("/mnt33/test4.txt");
+	
 	rostr filename = "/mnt33/owo.txt";
 	
 	int fd = sysopen(filename);
@@ -37,6 +37,8 @@ int main(int argc, char** argv)
 	} else {
 		outsfmt("Open failed with code %d\n\r", fd);
 	}
+
+	sys_removefil(filename);
 	#endif
 
 	return 0;

@@ -10,60 +10,66 @@
 
 namespace uni {
 
-static file_system_type* registered_filesystems = nullptr;
-static vfs_super_block* super_blocks = nullptr;
-static vfs_dentry* vfs_root = nullptr; // Global root directory
+	static file_system_type* registered_filesystems = nullptr;
+	static vfs_super_block* super_blocks = nullptr;
+	static vfs_dentry* vfs_root = nullptr; // Global root directory
 
-// Allocators
-static vfs_dentry* alloc_dentry(vfs_dentry* parent, const char* name) {
-	vfs_dentry* dentry = new vfs_dentry();
-	MemSet(dentry, 0, sizeof(vfs_dentry));
-	if (name) {
-		StrCopy(dentry->d_name, name);
-	}
-	dentry->d_parent = parent;
-	
-	// add to parent's child list
-	if (parent) {
-		if (!parent->d_first_child) {
-			parent->d_first_child = dentry;
-		} else {
-			vfs_dentry* p = parent->d_first_child;
-			while(p->d_next_sibling) p = p->d_next_sibling;
-			p->d_next_sibling = dentry;
+	// Allocators
+	static vfs_dentry* alloc_dentry(vfs_dentry* parent, const char* name) {
+		vfs_dentry* dentry = new vfs_dentry();
+		MemSet(dentry, 0, sizeof(vfs_dentry));
+		if (name) {
+			StrCopy(dentry->d_name, name);
 		}
+		dentry->d_parent = parent;
+
+		// add to parent's child list
+		if (parent) {
+			if (!parent->d_first_child) {
+				parent->d_first_child = dentry;
+			}
+			else {
+				vfs_dentry* p = parent->d_first_child;
+				while (p->d_next_sibling) p = p->d_next_sibling;
+				p->d_next_sibling = dentry;
+			}
+		}
+		return dentry;
 	}
-	return dentry;
+
+	static vfs_inode* alloc_inode(vfs_super_block* sb) {
+		vfs_inode* inode = new vfs_inode();
+		MemSet(inode, 0, sizeof(vfs_inode));
+		inode->i_sb = sb;
+		inode->ref_count = 1;
+		return inode;
+	}
+
+
+	// A Pseudo Memory Filesystem to serve as Rootfs
+	class RootFs : public FilesysTrait {
+	public:
+		virtual bool makefs(rostr vol_label, void* moreinfo = 0) override { return true; }
+		virtual bool loadfs(void* moreinfo = 0) override { return true; }
+		virtual bool create(rostr fullpath, stduint flags, void* exinfo, rostr linkdest = 0) override { return false; }
+		virtual bool remove(rostr pathname) override { return false; }
+		virtual void* search(rostr fullpath, FilesysSearchArgs* args) override { return nullptr; }
+		virtual bool proper(void* handler, stduint cmd, const void* moreinfo = 0) override { return false; }
+		virtual bool enumer(void* dir_handler, _tocall_ft _fn) override { return false; }
+		virtual stduint readfl(void* fil_handler, Slice file_slice, byte* dst) override { return 0; }
+		virtual stduint writfl(void* fil_handler, Slice file_slice, const byte* src) override { return 0; }
+	};
+
+	static RootFs global_rootfs_driver;
+	alignas(16) byte buf_root_sb[sizeof(vfs_super_block)];
 }
-
-static vfs_inode* alloc_inode(vfs_super_block* sb) {
-	vfs_inode* inode = new vfs_inode();
-	MemSet(inode, 0, sizeof(vfs_inode));
-	inode->i_sb = sb;
-	inode->ref_count = 1;
-	return inode;
-}
-
-
-// A Pseudo Memory Filesystem to serve as Rootfs
-class RootFs : public FilesysTrait {
-public:
-	virtual bool makefs(rostr vol_label, void* moreinfo = 0) override { return true; }
-	virtual bool loadfs(void* moreinfo = 0) override { return true; }
-	virtual bool create(rostr fullpath, stduint flags, void* exinfo, rostr linkdest = 0) override { return false; }
-	virtual bool remove(rostr pathname) override { return false; }
-	virtual void* search(rostr fullpath, FilesysSearchArgs* args) override { return nullptr; }
-	virtual bool proper(void* handler, stduint cmd, const void* moreinfo = 0) override { return false; }
-	virtual bool enumer(void* dir_handler, _tocall_ft _fn) override { return false; }
-	virtual stduint readfl(void* fil_handler, Slice file_slice, byte* dst) override { return 0; }
-	virtual stduint writfl(void* fil_handler, Slice file_slice, const byte* src) override { return 0; }
-};
-
-static RootFs global_rootfs_driver;
-alignas(16) byte buf_root_sb[sizeof(vfs_super_block)];
+extern file_system_type fs_fat;
 
 
 void Filesys::Initialize() {
+
+	Filesys::Register(&fs_fat);
+
 	vfs_root = alloc_dentry(nullptr, "/");
 	vfs_super_block* root_sb = new (buf_root_sb) vfs_super_block();
 	root_sb->fs = &global_rootfs_driver;
@@ -258,15 +264,15 @@ bool Filesys::MountFilesys(FilesysTrait* fs, file_system_type* type, const char*
 }
 
 
-bool Filesys::Mount(StorageTrait& storage, stduint dev, const char* target_path) {
+file_system_type* Filesys::Mount(StorageTrait& storage, stduint dev, const char* target_path) {
 	for (file_system_type* fs_type = registered_filesystems; fs_type; fs_type = fs_type->next) {
 		// probe() checks sys_id and calls loadfs() internally; non-null means ready to mount
 		FilesysTrait* fs = fs_type->probe(storage, dev);
 		if (fs) {
-			return Filesys::MountFilesys(fs, fs_type, target_path);
+			return Filesys::MountFilesys(fs, fs_type, target_path) ? fs_type : nullptr;
 		}
 	}
-	return false;
+	return nullptr;
 }
 
 struct PathHarvest {
@@ -489,9 +495,9 @@ int Filesys::Close(vfs_file* file) {
 	return 0;
 }
 
-int Filesys::Remove(const char* pathname) {
+bool Filesys::Remove(const char* pathname) {
 	vfs_dentry* dentry = Filesys::Index(pathname);
-	if (!dentry || !dentry->d_inode || !dentry->d_inode->i_sb) return -1;
+	if (!dentry || !dentry->d_inode || !dentry->d_inode->i_sb) return false;
 
 	FilesysTrait* fs = dentry->d_inode->i_sb->fs;
 	if (fs) {
@@ -516,9 +522,9 @@ int Filesys::Remove(const char* pathname) {
 		}
 
 		// Pass the pure relative path to the underlying physical FS
-		return fs->remove(rel_path) ? 0 : -1;
+		return fs->remove(rel_path);
 	}
-	return -1;
+	return false;
 }
 
 
@@ -526,9 +532,9 @@ int Filesys::Remove(const char* pathname) {
 // DevFs Implementation
 // -------------------------------------------------------------
 
-DevFs global_devfs;
+uni::DevFs uni::global_devfs;
 
-void devfs_register_and_mount() {
+void uni::devfs_register_and_mount() {
 	Filesys::MountFilesys(&global_devfs, nullptr, "/dev");
 	
 	vfs_dentry* dev_dir = Filesys::Index("/dev");
@@ -542,7 +548,7 @@ void devfs_register_and_mount() {
 			tty_inod->i_mode = I_CHAR_SPECIAL;
 			tty_inod->internal_handler = (void*)(stduint)i; // handler = tty index
 			tty_dentry->d_inode = tty_inod;
-		}
+		}//{} TEMP -> vtty
 	}
 }
 
@@ -574,4 +580,42 @@ stduint DevFs::writfl(void* fil_handler, Slice file_slice, const byte* src) {
 	return 0; // WIP: syssend to IPC
 }
 
-}
+// FS
+#include <c/format/filesys.h>
+#include <c/format/filesys/FAT.h>
+
+file_system_type fs_fat = { "fat", [](StorageTrait& storage, stduint dev) -> FilesysTrait* {
+		DiscPartition part(storage, dev);
+		if (part.getSlice().length == 0) return nullptr;
+		byte sys_id = part.getSlice().sys_id;
+		// Determine FAT sub-type from partition sys_id
+		int fat_ver;
+		if (sys_id == FILESYS_FAT12)          fat_ver = 12;
+		else if (sys_id == FILESYS_FAT16)     fat_ver = 16;
+		else if (sys_id == FILESYS_FAT32_CHS) fat_ver = 32;
+		else if (sys_id == FILESYS_FAT32_LBA) fat_ver = 32;
+		else return nullptr; // not a FAT partition
+
+		DiscPartition* p_part = new DiscPartition(storage, dev);
+		p_part->getSlice(); // initialize internal slice
+
+		stduint sec_size = p_part->Block_Size > 0 ? p_part->Block_Size : 512;
+		byte* fat_sec_buf = new byte[sec_size];
+		byte* fat_buf = new byte[0x1000];
+
+		FilesysFAT* fs = new FilesysFAT(fat_ver, *p_part, fat_sec_buf, fat_buf);
+
+		if (fs->loadfs()) {
+			return fs;
+		}
+
+		// Clean up dynamically allocated buffers on failure to prevent memory leaks
+		delete fs;
+		delete p_part;
+		delete[] fat_buf;
+		delete[] fat_sec_buf;
+		return nullptr;
+	},
+	nullptr
+};
+

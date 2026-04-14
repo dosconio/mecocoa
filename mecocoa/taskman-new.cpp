@@ -477,3 +477,23 @@ ProcessBlock* Taskman::CreateFork(ProcessBlock* fo, const CallgateFrame* frame) 
 	#endif
 }
 
+//
+
+ProcessBlock* Taskman::CreateFile(const char* path, byte ring, stduint parent) {
+	//{} ELF
+	auto label = StrIndexCharRight(path, '/');
+	if (!label) label = path; else label++;
+	vfs_dentry* d = Filesys::Index(path);
+	if (d && d->d_inode && d->d_inode->i_sb && d->d_inode->i_sb->fs) {
+		FileBlockBridge loop_device(d->d_inode->i_sb->fs, d->d_inode->internal_handler, d->d_inode->i_size, 512);
+		if (auto task = Taskman::CreateELF(&loop_device, ring)) {
+			task->parent_id = parent;
+			printlog(_LOG_INFO, "Loaded %s from %s", label, path);
+			return task;
+		}
+		else plogerro("%s: ELF Load Fail", label);
+	}
+	else plogwarn("%s: Not found at %s", label, path);
+	return nullptr;
+};
+

@@ -163,6 +163,14 @@ public: // _Comment(Console);
 	SheetTrait* pforms[_TEMP 4] = {};// should registered in global_layman
 public: // _Comment(Fileman);
 	FileDescriptor* pfiles[_TEMP 4];
+	//
+	auto Open(rostr pathname, int flags) -> stdsint;
+	//
+	auto Rdwt(bool wr_type, stduint fid, Slice slice) -> stduint;
+	//
+	auto Close(int fid) -> bool;
+	//
+	// bool Remove(rostr pathname);
 };
 #endif
 
@@ -200,7 +208,9 @@ public:
 		CreateELF(BlockTrait* source, byte ring) -> ProcessBlock*;
 	static auto// newProcess
 		CreateFork(ProcessBlock* parent, const CallgateFrame* frame) -> ProcessBlock*;
-	
+	static auto// newProcess from file
+		CreateFile(const char* path, byte ring, stduint parent) -> ProcessBlock*;
+
 	static auto
 		ExitCurrent(stduint code) -> bool;// call by syscall but taskman
 public:// taskman

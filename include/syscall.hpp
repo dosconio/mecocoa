@@ -16,11 +16,11 @@ enum
 	TIME = 0x03, // getsec (0sec/1ms)->second | x86(half)
 	REST = 0x04, // halt   (time 0-for-yeild) | x86(half)
 	COMM = 0x05, // syncom (mod, obj, &msg)   | x86 rv
-	OPEN = 0x06, // open   (path,flags)>=0    | x86(half)
-	CLOS = 0x07, // close  (fd)->0            | x86(half)
-	READ = 0x08, // read   (fd, adr, len)->len| x86(half)
-	WRIT = 0x09, // write  (fd, adr, len)->len| x86(half)
-	DELF = 0x0A, // remove (pathname)->?      | x86(half)
+	OPEN = 0x06, // open   (path,flags)>=0    | x86
+	CLOS = 0x07, // close  (fd)->0            | x86
+	READ = 0x08, // read   (fd, adr, len)->len| x86
+	WRIT = 0x09, // write  (fd, adr, len)->len| x86
+	DELF = 0x0A, // remove (pathname)->?      | x86
 	//=0x0B{} proper&enumer
 	//=0x0C{} 
 	WAIT = 0x0D, // wait   (&status)->pid     | x86

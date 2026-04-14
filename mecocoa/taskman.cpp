@@ -78,7 +78,7 @@ void Taskman::DumpTask(ProcessBlock* pb) {
 
 bool Taskman::ExitCurrent(stduint code) {
 	auto pid = CurrentPID();
-	ploginfo("AppExit: %[u] with code 0x%[x]", pid, code);
+	// ploginfo("AppExit: %[u] with code 0x%[x]", pid, code);
 
 	// [r]
 	// auto pb = Locate(pid);
