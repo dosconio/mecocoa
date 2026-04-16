@@ -35,20 +35,6 @@ LDFILE  = prehost/$(arch)/$(arch).ld
 LDFLAGS = -T $(LDFILE)
 
 
-asmpref=_ae_
-cplpref=_cc_
-cpppref=_cx_
-dest_obj=$(uobjpath)/mcca-$(arch)
-define asm_to_o
-$(dest_obj)/$(asmpref)$(notdir $(1:.asm=.o)): $(1)
-endef
-define c_to_o
-$(dest_obj)/$(cplpref)$(notdir $(1:.c=.o)): $(1)
-endef
-define cpp_to_o
-$(dest_obj)/$(cpppref)$(notdir $(1:.cpp=.o)): $(1)
-endef
-
 archdir=$(ubinpath)/AMD64/mecocoa
 
 #
@@ -62,25 +48,11 @@ asmfile=prehost/$(arch)/atx-x64.asm\
 	$(ulibpath)/asm/x64/interrupt/ruptable.asm \
 	
 
-cppfile=$(wildcard mecocoa/*.cpp) prehost/_auxiliary.cpp \
-	devdriv/timer/timer-lapic.cpp devdriv/kboard.cpp \
-	\
+cppfile=\
 	$(ulibpath)/cpp/color.cpp \
-	$(ulibpath)/cpp/consio.cpp \
-	$(ulibpath)/cpp/stream.cpp \
-	$(ulibpath)/cpp/string.cpp \
-	$(ulibpath)/cpp/interrupt.cpp \
 	$(ulibpath)/cpp/Witch/Form.cpp \
-	$(ulibpath)/cpp/system/paging.cpp \
-	$(ulibpath)/cpp/lango/lango-cpp.cpp \
-	$(ulibpath)/cpp/grp-base/bstring.cpp \
-	$(ulibpath)/cpp/dat-block/mempool.cpp \
-	$(ulibpath)/cpp/dat-block/bmmemoman.cpp \
-	$(ulibpath)/cpp/nodes/dnode.cpp $(wildcard $(ulibpath)/cpp/nodes/dnode/*.cpp) \
-	$(ulibpath)/cpp/filesystem/FAT.cpp $(wildcard $(ulibpath)/cpp/filesystem/FAT/*.cpp) \
 	\
 	$(ulibpath)/cpp/Device/ACPI.cpp \
-	$(ulibpath)/cpp/Device/Storage.cpp \
 	$(ulibpath)/cpp/Device/Bus/PCI.cpp \
 	$(ulibpath)/cpp/Device/Keyboard.cpp \
 	$(ulibpath)/cpp/Device/Timer.cpp \
@@ -88,20 +60,13 @@ cppfile=$(wildcard mecocoa/*.cpp) prehost/_auxiliary.cpp \
 	$(ulibpath)/cpp/Device/Video.cpp $(ulibpath)/cpp/Device/Video-VideoConsole2.cpp \
 	$(wildcard $(ulibpath)/cpp/Device/USB/*.cpp) $(wildcard $(ulibpath)/cpp/Device/USB/xHCI/*.cpp) \
 
-cplfile=$(ulibpath)/c/mcore.c\
-	$(ulibpath)/c/debug.c \
+cplfile=\
 	$(ulibpath)/c/driver/keyboard.c \
-	$(ulibpath)/c/auxiliary/toxxxer.c \
 	$(ulibpath)/c/data/font/font-8x5.c \
 	$(ulibpath)/c/data/font/font-16x8.c \
-	$(wildcard $(ulibpath)/c/dnode/*.c) \
-	$(ulibpath)/c/ustring/astring/salc.c \
-	$(ulibpath)/c/ustring/astring/StrHeap.c \
 
+include Makefile.inc
 
-asmobjs=$(addprefix $(dest_obj)/$(asmpref),$(patsubst %asm,%o,$(notdir $(asmfile))))
-cppobjs=$(addprefix $(dest_obj)/$(cpppref),$(patsubst %cpp,%o,$(notdir $(cppfile))))
-cplobjs=$(addprefix $(dest_obj)/$(cplpref),$(patsubst %c,%o,$(notdir $(cplfile))))
 elf_kernel=mcca-$(arch).elf
 
 mntdir=/mnt/floppy

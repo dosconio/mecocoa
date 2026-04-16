@@ -3,6 +3,8 @@
 // ModuTitle: Disk - PATA
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 
+// unchk: IDE1:0, IDE1:1
+
 #include "../../include/mecocoa.hpp"
 #include <c/storage/harddisk.h>
 #include <c/format/filesys.h>
@@ -219,7 +221,6 @@ bool Harddisk_PATA_Paged::Write(stduint BlockIden, const void* Sors) {
 
 //// ---- ---- SERVICE ---- ---- ////
 static stduint args[4];
-bool fileman_hd_ready = false;
 Harddisk_PATA_Paged* paged_disks[2];
 
 String* plab = nullptr;
@@ -280,9 +281,8 @@ void serv_dev_hd_loop()
 					}
 				}
 			}
-			fileman_hd_ready = true;
 			break;
-		case FiledevMsg::RUPT:// (usercall-forbidden)
+		case FiledevMsg::RUPT:// (usercall-forbidden, no feedback)
 			break;
 		case FiledevMsg::CLOSE:// [diskno]
 			ploginfo("[Hrddisk] close %u", (unsigned)(byte)args[0]);

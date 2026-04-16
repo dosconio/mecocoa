@@ -172,8 +172,6 @@ stdsint do_lseek(stduint pid, int fd, stdsint off, int whence) {
 
 //// ---- ---- SERVICE ---- ---- ////
 
-
-extern bool fileman_hd_ready;
 extern String* plab;
 #endif
 
@@ -191,27 +189,24 @@ void serv_file_loop()// for IDE 0:0, 0:1
 	while (true) {
 		switch ((FilemanMsg)sig_type)
 		{
-		#ifdef _ARC_x86
 		case FilemanMsg::TEST:// (no-feedback)
 		{
-
-			//{} Man by COnsole
-			// devfs_register_and_mount();
-
-			extern bool ento_gui;
-			_TEMP while (!fileman_hd_ready);
-			// Filesys::Tree();
+			#ifdef _ARC_x86
+			syssend(Task_Hdd_Serv, &retval, sizeof(retval[0]), _IMM(FiledevMsg::RUPT));// while (!fileman_hd_ready);
 			if (plab) {
 				IC.enAble(false);
+				extern bool ento_gui;
 				Taskman::CreateFile((*plab + "/init").reference(), 3, Task_Kernel)->focus_tty = vttys[ento_gui ? 1 : 0];
 				Taskman::CreateFile((*plab + "/apps/c").reference(), 3, Task_Kernel)->focus_tty = vttys[ento_gui ? 1 : 0];
 				IC.enAble();
 			}
 			else plogerro("No fs for INIT");
+			#endif
 			break;
 		}
 		case FilemanMsg::RUPT:// (usercall-forbidden&meaningless)
 			break;
+		#ifdef _ARC_x86
 		case FilemanMsg::OPEN:// open a file and return the file descriptor
 		{
 			// ploginfo("[fileman] PID %u open %s with %[32H]", to_args[1], &to_args[2], to_args[0]);

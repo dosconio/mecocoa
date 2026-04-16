@@ -44,8 +44,7 @@ void _entry()
 	VTTY_Append((&Console));
 
 	if constexpr(0) {
-		plogwarn("stack_size=%u", offsetof(ProcessBlock, stack_size));
-		plogwarn("stack_levladdr=%u", offsetof(ProcessBlock, stack_levladdr));
+		plogwarn("levstack offset size:%u addr:%u", offsetof(ProcessBlock, stack_size), offsetof(ProcessBlock, stack_levladdr));
 	}
 	Taskman::Create((void*)&serv_task_loop, RING_M);
 	Taskman::Create((void*)&serv_cons_loop, RING_M);

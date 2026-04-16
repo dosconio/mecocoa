@@ -39,51 +39,9 @@ LDFILE  = prehost/$(arch)/$(arch).ld
 LDFLAGS = -T $(LDFILE).ignore
 
 #
-asmpref=_ag_
-cplpref=_cc_
-cpppref=_cx_
-dest_obj=$(uobjpath)/mcca-$(arch)
-define asm_to_o
-$(dest_obj)/$(asmpref)$(notdir $(1:.S=.o)): $(1)
-endef
-define c_to_o
-$(dest_obj)/$(cplpref)$(notdir $(1:.c=.o)): $(1)
-endef
-define cpp_to_o
-$(dest_obj)/$(cpppref)$(notdir $(1:.cpp=.o)): $(1)
-endef
-
-#
-asmfile=$(wildcard prehost/$(arch)/*.S)
-
-cppfile=$(wildcard prehost/$(arch)/*.cpp) $(wildcard mecocoa/*.cpp) prehost/_auxiliary.cpp \
-	$(ulibpath)/cpp/sort.cpp \
-	$(ulibpath)/cpp/consio.cpp \
-	$(ulibpath)/cpp/stream.cpp \
-	$(ulibpath)/cpp/string.cpp \
-	$(ulibpath)/cpp/interrupt.cpp \
-	$(ulibpath)/cpp/Device/PLIC.cpp \
-	$(ulibpath)/cpp/Device/UART.cpp \
-	$(ulibpath)/cpp/Device/Timer.cpp \
-	$(ulibpath)/cpp/system/paging.cpp \
-	$(ulibpath)/cpp/Device/Storage.cpp \
-	$(ulibpath)/cpp/lango/lango-cpp.cpp \
-	$(ulibpath)/cpp/grp-base/bstring.cpp \
-	$(ulibpath)/cpp/dat-block/mempool.cpp \
-	$(ulibpath)/cpp/dat-block/bmmemoman.cpp \
-	$(ulibpath)/cpp/nodes/dnode.cpp $(wildcard $(ulibpath)/cpp/nodes/dnode/*.cpp) \
-	$(ulibpath)/cpp/filesystem/FAT.cpp $(wildcard $(ulibpath)/cpp/filesystem/FAT/*.cpp) \
-
-cplfile=$(ulibpath)/c/mcore.c \
-	$(ulibpath)/c/debug.c \
-	$(ulibpath)/c/auxiliary/toxxxer.c \
-	$(wildcard $(ulibpath)/c/dnode/*.c) \
-	$(ulibpath)/c/ustring/astring/salc.c \
-	$(ulibpath)/c/ustring/astring/StrHeap.c \
-
-asmobjs=$(addprefix $(dest_obj)/$(asmpref),$(patsubst %S,%o,$(notdir $(asmfile))))
-cppobjs=$(addprefix $(dest_obj)/$(cpppref),$(patsubst %cpp,%o,$(notdir $(cppfile))))
-cplobjs=$(addprefix $(dest_obj)/$(cplpref),$(patsubst %c,%o,$(notdir $(cplfile))))
+gasfile=$(wildcard prehost/$(arch)/*.S)
+cppfile=$(wildcard prehost/$(arch)/*.cpp) 
+include Makefile.inc
 
 elf_kernel=mcca-$(arch).elf
 
@@ -93,7 +51,7 @@ clang=clang-14
 sudokey=k
 
 .PHONY : build
-build: clean prehost/$(arch)/fatvhd.ignore $(asmobjs) $(cppobjs) $(cplobjs)
+build: clean prehost/$(arch)/fatvhd.ignore $(gasobjs) $(cppobjs) $(cplobjs)
 	#echo [building] MCCA for $(arch)
 	@echo MK $(elf_kernel)
 	@perl configs/qemuvirt-riscv.pl r32 > $(LDFILE).ignore
@@ -147,7 +105,7 @@ clean:
 	${RM} $(archdir)/kerdisk.fat
 	@${MKDIR} $(uobjpath)/mcca-$(arch)
 
-$(foreach src,$(asmfile),$(eval $(call asm_to_o,$(src))))
+$(foreach src,$(gasfile),$(eval $(call gas_to_o,$(src))))
 $(foreach src,$(cplfile),$(eval $(call c_to_o,$(src))))
 $(foreach src,$(cppfile),$(eval $(call cpp_to_o,$(src))))
 

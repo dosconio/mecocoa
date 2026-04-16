@@ -57,7 +57,7 @@ DEFSYSC sysc_OUTC(stduint ch, stduint len);
 DEFSYSC sysc_COMM(ProcessBlock* pb, stduint to, stduint op, CommMsg* msg);
 DEFSYSC sysc_INNC(stduint blocked);
 DEFSYSC sysc_EXIT(stduint code);
-extern bool fileman_hd_ready;
+
 
 __attribute__((optimize("O0")))
 stduint Handint_SYSCALL(CallgateFrame* frame) {
@@ -93,7 +93,6 @@ stduint Handint_SYSCALL(CallgateFrame* frame) {
 		ret = mecocoa_global->system_time.sec;
 		break;
 	case syscall_t::REST:
-	// case_syscall_t_REST:
 		Taskman::Schedule(true);
 		if (ch_tse) task_switch_enable = task_switch_enable_old;
 		break;
@@ -104,18 +103,14 @@ stduint Handint_SYSCALL(CallgateFrame* frame) {
 		break;
 	}
 	case syscall_t::OPEN:// (str, uint)->(uint)
-		while (!fileman_hd_ready);// wait hd registered (in real, HD can not be used before it inited then registered)
-		// while (1);
 		ret = syscall_06_open(para, caller_pid);
 		break;
 	case syscall_t::CLOS:
-		while (!fileman_hd_ready);// wait hd registered
 		ret = syscall_07_close(para, caller_pid);
 		break;
 	case syscall_t::READ:
 	case syscall_t::WRIT:
 	{
-		while (!fileman_hd_ready);// wait hd registered
 		stduint open_buf[4];
 		open_buf[0] = para[0];// fid
 		open_buf[1] = para[1];// addr
