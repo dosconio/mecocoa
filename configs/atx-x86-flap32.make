@@ -83,6 +83,8 @@ build: clean lib $(cppobjs)
 	echo MK subappc
 	g++ -I$(uincpath) $(flag) -m32 $(CXF) $(CXW) -std=c++2a \
 		subapps/hellocpp/* -o $(uobjpath)/sapp-$(arch)/c  -L$(uobjpath)/accm-$(arch) -l$(arch)
+	echo MK hello-rust
+	@cd subapps/hellorust/ && cargo build --release --target ../../configs/Rust/target/cargo-i686.json
 	# --- write out ---
 	@echo $(sudokey) | sudo -S kpartx -av $(ubinpath)/fixed2.vhd  >/dev/null # ls /dev/mapper/loop*p* && sudo mkfs.vfat -F 32 -n "DATA" /dev/mapper/loop*p7
 	@echo $(sudokey) | sudo -S mount /dev/mapper/loop*p7 $(mnts) #sudo fsck.vfat -v /dev/mapper/loop0p7 # fdisk # blkid
@@ -90,6 +92,7 @@ build: clean lib $(cppobjs)
 	@echo $(sudokey) | sudo -S cp $(uobjpath)/sapp-$(arch)/init $(mnts)/init
 	@echo $(sudokey) | sudo -S mkdir -p $(mnts)/apps
 	@echo $(sudokey) | sudo -S cp $(uobjpath)/sapp-$(arch)/c    $(mnts)/apps/c
+	-@echo $(sudokey) | sudo -S cp subapps/hellorust/target/cargo-i686/release/hellorust    $(mnts)/apps/d
 	@tree $(mnts) -s
 	@echo $(sudokey) | sudo -S umount $(mnts)
 	@echo $(sudokey) | sudo -S kpartx -dv $(ubinpath)/fixed2.vhd >/dev/null

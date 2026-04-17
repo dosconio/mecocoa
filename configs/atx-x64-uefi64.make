@@ -155,10 +155,6 @@ clean:
 	${RM} $(ubinpath)/$(arch).img
 	@${MKDIR} $(uobjpath)/mcca-$(arch)
 
-$(foreach src,$(asmfile),$(eval $(call asm_to_o,$(src))))
-$(foreach src,$(cplfile),$(eval $(call c_to_o,$(src))))
-$(foreach src,$(cppfile),$(eval $(call cpp_to_o,$(src))))
-
 _ae_%.o:
 	echo AS $(notdir $<)
 	aasm -f elf64      -o $@ $< -D_MCCA=0x8664 -D_UEFI -MD $(patsubst %.o,%.d,$@)

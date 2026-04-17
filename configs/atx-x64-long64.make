@@ -7,33 +7,13 @@
 arch?=atx-x64-long64
 
 mnts=/mnt/floppy
+mntdir=/mnt/mcca-$(arch)
+sudokey=k
 
-MKDIR = mkdir -p
-RM = rm -rf
-
-# (GNU)
-GPREF   = x86_64-linux-gnu-
-CFLAGS += -z norelro -nostdlib -fno-builtin
-CFLAGS += --static -mno-red-zone -m64  -mno-sse -mno-sse2 -mno-avx -mno-avx2 
-CFLAGS += -I$(uincpath) -D_MCCA=0x8664 -D_DEBUG
-CFLAGS += -fno-strict-aliasing -fno-exceptions -fno-stack-protector
-CFLAGS += -Wextra -Wno-multichar
-XFLAGS  = $(CFLAGS) -fno-rtti -fno-use-cxa-atexit
-G_DBG   = gdb-multiarch
-CC      = ${GPREF}gcc -O2
-CX      = ${GPREF}g++ -O2 -std=c++2a
-OBJCOPY = ${GPREF}objcopy
-OBJDUMP = ${GPREF}objdump
-
-# (QEMU)
-QARCH  = x86_64
-QEMU   = qemu-system-$(QARCH)
+CFLAGS += -mno-red-zone -m64  -mno-sse -mno-sse2 -mno-avx -mno-avx2 
+CFLAGS += -D_MCCA=0x8664 -D_DEBUG
+include Toolchain.inc
 QBOARD = atx
-
-#
-LDFILE  = prehost/$(arch)/$(arch).ld
-LDFLAGS = -T $(LDFILE) 
-
 
 #
 asmfile=prehost/atx-x64-uefi64/atx-x64.asm\
@@ -62,9 +42,6 @@ include Makefile.inc
 
 elf_kernel=AMD64/mecocoa/mcca-$(arch).elf
 bin_ladder=AMD64/mecocoa/ladder
-
-mntdir=/mnt/mcca-$(arch)
-sudokey=k
 
 .PHONY : build
 build: clean $(asmobjs) $(cppobjs) $(cplobjs)
@@ -109,11 +86,6 @@ clean:
 # 	${RM} $(uobjpath)/mcca-$(arch)/*
 	${RM} $(ubinpath)/$(arch).img
 	@${MKDIR} $(uobjpath)/mcca-$(arch)
-
-
-$(foreach src,$(asmfile),$(eval $(call asm_to_o,$(src))))
-$(foreach src,$(cplfile),$(eval $(call c_to_o,$(src))))
-$(foreach src,$(cppfile),$(eval $(call cpp_to_o,$(src))))
 
 _ae_%.o:
 	echo AS $(notdir $<)

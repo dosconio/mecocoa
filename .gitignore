@@ -1,6 +1,6 @@
 .obsidian/
 Cargo.lock
-subapps/hellod/target/
+subapps/hellorust/target/
 *.o
 *.ignore
 

@@ -77,6 +77,7 @@ stduint msgrecv(stduint fo_whom, void* msgaddr, stduint bytlen, stduint* type, s
 
 //{} with retval
 void sysdelay(unsigned dword) {
+	#if 0
 	unsigned last_tick = callid[0x1C / 4];
 	unsigned last_sec = callid[0x18 / 4];
 	while (callid[0x1C / 4] - last_tick + (callid[0x18 / 4] - last_sec) * 1000000 <= dword) {
@@ -85,6 +86,7 @@ void sysdelay(unsigned dword) {
 			dword -= 1000000;
 		}
 	}
+	#endif
 }
 
 stduint systest(unsigned t, unsigned e, unsigned s)// FF

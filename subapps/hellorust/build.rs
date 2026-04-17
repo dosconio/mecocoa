@@ -1,7 +1,7 @@
 use std::env;
 
 fn main() {
-    let ubinpath = env::var("ubinpath").expect("envar ubinpath wanted");
-    println!("cargo:rustc-link-search=native={}/mecocoa", ubinpath);
-    println!("cargo:rustc-link-lib=static=mccausr-x86");
+    let uobjpath = env::var("uobjpath").expect("envar uobjpath wanted");
+    println!("cargo:rustc-link-search=native={}/accm-atx-x86-flap32", uobjpath);
+    println!("cargo:rustc-link-lib=static=atx-x86-flap32");
 }

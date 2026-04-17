@@ -198,6 +198,7 @@ void serv_file_loop()// for IDE 0:0, 0:1
 				extern bool ento_gui;
 				Taskman::CreateFile((*plab + "/init").reference(), 3, Task_Kernel)->focus_tty = vttys[ento_gui ? 1 : 0];
 				Taskman::CreateFile((*plab + "/apps/c").reference(), 3, Task_Kernel)->focus_tty = vttys[ento_gui ? 1 : 0];
+				Taskman::CreateFile((*plab + "/apps/d").reference(), 3, Task_Kernel)->focus_tty = vttys[ento_gui ? 1 : 0];
 				IC.enAble();
 			}
 			else plogerro("No fs for INIT");

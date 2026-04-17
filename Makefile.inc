@@ -50,3 +50,9 @@ asmobjs=$(addprefix $(dest_obj)/$(asmpref),$(patsubst %asm,%o,$(notdir $(asmfile
 gasobjs=$(addprefix $(dest_obj)/$(gaspref),$(patsubst %S,%o,$(notdir $(gasfile))))
 cppobjs=$(addprefix $(dest_obj)/$(cpppref),$(patsubst %cpp,%o,$(notdir $(cppfile))))
 cplobjs=$(addprefix $(dest_obj)/$(cplpref),$(patsubst %c,%o,$(notdir $(cplfile))))
+
+
+$(foreach src,$(asmfile),$(eval $(call asm_to_o,$(src))))
+$(foreach src,$(gasfile),$(eval $(call gas_to_o,$(src))))
+$(foreach src,$(cplfile),$(eval $(call c_to_o,$(src))))
+$(foreach src,$(cppfile),$(eval $(call cpp_to_o,$(src))))

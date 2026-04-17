@@ -17,10 +17,7 @@ use core::panic::PanicInfo;
 
 //#[link(name = "mccausr-x86", kind = "static")]
 extern "C" {
-	fn _sysinit();
-    fn _sysouts(str: *const u8);
-	fn _sysdelay(ms: u32);
-    fn _sysquit(retval: i32);
+    fn sysouts(str: *const u8);
 }
 
 #[allow(unused_variables)]  
@@ -30,13 +27,8 @@ fn panic(info: &PanicInfo) -> ! {
 }
 
 #[no_mangle]
-pub extern "C" fn _start() -> ! {
+pub extern "C" fn main() {
 	unsafe {
-		_sysinit();
-		loop {
-			_sysouts("(D)\n\r\0".as_ptr());
-			_sysdelay(5000);
-			_sysquit(0);
-		}
+		sysouts("(App by Rust)\n\r\0".as_ptr());
 	}
 }

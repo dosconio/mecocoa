@@ -4,42 +4,19 @@
 # ModuTitle: Build for Mecocoa
 # Copyright: Dosconio Mecocoa, BCD License Version 3
 
-MKDIR = mkdir -p
-RM = rm -rf
 
-# (GNU)
-RISCV_ELF_EXISTS := $(shell command -v riscv64-elf-gcc 2>/dev/null)
-RISCV_UNKNOWN_EXISTS := $(shell command -v riscv64-unknown-elf-gcc 2>/dev/null)
-ifeq ($(RISCV_ELF_EXISTS),)
-    GPREF := riscv64-unknown-elf-
-else
-    GPREF := riscv64-elf-
-endif
-CFLAGS += -nostdlib -fno-builtin  -Wall -Wno-unused-variable -Wno-unused-function -Wno-parentheses # -g
 CFLAGS += -march=rv64g -mabi=lp64 -mcmodel=medany
-CFLAGS += -I$(uincpath) -D_MCCA=0x1064 -D_OPT_RISCV64 -D_DEBUG
-CFLAGS += -fno-strict-aliasing -fno-exceptions -fno-stack-protector
-XFLAGS  = $(CFLAGS) -fno-rtti -fno-use-cxa-atexit
-G_DBG   = gdb-multiarch
-CC      = ${GPREF}gcc -O2
-CX      = ${GPREF}g++ -O2
-OBJCOPY = ${GPREF}objcopy
-OBJDUMP = ${GPREF}objdump
-
-# (QEMU)
-QARCH  = riscv64
-QEMU   = qemu-system-$(QARCH)
+CFLAGS += -D_MCCA=0x1064 -D_OPT_RISCV64 -D_DEBUG
+include Toolchain.inc
 QBOARD = virt
 QFLAGS = -smp 1 -machine $(QBOARD) -bios none
 
-#
-LDFILE  = prehost/$(arch)/$(arch).ld
-LDFLAGS = -T $(LDFILE).ignore
 
 #
 gasfile=$(wildcard prehost/qemuvirt-r32/*.S)
 cppfile=$(wildcard prehost/qemuvirt-r32/*.cpp)
 include Makefile.inc
+LDFLAGS = -T $(LDFILE).ignore
 
 elf_kernel=mcca-$(arch).elf
 
@@ -101,9 +78,6 @@ clean:
 	${RM} $(archdir)/kerdisk.fat
 	@${MKDIR} $(uobjpath)/mcca-$(arch)
 
-$(foreach src,$(gasfile),$(eval $(call gas_to_o,$(src))))
-$(foreach src,$(cplfile),$(eval $(call c_to_o,$(src))))
-$(foreach src,$(cppfile),$(eval $(call cpp_to_o,$(src))))
 
 _ag_%.o:
 	echo AS $(notdir $<)
