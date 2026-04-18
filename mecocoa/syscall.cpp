@@ -164,15 +164,18 @@ stduint Handint_SYSCALL(CallgateFrame* frame) {
 	}
 	case syscall_t::EXEC:
 	{
-		plogerro("Please send to Task_TaskMan");
-		// ret = execv((const char*)para[0], (char**)para[1]);
+		msgbuf[0] = caller_pid;
+		msgbuf[1] = para[0];
+		msgbuf[2] = para[1];
+		msgbuf[3] = para[2];
+		syssend(Task_TaskMan, sliceof(msgbuf), _IMM(TaskmanMsg::EXEC));
+		sysrecv(Task_TaskMan, &ret, byteof(ret));
 		break;
 	}
 
 
 
 	case syscall_t::TEST:
-		//{TODO} ISSUE 20250706 Each time subapp (Ring3) print %d or other integer by outsfmt() will panic, but OutInteger() or Kernel Ring0 is OK.
 		if (para[0] == 'T' && para[1] == 'E' && para[2] == 'S') {
 			rostr test_msg = "Syscalls Test OK!";
 			Console.OutFormat("\xFF\x70[Mecocoa]\xFF\x27 PID");

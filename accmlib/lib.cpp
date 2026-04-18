@@ -137,18 +137,37 @@ int fork() {
     return syscall(syscall_t::FORK, nil, nil, nil);
 }
 
-static int execv(const char* path, char* argv[]);
-static int execl(const char* path, const char* arg, ...)
-{
-	//va_list parg = (va_list)(&arg);
-	char **p = (char**)&arg;
-	return execv(path, p);
-}
+// int exec(rostr path, rostr argstr) {
+// 	return syscall(syscall_t::EXEC, _IMM(path), _IMM(argstr), nil);
+// }
+
+_ESYM_C void free(void* ptr) {}
+
+// ----
 #define PROC_ORIGIN_STACK 128
-static int execv(const char* path, char* argv[])
+
+static int spawnv(const char* path, char* argv[]);
+int spawnl(const char* path, const char* arg, ...)
 {
-	stduint args[4];
-	stdsint ret;
+	char* argv[_TEMP 8];
+	int argc = 0;
+	va_list args;
+	argv[argc++] = (char*)arg;
+	va_start(args, arg);
+	while (argc < numsof(argv) - 1) {
+		char* next_arg = va_arg(args, char*);
+		argv[argc++] = next_arg;
+		// requires the argument list to be terminated by a NULL pointer
+		if (next_arg == 0) {
+			break;
+		}
+	}
+	va_end(args);
+	argv[argc] = 0;
+	return spawnv(path, argv);
+}
+static int spawnv(const char* path, char* argv[])
+{
 	char** p = argv;
 	char arg_stack[PROC_ORIGIN_STACK];
 	int stack_len = 0;
@@ -160,7 +179,7 @@ static int execv(const char* path, char* argv[])
 		stack_len += sizeof(char*);
 	}
 
-	*((int*)(&arg_stack[stack_len])) = 0;
+	*((char**)(&arg_stack[stack_len])) = nullptr;
 	stack_len += sizeof(char*);
 
 	char ** q = (char**)arg_stack;
@@ -174,15 +193,9 @@ static int execv(const char* path, char* argv[])
 		arg_stack[stack_len] = 0;
 		stack_len++;
 	}
-
-	args[1] = _IMM(path);
-	args[2] = _IMM(arg_stack);
-	args[3] = stack_len;
-	msgsend(Task_TaskMan, args, sizeof(args), 4);
-	msgrecv(Task_TaskMan, &ret, sizeof(ret), nil, nil);
-	return ret;
+	return syscall(syscall_t::EXEC, _IMM(path), _IMM(arg_stack), stack_len);
 }
 
-
-_ESYM_C void free(void* ptr) {}
+int execl(const char* path, const char* arg, ...);
+static int execv(const char* path, char* argv[]);
 

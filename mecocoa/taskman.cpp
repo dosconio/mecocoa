@@ -109,10 +109,42 @@ static void _Exit_Cleanup(stduint pid)
 	auto ppb = Taskman::Locate(pid);
 	ploginfo("cleaning %u", pid);
 	Taskman::DequeueReady(ppb);
-	//
-	//{} msg
-	//{} files (part II)
-	//{} h&s
+	// Msg: Clear IPC
+	ProcessBlock* sender = ppb->queue_send_queuehead;
+	while (sender) {
+		ProcessBlock* next = sender->queue_send_queuenext;
+		sender->Unblock(ProcessBlock::BlockReason::BR_SendMsg);
+		sender = next;
+	}// wakeup senders
+	ppb->queue_send_queuehead = nullptr;
+	// Release User and Kernel Stack
+	if (ppb->stack_lineaddr == ppb->stack_levladdr) {// Ring_M App use one stack (R0 for x86)
+		delete (byte*)ppb->stack_levladdr;
+	}
+	else {
+		delete (byte*)ppb->paging[_IMM(ppb->stack_lineaddr)];
+		delete (byte*)ppb->stack_levladdr;
+	}
+	// Release Segments
+	for0a(i, ppb->load_slices) {
+		if (!ppb->load_slices[i].address) break;
+		if (ppb->load_slices[i].length >= PAGE_SIZE&&
+			(byte*)ppb->paging[(ppb->load_slices[i].address) & ~0xFFF] + PAGE_SIZE ==
+			(byte*)ppb->paging[(ppb->load_slices[i].address + PAGE_SIZE) & ~0xFFF]) {// once allocated
+			// ploginfo("freeing segment: %[x] %[x]", ppb->load_slices[i].address, ppb->load_slices[i].length);
+			delete (byte*)ppb->paging[(ppb->load_slices[i].address) & ~0xFFF];
+		}
+		else while (ppb->load_slices[i].length) {
+			// ploginfo("freeing segment: %[x] %[x]", ppb->load_slices[i].address, ppb->load_slices[i].length);
+			delete (byte*)ppb->paging[(ppb->load_slices[i].address) & ~0xFFF];
+			ppb->load_slices[i].address += 0x1000;
+			ppb->load_slices[i].length -= minof(0x1000, ppb->load_slices[i].length);
+		}
+	}
+	// Heap
+	if (1) {
+
+	}
 	ppb->paging.~Paging();
 	ppb->state = ProcessBlock::State::Invalid;
 	Taskman::chain.Remove(ppb);
@@ -128,43 +160,55 @@ bool Taskman::Exit(ProcessBlock* p, stdsint exit_code)
 	ProcessBlock* pparent = Taskman::Locate(parent_pid);
 	stduint args[2] = { pid, _IMM(exit_code) };
 
-	// : fileman
+	// Release Files First
 	for0(i, numsof(p->pfiles)) if (p->pfiles[i]) {
-		p->pfiles[i]->vfile->f_inode->ref_count--;
+		p->Close(i);// p->pfiles[i]->vfile->f_inode->ref_count--;
 		p->pfiles[i] = 0;
 	}
 
 	p->exit_status = exit_code;
 
-	using PBS = ProcessBlock::State;
-	if (pparent->isWaiting()) {
-		// cast<stduint>(pparent->block_reason) &= ~_IMM(ProcessBlock::BlockReason::BR_Waiting);
-		pparent->Unblock(ProcessBlock::BlockReason::BR_Waiting);
-		// ploginfo("sending to parent %u", parent_pid);
-		syssend(parent_pid, &args, sizeof(args));
-		_Exit_Cleanup(pid);
-	}
-	else if (!p->parent_id) {
-		_Exit_Cleanup(pid);
-	}
-	else {
-		Taskman::DequeueReady(p);
-		p->state = PBS::Hanging;
-	}
-	// if the proc has any child, make INIT the new parent, (or kill all the children >_<)
+	// Handle Children (Reparenting to Task_Init)
+	// Must do this BEFORE cleaning up 'p' to ensure memory safety
 	auto nod = Taskman::chain.Root();
 	while (nod) {
 		auto taski = (ProcessBlock*)nod->offs;
+		auto next_nod = nod->next;
+
 		if (taski->pid && taski->parent_id == pid) {
-			taski->parent_id = (Task_Init);
-			if (Taskman::Locate(Task_Init)->isWaiting() && taski->state == PBS::Hanging) {
-				pparent->Unblock(ProcessBlock::BlockReason::BR_Waiting);
-				syssend(Task_Init, &args, sizeof(args));
+			taski->parent_id = Task_Init; // Reparent
+
+			auto init_pb = Taskman::Locate(Task_Init);
+			using PBS = ProcessBlock::State;
+
+			// If Init is waiting and this child is already a zombie
+			if (init_pb->isWaiting() && taski->state == PBS::Hanging) {
+				init_pb->Unblock(ProcessBlock::BlockReason::BR_Waiting);
+
+				stduint child_args[2] = { taski->pid, taski->exit_status };
+				syssend(Task_Init, &child_args, sizeof(child_args));
+
 				_Exit_Cleanup(taski->pid);
 			}
 		}
-		nod = nod->next;
+		nod = next_nod; // Safely move to the next node
 	}
+
+	// Handle Self (Notify Parent or become Zombie)
+	using PBS = ProcessBlock::State;
+	if (pparent && pparent->isWaiting()) {
+		pparent->Unblock(ProcessBlock::BlockReason::BR_Waiting);
+		syssend(parent_pid, &args, sizeof(args));
+		_Exit_Cleanup(pid); // Die completely
+	}
+	else if (!parent_pid) {
+		_Exit_Cleanup(pid); // No parent (usually only Init or Kernel), die completely
+	}
+	else {
+		Taskman::DequeueReady(p);
+		p->state = PBS::Hanging; // Become a Zombie and wait for parent to call Wait()
+	}
+
 	return true;
 }
 
@@ -195,91 +239,77 @@ stdsint Taskman::Wait(ProcessBlock* pb)
 	return ~_IMM0;
 }
 
-#ifdef _ARC_x86
-/// {} TODO
-stduint task_exec(stduint pid, void* fullpath, void* argstack, stduint stacklen)// return nil if OK
+ProcessBlock* Taskman::Exec(stduint parent, rostr usr_fullpath, void* usr_argstack, stduint stacklen)
 {
-	ploginfo("%s: %u %x %x %x", pid, fullpath, argstack, stacklen);
-/*
-	// get parameters from the message
-	int name_len = mm_msg.NAME_LEN;	// length of filename
-	int src = mm_msg.source;	// caller proc nr.
-	assert(name_len < MAX_PATH);
+	char buf_fullpath[_TEMP 32];
+	auto parent_pb = Locate(parent);
+	StrCopyP(buf_fullpath, kernel_paging, usr_fullpath, parent_pb->paging, sizeof(buf_fullpath));
+	ploginfo("%s: %u \"%s\" %x %x", __FUNCIDEN__, parent, buf_fullpath, usr_argstack, stacklen);
 
-	char pathname[MAX_PATH];
-	phys_copy((void*)va2la(TASK_MM, pathname),
-		(void*)va2la(src, mm_msg.PATHNAME),
-		name_len);
-	pathname[name_len] = 0;	// terminate the string
-
-	// get the file size
-	struct stat s;
-	int ret = stat(pathname, &s);
-	if (ret != 0) {
-		printl("{MM} MM::do_exec()::stat() returns error. %s", pathname);
-		return -1;
+	auto new_pb = Taskman::CreateFile(buf_fullpath, RING_U, parent);
+	if (!new_pb) {
+		plogwarn("%s: failed to load file", __FUNCIDEN__);
+		return nullptr;
 	}
 
-	// read the file
-	int fd = open(pathname, O_RDWR);
-	if (fd == -1)
-		return -1;
-	assert(s.st_size < MMBUF_SIZE);
-	read(fd, mmbuf, s.st_size);
-	close(fd);
+	stduint argc = 0;
+	stduint argv_ptr = 0;
+	stduint new_sp = new_pb->context.SP;
 
-	// overwrite the current proc image with the new one
-	Elf32_Ehdr* elf_hdr = (Elf32_Ehdr*)(mmbuf);
-	int i;
-	for (i = 0; i < elf_hdr->e_phnum; i++) {
-		Elf32_Phdr* prog_hdr = (Elf32_Phdr*)(mmbuf + elf_hdr->e_phoff +
-			(i * elf_hdr->e_phentsize));
-		if (prog_hdr->p_type == PT_LOAD) {
-			assert(prog_hdr->p_vaddr + prog_hdr->p_memsz <
-				PROC_IMAGE_SIZE_DEFAULT);
-			phys_copy((void*)va2la(src, (void*)prog_hdr->p_vaddr),
-				(void*)va2la(TASK_MM,
-					mmbuf + prog_hdr->p_offset),
-				prog_hdr->p_filesz);
+	if (stacklen > 0 && usr_argstack != nullptr) {
+		byte* temp_stack = new byte[stacklen];
+		if (!temp_stack) {
+			plogerro("%s: alloc temp_stack fail", __FUNCIDEN__);
+		}
+		else {
+			MemCopyP(temp_stack, kernel_paging, usr_argstack, parent_pb->paging, stacklen);
+			new_sp = (new_sp - stacklen) & ~_IMM(0xFlu);
+			stduint delta = new_sp - _IMM(usr_argstack);
+
+			char** q = (char**)temp_stack;
+			for (; *q != nullptr; q++, argc++) {
+				*q = (char*)(_IMM(*q) + delta);
+			}
+			MemCopyP((void*)new_sp, new_pb->paging, temp_stack, kernel_paging, stacklen);
+			argv_ptr = new_sp;
+			delete[] temp_stack;
 		}
 	}
-
-	// setup the arg stack
-	int orig_stack_len = mm_msg.BUF_LEN;
-	char stackcopy[PROC_ORIGIN_STACK];
-	phys_copy((void*)va2la(TASK_MM, stackcopy),
-		(void*)va2la(src, mm_msg.BUF),
-		orig_stack_len);
-
-	u8* orig_stack = (u8*)(PROC_IMAGE_SIZE_DEFAULT - PROC_ORIGIN_STACK);
-
-	int delta = (int)orig_stack - (int)mm_msg.BUF;
-
-	int argc = 0;
-	if (orig_stack_len) {	// has args
-		char** q = (char**)stackcopy;
-		for (; *q != 0; q++, argc++)
-			*q += delta;
+	else {
+		new_sp = (new_sp - sizeof(stduint)) & ~_IMM(0xFlu);
+		stduint null_ptr = 0;
+		MemCopyP((void*)new_sp, new_pb->paging, &null_ptr, kernel_paging, sizeof(stduint));
+		argv_ptr = new_sp;
 	}
 
-	phys_copy((void*)va2la(src, orig_stack),
-		(void*)va2la(TASK_MM, stackcopy),
-		orig_stack_len);
+	// [!] Unconditionally construct the C standard call frame for _start
+	#if (_MCCA & 0xFF00) == 0x8600
 
-	proc_table[src].regs.ecx = argc;
-	proc_table[src].regs.eax = (u32)orig_stack;
+	// Construct standard C call frame for x86: [Dummy Return IP, argc, argv]
+	struct C_CallFrame {
+		stduint dummy_return_ip;
+		stduint argc;
+		stduint argv;
+	};
 
-	// setup eip & esp
-	proc_table[src].regs.eip = elf_hdr->e_entry; // @see _start.asm
-	proc_table[src].regs.esp = PROC_IMAGE_SIZE_DEFAULT - PROC_ORIGIN_STACK;
+	C_CallFrame frame = { 0, argc, argv_ptr };
+	new_sp = new_sp & ~_IMM(0xFlu);
+	// System V ABI : ESP % 16 == 12
+	new_sp = new_sp - 20;// new_sp -= sizeof(call_frame);
+	MemCopyP((void*)new_sp, new_pb->paging, (void*)&frame, kernel_paging, sizeof(frame));
+	new_pb->context.SP = new_sp;	// esp = new stack pointer
 
-	strcpy(proc_table[src].name, pathname);
-*/
-	return 0;
+	#elif (_MCCA & 0xFF00) == 0x1000
+
+	new_pb->context.a0 = argc; // a0 = argc
+	new_pb->context.a1 = argv_ptr; // a1 = argv
+	new_pb->context.sp = new_sp; // sp = new stack pointer
+
+	#endif
+	new_pb->focus_tty = parent_pb->focus_tty;
+	Taskman::Append(new_pb);
+	return new_pb;
 }
-
-#endif
-
 
 // #pragma GCC pop_options
 
@@ -293,6 +323,7 @@ void _Comment(R0) serv_task_loop()
 {
 	volatile stduint to_args[8] = {};// 8*4=32 bytes
 	volatile stduint sig_type = 0, sig_src = 0, ret = 0;
+	ProcessBlock* pb;
 	ploginfo("Taskman Service Start");
 	while (true) {
 		switch (static_cast<TaskmanMsg>(sig_type))
@@ -318,8 +349,8 @@ void _Comment(R0) serv_task_loop()
 			Taskman::Wait(Taskman::Locate(to_args[0]));// send back { pid, taski->exit_status }
 			break;
 		case TaskmanMsg::EXEC:// (pid, &usr:fullpath, &usr:argstack, stacklen) -> 0(success)
-			to_args[0] = sig_src;
-			ret = task_exec(to_args[0], (void*)to_args[1], (void*)to_args[2], to_args[3]);
+			pb = Taskman::Exec(to_args[0], (rostr)to_args[1], (void*)to_args[2], to_args[3]);
+			ret = pb ? pb->getID() : 0;
 			syssend(sig_src, (void*)&ret, sizeof(ret));
 			break;
 		#endif

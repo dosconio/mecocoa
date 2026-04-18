@@ -27,8 +27,18 @@ fn panic(info: &PanicInfo) -> ! {
 }
 
 #[no_mangle]
-pub extern "C" fn main() {
+pub extern "C" fn main(argc: isize, argv: *const *const u8) -> isize {
 	unsafe {
-		sysouts("(App by Rust)\n\r\0".as_ptr());
+		sysouts("(UserDemo by Rust)\0".as_ptr());
 	}
+	for i in 0..argc {
+		unsafe {
+			sysouts(*argv.offset(i));
+			sysouts(" \0".as_ptr());
+		}
+	}
+	unsafe {
+		sysouts("\n\r\0".as_ptr());
+	}
+	0
 }

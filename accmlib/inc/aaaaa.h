@@ -40,6 +40,11 @@ extern "C" {
 	// return nil for success
 	int sys_removefil(rostr fullpath);
 
+	// int exec(rostr path, rostr argstr);
+	// int execl(const char* path, const char* arg, ...);
+	int spawnl(const char* path, const char* arg, ...);
+	
+
 	stduint get_core_id(unsigned int* ptr_hid);
 
 	// ---- POSIX:unistd ---- //

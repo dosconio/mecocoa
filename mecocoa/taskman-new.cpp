@@ -368,7 +368,7 @@ ProcessBlock* Taskman::CreateELF(BlockTrait* source, byte ring) {
 
 	#if (_MCCA & 0xFF00) == 0x8600
 	pb->context.RING = ring;
-	pb->context.SP = (stack_loc_top & ~0xFlu) - 8;// single stack
+	pb->context.SP = (stack_loc_top & ~0xFlu) - 8 - 0x10;// single stack
 	treat<uint32>(&pb->context.floating_point_context[24]) = 0x1F80;// ban all MXCSR exception
 	SetSegment(&pb->context);
 
@@ -385,9 +385,7 @@ ProcessBlock* Taskman::CreateELF(BlockTrait* source, byte ring) {
 	pb->time_slice = (ring == RING_U) ? 3 : 4;
 	pb->focus_tty = vttys[0];
 
-	#if _MCCA == 0x8632
-	Taskman::Append(pb);
-	#endif
+	// Taskman::Append(pb);
 	return pb;
 	#endif
 }

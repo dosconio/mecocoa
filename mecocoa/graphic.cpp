@@ -9,7 +9,7 @@
 #include "../include/console.hpp"
 
 
-#if _GUI_ENABLE
+#if (_MCCA & 0xFF00) == 0x8600 // _GUI_ENABLE
 
 const int kMouseCursorWidth = 15;
 const int kMouseCursorHeight = 24;

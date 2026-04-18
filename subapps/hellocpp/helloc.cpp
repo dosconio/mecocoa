@@ -41,6 +41,8 @@ int main(int argc, char** argv)
 	sys_removefil(filename);
 	#endif
 
+	spawnl("/mnt34/apps/d", "/mnt34/apps/d", "a", "b.c", nullptr);
+
 	return 0;
 }
 

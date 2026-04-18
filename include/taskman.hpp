@@ -218,6 +218,8 @@ public:// taskman
 		Exit(ProcessBlock* pb, stdsint exit_code);
 	static auto
 		Wait(ProcessBlock* pb) -> stdsint;
+	static auto
+		Exec(stduint parent, rostr usr_fullpath, void* usr_argstack, stduint stacklen) -> ProcessBlock*;
 public:// schedule
 	static auto Schedule(bool omit_slice = false) -> void;// Timer using
 	struct ReadyQueue {

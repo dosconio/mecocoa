@@ -11,10 +11,7 @@ FileDescriptor* f_desc_table = nil;
 stduint f_desc_table_count = 0;
 
 //// ---- ---- SYSCALL ---- ---- ////
-#ifdef _ARC_x86 // x86:
 
-
-//
 //{TODO} relative path
 stdsint ProcessBlock::Open(rostr pathname, int flags) {
 	int fd = -1;
@@ -119,10 +116,13 @@ bool ProcessBlock::Close(int fid)
 		return false;
 	}
 	Filesys::Close(self.pfiles[fd]->vfile);
+	self.pfiles[fd]->vfile->f_inode->ref_count--;
 	self.pfiles[fd]->vfile = nullptr; // Mark as free for reuse
 	self.pfiles[fd] = nullptr;
 	return true;
 }
+
+#ifdef _ARC_x86 // x86:
 
 //{} unchk
 stdsint do_lseek(stduint pid, int fd, stdsint off, int whence) {
@@ -194,12 +194,14 @@ void serv_file_loop()// for IDE 0:0, 0:1
 			#ifdef _ARC_x86
 			syssend(Task_Hdd_Serv, &retval, sizeof(retval[0]), _IMM(FiledevMsg::RUPT));// while (!fileman_hd_ready);
 			if (plab) {
-				IC.enAble(false);
 				extern bool ento_gui;
-				Taskman::CreateFile((*plab + "/init").reference(), 3, Task_Kernel)->focus_tty = vttys[ento_gui ? 1 : 0];
-				Taskman::CreateFile((*plab + "/apps/c").reference(), 3, Task_Kernel)->focus_tty = vttys[ento_gui ? 1 : 0];
-				Taskman::CreateFile((*plab + "/apps/d").reference(), 3, Task_Kernel)->focus_tty = vttys[ento_gui ? 1 : 0];
-				IC.enAble();
+				ProcessBlock* p;
+				p = Taskman::CreateFile((*plab + "/init").reference(), 3, Task_Kernel);
+				p->focus_tty = vttys[ento_gui ? 1 : 0];
+				Taskman::Append(p);
+				p = Taskman::CreateFile((*plab + "/apps/c").reference(), 3, Task_Kernel);
+				p->focus_tty = vttys[ento_gui ? 1 : 0];
+				Taskman::Append(p);
 			}
 			else plogerro("No fs for INIT");
 			#endif
