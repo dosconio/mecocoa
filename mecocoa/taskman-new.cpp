@@ -495,3 +495,238 @@ ProcessBlock* Taskman::CreateFile(const char* path, byte ring, stduint parent) {
 	return nullptr;
 };
 
+//
+
+ProcessBlock* Taskman::Exec(stduint parent, rostr usr_fullpath, void* usr_argstack, stduint stacklen)
+{
+	char buf_fullpath[_TEMP 32];
+	auto parent_pb = Locate(parent);
+	StrCopyP(buf_fullpath, kernel_paging, usr_fullpath, parent_pb->paging, sizeof(buf_fullpath));
+	ploginfo("%s: %u \"%s\" %x %x", __FUNCIDEN__, parent, buf_fullpath, usr_argstack, stacklen);
+
+	auto new_pb = Taskman::CreateFile(buf_fullpath, RING_U, parent);
+	if (!new_pb) {
+		plogwarn("%s: failed to load file", __FUNCIDEN__);
+		return nullptr;
+	}
+
+	stduint argc = 0;
+	stduint argv_ptr = 0;
+	stduint new_sp = new_pb->context.SP;
+
+	if (stacklen > 0 && usr_argstack != nullptr) {
+		byte* temp_stack = new byte[stacklen];
+		if (!temp_stack) {
+			plogerro("%s: alloc temp_stack fail", __FUNCIDEN__);
+		}
+		else {
+			MemCopyP(temp_stack, kernel_paging, usr_argstack, parent_pb->paging, stacklen);
+			new_sp = (new_sp - stacklen) & ~_IMM(0xFlu);
+			stduint delta = new_sp - _IMM(usr_argstack);
+
+			char** q = (char**)temp_stack;
+			for (; *q != nullptr; q++, argc++) {
+				*q = (char*)(_IMM(*q) + delta);
+			}
+			MemCopyP((void*)new_sp, new_pb->paging, temp_stack, kernel_paging, stacklen);
+			argv_ptr = new_sp;
+			delete[] temp_stack;
+		}
+	}
+	else {
+		new_sp = (new_sp - sizeof(stduint)) & ~_IMM(0xFlu);
+		stduint null_ptr = 0;
+		MemCopyP((void*)new_sp, new_pb->paging, &null_ptr, kernel_paging, sizeof(stduint));
+		argv_ptr = new_sp;
+	}
+
+	// [!] Unconditionally construct the C standard call frame for _start
+	#if (_MCCA & 0xFF00) == 0x8600
+
+	// Construct standard C call frame for x86: [Dummy Return IP, argc, argv]
+	struct C_CallFrame {
+		stduint dummy_return_ip;
+		stduint argc;
+		stduint argv;
+	};
+
+	C_CallFrame frame = { 0, argc, argv_ptr };
+	new_sp = new_sp & ~_IMM(0xFlu);
+	// System V ABI : ESP % 16 == 12
+	new_sp = new_sp - 20;// new_sp -= sizeof(call_frame);
+	MemCopyP((void*)new_sp, new_pb->paging, (void*)&frame, kernel_paging, sizeof(frame));
+	new_pb->context.SP = new_sp;	// esp = new stack pointer
+
+	#elif (_MCCA & 0xFF00) == 0x1000
+
+	new_pb->context.a0 = argc; // a0 = argc
+	new_pb->context.a1 = argv_ptr; // a1 = argv
+	new_pb->context.sp = new_sp; // sp = new stack pointer
+
+	#endif
+	new_pb->focus_tty = parent_pb->focus_tty;
+	Taskman::Append(new_pb);
+	return new_pb;
+}
+
+ProcessBlock* Taskman::Exet(stduint parent, rostr usr_fullpath, void* usr_argstack, stduint stacklen)
+{
+	char buf_fullpath[_TEMP 32];
+	auto current_pb = Locate(parent); // In EXET, caller is the parent (itself)
+
+	// Resolve path from old user space
+	StrCopyP(buf_fullpath, kernel_paging, usr_fullpath, current_pb->paging, sizeof(buf_fullpath));
+	auto label = StrIndexCharRight(buf_fullpath, '/');
+	if (!label) label = buf_fullpath; else label++;
+
+	ploginfo("%s: PID %u replacing image with \"%s\"", __FUNCIDEN__, parent, buf_fullpath);
+
+	// Open the executable file (Mirroring CreateFile logic)
+	vfs_dentry* d = Filesys::Index(buf_fullpath);
+	if (!d || !d->d_inode || !d->d_inode->i_sb || !d->d_inode->i_sb->fs) {
+		plogwarn("%s: File not found at %s", __FUNCIDEN__, buf_fullpath);
+		return nullptr;
+	}
+	FileBlockBridge loop_device(d->d_inode->i_sb->fs, d->d_inode->internal_handler, d->d_inode->i_size, 512);
+
+	// Read and Verify ELF Header
+	auto block_buffer = new byte[512];
+	struct ELF_Header_t header;
+	loop_device.Read(0, &header, sizeof(header), block_buffer);
+	if (MemCompare((const char*)header.e_ident, "\x7F""ELF", 4)) {
+		delete[] block_buffer;
+		plogerro("%s: Invalid ELF File Magic Number", __FUNCIDEN__);
+		return nullptr;
+	}
+
+	// Backup arguments BEFORE destroying the old address space
+	byte* temp_stack = nullptr;
+	if (stacklen > 0 && usr_argstack != nullptr) {
+		temp_stack = new byte[stacklen];
+		if (!temp_stack) {
+			delete[] block_buffer;
+			plogerro("%s: alloc temp_stack fail", __FUNCIDEN__);
+			return nullptr;
+		}
+		MemCopyP(temp_stack, kernel_paging, usr_argstack, current_pb->paging, stacklen);
+	}
+
+	// ==========================================
+	// From here, the old process image is destroyed.
+	// ==========================================
+
+	// Destroy Old User Space Segments (Using your continuous memory logic)
+	for0a(i, current_pb->load_slices) {
+		if (!current_pb->load_slices[i].address) break;
+		if (current_pb->load_slices[i].length >= PAGE_SIZE &&
+			(byte*)current_pb->paging[(current_pb->load_slices[i].address) & ~0xFFF] + PAGE_SIZE ==
+			(byte*)current_pb->paging[(current_pb->load_slices[i].address + PAGE_SIZE) & ~0xFFF]) {
+			delete (byte*)current_pb->paging[(current_pb->load_slices[i].address) & ~0xFFF];
+		}
+		else while (current_pb->load_slices[i].length) {
+			delete (byte*)current_pb->paging[(current_pb->load_slices[i].address) & ~0xFFF];
+			current_pb->load_slices[i].address += 0x1000;
+			current_pb->load_slices[i].length -= minof(0x1000, current_pb->load_slices[i].length);
+		}
+		current_pb->load_slices[i].address = 0;
+		current_pb->load_slices[i].length = 0;
+	}
+
+	// Reset Paging but PRESERVE the physical address of the stacks
+	stduint stack_norm_phy;
+	if (current_pb->stack_lineaddr == current_pb->stack_levladdr) {
+		stack_norm_phy = _IMM(current_pb->stack_levladdr);
+	}
+	else {
+		stack_norm_phy = _IMM(current_pb->paging[_IMM(current_pb->stack_lineaddr) & ~0xFFF]);
+	}
+
+	current_pb->paging.~Paging(); // Destroy old page tables
+
+	#if (_MCCA & 0xFF00) == 0x8600
+	current_pb->context.CR3 = _Taskman_Create_Paging(current_pb, current_pb->ring, stack_norm_phy);
+	#elif _MCCA == 0x1032 || _MCCA == 0x1064
+	current_pb->context.satp = _Taskman_Create_Paging(current_pb, current_pb->ring, stack_norm_phy);
+	#endif
+
+	// Load New ELF Image into current_pb
+	current_pb->context.IP = _IMM(header.e_entry);
+	stduint load_slice_p = 0;
+	for0(i, header.e_phnum) {
+		struct ELF_PHT_t ph;
+		stduint ph_offset = header.e_phoff + header.e_phentsize * i;
+		loop_device.Read(ph_offset, &ph, sizeof(ph), block_buffer);
+		if (ph.p_type == PT_LOAD && ph.p_memsz) {
+			_CreateELF_Carry((char*)ph.p_vaddr, ph.p_memsz, &loop_device, ph.p_offset, ph.p_filesz, current_pb->paging, block_buffer);
+			if (load_slice_p < numsof(current_pb->load_slices)) {
+				current_pb->load_slices[load_slice_p].address = ph.p_vaddr;
+				current_pb->load_slices[load_slice_p].length = ph.p_memsz;
+				load_slice_p++;
+			}
+		}
+	}
+	delete[] block_buffer;
+
+	// 8. Setup New Stack & C ABI Call Frame
+	stduint argc = 0;
+	stduint argv_ptr = 0;
+	const stduint stack_loc_top = _IMM(current_pb->stack_lineaddr) + current_pb->stack_size;
+	stduint new_sp = stack_loc_top;
+
+	if (temp_stack) {
+		new_sp = (new_sp - stacklen) & ~_IMM(0xFlu);
+		stduint delta = new_sp - _IMM(usr_argstack);
+
+		char** q = (char**)temp_stack;
+		for (; *q != nullptr; q++, argc++) {
+			*q = (char*)(_IMM(*q) + delta);
+		}
+		MemCopyP((void*)new_sp, current_pb->paging, temp_stack, kernel_paging, stacklen);
+		argv_ptr = new_sp;
+		delete[] temp_stack;
+	}
+	else {
+		new_sp = (new_sp - sizeof(stduint)) & ~_IMM(0xFlu);
+		stduint null_ptr = 0;
+		MemCopyP((void*)new_sp, current_pb->paging, &null_ptr, kernel_paging, sizeof(stduint));
+		argv_ptr = new_sp;
+	}
+
+	#if (_MCCA & 0xFF00) == 0x8600
+
+	struct C_CallFrame {
+		stduint dummy_return_ip;
+		stduint argc;
+		stduint argv;
+	};
+	C_CallFrame frame = { 0, argc, argv_ptr };
+	// System V ABI 16-byte alignment + margin
+	new_sp = new_sp & ~_IMM(0xFlu);
+	new_sp = new_sp - 48;
+	MemCopyP((void*)new_sp, current_pb->paging, &frame, kernel_paging, sizeof(frame));
+	current_pb->context.AX = 0;
+	current_pb->context.CX = 0;
+	current_pb->context.SP = new_sp;
+	treat<uint32>(&current_pb->context.floating_point_context[24]) = 0x1F80; // Reset FPU
+	SetSegment(&current_pb->context);
+	current_pb->unsolved_msg = nullptr;
+
+	#elif (_MCCA & 0xFF00) == 0x1000
+
+	new_sp = (new_sp & ~_IMM(0xFlu)) - 0x10;
+	current_pb->context.a0 = argc;
+	current_pb->context.a1 = argv_ptr;
+	current_pb->context.sp = new_sp;
+	#endif
+
+	using PBS = ProcessBlock::State;
+	if (current_pb->state != PBS::Ready) {
+		// Clear any pending IPC wait parameters (pseudo-code, adapt to your struct)
+		// current_pb->wait_for_pid = 0; 
+		current_pb->state = PBS::Ready;
+	}
+	// DumpTask(current_pb);
+	Taskman::EnqueueReady(current_pb);
+	return current_pb;
+}
+

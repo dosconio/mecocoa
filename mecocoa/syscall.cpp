@@ -76,19 +76,16 @@ stduint Handint_SYSCALL(CallgateFrame* frame) {
 		task_switch_enable = task_switch_enable_old;
 	}
 	switch (callid) {
-	case syscall_t::OUTC: {
+	case syscall_t::OUTC:
 		ret = sysc_OUTC(para[0], para[1]);
 		if (ch_tse) task_switch_enable = task_switch_enable_old;
 		break;
-	}
 	case syscall_t::INNC:
 		ret = sysc_INNC(para[0]);
 		break;
 	case syscall_t::EXIT:
-	{
 		sysc_EXIT(para[0]); loop;
 		break;
-	}
 	case syscall_t::TIME:
 		ret = mecocoa_global->system_time.sec;
 		break;
@@ -97,19 +94,16 @@ stduint Handint_SYSCALL(CallgateFrame* frame) {
 		if (ch_tse) task_switch_enable = task_switch_enable_old;
 		break;
 	case syscall_t::COMM:// (mode, obj, vaddr msg)
-	{
 		ret = sysc_COMM(Taskman::Locate(caller_pid), para[1], para[0], (CommMsg*)para[2]);
 		if (ch_tse) task_switch_enable = task_switch_enable_old;
 		break;
-	}
 	case syscall_t::OPEN:// (str, uint)->(uint)
 		ret = syscall_06_open(para, caller_pid);
 		break;
 	case syscall_t::CLOS:
 		ret = syscall_07_close(para, caller_pid);
 		break;
-	case syscall_t::READ:
-	case syscall_t::WRIT:
+	case syscall_t::READ: case syscall_t::WRIT:
 	{
 		stduint open_buf[4];
 		open_buf[0] = para[0];// fid
@@ -162,18 +156,15 @@ stduint Handint_SYSCALL(CallgateFrame* frame) {
 		ret = _IMM(pb->queue_send_queuehead);
 		break;
 	}
-	case syscall_t::EXEC:
-	{
+	case syscall_t::EXEC: case syscall_t::EXET:
 		msgbuf[0] = caller_pid;
 		msgbuf[1] = para[0];
 		msgbuf[2] = para[1];
 		msgbuf[3] = para[2];
-		syssend(Task_TaskMan, sliceof(msgbuf), _IMM(TaskmanMsg::EXEC));
-		sysrecv(Task_TaskMan, &ret, byteof(ret));
+		syssend(Task_TaskMan, sliceof(msgbuf),
+			_IMM(callid == syscall_t::EXEC ? TaskmanMsg::EXEC : TaskmanMsg::EXET));
+		sysrecv(Task_TaskMan, &ret, byteof(ret));// blocked and disappear here
 		break;
-	}
-
-
 
 	case syscall_t::TEST:
 		if (para[0] == 'T' && para[1] == 'E' && para[2] == 'S') {

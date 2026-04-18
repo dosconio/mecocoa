@@ -122,11 +122,9 @@ bool ProcessBlock::Close(int fid)
 	return true;
 }
 
-#ifdef _ARC_x86 // x86:
-
-//{} unchk
-stdsint do_lseek(stduint pid, int fd, stdsint off, int whence) {
-	ProcessBlock* pb = Taskman::Locate(pid);
+//{} unchk unused
+stdsint ProcessBlock::Seek(int fd, stdsint off, int whence) {
+	ProcessBlock* const pb = this;
 
 	// Validate ProcessBlock and File Descriptor
 	if (!pb || fd < 0 || !pb->pfiles[fd] || !pb->pfiles[fd]->vfile) {
@@ -172,6 +170,7 @@ stdsint do_lseek(stduint pid, int fd, stdsint off, int whence) {
 
 //// ---- ---- SERVICE ---- ---- ////
 
+#ifdef _ARC_x86 // x86:
 extern String* plab;
 #endif
 
@@ -197,9 +196,6 @@ void serv_file_loop()// for IDE 0:0, 0:1
 				extern bool ento_gui;
 				ProcessBlock* p;
 				p = Taskman::CreateFile((*plab + "/init").reference(), 3, Task_Kernel);
-				p->focus_tty = vttys[ento_gui ? 1 : 0];
-				Taskman::Append(p);
-				p = Taskman::CreateFile((*plab + "/apps/c").reference(), 3, Task_Kernel);
 				p->focus_tty = vttys[ento_gui ? 1 : 0];
 				Taskman::Append(p);
 			}

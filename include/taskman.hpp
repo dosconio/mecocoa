@@ -169,6 +169,8 @@ public: // _Comment(Fileman);
 	auto Rdwt(bool wr_type, stduint fid, Slice slice) -> stduint;
 	//
 	auto Close(int fid) -> bool;
+	// lseek
+	auto Seek(int fd, stdsint off, int whence) -> stdsint;
 	//
 	// bool Remove(rostr pathname);
 };
@@ -220,6 +222,8 @@ public:// taskman
 		Wait(ProcessBlock* pb) -> stdsint;
 	static auto
 		Exec(stduint parent, rostr usr_fullpath, void* usr_argstack, stduint stacklen) -> ProcessBlock*;
+	static auto// aka POSIX-EXECV
+		Exet(stduint parent, rostr usr_fullpath, void* usr_argstack, stduint stacklen) -> ProcessBlock*;
 public:// schedule
 	static auto Schedule(bool omit_slice = false) -> void;// Timer using
 	struct ReadyQueue {
@@ -251,6 +255,7 @@ enum class TaskmanMsg : stduint {
 	FORK,
 	WAIT,
 	EXEC,
+	EXET,
 };
 
 

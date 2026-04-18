@@ -27,7 +27,7 @@ enum
 	FORK = 0x0E, // U.fork ()->pid            | x86
 	TMSG = 0x0F, // trymsg ()->(msg_unsovled) | x86 rv
 	EXEC = 0x10, // spawnl (path,args,len)->0 | x86
-	EXET = 0x11, // execl  (path,args,len)->0 |
+	EXET = 0x11, // execl  (path,args,len)->0 | x86
 	MALC = 0x12, // malloc (pages)->addr>0    | 
 
 	GET_CORE_ID, // | rv

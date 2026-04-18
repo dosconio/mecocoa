@@ -196,6 +196,52 @@ static int spawnv(const char* path, char* argv[])
 	return syscall(syscall_t::EXEC, _IMM(path), _IMM(arg_stack), stack_len);
 }
 
-int execl(const char* path, const char* arg, ...);
-static int execv(const char* path, char* argv[]);
+int execv(const char* path, char* argv[]);
+int execl(const char* path, const char* arg, ...)
+{
+	char* argv[_TEMP 8];
+	int argc = 0;
+	va_list args;
+	argv[argc++] = (char*)arg;
+	va_start(args, arg);
+	while (argc < numsof(argv) - 1) {
+		char* next_arg = va_arg(args, char*);
+		argv[argc++] = next_arg;
+		// requires the argument list to be terminated by a NULL pointer
+		if (next_arg == 0) {
+			break;
+		}
+	}
+	va_end(args);
+	argv[argc] = 0;
+	return execv(path, argv);
+}
+int execv(const char* path, char* argv[])
+{
+	char** p = argv;
+	char arg_stack[PROC_ORIGIN_STACK];
+	int stack_len = 0;
 
+	while(*p++) {
+		if (stack_len + 2 * sizeof(char*) < PROC_ORIGIN_STACK); else {
+			plogerro("panic %s:%u", __FUNCIDEN__, __LINE__);
+		}
+		stack_len += sizeof(char*);
+	}
+
+	*((char**)(&arg_stack[stack_len])) = nullptr;
+	stack_len += sizeof(char*);
+
+	char ** q = (char**)arg_stack;
+	for (p = argv; *p != 0; p++) {
+		*q++ = &arg_stack[stack_len];
+		if (stack_len + StrLength(*p) + 1 < PROC_ORIGIN_STACK); else {
+			plogerro("panic %s:%u", __FUNCIDEN__, __LINE__);
+		}
+		StrCopy(&arg_stack[stack_len], *p);
+		stack_len += StrLength(*p);
+		arg_stack[stack_len] = 0;
+		stack_len++;
+	}
+	return syscall(syscall_t::EXET, _IMM(path), _IMM(arg_stack), stack_len);
+}

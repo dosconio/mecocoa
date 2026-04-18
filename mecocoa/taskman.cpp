@@ -65,10 +65,23 @@ void Taskman::DumpTask(ProcessBlock* pb) {
 	ploginfo(" (%u:%u) head %u, next %u, send_to_whom",
 		pb->state, pb->block_reason, pb->queue_send_queuehead, pb->queue_send_queuenext);
 	#if (_MCCA & 0xFF00) == 0x1000
-    ploginfo("  ra : %[x]  sp : %[x]  gp : %[x]  tp : %[x]", ctx->ra, ctx->sp, ctx->gp, ctx->tp);
-    ploginfo("  a0 : %[x]  a1 : %[x]  a7 : %[x]  s0 : %[x]", ctx->a0, ctx->a1, ctx->a7, ctx->s0);
-    ploginfo("  mepc: %[x]  mstatus: %[x]  satp: %[x]", ctx->mepc, ctx->mstatus, ctx->satp);
-    ploginfo("  ksp : %[x]", ctx->kernel_sp);
+	ploginfo("  ra : %[x]  sp : %[x]  gp : %[x]  tp : %[x]", ctx->ra, ctx->sp, ctx->gp, ctx->tp);
+	ploginfo("  a0 : %[x]  a1 : %[x]  a7 : %[x]  s0 : %[x]", ctx->a0, ctx->a1, ctx->a7, ctx->s0);
+	ploginfo("  mepc: %[x]  mstatus: %[x]  satp: %[x]", ctx->mepc, ctx->mstatus, ctx->satp);
+	ploginfo("  ksp : %[x]", ctx->kernel_sp);
+
+	#elif (_MCCA & 0xFF00) == 0x8600
+
+	// x86 Context Dump (General Purpose Registers)
+	ploginfo("  AX : %[x]  BX : %[x]  CX : %[x]  DX : %[x]", ctx->AX, ctx->BX, ctx->CX, ctx->DX);
+	ploginfo("  SI : %[x]  DI : %[x]  BP : %[x]  SP : %[x]", ctx->SI, ctx->DI, ctx->BP, ctx->SP);
+
+	// Instruction Pointer, Flags, and Paging
+	// Note: Adjust 'FLAGS' to 'EFLAGS' or your specific struct member name if it differs
+	ploginfo("  IP : %[x]  FLAGS: %[x]  CR3: %[x]", ctx->IP, ctx->FLAG, ctx->CR3);
+
+	// Privilege Level
+	ploginfo("  RING: %u", ctx->RING);
 	#endif
 	ploginfo("========================================");
 }
@@ -107,7 +120,7 @@ static void _Exit_Cleanup(stduint pid)
 	if (flag & 0x200) InterruptDisable();
 	#endif
 	auto ppb = Taskman::Locate(pid);
-	ploginfo("cleaning %u", pid);
+	ploginfo("cleaning %u, now exist %u tasks", pid, Taskman::chain.Count());
 	Taskman::DequeueReady(ppb);
 	// Msg: Clear IPC
 	ProcessBlock* sender = ppb->queue_send_queuehead;
@@ -239,78 +252,6 @@ stdsint Taskman::Wait(ProcessBlock* pb)
 	return ~_IMM0;
 }
 
-ProcessBlock* Taskman::Exec(stduint parent, rostr usr_fullpath, void* usr_argstack, stduint stacklen)
-{
-	char buf_fullpath[_TEMP 32];
-	auto parent_pb = Locate(parent);
-	StrCopyP(buf_fullpath, kernel_paging, usr_fullpath, parent_pb->paging, sizeof(buf_fullpath));
-	ploginfo("%s: %u \"%s\" %x %x", __FUNCIDEN__, parent, buf_fullpath, usr_argstack, stacklen);
-
-	auto new_pb = Taskman::CreateFile(buf_fullpath, RING_U, parent);
-	if (!new_pb) {
-		plogwarn("%s: failed to load file", __FUNCIDEN__);
-		return nullptr;
-	}
-
-	stduint argc = 0;
-	stduint argv_ptr = 0;
-	stduint new_sp = new_pb->context.SP;
-
-	if (stacklen > 0 && usr_argstack != nullptr) {
-		byte* temp_stack = new byte[stacklen];
-		if (!temp_stack) {
-			plogerro("%s: alloc temp_stack fail", __FUNCIDEN__);
-		}
-		else {
-			MemCopyP(temp_stack, kernel_paging, usr_argstack, parent_pb->paging, stacklen);
-			new_sp = (new_sp - stacklen) & ~_IMM(0xFlu);
-			stduint delta = new_sp - _IMM(usr_argstack);
-
-			char** q = (char**)temp_stack;
-			for (; *q != nullptr; q++, argc++) {
-				*q = (char*)(_IMM(*q) + delta);
-			}
-			MemCopyP((void*)new_sp, new_pb->paging, temp_stack, kernel_paging, stacklen);
-			argv_ptr = new_sp;
-			delete[] temp_stack;
-		}
-	}
-	else {
-		new_sp = (new_sp - sizeof(stduint)) & ~_IMM(0xFlu);
-		stduint null_ptr = 0;
-		MemCopyP((void*)new_sp, new_pb->paging, &null_ptr, kernel_paging, sizeof(stduint));
-		argv_ptr = new_sp;
-	}
-
-	// [!] Unconditionally construct the C standard call frame for _start
-	#if (_MCCA & 0xFF00) == 0x8600
-
-	// Construct standard C call frame for x86: [Dummy Return IP, argc, argv]
-	struct C_CallFrame {
-		stduint dummy_return_ip;
-		stduint argc;
-		stduint argv;
-	};
-
-	C_CallFrame frame = { 0, argc, argv_ptr };
-	new_sp = new_sp & ~_IMM(0xFlu);
-	// System V ABI : ESP % 16 == 12
-	new_sp = new_sp - 20;// new_sp -= sizeof(call_frame);
-	MemCopyP((void*)new_sp, new_pb->paging, (void*)&frame, kernel_paging, sizeof(frame));
-	new_pb->context.SP = new_sp;	// esp = new stack pointer
-
-	#elif (_MCCA & 0xFF00) == 0x1000
-
-	new_pb->context.a0 = argc; // a0 = argc
-	new_pb->context.a1 = argv_ptr; // a1 = argv
-	new_pb->context.sp = new_sp; // sp = new stack pointer
-
-	#endif
-	new_pb->focus_tty = parent_pb->focus_tty;
-	Taskman::Append(new_pb);
-	return new_pb;
-}
-
 // #pragma GCC pop_options
 
 
@@ -352,6 +293,13 @@ void _Comment(R0) serv_task_loop()
 			pb = Taskman::Exec(to_args[0], (rostr)to_args[1], (void*)to_args[2], to_args[3]);
 			ret = pb ? pb->getID() : 0;
 			syssend(sig_src, (void*)&ret, sizeof(ret));
+			break;
+		case TaskmanMsg::EXET:// (pid, &usr:fullpath, &usr:argstack, stacklen)
+			pb = Taskman::Exet(to_args[0], (rostr)to_args[1], (void*)to_args[2], to_args[3]);
+			if (!pb) {
+				ret = ~_IMM0;
+				syssend(sig_src, (void*)&ret, sizeof(ret));
+			}
 			break;
 		#endif
 
