@@ -153,7 +153,7 @@ stduint Handint_SYSCALL(CallgateFrame* frame) {
 	case syscall_t::TMSG:
 	{
 		ProcessBlock* pb = Taskman::Locate(caller_pid);
-		ret = _IMM(pb->queue_send_queuehead);
+		ret = _IMM(pb->main_thread->queue_send_queuehead);
 		break;
 	}
 	case syscall_t::EXEC: case syscall_t::EXET:
@@ -224,7 +224,7 @@ stduint syscall(syscall_t callid, stduint para1, stduint para2, stduint para3) {
 	#elif (_MCCA & 0xFF00) == 0x1000
 	void syscall_body(NormalTaskContext * cxt);
 	auto ppb = Taskman::Locate(Taskman::CurrentPID());
-	auto& cxt = ppb->context;
+	auto& cxt = ppb->main_thread->context;
 	cxt.a7 = _IMM(callid);
 	cxt.a0 = para1;
 	cxt.a1 = para2;
@@ -314,7 +314,7 @@ DEFSYSC sysc_COMM(ProcessBlock *pb, stduint to, stduint op, CommMsg* msg) {
 		plogerro("Invalid op %x", op);
 		return 0xF0F0;
 	}
-	if (pb->state == ProcessBlock::State::Pended) {
+	if (pb->main_thread->state == ThreadBlock::State::Pended) {
 		Taskman::Schedule(true);
 	}
 	return ret;
@@ -322,7 +322,7 @@ DEFSYSC sysc_COMM(ProcessBlock *pb, stduint to, stduint op, CommMsg* msg) {
 
 DEFSYSC sysc_TMSG() {
 	ProcessBlock* pb = Taskman::Locate(Taskman::CurrentPID());
-	return _IMM(pb->queue_send_queuehead);
+	return _IMM(pb->main_thread->queue_send_queuehead);
 }
 
 #endif

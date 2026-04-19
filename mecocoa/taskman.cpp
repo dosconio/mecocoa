@@ -46,6 +46,71 @@ namespace uni {
 static SysMessage _BUF_Message[64];
 Queue<SysMessage> message_queue(_BUF_Message, numsof(_BUF_Message));
 
+// ---- Lock ----
+void Taskman::SleepAndRelease(Spinlock* lk) {
+	auto old_tb = current_thread[getID()];
+	DequeueReady(old_tb);
+	lk->Release(false);
+	auto new_tb = PickNext();
+	if (!new_tb) new_tb = Locate(0)->main_thread;
+	current_thread[getID()] = new_tb;
+	new_tb->state = ThreadBlock::State::Running;
+	SwitchTaskContext(&new_tb->context, &old_tb->context);
+}
+
+bool Spinlock::Acquire() {
+	byte state_rupt;
+	#if (_MCCA & 0xFF00) == 0x8600
+	if (state_rupt = cast<REG_FLAG_t>(getFlags).IF) {
+		IC.enAble(false);
+	}
+	#endif
+	while (__atomic_exchange_n(&this->locked, 1, __ATOMIC_ACQUIRE) != 0) {
+		#if (_MCCA & 0xFF00) == 0x8600
+		asm volatile("pause" ::: "memory");
+		#endif
+	}
+	this->cpu_id = Taskman::getID();
+	return state_rupt;
+}
+void Spinlock::Release(bool old_if) {
+	this->cpu_id = -1;
+	__atomic_store_n(&this->locked, 0, __ATOMIC_RELEASE);
+	if (old_if) IC.enAble();
+}
+void Mutex::Acquire() {
+	bool old_if = this->guard.Acquire();
+
+	if (this->locked) {
+		ThreadBlock* crt = Taskman::current_thread[Taskman::getID()];
+		if (!this->wait_queue.isFull()) {
+			crt->state = ThreadBlock::State::Pended;
+			crt->block_reason = ThreadBlock::BlockReason::BR_Waiting;
+			this->wait_queue.Enqueue(crt);
+			Taskman::SleepAndRelease(&this->guard);
+		}
+		if (old_if) IC.enAble();
+	}
+	else {
+		this->locked = 1;
+		this->guard.Release(old_if);
+	}
+}
+void Mutex::Release() {
+	bool old_if = this->guard.Acquire();
+	if (!this->wait_queue.isEmpty()) {
+		ThreadBlock* wakeup_tb = nullptr;
+		this->wait_queue.Dequeue(wakeup_tb);
+		if (wakeup_tb) {
+			wakeup_tb->Unblock(ThreadBlock::BlockReason::BR_Waiting);
+		}
+	}
+	else {
+		this->locked = 0;
+	}
+	this->guard.Release(old_if);
+}
+
 // ---- . ----
 
 auto Taskman::AllocateTask() -> ProcessBlock* {
@@ -59,11 +124,21 @@ auto Taskman::AllocateTask() -> ProcessBlock* {
 	return ppb;
 }
 
+auto Taskman::AllocateThread() -> ThreadBlock* {
+	auto tb = (ThreadBlock*)mempool.allocate(sizeof(ThreadBlock), 4);
+	MemSet(tb, 0, sizeof(ThreadBlock));
+	if (!tb) {
+		plogerro("Taskman::AllocateThread() failed");
+		return nullptr;
+	}
+	return tb;
+}
+
 void Taskman::DumpTask(ProcessBlock* pb) {
-	auto ctx = &pb->context;
+	auto ctx = &pb->main_thread->context;
 	ploginfo("=== Context [%d] at %[x] ===", pb->getID(), pb);
 	ploginfo(" (%u:%u) head %u, next %u, send_to_whom",
-		pb->state, pb->block_reason, pb->queue_send_queuehead, pb->queue_send_queuenext);
+		pb->state, pb->main_thread->block_reason, pb->main_thread->queue_send_queuehead, pb->main_thread->queue_send_queuenext);
 	#if (_MCCA & 0xFF00) == 0x1000
 	ploginfo("  ra : %[x]  sp : %[x]  gp : %[x]  tp : %[x]", ctx->ra, ctx->sp, ctx->gp, ctx->tp);
 	ploginfo("  a0 : %[x]  a1 : %[x]  a7 : %[x]  s0 : %[x]", ctx->a0, ctx->a1, ctx->a7, ctx->s0);
@@ -121,23 +196,31 @@ static void _Exit_Cleanup(stduint pid)
 	#endif
 	auto ppb = Taskman::Locate(pid);
 	ploginfo("cleaning %u, now exist %u tasks", pid, Taskman::chain.Count());
-	Taskman::DequeueReady(ppb);
+	if (ppb->main_thread) Taskman::DequeueReady(ppb->main_thread);
 	// Msg: Clear IPC
-	ProcessBlock* sender = ppb->queue_send_queuehead;
+	ThreadBlock* sender = ppb->main_thread->queue_send_queuehead;
 	while (sender) {
-		ProcessBlock* next = sender->queue_send_queuenext;
-		sender->Unblock(ProcessBlock::BlockReason::BR_SendMsg);
+		ThreadBlock* next = sender->queue_send_queuenext;
+		sender->Unblock(ThreadBlock::BlockReason::BR_SendMsg);
 		sender = next;
 	}// wakeup senders
-	ppb->queue_send_queuehead = nullptr;
-	// Release User and Kernel Stack
-	if (ppb->stack_lineaddr == ppb->stack_levladdr) {// Ring_M App use one stack (R0 for x86)
-		delete (byte*)ppb->stack_levladdr;
+	ppb->main_thread->queue_send_queuehead = nullptr;
+	// Release Threads
+	ThreadBlock* th = ppb->thread_list_head;
+	while (th) {
+		ThreadBlock* next_th = th->process_thread_next;
+		Taskman::DequeueReady(th);
+		if (th->stack_lineaddr == th->stack_levladdr) {
+			delete (byte*)th->stack_levladdr;
+		}
+		else {
+			delete (byte*)ppb->paging[_IMM(th->stack_lineaddr) & ~0xFFF];
+			delete (byte*)th->stack_levladdr;
+		}
+		delete (byte*)th;
+		th = next_th;
 	}
-	else {
-		delete (byte*)ppb->paging[_IMM(ppb->stack_lineaddr)];
-		delete (byte*)ppb->stack_levladdr;
-	}
+	ppb->thread_list_head = ppb->main_thread = nullptr;
 	// Release Segments
 	for0a(i, ppb->load_slices) {
 		if (!ppb->load_slices[i].address) break;
@@ -196,7 +279,7 @@ bool Taskman::Exit(ProcessBlock* p, stdsint exit_code)
 
 			// If Init is waiting and this child is already a zombie
 			if (init_pb->isWaiting() && taski->state == PBS::Hanging) {
-				init_pb->Unblock(ProcessBlock::BlockReason::BR_Waiting);
+				init_pb->main_thread->Unblock(ThreadBlock::BlockReason::BR_Waiting);
 
 				stduint child_args[2] = { taski->pid, taski->exit_status };
 				syssend(Task_Init, &child_args, sizeof(child_args));
@@ -210,7 +293,7 @@ bool Taskman::Exit(ProcessBlock* p, stdsint exit_code)
 	// Handle Self (Notify Parent or become Zombie)
 	using PBS = ProcessBlock::State;
 	if (pparent && pparent->isWaiting()) {
-		pparent->Unblock(ProcessBlock::BlockReason::BR_Waiting);
+		pparent->main_thread->Unblock(ThreadBlock::BlockReason::BR_Waiting);
 		syssend(parent_pid, &args, sizeof(args));
 		_Exit_Cleanup(pid); // Die completely
 	}
@@ -218,7 +301,7 @@ bool Taskman::Exit(ProcessBlock* p, stdsint exit_code)
 		_Exit_Cleanup(pid); // No parent (usually only Init or Kernel), die completely
 	}
 	else {
-		Taskman::DequeueReady(p);
+		if (p->main_thread) Taskman::DequeueReady(p->main_thread);
 		p->state = PBS::Hanging; // Become a Zombie and wait for parent to call Wait()
 	}
 
@@ -244,7 +327,7 @@ stdsint Taskman::Wait(ProcessBlock* pb)
 		}
 	}
 	if (children) {// no child is HANGING
-		pb->Block(ProcessBlock::BlockReason::BR_Waiting);
+		pb->main_thread->Block(ThreadBlock::BlockReason::BR_Waiting);
 	}
 	else { // no any child
 		syssend(pid, &children, sizeof(children));// return 0

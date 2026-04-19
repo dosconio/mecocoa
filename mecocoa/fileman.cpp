@@ -198,6 +198,7 @@ void serv_file_loop()// for IDE 0:0, 0:1
 				p = Taskman::CreateFile((*plab + "/init").reference(), 3, Task_Kernel);
 				p->focus_tty = vttys[ento_gui ? 1 : 0];
 				Taskman::Append(p);
+				Taskman::AppendThread(p->main_thread);
 			}
 			else plogerro("No fs for INIT");
 			#endif

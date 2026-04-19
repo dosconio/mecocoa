@@ -102,8 +102,11 @@ trap_vector:
 .L_restore_user_context:
 	csrr    t6, mscratch # not csrr t6, mscratch
 	LOAD    t0, 33*SIZE_REG(t6)
+	csrr    t1, satp
+	BEQ     t0, t1, .L_skip_satp_restore
 	csrw    satp, t0
 	sfence.vma zero, zero
+.L_skip_satp_restore:
 	LOAD    t0, 32*SIZE_REG(t6)
 	csrw    mstatus, t0
 	LOAD    t0, 31*SIZE_REG(t6)
@@ -176,8 +179,11 @@ DirectTaskContext:
 	csrw	mscratch, a0		# mscratch -> context of the next task
 
 	LOAD    t0, 33*SIZE_REG(a0)
+	csrr    t1, satp
+	BEQ     t0, t1, .L_skip_satp_direct
 	csrw    satp, t0
 	sfence.vma zero, zero       # Flush TLB immediately after changing satp
+.L_skip_satp_direct:
 
 	# Restore Privilege & Execution State
 	LOAD    t0, 32*SIZE_REG(a0)
@@ -215,8 +221,11 @@ SwitchTaskContext: # a0: new_pb->context, a1: old_pb->context
 	#
 	csrw    mscratch, a0
 	LOAD    t0, 33*SIZE_REG(a0)
+	csrr    t1, satp
+	BEQ     t0, t1, .L_skip_satp_switch
 	csrw    satp, t0
 	sfence.vma zero, zero # fence.i
+.L_skip_satp_switch:
 	# Judge new task (kernel_ra == 0)
 	LOAD    ra, 35*SIZE_REG(a0)
 	beqz    ra, .L_first_time_switch

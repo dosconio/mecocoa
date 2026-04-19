@@ -3,6 +3,7 @@
 #define TASKMAN_HPP_
 
 #include <c/task.h>
+#include <c/lock.h>
 #include <cpp/queue>
 #include <c/driver/mouse.h>
 #include <c/system/paging.h>
@@ -93,59 +94,50 @@ struct CommMsg {
 
 // Process
 #ifndef _ACCM
+class ThreadBlock;
 class FileDescriptor;
 class CallgateFrame;
+
+// ---- LOCK ---- //
+struct Spinlock {
+	byte locked = 0;
+	stdsint cpu_id = 0;
+	Spinlock() {}
+	bool Acquire();
+	void Release(bool old_if);
+};
+
+struct Mutex {
+	Spinlock guard;
+	byte locked = 0;
+	uni::Queue<ThreadBlock*> wait_queue;
+	Mutex(stdint limit) : wait_queue(limit) {}
+	void Acquire();
+	void Release();
+};
+
 class _Comment(Kernel) ProcessBlock {
 public:
-	alignas(16) NormalTaskContext context;// advanced TSS_t
 	stduint pid;
 	stduint parent_id;
 	inline stduint getID() { return pid; }
 	stduint ring;
 public:
-	stduint stack_size;
-	byte* stack_lineaddr;// [linear] ring3 bottom of stack
-	// stack_levladdr: use phyzik. Because 0xFFFFFFFFC0001000ull or 0xFFC01000 is mapped to this.
-	byte* stack_levladdr;// [phyzik] ring0, may be 0 or same with stack_lineaddr for ring0 task 
-	sint8 priority = 0; // -16..-1 (Realtime RT) and 0..15 (Timeslice)
-	uint8 time_slice = 0; // execution time left for timeslice mode
-	bool is_expired = false; // true if task has expended its timeslice in the current epoch
-public _Comment(State):
+	// Process Level Wait State
 	enum class State : byte {
-		Running = 0,
-		Ready,
-		Pended,
-		Uninit,
-		Exited,
+		Active = 0,
 		Hanging,// aka Zobmie, call exit()
 		Invalid,
-	} state = State::Uninit;
-	inline bool isWaiting() {
-		return state == ProcessBlock::State::Pended &&
-			(_IMM(block_reason) & _IMM(ProcessBlock::BlockReason::BR_Waiting));
-	}
-	enum BlockReason : uint32 {
-		BR_None = 0,
-		BR_SendMsg = 0b10,
-		BR_RecvMsg = 0b100,
-		BR_Waiting = 0b1000,
-	} block_reason = BlockReason::BR_None;
-	void Block(BlockReason reason);
-	void Unblock(BlockReason reason);
-	ProcessBlock* queue_state_prev = nullptr, * queue_state_next = nullptr;// for ready queue
-	//
-	stduint processor_id;// running on which cpu core
+	} state = State::Active;
+	
+	inline bool isWaiting();
+	
 	stduint exit_status;
-public: // _Comment(Syscomm)
-	CommMsg* unsolved_msg = nullptr;
-	ProcessBlock* send_to_whom = nullptr;// nullptr for none (cannot comm with base-kernel)
-	ProcessBlock* recv_fo_whom = nullptr;// nullptr for ANY
-	stduint wait_rupt_no = 0;// equals vector plus one. 0 for none, 1 for ZeroException...
-	// if B->A, C->A. Then: A.qhead = B, B.qnext = C, C.qnext = none
-	ProcessBlock* queue_send_queuehead = nullptr;// nullptr for none
-	ProcessBlock* queue_send_queuenext = nullptr;
-	Paging* paging_redirect = nullptr;
-public: // _Comment(Thread)
+public: // _Comment(Threads)
+	// Currently maintaining a main thread for default usages (and fallback),
+	// further multi-thread implementations can maintain a vector / chain here.
+	ThreadBlock* main_thread = nullptr;
+	ThreadBlock* thread_list_head = nullptr;
 public: // _Comment(Interface);
 	enum class InterfaceType : byte {
 		MCCA4,// x86 will only support MCCA4
@@ -154,8 +146,10 @@ public: // _Comment(Interface);
 	} interface_type = InterfaceType::MCCA4;
 public:
 	uni::Paging paging;
+	uni::Paging* paging_redirect = nullptr;
 	stduint heaptop = 0;
 	stduint heapbtm = 0;// norm: max seg + 0x10000
+	Mutex sys_lock; // Use Mutex to protect internal systems like Heap / FD
 public: // _Comment(Taskman);
 	uni::Slice load_slices[8];// at most 8 slices, app-relative logical address
 public: // _Comment(Console);
@@ -166,40 +160,97 @@ public: // _Comment(Fileman);
 	struct vnode* cwd = 0;  // 
 	struct vnode* root = 0; // for chroot
 	//
+	ProcessBlock() : sys_lock(16) {}
 	auto Open(rostr pathname, int flags) -> stdsint;
-	//
 	auto Rdwt(bool wr_type, stduint fid, Slice slice) -> stduint;
-	//
 	auto Close(int fid) -> bool;
-	// lseek
 	auto Seek(int fd, stdsint off, int whence) -> stdsint;
-	//
-	// bool Remove(rostr pathname);
 };
-#endif
 
-#ifndef _ACCM
+class ThreadBlock {
+public:
+    alignas(16) NormalTaskContext context;// advanced TSS_t
+    stduint tid;
+    ProcessBlock* parent_process; 
+	ThreadBlock* process_thread_next = nullptr;
+public:
+	stduint stack_size;
+	byte* stack_lineaddr;// [linear] ring3 bottom of stack
+	// stack_levladdr: use phyzik. Because 0xFFFFFFFFC0001000ull or 0xFFC01000 is mapped to this.
+	byte* stack_levladdr;// [phyzik] ring0, may be 0 or same with stack_lineaddr for ring0 task 
+	
+	sint8 priority = 0; // -16..-1 (Realtime RT) and 0..15 (Timeslice)
+	uint8 time_slice = 0; // execution time left for timeslice mode
+	bool is_expired = false; // true if task has expended its timeslice in the current epoch
+public _Comment(State):
+	enum class State : byte {
+		Running = 0,
+		Ready,
+		Pended,
+		Uninit,
+		Exited,
+		Hanging,
+		Invalid,
+	} state = State::Uninit;
+	inline bool isWaiting() {
+		return state == State::Pended &&
+			(_IMM(block_reason) & _IMM(BlockReason::BR_Waiting));
+	}
+	enum BlockReason : uint32 {
+		BR_None = 0,
+		BR_SendMsg = 0b10,
+		BR_RecvMsg = 0b100,
+		BR_Waiting = 0b1000,
+	} block_reason = BlockReason::BR_None;
+	void Block(BlockReason reason);
+	void Unblock(BlockReason reason);
+	ThreadBlock* queue_state_prev = nullptr, * queue_state_next = nullptr;// for ready queue
+	//
+	stduint processor_id;// running on which cpu core
+	stduint exit_status;
+public: // _Comment(Syscomm)
+	CommMsg* unsolved_msg = nullptr;
+	ThreadBlock* send_to_whom = nullptr;// nullptr for none (cannot comm with base-kernel)
+	ThreadBlock* recv_fo_whom = nullptr;// nullptr for ANY
+	stduint wait_rupt_no = 0;// equals vector plus one. 0 for none, 1 for ZeroException...
+	// if B->A, C->A. Then: A.qhead = B, B.qnext = C, C.qnext = none
+	ThreadBlock* queue_send_queuehead = nullptr;// nullptr for none
+	ThreadBlock* queue_send_queuenext = nullptr;
+};
+
+inline bool ProcessBlock::isWaiting() {
+	return main_thread &&
+		(_IMM(main_thread->block_reason) & _IMM(ThreadBlock::BlockReason::BR_Waiting));
+}
+
 class Taskman {
 	static const stduint DEFAULT_STACK_SIZE = 0x1000;
 
 public:
 	static stduint PCU_CORES;
 	static stduint pcurrent[PCU_CORES_MAX];
+	static ThreadBlock* current_thread[PCU_CORES_MAX];
 public:// Gen.2
-	// Gen.1: fixed ProcessBlock* pblocks[16] and stduint pnumber
 	static Dchain chain;// [ArrayT] ordered by pid
 	static stduint min_available_pid;// in chain
 	static Dnode* min_available_left;// in chain
+	
+	static stduint min_available_tid;// in threads
 public:// for local core
 	static stduint getID() { return _TEMP 0; }// get core id
 	static stduint& CurrentPID() { return pcurrent[getID()]; }// get core id
+	static stduint& CurrentTID() { return current_thread[getID()]->tid; }
 public:
 	static auto
 		Initialize(stduint cpuid = 0) -> void;
 	static auto
 		Append(ProcessBlock* task) -> bool;
 	static auto
+		AppendThread(ThreadBlock* task) -> bool;
+	static auto
 		Locate(stduint taskid) -> ProcessBlock*;
+	static auto
+		LocateThread(stduint tid) -> ThreadBlock*;
 public:
 	// ring:
 	// - Intel: 0 1 2 3
@@ -229,23 +280,23 @@ public:// taskman
 public:// schedule
 	static auto Schedule(bool omit_slice = false) -> void;// Timer using
 	struct ReadyQueue {
-		ProcessBlock* head, * tail;
-		// 0..15 (aka -16 .. -1): Realtime (B-Type), schedule higher priority strictly first. Default: 4 slices
-		// 16..31 (aka 0 .. 15): Timeslice (A-Type), Active/Expired queues mechanism for guaranteed epoch access.
-		// Slice scale: 0~3 => 4 | 4~7 => 3 | 8~11 => 2 | 12~15 => 1
+		ThreadBlock* head, * tail;
 	};
 	static ReadyQueue priority_queues[32];
 	static ReadyQueue expired_queues[32];
 	static unsigned int ready_bitmap;
 	static unsigned int expired_bitmap;
 
-	static void EnqueueReady(ProcessBlock* pb);
-	static void DequeueReady(ProcessBlock* pb);
-	static void EnqueueExpired(ProcessBlock* pb);
-	static ProcessBlock* PickNext();
+	static void EnqueueReady(ThreadBlock* pb);
+	static void DequeueReady(ThreadBlock* pb);
+	static void EnqueueExpired(ThreadBlock* pb);
+	static ThreadBlock* PickNext();
+	static void SleepAndRelease(Spinlock* lk);
 public:
 	static auto// return a all-zero ProcessBlock
 		AllocateTask() -> ProcessBlock*;
+	static auto
+		AllocateThread() -> ThreadBlock*;
 	static void
 		DumpTask(ProcessBlock*);
 };
@@ -259,7 +310,6 @@ enum class TaskmanMsg : stduint {
 	EXEC,
 	EXET,
 };
-
 
 
 #if _MCCA == 0x8632

@@ -114,6 +114,7 @@ void mecocoa(const UefiData& uefi_data_ref)
 				FileBlockBridge loop_device(&fatvhd, han, han->size, 512);
 				if (auto pb = Taskman::CreateELF(&loop_device, RING_U)) {
 					Taskman::Append(pb);
+					Taskman::AppendThread(pb->main_thread);
 					// pb->focus_tty_id = 0;{} TODO
 					vttys[0]->type = pb->getID();
 				}

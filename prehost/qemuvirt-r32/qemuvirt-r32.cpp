@@ -44,7 +44,7 @@ void _entry()
 	VTTY_Append((&Console));
 
 	if constexpr(0) {
-		plogwarn("levstack offset size:%u addr:%u", offsetof(ProcessBlock, stack_size), offsetof(ProcessBlock, stack_levladdr));
+		plogwarn("levstack offset size:%u addr:%u", offsetof(ThreadBlock, stack_size), offsetof(ThreadBlock, stack_levladdr));
 	}
 	Taskman::Create((void*)&serv_task_loop, RING_M);
 	Taskman::Create((void*)&serv_cons_loop, RING_M);
@@ -74,6 +74,7 @@ void _entry()
 				// plogwarn("size: %[x]", han->size);
 				if (auto pb = Taskman::CreateELF(&loop_device, RING_U)) {
 					Taskman::Append(pb);
+					Taskman::AppendThread(pb->main_thread);
 				}
 				else plogerro("lpa.elf: Fail to parse or load ELF");
 			}

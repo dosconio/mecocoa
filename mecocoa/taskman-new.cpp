@@ -57,8 +57,8 @@ static stduint _Taskman_Create_Paging(ProcessBlock *ppb, byte ring, stduint stac
 	if (ring == 3) {
 		ppb->paging.Reset();
 		// stack
-		ppb->paging.Map(_IMM(ppb->stack_lineaddr), (stack_norm), ppb->stack_size, PAGESIZE_4KB, PGPROP_present | PGPROP_writable | PGPROP_user_access);
-		ppb->paging.Map(_NORMAL_RINGSTACK, _IMM(ppb->stack_levladdr), ppb->stack_size, PAGESIZE_4KB, PGPROP_present | PGPROP_writable);
+		ppb->paging.Map(_IMM(ppb->main_thread->stack_lineaddr), (stack_norm), ppb->main_thread->stack_size, PAGESIZE_4KB, PGPROP_present | PGPROP_writable | PGPROP_user_access);
+		ppb->paging.Map(_NORMAL_RINGSTACK, _IMM(ppb->main_thread->stack_levladdr), ppb->main_thread->stack_size, PAGESIZE_4KB, PGPROP_present | PGPROP_writable);
 		//
 		#if   _MCCA == 0x8632
 		ppb->paging.Map(0x80000000, 0x00000000, 0x04000000, PAGESIZE_4KB, PGPROP_present | PGPROP_writable);
@@ -89,7 +89,7 @@ static stduint _Taskman_Create_Paging(ProcessBlock *ppb, byte ring, stduint stac
 	#elif (_MCCA & 0xFF00) == 0x1000
 	ppb->paging.Reset();
 	// stack
-	ppb->paging.Map(_IMM(ppb->stack_lineaddr), _IMM(stack_norm), ppb->stack_size, PAGESIZE_4KB, PGPROP_present | PGPROP_writable | PGPROP_user_access);
+	ppb->paging.Map(_IMM(ppb->main_thread->stack_lineaddr), _IMM(stack_norm), ppb->main_thread->stack_size, PAGESIZE_4KB, PGPROP_present | PGPROP_writable | PGPROP_user_access);
 	ppb->paging.Map(0x80000000, 0x80000000, 0x01000000, PAGESIZE_4KB, 
                 PGPROP_present | PGPROP_writable);
 	return ppb->paging.MakeSATP();
@@ -154,23 +154,31 @@ void Taskman::Initialize(stduint cpuid) {
 
 	// register kernel as pid 0
 	auto kernel_task = AllocateTask();
+	auto kernel_thread = AllocateThread();
+	kernel_task->main_thread = kernel_thread;
+	kernel_task->thread_list_head = kernel_thread;
+	kernel_thread->parent_process = kernel_task;
+	
 	min_available_left = chain.Append(kernel_task);
-	kernel_task->state = ProcessBlock::State::Running;
+	kernel_task->state = ProcessBlock::State::Active;
 	kernel_task->paging.root_level_page = kernel_paging.root_level_page;
+	
 	pcurrent[cpuid] = 0;
+	current_thread[cpuid] = kernel_thread;
 	//
 	chain.Compare_f = ProcCmp;
 	min_available_pid = 1;
+	min_available_tid = 1;
 
 	#if (_MCCA & 0xFF00) == 0x1000
-	setMSCRATCH _IMM(&kernel_task->context);
+	setMSCRATCH _IMM(&kernel_thread->context);
 	setMIE(getMIE() | _MIE_MSIE);// software interrupts
-	kernel_task->context.kernel_sp = (usize)kernel_stack_top_cpu0;
+	kernel_thread->context.kernel_sp = (usize)kernel_stack_top_cpu0;
 	#endif
-	kernel_task->priority = 12;
-	kernel_task->time_slice = 4;
+	kernel_thread->priority = 12;
+	kernel_thread->time_slice = 4;
 	kernel_task->focus_tty = vttys[0];
-	Taskman::EnqueueReady(kernel_task);
+	Taskman::AppendThread(kernel_thread);
 }
 
 
@@ -208,33 +216,35 @@ ProcessBlock* Taskman::Create(void* entry, byte ring)
 	if (!ppb) return nullptr;
 	ppb->ring = ring;
 	ppb->parent_id = Task_Kernel;
+	ppb->focus_tty = vttys[0];
+	
+	auto tb = AllocateThread();
+	ppb->main_thread = tb;
+	ppb->thread_list_head = tb;
+	tb->parent_process = ppb;
+	
 	#if (_MCCA & 0xFF00) == 0x8600
 	ppb->paging.root_level_page = (PageEntry *)getCR3();
-	auto& new_ctx = ppb->context;
+	auto& new_ctx = tb->context;
 	new_ctx.IP = _IMM(entry);
 	new_ctx.CR3 = getCR3();
 	new_ctx.RING = ring;
-	SetSegment(&ppb->context);
+	SetSegment(&new_ctx);
 	treat<uint32>(&new_ctx.floating_point_context[24]) = 0x1F80;// ban all MXCSR exception
-	ppb->stack_size = DEFAULT_STACK_SIZE;
-	ppb->stack_lineaddr = (byte*)mempool.allocate(ppb->stack_size, 12);
-	ppb->stack_levladdr = ring != RING_M ? (byte*)mempool.allocate(ppb->stack_size, 12) : ppb->stack_lineaddr;
-	const stduint stack_top = _IMM(ppb->stack_lineaddr) + DEFAULT_STACK_SIZE;
+	tb->stack_size = DEFAULT_STACK_SIZE;
+	tb->stack_lineaddr = (byte*)mempool.allocate(tb->stack_size, 12);
+	tb->stack_levladdr = ring != RING_M ? (byte*)mempool.allocate(tb->stack_size, 12) : tb->stack_lineaddr;
+	const stduint stack_top = _IMM(tb->stack_lineaddr) + DEFAULT_STACK_SIZE;
 	new_ctx.SP = (stack_top & ~0xFlu) - 8;
 
-	// TSS->CR3 = _Taskman_Create_Paging(ppb, ring, _IMM(ppb->stack_lineaddr));
-	// if (ring == RING_U) {
-	// 	ppb->paging.Map(0x00010000, 0x00010000, 0x003F0000, PAGESIZE_4KB, PGPROP_present | PGPROP_writable | PGPROP_user_access | PGPROP_weak);
-	// }
-
 	#elif (_MCCA & 0xFF00) == 0x1000
-	ppb->stack_size = DEFAULT_STACK_SIZE;
-	ppb->stack_levladdr = (byte*)mempool.allocate(ppb->stack_size, PAGESIZE_4KB);
-	auto& ctx = ppb->context;
+	tb->stack_size = DEFAULT_STACK_SIZE;
+	tb->stack_levladdr = (byte*)mempool.allocate(tb->stack_size, PAGESIZE_4KB);
+	auto& ctx = tb->context;
 	ctx.sp = (stduint)mempool.allocate(DEFAULT_STACK_SIZE, 12) + DEFAULT_STACK_SIZE - 0x10;
 	ctx.IP = _IMM(entry);
 	ctx.mstatus = (ring << 11) | _MSTATUS_MPIE;
-	ctx.kernel_sp = _IMM(ppb->stack_levladdr) + ppb->stack_size - 0x10;
+	ctx.kernel_sp = _IMM(tb->stack_levladdr) + tb->stack_size - 0x10;
 
 	if (ring == RING_U) {
 		_TODO// Paging
@@ -242,10 +252,10 @@ ProcessBlock* Taskman::Create(void* entry, byte ring)
 
 	#endif
 
-	ppb->priority = (ring == RING_U) ? 3 : 0;
-	ppb->time_slice = (ring == RING_U) ? 3 : 4;
-	ppb->focus_tty = vttys[0];
+	tb->priority = (ring == RING_U) ? 3 : 0;
+	tb->time_slice = (ring == RING_U) ? 3 : 4;
 	Append(ppb);
+	AppendThread(tb);
 	return ppb;
 }
 static void _CreateELF_Carry(char* vaddr, stduint mem_length, BlockTrait* source, stduint file_offset, stduint file_size, Paging& pg, byte* buffer) {
@@ -326,22 +336,28 @@ ProcessBlock* Taskman::CreateELF(BlockTrait* source, byte ring) {
 	ProcessBlock* pb = Taskman::AllocateTask();
 	pb->ring = ring;
 	pb->parent_id = Task_Kernel;
+	pb->focus_tty = vttys[0];
+	
+	auto tb = AllocateThread();
+	pb->main_thread = tb;
+	pb->thread_list_head = tb;
+	tb->parent_process = pb;
 
-	pb->stack_size = HIGHER_STACK_SIZE;
-	auto stack_norm = (byte*)mempool.allocate(pb->stack_size, PAGESIZE_4KB);
-	auto stack_ring = ring != RING_M ? (byte*)mempool.allocate(pb->stack_size, PAGESIZE_4KB) : stack_norm;
-	pb->stack_lineaddr = (byte*)0x1000;
-	pb->stack_levladdr = stack_ring;
+	tb->stack_size = HIGHER_STACK_SIZE;
+	auto stack_norm = (byte*)mempool.allocate(tb->stack_size, PAGESIZE_4KB);
+	auto stack_ring = ring != RING_M ? (byte*)mempool.allocate(tb->stack_size, PAGESIZE_4KB) : stack_norm;
+	tb->stack_lineaddr = (byte*)0x1000;
+	tb->stack_levladdr = stack_ring;
 
 	// ---- CR3 Mapping ---- //
 	stduint kernel_size = _TEMP 0x00400000;
 	#if (_MCCA & 0xFF00) == 0x8600
-	pb->context.CR3 = _Taskman_Create_Paging(pb, ring, _IMM(stack_norm));
+	tb->context.CR3 = _Taskman_Create_Paging(pb, ring, _IMM(stack_norm));
 	#elif _MCCA == 0x1032 || _MCCA == 0x1064
-	pb->context.satp = _Taskman_Create_Paging(pb, ring, _IMM(stack_norm));
+	tb->context.satp = _Taskman_Create_Paging(pb, ring, _IMM(stack_norm));
 	#endif
 
-	pb->context.IP = _IMM(header.e_entry);
+	tb->context.IP = _IMM(header.e_entry);
 
 	stduint load_slice_p = 0;
 	for0(i, header.e_phnum) {
@@ -364,28 +380,26 @@ ProcessBlock* Taskman::CreateELF(BlockTrait* source, byte ring) {
 	delete[] block_buffer;
 
 	// ---- Stack and Gen.Regis ---- //
-	const stduint stack_loc_top = _IMM(pb->stack_lineaddr) + pb->stack_size;
+	const stduint stack_loc_top = _IMM(tb->stack_lineaddr) + tb->stack_size;
 
 	#if (_MCCA & 0xFF00) == 0x8600
-	pb->context.RING = ring;
-	pb->context.SP = (stack_loc_top & ~0xFlu) - 8 - 0x10;// single stack
-	treat<uint32>(&pb->context.floating_point_context[24]) = 0x1F80;// ban all MXCSR exception
-	SetSegment(&pb->context);
+	tb->context.RING = ring;
+	tb->context.SP = (stack_loc_top & ~0xFlu) - 8 - 0x10;// single stack
+	treat<uint32>(&tb->context.floating_point_context[24]) = 0x1F80;// ban all MXCSR exception
+	SetSegment(&tb->context);
 
 	#elif _MCCA == 0x1032 || _MCCA == 0x1064
 	constexpr stduint floating_support = (1 << 13);
-	pb->context.sp = (stack_loc_top & ~0xFlu) - 0x10;
-	pb->context.IP = _IMM(header.e_entry);
-	pb->context.mstatus = (ring << 11) | floating_support | _MSTATUS_MPIE;
-	pb->context.kernel_sp = _IMM(pb->stack_levladdr) + pb->stack_size - 0x10;
+	tb->context.sp = (stack_loc_top & ~0xFlu) - 0x10;
+	tb->context.IP = _IMM(header.e_entry);
+	tb->context.mstatus = (ring << 11) | floating_support | _MSTATUS_MPIE;
+	tb->context.kernel_sp = _IMM(tb->stack_levladdr) + tb->stack_size - 0x10;
 
 	#endif
 
-	pb->priority = (ring == RING_U) ? 4 : 0;
-	pb->time_slice = (ring == RING_U) ? 3 : 4;
-	pb->focus_tty = vttys[0];
+	tb->priority = (ring == RING_U) ? 4 : 0;
+	tb->time_slice = (ring == RING_U) ? 3 : 4;
 
-	// Taskman::Append(pb);
 	return pb;
 	#endif
 }
@@ -393,10 +407,18 @@ ProcessBlock* Taskman::CreateELF(BlockTrait* source, byte ring) {
 ProcessBlock* Taskman::CreateFork(ProcessBlock* fo, const CallgateFrame* frame) {
 	ProcessBlock* pb = Taskman::AllocateTask();
 	if (!pb) return 0;
+	
+	ThreadBlock* target_fo_thread = fo->main_thread; // Fork clones main thread context for now
 
 	auto ring = fo->ring;
 	pb->ring = ring;
 	pb->parent_id = fo->getID();
+	pb->focus_tty = fo->focus_tty;
+	
+	auto tb = AllocateThread();
+	pb->main_thread = tb;
+	pb->thread_list_head = tb;
+	tb->parent_process = pb;
 
 	#if _MCCA == 0x8632
 	// check undone and duplicate operations
@@ -405,19 +427,19 @@ ProcessBlock* Taskman::CreateFork(ProcessBlock* fo, const CallgateFrame* frame) 
 	// 3. FS Operation
 
 	// ---- Stack ---- //
-	pb->stack_size = fo->stack_size;
-	auto stack_norm = (byte*)mempool.allocate(pb->stack_size, 12);
-	auto stack_ring = ring ? (byte*)mempool.allocate(pb->stack_size, 12) : stack_norm;
-	pb->stack_lineaddr = fo->stack_lineaddr;
-	pb->stack_levladdr = stack_ring;
+	tb->stack_size = target_fo_thread->stack_size;
+	auto stack_norm = (byte*)mempool.allocate(tb->stack_size, 12);
+	auto stack_ring = ring ? (byte*)mempool.allocate(tb->stack_size, 12) : stack_norm;
+	tb->stack_lineaddr = target_fo_thread->stack_lineaddr;
+	tb->stack_levladdr = stack_ring;
 
 	// ---- Copy CR3 Mapping ---- //
 	// - Segments Mapping with coping
 	// - Kernel-Area Mapping
 	// - (TODO) Heap Area Mapping
-	pb->context = fo->context;
+	tb->context = target_fo_thread->context;
 	//{TEMP} use simple method
-	pb->context.CR3 = _Taskman_Create_Paging(pb, ring, _IMM(stack_norm));
+	tb->context.CR3 = _Taskman_Create_Paging(pb, ring, _IMM(stack_norm));
 	for0a(i, fo->load_slices) {
 		if (!fo->load_slices[i].length) break;
 		pb->load_slices[i] = fo->load_slices[i];
@@ -433,41 +455,43 @@ ProcessBlock* Taskman::CreateFork(ProcessBlock* fo, const CallgateFrame* frame) 
 			fo->load_slices[i].length);
 	}
 
-	pb->priority = fo->priority;
-	pb->time_slice = fo->time_slice;
-	pb->focus_tty = fo->focus_tty;
+	tb->priority = target_fo_thread->priority;
+	tb->time_slice = target_fo_thread->time_slice;
 
 	// ---- Stack and Gen.Regis ---- //
-	const stduint stack_loc_top = _IMM(pb->stack_lineaddr) + pb->stack_size;
-	const stduint stack_lev_top = _TEMP 0x1000 + pb->stack_size * 2;
+	const stduint stack_loc_top = _IMM(tb->stack_lineaddr) + tb->stack_size;
+	const stduint stack_lev_top = _TEMP 0x1000 + tb->stack_size * 2;
 	//
-	pb->context.ES = SegDaR3 | ring;
-	pb->context.CS = getCS(ring);
-	pb->context.SS = getSS(ring);
-	pb->context.DS = pb->context.ES;
-	pb->context.FS = pb->context.ES;
-	pb->context.GS = pb->context.ES;
+	tb->context.ES = SegDaR3 | ring;
+	tb->context.CS = getCS(ring);
+	tb->context.SS = getSS(ring);
+	tb->context.DS = tb->context.ES;
+	tb->context.FS = tb->context.ES;
+	tb->context.GS = tb->context.ES;
 	
-	MemCopyP(pb->stack_lineaddr, pb->paging, fo->stack_lineaddr, fo->paging, pb->stack_size);
-	MemCopyP(pb->stack_levladdr, kernel_paging, fo->stack_levladdr, kernel_paging, pb->stack_size);
+	MemCopyP(tb->stack_lineaddr, pb->paging, target_fo_thread->stack_lineaddr, fo->paging, tb->stack_size);
+	MemCopyP(tb->stack_levladdr, kernel_paging, target_fo_thread->stack_levladdr, kernel_paging, tb->stack_size);
 
-	pb->context.AX = nil; // return from fork()
-	pb->context.CX = frame->cx;
-	pb->context.DX = frame->dx;
-	pb->context.BX = frame->bx;
-	pb->context.SI = frame->si;
-	pb->context.DI = frame->di;
-	pb->context.BP = frame->bp;
-	pb->context.IP = frame->ip;
-	pb->context.SP = frame->sp0;
+	tb->context.AX = nil; // return from fork()
+	tb->context.CX = frame->cx;
+	tb->context.DX = frame->dx;
+	tb->context.BX = frame->bx;
+	tb->context.SI = frame->si;
+	tb->context.DI = frame->di;
+	tb->context.BP = frame->bp;
+	tb->context.IP = frame->ip;
+	tb->context.SP = frame->sp0;
 
 	// ---- File ---- //
+	fo->sys_lock.Acquire();
 	for0a(i, pb->pfiles) if (pb->pfiles[i]) {
 		pb->pfiles[i] = fo->pfiles[i];
 		pb->pfiles[i]->vfile->f_inode->ref_count++;
 	}
+	fo->sys_lock.Release();
 
 	Taskman::Append(pb);
+	Taskman::AppendThread(tb);
 	return pb;
 
 	#else
@@ -512,7 +536,7 @@ ProcessBlock* Taskman::Exec(stduint parent, rostr usr_fullpath, void* usr_argsta
 
 	stduint argc = 0;
 	stduint argv_ptr = 0;
-	stduint new_sp = new_pb->context.SP;
+	stduint new_sp = new_pb->main_thread->context.SP;
 
 	if (stacklen > 0 && usr_argstack != nullptr) {
 		byte* temp_stack = new byte[stacklen];
@@ -555,17 +579,18 @@ ProcessBlock* Taskman::Exec(stduint parent, rostr usr_fullpath, void* usr_argsta
 	// System V ABI : ESP % 16 == 12
 	new_sp = new_sp - 20;// new_sp -= sizeof(call_frame);
 	MemCopyP((void*)new_sp, new_pb->paging, (void*)&frame, kernel_paging, sizeof(frame));
-	new_pb->context.SP = new_sp;	// esp = new stack pointer
+	new_pb->main_thread->context.SP = new_sp;	// esp = new stack pointer
 
 	#elif (_MCCA & 0xFF00) == 0x1000
 
-	new_pb->context.a0 = argc; // a0 = argc
-	new_pb->context.a1 = argv_ptr; // a1 = argv
-	new_pb->context.sp = new_sp; // sp = new stack pointer
+	new_pb->main_thread->context.a0 = argc; // a0 = argc
+	new_pb->main_thread->context.a1 = argv_ptr; // a1 = argv
+	new_pb->main_thread->context.sp = new_sp; // sp = new stack pointer
 
 	#endif
 	new_pb->focus_tty = parent_pb->focus_tty;
 	Taskman::Append(new_pb);
+	Taskman::AppendThread(new_pb->main_thread);
 	return new_pb;
 }
 
@@ -634,23 +659,23 @@ ProcessBlock* Taskman::Exet(stduint parent, rostr usr_fullpath, void* usr_argsta
 
 	// Reset Paging but PRESERVE the physical address of the stacks
 	stduint stack_norm_phy;
-	if (current_pb->stack_lineaddr == current_pb->stack_levladdr) {
-		stack_norm_phy = _IMM(current_pb->stack_levladdr);
+	if (current_pb->main_thread->stack_lineaddr == current_pb->main_thread->stack_levladdr) {
+		stack_norm_phy = _IMM(current_pb->main_thread->stack_levladdr);
 	}
 	else {
-		stack_norm_phy = _IMM(current_pb->paging[_IMM(current_pb->stack_lineaddr) & ~0xFFF]);
+		stack_norm_phy = _IMM(current_pb->paging[_IMM(current_pb->main_thread->stack_lineaddr) & ~0xFFF]);
 	}
 
 	current_pb->paging.~Paging(); // Destroy old page tables
 
 	#if (_MCCA & 0xFF00) == 0x8600
-	current_pb->context.CR3 = _Taskman_Create_Paging(current_pb, current_pb->ring, stack_norm_phy);
+	current_pb->main_thread->context.CR3 = _Taskman_Create_Paging(current_pb, current_pb->ring, stack_norm_phy);
 	#elif _MCCA == 0x1032 || _MCCA == 0x1064
-	current_pb->context.satp = _Taskman_Create_Paging(current_pb, current_pb->ring, stack_norm_phy);
+	current_pb->main_thread->context.satp = _Taskman_Create_Paging(current_pb, current_pb->ring, stack_norm_phy);
 	#endif
 
 	// Load New ELF Image into current_pb
-	current_pb->context.IP = _IMM(header.e_entry);
+	current_pb->main_thread->context.IP = _IMM(header.e_entry);
 	stduint load_slice_p = 0;
 	for0(i, header.e_phnum) {
 		struct ELF_PHT_t ph;
@@ -670,7 +695,7 @@ ProcessBlock* Taskman::Exet(stduint parent, rostr usr_fullpath, void* usr_argsta
 	// 8. Setup New Stack & C ABI Call Frame
 	stduint argc = 0;
 	stduint argv_ptr = 0;
-	const stduint stack_loc_top = _IMM(current_pb->stack_lineaddr) + current_pb->stack_size;
+	const stduint stack_loc_top = _IMM(current_pb->main_thread->stack_lineaddr) + current_pb->main_thread->stack_size;
 	stduint new_sp = stack_loc_top;
 
 	if (temp_stack) {
@@ -704,29 +729,27 @@ ProcessBlock* Taskman::Exet(stduint parent, rostr usr_fullpath, void* usr_argsta
 	new_sp = new_sp & ~_IMM(0xFlu);
 	new_sp = new_sp - 48;
 	MemCopyP((void*)new_sp, current_pb->paging, &frame, kernel_paging, sizeof(frame));
-	current_pb->context.AX = 0;
-	current_pb->context.CX = 0;
-	current_pb->context.SP = new_sp;
-	treat<uint32>(&current_pb->context.floating_point_context[24]) = 0x1F80; // Reset FPU
-	SetSegment(&current_pb->context);
-	current_pb->unsolved_msg = nullptr;
+	current_pb->main_thread->context.AX = 0;
+	current_pb->main_thread->context.CX = 0;
+	current_pb->main_thread->context.SP = new_sp;
+	treat<uint32>(&current_pb->main_thread->context.floating_point_context[24]) = 0x1F80; // Reset FPU
+	SetSegment(&current_pb->main_thread->context);
+	current_pb->main_thread->unsolved_msg = nullptr;
 
 	#elif (_MCCA & 0xFF00) == 0x1000
 
 	new_sp = (new_sp & ~_IMM(0xFlu)) - 0x10;
-	current_pb->context.a0 = argc;
-	current_pb->context.a1 = argv_ptr;
-	current_pb->context.sp = new_sp;
+	current_pb->main_thread->context.a0 = argc;
+	current_pb->main_thread->context.a1 = argv_ptr;
+	current_pb->main_thread->context.sp = new_sp;
 	#endif
-
-	using PBS = ProcessBlock::State;
-	if (current_pb->state != PBS::Ready) {
-		// Clear any pending IPC wait parameters (pseudo-code, adapt to your struct)
-		// current_pb->wait_for_pid = 0; 
-		current_pb->state = PBS::Ready;
+	
+	using TBS = ThreadBlock::State;
+	if (current_pb->main_thread->state != TBS::Ready) {
+		current_pb->main_thread->state = TBS::Ready;
 	}
 	// DumpTask(current_pb);
-	Taskman::EnqueueReady(current_pb);
+	Taskman::EnqueueReady(current_pb->main_thread);
 	return current_pb;
 }
 

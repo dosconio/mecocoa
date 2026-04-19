@@ -10,7 +10,7 @@ enum
 	: stduint
 	#endif
 {
-	OUTC = 0x00, // outstr (chr/str, len)->0  | x86 x64 rv
+	OUTC = 0x00, // outstr (chr/str, len)->0  |.x86 x64 rv
 	INNC = 0x01, // innstr (blocked)->ASCII>0 | x86 rv
 	EXIT = 0x02, // exit   (code)             | x86 rv
 	TIME = 0x03, // getsec (0sec/1ms)->second | x86(half)

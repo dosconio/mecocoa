@@ -19,6 +19,8 @@ Dnode* Taskman::min_available_left;;
 
 stduint Taskman::PCU_CORES = 0;
 stduint Taskman::pcurrent[PCU_CORES_MAX];
+ThreadBlock* Taskman::current_thread[PCU_CORES_MAX];
+stduint Taskman::min_available_tid = 0;
 
 
 Taskman::ReadyQueue Taskman::priority_queues[32] = {};
@@ -26,8 +28,8 @@ Taskman::ReadyQueue Taskman::expired_queues[32] = {};
 unsigned int Taskman::ready_bitmap = 0;
 unsigned int Taskman::expired_bitmap = 0;
 
-void Taskman::EnqueueReady(ProcessBlock* pb) {
-	if (pb->state != ProcessBlock::State::Ready && pb->state != ProcessBlock::State::Running) return;
+void Taskman::EnqueueReady(ThreadBlock* pb) {
+	if (pb->state != ThreadBlock::State::Ready && pb->state != ThreadBlock::State::Running) return;
 	int idx = pb->priority + 16;
 	if (idx < 0) idx = 0;
 	if (idx > 31) idx = 31;
@@ -49,8 +51,8 @@ void Taskman::EnqueueReady(ProcessBlock* pb) {
 	ready_bitmap |= (1U << idx);
 }
 
-void Taskman::EnqueueExpired(ProcessBlock* pb) {
-	if (pb->state != ProcessBlock::State::Ready && pb->state != ProcessBlock::State::Running) return;
+void Taskman::EnqueueExpired(ThreadBlock* pb) {
+	if (pb->state != ThreadBlock::State::Ready && pb->state != ThreadBlock::State::Running) return;
 	int idx = pb->priority + 16;
 	if (idx < 0) idx = 0;
 	if (idx > 31) idx = 31;
@@ -69,7 +71,7 @@ void Taskman::EnqueueExpired(ProcessBlock* pb) {
 	expired_bitmap |= (1U << idx);
 }
 
-void Taskman::DequeueReady(ProcessBlock* pb) {
+void Taskman::DequeueReady(ThreadBlock* pb) {
 	int idx = pb->priority + 16;
 	if (idx < 0) idx = 0;
 	if (idx > 31) idx = 31;
@@ -100,7 +102,7 @@ void Taskman::DequeueReady(ProcessBlock* pb) {
 	if (in_expired && !expired_queues[idx].head) expired_bitmap &= ~(1U << idx);
 }
 
-ProcessBlock* Taskman::PickNext() {
+ThreadBlock* Taskman::PickNext() {
 	// If the A-Type TS segment (bits 16-31) is empty in Ready, but populated in Expired, Swap!
 	if ((ready_bitmap & 0xFFFF0000) == 0 && (expired_bitmap & 0xFFFF0000) != 0) {
 		for (int i = 16; i < 32; i++) {
@@ -108,7 +110,7 @@ ProcessBlock* Taskman::PickNext() {
 			expired_queues[i].head = expired_queues[i].tail = nullptr;
 			
 			// Reset is_expired flag for all tasks in the new epoch
-			ProcessBlock* node = priority_queues[i].head;
+			ThreadBlock* node = priority_queues[i].head;
 			while (node) {
 				node->is_expired = false;
 				node = node->queue_state_next;
@@ -123,13 +125,13 @@ ProcessBlock* Taskman::PickNext() {
 	return priority_queues[idx].head;
 }
 
-void ProcessBlock::Block(BlockReason reason) {
+void ThreadBlock::Block(BlockReason reason) {
 	if (state == State::Ready || state == State::Running) Taskman::DequeueReady(this);
 	state = State::Pended;
 	block_reason = BlockReason(block_reason | reason);
 }
 
-void ProcessBlock::Unblock(BlockReason reason) {
+void ThreadBlock::Unblock(BlockReason reason) {
 	block_reason = BlockReason(block_reason & ~reason);
 	if (block_reason == BlockReason::BR_None) {
 		state = State::Ready;//{} else panic...
@@ -142,19 +144,29 @@ void ProcessBlock::Unblock(BlockReason reason) {
 }
 
 bool Taskman::Append(ProcessBlock* task) {
-	task->pid = min_available_pid;
-	auto nod = chain.Append(task, false, min_available_left);
-	stduint las = min_available_pid;
-	while (nod = nod->next) {
-		stduint _new = ((ProcessBlock*)(nod->offs))->pid;
-		if (_new == las + 1) {
-			las = _new;
-		}
-		else break;
+	// Find available PID (Find smallest gap)
+	stduint target_pid = 1;
+	Dnode* insert_after = nullptr;
+	for (auto nod = chain.Root(); nod; nod = nod->next) {
+		stduint crt = cast<ProcessBlock*>(nod->offs)->pid;
+		if (crt == target_pid) target_pid++;
+		else if (crt > target_pid) break;
+		insert_after = nod;
 	}
-	min_available_pid = las + 1;
-	task->state = ProcessBlock::State::Ready;
-	min_available_left = nod;
+	task->pid = target_pid;
+	chain.Append(task, false, insert_after);
+	task->state = ProcessBlock::State::Active;
+	return true;
+}
+
+bool Taskman::AppendThread(ThreadBlock* task) {
+	stduint target_tid = 1;
+	while (LocateThread(target_tid) != nullptr) {
+		target_tid++;
+	}
+	task->tid = target_tid;
+	
+	task->state = ThreadBlock::State::Ready;
 	EnqueueReady(task);
 	return true;
 }
@@ -167,28 +179,33 @@ ProcessBlock* Taskman::Locate(stduint taskid) {
 	return nullptr;
 }
 
+ThreadBlock* Taskman::LocateThread(stduint tid) {
+	for (auto nod = chain.Root(); nod; nod = nod->next) {
+		auto ptask = cast<ProcessBlock*>(nod->offs);
+		for (auto th = ptask->thread_list_head; th; th = th->process_thread_next) {
+			if (th->tid == tid) return th;
+		}
+	}
+	return nullptr;
+}
+
 static auto
-ifContinueProcess(ProcessBlock* old_pb) -> bool {
-	using PBS = ProcessBlock::State;
+ifContinueProcess(ThreadBlock* old_pb) -> bool {
+	using TBS = ThreadBlock::State;
 	// Timeslice management (A-Type context)
-	if (old_pb->state == PBS::Running) {
+	if (old_pb->state == TBS::Running) {
 		if (old_pb->priority >= 0) {
 			if (old_pb->time_slice > 0) {
 				old_pb->time_slice--;
 				return true; // Continue same task
 			} else {
 				Taskman::DequeueReady(old_pb);
-				old_pb->state = PBS::Ready;
+				old_pb->state = TBS::Ready;
 				
 				// Enqueue to Expired Queue for Epoch A-Type Scheduling
 				Taskman::EnqueueExpired(old_pb); 
 				
 				// Allocation mapping:
-				// < 0 (RT)     => 4 slices
-				// 0..3         => 4 slices
-				// 4..7         => 3 slices
-				// 8..11        => 2 slices
-				// 12..15       => 1 slice
 				old_pb->time_slice = 3 - (old_pb->priority >> 2);
 			}
 		} else {
@@ -198,14 +215,14 @@ ifContinueProcess(ProcessBlock* old_pb) -> bool {
 				return true; // Continue same task
 			} else {
 				Taskman::DequeueReady(old_pb);
-				old_pb->state = PBS::Ready;
+				old_pb->state = TBS::Ready;
 				Taskman::EnqueueReady(old_pb); // Re-queue at tail (Round-Robin for same RT priority)
 				old_pb->time_slice = 4; // RT tasks also get 4 slices to avoid hogging forever if yielding is missed
 			}
 		}
-	} else if (old_pb && old_pb->state != PBS::Ready && old_pb->state != PBS::Uninit) {
+	} else if (old_pb && old_pb->state != TBS::Ready && old_pb->state != TBS::Uninit) {
 		// e.g. Pended or Hanging, already handled by DequeueReady elsewhere or below
-	} else if (old_pb && old_pb->state == PBS::Ready) {
+	} else if (old_pb && old_pb->state == TBS::Ready) {
 		// Nothing special, already in queue
 	}
 	return false;
@@ -233,19 +250,19 @@ ifContinueProcess(ProcessBlock* old_pb) -> bool {
 #if 1
 auto Taskman::Schedule(bool omit_slice)->decltype(Schedule())
 {
-	using PBS = ProcessBlock::State;
+	using TBS = ThreadBlock::State;
 	#if _MCCA == 0x8632
 	task_switch_enable = false;//{TODO} Lock, cpu0
 	#endif
 	stduint cpuid = getID();
-	auto old_pb = Taskman::Locate(CurrentPID());
-	if (!old_pb) {
-		plogerro("Taskman:Schedule: No current task found for CPU %d (crtpid=%u)", cpuid, CurrentPID());
+	auto old_tb = current_thread[cpuid];
+	if (!old_tb) {
+		plogerro("Taskman:Schedule: No current task found for CPU %d", cpuid);
 		HALT();
 		return;
 	}
 	if (!omit_slice) {
-		if (ifContinueProcess(old_pb)) {
+		if (ifContinueProcess(old_tb)) {
 			#if _MCCA == 0x8632
 			task_switch_enable = true;
 			#endif
@@ -253,38 +270,45 @@ auto Taskman::Schedule(bool omit_slice)->decltype(Schedule())
 		}
 	}
 	else {
-		auto s = old_pb->state;
-		Taskman::DequeueReady(old_pb);
-		old_pb->state = PBS::Ready;
-		if (s == PBS::Running || s == PBS::Ready) Taskman::EnqueueExpired(old_pb);
+		auto s = old_tb->state;
+		if (s == TBS::Pended) {
+			// Already handled by Block(); don't touch state or queues
+		} else {
+			Taskman::DequeueReady(old_tb);
+			old_tb->state = TBS::Ready;
+			if (s == TBS::Running || s == TBS::Ready) Taskman::EnqueueExpired(old_tb);
+		}
 	}
-	auto new_pb = PickNext();
-	if (!new_pb) new_pb = Taskman::Locate(0);
-	if (new_pb == old_pb) {
-		if (old_pb->state == PBS::Ready) old_pb->state = PBS::Running;
+	auto new_tb = PickNext();
+	if (!new_tb) new_tb = current_thread[cpuid]; // At least run self or idle thread if nothing else
+	if (new_tb == old_tb) {
+		if (old_tb->state == TBS::Ready) old_tb->state = TBS::Running;
 		#if _MCCA == 0x8632
 		task_switch_enable = true;
 		#endif
 		return;
 	}
-	CurrentPID() = new_pb->pid;
-	if (new_pb->state == PBS::Uninit) new_pb->state = PBS::Ready;
-	if (old_pb->state == PBS::Running && new_pb->state == PBS::Ready) {
-		old_pb->state = PBS::Ready;
-		new_pb->state = PBS::Running;
-	} else if (new_pb->state == PBS::Ready) {
-		new_pb->state = PBS::Running;
+	CurrentTID() = new_tb->tid;
+	CurrentPID() = new_tb->parent_process->pid;
+	
+	if (new_tb->state == TBS::Uninit) new_tb->state = TBS::Ready;
+	if (old_tb->state == TBS::Running && new_tb->state == TBS::Ready) {
+		old_tb->state = TBS::Ready;
+		new_tb->state = TBS::Running;
+	} else if (new_tb->state == TBS::Ready) {
+		new_tb->state = TBS::Running;
 	} else {
-		printlog(_LOG_FATAL, "task switch error (PID%u, State%u, PCnt%u).", new_pb->getID(), _IMM(new_pb->state), Taskman::chain.Count());
+		printlog(_LOG_FATAL, "task switch error state (TID%u, State%u)", new_tb->tid, _IMM(new_tb->state));
 	}
 
-	// ploginfo("switch %d->%d", old_pb->pid, new_pb->pid);
+	current_thread[cpuid] = new_tb;
+
 	#if _MCCA == 0x8632
 	task_switch_enable = true;//{TODO} X86 Unlock
 	#elif (_MCCA & 0xFF00) == 0x1000
 	#endif
 
-	SwitchTaskContext(&new_pb->context, &old_pb->context);
+	SwitchTaskContext(&new_tb->context, &old_tb->context);
 }
 #else
 auto Taskman::Schedule(bool omit_slice)->decltype(Schedule()) { }
