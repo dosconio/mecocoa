@@ -24,7 +24,7 @@ enum
 	//=0x0B{} proper&enumer
 	//=0x0C{} 
 	WAIT = 0x0D, // wait   (&status)->pid     | x86
-	FORK = 0x0E, // U.fork ()->pid            | x86
+	FORK = 0x0E, // fork   ()->pid            | x86
 	TMSG = 0x0F, // trymsg ()->(msg_unsovled) | x86 rv
 	EXEC = 0x10, // spawnl (path,args,len)->0 | x86
 	EXET = 0x11, // execl  (path,args,len)->0 | x86
@@ -34,13 +34,13 @@ enum
 
 
 	TEST = 0xFF, // (T,E,S)->0 | x86
-};
+};// . stand for well for multi-thread
 
 enum
 	#ifdef _INC_CPP
 	class
 	#endif
-	syscall_POSIX_t
+	syscall_linux_t
 	#ifdef _INC_CPP
 	: stduint
 	#endif

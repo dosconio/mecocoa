@@ -13,25 +13,28 @@
 String dump_availmem();
 void mecfetch() {
 	#if ((_MCCA & 0xFF00) == 0x8600)
-	const rostr blue = ento_gui ? "\xFE\xF8\xC8\x58" : "\xFF\x30";
-	const rostr pink = ento_gui ? "\xFE\xB8\xA8\xF8" : "\xFF\x50";
-	const rostr white = ento_gui ? "\xFE\xFF\xFF\xFF" : "\xFF\x70";
+	// const rostr blue = ento_gui ? "\xFE\xF8\xC8\x58" : "\xFF\x30";
+	// const rostr pink = ento_gui ? "\xFE\xB8\xA8\xF8" : "\xFF\x50";
+	// const rostr white = ento_gui ? "\xFE\xFF\xFF\xFF" : "\xFF\x70";
+	const rostr blue = "\033[48;2;88;200;248m";
+	const rostr pink = "\033[48;2;248;168;184m";
+	const rostr white = "\033[48;2;255;255;255m";
 	const unsigned attrl = ento_gui ? 4 : 2;
 	const unsigned width = ento_gui ? 48 : 16;
 	const unsigned height = ento_gui ? 3 : 1;
 
 	#if _GUI_LOGO
-	Console.out(blue, attrl);
-	for0(j, height) { for0(i, width) Console.OutChar(' '); Console.OutFormat("\n\r"); }
-	Console.out(pink, attrl);
-	for0(j, height) { for0(i, width) Console.OutChar(' '); Console.OutFormat("\n\r"); }
-	Console.out(white, attrl);
-	for0(j, height) { for0(i, width) Console.OutChar(' '); Console.OutFormat("\n\r"); }
-	Console.out(pink, attrl);
-	for0(j, height) { for0(i, width) Console.OutChar(' '); Console.OutFormat("\n\r"); }
-	Console.out(blue, attrl);
-	for0(j, height) { for0(i, width) Console.OutChar(' '); Console.OutFormat("\n\r"); }
-	Console.out("\xFF\xFF", 2);
+	Console.OutFormat(blue, attrl);
+	for0(j, height) { for0(i, width) Console.OutChar(' '); Console.OutFormat("\033[0m\n\r%s", blue); }
+	Console.OutFormat(pink, attrl);
+	for0(j, height) { for0(i, width) Console.OutChar(' '); Console.OutFormat("\033[0m\n\r%s", pink); }
+	Console.OutFormat(white, attrl);
+	for0(j, height) { for0(i, width) Console.OutChar(' '); Console.OutFormat("\033[0m\n\r%s", white); }
+	Console.OutFormat(pink, attrl);
+	for0(j, height) { for0(i, width) Console.OutChar(' '); Console.OutFormat("\033[0m\n\r%s", pink); }
+	Console.OutFormat(blue, attrl);
+	for0(j, height) { for0(i, width) Console.OutChar(' '); Console.OutFormat("\033[0m\n\r%s", blue); }
+	Console.OutFormat("\033[0m");// Console.out("\xFF\xFF", 2);
 	#endif
 
 	Console.OutFormat("CPU Brand: %s\n\r", text_brand());

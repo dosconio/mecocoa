@@ -115,7 +115,7 @@ void exception_handler(sdword iden, dword para) {
 		static bool first_done = false;
 		if (!first_done) {
 			first_done = true;
-			rostr test_page = (rostr)"\xFF\x70[Mecocoa]\xFF\x27 Exception #UD Test OK!\xFF\x07";
+			rostr test_page = (rostr)"[Mecocoa] Exception #UD Test OK!"; // "\xFF\x70[Mecocoa]\xFF\x27 Exception #UD Test OK!\xFF\x07";
 			outsfmt("%s\n\r", test_page);
 		}
 		else {

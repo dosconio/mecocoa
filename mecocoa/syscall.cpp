@@ -169,12 +169,12 @@ stduint Handint_SYSCALL(CallgateFrame* frame) {
 	case syscall_t::TEST:
 		if (para[0] == 'T' && para[1] == 'E' && para[2] == 'S') {
 			rostr test_msg = "Syscalls Test OK!";
-			Console.OutFormat("\xFF\x70[Mecocoa]\xFF\x27 PID");
+			Console.OutFormat("[Mecocoa] PID");
 			Console.OutInteger(caller_pid, +10);
-			Console.OutFormat(": %s\xFF\x07\n\r", test_msg + 0x80000000);
+			Console.OutFormat(": %s\n\r", test_msg + 0x80000000);
 		}
 		else {
-			rostr test_msg = "\xFF\x70[Mecocoa]\xFF\x47 Syscalls Test FAIL!\xFF\x07";
+			rostr test_msg = "[Mecocoa] Syscalls Test FAIL!";
 			Console.OutFormat("%s %x %x %x\n\r", test_msg + 0x80000000,
 				para[0], para[1], para[2]);
 		}

@@ -63,6 +63,9 @@ EXTERN Handint_PIT
 ; 0x21
 GLOBAL Handint_KBD_Entry
 EXTERN Handint_KBD
+; 0x24
+GLOBAL Handint_COM1_Entry
+EXTERN Handint_COM1
 ; 0x70
 GLOBAL Handint_RTC_Entry
 EXTERN Handint_RTC
@@ -103,6 +106,16 @@ Handint_KBD_Entry:
 	CALL PG_POP
 	POPAD
 	IRETD
+Handint_COM1_Entry:
+	PUSHAD
+	CALL PG_PUSH
+	MOV AL, ' '
+	OUT 0x20, AL
+	CALL Handint_COM1
+	CALL PG_POP
+	POPAD
+	IRETD
+
 ; ---- SLAVE PIC BELOW ----
 Handint_RTC_Entry:
 	PUSHAD

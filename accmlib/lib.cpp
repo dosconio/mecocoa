@@ -3,6 +3,8 @@
 #include "c/consio.h"
 volatile static unsigned* const callid = (volatile unsigned*)0x0000500;// 0x80000500;
 
+// POSIX Based
+
 #if (_ACCM & 0xFF00) == 0x1000
 _ESYM_C stduint syscall_bridge(stduint a0, stduint a1, stduint a2, stduint a3, stduint a4, stduint a5, stduint a6, stduint a7);
 stduint syscall(syscall_t callid, stduint p1, stduint p2, stduint p3) {

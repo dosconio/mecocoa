@@ -148,8 +148,8 @@ public: // _Comment(Syscomm)
 public: // _Comment(Thread)
 public: // _Comment(Interface);
 	enum class InterfaceType : byte {
-		MCCA4,
-		POSIX,
+		MCCA4,// x86 will only support MCCA4
+		Linux,
 		Win32,
 	} interface_type = InterfaceType::MCCA4;
 public:
@@ -163,6 +163,8 @@ public: // _Comment(Console);
 	SheetTrait* pforms[_TEMP 4] = {};// should registered in global_layman
 public: // _Comment(Fileman);
 	FileDescriptor* pfiles[_TEMP 4];
+	struct vnode* cwd = 0;  // 
+	struct vnode* root = 0; // for chroot
 	//
 	auto Open(rostr pathname, int flags) -> stdsint;
 	//

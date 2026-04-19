@@ -548,6 +548,30 @@ bool Filesys::Remove(const char* pathname) {
 	return false;
 }
 
+//{} single mount level only
+String Filesys::getAbsolutePath(vfs_dentry* dentry) {
+	String res;
+	if (!dentry) return res;
+
+	char path[512];
+	path[0] = '\0';
+	vfs_dentry* curr = dentry;
+
+	while (curr) {
+		if (curr == vfs_root) break;
+
+		char temp[512];
+		StrCopy(temp, path);
+		String(path, 512).Format("/%s%s", curr->d_name, temp);
+
+		curr = curr->d_parent;
+	}
+	if (path[0] == '\0') {
+		StrCopy(path, "/");
+	}
+	res.Format("%s", path);
+	return res;
+}
 
 // -------------------------------------------------------------
 // DevFs Implementation

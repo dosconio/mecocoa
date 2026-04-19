@@ -14,6 +14,8 @@ void kernel_fail(void* serious, ...);
 rostr text_brand();
 
 // ---- handler
+extern "C" void Handint_COM1_Entry();
+extern "C" void Handint_COM1();
 extern "C" void Handint_PIT_Entry();
 extern "C" void Handint_PIT();
 extern "C" void Handint_RTC_Entry();

@@ -42,10 +42,10 @@ _sign_entry() {
 	Taskman::Create((void*)&serv_dev_hd_loop, 0);
 
 	IC.enAble();
-	syscall(syscall_t::OUTC, 'O', 0);
-	Console.OutFormat("hayouuu~!\n\r");
+	// syscall(syscall_t::OUTC, 'O', 0);
+	// Console.OutFormat("hayouuu~!\n\r\a");
 
-	// Filesys::Tree();
+	Filesys::Tree();
 
 	// Done
 	loop HALT();

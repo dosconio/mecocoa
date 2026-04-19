@@ -117,6 +117,7 @@ qemu_args=\
 	-boot order=a -m 1G\
 	-drive file=$(ubinpath)/fixed2.vhd,format=vpc,if=none,id=disk0 \
 	-device ide-hd,drive=disk0,bus=ide.0,unit=0 \
+	-serial stdio \
 
 #	-drive file=$(ubinpath)/fixed2.vhd,format=vpc,if=none,id=disk1 \
 #	-device ide-hd,drive=disk1,bus=ide.0,unit=1 \
