@@ -100,34 +100,34 @@ static inline stduint MccaMemCopyP(void* dest, ProcessBlock* pd, const void* sor
 	#endif
 }
 
-void rupt_proc(stduint pid, stduint rupt_no)
+void rupt_proc(stduint tid, stduint rupt_no)
 {
-	auto task = Taskman::Locate(pid);
-	if ((_IMM(task->main_thread->block_reason) & _IMM(ThreadBlock::BlockReason::BR_RecvMsg)) &&
-		((stduint)task->main_thread->recv_fo_whom == ANYPROC || (stduint)task->main_thread->recv_fo_whom == INTRUPT)) {
+	auto th = Taskman::LocateThread(tid);
+	if (!th) return;
+	if ((_IMM(th->block_reason) & _IMM(ThreadBlock::BlockReason::BR_RecvMsg)) &&
+		((stduint)th->recv_fo_whom == ANYPROC || (stduint)th->recv_fo_whom == INTRUPT)) {
 		// ploginfo("INT-MSG: RUPT-PROC");
 		CommMsg tmp_msg = { };
 		tmp_msg.type = HARDRUPT;
-		MccaMemCopyP(task->main_thread->unsolved_msg, task, &tmp_msg, 0, sizeof(tmp_msg));
-		task->main_thread->wait_rupt_no = nil;
-		task->main_thread->unsolved_msg = NULL;
-		task->main_thread->Unblock(ThreadBlock::BlockReason::BR_RecvMsg);
+		MccaMemCopyP(th->unsolved_msg, th->parent_process, &tmp_msg, 0, sizeof(tmp_msg));
+		th->wait_rupt_no = nil;
+		th->unsolved_msg = NULL;
+		th->Unblock(ThreadBlock::BlockReason::BR_RecvMsg);
 	}
 	else {
-		task->main_thread->wait_rupt_no = rupt_no;
+		th->wait_rupt_no = rupt_no;
 	}
 }
 
 
-static bool msg_send_will_deadlock(ProcessBlock* fo, ProcessBlock* to)
+static bool msg_send_will_deadlock(ThreadBlock* fo_th, ThreadBlock* to_th)
 {
 	// e.g. A->B->C->A
-	ThreadBlock* crt = to->main_thread;
-	ThreadBlock* fo_th = fo->main_thread;
+	ThreadBlock* crt = to_th;
 	while (true) {
 		if (crt->block_reason == ThreadBlock::BlockReason::BR_SendMsg) {
 			if (crt->send_to_whom == fo_th) {
-				plogerro("deadlock %[32H]<-...->%[32H]", fo->getID(), crt->parent_process->getID());
+				plogerro("deadlock T%u<-...->T%u", fo_th->tid, crt->tid);
 				return true;
 			}
 			if (!crt->send_to_whom) break;
@@ -138,24 +138,25 @@ static bool msg_send_will_deadlock(ProcessBlock* fo, ProcessBlock* to)
 	return false;
 }
 
-int msg_send(ProcessBlock* fo, stduint too, _Comment(vaddr) CommMsg* msg)
+int msg_send(ThreadBlock* fo_th, stduint too, _Comment(vaddr) CommMsg* msg)
 {
 	#if _MCCA == 0x8632
 	_TEMP _ASM("cli");
 	#endif
-	// ploginfo("%s: (fo_id%u, to_id%u, fo->paging %[x]) msg{%x %x}", __FUNCIDEN__, fo->getID(), too, fo->paging.root_level_page, msg->data.address, msg->data.length);
 	if (!too) return 2;
-	auto to = Taskman::Locate(too);
-	if (!to) {
-		return 1;
+	ThreadBlock* to_th = Taskman::LocateThread(too);
+	if (!to_th) {
+		if (auto to_pb = Taskman::Locate(too)) to_th = to_pb->main_thread;
 	}
-	if (msg_send_will_deadlock(fo, to)) {
+	if (!to_th) return 1;
+
+	if (msg_send_will_deadlock(fo_th, to_th)) {
 		plogerro("msg_send_will_deadlock");
 		return -1;
 	}
 	
-	ThreadBlock* to_th = to->main_thread;
-	ThreadBlock* fo_th = fo->main_thread;
+	ProcessBlock* to = to_th->parent_process;
+	ProcessBlock* fo = fo_th->parent_process;
 
 	if ((_IMM(to_th->block_reason) & _IMM(ThreadBlock::BlockReason::BR_RecvMsg)) &&
 		(to_th->recv_fo_whom == fo_th || (stduint)to_th->recv_fo_whom == ANYPROC)) {
@@ -167,27 +168,24 @@ int msg_send(ProcessBlock* fo, stduint too, _Comment(vaddr) CommMsg* msg)
 		auto msg_to = (CommMsg*)SeekAddress(to, _IMM(to_th->unsolved_msg));
 		void* addr_to = msg_to ? (void*)msg_to->data.address : nullptr;
 		if (msg_to) MIN(leng, msg_to->data.length);
-		// ploginfo("SEND-MemCopyP %[32H], ..., %[32H], ..., %d)", addr_to, addr_fo, leng);
 		if (leng) MccaMemCopyP(addr_to, to, addr_fo, fo, leng);
 		if (msg_to && msg_fo) msg_to->type = msg_fo->type;
-		if (msg_to) msg_to->src = fo->getID();
+		if (msg_to) msg_to->src = fo_th->tid;
 		to_th->unsolved_msg = NULL;
 		to_th->recv_fo_whom = nullptr;
 		to_th->Unblock(ThreadBlock::BlockReason::BR_RecvMsg);
-		// assert fo & to: block_reason, unsolved_msg, recv_fo_whom, send_to_whom
 	}
 	else {
 		fo_th->Block(ThreadBlock::BlockReason::BR_SendMsg);
 		fo_th->send_to_whom = to_th;
-		if (fo_th->unsolved_msg) plogwarn("pid%u, unsolved_msg when send(%u)(%u)", fo->getID(), too, 0);
+		if (fo_th->unsolved_msg) plogwarn("T%u, unsolved_msg when send(%u)", fo_th->tid, too);
 		fo_th->unsolved_msg = msg;
-		// ploginfo("msg at %x %x %x", msg, msg->data.address, msg->data.length);
 		// proc sending queue
 		if (!to_th->queue_send_queuehead) to_th->queue_send_queuehead = fo_th; else {
 			ThreadBlock* crt = to_th->queue_send_queuehead;
 			while (crt->queue_send_queuenext) {
 				crt = crt->queue_send_queuenext;
-				if (!crt) { plogerro("Loss of ThreadBlock since qsend %[32H]", too); return 1; }
+				if (!crt) { plogerro("Loss of ThreadBlock since qsend T%u", too); return 1; }
 			}
 			crt->queue_send_queuenext = fo_th;
 		}
@@ -198,43 +196,37 @@ int msg_send(ProcessBlock* fo, stduint too, _Comment(vaddr) CommMsg* msg)
 	}
 	return 0;
 }
-int msg_recv(ProcessBlock* to, stduint foo, _Comment(vaddr) CommMsg* msg)
+int msg_recv(ThreadBlock* to_th, stduint foo, _Comment(vaddr) CommMsg* msg)
 {
 	#if _MCCA == 0x8632
 	_TEMP _ASM("cli");
 	#endif
 	
-	ThreadBlock* to_th = to->main_thread;
-
-	// ploginfo("%s: (to_id%u, fo_id%u, %[x])", __FUNCIDEN__, to->getID(), foo, to->paging.root_level_page);
 	_Comment(Proc - Interrupt) if ((to_th->wait_rupt_no) && (foo == ANYPROC || foo == INTRUPT)) {
 		CommMsg tmp_msg{ 0 };
 		tmp_msg.type = HARDRUPT;
 		tmp_msg.src = to_th->wait_rupt_no;
-		MccaMemCopyP(msg, to, &tmp_msg, 0, sizeof(tmp_msg));
+		MccaMemCopyP(msg, to_th->parent_process, &tmp_msg, 0, sizeof(tmp_msg));
 		to_th->wait_rupt_no = nil;
-		// ploginfo("INT-MSG: RECV-MSG");
 		return 0;
 	}
 	bool determined = false;
 	ThreadBlock* prev = nullptr;
 	ThreadBlock* fo_th = nullptr;
-	ProcessBlock* fo = nullptr;
 	if (foo == ANYPROC) {
 		if (to_th->queue_send_queuehead) {
 			fo_th = to_th->queue_send_queuehead;
-			foo = fo_th->parent_process->getID();
-			fo = Taskman::Locate(foo);
+			foo = fo_th->tid;
 			determined = true;
 		}
 	}
 	else if (foo != INTRUPT) {
-		// ploginfo("%u -> %u", foo, to->getID());
-		fo = Taskman::Locate(foo);
-		if (!fo) {
-			return 1;
+		fo_th = Taskman::LocateThread(foo);
+		if (!fo_th) {
+			if (auto fo_pb = Taskman::Locate(foo)) fo_th = fo_pb->main_thread;
 		}
-		fo_th = fo->main_thread;
+		if (!fo_th) return 1;
+
 		if (fo_th->block_reason == ThreadBlock::BlockReason::BR_SendMsg &&
 			fo_th->send_to_whom == to_th) {
 			ThreadBlock* crt = to_th->queue_send_queuehead;
@@ -259,19 +251,16 @@ int msg_recv(ProcessBlock* to, stduint foo, _Comment(vaddr) CommMsg* msg)
 			fo_th->queue_send_queuenext = nullptr;
 		}
 		//
-		auto msg_fo = (CommMsg*)SeekAddress(fo, (stduint)fo_th->unsolved_msg);
-		// ploginfo("msg_fo %u %x %x", fo->getID(), fo->unsolved_msg, msg_fo);
+		auto msg_fo = (CommMsg*)SeekAddress(fo_th->parent_process, (stduint)fo_th->unsolved_msg);
 		stduint leng0 = msg_fo ? msg_fo->data.length : 0;
 		void* addr_fo = msg_fo ? (void*)msg_fo->data.address : nullptr;
-		// ploginfo("msg_fo %x %x", addr_fo, leng0);
 
-		auto msg_to = (CommMsg*)SeekAddress(to, _IMM(msg));
+		auto msg_to = (CommMsg*)SeekAddress(to_th->parent_process, _IMM(msg));
 		stduint leng1 = msg_to ? msg_to->data.length : 0;
 		void* addr_to = msg_to ? (void*)msg_to->data.address : nullptr;
 		//
-		// ploginfo("RECV-MemCopyP %[32H], ..., %[32H], ..., minof(%d,%d)", addr_to, addr_fo, leng0, leng1);
 		stduint leng = minof(leng0, leng1);
-		if (leng) MccaMemCopyP(addr_to, to, addr_fo, fo, leng);
+		if (leng) MccaMemCopyP(addr_to, to_th->parent_process, addr_fo, fo_th->parent_process, leng);
 		if (msg_to && msg_fo) msg_to->type = msg_fo->type;
 		if (msg_to) msg_to->src = foo;
 		fo_th->unsolved_msg = NULL;
@@ -279,11 +268,22 @@ int msg_recv(ProcessBlock* to, stduint foo, _Comment(vaddr) CommMsg* msg)
 		fo_th->Unblock(ThreadBlock::BlockReason::BR_SendMsg);
 	}
 	else { // block self to wait for msg
-		// ploginfo("PID%u: BLOC[RECV]", to->getID());
+		ThreadBlock* fo_th_tgt = nullptr;
+		if (foo == ANYPROC || foo == INTRUPT) {
+			fo_th_tgt = (ThreadBlock*)foo;
+		} else {
+			fo_th_tgt = Taskman::LocateThread(foo);
+			if (!fo_th_tgt) {
+				if (auto fo_pb = Taskman::Locate(foo)) fo_th_tgt = fo_pb->main_thread;
+			}
+			if (!fo_th_tgt) return -1;
+		}
+
 		to_th->Block(ThreadBlock::BlockReason::BR_RecvMsg);
-		if (to_th->unsolved_msg) plogwarn("pid%u, unsolved_msg when recv(%u)(%u)", to->getID(), foo, 0);
+		if (to_th->unsolved_msg) plogwarn("T%u, unsolved_msg when recv(%u)", to_th->tid, foo);
 		to_th->unsolved_msg = msg;
-		to_th->recv_fo_whom = (foo == ANYPROC || foo == INTRUPT) ? (ThreadBlock*)foo : Taskman::Locate(foo)->main_thread;
+		to_th->recv_fo_whom = fo_th_tgt;
+
 		#if (_MCCA & 0xFF00) == 0x8600
 		Taskman::Schedule(true);
 		#endif

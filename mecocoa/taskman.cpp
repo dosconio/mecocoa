@@ -59,7 +59,7 @@ void Taskman::SleepAndRelease(Spinlock* lk) {
 }
 
 bool Spinlock::Acquire() {
-	byte state_rupt;
+	byte state_rupt = 0;
 	#if (_MCCA & 0xFF00) == 0x8600
 	if (state_rupt = cast<REG_FLAG_t>(getFlags).IF) {
 		IC.enAble(false);
@@ -116,21 +116,23 @@ void Mutex::Release() {
 auto Taskman::AllocateTask() -> ProcessBlock* {
 	// auto ppb = zalcof(ProcessBlock);
 	auto ppb = (ProcessBlock*)mempool.allocate(sizeof(ProcessBlock), 4);
-	MemSet(ppb, 0, sizeof(ProcessBlock));
 	if (!ppb) {
 		plogerro("Taskman::AllocateTask() failed");
 		return nullptr;
 	}
+	MemSet(ppb, 0, sizeof(ProcessBlock));
+	new (ppb) ProcessBlock();
 	return ppb;
 }
 
 auto Taskman::AllocateThread() -> ThreadBlock* {
 	auto tb = (ThreadBlock*)mempool.allocate(sizeof(ThreadBlock), 4);
-	MemSet(tb, 0, sizeof(ThreadBlock));
 	if (!tb) {
 		plogerro("Taskman::AllocateThread() failed");
 		return nullptr;
 	}
+	MemSet(tb, 0, sizeof(ThreadBlock));
+	new (tb) ThreadBlock();
 	return tb;
 }
 
@@ -188,6 +190,7 @@ bool Taskman::ExitCurrent(stduint code) {
 // - files open
 // - heaps, stacks
 // - paging
+// - threads?
 static void _Exit_Cleanup(stduint pid)
 {
 	#if defined(_DEBUG) && defined(_MCCA) && (_MCCA & 0xFF00) == 0x8600
@@ -210,6 +213,7 @@ static void _Exit_Cleanup(stduint pid)
 	while (th) {
 		ThreadBlock* next_th = th->process_thread_next;
 		Taskman::DequeueReady(th);
+		Taskman::thchain.Remove(th);
 		if (th->stack_lineaddr == th->stack_levladdr) {
 			delete (byte*)th->stack_levladdr;
 		}

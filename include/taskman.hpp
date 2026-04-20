@@ -216,6 +216,8 @@ public: // _Comment(Syscomm)
 	// if B->A, C->A. Then: A.qhead = B, B.qnext = C, C.qnext = none
 	ThreadBlock* queue_send_queuehead = nullptr;// nullptr for none
 	ThreadBlock* queue_send_queuenext = nullptr;
+public:
+	inline stduint getID() const { return tid; }
 };
 
 inline bool ProcessBlock::isWaiting() {
@@ -228,7 +230,6 @@ class Taskman {
 
 public:
 	static stduint PCU_CORES;
-	static stduint pcurrent[PCU_CORES_MAX];
 	static ThreadBlock* current_thread[PCU_CORES_MAX];
 public:// Gen.2
 	static Dchain chain;// [ArrayT] ordered by pid
@@ -238,8 +239,11 @@ public:// Gen.2
 	static stduint min_available_tid;// in threads
 public:// for local core
 	static stduint getID() { return _TEMP 0; }// get core id
-	static stduint& CurrentPID() { return pcurrent[getID()]; }// get core id
-	static stduint& CurrentTID() { return current_thread[getID()]->tid; }
+	static stduint  CurrentTID() { return current_thread[getID()]->tid; }
+	static stduint  CurrentPID() { return current_thread[getID()]->parent_process->pid; }
+public:
+	static Dchain thchain;
+	static Dnode* min_available_thleft;
 public:
 	static auto
 		Initialize(stduint cpuid = 0) -> void;
@@ -322,10 +326,10 @@ extern "C" bool task_switch_enable;
 #ifndef _ACCM
 
 // return zero for success
-int msg_send(ProcessBlock* fo, stduint to, _Comment(vaddr) CommMsg* msg);
-int msg_recv(ProcessBlock* to, stduint fo, _Comment(vaddr) CommMsg* msg);
+int msg_send(ThreadBlock* fo, stduint to, _Comment(vaddr) CommMsg* msg);
+int msg_recv(ThreadBlock* to, stduint fo, _Comment(vaddr) CommMsg* msg);
 
-void rupt_proc(stduint pid, stduint rupt_no);
+void rupt_proc(stduint tid, stduint rupt_no);
 
 inline static stduint syssend(stduint to_whom, const void* msgaddr, stduint bytlen, stduint type = 0)
 {

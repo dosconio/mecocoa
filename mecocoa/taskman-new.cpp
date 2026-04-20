@@ -160,10 +160,11 @@ void Taskman::Initialize(stduint cpuid) {
 	kernel_thread->parent_process = kernel_task;
 	
 	min_available_left = chain.Append(kernel_task);
+	min_available_thleft = thchain.Append(kernel_thread);
 	kernel_task->state = ProcessBlock::State::Active;
 	kernel_task->paging.root_level_page = kernel_paging.root_level_page;
 	
-	pcurrent[cpuid] = 0;
+	kernel_thread->tid = 0;
 	current_thread[cpuid] = kernel_thread;
 	//
 	chain.Compare_f = ProcCmp;

@@ -18,9 +18,10 @@ stduint Taskman::min_available_pid;// in chain
 Dnode* Taskman::min_available_left;;
 
 stduint Taskman::PCU_CORES = 0;
-stduint Taskman::pcurrent[PCU_CORES_MAX];
 ThreadBlock* Taskman::current_thread[PCU_CORES_MAX];
 stduint Taskman::min_available_tid = 0;
+Dchain Taskman::thchain = { nullptr };
+Dnode* Taskman::min_available_thleft = nullptr;
 
 
 Taskman::ReadyQueue Taskman::priority_queues[32] = {};
@@ -143,28 +144,38 @@ void ThreadBlock::Unblock(BlockReason reason) {
 	}
 }
 
+static stduint next_global_id = 1;
+
 bool Taskman::Append(ProcessBlock* task) {
-	// Find available PID (Find smallest gap)
-	stduint target_pid = 1;
-	Dnode* insert_after = nullptr;
-	for (auto nod = chain.Root(); nod; nod = nod->next) {
-		stduint crt = cast<ProcessBlock*>(nod->offs)->pid;
-		if (crt == target_pid) target_pid++;
-		else if (crt > target_pid) break;
-		insert_after = nod;
-	}
-	task->pid = target_pid;
+	task->pid = __atomic_fetch_add(&next_global_id, 1, __ATOMIC_SEQ_CST);
+
+	Dnode* insert_after = chain.Last();
+	// Dnode* insert_after = nullptr;
+	// for (auto nod = chain.Root(); nod; nod = nod->next) {
+	// 	if (cast<ProcessBlock*>(nod->offs)->pid > task->pid) break;
+	// 	insert_after = nod;
+	// }
+
 	chain.Append(task, false, insert_after);
 	task->state = ProcessBlock::State::Active;
 	return true;
 }
 
 bool Taskman::AppendThread(ThreadBlock* task) {
-	stduint target_tid = 1;
-	while (LocateThread(target_tid) != nullptr) {
-		target_tid++;
+	if (task->parent_process && task->parent_process->main_thread == task) {
+		task->tid = task->parent_process->pid;
 	}
-	task->tid = target_tid;
+	else {
+		task->tid = __atomic_fetch_add(&next_global_id, 1, __ATOMIC_SEQ_CST);
+	}
+
+	Dnode* insert_after = thchain.Last();
+	// Dnode* insert_after = nullptr;
+	// for (auto nod = thchain.Root(); nod; nod = nod->next) {
+	// 	if (cast<ThreadBlock*>(nod->offs)->tid > task->tid) break;
+	// 	insert_after = nod;
+	// }
+	thchain.Append(task, false, insert_after);
 	
 	task->state = ThreadBlock::State::Ready;
 	EnqueueReady(task);
@@ -180,11 +191,9 @@ ProcessBlock* Taskman::Locate(stduint taskid) {
 }
 
 ThreadBlock* Taskman::LocateThread(stduint tid) {
-	for (auto nod = chain.Root(); nod; nod = nod->next) {
-		auto ptask = cast<ProcessBlock*>(nod->offs);
-		for (auto th = ptask->thread_list_head; th; th = th->process_thread_next) {
-			if (th->tid == tid) return th;
-		}
+	for (auto nod = thchain.Root(); nod; nod = nod->next) {
+		auto th = cast<ThreadBlock*>(nod->offs);
+		if (th->tid == tid) return th;
 	}
 	return nullptr;
 }
@@ -288,8 +297,6 @@ auto Taskman::Schedule(bool omit_slice)->decltype(Schedule())
 		#endif
 		return;
 	}
-	CurrentTID() = new_tb->tid;
-	CurrentPID() = new_tb->parent_process->pid;
 	
 	if (new_tb->state == TBS::Uninit) new_tb->state = TBS::Ready;
 	if (old_tb->state == TBS::Running && new_tb->state == TBS::Ready) {

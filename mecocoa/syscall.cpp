@@ -16,20 +16,18 @@ static const byte syscall_delayflgs[0x100 / _BYTE_BITS_] = {
 	0b00110001, 0b00000000, // 0x0X
 };
 
-static stduint syscall_06_open(stduint* paras, stduint pid)
+static stduint syscall_06_open(stduint* paras, ThreadBlock* th)
 {
-	// plogtrac("%s", __FUNCIDEN__);
 	stduint open_buf[1];
-	ProcessBlock* pb = Taskman::Locate(pid);
+	ProcessBlock* pb = th->parent_process;
 	struct {
 		stduint flag;
 		stduint pid;
 		char filename[sizeof(stduint) * (8 - 2)];
 	} open_msg;
 	open_msg.flag = paras[1];
-	open_msg.pid = pid;
+	open_msg.pid = pb->pid;
 	auto len = StrCopyP(open_msg.filename, kernel_paging, (rostr)paras[0], pb->paging, byteof(open_msg.filename) - 1);
-	// ploginfo("fopen %s %u chars", open_msg.filename, len);
 	syssend(Task_FileSys, &open_msg, sizeof(open_msg), _IMM(FilemanMsg::OPEN));
 	sysrecv(Task_FileSys, open_buf, byteof(open_buf));
 	if (cast<stdsint>(open_buf[0]) < 0) {
@@ -39,14 +37,14 @@ static stduint syscall_06_open(stduint* paras, stduint pid)
 	return open_buf[0];
 }
 
-static stduint syscall_07_close(stduint* paras, stduint pid) {
+static stduint syscall_07_close(stduint* paras, ThreadBlock* th) {
 	stduint open_buf[1];
 	struct {
 		stduint fd;
 		stduint pid;
 	} open_msg;
 	open_msg.fd = paras[0];
-	open_msg.pid = pid;
+	open_msg.pid = th->parent_process->pid;
 	syssend(Task_FileSys, &open_msg, sizeof(open_msg), 0x03);
 	sysrecv(Task_FileSys, open_buf, byteof(open_buf));
 	return open_buf[0];// 0 for success
@@ -54,7 +52,7 @@ static stduint syscall_07_close(stduint* paras, stduint pid) {
 
 
 DEFSYSC sysc_OUTC(stduint ch, stduint len);
-DEFSYSC sysc_COMM(ProcessBlock* pb, stduint to, stduint op, CommMsg* msg);
+DEFSYSC sysc_COMM(stduint to, stduint op, CommMsg* msg);
 DEFSYSC sysc_INNC(stduint blocked);
 DEFSYSC sysc_EXIT(stduint code);
 
@@ -68,10 +66,11 @@ stduint Handint_SYSCALL(CallgateFrame* frame) {
 	stduint para[3] = { frame->cx, frame->dx, frame->bx };
 	stduint msgbuf[4] = {};
 	stduint ret = 0;
-	stduint caller_pid = Taskman::CurrentPID();
+	ThreadBlock* caller_th = Taskman::current_thread[Taskman::getID()];
+	ProcessBlock* pb = caller_th->parent_process;
+	stduint caller_pid = pb->pid;
 	byte flg = syscall_delayflgs[_IMM(callid) / _BYTE_BITS_];
 
-	char ch;
 	if (!(flg & _IMM1S(_IMM(callid) & 0b111)) && ch_tse) {
 		task_switch_enable = task_switch_enable_old;
 	}
@@ -94,14 +93,14 @@ stduint Handint_SYSCALL(CallgateFrame* frame) {
 		if (ch_tse) task_switch_enable = task_switch_enable_old;
 		break;
 	case syscall_t::COMM:// (mode, obj, vaddr msg)
-		ret = sysc_COMM(Taskman::Locate(caller_pid), para[1], para[0], (CommMsg*)para[2]);
+		ret = sysc_COMM(para[1], para[0], (CommMsg*)para[2]);
 		if (ch_tse) task_switch_enable = task_switch_enable_old;
 		break;
 	case syscall_t::OPEN:// (str, uint)->(uint)
-		ret = syscall_06_open(para, caller_pid);
+		ret = syscall_06_open(para, caller_th);
 		break;
 	case syscall_t::CLOS:
-		ret = syscall_07_close(para, caller_pid);
+		ret = syscall_07_close(para, caller_th);
 		break;
 	case syscall_t::READ: case syscall_t::WRIT:
 	{
@@ -112,13 +111,12 @@ stduint Handint_SYSCALL(CallgateFrame* frame) {
 		open_buf[3] = caller_pid;
 		syssend(Task_FileSys, open_buf, byteof(open_buf), _IMM(callid) - _IMM(syscall_t::READ) + _IMM(FilemanMsg::READ));
 		sysrecv(Task_FileSys, open_buf, byteof(open_buf[0]));
-		ret = open_buf[0];// 0 for success
+		ret = open_buf[0];
 		break;
 	}
-	case syscall_t::DELF:// (usr filename) --> (pid, filename[7]...) --> (!success)
+	case syscall_t::DELF:
 	{
 		stduint open_buf[(8)];
-		ProcessBlock* pb = Taskman::Locate(caller_pid);
 		open_buf[0] = caller_pid;
 		StrCopyP((char*)&open_buf[1], kernel_paging, (rostr)para[0], pb->paging, byteof(stduint) * 7 - 1);
 		syssend(Task_FileSys, open_buf, byteof(open_buf), _IMM(FilemanMsg::REMOVE));
@@ -137,13 +135,12 @@ stduint Handint_SYSCALL(CallgateFrame* frame) {
 		sysrecv(Task_TaskMan, tmp, byteof(tmp));// (pid, state)
 		ret = tmp[0];// pid
 		if (ret && para[1]) {
-			MemCopyP((void*)para[1], Taskman::Locate(caller_pid)->paging, &tmp[1], kernel_paging, byteof(stduint));
+			MemCopyP((void*)para[1], pb->paging, &tmp[1], kernel_paging, byteof(stduint));
 		}
 		break;
 	}
 	case syscall_t::FORK:
 	{
-		// ploginfo("syscall fork");
 		msgbuf[0] = caller_pid;
 		msgbuf[1] = _IMM(frame);
 		syssend(Task_TaskMan, sliceof(msgbuf), _IMM(TaskmanMsg::FORK));
@@ -152,8 +149,7 @@ stduint Handint_SYSCALL(CallgateFrame* frame) {
 	}
 	case syscall_t::TMSG:
 	{
-		ProcessBlock* pb = Taskman::Locate(caller_pid);
-		ret = _IMM(pb->main_thread->queue_send_queuehead);
+		ret = _IMM(caller_th->queue_send_queuehead);
 		break;
 	}
 	case syscall_t::EXEC: case syscall_t::EXET:
@@ -163,7 +159,7 @@ stduint Handint_SYSCALL(CallgateFrame* frame) {
 		msgbuf[3] = para[2];
 		syssend(Task_TaskMan, sliceof(msgbuf),
 			_IMM(callid == syscall_t::EXEC ? TaskmanMsg::EXEC : TaskmanMsg::EXET));
-		sysrecv(Task_TaskMan, &ret, byteof(ret));// blocked and disappear here
+		sysrecv(Task_TaskMan, &ret, byteof(ret));
 		break;
 
 	case syscall_t::TEST:
@@ -223,29 +219,21 @@ stduint syscall(syscall_t callid, stduint para1, stduint para2, stduint para3) {
 	return reinterpret_cast<stdsint(*)(stduint, stduint, stduint)>(SYSCALL_TABLE[_IMM(callid)])(para1, para2, para3);
 	#elif (_MCCA & 0xFF00) == 0x1000
 	void syscall_body(NormalTaskContext * cxt);
-	auto ppb = Taskman::Locate(Taskman::CurrentPID());
-	auto& cxt = ppb->main_thread->context;
-	cxt.a7 = _IMM(callid);
-	cxt.a0 = para1;
-	cxt.a1 = para2;
-	cxt.a2 = para3;
-	syscall_body(&cxt);
-	ret = cxt.a0;
+	auto th = Taskman::current_thread[Taskman::getID()];
+	th->context.a7 = _IMM(callid);
+	th->context.a0 = para1;
+	th->context.a1 = para2;
+	th->context.a2 = para3;
+	syscall_body(&th->context);
+	ret = th->context.a0;
 	#endif
 	return ret;
 }
 
 
-DEFSYSC sysc_OUTC(stduint ch, stduint len) {// OUTC
-	#if 0
-	if (len) {
-		UART0.out((rostr)ch, len);
-	}
-	else {
-		UART0.OutChar(ch);
-	}
-	#else
-	if (auto pid = Taskman::Locate(Taskman::CurrentPID())) {
+DEFSYSC sysc_OUTC(stduint ch, stduint len) {
+	auto th = Taskman::current_thread[Taskman::getID()];
+	if (auto pid = th->parent_process) {
 		if (auto con = pid->focus_tty ? (Console_t*)cast<Dnode*>(pid->focus_tty)->offs : 0)
 		{
 			if (len) {
@@ -271,7 +259,6 @@ DEFSYSC sysc_OUTC(stduint ch, stduint len) {// OUTC
 		else plogerro("sysc_OUTC: pid = %u", pid->getID());
 	}
 	else plogerro("sysc_try: null task");
-	#endif
 	return -1;
 }
 
@@ -280,7 +267,8 @@ DEFSYSC sysc_INNC(stduint blocked) {
 	usize msgbuf[4];
 	int ch = -1;
 	// Read from its TTY, return -1 if the TTY is occupied
-	auto ppb = Taskman::Locate(Taskman::CurrentPID());
+	auto th = Taskman::current_thread[Taskman::getID()];
+	auto ppb = th->parent_process;
 	if (blocked) {
 		msgbuf[3] = ppb->getID();
 		ppb->paging_redirect = nil;
@@ -300,38 +288,39 @@ DEFSYSC sysc_EXIT(stduint code) {
 	return -1;
 }
 
-DEFSYSC sysc_COMM(ProcessBlock *pb, stduint to, stduint op, CommMsg* msg) {
+DEFSYSC sysc_COMM(stduint to, stduint op, CommMsg* msg) {
+	auto th = Taskman::current_thread[Taskman::getID()];
 	usize ret;
 	if (op & 0b01) { // SEND
 		// ploginfo("%d --> %d: 0x%[x]", pb->getID(), to, msg);
-		if (ret = msg_send(pb, to, msg)) return ret;
+		if (ret = msg_send(th, to, msg)) return ret;
 	}
 	if (op & 0b10) { // RECV
 		// if (to && to != ~_IMM0) ploginfo("%d <-- %d", pb->getID(), to);
-		ret = msg_recv(pb, to, msg);
+		ret = msg_recv(th, to, msg);
 	}
 	if (op & 0b11); else {
 		plogerro("Invalid op %x", op);
 		return 0xF0F0;
 	}
-	if (pb->main_thread->state == ThreadBlock::State::Pended) {
+	if (th->state == ThreadBlock::State::Pended) {
 		Taskman::Schedule(true);
 	}
 	return ret;
 }
 
 DEFSYSC sysc_TMSG() {
-	ProcessBlock* pb = Taskman::Locate(Taskman::CurrentPID());
-	return _IMM(pb->main_thread->queue_send_queuehead);
+	auto th = Taskman::current_thread[Taskman::getID()];
+	return _IMM(th->queue_send_queuehead);
 }
 
 #endif
 
 #if (_MCCA & 0xFF00) == 0x1000
 
-static int sysc_GETCID(unsigned int *ptr_hid)
+static int sysc_GETCID(unsigned int *ptr_hid, ThreadBlock* th)
 {
-	auto pid = Taskman::Locate(Taskman::CurrentPID());
+	auto pid = th->parent_process;
 	auto pa = (stduint*)pid->paging[_IMM(ptr_hid)];
 	ploginfo("--> sysc_GETCID, arg0 = LA %[x] PA %[x]", ptr_hid, pa);
 	if (_IMM(pa) == ~_IMM0) return -1;
@@ -361,13 +350,13 @@ void syscall_body(NormalTaskContext* cxt)
 		clint.MSIP(getMHARTID(), MSIP_Type::SofRupt);
 		break;
 	case syscall_t::COMM:
-		cxt->a0 = sysc_COMM(Taskman::Locate(Taskman::CurrentPID()), cxt->a1, cxt->a0, (CommMsg*)cxt->a2);
+		cxt->a0 = sysc_COMM(cxt->a1, cxt->a0, (CommMsg*)cxt->a2);
 		break;
 	case syscall_t::TMSG:
 		cxt->a0 = sysc_TMSG();
 		break;
 	case syscall_t::GET_CORE_ID:
-		cxt->a0 = sysc_GETCID((unsigned int *)(cxt->a0));
+		cxt->a0 = sysc_GETCID((unsigned int *)(cxt->a0), Taskman::current_thread[Taskman::getID()]);
 		break;
 	default:
 		plogerro("Unknown syscall no: %d", syscall_num);
