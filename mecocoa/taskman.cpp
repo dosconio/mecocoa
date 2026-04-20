@@ -47,16 +47,7 @@ static SysMessage _BUF_Message[64];
 Queue<SysMessage> message_queue(_BUF_Message, numsof(_BUF_Message));
 
 // ---- Lock ----
-void Taskman::SleepAndRelease(Spinlock* lk) {
-	auto old_tb = current_thread[getID()];
-	DequeueReady(old_tb);
-	lk->Release(false);
-	auto new_tb = PickNext();
-	if (!new_tb) new_tb = Locate(0)->main_thread;
-	current_thread[getID()] = new_tb;
-	new_tb->state = ThreadBlock::State::Running;
-	SwitchTaskContext(&new_tb->context, &old_tb->context);
-}
+
 
 bool Spinlock::Acquire() {
 	byte state_rupt = 0;
@@ -253,6 +244,9 @@ static void _Exit_Cleanup(stduint pid)
 	#endif
 }
 
+void Taskman::Idle() {
+	loop HALT();
+}
 bool Taskman::Exit(ProcessBlock* p, stdsint exit_code)
 {
 	const auto pid = p->getID();

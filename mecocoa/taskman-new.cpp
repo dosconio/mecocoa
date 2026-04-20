@@ -180,6 +180,13 @@ void Taskman::Initialize(stduint cpuid) {
 	kernel_thread->time_slice = 4;
 	kernel_task->focus_tty = vttys[0];
 	Taskman::AppendThread(kernel_thread);
+
+	auto idle_task = Create((void*)Taskman::Idle, RING_M, false);
+	if (idle_task) {
+		idle_task->main_thread->priority = 31; // lowest priority
+		idle_task->main_thread->time_slice = 1;
+		idle_thread[cpuid] = idle_task->main_thread;
+	}
 }
 
 
@@ -211,7 +218,7 @@ static void SetSegment(NormalTaskContext* ntc) {
 }
 #endif
 
-ProcessBlock* Taskman::Create(void* entry, byte ring)
+ProcessBlock* Taskman::Create(void* entry, byte ring, bool append)
 {
 	auto ppb = AllocateTask();
 	if (!ppb) return nullptr;
@@ -255,8 +262,11 @@ ProcessBlock* Taskman::Create(void* entry, byte ring)
 
 	tb->priority = (ring == RING_U) ? 3 : 0;
 	tb->time_slice = (ring == RING_U) ? 3 : 4;
-	Append(ppb);
-	AppendThread(tb);
+	
+	if (append) {
+		Append(ppb);
+		AppendThread(tb);
+	}
 	return ppb;
 }
 static void _CreateELF_Carry(char* vaddr, stduint mem_length, BlockTrait* source, stduint file_offset, stduint file_size, Paging& pg, byte* buffer) {

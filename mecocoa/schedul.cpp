@@ -19,6 +19,7 @@ Dnode* Taskman::min_available_left;;
 
 stduint Taskman::PCU_CORES = 0;
 ThreadBlock* Taskman::current_thread[PCU_CORES_MAX];
+ThreadBlock* Taskman::idle_thread[PCU_CORES_MAX];
 stduint Taskman::min_available_tid = 0;
 Dchain Taskman::thchain = { nullptr };
 Dnode* Taskman::min_available_thleft = nullptr;
@@ -270,26 +271,60 @@ auto Taskman::Schedule(bool omit_slice)->decltype(Schedule())
 		HALT();
 		return;
 	}
+	bool is_idle = (old_tb == idle_thread[cpuid]);
 	if (!omit_slice) {
-		if (ifContinueProcess(old_tb)) {
+		if (!is_idle && ifContinueProcess(old_tb)) {
 			#if _MCCA == 0x8632
 			task_switch_enable = true;
 			#endif
 			return;
 		}
+		else if (is_idle) {
+			if (!ready_bitmap && !expired_bitmap) {
+				#if _MCCA == 0x8632
+				task_switch_enable = true;
+				#endif
+				return;// continue idle
+			}
+		}
 	}
 	else {
 		auto s = old_tb->state;
-		if (s == TBS::Pended) {
+		if (s == TBS::Pended || s == TBS::Hanging || s == TBS::Invalid) {
 			// Already handled by Block(); don't touch state or queues
-		} else {
+		}
+		else if (!is_idle) {
 			Taskman::DequeueReady(old_tb);
 			old_tb->state = TBS::Ready;
 			if (s == TBS::Running || s == TBS::Ready) Taskman::EnqueueExpired(old_tb);
 		}
+		else {
+			old_tb->state = TBS::Ready;
+		}
 	}
 	auto new_tb = PickNext();
-	if (!new_tb) new_tb = current_thread[cpuid]; // At least run self or idle thread if nothing else
+	if (!new_tb) {
+		// Fallback to self if runnable, otherwise switch to Idle thread
+		if (old_tb->state == TBS::Running || old_tb->state == TBS::Ready) {
+			new_tb = old_tb; 
+		} else {
+			new_tb = idle_thread[cpuid];
+			// Just in case idle_thread isn't set up yet, spin locally
+			if (!new_tb) {
+				#if _MCCA == 0x8632
+				task_switch_enable = true;
+				#endif
+				do {
+					IC.enAble();
+					HALT();
+					IC.enAble(false);
+				} while (!(new_tb = PickNext()));
+				#if _MCCA == 0x8632
+				task_switch_enable = false;
+				#endif
+			}
+		}
+	}
 	if (new_tb == old_tb) {
 		if (old_tb->state == TBS::Ready) old_tb->state = TBS::Running;
 		#if _MCCA == 0x8632
@@ -314,11 +349,36 @@ auto Taskman::Schedule(bool omit_slice)->decltype(Schedule())
 	task_switch_enable = true;//{TODO} X86 Unlock
 	#elif (_MCCA & 0xFF00) == 0x1000
 	#endif
-
+	// ploginfo("[core %u] switch Th %d -> Th %d", Taskman::getID(), old_tb->tid, new_tb->tid);
 	SwitchTaskContext(&new_tb->context, &old_tb->context);
 }
 #else
 auto Taskman::Schedule(bool omit_slice)->decltype(Schedule()) { }
 #endif
+void Taskman::SleepAndRelease(Spinlock* lk) {
+	auto old_tb = current_thread[getID()];
+	DequeueReady(old_tb);
+	lk->Release(false);
 
+	auto new_tb = PickNext();
+	if (!new_tb) {
+		new_tb = idle_thread[getID()];
+		if (!new_tb) {// idle is not ready
+			#if _MCCA == 0x8632
+			task_switch_enable = true;
+			#endif
+			do {
+				IC.enAble();
+				HALT();
+				IC.enAble(false);
+			} while (!(new_tb = PickNext()));
+			#if _MCCA == 0x8632
+			task_switch_enable = false;
+			#endif
+		}
+	}
 
+	current_thread[getID()] = new_tb;
+	new_tb->state = ThreadBlock::State::Running;
+	SwitchTaskContext(&new_tb->context, &old_tb->context);
+}

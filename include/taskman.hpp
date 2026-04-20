@@ -231,6 +231,7 @@ class Taskman {
 public:
 	static stduint PCU_CORES;
 	static ThreadBlock* current_thread[PCU_CORES_MAX];
+	static ThreadBlock* idle_thread[PCU_CORES_MAX];
 public:// Gen.2
 	static Dchain chain;// [ArrayT] ordered by pid
 	static stduint min_available_pid;// in chain
@@ -260,7 +261,7 @@ public:
 	// - Intel: 0 1 2 3
 	// - RISCV: Mach3 Supe1 User0
 	static auto// newProcess (BIN)
-		Create(void* entry, byte ring) -> ProcessBlock*;
+		Create(void* entry, byte ring, bool append = true) -> ProcessBlock*;
 	static auto _TODO// newProcess (auto check)
 		CreateFormat(BlockTrait* source, byte ring) -> ProcessBlock*;
 	static auto// newProcess (ELF)
@@ -273,6 +274,7 @@ public:
 	static auto
 		ExitCurrent(stduint code) -> bool;// call by syscall but taskman
 public:// taskman
+	static void Idle();
 	static bool
 		Exit(ProcessBlock* pb, stdsint exit_code);
 	static auto
