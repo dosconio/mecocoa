@@ -34,12 +34,13 @@ _sign_entry() {
 	__asm("ud2");
 
 	// Service
-	Taskman::Create((void*)&serv_task_loop, 0);
-	Taskman::Create((void*)&serv_cons_loop, 0);
-	Taskman::Create((void*)&serv_graf_loop, 0);
-	Taskman::Create((void*)&serv_file_loop, 0);
+	Taskman::Create((void*)&serv_task_loop, RING_M);
+	Taskman::Create((void*)&serv_cons_loop, RING_M);
+	Taskman::Create((void*)&serv_graf_loop, RING_M);
+	Taskman::Create((void*)&serv_file_loop, RING_M);
 	//
-	Taskman::Create((void*)&serv_dev_hd_loop, 0);
+	Taskman::Create((void*)&serv_dev_mem_loop, RING_M);
+	Taskman::Create((void*)&serv_dev_hd_loop, RING_M);
 
 	IC.enAble();
 	// syscall(syscall_t::OUTC, 'O', 0);

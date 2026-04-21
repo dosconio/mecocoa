@@ -38,6 +38,7 @@ void serv_cons_loop();
 void serv_graf_loop();
 #include "filesys.hpp"
 #include "fileman.hpp"
+void serv_dev_mem_loop();
 void serv_dev_hd_loop();
 void serv_file_loop();
 

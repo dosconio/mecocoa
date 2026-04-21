@@ -46,7 +46,6 @@ void Handint_HDD()// HDD Master
 
 static HD_Info hd_info[4] = { 0 };//{TEMP} 0:0 0:1 1:0 1:1
 static bool hd_info_valid[4] = { 0 };
-bool task_run = false;
 
 #define	STATUS_BSY	0x80
 #define	HD_TIMEOUT		10000	/* in millisec */
@@ -201,6 +200,10 @@ bool Harddisk_PATA_Paged::Read(stduint BlockIden, void* Dest) {
 	to_args[0] = getLowID();
 	to_args[1] = BlockIden;
 	syssend(Task_Hdd_Serv, sliceof(to_args), _IMM(FiledevMsg::READ));
+	// Receive ACK before data transfer
+	stduint ack;
+	sysrecv(Task_Hdd_Serv, &ack, sizeof(ack));
+	if (!ack) return false;
 	sysrecv(Task_Hdd_Serv, Dest, Block_Size);
 	return true;
 }
@@ -213,9 +216,11 @@ bool Harddisk_PATA_Paged::Write(stduint BlockIden, const void* Sors) {
 	to_args[0] = getLowID();
 	to_args[1] = BlockIden;
 	syssend(Task_Hdd_Serv, sliceof(to_args), _IMM(FiledevMsg::WRITE));
+	// Receive ACK before data transfer
+	stduint ack;
+	sysrecv(Task_Hdd_Serv, &ack, sizeof(ack));
+	if (!ack) return false;
 	syssend(Task_Hdd_Serv, Sors, Block_Size);
-	sysrecv(Task_Hdd_Serv, &to_args, sizeof(to_args)); 
-	
 	return true;
 }
 
@@ -227,8 +232,6 @@ String* plab = nullptr;
 int fat_time = 0;
 void serv_dev_hd_loop()
 {
-	
-	task_run = true;
 	if (_IMM(&bda->hdisk_number) != 0x475) {
 		plogerro("Invalid BIOS_DataArea");
 		while (1);
@@ -289,23 +292,28 @@ void serv_dev_hd_loop()
 			hd_close(*disks[(byte)args[0]]);// assert msg.data.length == 0
 			break;
 		case FiledevMsg::READ:// [diskno, lba]
+		{
 			// ploginfo("[Hrddisk] device %u: read %u", args[0], args[1]);
-			disks[args[0]]->Read(args[1], single_sector);
-			if (sig_src) syssend(sig_src, single_sector, disks[args[0]]->Block_Size);
+			stduint ack = (args[0] < numsof(disks) && disks[args[0]] && disks[args[0]]->Read(args[1], single_sector)) ? 1 : 0;
+			if (sig_src) syssend(sig_src, &ack, sizeof(ack));
+			if (ack && sig_src) syssend(sig_src, single_sector, disks[args[0]]->Block_Size);
 			break;
+		}
 		case FiledevMsg::WRITE:// [diskno, lba]
+		{
 			// ploginfo("[Hrddisk] device %u: write %u", (unsigned)(byte)args[0], slice.address);
-			if (sig_src) sysrecv(sig_src, single_sector, disks[args[0]]->Block_Size);
-			disks[args[0]]->Write(args[1], single_sector);
-			if (sig_src) {
-				stduint ack = 1;
-				syssend(sig_src, &ack, sizeof(ack));
+			stduint ack = (args[0] < numsof(disks) && disks[args[0]]) ? 1 : 0;
+			if (sig_src) syssend(sig_src, &ack, sizeof(ack));
+			if (ack && sig_src) {
+				sysrecv(sig_src, single_sector, disks[args[0]]->Block_Size);
+				disks[args[0]]->Write(args[1], single_sector);
 			}
 			break;
+		}
 		case FiledevMsg::GETPS:// (device 0 for all, 1~4 for primary, 5+ for logical)
 			GetPartitionSlice(args[0], sig_src);
 			break;
-
+		// OPEN: not support for fixed sockets
 
 		default:
 			plogerro("Bad TYPE in %s %s", __FILE__, __FUNCIDEN__);

@@ -18,6 +18,7 @@ enum {
 	Task_Console,
 	Task_ConsoleVideo,// [inner of Task_Console] manage mice and GUI
 	Task_FileSys,
+	Task_Memdisk_Serv,
 	Task_Hdd_Serv,
 	Task_Init,
 	Task_AppC,

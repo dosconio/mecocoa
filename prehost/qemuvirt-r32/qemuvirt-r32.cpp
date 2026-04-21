@@ -14,14 +14,6 @@ constexpr inline static stduint operator ""_Baud(unsigned long long i) { return 
 
 #define TIMER_INTERVAL (CLINT_TIMEBASE_FREQ/100) // 100Hz
 
-static const byte _FOLLOW_VHD[] = {
-	#if __BITS__ == 32
-	#embed "fatvhd.ignore"
-	#elif __BITS__ == 64
-	#embed "../qemuvirt-r64/fatvhd.ignore"
-	#endif
-};
-static_assert(sizeof(_FOLLOW_VHD) > 0);
 
 extern uint64 last_schepoint;
 _ESYM_C
@@ -50,40 +42,8 @@ void _entry()
 	Taskman::Create((void*)&serv_cons_loop, RING_M);
 	Taskman::Create((void*)&serv_graf_loop, RING_M);
 	Taskman::Create((void*)&serv_file_loop, RING_M);
-
-	Filesys::Tree();
-
-	ploginfo("FATVHD Size: %[x]", sizeof(_FOLLOW_VHD));
-	if (1) {
-		auto memdev_buffer = new byte[512];
-		auto fat_buffer = new byte[512];
-		MemoryBlockDevice memdev({ _IMM(_FOLLOW_VHD), sizeof(_FOLLOW_VHD) }, memdev_buffer);
-		FilesysFAT fatvhd(32, memdev, fat_buffer, NULL);
-		fatvhd.buffer_fatable = new byte[512];
-		FAT_FileHandle* han;
-		FAT_FileHandle filhan;
-		FilesysSearchArgs args = { &filhan, nullptr, nullptr, nullptr };
-		if (!fatvhd.loadfs()) {
-			plogerro("FATVHD loadfs failed");
-		}
-		else {
-			han = (FAT_FileHandle*)fatvhd.search("/", &args);
-			fatvhd.enumer(han, NULL);
-			if (han = (FAT_FileHandle*)fatvhd.search("lpa.elf", &args)) {
-				FileBlockBridge loop_device(&fatvhd, han, han->size, 512);
-				// plogwarn("size: %[x]", han->size);
-				if (auto pb = Taskman::CreateELF(&loop_device, RING_U)) {
-					Taskman::Append(pb);
-					Taskman::AppendThread(pb->main_thread);
-				}
-				else plogerro("lpa.elf: Fail to parse or load ELF");
-			}
-			else plogerro("lpa.elf: Not found");
-		}
-		delete[](fatvhd.buffer_fatable);
-		delete[](memdev_buffer);
-		delete[](fat_buffer);
-	}
+	//
+	Taskman::Create((void*)&serv_dev_mem_loop, RING_M);
 
 	if (Taskman::chain.Count() <= 1) {
 		ploginfo("Nothing to do.");

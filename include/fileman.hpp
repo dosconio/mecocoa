@@ -65,10 +65,11 @@ inline static uni::Harddisk_PATA* IndexDisk(unsigned dev) {
 enum class FiledevMsg {
 	TEST,
 	RUPT,
-	CLOSE,
-	READ,
-	WRITE,
-	GETPS,// GetPartitionSlice aka geometry
+	CLOSE,//(diskno) noreturn
+	READ, //I(diskno, lba) O:1 O:data_sector
+	WRITE,//I(diskno, lba) O:1 O:data_sector
+	GETPS,//(partid)->Slice. GetPartitionSlice aka geometry
+	OPEN,//(...) -> new_device_id
 };// for fileman-hd
 
 enum class FilemanMsg {
