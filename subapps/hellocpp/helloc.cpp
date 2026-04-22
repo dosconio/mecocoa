@@ -9,8 +9,13 @@ using namespace uni;
 
 int main(int argc, char** argv)
 {
-	unsigned id = systest('T', 'E', 'S');
-	outsfmt("C(%d)\n\r", 1);
+	unsigned id = systest('T', 'E', 'S');// TEST
+	outsfmt("C(%d)\n\r", id);// OUTC
+	for0(i, 3) {
+		outsfmt("C(%d)\n\r", syssecond());// TIME
+		sysrest(0 _Comment(s), 1);// REST
+	}// delay 3 s
+
 
 	#if 1
 	

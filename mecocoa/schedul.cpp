@@ -285,6 +285,7 @@ auto Taskman::Schedule(bool omit_slice)->decltype(Schedule())
 	
 	// Release the CPU's hold on switching output thread in clock cycle.
 	if (switching_out_threads[cpuid] != nullptr) {
+		// switching_out_threads[cpuid]->just_schedule = 0;//
 		switching_out_threads[cpuid] = nullptr;
 	}
 	

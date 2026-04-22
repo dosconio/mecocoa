@@ -22,7 +22,6 @@ void R_PIT_INIT() {
 	PIT_Init();
 }
 
-extern volatile stduint tick;
 void blink2();
 void RenderFrameFlush();
 void Handint_PIT()
@@ -36,7 +35,25 @@ void Handint_PIT()
 	}
 	static unsigned time = 0;
 	time++;
-	if (time % 10 == 0) tick++;
+	if (time % (1000 / SysTickFreq) == 0) {
+		tick++;
+		extern Dchain TimerManager;
+		extern Spinlock timer_lock;
+		SpinlockLocal guard(&timer_lock);
+		while (TimerManager.Root()) {
+			auto crt = treat<MsgTimer>(TimerManager.Root()->offs);
+			if (tick >= crt.timeout) {
+				TimerManager.Remove(TimerManager.Root());
+				if (crt.hand)
+					crt.hand((pureptr_t)crt.timeout, crt.iden); // realtime process
+				else {
+					message_queue.Enqueue(SysMessage{ SysMessage::RUPT_TIMER, crt });
+				}
+			}
+			else break;
+		}
+	}
+	static_assert(1000 / SysTickFreq > 0, "SysTickFreq must be greater than 0");
 	if (time >= 1000) {
 		time = 0;
 		// mecocoa_global->system_time.sec++;//{TEMP} help RTC	

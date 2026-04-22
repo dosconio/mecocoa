@@ -20,12 +20,6 @@ rostr text_brand();
 
 // ---- handler
 
-#define SysTickFreq 100 // 100Hz
-
-// volatile timeval system_time;
-
-extern volatile stduint tick;
-
 _ESYM_C{
 	// void Handint_SYSCALL_Entry(), Handint_SYSCALL();
 	void Handint_XHCI_Entry(), Handint_XHCI();

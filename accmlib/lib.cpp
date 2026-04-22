@@ -41,12 +41,12 @@ void exit(int code)// 2
 
 stduint syssecond()// 3
 {
-	return syscall(syscall_t::TIME, nil, nil, nil);
+	return syscall(syscall_t::TIME, 0, nil, nil);
 }
 
-void sysrest()// 4
+void sysrest(stduint unit, stduint num)// 4
 {
-	syscall(syscall_t::REST, nil, nil, nil);
+	syscall(syscall_t::REST, unit, num, nil);
 }
 
 void syscomm(int send_recv, stduint obj, struct CommMsg* msg)

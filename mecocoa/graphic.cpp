@@ -323,7 +323,6 @@ void GloScreenABGR8888::DrawPoints(const Rectangle& rect, const Color* base) con
 extern bool ento_gui;
 extern uni::LayerManager global_layman;
 extern VideoControlInterface* real_pvci;
-extern volatile stduint tick;
 void RenderFrameFlush() {
 	if (!enable_dubuffer) return;
 	global_layman.CheckTimers(tick);

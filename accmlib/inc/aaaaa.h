@@ -18,7 +18,7 @@ extern "C" {
 	void sysouts(const char* str);// 00
 	int sysinnc();// 01
 	stduint syssecond();// 03
-	void sysrest();// 04
+	void sysrest(stduint unit, stduint num);// 04
 
 	void syscomm(int send_recv, stduint obj, struct CommMsg* msg);// 05
 

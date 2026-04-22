@@ -42,12 +42,15 @@ static int TimerCmp(pureptr_t a, pureptr_t b) {
 		treat<MsgTimer>(((Dnode*)b)->offs).timeout;
 }
 Dchain TimerManager = { DnodeHeapFreeSimple };
+Spinlock timer_lock;
 
 void SysTimer::Initialize() {
 	TimerManager.Compare_f = TimerCmp;
 }
 
+// [Spinlocked]
 void SysTimer::Append(stduint timeout, stduint iden, _tocall_ft hand) {
+	SpinlockLocal guard(&timer_lock);
 	auto n = TimerManager.Append(new MsgTimer{ tick + timeout, iden, hand });
 	if (!n) plogerro("SysTimer::Append failed");
 	// ploginfo("SysTimer::Append %u, now %u timers", timeout, TimerManager.Count());

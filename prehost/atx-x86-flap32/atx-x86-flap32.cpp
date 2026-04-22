@@ -19,6 +19,7 @@ _sign_entry() {
 	cons_init();// located here, for  INT-10H may influence PIC
 	Cache_t::enAble();
 	Taskman::Initialize();
+	SysTimer::Initialize();
 	Filesys::Initialize();
 
 	// IVT and Device

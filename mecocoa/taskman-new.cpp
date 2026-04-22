@@ -746,6 +746,8 @@ ProcessBlock* Taskman::Exet(stduint parent, rostr usr_fullpath, void* usr_argsta
 	treat<uint32>(&current_pb->main_thread->context.floating_point_context[24]) = 0x1F80; // Reset FPU
 	SetSegment(&current_pb->main_thread->context);
 	current_pb->main_thread->unsolved_msg = nullptr;
+	current_pb->main_thread->block_reason = ThreadBlock::BlockReason::BR_None;
+	//{} more to zero?
 
 	#elif (_MCCA & 0xFF00) == 0x1000
 

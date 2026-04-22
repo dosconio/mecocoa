@@ -29,6 +29,10 @@ use crate uni;
 #endif
 //
 
+#define SysTickFreq 100 // 100Hz
+
+extern volatile stduint tick;
+
 #include "memoman.hpp"
 #include "syscall.hpp"
 #include "taskman.hpp"

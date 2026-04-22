@@ -224,6 +224,7 @@ public _Comment(State):
 	}
 	enum BlockReason : uint32 {
 		BR_None = 0,
+		BR_Resting = 0b1,
 		BR_SendMsg = 0b10,
 		BR_RecvMsg = 0b100,
 		BR_Waiting = 0b1000,

@@ -16,6 +16,8 @@ DEFSYSC sysc_OUTC(stduint ch, stduint len);
 DEFSYSC sysc_COMM(stduint op, stduint to, CommMsg* msg);
 DEFSYSC sysc_INNC(stduint blocked);
 DEFSYSC sysc_EXIT(stduint code);
+DEFSYSC sysc_TIME(stduint unit);
+DEFSYSC sysc_REST(stduint unit, stduint time);
 DEFSYSC sysc_OPEN(stduint usr_filepath, stduint flag);
 DEFSYSC sysc_CLOS(stduint fd);
 DEFSYSC sysc_READ(stduint fd, stduint addr, stduint len);
@@ -33,6 +35,9 @@ stduint Handint_SYSCALL(CallgateFrame* frame) {
 	ProcessBlock* pb = caller_th->parent_process;//{TORM}
 	stduint caller_pid = pb->pid;//{TORM}
 
+	// if (_IMM(callid) <= 10) {
+
+	// } else
 	switch (callid) {
 	case syscall_t::OUTC:
 		ret = sysc_OUTC(para[0], para[1]);
@@ -44,10 +49,10 @@ stduint Handint_SYSCALL(CallgateFrame* frame) {
 		sysc_EXIT(para[0]); loop;
 		break;
 	case syscall_t::TIME:
-		ret = mecocoa_global->system_time.sec;
+		ret = sysc_TIME(para[0]);
 		break;
 	case syscall_t::REST:
-		Taskman::Schedule(true);
+		ret = sysc_REST(para[0], para[1]);
 		break;
 	case syscall_t::COMM:// (mode, obj, vaddr msg)
 		ret = sysc_COMM(para[0], para[1], (CommMsg*)para[2]);
@@ -65,6 +70,9 @@ stduint Handint_SYSCALL(CallgateFrame* frame) {
 		ret = sysc_DELF(para[0]);
 		break;
 
+
+
+		
 	case syscall_t::WAIT:
 	{
 		// ploginfo("syscall wait");
@@ -225,6 +233,52 @@ DEFSYSC sysc_EXIT(stduint code) {
 	Taskman::ExitCurrent(code);
 	printlog(_LOG_FATAL, "sysc_EXIT unreachable");// unreachable
 	return -1;
+}
+
+DEFSYSC sysc_TIME(stduint unit) {
+	switch (unit) {
+	case 0:// second
+		return tick / SysTickFreq;// mecocoa_global->system_time.sec;
+	case 1:// ms
+		return tick * 1000 / SysTickFreq;
+	default:
+		plogwarn("Invalid time unit: %u", unit);
+		return -1;
+	}
+}
+
+static void _TimerWakeUp(pureptr_t, stduint th_ptr) {
+	if (auto th = (ThreadBlock*)th_ptr) {
+		th->Unblock(ThreadBlock::BlockReason::BR_Resting);
+	}
+}
+
+DEFSYSC sysc_REST(stduint unit, stduint time) {
+	if (time == 0) {
+		Taskman::Schedule(true);
+		return 0;
+	}
+	
+	stduint timeout = 0;
+	switch (unit) {
+	case 0: // second
+		timeout = time * SysTickFreq;
+		break;
+	case 1: // ms
+		timeout = time * SysTickFreq / 1000;
+		if (!timeout) timeout = 1; // At least 1 tick
+		break;
+	default:
+		plogwarn("Invalid time unit: %u", unit);
+		return -1;
+	}
+
+	auto th = Taskman::current_thread[Taskman::getID()];
+	th->Block(ThreadBlock::BlockReason::BR_Resting); // Block the thread to wait for timer
+	SysTimer::Append(timeout, (stduint)th, (_tocall_ft)_TimerWakeUp);
+	
+	Taskman::Schedule(true);
+	return 0;
 }
 
 DEFSYSC sysc_COMM(stduint op, stduint to, CommMsg* msg) {
