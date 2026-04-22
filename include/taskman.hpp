@@ -107,14 +107,38 @@ struct Spinlock {
 	bool Acquire();
 	void Release(bool old_if);
 };
+struct SpinlockLocal {
+	bool old_if;
+	Spinlock* spinlock;
+	SpinlockLocal(Spinlock* spinl) : spinlock(spinl) {
+		old_if = spinlock->Acquire();
+	}
+	/// @brief Drop the lock
+	~SpinlockLocal() {
+		auto sl = spinlock;
+		spinlock = 0;
+		if (sl) {
+			sl->Release(old_if);
+		}
+	}
+};
 
 struct Mutex {
 	Spinlock guard;
 	byte locked = 0;
 	uni::Queue<ThreadBlock*> wait_queue;
-	Mutex(stdint limit) : wait_queue(limit) {}
+	Mutex() : wait_queue() {}
 	void Acquire();
 	void Release();
+};
+struct MutexLocal {
+	Mutex* mutex;
+	MutexLocal(Mutex* _mutex) : mutex(_mutex) {
+		mutex->Acquire();
+	}
+	~MutexLocal() {
+		mutex->Release();
+	}
 };
 
 class _Comment(Kernel) ProcessBlock {
@@ -123,6 +147,7 @@ public:
 	stduint parent_id;
 	inline stduint getID() { return pid; }
 	stduint ring;
+	Mutex sys_lock{}; // Use Mutex to protect internal systems like Heap / FD
 public:
 	// Process Level Wait State
 	enum class State : byte {
@@ -150,7 +175,6 @@ public:
 	uni::Paging* paging_redirect = nullptr;
 	stduint heaptop = 0;
 	stduint heapbtm = 0;// norm: max seg + 0x10000
-	Mutex sys_lock; // Use Mutex to protect internal systems like Heap / FD
 public: // _Comment(Taskman);
 	uni::Slice load_slices[8];// at most 8 slices, app-relative logical address
 public: // _Comment(Console);
@@ -161,7 +185,7 @@ public: // _Comment(Fileman);
 	struct vnode* cwd = 0;  // 
 	struct vnode* root = 0; // for chroot
 	//
-	ProcessBlock() : sys_lock(16) {}
+	ProcessBlock() {}
 	auto Open(rostr pathname, int flags) -> stdsint;
 	auto Rdwt(bool wr_type, stduint fid, Slice slice) -> stduint;
 	auto Close(int fid) -> bool;

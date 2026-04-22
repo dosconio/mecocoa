@@ -46,7 +46,7 @@ extern "C" {
 	int spawnl(const char* path, const char* arg, ...);
 	
 
-	stduint get_core_id(unsigned int* ptr_hid);
+	stduint get_core_id(stduint* ptr_hid);
 
 	// ---- POSIX:unistd ---- //
 	int fork();

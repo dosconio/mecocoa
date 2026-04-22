@@ -32,7 +32,13 @@ SECTIONS
 		. = ALIGN(16);
 		BSS_ENTO = .;
 		*(.bss .bss.*)
+		*(COMMON)
 		BSS_ENDO = .;
+	} > RAM1
+
+	.boot_stack : {
+		. = ALIGN(16);
+		*(.boot_stack)
 	} > RAM1
 	
 	/* MACRO-CORE */

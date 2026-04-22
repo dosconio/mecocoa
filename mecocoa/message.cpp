@@ -138,11 +138,10 @@ static bool msg_send_will_deadlock(ThreadBlock* fo_th, ThreadBlock* to_th)
 	return false;
 }
 
+static Spinlock comm_lock;
 int msg_send(ThreadBlock* fo_th, stduint too, _Comment(vaddr) CommMsg* msg)
 {
-	#if _MCCA == 0x8632
-	_TEMP _ASM("cli");
-	#endif
+	SpinlockLocal guard(&comm_lock);
 	if (!too) return 2;
 	ThreadBlock* to_th = Taskman::LocateThread(too);
 	if (!to_th) {
@@ -190,6 +189,7 @@ int msg_send(ThreadBlock* fo_th, stduint too, _Comment(vaddr) CommMsg* msg)
 			crt->queue_send_queuenext = fo_th;
 		}
 		fo_th->queue_send_queuenext = nullptr;// keep this at tail
+		guard.~SpinlockLocal();
 		#if (_MCCA & 0xFF00) == 0x8600
 		Taskman::Schedule(true);
 		#endif
@@ -198,10 +198,7 @@ int msg_send(ThreadBlock* fo_th, stduint too, _Comment(vaddr) CommMsg* msg)
 }
 int msg_recv(ThreadBlock* to_th, stduint foo, _Comment(vaddr) CommMsg* msg)
 {
-	#if _MCCA == 0x8632
-	_TEMP _ASM("cli");
-	#endif
-	
+	SpinlockLocal guard(&comm_lock);
 	_Comment(Proc - Interrupt) if ((to_th->wait_rupt_no) && (foo == ANYPROC || foo == INTRUPT)) {
 		CommMsg tmp_msg{ 0 };
 		tmp_msg.type = HARDRUPT;
@@ -283,7 +280,7 @@ int msg_recv(ThreadBlock* to_th, stduint foo, _Comment(vaddr) CommMsg* msg)
 		if (to_th->unsolved_msg) plogwarn("T%u, unsolved_msg when recv(%u)", to_th->tid, foo);
 		to_th->unsolved_msg = msg;
 		to_th->recv_fo_whom = fo_th_tgt;
-
+		guard.~SpinlockLocal();
 		#if (_MCCA & 0xFF00) == 0x8600
 		Taskman::Schedule(true);
 		#endif

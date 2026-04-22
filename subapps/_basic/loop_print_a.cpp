@@ -12,7 +12,7 @@ static void task_delay(volatile int count)
 
 auto main(int argc, char** argv) -> int
 {
-	unsigned int hid = -1;
+	stduint hid = -1;
 	sysouts("Task 0: Created!\n");
 	int ret = -1;
 	ret = get_core_id(&hid);

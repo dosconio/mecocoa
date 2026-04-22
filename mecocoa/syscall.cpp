@@ -12,72 +12,30 @@
 
 #ifdef _ARC_x86 // x86:
 
-static const byte syscall_delayflgs[0x100 / _BYTE_BITS_] = {
-	0b00110001, 0b00000000, // 0x0X
-};
-
-static stduint syscall_06_open(stduint* paras, ThreadBlock* th)
-{
-	stduint open_buf[1];
-	ProcessBlock* pb = th->parent_process;
-	struct {
-		stduint flag;
-		stduint pid;
-		char filename[sizeof(stduint) * (8 - 2)];
-	} open_msg;
-	open_msg.flag = paras[1];
-	open_msg.pid = pb->pid;
-	auto len = StrCopyP(open_msg.filename, kernel_paging, (rostr)paras[0], pb->paging, byteof(open_msg.filename) - 1);
-	syssend(Task_FileSys, &open_msg, sizeof(open_msg), _IMM(FilemanMsg::OPEN));
-	sysrecv(Task_FileSys, open_buf, byteof(open_buf));
-	if (cast<stdsint>(open_buf[0]) < 0) {
-		open_buf[0] = ~_IMM0;// no descriptor
-	}
-	// ploginfo("open file: 0x%[32H]", open_buf[0]);
-	return open_buf[0];
-}
-
-static stduint syscall_07_close(stduint* paras, ThreadBlock* th) {
-	stduint open_buf[1];
-	struct {
-		stduint fd;
-		stduint pid;
-	} open_msg;
-	open_msg.fd = paras[0];
-	open_msg.pid = th->parent_process->pid;
-	syssend(Task_FileSys, &open_msg, sizeof(open_msg), 0x03);
-	sysrecv(Task_FileSys, open_buf, byteof(open_buf));
-	return open_buf[0];// 0 for success
-}
-
-
 DEFSYSC sysc_OUTC(stduint ch, stduint len);
-DEFSYSC sysc_COMM(stduint to, stduint op, CommMsg* msg);
+DEFSYSC sysc_COMM(stduint op, stduint to, CommMsg* msg);
 DEFSYSC sysc_INNC(stduint blocked);
 DEFSYSC sysc_EXIT(stduint code);
+DEFSYSC sysc_OPEN(stduint usr_filepath, stduint flag);
+DEFSYSC sysc_CLOS(stduint fd);
+DEFSYSC sysc_READ(stduint fd, stduint addr, stduint len);
+DEFSYSC sysc_WRIT(stduint fd, stduint addr, stduint len);
+DEFSYSC sysc_DELF(stduint usr_filepath);
 
 
 __attribute__((optimize("O0")))
 stduint Handint_SYSCALL(CallgateFrame* frame) {
-	auto task_switch_enable_old = task_switch_enable;//{TODO} {spinlk for multi-Proc}
-	task_switch_enable = false;
-	bool ch_tse = task_switch_enable_old == true;
 	auto callid = (syscall_t)frame->ax;
-	stduint para[3] = { frame->cx, frame->dx, frame->bx };
-	stduint msgbuf[4] = {};
+	stduint para[4] = { frame->cx, frame->dx, frame->bx };
+	stduint msgbuf[4] = {};//{TORM}
 	stduint ret = 0;
-	ThreadBlock* caller_th = Taskman::current_thread[Taskman::getID()];
-	ProcessBlock* pb = caller_th->parent_process;
-	stduint caller_pid = pb->pid;
-	byte flg = syscall_delayflgs[_IMM(callid) / _BYTE_BITS_];
+	ThreadBlock* caller_th = Taskman::current_thread[Taskman::getID()];//{TORM}
+	ProcessBlock* pb = caller_th->parent_process;//{TORM}
+	stduint caller_pid = pb->pid;//{TORM}
 
-	if (!(flg & _IMM1S(_IMM(callid) & 0b111)) && ch_tse) {
-		task_switch_enable = task_switch_enable_old;
-	}
 	switch (callid) {
 	case syscall_t::OUTC:
 		ret = sysc_OUTC(para[0], para[1]);
-		if (ch_tse) task_switch_enable = task_switch_enable_old;
 		break;
 	case syscall_t::INNC:
 		ret = sysc_INNC(para[0]);
@@ -90,40 +48,22 @@ stduint Handint_SYSCALL(CallgateFrame* frame) {
 		break;
 	case syscall_t::REST:
 		Taskman::Schedule(true);
-		if (ch_tse) task_switch_enable = task_switch_enable_old;
 		break;
 	case syscall_t::COMM:// (mode, obj, vaddr msg)
-		ret = sysc_COMM(para[1], para[0], (CommMsg*)para[2]);
-		if (ch_tse) task_switch_enable = task_switch_enable_old;
+		ret = sysc_COMM(para[0], para[1], (CommMsg*)para[2]);
 		break;
 	case syscall_t::OPEN:// (str, uint)->(uint)
-		ret = syscall_06_open(para, caller_th);
+		ret = sysc_OPEN(para[0], para[1]);
 		break;
 	case syscall_t::CLOS:
-		ret = syscall_07_close(para, caller_th);
+		ret = sysc_CLOS(para[0]);
 		break;
 	case syscall_t::READ: case syscall_t::WRIT:
-	{
-		stduint open_buf[4];
-		open_buf[0] = para[0];// fid
-		open_buf[1] = para[1];// addr
-		open_buf[2] = para[2];// len
-		open_buf[3] = caller_pid;
-		syssend(Task_FileSys, open_buf, byteof(open_buf), _IMM(callid) - _IMM(syscall_t::READ) + _IMM(FilemanMsg::READ));
-		sysrecv(Task_FileSys, open_buf, byteof(open_buf[0]));
-		ret = open_buf[0];
+		ret = (callid == syscall_t::READ ? sysc_READ : sysc_WRIT)(para[0], para[1], para[2]);
 		break;
-	}
 	case syscall_t::DELF:
-	{
-		stduint open_buf[(8)];
-		open_buf[0] = caller_pid;
-		StrCopyP((char*)&open_buf[1], kernel_paging, (rostr)para[0], pb->paging, byteof(stduint) * 7 - 1);
-		syssend(Task_FileSys, open_buf, byteof(open_buf), _IMM(FilemanMsg::REMOVE));
-		sysrecv(Task_FileSys, open_buf, byteof(open_buf[0]));
-		ret = open_buf[0];// 0 for success
+		ret = sysc_DELF(para[0]);
 		break;
-	}
 
 	case syscall_t::WAIT:
 	{
@@ -175,13 +115,11 @@ stduint Handint_SYSCALL(CallgateFrame* frame) {
 				para[0], para[1], para[2]);
 		}
 		ret = caller_pid;
-		// task_switch_enable = task_switch_enable_old;
 		break;
 	default:
 		printlog(_LOG_ERROR, "Unimplemented syscall: 0x%[32H]", _IMM(callid));
 		break;
 	}
-	// task_switch_enable = task_switch_enable_old;//{MUTEX for multi-Proc}
 	return ret;
 }
 
@@ -230,8 +168,9 @@ stduint syscall(syscall_t callid, stduint para1, stduint para2, stduint para3) {
 	return ret;
 }
 
-
+Mutex outc_mutex;// for con-io
 DEFSYSC sysc_OUTC(stduint ch, stduint len) {
+	MutexLocal mutex(&outc_mutex);
 	auto th = Taskman::current_thread[Taskman::getID()];
 	if (auto pid = th->parent_process) {
 		if (auto con = pid->focus_tty ? (Console_t*)cast<Dnode*>(pid->focus_tty)->offs : 0)
@@ -288,7 +227,7 @@ DEFSYSC sysc_EXIT(stduint code) {
 	return -1;
 }
 
-DEFSYSC sysc_COMM(stduint to, stduint op, CommMsg* msg) {
+DEFSYSC sysc_COMM(stduint op, stduint to, CommMsg* msg) {
 	auto th = Taskman::current_thread[Taskman::getID()];
 	usize ret;
 	if (op & 0b01) { // SEND
@@ -309,6 +248,49 @@ DEFSYSC sysc_COMM(stduint to, stduint op, CommMsg* msg) {
 	return ret;
 }
 
+DEFSYSC sysc_OPEN(stduint usr_filepath, stduint flag)
+{
+	ThreadBlock* th = Taskman::current_thread[Taskman::getID()];
+	stdsint open_buf[1];
+	ProcessBlock* pb = th->parent_process;
+	struct { stduint flag;stduint pid;rostr usr_filepath; } open_msg;
+	open_msg.flag = flag;
+	open_msg.pid = th->getID();
+	open_msg.usr_filepath = (rostr)usr_filepath;
+	syssend(Task_FileSys, &open_msg, sizeof(open_msg), _IMM(FilemanMsg::OPEN));
+	sysrecv(Task_FileSys, open_buf, byteof(open_buf));
+	return open_buf[0];
+}
+
+DEFSYSC sysc_CLOS(stduint fd) {
+	ThreadBlock* th = Taskman::current_thread[Taskman::getID()];
+	stdsint open_buf[1];
+	struct { stduint fd;stduint pid; } open_msg = { fd , th->parent_process->pid };
+	syssend(Task_FileSys, &open_msg, sizeof(open_msg), 0x03);
+	sysrecv(Task_FileSys, open_buf, byteof(open_buf));
+	return open_buf[0];// 0 for success
+}
+
+DEFSYSC sysc_READ(stduint fd, stduint addr, stduint len) {
+	stduint open_buf[4]{ fd, addr,len,Taskman::current_thread[Taskman::getID()]->getID() };
+	syssend(Task_FileSys, open_buf, byteof(open_buf), _IMM(FilemanMsg::READ));
+	sysrecv(Task_FileSys, open_buf, byteof(open_buf[0]));
+	return open_buf[0];
+}
+DEFSYSC sysc_WRIT(stduint fd, stduint addr, stduint len) {
+	stduint open_buf[4]{ fd, addr,len,Taskman::current_thread[Taskman::getID()]->getID() };
+	syssend(Task_FileSys, open_buf, byteof(open_buf), _IMM(FilemanMsg::WRITE));
+	sysrecv(Task_FileSys, open_buf, byteof(open_buf[0]));
+	return open_buf[0];
+}
+
+DEFSYSC sysc_DELF(stduint usr_filepath) {
+	stduint open_buf[2]{ usr_filepath,Taskman::current_thread[Taskman::getID()]->getID() };
+	syssend(Task_FileSys, open_buf, byteof(open_buf), _IMM(FilemanMsg::REMOVE));
+	sysrecv(Task_FileSys, open_buf, byteof(open_buf[0]));
+	return open_buf[0];// 0 for success
+}
+
 DEFSYSC sysc_TMSG() {
 	auto th = Taskman::current_thread[Taskman::getID()];
 	return _IMM(th->queue_send_queuehead);
@@ -318,11 +300,11 @@ DEFSYSC sysc_TMSG() {
 
 #if (_MCCA & 0xFF00) == 0x1000
 
-static int sysc_GETCID(unsigned int *ptr_hid, ThreadBlock* th)
+static int sysc_GETCID(stduint ptr_hid)
 {
-	auto pid = th->parent_process;
-	auto pa = (stduint*)pid->paging[_IMM(ptr_hid)];
-	ploginfo("--> sysc_GETCID, arg0 = LA %[x] PA %[x]", ptr_hid, pa);
+	auto pid = Taskman::current_thread[Taskman::getID()];
+	auto pa = (stduint*)pid->parent_process->paging[_IMM(ptr_hid)];
+	ploginfo("[%s] arg0 = LA %[x] PA %[x]", __FUNCIDEN__, ptr_hid, pa);
 	if (_IMM(pa) == ~_IMM0) return -1;
 	if (ptr_hid == NULL) {
 		return -1;
@@ -350,13 +332,13 @@ void syscall_body(NormalTaskContext* cxt)
 		clint.MSIP(getMHARTID(), MSIP_Type::SofRupt);
 		break;
 	case syscall_t::COMM:
-		cxt->a0 = sysc_COMM(cxt->a1, cxt->a0, (CommMsg*)cxt->a2);
+		cxt->a0 = sysc_COMM(cxt->a0, cxt->a1, (CommMsg*)cxt->a2);
 		break;
 	case syscall_t::TMSG:
 		cxt->a0 = sysc_TMSG();
 		break;
 	case syscall_t::GET_CORE_ID:
-		cxt->a0 = sysc_GETCID((unsigned int *)(cxt->a0), Taskman::current_thread[Taskman::getID()]);
+		cxt->a0 = sysc_GETCID(cxt->a0);
 		break;
 	default:
 		plogerro("Unknown syscall no: %d", syscall_num);

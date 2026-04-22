@@ -127,7 +127,7 @@ int sys_removefil(rostr fullpath)
 	return syscall(syscall_t::DELF, _IMM(fullpath), nil, nil);
 }
 
-stduint get_core_id(unsigned int* ptr_hid) {
+stduint get_core_id(stduint* ptr_hid) {
 	return syscall(syscall_t::GET_CORE_ID, _IMM(ptr_hid), nil, nil);
 }
 

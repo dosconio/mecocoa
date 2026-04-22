@@ -62,7 +62,7 @@ multiboot_entry:
 loop:   hlt
 	jmp     loop
 
-.section .bss, "aw", @nobits
+.section .boot_stack, "aw", @nobits
 
 # .comm   stack, STACK_SIZE
 _start_eax: .long 0

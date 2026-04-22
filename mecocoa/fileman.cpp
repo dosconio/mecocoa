@@ -180,10 +180,13 @@ void serv_file_loop()// for IDE 0:0, 0:1
 	f_desc_table = (FileDescriptor*)new byte[0x1000];
 	f_desc_table_count = nil;
 	::buffer = new byte[FSBUF_SIZE];
+	constexpr stduint pathbuf_size = 512;
+	byte* const pathbuf = new byte[pathbuf_size];
 	//
 	stduint to_args[8];// 8*4=32 bytes
 	stduint sig_type = 0, sig_src;
 	stduint retval[1];
+	ThreadBlock* tb;
 
 	while (true) {
 		switch ((FilemanMsg)sig_type)
@@ -214,13 +217,12 @@ void serv_file_loop()// for IDE 0:0, 0:1
 		case FilemanMsg::RUPT:// (usercall-forbidden&meaningless)
 			break;
 		#ifdef _ARC_x86
-		case FilemanMsg::OPEN:// open a file and return the file descriptor
+		case FilemanMsg::OPEN://(flags, thid, usr_filename) | open a file and return the file descriptor
 		{
-			// ploginfo("[fileman] PID %u open %s with %[32H]", to_args[1], &to_args[2], to_args[0]);
-			// BYTE 0~ 3 : flags
-			// BYTE 4~ 7 : processid
-			// BYTE 8~31 : filename
-			stduint retval = static_cast<stduint>(Taskman::Locate(to_args[1])->Open((rostr)&to_args[2], to_args[0]));
+			tb = Taskman::LocateThread(to_args[1]);
+			auto len = StrCopyP((char*)pathbuf, kernel_paging, (rostr)to_args[2], tb->parent_process->paging, pathbuf_size);
+			// ploginfo("[fileman] TID %u open %s with %[32H]", to_args[1], pathbuf, to_args[0]);
+			stduint retval = static_cast<stduint>(tb->parent_process->Open((rostr)pathbuf, to_args[0]));
 			syssend(sig_src, &retval, sizeof(retval), 0);
 			break;
 		}
@@ -235,17 +237,17 @@ void serv_file_loop()// for IDE 0:0, 0:1
 		case FilemanMsg::WRITE://
 		{
 			// ploginfo("[fileman] rdwt %d %d %d", to_args[0], to_args[1], to_args[2]);
-			stduint ret = Taskman::Locate(to_args[3])->Rdwt((FilemanMsg)sig_type == FilemanMsg::WRITE,
+			stduint ret = Taskman::LocateThread(to_args[3])->parent_process->Rdwt((FilemanMsg)sig_type == FilemanMsg::WRITE,
 				to_args[0], Slice{ to_args[1], to_args[2] });
 			syssend(sig_src, &ret, sizeof(ret));
 			break;
 		}
 		case FilemanMsg::REMOVE:// --> (pid, filename[7]...) --> (!success)
-		{
-			retval[0] = Filesys::Remove((rostr)&to_args[1]);
+			tb = Taskman::LocateThread(to_args[1]);
+			retval[0] = StrCopyP((char*)pathbuf, kernel_paging, (rostr)to_args[0], tb->parent_process->paging, pathbuf_size);
+			retval[0] = Filesys::Remove((rostr)pathbuf);
 			syssend(sig_src, &retval, sizeof(retval[0]));
 			break;
-		}
 		// ... ...
 
 		case FilemanMsg::TEMP:
