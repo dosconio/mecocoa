@@ -55,9 +55,7 @@ void Handint_PIT()
 	#endif
 	if (time_slice >= 4) { // switch task
 		time_slice = 0;
-		if (task_switch_enable) {
-			Taskman::Schedule();
-		}
+		Taskman::Schedule();
 	}
 }
 

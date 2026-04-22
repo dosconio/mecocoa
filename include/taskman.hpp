@@ -198,6 +198,7 @@ public:
     stduint tid;
     ProcessBlock* parent_process; 
 	ThreadBlock* process_thread_next = nullptr;
+	volatile stduint just_schedule;// in fact a bool
 public:
 	stduint stack_size;
 	byte* stack_lineaddr;// [linear] ring3 bottom of stack
@@ -257,6 +258,7 @@ public:
 	static stduint PCU_CORES;
 	static ThreadBlock* current_thread[PCU_CORES_MAX];
 	static ThreadBlock* idle_thread[PCU_CORES_MAX];
+	static ThreadBlock* volatile switching_out_threads[PCU_CORES_MAX];
 public:// Gen.2
 	static Dchain chain;// [ArrayT] ordered by pid
 	static stduint min_available_pid;// in chain
@@ -345,8 +347,6 @@ enum class TaskmanMsg : stduint {
 
 #if _MCCA == 0x8632
 #include "fileman.hpp"
-
-extern "C" bool task_switch_enable;
 #endif
 
 

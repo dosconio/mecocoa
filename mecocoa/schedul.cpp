@@ -10,7 +10,6 @@
 TSS_t* PCU_CORES_TSS[PCU_CORES_MAX] = {};
 #endif
 #ifdef _ARC_x86 // x86:
-bool task_switch_enable = true;//{} spinlk
 #endif
 
 Dchain Taskman::chain = { DnodeHeapFreeSimple };;// ordered by pid
@@ -20,6 +19,7 @@ Dnode* Taskman::min_available_left;;
 stduint Taskman::PCU_CORES = 0;
 ThreadBlock* Taskman::current_thread[PCU_CORES_MAX];
 ThreadBlock* Taskman::idle_thread[PCU_CORES_MAX];
+ThreadBlock* volatile Taskman::switching_out_threads[PCU_CORES_MAX];
 stduint Taskman::min_available_tid = 0;
 Dchain Taskman::thchain = { nullptr };
 Dnode* Taskman::min_available_thleft = nullptr;
@@ -123,8 +123,26 @@ ThreadBlock* Taskman::PickNext() {
 	}
 
 	if (!ready_bitmap) return nullptr;
-	uint32 idx = __builtin_ctz(ready_bitmap);
-	return priority_queues[idx].head;
+	uint32 original_bitmap = ready_bitmap;
+	while (original_bitmap) {
+		uint32 idx = __builtin_ctz(original_bitmap);
+		ThreadBlock* node = priority_queues[idx].head;
+		while (node) {
+			if (!node->just_schedule) {
+				// Check whether node is in the array: 
+				for (int i = 0; i < PCU_CORES_MAX; i++) {
+					if (switching_out_threads[i] == node) {
+						switching_out_threads[i] = nullptr;
+						break;
+					}
+				}
+				return node;
+			}
+			node = node->queue_state_next;
+		}
+		original_bitmap &= ~(1U << idx);
+	}
+	return nullptr;
 }
 
 void ThreadBlock::Block(BlockReason reason) {
@@ -258,13 +276,18 @@ ifContinueProcess(ThreadBlock* old_pb) -> bool {
 
  // before calling, the task may be pended
 #if 1
+static Spinlock scheduler_lock;
 auto Taskman::Schedule(bool omit_slice)->decltype(Schedule())
 {
+	bool old_if = scheduler_lock.Acquire();
 	using TBS = ThreadBlock::State;
-	#if _MCCA == 0x8632
-	task_switch_enable = false;//{TODO} Lock, cpu0
-	#endif
 	stduint cpuid = getID();
+	
+	// Release the CPU's hold on switching output thread in clock cycle.
+	if (switching_out_threads[cpuid] != nullptr) {
+		switching_out_threads[cpuid] = nullptr;
+	}
+	
 	auto old_tb = current_thread[cpuid];
 	if (!old_tb) {
 		plogerro("Taskman:Schedule: No current task found for CPU %d", cpuid);
@@ -274,16 +297,12 @@ auto Taskman::Schedule(bool omit_slice)->decltype(Schedule())
 	bool is_idle = (old_tb == idle_thread[cpuid]);
 	if (!omit_slice) {
 		if (!is_idle && ifContinueProcess(old_tb)) {
-			#if _MCCA == 0x8632
-			task_switch_enable = true;
-			#endif
+			scheduler_lock.Release(old_if);
 			return;
 		}
 		else if (is_idle) {
 			if (!ready_bitmap && !expired_bitmap) {
-				#if _MCCA == 0x8632
-				task_switch_enable = true;
-				#endif
+				scheduler_lock.Release(old_if);
 				return;// continue idle
 			}
 		}
@@ -311,25 +330,19 @@ auto Taskman::Schedule(bool omit_slice)->decltype(Schedule())
 			new_tb = idle_thread[cpuid];
 			// Just in case idle_thread isn't set up yet, spin locally
 			if (!new_tb) {
-				#if _MCCA == 0x8632
-				task_switch_enable = true;
-				#endif
+				scheduler_lock.Release(old_if);
 				do {
 					IC.enAble();
 					HALT();
 					IC.enAble(false);
 				} while (!(new_tb = PickNext()));
-				#if _MCCA == 0x8632
-				task_switch_enable = false;
-				#endif
+				old_if = scheduler_lock.Acquire();
 			}
 		}
 	}
 	if (new_tb == old_tb) {
 		if (old_tb->state == TBS::Ready) old_tb->state = TBS::Running;
-		#if _MCCA == 0x8632
-		task_switch_enable = true;
-		#endif
+		scheduler_lock.Release(old_if);
 		return;
 	}
 	
@@ -345,11 +358,10 @@ auto Taskman::Schedule(bool omit_slice)->decltype(Schedule())
 
 	current_thread[cpuid] = new_tb;
 
-	#if _MCCA == 0x8632
-	task_switch_enable = true;//{TODO} X86 Unlock
-	#elif (_MCCA & 0xFF00) == 0x1000
-	#endif
-	// ploginfo("[core %u] switch Th %d -> Th %d", Taskman::getID(), old_tb->tid, new_tb->tid);
+	old_tb->just_schedule = 1;
+	switching_out_threads[cpuid] = old_tb;
+
+	scheduler_lock.Release(old_if);
 	SwitchTaskContext(&new_tb->context, &old_tb->context);
 }
 #else
@@ -357,6 +369,7 @@ auto Taskman::Schedule(bool omit_slice)->decltype(Schedule()) { }
 #endif
 void Taskman::SleepAndRelease(Spinlock* lk) {
 	auto old_tb = current_thread[getID()];
+	bool old_if = scheduler_lock.Acquire();
 	DequeueReady(old_tb);
 	lk->Release(false);
 
@@ -364,21 +377,23 @@ void Taskman::SleepAndRelease(Spinlock* lk) {
 	if (!new_tb) {
 		new_tb = idle_thread[getID()];
 		if (!new_tb) {// idle is not ready
-			#if _MCCA == 0x8632
-			task_switch_enable = true;
-			#endif
+			scheduler_lock.Release(old_if);
 			do {
 				IC.enAble();
 				HALT();
 				IC.enAble(false);
 			} while (!(new_tb = PickNext()));
-			#if _MCCA == 0x8632
-			task_switch_enable = false;
-			#endif
+			old_if = scheduler_lock.Acquire();
 		}
 	}
 
 	current_thread[getID()] = new_tb;
 	new_tb->state = ThreadBlock::State::Running;
+	
+	old_tb->just_schedule = 1;
+	switching_out_threads[getID()] = old_tb;
+	
+	scheduler_lock.Release(old_if);
+	// No explicit unlock of scheduler_lock here, because earlier we unlock lk, but wait!
 	SwitchTaskContext(&new_tb->context, &old_tb->context);
 }

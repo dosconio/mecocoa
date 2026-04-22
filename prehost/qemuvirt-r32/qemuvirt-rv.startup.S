@@ -82,13 +82,8 @@ trap_vector:
 	STORE   a0, 33*SIZE_REG(t6)
 	csrw    mscratch, t6 # PCB
 	# Stack Balance
-	#if   __BITS__==32
-	LOAD      t0, 164(t6)
-	LOAD      t1, 156(t6)
-	#elif __BITS__==64
-	LOAD      t0, 328(t6)
-	LOAD      t1, 312(t6)
-	#endif
+	LOAD      t0, 42*SIZE_REG(t6) # stack_levladdr
+	LOAD      t1, 40*SIZE_REG(t6) # stack_size
 	add     t0, t0, t1
 	addi    sp, t0, -16
 	#
@@ -218,6 +213,7 @@ SwitchTaskContext: # a0: new_pb->context, a1: old_pb->context
 	STORE   s11, 14*SIZE_REG(sp)
 	STORE   sp, 34*SIZE_REG(a1)
 	STORE   ra, 35*SIZE_REG(a1)
+	STORE   zero, 39*SIZE_REG(a1) # clear old_pb->just_schedule
 	#
 	csrw    mscratch, a0
 	LOAD    t0, 33*SIZE_REG(a0)
