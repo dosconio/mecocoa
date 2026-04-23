@@ -8,144 +8,10 @@
 #include <c/driver/timer.h>
 #include <c/driver/keyboard.h>
 
-#define DEFSYSC static stdsint
-
-#ifdef _ARC_x86 // x86:
-
-DEFSYSC sysc_OUTC(stduint ch, stduint len);
-DEFSYSC sysc_COMM(stduint op, stduint to, CommMsg* msg);
-DEFSYSC sysc_INNC(stduint blocked);
-DEFSYSC sysc_EXIT(stduint code);
-DEFSYSC sysc_TIME(stduint unit);
-DEFSYSC sysc_REST(stduint unit, stduint time);
-DEFSYSC sysc_OPEN(stduint usr_filepath, stduint flag);
-DEFSYSC sysc_CLOS(stduint fd);
-DEFSYSC sysc_READ(stduint fd, stduint addr, stduint len);
-DEFSYSC sysc_WRIT(stduint fd, stduint addr, stduint len);
-DEFSYSC sysc_DELF(stduint usr_filepath);
-
-
-__attribute__((optimize("O0")))
-stduint Handint_SYSCALL(CallgateFrame* frame) {
-	auto callid = (syscall_t)frame->ax;
-	stduint para[4] = { frame->cx, frame->dx, frame->bx };
-	stduint msgbuf[4] = {};//{TORM}
-	stduint ret = 0;
-	ThreadBlock* caller_th = Taskman::current_thread[Taskman::getID()];//{TORM}
-	ProcessBlock* pb = caller_th->parent_process;//{TORM}
-	stduint caller_pid = pb->pid;//{TORM}
-
-	// if (_IMM(callid) <= 10) {
-
-	// } else
-	switch (callid) {
-	case syscall_t::OUTC:
-		ret = sysc_OUTC(para[0], para[1]);
-		break;
-	case syscall_t::INNC:
-		ret = sysc_INNC(para[0]);
-		break;
-	case syscall_t::EXIT:
-		sysc_EXIT(para[0]); loop;
-		break;
-	case syscall_t::TIME:
-		ret = sysc_TIME(para[0]);
-		break;
-	case syscall_t::REST:
-		ret = sysc_REST(para[0], para[1]);
-		break;
-	case syscall_t::COMM:// (mode, obj, vaddr msg)
-		ret = sysc_COMM(para[0], para[1], (CommMsg*)para[2]);
-		break;
-	case syscall_t::OPEN:// (str, uint)->(uint)
-		ret = sysc_OPEN(para[0], para[1]);
-		break;
-	case syscall_t::CLOS:
-		ret = sysc_CLOS(para[0]);
-		break;
-	case syscall_t::READ: case syscall_t::WRIT:
-		ret = (callid == syscall_t::READ ? sysc_READ : sysc_WRIT)(para[0], para[1], para[2]);
-		break;
-	case syscall_t::DELF:
-		ret = sysc_DELF(para[0]);
-		break;
-
-
-
-		
-	case syscall_t::WAIT:
-	{
-		// ploginfo("syscall wait");
-		stduint tmp[2];
-		para[1] = para[0];
-		para[0] = caller_pid;
-		syssend(Task_TaskMan, para, byteof(para), _IMM(TaskmanMsg::WAIT));
-		sysrecv(Task_TaskMan, tmp, byteof(tmp));// (pid, state)
-		ret = tmp[0];// pid
-		if (ret && para[1]) {
-			MemCopyP((void*)para[1], pb->paging, &tmp[1], kernel_paging, byteof(stduint));
-		}
-		break;
-	}
-	case syscall_t::FORK:
-	{
-		msgbuf[0] = caller_pid;
-		msgbuf[1] = _IMM(frame);
-		syssend(Task_TaskMan, sliceof(msgbuf), _IMM(TaskmanMsg::FORK));
-		sysrecv(Task_TaskMan, &ret, byteof(ret));
-		break;
-	}
-	case syscall_t::TMSG:
-	{
-		ret = _IMM(caller_th->queue_send_queuehead);
-		break;
-	}
-	case syscall_t::EXEC: case syscall_t::EXET:
-		msgbuf[0] = caller_pid;
-		msgbuf[1] = para[0];
-		msgbuf[2] = para[1];
-		msgbuf[3] = para[2];
-		syssend(Task_TaskMan, sliceof(msgbuf),
-			_IMM(callid == syscall_t::EXEC ? TaskmanMsg::EXEC : TaskmanMsg::EXET));
-		sysrecv(Task_TaskMan, &ret, byteof(ret));
-		break;
-
-	case syscall_t::TEST:
-		if (para[0] == 'T' && para[1] == 'E' && para[2] == 'S') {
-			rostr test_msg = "Syscalls Test OK!";
-			Console.OutFormat("[Mecocoa] PID");
-			Console.OutInteger(caller_pid, +10);
-			Console.OutFormat(": %s\n\r", test_msg + 0x80000000);
-		}
-		else {
-			rostr test_msg = "[Mecocoa] Syscalls Test FAIL!";
-			Console.OutFormat("%s %x %x %x\n\r", test_msg + 0x80000000,
-				para[0], para[1], para[2]);
-		}
-		ret = caller_pid;
-		break;
-	default:
-		printlog(_LOG_ERROR, "Unimplemented syscall: 0x%[32H]", _IMM(callid));
-		break;
-	}
-	return ret;
-}
-
-
-#endif
-
-
-
+#define DEFSYSC extern "C" stdsint
+extern stduint SYSCALL_TABLE[16];
 
 #if (_MCCA & 0xFF00) == 0x8600 || (_MCCA & 0xFF00) == 0x1000
-_ESYM_C stduint SYSCALL_TABLE[];
-DEFSYSC sysc_OUTC(stduint ch, stduint len);
-DEFSYSC sysc_EXIT(stduint code);
-stduint SYSCALL_TABLE[] = {
-	_IMM(sysc_OUTC),// OUTC(ch/str, strlen) | strlen: 0 for single char
-	0,// INNC(else_blocked)
-	_IMM(sysc_EXIT),// EXIT(code)
-};
 
 __attribute__((optimize("O0")))
 stduint syscall(syscall_t callid, stduint para1, stduint para2, stduint para3) {
@@ -158,11 +24,16 @@ stduint syscall(syscall_t callid, stduint para1, stduint para2, stduint para3) {
 	CallFar(0, SegCall);
 	__asm("mov  %%eax, %0" : "=m"(ret));
 	#elif _MCCA == 0x8664
+	auto pb = Taskman::current_thread[Taskman::getID()]->parent_process;
+	auto old_dir = pb->paging_redirect;
+	pb->paging_redirect = &kernel_paging;
 	if (_IMM(callid) >= numsof(SYSCALL_TABLE)) {
 		plogerro("syscall: callid out of range: %u", callid);
 		loop HALT();
 	}
-	return reinterpret_cast<stdsint(*)(stduint, stduint, stduint)>(SYSCALL_TABLE[_IMM(callid)])(para1, para2, para3);
+	ret = reinterpret_cast<stdsint(*)(stduint, stduint, stduint)>(SYSCALL_TABLE[_IMM(callid)])(para1, para2, para3);
+	pb->paging_redirect = old_dir;
+	return ret;
 	#elif (_MCCA & 0xFF00) == 0x1000
 	void syscall_body(NormalTaskContext * cxt);
 	auto th = Taskman::current_thread[Taskman::getID()];
@@ -178,27 +49,24 @@ stduint syscall(syscall_t callid, stduint para1, stduint para2, stduint para3) {
 
 Mutex outc_mutex;// for con-io
 DEFSYSC sysc_OUTC(stduint ch, stduint len) {
+	// ploginfo("sysc_OUTC: ch = %[x], len = %[x]", ch, len);
 	MutexLocal mutex(&outc_mutex);
 	auto th = Taskman::current_thread[Taskman::getID()];
 	if (auto pid = th->parent_process) {
 		if (auto con = pid->focus_tty ? (Console_t*)cast<Dnode*>(pid->focus_tty)->offs : 0)
 		{
-			if (len) {
-				while (len) {
-					stduint crt_len = 0x1000 - (ch & 0xFFF);
-					if (len < crt_len) crt_len = len;
-					auto pa = pid->paging[ch];
-					if (_IMM(pa) == ~_IMM0) {
-						plogerro("OUTC");
-						return -1;
-					}
-					con->out((rostr)pa, crt_len);
-					ch += crt_len;
-					len -= crt_len;
+			if (!len) con->OutChar(ch);
+			else while (len) {
+				stduint crt_len = 0x1000 - (ch & 0xFFF);
+				if (len < crt_len) crt_len = len;
+				auto pa = pid->paging[ch];
+				if (_IMM(pa) == ~_IMM0) {
+					plogerro("OUTC");
+					return -1;
 				}
-			}
-			else {
-				con->OutChar(ch);
+				con->out((rostr)pa, crt_len);
+				ch += crt_len;
+				len -= crt_len;
 			}
 			// con->OutChar(nil);
 			return 0;
@@ -281,16 +149,17 @@ DEFSYSC sysc_REST(stduint unit, stduint time) {
 	return 0;
 }
 
-DEFSYSC sysc_COMM(stduint op, stduint to, CommMsg* msg) {
+DEFSYSC sysc_COMM(stduint op, stduint to, stduint msg) {
 	auto th = Taskman::current_thread[Taskman::getID()];
 	usize ret;
+	// ploginfo("sysc_COMM:[th%u] op = %x, to = %x, msg = %x", th->getID(), op, to, msg);
 	if (op & 0b01) { // SEND
 		// ploginfo("%d --> %d: 0x%[x]", pb->getID(), to, msg);
-		if (ret = msg_send(th, to, msg)) return ret;
+		if (ret = msg_send(th, to, (CommMsg*)msg)) return ret;
 	}
 	if (op & 0b10) { // RECV
 		// if (to && to != ~_IMM0) ploginfo("%d <-- %d", pb->getID(), to);
-		ret = msg_recv(th, to, msg);
+		ret = msg_recv(th, to, (CommMsg*)msg);
 	}
 	if (op & 0b11); else {
 		plogerro("Invalid op %x", op);
@@ -332,7 +201,7 @@ DEFSYSC sysc_READ(stduint fd, stduint addr, stduint len) {
 	// TTY device
 	if (asrtand(pb->pfiles[fd])->vfile && 
 	    asrtand(pb->pfiles[fd]->vfile->f_dentry)->d_inode &&
-	    pb->pfiles[fd]->vfile->f_dentry->d_inode->i_mode == I_CHAR_SPECIAL) {
+		pb->pfiles[fd]->vfile->f_dentry->d_inode->i_mode == I_CHAR_SPECIAL) {		
 		// char device, read blockedly
 		stduint total_read = 0;
 		while (total_read < len) {
@@ -362,9 +231,8 @@ DEFSYSC sysc_READ(stduint fd, stduint addr, stduint len) {
 					}
 					continue;
 				}
-				
 				// Store in user buffer and provide visual echo
-				MemCopyP((void*)(addr + total_read), pb->paging, &ch, kernel_paging, 1);
+				MemCopyP((void*)(addr + total_read), pb->paging_redirect ? *pb->paging_redirect : pb->paging, &ch, kernel_paging, 1);
 				total_read++;
 				if (con) con->OutChar(ch);
 				
@@ -376,7 +244,7 @@ DEFSYSC sysc_READ(stduint fd, stduint addr, stduint len) {
 
 			if (total_read > 0) {
 				byte last_char;
-				MemCopyP(&last_char, pb->paging, (void*)(addr + total_read - 1), kernel_paging, 1);
+				MemCopyP(&last_char, kernel_paging, (void*)(addr + total_read - 1), pb->paging_redirect ? *pb->paging_redirect : pb->paging, 1);
 				if (last_char == '\n') {
 					break;
 				}
@@ -410,6 +278,25 @@ DEFSYSC sysc_TMSG() {
 	return _IMM(th->queue_send_queuehead);
 }
 
+stduint SYSCALL_TABLE[] = {
+	mglb(sysc_OUTC),
+	mglb(sysc_INNC),
+	mglb(sysc_EXIT),
+	mglb(sysc_TIME),
+	mglb(sysc_REST),
+	mglb(sysc_COMM),
+	mglb(sysc_OPEN),
+	mglb(sysc_CLOS),
+	mglb(sysc_READ),
+	mglb(sysc_WRIT),
+	mglb(sysc_DELF),
+	0,//B
+	0,//C
+	0,//WAIT
+	0,//FORK
+	mglb(sysc_TMSG),
+
+};
 #endif
 
 #if (_MCCA & 0xFF00) == 0x1000
@@ -446,7 +333,7 @@ void syscall_body(NormalTaskContext* cxt)
 		clint.MSIP(getMHARTID(), MSIP_Type::SofRupt);
 		break;
 	case syscall_t::COMM:
-		cxt->a0 = sysc_COMM(cxt->a0, cxt->a1, (CommMsg*)cxt->a2);
+		cxt->a0 = sysc_COMM(cxt->a0, cxt->a1, cxt->a2);
 		break;
 	case syscall_t::TMSG:
 		cxt->a0 = sysc_TMSG();
@@ -463,5 +350,83 @@ void syscall_body(NormalTaskContext* cxt)
 	return;
 }
 
+#endif
+#ifdef _ARC_x86 // x86:
+
+__attribute__((optimize("O0")))
+stduint Handint_SYSCALL(CallgateFrame* frame) {
+	auto callid = (syscall_t)frame->ax;
+	stduint para[4] = { frame->cx, frame->dx, frame->bx };
+	stduint msgbuf[4] = {};//{TORM}
+	stduint ret = 0;
+	ThreadBlock* caller_th = Taskman::current_thread[Taskman::getID()];//{TORM}
+	ProcessBlock* pb = caller_th->parent_process;//{TORM}
+	stduint caller_pid = pb->pid;//{TORM}
+
+	if (_IMM(callid) <= 10 && SYSCALL_TABLE[_IMM(callid)]) {
+		return (reinterpret_cast<stdsint(*)(stduint, stduint, stduint)>mglb(SYSCALL_TABLE[_IMM(callid)]))(para[0], para[1], para[2]);// Err
+	}
+	else switch (callid) {
+
+		
+	case syscall_t::WAIT:
+	{
+		// ploginfo("syscall wait");
+		stduint tmp[2];
+		para[1] = para[0];
+		para[0] = caller_pid;
+		syssend(Task_TaskMan, para, byteof(para), _IMM(TaskmanMsg::WAIT));
+		sysrecv(Task_TaskMan, tmp, byteof(tmp));// (pid, state)
+		ret = tmp[0];// pid
+		if (ret && para[1]) {
+			MemCopyP((void*)para[1], pb->paging, &tmp[1], kernel_paging, byteof(stduint));
+		}
+		break;
+	}
+	case syscall_t::FORK:
+	{
+		msgbuf[0] = caller_pid;
+		msgbuf[1] = _IMM(frame);
+		syssend(Task_TaskMan, sliceof(msgbuf), _IMM(TaskmanMsg::FORK));
+		sysrecv(Task_TaskMan, &ret, byteof(ret));
+		break;
+	}
+	case syscall_t::TMSG:
+	{
+		ret = _IMM(caller_th->queue_send_queuehead);
+		break;
+	}
+	case syscall_t::EXEC: case syscall_t::EXET:
+		msgbuf[0] = caller_pid;
+		msgbuf[1] = para[0];
+		msgbuf[2] = para[1];
+		msgbuf[3] = para[2];
+		syssend(Task_TaskMan, sliceof(msgbuf),
+			_IMM(callid == syscall_t::EXEC ? TaskmanMsg::EXEC : TaskmanMsg::EXET));
+		sysrecv(Task_TaskMan, &ret, byteof(ret));
+		break;
+
+	case syscall_t::TEST:
+		if (para[0] == 'T' && para[1] == 'E' && para[2] == 'S') {
+			rostr test_msg = "Syscalls Test OK!";
+			Console.OutFormat("[Mecocoa] PID");
+			Console.OutInteger(caller_pid, +10);
+			Console.OutFormat(": %s\n\r", test_msg + 0x80000000);
+		}
+		else {
+			rostr test_msg = "[Mecocoa] Syscalls Test FAIL!";
+			Console.OutFormat("%s %x %x %x\n\r", test_msg + 0x80000000,
+				para[0], para[1], para[2]);
+		}
+		ret = caller_pid;
+		break;
+	default:
+		printlog(_LOG_ERROR, "Unimplemented syscall: 0x%[32H]", _IMM(callid));
+		break;
+	}
+	return ret;
+}
+
 
 #endif
+

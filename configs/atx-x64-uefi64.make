@@ -72,6 +72,7 @@ elf_kernel=mcca-$(arch).elf
 mntdir=/mnt/floppy
 clang=clang-14
 sudokey=k
+uherpath=/her
 
 .PHONY : build
 build: clean $(archdir)/kerdisk.fat $(ubinpath)/$(arch).img $(asmobjs) $(cppobjs) $(cplobjs)
@@ -82,12 +83,19 @@ build: clean $(archdir)/kerdisk.fat $(ubinpath)/$(arch).img $(asmobjs) $(cppobjs
 		prehost/$(arch)/$(arch).cpp \
 		$(uobjpath)/mcca-$(arch)/*.o \
 	# OUTDATED # prehost/$(arch)/script-adapt.sh ~/_obj/$(elf_kernel) $(ubinpath)/$(elf_kernel)
+	mkdir -p $(uobjpath)/sapp-$(arch)
+	echo MK appinit
+	$(CX) -Iaccmlib $(XFLAGS) \
+		-o $(uobjpath)/sapp-$(arch)/init $(uherpath)/COTLAB/src/cotlab.cpp -L$(uobjpath)/accm-atx-x64 -latx-x64 -e _start
+	echo MK a
+	aasm subapps/helloa/helloa-x64.asm -felf64 -o subapps/helloa/helloa-x64.o
+	ld   -s -m elf_x86_64 -o $(uobjpath)/app-$(arch)/a subapps/helloa/helloa-x64.o -Ttext-segment=0x10000 -e main
+	#
 	@echo $(sudokey) | sudo -S mkdir -p $(mntdir)
 	@echo $(sudokey) | sudo -S mount -o loop $(archdir)/kerdisk.fat $(mntdir)
 	#
 	mkdir -p $(uobjpath)/app-$(arch)
-	aasm subapps/helloa/helloa-x64.asm -felf64 -o subapps/helloa/helloa-x64.o
-	ld   -s -m elf_x86_64 -o $(uobjpath)/app-$(arch)/a subapps/helloa/helloa-x64.o -Ttext-segment=0x10000 -e main # elf_i386
+	@echo $(sudokey) | sudo -S cp $(uobjpath)/sapp-$(arch)/init $(mntdir)/init
 	@echo $(sudokey) | sudo -S cp $(uobjpath)/app-$(arch)/a $(mntdir)/appa.elf
 	tree $(mntdir)
 	@echo $(sudokey) | sudo -S umount $(mntdir)
@@ -134,7 +142,7 @@ qemu_args=\
 
 run: build
 	@echo [ running] MCCA for $(arch)
-	@${QEMU} $(qemu_args) -m 1G -enable-kvm || ${QEMU} $(qemu_args) -m 1G
+	@${QEMU} $(qemu_args) -m 512M -enable-kvm || ${QEMU} $(qemu_args) -m 512M
 	@echo
 	@echo 'Mount the image:' 
 	@echo '  mount -o loop $(ubinpath)/$(arch).img $(mntdir)'
@@ -143,7 +151,7 @@ run: build
 	@echo $(sudokey) | sudo -S umount $(mntdir)
 	@echo
 run-only:
-	@${QEMU} $(qemu_args) -m 1G -enable-kvm || ${QEMU} $(qemu_args) -m 1G
+	@${QEMU} $(qemu_args) -m 512M -enable-kvm || ${QEMU} $(qemu_args) -m 512M
 
 #{TODO} debug
 

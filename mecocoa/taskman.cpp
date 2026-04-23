@@ -261,6 +261,7 @@ bool Taskman::Exit(ProcessBlock* p, stdsint exit_code)
 	}
 
 	p->exit_status = exit_code;
+	// ploginfo("Process %u exited with code %[x]", pid, exit_code);
 
 	// Handle Children (Reparenting to Task_Init)
 	// Must do this BEFORE cleaning up 'p' to ensure memory safety
@@ -355,9 +356,12 @@ void _Comment(R0) serv_task_loop()
 			break;
 		case TaskmanMsg::EXIT: // (pid, state)
 			// ploginfo("Taskman exit: %u %u", to_args[0], to_args[1]);
+			if (!to_args[0]) {
+				plogerro("Try to exit Task_Kernel");
+				break;
+			}
 			Taskman::Exit(Taskman::Locate(to_args[0]), to_args[1]);
 			break;
-		#ifdef _ARC_x86
 		case TaskmanMsg::FORK: // (pid, cframe)
 			// ploginfo("Taskman fork: %u", to_args[0]);
 			if (1) {
@@ -382,13 +386,13 @@ void _Comment(R0) serv_task_loop()
 				syssend(sig_src, (void*)&ret, sizeof(ret));
 			}
 			break;
-		#endif
 
 		default:
 			plogerro("Bad TYPE %u in %s %s", sig_type, __FILE__, __FUNCIDEN__);
 			break;
 		}
-		sysrecv(ANYPROC, (void*)to_args, byteof(to_args), (stduint *)&sig_type, (stduint *)&sig_src);
+		sysrecv(ANYPROC, (void*)to_args, byteof(to_args), (stduint*)&sig_type, (stduint*)&sig_src);
+		// ploginfo("Taskman recv: %u %u", sig_type, sig_src);
 	}
 }
 

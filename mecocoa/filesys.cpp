@@ -606,14 +606,21 @@ bool DevFs::proper(void* handler, stduint cmd, const void* moreinfo) { return fa
 bool DevFs::enumer(void* dir_handler, _tocall_ft _fn) { return false; }
 
 stduint DevFs::readfl(void* fil_handler, Slice file_slice, byte* dst) {
+	// ploginfo("DevFs::readfl (%[x])", fil_handler);
 	stduint tty_idx = (stduint)fil_handler;
 
 	if (tty_idx >= vttys.Count()) return 0;
 	Dnode* tty_node = vttys[tty_idx];
-	if (!tty_node) return 0;
+	if (!tty_node) {
+		plogwarn("tty %u not found", tty_idx);
+		return 0;
+	}
 
 	QueueLimited* input_queue = VTTY_INNQ(tty_node);
-	if (!input_queue) return 0;
+	if (!input_queue) {
+		plogwarn("tty %u input queue not found", tty_idx);
+		return 0;
+	}
 
 	Console_t* con = (Console_t*)tty_node->offs;
 

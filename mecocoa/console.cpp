@@ -189,6 +189,7 @@ void _Comment(R1) serv_cons_loop()
 				ProcessBlock* pb = Taskman::Locate(to_args[3]);
 				if (!ifContainBlockedTTY(pb)) {
 					blocked_vtty_pid.Append(pb->getID());
+					// ploginfo("Blocked TTY %u by %u", pb->focus_tty, pb->getID());
 				}
 				else {
 					ret = ~_IMM0;

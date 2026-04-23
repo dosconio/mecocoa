@@ -34,7 +34,6 @@ void Handint_XHCI() {
 volatile timeval_t system_time = {};
 volatile stduint tick = 0;
 
-#if (_MCCA & 0xFF00) == 0x8600
 
 
 static int TimerCmp(pureptr_t a, pureptr_t b) {
@@ -56,7 +55,6 @@ void SysTimer::Append(stduint timeout, stduint iden, _tocall_ft hand) {
 	// ploginfo("SysTimer::Append %u, now %u timers", timeout, TimerManager.Count());
 }
 
-#endif
 
 #if _MCCA == 0x8664 && defined(_UEFI)
 

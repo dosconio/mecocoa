@@ -50,6 +50,7 @@ lib-all:
 	make -f accmlib/accmrv32.make
 	make -f accmlib/accmrv64.make
 	make -f accmlib/accmx86.make
+	make -f accmlib/accmx64.make
 
 .PHONY : all
 all: lib-all

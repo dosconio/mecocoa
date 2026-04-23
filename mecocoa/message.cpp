@@ -93,6 +93,8 @@ static inline stduint MccaMemCopyP(void* dest, ProcessBlock* pd, const void* sor
 	pag.root_level_page = nil;
 	return MemCopyP(dest, (pd && pd->paging_redirect) ? *pd->paging_redirect : pag,
 		sors, (ps && ps->paging_redirect) ? *ps->paging_redirect : pag, n);
+	#elif _MCCA == 0x8664
+	return MemCopyP(dest, pd ? (pd->paging_redirect ? *pd->paging_redirect : pd->paging) : kernel_paging, sors, ps ? (ps->paging_redirect ? *ps->paging_redirect : ps->paging) : kernel_paging, n);
 	#else
 	return MemCopyP(dest, pd ? pd->paging : kernel_paging, sors, ps ? ps->paging : kernel_paging, n);
 	#endif

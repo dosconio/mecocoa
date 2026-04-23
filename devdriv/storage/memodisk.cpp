@@ -21,7 +21,9 @@ static byte _FOLLOW_VHD[] = {
 };
 // x64uefi is in UEFI Area
 static_assert(sizeof(_FOLLOW_VHD) > 0);
-
+#if _MCCA == 0x8664 && defined(_UEFI)
+extern UefiData uefi_data;
+#endif
 
 class Memodisk : public MemoryBlockDevice {
 private:
@@ -150,6 +152,13 @@ void serv_dev_mem_loop() {
 				#if (_MCCA & 0xFF00) == 0x1000
 				ploginfo("[Memdisk] Default FATVHD Size: %[x]", sizeof(_FOLLOW_VHD));
 				auto dev0 = open(sliceof(_FOLLOW_VHD), FILESYS_FAT32_LBA);
+				printlog(dev0 >= 0 ? _LOG_INFO : _LOG_ERROR, "[Memdisk] Created Memdisk %u, trying FAT32", dev0);
+				if (auto fs = Filesys::Mount(*locate(0), 0, "/md0")) {//{} "/dev/md0"
+					ploginfo("[Memdisk] Loaded %s", fs->name);
+				}
+
+				#elif _MCCA == 0x8664 && defined(_UEFI)
+				auto dev0 = open(uefi_data.fatvhd_addr, 32 * 1024 * 1024, FILESYS_FAT32_LBA);
 				printlog(dev0 >= 0 ? _LOG_INFO : _LOG_ERROR, "[Memdisk] Created Memdisk %u, trying FAT32", dev0);
 				if (auto fs = Filesys::Mount(*locate(0), 0, "/md0")) {//{} "/dev/md0"
 					ploginfo("[Memdisk] Loaded %s", fs->name);

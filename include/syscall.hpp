@@ -12,10 +12,10 @@ enum
 {
 	OUTC = 0x00, // outstr (chr/str, len)->0  |.x86 x64 rv
 	INNC = 0x01, // innstr (blocked)->ASCII>0 | x86 rv
-	EXIT = 0x02, // exit   (code)             | x86 rv
+	EXIT = 0x02, // exit   (code)             | x86 x64 rv
 	TIME = 0x03, // getsec (0sec/1ms)->second | x86
 	REST = 0x04, // halt   (unit, time)       | x86
-	COMM = 0x05, // syncom (mod, obj, &msg)   | x86 rv
+	COMM = 0x05, // syncom (mod, obj, &msg)   | x86 x64 rv
 	OPEN = 0x06, // open   (path,flags)>=0    | x86
 	CLOS = 0x07, // close  (fd)->0            | x86
 	READ = 0x08, // read   (fd, adr, len)->len| x86

@@ -184,7 +184,7 @@ void serv_file_loop()// for IDE 0:0, 0:1
 	byte* const pathbuf = new byte[pathbuf_size];
 	//
 	stduint to_args[8];// 8*4=32 bytes
-	stduint sig_type = 0, sig_src;
+	stduint sig_type = 0, sig_src = 0;
 	stduint retval[1];
 	ThreadBlock* tb;
 
@@ -205,6 +205,18 @@ void serv_file_loop()// for IDE 0:0, 0:1
 			}
 			else plogerro("No fs for INIT");
 
+			#elif _MCCA == 0x8664 && defined(_UEFI)
+			syssend(Task_Memdisk_Serv, &retval, sizeof(retval[0]), _IMM(FiledevMsg::RUPT));
+			ProcessBlock* p = Taskman::CreateFile(("/md0/init"), RING_U, Task_Kernel);
+			p->focus_tty = vttys[ento_gui ? 1 : 0];
+			Taskman::Append(p);
+			Taskman::AppendThread(p->main_thread);
+			//
+			p = Taskman::CreateFile(("/md0/appa.elf"), RING_U, Task_Kernel);
+			p->focus_tty = vttys[ento_gui ? 1 : 0];
+			Taskman::Append(p);
+			Taskman::AppendThread(p->main_thread);
+
 			#elif (_MCCA & 0xFF00) == 0x1000
 			syssend(Task_Memdisk_Serv, &retval, sizeof(retval[0]), _IMM(FiledevMsg::RUPT));
 			ProcessBlock* p;
@@ -216,7 +228,6 @@ void serv_file_loop()// for IDE 0:0, 0:1
 		}
 		case FilemanMsg::RUPT:// (usercall-forbidden&meaningless)
 			break;
-		#ifdef _ARC_x86
 		case FilemanMsg::OPEN://(flags, thid, usr_filename) | open a file and return the file descriptor
 		{
 			tb = Taskman::LocateThread(to_args[1]);
@@ -256,7 +267,7 @@ void serv_file_loop()// for IDE 0:0, 0:1
 			syssend(sig_src, &retval, sizeof(retval[0]));
 			break;
 		}
-		#endif
+
 		// ... ...
 		default:
 			plogerro("Bad TYPE in %s %s", __FILE__, __FUNCIDEN__);

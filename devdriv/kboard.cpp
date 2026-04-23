@@ -130,14 +130,9 @@ int KeyboardBridge::out(const char* str, stduint len) {
 // USB3-KBD
 #ifdef _UEFI// x64 only now
 
-#include <cpp/Witch/Control/Control-TextBox.hpp>
-
-
 static void setLED() {
 	// {} KbdSetLED((_IMM(kbd_state.lock_caps) << 2) | (_IMM(kbd_state.lock_number) << 1) | _IMM(kbd_state.lock_scroll));
 }
-
-extern uni::witch::control::TextBox* ptext_1;
 
 void sysmsg_kbd(keyboard_event_t kbd_event) {
 	if (!kbd_event.keycode) {
@@ -158,26 +153,13 @@ void sysmsg_kbd(keyboard_event_t kbd_event) {
 			// NumPad adjustments
 			ch = key_map_shift[kbd_event.keycode];
 		}
-		
-		// UEFI GUI specific implementation
-		if (ch == '\b') {
-			if (ptext_1) {
-				auto str = ptext_1->text.reflect();
-				if (*str) {
-					ptext_1->text[-1] = 0;
-					ptext_1->text.Refresh();
-				}
-			}
+		auto p_vtty = vttys[current_screen_TTY];
+		if (!p_vtty) {
+			plogerro("assert p_vtty");
 		}
-		else if (ptext_1 && ch) ptext_1->text << ch;
-		if (ptext_1) ptext_1->doshow(0);
-
-		// ----
-
-		// test taskman
-		// now the task 1 should at ready queue.
-		if (ch == 'S') Taskman::DequeueReady(treat<ProcessBlock>(Taskman::chain[2]->offs).main_thread);
-		else if (ch == 'R') Taskman::EnqueueReady(treat<ProcessBlock>(Taskman::chain[2]->offs).main_thread);
+		if (ch) {
+			VTTY_INNQ(p_vtty)->OutChar(ch);
+		}
 	}
 }
 

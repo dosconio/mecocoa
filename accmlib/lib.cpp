@@ -118,7 +118,7 @@ stduint sysread(int fd, void* buf, stduint size)
 {
 	return syscall(syscall_t::READ, fd, _IMM(buf), size);
 }
-stduint syswrite(int fd, void* buf, stduint size) {
+stduint syswrite(int fd, const void* buf, stduint size) {
 	return syscall(syscall_t::WRIT, fd, _IMM(buf), size);
 }
 
