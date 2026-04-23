@@ -35,6 +35,7 @@ enum
 
 	TEST = 0xFF, // (T,E,S)->0 | x86
 };// . stand for well for multi-thread
+// Locks usually end with `_lock;`
 
 enum
 	#ifdef _INC_CPP

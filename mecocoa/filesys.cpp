@@ -607,22 +607,52 @@ bool DevFs::enumer(void* dir_handler, _tocall_ft _fn) { return false; }
 
 stduint DevFs::readfl(void* fil_handler, Slice file_slice, byte* dst) {
 	stduint tty_idx = (stduint)fil_handler;
-	stduint msg[4];
-	msg[0] = MAKE_DEV(DEV_TTY, tty_idx);
-	msg[1] = file_slice.address;
-	msg[2] = file_slice.length;
-	msg[3] = 0; // PID
-	return 0; // WIP: syssend to IPC
+
+	if (tty_idx >= vttys.Count()) return 0;
+	Dnode* tty_node = vttys[tty_idx];
+	if (!tty_node) return 0;
+
+	QueueLimited* input_queue = VTTY_INNQ(tty_node);
+	if (!input_queue) return 0;
+
+	Console_t* con = (Console_t*)tty_node->offs;
+
+	stduint bytes_read = 0;
+	while (bytes_read < file_slice.length) {
+		int ch = input_queue->inn();
+		if (ch == -1) break;
+		if (ch == '\b' || ch == 0x7F) {
+			if (bytes_read > 0) {
+				bytes_read--;
+				asserv(con)->out("\b \b", 3);
+			}
+			continue;
+		}
+		dst[bytes_read++] = (byte)ch;
+		if (con) {
+			con->OutChar(ch);
+		}
+		if (ch == '\n') {
+			break;
+		}
+	}
+
+	return bytes_read;
 }
 
 stduint DevFs::writfl(void* fil_handler, Slice file_slice, const byte* src) {
 	stduint tty_idx = (stduint)fil_handler;
-	stduint msg[4];
-	msg[0] = MAKE_DEV(DEV_TTY, tty_idx);
-	msg[1] = file_slice.address;
-	msg[2] = file_slice.length;
-	msg[3] = 0; // PID
-	return 0; // WIP: syssend to IPC
+
+	if (tty_idx >= vttys.Count()) return 0;
+	Dnode* tty_node = vttys[tty_idx];
+	if (!tty_node) return 0;
+
+	Console_t* con = (Console_t*)tty_node->offs;
+	if (!con) return 0;
+
+	con->out((rostr)src, file_slice.length);
+
+	return file_slice.length;
 }
 
 // FS

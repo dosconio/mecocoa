@@ -326,10 +326,70 @@ DEFSYSC sysc_CLOS(stduint fd) {
 }
 
 DEFSYSC sysc_READ(stduint fd, stduint addr, stduint len) {
-	stduint open_buf[4]{ fd, addr,len,Taskman::current_thread[Taskman::getID()]->getID() };
-	syssend(Task_FileSys, open_buf, byteof(open_buf), _IMM(FilemanMsg::READ));
-	sysrecv(Task_FileSys, open_buf, byteof(open_buf[0]));
-	return open_buf[0];
+	ThreadBlock* th = Taskman::current_thread[Taskman::getID()];
+	ProcessBlock* pb = th->parent_process;
+
+	// TTY device
+	if (asrtand(pb->pfiles[fd])->vfile && 
+	    asrtand(pb->pfiles[fd]->vfile->f_dentry)->d_inode &&
+	    pb->pfiles[fd]->vfile->f_dentry->d_inode->i_mode == I_CHAR_SPECIAL) {
+		// char device, read blockedly
+		stduint total_read = 0;
+		while (total_read < len) {
+			stduint open_buf[4]{ fd, addr + total_read, len - total_read, th->getID() };
+			syssend(Task_FileSys, open_buf, byteof(open_buf), _IMM(FilemanMsg::READ));
+			sysrecv(Task_FileSys, open_buf, byteof(open_buf[0]));
+
+			stduint bytes_read = open_buf[0];
+			if (bytes_read == 0) {
+				stduint msgbuf[4];
+				msgbuf[3] = pb->getID();
+				syssend(Task_Console, msgbuf, byteof(msgbuf), _IMM(ConsoleMsg::INNC));
+				stduint ret;
+				sysrecv(Task_Console, &ret, byteof(ret));
+				if (ret == ~_IMM0) break;
+
+				// Identify the specific vtty device for echo
+				stduint tty_idx = (stduint)pb->pfiles[fd]->vfile->f_inode->internal_handler;
+				Console_t* con = (tty_idx < vttys.Count()) ? (Console_t*)vttys[tty_idx]->offs : nullptr;
+
+				// Handle the character "consumed" by Task_Console service
+				byte ch = (byte)ret;
+				if (ch == '\b' || ch == 0x7F) {
+					if (total_read > 0) {
+						total_read--;
+						if (con) con->out("\b \b", 3);
+					}
+					continue;
+				}
+				
+				// Store in user buffer and provide visual echo
+				MemCopyP((void*)(addr + total_read), pb->paging, &ch, kernel_paging, 1);
+				total_read++;
+				if (con) con->OutChar(ch);
+				
+				if (ch == '\n') break;
+				continue;
+			}
+
+			total_read += bytes_read;
+
+			if (total_read > 0) {
+				byte last_char;
+				MemCopyP(&last_char, pb->paging, (void*)(addr + total_read - 1), kernel_paging, 1);
+				if (last_char == '\n') {
+					break;
+				}
+			}
+		}
+		return total_read;
+	}
+	else {
+		stduint open_buf[4]{ fd, addr, len, th->getID() };
+		syssend(Task_FileSys, open_buf, byteof(open_buf), _IMM(FilemanMsg::READ));
+		sysrecv(Task_FileSys, open_buf, byteof(open_buf[0]));
+		return open_buf[0];
+	}
 }
 DEFSYSC sysc_WRIT(stduint fd, stduint addr, stduint len) {
 	stduint open_buf[4]{ fd, addr,len,Taskman::current_thread[Taskman::getID()]->getID() };
