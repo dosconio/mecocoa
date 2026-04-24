@@ -323,9 +323,9 @@ public:// schedule
 	static unsigned int ready_bitmap;
 	static unsigned int expired_bitmap;
 
-	static void EnqueueReady(ThreadBlock* pb);
-	static void DequeueReady(ThreadBlock* pb);
-	static void EnqueueExpired(ThreadBlock* pb);
+	static void EnqueueReady(ThreadBlock* pb, bool lock = true);
+	static void DequeueReady(ThreadBlock* pb, bool lock = true);
+	static void EnqueueExpired(ThreadBlock* pb, bool lock = true);
 	static ThreadBlock* PickNext();
 	static void SleepAndRelease(Spinlock* lk);
 public:

@@ -580,7 +580,7 @@ ProcessBlock* Taskman::Exec(stduint parent, rostr usr_fullpath, void* usr_argsta
 		char** q = (char**)temp_stack;
 		for (; *q != nullptr; q++, argc++) {
 			// Safely offset pointers using uintptr_t integer math
-			*q = (char*)((uintptr_t)(*q) + delta);
+			*q = (char*)((stduint)(*q) + delta);
 		}
 		// Copy argv array and string data onto the new process stack
 		MemCopyP((void*)new_sp, new_pb->paging, temp_stack, kernel_paging, stacklen);
@@ -740,7 +740,7 @@ ProcessBlock* Taskman::Exet(stduint parent, rostr usr_fullpath, void* usr_argsta
 
 		char** q = (char**)temp_stack;
 		for (; *q != nullptr; q++, argc++) {
-			*q = (char*)((uintptr_t)(*q) + delta);
+			*q = (char*)((stduint)(*q) + delta);
 		}
 		// Copy argv array and string data onto the user stack
 		MemCopyP((void*)new_sp, current_pb->paging, temp_stack, kernel_paging, stacklen);

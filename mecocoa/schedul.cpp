@@ -29,14 +29,21 @@ Taskman::ReadyQueue Taskman::priority_queues[32] = {};
 Taskman::ReadyQueue Taskman::expired_queues[32] = {};
 unsigned int Taskman::ready_bitmap = 0;
 unsigned int Taskman::expired_bitmap = 0;
+static Spinlock scheduler_lock;
 
-void Taskman::EnqueueReady(ThreadBlock* pb) {
-	if (pb->state != ThreadBlock::State::Ready && pb->state != ThreadBlock::State::Running) return;
+void Taskman::EnqueueReady(ThreadBlock* pb, bool lock) {
+	stduint old_if = 0;
+	if (lock) old_if = scheduler_lock.Acquire();
+	if (pb->state != ThreadBlock::State::Ready && pb->state != ThreadBlock::State::Running) {
+		if (lock) scheduler_lock.Release(old_if);
+		return;
+	}
 	int idx = pb->priority + 16;
 	if (idx < 0) idx = 0;
 	if (idx > 31) idx = 31;
 
 	if (pb->queue_state_next != nullptr || pb->queue_state_prev != nullptr || priority_queues[idx].head == pb) {
+		if (lock) scheduler_lock.Release(old_if);
 		return;// duplicate check
 	}
 
@@ -51,10 +58,16 @@ void Taskman::EnqueueReady(ThreadBlock* pb) {
 		pb->queue_state_prev = nullptr;
 	}
 	ready_bitmap |= (1U << idx);
+	if (lock) scheduler_lock.Release(old_if);
 }
 
-void Taskman::EnqueueExpired(ThreadBlock* pb) {
-	if (pb->state != ThreadBlock::State::Ready && pb->state != ThreadBlock::State::Running) return;
+void Taskman::EnqueueExpired(ThreadBlock* pb, bool lock) {
+	stduint old_if = 0;
+	if (lock) old_if = scheduler_lock.Acquire();
+	if (pb->state != ThreadBlock::State::Ready && pb->state != ThreadBlock::State::Running) {
+		if (lock) scheduler_lock.Release(old_if);
+		return;
+	}
 	int idx = pb->priority + 16;
 	if (idx < 0) idx = 0;
 	if (idx > 31) idx = 31;
@@ -71,9 +84,12 @@ void Taskman::EnqueueExpired(ThreadBlock* pb) {
 		pb->queue_state_prev = nullptr;
 	}
 	expired_bitmap |= (1U << idx);
+	if (lock) scheduler_lock.Release(old_if);
 }
 
-void Taskman::DequeueReady(ThreadBlock* pb) {
+void Taskman::DequeueReady(ThreadBlock* pb, bool lock) {
+	stduint old_if = 0;
+	if (lock) old_if = scheduler_lock.Acquire();
 	int idx = pb->priority + 16;
 	if (idx < 0) idx = 0;
 	if (idx > 31) idx = 31;
@@ -102,6 +118,7 @@ void Taskman::DequeueReady(ThreadBlock* pb) {
 
 	if (in_active && !priority_queues[idx].head) ready_bitmap &= ~(1U << idx);
 	if (in_expired && !expired_queues[idx].head) expired_bitmap &= ~(1U << idx);
+	if (lock) scheduler_lock.Release(old_if);
 }
 
 ThreadBlock* Taskman::PickNext() {
@@ -146,19 +163,20 @@ ThreadBlock* Taskman::PickNext() {
 }
 
 void ThreadBlock::Block(BlockReason reason) {
-	if (state == State::Ready || state == State::Running) Taskman::DequeueReady(this);
+	Taskman::DequeueReady(this);
 	state = State::Pended;
 	block_reason = BlockReason(block_reason | reason);
 }
 
 void ThreadBlock::Unblock(BlockReason reason) {
+	SpinlockLocal guard(&scheduler_lock);
 	block_reason = BlockReason(block_reason & ~reason);
 	if (block_reason == BlockReason::BR_None) {
 		state = State::Ready;//{} else panic...
 		if (this->is_expired) {
-			Taskman::EnqueueExpired(this);
+			Taskman::EnqueueExpired(this, false);
 		} else {
-			Taskman::EnqueueReady(this);
+			Taskman::EnqueueReady(this, false);
 		}
 	}
 }
@@ -166,6 +184,7 @@ void ThreadBlock::Unblock(BlockReason reason) {
 static stduint next_global_id = 1;
 
 bool Taskman::Append(ProcessBlock* task) {
+	SpinlockLocal guard(&scheduler_lock);
 	task->pid = __atomic_fetch_add(&next_global_id, 1, __ATOMIC_SEQ_CST);
 
 	Dnode* insert_after = chain.Last();
@@ -181,6 +200,7 @@ bool Taskman::Append(ProcessBlock* task) {
 }
 
 bool Taskman::AppendThread(ThreadBlock* task) {
+	SpinlockLocal guard(&scheduler_lock);
 	if (task->parent_process && task->parent_process->main_thread == task) {
 		task->tid = task->parent_process->pid;
 	}
@@ -197,7 +217,7 @@ bool Taskman::AppendThread(ThreadBlock* task) {
 	thchain.Append(task, false, insert_after);
 	
 	task->state = ThreadBlock::State::Ready;
-	EnqueueReady(task);
+	EnqueueReady(task, false);
 	return true;
 }
 
@@ -227,11 +247,11 @@ ifContinueProcess(ThreadBlock* old_pb) -> bool {
 				old_pb->time_slice--;
 				return true; // Continue same task
 			} else {
-				Taskman::DequeueReady(old_pb);
+				Taskman::DequeueReady(old_pb, false);
 				old_pb->state = TBS::Ready;
 				
 				// Enqueue to Expired Queue for Epoch A-Type Scheduling
-				Taskman::EnqueueExpired(old_pb); 
+				Taskman::EnqueueExpired(old_pb, false); 
 				
 				// Allocation mapping:
 				old_pb->time_slice = 3 - (old_pb->priority >> 2);
@@ -242,9 +262,9 @@ ifContinueProcess(ThreadBlock* old_pb) -> bool {
 				old_pb->time_slice--;
 				return true; // Continue same task
 			} else {
-				Taskman::DequeueReady(old_pb);
+				Taskman::DequeueReady(old_pb, false);
 				old_pb->state = TBS::Ready;
-				Taskman::EnqueueReady(old_pb); // Re-queue at tail (Round-Robin for same RT priority)
+				Taskman::EnqueueReady(old_pb, false); // Re-queue at tail (Round-Robin for same RT priority)
 				old_pb->time_slice = 4; // RT tasks also get 4 slices to avoid hogging forever if yielding is missed
 			}
 		}
@@ -276,7 +296,6 @@ ifContinueProcess(ThreadBlock* old_pb) -> bool {
 
  // before calling, the task may be pended
 #if 1
-static Spinlock scheduler_lock;
 auto Taskman::Schedule(bool omit_slice)->decltype(Schedule())
 {
 	bool old_if = scheduler_lock.Acquire();
@@ -314,9 +333,9 @@ auto Taskman::Schedule(bool omit_slice)->decltype(Schedule())
 			// Already handled by Block(); don't touch state or queues
 		}
 		else if (!is_idle) {
-			Taskman::DequeueReady(old_tb);
+			Taskman::DequeueReady(old_tb, false);
 			old_tb->state = TBS::Ready;
-			if (s == TBS::Running || s == TBS::Ready) Taskman::EnqueueExpired(old_tb);
+			if (s == TBS::Running || s == TBS::Ready) Taskman::EnqueueExpired(old_tb, false);
 		}
 		else {
 			old_tb->state = TBS::Ready;
@@ -371,7 +390,7 @@ auto Taskman::Schedule(bool omit_slice)->decltype(Schedule()) { }
 void Taskman::SleepAndRelease(Spinlock* lk) {
 	auto old_tb = current_thread[getID()];
 	bool old_if = scheduler_lock.Acquire();
-	DequeueReady(old_tb);
+	DequeueReady(old_tb, false);
 	lk->Release(false);
 
 	auto new_tb = PickNext();

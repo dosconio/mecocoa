@@ -52,7 +52,8 @@ Queue<SysMessage> message_queue(_BUF_Message, numsof(_BUF_Message));
 bool Spinlock::Acquire() {
 	byte state_rupt = 0;
 	#if (_MCCA & 0xFF00) == 0x8600
-	if (state_rupt = cast<REG_FLAG_t>(getFlags).IF) {
+	stduint flags = getFlags();
+	if (state_rupt = cast<REG_FLAG_t>(flags).IF) {
 		IC.enAble(false);
 	}
 	#endif
