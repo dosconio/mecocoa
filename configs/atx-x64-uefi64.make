@@ -87,6 +87,9 @@ build: clean $(archdir)/kerdisk.fat $(ubinpath)/$(arch).img $(asmobjs) $(cppobjs
 	echo MK appinit
 	$(CX) -Iaccmlib $(XFLAGS) \
 		-o $(uobjpath)/sapp-$(arch)/init $(uherpath)/COTLAB/src/cotlab.cpp -L$(uobjpath)/accm-atx-x64 -latx-x64 -e _start
+	echo MK subappc
+	$(CX) -Iaccmlib $(XFLAGS) \
+		subapps/hellocpp/* -o $(uobjpath)/sapp-$(arch)/c  -L$(uobjpath)/accm-atx-x64 -latx-x64 -e _start
 	echo MK a
 	aasm subapps/helloa/helloa-x64.asm -felf64 -o subapps/helloa/helloa-x64.o
 	ld   -s -m elf_x86_64 -o $(uobjpath)/app-$(arch)/a subapps/helloa/helloa-x64.o -Ttext-segment=0x10000 -e main
@@ -96,6 +99,7 @@ build: clean $(archdir)/kerdisk.fat $(ubinpath)/$(arch).img $(asmobjs) $(cppobjs
 	#
 	mkdir -p $(uobjpath)/app-$(arch)
 	@echo $(sudokey) | sudo -S cp $(uobjpath)/sapp-$(arch)/init $(mntdir)/init
+	@echo $(sudokey) | sudo -S cp $(uobjpath)/sapp-$(arch)/c    $(mntdir)/c
 	@echo $(sudokey) | sudo -S cp $(uobjpath)/app-$(arch)/a $(mntdir)/appa.elf
 	tree $(mntdir)
 	@echo $(sudokey) | sudo -S umount $(mntdir)

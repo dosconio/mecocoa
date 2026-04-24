@@ -8,7 +8,8 @@
 [CPU 586]
 ;%include "mecocoa/kernel.inc"
 
-GLOBAL syscall
+GLOBAL _start, syscall
+EXTERN main, exit
 
 section .text
 
@@ -37,3 +38,16 @@ syscall:
 
 RET
 
+_start:
+	xor	ebp, ebp		; Mark the end of stack frames
+	pop	eax				; Get argc from stack, ESP now points to argv
+	mov	ebx, esp		; Get argv pointer
+	and	esp, -16		; Ensure 16-byte alignment
+	sub	esp, 8			; Padding to maintain alignment after 2 pushes
+	push	ebx			; Second argument: argv
+	push	eax			; First argument: argc
+	call	main		; Call main(argc, argv)
+	add	esp, 16			; Clean up arguments and padding
+	push	eax			; Push return value for exit
+	call	exit		; Call exit(status)
+mov byte[0], 0

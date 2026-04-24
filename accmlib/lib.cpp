@@ -151,99 +151,142 @@ _ESYM_C void free(void* ptr) {}
 static int spawnv(const char* path, char* argv[]);
 int spawnl(const char* path, const char* arg, ...)
 {
-	char* argv[_TEMP 8];
+	char* argv[_TEMP 16]; // Increased safe size
 	int argc = 0;
 	va_list args;
+	
 	argv[argc++] = (char*)arg;
 	va_start(args, arg);
 	while (argc < numsof(argv) - 1) {
 		char* next_arg = va_arg(args, char*);
 		argv[argc++] = next_arg;
 		// requires the argument list to be terminated by a NULL pointer
-		if (next_arg == 0) {
+		if (next_arg == nullptr || next_arg == 0) {
 			break;
 		}
 	}
 	va_end(args);
-	argv[argc] = 0;
+	
+	// Force ensure the last element is NULL
+	argv[argc] = nullptr; 
 	return spawnv(path, argv);
 }
+
 static int spawnv(const char* path, char* argv[])
 {
-	char** p = argv;
 	char arg_stack[PROC_ORIGIN_STACK];
-	int stack_len = 0;
+	int argc = 0;
+	int str_bytes = 0;
 
-	while(*p++) {
-		if (stack_len + 2 * sizeof(char*) < PROC_ORIGIN_STACK); else {
-			plogerro("panic %s:%u", __FUNCIDEN__, __LINE__);
-		}
-		stack_len += sizeof(char*);
+	// Calculate argument count and the total length of all strings
+	while (argv[argc] != nullptr && argv[argc] != 0) {
+		str_bytes += StrLength(argv[argc]) + 1; // +1 for the '\0' terminator
+		argc++;
 	}
 
-	*((char**)(&arg_stack[stack_len])) = nullptr;
-	stack_len += sizeof(char*);
+	// Calculate memory layout sizes
+	// IMPORTANT FIX: We need (argc) pointers, PLUS 1 NULL for argv end, PLUS 1 NULL for envp end!
+	// This prevents the C runtime from interpreting the raw strings as environment variables.
+	int ptr_array_size = (argc + 2) * sizeof(char*);
+	int total_size = ptr_array_size + str_bytes;
 
-	char ** q = (char**)arg_stack;
-	for (p = argv; *p != 0; p++) {
-		*q++ = &arg_stack[stack_len];
-		if (stack_len + StrLength(*p) + 1 < PROC_ORIGIN_STACK); else {
-			plogerro("panic %s:%u", __FUNCIDEN__, __LINE__);
-		}
-		StrCopy(&arg_stack[stack_len], *p);
-		stack_len += StrLength(*p);
-		arg_stack[stack_len] = 0;
-		stack_len++;
+	// Check if the total size exceeds our stack buffer limit
+	if (total_size > PROC_ORIGIN_STACK) {
+		plogerro("panic %s:%u - argument stack overflow", __FUNCIDEN__, __LINE__);
+		return -1;
 	}
-	return syscall(syscall_t::EXEC, _IMM(path), _IMM(arg_stack), stack_len);
+
+	// Layout the buffer: Pointers go first, Strings go after
+	char** ptr_array = (char**)arg_stack;
+	char* str_area = arg_stack + ptr_array_size;
+
+	for (int i = 0; i < argc; i++) {
+		// Store the absolute address of the string buffer within the current stack
+		ptr_array[i] = str_area;
+		
+		// Copy string data to the string area
+		int len = StrLength(argv[i]);
+		StrCopy(str_area, argv[i]);
+		str_area[len] = '\0'; // Ensure it is explicitly null-terminated
+		
+		// Move the string pointer forward for the next argument
+		str_area += len + 1;
+	}
+
+	// Terminate the argv array with NULL
+	ptr_array[argc] = nullptr;
+	
+	// Terminate the envp array with NULL (Empty environment)
+	// This is the shield that protects your strings from being parsed as pointers!
+	ptr_array[argc + 1] = nullptr;
+
+	return syscall(syscall_t::EXEC, _IMM(path), _IMM(arg_stack), total_size);
 }
 
 int execv(const char* path, char* argv[]);
 int execl(const char* path, const char* arg, ...)
 {
-	char* argv[_TEMP 8];
+	char* argv[_TEMP 16];
 	int argc = 0;
 	va_list args;
+	
 	argv[argc++] = (char*)arg;
 	va_start(args, arg);
 	while (argc < numsof(argv) - 1) {
 		char* next_arg = va_arg(args, char*);
 		argv[argc++] = next_arg;
 		// requires the argument list to be terminated by a NULL pointer
-		if (next_arg == 0) {
+		if (next_arg == nullptr || next_arg == 0) {
 			break;
 		}
 	}
 	va_end(args);
-	argv[argc] = 0;
+	
+	// Force ensure the last element is NULL
+	argv[argc] = nullptr; 
 	return execv(path, argv);
 }
+
 int execv(const char* path, char* argv[])
 {
-	char** p = argv;
 	char arg_stack[PROC_ORIGIN_STACK];
-	int stack_len = 0;
+	int argc = 0;
+	int str_bytes = 0;
 
-	while(*p++) {
-		if (stack_len + 2 * sizeof(char*) < PROC_ORIGIN_STACK); else {
-			plogerro("panic %s:%u", __FUNCIDEN__, __LINE__);
-		}
-		stack_len += sizeof(char*);
+	// Calculate argument count and string sizes
+	while (argv[argc] != nullptr && argv[argc] != 0) {
+		str_bytes += StrLength(argv[argc]) + 1;
+		argc++;
 	}
 
-	*((char**)(&arg_stack[stack_len])) = nullptr;
-	stack_len += sizeof(char*);
+	// Layout memory sizes (argc + 1 for argv NULL, + 1 for envp NULL)
+	int ptr_array_size = (argc + 2) * sizeof(char*);
+	int total_size = ptr_array_size + str_bytes;
 
-	char ** q = (char**)arg_stack;
-	for (p = argv; *p != 0; p++) {
-		*q++ = &arg_stack[stack_len];
-		if (stack_len + StrLength(*p) + 1 < PROC_ORIGIN_STACK); else {
-			plogerro("panic %s:%u", __FUNCIDEN__, __LINE__);
-		}
-		StrCopy(&arg_stack[stack_len], *p);
-		stack_len += StrLength(*p);
-		arg_stack[stack_len] = 0;
-		stack_len++;
+	if (total_size > PROC_ORIGIN_STACK) {
+		plogerro("panic %s:%u - argument stack overflow", __FUNCIDEN__, __LINE__);
+		return -1;
 	}
-	return syscall(syscall_t::EXET, _IMM(path), _IMM(arg_stack), stack_len);
+
+	// Fill the pointers and copy the strings
+	char** ptr_array = (char**)arg_stack;
+	char* str_area = arg_stack + ptr_array_size;
+
+	for (int i = 0; i < argc; i++) {
+		ptr_array[i] = str_area;
+		
+		int len = StrLength(argv[i]);
+		StrCopy(str_area, argv[i]);
+		str_area[len] = '\0';
+		
+		str_area += len + 1;
+	}
+
+	// Terminate argv array
+	ptr_array[argc] = nullptr;
+	
+	// Terminate envp array (Empty environment)
+	ptr_array[argc + 1] = nullptr;
+
+	return syscall(syscall_t::EXET, _IMM(path), _IMM(arg_stack), total_size);
 }

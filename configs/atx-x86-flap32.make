@@ -82,7 +82,7 @@ build: clean lib $(cppobjs)
 		-o $(uobjpath)/sapp-$(arch)/init $(uherpath)/COTLAB/src/cotlab.cpp -L$(uobjpath)/accm-$(arch) -l$(arch)
 	echo MK subappc
 	g++ -I$(uincpath) $(flag) -m32 $(CXF) $(CXW) -std=c++2a \
-		subapps/hellocpp/* -o $(uobjpath)/sapp-$(arch)/c  -L$(uobjpath)/accm-$(arch) -l$(arch)
+		subapps/hellocpp/* -o $(uobjpath)/sapp-$(arch)/c  -L$(uobjpath)/accm-$(arch) -l$(arch) -e _start
 	echo MK hello-rust
 	@cd subapps/hellorust/ && cargo build --release --target ../../configs/Rust/target/cargo-i686.json
 	# --- write out ---

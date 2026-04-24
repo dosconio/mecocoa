@@ -19,7 +19,8 @@ int main(int argc, char** argv)
 
 	#if 1
 	
-	rostr filename = "/mnt33/owo.txt";
+	// rostr filename = "/mnt33/owo.txt";
+	rostr filename = "/md0/owo.txt";
 	
 	int fd = sysopen(filename);
 	if (fd < 0) {

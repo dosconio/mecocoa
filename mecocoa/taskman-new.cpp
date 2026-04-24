@@ -431,7 +431,7 @@ ProcessBlock* Taskman::CreateFork(ProcessBlock* fo, const CallgateFrame* frame) 
 	pb->thread_list_head = tb;
 	tb->parent_process = pb;
 
-	#if _MCCA == 0x8632
+	#if _MCCA == 0x8632 || _MCCA == 0x8664
 	// check undone and duplicate operations
 	// 1. Context
 	// 2. Copy segmants and stack
@@ -492,6 +492,17 @@ ProcessBlock* Taskman::CreateFork(ProcessBlock* fo, const CallgateFrame* frame) 
 	tb->context.BP = frame->bp;
 	tb->context.IP = frame->ip;
 	tb->context.SP = frame->sp0;
+	#if _MCCA == 0x8664
+	tb->context.GPR[8] = frame->r8;
+	tb->context.GPR[9] = frame->r9;
+	tb->context.GPR[10] = frame->r10;
+	tb->context.GPR[11] = frame->r11;
+	tb->context.GPR[12] = frame->r12;
+	tb->context.GPR[13] = frame->r13;
+	tb->context.GPR[14] = frame->r14;
+	tb->context.GPR[15] = frame->r15;
+	#endif
+	(tb->context.FLAG) |= 0x200;// IF
 
 	// ---- File ---- //
 	fo->sys_lock.Acquire();
@@ -546,59 +557,73 @@ ProcessBlock* Taskman::Exec(stduint parent, rostr usr_fullpath, void* usr_argsta
 	}
 
 	stduint argc = 0;
-	stduint argv_ptr = 0;
 	stduint new_sp = new_pb->main_thread->context.SP;
 
+	// Backup arguments from parent's address space
+	byte* temp_stack = nullptr;
 	if (stacklen > 0 && usr_argstack != nullptr) {
-		byte* temp_stack = new byte[stacklen];
+		temp_stack = new byte[stacklen];
 		if (!temp_stack) {
 			plogerro("%s: alloc temp_stack fail", __FUNCIDEN__);
 		}
 		else {
 			MemCopyP(temp_stack, kernel_paging, usr_argstack, parent_pb->paging, stacklen);
-			new_sp = (new_sp - stacklen) & ~_IMM(0xFlu);
-			stduint delta = new_sp - _IMM(usr_argstack);
-
-			char** q = (char**)temp_stack;
-			for (; *q != nullptr; q++, argc++) {
-				*q = (char*)(_IMM(*q) + delta);
-			}
-			MemCopyP((void*)new_sp, new_pb->paging, temp_stack, kernel_paging, stacklen);
-			argv_ptr = new_sp;
-			delete[] temp_stack;
 		}
 	}
+
+	// 8. Setup New Stack (Linux Flat Stack Layout - Cross Architecture)
+	if (temp_stack) {
+		// Align stack to 16 bytes first, then allocate space for argv array & strings
+		new_sp = (new_sp - stacklen - _TEMP 0x20) & ~_IMM(0xFlu);
+		stduint delta = new_sp - _IMM(usr_argstack);
+
+		char** q = (char**)temp_stack;
+		for (; *q != nullptr; q++, argc++) {
+			// Safely offset pointers using uintptr_t integer math
+			*q = (char*)((uintptr_t)(*q) + delta);
+		}
+		// Copy argv array and string data onto the new process stack
+		MemCopyP((void*)new_sp, new_pb->paging, temp_stack, kernel_paging, stacklen);
+		delete[] temp_stack;
+	}
 	else {
+		// If no args, just allocate space for a NULL pointer
 		new_sp = (new_sp - sizeof(stduint)) & ~_IMM(0xFlu);
 		stduint null_ptr = 0;
 		MemCopyP((void*)new_sp, new_pb->paging, &null_ptr, kernel_paging, sizeof(stduint));
-		argv_ptr = new_sp;
 	}
 
-	// [!] Unconditionally construct the C standard call frame for _start
+	// ==============================================================
+	// Push 'argc' right above the 'argv' array to match Linux ABI
+	// Layout will be: [SP] -> argc, [SP+size] -> argv[0], ...
+	// This layout is universally valid for x86 (32-bit) and x64 (64-bit)
+	// ==============================================================
+	new_sp -= sizeof(stduint);
+	MemCopyP((void*)new_sp, new_pb->paging, &argc, kernel_paging, sizeof(stduint));
+
+	// Apply Context
 	#if (_MCCA & 0xFF00) == 0x8600
 
-	// Construct standard C call frame for x86: [Dummy Return IP, argc, argv]
-	struct C_CallFrame {
-		stduint dummy_return_ip;
-		stduint argc;
-		stduint argv;
-	};
+	// x86 & x64 Context
+	// Note: DO NOT set DI/SI registers here. The user-space _start will pop them natively!
+	// For x86: _start will 'pop eax'
+	// For x64: _start will 'pop rdi'
+	new_pb->main_thread->context.SP = new_sp;
 
-	C_CallFrame frame = { 0, argc, argv_ptr };
-	new_sp = new_sp & ~_IMM(0xFlu);
-	// System V ABI : ESP % 16 == 12
-	new_sp = new_sp - 20;// new_sp -= sizeof(call_frame);
-	MemCopyP((void*)new_sp, new_pb->paging, (void*)&frame, kernel_paging, sizeof(frame));
-	new_pb->main_thread->context.SP = new_sp;	// esp = new stack pointer
+	treat<uint32>(&new_pb->main_thread->context.floating_point_context[24]) = 0x1F80; // Reset FPU
+	SetSegment(&new_pb->main_thread->context);
+	new_pb->main_thread->unsolved_msg = nullptr;
+	new_pb->main_thread->block_reason = ThreadBlock::BlockReason::BR_None;
 
 	#elif (_MCCA & 0xFF00) == 0x1000
 
-	new_pb->main_thread->context.a0 = argc; // a0 = argc
-	new_pb->main_thread->context.a1 = argv_ptr; // a1 = argv
-	new_pb->main_thread->context.sp = new_sp; // sp = new stack pointer
+	// For RISC-V, ABI dictates argc in a0, and argv pointer in a1
+	new_pb->main_thread->context.a0 = argc;
+	new_pb->main_thread->context.a1 = new_sp + sizeof(stduint); // Point to argv[0] directly
+	new_pb->main_thread->context.sp = new_sp;
 
 	#endif
+
 	new_pb->focus_tty = parent_pb->focus_tty;
 	Taskman::Append(new_pb);
 	Taskman::AppendThread(new_pb->main_thread);
@@ -703,66 +728,68 @@ ProcessBlock* Taskman::Exet(stduint parent, rostr usr_fullpath, void* usr_argsta
 	}
 	delete[] block_buffer;
 
-	// 8. Setup New Stack & C ABI Call Frame
+	// 8. Setup New Stack (Linux Flat Stack Layout - Cross Architecture)
 	stduint argc = 0;
-	stduint argv_ptr = 0;
 	const stduint stack_loc_top = _IMM(current_pb->main_thread->stack_lineaddr) + current_pb->main_thread->stack_size;
 	stduint new_sp = stack_loc_top;
 
 	if (temp_stack) {
-		new_sp = (new_sp - stacklen) & ~_IMM(0xFlu);
+		// Align stack to 16 bytes first, then allocate space for argv array & strings
+		new_sp = (new_sp - stacklen - _TEMP 0x20) & ~_IMM(0xFlu);
 		stduint delta = new_sp - _IMM(usr_argstack);
 
 		char** q = (char**)temp_stack;
 		for (; *q != nullptr; q++, argc++) {
-			*q = (char*)(_IMM(*q) + delta);
+			*q = (char*)((uintptr_t)(*q) + delta);
 		}
+		// Copy argv array and string data onto the user stack
 		MemCopyP((void*)new_sp, current_pb->paging, temp_stack, kernel_paging, stacklen);
-		argv_ptr = new_sp;
 		delete[] temp_stack;
 	}
 	else {
+		// If no args, just allocate space for a NULL pointer
 		new_sp = (new_sp - sizeof(stduint)) & ~_IMM(0xFlu);
 		stduint null_ptr = 0;
 		MemCopyP((void*)new_sp, current_pb->paging, &null_ptr, kernel_paging, sizeof(stduint));
-		argv_ptr = new_sp;
 	}
 
+	// ==============================================================
+	// Push 'argc' right above the 'argv' array to match Linux ABI
+	// Layout will be: [SP] -> argc, [SP+size] -> argv[0], ...
+	// This layout is universally valid for x86 (32-bit) and x64 (64-bit)
+	// ==============================================================
+	new_sp -= sizeof(stduint);
+	MemCopyP((void*)new_sp, current_pb->paging, &argc, kernel_paging, sizeof(stduint));
+
+	// Apply Context
 	#if (_MCCA & 0xFF00) == 0x8600
 
-	struct C_CallFrame {
-		stduint dummy_return_ip;
-		stduint argc;
-		stduint argv;
-	};
-	C_CallFrame frame = { 0, argc, argv_ptr };
-	// System V ABI 16-byte alignment + margin
-	new_sp = new_sp & ~_IMM(0xFlu);
-	new_sp = new_sp - 48;
-	MemCopyP((void*)new_sp, current_pb->paging, &frame, kernel_paging, sizeof(frame));
 	current_pb->main_thread->context.AX = 0;
 	current_pb->main_thread->context.CX = 0;
+
+	// Note: DO NOT set DI/SI registers here. The user-space _start will pop them natively!
+	// For x86: _start will 'pop eax'
+	// For x64: _start will 'pop rdi'
 	current_pb->main_thread->context.SP = new_sp;
+
 	treat<uint32>(&current_pb->main_thread->context.floating_point_context[24]) = 0x1F80; // Reset FPU
 	SetSegment(&current_pb->main_thread->context);
 	current_pb->main_thread->unsolved_msg = nullptr;
 	current_pb->main_thread->block_reason = ThreadBlock::BlockReason::BR_None;
-	//{} more to zero?
 
 	#elif (_MCCA & 0xFF00) == 0x1000
 
-	new_sp = (new_sp & ~_IMM(0xFlu)) - 0x10;
+	// For RISC-V, ABI dictates argc in a0, and argv pointer in a1
 	current_pb->main_thread->context.a0 = argc;
-	current_pb->main_thread->context.a1 = argv_ptr;
+	current_pb->main_thread->context.a1 = new_sp + sizeof(stduint); // Point to argv[0] directly
 	current_pb->main_thread->context.sp = new_sp;
+
 	#endif
-	
+
 	using TBS = ThreadBlock::State;
 	if (current_pb->main_thread->state != TBS::Ready) {
 		current_pb->main_thread->state = TBS::Ready;
 	}
-	// DumpTask(current_pb);
 	Taskman::EnqueueReady(current_pb->main_thread);
 	return current_pb;
 }
-

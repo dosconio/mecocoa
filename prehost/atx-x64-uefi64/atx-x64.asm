@@ -140,9 +140,13 @@ tryUD:
 	POP  R15
 %endmacro
 
+; SYSCALL convention: RCX=user_RIP, R11=user_RFLAGS, RSP=user_RSP (unchanged)
+; Mecocoa ABI:  RAX=syscall#, RDI=p1, RSI=p2, RDX=p3
 GLOBAL Handint_SYSCALL_Entry
-EXTERN SYSCALL_TABLE
+EXTERN Handint_SYSCALL
 Handint_SYSCALL_Entry:
+	PUSH RSP
+	PUSH RAX
 	PUSH R15
 	PUSH R14
 	PUSH R13
@@ -157,24 +161,10 @@ Handint_SYSCALL_Entry:
 	PUSH RBX
 	PUSH RDX
 	PUSH RCX; original RIP
-	MOV  ECX, DS
-	PUSH RCX
-	MOV  ECX, ES
-	PUSH RCX
-	MOV  ECX, FS
-	PUSH RCX
-	MOV  ECX, GS
-	PUSH RCX
-	MOV  ECX, SegData
-	MOV  DS, ECX
-	MOV  ES, ECX
-	MOV  FS, ECX
-	MOV  GS, ECX
 	;
 	MOV RCX, R10
 	MOV RBP, RSP
 	AND RSP, 0xFFFFFFFFFFFFFFF0
-	AND EAX, 0x7FFFFFFF
 
 	PUSH RBP
 	PUSH RDI
@@ -198,22 +188,17 @@ Handint_SYSCALL_Entry:
 	PUSH R11
 	PUSH R12
 	MOV RCX, R10
-	STI
-	CALL [SYSCALL_TABLE + 8 * EAX]; -> RAX; rbx, r12-r15: callee-saved
+	; STI
+	; Handint_SYSCALL(CallgateFrame* RDI)
+	MOV  RDI, RBP; skip PG_PUSH's 2 qword
+	CALL Handint_SYSCALL; -> RAX; rbx, r12-r15: callee-saved
 	MOV R12, RAX
 	CLI
 	CALL PG_POP
 
 	MOV RSP, RBP
 	MOV RAX, R12
-	POP  RCX
-	MOV  GS, ECX
-	POP  RCX
-	MOV  FS, ECX
-	POP  RCX
-	MOV  ES, ECX
-	POP  RCX
-	MOV  DS, ECX
+	;
 	POP  RCX
 	POP  RDX
 	POP  RBX
@@ -228,6 +213,8 @@ Handint_SYSCALL_Entry:
 	POP  R13
 	POP  R14
 	POP  R15
+	ADD  RSP, 0x8
+	POP  RSP
 O64 SYSRET
 
 

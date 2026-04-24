@@ -11,23 +11,23 @@ enum
 	#endif
 {
 	OUTC = 0x00, // outstr (chr/str, len)->0  |.x86 x64 rv
-	INNC = 0x01, // innstr (blocked)->ASCII>0 | x86 rv
+	INNC = 0x01, // innstr (blocked)->ASCII>0 | x86 x64 rv
 	EXIT = 0x02, // exit   (code)             | x86 x64 rv
-	TIME = 0x03, // getsec (0sec/1ms)->second | x86
-	REST = 0x04, // halt   (unit, time)       | x86
+	TIME = 0x03, // getsec (0sec/1ms)->second | x86 x64
+	REST = 0x04, // halt   (unit, time)       | x86 x64
 	COMM = 0x05, // syncom (mod, obj, &msg)   | x86 x64 rv
-	OPEN = 0x06, // open   (path,flags)>=0    | x86
-	CLOS = 0x07, // close  (fd)->0            | x86
-	READ = 0x08, // read   (fd, adr, len)->len| x86
-	WRIT = 0x09, // write  (fd, adr, len)->len| x86
-	DELF = 0x0A, // remove (pathname)->?      | x86
+	OPEN = 0x06, // open   (path,flags)>=0    | x86 x64
+	CLOS = 0x07, // close  (fd)->0            | x86 x64
+	READ = 0x08, // read   (fd, adr, len)->len| x86 x64
+	WRIT = 0x09, // write  (fd, adr, len)->len| x86 x64
+	DELF = 0x0A, // remove (pathname)->?      | x86 x64
 	//=0x0B{} proper&enumer
 	//=0x0C{} 
-	WAIT = 0x0D, // wait   (&status)->pid     | x86
-	FORK = 0x0E, // fork   ()->pid            | x86
-	TMSG = 0x0F, // trymsg ()->(msg_unsovled) | x86 rv
-	EXEC = 0x10, // spawnl (path,args,len)->0 | x86
-	EXET = 0x11, // execl  (path,args,len)->0 | x86
+	WAIT = 0x0D, // wait   (&status)->pid     | x86 x64
+	FORK = 0x0E, // fork   ()->pid            | x86 x64
+	TMSG = 0x0F, // trymsg ()->(msg_unsovled) | x86 x64 rv
+	EXEC = 0x10, // spawnl (path,args,len)->0 | x86 x64
+	EXET = 0x11, // execl  (path,args,len)->0 | x86 x64
 	MALC = 0x12, // malloc (pages)->addr>0    | 
 
 	GET_CORE_ID, // | rv

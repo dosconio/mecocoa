@@ -211,11 +211,6 @@ void serv_file_loop()// for IDE 0:0, 0:1
 			p->focus_tty = vttys[ento_gui ? 1 : 0];
 			Taskman::Append(p);
 			Taskman::AppendThread(p->main_thread);
-			//
-			p = Taskman::CreateFile(("/md0/appa.elf"), RING_U, Task_Kernel);
-			p->focus_tty = vttys[ento_gui ? 1 : 0];
-			Taskman::Append(p);
-			Taskman::AppendThread(p->main_thread);
 
 			#elif (_MCCA & 0xFF00) == 0x1000
 			syssend(Task_Memdisk_Serv, &retval, sizeof(retval[0]), _IMM(FiledevMsg::RUPT));
