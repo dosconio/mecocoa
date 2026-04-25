@@ -41,7 +41,16 @@ enum class ConsoleMsg {
 extern unsigned current_screen_TTY;// focus
 
 #if (_MCCA & 0xFF00) == 0x8600
-extern uni::LayerManager global_layman;
+class LayerManager2 : public uni::LayerManager {
+public:
+	using LayerManager::LayerManager;
+	bool lazy_update = false;
+	// Request an update, if lazy_update is true, it just adds to dirty area
+	virtual void Update(SheetTrait* who, const Rectangle& rect) override;
+	// Force the update immediately (Composition)
+	void UpdateForce(SheetTrait* who, const Rectangle& rect);
+};
+extern LayerManager2 global_layman;
 #endif
 
 #if _MCCA == 0x8632

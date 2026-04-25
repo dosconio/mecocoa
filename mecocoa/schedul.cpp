@@ -382,6 +382,7 @@ auto Taskman::Schedule(bool omit_slice)->decltype(Schedule())
 	switching_out_threads[cpuid] = old_tb;
 
 	scheduler_lock.Release(old_if);
+	// ploginfo("[CPU%u]SCH: Th%u -> Th%u", cpuid, old_tb->tid, new_tb->tid);
 	SwitchTaskContext(&new_tb->context, &old_tb->context);
 }
 #else

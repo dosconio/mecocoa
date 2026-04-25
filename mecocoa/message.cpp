@@ -17,16 +17,15 @@ extern uni::witch::control::TextBox* ptext_1;
 extern void sysmsg_kbd(keyboard_event_t kbd_event);
 extern uni::Dchain TimerManager;
 extern bool ento_gui;
-extern uni::LayerManager global_layman;
 extern uni::VideoControlInterface* real_pvci;
 void _Comment(R0) serv_sysmsg() {
 	#if _MCCA == 0x8664 && defined(_UEFI)
+	global_layman.lazy_update = _GUI_DOUBLE_BUFFER;// Only enable lazy mode if double buffering is enabled
 	while (true) {
 		IC.enAble(false);
 		// auto crt_tick = tick;
 		if (!message_queue.Count()) {
 			IC.enAble(true);
-			// SwitchTaskContext(&task_b_ctx, &task_kernel_ctx);
 			HALT();
 			continue;
 		}
@@ -53,8 +52,12 @@ void _Comment(R0) serv_sysmsg() {
 			break;
 		case SysMessage::RUPT_FLUSH:
 			if (ento_gui && real_pvci && global_layman.sheet_buffer) {
-				if (msg.args.rect.w > 0 && msg.args.rect.h > 0)
+				if (msg.args.rect.w > 0 && msg.args.rect.h > 0) {
+					// Perform delayed composition (Layer Blending)
+					global_layman.UpdateForce(nullptr, msg.args.rect.toRectangle());
+					// Flush back-buffer to physical screen
 					real_pvci->DrawPoints(msg.args.rect.toRectangle(), global_layman.sheet_buffer);
+				}
 			}
 			break;
 		default:

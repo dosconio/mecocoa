@@ -134,18 +134,60 @@ void LayerManager::Dorupt(SheetTrait* who, SheetEvent event, Point rel_p, para_l
 	}
 }
 
+void LayerManager2::Update(SheetTrait* who, const Rectangle& rect) {
+	Rectangle abs_rect = who ? who->sheet_area : window;
+	abs_rect.x += rect.x;
+	abs_rect.y += rect.y;
+	// Mark the area as dirty for the next flush cycle
+	this->AddDirty(Rectangle(Point(abs_rect.x, abs_rect.y), Size2(rect.width, rect.height)));
+	if (!lazy_update) {
+		UpdateForce(who, rect);
+	}
+}
+
+void LayerManager2::UpdateForce(SheetTrait* who, const Rectangle& rect) {
+	if (!this) return;
+	// Local VCI for blending into the sheet_buffer (back-buffer)
+	VideoControlInterfaceMARGB8888 vcim(sheet_buffer, window.getSize());
+	Rectangle abs_rect = who ? who->sheet_area : window;
+	abs_rect.x += rect.x;
+	abs_rect.y += rect.y;
+	// Iterate through the rectangle and composite layers
+	for0(i, rect.height) {
+		Point point(abs_rect.x + 0, abs_rect.y + i);
+		if (point.y >= window.height) break;
+		for0(j, rect.width) {
+			if (point.x >= window.width) break;
+			if (sheet_buffer) {
+				vcim.DrawPoint(point, EvaluateColor(point));
+			}
+			else if (pvci) pvci->DrawPoint(point, EvaluateColor(point));
+			point.x++;
+		}
+	}
+	// Propagate to parent if exists
+	if (sheet_parent) {
+		sheet_parent->Update(this, Rectangle(
+			Point(abs_rect.x, abs_rect.y),
+			Size2(rect.width, rect.height)
+		));
+	}
+}
+
 #endif
 
 // ---- ---- ---- ---- . ---- ---- ---- ----
 
 static SysMessage _BUF_Message_Conv[64];
 uni::Queue<SysMessage> message_queue_conv(_BUF_Message_Conv, numsof(_BUF_Message_Conv));
+extern uni::VideoControlInterface* real_pvci; // Declared for serv_graf_loop
 void serv_graf_loop() {
 	SysMessage msg;// Inner Module Message System
+	global_layman.lazy_update = _GUI_DOUBLE_BUFFER;// Only enable lazy mode if double buffering is enabled
 	#if _GUI_ENABLE == 0
 	loop Taskman::Schedule(true);// yield
 	#endif
-	#if (_MCCA == 0x8632)
+	#if (_MCCA == 0x8632) || (_MCCA == 0x8664)
 	while (true) {
 		IC.enAble(false);
 		if (!message_queue_conv.Count()) {
@@ -159,6 +201,18 @@ void serv_graf_loop() {
 		switch (msg.type) {
 		case SysMessage::RUPT_MOUSE:
 			hand_mouse(msg.args.mou_event);
+			break;
+		case SysMessage::RUPT_FLUSH:
+			// Asynchronous rendering: Compose and then Flush to screen
+			if (ento_gui && global_layman.pvci && global_layman.sheet_buffer) {
+				if (msg.args.rect.w > 0 && msg.args.rect.h > 0) {
+					// Perform delayed composition (Layer Blending)
+					global_layman.UpdateForce(nullptr, msg.args.rect.toRectangle());
+					// Flush back-buffer to physical screen
+					if (real_pvci)
+						real_pvci->DrawPoints(msg.args.rect.toRectangle(), global_layman.sheet_buffer);
+				}
+			}
 			break;
 		default:
 			plogerro("%s Unknown message type: %d", __FUNCIDEN__, msg.type);
@@ -321,11 +375,11 @@ void GloScreenABGR8888::DrawPoints(const Rectangle& rect, const Color* base) con
 // Double Buffer
 #if (_MCCA & 0xFF00) == 0x8600
 extern bool ento_gui;
-extern uni::LayerManager global_layman;
-extern VideoControlInterface* real_pvci;
+extern LayerManager2 global_layman; // Updated to LayerManager2
+extern uni::VideoControlInterface* real_pvci;
 void RenderFrameFlush() {
-	if (!enable_dubuffer) return;
 	global_layman.CheckTimers(tick);
+	if (!enable_dubuffer) return;
 	if (ento_gui && global_layman.pvci && global_layman.is_dirty) {
 		static uint64 last_flush_time = 0;
 		if (tick - last_flush_time >= 5) { // 100 FPS target (10ms)
@@ -359,8 +413,8 @@ void RenderFrameFlush() {
 			#if _MCCA == 0x8664
 			message_queue.Enqueue(msg);
 			#elif _MCCA == 0x8632
-			if (real_pvci && w > 0 && h > 0)
-				real_pvci->DrawPoints(msg.args.rect.toRectangle(), global_layman.sheet_buffer);
+			// Enqueue the flush message to be handled by serv_graf_loop
+			message_queue_conv.Enqueue(msg);
 			#endif
 
 			last_flush_time = tick;
