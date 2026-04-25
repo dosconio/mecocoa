@@ -29,19 +29,6 @@ struct Syscall {
 	}
 };
 
-void TaskB() {
-	ploginfo("TaskB");
-	stduint cnt = 0;
-	extern uni::witch::control::Label* plabel_1;
-	while (1) {
-		// IC.enAble(false);
-		plabel_1->text = String::newFormat("t%u", cnt++);
-		plabel_1->doshow(0);
-		// IC.enAble(true);
-		HALT(); // SwitchTaskContext(&task_kernel_ctx, &task_b_ctx);
-	}
-}
-
 // ---- Kernel
 
 extern "C" //__attribute__((ms_abi))

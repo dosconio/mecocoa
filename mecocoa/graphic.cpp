@@ -183,9 +183,10 @@ uni::Queue<SysMessage> message_queue_conv(_BUF_Message_Conv, numsof(_BUF_Message
 extern uni::VideoControlInterface* real_pvci; // Declared for serv_graf_loop
 void serv_graf_loop() {
 	SysMessage msg;// Inner Module Message System
-	global_layman.lazy_update = _GUI_DOUBLE_BUFFER;// Only enable lazy mode if double buffering is enabled
 	#if _GUI_ENABLE == 0
 	loop Taskman::Schedule(true);// yield
+	#else
+	global_layman.lazy_update = _GUI_DOUBLE_BUFFER;// Only enable lazy mode if double buffering is enabled
 	#endif
 	#if (_MCCA == 0x8632) || (_MCCA == 0x8664)
 	while (true) {

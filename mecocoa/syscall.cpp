@@ -211,9 +211,7 @@ DEFSYSC sysc_READ(stduint fd, stduint addr, stduint len) {
 
 			stduint bytes_read = open_buf[0];
 			if (bytes_read == 0) {
-				stduint msgbuf[4];
-				msgbuf[3] = pb->getID();
-				syssend(Task_Console, msgbuf, byteof(msgbuf), _IMM(ConsoleMsg::INNC));
+				syssend(Task_Console, 0, 0, _IMM(ConsoleMsg::INNC));
 				stduint ret;
 				sysrecv(Task_Console, &ret, byteof(ret));
 				if (ret == ~_IMM0) break;

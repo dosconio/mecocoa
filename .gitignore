@@ -1,6 +1,6 @@
 .obsidian/
 Cargo.lock
-subapps/hellorust/target/
+subapps/_hello/rust/target/
 *.o
 *.ignore
 

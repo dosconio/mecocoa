@@ -1,5 +1,5 @@
 //#include <c/stdinc.h>
-#include "../../accmlib/inc/aaaaa.h"
+#include "../accmlib/inc/aaaaa.h"
 #include "c/consio.h"
 
 using namespace uni;
@@ -17,7 +17,7 @@ int main(int argc, char** argv)
 	}// delay 3 s
 
 
-	#if 1
+	#if 0
 	
 	// rostr filename = "/mnt33/owo.txt";
 	rostr filename = "/md0/owo.txt";
@@ -45,6 +45,15 @@ int main(int argc, char** argv)
 	}
 
 	sys_removefil(filename);
+	#endif
+
+	#if 1
+	stduint buf[4] = {21};
+	CommMsg msg;
+	msg.data.address = _IMM(buf);
+	msg.data.length = sizeof(buf);
+	msg.type = 4;// ConsoleMsg::FNEW;
+	syscomm(1, Task_Console, &msg);
 	#endif
 
 

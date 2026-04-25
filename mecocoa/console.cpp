@@ -161,34 +161,22 @@ void _Comment(R1) serv_cons_loop()
 		// Process potential message
 		if (syscall(syscall_t::TMSG)) {
 			sysrecv(ANYPROC, (void*)to_args, byteof(to_args), (usize*)&sig_type, (usize*)&sig_src);
-			ProcessBlock* pb = Taskman::Locate(to_args[3]);
+			auto th = Taskman::LocateThread(sig_src);
 			switch (ConsoleMsg(sig_type)) {
 			case ConsoleMsg::TEST: break;
 
 			#ifdef _ARC_x86 // x86:
 			case ConsoleMsg::READ:
-				to_args[0] &= _IMM1S(dev_domain_bits) - 1;
-				//{TODO}
+				_TODO
 				break;
 			case ConsoleMsg::WRIT:
-				ret = StrCopyP(cons_buffer, kernel_paging,
-					(char*)to_args[1], pb->paging, to_args[2]);
-				// if (get_drv_pid(to_args[0]) == 4)
-				//{TODO} 0x1000 and to_args[2]
-				if (((_IMM1S(dev_domain_bits) - 1) & to_args[0]) == 0) {
-					
-					// LocateTTY(0xFF & to_args[0])->out(cons_buffer, ret);
-				}
-				syssend(sig_src, (void*)&ret, sizeof(ret), 0);
+				_TODO
 				break;
 			#endif
 
-			case ConsoleMsg::INNC:
-			{
-				// ReadChar(ASCII): normal \n \r ...
-				ProcessBlock* pb = Taskman::Locate(to_args[3]);
-				if (!ifContainBlockedTTY(pb)) {
-					blocked_vtty_pid.Append(pb->getID());
+			case ConsoleMsg::INNC:// ReadChar(ASCII): normal \n \r ...
+				if (!ifContainBlockedTTY(th->parent_process)) {
+					blocked_vtty_pid.Append(th->parent_process->getID());
 					// ploginfo("Blocked TTY %u by %u", pb->focus_tty, pb->getID());
 				}
 				else {
@@ -196,9 +184,12 @@ void _Comment(R1) serv_cons_loop()
 					syssend(sig_src, (void*)&ret, sizeof(ret), 0);
 				}
 				break;
-			}
+			case ConsoleMsg::FNEW:
+				ploginfo("creating new form %[x]", to_args[0]);
+				break;
 
-			
+
+
 
 
 			default:
@@ -225,10 +216,7 @@ LayerManager2 global_layman;
 extern UefiData uefi_data;
 #endif
 
-::uni::Witch::Form form0, form1, form2;
-
-uni::witch::control::Label* plabel_1;
-uni::witch::control::TextBox* ptext_1;
+::uni::Witch::Form form2;
 
 void enable_2buffer() {
 	// Double Buffer
@@ -338,35 +326,7 @@ void cons_init() {
 	const Point cursor_pos = { 300,200 };
 	Cursor::global_cursor->setSheet(global_layman, cursor_pos);
 
-	// [demo] window
-	if (1) {
-		Rectangle rect{ Point(200, 40), Size2(160, 80) };
-		// Label
-		auto plabel = new uni::witch::control::Label("QwQ~");
-		plabel->sheet_area = Rectangle(Point(0, 0), Size2(8 * 5, 16));
-		plabel->doshow(0);
-		plabel_1 = plabel;
-
-		form0.Title = "Ciallo~>v<";// new (&form0.Title) String((char*)form0_title_text, sizeof(form0_title_text));
-		form0.AppendControl(plabel);
-		form0.setSheet(global_layman, rect, (Color*)mem.allocate(rect.getArea() * sizeof(Color)));
-		global_layman.Append(&form0);
-	}
-	if (1) {
-		Rectangle rect{ Point(400, 40), Size2(160, 80) };
-		auto ptext = new uni::witch::control::TextBox();
-		ptext->sheet_area = Rectangle(Point(2, 2), Size2(8 * 18, 25));
-		ptext->doshow(0);
-		ptext_1 = ptext;
-
-		form1.Title = "Test TextBox";
-		form1.AppendControl(ptext);
-		form1.setSheet(global_layman, rect, (Color*)mem.allocate(rect.getArea() * sizeof(Color)));
-		form1.setFocus(ptext);
-		global_layman.Append(&form1);
-		ptext->Start();
-	}
-	if (1) {
+	if (_TEMP 1) {
 		Rectangle rect{ Point(250, 160), Size2(480, 320) };
 		auto pcon = new VideoConsole2(NULL,
 			Rectangle(Point(2, 2), Size2(470, 290)),
@@ -388,7 +348,7 @@ void cons_init() {
 		pcon->Start();
 
 		VTTY_Append((pcon));
-	}
+	}// should follow 'init'
 
 	global_layman.Append(vcon0);
 

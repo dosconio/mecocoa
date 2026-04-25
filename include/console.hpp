@@ -36,6 +36,7 @@ enum class ConsoleMsg {
 	READ,// R (dev, addr, len, pid)
 	WRIT,// W (dev, addr, len, pid)
 	INNC,//   (., ., ., pid) noreturn
+	FNEW,// new-form    ()
 };
 
 extern unsigned current_screen_TTY;// focus
