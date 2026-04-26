@@ -122,6 +122,19 @@ int KeyboardBridge::out(const char* str, stduint len) {
 			}
 		}
 	}
+	// Render the bottom ribbon
+	#if !_GUI_ENABLE
+	struct element { byte ch; byte attr; };
+	Letvar(Ribbon, element*, (_VIDEO_ADDR_BUFFER + 80 * 2 * 24));
+	if (!ento_gui && current_screen_TTY == 0) {
+		Ribbon[0].attr = kbd_state.mod.l_ctrl ? 0x70 : 0x07;
+		Ribbon[1].attr = kbd_state.mod.l_shift ? 0x70 : 0x07;
+		Ribbon[2].attr = kbd_state.mod.l_alt ? 0x70 : 0x07;
+		Ribbon[77].attr = kbd_state.mod.r_alt ? 0x70 : 0x07;
+		Ribbon[78].attr = kbd_state.mod.r_shift ? 0x70 : 0x07;
+		Ribbon[79].attr = kbd_state.mod.r_ctrl ? 0x70 : 0x07;
+	}
+	#endif
 	return 0;
 }
 

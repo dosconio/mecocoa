@@ -375,9 +375,31 @@ void GloScreenABGR8888::DrawPoints(const Rectangle& rect, const Color* base) con
 
 // Double Buffer
 #if (_MCCA & 0xFF00) == 0x8600
-extern bool ento_gui;
-extern LayerManager2 global_layman; // Updated to LayerManager2
 extern uni::VideoControlInterface* real_pvci;
+void enable_2buffer() {
+	// Double Buffer
+	//{} put off
+	#if _GUI_DOUBLE_BUFFER
+	auto vcon0_size = global_layman.window.getArea() * sizeof(Color);
+	global_layman.sheet_buffer = (Color*)mem.allocate(vcon0_size);
+	if (!global_layman.sheet_buffer) {
+		plogerro("Failed to allocate back buffer for Layman");
+	} else {
+		global_layman.sheet_area = global_layman.window;
+		for0(i, global_layman.window.getArea()) {
+			global_layman.sheet_buffer[i] = Color::Black;
+		}
+		// Redirect global_layman's VCI to point to our back-buffer
+		extern VideoControlInterface* real_pvci;
+		real_pvci = global_layman.pvci;
+		// Allocate a static VCI for the back-buffer
+		static byte _BUF_VCI[sizeof(VideoControlInterfaceMARGB8888)];
+		VideoControlInterfaceMARGB8888* back_vci = new (_BUF_VCI) VideoControlInterfaceMARGB8888(global_layman.sheet_buffer, global_layman.window.getSize());
+		global_layman.pvci = back_vci;
+	}
+	enable_dubuffer = true;
+	#endif
+}
 void RenderFrameFlush() {
 	global_layman.CheckTimers(tick);
 	if (!enable_dubuffer) return;

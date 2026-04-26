@@ -75,13 +75,13 @@ stduint ProcessBlock::Rdwt(bool wr_type, stduint fid, Slice slice)
 		int bytes_processed = 0;
 
 		if (wr_type) {
-			MemCopyP(::buffer, kernel_paging, (void*)curr_addr, pb->paging, chunk);
+			MccaMemCopyP(::buffer, NULL, (void*)curr_addr, pb, chunk);
 			bytes_processed = Filesys::Write(file, ::buffer, chunk);
 		}
 		else {
 			bytes_processed = Filesys::Read(file, ::buffer, chunk);
 			if (bytes_processed > 0) {
-				MemCopyP((void*)curr_addr, pb->paging, ::buffer, kernel_paging, bytes_processed);
+				MccaMemCopyP((void*)curr_addr, pb, ::buffer, NULL, bytes_processed);
 			}
 		}
 
@@ -196,7 +196,6 @@ void serv_file_loop()// for IDE 0:0, 0:1
 			#ifdef _ARC_x86
 			syssend(Task_Hdd_Serv, &retval, sizeof(retval[0]), _IMM(FiledevMsg::RUPT));// while (!fileman_hd_ready);
 			if (plab) {
-				extern bool ento_gui;
 				ProcessBlock* p;
 				p = Taskman::CreateFile((*plab + "/init").reference(), RING_U, Task_Kernel);
 				p->focus_tty = vttys[ento_gui ? 1 : 0];

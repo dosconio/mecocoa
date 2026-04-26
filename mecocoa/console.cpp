@@ -94,24 +94,8 @@ void blink2() {
 
 
 //// ---- ---- DYNAMIC CORE ---- ---- ////
-#if 1
-
-char* cons_buffer;
-extern keyboard_state_t kbd_state;
-
-static bool ifContainBlockedTTY(ProcessBlock* ppb) {
-	for0(i, blocked_vtty_pid.Count()) {
-		if (Taskman::Locate(blocked_vtty_pid[i])->focus_tty == ppb->focus_tty) {
-			return true;
-		}
-	}
-	return false;
-}// To OPTIMIZE
-void _Comment(R1) serv_cons_loop()
-{
-	#ifdef _ARC_x86 // x86:
-	cons_buffer = (char*)Memory::physical_allocate(0x1000);
-	// mouse_buf[3] = 0;
+#ifdef _ARC_x86 // x86:
+static void InitializeBottomBar() {
 	// BCON:
 	struct element { byte ch; byte attr; };
 	Letvar(Ribbon, element*, (_VIDEO_ADDR_BUFFER + 80 * 2 * 24));
@@ -121,6 +105,79 @@ void _Comment(R1) serv_cons_loop()
 	Ribbon[77].ch = '+';
 	Ribbon[78].ch = '-';
 	Ribbon[79].ch = '^';
+}
+#endif
+
+#if 1
+static bool ifContainBlockedTTY(ProcessBlock* ppb) {
+	for0(i, blocked_vtty_pid.Count()) {
+		if (Taskman::Locate(blocked_vtty_pid[i])->focus_tty == ppb->focus_tty) {
+			return true;
+		}
+	}
+	return false;
+}// To OPTIMIZE
+
+struct FMT_ConsoleMsg_FNEW {
+	stduint pform_id;// in pforms
+	Rectangle* usrp_rect;
+};
+static stdsint ConsoleMsg_FNEW(const FMT_ConsoleMsg_FNEW* data, ProcessBlock* pb) {
+	//{TODO} pform_id
+	Rectangle rect; MccaMemCopyP(&rect, NULL, data->usrp_rect, pb, sizeof(rect));
+	ploginfo("FNEW: new form (%u,%u)", rect.width, rect.height);
+	// Find an empty slot in pforms
+	stdsint slot_idx = -1;
+	for (stduint i = 0; i < _TEMP 4; i++) {
+		if (pb->pforms[i] == nullptr) {
+			slot_idx = i;
+			break;
+		}
+	}
+	if (slot_idx == -1) return -1;
+
+	// Create a new empty form
+	auto pfrm = new ::uni::Witch::Form();
+	if (!pfrm) return -1;
+	pfrm->Title = "New Form";
+
+	// Allocate and set sheet for the form
+	Color* sheet_buffer = (Color*)mem.allocate(rect.getArea() * sizeof(Color));
+	if (!sheet_buffer) {
+		delete pfrm;
+		return -1;
+	}
+	pfrm->setSheet(global_layman, rect, sheet_buffer);
+
+	// Register in global layer manager
+	global_layman.Append(pfrm);
+	// Move the new form to the second layer (behind the cursor)
+	Nnode* target = &pfrm->refSheetNode();
+	if (global_layman.subf && target != global_layman.subf) {
+		// Remove from the tail where Append put it
+		if (target->left) target->left->next = target->next;
+		if (global_layman.subl == target) global_layman.subl = target->left;
+		// Insert after the top layer (cursor)
+		Nnode* top = global_layman.subf;
+		Nnode* sec = top->next;
+		target->left = top;
+		target->next = sec;
+		top->next = target;
+		if (sec) sec->left = target;
+		else global_layman.subl = target;// target is now the new tail
+	}
+	global_layman.Update(pfrm, Rectangle(Point(0, 0), rect.getSize()));
+
+	// Store in process block pforms
+	pb->pforms[slot_idx] = pfrm;
+
+	return slot_idx;
+}
+
+void _Comment(R1) serv_cons_loop()
+{
+	#ifdef _ARC_x86 // x86:
+	InitializeBottomBar();
 	#endif
 
 	devfs_register_and_mount();
@@ -143,20 +200,6 @@ void _Comment(R1) serv_cons_loop()
 				syssend(pid, &val, byteof(val));
 			}
 		}
-
-		// Render the bottom ribbon
-		#ifdef _ARC_x86 // x86:
-		#if !_GUI_ENABLE
-		if (!ento_gui && current_screen_TTY == 0) {
-			Ribbon[0].attr = kbd_state.mod.l_ctrl ? 0x70 : 0x07;
-			Ribbon[1].attr = kbd_state.mod.l_shift ? 0x70 : 0x07;
-			Ribbon[2].attr = kbd_state.mod.l_alt ? 0x70 : 0x07;
-			Ribbon[77].attr = kbd_state.mod.r_alt ? 0x70 : 0x07;
-			Ribbon[78].attr = kbd_state.mod.r_shift ? 0x70 : 0x07;
-			Ribbon[79].attr = kbd_state.mod.r_ctrl ? 0x70 : 0x07;
-		}
-		#endif
-		#endif
 
 		// Process potential message
 		if (syscall(syscall_t::TMSG)) {
@@ -186,6 +229,8 @@ void _Comment(R1) serv_cons_loop()
 				break;
 			case ConsoleMsg::FNEW:
 				ploginfo("creating new form %[x]", to_args[0]);
+				ret = ConsoleMsg_FNEW((FMT_ConsoleMsg_FNEW*)to_args, th->parent_process);
+				syssend(sig_src, (void*)&ret, sizeof(ret), 0);
 				break;
 
 
@@ -216,32 +261,7 @@ LayerManager2 global_layman;
 extern UefiData uefi_data;
 #endif
 
-::uni::Witch::Form form2;
-
-void enable_2buffer() {
-	// Double Buffer
-	//{} put off
-	#if _GUI_DOUBLE_BUFFER
-	auto vcon0_size = global_layman.window.getArea() * sizeof(Color);
-	global_layman.sheet_buffer = (Color*)mem.allocate(vcon0_size);
-	if (!global_layman.sheet_buffer) {
-		plogerro("Failed to allocate back buffer for Layman");
-	} else {
-		global_layman.sheet_area = global_layman.window;
-		for0(i, global_layman.window.getArea()) {
-			global_layman.sheet_buffer[i] = Color::Black;
-		}
-		// Redirect global_layman's VCI to point to our back-buffer
-		extern VideoControlInterface* real_pvci;
-		real_pvci = global_layman.pvci;
-		// Allocate a static VCI for the back-buffer
-		static byte _BUF_VCI[sizeof(VideoControlInterfaceMARGB8888)];
-		VideoControlInterfaceMARGB8888* back_vci = new (_BUF_VCI) VideoControlInterfaceMARGB8888(global_layman.sheet_buffer, global_layman.window.getSize());
-		global_layman.pvci = back_vci;
-	}
-	enable_dubuffer = true;
-	#endif
-}
+::uni::Witch::Form form2 _TEMP;
 
 void cons_init() {
 	con0_out = 0;

@@ -16,7 +16,6 @@ extern uni::witch::control::TextBox* ptext_1;
 
 extern void sysmsg_kbd(keyboard_event_t kbd_event);
 extern uni::Dchain TimerManager;
-extern bool ento_gui;
 extern uni::VideoControlInterface* real_pvci;
 void _Comment(R0) serv_sysmsg() {
 	#if _MCCA == 0x8664 && defined(_UEFI)
@@ -71,37 +70,6 @@ void _Comment(R0) serv_sysmsg() {
 #if 1
 
 #define HARDRUPT 1
-
-// return 0 if failure
-static inline bool ifPaging(ProcessBlock* pb) {
-	#if (_MCCA & 0xFF00) == 0x1000 // M-RISCV
-	return !!pb->paging_redirect;
-	#else
-	return true;
-	#endif
-}
-static inline void* SeekAddress(ProcessBlock* pb, stduint addr) {
-	#if (_MCCA & 0xFF00) == 0x1000 // M-RISCV
-	uni::Paging* pag = pb->paging_redirect;
-	void* ptr = pag ? (*pag)[addr] : (void*)addr;
-	#else
-	uni::Paging* pag = pb->paging_redirect ? pb->paging_redirect : &pb->paging;
-	void* ptr = (*pag)[addr];
-	#endif
-	return _IMM(ptr) != ~_IMM0 ? ptr : nullptr;
-}
-static inline stduint MccaMemCopyP(void* dest, ProcessBlock* pd, const void* sors, ProcessBlock* ps, size_t n) {
-	#if (_MCCA & 0xFF00) == 0x1000 // M-RISCV
-	Paging pag = {};
-	pag.root_level_page = nil;
-	return MemCopyP(dest, (pd && pd->paging_redirect) ? *pd->paging_redirect : pag,
-		sors, (ps && ps->paging_redirect) ? *ps->paging_redirect : pag, n);
-	#elif _MCCA == 0x8664
-	return MemCopyP(dest, pd ? (pd->paging_redirect ? *pd->paging_redirect : pd->paging) : kernel_paging, sors, ps ? (ps->paging_redirect ? *ps->paging_redirect : ps->paging) : kernel_paging, n);
-	#else
-	return MemCopyP(dest, pd ? pd->paging : kernel_paging, sors, ps ? ps->paging : kernel_paging, n);
-	#endif
-}
 
 void rupt_proc(stduint tid, stduint rupt_no)
 {

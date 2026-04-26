@@ -33,10 +33,15 @@ inline static QueueLimited* VTTY_INNQ(Dnode* nod) {
 
 enum class ConsoleMsg {
 	TEST,
-	READ,// R (dev, addr, len, pid)
-	WRIT,// W (dev, addr, len, pid)
-	INNC,//   (., ., ., pid) noreturn
+	READ,//(UNDO) R (dev, addr, len, pid)
+	WRIT,//(UNDO) W (dev, addr, len, pid)
+	INNC,// () noreturn
 	FNEW,// new-form    ()
+	FDEL,//(UNDO)
+	FBID,//(UNDO)
+	FUPD,//(UNDO)
+	FDRW,//(UNDO)
+	FCHR,//(UNDO) draw string (usr_point, usr_str, color, 0 for easy)
 };
 
 extern unsigned current_screen_TTY;// focus

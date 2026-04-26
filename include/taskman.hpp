@@ -347,12 +347,6 @@ enum class TaskmanMsg : stduint {
 	EXET,
 };
 
-
-#if _MCCA == 0x8632
-#include "fileman.hpp"
-#endif
-
-
 #ifndef _ACCM
 
 // return zero for success
@@ -386,6 +380,31 @@ inline static stduint syssdrv(stduint whom, void* msgaddr, stduint bytlen, stdui
 	auto a = syssend(whom, msgaddr, bytlen, type ? *type : 0);
 	return sysrecv(whom, msgaddr, bytlen, type);
 }
+
+static inline void* SeekAddress(ProcessBlock* pb, stduint addr) {
+	#if (_MCCA & 0xFF00) == 0x1000 // M-RISCV
+	uni::Paging* pag = pb->paging_redirect;
+	void* ptr = pag ? (*pag)[addr] : (void*)addr;
+	#else
+	uni::Paging* pag = pb->paging_redirect ? pb->paging_redirect : &pb->paging;
+	void* ptr = (*pag)[addr];
+	#endif
+	return _IMM(ptr) != ~_IMM0 ? ptr : nullptr;
+}
+static inline stduint MccaMemCopyP(void* dest, ProcessBlock* pd, const void* sors, ProcessBlock* ps, size_t n) {
+	extern Paging kernel_paging;
+	#if (_MCCA & 0xFF00) == 0x1000 // M-RISCV
+	Paging pag = {};
+	pag.root_level_page = nil;
+	return MemCopyP(dest, (pd && pd->paging_redirect) ? *pd->paging_redirect : pag,
+		sors, (ps && ps->paging_redirect) ? *ps->paging_redirect : pag, n);
+	#elif _MCCA == 0x8664
+	return MemCopyP(dest, pd ? (pd->paging_redirect ? *pd->paging_redirect : pd->paging) : kernel_paging, sors, ps ? (ps->paging_redirect ? *ps->paging_redirect : ps->paging) : kernel_paging, n);
+	#else
+	return MemCopyP(dest, pd ? pd->paging : kernel_paging, sors, ps ? ps->paging : kernel_paging, n);
+	#endif
+}
+
 #endif
 
 #endif

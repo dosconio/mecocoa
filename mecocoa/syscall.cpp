@@ -32,7 +32,8 @@ stduint syscall(syscall_t callid, stduint para1, stduint para2, stduint para3) {
 		loop HALT();
 	}
 	ret = reinterpret_cast<stdsint(*)(stduint, stduint, stduint)>(SYSCALL_TABLE[_IMM(callid)])(para1, para2, para3);
-	pb->paging_redirect = old_dir;
+	pb->paging_redirect = 0;// old_dir;
+	// if (old_dir) ploginfo(">>> %x", old_dir);
 	return ret;
 	#elif (_MCCA & 0xFF00) == 0x1000
 	void syscall_body(NormalTaskContext * cxt);
@@ -230,7 +231,7 @@ DEFSYSC sysc_READ(stduint fd, stduint addr, stduint len) {
 					continue;
 				}
 				// Store in user buffer and provide visual echo
-				MemCopyP((void*)(addr + total_read), pb->paging_redirect ? *pb->paging_redirect : pb->paging, &ch, kernel_paging, 1);
+				MccaMemCopyP((void*)(addr + total_read), pb, &ch, NULL, 1);
 				total_read++;
 				if (con) con->OutChar(ch);
 				
@@ -242,7 +243,7 @@ DEFSYSC sysc_READ(stduint fd, stduint addr, stduint len) {
 
 			if (total_read > 0) {
 				byte last_char;
-				MemCopyP(&last_char, kernel_paging, (void*)(addr + total_read - 1), pb->paging_redirect ? *pb->paging_redirect : pb->paging, 1);
+				MccaMemCopyP(&last_char, NULL, (void*)(addr + total_read - 1), pb, 1);
 				if (last_char == '\n') {
 					break;
 				}
@@ -280,7 +281,7 @@ DEFSYSC sysc_WAIT(stduint usr_status) {
 	stdsint ret = open_buf[0];// pid
 	if (ret && usr_status) {
 		auto pb = tb->parent_process;
-		MemCopyP((void*)usr_status, (pb->paging_redirect ? *pb->paging_redirect : pb->paging), &open_buf[1], kernel_paging, byteof(stduint));
+		MccaMemCopyP((void*)usr_status, pb, &open_buf[1], NULL, byteof(stduint));
 	}
 	return ret;
 }
