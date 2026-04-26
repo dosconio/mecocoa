@@ -36,12 +36,13 @@ enum class ConsoleMsg {
 	READ,//(UNDO) R (dev, addr, len, pid)
 	WRIT,//(UNDO) W (dev, addr, len, pid)
 	INNC,// () noreturn
-	FNEW,// new-form    ()
+	FNEW,// new-form    (formid, u_rect)->formid
 	FDEL,//(UNDO)
 	FBID,//(UNDO)
 	FUPD,//(UNDO)
+	FMSG,//(UNDO)
 	FDRW,//(UNDO)
-	FCHR,//(UNDO) draw string (usr_point, usr_str, color, 0 for easy)
+	FCHR,// draw-string (formid, u_point, u_str, color)
 };
 
 extern unsigned current_screen_TTY;// focus
@@ -98,7 +99,10 @@ defVconIface(GloScreenABGR8888, uint32);
 extern bool ento_gui;
 extern bool enable_dubuffer;
 
-void cons_init();
+struct Consman {
+	static bool Initialize();
+};
+
 void enable_2buffer();
 
 void hand_mouse(MouseMessage mmsg);

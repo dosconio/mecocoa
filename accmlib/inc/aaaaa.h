@@ -6,6 +6,7 @@ using namespace uni;
 // #include "../../include/syscall.hpp"
 #include "../../include/taskman.hpp"
 #include "../../include/fileman.hpp"
+#include "../../include/console.hpp"
 
 #define sysrecv(pid,msg) syscomm(0,pid,msg)
 #define syssend(pid,msg) syscomm(1,pid,msg)
@@ -54,5 +55,18 @@ extern "C" {
 	int _Comment(pid) wait(int* status);
 
 #ifdef _INC_CPP
+}
+#endif
+
+// CONSOLE
+#ifdef _INC_CPP
+extern "C" {
+	#endif
+
+	stdsint sys_create_form(stduint form_id, const Rectangle* rect);
+
+	stdsint sys_draw_default_string(stduint form_id, Point vertex, rostr string, Color color);
+
+	#ifdef _INC_CPP
 }
 #endif

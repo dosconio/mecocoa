@@ -22,7 +22,12 @@ void R_RTC_INIT() {
 	RTC_Init();
 }
 
-void blink();
+void blink() {
+	extern GloScreenARGB8888 local_vci;
+	static bool b = false;
+	local_vci.DrawRectangle(Rectangle(Point(0, 0), Size2(8, 16), b ? Color::Black : Color::White));
+	b = !b;
+}
 void Handint_RTC()
 {
 	// 1Hz

@@ -9,18 +9,6 @@
 #include <cpp/Witch/Control/Control-TextBox.hpp>
 
 
-
-#if (_MCCA & 0xFF00) == 0x8600
-
-Cursor* Cursor::global_cursor = nullptr;
-SheetTrait* Cursor::moving_sheet = nullptr;
-bool Cursor::mouse_btnl_dn = false;
-bool Cursor::mouse_btnm_dn = false;
-bool Cursor::mouse_btnr_dn = false;
-
-#endif
-
-
 #if 1 // ---- ---- TTY ---- ----
 
 // vtty0: global_ground
@@ -53,62 +41,12 @@ Dnode* VTTY_Append(Console_t* con) {
 Dchain vttys = { VTTY_Free };// offs->ConT*, type->vtty_type_t
 
 #endif
-
 Vector<stduint> blocked_vtty_pid;
 // total: may need change after Remove
 unsigned current_screen_TTY = 0;
 
-#if (_MCCA & 0xFF00) == 0x8600
-
-// consider CLI
-BareConsole Bcons[TTY_NUMBER];// TTY 0~3 and their buffer
-// consider GUI
-byte _BUF_cursor[byteof(Cursor)];
-// global
-bool ento_gui = false;
-bool enable_dubuffer = false;
-OstreamTrait* con0_out = 0;
-#ifndef _UEFI
-GloScreenARGB8888 local_vci;
-#else
-GloScreenARGB8888 vga_ARGB8888;
-GloScreenABGR8888 vga_ABGR8888;
-#endif
-VideoControlInterface* real_pvci = nullptr;
-
-
-#ifndef _UEFI
-void blink() {
-	static bool b = false;
-	local_vci.DrawRectangle(Rectangle(Point(0, 0), Size2(8, 16), b ? Color::Black : Color::White));
-	b = !b;
-}
-void blink2() {
-	static bool b = false;
-	local_vci.DrawRectangle(Rectangle(Point(8, 0), Size2(8, 16), b ? Color::Black : Color::White));
-	b = !b;
-}
-#endif
-
-#endif
-
-
 //// ---- ---- DYNAMIC CORE ---- ---- ////
-#ifdef _ARC_x86 // x86:
-static void InitializeBottomBar() {
-	// BCON:
-	struct element { byte ch; byte attr; };
-	Letvar(Ribbon, element*, (_VIDEO_ADDR_BUFFER + 80 * 2 * 24));
-	Ribbon[0].ch = '^';
-	Ribbon[1].ch = '-';
-	Ribbon[2].ch = '+';
-	Ribbon[77].ch = '+';
-	Ribbon[78].ch = '-';
-	Ribbon[79].ch = '^';
-}
-#endif
 
-#if 1
 static bool ifContainBlockedTTY(ProcessBlock* ppb) {
 	for0(i, blocked_vtty_pid.Count()) {
 		if (Taskman::Locate(blocked_vtty_pid[i])->focus_tty == ppb->focus_tty) {
@@ -118,6 +56,7 @@ static bool ifContainBlockedTTY(ProcessBlock* ppb) {
 	return false;
 }// To OPTIMIZE
 
+#if _GUI_ENABLE
 struct FMT_ConsoleMsg_FNEW {
 	stduint pform_id;// in pforms
 	Rectangle* usrp_rect;
@@ -174,11 +113,38 @@ static stdsint ConsoleMsg_FNEW(const FMT_ConsoleMsg_FNEW* data, ProcessBlock* pb
 	return slot_idx;
 }
 
+_PACKED(struct) FMT_ConsoleMsg_FCHR {
+	stduint pform_id;// in pforms
+	Point* usrp_vertex;
+	const char* usrp_str;
+	Color color;
+};
+static stdsint ConsoleMsg_FCHR(const FMT_ConsoleMsg_FCHR* data, ProcessBlock* pb) {
+	// Target form from process pforms
+	if (data->pform_id >= _TEMP 4) return -1;
+	SheetTrait* pfrm = pb->pforms[data->pform_id];
+	if (!pfrm) return -1;
+
+	// Copy parameters from user space
+	Point vertex;
+	if (MccaMemCopyP(&vertex, NULL, data->usrp_vertex, pb, sizeof(vertex)) != sizeof(vertex)) return -1;
+	char buf[32];
+	stduint len = StrCopyP(buf, kernel_paging, data->usrp_str, pb->paging, sizeof(buf));
+
+	// Draw using DrawString_16 (8x16 font)
+	uni::DrawString_16(*pfrm, vertex, String(buf), data->color);
+
+	// Update the dirty area
+	Rectangle dirty_rect(vertex, Size2(StrLength(buf) * 8, 16));
+	global_layman.Update(pfrm, dirty_rect);
+
+	return 0;
+}
+#endif
+
+
 void _Comment(R1) serv_cons_loop()
 {
-	#ifdef _ARC_x86 // x86:
-	InitializeBottomBar();
-	#endif
 
 	devfs_register_and_mount();
 
@@ -227,14 +193,21 @@ void _Comment(R1) serv_cons_loop()
 					syssend(sig_src, (void*)&ret, sizeof(ret), 0);
 				}
 				break;
+
+				//
+				#if _GUI_ENABLE
 			case ConsoleMsg::FNEW:
 				ploginfo("creating new form %[x]", to_args[0]);
 				ret = ConsoleMsg_FNEW((FMT_ConsoleMsg_FNEW*)to_args, th->parent_process);
-				syssend(sig_src, (void*)&ret, sizeof(ret), 0);
+				syssend(sig_src, (void*)&ret, sizeof(ret));
+				break;
+			case ConsoleMsg::FCHR:
+				ret = ConsoleMsg_FCHR((FMT_ConsoleMsg_FCHR*)to_args, th->parent_process);
+				syssend(sig_src, (void*)&ret, sizeof(ret));
 				break;
 
 
-
+				#endif
 
 
 			default:
@@ -245,7 +218,6 @@ void _Comment(R1) serv_cons_loop()
 		syscall(syscall_t::REST);
 	}
 }
-#endif
 
 //// ---- ---- Bottom Impl ---- ---- ////
 #ifdef _ARC_x86 // x86:
@@ -254,134 +226,9 @@ void uni::BareConsole::doshow(void* _) {}
 
 #endif
 
-//// ---- ---- STATIC CORE ---- ---- ////
-#if ((_MCCA & 0xFF00) == 0x8600)
-LayerManager2 global_layman;
-#if defined(_UEFI) && _MCCA == 0x8664
-extern UefiData uefi_data;
-#endif
 
-::uni::Witch::Form form2 _TEMP;
 
-void cons_init() {
-	con0_out = 0;
-	Bcons[0].Reset(bda->screen_columns, 24, _VIDEO_ADDR_BUFFER, 0 * 50); Bcons[0].setShowY(0, 24);
-	for1(i, TTY_NUMBER - 1) {
-		Bcons[i].Reset(bda->screen_columns, 50, _VIDEO_ADDR_BUFFER, i * 50); Bcons[i].setShowY(0, 25);
-	}
 
-	// try first 800xN ARGB8888 Mode
-	uint16 vmod_default = nil;
-	#if !defined(_UEFI)
-	call_ladder(R16FN_LSVM);// list video modes
-	for (auto vie = (VideoInfoEntry*)0x78000; _IMM(vie) < 0x80000; vie++) {
-		#if !_GUI_ENABLE
-		break;
-		#endif
-		if (!vie->mode) break;
-		// ploginfo("mode %[16H], %ux%u, ARGB:%[16H]", vie->mode, vie->width, vie->height, vie->bitmode);
-		if (vie->bitmode == 0x8888 && vie->width == 800) {
-			vmod_default = vie->mode;
-			break;
-		}
-	}
-	#else
-	vmod_default = 0xFFFF;
-	#endif
-	ento_gui = vmod_default;
-	if (!vmod_default) {
-		con0_out = &Bcons[0];
-		Bcons[0].Scroll(24);
-		for0a(i, Bcons) ttys.Append(dynamic_cast<Console_t*>(&Bcons[i]));
-		for0a(i, Bcons) VTTY_Append((&Bcons[i]));
-		plogwarn("There is no default 800xN-8888 Video Mode");
-		return;
-	}
-
-	// config layman
-	#if !defined(_UEFI)
-	auto addr = (ModeInfoBlock*)_IMM(call_ladder(R16FN_VMOD, vmod_default));
-	Rectangle screen0_win{ Point(0,0), Size2(addr->XResolution, addr->YResolution), Color::Black };
-	global_layman.Reset(&local_vci, screen0_win);
-	global_layman.video_mode = vmod_default;
-	global_layman.video_memory = addr->PhysBasePtr;
-	global_layman.pixel_fmt = PixelFormat::ARGB8888;
-	#else
-	Rectangle screen0_win{ Point(0,0), Size2(uefi_data.frame_buffer_config.horizontal_resolution, uefi_data.frame_buffer_config.vertical_resolution), Color::Black };
-	VideoControlInterface* screen;
-	switch (uefi_data.frame_buffer_config.pixel_format) {
-	case PixelFormat::ARGB8888: screen = &vga_ARGB8888; break;
-	case PixelFormat::ABGR8888: screen = &vga_ABGR8888; break;
-	default:
-		loop HALT();
-	}
-	global_layman.Reset(screen, screen0_win);
-	global_layman.video_mode = vmod_default;
-	global_layman.video_memory = (stduint)uefi_data.frame_buffer_config.frame_buffer;
-	global_layman.pixel_fmt = uefi_data.frame_buffer_config.pixel_format;
-	#endif
-	const stduint vcon0_size = global_layman.window.getArea() * sizeof(Color);
-	//
-	#if _MCCA == 0x8632
-	kernel_paging.Map(
-		global_layman.video_memory,
-		global_layman.video_memory,
-		vcon0_size,
-		PAGESIZE_4KB, PGPROP_present | PGPROP_writable
-	);// VGA
-	#endif
-
-	// main screen
-	auto vcon0 = new VideoConsole2(&global_layman.getVCI(), screen0_win, Color::Black, Color::White);
-	// auto vcon0_buf = (Color*)mem.allocate(vcon0_size);
-	vcon0->setBuffers(nullptr,
-		new BufferChar[vcon0->getCols() * vcon0->getRows()],
-		new Color[vcon0->getLineBufferSize()]
-	);
-	vcon0->InitializeSheet(global_layman, screen0_win.getVertex(), screen0_win.getSize());
-	VTTY_Append(vcon0);
-
-	// cursor
-	Cursor::global_cursor = new (_BUF_cursor)Cursor{ &global_layman.getVCI() };
-	const Point cursor_pos = { 300,200 };
-	Cursor::global_cursor->setSheet(global_layman, cursor_pos);
-
-	if (_TEMP 1) {
-		Rectangle rect{ Point(250, 160), Size2(480, 320) };
-		auto pcon = new VideoConsole2(NULL,
-			Rectangle(Point(2, 2), Size2(470, 290)),
-				Color::Black, 0xFFFCEAF1
-		);
-		// auto vcon_buf = (Color*)mem.allocate(pcon->window.getArea() * sizeof(Color));// Vcon Gen1
-		auto text_buf = (BufferChar*)mem.allocate(pcon->getCols() * pcon->getRows() * sizeof(BufferChar));
-		auto line_buf = (Color*)mem.allocate(pcon->getLineBufferSize() * sizeof(Color));
-		pcon->setBuffers(nullptr, text_buf, line_buf);
-		pcon->InitializeSheet(global_layman, pcon->window.getVertex(), pcon->window.getSize());
-		// pcon->setModeBuffer(vcon_buf); Vcon Gen1
-		pcon->Clear();
-
-		form2.Title = "Console-Gen2";
-		form2.AppendControl(pcon);
-		form2.setSheet(global_layman, rect, (Color*)mem.allocate(rect.getArea() * sizeof(Color)));
-		form2.setFocus(pcon);
-		global_layman.Append(&form2);
-		pcon->Start();
-
-		VTTY_Append((pcon));
-	}// should follow 'init'
-
-	global_layman.Append(vcon0);
-
-	#if _GUI_DOUBLE_BUFFER
-	enable_2buffer();
-	#endif
-
-	vcon0->Clear();
-	con0_out = vcon0;
-	current_screen_TTY = _TEMP 1;
-
-	// default tty are all bcon
-}
 /* 4 BCON TTY
 
 void uni::BareConsole::doshow(void *_) {
@@ -401,7 +248,4 @@ void uni::BareConsole::doshow(void *_) {
 }
 
 */
-
-#endif
-
 

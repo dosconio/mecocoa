@@ -13,7 +13,7 @@
 
 _ESYM_C void mecocoa() {
 	if (!Memory::initialize('ANIF', NULL)) HALT();
-	cons_init();
+	Consman::Initialize();
 	//{} Cache_t::enAble();
 	Taskman::Initialize();
 

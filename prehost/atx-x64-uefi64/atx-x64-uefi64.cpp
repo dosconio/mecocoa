@@ -43,7 +43,7 @@ void mecocoa(const UefiData& uefi_data_ref)
 	_call_serious = kernel_fail;
 	
 	if (!Memory::initialize('UEFI', (byte*)(&uefi_data.memory_map))) HALT();
-	cons_init();
+	Consman::Initialize();
 	//{} Cache_t::enAble();
 	Taskman::Initialize();
 	SysTimer::Initialize();

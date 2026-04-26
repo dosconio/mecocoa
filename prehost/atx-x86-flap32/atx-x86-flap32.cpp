@@ -16,7 +16,7 @@ extern RMOD_LIST __init_rmod_ento[], __init_rmod_endo[];
 _sign_entry() {
 	_call_serious = kernel_fail;
 	if (!Memory::initialize(_start_eax, (byte*)_start_ebx)) HALT();
-	cons_init();// located here, for  INT-10H may influence PIC
+	Consman::Initialize();// located here, for  INT-10H may influence PIC
 	Cache_t::enAble();
 	Taskman::Initialize();
 	SysTimer::Initialize();
