@@ -14,6 +14,17 @@ stdsint sys_create_form(stduint form_id, const Rectangle* rect)
 	return buf[0];
 }
 
+stdsint sys_close_form(stduint form_id) {
+	stduint buf[1] = { form_id };
+	CommMsg msg;
+	msg.data.address = _IMM(buf);
+	msg.data.length = sizeof(buf);
+	msg.type = _IMM(ConsoleMsg::FDEL);
+	syscomm(1, Task_Console, &msg);
+	syscomm(0, Task_Console, &msg);
+	return buf[0];
+}
+
 stdsint sys_draw_default_string(stduint form_id, Point vertex, rostr string, Color color)
 {
 	stduint buf[4] = { form_id, _IMM(&vertex), _IMM(string), _IMM(color) };

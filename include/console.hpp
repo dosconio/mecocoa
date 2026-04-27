@@ -37,7 +37,7 @@ enum class ConsoleMsg {
 	WRIT,//(UNDO) W (dev, addr, len, pid)
 	INNC,// () noreturn
 	FNEW,// new-form    (formid, u_rect)->formid
-	FDEL,//(UNDO)
+	FDEL,// close-form  (formid)
 	FBID,//(UNDO)
 	FUPD,//(UNDO)
 	FMSG,//(UNDO)

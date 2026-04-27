@@ -62,11 +62,13 @@ int main(int argc, char** argv)
 		outsfmt("TEST(%d)\n\r", syssecond());// TIME
 		sysrest(0 _Comment(s), 1);// REST
 	}// delay 3 s
+	if (form_id >= 0) sys_close_form(form_id);
+	form_id = -1;
 	#endif
 
 
 
-	loop sysrest(0, 0);
+	// loop sysrest(0, 0);
 	return 0;
 }
 

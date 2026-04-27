@@ -261,6 +261,11 @@ bool Taskman::Exit(ProcessBlock* p, stdsint exit_code)
 		p->pfiles[i] = 0;
 	}
 
+	// Release Forms First
+	stduint fdel_args[2] = { ~_IMM0, pid };
+	syssend(Task_Console, fdel_args, sizeof(fdel_args), _IMM(ConsoleMsg::FDEL));
+	sysrecv(Task_Console, fdel_args, sizeof(fdel_args));
+
 	p->exit_status = exit_code;
 	// ploginfo("Process %u exited with code %[x]", pid, exit_code);
 

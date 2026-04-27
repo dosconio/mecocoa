@@ -84,7 +84,7 @@ struct FMT_ConsoleMsg_FNEW {
 	Rectangle* usrp_rect;
 };
 static stdsint ConsoleMsg_FNEW(const FMT_ConsoleMsg_FNEW* data, ProcessBlock* pb) {
-	//{TODO} pform_id
+	//{TODO} nested pform_id
 	Rectangle rect; MccaMemCopyP(&rect, NULL, data->usrp_rect, pb, sizeof(rect));
 	ploginfo("FNEW: new form (%u,%u)", rect.width, rect.height);
 	// Find an empty slot in pforms
@@ -103,7 +103,7 @@ static stdsint ConsoleMsg_FNEW(const FMT_ConsoleMsg_FNEW* data, ProcessBlock* pb
 	pfrm->Title = "New Form";
 
 	// Allocate and set sheet for the form
-	Color* sheet_buffer = (Color*)mem.allocate(rect.getArea() * sizeof(Color));
+	Color* sheet_buffer = new Color[rect.getArea()];
 	if (!sheet_buffer) {
 		delete pfrm;
 		return -1;
@@ -133,6 +133,48 @@ static stdsint ConsoleMsg_FNEW(const FMT_ConsoleMsg_FNEW* data, ProcessBlock* pb
 	pb->pforms[slot_idx] = pfrm;
 
 	return slot_idx;
+}
+
+static stdsint ConsoleMsg_FDEL(stduint pform_id, ProcessBlock* pb) {
+	if (pform_id == ~_IMM0) {
+		for (stduint i = 0; i < _TEMP 4; i++) {
+			if (pb->pforms[i]) ConsoleMsg_FDEL(i, pb);
+		}
+		return 0;
+	}
+	if (pform_id >= _TEMP 4) return -1;
+	SheetTrait* pfrm = pb->pforms[pform_id];
+	if (!pfrm) return -1;
+
+	// Recursive destroy sub-forms belonging to this process
+	for (stduint i = 0; i < _TEMP 4; i++) {
+		if (pb->pforms[i] && pb->pforms[i]->refSheetParent() == (LayerManager*)pfrm) {
+			ConsoleMsg_FDEL(i, pb);
+		}
+	}
+
+	// Remove from parent layer manager (e.g., global_layman)
+	LayerManager* parent = pfrm->refSheetParent();
+	if (parent) {
+		Nnode* target = &pfrm->refSheetNode();
+		if (target->left) target->left->next = target->next;
+		else parent->subf = target->next;
+		if (target->next) target->next->left = target->left;
+		else parent->subl = target->left;
+		target->left = target->next = nullptr;
+		pfrm->refSheetParent() = nullptr;
+	}
+	global_layman.Update(pfrm, Rectangle{ Point2(0,0), pfrm->sheet_area.getSize() });
+
+	// Release resources
+	if (pfrm->sheet_buffer) {
+		delete[] pfrm->sheet_buffer;
+		pfrm->sheet_buffer = nullptr;
+	}
+	delete pfrm;
+	pb->pforms[pform_id] = nullptr;
+
+	return 0;
 }
 
 static stdsint ConsoleMsg_FDRW(const FMT_ConsoleMsg_FDRW* data, ProcessBlock* pb) {
@@ -257,6 +299,18 @@ void _Comment(R1) serv_cons_loop()
 				ret = ConsoleMsg_FNEW((FMT_ConsoleMsg_FNEW*)to_args, th->parent_process);
 				syssend(sig_src, (void*)&ret, sizeof(ret));
 				break;
+
+			case ConsoleMsg::FDEL:
+				{
+					ProcessBlock* pb_target = th->parent_process;
+					// If request from Taskman, to_args[1] is the target PID
+					if (sig_src == Task_TaskMan) pb_target = Taskman::Locate(to_args[1]);
+					ret = ConsoleMsg_FDEL(to_args[0], pb_target);
+					syssend(sig_src, (void*)&ret, sizeof(ret));
+				}
+				break;
+
+
 			case ConsoleMsg::FDRW:
 				ret = ConsoleMsg_FDRW((FMT_ConsoleMsg_FDRW*)to_args, th->parent_process);
 				syssend(sig_src, (void*)&ret, sizeof(ret));
