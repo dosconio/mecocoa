@@ -45,6 +45,28 @@ Vector<stduint> blocked_vtty_pid;
 // total: may need change after Remove
 unsigned current_screen_TTY = 0;
 
+//// ---- ---- Bottom Impl ---- ---- ////
+#ifdef _ARC_x86 // x86:
+
+extern BareConsole Bcons[TTY_NUMBER];
+void uni::BareConsole::doshow(void* _) {
+	unsigned id = _IMM(_);
+	if (id == current_screen_TTY) return;
+	if (id >= TTY_NUMBER) {
+		plogerro("TTY Id %u", id);
+		return;
+	}
+	Bcons[current_screen_TTY].last_curposi = curget();
+	Bcons[id].setStartLine(topline + crtline);
+	current_screen_TTY = id;
+	curset(Bcons[id].last_curposi);
+	//
+	for0(i, 4) Bcons[i].auto_incbegaddr = false;
+	Bcons[id].auto_incbegaddr = true;
+}
+
+#endif
+
 //// ---- ---- DYNAMIC CORE ---- ---- ////
 
 static bool ifContainBlockedTTY(ProcessBlock* ppb) {
@@ -113,6 +135,43 @@ static stdsint ConsoleMsg_FNEW(const FMT_ConsoleMsg_FNEW* data, ProcessBlock* pb
 	return slot_idx;
 }
 
+static stdsint ConsoleMsg_FDRW(const FMT_ConsoleMsg_FDRW* data, ProcessBlock* pb) {
+	// Target form from process pforms
+	if (data->pform_id >= _TEMP 4) return -1;
+	SheetTrait* pfrm = pb->pforms[data->pform_id];
+	if (!pfrm) return -1;
+	ploginfo("ConsoleMsg_FDRW: draw %d", data->shape_type);
+	switch (data->shape_type) {
+	case FMT_ConsoleMsg_FDRW::Shape::Point: {
+		FMT_ConsoleMsg_FDRW::ShapeInfo::ColorPoint cp;
+		if (MccaMemCopyP(&cp, NULL, data->usr_shape_info.cpoint, pb, sizeof(cp)) != sizeof(cp)) return -1;
+		if (!pfrm->sheet_buffer) return -1;
+		pfrm->sheet_buffer[cp.po.y * pfrm->sheet_area.width + cp.po.x] = cp.co;
+		return 0;
+	}
+	case FMT_ConsoleMsg_FDRW::Shape::Line: {
+		FMT_ConsoleMsg_FDRW::ShapeInfo::ColorLine cl;
+		if (MccaMemCopyP(&cl, NULL, data->usr_shape_info.cline, pb, sizeof(cl)) != sizeof(cl)) return -1;
+		if (!pfrm->sheet_buffer) return -1;
+		VideoControlInterfaceMARGB8888 vcim(pfrm->sheet_buffer, pfrm->sheet_area.getSize());
+		LayerManager lm(&vcim, Rectangle{ Point(0,0), pfrm->sheet_area.getSize() });
+		lm.DrawLine(cl.disp, cl.size, cl.color);
+		return 0;
+	}
+	case FMT_ConsoleMsg_FDRW::Shape::Rect: {
+		Rectangle rect;
+		if (MccaMemCopyP(&rect, NULL, data->usr_shape_info.crect, pb, sizeof(rect)) != sizeof(rect)) return -1;
+		if (!pfrm->sheet_buffer) return -1;
+		VideoControlInterfaceMARGB8888 vcim(pfrm->sheet_buffer, pfrm->sheet_area.getSize());
+		vcim.DrawRectangle(rect);
+		global_layman.Update(pfrm, rect);
+		return 0;
+	}
+
+	default: return -1;
+	}
+}
+
 _PACKED(struct) FMT_ConsoleMsg_FCHR {
 	stduint pform_id;// in pforms
 	Point* usrp_vertex;
@@ -145,14 +204,11 @@ static stdsint ConsoleMsg_FCHR(const FMT_ConsoleMsg_FCHR* data, ProcessBlock* pb
 
 void _Comment(R1) serv_cons_loop()
 {
-
-	devfs_register_and_mount();
-
 	volatile stduint sig_type = 0, sig_src, ret;
-	volatile stduint to_args[4];
-
+	volatile stduint to_args[4];	
 	int ch;
-
+	
+	_TEMP devfs_register_and_mount();
 	while (true) {
 		for0 (i, blocked_vtty_pid.Count()) if (stduint pid = blocked_vtty_pid[i]) {
 			auto ppb = Taskman::Locate(pid);
@@ -201,6 +257,10 @@ void _Comment(R1) serv_cons_loop()
 				ret = ConsoleMsg_FNEW((FMT_ConsoleMsg_FNEW*)to_args, th->parent_process);
 				syssend(sig_src, (void*)&ret, sizeof(ret));
 				break;
+			case ConsoleMsg::FDRW:
+				ret = ConsoleMsg_FDRW((FMT_ConsoleMsg_FDRW*)to_args, th->parent_process);
+				syssend(sig_src, (void*)&ret, sizeof(ret));
+				break;
 			case ConsoleMsg::FCHR:
 				ret = ConsoleMsg_FCHR((FMT_ConsoleMsg_FCHR*)to_args, th->parent_process);
 				syssend(sig_src, (void*)&ret, sizeof(ret));
@@ -218,34 +278,4 @@ void _Comment(R1) serv_cons_loop()
 		syscall(syscall_t::REST);
 	}
 }
-
-//// ---- ---- Bottom Impl ---- ---- ////
-#ifdef _ARC_x86 // x86:
-
-void uni::BareConsole::doshow(void* _) {}
-
-#endif
-
-
-
-
-/* 4 BCON TTY
-
-void uni::BareConsole::doshow(void *_) {
-	unsigned id = IndexTTY(this);
-	if (id == current_screen_TTY) return;
-	if (id > 3) {
-		plogerro("TTY Id %u", id);
-		return;
-	}
-	bcons[current_screen_TTY]->last_curposi = curget();
-	bcons[id]->setStartLine(topline + crtline);
-	current_screen_TTY = id;
-	curset(bcons[id]->last_curposi);
-	//
-	for0(i, 4) bcons[i]->auto_incbegaddr = false;
-	bcons[id]->auto_incbegaddr = true;
-}
-
-*/
 

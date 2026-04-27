@@ -67,6 +67,12 @@ extern "C" {
 
 	stdsint sys_draw_default_string(stduint form_id, Point vertex, rostr string, Color color);
 
+	stdsint sys_draw_point(stduint form_id, Point po, Color co);
+
+	stdsint sys_draw_line(stduint form_id, Point disp, Size2 size, Color co);
+
+	stdsint sys_draw_rectangle(stduint form_id, const Rectangle* rect);
+
 	#ifdef _INC_CPP
 }
 #endif

@@ -238,7 +238,13 @@ ProcessBlock* Taskman::Create(void* entry, byte ring, bool append)
 	new_ctx.CR3 = getCR3();
 	new_ctx.RING = ring;
 	SetSegment(&new_ctx);
-	treat<uint32>(&new_ctx.floating_point_context[24]) = 0x1F80;// ban all MXCSR exception
+	#if (_MCCA & 0xFF00) == 0x8600
+	// Initialize FPU/SSE context to a safe state (masked exceptions)
+	// Offset 0: FPU Control Word (0x037F = Mask all exceptions)
+	treat<uint16>(&new_ctx.floating_point_context[0]) = 0x037F;
+	// Offset 24: MXCSR (0x1F80 = Mask all SSE exceptions)
+	treat<uint32>(&new_ctx.floating_point_context[24]) = 0x1F80;
+	#endif
 	tb->stack_size = DEFAULT_STACK_SIZE;
 	tb->stack_lineaddr = (byte*)mempool.allocate(tb->stack_size, 12);
 	tb->stack_levladdr = ring != RING_M ? (byte*)mempool.allocate(tb->stack_size, 12) : tb->stack_lineaddr;
@@ -396,8 +402,14 @@ ProcessBlock* Taskman::CreateELF(BlockTrait* source, byte ring) {
 	#if (_MCCA & 0xFF00) == 0x8600
 	tb->context.RING = ring;
 	tb->context.SP = (stack_loc_top & ~0xFlu) - 8 - 0x10;// single stack
-	treat<uint32>(&tb->context.floating_point_context[24]) = 0x1F80;// ban all MXCSR exception
 	SetSegment(&tb->context);
+	#if (_MCCA & 0xFF00) == 0x8600
+	// Initialize FPU/SSE context to a safe state (masked exceptions)
+	// Offset 0: FPU Control Word (0x037F = Mask all exceptions)
+	treat<uint16>(&tb->context.floating_point_context[0]) = 0x037F;
+	// Offset 24: MXCSR (0x1F80 = Mask all SSE exceptions)
+	treat<uint32>(&tb->context.floating_point_context[24]) = 0x1F80;
+	#endif
 
 	#elif _MCCA == 0x1032 || _MCCA == 0x1064
 	constexpr stduint floating_support = (1 << 13);
@@ -610,7 +622,14 @@ ProcessBlock* Taskman::Exec(stduint parent, rostr usr_fullpath, void* usr_argsta
 	// For x64: _start will 'pop rdi'
 	new_pb->main_thread->context.SP = new_sp;
 
-	treat<uint32>(&new_pb->main_thread->context.floating_point_context[24]) = 0x1F80; // Reset FPU
+	// FPU/SSE context is initialized in setup functions
+	#if (_MCCA & 0xFF00) == 0x8600
+	// Initialize FPU/SSE context to a safe state (masked exceptions)
+	// Offset 0: FPU Control Word (0x037F = Mask all exceptions)
+	treat<uint16>(&new_pb->main_thread->context.floating_point_context[0]) = 0x037F;
+	// Offset 24: MXCSR (0x1F80 = Mask all SSE exceptions)
+	treat<uint32>(&new_pb->main_thread->context.floating_point_context[24]) = 0x1F80;
+	#endif
 	SetSegment(&new_pb->main_thread->context);
 	new_pb->main_thread->unsolved_msg = nullptr;
 	new_pb->main_thread->block_reason = ThreadBlock::BlockReason::BR_None;
@@ -772,7 +791,13 @@ ProcessBlock* Taskman::Exet(stduint parent, rostr usr_fullpath, void* usr_argsta
 	// For x64: _start will 'pop rdi'
 	current_pb->main_thread->context.SP = new_sp;
 
-	treat<uint32>(&current_pb->main_thread->context.floating_point_context[24]) = 0x1F80; // Reset FPU
+	#if (_MCCA & 0xFF00) == 0x8600
+	// Initialize FPU/SSE context to a safe state (masked exceptions)
+	// Offset 0: FPU Control Word (0x037F = Mask all exceptions)
+	treat<uint16>(&current_pb->main_thread->context.floating_point_context[0]) = 0x037F;
+	// Offset 24: MXCSR (0x1F80 = Mask all SSE exceptions)
+	treat<uint32>(&current_pb->main_thread->context.floating_point_context[24]) = 0x1F80;
+	#endif
 	SetSegment(&current_pb->main_thread->context);
 	current_pb->main_thread->unsolved_msg = nullptr;
 	current_pb->main_thread->block_reason = ThreadBlock::BlockReason::BR_None;

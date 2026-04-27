@@ -41,8 +41,21 @@ enum class ConsoleMsg {
 	FBID,//(UNDO)
 	FUPD,//(UNDO)
 	FMSG,//(UNDO)
-	FDRW,//(UNDO)
+	FDRW,// draw        (formid, shape_type, usr_shape_info)
 	FCHR,// draw-string (formid, u_point, u_str, color)
+};
+_PACKED(struct) FMT_ConsoleMsg_FDRW {
+	stduint pform_id;// in pforms
+	enum class Shape {
+		Point,
+		Line,
+		Rect,
+	} shape_type;
+	union ShapeInfo {
+		struct ColorPoint { Point2 po; Color co; } *cpoint;
+		struct ColorLine { Point disp; Size2 size; Color color; } *cline;
+		Rectangle *crect;
+	} usr_shape_info;
 };
 
 extern unsigned current_screen_TTY;// focus

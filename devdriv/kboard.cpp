@@ -40,6 +40,7 @@ static void setLED() {
 }
 
 KeyboardBridge kbdbridge;
+extern BareConsole Bcons[TTY_NUMBER];
 int KeyboardBridge::out(const char* str, stduint len) {
 	static bool last_E0 = false;
 	extern const byte key_ps2set1_usb[128];
@@ -114,7 +115,10 @@ int KeyboardBridge::out(const char* str, stduint len) {
 					ttycon->auto_incbegaddr = 0;
 					ttycon->setStartLine(++ttycon->crtline + ttycon->topline);
 				}
-				else//{} F1~4 doshow
+				else if (Ranglin(event.keycode, 0x3A, 4))// F1~4 doshow
+				{
+					Bcons[event.keycode - 0x3A].doshow(pureptr_t(event.keycode - 0x3A));
+				}
 				#endif
 				if (ascii_ch) {
 					VTTY_INNQ(p_vtty)->OutChar(ascii_ch);

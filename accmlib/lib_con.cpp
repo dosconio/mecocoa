@@ -26,5 +26,55 @@ stdsint sys_draw_default_string(stduint form_id, Point vertex, rostr string, Col
 	return buf[0];// should be 0
 }
 
+stdsint sys_draw_point(stduint form_id, Point po, Color co) {
+	FMT_ConsoleMsg_FDRW fdraw;
+	FMT_ConsoleMsg_FDRW::ShapeInfo::ColorPoint cp = { po, co };
+	stdsint ret = -1;
+	fdraw.pform_id = form_id;
+	fdraw.shape_type = FMT_ConsoleMsg_FDRW::Shape::Point;
+	fdraw.usr_shape_info.cpoint = &cp;
+	CommMsg msg;
+	msg.data.address = _IMM(&fdraw);
+	msg.data.length = sizeof(fdraw);
+	msg.type = _IMM(ConsoleMsg::FDRW);
+	syscomm(1, Task_Console, &msg);
+	msg.data.address = _IMM(&ret);
+	msg.data.length = sizeof(ret);
+	syscomm(0, Task_Console, &msg);
+	return ret;// should be 0
+}
 
+stdsint sys_draw_line(stduint form_id, Point disp, Size2 size, Color co) {
+	FMT_ConsoleMsg_FDRW fdraw;
+	FMT_ConsoleMsg_FDRW::ShapeInfo::ColorLine cl = { disp, size, co };
+	stdsint ret = -1;
+	fdraw.pform_id = form_id;
+	fdraw.shape_type = FMT_ConsoleMsg_FDRW::Shape::Line;
+	fdraw.usr_shape_info.cline = &cl;
+	CommMsg msg;
+	msg.data.address = _IMM(&fdraw);
+	msg.data.length = sizeof(fdraw);
+	msg.type = _IMM(ConsoleMsg::FDRW);
+	syscomm(1, Task_Console, &msg);
+	msg.data.address = _IMM(&ret);
+	msg.data.length = sizeof(ret);
+	syscomm(0, Task_Console, &msg);
+	return ret;// should be 0
+}
 
+stdsint sys_draw_rectangle(stduint form_id, const Rectangle* rect) {
+	FMT_ConsoleMsg_FDRW fdraw;
+	stdsint ret = -1;
+	fdraw.pform_id = form_id;
+	fdraw.shape_type = FMT_ConsoleMsg_FDRW::Shape::Rect;
+	fdraw.usr_shape_info.crect = (Rectangle*)rect;
+	CommMsg msg;
+	msg.data.address = _IMM(&fdraw);
+	msg.data.length = sizeof(fdraw);
+	msg.type = _IMM(ConsoleMsg::FDRW);
+	syscomm(1, Task_Console, &msg);
+	msg.data.address = _IMM(&ret);
+	msg.data.length = sizeof(ret);
+	syscomm(0, Task_Console, &msg);
+	return ret;// should be 0
+}
