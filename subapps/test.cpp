@@ -66,8 +66,18 @@ int main(int argc, char** argv)
 	keyboard_event_t* key_event;
 	while (sys_fetch_msg(form_id, true, &smsg)) {
 		switch (smsg.event) {
+		case SheetEvent::onMoved:
+			ploginfo("msg: _moved at (%d, %d)", smsg.args[0], smsg.args[1]);
+			break;
 		case SheetEvent::onClick:
-			ploginfo("msg: _click %x(%d, %d)", smsg.args[2], smsg.args[0], smsg.args[1]);
+			if (smsg.args[3] == 1 && !(smsg.args[2] & 0x10)) {
+				// Left button release on Close Button
+				ploginfo("msg: _close requested via button");
+				sys_close_form(form_id);
+				return 0;
+			} else {
+				ploginfo("msg: _click at (%d, %d), comp=%d", smsg.args[0], smsg.args[1], smsg.args[2]);
+			}
 			break;
 		case SheetEvent::onKeybd:
 			key_event = (keyboard_event_t*)smsg.args;

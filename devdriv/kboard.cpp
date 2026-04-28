@@ -5,6 +5,7 @@
 
 #include "../include/mecocoa.hpp"
 #include <c/driver/keyboard.h>
+#include <cpp/Witch/Form.hpp>
 
 _ESYM_C void R_KBD_INIT();
 
@@ -121,9 +122,15 @@ int KeyboardBridge::out(const char* str, stduint len) {
 				}
 				#endif
 				if (ascii_ch) {
+					extern ::uni::Witch::Form form2;
+					// If focus is on an app window (not the console form and not background), swallow the character
+					if (last_click_sheet && last_click_sheet != (::uni::SheetTrait*)&form2) {
+						last_click_sheet->onrupt(SheetEvent::onKeybd, Point(0, 0), &event);
+						return 0; // Intercept: do not pass to VTTY
+					}
 					VTTY_INNQ(p_vtty)->OutChar(ascii_ch);
 				}
-				// Forward keyboard event to focused window
+				// Forward keyboard event to focused window (for console or background)
 				if (last_click_sheet) {
 					last_click_sheet->onrupt(SheetEvent::onKeybd, Point(0, 0), &event);
 				}
@@ -179,9 +186,15 @@ void sysmsg_kbd(keyboard_event_t kbd_event) {
 			plogerro("assert p_vtty");
 		}
 		if (ch) {
+			extern ::uni::Witch::Form form2;
+			// If focus is on an app window (not the console form and not background), swallow the character
+			if (last_click_sheet && last_click_sheet != (::uni::SheetTrait*)&form2) {
+				last_click_sheet->onrupt(SheetEvent::onKeybd, Point(0, 0), &kbd_event);
+				return; // Intercept: do not pass to VTTY
+			}
 			VTTY_INNQ(p_vtty)->OutChar(ch);
 		}
-		// Forward keyboard event to focused window
+		// Forward keyboard event to focused window (for console or background)
 		if (last_click_sheet) {
 			last_click_sheet->onrupt(SheetEvent::onKeybd, Point(0, 0), &kbd_event);
 		}

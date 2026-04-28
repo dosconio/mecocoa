@@ -118,10 +118,22 @@ void hand_mouse(MouseMessage mmsg) {
 	}
 
 	// cursor layer
-	if ((mmsg.X || mmsg.Y))
-		global_layman.Domove(Cursor::global_cursor, { mmsg.X,mmsg.Y });
+	static uint64 last_onmoved_tick = 0;
+	if ((mmsg.X || mmsg.Y)) {
+		global_layman.Domove(Cursor::global_cursor, { mmsg.X, mmsg.Y });
+		// Dispatch onMoved event to the sheet under cursor with rate limiting
+		if ((change_btns & 0b111) || (tick - last_onmoved_tick >= 20)) {
+			Point cursor_p = Cursor::global_cursor->sheet_area.getVertex();
+			SheetTrait* hover_sheet = global_layman.getTop(cursor_p, 1);
+			if (hover_sheet) {
+				Point rel_p = cursor_p - hover_sheet->sheet_area.getVertex();
+				hover_sheet->onrupt(SheetEvent::onMoved, rel_p, change_btns);
+			}
+			last_onmoved_tick = tick;
+		}
+	}
 	if (Cursor::moving_sheet) {
-		global_layman.Domove(Cursor::moving_sheet, { mmsg.X,mmsg.Y });
+		global_layman.Domove(Cursor::moving_sheet, { mmsg.X, mmsg.Y });
 	}
 }
 
