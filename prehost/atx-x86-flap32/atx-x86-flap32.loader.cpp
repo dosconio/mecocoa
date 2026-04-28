@@ -128,3 +128,5 @@ stduint FilesysFAT::writfl(void* fil_handler, Slice file_slice, const byte* sors
 bool FilesysFAT::remove(rostr pathname) { return false; }
 bool FilesysFAT::create(rostr fullpath, stduint flags, void* exinfo, rostr linkdest) { return false; }
 
+void operator delete(void* ptr, stduint size) noexcept {}
+

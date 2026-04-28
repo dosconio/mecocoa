@@ -1,6 +1,7 @@
 .obsidian/
 Cargo.lock
 subapps/_hello/rust/target/
+accmlib/lib/accmx86/target/
 *.o
 *.ignore
 

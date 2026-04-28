@@ -67,6 +67,8 @@ extern "C" {
 
 	stdsint sys_close_form(stduint form_id);
 
+	stdsint sys_fetch_msg(stduint formid, stduint if_blocked, SheetMessage* u_msg);
+
 	stdsint sys_draw_default_string(stduint form_id, Point vertex, rostr string, Color color);
 
 	stdsint sys_draw_point(stduint form_id, Point po, Color co);

@@ -40,9 +40,14 @@ enum class ConsoleMsg {
 	FDEL,// close-form  (formid)
 	FBID,//(UNDO)
 	FUPD,//(UNDO)
-	FMSG,//(UNDO)
+	FMSG,// fetch-msg   (formid, if_blocked, &u_msg) -> 1 Ok 0 No-Msg
 	FDRW,// draw        (formid, shape_type, usr_shape_info)
 	FCHR,// draw-string (formid, u_point, u_str, color)
+};
+_PACKED(struct) FMT_ConsoleMsg_FMSG {
+	stduint pform_id;
+	stduint if_blocked;
+	SheetMessage* message;
 };
 _PACKED(struct) FMT_ConsoleMsg_FDRW {
 	stduint pform_id;// in pforms
@@ -59,6 +64,7 @@ _PACKED(struct) FMT_ConsoleMsg_FDRW {
 };
 
 extern unsigned current_screen_TTY;// focus
+extern SheetTrait* last_click_sheet;
 
 #if (_MCCA & 0xFF00) == 0x8600
 class LayerManager2 : public uni::LayerManager {

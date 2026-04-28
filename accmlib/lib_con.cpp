@@ -25,6 +25,23 @@ stdsint sys_close_form(stduint form_id) {
 	return buf[0];
 }
 
+stdsint sys_fetch_msg(stduint form_id, stduint if_blocked, SheetMessage* u_msg) {
+	FMT_ConsoleMsg_FMSG fmsg;
+	stdsint ret = -1;
+	fmsg.pform_id = form_id;
+	fmsg.if_blocked = if_blocked;
+	fmsg.message = u_msg;
+	CommMsg msg;
+	msg.data.address = _IMM(&fmsg);
+	msg.data.length = sizeof(fmsg);
+	msg.type = _IMM(ConsoleMsg::FMSG);
+	syscomm(1, Task_Console, &msg);
+	msg.data.address = _IMM(&ret);
+	msg.data.length = sizeof(ret);
+	syscomm(0, Task_Console, &msg);
+	return ret;
+}
+
 stdsint sys_draw_default_string(stduint form_id, Point vertex, rostr string, Color color)
 {
 	stduint buf[4] = { form_id, _IMM(&vertex), _IMM(string), _IMM(color) };

@@ -58,12 +58,37 @@ int main(int argc, char** argv)
 	else {
 		outsfmt("Create form failed with code %d\n\r", form_id);
 	}
-	for0(i, 3) {
+	if (0) for0(i, 3) {
 		outsfmt("TEST(%d)\n\r", syssecond());// TIME
 		sysrest(0 _Comment(s), 1);// REST
 	}// delay 3 s
-	if (form_id >= 0) sys_close_form(form_id);
-	form_id = -1;
+	SheetMessage smsg;
+	keyboard_event_t* key_event;
+	while (sys_fetch_msg(form_id, true, &smsg)) {
+		switch (smsg.event) {
+		case SheetEvent::onClick:
+			ploginfo("msg: _click %x(%d, %d)", smsg.args[2], smsg.args[0], smsg.args[1]);
+			break;
+		case SheetEvent::onKeybd:
+			key_event = (keyboard_event_t*)smsg.args;
+			// exit when Alt+F4
+			if (key_event->keycode == _UKEY_F4 && (key_event->mod.l_alt || key_event->mod.r_alt)) {
+				exit(0);
+			}
+			ploginfo("msg: kboard code=%[32H]", *key_event);
+			break;
+		default:
+			ploginfo("msg: typ%u", smsg.event);
+			break;
+		}
+	}
+	if (0) {
+		if (form_id >= 0) sys_close_form(form_id);
+		form_id = -1;
+	};
+
+
+
 	#endif
 
 

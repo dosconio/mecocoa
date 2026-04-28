@@ -123,6 +123,10 @@ int KeyboardBridge::out(const char* str, stduint len) {
 				if (ascii_ch) {
 					VTTY_INNQ(p_vtty)->OutChar(ascii_ch);
 				}
+				// Forward keyboard event to focused window
+				if (last_click_sheet) {
+					last_click_sheet->onrupt(SheetEvent::onKeybd, Point(0, 0), &event);
+				}
 			}
 		}
 	}
@@ -176,6 +180,10 @@ void sysmsg_kbd(keyboard_event_t kbd_event) {
 		}
 		if (ch) {
 			VTTY_INNQ(p_vtty)->OutChar(ch);
+		}
+		// Forward keyboard event to focused window
+		if (last_click_sheet) {
+			last_click_sheet->onrupt(SheetEvent::onKeybd, Point(0, 0), &kbd_event);
 		}
 	}
 }

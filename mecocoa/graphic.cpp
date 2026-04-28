@@ -64,7 +64,7 @@ void Cursor::setSheet(LayerManager& layman, const Point& vertex) {
 }
 
 
-static SheetTrait* last_click_sheet = nullptr;// mark the focused window
+SheetTrait* last_click_sheet = nullptr;// mark the focused window
 
 // hand_mouse
 void hand_mouse(MouseMessage mmsg) {

@@ -45,6 +45,17 @@ Vector<stduint> blocked_vtty_pid;
 // total: may need change after Remove
 unsigned current_screen_TTY = 0;
 
+struct BlockedFormMsg {
+	stduint sig_src; // thread id
+	stduint pform_id; // form index in pforms
+	SheetMessage* usr_msg_ptr; // user space buffer pointer
+
+	bool operator==(const BlockedFormMsg& other) const {
+		return sig_src == other.sig_src && pform_id == other.pform_id && usr_msg_ptr == other.usr_msg_ptr;
+	}
+};
+Vector<BlockedFormMsg> blocked_form_msgs;
+
 //// ---- ---- Bottom Impl ---- ---- ////
 #ifdef _ARC_x86 // x86:
 
@@ -166,6 +177,15 @@ static stdsint ConsoleMsg_FDEL(stduint pform_id, ProcessBlock* pb) {
 	}
 	global_layman.Update(pfrm, Rectangle{ Point2(0,0), pfrm->sheet_area.getSize() });
 
+	// Unblock and notify threads waiting for this form
+	for (stduint i = 0; i < blocked_form_msgs.Count(); i++) {
+		if (blocked_form_msgs[i].pform_id == pform_id) {
+			stdsint err_val = -1;
+			syssend(blocked_form_msgs[i].sig_src, &err_val, sizeof(err_val));
+			blocked_form_msgs.Remove(i--);
+		}
+	}
+
 	// Release resources
 	if (pfrm->sheet_buffer) {
 		delete[] pfrm->sheet_buffer;
@@ -175,6 +195,29 @@ static stdsint ConsoleMsg_FDEL(stduint pform_id, ProcessBlock* pb) {
 	pb->pforms[pform_id] = nullptr;
 
 	return 0;
+}
+
+static stdsint ConsoleMsg_FMSG(const FMT_ConsoleMsg_FMSG* data, ProcessBlock* pb, stduint sig_src) {
+	if (data->pform_id >= _TEMP 4) return -1;
+	SheetTrait* pfrm = pb->pforms[data->pform_id];
+	if (!pfrm) return -1;
+
+	// Assuming pfrm is a Form object with a message queue
+	auto pf = static_cast<::uni::Witch::Form*>(pfrm);
+	if (pf->msg_queue.Count()) {
+		SheetMessage msg;
+		pf->msg_queue.Dequeue(msg);
+		MccaMemCopyP(data->message, pb, &msg, NULL, sizeof(msg));
+		return 1; // Message fetched
+	}
+
+	if (data->if_blocked) {
+		// Store blocking request to be handled later
+		blocked_form_msgs.Append({ sig_src, data->pform_id, data->message });
+		return -2; // Signal that reply is deferred
+	}
+
+	return 0; // No message available
 }
 
 static stdsint ConsoleMsg_FDRW(const FMT_ConsoleMsg_FDRW* data, ProcessBlock* pb) {
@@ -265,6 +308,31 @@ void _Comment(R1) serv_cons_loop()
 			}
 		}
 
+		// Handle blocked form message requests
+		for (stduint i = 0; i < blocked_form_msgs.Count(); i++) {
+			auto& b = blocked_form_msgs[i];
+			ThreadBlock* th = Taskman::LocateThread(b.sig_src);
+			if (!th || !th->parent_process) {
+				blocked_form_msgs.Remove(i--);
+				continue;
+			}
+			ProcessBlock* pb = th->parent_process;
+			SheetTrait* pfrm = pb->pforms[b.pform_id];
+			if (!pfrm) {
+				blocked_form_msgs.Remove(i--);
+				continue;
+			}
+			auto pf = static_cast<::uni::Witch::Form*>(pfrm);
+			if (pf->msg_queue.Count()) {
+				SheetMessage msg;
+				pf->msg_queue.Dequeue(msg);
+				MccaMemCopyP(b.usr_msg_ptr, pb, &msg, NULL, sizeof(msg));
+				stdsint res_val = 1;
+				syssend(b.sig_src, &res_val, sizeof(res_val));
+				blocked_form_msgs.Remove(i--);
+			}
+		}
+
 		// Process potential message
 		if (syscall(syscall_t::TMSG)) {
 			sysrecv(ANYPROC, (void*)to_args, byteof(to_args), (usize*)&sig_type, (usize*)&sig_src);
@@ -310,6 +378,13 @@ void _Comment(R1) serv_cons_loop()
 				}
 				break;
 
+
+			case ConsoleMsg::FMSG:
+				ret = ConsoleMsg_FMSG((FMT_ConsoleMsg_FMSG*)to_args, th->parent_process, sig_src);
+				if (ret != -2) {
+					syssend(sig_src, (void*)&ret, sizeof(ret));
+				}
+				break;
 
 			case ConsoleMsg::FDRW:
 				ret = ConsoleMsg_FDRW((FMT_ConsoleMsg_FDRW*)to_args, th->parent_process);
