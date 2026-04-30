@@ -192,7 +192,6 @@ void LayerManager2::UpdateForce(SheetTrait* who, const Rectangle& rect) {
 
 static SysMessage _BUF_Message_Conv[64];
 uni::Queue<SysMessage> message_queue_conv(_BUF_Message_Conv, numsof(_BUF_Message_Conv));
-extern uni::VideoControlInterface* real_pvci; // Declared for serv_graf_loop
 void serv_graf_loop() {
 	SysMessage msg;// Inner Module Message System
 	#if _GUI_ENABLE == 0
@@ -217,13 +216,13 @@ void serv_graf_loop() {
 			break;
 		case SysMessage::RUPT_FLUSH:
 			// Asynchronous rendering: Compose and then Flush to screen
-			if (ento_gui && global_layman.pvci && global_layman.sheet_buffer) {
+			if (Consman::ento_gui && global_layman.pvci && global_layman.sheet_buffer) {
 				if (msg.args.rect.w > 0 && msg.args.rect.h > 0) {
 					// Perform delayed composition (Layer Blending)
 					global_layman.UpdateForce(nullptr, msg.args.rect.toRectangle());
 					// Flush back-buffer to physical screen
-					if (real_pvci)
-						real_pvci->DrawPoints(msg.args.rect.toRectangle(), global_layman.sheet_buffer);
+					if (Consman::real_pvci)
+						Consman::real_pvci->DrawPoints(msg.args.rect.toRectangle(), global_layman.sheet_buffer);
 				}
 			}
 			break;
@@ -387,8 +386,7 @@ void GloScreenABGR8888::DrawPoints(const Rectangle& rect, const Color* base) con
 
 // Double Buffer
 #if (_MCCA & 0xFF00) == 0x8600
-extern uni::VideoControlInterface* real_pvci;
-void enable_2buffer() {
+void Consman::enable_2buffer() {
 	// Double Buffer
 	//{} put off
 	#if _GUI_DOUBLE_BUFFER
@@ -402,20 +400,19 @@ void enable_2buffer() {
 			global_layman.sheet_buffer[i] = Color::Black;
 		}
 		// Redirect global_layman's VCI to point to our back-buffer
-		extern VideoControlInterface* real_pvci;
-		real_pvci = global_layman.pvci;
+		Consman::real_pvci = global_layman.pvci;
 		// Allocate a static VCI for the back-buffer
 		static byte _BUF_VCI[sizeof(VideoControlInterfaceMARGB8888)];
 		VideoControlInterfaceMARGB8888* back_vci = new (_BUF_VCI) VideoControlInterfaceMARGB8888(global_layman.sheet_buffer, global_layman.window.getSize());
 		global_layman.pvci = back_vci;
 	}
-	enable_dubuffer = true;
+	Consman::enable_dubuffer = true;
 	#endif
 }
 void RenderFrameFlush() {
 	global_layman.CheckTimers(tick);
-	if (!enable_dubuffer) return;
-	if (ento_gui && global_layman.pvci && global_layman.is_dirty) {
+	if (!Consman::enable_dubuffer) return;
+	if (Consman::ento_gui && global_layman.pvci && global_layman.is_dirty) {
 		static uint64 last_flush_time = 0;
 		if (tick - last_flush_time >= 5) { // 100 FPS target (10ms)
 			global_layman.is_dirty = false;

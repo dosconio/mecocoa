@@ -62,7 +62,7 @@ void Handint_PIT()
 	if (time >= 1000) {
 		time = 0;
 		// mecocoa_global->system_time.sec++;//{TEMP} help RTC	
-		if (!ento_gui) {
+		if (!Consman::ento_gui) {
 			Letvar(p, char*, 0xB8001);
 			*p ^= 0x70;// make it blink
 		}

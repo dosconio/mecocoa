@@ -5,7 +5,6 @@
 
 #include "../include/mecocoa.hpp"
 #include <c/driver/keyboard.h>
-#include <cpp/Witch/Form.hpp>
 
 _ESYM_C void R_KBD_INIT();
 
@@ -122,9 +121,9 @@ int KeyboardBridge::out(const char* str, stduint len) {
 				}
 				#endif
 				if (ascii_ch) {
-					extern ::uni::Witch::Form form2;
+					extern ::uni::Witch::Form* form2;
 					// If focus is on an app window (not the console form and not background), swallow the character
-					if (last_click_sheet && last_click_sheet != (::uni::SheetTrait*)&form2) {
+					if (last_click_sheet && last_click_sheet != (::uni::SheetTrait*)form2) {
 						last_click_sheet->onrupt(SheetEvent::onKeybd, Point(0, 0), &event);
 						return 0; // Intercept: do not pass to VTTY
 					}
@@ -141,7 +140,7 @@ int KeyboardBridge::out(const char* str, stduint len) {
 	#if !_GUI_ENABLE
 	struct element { byte ch; byte attr; };
 	Letvar(Ribbon, element*, (_VIDEO_ADDR_BUFFER + 80 * 2 * 24));
-	if (!ento_gui && current_screen_TTY == 0) {
+	if (!Consman::ento_gui && current_screen_TTY == 0) {
 		Ribbon[0].attr = kbd_state.mod.l_ctrl ? 0x70 : 0x07;
 		Ribbon[1].attr = kbd_state.mod.l_shift ? 0x70 : 0x07;
 		Ribbon[2].attr = kbd_state.mod.l_alt ? 0x70 : 0x07;
@@ -186,9 +185,9 @@ void sysmsg_kbd(keyboard_event_t kbd_event) {
 			plogerro("assert p_vtty");
 		}
 		if (ch) {
-			extern ::uni::Witch::Form form2;
+			extern ::uni::Witch::Form* form2;
 			// If focus is on an app window (not the console form and not background), swallow the character
-			if (last_click_sheet && last_click_sheet != (::uni::SheetTrait*)&form2) {
+			if (last_click_sheet && last_click_sheet != (::uni::SheetTrait*)form2) {
 				last_click_sheet->onrupt(SheetEvent::onKeybd, Point(0, 0), &kbd_event);
 				return; // Intercept: do not pass to VTTY
 			}

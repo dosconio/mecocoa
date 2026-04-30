@@ -44,7 +44,7 @@ uherpath=/her
 
 .PHONY: build install lib accm run clean
 
-build: clean lib $(cppobjs)
+build: clean lib $(cppobjs) build_util
 	@echo "MK $(arch) real16 support"
 	aasm prehost/$(arch)/atx-x86.asm        -felf   -o $(uobjpath)/mcca-$(arch)/mcca-$(arch)-elf16.o  -Iinclude/
 	aasm prehost/$(arch)/atx-ladder.asm     -felf   -o $(uobjpath)/mcca-$(arch)/mcca-$(arch)-ladder.o -Iinclude/ -D_MCCA=0x8632
@@ -76,23 +76,14 @@ build: clean lib $(cppobjs)
 	@echo $(sudokey) | sudo -S umount $(mnts)
 	@perl configs/$(arch).bochsdbg.pl > $(ubinpath)/I686/mecocoa/bochsrc.bxrc
 	@perl configs/$(arch).bochsdbg-lin.pl > $(ubinpath)/I686/mecocoa/bochsrc-lin.bxrc
-	#
-	echo MK appinit
-	g++ -I$(uincpath) -Iaccmlib $(flag) -m32 $(CXF) $(CXW) -std=c++2a \
-		-o $(uobjpath)/sapp-$(arch)/init $(uherpath)/COTLAB/src/cotlab.cpp -L$(uobjpath)/accm-$(arch) -l$(arch)
-	echo MK subtest
-	g++ -I$(uincpath) $(flag) -m32 $(CXF) $(CXW) -std=c++2a \
-		subapps/test.cpp -o $(uobjpath)/sapp-$(arch)/c  -L$(uobjpath)/accm-$(arch) -l$(arch) -e _start
-	echo MK hello-rust
-	@cd subapps/_hello/rust/ && cargo build --release --target ../../../configs/Rust/target/cargo-i686.json
 	# --- write out ---
 	@echo $(sudokey) | sudo -S kpartx -av $(ubinpath)/fixed2.vhd  >/dev/null # ls /dev/mapper/loop*p* && sudo mkfs.vfat -F 32 -n "DATA" /dev/mapper/loop*p7
 	@echo $(sudokey) | sudo -S mount /dev/mapper/loop*p7 $(mnts) #sudo fsck.vfat -v /dev/mapper/loop0p7 # fdisk # blkid
 	@echo $(sudokey) | sudo -S cp $(ubinpath)/$(elf_kernel)     $(mnts)/mx86.elf
-	@echo $(sudokey) | sudo -S cp $(uobjpath)/sapp-$(arch)/init $(mnts)/init
+	@echo $(sudokey) | sudo -S rm       $(mnts)/apps/*
 	@echo $(sudokey) | sudo -S mkdir -p $(mnts)/apps
-	@echo $(sudokey) | sudo -S cp $(uobjpath)/sapp-$(arch)/c    $(mnts)/apps/c
-	-@echo $(sudokey) | sudo -S cp subapps/_hello/rust/target/cargo-i686/release/rust    $(mnts)/apps/d
+	@echo $(sudokey) | sudo -S mv $(uobjpath)/sapp-$(arch)/init $(mnts)/init
+	@echo $(sudokey) | sudo -S cp $(uobjpath)/sapp-$(arch)/*    $(mnts)/apps/
 	@tree $(mnts) -s
 	@echo $(sudokey) | sudo -S umount $(mnts)
 	@echo $(sudokey) | sudo -S kpartx -dv $(ubinpath)/fixed2.vhd >/dev/null
@@ -102,6 +93,23 @@ build: clean lib $(cppobjs)
 	@echo "You can now debug in bochs with the command:"
 	@echo "  " $(bochd) -f $(dstdir)/bochsrc.bxrc
 	@echo "  " bochs -f $(ubinpath)/I686/mecocoa/bochsrc-lin.bxrc -debugger
+
+build_util:
+	# ---- COTL INIT ---- #
+	echo MK appinit
+	g++ -I$(uincpath) -Iaccmlib $(flag) -m32 $(CXF) $(CXW) -std=c++2a \
+		-o $(uobjpath)/sapp-$(arch)/init\
+		$(uherpath)/COTLAB/src/cotlab.cpp -L$(uobjpath)/accm-$(arch) -l$(arch)
+	# ---- UNIS UTIL ---- #
+	# ---- MCCA UTIL ---- #
+	echo MK subtest
+	g++ -I$(uincpath) $(flag) -m32 $(CXF) $(CXW) -std=c++2a \
+		subapps/test.cpp -o $(uobjpath)/sapp-$(arch)/test\
+		-L$(uobjpath)/accm-$(arch) -l$(arch) -e _start
+	#
+	echo MK hello-rust
+	@cd subapps/_hello/rust/ && cargo build --release --target ../../../configs/Rust/target/cargo-i686.json
+	cp subapps/_hello/rust/target/cargo-i686/release/rust    $(uobjpath)/sapp-$(arch)/_rust
 
 install:
 	@echo $(sudokey) | sudo -S cp $(ubinpath)/$(elf_kernel)     /boot/mx86.elf

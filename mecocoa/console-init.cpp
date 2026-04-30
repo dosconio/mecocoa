@@ -4,7 +4,6 @@
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 #include "../include/mecocoa.hpp"
 
-#include <cpp/Witch/Form.hpp>
 
 #if (_MCCA & 0xFF00) == 0x8600
 Cursor* Cursor::global_cursor = nullptr;
@@ -16,9 +15,9 @@ bool Cursor::mouse_btnr_dn = false;
 BareConsole Bcons[TTY_NUMBER];// TTY 0~3 and their buffer
 // consider GUI
 byte _BUF_cursor[byteof(Cursor)];
-bool ento_gui = false;
-bool enable_dubuffer = false;
-VideoControlInterface* real_pvci = nullptr;
+bool Consman::ento_gui = false;
+bool Consman::enable_dubuffer = false;
+VideoControlInterface* Consman::real_pvci = nullptr;
 
 #ifndef _UEFI
 GloScreenARGB8888 local_vci;
@@ -52,7 +51,7 @@ static void InitializeBottomBar() {
 }
 #endif
 
-::uni::Witch::Form form2 _TEMP;
+::uni::Witch::Form* form2 _TEMP;
 
 bool Consman::Initialize() {
 	con0_out = 0;
@@ -82,7 +81,7 @@ bool Consman::Initialize() {
 	#else
 	vmod_default = 0xFFFF;
 	#endif
-	ento_gui = vmod_default;
+	Consman::ento_gui = vmod_default;
 	if (!vmod_default) {
 		con0_out = &Bcons[0];
 		Bcons[0].Scroll(24);
@@ -142,32 +141,14 @@ bool Consman::Initialize() {
 
 	if (_TEMP 1) {
 		Rectangle rect{ Point(250, 160), Size2(480, 320) };
-		auto pcon = new VideoConsole2(NULL,
-			Rectangle(Point(2, 2), Size2(470, 290)),
-				Color::Black, 0xFFFCEAF1
-		);
-		// auto vcon_buf = (Color*)mem.allocate(pcon->window.getArea() * sizeof(Color));// Vcon Gen1
-		auto text_buf = (BufferChar*)mem.allocate(pcon->getCols() * pcon->getRows() * sizeof(BufferChar));
-		auto line_buf = (Color*)mem.allocate(pcon->getLineBufferSize() * sizeof(Color));
-		pcon->setBuffers(nullptr, text_buf, line_buf);
-		pcon->InitializeSheet(global_layman, pcon->window.getVertex(), pcon->window.getSize());
-		// pcon->setModeBuffer(vcon_buf); Vcon Gen1
-		pcon->Clear();
-
-		form2.Title = "Console-Gen2";
-		form2.AppendControl(pcon);
-		form2.setSheet(global_layman, rect, (Color*)mem.allocate(rect.getArea() * sizeof(Color)));
-		form2.setFocus(pcon);
-		global_layman.Append(&form2);
-		pcon->Start();
-
-		VTTY_Append((pcon));
+		auto [pcon, pf, tty_no] = CreateVconsole(rect, "Console-Gen2");
+		form2 = pf;
 	}// should follow 'init'
 
 	global_layman.Append(vcon0);
 
 	#if _GUI_DOUBLE_BUFFER
-	enable_2buffer();
+	Consman::enable_2buffer();
 	#endif
 
 	vcon0->Clear();

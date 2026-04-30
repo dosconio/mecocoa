@@ -198,7 +198,7 @@ void serv_file_loop()// for IDE 0:0, 0:1
 			if (plab) {
 				ProcessBlock* p;
 				p = Taskman::CreateFile((*plab + "/init").reference(), RING_U, Task_Kernel);
-				p->focus_tty = vttys[ento_gui ? 1 : 0];
+				p->focus_tty = vttys[Consman::ento_gui ? 1 : 0];
 				Taskman::Append(p);
 				Taskman::AppendThread(p->main_thread);
 			}
@@ -207,7 +207,7 @@ void serv_file_loop()// for IDE 0:0, 0:1
 			#elif _MCCA == 0x8664 && defined(_UEFI)
 			syssend(Task_Memdisk_Serv, &retval, sizeof(retval[0]), _IMM(FiledevMsg::RUPT));
 			ProcessBlock* p = Taskman::CreateFile(("/md0/init"), RING_U, Task_Kernel);
-			p->focus_tty = vttys[ento_gui ? 1 : 0];
+			p->focus_tty = vttys[Consman::ento_gui ? 1 : 0];
 			Taskman::Append(p);
 			Taskman::AppendThread(p->main_thread);
 

@@ -13,15 +13,12 @@
 String dump_availmem();
 void mecfetch() {
 	#if ((_MCCA & 0xFF00) == 0x8600)
-	// const rostr blue = ento_gui ? "\xFE\xF8\xC8\x58" : "\xFF\x30";
-	// const rostr pink = ento_gui ? "\xFE\xB8\xA8\xF8" : "\xFF\x50";
-	// const rostr white = ento_gui ? "\xFE\xFF\xFF\xFF" : "\xFF\x70";
-	const rostr blue = "\033[48;2;88;200;248m";
-	const rostr pink = "\033[48;2;248;168;184m";
-	const rostr white = "\033[48;2;255;255;255m";
-	const unsigned attrl = ento_gui ? 4 : 2;
-	const unsigned width = ento_gui ? 48 : 16;
-	const unsigned height = ento_gui ? 3 : 1;
+	const rostr blue = "\033[48;2;88;200;248m"; 	//  ento_gui ? "\xFE\xF8\xC8\x58" : "\xFF\x30";
+	const rostr pink = "\033[48;2;248;168;184m";	//  ento_gui ? "\xFE\xB8\xA8\xF8" : "\xFF\x50";
+	const rostr white = "\033[48;2;255;255;255m";	//  ento_gui ? "\xFE\xFF\xFF\xFF" : "\xFF\x70";
+	const unsigned attrl = Consman::ento_gui ? 4 : 2;
+	const unsigned width = Consman::ento_gui ? 48 : 16;
+	const unsigned height = Consman::ento_gui ? 3 : 1;
 
 	#if _GUI_LOGO
 	Console.OutFormat(blue, attrl);

@@ -17,6 +17,7 @@ public:\
 
 #include <cpp/Device/_Video.hpp>
 #include <c/driver/mouse.h>
+#include <cpp/Witch/Form.hpp>
 
 extern Dchain ttys, vttys;
 struct vtty_type_t {
@@ -115,14 +116,24 @@ public:
 defVconIface(GloScreenARGB8888, uint32);
 defVconIface(GloScreenABGR8888, uint32);
 
-extern bool ento_gui;
-extern bool enable_dubuffer;
-
+struct _RET_CreateVconsole {
+	uni::VideoConsole2* pcon;
+	::uni::Witch::Form* pform;
+	stduint tty_no;
+	// -> pid
+};
 struct Consman {
+	// GUI
+	static bool ento_gui;
+	static bool enable_dubuffer;
+	static uni::VideoControlInterface* real_pvci;
+	//
 	static bool Initialize();
+	static void enable_2buffer();
+	static _RET_CreateVconsole CreateVconsole(const Rectangle& rect, rostr title);
+	//{} TODO RemoveVconsole
 };
 
-void enable_2buffer();
 
 void hand_mouse(MouseMessage mmsg);
 void hand_kboard(keyboard_event_t mmsg);

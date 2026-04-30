@@ -4,7 +4,6 @@
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 #include "../include/mecocoa.hpp"
 
-#include <cpp/Witch/Form.hpp>
 #include <cpp/Witch/Control/Control-Label.hpp>
 #include <cpp/Witch/Control/Control-TextBox.hpp>
 
@@ -76,6 +75,37 @@ void uni::BareConsole::doshow(void* _) {
 	Bcons[id].auto_incbegaddr = true;
 }
 
+#endif
+
+#if _GUI_ENABLE
+_RET_CreateVconsole Consman::CreateVconsole(const Rectangle& rect, rostr title) {
+	_RET_CreateVconsole ret;
+	auto pcon = new VideoConsole2(NULL,
+		Rectangle(Point(2, 2), Size2(rect.width - 10, rect.height - 30)),
+		Color::Black, 0xFFFCEAF1
+	);
+	ret.pcon = pcon;
+	// auto vcon_buf = (Color*)mem.allocate(pcon->window.getArea() * sizeof(Color));// Vcon Gen1
+	auto text_buf = (BufferChar*)mem.allocate(pcon->getCols() * pcon->getRows() * sizeof(BufferChar));
+	auto line_buf = (Color*)mem.allocate(pcon->getLineBufferSize() * sizeof(Color));
+	pcon->setBuffers(nullptr, text_buf, line_buf);
+	pcon->InitializeSheet(global_layman, pcon->window.getVertex(), pcon->window.getSize());
+	// pcon->setModeBuffer(vcon_buf); Vcon Gen1
+	pcon->Clear();
+
+	auto pform = new ::uni::Witch::Form();
+	ret.pform = pform;
+	pform->Title = title;
+	pform->AppendControl(pcon);
+	pform->setSheet(global_layman, rect, (Color*)mem.allocate(rect.getArea() * sizeof(Color)));
+	pform->setFocus(pcon);
+	global_layman.Append(pform);
+	pcon->Start();//{} 2buffer only now
+
+	VTTY_Append((pcon));
+	ret.tty_no = vttys.Locate((pureptr_t)pcon, false);
+	return ret;
+}
 #endif
 
 //// ---- ---- DYNAMIC CORE ---- ---- ////

@@ -37,7 +37,7 @@ void Handint_RTC()
 	innpb(0x71);
 	mecocoa_global->system_time.sec++;
 
-	if (!ento_gui) {
+	if (!Consman::ento_gui) {
 		Letvar(p, char*, 0xB8003);
 		*p ^= 0x70;// make it blink
 	}

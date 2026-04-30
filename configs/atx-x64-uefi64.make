@@ -75,7 +75,7 @@ sudokey=k
 uherpath=/her
 
 .PHONY : build
-build: clean $(archdir)/kerdisk.fat $(ubinpath)/$(arch).img $(asmobjs) $(cppobjs) $(cplobjs)
+build: clean $(archdir)/kerdisk.fat $(ubinpath)/$(arch).img $(asmobjs) $(cppobjs) $(cplobjs) build_util
 	@echo MK $(elf_kernel)
 	$(CX) $(XFLAGS) \
 		-T prehost/$(arch)/$(arch).ld -o $(ubinpath)/$(elf_kernel) \
@@ -83,24 +83,10 @@ build: clean $(archdir)/kerdisk.fat $(ubinpath)/$(arch).img $(asmobjs) $(cppobjs
 		prehost/$(arch)/$(arch).cpp \
 		$(uobjpath)/mcca-$(arch)/*.o \
 	# OUTDATED # prehost/$(arch)/script-adapt.sh ~/_obj/$(elf_kernel) $(ubinpath)/$(elf_kernel)
-	mkdir -p $(uobjpath)/sapp-$(arch)
-	echo MK appinit
-	$(CX) -Iaccmlib $(XFLAGS) \
-		-o $(uobjpath)/sapp-$(arch)/init $(uherpath)/COTLAB/src/cotlab.cpp -L$(uobjpath)/accm-atx-x64 -latx-x64 -e _start
-	echo MK subtest
-	$(CX) -Iaccmlib $(XFLAGS) \
-		subapps/test.cpp -o $(uobjpath)/sapp-$(arch)/c  -L$(uobjpath)/accm-atx-x64 -latx-x64 -e _start
-	echo MK a
-	aasm subapps/_hello/asm/helloa-x64.asm -felf64 -o subapps/_hello/asm/helloa-x64.o
-	ld   -s -m elf_x86_64 -o $(uobjpath)/app-$(arch)/a subapps/_hello/asm/helloa-x64.o -Ttext-segment=0x10000 -e main
-	#
 	@echo $(sudokey) | sudo -S mkdir -p $(mntdir)
 	@echo $(sudokey) | sudo -S mount -o loop $(archdir)/kerdisk.fat $(mntdir)
 	#
-	mkdir -p $(uobjpath)/app-$(arch)
-	@echo $(sudokey) | sudo -S cp $(uobjpath)/sapp-$(arch)/init $(mntdir)/init
-	@echo $(sudokey) | sudo -S cp $(uobjpath)/sapp-$(arch)/c    $(mntdir)/c
-	@echo $(sudokey) | sudo -S cp $(uobjpath)/app-$(arch)/a $(mntdir)/appa.elf
+	@echo $(sudokey) | sudo -S cp $(uobjpath)/sapp-$(arch)/*    $(mntdir)/
 	tree $(mntdir)
 	@echo $(sudokey) | sudo -S umount $(mntdir)
 	@echo $(sudokey) | sudo -S mount -o loop $(ubinpath)/$(arch).img $(mntdir)
@@ -122,6 +108,23 @@ $(ubinpath)/$(arch).img: loader
 	qemu-img create -f raw $@ 100M > /dev/null
 	mkfs.fat -n 'MECOCOA ' -s 2 -f 2 -R 32 -F 32 $@ > /dev/null
 
+build_util:
+	mkdir -p $(uobjpath)/sapp-$(arch)
+	# ---- COTL INIT ---- #
+	echo MK appinit
+	$(CX) -Iaccmlib $(XFLAGS) \
+		-o $(uobjpath)/sapp-$(arch)/init \
+		$(uherpath)/COTLAB/src/cotlab.cpp -L$(uobjpath)/accm-atx-x64 -latx-x64 -e _start
+	# ---- UNIS UTIL ---- #
+	# ---- MCCA UTIL ---- #
+	echo MK subtest
+	$(CX) -Iaccmlib $(XFLAGS) \
+		subapps/test.cpp -o $(uobjpath)/sapp-$(arch)/test \
+		-L$(uobjpath)/accm-atx-x64 -latx-x64 -e _start
+# (ASM TEMPLATE)
+#	echo MK a
+#	aasm subapps/_hello/asm/helloa-x64.asm -felf64 -o subapps/_hello/asm/helloa-x64.o
+#	ld   -s -m elf_x86_64 -o $(uobjpath)/sapp-$(arch)/a subapps/_hello/asm/helloa-x64.o -Ttext-segment=0x10000 -e main
 
 edkdir=/home/$(USER)/soft/edk2
 .PHONY : loader
