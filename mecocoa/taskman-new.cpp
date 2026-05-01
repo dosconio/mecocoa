@@ -224,7 +224,7 @@ ProcessBlock* Taskman::Create(void* entry, byte ring, bool append)
 	if (!ppb) return nullptr;
 	ppb->ring = ring;
 	ppb->parent_id = Task_Kernel;
-	ppb->focus_tty = vttys[0];
+	ppb->focus_tty = nullptr;
 	
 	auto tb = AllocateThread();
 	ppb->main_thread = tb;
@@ -353,7 +353,7 @@ ProcessBlock* Taskman::CreateELF(BlockTrait* source, byte ring) {
 	ProcessBlock* pb = Taskman::AllocateTask();
 	pb->ring = ring;
 	pb->parent_id = Task_Kernel;
-	pb->focus_tty = vttys[0];
+	pb->focus_tty = nullptr;
 	
 	auto tb = AllocateThread();
 	pb->main_thread = tb;
@@ -437,6 +437,10 @@ ProcessBlock* Taskman::CreateFork(ProcessBlock* fo, const CallgateFrame* frame) 
 	pb->ring = ring;
 	pb->parent_id = fo->getID();
 	pb->focus_tty = fo->focus_tty;
+	if (pb->focus_tty && pb->focus_tty->type) {
+		auto pblock = (vtty_type_t*)pb->focus_tty->type;
+		pblock->proc_group.Append(pb->pid);
+	}
 	
 	auto tb = AllocateThread();
 	pb->main_thread = tb;
@@ -643,9 +647,25 @@ ProcessBlock* Taskman::Exec(stduint parent, rostr usr_fullpath, void* usr_argsta
 
 	#endif
 
+	#if _GUI_ENABLE
+	ProcessBlock* shell_pb = Taskman::Create((void*)&serv_shell_process, RING_M);
+	if (shell_pb) {
+		syssend(shell_pb->main_thread->getID(), &new_pb, sizeof(new_pb), 0);
+	} else {
+		new_pb->focus_tty = parent_pb->focus_tty;
+		if (new_pb->focus_tty && new_pb->focus_tty->type) {
+			auto pblock = (vtty_type_t*)new_pb->focus_tty->type;
+			pblock->proc_group.Append(new_pb->pid);
+		}
+		Taskman::Append(new_pb);
+		Taskman::AppendThread(new_pb->main_thread);
+	}
+	#else
+
 	new_pb->focus_tty = parent_pb->focus_tty;
 	Taskman::Append(new_pb);
 	Taskman::AppendThread(new_pb->main_thread);
+	#endif
 	return new_pb;
 }
 

@@ -261,10 +261,31 @@ bool Taskman::Exit(ProcessBlock* p, stdsint exit_code)
 		p->pfiles[i] = 0;
 	}
 
+	#if _GUI_ENABLE
 	// Release Forms First
 	stduint fdel_args[2] = { ~_IMM0, pid };
 	syssend(Task_Console, fdel_args, sizeof(fdel_args), _IMM(ConsoleMsg::FDEL));
 	sysrecv(Task_Console, fdel_args, sizeof(fdel_args));
+
+	// Release TTY Binding
+	if (p->focus_tty && p->focus_tty->type) {
+		auto pblock = (vtty_type_t*)p->focus_tty->type;
+		for (stdsint i = pblock->proc_group.Count() - 1; i >= 0; --i) {
+			if (pblock->proc_group[i] == pid) {
+				pblock->proc_group.Remove(i);
+				break;
+			}
+		}
+		if (pblock->proc_group.Count() == 0 && pblock->master_pid != 0) {
+			stduint mpid = pblock->master_pid;
+			pblock->master_pid = 0; // prevent recursion
+			auto master_pb = Taskman::Locate(mpid);
+			if (master_pb && master_pb->state == ProcessBlock::State::Active) {
+				Taskman::Exit(master_pb, 0);
+			}
+		}
+	}
+	#endif
 
 	p->exit_status = exit_code;
 	// ploginfo("Process %u exited with code %[x]", pid, exit_code);

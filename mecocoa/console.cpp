@@ -16,14 +16,14 @@ Dchain ttys = { nullptr };// offs->ConT*, type->B/V
 static void VTTY_Free(pureptr_t inp) {
 	Letvar(nod, Dnode*, inp);
 	// skip offs
-	auto& block = *(vtty_type_t*)nod->type;
-	if (block.innput_queue.slice.address) {
-		delete (byte*)block.innput_queue.slice.address;
+	auto pblock = (vtty_type_t*)nod->type;
+	if (pblock->innput_queue.slice.address) {
+		delete[] (byte*)pblock->innput_queue.slice.address;
 	}
-	if (block.output_queue.slice.address) {
+	if (pblock->output_queue.slice.address) {
 		_TODO
 	}
-	memf((void*)nod->type);
+	delete pblock;
 }
 Dnode* VTTY_Append(Console_t* con) {
 	if (!con) {
@@ -34,7 +34,15 @@ Dnode* VTTY_Append(Console_t* con) {
 	if (!p) return nullptr;
 	const stduint SIZE_INN_BUF = 64;
 	auto p_innbuf = new byte[SIZE_INN_BUF];
-	p->type = _IMM(new vtty_type_t({ 0, QueueLimited({_IMM(p_innbuf), SIZE_INN_BUF}), QueueLimited({0, 0}) }));
+	auto pblock = new vtty_type_t({ 0, QueueLimited({_IMM(p_innbuf), SIZE_INN_BUF}), QueueLimited({0, 0}) });
+	p->type = _IMM(pblock);
+	
+	if (Taskman::current_thread[Taskman::getID()]) {
+		pblock->master_pid = Taskman::CurrentPID();
+	} else {
+		pblock->master_pid = 0;
+	}
+	
 	return p;
 }
 Dchain vttys = { VTTY_Free };// offs->ConT*, type->vtty_type_t
@@ -54,6 +62,8 @@ struct BlockedFormMsg {
 	}
 };
 Vector<BlockedFormMsg> blocked_form_msgs;
+
+::uni::Witch::Form* form_terminal = nullptr;
 
 //// ---- ---- Bottom Impl ---- ---- ////
 #ifdef _ARC_x86 // x86:
@@ -85,26 +95,65 @@ _RET_CreateVconsole Consman::CreateVconsole(const Rectangle& rect, rostr title) 
 		Color::Black, 0xFFFCEAF1
 	);
 	ret.pcon = pcon;
+	// plogwarn(">pcon: %x", pcon);
 	// auto vcon_buf = (Color*)mem.allocate(pcon->window.getArea() * sizeof(Color));// Vcon Gen1
-	auto text_buf = (BufferChar*)mem.allocate(pcon->getCols() * pcon->getRows() * sizeof(BufferChar));
-	auto line_buf = (Color*)mem.allocate(pcon->getLineBufferSize() * sizeof(Color));
+	auto text_buf = new BufferChar[pcon->getCols() * pcon->getRows()];
+	// plogwarn(">text_buf: %x", text_buf);
+	auto line_buf = new Color[pcon->getLineBufferSize()];
+	// plogwarn(">line_buf: %x", line_buf);
 	pcon->setBuffers(nullptr, text_buf, line_buf);
-	pcon->InitializeSheet(global_layman, pcon->window.getVertex(), pcon->window.getSize());
-	// pcon->setModeBuffer(vcon_buf); Vcon Gen1
-	pcon->Clear();
-
+	
 	auto pform = new ::uni::Witch::Form();
+	// plogwarn(">pform: %x", pform);
+	form_terminal = pform;
 	ret.pform = pform;
 	pform->Title = title;
+	pcon->InitializeSheet(*pform, pcon->window.getVertex(), pcon->window.getSize());
+	// pcon->setModeBuffer(vcon_buf); Vcon Gen1
+	pcon->Clear();
 	pform->AppendControl(pcon);
-	pform->setSheet(global_layman, rect, (Color*)mem.allocate(rect.getArea() * sizeof(Color)));
+	pform->setSheet(global_layman, rect, new Color[rect.getArea()]);
 	pform->setFocus(pcon);
 	global_layman.Append(pform);
+
+	// Move the new form to the second layer (behind the cursor)
+	Nnode* target = &pform->refSheetNode();
+	if (global_layman.subf && target != global_layman.subf) {
+		// Remove from the tail where Append put it
+		if (target->left) target->left->next = target->next;
+		if (global_layman.subl == target) global_layman.subl = target->left;
+		// Insert after the top layer (cursor)
+		Nnode* top = global_layman.subf;
+		Nnode* sec = top->next;
+		target->left = top;
+		target->next = sec;
+		top->next = target;
+		if (sec) sec->left = target;
+		else global_layman.subl = target;// target is now the new tail
+	}
+	global_layman.Update(pform, Rectangle(Point(0, 0), rect.getSize()));
+
 	pcon->Start();//{} 2buffer only now
 
-	VTTY_Append((pcon));
+	VTTY_Append(pcon);
 	ret.tty_no = vttys.Locate((pureptr_t)pcon, false);
+	ploginfo("CreateVconsole: tty_no=%u", ret.tty_no);
+	// pcon->OutFormat("Hello");
 	return ret;
+}
+
+void Consman::RemoveVconsole(stduint tty_no) {
+	if (tty_no >= vttys.Count()) return;
+	Dnode* nod = vttys.LocateNode(tty_no);
+	if (!nod) return;
+	auto pcon = (uni::VideoConsole2*)nod->offs;
+	if (pcon) {
+		pcon->Stop();
+		delete pcon;
+	}
+	vttys.Remove(nod);
+
+	//{} Remove from global_layman
 }
 #endif
 
@@ -255,7 +304,7 @@ static stdsint ConsoleMsg_FDRW(const FMT_ConsoleMsg_FDRW* data, ProcessBlock* pb
 	if (data->pform_id >= _TEMP 4) return -1;
 	SheetTrait* pfrm = pb->pforms[data->pform_id];
 	if (!pfrm) return -1;
-	ploginfo("ConsoleMsg_FDRW: draw %d", data->shape_type);
+	// ploginfo("ConsoleMsg_FDRW: draw %d", data->shape_type);
 	switch (data->shape_type) {
 	case FMT_ConsoleMsg_FDRW::Shape::Point: {
 		FMT_ConsoleMsg_FDRW::ShapeInfo::ColorPoint cp;
@@ -316,6 +365,73 @@ static stdsint ConsoleMsg_FCHR(const FMT_ConsoleMsg_FCHR* data, ProcessBlock* pb
 }
 #endif
 
+
+#ifdef _ARC_x86
+extern String* plab;
+#endif
+#if _GUI_ENABLE
+void _Comment(R1) serv_shell_process() {
+	stduint tty_target = 0;
+	::uni::Witch::Form* pf_ptr = nullptr;
+	if (Consman::ento_gui) {
+		Rectangle rect{ Point(250, 160), Size2(480, 320) };
+		auto [pcon, pf, tty_no] = Consman::CreateVconsole(rect, "Terminal");
+		pf_ptr = pf;
+		tty_target = tty_no;
+		ploginfo("CreateVconsole->[%[x],%[x],%u]", pcon, pf, tty_no);
+	}
+
+	ProcessBlock* p = nullptr;
+	stduint src = 0, type = 0;
+	sysrecv(ANYPROC, &p, sizeof(p), &type, &src);
+	if (p) {
+		p->focus_tty = vttys[tty_target];
+		if (auto nod = vttys.LocateNode(tty_target)) {
+			auto pblock = (vtty_type_t*)nod->type;
+			pblock->master_pid = Taskman::CurrentPID();
+			pblock->proc_group.Append(p->pid);
+		}
+		Taskman::Append(p);
+		Taskman::AppendThread(p->main_thread);
+	}
+	
+	extern const char key_map[256], key_map_shift[256];
+	while (true) {
+		if (pf_ptr) {
+			while (pf_ptr->msg_queue.Count()) {
+				SheetMessage smsg;
+				pf_ptr->msg_queue.Dequeue(smsg);
+				if (smsg.event == SheetEvent::onKeybd) {
+					auto* key_event = (keyboard_event_t*)smsg.args;
+					if (key_event->method == keyboard_event_t::method_t::keydown) {
+						auto ascii_ch = (key_event->mod.l_shift || key_event->mod.r_shift ? key_map_shift : key_map)[key_event->keycode];
+						if (ascii_ch) {
+							VTTY_INNQ(vttys[tty_target])->OutChar(ascii_ch);
+						}
+					}
+				}
+			}
+		}
+
+		HALT();
+		if (auto nod = vttys.LocateNode(tty_target)) {
+			auto pblock = (vtty_type_t*)nod->type;
+			if (p && pblock->proc_group.Count() == 0) {
+				break;
+			}
+		} else {
+			break;
+		}
+	}
+	
+	
+	if (Consman::ento_gui) {
+		Consman::RemoveVconsole(tty_target);
+	}
+	syscall(syscall_t::EXIT);
+	loop Taskman::Schedule(true);
+}
+#endif
 
 void _Comment(R1) serv_cons_loop()
 {
@@ -430,7 +546,7 @@ void _Comment(R1) serv_cons_loop()
 
 
 			default:
-				plogerro("Unknown syscall type %u", sig_type);
+				plogerro("Unknown consmsg type %u", sig_type);
 				break;
 			}
 		}

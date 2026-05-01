@@ -24,6 +24,10 @@ struct vtty_type_t {
 	stduint blocked_pid;
 	QueueLimited innput_queue;
 	QueueLimited output_queue;
+	uni::Vector<stduint> proc_group;
+	stduint master_pid = 0;
+
+	// vtty_type_t() : innput_queue({ 0,0 }), output_queue({ 0,0 }) {}
 };
 Dnode* VTTY_Append(Console_t* con);
 inline static QueueLimited* VTTY_INNQ(Dnode* nod) {
@@ -131,7 +135,7 @@ struct Consman {
 	static bool Initialize();
 	static void enable_2buffer();
 	static _RET_CreateVconsole CreateVconsole(const Rectangle& rect, rostr title);
-	//{} TODO RemoveVconsole
+	static void RemoveVconsole(stduint tty_no);
 };
 
 

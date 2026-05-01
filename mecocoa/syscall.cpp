@@ -54,7 +54,7 @@ DEFSYSC sysc_OUTC(stduint ch, stduint len) {
 	MutexLocal mutex(&outc_mutex);
 	auto th = Taskman::current_thread[Taskman::getID()];
 	if (auto pid = th->parent_process) {
-		if (auto con = pid->focus_tty ? (Console_t*)cast<Dnode*>(pid->focus_tty)->offs : 0)
+		if (auto con = pid->focus_tty ? (Console_t*)pid->focus_tty->offs : 0)
 		{
 			if (!len) con->OutChar(ch);
 			else while (len) {

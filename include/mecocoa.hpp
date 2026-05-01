@@ -39,6 +39,7 @@ extern volatile stduint tick;
 void serv_task_loop();
 #include "console.hpp"
 void serv_cons_loop();
+void serv_shell_process();
 void serv_graf_loop();
 #include "filesys.hpp"
 #include "fileman.hpp"

@@ -196,25 +196,48 @@ void serv_file_loop()// for IDE 0:0, 0:1
 			#ifdef _ARC_x86
 			syssend(Task_Hdd_Serv, &retval, sizeof(retval[0]), _IMM(FiledevMsg::RUPT));// while (!fileman_hd_ready);
 			if (plab) {
+				#if _GUI_ENABLE
+				ProcessBlock* shell_p = Taskman::Create((void*)&serv_shell_process, RING_M);
+				ProcessBlock* init_p = Taskman::CreateFile((*plab + "/init").reference(), RING_U, shell_p->pid);
+				if (shell_p) {
+					syssend(shell_p->main_thread->getID(), &init_p, sizeof(init_p));
+				}
+				else if (init_p) {
+					plogerro("Shell creation failed, but init loaded.");
+				}
+				#else
 				ProcessBlock* p;
 				p = Taskman::CreateFile((*plab + "/init").reference(), RING_U, Task_Kernel);
-				p->focus_tty = vttys[Consman::ento_gui ? 1 : 0];
+				p->focus_tty = vttys[0];
 				Taskman::Append(p);
 				Taskman::AppendThread(p->main_thread);
+				#endif
 			}
 			else plogerro("No fs for INIT");
 
 			#elif _MCCA == 0x8664 && defined(_UEFI)
+			
 			syssend(Task_Memdisk_Serv, &retval, sizeof(retval[0]), _IMM(FiledevMsg::RUPT));
+			#if _GUI_ENABLE
+			ProcessBlock* shell_p = Taskman::Create((void*)&serv_shell_process, RING_M);
+			ProcessBlock* init_p = Taskman::CreateFile(("/md0/init"), RING_U, shell_p->pid);
+			if (shell_p) {
+				syssend(shell_p->main_thread->getID(), &init_p, sizeof(init_p));
+			} else if (init_p) {
+				plogerro("Shell creation failed, but init loaded.");
+			}
+			#else
 			ProcessBlock* p = Taskman::CreateFile(("/md0/init"), RING_U, Task_Kernel);
 			p->focus_tty = vttys[Consman::ento_gui ? 1 : 0];
 			Taskman::Append(p);
 			Taskman::AppendThread(p->main_thread);
+			#endif
 
 			#elif (_MCCA & 0xFF00) == 0x1000
 			syssend(Task_Memdisk_Serv, &retval, sizeof(retval[0]), _IMM(FiledevMsg::RUPT));
 			ProcessBlock* p;
 			p = Taskman::CreateFile(("/md0/lpa.elf"), RING_U, Task_Kernel);
+			p->focus_tty = vttys[0];
 			Taskman::Append(p);
 			Taskman::AppendThread(p->main_thread);
 			#endif

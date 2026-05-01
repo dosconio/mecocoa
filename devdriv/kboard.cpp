@@ -121,13 +121,16 @@ int KeyboardBridge::out(const char* str, stduint len) {
 				}
 				#endif
 				if (ascii_ch) {
-					extern ::uni::Witch::Form* form2;
+					#if _GUI_ENABLE
 					// If focus is on an app window (not the console form and not background), swallow the character
-					if (last_click_sheet && last_click_sheet != (::uni::SheetTrait*)form2) {
+					if (last_click_sheet && last_click_sheet->refSheetNode().next) {
+						// ignore background
 						last_click_sheet->onrupt(SheetEvent::onKeybd, Point(0, 0), &event);
 						return 0; // Intercept: do not pass to VTTY
 					}
+					#else
 					VTTY_INNQ(p_vtty)->OutChar(ascii_ch);
+					#endif
 				}
 				// Forward keyboard event to focused window (for console or background)
 				if (last_click_sheet) {
@@ -184,17 +187,8 @@ void sysmsg_kbd(keyboard_event_t kbd_event) {
 		if (!p_vtty) {
 			plogerro("assert p_vtty");
 		}
-		if (ch) {
-			extern ::uni::Witch::Form* form2;
-			// If focus is on an app window (not the console form and not background), swallow the character
-			if (last_click_sheet && last_click_sheet != (::uni::SheetTrait*)form2) {
-				last_click_sheet->onrupt(SheetEvent::onKeybd, Point(0, 0), &kbd_event);
-				return; // Intercept: do not pass to VTTY
-			}
-			VTTY_INNQ(p_vtty)->OutChar(ch);
-		}
 		// Forward keyboard event to focused window (for console or background)
-		if (last_click_sheet) {
+		if (last_click_sheet && last_click_sheet->refSheetNode().next) {
 			last_click_sheet->onrupt(SheetEvent::onKeybd, Point(0, 0), &kbd_event);
 		}
 	}

@@ -67,7 +67,7 @@ int main(int argc, char** argv)
 	while (sys_fetch_msg(form_id, true, &smsg)) {
 		switch (smsg.event) {
 		case SheetEvent::onMoved:
-			ploginfo("msg: _moved at (%d, %d)", smsg.args[0], smsg.args[1]);
+			// ploginfo("msg: _moved at (%d, %d)", smsg.args[0], smsg.args[1]);
 			break;
 		case SheetEvent::onClick:
 			if (smsg.args[3] == 1 && !(smsg.args[2] & 0x10)) {

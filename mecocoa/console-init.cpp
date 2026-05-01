@@ -51,7 +51,6 @@ static void InitializeBottomBar() {
 }
 #endif
 
-::uni::Witch::Form* form2 _TEMP;
 
 bool Consman::Initialize() {
 	con0_out = 0;
@@ -139,12 +138,6 @@ bool Consman::Initialize() {
 	const Point cursor_pos = { 300,200 };
 	Cursor::global_cursor->setSheet(global_layman, cursor_pos);
 
-	if (_TEMP 1) {
-		Rectangle rect{ Point(250, 160), Size2(480, 320) };
-		auto [pcon, pf, tty_no] = CreateVconsole(rect, "Console-Gen2");
-		form2 = pf;
-	}// should follow 'init'
-
 	global_layman.Append(vcon0);
 
 	#if _GUI_DOUBLE_BUFFER
@@ -153,7 +146,6 @@ bool Consman::Initialize() {
 
 	vcon0->Clear();
 	con0_out = vcon0;
-	current_screen_TTY = _TEMP 1;
 
 	// default tty are all bcon
 	return true;
