@@ -214,7 +214,7 @@ void external_interrupt_handler()
 		UART0 >> ch;
 		// UART0 << ch;
 		
-		auto p_vtty = vttys[current_screen_TTY];
+		auto p_vtty = vttys[Consman::current_screen_TTY];
 		if (!p_vtty) {
 			plogerro("assert p_vtty");
 		}

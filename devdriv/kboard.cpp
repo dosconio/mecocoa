@@ -97,15 +97,15 @@ int KeyboardBridge::out(const char* str, stduint len) {
 				}
 
 				#if !_GUI_ENABLE
-				BareConsole* ttycon = static_cast<BareConsole*>((Console_t*)ttys[current_screen_TTY]->offs);
+				BareConsole* ttycon = static_cast<BareConsole*>((Console_t*)ttys[Consman::current_screen_TTY]->offs);
 				if (!ttycon) {
 					plogerro("assert ttycons");
 				}
-				#endif
-				auto p_vtty = vttys[current_screen_TTY];
+				auto p_vtty = vttys[Consman::current_screen_TTY];
 				if (!p_vtty) {
 					plogerro("assert p_vtty");
 				}
+				#endif
 				#if !_GUI_ENABLE
 				if (event.keycode == 0x4B && ttycon->crtline > 0) { // PgUp -> PageUp VKC
 					ttycon->auto_incbegaddr = 0;
@@ -123,9 +123,9 @@ int KeyboardBridge::out(const char* str, stduint len) {
 				if (ascii_ch) {
 					#if _GUI_ENABLE
 					// If focus is on an app window (not the console form and not background), swallow the character
-					if (last_click_sheet && last_click_sheet->refSheetNode().next) {
+					if (asrtand(Consman::last_click_sheet)->refSheetNode().next) {
 						// ignore background
-						last_click_sheet->onrupt(SheetEvent::onKeybd, Point(0, 0), &event);
+						Consman::last_click_sheet->onrupt(SheetEvent::onKeybd, Point(0, 0), &event);
 						return 0; // Intercept: do not pass to VTTY
 					}
 					#else
@@ -133,8 +133,8 @@ int KeyboardBridge::out(const char* str, stduint len) {
 					#endif
 				}
 				// Forward keyboard event to focused window (for console or background)
-				if (last_click_sheet) {
-					last_click_sheet->onrupt(SheetEvent::onKeybd, Point(0, 0), &event);
+				if (Consman::last_click_sheet) {
+					Consman::last_click_sheet->onrupt(SheetEvent::onKeybd, Point(0, 0), &event);
 				}
 			}
 		}
@@ -143,7 +143,7 @@ int KeyboardBridge::out(const char* str, stduint len) {
 	#if !_GUI_ENABLE
 	struct element { byte ch; byte attr; };
 	Letvar(Ribbon, element*, (_VIDEO_ADDR_BUFFER + 80 * 2 * 24));
-	if (!Consman::ento_gui && current_screen_TTY == 0) {
+	if (!Consman::ento_gui && Consman::current_screen_TTY == 0) {
 		Ribbon[0].attr = kbd_state.mod.l_ctrl ? 0x70 : 0x07;
 		Ribbon[1].attr = kbd_state.mod.l_shift ? 0x70 : 0x07;
 		Ribbon[2].attr = kbd_state.mod.l_alt ? 0x70 : 0x07;
@@ -183,13 +183,13 @@ void sysmsg_kbd(keyboard_event_t kbd_event) {
 			// NumPad adjustments
 			ch = key_map_shift[kbd_event.keycode];
 		}
-		auto p_vtty = vttys[current_screen_TTY];
+		auto p_vtty = vttys[Consman::current_screen_TTY];
 		if (!p_vtty) {
 			plogerro("assert p_vtty");
 		}
 		// Forward keyboard event to focused window (for console or background)
-		if (last_click_sheet && last_click_sheet->refSheetNode().next) {
-			last_click_sheet->onrupt(SheetEvent::onKeybd, Point(0, 0), &kbd_event);
+		if (asrtand(Consman::last_click_sheet)->refSheetNode().next) {
+			Consman::last_click_sheet->onrupt(SheetEvent::onKeybd, Point(0, 0), &kbd_event);
 		}
 	}
 }

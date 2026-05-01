@@ -106,6 +106,10 @@ build_util:
 	g++ -I$(uincpath) $(flag) -m32 $(CXF) $(CXW) -std=c++2a \
 		subapps/test.cpp -o $(uobjpath)/sapp-$(arch)/test\
 		-L$(uobjpath)/accm-$(arch) -l$(arch) -e _start
+	echo MK paint
+	g++ -I$(uincpath) $(flag) -m32 $(CXF) $(CXW) -std=c++2a \
+		subapps/paint.cpp -o $(uobjpath)/sapp-$(arch)/paint\
+		-L$(uobjpath)/accm-$(arch) -l$(arch) -e _start
 	#
 	echo MK hello-rust
 	@cd subapps/_hello/rust/ && cargo build --release --target ../../../configs/Rust/target/cargo-i686.json

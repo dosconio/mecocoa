@@ -49,8 +49,7 @@ Dchain vttys = { VTTY_Free };// offs->ConT*, type->vtty_type_t
 
 #endif
 Vector<stduint> blocked_vtty_pid;
-// total: may need change after Remove
-unsigned current_screen_TTY = 0;
+
 
 struct BlockedFormMsg {
 	stduint sig_src; // thread id
@@ -71,14 +70,14 @@ Vector<BlockedFormMsg> blocked_form_msgs;
 extern BareConsole Bcons[TTY_NUMBER];
 void uni::BareConsole::doshow(void* _) {
 	unsigned id = _IMM(_);
-	if (id == current_screen_TTY) return;
+	if (id == Consman::current_screen_TTY) return;
 	if (id >= TTY_NUMBER) {
 		plogerro("TTY Id %u", id);
 		return;
 	}
-	Bcons[current_screen_TTY].last_curposi = curget();
+	Bcons[Consman::current_screen_TTY].last_curposi = curget();
 	Bcons[id].setStartLine(topline + crtline);
-	current_screen_TTY = id;
+	Consman::current_screen_TTY = id;
 	curset(Bcons[id].last_curposi);
 	//
 	for0(i, 4) Bcons[i].auto_incbegaddr = false;
@@ -117,21 +116,7 @@ _RET_CreateVconsole Consman::CreateVconsole(const Rectangle& rect, rostr title) 
 	global_layman.Append(pform);
 
 	// Move the new form to the second layer (behind the cursor)
-	Nnode* target = &pform->refSheetNode();
-	if (global_layman.subf && target != global_layman.subf) {
-		// Remove from the tail where Append put it
-		if (target->left) target->left->next = target->next;
-		if (global_layman.subl == target) global_layman.subl = target->left;
-		// Insert after the top layer (cursor)
-		Nnode* top = global_layman.subf;
-		Nnode* sec = top->next;
-		target->left = top;
-		target->next = sec;
-		top->next = target;
-		if (sec) sec->left = target;
-		else global_layman.subl = target;// target is now the new tail
-	}
-	global_layman.Update(pform, Rectangle(Point(0, 0), rect.getSize()));
+	Consman::SwitchForm(pform);
 
 	pcon->Start();//{} 2buffer only now
 
@@ -154,6 +139,23 @@ void Consman::RemoveVconsole(stduint tty_no) {
 	vttys.Remove(nod);
 
 	//{} Remove from global_layman
+}
+void Consman::SwitchForm(SheetTrait* pfrm) {
+	Nnode* target = &pfrm->refSheetNode();
+	if (global_layman.subf && target != global_layman.subf) {
+		// Remove from the tail where Append put it
+		if (target->left) target->left->next = target->next;
+		if (global_layman.subl == target) global_layman.subl = target->left;
+		// Insert after the top layer (cursor)
+		Nnode* top = global_layman.subf;
+		Nnode* sec = top->next;
+		target->left = top;
+		target->next = sec;
+		top->next = target;
+		if (sec) sec->left = target;
+		else global_layman.subl = target;// target is now the new tail
+	}
+	global_layman.Update(pfrm, Rectangle(Point(0, 0), pfrm->sheet_area.getSize()));
 }
 #endif
 
@@ -203,21 +205,7 @@ static stdsint ConsoleMsg_FNEW(const FMT_ConsoleMsg_FNEW* data, ProcessBlock* pb
 	// Register in global layer manager
 	global_layman.Append(pfrm);
 	// Move the new form to the second layer (behind the cursor)
-	Nnode* target = &pfrm->refSheetNode();
-	if (global_layman.subf && target != global_layman.subf) {
-		// Remove from the tail where Append put it
-		if (target->left) target->left->next = target->next;
-		if (global_layman.subl == target) global_layman.subl = target->left;
-		// Insert after the top layer (cursor)
-		Nnode* top = global_layman.subf;
-		Nnode* sec = top->next;
-		target->left = top;
-		target->next = sec;
-		top->next = target;
-		if (sec) sec->left = target;
-		else global_layman.subl = target;// target is now the new tail
-	}
-	global_layman.Update(pfrm, Rectangle(Point(0, 0), rect.getSize()));
+	Consman::SwitchForm(pfrm);
 
 	// Store in process block pforms
 	pb->pforms[slot_idx] = pfrm;
@@ -317,9 +305,25 @@ static stdsint ConsoleMsg_FDRW(const FMT_ConsoleMsg_FDRW* data, ProcessBlock* pb
 		FMT_ConsoleMsg_FDRW::ShapeInfo::ColorLine cl;
 		if (MccaMemCopyP(&cl, NULL, data->usr_shape_info.cline, pb, sizeof(cl)) != sizeof(cl)) return -1;
 		if (!pfrm->sheet_buffer) return -1;
+
 		VideoControlInterfaceMARGB8888 vcim(pfrm->sheet_buffer, pfrm->sheet_area.getSize());
 		LayerManager lm(&vcim, Rectangle{ Point(0,0), pfrm->sheet_area.getSize() });
-		lm.DrawLine(cl.disp, cl.size, cl.color);
+		
+		// Now compatible with signed offsets
+		Size2dif off;
+		off.x = cl.size.x;
+		off.y = cl.size.y;
+		lm.DrawLine(cl.disp, off, cl.color);
+		
+		// Calculate the bounding box for the line update (always positive dimensions for the dirty rect)
+		stdsint x1 = cl.disp.x, y1 = cl.disp.y;
+		stdsint x2 = cl.disp.x + cl.size.x, y2 = cl.disp.y + cl.size.y;
+		stdsint rx = (x1 < x2 ? x1 : x2) - 1;
+		stdsint ry = (y1 < y2 ? y1 : y2) - 1;
+		stdsint rw = (x1 < x2 ? x2 - x1 : x1 - x2) + 3;
+		stdsint rh = (y1 < y2 ? y2 - y1 : y1 - y2) + 3;
+		global_layman.Update(pfrm, Rectangle(Point(rx, ry), Size2(rw, rh)));
+
 		return 0;
 	}
 	case FMT_ConsoleMsg_FDRW::Shape::Rect: {

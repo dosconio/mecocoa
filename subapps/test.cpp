@@ -76,7 +76,7 @@ int main(int argc, char** argv)
 				sys_close_form(form_id);
 				return 0;
 			} else {
-				ploginfo("msg: _click at (%d, %d), comp=%d", smsg.args[0], smsg.args[1], smsg.args[2]);
+				ploginfo("msg: _click at (%d, %d), comp=%x", smsg.args[0], smsg.args[1], smsg.args[2]);
 			}
 			break;
 		case SheetEvent::onKeybd:

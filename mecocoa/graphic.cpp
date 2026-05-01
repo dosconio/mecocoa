@@ -63,9 +63,6 @@ void Cursor::setSheet(LayerManager& layman, const Point& vertex) {
 	layman.Append(this);
 }
 
-
-SheetTrait* last_click_sheet = nullptr;// mark the focused window
-
 // hand_mouse
 void hand_mouse(MouseMessage mmsg) {
 	// ploginfo("hand_mouse (%d, %d)", displacement_x, displacement_y);
@@ -90,11 +87,11 @@ void hand_mouse(MouseMessage mmsg) {
 	SheetTrait* sheet = nullptr;
 	if ((change_btns & 0b111) && (sheet = global_layman.getTop(cursor_p, 1))) {
 		cursor_p -= sheet->sheet_area.getVertex();
-		if (last_click_sheet && last_click_sheet != sheet) {
-			last_click_sheet->onrupt(SheetEvent::onLeave, Point(0, 0), 1);
+		if (Consman::last_click_sheet && Consman::last_click_sheet != sheet) {
+			Consman::last_click_sheet->onrupt(SheetEvent::onLeave, Point(0, 0), 1);
 		}
 		sheet->onrupt(SheetEvent::onClick, cursor_p, change_btns);
-		last_click_sheet = sheet;
+		Consman::last_click_sheet = sheet;
 
 		// Move window to the front (Layer 1, just behind Cursor)
 		Nnode* target = &sheet->refSheetNode();

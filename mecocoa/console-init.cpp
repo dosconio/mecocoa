@@ -11,12 +11,14 @@ SheetTrait* Cursor::moving_sheet = nullptr;
 bool Cursor::mouse_btnl_dn = false;
 bool Cursor::mouse_btnm_dn = false;
 bool Cursor::mouse_btnr_dn = false;
-// consider CLI
+// consider CLI: No Remove
+unsigned Consman::current_screen_TTY = 0;
 BareConsole Bcons[TTY_NUMBER];// TTY 0~3 and their buffer
 // consider GUI
 byte _BUF_cursor[byteof(Cursor)];
 bool Consman::ento_gui = false;
 bool Consman::enable_dubuffer = false;
+SheetTrait* Consman::last_click_sheet = nullptr;// mark the focused window
 VideoControlInterface* Consman::real_pvci = nullptr;
 
 #ifndef _UEFI

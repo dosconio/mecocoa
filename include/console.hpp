@@ -68,8 +68,6 @@ _PACKED(struct) FMT_ConsoleMsg_FDRW {
 	} usr_shape_info;
 };
 
-extern unsigned current_screen_TTY;// focus
-extern SheetTrait* last_click_sheet;
 
 #if (_MCCA & 0xFF00) == 0x8600
 class LayerManager2 : public uni::LayerManager {
@@ -127,15 +125,19 @@ struct _RET_CreateVconsole {
 	// -> pid
 };
 struct Consman {
+	// CLI
+	static unsigned current_screen_TTY;// focus
 	// GUI
 	static bool ento_gui;
 	static bool enable_dubuffer;
+	static SheetTrait* last_click_sheet;
 	static uni::VideoControlInterface* real_pvci;
 	//
 	static bool Initialize();
 	static void enable_2buffer();
 	static _RET_CreateVconsole CreateVconsole(const Rectangle& rect, rostr title);
 	static void RemoveVconsole(stduint tty_no);
+	static void SwitchForm(SheetTrait* form);
 };
 
 
