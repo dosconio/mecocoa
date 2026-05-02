@@ -127,7 +127,6 @@ bool Consman::Initialize() {
 
 	// main screen
 	auto vcon0 = new VideoConsole2(&global_layman.getVCI(), screen0_win, Color::Black, Color::White);
-	// auto vcon0_buf = (Color*)mem.allocate(vcon0_size);
 	vcon0->setBuffers(nullptr,
 		new BufferChar[vcon0->getCols() * vcon0->getRows()],
 		new Color[vcon0->getLineBufferSize()]

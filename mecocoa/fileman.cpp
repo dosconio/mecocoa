@@ -196,18 +196,23 @@ void serv_file_loop()// for IDE 0:0, 0:1
 			#ifdef _ARC_x86
 			syssend(Task_Hdd_Serv, &retval, sizeof(retval[0]), _IMM(FiledevMsg::RUPT));// while (!fileman_hd_ready);
 			if (plab) {
+				ProcessBlock* init_p = Taskman::CreateFile((*plab + "/init").reference(), RING_U, Task_Kernel);
+				init_p->focus_tty = vttys[0];
+				Taskman::Append(init_p);
+				Taskman::AppendThread(init_p->main_thread);
 				#if _GUI_ENABLE
 				ProcessBlock* shell_p = Taskman::Create((void*)&serv_shell_process, RING_M);
-				ProcessBlock* init_p = Taskman::CreateFile((*plab + "/init").reference(), RING_U, shell_p->pid);
+				ProcessBlock* cotl_p = Taskman::CreateFile((*plab + "/apps/cot").reference(), RING_U, shell_p->pid);
 				if (shell_p) {
-					syssend(shell_p->main_thread->getID(), &init_p, sizeof(init_p));
+					syssend(shell_p->main_thread->getID(), &cotl_p, sizeof(cotl_p));
 				}
-				else if (init_p) {
+				else if (cotl_p) {
 					plogerro("Shell creation failed, but init loaded.");
 				}
+				ploginfo("Create new shell-form: pid%u", shell_p->pid);
 				#else
 				ProcessBlock* p;
-				p = Taskman::CreateFile((*plab + "/init").reference(), RING_U, Task_Kernel);
+				p = Taskman::CreateFile((*plab + "/apps/cot").reference(), RING_U, Task_Kernel);
 				p->focus_tty = vttys[0];
 				Taskman::Append(p);
 				Taskman::AppendThread(p->main_thread);
@@ -218,17 +223,21 @@ void serv_file_loop()// for IDE 0:0, 0:1
 			#elif _MCCA == 0x8664 && defined(_UEFI)
 			
 			syssend(Task_Memdisk_Serv, &retval, sizeof(retval[0]), _IMM(FiledevMsg::RUPT));
+			ProcessBlock* init_p = Taskman::CreateFile(("/md0/init"), RING_U, Task_Kernel);
+			init_p->focus_tty = vttys[0];
+			Taskman::Append(init_p);
+			Taskman::AppendThread(init_p->main_thread);
 			#if _GUI_ENABLE
 			ProcessBlock* shell_p = Taskman::Create((void*)&serv_shell_process, RING_M);
-			ProcessBlock* init_p = Taskman::CreateFile(("/md0/init"), RING_U, shell_p->pid);
+			ProcessBlock* cotl_p = Taskman::CreateFile(("/md0/cot"), RING_U, shell_p->pid);
 			if (shell_p) {
-				syssend(shell_p->main_thread->getID(), &init_p, sizeof(init_p));
-			} else if (init_p) {
+				syssend(shell_p->main_thread->getID(), &cotl_p, sizeof(cotl_p));
+			} else if (cotl_p) {
 				plogerro("Shell creation failed, but init loaded.");
 			}
 			#else
-			ProcessBlock* p = Taskman::CreateFile(("/md0/init"), RING_U, Task_Kernel);
-			p->focus_tty = vttys[Consman::ento_gui ? 1 : 0];
+			ProcessBlock* p = Taskman::CreateFile(("/md0/cot"), RING_U, Task_Kernel);
+			p->focus_tty = vttys[0];
 			Taskman::Append(p);
 			Taskman::AppendThread(p->main_thread);
 			#endif

@@ -111,12 +111,16 @@ $(ubinpath)/$(arch).img: loader
 build_util:
 	mkdir -p $(uobjpath)/sapp-$(arch)
 	# ---- COTL INIT ---- #
-	echo MK appinit
+	echo MK appshell
 	$(CX) -Iaccmlib $(XFLAGS) \
-		-o $(uobjpath)/sapp-$(arch)/init \
+		-o $(uobjpath)/sapp-$(arch)/cot \
 		$(uherpath)/COTLAB/src/cotlab.cpp -L$(uobjpath)/accm-atx-x64 -latx-x64 -e _start
 	# ---- UNIS UTIL ---- #
 	# ---- MCCA UTIL ---- #
+	echo MK appinit
+	$(CX) -Iaccmlib $(XFLAGS) \
+		-o $(uobjpath)/sapp-$(arch)/init \
+		subapps/init.cpp -L$(uobjpath)/accm-atx-x64 -latx-x64 -e _start
 	echo MK subtest
 	$(CX) -Iaccmlib $(XFLAGS) \
 		subapps/test.cpp -o $(uobjpath)/sapp-$(arch)/test \

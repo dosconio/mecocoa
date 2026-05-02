@@ -22,7 +22,6 @@ enum {
 	#if _MCCA == 0x8632
 	Task_Hdd_Serv,
 	#endif
-	Task_Shell,
 	Task_Init,
 	//
 	TaskCount
@@ -147,6 +146,8 @@ class _Comment(Kernel) ProcessBlock {
 public:
 	stduint pid;
 	stduint parent_id;
+	ProcessBlock* child_list_head = nullptr; // Head of children linked list
+	ProcessBlock* sibling_next = nullptr;    // Next sibling in parent's children list
 	inline stduint getID() { return pid; }
 	stduint ring;
 	Mutex sys_lock{}; // Use Mutex to protect internal systems like Heap / FD

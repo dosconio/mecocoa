@@ -95,7 +95,7 @@ _RET_CreateVconsole Consman::CreateVconsole(const Rectangle& rect, rostr title) 
 	);
 	ret.pcon = pcon;
 	// plogwarn(">pcon: %x", pcon);
-	// auto vcon_buf = (Color*)mem.allocate(pcon->window.getArea() * sizeof(Color));// Vcon Gen1
+	// auto vcon_buf = (Color*).allocate(pcon->window.getArea() * sizeof(Color));// Vcon Gen1
 	auto text_buf = new BufferChar[pcon->getCols() * pcon->getRows()];
 	// plogwarn(">text_buf: %x", text_buf);
 	auto line_buf = new Color[pcon->getLineBufferSize()];
@@ -133,12 +133,30 @@ void Consman::RemoveVconsole(stduint tty_no) {
 	if (!nod) return;
 	auto pcon = (uni::VideoConsole2*)nod->offs;
 	if (pcon) {
+		// Identify and cleanup the parent Form
+		auto pclient = pcon->refSheetParent();
+		auto pfrm = (pclient) ? (uni::Witch::Form*)pclient->refSheetParent() : nullptr;
+		if (pfrm) {
+			Rectangle area = pfrm->sheet_area;
+			global_layman.Remove(pfrm);
+			
+			if (pfrm->sheet_buffer) {
+				delete[] pfrm->sheet_buffer;
+				pfrm->sheet_buffer = nullptr;
+			}
+			delete pfrm;
+
+			// Refresh to clear residuals
+			global_layman.Update(nullptr, area);
+		}
+
+		// Stop and destroy the console object
 		pcon->Stop();
 		delete pcon;
 	}
-	vttys.Remove(nod);
 
-	//{} Remove from global_layman
+	// Remove from VTTY list and trigger VTTY_Free
+	vttys.Remove(nod);
 }
 void Consman::SwitchForm(SheetTrait* pfrm) {
 	Nnode* target = &pfrm->refSheetNode();
@@ -389,14 +407,16 @@ void _Comment(R1) serv_shell_process() {
 	stduint src = 0, type = 0;
 	sysrecv(ANYPROC, &p, sizeof(p), &type, &src);
 	if (p) {
-		p->focus_tty = vttys[tty_target];
-		if (auto nod = vttys.LocateNode(tty_target)) {
+		if (p->pid == 0) {// uninit
+			Taskman::Append(p);
+			Taskman::AppendThread(p->main_thread);
+		}
+		p->focus_tty = vttys.LocateNode(tty_target);
+		if (auto nod = (Dnode*)p->focus_tty) {
 			auto pblock = (vtty_type_t*)nod->type;
 			pblock->master_pid = Taskman::CurrentPID();
 			pblock->proc_group.Append(p->pid);
 		}
-		Taskman::Append(p);
-		Taskman::AppendThread(p->main_thread);
 	}
 	
 	extern const char key_map[256], key_map_shift[256];
@@ -410,30 +430,84 @@ void _Comment(R1) serv_shell_process() {
 					if (key_event->method == keyboard_event_t::method_t::keydown) {
 						auto ascii_ch = (key_event->mod.l_shift || key_event->mod.r_shift ? key_map_shift : key_map)[key_event->keycode];
 						if (ascii_ch) {
-							VTTY_INNQ(vttys[tty_target])->OutChar(ascii_ch);
+							VTTY_INNQ(vttys.LocateNode(tty_target))->OutChar(ascii_ch);
 						}
+					}
+				}
+				else if (smsg.event == SheetEvent::onClick) {
+					bool left_down = (smsg.args[2] & 0x10);
+					if (smsg.args[3] == 1 && !left_down) {
+						// Force kill all processes in the group
+						if (auto nod = vttys.LocateNode(tty_target)) {
+							auto pblock = (vtty_type_t*)nod->type;
+							stduint self_pid = Taskman::CurrentPID();
+
+					if (smsg.args[3] == 1 && !left_down) {
+						// Force kill all processes in the group
+						if (auto nod = vttys.LocateNode(tty_target)) {
+							auto pblock = (vtty_type_t*)nod->type;
+							stduint self_pid = Taskman::CurrentPID();
+							
+							// Copy the group to a local buffer to ensure stable iteration
+							stduint pid_list[32];
+							stduint count = pblock->proc_group.Count();
+							if (count > 32) count = 32;
+							for (stduint i = 0; i < count; i++) pid_list[i] = pblock->proc_group[i];
+
+							for (stdsint i = count - 1; i >= 0; --i) {
+								stduint pid = pid_list[i];
+								
+								// Protect system tasks but allow killing the master shell
+								if ((pid >= TaskCount || pid == pblock->master_pid) && pid != self_pid) {
+									ProcessBlock* pb_to_kill = Taskman::Locate(pid);
+									if (pb_to_kill && pb_to_kill->state != ProcessBlock::State::Hanging) {
+										stduint exit_para[2] = { pb_to_kill->pid, (stduint)-1 };
+										syssend(Task_TaskMan, exit_para, sizeof(exit_para), _IMM(TaskmanMsg::EXIT));
+										sysrecv(Task_TaskMan, exit_para, sizeof(exit_para));
+									}
+								}
+							}
+						}
+						goto shell_exit;
+					}
+						}
+						goto shell_exit;
 					}
 				}
 			}
 		}
 
-		HALT();
+
 		if (auto nod = vttys.LocateNode(tty_target)) {
 			auto pblock = (vtty_type_t*)nod->type;
 			if (p && pblock->proc_group.Count() == 0) {
-				break;
+				goto shell_exit;
 			}
 		} else {
-			break;
+			goto shell_exit;
 		}
 	}
-	
-	
+
+shell_exit:
 	if (Consman::ento_gui) {
+		auto pblock = (vtty_type_t*)vttys.LocateNode(tty_target)->type;
+		for (stdsint i = pblock->proc_group.Count() - 1; i >= 0; --i) {
+			stduint pid = pblock->proc_group[i];
+			auto pb_to_kill = Taskman::Locate(pid);
+			if (pb_to_kill && pb_to_kill->state != ProcessBlock::State::Hanging) {
+				stduint exit_para[2] = { pb_to_kill->pid, (stduint)-1 };
+				syssend(Task_TaskMan, exit_para, sizeof(exit_para), _IMM(TaskmanMsg::EXIT));
+				sysrecv(Task_TaskMan, exit_para, sizeof(exit_para));
+			}
+		}
 		Consman::RemoveVconsole(tty_target);
 	}
-	syscall(syscall_t::EXIT);
-	loop Taskman::Schedule(true);
+	
+	// Final exit for the shell process itself
+	stduint exit_para[2] = { Taskman::CurrentPID(), 0 };
+	syssend(Task_TaskMan, exit_para, sizeof(exit_para), _IMM(TaskmanMsg::EXIT));
+	// Never reach here: the stack will be reclaimed by Taskman
+	while (true);
 }
 #endif
 
@@ -448,7 +522,8 @@ void _Comment(R1) serv_cons_loop()
 		for0 (i, blocked_vtty_pid.Count()) if (stduint pid = blocked_vtty_pid[i]) {
 			auto ppb = Taskman::Locate(pid);
 			if (!ppb) {
-				plogerro("%s", __FUNCIDEN__);
+				blocked_vtty_pid.Remove(i);
+				i--;
 				continue;
 			}
 			if (ppb->focus_tty && -1 != (ch = VTTY_INNQ(ppb->focus_tty)->inn())) {
@@ -521,8 +596,8 @@ void _Comment(R1) serv_cons_loop()
 			case ConsoleMsg::FDEL:
 				{
 					ProcessBlock* pb_target = th->parent_process;
-					// If request from Taskman, to_args[1] is the target PID
-					if (sig_src == Task_TaskMan) pb_target = Taskman::Locate(to_args[1]);
+					// If request from System Tasks, to_args[1] is the target PID
+					if (sig_src < TaskCount) pb_target = Taskman::Locate(to_args[1]);
 					ret = ConsoleMsg_FDEL(to_args[0], pb_target);
 					syssend(sig_src, (void*)&ret, sizeof(ret));
 				}

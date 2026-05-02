@@ -96,12 +96,20 @@ build: clean lib $(cppobjs) build_util
 
 build_util:
 	# ---- COTL INIT ---- #
-	echo MK appinit
+	echo MK appshell
 	g++ -I$(uincpath) -Iaccmlib $(flag) -m32 $(CXF) $(CXW) -std=c++2a \
-		-o $(uobjpath)/sapp-$(arch)/init\
+		-o $(uobjpath)/sapp-$(arch)/cot\
 		$(uherpath)/COTLAB/src/cotlab.cpp -L$(uobjpath)/accm-$(arch) -l$(arch)
 	# ---- UNIS UTIL ---- #
+	echo MK sleep
+	g++ -I$(uincpath) -Iaccmlib $(flag) -m32 $(CXF) $(CXW) -std=c++2a \
+		-o $(uobjpath)/sapp-$(arch)/sleep\
+		$(uherpath)/unisym/demo/utilities/sleep.cpp -L$(uobjpath)/accm-$(arch) -l$(arch) -lgcc
 	# ---- MCCA UTIL ---- #
+	echo MK appinit
+	g++ -I$(uincpath) -Iaccmlib $(flag) -m32 $(CXF) $(CXW) -std=c++2a \
+		subapps/init.cpp -o $(uobjpath)/sapp-$(arch)/init\
+		-L$(uobjpath)/accm-$(arch) -l$(arch) -e _start
 	echo MK subtest
 	g++ -I$(uincpath) $(flag) -m32 $(CXF) $(CXW) -std=c++2a \
 		subapps/test.cpp -o $(uobjpath)/sapp-$(arch)/test\

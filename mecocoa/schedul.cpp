@@ -29,7 +29,7 @@ Taskman::ReadyQueue Taskman::priority_queues[32] = {};
 Taskman::ReadyQueue Taskman::expired_queues[32] = {};
 unsigned int Taskman::ready_bitmap = 0;
 unsigned int Taskman::expired_bitmap = 0;
-static Spinlock scheduler_lock;
+Spinlock scheduler_lock;
 
 void Taskman::EnqueueReady(ThreadBlock* pb, bool lock) {
 	stduint old_if = 0;
@@ -186,6 +186,13 @@ static stduint next_global_id = 1;
 bool Taskman::Append(ProcessBlock* task) {
 	SpinlockLocal guard(&scheduler_lock);
 	task->pid = __atomic_fetch_add(&next_global_id, 1, __ATOMIC_SEQ_CST);
+
+	// Hierarchical Process Tree: Link to parent
+	ProcessBlock* pparent = Taskman::Locate(task->parent_id);
+	if (pparent) {
+		task->sibling_next = pparent->child_list_head;
+		pparent->child_list_head = task;
+	}
 
 	Dnode* insert_after = chain.Last();
 	// Dnode* insert_after = nullptr;

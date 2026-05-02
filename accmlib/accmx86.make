@@ -7,7 +7,7 @@ asmfile=$(wildcard $(ulibpath)/asm/x86/*.asm) $(wildcard $(ulibpath)/asm/x86/**/
 asmobjs=$(patsubst %asm, %o, $(asmfile))
 
 cplpref=_cc_
-cplfile=$(wildcard $(ulibpath)/c/*.c) $(wildcard accmlib/*.c)
+cplfile=$(wildcard $(ulibpath)/c/*.c) $(wildcard $(ulibpath)/c/**/*.c) $(wildcard $(ulibpath)/c/**/**/*.c) $(wildcard accmlib/*.c)
 cplobjs=$(patsubst %c, %o, $(cplfile))
 
 cpppref=_cx_
@@ -16,7 +16,7 @@ cppobjs=$(patsubst %cpp, %o, $(cppfile))
 
 dest_obj=$(uobjpath)/accm-$(arch)
 COMWAN = -Wno-builtin-declaration-mismatch
-COMFLG = -m32 -mno-sse -mno-sse2 -mno-sse3 -mno-ssse3 -mno-sse4 -static -fno-builtin -nostdlib -fno-stack-protector  -O3 $(COMWAN)
+COMFLG = -m32 -static -fno-builtin -nostdlib -fno-stack-protector  -O3 $(COMWAN)
 CC=gcc $(COMFLG)
 CX=g++ $(COMFLG) -std=c++2a -fno-exceptions  -fno-unwind-tables -fno-rtti -Wno-volatile
 LD=ld -m elf_i386
