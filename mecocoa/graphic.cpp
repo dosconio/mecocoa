@@ -77,60 +77,66 @@ void hand_mouse(MouseMessage mmsg) {
 	if ((change_btns & 0b1) && !mmsg.BtnLeft) {
 		Cursor::moving_sheet = nullptr;
 	}
-	
+
 	Cursor::mouse_btnl_dn = mmsg.BtnLeft;
 	Cursor::mouse_btnm_dn = mmsg.BtnMiddle;
 	Cursor::mouse_btnr_dn = mmsg.BtnRight;
 	Point cursor_p = Cursor::global_cursor->sheet_area.getVertex();
 
-	// normal layers
-	SheetTrait* sheet = nullptr;
-	if ((change_btns & 0b111) && (sheet = global_layman.getTop(cursor_p, 1))) {
-		cursor_p -= sheet->sheet_area.getVertex();
-		if (Consman::last_click_sheet && Consman::last_click_sheet != sheet) {
-			Consman::last_click_sheet->onrupt(SheetEvent::onLeave, Point(0, 0), 1);
-		}
-		sheet->onrupt(SheetEvent::onClick, cursor_p, change_btns);
-		Consman::last_click_sheet = sheet;
+	{
+		#if _GUI_ENABLE
+		SpinlockLocal guard(&gui_lock);
+		#endif
 
-		// Move window to the front (Layer 1, just behind Cursor)
-		Nnode* target = &sheet->refSheetNode();
-		if (target != global_layman.subf->next && target != global_layman.subl) {
-			// Nchain::Exchange
-			Nnode* prev = target->left;
-			Nnode* next = target->next;
-			if (prev) prev->next = next;
-			if (next) next->left = prev;
-
-			Nnode* top = global_layman.subf;
-			Nnode* sec = top->next;
-
-			target->left = top;
-			target->next = sec;
-			top->next = target;
-			if (sec) sec->left = target;
-
-			global_layman.Update(NULL, sheet->sheet_area);
-		}
-	}
-
-	// cursor layer
-	static uint64 last_onmoved_tick = 0;
-	if ((mmsg.X || mmsg.Y)) {
-		global_layman.Domove(Cursor::global_cursor, { mmsg.X, mmsg.Y });
-		// Dispatch onMoved event to the sheet under cursor with rate limiting
-		if ((change_btns & 0b111) || (tick - last_onmoved_tick >= 20)) {
-			Point cursor_p = Cursor::global_cursor->sheet_area.getVertex();
-			SheetTrait* hover_sheet = global_layman.getTop(cursor_p, 1);
-			if (hover_sheet) {
-				Point rel_p = cursor_p - hover_sheet->sheet_area.getVertex();
-				hover_sheet->onrupt(SheetEvent::onMoved, rel_p, change_btns);
+				// 1. Handle Clicks and Z-order
+		SheetTrait* sheet = nullptr;
+		if ((change_btns & 0b111) && (sheet = global_layman.getTop(cursor_p, 1))) {
+			Point rel_p = cursor_p - sheet->sheet_area.getVertex();
+			if (Consman::last_click_sheet && Consman::last_click_sheet != sheet) {
+				Consman::last_click_sheet->onrupt(SheetEvent::onLeave, Point(0, 0), 1);
 			}
-			last_onmoved_tick = tick;
+			sheet->onrupt(SheetEvent::onClick, rel_p, change_btns);
+			Consman::last_click_sheet = sheet;
+
+			// Bring to front (Insert after subf, which is the cursor)
+			Nnode* target = &sheet->refSheetNode();
+			if (global_layman.subf && target != global_layman.subf->next && target != global_layman.subl) {
+				// Nchain::Exchange-like manual manipulation
+				Nnode* prev = target->left;
+				Nnode* next = target->next;
+				if (prev) prev->next = next;
+				if (next) next->left = prev;
+
+				Nnode* top = global_layman.subf;
+				Nnode* sec = top->next;
+
+				target->left = top;
+				target->next = sec;
+				top->next = target;
+				if (sec) sec->left = target;
+
+				global_layman.Update(nullptr, sheet->sheet_area);
+			}
 		}
-	}
-	if (Cursor::moving_sheet) {
-		global_layman.Domove(Cursor::moving_sheet, { mmsg.X, mmsg.Y });
+
+		// 2. Handle Movement
+		if (mmsg.X || mmsg.Y) {
+			global_layman.Domove(Cursor::global_cursor, { mmsg.X, mmsg.Y });
+			if (Cursor::moving_sheet) {
+				global_layman.Domove(Cursor::moving_sheet, { mmsg.X, mmsg.Y });
+			}
+
+			static uint64 last_onmoved_tick = 0;
+			if ((change_btns & 0b111) || (tick - last_onmoved_tick >= 20)) {
+				Point current_cursor_p = Cursor::global_cursor->sheet_area.getVertex();
+				SheetTrait* hover_sheet = global_layman.getTop(current_cursor_p, 1);
+				if (hover_sheet) {
+					Point rel_p = current_cursor_p - hover_sheet->sheet_area.getVertex();
+					hover_sheet->onrupt(SheetEvent::onMoved, rel_p, change_btns);
+				}
+				last_onmoved_tick = tick;
+			}
+		}
 	}
 }
 
@@ -147,11 +153,23 @@ void LayerManager2::Update(SheetTrait* who, const Rectangle& rect) {
 	Rectangle abs_rect = who ? who->sheet_area : window;
 	abs_rect.x += rect.x;
 	abs_rect.y += rect.y;
-	// Mark the area as dirty for the next flush cycle
-	this->AddDirty(Rectangle(Point(abs_rect.x, abs_rect.y), Size2(rect.width, rect.height)));
-	if (!lazy_update) {
-		UpdateForce(who, rect);
+	Rectangle dirty_rect(Point(abs_rect.x, abs_rect.y), Size2(rect.width, rect.height));
+
+	#if _GUI_ENABLE
+	bool already_locked = gui_lock.cpu_id == Taskman::getID();
+	if (already_locked) {
+		this->AddDirty(dirty_rect);
+		if (!lazy_update) UpdateForce(who, rect);
 	}
+	else {
+		SpinlockLocal guard(&gui_lock);
+		this->AddDirty(dirty_rect);
+		if (!lazy_update) UpdateForce(who, rect);
+	}
+	#else
+	this->AddDirty(dirty_rect);
+	if (!lazy_update) UpdateForce(who, rect);
+	#endif
 }
 
 void LayerManager2::UpdateForce(SheetTrait* who, const Rectangle& rect) {
@@ -215,14 +233,42 @@ void serv_graf_loop() {
 			// Asynchronous rendering: Compose and then Flush to screen
 			if (Consman::ento_gui && global_layman.pvci && global_layman.sheet_buffer) {
 				if (msg.args.rect.w > 0 && msg.args.rect.h > 0) {
-					// Perform delayed composition (Layer Blending)
-					global_layman.UpdateForce(nullptr, msg.args.rect.toRectangle());
-					// Flush back-buffer to physical screen
+					{
+						// [Lock]: Protect composition against concurrent layer cleanup
+						#if _GUI_ENABLE
+						SpinlockLocal guard(&gui_lock);
+						#endif
+												// Perform delayed composition (Layer Blending)
+						global_layman.UpdateForce(nullptr, msg.args.rect.toRectangle());
+					}
+					// Flush back-buffer to physical screen (buffer is now stable)
 					if (Consman::real_pvci)
 						Consman::real_pvci->DrawPoints(msg.args.rect.toRectangle(), global_layman.sheet_buffer);
 				}
 			}
 			break;
+		case SysMessage::RUPT_NEW_TERM:
+		{
+			ProcessBlock* shell_p = Taskman::Create((void*)&serv_shell_process, RING_M);
+			// ploginfo("[GRAPHIC] Shell PID %x %x", rsp, Taskman::current_thread[Taskman::getID()]->stack_lineaddr);
+			//
+			#ifdef _ARC_x86 // x86:
+			extern String* plab;
+			ProcessBlock* cotl_p = Taskman::CreateFile((*plab + "/apps/cot").reference(), RING_U, shell_p->pid);
+			#else
+			ProcessBlock* cotl_p = Taskman::CreateFile(("/md0/cot"), RING_U, shell_p->pid);
+			#endif
+			//
+			if (shell_p) {
+				ploginfo("[GRAPHIC] Activate Shell TID %x", shell_p->main_thread->getID());
+				syssend(shell_p->main_thread->getID(), &cotl_p, sizeof(cotl_p));
+			}
+			else if (cotl_p) {
+				plogerro("Shell creation failed, but init loaded.");
+			}
+			ploginfo("Create new shell-form: pid%u", shell_p->pid);
+			break;
+		}
 		default:
 			plogerro("%s Unknown message type: %d", __FUNCIDEN__, msg.type);
 			break;

@@ -249,7 +249,7 @@ ProcessBlock* Taskman::Create(void* entry, byte ring, bool append)
 	tb->stack_lineaddr = (byte*)mempool.allocate(tb->stack_size, 12);
 	tb->stack_levladdr = ring != RING_M ? (byte*)mempool.allocate(tb->stack_size, 12) : tb->stack_lineaddr;
 	const stduint stack_top = _IMM(tb->stack_lineaddr) + DEFAULT_STACK_SIZE;
-	new_ctx.SP = (stack_top & ~0xFlu) - 8;
+	new_ctx.SP = (stack_top & ~0xFlu) - 0x10 - sizeof(stduint);
 
 	#elif (_MCCA & 0xFF00) == 0x1000
 	tb->stack_size = DEFAULT_STACK_SIZE;
@@ -401,7 +401,7 @@ ProcessBlock* Taskman::CreateELF(BlockTrait* source, byte ring) {
 
 	#if (_MCCA & 0xFF00) == 0x8600
 	tb->context.RING = ring;
-	tb->context.SP = (stack_loc_top & ~0xFlu) - 8 - 0x10;// single stack
+	tb->context.SP = (stack_loc_top & ~0xFlu) - 0x10 - sizeof(stduint); // Ensure (ESP+4) is 16-byte aligned
 	SetSegment(&tb->context);
 	#if (_MCCA & 0xFF00) == 0x8600
 	// Initialize FPU/SSE context to a safe state (masked exceptions)

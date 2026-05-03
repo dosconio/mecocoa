@@ -7,6 +7,11 @@
 #include <cpp/Witch/Control/Control-Label.hpp>
 #include <cpp/Witch/Control/Control-TextBox.hpp>
 
+#if _GUI_ENABLE
+extern Spinlock gui_lock;
+#endif
+extern Spinlock scheduler_lock;
+
 
 #if 1 // ---- ---- TTY ---- ----
 
@@ -30,19 +35,24 @@ Dnode* VTTY_Append(Console_t* con) {
 		plogerro("%s: You may lose impl Console_t for con", __FUNCIDEN__);
 		return nullptr;
 	}
+
+	#if _GUI_ENABLE
+	SpinlockLocal guard(&gui_lock);
+	#endif
 	auto p = vttys.Append(con);
 	if (!p) return nullptr;
 	const stduint SIZE_INN_BUF = 64;
 	auto p_innbuf = new byte[SIZE_INN_BUF];
 	auto pblock = new vtty_type_t({ 0, QueueLimited({_IMM(p_innbuf), SIZE_INN_BUF}), QueueLimited({0, 0}) });
 	p->type = _IMM(pblock);
-	
+
 	if (Taskman::current_thread[Taskman::getID()]) {
 		pblock->master_pid = Taskman::CurrentPID();
-	} else {
+	}
+	else {
 		pblock->master_pid = 0;
 	}
-	
+
 	return p;
 }
 Dchain vttys = { VTTY_Free };// offs->ConT*, type->vtty_type_t
@@ -62,7 +72,6 @@ struct BlockedFormMsg {
 };
 Vector<BlockedFormMsg> blocked_form_msgs;
 
-::uni::Witch::Form* form_terminal = nullptr;
 
 //// ---- ---- Bottom Impl ---- ---- ////
 #ifdef _ARC_x86 // x86:
@@ -101,10 +110,10 @@ _RET_CreateVconsole Consman::CreateVconsole(const Rectangle& rect, rostr title) 
 	auto line_buf = new Color[pcon->getLineBufferSize()];
 	// plogwarn(">line_buf: %x", line_buf);
 	pcon->setBuffers(nullptr, text_buf, line_buf);
-	
+
 	auto pform = new ::uni::Witch::Form();
 	// plogwarn(">pform: %x", pform);
-	form_terminal = pform;
+
 	ret.pform = pform;
 	pform->Title = title;
 	pcon->InitializeSheet(*pform, pcon->window.getVertex(), pcon->window.getSize());
@@ -113,10 +122,15 @@ _RET_CreateVconsole Consman::CreateVconsole(const Rectangle& rect, rostr title) 
 	pform->AppendControl(pcon);
 	pform->setSheet(global_layman, rect, new Color[rect.getArea()]);
 	pform->setFocus(pcon);
-	global_layman.Append(pform);
 
-	// Move the new form to the second layer (behind the cursor)
-	Consman::SwitchForm(pform);
+	{
+		// [Lock]: Protect global layman chain and focus switch
+		#if _GUI_ENABLE
+		SpinlockLocal guard(&gui_lock);
+		#endif
+		global_layman.Append(pform);
+		Consman::SwitchForm(pform);
+	}
 
 	pcon->Start();//{} 2buffer only now
 
@@ -127,36 +141,58 @@ _RET_CreateVconsole Consman::CreateVconsole(const Rectangle& rect, rostr title) 
 	return ret;
 }
 
-void Consman::RemoveVconsole(stduint tty_no) {
-	if (tty_no >= vttys.Count()) return;
-	Dnode* nod = vttys.LocateNode(tty_no);
+void Consman::RemoveVconsole(Dnode* nod) {
 	if (!nod) return;
 	auto pcon = (uni::VideoConsole2*)nod->offs;
 	if (pcon) {
 		// Identify and cleanup the parent Form
 		auto pclient = pcon->refSheetParent();
 		auto pfrm = (pclient) ? (uni::Witch::Form*)pclient->refSheetParent() : nullptr;
-		if (pfrm) {
-			Rectangle area = pfrm->sheet_area;
-			global_layman.Remove(pfrm);
-			
-			if (pfrm->sheet_buffer) {
-				delete[] pfrm->sheet_buffer;
-				pfrm->sheet_buffer = nullptr;
+		if (pclient) {
+			// Focus cleanup: reset global pointers if they point to any component of this window
+			if (Consman::last_click_sheet == pclient || 
+				Consman::last_click_sheet == pcon) {
+				Consman::last_click_sheet = nullptr;
 			}
-			delete pfrm;
+			if (Cursor::moving_sheet == pclient || Cursor::moving_sheet == pcon) {
+				Cursor::moving_sheet = nullptr;
+			}
 
-			// Refresh to clear residuals
-			global_layman.Update(nullptr, area);
+			Rectangle area = pclient->sheet_area;
+			{
+				// [Lock]: Caller must hold gui_lock. 
+				// In _CleanSingleForm, it is already held.
+				pclient->Remove(pcon); // Unlink pcon from parent Form
+				global_layman.Remove(pclient); // Ensure it's removed from desktop too
+				global_layman.Update(nullptr, area);
+			}
 		}
 
-		// Stop and destroy the console object
+		// Stop the console object (this will free text_buf and line_buf using free())
 		pcon->Stop();
 		delete pcon;
 	}
 
+	// Nullify focus_tty references for ALL processes in the system to prevent UAF
+	{
+		SpinlockLocal guard(&scheduler_lock);
+		for (auto pnod = Taskman::chain.Root(); pnod; pnod = pnod->next) {
+			auto p = cast<ProcessBlock*>(pnod->offs);
+			if (p->focus_tty == nod) p->focus_tty = nullptr;
+		}
+	}
+
 	// Remove from VTTY list and trigger VTTY_Free
+	// [Lock]: Caller must hold gui_lock.
 	vttys.Remove(nod);
+
+	// Clean up any blocked PIDs waiting for this TTY
+	for (stduint i = 0; i < blocked_vtty_pid.Count(); i++) {
+		ProcessBlock* p = Taskman::Locate(blocked_vtty_pid[i]);
+		if (!p || p->focus_tty == nod || p->focus_tty == nullptr) {
+			blocked_vtty_pid.Remove(i--);
+		}
+	}
 }
 void Consman::SwitchForm(SheetTrait* pfrm) {
 	Nnode* target = &pfrm->refSheetNode();
@@ -173,6 +209,7 @@ void Consman::SwitchForm(SheetTrait* pfrm) {
 		if (sec) sec->left = target;
 		else global_layman.subl = target;// target is now the new tail
 	}
+	// [Note]: global_layman.Update is protected by the caller's gui_lock or should be locked if called alone
 	global_layman.Update(pfrm, Rectangle(Point(0, 0), pfrm->sheet_area.getSize()));
 }
 #endif
@@ -180,8 +217,10 @@ void Consman::SwitchForm(SheetTrait* pfrm) {
 //// ---- ---- DYNAMIC CORE ---- ---- ////
 
 static bool ifContainBlockedTTY(ProcessBlock* ppb) {
+	if (!ppb) return false;
 	for0(i, blocked_vtty_pid.Count()) {
-		if (Taskman::Locate(blocked_vtty_pid[i])->focus_tty == ppb->focus_tty) {
+		ProcessBlock* p = Taskman::Locate(blocked_vtty_pid[i]);
+		if (p && p->focus_tty == ppb->focus_tty) {
 			return true;
 		}
 	}
@@ -220,10 +259,14 @@ static stdsint ConsoleMsg_FNEW(const FMT_ConsoleMsg_FNEW* data, ProcessBlock* pb
 	}
 	pfrm->setSheet(global_layman, rect, sheet_buffer);
 
-	// Register in global layer manager
-	global_layman.Append(pfrm);
-	// Move the new form to the second layer (behind the cursor)
-	Consman::SwitchForm(pfrm);
+	{
+		// [Lock]: Protect global registration
+		#if _GUI_ENABLE
+		SpinlockLocal guard(&gui_lock);
+		#endif
+		global_layman.Append(pfrm);
+		Consman::SwitchForm(pfrm);
+	}
 
 	// Store in process block pforms
 	pb->pforms[slot_idx] = pfrm;
@@ -231,56 +274,122 @@ static stdsint ConsoleMsg_FNEW(const FMT_ConsoleMsg_FNEW* data, ProcessBlock* pb
 	return slot_idx;
 }
 
-static stdsint ConsoleMsg_FDEL(stduint pform_id, ProcessBlock* pb) {
-	if (pform_id == ~_IMM0) {
-		for (stduint i = 0; i < _TEMP 4; i++) {
-			if (pb->pforms[i]) ConsoleMsg_FDEL(i, pb);
-		}
-		return 0;
-	}
-	if (pform_id >= _TEMP 4) return -1;
+static void _CleanSingleForm(ProcessBlock* pb, stduint pform_id) {
+	if (pform_id >= _TEMP 4) return;
 	SheetTrait* pfrm = pb->pforms[pform_id];
-	if (!pfrm) return -1;
+	if (!pfrm) return;
 
-	// Recursive destroy sub-forms belonging to this process
+	// Recursive destroy sub-forms belonging to this process that are children of this form
 	for (stduint i = 0; i < _TEMP 4; i++) {
 		if (pb->pforms[i] && pb->pforms[i]->refSheetParent() == (LayerManager*)pfrm) {
-			ConsoleMsg_FDEL(i, pb);
+			_CleanSingleForm(pb, i);
 		}
 	}
 
-	// Remove from parent layer manager (e.g., global_layman)
-	LayerManager* parent = pfrm->refSheetParent();
-	if (parent) {
-		Nnode* target = &pfrm->refSheetNode();
-		if (target->left) target->left->next = target->next;
-		else parent->subf = target->next;
-		if (target->next) target->next->left = target->left;
-		else parent->subl = target->left;
-		target->left = target->next = nullptr;
-		pfrm->refSheetParent() = nullptr;
-	}
-	global_layman.Update(pfrm, Rectangle{ Point2(0,0), pfrm->sheet_area.getSize() });
+	Rectangle area = pfrm->sheet_area;
+	{
+		// [Lock]: Protect global layman chain and focus switch
+		#if _GUI_ENABLE
+		SpinlockLocal guard(&gui_lock);
+		#endif
 
-	// Unblock and notify threads waiting for this form
+		LayerManager* parent = pfrm->refSheetParent();
+		if (parent) parent->Remove(pfrm);
+		global_layman.Update(nullptr, area);
+
+		// [TTY Leak Fix]: If this form OR any of its children is a TTY (VideoConsole2), remove it from the global TTY chain
+		extern uni::Dchain vttys;
+		auto UnbindTTY = [&](SheetTrait* target) {
+			for (auto nod = vttys.Root(); nod; nod = nod->next) {
+				if (nod->offs == (pureptr_t)target) {
+					// Specialized cleanup handles global focus_tty sanitization
+					Consman::RemoveVconsole(nod);
+					return true;
+				}
+			}
+			return false;
+			};
+
+		UnbindTTY(pfrm);
+		// Also check immediate children (VideoConsole2 is a child of the Form)
+		LayerManager* pman = (LayerManager*)pfrm;
+		Nnode* nod = pman->subf;
+		while (nod) {
+			Nnode* next = nod->next; // Save next before potential deletion
+			UnbindTTY(cast<SheetTrait*>(nod->offs));
+			nod = next;
+		}
+
+		// [Ghost Pointer Fix]: Clear global pointers if they target the form OR any of its descendants
+		auto IsDescendantOf = [](SheetTrait* target, SheetTrait* root) -> bool {
+			SheetTrait* curr = target;
+			while (curr) {
+				if (curr == root) return true;
+				curr = (SheetTrait*)curr->refSheetParent();
+			}
+			return false;
+			};
+
+		if (Consman::last_click_sheet && IsDescendantOf(Consman::last_click_sheet, pfrm)) {
+			Consman::last_click_sheet = nullptr;
+		}
+		if (Cursor::moving_sheet && IsDescendantOf(Cursor::moving_sheet, pfrm)) {
+			Cursor::moving_sheet = nullptr;
+		}
+
+		global_layman.UnregisterTimer(pfrm);
+	}
+
+	// Unblock threads waiting for this specific form
 	for (stduint i = 0; i < blocked_form_msgs.Count(); i++) {
 		if (blocked_form_msgs[i].pform_id == pform_id) {
 			stdsint err_val = -1;
-			syssend(blocked_form_msgs[i].sig_src, &err_val, sizeof(err_val));
+			ThreadBlock* th_target = Taskman::LocateThread(blocked_form_msgs[i].sig_src);
+			if (th_target && th_target->parent_process && th_target->parent_process->state == ProcessBlock::State::Active) {
+				syssend(blocked_form_msgs[i].sig_src, &err_val, sizeof(err_val));
+			}
 			blocked_form_msgs.Remove(i--);
 		}
 	}
 
-	// Release resources
+	// Safe memory release
 	if (pfrm->sheet_buffer) {
 		delete[] pfrm->sheet_buffer;
 		pfrm->sheet_buffer = nullptr;
 	}
+
+	// [Message Queue Fix]: Remove any pending blocking requests for this form
+	for (stduint i = 0; i < blocked_form_msgs.Count(); i++) {
+		if (blocked_form_msgs[i].pform_id == pform_id) {
+			blocked_form_msgs.Remove(i);
+			i--;
+		}
+	}
+
 	delete pfrm;
 	pb->pforms[pform_id] = nullptr;
+}
 
+static stdsint ConsoleMsg_FDEL(stduint pform_id, ProcessBlock* pb) {
+	if (pform_id == ~_IMM0) {
+		for (stduint i = 0; i < _TEMP 4; i++) {
+			_CleanSingleForm(pb, i);
+		}
+		return 0;
+	}
+	if (pform_id >= _TEMP 4 || !pb->pforms[pform_id]) return -1;
+	_CleanSingleForm(pb, pform_id);
 	return 0;
 }
+
+void Global_CleanProcessForms(ProcessBlock* pb) {
+	if (!pb) return;
+	for (stduint pform_id = 0; pform_id < _TEMP 4; pform_id++) {
+		_CleanSingleForm(pb, pform_id);
+	}
+}
+
+
 
 static stdsint ConsoleMsg_FMSG(const FMT_ConsoleMsg_FMSG* data, ProcessBlock* pb, stduint sig_src) {
 	if (data->pform_id >= _TEMP 4) return -1;
@@ -326,13 +435,13 @@ static stdsint ConsoleMsg_FDRW(const FMT_ConsoleMsg_FDRW* data, ProcessBlock* pb
 
 		VideoControlInterfaceMARGB8888 vcim(pfrm->sheet_buffer, pfrm->sheet_area.getSize());
 		LayerManager lm(&vcim, Rectangle{ Point(0,0), pfrm->sheet_area.getSize() });
-		
+
 		// Now compatible with signed offsets
 		Size2dif off;
 		off.x = cl.size.x;
 		off.y = cl.size.y;
 		lm.DrawLine(cl.disp, off, cl.color);
-		
+
 		// Calculate the bounding box for the line update (always positive dimensions for the dirty rect)
 		stdsint x1 = cl.disp.x, y1 = cl.disp.y;
 		stdsint x2 = cl.disp.x + cl.size.x, y2 = cl.disp.y + cl.size.y;
@@ -340,6 +449,7 @@ static stdsint ConsoleMsg_FDRW(const FMT_ConsoleMsg_FDRW* data, ProcessBlock* pb
 		stdsint ry = (y1 < y2 ? y1 : y2) - 1;
 		stdsint rw = (x1 < x2 ? x2 - x1 : x1 - x2) + 3;
 		stdsint rh = (y1 < y2 ? y2 - y1 : y1 - y2) + 3;
+
 		global_layman.Update(pfrm, Rectangle(Point(rx, ry), Size2(rw, rh)));
 
 		return 0;
@@ -376,6 +486,14 @@ static stdsint ConsoleMsg_FCHR(const FMT_ConsoleMsg_FCHR* data, ProcessBlock* pb
 	char buf[32];
 	stduint len = StrCopyP(buf, kernel_paging, data->usrp_str, pb->paging, sizeof(buf));
 
+	// [Security Fix]: Validate drawing bounds to prevent heap corruption
+	stduint str_len = StrLength(buf);
+	if (vertex.x < 0 || vertex.y < 0 ||
+		(vertex.x + (stdsint)str_len * 8) > pfrm->sheet_area.width ||
+		(vertex.y + 16) > pfrm->sheet_area.height) {
+		return -1;
+	}
+
 	// Draw using DrawString_16 (8x16 font)
 	uni::DrawString_16(*pfrm, vertex, String(buf), data->color);
 
@@ -393,13 +511,13 @@ extern String* plab;
 #endif
 #if _GUI_ENABLE
 void _Comment(R1) serv_shell_process() {
-	stduint tty_target = 0;
+	uni::Dnode* tty_target = 0;
 	::uni::Witch::Form* pf_ptr = nullptr;
 	if (Consman::ento_gui) {
 		Rectangle rect{ Point(250, 160), Size2(480, 320) };
 		auto [pcon, pf, tty_no] = Consman::CreateVconsole(rect, "Terminal");
 		pf_ptr = pf;
-		tty_target = tty_no;
+		tty_target = vttys.LocateNode(tty_no);
 		ploginfo("CreateVconsole->[%[x],%[x],%u]", pcon, pf, tty_no);
 	}
 
@@ -407,18 +525,22 @@ void _Comment(R1) serv_shell_process() {
 	stduint src = 0, type = 0;
 	sysrecv(ANYPROC, &p, sizeof(p), &type, &src);
 	if (p) {
-		if (p->pid == 0) {// uninit
-			Taskman::Append(p);
-			Taskman::AppendThread(p->main_thread);
-		}
-		p->focus_tty = vttys.LocateNode(tty_target);
+		// Register the process globally
+		Taskman::Append(p);
+
+		// [New]: Register the manually created window in the process space for unified FDEL cleanup
+		if (pf_ptr) p->pforms[0] = pf_ptr;
+
+		p->focus_tty = tty_target;
 		if (auto nod = (Dnode*)p->focus_tty) {
 			auto pblock = (vtty_type_t*)nod->type;
 			pblock->master_pid = Taskman::CurrentPID();
 			pblock->proc_group.Append(p->pid);
 		}
+		// Now that the environment is set up, start the application thread
+		Taskman::AppendThread(p->main_thread);
 	}
-	
+
 	extern const char key_map[256], key_map_shift[256];
 	while (true) {
 		if (pf_ptr) {
@@ -430,7 +552,14 @@ void _Comment(R1) serv_shell_process() {
 					if (key_event->method == keyboard_event_t::method_t::keydown) {
 						auto ascii_ch = (key_event->mod.l_shift || key_event->mod.r_shift ? key_map_shift : key_map)[key_event->keycode];
 						if (ascii_ch) {
-							VTTY_INNQ(vttys.LocateNode(tty_target))->OutChar(ascii_ch);
+							// Taskman::DumpTask(Taskman::Locate(Task_Console));
+							// ploginfo("blocked_vtty_pid.Count: %u", blocked_vtty_pid.Count());
+							// if (blocked_vtty_pid.Count() == 1) {
+							// 	ploginfo("blocked_vtty_pid[0]: %u", blocked_vtty_pid[0]);
+							// }
+							if (auto* q = VTTY_INNQ(tty_target)) {
+								q->OutChar(ascii_ch);
+							}
 						}
 					}
 				}
@@ -438,16 +567,10 @@ void _Comment(R1) serv_shell_process() {
 					bool left_down = (smsg.args[2] & 0x10);
 					if (smsg.args[3] == 1 && !left_down) {
 						// Force kill all processes in the group
-						if (auto nod = vttys.LocateNode(tty_target)) {
+						if (auto nod = tty_target) {
 							auto pblock = (vtty_type_t*)nod->type;
 							stduint self_pid = Taskman::CurrentPID();
 
-					if (smsg.args[3] == 1 && !left_down) {
-						// Force kill all processes in the group
-						if (auto nod = vttys.LocateNode(tty_target)) {
-							auto pblock = (vtty_type_t*)nod->type;
-							stduint self_pid = Taskman::CurrentPID();
-							
 							// Copy the group to a local buffer to ensure stable iteration
 							stduint pid_list[32];
 							stduint count = pblock->proc_group.Count();
@@ -456,7 +579,7 @@ void _Comment(R1) serv_shell_process() {
 
 							for (stdsint i = count - 1; i >= 0; --i) {
 								stduint pid = pid_list[i];
-								
+
 								// Protect system tasks but allow killing the master shell
 								if ((pid >= TaskCount || pid == pblock->master_pid) && pid != self_pid) {
 									ProcessBlock* pb_to_kill = Taskman::Locate(pid);
@@ -470,27 +593,25 @@ void _Comment(R1) serv_shell_process() {
 						}
 						goto shell_exit;
 					}
-						}
-						goto shell_exit;
-					}
 				}
 			}
 		}
 
 
-		if (auto nod = vttys.LocateNode(tty_target)) {
+		if (auto nod = tty_target) {
 			auto pblock = (vtty_type_t*)nod->type;
 			if (p && pblock->proc_group.Count() == 0) {
 				goto shell_exit;
 			}
-		} else {
+		}
+		else {
 			goto shell_exit;
 		}
 	}
 
 shell_exit:
 	if (Consman::ento_gui) {
-		auto pblock = (vtty_type_t*)vttys.LocateNode(tty_target)->type;
+		auto pblock = (vtty_type_t*)tty_target->type;
 		for (stdsint i = pblock->proc_group.Count() - 1; i >= 0; --i) {
 			stduint pid = pblock->proc_group[i];
 			auto pb_to_kill = Taskman::Locate(pid);
@@ -500,12 +621,18 @@ shell_exit:
 				sysrecv(Task_TaskMan, exit_para, sizeof(exit_para));
 			}
 		}
-		Consman::RemoveVconsole(tty_target);
+		{
+			#if _GUI_ENABLE
+			SpinlockLocal guard(&gui_lock);
+			#endif
+			Consman::RemoveVconsole(tty_target);
+		}
 	}
-	
+
+	Taskman::ExitCurrent(0);
 	// Final exit for the shell process itself
-	stduint exit_para[2] = { Taskman::CurrentPID(), 0 };
-	syssend(Task_TaskMan, exit_para, sizeof(exit_para), _IMM(TaskmanMsg::EXIT));
+	// stduint exit_para[2] = { Taskman::CurrentPID(), 0 };
+	// syssend(Task_TaskMan, exit_para, sizeof(exit_para), _IMM(TaskmanMsg::EXIT));
 	// Never reach here: the stack will be reclaimed by Taskman
 	while (true);
 }
@@ -514,47 +641,63 @@ shell_exit:
 void _Comment(R1) serv_cons_loop()
 {
 	volatile stduint sig_type = 0, sig_src, ret;
-	volatile stduint to_args[4];	
+	volatile stduint to_args[4];
 	int ch;
-	
+
 	_TEMP devfs_register_and_mount();
 	while (true) {
-		for0 (i, blocked_vtty_pid.Count()) if (stduint pid = blocked_vtty_pid[i]) {
-			auto ppb = Taskman::Locate(pid);
-			if (!ppb) {
-				blocked_vtty_pid.Remove(i);
-				i--;
-				continue;
-			}
-			if (ppb->focus_tty && -1 != (ch = VTTY_INNQ(ppb->focus_tty)->inn())) {
-				stdsint val = ch; // The character is already translated through sysmsg_kbd
-				blocked_vtty_pid.Remove(i);
-				syssend(pid, &val, byteof(val));
+		{
+			#if _GUI_ENABLE
+			SpinlockLocal guard(&gui_lock);
+			#endif
+			for (stduint i = 0; i < blocked_vtty_pid.Count(); i++) {
+				stduint pid = blocked_vtty_pid[i];
+				if (!pid) continue;
+
+				ProcessBlock* ppb = Taskman::Locate(pid);
+				// Identify and clean up processes that are no longer active (Hanging or Invalid)
+				if (!ppb || ppb->state != ProcessBlock::State::Active) {
+					blocked_vtty_pid.Remove(i--);
+					continue;
+				}
+
+				QueueLimited* q = ppb->focus_tty ? VTTY_INNQ(ppb->focus_tty) : nullptr;
+				if (q && -1 != (ch = q->inn())) {
+					stdsint val = ch;
+					blocked_vtty_pid.Remove(i--);
+					syssend(pid, &val, byteof(val));
+				}
 			}
 		}
 
 		// Handle blocked form message requests
-		for (stduint i = 0; i < blocked_form_msgs.Count(); i++) {
-			auto& b = blocked_form_msgs[i];
-			ThreadBlock* th = Taskman::LocateThread(b.sig_src);
-			if (!th || !th->parent_process) {
-				blocked_form_msgs.Remove(i--);
-				continue;
-			}
-			ProcessBlock* pb = th->parent_process;
-			SheetTrait* pfrm = pb->pforms[b.pform_id];
-			if (!pfrm) {
-				blocked_form_msgs.Remove(i--);
-				continue;
-			}
-			auto pf = static_cast<::uni::Witch::Form*>(pfrm);
-			if (pf->msg_queue.Count()) {
-				SheetMessage msg;
-				pf->msg_queue.Dequeue(msg);
-				MccaMemCopyP(b.usr_msg_ptr, pb, &msg, NULL, sizeof(msg));
-				stdsint res_val = 1;
-				syssend(b.sig_src, &res_val, sizeof(res_val));
-				blocked_form_msgs.Remove(i--);
+		{
+			#if _GUI_ENABLE
+			SpinlockLocal guard(&gui_lock);
+			#endif
+			for (stduint i = 0; i < blocked_form_msgs.Count(); i++) {
+				auto& b = blocked_form_msgs[i];
+				ThreadBlock* th = Taskman::LocateThread(b.sig_src);
+				if (!th || !th->parent_process) {
+					blocked_form_msgs.Remove(i--);
+					continue;
+				}
+				ProcessBlock* pb = th->parent_process;
+				SheetTrait* pfrm = pb->pforms[b.pform_id];
+				if (!pfrm) {
+					blocked_form_msgs.Remove(i--);
+					continue;
+				}
+				auto pf = static_cast<::uni::Witch::Form*>(pfrm);
+				if (pf->msg_queue.Count()) {
+					SheetMessage msg;
+					pf->msg_queue.Dequeue(msg);
+					MccaMemCopyP(b.usr_msg_ptr, pb, &msg, NULL, sizeof(msg));
+
+					stduint val = 1;
+					blocked_form_msgs.Remove(i--);
+					syssend(b.sig_src, &val, byteof(val));
+				}
 			}
 		}
 
@@ -565,14 +708,14 @@ void _Comment(R1) serv_cons_loop()
 			switch (ConsoleMsg(sig_type)) {
 			case ConsoleMsg::TEST: break;
 
-			#ifdef _ARC_x86 // x86:
+				#ifdef _ARC_x86 // x86:
 			case ConsoleMsg::READ:
 				_TODO
-				break;
+					break;
 			case ConsoleMsg::WRIT:
 				_TODO
-				break;
-			#endif
+					break;
+				#endif
 
 			case ConsoleMsg::INNC:// ReadChar(ASCII): normal \n \r ...
 				if (!ifContainBlockedTTY(th->parent_process)) {
@@ -594,14 +737,14 @@ void _Comment(R1) serv_cons_loop()
 				break;
 
 			case ConsoleMsg::FDEL:
-				{
-					ProcessBlock* pb_target = th->parent_process;
-					// If request from System Tasks, to_args[1] is the target PID
-					if (sig_src < TaskCount) pb_target = Taskman::Locate(to_args[1]);
-					ret = ConsoleMsg_FDEL(to_args[0], pb_target);
-					syssend(sig_src, (void*)&ret, sizeof(ret));
-				}
-				break;
+			{
+				ProcessBlock* pb_target = th->parent_process;
+				// If request from System Tasks, to_args[1] is the target PID
+				if (sig_src < TaskCount) pb_target = Taskman::Locate(to_args[1]);
+				ret = ConsoleMsg_FDEL(to_args[0], pb_target);
+				syssend(sig_src, (void*)&ret, sizeof(ret));
+			}
+			break;
 
 
 			case ConsoleMsg::FMSG:

@@ -111,22 +111,16 @@ public:
 #endif
 
 
-#if (_MCCA & 0xFF00) == 0x8600
-#define TTY_NUMBER 4
-
-// defVconIface(GloScreenRGB888, uint8);
-defVconIface(GloScreenARGB8888, uint32);
-defVconIface(GloScreenABGR8888, uint32);
-
 struct _RET_CreateVconsole {
 	uni::VideoConsole2* pcon;
 	::uni::Witch::Form* pform;
 	stduint tty_no;
-	// -> pid
 };
+
 struct Consman {
 	// CLI
 	static unsigned current_screen_TTY;// focus
+	#if (_MCCA & 0xFF00) == 0x8600
 	// GUI
 	static bool ento_gui;
 	static bool enable_dubuffer;
@@ -136,14 +130,30 @@ struct Consman {
 	static bool Initialize();
 	static void enable_2buffer();
 	static _RET_CreateVconsole CreateVconsole(const Rectangle& rect, rostr title);
-	static void RemoveVconsole(stduint tty_no);
+	static void RemoveVconsole(Dnode* nod);
 	static void SwitchForm(SheetTrait* form);
+	#endif
 };
+
+#if (_MCCA & 0xFF00) == 0x8600
+#define TTY_NUMBER 4
+
+// defVconIface(GloScreenRGB888, uint8);
+defVconIface(GloScreenARGB8888, uint32);
+defVconIface(GloScreenABGR8888, uint32);
 
 
 void hand_mouse(MouseMessage mmsg);
 void hand_kboard(keyboard_event_t mmsg);
 
+
+class ProcessBlock;
+class Spinlock;
+
+#if _GUI_ENABLE
+void Global_CleanProcessForms(ProcessBlock* pb);
+extern Spinlock gui_lock;
+#endif
 
 #endif
 

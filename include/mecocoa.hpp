@@ -1,6 +1,19 @@
 #ifndef MECOCOA_HPP_
 #define MECOCOA_HPP_
 
+#define _GUI_ENABLE 1
+// double buffer, or the anime is disabled
+#define _GUI_DOUBLE_BUFFER 1
+// print logo 🏳️‍⚧️
+#define _GUI_LOGO 1
+
+#if (_MCCA & 0xFF00) == 0x1000
+#undef _GUI_ENABLE
+#define _GUI_ENABLE 0
+#endif
+
+//
+
 #ifndef _STYLE_RUST
 #define _STYLE_RUST
 #endif
@@ -64,15 +77,4 @@ void mecfetch();
 // ---- . ----
 
 //
-#define _GUI_ENABLE 1
-// double buffer, or the anime is disabled
-#define _GUI_DOUBLE_BUFFER 1
-// print logo 🏳️‍⚧️
-#define _GUI_LOGO 1
-
-#if (_MCCA & 0xFF00) == 0x1000
-#undef _GUI_ENABLE
-#define _GUI_ENABLE 0
-#endif
-
 #endif // MECOCOA_HPP_

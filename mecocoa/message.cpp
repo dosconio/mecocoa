@@ -108,7 +108,7 @@ static bool msg_send_will_deadlock(ThreadBlock* fo_th, ThreadBlock* to_th)
 	return false;
 }
 
-static Spinlock comm_lock;
+Spinlock comm_lock;
 int msg_send(ThreadBlock* fo_th, stduint too, _Comment(vaddr) CommMsg* msg)
 {
 	SpinlockLocal guard(&comm_lock);
@@ -258,5 +258,40 @@ int msg_recv(ThreadBlock* to_th, stduint foo, _Comment(vaddr) CommMsg* msg)
 	return 0;
 }
 
+
+void msg_cleanup_thread(ThreadBlock* th) {
+	SpinlockLocal guard(&comm_lock);
+	
+	// Case 1: This thread (th) was a target (Receiver), unblock all its senders
+	ThreadBlock* sender = th->queue_send_queuehead;
+	while (sender) {
+		ThreadBlock* s_next = sender->queue_send_queuenext;
+		sender->send_to_whom = nullptr;
+		sender->queue_send_queuenext = nullptr;
+		sender->Unblock(ThreadBlock::BlockReason::BR_SendMsg);
+		sender = s_next;
+	}
+	th->queue_send_queuehead = nullptr;
+
+	// Case 2: This thread (th) was a sender waiting in a target's (target_th) queue
+	if (th->send_to_whom) {
+		ThreadBlock* target_th = th->send_to_whom;
+		if (target_th->queue_send_queuehead == th) {
+			// th is the head of the target's queue
+			target_th->queue_send_queuehead = th->queue_send_queuenext;
+		} else {
+			// Find th in the target's queue and unlink it
+			ThreadBlock* prev = target_th->queue_send_queuehead;
+			while (prev && prev->queue_send_queuenext != th) {
+				prev = prev->queue_send_queuenext;
+			}
+			if (prev) {
+				prev->queue_send_queuenext = th->queue_send_queuenext;
+			}
+		}
+		th->send_to_whom = nullptr;
+		th->queue_send_queuenext = nullptr;
+	}
+}
 
 #endif

@@ -5,6 +5,8 @@
 #include "../include/mecocoa.hpp"
 #include "../include/filesys.hpp"
 
+extern Spinlock scheduler_lock;
+
 #include <c/driver/keyboard.h>
 
 // #pragma GCC push_options
@@ -197,7 +199,11 @@ static void _Exit_Cleanup(stduint pid)
 	extern Spinlock scheduler_lock;
 	{
 		SpinlockLocal guard(&scheduler_lock);
-		ProcessBlock* pparent = Taskman::Locate(ppb->parent_id);
+		ProcessBlock* pparent = nullptr;
+		for (auto nod = Taskman::chain.Root(); nod; nod = nod->next) {
+			auto p = cast<ProcessBlock*>(nod->offs);
+			if (p->pid == ppb->parent_id) { pparent = p; break; }
+		}
 		if (pparent) {
 			if (pparent->child_list_head == ppb) {
 				pparent->child_list_head = ppb->sibling_next;
@@ -214,6 +220,14 @@ static void _Exit_Cleanup(stduint pid)
 	// Hierarchical Process Tree: Deep Reap children
 	while (ppb->child_list_head) {
 		ProcessBlock* child = ppb->child_list_head;
+		
+		// Unlink from current parent first to avoid infinite loop
+		{
+			SpinlockLocal guard(&scheduler_lock);
+			ppb->child_list_head = child->sibling_next;
+			child->sibling_next = nullptr;
+		}
+
 		if (child->state == ProcessBlock::State::Hanging) {
 			_Exit_Cleanup(child->pid);
 		}
@@ -228,16 +242,51 @@ static void _Exit_Cleanup(stduint pid)
 		}
 	}
 
-	if (ppb->main_thread) Taskman::DequeueReady(ppb->main_thread);
-	// Msg: Clear IPC
-	ThreadBlock* sender = ppb->main_thread->queue_send_queuehead;
-	while (sender) {
-		ThreadBlock* next = sender->queue_send_queuenext;
-		sender->Unblock(ThreadBlock::BlockReason::BR_SendMsg);
-		sender = next;
-	}// wakeup senders
-	ppb->main_thread->queue_send_queuehead = nullptr;
-	// Release Threads
+	#if _GUI_ENABLE
+	// 1. Release GUI Resources First (while threads are still valid for unblocking)
+	Global_CleanProcessForms(ppb);
+
+	// 2. Release TTY Binding
+	if (ppb->focus_tty) {
+		bool is_tty_valid = false;
+		extern uni::Dchain vttys;
+		for (auto nod = vttys.Root(); nod; nod = nod->next) {
+			if (nod == ppb->focus_tty) {
+				is_tty_valid = true;
+				break;
+			}
+		}
+
+		if (is_tty_valid && ppb->focus_tty->type) {
+			auto pblock = (vtty_type_t*)ppb->focus_tty->type;
+			for (stdsint i = pblock->proc_group.Count() - 1; i >= 0; --i) {
+				if (pblock->proc_group[i] == pid) {
+					pblock->proc_group.Remove(i);
+					break;
+				}
+			}
+			if (pblock->master_pid == pid || (pblock->proc_group.Count() == 0 && pblock->master_pid != 0)) {
+				pblock->master_pid = 0; 
+			}
+		}
+		ppb->focus_tty = nullptr;
+	}
+	#endif
+
+	// 3. Unlink all threads from IPC queues (but don't delete them yet)
+	ThreadBlock* th_ptr = ppb->thread_list_head;
+	while (th_ptr) {
+		msg_cleanup_thread(th_ptr);
+		th_ptr = th_ptr->process_thread_next;
+	}
+
+	// 4. Release Files
+	for0(i, numsof(ppb->pfiles)) if (ppb->pfiles[i]) {
+		ppb->Close(i);
+		ppb->pfiles[i] = 0;
+	}
+
+	// 5. Final Destruction: Release Thread blocks and stacks
 	ThreadBlock* th = ppb->thread_list_head;
 	while (th) {
 		ThreadBlock* next_th = th->process_thread_next;
@@ -254,33 +303,6 @@ static void _Exit_Cleanup(stduint pid)
 		th = next_th;
 	}
 	ppb->thread_list_head = ppb->main_thread = nullptr;
-
-	// Release Files First
-	for0(i, numsof(ppb->pfiles)) if (ppb->pfiles[i]) {
-		ppb->Close(i);
-		ppb->pfiles[i] = 0;
-	}
-
-	#if _GUI_ENABLE
-	// Release Forms First
-	stduint fdel_args[2] = { ~_IMM0, pid };
-	syssend(Task_Console, fdel_args, sizeof(fdel_args), _IMM(ConsoleMsg::FDEL));
-	sysrecv(Task_Console, fdel_args, sizeof(fdel_args));
-
-	// Release TTY Binding
-	if (ppb->focus_tty && ppb->focus_tty->type) {
-		auto pblock = (vtty_type_t*)ppb->focus_tty->type;
-		for (stdsint i = pblock->proc_group.Count() - 1; i >= 0; --i) {
-			if (pblock->proc_group[i] == pid) {
-				pblock->proc_group.Remove(i);
-				break;
-			}
-		}
-		if (pblock->proc_group.Count() == 0 && pblock->master_pid != 0) {
-			pblock->master_pid = 0; 
-		}
-	}
-	#endif
 
 	// Release Segments
 	for0a(i, ppb->load_slices) {
@@ -305,7 +327,13 @@ static void _Exit_Cleanup(stduint pid)
 	// Release Heap/Paging
 	ppb->paging.~Paging();
 	ppb->state = ProcessBlock::State::Invalid;
-	Taskman::chain.Remove(ppb);
+
+	{
+		SpinlockLocal guard(&scheduler_lock);
+		Taskman::chain.Remove(ppb);
+	}
+
+	mempool.deallocate(ppb, sizeof(ProcessBlock));
 	#if defined(_DEBUG) && defined(_MCCA) && (_MCCA & 0xFF00) == 0x8600
 	setFlags(flag);
 	#endif
@@ -339,20 +367,40 @@ bool Taskman::Exit(ProcessBlock* p, stdsint exit_code)
 		ProcessBlock* pb_sys = Taskman::Locate(i);
 		if (pb_sys && pb_sys->main_thread) {
 			ThreadBlock* th = pb_sys->main_thread;
-			// If this system task is blocked while sending to us, unblock it
-			if (th->block_reason & ThreadBlock::BlockReason::BR_SendMsg) {
-				if (th->send_to_whom && th->send_to_whom->parent_process == p) {
-					th->Unblock(ThreadBlock::BlockReason::BR_SendMsg);
-				}
+			
+			extern Spinlock comm_lock;
+			SpinlockLocal guard(&comm_lock);
+
+			// 1. If this system task is blocked while sending to us, unblock it and clear pointers
+			if ((th->block_reason & ThreadBlock::BlockReason::BR_SendMsg) &&
+				th->send_to_whom && th->send_to_whom->parent_process == p) {
+				th->send_to_whom = nullptr;
+				th->queue_send_queuenext = nullptr;
+				th->Unblock(ThreadBlock::BlockReason::BR_SendMsg);
+			}
+
+			// 2. If this system task is blocked while receiving from us, unblock it
+			if ((th->block_reason & ThreadBlock::BlockReason::BR_RecvMsg) &&
+				th->recv_fo_whom && th->recv_fo_whom->parent_process == p) {
+				th->recv_fo_whom = nullptr;
+				th->Unblock(ThreadBlock::BlockReason::BR_RecvMsg);
 			}
 		}
 	}
 
 	// Wakeup any senders blocked by this process's main thread queue
 	if (p->main_thread) {
+		extern Spinlock comm_lock;
+		SpinlockLocal guard(&comm_lock);
+
 		ThreadBlock* sender = p->main_thread->queue_send_queuehead;
 		while (sender) {
 			ThreadBlock* next = sender->queue_send_queuenext;
+			
+			// Sever dangling pointers
+			sender->send_to_whom = nullptr;
+			sender->queue_send_queuenext = nullptr;
+			
 			sender->Unblock(ThreadBlock::BlockReason::BR_SendMsg);
 			sender = next;
 		}
@@ -399,6 +447,7 @@ bool Taskman::Exit(ProcessBlock* p, stdsint exit_code)
 
 stdsint Taskman::Wait(ProcessBlock* pb)
 {
+	if (!pb) return ~_IMM0;
 	const auto pid = pb->getID();
 	stduint children = 0;
 	for (auto nod = Taskman::chain.Root(); nod; nod = nod->next) {
@@ -445,7 +494,7 @@ void _Comment(R0) serv_task_loop()
 			// Nothing
 			break;
 		case TaskmanMsg::EXIT: // (pid, state)
-			// ploginfo("Taskman exit: %u %u", to_args[0], to_args[1]);
+			ploginfo("Taskman exit: %u %u", to_args[0], to_args[1]);
 			if (!to_args[0]) {
 				plogerro("Try to exit Task_Kernel");
 				break;
@@ -453,6 +502,8 @@ void _Comment(R0) serv_task_loop()
 			Taskman::Exit(Taskman::Locate(to_args[0]), to_args[1]);
 			_Exit_Cleanup(to_args[0]); // Force immediate cleanup to satisfy synchronous IPC wait
 			ret = 0;
+			ploginfo("Taskman exit: %u %u", to_args[0], to_args[1]);
+
 			syssend(sig_src, (void*)&ret, sizeof(ret));
 			break;
 		case TaskmanMsg::FORK: // (pid, cframe)
@@ -474,8 +525,8 @@ void _Comment(R0) serv_task_loop()
 			break;
 		case TaskmanMsg::EXET:// (pid, &usr:fullpath, &usr:argstack, stacklen)
 			pb = Taskman::Exet(to_args[0], (rostr)to_args[1], (void*)to_args[2], to_args[3]);
-			if (!pb) {
-				ret = ~_IMM0;
+			if (!pb || sig_src != to_args[0]) {
+				ret = pb ? 0 : ~_IMM0;
 				syssend(sig_src, (void*)&ret, sizeof(ret));
 			}
 			break;
@@ -484,6 +535,7 @@ void _Comment(R0) serv_task_loop()
 			plogerro("Bad TYPE %u in %s %s", sig_type, __FILE__, __FUNCIDEN__);
 			break;
 		}
+		// plogwarn("TRY TO");
 		sysrecv(ANYPROC, (void*)to_args, byteof(to_args), (stduint*)&sig_type, (stduint*)&sig_src);
 		// ploginfo("Taskman recv: %u %u", sig_type, sig_src);
 	}

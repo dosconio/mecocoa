@@ -45,6 +45,7 @@ struct SysMessage {
 		RUPT_MOUSE,
 		RUPT_KBD,
 		RUPT_FLUSH,
+		RUPT_NEW_TERM,
 	} type;
 	union {
 		struct MsgTimer timer;
@@ -354,6 +355,7 @@ enum class TaskmanMsg : stduint {
 int msg_send(ThreadBlock* fo, stduint to, _Comment(vaddr) CommMsg* msg);
 int msg_recv(ThreadBlock* to, stduint fo, _Comment(vaddr) CommMsg* msg);
 
+void msg_cleanup_thread(ThreadBlock* th);
 void rupt_proc(stduint tid, stduint rupt_no);
 
 inline static stduint syssend(stduint to_whom, const void* msgaddr, stduint bytlen, stduint type = 0)

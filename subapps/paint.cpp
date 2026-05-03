@@ -34,7 +34,7 @@ int main(int argc, char** argv)
 			if (left_down) {
 				// START DRAWING: Button Pressed
 				is_drawing = true;
-				last_p = { (stdsint)smsg.args[0], (stdsint)smsg.args[1] };
+				last_p = { smsg.args[0], smsg.args[1] };
 				sys_draw_point(form_id, last_p, pen_color);
 			}
 			else {
@@ -54,7 +54,7 @@ int main(int argc, char** argv)
 		{
 			// Only draw if the button is currently held down
 			if (is_drawing) {
-				Point curr_p = { (stdsint)smsg.args[0], (stdsint)smsg.args[1] };
+				Point curr_p = { smsg.args[0], smsg.args[1] };
 				
 				// Ensure movement occurred to avoid redundant draws
 				if (curr_p.x != last_p.x || curr_p.y != last_p.y) {

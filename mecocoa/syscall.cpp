@@ -91,8 +91,11 @@ DEFSYSC sysc_INNC(stduint blocked) {
 		syssend(Task_Console, sliceof(msgbuf), _IMM(ConsoleMsg::INNC));//
 		sysrecv(Task_Console, &ret, byteof(ret));// need Context
 	}
-	else if (ppb->focus_tty && -1 != (ch = VTTY_INNQ(ppb->focus_tty)->inn())) {
-		ret = ch;
+	else if (ppb->focus_tty) {
+		QueueLimited* q = VTTY_INNQ(ppb->focus_tty);
+		if (q && -1 != (ch = q->inn())) {
+			ret = ch;
+		}
 	}
 	return ret;
 }

@@ -207,7 +207,9 @@ void operator delete[](void* p) {
 	free(p);
 }
 void operator delete(void* ptr, stduint size) noexcept {
-	if (!mempool.deallocate(ptr, size)) plogerro("del BAD");
+	// ploginfo("delete[](%[x], %[x])", ptr, size);
+	// if (!mempool.deallocate(ptr, size)) plogerro("del BAD");
+	if (!mempool.deallocate(ptr)) plogerro("del BAD");
 }
 void operator delete[](void* ptr, stduint size) {
 	::operator delete(ptr, size);

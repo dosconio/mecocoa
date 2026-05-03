@@ -188,7 +188,15 @@ bool Taskman::Append(ProcessBlock* task) {
 	task->pid = __atomic_fetch_add(&next_global_id, 1, __ATOMIC_SEQ_CST);
 
 	// Hierarchical Process Tree: Link to parent
-	ProcessBlock* pparent = Taskman::Locate(task->parent_id);
+	ProcessBlock* pparent = nullptr;
+	for (auto nod = chain.Root(); nod; nod = nod->next) {
+		auto task_node = cast<ProcessBlock*>(nod->offs);
+		if (task_node->pid == task->parent_id) {
+			pparent = task_node;
+			break;
+		}
+	}
+
 	if (pparent) {
 		task->sibling_next = pparent->child_list_head;
 		pparent->child_list_head = task;
@@ -229,6 +237,7 @@ bool Taskman::AppendThread(ThreadBlock* task) {
 }
 
 ProcessBlock* Taskman::Locate(stduint taskid) {
+	SpinlockLocal guard(&scheduler_lock);
 	for (auto nod = chain.Root(); nod; nod = nod->next) {
 		auto task = cast<ProcessBlock*>(nod->offs);
 		if (task->pid == taskid) return task;
@@ -237,6 +246,7 @@ ProcessBlock* Taskman::Locate(stduint taskid) {
 }
 
 ThreadBlock* Taskman::LocateThread(stduint tid) {
+	SpinlockLocal guard(&scheduler_lock);
 	for (auto nod = thchain.Root(); nod; nod = nod->next) {
 		auto th = cast<ThreadBlock*>(nod->offs);
 		if (th->tid == tid) return th;

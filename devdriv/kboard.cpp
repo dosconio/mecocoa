@@ -80,8 +80,16 @@ int KeyboardBridge::out(const char* str, stduint len) {
 				event.mod = kbd_state.mod;
 			}
 			
-			// x86 Routing Implementation Native to Bare-Metal
-			if (event.method == keyboard_event_t::method_t::keydown && event.keycode == 0x39) { // CapsLock
+			// Global Hotkeys
+			if (event.method == keyboard_event_t::method_t::keydown && (event.mod.l_logo || event.mod.r_logo)) {
+				if (event.keycode == 0x06) { // Win + C
+					extern uni::Queue<SysMessage> message_queue_conv;
+					SysMessage msg;
+					msg.type = SysMessage::RUPT_NEW_TERM;
+					message_queue_conv.Enqueue(msg);
+				}
+			}
+			else if (event.method == keyboard_event_t::method_t::keydown && event.keycode == 0x39) { // CapsLock
 				kbd_state.lock_caps = !kbd_state.lock_caps; setLED();
 			}
 			else if (event.method == keyboard_event_t::method_t::keydown && event.keycode == 0x53) { // NumLock
@@ -177,15 +185,18 @@ void sysmsg_kbd(keyboard_event_t kbd_event) {
 	else if (kbd_event.method == keyboard_event_t::method_t::keydown && kbd_event.keycode == 0x47) { // ScrollLock
 		kbd_state.lock_scroll = !kbd_state.lock_scroll; setLED();
 	}
+	else if (kbd_event.method == keyboard_event_t::method_t::keydown && (kbd_state.mod.l_logo || kbd_state.mod.r_logo) && kbd_event.keycode == 0x06) {
+		// Global Hotkey: Win + C
+		extern uni::Queue<SysMessage> message_queue_conv;
+		SysMessage msg;
+		msg.type = SysMessage::RUPT_NEW_TERM;
+		message_queue_conv.Enqueue(msg);
+	}
 	else if (kbd_event.method == keyboard_event_t::method_t::keydown) {
 		auto ch = (kbd_state.mod.l_shift || kbd_state.mod.r_shift ? key_map_shift : key_map)[kbd_event.keycode];
 		if (!ch && kbd_state.lock_number && kbd_event.keycode >= 0x59 && kbd_event.keycode <= 0x63) {
 			// NumPad adjustments
 			ch = key_map_shift[kbd_event.keycode];
-		}
-		auto p_vtty = vttys[Consman::current_screen_TTY];
-		if (!p_vtty) {
-			plogerro("assert p_vtty");
 		}
 		// Forward keyboard event to focused window (for console or background)
 		if (asrtand(Consman::last_click_sheet)->refSheetNode().next) {
