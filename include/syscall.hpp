@@ -26,8 +26,8 @@ enum
 	WAIT = 0x0D, // wait   (&status)->pid     | x86 x64
 	FORK = 0x0E, // fork   ()->pid            | x86 x64
 	TMSG = 0x0F, // trymsg ()->(msg_unsovled) | x86 x64 rv
-	EXEC = 0x10, // spawnl (path,args,len)->0 | x86 x64
-	EXET = 0x11, // execl  (path,args,len)->0 | x86 x64
+	EXEC = 0x10, // spawn  (path,argv,envp)->0| x86 x64
+	EXET = 0x11, // exec   (path,argv,envp)->0| x86 x64
 	MALC = 0x12, // malloc (pages)->addr>0    | 
 
 	GET_CORE_ID, // | rv

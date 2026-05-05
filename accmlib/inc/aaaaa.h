@@ -34,8 +34,9 @@ extern "C" {
 	// return nil for success
 	int sys_removefil(rostr fullpath);
 
-	// int exec(rostr path, rostr argstr);
-	int execv(const char* path, char* argv[]);
+	int execve(const char* path, char* const argv[], char* const envp[]);
+	int spawnve(const char* path, char* const argv[], char* const envp[]);
+	int execv(const char* path, char* const argv[]);
 	int execl(const char* path, const char* arg, ...);
 	int spawnl(const char* path, const char* arg, ...);
 	

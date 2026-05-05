@@ -312,9 +312,9 @@ public:// taskman
 	static auto
 		Wait(ProcessBlock* pb) -> stdsint;
 	static auto
-		Exec(stduint parent, rostr usr_fullpath, void* usr_argstack, stduint stacklen) -> ProcessBlock*;
+		Exec(stduint parent, rostr usr_fullpath, char** usr_argv, char** usr_envp) -> ProcessBlock*;
 	static auto// aka POSIX-EXECV
-		Exet(stduint parent, rostr usr_fullpath, void* usr_argstack, stduint stacklen) -> ProcessBlock*;
+		Exet(stduint parent, rostr usr_fullpath, char** usr_argv, char** usr_envp) -> ProcessBlock*;
 public:// schedule
 	static auto Schedule(bool omit_slice = false) -> void;// Timer using
 	struct ReadyQueue {

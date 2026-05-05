@@ -42,11 +42,12 @@ _start:
 	xor	ebp, ebp		; Mark the end of stack frames
 	pop	eax				; Get argc from stack, ESP now points to argv
 	mov	ebx, esp		; Get argv pointer
+	lea	ecx, [ebx + eax*4 + 4] ; Get envp pointer (argv + argc*4 + 4 for NULL)
 	and	esp, -16		; Ensure 16-byte alignment
-	sub	esp, 8			; Padding to maintain alignment after 2 pushes
+	push	ecx			; Third argument: envp
 	push	ebx			; Second argument: argv
 	push	eax			; First argument: argc
-	call	main		; Call main(argc, argv)
+	call	main		; Call main(argc, argv, envp)
 	add	esp, 16			; Clean up arguments and padding
 	push	eax			; Push return value for exit
 	call	_exit		; Call exit(status)

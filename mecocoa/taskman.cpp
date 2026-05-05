@@ -517,13 +517,13 @@ void _Comment(R0) serv_task_loop()
 			// ploginfo("Taskman wait: %u %x", to_args[0], to_args[1]);
 			Taskman::Wait(Taskman::Locate(to_args[0]));// send back { pid, taski->exit_status }
 			break;
-		case TaskmanMsg::EXEC:// (pid, &usr:fullpath, &usr:argstack, stacklen) -> 0(success)
-			pb = Taskman::Exec(to_args[0], (rostr)to_args[1], (void*)to_args[2], to_args[3]);
+		case TaskmanMsg::EXEC:// (pid, &usr:fullpath, &usr:argv, &usr:envp) -> 0(success)
+			pb = Taskman::Exec(to_args[0], (rostr)to_args[1], (char**)to_args[2], (char**)to_args[3]);
 			ret = pb ? pb->getID() : 0;
 			syssend(sig_src, (void*)&ret, sizeof(ret));
 			break;
-		case TaskmanMsg::EXET:// (pid, &usr:fullpath, &usr:argstack, stacklen)
-			pb = Taskman::Exet(to_args[0], (rostr)to_args[1], (void*)to_args[2], to_args[3]);
+		case TaskmanMsg::EXET:// (pid, &usr:fullpath, &usr:argv, &usr:envp)
+			pb = Taskman::Exet(to_args[0], (rostr)to_args[1], (char**)to_args[2], (char**)to_args[3]);
 			if (!pb || sig_src != to_args[0]) {
 				ret = pb ? 0 : ~_IMM0;
 				syssend(sig_src, (void*)&ret, sizeof(ret));

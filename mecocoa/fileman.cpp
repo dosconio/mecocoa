@@ -75,15 +75,18 @@ stduint ProcessBlock::Rdwt(bool wr_type, stduint fid, Slice slice)
 		int bytes_processed = 0;
 
 		if (wr_type) {
-			MccaMemCopyP(::buffer, NULL, (void*)curr_addr, pb, chunk);
+			MemCopyP(::buffer, kernel_paging, (void*)curr_addr, pb->paging, chunk);
+			// ploginfo("write: %x, buf: %s", pb->paging_redirect, ::buffer);
 			bytes_processed = Filesys::Write(file, ::buffer, chunk);
 		}
 		else {
 			bytes_processed = Filesys::Read(file, ::buffer, chunk);
 			if (bytes_processed > 0) {
-				MccaMemCopyP((void*)curr_addr, pb, ::buffer, NULL, bytes_processed);
+				MemCopyP((void*)curr_addr, pb->paging, ::buffer, kernel_paging, bytes_processed);
 			}
+			// ploginfo("read: %x, buf: %s", pb->paging_redirect, ::buffer);
 		}
+		// address from user-space, so use MemCopyP but MccaMemCopyP
 
 		// Break if error occurred or EOF reached
 		if (bytes_processed <= 0) {

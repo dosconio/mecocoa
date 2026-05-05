@@ -300,14 +300,14 @@ DEFSYSC sysc_TMSG() {
 	return _IMM(th->queue_send_queuehead);
 }
 
-DEFSYSC sysc_EXEC(stduint path, stduint args, stduint len) {
-	stduint msgbuf[4] = { Taskman::current_thread[Taskman::getID()]->parent_process->getID(), path, args, len };
+DEFSYSC sysc_EXEC(stduint path, stduint argv, stduint envp) {
+	stduint msgbuf[4] = { Taskman::current_thread[Taskman::getID()]->parent_process->getID(), path, argv, envp };
 	syssend(Task_TaskMan, sliceof(msgbuf), _IMM(TaskmanMsg::EXEC));
 	sysrecv(Task_TaskMan, &msgbuf, byteof(msgbuf[0]));
 	return msgbuf[0];
 }
-DEFSYSC sysc_EXET(stduint path, stduint args, stduint len) {
-	stduint msgbuf[4] = { Taskman::current_thread[Taskman::getID()]->parent_process->getID(), path, args, len };
+DEFSYSC sysc_EXET(stduint path, stduint argv, stduint envp) {
+	stduint msgbuf[4] = { Taskman::current_thread[Taskman::getID()]->parent_process->getID(), path, argv, envp };
 	syssend(Task_TaskMan, sliceof(msgbuf), _IMM(TaskmanMsg::EXET));
 	sysrecv(Task_TaskMan, &msgbuf, byteof(msgbuf[0]));
 	return msgbuf[0];

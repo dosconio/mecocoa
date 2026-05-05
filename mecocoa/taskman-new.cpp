@@ -9,6 +9,79 @@
 
 void* higher_stacks[PCU_CORES_MAX];// when 1 core 1 stack
 
+struct AuxVector {
+	stduint type;
+	stduint value;
+};
+
+static stduint _Taskman_Setup_Stack(ProcessBlock* pb, ProcessBlock* parent, char** usr_argv, char** usr_envp, stduint entry, stduint phdr, stduint phnum, stduint phent) {
+	stduint argc = 0, envc = 0;
+	stduint str_len = 0;
+	stduint* argv_ptrs = nullptr, * envp_ptrs = nullptr;
+
+	auto count_and_size = [&](char** usr_ptr, stduint& count) {
+		if (!usr_ptr) return;
+		while (true) {
+			stduint ptr;
+			MemCopyP(&ptr, kernel_paging, (void*)((stduint)usr_ptr + count * sizeof(stduint)), parent->paging, sizeof(stduint));
+			if (!ptr) break;
+			char buf[256];
+			stduint len = StrCopyP(buf, kernel_paging, (rostr)ptr, parent->paging, sizeof(buf));
+			str_len += len + 1;
+			count++;
+		}
+	};
+
+	count_and_size(usr_argv, argc);
+	count_and_size(usr_envp, envc);
+
+	constexpr stduint auxc = 6; // PHDR, PHENT, PHNUM, PAGESZ, ENTRY, NULL
+	stduint ptr_count = 1 + (argc + 1) + (envc + 1) + (auxc * 2); // argc, argv[], envp[], auxv[]
+	stduint total_len = ptr_count * sizeof(stduint) + str_len;
+	total_len = (total_len + 15) & ~15; // Align
+
+	byte* temp_buf = new byte[total_len];
+	MemSet(temp_buf, 0, total_len);
+
+	stduint* ptr_area = (stduint*)temp_buf;
+	char* str_area = (char*)(temp_buf + ptr_count * sizeof(stduint));
+
+	stduint new_sp = (stduint)pb->main_thread->stack_lineaddr + pb->main_thread->stack_size - total_len;
+	new_sp &= ~0xFlu;
+	stduint delta = new_sp;
+
+	*ptr_area++ = argc;
+	auto copy_strings = [&](char** usr_ptr, stduint count) {
+		for (stduint i = 0; i < count; i++) {
+			stduint ptr;
+			MemCopyP(&ptr, kernel_paging, (void*)((stduint)usr_ptr + i * sizeof(stduint)), parent->paging, sizeof(stduint));
+			char* dest = str_area;
+			stduint len = StrCopyP(dest, kernel_paging, (rostr)ptr, parent->paging, 0x1000); // assume max 4k
+			*ptr_area++ = delta + (stduint)((byte*)dest - temp_buf);
+			str_area += len + 1;
+		}
+		*ptr_area++ = 0; // NULL terminator
+	};
+
+	copy_strings(usr_argv, argc);
+	copy_strings(usr_envp, envc);
+
+	auto add_aux = [&](stduint type, stduint val) {
+		*ptr_area++ = type;
+		*ptr_area++ = val;
+	};
+	add_aux(AT_PHDR, phdr);
+	add_aux(AT_PHENT, phent);
+	add_aux(AT_PHNUM, phnum);
+	add_aux(AT_PAGESZ, 4096);
+	add_aux(AT_ENTRY, entry);
+	add_aux(AT_NULL, 0);
+
+	MemCopyP((void*)new_sp, pb->paging, temp_buf, kernel_paging, total_len);
+	delete[] temp_buf;
+	return new_sp;
+}
+
 #if _MCCA == 0x8632
 constexpr unsigned ldt_entry_cnt = 8;
 alignas(16) static descriptor_t _LDT[ldt_entry_cnt];
@@ -559,153 +632,83 @@ ProcessBlock* Taskman::CreateFile(const char* path, byte ring, stduint parent) {
 
 //
 
-ProcessBlock* Taskman::Exec(stduint parent, rostr usr_fullpath, void* usr_argstack, stduint stacklen)
+ProcessBlock* Taskman::Exec(stduint parent, rostr usr_fullpath, char** usr_argv, char** usr_envp)
 {
 	char buf_fullpath[_TEMP 32];
 	auto parent_pb = Locate(parent);
 	StrCopyP(buf_fullpath, kernel_paging, usr_fullpath, parent_pb->paging, sizeof(buf_fullpath));
-	ploginfo("%s: %u \"%s\" %x %x", __FUNCIDEN__, parent, buf_fullpath, usr_argstack, stacklen);
 
 	auto new_pb = Taskman::CreateFile(buf_fullpath, RING_U, parent);
-	if (!new_pb) {
-		plogwarn("%s: failed to load file", __FUNCIDEN__);
-		return nullptr;
+	if (!new_pb) return nullptr;
+
+	vfs_dentry* d = Filesys::Index(buf_fullpath);
+	FileBlockBridge loop_device(d->d_inode->i_sb->fs, d->d_inode->internal_handler, d->d_inode->i_size, 512);
+	ELF_Header_t header;
+	auto block_buffer = new byte[512];
+	loop_device.Read(0, &header, sizeof(header), block_buffer);
+
+	stduint phdr_addr = 0;
+	for (stduint i = 0; i < header.e_phnum; i++) {
+		struct ELF_PHT_t ph;
+		loop_device.Read(header.e_phoff + i * header.e_phentsize, &ph, sizeof(ph), block_buffer);
+		if (ph.p_type == PT_PHDR) phdr_addr = ph.p_vaddr;
+		if (ph.p_type == PT_LOAD && ph.p_offset == 0 && !phdr_addr) phdr_addr = ph.p_vaddr + header.e_phoff;
 	}
+	delete[] block_buffer;
 
-	stduint argc = 0;
-	stduint new_sp = new_pb->main_thread->context.SP;
+	stduint new_sp = _Taskman_Setup_Stack(new_pb, parent_pb, usr_argv, usr_envp, (stduint)header.e_entry, phdr_addr, header.e_phnum, header.e_phentsize);
 
-	// Backup arguments from parent's address space
-	byte* temp_stack = nullptr;
-	if (stacklen > 0 && usr_argstack != nullptr) {
-		temp_stack = new byte[stacklen];
-		if (!temp_stack) {
-			plogerro("%s: alloc temp_stack fail", __FUNCIDEN__);
-		}
-		else {
-			MemCopyP(temp_stack, kernel_paging, usr_argstack, parent_pb->paging, stacklen);
-		}
-	}
-
-	// 8. Setup New Stack (Linux Flat Stack Layout - Cross Architecture)
-	if (temp_stack) {
-		// Align stack to 16 bytes first, then allocate space for argv array & strings
-		new_sp = (new_sp - stacklen - _TEMP 0x20) & ~_IMM(0xFlu);
-		stduint delta = new_sp - _IMM(usr_argstack);
-
-		char** q = (char**)temp_stack;
-		for (; *q != nullptr; q++, argc++) {
-			// Safely offset pointers using uintptr_t integer math
-			*q = (char*)((stduint)(*q) + delta);
-		}
-		// Copy argv array and string data onto the new process stack
-		MemCopyP((void*)new_sp, new_pb->paging, temp_stack, kernel_paging, stacklen);
-		delete[] temp_stack;
-	}
-	else {
-		// If no args, just allocate space for a NULL pointer
-		new_sp = (new_sp - sizeof(stduint)) & ~_IMM(0xFlu);
-		stduint null_ptr = 0;
-		MemCopyP((void*)new_sp, new_pb->paging, &null_ptr, kernel_paging, sizeof(stduint));
-	}
-
-	// ==============================================================
-	// Push 'argc' right above the 'argv' array to match Linux ABI
-	// Layout will be: [SP] -> argc, [SP+size] -> argv[0], ...
-	// This layout is universally valid for x86 (32-bit) and x64 (64-bit)
-	// ==============================================================
-	new_sp -= sizeof(stduint);
-	MemCopyP((void*)new_sp, new_pb->paging, &argc, kernel_paging, sizeof(stduint));
-
-	// Apply Context
 	#if (_MCCA & 0xFF00) == 0x8600
-
-	// x86 & x64 Context
-	// Note: DO NOT set DI/SI registers here. The user-space _start will pop them natively!
-	// For x86: _start will 'pop eax'
-	// For x64: _start will 'pop rdi'
 	new_pb->main_thread->context.SP = new_sp;
-
-	// FPU/SSE context is initialized in setup functions
 	#if (_MCCA & 0xFF00) == 0x8600
-	// Initialize FPU/SSE context to a safe state (masked exceptions)
-	// Offset 0: FPU Control Word (0x037F = Mask all exceptions)
 	treat<uint16>(&new_pb->main_thread->context.floating_point_context[0]) = 0x037F;
-	// Offset 24: MXCSR (0x1F80 = Mask all SSE exceptions)
 	treat<uint32>(&new_pb->main_thread->context.floating_point_context[24]) = 0x1F80;
 	#endif
 	SetSegment(&new_pb->main_thread->context);
+	#elif (_MCCA & 0xFF00) == 0x1000
+	new_pb->main_thread->context.sp = new_sp;
+	#endif
+
 	new_pb->main_thread->unsolved_msg = nullptr;
 	new_pb->main_thread->block_reason = ThreadBlock::BlockReason::BR_None;
-
-	#elif (_MCCA & 0xFF00) == 0x1000
-
-	// For RISC-V, ABI dictates argc in a0, and argv pointer in a1
-	new_pb->main_thread->context.a0 = argc;
-	new_pb->main_thread->context.a1 = new_sp + sizeof(stduint); // Point to argv[0] directly
-	new_pb->main_thread->context.sp = new_sp;
-
-	#endif
 
 	new_pb->focus_tty = parent_pb->focus_tty;
 	Taskman::Append(new_pb);
 	Taskman::AppendThread(new_pb->main_thread);
-
 	if (new_pb->focus_tty && new_pb->focus_tty->type) {
 		auto pblock = (vtty_type_t*)new_pb->focus_tty->type;
 		pblock->proc_group.Append(new_pb->pid);
 	}
-
 	return new_pb;
 }
 
-ProcessBlock* Taskman::Exet(stduint parent, rostr usr_fullpath, void* usr_argstack, stduint stacklen)
+
+ProcessBlock* Taskman::Exet(stduint parent, rostr usr_fullpath, char** usr_argv, char** usr_envp)
 {
 	char buf_fullpath[_TEMP 32];
-	auto current_pb = Locate(parent); // In EXET, caller is the parent (itself)
-
-	// Resolve path from old user space
+	auto current_pb = Locate(parent);
 	StrCopyP(buf_fullpath, kernel_paging, usr_fullpath, current_pb->paging, sizeof(buf_fullpath));
-	auto label = StrIndexCharRight(buf_fullpath, '/');
-	if (!label) label = buf_fullpath; else label++;
 
-	ploginfo("%s: PID %u replacing image with \"%s\"", __FUNCIDEN__, parent, buf_fullpath);
-
-	// Open the executable file (Mirroring CreateFile logic)
 	vfs_dentry* d = Filesys::Index(buf_fullpath);
-	if (!d || !d->d_inode || !d->d_inode->i_sb || !d->d_inode->i_sb->fs) {
-		plogwarn("%s: File not found at %s", __FUNCIDEN__, buf_fullpath);
-		return nullptr;
-	}
+	if (!d) return nullptr;
 	FileBlockBridge loop_device(d->d_inode->i_sb->fs, d->d_inode->internal_handler, d->d_inode->i_size, 512);
-
-	// Read and Verify ELF Header
+	
 	auto block_buffer = new byte[512];
-	struct ELF_Header_t header;
+	ELF_Header_t header;
 	loop_device.Read(0, &header, sizeof(header), block_buffer);
-	if (MemCompare((const char*)header.e_ident, "\x7F""ELF", 4)) {
-		delete[] block_buffer;
-		plogerro("%s: Invalid ELF File Magic Number", __FUNCIDEN__);
-		return nullptr;
+
+	stduint phdr_addr = 0;
+	for (stduint i = 0; i < header.e_phnum; i++) {
+		struct ELF_PHT_t ph;
+		loop_device.Read(header.e_phoff + i * header.e_phentsize, &ph, sizeof(ph), block_buffer);
+		if (ph.p_type == PT_PHDR) phdr_addr = ph.p_vaddr;
+		if (ph.p_type == PT_LOAD && ph.p_offset == 0 && !phdr_addr) phdr_addr = ph.p_vaddr + header.e_phoff;
 	}
 
-	// Backup arguments BEFORE destroying the old address space
-	byte* temp_stack = nullptr;
-	if (stacklen > 0 && usr_argstack != nullptr) {
-		temp_stack = new byte[stacklen];
-		if (!temp_stack) {
-			delete[] block_buffer;
-			plogerro("%s: alloc temp_stack fail", __FUNCIDEN__);
-			return nullptr;
-		}
-		MemCopyP(temp_stack, kernel_paging, usr_argstack, current_pb->paging, stacklen);
-	}
+	// 1. Prepare stack frame in temporary kernel buffer while old paging is still active
+	stduint new_sp = _Taskman_Setup_Stack(current_pb, current_pb, usr_argv, usr_envp, (stduint)header.e_entry, phdr_addr, header.e_phnum, header.e_phentsize);
 
-	// ==========================================
-	// From here, the old process image is destroyed.
-	// ==========================================
-
-	// Destroy Old User Space Segments (Using your continuous memory logic)
+	// 2. Destroy Old Image
 	for0a(i, current_pb->load_slices) {
 		if (!current_pb->load_slices[i].address) break;
 		if (current_pb->load_slices[i].length >= PAGE_SIZE &&
@@ -722,30 +725,26 @@ ProcessBlock* Taskman::Exet(stduint parent, rostr usr_fullpath, void* usr_argsta
 		current_pb->load_slices[i].length = 0;
 	}
 
-	// Reset Paging but PRESERVE the physical address of the stacks
 	stduint stack_norm_phy;
-	if (current_pb->main_thread->stack_lineaddr == current_pb->main_thread->stack_levladdr) {
+	if (current_pb->main_thread->stack_lineaddr == current_pb->main_thread->stack_levladdr)
 		stack_norm_phy = _IMM(current_pb->main_thread->stack_levladdr);
-	}
-	else {
+	else
 		stack_norm_phy = _IMM(current_pb->paging[_IMM(current_pb->main_thread->stack_lineaddr) & ~0xFFF]);
-	}
 
-	current_pb->paging.~Paging(); // Destroy old page tables
+	current_pb->paging.~Paging();
 
+	// 3. Setup New Paging and Load ELF
 	#if (_MCCA & 0xFF00) == 0x8600
 	current_pb->main_thread->context.CR3 = _Taskman_Create_Paging(current_pb, current_pb->ring, stack_norm_phy);
-	#elif _MCCA == 0x1032 || _MCCA == 0x1064
+	#elif (_MCCA & 0xFF00) == 0x1000
 	current_pb->main_thread->context.satp = _Taskman_Create_Paging(current_pb, current_pb->ring, stack_norm_phy);
 	#endif
 
-	// Load New ELF Image into current_pb
 	current_pb->main_thread->context.IP = _IMM(header.e_entry);
 	stduint load_slice_p = 0;
 	for0(i, header.e_phnum) {
 		struct ELF_PHT_t ph;
-		stduint ph_offset = header.e_phoff + header.e_phentsize * i;
-		loop_device.Read(ph_offset, &ph, sizeof(ph), block_buffer);
+		loop_device.Read(header.e_phoff + i * header.e_phentsize, &ph, sizeof(ph), block_buffer);
 		if (ph.p_type == PT_LOAD && ph.p_memsz) {
 			_CreateELF_Carry((char*)ph.p_vaddr, ph.p_memsz, &loop_device, ph.p_offset, ph.p_filesz, current_pb->paging, block_buffer);
 			if (load_slice_p < numsof(current_pb->load_slices)) {
@@ -757,70 +756,18 @@ ProcessBlock* Taskman::Exet(stduint parent, rostr usr_fullpath, void* usr_argsta
 	}
 	delete[] block_buffer;
 
-	// 8. Setup New Stack (Linux Flat Stack Layout - Cross Architecture)
-	stduint argc = 0;
-	const stduint stack_loc_top = _IMM(current_pb->main_thread->stack_lineaddr) + current_pb->main_thread->stack_size;
-	stduint new_sp = stack_loc_top;
-
-	if (temp_stack) {
-		// Align stack to 16 bytes first, then allocate space for argv array & strings
-		new_sp = (new_sp - stacklen - _TEMP 0x20) & ~_IMM(0xFlu);
-		stduint delta = new_sp - _IMM(usr_argstack);
-
-		char** q = (char**)temp_stack;
-		for (; *q != nullptr; q++, argc++) {
-			*q = (char*)((stduint)(*q) + delta);
-		}
-		// Copy argv array and string data onto the user stack
-		MemCopyP((void*)new_sp, current_pb->paging, temp_stack, kernel_paging, stacklen);
-		delete[] temp_stack;
-	}
-	else {
-		// If no args, just allocate space for a NULL pointer
-		new_sp = (new_sp - sizeof(stduint)) & ~_IMM(0xFlu);
-		stduint null_ptr = 0;
-		MemCopyP((void*)new_sp, current_pb->paging, &null_ptr, kernel_paging, sizeof(stduint));
-	}
-
-	// ==============================================================
-	// Push 'argc' right above the 'argv' array to match Linux ABI
-	// Layout will be: [SP] -> argc, [SP+size] -> argv[0], ...
-	// This layout is universally valid for x86 (32-bit) and x64 (64-bit)
-	// ==============================================================
-	new_sp -= sizeof(stduint);
-	MemCopyP((void*)new_sp, current_pb->paging, &argc, kernel_paging, sizeof(stduint));
-
-	// Apply Context
 	#if (_MCCA & 0xFF00) == 0x8600
-
+	current_pb->main_thread->context.SP = new_sp;
 	current_pb->main_thread->context.AX = 0;
 	current_pb->main_thread->context.CX = 0;
-
-	// Note: DO NOT set DI/SI registers here. The user-space _start will pop them natively!
-	// For x86: _start will 'pop eax'
-	// For x64: _start will 'pop rdi'
-	current_pb->main_thread->context.SP = new_sp;
-
-	#if (_MCCA & 0xFF00) == 0x8600
-	// Initialize FPU/SSE context to a safe state (masked exceptions)
-	// Offset 0: FPU Control Word (0x037F = Mask all exceptions)
-	treat<uint16>(&current_pb->main_thread->context.floating_point_context[0]) = 0x037F;
-	// Offset 24: MXCSR (0x1F80 = Mask all SSE exceptions)
-	treat<uint32>(&current_pb->main_thread->context.floating_point_context[24]) = 0x1F80;
-	#endif
 	SetSegment(&current_pb->main_thread->context);
+	#elif (_MCCA & 0xFF00) == 0x1000
+	current_pb->main_thread->context.sp = new_sp;
+	#endif
+
 	current_pb->main_thread->unsolved_msg = nullptr;
 	current_pb->main_thread->block_reason = ThreadBlock::BlockReason::BR_None;
-
-	#elif (_MCCA & 0xFF00) == 0x1000
-
-	// For RISC-V, ABI dictates argc in a0, and argv pointer in a1
-	current_pb->main_thread->context.a0 = argc;
-	current_pb->main_thread->context.a1 = new_sp + sizeof(stduint); // Point to argv[0] directly
-	current_pb->main_thread->context.sp = new_sp;
-
-	#endif
-
+	
 	using TBS = ThreadBlock::State;
 	if (current_pb->main_thread->state != TBS::Ready) {
 		current_pb->main_thread->state = TBS::Ready;
@@ -828,3 +775,4 @@ ProcessBlock* Taskman::Exet(stduint parent, rostr usr_fullpath, void* usr_argsta
 	Taskman::EnqueueReady(current_pb->main_thread);
 	return current_pb;
 }
+
