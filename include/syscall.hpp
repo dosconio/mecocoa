@@ -23,7 +23,7 @@ enum
 	DELF = 0x0A, // remove (pathname)->?      | x86 x64
 	//=0x0B{} proper&enumer
 	//=0x0C{} 
-	WAIT = 0x0D, // wait   (&status)->pid     | x86 x64
+	WAIT = 0x0D, // wait   (pid, &status)->pid| x86 x64    | pid 0 for any
 	FORK = 0x0E, // fork   ()->pid            | x86 x64
 	TMSG = 0x0F, // trymsg ()->(msg_unsovled) | x86 x64 rv
 	EXEC = 0x10, // spawn  (path,argv,envp)->0| x86 x64

@@ -1,5 +1,13 @@
 #include "inc/aaaaa.h"
 #include <unistd.h>
+#include <fcntl.h>
+#include <stdarg.h>
+
+
+int open(const char* path, int oflag, ...) {
+	// Note: mode is ignored for now as Mecocoa filesystem doesn't support complex permissions yet
+	return syscall(syscall_t::OPEN, _IMM(path), oflag, nil);
+}
 
 int close(int fd) {
 	return syscall(syscall_t::CLOS, fd, nil, nil);

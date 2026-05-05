@@ -57,10 +57,14 @@ stduint ProcessBlock::Rdwt(bool wr_type, stduint fid, Slice slice)
 	_Comment(const) ProcessBlock* pb = this;
 	if (!pb || !pb->pfiles[fid] || !pb->pfiles[fid]->vfile) return 0;
 	if (wr_type) {
-		if (!(pb->pfiles[fid]->fd_mode & O_RDWR)) return 0;//{} -1
+		int mode = pb->pfiles[fid]->fd_mode & O_ACCMODE;
+		if (mode != O_WRONLY && mode != O_RDWR) return 0;
 	}
 	
 	vfs_file* file = pb->pfiles[fid]->vfile;
+	if (wr_type && (pb->pfiles[fid]->fd_mode & O_APPEND)) {
+		pb->pfiles[fid]->fd_pos = file->f_inode->i_size;
+	}
 	file->f_pos = pb->pfiles[fid]->fd_pos; // sync pos 
 
 	int total_bytes = 0;

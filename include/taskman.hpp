@@ -147,6 +147,7 @@ class _Comment(Kernel) ProcessBlock {
 public:
 	stduint pid;
 	stduint parent_id;
+	stduint wait_for_pid = 0; // 0 for any, non-zero for specific
 	ProcessBlock* child_list_head = nullptr; // Head of children linked list
 	ProcessBlock* sibling_next = nullptr;    // Next sibling in parent's children list
 	inline stduint getID() { return pid; }
@@ -309,8 +310,7 @@ public:// taskman
 	static void Idle();
 	static bool
 		Exit(ProcessBlock* pb, stdsint exit_code);
-	static auto
-		Wait(ProcessBlock* pb) -> stdsint;
+	static stdsint Wait(ProcessBlock* pb, stduint target_pid = 0);// 0 for any child
 	static auto
 		Exec(stduint parent, rostr usr_fullpath, char** usr_argv, char** usr_envp) -> ProcessBlock*;
 	static auto// aka POSIX-EXECV

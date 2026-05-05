@@ -395,6 +395,12 @@ void Filesys::Tree() {
 
 int Filesys::Open(const char* pathname, int flags, vfs_file** out_file) {
 	vfs_dentry* dentry = Filesys::Index(pathname);
+	if (dentry && dentry->d_inode) {
+		// O_DIRECTORY: If pathname refers to a non-directory file, open() shall fail.
+		if ((flags & O_DIRECTORY) && (dentry->d_inode->i_mode & I_TYPE_MASK) != I_DIRECTORY) {
+			return -1;
+		}
+	}
 
 	if (!dentry || !dentry->d_inode) {
 		// File does not exist. Check if we need to create it.
@@ -463,22 +469,32 @@ int Filesys::Open(const char* pathname, int flags, vfs_file** out_file) {
 	}
 	else {
 		// File already exists
-		if (flags & O_CREAT) {
-			ploginfo("file `%s' exists", pathname);
+		if ((flags & O_CREAT) && (flags & O_EXCL)) {
+			ploginfo("file `%s' exists (O_EXCL)", pathname);
 			return -1;
 		}
 
 		if (flags & O_TRUNC) {
-			// Handle truncation logic
-			dentry->d_inode->i_size = 0;
+			// POSIX: O_TRUNC has no effect on FIFO or terminal device files.
+			// And requires writability.
+			int mode = flags & O_ACCMODE;
+			if (mode == O_WRONLY || mode == O_RDWR) {
+				dentry->d_inode->i_size = 0;
+			}
 		}
 	}
 
 	vfs_file* file = new vfs_file();
 	file->f_dentry = dentry;
 	file->f_inode = dentry->d_inode;
-	file->f_pos = 0;
 	file->f_mode = flags;
+	
+	// O_APPEND: The file offset shall be set to the end of the file prior to each write.
+	if (flags & O_APPEND) {
+		file->f_pos = dentry->d_inode->i_size;
+	} else {
+		file->f_pos = 0;
+	}
 
 	if (out_file) *out_file = file;
 	return 0;

@@ -19,8 +19,30 @@ pid_t getpid(void) {
 
 //
 
-pid_t _Comment(pid) wait(int* status)
+pid_t wait(int* status)
 {
-	return syscall(syscall_t::WAIT, _IMM(status), nil, nil);
+	return syscall(syscall_t::WAIT, 0, _IMM(status), nil);
+}
+
+int waitid(idtype_t idtype, id_t id, siginfo_t* infop, int options)
+{
+	stduint target_pid = (idtype == P_PID) ? id : 0;
+	int status;
+	pid_t pid = syscall(syscall_t::WAIT, target_pid, _IMM(&status), nil);
+	if (pid > 0 && infop) {
+		infop->si_pid = pid;
+		infop->si_status = status;
+		infop->si_code = WEXITED;
+		return 0;
+	}
+	return (pid == 0 && (options & WNOHANG)) ? 0 : -1;
+}
+
+int execve(const char* path, char* const argv[], char* const envp[]) {
+	return syscall(syscall_t::EXET, _IMM(path), _IMM(argv), _IMM(envp));
+}
+
+int execv(const char* path, char* const argv[]) {
+	return execve(path, argv, nullptr);
 }
 

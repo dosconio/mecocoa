@@ -430,8 +430,9 @@ bool Taskman::Exit(ProcessBlock* p, stdsint exit_code)
 	using PBS = ProcessBlock::State;
 	bool parent_active = pparent && pparent->state == PBS::Active;
 
-	if (parent_active && pparent->isWaiting()) {
+	if (parent_active && pparent->isWaiting() && (pparent->wait_for_pid == 0 || pparent->wait_for_pid == pid)) {
 		pparent->main_thread->Unblock(ThreadBlock::BlockReason::BR_Waiting);
+		pparent->wait_for_pid = 0; // Reset after unblocking
 		syssend(parent_pid, &args, sizeof(args));
 		_Exit_Cleanup(pid); // Die completely
 	}
@@ -445,7 +446,7 @@ bool Taskman::Exit(ProcessBlock* p, stdsint exit_code)
 	return true;
 }
 
-stdsint Taskman::Wait(ProcessBlock* pb)
+stdsint Taskman::Wait(ProcessBlock* pb, stduint target_pid)
 {
 	if (!pb) return ~_IMM0;
 	const auto pid = pb->getID();
@@ -453,18 +454,24 @@ stdsint Taskman::Wait(ProcessBlock* pb)
 	for (auto nod = Taskman::chain.Root(); nod; nod = nod->next) {
 		auto taski = (ProcessBlock*)nod->offs;
 		if (taski->pid && taski->parent_id == pid) {
+			// If target_pid is non-zero, skip other children
+			if (target_pid != 0 && taski->pid != target_pid) {
+				continue;
+			}
+			
 			children++;
 			if (taski->state == ProcessBlock::State::Hanging) {
 				stduint args[2] = { taski->pid, taski->exit_status };
 				stduint child_pid = taski->pid;
 				_Exit_Cleanup(child_pid);
-				children = child_pid;
+				// children = child_pid;
 				syssend(pid, args, sizeof(args));
 				return child_pid;
 			}
 		}
 	}
 	if (children) {// no child is HANGING
+		pb->wait_for_pid = target_pid;
 		pb->main_thread->Block(ThreadBlock::BlockReason::BR_Waiting);
 	}
 	else { // no any child
@@ -513,9 +520,9 @@ void _Comment(R0) serv_task_loop()
 			}
 			syssend(sig_src, (void*)&ret, sizeof(ret));
 			break;
-		case TaskmanMsg::WAIT: // (pid) -> (*)
+		case TaskmanMsg::WAIT: // (parent_pid, target_pid) -> (*)
 			// ploginfo("Taskman wait: %u %x", to_args[0], to_args[1]);
-			Taskman::Wait(Taskman::Locate(to_args[0]));// send back { pid, taski->exit_status }
+			Taskman::Wait(Taskman::Locate(to_args[0]), to_args[1]);// send back { pid, taski->exit_status }
 			break;
 		case TaskmanMsg::EXEC:// (pid, &usr:fullpath, &usr:argv, &usr:envp) -> 0(success)
 			pb = Taskman::Exec(to_args[0], (rostr)to_args[1], (char**)to_args[2], (char**)to_args[3]);

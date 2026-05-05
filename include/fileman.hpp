@@ -84,10 +84,7 @@ enum class FilemanMsg {
 	TEMP,
 };
 
-#define	O_CREAT     0b001
-#define	O_RDWR      0b010
-#define	O_TRUNC     0b100 // truncate file
-#define O_DIRECTORY 0b1000
+#include <c/API-POSIX/fcntl.h>
 
 struct inode;
 namespace uni { struct vfs_file; }

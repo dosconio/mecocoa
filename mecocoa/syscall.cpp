@@ -275,10 +275,10 @@ DEFSYSC sysc_DELF(stduint usr_filepath) {
 	return open_buf[0];// 0 for success
 }
 
-DEFSYSC sysc_WAIT(stduint usr_status) {
+DEFSYSC sysc_WAIT(stduint pid, stduint usr_status) {
 	// ploginfo("syscall wait");
 	auto tb = Taskman::current_thread[Taskman::getID()];
-	stduint open_buf[2]{ tb->parent_process->getID(),usr_status };
+	stduint open_buf[3]{ tb->parent_process->getID(), pid, usr_status };
 	syssend(Task_TaskMan, sliceof(open_buf), _IMM(TaskmanMsg::WAIT));
 	sysrecv(Task_TaskMan, sliceof(open_buf));// (pid, state)
 	stdsint ret = open_buf[0];// pid

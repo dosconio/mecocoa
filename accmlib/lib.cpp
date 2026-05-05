@@ -145,15 +145,6 @@ int spawnl(const char* path, const char* arg, ...)
 	return spawnve(path, argv, nullptr);
 }
 
-int execve(const char* path, char* const argv[], char* const envp[])
-{
-	return syscall(syscall_t::EXET, _IMM(path), _IMM(argv), _IMM(envp));
-}
-
-int execv(const char* path, char* const argv[])
-{
-	return execve(path, argv, nullptr);
-}
 
 int execl(const char* path, const char* arg, ...)
 {
