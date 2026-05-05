@@ -222,7 +222,12 @@ DEFSYSC sysc_READ(stduint fd, stduint addr, stduint len) {
 
 				// Identify the specific vtty device for echo
 				stduint tty_idx = (stduint)pb->pfiles[fd]->vfile->f_inode->internal_handler;
-				Console_t* con = (tty_idx < vttys.Count()) ? (Console_t*)vttys[tty_idx]->offs : nullptr;
+				Console_t* con = nullptr;
+				if (tty_idx == (stduint)~0) {
+					if (pb->focus_tty) con = (Console_t*)pb->focus_tty->offs;
+				} else if (tty_idx < vttys.Count()) {
+					con = (Console_t*)vttys[tty_idx]->offs;
+				}
 
 				// Handle the character "consumed" by Task_Console service
 				byte ch = (byte)ret;

@@ -26,6 +26,7 @@ struct vtty_type_t {
 	QueueLimited output_queue;
 	uni::Vector<stduint> proc_group;
 	stduint master_pid = 0;
+	stduint id; // Fixed TTY ID from Bitmap
 
 	// vtty_type_t() : innput_queue({ 0,0 }), output_queue({ 0,0 }) {}
 };

@@ -3,7 +3,9 @@
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 #include "../include/mecocoa.hpp"
 
-#include <cpp/trait/StorageTrait.hpp>
+#include <cpp/string>
+#include <c/bitmap.h>
+using namespace uni;
 #include "../include/filesys.hpp"
 #include "../include/fileman.hpp" // for DEV_TTY etc
 // VFS and DevFs Implementation
@@ -13,6 +15,7 @@ namespace uni {
 	static file_system_type* registered_filesystems = nullptr;
 	static vfs_super_block* super_blocks = nullptr;
 	static vfs_dentry* vfs_root = nullptr; // Global root directory
+	static Spinlock vfs_lock;
 
 	// Allocators
 	static vfs_dentry* alloc_dentry(vfs_dentry* parent, const char* name) {
@@ -133,12 +136,19 @@ static stduint vfs_on_search_segment(void* handle, const char* name, stduint is_
 		if (!new_inod) return 0;
 
 		new_inod->i_size = (stduint)size;
-		new_inod->i_mode = (is_dir != 0) ? I_DIRECTORY : I_REGULAR;
+		if (is_dir == 1) new_inod->i_mode = I_DIRECTORY;
+		else if (is_dir == 2) new_inod->i_mode = I_CHAR_SPECIAL;
+		else new_inod->i_mode = I_REGULAR;
 		
-		byte* saved_h = new byte[128];
-		if (saved_h) {
-			MemCopyN(saved_h, handle, 128);
-			new_inod->internal_handler = saved_h;
+		if (is_dir == 2) {
+			new_inod->internal_handler = handle;
+		}
+		else {
+			byte* saved_h = new byte[128];
+			if (saved_h) {
+				MemCopyN(saved_h, handle, 128);
+				new_inod->internal_handler = saved_h;
+			}
 		}
 		
 		next_d->d_inode = new_inod;
@@ -155,7 +165,7 @@ static stduint vfs_on_search_segment(void* handle, const char* name, stduint is_
 }
 
 
-vfs_dentry* Filesys::Index(const char* pathname) {
+static vfs_dentry* _Index_unlocked(const char* pathname) {
 	if (!pathname || pathname[0] == '\0') return nullptr;
 	
 	vfs_dentry* current = vfs_root;
@@ -227,9 +237,15 @@ vfs_dentry* Filesys::Index(const char* pathname) {
 	return (current && current->d_mounts) ? current->d_mounts : current;
 }
 
+vfs_dentry* Filesys::Index(const char* pathname) {
+	SpinlockLocal guard(&vfs_lock);
+	return _Index_unlocked(pathname);
+}
+
 
 bool Filesys::MountFilesys(FilesysTrait* fs, file_system_type* type, const char* target_path) {
-	vfs_dentry* target = Filesys::Index(target_path);
+	SpinlockLocal guard(&vfs_lock);
+	vfs_dentry* target = _Index_unlocked(target_path);
 	if (!target) {
 		// We can create the mount point in rootfs if it doesn't exist
 		if (target_path[0] == '/') {
@@ -389,6 +405,7 @@ void vfs_tree_node(vfs_dentry* node, int depth) {
 }
 
 void Filesys::Tree() {
+	SpinlockLocal guard(&vfs_lock);
 	Console.OutFormat("VFS Virtual Tree Structure:\n\r");
 	vfs_tree_node(vfs_root, 0);
 }
@@ -595,46 +612,105 @@ String Filesys::getAbsolutePath(vfs_dentry* dentry) {
 
 uni::DevFs uni::global_devfs;
 
-void uni::devfs_register_and_mount() {
-	Filesys::MountFilesys(&global_devfs, nullptr, "/dev");
-	
-	vfs_dentry* dev_dir = Filesys::Index("/dev");
-	if (dev_dir) {
-		// within DevFs, create dentries for /dev/tty0 to /dev/tty3
-		for (int i = 0; i < 4; i++) {
-			char tty_name[16];
-			String(tty_name, sizeof(tty_name)).Format("tty%u", i);
-			vfs_dentry* tty_dentry = alloc_dentry(dev_dir, tty_name);
-			vfs_inode* tty_inod = alloc_inode(dev_dir->d_inode->i_sb);
-			tty_inod->i_mode = I_CHAR_SPECIAL;
-			tty_inod->internal_handler = (void*)(stduint)i; // handler = tty index
-			tty_dentry->d_inode = tty_inod;
-		}//{} TEMP -> vtty
+static uint32 _tty_id_bits = 0;
+static Bitmap tty_id_allocator(&_tty_id_bits, 4);
+
+int DevFs::allocate_tty_id() {
+	for (int i = 0; i < 32; i++) {
+		if (!tty_id_allocator.bitof(i)) {
+			tty_id_allocator.setof(i, true);
+			return i;
+		}
 	}
+	return -1;
+}
+
+void DevFs::free_tty_id(int id) {
+	tty_id_allocator.setof(id, false);
 }
 
 bool DevFs::makefs(rostr vol_label, void* moreinfo) { return true; }
 bool DevFs::loadfs(void* moreinfo) { return true; }
 bool DevFs::create(rostr fullpath, stduint flags, void* exinfo, rostr linkdest) { return false; }
 bool DevFs::remove(rostr pathname) { return false; }
-void* DevFs::search(rostr fullpath, FilesysSearchArgs* args) { return nullptr; }
-bool DevFs::proper(void* handler, stduint cmd, const void* moreinfo) { return false; }
-bool DevFs::enumer(void* dir_handler, _tocall_ft _fn) { return false; }
+
+void* DevFs::search(rostr fullpath, FilesysSearchArgs* args) {
+	if (StrCompare(fullpath, "/tty") == 0) {
+		if (args->on_segment) args->on_segment((void*)~0, "tty", 2, 0, args->user_data);
+		return (void*)~0; // Special handler for /dev/tty
+	}
+	if (StrCompare(fullpath, "/pts") == 0) {
+		if (args->on_segment) args->on_segment((void*)0x1000, "pts", 1, 0, args->user_data);
+		return (void*)0x1000; // Marker for pts directory
+	}
+	if (StrCompareN(fullpath, "/pts/", 5) == 0) {
+		const char* s = fullpath + 5;
+		stduint id = 0;
+		while (*s >= '0' && *s <= '9') {
+			id = id * 10 + (*s - '0');
+			s++;
+		}
+		if (*s == '\0') {
+			// Verify ID exists
+			for (auto nod = vttys.Root(); nod; nod = nod->next) {
+				if (((vtty_type_t*)nod->type)->id == id) {
+					char name[16]; String(name, 16).Format("%u", id);
+					if (args->on_segment) {
+						args->on_segment((void*)0x1000, "pts", 1, 0, args->user_data);
+						args->on_segment((void*)id, name, 2, 0, args->user_data);
+					}
+					return (void*)id;
+				}
+			}
+		}
+	}
+	return nullptr;
+}
+
+bool DevFs::proper(void* handler, stduint cmd, const void* moreinfo) {
+	if (cmd == (stduint)FilesysCmd::FS_CMD_GET_ISDIR) {
+		bool* p_isdir = (bool*)moreinfo;
+		if (handler == (void*)0x1000) *p_isdir = true;
+		else *p_isdir = false;
+		return true;
+	}
+	return false;
+}
+
+bool DevFs::enumer(void* dir_handler, _tocall_ft _fn) {
+	if (dir_handler == (void*)~0 || dir_handler == nullptr) { // Root of /dev
+		_fn((void*)0, (void*)"tty");
+		_fn((void*)1, (void*)"pts");
+		return true;
+	}
+	if (dir_handler == (void*)0x1000) { // /dev/pts
+		for (auto nod = vttys.Root(); nod; nod = nod->next) {
+			char name[16];
+			String(name, 16).Format("%u", ((vtty_type_t*)nod->type)->id);
+			_fn((void*)0, (void*)name);
+		}
+		return true;
+	}
+	return false;
+}
 
 stduint DevFs::readfl(void* fil_handler, Slice file_slice, byte* dst) {
-	// ploginfo("DevFs::readfl (%[x])", fil_handler);
-	stduint tty_idx = (stduint)fil_handler;
+	stduint tty_id = (stduint)fil_handler;
+	Dnode* tty_node = nullptr;
 
-	if (tty_idx >= vttys.Count()) return 0;
-	Dnode* tty_node = vttys[tty_idx];
+	if (tty_id == (stduint)~0) { // Unbound Magic TTY
+		return 0;
+	} else {
+		tty_node = (Dnode*)fil_handler;
+	}
+
 	if (!tty_node) {
-		plogwarn("tty %u not found", tty_idx);
 		return 0;
 	}
 
 	QueueLimited* input_queue = VTTY_INNQ(tty_node);
 	if (!input_queue) {
-		plogwarn("tty %u input queue not found", tty_idx);
+		plogwarn("tty %u input queue not found", tty_id);
 		return 0;
 	}
 
@@ -664,10 +740,15 @@ stduint DevFs::readfl(void* fil_handler, Slice file_slice, byte* dst) {
 }
 
 stduint DevFs::writfl(void* fil_handler, Slice file_slice, const byte* src) {
-	stduint tty_idx = (stduint)fil_handler;
+	stduint tty_id = (stduint)fil_handler;
+	Dnode* tty_node = nullptr;
 
-	if (tty_idx >= vttys.Count()) return 0;
-	Dnode* tty_node = vttys[tty_idx];
+	if (tty_id == (stduint)~0) { // Unbound Magic TTY
+		return 0;
+	} else {
+		tty_node = (Dnode*)fil_handler;
+	}
+
 	if (!tty_node) return 0;
 
 	Console_t* con = (Console_t*)tty_node->offs;

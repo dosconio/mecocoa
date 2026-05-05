@@ -673,6 +673,11 @@ ProcessBlock* Taskman::Exec(stduint parent, rostr usr_fullpath, char** usr_argv,
 	new_pb->main_thread->block_reason = ThreadBlock::BlockReason::BR_None;
 
 	new_pb->focus_tty = parent_pb->focus_tty;
+	if (new_pb->focus_tty) {
+		new_pb->Open("/dev/tty", O_RDWR); // stdin
+		new_pb->Open("/dev/tty", O_RDWR); // stdout
+		new_pb->Open("/dev/tty", O_RDWR); // stderr
+	}
 	Taskman::Append(new_pb);
 	Taskman::AppendThread(new_pb->main_thread);
 	if (new_pb->focus_tty && new_pb->focus_tty->type) {

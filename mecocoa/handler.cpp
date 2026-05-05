@@ -101,7 +101,7 @@ void exception_handler(sdword iden, dword para) {
 	#if _MCCA == 0x8664
 	_ASM("mov %%r15, %0" : "=r"(r15));
 	#else
-	_ASM("mov %%edi, %0" : "=r"(r15));
+	_ASM("mov %%edx, %0" : "=r"(r15));
 	#endif
 	const bool have_para = iden >= 0;
 	if (iden < 0) iden = ~iden;
@@ -135,8 +135,8 @@ void exception_handler(sdword iden, dword para) {
 		break;
 
 	case ERQ_Page_Fault:// 14
-		printlog(_LOG_FATAL, have_para ? "%s with 0x%[x], vaddr=0x%[x], CR3=0x%[x]" : "%s",
-			ExceptionDescription[iden], para, getCR2(), r15); // printlog will call halt machine
+		printlog(_LOG_FATAL, have_para ? "%s with 0x%[x], vaddr=0x%[x], TID%u, CR3=0x%[x]" : "%s",
+			ExceptionDescription[iden], para, getCR2(), Taskman::current_thread[Taskman::getID()], r15); // printlog will call halt machine
 		break;
 
 	default:

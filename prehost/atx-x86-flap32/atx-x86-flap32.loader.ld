@@ -13,7 +13,6 @@ SECTIONS
 		*(.data)
 		*(.note.gnu.build-id)
 		*(.got)
-		*(.eh_frame)
 	}> RAM1
 	.bss : {
 		BSS_ENTO = .;
@@ -31,4 +30,13 @@ SECTIONS
 	__init_array_end = .;
 	}> RAM1
 
+	/DISCARD/ : {
+		*(.eh_frame)
+		*(.eh_frame_hdr)
+		*(.eh_frame.*)
+		*(.comment)
+		*(.note)
+		*(.note.gnu.property)
+		*(.gnu.build.attributes)
+	}
 }

@@ -80,11 +80,21 @@ stduint ProcessBlock::Rdwt(bool wr_type, stduint fid, Slice slice)
 
 		if (wr_type) {
 			MemCopyP(::buffer, kernel_paging, (void*)curr_addr, pb->paging, chunk);
-			// ploginfo("write: %x, buf: %s", pb->paging_redirect, ::buffer);
-			bytes_processed = Filesys::Write(file, ::buffer, chunk);
+			// Redirect Magic TTY (~0) to focused TTY
+			if ((stduint)file->f_inode->internal_handler == (stduint)~0 && pb->focus_tty) {
+				bytes_processed = global_devfs.writfl(pb->focus_tty, Slice{ 0, (stduint)chunk }, (byte*)::buffer);
+			}
+			else {
+				bytes_processed = Filesys::Write(file, ::buffer, chunk);
+			}
 		}
 		else {
-			bytes_processed = Filesys::Read(file, ::buffer, chunk);
+			if ((stduint)file->f_inode->internal_handler == (stduint)~0 && pb->focus_tty) {
+				bytes_processed = global_devfs.readfl(pb->focus_tty, Slice{ 0, (stduint)chunk }, (byte*)::buffer);
+			}
+			else {
+				bytes_processed = Filesys::Read(file, ::buffer, chunk);
+			}
 			if (bytes_processed > 0) {
 				MemCopyP((void*)curr_addr, pb->paging, ::buffer, kernel_paging, bytes_processed);
 			}
@@ -208,13 +218,13 @@ void serv_file_loop()// for IDE 0:0, 0:1
 				break;
 			}
 			ProcessBlock* init_p = Taskman::CreateFile((*plab + "/init").reference(), RING_U, Task_Kernel);
-			init_p->focus_tty = vttys[0];
+			init_p->focus_tty = vttys.LocateNode(0);
 			Taskman::Append(init_p);
 			Taskman::AppendThread(init_p->main_thread);
 			#elif _MCCA == 0x8664 && defined(_UEFI)
 			syssend(Task_Memdisk_Serv, &retval, sizeof(retval[0]), _IMM(FiledevMsg::RUPT));
 			ProcessBlock* init_p = Taskman::CreateFile(("/md0/init"), RING_U, Task_Kernel);
-			init_p->focus_tty = vttys[0];
+			init_p->focus_tty = vttys.LocateNode(0);
 			Taskman::Append(init_p);
 			Taskman::AppendThread(init_p->main_thread);
 			#endif
@@ -244,7 +254,12 @@ void serv_file_loop()// for IDE 0:0, 0:1
 			#else
 			p = Taskman::CreateFile(("/md0/cot"), RING_U, Task_Kernel);
 			#endif
-			p->focus_tty = vttys[0];
+			p->focus_tty = vttys.LocateNode(0);
+			if (p->focus_tty) {
+				p->Open("/dev/tty", O_RDWR); // stdin
+				p->Open("/dev/tty", O_RDWR); // stdout
+				p->Open("/dev/tty", O_RDWR); // stderr
+			}
 			Taskman::Append(p);
 			Taskman::AppendThread(p->main_thread);
 			#endif
@@ -253,7 +268,7 @@ void serv_file_loop()// for IDE 0:0, 0:1
 			syssend(Task_Memdisk_Serv, &retval, sizeof(retval[0]), _IMM(FiledevMsg::RUPT));
 			ProcessBlock* p;
 			p = Taskman::CreateFile(("/md0/lpa.elf"), RING_U, Task_Kernel);
-			p->focus_tty = vttys[0];
+			p->focus_tty = vttys.LocateNode(0);
 			Taskman::Append(p);
 			Taskman::AppendThread(p->main_thread);
 			#endif

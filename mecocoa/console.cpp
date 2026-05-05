@@ -11,9 +11,12 @@
 extern Spinlock gui_lock;
 #endif
 extern Spinlock scheduler_lock;
+#include "../include/filesys.hpp"
+
 
 
 #if 1 // ---- ---- TTY ---- ----
+
 
 // vtty0: global_ground
 // vtty1: form1...
@@ -22,6 +25,7 @@ static void VTTY_Free(pureptr_t inp) {
 	Letvar(nod, Dnode*, inp);
 	// skip offs
 	auto pblock = (vtty_type_t*)nod->type;
+	DevFs::free_tty_id(pblock->id);
 	if (pblock->innput_queue.slice.address) {
 		delete[] (byte*)pblock->innput_queue.slice.address;
 	}
@@ -44,6 +48,7 @@ Dnode* VTTY_Append(Console_t* con) {
 	const stduint SIZE_INN_BUF = 64;
 	auto p_innbuf = new byte[SIZE_INN_BUF];
 	auto pblock = new vtty_type_t({ 0, QueueLimited({_IMM(p_innbuf), SIZE_INN_BUF}), QueueLimited({0, 0}) });
+	pblock->id = DevFs::allocate_tty_id();
 	p->type = _IMM(pblock);
 
 	if (Taskman::current_thread[Taskman::getID()]) {
@@ -109,11 +114,20 @@ _RET_CreateVconsole Consman::CreateVconsole(const Rectangle& rect, rostr title) 
 	// plogwarn(">text_buf: %x", text_buf);
 	auto line_buf = new Color[pcon->getLineBufferSize()];
 	// plogwarn(">line_buf: %x", line_buf);
+	if (!text_buf || !line_buf) {
+		delete pcon;
+		plogerro("?");
+		return ret;
+	}
 	pcon->setBuffers(nullptr, text_buf, line_buf);
 
 	auto pform = new ::uni::Witch::Form();
 	// plogwarn(">pform: %x", pform);
-
+	if (!pform) {
+		delete pcon;
+		plogerro("?");
+		return ret;
+	}
 	ret.pform = pform;
 	pform->Title = title;
 	pcon->InitializeSheet(*pform, pcon->window.getVertex(), pcon->window.getSize());
@@ -525,20 +539,31 @@ void _Comment(R1) serv_shell_process() {
 	stduint src = 0, type = 0;
 	sysrecv(ANYPROC, &p, sizeof(p), &type, &src);
 	if (p) {
-		// Register the process globally
+		// Register the process globally to get a valid PID
 		Taskman::Append(p);
-
-		// [New]: Register the manually created window in the process space for unified FDEL cleanup
-		if (pf_ptr) p->pforms[0] = pf_ptr;
+		// Lock the process state during complex environment setup
+		IC.enAble(false);
+		p->state = ProcessBlock::State::Hanging;
 
 		p->focus_tty = tty_target;
+		if (p->focus_tty) {
+			p->Open("/dev/tty", O_RDWR); // O_RDONLY stdin
+			p->Open("/dev/tty", O_RDWR); // O_WRONLY stdout
+			p->Open("/dev/tty", O_RDWR); // O_WRONLY stderr
+		}
+		// Register the manually created window in the process space for unified cleanup
+		if (pf_ptr) p->pforms[0] = pf_ptr;
+
 		if (auto nod = (Dnode*)p->focus_tty) {
 			auto pblock = (vtty_type_t*)nod->type;
 			pblock->master_pid = Taskman::CurrentPID();
 			pblock->proc_group.Append(p->pid);
 		}
-		// Now that the environment is set up, start the application thread
+		
+		// Environment is ready, restore state and start the application thread
+		p->state = ProcessBlock::State::Active;
 		Taskman::AppendThread(p->main_thread);
+		IC.enAble();
 	}
 
 	extern const char key_map[256], key_map_shift[256];
@@ -622,10 +647,9 @@ shell_exit:
 			}
 		}
 		{
-			#if _GUI_ENABLE
-			SpinlockLocal guard(&gui_lock);
-			#endif
+			IC.enAble(false);
 			Consman::RemoveVconsole(tty_target);
+			IC.enAble(true);
 		}
 	}
 
@@ -644,7 +668,7 @@ void _Comment(R1) serv_cons_loop()
 	volatile stduint to_args[4];
 	int ch;
 
-	_TEMP devfs_register_and_mount();
+	Filesys::MountFilesys(&global_devfs, nullptr, "/dev");
 	while (true) {
 		{
 			#if _GUI_ENABLE

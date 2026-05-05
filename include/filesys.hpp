@@ -99,8 +99,7 @@ public:
 	// General path resolution: find dentry for a given path
 	static vfs_dentry* Index(const char* pathname);
 
-	friend void devfs_register_and_mount();
-protected:
+public:
 	// Explicitly mount an instantiated FS to a path (used by DevFs and RootFs)
 	static bool MountFilesys(FilesysTrait* fs, file_system_type* type, const char* target_path);
 
@@ -130,10 +129,12 @@ public:
 	virtual bool enumer(void* dir_handler, _tocall_ft _fn) override;
 	virtual stduint readfl(void* fil_handler, Slice file_slice, byte* dst) override;
 	virtual stduint writfl(void* fil_handler, Slice file_slice, const byte* src) override;
+public:
+	static int allocate_tty_id();
+	static void free_tty_id(int id);
 };
 
 extern DevFs global_devfs;
-void devfs_register_and_mount();
 
 }
 
