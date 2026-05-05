@@ -54,6 +54,10 @@ bool Memory::initialize(stduint eax, byte* ebx) {
 
 	// x64 has default paging now
 	#if _MCCA == 0x8632
+	if (_IMM(&FILE_ENDO) >= _IMM(p_ext)) {
+		p_ext = (byte*)(_IMM(&FILE_ENDO) + 0x1000);
+		p_ext = (byte*)floorAlign(0x1000, _IMM(p_ext));
+	}
 	if (eax == MULTIBOOT2_BOOTLOADER_MAGIC) { parse_grub(_IMM(ebx)); }
 	_physical_allocate = Memory::physical_allocate;
 	MemSet(kernel_paging.root_level_page = (PageEntry*)0x100000, 0, 0x1000);// kernel_paging.Reset();

@@ -4,7 +4,7 @@
 int main(int argc, char** argv)
 {
 	while (1) {
-		unsigned id = systest('T', 'E', 'S');
+		unsigned id = getpid();
 		unsigned last_sec = 0;
 		int stage = 0;
 		volatile stduint tmp;

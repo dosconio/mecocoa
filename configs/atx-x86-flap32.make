@@ -44,7 +44,7 @@ uherpath=/her
 
 .PHONY: build install lib accm run clean
 
-build: clean lib $(cppobjs) build_util
+build: clean lib accm $(cppobjs) build_util
 	@echo "MK $(arch) real16 support"
 	aasm prehost/$(arch)/atx-x86.asm        -felf   -o $(uobjpath)/mcca-$(arch)/mcca-$(arch)-elf16.o  -Iinclude/
 	aasm prehost/$(arch)/atx-ladder.asm     -felf   -o $(uobjpath)/mcca-$(arch)/mcca-$(arch)-ladder.o -Iinclude/ -D_MCCA=0x8632
@@ -94,30 +94,32 @@ build: clean lib $(cppobjs) build_util
 	@echo "  " $(bochd) -f $(dstdir)/bochsrc.bxrc
 	@echo "  " bochs -f $(ubinpath)/I686/mecocoa/bochsrc-lin.bxrc -debugger
 
+ACCM_INCF=-I$(uincpath) -Iaccmlib -I$(uincpath)/c/API-POSIX
+ACCM_LIBS=accm-x86
 build_util:
 	# ---- COTL INIT ---- #
 	echo MK appshell
-	g++ -I$(uincpath) -Iaccmlib $(flag) -m32 $(CXF) $(CXW) -std=c++2a \
+	g++ $(ACCM_INCF) $(flag) -m32 $(CXF) $(CXW) -std=c++2a \
 		-o $(uobjpath)/sapp-$(arch)/cot\
-		$(uherpath)/COTLAB/src/cotlab.cpp -L$(uobjpath)/accm-$(arch) -l$(arch)
+		$(uherpath)/COTLAB/src/cotlab.cpp -L$(uobjpath)/$(ACCM_LIBS) -lx86 -lgcc
 	# ---- UNIS UTIL ---- #
 	echo MK sleep
-	g++ -I$(uincpath) -Iaccmlib $(flag) -m32 $(CXF) $(CXW) -std=c++2a \
+	g++ $(ACCM_INCF) $(flag) -m32 $(CXF) $(CXW) -std=c++2a \
 		-o $(uobjpath)/sapp-$(arch)/sleep\
-		$(uherpath)/unisym/demo/utilities/sleep.cpp -L$(uobjpath)/accm-$(arch) -l$(arch) -lgcc
+		$(uherpath)/unisym/demo/utilities/sleep.cpp -L$(uobjpath)/$(ACCM_LIBS) -lx86 -lgcc
 	# ---- MCCA UTIL ---- #
 	echo MK appinit
-	g++ -I$(uincpath) -Iaccmlib $(flag) -m32 $(CXF) $(CXW) -std=c++2a \
+	g++ $(ACCM_INCF) $(flag) -m32 $(CXF) $(CXW) -std=c++2a \
 		subapps/init.cpp -o $(uobjpath)/sapp-$(arch)/init\
-		-L$(uobjpath)/accm-$(arch) -l$(arch) -e _start
+		-L$(uobjpath)/$(ACCM_LIBS) -lx86 -e _start
 	echo MK subtest
-	g++ -I$(uincpath) $(flag) -m32 $(CXF) $(CXW) -std=c++2a \
+	g++ $(ACCM_INCF) $(flag) -m32 $(CXF) $(CXW) -std=c++2a \
 		subapps/test.cpp -o $(uobjpath)/sapp-$(arch)/test\
-		-L$(uobjpath)/accm-$(arch) -l$(arch) -e _start
+		-L$(uobjpath)/$(ACCM_LIBS) -lx86 -e _start
 	echo MK paint
-	g++ -I$(uincpath) $(flag) -m32 $(CXF) $(CXW) -std=c++2a \
+	g++ $(ACCM_INCF) $(flag) -m32 $(CXF) $(CXW) -std=c++2a \
 		subapps/paint.cpp -o $(uobjpath)/sapp-$(arch)/paint\
-		-L$(uobjpath)/accm-$(arch) -l$(arch) -e _start
+		-L$(uobjpath)/$(ACCM_LIBS) -lx86 -e _start
 	#
 	echo MK hello-rust
 	@cd subapps/_hello/rust/ && cargo build --release --target ../../../configs/Rust/target/cargo-i686.json
@@ -127,9 +129,11 @@ install:
 	@echo $(sudokey) | sudo -S cp $(ubinpath)/$(elf_kernel)     /boot/mx86.elf
 
 lib:
+	@echo MK lib for MCCA-x86
 	cd $(ulibpath)/.. && make mx86 -j
 
 accm:
+	@echo MK lib for ACCM-x86
 	make -f accmlib/accmx86.make
 
 qemu_args=\

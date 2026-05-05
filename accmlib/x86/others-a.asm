@@ -9,7 +9,7 @@
 ;%include "mecocoa/kernel.inc"
 
 GLOBAL _start, syscall
-EXTERN main, exit
+EXTERN main, _exit
 
 section .text
 
@@ -49,5 +49,5 @@ _start:
 	call	main		; Call main(argc, argv)
 	add	esp, 16			; Clean up arguments and padding
 	push	eax			; Push return value for exit
-	call	exit		; Call exit(status)
+	call	_exit		; Call exit(status)
 mov byte[0], 0

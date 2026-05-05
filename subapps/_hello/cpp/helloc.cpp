@@ -9,7 +9,7 @@ using namespace uni;
 
 int main(int argc, char** argv)
 {
-	unsigned id = systest('T', 'E', 'S');// TEST
+	unsigned id = getpid();// TEST
 	outsfmt("C(%d)\n\r", id);// OUTC
 	// TODO
 	return 0;

@@ -75,7 +75,7 @@ sudokey=k
 uherpath=/her
 
 .PHONY : build
-build: clean $(archdir)/kerdisk.fat $(ubinpath)/$(arch).img $(asmobjs) $(cppobjs) $(cplobjs) build_util
+build: clean accm $(archdir)/kerdisk.fat $(ubinpath)/$(arch).img $(asmobjs) $(cppobjs) $(cplobjs) build_util
 	@echo MK $(elf_kernel)
 	$(CX) $(XFLAGS) \
 		-T prehost/$(arch)/$(arch).ld -o $(ubinpath)/$(elf_kernel) \
@@ -99,6 +99,10 @@ build: clean $(archdir)/kerdisk.fat $(ubinpath)/$(arch).img $(asmobjs) $(cppobjs
 	# update
 	qemu-img convert -f raw -O vpc $(ubinpath)/$(arch).img $(ubinpath)/$(arch).vhd
 
+accm:
+	@echo MK lib for ACCM-x64
+	make -f accmlib/accmx64.make
+
 $(archdir)/kerdisk.fat:
 	dd if=/dev/zero of=$@ bs=1M count=32
 	mkfs.fat -n 'MECOCOA2' -s 2 -f 2 -R 32 -F 32 $@
@@ -108,23 +112,25 @@ $(ubinpath)/$(arch).img: loader
 	qemu-img create -f raw $@ 100M > /dev/null
 	mkfs.fat -n 'MECOCOA ' -s 2 -f 2 -R 32 -F 32 $@ > /dev/null
 
+ACCM_INCF=-I$(uincpath) -Iaccmlib -I$(uincpath)/c/API-POSIX
+ACCM_LIBS=accm-x64
 build_util:
 	mkdir -p $(uobjpath)/sapp-$(arch)
 	# ---- COTL INIT ---- #
 	echo MK appshell
-	$(CX) -Iaccmlib $(XFLAGS) \
+	$(CX) $(ACCM_INCF) $(XFLAGS) \
 		-o $(uobjpath)/sapp-$(arch)/cot \
-		$(uherpath)/COTLAB/src/cotlab.cpp -L$(uobjpath)/accm-atx-x64 -latx-x64 -e _start
+		$(uherpath)/COTLAB/src/cotlab.cpp -L$(uobjpath)/$(ACCM_LIBS) -lx64 -e _start
 	# ---- UNIS UTIL ---- #
 	# ---- MCCA UTIL ---- #
 	echo MK appinit
-	$(CX) -Iaccmlib $(XFLAGS) \
+	$(CX) $(ACCM_INCF) $(XFLAGS) \
 		-o $(uobjpath)/sapp-$(arch)/init \
-		subapps/init.cpp -L$(uobjpath)/accm-atx-x64 -latx-x64 -e _start
+		subapps/init.cpp -L$(uobjpath)/$(ACCM_LIBS) -lx64 -e _start
 	echo MK subtest
-	$(CX) -Iaccmlib $(XFLAGS) \
+	$(CX) $(ACCM_INCF) $(XFLAGS) \
 		subapps/test.cpp -o $(uobjpath)/sapp-$(arch)/test \
-		-L$(uobjpath)/accm-atx-x64 -latx-x64 -e _start
+		-L$(uobjpath)/$(ACCM_LIBS) -lx64 -e _start
 # (ASM TEMPLATE)
 #	echo MK a
 #	aasm subapps/_hello/asm/helloa-x64.asm -felf64 -o subapps/_hello/asm/helloa-x64.o

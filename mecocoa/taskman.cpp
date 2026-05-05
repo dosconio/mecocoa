@@ -494,7 +494,7 @@ void _Comment(R0) serv_task_loop()
 			// Nothing
 			break;
 		case TaskmanMsg::EXIT: // (pid, state)
-			ploginfo("Taskman exit: %u %u", to_args[0], to_args[1]);
+			// ploginfo("Taskman exit: %u %u", to_args[0], to_args[1]);
 			if (!to_args[0]) {
 				plogerro("Try to exit Task_Kernel");
 				break;
@@ -502,7 +502,6 @@ void _Comment(R0) serv_task_loop()
 			Taskman::Exit(Taskman::Locate(to_args[0]), to_args[1]);
 			_Exit_Cleanup(to_args[0]); // Force immediate cleanup to satisfy synchronous IPC wait
 			ret = 0;
-			ploginfo("Taskman exit: %u %u", to_args[0], to_args[1]);
 
 			syssend(sig_src, (void*)&ret, sizeof(ret));
 			break;

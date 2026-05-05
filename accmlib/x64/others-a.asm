@@ -2,7 +2,7 @@
 [BITS 64]
 
 GLOBAL syscall, _start
-EXTERN main, exit
+EXTERN main, _exit
 
 section .text
 
@@ -22,5 +22,5 @@ _start:
 	and	rsp, -16	; Ensure 16-byte alignment for System V ABI
 	call	main	; Call main(argc, argv)
 	mov	rdi, rax	; Use return value as exit code
-	call	exit	; Call exit(status)
+	call	_exit	; Call exit(status)
 mov byte[0], 0

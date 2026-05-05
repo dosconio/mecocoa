@@ -136,7 +136,7 @@ _RET_CreateVconsole Consman::CreateVconsole(const Rectangle& rect, rostr title) 
 
 	VTTY_Append(pcon);
 	ret.tty_no = vttys.Locate((pureptr_t)pcon, false);
-	ploginfo("CreateVconsole: tty_no=%u", ret.tty_no);
+	// ploginfo("CreateVconsole: tty_no=%u", ret.tty_no);
 	// pcon->OutFormat("Hello");
 	return ret;
 }
@@ -518,7 +518,7 @@ void _Comment(R1) serv_shell_process() {
 		auto [pcon, pf, tty_no] = Consman::CreateVconsole(rect, "Terminal");
 		pf_ptr = pf;
 		tty_target = vttys.LocateNode(tty_no);
-		ploginfo("CreateVconsole->[%[x],%[x],%u]", pcon, pf, tty_no);
+		// ploginfo("CreateVconsole->[%[x],%[x],%u]", pcon, pf, tty_no);
 	}
 
 	ProcessBlock* p = nullptr;

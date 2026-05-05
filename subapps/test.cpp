@@ -1,6 +1,7 @@
 //#include <c/stdinc.h>
 #include "../accmlib/inc/aaaaa.h"
 #include "c/consio.h"
+#include "unistd.h"
 
 using namespace uni;
 
@@ -9,7 +10,7 @@ using namespace uni;
 
 int main(int argc, char** argv)
 {
-	unsigned id = systest('T', 'E', 'S');// TEST
+	unsigned id = getpid();// TEST
 	outsfmt("C(%d)\n\r", id);// OUTC
 
 	#if 1
@@ -28,15 +29,15 @@ int main(int argc, char** argv)
 	if (fd >= 0) {
 		outsfmt("Open success! FD=%d\n\r", fd);
 		const char* msg = "Hello from Mecocoa VFS!\n";
-		syswrite(fd, (void*)msg, 24);
-		sysclose(fd);
+		write(fd, (void*)msg, 24);
+		close(fd);
 
 		fd = sysopen(filename);
 		if (fd >= 0) {
 			char buf[32] = {0};
-			sysread(fd, buf, 24);
+			read(fd, buf, 24);
 			outsfmt("Read result: %s\n\r", buf);
-			sysclose(fd);
+			close(fd);
 		}
 	} else {
 		outsfmt("Open failed with code %d\n\r", fd);
@@ -83,7 +84,7 @@ int main(int argc, char** argv)
 			key_event = (keyboard_event_t*)smsg.args;
 			// exit when Alt+F4
 			if (key_event->keycode == _UKEY_F4 && (key_event->mod.l_alt || key_event->mod.r_alt)) {
-				exit(0);
+				_exit(0);
 			}
 			ploginfo("msg: kboard code=%[32H]", *key_event);
 			break;

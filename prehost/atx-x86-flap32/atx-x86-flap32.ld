@@ -3,6 +3,7 @@ ENTRY(multiboot_entry) /* ENTRY(_start) */ /* -e _start */
 MEMORY
 {
 	RAM1 (rwx) : ORIGIN = 0x8000, LENGTH = 0x70000 /* 0x7E00 .. 0x70000 */
+	/* 0x00101000 .. .. */
 }
 
 SECTIONS

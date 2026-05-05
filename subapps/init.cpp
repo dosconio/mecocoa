@@ -1,5 +1,6 @@
 #include "inc/aaaaa.h"
 #include "cpp/queue"
+#include <sys/wait.h>
 
 int main(int argc, char** argv)
 {

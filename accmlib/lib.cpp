@@ -21,9 +21,7 @@ void sysouts(const char* str)// 0
 	if (!len) return;
 	syscall(syscall_t::OUTC, (stduint)str, len, nil);
 	// [Other Method]
-	//    fd = sysopen("/dev_tty0");
-	//    syswrite(fd, (void*)"Hello CCCCC!\n\r", 15);
-	//    sysclose(fd);
+	//    syswrite(STDOUT, (void*)"Hello CCCCC!\n\r", 15);
 }
 
 int sysinnc()// 1
@@ -32,12 +30,7 @@ int sysinnc()// 1
 }
 
 _ESYM_C
-void exit(int code)// 2
-{
-	syscall(syscall_t::EXIT, code, nil, nil);
-	*((byte*)0) = 0;// try make error
-	while (1);
-}
+
 
 stduint syssecond()// 3
 {
@@ -91,10 +84,6 @@ void sysdelay(unsigned dword) {
 	#endif
 }
 
-stduint systest(unsigned t, unsigned e, unsigned s)// FF
-{
-	return syscall(syscall_t::TEST, t, e, s);
-}
 
 int sys_createfil(rostr fullpath)
 {
@@ -111,16 +100,7 @@ int sysopen(rostr fullpath) {
 	stduint r = syscall(syscall_t::OPEN, _IMM(fullpath), 0b10, nil);// open -> desc
 	return *(int*)&r;
 }
-int sysclose(int fd) {
-	return syscall(syscall_t::CLOS, fd, nil, nil);
-}
-stduint sysread(int fd, void* buf, stduint size)
-{
-	return syscall(syscall_t::READ, fd, _IMM(buf), size);
-}
-stduint syswrite(int fd, const void* buf, stduint size) {
-	return syscall(syscall_t::WRIT, fd, _IMM(buf), size);
-}
+
 
 int sys_removefil(rostr fullpath)
 {
@@ -131,13 +111,7 @@ stduint get_core_id(stduint* ptr_hid) {
 	return syscall(syscall_t::GET_CORE_ID, _IMM(ptr_hid), nil, nil);
 }
 
-int _Comment(pid) wait(int* status)
-{
-	return syscall(syscall_t::WAIT, _IMM(status), nil, nil);
-}
-int fork() {
-    return syscall(syscall_t::FORK, nil, nil, nil);
-}
+
 
 // int exec(rostr path, rostr argstr) {
 // 	return syscall(syscall_t::EXEC, _IMM(path), _IMM(argstr), nil);

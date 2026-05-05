@@ -57,7 +57,7 @@ stduint ProcessBlock::Rdwt(bool wr_type, stduint fid, Slice slice)
 	_Comment(const) ProcessBlock* pb = this;
 	if (!pb || !pb->pfiles[fid] || !pb->pfiles[fid]->vfile) return 0;
 	if (wr_type) {
-		if (!(pb->pfiles[fid]->fd_mode & O_RDWR)) return 0;
+		if (!(pb->pfiles[fid]->fd_mode & O_RDWR)) return 0;//{} -1
 	}
 	
 	vfs_file* file = pb->pfiles[fid]->vfile;
@@ -265,8 +265,8 @@ void serv_file_loop()// for IDE 0:0, 0:1
 		}
 		case FilemanMsg::CLOSE:// -> 0 for success
 		{
-			stduint ret;
-			ret = Taskman::Locate(to_args[1])->Close(to_args[0]);
+			stdsint ret;
+			ret = Taskman::Locate(to_args[1])->Close(to_args[0]) ? 0 : -1;// POSIX Close
 			syssend(sig_src, &ret, sizeof(ret), 0);
 			break;
 		}
