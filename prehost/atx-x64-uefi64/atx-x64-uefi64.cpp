@@ -5,6 +5,7 @@
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 #include "../../include/mecocoa.hpp"
 
+#include "c/driver/UART.h"
 #include <c/driver/mouse.h>// qemu only
 #include <c/driver/timer.h>
 #include <cpp/Device/ACPI.hpp>
@@ -29,6 +30,12 @@ struct Syscall {
 	}
 };
 
+x86_COM com1;
+extern OstreamTrait* con0_out;
+int x86_COM::inn() {
+	_TODO return -1;
+}
+
 // ---- Kernel
 
 extern "C" //__attribute__((ms_abi))
@@ -49,6 +56,7 @@ void mecocoa(const UefiData& uefi_data_ref)
 	SysTimer::Initialize();
 	Filesys::Initialize();
 
+	con0_out = &com1;
 	#ifdef _UEFI
 	ploginfo("Ciallo %lf, rsp=%[x]", 2025.09, rsp);
 	#endif

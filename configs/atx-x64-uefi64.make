@@ -154,7 +154,7 @@ qemu_args=\
 	-device nec-usb-xhci,id=xhci \
 	-device usb-mouse \
 	-device usb-kbd \
-	-monitor stdio \
+	-serial mon:stdio \
 	-no-reboot -no-shutdown  \
 
 run: build
