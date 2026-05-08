@@ -166,7 +166,7 @@ int KeyboardBridge::out(const char* str, stduint len) {
 #endif
 
 // USB3-KBD
-#ifdef _UEFI// x64 only now
+#if _MCCA == 0x8664// x64 only now
 
 static void setLED() {
 	// {} KbdSetLED((_IMM(kbd_state.lock_caps) << 2) | (_IMM(kbd_state.lock_number) << 1) | _IMM(kbd_state.lock_scroll));

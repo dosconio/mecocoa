@@ -25,7 +25,7 @@ stdsint ProcessBlock::Open(rostr pathname, int flags) {
 	}
 	// find a free slot in f_desc_table (reuse empty slots)
 	FileDescriptor* pfd = NULL;
-	for (int i = 0; i < 0x1000 / sizeof(FileDescriptor); i++) {
+	for (stduint i = 0; i < 0x1000 / sizeof(FileDescriptor); i++) {
 		if (f_desc_table[i].vfile == nullptr) {
 			pfd = &f_desc_table[i];
 			if (i >= f_desc_table_count) f_desc_table_count = i + 1;

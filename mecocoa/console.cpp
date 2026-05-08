@@ -48,7 +48,9 @@ Dnode* VTTY_Append(Console_t* con) {
 	if (!p) return nullptr;
 	const stduint SIZE_INN_BUF = 64;
 	auto p_innbuf = new byte[SIZE_INN_BUF];
-	auto pblock = new vtty_type_t({ 0, QueueLimited({_IMM(p_innbuf), SIZE_INN_BUF}), QueueLimited({0, 0}) });
+	auto pblock = new vtty_type_t();
+	pblock->innput_queue = QueueLimited({_IMM(p_innbuf), SIZE_INN_BUF});
+	pblock->output_queue = QueueLimited({0, 0});
 	pblock->id = DevFs::allocate_tty_id();
 	p->type = _IMM(pblock);
 
@@ -483,7 +485,7 @@ static stdsint ConsoleMsg_FDRW(const FMT_ConsoleMsg_FDRW* data, ProcessBlock* pb
 	}
 }
 
-_PACKED(struct) FMT_ConsoleMsg_FCHR {
+struct FMT_ConsoleMsg_FCHR {
 	stduint pform_id;// in pforms
 	Point* usrp_vertex;
 	const char* usrp_str;
@@ -503,8 +505,7 @@ static stdsint ConsoleMsg_FCHR(const FMT_ConsoleMsg_FCHR* data, ProcessBlock* pb
 
 	// [Security Fix]: Validate drawing bounds to prevent heap corruption
 	stduint str_len = StrLength(buf);
-	if (vertex.x < 0 || vertex.y < 0 ||
-		(vertex.x + (stdsint)str_len * 8) > pfrm->sheet_area.width ||
+	if ((vertex.x + (stdsint)str_len * 8) > pfrm->sheet_area.width ||
 		(vertex.y + 16) > pfrm->sheet_area.height) {
 		return -1;
 	}
@@ -777,7 +778,7 @@ void _Comment(R1) serv_cons_loop()
 
 			case ConsoleMsg::FMSG:
 				ret = ConsoleMsg_FMSG((FMT_ConsoleMsg_FMSG*)to_args, th->parent_process, sig_src);
-				if (ret != -2) {
+				if ((stdsint)ret != -2) {
 					syssend(sig_src, (void*)&ret, sizeof(ret));
 				}
 				break;

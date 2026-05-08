@@ -55,7 +55,7 @@ bool Spinlock::Acquire() {
 	byte state_rupt = 0;
 	#if (_MCCA & 0xFF00) == 0x8600
 	stduint flags = getFlags();
-	if (state_rupt = cast<REG_FLAG_t>(flags).IF) {
+	if ((state_rupt = (byte)cast<REG_FLAG_t>(flags).IF)) {
 		IC.enAble(false);
 	}
 	#endif
@@ -64,8 +64,8 @@ bool Spinlock::Acquire() {
 		asm volatile("pause" ::: "memory");
 		#endif
 	}
-	this->cpu_id = Taskman::getID();
-	return state_rupt;
+	this->cpu_id = (stdsint)Taskman::getID();
+	return (bool)state_rupt;
 }
 void Spinlock::Release(bool old_if) {
 	this->cpu_id = -1;

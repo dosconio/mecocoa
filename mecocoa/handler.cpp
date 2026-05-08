@@ -22,7 +22,7 @@ InterruptControl IC = { _IMM(trap_vector) };
 
 __attribute__((target("general-regs-only"), optimize("O0")))
 void Handint_XHCI() {
-	message_queue.Enqueue(SysMessage{ SysMessage::RUPT_xHCI });
+	message_queue.Enqueue(SysMessage{ SysMessage::RUPT_xHCI, {} });
 	sendEOI();
 }
 

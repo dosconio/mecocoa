@@ -170,9 +170,7 @@ int msg_recv(ThreadBlock* to_th, stduint foo, _Comment(vaddr) CommMsg* msg)
 {
 	SpinlockLocal guard(&comm_lock);
 	_Comment(Proc - Interrupt) if ((to_th->wait_rupt_no) && (foo == ANYPROC || foo == INTRUPT)) {
-		CommMsg tmp_msg{ 0 };
-		tmp_msg.type = HARDRUPT;
-		tmp_msg.src = to_th->wait_rupt_no;
+		CommMsg tmp_msg = { {0, 0}, HARDRUPT, to_th->wait_rupt_no };
 		MccaMemCopyP(msg, to_th->parent_process, &tmp_msg, 0, sizeof(tmp_msg));
 		to_th->wait_rupt_no = nil;
 		return 0;

@@ -18,15 +18,17 @@ SegCo32 EQU 8*4
 
 %ifdef _UEFI
 _entry:
-    MOV  RSP, kernel_stack + 1024*1024
-	PUSH RDI
-	CALL EnableSSE
-	CALL _ZN6Memory9clear_bssEv; Memory::clear_bss
-	CALL _preprocess
-	POP  RDI
-	CALL mecocoa
-	LUP: HLT
-	JMP  LUP
+    MOV  RSP, kernel_stack + 1024*1024 ; RSP = 16N
+    PUSH RDI                            ; 1st push: Save argument
+    PUSH RDI                            ; 2nd push: Alignment dummy (keep RSP = 16N)
+    CALL EnableSSE                      ; Inside: RSP = 16N - 8 (Correct)
+    CALL _ZN6Memory9clear_bssEv         ; Inside: RSP = 16N - 8 (Correct)
+    CALL _preprocess                    ; Inside: RSP = 16N - 8 (Correct)
+    POP  RAX                            ; Remove dummy
+    POP  RDI                            ; Restore argument
+    CALL mecocoa                        ; Inside: RSP = 16N - 8 (Correct)
+    LUP: HLT
+    JMP  LUP
 %else
 _entry:
 	MOV  RSP, 0x7FF0

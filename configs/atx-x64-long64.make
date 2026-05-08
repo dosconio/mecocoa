@@ -30,6 +30,7 @@ cppfile=\
 	$(ulibpath)/cpp/Witch/Form.cpp \
 	$(ulibpath)/cpp/Device/ACPI.cpp \
 	$(ulibpath)/cpp/Device/Buzzer.cpp \
+	$(ulibpath)/cpp/Device/Keyboard.cpp \
 	$(ulibpath)/cpp/Device/Video.cpp $(ulibpath)/cpp/Device/Video-VideoConsole2.cpp \
 
 cplfile=\

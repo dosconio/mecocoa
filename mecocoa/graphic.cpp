@@ -156,7 +156,7 @@ void LayerManager2::Update(SheetTrait* who, const Rectangle& rect) {
 	Rectangle dirty_rect(Point(abs_rect.x, abs_rect.y), Size2(rect.width, rect.height));
 
 	#if _GUI_ENABLE
-	bool already_locked = gui_lock.cpu_id == Taskman::getID();
+	bool already_locked = gui_lock.cpu_id == (stdsint)Taskman::getID();
 	if (already_locked) {
 		this->AddDirty(dirty_rect);
 		if (!lazy_update) UpdateForce(who, rect);

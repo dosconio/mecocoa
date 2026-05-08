@@ -139,7 +139,7 @@ static bool read(stduint diskno, stduint lba, void* buffer) {
 }
 
 void serv_dev_mem_loop() {
-	stduint sig_type = 0, sig_src;
+	stduint sig_type = 0, sig_src = 0;
 	stduint args[4];
 	stduint ret;
 	byte* rw_buffer = new byte[512];
