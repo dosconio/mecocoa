@@ -336,7 +336,7 @@ void vfs_tree_physical(FilesysTrait* fs, const char* path, int depth) {
 		// We MUST continue iterating just to delete the remaining nodes to prevent memory leak!
 		if (++count > 100) {
 			plogwarn("vfs_tree_physical: Exceeded display limit\n\r");
-			delete curr;
+			free(curr);
 			curr = next;
 			continue;
 		}
@@ -365,13 +365,13 @@ void vfs_tree_physical(FilesysTrait* fs, const char* path, int depth) {
 						String(subpath, 512).Format("%s/%s", path, curr->name);
 					}
 					vfs_tree_physical(fs, subpath, depth + 1);
-					delete[] subpath;
+					free(subpath);
 				}
 			}
 		}
 
 		// Safely delete processed node
-		delete curr;
+		free(curr);
 		curr = next;
 	}
 }
@@ -544,7 +544,7 @@ int Filesys::Close(vfs_file* file) {
 			file->f_inode->i_size = file->f_pos;
 		}
 		file->f_inode = nullptr;
-		delete file;
+		free(file);
 	}
 	return 0;
 }
@@ -791,10 +791,10 @@ file_system_type fs_fat = { "fat", [](StorageTrait& storage, stduint dev) -> Fil
 		}
 
 		// Clean up dynamically allocated buffers on failure to prevent memory leaks
-		delete fs;
-		delete p_part;
-		delete[] fat_buf;
-		delete[] fat_sec_buf;
+		free(fs);
+		free(p_part);
+		free(fat_buf);
+		free(fat_sec_buf);
 		return nullptr;
 	},
 	nullptr

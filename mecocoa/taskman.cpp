@@ -188,12 +188,12 @@ bool Taskman::ExitCurrent(stduint code) {
 // - threads?
 static void _Exit_Cleanup(stduint pid)
 {
-	#if defined(_DEBUG) && defined(_MCCA) && (_MCCA & 0xFF00) == 0x8600
-	auto flag = getFlags();
-	if (flag & 0x200) InterruptDisable();
-	#endif
 	auto ppb = Taskman::Locate(pid);
 	if (!ppb || ppb->state == ProcessBlock::State::Invalid) return;
+	ppb->state = ProcessBlock::State::Invalid;
+
+	ppb->sys_lock.Acquire();
+    ppb->sys_lock.Release();
 
 	// Hierarchical Process Tree: Unlink from parent
 	extern Spinlock scheduler_lock;
@@ -259,7 +259,7 @@ static void _Exit_Cleanup(stduint pid)
 
 		if (is_tty_valid && ppb->focus_tty->type) {
 			auto pblock = (vtty_type_t*)ppb->focus_tty->type;
-			for (stdsint i = pblock->proc_group.Count() - 1; i >= 0; --i) {
+			if (pblock->master_pid == pid) for (stdsint i = pblock->proc_group.Count() - 1; i >= 0; --i) {
 				if (pblock->proc_group[i] == pid) {
 					pblock->proc_group.Remove(i);
 					break;
@@ -293,13 +293,13 @@ static void _Exit_Cleanup(stduint pid)
 		Taskman::DequeueReady(th);
 		Taskman::thchain.Remove(th);
 		if (th->stack_lineaddr == th->stack_levladdr) {
-			delete (byte*)th->stack_levladdr;
+			free((byte*)th->stack_levladdr);
 		}
 		else {
-			delete (byte*)ppb->paging[_IMM(th->stack_lineaddr) & ~0xFFF];
-			delete (byte*)th->stack_levladdr;
+			free((byte*)ppb->paging[_IMM(th->stack_lineaddr) & ~0xFFF]);
+			free((byte*)th->stack_levladdr);
 		}
-		delete (byte*)th;
+		free((byte*)th);
 		th = next_th;
 	}
 	ppb->thread_list_head = ppb->main_thread = nullptr;
@@ -311,11 +311,11 @@ static void _Exit_Cleanup(stduint pid)
 			(byte*)ppb->paging[(ppb->load_slices[i].address) & ~0xFFF] + PAGE_SIZE ==
 			(byte*)ppb->paging[(ppb->load_slices[i].address + PAGE_SIZE) & ~0xFFF]) {// once allocated
 			// ploginfo("freeing segment: %[x] %[x]", ppb->load_slices[i].address, ppb->load_slices[i].length);
-			delete (byte*)ppb->paging[(ppb->load_slices[i].address) & ~0xFFF];
+			free((byte*)ppb->paging[(ppb->load_slices[i].address) & ~0xFFF]);
 		}
 		else while (ppb->load_slices[i].length) {
 			// ploginfo("freeing segment: %[x] %[x]", ppb->load_slices[i].address, ppb->load_slices[i].length);
-			delete (byte*)ppb->paging[(ppb->load_slices[i].address) & ~0xFFF];
+			free((byte*)ppb->paging[(ppb->load_slices[i].address) & ~0xFFF]);
 			ppb->load_slices[i].address += 0x1000;
 			ppb->load_slices[i].length -= minof(0x1000, ppb->load_slices[i].length);
 		}
@@ -325,18 +325,23 @@ static void _Exit_Cleanup(stduint pid)
 
 	}
 	// Release Heap/Paging
-	ppb->paging.~Paging();
-	ppb->state = ProcessBlock::State::Invalid;
+	if (ppb->ring) ppb->paging.~Paging();
+	else ppb->paging.root_level_page = nullptr;
 
 	{
 		SpinlockLocal guard(&scheduler_lock);
 		Taskman::chain.Remove(ppb);
 	}
 
-	mempool.deallocate(ppb, sizeof(ProcessBlock));
-	#if defined(_DEBUG) && defined(_MCCA) && (_MCCA & 0xFF00) == 0x8600
-	setFlags(flag);
-	#endif
+	if (__atomic_sub_fetch(&ppb->ref_count, 1, __ATOMIC_SEQ_CST) == 0) {
+		mempool.deallocate(ppb);
+	}
+	else {
+		plogerro("ref_count: %d", ppb->ref_count);
+		//{} TODO: Add a Vector to store pb undeallocated
+		// release them until ref_count == 0
+	}
+
 }
 
 void Taskman::Idle() {

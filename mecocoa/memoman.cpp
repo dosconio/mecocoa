@@ -13,7 +13,9 @@ stduint Memory::total_memsize = 0;
 bool map_ready = false;
 
 
-Mempool mempool = {};
+Mempool mempool0 = {};
+LockedAllocator mempool(&mempool0);
+
 #if 0 // for small flash board
 #define mempool (*pmempool)
 #endif
@@ -50,6 +52,30 @@ void* Memory::physical_allocate(usize siz) {
 
 #endif
 
+
+// ---- LOCKED ----
+
+Spinlock mempool_lock;
+
+
+// ---------------------------------------------------------
+// LockedAllocator Implementation
+// ---------------------------------------------------------
+
+
+void* LockedAllocator::allocate(stduint size, stduint alignment, stduint boundary) {
+	bool old_if = mempool_lock.Acquire();
+	void* ret = base_allocator->allocate(size, alignment, boundary);
+	mempool_lock.Release(old_if);
+	return ret;
+}
+bool LockedAllocator::deallocate(void* ptr, stduint size) {
+	if (!ptr) return false; 
+	bool old_if = mempool_lock.Acquire();
+	bool ret = base_allocator->deallocate(ptr, size);
+	mempool_lock.Release(old_if);
+	return ret;
+}
 
 // ---- INTERFACE ----
 
@@ -208,11 +234,11 @@ void operator delete[](void* p) {
 }
 void operator delete(void* ptr, stduint size) noexcept {
 	// ploginfo("delete[](%[x], %[x])", ptr, size);
-	// if (!mempool.deallocate(ptr, size)) plogerro("del BAD");
-	if (!mempool.deallocate(ptr)) plogerro("del BAD");
+	if (!mempool.deallocate(ptr, size)) plogerro("del BAD");
+	// if (!mempool.deallocate(ptr)) plogerro("del BAD");
 }
 void operator delete[](void* ptr, stduint size) {
-	::operator delete(ptr, size);
+	::operator delete(ptr, _IMM0);// (ptr, size);
 }
 #if defined(_UEFI)
 void operator delete(void* ptr, stduint size, std::align_val_t) noexcept { ::operator delete(ptr, size); }

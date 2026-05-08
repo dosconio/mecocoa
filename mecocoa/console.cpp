@@ -27,14 +27,15 @@ static void VTTY_Free(pureptr_t inp) {
 	auto pblock = (vtty_type_t*)nod->type;
 	DevFs::free_tty_id(pblock->id);
 	if (pblock->innput_queue.slice.address) {
-		delete[] (byte*)pblock->innput_queue.slice.address;
+		free((byte*)pblock->innput_queue.slice.address);
 	}
 	if (pblock->output_queue.slice.address) {
 		_TODO
 	}
-	delete pblock;
+	free(pblock);
 }
 Dnode* VTTY_Append(Console_t* con) {
+	// ploginfo("VTTY_Append called for console at %p", con);
 	if (!con) {
 		plogerro("%s: You may lose impl Console_t for con", __FUNCIDEN__);
 		return nullptr;
@@ -115,7 +116,7 @@ _RET_CreateVconsole Consman::CreateVconsole(const Rectangle& rect, rostr title) 
 	auto line_buf = new Color[pcon->getLineBufferSize()];
 	// plogwarn(">line_buf: %x", line_buf);
 	if (!text_buf || !line_buf) {
-		delete pcon;
+		free(pcon);
 		plogerro("?");
 		return ret;
 	}
@@ -124,7 +125,7 @@ _RET_CreateVconsole Consman::CreateVconsole(const Rectangle& rect, rostr title) 
 	auto pform = new ::uni::Witch::Form();
 	// plogwarn(">pform: %x", pform);
 	if (!pform) {
-		delete pcon;
+		free(pcon);
 		plogerro("?");
 		return ret;
 	}
@@ -184,7 +185,7 @@ void Consman::RemoveVconsole(Dnode* nod) {
 
 		// Stop the console object (this will free text_buf and line_buf using free())
 		pcon->Stop();
-		delete pcon;
+		free(pcon);
 	}
 
 	// Nullify focus_tty references for ALL processes in the system to prevent UAF
@@ -268,7 +269,7 @@ static stdsint ConsoleMsg_FNEW(const FMT_ConsoleMsg_FNEW* data, ProcessBlock* pb
 	// Allocate and set sheet for the form
 	Color* sheet_buffer = new Color[rect.getArea()];
 	if (!sheet_buffer) {
-		delete pfrm;
+		free(pfrm);
 		return -1;
 	}
 	pfrm->setSheet(global_layman, rect, sheet_buffer);
@@ -368,7 +369,7 @@ static void _CleanSingleForm(ProcessBlock* pb, stduint pform_id) {
 
 	// Safe memory release
 	if (pfrm->sheet_buffer) {
-		delete[] pfrm->sheet_buffer;
+		free(pfrm->sheet_buffer);
 		pfrm->sheet_buffer = nullptr;
 	}
 
@@ -380,7 +381,7 @@ static void _CleanSingleForm(ProcessBlock* pb, stduint pform_id) {
 		}
 	}
 
-	delete pfrm;
+	free(pfrm);
 	pb->pforms[pform_id] = nullptr;
 }
 
@@ -637,8 +638,10 @@ void _Comment(R1) serv_shell_process() {
 shell_exit:
 	if (Consman::ento_gui) {
 		auto pblock = (vtty_type_t*)tty_target->type;
+		stduint self_pid = Taskman::CurrentPID();
 		for (stdsint i = pblock->proc_group.Count() - 1; i >= 0; --i) {
 			stduint pid = pblock->proc_group[i];
+			if (pid == self_pid) continue;
 			auto pb_to_kill = Taskman::Locate(pid);
 			if (pb_to_kill && pb_to_kill->state != ProcessBlock::State::Hanging) {
 				stduint exit_para[2] = { pb_to_kill->pid, (stduint)-1 };
@@ -669,6 +672,7 @@ void _Comment(R1) serv_cons_loop()
 	int ch;
 
 	Filesys::MountFilesys(&global_devfs, nullptr, "/dev");
+	ploginfo("[DevFs] Mounted to /dev");
 	while (true) {
 		{
 			#if _GUI_ENABLE

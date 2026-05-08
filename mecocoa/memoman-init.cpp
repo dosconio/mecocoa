@@ -16,8 +16,6 @@ _PACKED(struct) memory_info_entry {
 
 byte _BUF_pagebmap[sizeof(BmMemoman)];
 
-extern Mempool mempool;
-
 const stduint bmapsize = 0x100000 / 8;
 
 // 0x0000000000000000 .. 0x0000000100000000

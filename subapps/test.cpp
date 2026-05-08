@@ -48,7 +48,7 @@ int main(int argc, char** argv)
 
 	#if 1
 	Rectangle rect{ Point(100, 80), Size2(320, 240) };
-	stduint form_id = sys_create_form(-_IMM0, &rect);
+	auto form_id = sys_create_form(-_IMM0, &rect);
 	if (form_id >= 0) {
 		sys_draw_default_string(form_id, Point2(50, 50), "Ciallo~", Color::Maroon);
 		sys_draw_point(form_id, Point2(100, 100), Color::Red);

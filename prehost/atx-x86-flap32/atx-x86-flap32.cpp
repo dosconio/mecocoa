@@ -48,6 +48,7 @@ _sign_entry() {
 	// Console.OutFormat("hayouuu~!\n\r\a");
 
 	Filesys::Tree();
+	mempool0.dump_available();
 
 	// Done
 	loop HALT();

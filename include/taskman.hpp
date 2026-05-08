@@ -153,6 +153,7 @@ public:
 	inline stduint getID() { return pid; }
 	stduint ring;
 	Mutex sys_lock{}; // Use Mutex to protect internal systems like Heap / FD
+	volatile int ref_count = 1;
 public:
 	// Process Level Wait State
 	enum class State : byte {
@@ -277,7 +278,7 @@ public:// for local core
 	static stduint  CurrentPID() { return current_thread[getID()]->parent_process->pid; }
 public:
 	static Dchain thchain;
-	static Dnode* min_available_thleft;
+	// static Dnode* min_available_thleft;
 public:
 	static auto
 		Initialize(stduint cpuid = 0) -> void;

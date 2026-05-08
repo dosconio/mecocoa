@@ -136,7 +136,7 @@ void exception_handler(sdword iden, dword para) {
 
 	case ERQ_Page_Fault:// 14
 		printlog(_LOG_FATAL, have_para ? "%s with 0x%[x], vaddr=0x%[x], TID%u, CR3=0x%[x]" : "%s",
-			ExceptionDescription[iden], para, getCR2(), Taskman::current_thread[Taskman::getID()], r15); // printlog will call halt machine
+			ExceptionDescription[iden], para, getCR2(), Taskman::current_thread[Taskman::getID()]->tid, r15); // printlog will call halt machine
 		break;
 
 	default:

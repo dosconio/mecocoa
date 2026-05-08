@@ -49,8 +49,7 @@ public:
 
 	virtual ~Memodisk() {
 		if (auto_allocated && address) {
-			delete[](byte*)address;
-			address = nullptr;
+			mfree(address);
 		}
 	}
 

@@ -22,7 +22,7 @@ ThreadBlock* Taskman::idle_thread[PCU_CORES_MAX];
 ThreadBlock* volatile Taskman::switching_out_threads[PCU_CORES_MAX];
 stduint Taskman::min_available_tid = 0;
 Dchain Taskman::thchain = { nullptr };
-Dnode* Taskman::min_available_thleft = nullptr;
+// Dnode* Taskman::min_available_thleft = nullptr;
 
 
 Taskman::ReadyQueue Taskman::priority_queues[32] = {};
@@ -211,6 +211,15 @@ bool Taskman::Append(ProcessBlock* task) {
 
 	chain.Append(task, false, insert_after);
 	task->state = ProcessBlock::State::Active;
+
+	if (0 && task->pid >= 8) {
+		ploginfo("--- Audit of all Threads (New PID %u) ---", task->pid);
+		for (auto nod = thchain.Root(); nod; nod = nod->next) {
+			auto th = cast<ThreadBlock*>(nod->offs);
+			ploginfo("TID %u: StackPhys=%[x], PB=%[x]", th->tid, th->stack_levladdr, th->parent_process);
+		}
+		ploginfo("------------------------------------------");
+	}
 	return true;
 }
 

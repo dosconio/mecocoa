@@ -78,7 +78,7 @@ static stduint _Taskman_Setup_Stack(ProcessBlock* pb, ProcessBlock* parent, char
 	add_aux(AT_NULL, 0);
 
 	MemCopyP((void*)new_sp, pb->paging, temp_buf, kernel_paging, total_len);
-	delete[] temp_buf;
+	free(temp_buf);
 	return new_sp;
 }
 
@@ -233,7 +233,7 @@ void Taskman::Initialize(stduint cpuid) {
 	kernel_thread->parent_process = kernel_task;
 	
 	min_available_left = chain.Append(kernel_task);
-	min_available_thleft = thchain.Append(kernel_thread);
+	// min_available_thleft = thchain.Append(kernel_thread);
 	kernel_task->state = ProcessBlock::State::Active;
 	kernel_task->paging.root_level_page = kernel_paging.root_level_page;
 	
@@ -418,7 +418,7 @@ ProcessBlock* Taskman::CreateELF(BlockTrait* source, byte ring) {
 	struct ELF_Header_t header;
 	source->Read(0, &header, sizeof(header), block_buffer);
 	if (MemCompare((const char*)header.e_ident, "\x7F""ELF", 4)) {
-		delete[] block_buffer;
+		free(block_buffer);
 		plogerro("%s: Invalid ELF File Magic Number", __FUNCIDEN__);
 		return nullptr;
 	}
@@ -467,7 +467,7 @@ ProcessBlock* Taskman::CreateELF(BlockTrait* source, byte ring) {
 			}
 		}
 	}
-	delete[] block_buffer;
+	free(block_buffer);
 
 	// ---- Stack and Gen.Regis ---- //
 	const stduint stack_loc_top = _IMM(tb->stack_lineaddr) + tb->stack_size;
@@ -654,7 +654,7 @@ ProcessBlock* Taskman::Exec(stduint parent, rostr usr_fullpath, char** usr_argv,
 		if (ph.p_type == PT_PHDR) phdr_addr = ph.p_vaddr;
 		if (ph.p_type == PT_LOAD && ph.p_offset == 0 && !phdr_addr) phdr_addr = ph.p_vaddr + header.e_phoff;
 	}
-	delete[] block_buffer;
+	free(block_buffer);
 
 	stduint new_sp = _Taskman_Setup_Stack(new_pb, parent_pb, usr_argv, usr_envp, (stduint)header.e_entry, phdr_addr, header.e_phnum, header.e_phentsize);
 
@@ -719,10 +719,10 @@ ProcessBlock* Taskman::Exet(stduint parent, rostr usr_fullpath, char** usr_argv,
 		if (current_pb->load_slices[i].length >= PAGE_SIZE &&
 			(byte*)current_pb->paging[(current_pb->load_slices[i].address) & ~0xFFF] + PAGE_SIZE ==
 			(byte*)current_pb->paging[(current_pb->load_slices[i].address + PAGE_SIZE) & ~0xFFF]) {
-			delete (byte*)current_pb->paging[(current_pb->load_slices[i].address) & ~0xFFF];
+			free((byte*)current_pb->paging[(current_pb->load_slices[i].address) & ~0xFFF]);
 		}
 		else while (current_pb->load_slices[i].length) {
-			delete (byte*)current_pb->paging[(current_pb->load_slices[i].address) & ~0xFFF];
+			free((byte*)current_pb->paging[(current_pb->load_slices[i].address) & ~0xFFF]);
 			current_pb->load_slices[i].address += 0x1000;
 			current_pb->load_slices[i].length -= minof(0x1000, current_pb->load_slices[i].length);
 		}
@@ -759,7 +759,7 @@ ProcessBlock* Taskman::Exet(stduint parent, rostr usr_fullpath, char** usr_argv,
 			}
 		}
 	}
-	delete[] block_buffer;
+	free(block_buffer);
 
 	#if (_MCCA & 0xFF00) == 0x8600
 	current_pb->main_thread->context.SP = new_sp;

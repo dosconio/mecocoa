@@ -54,8 +54,13 @@ stdsint ProcessBlock::Open(rostr pathname, int flags) {
 
 stduint ProcessBlock::Rdwt(bool wr_type, stduint fid, Slice slice)
 {
+	MutexLocal guard(&this->sys_lock);
 	_Comment(const) ProcessBlock* pb = this;
+	if (fid >= 4 _TEMP) plogerro("BOOM %d", fid);
 	if (!pb || !pb->pfiles[fid] || !pb->pfiles[fid]->vfile) return 0;
+	if (this->state == ProcessBlock::State::Invalid) {
+		return 0;
+	}
 	if (wr_type) {
 		int mode = pb->pfiles[fid]->fd_mode & O_ACCMODE;
 		if (mode != O_WRONLY && mode != O_RDWR) return 0;
@@ -127,13 +132,15 @@ stduint ProcessBlock::Rdwt(bool wr_type, stduint fid, Slice slice)
 
 bool ProcessBlock::Close(int fid)
 {
+	MutexLocal guard(&this->sys_lock);
 	int fd = fid;
 	if (!self.pfiles[fd]) {
 		ploginfo("%s %d skip", __FUNCIDEN__, fd);
 		return false;
 	}
-	Filesys::Close(self.pfiles[fd]->vfile);
 	self.pfiles[fd]->vfile->f_inode->ref_count--;
+	//
+	Filesys::Close(self.pfiles[fd]->vfile);
 	self.pfiles[fd]->vfile = nullptr; // Mark as free for reuse
 	self.pfiles[fd] = nullptr;
 	return true;
@@ -254,7 +261,7 @@ void serv_file_loop()// for IDE 0:0, 0:1
 			#else
 			p = Taskman::CreateFile(("/md0/cot"), RING_U, Task_Kernel);
 			#endif
-			p->focus_tty = vttys.LocateNode(0);
+			p->focus_tty = vttys[0];
 			if (p->focus_tty) {
 				p->Open("/dev/tty", O_RDWR); // stdin
 				p->Open("/dev/tty", O_RDWR); // stdout
@@ -268,7 +275,7 @@ void serv_file_loop()// for IDE 0:0, 0:1
 			syssend(Task_Memdisk_Serv, &retval, sizeof(retval[0]), _IMM(FiledevMsg::RUPT));
 			ProcessBlock* p;
 			p = Taskman::CreateFile(("/md0/lpa.elf"), RING_U, Task_Kernel);
-			p->focus_tty = vttys.LocateNode(0);
+			p->focus_tty = vttys[0];
 			Taskman::Append(p);
 			Taskman::AppendThread(p->main_thread);
 			#endif
@@ -295,10 +302,30 @@ void serv_file_loop()// for IDE 0:0, 0:1
 		case FilemanMsg::READ://
 		case FilemanMsg::WRITE://
 		{
+
+			ProcessBlock* safe_pb = nullptr;
+
+			ThreadBlock* sender_th = Taskman::LocateThread(to_args[3]);
+			if (sender_th && sender_th->parent_process &&
+				sender_th->parent_process->state != ProcessBlock::State::Invalid) {
+				safe_pb = sender_th->parent_process;
+				__atomic_add_fetch(&safe_pb->ref_count, 1, __ATOMIC_SEQ_CST);
+			}
+			if (safe_pb) {
+				stduint ret = safe_pb->Rdwt(
+					(FilemanMsg)sig_type == FilemanMsg::WRITE,
+					to_args[0], Slice{ to_args[1], to_args[2] }
+				);
+				syssend(sig_src, &ret, sizeof(ret));
+				if (__atomic_sub_fetch(&safe_pb->ref_count, 1, __ATOMIC_SEQ_CST) == 0) {
+					mempool.deallocate(safe_pb);
+				}
+			}
+			else {
+				stduint err_ret = 0;
+				if (to_args[3] != sig_src) syssend(sig_src, &err_ret, sizeof(err_ret));
+			}
 			// ploginfo("[fileman] rdwt %d %d %d", to_args[0], to_args[1], to_args[2]);
-			stduint ret = Taskman::LocateThread(to_args[3])->parent_process->Rdwt((FilemanMsg)sig_type == FilemanMsg::WRITE,
-				to_args[0], Slice{ to_args[1], to_args[2] });
-			syssend(sig_src, &ret, sizeof(ret));
 			break;
 		}
 		case FilemanMsg::REMOVE:// --> (pid, filename[7]...) --> (!success)

@@ -106,7 +106,20 @@ _PACKED(struct) VideoInfoEntry {
 #endif
 
 extern byte BSS_ENTO, BSS_ENDO;
-extern uni::Mempool mempool;
+extern uni::Mempool mempool0;
+class LockedAllocator : public trait::Malloc {
+public:
+	Mempool* base_allocator;
+public:
+	LockedAllocator(Mempool* base) : base_allocator(base) {}
+	virtual void* allocate(stduint size, stduint alignment = 0, stduint boundary = 0) override;
+	virtual bool deallocate(void* ptr, stduint size = 0 _Comment(zero_for_block)) override;
+	//
+	void Reset() { base_allocator->Reset(); }
+	void Reset(const Slice& slice) { base_allocator->Reset(slice); }
+	void Append(const Slice& slice) { base_allocator->Append(slice); }
+};
+extern LockedAllocator mempool;
 
 // class Memory
 #if 1
