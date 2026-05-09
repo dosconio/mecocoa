@@ -251,13 +251,7 @@ void serv_graf_loop() {
 		{
 			ProcessBlock* shell_p = Taskman::Create((void*)&serv_shell_process, RING_M);
 			// ploginfo("[GRAPHIC] Shell PID %x %x", rsp, Taskman::current_thread[Taskman::getID()]->stack_lineaddr);
-			//
-			#ifdef _ARC_x86 // x86:
-			extern String* plab;
-			ProcessBlock* cotl_p = Taskman::CreateFile((*plab + "/apps/cot").reference(), RING_U, shell_p->pid);
-			#else
 			ProcessBlock* cotl_p = Taskman::CreateFile(("/md0/cot"), RING_U, shell_p->pid);
-			#endif
 			//
 			if (shell_p) {
 				ploginfo("[GRAPHIC] Activate Shell TID %x", shell_p->main_thread->getID());

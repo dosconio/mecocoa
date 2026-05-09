@@ -228,7 +228,6 @@ bool Harddisk_PATA_Paged::Write(stduint BlockIden, const void* Sors) {
 static stduint args[4];
 Harddisk_PATA_Paged* paged_disks[2];
 
-String* plab = nullptr;
 int fat_time = 0;
 void serv_dev_hd_loop()
 {
@@ -278,9 +277,6 @@ void serv_dev_hd_loop()
 				if (auto fs = Filesys::Mount(*paged_disks[DRV_OF_DEV(dev)], dev, lab.reference())) {
 					if (!StrCompare(fs->name, "fat")) {
 						fat_time++;
-						if (fat_time == 2) {
-							lab_fat = lab; plab = &lab_fat;
-						}
 					}
 				}
 			}

@@ -24,7 +24,7 @@ OstreamTrait* con0_out;// TTY0
 #define single_sector  ((byte*)0x100000)
 #define fatable_sector ((byte*)0x100200)
 #define hdinfo_addr    ((byte*)0x100400)
-#define kernel_addr    ((byte*)0x101000)
+#define kernel_addr    ((byte*)0x2200000)
 
 // temp
 #define paging_addr    ((byte*)0x200000)

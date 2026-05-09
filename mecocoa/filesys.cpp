@@ -519,6 +519,7 @@ int Filesys::Open(const char* pathname, int flags, vfs_file** out_file) {
 
 int Filesys::Read(vfs_file* file, void* buf, stduint count) {
 	if (!file || !file->f_inode || !file->f_inode->i_sb) return -1;
+	SpinlockLocal guard(&vfs_lock);
 	FilesysTrait* fs = file->f_inode->i_sb->fs;
 	
 	stduint bytes = fs->readfl(file->f_inode->internal_handler, Slice{ file->f_pos, count }, (byte*)buf);
@@ -528,6 +529,7 @@ int Filesys::Read(vfs_file* file, void* buf, stduint count) {
 
 int Filesys::Write(vfs_file* file, const void* buf, stduint count) {
 	if (!file || !file->f_inode || !file->f_inode->i_sb) return -1;
+	SpinlockLocal guard(&vfs_lock);
 	FilesysTrait* fs = file->f_inode->i_sb->fs;
 
 	stduint bytes = fs->writfl(file->f_inode->internal_handler, Slice{ file->f_pos, count }, (const byte*)buf);
@@ -539,6 +541,7 @@ int Filesys::Write(vfs_file* file, const void* buf, stduint count) {
 }
 
 int Filesys::Close(vfs_file* file) {
+	SpinlockLocal guard(&vfs_lock);
 	if (file) {
 		if (file->f_inode && file->f_pos > file->f_inode->i_size) {
 			file->f_inode->i_size = file->f_pos;

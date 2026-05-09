@@ -409,7 +409,7 @@ auto Taskman::Schedule(bool omit_slice)->decltype(Schedule())
 
 	scheduler_lock.Release(old_if);
 	// if (new_tb->tid > 8) ploginfo("[CPU%u]SCH: Th%u -> Th%u", cpuid, old_tb->tid, new_tb->tid);
-	#if _MCCA == 0x8664
+	#if _MCCA == 0x8664 || _MCCA == 0x8632
 	((void(*)(NormalTaskContext*, NormalTaskContext*))mglb(SwitchTaskContext))((NormalTaskContext*)mglb(&new_tb->context), (NormalTaskContext*)mglb(&old_tb->context));
 	#else
 	SwitchTaskContext(&new_tb->context, &old_tb->context);
@@ -446,7 +446,7 @@ void Taskman::SleepAndRelease(Spinlock* lk) {
 	
 	scheduler_lock.Release(old_if);
 	// No explicit unlock of scheduler_lock here, because earlier we unlock lk, but wait!
-	#if _MCCA == 0x8664
+	#if _MCCA == 0x8664 || _MCCA == 0x8632
 	((void(*)(NormalTaskContext*, NormalTaskContext*))mglb(SwitchTaskContext))((NormalTaskContext*)mglb(&new_tb->context), (NormalTaskContext*)mglb(&old_tb->context));
 	#else
 	SwitchTaskContext(&new_tb->context, &old_tb->context);

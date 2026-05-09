@@ -4,12 +4,16 @@
 # ModuTitle: Build for Mecocoa
 # Copyright: Dosconio Mecocoa, BCD License Version 3
 
+# ln -s /mnt/hgfs/her /her
+uherpath=/her
+archdir=$(ubinpath)/I686/mecocoa
+
 
 iden=mccax86.img
 boot=$(ubinpath)/boot-x86.bin
-dstdir=D:/bin/I686/mecocoa
-outs=$(ubinpath)/I686/mecocoa/$(iden)
+outs=$(archdir)/$(iden)
 mnts=/mnt/floppy
+mntdir=/mnt/floppy
 arch=atx-x86-flap32
 flag=-D_MCCA=0x8632 -D_ARC_x86=5 -D_DEBUG 
 
@@ -22,17 +26,16 @@ CXF=$(CXF1) $(CXF2) -fno-rtti -fno-use-cxa-atexit -static -nostdlib
 CXW=-Wno-builtin-declaration-mismatch -Wno-volatile -Wno-multichar
 CX=g++ -I$(uincpath) -c $(flag) $(CXF) $(CXW) -std=c++2a
 
-ker_mod=$(uobjpath)/mcca-$(arch)/*
+ker_mod=$(uobjpath)/mcca-$(arch)/*.o
 
 cppfile=$(wildcard mecocoa/*.cpp) $(wildcard devdriv/*.cpp) $(wildcard devdriv/**/*.cpp)
-cppobjs=$(patsubst %cpp, %o, $(cppfile))
+cppobjs=$(patsubst %.cpp, $(uobjpath)/mcca-$(arch)/%.o, $(notdir $(cppfile)))
+VPATH = $(sort $(dir $(cppfile)))
 
 sudokey=k
-elf_loader=I686/mecocoa/mcca-$(arch).loader.elf
-elf_kernel=I686/mecocoa/mcca-$(arch).elf
+elf_loader=$(archdir)/mcca-$(arch).loader.elf
+elf_kernel=$(archdir)/mcca-$(arch).elf
 
-# ln -s /mnt/hgfs/her /her
-uherpath=/her
 
 # cfdisk of fixed2.vhd
 # Device          Boot     Start      End  Sectors   Size  Id Type
@@ -44,7 +47,7 @@ uherpath=/her
 
 .PHONY: build install lib accm run clean
 
-build: clean lib accm $(cppobjs) build_util
+build: lib accm prehost/$(arch)/fatvhd.ignore $(cppobjs) build_util
 	@echo "MK $(arch) real16 support"
 	aasm prehost/$(arch)/atx-x86.asm        -felf   -o $(uobjpath)/mcca-$(arch)/mcca-$(arch)-elf16.o  -Iinclude/
 	aasm prehost/$(arch)/atx-ladder.asm     -felf   -o $(uobjpath)/mcca-$(arch)/mcca-$(arch)-ladder.o -Iinclude/ -D_MCCA=0x8632
@@ -53,36 +56,37 @@ build: clean lib accm $(cppobjs) build_util
 	$(CX) prehost/$(arch)/grubhead.S -o $(uobjpath)/mcca-$(arch).grub.o -D_LOADER
 	g++ -I$(uincpath) $(flag) -m32 $(uobjpath)/mcca-$(arch).grub.o prehost/$(arch)/$(arch).loader.cpp \
 		prehost/_auxiliary.cpp $(uobjpath)/mcca-$(arch)/mcca-$(arch)-elf64.o $(uobjpath)/CGMin32/_ae_manage.o\
-		-o $(ubinpath)/$(elf_loader) -L$(ubinpath) -lm32d $(CXF) \
+		-o $(elf_loader) -L$(ubinpath) -lm32d $(CXF) \
 		-T prehost/$(arch)/$(arch).loader.ld  \
 		-nostartfiles -O2 \
-		-Wl,-Map=$(ubinpath)/$(elf_loader).map
-	strip --strip-all $(ubinpath)/$(elf_loader)
+		-Wl,-Map=$(elf_loader).map
+	strip --strip-all $(elf_loader)
 	rm $(uobjpath)/mcca-$(arch)/mcca-$(arch)-elf64.o
 	#
 	@echo "MK $(arch)"
 	$(CX) prehost/$(arch)/grubhead.S -o $(uobjpath)/mcca-$(arch).grub.o
-	g++ -I$(uincpath) $(flag) -m32 $(uobjpath)/mcca-$(arch).grub.o $(ker_mod) prehost/$(arch)/$(arch).cpp prehost/_auxiliary.cpp -o $(ubinpath)/$(elf_kernel) -L$(ubinpath) -lm32d $(CXF) \
+	g++ -I$(uincpath) $(flag) -m32 $(uobjpath)/mcca-$(arch).grub.o $(ker_mod) prehost/$(arch)/$(arch).cpp prehost/_auxiliary.cpp -o $(elf_kernel) -L$(ubinpath) -lm32d $(CXF) \
 		-T prehost/$(arch)/$(arch).ld  \
 		-nostartfiles -O2 \
-		-Wl,-Map=$(ubinpath)/$(elf_kernel).map
-	strip --strip-all $(ubinpath)/$(elf_kernel)
+		-Wl,-Map=$(elf_kernel).map
+	strip --strip-all $(elf_kernel)
 	@dd if=/dev/zero of=$(outs) bs=512 count=2880 2>>/dev/null
 	@dd if=$(boot)   of=$(outs) bs=512 count=1 conv=notrunc 2>>/dev/null
 	@echo $(sudokey) | sudo -S mkdir -p $(mnts)
 	@echo $(sudokey) | sudo -S mount -o loop $(outs) $(mnts)
-	@echo $(sudokey) | sudo -S cp $(ubinpath)/$(elf_loader) $(mnts)/KEX.OBJ
+	@echo $(sudokey) | sudo -S cp $(elf_loader) $(mnts)/KEX.OBJ
 	@tree $(mnts) -s
 	@echo $(sudokey) | sudo -S umount $(mnts)
-	@perl configs/$(arch).bochsdbg.pl > $(ubinpath)/I686/mecocoa/bochsrc.bxrc
-	@perl configs/$(arch).bochsdbg-lin.pl > $(ubinpath)/I686/mecocoa/bochsrc-lin.bxrc
+	@perl configs/$(arch).bochsdbg.pl > $(archdir)/bochsrc.bxrc
+	@perl configs/$(arch).bochsdbg-lin.pl > $(archdir)/bochsrc-lin.bxrc
+
 	# --- write out ---
+	@echo MK  $(arch) patadisk 0:0
 	@echo $(sudokey) | sudo -S kpartx -av $(ubinpath)/fixed2.vhd  >/dev/null # ls /dev/mapper/loop*p* && sudo mkfs.vfat -F 32 -n "DATA" /dev/mapper/loop*p7
 	@echo $(sudokey) | sudo -S mount /dev/mapper/loop*p7 $(mnts) #sudo fsck.vfat -v /dev/mapper/loop0p7 # fdisk # blkid
-	@echo $(sudokey) | sudo -S cp $(ubinpath)/$(elf_kernel)     $(mnts)/mx86.elf
+	@echo $(sudokey) | sudo -S cp $(elf_kernel)     $(mnts)/mx86.elf
 	@echo $(sudokey) | sudo -S rm       $(mnts)/apps/*
 	@echo $(sudokey) | sudo -S mkdir -p $(mnts)/apps
-	@echo $(sudokey) | sudo -S mv $(uobjpath)/sapp-$(arch)/init $(mnts)/init
 	@echo $(sudokey) | sudo -S cp $(uobjpath)/sapp-$(arch)/*    $(mnts)/apps/
 	@tree $(mnts) -s
 	@echo $(sudokey) | sudo -S umount $(mnts)
@@ -91,8 +95,8 @@ build: clean lib accm $(cppobjs) build_util
 	@echo
 	@echo Run \"make -f accmlib/accmx86.make\" to build accm-x86
 	@echo "You can now debug in bochs with the command:"
-	@echo "  " $(bochd) -f $(dstdir)/bochsrc.bxrc
-	@echo "  " bochs -f $(ubinpath)/I686/mecocoa/bochsrc-lin.bxrc -debugger
+	@echo "  " $(bochd) -f $(archdir)/bochsrc.bxrc
+	@echo "  " bochs -f $(archdir)/bochsrc-lin.bxrc -debugger
 
 ACCM_INCF=-I$(uincpath) -Iaccmlib -I$(uincpath)/c/API-POSIX
 ACCM_LIBS=accm-x86
@@ -126,7 +130,7 @@ build_util:
 	cp subapps/_hello/rust/target/cargo-i686/release/rust    $(uobjpath)/sapp-$(arch)/_rust
 
 install:
-	@echo $(sudokey) | sudo -S cp $(ubinpath)/$(elf_kernel)     /boot/mx86.elf
+	@echo $(sudokey) | sudo -S cp $(elf_kernel)     /boot/mx86.elf
 
 lib:
 	@echo MK lib for MCCA-x86
@@ -135,6 +139,17 @@ lib:
 accm:
 	@echo MK lib for ACCM-x86
 	make -f accmlib/accmx86.make
+
+prehost/$(arch)/fatvhd.ignore: build_util
+	@echo MK  $(arch) memdisk
+	dd if=/dev/zero of=$@ bs=1M count=1
+	mkfs.fat -n 'MECOCOA2' -F 12 $@
+	@echo $(sudokey) | sudo -S mount -o loop $@ $(mntdir)
+	@echo $(sudokey) | sudo -S mv $(uobjpath)/sapp-$(arch)/init $(mntdir)/init
+	@echo $(sudokey) | sudo -S mv $(uobjpath)/sapp-$(arch)/cot  $(mntdir)/cot
+	@echo $(sudokey) | sudo -S umount $(mntdir)
+
+$(uobjpath)/mcca-$(arch)/memodisk.o: prehost/$(arch)/fatvhd.ignore
 
 qemu_args=\
 	-drive format=raw,file=$(outs),if=floppy \
@@ -160,8 +175,10 @@ clean:
 	@echo ---- Mecocoa $(arch) ----#[clearing]
 	@-rm $(uobjpath)/mcca-$(arch)/* 1>/dev/null
 
-%.o: %.cpp
+$(uobjpath)/mcca-$(arch)/%.o: %.cpp
 	@mkdir $(uobjpath)/mcca-$(arch) -p
 	@echo "CX $(notdir $<)"
-	@$(CX) $< -o $(uobjpath)/mcca-$(arch)/$(notdir $@) -O0
+	@$(CX) $< -o $@ -O0 -MMD -MF $(patsubst %.o,%.d,$@) -MT $@
+
+-include $(uobjpath)/mcca-$(arch)/*.d
 

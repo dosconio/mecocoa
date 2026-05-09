@@ -2,8 +2,8 @@ ENTRY(multiboot_entry) /* ENTRY(_start) */ /* -e _start */
 
 MEMORY
 {
-	RAM1 (rwx) : ORIGIN = 0x8000, LENGTH = 0x70000 /* 0x7E00 .. 0x70000 */
-	/* 0x00101000 .. .. */
+	RAM1 (rwx) : ORIGIN =     0x8000, LENGTH = 0x70000 /* 0x7E00 .. 0x70000 */
+	RAM2 (rwx) : ORIGIN = 0x00101000, LENGTH = 0x10000000
 }
 
 SECTIONS
@@ -65,6 +65,10 @@ SECTIONS
 		KEEP (*(.fini_array))
 		__fini_array_end = .;
 	} > RAM1
+
+	.extdata : {
+		KEEP(*(.extdata))
+	} > RAM2
 
 	/* Remove information from the compiler libraries */
 	/DISCARD/ :

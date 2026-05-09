@@ -8,13 +8,16 @@
 
 static stduint next_id = 0;
 
+__attribute__((section(".extdata")))
 static byte _FOLLOW_VHD[] = {
-	#if (_MCCA & 0xFF00) == 0x1000
+	#if   (_MCCA & 0xFF00) == 0x1000
 	#if __BITS__ == 32
 	#embed "../../prehost/qemuvirt-r32/fatvhd.ignore"
 	#elif __BITS__ == 64
 	#embed "../../prehost/qemuvirt-r64/fatvhd.ignore"
 	#endif
+	#elif _MCCA == 0x8632
+	#embed "../../prehost/atx-x86-flap32/fatvhd.ignore"
 	#else
 	0
 	#endif
@@ -148,10 +151,11 @@ void serv_dev_mem_loop() {
 		switch ((FiledevMsg)sig_type) {
 		case FiledevMsg::TEST:// (no-feedback)
 			if (1) {
-				#if (_MCCA & 0xFF00) == 0x1000
+				#if (_MCCA & 0xFF00) == 0x1000 || _MCCA == 0x8632
 				ploginfo("[Memdisk] Default FATVHD Size: %[x]", sizeof(_FOLLOW_VHD));
-				auto dev0 = open(sliceof(_FOLLOW_VHD), FILESYS_FAT32_LBA);
-				printlog(dev0 >= 0 ? _LOG_INFO : _LOG_ERROR, "[Memdisk] Created Memdisk %u, trying FAT32", dev0);
+				stduint sectype = (sizeof(_FOLLOW_VHD) < 32 * 1024 * 1024) ? FILESYS_FAT12 : FILESYS_FAT32_LBA;
+				auto dev0 = open(sliceof(_FOLLOW_VHD), sectype);
+				printlog(dev0 >= 0 ? _LOG_INFO : _LOG_ERROR, "[Memdisk] Created Memdisk %u, trying FAT", dev0);
 				if (auto fs = Filesys::Mount(*locate(0), 0, "/md0")) {//{} "/dev/md0"
 					ploginfo("[Memdisk] Loaded %s", fs->name);
 				}

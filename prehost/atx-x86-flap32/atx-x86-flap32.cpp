@@ -47,9 +47,7 @@ _sign_entry() {
 	// syscall(syscall_t::OUTC, 'O', 0);
 	// Console.OutFormat("hayouuu~!\n\r\a");
 
-	Filesys::Tree();
-	mempool0.dump_available();
+	// mempool0.dump_available();
 
-	// Done
 	loop HALT();
 }

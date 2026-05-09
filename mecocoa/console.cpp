@@ -521,10 +521,6 @@ static stdsint ConsoleMsg_FCHR(const FMT_ConsoleMsg_FCHR* data, ProcessBlock* pb
 }
 #endif
 
-
-#ifdef _ARC_x86
-extern String* plab;
-#endif
 #if _GUI_ENABLE
 void _Comment(R1) serv_shell_process() {
 	uni::Dnode* tty_target = 0;

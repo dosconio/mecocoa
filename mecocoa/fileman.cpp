@@ -194,10 +194,6 @@ stdsint ProcessBlock::Seek(int fd, stdsint off, int whence) {
 
 //// ---- ---- SERVICE ---- ---- ////
 
-#ifdef _ARC_x86 // x86:
-extern String* plab;
-#endif
-
 #if 1
 void serv_file_loop()// for IDE 0:0, 0:1
 {
@@ -218,32 +214,28 @@ void serv_file_loop()// for IDE 0:0, 0:1
 		case FilemanMsg::TEST:// (no-feedback)
 		{
 			// Init
-			#ifdef _ARC_x86
-			syssend(Task_Hdd_Serv, &retval, sizeof(retval[0]), _IMM(FiledevMsg::RUPT));// while (!fileman_hd_ready);
-			if (!plab) {
-				plogerro("No fs for INIT");
-				break;
-			}
-			ProcessBlock* init_p = Taskman::CreateFile((*plab + "/init").reference(), RING_U, Task_Kernel);
-			init_p->focus_tty = vttys.LocateNode(0);
-			Taskman::Append(init_p);
-			Taskman::AppendThread(init_p->main_thread);
-			#elif _MCCA == 0x8664 && defined(_UEFI)
+			#if (_MCCA & 0xFF00) == 0x8600
 			syssend(Task_Memdisk_Serv, &retval, sizeof(retval[0]), _IMM(FiledevMsg::RUPT));
-			ProcessBlock* init_p = Taskman::CreateFile(("/md0/init"), RING_U, Task_Kernel);
-			init_p->focus_tty = vttys.LocateNode(0);
-			Taskman::Append(init_p);
-			Taskman::AppendThread(init_p->main_thread);
+			#if _MCCA == 0x8632
+			syssend(Task_Hdd_Serv, &retval, sizeof(retval[0]), _IMM(FiledevMsg::RUPT));// while (!fileman_hd_ready);
 			#endif
+			Filesys::Tree();
+			ProcessBlock* init_p = Taskman::CreateFile(("/md0/init"), RING_U, Task_Kernel);
+			if (init_p) {
+				init_p->focus_tty = vttys.LocateNode(0);
+				Taskman::Append(init_p);
+				Taskman::AppendThread(init_p->main_thread);
+			}
+			else {
+				plogerro("Failed to load /md0/init");
+			}
+			#endif
+
 			// Shell
 			#if (_MCCA & 0xFF00) == 0x8600
 			#if _GUI_ENABLE
 			ProcessBlock* shell_p = Taskman::Create((void*)&serv_shell_process, RING_M);
-			#if _MCCA == 0x8632
-			ProcessBlock* cotl_p = Taskman::CreateFile((*plab + "/apps/cot").reference(), RING_U, shell_p->pid);
-			#else
 			ProcessBlock* cotl_p = Taskman::CreateFile(("/md0/cot"), RING_U, shell_p->pid);
-			#endif
 			if (shell_p) {
 				if (cotl_p) {
 					// Append and AppendThread moved to Shell
@@ -256,11 +248,7 @@ void serv_file_loop()// for IDE 0:0, 0:1
 			ploginfo("Create new shell-form: pid%u", shell_p->pid);
 			#else
 			ProcessBlock* p;
-			#if _MCCA == 0x8632
-			p = Taskman::CreateFile((*plab + "/apps/cot").reference(), RING_U, Task_Kernel);
-			#else
 			p = Taskman::CreateFile(("/md0/cot"), RING_U, Task_Kernel);
-			#endif
 			p->focus_tty = vttys[0];
 			if (p->focus_tty) {
 				p->Open("/dev/tty", O_RDWR); // stdin
