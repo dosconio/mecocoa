@@ -38,7 +38,7 @@ stdsint ProcessBlock::Open(rostr pathname, int flags) {
 	}
 	
 	vfs_file* file = nullptr;
-	int ret = Filesys::Open(pathname, flags, &file);
+	int ret = Filesys::Open(pathname, flags, &file, this->cwd);
 	
 	if (ret < 0 || !file) {
 		// plogwarn("pathname %s failed to %s", pathname, (flags & O_RDWR) ? "open" : "create");
@@ -138,10 +138,12 @@ bool ProcessBlock::Close(int fid)
 		ploginfo("%s %d skip", __FUNCIDEN__, fd);
 		return false;
 	}
-	self.pfiles[fd]->vfile->f_inode->ref_count--;
-	//
-	Filesys::Close(self.pfiles[fd]->vfile);
-	self.pfiles[fd]->vfile = nullptr; // Mark as free for reuse
+	if (self.pfiles[fd]->vfile) {
+		if (self.pfiles[fd]->vfile->f_inode)
+			self.pfiles[fd]->vfile->f_inode->ref_count--;
+		Filesys::Close(self.pfiles[fd]->vfile);
+		self.pfiles[fd]->vfile = nullptr;
+	}
 	self.pfiles[fd] = nullptr;
 	return true;
 }
@@ -190,6 +192,25 @@ stdsint ProcessBlock::Seek(int fd, stdsint off, int whence) {
 	file->f_pos = pos;
 
 	return pos;
+}
+
+FileDescriptor* FileDescriptor_Clone(FileDescriptor* src) {
+	if (!src || !src->vfile) return nullptr;
+	for (stduint i = 0; i < 0x1000 / sizeof(FileDescriptor); i++) {
+		if (f_desc_table[i].vfile == nullptr) {
+			FileDescriptor* pfd = &f_desc_table[i];
+			*pfd = *src;
+			// Clone the vfs_file object to avoid shared destruction
+			vfs_file* nvfile = (vfs_file*)malc(sizeof(vfs_file));
+			if (!nvfile) return nullptr;
+			*nvfile = *(src->vfile);
+			pfd->vfile = nvfile;
+			// Increment ref count of the inode
+			if (pfd->vfile->f_inode) pfd->vfile->f_inode->ref_count++;
+			return pfd;
+		}
+	}
+	return nullptr;
 }
 
 //// ---- ---- SERVICE ---- ---- ////

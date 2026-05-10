@@ -18,9 +18,9 @@ _sign_entry() {
 	if (!Memory::initialize(_start_eax, (byte*)_start_ebx)) HALT();
 	Consman::Initialize();// located here, for  INT-10H may influence PIC
 	Cache_t::enAble();
-	Taskman::Initialize();
-	SysTimer::Initialize();
 	Filesys::Initialize();
+	SysTimer::Initialize();
+	Taskman::Initialize();
 
 	// IVT and Device
 	IC.Reset(SegCo32, 0x80000000);

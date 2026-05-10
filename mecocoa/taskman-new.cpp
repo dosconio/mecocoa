@@ -243,6 +243,8 @@ void Taskman::Initialize(stduint cpuid) {
 	chain.Compare_f = ProcCmp;
 	min_available_pid = 1;
 	min_available_tid = 1;
+	kernel_task->cwd = Filesys::getRoot(); // Set kernel CWD
+	kernel_task->root = Filesys::getRoot();
 
 	#if (_MCCA & 0xFF00) == 0x1000
 	setMSCRATCH _IMM(&kernel_thread->context);
@@ -298,6 +300,8 @@ ProcessBlock* Taskman::Create(void* entry, byte ring, bool append)
 	ppb->ring = ring;
 	ppb->parent_id = Task_Kernel;
 	ppb->focus_tty = nullptr;
+	ppb->cwd = Filesys::getRoot(); // Default to root
+	ppb->root = Filesys::getRoot();
 	
 	auto tb = AllocateThread();
 	ppb->main_thread = tb;
@@ -510,6 +514,8 @@ ProcessBlock* Taskman::CreateFork(ProcessBlock* fo, const CallgateFrame* frame) 
 	pb->ring = ring;
 	pb->parent_id = fo->getID();
 	pb->focus_tty = fo->focus_tty;
+	pb->cwd = fo->cwd;
+	pb->root = fo->root;
 	auto tb = AllocateThread();
 	pb->main_thread = tb;
 	pb->thread_list_head = tb;
@@ -590,9 +596,8 @@ ProcessBlock* Taskman::CreateFork(ProcessBlock* fo, const CallgateFrame* frame) 
 
 	// ---- File ---- //
 	fo->sys_lock.Acquire();
-	for0a(i, pb->pfiles) if (pb->pfiles[i]) {
-		pb->pfiles[i] = fo->pfiles[i];
-		pb->pfiles[i]->vfile->f_inode->ref_count++;
+	for0a(i, pb->pfiles) if (fo->pfiles[i]) {
+		pb->pfiles[i] = FileDescriptor_Clone(fo->pfiles[i]);
 	}
 	fo->sys_lock.Release();
 
@@ -612,15 +617,20 @@ ProcessBlock* Taskman::CreateFork(ProcessBlock* fo, const CallgateFrame* frame) 
 
 //
 
-ProcessBlock* Taskman::CreateFile(const char* path, byte ring, stduint parent) {
+ProcessBlock* Taskman::CreateFile(const char* path, byte ring, stduint parent, vfs_dentry* base) {
 	//{} ELF
 	auto label = StrIndexCharRight(path, '/');
 	if (!label) label = path; else label++;
-	vfs_dentry* d = Filesys::Index(path);
+	vfs_dentry* d = Filesys::Index(path, base);
 	if (d && d->d_inode && d->d_inode->i_sb && d->d_inode->i_sb->fs) {
 		FileBlockBridge loop_device(d->d_inode->i_sb->fs, d->d_inode->internal_handler, d->d_inode->i_size, 512);
 		if (auto task = Taskman::CreateELF(&loop_device, ring)) {
 			task->parent_id = parent;
+			ProcessBlock* pparent = Taskman::Locate(parent);
+			if (pparent) {
+				task->cwd = pparent->cwd;
+				task->root = pparent->root;
+			}
 			printlog(_LOG_INFO, "Loaded %s from %s", label, path);
 			return task;
 		}
@@ -634,14 +644,15 @@ ProcessBlock* Taskman::CreateFile(const char* path, byte ring, stduint parent) {
 
 ProcessBlock* Taskman::Exec(stduint parent, rostr usr_fullpath, char** usr_argv, char** usr_envp)
 {
-	char buf_fullpath[_TEMP 32];
+	static char buf_fullpath[_TEMP 512];
 	auto parent_pb = Locate(parent);
-	StrCopyP(buf_fullpath, kernel_paging, usr_fullpath, parent_pb->paging, sizeof(buf_fullpath));
+	StrCopyP(buf_fullpath, kernel_paging, usr_fullpath, parent_pb->paging, 512);
 
-	auto new_pb = Taskman::CreateFile(buf_fullpath, RING_U, parent);
+	auto new_pb = Taskman::CreateFile(buf_fullpath, RING_U, parent, parent_pb->cwd);
 	if (!new_pb) return nullptr;
 
-	vfs_dentry* d = Filesys::Index(buf_fullpath);
+	vfs_dentry* d = Filesys::Index(buf_fullpath, parent_pb->cwd);
+	if (!d) return nullptr;
 	FileBlockBridge loop_device(d->d_inode->i_sb->fs, d->d_inode->internal_handler, d->d_inode->i_size, 512);
 	ELF_Header_t header;
 	auto block_buffer = new byte[512];
@@ -654,7 +665,7 @@ ProcessBlock* Taskman::Exec(stduint parent, rostr usr_fullpath, char** usr_argv,
 		if (ph.p_type == PT_PHDR) phdr_addr = ph.p_vaddr;
 		if (ph.p_type == PT_LOAD && ph.p_offset == 0 && !phdr_addr) phdr_addr = ph.p_vaddr + header.e_phoff;
 	}
-	free(block_buffer);
+	delete[] block_buffer;
 
 	stduint new_sp = _Taskman_Setup_Stack(new_pb, parent_pb, usr_argv, usr_envp, (stduint)header.e_entry, phdr_addr, header.e_phnum, header.e_phentsize);
 
@@ -672,6 +683,8 @@ ProcessBlock* Taskman::Exec(stduint parent, rostr usr_fullpath, char** usr_argv,
 	new_pb->main_thread->unsolved_msg = nullptr;
 	new_pb->main_thread->block_reason = ThreadBlock::BlockReason::BR_None;
 
+	new_pb->cwd = parent_pb->cwd;
+	new_pb->root = parent_pb->root;
 	new_pb->focus_tty = parent_pb->focus_tty;
 	if (new_pb->focus_tty) {
 		new_pb->Open("/dev/tty", O_RDWR); // stdin
@@ -690,11 +703,11 @@ ProcessBlock* Taskman::Exec(stduint parent, rostr usr_fullpath, char** usr_argv,
 
 ProcessBlock* Taskman::Exet(stduint parent, rostr usr_fullpath, char** usr_argv, char** usr_envp)
 {
-	char buf_fullpath[_TEMP 32];
+	static char buf_fullpath[512];
 	auto current_pb = Locate(parent);
-	StrCopyP(buf_fullpath, kernel_paging, usr_fullpath, current_pb->paging, sizeof(buf_fullpath));
+	StrCopyP(buf_fullpath, kernel_paging, usr_fullpath, current_pb->paging, 512);
 
-	vfs_dentry* d = Filesys::Index(buf_fullpath);
+	vfs_dentry* d = Filesys::Index(buf_fullpath, current_pb->cwd);
 	if (!d) return nullptr;
 	FileBlockBridge loop_device(d->d_inode->i_sb->fs, d->d_inode->internal_handler, d->d_inode->i_size, 512);
 	
@@ -759,7 +772,7 @@ ProcessBlock* Taskman::Exet(stduint parent, rostr usr_fullpath, char** usr_argv,
 			}
 		}
 	}
-	free(block_buffer);
+	delete[] block_buffer;
 
 	#if (_MCCA & 0xFF00) == 0x8600
 	current_pb->main_thread->context.SP = new_sp;

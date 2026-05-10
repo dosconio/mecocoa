@@ -72,6 +72,10 @@ struct vfs_dentry {
 	// Mount point: If a filesystem is mounted ON THIS dentry,
 	// d_mounts points to the root dentry of that mounted filesystem.
 	vfs_dentry* d_mounts;
+
+	// Reverse Mount: If this is the root dentry of a mounted filesystem,
+	// d_mounted_on points to the dentry in the parent FS where it was mounted.
+	vfs_dentry* d_mounted_on;
 };
 
 // Opened file representation (File descriptor struct)
@@ -88,7 +92,7 @@ public:
 	//
 	static void Initialize();
 	// General Path creation (for files)
-	static vfs_dentry* Create(const char* pathname, stduint mode);
+	static vfs_dentry* Create(const char* pathname, stduint mode, vfs_dentry* base = nullptr);
 	// Display the hierarchy of the virtual file system (VFS tree)
 	static void Tree();
 	// Register a file system driver
@@ -97,20 +101,21 @@ public:
 	static auto
 		Mount(StorageTrait& storage, stduint dev, const char* target_path) -> file_system_type*;
 	// General path resolution: find dentry for a given path
-	static vfs_dentry* Index(const char* pathname);
+	static vfs_dentry* Index(const char* pathname, vfs_dentry* base = nullptr);
 
 public:
 	// Explicitly mount an instantiated FS to a path (used by DevFs and RootFs)
 	static bool MountFilesys(FilesysTrait* fs, file_system_type* type, const char* target_path);
 
 public:
-	static int Open(const char* pathname, int flags, vfs_file** out_file);
+	static int Open(const char* pathname, int flags, vfs_file** out_file, vfs_dentry* base = nullptr);
 	static int Read(vfs_file* file, void* buf, stduint count);
 	static int Write(vfs_file* file, const void* buf, stduint count);
 	static int Close(vfs_file* file);
 	static bool Remove(const char* pathname);
 	//
 	static String getAbsolutePath(vfs_dentry* dentry);
+	static vfs_dentry* getRoot();
 };
 
 

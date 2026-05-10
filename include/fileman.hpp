@@ -105,6 +105,7 @@ inline static stduint get_drv_pid(u32 dev) {
 	return drv;
 }
 
+FileDescriptor* FileDescriptor_Clone(FileDescriptor* src);
 bool strip_path(char* filename, const char* pathname, inode** ppinode);
 
 #endif

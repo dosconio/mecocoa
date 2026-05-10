@@ -153,7 +153,7 @@ void serv_dev_mem_loop() {
 			if (1) {
 				#if (_MCCA & 0xFF00) == 0x1000 || _MCCA == 0x8632
 				ploginfo("[Memdisk] Default FATVHD Size: %[x]", sizeof(_FOLLOW_VHD));
-				stduint sectype = (sizeof(_FOLLOW_VHD) < 32 * 1024 * 1024) ? FILESYS_FAT12 : FILESYS_FAT32_LBA;
+				stduint sectype = FILESYS_FAT32_LBA;
 				auto dev0 = open(sliceof(_FOLLOW_VHD), sectype);
 				printlog(dev0 >= 0 ? _LOG_INFO : _LOG_ERROR, "[Memdisk] Created Memdisk %u, trying FAT", dev0);
 				if (auto fs = Filesys::Mount(*locate(0), 0, "/md0")) {//{} "/dev/md0"

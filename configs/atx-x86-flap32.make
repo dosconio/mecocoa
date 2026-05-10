@@ -143,7 +143,7 @@ accm:
 prehost/$(arch)/fatvhd.ignore: build_util
 	@echo MK  $(arch) memdisk
 	dd if=/dev/zero of=$@ bs=1M count=1
-	mkfs.fat -n 'MECOCOA2' -F 12 $@
+	mkfs.fat -n 'MECOCOA2' -s 2 -f 2 -R 32 -F 32 $@
 	@echo $(sudokey) | sudo -S mount -o loop $@ $(mntdir)
 	@echo $(sudokey) | sudo -S mv $(uobjpath)/sapp-$(arch)/init $(mntdir)/init
 	@echo $(sudokey) | sudo -S mv $(uobjpath)/sapp-$(arch)/cot  $(mntdir)/cot

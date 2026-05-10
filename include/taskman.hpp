@@ -143,6 +143,9 @@ struct MutexLocal {
 	}
 };
 
+namespace uni {
+    class vfs_dentry;
+}
 class _Comment(Kernel) ProcessBlock {
 public:
 	stduint pid;
@@ -188,8 +191,8 @@ public: // _Comment(Console);
 	SheetTrait* pforms[_TEMP 4] = {};// should registered in global_layman
 public: // _Comment(Fileman);
 	FileDescriptor* pfiles[_TEMP 4];
-	struct vnode* cwd = 0;  // 
-	struct vnode* root = 0; // for chroot
+	vfs_dentry* cwd = nullptr;  // Current Working Directory
+	vfs_dentry* root = nullptr; // Root for chroot
 	//
 	ProcessBlock() {}
 	auto Open(rostr pathname, int flags) -> stdsint;
@@ -303,7 +306,7 @@ public:
 	static auto// newProcess
 		CreateFork(ProcessBlock* parent, const CallgateFrame* frame) -> ProcessBlock*;
 	static auto// newProcess from file
-		CreateFile(const char* path, byte ring, stduint parent) -> ProcessBlock*;
+		CreateFile(const char* path, byte ring, stduint parent, uni::vfs_dentry* base = nullptr) -> ProcessBlock*;
 
 	static auto
 		ExitCurrent(stduint code) -> bool;// call by syscall but taskman

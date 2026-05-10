@@ -26,8 +26,8 @@ void _entry()
 		loop HALT();
 	}
 	//{} Cache_t::enAble();
-	Taskman::Initialize();
 	Filesys::Initialize();
+	Taskman::Initialize();
 
 	IC.Reset();
 	// UART0

@@ -52,9 +52,9 @@ void mecocoa(const UefiData& uefi_data_ref)
 	if (!Memory::initialize('UEFI', (byte*)(&uefi_data.memory_map))) HALT();
 	Consman::Initialize();
 	//{} Cache_t::enAble();
-	Taskman::Initialize();
-	SysTimer::Initialize();
 	Filesys::Initialize();
+	SysTimer::Initialize();
+	Taskman::Initialize();
 
 	con0_out = &com1;
 	#ifdef _UEFI

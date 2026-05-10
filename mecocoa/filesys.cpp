@@ -17,6 +17,8 @@ namespace uni {
 	static vfs_dentry* vfs_root = nullptr; // Global root directory
 	static Spinlock vfs_lock;
 
+	vfs_dentry* Filesys::getRoot() { return vfs_root; }
+
 	// Allocators
 	static vfs_dentry* alloc_dentry(vfs_dentry* parent, const char* name) {
 		vfs_dentry* dentry = new vfs_dentry();
@@ -86,6 +88,7 @@ void Filesys::Initialize() {
 	vfs_inode* root_inode = alloc_inode(root_sb);
 	root_inode->i_mode = I_DIRECTORY;
 	vfs_root->d_inode = root_inode;
+	vfs_root->d_mounted_on = nullptr;
 	
 	// Pre-allocate FHS standard directories
 	const char* standard_dirs[] = {
@@ -165,10 +168,11 @@ static stduint vfs_on_search_segment(void* handle, const char* name, stduint is_
 }
 
 
-static vfs_dentry* _Index_unlocked(const char* pathname) {
+static vfs_dentry* _Index_unlocked(const char* pathname, vfs_dentry* base) {
 	if (!pathname || pathname[0] == '\0') return nullptr;
 	
-	vfs_dentry* current = vfs_root;
+	vfs_dentry* current = (pathname[0] == '/') ? vfs_root : base;
+	if (!current) current = vfs_root; // Fallback to root if no base provided
 	char inner_path[256] = ""; // Path relative to the current mount point
 	
 	if (pathname[0] == '/') {
@@ -237,27 +241,63 @@ static vfs_dentry* _Index_unlocked(const char* pathname) {
 	return (current && current->d_mounts) ? current->d_mounts : current;
 }
 
-vfs_dentry* Filesys::Index(const char* pathname) {
+vfs_dentry* Filesys::Index(const char* pathname, vfs_dentry* base) {
+	return _Index_unlocked(pathname, base);
+}
+
+static vfs_dentry* _Create_unlocked(const char* pathname, stduint mode, vfs_dentry* base) {
+	if (!pathname || pathname[0] == '\0') return nullptr;
+
+	vfs_dentry* current = (pathname[0] == '/') ? vfs_root : base;
+	if (!current) current = vfs_root;
+
+	if (pathname[0] == '/') pathname++;
+
+	while (*pathname) {
+		while (*pathname == '/') pathname++;
+		if (*pathname == '\0') break;
+
+		const char* next_slash = pathname;
+		while (*next_slash && *next_slash != '/') next_slash++;
+		int len = next_slash - pathname;
+
+		char part[VFS_MAX_FILENAME];
+		if (len >= VFS_MAX_FILENAME) len = VFS_MAX_FILENAME - 1;
+		MemCopyN(part, pathname, len);
+		part[len] = '\0';
+
+		vfs_dentry* next_d = lookup_dentry(current, part, len);
+		if (!next_d) {
+			// Create the missing directory entry in the current filesystem (usually rootfs)
+			next_d = alloc_dentry(current, part);
+			vfs_inode* inod = alloc_inode(current->d_inode->i_sb);
+			inod->i_mode = I_DIRECTORY; // Mount points are always directories
+			next_d->d_inode = inod;
+		}
+
+		// Crossing mount points if we are traversing
+		if (next_d->d_mounts) current = next_d->d_mounts;
+		else current = next_d;
+
+		pathname = next_slash;
+	}
+	return current;
+}
+
+vfs_dentry* Filesys::Create(const char* pathname, stduint mode, vfs_dentry* base) {
 	SpinlockLocal guard(&vfs_lock);
-	return _Index_unlocked(pathname);
+	return _Create_unlocked(pathname, mode, base);
 }
 
 
 bool Filesys::MountFilesys(FilesysTrait* fs, file_system_type* type, const char* target_path) {
 	SpinlockLocal guard(&vfs_lock);
-	vfs_dentry* target = _Index_unlocked(target_path);
+	vfs_dentry* target = _Index_unlocked(target_path, nullptr);
 	if (!target) {
-		// We can create the mount point in rootfs if it doesn't exist
-		if (target_path[0] == '/') {
-			const char* name = target_path + 1;
-			target = alloc_dentry(vfs_root, name);
-			vfs_inode* mnt_inod = alloc_inode(super_blocks);
-			mnt_inod->i_mode = I_DIRECTORY;
-			target->d_inode = mnt_inod;
-		} else {
-			return false;
-		}
+		// Auto-create intermediate directories in VFS if they don't exist
+		target = _Create_unlocked(target_path, I_DIRECTORY, nullptr);
 	}
+	if (!target) return false;
 	
 	if (target->d_mounts) return false; // Already heavily mounted
 	
@@ -274,6 +314,7 @@ bool Filesys::MountFilesys(FilesysTrait* fs, file_system_type* type, const char*
 	s_root->d_inode->i_mode = I_DIRECTORY;
 	
 	sb->s_root = s_root;
+	s_root->d_mounted_on = target; // Store reverse link for path reconstruction
 	target->d_mounts = s_root;
 	
 	return true;
@@ -410,8 +451,8 @@ void Filesys::Tree() {
 	vfs_tree_node(vfs_root, 0);
 }
 
-int Filesys::Open(const char* pathname, int flags, vfs_file** out_file) {
-	vfs_dentry* dentry = Filesys::Index(pathname);
+int Filesys::Open(const char* pathname, int flags, vfs_file** out_file, vfs_dentry* base) {
+	vfs_dentry* dentry = Filesys::Index(pathname, base);
 	if (dentry && dentry->d_inode) {
 		// O_DIRECTORY: If pathname refers to a non-directory file, open() shall fail.
 		if ((flags & O_DIRECTORY) && (dentry->d_inode->i_mode & I_TYPE_MASK) != I_DIRECTORY) {
@@ -442,7 +483,7 @@ int Filesys::Open(const char* pathname, int flags, vfs_file** out_file) {
 			}
 
 			// Locate parent directory to find the target physical filesystem
-			vfs_dentry* parent_dentry = Filesys::Index(dir_path);
+			vfs_dentry* parent_dentry = Filesys::Index(dir_path, base);
 			if (!parent_dentry || !parent_dentry->d_inode || !parent_dentry->d_inode->i_sb) {
 				plogwarn("Parent directory not found for creation: %s", dir_path);
 				return -1;
@@ -600,7 +641,12 @@ String Filesys::getAbsolutePath(vfs_dentry* dentry) {
 		StrCopy(temp, path);
 		String(path, 512).Format("/%s%s", curr->d_name, temp);
 
-		curr = curr->d_parent;
+		if (curr->d_parent == nullptr && curr->d_mounted_on != nullptr) {
+			curr = curr->d_mounted_on->d_parent;
+		}
+		else {
+			curr = curr->d_parent;
+		}
 	}
 	if (path[0] == '\0') {
 		StrCopy(path, "/");
