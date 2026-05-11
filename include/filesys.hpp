@@ -100,6 +100,8 @@ public:
 	// Probe a partition and if successful, mount it at the target path
 	static auto
 		Mount(StorageTrait& storage, stduint dev, const char* target_path) -> file_system_type*;
+	// Detach a filesystem from the VFS tree and release resources
+	static bool Unmount(const char* target_path);
 	// General path resolution: find dentry for a given path
 	static vfs_dentry* Index(const char* pathname, vfs_dentry* base = nullptr);
 

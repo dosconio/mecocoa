@@ -55,6 +55,7 @@ int main(int argc, char** argv)
 		sys_draw_line(form_id, Point2(80, 100), Point2(40, 30), Color::Blue);
 		Rectangle rect0{ Point(16, 16), Size2(10, 40), Color::Green };
 		sys_draw_rectangle(form_id, &rect0);
+		sys_set_timer(form_id, 1000); // 1s timer
 	}
 	else {
 		outsfmt("Create form failed with code %d\n\r", form_id);
@@ -67,6 +68,9 @@ int main(int argc, char** argv)
 	keyboard_event_t* key_event;
 	while (sys_fetch_msg(form_id, true, &smsg)) {
 		switch (smsg.event) {
+		case SheetEvent::onTimer:
+			outsfmt("msg: onTimer at %u\n\r", smsg.args[3]);
+			break;
 		case SheetEvent::onMoved:
 			// ploginfo("msg: _moved at (%d, %d)", smsg.args[0], smsg.args[1]);
 			break;

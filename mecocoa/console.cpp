@@ -519,6 +519,33 @@ static stdsint ConsoleMsg_FCHR(const FMT_ConsoleMsg_FCHR* data, ProcessBlock* pb
 
 	return 0;
 }
+
+static stdsint ConsoleMsg_FTIM(stduint pform_id, stduint ms, ProcessBlock* pb) {
+	if (pform_id >= _TEMP 4) return -1;
+	SheetTrait* pfrm = pb->pforms[pform_id];
+	if (!pfrm) return -1;
+
+	// Calculate timer period (convert ms to ticks)
+	stduint period = ms * SysTickFreq / 1000;
+	if (ms && !period) period = 1;
+
+	#if _GUI_ENABLE
+	SpinlockLocal guard(&gui_lock);
+	#endif
+	global_layman.UnregisterTimer(pfrm);
+	if (period) {
+		global_layman.RegisterTimer(pfrm);
+		// RegisterTimer in unisym sets timer_timeout_period to 0, so we must set it AFTER.
+		pfrm->timer_timeout_period = period;
+		pfrm->timer_timeout_tick = tick + period;
+		ploginfo("Timer set for form %u: period %u ticks", pform_id, period);
+	}
+	else {
+		pfrm->timer_timeout_period = 0;
+	}
+
+	return 0;
+}
 #endif
 
 #if _GUI_ENABLE
@@ -785,6 +812,10 @@ void _Comment(R1) serv_cons_loop()
 				break;
 			case ConsoleMsg::FCHR:
 				ret = ConsoleMsg_FCHR((FMT_ConsoleMsg_FCHR*)to_args, th->parent_process);
+				syssend(sig_src, (void*)&ret, sizeof(ret));
+				break;
+			case ConsoleMsg::FTIM:
+				ret = ConsoleMsg_FTIM(to_args[0], to_args[1], th->parent_process);
 				syssend(sig_src, (void*)&ret, sizeof(ret));
 				break;
 

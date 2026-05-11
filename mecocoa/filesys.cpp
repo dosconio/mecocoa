@@ -245,6 +245,18 @@ vfs_dentry* Filesys::Index(const char* pathname, vfs_dentry* base) {
 	return _Index_unlocked(pathname, base);
 }
 
+static void _Prune_unlocked(vfs_dentry* dentry) {
+	if (!dentry) return;
+	vfs_dentry* child = dentry->d_first_child;
+	while (child) {
+		vfs_dentry* next = child->d_next_sibling;
+		_Prune_unlocked(child);
+		child = next;
+	}
+	if (dentry->d_inode) delete dentry->d_inode;
+	delete dentry;
+}
+
 static vfs_dentry* _Create_unlocked(const char* pathname, stduint mode, vfs_dentry* base) {
 	if (!pathname || pathname[0] == '\0') return nullptr;
 
@@ -317,6 +329,43 @@ bool Filesys::MountFilesys(FilesysTrait* fs, file_system_type* type, const char*
 	s_root->d_mounted_on = target; // Store reverse link for path reconstruction
 	target->d_mounts = s_root;
 	
+	return true;
+}
+
+bool Filesys::Unmount(const char* target_path) {
+	SpinlockLocal guard(&vfs_lock);
+	vfs_dentry* target = _Index_unlocked(target_path, nullptr);
+	if (!target || !target->d_mounts) {
+		return false;
+	}
+
+	vfs_dentry* s_root = target->d_mounts;
+	vfs_super_block* sb = s_root->d_inode->i_sb;
+
+	// 1. Remove from global superblock list
+	if (super_blocks == sb) {
+		super_blocks = sb->next;
+	}
+	else {
+		vfs_super_block* p = super_blocks;
+		while (p && p->next != sb) p = p->next;
+		if (p) p->next = sb->next;
+	}
+
+	// 2. Detach from VFS tree
+	target->d_mounts = nullptr;
+
+	// 3. Cleanup backend driver and storage
+	if (sb->fs) {
+		StorageTrait* st = sb->fs->storage;
+		delete sb->fs;
+		if (st) delete st; // This is the DiscPartition allocated in Mount()
+	}
+
+	// 4. Prune all cached dentries for this mount
+	_Prune_unlocked(s_root);
+
+	delete sb;
 	return true;
 }
 
@@ -781,6 +830,7 @@ stduint DevFs::readfl(void* fil_handler, Slice file_slice, byte* dst) {
 			con->OutChar(ch);
 		}
 		if (ch == '\n') {
+			// con->OutChar('\r');
 			break;
 		}
 	}

@@ -49,6 +49,7 @@ enum class ConsoleMsg {
 	FMSG,// fetch-msg   (formid, if_blocked, &u_msg) -> 1 Ok 0 No-Msg
 	FDRW,// draw        (formid, shape_type, usr_shape_info)
 	FCHR,// draw-string (formid, u_point, u_str, color)
+	FTIM,// set-timer   (formid, ms)
 };
 _PACKED(struct) FMT_ConsoleMsg_FMSG {
 	stduint pform_id;

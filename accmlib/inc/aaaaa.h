@@ -65,6 +65,7 @@ extern "C" {
 	stdsint sys_draw_line(stduint form_id, Point disp, Size2 size, Color co);
 
 	stdsint sys_draw_rectangle(stduint form_id, const Rectangle* rect);
+	stdsint sys_set_timer(stduint form_id, stduint ms);
 
 
 

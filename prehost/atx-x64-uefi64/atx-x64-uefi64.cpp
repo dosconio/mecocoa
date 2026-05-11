@@ -85,6 +85,7 @@ void mecocoa(const UefiData& uefi_data_ref)
 		ploginfo("xHC-USB-Mouse has been found: %[8H].%[8H].%[8H]", xhc_dev->bus, xhc_dev->device, xhc_dev->function);
 	}
 
+	mecfetch();
 	tryUD();
 
 	// Service

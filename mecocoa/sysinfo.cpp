@@ -74,19 +74,18 @@ rostr text_brand() {
 #endif
 
 String dump_availmem() {
-	double mem = Memory::total_memsize;
+	stduint mem = Memory::total_memsize;
+	stduint frac = 0;
 	char unit[]{ ' ', 'K', 'M', 'G', 'T' };
 	int level = 0;
 	// assert mem != 0
-	while (mem > 1024) {
-		level++;
+	while (mem >= 1024 && level < 4) {
+		frac = (mem % 1024) * 100 / 1024;
 		mem /= 1024;
+		level++;
 	}
-	mem *= 100;
-	mem = (int)mem;
-	mem /= 100;
 	String ret;
-	if (level) ret.Format("%lf %cB", mem, unit[level]);
+	if (level) ret.Format("%u.%02u %cB", (unsigned int)mem, (unsigned int)frac, unit[level]);
 	else ret.Format("0x%[x] B", Memory::total_memsize);
 	return ret;
 }

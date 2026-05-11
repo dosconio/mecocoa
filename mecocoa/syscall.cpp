@@ -243,7 +243,10 @@ DEFSYSC sysc_READ(stduint fd, stduint addr, stduint len) {
 				total_read++;
 				if (con) con->OutChar(ch);
 				
-				if (ch == '\n') break;
+				if (ch == '\n') {
+					con->OutChar('\r');
+					break;
+				}
 				continue;
 			}
 

@@ -106,3 +106,14 @@ stdsint sys_draw_rectangle(stduint form_id, const Rectangle* rect) {
 	syscomm(0, Task_Console, &msg);
 	return ret;// should be 0
 }
+
+stdsint sys_set_timer(stduint form_id, stduint ms) {
+	stduint buf[2] = { form_id, ms };
+	CommMsg msg;
+	msg.data.address = _IMM(buf);
+	msg.data.length = sizeof(buf);
+	msg.type = _IMM(ConsoleMsg::FTIM);
+	syscomm(1, Task_Console, &msg);
+	syscomm(0, Task_Console, &msg);
+	return buf[0];
+}
