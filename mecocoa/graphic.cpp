@@ -216,14 +216,14 @@ void serv_graf_loop() {
 	#endif
 	#if (_MCCA == 0x8632) || (_MCCA == 0x8664)
 	while (true) {
-		IC.enAble(false);
+		IC.enInterrupt(false);
 		if (!message_queue_conv.Count()) {
-			IC.enAble(true);
+			IC.enInterrupt(true);
 			Taskman::Schedule(true);// yield
 			continue;
 		}
 		message_queue_conv.Dequeue(msg);
-		IC.enAble(true);
+		IC.enInterrupt(true);
 		//
 		switch (msg.type) {
 		case SysMessage::RUPT_MOUSE:

@@ -7,9 +7,23 @@
 #include <cpp/Device/UART>
 #include <c/driver/timer.h>
 #include <c/driver/keyboard.h>
+#include <c/proctrl/IAx86_64.msr.h>
 
 #define DEFSYSC extern "C" stdsint
 extern stduint SYSCALL_TABLE[18];
+
+void Syscall::Initialize() {
+	#if _MCCA == 0x8632
+	IC[IRQ_SYSCALL].setRange(mglb(Handint_INTCALL_Entry), SegCo32); IC[IRQ_SYSCALL].DPL = 3;
+
+	#elif _MCCA == 0x8664
+	setMSR(x86MSR::EFER, 0x0501);
+	setMSR(x86MSR::LSTAR, mglb(Handint_SYSCALL_Entry));
+	setMSR(x86MSR::STAR, (_IMM(SegCo64) << 32) | (_IMM(SegCo32 | _IMM(RING_U)) << 48));
+	setMSR(x86MSR::FMASK, 0x200);
+
+	#endif
+}
 
 #if (_MCCA & 0xFF00) == 0x8600 || (_MCCA & 0xFF00) == 0x1000
 
@@ -101,7 +115,7 @@ DEFSYSC sysc_INNC(stduint blocked) {
 }
 
 DEFSYSC sysc_EXIT(stduint code) {
-	// IC.enAble(false);
+	// IC.enInterrupt(false);
 	Taskman::ExitCurrent(code);
 	printlog(_LOG_FATAL, "sysc_EXIT unreachable");// unreachable
 	return -1;

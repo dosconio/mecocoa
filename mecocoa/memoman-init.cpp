@@ -61,6 +61,7 @@ bool Memory::initialize(stduint eax, byte* ebx) {
 	MemSet(kernel_paging.root_level_page = (PageEntry*)0x100000, 0, 0x1000);// kernel_paging.Reset();
 	kernel_paging.Map(0x00000000, 0x00000000, 0x10000000, PAGESIZE_4MB, PGPROP_present | PGPROP_writable | PGPROP_user_access);// 4MB
 	kernel_paging.Map(0x80000000, 0x00000000, 0x10000000, PAGESIZE_4MB, PGPROP_present | PGPROP_writable);
+	kernel_paging.Map(0xFEC00000, 0xFEC00000, 0x00200000, PAGESIZE_4MB, PGPROP_present | PGPROP_writable);
 	setCR4(getCR4() | 0x10);// CR4.PSE
 	setCR3(_IMM(kernel_paging.root_level_page));
 	PagingEnable();

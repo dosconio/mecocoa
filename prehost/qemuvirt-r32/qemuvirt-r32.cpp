@@ -49,7 +49,7 @@ void _entry()
 		ploginfo("Nothing to do.");
 		HALT();//{} shutdown
 	}
-	IC.enAble(true);
+	IC.enInterrupt(true);
 	// CLINT Clock
 	last_schepoint = clint.Read() + TIMER_INTERVAL;
 	clint.Load(getMHARTID(), last_schepoint);

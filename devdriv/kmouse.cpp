@@ -43,6 +43,7 @@ static void process_mouse(byte ch) {
 	}
 }
 void Handint_MOU() {
+	IC.SendEOI(IRQ_PS2_Mouse); // Acknowledge interrupt
 	byte state = innpb(PORT_KEYBOARD_CMD);
 	if (state & 0x20); else return;//{} check AUX, give KBD
 	byte ch = innpb(PORT_KEYBOARD_DAT);

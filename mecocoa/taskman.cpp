@@ -56,7 +56,7 @@ bool Spinlock::Acquire() {
 	#if (_MCCA & 0xFF00) == 0x8600
 	stduint flags = getFlags();
 	if ((state_rupt = (byte)cast<REG_FLAG_t>(flags).IF)) {
-		IC.enAble(false);
+		IC.enInterrupt(false);
 	}
 	#endif
 	while (__atomic_exchange_n(&this->locked, 1, __ATOMIC_ACQUIRE) != 0) {
@@ -70,7 +70,7 @@ bool Spinlock::Acquire() {
 void Spinlock::Release(bool old_if) {
 	this->cpu_id = -1;
 	__atomic_store_n(&this->locked, 0, __ATOMIC_RELEASE);
-	if (old_if) IC.enAble();
+	if (old_if) IC.enInterrupt();
 }
 void Mutex::Acquire() {
 	bool old_if = this->guard.Acquire();
@@ -83,7 +83,7 @@ void Mutex::Acquire() {
 			this->wait_queue.Enqueue(crt);
 			Taskman::SleepAndRelease(&this->guard);
 		}
-		if (old_if) IC.enAble();
+		if (old_if) IC.enInterrupt();
 	}
 	else {
 		this->locked = 1;

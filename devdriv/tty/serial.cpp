@@ -53,6 +53,7 @@ int x86_COM::inn() {
 
 void Handint_COM1()
 {
+	IC.SendEOI(IRQ_COM13_RS232_P1); // Acknowledge interrupt
 	// unchked
 	uint8_t iir = innpb(PORT_COM1_DATA + 2);
 	while ((iir & 0x01) == 0) {// Pending

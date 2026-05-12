@@ -20,16 +20,16 @@ void _Comment(R0) serv_sysmsg() {
 	#if _MCCA == 0x8664 && defined(_UEFI)
 	global_layman.lazy_update = _GUI_DOUBLE_BUFFER;// Only enable lazy mode if double buffering is enabled
 	while (true) {
-		IC.enAble(false);
+		IC.enInterrupt(false);
 		// auto crt_tick = tick;
 		if (!message_queue.Count()) {
-			IC.enAble(true);
+			IC.enInterrupt(true);
 			HALT();
 			continue;
 		}
 		SysMessage msg;
 		message_queue.Dequeue(msg);
-		IC.enAble(true);
+		IC.enInterrupt(true);
 		auto& xhc = *reinterpret_cast<uni::device::SpaceUSB3::HostController*>(_BUF_xhc);
 		switch (msg.type) {
 		case SysMessage::RUPT_xHCI:

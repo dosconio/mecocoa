@@ -5,6 +5,7 @@
 #include "../../include/mecocoa.hpp"
 
 #include <c/format/ELF.h>
+#include "c/driver/UART.h"
 #include <c/driver/mouse.h>
 #include <c/driver/timer.h>
 #include <cpp/Device/Cache>
@@ -12,24 +13,18 @@
 
 
 extern uint32 _start_eax, _start_ebx;
-extern RMOD_LIST __init_rmod_ento[], __init_rmod_endo[];
+extern OstreamTrait* con0_out;
 _sign_entry() {
 	_call_serious = kernel_fail;
+	x86_COM com1; con0_out = &com1;// early UART
 	if (!Memory::initialize(_start_eax, (byte*)_start_ebx)) HALT();
 	Consman::Initialize();// located here, for  INT-10H may influence PIC
 	Cache_t::enAble();
 	Filesys::Initialize();
 	SysTimer::Initialize();
 	Taskman::Initialize();
-
-	// IVT and Device
-	IC.Reset(SegCo32, 0x80000000);
-	IC.Init();
-	for (auto func = __init_rmod_ento; func < __init_rmod_endo; func++) {
-		ploginfo("Loading %s", func->name);
-		(func->init)();
-	}
-	IC[IRQ_SYSCALL].setRange(mglb(Handint_INTCALL_Entry), SegCo32); IC[IRQ_SYSCALL].DPL = 3;
+	Devsman::Initialize();
+	Syscall::Initialize();
 
 	mecfetch();
 	__asm("ud2");
@@ -43,7 +38,7 @@ _sign_entry() {
 	Taskman::Create((void*)&serv_dev_mem_loop, RING_M);
 	Taskman::Create((void*)&serv_dev_hd_loop, RING_M);
 
-	IC.enAble();
+	IC.enInterrupt();
 	// syscall(syscall_t::OUTC, 'O', 0);
 	// Console.OutFormat("hayouuu~!\n\r\a");
 

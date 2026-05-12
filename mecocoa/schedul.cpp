@@ -378,9 +378,9 @@ auto Taskman::Schedule(bool omit_slice)->decltype(Schedule())
 			if (!new_tb) {
 				scheduler_lock.Release(old_if);
 				do {
-					IC.enAble();
+					IC.enInterrupt();
 					HALT();
-					IC.enAble(false);
+					IC.enInterrupt(false);
 				} while (!(new_tb = PickNext()));
 				old_if = scheduler_lock.Acquire();
 			}
@@ -430,9 +430,9 @@ void Taskman::SleepAndRelease(Spinlock* lk) {
 		if (!new_tb) {// idle is not ready
 			scheduler_lock.Release(old_if);
 			do {
-				IC.enAble();
+				IC.enInterrupt();
 				HALT();
-				IC.enAble(false);
+				IC.enInterrupt(false);
 			} while (!(new_tb = PickNext()));
 			old_if = scheduler_lock.Acquire();
 		}

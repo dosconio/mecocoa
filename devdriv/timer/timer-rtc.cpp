@@ -30,6 +30,7 @@ void blink() {
 }
 void Handint_RTC()
 {
+	IC.SendEOI(IRQ_RTC); // Acknowledge interrupt
 	// 1Hz
 	// auto push flag by interrupt module
 	// OPEN NMI AFTER READ REG-C, OR ONLY INT ONCE

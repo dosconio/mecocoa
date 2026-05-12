@@ -69,4 +69,8 @@ void syscall(NormalTaskContext* cxt);
 #endif
 _ESYM_C stduint syscall(syscall_t callid, stduint p1 = 0, stduint p2 = 0, stduint p3 = 0);// MCCA 4 PARA SYSC
 
+struct Syscall {
+	static void Initialize();
+};
+
 #endif

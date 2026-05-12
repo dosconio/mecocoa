@@ -87,12 +87,20 @@ RefreshGDT:
 	PUSH EAX
 RETF
 RefreshGDT_NEXT: RET
+LocalEOI:
+	; MOV AL, ' '
+	; OUT 0xA0, AL
+	; OUT 0x20, AL
+	; [x2APIC]
+	; MOV ECX, 0x80B
+	; WRMSR
+	; [APIC]
+	; MOV EAX, 0xFEE000B0
+	; MOV [EAX], EAX; the value is not important
 
 Handint_PIT_Entry:
 	PUSHAD
 	CALL PG_PUSH
-	MOV AL, ' '
-	OUT 0x20, AL
 	CALL Handint_PIT
 	CALL PG_POP
 	POPAD
@@ -100,8 +108,6 @@ Handint_PIT_Entry:
 Handint_KBD_Entry:
 	PUSHAD
 	CALL PG_PUSH
-	MOV AL, ' '
-	OUT 0x20, AL
 	CALL Handint_KBD
 	CALL PG_POP
 	POPAD
@@ -109,8 +115,6 @@ Handint_KBD_Entry:
 Handint_COM1_Entry:
 	PUSHAD
 	CALL PG_PUSH
-	MOV AL, ' '
-	OUT 0x20, AL
 	CALL Handint_COM1
 	CALL PG_POP
 	POPAD
@@ -122,9 +126,6 @@ Handint_RTC_Entry:
 	CALL PG_PUSH
 	CALL Handint_RTC
 	CALL PG_POP
-	MOV AL, ' '
-	OUT 0xA0, AL
-	OUT 0x20, AL
 	POPAD
 	IRETD
 Handint_MOU_Entry:
@@ -132,9 +133,6 @@ Handint_MOU_Entry:
 	CALL PG_PUSH
 	CALL Handint_MOU
 	CALL PG_POP
-	MOV AL, ' '
-	OUT 0xA0, AL
-	OUT 0x20, AL
 	POPAD
 	IRETD
 Handint_HDD_Entry:
@@ -142,9 +140,6 @@ Handint_HDD_Entry:
 	CALL PG_PUSH
 	CALL Handint_HDD
 	CALL PG_POP
-	MOV AL, ' '
-	OUT 0xA0, AL
-	OUT 0x20, AL
 	POPAD
 	IRETD
 

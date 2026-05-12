@@ -31,6 +31,7 @@ void blink2() {
 void RenderFrameFlush();
 void Handint_PIT()
 {
+	IC.SendEOI(IRQ_PIT); // Acknowledge interrupt
 	// auto push flag by intterrupt module
 	// 1000Hz
 	mecocoa_global->system_time.mic += 1000;// 1k us = 1ms

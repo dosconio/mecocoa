@@ -36,6 +36,7 @@ void R_HDD_INIT() {
 
 void Handint_HDD()// HDD Master
 {
+	IC.SendEOI(IRQ_ATA_DISK0); // Acknowledge interrupt
 	disks[0]->getStatus();// innpb(REG_STATUS);
 	if (lock) return;
 	lock = 1;

@@ -32,6 +32,7 @@ void R_KBD_INIT() {
 
 extern KeyboardBridge kbdbridge;
 void Handint_KBD() {
+	IC.SendEOI(IRQ_Keyboard); // Acknowledge interrupt
 	kbdbridge.OutChar(innpb(PORT_KEYBOARD_DAT));
 }
 

@@ -567,7 +567,7 @@ void _Comment(R1) serv_shell_process() {
 		// Register the process globally to get a valid PID
 		Taskman::Append(p);
 		// Lock the process state during complex environment setup
-		IC.enAble(false);
+		IC.enInterrupt(false);
 		p->state = ProcessBlock::State::Hanging;
 
 		p->focus_tty = tty_target;
@@ -588,7 +588,7 @@ void _Comment(R1) serv_shell_process() {
 		// Environment is ready, restore state and start the application thread
 		p->state = ProcessBlock::State::Active;
 		Taskman::AppendThread(p->main_thread);
-		IC.enAble();
+		IC.enInterrupt();
 	}
 
 	extern const char key_map[256], key_map_shift[256];
@@ -674,9 +674,9 @@ shell_exit:
 			}
 		}
 		{
-			IC.enAble(false);
+			IC.enInterrupt(false);
 			Consman::RemoveVconsole(tty_target);
-			IC.enAble(true);
+			IC.enInterrupt(true);
 		}
 	}
 

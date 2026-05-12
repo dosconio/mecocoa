@@ -21,15 +21,6 @@ alignas(16) byte kernel_stack[1024 * 1024];
 
 UefiData uefi_data;
 
-struct Syscall {
-	static void Initialize() {
-		setMSR(x86MSR::EFER, 0x0501);
-		setMSR(x86MSR::LSTAR, mglb(Handint_SYSCALL_Entry));
-		setMSR(x86MSR::STAR, (_IMM(SegCo64) << 32) | (_IMM(SegCo32 | _IMM(RING_U)) << 48));
-		setMSR(x86MSR::FMASK, 0x200);
-	}
-};
-
 x86_COM com1;
 extern OstreamTrait* con0_out;
 int x86_COM::inn() {
