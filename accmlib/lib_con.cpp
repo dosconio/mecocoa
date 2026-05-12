@@ -117,3 +117,25 @@ stdsint sys_set_timer(stduint form_id, stduint ms) {
 	syscomm(0, Task_Console, &msg);
 	return buf[0];
 }
+
+stdsint sys_set_form_buffer(stduint form_id, void* buffer) {
+	stduint buf[2] = { form_id, _IMM(buffer) };
+	CommMsg msg;
+	msg.data.address = _IMM(buf);
+	msg.data.length = sizeof(buf);
+	msg.type = _IMM(ConsoleMsg::FBID);
+	syscomm(1, Task_Console, &msg);
+	syscomm(0, Task_Console, &msg);
+	return buf[0];
+}
+
+stdsint sys_update_form(stduint form_id, const Rectangle* rect) {
+	stduint buf[2] = { form_id, _IMM(rect) };
+	CommMsg msg;
+	msg.data.address = _IMM(buf);
+	msg.data.length = sizeof(buf);
+	msg.type = _IMM(ConsoleMsg::FUPD);
+	syscomm(1, Task_Console, &msg);
+	syscomm(0, Task_Console, &msg);
+	return buf[0];
+}

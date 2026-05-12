@@ -117,7 +117,7 @@ void exception_handler(sdword iden, dword para) {
 		if (!first_done) {
 			first_done = true;
 			rostr test_page = (rostr)"[Mecocoa] Exception #UD Test OK!"; // "\xFF\x70[Mecocoa]\xFF\x27 Exception #UD Test OK!\xFF\x07";
-			outsfmt("%s\n\r", test_page);
+			printlog(_LOG_GOOD, " %s", test_page);
 		}
 		else {
 			printlog(_LOG_FATAL, " %s", ExceptionDescription[iden]);// no-para

@@ -287,6 +287,7 @@ static stdsint ConsoleMsg_FNEW(const FMT_ConsoleMsg_FNEW* data, ProcessBlock* pb
 
 	// Store in process block pforms
 	pb->pforms[slot_idx] = pfrm;
+	pfrm->usrp_owner = pb;
 
 	return slot_idx;
 }
@@ -407,6 +408,41 @@ void Global_CleanProcessForms(ProcessBlock* pb) {
 }
 
 
+
+static stdsint ConsoleMsg_FBID(const FMT_ConsoleMsg_FBID* data, ProcessBlock* pb) {
+	if (data->pform_id >= _TEMP 4) return -1;
+	::uni::Witch::Form* pf = static_cast<::uni::Witch::Form*>(pb->pforms[data->pform_id]);
+	if (!pf) return -1;
+
+	pf->usrp_buffer = data->usrp_buffer;
+	pf->usrp_owner = pb;
+
+	return 0;
+}
+
+static stdsint ConsoleMsg_FUPD(const FMT_ConsoleMsg_FUPD* data, ProcessBlock* pb) {
+	if (data->pform_id >= _TEMP 4) return -1;
+	SheetTrait* pfrm = pb->pforms[data->pform_id];
+	if (!pfrm) return -1;
+
+	::uni::Witch::Form* pf = static_cast<::uni::Witch::Form*>(pfrm);
+	void* user_buf = pf->usrp_buffer;
+	if (!user_buf || !pfrm->sheet_buffer) return -1;
+
+	Rectangle client_area = pf->getClientArea();
+	ProcessBlock* owner = (ProcessBlock*)pf->usrp_owner;
+	if (!owner) owner = pb;
+
+	// Copy user pixels directly into Form's sheet_buffer at client area offset
+	for (stduint i = 0; i < client_area.height; i++) {
+		Color* dst = pfrm->sheet_buffer + (client_area.y + i) * pfrm->sheet_area.width + client_area.x;
+		Color* src = (Color*)user_buf + i * client_area.width;
+		MccaMemCopyP(dst, NULL, src, owner, client_area.width * sizeof(Color));
+	}
+
+	global_layman.Update(pfrm, Rectangle(Point(0, 0), pfrm->sheet_area.getSize()));
+	return 0;
+}
 
 static stdsint ConsoleMsg_FMSG(const FMT_ConsoleMsg_FMSG* data, ProcessBlock* pb, stduint sig_src) {
 	if (data->pform_id >= _TEMP 4) return -1;
@@ -812,6 +848,14 @@ void _Comment(R1) serv_cons_loop()
 				break;
 			case ConsoleMsg::FCHR:
 				ret = ConsoleMsg_FCHR((FMT_ConsoleMsg_FCHR*)to_args, th->parent_process);
+				syssend(sig_src, (void*)&ret, sizeof(ret));
+				break;
+			case ConsoleMsg::FBID:
+				ret = ConsoleMsg_FBID((FMT_ConsoleMsg_FBID*)to_args, th->parent_process);
+				syssend(sig_src, (void*)&ret, sizeof(ret));
+				break;
+			case ConsoleMsg::FUPD:
+				ret = ConsoleMsg_FUPD((FMT_ConsoleMsg_FUPD*)to_args, th->parent_process);
 				syssend(sig_src, (void*)&ret, sizeof(ret));
 				break;
 			case ConsoleMsg::FTIM:

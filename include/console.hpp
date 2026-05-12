@@ -56,6 +56,14 @@ _PACKED(struct) FMT_ConsoleMsg_FMSG {
 	stduint if_blocked;
 	SheetMessage* message;
 };
+_PACKED(struct) FMT_ConsoleMsg_FBID {
+	stduint pform_id;
+	void* usrp_buffer;
+};
+_PACKED(struct) FMT_ConsoleMsg_FUPD {
+	stduint pform_id;
+	Rectangle* usrp_rect;
+};
 _PACKED(struct) FMT_ConsoleMsg_FDRW {
 	stduint pform_id;// in pforms
 	enum class Shape {

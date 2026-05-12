@@ -8,6 +8,10 @@ using namespace uni;
 // mnt33 fat16
 // mnt34 fat32
 
+static Color test_buffer[318 * 221];
+static Color colors[] = { Color::Red, Color::Green, Color::Blue, Color::Yellow, (0xFF00FFFF), (0xFFFF00FF) };
+static int color_idx = 0;
+
 int main(int argc, char** argv)
 {
 	unsigned id = getpid();// TEST
@@ -50,6 +54,15 @@ int main(int argc, char** argv)
 	Rectangle rect{ Point(100, 80), Size2(320, 240) };
 	auto form_id = sys_create_form(-_IMM0, &rect);
 	if (form_id >= 0) {
+		sys_set_form_buffer(form_id, test_buffer);
+		for (int i = 0; i < 318 * 221; i++) {
+			test_buffer[i].r = 0xFF;
+			test_buffer[i].g = 0xFF;
+			test_buffer[i].b = 0xFF;
+			test_buffer[i].a = 0xFF;
+		}
+		sys_update_form(form_id, nullptr);
+
 		sys_draw_default_string(form_id, Point2(50, 50), "Ciallo~", Color::Maroon);
 		sys_draw_point(form_id, Point2(100, 100), Color::Red);
 		sys_draw_line(form_id, Point2(80, 100), Point2(40, 30), Color::Blue);
@@ -69,8 +82,15 @@ int main(int argc, char** argv)
 	while (sys_fetch_msg(form_id, true, &smsg)) {
 		switch (smsg.event) {
 		case SheetEvent::onTimer:
-			outsfmt("msg: onTimer at %u\n\r", smsg.args[3]);
+		{
+			Color c = colors[color_idx];
+			c.a = 0xFF; // Ensure opaque
+			for (int i = 0; i < 318 * 221; i++) test_buffer[i] = c;
+			color_idx = (color_idx + 1) % 6;
+			// sys_update_form(form_id, nullptr);
+			// outsfmt("msg: onTimer at %u\n\r", smsg.args[3]);
 			break;
+		}
 		case SheetEvent::onMoved:
 			// ploginfo("msg: _moved at (%d, %d)", smsg.args[0], smsg.args[1]);
 			break;

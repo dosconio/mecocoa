@@ -6,12 +6,19 @@
 // led by bootx64 and atx-x86-flap32.loader; we do not mix long64 and uefi64
 #include "../../include/mecocoa.hpp"
 
+#include "c/driver/UART.h"
 #include "cpp/trait/StorageTrait.hpp"
 
 // x86: GDT, PG, MEM (for ladder auto-enable PG)
 // x64: GDT, MEM, PG
 
+extern OstreamTrait* con0_out;
+int x86_COM::inn() {
+	_TODO return -1;
+}
+
 _ESYM_C void mecocoa() {
+	x86_COM com1; con0_out = &com1;
 	if (!Memory::initialize('ANIF', NULL)) HALT();
 	Consman::Initialize();
 	//{} Cache_t::enAble();

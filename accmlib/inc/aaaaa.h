@@ -66,6 +66,8 @@ extern "C" {
 
 	stdsint sys_draw_rectangle(stduint form_id, const Rectangle* rect);
 	stdsint sys_set_timer(stduint form_id, stduint ms);
+	stdsint sys_set_form_buffer(stduint form_id, void* buffer);
+	stdsint sys_update_form(stduint form_id, const Rectangle* rect);
 
 
 
