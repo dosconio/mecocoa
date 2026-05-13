@@ -141,11 +141,11 @@ int KeyboardBridge::out(const char* str, stduint len) {
 					VTTY_INNQ(p_vtty)->OutChar(ascii_ch);
 					#endif
 				}
-				// Forward keyboard event to focused window (for console or background)
-				if (Consman::last_click_sheet) {
-					Consman::last_click_sheet->onrupt(SheetEvent::onKeybd, Point(0, 0), &event);
-				}
 			}
+		}
+		// Forward ALL keyboard events (down/up/repeat) to focused window
+		if (Consman::last_click_sheet) {
+			Consman::last_click_sheet->onrupt(SheetEvent::onKeybd, Point(0, 0), &event);
 		}
 	}
 	// Render the bottom ribbon

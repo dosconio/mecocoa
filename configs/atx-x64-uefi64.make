@@ -131,6 +131,10 @@ build_util:
 	$(CX) $(ACCM_INCF) $(XFLAGS) \
 		subapps/test.cpp -o $(uobjpath)/sapp-$(arch)/test \
 		-L$(uobjpath)/$(ACCM_LIBS) -lx64 -e _start
+	echo MK game_breakout (FAIL)
+	$(CX) $(ACCM_INCF) $(XFLAGS) \
+		subapps/game_breakout.cpp $(ulibpath)/cpp/lango/lango-cpp.cpp -o $(uobjpath)/sapp-$(arch)/gblock \
+		-L$(uobjpath)/$(ACCM_LIBS) -lx64 -e _start
 # (ASM TEMPLATE)
 #	echo MK a
 #	aasm subapps/_hello/asm/helloa-x64.asm -felf64 -o subapps/_hello/asm/helloa-x64.o
