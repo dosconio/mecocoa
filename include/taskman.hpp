@@ -11,6 +11,7 @@
 #include <cpp/trait/BlockTrait.hpp>
 
 #include "syscall.hpp"
+#include <c/ISO_IEC_STD/signal.h>
 
 enum {
 	Task_Kernel,
@@ -193,8 +194,20 @@ public: // _Comment(Fileman);
 	FileDescriptor* pfiles[_TEMP 4];
 	vfs_dentry* cwd = nullptr;  // Current Working Directory
 	vfs_dentry* root = nullptr; // Root for chroot
+	// Signal
+	struct sigaction sig_actions[_NSIG]; // Action table (shared by threads)
+	sigset_t shared_pending_signals;      // Pending signals for the whole process
 	//
-	ProcessBlock() {}
+	ProcessBlock() {
+		// Initialize signal actions to default
+		for (int i = 0; i < _NSIG; i++) {
+			sig_actions[i].sa_handler = SIG_DFL;
+			_sigset_raw(&sig_actions[i].sa_mask) = 0;
+			sig_actions[i].sa_flags = 0;
+			sig_actions[i].sa_restorer = nullptr;
+		}
+		_sigset_raw(&shared_pending_signals) = 0;
+	}
 	auto Open(rostr pathname, int flags) -> stdsint;
 	auto Rdwt(bool wr_type, stduint fid, Slice slice) -> stduint;
 	auto Close(int fid) -> bool;
@@ -254,6 +267,9 @@ public: // _Comment(Syscomm)
 	ThreadBlock* queue_send_queuenext = nullptr;
 public:
 	inline stduint getID() const { return tid; }
+	// Signal
+	sigset_t pending_signals; // Bitmask of waiting signals
+	sigset_t blocked_signals; // Bitmask of masked signals
 };
 
 inline bool ProcessBlock::isWaiting() {

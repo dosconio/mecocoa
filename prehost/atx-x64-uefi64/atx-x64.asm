@@ -220,22 +220,30 @@ Handint_SYSCALL_Entry:
 O64 SYSRET
 
 
-GLOBAL Handint_XHCI_Entry
-EXTERN Handint_XHCI
-Handint_XHCI_Entry:
-	PUSHA64
-	CALL PG_PUSH
-	CALL Handint_XHCI
-	CALL PG_POP
-	POPA64
-IRETQ
+EXTERN interrupt_dispatcher
 
-GLOBAL Handint_LAPICT_Entry
-EXTERN Handint_LAPICT
-Handint_LAPICT_Entry:
+GLOBAL Handint_Common_Stub_64
+Handint_Common_Stub_64:
 	PUSHA64
 	CALL PG_PUSH
-	CALL Handint_LAPICT
+	; IRQ ID is at [RSP + 120 (PUSHA64) + 16 (PG_PUSH)] = 136
+	MOV RDI, [RSP + 136]
+	MOV RSI, RSP ; Pass Context pointer as 2nd argument
+	CALL interrupt_dispatcher
 	CALL PG_POP
 	POPA64
-IRETQ
+	ADD RSP, 8; Pop Interrupt ID
+	IRETQ
+
+%macro IRQ_TRAMPOLINE_64 2
+GLOBAL %1
+%1:
+	PUSH %2
+	JMP Handint_Common_Stub_64
+%endmacro
+
+; XHCI Interrupt
+IRQ_TRAMPOLINE_64 Handint_XHCI_Entry, 0x40
+
+; LAPIC Timer Interrupt
+IRQ_TRAMPOLINE_64 Handint_LAPICT_Entry, 0x41

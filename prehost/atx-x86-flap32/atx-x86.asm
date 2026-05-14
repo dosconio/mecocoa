@@ -32,51 +32,59 @@ RETF
 
 GLOBAL Handint_INTCALL_Entry
 Handint_INTCALL_Entry:
-
-
-;	stduint para[4];// a c d b
-;	__asm("mov  %%eax, %0" : "=m"(para[0]));
-;	__asm("mov  %%ecx, %0" : "=m"(para[1]));
-;	__asm("mov  %%edx, %0" : "=m"(para[2]));
-;	__asm("mov  %%ebx, %0" : "=m"(para[3]));
-;	__asm("push %ebx;push %ecx;push %edx;push %ebp;push %esi;push %edi;");
-;	__asm("call PG_PUSH");
-;	// stduint ret = call_body((syscall_t)para[0], para[1], para[2], para[3]);
-;	stduint ret;
-;
-;	__asm("call PG_POP");
-;	__asm("mov  %0, %%eax" : : "m"(ret));
-;	__asm("pop %edi");// popad
-;	__asm("pop %esi");
-;	__asm("pop %ebp");
-;	__asm("pop %edx");
-;	__asm("pop %ecx");
-;	__asm("pop %ebx");
-;	__asm("mov  %ebp, %esp");
-;	__asm("pop  %ebp      ");
+	PUSHFD
+	CLI
+	PUSHAD
+	CALL PG_PUSH; leave 20 bytes
+	; CallgateFrame* is ESP + 20
+	LEA EAX, [ESP + 20]
+	PUSH EAX
+	CALL Handint_SYSCALL
+	ADD ESP, 4
+	MOV [ESP + 48], EAX; write back EAX to the saved PUSHAD state
+	CALL PG_POP
+	POPAD
+	POPFD
 IRETD
 
-[BITS 32]
-; 0x20
-GLOBAL Handint_PIT_Entry
-EXTERN Handint_PIT
-; 0x21
-GLOBAL Handint_KBD_Entry
-EXTERN Handint_KBD
-; 0x24
-GLOBAL Handint_COM1_Entry
-EXTERN Handint_COM1
-; 0x70
-GLOBAL Handint_RTC_Entry
-EXTERN Handint_RTC
-; 0x74 Mouse
-GLOBAL Handint_MOU_Entry
-EXTERN Handint_MOU
-; 0x76 0x77
-GLOBAL Handint_HDD_Entry
-EXTERN Handint_HDD
-
+EXTERN interrupt_dispatcher
 EXTERN PG_PUSH, PG_POP
+
+GLOBAL Handint_Common_Stub
+Handint_Common_Stub:
+	PUSHAD
+	CALL PG_PUSH; leave 20 bytes
+	PUSH ESP ; Pass Context pointer as 2nd argument
+	PUSH DWORD [ESP + 56] ; Interrupt ID (original offset 52 + 4)
+	CALL interrupt_dispatcher
+	ADD ESP, 8 ; Clean up 2 arguments
+	CALL PG_POP
+	POPAD
+	ADD ESP, 4; Pop Interrupt ID
+	IRETD
+
+%macro IRQ_TRAMPOLINE 2
+GLOBAL %1
+%1:
+	PUSH %2
+	JMP Handint_Common_Stub
+%endmacro
+
+; 0x20..0x27
+IRQ_TRAMPOLINE Handint_PIT_Entry, 0x20
+IRQ_TRAMPOLINE Handint_KBD_Entry, 0x21
+IRQ_TRAMPOLINE Handint_CAS_Entry, 0x22
+IRQ_TRAMPOLINE Handint_COM2_Entry, 0x23
+IRQ_TRAMPOLINE Handint_COM1_Entry, 0x24
+IRQ_TRAMPOLINE Handint_LPT2_Entry, 0x25
+IRQ_TRAMPOLINE Handint_FLP_Entry, 0x26
+IRQ_TRAMPOLINE Handint_LPT1_Entry, 0x27
+
+; 0x70..0x77
+IRQ_TRAMPOLINE Handint_RTC_Entry, 0x70
+IRQ_TRAMPOLINE Handint_MOU_Entry, 0x74
+IRQ_TRAMPOLINE Handint_HDD_Entry, 0x76
+IRQ_TRAMPOLINE Handint_HDD1_Entry, 0x77
 
 GLOBAL RefreshGDT
 RefreshGDT:
@@ -85,61 +93,9 @@ RefreshGDT:
 	PUSH EAX
 	MOV EAX, RefreshGDT_NEXT
 	PUSH EAX
-RETF
+	RETF
 RefreshGDT_NEXT: RET
+
 LocalEOI:
-	; MOV AL, ' '
-	; OUT 0xA0, AL
-	; OUT 0x20, AL
-	; [x2APIC]
-	; MOV ECX, 0x80B
-	; WRMSR
-	; [APIC]
-	; MOV EAX, 0xFEE000B0
-	; MOV [EAX], EAX; the value is not important
 
-Handint_PIT_Entry:
-	PUSHAD
-	CALL PG_PUSH
-	CALL Handint_PIT
-	CALL PG_POP
-	POPAD
-	IRETD
-Handint_KBD_Entry:
-	PUSHAD
-	CALL PG_PUSH
-	CALL Handint_KBD
-	CALL PG_POP
-	POPAD
-	IRETD
-Handint_COM1_Entry:
-	PUSHAD
-	CALL PG_PUSH
-	CALL Handint_COM1
-	CALL PG_POP
-	POPAD
-	IRETD
-
-; ---- SLAVE PIC BELOW ----
-Handint_RTC_Entry:
-	PUSHAD
-	CALL PG_PUSH
-	CALL Handint_RTC
-	CALL PG_POP
-	POPAD
-	IRETD
-Handint_MOU_Entry:
-	PUSHAD
-	CALL PG_PUSH
-	CALL Handint_MOU
-	CALL PG_POP
-	POPAD
-	IRETD
-Handint_HDD_Entry:
-	PUSHAD
-	CALL PG_PUSH
-	CALL Handint_HDD
-	CALL PG_POP
-	POPAD
-	IRETD
 

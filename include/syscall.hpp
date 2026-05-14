@@ -29,6 +29,9 @@ enum
 	EXEC = 0x10, // spawn  (path,argv,envp)->0| x86 x64
 	EXET = 0x11, // exec   (path,argv,envp)->0| x86 x64
 	MALC = 0x12, // malloc (pages)->addr>0    | 
+	SIGA = 0x13, // sigaction (sig,&new,&old) | 
+	KILL = 0x14, // kill (pid, sig, tid)      | 
+	SIGR = 0x15, // sigreturn ()              | 
 
 	GET_CORE_ID, // | rv
 

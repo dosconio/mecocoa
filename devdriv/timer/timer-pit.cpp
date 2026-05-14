@@ -19,8 +19,10 @@ RMOD_LIST RMOD_LIST_PIT{
 
 void R_PIT_INIT() {
 	IC[IRQ_PIT].setRange(mglb(Handint_PIT_Entry), SegCo32);
+	register_interrupt_handler(IRQ_PIT, Handint_PIT);
 	PIT_Init();
 }
+
 
 void blink2() {
 	extern GloScreenARGB8888 local_vci;

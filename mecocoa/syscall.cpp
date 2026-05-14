@@ -10,7 +10,14 @@
 #include <c/proctrl/IAx86_64.msr.h>
 
 #define DEFSYSC extern "C" stdsint
-extern stduint SYSCALL_TABLE[18];
+
+// Kernel Signal Functions
+extern "C" stduint sys_sigaction(int, const struct sigaction*, struct sigaction*);
+extern "C" stduint sys_kill(stduint, int, stduint);
+extern "C" void sys_sigreturn();
+
+// Syscall Wrappers
+extern stduint SYSCALL_TABLE[22];
 
 void Syscall::Initialize() {
 	#if _MCCA == 0x8632
@@ -353,6 +360,23 @@ DEFSYSC sysc_TEST(stduint t, stduint e, stduint s) {
 }
 
 
+DEFSYSC sysc_SIGA(stduint sig, stduint act, stduint oact) {
+	auto pb = Taskman::current_thread[Taskman::getID()]->parent_process;
+	const struct sigaction* p_act = (const struct sigaction*)(act ? pb->paging[act] : nullptr);
+	struct sigaction* p_oact = (struct sigaction*)(oact ? pb->paging[oact] : nullptr);
+	return (stdsint)sys_sigaction((int)sig, p_act, p_oact);
+}
+
+DEFSYSC sysc_KILL(stduint pid, stduint sig, stduint tid) {
+	return (stdsint)sys_kill(pid, (int)sig, tid);
+}
+
+DEFSYSC sysc_SIGR() {
+	sys_sigreturn();
+	return 0;
+}
+
+#if (_MCCA & 0xFF00) == 0x8600 || (_MCCA & 0xFF00) == 0x1000
 stduint SYSCALL_TABLE[] = {
 	mglb(sysc_OUTC),
 	mglb(sysc_INNC),
@@ -372,7 +396,13 @@ stduint SYSCALL_TABLE[] = {
 	mglb(sysc_TMSG),
 	mglb(sysc_EXEC),
 	mglb(sysc_EXET),
+	0, //{} mglb(sysc_MALC), // 0x12 unchk
+	mglb(sysc_SIGA), // 0x13 unchk
+	mglb(sysc_KILL), // 0x14 unchk
+	mglb(sysc_SIGR), // 0x15 unchk
 };
+#endif
+
 #endif
 
 #if (_MCCA & 0xFF00) == 0x1000
@@ -416,6 +446,15 @@ void syscall_body(NormalTaskContext* cxt)
 		break;
 	case syscall_t::GET_CORE_ID:
 		cxt->a0 = sysc_GETCID(cxt->a0);
+		break;
+	case syscall_t::SIGA:
+		cxt->a0 = sysc_SIGA(cxt->a0, cxt->a1, cxt->a2);
+		break;
+	case syscall_t::KILL:
+		cxt->a0 = sysc_KILL(cxt->a0, cxt->a1, cxt->a2);
+		break;
+	case syscall_t::SIGR:
+		cxt->a0 = sysc_SIGR();
 		break;
 	default:
 		plogerro("Unknown syscall no: %d", syscall_num);

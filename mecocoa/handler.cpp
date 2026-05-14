@@ -18,6 +18,41 @@ _ESYM_C Handler_t trap_vector[];
 InterruptControl IC = { _IMM(trap_vector) };
 #endif
 
+// Unified interrupt handler array
+Handler_t interrupt_handlers[256] = { nullptr };
+
+#include <c/ISO_IEC_STD/signal.h>
+extern "C" void check_and_deliver_signals(NormalTaskContext* cxt);
+
+// Unified interrupt dispatcher called from assembly stubs
+extern "C" void interrupt_dispatcher(stduint irq_id, NormalTaskContext* cxt) {
+	if (irq_id < 256 && interrupt_handlers[irq_id]) {
+		interrupt_handlers[irq_id]();
+	}
+	
+	// Check for pending signals if returning to user mode (Ring > 0)
+	if (cxt) {
+		#if (_MCCA & 0xFF00) == 0x8600
+		if ((cxt->CS & 3) != 0) { // (CS & 3) != 0
+			check_and_deliver_signals(cxt);
+		}
+		#elif (_MCCA & 0xFF00) == 0x1000
+		if ((cxt->mstatus & (3 << 11)) == 0) { // MPP == 0 (User mode)
+			check_and_deliver_signals(cxt);
+		}
+		#endif
+	}
+}
+
+// Register a handler for a specific interrupt ID
+extern "C" void register_interrupt_handler(stduint irq_id, Handler_t handler) {
+	if (irq_id < 256) {
+		interrupt_handlers[irq_id] = handler;
+	}
+}
+
+
+
 #if defined(_UEFI)// x64 only
 
 __attribute__((target("general-regs-only"), optimize("O0")))
@@ -40,12 +75,15 @@ static int TimerCmp(pureptr_t a, pureptr_t b) {
 	return treat<MsgTimer>(((Dnode*)a)->offs).timeout -
 		treat<MsgTimer>(((Dnode*)b)->offs).timeout;
 }
+// Timer management
 Dchain TimerManager = { DnodeHeapFreeSimple };
 Spinlock timer_lock;
 
 void SysTimer::Initialize() {
 	TimerManager.Compare_f = TimerCmp;
 }
+
+
 
 // [Spinlocked]
 void SysTimer::Append(stduint timeout, stduint iden, _tocall_ft hand) {

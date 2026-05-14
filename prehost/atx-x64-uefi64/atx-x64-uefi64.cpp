@@ -64,10 +64,13 @@ void mecocoa(const UefiData& uefi_data_ref)
 		plogerro("No devices on PCI or PCI init failed.");
 	}
 	IC[IRQ_xHCI].setModeRupt(mglb(Handint_XHCI_Entry), SegCo64);
+	register_interrupt_handler(IRQ_xHCI, Handint_XHCI);
 	//[TIM.LAPIC] -> sys-delay
 	ACPI::Assert(*(const ACPI::RSDP*)uefi_data.acpi_table);
 	IC[IRQ_LAPICTimer].setModeRupt(mglb(Handint_LAPICT_Entry), SegCo64);
+	register_interrupt_handler(IRQ_LAPICTimer, Handint_LAPICT);
 	lapic_timer.Reset();
+
 	lapic_timer.Reset(lapic_timer.Frequency / SysTickFreq);
 	//[USB Mouse&Keyboard]
 	uni::device::SpaceUSB::HIDMouseDriver::default_observer = hand_mouse;

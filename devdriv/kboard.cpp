@@ -27,13 +27,14 @@ RMOD_LIST RMOD_LIST_KBD{
 
 void R_KBD_INIT() {
 	IC[IRQ_Keyboard].setRange(mglb(Handint_KBD_Entry), SegCo32);
+	register_interrupt_handler(IRQ_Keyboard, Handint_KBD);
 	Keyboard_Init();
 }
 
 extern KeyboardBridge kbdbridge;
 void Handint_KBD() {
-	IC.SendEOI(IRQ_Keyboard); // Acknowledge interrupt
 	kbdbridge.OutChar(innpb(PORT_KEYBOARD_DAT));
+	IC.SendEOI(IRQ_Keyboard); // Acknowledge interrupt
 }
 
 static void setLED() {
@@ -193,11 +194,13 @@ void sysmsg_kbd(keyboard_event_t kbd_event) {
 		msg.type = SysMessage::RUPT_NEW_TERM;
 		message_queue_conv.Enqueue(msg);
 	}
-	else if (kbd_event.method == keyboard_event_t::method_t::keydown) {
-		auto ch = (kbd_state.mod.l_shift || kbd_state.mod.r_shift ? key_map_shift : key_map)[kbd_event.keycode];
-		if (!ch && kbd_state.lock_number && kbd_event.keycode >= 0x59 && kbd_event.keycode <= 0x63) {
-			// NumPad adjustments
-			ch = key_map_shift[kbd_event.keycode];
+	else {
+		if (kbd_event.method == keyboard_event_t::method_t::keydown) {
+			auto ch = (kbd_state.mod.l_shift || kbd_state.mod.r_shift ? key_map_shift : key_map)[kbd_event.keycode];
+			if (!ch && kbd_state.lock_number && kbd_event.keycode >= 0x59 && kbd_event.keycode <= 0x63) {
+				// NumPad adjustments
+				ch = key_map_shift[kbd_event.keycode];
+			}
 		}
 		// Forward keyboard event to focused window (for console or background)
 		if (asrtand(Consman::last_click_sheet)->refSheetNode().next) {

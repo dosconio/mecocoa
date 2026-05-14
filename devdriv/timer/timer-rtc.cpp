@@ -19,8 +19,10 @@ RMOD_LIST RMOD_LIST_RTC{
 
 void R_RTC_INIT() {
 	IC[IRQ_RTC].setRange(mglb(Handint_RTC_Entry), SegCo32);
+	register_interrupt_handler(IRQ_RTC, Handint_RTC);
 	RTC_Init();
 }
+
 
 void blink() {
 	extern GloScreenARGB8888 local_vci;
@@ -30,7 +32,6 @@ void blink() {
 }
 void Handint_RTC()
 {
-	IC.SendEOI(IRQ_RTC); // Acknowledge interrupt
 	// 1Hz
 	// auto push flag by interrupt module
 	// OPEN NMI AFTER READ REG-C, OR ONLY INT ONCE
@@ -43,6 +44,8 @@ void Handint_RTC()
 		*p ^= 0x70;// make it blink
 	}
 	else blink();
+
+	IC.SendEOI(IRQ_RTC); // Acknowledge interrupt
 }
 
 #endif

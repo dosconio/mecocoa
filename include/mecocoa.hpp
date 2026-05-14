@@ -25,6 +25,8 @@
 #include <cpp/interrupt>
 #include <cpp/vector>
 
+#include <c/ISO_IEC_STD/signal.h>
+
 use crate uni;
 #if _MCCA == 0x8632
 #include "../include/atx-x86-flap32.hpp"
@@ -77,5 +79,8 @@ void mecfetch();
 
 // ---- . ----
 
+extern "C" void register_interrupt_handler(stduint irq_id, Handler_t handler);
+
 //
 #endif // MECOCOA_HPP_
+

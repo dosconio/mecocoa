@@ -18,8 +18,10 @@ RMOD_LIST RMOD_LIST_MOU{
 
 void R_MOU_INIT() {
 	IC[IRQ_PS2_Mouse].setRange(mglb(Handint_MOU_Entry), SegCo32);
+	register_interrupt_handler(IRQ_PS2_Mouse, Handint_MOU);
 	Mouse_Init();
 }
+
 
 extern uni::Queue<SysMessage> message_queue_conv;
 static bool fa_mouse = false;
@@ -43,13 +45,16 @@ static void process_mouse(byte ch) {
 	}
 }
 void Handint_MOU() {
-	IC.SendEOI(IRQ_PS2_Mouse); // Acknowledge interrupt
 	byte state = innpb(PORT_KEYBOARD_CMD);
-	if (state & 0x20); else return;//{} check AUX, give KBD
+	if (state & 0x20); else {
+		IC.SendEOI(IRQ_PS2_Mouse);
+		return;
+	}
 	byte ch = innpb(PORT_KEYBOARD_DAT);
 	// if (ch != (byte)0xFA)// 0xFA is ready signal
 	if (!fa_mouse && ch == (byte)0xFA) {
 		fa_mouse = true;
+		IC.SendEOI(IRQ_PS2_Mouse);
 		return;
 	}
 	process_mouse(ch);// asserv(queue_mouse)->OutChar(ch);
@@ -57,6 +62,7 @@ void Handint_MOU() {
 	{
 		process_mouse(innpb(PORT_KEYBOARD_DAT));
 	}
+	IC.SendEOI(IRQ_PS2_Mouse); // Acknowledge interrupt
 }
 
 

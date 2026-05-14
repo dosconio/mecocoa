@@ -27,7 +27,9 @@ static char* single_sector = NULL;// file-hd used buffer
 
 void R_HDD_INIT() {
 	IC[IRQ_ATA_DISK0].setRange(mglb(Handint_HDD_Entry), SegCo32);
+	register_interrupt_handler(IRQ_ATA_DISK0, Handint_HDD);
 	for0a(i, disks) {
+
 		disks[i] = new (hdd_buf + i * byteof(**disks)) Harddisk_PATA(i);
 	}
 	disks[0]->setInterrupt(NULL);
@@ -36,11 +38,14 @@ void R_HDD_INIT() {
 
 void Handint_HDD()// HDD Master
 {
-	IC.SendEOI(IRQ_ATA_DISK0); // Acknowledge interrupt
 	disks[0]->getStatus();// innpb(REG_STATUS);
-	if (lock) return;
+	if (lock) {
+		IC.SendEOI(IRQ_ATA_DISK0);
+		return;
+	}
 	lock = 1;
 	rupt_proc(Task_Hdd_Serv, IRQ_ATA_DISK0);
+	IC.SendEOI(IRQ_ATA_DISK0); // Acknowledge interrupt
 }
 
 //
