@@ -14,6 +14,7 @@
 
 extern uint32 _start_eax, _start_ebx;
 extern OstreamTrait* con0_out;
+#define Systime SysTimer
 _sign_entry() {
 	_call_serious = kernel_fail;
 	x86_COM com1; con0_out = &com1;// early UART
@@ -21,9 +22,10 @@ _sign_entry() {
 	Consman::Initialize();// located here, for  INT-10H may influence PIC
 	Cache_t::enAble();
 	Filesys::Initialize();
-	SysTimer::Initialize();
+	Systime::Initialize();
 	Taskman::Initialize();
 	Devsman::Initialize();
+	Virtman::Initialize();
 	Syscall::Initialize();
 
 	mecfetch();

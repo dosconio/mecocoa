@@ -11,6 +11,10 @@
 #include "../include/console.hpp"
 
 String dump_availmem();
+rostr text_cpu_factory();
+
+Procontroller_t cpu_type = PCU_Unknown;
+
 void mecfetch() {
 	#if ((_MCCA & 0xFF00) == 0x8600)
 	const rostr blue = "\033[48;2;88;200;248m"; 	//  ento_gui ? "\xFE\xF8\xC8\x58" : "\xFF\x30";
@@ -34,7 +38,8 @@ void mecfetch() {
 	Console.OutFormat("\033[0m");// Console.out("\xFF\xFF", 2);
 	#endif
 
-	Console.OutFormat("CPU Brand: %s\n\r", text_brand());
+	printlog(cpu_type ? _LOG_GOOD : _LOG_WARN, "CPU Factory: %s", text_cpu_factory());
+	ploginfo("CPU Brand: %s", text_brand());
 
 	tm datime = {};
 	#if _MCCA == 0x8632 //((_MCCA & 0xFF00) == 0x8600)
@@ -61,6 +66,20 @@ void kernel_fail(void* _serious, ...) {
 		outsfmt("\n\rKernel panic!\n\r");
 		__asm("cli; hlt");
 	}
+}
+
+rostr text_cpu_factory() {
+	unsigned a[1], b[1], c[1], d[1];
+	unsigned* ker_ptr = (unsigned*)ker_buf.reflect();
+	_IO_CPUID(0, 0, a, b, c, d);
+	*ker_ptr++ = *b;
+	*ker_ptr++ = *d;
+	*ker_ptr++ = *c;
+	*ker_ptr = 0;
+	if (StrCompare("GenuineIntel", ker_buf.reference()) == 0) cpu_type = PCU_Intel;
+	else if (StrCompare("AuthenticAMD", ker_buf.reference()) == 0) cpu_type = PCU_AMD;
+	else cpu_type = PCU_Unknown;
+	return ker_buf.reference();
 }
 
 rostr text_brand() {

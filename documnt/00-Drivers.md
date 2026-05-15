@@ -8,12 +8,12 @@ her-note: false
 ## x86/x64l
 
 - CRT Video (by BIOS)
-- Interrupt 8259 **PIC**
+- Interrupt 8259 **PIC** and **x2APIC**
 - Interrupt 8254 **PIT**
 - **RTC**
 - **Buzzer** PC Speaker
 - **KBD** Keyboard and **MOU** PS/2-Mouse
-- IDE Disk
+- PATA Disk
 
 ## x64u
 
@@ -29,4 +29,3 @@ her-note: false
 
 - Floppy
 - Network
-- APIC
