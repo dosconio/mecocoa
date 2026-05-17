@@ -22,6 +22,7 @@ enum {
 	Task_Memdisk_Serv,
 	#if _MCCA == 0x8632
 	Task_Hdd_Serv,
+	Task_Flp_Serv,
 	#endif
 	Task_Init,
 	//

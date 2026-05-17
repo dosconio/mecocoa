@@ -39,6 +39,7 @@ _sign_entry() {
 	//
 	Taskman::Create((void*)&serv_dev_mem_loop, RING_M);
 	Taskman::Create((void*)&serv_dev_hd_loop, RING_M);
+	Taskman::Create((void*)&serv_dev_fl_loop, RING_M);
 
 	IC.enInterrupt();
 	// syscall(syscall_t::OUTC, 'O', 0);

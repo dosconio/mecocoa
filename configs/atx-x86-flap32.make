@@ -70,11 +70,14 @@ build: lib accm prehost/$(arch)/fatvhd.ignore $(cppobjs) build_util
 		-nostartfiles -O2 \
 		-Wl,-Map=$(elf_kernel).map
 	strip --strip-all $(elf_kernel)
+	# ---- Floppy ----
 	@dd if=/dev/zero of=$(outs) bs=512 count=2880 2>>/dev/null
 	@dd if=$(boot)   of=$(outs) bs=512 count=1 conv=notrunc 2>>/dev/null
 	@echo $(sudokey) | sudo -S mkdir -p $(mnts)
 	@echo $(sudokey) | sudo -S mount -o loop $(outs) $(mnts)
 	@echo $(sudokey) | sudo -S cp $(elf_loader) $(mnts)/KEX.OBJ
+	@echo $(sudokey) | sudo -S mkdir -p $(mnts)/apps
+	@echo $(sudokey) | sudo -S cp $(uobjpath)/sapp-$(arch)/*    $(mnts)/apps/
 	@tree $(mnts) -s
 	@echo $(sudokey) | sudo -S umount $(mnts)
 	@perl configs/$(arch).bochsdbg.pl > $(archdir)/bochsrc.bxrc
