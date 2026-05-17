@@ -105,6 +105,47 @@ void Mutex::Release() {
 	this->guard.Release(old_if);
 }
 
+void Semaphore::Acquire() {
+	bool old_if = this->guard.Acquire(); // Disable interrupts and acquire lock
+
+	if (this->value > 0) {
+		this->value--;
+		this->guard.Release(old_if); // Resource acquired, unlock and return
+	}
+	else {
+		ThreadBlock* crt = Taskman::current_thread[Taskman::getID()];
+		if (!this->wait_queue.isFull()) {
+			// Transition thread to pending state with waiting block reason
+			// State and BlockReason verified strictly via taskman.hpp
+			crt->state = ThreadBlock::State::Pended;
+			crt->block_reason = ThreadBlock::BlockReason::BR_Waiting;
+			this->wait_queue.Enqueue(crt);
+
+			// Yield CPU: puts thread to sleep, releases spinlock, and switches context
+			Taskman::SleepAndRelease(&this->guard);
+		}
+		if (old_if) IC.enInterrupt(); // Re-enable interrupts if they were originally enabled
+	}
+}
+
+void Semaphore::Release() {
+	bool old_if = this->guard.Acquire(); // Disable interrupts and acquire lock
+
+	if (!this->wait_queue.isEmpty()) {
+		ThreadBlock* wakeup_tb = nullptr;
+		this->wait_queue.Dequeue(wakeup_tb);
+		if (wakeup_tb) {
+			// Wake up the waiting thread by moving it back to ready queue
+			wakeup_tb->Unblock(ThreadBlock::BlockReason::BR_Waiting);
+		}
+	}
+	else {
+		this->value++; // Increment resource counter if no threads are pending
+	}
+
+	this->guard.Release(old_if); // Release lock and restore interrupt state
+}
+
 // ---- . ----
 
 auto Taskman::AllocateTask() -> ProcessBlock* {

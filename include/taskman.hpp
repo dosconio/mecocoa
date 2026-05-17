@@ -144,6 +144,33 @@ struct MutexLocal {
 	}
 };
 
+struct Semaphore {
+	Spinlock guard;
+	stdsint value;
+	uni::Queue<ThreadBlock*> wait_queue;
+
+	/// @brief Initialize semaphore with an initial counter value
+	/// @param initial_value The initial available resource count (default is 1)
+	Semaphore(stdsint initial_value = 1) : value(initial_value), wait_queue() {}
+
+	/// @brief Acquire operation - Decrements resource count or blocks the current thread
+	void Acquire();
+
+	/// @brief Release operation - Increments resource count or wakes up a waiting thread
+	void Release();
+};
+
+/// @brief RAII local wrapper for Semaphore, automatically invoking Acquire/Release on scope lifetime
+struct SemaphoreLocal {
+	Semaphore* semaphore;
+	SemaphoreLocal(Semaphore* _sem) : semaphore(_sem) {
+		semaphore->Acquire();
+	}
+	~SemaphoreLocal() {
+		semaphore->Release();
+	}
+};
+
 namespace uni {
     class vfs_dentry;
 }
