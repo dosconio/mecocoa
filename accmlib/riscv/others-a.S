@@ -1,5 +1,5 @@
 #define _DEV_GNU_AS
-#include "../../include/qemuvirt-riscv.hpp"
+#include "../../include/archits/qemuvirt-riscv.hpp"
 
 .global syscall_bridge
 syscall_bridge:

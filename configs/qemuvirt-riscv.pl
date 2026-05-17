@@ -3,7 +3,7 @@ my $arch = $ARGV[0] || 'r32';
 print 'OUTPUT_ARCH( "riscv" )
 ';
 
-print "#include \"../../include/qemuvirt-riscv.hpp\" /* The file is gen by qemuvirt-riscv.pl */ \n";
+print "#include \"../../include/archits/qemuvirt-riscv.hpp\" /* The file is gen by qemuvirt-riscv.pl */ \n";
 
 print '
 ENTRY( _start )

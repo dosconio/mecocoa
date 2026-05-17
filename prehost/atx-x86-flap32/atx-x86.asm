@@ -6,7 +6,7 @@
 ; Copyright: Dosconio Mecocoa, BSD 3-Clause License
 
 %include "osdev.a"
-%include "ladder.a"
+%include "assembl/ladder.a"
 
 SegData EQU 8*3
 SegCo32 EQU 8*4
@@ -54,19 +54,19 @@ GLOBAL Handint_Common_Stub
 Handint_Common_Stub:
 	PUSHAD
 	CALL PG_PUSH; leave 20 bytes
-	PUSH ESP ; Pass Context pointer as 2nd argument
-	PUSH DWORD [ESP + 56] ; Interrupt ID (original offset 52 + 4)
+	PUSH ESP ; Pass HardwareInterruptFrame* as the first and only argument
 	CALL interrupt_dispatcher
-	ADD ESP, 8 ; Clean up 2 arguments
+	ADD ESP, 4 ; Clean up argument
 	CALL PG_POP
 	POPAD
-	ADD ESP, 4; Pop Interrupt ID
+	ADD ESP, 8; Pop Vector ID and Error Code
 	IRETD
 
 %macro IRQ_TRAMPOLINE 2
 GLOBAL %1
 %1:
-	PUSH %2
+	PUSH DWORD 0        ; Dummy Error Code
+	PUSH DWORD %2       ; Interrupt ID
 	JMP Handint_Common_Stub
 %endmacro
 

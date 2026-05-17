@@ -21,7 +21,7 @@ alignas(16) byte kernel_stack[1024 * 1024];
 
 UefiData uefi_data;
 
-x86_COM com1;
+
 extern OstreamTrait* con0_out;
 int x86_COM::inn() {
 	_TODO return -1;
@@ -29,6 +29,7 @@ int x86_COM::inn() {
 
 // ---- Kernel
 
+#define Systime SysTimer
 extern "C" //__attribute__((ms_abi))
 void mecocoa(const UefiData& uefi_data_ref)
 {
@@ -39,15 +40,19 @@ void mecocoa(const UefiData& uefi_data_ref)
 	#endif
 
 	_call_serious = kernel_fail;
-	
+	x86_COM com1; con0_out = &com1;
 	if (!Memory::initialize('UEFI', (byte*)(&uefi_data.memory_map))) HALT();
 	Consman::Initialize();
 	//{} Cache_t::enAble();
 	Filesys::Initialize();
-	SysTimer::Initialize();
+	Systime::Initialize();
 	Taskman::Initialize();
+	Devsman::Initialize();
+	Virtman::Initialize();
+	// Syscall::Initialize();
 
-	con0_out = &com1;
+	//{} mem > 4G
+
 	#ifdef _UEFI
 	ploginfo("Ciallo %lf, rsp=%[x]", 2025.09, rsp);
 	#endif

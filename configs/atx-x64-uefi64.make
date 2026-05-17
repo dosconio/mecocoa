@@ -151,7 +151,7 @@ loader:
 	cp $(edkdir)/Build/MccaLoaderX64/DEBUG_CLANGDWARF/X64/Loader.efi $(ubinpath)/AMD64/loader.efi
 
 .PHONY : run run-only
-qemu_args=\
+qemu_args=-cpu host\
 	-drive if=pflash,format=raw,readonly=on,file=$(ubinpath)/AMD64/OVMF/OVMF_CODE.fd \
 	-drive if=pflash,format=raw,file=$(ubinpath)/AMD64/OVMF/OVMF_VARS.fd \
 	-drive if=ide,index=0,media=disk,format=raw,file=$(ubinpath)/$(arch).img \

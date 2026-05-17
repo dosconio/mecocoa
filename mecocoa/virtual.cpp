@@ -60,7 +60,7 @@ bool Virtman::Initialize() {
 		}
 		else plogwarn("[VIRTUAL] VT-x is not supported");
 		return vm_supported;
-	case PCU_AMD:// {unchk} SVM(Secure Virtual Machine)/AMD-V
+	case PCU_AMD:// SVM(Secure Virtual Machine)/AMD-V
 		_IO_CPUID(0x80000001, tok_any, &a, &b, &c, &d);
 		if (!(c & (1 << 2))) { // ECX Bit 2: SVM
 			plogwarn("[VIRTUAL] SVM (AMD-V) is not supported by this CPU");

@@ -7,7 +7,6 @@ using namespace uni;
 #include <c/dnode.h>
 #include <cpp/interrupt>
 #include <cpp/Device/_Video.hpp>
-#include "console.hpp"
 
 // ---- asm
 
@@ -92,7 +91,7 @@ _ESYM_C
 void setDSAll(uint16 value);
 
 #ifdef _UEFI
-#include "../prehost/atx-x64-uefi64/atx-x64-uefi64.loader/loader-graph.h"
+#include "../../prehost/atx-x64-uefi64/atx-x64-uefi64.loader/loader-graph.h"
 #endif
 
 #define mglb(x) (_IMM(x) | 0xFFFFFFFFC0000000ull)

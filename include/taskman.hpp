@@ -272,6 +272,8 @@ public:
 	sigset_t blocked_signals; // Bitmask of masked signals
 };
 
+#include "taskman/context.hpp"
+
 inline bool ProcessBlock::isWaiting() {
 	return main_thread &&
 		(_IMM(main_thread->block_reason) & _IMM(ThreadBlock::BlockReason::BR_Waiting));

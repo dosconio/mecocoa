@@ -266,6 +266,7 @@ void msg_cleanup_thread(ThreadBlock* th) {
 		ThreadBlock* s_next = sender->queue_send_queuenext;
 		sender->send_to_whom = nullptr;
 		sender->queue_send_queuenext = nullptr;
+		sender->unsolved_msg = nullptr;
 		sender->Unblock(ThreadBlock::BlockReason::BR_SendMsg);
 		sender = s_next;
 	}
@@ -289,6 +290,11 @@ void msg_cleanup_thread(ThreadBlock* th) {
 		}
 		th->send_to_whom = nullptr;
 		th->queue_send_queuenext = nullptr;
+		th->unsolved_msg = nullptr;
+	}
+	if (th->block_reason & ThreadBlock::BlockReason::BR_RecvMsg) {
+		th->recv_fo_whom = nullptr;
+		th->unsolved_msg = nullptr;
 	}
 }
 

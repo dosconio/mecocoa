@@ -2,7 +2,7 @@
 ; Format: Binary
 
 %include "osdev.a"
-%include "ladder.a"
+%include "assembl/ladder.a"
 
 ; Link this below or above 0x10000
 %if _MCCA == 0x8664

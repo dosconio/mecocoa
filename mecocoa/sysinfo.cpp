@@ -108,3 +108,12 @@ String dump_availmem() {
 	else ret.Format("0x%[x] B", Memory::total_memsize);
 	return ret;
 }
+
+static Spinlock log_lock;
+void printlog(loglevel_t level, const char* fmt, ...)
+{
+	SpinlockLocal lock(&log_lock);
+	Letpara(paras, fmt);
+	printlogx(level, fmt, paras);
+	para_endo(paras);
+}

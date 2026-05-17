@@ -22,7 +22,29 @@ InterruptControl IC = { _IMM(trap_vector) };
 Handler_t interrupt_handlers[256] = { nullptr };
 
 #include <c/ISO_IEC_STD/signal.h>
-extern "C" void check_and_deliver_signals(NormalTaskContext* cxt);
+extern "C" void check_and_deliver_signals(void* context);
+
+#if (_MCCA & 0xFF00) == 0x8600
+extern "C" void exception_handler(HardwareInterruptFrame* frame);
+
+// Unified interrupt dispatcher called from assembly stubs
+extern "C" void interrupt_dispatcher(HardwareInterruptFrame* frame) {
+	stduint irq_id = frame->interrupt_id;
+	if (irq_id < 0x20) {
+		exception_handler(frame);
+	}
+	else {
+		if (irq_id < 256 && interrupt_handlers[irq_id]) {
+			interrupt_handlers[irq_id]();
+		}
+	}
+	
+	// Check for pending signals if returning to user mode (Ring > 0)
+	if ((frame->hw_cs & 3) != 0) { // returning to Ring > 0
+		check_and_deliver_signals(frame);
+	}
+}
+#elif (_MCCA & 0xFF00) == 0x1000
 
 // Unified interrupt dispatcher called from assembly stubs
 extern "C" void interrupt_dispatcher(stduint irq_id, NormalTaskContext* cxt) {
@@ -32,17 +54,12 @@ extern "C" void interrupt_dispatcher(stduint irq_id, NormalTaskContext* cxt) {
 	
 	// Check for pending signals if returning to user mode (Ring > 0)
 	if (cxt) {
-		#if (_MCCA & 0xFF00) == 0x8600
-		if ((cxt->CS & 3) != 0) { // (CS & 3) != 0
-			check_and_deliver_signals(cxt);
-		}
-		#elif (_MCCA & 0xFF00) == 0x1000
 		if ((cxt->mstatus & (3 << 11)) == 0) { // MPP == 0 (User mode)
 			check_and_deliver_signals(cxt);
 		}
-		#endif
 	}
 }
+#endif
 
 // Register a handler for a specific interrupt ID
 extern "C" void register_interrupt_handler(stduint irq_id, Handler_t handler) {
@@ -134,15 +151,11 @@ static rostr ExceptionDescription[] = {
 
 _ESYM_C
 __attribute__((target("general-regs-only"), optimize("O0")))
-void exception_handler(sdword iden, dword para) {
-	stduint r15;
-	#if _MCCA == 0x8664
-	_ASM("mov %%r15, %0" : "=r"(r15));
-	#else
-	_ASM("mov %%edx, %0" : "=r"(r15));
-	#endif
-	const bool have_para = iden >= 0;
-	if (iden < 0) iden = ~iden;
+void exception_handler(HardwareInterruptFrame* frame) {
+	stduint iden = frame->interrupt_id;
+	stduint para = frame->error_code;
+	stduint r15 = frame->pg_cr3;
+	const bool have_para = (iden == 8 || (iden >= 10 && iden <= 14) || iden == 17 || iden == 21);
 
 	dword tmp;
 	if (iden >= 0x20)
@@ -156,6 +169,11 @@ void exception_handler(sdword iden, dword para) {
 			first_done = true;
 			rostr test_page = (rostr)"[Mecocoa] Exception #UD Test OK!"; // "\xFF\x70[Mecocoa]\xFF\x27 Exception #UD Test OK!\xFF\x07";
 			printlog(_LOG_GOOD, " %s", test_page);
+			#if _MCCA == 0x8632
+			frame->hw_eip += 2;
+			#elif _MCCA == 0x8664
+			frame->hw_rip += 2;
+			#endif
 		}
 		else {
 			printlog(_LOG_FATAL, " %s", ExceptionDescription[iden]);// no-para
@@ -173,7 +191,7 @@ void exception_handler(sdword iden, dword para) {
 		break;
 
 	case ERQ_Page_Fault:// 14
-		printlog(_LOG_FATAL, have_para ? "%s with 0x%[x], vaddr=0x%[x], TID%u, CR3=0x%[x]" : "%s",
+		printlog(_LOG_FATAL, "%s with 0x%[x], vaddr=0x%[x], TID%u, CR3=0x%[x]",
 			ExceptionDescription[iden], para, getCR2(), Taskman::current_thread[Taskman::getID()]->tid, r15); // printlog will call halt machine
 		break;
 

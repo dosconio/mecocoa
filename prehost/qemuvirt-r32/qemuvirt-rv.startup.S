@@ -3,7 +3,7 @@
 # AllAuthor: @ArinaMgk
 # ModuTitle: Startup
 # Copyright: Dosconio Mecocoa, BSD 3-Clause License
-#include "../../include/qemuvirt-riscv.hpp"
+#include "../../include/archits/qemuvirt-riscv.hpp"
 #include "../qemuvirt-r32/qemuvirt.hs"
 # using:
 # .section .rodata

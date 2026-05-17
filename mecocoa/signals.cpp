@@ -56,9 +56,7 @@ static const SigActionDefault default_actions[_NSIG] = {
 	SIG_ACT_TERM
 };
 
-// Core logic for checking and delivering signals
-// Called from the assembly exit path when returning to User Mode
-extern "C" void check_and_deliver_signals(NormalTaskContext* cxt) {
+extern "C" void check_and_deliver_signals(void* context) {
 	ThreadBlock* crt = Taskman::current_thread[Taskman::getID()];
 	if (!crt || !crt->parent_process) return;
 

@@ -106,40 +106,40 @@ tryUD:
 	RET
 
 %macro PUSHA64 0
-	PUSH R15
-	PUSH R14
-	PUSH R13
-	PUSH R12
-	PUSH R11
-	PUSH R10
-	PUSH R9
-	PUSH R8
-	PUSH RDI
-	PUSH RSI
-	PUSH RBP
-	; PUSH RSP
-	PUSH RBX
-	PUSH RDX
-	PUSH RCX
 	PUSH RAX
+	PUSH RCX
+	PUSH RDX
+	PUSH RBX
+	; PUSH RSP
+	PUSH RBP
+	PUSH RSI
+	PUSH RDI
+	PUSH R8
+	PUSH R9
+	PUSH R10
+	PUSH R11
+	PUSH R12
+	PUSH R13
+	PUSH R14
+	PUSH R15
 %endmacro
 %macro POPA64 0
-	POP  RAX
-	POP  RCX
-	POP  RDX
-	POP  RBX
-	; POP RSP
-	POP  RBP
-	POP  RSI
-	POP  RDI
-	POP  R8
-	POP  R9
-	POP  R10
-	POP  R11
-	POP  R12
-	POP  R13
-	POP  R14
 	POP  R15
+	POP  R14
+	POP  R13
+	POP  R12
+	POP  R11
+	POP  R10
+	POP  R9
+	POP  R8
+	POP  RDI
+	POP  RSI
+	POP  RBP
+	; POP RSP
+	POP  RBX
+	POP  RDX
+	POP  RCX
+	POP  RAX
 %endmacro
 
 ; SYSCALL convention: RCX=user_RIP, R11=user_RFLAGS, RSP=user_RSP (unchanged)
@@ -226,19 +226,18 @@ GLOBAL Handint_Common_Stub_64
 Handint_Common_Stub_64:
 	PUSHA64
 	CALL PG_PUSH
-	; IRQ ID is at [RSP + 120 (PUSHA64) + 16 (PG_PUSH)] = 136
-	MOV RDI, [RSP + 136]
-	MOV RSI, RSP ; Pass Context pointer as 2nd argument
+	MOV RDI, RSP ; Pass HardwareInterruptFrame* as the first and only argument (System V ABI convention)
 	CALL interrupt_dispatcher
 	CALL PG_POP
 	POPA64
-	ADD RSP, 8; Pop Interrupt ID
+	ADD RSP, 16; Pop Vector ID and Error Code
 	IRETQ
 
 %macro IRQ_TRAMPOLINE_64 2
 GLOBAL %1
 %1:
-	PUSH %2
+	PUSH QWORD 0        ; Dummy Error Code
+	PUSH QWORD %2       ; Interrupt ID
 	JMP Handint_Common_Stub_64
 %endmacro
 
