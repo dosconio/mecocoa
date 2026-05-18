@@ -10,7 +10,7 @@
 	dev / NR_PRIM_PER_DRIVE : \
 	(dev - MINOR_hd1a) / NR_SUB_PER_DRIVE)
 
-#define MAX_DRIVES 2 // only for primary IDE
+#define MAX_DRIVES 4 // both primary and secondary IDE
 
 #define MAX_PRIM        (MAX_DRIVES * NR_PRIM_PER_DRIVE - 1) // 9. prim_dev ranges in hd[0-9] (h[0] h[1~4], h[5], h[6~9])
 #define MAX_SUBPARTITIONS    (NR_SUB_PER_DRIVE * MAX_DRIVES)

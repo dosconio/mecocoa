@@ -5,27 +5,35 @@ her-note: false
 
 # Driver
 
-## x86/x64l
+## x86/x64
 
 - CRT Video (by BIOS)
-- Interrupt 8259 **PIC** and **x2APIC**
-- Interrupt 8254 **PIT**
-- **RTC**
+- Interrupt 8259 **PIC** and **(x2)APIC**
 - **Buzzer** PC Speaker
 - **KBD** Keyboard and **MOU** PS/2-Mouse
-- PATA Disk
+- COMn UART
 
-## x64u
-
+x64u only
 - Bus: **PCI**
-- LAPIC Timer and ACPI PM Timer
 - **KBD** USB-Keyboard and **MOU** USB-Mouse
+
+### Timer
+
+- Interrupt 8254 **PIT**
+- **RTC**
+x64u only
+- LAPIC Timer and ACPI PM Timer
+
+
+### Storage
+
+- Floppy
+- PATA Disk
+- ATAPI CD
+
+
 
 ## RV qemuvirt
 
 - UART
 
-### TODO
-
-- Floppy
-- Network

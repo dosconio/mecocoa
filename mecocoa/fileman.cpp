@@ -256,6 +256,7 @@ void serv_file_loop()// for IDE 0:0, 0:1
 			// Shell
 			#if (_MCCA & 0xFF00) == 0x8600
 			#if _GUI_ENABLE
+			ploginfo("Loading first Shell...");
 			ProcessBlock* shell_p = Taskman::Create((void*)&serv_shell_process, RING_M);
 			ProcessBlock* cotl_p = Taskman::CreateFile(("/md0/cot"), RING_U, shell_p->pid);
 			if (shell_p) {

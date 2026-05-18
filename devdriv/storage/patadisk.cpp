@@ -20,25 +20,50 @@ RMOD_LIST RMOD_LIST_HDD{
 };
 #endif
 
-Harddisk_PATA* disks[2];// referenced
+Harddisk_PATA* disks[MAX_DRIVES];// referenced
 static char hdd_buf[byteof(**disks) * numsof(disks)];
 static byte lock = 1;
 static char* single_sector = NULL;// file-hd used buffer
 
+_ESYM_C void Handint_HDD1_Entry();
+
+void Handint_HDD1()
+{
+	if (disks[2]) disks[2]->getStatus(); // Clear Secondary IDE Channel interrupt
+	if (lock) {
+		IC.SendEOI(IRQ_ATA_DISK1);
+		return;
+	}
+	lock = 1;
+	rupt_proc(Task_Hdd_Serv, IRQ_ATA_DISK1);
+	IC.SendEOI(IRQ_ATA_DISK1);
+}
+
 void R_HDD_INIT() {
 	IC[IRQ_ATA_DISK0].setRange(mglb(Handint_HDD_Entry), SegCo32);
 	register_interrupt_handler(IRQ_ATA_DISK0, Handint_HDD);
-	for0a(i, disks) {
-
-		disks[i] = new (hdd_buf + i * byteof(**disks)) Harddisk_PATA(i);
+	IC[IRQ_ATA_DISK1].setRange(mglb(Handint_HDD1_Entry), SegCo32);
+	register_interrupt_handler(IRQ_ATA_DISK1, Handint_HDD1);
+	
+	for0(i, MAX_DRIVES) {
+		Harddisk_PATA probe(i);
+		byte dev_type = probe.ProbeDevice();
+		if (dev_type == 1) {
+			disks[i] = new (hdd_buf + i * byteof(**disks)) Harddisk_PATA(i);
+		} else if (dev_type == 2) {
+			disks[i] = new (hdd_buf + i * byteof(**disks)) xCD_ATAPI(i);
+		} else {
+			disks[i] = nullptr;
+		}
 	}
-	disks[0]->setInterrupt(NULL);
+	if (disks[0] || disks[1]) (disks[0] ? disks[0] : disks[1])->setInterrupt(NULL);
+	if (disks[2] || disks[3]) (disks[2] ? disks[2] : disks[3])->setInterrupt(NULL); // Enable secondary channel interrupt
 	if (!single_sector) single_sector = new char[0x1000];
 }
 
 void Handint_HDD()// HDD Master
 {
-	disks[0]->getStatus();// innpb(REG_STATUS);
+	if (disks[0]) disks[0]->getStatus();// innpb(REG_STATUS);
 	if (lock) {
 		IC.SendEOI(IRQ_ATA_DISK0);
 		return;
@@ -144,19 +169,21 @@ enum { REG_DATA = 0 };
 static void hd_open(Harddisk_PATA& hd) { // 0x00
 	byte low_id = hd.getLowID();
 	HdiskCommand cmd = {};
-	cmd.command = ATA_IDENTIFY;
+	cmd.command = (hd.Block_Size == 2048) ? ATAPI_CMD_IDENTIFY : ATA_IDENTIFY;
 	cmd.device = MAKE_DEVICE_REG(0, low_id, 0);
 	lock = 0;
-	// ploginfo("hd_open: %u, bs=%u", low_id, hd.Block_Size);
 	hd.Hdisk_OUT(&cmd);
 	hd_int_wait();
-	IN_wn(0x1F0 + REG_DATA, (word*)single_sector, hd.Block_Size);
+	word io_base = hd.getHigID() == 0 ? PORT_IDE_CommandBlock_0 : PORT_IDE_CommandBlock_1;
+	IN_wn(io_base + REG_DATA, (word*)single_sector, 512); // IDENTIFY payload is always 512 bytes
 	print_identify_info((uint16*)single_sector, hd);
 	if (!hd_info_valid[hd.getHigID() * 2 + low_id]) {
 		// if (_TEMP hd.getID() == 0x01) {
 		// DiscPartition dpart(hd, NR_PRIM_PER_DRIVE * low_id);
 		HD_Info& hdi = hd_info[hd.getHigID() * 2 + low_id];
-		DiscPartition::Partition(hd, hdi, (byte*)single_sector, NR_PRIM_PER_DRIVE * low_id);
+		if (hd.Block_Size == 512) { // Skip MBR mounting for ATAPI CD-ROMs
+			DiscPartition::Partition(hd, hdi, (byte*)single_sector, NR_PRIM_PER_DRIVE * low_id);
+		}
 		// if (1) print_hdinfo(hd);
 		hd_info_valid[hd.getHigID() * 2 + low_id] = true;
 	}
@@ -167,7 +194,19 @@ static void hd_close(Harddisk_PATA& hd) { // 0x02
 }
 
 static uni::PartitionSlice _LOCAL_GetPartitionSlice(unsigned device) {
-	Harddisk_PATA& hd = *disks[DRV_OF_DEV(device)];
+	stduint drv = DRV_OF_DEV(device);
+	if (drv >= MAX_DRIVES || !disks[drv]) {
+		uni::PartitionSlice slice = {0};
+		return slice;
+	}
+	Harddisk_PATA& hd = *disks[drv];
+	if (hd.Block_Size == 2048) { // CD-ROM raw whole disk mapping
+		if (device != MINOR_hd1a + drv * NR_SUB_PER_DRIVE) {
+			uni::PartitionSlice slice = {0};
+			return slice;
+		}
+		return hd.getSlice(device);
+	}
 	HD_Info& hdinfo = hd_info[hd.getHigID() * 2 + hd.getLowID()];
 	return device < MINOR_hd1a ?
 		hdinfo.primary[device % NR_PRIM_PER_DRIVE] :
@@ -176,8 +215,24 @@ static uni::PartitionSlice _LOCAL_GetPartitionSlice(unsigned device) {
 static void GetPartitionSlice(unsigned device, stduint pg_task)
 {
 	//{} hd_info_valid
+	stduint drv = DRV_OF_DEV(device);
+	if (drv >= MAX_DRIVES || !disks[drv]) {
+		uni::PartitionSlice ret = {0};
+		syssend(pg_task, &ret, byteof(ret));
+		return;
+	}
 	uni::PartitionSlice* retp;
-	Harddisk_PATA& hd = *disks[DRV_OF_DEV(device)];
+	Harddisk_PATA& hd = *disks[drv];
+	if (hd.Block_Size == 2048) { // CD-ROM raw whole disk mapping
+		if (device != MINOR_hd1a + drv * NR_SUB_PER_DRIVE) {
+			uni::PartitionSlice ret = {0};
+			syssend(pg_task, &ret, byteof(ret));
+			return;
+		}
+		uni::PartitionSlice ret = hd.getSlice(device);
+		syssend(pg_task, &ret, byteof(ret));
+		return;
+	}
 	HD_Info& hdinfo = hd_info[hd.getHigID() * 2 + hd.getLowID()];
 	retp = device < MINOR_hd1a ?
 		&hdinfo.primary[device % NR_PRIM_PER_DRIVE] :
@@ -200,10 +255,11 @@ struct Harddisk_PATA_Paged : public uni::Harddisk_PATA {
 };
 bool Harddisk_PATA_Paged::Read(stduint BlockIden, void* Dest) {
 	if (Taskman::CurrentPID() == Task_Hdd_Serv) {
-		return Harddisk_PATA::Read(BlockIden, Dest);
+		if (!disks[getID()]) return false;
+		return disks[getID()]->Read(BlockIden, Dest);
 	}
 	stduint to_args[2];
-	to_args[0] = getLowID();
+	to_args[0] = getID();
 	to_args[1] = BlockIden;
 	syssend(Task_Hdd_Serv, sliceof(to_args), _IMM(FiledevMsg::READ));
 	// Receive ACK before data transfer
@@ -216,10 +272,11 @@ bool Harddisk_PATA_Paged::Read(stduint BlockIden, void* Dest) {
 
 bool Harddisk_PATA_Paged::Write(stduint BlockIden, const void* Sors) {
 	if (Taskman::CurrentPID() == Task_Hdd_Serv) {
-		return Harddisk_PATA::Write(BlockIden, Sors);
+		if (!disks[getID()]) return false;
+		return disks[getID()]->Write(BlockIden, Sors);
 	}
 	stduint to_args[2];
-	to_args[0] = getLowID();
+	to_args[0] = getID();
 	to_args[1] = BlockIden;
 	syssend(Task_Hdd_Serv, sliceof(to_args), _IMM(FiledevMsg::WRITE));
 	// Receive ACK before data transfer
@@ -232,7 +289,7 @@ bool Harddisk_PATA_Paged::Write(stduint BlockIden, const void* Sors) {
 
 //// ---- ---- SERVICE ---- ---- ////
 static stduint args[4];
-Harddisk_PATA_Paged* paged_disks[2];
+Harddisk_PATA_Paged* paged_disks[MAX_DRIVES];
 
 int fat_time = 0;
 void serv_dev_hd_loop()
@@ -243,15 +300,20 @@ void serv_dev_hd_loop()
 	}
 
 	for0a(i, disks) {
-		disks[i]->fn_cmd_wait = hd_cmd_wait;
-		disks[i]->fn_int_wait = hd_int_wait;
-		disks[i]->fn_lup_wait = waitfor;
-		disks[i]->fn_feedback = hd_rw_foreback;
-		disks[i]->react_type = Harddisk_PATA::ReactType::Rupt;
+		if (disks[i]) {
+			disks[i]->fn_cmd_wait = hd_cmd_wait;
+			disks[i]->fn_int_wait = hd_int_wait;
+			disks[i]->fn_lup_wait = waitfor;
+			disks[i]->fn_feedback = hd_rw_foreback;
+			disks[i]->react_type = Harddisk_PATA::ReactType::Rupt;
+		}
 	}
 	// Initialize the paged proxy disks
 	for0a(i, paged_disks) {
 		paged_disks[i] = new Harddisk_PATA_Paged(i);
+		if (disks[i]) {
+			paged_disks[i]->Block_Size = disks[i]->Block_Size;
+		}
 	}
 	
 	// Console.OutFormat("[Hrddisk] detect %u disks\n\r", bda->hdisk_number);
@@ -262,12 +324,14 @@ void serv_dev_hd_loop()
 		switch ((FiledevMsg)sig_type)
 		{
 		case FiledevMsg::TEST:// (no-feedback)
-			for0(i, bda->hdisk_number) {
-				hd_open(*disks[i]);
-				Console.OutFormat("[Hrddisk] Detect Disk on IDE%u:%u : %u MB\n\r", i / MAX_DRIVES, i % MAX_DRIVES, _IMM(disks[i]->getUnits() * disks[i]->Block_Size) >> 20);
+			for0(i, MAX_DRIVES) {
+				if (disks[i]) {
+					hd_open(*disks[i]);
+					Console.OutFormat("[Hrddisk] Detect %s on IDE%u:%u : %u MB\n\r", (disks[i]->Block_Size == 2048) ? "CD-ROM" : "Disk", i / 2, i % 2, _IMM(disks[i]->getUnits() * disks[i]->Block_Size) >> 20);
+				}
 			}
 
-			for (int dev = 1; dev < NR_SUB_PER_DRIVE * bda->hdisk_number; dev++) { // Scan typical devs up to logical drives
+			for (int dev = 1; dev < NR_SUB_PER_DRIVE * MAX_DRIVES; dev++) { // Scan typical devs up to logical drives
 				// Probe partition type via MBR sys_id to avoid blind loadfs() attempts
 				if (dev < 0x10) {
 					if (Ranglin(dev, 1, 4) || Ranglin(dev, 6, 4)); else continue;
