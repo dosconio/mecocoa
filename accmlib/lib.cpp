@@ -163,3 +163,62 @@ int execl(const char* path, const char* arg, ...)
 	argv[argc] = nullptr; 
 	return execv(path, argv);
 }
+
+extern "C" void __sigrestorer();
+
+extern "C" int sigaction(int sig, const struct _POSIX_sigaction* act, struct _POSIX_sigaction* oact) {
+	struct _POSIX_sigaction temp_act;
+	if (act) {
+		temp_act = *act;
+		if (temp_act.sa_restorer == nullptr) {
+			temp_act.sa_restorer = __sigrestorer;
+		}
+		act = &temp_act;
+	}
+	return (int)syscall(syscall_t::SIGA, sig, _IMM(act), _IMM(oact));
+}
+
+extern "C" int kill(pid_t pid, int sig) {
+	return (int)syscall(syscall_t::KILL, pid, sig, 0);
+}
+
+extern "C" int sigemptyset(_POSIX_sigset_t* set) {
+	if (!set) return -1;
+	_sigset_raw(set) = 0;
+	return 0;
+}
+
+extern "C" int sigfillset(_POSIX_sigset_t* set) {
+	if (!set) return -1;
+	_sigset_raw(set) = ~0ULL;
+	return 0;
+}
+
+extern "C" int sigaddset(_POSIX_sigset_t* set, int signo) {
+	if (!set || signo <= 0 || signo >= _NSIG) return -1;
+	_sigset_raw(set) |= (1ULL << (signo - 1));
+	return 0;
+}
+
+extern "C" int sigdelset(_POSIX_sigset_t* set, int signo) {
+	if (!set || signo <= 0 || signo >= _NSIG) return -1;
+	_sigset_raw(set) &= ~(1ULL << (signo - 1));
+	return 0;
+}
+
+extern "C" int sigismember(const _POSIX_sigset_t* set, int signo) {
+	if (!set || signo <= 0 || signo >= _NSIG) return 0;
+	return (_sigset_raw(set) & (1ULL << (signo - 1))) != 0;
+}
+
+extern "C" __sighandler_t signal(int sig, __sighandler_t handler) {
+	struct _POSIX_sigaction act, oact;
+	act.sa_handler = handler;
+	sigemptyset(&act.sa_mask);
+	act.sa_flags = 0;
+	act.sa_restorer = nullptr;
+	if (sigaction(sig, &act, &oact) < 0) {
+		return SIG_ERR;
+	}
+	return oact.sa_handler;
+}

@@ -12,9 +12,10 @@
 #define DEFSYSC extern "C" stdsint
 
 // Kernel Signal Functions
-extern "C" stduint sys_sigaction(int, const struct sigaction*, struct sigaction*);
+extern "C" stduint sys_sigaction(int, const struct _POSIX_sigaction*, struct _POSIX_sigaction*);
 extern "C" stduint sys_kill(stduint, int, stduint);
-extern "C" void sys_sigreturn();
+extern "C" stdsint sysc_SIGR(void* context);
+extern "C" void check_and_deliver_signals(void* context);
 
 // Syscall Wrappers
 extern stduint SYSCALL_TABLE[22];
@@ -81,7 +82,7 @@ DEFSYSC sysc_OUTC(stduint ch, stduint len) {
 			else while (len) {
 				stduint crt_len = 0x1000 - (ch & 0xFFF);
 				if (len < crt_len) crt_len = len;
-				auto pa = pid->paging[ch];
+				auto pa = mglb(pid->paging[ch]);
 				if (_IMM(pa) == ~_IMM0) {
 					plogerro("OUTC");
 					return -1;
@@ -171,6 +172,9 @@ DEFSYSC sysc_REST(stduint unit, stduint time) {
 	SysTimer::Append(timeout, (stduint)th, (_tocall_ft)_TimerWakeUp);
 	
 	Taskman::Schedule(true);
+	if (_sigset_raw(&th->pending_signals) & ~_sigset_raw(&th->blocked_signals)) {
+		return -4; // -EINTR
+	}
 	return 0;
 }
 
@@ -192,6 +196,9 @@ DEFSYSC sysc_COMM(stduint op, stduint to, stduint msg) {
 	}
 	if (th->state == ThreadBlock::State::Pended) {
 		Taskman::Schedule(true);
+	}
+	if (_sigset_raw(&th->pending_signals) & ~_sigset_raw(&th->blocked_signals)) {
+		return -4; // -EINTR
 	}
 	return ret;
 }
@@ -232,13 +239,15 @@ DEFSYSC sysc_READ(stduint fd, stduint addr, stduint len) {
 		while (total_read < len) {
 			stduint open_buf[4]{ fd, addr + total_read, len - total_read, th->getID() };
 			syssend(Task_FileSys, open_buf, byteof(open_buf), _IMM(FilemanMsg::READ));
-			sysrecv(Task_FileSys, open_buf, byteof(open_buf[0]));
+			stduint r1 = sysrecv(Task_FileSys, open_buf, byteof(open_buf[0]));
+			if ((stdsint)r1 < 0) return r1; // Return -EINTR if interrupted
 
 			stduint bytes_read = open_buf[0];
 			if (bytes_read == 0) {
 				syssend(Task_Console, 0, 0, _IMM(ConsoleMsg::INNC));
 				stduint ret;
-				sysrecv(Task_Console, &ret, byteof(ret));
+				stduint r2 = sysrecv(Task_Console, &ret, byteof(ret));
+				if ((stdsint)r2 < 0) return r2; // Return -EINTR if interrupted
 				if (ret == ~_IMM0) break;
 
 				// Identify the specific vtty device for echo
@@ -309,7 +318,8 @@ DEFSYSC sysc_WAIT(stduint pid, stduint usr_status) {
 	auto tb = Taskman::current_thread[Taskman::getID()];
 	stduint open_buf[3]{ tb->parent_process->getID(), pid, usr_status };
 	syssend(Task_TaskMan, sliceof(open_buf), _IMM(TaskmanMsg::WAIT));
-	sysrecv(Task_TaskMan, sliceof(open_buf));// (pid, state)
+	stduint r = sysrecv(Task_TaskMan, sliceof(open_buf));// (pid, state)
+	if ((stdsint)r < 0) return r; // Return -EINTR if interrupted
 	stdsint ret = open_buf[0];// pid
 	if (ret && usr_status) {
 		auto pb = tb->parent_process;
@@ -362,8 +372,18 @@ DEFSYSC sysc_TEST(stduint t, stduint e, stduint s) {
 
 DEFSYSC sysc_SIGA(stduint sig, stduint act, stduint oact) {
 	auto pb = Taskman::current_thread[Taskman::getID()]->parent_process;
-	const struct sigaction* p_act = (const struct sigaction*)(act ? pb->paging[act] : nullptr);
-	struct sigaction* p_oact = (struct sigaction*)(oact ? pb->paging[oact] : nullptr);
+	
+	stduint phys_act = act ? (stduint)pb->paging[act] : 0;
+	stduint phys_oact = oact ? (stduint)pb->paging[oact] : 0;
+	
+	const struct _POSIX_sigaction* p_act = act ? (const struct _POSIX_sigaction*)mglb(phys_act) : nullptr;
+	struct _POSIX_sigaction* p_oact = oact ? (struct _POSIX_sigaction*)mglb(phys_oact) : nullptr;
+	
+	if (oact && _IMM(phys_oact) == ~_IMM0) {
+		plogerro("sysc_SIGA: oact address 0x%[x] not mapped in user page table!", oact);
+		return -1;
+	}
+	
 	return (stdsint)sys_sigaction((int)sig, p_act, p_oact);
 }
 
@@ -371,10 +391,6 @@ DEFSYSC sysc_KILL(stduint pid, stduint sig, stduint tid) {
 	return (stdsint)sys_kill(pid, (int)sig, tid);
 }
 
-DEFSYSC sysc_SIGR() {
-	sys_sigreturn();
-	return 0;
-}
 
 #if (_MCCA & 0xFF00) == 0x8600 || (_MCCA & 0xFF00) == 0x1000
 stduint SYSCALL_TABLE[] = {
@@ -399,7 +415,7 @@ stduint SYSCALL_TABLE[] = {
 	0, //{} mglb(sysc_MALC), // 0x12 unchk
 	mglb(sysc_SIGA), // 0x13 unchk
 	mglb(sysc_KILL), // 0x14 unchk
-	mglb(sysc_SIGR), // 0x15 unchk
+	0, // 0x15 unchk (handled manually to pass context frame)
 };
 #endif
 
@@ -454,19 +470,20 @@ void syscall_body(NormalTaskContext* cxt)
 		cxt->a0 = sysc_KILL(cxt->a0, cxt->a1, cxt->a2);
 		break;
 	case syscall_t::SIGR:
-		cxt->a0 = sysc_SIGR();
+		cxt->a0 = sysc_SIGR(cxt);
 		break;
 	default:
 		plogerro("Unknown syscall no: %d", syscall_num);
 		loop HALT();
 		cxt->a0 = -1;
 	}
-
+	check_and_deliver_signals(cxt);
 	return;
 }
 
 #endif
 #if (_MCCA & 0xFF00) == 0x8600
+extern "C" void check_and_deliver_signals_syscall(CallgateFrame* frame);
 __attribute__((optimize("O0")))
 stduint Handint_SYSCALL(CallgateFrame* frame) {
 	#if _MCCA == 0x8632
@@ -474,23 +491,28 @@ stduint Handint_SYSCALL(CallgateFrame* frame) {
 	stduint para[4] = { frame->cx, frame->dx, frame->bx };
 	#elif _MCCA == 0x8664
 	auto pb = Taskman::current_thread[Taskman::getID()]->parent_process;
-	if (&pb->paging != &kernel_paging) frame = (CallgateFrame*)pb->paging[_IMM(frame)];
+	if (&pb->paging != &kernel_paging) frame = (CallgateFrame*)(pb->paging[_IMM(frame)]);
 	auto callid = (syscall_t)(frame->ax & 0x7FFFFFFFu);
 	stduint para[4] = { frame->di, frame->si, frame->dx };
 	#endif
 
+	stduint ret_val = -1;
 	if (_IMM(callid) < numsof(SYSCALL_TABLE) && SYSCALL_TABLE[_IMM(callid)]) {
-		return (reinterpret_cast<stdsint(*)(stduint, stduint, stduint)>mglb(SYSCALL_TABLE[_IMM(callid)]))(para[0], para[1], para[2]);
+		ret_val = (reinterpret_cast<stdsint(*)(stduint, stduint, stduint)>mglb(SYSCALL_TABLE[_IMM(callid)]))(para[0], para[1], para[2]);
 	}
 	else switch (callid) {
-	case syscall_t::FORK: return sysx_FORK(frame);
-	case syscall_t::TEST: return sysc_TEST(para[0], para[1], para[2]);
+	case syscall_t::FORK: ret_val = sysx_FORK(frame); break;
+	case syscall_t::SIGR: ret_val = sysc_SIGR(frame); break;
+	case syscall_t::TEST: ret_val = sysc_TEST(para[0], para[1], para[2]); break;
 	
 	default:
 		printlog(_LOG_ERROR, "Unimplemented syscall: 0x%[32H]", _IMM(callid));
 		break;
 	}
-	return -1;
+
+	frame->ax = ret_val;
+	check_and_deliver_signals_syscall(frame);
+	return frame->ax;
 }
 #endif
 

@@ -157,6 +157,48 @@ void exception_handler(HardwareInterruptFrame* frame) {
 	stduint r15 = frame->pg_cr3;
 	const bool have_para = (iden == 8 || (iden >= 10 && iden <= 14) || iden == 17 || iden == 21);
 
+	// Check if exception comes from user space (Ring 3)
+	bool is_user = (frame->hw_cs & 3) != 0;
+
+	if (is_user) {
+		#if _MCCA == 0x8664
+		plogwarn("User exception %d (para %[x]) at RIP %[x], RSP %[x], CR2 %[x]", (int)iden, para, frame->hw_rip, frame->hw_rsp, getCR2());
+		#else
+		plogwarn("User exception %d (para %[x]) at EIP %[x], ESP %[x]", (int)iden, para, frame->hw_eip, frame->hw_esp);
+		#endif
+		int sig = 0;
+		switch (iden) {
+			case ERQ_Divide_By_Zero:
+				sig = SIGFPE;
+				break;
+			case ERQ_Step:
+			case ERQ_Breakpoint:
+				sig = SIGTRAP;
+				break;
+			case ERQ_Overflow:
+			case ERQ_Bound:
+			case ERQ_x0D: // General Protection (#GP) defined as ERQ_x0D in IBM.h
+			case ERQ_Page_Fault:
+				sig = SIGSEGV;
+				break;
+			case ERQ_Invalid_Opcode:
+				sig = SIGILL;
+				break;
+			default:
+				sig = SIGILL; // Fallback signal for unknown exceptions
+				break;
+		}
+
+		if (sig != 0) {
+			ThreadBlock* crt = Taskman::current_thread[Taskman::getID()];
+			if (crt) {
+				// Mark signal as pending directly in Ring 0 exception handler
+				sigaddset(&crt->pending_signals, sig);
+				return; // Returns to dispatcher, which calls check_and_deliver_signals
+			}
+		}
+	}
+
 	dword tmp;
 	if (iden >= 0x20)
 		printlog(_LOG_FATAL, "#ELSE %x %x", iden, para);

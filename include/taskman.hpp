@@ -223,8 +223,8 @@ public: // _Comment(Fileman);
 	vfs_dentry* cwd = nullptr;  // Current Working Directory
 	vfs_dentry* root = nullptr; // Root for chroot
 	// Signal
-	struct sigaction sig_actions[_NSIG]; // Action table (shared by threads)
-	sigset_t shared_pending_signals;      // Pending signals for the whole process
+	struct _POSIX_sigaction sig_actions[_NSIG]; // Action table (shared by threads)
+	_POSIX_sigset_t shared_pending_signals;      // Pending signals for the whole process
 	//
 	ProcessBlock() {
 		// Initialize signal actions to default
@@ -296,8 +296,10 @@ public: // _Comment(Syscomm)
 public:
 	inline stduint getID() const { return tid; }
 	// Signal
-	sigset_t pending_signals; // Bitmask of waiting signals
-	sigset_t blocked_signals; // Bitmask of masked signals
+	_POSIX_sigset_t pending_signals; // Bitmask of waiting signals
+	_POSIX_sigset_t blocked_signals; // Bitmask of masked signals
+	stduint sas_sp = 0;       // Alternate signal stack pointer
+	stduint sas_size = 0;     // Alternate signal stack size
 };
 
 #include "taskman/context.hpp"

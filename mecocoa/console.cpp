@@ -13,6 +13,8 @@ extern Spinlock gui_lock;
 extern Spinlock scheduler_lock;
 #include "../include/filesys.hpp"
 
+extern "C" stduint sys_kill(stduint pid, int sig, stduint tid);
+
 
 
 #if 1 // ---- ---- TTY ---- ----
@@ -617,7 +619,7 @@ void _Comment(R1) serv_shell_process() {
 
 		if (auto nod = (Dnode*)p->focus_tty) {
 			auto pblock = (vtty_type_t*)nod->type;
-			pblock->master_pid = Taskman::CurrentPID();
+			pblock->master_pid = p->pid;
 			pblock->proc_group.Append(p->pid);
 		}
 		
@@ -638,11 +640,19 @@ void _Comment(R1) serv_shell_process() {
 					if (key_event->method == keyboard_event_t::method_t::keydown) {
 						auto ascii_ch = (key_event->mod.l_shift || key_event->mod.r_shift ? key_map_shift : key_map)[key_event->keycode];
 						if (ascii_ch) {
-							// Taskman::DumpTask(Taskman::Locate(Task_Console));
-							// ploginfo("blocked_vtty_pid.Count: %u", blocked_vtty_pid.Count());
-							// if (blocked_vtty_pid.Count() == 1) {
-							// 	ploginfo("blocked_vtty_pid[0]: %u", blocked_vtty_pid[0]);
-							// }
+							// Check for Ctrl+C to trigger SIGINT
+							if ((key_event->mod.l_ctrl || key_event->mod.r_ctrl) && !key_event->mod.l_shift && !key_event->mod.r_shift && ascii_ch == 'c') {
+								if (tty_target && tty_target->type) {
+									auto pblock = (vtty_type_t*)tty_target->type;
+									for (stduint idx = 0; idx < pblock->proc_group.Count(); idx++) {
+										stduint target_pid = pblock->proc_group[idx];
+										if (target_pid >= TaskCount && target_pid != pblock->master_pid) {
+											sys_kill(target_pid, SIGINT, 0);
+										}
+									}
+								}
+								continue;
+							}
 							if (auto* q = VTTY_INNQ(tty_target)) {
 								q->OutChar(ascii_ch);
 							}
@@ -670,9 +680,7 @@ void _Comment(R1) serv_shell_process() {
 								if ((pid >= TaskCount || pid == pblock->master_pid) && pid != self_pid) {
 									ProcessBlock* pb_to_kill = Taskman::Locate(pid);
 									if (pb_to_kill && pb_to_kill->state != ProcessBlock::State::Hanging) {
-										stduint exit_para[2] = { pb_to_kill->pid, (stduint)-1 };
-										syssend(Task_TaskMan, exit_para, sizeof(exit_para), _IMM(TaskmanMsg::EXIT));
-										sysrecv(Task_TaskMan, exit_para, sizeof(exit_para));
+										sys_kill(pid, SIGKILL, 0);
 									}
 								}
 							}
@@ -704,9 +712,7 @@ shell_exit:
 			if (pid == self_pid) continue;
 			auto pb_to_kill = Taskman::Locate(pid);
 			if (pb_to_kill && pb_to_kill->state != ProcessBlock::State::Hanging) {
-				stduint exit_para[2] = { pb_to_kill->pid, (stduint)-1 };
-				syssend(Task_TaskMan, exit_para, sizeof(exit_para), _IMM(TaskmanMsg::EXIT));
-				sysrecv(Task_TaskMan, exit_para, sizeof(exit_para));
+				sys_kill(pid, SIGKILL, 0);
 			}
 		}
 		{

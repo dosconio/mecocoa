@@ -8,7 +8,7 @@
 [CPU 586]
 ;%include "mecocoa/kernel.inc"
 
-GLOBAL _start, syscall
+GLOBAL _start, syscall, __sigrestorer
 EXTERN main, _exit
 
 section .text
@@ -52,3 +52,8 @@ _start:
 	push	eax			; Push return value for exit
 	call	_exit		; Call exit(status)
 mov byte[0], 0
+
+__sigrestorer:
+	MOV EAX, 0x15 ; syscall_t::SIGR (0x15)
+	CALL SegCall|3:0
+

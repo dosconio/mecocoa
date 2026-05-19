@@ -6,6 +6,8 @@
 #include "../include/mecocoa.hpp"
 #include <c/driver/keyboard.h>
 
+extern "C" stduint sys_kill(stduint pid, int sig, stduint tid);
+
 _ESYM_C void R_KBD_INIT();
 
 #if (_MCCA & 0xFF00) == 0x8600
@@ -139,6 +141,19 @@ int KeyboardBridge::out(const char* str, stduint len) {
 						return 0; // Intercept: do not pass to VTTY
 					}
 					#else
+					// Check for Ctrl+C to trigger SIGINT (Non-GUI Mode, exclude Shift)
+					if ((kbd_state.mod.l_ctrl || kbd_state.mod.r_ctrl) && !kbd_state.mod.l_shift && !kbd_state.mod.r_shift && ascii_ch == 'c') {
+						if (p_vtty && p_vtty->type) {
+							auto pblock = (vtty_type_t*)p_vtty->type;
+							for (stduint idx = 0; idx < pblock->proc_group.Count(); idx++) {
+								stduint target_pid = pblock->proc_group[idx];
+								if (target_pid >= TaskCount && target_pid != pblock->master_pid) {
+									sys_kill(target_pid, SIGINT, 0);
+								}
+							}
+						}
+						return 0;
+					}
 					VTTY_INNQ(p_vtty)->OutChar(ascii_ch);
 					#endif
 				}
@@ -201,6 +216,22 @@ void sysmsg_kbd(keyboard_event_t kbd_event) {
 				// NumPad adjustments
 				ch = key_map_shift[kbd_event.keycode];
 			}
+			// Check for Ctrl+C to trigger SIGINT (Non-GUI Mode, exclude Shift)
+			#if !_GUI_ENABLE
+			if ((kbd_state.mod.l_ctrl || kbd_state.mod.r_ctrl) && !kbd_state.mod.l_shift && !kbd_state.mod.r_shift && ch == 'c') {
+				auto p_vtty = vttys[Consman::current_screen_TTY];
+				if (p_vtty && p_vtty->type) {
+					auto pblock = (vtty_type_t*)p_vtty->type;
+					for (stduint idx = 0; idx < pblock->proc_group.Count(); idx++) {
+						stduint target_pid = pblock->proc_group[idx];
+						if (target_pid >= TaskCount && target_pid != pblock->master_pid) {
+							sys_kill(target_pid, SIGINT, 0);
+						}
+					}
+				}
+				return;
+			}
+			#endif
 		}
 		// Forward keyboard event to focused window (for console or background)
 		if (asrtand(Consman::last_click_sheet)->refSheetNode().next) {

@@ -37,3 +37,8 @@ _start:
 	call exit   #(exit_code)
 .L_dead: 	j .L_dead
 .size _start, . - _start
+
+.global __sigrestorer
+__sigrestorer:
+	li a7, 0x15 /* syscall_t::SIGR */
+	ecall

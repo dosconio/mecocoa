@@ -1,7 +1,7 @@
 
 [BITS 64]
 
-GLOBAL syscall, _start
+GLOBAL syscall, _start, __sigrestorer
 EXTERN main, _exit
 
 section .text
@@ -25,3 +25,8 @@ _start:
 	mov	rdi, rax	; Use return value as exit code
 	call	_exit	; Call exit(status)
 mov byte[0], 0
+
+__sigrestorer:
+	MOV RAX, 0x15 ; syscall_t::SIGR (0x15)
+	SYSCALL
+

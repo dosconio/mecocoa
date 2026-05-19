@@ -213,6 +213,7 @@ bool Taskman::ExitCurrent(stduint code) {
 
 	// [u]
 	// __asm("mov %0, %%eax" : : "m"(para[0])); TaskReturn();
+
 	stduint para[2] = { pid, code };
 	syssend(Task_TaskMan, sliceof(para), _IMM(TaskmanMsg::EXIT));
 	sysrecv(Task_TaskMan, sliceof(para));
@@ -300,7 +301,7 @@ static void _Exit_Cleanup(stduint pid)
 
 		if (is_tty_valid && ppb->focus_tty->type) {
 			auto pblock = (vtty_type_t*)ppb->focus_tty->type;
-			if (pblock->master_pid == pid) for (stdsint i = pblock->proc_group.Count() - 1; i >= 0; --i) {
+			for (stdsint i = pblock->proc_group.Count() - 1; i >= 0; --i) {
 				if (pblock->proc_group[i] == pid) {
 					pblock->proc_group.Remove(i);
 					break;
@@ -401,12 +402,7 @@ bool Taskman::Exit(ProcessBlock* p, stdsint exit_code)
 
 	ploginfo("Process %u exited with code %[x]", pid, exit_code);
 
-	// Hierarchical Process Tree: Recursive Kill
-	while (p->child_list_head) {
-		ProcessBlock* child = p->child_list_head;
-		Taskman::Exit(child, -1);
-		_Exit_Cleanup(child->pid);
-	}
+	// [Canceled] Hierarchical Process Tree: Recursive Kill
 
 	// Check all system tasks to see if they are blocked by the exiting process
 	for (stduint i = 0; i < TaskCount; i++) {
@@ -455,20 +451,26 @@ bool Taskman::Exit(ProcessBlock* p, stdsint exit_code)
 
 	p->exit_status = exit_code;
 
-	// Handle Remaining Children (Reap zombies or Reparent living ones)
+	// Handle Remaining Children (Reparent all children to Task_Init)
 	while (p->child_list_head) {
 		ProcessBlock* child = p->child_list_head;
-		if (child->state == ProcessBlock::State::Hanging) {
-			_Exit_Cleanup(child->pid);
+
+		// Unlink the child from current parent's child list first
+		{
+			SpinlockLocal guard(&scheduler_lock);
+			p->child_list_head = child->sibling_next;
+			child->sibling_next = nullptr;
 		}
-		else {
-			child->parent_id = Task_Init;
-			ProcessBlock* pinit = Taskman::Locate(Task_Init);
-			if (pinit) {
-				SpinlockLocal guard(&scheduler_lock);
-				child->sibling_next = pinit->child_list_head;
-				pinit->child_list_head = child;
-			}
+
+		// Reparent the child to Task_Init (sole source of truth from taskman.hpp)
+		child->parent_id = Task_Init;
+
+		// Attach the child to Task_Init's child list
+		ProcessBlock* pinit = Taskman::Locate(Task_Init);
+		if (pinit) {
+			SpinlockLocal guard(&scheduler_lock);
+			child->sibling_next = pinit->child_list_head;
+			pinit->child_list_head = child;
 		}
 	}
 
@@ -479,7 +481,9 @@ bool Taskman::Exit(ProcessBlock* p, stdsint exit_code)
 	if (parent_active && pparent->isWaiting() && (pparent->wait_for_pid == 0 || pparent->wait_for_pid == pid)) {
 		pparent->main_thread->Unblock(ThreadBlock::BlockReason::BR_Waiting);
 		pparent->wait_for_pid = 0; // Reset after unblocking
+
 		syssend(parent_pid, &args, sizeof(args));
+
 		_Exit_Cleanup(pid); // Die completely
 	}
 	else if (!parent_active) {
@@ -511,7 +515,9 @@ stdsint Taskman::Wait(ProcessBlock* pb, stduint target_pid)
 				stduint child_pid = taski->pid;
 				_Exit_Cleanup(child_pid);
 				// children = child_pid;
+				
 				syssend(pid, args, sizeof(args));
+
 				return child_pid;
 			}
 		}
@@ -521,7 +527,7 @@ stdsint Taskman::Wait(ProcessBlock* pb, stduint target_pid)
 		pb->main_thread->Block(ThreadBlock::BlockReason::BR_Waiting);
 	}
 	else { // no any child
-		syssend(pid, &children, sizeof(children));// return 0
+		syssend(pid, &children, sizeof(children));
 	}
 	return ~_IMM0;
 }
