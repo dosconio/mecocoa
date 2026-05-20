@@ -90,11 +90,17 @@ static constexpr const stduint ANYPROC = (_IMM0);
 static constexpr const stduint INTRUPT = (~_IMM0);
 static constexpr const stduint COMM_RECV = 0b10;
 static constexpr const stduint COMM_SEND = 0b01;
+static constexpr const stduint COMM_SEND_ASYNC = 0b100;
+static constexpr const stduint LIMIT_THREAD_AMSG = 32;
 
 struct CommMsg {
 	uni::Slice data;
 	stduint type;
 	stduint src;// use if type is HARDRUPT
+};
+
+struct AsyncCommMsg {
+	CommMsg msg;
 };
 
 // Process
@@ -293,9 +299,10 @@ public: // _Comment(Syscomm)
 	// if B->A, C->A. Then: A.qhead = B, B.qnext = C, C.qnext = none
 	ThreadBlock* queue_send_queuehead = nullptr;// nullptr for none
 	ThreadBlock* queue_send_queuenext = nullptr;
+	Dchain async_messages;
 public:
 	inline stduint getID() const { return tid; }
-	// Signal
+public: // _Comment(Signals)
 	_POSIX_sigset_t pending_signals; // Bitmask of waiting signals
 	_POSIX_sigset_t blocked_signals; // Bitmask of masked signals
 	stduint sas_sp = 0;       // Alternate signal stack pointer
@@ -404,7 +411,7 @@ enum class TaskmanMsg : stduint {
 #ifndef _ACCM
 
 // return zero for success
-int msg_send(ThreadBlock* fo, stduint to, _Comment(vaddr) CommMsg* msg);
+int msg_send(ThreadBlock* fo, stduint to, _Comment(vaddr) CommMsg* msg, bool is_async = false);
 int msg_recv(ThreadBlock* to, stduint fo, _Comment(vaddr) CommMsg* msg);
 
 void msg_cleanup_thread(ThreadBlock* th);
@@ -417,6 +424,14 @@ inline static stduint syssend(stduint to_whom, const void* msgaddr, stduint bytl
 	msg.data.length = bytlen;
 	msg.type = type;
 	return syscall(syscall_t::COMM, COMM_SEND, to_whom, _IMM(&msg));
+}
+inline static stduint syssend_async(stduint to_whom, const void* msgaddr, stduint bytlen, stduint type = 0)
+{
+	struct CommMsg msg = { };
+	msg.data.address = _IMM(msgaddr);
+	msg.data.length = bytlen;
+	msg.type = type;
+	return syscall(syscall_t::COMM, COMM_SEND_ASYNC, to_whom, _IMM(&msg));
 }
 inline static stduint sysrecv(stduint fo_whom, void* msgaddr, stduint bytlen, stduint* type = NULL, stduint* src = NULL)
 {

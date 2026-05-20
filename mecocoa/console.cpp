@@ -759,7 +759,7 @@ void _Comment(R1) serv_cons_loop()
 				if (q && -1 != (ch = q->inn())) {
 					stdsint val = ch;
 					blocked_vtty_pid.Remove(i--);
-					syssend(pid, &val, byteof(val));
+					syssend_async(pid, &val, byteof(val));
 				}
 			}
 		}
@@ -790,7 +790,7 @@ void _Comment(R1) serv_cons_loop()
 
 					stduint val = 1;
 					blocked_form_msgs.Remove(i--);
-					syssend(b.sig_src, &val, byteof(val));
+					syssend_async(b.sig_src, &val, byteof(val));
 				}
 			}
 		}
@@ -818,7 +818,7 @@ void _Comment(R1) serv_cons_loop()
 				}
 				else {
 					ret = ~_IMM0;
-					syssend(sig_src, (void*)&ret, sizeof(ret), 0);
+					syssend_async(sig_src, (void*)&ret, sizeof(ret), 0);
 				}
 				break;
 
@@ -827,7 +827,7 @@ void _Comment(R1) serv_cons_loop()
 			case ConsoleMsg::FNEW:
 				ploginfo("creating new form %[x]", to_args[0]);
 				ret = ConsoleMsg_FNEW((FMT_ConsoleMsg_FNEW*)to_args, th->parent_process);
-				syssend(sig_src, (void*)&ret, sizeof(ret));
+				syssend_async(sig_src, (void*)&ret, sizeof(ret));
 				break;
 
 			case ConsoleMsg::FDEL:
@@ -836,7 +836,7 @@ void _Comment(R1) serv_cons_loop()
 				// If request from System Tasks, to_args[1] is the target PID
 				if (sig_src < TaskCount) pb_target = Taskman::Locate(to_args[1]);
 				ret = ConsoleMsg_FDEL(to_args[0], pb_target);
-				syssend(sig_src, (void*)&ret, sizeof(ret));
+				syssend_async(sig_src, (void*)&ret, sizeof(ret));
 			}
 			break;
 
@@ -844,29 +844,29 @@ void _Comment(R1) serv_cons_loop()
 			case ConsoleMsg::FMSG:
 				ret = ConsoleMsg_FMSG((FMT_ConsoleMsg_FMSG*)to_args, th->parent_process, sig_src);
 				if ((stdsint)ret != -2) {
-					syssend(sig_src, (void*)&ret, sizeof(ret));
+					syssend_async(sig_src, (void*)&ret, sizeof(ret));
 				}
 				break;
 
 			case ConsoleMsg::FDRW:
 				ret = ConsoleMsg_FDRW((FMT_ConsoleMsg_FDRW*)to_args, th->parent_process);
-				syssend(sig_src, (void*)&ret, sizeof(ret));
+				syssend_async(sig_src, (void*)&ret, sizeof(ret));
 				break;
 			case ConsoleMsg::FCHR:
 				ret = ConsoleMsg_FCHR((FMT_ConsoleMsg_FCHR*)to_args, th->parent_process);
-				syssend(sig_src, (void*)&ret, sizeof(ret));
+				syssend_async(sig_src, (void*)&ret, sizeof(ret));
 				break;
 			case ConsoleMsg::FBID:
 				ret = ConsoleMsg_FBID((FMT_ConsoleMsg_FBID*)to_args, th->parent_process);
-				syssend(sig_src, (void*)&ret, sizeof(ret));
+				syssend_async(sig_src, (void*)&ret, sizeof(ret));
 				break;
 			case ConsoleMsg::FUPD:
 				ret = ConsoleMsg_FUPD((FMT_ConsoleMsg_FUPD*)to_args, th->parent_process);
-				syssend(sig_src, (void*)&ret, sizeof(ret));
+				syssend_async(sig_src, (void*)&ret, sizeof(ret));
 				break;
 			case ConsoleMsg::FTIM:
 				ret = ConsoleMsg_FTIM(to_args[0], to_args[1], th->parent_process);
-				syssend(sig_src, (void*)&ret, sizeof(ret));
+				syssend_async(sig_src, (void*)&ret, sizeof(ret));
 				break;
 
 

@@ -180,17 +180,17 @@ DEFSYSC sysc_REST(stduint unit, stduint time) {
 
 DEFSYSC sysc_COMM(stduint op, stduint to, stduint msg) {
 	auto th = Taskman::current_thread[Taskman::getID()];
-	usize ret;
+	usize ret = 0;
 	// ploginfo("sysc_COMM:[th%u] op = %x, to = %x, msg = %x", th->getID(), op, to, msg);
-	if (op & 0b01) { // SEND
+	if (op & (COMM_SEND | COMM_SEND_ASYNC)) { // SEND or ASYNC_SEND
 		// ploginfo("%d --> %d: 0x%[x]", pb->getID(), to, msg);
-		if (ret = msg_send(th, to, (CommMsg*)msg)) return ret;
+		if (ret = msg_send(th, to, (CommMsg*)msg, (op & COMM_SEND_ASYNC) != 0)) return ret;
 	}
-	if (op & 0b10) { // RECV
+	if (op & COMM_RECV) { // RECV
 		// if (to && to != ~_IMM0) ploginfo("%d <-- %d", pb->getID(), to);
 		ret = msg_recv(th, to, (CommMsg*)msg);
 	}
-	if (op & 0b11); else {
+	if (op & (COMM_SEND | COMM_SEND_ASYNC | COMM_RECV)); else {
 		plogerro("Invalid op %x", op);
 		return 0xF0F0;
 	}

@@ -90,7 +90,7 @@ bool Consman::Initialize() {
 	#endif
 	Consman::ento_gui = vmod_default;
 	if (!vmod_default) {
-		con0_out = &Bcons[0];
+		// con0_out = &Bcons[0];
 		Bcons[0].Scroll(24);
 		for0a(i, Bcons) ttys.Append(dynamic_cast<Console_t*>(&Bcons[i]));
 		for0a(i, Bcons) VTTY_Append((&Bcons[i]));

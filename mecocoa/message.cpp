@@ -5,12 +5,9 @@
 #include "../include/mecocoa.hpp"
 
 #include <c/task.h>
-#include <cpp/Witch/Control/Control-Label.hpp>
-#include <cpp/Witch/Control/Control-TextBox.hpp>
 
 #if _MCCA == 0x8664 && defined(_UEFI)
 extern byte _BUF_xhc[];
-extern uni::witch::control::TextBox* ptext_1;
 #endif
 
 
@@ -108,8 +105,21 @@ static bool msg_send_will_deadlock(ThreadBlock* fo_th, ThreadBlock* to_th)
 	return false;
 }
 
+void free_async_msg(pureptr_t ptr) {
+	if (ptr) {
+		auto* nod = (Dnode*)ptr;
+		auto* amsg = (AsyncCommMsg*)nod->offs;
+		if (amsg) {
+			if (amsg->msg.data.address) {
+				delete[] (byte*)amsg->msg.data.address;
+			}
+			delete amsg;
+		}
+	}
+}
+
 Spinlock comm_lock;
-int msg_send(ThreadBlock* fo_th, stduint too, _Comment(vaddr) CommMsg* msg)
+int msg_send(ThreadBlock* fo_th, stduint too, _Comment(vaddr) CommMsg* msg, bool is_async)
 {
 	SpinlockLocal guard(&comm_lock);
 	if (!too) return 2;
@@ -119,7 +129,7 @@ int msg_send(ThreadBlock* fo_th, stduint too, _Comment(vaddr) CommMsg* msg)
 	}
 	if (!to_th) return 1;
 
-	if (msg_send_will_deadlock(fo_th, to_th)) {
+	if (!is_async && msg_send_will_deadlock(fo_th, to_th)) {
 		plogerro("msg_send_will_deadlock");
 		return -1;
 	}
@@ -143,6 +153,38 @@ int msg_send(ThreadBlock* fo_th, stduint too, _Comment(vaddr) CommMsg* msg)
 		to_th->unsolved_msg = NULL;
 		to_th->recv_fo_whom = nullptr;
 		to_th->Unblock(ThreadBlock::BlockReason::BR_RecvMsg);
+	}
+	else if (is_async) {
+		if (to_th->async_messages.Count() >= LIMIT_THREAD_AMSG) {
+			return 3;
+		}
+		void* pg_leng = SeekAddress(fo, _IMM(&msg->data.length));
+		stduint leng = _IMM(pg_leng) ? *(stduint*)pg_leng : 0;
+		auto msg_fo = (CommMsg*)SeekAddress(fo, _IMM(msg));
+		void* addr_fo = msg_fo ? (void*)msg_fo->data.address : nullptr;
+
+		AsyncCommMsg* amsg = new AsyncCommMsg();
+		if (!amsg) return 1;
+		byte* payload = nullptr;
+		if (leng) {
+			payload = new byte[leng];
+			if (!payload) {
+				delete amsg;
+				return 1;
+			}
+			MccaMemCopyP(payload, nullptr, addr_fo, fo, leng);
+		}
+
+		amsg->msg.data.address = (stduint)payload;
+		amsg->msg.data.length = leng;
+		if (msg_fo) {
+			amsg->msg.type = msg_fo->type;
+		} else {
+			amsg->msg.type = 0;
+		}
+		amsg->msg.src = fo_th->tid;
+
+		to_th->async_messages.Append(amsg);
 	}
 	else {
 		fo_th->Block(ThreadBlock::BlockReason::BR_SendMsg);
@@ -190,9 +232,7 @@ int msg_recv(ThreadBlock* to_th, stduint foo, _Comment(vaddr) CommMsg* msg)
 		if (!fo_th) {
 			if (auto fo_pb = Taskman::Locate(foo)) fo_th = fo_pb->main_thread;
 		}
-		if (!fo_th) return 1;
-
-		if (fo_th->block_reason == ThreadBlock::BlockReason::BR_SendMsg &&
+		if (fo_th && fo_th->block_reason == ThreadBlock::BlockReason::BR_SendMsg &&
 			fo_th->send_to_whom == to_th) {
 			ThreadBlock* crt = to_th->queue_send_queuehead;
 			while (crt) {
@@ -232,26 +272,59 @@ int msg_recv(ThreadBlock* to_th, stduint foo, _Comment(vaddr) CommMsg* msg)
 		fo_th->send_to_whom = nullptr;
 		fo_th->Unblock(ThreadBlock::BlockReason::BR_SendMsg);
 	}
-	else { // block self to wait for msg
-		ThreadBlock* fo_th_tgt = nullptr;
-		if (foo == ANYPROC || foo == INTRUPT) {
-			fo_th_tgt = (ThreadBlock*)foo;
-		} else {
-			fo_th_tgt = Taskman::LocateThread(foo);
-			if (!fo_th_tgt) {
-				if (auto fo_pb = Taskman::Locate(foo)) fo_th_tgt = fo_pb->main_thread;
+	else {
+		Dnode* target_node = nullptr;
+		AsyncCommMsg* amsg = nullptr;
+		if (foo == ANYPROC) {
+			target_node = to_th->async_messages.Root();
+		}
+		else if (foo != INTRUPT) {
+			for (Dnode* nod = to_th->async_messages.Root(); nod; nod = nod->next) {
+				auto* candidate = (AsyncCommMsg*)nod->offs;
+				if (candidate && candidate->msg.src == foo) {
+					target_node = nod;
+					break;
+				}
 			}
-			if (!fo_th_tgt) return -1;
 		}
 
-		to_th->Block(ThreadBlock::BlockReason::BR_RecvMsg);
-		if (to_th->unsolved_msg) plogwarn("T%u, unsolved_msg when recv(%u)", to_th->tid, foo);
-		to_th->unsolved_msg = msg;
-		to_th->recv_fo_whom = fo_th_tgt;
-		guard.~SpinlockLocal();
-		#if (_MCCA & 0xFF00) == 0x8600
-		Taskman::Schedule(true);
-		#endif
+		if (target_node) {
+			amsg = (AsyncCommMsg*)target_node->offs;
+			auto msg_to = (CommMsg*)SeekAddress(to_th->parent_process, _IMM(msg));
+			stduint leng1 = msg_to ? msg_to->data.length : 0;
+			void* addr_to = msg_to ? (void*)msg_to->data.address : nullptr;
+
+			stduint leng = minof(amsg->msg.data.length, leng1);
+			if (leng) {
+				MccaMemCopyP(addr_to, to_th->parent_process, (void*)amsg->msg.data.address, nullptr, leng);
+			}
+			if (msg_to) {
+				msg_to->type = amsg->msg.type;
+				msg_to->src = amsg->msg.src;
+			}
+			to_th->async_messages.Remove(target_node);
+		}
+		else { // block self to wait for msg
+			ThreadBlock* fo_th_tgt = nullptr;
+			if (foo == ANYPROC || foo == INTRUPT) {
+				fo_th_tgt = (ThreadBlock*)foo;
+			} else {
+				fo_th_tgt = Taskman::LocateThread(foo);
+				if (!fo_th_tgt) {
+					if (auto fo_pb = Taskman::Locate(foo)) fo_th_tgt = fo_pb->main_thread;
+				}
+				if (!fo_th_tgt) return -1;
+			}
+
+			to_th->Block(ThreadBlock::BlockReason::BR_RecvMsg);
+			if (to_th->unsolved_msg) plogwarn("T%u, unsolved_msg when recv(%u)", to_th->tid, foo);
+			to_th->unsolved_msg = msg;
+			to_th->recv_fo_whom = fo_th_tgt;
+			guard.~SpinlockLocal();
+			#if (_MCCA & 0xFF00) == 0x8600
+			Taskman::Schedule(true);
+			#endif
+		}
 	}
 	return 0;
 }
@@ -296,6 +369,9 @@ void msg_cleanup_thread(ThreadBlock* th) {
 		th->recv_fo_whom = nullptr;
 		th->unsolved_msg = nullptr;
 	}
+
+	// Case 3: Clean up all pending async messages for this thread
+	th->async_messages.Remove(0, th->async_messages.Count());
 }
 
 #endif

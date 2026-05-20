@@ -160,6 +160,7 @@ auto Taskman::AllocateTask() -> ProcessBlock* {
 	return ppb;
 }
 
+extern void free_async_msg(pureptr_t ptr);
 auto Taskman::AllocateThread() -> ThreadBlock* {
 	auto tb = (ThreadBlock*)mempool.allocate(sizeof(ThreadBlock), 4);
 	if (!tb) {
@@ -168,6 +169,7 @@ auto Taskman::AllocateThread() -> ThreadBlock* {
 	}
 	MemSet(tb, 0, sizeof(ThreadBlock));
 	new (tb) ThreadBlock();
+	tb->async_messages.func_free = free_async_msg;
 	return tb;
 }
 

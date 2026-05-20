@@ -127,6 +127,10 @@ build_util:
 	g++ $(ACCM_INCF) $(flag) -m32 $(CXF) $(CXW) -std=c++2a \
 		subapps/paint.cpp -o $(uobjpath)/sapp-$(arch)/paint\
 		-L$(uobjpath)/$(ACCM_LIBS) -lx86 -e _start
+	echo MK fault
+	g++ $(ACCM_INCF) $(flag) -m32 $(CXF2) -fno-rtti -fno-use-cxa-atexit -static -nostartfiles  $(CXW) -std=c++2a \
+		subapps/fault.cpp $(ulibpath)/cpp/lango/lango-cpp.cpp -o $(uobjpath)/sapp-$(arch)/fault\
+		-L$(uobjpath)/$(ACCM_LIBS) -lx86 -e _start 
 	echo MK cube
 	g++ $(ACCM_INCF) $(flag) -m32 $(CXF2) -fno-rtti -fno-use-cxa-atexit -static -nostartfiles  $(CXW) -std=c++2a \
 		subapps/cube.cpp $(ulibpath)/cpp/lango/lango-cpp.cpp -o $(uobjpath)/sapp-$(arch)/cube\
