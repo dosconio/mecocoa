@@ -189,6 +189,27 @@ static vfs_dentry* _Index_unlocked(const char* pathname, vfs_dentry* base) {
 	if (!current) current = vfs_root; // Fallback to root if no base provided
 	char inner_path[256] = ""; // Path relative to the current mount point
 	
+	if (pathname[0] != '/' && current) {
+		vfs_dentry* temp = current;
+		vfs_dentry* stack[32];
+		int stack_ptr = 0;
+		while (temp && temp->d_parent && stack_ptr < 32) {
+			stack[stack_ptr++] = temp;
+			temp = temp->d_parent;
+		}
+		stduint cur_ilen = 0;
+		for (int i = stack_ptr - 1; i >= 0; i--) {
+			vfs_dentry* d = stack[i];
+			stduint len = StrLength(d->d_name);
+			if (cur_ilen + len + 2 < 256) {
+				if (cur_ilen > 0) inner_path[cur_ilen++] = '/';
+				MemCopyN(inner_path + cur_ilen, d->d_name, len);
+				inner_path[cur_ilen + len] = '\0';
+				cur_ilen += len;
+			}
+		}
+	}
+	
 	if (pathname[0] == '/') {
 		pathname++;
 	}
@@ -234,7 +255,11 @@ static vfs_dentry* _Index_unlocked(const char* pathname, vfs_dentry* base) {
 				FilesysTrait* fs = real_current->d_inode->i_sb->fs;
 
 				byte h_buf[128];
-				vfs_lookup_ctx ctx = { current, real_current->d_inode->i_sb, false };
+				vfs_dentry* mount_root = real_current;
+				while (mount_root && mount_root->d_parent) {
+					mount_root = mount_root->d_parent;
+				}
+				vfs_lookup_ctx ctx = { mount_root, real_current->d_inode->i_sb, false };
 				FilesysSearchArgs args = { h_buf, nullptr, vfs_on_search_segment, &ctx };
 
 				String full_remainder;

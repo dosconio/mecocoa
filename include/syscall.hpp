@@ -21,17 +21,19 @@ enum
 	READ = 0x08, // read   (fd, adr, len)->len| x86 x64
 	WRIT = 0x09, // write  (fd, adr, len)->len| x86 x64
 	DELF = 0x0A, // remove (pathname)->?      | x86 x64
-	PORP = 0x0B, // proper (fd, &proper)->0   |
-	ENUM = 0x0C, // enumer (fd,&kde,cnt)->cnt |
+	PORP = 0x0B, // proper (fd, &proper)->0   | x86
+	ENUM = 0x0C, // enumer (fd,&kde,cnt)->cnt | x86
 	WAIT = 0x0D, // wait   (pid, &status)->pid| x86 x64    | pid 0 for any
 	FORK = 0x0E, // fork   ()->pid            | x86 x64
 	TMSG = 0x0F, // trymsg ()->(msg_unsovled) | x86 x64 rv
 	EXEC = 0x10, // spawn  (path,argv,envp)->0| x86 x64
 	EXET = 0x11, // exec   (path,argv,envp)->0| x86 x64
 	// MALC = 0x12, // malloc (pages)->addr>0    | 
-	SIGA = 0x13, // sigaction (sig,&new,&old) | 
-	KILL = 0x14, // kill (pid, sig, tid)      | 
-	SIGR = 0x15, // sigreturn ()              | 
+	SIGA = 0x13, // sigaction (sig,&new,&old) | x86
+	KILL = 0x14, // kill (pid, sig, tid)      | x86
+	SIGR = 0x15, // sigreturn ()              | -
+	SETD = 0x16, // chdir  (path)->status     | x86
+	GETD = 0x17, // getcwd (buf, size)->len   | x86
 	// TNEW
 	// TEXI
 

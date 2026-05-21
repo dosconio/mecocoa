@@ -18,7 +18,7 @@ extern "C" stdsint sysc_SIGR(void* context);
 extern "C" void check_and_deliver_signals(void* context);
 
 // Syscall Wrappers
-extern stduint SYSCALL_TABLE[22];
+extern stduint SYSCALL_TABLE[25];
 
 void Syscall::Initialize() {
 	#if _MCCA == 0x8632
@@ -351,7 +351,24 @@ DEFSYSC sysc_ENUM(stduint fd, stduint addr, stduint count) {
 	return open_buf[0];
 }
 
+DEFSYSC sysc_SETD(stduint usr_path) {
+	ThreadBlock* th = Taskman::current_thread[Taskman::getID()];
+	stdsint open_buf[2]{ (stdsint)usr_path, (stdsint)th->getID() };
+	syssend(Task_FileSys, open_buf, byteof(open_buf), _IMM(FilemanMsg::SETD));
+	sysrecv(Task_FileSys, open_buf, byteof(open_buf[0]));
+	return open_buf[0];
+}
+
+DEFSYSC sysc_GETD(stduint usr_buf, stduint size) {
+	ThreadBlock* th = Taskman::current_thread[Taskman::getID()];
+	stdsint open_buf[3]{ (stdsint)usr_buf, (stdsint)size, (stdsint)th->getID() };
+	syssend(Task_FileSys, open_buf, byteof(open_buf), _IMM(FilemanMsg::GETD));
+	sysrecv(Task_FileSys, open_buf, byteof(open_buf[0]));
+	return open_buf[0];
+}
+
 DEFSYSC sysc_WAIT(stduint pid, stduint usr_status) {
+
 	// ploginfo("syscall wait");
 	auto tb = Taskman::current_thread[Taskman::getID()];
 	stduint open_buf[3]{ tb->parent_process->getID(), pid, usr_status };
@@ -454,6 +471,9 @@ stduint SYSCALL_TABLE[] = {
 	mglb(sysc_SIGA), // 0x13 unchk
 	mglb(sysc_KILL), // 0x14 unchk
 	0, // 0x15 unchk (handled manually to pass context frame)
+	mglb(sysc_SETD), // 0x16 (SETD)
+	mglb(sysc_GETD), // 0x17 (GETD)
+	0, // 0x18 (GET_CORE_ID)
 };
 #endif
 
@@ -509,6 +529,12 @@ void syscall_body(NormalTaskContext* cxt)
 		break;
 	case syscall_t::SIGR:
 		cxt->a0 = sysc_SIGR(cxt);
+		break;
+	case syscall_t::SETD:
+		cxt->a0 = sysc_SETD(cxt->a0);
+		break;
+	case syscall_t::GETD:
+		cxt->a0 = sysc_GETD(cxt->a0, cxt->a1);
 		break;
 	case syscall_t::PORP:
 		cxt->a0 = sysc_PORP(cxt->a0, cxt->a1);

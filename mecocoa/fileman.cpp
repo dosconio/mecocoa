@@ -371,6 +371,67 @@ void serv_file_loop()// for IDE 0:0, 0:1
 			}
 			break;
 		}
+
+
+		case FilemanMsg::SETD:
+		{
+			tb = Taskman::LocateThread(to_args[1]);
+			if (!tb || !tb->parent_process || tb->parent_process->state == ProcessBlock::State::Invalid) {
+				stdsint err_ret = -1;
+				syssend(sig_src, &err_ret, sizeof(err_ret));
+				break;
+			}
+			auto len = StrCopyP((char*)pathbuf, kernel_paging, (rostr)to_args[0], tb->parent_process->paging, pathbuf_size);
+			if (len == 0) {
+				stdsint err_ret = -1;
+				syssend(sig_src, &err_ret, sizeof(err_ret));
+				break;
+			}
+			vfs_dentry* target_dentry = Filesys::Index((const char*)pathbuf, tb->parent_process->cwd);
+			if (!target_dentry) {
+				stdsint err_ret = -1;
+				syssend(sig_src, &err_ret, sizeof(err_ret));
+				break;
+			}
+			if (!target_dentry->d_inode || (target_dentry->d_inode->i_mode & I_TYPE_MASK) != I_DIRECTORY) {
+				stdsint err_ret = -2;
+				syssend(sig_src, &err_ret, sizeof(err_ret));
+				break;
+			}
+			tb->parent_process->cwd = target_dentry;
+			stdsint ok_ret = 0;
+			syssend(sig_src, &ok_ret, sizeof(ok_ret));
+			break;
+		}
+
+		case FilemanMsg::GETD:
+		{
+			tb = Taskman::LocateThread(to_args[2]);
+			if (!tb || !tb->parent_process || tb->parent_process->state == ProcessBlock::State::Invalid) {
+				stdsint err_ret = -1;
+				syssend(sig_src, &err_ret, sizeof(err_ret));
+				break;
+			}
+			stduint usr_buf = to_args[0];
+			stduint size = to_args[1];
+			if (!usr_buf || size == 0) {
+				stdsint err_ret = -1;
+				syssend(sig_src, &err_ret, sizeof(err_ret));
+				break;
+			}
+			String abs_path = Filesys::getAbsolutePath(tb->parent_process->cwd);
+			stduint path_len = StrLength(abs_path.reference());
+			if (size < path_len + 1) {
+				stdsint err_ret = -2;
+				syssend(sig_src, &err_ret, sizeof(err_ret));
+				break;
+			}
+			stduint copied = MemCopyP((void*)usr_buf, tb->parent_process->paging, abs_path.reference(), kernel_paging, path_len + 1);
+			stdsint get_ret = (copied < path_len + 1) ? -3 : (stdsint)path_len;
+			syssend(sig_src, &get_ret, sizeof(get_ret));
+			break;
+		}
+
 		// ... ...
 
 		case FilemanMsg::TEMP:

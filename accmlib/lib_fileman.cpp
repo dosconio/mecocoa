@@ -21,6 +21,20 @@ stdsint write(int fd, const void* buf, size_t nbyte) {
 	return syscall(syscall_t::WRIT, fd, _IMM(buf), nbyte);
 }
 
+int chdir(const char* path) {
+	// Invoke the SETD system call
+	return syscall(syscall_t::SETD, _IMM(path), nil, nil);
+}
+
+char* getcwd(char* buf, size_t size) {
+	// Invoke the GETD system call
+	int ret = syscall(syscall_t::GETD, _IMM(buf), size, nil);
+	if (ret < 0) {
+		return nullptr;
+	}
+	return buf;
+}
+
 #include <sys/stat.h>
 #include <dirent.h>
 
