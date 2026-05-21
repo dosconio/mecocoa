@@ -117,3 +117,6 @@ void printlog(loglevel_t level, const char* fmt, ...)
 	printlogx(level, fmt, paras);
 	para_endo(paras);
 }
+
+//// ---- POWER MANAGER ---- ////
+

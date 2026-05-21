@@ -114,6 +114,7 @@ public:
 	static int Read(vfs_file* file, void* buf, stduint count);
 	static int Write(vfs_file* file, const void* buf, stduint count);
 	static int Close(vfs_file* file);
+	static int Enumer(vfs_file* file, void* buf, stduint count, ProcessBlock* pb);
 	static bool Remove(const char* pathname);
 	//
 	static String getAbsolutePath(vfs_dentry* dentry);

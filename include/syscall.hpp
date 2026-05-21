@@ -21,8 +21,8 @@ enum
 	READ = 0x08, // read   (fd, adr, len)->len| x86 x64
 	WRIT = 0x09, // write  (fd, adr, len)->len| x86 x64
 	DELF = 0x0A, // remove (pathname)->?      | x86 x64
-	//=0x0B{} proper&enumer
-	//=0x0C{} 
+	PORP = 0x0B, // proper (fd, &proper)->0   |
+	ENUM = 0x0C, // enumer (fd,&kde,cnt)->cnt |
 	WAIT = 0x0D, // wait   (pid, &status)->pid| x86 x64    | pid 0 for any
 	FORK = 0x0E, // fork   ()->pid            | x86 x64
 	TMSG = 0x0F, // trymsg ()->(msg_unsovled) | x86 x64 rv
@@ -72,6 +72,16 @@ void syscall(NormalTaskContext* cxt);
 #endif
 #else
 #endif
+struct file_proper_t {
+	stduint size;					// File size in bytes
+	stduint mode;					// File mode (type and permissions)
+};
+
+struct dirent_t {
+	stduint is_dir;					// Directory flag (0: file, 1: directory)
+	char name[64];					// File name
+};
+
 _ESYM_C stduint syscall(syscall_t callid, stduint p1 = 0, stduint p2 = 0, stduint p3 = 0);// MCCA 4 PARA SYSC
 
 struct Syscall {

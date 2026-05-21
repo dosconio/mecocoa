@@ -345,6 +345,32 @@ void serv_file_loop()// for IDE 0:0, 0:1
 			retval[0] = Filesys::Remove((rostr)pathbuf);
 			syssend(sig_src, &retval, sizeof(retval[0]));
 			break;
+		case FilemanMsg::ENUMER:
+		{
+			ProcessBlock* safe_pb = nullptr;
+			ThreadBlock* sender_th = Taskman::LocateThread(to_args[3]);
+			if (sender_th && sender_th->parent_process &&
+				sender_th->parent_process->state != ProcessBlock::State::Invalid) {
+				safe_pb = sender_th->parent_process;
+				__atomic_add_fetch(&safe_pb->ref_count, 1, __ATOMIC_SEQ_CST);
+			}
+
+			stduint ret = 0;
+			if (safe_pb) {
+				int fd = to_args[0];
+				if (fd >= 0 && fd < 16 && safe_pb->pfiles[fd] && safe_pb->pfiles[fd]->vfile) {
+					ret = Filesys::Enumer(safe_pb->pfiles[fd]->vfile, (void*)to_args[1], to_args[2], safe_pb);
+				}
+				syssend(sig_src, &ret, sizeof(ret));
+				if (__atomic_sub_fetch(&safe_pb->ref_count, 1, __ATOMIC_SEQ_CST) == 0) {
+					mempool.deallocate(safe_pb);
+				}
+			}
+			else {
+				if (to_args[3] != sig_src) syssend(sig_src, &ret, sizeof(ret));
+			}
+			break;
+		}
 		// ... ...
 
 		case FilemanMsg::TEMP:

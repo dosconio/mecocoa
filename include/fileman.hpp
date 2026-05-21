@@ -80,6 +80,7 @@ enum class FilemanMsg {
 	READ,
 	WRITE,
 	REMOVE,
+	ENUMER,
 
 	TEMP,
 };

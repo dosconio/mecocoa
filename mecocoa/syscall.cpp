@@ -313,6 +313,44 @@ DEFSYSC sysc_DELF(stduint usr_filepath) {
 	return open_buf[0];// 0 for success
 }
 
+DEFSYSC sysc_PORP(stduint fd, stduint usr_proper) {
+	ThreadBlock* th = Taskman::current_thread[Taskman::getID()];
+	ProcessBlock* pb = th->parent_process;
+
+	// Check if fd is valid
+	if (fd >= 16 || !pb->pfiles[fd] || !pb->pfiles[fd]->vfile) {
+		return -1; // Invalid file descriptor
+	}
+
+	auto* vfile = pb->pfiles[fd]->vfile;
+	auto* inode = vfile->f_inode;
+	if (!inode) {
+		return -1;
+	}
+
+	file_proper_t prop;
+	prop.size = inode->i_size;
+	prop.mode = inode->i_mode & I_TYPE_MASK;
+
+	MccaMemCopyP((void*)usr_proper, pb, &prop, nullptr, sizeof(prop));
+	return 0; // Success
+}
+
+DEFSYSC sysc_ENUM(stduint fd, stduint addr, stduint count) {
+	ThreadBlock* th = Taskman::current_thread[Taskman::getID()];
+	ProcessBlock* pb = th->parent_process;
+
+	// Check if fd is valid
+	if (fd >= 16 || !pb->pfiles[fd] || !pb->pfiles[fd]->vfile) {
+		return -1; // Invalid file descriptor
+	}
+
+	stduint open_buf[4]{ fd, addr, count, th->getID() };
+	syssend(Task_FileSys, open_buf, byteof(open_buf), _IMM(FilemanMsg::ENUMER));
+	sysrecv(Task_FileSys, open_buf, byteof(open_buf[0]));
+	return open_buf[0];
+}
+
 DEFSYSC sysc_WAIT(stduint pid, stduint usr_status) {
 	// ploginfo("syscall wait");
 	auto tb = Taskman::current_thread[Taskman::getID()];
@@ -405,12 +443,12 @@ stduint SYSCALL_TABLE[] = {
 	mglb(sysc_READ),
 	mglb(sysc_WRIT),
 	mglb(sysc_DELF),
-	0,//B
-	0,//C
+	mglb(sysc_PORP),
+	mglb(sysc_ENUM),
 	mglb(sysc_WAIT),
 	mglb(sysx_FORK) & 0,// Fork need frame, process it other way
 	mglb(sysc_TMSG),
-	mglb(sysc_EXEC),
+	mglb(sysc_EXEC),// 0x10
 	mglb(sysc_EXET),
 	0, //{} mglb(sysc_MALC), // 0x12 unchk
 	mglb(sysc_SIGA), // 0x13 unchk
@@ -471,6 +509,12 @@ void syscall_body(NormalTaskContext* cxt)
 		break;
 	case syscall_t::SIGR:
 		cxt->a0 = sysc_SIGR(cxt);
+		break;
+	case syscall_t::PORP:
+		cxt->a0 = sysc_PORP(cxt->a0, cxt->a1);
+		break;
+	case syscall_t::ENUM:
+		cxt->a0 = sysc_ENUM(cxt->a0, cxt->a1, cxt->a2);
 		break;
 	default:
 		plogerro("Unknown syscall no: %d", syscall_num);

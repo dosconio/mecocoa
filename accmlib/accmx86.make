@@ -9,7 +9,7 @@ cplpref=_cc_
 cplfile=$(wildcard $(ulibpath)/c/*.c) $(wildcard $(ulibpath)/c/**/*.c) $(wildcard $(ulibpath)/c/**/**/*.c) $(wildcard accmlib/*.c)
 
 cpppref=_cx_
-cppfile=$(wildcard $(ulibpath)/cpp/*.cpp) $(wildcard accmlib/*.cpp) prehost/_auxiliary.cpp
+cppfile=$(wildcard $(ulibpath)/cpp/*.cpp) $(wildcard accmlib/*.cpp) prehost/_auxiliary.cpp $(ulibpath)/cpp/grp-base/bstring.cpp
 
 dest_obj=$(uobjpath)/accm-$(arch)
 COMWAN = -Wno-builtin-declaration-mismatch

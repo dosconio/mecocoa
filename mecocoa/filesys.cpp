@@ -60,7 +60,19 @@ namespace uni {
 		virtual bool remove(rostr pathname) override { return false; }
 		virtual void* search(rostr fullpath, FilesysSearchArgs* args) override { return nullptr; }
 		virtual bool proper(void* handler, stduint cmd, const void* moreinfo = 0) override { return false; }
-		virtual bool enumer(void* dir_handler, _tocall_ft _fn) override { return false; }
+		virtual bool enumer(void* dir_handler, _tocall_ft _fn) override {
+			// dir_handler is the vfs_dentry* of this directory (set at inode creation)
+			vfs_dentry* dir = (vfs_dentry*)dir_handler;
+			if (!dir || !_fn) return false;
+			vfs_dentry* child = dir->d_first_child;
+			while (child) {
+				bool is_dir = child->d_inode &&
+					(child->d_inode->i_mode & I_TYPE_MASK) == I_DIRECTORY;
+				_fn((void*)(stduint)is_dir, (void*)child->d_name);
+				child = child->d_next_sibling;
+			}
+			return true;
+		}
 		virtual stduint readfl(void* fil_handler, Slice file_slice, byte* dst) override { return 0; }
 		virtual stduint writfl(void* fil_handler, Slice file_slice, const byte* src) override { return 0; }
 	};
@@ -87,6 +99,7 @@ void Filesys::Initialize() {
 	
 	vfs_inode* root_inode = alloc_inode(root_sb);
 	root_inode->i_mode = I_DIRECTORY;
+	root_inode->internal_handler = vfs_root; // RootFs: dir_handler == its own dentry
 	vfs_root->d_inode = root_inode;
 	vfs_root->d_mounted_on = nullptr;
 	
@@ -99,6 +112,7 @@ void Filesys::Initialize() {
 		vfs_dentry* dir_dentry = alloc_dentry(vfs_root, standard_dirs[i]);
 		vfs_inode* dir_inod = alloc_inode(root_sb);
 		dir_inod->i_mode = I_DIRECTORY;
+		dir_inod->internal_handler = dir_dentry; // RootFs: dir_handler == its own dentry
 		dir_dentry->d_inode = dir_inod;
 	}
 }
@@ -192,6 +206,24 @@ static vfs_dentry* _Index_unlocked(const char* pathname, vfs_dentry* base) {
 		MemCopyN(part, pathname, len);
 		part[len] = '\0';
 
+		// Handle special components: "." stays, ".." goes to parent
+		if (part[0] == '.' && part[1] == '\0') {
+			pathname = next_slash;
+			continue; // "." : stay at current directory
+		}
+		if (part[0] == '.' && part[1] == '.' && part[2] == '\0') {
+			if (current->d_parent != nullptr) {
+				current = current->d_parent; // go to parent in same FS
+			} else if (current->d_mounted_on != nullptr) {
+				// Cross mount boundary upward (e.g. root of mounted FAT -> VFS anchor)
+				vfs_dentry* anchor = current->d_mounted_on;
+				current = anchor->d_parent ? anchor->d_parent : anchor;
+			}
+			// else: already at VFS root, ".." of root points to itself, stay put
+			pathname = next_slash;
+			continue;
+		}
+
 		vfs_dentry* next_d = lookup_dentry(current, part, len);
 		
 		if (!next_d) {
@@ -284,6 +316,7 @@ static vfs_dentry* _Create_unlocked(const char* pathname, stduint mode, vfs_dent
 			next_d = alloc_dentry(current, part);
 			vfs_inode* inod = alloc_inode(current->d_inode->i_sb);
 			inod->i_mode = I_DIRECTORY; // Mount points are always directories
+			inod->internal_handler = next_d; // RootFs: dir_handler == its own dentry
 			next_d->d_inode = inod;
 		}
 
@@ -324,6 +357,17 @@ bool Filesys::MountFilesys(FilesysTrait* fs, file_system_type* type, const char*
 	vfs_dentry* s_root = alloc_dentry(nullptr, target->d_name);
 	s_root->d_inode = alloc_inode(sb);
 	s_root->d_inode->i_mode = I_DIRECTORY;
+
+	// Fetch the physical FS root directory handle and heap-copy it for persistence
+	// (same pattern as vfs_on_search_segment: copy 128-byte handle buffer to heap)
+	byte root_h_buf[128];
+	FilesysSearchArgs root_args = { root_h_buf, nullptr, nullptr, nullptr };
+	void* root_handler = fs->search("/", &root_args);
+	if (root_handler) {
+		byte* saved_handler = new byte[128];
+		MemCopyN(saved_handler, root_h_buf, 128);
+		s_root->d_inode->internal_handler = saved_handler;
+	}
 	
 	sb->s_root = s_root;
 	s_root->d_mounted_on = target; // Store reverse link for path reconstruction
@@ -386,6 +430,42 @@ struct PathHarvest {
 	bool is_dir;
 	PathHarvest* next;
 };
+
+struct EnumContext {
+	ProcessBlock* pb;
+	void* user_addr;          // User-space address of dirent_t array
+	stduint max_count;        // Maximum number of entries to read
+	stduint skip_count;       // Entries to skip (file->f_pos)
+	stduint current_idx;      // Current item being enumerated in VFS call
+	stduint filled_count;     // Number of entries successfully copied to user space
+};
+static EnumContext g_enum_cxt;
+
+static void user_enumer_callback(void* is_dir, void* name) {
+	if (g_enum_cxt.filled_count >= g_enum_cxt.max_count) return;
+
+	// Check if we need to skip this entry
+	if (g_enum_cxt.current_idx < g_enum_cxt.skip_count) {
+		g_enum_cxt.current_idx++;
+		return;
+	}
+
+	g_enum_cxt.current_idx++;
+
+	dirent_t kde;
+	kde.is_dir = (stduint)is_dir;
+	// Copy name and terminate it safely
+	stduint name_len = StrLength((const char*)name);
+	if (name_len >= 64) name_len = 63;
+	MemCopyN(kde.name, (const char*)name, name_len);
+	kde.name[name_len] = '\0';
+
+	// Copy to user space memory
+	stduint offset = g_enum_cxt.filled_count * sizeof(dirent_t);
+	MccaMemCopyP((void*)((stduint)g_enum_cxt.user_addr + offset), g_enum_cxt.pb, &kde, nullptr, sizeof(dirent_t));
+
+	g_enum_cxt.filled_count++;
+}
 
 static PathHarvest** g_harvest_tail = nullptr;
 
@@ -640,6 +720,24 @@ int Filesys::Close(vfs_file* file) {
 		free(file);
 	}
 	return 0;
+}
+
+int Filesys::Enumer(vfs_file* file, void* buf, stduint count, ProcessBlock* pb) {
+	if (!file || !file->f_inode || !file->f_inode->i_sb) return -1;
+	SpinlockLocal guard(&vfs_lock);
+	FilesysTrait* fs = file->f_inode->i_sb->fs;
+
+	g_enum_cxt.pb = pb;
+	g_enum_cxt.user_addr = buf;
+	g_enum_cxt.max_count = count;
+	g_enum_cxt.skip_count = file->f_pos;
+	g_enum_cxt.current_idx = 0;
+	g_enum_cxt.filled_count = 0;
+
+	fs->enumer(file->f_inode->internal_handler, (_tocall_ft)user_enumer_callback);
+
+	file->f_pos += g_enum_cxt.filled_count;
+	return g_enum_cxt.filled_count;
 }
 
 bool Filesys::Remove(const char* pathname) {

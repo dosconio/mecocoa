@@ -114,6 +114,10 @@ build_util:
 	g++ $(ACCM_INCF) $(flag) -m32 $(CXF) $(CXW) -std=c++2a \
 		-o $(uobjpath)/sapp-$(arch)/sleep\
 		$(uherpath)/unisym/demo/utilities/sleep.cpp -L$(uobjpath)/$(ACCM_LIBS) -lx86 -lgcc
+	echo MK ls
+	g++ $(ACCM_INCF) $(flag) -m32 $(CXF) $(CXW) -std=c++2a \
+		-o $(uobjpath)/sapp-$(arch)/ls\
+		$(uherpath)/unisym/demo/utilities/ls.cpp -L$(uobjpath)/$(ACCM_LIBS) -lx86 -lgcc
 	# ---- MCCA UTIL ---- #
 	echo MK appinit
 	g++ $(ACCM_INCF) $(flag) -m32 $(CXF) $(CXW) -std=c++2a \
@@ -162,6 +166,8 @@ prehost/$(arch)/fatvhd.ignore: build_util
 	@echo $(sudokey) | sudo -S mount -o loop $@ $(mntdir)
 	@echo $(sudokey) | sudo -S mv $(uobjpath)/sapp-$(arch)/init $(mntdir)/init
 	@echo $(sudokey) | sudo -S mv $(uobjpath)/sapp-$(arch)/cot  $(mntdir)/cot
+	# from uni-utils:
+	@echo $(sudokey) | sudo -S mv $(uobjpath)/sapp-$(arch)/ls   $(mntdir)/ls
 	@echo $(sudokey) | sudo -S umount $(mntdir)
 
 $(uobjpath)/mcca-$(arch)/memodisk.o: prehost/$(arch)/fatvhd.ignore

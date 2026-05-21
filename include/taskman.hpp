@@ -225,7 +225,7 @@ public: // _Comment(Console);
 	Dnode* focus_tty = nullptr;
 	SheetTrait* pforms[_TEMP 4] = {};// should registered in global_layman
 public: // _Comment(Fileman);
-	FileDescriptor* pfiles[_TEMP 4];
+	FileDescriptor* pfiles[_TEMP 6];
 	vfs_dentry* cwd = nullptr;  // Current Working Directory
 	vfs_dentry* root = nullptr; // Root for chroot
 	// Signal
