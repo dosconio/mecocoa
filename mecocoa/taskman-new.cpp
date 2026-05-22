@@ -596,8 +596,13 @@ ProcessBlock* Taskman::CreateFork(ProcessBlock* fo, const CallgateFrame* frame) 
 
 	// ---- File ---- //
 	fo->sys_lock.Acquire();
-	for0a(i, pb->pfiles) if (fo->pfiles[i]) {
-		pb->pfiles[i] = FileDescriptor_Clone(fo->pfiles[i]);
+	pb->pfiles.Clear();
+	for (stduint i = 0; i < fo->pfiles.Count(); i++) {
+		if (fo->pfiles[i]) {
+			pb->pfiles.Append(FileDescriptor_Clone(fo->pfiles[i]));
+		} else {
+			pb->pfiles.Append(nullptr);
+		}
 	}
 	fo->sys_lock.Release();
 

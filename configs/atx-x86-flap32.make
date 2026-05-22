@@ -122,6 +122,10 @@ build_util:
 	g++ $(ACCM_INCF) $(flag) -m32 $(CXF) $(CXW) -std=c++2a \
 		-o $(uobjpath)/sapp-$(arch)/pwd\
 		$(uherpath)/unisym/demo/utilities/pwd.cpp -L$(uobjpath)/$(ACCM_LIBS) -lx86 -lgcc
+	echo MK cat
+	g++ $(ACCM_INCF) $(flag) -m32 $(CXF) $(CXW) -std=c++2a \
+		-o $(uobjpath)/sapp-$(arch)/cat\
+		$(uherpath)/unisym/demo/utilities/cat.cpp -L$(uobjpath)/$(ACCM_LIBS) -lx86 -lgcc
 	# ---- MCCA UTIL ---- #
 	echo MK appinit
 	g++ $(ACCM_INCF) $(flag) -m32 $(CXF) $(CXW) -std=c++2a \

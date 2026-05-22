@@ -160,6 +160,25 @@ auto Taskman::AllocateTask() -> ProcessBlock* {
 	return ppb;
 }
 
+void ProcessBlock::Release(ProcessBlock* pb) {
+	if (!pb) return;
+	if (__atomic_sub_fetch(&pb->ref_count, 1, __ATOMIC_SEQ_CST) == 0) {
+		ploginfo("ProcessBlock::Release() [%d] [%p]", pb->getID(), pb);
+		pb->~ProcessBlock();
+		mempool.deallocate(pb);
+	}
+}
+
+ProcessBlock* ProcessBlock::Acquire(stduint tid) {
+	ThreadBlock* th = Taskman::LocateThread(tid);
+	if (th && th->parent_process && th->parent_process->state != ProcessBlock::State::Invalid) {
+		ProcessBlock* pb = th->parent_process;
+		__atomic_add_fetch(&pb->ref_count, 1, __ATOMIC_SEQ_CST);
+		return pb;
+	}
+	return nullptr;
+}
+
 extern void free_async_msg(pureptr_t ptr);
 auto Taskman::AllocateThread() -> ThreadBlock* {
 	auto tb = (ThreadBlock*)mempool.allocate(sizeof(ThreadBlock), 4);
@@ -325,10 +344,12 @@ static void _Exit_Cleanup(stduint pid)
 	}
 
 	// 4. Release Files
-	for0(i, numsof(ppb->pfiles)) if (ppb->pfiles[i]) {
-		ppb->Close(i);
-		ppb->pfiles[i] = 0;
+	for (stduint i = 0; i < ppb->pfiles.Count(); i++) {
+		if (ppb->pfiles[i]) {
+			ppb->Close(i);
+		}
 	}
+	ppb->pfiles.Clear();
 
 	// 5. Final Destruction: Release Thread blocks and stacks
 	ThreadBlock* th = ppb->thread_list_head;
@@ -369,22 +390,19 @@ static void _Exit_Cleanup(stduint pid)
 
 	}
 	// Release Heap/Paging
-	if (ppb->ring) ppb->paging.~Paging();
-	else ppb->paging.root_level_page = nullptr;
+	if (!ppb->ring) {
+		ppb->paging.root_level_page = nullptr;
+	}
 
 	{
 		SpinlockLocal guard(&scheduler_lock);
 		Taskman::chain.Remove(ppb);
 	}
 
-	if (__atomic_sub_fetch(&ppb->ref_count, 1, __ATOMIC_SEQ_CST) == 0) {
-		mempool.deallocate(ppb);
+	if (ppb->ref_count > 1) {
+		plogwarn("ref_count: %d, delay destruction", ppb->ref_count - 1);
 	}
-	else {
-		plogerro("ref_count: %d", ppb->ref_count);
-		//{} TODO: Add a Vector to store pb undeallocated
-		// release them until ref_count == 0
-	}
+	ProcessBlock::Release(ppb);
 
 }
 
@@ -420,6 +438,7 @@ bool Taskman::Exit(ProcessBlock* p, stdsint exit_code)
 				th->send_to_whom && th->send_to_whom->parent_process == p) {
 				th->send_to_whom = nullptr;
 				th->queue_send_queuenext = nullptr;
+				th->unsolved_msg = nullptr;
 				th->Unblock(ThreadBlock::BlockReason::BR_SendMsg);
 			}
 
@@ -427,6 +446,7 @@ bool Taskman::Exit(ProcessBlock* p, stdsint exit_code)
 			if ((th->block_reason & ThreadBlock::BlockReason::BR_RecvMsg) &&
 				th->recv_fo_whom && th->recv_fo_whom->parent_process == p) {
 				th->recv_fo_whom = nullptr;
+				th->unsolved_msg = nullptr;
 				th->Unblock(ThreadBlock::BlockReason::BR_RecvMsg);
 			}
 		}
@@ -444,6 +464,7 @@ bool Taskman::Exit(ProcessBlock* p, stdsint exit_code)
 			// Sever dangling pointers
 			sender->send_to_whom = nullptr;
 			sender->queue_send_queuenext = nullptr;
+			sender->unsolved_msg = nullptr;
 			
 			sender->Unblock(ThreadBlock::BlockReason::BR_SendMsg);
 			sender = next;

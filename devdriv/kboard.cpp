@@ -154,6 +154,12 @@ int KeyboardBridge::out(const char* str, stduint len) {
 						}
 						return 0;
 					}
+					// Translate Ctrl + letters to control characters (e.g., Ctrl+D -> 0x04)
+					if ((kbd_state.mod.l_ctrl || kbd_state.mod.r_ctrl) && !kbd_state.mod.l_shift && !kbd_state.mod.r_shift) {
+						if (ascii_ch >= 'a' && ascii_ch <= 'z') {
+							ascii_ch = ascii_ch - 'a' + 1;
+						}
+					}
 					VTTY_INNQ(p_vtty)->OutChar(ascii_ch);
 					#endif
 				}

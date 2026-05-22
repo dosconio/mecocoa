@@ -9,6 +9,7 @@
 #include <c/system/paging.h>
 #include <cpp/Device/_Timer.hpp>
 #include <cpp/trait/BlockTrait.hpp>
+#include <cpp/vector>
 
 #include "syscall.hpp"
 #include <c/ISO_IEC_STD/signal.h>
@@ -223,9 +224,9 @@ public: // _Comment(Taskman);
 	uni::Slice load_slices[8];// at most 8 slices, app-relative logical address
 public: // _Comment(Console);
 	Dnode* focus_tty = nullptr;
-	SheetTrait* pforms[_TEMP 4] = {};// should registered in global_layman
+	uni::Vector<SheetTrait*> pforms;// should registered in global_layman
 public: // _Comment(Fileman);
-	FileDescriptor* pfiles[_TEMP 6];
+	uni::Vector<FileDescriptor*> pfiles;
 	vfs_dentry* cwd = nullptr;  // Current Working Directory
 	vfs_dentry* root = nullptr; // Root for chroot
 	// Signal
@@ -246,6 +247,9 @@ public: // _Comment(Fileman);
 	auto Rdwt(bool wr_type, stduint fid, Slice slice) -> stduint;
 	auto Close(int fid) -> bool;
 	auto Seek(int fd, stdsint off, int whence) -> stdsint;
+	//
+	static void Release(ProcessBlock* pb);
+	static ProcessBlock* Acquire(stduint tid);
 };
 
 class ThreadBlock {

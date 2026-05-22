@@ -231,7 +231,9 @@ DEFSYSC sysc_READ(stduint fd, stduint addr, stduint len) {
 	ProcessBlock* pb = th->parent_process;
 
 	// TTY device
-	if (asrtand(pb->pfiles[fd])->vfile && 
+	if (fd < pb->pfiles.Count() &&
+	    pb->pfiles[fd] &&
+	    asrtand(pb->pfiles[fd])->vfile && 
 	    asrtand(pb->pfiles[fd]->vfile->f_dentry)->d_inode &&
 		pb->pfiles[fd]->vfile->f_dentry->d_inode->i_mode == I_CHAR_SPECIAL) {		
 		// char device, read blockedly
@@ -261,6 +263,9 @@ DEFSYSC sysc_READ(stduint fd, stduint addr, stduint len) {
 
 				// Handle the character "consumed" by Task_Console service
 				byte ch = (byte)ret;
+				if (ch == 0x04) { // Ctrl+D (EOF)
+					break;
+				}
 				if (ch == '\b' || ch == 0x7F) {
 					if (total_read > 0) {
 						total_read--;
@@ -318,7 +323,7 @@ DEFSYSC sysc_PORP(stduint fd, stduint usr_proper) {
 	ProcessBlock* pb = th->parent_process;
 
 	// Check if fd is valid
-	if (fd >= 16 || !pb->pfiles[fd] || !pb->pfiles[fd]->vfile) {
+	if (fd >= pb->pfiles.Count() || !pb->pfiles[fd] || !pb->pfiles[fd]->vfile) {
 		return -1; // Invalid file descriptor
 	}
 
@@ -341,7 +346,7 @@ DEFSYSC sysc_ENUM(stduint fd, stduint addr, stduint count) {
 	ProcessBlock* pb = th->parent_process;
 
 	// Check if fd is valid
-	if (fd >= 16 || !pb->pfiles[fd] || !pb->pfiles[fd]->vfile) {
+	if (fd >= pb->pfiles.Count() || !pb->pfiles[fd] || !pb->pfiles[fd]->vfile) {
 		return -1; // Invalid file descriptor
 	}
 

@@ -15,9 +15,15 @@ stduint f_desc_table_count = 0;
 //{TODO} relative path
 stdsint ProcessBlock::Open(rostr pathname, int flags) {
 	int fd = -1;
-	for0a(i, self.pfiles) if (!self.pfiles[i]) {
-		fd = i;// find a available fileslot
-		break;
+	for (stduint i = 0; i < self.pfiles.Count(); i++) {
+		if (!self.pfiles[i]) {
+			fd = i;// find a available fileslot
+			break;
+		}
+	}
+	if (fd == -1 && self.pfiles.Count() < 128) {
+		fd = self.pfiles.Count();
+		self.pfiles.Append(nullptr);
 	}
 	if (fd == -1) {
 		plogwarn("no file slot available");
@@ -49,6 +55,9 @@ stdsint ProcessBlock::Open(rostr pathname, int flags) {
 	pfd->vfile = file;
 	pfd->fd_mode = flags;
 	pfd->fd_pos = 0;
+	if (pfd->vfile->f_inode) {
+		pfd->vfile->f_inode->ref_count++;
+	}
 	return fd;
 }
 
@@ -56,8 +65,8 @@ stduint ProcessBlock::Rdwt(bool wr_type, stduint fid, Slice slice)
 {
 	MutexLocal guard(&this->sys_lock);
 	_Comment(const) ProcessBlock* pb = this;
-	if (fid >= 4 _TEMP) plogerro("BOOM %d", fid);
-	if (!pb || !pb->pfiles[fid] || !pb->pfiles[fid]->vfile) return 0;
+	if (fid >= pb->pfiles.Count()) plogerro("BOOM %d", fid);
+	if (!pb || fid >= pb->pfiles.Count() || !pb->pfiles[fid] || !pb->pfiles[fid]->vfile) return 0;
 	if (this->state == ProcessBlock::State::Invalid) {
 		return 0;
 	}
@@ -134,7 +143,7 @@ bool ProcessBlock::Close(int fid)
 {
 	MutexLocal guard(&this->sys_lock);
 	int fd = fid;
-	if (!self.pfiles[fd]) {
+	if (fd < 0 || fd >= (stdsint)self.pfiles.Count() || !self.pfiles[fd]) {
 		ploginfo("%s %d skip", __FUNCIDEN__, fd);
 		return false;
 	}
@@ -153,7 +162,7 @@ stdsint ProcessBlock::Seek(int fd, stdsint off, int whence) {
 	ProcessBlock* const pb = this;
 
 	// Validate ProcessBlock and File Descriptor
-	if (!pb || fd < 0 || !pb->pfiles[fd] || !pb->pfiles[fd]->vfile) {
+	if (!pb || fd < 0 || fd >= (stdsint)pb->pfiles.Count() || !pb->pfiles[fd] || !pb->pfiles[fd]->vfile) {
 		return -1;
 	}
 
@@ -314,23 +323,14 @@ void serv_file_loop()// for IDE 0:0, 0:1
 		case FilemanMsg::WRITE://
 		{
 
-			ProcessBlock* safe_pb = nullptr;
-
-			ThreadBlock* sender_th = Taskman::LocateThread(to_args[3]);
-			if (sender_th && sender_th->parent_process &&
-				sender_th->parent_process->state != ProcessBlock::State::Invalid) {
-				safe_pb = sender_th->parent_process;
-				__atomic_add_fetch(&safe_pb->ref_count, 1, __ATOMIC_SEQ_CST);
-			}
+			ProcessBlock* safe_pb = ProcessBlock::Acquire(to_args[3]);
 			if (safe_pb) {
 				stduint ret = safe_pb->Rdwt(
 					(FilemanMsg)sig_type == FilemanMsg::WRITE,
 					to_args[0], Slice{ to_args[1], to_args[2] }
 				);
 				syssend(sig_src, &ret, sizeof(ret));
-				if (__atomic_sub_fetch(&safe_pb->ref_count, 1, __ATOMIC_SEQ_CST) == 0) {
-					mempool.deallocate(safe_pb);
-				}
+				ProcessBlock::Release(safe_pb);
 			}
 			else {
 				stduint err_ret = 0;
@@ -347,24 +347,16 @@ void serv_file_loop()// for IDE 0:0, 0:1
 			break;
 		case FilemanMsg::ENUMER:
 		{
-			ProcessBlock* safe_pb = nullptr;
-			ThreadBlock* sender_th = Taskman::LocateThread(to_args[3]);
-			if (sender_th && sender_th->parent_process &&
-				sender_th->parent_process->state != ProcessBlock::State::Invalid) {
-				safe_pb = sender_th->parent_process;
-				__atomic_add_fetch(&safe_pb->ref_count, 1, __ATOMIC_SEQ_CST);
-			}
+			ProcessBlock* safe_pb = ProcessBlock::Acquire(to_args[3]);
 
 			stduint ret = 0;
 			if (safe_pb) {
 				int fd = to_args[0];
-				if (fd >= 0 && fd < 16 && safe_pb->pfiles[fd] && safe_pb->pfiles[fd]->vfile) {
+				if (fd >= 0 && fd < (stdsint)safe_pb->pfiles.Count() && safe_pb->pfiles[fd] && safe_pb->pfiles[fd]->vfile) {
 					ret = Filesys::Enumer(safe_pb->pfiles[fd]->vfile, (void*)to_args[1], to_args[2], safe_pb);
 				}
 				syssend(sig_src, &ret, sizeof(ret));
-				if (__atomic_sub_fetch(&safe_pb->ref_count, 1, __ATOMIC_SEQ_CST) == 0) {
-					mempool.deallocate(safe_pb);
-				}
+				ProcessBlock::Release(safe_pb);
 			}
 			else {
 				if (to_args[3] != sig_src) syssend(sig_src, &ret, sizeof(ret));

@@ -257,11 +257,15 @@ static stdsint ConsoleMsg_FNEW(const FMT_ConsoleMsg_FNEW* data, ProcessBlock* pb
 	ploginfo("FNEW: new form (%u,%u)", rect.width, rect.height);
 	// Find an empty slot in pforms
 	stdsint slot_idx = -1;
-	for (stduint i = 0; i < _TEMP 4; i++) {
+	for (stduint i = 0; i < pb->pforms.Count(); i++) {
 		if (pb->pforms[i] == nullptr) {
 			slot_idx = i;
 			break;
 		}
+	}
+	if (slot_idx == -1 && pb->pforms.Count() < 128) {
+		slot_idx = pb->pforms.Count();
+		pb->pforms.Append(nullptr);
 	}
 	if (slot_idx == -1) return -1;
 
@@ -295,12 +299,12 @@ static stdsint ConsoleMsg_FNEW(const FMT_ConsoleMsg_FNEW* data, ProcessBlock* pb
 }
 
 static void _CleanSingleForm(ProcessBlock* pb, stduint pform_id) {
-	if (pform_id >= _TEMP 4) return;
+	if (pform_id >= pb->pforms.Count()) return;
 	SheetTrait* pfrm = pb->pforms[pform_id];
 	if (!pfrm) return;
 
 	// Recursive destroy sub-forms belonging to this process that are children of this form
-	for (stduint i = 0; i < _TEMP 4; i++) {
+	for (stduint i = 0; i < pb->pforms.Count(); i++) {
 		if (pb->pforms[i] && pb->pforms[i]->refSheetParent() == (LayerManager*)pfrm) {
 			_CleanSingleForm(pb, i);
 		}
@@ -392,19 +396,19 @@ static void _CleanSingleForm(ProcessBlock* pb, stduint pform_id) {
 
 static stdsint ConsoleMsg_FDEL(stduint pform_id, ProcessBlock* pb) {
 	if (pform_id == ~_IMM0) {
-		for (stduint i = 0; i < _TEMP 4; i++) {
+		for (stduint i = 0; i < pb->pforms.Count(); i++) {
 			_CleanSingleForm(pb, i);
 		}
 		return 0;
 	}
-	if (pform_id >= _TEMP 4 || !pb->pforms[pform_id]) return -1;
+	if (pform_id >= pb->pforms.Count() || !pb->pforms[pform_id]) return -1;
 	_CleanSingleForm(pb, pform_id);
 	return 0;
 }
 
 void Global_CleanProcessForms(ProcessBlock* pb) {
 	if (!pb) return;
-	for (stduint pform_id = 0; pform_id < _TEMP 4; pform_id++) {
+	for (stduint pform_id = 0; pform_id < pb->pforms.Count(); pform_id++) {
 		_CleanSingleForm(pb, pform_id);
 	}
 }
@@ -412,7 +416,7 @@ void Global_CleanProcessForms(ProcessBlock* pb) {
 
 
 static stdsint ConsoleMsg_FBID(const FMT_ConsoleMsg_FBID* data, ProcessBlock* pb) {
-	if (data->pform_id >= _TEMP 4) return -1;
+	if (data->pform_id >= pb->pforms.Count()) return -1;
 	::uni::Witch::Form* pf = static_cast<::uni::Witch::Form*>(pb->pforms[data->pform_id]);
 	if (!pf) return -1;
 
@@ -423,7 +427,7 @@ static stdsint ConsoleMsg_FBID(const FMT_ConsoleMsg_FBID* data, ProcessBlock* pb
 }
 
 static stdsint ConsoleMsg_FUPD(const FMT_ConsoleMsg_FUPD* data, ProcessBlock* pb) {
-	if (data->pform_id >= _TEMP 4) return -1;
+	if (data->pform_id >= pb->pforms.Count()) return -1;
 	SheetTrait* pfrm = pb->pforms[data->pform_id];
 	if (!pfrm) return -1;
 
@@ -447,7 +451,7 @@ static stdsint ConsoleMsg_FUPD(const FMT_ConsoleMsg_FUPD* data, ProcessBlock* pb
 }
 
 static stdsint ConsoleMsg_FMSG(const FMT_ConsoleMsg_FMSG* data, ProcessBlock* pb, stduint sig_src) {
-	if (data->pform_id >= _TEMP 4) return -1;
+	if (data->pform_id >= pb->pforms.Count()) return -1;
 	SheetTrait* pfrm = pb->pforms[data->pform_id];
 	if (!pfrm) return -1;
 
@@ -471,7 +475,7 @@ static stdsint ConsoleMsg_FMSG(const FMT_ConsoleMsg_FMSG* data, ProcessBlock* pb
 
 static stdsint ConsoleMsg_FDRW(const FMT_ConsoleMsg_FDRW* data, ProcessBlock* pb) {
 	// Target form from process pforms
-	if (data->pform_id >= _TEMP 4) return -1;
+	if (data->pform_id >= pb->pforms.Count()) return -1;
 	SheetTrait* pfrm = pb->pforms[data->pform_id];
 	if (!pfrm) return -1;
 	// ploginfo("ConsoleMsg_FDRW: draw %d", data->shape_type);
@@ -531,7 +535,7 @@ struct FMT_ConsoleMsg_FCHR {
 };
 static stdsint ConsoleMsg_FCHR(const FMT_ConsoleMsg_FCHR* data, ProcessBlock* pb) {
 	// Target form from process pforms
-	if (data->pform_id >= _TEMP 4) return -1;
+	if (data->pform_id >= pb->pforms.Count()) return -1;
 	SheetTrait* pfrm = pb->pforms[data->pform_id];
 	if (!pfrm) return -1;
 
@@ -559,7 +563,7 @@ static stdsint ConsoleMsg_FCHR(const FMT_ConsoleMsg_FCHR* data, ProcessBlock* pb
 }
 
 static stdsint ConsoleMsg_FTIM(stduint pform_id, stduint ms, ProcessBlock* pb) {
-	if (pform_id >= _TEMP 4) return -1;
+	if (pform_id >= pb->pforms.Count()) return -1;
 	SheetTrait* pfrm = pb->pforms[pform_id];
 	if (!pfrm) return -1;
 
@@ -615,7 +619,10 @@ void _Comment(R1) serv_shell_process() {
 			p->Open("/dev/tty", O_RDWR); // O_WRONLY stderr
 		}
 		// Register the manually created window in the process space for unified cleanup
-		if (pf_ptr) p->pforms[0] = pf_ptr;
+		if (pf_ptr) {
+			if (p->pforms.Count() == 0) p->pforms.Append(pf_ptr);
+			else p->pforms[0] = pf_ptr;
+		}
 
 		if (auto nod = (Dnode*)p->focus_tty) {
 			auto pblock = (vtty_type_t*)nod->type;
@@ -652,6 +659,12 @@ void _Comment(R1) serv_shell_process() {
 									}
 								}
 								continue;
+							}
+							// Translate Ctrl + letters to control characters (e.g., Ctrl+D -> 0x04)
+							if ((key_event->mod.l_ctrl || key_event->mod.r_ctrl) && !key_event->mod.l_shift && !key_event->mod.r_shift) {
+								if (ascii_ch >= 'a' && ascii_ch <= 'z') {
+									ascii_ch = ascii_ch - 'a' + 1;
+								}
 							}
 							if (auto* q = VTTY_INNQ(tty_target)) {
 								q->OutChar(ascii_ch);
