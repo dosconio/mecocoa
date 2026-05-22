@@ -21,7 +21,7 @@ stdsint ProcessBlock::Open(rostr pathname, int flags) {
 			break;
 		}
 	}
-	if (fd == -1 && self.pfiles.Count() < 128) {
+	if (fd == -1 && self.pfiles.Count() < DEFAULT_FILES_LIMIT) {
 		fd = self.pfiles.Count();
 		self.pfiles.Append(nullptr);
 	}
@@ -253,7 +253,7 @@ void serv_file_loop()// for IDE 0:0, 0:1
 			Filesys::Tree();
 			ProcessBlock* init_p = Taskman::CreateFile(("/md0/init"), RING_U, Task_Kernel);
 			if (init_p) {
-				init_p->focus_tty = vttys.LocateNode(0);
+				init_p->focus_tty = vttys[0];
 				Taskman::Append(init_p);
 				Taskman::AppendThread(init_p->main_thread);
 			}
@@ -305,17 +305,25 @@ void serv_file_loop()// for IDE 0:0, 0:1
 			break;
 		case FilemanMsg::OPEN://(flags, thid, usr_filename) | open a file and return the file descriptor
 		{
-			tb = Taskman::LocateThread(to_args[1]);
-			auto len = StrCopyP((char*)pathbuf, kernel_paging, (rostr)to_args[2], tb->parent_process->paging, pathbuf_size);
-			// ploginfo("[fileman] TID %u open %s with %[32H]", to_args[1], pathbuf, to_args[0]);
-			stduint retval = static_cast<stduint>(tb->parent_process->Open((rostr)pathbuf, to_args[0]));
+			stduint retval = ~_IMM0;
+			ProcessBlock* safe_pb = ProcessBlock::Acquire(to_args[1]);
+			if (safe_pb) {
+				auto len = StrCopyP((char*)pathbuf, kernel_paging, (rostr)to_args[2], safe_pb->paging, pathbuf_size);
+				// ploginfo("[fileman] TID %u open %s with %[32H]", to_args[1], pathbuf, to_args[0]);
+				retval = static_cast<stduint>(safe_pb->Open((rostr)pathbuf, to_args[0]));
+				ProcessBlock::Release(safe_pb);
+			}
 			syssend(sig_src, &retval, sizeof(retval), 0);
 			break;
 		}
 		case FilemanMsg::CLOSE:// -> 0 for success
 		{
-			stdsint ret;
-			ret = Taskman::Locate(to_args[1])->Close(to_args[0]) ? 0 : -1;// POSIX Close
+			stdsint ret = -1;
+			ProcessBlock* safe_pb = ProcessBlock::AcquireByPID(to_args[1]);
+			if (safe_pb) {
+				ret = safe_pb->Close(to_args[0]) ? 0 : -1;// POSIX Close
+				ProcessBlock::Release(safe_pb);
+			}
 			syssend(sig_src, &ret, sizeof(ret), 0);
 			break;
 		}
@@ -340,11 +348,19 @@ void serv_file_loop()// for IDE 0:0, 0:1
 			break;
 		}
 		case FilemanMsg::REMOVE:// --> (pid, filename[7]...) --> (!success)
-			tb = Taskman::LocateThread(to_args[1]);
-			retval[0] = StrCopyP((char*)pathbuf, kernel_paging, (rostr)to_args[0], tb->parent_process->paging, pathbuf_size);
-			retval[0] = Filesys::Remove((rostr)pathbuf);
+		{
+			retval[0] = ~_IMM0;
+			ProcessBlock* safe_pb = ProcessBlock::Acquire(to_args[1]);
+			if (safe_pb) {
+				auto len = StrCopyP((char*)pathbuf, kernel_paging, (rostr)to_args[0], safe_pb->paging, pathbuf_size);
+				if (len > 0) {
+					retval[0] = Filesys::Remove((rostr)pathbuf);
+				}
+				ProcessBlock::Release(safe_pb);
+			}
 			syssend(sig_src, &retval, sizeof(retval[0]));
 			break;
+		}
 		case FilemanMsg::ENUMER:
 		{
 			ProcessBlock* safe_pb = ProcessBlock::Acquire(to_args[3]);
@@ -367,60 +383,64 @@ void serv_file_loop()// for IDE 0:0, 0:1
 
 		case FilemanMsg::SETD:
 		{
-			tb = Taskman::LocateThread(to_args[1]);
-			if (!tb || !tb->parent_process || tb->parent_process->state == ProcessBlock::State::Invalid) {
-				stdsint err_ret = -1;
+			stdsint err_ret = -1;
+			ProcessBlock* safe_pb = ProcessBlock::Acquire(to_args[1]);
+			if (!safe_pb) {
 				syssend(sig_src, &err_ret, sizeof(err_ret));
 				break;
 			}
-			auto len = StrCopyP((char*)pathbuf, kernel_paging, (rostr)to_args[0], tb->parent_process->paging, pathbuf_size);
+			auto len = StrCopyP((char*)pathbuf, kernel_paging, (rostr)to_args[0], safe_pb->paging, pathbuf_size);
 			if (len == 0) {
-				stdsint err_ret = -1;
 				syssend(sig_src, &err_ret, sizeof(err_ret));
+				ProcessBlock::Release(safe_pb);
 				break;
 			}
-			vfs_dentry* target_dentry = Filesys::Index((const char*)pathbuf, tb->parent_process->cwd);
+			vfs_dentry* target_dentry = Filesys::Index((const char*)pathbuf, safe_pb->cwd);
 			if (!target_dentry) {
-				stdsint err_ret = -1;
 				syssend(sig_src, &err_ret, sizeof(err_ret));
+				ProcessBlock::Release(safe_pb);
 				break;
 			}
 			if (!target_dentry->d_inode || (target_dentry->d_inode->i_mode & I_TYPE_MASK) != I_DIRECTORY) {
-				stdsint err_ret = -2;
-				syssend(sig_src, &err_ret, sizeof(err_ret));
+				stdsint type_err = -2;
+				syssend(sig_src, &type_err, sizeof(type_err));
+				ProcessBlock::Release(safe_pb);
 				break;
 			}
-			tb->parent_process->cwd = target_dentry;
+			safe_pb->cwd = target_dentry;
 			stdsint ok_ret = 0;
 			syssend(sig_src, &ok_ret, sizeof(ok_ret));
+			ProcessBlock::Release(safe_pb);
 			break;
 		}
 
 		case FilemanMsg::GETD:
 		{
-			tb = Taskman::LocateThread(to_args[2]);
-			if (!tb || !tb->parent_process || tb->parent_process->state == ProcessBlock::State::Invalid) {
-				stdsint err_ret = -1;
+			stdsint err_ret = -1;
+			ProcessBlock* safe_pb = ProcessBlock::Acquire(to_args[2]);
+			if (!safe_pb) {
 				syssend(sig_src, &err_ret, sizeof(err_ret));
 				break;
 			}
 			stduint usr_buf = to_args[0];
 			stduint size = to_args[1];
 			if (!usr_buf || size == 0) {
-				stdsint err_ret = -1;
 				syssend(sig_src, &err_ret, sizeof(err_ret));
+				ProcessBlock::Release(safe_pb);
 				break;
 			}
-			String abs_path = Filesys::getAbsolutePath(tb->parent_process->cwd);
+			String abs_path = Filesys::getAbsolutePath(safe_pb->cwd);
 			stduint path_len = StrLength(abs_path.reference());
 			if (size < path_len + 1) {
-				stdsint err_ret = -2;
-				syssend(sig_src, &err_ret, sizeof(err_ret));
+				stdsint size_err = -2;
+				syssend(sig_src, &size_err, sizeof(size_err));
+				ProcessBlock::Release(safe_pb);
 				break;
 			}
-			stduint copied = MemCopyP((void*)usr_buf, tb->parent_process->paging, abs_path.reference(), kernel_paging, path_len + 1);
+			stduint copied = MemCopyP((void*)usr_buf, safe_pb->paging, abs_path.reference(), kernel_paging, path_len + 1);
 			stdsint get_ret = (copied < path_len + 1) ? -3 : (stdsint)path_len;
 			syssend(sig_src, &get_ret, sizeof(get_ret));
+			ProcessBlock::Release(safe_pb);
 			break;
 		}
 

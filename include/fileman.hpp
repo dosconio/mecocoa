@@ -5,6 +5,8 @@
 #include <c/storage/harddisk.h>
 // The version just consider primary IDE
 
+const stduint DEFAULT_FILES_LIMIT = 128;
+
 // for 2 disks
 #define	DRV_OF_DEV(dev) (dev <= MAX_PRIM ? \
 	dev / NR_PRIM_PER_DRIVE : \

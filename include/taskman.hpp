@@ -250,6 +250,7 @@ public: // _Comment(Fileman);
 	//
 	static void Release(ProcessBlock* pb);
 	static ProcessBlock* Acquire(stduint tid);
+	static ProcessBlock* AcquireByPID(stduint pid);
 };
 
 class ThreadBlock {

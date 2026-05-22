@@ -207,9 +207,12 @@ void Consman::RemoveVconsole(Dnode* nod) {
 
 	// Clean up any blocked PIDs waiting for this TTY
 	for (stduint i = 0; i < blocked_vtty_pid.Count(); i++) {
-		ProcessBlock* p = Taskman::Locate(blocked_vtty_pid[i]);
+		ProcessBlock* p = ProcessBlock::AcquireByPID(blocked_vtty_pid[i]);
 		if (!p || p->focus_tty == nod || p->focus_tty == nullptr) {
 			blocked_vtty_pid.Remove(i--);
+		}
+		if (p) {
+			ProcessBlock::Release(p);
 		}
 	}
 }
@@ -238,9 +241,13 @@ void Consman::SwitchForm(SheetTrait* pfrm) {
 static bool ifContainBlockedTTY(ProcessBlock* ppb) {
 	if (!ppb) return false;
 	for0(i, blocked_vtty_pid.Count()) {
-		ProcessBlock* p = Taskman::Locate(blocked_vtty_pid[i]);
-		if (p && p->focus_tty == ppb->focus_tty) {
-			return true;
+		ProcessBlock* p = ProcessBlock::AcquireByPID(blocked_vtty_pid[i]);
+		if (p) {
+			bool match = (p->focus_tty == ppb->focus_tty);
+			ProcessBlock::Release(p);
+			if (match) {
+				return true;
+			}
 		}
 	}
 	return false;
@@ -263,7 +270,7 @@ static stdsint ConsoleMsg_FNEW(const FMT_ConsoleMsg_FNEW* data, ProcessBlock* pb
 			break;
 		}
 	}
-	if (slot_idx == -1 && pb->pforms.Count() < 128) {
+	if (slot_idx == -1 && pb->pforms.Count() < DEFAULT_FILES_LIMIT) {
 		slot_idx = pb->pforms.Count();
 		pb->pforms.Append(nullptr);
 	}
@@ -368,9 +375,12 @@ static void _CleanSingleForm(ProcessBlock* pb, stduint pform_id) {
 	for (stduint i = 0; i < blocked_form_msgs.Count(); i++) {
 		if (blocked_form_msgs[i].pform_id == pform_id) {
 			stdsint err_val = -1;
-			ThreadBlock* th_target = Taskman::LocateThread(blocked_form_msgs[i].sig_src);
-			if (th_target && th_target->parent_process && th_target->parent_process->state == ProcessBlock::State::Active) {
+			ProcessBlock* safe_pb = ProcessBlock::Acquire(blocked_form_msgs[i].sig_src);
+			if (safe_pb && safe_pb->state == ProcessBlock::State::Active) {
 				syssend(blocked_form_msgs[i].sig_src, &err_val, sizeof(err_val));
+			}
+			if (safe_pb) {
+				ProcessBlock::Release(safe_pb);
 			}
 			blocked_form_msgs.Remove(i--);
 		}
@@ -598,7 +608,7 @@ void _Comment(R1) serv_shell_process() {
 		Rectangle rect{ Point(250, 160), Size2(480, 320) };
 		auto [pcon, pf, tty_no] = Consman::CreateVconsole(rect, "Terminal");
 		pf_ptr = pf;
-		tty_target = vttys.LocateNode(tty_no);
+		tty_target = vttys[tty_no];
 		// ploginfo("CreateVconsole->[%[x],%[x],%u]", pcon, pf, tty_no);
 	}
 
@@ -691,9 +701,13 @@ void _Comment(R1) serv_shell_process() {
 
 								// Protect system tasks but allow killing the master shell
 								if ((pid >= TaskCount || pid == pblock->master_pid) && pid != self_pid) {
-									ProcessBlock* pb_to_kill = Taskman::Locate(pid);
-									if (pb_to_kill && pb_to_kill->state != ProcessBlock::State::Hanging) {
-										sys_kill(pid, SIGKILL, 0);
+									ProcessBlock* pb_to_kill = ProcessBlock::AcquireByPID(pid);
+									if (pb_to_kill) {
+										bool should_kill = (pb_to_kill->state != ProcessBlock::State::Hanging);
+										ProcessBlock::Release(pb_to_kill);
+										if (should_kill) {
+											sys_kill(pid, SIGKILL, 0);
+										}
 									}
 								}
 							}
@@ -723,9 +737,13 @@ shell_exit:
 		for (stdsint i = pblock->proc_group.Count() - 1; i >= 0; --i) {
 			stduint pid = pblock->proc_group[i];
 			if (pid == self_pid) continue;
-			auto pb_to_kill = Taskman::Locate(pid);
-			if (pb_to_kill && pb_to_kill->state != ProcessBlock::State::Hanging) {
-				sys_kill(pid, SIGKILL, 0);
+			auto pb_to_kill = ProcessBlock::AcquireByPID(pid);
+			if (pb_to_kill) {
+				bool should_kill = (pb_to_kill->state != ProcessBlock::State::Hanging);
+				ProcessBlock::Release(pb_to_kill);
+				if (should_kill) {
+					sys_kill(pid, SIGKILL, 0);
+				}
 			}
 		}
 		{
@@ -761,9 +779,12 @@ void _Comment(R1) serv_cons_loop()
 				stduint pid = blocked_vtty_pid[i];
 				if (!pid) continue;
 
-				ProcessBlock* ppb = Taskman::Locate(pid);
+				ProcessBlock* ppb = ProcessBlock::AcquireByPID(pid);
 				// Identify and clean up processes that are no longer active (Hanging or Invalid)
 				if (!ppb || ppb->state != ProcessBlock::State::Active) {
+					if (ppb) {
+						ProcessBlock::Release(ppb);
+					}
 					blocked_vtty_pid.Remove(i--);
 					continue;
 				}
@@ -774,6 +795,7 @@ void _Comment(R1) serv_cons_loop()
 					blocked_vtty_pid.Remove(i--);
 					syssend_async(pid, &val, byteof(val));
 				}
+				ProcessBlock::Release(ppb);
 			}
 		}
 
@@ -784,14 +806,14 @@ void _Comment(R1) serv_cons_loop()
 			#endif
 			for (stduint i = 0; i < blocked_form_msgs.Count(); i++) {
 				auto& b = blocked_form_msgs[i];
-				ThreadBlock* th = Taskman::LocateThread(b.sig_src);
-				if (!th || !th->parent_process) {
+				ProcessBlock* pb = ProcessBlock::Acquire(b.sig_src);
+				if (!pb) {
 					blocked_form_msgs.Remove(i--);
 					continue;
 				}
-				ProcessBlock* pb = th->parent_process;
-				SheetTrait* pfrm = pb->pforms[b.pform_id];
+				SheetTrait* pfrm = (b.pform_id < pb->pforms.Count()) ? pb->pforms[b.pform_id] : nullptr;
 				if (!pfrm) {
+					ProcessBlock::Release(pb);
 					blocked_form_msgs.Remove(i--);
 					continue;
 				}
@@ -805,13 +827,15 @@ void _Comment(R1) serv_cons_loop()
 					blocked_form_msgs.Remove(i--);
 					syssend_async(b.sig_src, &val, byteof(val));
 				}
+				ProcessBlock::Release(pb);
 			}
 		}
 
 		// Process potential message
 		if (syscall(syscall_t::TMSG)) {
 			sysrecv(ANYPROC, (void*)to_args, byteof(to_args), (usize*)&sig_type, (usize*)&sig_src);
-			auto th = Taskman::LocateThread(sig_src);
+			ProcessBlock* safe_pb = ProcessBlock::Acquire(sig_src);
+			if (!safe_pb) continue;
 			switch (ConsoleMsg(sig_type)) {
 			case ConsoleMsg::TEST: break;
 
@@ -825,8 +849,8 @@ void _Comment(R1) serv_cons_loop()
 				#endif
 
 			case ConsoleMsg::INNC:// ReadChar(ASCII): normal \n \r ...
-				if (!ifContainBlockedTTY(th->parent_process)) {
-					blocked_vtty_pid.Append(th->parent_process->getID());
+				if (!ifContainBlockedTTY(safe_pb)) {
+					blocked_vtty_pid.Append(safe_pb->getID());
 					// ploginfo("Blocked TTY %u by %u", pb->focus_tty, pb->getID());
 				}
 				else {
@@ -839,46 +863,58 @@ void _Comment(R1) serv_cons_loop()
 				#if _GUI_ENABLE
 			case ConsoleMsg::FNEW:
 				ploginfo("creating new form %[x]", to_args[0]);
-				ret = ConsoleMsg_FNEW((FMT_ConsoleMsg_FNEW*)to_args, th->parent_process);
+				ret = ConsoleMsg_FNEW((FMT_ConsoleMsg_FNEW*)to_args, safe_pb);
 				syssend_async(sig_src, (void*)&ret, sizeof(ret));
 				break;
 
 			case ConsoleMsg::FDEL:
 			{
-				ProcessBlock* pb_target = th->parent_process;
-				// If request from System Tasks, to_args[1] is the target PID
-				if (sig_src < TaskCount) pb_target = Taskman::Locate(to_args[1]);
-				ret = ConsoleMsg_FDEL(to_args[0], pb_target);
+				ProcessBlock* pb_target = nullptr;
+				bool need_release = false;
+				if (sig_src < TaskCount) {
+					pb_target = ProcessBlock::AcquireByPID(to_args[1]);
+					need_release = true;
+				} else {
+					pb_target = safe_pb;
+				}
+				if (pb_target) {
+					ret = ConsoleMsg_FDEL(to_args[0], pb_target);
+					if (need_release) {
+						ProcessBlock::Release(pb_target);
+					}
+				} else {
+					ret = -1;
+				}
 				syssend_async(sig_src, (void*)&ret, sizeof(ret));
 			}
 			break;
 
 
 			case ConsoleMsg::FMSG:
-				ret = ConsoleMsg_FMSG((FMT_ConsoleMsg_FMSG*)to_args, th->parent_process, sig_src);
+				ret = ConsoleMsg_FMSG((FMT_ConsoleMsg_FMSG*)to_args, safe_pb, sig_src);
 				if ((stdsint)ret != -2) {
 					syssend_async(sig_src, (void*)&ret, sizeof(ret));
 				}
 				break;
 
 			case ConsoleMsg::FDRW:
-				ret = ConsoleMsg_FDRW((FMT_ConsoleMsg_FDRW*)to_args, th->parent_process);
+				ret = ConsoleMsg_FDRW((FMT_ConsoleMsg_FDRW*)to_args, safe_pb);
 				syssend_async(sig_src, (void*)&ret, sizeof(ret));
 				break;
 			case ConsoleMsg::FCHR:
-				ret = ConsoleMsg_FCHR((FMT_ConsoleMsg_FCHR*)to_args, th->parent_process);
+				ret = ConsoleMsg_FCHR((FMT_ConsoleMsg_FCHR*)to_args, safe_pb);
 				syssend_async(sig_src, (void*)&ret, sizeof(ret));
 				break;
 			case ConsoleMsg::FBID:
-				ret = ConsoleMsg_FBID((FMT_ConsoleMsg_FBID*)to_args, th->parent_process);
+				ret = ConsoleMsg_FBID((FMT_ConsoleMsg_FBID*)to_args, safe_pb);
 				syssend_async(sig_src, (void*)&ret, sizeof(ret));
 				break;
 			case ConsoleMsg::FUPD:
-				ret = ConsoleMsg_FUPD((FMT_ConsoleMsg_FUPD*)to_args, th->parent_process);
+				ret = ConsoleMsg_FUPD((FMT_ConsoleMsg_FUPD*)to_args, safe_pb);
 				syssend_async(sig_src, (void*)&ret, sizeof(ret));
 				break;
 			case ConsoleMsg::FTIM:
-				ret = ConsoleMsg_FTIM(to_args[0], to_args[1], th->parent_process);
+				ret = ConsoleMsg_FTIM(to_args[0], to_args[1], safe_pb);
 				syssend_async(sig_src, (void*)&ret, sizeof(ret));
 				break;
 
@@ -890,6 +926,7 @@ void _Comment(R1) serv_cons_loop()
 				plogerro("Unknown consmsg type %u", sig_type);
 				break;
 			}
+			ProcessBlock::Release(safe_pb);
 		}
 		syscall(syscall_t::REST);
 	}

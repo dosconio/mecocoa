@@ -170,11 +170,32 @@ void ProcessBlock::Release(ProcessBlock* pb) {
 }
 
 ProcessBlock* ProcessBlock::Acquire(stduint tid) {
-	ThreadBlock* th = Taskman::LocateThread(tid);
-	if (th && th->parent_process && th->parent_process->state != ProcessBlock::State::Invalid) {
-		ProcessBlock* pb = th->parent_process;
-		__atomic_add_fetch(&pb->ref_count, 1, __ATOMIC_SEQ_CST);
-		return pb;
+	SpinlockLocal guard(&scheduler_lock);
+	for (auto nod = Taskman::thchain.Root(); nod; nod = nod->next) {
+		auto th = cast<ThreadBlock*>(nod->offs);
+		if (th->tid == tid) {
+			if (th->parent_process && th->parent_process->state != ProcessBlock::State::Invalid) {
+				ProcessBlock* pb = th->parent_process;
+				__atomic_add_fetch(&pb->ref_count, 1, __ATOMIC_SEQ_CST);
+				return pb;
+			}
+			break;
+		}
+	}
+	return nullptr;
+}
+
+ProcessBlock* ProcessBlock::AcquireByPID(stduint pid) {
+	SpinlockLocal guard(&scheduler_lock);
+	for (auto nod = Taskman::chain.Root(); nod; nod = nod->next) {
+		auto pb = cast<ProcessBlock*>(nod->offs);
+		if (pb->pid == pid) {
+			if (pb->state != ProcessBlock::State::Invalid) {
+				__atomic_add_fetch(&pb->ref_count, 1, __ATOMIC_SEQ_CST);
+				return pb;
+			}
+			break;
+		}
 	}
 	return nullptr;
 }
@@ -355,8 +376,11 @@ static void _Exit_Cleanup(stduint pid)
 	ThreadBlock* th = ppb->thread_list_head;
 	while (th) {
 		ThreadBlock* next_th = th->process_thread_next;
-		Taskman::DequeueReady(th);
-		Taskman::thchain.Remove(th);
+		{
+			SpinlockLocal guard(&scheduler_lock);
+			Taskman::DequeueReady(th, false);
+			Taskman::thchain.Remove(th);
+		}
 		if (th->stack_lineaddr == th->stack_levladdr) {
 			free((byte*)th->stack_levladdr);
 		}
