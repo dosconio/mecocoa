@@ -264,7 +264,7 @@ void R_FLP_INIT() {
 
 	// Allocate a 4KB aligned physical page for floppy DMA buffer
 	if (!floppy_sector) {
-		floppy_sector = (char*)mempool.allocate(4096, 4096);
+		floppy_sector = (char*)mempool.allocate(4096, PAGESIZE_4KB);
 	}
 }
 

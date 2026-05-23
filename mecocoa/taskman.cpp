@@ -411,7 +411,16 @@ static void _Exit_Cleanup(stduint pid)
 	}
 	// Heap
 	if (1) {
-
+		for (stduint i = 0; i < ppb->vmas.Count(); i++) {
+			const auto& vma = ppb->vmas[i];
+			for (stduint addr = vma.vm_start; addr < vma.vm_end; addr += 0x1000) {
+				void* phys_addr = ppb->paging[addr];
+				if (phys_addr != (void*)~_IMM0) {
+					free(phys_addr);
+				}
+			}
+		}
+		ppb->vmas.Clear();
 	}
 	// Release Heap/Paging
 	if (!ppb->ring) {

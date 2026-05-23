@@ -238,13 +238,14 @@ void operator delete(void* ptr, stduint size) noexcept {
 	// if (!mempool.deallocate(ptr)) plogerro("del BAD");
 }
 void operator delete[](void* ptr, stduint size) {
-	::operator delete(ptr, _IMM0);// (ptr, size);
+	::operator delete(ptr, size);
 }
 #if defined(_UEFI)
 void operator delete(void* ptr, stduint size, std::align_val_t) noexcept { ::operator delete(ptr, size); }
 #endif
 //
 _ESYM_C void free(void* p) {
+	if (!p) return;
 	bool a = (mempool.deallocate(p));
 	if (!a) printlog(a ? _LOG_INFO: _LOG_ERROR, "mfree 0x%[x]", p);
 }

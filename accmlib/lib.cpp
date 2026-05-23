@@ -1,6 +1,7 @@
 #include "inc/aaaaa.h"
 #include "c/ustring.h"
 #include "c/consio.h"
+
 volatile static unsigned* const callid = (volatile unsigned*)0x0000500;// 0x80000500;
 
 // POSIX Based
@@ -30,8 +31,6 @@ int sysinnc()// 1
 }
 
 _ESYM_C
-
-
 stduint syssecond()// 3
 {
 	return syscall(syscall_t::TIME, 0, nil, nil);
@@ -112,12 +111,6 @@ stduint get_core_id(stduint* ptr_hid) {
 }
 
 
-
-// int exec(rostr path, rostr argstr) {
-// 	return syscall(syscall_t::EXEC, _IMM(path), _IMM(argstr), nil);
-// }
-
-_ESYM_C void free(void* ptr) {}
 
 // ----
 #define PROC_ORIGIN_STACK 128

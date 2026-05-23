@@ -18,7 +18,7 @@ extern "C" stdsint sysc_SIGR(void* context);
 extern "C" void check_and_deliver_signals(void* context);
 
 // Syscall Wrappers
-extern stduint SYSCALL_TABLE[25];
+extern stduint SYSCALL_TABLE[27];
 
 void Syscall::Initialize() {
 	#if _MCCA == 0x8632
@@ -451,6 +451,69 @@ DEFSYSC sysc_KILL(stduint pid, stduint sig, stduint tid) {
 	return (stdsint)sys_kill(pid, (int)sig, tid);
 }
 
+DEFSYSC sysc_MMAP(stduint len, stduint flag, stduint fd) {
+	ThreadBlock* th = Taskman::current_thread[Taskman::getID()];
+	ProcessBlock* pb = th->parent_process;
+	if (&pb->paging == &kernel_paging) {
+		return ~_IMM0; // Reject kernel page table
+	}
+	len = (len + 0xFFF) & ~_IMM(0xFFF); // Align to 4KB page size
+	SpinlockLocal guard(&pb->vma_lock);
+	stduint addr = pb->heaptop;
+	pb->heaptop += len;
+	pb->vmas.Append(VirtualMemoryArea(addr, pb->heaptop, flag));
+	return addr;
+}
+
+DEFSYSC sysc_UMAP(stduint addr, stduint len) {
+	if ((addr & 0xFFF) || (len & 0xFFF)) {
+		return ~_IMM0; // Address and length must be 4KB aligned
+	}
+	ThreadBlock* th = Taskman::current_thread[Taskman::getID()];
+	ProcessBlock* pb = th->parent_process;
+	if (&pb->paging == &kernel_paging) {
+		return ~_IMM0; // Reject kernel page table
+	}
+	SpinlockLocal guard(&pb->vma_lock);
+	
+	// Unmap and free physical memory
+	for (stduint curr = addr; curr < addr + len; curr += 0x1000) {
+		void* phys_addr = pb->paging[curr];
+		if (phys_addr != (void*)~_IMM0) {
+			free(phys_addr);
+			pb->paging.Unmap(curr, 0x1000);
+			__asm__ volatile("invlpg (%0)" : : "r"(curr) : "memory");
+		}
+	}
+	
+	// Remove or split VMAs in [addr, addr + len)
+	for (stduint i = 0; i < pb->vmas.Count(); ) {
+		auto& vma = pb->vmas[i];
+		if (vma.vm_start >= addr && vma.vm_end <= addr + len) {
+			pb->vmas.Remove(i, 1);
+		} else if (vma.vm_start < addr && vma.vm_end > addr + len) {
+			stduint old_end = vma.vm_end;
+			vma.vm_end = addr;
+			VirtualMemoryArea new_vma(addr + len, old_end, vma.vm_flags);
+			pb->vmas.Insert(i + 1, &new_vma);
+			i += 2;
+		} else if (vma.vm_start < addr && vma.vm_end > addr) {
+			vma.vm_end = addr;
+			i++;
+		} else if (vma.vm_start < addr + len && vma.vm_end > addr + len) {
+			vma.vm_start = addr + len;
+			i++;
+		} else {
+			i++;
+		}
+	}
+	
+	if (addr + len == pb->heaptop) {
+		pb->heaptop = addr;
+	}
+	return len;
+}
+
 
 #if (_MCCA & 0xFF00) == 0x8600 || (_MCCA & 0xFF00) == 0x1000
 stduint SYSCALL_TABLE[] = {
@@ -478,7 +541,9 @@ stduint SYSCALL_TABLE[] = {
 	0, // 0x15 unchk (handled manually to pass context frame)
 	mglb(sysc_SETD), // 0x16 (SETD)
 	mglb(sysc_GETD), // 0x17 (GETD)
-	0, // 0x18 (GET_CORE_ID)
+	mglb(sysc_MMAP), // 0x18 (MMAP)
+	mglb(sysc_UMAP), // 0x19 (UMAP)
+	0, // 0x1A (GET_CORE_ID)
 };
 #endif
 

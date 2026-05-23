@@ -454,6 +454,7 @@ ProcessBlock* Taskman::CreateELF(BlockTrait* source, byte ring) {
 	tb->context.IP = _IMM(header.e_entry);
 
 	stduint load_slice_p = 0;
+	stduint max_seg_end = 0;
 	for0(i, header.e_phnum) {
 		struct ELF_PHT_t ph;
 		stduint ph_offset = header.e_phoff + header.e_phentsize * i;
@@ -469,9 +470,22 @@ ProcessBlock* Taskman::CreateELF(BlockTrait* source, byte ring) {
 			else {
 				plogwarn("[Taskman] CreateELF LoadSlice Overflow");
 			}
+			stduint seg_end = ph.p_vaddr + ph.p_memsz;
+			if (seg_end > max_seg_end) {
+				max_seg_end = seg_end;
+			}
 		}
 	}
 	free(block_buffer);
+
+	if (max_seg_end > 0) {
+		pb->heapbtm = (max_seg_end + 0xFFF) & ~_IMM(0xFFF);
+		pb->heapbtm += 0x10000;
+		pb->heaptop = pb->heapbtm;
+	} else {
+		pb->heapbtm = 0x08000000;
+		pb->heaptop = pb->heapbtm;
+	}
 
 	// ---- Stack and Gen.Regis ---- //
 	const stduint stack_loc_top = _IMM(tb->stack_lineaddr) + tb->stack_size;
@@ -537,10 +551,27 @@ ProcessBlock* Taskman::CreateFork(ProcessBlock* fo, const CallgateFrame* frame) 
 	// ---- Copy CR3 Mapping ---- //
 	// - Segments Mapping with coping
 	// - Kernel-Area Mapping
-	// - (TODO) Heap Area Mapping
+	// - Heap Area Mapping
 	tb->context = target_fo_thread->context;
 	//{TEMP} use simple method
 	tb->context.CR3 = _Taskman_Create_Paging(pb, ring, _IMM(stack_norm));
+
+	// Copy Heap VMAs and mapped pages
+	pb->heapbtm = fo->heapbtm;
+	pb->heaptop = fo->heaptop;
+	pb->vmas = fo->vmas;
+	for (stduint i = 0; i < fo->vmas.Count(); i++) {
+		const auto& vma = fo->vmas[i];
+		for (stduint addr = vma.vm_start; addr < vma.vm_end; addr += 0x1000) {
+			void* parent_phy = fo->paging[addr];
+			if (parent_phy != (void*)~_IMM0) {
+				void* child_phy = mempool.allocate(0x1000, 12);
+				MemSet((void*)mglb(child_phy), 0, 0x1000); // Zero-fill child page
+				MemCopyP((void*)mglb(child_phy), kernel_paging, (const void*)mglb(parent_phy), kernel_paging, 0x1000);
+				pb->paging.Map(addr, (stduint)child_phy, 0x1000, PAGESIZE_4KB, PGPROP_present | PGPROP_writable | PGPROP_user_access);
+			}
+		}
+	}
 	for0a(i, fo->load_slices) {
 		if (!fo->load_slices[i].length) break;
 		pb->load_slices[i] = fo->load_slices[i];
@@ -732,6 +763,17 @@ ProcessBlock* Taskman::Exet(stduint parent, rostr usr_fullpath, char** usr_argv,
 	stduint new_sp = _Taskman_Setup_Stack(current_pb, current_pb, usr_argv, usr_envp, (stduint)header.e_entry, phdr_addr, header.e_phnum, header.e_phentsize);
 
 	// 2. Destroy Old Image
+	for (stduint i = 0; i < current_pb->vmas.Count(); i++) {
+		const auto& vma = current_pb->vmas[i];
+		for (stduint addr = vma.vm_start; addr < vma.vm_end; addr += 0x1000) {
+			void* phys_addr = current_pb->paging[addr];
+			if (phys_addr != (void*)~_IMM0) {
+				free(phys_addr);
+			}
+		}
+	}
+	current_pb->vmas.Clear();
+
 	for0a(i, current_pb->load_slices) {
 		if (!current_pb->load_slices[i].address) break;
 		if (current_pb->load_slices[i].length >= PAGE_SIZE &&
@@ -765,6 +807,7 @@ ProcessBlock* Taskman::Exet(stduint parent, rostr usr_fullpath, char** usr_argv,
 
 	current_pb->main_thread->context.IP = _IMM(header.e_entry);
 	stduint load_slice_p = 0;
+	stduint max_seg_end = 0;
 	for0(i, header.e_phnum) {
 		struct ELF_PHT_t ph;
 		loop_device.Read(header.e_phoff + i * header.e_phentsize, &ph, sizeof(ph), block_buffer);
@@ -775,9 +818,22 @@ ProcessBlock* Taskman::Exet(stduint parent, rostr usr_fullpath, char** usr_argv,
 				current_pb->load_slices[load_slice_p].length = ph.p_memsz;
 				load_slice_p++;
 			}
+			stduint seg_end = ph.p_vaddr + ph.p_memsz;
+			if (seg_end > max_seg_end) {
+				max_seg_end = seg_end;
+			}
 		}
 	}
 	delete[] block_buffer;
+
+	if (max_seg_end > 0) {
+		current_pb->heapbtm = (max_seg_end + 0xFFF) & ~_IMM(0xFFF);
+		current_pb->heapbtm += 0x10000;
+		current_pb->heaptop = current_pb->heapbtm;
+	} else {
+		current_pb->heapbtm = 0x08000000;
+		current_pb->heaptop = current_pb->heapbtm;
+	}
 
 	#if (_MCCA & 0xFF00) == 0x8600
 	current_pb->main_thread->context.SP = new_sp;

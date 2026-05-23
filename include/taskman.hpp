@@ -182,6 +182,18 @@ struct SemaphoreLocal {
 namespace uni {
     class vfs_dentry;
 }
+struct VirtualMemoryArea {
+	stduint vm_start;	// Align by 4KB page size
+	stduint vm_end;		// Align by 4KB page size
+	stduint vm_flags;	// Attributes (e.g. PGPROP_writable, PGPROP_user_access)
+	VirtualMemoryArea() : vm_start(0), vm_end(0), vm_flags(0) {}
+	VirtualMemoryArea(stduint start, stduint end, stduint flags)
+		: vm_start(start), vm_end(end), vm_flags(flags) {}
+	bool operator==(const VirtualMemoryArea& other) const {
+		return vm_start == other.vm_start && vm_end == other.vm_end && vm_flags == other.vm_flags;
+	}
+};
+
 class _Comment(Kernel) ProcessBlock {
 public:
 	stduint pid;
@@ -220,6 +232,8 @@ public:
 	uni::Paging* paging_redirect = nullptr;
 	stduint heaptop = 0;
 	stduint heapbtm = 0;// norm: max seg + 0x10000
+	uni::Vector<VirtualMemoryArea> vmas; // List of virtual memory areas
+	Spinlock vma_lock; // Spinlock protecting VMAs and page tables
 public: // _Comment(Taskman);
 	uni::Slice load_slices[8];// at most 8 slices, app-relative logical address
 public: // _Comment(Console);

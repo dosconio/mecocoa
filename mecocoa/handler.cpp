@@ -148,6 +148,76 @@ static rostr ExceptionDescription[] = {
 
 
 #if (_MCCA & 0xFF00) == 0x8600
+_ESYM_C
+__attribute__((target("general-regs-only"), optimize("O0")))
+bool exception_handler_user(HardwareInterruptFrame* frame, stduint iden, stduint para) {
+	#if _MCCA == 0x8664
+	plogwarn("User exception %d (para %[x]) at RIP %[x], RSP %[x], CR2 %[x]", (int)iden, para, frame->hw_rip, frame->hw_rsp, getCR2());
+	#else
+	plogwarn("User exception %d (para %[x]) at EIP %[x], ESP %[x]", (int)iden, para, frame->hw_eip, frame->hw_esp);
+	#endif
+	int sig = 0;
+	switch (iden) {
+	case ERQ_Divide_By_Zero:
+		sig = SIGFPE;
+		break;
+	case ERQ_Step:
+	case ERQ_Breakpoint:
+		sig = SIGTRAP;
+		break;
+	case ERQ_Overflow:
+	case ERQ_Bound:
+	case ERQ_x0D: // General Protection (#GP) defined as ERQ_x0D in IBM.h
+		sig = SIGSEGV;
+		break;
+	case ERQ_Page_Fault:
+	{
+		stduint fault_addr = getCR2();
+		ThreadBlock* crt = Taskman::current_thread[Taskman::getID()];
+		ProcessBlock* pb = crt ? crt->parent_process : nullptr;
+		bool handled = false;
+		if (pb) {
+			SpinlockLocal guard(&pb->vma_lock);
+			for (stduint i = 0; i < pb->vmas.Count(); i++) {
+				const auto& vma = pb->vmas[i];
+				if (fault_addr >= vma.vm_start && fault_addr < vma.vm_end) {
+					void* phy_page = mempool.allocate(0x1000, 12);
+					if (phy_page != (void*)~_IMM0) {
+						MemSet((void*)mglb(phy_page), 0, 0x1000); // Zero-fill physical page
+						stduint aligned_vaddr = fault_addr & ~_IMM(0xFFF);
+						pb->paging.Map(aligned_vaddr, (stduint)phy_page, 0x1000, PAGESIZE_4KB, PGPROP_present | PGPROP_writable | PGPROP_user_access);
+						__asm__ volatile("invlpg (%0)" : : "r"(aligned_vaddr) : "memory");
+						handled = true;
+					}
+					break;
+				}
+			}
+		}
+		if (handled) {
+			return true; // Retry faulting instruction
+		}
+		plogwarn("Segmentation fault: process %u accessed unmapped address 0x%[x]", pb ? pb->pid : 0, fault_addr);
+		sig = SIGSEGV;
+	}
+	break;
+	case ERQ_Invalid_Opcode:
+		sig = SIGILL;
+		break;
+	default:
+		sig = SIGILL; // Fallback signal for unknown exceptions
+		break;
+	}
+
+	if (sig != 0) {
+		ThreadBlock* crt = Taskman::current_thread[Taskman::getID()];
+		if (crt) {
+			// Mark signal as pending directly in Ring 0 exception handler
+			sigaddset(&crt->pending_signals, sig);
+			return true; // Returns to dispatcher, which calls check_and_deliver_signals
+		}
+	}
+	return false;
+}
 
 _ESYM_C
 __attribute__((target("general-regs-only"), optimize("O0")))
@@ -160,44 +230,7 @@ void exception_handler(HardwareInterruptFrame* frame) {
 	// Check if exception comes from user space (Ring 3)
 	bool is_user = (frame->hw_cs & 3) != 0;
 
-	if (is_user) {
-		#if _MCCA == 0x8664
-		plogwarn("User exception %d (para %[x]) at RIP %[x], RSP %[x], CR2 %[x]", (int)iden, para, frame->hw_rip, frame->hw_rsp, getCR2());
-		#else
-		plogwarn("User exception %d (para %[x]) at EIP %[x], ESP %[x]", (int)iden, para, frame->hw_eip, frame->hw_esp);
-		#endif
-		int sig = 0;
-		switch (iden) {
-			case ERQ_Divide_By_Zero:
-				sig = SIGFPE;
-				break;
-			case ERQ_Step:
-			case ERQ_Breakpoint:
-				sig = SIGTRAP;
-				break;
-			case ERQ_Overflow:
-			case ERQ_Bound:
-			case ERQ_x0D: // General Protection (#GP) defined as ERQ_x0D in IBM.h
-			case ERQ_Page_Fault:
-				sig = SIGSEGV;
-				break;
-			case ERQ_Invalid_Opcode:
-				sig = SIGILL;
-				break;
-			default:
-				sig = SIGILL; // Fallback signal for unknown exceptions
-				break;
-		}
-
-		if (sig != 0) {
-			ThreadBlock* crt = Taskman::current_thread[Taskman::getID()];
-			if (crt) {
-				// Mark signal as pending directly in Ring 0 exception handler
-				sigaddset(&crt->pending_signals, sig);
-				return; // Returns to dispatcher, which calls check_and_deliver_signals
-			}
-		}
-	}
+	if (is_user && exception_handler_user(frame, iden, para)) return;
 
 	dword tmp;
 	if (iden >= 0x20)
@@ -233,8 +266,12 @@ void exception_handler(HardwareInterruptFrame* frame) {
 		break;
 
 	case ERQ_Page_Fault:// 14
-		printlog(_LOG_FATAL, "%s with 0x%[x], vaddr=0x%[x], TID%u, CR3=0x%[x]",
-			ExceptionDescription[iden], para, getCR2(), Taskman::current_thread[Taskman::getID()]->tid, r15); // printlog will call halt machine
+		printlog(_LOG_FATAL, "%s with 0x%[x], vaddr=0x%[x], TID%u, CR3=0x%[x]\n\r\t %s%s%s%s",
+			ExceptionDescription[iden], para, getCR2(), Taskman::current_thread[Taskman::getID()]->tid, r15,
+			para & 1 ? "Protected " : "Miss",
+			para & 0b10 ? "Write " : "Read ",
+			para & 0b100 ? "User " : "Kernel ",
+			para & 0b1000 ? "RSVD " : " "); // printlog will call halt machine
 		break;
 
 	default:

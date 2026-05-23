@@ -34,6 +34,8 @@ enum
 	SIGR = 0x15, // sigreturn ()              | -
 	SETD = 0x16, // chdir  (path)->status     | x86
 	GETD = 0x17, // getcwd (buf, size)->len   | x86
+	MMAP = 0x18, // mmap   (size,fl,fd)->addr | 
+	UMAP = 0x19, // munmap (addr,size) ->0    | 
 	// TNEW
 	// TEXI
 

@@ -82,7 +82,7 @@ int main(int argc, char** argv)
 	sys_removefil(filename);
 	#endif
 
-	#if 1
+	#if 0 // TEST FORM
 	Rectangle rect{ Point(100, 80), Size2(320, 240) };
 	auto form_id = sys_create_form(-_IMM0, &rect);
 	if (form_id >= 0) {
@@ -158,7 +158,61 @@ int main(int argc, char** argv)
 
 	#endif
 
+	#if 1 // MMAP
+	// * ((byte*)0x20000000) = 0x55;// should be killed
+	// below test user-heap (malloc) :
+	outsfmt("[TestApp] Starting user heap test...\n\r");
 
+	// malloc 1: correct allocation and free
+	outsfmt("[TestApp] Performing malloc 1 (100 bytes)...\n\r");
+	void* ptr1 = malloc(100);
+	if (ptr1) {
+		outsfmt("[TestApp] malloc 1 succeeded, address: %p\n\r", ptr1);
+		// Write to it to trigger page fault (demand paging) and verify zero-filling
+		bool zeroed = true;
+		for (int i = 0; i < 100; i++) {
+			if (((char*)ptr1)[i] != 0) {
+				zeroed = false;
+			}
+		}
+		outsfmt("[TestApp] malloc 1 memory zero-fill check: %s\n\r", zeroed ? "PASSED" : "FAILED");
+		
+		// Write unique pattern
+		((char*)ptr1)[0] = 0xA5;
+		
+		// free 1: correct free
+		outsfmt("[TestApp] Freeing malloc 1 with correct address...\n\r");
+		free(ptr1);
+		outsfmt("[TestApp] Freeing malloc 1 completed.\n\r");
+	} else {
+		outsfmt("[TestApp] malloc 1 failed!\n\r");
+	}
+
+	// free 2: incorrect address (offset from original ptr1 to test invalid deallocation detection)
+	if (ptr1) {
+		void* bad_ptr = (void*)((stduint)ptr1 + 4);
+		outsfmt("[TestApp] Freeing incorrect address %p (should print Mempool error)...\n\r", bad_ptr);
+		free(bad_ptr);
+		outsfmt("[TestApp] Freeing incorrect address completed.\n\r");
+	}
+
+	// malloc 2: allocated and not freed (OS will clean up on exit)
+	outsfmt("[TestApp] Performing malloc 2 (200 bytes, will NOT be freed)...\n\r");
+	void* ptr2 = malloc(200);
+	if (ptr2) {
+		outsfmt("[TestApp] malloc 2 succeeded, address: %p\n\r", ptr2);
+		// Write to trigger page fault
+		((char*)ptr2)[0] = 0x5A;
+		outsfmt("[TestApp] malloc 2 written successfully, leaving it for OS cleanup.\n\r");
+	} else {
+		outsfmt("[TestApp] malloc 2 failed!\n\r");
+	}
+
+	// Trigger access to unmapped area to demonstrate abnormal address display
+	outsfmt("[TestApp] Accessing unmapped address 0x50000000 to trigger crash...\n\r");
+	sysrest(1, 100); // Short delay to ensure output is flushed
+	*((volatile char*)0x50000000) = 0xAA;
+	#endif
 
 	// loop sysrest(0, 0);
 	return 0;

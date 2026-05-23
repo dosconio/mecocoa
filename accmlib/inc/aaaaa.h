@@ -43,6 +43,9 @@ extern "C" {
 
 	stduint get_core_id(stduint* ptr_hid);
 
+	void* malloc(size_t size);
+	void free(void* ptr);
+
 #ifdef _INC_CPP
 }
 #endif
