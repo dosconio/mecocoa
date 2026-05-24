@@ -487,7 +487,7 @@ static void user_enumer_callback(void* is_dir, void* name) {
 
 	// Copy to user space memory
 	stduint offset = g_enum_cxt.filled_count * sizeof(dirent_t);
-	MccaMemCopyP((void*)((stduint)g_enum_cxt.user_addr + offset), g_enum_cxt.pb, &kde, nullptr, sizeof(dirent_t));
+	MemCopyP((void*)((stduint)g_enum_cxt.user_addr + offset), g_enum_cxt.pb->paging, &kde, kernel_paging, sizeof(dirent_t));// To local area
 
 	g_enum_cxt.filled_count++;
 }

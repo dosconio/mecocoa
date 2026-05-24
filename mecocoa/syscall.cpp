@@ -583,7 +583,7 @@ stduint SYSCALL_TABLE[] = {
 	mglb(sysc_WRIT),
 	mglb(sysc_DELF),
 	mglb(sysc_PORP),
-	mglb(sysc_ENUM),
+	mglb(sysc_ENUM),// U-only
 	mglb(sysc_WAIT),
 	mglb(sysx_FORK) & 0,// Fork need frame, process it other way
 	mglb(sysc_TMSG),
@@ -685,6 +685,7 @@ stduint Handint_SYSCALL(CallgateFrame* frame) {
 	stduint para[4] = { frame->cx, frame->dx, frame->bx };
 	#elif _MCCA == 0x8664
 	auto pb = Taskman::current_thread[Taskman::getID()]->parent_process;
+	pb->paging_redirect = 0;
 	if (&pb->paging != &kernel_paging) frame = (CallgateFrame*)(pb->paging[_IMM(frame)]);
 	auto callid = (syscall_t)(frame->ax & 0x7FFFFFFFu);
 	stduint para[4] = { frame->di, frame->si, frame->dx };

@@ -151,11 +151,13 @@ static rostr ExceptionDescription[] = {
 _ESYM_C
 __attribute__((target("general-regs-only"), optimize("O0")))
 bool exception_handler_user(HardwareInterruptFrame* frame, stduint iden, stduint para) {
-	#if _MCCA == 0x8664
-	plogwarn("User exception %d (para %[x]) at RIP %[x], RSP %[x], CR2 %[x]", (int)iden, para, frame->hw_rip, frame->hw_rsp, getCR2());
-	#else
-	plogwarn("User exception %d (para %[x]) at EIP %[x], ESP %[x]", (int)iden, para, frame->hw_eip, frame->hw_esp);
-	#endif
+	if (iden != ERQ_Page_Fault) {
+		#if _MCCA == 0x8664
+		plogwarn("User exception %d (para %[x]) at RIP %[x], RSP %[x], CR2 %[x]", (int)iden, para, frame->hw_rip, frame->hw_rsp, getCR2());
+		#else
+		plogwarn("User exception %d (para %[x]) at EIP %[x], ESP %[x]", (int)iden, para, frame->hw_eip, frame->hw_esp);
+		#endif
+	}
 	int sig = 0;
 	switch (iden) {
 	case ERQ_Divide_By_Zero:

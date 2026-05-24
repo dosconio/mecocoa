@@ -16,6 +16,7 @@ enum
 	TIME = 0x03, // getsec (0sec/1ms)->second | x86 x64
 	REST = 0x04, // halt   (unit, time)       | x86 x64
 	COMM = 0x05, // syncom (mod, obj, &msg)   | x86 x64 rv
+	// [Fileops]
 	OPEN = 0x06, // open   (path,flags)>=0    | x86 x64
 	CLOS = 0x07, // close  (fd)->0            | x86 x64
 	READ = 0x08, // read   (fd, adr, len)->len| x86 x64
@@ -23,26 +24,31 @@ enum
 	DELF = 0x0A, // remove (pathname)->?      | x86 x64
 	PORP = 0x0B, // proper (fd, &proper)->0   | x86
 	ENUM = 0x0C, // enumer (fd,&kde,cnt)->cnt | x86
+	// [Process]
 	WAIT = 0x0D, // wait   (pid, &status)->pid| x86 x64    | pid 0 for any
 	FORK = 0x0E, // fork   ()->pid            | x86 x64
 	TMSG = 0x0F, // trymsg ()->(msg_unsovled) | x86 x64 rv
 	EXEC = 0x10, // spawn  (path,argv,envp)->0| x86 x64
 	EXET = 0x11, // exec   (path,argv,envp)->0| x86 x64
-	// MALC = 0x12, // malloc (pages)->addr>0    | 
+	PFUN = 0x12, // procfn () |(TODO) | priority ...
+	// [Signals]
 	SIGA = 0x13, // sigaction (sig,&new,&old) | x86
-	KILL = 0x14, // kill (pid, sig, tid)      | x86
+	KILL = 0x14, // kill      (pid, sig, tid) | x86
 	SIGR = 0x15, // sigreturn ()              | -
+	// [Fileops Extend]
 	SETD = 0x16, // chdir  (path)->status     | x86
 	GETD = 0x17, // getcwd (buf, size)->len   | x86
-	MMAP = 0x18, // mmap   (size,fl,fd)->addr | 
-	UMAP = 0x19, // munmap (addr,size) ->0    | 
+	MMAP = 0x18, // mmap   (size,fl,fd)->addr | x86
+	UMAP = 0x19, // munmap (addr,size) ->0    | x86
+	// [Threads]
 	// TNEW
 	// TEXI
 
-	GET_CORE_ID, // | rv
+	GET_CORE_ID, // getcid () | rv
+	MANA, // manage (func, op1, op2)->?|(TODO)      | shutdown reboot...
 
 
-	TEST = 0xFF, // (T,E,S)->0 | x86
+	TEST = 0xFF, // getpid (T,E,S)->0 | x86
 };// . stand for well for multi-thread
 // Locks usually end with `_lock;`
 

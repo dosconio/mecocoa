@@ -133,7 +133,7 @@ build_util:
 		-L$(uobjpath)/$(ACCM_LIBS) -lx86 -e _start
 	echo MK subtest
 	g++ $(ACCM_INCF) $(flag) -m32 $(CXF) $(CXW) -std=c++2a \
-		subapps/test.cpp -o $(uobjpath)/sapp-$(arch)/test\
+		subapps/test.cpp $(ulibpath)/cpp/lango/lango-cpp.cpp -o $(uobjpath)/sapp-$(arch)/test\
 		-L$(uobjpath)/$(ACCM_LIBS) -lx86 -e _start
 	echo MK paint
 	g++ $(ACCM_INCF) $(flag) -m32 $(CXF) $(CXW) -std=c++2a \

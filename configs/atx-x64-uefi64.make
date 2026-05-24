@@ -15,7 +15,7 @@ CFLAGS += -nostdlib -fno-builtin -z norelro
 CFLAGS += --static -mno-red-zone -m64  -mno-sse -mno-sse2 -mno-avx -mno-avx2
 # -msoft-float
 CFLAGS += -I$(uincpath) -D_MCCA=0x8664 -D_UEFI -D_DEBUG
-CFLAGS += -fno-strict-aliasing -fno-exceptions -fno-stack-protector
+CFLAGS += -fno-strict-aliasing -fno-exceptions -fno-stack-protector -ffreestanding
 CFLAGS += -Wextra -Wno-multichar
 XFLAGS  = $(CFLAGS) -fno-rtti -fno-use-cxa-atexit
 G_DBG   = gdb-multiarch
@@ -129,7 +129,7 @@ build_util:
 		subapps/init.cpp -L$(uobjpath)/$(ACCM_LIBS) -lx64 -e _start
 	echo MK subtest
 	$(CX) $(ACCM_INCF) $(XFLAGS) \
-		subapps/test.cpp -o $(uobjpath)/sapp-$(arch)/test \
+		subapps/test.cpp $(ulibpath)/cpp/lango/lango-cpp.cpp -o $(uobjpath)/sapp-$(arch)/test \
 		-L$(uobjpath)/$(ACCM_LIBS) -lx64 -e _start
 	echo MK game_breakout '(FAIL)'
 	$(CX) $(ACCM_INCF) $(XFLAGS) \

@@ -492,8 +492,33 @@ static inline void* SeekAddress(ProcessBlock* pb, stduint addr) {
 	#endif
 	return _IMM(ptr) != ~_IMM0 ? ptr : nullptr;
 }
+
+extern "C" void* kernel_prefault_page(ProcessBlock* pb, stduint addr);
+
 static inline stduint MccaMemCopyP(void* dest, ProcessBlock* pd, const void* sors, ProcessBlock* ps, size_t n) {
 	extern Paging kernel_paging;
+	if (ps) {
+		stduint start_page = (stduint)sors & ~_IMM(0xFFF);
+		stduint end_page = ((stduint)sors + n + 0xFFF) & ~_IMM(0xFFF);
+		if (end_page >= start_page) {
+			for (stduint curr = start_page; curr < end_page; curr += 0x1000) {
+				if (!SeekAddress(ps, curr)) {
+					kernel_prefault_page(ps, curr);
+				}
+			}
+		}
+	}
+	if (pd) {
+		stduint start_page = (stduint)dest & ~_IMM(0xFFF);
+		stduint end_page = ((stduint)dest + n + 0xFFF) & ~_IMM(0xFFF);
+		if (end_page >= start_page) {
+			for (stduint curr = start_page; curr < end_page; curr += 0x1000) {
+				if (!SeekAddress(pd, curr)) {
+					kernel_prefault_page(pd, curr);
+				}
+			}
+		}
+	}
 	#if (_MCCA & 0xFF00) == 0x1000 // M-RISCV
 	Paging pag = {};
 	pag.root_level_page = nil;
