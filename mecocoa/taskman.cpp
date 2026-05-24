@@ -413,11 +413,30 @@ static void _Exit_Cleanup(stduint pid)
 	if (1) {
 		for (stduint i = 0; i < ppb->vmas.Count(); i++) {
 			const auto& vma = ppb->vmas[i];
+			if (vma.vm_type == VMA_FILE && vma.vfile && (vma.vm_flags & PGPROP_writable)) {
+				for (stduint addr = vma.vm_start; addr < vma.vm_end; addr += 0x1000) {
+					void* phys_addr = ppb->paging[addr];
+					if (phys_addr != (void*)~_IMM0) {
+						stduint file_offset = addr - vma.vm_start + vma.file_offset;
+						if (file_offset < vma.vfile->f_inode->i_size) {
+							stduint write_len = minof(_IMM(0x1000), vma.vfile->f_inode->i_size - file_offset);
+							vma.vfile->f_pos = file_offset;
+							Filesys::Write(vma.vfile, (const void*)mglb(phys_addr), write_len);
+						}
+					}
+				}
+			}
 			for (stduint addr = vma.vm_start; addr < vma.vm_end; addr += 0x1000) {
 				void* phys_addr = ppb->paging[addr];
 				if (phys_addr != (void*)~_IMM0) {
 					free(phys_addr);
 				}
+			}
+			if (vma.vm_type == VMA_FILE && vma.vfile) {
+				if (vma.vfile->f_inode) {
+					vma.vfile->f_inode->ref_count--;
+				}
+				Filesys::Close(vma.vfile);
 			}
 		}
 		ppb->vmas.Clear();

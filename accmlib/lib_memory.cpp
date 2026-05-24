@@ -3,17 +3,18 @@
 #include "c/consio.h"
 #include "c/mempool.h"
 #include "c/system/paging.h"
+#include <sys/mman.h>
 
 class UserHeapMmapAllocator : public uni::trait::Malloc {
 public:
 	virtual void* allocate(stduint size, stduint alignment = 0, stduint boundary = 0) override {
 		stduint page_size = (size + 0xFFF) & ~_IMM(0xFFF);
-		return (void*)syscall(syscall_t::MMAP, page_size, PGPROP_present | PGPROP_writable | PGPROP_user_access, 0);
+		return (void*)syscall(syscall_t::MMAP, page_size, PGPROP_present | PGPROP_writable | PGPROP_user_access, ~_IMM0);
 	}
 	virtual bool deallocate(void* ptr, stduint size = 0) override {
 		if (!ptr) return true;
 		stduint page_size = (size + 0xFFF) & ~_IMM(0xFFF);
-		return syscall(syscall_t::UMAP, (stduint)ptr, page_size) == 0;
+		return syscall(syscall_t::UMAP, (stduint)ptr, page_size) != ~_IMM0;
 	}
 };
 
@@ -44,3 +45,12 @@ _ESYM_C void free(void* ptr) {
 	user_mempool.deallocate(ptr);
 }
 
+_ESYM_C void* mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset) {
+	stduint ret = syscall(syscall_t::MMAP, length, prot, fd);
+	return (void*)ret;
+}
+
+_ESYM_C int munmap(void* addr, size_t length) {
+	stduint ret = syscall(syscall_t::UMAP, (stduint)addr, length);
+	return ret == length ? 0 : -1;
+}

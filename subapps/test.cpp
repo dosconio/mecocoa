@@ -3,84 +3,20 @@
 #include "c/consio.h"
 #include "unistd.h"
 #include <c/ISO_IEC_STD/signal.h>
+#include <sys/mman.h>
 
 using namespace uni;
-
-// mnt33 fat16
-// mnt34 fat32
 
 static Color test_buffer[318 * 221];
 static Color colors[] = { Color::Red, Color::Green, Color::Blue, Color::Yellow, (0xFF00FFFF), (0xFFFF00FF) };
 static int color_idx = 0;
 
-static void sigint_handler(int signo) {
-	outsfmt("\n\r[TestApp] Received SIGINT (%d)! Interrupted successfully!\n\r", signo);
-}
-
-static void sigfpe_handler(int signo) {
-	outsfmt("\n\r[TestApp] Received SIGFPE (%d) from divide-by-zero!\n\r", signo);
-	_exit(1);
-}
-
 int main(int argc, char** argv)
 {
-	struct _POSIX_sigaction act;
-	act.sa_handler = sigint_handler;
-	sigemptyset(&act.sa_mask);
-	act.sa_flags = 0;
-	act.sa_restorer = nullptr;
-	sigaction(SIGINT, &act, nullptr);
 
-	struct _POSIX_sigaction act_fpe;
-	act_fpe.sa_handler = sigfpe_handler;
-	sigemptyset(&act_fpe.sa_mask);
-	act_fpe.sa_flags = 0;
-	act_fpe.sa_restorer = nullptr;
-	sigaction(SIGFPE, &act_fpe, nullptr);
-
-	// Trigger exception test if required:
-	if (0) {
-		volatile int a = 1;
-		volatile int b = 0;
-		volatile int c = a / b;
-		(void)c;
-	}
 
 	unsigned id = getpid();// TEST
 	outsfmt("C(%d)\n\r", id);// OUTC
-
-	#if 1
-
-	#if __BITS__ == 32
-	rostr filename = "/mnt33/owo.txt";
-	#else
-	rostr filename = "/md0/owo.txt";
-	#endif
-
-	int fd = sysopen(filename);
-	if (fd < 0) {
-		fd = sys_createfil(filename);
-	}
-
-	if (fd >= 0) {
-		outsfmt("Open success! FD=%d\n\r", fd);
-		const char* msg = "Hello from Mecocoa VFS!\n";
-		write(fd, (void*)msg, 24);
-		close(fd);
-
-		fd = sysopen(filename);
-		if (fd >= 0) {
-			char buf[32] = {0};
-			read(fd, buf, 24);
-			outsfmt("Read result: %s\n\r", buf);
-			close(fd);
-		}
-	} else {
-		outsfmt("Open failed with code %d\n\r", fd);
-	}
-
-	sys_removefil(filename);
-	#endif
 
 	#if 0 // TEST FORM
 	Rectangle rect{ Point(100, 80), Size2(320, 240) };
@@ -158,60 +94,119 @@ int main(int argc, char** argv)
 
 	#endif
 
-	#if 1 // MMAP
-	// * ((byte*)0x20000000) = 0x55;// should be killed
-	// below test user-heap (malloc) :
-	outsfmt("[TestApp] Starting user heap test...\n\r");
+	#if 1 // MMAP FILE
+	{
+		auto tmp = (char*)malloc(0x1001);
+		*tmp = 'a';
+		free(tmp);
 
-	// malloc 1: correct allocation and free
-	outsfmt("[TestApp] Performing malloc 1 (100 bytes)...\n\r");
-	void* ptr1 = malloc(100);
-	if (ptr1) {
-		outsfmt("[TestApp] malloc 1 succeeded, address: %p\n\r", ptr1);
-		// Write to it to trigger page fault (demand paging) and verify zero-filling
-		bool zeroed = true;
-		for (int i = 0; i < 100; i++) {
-			if (((char*)ptr1)[i] != 0) {
-				zeroed = false;
+		outsfmt("=== File MMAP Test Start ===\n\r");
+		rostr test_file = "/md0/mmap_t.txt";
+
+		// 1. Create and write to the test file
+		int fd = sysopen(test_file);
+		if (fd < 0) {
+			fd = sys_createfil(test_file);
+		}
+		if (fd < 0) {
+			outsfmt("Error: Failed to create test file %s!\n\r", test_file);
+			return -1;
+		}
+
+		const char* init_content = "Hello Mecocoa File MMAP!";
+		int written = write(fd, (void*)init_content, 24);
+		outsfmt("Step 1: Write init pattern, fd=%d, bytes=%d\n\r", fd, written);
+		close(fd);
+
+		// 2. Re-open and establish mmap mapping
+		fd = sysopen(test_file);
+		if (fd < 0) {
+			outsfmt("Error: Failed to re-open test file!\n\r");
+			return -1;
+		}
+
+		// Map a 4KB page with flag 7 (present | writable | user)
+		void* map_addr = mmap(nullptr, 4096, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_SHARED, fd, 0);
+		outsfmt("Step 2: MMAP completed, map_addr=0x%x\n\r", (stduint)map_addr);
+		if (map_addr == MAP_FAILED) {
+			outsfmt("Error: MMAP failed!\n\r");
+			close(fd);
+			return -1;
+		}
+
+		// 3. Immediately close original fd to verify lifecycle independence (inode ref count)
+		close(fd);
+		outsfmt("Step 3: Closed original fd. Attempting to read from map...\n\r");
+
+		// 4. First-time read and verify
+		char* ptr = (char*)map_addr;
+		char read_buf[32] = {0};
+		for (int i = 0; i < 24; i++) {
+			read_buf[i] = ptr[i];
+		}
+		outsfmt("Step 4: Read from memory: '%s'\n\r", read_buf);
+
+		bool match = true;
+		for (int i = 0; i < 24; i++) {
+			if (read_buf[i] != init_content[i]) {
+				match = false;
+				break;
 			}
 		}
-		outsfmt("[TestApp] malloc 1 memory zero-fill check: %s\n\r", zeroed ? "PASSED" : "FAILED");
-		
-		// Write unique pattern
-		((char*)ptr1)[0] = 0xA5;
-		
-		// free 1: correct free
-		outsfmt("[TestApp] Freeing malloc 1 with correct address...\n\r");
-		free(ptr1);
-		outsfmt("[TestApp] Freeing malloc 1 completed.\n\r");
-	} else {
-		outsfmt("[TestApp] malloc 1 failed!\n\r");
-	}
+		if (match) {
+			outsfmt("Success: Initial memory contents match!\n\r");
+		} else {
+			outsfmt("Error: Memory contents mismatch!\n\r");
+		}
 
-	// free 2: incorrect address (offset from original ptr1 to test invalid deallocation detection)
-	if (ptr1) {
-		void* bad_ptr = (void*)((stduint)ptr1 + 4);
-		outsfmt("[TestApp] Freeing incorrect address %p (should print Mempool error)...\n\r", bad_ptr);
-		free(bad_ptr);
-		outsfmt("[TestApp] Freeing incorrect address completed.\n\r");
-	}
+		// 5. Modify mapped memory ("Hello" -> "World")
+		outsfmt("Step 5: Modifying mapped memory ('Hello' -> 'World')...\n\r");
+		ptr[0] = 'W';
+		ptr[1] = 'o';
+		ptr[2] = 'r';
+		ptr[3] = 'l';
+		ptr[4] = 'd';
 
-	// malloc 2: allocated and not freed (OS will clean up on exit)
-	outsfmt("[TestApp] Performing malloc 2 (200 bytes, will NOT be freed)...\n\r");
-	void* ptr2 = malloc(200);
-	if (ptr2) {
-		outsfmt("[TestApp] malloc 2 succeeded, address: %p\n\r", ptr2);
-		// Write to trigger page fault
-		((char*)ptr2)[0] = 0x5A;
-		outsfmt("[TestApp] malloc 2 written successfully, leaving it for OS cleanup.\n\r");
-	} else {
-		outsfmt("[TestApp] malloc 2 failed!\n\r");
-	}
+		// 6. Unmap memory (munmap / UMAP)
+		outsfmt("Step 6: Unmapping memory...\n\r");
+		int umap_res = munmap(map_addr, 4096);
+		if (umap_res != 0) {
+			outsfmt("Error: UMAP failed with code %d!\n\r", umap_res);
+		} else {
+			outsfmt("Success: UMAP success!\n\r");
+		}
 
-	// Trigger access to unmapped area to demonstrate abnormal address display
-	outsfmt("[TestApp] Accessing unmapped address 0x50000000 to trigger crash...\n\r");
-	sysrest(1, 100); // Short delay to ensure output is flushed
-	*((volatile char*)0x50000000) = 0xAA;
+		// 7. Re-open the file to verify data writeback
+		fd = sysopen(test_file);
+		if (fd < 0) {
+			outsfmt("Error: Failed to open test file for writeback verification!\n\r");
+			return -1;
+		}
+
+		char verify_buf[32] = {0};
+		int read_bytes = read(fd, verify_buf, 24);
+		outsfmt("Step 7: Read back from file: '%s' (bytes=%d)\n\r", verify_buf, read_bytes);
+		close(fd);
+
+		const char* expected_content = "World Mecocoa File MMAP!";
+		match = true;
+		for (int i = 0; i < 24; i++) {
+			if (verify_buf[i] != expected_content[i]) {
+				match = false;
+				break;
+			}
+		}
+		if (match) {
+			outsfmt("Success: File contents correctly written back!\n\r");
+			outsfmt("=== File MMAP Test ALL PASSED! ===\n\r");
+		} else {
+			outsfmt("Error: File contents NOT written back properly!\n\r");
+		}
+
+		// 8. Clean up the temporary test file
+		sys_removefil(test_file);
+		outsfmt("Step 8: Cleaned up test file.\n\r");
+	}
 	#endif
 
 	// loop sysrest(0, 0);

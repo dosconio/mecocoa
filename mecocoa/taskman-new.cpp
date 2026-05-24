@@ -560,6 +560,19 @@ ProcessBlock* Taskman::CreateFork(ProcessBlock* fo, const CallgateFrame* frame) 
 	pb->heapbtm = fo->heapbtm;
 	pb->heaptop = fo->heaptop;
 	pb->vmas = fo->vmas;
+	for (stduint i = 0; i < pb->vmas.Count(); i++) {
+		auto& vma = pb->vmas[i];
+		if (vma.vm_type == VMA_FILE && vma.vfile) {
+			uni::vfs_file* nvfile = (uni::vfs_file*)malc(sizeof(uni::vfs_file));
+			if (nvfile) {
+				*nvfile = *(vma.vfile);
+				if (nvfile->f_inode) {
+					nvfile->f_inode->ref_count++;
+				}
+				vma.vfile = nvfile;
+			}
+		}
+	}
 	for (stduint i = 0; i < fo->vmas.Count(); i++) {
 		const auto& vma = fo->vmas[i];
 		for (stduint addr = vma.vm_start; addr < vma.vm_end; addr += 0x1000) {
@@ -765,11 +778,30 @@ ProcessBlock* Taskman::Exet(stduint parent, rostr usr_fullpath, char** usr_argv,
 	// 2. Destroy Old Image
 	for (stduint i = 0; i < current_pb->vmas.Count(); i++) {
 		const auto& vma = current_pb->vmas[i];
+		if (vma.vm_type == VMA_FILE && vma.vfile && (vma.vm_flags & PGPROP_writable)) {
+			for (stduint addr = vma.vm_start; addr < vma.vm_end; addr += 0x1000) {
+				void* phys_addr = current_pb->paging[addr];
+				if (phys_addr != (void*)~_IMM0) {
+					stduint file_offset = addr - vma.vm_start + vma.file_offset;
+					if (file_offset < vma.vfile->f_inode->i_size) {
+						stduint write_len = minof(_IMM(0x1000), vma.vfile->f_inode->i_size - file_offset);
+						vma.vfile->f_pos = file_offset;
+						Filesys::Write(vma.vfile, (const void*)mglb(phys_addr), write_len);
+					}
+				}
+			}
+		}
 		for (stduint addr = vma.vm_start; addr < vma.vm_end; addr += 0x1000) {
 			void* phys_addr = current_pb->paging[addr];
 			if (phys_addr != (void*)~_IMM0) {
 				free(phys_addr);
 			}
+		}
+		if (vma.vm_type == VMA_FILE && vma.vfile) {
+			if (vma.vfile->f_inode) {
+				vma.vfile->f_inode->ref_count--;
+			}
+			Filesys::Close(vma.vfile);
 		}
 	}
 	current_pb->vmas.Clear();

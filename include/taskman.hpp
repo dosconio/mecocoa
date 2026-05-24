@@ -180,17 +180,29 @@ struct SemaphoreLocal {
 };
 
 namespace uni {
-    class vfs_dentry;
+	class vfs_dentry;
+	struct vfs_file;
 }
+enum VirtualMemoryAreaType {
+	VMA_ANONYMOUS = 0,
+	VMA_FILE = 1
+};
 struct VirtualMemoryArea {
 	stduint vm_start;	// Align by 4KB page size
 	stduint vm_end;		// Align by 4KB page size
 	stduint vm_flags;	// Attributes (e.g. PGPROP_writable, PGPROP_user_access)
-	VirtualMemoryArea() : vm_start(0), vm_end(0), vm_flags(0) {}
+	
+	// File backing extensions
+	VirtualMemoryAreaType vm_type = VMA_ANONYMOUS;
+	uni::vfs_file* vfile = nullptr;
+	stduint file_offset = 0;
+
+	VirtualMemoryArea() : vm_start(0), vm_end(0), vm_flags(0), vm_type(VMA_ANONYMOUS), vfile(nullptr), file_offset(0) {}
 	VirtualMemoryArea(stduint start, stduint end, stduint flags)
-		: vm_start(start), vm_end(end), vm_flags(flags) {}
+		: vm_start(start), vm_end(end), vm_flags(flags), vm_type(VMA_ANONYMOUS), vfile(nullptr), file_offset(0) {}
 	bool operator==(const VirtualMemoryArea& other) const {
-		return vm_start == other.vm_start && vm_end == other.vm_end && vm_flags == other.vm_flags;
+		return vm_start == other.vm_start && vm_end == other.vm_end && vm_flags == other.vm_flags &&
+			vm_type == other.vm_type && vfile == other.vfile && file_offset == other.file_offset;
 	}
 };
 

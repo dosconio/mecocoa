@@ -185,8 +185,18 @@ bool exception_handler_user(HardwareInterruptFrame* frame, stduint iden, stduint
 					if (phy_page != (void*)~_IMM0) {
 						MemSet((void*)mglb(phy_page), 0, 0x1000); // Zero-fill physical page
 						stduint aligned_vaddr = fault_addr & ~_IMM(0xFFF);
+						
+						if (vma.vm_type == VMA_FILE && vma.vfile) {
+							stduint offset = aligned_vaddr - vma.vm_start + vma.file_offset;
+							if (vma.vfile->f_inode && offset < vma.vfile->f_inode->i_size) {
+								stduint read_len = minof(_IMM(0x1000), vma.vfile->f_inode->i_size - offset);
+								vma.vfile->f_pos = offset;
+								Filesys::Read(vma.vfile, (void*)mglb(phy_page), read_len);
+							}
+						}
+						
 						pb->paging.Map(aligned_vaddr, (stduint)phy_page, 0x1000, PAGESIZE_4KB, PGPROP_present | PGPROP_writable | PGPROP_user_access);
-						__asm__ volatile("invlpg (%0)" : : "r"(aligned_vaddr) : "memory");
+						RefreshVirtualAddress(aligned_vaddr);
 						handled = true;
 					}
 					break;

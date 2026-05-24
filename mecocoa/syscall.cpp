@@ -461,7 +461,22 @@ DEFSYSC sysc_MMAP(stduint len, stduint flag, stduint fd) {
 	SpinlockLocal guard(&pb->vma_lock);
 	stduint addr = pb->heaptop;
 	pb->heaptop += len;
-	pb->vmas.Append(VirtualMemoryArea(addr, pb->heaptop, flag));
+	
+	VirtualMemoryArea vma(addr, pb->heaptop, flag);
+	if (fd != ~_IMM0 && fd < pb->pfiles.Count() && pb->pfiles[fd] && pb->pfiles[fd]->vfile) {
+		uni::vfs_file* parent_vfile = pb->pfiles[fd]->vfile;
+		uni::vfs_file* nvfile = (uni::vfs_file*)malc(sizeof(uni::vfs_file));
+		if (nvfile) {
+			*nvfile = *parent_vfile;
+			if (nvfile->f_inode) {
+				nvfile->f_inode->ref_count++;
+			}
+			vma.vm_type = VMA_FILE;
+			vma.vfile = nvfile;
+			vma.file_offset = 0;
+		}
+	}
+	pb->vmas.Append(vma);
 	return addr;
 }
 
@@ -476,13 +491,35 @@ DEFSYSC sysc_UMAP(stduint addr, stduint len) {
 	}
 	SpinlockLocal guard(&pb->vma_lock);
 	
+	// Write back dirty pages for file-backed mappings in the unmapped range
+	for (stduint i = 0; i < pb->vmas.Count(); i++) {
+		auto& vma = pb->vmas[i];
+		if (vma.vm_type == VMA_FILE && vma.vfile && (vma.vm_flags & PGPROP_writable)) {
+			stduint overlap_start = maxof(vma.vm_start, addr);
+			stduint overlap_end = minof(vma.vm_end, addr + len);
+			if (overlap_start < overlap_end) {
+				for (stduint page_addr = overlap_start; page_addr < overlap_end; page_addr += 0x1000) {
+					void* phys = pb->paging[page_addr];
+					if (phys != (void*)~_IMM0) {
+						stduint file_offset = page_addr - vma.vm_start + vma.file_offset;
+						if (file_offset < vma.vfile->f_inode->i_size) {
+							stduint write_len = minof(_IMM(0x1000), vma.vfile->f_inode->i_size - file_offset);
+							vma.vfile->f_pos = file_offset;
+							Filesys::Write(vma.vfile, (const void*)mglb(phys), write_len);
+						}
+					}
+				}
+			}
+		}
+	}
+
 	// Unmap and free physical memory
 	for (stduint curr = addr; curr < addr + len; curr += 0x1000) {
 		void* phys_addr = pb->paging[curr];
 		if (phys_addr != (void*)~_IMM0) {
 			free(phys_addr);
 			pb->paging.Unmap(curr, 0x1000);
-			__asm__ volatile("invlpg (%0)" : : "r"(curr) : "memory");
+			RefreshVirtualAddress(curr);
 		}
 	}
 	
@@ -490,17 +527,34 @@ DEFSYSC sysc_UMAP(stduint addr, stduint len) {
 	for (stduint i = 0; i < pb->vmas.Count(); ) {
 		auto& vma = pb->vmas[i];
 		if (vma.vm_start >= addr && vma.vm_end <= addr + len) {
+			if (vma.vm_type == VMA_FILE && vma.vfile) {
+				if (vma.vfile->f_inode) vma.vfile->f_inode->ref_count--;
+				Filesys::Close(vma.vfile);
+			}
 			pb->vmas.Remove(i, 1);
 		} else if (vma.vm_start < addr && vma.vm_end > addr + len) {
 			stduint old_end = vma.vm_end;
 			vma.vm_end = addr;
 			VirtualMemoryArea new_vma(addr + len, old_end, vma.vm_flags);
+			if (vma.vm_type == VMA_FILE && vma.vfile) {
+				uni::vfs_file* nvfile = (uni::vfs_file*)malc(sizeof(uni::vfs_file));
+				if (nvfile) {
+					*nvfile = *(vma.vfile);
+					if (nvfile->f_inode) nvfile->f_inode->ref_count++;
+					new_vma.vm_type = VMA_FILE;
+					new_vma.vfile = nvfile;
+					new_vma.file_offset = vma.file_offset + (addr + len - vma.vm_start);
+				}
+			}
 			pb->vmas.Insert(i + 1, &new_vma);
 			i += 2;
 		} else if (vma.vm_start < addr && vma.vm_end > addr) {
 			vma.vm_end = addr;
 			i++;
 		} else if (vma.vm_start < addr + len && vma.vm_end > addr + len) {
+			if (vma.vm_type == VMA_FILE && vma.vfile) {
+				vma.file_offset = vma.file_offset + (addr + len - vma.vm_start);
+			}
 			vma.vm_start = addr + len;
 			i++;
 		} else {
