@@ -265,9 +265,34 @@ static vfs_dentry* _Index_unlocked(const char* pathname, vfs_dentry* base) {
 				vfs_lookup_ctx ctx = { mount_root, real_current->d_inode->i_sb, false };
 				FilesysSearchArgs args = { h_buf, nullptr, vfs_on_search_segment, &ctx };
 
+				// Reconstruct relative path to the mount point root to ensure correct delegation
+				char* dyn_inner_path = (char*)malloc(256);
+				MemSet(dyn_inner_path, 0, 256);
+				vfs_dentry* temp = real_current;
+				vfs_dentry** vfs_stack = (vfs_dentry**)malloc(32 * sizeof(vfs_dentry*));
+				int stack_ptr = 0;
+				while (temp && temp != mount_root && stack_ptr < 32) {
+					vfs_stack[stack_ptr++] = temp;
+					temp = temp->d_parent;
+				}
+				stduint cur_ilen = 0;
+				for (int i = stack_ptr - 1; i >= 0; i--) {
+					vfs_dentry* d = vfs_stack[i];
+					stduint len = StrLength(d->d_name);
+					if (cur_ilen + len + 2 < 256) {
+						if (cur_ilen > 0) dyn_inner_path[cur_ilen++] = '/';
+						MemCopyN(dyn_inner_path + cur_ilen, d->d_name, len);
+						dyn_inner_path[cur_ilen + len] = '\0';
+						cur_ilen += len;
+					}
+				}
+				free(vfs_stack);
+
 				String full_remainder;
-				if (inner_path[0]) full_remainder.Format("%s/%s", inner_path, pathname);
+				if (dyn_inner_path[0]) full_remainder.Format("%s/%s", dyn_inner_path, pathname);
 				else full_remainder.Format("/%s", pathname);
+
+				free(dyn_inner_path);
 
 				if (fs->search(full_remainder.reference(), &args)) {
 					// fs->search successfully resolved the path (or partial path) through callbacks
@@ -621,30 +646,38 @@ int Filesys::Open(const char* pathname, int flags, vfs_file** out_file, vfs_dent
 		// File does not exist. Check if we need to create it.
 		if (flags & O_CREAT) {
 			// Extract parent directory path
-			char dir_path[256] = { 0 };
+			char* dir_path = (char*)malloc(256);
+			MemSet(dir_path, 0, 256);
 			const char* last_slash = pathname;
 
 			for (const char* p = pathname; *p; p++) {
 				if (*p == '/') last_slash = p;
 			}
 
-			if (last_slash == pathname) {
-				if (pathname[0] == '/') StrCopy(dir_path, "/");
-				else StrCopy(dir_path, "/"); // Fallback to root
+			vfs_dentry* parent_dentry = nullptr;
+			if (last_slash == pathname && pathname[0] != '/') {
+				parent_dentry = base ? base : vfs_root;
 			}
 			else {
-				stduint len = last_slash - pathname;
-				if (len == 0) len = 1; // Preserve root '/'
-				MemCopyN(dir_path, pathname, len);
-				dir_path[len] = '\0';
+				if (last_slash == pathname) {
+					StrCopy(dir_path, "/");
+				}
+				else {
+					stduint len = last_slash - pathname;
+					if (len == 0) len = 1; // Preserve root '/'
+					MemCopyN(dir_path, pathname, len);
+					dir_path[len] = '\0';
+				}
+				parent_dentry = Filesys::Index(dir_path, base);
 			}
 
-			// Locate parent directory to find the target physical filesystem
-			vfs_dentry* parent_dentry = Filesys::Index(dir_path, base);
 			if (!parent_dentry || !parent_dentry->d_inode || !parent_dentry->d_inode->i_sb) {
 				plogwarn("Parent directory not found for creation: %s", dir_path);
+				free(dir_path);
 				return -1;
 			}
+
+			free(dir_path);
 
 			FilesysTrait* fs = parent_dentry->d_inode->i_sb->fs;
 			if (!fs) return -1;
@@ -668,7 +701,7 @@ int Filesys::Open(const char* pathname, int flags, vfs_file** out_file, vfs_dent
 
 			// Use alloc_inode to create a proper Virtual Inode with a valid Superblock (i_sb)
 			vfs_inode* new_vfs_inode = alloc_inode(parent_dentry->d_inode->i_sb);
-			new_vfs_inode->i_mode = I_REGULAR;
+			new_vfs_inode->i_mode = (flags & O_DIRECTORY) ? I_DIRECTORY : I_REGULAR;
 			new_vfs_inode->i_size = 0;
 
 			// SECURE BRIDGE: Save the physical handler into internal_handler
@@ -768,8 +801,8 @@ int Filesys::Enumer(vfs_file* file, void* buf, stduint count, ProcessBlock* pb) 
 	return g_enum_cxt.filled_count;
 }
 
-bool Filesys::Remove(const char* pathname) {
-	vfs_dentry* dentry = Filesys::Index(pathname);
+bool Filesys::Remove(const char* pathname, vfs_dentry* base) {
+	vfs_dentry* dentry = Filesys::Index(pathname, base);
 	if (!dentry || !dentry->d_inode || !dentry->d_inode->i_sb) return false;
 
 	FilesysTrait* fs = dentry->d_inode->i_sb->fs;
@@ -795,7 +828,28 @@ bool Filesys::Remove(const char* pathname) {
 		}
 
 		// Pass the pure relative path to the underlying physical FS
-		return fs->remove(rel_path);
+		bool ret = fs->remove(rel_path);
+		if (ret) {
+			SpinlockLocal guard(&vfs_lock);
+			vfs_dentry* parent = dentry->d_parent;
+			if (parent) {
+				if (parent->d_first_child == dentry) {
+					parent->d_first_child = dentry->d_next_sibling;
+				}
+				else {
+					vfs_dentry* prev = parent->d_first_child;
+					while (prev && prev->d_next_sibling != dentry) {
+						prev = prev->d_next_sibling;
+					}
+					if (prev) {
+						prev->d_next_sibling = dentry->d_next_sibling;
+					}
+				}
+			}
+			// Keep dentry and inode in memory to prevent Use-After-Free for active process file descriptors.
+			// They will remain as disconnected orphans and safely closed by closedir/close without crash.
+		}
+		return ret;
 	}
 	return false;
 }

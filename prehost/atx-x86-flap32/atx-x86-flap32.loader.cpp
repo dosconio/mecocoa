@@ -24,7 +24,8 @@ OstreamTrait* con0_out;// TTY0
 #define single_sector  ((byte*)0x100000)
 #define fatable_sector ((byte*)0x100200)
 #define hdinfo_addr    ((byte*)0x100400)
-#define kernel_addr    ((byte*)0x2200000)
+#define kernel_addr    ((byte*)0x2800000)
+#define loader_stkbtm  ((byte*)0x2200000)
 
 // temp
 #define paging_addr    ((byte*)0x200000)
@@ -66,11 +67,12 @@ void body() {
 	support_ia32e = IfSupport_IA32E();
 	ploginfo("[IA32E] %s", support_ia32e ? "Supported" : "No");
 	if (support_ia32e && pfs_fat0.search("mx64.elf", &args)) {
-		printlog(_LOG_INFO, "Found: long64");
-		pfs_fat0.readfl(&filhan, Slice{ 0,filhan.size }, kernel_addr);
+		printlog(_LOG_INFO, "Found : long64 %[x]", filhan.size);
+		auto len = pfs_fat0.readfl(&filhan, Slice{ 0,filhan.size }, kernel_addr);
+		printlog(_LOG_INFO, "Loaded: long64 %[x]", len);
 	}
 	else if (pfs_fat0.search("mx86.elf", &args)) {
-		printlog(_LOG_INFO, "Found: flap32");
+		printlog(_LOG_INFO, "Found : flap32");
 		support_ia32e = false;
 		pfs_fat0.readfl(&filhan, Slice{ 0,filhan.size }, kernel_addr);
 	}
@@ -80,6 +82,7 @@ void body() {
 	}
 
 	if (support_ia32e) {
+		ploginfo("Loading ladder...");
 		if (pfs_fat0.search("ladder", &args)) {
 			pfs_fat0.readfl(&filhan, Slice{ 0,filhan.size }, 0x8000_addr);
 		}
@@ -108,7 +111,7 @@ void body() {
 }
 
 _sign_entry() {
-	__asm("movl $0x70000, %esp");
+	__asm("movl $0x2800000, %esp");
 	body();
 }
 

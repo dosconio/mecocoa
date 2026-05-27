@@ -216,8 +216,7 @@ blk_hit:
 
 // ---- Entry point ----
 int main(int argc, char **argv) {
-	_preprocess();
-	
+
 	Rectangle rect{ Point(120, 80), Size2(kCW + 2, kCH + 19) };
 	stdsint form_id = sys_create_form(-1, &rect);
 	if (form_id < 0) return -1;

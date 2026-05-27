@@ -32,16 +32,22 @@ read:
 run-only:
 	@make -f configs/$(arch).make run-only
 
-###
-FLAG_RV32=qemuvirt-r32
+line:
+	@ total=0; \
+	for file in mecocoa/* include/*.hpp; do \
+		if [ -f "$$file" ]; then \
+			count=$$(grep -v '^[[:space:]]*$$' "$$file" | wc -l); \
+			printf "%s\t: %s\n" "$$count" "$$file"; \
+			total=$$((total + count)); \
+		fi; \
+	done; \
+	printf "%s\t: TOTAL\n" "$$total"
 
-build-r32:
-	@arch=$(FLAG_RV32) make -f configs/$(FLAG_RV32).make build --silent
-run-r32:
-	@arch=$(FLAG_RV32) make -f configs/$(FLAG_RV32).make run --silent
-lib-r32:
-	# _TODO cd $(ulibpath)/.. && make mr32 -j
-
+devenv-arch:
+	sudo pacman -S lib32-glibc gcc-multilib tree
+	yay -S riscv-gnu-toolchain-bin
+	sudo pacman -S dotnet-sdk
+# 	dotnet tool install -g dotnet-script # dotnet script test.csx
 
 ###
 
@@ -53,7 +59,7 @@ lib-all:
 	make -f accmlib/accmx64.make
 
 .PHONY : all
-all: lib-all
+all:
 	#
 	make arch=atx-x86-flap32
 	make arch=atx-x64-uefi64

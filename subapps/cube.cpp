@@ -101,9 +101,6 @@ void DrawSurface(int sur) {
 }
 
 int main(int argc, char** argv) {
-	// asm volatile ("finit");
-	_preprocess();
-
 	Rectangle rect = { Point(200, 200), Size2(kCanvasWidth + 2, kCanvasHeight + 19) };
 	stdsint form_id = sys_create_form(-1, &rect);
 	if (form_id < 0) return -1;

@@ -355,7 +355,7 @@ void serv_file_loop()// for IDE 0:0, 0:1
 			if (safe_pb) {
 				auto len = StrCopyP((char*)pathbuf, kernel_paging, (rostr)to_args[0], safe_pb->paging, pathbuf_size);
 				if (len > 0) {
-					retval[0] = Filesys::Remove((rostr)pathbuf);
+					retval[0] = Filesys::Remove((rostr)pathbuf, safe_pb->cwd);
 				}
 				ProcessBlock::Release(safe_pb);
 			}

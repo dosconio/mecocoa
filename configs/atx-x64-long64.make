@@ -12,6 +12,8 @@ sudokey=k
 
 CFLAGS += -mno-red-zone -m64  -mno-sse -mno-sse2 -mno-avx -mno-avx2 
 CFLAGS += -D_MCCA=0x8664 -D_DEBUG
+CFLAGS += -ffreestanding
+
 include Toolchain.inc
 QBOARD = atx
 
@@ -31,6 +33,7 @@ cppfile=\
 	$(ulibpath)/cpp/Device/ACPI.cpp \
 	$(ulibpath)/cpp/Device/Buzzer.cpp \
 	$(ulibpath)/cpp/Device/Keyboard.cpp \
+	$(ulibpath)/cpp/charset/Unicode.cpp \
 	$(ulibpath)/cpp/Device/Video.cpp $(ulibpath)/cpp/Device/Video-VideoConsole2.cpp \
 
 cplfile=\

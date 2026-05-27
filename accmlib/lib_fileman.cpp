@@ -140,3 +140,17 @@ int closedir(DIR *dirp) {
 	}
 	return -1;
 }
+
+int mkdir(const char *path, mode_t mode) {
+	// Create directory using open with O_CREAT and O_DIRECTORY flags
+	int fd = open(path, O_CREAT | O_DIRECTORY | O_RDONLY);
+	if (fd < 0) return -1;
+	close(fd);
+	return 0;
+}
+
+int unlink(const char* pathname) {
+	// Call DELF system call: returns 1 for success, 0 for failure
+	int ret = syscall(syscall_t::DELF, _IMM(pathname), nil, nil);
+	return ret ? 0 : -1;
+}

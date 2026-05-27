@@ -38,6 +38,7 @@ void mecfetch() {
 	Console.OutFormat("\033[0m");// Console.out("\xFF\xFF", 2);
 	#endif
 
+	printlog(_LOG_TRACE, "メココア");
 	printlog(cpu_type ? _LOG_GOOD : _LOG_WARN, "CPU Factory: %s", text_cpu_factory());
 	ploginfo("CPU Brand: %s", text_brand());
 

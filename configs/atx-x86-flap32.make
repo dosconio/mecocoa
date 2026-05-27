@@ -121,57 +121,19 @@ build: lib accm prehost/$(arch)/fatvhd.ignore $(cppobjs) build_util
 ACCM_INCF=-I$(uincpath) -Iaccmlib -I$(uincpath)/c/API-POSIX
 ACCM_LIBS=accm-x86
 build_util:
-	# ---- COTL INIT ---- #
-	echo MK appshell
-	g++ $(ACCM_INCF) $(flag) -m32 $(CXF) $(CXW) -std=c++2a \
-		-o $(uobjpath)/sapp-$(arch)/cot\
-		$(uherpath)/COTLAB/src/cotlab.cpp -L$(uobjpath)/$(ACCM_LIBS) -lx86 -lgcc
-	# ---- UNIS UTIL ---- #
-	echo MK sleep
-	g++ $(ACCM_INCF) $(flag) -m32 $(CXF) $(CXW) -std=c++2a \
-		-o $(uobjpath)/sapp-$(arch)/sleep\
-		$(uherpath)/unisym/demo/utilities/sleep.cpp -L$(uobjpath)/$(ACCM_LIBS) -lx86 -lgcc
-	echo MK ls
-	g++ $(ACCM_INCF) $(flag) -m32 $(CXF) $(CXW) -std=c++2a \
-		-o $(uobjpath)/sapp-$(arch)/ls\
-		$(uherpath)/unisym/demo/utilities/ls.cpp -L$(uobjpath)/$(ACCM_LIBS) -lx86 -lgcc
-	echo MK pwd
-	g++ $(ACCM_INCF) $(flag) -m32 $(CXF) $(CXW) -std=c++2a \
-		-o $(uobjpath)/sapp-$(arch)/pwd\
-		$(uherpath)/unisym/demo/utilities/pwd.cpp -L$(uobjpath)/$(ACCM_LIBS) -lx86 -lgcc
-	echo MK cat
-	g++ $(ACCM_INCF) $(flag) -m32 $(CXF) $(CXW) -std=c++2a \
-		-o $(uobjpath)/sapp-$(arch)/cat\
-		$(uherpath)/unisym/demo/utilities/cat.cpp -L$(uobjpath)/$(ACCM_LIBS) -lx86 -lgcc
-	# ---- MCCA UTIL ---- #
-	echo MK appinit
-	g++ $(ACCM_INCF) $(flag) -m32 $(CXF) $(CXW) -std=c++2a \
-		subapps/init.cpp -o $(uobjpath)/sapp-$(arch)/init\
-		-L$(uobjpath)/$(ACCM_LIBS) -lx86 -e _start
-	echo MK subtest
-	g++ $(ACCM_INCF) $(flag) -m32 $(CXF) $(CXW) -std=c++2a \
-		subapps/test.cpp $(ulibpath)/cpp/lango/lango-cpp.cpp -o $(uobjpath)/sapp-$(arch)/test\
-		-L$(uobjpath)/$(ACCM_LIBS) -lx86 -e _start
-	echo MK paint
-	g++ $(ACCM_INCF) $(flag) -m32 $(CXF) $(CXW) -std=c++2a \
-		subapps/paint.cpp -o $(uobjpath)/sapp-$(arch)/paint\
-		-L$(uobjpath)/$(ACCM_LIBS) -lx86 -e _start
-	echo MK fault
-	g++ $(ACCM_INCF) $(flag) -m32 $(CXF2) -fno-rtti -fno-use-cxa-atexit -static -nostartfiles  $(CXW) -std=c++2a \
-		subapps/fault.cpp $(ulibpath)/cpp/lango/lango-cpp.cpp -o $(uobjpath)/sapp-$(arch)/fault\
-		-L$(uobjpath)/$(ACCM_LIBS) -lx86 -e _start 
-	echo MK cube
-	g++ $(ACCM_INCF) $(flag) -m32 $(CXF2) -fno-rtti -fno-use-cxa-atexit -static -nostartfiles  $(CXW) -std=c++2a \
-		subapps/cube.cpp $(ulibpath)/cpp/lango/lango-cpp.cpp -o $(uobjpath)/sapp-$(arch)/cube\
-		-L$(uobjpath)/$(ACCM_LIBS) -lx86 -e _start 
-	echo MK game_breakout
-	g++ $(ACCM_INCF) $(flag) -m32 $(CXF) $(CXW) -std=c++2a \
-		subapps/game_breakout.cpp $(ulibpath)/cpp/lango/lango-cpp.cpp -o $(uobjpath)/sapp-$(arch)/gblock\
-		-L$(uobjpath)/$(ACCM_LIBS) -lx86 -e _start
-	#
-	echo MK hello-rust
-	@cd subapps/_hello/rust/ && cargo build --release --target ../../../configs/Rust/target/cargo-i686.json
-	cp subapps/_hello/rust/target/cargo-i686/release/rust    $(uobjpath)/sapp-$(arch)/_rust
+	@make -f subapps/Makefile.gcc.x86 \
+		arch=$(arch) \
+		uherpath=$(uherpath) \
+		uobjpath=$(uobjpath) \
+		uincpath=$(uincpath) \
+		ulibpath=$(ulibpath) \
+		ACCM_INCF="$(ACCM_INCF)" \
+		flag="$(flag)" \
+		CXF="$(CXF)" \
+		CXF2="$(CXF2)" \
+		CXW="$(CXW)" \
+		ACCM_LIBS="$(ACCM_LIBS)"
+
 
 install:
 	@echo $(sudokey) | sudo -S cp $(elf_kernel)     /boot/mx86.elf
@@ -220,6 +182,10 @@ run-only:
 clean:
 	@echo ---- Mecocoa $(arch) ----#[clearing]
 	@-rm $(uobjpath)/mcca-$(arch)/* 1>/dev/null
+	@make -f subapps/Makefile.gcc.x86 clean \
+		arch=$(arch) \
+		uobjpath=$(uobjpath)
+
 
 $(uobjpath)/mcca-$(arch)/%.o: %.cpp
 	@mkdir $(uobjpath)/mcca-$(arch) -p

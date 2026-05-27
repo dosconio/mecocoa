@@ -10,6 +10,8 @@
 
 GLOBAL _start, syscall, __sigrestorer
 EXTERN main, _exit
+EXTERN _preprocess
+
 
 section .text
 
@@ -47,6 +49,9 @@ _start:
 	push	ecx			; Third argument: envp
 	push	ebx			; Second argument: argv
 	push	eax			; First argument: argc
+
+	call _preprocess
+
 	call	main		; Call main(argc, argv, envp)
 	add	esp, 16			; Clean up arguments and padding
 	push	eax			; Push return value for exit

@@ -215,3 +215,16 @@ extern "C" __sighandler_t signal(int sig, __sighandler_t handler) {
 	}
 	return oact.sa_handler;
 }
+
+extern "C" _WEAK void _preprocess() {}
+
+#include <stdarg.h>
+
+extern "C" int printf(const char* fmt, ...) {
+	va_list args;
+	va_start(args, fmt);
+	int ret = outsfmtlst(fmt, args);
+	va_end(args);
+	return ret;
+}
+

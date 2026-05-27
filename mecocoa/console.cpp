@@ -630,19 +630,13 @@ void _Comment(R1) serv_shell_process() {
 
 	if (Consman::ento_gui) {
 		Rectangle rect{ Point(250, 160), Size2(480, 320) };
-		ploginfo("[DEBUG] serv_shell_process: Calling CreateVconsole...");
 		auto [pcon, pf, tty_no] = Consman::CreateVconsole(rect, "Terminal");
-		ploginfo("[DEBUG] serv_shell_process: CreateVconsole returned successfully.");
 		pf_ptr = pf;
 		tty_target = vttys[tty_no];
-
-		ploginfo("[DEBUG] serv_shell_process: Loading /md0/cot internally...");
 		p = Taskman::CreateFile(("/md0/cot"), RING_U, Taskman::CurrentPID());
-		ploginfo("[DEBUG] serv_shell_process: Load done, p = 0x%p", p);
 	}
 
 	if (p) {
-		ploginfo("[DEBUG] serv_shell_process: Registering process to Taskman...");
 		// Register the process globally to get a valid PID
 		Taskman::Append(p);
 		// Lock the process state during complex environment setup
@@ -667,13 +661,11 @@ void _Comment(R1) serv_shell_process() {
 			pblock->proc_group.Append(p->pid);
 		}
 		
-		ploginfo("[DEBUG] serv_shell_process: Appending main thread to scheduler...");
 		// Environment is ready, restore state and start the application thread
 		p->state = ProcessBlock::State::Active;
 		Taskman::AppendThread(p->main_thread);
 		IC.enInterrupt(true);
 
-		ploginfo("[DEBUG] serv_shell_process: shell initialization completed successfully!");
 	}
 
 	extern const char key_map[256], key_map_shift[256];

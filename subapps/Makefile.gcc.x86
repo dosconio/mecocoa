@@ -1,0 +1,107 @@
+# ASCII Makefile TAB4 LF
+# Attribute: Ubuntu(64) Shell(Bash)
+# ModuTitle: Build subapps for Mecocoa x86
+
+BIN_DIR = $(uobjpath)/sapp-$(arch)
+LIBX86 = $(uobjpath)/$(ACCM_LIBS)/libx86.a
+
+.PHONY: all clean
+
+all: $(BIN_DIR) \
+	$(BIN_DIR)/cot \
+	$(BIN_DIR)/sleep \
+	$(BIN_DIR)/ls \
+	$(BIN_DIR)/pwd \
+	$(BIN_DIR)/cat \
+	$(BIN_DIR)/init \
+	$(BIN_DIR)/test \
+	$(BIN_DIR)/paint \
+	$(BIN_DIR)/fault \
+	$(BIN_DIR)/cube \
+	$(BIN_DIR)/gblock \
+	$(BIN_DIR)/_rust \
+	$(BIN_DIR)/cp \
+	$(BIN_DIR)/rm \
+	$(BIN_DIR)/mv \
+	$(BIN_DIR)/mkdir \
+	$(BIN_DIR)/echo \
+	$(BIN_DIR)/clear
+
+$(BIN_DIR):
+	mkdir -p $@
+
+$(BIN_DIR)/cot: $(uherpath)/COTLAB/src/cotlab.cpp $(LIBX86)
+	@echo "MK appshell"
+	g++ $(ACCM_INCF) $(flag) -m32 $(CXF) $(CXW) -std=c++2a -o $@ $< -L$(uobjpath)/$(ACCM_LIBS) -lx86 -lgcc
+
+$(BIN_DIR)/sleep: $(uherpath)/unisym/demo/utilities/sleep.cpp $(LIBX86)
+	@echo "MK sleep"
+	g++ $(ACCM_INCF) $(flag) -m32 $(CXF) $(CXW) -std=c++2a -o $@ $< -L$(uobjpath)/$(ACCM_LIBS) -lx86 -lgcc
+
+$(BIN_DIR)/ls: $(uherpath)/unisym/demo/utilities/ls.cpp $(LIBX86)
+	@echo "MK ls"
+	g++ $(ACCM_INCF) $(flag) -m32 $(CXF) $(CXW) -std=c++2a -o $@ $< -L$(uobjpath)/$(ACCM_LIBS) -lx86 -lgcc
+
+$(BIN_DIR)/pwd: $(uherpath)/unisym/demo/utilities/pwd.cpp $(LIBX86)
+	@echo "MK pwd"
+	g++ $(ACCM_INCF) $(flag) -m32 $(CXF) $(CXW) -std=c++2a -o $@ $< -L$(uobjpath)/$(ACCM_LIBS) -lx86 -lgcc
+
+$(BIN_DIR)/cat: $(uherpath)/unisym/demo/utilities/cat.cpp $(LIBX86)
+	@echo "MK cat"
+	g++ $(ACCM_INCF) $(flag) -m32 $(CXF) $(CXW) -std=c++2a -o $@ $< -L$(uobjpath)/$(ACCM_LIBS) -lx86 -lgcc
+
+$(BIN_DIR)/init: subapps/init.cpp $(LIBX86)
+	@echo "MK appinit"
+	g++ $(ACCM_INCF) $(flag) -m32 $(CXF) $(CXW) -std=c++2a $< -o $@ -L$(uobjpath)/$(ACCM_LIBS) -lx86 -e _start
+
+$(BIN_DIR)/test: subapps/test.cpp $(ulibpath)/cpp/lango/lango-cpp.cpp $(LIBX86)
+	@echo "MK subtest"
+	g++ $(ACCM_INCF) $(flag) -m32 $(CXF) $(CXW) -std=c++2a subapps/test.cpp $(ulibpath)/cpp/lango/lango-cpp.cpp -o $@ -L$(uobjpath)/$(ACCM_LIBS) -lx86 -e _start
+
+$(BIN_DIR)/paint: subapps/paint.cpp $(LIBX86)
+	@echo "MK paint"
+	g++ $(ACCM_INCF) $(flag) -m32 $(CXF) $(CXW) -std=c++2a $< -o $@ -L$(uobjpath)/$(ACCM_LIBS) -lx86 -e _start
+
+$(BIN_DIR)/fault: subapps/fault.cpp $(ulibpath)/cpp/lango/lango-cpp.cpp $(LIBX86)
+	@echo "MK fault"
+	g++ $(ACCM_INCF) $(flag) -m32 $(CXF2) -fno-rtti -fno-use-cxa-atexit -static -nostartfiles $(CXW) -std=c++2a subapps/fault.cpp $(ulibpath)/cpp/lango/lango-cpp.cpp -o $@ -L$(uobjpath)/$(ACCM_LIBS) -lx86 -e _start
+
+$(BIN_DIR)/cube: subapps/cube.cpp $(ulibpath)/cpp/lango/lango-cpp.cpp $(LIBX86)
+	@echo "MK cube"
+	g++ $(ACCM_INCF) $(flag) -m32 $(CXF2) -fno-rtti -fno-use-cxa-atexit -static -nostartfiles $(CXW) -std=c++2a subapps/cube.cpp $(ulibpath)/cpp/lango/lango-cpp.cpp -o $@ -L$(uobjpath)/$(ACCM_LIBS) -lx86 -e _start
+
+$(BIN_DIR)/gblock: subapps/game_breakout.cpp $(ulibpath)/cpp/lango/lango-cpp.cpp $(LIBX86)
+	@echo "MK game_breakout"
+	g++ $(ACCM_INCF) $(flag) -m32 $(CXF) $(CXW) -std=c++2a subapps/game_breakout.cpp $(ulibpath)/cpp/lango/lango-cpp.cpp -o $@ -L$(uobjpath)/$(ACCM_LIBS) -lx86 -e _start
+
+$(BIN_DIR)/_rust: subapps/_hello/rust/src/main.rs subapps/_hello/rust/Cargo.toml
+	@echo "MK hello-rust"
+	@cd subapps/_hello/rust/ && cargo build --release --target ../../../configs/Rust/target/cargo-i686.json
+	cp subapps/_hello/rust/target/cargo-i686/release/rust $@
+$(BIN_DIR)/cp: $(uherpath)/unisym/demo/utilities/cp.c $(LIBX86)
+	@echo "MK cp"
+	g++ $(ACCM_INCF) $(flag) -m32 $(CXF) $(CXW) -std=c++2a -o $@ $< -L$(uobjpath)/$(ACCM_LIBS) -lx86 -lgcc
+
+$(BIN_DIR)/rm: $(uherpath)/unisym/demo/utilities/rm.c $(LIBX86)
+	@echo "MK rm"
+	g++ $(ACCM_INCF) $(flag) -m32 $(CXF) $(CXW) -std=c++2a -o $@ $< -L$(uobjpath)/$(ACCM_LIBS) -lx86 -lgcc
+
+$(BIN_DIR)/mv: $(uherpath)/unisym/demo/utilities/mv.c $(LIBX86)
+	@echo "MK mv"
+	g++ $(ACCM_INCF) $(flag) -m32 $(CXF) $(CXW) -std=c++2a -o $@ $< -L$(uobjpath)/$(ACCM_LIBS) -lx86 -lgcc
+
+$(BIN_DIR)/mkdir: $(uherpath)/unisym/demo/utilities/mkdir.c $(LIBX86)
+	@echo "MK mkdir"
+	g++ $(ACCM_INCF) $(flag) -m32 $(CXF) $(CXW) -std=c++2a -o $@ $< -L$(uobjpath)/$(ACCM_LIBS) -lx86 -lgcc
+
+$(BIN_DIR)/echo: $(uherpath)/unisym/demo/utilities/echo.c $(LIBX86)
+	@echo "MK echo"
+	g++ $(ACCM_INCF) $(flag) -m32 $(CXF) $(CXW) -std=c++2a -o $@ $< -L$(uobjpath)/$(ACCM_LIBS) -lx86 -lgcc
+
+$(BIN_DIR)/clear: $(uherpath)/unisym/demo/utilities/clear.c $(LIBX86)
+	@echo "MK clear"
+	g++ $(ACCM_INCF) $(flag) -m32 $(CXF) $(CXW) -std=c++2a -o $@ $< -L$(uobjpath)/$(ACCM_LIBS) -lx86 -lgcc
+
+clean:
+	@echo "RM $(BIN_DIR)"
+	@-rm -rf $(BIN_DIR) 1>/dev/null

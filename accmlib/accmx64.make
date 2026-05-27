@@ -38,19 +38,25 @@ gasobjs=$(addprefix $(dest_obj)/$(gaspref),$(patsubst %S,%o,$(notdir $(gasfile))
 cppobjs=$(addprefix $(dest_obj)/$(cpppref),$(patsubst %cpp,%o,$(notdir $(cppfile))))
 cplobjs=$(addprefix $(dest_obj)/$(cplpref),$(patsubst %c,%o,$(notdir $(cplfile))))
 
-.PHONY: all delall
-all: delall $(asmobjs) $(cplobjs) $(cppobjs)
-	@${AR} -rcs ${dest_obj}/lib$(arch).a ${dest_obj}/*.o
+.PHONY: all clean
+all: ${dest_obj}/lib$(arch).a
+
+$(dest_obj):
+	mkdir -p $@
+
+$(asmobjs) $(cplobjs) $(cppobjs): | $(dest_obj)
+
+${dest_obj}/lib$(arch).a: $(asmobjs) $(cplobjs) $(cppobjs)
+	@-rm -f $@
+	@echo "AR $(notdir $@)"
+	@${AR} -rcs $@ $^
+
 
 $(foreach src,$(asmfile),$(eval $(call asm_to_o,$(src))))
 $(foreach src,$(gasfile),$(eval $(call gas_to_o,$(src))))
 $(foreach src,$(cplfile),$(eval $(call c_to_o,$(src))))
 $(foreach src,$(cppfile),$(eval $(call cpp_to_o,$(src))))
 
-delall:
-	mkdir $(uobjpath)/accm-$(arch) -p
-	@-rm ${dest_obj}/lib$(arch).a
-# 	@-rm -rf $(uobjpath)/accm-$(arch)/*
 
 _ae_%.o:
 	@echo AS $(notdir $<)

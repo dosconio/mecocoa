@@ -13,7 +13,6 @@ static int color_idx = 0;
 
 int main(int argc, char** argv)
 {
-	_preprocess();
 	// unsigned id = getpid();// TEST
 	// outsfmt("C(%d)\n\r", id);// OUTC
 
