@@ -85,7 +85,7 @@ void hand_mouse(MouseMessage mmsg) {
 
 	{
 		#if _GUI_ENABLE
-		SpinlockLocal guard(&gui_lock);
+		RecursiveMutexLocal guard(&gui_lock);
 		#endif
 
 				// 1. Handle Clicks and Z-order
@@ -156,16 +156,9 @@ void LayerManager2::Update(SheetTrait* who, const Rectangle& rect) {
 	Rectangle dirty_rect(Point(abs_rect.x, abs_rect.y), Size2(rect.width, rect.height));
 
 	#if _GUI_ENABLE
-	bool already_locked = gui_lock.cpu_id == (stdsint)Taskman::getID();
-	if (already_locked) {
-		this->AddDirty(dirty_rect);
-		if (!lazy_update) UpdateForce(who, rect);
-	}
-	else {
-		SpinlockLocal guard(&gui_lock);
-		this->AddDirty(dirty_rect);
-		if (!lazy_update) UpdateForce(who, rect);
-	}
+	RecursiveMutexLocal guard(&gui_lock);
+	this->AddDirty(dirty_rect);
+	if (!lazy_update) UpdateForce(who, rect);
 	#else
 	this->AddDirty(dirty_rect);
 	if (!lazy_update) UpdateForce(who, rect);
@@ -207,6 +200,7 @@ void LayerManager2::UpdateForce(SheetTrait* who, const Rectangle& rect) {
 
 static SysMessage _BUF_Message_Conv[64];
 uni::Queue<SysMessage> message_queue_conv(_BUF_Message_Conv, numsof(_BUF_Message_Conv));
+volatile bool has_pending_timer = false;
 void serv_graf_loop() {
 	SysMessage msg;// Inner Module Message System
 	#if _GUI_ENABLE == 0
@@ -226,6 +220,10 @@ void serv_graf_loop() {
 		IC.enInterrupt(true);
 		//
 		switch (msg.type) {
+		case SysMessage::RUPT_TIMER:
+			global_layman.CheckTimers(tick);
+			has_pending_timer = false;
+			break;
 		case SysMessage::RUPT_MOUSE:
 			hand_mouse(msg.args.mou_event);
 			break;
@@ -236,7 +234,7 @@ void serv_graf_loop() {
 					{
 						// [Lock]: Protect composition against concurrent layer cleanup
 						#if _GUI_ENABLE
-						SpinlockLocal guard(&gui_lock);
+						RecursiveMutexLocal guard(&gui_lock);
 						#endif
 												// Perform delayed composition (Layer Blending)
 						global_layman.UpdateForce(nullptr, msg.args.rect.toRectangle());
@@ -247,20 +245,13 @@ void serv_graf_loop() {
 				}
 			}
 			break;
+
 		case SysMessage::RUPT_NEW_TERM:
 		{
 			ProcessBlock* shell_p = Taskman::Create((void*)&serv_shell_process, RING_M);
-			// ploginfo("[GRAPHIC] Shell PID %x %x", rsp, Taskman::current_thread[Taskman::getID()]->stack_lineaddr);
-			ProcessBlock* cotl_p = Taskman::CreateFile(("/md0/cot"), RING_U, shell_p->pid);
-			//
 			if (shell_p) {
-				ploginfo("[GRAPHIC] Activate Shell TID %x", shell_p->main_thread->getID());
-				syssend(shell_p->main_thread->getID(), &cotl_p, sizeof(cotl_p));
+				ploginfo("Create new shell-form: pid%u", shell_p->pid);
 			}
-			else if (cotl_p) {
-				plogerro("Shell creation failed, but init loaded.");
-			}
-			ploginfo("Create new shell-form: pid%u", shell_p->pid);
 			break;
 		}
 		default:
@@ -325,7 +316,7 @@ void GloScreenRGB888::DrawRectangle(const Rectangle& rect) const {// RGB 24bpp o
 		p += video_info->BytesPerScanLine;
 	}
 }
-void GloScreenRGB888::DrawFont(const Point& disp, const DisplayFont& font) const {
+void GloScreenRGB888::DrawFont(const Point& disp, const DisplayFont& font, const String& str) const {
 	_TODO;
 }
 Color GloScreenRGB888::GetColor(Point p) const {
@@ -356,7 +347,7 @@ void GloScreenARGB8888::DrawRectangle(const Rectangle& rect) const {
 		p += VCI_LimitX();
 	}
 }
-void GloScreenARGB8888::DrawFont(const Point& disp, const DisplayFont& font) const {
+void GloScreenARGB8888::DrawFont(const Point& disp, const DisplayFont& font, const String& str) const {
 	_TODO;
 }
 Color GloScreenARGB8888::GetColor(Point p) const {
@@ -401,7 +392,7 @@ void GloScreenABGR8888::DrawRectangle(const Rectangle& rect) const {
 		p += VCI_LimitX();
 	}
 }
-void GloScreenABGR8888::DrawFont(const Point& disp, const DisplayFont& font) const {
+void GloScreenABGR8888::DrawFont(const Point& disp, const DisplayFont& font, const String& str) const {
 	_TODO;
 }
 Color GloScreenABGR8888::GetColor(Point p) const {
@@ -447,7 +438,22 @@ void Consman::enable_2buffer() {
 	#endif
 }
 void RenderFrameFlush() {
-	global_layman.CheckTimers(tick);
+	if (Consman::ento_gui) {
+		static uint64 last_timer_check = 0;
+		if (tick - last_timer_check >= 10) { // Limit to 100ms interval
+			if (!has_pending_timer) {
+				has_pending_timer = true;
+				last_timer_check = tick;
+				SysMessage msg;
+				msg.type = SysMessage::RUPT_TIMER;
+				#if _MCCA == 0x8664
+				message_queue.Enqueue(msg);
+				#elif _MCCA == 0x8632
+				message_queue_conv.Enqueue(msg);
+				#endif
+			}
+		}
+	}
 	if (!Consman::enable_dubuffer) return;
 	if (Consman::ento_gui && global_layman.pvci && global_layman.is_dirty) {
 		static uint64 last_flush_time = 0;

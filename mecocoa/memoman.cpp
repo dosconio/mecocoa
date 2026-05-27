@@ -250,6 +250,32 @@ _ESYM_C void free(void* p) {
 	if (!a) printlog(a ? _LOG_INFO: _LOG_ERROR, "mfree 0x%[x]", p);
 }
 _ESYM_C void memf(void* ptr) { free(ptr); }
+
+_ESYM_C void* realloc(void* ptr, size_t size) {
+	if (!ptr) return malloc(size);
+	if (!size) {
+		free(ptr);
+		return nullptr;
+	}
+	struct Header {
+		stduint size;
+		stduint prop;
+	};
+	Header* header = (Header*)ptr - 1;
+	if (header->prop != _IMM(0xFEDC5AA5)) {
+		return nullptr;
+	}
+	size_t old_size = header->size;
+	if (old_size >= size) {
+		return ptr;
+	}
+	void* new_ptr = malloc(size);
+	if (new_ptr) {
+		MemCopyN(new_ptr, ptr, old_size);
+		free(ptr);
+	}
+	return new_ptr;
+}
 #endif
 
 

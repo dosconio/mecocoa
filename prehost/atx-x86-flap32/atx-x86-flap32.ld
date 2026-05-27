@@ -15,6 +15,7 @@ SECTIONS
 		*(.multiboot)
 	}
 	*/
+
 	.text : {
 		*mcca-atx-x86-flap32.grub.o(.text .text.*)
 		*mcca-atx-x86-flap32-ladder.o(.text .text.*)
@@ -68,6 +69,7 @@ SECTIONS
 
 	.extdata : {
 		KEEP(*(.extdata))
+		*(.ext.freetype)
 	} > RAM2
 
 	/* Remove information from the compiler libraries */
@@ -76,9 +78,9 @@ SECTIONS
 		*(.note.gnu.build-id)
 		*(.eh_frame)
 		*(.comment)
-		libc.a ( * )
-		libm.a ( * )
-		libgcc.a ( * )
+		/* libc.a ( * ) */
+		/* libm.a ( * ) */
+		/* libgcc.a ( * ) */
 	}
 	FILE_ENDO = .;
 }

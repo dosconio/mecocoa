@@ -12,6 +12,8 @@
 #define _GUI_ENABLE 0
 #endif
 
+#define _GUI_FREETYPE 0
+
 //
 
 #ifndef _STYLE_RUST

@@ -5,6 +5,8 @@
 #include "../include/mecocoa.hpp"
 #include <c/format/filesys/FAT.h>
 
+extern "C" void Consman_InitializeFreeType();
+
 static byte* buffer = nil;
 #define FSBUF_SIZE 0x8000
 FileDescriptor* f_desc_table = nil;
@@ -98,6 +100,10 @@ stduint ProcessBlock::Rdwt(bool wr_type, stduint fid, Slice slice)
 			if ((stduint)file->f_inode->internal_handler == (stduint)~0 && pb->focus_tty) {
 				bytes_processed = global_devfs.writfl(pb->focus_tty, Slice{ 0, (stduint)chunk }, (byte*)::buffer);
 			}
+			else if (file->f_inode && (file->f_inode->i_mode & I_TYPE_MASK) == I_CHAR_SPECIAL) {
+				// Bypass global vfs_lock spinlock for character special devices to avoid deadlocks.
+				bytes_processed = file->f_inode->i_sb->fs->writfl(file->f_inode->internal_handler, Slice{ file->f_pos, (stduint)chunk }, (const byte*)::buffer);
+			}
 			else {
 				bytes_processed = Filesys::Write(file, ::buffer, chunk);
 			}
@@ -105,6 +111,10 @@ stduint ProcessBlock::Rdwt(bool wr_type, stduint fid, Slice slice)
 		else {
 			if ((stduint)file->f_inode->internal_handler == (stduint)~0 && pb->focus_tty) {
 				bytes_processed = global_devfs.readfl(pb->focus_tty, Slice{ 0, (stduint)chunk }, (byte*)::buffer);
+			}
+			else if (file->f_inode && (file->f_inode->i_mode & I_TYPE_MASK) == I_CHAR_SPECIAL) {
+				// Bypass global vfs_lock spinlock for character special devices to avoid deadlocks.
+				bytes_processed = file->f_inode->i_sb->fs->readfl(file->f_inode->internal_handler, Slice{ file->f_pos, (stduint)chunk }, (byte*)::buffer);
 			}
 			else {
 				bytes_processed = Filesys::Read(file, ::buffer, chunk);
@@ -251,6 +261,7 @@ void serv_file_loop()// for IDE 0:0, 0:1
 			syssend(Task_Flp_Serv, &retval, sizeof(retval[0]), _IMM(FiledevMsg::RUPT));
 			#endif
 			Filesys::Tree();
+			Consman_InitializeFreeType();
 			ProcessBlock* init_p = Taskman::CreateFile(("/md0/init"), RING_U, Task_Kernel);
 			if (init_p) {
 				init_p->focus_tty = vttys[0];
@@ -267,17 +278,7 @@ void serv_file_loop()// for IDE 0:0, 0:1
 			#if _GUI_ENABLE
 			ploginfo("Loading first Shell...");
 			ProcessBlock* shell_p = Taskman::Create((void*)&serv_shell_process, RING_M);
-			ProcessBlock* cotl_p = Taskman::CreateFile(("/md0/cot"), RING_U, shell_p->pid);
-			if (shell_p) {
-				if (cotl_p) {
-					// Append and AppendThread moved to Shell
-				}
-				syssend(shell_p->main_thread->getID(), &cotl_p, sizeof(cotl_p));
-			}
-			else if (cotl_p) {
-				plogerro("Shell creation failed, but init loaded.");
-			}
-			ploginfo("Create new shell-form: pid%u", shell_p->pid);
+			ploginfo("Create new shell-form: pid%u", shell_p ? shell_p->pid : 0);
 			#else
 			ProcessBlock* p;
 			p = Taskman::CreateFile(("/md0/cot"), RING_U, Task_Kernel);

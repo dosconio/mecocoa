@@ -21,6 +21,15 @@ her-note: false
 	- git checkout edk2-stable202502 # edk2-stable202208
 	- git submodule update --init --recursive
 	- make -C /home/phina/soft/edk2/BaseTools/Source/C
+- FreeType 2.14.3
+
+```
+[c++lib]
+GLIBC..stdlib
+UNISYM
+EDK2: mcca
+FreeType 2.14.3: mcca
+```
 
 **Branch**
 	- `main`/master: add new features and test for UNISYM.

@@ -10,7 +10,7 @@ public:\
 	virtual Point GetCursor() const override;\
 	virtual void DrawPoint(const Point& disp, Color color) const override;\
 	virtual void DrawRectangle(const Rectangle& rect) const override;\
-	virtual void DrawFont(const Point& disp, const DisplayFont& font) const override;\
+	virtual void DrawFont(const Point& disp, const DisplayFont& font, const String& str) const override;\
 	virtual Color GetColor(Point p) const override;\
 	virtual void DrawPoints(const Rectangle& rect, const Color* base) const override;\
 };
@@ -35,6 +35,11 @@ inline static QueueLimited* VTTY_INNQ(Dnode* nod) {
 	if (!nod || !nod->type) return nullptr;
 	auto& block = *(vtty_type_t*)nod->type;
 	return &block.innput_queue;
+}
+inline static QueueLimited* VTTY_OUTQ(Dnode* nod) {
+	if (!nod || !nod->type) return nullptr;
+	auto& block = *(vtty_type_t*)nod->type;
+	return &block.output_queue;
 }
 
 enum class ConsoleMsg {
@@ -162,7 +167,7 @@ class Spinlock;
 
 #if _GUI_ENABLE
 void Global_CleanProcessForms(ProcessBlock* pb);
-extern Spinlock gui_lock;
+extern RecursiveMutex gui_lock;
 #endif
 
 #endif

@@ -8,7 +8,10 @@
 using namespace uni;
 #include "../include/filesys.hpp"
 #include "../include/fileman.hpp" // for DEV_TTY etc
+#include "../include/console.hpp" // for VTTY_OUTQ, SysMessage, vtty_type_t
 // VFS and DevFs Implementation
+
+extern uni::Queue<SysMessage> message_queue_conv;// defined in graphic.cpp
 
 namespace uni {
 

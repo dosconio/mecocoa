@@ -57,6 +57,7 @@ cppfile=\
 	$(ulibpath)/cpp/Device/Keyboard.cpp \
 	$(ulibpath)/cpp/Device/Timer.cpp \
 	$(ulibpath)/cpp/Device/Mouse.cpp \
+	$(ulibpath)/cpp/charset/Unicode.cpp \
 	$(ulibpath)/cpp/Device/Video.cpp $(ulibpath)/cpp/Device/Video-VideoConsole2.cpp \
 	$(wildcard $(ulibpath)/cpp/Device/USB/*.cpp) $(wildcard $(ulibpath)/cpp/Device/USB/xHCI/*.cpp) \
 

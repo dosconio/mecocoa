@@ -24,7 +24,7 @@ SheetTrait* Consman::last_click_sheet = nullptr;// mark the focused window
 VideoControlInterface* Consman::real_pvci = nullptr;
 
 #if _GUI_ENABLE
-Spinlock gui_lock;
+RecursiveMutex gui_lock;
 #endif
 
 #ifndef _UEFI
@@ -36,6 +36,8 @@ GloScreenABGR8888 vga_ABGR8888;
 
 OstreamTrait* con0_out = 0;
 #endif
+
+uni::VideoConsole2* global_vcon0 = nullptr;
 
 
 //// ---- ---- STATIC CORE ---- ---- ////
@@ -59,6 +61,12 @@ static void InitializeBottomBar() {
 }
 #endif
 
+
+#if _MCCA == 0x8632
+static uni::BitmapFontEngine fallback_engine(1);
+#else
+static uni::BitmapFontEngine loader_font_engine(1);
+#endif
 
 bool Consman::Initialize() {
 	// con0_out = 0;
@@ -133,6 +141,14 @@ bool Consman::Initialize() {
 
 	// main screen
 	auto vcon0 = new VideoConsole2(&global_layman.getVCI(), screen0_win, Color::Black, Color::White);
+	global_vcon0 = vcon0;
+
+#if _MCCA == 0x8632
+	vcon0->setFontEngine(&fallback_engine);
+#else
+	vcon0->setFontEngine(&loader_font_engine);
+#endif
+
 	vcon0->setBuffers(nullptr,
 		new BufferChar[vcon0->getCols() * vcon0->getRows()],
 		new Color[vcon0->getLineBufferSize()]
@@ -156,5 +172,25 @@ bool Consman::Initialize() {
 
 	// default tty are all bcon
 	return true;
+}
+
+_ESYM_C void Consman_InitializeFreeType() {
+#if _MCCA == 0x8632
+	ploginfo("Consman_InitializeFreeType: [Start]");
+	extern bool InitializeFont();
+	extern uni::FontEngine* global_ft_engine;
+	bool success = InitializeFont();
+	ploginfo("Consman_InitializeFreeType: InitializeFont returned %d", success);
+	ploginfo("Consman_InitializeFreeType: global_ft_engine = %p, global_vcon0 = %p", global_ft_engine, global_vcon0);
+	if (global_ft_engine && global_vcon0) {
+		ploginfo("Consman_InitializeFreeType: Setting font engine...");
+		global_vcon0->setFontEngine(global_ft_engine);
+		ploginfo("Consman_InitializeFreeType: Clearing screen...");
+		global_vcon0->Clear();
+		ploginfo("Consman_InitializeFreeType: [Successful End]");
+	} else {
+		ploginfo("Consman_InitializeFreeType: Deferring check failed (missing engine or vcon0)");
+	}
+#endif
 }
 #endif

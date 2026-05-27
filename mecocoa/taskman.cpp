@@ -105,6 +105,38 @@ void Mutex::Release() {
 	this->guard.Release(old_if);
 }
 
+RecursiveMutex::RecursiveMutex() : mutex(), owner_tid((stduint)~0), count(0) {}
+
+void RecursiveMutex::Acquire() {
+	stduint current_tid = Taskman::CurrentTID();
+	if (owner_tid == current_tid) {
+		count++;
+		return;
+	}
+	mutex.Acquire();
+	owner_tid = current_tid;
+	count = 1;
+}
+
+void RecursiveMutex::Release() {
+	if (owner_tid == Taskman::CurrentTID()) {
+		count--;
+		if (count == 0) {
+			owner_tid = (stduint)~0;
+			mutex.Release();
+		}
+	}
+}
+
+RecursiveMutexLocal::RecursiveMutexLocal(RecursiveMutex* _rmutex) : rmutex(_rmutex) {
+	rmutex->Acquire();
+}
+
+RecursiveMutexLocal::~RecursiveMutexLocal() {
+	rmutex->Release();
+}
+
+
 void Semaphore::Acquire() {
 	bool old_if = this->guard.Acquire(); // Disable interrupts and acquire lock
 

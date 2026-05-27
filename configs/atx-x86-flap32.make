@@ -21,14 +21,14 @@ qemu=qemu-system-i386 # not support ia32e
 bochd=C:/Soft/Bochs-2.7/bochsdbg.exe
 
 CXF1=-m32 -mno-red-zone -mno-sse -mno-sse2 -mno-sse3 -mno-ssse3 -mno-sse4
-CXF2=-ffreestanding -fno-omit-frame-pointer -fno-stack-protector -fno-pic -fno-exceptions -fno-unwind-tables -fno-builtin -fno-strict-aliasing
+CXF2=-ffreestanding -fno-omit-frame-pointer -fno-stack-protector -fno-pic -fno-exceptions -fno-unwind-tables -fno-builtin -fno-strict-aliasing -ffunction-sections -fdata-sections
 CXF=$(CXF1) $(CXF2) -fno-rtti -fno-use-cxa-atexit -static -nostdlib 
 CXW=-Wno-builtin-declaration-mismatch -Wno-volatile -Wno-multichar
-CX=g++ -I$(uincpath) -c $(flag) $(CXF) $(CXW) -std=c++2a
+CX=g++ -I$(uincpath) -Idepends/freetype/x86/include -c $(flag) $(CXF) $(CXW) -std=c++2a
 
 ker_mod=$(uobjpath)/mcca-$(arch)/*.o
 
-cppfile=$(wildcard mecocoa/*.cpp) $(wildcard devdriv/*.cpp) $(wildcard devdriv/**/*.cpp)
+cppfile=$(wildcard mecocoa/*.cpp) $(wildcard devdriv/*.cpp) $(wildcard devdriv/**/*.cpp) depends/freetype.cpp
 cppobjs=$(patsubst %.cpp, $(uobjpath)/mcca-$(arch)/%.o, $(notdir $(cppfile)))
 VPATH = $(sort $(dir $(cppfile)))
 
@@ -52,23 +52,38 @@ build: lib accm prehost/$(arch)/fatvhd.ignore $(cppobjs) build_util
 	aasm prehost/$(arch)/atx-x86.asm        -felf   -o $(uobjpath)/mcca-$(arch)/mcca-$(arch)-elf16.o  -Iinclude/
 	aasm prehost/$(arch)/atx-ladder.asm     -felf   -o $(uobjpath)/mcca-$(arch)/mcca-$(arch)-ladder.o -Iinclude/ -D_MCCA=0x8632
 	aasm prehost/$(arch)/atx-x86-loader.asm -felf   -o $(uobjpath)/mcca-$(arch)/mcca-$(arch)-elf64.o
+	@echo "CX $(arch).loader.cpp"
+	$(CX) -O2 prehost/$(arch)/$(arch).loader.cpp -o $(uobjpath)/mcca-$(arch).loader.o
+	@echo "CX _auxiliary.cpp"
+	$(CX) -O2 prehost/_auxiliary.cpp -o $(uobjpath)/mcca-$(arch)._auxiliary.o
 	@echo "MK $(arch) loader"
 	$(CX) prehost/$(arch)/grubhead.S -o $(uobjpath)/mcca-$(arch).grub.o -D_LOADER
-	g++ -I$(uincpath) $(flag) -m32 $(uobjpath)/mcca-$(arch).grub.o prehost/$(arch)/$(arch).loader.cpp \
-		prehost/_auxiliary.cpp $(uobjpath)/mcca-$(arch)/mcca-$(arch)-elf64.o $(uobjpath)/CGMin32/_ae_manage.o\
-		-o $(elf_loader) -L$(ubinpath) -lm32d $(CXF) \
+	ld -m elf_i386 -static -nostdlib --gc-sections \
+		$(uobjpath)/mcca-$(arch).grub.o \
+		$(uobjpath)/mcca-$(arch).loader.o \
+		$(uobjpath)/mcca-$(arch)._auxiliary.o \
+		$(uobjpath)/mcca-$(arch)/mcca-$(arch)-elf64.o \
+		$(uobjpath)/CGMin32/_ae_manage.o\
+		-o $(elf_loader) -L$(ubinpath) -lm32d  \
 		-T prehost/$(arch)/$(arch).loader.ld  \
-		-nostartfiles -O2 \
-		-Wl,-Map=$(elf_loader).map
+		-Map $(elf_loader).map
 	strip --strip-all $(elf_loader)
 	rm $(uobjpath)/mcca-$(arch)/mcca-$(arch)-elf64.o
 	#
+	@echo "CX $(arch).cpp"
+	$(CX) -O2 prehost/$(arch)/$(arch).cpp -o $(uobjpath)/mcca-$(arch).kernel.o
 	@echo "MK $(arch)"
 	$(CX) prehost/$(arch)/grubhead.S -o $(uobjpath)/mcca-$(arch).grub.o
-	g++ -I$(uincpath) $(flag) -m32 $(uobjpath)/mcca-$(arch).grub.o $(ker_mod) prehost/$(arch)/$(arch).cpp prehost/_auxiliary.cpp -o $(elf_kernel) -L$(ubinpath) -lm32d $(CXF) \
+	ld -m elf_i386 -static -nostdlib --gc-sections \
+		$(uobjpath)/mcca-$(arch).grub.o \
+		$(ker_mod) \
+		$(uobjpath)/mcca-$(arch).kernel.o \
+		$(uobjpath)/mcca-$(arch)._auxiliary.o \
+		-o $(elf_kernel) \
+		-L depends/freetype/x86 -lfreetype \
+		-L$(ubinpath) -lm32d \
 		-T prehost/$(arch)/$(arch).ld  \
-		-nostartfiles -O2 \
-		-Wl,-Map=$(elf_kernel).map
+		-Map $(elf_kernel).map
 	strip --strip-all $(elf_kernel)
 	# ---- Floppy ----
 	@dd if=/dev/zero of=$(outs) bs=512 count=2880 2>>/dev/null
@@ -88,6 +103,8 @@ build: lib accm prehost/$(arch)/fatvhd.ignore $(cppobjs) build_util
 	@echo $(sudokey) | sudo -S kpartx -av $(ubinpath)/fixed2.vhd  >/dev/null # ls /dev/mapper/loop*p* && sudo mkfs.vfat -F 32 -n "DATA" /dev/mapper/loop*p7
 	@echo $(sudokey) | sudo -S mount /dev/mapper/loop*p7 $(mnts) #sudo fsck.vfat -v /dev/mapper/loop0p7 # fdisk # blkid
 	@echo $(sudokey) | sudo -S cp $(elf_kernel)     $(mnts)/mx86.elf
+	@echo $(sudokey) | sudo -S cp depends/fonts/simsun.ttf      $(mnts)/
+	@echo $(sudokey) | sudo -S echo "ようこそ，メココAの世界へ！" | sudo tee "${mnts}/ciallo.txt" > /dev/null
 	@echo $(sudokey) | sudo -S rm       $(mnts)/apps/*
 	@echo $(sudokey) | sudo -S mkdir -p $(mnts)/apps
 	@echo $(sudokey) | sudo -S cp $(uobjpath)/sapp-$(arch)/*    $(mnts)/apps/
@@ -98,7 +115,7 @@ build: lib accm prehost/$(arch)/fatvhd.ignore $(cppobjs) build_util
 	@echo
 	@echo Run \"make -f accmlib/accmx86.make\" to build accm-x86
 	@echo "You can now debug in bochs with the command:"
-	@echo "  " $(bochd) -f $(archdir)/bochsrc.bxrc
+	@echo "  " $(bochd) -f %ubinpath%/I686/mecocoa/bochsrc.bxrc
 	@echo "  " bochs -f $(archdir)/bochsrc-lin.bxrc -debugger
 
 ACCM_INCF=-I$(uincpath) -Iaccmlib -I$(uincpath)/c/API-POSIX
@@ -208,6 +225,7 @@ $(uobjpath)/mcca-$(arch)/%.o: %.cpp
 	@mkdir $(uobjpath)/mcca-$(arch) -p
 	@echo "CX $(notdir $<)"
 	@$(CX) $< -o $@ -O0 -MMD -MF $(patsubst %.o,%.d,$@) -MT $@
+	@if [ "$(notdir $<)" = "freetype.cpp" ]; then objcopy --rename-section .text=.ext.freetype --rename-section .rodata=.ext.freetype --rename-section .data=.ext.freetype $@; fi
 
 -include $(uobjpath)/mcca-$(arch)/*.d
 

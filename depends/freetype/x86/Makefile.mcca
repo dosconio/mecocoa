@@ -1,0 +1,71 @@
+# 用于 Mecocoa x86 独立环境的 FreeType 编译配置文件
+# 路径：depends/freetype/x86/Makefile.mcca
+
+override arch=x86
+uincpath?=../../../unisym/inc
+uobjpath?=../../../_obj
+
+# 编译工具定义
+CC=gcc
+AR=ar
+
+# 桥接 setjmp/longjmp 宏定义，并配置 FreeType 特性
+BRIDGE_FLAGS = -DFT2_BUILD_LIBRARY \
+               -D_MCCA=0x8632 -D_ARC_x86=5 -D_DEBUG
+
+# FreeType 本身头文件路径 + Unisym 独立库头文件路径
+INCLUDES = -Iinclude \
+           -I$(uincpath) \
+           -I$(uincpath)/c/ISO_IEC_STD
+
+# 独立环境 C 编译参数（禁用 SSE、红色区域、堆栈保护以及标准宿主库）
+CFLAGS = -m32 -static -fno-builtin -nostdlib -fno-stack-protector -O2 \
+         -mno-red-zone -mno-sse -mno-sse2 -mno-sse3 -mno-ssse3 -mno-sse4 \
+         -ffreestanding -fno-exceptions -fno-unwind-tables -fno-asynchronous-unwind-tables \
+         $(INCLUDES) $(BRIDGE_FLAGS)
+
+# 根据 INSTALL.ANY 指南挑选的 FreeType 组件主文件
+SRCS = src/base/ftsystem.c \
+       src/base/ftinit.c \
+       src/base/ftdebug.c \
+       src/base/ftbase.c \
+       src/base/ftbbox.c \
+       src/base/ftglyph.c \
+       src/base/ftbitmap.c \
+       src/base/ftgasp.c \
+       src/base/ftstroke.c \
+       src/base/ftsynth.c \
+       src/base/ftmm.c \
+       src/sfnt/sfnt.c \
+       src/truetype/truetype.c \
+       src/smooth/smooth.c \
+       src/raster/raster.c \
+       src/autofit/autofit.c \
+       src/gzip/ftgzip.c \
+       src/psnames/psnames.c
+
+OBJS = $(patsubst %.c, $(uobjpath)/freetype-x86/%.o, $(SRCS))
+
+# 目标输出位置，为当前编译目录下的 libfreetype.a
+TARGET = libfreetype.a
+
+.PHONY: all clean
+
+all: $(TARGET)
+
+$(TARGET): $(OBJS)
+	@mkdir -p $(dir $@)
+	@echo "AR $@"
+	@$(AR) rcs $@ $^
+	@objcopy --rename-section .text=.ext.freetype --rename-section .rodata=.ext.freetype --rename-section .data=.ext.freetype $@
+	@echo "Cleaning up intermediate object files..."
+	@rm -rf $(uobjpath)/freetype-x86
+
+$(uobjpath)/freetype-x86/%.o: %.c
+	@mkdir -p $(dir $@)
+	@echo "CC $<"
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+clean:
+	rm -rf $(uobjpath)/freetype-x86
+	rm -f $(TARGET)

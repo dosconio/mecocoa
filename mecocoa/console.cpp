@@ -8,7 +8,7 @@
 #include <cpp/Witch/Control/Control-TextBox.hpp>
 
 #if _GUI_ENABLE
-extern Spinlock gui_lock;
+extern RecursiveMutex gui_lock;
 #endif
 extern Spinlock scheduler_lock;
 #include "../include/filesys.hpp"
@@ -32,7 +32,7 @@ static void VTTY_Free(pureptr_t inp) {
 		free((byte*)pblock->innput_queue.slice.address);
 	}
 	if (pblock->output_queue.slice.address) {
-		_TODO
+		free((byte*)pblock->output_queue.slice.address);
 	}
 	free(pblock);
 }
@@ -44,15 +44,17 @@ Dnode* VTTY_Append(Console_t* con) {
 	}
 
 	#if _GUI_ENABLE
-	SpinlockLocal guard(&gui_lock);
+	RecursiveMutexLocal guard(&gui_lock);
 	#endif
 	auto p = vttys.Append(con);
 	if (!p) return nullptr;
 	const stduint SIZE_INN_BUF = 64;
 	auto p_innbuf = new byte[SIZE_INN_BUF];
+	const stduint SIZE_OUT_BUF = 4096;// ring buffer for async TTY text output
+	auto p_outbuf = new byte[SIZE_OUT_BUF];
 	auto pblock = new vtty_type_t();
 	pblock->innput_queue = QueueLimited({_IMM(p_innbuf), SIZE_INN_BUF});
-	pblock->output_queue = QueueLimited({0, 0});
+	pblock->output_queue = QueueLimited({_IMM(p_outbuf), SIZE_OUT_BUF});
 	pblock->id = DevFs::allocate_tty_id();
 	p->type = _IMM(pblock);
 
@@ -106,12 +108,32 @@ void uni::BareConsole::doshow(void* _) {
 #endif
 
 #if _GUI_ENABLE
+#if _MCCA == 0x8632
+static uni::BitmapFontEngine fallback_engine(1);
+#else
+static uni::BitmapFontEngine gui_font_engine(1);
+#endif
+
 _RET_CreateVconsole Consman::CreateVconsole(const Rectangle& rect, rostr title) {
 	_RET_CreateVconsole ret;
 	auto pcon = new VideoConsole2(NULL,
 		Rectangle(Point(2, 2), Size2(rect.width - 10, rect.height - 30)),
 		Color::Black, 0xFFFCEAF1
 	);
+
+	#if _MCCA == 0x8632
+	extern uni::FontEngine* global_ft_engine;
+	if (global_ft_engine) {
+		pcon->setFontEngine(global_ft_engine);
+	}
+	else {
+		pcon->setFontEngine(&fallback_engine);
+	}
+	#else
+		// Bind standard 16x8 bitmap font engine for 64-bit target
+	pcon->setFontEngine(&gui_font_engine);
+	#endif
+
 	ret.pcon = pcon;
 	// plogwarn(">pcon: %x", pcon);
 	// auto vcon_buf = (Color*).allocate(pcon->window.getArea() * sizeof(Color));// Vcon Gen1
@@ -145,7 +167,7 @@ _RET_CreateVconsole Consman::CreateVconsole(const Rectangle& rect, rostr title) 
 	{
 		// [Lock]: Protect global layman chain and focus switch
 		#if _GUI_ENABLE
-		SpinlockLocal guard(&gui_lock);
+		RecursiveMutexLocal guard(&gui_lock);
 		#endif
 		global_layman.Append(pform);
 		Consman::SwitchForm(pform);
@@ -292,7 +314,7 @@ static stdsint ConsoleMsg_FNEW(const FMT_ConsoleMsg_FNEW* data, ProcessBlock* pb
 	{
 		// [Lock]: Protect global registration
 		#if _GUI_ENABLE
-		SpinlockLocal guard(&gui_lock);
+		RecursiveMutexLocal guard(&gui_lock);
 		#endif
 		global_layman.Append(pfrm);
 		Consman::SwitchForm(pfrm);
@@ -321,7 +343,7 @@ static void _CleanSingleForm(ProcessBlock* pb, stduint pform_id) {
 	{
 		// [Lock]: Protect global layman chain and focus switch
 		#if _GUI_ENABLE
-		SpinlockLocal guard(&gui_lock);
+		RecursiveMutexLocal guard(&gui_lock);
 		#endif
 
 		LayerManager* parent = pfrm->refSheetParent();
@@ -582,7 +604,7 @@ static stdsint ConsoleMsg_FTIM(stduint pform_id, stduint ms, ProcessBlock* pb) {
 	if (ms && !period) period = 1;
 
 	#if _GUI_ENABLE
-	SpinlockLocal guard(&gui_lock);
+	RecursiveMutexLocal guard(&gui_lock);
 	#endif
 	global_layman.UnregisterTimer(pfrm);
 	if (period) {
@@ -604,18 +626,23 @@ static stdsint ConsoleMsg_FTIM(stduint pform_id, stduint ms, ProcessBlock* pb) {
 void _Comment(R1) serv_shell_process() {
 	uni::Dnode* tty_target = 0;
 	::uni::Witch::Form* pf_ptr = nullptr;
+	ProcessBlock* p = nullptr;
+
 	if (Consman::ento_gui) {
 		Rectangle rect{ Point(250, 160), Size2(480, 320) };
+		ploginfo("[DEBUG] serv_shell_process: Calling CreateVconsole...");
 		auto [pcon, pf, tty_no] = Consman::CreateVconsole(rect, "Terminal");
+		ploginfo("[DEBUG] serv_shell_process: CreateVconsole returned successfully.");
 		pf_ptr = pf;
 		tty_target = vttys[tty_no];
-		// ploginfo("CreateVconsole->[%[x],%[x],%u]", pcon, pf, tty_no);
+
+		ploginfo("[DEBUG] serv_shell_process: Loading /md0/cot internally...");
+		p = Taskman::CreateFile(("/md0/cot"), RING_U, Taskman::CurrentPID());
+		ploginfo("[DEBUG] serv_shell_process: Load done, p = 0x%p", p);
 	}
 
-	ProcessBlock* p = nullptr;
-	stduint src = 0, type = 0;
-	sysrecv(ANYPROC, &p, sizeof(p), &type, &src);
 	if (p) {
+		ploginfo("[DEBUG] serv_shell_process: Registering process to Taskman...");
 		// Register the process globally to get a valid PID
 		Taskman::Append(p);
 		// Lock the process state during complex environment setup
@@ -640,10 +667,13 @@ void _Comment(R1) serv_shell_process() {
 			pblock->proc_group.Append(p->pid);
 		}
 		
+		ploginfo("[DEBUG] serv_shell_process: Appending main thread to scheduler...");
 		// Environment is ready, restore state and start the application thread
 		p->state = ProcessBlock::State::Active;
 		Taskman::AppendThread(p->main_thread);
-		IC.enInterrupt();
+		IC.enInterrupt(true);
+
+		ploginfo("[DEBUG] serv_shell_process: shell initialization completed successfully!");
 	}
 
 	extern const char key_map[256], key_map_shift[256];
@@ -773,7 +803,7 @@ void _Comment(R1) serv_cons_loop()
 	while (true) {
 		{
 			#if _GUI_ENABLE
-			SpinlockLocal guard(&gui_lock);
+			RecursiveMutexLocal guard(&gui_lock);
 			#endif
 			for (stduint i = 0; i < blocked_vtty_pid.Count(); i++) {
 				stduint pid = blocked_vtty_pid[i];
@@ -802,7 +832,7 @@ void _Comment(R1) serv_cons_loop()
 		// Handle blocked form message requests
 		{
 			#if _GUI_ENABLE
-			SpinlockLocal guard(&gui_lock);
+			RecursiveMutexLocal guard(&gui_lock);
 			#endif
 			for (stduint i = 0; i < blocked_form_msgs.Count(); i++) {
 				auto& b = blocked_form_msgs[i];

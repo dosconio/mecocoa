@@ -49,12 +49,14 @@ struct SysMessage {
 		RUPT_KBD,
 		RUPT_FLUSH,
 		RUPT_NEW_TERM,
+		RUPT_TTY_OUT,// async TTY text ready to render (sent by DevFs::writfl)
 	} type;
 	union {
 		struct MsgTimer timer;
 		MouseMessage mou_event;
 		keyboard_event_t kbd_event;
 		MccaRectangle rect;// RUPT_FLUSH
+		Dnode* tty_node;// RUPT_TTY_OUT: which vtty has pending output
 	} args;
 };
 extern uni::Queue<SysMessage> message_queue;
@@ -150,6 +152,22 @@ struct MutexLocal {
 	~MutexLocal() {
 		mutex->Release();
 	}
+};
+
+struct RecursiveMutex {
+	Mutex mutex;
+	stduint owner_tid;
+	stduint count;
+
+	RecursiveMutex();
+	void Acquire();
+	void Release();
+};
+
+struct RecursiveMutexLocal {
+	RecursiveMutex* rmutex;
+	RecursiveMutexLocal(RecursiveMutex* _rmutex);
+	~RecursiveMutexLocal();
 };
 
 struct Semaphore {

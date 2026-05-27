@@ -45,6 +45,42 @@ _ESYM_C void free(void* ptr) {
 	user_mempool.deallocate(ptr);
 }
 
+_PACKED(struct) MempoolHeader {
+	stduint size;
+	stduint prop;
+};
+
+_ESYM_C void* calloc(size_t nmemb, size_t size) {
+	size_t total = nmemb * size;
+	void* ptr = malloc(total);
+	if (ptr) {
+		MemSet(ptr, 0, total);
+	}
+	return ptr;
+}
+
+_ESYM_C void* realloc(void* ptr, size_t size) {
+	if (!ptr) return malloc(size);
+	if (!size) {
+		free(ptr);
+		return nullptr;
+	}
+	MempoolHeader* header = (MempoolHeader*)ptr - 1;
+	if (header->prop != _IMM(0xFEDC5AA5)) {
+		return nullptr; // Safety fallback
+	}
+	size_t old_size = header->size;
+	if (old_size >= size) {
+		return ptr; // Already large enough
+	}
+	void* new_ptr = malloc(size);
+	if (new_ptr) {
+		MemCopyN(new_ptr, ptr, old_size);
+		free(ptr);
+	}
+	return new_ptr;
+}
+
 _ESYM_C void* mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset) {
 	stduint ret = syscall(syscall_t::MMAP, length, prot, fd);
 	return (void*)ret;

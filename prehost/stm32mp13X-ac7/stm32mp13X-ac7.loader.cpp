@@ -217,7 +217,7 @@ _ESYM_C void assert_failed(void) { erro(); }
 // Global Data
 VideoConsole VConsole(&LTDC[1], Rectangle(Point(0, 0), Size2(800,480)));
 
-void LTDC_LAYER_t::DrawFont(const Point& disp, const DisplayFont& font) const {}
+void LTDC_LAYER_t::DrawFont(const Point& disp, const DisplayFont& font, const String& str) const {}
 
 void erro(const char*) {
 	loop{
