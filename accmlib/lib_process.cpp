@@ -42,7 +42,8 @@ int execve(const char* path, char* const argv[], char* const envp[]) {
 	return syscall(syscall_t::EXET, _IMM(path), _IMM(argv), _IMM(envp));
 }
 
+extern "C" char** environ;
 int execv(const char* path, char* const argv[]) {
-	return execve(path, argv, nullptr);
+	return execve(path, argv, environ);
 }
 

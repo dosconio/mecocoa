@@ -25,7 +25,9 @@ all: $(BIN_DIR) \
 	$(BIN_DIR)/mv \
 	$(BIN_DIR)/mkdir \
 	$(BIN_DIR)/echo \
-	$(BIN_DIR)/clear
+	$(BIN_DIR)/clear \
+	$(BIN_DIR)/args
+
 
 $(BIN_DIR):
 	mkdir -p $@
@@ -101,6 +103,11 @@ $(BIN_DIR)/echo: $(uherpath)/unisym/demo/utilities/echo.c $(LIBX86)
 $(BIN_DIR)/clear: $(uherpath)/unisym/demo/utilities/clear.c $(LIBX86)
 	@echo "MK clear"
 	g++ $(ACCM_INCF) $(flag) -m32 $(CXF) $(CXW) -std=c++2a -o $@ $< -L$(uobjpath)/$(ACCM_LIBS) -lx86 -lgcc
+
+$(BIN_DIR)/args: $(uherpath)/unisym/demo/utilities/args.c $(LIBX86)
+	@echo "MK args"
+	g++ $(ACCM_INCF) $(flag) -m32 $(CXF) $(CXW) -std=c++2a -o $@ $< -L$(uobjpath)/$(ACCM_LIBS) -lx86 -lgcc
+
 
 clean:
 	@echo "RM $(BIN_DIR)"

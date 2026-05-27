@@ -216,7 +216,95 @@ extern "C" __sighandler_t signal(int sig, __sighandler_t handler) {
 	return oact.sa_handler;
 }
 
+extern "C" char** environ;
+char** environ = nullptr;
+
+extern "C" void _init_environ(int argc, char** argv, char** envp) {
+	environ = envp;
+}
+
 extern "C" _WEAK void _preprocess() {}
+
+
+
+extern "C" char* getenv(const char* name) {
+	if (!name || !environ) {
+		return nullptr;
+	}
+	stduint len = StrLength(name);
+	for (int i = 0; environ[i] != nullptr; i++) {
+		if (StrCompareN(environ[i], name, len) == 0 && environ[i][len] == '=') {
+			return environ[i] + len + 1;
+		}
+	}
+	return nullptr;
+}
+
+extern "C" int setenv(const char* name, const char* value, int overwrite) {
+	if (!name || StrLength(name) == 0 || StrIndexChar(name, '=') != nullptr) {
+		return -1;
+	}
+	char* current = getenv(name);
+	if (current) {
+		if (!overwrite) {
+			return 0;
+		}
+		// Overwrite the existing value
+		stduint name_len = StrLength(name);
+		stduint val_len = StrLength(value);
+		char* new_str = (char*)malloc(name_len + 1 + val_len + 1);
+		if (!new_str) {
+			return -1;
+		}
+		StrCopy(new_str, name);
+		StrAppend(new_str, "=");
+		StrAppend(new_str, value);
+		
+		for (int i = 0; environ[i] != nullptr; i++) {
+			if (StrCompareN(environ[i], name, name_len) == 0 && environ[i][name_len] == '=') {
+				environ[i] = new_str;
+				return 0;
+			}
+		}
+	} else {
+		stduint count = 0;
+		if (environ) {
+			while (environ[count] != nullptr) {
+				count++;
+			}
+		}
+		// Allocate a new array to hold the existing variables plus the new one and the NULL terminator
+		char** new_env = (char**)malloc((count + 2) * sizeof(char*));
+		if (!new_env) {
+			return -1;
+		}
+		for (stduint i = 0; i < count; i++) {
+			new_env[i] = environ[i];
+		}
+		
+		stduint name_len = StrLength(name);
+		stduint val_len = StrLength(value);
+		char* new_str = (char*)malloc(name_len + 1 + val_len + 1);
+		if (!new_str) {
+			free(new_env);
+			return -1;
+		}
+		StrCopy(new_str, name);
+		StrAppend(new_str, "=");
+		StrAppend(new_str, value);
+		
+		new_env[count] = new_str;
+		new_env[count + 1] = nullptr;
+		environ = new_env;
+	}
+	return 0;
+}
+
+extern "C" char* strchr(const char* s, int c) {
+	return (char*)StrIndexChar(s, c);
+}
+
+
 
 #include <stdarg.h>
 

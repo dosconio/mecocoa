@@ -32,8 +32,29 @@ static stduint _Taskman_Setup_Stack(ProcessBlock* pb, ProcessBlock* parent, char
 		}
 	};
 
+	// Check if we should inject default environment variables for non-ring0 user space task
+	bool use_default_env = false;
+	if (pb->ring == RING_U) {
+		stduint temp_envc = 0;
+		if (usr_envp) {
+			stduint ptr = 0;
+			MemCopyP(&ptr, kernel_paging, usr_envp, parent->paging, sizeof(stduint));
+			if (ptr) {
+				temp_envc = 1;
+			}
+		}
+		if (temp_envc == 0) {
+			use_default_env = true;
+		}
+	}
+
 	count_and_size(usr_argv, argc);
-	count_and_size(usr_envp, envc);
+	if (use_default_env) {
+		envc = 3;
+		str_len += StrLength("?=0") + 1 + StrLength("PATH=/md0:/mnt34/apps") + 1 + StrLength("USER=root") + 1;
+	} else {
+		count_and_size(usr_envp, envc);
+	}
 
 	constexpr stduint auxc = 6; // PHDR, PHENT, PHNUM, PAGESZ, ENTRY, NULL
 	stduint ptr_count = 1 + (argc + 1) + (envc + 1) + (auxc * 2); // argc, argv[], envp[], auxv[]
@@ -64,7 +85,20 @@ static stduint _Taskman_Setup_Stack(ProcessBlock* pb, ProcessBlock* parent, char
 	};
 
 	copy_strings(usr_argv, argc);
-	copy_strings(usr_envp, envc);
+	if (use_default_env) {
+		const char* defaults[] = { "?=0", "PATH=/md0:/mnt34/apps", "USER=root" };
+		for (stduint i = 0; i < 3; i++) {
+			char* dest = str_area;
+			StrCopy(dest, defaults[i]);
+			stduint len = StrLength(defaults[i]);
+			*ptr_area++ = delta + (stduint)((byte*)dest - temp_buf);
+			str_area += len + 1;
+		}
+		*ptr_area++ = 0; // NULL terminator
+	} else {
+		copy_strings(usr_envp, envc);
+	}
+
 
 	auto add_aux = [&](stduint type, stduint val) {
 		*ptr_area++ = type;

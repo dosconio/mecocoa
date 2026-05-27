@@ -182,11 +182,6 @@ _ESYM_C long strtol(const char* str, char** endptr, int base) {
 	return negative ? -(long)result : (long)result;
 }
 
-_ESYM_C char* getenv(const char* name) {
-	(void)name;
-	return nullptr;
-}
-
 _ESYM_C long __isoc23_strtol(const char* str, char** endptr, int base) {
 	return strtol(str, endptr, base);
 }
