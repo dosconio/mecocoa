@@ -18,7 +18,7 @@ extern "C" stdsint sysc_SIGR(void* context);
 extern "C" void check_and_deliver_signals(void* context);
 
 // Syscall Wrappers
-extern stduint SYSCALL_TABLE[29];
+extern stduint SYSCALL_TABLE[30];
 
 void Syscall::Initialize() {
 	#if _MCCA == 0x8632
@@ -232,9 +232,24 @@ DEFSYSC sysc_DUP2(stduint oldfd, stduint newfd) {
 	return pb->Dup2((int)oldfd, (int)newfd);
 }
 
+DEFSYSC sysc_PIPE(stduint usr_pipefd) {
+	ThreadBlock* th = Taskman::current_thread[Taskman::getID()];
+	ProcessBlock* pb = th->parent_process;
+	return pb->Pipe((int*)usr_pipefd);
+}
+
 DEFSYSC sysc_READ(stduint fd, stduint addr, stduint len) {
 	ThreadBlock* th = Taskman::current_thread[Taskman::getID()];
 	ProcessBlock* pb = th->parent_process;
+
+	// Intercept named pipes to bypass Task_FileSys server and execute in current thread's context to avoid deadlocks.
+	if (fd < pb->pfiles.Count() &&
+		pb->pfiles[fd] &&
+		pb->pfiles[fd]->vfile &&
+		pb->pfiles[fd]->vfile->f_inode &&
+		(pb->pfiles[fd]->vfile->f_inode->i_mode & I_TYPE_MASK) == I_NAMED_PIPE) {
+		return pb->Rdwt(false, fd, uni::Slice{ addr, len });
+	}
 
 	// TTY device
 	if (fd < pb->pfiles.Count() &&
@@ -311,7 +326,19 @@ DEFSYSC sysc_READ(stduint fd, stduint addr, stduint len) {
 	}
 }
 DEFSYSC sysc_WRIT(stduint fd, stduint addr, stduint len) {
-	stduint open_buf[4]{ fd, addr,len,Taskman::current_thread[Taskman::getID()]->getID() };
+	ThreadBlock* th = Taskman::current_thread[Taskman::getID()];
+	ProcessBlock* pb = th->parent_process;
+
+	// Intercept named pipes to bypass Task_FileSys server and execute in current thread's context to avoid deadlocks.
+	if (fd < pb->pfiles.Count() &&
+		pb->pfiles[fd] &&
+		pb->pfiles[fd]->vfile &&
+		pb->pfiles[fd]->vfile->f_inode &&
+		(pb->pfiles[fd]->vfile->f_inode->i_mode & I_TYPE_MASK) == I_NAMED_PIPE) {
+		return pb->Rdwt(true, fd, uni::Slice{ addr, len });
+	}
+
+	stduint open_buf[4]{ fd, addr, len, th->getID() };
 	syssend(Task_FileSys, open_buf, byteof(open_buf), _IMM(FilemanMsg::WRITE));
 	sysrecv(Task_FileSys, open_buf, byteof(open_buf[0]));
 	return open_buf[0];
@@ -606,6 +633,7 @@ stduint SYSCALL_TABLE[] = {
 	0, // 0x1A (GET_CORE_ID)
 	0, // 0x1B (MANA)
 	mglb(sysc_DUP2), // 0x1C (DUP2)
+	mglb(sysc_PIPE), // 0x1D (PIPE)
 };
 #endif
 
@@ -676,6 +704,9 @@ void syscall_body(NormalTaskContext* cxt)
 		break;
 	case syscall_t::DUP2:
 		cxt->a0 = sysc_DUP2(cxt->a0, cxt->a1);
+		break;
+	case syscall_t::PIPE:
+		cxt->a0 = sysc_PIPE(cxt->a0);
 		break;
 	default:
 		plogerro("Unknown syscall no: %d", syscall_num);

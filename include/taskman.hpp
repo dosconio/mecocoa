@@ -292,6 +292,7 @@ public: // _Comment(Fileman);
 	auto Close(int fid) -> bool;
 	auto Seek(int fd, stdsint off, int whence) -> stdsint;
 	auto Dup2(int oldfd, int newfd) -> stdsint;
+	auto Pipe(int pipefd[2]) -> stdsint;
 	//
 	static void Release(ProcessBlock* pb);
 	static ProcessBlock* Acquire(stduint tid);

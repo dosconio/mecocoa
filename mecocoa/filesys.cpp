@@ -749,7 +749,11 @@ int Filesys::Open(const char* pathname, int flags, vfs_file** out_file, vfs_dent
 }
 
 int Filesys::Read(vfs_file* file, void* buf, stduint count) {
-	if (!file || !file->f_inode || !file->f_inode->i_sb) return -1;
+	if (!file || !file->f_inode) return -1;
+	if ((file->f_inode->i_mode & I_TYPE_MASK) == I_NAMED_PIPE) {
+		return Filesys::ReadPipe(file, buf, count);
+	}
+	if (!file->f_inode->i_sb) return -1;
 	SpinlockLocal guard(&vfs_lock);
 	FilesysTrait* fs = file->f_inode->i_sb->fs;
 	
@@ -759,7 +763,11 @@ int Filesys::Read(vfs_file* file, void* buf, stduint count) {
 }
 
 int Filesys::Write(vfs_file* file, const void* buf, stduint count) {
-	if (!file || !file->f_inode || !file->f_inode->i_sb) return -1;
+	if (!file || !file->f_inode) return -1;
+	if ((file->f_inode->i_mode & I_TYPE_MASK) == I_NAMED_PIPE) {
+		return Filesys::WritePipe(file, buf, count);
+	}
+	if (!file->f_inode->i_sb) return -1;
 	SpinlockLocal guard(&vfs_lock);
 	FilesysTrait* fs = file->f_inode->i_sb->fs;
 
@@ -772,6 +780,10 @@ int Filesys::Write(vfs_file* file, const void* buf, stduint count) {
 }
 
 int Filesys::Close(vfs_file* file) {
+	if (!file || !file->f_inode) return -1;
+	if ((file->f_inode->i_mode & I_TYPE_MASK) == I_NAMED_PIPE) {
+		return Filesys::ClosePipe(file);
+	}
 	SpinlockLocal guard(&vfs_lock);
 	if (file) {
 		if (file->f_inode && file->f_pos > file->f_inode->i_size) {
@@ -1078,4 +1090,226 @@ file_system_type fs_fat = { "fat", [](StorageTrait& storage, stduint dev) -> Fil
 	},
 	nullptr
 };
+
+
+// ---- VFS Pipe Implementation ----
+
+extern "C" stduint sys_kill(stduint pid, int sig, stduint tid);
+
+int Filesys::CreatePipe(vfs_file** out_reader, vfs_file** out_writer) {
+	SpinlockLocal guard(&vfs_lock);
+	
+	// Allocate PipeChannel on heap
+	PipeChannel* chan = new PipeChannel();
+	if (!chan) return -1;
+	
+	// Allocate a 4KB memory buffer for the ring buffer
+	char* buf = new char[4096];
+	if (!buf) {
+		delete chan;
+		return -1;
+	}
+	chan->buffer = QueueLimited(Slice{ (stduint)buf, 4096 });
+	chan->reader_count = 1;
+	chan->writer_count = 1;
+	
+	// Allocate VFS Inode for the pipe
+	vfs_inode* inode = alloc_inode(nullptr);
+	if (!inode) {
+		delete[] buf;
+		delete chan;
+		return -1;
+	}
+	inode->i_mode = I_NAMED_PIPE;
+	inode->internal_handler = chan;
+	inode->ref_count = 2; // For reader and writer
+	inode->i_size = 0;
+	
+	// Allocate vfs_file for reader
+	vfs_file* file_r = new vfs_file();
+	if (!file_r) {
+		delete inode;
+		delete[] buf;
+		delete chan;
+		return -1;
+	}
+	file_r->f_dentry = nullptr;
+	file_r->f_inode = inode;
+	file_r->f_pos = 0;
+	file_r->f_mode = O_RDONLY;
+	
+	// Allocate vfs_file for writer
+	vfs_file* file_w = new vfs_file();
+	if (!file_w) {
+		delete file_r;
+		delete inode;
+		delete[] buf;
+		delete chan;
+		return -1;
+	}
+	file_w->f_dentry = nullptr;
+	file_w->f_inode = inode;
+	file_w->f_pos = 0;
+	file_w->f_mode = O_WRONLY;
+	
+	*out_reader = file_r;
+	*out_writer = file_w;
+	return 0;
+}
+
+int Filesys::ReadPipe(vfs_file* file, void* buf, stduint count) {
+	PipeChannel* chan = (PipeChannel*)file->f_inode->internal_handler;
+	if (!chan) return -1;
+
+	stduint bytes_read = 0;
+	byte* dst = (byte*)buf;
+	
+	while (bytes_read < count) {
+		chan->lock.Acquire();
+		
+		if (chan->buffer.is_empty()) {
+			if (chan->writer_count == 0) {
+				// EOF
+				chan->lock.Release();
+				break;
+			}
+			// Wait blockedly
+			ThreadBlock* th = Taskman::current_thread[Taskman::getID()];
+			chan->rq.Enqueue(th);
+			chan->lock.Release();
+			
+			// Block the thread
+			th->Block(ThreadBlock::BlockReason::BR_RecvMsg);
+			Taskman::Schedule(true);
+			
+			// Loop again
+			continue;
+		}
+		
+		// Read as much as possible
+		while (bytes_read < count && !chan->buffer.is_empty()) {
+			int ch = chan->buffer.inn();
+			if (ch == -1) break;
+			dst[bytes_read++] = (byte)ch;
+		}
+		
+		// Wake up writers
+		while (!chan->wq.isEmpty()) {
+			ThreadBlock* w_th = nullptr;
+			chan->wq.Dequeue(w_th);
+			if (w_th) {
+				w_th->Unblock(ThreadBlock::BlockReason::BR_SendMsg);
+			}
+		}
+		
+		chan->lock.Release();
+	}
+	
+	return bytes_read;
+}
+
+int Filesys::WritePipe(vfs_file* file, const void* buf, stduint count) {
+	PipeChannel* chan = (PipeChannel*)file->f_inode->internal_handler;
+	if (!chan) return -1;
+
+	stduint bytes_written = 0;
+	const byte* src = (const byte*)buf;
+	
+	while (bytes_written < count) {
+		chan->lock.Acquire();
+		
+		if (chan->reader_count == 0) {
+			// POSIX: write to pipe with no readers -> SIGPIPE
+			chan->lock.Release();
+			// Send SIGPIPE to current process
+			ThreadBlock* th = Taskman::current_thread[Taskman::getID()];
+			sys_kill(th->parent_process->pid, SIGPIPE, 0);
+			return -1; // -EPIPE
+		}
+		
+		if (chan->buffer.is_full()) {
+			// Wait blockedly
+			ThreadBlock* th = Taskman::current_thread[Taskman::getID()];
+			chan->wq.Enqueue(th);
+			chan->lock.Release();
+			
+			// Block the thread
+			th->Block(ThreadBlock::BlockReason::BR_SendMsg);
+			Taskman::Schedule(true);
+			
+			continue;
+		}
+		
+		// Write as much as possible
+		stduint chunk = count - bytes_written;
+		int written = chan->buffer.out((const char*)(src + bytes_written), chunk);
+		bytes_written += written;
+		
+		// Wake up readers
+		while (!chan->rq.isEmpty()) {
+			ThreadBlock* r_th = nullptr;
+			chan->rq.Dequeue(r_th);
+			if (r_th) {
+				r_th->Unblock(ThreadBlock::BlockReason::BR_RecvMsg);
+			}
+		}
+		
+		chan->lock.Release();
+	}
+	
+	return bytes_written;
+}
+
+int Filesys::ClosePipe(vfs_file* file) {
+	PipeChannel* chan = (PipeChannel*)file->f_inode->internal_handler;
+	if (!chan) return -1;
+	
+	chan->lock.Acquire();
+	if ((file->f_mode & O_ACCMODE) == O_RDONLY) {
+		chan->reader_count--;
+		if (chan->reader_count == 0) {
+			// Wake up blocked writers
+			while (!chan->wq.isEmpty()) {
+				ThreadBlock* w_th = nullptr;
+				chan->wq.Dequeue(w_th);
+				if (w_th) {
+					w_th->Unblock(ThreadBlock::BlockReason::BR_SendMsg);
+				}
+			}
+		}
+	} else if ((file->f_mode & O_ACCMODE) == O_WRONLY) {
+		chan->writer_count--;
+		if (chan->writer_count == 0) {
+			// Wake up blocked readers
+			while (!chan->rq.isEmpty()) {
+				ThreadBlock* r_th = nullptr;
+				chan->rq.Dequeue(r_th);
+				if (r_th) {
+					r_th->Unblock(ThreadBlock::BlockReason::BR_RecvMsg);
+				}
+			}
+		}
+	}
+	
+	bool destroy = (chan->reader_count == 0 && chan->writer_count == 0);
+	chan->lock.Release();
+	
+	if (destroy) {
+		delete[] (char*)chan->buffer.slice.address;
+		delete chan;
+		file->f_inode->internal_handler = nullptr;
+	}
+	
+	// Normal inode clean up
+	SpinlockLocal guard(&vfs_lock);
+	if (file->f_inode) {
+		// Inode ref_count is already decremented by ProcessBlock::Close,
+		// so we only delete it here when its ref_count reaches 0.
+		if (file->f_inode->ref_count == 0) {
+			delete file->f_inode;
+		}
+	}
+	free(file);
+	return 0;
+}
 

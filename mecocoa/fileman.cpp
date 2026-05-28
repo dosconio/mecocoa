@@ -252,6 +252,63 @@ stdsint ProcessBlock::Dup2(int oldfd, int newfd) {
 	return newfd;
 }
 
+stdsint ProcessBlock::Pipe(int pipefd[2]) {
+	MutexLocal guard(&this->sys_lock);
+	vfs_file* reader = nullptr;
+	vfs_file* writer = nullptr;
+
+	if (Filesys::CreatePipe(&reader, &writer) < 0) {
+		return -1;
+	}
+
+	// Helper logic to allocate fd and bind FileDescriptor in fileman
+	auto alloc_fd = [this](vfs_file* file, int mode) -> int {
+		int fd = -1;
+		for (stduint i = 0; i < self.pfiles.Count(); i++) {
+			if (!self.pfiles[i]) {
+				fd = i;
+				break;
+			}
+		}
+		if (fd == -1 && self.pfiles.Count() < DEFAULT_FILES_LIMIT) {
+			fd = self.pfiles.Count();
+			self.pfiles.Append(nullptr);
+		}
+		if (fd == -1) return -1;
+
+		FileDescriptor* pfd = nullptr;
+		for (stduint i = 0; i < 0x1000 / sizeof(FileDescriptor); i++) {
+			if (f_desc_table[i].vfile == nullptr) {
+				pfd = &f_desc_table[i];
+				if (i >= f_desc_table_count) f_desc_table_count = i + 1;
+				break;
+			}
+		}
+		if (!pfd) return -1;
+
+		self.pfiles[fd] = pfd;
+		pfd->vfile = file;
+		pfd->fd_mode = mode;
+		pfd->fd_pos = 0;
+		return fd;
+	};
+
+	int fd_r = alloc_fd(reader, O_RDONLY);
+	int fd_w = alloc_fd(writer, O_WRONLY);
+
+	if (fd_r < 0 || fd_w < 0) {
+		if (fd_r >= 0) Close(fd_r);
+		if (fd_w >= 0) Close(fd_w);
+		return -1;
+	}
+
+	// Safely copy fd values to user space array
+	MccaMemCopyP(pipefd, this, &fd_r, nullptr, sizeof(int));
+	MccaMemCopyP(pipefd + 1, this, &fd_w, nullptr, sizeof(int));
+
+	return 0;
+}
+
 FileDescriptor* FileDescriptor_Clone(FileDescriptor* src) {
 	if (!src || !src->vfile) return nullptr;
 	for (stduint i = 0; i < 0x1000 / sizeof(FileDescriptor); i++) {
@@ -264,7 +321,21 @@ FileDescriptor* FileDescriptor_Clone(FileDescriptor* src) {
 			*nvfile = *(src->vfile);
 			pfd->vfile = nvfile;
 			// Increment ref count of the inode
-			if (pfd->vfile->f_inode) pfd->vfile->f_inode->ref_count++;
+			if (pfd->vfile->f_inode) {
+				pfd->vfile->f_inode->ref_count++;
+				if ((pfd->vfile->f_inode->i_mode & I_TYPE_MASK) == I_NAMED_PIPE) {
+					PipeChannel* chan = (PipeChannel*)pfd->vfile->f_inode->internal_handler;
+					if (chan) {
+						chan->lock.Acquire();
+						if ((pfd->vfile->f_mode & O_ACCMODE) == O_RDONLY) {
+							chan->reader_count++;
+						} else if ((pfd->vfile->f_mode & O_ACCMODE) == O_WRONLY) {
+							chan->writer_count++;
+						}
+						chan->lock.Release();
+					}
+				}
+			}
 			return pfd;
 		}
 	}
@@ -285,7 +356,7 @@ void serv_file_loop()// for IDE 0:0, 0:1
 	stduint to_args[8];// 8*4=32 bytes
 	stduint sig_type = 0, sig_src = 0;
 	stduint retval[1];
-	ThreadBlock* tb;
+	::ThreadBlock* tb;
 
 	while (true) {
 		switch ((FilemanMsg)sig_type)

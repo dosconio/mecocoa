@@ -78,6 +78,16 @@ struct vfs_dentry {
 	vfs_dentry* d_mounted_on;
 };
 
+// Pipe channel representation for anonymous memory pipelines
+struct PipeChannel {
+	QueueLimited buffer;          // Circular ring buffer
+	stduint reader_count;         // Reader descriptors counter
+	stduint writer_count;         // Writer descriptors counter
+	Mutex lock;                   // Mutex to protect concurrent operations
+	Queue<::ThreadBlock*> rq;     // Read waiting queue
+	Queue<::ThreadBlock*> wq;     // Write waiting queue
+};
+
 // Opened file representation (File descriptor struct)
 struct vfs_file {
 	vfs_dentry* f_dentry;
@@ -108,6 +118,12 @@ public:
 public:
 	// Explicitly mount an instantiated FS to a path (used by DevFs and RootFs)
 	static bool MountFilesys(FilesysTrait* fs, file_system_type* type, const char* target_path);
+
+public:
+	static int CreatePipe(vfs_file** out_reader, vfs_file** out_writer);
+	static int ReadPipe(vfs_file* file, void* buf, stduint count);
+	static int WritePipe(vfs_file* file, const void* buf, stduint count);
+	static int ClosePipe(vfs_file* file);
 
 public:
 	static int Open(const char* pathname, int flags, vfs_file** out_file, vfs_dentry* base = nullptr);
