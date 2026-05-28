@@ -46,6 +46,7 @@ enum
 
 	GET_CORE_ID, // getcid () | rv
 	MANA, // manage (func, op1, op2)->?|(TODO)      | shutdown reboot...
+	DUP2, // dup2   (oldfd, newfd)->newfd |
 
 
 	TEST = 0xFF, // getpid (T,E,S)->0 | x86

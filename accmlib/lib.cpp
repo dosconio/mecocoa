@@ -14,13 +14,14 @@ stduint syscall(syscall_t callid, stduint p1, stduint p2, stduint p3) {
 #endif
 
 void outtxt(const char* str, stduint len) {
-	syscall(syscall_t::OUTC, (stduint)str, len, nil);
+	syscall(syscall_t::WRIT, 1, (stduint)str, len);// stdout
+	// syscall(syscall_t::OUTC, (stduint)str, len, nil);// bindout
 }
 void sysouts(const char* str)// 0
 {
 	auto len = StrLength(str);
 	if (!len) return;
-	syscall(syscall_t::OUTC, (stduint)str, len, nil);
+	syscall(syscall_t::WRIT, 1, (stduint)str, len);
 	// [Other Method]
 	//    syswrite(STDOUT, (void*)"Hello CCCCC!\n\r", 15);
 }
@@ -110,7 +111,9 @@ stduint get_core_id(stduint* ptr_hid) {
 	return syscall(syscall_t::GET_CORE_ID, _IMM(ptr_hid), nil, nil);
 }
 
-
+extern "C" int dup2(int oldfd, int newfd) {
+	return (int)syscall(syscall_t::DUP2, (stduint)oldfd, (stduint)newfd, nil);
+}
 
 // ----
 #define PROC_ORIGIN_STACK 128

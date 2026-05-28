@@ -106,3 +106,8 @@ Build Example:
 
 Emulate
 - VMware, VMBox, Bochs, QEMU-system-i386(9.2.4), TODO(Simics,Wel)
+
+## Test
+
+x86 : QEMU, VMware. (VMBox and Bochs are cancelled)
+

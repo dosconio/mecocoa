@@ -213,6 +213,45 @@ stdsint ProcessBlock::Seek(int fd, stdsint off, int whence) {
 	return pos;
 }
 
+stdsint ProcessBlock::Dup2(int oldfd, int newfd) {
+	MutexLocal guard(&this->sys_lock);
+
+	// Validate original file descriptor
+	if (oldfd < 0 || oldfd >= (stdsint)self.pfiles.Count() || !self.pfiles[oldfd]) {
+		return -1;
+	}
+
+	// POSIX standard: doing nothing if oldfd equals newfd
+	if (oldfd == newfd) {
+		return newfd;
+	}
+
+	// Close the target file descriptor first if it is open
+	if (newfd >= 0 && newfd < (stdsint)self.pfiles.Count() && self.pfiles[newfd]) {
+		if (self.pfiles[newfd]->vfile) {
+			if (self.pfiles[newfd]->vfile->f_inode) {
+				self.pfiles[newfd]->vfile->f_inode->ref_count--;
+			}
+			Filesys::Close(self.pfiles[newfd]->vfile);
+			self.pfiles[newfd]->vfile = nullptr;
+		}
+		self.pfiles[newfd] = nullptr;
+	}
+
+	// Expand the process file descriptors vector size if needed
+	while (self.pfiles.Count() <= (stduint)newfd) {
+		self.pfiles.Append(nullptr);
+	}
+
+	// Duplicate descriptor to the target slot
+	self.pfiles[newfd] = FileDescriptor_Clone(self.pfiles[oldfd]);
+	if (!self.pfiles[newfd]) {
+		return -1;
+	}
+
+	return newfd;
+}
+
 FileDescriptor* FileDescriptor_Clone(FileDescriptor* src) {
 	if (!src || !src->vfile) return nullptr;
 	for (stduint i = 0; i < 0x1000 / sizeof(FileDescriptor); i++) {

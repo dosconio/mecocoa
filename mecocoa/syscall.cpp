@@ -18,7 +18,7 @@ extern "C" stdsint sysc_SIGR(void* context);
 extern "C" void check_and_deliver_signals(void* context);
 
 // Syscall Wrappers
-extern stduint SYSCALL_TABLE[27];
+extern stduint SYSCALL_TABLE[29];
 
 void Syscall::Initialize() {
 	#if _MCCA == 0x8632
@@ -224,6 +224,12 @@ DEFSYSC sysc_CLOS(stduint fd) {
 	syssend(Task_FileSys, &open_msg, sizeof(open_msg), 0x03);
 	sysrecv(Task_FileSys, open_buf, byteof(open_buf));
 	return open_buf[0];// 0 for success
+}
+
+DEFSYSC sysc_DUP2(stduint oldfd, stduint newfd) {
+	ThreadBlock* th = Taskman::current_thread[Taskman::getID()];
+	ProcessBlock* pb = th->parent_process;
+	return pb->Dup2((int)oldfd, (int)newfd);
 }
 
 DEFSYSC sysc_READ(stduint fd, stduint addr, stduint len) {
@@ -598,6 +604,8 @@ stduint SYSCALL_TABLE[] = {
 	mglb(sysc_MMAP), // 0x18 (MMAP)
 	mglb(sysc_UMAP), // 0x19 (UMAP)
 	0, // 0x1A (GET_CORE_ID)
+	0, // 0x1B (MANA)
+	mglb(sysc_DUP2), // 0x1C (DUP2)
 };
 #endif
 
@@ -665,6 +673,9 @@ void syscall_body(NormalTaskContext* cxt)
 		break;
 	case syscall_t::ENUM:
 		cxt->a0 = sysc_ENUM(cxt->a0, cxt->a1, cxt->a2);
+		break;
+	case syscall_t::DUP2:
+		cxt->a0 = sysc_DUP2(cxt->a0, cxt->a1);
 		break;
 	default:
 		plogerro("Unknown syscall no: %d", syscall_num);

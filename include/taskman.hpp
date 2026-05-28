@@ -291,6 +291,7 @@ public: // _Comment(Fileman);
 	auto Rdwt(bool wr_type, stduint fid, Slice slice) -> stduint;
 	auto Close(int fid) -> bool;
 	auto Seek(int fd, stdsint off, int whence) -> stdsint;
+	auto Dup2(int oldfd, int newfd) -> stdsint;
 	//
 	static void Release(ProcessBlock* pb);
 	static ProcessBlock* Acquire(stduint tid);
