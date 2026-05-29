@@ -1,9 +1,16 @@
 AASM = aasm # a/n/yasm
 override arch=x86
-attr = -D_DEBUG -D_ACCM=0x8632 -I$(uincpath) -I$(uincpath)/c/API-POSIX
+TOOLCHAIN ?= i686-mcca-elf-
+attr = -D_DEBUG -D_ACCM=0x8632 -I$(uincpath) -I$(uincpath)/c/ISO_IEC_STD -I$(uincpath)/c/API-POSIX -Iaccmlib/sysroot/usr/include
 
 asmpref=_ae_
-asmfile=$(wildcard $(ulibpath)/asm/x86/*.asm) $(wildcard $(ulibpath)/asm/x86/**/*.asm) $(wildcard accmlib/x86/*.asm)
+CRT0_SRC=accmlib/arch/x86/crt0.asm
+CRT0_OBJ=$(dest_obj)/crt0.o
+SYSROOT_TRIPLE=i686-mcca
+SYSROOT_USR_LIB=accmlib/sysroot/usr/lib/$(SYSROOT_TRIPLE)
+SYSROOT_CRT0=$(SYSROOT_USR_LIB)/crt0.o
+SYSROOT_LIBC=$(SYSROOT_USR_LIB)/libc.a
+asmfile=$(filter-out $(CRT0_SRC),$(wildcard $(ulibpath)/asm/x86/*.asm) $(wildcard $(ulibpath)/asm/x86/**/*.asm) $(wildcard accmlib/arch/x86/*.asm))
 
 cplpref=_cc_
 cplfile=$(wildcard $(ulibpath)/c/*.c) $(wildcard $(ulibpath)/c/**/*.c) $(wildcard $(ulibpath)/c/**/**/*.c) $(wildcard accmlib/*.c)
@@ -13,12 +20,12 @@ cppfile=$(wildcard $(ulibpath)/cpp/*.cpp) $(wildcard $(ulibpath)/cpp/dat-block/*
 
 dest_obj=$(uobjpath)/accm-$(arch)
 COMWAN = -Wno-builtin-declaration-mismatch
-COMFLG = -m32 -static -fno-builtin -nostdlib -fno-stack-protector  -O2 $(COMWAN)
-CC=gcc 
+COMFLG = -m32 -static -fno-builtin -nostdlib -fno-stack-protector  -O2 -fno-strict-aliasing  $(COMWAN)
+CC=$(TOOLCHAIN)gcc
 CFLAGS=$(COMFLG) $(attr)
-CX=g++ 
+CX=$(TOOLCHAIN)g++
 XFLAGS=$(CFLAGS) -std=c++2a -fno-exceptions  -fno-unwind-tables -fno-rtti -Wno-volatile
-LD=ld -m elf_i386
+LD=$(TOOLCHAIN)ld -m elf_i386
 
 define asm_to_o
 $(dest_obj)/$(asmpref)$(notdir $(1:.asm=.o)): $(1)
@@ -39,17 +46,32 @@ cppobjs=$(addprefix $(dest_obj)/$(cpppref),$(patsubst %cpp,%o,$(notdir $(cppfile
 cplobjs=$(addprefix $(dest_obj)/$(cplpref),$(patsubst %c,%o,$(notdir $(cplfile))))
 
 .PHONY: all clean
-all: ${dest_obj}/lib$(arch).a
+all: $(SYSROOT_CRT0) $(SYSROOT_LIBC)
 
 $(dest_obj):
 	mkdir -p $@
 
-$(asmobjs) $(cplobjs) $(cppobjs): | $(dest_obj)
+$(CRT0_OBJ) $(asmobjs) $(cplobjs) $(cppobjs): | $(dest_obj)
+
+$(SYSROOT_USR_LIB):
+	mkdir -p $@
+
+$(CRT0_OBJ): $(CRT0_SRC)
+	@echo AS $(notdir $<)
+	@aasm -f elf -o $@ $< -MD $(patsubst %.o,%.d,$@)
+
+$(SYSROOT_CRT0): $(CRT0_OBJ) | $(SYSROOT_USR_LIB)
+	@echo "CP $(notdir $@)"
+	@cp $(CRT0_OBJ) $@
 
 ${dest_obj}/lib$(arch).a: $(asmobjs) $(cplobjs) $(cppobjs)
 	@-rm -f $@
 	@echo "AR $(notdir $@)"
 	@${AR} -rcs $@ $^
+
+$(SYSROOT_LIBC): ${dest_obj}/lib$(arch).a | $(SYSROOT_USR_LIB)
+	@echo "CP $(notdir $@)"
+	@cp $< $@
 
 
 $(foreach src,$(asmfile),$(eval $(call asm_to_o,$(src))))

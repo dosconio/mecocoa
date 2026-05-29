@@ -1,4 +1,4 @@
-#include "inc/aaaaa.h"
+#include "aaaaa.h"
 #include "c/ustring.h"
 #include "c/consio.h"
 #include "c/mempool.h"

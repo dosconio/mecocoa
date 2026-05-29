@@ -101,11 +101,12 @@ build: lib accm prehost/$(arch)/fatvhd.ignore $(cppobjs) build_util
 	# --- write out ---
 	@echo MK  $(arch) patadisk 0:0
 	@echo $(sudokey) | sudo -S kpartx -av $(ubinpath)/fixed2.vhd  >/dev/null # ls /dev/mapper/loop*p* && sudo mkfs.vfat -F 32 -n "DATA" /dev/mapper/loop*p7
+	@echo $(sudokey) | sudo -S mkfs.fat -F 32 -n "DATA" /dev/mapper/loop*p7 >/dev/null
 	@echo $(sudokey) | sudo -S mount /dev/mapper/loop*p7 $(mnts) #sudo fsck.vfat -v /dev/mapper/loop0p7 # fdisk # blkid
 	@echo $(sudokey) | sudo -S cp $(elf_kernel)     $(mnts)/mx86.elf
 	@echo $(sudokey) | sudo -S cp depends/fonts/simsun.ttf      $(mnts)/
 	@echo $(sudokey) | sudo -S echo "ようこそ，メココAの世界へ！" | sudo tee "${mnts}/ciallo.txt" > /dev/null
-	@echo $(sudokey) | sudo -S rm       $(mnts)/apps/*
+	#@echo $(sudokey) | sudo -S rm       $(mnts)/apps/*
 	@echo $(sudokey) | sudo -S mkdir -p $(mnts)/apps
 	@echo $(sudokey) | sudo -S cp $(uobjpath)/sapp-$(arch)/*    $(mnts)/apps/
 	@tree $(mnts) -s
@@ -118,7 +119,7 @@ build: lib accm prehost/$(arch)/fatvhd.ignore $(cppobjs) build_util
 	@echo "  " $(bochd) -f %ubinpath%/I686/mecocoa/bochsrc.bxrc
 	@echo "  " bochs -f $(archdir)/bochsrc-lin.bxrc -debugger
 
-ACCM_INCF=-I$(uincpath) -Iaccmlib -I$(uincpath)/c/API-POSIX
+ACCM_INCF=-I$(uincpath) -I$(uincpath)/c/API-POSIX
 ACCM_LIBS=accm-x86
 build_util:
 	@make -f subapps/Makefile.gcc.x86 \
@@ -152,7 +153,7 @@ prehost/$(arch)/fatvhd.ignore: build_util
 	mkfs.fat -n 'MECOCOA2' -s 2 -f 2 -R 32 -F 32 $@
 	@echo $(sudokey) | sudo -S mount -o loop $@ $(mntdir)
 	@echo $(sudokey) | sudo -S mv $(uobjpath)/sapp-$(arch)/init $(mntdir)/init
-	@echo $(sudokey) | sudo -S mv $(uobjpath)/sapp-$(arch)/cot  $(mntdir)/cot
+	@echo $(sudokey) | sudo -S cp $(uobjpath)/sapp-$(arch)/cot  $(mntdir)/cot
 	# from uni-utils:
 	@echo $(sudokey) | sudo -S mv $(uobjpath)/sapp-$(arch)/ls   $(mntdir)/ls
 	@echo $(sudokey) | sudo -S umount $(mntdir)
@@ -194,4 +195,3 @@ $(uobjpath)/mcca-$(arch)/%.o: %.cpp
 	@if [ "$(notdir $<)" = "freetype.cpp" ]; then objcopy --rename-section .text=.ext.freetype --rename-section .rodata=.ext.freetype --rename-section .data=.ext.freetype $@; fi
 
 -include $(uobjpath)/mcca-$(arch)/*.d
-

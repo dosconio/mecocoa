@@ -66,7 +66,7 @@ extern uni::Queue<SysMessage> message_queue;
 #define PCU_CORES_MAX 16
 #endif
 
-#define HIGHER_STACK_SIZE 0x4000
+#define HIGHER_STACK_SIZE 0x8000
 
 #if (_MCCA & 0xFF00) == 0x8600
 enum {

@@ -1,5 +1,5 @@
 //#include <c/stdinc.h>
-#include "../../accmlib/inc/aaaaa.h"
+#include "aaaaa.h"
 
 int main(int argc, char** argv)
 {

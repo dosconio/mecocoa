@@ -1,5 +1,5 @@
 //#include <c/stdinc.h>
-#include "../../../accmlib/inc/aaaaa.h"
+#include "../../../accmlib/aaaaa.h"
 #include "c/consio.h"
 
 using namespace uni;

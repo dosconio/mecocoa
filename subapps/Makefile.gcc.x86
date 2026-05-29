@@ -4,19 +4,35 @@
 
 BIN_DIR = $(uobjpath)/sapp-$(arch)
 LIBX86 = $(uobjpath)/$(ACCM_LIBS)/libx86.a
+MCCA_X86_TOOLCHAIN ?= i686-mcca-elf-
+MCCA_X86_TRIPLE ?= i686-mcca
+MCCA_X86_SYSROOT ?= accmlib/sysroot
+MCCA_X86_CC ?= $(MCCA_X86_TOOLCHAIN)gcc
+MCCA_X86_CXX ?= $(MCCA_X86_TOOLCHAIN)g++
+MCCA_X86_CRT0 = $(MCCA_X86_SYSROOT)/usr/lib/$(MCCA_X86_TRIPLE)/crt0.o
+MCCA_X86_LIBC = $(MCCA_X86_SYSROOT)/usr/lib/$(MCCA_X86_TRIPLE)/libc.a
+MCCA_X86_COMFLAGS = $(flag) -I$(uincpath) -I$(uincpath)/c/ISO_IEC_STD -I$(uincpath)/c/API-POSIX -I$(MCCA_X86_SYSROOT)/usr/include
+
+MCCA_X86_CFLAGS = $(MCCA_X86_COMFLAGS) --sysroot=$(MCCA_X86_SYSROOT) -m32 -ffreestanding -fno-builtin -fno-stack-protector -fno-pic -fno-pie -static -nostdlib
+MCCA_X86_CXXFLAGS = $(MCCA_X86_CFLAGS) -fno-exceptions -fno-rtti -fno-use-cxa-atexit -std=c++2a
+MCCA_X86_LDLIBS = $(MCCA_X86_CRT0) $(MCCA_X86_LIBC) -lgcc -Wl,-m,elf_i386 -Wl,-z,noexecstack -no-pie
+STDCPP_APP_CXXFLAGS = -m32 -static -nodefaultlibs -nostartfiles -fno-omit-frame-pointer -fno-stack-protector -fno-pic -fno-builtin -fno-strict-aliasing -ffunction-sections -fdata-sections $(CXW) -std=c++2a
+STDCPP_APP_LIBS = -L$(uobjpath)/$(ACCM_LIBS) -lx86 -lstdc++ -lsupc++ -lgcc -lm
 
 .PHONY: all clean
 
 all: $(BIN_DIR) \
-	$(BIN_DIR)/cot \
-	$(BIN_DIR)/sleep \
-	$(BIN_DIR)/ls \
-	$(BIN_DIR)/pwd \
-	$(BIN_DIR)/cat \
 	$(BIN_DIR)/init \
+	$(BIN_DIR)/cot \
+	$(BIN_DIR)/ls \
+	\
+	$(BIN_DIR)/fault \
+	\
+	$(BIN_DIR)/cat \
+	$(BIN_DIR)/sleep \
+	$(BIN_DIR)/pwd \
 	$(BIN_DIR)/test \
 	$(BIN_DIR)/paint \
-	$(BIN_DIR)/fault \
 	$(BIN_DIR)/cube \
 	$(BIN_DIR)/gblock \
 	$(BIN_DIR)/_rust \
@@ -26,88 +42,102 @@ all: $(BIN_DIR) \
 	$(BIN_DIR)/mkdir \
 	$(BIN_DIR)/echo \
 	$(BIN_DIR)/clear \
-	$(BIN_DIR)/args
+	$(BIN_DIR)/args \
+	$(BIN_DIR)/sort \
+	$(BIN_DIR)/more \
+	$(BIN_DIR)/grep \
 
 
 $(BIN_DIR):
 	mkdir -p $@
 
-$(BIN_DIR)/cot: $(uherpath)/COTLAB/src/cotlab.cpp $(LIBX86)
+$(BIN_DIR)/cot: $(uherpath)/COTLAB/src/cotlab.cpp $(LIBX86) $(MCCA_X86_CRT0)
 	@echo "MK appshell"
-	g++ $(ACCM_INCF) $(flag) -m32 $(CXF) $(CXW) -std=c++2a -o $@ $< -L$(uobjpath)/$(ACCM_LIBS) -lx86 -lgcc
+	$(MCCA_X86_CXX) $(MCCA_X86_CXXFLAGS) -o $@ $< $(MCCA_X86_LDLIBS)
 
-$(BIN_DIR)/sleep: $(uherpath)/unisym/demo/utilities/sleep.cpp $(LIBX86)
+$(BIN_DIR)/sleep: $(uherpath)/unisym/demo/utilities/sleep.cpp $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
 	@echo "MK sleep"
-	g++ $(ACCM_INCF) $(flag) -m32 $(CXF) $(CXW) -std=c++2a -o $@ $< -L$(uobjpath)/$(ACCM_LIBS) -lx86 -lgcc
+	$(MCCA_X86_CXX) $(MCCA_X86_CXXFLAGS) -o $@ $< $(MCCA_X86_LDLIBS)
 
-$(BIN_DIR)/ls: $(uherpath)/unisym/demo/utilities/ls.cpp $(LIBX86)
+$(BIN_DIR)/ls: $(uherpath)/unisym/demo/utilities/ls.cpp $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
 	@echo "MK ls"
-	g++ $(ACCM_INCF) $(flag) -m32 $(CXF) $(CXW) -std=c++2a -o $@ $< -L$(uobjpath)/$(ACCM_LIBS) -lx86 -lgcc
+	$(MCCA_X86_CXX) $(MCCA_X86_CXXFLAGS) -o $@ $< $(MCCA_X86_LDLIBS)
 
-$(BIN_DIR)/pwd: $(uherpath)/unisym/demo/utilities/pwd.cpp $(LIBX86)
+$(BIN_DIR)/pwd: $(uherpath)/unisym/demo/utilities/pwd.cpp $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
 	@echo "MK pwd"
-	g++ $(ACCM_INCF) $(flag) -m32 $(CXF) $(CXW) -std=c++2a -o $@ $< -L$(uobjpath)/$(ACCM_LIBS) -lx86 -lgcc
+	$(MCCA_X86_CXX) $(MCCA_X86_CXXFLAGS) -o $@ $< $(MCCA_X86_LDLIBS)
 
-$(BIN_DIR)/cat: $(uherpath)/unisym/demo/utilities/cat.cpp $(LIBX86)
+$(BIN_DIR)/cat: $(uherpath)/unisym/demo/utilities/cat.cpp $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
 	@echo "MK cat"
-	g++ $(ACCM_INCF) $(flag) -m32 $(CXF) $(CXW) -std=c++2a -o $@ $< -L$(uobjpath)/$(ACCM_LIBS) -lx86 -lgcc
+	$(MCCA_X86_CXX) $(MCCA_X86_CXXFLAGS) -o $@ $< $(MCCA_X86_LDLIBS)
 
-$(BIN_DIR)/init: subapps/init.cpp $(LIBX86)
+$(BIN_DIR)/init: subapps/init.cpp $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
 	@echo "MK appinit"
-	g++ $(ACCM_INCF) $(flag) -m32 $(CXF) $(CXW) -std=c++2a $< -o $@ -L$(uobjpath)/$(ACCM_LIBS) -lx86 -e _start
+	$(MCCA_X86_CXX) $(MCCA_X86_CXXFLAGS) -o $@ $< $(MCCA_X86_LDLIBS)
 
-$(BIN_DIR)/test: subapps/test.cpp $(ulibpath)/cpp/lango/lango-cpp.cpp $(LIBX86)
+$(BIN_DIR)/test: subapps/test.cpp $(ulibpath)/cpp/lango/lango-cpp.cpp $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
 	@echo "MK subtest"
-	g++ $(ACCM_INCF) $(flag) -m32 $(CXF) $(CXW) -std=c++2a subapps/test.cpp $(ulibpath)/cpp/lango/lango-cpp.cpp -o $@ -L$(uobjpath)/$(ACCM_LIBS) -lx86 -e _start
+	$(MCCA_X86_CXX) $(MCCA_X86_CXXFLAGS) -o $@ subapps/test.cpp $(ulibpath)/cpp/lango/lango-cpp.cpp $(MCCA_X86_LDLIBS)
 
-$(BIN_DIR)/paint: subapps/paint.cpp $(LIBX86)
+$(BIN_DIR)/paint: subapps/paint.cpp $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
 	@echo "MK paint"
-	g++ $(ACCM_INCF) $(flag) -m32 $(CXF) $(CXW) -std=c++2a $< -o $@ -L$(uobjpath)/$(ACCM_LIBS) -lx86 -e _start
+	$(MCCA_X86_CXX) $(MCCA_X86_CXXFLAGS) -o $@ $< $(MCCA_X86_LDLIBS)
 
-$(BIN_DIR)/fault: subapps/fault.cpp $(ulibpath)/cpp/lango/lango-cpp.cpp $(LIBX86)
+$(BIN_DIR)/fault: subapps/fault.cpp $(ulibpath)/cpp/lango/lango-cpp.cpp $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
 	@echo "MK fault"
-	g++ $(ACCM_INCF) $(flag) -m32 $(CXF2) -fno-rtti -fno-use-cxa-atexit -static -nostartfiles $(CXW) -std=c++2a subapps/fault.cpp $(ulibpath)/cpp/lango/lango-cpp.cpp -o $@ -L$(uobjpath)/$(ACCM_LIBS) -lx86 -e _start
+	$(MCCA_X86_CXX) $(MCCA_X86_CXXFLAGS) -o $@ subapps/fault.cpp $(ulibpath)/cpp/lango/lango-cpp.cpp $(MCCA_X86_LDLIBS)
 
-$(BIN_DIR)/cube: subapps/cube.cpp $(ulibpath)/cpp/lango/lango-cpp.cpp $(LIBX86)
+$(BIN_DIR)/cube: subapps/cube.cpp $(ulibpath)/cpp/lango/lango-cpp.cpp $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
 	@echo "MK cube"
-	g++ $(ACCM_INCF) $(flag) -m32 $(CXF2) -fno-rtti -fno-use-cxa-atexit -static -nostartfiles $(CXW) -std=c++2a subapps/cube.cpp $(ulibpath)/cpp/lango/lango-cpp.cpp -o $@ -L$(uobjpath)/$(ACCM_LIBS) -lx86 -e _start
+	$(MCCA_X86_CXX) $(MCCA_X86_CXXFLAGS) -o $@ subapps/cube.cpp $(ulibpath)/cpp/lango/lango-cpp.cpp $(MCCA_X86_LDLIBS)
 
-$(BIN_DIR)/gblock: subapps/game_breakout.cpp $(ulibpath)/cpp/lango/lango-cpp.cpp $(LIBX86)
+$(BIN_DIR)/gblock: subapps/game_breakout.cpp $(ulibpath)/cpp/lango/lango-cpp.cpp $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
 	@echo "MK game_breakout"
-	g++ $(ACCM_INCF) $(flag) -m32 $(CXF) $(CXW) -std=c++2a subapps/game_breakout.cpp $(ulibpath)/cpp/lango/lango-cpp.cpp -o $@ -L$(uobjpath)/$(ACCM_LIBS) -lx86 -e _start
+	$(MCCA_X86_CXX) $(MCCA_X86_CXXFLAGS) -o $@ subapps/game_breakout.cpp $(ulibpath)/cpp/lango/lango-cpp.cpp $(MCCA_X86_LDLIBS)
 
 $(BIN_DIR)/_rust: subapps/_hello/rust/src/main.rs subapps/_hello/rust/Cargo.toml
 	@echo "MK hello-rust"
 	@cd subapps/_hello/rust/ && cargo build --release --target ../../../configs/Rust/target/cargo-i686.json
 	cp subapps/_hello/rust/target/cargo-i686/release/rust $@
-$(BIN_DIR)/cp: $(uherpath)/unisym/demo/utilities/cp.c $(LIBX86)
+$(BIN_DIR)/cp: $(uherpath)/unisym/demo/utilities/cp.c $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
 	@echo "MK cp"
-	g++ $(ACCM_INCF) $(flag) -m32 $(CXF) $(CXW) -std=c++2a -o $@ $< -L$(uobjpath)/$(ACCM_LIBS) -lx86 -lgcc
+	$(MCCA_X86_CC) $(MCCA_X86_CFLAGS) -o $@ $< $(MCCA_X86_LDLIBS)
 
-$(BIN_DIR)/rm: $(uherpath)/unisym/demo/utilities/rm.c $(LIBX86)
+$(BIN_DIR)/rm: $(uherpath)/unisym/demo/utilities/rm.c $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
 	@echo "MK rm"
-	g++ $(ACCM_INCF) $(flag) -m32 $(CXF) $(CXW) -std=c++2a -o $@ $< -L$(uobjpath)/$(ACCM_LIBS) -lx86 -lgcc
+	$(MCCA_X86_CC) $(MCCA_X86_CFLAGS) -o $@ $< $(MCCA_X86_LDLIBS)
 
-$(BIN_DIR)/mv: $(uherpath)/unisym/demo/utilities/mv.c $(LIBX86)
+$(BIN_DIR)/mv: $(uherpath)/unisym/demo/utilities/mv.c $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
 	@echo "MK mv"
-	g++ $(ACCM_INCF) $(flag) -m32 $(CXF) $(CXW) -std=c++2a -o $@ $< -L$(uobjpath)/$(ACCM_LIBS) -lx86 -lgcc
+	$(MCCA_X86_CC) $(MCCA_X86_CFLAGS) -o $@ $< $(MCCA_X86_LDLIBS)
 
-$(BIN_DIR)/mkdir: $(uherpath)/unisym/demo/utilities/mkdir.c $(LIBX86)
+$(BIN_DIR)/mkdir: $(uherpath)/unisym/demo/utilities/mkdir.c $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
 	@echo "MK mkdir"
-	g++ $(ACCM_INCF) $(flag) -m32 $(CXF) $(CXW) -std=c++2a -o $@ $< -L$(uobjpath)/$(ACCM_LIBS) -lx86 -lgcc
+	$(MCCA_X86_CC) $(MCCA_X86_CFLAGS) -o $@ $< $(MCCA_X86_LDLIBS)
 
-$(BIN_DIR)/echo: $(uherpath)/unisym/demo/utilities/echo.c $(LIBX86)
+$(BIN_DIR)/echo: $(uherpath)/unisym/demo/utilities/echo.c $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
 	@echo "MK echo"
-	g++ $(ACCM_INCF) $(flag) -m32 $(CXF) $(CXW) -std=c++2a -o $@ $< -L$(uobjpath)/$(ACCM_LIBS) -lx86 -lgcc
+	$(MCCA_X86_CC) $(MCCA_X86_CFLAGS) -o $@ $< $(MCCA_X86_LDLIBS)
 
-$(BIN_DIR)/clear: $(uherpath)/unisym/demo/utilities/clear.c $(LIBX86)
+$(BIN_DIR)/clear: $(uherpath)/unisym/demo/utilities/clear.c $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
 	@echo "MK clear"
-	g++ $(ACCM_INCF) $(flag) -m32 $(CXF) $(CXW) -std=c++2a -o $@ $< -L$(uobjpath)/$(ACCM_LIBS) -lx86 -lgcc
+	$(MCCA_X86_CC) $(MCCA_X86_CFLAGS) -o $@ $< $(MCCA_X86_LDLIBS)
 
-$(BIN_DIR)/args: $(uherpath)/unisym/demo/utilities/args.c $(LIBX86)
+$(BIN_DIR)/args: $(uherpath)/unisym/demo/utilities/args.c $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
 	@echo "MK args"
-	g++ $(ACCM_INCF) $(flag) -m32 $(CXF) $(CXW) -std=c++2a -o $@ $< -L$(uobjpath)/$(ACCM_LIBS) -lx86 -lgcc
+	$(MCCA_X86_CC) $(MCCA_X86_CFLAGS) -o $@ $< $(MCCA_X86_LDLIBS)
 
+$(BIN_DIR)/more: $(uherpath)/unisym/demo/utilities/more.cpp $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
+	@echo "MK more"
+	$(MCCA_X86_CXX) $(MCCA_X86_CXXFLAGS) -o $@ $< $(MCCA_X86_LDLIBS)
+
+$(BIN_DIR)/grep: $(uherpath)/unisym/demo/utilities/grep.cpp $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
+	@echo "MK grep"
+	$(MCCA_X86_CXX) $(MCCA_X86_CXXFLAGS) -o $@ $< $(MCCA_X86_LDLIBS)
+
+$(BIN_DIR)/sort: $(uherpath)/unisym/demo/utilities/sort.cpp $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
+	@echo "MK sort"
+	$(MCCA_X86_CXX) $(MCCA_X86_CXXFLAGS) -o $@ $< $(MCCA_X86_LDLIBS)
 
 clean:
 	@echo "RM $(BIN_DIR)"

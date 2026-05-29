@@ -1,4 +1,4 @@
-#include "inc/aaaaa.h"
+#include "aaaaa.h"
 #include "c/ustring.h"
 #include "c/consio.h"
 
@@ -131,16 +131,16 @@ int spawnl(const char* path, const char* arg, ...)
 {
 	char* argv[_TEMP 16]; // Increased safe size
 	int argc = 0;
-	va_list args;
+	para_list args;
 	
 	argv[argc++] = (char*)arg;
-	va_start(args, arg);
+	para_ento(args, arg);
 	while (argc < numsof(argv) - 1) {
-		char* next_arg = va_arg(args, char*);
+		char* next_arg = para_next(args, char*);
 		argv[argc++] = next_arg;
 		if (next_arg == nullptr || next_arg == 0) break;
 	}
-	va_end(args);
+	para_endo(args);
 	argv[argc] = nullptr; 
 	return spawnve(path, argv, nullptr);
 }
@@ -150,16 +150,16 @@ int execl(const char* path, const char* arg, ...)
 {
 	char* argv[_TEMP 16];
 	int argc = 0;
-	va_list args;
+	para_list args;
 	
 	argv[argc++] = (char*)arg;
-	va_start(args, arg);
+	para_ento(args, arg);
 	while (argc < numsof(argv) - 1) {
-		char* next_arg = va_arg(args, char*);
+		char* next_arg = para_next(args, char*);
 		argv[argc++] = next_arg;
 		if (next_arg == nullptr || next_arg == 0) break;
 	}
-	va_end(args);
+	para_endo(args);
 	argv[argc] = nullptr; 
 	return execv(path, argv);
 }
@@ -316,10 +316,10 @@ extern "C" char* strchr(const char* s, int c) {
 #include <stdarg.h>
 
 extern "C" int printf(const char* fmt, ...) {
-	va_list args;
-	va_start(args, fmt);
+	para_list args;
+	para_ento(args, fmt);
 	int ret = outsfmtlst(fmt, args);
-	va_end(args);
+	para_endo(args);
 	return ret;
 }
 

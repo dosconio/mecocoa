@@ -2,7 +2,7 @@ AASM = aasm # a/n/yasm
 arch=riscv64
 
 asmpref=_ag_
-asmfile=$(wildcard accmlib/riscv/*.S)
+asmfile=$(wildcard accmlib/arch/riscv/*.S)
 asmobjs=$(patsubst %S, %o, $(asmfile))
 
 cplpref=_cc_
@@ -24,7 +24,7 @@ else
 endif
 CFLAGS += -nostdlib -fno-builtin -Wall -Wno-unused-variable -Wno-unused-function -Wno-parentheses
 CFLAGS += -march=rv64g -mabi=lp64
-CFLAGS += -I$(uincpath) -D_ACCM=0x1064 -D_OPT_RISCV64 -D_DEBUG
+CFLAGS += -I$(uincpath) -Iaccmlib/sysroot/usr/include -D_ACCM=0x1064 -D_OPT_RISCV64 -D_DEBUG
 CFLAGS += -fno-strict-aliasing -fno-exceptions -fno-stack-protector
 CFLAGS += -g
 XFLAGS  = $(CFLAGS) -fno-rtti -fno-use-cxa-atexit

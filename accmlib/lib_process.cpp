@@ -1,4 +1,4 @@
-#include "inc/aaaaa.h"
+#include "aaaaa.h"
 #include <unistd.h>
 #include <sys/wait.h>
 

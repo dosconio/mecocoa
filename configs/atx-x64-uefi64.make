@@ -113,7 +113,7 @@ $(ubinpath)/$(arch).img: loader
 	qemu-img create -f raw $@ 100M > /dev/null
 	mkfs.fat -n 'MECOCOA ' -s 2 -f 2 -R 32 -F 32 $@ > /dev/null
 
-ACCM_INCF=-I$(uincpath) -Iaccmlib -I$(uincpath)/c/API-POSIX
+ACCM_INCF=-I$(uincpath) -Iaccmlib/sysroot/usr/include -I$(uincpath)/c/API-POSIX
 ACCM_LIBS=accm-x64
 build_util:
 	mkdir -p $(uobjpath)/sapp-$(arch)

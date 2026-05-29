@@ -42,7 +42,7 @@ $(uobjpath)/sapp-$(arch)/loop_echo: subapps/_basic/loop_echo.cpp
 	$(MKDIR) $(uobjpath)/sapp-$(arch)
 	echo MK $<
 	@${CX} ${XFLAGS} $< -o $(uobjpath)/sapp-$(arch)/loop_echo \
-		-L$(uobjpath)/accm-riscv64 -lriscv64 -T accmlib/accmrv.ld
+		-L$(uobjpath)/accm-riscv64 -lriscv64 -T accmlib/accmrv.ld -Iaccmlib/sysroot/usr/include
 $(archdir)/kerdisk.fat: $(uobjpath)/sapp-$(arch)/loop_echo
 	$(MKDIR) $(archdir)
 	dd if=/dev/zero of=$@ bs=1M count=1

@@ -750,6 +750,7 @@ void _Comment(R1) serv_shell_process() {
 		else {
 			goto shell_exit;
 		}
+		syscall(syscall_t::REST, 0, 0);
 	}
 
 shell_exit:
@@ -896,7 +897,8 @@ void _Comment(R1) serv_cons_loop()
 				if (sig_src < TaskCount) {
 					pb_target = ProcessBlock::AcquireByPID(to_args[1]);
 					need_release = true;
-				} else {
+				}
+				else {
 					pb_target = safe_pb;
 				}
 				if (pb_target) {
@@ -904,7 +906,8 @@ void _Comment(R1) serv_cons_loop()
 					if (need_release) {
 						ProcessBlock::Release(pb_target);
 					}
-				} else {
+				}
+				else {
 					ret = -1;
 				}
 				syssend_async(sig_src, (void*)&ret, sizeof(ret));
@@ -950,6 +953,7 @@ void _Comment(R1) serv_cons_loop()
 			}
 			ProcessBlock::Release(safe_pb);
 		}
+		else HALT();
 		syscall(syscall_t::REST);
 	}
 }

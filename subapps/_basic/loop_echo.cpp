@@ -1,5 +1,5 @@
 
-#include "../../accmlib/inc/aaaaa.h"
+#include "aaaaa.h"
 
 auto main(int argc, char** argv) -> int
 {

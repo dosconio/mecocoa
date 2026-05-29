@@ -1,4 +1,4 @@
-#include "inc/aaaaa.h"
+#include "aaaaa.h"
 #include "cpp/queue"
 #include <sys/wait.h>
 

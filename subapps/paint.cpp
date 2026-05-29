@@ -4,7 +4,7 @@
 // ModuTitle: Clean Paint Application
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 
-#include "../accmlib/inc/aaaaa.h"
+#include "aaaaa.h"
 #include "c/consio.h"
 
 using namespace uni;

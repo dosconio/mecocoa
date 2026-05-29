@@ -1,4 +1,4 @@
-#include "../accmlib/inc/aaaaa.h"
+#include "aaaaa.h"
 
 int main(int argc, char** argv) {
 	const char* cmd = "hlt";

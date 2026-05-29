@@ -1,15 +1,15 @@
 AASM = aasm # a/n/yasm
 override arch=x64
-attr = -D_DEBUG -D_ACCM=0x8664 -I$(uincpath)  -I$(uincpath)/c/API-POSIX
+attr = -D_DEBUG -D_ACCM=0x8664 -I$(uincpath)  -I$(uincpath)/c/API-POSIX -Iaccmlib/sysroot/usr/include
 
 asmpref=_ae_
-asmfile=$(wildcard $(ulibpath)/asm/x64/*.asm) $(wildcard $(ulibpath)/asm/x64/**/*.asm) $(wildcard accmlib/x64/*.asm)
+asmfile=$(wildcard $(ulibpath)/asm/x64/*.asm) $(wildcard $(ulibpath)/asm/x64/**/*.asm) $(wildcard accmlib/arch/x64/*.asm)
 
 cplpref=_cc_
 cplfile=$(wildcard $(ulibpath)/c/*.c) $(wildcard $(ulibpath)/c/**/*.c) $(wildcard $(ulibpath)/c/**/**/*.c) $(wildcard accmlib/*.c)
 
 cpppref=_cx_
-cppfile=$(wildcard $(ulibpath)/cpp/*.cpp) $(wildcard $(ulibpath)/cpp/dat-block/*.cpp) $(wildcard accmlib/*.cpp) prehost/_auxiliary.cpp
+cppfile=$(wildcard $(ulibpath)/cpp/*.cpp) $(wildcard $(ulibpath)/cpp/dat-block/*.cpp) $(wildcard accmlib/*.cpp) prehost/_auxiliary.cpp $(ulibpath)/cpp/grp-base/bstring.cpp
 
 dest_obj=$(uobjpath)/accm-$(arch)
 COMWAN = -Wno-builtin-declaration-mismatch

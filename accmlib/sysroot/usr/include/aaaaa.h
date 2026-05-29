@@ -4,9 +4,9 @@
 using namespace uni;
 #endif
 // #include "../../include/syscall.hpp"
-#include "../../include/taskman.hpp"
-#include "../../include/fileman.hpp"
-#include "../../include/console.hpp"
+#include "../../../../include/taskman.hpp"
+#include "../../../../include/fileman.hpp"
+#include "../../../../include/console.hpp"
 
 #define sysrecv(pid,msg) syscomm(0,pid,msg)
 #define syssend(pid,msg) syscomm(1,pid,msg)

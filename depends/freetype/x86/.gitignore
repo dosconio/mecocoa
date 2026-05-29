@@ -1,0 +1,7 @@
+*
+!.gitignore
+!*/
+!*.mcca
+!include/freetype/config/ftmodule.h
+!include/freetype/config/ftoption.h
+!src/base/ftsystem.c

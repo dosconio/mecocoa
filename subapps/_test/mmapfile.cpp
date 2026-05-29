@@ -1,5 +1,5 @@
 //#include <c/stdinc.h>
-#include "../../accmlib/inc/aaaaa.h"
+#include "aaaaa.h"
 #include "c/consio.h"
 #include "unistd.h"
 #include <c/ISO_IEC_STD/signal.h>
