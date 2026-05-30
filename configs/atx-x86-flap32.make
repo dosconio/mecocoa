@@ -24,7 +24,7 @@ CXF1=-m32 -mno-red-zone -mno-sse -mno-sse2 -mno-sse3 -mno-ssse3 -mno-sse4
 CXF2=-ffreestanding -fno-omit-frame-pointer -fno-stack-protector -fno-pic -fno-exceptions -fno-unwind-tables -fno-builtin -fno-strict-aliasing -ffunction-sections -fdata-sections
 CXF=$(CXF1) $(CXF2) -fno-rtti -fno-use-cxa-atexit -static -nostdlib 
 CXW=-Wno-builtin-declaration-mismatch -Wno-volatile -Wno-multichar
-CX=g++ -I$(uincpath) -Idepends/freetype/x86/include -c $(flag) $(CXF) $(CXW) -std=c++2a
+CX=g++ -I$(uincpath) -c $(flag) $(CXF) $(CXW) -std=c++2a
 
 ker_mod=$(uobjpath)/mcca-$(arch)/*.o
 
@@ -186,7 +186,8 @@ clean:
 	@make -f subapps/Makefile.gcc.x86 clean \
 		arch=$(arch) \
 		uobjpath=$(uobjpath)
-
+clean-app:
+	@-rm -r $(uobjpath)/sapp-$(arch)/*
 
 $(uobjpath)/mcca-$(arch)/%.o: %.cpp
 	@mkdir $(uobjpath)/mcca-$(arch) -p

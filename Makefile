@@ -23,6 +23,9 @@ clean:
 	cd $(ulibpath)/.. && make clean
 	@make -f configs/$(arch).make clean --silent
 
+clean-app:
+	@make -f configs/$(arch).make clean-app --silent
+
 pack:
 	@make -f configs/$(arch).make pack --silent
 

@@ -43,6 +43,8 @@ struct vfs_super_block {
 #define I_DIRECTORY     0040000
 #define I_CHAR_SPECIAL  0020000
 #define I_NAMED_PIPE	0010000
+#define I_LNK           0120000  //{TODO} (SymLink)
+#define I_SOCK          0140000  //{TODO} (Socket)
 #endif
 
 // In-memory node structure

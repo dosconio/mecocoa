@@ -28,7 +28,7 @@ x64u only
 ### Storage
 
 - Floppy
-- PATA Disk
+- PATA Disk (MBR)
 - ATAPI CD
 
 

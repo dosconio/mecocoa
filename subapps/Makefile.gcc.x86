@@ -19,33 +19,30 @@ MCCA_X86_LDLIBS = $(MCCA_X86_CRT0) $(MCCA_X86_LIBC) -lgcc -Wl,-m,elf_i386 -Wl,-z
 STDCPP_APP_CXXFLAGS = -m32 -static -nodefaultlibs -nostartfiles -fno-omit-frame-pointer -fno-stack-protector -fno-pic -fno-builtin -fno-strict-aliasing -ffunction-sections -fdata-sections $(CXW) -std=c++2a
 STDCPP_APP_LIBS = -L$(uobjpath)/$(ACCM_LIBS) -lx86 -lstdc++ -lsupc++ -lgcc -lm
 
+UNIS_UTIL_DIR = $(ulibpath)/../demo/utilities
+UNIS_UTIL_C_SRCS = $(wildcard $(UNIS_UTIL_DIR)/*.c)
+UNIS_UTIL_CPP_SRCS = $(wildcard $(UNIS_UTIL_DIR)/*.cpp)
+UNIS_UTIL_APPS = $(sort $(addprefix $(BIN_DIR)/,$(basename $(notdir $(UNIS_UTIL_C_SRCS) $(UNIS_UTIL_CPP_SRCS)))))
+
+# ---- COTL INIT ---- #
+# ---- UNIS UTIL ---- #
+# ---- MCCA UTIL ---- #
+
 .PHONY: all clean
 
 all: $(BIN_DIR) \
 	$(BIN_DIR)/init \
 	$(BIN_DIR)/cot \
-	$(BIN_DIR)/ls \
+	$(UNIS_UTIL_APPS) \
 	\
 	$(BIN_DIR)/fault \
 	\
-	$(BIN_DIR)/cat \
-	$(BIN_DIR)/sleep \
-	$(BIN_DIR)/pwd \
 	$(BIN_DIR)/test \
 	$(BIN_DIR)/paint \
 	$(BIN_DIR)/cube \
 	$(BIN_DIR)/gblock \
 	$(BIN_DIR)/_rust \
-	$(BIN_DIR)/cp \
-	$(BIN_DIR)/rm \
-	$(BIN_DIR)/mv \
-	$(BIN_DIR)/mkdir \
-	$(BIN_DIR)/echo \
-	$(BIN_DIR)/clear \
-	$(BIN_DIR)/args \
-	$(BIN_DIR)/sort \
-	$(BIN_DIR)/more \
-	$(BIN_DIR)/grep \
+	\
 
 
 $(BIN_DIR):
@@ -55,21 +52,13 @@ $(BIN_DIR)/cot: $(uherpath)/COTLAB/src/cotlab.cpp $(LIBX86) $(MCCA_X86_CRT0)
 	@echo "MK appshell"
 	$(MCCA_X86_CXX) $(MCCA_X86_CXXFLAGS) -o $@ $< $(MCCA_X86_LDLIBS)
 
-$(BIN_DIR)/sleep: $(uherpath)/unisym/demo/utilities/sleep.cpp $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
-	@echo "MK sleep"
-	$(MCCA_X86_CXX) $(MCCA_X86_CXXFLAGS) -o $@ $< $(MCCA_X86_LDLIBS)
+$(BIN_DIR)/%: $(UNIS_UTIL_DIR)/%.c $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
+	@echo "MK $*"
+	$(MCCA_X86_CC) $(MCCA_X86_CFLAGS) -o $@ $< $(MCCA_X86_LDLIBS)
 
-$(BIN_DIR)/ls: $(uherpath)/unisym/demo/utilities/ls.cpp $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
-	@echo "MK ls"
-	$(MCCA_X86_CXX) $(MCCA_X86_CXXFLAGS) -o $@ $< $(MCCA_X86_LDLIBS)
-
-$(BIN_DIR)/pwd: $(uherpath)/unisym/demo/utilities/pwd.cpp $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
-	@echo "MK pwd"
-	$(MCCA_X86_CXX) $(MCCA_X86_CXXFLAGS) -o $@ $< $(MCCA_X86_LDLIBS)
-
-$(BIN_DIR)/cat: $(uherpath)/unisym/demo/utilities/cat.cpp $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
-	@echo "MK cat"
-	$(MCCA_X86_CXX) $(MCCA_X86_CXXFLAGS) -o $@ $< $(MCCA_X86_LDLIBS)
+$(BIN_DIR)/%: $(UNIS_UTIL_DIR)/%.cpp $(ulibpath)/cpp/lango/lango-cpp.cpp $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
+	@echo "MK $*"
+	$(MCCA_X86_CXX) $(MCCA_X86_CXXFLAGS) -o $@ $< $(ulibpath)/cpp/lango/lango-cpp.cpp $(MCCA_X86_LDLIBS)
 
 $(BIN_DIR)/init: subapps/init.cpp $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
 	@echo "MK appinit"
@@ -99,45 +88,6 @@ $(BIN_DIR)/_rust: subapps/_hello/rust/src/main.rs subapps/_hello/rust/Cargo.toml
 	@echo "MK hello-rust"
 	@cd subapps/_hello/rust/ && cargo build --release --target ../../../configs/Rust/target/cargo-i686.json
 	cp subapps/_hello/rust/target/cargo-i686/release/rust $@
-$(BIN_DIR)/cp: $(uherpath)/unisym/demo/utilities/cp.c $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
-	@echo "MK cp"
-	$(MCCA_X86_CC) $(MCCA_X86_CFLAGS) -o $@ $< $(MCCA_X86_LDLIBS)
-
-$(BIN_DIR)/rm: $(uherpath)/unisym/demo/utilities/rm.c $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
-	@echo "MK rm"
-	$(MCCA_X86_CC) $(MCCA_X86_CFLAGS) -o $@ $< $(MCCA_X86_LDLIBS)
-
-$(BIN_DIR)/mv: $(uherpath)/unisym/demo/utilities/mv.c $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
-	@echo "MK mv"
-	$(MCCA_X86_CC) $(MCCA_X86_CFLAGS) -o $@ $< $(MCCA_X86_LDLIBS)
-
-$(BIN_DIR)/mkdir: $(uherpath)/unisym/demo/utilities/mkdir.c $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
-	@echo "MK mkdir"
-	$(MCCA_X86_CC) $(MCCA_X86_CFLAGS) -o $@ $< $(MCCA_X86_LDLIBS)
-
-$(BIN_DIR)/echo: $(uherpath)/unisym/demo/utilities/echo.c $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
-	@echo "MK echo"
-	$(MCCA_X86_CC) $(MCCA_X86_CFLAGS) -o $@ $< $(MCCA_X86_LDLIBS)
-
-$(BIN_DIR)/clear: $(uherpath)/unisym/demo/utilities/clear.c $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
-	@echo "MK clear"
-	$(MCCA_X86_CC) $(MCCA_X86_CFLAGS) -o $@ $< $(MCCA_X86_LDLIBS)
-
-$(BIN_DIR)/args: $(uherpath)/unisym/demo/utilities/args.c $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
-	@echo "MK args"
-	$(MCCA_X86_CC) $(MCCA_X86_CFLAGS) -o $@ $< $(MCCA_X86_LDLIBS)
-
-$(BIN_DIR)/more: $(uherpath)/unisym/demo/utilities/more.cpp $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
-	@echo "MK more"
-	$(MCCA_X86_CXX) $(MCCA_X86_CXXFLAGS) -o $@ $< $(MCCA_X86_LDLIBS)
-
-$(BIN_DIR)/grep: $(uherpath)/unisym/demo/utilities/grep.cpp $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
-	@echo "MK grep"
-	$(MCCA_X86_CXX) $(MCCA_X86_CXXFLAGS) -o $@ $< $(MCCA_X86_LDLIBS)
-
-$(BIN_DIR)/sort: $(uherpath)/unisym/demo/utilities/sort.cpp $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
-	@echo "MK sort"
-	$(MCCA_X86_CXX) $(MCCA_X86_CXXFLAGS) -o $@ $< $(MCCA_X86_LDLIBS)
 
 clean:
 	@echo "RM $(BIN_DIR)"

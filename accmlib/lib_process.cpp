@@ -2,11 +2,16 @@
 #include <unistd.h>
 #include <sys/wait.h>
 
-void _exit(int code)
+extern "C" void _exit(int code)
 {
 	syscall(syscall_t::EXIT, code, nil, nil);// 戰至最後一刻！
 	*((byte*)nullptr) = nil;// 自刎歸天⚔️（介錯）
 	while (1);// 歸天失敗
+}
+
+extern "C" void exit(int code)
+{
+	_exit(code);
 }
 
 pid_t fork() {

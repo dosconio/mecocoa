@@ -311,6 +311,10 @@ extern "C" char* strchr(const char* s, int c) {
 	return (char*)StrIndexChar(s, c);
 }
 
+extern "C" int atoi(const char* nptr) {
+	return (int)atoins(nptr);
+}
+
 
 
 #include <stdarg.h>

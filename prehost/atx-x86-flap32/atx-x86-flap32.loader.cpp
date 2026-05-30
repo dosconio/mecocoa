@@ -130,6 +130,8 @@ PartitionSlice Harddisk_PATA::getSlice(stduint dev) {
 stduint FilesysFAT::writfl(void* fil_handler, Slice file_slice, const byte* sors) { return nil; }
 bool FilesysFAT::remove(rostr pathname) { return false; }
 bool FilesysFAT::create(rostr fullpath, stduint flags, void* exinfo, rostr linkdest) { return false; }
+bool FilesysFAT::truncate(void* fil_handler, stduint size) { return false; }
+bool FilesysFAT::rename(rostr src_path, rostr dst_path) { return false; }
 
 void operator delete(void* ptr, stduint size) noexcept {}
 _ESYM_C void* calloc(size_t nmemb, size_t size) { return 0; }
