@@ -7,7 +7,11 @@
 
 
 #if (_MCCA & 0xFF00) == 0x8600
-TSS_t* PCU_CORES_TSS[PCU_CORES_MAX] = {};
+PERCORE* Taskman::PCU_CORES_PERCORE[PCU_CORES_MAX] = {};
+#else
+ThreadBlock* PCU_CORES_current_thread[PCU_CORES_MAX] = {};
+ThreadBlock* PCU_CORES_idle_thread[PCU_CORES_MAX] = {};
+ThreadBlock* volatile PCU_CORES_switching_out_threads[PCU_CORES_MAX] = {};
 #endif
 #ifdef _ARC_x86 // x86:
 #endif
@@ -17,9 +21,6 @@ stduint Taskman::min_available_pid;// in chain
 Dnode* Taskman::min_available_left;;
 
 stduint Taskman::PCU_CORES = 0;
-ThreadBlock* Taskman::current_thread[PCU_CORES_MAX];
-ThreadBlock* Taskman::idle_thread[PCU_CORES_MAX];
-ThreadBlock* volatile Taskman::switching_out_threads[PCU_CORES_MAX];
 stduint Taskman::min_available_tid = 0;
 Dchain Taskman::thchain = { nullptr };
 // Dnode* Taskman::min_available_thleft = nullptr;
@@ -30,6 +31,67 @@ Taskman::ReadyQueue Taskman::expired_queues[32] = {};
 unsigned int Taskman::ready_bitmap = 0;
 unsigned int Taskman::expired_bitmap = 0;
 Spinlock scheduler_lock;
+
+#if   _MCCA == 0x8632
+#define _NORMAL_RINGSTACK 0xFFC01000ull
+#elif _MCCA == 0x8664
+#define _NORMAL_RINGSTACK 0xFFFFFFFFC0001000ull
+#endif
+
+#if (_MCCA & 0xFF00) == 0x8600
+static void RebindThreadKernelStackWindow(ThreadBlock* th) {
+	if (!th || !th->parent_process || !th->stack_levladdr || !th->stack_size) return;
+
+	auto remap_stack_window = [&](Paging& pg) {
+		pg.Map(
+			_NORMAL_RINGSTACK,
+			_IMM(th->stack_levladdr),
+			th->stack_size,
+			PAGESIZE_4KB,
+			PGPROP_present | PGPROP_writable
+		);
+	};
+
+	// The currently active CR3 still needs this fixed VA window to point at the
+	// incoming thread's ring0 stack because SwitchTaskContext restores the new
+	// kernel continuation before it switches CR3.
+	remap_stack_window(kernel_paging);
+	remap_stack_window(th->parent_process->paging);
+	Paging active_pg = {};
+	active_pg.root_level_page = (PageEntry*)getCR3();
+	if (active_pg.root_level_page != kernel_paging.root_level_page &&
+		active_pg.root_level_page != th->parent_process->paging.root_level_page) {
+		remap_stack_window(active_pg);
+	}
+
+	for (stduint off = 0; off < th->stack_size; off += 0x1000) {
+		RefreshVirtualAddress(_NORMAL_RINGSTACK + off);
+	}
+}
+#endif
+
+#if _MCCA == 0x8664
+static void BindCurrentKernelEntryStack(ThreadBlock* th, stduint cpuid) {
+	if (!th) return;
+	auto percore = Taskman::PCU_CORES_PERCORE[cpuid];
+	if (!percore) return;
+	RebindThreadKernelStackWindow(th);
+	percore->current_thread = th;
+	percore->kernel_rsp = _NORMAL_RINGSTACK + th->stack_size;
+	percore->tss.RSP0 = percore->kernel_rsp;
+	if (!percore->current_thread) {
+		printlog(_LOG_FATAL, "x64 sched assert: null current_thread on CPU%u", cpuid);
+	}
+	if (!percore->kernel_rsp) {
+		printlog(_LOG_FATAL, "x64 sched assert: zero kernel_rsp on CPU%u TID%u", cpuid, th->tid);
+	}
+	if (percore->tss.RSP0 != percore->kernel_rsp) {
+		printlog(_LOG_FATAL,
+			"x64 sched assert: TSS.RSP0 mismatch on CPU%u TID%u rsp0=%[x] krsp=%[x]",
+			cpuid, th->tid, percore->tss.RSP0, percore->kernel_rsp);
+	}
+}
+#endif
 
 void Taskman::EnqueueReady(ThreadBlock* pb, bool lock) {
 	stduint old_if = 0;
@@ -148,8 +210,8 @@ ThreadBlock* Taskman::PickNext() {
 			if (!node->just_schedule) {
 				// Check whether node is in the array: 
 				for (int i = 0; i < PCU_CORES_MAX; i++) {
-					if (switching_out_threads[i] == node) {
-						switching_out_threads[i] = nullptr;
+					if (switching_out_threads(i) == node) {
+						switching_out_threads(i) = nullptr;
 						break;
 					}
 				}
@@ -327,20 +389,23 @@ auto Taskman::Schedule(bool omit_slice)->decltype(Schedule())
 	bool old_if = scheduler_lock.Acquire();
 	using TBS = ThreadBlock::State;
 	stduint cpuid = getID();
-	
+
 	// Release the CPU's hold on switching output thread in clock cycle.
-	if (switching_out_threads[cpuid] != nullptr) {
-		// switching_out_threads[cpuid]->just_schedule = 0;//
-		switching_out_threads[cpuid] = nullptr;
+	if (switching_out_threads(cpuid) != nullptr) {
+		auto completed_th = switching_out_threads(cpuid);
+		if (completed_th->state == ThreadBlock::State::Hanging && completed_th->is_detached) {
+			Taskman::DestroyThread(completed_th);
+		}
+		switching_out_threads(cpuid) = nullptr;
 	}
-	
-	auto old_tb = current_thread[cpuid];
+
+	auto old_tb = current_thread(cpuid);
 	if (!old_tb) {
 		plogerro("Taskman:Schedule: No current task found for CPU %d", cpuid);
 		HALT();
 		return;
 	}
-	bool is_idle = (old_tb == idle_thread[cpuid]);
+	bool is_idle = (old_tb == idle_thread(cpuid));
 	if (!omit_slice) {
 		if (!is_idle && ifContinueProcess(old_tb)) {
 			scheduler_lock.Release(old_if);
@@ -371,9 +436,10 @@ auto Taskman::Schedule(bool omit_slice)->decltype(Schedule())
 	if (!new_tb) {
 		// Fallback to self if runnable, otherwise switch to Idle thread
 		if (old_tb->state == TBS::Running || old_tb->state == TBS::Ready) {
-			new_tb = old_tb; 
-		} else {
-			new_tb = idle_thread[cpuid];
+			new_tb = old_tb;
+		}
+		else {
+			new_tb = idle_thread(cpuid);
 			// Just in case idle_thread isn't set up yet, spin locally
 			if (!new_tb) {
 				scheduler_lock.Release(old_if);
@@ -391,21 +457,29 @@ auto Taskman::Schedule(bool omit_slice)->decltype(Schedule())
 		scheduler_lock.Release(old_if);
 		return;
 	}
-	
+
 	if (new_tb->state == TBS::Uninit) new_tb->state = TBS::Ready;
 	if (old_tb->state == TBS::Running && new_tb->state == TBS::Ready) {
 		old_tb->state = TBS::Ready;
 		new_tb->state = TBS::Running;
-	} else if (new_tb->state == TBS::Ready) {
+	}
+	else if (new_tb->state == TBS::Ready) {
 		new_tb->state = TBS::Running;
-	} else {
+	}
+	else {
 		printlog(_LOG_FATAL, "task switch error state (TID%u, State%u)", new_tb->tid, _IMM(new_tb->state));
 	}
 
-	current_thread[cpuid] = new_tb;
+	current_thread(cpuid) = new_tb;
+	#if _MCCA == 0x8632
+	RebindThreadKernelStackWindow(new_tb);
+	#endif
+	#if _MCCA == 0x8664
+	BindCurrentKernelEntryStack(new_tb, cpuid);
+	#endif
 
 	old_tb->just_schedule = 1;
-	switching_out_threads[cpuid] = old_tb;
+	switching_out_threads(cpuid) = old_tb;
 
 	scheduler_lock.Release(old_if);
 	// if (new_tb->tid > 8) ploginfo("[CPU%u]SCH: Th%u -> Th%u", cpuid, old_tb->tid, new_tb->tid);
@@ -419,14 +493,14 @@ auto Taskman::Schedule(bool omit_slice)->decltype(Schedule())
 auto Taskman::Schedule(bool omit_slice)->decltype(Schedule()) { }
 #endif
 void Taskman::SleepAndRelease(Spinlock* lk) {
-	auto old_tb = current_thread[getID()];
+	auto old_tb = current_thread(getID());
 	bool old_if = scheduler_lock.Acquire();
 	DequeueReady(old_tb, false);
 	lk->Release(false);
 
 	auto new_tb = PickNext();
 	if (!new_tb) {
-		new_tb = idle_thread[getID()];
+		new_tb = idle_thread(getID());
 		if (!new_tb) {// idle is not ready
 			scheduler_lock.Release(old_if);
 			do {
@@ -438,12 +512,18 @@ void Taskman::SleepAndRelease(Spinlock* lk) {
 		}
 	}
 
-	current_thread[getID()] = new_tb;
+	current_thread(getID()) = new_tb;
+	#if _MCCA == 0x8632
+	RebindThreadKernelStackWindow(new_tb);
+	#endif
+	#if _MCCA == 0x8664
+	BindCurrentKernelEntryStack(new_tb, getID());
+	#endif
 	new_tb->state = ThreadBlock::State::Running;
-	
+
 	old_tb->just_schedule = 1;
-	switching_out_threads[getID()] = old_tb;
-	
+	switching_out_threads(getID()) = old_tb;
+
 	scheduler_lock.Release(old_if);
 	// No explicit unlock of scheduler_lock here, because earlier we unlock lk, but wait!
 	#if _MCCA == 0x8664 || _MCCA == 0x8632

@@ -83,7 +83,7 @@ struct RegisterContext {
 };
 
 static void check_and_deliver_signals_generic(RegisterContext& ctx) {
-	ThreadBlock* crt = Taskman::current_thread[Taskman::getID()];
+	ThreadBlock* crt = Taskman::CurrentTB();
 	if (!crt || !crt->parent_process) return;
 
 	ProcessBlock* pb = crt->parent_process;
@@ -380,7 +380,7 @@ extern "C" int sigismember(const _POSIX_sigset_t* set, int signo) {
 extern "C" stduint sys_sigaction(int sig, const struct _POSIX_sigaction* act, struct _POSIX_sigaction* oact) {
 	if (sig <= 0 || sig >= _NSIG || sig == SIGKILL || sig == SIGSTOP) return (stduint)-1;
 	
-	ThreadBlock* crt = Taskman::current_thread[Taskman::getID()];
+	ThreadBlock* crt = Taskman::CurrentTB();
 	ProcessBlock* pb = crt->parent_process;
 	
 	if (oact) {
@@ -478,7 +478,7 @@ extern "C" stduint sys_kill(stduint pid, int sig, stduint tid) {
 }
 
 extern "C" stdsint sysc_SIGR(void* context) {
-	ThreadBlock* crt = Taskman::current_thread[Taskman::getID()];
+	ThreadBlock* crt = Taskman::CurrentTB();
 	if (!crt || !crt->parent_process) return -1;
 
 	ProcessBlock* pb = crt->parent_process;

@@ -84,8 +84,41 @@ enum {
 
 
 #if (_MCCA & 0xFF00) == 0x8600
-extern TSS_t* PCU_CORES_TSS[PCU_CORES_MAX];
+#define PERCORE_VBASE   0xFFFFFFFFB0000000ull
+#define PERCORE_STRIDE  0x1000  // 4KB per CPU
+#if _MCCA == 0x8664
+#define _NORMAL_RINGSTACK 0xFFFFFFFFC0001000ull
+#elif _MCCA == 0x8632
+#define _NORMAL_RINGSTACK 0xFFC01000ull
+#endif
 
+struct ThreadBlock;
+
+struct PERCORE {
+	TSS_t tss; // offset 0x000: for hardware stack switching
+	uint8 _pad0[128 - sizeof(TSS_t) % 128
+		? 128 - sizeof(TSS_t) % 128 : 0];
+#if _MCCA == 0x8664
+	uint64 kernel_rsp;
+	uint64 scratch;
+	uint8 _pad1[128 - 16];
+#endif
+	ThreadBlock* current_thread;
+	ThreadBlock* idle_thread;
+	ThreadBlock* volatile switching_out_thread;
+	uint8 _pad2[128 - 3 * sizeof(void*)];
+};
+static_assert(sizeof(PERCORE) <= 0x1000, "PERCORE must fit in one 4KB page");
+#if _MCCA == 0x8664
+static_assert(offsetof(PERCORE, kernel_rsp) == 128, "PERCORE.kernel_rsp offset mismatch!");
+static_assert(offsetof(PERCORE, scratch) == 136, "PERCORE.scratch offset mismatch!");
+#endif
+
+#else
+struct ThreadBlock;
+extern ThreadBlock* PCU_CORES_current_thread[PCU_CORES_MAX];
+extern ThreadBlock* PCU_CORES_idle_thread[PCU_CORES_MAX];
+extern ThreadBlock* volatile PCU_CORES_switching_out_threads[PCU_CORES_MAX];
 #endif
 
 // Message
@@ -342,6 +375,9 @@ public _Comment(State):
 	//
 	stduint processor_id;// running on which cpu core
 	stduint exit_status;
+	bool is_detached = false;
+	stduint futex_wait_addr = 0;
+	uni::Queue<ThreadBlock*> join_wait_queue;
 public: // _Comment(Syscomm)
 	CommMsg* unsolved_msg = nullptr;
 	ThreadBlock* send_to_whom = nullptr;// nullptr for none (cannot comm with base-kernel)
@@ -372,9 +408,45 @@ class Taskman {
 
 public:
 	static stduint PCU_CORES;
-	static ThreadBlock* current_thread[PCU_CORES_MAX];
-	static ThreadBlock* idle_thread[PCU_CORES_MAX];
-	static ThreadBlock* volatile switching_out_threads[PCU_CORES_MAX];
+	#if (_MCCA & 0xFF00) == 0x8600
+	static PERCORE* PCU_CORES_PERCORE[PCU_CORES_MAX];
+	#endif
+	static inline ThreadBlock*& current_thread(stduint cpuid) {
+		#if (_MCCA & 0xFF00) == 0x8600
+		if (!PCU_CORES_PERCORE[cpuid]) {
+			static ThreadBlock* dummy = nullptr;
+			dummy = nullptr;
+			return dummy;
+		}
+		return PCU_CORES_PERCORE[cpuid]->current_thread;
+		#else
+		return PCU_CORES_current_thread[cpuid];
+		#endif
+	}
+	static inline ThreadBlock*& idle_thread(stduint cpuid) {
+		#if (_MCCA & 0xFF00) == 0x8600
+		if (!PCU_CORES_PERCORE[cpuid]) {
+			static ThreadBlock* dummy = nullptr;
+			dummy = nullptr;
+			return dummy;
+		}
+		return PCU_CORES_PERCORE[cpuid]->idle_thread;
+		#else
+		return PCU_CORES_idle_thread[cpuid];
+		#endif
+	}
+	static inline ThreadBlock* volatile& switching_out_threads(stduint cpuid) {
+		#if (_MCCA & 0xFF00) == 0x8600
+		if (!PCU_CORES_PERCORE[cpuid]) {
+			static ThreadBlock* volatile dummy = nullptr;
+			dummy = nullptr;
+			return dummy;
+		}
+		return PCU_CORES_PERCORE[cpuid]->switching_out_thread;
+		#else
+		return PCU_CORES_switching_out_threads[cpuid];
+		#endif
+	}
 public:// Gen.2
 	static Dchain chain;// [ArrayT] ordered by pid
 	static stduint min_available_pid;// in chain
@@ -383,8 +455,21 @@ public:// Gen.2
 	static stduint min_available_tid;// in threads
 public:// for local core
 	static stduint getID() { return _TEMP 0; }// get core id
-	static stduint  CurrentTID() { return current_thread[getID()]->tid; }
-	static stduint  CurrentPID() { return current_thread[getID()]->parent_process->pid; }
+	static ThreadBlock* CurrentTB() {
+		return current_thread(getID());
+	}
+	static ProcessBlock* CurrentPB() {
+		auto th = CurrentTB();
+		return th ? th->parent_process : nullptr;
+	}
+	static stduint  CurrentTID() {
+		auto th = CurrentTB();
+		return th ? th->tid : (stduint)~1ull;
+	}
+	static stduint  CurrentPID() {
+		auto pb = CurrentPB();
+		return pb ? pb->pid : (stduint)~1ull;
+	}
 public:
 	static Dchain thchain;
 	// static Dnode* min_available_thleft;
@@ -425,6 +510,14 @@ public:// taskman
 		Exec(stduint parent, rostr usr_fullpath, char** usr_argv, char** usr_envp) -> ProcessBlock*;
 	static auto// aka POSIX-EXECV
 		Exet(stduint parent, rostr usr_fullpath, char** usr_argv, char** usr_envp) -> ProcessBlock*;
+public:// threads
+	static stdsint CreateThread(ProcessBlock* pb, stduint entry, stduint arg, stduint stack_top);
+	static stduint CurrentThreadId();
+	static void YieldThread();
+	static bool ExitThread(stduint code);
+	static stdsint JoinThread(stduint tid, stduint usr_status);
+	static stdsint DetachThread(stduint tid);
+	static stdsint Futex(stduint addr, stduint op, stduint val);
 public:// schedule
 	static auto Schedule(bool omit_slice = false) -> void;// Timer using
 	struct ReadyQueue {
@@ -445,6 +538,8 @@ public:
 		AllocateTask() -> ProcessBlock*;
 	static auto
 		AllocateThread() -> ThreadBlock*;
+	static void
+		DestroyThread(ThreadBlock* th);
 	static void
 		DumpTask(ProcessBlock*);
 };

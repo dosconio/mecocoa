@@ -1174,7 +1174,7 @@ int Filesys::ReadPipe(vfs_file* file, void* buf, stduint count) {
 				break;
 			}
 			// Wait blockedly
-			ThreadBlock* th = Taskman::current_thread[Taskman::getID()];
+			ThreadBlock* th = Taskman::CurrentTB();
 			chan->rq.Enqueue(th);
 			chan->lock.Release();
 			
@@ -1222,14 +1222,14 @@ int Filesys::WritePipe(vfs_file* file, const void* buf, stduint count) {
 			// POSIX: write to pipe with no readers -> SIGPIPE
 			chan->lock.Release();
 			// Send SIGPIPE to current process
-			ThreadBlock* th = Taskman::current_thread[Taskman::getID()];
+			ThreadBlock* th = Taskman::CurrentTB();
 			sys_kill(th->parent_process->pid, SIGPIPE, 0);
 			return -1; // -EPIPE
 		}
 		
 		if (chan->buffer.is_full()) {
 			// Wait blockedly
-			ThreadBlock* th = Taskman::current_thread[Taskman::getID()];
+			ThreadBlock* th = Taskman::CurrentTB();
 			chan->wq.Enqueue(th);
 			chan->lock.Release();
 			

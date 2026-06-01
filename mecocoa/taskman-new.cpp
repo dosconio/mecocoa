@@ -184,6 +184,16 @@ static stduint _Taskman_Create_Paging(ProcessBlock *ppb, byte ring, stduint stac
 			0x40000000ull - 2 * _IMM1S(PAGESIZE_2MB),
 			PAGESIZE_2MB, PGPROP_present | PGPROP_writable
 		);// High Part
+		for0(cpu_i, PCU_CORES_MAX) {
+			if (!Taskman::PCU_CORES_PERCORE[cpu_i]) continue;
+			ppb->paging.Map(
+				PERCORE_VBASE + cpu_i * PERCORE_STRIDE,
+				_IMM(Taskman::PCU_CORES_PERCORE[cpu_i]),
+				PERCORE_STRIDE,
+				PAGESIZE_4KB,
+				PGPROP_present | PGPROP_writable
+			);
+		}
 		#endif
 
 		_Mapping_Core_Stack(ppb->paging);
@@ -204,42 +214,41 @@ static stduint _Taskman_Create_Paging(ProcessBlock *ppb, byte ring, stduint stac
 	#endif
 	return nil;
 }
-extern stduint kernel_stack_top_cpu0[];
-void Taskman::Initialize(stduint cpuid) {
-	#if (_MCCA & 0xFF00) == 0x8600
-	if (cpuid || PCU_CORES_TSS[0]) return; // already initialized
-	PCU_CORES = PCU_CORES_MAX;
-	auto addr = (TSS_t*)mem.allocate(sizeof(TSS_t) * PCU_CORES);
-	MemSet(addr, 0, sizeof(TSS_t) * PCU_CORES);
-	for0(i, PCU_CORES) {
-		PCU_CORES_TSS[i] = addr;
-		higher_stacks[i] = (mem.allocate(0x1000, PAGESIZE_4KB));
-		#if _MCCA == 0x8664
-		addr->RSP0 = _NORMAL_RINGSTACK + HIGHER_STACK_SIZE - 8;// for user-app in cpu0
-		#else
-		addr->ESP0 = _IMM(mem.allocate(0x1000));
-		#endif
-		addr++;
-		//{} TEMP GDT_Alloc and tss.setRange
-		if (i == 0)
-		{
-			mecocoa_global->gdt_ptr->tss.setRange(mglb(PCU_CORES_TSS[i]), sizeof(TSS_t) - 1);
-			#if _MCCA == 0x8632
-			const stduint stack_lev_top = _NORMAL_RINGSTACK + HIGHER_STACK_SIZE;
-			PCU_CORES_TSS[i]->ESP0 = stack_lev_top - 0x10;
-			PCU_CORES_TSS[i]->SS0 = SegData;
-			PCU_CORES_TSS[i]->ESP1 = stack_lev_top - 0x10;
-			PCU_CORES_TSS[i]->SS1 = 8 * 5 + 4 + 1;// 4:LDT 8*5:SS1 1:Ring1
-			PCU_CORES_TSS[i]->ESP2 = stack_lev_top - 0x10;
-			PCU_CORES_TSS[i]->SS2 = 8 * 6 + 4 + 2;// 4:LDT 8*6:SS2 2:Ring2
-			//
-			PCU_CORES_TSS[i]->LDTDptr = SegGLDT + 3; // LDT yo GDT
-			PCU_CORES_TSS[i]->LDTLength = 8 * 8 - 1;
-			PCU_CORES_TSS[i]->STRC_15_T = 0;
-			PCU_CORES_TSS[i]->IO_MAP = sizeof(TSS_t) - 1;
+	extern stduint kernel_stack_top_cpu0[];
+	void Taskman::Initialize(stduint cpuid) {
+		#if (_MCCA & 0xFF00) == 0x8600
+		if (cpuid || PCU_CORES_PERCORE[0]) return; // already initialized
+		PCU_CORES = PCU_CORES_MAX;
+		for0(i, PCU_CORES) {
+			auto percore = (PERCORE*)mem.allocate(sizeof(PERCORE), PAGESIZE_4KB);
+			MemSet(percore, 0, sizeof(PERCORE));
+			PCU_CORES_PERCORE[i] = percore;
+			higher_stacks[i] = (mem.allocate(0x1000, PAGESIZE_4KB));
+			#if _MCCA == 0x8664
+			percore->tss.RSP0 = _NORMAL_RINGSTACK + HIGHER_STACK_SIZE - 8;// for user-app in cpu0
+			#else
+			percore->tss.ESP0 = _IMM(mem.allocate(0x1000));
 			#endif
+			//{} TEMP GDT_Alloc and tss.setRange
+			if (i == 0)
+			{
+				mecocoa_global->gdt_ptr->tss.setRange(mglb(&PCU_CORES_PERCORE[i]->tss), sizeof(TSS_t) - 1);
+				#if _MCCA == 0x8632
+				const stduint stack_lev_top = _NORMAL_RINGSTACK + HIGHER_STACK_SIZE;
+				PCU_CORES_PERCORE[i]->tss.ESP0 = stack_lev_top - 0x10;
+				PCU_CORES_PERCORE[i]->tss.SS0 = SegData;
+				PCU_CORES_PERCORE[i]->tss.ESP1 = stack_lev_top - 0x10;
+				PCU_CORES_PERCORE[i]->tss.SS1 = 8 * 5 + 4 + 1;// 4:LDT 8*5:SS1 1:Ring1
+				PCU_CORES_PERCORE[i]->tss.ESP2 = stack_lev_top - 0x10;
+				PCU_CORES_PERCORE[i]->tss.SS2 = 8 * 6 + 4 + 2;// 4:LDT 8*6:SS2 2:Ring2
+				//
+				PCU_CORES_PERCORE[i]->tss.LDTDptr = SegGLDT + 3; // LDT yo GDT
+				PCU_CORES_PERCORE[i]->tss.LDTLength = 8 * 8 - 1;
+				PCU_CORES_PERCORE[i]->tss.STRC_15_T = 0;
+				PCU_CORES_PERCORE[i]->tss.IO_MAP = sizeof(TSS_t) - 1;
+				#endif
+			}
 		}
-	}
 	_Mapping_Core_Stack(kernel_paging);
 	
 	
@@ -272,7 +281,12 @@ void Taskman::Initialize(stduint cpuid) {
 	kernel_task->paging.root_level_page = kernel_paging.root_level_page;
 	
 	kernel_thread->tid = 0;
-	current_thread[cpuid] = kernel_thread;
+	current_thread(cpuid) = kernel_thread;
+	#if _MCCA == 0x8664
+	PCU_CORES_PERCORE[cpuid]->current_thread = kernel_thread;
+	PCU_CORES_PERCORE[cpuid]->kernel_rsp = _NORMAL_RINGSTACK + HIGHER_STACK_SIZE;
+	PCU_CORES_PERCORE[cpuid]->tss.RSP0 = PCU_CORES_PERCORE[cpuid]->kernel_rsp;
+	#endif
 	//
 	chain.Compare_f = ProcCmp;
 	min_available_pid = 1;
@@ -294,7 +308,10 @@ void Taskman::Initialize(stduint cpuid) {
 	if (idle_task) {
 		idle_task->main_thread->priority = 31; // lowest priority
 		idle_task->main_thread->time_slice = 1;
-		idle_thread[cpuid] = idle_task->main_thread;
+		idle_thread(cpuid) = idle_task->main_thread;
+		#if _MCCA == 0x8664
+		PCU_CORES_PERCORE[cpuid]->idle_thread = idle_task->main_thread;
+		#endif
 	}
 }
 
@@ -920,4 +937,3 @@ ProcessBlock* Taskman::Exet(stduint parent, rostr usr_fullpath, char** usr_argv,
 	Taskman::EnqueueReady(current_pb->main_thread);
 	return current_pb;
 }
-

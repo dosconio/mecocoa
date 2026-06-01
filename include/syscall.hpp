@@ -48,6 +48,13 @@ enum
 	MANA, // manage (func, op1, op2)->?|(TODO)      | shutdown reboot...
 	DUP2, // dup2   (oldfd, newfd)->newfd | x86
 	PIPE, // pipe   (pipefd)->0           | x86
+	TNEW, // thread_create (entry, arg, stack_top)->tid  | x86 x64
+	TEXI, // thread_exit   (exit_code)                   | x86 x64
+	TJOI, // thread_join   (tid, &exit_code)->status     | x86 x64
+	TGET, // thread_self   ()->tid                       | x86 x64
+	TDET, // thread_detach (tid)->status                 | x86 x64
+	TYLD, // thread_yield  ()->0                         | x86 x64
+	FUTX, // futex         (addr, op, val)->status       | x86 x64
 
 
 	TEST = 0xFF, // getpid (T,E,S)->0 | x86

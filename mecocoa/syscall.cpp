@@ -15,10 +15,17 @@
 extern "C" stduint sys_sigaction(int, const struct _POSIX_sigaction*, struct _POSIX_sigaction*);
 extern "C" stduint sys_kill(stduint, int, stduint);
 extern "C" stdsint sysc_SIGR(void* context);
+extern "C" stdsint sysc_TNEW(stduint, stduint, stduint);
+extern "C" stdsint sysc_TEXI(stduint, stduint, stduint);
+extern "C" stdsint sysc_TJOI(stduint, stduint, stduint);
+extern "C" stdsint sysc_TGET(stduint, stduint, stduint);
+extern "C" stdsint sysc_TDET(stduint, stduint, stduint);
+extern "C" stdsint sysc_TYLD(stduint, stduint, stduint);
+extern "C" stdsint sysc_FUTX(stduint, stduint, stduint);
 extern "C" void check_and_deliver_signals(void* context);
 
 // Syscall Wrappers
-extern stduint SYSCALL_TABLE[30];
+extern stduint SYSCALL_TABLE[37];
 
 void Syscall::Initialize() {
 	#if _MCCA == 0x8632
@@ -29,6 +36,9 @@ void Syscall::Initialize() {
 	setMSR(x86MSR::LSTAR, mglb(Handint_SYSCALL_Entry));
 	setMSR(x86MSR::STAR, (_IMM(SegCo64) << 32) | (_IMM(SegCo32 | _IMM(RING_U)) << 48));
 	setMSR(x86MSR::FMASK, 0x200);
+	stduint percore_addr = PERCORE_VBASE + Taskman::getID() * PERCORE_STRIDE;
+	setMSR(x86MSR::GS_BASE, percore_addr);
+	setMSR(x86MSR::KERNEL_GS_BASE, 0);
 
 	#endif
 }
@@ -46,7 +56,7 @@ stduint syscall(syscall_t callid, stduint para1, stduint para2, stduint para3) {
 	CallFar(0, SegCall);
 	__asm("mov  %%eax, %0" : "=m"(ret));
 	#elif _MCCA == 0x8664
-	auto pb = Taskman::current_thread[Taskman::getID()]->parent_process;
+	auto pb = Taskman::CurrentPB();
 	auto old_dir = pb->paging_redirect;
 	pb->paging_redirect = &kernel_paging;
 	if (_IMM(callid) >= numsof(SYSCALL_TABLE)) {
@@ -59,7 +69,7 @@ stduint syscall(syscall_t callid, stduint para1, stduint para2, stduint para3) {
 	return ret;
 	#elif (_MCCA & 0xFF00) == 0x1000
 	void syscall_body(NormalTaskContext * cxt);
-	auto th = Taskman::current_thread[Taskman::getID()];
+	auto th = Taskman::CurrentTB();
 	th->context.a7 = _IMM(callid);
 	th->context.a0 = para1;
 	th->context.a1 = para2;
@@ -74,7 +84,7 @@ Mutex outc_mutex;// for con-io
 DEFSYSC sysc_OUTC(stduint ch, stduint len) {
 	// ploginfo("sysc_OUTC: ch = %[x], len = %[x]", ch, len);
 	MutexLocal mutex(&outc_mutex);
-	auto th = Taskman::current_thread[Taskman::getID()];
+	auto th = Taskman::CurrentTB();
 	if (auto pid = th->parent_process) {
 		if (auto con = pid->focus_tty ? (Console_t*)pid->focus_tty->offs : 0)
 		{
@@ -105,7 +115,7 @@ DEFSYSC sysc_INNC(stduint blocked) {
 	usize msgbuf[4];
 	int ch = -1;
 	// Read from its TTY, return -1 if the TTY is occupied
-	auto th = Taskman::current_thread[Taskman::getID()];
+	auto th = Taskman::CurrentTB();
 	auto ppb = th->parent_process;
 	if (blocked) {
 		msgbuf[3] = ppb->getID();
@@ -167,7 +177,7 @@ DEFSYSC sysc_REST(stduint unit, stduint time) {
 		return -1;
 	}
 
-	auto th = Taskman::current_thread[Taskman::getID()];
+	auto th = Taskman::CurrentTB();
 	th->Block(ThreadBlock::BlockReason::BR_Resting); // Block the thread to wait for timer
 	SysTimer::Append(timeout, (stduint)th, (_tocall_ft)_TimerWakeUp);
 	
@@ -179,7 +189,7 @@ DEFSYSC sysc_REST(stduint unit, stduint time) {
 }
 
 DEFSYSC sysc_COMM(stduint op, stduint to, stduint msg) {
-	auto th = Taskman::current_thread[Taskman::getID()];
+	auto th = Taskman::CurrentTB();
 	usize ret = 0;
 	// ploginfo("sysc_COMM:[th%u] op = %x, to = %x, msg = %x", th->getID(), op, to, msg);
 	if (op & (COMM_SEND | COMM_SEND_ASYNC)) { // SEND or ASYNC_SEND
@@ -205,7 +215,7 @@ DEFSYSC sysc_COMM(stduint op, stduint to, stduint msg) {
 
 DEFSYSC sysc_OPEN(stduint usr_filepath, stduint flag)
 {
-	ThreadBlock* th = Taskman::current_thread[Taskman::getID()];
+	ThreadBlock* th = Taskman::CurrentTB();
 	stdsint open_buf[1];
 	ProcessBlock* pb = th->parent_process;
 	struct { stduint flag;stduint pid;rostr usr_filepath; } open_msg;
@@ -218,7 +228,7 @@ DEFSYSC sysc_OPEN(stduint usr_filepath, stduint flag)
 }
 
 DEFSYSC sysc_CLOS(stduint fd) {
-	ThreadBlock* th = Taskman::current_thread[Taskman::getID()];
+	ThreadBlock* th = Taskman::CurrentTB();
 	stdsint open_buf[1];
 	struct { stduint fd;stduint pid; } open_msg = { fd , th->parent_process->pid };
 	syssend(Task_FileSys, &open_msg, sizeof(open_msg), 0x03);
@@ -227,19 +237,19 @@ DEFSYSC sysc_CLOS(stduint fd) {
 }
 
 DEFSYSC sysc_DUP2(stduint oldfd, stduint newfd) {
-	ThreadBlock* th = Taskman::current_thread[Taskman::getID()];
+	ThreadBlock* th = Taskman::CurrentTB();
 	ProcessBlock* pb = th->parent_process;
 	return pb->Dup2((int)oldfd, (int)newfd);
 }
 
 DEFSYSC sysc_PIPE(stduint usr_pipefd) {
-	ThreadBlock* th = Taskman::current_thread[Taskman::getID()];
+	ThreadBlock* th = Taskman::CurrentTB();
 	ProcessBlock* pb = th->parent_process;
 	return pb->Pipe((int*)usr_pipefd);
 }
 
 DEFSYSC sysc_READ(stduint fd, stduint addr, stduint len) {
-	ThreadBlock* th = Taskman::current_thread[Taskman::getID()];
+	ThreadBlock* th = Taskman::CurrentTB();
 	ProcessBlock* pb = th->parent_process;
 
 	// Intercept named pipes to bypass Task_FileSys server and execute in current thread's context to avoid deadlocks.
@@ -326,7 +336,7 @@ DEFSYSC sysc_READ(stduint fd, stduint addr, stduint len) {
 	}
 }
 DEFSYSC sysc_WRIT(stduint fd, stduint addr, stduint len) {
-	ThreadBlock* th = Taskman::current_thread[Taskman::getID()];
+	ThreadBlock* th = Taskman::CurrentTB();
 	ProcessBlock* pb = th->parent_process;
 
 	// Intercept named pipes to bypass Task_FileSys server and execute in current thread's context to avoid deadlocks.
@@ -345,14 +355,14 @@ DEFSYSC sysc_WRIT(stduint fd, stduint addr, stduint len) {
 }
 
 DEFSYSC sysc_DELF(stduint usr_filepath) {
-	stduint open_buf[2]{ usr_filepath,Taskman::current_thread[Taskman::getID()]->getID() };
+	stduint open_buf[2]{ usr_filepath, Taskman::CurrentTID() };
 	syssend(Task_FileSys, open_buf, byteof(open_buf), _IMM(FilemanMsg::REMOVE));
 	sysrecv(Task_FileSys, open_buf, byteof(open_buf[0]));
 	return open_buf[0];// 0 for success
 }
 
 DEFSYSC sysc_PORP(stduint fd, stduint usr_proper) {
-	ThreadBlock* th = Taskman::current_thread[Taskman::getID()];
+	ThreadBlock* th = Taskman::CurrentTB();
 	ProcessBlock* pb = th->parent_process;
 
 	// Check if fd is valid
@@ -375,7 +385,7 @@ DEFSYSC sysc_PORP(stduint fd, stduint usr_proper) {
 }
 
 DEFSYSC sysc_ENUM(stduint fd, stduint addr, stduint count) {
-	ThreadBlock* th = Taskman::current_thread[Taskman::getID()];
+	ThreadBlock* th = Taskman::CurrentTB();
 	ProcessBlock* pb = th->parent_process;
 
 	// Check if fd is valid
@@ -390,7 +400,7 @@ DEFSYSC sysc_ENUM(stduint fd, stduint addr, stduint count) {
 }
 
 DEFSYSC sysc_SETD(stduint usr_path) {
-	ThreadBlock* th = Taskman::current_thread[Taskman::getID()];
+	ThreadBlock* th = Taskman::CurrentTB();
 	stdsint open_buf[2]{ (stdsint)usr_path, (stdsint)th->getID() };
 	syssend(Task_FileSys, open_buf, byteof(open_buf), _IMM(FilemanMsg::SETD));
 	sysrecv(Task_FileSys, open_buf, byteof(open_buf[0]));
@@ -398,7 +408,7 @@ DEFSYSC sysc_SETD(stduint usr_path) {
 }
 
 DEFSYSC sysc_GETD(stduint usr_buf, stduint size) {
-	ThreadBlock* th = Taskman::current_thread[Taskman::getID()];
+	ThreadBlock* th = Taskman::CurrentTB();
 	stdsint open_buf[3]{ (stdsint)usr_buf, (stdsint)size, (stdsint)th->getID() };
 	syssend(Task_FileSys, open_buf, byteof(open_buf), _IMM(FilemanMsg::GETD));
 	sysrecv(Task_FileSys, open_buf, byteof(open_buf[0]));
@@ -408,7 +418,7 @@ DEFSYSC sysc_GETD(stduint usr_buf, stduint size) {
 DEFSYSC sysc_WAIT(stduint pid, stduint usr_status) {
 
 	// ploginfo("syscall wait");
-	auto tb = Taskman::current_thread[Taskman::getID()];
+	auto tb = Taskman::CurrentTB();
 	stduint open_buf[3]{ tb->parent_process->getID(), pid, usr_status };
 	syssend(Task_TaskMan, sliceof(open_buf), _IMM(TaskmanMsg::WAIT));
 	stduint r = sysrecv(Task_TaskMan, sliceof(open_buf));// (pid, state)
@@ -422,24 +432,24 @@ DEFSYSC sysc_WAIT(stduint pid, stduint usr_status) {
 }
 
 DEFSYSC sysx_FORK(CallgateFrame* phyzik_frame) {
-	stduint msgbuf[2] = { Taskman::current_thread[Taskman::getID()]->parent_process->getID(), _IMM(phyzik_frame) };
+	stduint msgbuf[2] = { Taskman::CurrentPID(), _IMM(phyzik_frame) };
 	syssend(Task_TaskMan, sliceof(msgbuf), _IMM(TaskmanMsg::FORK));
 	sysrecv(Task_TaskMan, &msgbuf, byteof(msgbuf[0]));
 	return msgbuf[0];
 }
 DEFSYSC sysc_TMSG() {
-	auto th = Taskman::current_thread[Taskman::getID()];
+	auto th = Taskman::CurrentTB();
 	return _IMM(th->queue_send_queuehead);
 }
 
 DEFSYSC sysc_EXEC(stduint path, stduint argv, stduint envp) {
-	stduint msgbuf[4] = { Taskman::current_thread[Taskman::getID()]->parent_process->getID(), path, argv, envp };
+	stduint msgbuf[4] = { Taskman::CurrentPID(), path, argv, envp };
 	syssend(Task_TaskMan, sliceof(msgbuf), _IMM(TaskmanMsg::EXEC));
 	sysrecv(Task_TaskMan, &msgbuf, byteof(msgbuf[0]));
 	return msgbuf[0];
 }
 DEFSYSC sysc_EXET(stduint path, stduint argv, stduint envp) {
-	stduint msgbuf[4] = { Taskman::current_thread[Taskman::getID()]->parent_process->getID(), path, argv, envp };
+	stduint msgbuf[4] = { Taskman::CurrentPID(), path, argv, envp };
 	syssend(Task_TaskMan, sliceof(msgbuf), _IMM(TaskmanMsg::EXET));
 	sysrecv(Task_TaskMan, &msgbuf, byteof(msgbuf[0]));
 	return msgbuf[0];
@@ -447,7 +457,7 @@ DEFSYSC sysc_EXET(stduint path, stduint argv, stduint envp) {
 
 
 DEFSYSC sysc_TEST(stduint t, stduint e, stduint s) {
-	ThreadBlock* caller_th = Taskman::current_thread[Taskman::getID()];
+	ThreadBlock* caller_th = Taskman::CurrentTB();
 	ProcessBlock* pb = caller_th->parent_process;
 	if (t == 'T' && e == 'E' && s == 'S') {
 		rostr test_msg = "Syscalls Test OK!";
@@ -464,7 +474,7 @@ DEFSYSC sysc_TEST(stduint t, stduint e, stduint s) {
 
 
 DEFSYSC sysc_SIGA(stduint sig, stduint act, stduint oact) {
-	auto pb = Taskman::current_thread[Taskman::getID()]->parent_process;
+	auto pb = Taskman::CurrentPB();
 	
 	stduint phys_act = act ? (stduint)pb->paging[act] : 0;
 	stduint phys_oact = oact ? (stduint)pb->paging[oact] : 0;
@@ -485,7 +495,7 @@ DEFSYSC sysc_KILL(stduint pid, stduint sig, stduint tid) {
 }
 
 DEFSYSC sysc_MMAP(stduint len, stduint flag, stduint fd) {
-	ThreadBlock* th = Taskman::current_thread[Taskman::getID()];
+	ThreadBlock* th = Taskman::CurrentTB();
 	ProcessBlock* pb = th->parent_process;
 	if (&pb->paging == &kernel_paging) {
 		return ~_IMM0; // Reject kernel page table
@@ -517,7 +527,7 @@ DEFSYSC sysc_UMAP(stduint addr, stduint len) {
 	if ((addr & 0xFFF) || (len & 0xFFF)) {
 		return ~_IMM0; // Address and length must be 4KB aligned
 	}
-	ThreadBlock* th = Taskman::current_thread[Taskman::getID()];
+	ThreadBlock* th = Taskman::CurrentTB();
 	ProcessBlock* pb = th->parent_process;
 	if (&pb->paging == &kernel_paging) {
 		return ~_IMM0; // Reject kernel page table
@@ -634,6 +644,13 @@ stduint SYSCALL_TABLE[] = {
 	0, // 0x1B (MANA)
 	mglb(sysc_DUP2), // 0x1C (DUP2)
 	mglb(sysc_PIPE), // 0x1D (PIPE)
+	mglb(sysc_TNEW), // 0x1E (TNEW)
+	mglb(sysc_TEXI), // 0x1F (TEXI)
+	mglb(sysc_TJOI), // 0x20 (TJOI)
+	mglb(sysc_TGET), // 0x21 (TGET)
+	mglb(sysc_TDET), // 0x22 (TDET)
+	mglb(sysc_TYLD), // 0x23 (TYLD)
+	mglb(sysc_FUTX), // 0x24 (FUTX)
 };
 #endif
 
@@ -643,7 +660,7 @@ stduint SYSCALL_TABLE[] = {
 
 static int sysc_GETCID(stduint ptr_hid)
 {
-	auto pid = Taskman::current_thread[Taskman::getID()];
+	auto pid = Taskman::CurrentTB();
 	auto pa = (stduint*)pid->parent_process->paging[_IMM(ptr_hid)];
 	ploginfo("[%s] arg0 = LA %[x] PA %[x]", __FUNCIDEN__, ptr_hid, pa);
 	if (_IMM(pa) == ~_IMM0) return -1;
@@ -720,13 +737,14 @@ void syscall_body(NormalTaskContext* cxt)
 #endif
 #if (_MCCA & 0xFF00) == 0x8600
 extern "C" void check_and_deliver_signals_syscall(CallgateFrame* frame);
+
 __attribute__((optimize("O0")))
 stduint Handint_SYSCALL(CallgateFrame* frame) {
 	#if _MCCA == 0x8632
 	auto callid = (syscall_t)frame->ax;
 	stduint para[4] = { frame->cx, frame->dx, frame->bx };
 	#elif _MCCA == 0x8664
-	auto pb = Taskman::current_thread[Taskman::getID()]->parent_process;
+	auto pb = Taskman::CurrentPB();
 	pb->paging_redirect = 0;
 	if (&pb->paging != &kernel_paging) frame = (CallgateFrame*)(pb->paging[_IMM(frame)]);
 	auto callid = (syscall_t)(frame->ax & 0x7FFFFFFFu);

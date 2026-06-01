@@ -147,13 +147,24 @@ tryUD:
 GLOBAL Handint_SYSCALL_Entry
 EXTERN Handint_SYSCALL
 Handint_SYSCALL_Entry:
-	PUSH RSP
+	; x64 SYSCALL does not switch stacks for us.
+	; SWAPGS gives access to the per-CPU PERCORE block:
+	;   GS:128 -> PERCORE.kernel_rsp
+	;   GS:136 -> PERCORE.scratch
+	SWAPGS
+
+	MOV [GS:136], RSP ; Save user RSP to PERCORE.scratch
+	MOV RSP, [GS:128] ; Load kernel RSP from PERCORE.kernel_rsp
+
+	; Build a syscall frame on the current thread's kernel entry stack.
+	; The C handler treats this like a synthetic interrupt frame.
+	PUSH QWORD [GS:136] ; push user RSP as sp0
 	PUSH RAX
 	PUSH R15
 	PUSH R14
 	PUSH R13
 	PUSH R12
-	PUSH R11; original RFLAGS, will enable rupt
+	PUSH R11 ; original RFLAGS
 	PUSH R10
 	PUSH R9
 	PUSH R8
@@ -162,12 +173,12 @@ Handint_SYSCALL_Entry:
 	PUSH RBP
 	PUSH RBX
 	PUSH RDX
-	PUSH RCX; original RIP
-	;
-	MOV RCX, R10
+	PUSH RCX ; original RIP
+
 	MOV RBP, RSP
 	AND RSP, 0xFFFFFFFFFFFFFFF0
 
+	; Save volatile registers around PG_PUSH
 	PUSH RBP
 	PUSH RDI
 	PUSH RSI
@@ -189,19 +200,21 @@ Handint_SYSCALL_Entry:
 	POP  RBP
 	PUSH R11
 	PUSH R12
-	MOV RCX, R10
-	; STI
-	; Handint_SYSCALL(CallgateFrame* RDI)
-	MOV  RDI, RBP; skip PG_PUSH's 2 qword
-	CALL Handint_SYSCALL; -> RAX; rbx, r12-r15: callee-saved
-	MOV R12, RAX
-	CLI
+
+	; Dispatch to C handler
+	MOV  RDI, RBP
+	MOV  RCX, R10
+	CALL Handint_SYSCALL
+	MOV  R12, RAX
+
+	; Restore CR3
 	CALL PG_POP
 
-	MOV RSP, RBP
-	MOV RAX, R12
-	;
-	POP  RCX
+	MOV  RSP, RBP
+	MOV  RAX, R12
+
+	; Restore context
+	POP  RCX ; user RIP
 	POP  RDX
 	POP  RBX
 	POP  RBP
@@ -210,13 +223,16 @@ Handint_SYSCALL_Entry:
 	POP  R8
 	POP  R9
 	POP  R10
-	POP  R11
+	POP  R11 ; user RFLAGS
 	POP  R12
 	POP  R13
 	POP  R14
 	POP  R15
-	ADD  RSP, 0x8
-	POP  RSP
+	ADD  RSP, 8 ; Skip RAX slot
+	POP  RSP ; Restore user RSP
+
+	; Return to the user-side GS state before SYSRET.
+	SWAPGS
 O64 SYSRET
 
 
@@ -224,12 +240,23 @@ EXTERN interrupt_dispatcher
 
 GLOBAL Handint_Common_Stub_64
 Handint_Common_Stub_64:
+	; Interrupt/exception gates from Ring 3 must pair with the SYSCALL path.
+	; We enter the kernel with the kernel-side GS state and restore the
+	; user-side GS state again before IRETQ back to Ring 3.
+	TEST QWORD [RSP + 24], 3 ; From Ring 3?
+	JZ .entry_gs_ready
+	SWAPGS
+.entry_gs_ready:
 	PUSHA64
 	CALL PG_PUSH
 	MOV RDI, RSP ; Pass HardwareInterruptFrame* as the first and only argument (System V ABI convention)
 	CALL interrupt_dispatcher
 	CALL PG_POP
 	POPA64
+	TEST QWORD [RSP + 24], 3 ; Return to Ring 3?
+	JZ .exit_gs_ready
+	SWAPGS
+.exit_gs_ready:
 	ADD RSP, 16; Pop Vector ID and Error Code
 	IRETQ
 

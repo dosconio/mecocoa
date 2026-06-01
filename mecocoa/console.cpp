@@ -58,7 +58,7 @@ Dnode* VTTY_Append(Console_t* con) {
 	pblock->id = DevFs::allocate_tty_id();
 	p->type = _IMM(pblock);
 
-	if (Taskman::current_thread[Taskman::getID()]) {
+	if (Taskman::CurrentTB()) {
 		pblock->master_pid = Taskman::CurrentPID();
 	}
 	else {

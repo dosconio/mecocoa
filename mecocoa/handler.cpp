@@ -38,7 +38,7 @@ extern "C" void interrupt_dispatcher(HardwareInterruptFrame* frame) {
 			interrupt_handlers[irq_id]();
 		}
 	}
-	
+
 	// Check for pending signals if returning to user mode (Ring > 0)
 	if ((frame->hw_cs & 3) != 0) { // returning to Ring > 0
 		check_and_deliver_signals(frame);
@@ -175,7 +175,7 @@ bool exception_handler_user(HardwareInterruptFrame* frame, stduint iden, stduint
 	case ERQ_Page_Fault:
 	{
 		stduint fault_addr = getCR2();
-		ThreadBlock* crt = Taskman::current_thread[Taskman::getID()];
+		ThreadBlock* crt = Taskman::CurrentTB();
 		ProcessBlock* pb = crt ? crt->parent_process : nullptr;
 		bool handled = false;
 		if (pb) {
@@ -221,7 +221,7 @@ bool exception_handler_user(HardwareInterruptFrame* frame, stduint iden, stduint
 	}
 
 	if (sig != 0) {
-		ThreadBlock* crt = Taskman::current_thread[Taskman::getID()];
+		ThreadBlock* crt = Taskman::CurrentTB();
 		if (crt) {
 			// Mark signal as pending directly in Ring 0 exception handler
 			sigaddset(&crt->pending_signals, sig);
@@ -263,7 +263,15 @@ void exception_handler(HardwareInterruptFrame* frame) {
 			#endif
 		}
 		else {
+			#if _MCCA == 0x8632
+			printlog(_LOG_FATAL, " %s at EIP %[x], ESP %[x], CS %[x], CR2 %[x], TID %u",
+				ExceptionDescription[iden], frame->hw_eip, frame->hw_esp, frame->hw_cs, getCR2(), Taskman::CurrentTID());
+			#elif _MCCA == 0x8664
+			printlog(_LOG_FATAL, " %s at RIP %[x], RSP %[x], CS %[x], CR2 %[x], TID %u",
+				ExceptionDescription[iden], frame->hw_rip, frame->hw_rsp, frame->hw_cs, getCR2(), Taskman::CurrentTID());
+			#else
 			printlog(_LOG_FATAL, " %s", ExceptionDescription[iden]);// no-para
+			#endif
 			__asm("cli; hlt");
 		}
 		break;
@@ -279,7 +287,7 @@ void exception_handler(HardwareInterruptFrame* frame) {
 
 	case ERQ_Page_Fault:// 14
 		printlog(_LOG_FATAL, "%s with 0x%[x], vaddr=0x%[x], TID%u, CR3=0x%[x]\n\r\t %s%s%s%s",
-			ExceptionDescription[iden], para, getCR2(), Taskman::current_thread[Taskman::getID()]->tid, r15,
+			ExceptionDescription[iden], para, getCR2(), Taskman::CurrentTID(), r15,
 			para & 1 ? "Protected " : "Miss",
 			para & 0b10 ? "Write " : "Read ",
 			para & 0b100 ? "User " : "Kernel ",

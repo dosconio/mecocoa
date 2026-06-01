@@ -76,7 +76,7 @@ void Mutex::Acquire() {
 	bool old_if = this->guard.Acquire();
 
 	if (this->locked) {
-		ThreadBlock* crt = Taskman::current_thread[Taskman::getID()];
+		ThreadBlock* crt = Taskman::CurrentTB();
 		if (!this->wait_queue.isFull()) {
 			crt->state = ThreadBlock::State::Pended;
 			crt->block_reason = ThreadBlock::BlockReason::BR_Waiting;
@@ -145,7 +145,7 @@ void Semaphore::Acquire() {
 		this->guard.Release(old_if); // Resource acquired, unlock and return
 	}
 	else {
-		ThreadBlock* crt = Taskman::current_thread[Taskman::getID()];
+		ThreadBlock* crt = Taskman::CurrentTB();
 		if (!this->wait_queue.isFull()) {
 			// Transition thread to pending state with waiting block reason
 			// State and BlockReason verified strictly via taskman.hpp
@@ -243,6 +243,44 @@ auto Taskman::AllocateThread() -> ThreadBlock* {
 	new (tb) ThreadBlock();
 	tb->async_messages.func_free = free_async_msg;
 	return tb;
+}
+
+void Taskman::DestroyThread(ThreadBlock* th) {
+	if (!th) return;
+	ProcessBlock* ppb = th->parent_process;
+	if (ppb) {
+		SpinlockLocal guard(&scheduler_lock);
+		if (ppb->thread_list_head == th) {
+			ppb->thread_list_head = th->process_thread_next;
+		}
+		else {
+			ThreadBlock* prev = ppb->thread_list_head;
+			while (prev && prev->process_thread_next != th) {
+				prev = prev->process_thread_next;
+			}
+			if (prev) {
+				prev->process_thread_next = th->process_thread_next;
+			}
+		}
+		if (ppb->main_thread == th) {
+			ppb->main_thread = ppb->thread_list_head;
+		}
+	}
+	{
+		SpinlockLocal guard(&scheduler_lock);
+		Taskman::DequeueReady(th, false);
+		Taskman::thchain.Remove(th);
+	}
+	if (th->stack_lineaddr == th->stack_levladdr) {
+		free((byte*)th->stack_levladdr);
+	}
+	else if (ppb) {
+		if (th->stack_lineaddr) {
+			free((byte*)ppb->paging[_IMM(th->stack_lineaddr) & ~0xFFF]);
+		}
+		free((byte*)th->stack_levladdr);
+	}
+	free((byte*)th);
 }
 
 void Taskman::DumpTask(ProcessBlock* pb) {
@@ -405,25 +443,10 @@ static void _Exit_Cleanup(stduint pid)
 	ppb->pfiles.Clear();
 
 	// 5. Final Destruction: Release Thread blocks and stacks
-	ThreadBlock* th = ppb->thread_list_head;
-	while (th) {
-		ThreadBlock* next_th = th->process_thread_next;
-		{
-			SpinlockLocal guard(&scheduler_lock);
-			Taskman::DequeueReady(th, false);
-			Taskman::thchain.Remove(th);
-		}
-		if (th->stack_lineaddr == th->stack_levladdr) {
-			free((byte*)th->stack_levladdr);
-		}
-		else {
-			free((byte*)ppb->paging[_IMM(th->stack_lineaddr) & ~0xFFF]);
-			free((byte*)th->stack_levladdr);
-		}
-		free((byte*)th);
-		th = next_th;
+	while (ppb->thread_list_head) {
+		Taskman::DestroyThread(ppb->thread_list_head);
 	}
-	ppb->thread_list_head = ppb->main_thread = nullptr;
+	ppb->main_thread = nullptr;
 
 	// Release Segments
 	for0a(i, ppb->load_slices) {

@@ -13,6 +13,9 @@ static int color_idx = 0;
 
 int main(int argc, char** argv)
 {
+	#if __BITS__ == 64
+	_preprocess();
+	#endif
 	// unsigned id = getpid();// TEST
 	// outsfmt("C(%d)\n\r", id);// OUTC
 
@@ -97,4 +100,3 @@ int main(int argc, char** argv)
 	// loop sysrest(0, 0);
 	return 0;
 }
-
