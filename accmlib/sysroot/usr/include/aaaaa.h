@@ -77,3 +77,26 @@ extern "C" {
 	#ifdef _INC_CPP
 }
 #endif
+
+#ifdef _INC_CPP
+class GraphicForm {
+private:
+	stdsint form_id_;
+	uni::Rectangle rect_;
+	uni::Color* fb_buffer_;
+	uni::VideoControlInterfaceMARGB8888* pvci_;
+	uni::LayerManager* playman_;
+	uni::SheetTrait* focus_sheet_;
+public:
+	GraphicForm(const uni::Rectangle& rect, const char* title = "Form");
+	~GraphicForm();
+	stdsint getFormId() const;
+	uni::Color* getBuffer() const;
+	uni::LayerManager& getLayerManager();
+	stduint getClientWidth() const;
+	stduint getClientHeight() const;
+	void HandleEvent(const uni::SheetMessage& smsg);
+	void DrawString(const uni::Point& vertex, const char* str, uni::Color col);
+};
+#endif
+

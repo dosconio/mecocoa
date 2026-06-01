@@ -91,8 +91,8 @@ build: lib accm prehost/$(arch)/fatvhd.ignore $(cppobjs) build_util
 	@echo $(sudokey) | sudo -S mkdir -p $(mnts)
 	@echo $(sudokey) | sudo -S mount -o loop $(outs) $(mnts)
 	@echo $(sudokey) | sudo -S cp $(elf_loader) $(mnts)/KEX.OBJ
-	@echo $(sudokey) | sudo -S mkdir -p $(mnts)/apps
-	@echo $(sudokey) | sudo -S cp $(uobjpath)/sapp-$(arch)/*    $(mnts)/apps/
+	#@echo $(sudokey) | sudo -S mkdir -p $(mnts)/apps
+	#@echo $(sudokey) | sudo -S cp $(uobjpath)/sapp-$(arch)/*    $(mnts)/apps/
 	@tree $(mnts) -s
 	@echo $(sudokey) | sudo -S umount $(mnts)
 	@perl configs/$(arch).bochsdbg.pl > $(archdir)/bochsrc.bxrc
@@ -121,8 +121,10 @@ build: lib accm prehost/$(arch)/fatvhd.ignore $(cppobjs) build_util
 
 ACCM_INCF=-I$(uincpath) -I$(uincpath)/c/API-POSIX
 ACCM_LIBS=accm-x86
+#[Tool System] gcc clang
+TOOLSYS=clang
 build_util:
-	@make -f subapps/Makefile.gcc.x86 \
+	@make -f subapps/Makefile.$(TOOLSYS).x86 \
 		arch=$(arch) \
 		uherpath=$(uherpath) \
 		uobjpath=$(uobjpath) \
@@ -145,7 +147,7 @@ lib:
 
 accm:
 	@echo MK lib for ACCM-x86
-	make -f accmlib/accmx86.make
+	make -f accmlib/accmx86.$(TOOLSYS).make
 
 prehost/$(arch)/fatvhd.ignore: build_util
 	@echo MK  $(arch) memdisk

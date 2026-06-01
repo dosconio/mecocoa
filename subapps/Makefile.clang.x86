@@ -1,0 +1,98 @@
+# ASCII Makefile TAB4 LF
+# Attribute: Ubuntu(64) Shell(Bash)
+# ModuTitle: Build subapps for Mecocoa x86 (LLVM/Clang version)
+
+BIN_DIR = $(uobjpath)/sapp-$(arch)
+LIBX86 = $(uobjpath)/$(ACCM_LIBS)/libx86.a
+MCCA_X86_TRIPLE ?= i686-mcca
+MCCA_X86_SYSROOT ?= accmlib/sysroot
+MCCA_X86_CC ?= clang -target i686-unknown-none-elf
+MCCA_X86_CXX ?= clang++ -target i686-unknown-none-elf
+MCCA_X86_CRT0 = $(MCCA_X86_SYSROOT)/usr/lib/$(MCCA_X86_TRIPLE)/crt0.o
+MCCA_X86_LIBC = $(MCCA_X86_SYSROOT)/usr/lib/$(MCCA_X86_TRIPLE)/libc.a
+MCCA_X86_COMFLAGS = $(flag) -I$(uincpath) -I$(uincpath)/c/ISO_IEC_STD -I$(uincpath)/c/API-POSIX -I$(MCCA_X86_SYSROOT)/usr/include
+
+MCCA_X86_CFLAGS = $(MCCA_X86_COMFLAGS) --sysroot=$(MCCA_X86_SYSROOT) -m32 -fno-builtin -fno-stack-protector -fno-pic -fno-pie -static -nostdlib -Wno-incompatible-library-redeclaration -Wno-invalid-constexpr
+MCCA_X86_CXXFLAGS = $(MCCA_X86_CFLAGS) -fno-exceptions -fno-rtti -fno-use-cxa-atexit -std=c++2a
+MCCA_X86_LDLIBS = $(MCCA_X86_CRT0) $(MCCA_X86_LIBC) -lgcc -Wl,-m,elf_i386 -Wl,-z,noexecstack -no-pie -fuse-ld=lld
+STDCPP_APP_CXXFLAGS = -m32 -static -nodefaultlibs -nostartfiles -fno-omit-frame-pointer -fno-stack-protector -fno-pic -fno-builtin -fno-strict-aliasing -ffunction-sections -fdata-sections $(CXW) -std=c++2a
+STDCPP_APP_LIBS = -L$(uobjpath)/$(ACCM_LIBS) -lx86 -lstdc++ -lsupc++ -lgcc -lm
+
+UNIS_UTIL_DIR = $(ulibpath)/../demo/utilities
+UNIS_UTIL_C_SRCS = $(wildcard $(UNIS_UTIL_DIR)/*.c)
+UNIS_UTIL_CPP_SRCS = $(wildcard $(UNIS_UTIL_DIR)/*.cpp)
+UNIS_UTIL_APPS = $(sort $(addprefix $(BIN_DIR)/,$(basename $(notdir $(UNIS_UTIL_C_SRCS) $(UNIS_UTIL_CPP_SRCS)))))
+
+# ---- COTL INIT ---- #
+# ---- UNIS UTIL ---- #
+# ---- MCCA UTIL ---- #
+
+.PHONY: all clean
+
+all: $(BIN_DIR) \
+	$(BIN_DIR)/init \
+	$(BIN_DIR)/cot \
+	$(UNIS_UTIL_APPS) \
+	\
+	$(BIN_DIR)/fault \
+	\
+	$(BIN_DIR)/test \
+	$(BIN_DIR)/paint \
+	$(BIN_DIR)/cube \
+	$(BIN_DIR)/gblock \
+	$(BIN_DIR)/_rust \
+	$(BIN_DIR)/notepad \
+	\
+
+
+$(BIN_DIR):
+	mkdir -p $@
+
+$(BIN_DIR)/cot: $(uherpath)/COTLAB/src/cotlab.cpp $(LIBX86) $(MCCA_X86_CRT0)
+	@echo "MK appshell"
+	$(MCCA_X86_CXX) $(MCCA_X86_CXXFLAGS) -o $@ $< $(MCCA_X86_LDLIBS)
+
+$(BIN_DIR)/%: $(UNIS_UTIL_DIR)/%.c $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
+	@echo "MK $*"
+	$(MCCA_X86_CC) $(MCCA_X86_CFLAGS) -o $@ $< $(MCCA_X86_LDLIBS)
+
+$(BIN_DIR)/%: $(UNIS_UTIL_DIR)/%.cpp $(ulibpath)/cpp/lango/lango-cpp.cpp $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
+	@echo "MK $*"
+	$(MCCA_X86_CXX) $(MCCA_X86_CXXFLAGS) -o $@ $< $(ulibpath)/cpp/lango/lango-cpp.cpp $(MCCA_X86_LDLIBS)
+
+$(BIN_DIR)/init: subapps/init.cpp $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
+	@echo "MK appinit"
+	$(MCCA_X86_CXX) $(MCCA_X86_CXXFLAGS) -o $@ $< $(MCCA_X86_LDLIBS)
+
+$(BIN_DIR)/test: subapps/test.cpp $(ulibpath)/cpp/lango/lango-cpp.cpp $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
+	@echo "MK subtest"
+	$(MCCA_X86_CXX) $(MCCA_X86_CXXFLAGS) -o $@ subapps/test.cpp $(ulibpath)/cpp/lango/lango-cpp.cpp $(MCCA_X86_LDLIBS)
+
+$(BIN_DIR)/paint: subapps/paint.cpp $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
+	@echo "MK paint"
+	$(MCCA_X86_CXX) $(MCCA_X86_CXXFLAGS) -o $@ $< $(MCCA_X86_LDLIBS)
+
+$(BIN_DIR)/fault: subapps/fault.cpp $(ulibpath)/cpp/lango/lango-cpp.cpp $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
+	@echo "MK fault"
+	$(MCCA_X86_CXX) $(MCCA_X86_CXXFLAGS) -o $@ subapps/fault.cpp $(ulibpath)/cpp/lango/lango-cpp.cpp $(MCCA_X86_LDLIBS)
+
+$(BIN_DIR)/cube: subapps/cube.cpp $(ulibpath)/cpp/lango/lango-cpp.cpp $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
+	@echo "MK cube"
+	$(MCCA_X86_CXX) $(MCCA_X86_CXXFLAGS) -o $@ subapps/cube.cpp $(ulibpath)/cpp/lango/lango-cpp.cpp $(MCCA_X86_LDLIBS)
+
+$(BIN_DIR)/gblock: subapps/game_breakout.cpp $(ulibpath)/cpp/lango/lango-cpp.cpp $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
+	@echo "MK game_breakout"
+	$(MCCA_X86_CXX) $(MCCA_X86_CXXFLAGS) -o $@ subapps/game_breakout.cpp $(ulibpath)/cpp/lango/lango-cpp.cpp $(MCCA_X86_LDLIBS)
+
+$(BIN_DIR)/_rust: subapps/_hello/rust/src/main.rs subapps/_hello/rust/Cargo.toml
+	@echo "MK hello-rust"
+	@cd subapps/_hello/rust/ && cargo build --release --target ../../../configs/Rust/target/cargo-i686.json
+	cp subapps/_hello/rust/target/cargo-i686/release/rust $@
+
+$(BIN_DIR)/notepad: subapps/notepad.cpp $(ulibpath)/cpp/lango/lango-cpp.cpp $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
+	@echo "MK notepad"
+	$(MCCA_X86_CXX) $(MCCA_X86_CXXFLAGS) -o $@ subapps/notepad.cpp $(ulibpath)/cpp/lango/lango-cpp.cpp $(MCCA_X86_LDLIBS)
+
+clean:
+	@echo "RM $(BIN_DIR)"
+	@-rm -rf $(BIN_DIR) 1>/dev/null

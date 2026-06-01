@@ -471,14 +471,48 @@ static stdsint ConsoleMsg_FUPD(const FMT_ConsoleMsg_FUPD* data, ProcessBlock* pb
 	ProcessBlock* owner = (ProcessBlock*)pf->usrp_owner;
 	if (!owner) owner = pb;
 
-	// Copy user pixels directly into Form's sheet_buffer at client area offset
-	for (stduint i = 0; i < client_area.height; i++) {
-		Color* dst = pfrm->sheet_buffer + (client_area.y + i) * pfrm->sheet_area.width + client_area.x;
-		Color* src = (Color*)user_buf + i * client_area.width;
-		MccaMemCopyP(dst, NULL, src, owner, client_area.width * sizeof(Color));
+	Rectangle dirty_rect;
+	bool has_dirty = false;
+	if (data->usrp_rect) {
+		if (MccaMemCopyP(&dirty_rect, NULL, data->usrp_rect, pb, sizeof(dirty_rect)) == sizeof(dirty_rect)) {
+			has_dirty = true;
+		}
 	}
 
-	global_layman.Update(pfrm, Rectangle(Point(0, 0), pfrm->sheet_area.getSize()));
+	if (has_dirty) {
+		if (dirty_rect.x >= client_area.width || dirty_rect.y >= client_area.height) {
+			return 0;
+		}
+		stduint end_x = dirty_rect.x + dirty_rect.width;
+		if (end_x < dirty_rect.x || end_x > client_area.width) {
+			dirty_rect.width = client_area.width - dirty_rect.x;
+		}
+		stduint end_y = dirty_rect.y + dirty_rect.height;
+		if (end_y < dirty_rect.y || end_y > client_area.height) {
+			dirty_rect.height = client_area.height - dirty_rect.y;
+		}
+		if (dirty_rect.width == 0 || dirty_rect.height == 0) {
+			return 0;
+		}
+	} else {
+		dirty_rect.x = 0;
+		dirty_rect.y = 0;
+		dirty_rect.width = client_area.width;
+		dirty_rect.height = client_area.height;
+	}
+
+	// Copy user pixels directly into Form's sheet_buffer at client area + dirty rect offset
+	for (stduint i = 0; i < dirty_rect.height; i++) {
+		Color* dst = pfrm->sheet_buffer + (client_area.y + dirty_rect.y + i) * pfrm->sheet_area.width + (client_area.x + dirty_rect.x);
+		Color* src = (Color*)user_buf + (dirty_rect.y + i) * client_area.width + dirty_rect.x;
+		MccaMemCopyP(dst, NULL, src, owner, dirty_rect.width * sizeof(Color));
+	}
+
+	Rectangle update_rect(
+		Point(client_area.x + dirty_rect.x, client_area.y + dirty_rect.y),
+		Size2(dirty_rect.width, dirty_rect.height)
+	);
+	global_layman.Update(pfrm, update_rect);
 	return 0;
 }
 
@@ -574,12 +608,12 @@ static stdsint ConsoleMsg_FCHR(const FMT_ConsoleMsg_FCHR* data, ProcessBlock* pb
 	// Copy parameters from user space
 	Point vertex;
 	if (MccaMemCopyP(&vertex, NULL, data->usrp_vertex, pb, sizeof(vertex)) != sizeof(vertex)) return -1;
-	char buf[32];
-	stduint len = StrCopyP(buf, kernel_paging, data->usrp_str, pb->paging, sizeof(buf));
+	String buf(String::Charset::UTF8, 256);
+	stduint len = StrCopyP(buf.reflect(), kernel_paging, data->usrp_str, pb->paging, 256);
+	buf.Refresh();
 
 	// [Security Fix]: Validate drawing bounds to prevent heap corruption
-	stduint str_len = StrLength(buf);
-	if ((vertex.x + (stdsint)str_len * 8) > pfrm->sheet_area.width ||
+	if ((vertex.x + (stdsint)buf.getByteCount() * _TEMP 8) > pfrm->sheet_area.width ||
 		(vertex.y + 16) > pfrm->sheet_area.height) {
 		return -1;
 	}
@@ -588,7 +622,7 @@ static stdsint ConsoleMsg_FCHR(const FMT_ConsoleMsg_FCHR* data, ProcessBlock* pb
 	uni::DrawString_16(*pfrm, vertex, String(buf), data->color);
 
 	// Update the dirty area
-	Rectangle dirty_rect(vertex, Size2(StrLength(buf) * 8, 16));
+	Rectangle dirty_rect(vertex, Size2(buf.getByteCount() * 8, 16));
 	global_layman.Update(pfrm, dirty_rect);
 
 	return 0;

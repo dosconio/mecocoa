@@ -1,6 +1,12 @@
 AASM = aasm # a/n/yasm
 override arch=x86
-TOOLCHAIN ?= i686-mcca-elf-
+
+# LLVM compiler and target setup
+CC = clang -target i686-unknown-none-elf
+CX = clang++ -target i686-unknown-none-elf
+AR = llvm-ar
+LD = ld.lld -m elf_i386
+
 attr = -D_DEBUG -D_ACCM=0x8632 -I$(uincpath) -I$(uincpath)/c/ISO_IEC_STD -I$(uincpath)/c/API-POSIX -Iaccmlib/sysroot/usr/include
 
 asmpref=_ae_
@@ -16,16 +22,13 @@ cplpref=_cc_
 cplfile=$(wildcard $(ulibpath)/c/*.c) $(wildcard $(ulibpath)/c/**/*.c) $(wildcard $(ulibpath)/c/**/**/*.c) $(wildcard accmlib/*.c)
 
 cpppref=_cx_
-cppfile=$(wildcard $(ulibpath)/cpp/*.cpp) $(wildcard $(ulibpath)/cpp/dat-block/*.cpp) $(wildcard accmlib/*.cpp) prehost/_auxiliary.cpp $(ulibpath)/cpp/grp-base/bstring.cpp
+cppfile=$(wildcard $(ulibpath)/cpp/*.cpp) $(wildcard $(ulibpath)/cpp/dat-block/*.cpp) $(ulibpath)/cpp/Device/Video.cpp $(ulibpath)/cpp/Device/Keyboard.cpp $(ulibpath)/cpp/Witch/Form.cpp $(wildcard accmlib/*.cpp) prehost/_auxiliary.cpp $(ulibpath)/cpp/grp-base/bstring.cpp
 
 dest_obj=$(uobjpath)/accm-$(arch)
-COMWAN = -Wno-builtin-declaration-mismatch
-COMFLG = -m32 -static -fno-builtin -nostdlib -fno-stack-protector  -O2 -fno-strict-aliasing  $(COMWAN)
-CC=$(TOOLCHAIN)gcc
+COMWAN = -Wno-incompatible-library-redeclaration -Wno-invalid-constexpr
+COMFLG = -m32 -static -fno-builtin -nostdlib -fno-stack-protector -O2 -fno-strict-aliasing $(COMWAN)
 CFLAGS=$(COMFLG) $(attr)
-CX=$(TOOLCHAIN)g++
-XFLAGS=$(CFLAGS) -std=c++2a -fno-exceptions  -fno-unwind-tables -fno-rtti -Wno-volatile
-LD=$(TOOLCHAIN)ld -m elf_i386
+XFLAGS=$(CFLAGS) -std=c++2a -fno-exceptions -fno-unwind-tables -fno-rtti -Wno-volatile
 
 define asm_to_o
 $(dest_obj)/$(asmpref)$(notdir $(1:.asm=.o)): $(1)

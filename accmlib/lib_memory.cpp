@@ -90,3 +90,21 @@ _ESYM_C int munmap(void* addr, size_t length) {
 	stduint ret = syscall(syscall_t::UMAP, (stduint)addr, length);
 	return ret == length ? 0 : -1;
 }
+
+// ----
+
+void operator delete(void* p, size_t size) noexcept {
+	if (!p) return;
+	if (!user_heap_initialized) {
+		user_heap_init();
+	}
+	user_mempool.deallocate(p, size);
+}
+
+void operator delete[](void* p, size_t size) noexcept {
+	if (!p) return;
+	if (!user_heap_initialized) {
+		user_heap_init();
+	}
+	user_mempool.deallocate(p, size);
+}
