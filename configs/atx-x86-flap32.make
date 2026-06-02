@@ -104,7 +104,8 @@ build: lib accm prehost/$(arch)/fatvhd.ignore $(cppobjs) build_util
 	@echo $(sudokey) | sudo -S mkfs.fat -F 32 -n "DATA" /dev/mapper/loop*p7 >/dev/null
 	@echo $(sudokey) | sudo -S mount /dev/mapper/loop*p7 $(mnts) #sudo fsck.vfat -v /dev/mapper/loop0p7 # fdisk # blkid
 	@echo $(sudokey) | sudo -S cp $(elf_kernel)     $(mnts)/mx86.elf
-	@echo $(sudokey) | sudo -S cp depends/fonts/simsun.ttf      $(mnts)/
+	@echo $(sudokey) | sudo -S cp $(ulibpath)/../.picture/phina.head.bmp  $(mnts)/
+	@echo $(sudokey) | sudo -S cp depends/fonts/simsun.ttf                $(mnts)/
 	@echo $(sudokey) | sudo -S echo "ようこそ，メココAの世界へ！" | sudo tee "${mnts}/ciallo.txt" > /dev/null
 	#@echo $(sudokey) | sudo -S rm       $(mnts)/apps/*
 	@echo $(sudokey) | sudo -S mkdir -p $(mnts)/apps

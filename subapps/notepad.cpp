@@ -1,6 +1,8 @@
 #include "aaaaa.h"
 #include "c/consio.h"
 #include "unistd.h"
+#include <fcntl.h>
+#include <sys/stat.h>
 #include <cpp/Witch/Control/Control-TextBox.hpp>
 
 using namespace uni;
@@ -23,7 +25,30 @@ int main(int argc, char** argv)
 
 	// Mount a real user-space TextBox control filling the client area
 	uni::witch::control::TextBox textbox;
-	textbox.text = "Click here to type...";
+	
+	// Default to empty string
+	textbox.text = "";
+
+	// Attempt to load file if path argument is provided
+	if (argc >= 2 && argv[1] != nullptr) {
+		int fd = open(argv[1], O_RDONLY);
+		if (fd >= 0) {
+			struct stat st;
+			if (fstat(fd, &st) == 0 && st.st_size > 0) {
+				char* buf = (char*)malloc(st.st_size + 1);
+				if (buf) {
+					stdsint read_bytes = read(fd, buf, st.st_size);
+					if (read_bytes > 0) {
+						buf[read_bytes] = '\0';
+						textbox.text = buf;
+					}
+					free(buf);
+				}
+			}
+			close(fd);
+		}
+	}
+
 	textbox.InitializeSheet(form.getLayerManager(), Point(10, 10), Size2(378, 261));
 	form.getLayerManager().Append(&textbox);
 	textbox.Start();

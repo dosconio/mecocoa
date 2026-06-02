@@ -42,6 +42,7 @@ all: $(BIN_DIR) \
 	$(BIN_DIR)/cube \
 	$(BIN_DIR)/gblock \
 	$(BIN_DIR)/_rust \
+	$(BIN_DIR)/viewpic \
 	\
 
 
@@ -88,6 +89,10 @@ $(BIN_DIR)/_rust: subapps/_hello/rust/src/main.rs subapps/_hello/rust/Cargo.toml
 	@echo "MK hello-rust"
 	@cd subapps/_hello/rust/ && cargo build --release --target ../../../configs/Rust/target/cargo-i686.json
 	cp subapps/_hello/rust/target/cargo-i686/release/rust $@
+
+$(BIN_DIR)/viewpic: subapps/viewpic.cpp $(ulibpath)/cpp/fileformat/picture/BMP.cpp $(ulibpath)/cpp/lango/lango-cpp.cpp $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
+	@echo "MK viewpic"
+	$(MCCA_X86_CXX) $(MCCA_X86_CXXFLAGS) -o $@ subapps/viewpic.cpp $(ulibpath)/cpp/fileformat/picture/BMP.cpp $(ulibpath)/cpp/lango/lango-cpp.cpp $(MCCA_X86_LDLIBS)
 
 clean:
 	@echo "RM $(BIN_DIR)"
