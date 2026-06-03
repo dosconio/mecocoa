@@ -9,6 +9,11 @@ extern Spinlock scheduler_lock;
 
 #include <c/driver/keyboard.h>
 
+#if (_MCCA & 0xFF00) == 0x8600
+#include <c/proctrl/IAx86_64.msr.h>
+
+#endif
+
 // #pragma GCC push_options
 // #pragma GCC optimize("O2")
 
@@ -660,6 +665,76 @@ stdsint Taskman::Wait(ProcessBlock* pb, stduint target_pid)
 		syssend(pid, &children, sizeof(children));
 	}
 	return ~_IMM0;
+}
+
+//
+
+extern Handler_t SMP_AP_ENTRY[];
+inline uint64_t rdtsc() {
+	uint32_t lo, hi;
+	// The rdtsc instruction loads the 64-bit counter into EDX:EAX
+	__asm__ __volatile__("rdtsc" : "=a"(lo), "=d"(hi));
+	return ((uint64_t)hi << 32) | lo;
+}
+// A strictly deterministic delay using TSC + pause.
+// It doesn't matter how long a single 'pause' takes, 
+// because the timeline is guarded strictly by the constant TSC clock.
+void TSC_Wait_MS(uint64_t ms) {
+	// Assuming a baseline of 2.5 GHz (2,500,000 ticks per millisecond)
+	// QEMU's TSC frequency usually matches your host CPU's base clock.
+	const uint64_t ticks_per_ms = 2500000; 
+	uint64_t total_ticks = ms * ticks_per_ms;
+	uint64_t start_time = rdtsc(); // Read initial TSC
+	while ((rdtsc() - start_time) < total_ticks) {
+		// 'pause' here simply prevents the loop from burning execution units
+		// and handles hyper-threading gracefully.
+		__asm__ __volatile__("pause" ::: "memory"); 
+	}
+}
+void Coreman::Initialize() {
+	#if (_MCCA & 0xFF00) == 0x8600 && _MCCA == 0x8632
+	if (!IC.getType()) {
+		plogwarn("[COREMAN] Coreman is not supported, because APIC is not supported");
+		return;
+	}
+	const stduint ap_entry = _IMM(SMP_AP_ENTRY);
+	ploginfo("[COREMAN] Entry of SMP-AP: %[x]", ap_entry);
+
+	// Get LAPIC ID
+	if (1) {
+		static rostr b_type_name[] = {
+			"SMP ", // "Simultaneous Multithreading",
+			"Core"
+		};
+		uint32 i{ 0 };
+		uint32 a, b, c, d;
+		while (true) {
+			_IO_CPUID(0x0B, i++, &a, &b, &c, &d);// 0xB Extended Topology Enumeration
+			byte type_num = c >> 8 & 0xFF;
+			// According to the official Intel/AMD architecture manuals, the lower 8 bits of the ECX register (i.e., c & 0xFF) returned at this point are undefined, or simply equal to the input sub-leaf number (which is 2). It is not an explicitly calculated "total number of topology levels" returned by the CPU.
+			_TEMP if (!type_num) break;
+			ploginfo("[COREMAN] LAPIC ID: type(%s) width(%[x]), logp(%x)",
+				type_num - 1 < numsof(b_type_name) ? b_type_name[type_num - 1] : String::newFormat("0x%[8H]", type_num - 1).reference(),
+				a & 0x1F,
+				b & 0xFF);
+			// LOGP:  for logical processor
+			// Width: for different thread
+		}
+		ploginfo("[COREMAN] x2APIC ID level(%[x]), current logp(%[x])", c & 0xFF, d);
+	}
+
+	// Active SMP-APs
+	if constexpr (true) {
+		setMSR(x86MSR::APIC_ICR_LOW, 0xC4500);// Send INIT IPI to all other processors, (5)Delivery Mode
+		TSC_Wait_MS(10 + 1);
+		setMSR(x86MSR::APIC_ICR_LOW, 0xC4600 | (ap_entry >> PAGESIZE_4KB));
+		TSC_Wait_MS(1 + 1);
+		setMSR(x86MSR::APIC_ICR_LOW, 0xC4600 | (ap_entry >> PAGESIZE_4KB));
+		TSC_Wait_MS(10 + 1);
+	}
+
+
+	#endif
 }
 
 // #pragma GCC pop_options

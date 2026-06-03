@@ -4,6 +4,7 @@
 #include "../include/mecocoa.hpp"
 
 #include <c/consio.h>
+#include <cpp/Device/ACPI.hpp>
 
 _ESYM_C Handler_t FILE_ENTO, FILE_ENDO;
 
@@ -31,6 +32,235 @@ static stduint parse_norm(stduint addr);
 #if _MCCA == 0x8632
 
 static stduint parse_grub(stduint addr);
+stduint acpi_rsdp_addr = 0;
+stduint acpi_madt_addr = 0;
+stduint acpi_cpu_count = 0;
+uint32 acpi_cpu_lapic_ids[PCU_CORES_MAX] = {};
+static constexpr stduint kEarlyMappedPhysTop = 0x10000000;
+static constexpr stduint kAcpiHighWindowBase = 0x3FC00000;
+static constexpr stduint kAcpiHighWindowSize = 0x00400000;
+
+_PACKED(struct) ACPIRSDT {
+	uni::ACPI::DescriptionHeader header;
+};
+
+_PACKED(struct) ACPIMADT {
+	uni::ACPI::DescriptionHeader header;
+	uint32 lapic_address;
+	uint32 flags;
+};
+
+_PACKED(struct) ACPIMADTEntry {
+	uint8 type;
+	uint8 length;
+};
+
+_PACKED(struct) ACPIMADTLocalAPIC {
+	ACPIMADTEntry entry;
+	uint8 acpi_processor_uid;
+	uint8 apic_id;
+	uint32 flags;
+};
+
+_PACKED(struct) ACPIMADTLocalX2APIC {
+	ACPIMADTEntry entry;
+	uint16 reserved;
+	uint32 x2apic_id;
+	uint32 flags;
+	uint32 acpi_processor_uid;
+};
+
+static bool rsdp_checksum_ok(const uni::ACPI::RSDP* rsdp) {
+	if (!rsdp) return false;
+	const uint8* bytes = reinterpret_cast<const uint8*>(rsdp);
+	uint8 sum = 0;
+	for0(i, 20) sum = (uint8)(sum + bytes[i]);
+	if (sum != 0) return false;
+	if (rsdp->revision >= 2) {
+		sum = 0;
+		uint32 length = rsdp->length < 20 ? 20 : rsdp->length;
+		for (uint32 i = 0; i < length; i++) sum = (uint8)(sum + bytes[i]);
+		if (sum != 0) return false;
+	}
+	return true;
+}
+
+static bool early_phys_range_mapped(stduint addr, stduint size) {
+	if (!size) return false;
+	if (addr + size < addr) return false;
+	if (addr < kEarlyMappedPhysTop && addr + size <= kEarlyMappedPhysTop) return true;
+	if (addr >= kAcpiHighWindowBase &&
+		addr + size <= kAcpiHighWindowBase + kAcpiHighWindowSize) return true;
+	return false;
+}
+
+static bool rsdt_candidate_valid(stduint rsdt_addr) {
+	if ((rsdt_addr & 0x3) != 0) {
+		plogwarn("[ACPI] RSDT candidate %[x] is not 4-byte aligned", rsdt_addr);
+	}
+	if (!early_phys_range_mapped(rsdt_addr, sizeof(ACPIRSDT))) {
+		plogwarn("[ACPI] Reject RSDT candidate %[x]: outside early mapped range", rsdt_addr);
+		return false;
+	}
+	auto rsdt = reinterpret_cast<const ACPIRSDT*>(rsdt_addr);
+	if (rsdt->header.length < sizeof(uni::ACPI::DescriptionHeader)) {
+		plogwarn("[ACPI] Reject RSDT candidate %[x]: bad length %[x]",
+			rsdt_addr, rsdt->header.length);
+		return false;
+	}
+	if (!early_phys_range_mapped(rsdt_addr, rsdt->header.length)) {
+		plogwarn("[ACPI] Reject RSDT candidate %[x]: table length %[x] outside early map",
+			rsdt_addr, rsdt->header.length);
+		return false;
+	}
+	if (!rsdt->header.isValid("RSDT")) {
+		plogwarn("[ACPI] Reject RSDT candidate %[x]: header validation failed", rsdt_addr);
+		return false;
+	}
+	return true;
+}
+
+static void dump_rsdp_bytes(stduint addr) {
+	auto bytes = reinterpret_cast<const uint8*>(addr);
+	ploginfo("[ACPI] RSDP raw @%[x]: %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x",
+		addr,
+		bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+		bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15],
+		bytes[16], bytes[17], bytes[18], bytes[19]);
+	ploginfo("[ACPI] RSDP ext @%[x]: %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x",
+		addr + 20,
+		bytes[20], bytes[21], bytes[22], bytes[23], bytes[24], bytes[25], bytes[26], bytes[27],
+		bytes[28], bytes[29], bytes[30], bytes[31], bytes[32], bytes[33], bytes[34], bytes[35]);
+}
+
+static void log_rsdp_candidate(stduint addr, const char* source) {
+	auto rsdp = reinterpret_cast<const uni::ACPI::RSDP*>(addr);
+	ploginfo("[ACPI] RSDP candidate (%s) at %[x], rev=%u, RSDT=%[x]",
+		source, addr, rsdp->revision, rsdp->rsdt_address);
+	dump_rsdp_bytes(addr);
+}
+
+static stduint scan_rsdp_range(stduint begin, stduint length, const char* source) {
+	const stduint end = begin + length;
+	stduint first = 0;
+	for (stduint addr = begin; addr + sizeof(uni::ACPI::RSDP) <= end; addr += 16) {
+		auto rsdp = reinterpret_cast<const uni::ACPI::RSDP*>(addr);
+		if (MemCompare(rsdp->signature, "RSD PTR ", 8)) continue;
+		ploginfo("[ACPI] Signature hit (%s) at %[x]", source, addr);
+		if (!rsdp_checksum_ok(rsdp)) continue;
+		log_rsdp_candidate(addr, source);
+		if (!first && rsdt_candidate_valid(rsdp->rsdt_address)) first = addr;
+	}
+	return first;
+}
+
+static stduint find_rsdp_bios() {
+	const stduint ebda_seg = *(volatile uint16*)(0x40E);
+	if (ebda_seg) {
+		const stduint ebda_addr = ebda_seg << 4;
+		ploginfo("[ACPI] BDA[0x40E]=%[x], EBDA base=%[x]", ebda_seg, ebda_addr);
+		if (auto found = scan_rsdp_range(ebda_addr, 1024, "EBDA")) return found;
+	}
+	else {
+		plogwarn("[ACPI] EBDA segment from BDA[0x40E] is zero");
+	}
+	ploginfo("[ACPI] Scanning BIOS high area for RSDP: %[x]..%[x]", 0xE0000u, 0xFFFFFu);
+	return scan_rsdp_range(0xE0000, 0x20000, "BIOS-HIGH");
+}
+
+static uint32 current_bootstrap_lapic_id() {
+	uint32 a = 0, b = 0, c = 0, d = 0;
+	_IO_CPUID(1, 0, &a, &b, &c, &d);
+	return (b >> 24) & 0xFF;
+}
+
+static void register_acpi_cpu_lapic_id(uint32 lapic_id, uint32 bsp_lapic_id) {
+	for0(i, acpi_cpu_count) {
+		if (acpi_cpu_lapic_ids[i] == lapic_id) return;
+	}
+	if (acpi_cpu_count >= PCU_CORES_MAX) {
+		plogwarn("[ACPI] CPU count exceeds PCU_CORES_MAX=%u, lapic=%[x] ignored",
+			PCU_CORES_MAX, lapic_id);
+		return;
+	}
+	acpi_cpu_lapic_ids[acpi_cpu_count++] = lapic_id;
+	if (lapic_id == bsp_lapic_id && acpi_cpu_count > 1) {
+		const uint32 last = acpi_cpu_count - 1;
+		const uint32 tmp = acpi_cpu_lapic_ids[0];
+		acpi_cpu_lapic_ids[0] = acpi_cpu_lapic_ids[last];
+		acpi_cpu_lapic_ids[last] = tmp;
+	}
+}
+
+static stduint find_madt_from_rsdt(stduint rsdt_addr) {
+	if (!rsdt_addr) return 0;
+	if (!early_phys_range_mapped(rsdt_addr, sizeof(ACPIRSDT))) {
+		plogwarn("[ACPI] RSDT at %[x] is outside early mapped range", rsdt_addr);
+		return 0;
+	}
+	auto rsdt = reinterpret_cast<const ACPIRSDT*>(rsdt_addr);
+	if (!early_phys_range_mapped(rsdt_addr, rsdt->header.length) ||
+		rsdt->header.length < sizeof(uni::ACPI::DescriptionHeader)) {
+		plogwarn("[ACPI] RSDT length %[x] at %[x] is invalid for early mapping",
+			rsdt->header.length, rsdt_addr);
+		return 0;
+	}
+	if (!rsdt->header.isValid("RSDT")) return 0;
+	auto entries = reinterpret_cast<const uint32*>(&rsdt->header + 1);
+	const stduint count =
+		(rsdt->header.length - sizeof(uni::ACPI::DescriptionHeader)) / sizeof(uint32);
+	for0(i, count) {
+		if (!early_phys_range_mapped(entries[i], sizeof(uni::ACPI::DescriptionHeader))) {
+			continue;
+		}
+		auto header = reinterpret_cast<const uni::ACPI::DescriptionHeader*>(entries[i]);
+		if (!early_phys_range_mapped(entries[i], header->length) ||
+			header->length < sizeof(uni::ACPI::DescriptionHeader)) {
+			continue;
+		}
+		if (header->isValid("APIC")) return entries[i];
+	}
+	return 0;
+}
+
+static void enumerate_madt_cpus(stduint madt_addr) {
+	acpi_cpu_count = 0;
+	MemSet(acpi_cpu_lapic_ids, 0, sizeof(acpi_cpu_lapic_ids));
+	if (!madt_addr) return;
+	if (!early_phys_range_mapped(madt_addr, sizeof(ACPIMADT))) return;
+	auto madt = reinterpret_cast<const ACPIMADT*>(madt_addr);
+	if (!early_phys_range_mapped(madt_addr, madt->header.length) ||
+		madt->header.length < sizeof(ACPIMADT)) {
+		plogwarn("[ACPI] MADT length %[x] at %[x] is invalid for early mapping",
+			madt->header.length, madt_addr);
+		return;
+	}
+	if (!madt->header.isValid("APIC")) return;
+	const uint32 bsp_lapic_id = current_bootstrap_lapic_id();
+	const stduint entries_begin = madt_addr + sizeof(ACPIMADT);
+	const stduint entries_end = madt_addr + madt->header.length;
+	for (stduint addr = entries_begin; addr + sizeof(ACPIMADTEntry) <= entries_end;) {
+		auto entry = reinterpret_cast<const ACPIMADTEntry*>(addr);
+		if (entry->length < sizeof(ACPIMADTEntry)) break;
+		if (addr + entry->length > entries_end) break;
+		if (entry->type == 0 && entry->length >= sizeof(ACPIMADTLocalAPIC)) {
+			auto lapic = reinterpret_cast<const ACPIMADTLocalAPIC*>(entry);
+			if (lapic->flags & 0x1) {
+				register_acpi_cpu_lapic_id(lapic->apic_id, bsp_lapic_id);
+			}
+		}
+		else if (entry->type == 9 && entry->length >= sizeof(ACPIMADTLocalX2APIC)) {
+			auto x2apic = reinterpret_cast<const ACPIMADTLocalX2APIC*>(entry);
+			if (x2apic->flags & 0x1) {
+				register_acpi_cpu_lapic_id(x2apic->x2apic_id, bsp_lapic_id);
+			}
+		}
+		addr += entry->length;
+	}
+	if (!acpi_cpu_count) {
+		register_acpi_cpu_lapic_id(bsp_lapic_id, bsp_lapic_id);
+	}
+}
 
 #elif _MCCA == 0x8664
 //
@@ -56,11 +286,33 @@ bool Memory::initialize(stduint eax, byte* ebx) {
 		p_ext = (byte*)(_IMM(&FILE_ENDO) + 0x1000);
 		p_ext = (byte*)floorAlign(0x1000, _IMM(p_ext));
 	}
+	acpi_rsdp_addr = find_rsdp_bios();
+	if (acpi_rsdp_addr) {
+		auto rsdp = reinterpret_cast<const uni::ACPI::RSDP*>(acpi_rsdp_addr);
+		acpi_madt_addr = find_madt_from_rsdt(rsdp->rsdt_address);
+		enumerate_madt_cpus(acpi_madt_addr);
+		ploginfo("[ACPI] RSDP found at %[x], rev=%u, RSDT=%[x]",
+			acpi_rsdp_addr, rsdp->revision, rsdp->rsdt_address);
+		if (acpi_madt_addr) {
+			ploginfo("[ACPI] MADT found at %[x], CPU count=%u", acpi_madt_addr, acpi_cpu_count);
+			for0(i, acpi_cpu_count) {
+				ploginfo("[ACPI] CPU%u LAPIC ID=%[x]", i, acpi_cpu_lapic_ids[i]);
+			}
+		}
+		else {
+			plogwarn("[ACPI] MADT not found from RSDT");
+		}
+	}
+	else {
+		plogwarn("[ACPI] RSDP not found via BIOS scan");
+	}
 	if (eax == MULTIBOOT2_BOOTLOADER_MAGIC) { parse_grub(_IMM(ebx)); }
 	_physical_allocate = Memory::physical_allocate;
+	mecocoa_global->kernel_cr3 = 0x100000;
 	MemSet(kernel_paging.root_level_page = (PageEntry*)0x100000, 0, 0x1000);// kernel_paging.Reset();
 	kernel_paging.Map(0x00000000, 0x00000000, 0x10000000, PAGESIZE_4MB, PGPROP_present | PGPROP_writable | PGPROP_user_access);// 4MB
 	kernel_paging.Map(0x80000000, 0x00000000, 0x10000000, PAGESIZE_4MB, PGPROP_present | PGPROP_writable);
+	kernel_paging.Map(kAcpiHighWindowBase, kAcpiHighWindowBase, kAcpiHighWindowSize, PAGESIZE_4MB, PGPROP_present | PGPROP_writable);
 	kernel_paging.Map(0xFEC00000, 0xFEC00000, 0x00200000, PAGESIZE_4MB, PGPROP_present | PGPROP_writable);
 	setCR4(getCR4() | 0x10);// CR4.PSE
 	setCR3(_IMM(kernel_paging.root_level_page));

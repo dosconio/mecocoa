@@ -2,7 +2,8 @@ ENTRY(multiboot_entry) /* ENTRY(_start) */ /* -e _start */
 
 MEMORY
 {
-	RAM1 (rwx) : ORIGIN =     0x8000, LENGTH = 0x70000 /* 0x7E00 .. 0x70000 */
+	RAM0 (rwx) : ORIGIN =     0x7E00, LENGTH = 0x100
+	RAM1 (rwx) : ORIGIN =     0x8000, LENGTH = 0x70000
 	RAM2 (rwx) : ORIGIN = 0x00101000, LENGTH = 0x10000000
 }
 
@@ -18,6 +19,10 @@ SECTIONS
 
 	.text : {
 		*mcca-atx-x86-flap32.grub.o(.text .text.*)
+	} > RAM0
+
+	/* MultiCore */
+	.text : {
 		*mcca-atx-x86-flap32-ladder.o(.text .text.*)
 		*(.text .text.*)
 	} > RAM1

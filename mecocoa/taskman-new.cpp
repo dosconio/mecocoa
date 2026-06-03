@@ -7,7 +7,7 @@
 
 #include "../include/filesys.hpp"
 
-void* higher_stacks[PCU_CORES_MAX];// when 1 core 1 stack
+extern "C" void* higher_stacks[PCU_CORES_MAX] = {};// when 1 core 1 stack
 
 struct AuxVector {
 	stduint type;
@@ -121,6 +121,11 @@ constexpr unsigned ldt_entry_cnt = 8;
 alignas(16) static descriptor_t _LDT[ldt_entry_cnt];
 #define FLAT_CODE_R3_PROP 0x00CFFA00
 #define FLAT_DATA_R3_PROP 0x00CFF200
+static uint32 current_bootstrap_lapic_id() {
+	uint32 a = 0, b = 0, c = 0, d = 0;
+	_IO_CPUID(1, 0, &a, &b, &c, &d);
+	return (b >> 24) & 0xFF;
+}
 static void make_LDT(descriptor_t* ldt_alias, byte ring) {
 	for0(i, 4) {
 		ldt_alias[i]._data = (uint64(FLAT_CODE_R3_PROP) << 32) | 0x0000FFFF;
@@ -218,12 +223,37 @@ static stduint _Taskman_Create_Paging(ProcessBlock *ppb, byte ring, stduint stac
 	void Taskman::Initialize(stduint cpuid) {
 		#if (_MCCA & 0xFF00) == 0x8600
 		if (cpuid || PCU_CORES_PERCORE[0]) return; // already initialized
+		#if _MCCA == 0x8632
+		PCU_CORES = acpi_cpu_count ? minof(acpi_cpu_count, _IMM(PCU_CORES_MAX)) : 1;
+		#else
 		PCU_CORES = PCU_CORES_MAX;
+		#endif
+		for0(i, LAPIC_ID_MAP_SIZE) {
+			g_lapicid_to_coreid[i] = CORE_ID_INVALID;
+			ap_lapicid_to_coreid[i] = CORE_ID_INVALID;
+		}
 		for0(i, PCU_CORES) {
 			auto percore = (PERCORE*)mem.allocate(sizeof(PERCORE), PAGESIZE_4KB);
 			MemSet(percore, 0, sizeof(PERCORE));
 			PCU_CORES_PERCORE[i] = percore;
 			higher_stacks[i] = (mem.allocate(0x1000, PAGESIZE_4KB));
+			ap_higher_stack_tops[i] = _IMM(higher_stacks[i]) + 0x1000 - 0x10;
+			#if _MCCA == 0x8632
+			percore->lapic_id = acpi_cpu_count ? acpi_cpu_lapic_ids[i] :
+				(i == 0 ? current_bootstrap_lapic_id() : CORE_ID_INVALID);
+			if (percore->lapic_id < LAPIC_ID_MAP_SIZE) {
+				g_lapicid_to_coreid[percore->lapic_id] = i;
+				ap_lapicid_to_coreid[percore->lapic_id] = i;
+			}
+			else {
+				plogwarn("[COREMAN] LAPIC ID %[x] exceeds direct map size %u",
+					percore->lapic_id, LAPIC_ID_MAP_SIZE);
+			}
+			#else
+			percore->lapic_id = CORE_ID_INVALID;
+			#endif
+			percore->state = CoreState::Prepared;
+			percore->kernel_stack = 0;
 			#if _MCCA == 0x8664
 			percore->tss.RSP0 = _NORMAL_RINGSTACK + HIGHER_STACK_SIZE - 8;// for user-app in cpu0
 			#else
@@ -286,6 +316,10 @@ static stduint _Taskman_Create_Paging(ProcessBlock *ppb, byte ring, stduint stac
 	PCU_CORES_PERCORE[cpuid]->current_thread = kernel_thread;
 	PCU_CORES_PERCORE[cpuid]->kernel_rsp = _NORMAL_RINGSTACK + HIGHER_STACK_SIZE;
 	PCU_CORES_PERCORE[cpuid]->tss.RSP0 = PCU_CORES_PERCORE[cpuid]->kernel_rsp;
+	#elif _MCCA == 0x8632
+	if (PCU_CORES_PERCORE[cpuid]) {
+		PCU_CORES_PERCORE[cpuid]->current_thread = kernel_thread;
+	}
 	#endif
 	//
 	chain.Compare_f = ProcCmp;
@@ -304,13 +338,15 @@ static stduint _Taskman_Create_Paging(ProcessBlock *ppb, byte ring, stduint stac
 	kernel_task->focus_tty = vttys[0];
 	Taskman::AppendThread(kernel_thread);
 
-	auto idle_task = Create((void*)Taskman::Idle, RING_M, false);
-	if (idle_task) {
+	for0(cpu_i, PCU_CORES) {
+		auto idle_task = Create((void*)Taskman::Idle, RING_M, false);
+		if (!idle_task) continue;
 		idle_task->main_thread->priority = 31; // lowest priority
 		idle_task->main_thread->time_slice = 1;
-		idle_thread(cpuid) = idle_task->main_thread;
-		#if _MCCA == 0x8664
-		PCU_CORES_PERCORE[cpuid]->idle_thread = idle_task->main_thread;
+		idle_task->main_thread->processor_id = cpu_i;
+		idle_thread(cpu_i) = idle_task->main_thread;
+		#if (_MCCA & 0xFF00) == 0x8600
+		PCU_CORES_PERCORE[cpu_i]->idle_thread = idle_task->main_thread;
 		#endif
 	}
 }

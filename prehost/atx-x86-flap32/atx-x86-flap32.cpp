@@ -27,6 +27,7 @@ _sign_entry() {
 	Devsman::Initialize();
 	Virtman::Initialize();
 	Syscall::Initialize();
+	Coreman::Initialize();
 
 	mecfetch();
 	__asm("ud2");

@@ -76,6 +76,7 @@ void uni::FloppyDisk::Reset() {
 	for (volatile int i = 0; i < 10000; i++) _TEMP;
 	flp_lock = 0;
 	outpb(PORT_FDC_DOR, 0x0C); // Enable DMA/INT, clear Reset
+	motor_state = false;
 
 	if (fn_int_wait) fn_int_wait();
 
@@ -216,7 +217,8 @@ struct FloppyDisk_Paged : public uni::FloppyDisk {
 
 bool FloppyDisk_Paged::Read(stduint BlockIden, void* Dest) {
 	if (Taskman::CurrentPID() == Task_Flp_Serv) {
-		return FloppyDisk::Read(BlockIden, Dest);
+		// Delegate to the actual physical floppy disk instance to keep motor state in sync
+		return floppies[getID()]->Read(BlockIden, Dest);
 	}
 	stduint to_args[2];
 	to_args[0] = getID();
@@ -232,7 +234,8 @@ bool FloppyDisk_Paged::Read(stduint BlockIden, void* Dest) {
 
 bool FloppyDisk_Paged::Write(stduint BlockIden, const void* Sors) {
 	if (Taskman::CurrentPID() == Task_Flp_Serv) {
-		return FloppyDisk::Write(BlockIden, Sors);
+		// Delegate to the actual physical floppy disk instance to keep motor state in sync
+		return floppies[getID()]->Write(BlockIden, Sors);
 	}
 	stduint to_args[2];
 	to_args[0] = getID();

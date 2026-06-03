@@ -53,10 +53,9 @@ _PACKED(struct) mecocoa_global_t {
 	uint16 ADDR_PARA1;
 	uint16 ADDR_PARA2;
 	uint16 ADDR_PARA3;
-	stduint kernel_cr3;// offset 0x08
-	uint16 padding0;
-	uint16 gdt_len;
-	mec_gdt* gdt_ptr;
+	uint64 kernel_cr3;// offset 0x08
+	uint16 gdt_len;// offset 0x10 for 64-bit
+	mec_gdt* gdt_ptr;// 0x12
 	volatile timeval_t system_time;//{TORM}
 };
 
@@ -102,6 +101,7 @@ _PACKED(struct) VideoInfoEntry {
 #define mem_area_exten_beg 0x00101000
 // area-basic: 0x7E00 .. 0x80000
 // area-exten: mem_area_exten_beg .. mem_area_exten_beg + areax_size
+extern stduint acpi_rsdp_addr;
 #endif
 #endif
 

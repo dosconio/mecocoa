@@ -8,6 +8,9 @@
 
 #if (_MCCA & 0xFF00) == 0x8600
 PERCORE* Taskman::PCU_CORES_PERCORE[PCU_CORES_MAX] = {};
+uint32 g_lapicid_to_coreid[LAPIC_ID_MAP_SIZE] = {};
+extern "C" uint32 ap_lapicid_to_coreid[LAPIC_ID_MAP_SIZE] = {};
+extern "C" stduint ap_higher_stack_tops[PCU_CORES_MAX] = {};
 #else
 ThreadBlock* PCU_CORES_current_thread[PCU_CORES_MAX] = {};
 ThreadBlock* PCU_CORES_idle_thread[PCU_CORES_MAX] = {};
@@ -70,7 +73,42 @@ static void RebindThreadKernelStackWindow(ThreadBlock* th) {
 }
 #endif
 
-#if _MCCA == 0x8664
+#if _MCCA == 0x8632
+static void BindCurrentKernelEntryStack(ThreadBlock* th, stduint cpuid) {
+	if (!th) return;
+	auto percore = Taskman::PCU_CORES_PERCORE[cpuid];
+	if (!percore) return;
+	if (!th->stack_levladdr || !th->stack_size) return;
+	// 8632 enters ring0 through the fixed high virtual stack window. The
+	// per-thread ring0 stack backing changes, but ESP0 must keep pointing at
+	// the remapped window top rather than the backing allocation itself.
+	RebindThreadKernelStackWindow(th);
+	percore->current_thread = th;
+	percore->kernel_stack = _NORMAL_RINGSTACK + th->stack_size - 0x10;
+	percore->tss.ESP0 = percore->kernel_stack;
+	percore->tss.SS0 = SegData;
+}
+
+extern "C" void AP_Main(stduint core_id) {
+	auto percore = Taskman::PCU_CORES_PERCORE[core_id];
+	if (!percore) {
+		plogerro("[COREMAN] AP core%u missing PERCORE", core_id);
+		loop HALT();
+	}
+	auto idle = Taskman::idle_thread(core_id);
+	if (!idle) {
+		plogerro("[COREMAN] AP core%u missing idle thread", core_id);
+		loop HALT();
+	}
+	idle->processor_id = core_id;
+	idle->state = ThreadBlock::State::Running;
+	Taskman::current_thread(core_id) = idle;
+	BindCurrentKernelEntryStack(idle, core_id);
+	percore->state = CoreState::Online;
+	ploginfo("[COREMAN] AP core%u online, lapic=%[x]", core_id, percore->lapic_id);
+	loop HALT();
+}
+#elif _MCCA == 0x8664
 static void BindCurrentKernelEntryStack(ThreadBlock* th, stduint cpuid) {
 	if (!th) return;
 	auto percore = Taskman::PCU_CORES_PERCORE[cpuid];
@@ -470,11 +508,8 @@ auto Taskman::Schedule(bool omit_slice)->decltype(Schedule())
 		printlog(_LOG_FATAL, "task switch error state (TID%u, State%u)", new_tb->tid, _IMM(new_tb->state));
 	}
 
-	current_thread(cpuid) = new_tb;
-	#if _MCCA == 0x8632
-	RebindThreadKernelStackWindow(new_tb);
-	#endif
-	#if _MCCA == 0x8664
+current_thread(cpuid) = new_tb;
+	#if (_MCCA & 0xFF00) == 0x8600
 	BindCurrentKernelEntryStack(new_tb, cpuid);
 	#endif
 
@@ -513,10 +548,7 @@ void Taskman::SleepAndRelease(Spinlock* lk) {
 	}
 
 	current_thread(getID()) = new_tb;
-	#if _MCCA == 0x8632
-	RebindThreadKernelStackWindow(new_tb);
-	#endif
-	#if _MCCA == 0x8664
+	#if (_MCCA & 0xFF00) == 0x8600
 	BindCurrentKernelEntryStack(new_tb, getID());
 	#endif
 	new_tb->state = ThreadBlock::State::Running;

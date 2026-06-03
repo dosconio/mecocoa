@@ -64,6 +64,7 @@ namespace uni {
 		outpb(PORT_FDC_DOR, 0x00);
 		for (volatile int i = 0; i < 100000; i++) _TEMP;
 		outpb(PORT_FDC_DOR, 0x0C); // Enable DMA/INT, clear Reset
+		motor_state = false;
 
 		for (volatile int i = 0; i < 100000; i++) _TEMP;
 

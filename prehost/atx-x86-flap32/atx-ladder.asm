@@ -17,6 +17,10 @@ SegCo32 EQU 8*4
 ADDR_PARA0 EQU 0x500
 ADDR_PARA1 EQU 0x502
 
+EXTERN ap_lapicid_to_coreid
+EXTERN ap_higher_stack_tops
+EXTERN AP_Main
+
 %if _MCCA == 0x8664
 [BITS 32]
 	PUSHAD
@@ -78,9 +82,52 @@ PointBack32:
 JMP FAR [KernelJump]
 
 %elif _MCCA == 0x8632
+[BITS 16]
+; Entry of Application Processor
+GLOBAL SMP_AP_ENTRY
+SMP_AP_ENTRY: CLI
+	; WBINVD
+	XOR AX, AX
+	MOV DS, AX
+	MOV ES, AX
+CONT:
+	LGDT [0x510]; GDT addr < 0x10000
+	MOV  EAX, [0x508]
+	MOV  CR3, EAX
+	MOV EAX, CR4
+	BTS EAX, 4; CR4.PSE
+	MOV CR4, EAX
+	MOV  EAX, CR0
+	OR   EAX, 0x80000001
+	MOV  CR0, EAX
+	JMP  WORD SegCo32:TMP32
+
+ALIGN 4
 OLD_STACK: DD 0
+TMP1:DD 0,0
 
 [BITS 32]
+TMP32:
+	LoadDataSegs SegData
+	LGDT [0x510]; GDT addr < 0x10000
+	XOR ECX, ECX
+	MOV EAX, 0x0B
+	CPUID
+	MOV EAX, [ap_lapicid_to_coreid + EDX * 4]
+	CMP EAX, 0xFFFFFFFF
+	JE  SMP_AP_ENTRY_END
+	MOV ECX, EAX
+	MOV ESP, [ap_higher_stack_tops + ECX * 4]
+	PUSH ECX
+	CALL AP_Main
+	ADD ESP, 4
+
+
+SMP_AP_ENTRY_END:
+	HLT
+JMP SMP_AP_ENTRY_END
+
+
 GLOBAL CallCo16
 CallCo16:
 	MOV [OLD_STACK], ESP

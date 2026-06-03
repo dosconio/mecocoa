@@ -66,6 +66,23 @@ extern uni::Queue<SysMessage> message_queue;
 #define PCU_CORES_MAX 16
 #endif
 
+static constexpr uint32 CORE_ID_INVALID = 0xFFFFFFFFu;
+static constexpr stduint LAPIC_ID_MAP_SIZE = 256;
+
+#if _MCCA == 0x8632
+extern stduint acpi_madt_addr;
+extern stduint acpi_cpu_count;
+extern uint32 acpi_cpu_lapic_ids[PCU_CORES_MAX];
+#ifdef __cplusplus
+extern "C" {
+#endif
+extern uint32 ap_lapicid_to_coreid[LAPIC_ID_MAP_SIZE];
+extern stduint ap_higher_stack_tops[PCU_CORES_MAX];
+#ifdef __cplusplus
+}
+#endif
+#endif
+
 #define HIGHER_STACK_SIZE 0x8000
 
 #if (_MCCA & 0xFF00) == 0x8600
@@ -94,6 +111,14 @@ enum {
 
 struct ThreadBlock;
 
+enum class CoreState : uint32 {
+	Empty = 0,
+	Prepared = 1,
+	Booting = 2,
+	Online = 3,
+	Failed = 4,
+};
+
 struct PERCORE {
 	TSS_t tss; // offset 0x000: for hardware stack switching
 	uint8 _pad0[128 - sizeof(TSS_t) % 128
@@ -107,12 +132,16 @@ struct PERCORE {
 	ThreadBlock* idle_thread;
 	ThreadBlock* volatile switching_out_thread;
 	uint8 _pad2[128 - 3 * sizeof(void*)];
+	uint32 lapic_id;
+	CoreState volatile state;
+	stduint kernel_stack;
 };
 static_assert(sizeof(PERCORE) <= 0x1000, "PERCORE must fit in one 4KB page");
 #if _MCCA == 0x8664
 static_assert(offsetof(PERCORE, kernel_rsp) == 128, "PERCORE.kernel_rsp offset mismatch!");
 static_assert(offsetof(PERCORE, scratch) == 136, "PERCORE.scratch offset mismatch!");
 #endif
+extern uint32 g_lapicid_to_coreid[LAPIC_ID_MAP_SIZE];
 
 #else
 struct ThreadBlock;
@@ -542,6 +571,11 @@ public:
 		DestroyThread(ThreadBlock* th);
 	static void
 		DumpTask(ProcessBlock*);
+};
+class Coreman {
+public:
+	static auto
+		Initialize() -> void;// called by Bootstrap Processor
 };
 #endif
 
