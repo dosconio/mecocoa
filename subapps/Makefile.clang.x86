@@ -12,7 +12,8 @@ MCCA_X86_CRT0 = $(MCCA_X86_SYSROOT)/usr/lib/$(MCCA_X86_TRIPLE)/crt0.o
 MCCA_X86_LIBC = $(MCCA_X86_SYSROOT)/usr/lib/$(MCCA_X86_TRIPLE)/libc.a
 MCCA_X86_COMFLAGS = $(flag) -I$(uincpath) -I$(uincpath)/c/ISO_IEC_STD -I$(uincpath)/c/API-POSIX -I$(MCCA_X86_SYSROOT)/usr/include
 
-MCCA_X86_CFLAGS = $(MCCA_X86_COMFLAGS) --sysroot=$(MCCA_X86_SYSROOT) -m32 -fno-builtin -fno-stack-protector -fno-pic -fno-pie -static -nostdlib -Wno-incompatible-library-redeclaration -Wno-invalid-constexpr
+MCCA_X86_CFLAGS = $(MCCA_X86_COMFLAGS) --sysroot=$(MCCA_X86_SYSROOT) -m32 -fno-builtin -fno-stack-protector -fno-pic -fno-pie -static -nostdlib \
+	-Wno-incompatible-library-redeclaration -Wno-invalid-constexpr -Wno-empty-body
 MCCA_X86_CXXFLAGS = $(MCCA_X86_CFLAGS) -fno-exceptions -fno-rtti -fno-use-cxa-atexit -std=c++2a
 MCCA_X86_LDLIBS = $(MCCA_X86_CRT0) $(MCCA_X86_LIBC) -lgcc -Wl,-m,elf_i386 -Wl,-z,noexecstack -no-pie -fuse-ld=lld
 STDCPP_APP_CXXFLAGS = -m32 -static -nodefaultlibs -nostartfiles -fno-omit-frame-pointer -fno-stack-protector -fno-pic -fno-builtin -fno-strict-aliasing -ffunction-sections -fdata-sections $(CXW) -std=c++2a

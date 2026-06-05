@@ -370,10 +370,11 @@ void serv_file_loop()// for IDE 0:0, 0:1
 			syssend(Task_Hdd_Serv, &retval, sizeof(retval[0]), _IMM(FiledevMsg::RUPT));// while (!fileman_hd_ready);
 			syssend(Task_Flp_Serv, &retval, sizeof(retval[0]), _IMM(FiledevMsg::RUPT));
 			#endif
-			Filesys::Tree();
+			// Filesys::Tree();
 			Consman_InitializeFreeType();
 			ProcessBlock* init_p = Taskman::CreateFile(("/md0/init"), RING_U, Task_Kernel);
 			if (init_p) {
+				init_p->main_thread->name = "init";
 				init_p->focus_tty = vttys[0];
 				Taskman::Append(init_p);
 				Taskman::AppendThread(init_p->main_thread);
@@ -388,6 +389,7 @@ void serv_file_loop()// for IDE 0:0, 0:1
 			#if _GUI_ENABLE
 			ploginfo("Loading first Shell...");
 			ProcessBlock* shell_p = Taskman::Create((void*)&serv_shell_process, RING_M);
+			if (shell_p) shell_p->main_thread->name = "shell";
 			ploginfo("Create new shell-form: pid%u", shell_p ? shell_p->pid : 0);
 			#else
 			ProcessBlock* p;

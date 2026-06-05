@@ -17,6 +17,63 @@ extern Spinlock scheduler_lock;
 // #pragma GCC push_options
 // #pragma GCC optimize("O2")
 
+#if _MCCA == 0x8632
+stduint Taskman::getID() {
+	uint32 a = 0, b = 0, c = 0, d = 0;
+	_IO_CPUID(0x0B, 0, &a, &b, &c, &d);
+	if (d < LAPIC_ID_MAP_SIZE) {
+		const auto core_id = g_lapicid_to_coreid[d];
+		if (core_id != CORE_ID_INVALID) return core_id;
+	}
+	return 0;
+}
+
+static void HandleRescheduleIPI() {
+	IC.SendEOI();
+}
+
+static void HandleWakeIPI() {
+	IC.SendEOI();
+}
+
+static void SendFixedIPIByCore(stduint core_id, uint8 vector) {
+	if (core_id >= Taskman::PCU_CORES) return;
+	auto percore = Taskman::PCU_CORES_PERCORE[core_id];
+	if (!percore) return;
+	const uint32 lapic_id = percore->lapic_id;
+	if (lapic_id == CORE_ID_INVALID) return;
+
+	if (IC.getType() == 2) {
+		const uint64 icr = (uint64(lapic_id) << 32) | vector;
+		setMSR(x86MSR::APIC_ICR_LOW, icr);
+	}
+	else if (IC.getType() == 1) {
+		IC.WriteLAPIC(0x310, lapic_id << 24);
+		IC.WriteLAPIC(0x300, vector);
+	}
+}
+
+void Taskman::SendRescheduleIPI(stduint core_id) {
+	SendFixedIPIByCore(core_id, IRQ_RESCHED_IPI);
+}
+
+void Taskman::SendWakeIPI(stduint core_id) {
+	SendFixedIPIByCore(core_id, IRQ_WAKE_IPI);
+}
+
+void SendWakeAllApsIPI() {
+	if (Taskman::PCU_CORES <= 1) return;
+	if (IC.getType() == 2) {
+		setMSR(x86MSR::APIC_ICR_LOW, 0xC0000u | IRQ_WAKE_IPI);
+	}
+	else if (IC.getType() == 1) {
+		IC.WriteLAPIC(0x300, 0xC0000u | IRQ_WAKE_IPI);
+	}
+}
+#else
+stduint Taskman::getID() { return _TEMP 0; }
+#endif
+
 namespace uni {
 	template <>
 	bool Queue<SysMessage>::Enqueue(const SysMessage& item) {
@@ -246,6 +303,7 @@ auto Taskman::AllocateThread() -> ThreadBlock* {
 	}
 	MemSet(tb, 0, sizeof(ThreadBlock));
 	new (tb) ThreadBlock();
+	tb->processor_id = CORE_ID_INVALID;
 	tb->async_messages.func_free = free_async_msg;
 	return tb;
 }
@@ -697,6 +755,10 @@ void Coreman::Initialize() {
 		plogwarn("[COREMAN] Coreman is not supported, because APIC is not supported");
 		return;
 	}
+	IC[IRQ_RESCHED_IPI].setRange(mglb(Handint_RESCHED_Entry), SegCo32);
+	IC[IRQ_WAKE_IPI].setRange(mglb(Handint_WAKE_Entry), SegCo32);
+	register_interrupt_handler(IRQ_RESCHED_IPI, HandleRescheduleIPI);
+	register_interrupt_handler(IRQ_WAKE_IPI, HandleWakeIPI);
 	const stduint ap_entry = _IMM(SMP_AP_ENTRY);
 	ploginfo("[COREMAN] Entry of SMP-AP: %[x]", ap_entry);
 

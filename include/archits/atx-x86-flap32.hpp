@@ -28,6 +28,8 @@ extern "C" void Handint_FLP_Entry();
 extern "C" void Handint_FLP();
 extern "C" void Handint_HDD_Entry();
 extern "C" void Handint_HDD();
+extern "C" void Handint_RESCHED_Entry();
+extern "C" void Handint_WAKE_Entry();
 
 // ----
 

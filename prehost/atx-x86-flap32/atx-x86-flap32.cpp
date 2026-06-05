@@ -33,14 +33,14 @@ _sign_entry() {
 	__asm("ud2");
 
 	// Service
-	Taskman::Create((void*)&serv_task_loop, RING_M);
-	Taskman::Create((void*)&serv_cons_loop, RING_M);
-	Taskman::Create((void*)&serv_graf_loop, RING_M);
-	Taskman::Create((void*)&serv_file_loop, RING_M);
+	Taskman::Create((void*)&serv_task_loop, RING_M)->main_thread->name = "serv_task_loop";
+	Taskman::Create((void*)&serv_cons_loop, RING_M)->main_thread->name = "serv_cons_loop";
+	Taskman::Create((void*)&serv_graf_loop, RING_M)->main_thread->name = "serv_graf_loop";
+	Taskman::Create((void*)&serv_file_loop, RING_M)->main_thread->name = "serv_file_loop";
 	//
-	Taskman::Create((void*)&serv_dev_mem_loop, RING_M);
-	Taskman::Create((void*)&serv_dev_hd_loop, RING_M);
-	Taskman::Create((void*)&serv_dev_fl_loop, RING_M);
+	Taskman::Create((void*)&serv_dev_mem_loop, RING_M)->main_thread->name = "serv_dev_mem_loop";
+	Taskman::Create((void*)&serv_dev_hd_loop, RING_M)->main_thread->name = "serv_dev_hd_loop";
+	Taskman::Create((void*)&serv_dev_fl_loop, RING_M)->main_thread->name = "serv_dev_fl_loop";
 
 	IC.enInterrupt();
 	// syscall(syscall_t::OUTC, 'O', 0);

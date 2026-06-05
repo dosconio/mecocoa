@@ -8,6 +8,11 @@
 #include <cpp/Device/UART>
 #include <c/driver/mouse.h>
 #include <c/driver/timer.h>
+#if _MCCA == 0x8632
+extern "C" volatile uint32 ap_ring3_iret_guard_hits;
+extern "C" volatile uint32 ap_ring3_iret_last_lapicid;
+extern "C" volatile uint32 ap_ring3_iret_last_coreid;
+#endif
 
 #if _MCCA == 0x8664 && defined(_UEFI)
 InterruptControl IC = { nil };
@@ -146,6 +151,35 @@ static rostr ExceptionDescription[] = {
 };
 #endif
 
+#if _MCCA == 0x8632
+static inline bool FrameFromUser(const HardwareInterruptFrame* frame) {
+	return (frame->hw_cs & 3) != 0;
+}
+
+static inline stduint FrameSavedEsp(const HardwareInterruptFrame* frame) {
+	return FrameFromUser(frame) ? frame->hw_esp : frame->pg_esp_old;
+}
+
+static inline stduint FrameSavedSs(const HardwareInterruptFrame* frame) {
+	return FrameFromUser(frame) ? frame->hw_ss : frame->pg_ss;
+}
+
+static void LogSelectorFaultContext(rostr name, HardwareInterruptFrame* frame, stduint para) {
+	const stduint cpu = Taskman::getID();
+	const stduint tid = Taskman::CurrentTID();
+	const stduint sel_index = para >> 3;
+	const stduint sel_ti = (para >> 2) & 0x1;
+	const stduint sel_idt = (para >> 1) & 0x1;
+	const stduint sel_ext = para & 0x1;
+	printlog(_LOG_FATAL,
+		"%s with 0x%[x] on CPU%u, TID%u at EIP=0x%[x] ESP=0x%[x] CS=0x%[x] SS=0x%[x] CR3=0x%[x] "
+		"(idx=0x%[x] %s %s ext=%u) [R3SCR] hits=%u lapic=%u core=%u",
+		name, para, cpu, tid, frame->hw_eip, FrameSavedEsp(frame), frame->hw_cs, FrameSavedSs(frame), frame->pg_cr3,
+		sel_index, sel_idt ? "IDT" : (sel_ti ? "LDT" : "GDT"), sel_idt ? "vector" : "selector", sel_ext,
+		ap_ring3_iret_guard_hits, ap_ring3_iret_last_lapicid, ap_ring3_iret_last_coreid);
+}
+#endif
+
 
 #if (_MCCA & 0xFF00) == 0x8600
 _ESYM_C
@@ -155,7 +189,8 @@ bool exception_handler_user(HardwareInterruptFrame* frame, stduint iden, stduint
 		#if _MCCA == 0x8664
 		plogwarn("User exception %d (para %[x]) at RIP %[x], RSP %[x], CR2 %[x]", (int)iden, para, frame->hw_rip, frame->hw_rsp, getCR2());
 		#else
-		plogwarn("User exception %d (para %[x]) at EIP %[x], ESP %[x]", (int)iden, para, frame->hw_eip, frame->hw_esp);
+		plogwarn("User exception %d (para %[x]) on CPU%u, TID%u at EIP %[x], ESP %[x], CR3 %[x]",
+			(int)iden, para, Taskman::getID(), Taskman::CurrentTID(), frame->hw_eip, FrameSavedEsp(frame), frame->pg_cr3);
 		#endif
 	}
 	int sig = 0;
@@ -265,7 +300,7 @@ void exception_handler(HardwareInterruptFrame* frame) {
 		else {
 			#if _MCCA == 0x8632
 			printlog(_LOG_FATAL, " %s at EIP %[x], ESP %[x], CS %[x], CR2 %[x], TID %u",
-				ExceptionDescription[iden], frame->hw_eip, frame->hw_esp, frame->hw_cs, getCR2(), Taskman::CurrentTID());
+				ExceptionDescription[iden], frame->hw_eip, FrameSavedEsp(frame), frame->hw_cs, getCR2(), Taskman::CurrentTID());
 			#elif _MCCA == 0x8664
 			printlog(_LOG_FATAL, " %s at RIP %[x], RSP %[x], CS %[x], CR2 %[x], TID %u",
 				ExceptionDescription[iden], frame->hw_rip, frame->hw_rsp, frame->hw_cs, getCR2(), Taskman::CurrentTID());
@@ -286,12 +321,38 @@ void exception_handler(HardwareInterruptFrame* frame) {
 		break;
 
 	case ERQ_Page_Fault:// 14
-		printlog(_LOG_FATAL, "%s with 0x%[x], vaddr=0x%[x], TID%u, CR3=0x%[x]\n\r\t %s%s%s%s",
+		#if _MCCA == 0x8632
+		printlog(_LOG_FATAL,
+			"%s with 0x%[x], vaddr=0x%[x], TID%u, CR3=0x%[x]\n\r\t %s%s%s%s "
+			"[R3SCR] hits=%u lapic=%u core=%u",
+			ExceptionDescription[iden], para, getCR2(), Taskman::CurrentTID(), r15,
+			para & 1 ? "Protected " : "Miss",
+			para & 0b10 ? "Write " : "Read ",
+			para & 0b100 ? "User " : "Kernel ",
+			para & 0b1000 ? "RSVD " : " ",
+			ap_ring3_iret_guard_hits, ap_ring3_iret_last_lapicid, ap_ring3_iret_last_coreid); // printlog will call halt machine
+		#else
+		printlog(_LOG_FATAL,
+			"%s with 0x%[x], vaddr=0x%[x], TID%u, CR3=0x%[x]\n\r\t %s%s%s%s",
 			ExceptionDescription[iden], para, getCR2(), Taskman::CurrentTID(), r15,
 			para & 1 ? "Protected " : "Miss",
 			para & 0b10 ? "Write " : "Read ",
 			para & 0b100 ? "User " : "Kernel ",
 			para & 0b1000 ? "RSVD " : " "); // printlog will call halt machine
+		#endif
+		break;
+
+	case ERQ_Invalid_TSS:// 10
+	case ERQ_x0B:// 11 Segment Not Present
+	case ERQ_x0C:// 12 Stack Fault
+	case ERQ_x0D:// 13 General Protection
+		#if _MCCA == 0x8632
+		LogSelectorFaultContext(ExceptionDescription[iden], frame, para);
+		#else
+		printlog(_LOG_FATAL, have_para ? "%s with 0x%[32H]" : "%s",
+			ExceptionDescription[iden], para);
+		#endif
+		__asm("cli; hlt");
 		break;
 
 	default:

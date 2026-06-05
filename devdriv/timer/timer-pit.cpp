@@ -78,8 +78,16 @@ void Handint_PIT()
 	#if _GUI_DOUBLE_BUFFER
 	RenderFrameFlush();
 	#endif
+	if (time_slice == 2) {
+		if (Taskman::getID() == 0) {
+			SendWakeAllApsIPI();
+		}
+	}
 	if (time_slice >= 4) { // switch task
 		time_slice = 0;
+		if (Taskman::getID() == 0) {
+			WakeOneIdleApForReadyWork();
+		}
 		Taskman::Schedule();
 	}
 }

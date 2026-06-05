@@ -68,8 +68,9 @@ extern uni::Queue<SysMessage> message_queue;
 
 static constexpr uint32 CORE_ID_INVALID = 0xFFFFFFFFu;
 static constexpr stduint LAPIC_ID_MAP_SIZE = 256;
-
 #if _MCCA == 0x8632
+static constexpr uint8 IRQ_RESCHED_IPI = 0xF1;
+static constexpr uint8 IRQ_WAKE_IPI = 0xF2;
 extern stduint acpi_madt_addr;
 extern stduint acpi_cpu_count;
 extern uint32 acpi_cpu_lapic_ids[PCU_CORES_MAX];
@@ -78,9 +79,16 @@ extern "C" {
 #endif
 extern uint32 ap_lapicid_to_coreid[LAPIC_ID_MAP_SIZE];
 extern stduint ap_higher_stack_tops[PCU_CORES_MAX];
+extern stduint ap_ring3_iret_stack_tops[PCU_CORES_MAX];
+extern volatile uint32 ap_resched_ipi_hits[PCU_CORES_MAX];
+extern volatile uint32 ap_ring3_iret_guard_hits;
+extern volatile uint32 ap_ring3_iret_last_lapicid;
+extern volatile uint32 ap_ring3_iret_last_coreid;
 #ifdef __cplusplus
 }
 #endif
+void SendWakeAllApsIPI();
+bool WakeOneIdleApForReadyWork();
 #endif
 
 #define HIGHER_STACK_SIZE 0x8000
@@ -109,6 +117,11 @@ enum {
 #define _NORMAL_RINGSTACK 0xFFC01000ull
 #endif
 
+inline stduint GetCoreRingStackBase(stduint cpuid) {
+	return _NORMAL_RINGSTACK + cpuid * 0x10000ull;
+}
+
+
 struct ThreadBlock;
 
 enum class CoreState : uint32 {
@@ -135,6 +148,9 @@ struct PERCORE {
 	uint32 lapic_id;
 	CoreState volatile state;
 	stduint kernel_stack;
+	#if _MCCA == 0x8632
+	stduint tss_selector;
+	#endif
 };
 static_assert(sizeof(PERCORE) <= 0x1000, "PERCORE must fit in one 4KB page");
 #if _MCCA == 0x8664
@@ -377,6 +393,7 @@ public:
 	sint8 priority = 0; // -16..-1 (Realtime RT) and 0..15 (Timeslice)
 	uint8 time_slice = 0; // execution time left for timeslice mode
 	bool is_expired = false; // true if task has expended its timeslice in the current epoch
+	rostr name = 0;// kernel area {TODO} un-released
 public _Comment(State):
 	enum class State : byte {
 		Running = 0,
@@ -403,6 +420,9 @@ public _Comment(State):
 	ThreadBlock* queue_state_prev = nullptr, * queue_state_next = nullptr;// for ready queue
 	//
 	stduint processor_id;// running on which cpu core
+	stduint ring_coreid = CORE_ID_INVALID;
+	stduint first_run_cpu = CORE_ID_INVALID;
+	bool has_run_once = false;
 	stduint exit_status;
 	bool is_detached = false;
 	stduint futex_wait_addr = 0;
@@ -483,7 +503,7 @@ public:// Gen.2
 	
 	static stduint min_available_tid;// in threads
 public:// for local core
-	static stduint getID() { return _TEMP 0; }// get core id
+	static stduint getID();// get core id
 	static ThreadBlock* CurrentTB() {
 		return current_thread(getID());
 	}
@@ -562,6 +582,10 @@ public:// schedule
 	static void EnqueueExpired(ThreadBlock* pb, bool lock = true);
 	static ThreadBlock* PickNext();
 	static void SleepAndRelease(Spinlock* lk);
+	#if _MCCA == 0x8632
+	static void SendRescheduleIPI(stduint core_id);
+	static void SendWakeIPI(stduint core_id);
+	#endif
 public:
 	static auto// return a all-zero ProcessBlock
 		AllocateTask() -> ProcessBlock*;

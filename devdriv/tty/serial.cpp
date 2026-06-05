@@ -73,6 +73,17 @@ void Handint_COM1()
 				com1.OutFormat("\n");
 			}
 			com1.OutFormat("%c", data);// com1.OutFormat("Receive %c\n\r", data);
+			if (data == 's') {
+				com1.OutFormat("\n\r");
+				void dump_processors(OstreamTrait & com1);
+				dump_processors(com1);
+				com1.OutFormat("\n\r");
+				void dump_threads(OstreamTrait & com1);
+				dump_threads(com1);
+				com1.OutFormat("\n\r");
+				void dump_ready_queue(OstreamTrait & com1);
+				dump_ready_queue(com1);
+			}
 			break;
 		}
 		case 0x01: // Transmitter Holding Register Empty 

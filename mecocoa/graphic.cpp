@@ -204,7 +204,10 @@ volatile bool has_pending_timer = false;
 void serv_graf_loop() {
 	SysMessage msg;// Inner Module Message System
 	#if _GUI_ENABLE == 0
-	loop Taskman::Schedule(true);// yield
+	while (true) {
+		// HALT(); // Sleep the CPU core until the next interrupt
+		Taskman::Schedule(true);// yield
+	}
 	#else
 	global_layman.lazy_update = _GUI_DOUBLE_BUFFER;// Only enable lazy mode if double buffering is enabled
 	#endif
@@ -213,6 +216,7 @@ void serv_graf_loop() {
 		IC.enInterrupt(false);
 		if (!message_queue_conv.Count()) {
 			IC.enInterrupt(true);
+			HALT(); // Sleep the CPU core until the next interrupt
 			Taskman::Schedule(true);// yield
 			continue;
 		}

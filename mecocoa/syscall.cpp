@@ -740,6 +740,20 @@ extern "C" void check_and_deliver_signals_syscall(CallgateFrame* frame);
 
 __attribute__((optimize("O0")))
 stduint Handint_SYSCALL(CallgateFrame* frame) {
+	auto crt_th = Taskman::CurrentTB();
+	bool was_pinned = false;
+	const stduint cpu_id = Taskman::getID();
+	if (crt_th) {
+		#if _MCCA == 0x8632
+		if (cpu_id != 0) {
+			if (crt_th->ring_coreid != CORE_ID_INVALID) {
+				was_pinned = true;
+			} else {
+				crt_th->ring_coreid = cpu_id;
+			}
+		}
+		#endif
+	}
 	#if _MCCA == 0x8632
 	auto callid = (syscall_t)frame->ax;
 	stduint para[4] = { frame->cx, frame->dx, frame->bx };
@@ -767,6 +781,9 @@ stduint Handint_SYSCALL(CallgateFrame* frame) {
 
 	frame->ax = ret_val;
 	check_and_deliver_signals_syscall(frame);
+	if (crt_th && !was_pinned) {
+		crt_th->ring_coreid = CORE_ID_INVALID;
+	}
 	return frame->ax;
 }
 #endif

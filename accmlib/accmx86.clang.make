@@ -25,7 +25,7 @@ cpppref=_cx_
 cppfile=$(wildcard $(ulibpath)/cpp/*.cpp) $(wildcard $(ulibpath)/cpp/dat-block/*.cpp) $(ulibpath)/cpp/Device/Video.cpp $(ulibpath)/cpp/Device/Keyboard.cpp $(ulibpath)/cpp/Witch/Form.cpp $(wildcard accmlib/*.cpp) prehost/_auxiliary.cpp $(ulibpath)/cpp/grp-base/bstring.cpp
 
 dest_obj=$(uobjpath)/accm-$(arch)
-COMWAN = -Wno-incompatible-library-redeclaration -Wno-invalid-constexpr
+COMWAN = -Wno-incompatible-library-redeclaration -Wno-invalid-constexpr -Wno-empty-body
 COMFLG = -m32 -static -fno-builtin -nostdlib -fno-stack-protector -O2 -fno-strict-aliasing $(COMWAN)
 CFLAGS=$(COMFLG) $(attr)
 XFLAGS=$(CFLAGS) -std=c++2a -fno-exceptions -fno-unwind-tables -fno-rtti -Wno-volatile
