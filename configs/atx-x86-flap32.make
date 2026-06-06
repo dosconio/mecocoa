@@ -28,7 +28,7 @@ CX=g++ -I$(uincpath) -c $(flag) $(CXF) $(CXW) -std=c++2a
 
 ker_mod=$(uobjpath)/mcca-$(arch)/*.o
 
-cppfile=$(wildcard mecocoa/*.cpp) $(wildcard devdriv/*.cpp) $(wildcard devdriv/**/*.cpp) depends/freetype.cpp
+cppfile=$(wildcard mecocoa/*.cpp) $(wildcard devdriv/*.cpp) $(wildcard devdriv/**/*.cpp) $(wildcard depends/*.cpp)
 cppobjs=$(patsubst %.cpp, $(uobjpath)/mcca-$(arch)/%.o, $(notdir $(cppfile)))
 VPATH = $(sort $(dir $(cppfile)))
 

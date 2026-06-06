@@ -175,12 +175,13 @@ static stduint CountQueuedReadyTasks(stduint limit) {
 }
 
 bool WakeOneIdleApForReadyWork() {
+	#if _SYS_MULTICORE
 	if (!g_enable_ap_scheduling) return false;
 	if (Taskman::PCU_CORES <= 1) return false;
 	if (Taskman::getID() != 0) return false;
 
 	SpinlockLocal guard(&scheduler_lock);
-	if (CountQueuedReadyTasks(2) < 2) return false;
+	// if (CountQueuedReadyTasks(2) < 2) return false;
 
 	static stduint next_ap = 1;
 	for0(try_i, PCU_CORES_MAX) {
@@ -192,13 +193,14 @@ bool WakeOneIdleApForReadyWork() {
 			percore->state == CoreState::Online &&
 			Taskman::current_thread(next_ap) == Taskman::idle_thread(next_ap) &&
 			(Taskman::switching_out_threads(next_ap) == nullptr ||
-			 !Taskman::switching_out_threads(next_ap)->just_schedule)) {
+				!Taskman::switching_out_threads(next_ap)->just_schedule)) {
 			Taskman::SendRescheduleIPI(next_ap);
 			next_ap++;
 			return true;
 		}
 		next_ap++;
 	}
+	#endif
 	return false;
 }
 

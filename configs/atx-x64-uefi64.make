@@ -60,6 +60,8 @@ cppfile=\
 	$(ulibpath)/cpp/charset/Unicode.cpp \
 	$(ulibpath)/cpp/Device/Video.cpp $(ulibpath)/cpp/Device/Video-VideoConsole2.cpp \
 	$(wildcard $(ulibpath)/cpp/Device/USB/*.cpp) $(wildcard $(ulibpath)/cpp/Device/USB/xHCI/*.cpp) \
+	\
+	depends/cotlabx.cpp \
 
 cplfile=\
 	$(ulibpath)/c/driver/keyboard.c \

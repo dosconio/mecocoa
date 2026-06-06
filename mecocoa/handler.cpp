@@ -441,6 +441,7 @@ void external_interrupt_handler()
 			ch = '\b';
 		}
 		VTTY_INNQ(p_vtty)->OutChar(ch);
+		Consman::WakeBlockedWaitersDeferred();
 	}
 	else if (irq) {
 		plogerro("not considered interrupt %d\n", irq);

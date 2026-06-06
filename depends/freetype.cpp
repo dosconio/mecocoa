@@ -8,7 +8,7 @@
 
 FT_Library ft_library;
 uint8_t* font_buf = nullptr;
-static Mutex ft_lock;
+Mutex ft_lock;
 static uint8 ascii_glyph_cache[128][16];
 static bool ascii_glyph_cache_valid[128] = { false };
 static bool loading_ascii = false;

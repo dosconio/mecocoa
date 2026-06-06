@@ -48,6 +48,7 @@ struct SysMessage {
 		RUPT_MOUSE,
 		RUPT_KBD,
 		RUPT_FLUSH,
+		RUPT_CONSOLE_WAKE,
 		RUPT_NEW_TERM,
 		RUPT_TTY_OUT,// async TTY text ready to render (sent by DevFs::writfl)
 	} type;

@@ -13,12 +13,7 @@ extern RecursiveMutex gui_lock;
 extern Spinlock scheduler_lock;
 #include "../include/filesys.hpp"
 
-extern "C" stduint sys_kill(stduint pid, int sig, stduint tid);
-
-
-
 #if 1 // ---- ---- TTY ---- ----
-
 
 // vtty0: global_ground
 // vtty1: form1...
@@ -83,6 +78,34 @@ struct BlockedFormMsg {
 	}
 };
 Vector<BlockedFormMsg> blocked_form_msgs;
+static volatile byte console_has_blocked_waiters = 0;
+static volatile byte console_wake_pending = 0;
+
+static void RefreshConsoleBlockedState() {
+	byte has_waiters = blocked_vtty_pid.Count() || blocked_form_msgs.Count();
+	__atomic_store_n(&console_has_blocked_waiters, has_waiters, __ATOMIC_RELEASE);
+}
+
+void Consman::WakeBlockedWaiters() {
+	if (!__atomic_load_n(&console_has_blocked_waiters, __ATOMIC_ACQUIRE)) return;
+	if (__atomic_exchange_n(&console_wake_pending, 1, __ATOMIC_ACQ_REL)) return;
+	syssend_async(Task_Console, nullptr, 0, (stduint)ConsoleMsg::TEST);
+}
+
+void Consman::WakeBlockedWaitersDeferred() {
+	if (!__atomic_load_n(&console_has_blocked_waiters, __ATOMIC_ACQUIRE)) return;
+	if (__atomic_exchange_n(&console_wake_pending, 1, __ATOMIC_ACQ_REL)) return;
+	#if _MCCA == 0x8664 && defined(_UEFI)
+	SysMessage msg = {};
+	msg.type = SysMessage::RUPT_CONSOLE_WAKE;
+	message_queue.Enqueue(msg);
+	#else
+	// Fallback for targets that do not run serv_sysmsg(): wake Task_Console directly.
+	CommMsg notification_msg = {};
+	notification_msg.type = (stduint)ConsoleMsg::TEST;
+	msg_send(Taskman::CurrentTB(), Task_Console, &notification_msg, true);
+	#endif
+}
 
 
 //// ---- ---- Bottom Impl ---- ---- ////
@@ -237,6 +260,7 @@ void Consman::RemoveVconsole(Dnode* nod) {
 			ProcessBlock::Release(p);
 		}
 	}
+	RefreshConsoleBlockedState();
 }
 void Consman::SwitchForm(SheetTrait* pfrm) {
 	Nnode* target = &pfrm->refSheetNode();
@@ -407,6 +431,7 @@ static void _CleanSingleForm(ProcessBlock* pb, stduint pform_id) {
 			blocked_form_msgs.Remove(i--);
 		}
 	}
+	RefreshConsoleBlockedState();
 
 	// Safe memory release
 	if (pfrm->sheet_buffer) {
@@ -421,6 +446,7 @@ static void _CleanSingleForm(ProcessBlock* pb, stduint pform_id) {
 			i--;
 		}
 	}
+	RefreshConsoleBlockedState();
 
 	free(pfrm);
 	pb->pforms[pform_id] = nullptr;
@@ -533,6 +559,7 @@ static stdsint ConsoleMsg_FMSG(const FMT_ConsoleMsg_FMSG* data, ProcessBlock* pb
 	if (data->if_blocked) {
 		// Store blocking request to be handled later
 		blocked_form_msgs.Append({ sig_src, data->pform_id, data->message });
+		RefreshConsoleBlockedState();
 		return -2; // Signal that reply is deferred
 	}
 
@@ -656,169 +683,6 @@ static stdsint ConsoleMsg_FTIM(stduint pform_id, stduint ms, ProcessBlock* pb) {
 }
 #endif
 
-#if _GUI_ENABLE
-void _Comment(R1) serv_shell_process() {
-	uni::Dnode* tty_target = 0;
-	::uni::Witch::Form* pf_ptr = nullptr;
-	ProcessBlock* p = nullptr;
-
-	if (Consman::ento_gui) {
-		Rectangle rect{ Point(250, 160), Size2(480, 320) };
-		auto [pcon, pf, tty_no] = Consman::CreateVconsole(rect, "Terminal");
-		pf_ptr = pf;
-		tty_target = vttys[tty_no];
-		p = Taskman::CreateFile(("/md0/cot"), RING_U, Taskman::CurrentPID());
-	}
-
-	if (p) {
-		// Register the process globally to get a valid PID
-		Taskman::Append(p);
-		// Lock the process state during complex environment setup
-		IC.enInterrupt(false);
-		p->state = ProcessBlock::State::Hanging;
-
-		p->focus_tty = tty_target;
-		if (p->focus_tty) {
-			p->Open("/dev/tty", O_RDWR); // O_RDONLY stdin
-			p->Open("/dev/tty", O_RDWR); // O_WRONLY stdout
-			p->Open("/dev/tty", O_RDWR); // O_WRONLY stderr
-		}
-		// Register the manually created window in the process space for unified cleanup
-		if (pf_ptr) {
-			if (p->pforms.Count() == 0) p->pforms.Append(pf_ptr);
-			else p->pforms[0] = pf_ptr;
-		}
-
-		if (auto nod = (Dnode*)p->focus_tty) {
-			auto pblock = (vtty_type_t*)nod->type;
-			pblock->master_pid = p->pid;
-			pblock->proc_group.Append(p->pid);
-		}
-		
-		// Environment is ready, restore state and start the application thread
-		p->state = ProcessBlock::State::Active;
-		Taskman::AppendThread(p->main_thread);
-		IC.enInterrupt(true);
-
-	}
-
-	extern const char key_map[256], key_map_shift[256];
-	while (true) {
-		if (pf_ptr) {
-			while (pf_ptr->msg_queue.Count()) {
-				SheetMessage smsg;
-				pf_ptr->msg_queue.Dequeue(smsg);
-				if (smsg.event == SheetEvent::onKeybd) {
-					auto* key_event = (keyboard_event_t*)smsg.args;
-					if (key_event->method == keyboard_event_t::method_t::keydown) {
-						auto ascii_ch = (key_event->mod.l_shift || key_event->mod.r_shift ? key_map_shift : key_map)[key_event->keycode];
-						if (ascii_ch) {
-							// Check for Ctrl+C to trigger SIGINT
-							if ((key_event->mod.l_ctrl || key_event->mod.r_ctrl) && !key_event->mod.l_shift && !key_event->mod.r_shift && ascii_ch == 'c') {
-								if (tty_target && tty_target->type) {
-									auto pblock = (vtty_type_t*)tty_target->type;
-									for (stduint idx = 0; idx < pblock->proc_group.Count(); idx++) {
-										stduint target_pid = pblock->proc_group[idx];
-										if (target_pid >= TaskCount && target_pid != pblock->master_pid) {
-											sys_kill(target_pid, SIGINT, 0);
-										}
-									}
-								}
-								continue;
-							}
-							// Translate Ctrl + letters to control characters (e.g., Ctrl+D -> 0x04)
-							if ((key_event->mod.l_ctrl || key_event->mod.r_ctrl) && !key_event->mod.l_shift && !key_event->mod.r_shift) {
-								if (ascii_ch >= 'a' && ascii_ch <= 'z') {
-									ascii_ch = ascii_ch - 'a' + 1;
-								}
-							}
-							if (auto* q = VTTY_INNQ(tty_target)) {
-								q->OutChar(ascii_ch);
-							}
-						}
-					}
-				}
-				else if (smsg.event == SheetEvent::onClick) {
-					bool left_down = (smsg.args[2] & 0x10);
-					if (smsg.args[3] == 1 && !left_down) {
-						// Force kill all processes in the group
-						if (auto nod = tty_target) {
-							auto pblock = (vtty_type_t*)nod->type;
-							stduint self_pid = Taskman::CurrentPID();
-
-							// Copy the group to a local buffer to ensure stable iteration
-							stduint pid_list[32];
-							stduint count = pblock->proc_group.Count();
-							if (count > 32) count = 32;
-							for (stduint i = 0; i < count; i++) pid_list[i] = pblock->proc_group[i];
-
-							for (stdsint i = count - 1; i >= 0; --i) {
-								stduint pid = pid_list[i];
-
-								// Protect system tasks but allow killing the master shell
-								if ((pid >= TaskCount || pid == pblock->master_pid) && pid != self_pid) {
-									ProcessBlock* pb_to_kill = ProcessBlock::AcquireByPID(pid);
-									if (pb_to_kill) {
-										bool should_kill = (pb_to_kill->state != ProcessBlock::State::Hanging);
-										ProcessBlock::Release(pb_to_kill);
-										if (should_kill) {
-											sys_kill(pid, SIGKILL, 0);
-										}
-									}
-								}
-							}
-						}
-						goto shell_exit;
-					}
-				}
-			}
-		}
-
-
-		if (auto nod = tty_target) {
-			auto pblock = (vtty_type_t*)nod->type;
-			if (p && pblock->proc_group.Count() == 0) {
-				goto shell_exit;
-			}
-		}
-		else {
-			goto shell_exit;
-		}
-		syscall(syscall_t::REST, 0, 0);
-	}
-
-shell_exit:
-	if (Consman::ento_gui) {
-		auto pblock = (vtty_type_t*)tty_target->type;
-		stduint self_pid = Taskman::CurrentPID();
-		for (stdsint i = pblock->proc_group.Count() - 1; i >= 0; --i) {
-			stduint pid = pblock->proc_group[i];
-			if (pid == self_pid) continue;
-			auto pb_to_kill = ProcessBlock::AcquireByPID(pid);
-			if (pb_to_kill) {
-				bool should_kill = (pb_to_kill->state != ProcessBlock::State::Hanging);
-				ProcessBlock::Release(pb_to_kill);
-				if (should_kill) {
-					sys_kill(pid, SIGKILL, 0);
-				}
-			}
-		}
-		{
-			IC.enInterrupt(false);
-			Consman::RemoveVconsole(tty_target);
-			IC.enInterrupt(true);
-		}
-	}
-
-	Taskman::ExitCurrent(0);
-	// Final exit for the shell process itself
-	// stduint exit_para[2] = { Taskman::CurrentPID(), 0 };
-	// syssend(Task_TaskMan, exit_para, sizeof(exit_para), _IMM(TaskmanMsg::EXIT));
-	// Never reach here: the stack will be reclaimed by Taskman
-	while (true);
-}
-#endif
-
 void _Comment(R1) serv_cons_loop()
 {
 	volatile stduint sig_type = 0, sig_src, ret;
@@ -828,71 +692,11 @@ void _Comment(R1) serv_cons_loop()
 	Filesys::MountFilesys(&global_devfs, nullptr, "/dev");
 	ploginfo("[DevFs] Mounted to /dev");
 	while (true) {
-		{
-			#if _GUI_ENABLE
-			RecursiveMutexLocal guard(&gui_lock);
-			#endif
-			for (stduint i = 0; i < blocked_vtty_pid.Count(); i++) {
-				stduint pid = blocked_vtty_pid[i];
-				if (!pid) continue;
-
-				ProcessBlock* ppb = ProcessBlock::AcquireByPID(pid);
-				// Identify and clean up processes that are no longer active (Hanging or Invalid)
-				if (!ppb || ppb->state != ProcessBlock::State::Active) {
-					if (ppb) {
-						ProcessBlock::Release(ppb);
-					}
-					blocked_vtty_pid.Remove(i--);
-					continue;
-				}
-
-				QueueLimited* q = ppb->focus_tty ? VTTY_INNQ(ppb->focus_tty) : nullptr;
-				if (q && -1 != (ch = q->inn())) {
-					stdsint val = ch;
-					blocked_vtty_pid.Remove(i--);
-					syssend_async(pid, &val, byteof(val));
-				}
-				ProcessBlock::Release(ppb);
-			}
-		}
-
-		// Handle blocked form message requests
-		{
-			#if _GUI_ENABLE
-			RecursiveMutexLocal guard(&gui_lock);
-			#endif
-			for (stduint i = 0; i < blocked_form_msgs.Count(); i++) {
-				auto& b = blocked_form_msgs[i];
-				ProcessBlock* pb = ProcessBlock::Acquire(b.sig_src);
-				if (!pb) {
-					blocked_form_msgs.Remove(i--);
-					continue;
-				}
-				SheetTrait* pfrm = (b.pform_id < pb->pforms.Count()) ? pb->pforms[b.pform_id] : nullptr;
-				if (!pfrm) {
-					ProcessBlock::Release(pb);
-					blocked_form_msgs.Remove(i--);
-					continue;
-				}
-				auto pf = static_cast<::uni::Witch::Form*>(pfrm);
-				if (pf->msg_queue.Count()) {
-					SheetMessage msg;
-					pf->msg_queue.Dequeue(msg);
-					MccaMemCopyP(b.usr_msg_ptr, pb, &msg, NULL, sizeof(msg));
-
-					stduint val = 1;
-					blocked_form_msgs.Remove(i--);
-					syssend_async(b.sig_src, &val, byteof(val));
-				}
-				ProcessBlock::Release(pb);
-			}
-		}
-
-		// Process potential message
-		if (syscall(syscall_t::TMSG)) {
-			sysrecv(ANYPROC, (void*)to_args, byteof(to_args), (usize*)&sig_type, (usize*)&sig_src);
-			ProcessBlock* safe_pb = ProcessBlock::Acquire(sig_src);
-			if (!safe_pb) continue;
+		// Block here to wait for messages or wake notifications
+		sysrecv(ANYPROC, (void*)to_args, byteof(to_args), (usize*)&sig_type, (usize*)&sig_src);
+		__atomic_store_n(&console_wake_pending, 0, __ATOMIC_RELEASE);
+		ProcessBlock* safe_pb = ProcessBlock::Acquire(sig_src);
+		if (safe_pb) {
 			switch (ConsoleMsg(sig_type)) {
 			case ConsoleMsg::TEST: break;
 
@@ -908,6 +712,7 @@ void _Comment(R1) serv_cons_loop()
 			case ConsoleMsg::INNC:// ReadChar(ASCII): normal \n \r ...
 				if (!ifContainBlockedTTY(safe_pb)) {
 					blocked_vtty_pid.Append(safe_pb->getID());
+					RefreshConsoleBlockedState();
 					// ploginfo("Blocked TTY %u by %u", pb->focus_tty, pb->getID());
 				}
 				else {
@@ -987,8 +792,69 @@ void _Comment(R1) serv_cons_loop()
 			}
 			ProcessBlock::Release(safe_pb);
 		}
-		else HALT();
-		syscall(syscall_t::REST);
+
+		{
+			#if _GUI_ENABLE
+			RecursiveMutexLocal guard(&gui_lock);
+			#endif
+			for (stduint i = 0; i < blocked_vtty_pid.Count(); i++) {
+				stduint pid = blocked_vtty_pid[i];
+				if (!pid) continue;
+
+				ProcessBlock* ppb = ProcessBlock::AcquireByPID(pid);
+				// Identify and clean up processes that are no longer active (Hanging or Invalid)
+				if (!ppb || ppb->state != ProcessBlock::State::Active) {
+					if (ppb) {
+						ProcessBlock::Release(ppb);
+					}
+					blocked_vtty_pid.Remove(i--);
+					continue;
+				}
+
+				QueueLimited* q = ppb->focus_tty ? VTTY_INNQ(ppb->focus_tty) : nullptr;
+				if (q && -1 != (ch = q->inn())) {
+					stdsint val = ch;
+					blocked_vtty_pid.Remove(i--);
+					syssend_async(pid, &val, byteof(val));
+				}
+				ProcessBlock::Release(ppb);
+			}
+			RefreshConsoleBlockedState();
+		}
+
+		// Handle blocked form message requests
+		{
+			#if _GUI_ENABLE
+			RecursiveMutexLocal guard(&gui_lock);
+			#endif
+			for (stduint i = 0; i < blocked_form_msgs.Count(); i++) {
+				auto& b = blocked_form_msgs[i];
+				ProcessBlock* pb = ProcessBlock::Acquire(b.sig_src);
+				if (!pb) {
+					blocked_form_msgs.Remove(i--);
+					continue;
+				}
+				SheetTrait* pfrm = (b.pform_id < pb->pforms.Count()) ? pb->pforms[b.pform_id] : nullptr;
+				if (!pfrm) {
+					ProcessBlock::Release(pb);
+					blocked_form_msgs.Remove(i--);
+					continue;
+				}
+				auto pf = static_cast<::uni::Witch::Form*>(pfrm);
+				if (pf->msg_queue.Count()) {
+					SheetMessage msg;
+					pf->msg_queue.Dequeue(msg);
+					MccaMemCopyP(b.usr_msg_ptr, pb, &msg, NULL, sizeof(msg));
+
+					stduint val = 1;
+					stduint target_sig_src = b.sig_src;
+					blocked_form_msgs.Remove(i--);
+					syssend_async(target_sig_src, &val, byteof(val));
+				}
+				ProcessBlock::Release(pb);
+			}
+			RefreshConsoleBlockedState();
+		}
 	}
 }
 

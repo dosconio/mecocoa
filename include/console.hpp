@@ -135,6 +135,8 @@ struct _RET_CreateVconsole {
 struct Consman {
 	// CLI
 	static unsigned current_screen_TTY;// focus
+	static void WakeBlockedWaiters();
+	static void WakeBlockedWaitersDeferred();
 	#if (_MCCA & 0xFF00) == 0x8600
 	// GUI
 	static bool ento_gui;

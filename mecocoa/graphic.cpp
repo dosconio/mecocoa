@@ -227,9 +227,11 @@ void serv_graf_loop() {
 		case SysMessage::RUPT_TIMER:
 			global_layman.CheckTimers(tick);
 			has_pending_timer = false;
+			Consman::WakeBlockedWaiters();
 			break;
 		case SysMessage::RUPT_MOUSE:
 			hand_mouse(msg.args.mou_event);
+			Consman::WakeBlockedWaiters();
 			break;
 		case SysMessage::RUPT_FLUSH:
 			// Asynchronous rendering: Compose and then Flush to screen

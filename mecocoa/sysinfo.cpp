@@ -362,5 +362,72 @@ void printlog(loglevel_t level, const char* fmt, ...)
 	para_endo(paras);
 }
 
+namespace uni {
+	extern Spinlock vfs_lock;
+}
+
+void dump_lock(OstreamTrait& com1) {
+	// Declare the external global spinlocks
+	extern Spinlock scheduler_lock;
+	extern Spinlock timer_lock;
+	extern Spinlock mempool_lock;
+	extern Spinlock comm_lock;
+	extern Spinlock log_lock;
+
+	// Declare the external global mutexes
+	extern Mutex outc_mutex;
+	extern RecursiveMutex gui_lock;
+	#if _MCCA == 0x8632 && _GUI_ENABLE && _GUI_FREETYPE
+	extern Mutex ft_lock;
+	#endif
+
+	com1.OutFormat("=== Global Spinlocks ===\n\r");
+	com1.OutFormat("Address             Locked  HCPUID  Name\n\r");
+	com1.OutFormat("%p  %s     %[i]      scheduler_lock\n\r", &scheduler_lock, scheduler_lock.locked ? "Yes" : "No ", (stdsint)scheduler_lock.cpu_id);
+	com1.OutFormat("%p  %s     %[i]      timer_lock\n\r", &timer_lock, timer_lock.locked ? "Yes" : "No ", (stdsint)timer_lock.cpu_id);
+	com1.OutFormat("%p  %s     %[i]      mempool_lock\n\r", &mempool_lock, mempool_lock.locked ? "Yes" : "No ", (stdsint)mempool_lock.cpu_id);
+	com1.OutFormat("%p  %s     %[i]      comm_lock\n\r", &comm_lock, comm_lock.locked ? "Yes" : "No ", (stdsint)comm_lock.cpu_id);
+	com1.OutFormat("%p  %s     %[i]      log_lock\n\r", &log_lock, log_lock.locked ? "Yes" : "No ", (stdsint)log_lock.cpu_id);
+	com1.OutFormat("%p  %s     %[i]      vfs_lock\n\r", &uni::vfs_lock, uni::vfs_lock.locked ? "Yes" : "No ", (stdsint)uni::vfs_lock.cpu_id);
+
+	com1.OutFormat("\n\r=== Global Mutexes ===\n\r");
+	com1.OutFormat("Address             Locked  Waiters Name\n\r");
+	com1.OutFormat("%p  %s     %[u]       outc_mutex\n\r", &outc_mutex, outc_mutex.locked ? "Yes" : "No ", outc_mutex.wait_queue.Count());
+	#if _MCCA == 0x8632 && _GUI_ENABLE && _GUI_FREETYPE
+	com1.OutFormat("%p  %s     %[u]       ft_lock\n\r", &ft_lock, ft_lock.locked ? "Yes" : "No ", ft_lock.wait_queue.Count());
+	#endif
+	#if  _GUI_ENABLE
+	com1.OutFormat("%p  %s     %[u]       gui_lock (Recursive: OwnerTID %[u], Count %[u])\n\r",
+		&gui_lock.mutex, gui_lock.mutex.locked ? "Yes" : "No ", gui_lock.mutex.wait_queue.Count(), 
+		(stduint)gui_lock.owner_tid, (stduint)gui_lock.count);
+	#endif
+	com1.OutFormat("\n\r=== Per-Process Locks ===\n\r");
+	com1.OutFormat("PID  Process Name        VMA Lock (Spinlock)    Sys Lock (Mutex)\n\r");
+	com1.OutFormat("                         Addr      Locked HCPUID Addr      Locked Waiters\n\r");
+
+	// Safely acquire scheduler_lock to walk the process chain Taskman::chain
+	bool old_if = scheduler_lock.Acquire();
+	for (auto nod = Taskman::chain.Root(); nod; nod = nod->next) {
+		auto pb = cast<ProcessBlock*>(nod->offs);
+		com1.OutFormat("%[u]    ", pb->pid);
+		// Align name
+		stduint name_len = 0;
+		if (pb->main_thread && pb->main_thread->name) {
+			com1.OutFormat("%s", pb->main_thread->name);
+			while (pb->main_thread->name[name_len]) name_len++;
+		} else {
+			com1.OutFormat("(unknown)");
+			name_len = 9;
+		}
+		for (stduint space = name_len; space < 20; space++) {
+			com1.OutFormat(" ");
+		}
+		com1.OutFormat("%p  %s    %[i]      %p  %s    %[u]\n\r",
+			&pb->vma_lock, pb->vma_lock.locked ? "Yes" : "No ", (stdsint)pb->vma_lock.cpu_id,
+			&pb->sys_lock, pb->sys_lock.locked ? "Yes" : "No ", pb->sys_lock.wait_queue.Count());
+	}
+	scheduler_lock.Release(old_if);
+}
+
 //// ---- POWER MANAGER ---- ////
 

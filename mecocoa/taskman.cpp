@@ -62,13 +62,16 @@ void Taskman::SendWakeIPI(stduint core_id) {
 }
 
 void SendWakeAllApsIPI() {
+	#if _SYS_MULTICORE
 	if (Taskman::PCU_CORES <= 1) return;
+	if (Taskman::getID() != 0) return;
 	if (IC.getType() == 2) {
 		setMSR(x86MSR::APIC_ICR_LOW, 0xC0000u | IRQ_WAKE_IPI);
 	}
 	else if (IC.getType() == 1) {
 		IC.WriteLAPIC(0x300, 0xC0000u | IRQ_WAKE_IPI);
 	}
+	#endif
 }
 #else
 stduint Taskman::getID() { return _TEMP 0; }
@@ -728,6 +731,7 @@ stdsint Taskman::Wait(ProcessBlock* pb, stduint target_pid)
 //
 
 extern Handler_t SMP_AP_ENTRY[];
+#if (_MCCA & 0xFF00) == 0x8600 
 inline uint64_t rdtsc() {
 	uint32_t lo, hi;
 	// The rdtsc instruction loads the 64-bit counter into EDX:EAX
@@ -749,6 +753,7 @@ void TSC_Wait_MS(uint64_t ms) {
 		__asm__ __volatile__("pause" ::: "memory"); 
 	}
 }
+#endif
 void Coreman::Initialize() {
 	#if (_MCCA & 0xFF00) == 0x8600 && _MCCA == 0x8632
 	if (!IC.getType()) {

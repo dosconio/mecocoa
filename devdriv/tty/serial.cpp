@@ -84,6 +84,11 @@ void Handint_COM1()
 				void dump_ready_queue(OstreamTrait & com1);
 				dump_ready_queue(com1);
 			}
+			if (data == 'l') {
+				com1.OutFormat("\n\r");
+				void dump_lock(OstreamTrait & com1);
+				dump_lock(com1);
+			}
 			break;
 		}
 		case 0x01: // Transmitter Holding Register Empty 

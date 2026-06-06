@@ -138,6 +138,7 @@ int KeyboardBridge::out(const char* str, stduint len) {
 					if (asrtand(Consman::last_click_sheet)->refSheetNode().next) {
 						// ignore background
 						Consman::last_click_sheet->onrupt(SheetEvent::onKeybd, Point(0, 0), &event);
+						Consman::WakeBlockedWaiters();
 						return 0; // Intercept: do not pass to VTTY
 					}
 					#else
@@ -161,6 +162,7 @@ int KeyboardBridge::out(const char* str, stduint len) {
 						}
 					}
 					VTTY_INNQ(p_vtty)->OutChar(ascii_ch);
+					Consman::WakeBlockedWaiters();
 					#endif
 				}
 			}
@@ -168,6 +170,7 @@ int KeyboardBridge::out(const char* str, stduint len) {
 		// Forward ALL keyboard events (down/up/repeat) to focused window
 		if (Consman::last_click_sheet) {
 			Consman::last_click_sheet->onrupt(SheetEvent::onKeybd, Point(0, 0), &event);
+			Consman::WakeBlockedWaiters();
 		}
 	}
 	// Render the bottom ribbon
@@ -253,4 +256,3 @@ void hand_kboard(keyboard_event_t  kmsg) {
 	message_queue.Enqueue(msg);
 }
 #endif
-

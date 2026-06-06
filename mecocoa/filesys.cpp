@@ -18,7 +18,7 @@ namespace uni {
 	static file_system_type* registered_filesystems = nullptr;
 	static vfs_super_block* super_blocks = nullptr;
 	static vfs_dentry* vfs_root = nullptr; // Global root directory
-	static Spinlock vfs_lock;
+	Spinlock vfs_lock;
 
 	vfs_dentry* Filesys::getRoot() { return vfs_root; }
 

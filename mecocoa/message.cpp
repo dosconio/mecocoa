@@ -44,6 +44,10 @@ void _Comment(R0) serv_sysmsg() {
 		case SysMessage::RUPT_KBD:
 			// ploginfo("Kbd %[32H]", msg.args.kbd_event);
 			sysmsg_kbd(msg.args.kbd_event);
+			Consman::WakeBlockedWaiters();
+			break;
+		case SysMessage::RUPT_CONSOLE_WAKE:
+			Consman::WakeBlockedWaiters();
 			break;
 		case SysMessage::RUPT_FLUSH:
 			if (Consman::ento_gui && Consman::real_pvci && global_layman.sheet_buffer) {
