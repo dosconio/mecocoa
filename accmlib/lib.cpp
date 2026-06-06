@@ -230,7 +230,7 @@ extern "C" void _init_environ(int argc, char** argv, char** envp) {
 	environ = envp;
 }
 
-extern "C" _WEAK void _preprocess() {}
+// extern "C" _WEAK void _preprocess() {}
 
 
 

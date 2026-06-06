@@ -57,42 +57,42 @@ $(BIN_DIR)/%: $(UNIS_UTIL_DIR)/%.c $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
 	@echo "MK $*"
 	$(MCCA_X86_CC) $(MCCA_X86_CFLAGS) -o $@ $< $(MCCA_X86_LDLIBS)
 
-$(BIN_DIR)/%: $(UNIS_UTIL_DIR)/%.cpp $(ulibpath)/cpp/lango/lango-cpp.cpp $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
+$(BIN_DIR)/%: $(UNIS_UTIL_DIR)/%.cpp $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
 	@echo "MK $*"
-	$(MCCA_X86_CXX) $(MCCA_X86_CXXFLAGS) -o $@ $< $(ulibpath)/cpp/lango/lango-cpp.cpp $(MCCA_X86_LDLIBS)
+	$(MCCA_X86_CXX) $(MCCA_X86_CXXFLAGS) -o $@ $< $(MCCA_X86_LDLIBS)
 
 $(BIN_DIR)/init: subapps/init.cpp $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
 	@echo "MK appinit"
 	$(MCCA_X86_CXX) $(MCCA_X86_CXXFLAGS) -o $@ $< $(MCCA_X86_LDLIBS)
 
-$(BIN_DIR)/test: subapps/test.cpp $(ulibpath)/cpp/lango/lango-cpp.cpp $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
+$(BIN_DIR)/test: subapps/test.cpp $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
 	@echo "MK subtest"
-	$(MCCA_X86_CXX) $(MCCA_X86_CXXFLAGS) -o $@ subapps/test.cpp $(ulibpath)/cpp/lango/lango-cpp.cpp $(MCCA_X86_LDLIBS)
+	$(MCCA_X86_CXX) $(MCCA_X86_CXXFLAGS) -o $@ subapps/test.cpp $(MCCA_X86_LDLIBS)
 
 $(BIN_DIR)/paint: subapps/paint.cpp $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
 	@echo "MK paint"
 	$(MCCA_X86_CXX) $(MCCA_X86_CXXFLAGS) -o $@ $< $(MCCA_X86_LDLIBS)
 
-$(BIN_DIR)/fault: subapps/fault.cpp $(ulibpath)/cpp/lango/lango-cpp.cpp $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
+$(BIN_DIR)/fault: subapps/fault.cpp $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
 	@echo "MK fault"
-	$(MCCA_X86_CXX) $(MCCA_X86_CXXFLAGS) -o $@ subapps/fault.cpp $(ulibpath)/cpp/lango/lango-cpp.cpp $(MCCA_X86_LDLIBS)
+	$(MCCA_X86_CXX) $(MCCA_X86_CXXFLAGS) -o $@ subapps/fault.cpp $(MCCA_X86_LDLIBS)
 
-$(BIN_DIR)/cube: subapps/cube.cpp $(ulibpath)/cpp/lango/lango-cpp.cpp $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
+$(BIN_DIR)/cube: subapps/cube.cpp $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
 	@echo "MK cube"
-	$(MCCA_X86_CXX) $(MCCA_X86_CXXFLAGS) -o $@ subapps/cube.cpp $(ulibpath)/cpp/lango/lango-cpp.cpp $(MCCA_X86_LDLIBS)
+	$(MCCA_X86_CXX) $(MCCA_X86_CXXFLAGS) -o $@ subapps/cube.cpp $(MCCA_X86_LDLIBS)
 
-$(BIN_DIR)/gblock: subapps/game_breakout.cpp $(ulibpath)/cpp/lango/lango-cpp.cpp $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
+$(BIN_DIR)/gblock: subapps/game_breakout.cpp $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
 	@echo "MK game_breakout"
-	$(MCCA_X86_CXX) $(MCCA_X86_CXXFLAGS) -o $@ subapps/game_breakout.cpp $(ulibpath)/cpp/lango/lango-cpp.cpp $(MCCA_X86_LDLIBS)
+	$(MCCA_X86_CXX) $(MCCA_X86_CXXFLAGS) -o $@ subapps/game_breakout.cpp $(MCCA_X86_LDLIBS)
 
 $(BIN_DIR)/_rust: subapps/_hello/rust/src/main.rs subapps/_hello/rust/Cargo.toml
 	@echo "MK hello-rust"
 	@cd subapps/_hello/rust/ && cargo build --release --target ../../../configs/Rust/target/cargo-i686.json
 	cp subapps/_hello/rust/target/cargo-i686/release/rust $@
 
-$(BIN_DIR)/viewpic: subapps/viewpic.cpp $(ulibpath)/cpp/fileformat/picture/BMP.cpp $(ulibpath)/cpp/lango/lango-cpp.cpp $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
+$(BIN_DIR)/viewpic: subapps/viewpic.cpp $(ulibpath)/cpp/fileformat/picture/BMP.cpp $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
 	@echo "MK viewpic"
-	$(MCCA_X86_CXX) $(MCCA_X86_CXXFLAGS) -o $@ subapps/viewpic.cpp $(ulibpath)/cpp/fileformat/picture/BMP.cpp $(ulibpath)/cpp/lango/lango-cpp.cpp $(MCCA_X86_LDLIBS)
+	$(MCCA_X86_CXX) $(MCCA_X86_CXXFLAGS) -o $@ subapps/viewpic.cpp $(ulibpath)/cpp/fileformat/picture/BMP.cpp $(MCCA_X86_LDLIBS)
 
 clean:
 	@echo "RM $(BIN_DIR)"

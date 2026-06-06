@@ -258,8 +258,9 @@ static void My_FT_Stream_Close(FT_Stream stream) {
 			ProcessBlock* pb = ProcessBlock::Acquire(Taskman::CurrentTID());
 			int fd = -1;
 			if (pb) {
-				for (stduint i = 0; i < pb->pfiles.Count(); ++i) {
-					if (pb->pfiles[i] && pb->pfiles[i]->vfile == file) {
+				auto files = pb->fileman.Lock();
+				for (stduint i = 0; i < files->pfiles.Count(); ++i) {
+					if (files->pfiles[i] && files->pfiles[i]->vfile == file) {
 						fd = i;
 						break;
 					}
@@ -294,8 +295,11 @@ extern "C" bool InitializeFont() {
 		int fd = sysc_OPEN((stduint)"/mnt34/simsun.ttf", 0);
 		if (fd >= 0) {
 			ProcessBlock* pb = ProcessBlock::Acquire(Taskman::CurrentTID());
-			if (pb && fd < (stdsint)pb->pfiles.Count() && pb->pfiles[fd]) {
-				file = pb->pfiles[fd]->vfile;
+			if (pb) {
+				auto files = pb->fileman.Lock();
+				if (fd < (stdsint)files->pfiles.Count() && files->pfiles[fd]) {
+					file = files->pfiles[fd]->vfile;
+				}
 			}
 			ProcessBlock::Release(pb);
 			open_err = (file != nullptr) ? 0 : -1;
@@ -318,8 +322,9 @@ extern "C" bool InitializeFont() {
 			ProcessBlock* pb = ProcessBlock::Acquire(Taskman::CurrentTID());
 			int fd = -1;
 			if (pb) {
-				for (stduint i = 0; i < pb->pfiles.Count(); ++i) {
-					if (pb->pfiles[i] && pb->pfiles[i]->vfile == file) {
+				auto files = pb->fileman.Lock();
+				for (stduint i = 0; i < files->pfiles.Count(); ++i) {
+					if (files->pfiles[i] && files->pfiles[i]->vfile == file) {
 						fd = i;
 						break;
 					}
@@ -345,8 +350,9 @@ extern "C" bool InitializeFont() {
 			ProcessBlock* pb = ProcessBlock::Acquire(Taskman::CurrentTID());
 			int fd = -1;
 			if (pb) {
-				for (stduint i = 0; i < pb->pfiles.Count(); ++i) {
-					if (pb->pfiles[i] && pb->pfiles[i]->vfile == file) {
+				auto files = pb->fileman.Lock();
+				for (stduint i = 0; i < files->pfiles.Count(); ++i) {
+					if (files->pfiles[i] && files->pfiles[i]->vfile == file) {
 						fd = i;
 						break;
 					}
@@ -426,8 +432,9 @@ extern "C" bool InitializeFont() {
 			ProcessBlock* pb = ProcessBlock::Acquire(Taskman::CurrentTID());
 			int fd = -1;
 			if (pb) {
-				for (stduint i = 0; i < pb->pfiles.Count(); ++i) {
-					if (pb->pfiles[i] && pb->pfiles[i]->vfile == file) {
+				auto files = pb->fileman.Lock();
+				for (stduint i = 0; i < files->pfiles.Count(); ++i) {
+					if (files->pfiles[i] && files->pfiles[i]->vfile == file) {
 						fd = i;
 						break;
 					}
@@ -461,4 +468,3 @@ extern "C" bool InitializeFont() {
 	return false;
 }
 #endif
-

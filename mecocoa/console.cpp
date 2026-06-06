@@ -252,7 +252,7 @@ void Consman::RemoveVconsole(Dnode* nod) {
 
 	// Clean up any blocked PIDs waiting for this TTY
 	for (stduint i = 0; i < blocked_vtty_pid.Count(); i++) {
-		ProcessBlock* p = ProcessBlock::AcquireByPID(blocked_vtty_pid[i]);
+		ProcessBlock* p = ProcessBlock::AcquireActiveByPID(blocked_vtty_pid[i]);
 		if (!p || p->focus_tty == nod || p->focus_tty == nullptr) {
 			blocked_vtty_pid.Remove(i--);
 		}
@@ -287,7 +287,7 @@ void Consman::SwitchForm(SheetTrait* pfrm) {
 static bool ifContainBlockedTTY(ProcessBlock* ppb) {
 	if (!ppb) return false;
 	for0(i, blocked_vtty_pid.Count()) {
-		ProcessBlock* p = ProcessBlock::AcquireByPID(blocked_vtty_pid[i]);
+		ProcessBlock* p = ProcessBlock::AcquireActiveByPID(blocked_vtty_pid[i]);
 		if (p) {
 			bool match = (p->focus_tty == ppb->focus_tty);
 			ProcessBlock::Release(p);
@@ -421,8 +421,8 @@ static void _CleanSingleForm(ProcessBlock* pb, stduint pform_id) {
 	for (stduint i = 0; i < blocked_form_msgs.Count(); i++) {
 		if (blocked_form_msgs[i].pform_id == pform_id) {
 			stdsint err_val = -1;
-			ProcessBlock* safe_pb = ProcessBlock::Acquire(blocked_form_msgs[i].sig_src);
-			if (safe_pb && safe_pb->state == ProcessBlock::State::Active) {
+			ProcessBlock* safe_pb = ProcessBlock::AcquireActive(blocked_form_msgs[i].sig_src);
+			if (safe_pb) {
 				syssend(blocked_form_msgs[i].sig_src, &err_val, sizeof(err_val));
 			}
 			if (safe_pb) {
@@ -734,7 +734,7 @@ void _Comment(R1) serv_cons_loop()
 				ProcessBlock* pb_target = nullptr;
 				bool need_release = false;
 				if (sig_src < TaskCount) {
-					pb_target = ProcessBlock::AcquireByPID(to_args[1]);
+					pb_target = ProcessBlock::AcquireActiveByPID(to_args[1]);
 					need_release = true;
 				}
 				else {
@@ -801,12 +801,9 @@ void _Comment(R1) serv_cons_loop()
 				stduint pid = blocked_vtty_pid[i];
 				if (!pid) continue;
 
-				ProcessBlock* ppb = ProcessBlock::AcquireByPID(pid);
-				// Identify and clean up processes that are no longer active (Hanging or Invalid)
-				if (!ppb || ppb->state != ProcessBlock::State::Active) {
-					if (ppb) {
-						ProcessBlock::Release(ppb);
-					}
+				ProcessBlock* ppb = ProcessBlock::AcquireActiveByPID(pid);
+				// Identify and clean up processes that are no longer accessible for active resource use.
+				if (!ppb) {
 					blocked_vtty_pid.Remove(i--);
 					continue;
 				}
@@ -829,7 +826,7 @@ void _Comment(R1) serv_cons_loop()
 			#endif
 			for (stduint i = 0; i < blocked_form_msgs.Count(); i++) {
 				auto& b = blocked_form_msgs[i];
-				ProcessBlock* pb = ProcessBlock::Acquire(b.sig_src);
+				ProcessBlock* pb = ProcessBlock::AcquireActive(b.sig_src);
 				if (!pb) {
 					blocked_form_msgs.Remove(i--);
 					continue;

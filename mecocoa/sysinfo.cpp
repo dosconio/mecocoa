@@ -422,9 +422,10 @@ void dump_lock(OstreamTrait& com1) {
 		for (stduint space = name_len; space < 20; space++) {
 			com1.OutFormat(" ");
 		}
+		auto& fileman_mutex = pb->fileman.raw_mutex();
 		com1.OutFormat("%p  %s    %[i]      %p  %s    %[u]\n\r",
 			&pb->vma_lock, pb->vma_lock.locked ? "Yes" : "No ", (stdsint)pb->vma_lock.cpu_id,
-			&pb->sys_lock, pb->sys_lock.locked ? "Yes" : "No ", pb->sys_lock.wait_queue.Count());
+			&fileman_mutex, fileman_mutex.locked ? "Yes" : "No ", fileman_mutex.wait_queue.Count());
 	}
 	scheduler_lock.Release(old_if);
 }

@@ -11,6 +11,7 @@
 #include <cpp/trait/BlockTrait.hpp>
 #include <cpp/vector>
 
+#include "fileman.hpp"
 #include "syscall.hpp"
 #include <c/ISO_IEC_STD/signal.h>
 
@@ -191,99 +192,28 @@ class ThreadBlock;
 class FileDescriptor;
 class CallgateFrame;
 
-// ---- LOCK ---- //
-struct Spinlock {
-	byte locked = 0;
-	stdsint cpu_id = 0;
-	Spinlock() {}
-	bool Acquire();
-	void Release(bool old_if);
-};
-struct SpinlockLocal {
-	bool old_if;
-	Spinlock* spinlock;
-	SpinlockLocal(Spinlock* spinl) : spinlock(spinl) {
-		old_if = spinlock->Acquire();
-	}
-	/// @brief Drop the lock
-	~SpinlockLocal() {
-		auto sl = spinlock;
-		spinlock = 0;
-		if (sl) {
-			sl->Release(old_if);
-		}
-	}
-};
+#include "taskman/lock.hpp"
 
-struct Mutex {
-	Spinlock guard;
-	byte locked = 0;
-	uni::Queue<ThreadBlock*> wait_queue;
-	Mutex() : wait_queue() {}
-	void Acquire();
-	void Release();
-};
-struct MutexLocal {
-	Mutex* mutex;
-	MutexLocal(Mutex* _mutex) : mutex(_mutex) {
-		mutex->Acquire();
-	}
-	~MutexLocal() {
-		mutex->Release();
-	}
-};
-
-struct RecursiveMutex {
-	Mutex mutex;
-	stduint owner_tid;
-	stduint count;
-
-	RecursiveMutex();
-	void Acquire();
-	void Release();
-};
-
-struct RecursiveMutexLocal {
-	RecursiveMutex* rmutex;
-	RecursiveMutexLocal(RecursiveMutex* _rmutex);
-	~RecursiveMutexLocal();
-};
-
-struct Semaphore {
-	Spinlock guard;
-	stdsint value;
-	uni::Queue<ThreadBlock*> wait_queue;
-
-	/// @brief Initialize semaphore with an initial counter value
-	/// @param initial_value The initial available resource count (default is 1)
-	Semaphore(stdsint initial_value = 1) : value(initial_value), wait_queue() {}
-
-	/// @brief Acquire operation - Decrements resource count or blocks the current thread
-	void Acquire();
-
-	/// @brief Release operation - Increments resource count or wakes up a waiting thread
-	void Release();
-};
-
-/// @brief RAII local wrapper for Semaphore, automatically invoking Acquire/Release on scope lifetime
-struct SemaphoreLocal {
-	Semaphore* semaphore;
-	SemaphoreLocal(Semaphore* _sem) : semaphore(_sem) {
-		semaphore->Acquire();
-	}
-	~SemaphoreLocal() {
-		semaphore->Release();
-	}
-};
-
-namespace uni {
-	class vfs_dentry;
-	struct vfs_file;
-}
 enum VirtualMemoryAreaType {
 	VMA_ANONYMOUS = 0,
 	VMA_FILE = 1
 };
+#ifndef _ACCM
+struct ProcSignals {
+	struct _POSIX_sigaction sig_actions[_NSIG];
+	_POSIX_sigset_t shared_pending_signals;
+
+	ProcSignals() {
+		for (int i = 0; i < _NSIG; i++) {
+			sig_actions[i].sa_handler = SIG_DFL;
+			_sigset_raw(&sig_actions[i].sa_mask) = 0;
+			sig_actions[i].sa_flags = 0;
+			sig_actions[i].sa_restorer = nullptr;
+		}
+		_sigset_raw(&shared_pending_signals) = 0;
+	}
+};
+#endif
 struct VirtualMemoryArea {
 	stduint vm_start;	// Align by 4KB page size
 	stduint vm_end;		// Align by 4KB page size
@@ -304,68 +234,60 @@ struct VirtualMemoryArea {
 };
 
 class _Comment(Kernel) ProcessBlock {
-public:
+public: // Identity / Config
 	stduint pid;
 	stduint parent_id;
-	stduint wait_for_pid = 0; // 0 for any, non-zero for specific
-	ProcessBlock* child_list_head = nullptr; // Head of children linked list
-	ProcessBlock* sibling_next = nullptr;    // Next sibling in parent's children list
 	inline stduint getID() { return pid; }
 	stduint ring;
-	Mutex sys_lock{}; // Use Mutex to protect internal systems like Heap / FD
-	volatile int ref_count = 1;
-public:
-	// Process Level Wait State
-	enum class State : byte {
-		Active = 0,
-		Hanging,// aka Zobmie, call exit()
-		Invalid,
-	} state = State::Active;
-	
-	inline bool isWaiting();
-	
-	stduint exit_status;
-public: // _Comment(Threads)
-	// Currently maintaining a main thread for default usages (and fallback),
-	// further multi-thread implementations can maintain a vector / chain here.
-	ThreadBlock* main_thread = nullptr;
-	ThreadBlock* thread_list_head = nullptr;
-public: // _Comment(Interface);
 	enum class InterfaceType : byte {
 		MCCA4,// x86 will only support MCCA4
 		Linux,
 		Win32,
 	} interface_type = InterfaceType::MCCA4;
-public:
+
+public: // Lifecycle
+	volatile int ref_count = 1;
+	enum class State : byte {
+		Active = 0,
+		Expiring,
+		Hanging,// aka Zobmie, call exit()
+		Invalid,
+	} state = State::Active;
+	stduint wait_for_pid = 0; // 0 for any, non-zero for specific
+	inline bool isWaiting();
+	stduint exit_status;
+
+public: // ProcessTree
+	ProcessBlock* child_list_head = nullptr; // Head of children linked list
+	ProcessBlock* sibling_next = nullptr;    // Next sibling in parent's children list
+
+public: // Threads
+	// Currently maintaining a main thread for default usages (and fallback),
+	// further multi-thread implementations can maintain a vector / chain here.
+	ThreadBlock* main_thread = nullptr;
+	ThreadBlock* thread_list_head = nullptr;
+
+public: // VirtualMemory
 	uni::Paging paging;
 	uni::Paging* paging_redirect = nullptr;
 	stduint heaptop = 0;
 	stduint heapbtm = 0;// norm: max seg + 0x10000
 	uni::Vector<VirtualMemoryArea> vmas; // List of virtual memory areas
 	Spinlock vma_lock; // Spinlock protecting VMAs and page tables
-public: // _Comment(Taskman);
 	uni::Slice load_slices[8];// at most 8 slices, app-relative logical address
-public: // _Comment(Console);
+
+public: // Fileman
+	MutexBlock<ProcFiles> fileman;
+
+public: // UIConsole
 	Dnode* focus_tty = nullptr;
 	uni::Vector<SheetTrait*> pforms;// should registered in global_layman
-public: // _Comment(Fileman);
-	uni::Vector<FileDescriptor*> pfiles;
-	vfs_dentry* cwd = nullptr;  // Current Working Directory
-	vfs_dentry* root = nullptr; // Root for chroot
-	// Signal
-	struct _POSIX_sigaction sig_actions[_NSIG]; // Action table (shared by threads)
-	_POSIX_sigset_t shared_pending_signals;      // Pending signals for the whole process
-	//
-	ProcessBlock() {
-		// Initialize signal actions to default
-		for (int i = 0; i < _NSIG; i++) {
-			sig_actions[i].sa_handler = SIG_DFL;
-			_sigset_raw(&sig_actions[i].sa_mask) = 0;
-			sig_actions[i].sa_flags = 0;
-			sig_actions[i].sa_restorer = nullptr;
-		}
-		_sigset_raw(&shared_pending_signals) = 0;
-	}
+
+public: // Signals
+	MutexBlock<ProcSignals> signals;
+
+public:
+	ProcessBlock() {}
 	auto Open(rostr pathname, int flags) -> stdsint;
 	auto Rdwt(bool wr_type, stduint fid, Slice slice) -> stduint;
 	auto Close(int fid) -> bool;
@@ -376,6 +298,8 @@ public: // _Comment(Fileman);
 	static void Release(ProcessBlock* pb);
 	static ProcessBlock* Acquire(stduint tid);
 	static ProcessBlock* AcquireByPID(stduint pid);
+	static ProcessBlock* AcquireActive(stduint tid);
+	static ProcessBlock* AcquireActiveByPID(stduint pid);
 };
 
 class ThreadBlock {

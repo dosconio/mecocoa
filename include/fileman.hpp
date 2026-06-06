@@ -92,6 +92,7 @@ enum class FilemanMsg {
 #include <c/API-POSIX/fcntl.h>
 
 struct inode;
+namespace uni { struct vfs_dentry; }
 namespace uni { struct vfs_file; }
 struct FileDescriptor {
 	int fd_mode; /**< R or W */
@@ -112,5 +113,13 @@ inline static stduint get_drv_pid(u32 dev) {
 
 FileDescriptor* FileDescriptor_Clone(FileDescriptor* src);
 bool strip_path(char* filename, const char* pathname, inode** ppinode);
+
+#ifndef _ACCM
+struct ProcFiles {
+	uni::Vector<FileDescriptor*> pfiles;
+	uni::vfs_dentry* cwd = nullptr;  // Current Working Directory
+	uni::vfs_dentry* root = nullptr; // Root for chroot
+};
+#endif
 
 #endif

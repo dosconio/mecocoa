@@ -243,6 +243,16 @@ bool exception_handler_user(HardwareInterruptFrame* frame, stduint iden, stduint
 		if (handled) {
 			return true; // Retry faulting instruction
 		}
+		if (pb) {
+			plogwarn("Page fault context: pid=%u eip=0x%[x] esp=0x%[x] cs=0x%[x] cr3=0x%[x] heap=[0x%[x],0x%[x]) vmas=%u",
+				pb->pid, frame->hw_eip, FrameSavedEsp(frame), frame->hw_cs, frame->pg_cr3,
+				pb->heapbtm, pb->heaptop, pb->vmas.Count());
+			for (stduint i = 0; i < pb->vmas.Count() && i < 6; i++) {
+				const auto& vma = pb->vmas[i];
+				plogwarn("  vma[%u] [0x%[x],0x%[x]) flags=0x%[x] type=%u",
+					i, vma.vm_start, vma.vm_end, vma.vm_flags, vma.vm_type);
+			}
+		}
 		plogwarn("Segmentation fault: process %u accessed unmapped address 0x%[x]", pb ? pb->pid : 0, fault_addr);
 		sig = SIGSEGV;
 	}

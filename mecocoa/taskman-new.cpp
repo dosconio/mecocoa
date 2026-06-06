@@ -378,8 +378,11 @@ static stduint _Taskman_Create_Paging(ProcessBlock *ppb, byte ring, stduint stac
 	chain.Compare_f = ProcCmp;
 	min_available_pid = 1;
 	min_available_tid = 1;
-	kernel_task->cwd = Filesys::getRoot(); // Set kernel CWD
-	kernel_task->root = Filesys::getRoot();
+	{
+		auto files = kernel_task->fileman.Lock();
+		files->cwd = Filesys::getRoot(); // Set kernel CWD
+		files->root = Filesys::getRoot();
+	}
 
 	#if (_MCCA & 0xFF00) == 0x1000
 	setMSCRATCH _IMM(&kernel_thread->context);
@@ -446,8 +449,11 @@ ProcessBlock* Taskman::Create(void* entry, byte ring, bool append)
 	ppb->ring = ring;
 	ppb->parent_id = Task_Kernel;
 	ppb->focus_tty = nullptr;
-	ppb->cwd = Filesys::getRoot(); // Default to root
-	ppb->root = Filesys::getRoot();
+	{
+		auto files = ppb->fileman.Lock();
+		files->cwd = Filesys::getRoot(); // Default to root
+		files->root = Filesys::getRoot();
+	}
 	
 	auto tb = AllocateThread();
 	ppb->main_thread = tb;
@@ -540,18 +546,19 @@ static void _CreateELF_Carry(char* vaddr, stduint mem_length, BlockTrait* source
 		}
 
 		stduint phy_dest = phy + compensation;
+		void* kdest = (void*)mglb(phy_dest);
 
 		// xDATA or BSS 
 		if (bytes_read >= file_size) {
-			MemSet((void*)phy_dest, 0, chunk_size);
+			MemSet(kdest, 0, chunk_size);
 		} 
 		else {
 			stduint copy_size = chunk_size;
 			if (bytes_read + chunk_size > file_size) {
 				copy_size = file_size - bytes_read;
-				MemSet((void*)(phy_dest + copy_size), 0, chunk_size - copy_size);
+				MemSet((void*)mglb(phy_dest + copy_size), 0, chunk_size - copy_size);
 			}
-			auto ret = source->Read(file_offset + bytes_read, (void*)phy_dest, copy_size, buffer);
+			auto ret = source->Read(file_offset + bytes_read, kdest, copy_size, buffer);
 			if (ret != copy_size) {
 				plogwarn("%s %u: Read failed", __FUNCIDEN__, __LINE__);
 			}
@@ -601,10 +608,13 @@ ProcessBlock* Taskman::CreateELF(BlockTrait* source, byte ring) {
 
 	stduint load_slice_p = 0;
 	stduint max_seg_end = 0;
+	stduint phdr_addr = 0;
 	for0(i, header.e_phnum) {
 		struct ELF_PHT_t ph;
 		stduint ph_offset = header.e_phoff + header.e_phentsize * i;
 		source->Read(ph_offset, &ph, sizeof(ph), block_buffer);
+		if (ph.p_type == PT_PHDR) phdr_addr = ph.p_vaddr;
+		if (ph.p_type == PT_LOAD && ph.p_offset == 0 && !phdr_addr) phdr_addr = ph.p_vaddr + header.e_phoff;
 		if (ph.p_type == PT_LOAD && ph.p_memsz) 
 		{
 			_CreateELF_Carry((char*)ph.p_vaddr, ph.p_memsz, source, ph.p_offset, ph.p_filesz, pb->paging, block_buffer);
@@ -635,10 +645,14 @@ ProcessBlock* Taskman::CreateELF(BlockTrait* source, byte ring) {
 
 	// ---- Stack and Gen.Regis ---- //
 	const stduint stack_loc_top = _IMM(tb->stack_lineaddr) + tb->stack_size;
+	const stduint initial_sp = _Taskman_Setup_Stack(pb, pb, nullptr, nullptr,
+		(stduint)header.e_entry, phdr_addr, header.e_phnum, header.e_phentsize);
 
 	#if (_MCCA & 0xFF00) == 0x8600
 	tb->context.RING = ring;
-	tb->context.SP = (stack_loc_top & ~0xFlu) - 0x10 - sizeof(stduint); // Ensure (ESP+4) is 16-byte aligned
+	tb->context.SP = initial_sp;
+	ploginfo("[elf] entry=%[x] sp=%[x] stack=[%[x],%[x]) heap=[%[x],%[x]) ring=%u",
+		tb->context.IP, tb->context.SP, tb->stack_lineaddr, stack_loc_top, pb->heapbtm, pb->heaptop, ring);
 	SetSegment(&tb->context);
 	#if (_MCCA & 0xFF00) == 0x8600
 	// Initialize FPU/SSE context to a safe state (masked exceptions)
@@ -650,7 +664,7 @@ ProcessBlock* Taskman::CreateELF(BlockTrait* source, byte ring) {
 
 	#elif _MCCA == 0x1032 || _MCCA == 0x1064
 	constexpr stduint floating_support = (1 << 13);
-	tb->context.sp = (stack_loc_top & ~0xFlu) - 0x10;
+	tb->context.sp = initial_sp;
 	tb->context.IP = _IMM(header.e_entry);
 	tb->context.mstatus = (ring << 11) | floating_support | _MSTATUS_MPIE;
 	tb->context.kernel_sp = _IMM(tb->stack_levladdr) + tb->stack_size - 0x10;
@@ -674,8 +688,12 @@ ProcessBlock* Taskman::CreateFork(ProcessBlock* fo, const CallgateFrame* frame) 
 	pb->ring = ring;
 	pb->parent_id = fo->getID();
 	pb->focus_tty = fo->focus_tty;
-	pb->cwd = fo->cwd;
-	pb->root = fo->root;
+	{
+		auto src_files = fo->fileman.Lock();
+		auto dst_files = pb->fileman.Lock();
+		dst_files->cwd = src_files->cwd;
+		dst_files->root = src_files->root;
+	}
 	auto tb = AllocateThread();
 	pb->main_thread = tb;
 	pb->thread_list_head = tb;
@@ -771,6 +789,9 @@ ProcessBlock* Taskman::CreateFork(ProcessBlock* fo, const CallgateFrame* frame) 
 	tb->context.DI = frame->di;
 	tb->context.BP = frame->bp;
 	tb->context.IP = frame->ip;
+	ploginfo("[fork] parent=%u child_pending sp0=%[x] stack=[%[x],%[x]) ip=%[x]",
+		fo->getID(), frame->sp0, tb->stack_lineaddr,
+		_IMM(tb->stack_lineaddr) + tb->stack_size, frame->ip);
 	tb->context.SP = frame->sp0;
 	#if _MCCA == 0x8664
 	tb->context.GPR[8] = frame->r8;
@@ -785,16 +806,18 @@ ProcessBlock* Taskman::CreateFork(ProcessBlock* fo, const CallgateFrame* frame) 
 	(tb->context.FLAG) |= 0x200;// IF
 
 	// ---- File ---- //
-	fo->sys_lock.Acquire();
-	pb->pfiles.Clear();
-	for (stduint i = 0; i < fo->pfiles.Count(); i++) {
-		if (fo->pfiles[i]) {
-			pb->pfiles.Append(FileDescriptor_Clone(fo->pfiles[i]));
-		} else {
-			pb->pfiles.Append(nullptr);
+	{
+		auto src_files = fo->fileman.Lock();
+		auto dst_files = pb->fileman.Lock();
+		dst_files->pfiles.Clear();
+		for (stduint i = 0; i < src_files->pfiles.Count(); i++) {
+			if (src_files->pfiles[i]) {
+				dst_files->pfiles.Append(FileDescriptor_Clone(src_files->pfiles[i]));
+			} else {
+				dst_files->pfiles.Append(nullptr);
+			}
 		}
 	}
-	fo->sys_lock.Release();
 
 	Taskman::Append(pb);
 	Taskman::AppendThread(tb);
@@ -823,8 +846,10 @@ ProcessBlock* Taskman::CreateFile(const char* path, byte ring, stduint parent, v
 			task->parent_id = parent;
 			ProcessBlock* pparent = Taskman::Locate(parent);
 			if (pparent) {
-				task->cwd = pparent->cwd;
-				task->root = pparent->root;
+				auto parent_files = pparent->fileman.Lock();
+				auto task_files = task->fileman.Lock();
+				task_files->cwd = parent_files->cwd;
+				task_files->root = parent_files->root;
 			}
 			printlog(_LOG_INFO, "Loaded %s from %s", label, path);
 			return task;
@@ -842,11 +867,16 @@ ProcessBlock* Taskman::Exec(stduint parent, rostr usr_fullpath, char** usr_argv,
 	static char buf_fullpath[_TEMP 512];
 	auto parent_pb = Locate(parent);
 	StrCopyP(buf_fullpath, kernel_paging, usr_fullpath, parent_pb->paging, 512);
+	vfs_dentry* parent_cwd = nullptr;
+	{
+		auto parent_files = parent_pb->fileman.Lock();
+		parent_cwd = parent_files->cwd;
+	}
 
-	auto new_pb = Taskman::CreateFile(buf_fullpath, RING_U, parent, parent_pb->cwd);
+	auto new_pb = Taskman::CreateFile(buf_fullpath, RING_U, parent, parent_cwd);
 	if (!new_pb) return nullptr;
 
-	vfs_dentry* d = Filesys::Index(buf_fullpath, parent_pb->cwd);
+	vfs_dentry* d = Filesys::Index(buf_fullpath, parent_cwd);
 	if (!d) return nullptr;
 	FileBlockBridge loop_device(d->d_inode->i_sb->fs, d->d_inode->internal_handler, d->d_inode->i_size, 512);
 	ELF_Header_t header;
@@ -866,6 +896,11 @@ ProcessBlock* Taskman::Exec(stduint parent, rostr usr_fullpath, char** usr_argv,
 
 	#if (_MCCA & 0xFF00) == 0x8600
 	new_pb->main_thread->context.SP = new_sp;
+	ploginfo("[exec] parent=%u new=%p entry=%[x] sp=%[x] stack=[%[x],%[x]) heap=[%[x],%[x]) path=%s",
+		parent, new_pb, new_pb->main_thread->context.IP, new_sp,
+		new_pb->main_thread->stack_lineaddr,
+		_IMM(new_pb->main_thread->stack_lineaddr) + new_pb->main_thread->stack_size,
+		new_pb->heapbtm, new_pb->heaptop, buf_fullpath);
 	#if (_MCCA & 0xFF00) == 0x8600
 	treat<uint16>(&new_pb->main_thread->context.floating_point_context[0]) = 0x037F;
 	treat<uint32>(&new_pb->main_thread->context.floating_point_context[24]) = 0x1F80;
@@ -878,8 +913,12 @@ ProcessBlock* Taskman::Exec(stduint parent, rostr usr_fullpath, char** usr_argv,
 	new_pb->main_thread->unsolved_msg = nullptr;
 	new_pb->main_thread->block_reason = ThreadBlock::BlockReason::BR_None;
 
-	new_pb->cwd = parent_pb->cwd;
-	new_pb->root = parent_pb->root;
+	{
+		auto parent_files = parent_pb->fileman.Lock();
+		auto new_files = new_pb->fileman.Lock();
+		new_files->cwd = parent_files->cwd;
+		new_files->root = parent_files->root;
+	}
 	new_pb->focus_tty = parent_pb->focus_tty;
 	if (new_pb->focus_tty) {
 		new_pb->Open("/dev/tty", O_RDWR); // stdin
@@ -901,8 +940,13 @@ ProcessBlock* Taskman::Exet(stduint parent, rostr usr_fullpath, char** usr_argv,
 	static char buf_fullpath[512];
 	auto current_pb = Locate(parent);
 	StrCopyP(buf_fullpath, kernel_paging, usr_fullpath, current_pb->paging, 512);
+	vfs_dentry* current_cwd = nullptr;
+	{
+		auto current_files = current_pb->fileman.Lock();
+		current_cwd = current_files->cwd;
+	}
 
-	vfs_dentry* d = Filesys::Index(buf_fullpath, current_pb->cwd);
+	vfs_dentry* d = Filesys::Index(buf_fullpath, current_cwd);
 	if (!d) return nullptr;
 	FileBlockBridge loop_device(d->d_inode->i_sb->fs, d->d_inode->internal_handler, d->d_inode->i_size, 512);
 	

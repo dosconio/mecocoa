@@ -251,22 +251,33 @@ DEFSYSC sysc_PIPE(stduint usr_pipefd) {
 DEFSYSC sysc_READ(stduint fd, stduint addr, stduint len) {
 	ThreadBlock* th = Taskman::CurrentTB();
 	ProcessBlock* pb = th->parent_process;
+	bool is_named_pipe = false;
+	bool is_char_special = false;
 
 	// Intercept named pipes to bypass Task_FileSys server and execute in current thread's context to avoid deadlocks.
-	if (fd < pb->pfiles.Count() &&
-		pb->pfiles[fd] &&
-		pb->pfiles[fd]->vfile &&
-		pb->pfiles[fd]->vfile->f_inode &&
-		(pb->pfiles[fd]->vfile->f_inode->i_mode & I_TYPE_MASK) == I_NAMED_PIPE) {
+	{
+		auto files = pb->fileman.Lock();
+		if (fd < files->pfiles.Count() &&
+			files->pfiles[fd] &&
+			files->pfiles[fd]->vfile &&
+			files->pfiles[fd]->vfile->f_inode &&
+			(files->pfiles[fd]->vfile->f_inode->i_mode & I_TYPE_MASK) == I_NAMED_PIPE) {
+			is_named_pipe = true;
+		}
+		if (fd < files->pfiles.Count() &&
+			files->pfiles[fd] &&
+			asrtand(files->pfiles[fd])->vfile &&
+			asrtand(files->pfiles[fd]->vfile->f_dentry)->d_inode &&
+			files->pfiles[fd]->vfile->f_dentry->d_inode->i_mode == I_CHAR_SPECIAL) {
+			is_char_special = true;
+		}
+	}
+	if (is_named_pipe) {
 		return pb->Rdwt(false, fd, uni::Slice{ addr, len });
 	}
 
 	// TTY device
-	if (fd < pb->pfiles.Count() &&
-	    pb->pfiles[fd] &&
-	    asrtand(pb->pfiles[fd])->vfile && 
-	    asrtand(pb->pfiles[fd]->vfile->f_dentry)->d_inode &&
-		pb->pfiles[fd]->vfile->f_dentry->d_inode->i_mode == I_CHAR_SPECIAL) {		
+	if (is_char_special) {
 		// char device, read blockedly
 		stduint total_read = 0;
 		while (total_read < len) {
@@ -284,7 +295,14 @@ DEFSYSC sysc_READ(stduint fd, stduint addr, stduint len) {
 				if (ret == ~_IMM0) break;
 
 				// Identify the specific vtty device for echo
-				stduint tty_idx = (stduint)pb->pfiles[fd]->vfile->f_inode->internal_handler;
+				stduint tty_idx = (stduint)~0;
+				{
+					auto files = pb->fileman.Lock();
+					if (fd < files->pfiles.Count() && files->pfiles[fd] && files->pfiles[fd]->vfile &&
+						files->pfiles[fd]->vfile->f_inode) {
+						tty_idx = (stduint)files->pfiles[fd]->vfile->f_inode->internal_handler;
+					}
+				}
 				Console_t* con = nullptr;
 				if (tty_idx == (stduint)~0) {
 					if (pb->focus_tty) con = (Console_t*)pb->focus_tty->offs;
@@ -338,13 +356,20 @@ DEFSYSC sysc_READ(stduint fd, stduint addr, stduint len) {
 DEFSYSC sysc_WRIT(stduint fd, stduint addr, stduint len) {
 	ThreadBlock* th = Taskman::CurrentTB();
 	ProcessBlock* pb = th->parent_process;
+	bool is_named_pipe = false;
 
 	// Intercept named pipes to bypass Task_FileSys server and execute in current thread's context to avoid deadlocks.
-	if (fd < pb->pfiles.Count() &&
-		pb->pfiles[fd] &&
-		pb->pfiles[fd]->vfile &&
-		pb->pfiles[fd]->vfile->f_inode &&
-		(pb->pfiles[fd]->vfile->f_inode->i_mode & I_TYPE_MASK) == I_NAMED_PIPE) {
+	{
+		auto files = pb->fileman.Lock();
+		if (fd < files->pfiles.Count() &&
+			files->pfiles[fd] &&
+			files->pfiles[fd]->vfile &&
+			files->pfiles[fd]->vfile->f_inode &&
+			(files->pfiles[fd]->vfile->f_inode->i_mode & I_TYPE_MASK) == I_NAMED_PIPE) {
+			is_named_pipe = true;
+		}
+	}
+	if (is_named_pipe) {
 		return pb->Rdwt(true, fd, uni::Slice{ addr, len });
 	}
 
@@ -364,13 +389,14 @@ DEFSYSC sysc_DELF(stduint usr_filepath) {
 DEFSYSC sysc_PORP(stduint fd, stduint usr_proper) {
 	ThreadBlock* th = Taskman::CurrentTB();
 	ProcessBlock* pb = th->parent_process;
+	auto files = pb->fileman.Lock();
 
 	// Check if fd is valid
-	if (fd >= pb->pfiles.Count() || !pb->pfiles[fd] || !pb->pfiles[fd]->vfile) {
+	if (fd >= files->pfiles.Count() || !files->pfiles[fd] || !files->pfiles[fd]->vfile) {
 		return -1; // Invalid file descriptor
 	}
 
-	auto* vfile = pb->pfiles[fd]->vfile;
+	auto* vfile = files->pfiles[fd]->vfile;
 	auto* inode = vfile->f_inode;
 	if (!inode) {
 		return -1;
@@ -389,8 +415,11 @@ DEFSYSC sysc_ENUM(stduint fd, stduint addr, stduint count) {
 	ProcessBlock* pb = th->parent_process;
 
 	// Check if fd is valid
-	if (fd >= pb->pfiles.Count() || !pb->pfiles[fd] || !pb->pfiles[fd]->vfile) {
-		return -1; // Invalid file descriptor
+	{
+		auto files = pb->fileman.Lock();
+		if (fd >= files->pfiles.Count() || !files->pfiles[fd] || !files->pfiles[fd]->vfile) {
+			return -1; // Invalid file descriptor
+		}
 	}
 
 	stduint open_buf[4]{ fd, addr, count, th->getID() };
@@ -504,19 +533,22 @@ DEFSYSC sysc_MMAP(stduint len, stduint flag, stduint fd) {
 	SpinlockLocal guard(&pb->vma_lock);
 	stduint addr = pb->heaptop;
 	pb->heaptop += len;
-	
+
 	VirtualMemoryArea vma(addr, pb->heaptop, flag);
-	if (fd != ~_IMM0 && fd < pb->pfiles.Count() && pb->pfiles[fd] && pb->pfiles[fd]->vfile) {
-		uni::vfs_file* parent_vfile = pb->pfiles[fd]->vfile;
-		uni::vfs_file* nvfile = (uni::vfs_file*)malc(sizeof(uni::vfs_file));
-		if (nvfile) {
-			*nvfile = *parent_vfile;
-			if (nvfile->f_inode) {
-				nvfile->f_inode->ref_count++;
+	if (fd != ~_IMM0) {
+		auto files = pb->fileman.Lock();
+		if (fd < files->pfiles.Count() && files->pfiles[fd] && files->pfiles[fd]->vfile) {
+			uni::vfs_file* parent_vfile = files->pfiles[fd]->vfile;
+			uni::vfs_file* nvfile = (uni::vfs_file*)malc(sizeof(uni::vfs_file));
+			if (nvfile) {
+				*nvfile = *parent_vfile;
+				if (nvfile->f_inode) {
+					nvfile->f_inode->ref_count++;
+				}
+				vma.vm_type = VMA_FILE;
+				vma.vfile = nvfile;
+				vma.file_offset = 0;
 			}
-			vma.vm_type = VMA_FILE;
-			vma.vfile = nvfile;
-			vma.file_offset = 0;
 		}
 	}
 	pb->vmas.Append(vma);

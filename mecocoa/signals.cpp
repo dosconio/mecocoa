@@ -90,16 +90,20 @@ static void check_and_deliver_signals_generic(RegisterContext& ctx) {
 
 	// Find the first unblocked pending signal (both thread-specific and process-shared)
 	int signo = 0;
+	struct _POSIX_sigaction act = {};
 	for (int i = 1; i < _NSIG; i++) {
 		if (!sigismember(&crt->blocked_signals, i)) {
 			if (sigismember(&crt->pending_signals, i)) {
 				signo = i;
 				sigdelset(&crt->pending_signals, i);
 				break;
-			} else if (sigismember(&pb->shared_pending_signals, i)) {
-				signo = i;
-				sigdelset(&pb->shared_pending_signals, i);
-				break;
+			} else {
+				auto signals = pb->signals.Lock();
+				if (sigismember(&signals->shared_pending_signals, i)) {
+					signo = i;
+					sigdelset(&signals->shared_pending_signals, i);
+					break;
+				}
 			}
 		}
 	}
@@ -108,7 +112,10 @@ static void check_and_deliver_signals_generic(RegisterContext& ctx) {
 	if (signo == 0) return;
 
 	// We retrieve the registered action
-	struct _POSIX_sigaction act = pb->sig_actions[signo];
+	{
+		auto signals = pb->signals.Lock();
+		act = signals->sig_actions[signo];
+	}
 	
 	// Check if action is IGNORE
 	if (act.sa_handler == SIG_IGN) {
@@ -384,10 +391,12 @@ extern "C" stduint sys_sigaction(int sig, const struct _POSIX_sigaction* act, st
 	ProcessBlock* pb = crt->parent_process;
 	
 	if (oact) {
-		*oact = pb->sig_actions[sig];
+		auto signals = pb->signals.Lock();
+		*oact = signals->sig_actions[sig];
 	}
 	if (act) {
-		pb->sig_actions[sig] = *act;
+		auto signals = pb->signals.Lock();
+		signals->sig_actions[sig] = *act;
 	}
 	return 0;
 }
@@ -435,7 +444,10 @@ extern "C" stduint sys_kill(stduint pid, int sig, stduint tid) {
 
 	if (tid == 0) {
 		// Send to process (Shared)
-		sigaddset(&pb->shared_pending_signals, sig);
+		{
+			auto signals = pb->signals.Lock();
+			sigaddset(&signals->shared_pending_signals, sig);
+		}
 		
 		// Find a thread to deliver the signal (one that doesn't block the signal)
 		ThreadBlock* target_th = nullptr;
@@ -460,7 +472,8 @@ extern "C" stduint sys_kill(stduint pid, int sig, stduint tid) {
 		// If a target thread is found, move the signal to its pending list and wake it up
 		if (target_th) {
 			sigaddset(&target_th->pending_signals, sig);
-			sigdelset(&pb->shared_pending_signals, sig);
+			auto signals = pb->signals.Lock();
+			sigdelset(&signals->shared_pending_signals, sig);
 			wakeup_thread_for_signal(target_th, sig);
 		}
 	} else {

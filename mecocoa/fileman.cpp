@@ -12,20 +12,35 @@ static byte* buffer = nil;
 FileDescriptor* f_desc_table = nil;
 stduint f_desc_table_count = 0;
 
+static bool CloseFileSlotUnlocked(ProcFiles& files, int fd) {
+	if (fd < 0 || fd >= (stdsint)files.pfiles.Count() || !files.pfiles[fd]) {
+		return false;
+	}
+	if (files.pfiles[fd]->vfile) {
+		if (files.pfiles[fd]->vfile->f_inode)
+			files.pfiles[fd]->vfile->f_inode->ref_count--;
+		Filesys::Close(files.pfiles[fd]->vfile);
+		files.pfiles[fd]->vfile = nullptr;
+	}
+	files.pfiles[fd] = nullptr;
+	return true;
+}
+
 //// ---- ---- SYSCALL ---- ---- ////
 
 //{TODO} relative path
 stdsint ProcessBlock::Open(rostr pathname, int flags) {
+	auto files = this->fileman.Lock();
 	int fd = -1;
-	for (stduint i = 0; i < self.pfiles.Count(); i++) {
-		if (!self.pfiles[i]) {
+	for (stduint i = 0; i < files->pfiles.Count(); i++) {
+		if (!files->pfiles[i]) {
 			fd = i;// find a available fileslot
 			break;
 		}
 	}
-	if (fd == -1 && self.pfiles.Count() < DEFAULT_FILES_LIMIT) {
-		fd = self.pfiles.Count();
-		self.pfiles.Append(nullptr);
+	if (fd == -1 && files->pfiles.Count() < DEFAULT_FILES_LIMIT) {
+		fd = files->pfiles.Count();
+		files->pfiles.Append(nullptr);
 	}
 	if (fd == -1) {
 		plogwarn("no file slot available");
@@ -46,14 +61,14 @@ stdsint ProcessBlock::Open(rostr pathname, int flags) {
 	}
 	
 	vfs_file* file = nullptr;
-	int ret = Filesys::Open(pathname, flags, &file, this->cwd);
+	int ret = Filesys::Open(pathname, flags, &file, files->cwd);
 	
 	if (ret < 0 || !file) {
 		// plogwarn("pathname %s failed to %s", pathname, (flags & O_RDWR) ? "open" : "create");
 		return -1;
 	}
 	
-	self.pfiles[fd] = pfd;
+	files->pfiles[fd] = pfd;
 	pfd->vfile = file;
 	pfd->fd_mode = flags;
 	pfd->fd_pos = 0;
@@ -65,23 +80,23 @@ stdsint ProcessBlock::Open(rostr pathname, int flags) {
 
 stduint ProcessBlock::Rdwt(bool wr_type, stduint fid, Slice slice)
 {
-	MutexLocal guard(&this->sys_lock);
+	auto files = this->fileman.Lock();
 	_Comment(const) ProcessBlock* pb = this;
-	if (fid >= pb->pfiles.Count()) plogerro("BOOM %d", fid);
-	if (!pb || fid >= pb->pfiles.Count() || !pb->pfiles[fid] || !pb->pfiles[fid]->vfile) return 0;
+	if (fid >= files->pfiles.Count()) plogerro("BOOM %d", fid);
+	if (!pb || fid >= files->pfiles.Count() || !files->pfiles[fid] || !files->pfiles[fid]->vfile) return 0;
 	if (this->state == ProcessBlock::State::Invalid) {
 		return 0;
 	}
 	if (wr_type) {
-		int mode = pb->pfiles[fid]->fd_mode & O_ACCMODE;
+		int mode = files->pfiles[fid]->fd_mode & O_ACCMODE;
 		if (mode != O_WRONLY && mode != O_RDWR) return 0;
 	}
 	
-	vfs_file* file = pb->pfiles[fid]->vfile;
-	if (wr_type && (pb->pfiles[fid]->fd_mode & O_APPEND)) {
-		pb->pfiles[fid]->fd_pos = file->f_inode->i_size;
+	vfs_file* file = files->pfiles[fid]->vfile;
+	if (wr_type && (files->pfiles[fid]->fd_mode & O_APPEND)) {
+		files->pfiles[fid]->fd_pos = file->f_inode->i_size;
 	}
-	file->f_pos = pb->pfiles[fid]->fd_pos; // sync pos 
+	file->f_pos = files->pfiles[fid]->fd_pos; // sync pos
 
 	int total_bytes = 0;
 	int bytes_left = slice.length;
@@ -135,10 +150,10 @@ stduint ProcessBlock::Rdwt(bool wr_type, stduint fid, Slice slice)
 		total_bytes += bytes_processed;
 		curr_addr += bytes_processed;
 		bytes_left -= bytes_processed;
-		pb->pfiles[fid]->fd_pos += bytes_processed;
+		files->pfiles[fid]->fd_pos += bytes_processed;
 		
 		// Update the underlying VFS file position 
-		file->f_pos = pb->pfiles[fid]->fd_pos;
+		file->f_pos = files->pfiles[fid]->fd_pos;
 
 		// If the processed bytes are less than the chunk requested, we likely hit the end of the file.
 		if (bytes_processed < chunk) {
@@ -151,35 +166,29 @@ stduint ProcessBlock::Rdwt(bool wr_type, stduint fid, Slice slice)
 
 bool ProcessBlock::Close(int fid)
 {
-	MutexLocal guard(&this->sys_lock);
+	auto files = this->fileman.Lock();
 	int fd = fid;
-	if (fd < 0 || fd >= (stdsint)self.pfiles.Count() || !self.pfiles[fd]) {
+	if (fd < 0 || fd >= (stdsint)files->pfiles.Count() || !files->pfiles[fd]) {
 		ploginfo("%s %d skip", __FUNCIDEN__, fd);
 		return false;
 	}
-	if (self.pfiles[fd]->vfile) {
-		if (self.pfiles[fd]->vfile->f_inode)
-			self.pfiles[fd]->vfile->f_inode->ref_count--;
-		Filesys::Close(self.pfiles[fd]->vfile);
-		self.pfiles[fd]->vfile = nullptr;
-	}
-	self.pfiles[fd] = nullptr;
-	return true;
+	return CloseFileSlotUnlocked(*files, fd);
 }
 
 //{} unchk unused
 stdsint ProcessBlock::Seek(int fd, stdsint off, int whence) {
+	auto files = this->fileman.Lock();
 	ProcessBlock* const pb = this;
 
 	// Validate ProcessBlock and File Descriptor
-	if (!pb || fd < 0 || fd >= (stdsint)pb->pfiles.Count() || !pb->pfiles[fd] || !pb->pfiles[fd]->vfile) {
+	if (!pb || fd < 0 || fd >= (stdsint)files->pfiles.Count() || !files->pfiles[fd] || !files->pfiles[fd]->vfile) {
 		return -1;
 	}
 
-	vfs_file* file = pb->pfiles[fd]->vfile;
+	vfs_file* file = files->pfiles[fd]->vfile;
 	if (!file->f_inode) return -1;
 
-	stdsint pos = pb->pfiles[fd]->fd_pos;
+	stdsint pos = files->pfiles[fd]->fd_pos;
 	stdsint f_size = file->f_inode->i_size;
 
 	// SEEK_SET: 0, SEEK_CUR: 1, SEEK_END: 2
@@ -207,17 +216,17 @@ stdsint ProcessBlock::Seek(int fd, stdsint off, int whence) {
 	MIN(pos, f_size);
 
 	// Update position in both the process file descriptor and the VFS file object
-	pb->pfiles[fd]->fd_pos = pos;
+	files->pfiles[fd]->fd_pos = pos;
 	file->f_pos = pos;
 
 	return pos;
 }
 
 stdsint ProcessBlock::Dup2(int oldfd, int newfd) {
-	MutexLocal guard(&this->sys_lock);
+	auto files = this->fileman.Lock();
 
 	// Validate original file descriptor
-	if (oldfd < 0 || oldfd >= (stdsint)self.pfiles.Count() || !self.pfiles[oldfd]) {
+	if (oldfd < 0 || oldfd >= (stdsint)files->pfiles.Count() || !files->pfiles[oldfd]) {
 		return -1;
 	}
 
@@ -227,25 +236,18 @@ stdsint ProcessBlock::Dup2(int oldfd, int newfd) {
 	}
 
 	// Close the target file descriptor first if it is open
-	if (newfd >= 0 && newfd < (stdsint)self.pfiles.Count() && self.pfiles[newfd]) {
-		if (self.pfiles[newfd]->vfile) {
-			if (self.pfiles[newfd]->vfile->f_inode) {
-				self.pfiles[newfd]->vfile->f_inode->ref_count--;
-			}
-			Filesys::Close(self.pfiles[newfd]->vfile);
-			self.pfiles[newfd]->vfile = nullptr;
-		}
-		self.pfiles[newfd] = nullptr;
+	if (newfd >= 0 && newfd < (stdsint)files->pfiles.Count() && files->pfiles[newfd]) {
+		CloseFileSlotUnlocked(*files, newfd);
 	}
 
 	// Expand the process file descriptors vector size if needed
-	while (self.pfiles.Count() <= (stduint)newfd) {
-		self.pfiles.Append(nullptr);
+	while (files->pfiles.Count() <= (stduint)newfd) {
+		files->pfiles.Append(nullptr);
 	}
 
 	// Duplicate descriptor to the target slot
-	self.pfiles[newfd] = FileDescriptor_Clone(self.pfiles[oldfd]);
-	if (!self.pfiles[newfd]) {
+	files->pfiles[newfd] = FileDescriptor_Clone(files->pfiles[oldfd]);
+	if (!files->pfiles[newfd]) {
 		return -1;
 	}
 
@@ -253,7 +255,7 @@ stdsint ProcessBlock::Dup2(int oldfd, int newfd) {
 }
 
 stdsint ProcessBlock::Pipe(int pipefd[2]) {
-	MutexLocal guard(&this->sys_lock);
+	auto files = this->fileman.Lock();
 	vfs_file* reader = nullptr;
 	vfs_file* writer = nullptr;
 
@@ -262,17 +264,17 @@ stdsint ProcessBlock::Pipe(int pipefd[2]) {
 	}
 
 	// Helper logic to allocate fd and bind FileDescriptor in fileman
-	auto alloc_fd = [this](vfs_file* file, int mode) -> int {
+	auto alloc_fd = [&files](vfs_file* file, int mode) -> int {
 		int fd = -1;
-		for (stduint i = 0; i < self.pfiles.Count(); i++) {
-			if (!self.pfiles[i]) {
+		for (stduint i = 0; i < files->pfiles.Count(); i++) {
+			if (!files->pfiles[i]) {
 				fd = i;
 				break;
 			}
 		}
-		if (fd == -1 && self.pfiles.Count() < DEFAULT_FILES_LIMIT) {
-			fd = self.pfiles.Count();
-			self.pfiles.Append(nullptr);
+		if (fd == -1 && files->pfiles.Count() < DEFAULT_FILES_LIMIT) {
+			fd = files->pfiles.Count();
+			files->pfiles.Append(nullptr);
 		}
 		if (fd == -1) return -1;
 
@@ -286,7 +288,7 @@ stdsint ProcessBlock::Pipe(int pipefd[2]) {
 		}
 		if (!pfd) return -1;
 
-		self.pfiles[fd] = pfd;
+		files->pfiles[fd] = pfd;
 		pfd->vfile = file;
 		pfd->fd_mode = mode;
 		pfd->fd_pos = 0;
@@ -297,8 +299,8 @@ stdsint ProcessBlock::Pipe(int pipefd[2]) {
 	int fd_w = alloc_fd(writer, O_WRONLY);
 
 	if (fd_r < 0 || fd_w < 0) {
-		if (fd_r >= 0) Close(fd_r);
-		if (fd_w >= 0) Close(fd_w);
+		if (fd_r >= 0) CloseFileSlotUnlocked(*files, fd_r);
+		if (fd_w >= 0) CloseFileSlotUnlocked(*files, fd_w);
 		return -1;
 	}
 
@@ -419,7 +421,7 @@ void serv_file_loop()// for IDE 0:0, 0:1
 		case FilemanMsg::OPEN://(flags, thid, usr_filename) | open a file and return the file descriptor
 		{
 			stduint retval = ~_IMM0;
-			ProcessBlock* safe_pb = ProcessBlock::Acquire(to_args[1]);
+			ProcessBlock* safe_pb = ProcessBlock::AcquireActive(to_args[1]);
 			if (safe_pb) {
 				auto len = StrCopyP((char*)pathbuf, kernel_paging, (rostr)to_args[2], safe_pb->paging, pathbuf_size);
 				// ploginfo("[fileman] TID %u open %s with %[32H]", to_args[1], pathbuf, to_args[0]);
@@ -432,7 +434,7 @@ void serv_file_loop()// for IDE 0:0, 0:1
 		case FilemanMsg::CLOSE:// -> 0 for success
 		{
 			stdsint ret = -1;
-			ProcessBlock* safe_pb = ProcessBlock::AcquireByPID(to_args[1]);
+			ProcessBlock* safe_pb = ProcessBlock::AcquireActiveByPID(to_args[1]);
 			if (safe_pb) {
 				ret = safe_pb->Close(to_args[0]) ? 0 : -1;// POSIX Close
 				ProcessBlock::Release(safe_pb);
@@ -444,7 +446,7 @@ void serv_file_loop()// for IDE 0:0, 0:1
 		case FilemanMsg::WRITE://
 		{
 
-			ProcessBlock* safe_pb = ProcessBlock::Acquire(to_args[3]);
+			ProcessBlock* safe_pb = ProcessBlock::AcquireActive(to_args[3]);
 			if (safe_pb) {
 				stduint ret = safe_pb->Rdwt(
 					(FilemanMsg)sig_type == FilemanMsg::WRITE,
@@ -463,11 +465,14 @@ void serv_file_loop()// for IDE 0:0, 0:1
 		case FilemanMsg::REMOVE:// --> (pid, filename[7]...) --> (!success)
 		{
 			retval[0] = ~_IMM0;
-			ProcessBlock* safe_pb = ProcessBlock::Acquire(to_args[1]);
+			ProcessBlock* safe_pb = ProcessBlock::AcquireActive(to_args[1]);
 			if (safe_pb) {
-				auto len = StrCopyP((char*)pathbuf, kernel_paging, (rostr)to_args[0], safe_pb->paging, pathbuf_size);
-				if (len > 0) {
-					retval[0] = Filesys::Remove((rostr)pathbuf, safe_pb->cwd);
+				{
+					auto files = safe_pb->fileman.Lock();
+					auto len = StrCopyP((char*)pathbuf, kernel_paging, (rostr)to_args[0], safe_pb->paging, pathbuf_size);
+					if (len > 0) {
+						retval[0] = Filesys::Remove((rostr)pathbuf, files->cwd);
+					}
 				}
 				ProcessBlock::Release(safe_pb);
 			}
@@ -476,13 +481,16 @@ void serv_file_loop()// for IDE 0:0, 0:1
 		}
 		case FilemanMsg::ENUMER:
 		{
-			ProcessBlock* safe_pb = ProcessBlock::Acquire(to_args[3]);
+			ProcessBlock* safe_pb = ProcessBlock::AcquireActive(to_args[3]);
 
 			stduint ret = 0;
 			if (safe_pb) {
-				int fd = to_args[0];
-				if (fd >= 0 && fd < (stdsint)safe_pb->pfiles.Count() && safe_pb->pfiles[fd] && safe_pb->pfiles[fd]->vfile) {
-					ret = Filesys::Enumer(safe_pb->pfiles[fd]->vfile, (void*)to_args[1], to_args[2], safe_pb);
+				{
+					auto files = safe_pb->fileman.Lock();
+					int fd = to_args[0];
+					if (fd >= 0 && fd < (stdsint)files->pfiles.Count() && files->pfiles[fd] && files->pfiles[fd]->vfile) {
+						ret = Filesys::Enumer(files->pfiles[fd]->vfile, (void*)to_args[1], to_args[2], safe_pb);
+					}
 				}
 				syssend(sig_src, &ret, sizeof(ret));
 				ProcessBlock::Release(safe_pb);
@@ -497,32 +505,32 @@ void serv_file_loop()// for IDE 0:0, 0:1
 		case FilemanMsg::SETD:
 		{
 			stdsint err_ret = -1;
-			ProcessBlock* safe_pb = ProcessBlock::Acquire(to_args[1]);
+			stdsint reply = 0;
+			ProcessBlock* safe_pb = ProcessBlock::AcquireActive(to_args[1]);
 			if (!safe_pb) {
 				syssend(sig_src, &err_ret, sizeof(err_ret));
 				break;
 			}
-			auto len = StrCopyP((char*)pathbuf, kernel_paging, (rostr)to_args[0], safe_pb->paging, pathbuf_size);
-			if (len == 0) {
-				syssend(sig_src, &err_ret, sizeof(err_ret));
-				ProcessBlock::Release(safe_pb);
-				break;
+			{
+				auto files = safe_pb->fileman.Lock();
+				auto len = StrCopyP((char*)pathbuf, kernel_paging, (rostr)to_args[0], safe_pb->paging, pathbuf_size);
+				if (len == 0) {
+					reply = err_ret;
+				}
+				else {
+					vfs_dentry* target_dentry = Filesys::Index((const char*)pathbuf, files->cwd);
+					if (!target_dentry) {
+						reply = err_ret;
+					}
+					else if (!target_dentry->d_inode || (target_dentry->d_inode->i_mode & I_TYPE_MASK) != I_DIRECTORY) {
+						reply = -2;
+					}
+					else {
+						files->cwd = target_dentry;
+					}
+				}
 			}
-			vfs_dentry* target_dentry = Filesys::Index((const char*)pathbuf, safe_pb->cwd);
-			if (!target_dentry) {
-				syssend(sig_src, &err_ret, sizeof(err_ret));
-				ProcessBlock::Release(safe_pb);
-				break;
-			}
-			if (!target_dentry->d_inode || (target_dentry->d_inode->i_mode & I_TYPE_MASK) != I_DIRECTORY) {
-				stdsint type_err = -2;
-				syssend(sig_src, &type_err, sizeof(type_err));
-				ProcessBlock::Release(safe_pb);
-				break;
-			}
-			safe_pb->cwd = target_dentry;
-			stdsint ok_ret = 0;
-			syssend(sig_src, &ok_ret, sizeof(ok_ret));
+			syssend(sig_src, &reply, sizeof(reply));
 			ProcessBlock::Release(safe_pb);
 			break;
 		}
@@ -530,7 +538,7 @@ void serv_file_loop()// for IDE 0:0, 0:1
 		case FilemanMsg::GETD:
 		{
 			stdsint err_ret = -1;
-			ProcessBlock* safe_pb = ProcessBlock::Acquire(to_args[2]);
+			ProcessBlock* safe_pb = ProcessBlock::AcquireActive(to_args[2]);
 			if (!safe_pb) {
 				syssend(sig_src, &err_ret, sizeof(err_ret));
 				break;
@@ -542,7 +550,11 @@ void serv_file_loop()// for IDE 0:0, 0:1
 				ProcessBlock::Release(safe_pb);
 				break;
 			}
-			String abs_path = Filesys::getAbsolutePath(safe_pb->cwd);
+			String abs_path;
+			{
+				auto files = safe_pb->fileman.Lock();
+				abs_path = Filesys::getAbsolutePath(files->cwd);
+			}
 			stduint path_len = StrLength(abs_path.reference());
 			if (size < path_len + 1) {
 				stdsint size_err = -2;

@@ -297,6 +297,37 @@ ProcessBlock* ProcessBlock::AcquireByPID(stduint pid) {
 	return nullptr;
 }
 
+ProcessBlock* ProcessBlock::AcquireActive(stduint tid) {
+	SpinlockLocal guard(&scheduler_lock);
+	for (auto nod = Taskman::thchain.Root(); nod; nod = nod->next) {
+		auto th = cast<ThreadBlock*>(nod->offs);
+		if (th->tid == tid) {
+			if (th->parent_process && th->parent_process->state == ProcessBlock::State::Active) {
+				ProcessBlock* pb = th->parent_process;
+				__atomic_add_fetch(&pb->ref_count, 1, __ATOMIC_SEQ_CST);
+				return pb;
+			}
+			break;
+		}
+	}
+	return nullptr;
+}
+
+ProcessBlock* ProcessBlock::AcquireActiveByPID(stduint pid) {
+	SpinlockLocal guard(&scheduler_lock);
+	for (auto nod = Taskman::chain.Root(); nod; nod = nod->next) {
+		auto pb = cast<ProcessBlock*>(nod->offs);
+		if (pb->pid == pid) {
+			if (pb->state == ProcessBlock::State::Active) {
+				__atomic_add_fetch(&pb->ref_count, 1, __ATOMIC_SEQ_CST);
+				return pb;
+			}
+			break;
+		}
+	}
+	return nullptr;
+}
+
 extern void free_async_msg(pureptr_t ptr);
 auto Taskman::AllocateThread() -> ThreadBlock* {
 	auto tb = (ThreadBlock*)mempool.allocate(sizeof(ThreadBlock), 4);
@@ -412,18 +443,22 @@ static void _Exit_Cleanup(stduint pid)
 	if (!ppb || ppb->state == ProcessBlock::State::Invalid) return;
 	ppb->state = ProcessBlock::State::Invalid;
 
-	ppb->sys_lock.Acquire();
-    ppb->sys_lock.Release();
+	{
+		auto files = ppb->fileman.Lock();
+	}
 
 	// Hierarchical Process Tree: Unlink from parent
 	extern Spinlock scheduler_lock;
-	{
-		SpinlockLocal guard(&scheduler_lock);
-		ProcessBlock* pparent = nullptr;
+	auto locate_nolock = [](stduint target_pid) -> ProcessBlock* {
 		for (auto nod = Taskman::chain.Root(); nod; nod = nod->next) {
 			auto p = cast<ProcessBlock*>(nod->offs);
-			if (p->pid == ppb->parent_id) { pparent = p; break; }
+			if (p->pid == target_pid) return p;
 		}
+		return nullptr;
+	};
+	{
+		SpinlockLocal guard(&scheduler_lock);
+		ProcessBlock* pparent = locate_nolock(ppb->parent_id);
 		if (pparent) {
 			if (pparent->child_list_head == ppb) {
 				pparent->child_list_head = ppb->sibling_next;
@@ -453,9 +488,9 @@ static void _Exit_Cleanup(stduint pid)
 		}
 		else {
 			child->parent_id = Task_Init;
-			ProcessBlock* pinit = Taskman::Locate(Task_Init);
+			SpinlockLocal guard(&scheduler_lock);
+			ProcessBlock* pinit = locate_nolock(Task_Init);
 			if (pinit) {
-				SpinlockLocal guard(&scheduler_lock);
 				child->sibling_next = pinit->child_list_head;
 				pinit->child_list_head = child;
 			}
@@ -501,12 +536,24 @@ static void _Exit_Cleanup(stduint pid)
 	}
 
 	// 4. Release Files
-	for (stduint i = 0; i < ppb->pfiles.Count(); i++) {
-		if (ppb->pfiles[i]) {
-			ppb->Close(i);
-		}
+	stduint file_count = 0;
+	{
+		auto files = ppb->fileman.Lock();
+		file_count = files->pfiles.Count();
 	}
-	ppb->pfiles.Clear();
+	for (stduint i = 0; i < file_count; i++) {
+		{
+			auto files = ppb->fileman.Lock();
+			if (i >= files->pfiles.Count() || !files->pfiles[i]) {
+				continue;
+			}
+		}
+		ppb->Close(i);
+	}
+	{
+		auto files = ppb->fileman.Lock();
+		files->pfiles.Clear();
+	}
 
 	// 5. Final Destruction: Release Thread blocks and stacks
 	while (ppb->thread_list_head) {
@@ -586,7 +633,7 @@ bool Taskman::Exit(ProcessBlock* p, stdsint exit_code)
 {
 	extern Spinlock scheduler_lock;
 	if (!p || p->state != ProcessBlock::State::Active) return false;
-	p->state = ProcessBlock::State::Hanging; // Mark as terminating immediately
+	p->state = ProcessBlock::State::Expiring; // Mark as terminating immediately
 
 	const auto pid = p->getID();
 	auto parent_pid = p->parent_id;
@@ -648,6 +695,13 @@ bool Taskman::Exit(ProcessBlock* p, stdsint exit_code)
 	p->exit_status = exit_code;
 
 	// Handle Remaining Children (Reparent all children to Task_Init)
+	auto locate_nolock = [](stduint target_pid) -> ProcessBlock* {
+		for (auto nod = Taskman::chain.Root(); nod; nod = nod->next) {
+			auto task = cast<ProcessBlock*>(nod->offs);
+			if (task->pid == target_pid) return task;
+		}
+		return nullptr;
+	};
 	while (p->child_list_head) {
 		ProcessBlock* child = p->child_list_head;
 
@@ -662,9 +716,9 @@ bool Taskman::Exit(ProcessBlock* p, stdsint exit_code)
 		child->parent_id = Task_Init;
 
 		// Attach the child to Task_Init's child list
-		ProcessBlock* pinit = Taskman::Locate(Task_Init);
+		SpinlockLocal guard(&scheduler_lock);
+		ProcessBlock* pinit = locate_nolock(Task_Init);
 		if (pinit) {
-			SpinlockLocal guard(&scheduler_lock);
 			child->sibling_next = pinit->child_list_head;
 			pinit->child_list_head = child;
 		}
