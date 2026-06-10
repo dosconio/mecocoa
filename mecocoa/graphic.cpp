@@ -88,7 +88,7 @@ void hand_mouse(MouseMessage mmsg) {
 		RecursiveMutexLocal guard(&gui_lock);
 		#endif
 
-				// 1. Handle Clicks and Z-order
+		// Handle Clicks and Z-order
 		SheetTrait* sheet = nullptr;
 		if ((change_btns & 0b111) && (sheet = global_layman.getTop(cursor_p, 1))) {
 			Point rel_p = cursor_p - sheet->sheet_area.getVertex();
@@ -119,7 +119,7 @@ void hand_mouse(MouseMessage mmsg) {
 			}
 		}
 
-		// 2. Handle Movement
+		// Handle Movement
 		if (mmsg.X || mmsg.Y) {
 			global_layman.Domove(Cursor::global_cursor, { mmsg.X, mmsg.Y });
 			if (Cursor::moving_sheet) {
@@ -225,12 +225,29 @@ void serv_graf_loop() {
 		//
 		switch (msg.type) {
 		case SysMessage::RUPT_TIMER:
-			global_layman.CheckTimers(tick);
+			if constexpr (_GUI_ENABLE) {
+				// [Lock]: Protect timer iteration against concurrent layer cleanup
+				RecursiveMutexLocal guard(&gui_lock);
+				global_layman.CheckTimers(tick);
+			}
 			has_pending_timer = false;
 			Consman::WakeBlockedWaiters();
 			break;
 		case SysMessage::RUPT_MOUSE:
 			hand_mouse(msg.args.mou_event);
+			Consman::WakeBlockedWaiters();
+			break;
+		case SysMessage::RUPT_KBD:
+			if constexpr (_GUI_ENABLE) {
+				// [Lock]: Protect last_click_sheet access against concurrent form cleanup
+				#if _GUI_ENABLE
+				RecursiveMutexLocal guard(&gui_lock);
+				#endif
+				auto& kbd_event = msg.args.kbd_event;
+				if (Consman::last_click_sheet) {
+					Consman::last_click_sheet->onrupt(SheetEvent::onKeybd, Point(0, 0), &kbd_event);
+				}
+			}
 			Consman::WakeBlockedWaiters();
 			break;
 		case SysMessage::RUPT_FLUSH:
@@ -242,7 +259,8 @@ void serv_graf_loop() {
 						#if _GUI_ENABLE
 						RecursiveMutexLocal guard(&gui_lock);
 						#endif
-												// Perform delayed composition (Layer Blending)
+						// Perform delayed composition (Layer Blending)
+						// ploginfo("[GRAPHIC] Flush ((%u,%u),(%u,%u))", msg.args.rect.x, msg.args.rect.y, msg.args.rect.w, msg.args.rect.h);
 						global_layman.UpdateForce(nullptr, msg.args.rect.toRectangle());
 					}
 					// Flush back-buffer to physical screen (buffer is now stable)

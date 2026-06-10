@@ -34,12 +34,12 @@ enum {
 void serv_sysmsg();
 
 struct MsgTimer {
-	stduint timeout;
-	stduint iden;
-	_tocall_ft hand;// Realtime Hook
+	stduint timeout = 0;
+	stduint iden = 0;
+	_tocall_ft hand = nullptr;// Realtime Hook
 };
 struct MccaRectangle {
-	stduint x, y, w, h;
+	stduint x = 0, y = 0, w = 0, h = 0;
 	auto toRectangle() -> uni::Rectangle { return Rectangle(Point2(x, y), Size2(w, h)); }
 };
 struct SysMessage {
@@ -52,14 +52,14 @@ struct SysMessage {
 		RUPT_CONSOLE_WAKE,
 		RUPT_NEW_TERM,
 		RUPT_TTY_OUT,// async TTY text ready to render (sent by DevFs::writfl)
-	} type;
+	} type = Type::RUPT_TIMER;
 	union {
 		struct MsgTimer timer;
 		MouseMessage mou_event;
 		keyboard_event_t kbd_event;
 		MccaRectangle rect;// RUPT_FLUSH
 		Dnode* tty_node;// RUPT_TTY_OUT: which vtty has pending output
-	} args;
+	} args = {};
 };
 extern uni::Queue<SysMessage> message_queue;
 
@@ -93,7 +93,11 @@ void SendWakeAllApsIPI();
 bool WakeOneIdleApForReadyWork();
 #endif
 
+#if _GUI_ENABLE
+#define HIGHER_STACK_SIZE 0xC000
+#else
 #define HIGHER_STACK_SIZE 0x8000
+#endif
 
 #if (_MCCA & 0xFF00) == 0x8600
 enum {
@@ -177,13 +181,13 @@ static constexpr const stduint COMM_SEND_ASYNC = 0b100;
 static constexpr const stduint LIMIT_THREAD_AMSG = 32;
 
 struct CommMsg {
-	uni::Slice data;
-	stduint type;
-	stduint src;// use if type is HARDRUPT
+	uni::Slice data = {};
+	stduint type = 0;
+	stduint src = 0;// use if type is HARDRUPT
 };
 
 struct AsyncCommMsg {
-	CommMsg msg;
+	CommMsg msg = {};
 };
 
 // Process
@@ -235,10 +239,10 @@ struct VirtualMemoryArea {
 
 class _Comment(Kernel) ProcessBlock {
 public: // Identity / Config
-	stduint pid;
-	stduint parent_id;
+	stduint pid = 0;
+	stduint parent_id = 0;
 	inline stduint getID() { return pid; }
-	stduint ring;
+	stduint ring = 0;
 	enum class InterfaceType : byte {
 		MCCA4,// x86 will only support MCCA4
 		Linux,
@@ -255,7 +259,7 @@ public: // Lifecycle
 	} state = State::Active;
 	stduint wait_for_pid = 0; // 0 for any, non-zero for specific
 	inline bool isWaiting();
-	stduint exit_status;
+	stduint exit_status = 0;
 
 public: // ProcessTree
 	ProcessBlock* child_list_head = nullptr; // Head of children linked list
@@ -287,7 +291,7 @@ public: // Signals
 	MutexBlock<ProcSignals> signals;
 
 public:
-	ProcessBlock() {}
+	ProcessBlock() = default;
 	auto Open(rostr pathname, int flags) -> stdsint;
 	auto Rdwt(bool wr_type, stduint fid, Slice slice) -> stduint;
 	auto Close(int fid) -> bool;
@@ -305,15 +309,15 @@ public:
 class ThreadBlock {
 public:
     alignas(16) NormalTaskContext context;// advanced TSS_t
-    stduint tid;
-    ProcessBlock* parent_process; 
+    stduint tid = 0;
+    ProcessBlock* parent_process = nullptr; 
 	ThreadBlock* process_thread_next = nullptr;
-	volatile stduint just_schedule;// in fact a bool
+	volatile stduint just_schedule = 0;// in fact a bool
 public:
-	stduint stack_size;
-	byte* stack_lineaddr;// [linear] ring3 bottom of stack
+	stduint stack_size = 0;
+	byte* stack_lineaddr = nullptr;// [linear] ring3 bottom of stack
 	// stack_levladdr: use phyzik. Because 0xFFFFFFFFC0001000ull or 0xFFC01000 is mapped to this.
-	byte* stack_levladdr;// [phyzik] ring0, may be 0 or same with stack_lineaddr for ring0 task 
+	byte* stack_levladdr = nullptr;// [phyzik] ring0, may be 0 or same with stack_lineaddr for ring0 task 
 	
 	sint8 priority = 0; // -16..-1 (Realtime RT) and 0..15 (Timeslice)
 	uint8 time_slice = 0; // execution time left for timeslice mode
@@ -339,16 +343,17 @@ public _Comment(State):
 		BR_SendMsg = 0b10,
 		BR_RecvMsg = 0b100,
 		BR_Waiting = 0b1000,
+		BR_Exiting = 0b10000,
 	} block_reason = BlockReason::BR_None;
 	void Block(BlockReason reason);
 	void Unblock(BlockReason reason);
 	ThreadBlock* queue_state_prev = nullptr, * queue_state_next = nullptr;// for ready queue
 	//
-	stduint processor_id;// running on which cpu core
+	stduint processor_id = 0;// running on which cpu core
 	stduint ring_coreid = CORE_ID_INVALID;
 	stduint first_run_cpu = CORE_ID_INVALID;
 	bool has_run_once = false;
-	stduint exit_status;
+	stduint exit_status = 0;
 	bool is_detached = false;
 	stduint futex_wait_addr = 0;
 	uni::Queue<ThreadBlock*> join_wait_queue;
@@ -495,7 +500,7 @@ public:// threads
 public:// schedule
 	static auto Schedule(bool omit_slice = false) -> void;// Timer using
 	struct ReadyQueue {
-		ThreadBlock* head, * tail;
+		ThreadBlock* head = nullptr, * tail = nullptr;
 	};
 	static ReadyQueue priority_queues[32];
 	static ReadyQueue expired_queues[32];

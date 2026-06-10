@@ -244,9 +244,13 @@ bool exception_handler_user(HardwareInterruptFrame* frame, stduint iden, stduint
 			return true; // Retry faulting instruction
 		}
 		if (pb) {
+			#if _MCCA == 0x8632
 			plogwarn("Page fault context: pid=%u eip=0x%[x] esp=0x%[x] cs=0x%[x] cr3=0x%[x] heap=[0x%[x],0x%[x]) vmas=%u",
 				pb->pid, frame->hw_eip, FrameSavedEsp(frame), frame->hw_cs, frame->pg_cr3,
 				pb->heapbtm, pb->heaptop, pb->vmas.Count());
+			#else
+			plogwarn("Page fault context");
+			#endif
 			for (stduint i = 0; i < pb->vmas.Count() && i < 6; i++) {
 				const auto& vma = pb->vmas[i];
 				plogwarn("  vma[%u] [0x%[x],0x%[x]) flags=0x%[x] type=%u",
@@ -333,9 +337,10 @@ void exception_handler(HardwareInterruptFrame* frame) {
 	case ERQ_Page_Fault:// 14
 		#if _MCCA == 0x8632
 		printlog(_LOG_FATAL,
-			"%s with 0x%[x], vaddr=0x%[x], TID%u, CR3=0x%[x]\n\r\t %s%s%s%s "
+			"%s with 0x%[x], vaddr=0x%[x], TID%u, EIP=0x%[x], ESP=0x%[x], CS=0x%[x], CR3=0x%[x]\n\r\t %s%s%s%s "
 			"[R3SCR] hits=%u lapic=%u core=%u",
-			ExceptionDescription[iden], para, getCR2(), Taskman::CurrentTID(), r15,
+			ExceptionDescription[iden], para, getCR2(), Taskman::CurrentTID(),
+			frame->hw_eip, FrameSavedEsp(frame), frame->hw_cs, r15,
 			para & 1 ? "Protected " : "Miss",
 			para & 0b10 ? "Write " : "Read ",
 			para & 0b100 ? "User " : "Kernel ",

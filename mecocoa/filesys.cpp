@@ -479,9 +479,9 @@ file_system_type* Filesys::Mount(StorageTrait& storage, stduint dev, const char*
 }
 
 struct PathHarvest {
-	char name[256];
-	bool is_dir;
-	PathHarvest* next;
+	char name[256] = {};
+	bool is_dir = false;
+	PathHarvest* next = nullptr;
 };
 
 struct EnumContext {
@@ -524,7 +524,7 @@ static PathHarvest** g_harvest_tail = nullptr;
 
 static void tree_callback(void* is_dir, void* name) {
 	if (!g_harvest_tail) return;
-	PathHarvest* n = new PathHarvest;
+	PathHarvest* n = new PathHarvest();
 	if (!n) return;
 	StrCopy(n->name, (const char*)name);
 	n->is_dir = (bool)(stduint)is_dir;

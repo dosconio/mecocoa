@@ -179,8 +179,15 @@ void RecursiveMutex::Acquire() {
 		return;
 	}
 	mutex.Acquire();
+	// After mutex.Acquire() returns, interrupts may be re-enabled and this
+	// thread can be preempted or SIGKILL'd before setting owner_tid/count.
+	// If that happens, the mutex remains locked (mutex.locked==1) but
+	// owner_tid==~0 and count==0, making the lock permanently unreleasable.
+	// Disable interrupts briefly to make owner_tid/count assignment atomic.
+	bool old_if = scheduler_lock.Acquire();
 	owner_tid = current_tid;
 	count = 1;
+	scheduler_lock.Release(old_if);
 }
 
 void RecursiveMutex::Release() {
@@ -424,10 +431,14 @@ bool Taskman::ExitCurrent(stduint code) {
 	// __asm("mov %0, %%eax" : : "m"(para[0])); TaskReturn();
 
 	stduint para[2] = { pid, code };
-	syssend(Task_TaskMan, sliceof(para), _IMM(TaskmanMsg::EXIT));
-	sysrecv(Task_TaskMan, sliceof(para));
+	syssend_async(Task_TaskMan, sliceof(para), _IMM(TaskmanMsg::EXIT));
 
-	return true;// unreachable
+	if (auto th = CurrentTB()) {
+		th->Block(ThreadBlock::BlockReason::BR_Waiting);
+	}
+	Taskman::Schedule(true);
+	printlog(_LOG_FATAL, "Taskman::ExitCurrent unreachable");
+	return false;
 }
 
 // Resources
@@ -502,29 +513,34 @@ static void _Exit_Cleanup(stduint pid)
 	Global_CleanProcessForms(ppb);
 
 	// 2. Release TTY Binding
-	if (ppb->focus_tty) {
-		bool is_tty_valid = false;
-		extern uni::Dchain vttys;
-		for (auto nod = vttys.Root(); nod; nod = nod->next) {
-			if (nod == ppb->focus_tty) {
-				is_tty_valid = true;
-				break;
-			}
-		}
-
-		if (is_tty_valid && ppb->focus_tty->type) {
-			auto pblock = (vtty_type_t*)ppb->focus_tty->type;
-			for (stdsint i = pblock->proc_group.Count() - 1; i >= 0; --i) {
-				if (pblock->proc_group[i] == pid) {
-					pblock->proc_group.Remove(i);
+	// [Lock]: Protect focus_tty access against RemoveVconsole which nullifies
+	// focus_tty and deletes VideoConsole2 under gui_lock.
+	{
+		RecursiveMutexLocal guard(&gui_lock);
+		if (ppb->focus_tty) {
+			bool is_tty_valid = false;
+			extern uni::Dchain vttys;
+			for (auto nod = vttys.Root(); nod; nod = nod->next) {
+				if (nod == ppb->focus_tty) {
+					is_tty_valid = true;
 					break;
 				}
 			}
-			if (pblock->master_pid == pid || (pblock->proc_group.Count() == 0 && pblock->master_pid != 0)) {
-				pblock->master_pid = 0; 
+
+			if (is_tty_valid && ppb->focus_tty->type) {
+				auto pblock = (vtty_type_t*)ppb->focus_tty->type;
+				for (stdsint i = pblock->proc_group.Count() - 1; i >= 0; --i) {
+					if (pblock->proc_group[i] == pid) {
+						pblock->proc_group.Remove(i);
+						break;
+					}
+				}
+				if (pblock->master_pid == pid || (pblock->proc_group.Count() == 0 && pblock->master_pid != 0)) {
+					pblock->master_pid = 0; 
+				}
 			}
+			ppb->focus_tty = nullptr;
 		}
-		ppb->focus_tty = nullptr;
 	}
 	#endif
 
@@ -732,7 +748,7 @@ bool Taskman::Exit(ProcessBlock* p, stdsint exit_code)
 		pparent->main_thread->Unblock(ThreadBlock::BlockReason::BR_Waiting);
 		pparent->wait_for_pid = 0; // Reset after unblocking
 
-		syssend(parent_pid, &args, sizeof(args));
+		syssend_async(parent_pid, &args, sizeof(args));
 
 		_Exit_Cleanup(pid); // Die completely
 	}
@@ -766,7 +782,7 @@ stdsint Taskman::Wait(ProcessBlock* pb, stduint target_pid)
 				_Exit_Cleanup(child_pid);
 				// children = child_pid;
 				
-				syssend(pid, args, sizeof(args));
+				syssend_async(pid, args, sizeof(args));
 
 				return child_pid;
 			}
@@ -777,7 +793,7 @@ stdsint Taskman::Wait(ProcessBlock* pb, stduint target_pid)
 		pb->main_thread->Block(ThreadBlock::BlockReason::BR_Waiting);
 	}
 	else { // no any child
-		syssend(pid, &children, sizeof(children));
+		syssend_async(pid, &children, sizeof(children));
 	}
 	return ~_IMM0;
 }
@@ -885,10 +901,7 @@ void _Comment(R0) serv_task_loop()
 				break;
 			}
 			Taskman::Exit(Taskman::Locate(to_args[0]), to_args[1]);
-			_Exit_Cleanup(to_args[0]); // Force immediate cleanup to satisfy synchronous IPC wait
-			ret = 0;
-
-			syssend(sig_src, (void*)&ret, sizeof(ret));
+			_Exit_Cleanup(to_args[0]);
 			break;
 		case TaskmanMsg::FORK: // (pid, cframe)
 			// ploginfo("Taskman fork: %u", to_args[0]);

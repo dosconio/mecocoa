@@ -76,9 +76,9 @@ extern InterruptControl IC;
 #endif
 
 struct RMOD_LIST {
-	Handler_t init;
-	rostr name;
-	stduint keep[2];
+	Handler_t init = nullptr;
+	rostr name = nullptr;
+	stduint keep[2] = {};
 };// unload irq dep ...
 
 void mecfetch();

@@ -81,6 +81,36 @@ Vector<BlockedFormMsg> blocked_form_msgs;
 static volatile byte console_has_blocked_waiters = 0;
 static volatile byte console_wake_pending = 0;
 
+// Check if the target sheet is the same as or a descendant of the root sheet.
+// This is used to safely nullify global pointers (e.g. last_click_sheet, moving_sheet)
+// targeting a sheet hierarchy that is about to be destroyed, preventing Use-After-Free (UAF).
+static bool IsDescendantOf(SheetTrait* target, SheetTrait* root) {
+	SheetTrait* curr = target;
+	while (curr) {
+		if (curr == root) return true;
+		curr = (SheetTrait*)curr->refSheetParent();
+	}
+	return false;
+}
+
+//{TODO} to graphic
+// Detach and clean up all child layers under the specified root layer manager.
+// Resets each child's parent reference to nullptr and unregisters it from the
+// global layout manager timer to prevent callbacks on deleted contexts.
+#if _GUI_ENABLE
+static void DetachLayerChildren(LayerManager* root) {
+	if (!root) return;
+	for (auto child = root->subf; child; child = child->next) {
+		if (!child->offs) continue;
+		auto sheet = cast<SheetTrait*>(child->offs);
+		sheet->refSheetParent() = nullptr;
+		global_layman.UnregisterTimer(sheet);
+	}
+	root->subf = nullptr;
+	root->subl = nullptr;
+}
+#endif
+
 static void RefreshConsoleBlockedState() {
 	byte has_waiters = blocked_vtty_pid.Count() || blocked_form_msgs.Count();
 	__atomic_store_n(&console_has_blocked_waiters, has_waiters, __ATOMIC_RELEASE);
@@ -165,7 +195,9 @@ _RET_CreateVconsole Consman::CreateVconsole(const Rectangle& rect, rostr title) 
 	auto line_buf = new Color[pcon->getLineBufferSize()];
 	// plogwarn(">line_buf: %x", line_buf);
 	if (!text_buf || !line_buf) {
-		free(pcon);
+		delete[] text_buf;// ?
+		delete[] line_buf;// ?
+		delete pcon;
 		plogerro("?");
 		return ret;
 	}
@@ -174,7 +206,7 @@ _RET_CreateVconsole Consman::CreateVconsole(const Rectangle& rect, rostr title) 
 	auto pform = new ::uni::Witch::Form();
 	// plogwarn(">pform: %x", pform);
 	if (!pform) {
-		free(pcon);
+		delete pcon;
 		plogerro("?");
 		return ret;
 	}
@@ -207,37 +239,57 @@ _RET_CreateVconsole Consman::CreateVconsole(const Rectangle& rect, rostr title) 
 
 void Consman::RemoveVconsole(Dnode* nod) {
 	if (!nod) return;
+	#if _GUI_ENABLE
+	RecursiveMutexLocal gui_guard(&gui_lock);
+	#endif
 	auto pcon = (uni::VideoConsole2*)nod->offs;
+	auto pclient = pcon ? pcon->refSheetParent() : nullptr;
+	// pcon->refSheetParent() returns &client_area (set by AppendControl),
+	// NOT the Form. The Form is client_area's parent (set by setSheet).
+	auto pfrm = pclient ? static_cast<uni::Witch::Form*>(pclient->refSheetParent()) : nullptr;
+
+	// Phase 1: detach all global references before destroying any GUI object.
+	if (Consman::last_click_sheet &&
+		((pclient && IsDescendantOf(Consman::last_click_sheet, pclient)) ||
+		 Consman::last_click_sheet == pcon)) {
+		Consman::last_click_sheet = nullptr;
+	}
+	if (Cursor::moving_sheet &&
+		((pclient && IsDescendantOf(Cursor::moving_sheet, pclient)) ||
+		 Cursor::moving_sheet == pcon)) {
+		Cursor::moving_sheet = nullptr;
+	}
 	if (pcon) {
-		// Identify and cleanup the parent Form
-		auto pclient = pcon->refSheetParent();
-		auto pfrm = (pclient) ? (uni::Witch::Form*)pclient->refSheetParent() : nullptr;
-		if (pclient) {
-			// Focus cleanup: reset global pointers if they point to any component of this window
-			if (Consman::last_click_sheet == pclient || 
-				Consman::last_click_sheet == pcon) {
-				Consman::last_click_sheet = nullptr;
-			}
-			if (Cursor::moving_sheet == pclient || Cursor::moving_sheet == pcon) {
-				Cursor::moving_sheet = nullptr;
-			}
-
-			Rectangle area = pclient->sheet_area;
-			{
-				// [Lock]: Caller must hold gui_lock. 
-				// In _CleanSingleForm, it is already held.
-				pclient->Remove(pcon); // Unlink pcon from parent Form
-				global_layman.Remove(pclient); // Ensure it's removed from desktop too
-				global_layman.Update(nullptr, area);
-			}
+		global_layman.UnregisterTimer(pcon);
+	}
+	printlog(_LOG_ERROR, "[PROBE] RemoveVconsole: pcon=%x pclient=%x pfrm=%x", (stduint)pcon, (stduint)pclient, (stduint)pfrm);
+	if (pclient) {
+		bool removed = pclient->Remove(pcon);
+		printlog(_LOG_ERROR, "[PROBE] RemoveVconsole: pclient->Remove(pcon)=%d pclient->subf=%x", removed, (stduint)pclient->subf);
+	}
+	if (pfrm) {
+		global_layman.UnregisterTimer(pfrm);
+		global_layman.Remove(pfrm);
+		pfrm->refSheetParent() = nullptr;
+		DetachLayerChildren(static_cast<LayerManager*>(pfrm));
+		// Also detach Form's sheet_node.subf chain (close_btn, title_bar, client_area)
+		// which is used by Form::getPoint but NOT by LayerManager::subf.
+		for (auto child = pfrm->refSheetNode().subf; child; child = child->next) {
+			if (!child->offs) continue;
+			auto sheet = cast<SheetTrait*>(child->offs);
+			sheet->refSheetParent() = nullptr;
+			global_layman.UnregisterTimer(sheet);
 		}
-
-		// Stop the console object (this will free text_buf and line_buf using free())
-		pcon->Stop();
-		free(pcon);
+		// client_area's children (VideoConsole2 etc.) also need detachment
+		DetachLayerChildren(&static_cast<uni::Witch::Form*>(pfrm)->getClientSheet());
+		pfrm->refSheetNode().subf = nullptr;
 	}
 
-	// Nullify focus_tty references for ALL processes in the system to prevent UAF
+	Rectangle area = pfrm ? pfrm->sheet_area : (pclient ? pclient->sheet_area : Rectangle{});
+	if (area.width || area.height) {
+		global_layman.Update(nullptr, area);
+	}
+
 	{
 		SpinlockLocal guard(&scheduler_lock);
 		for (auto pnod = Taskman::chain.Root(); pnod; pnod = pnod->next) {
@@ -245,12 +297,6 @@ void Consman::RemoveVconsole(Dnode* nod) {
 			if (p->focus_tty == nod) p->focus_tty = nullptr;
 		}
 	}
-
-	// Remove from VTTY list and trigger VTTY_Free
-	// [Lock]: Caller must hold gui_lock.
-	vttys.Remove(nod);
-
-	// Clean up any blocked PIDs waiting for this TTY
 	for (stduint i = 0; i < blocked_vtty_pid.Count(); i++) {
 		ProcessBlock* p = ProcessBlock::AcquireActiveByPID(blocked_vtty_pid[i]);
 		if (!p || p->focus_tty == nod || p->focus_tty == nullptr) {
@@ -261,6 +307,35 @@ void Consman::RemoveVconsole(Dnode* nod) {
 		}
 	}
 	RefreshConsoleBlockedState();
+	// Phase 2: destroy detached objects.
+	// Nullify nod->offs before vttys.Remove so that DnodeHeapFreeSimple
+	// calls free(nullptr) (a no-op), avoiding double-free of pcon.
+	if (pcon) {
+		pcon->Stop();
+		delete pcon;
+		nod->offs = nullptr;
+	}
+	if (pfrm) {
+		if (pfrm->sheet_buffer) {
+			delete[] pfrm->sheet_buffer;
+			pfrm->sheet_buffer = nullptr;
+		}
+		// Nullify any pforms slot pointing to this Form to prevent
+		// _CleanSingleForm from finding a dangling pointer later.
+		{
+			SpinlockLocal guard(&scheduler_lock);
+			for (auto pnod = Taskman::chain.Root(); pnod; pnod = pnod->next) {
+				auto pb = cast<ProcessBlock*>(pnod->offs);
+				for (stduint i = 0; i < pb->pforms.Count(); i++) {
+					if (pb->pforms[i] == pfrm) {
+						pb->pforms[i] = nullptr;
+					}
+				}
+			}
+		}
+		delete pfrm;
+	}
+	vttys.Remove(nod);
 }
 void Consman::SwitchForm(SheetTrait* pfrm) {
 	Nnode* target = &pfrm->refSheetNode();
@@ -330,7 +405,7 @@ static stdsint ConsoleMsg_FNEW(const FMT_ConsoleMsg_FNEW* data, ProcessBlock* pb
 	// Allocate and set sheet for the form
 	Color* sheet_buffer = new Color[rect.getArea()];
 	if (!sheet_buffer) {
-		free(pfrm);
+		delete pfrm;
 		return -1;
 	}
 	pfrm->setSheet(global_layman, rect, sheet_buffer);
@@ -365,14 +440,10 @@ static void _CleanSingleForm(ProcessBlock* pb, stduint pform_id) {
 
 	Rectangle area = pfrm->sheet_area;
 	{
-		// [Lock]: Protect global layman chain and focus switch
+		// [Lock]: Protect global layman chain, focus switch, and object lifetime
 		#if _GUI_ENABLE
 		RecursiveMutexLocal guard(&gui_lock);
 		#endif
-
-		LayerManager* parent = pfrm->refSheetParent();
-		if (parent) parent->Remove(pfrm);
-		global_layman.Update(nullptr, area);
 
 		// [TTY Leak Fix]: If this form OR any of its children is a TTY (VideoConsole2), remove it from the global TTY chain
 		extern uni::Dchain vttys;
@@ -380,7 +451,7 @@ static void _CleanSingleForm(ProcessBlock* pb, stduint pform_id) {
 			for (auto nod = vttys.Root(); nod; nod = nod->next) {
 				if (nod->offs == (pureptr_t)target) {
 					// Specialized cleanup handles global focus_tty sanitization
-					Consman::RemoveVconsole(nod);
+					// [DIAG] Consman::RemoveVconsole(nod);
 					return true;
 				}
 			}
@@ -388,33 +459,99 @@ static void _CleanSingleForm(ProcessBlock* pb, stduint pform_id) {
 			};
 
 		UnbindTTY(pfrm);
-		// Also check immediate children (VideoConsole2 is a child of the Form)
-		LayerManager* pman = (LayerManager*)pfrm;
-		Nnode* nod = pman->subf;
+		// Also check children in sheet_node.subf (close_btn, title_bar, client_area)
+		// and client_area's children (VideoConsole2 etc.)
+		Nnode* nod = pfrm->refSheetNode().subf;
 		while (nod) {
-			Nnode* next = nod->next; // Save next before potential deletion
-			UnbindTTY(cast<SheetTrait*>(nod->offs));
+			Nnode* next = nod->next;
+			if (nod->offs) UnbindTTY(cast<SheetTrait*>(nod->offs));
+			nod = next;
+		}
+		// Check client_area's children for TTY
+		nod = static_cast<uni::Witch::Form*>(pfrm)->getClientSheet().subf;
+		while (nod) {
+			Nnode* next = nod->next;
+			if (nod->offs) UnbindTTY(cast<SheetTrait*>(nod->offs));
 			nod = next;
 		}
 
-		// [Ghost Pointer Fix]: Clear global pointers if they target the form OR any of its descendants
-		auto IsDescendantOf = [](SheetTrait* target, SheetTrait* root) -> bool {
-			SheetTrait* curr = target;
-			while (curr) {
-				if (curr == root) return true;
-				curr = (SheetTrait*)curr->refSheetParent();
-			}
-			return false;
-			};
-
+		// Phase 1: detach from all global roots before destruction.
 		if (Consman::last_click_sheet && IsDescendantOf(Consman::last_click_sheet, pfrm)) {
 			Consman::last_click_sheet = nullptr;
 		}
 		if (Cursor::moving_sheet && IsDescendantOf(Cursor::moving_sheet, pfrm)) {
 			Cursor::moving_sheet = nullptr;
 		}
-
 		global_layman.UnregisterTimer(pfrm);
+		LayerManager* parent = pfrm->refSheetParent();
+		if (parent) parent->Remove(pfrm);
+		global_layman.Remove(pfrm);
+		pfrm->refSheetParent() = nullptr;
+		DetachLayerChildren(static_cast<LayerManager*>(pfrm));
+		// Also detach Form's sheet_node.subf chain and client_area's children
+		for (auto child = pfrm->refSheetNode().subf; child; child = child->next) {
+			if (!child->offs) continue;
+			auto sheet = cast<SheetTrait*>(child->offs);
+			sheet->refSheetParent() = nullptr;
+			global_layman.UnregisterTimer(sheet);
+		}
+		// Delete VideoConsole2 children from client_area.subf
+		LayerManager& client = static_cast<uni::Witch::Form*>(pfrm)->getClientSheet();
+		extern uni::Dchain vttys;
+		while (client.subf) {
+			SheetTrait* child_sheet = cast<SheetTrait*>(client.subf->offs);
+			client.Remove(child_sheet);
+			if (child_sheet) {
+				child_sheet->refSheetParent() = nullptr;
+				global_layman.UnregisterTimer(child_sheet);
+				// Find and remove from vttys chain
+				// IMPORTANT: vttys stores Console_t* (base class), but child_sheet
+				// is SheetTrait* (another base). Due to multiple inheritance,
+				// these have different addresses. Must cast to VideoConsole2* first,
+				// then to Console_t* to get the correct base pointer for comparison.
+				Console_t* con_base = static_cast<Console_t*>(static_cast<uni::VideoConsole2*>(child_sheet));
+				for (auto vn = vttys.Root(); vn; vn = vn->next) {
+					if (vn->offs == (pureptr_t)con_base) {
+						auto pcon = (uni::VideoConsole2*)vn->offs;
+						if (pcon) { pcon->Stop(); }
+						delete pcon;
+						vn->offs = nullptr;
+						vttys.Remove(vn);
+						break;
+					}
+				}
+			}
+		}
+		DetachLayerChildren(&static_cast<uni::Witch::Form*>(pfrm)->getClientSheet());
+		pfrm->refSheetNode().subf = nullptr;
+		global_layman.Update(nullptr, area);
+
+		// Phase 2: nullify pforms slot BEFORE delete to prevent concurrent access
+		// CRITICAL: Must nullify ALL processes' pforms pointing to this Form,
+		// not just the current process. Child processes may share the same Form
+		// pointer. If only the current process's slot is nullified, the child's
+		// cleanup (Global_CleanProcessForms) will find a dangling pointer and
+		// delete whatever object was reallocated at that address.
+		{
+			SpinlockLocal guard(&scheduler_lock);
+			for (auto pnod = Taskman::chain.Root(); pnod; pnod = pnod->next) {
+				auto other_pb = cast<ProcessBlock*>(pnod->offs);
+				for (stduint j = 0; j < other_pb->pforms.Count(); j++) {
+					if (other_pb->pforms[j] == pfrm) {
+						other_pb->pforms[j] = nullptr;
+					}
+				}
+			}
+		}
+		pb->pforms[pform_id] = nullptr;
+
+		// Safe memory release (still under gui_lock to prevent UAF)
+		if (pfrm->sheet_buffer) {
+			delete[] pfrm->sheet_buffer;
+			pfrm->sheet_buffer = nullptr;
+		}
+
+		delete static_cast<::uni::Witch::Form*>(pfrm);
 	}
 
 	// Unblock threads waiting for this specific form
@@ -423,7 +560,7 @@ static void _CleanSingleForm(ProcessBlock* pb, stduint pform_id) {
 			stdsint err_val = -1;
 			ProcessBlock* safe_pb = ProcessBlock::AcquireActive(blocked_form_msgs[i].sig_src);
 			if (safe_pb) {
-				syssend(blocked_form_msgs[i].sig_src, &err_val, sizeof(err_val));
+				syssend_async(blocked_form_msgs[i].sig_src, &err_val, sizeof(err_val));
 			}
 			if (safe_pb) {
 				ProcessBlock::Release(safe_pb);
@@ -433,12 +570,6 @@ static void _CleanSingleForm(ProcessBlock* pb, stduint pform_id) {
 	}
 	RefreshConsoleBlockedState();
 
-	// Safe memory release
-	if (pfrm->sheet_buffer) {
-		free(pfrm->sheet_buffer);
-		pfrm->sheet_buffer = nullptr;
-	}
-
 	// [Message Queue Fix]: Remove any pending blocking requests for this form
 	for (stduint i = 0; i < blocked_form_msgs.Count(); i++) {
 		if (blocked_form_msgs[i].pform_id == pform_id) {
@@ -447,9 +578,6 @@ static void _CleanSingleForm(ProcessBlock* pb, stduint pform_id) {
 		}
 	}
 	RefreshConsoleBlockedState();
-
-	free(pfrm);
-	pb->pforms[pform_id] = nullptr;
 }
 
 static stdsint ConsoleMsg_FDEL(stduint pform_id, ProcessBlock* pb) {
@@ -724,13 +852,23 @@ void _Comment(R1) serv_cons_loop()
 				//
 				#if _GUI_ENABLE
 			case ConsoleMsg::FNEW:
+			{
+				// [Lock]: Protect pforms access against concurrent form cleanup
+				#if _GUI_ENABLE
+				RecursiveMutexLocal guard(&gui_lock);
+				#endif
 				ploginfo("creating new form %[x]", to_args[0]);
 				ret = ConsoleMsg_FNEW((FMT_ConsoleMsg_FNEW*)to_args, safe_pb);
+			}
 				syssend_async(sig_src, (void*)&ret, sizeof(ret));
 				break;
 
 			case ConsoleMsg::FDEL:
 			{
+				// [Lock]: Protect pforms access against concurrent form cleanup
+				#if _GUI_ENABLE
+				RecursiveMutexLocal guard(&gui_lock);
+				#endif
 				ProcessBlock* pb_target = nullptr;
 				bool need_release = false;
 				if (sig_src < TaskCount) {
@@ -749,36 +887,73 @@ void _Comment(R1) serv_cons_loop()
 				else {
 					ret = -1;
 				}
-				syssend_async(sig_src, (void*)&ret, sizeof(ret));
 			}
-			break;
+				syssend_async(sig_src, (void*)&ret, sizeof(ret));
+				break;
 
 
 			case ConsoleMsg::FMSG:
+			{
+				// [Lock]: Protect pforms access against concurrent form cleanup
+				#if _GUI_ENABLE
+				RecursiveMutexLocal guard(&gui_lock);
+				#endif
 				ret = ConsoleMsg_FMSG((FMT_ConsoleMsg_FMSG*)to_args, safe_pb, sig_src);
+			}
 				if ((stdsint)ret != -2) {
 					syssend_async(sig_src, (void*)&ret, sizeof(ret));
 				}
 				break;
 
 			case ConsoleMsg::FDRW:
+			{
+				// [Lock]: Protect pforms access against concurrent form cleanup
+				#if _GUI_ENABLE
+				RecursiveMutexLocal guard(&gui_lock);
+				#endif
 				ret = ConsoleMsg_FDRW((FMT_ConsoleMsg_FDRW*)to_args, safe_pb);
+			}
 				syssend_async(sig_src, (void*)&ret, sizeof(ret));
 				break;
 			case ConsoleMsg::FCHR:
+			{
+				// [Lock]: Protect pforms access against concurrent form cleanup
+				#if _GUI_ENABLE
+				RecursiveMutexLocal guard(&gui_lock);
+				#endif
 				ret = ConsoleMsg_FCHR((FMT_ConsoleMsg_FCHR*)to_args, safe_pb);
+			}
 				syssend_async(sig_src, (void*)&ret, sizeof(ret));
 				break;
 			case ConsoleMsg::FBID:
+			{
+				// [Lock]: Protect pforms access against concurrent form cleanup
+				#if _GUI_ENABLE
+				RecursiveMutexLocal guard(&gui_lock);
+				#endif
 				ret = ConsoleMsg_FBID((FMT_ConsoleMsg_FBID*)to_args, safe_pb);
+			}
 				syssend_async(sig_src, (void*)&ret, sizeof(ret));
 				break;
 			case ConsoleMsg::FUPD:
+			{
+				// [Lock]: Protect pforms access against concurrent form cleanup
+				#if _GUI_ENABLE
+				RecursiveMutexLocal guard(&gui_lock);
+				#endif
 				ret = ConsoleMsg_FUPD((FMT_ConsoleMsg_FUPD*)to_args, safe_pb);
+			}
 				syssend_async(sig_src, (void*)&ret, sizeof(ret));
 				break;
 			case ConsoleMsg::FTIM:
+			{
+				// [Lock]: Protect pforms access against concurrent form cleanup
+				// (ConsoleMsg_FTIM also acquires gui_lock internally, but RecursiveMutex allows reentry)
+				#if _GUI_ENABLE
+				RecursiveMutexLocal guard(&gui_lock);
+				#endif
 				ret = ConsoleMsg_FTIM(to_args[0], to_args[1], safe_pb);
+			}
 				syssend_async(sig_src, (void*)&ret, sizeof(ret));
 				break;
 

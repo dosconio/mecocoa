@@ -95,9 +95,9 @@ struct inode;
 namespace uni { struct vfs_dentry; }
 namespace uni { struct vfs_file; }
 struct FileDescriptor {
-	int fd_mode; /**< R or W */
-	int fd_pos; /**< Current position for R/W. */
-	uni::vfs_file* vfile; /**< Ptr to the VFS file */
+	int fd_mode = 0; /**< R or W */
+	int fd_pos = 0; /**< Current position for R/W. */
+	uni::vfs_file* vfile = nullptr; /**< Ptr to the VFS file */
 };
 
 #define	INVALID_INODE 0

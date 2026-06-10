@@ -5,6 +5,8 @@
 
 #include "../include/mecocoa.hpp"
 
+extern Spinlock scheduler_lock;
+
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Waddress-of-packed-member"
 
@@ -97,7 +99,8 @@ static void check_and_deliver_signals_generic(RegisterContext& ctx) {
 				signo = i;
 				sigdelset(&crt->pending_signals, i);
 				break;
-			} else {
+			}
+			else {
 				auto signals = pb->signals.Lock();
 				if (sigismember(&signals->shared_pending_signals, i)) {
 					signo = i;
@@ -107,7 +110,7 @@ static void check_and_deliver_signals_generic(RegisterContext& ctx) {
 			}
 		}
 	}
-	
+
 	// If no signal, return immediately
 	if (signo == 0) return;
 
@@ -116,7 +119,7 @@ static void check_and_deliver_signals_generic(RegisterContext& ctx) {
 		auto signals = pb->signals.Lock();
 		act = signals->sig_actions[signo];
 	}
-	
+
 	// Check if action is IGNORE
 	if (act.sa_handler == SIG_IGN) {
 		return;
@@ -126,31 +129,48 @@ static void check_and_deliver_signals_generic(RegisterContext& ctx) {
 	if (act.sa_handler == SIG_DFL) {
 		SigActionDefault def = default_actions[signo];
 		switch (def) {
-			case SIG_ACT_IGN:
-				// Simply discard and return
-				break;
-			case SIG_ACT_TERM:
-			case SIG_ACT_CORE:
-				// Terminate process with standardized exit code
-				if (signo == SIGKILL || signo == SIGTERM) {
-					ploginfo("Process %u forced to exit due to signal %d", pb->getID(), signo);
+		case SIG_ACT_IGN:
+			// Simply discard and return
+			break;
+		case SIG_ACT_TERM:
+		case SIG_ACT_CORE:
+			// Terminate process with standardized exit code
+			if (signo == SIGKILL || signo == SIGTERM) {
+				ploginfo("Process %u forced to exit due to signal %d", pb->getID(), signo);
+			}
+			// [Lock]: Force-release gui_lock if held by this thread.
+			// SIGKILL terminates the thread immediately, bypassing RAII destructors.
+			// If gui_lock is held, it will never be released, causing system-wide deadlock.
+			if constexpr (_GUI_ENABLE) {
+				extern RecursiveMutex gui_lock;
+				stduint cur_tid = Taskman::CurrentTID();
+				bool old_if = scheduler_lock.Acquire();
+				if (gui_lock.owner_tid == cur_tid && gui_lock.count > 0) {
+					gui_lock.count = 0;
+					gui_lock.owner_tid = (stduint)~0;
+					scheduler_lock.Release(old_if);
+					gui_lock.mutex.Release();
 				}
-				Taskman::ExitCurrent(128 + signo);
-				break;
-			case SIG_ACT_STOP:
-				// Suspend the thread
-				crt->state = ThreadBlock::State::Pended;
-				crt->block_reason = ThreadBlock::BlockReason::BR_Waiting;
-				Taskman::Schedule(true);
-				break;
-			case SIG_ACT_CONT:
-				// Resume the thread if it was pended
-				if (crt->state == ThreadBlock::State::Pended) {
-					crt->state = ThreadBlock::State::Ready;
-					crt->block_reason = ThreadBlock::BlockReason::BR_None;
-					Taskman::EnqueueReady(crt);
+				else {
+					scheduler_lock.Release(old_if);
 				}
-				break;
+			}
+			Taskman::ExitCurrent(128 + signo);
+			break;
+		case SIG_ACT_STOP:
+			// Suspend the thread
+			crt->state = ThreadBlock::State::Pended;
+			crt->block_reason = ThreadBlock::BlockReason::BR_Waiting;
+			Taskman::Schedule(true);
+			break;
+		case SIG_ACT_CONT:
+			// Resume the thread if it was pended
+			if (crt->state == ThreadBlock::State::Pended) {
+				crt->state = ThreadBlock::State::Ready;
+				crt->block_reason = ThreadBlock::BlockReason::BR_None;
+				Taskman::EnqueueReady(crt);
+			}
+			break;
 		}
 		return;
 	}
@@ -206,7 +226,7 @@ static void check_and_deliver_signals_generic(RegisterContext& ctx) {
 	uframe.context = scontext;
 
 	// Push SigStackFrame and trampoline/return address onto user stack
-#if _MCCA == 0x8632
+	#if _MCCA == 0x8632
 	user_sp -= sizeof(SigStackFrame);
 	user_sp &= ~0xF; // Align the stack frame start to 16-byte boundary
 	user_sp -= 4; // Space for return address (sa_restorer), making ESP = 16n - 4 (12 mod 16)
@@ -221,8 +241,8 @@ static void check_and_deliver_signals_generic(RegisterContext& ctx) {
 	// Update stack frame to execute the handler
 	*ctx.p_sp = user_sp;
 	*ctx.p_ip = (stduint)act.sa_handler;
-	
-#elif _MCCA == 0x8664
+
+	#elif _MCCA == 0x8664
 	user_sp -= sizeof(SigStackFrame);
 	user_sp &= ~0xF; // Align the stack frame start to 16-byte boundary
 	user_sp -= 8; // Space for return address (sa_restorer), making RSP = 16n - 8 (8 mod 16)
@@ -239,7 +259,7 @@ static void check_and_deliver_signals_generic(RegisterContext& ctx) {
 	*ctx.p_ip = (stduint)act.sa_handler;
 	*ctx.p_di = signo; // first argument (RDI) in x86_64 calling convention
 
-#elif (_MCCA & 0xFF00) == 0x1000 // RISCV
+	#elif (_MCCA & 0xFF00) == 0x1000 // RISCV
 	user_sp -= sizeof(SigStackFrame);
 	user_sp &= ~0xF; // Keep 16-byte aligned
 
@@ -251,7 +271,7 @@ static void check_and_deliver_signals_generic(RegisterContext& ctx) {
 	*ctx.p_ax = signo;
 	*ctx.p_sp = user_sp;
 	*ctx.p_ip = (stduint)act.sa_handler;
-#endif
+	#endif
 
 	// Block the signal during handler execution (nested protection) unless SA_NODEFER is set
 	if (!(act.sa_flags & SA_NODEFER)) {
@@ -267,7 +287,7 @@ static void check_and_deliver_signals_generic(RegisterContext& ctx) {
 
 extern "C" void check_and_deliver_signals(void* context) {
 	RegisterContext ctx = {};
-#if _MCCA == 0x8632
+	#if _MCCA == 0x8632
 	HardwareInterruptFrame* frame = (HardwareInterruptFrame*)context;
 	ctx.p_ip = &frame->hw_eip;
 	ctx.p_sp = &frame->hw_esp;
@@ -279,7 +299,7 @@ extern "C" void check_and_deliver_signals(void* context) {
 	ctx.p_bp = &frame->pusha_ebp;
 	ctx.p_si = &frame->pusha_esi;
 	ctx.p_di = &frame->pusha_edi;
-#elif _MCCA == 0x8664
+	#elif _MCCA == 0x8664
 	HardwareInterruptFrame* frame = (HardwareInterruptFrame*)context;
 	ctx.p_ip = &frame->hw_rip;
 	ctx.p_sp = &frame->hw_rsp;
@@ -299,7 +319,7 @@ extern "C" void check_and_deliver_signals(void* context) {
 	ctx.p_r13 = &frame->pusha_r13;
 	ctx.p_r14 = &frame->pusha_r14;
 	ctx.p_r15 = &frame->pusha_r15;
-#elif (_MCCA & 0xFF00) == 0x1000 // RISCV
+	#elif (_MCCA & 0xFF00) == 0x1000 // RISCV
 	NormalTaskContext* cxt = (NormalTaskContext*)context;
 	ctx.p_ip = &cxt->IP;
 	ctx.p_sp = &cxt->sp;
@@ -311,13 +331,13 @@ extern "C" void check_and_deliver_signals(void* context) {
 	ctx.p_bp = &cxt->s0;
 	ctx.p_si = &cxt->s1;
 	ctx.p_di = &cxt->ra;
-#endif
+	#endif
 	check_and_deliver_signals_generic(ctx);
 }
 
 extern "C" void check_and_deliver_signals_syscall(CallgateFrame* frame) {
 	RegisterContext ctx = {};
-#if _MCCA == 0x8632
+	#if _MCCA == 0x8632
 	ctx.p_ip = &frame->ip;
 	ctx.p_sp = &frame->sp0;
 	ctx.p_flags = &frame->flags;
@@ -328,7 +348,7 @@ extern "C" void check_and_deliver_signals_syscall(CallgateFrame* frame) {
 	ctx.p_bp = &frame->bp;
 	ctx.p_si = &frame->si;
 	ctx.p_di = &frame->di;
-#elif _MCCA == 0x8664
+	#elif _MCCA == 0x8664
 	ctx.p_ip = &frame->ip;
 	ctx.p_sp = &frame->sp0;
 	ctx.p_flags = &frame->flags;
@@ -347,7 +367,7 @@ extern "C" void check_and_deliver_signals_syscall(CallgateFrame* frame) {
 	ctx.p_r13 = &frame->r13;
 	ctx.p_r14 = &frame->r14;
 	ctx.p_r15 = &frame->r15;
-#endif
+	#endif
 	check_and_deliver_signals_generic(ctx);
 }
 

@@ -19,21 +19,21 @@ struct vfs_dentry;
 
 // Represents a registered file system type
 struct file_system_type {
-	const char* name;
+	const char* name = nullptr;
 	// Returns a new initialized FilesysTrait instance if the storage contains this file system.
-	FilesysTrait* (*probe)(StorageTrait& storage, stduint partition_dev);
+	FilesysTrait* (*probe)(StorageTrait& storage, stduint partition_dev) = nullptr;
 	
-	file_system_type* next;
+	file_system_type* next = nullptr;
 };
 
 // Represents an active mounted file system
 struct vfs_super_block {
-	FilesysTrait* fs;             // The backend file system operations
-	vfs_dentry* s_root;           // Root dentry of this mount
-	file_system_type* type;       // Pointer to the FS type
-	stduint device_id;            // Underlying device id
+	FilesysTrait* fs = nullptr;             // The backend file system operations
+	vfs_dentry* s_root = nullptr;           // Root dentry of this mount
+	file_system_type* type = nullptr;       // Pointer to the FS type
+	stduint device_id = 0;            // Underlying device id
 	
-	vfs_super_block* next;
+	vfs_super_block* next = nullptr;
 };
 
 #ifndef I_TYPE_MASK
@@ -49,42 +49,42 @@ struct vfs_super_block {
 
 // In-memory node structure
 struct vfs_inode {
-	vfs_super_block* i_sb;
+	vfs_super_block* i_sb = nullptr;
 	
-	stduint i_no;                 // Inode number
-	stduint i_mode;               // File mode (type and permissions)
-	stduint i_size;               // File size in bytes
+	stduint i_no = 0;                 // Inode number
+	stduint i_mode = 0;               // File mode (type and permissions)
+	stduint i_size = 0;               // File size in bytes
 	
-	void* internal_handler;       // e.g. FAT_FileHandle* or internal inode* from specific FS
+	void* internal_handler = nullptr;       // e.g. FAT_FileHandle* or internal inode* from specific FS
 	
-	stduint ref_count;
+	stduint ref_count = 0;
 };
 
 #define VFS_MAX_FILENAME 64
 
 // Directory entry caching and tree structure
 struct vfs_dentry {
-	vfs_dentry* d_parent;         // Parent directory
-	vfs_dentry* d_first_child;    // First child directory/file
-	vfs_dentry* d_next_sibling;   // Next sibling in the same directory
-	
-	vfs_inode* d_inode;           // The associated inode (if loaded)
-	char d_name[VFS_MAX_FILENAME];// The name of this entry
-	
+	vfs_dentry* d_parent = nullptr;         // Parent directory
+	vfs_dentry* d_first_child = nullptr;    // First child directory/file
+	vfs_dentry* d_next_sibling = nullptr;   // Next sibling in the same directory
+
+	vfs_inode* d_inode = nullptr;           // The associated inode (if loaded)
+	char d_name[VFS_MAX_FILENAME] = {};     // The name of this entry
+
 	// Mount point: If a filesystem is mounted ON THIS dentry,
 	// d_mounts points to the root dentry of that mounted filesystem.
-	vfs_dentry* d_mounts;
+	vfs_dentry* d_mounts = nullptr;
 
 	// Reverse Mount: If this is the root dentry of a mounted filesystem,
 	// d_mounted_on points to the dentry in the parent FS where it was mounted.
-	vfs_dentry* d_mounted_on;
+	vfs_dentry* d_mounted_on = nullptr;
 };
 
 // Pipe channel representation for anonymous memory pipelines
 struct PipeChannel {
 	QueueLimited buffer;          // Circular ring buffer
-	stduint reader_count;         // Reader descriptors counter
-	stduint writer_count;         // Writer descriptors counter
+	stduint reader_count = 0;         // Reader descriptors counter
+	stduint writer_count = 0;         // Writer descriptors counter
 	Mutex lock;                   // Mutex to protect concurrent operations
 	Queue<::ThreadBlock*> rq;     // Read waiting queue
 	Queue<::ThreadBlock*> wq;     // Write waiting queue
@@ -92,10 +92,10 @@ struct PipeChannel {
 
 // Opened file representation (File descriptor struct)
 struct vfs_file {
-	vfs_dentry* f_dentry;
-	vfs_inode* f_inode;
-	stduint f_pos;                // Current read/write position
-	stduint f_mode;               // Open mode (R/W/A etc)
+	vfs_dentry* f_dentry = nullptr;
+	vfs_inode* f_inode = nullptr;
+	stduint f_pos = 0;                // Current read/write position
+	stduint f_mode = 0;               // Open mode (R/W/A etc)
 };
 
 // Virtual File System

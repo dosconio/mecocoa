@@ -133,6 +133,8 @@ stdsint Taskman::CreateThread(ProcessBlock* pb, stduint entry, stduint arg, stdu
 		free((byte*)tb);
 		return -1;
 	}
+	// [DIAG] Write stack canary at the bottom of the kernel stack
+	*(stduint*)tb->stack_levladdr = 0xDEADBEEF;
 	#if _MCCA == 0x1032 || _MCCA == 0x1064
 	tb->context.kernel_sp = _IMM(tb->stack_levladdr) + tb->stack_size - 0x10;
 	#endif

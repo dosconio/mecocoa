@@ -92,6 +92,7 @@ int KeyboardBridge::out(const char* str, stduint len) {
 					msg.type = SysMessage::RUPT_NEW_TERM;
 					message_queue_conv.Enqueue(msg);
 				}
+				return 0; // Intercept: do not pass to VTTY or other sheets
 			}
 			else if (event.method == keyboard_event_t::method_t::keydown && event.keycode == 0x39) { // CapsLock
 				kbd_state.lock_caps = !kbd_state.lock_caps; setLED();
@@ -134,13 +135,17 @@ int KeyboardBridge::out(const char* str, stduint len) {
 				#endif
 				if (ascii_ch) {
 					#if _GUI_ENABLE
-					// If focus is on an app window (not the console form and not background), swallow the character
-					if (asrtand(Consman::last_click_sheet)->refSheetNode().next) {
-						// ignore background
-						Consman::last_click_sheet->onrupt(SheetEvent::onKeybd, Point(0, 0), &event);
-						Consman::WakeBlockedWaiters();
-						return 0; // Intercept: do not pass to VTTY
+					// [Lock]: Delegate keyboard event to serv_graf_loop to avoid
+					// accessing last_click_sheet without gui_lock in interrupt context.
+					// Direct onrupt() here causes UAF when _CleanSingleForm deletes the sheet.
+					{
+						extern uni::Queue<SysMessage> message_queue_conv;
+						SysMessage msg;
+						msg.type = SysMessage::RUPT_KBD;
+						msg.args.kbd_event = event;
+						message_queue_conv.Enqueue(msg);
 					}
+					return 0; // Intercept: event will be forwarded in serv_graf_loop
 					#else
 					// Check for Ctrl+C to trigger SIGINT (Non-GUI Mode, exclude Shift)
 					if ((kbd_state.mod.l_ctrl || kbd_state.mod.r_ctrl) && !kbd_state.mod.l_shift && !kbd_state.mod.r_shift && ascii_ch == 'c') {
@@ -168,10 +173,22 @@ int KeyboardBridge::out(const char* str, stduint len) {
 			}
 		}
 		// Forward ALL keyboard events (down/up/repeat) to focused window
+		#if _GUI_ENABLE
+		// [Lock]: Delegate keyboard event to serv_graf_loop to avoid
+		// accessing last_click_sheet without gui_lock in interrupt context.
+		{
+			extern uni::Queue<SysMessage> message_queue_conv;
+			SysMessage msg;
+			msg.type = SysMessage::RUPT_KBD;
+			msg.args.kbd_event = event;
+			message_queue_conv.Enqueue(msg);
+		}
+		#else
 		if (Consman::last_click_sheet) {
 			Consman::last_click_sheet->onrupt(SheetEvent::onKeybd, Point(0, 0), &event);
 			Consman::WakeBlockedWaiters();
 		}
+		#endif
 	}
 	// Render the bottom ribbon
 	#if !_GUI_ENABLE
@@ -211,12 +228,14 @@ void sysmsg_kbd(keyboard_event_t kbd_event) {
 	else if (kbd_event.method == keyboard_event_t::method_t::keydown && kbd_event.keycode == 0x47) { // ScrollLock
 		kbd_state.lock_scroll = !kbd_state.lock_scroll; setLED();
 	}
-	else if (kbd_event.method == keyboard_event_t::method_t::keydown && (kbd_state.mod.l_logo || kbd_state.mod.r_logo) && kbd_event.keycode == 0x06) {
-		// Global Hotkey: Win + C
-		extern uni::Queue<SysMessage> message_queue_conv;
-		SysMessage msg;
-		msg.type = SysMessage::RUPT_NEW_TERM;
-		message_queue_conv.Enqueue(msg);
+	else if (kbd_event.method == keyboard_event_t::method_t::keydown && (kbd_state.mod.l_logo || kbd_state.mod.r_logo)) {
+		if (kbd_event.keycode == 0x06) { // Win + C
+			// Global Hotkey: Win + C
+			extern uni::Queue<SysMessage> message_queue_conv;
+			SysMessage msg;
+			msg.type = SysMessage::RUPT_NEW_TERM;
+			message_queue_conv.Enqueue(msg);
+		}
 	}
 	else {
 		if (kbd_event.method == keyboard_event_t::method_t::keydown) {

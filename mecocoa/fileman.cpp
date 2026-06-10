@@ -82,7 +82,10 @@ stduint ProcessBlock::Rdwt(bool wr_type, stduint fid, Slice slice)
 {
 	auto files = this->fileman.Lock();
 	_Comment(const) ProcessBlock* pb = this;
-	if (fid >= files->pfiles.Count()) plogerro("BOOM %d", fid);
+	if (fid >= files->pfiles.Count()) {
+		plogerro("BOOM %d", fid);
+		return 0;
+	}
 	if (!pb || fid >= files->pfiles.Count() || !files->pfiles[fid] || !files->pfiles[fid]->vfile) return 0;
 	if (this->state == ProcessBlock::State::Invalid) {
 		return 0;
@@ -112,8 +115,15 @@ stduint ProcessBlock::Rdwt(bool wr_type, stduint fid, Slice slice)
 		if (wr_type) {
 			MemCopyP(::buffer, kernel_paging, (void*)curr_addr, pb->paging, chunk);
 			// Redirect Magic TTY (~0) to focused TTY
-			if ((stduint)file->f_inode->internal_handler == (stduint)~0 && pb->focus_tty) {
-				bytes_processed = global_devfs.writfl(pb->focus_tty, Slice{ 0, (stduint)chunk }, (byte*)::buffer);
+			if ((stduint)file->f_inode->internal_handler == (stduint)~0) {
+				// [Lock]: Protect focus_tty access and TTY I/O against
+				// RemoveVconsole which deletes VideoConsole2 under gui_lock.
+				#if _GUI_ENABLE
+				RecursiveMutexLocal guard(&gui_lock);
+				#endif
+				if (pb->focus_tty) {
+					bytes_processed = global_devfs.writfl(pb->focus_tty, Slice{ 0, (stduint)chunk }, (byte*)::buffer);
+				}
 			}
 			else if (file->f_inode && (file->f_inode->i_mode & I_TYPE_MASK) == I_CHAR_SPECIAL) {
 				// Bypass global vfs_lock spinlock for character special devices to avoid deadlocks.
@@ -124,8 +134,15 @@ stduint ProcessBlock::Rdwt(bool wr_type, stduint fid, Slice slice)
 			}
 		}
 		else {
-			if ((stduint)file->f_inode->internal_handler == (stduint)~0 && pb->focus_tty) {
-				bytes_processed = global_devfs.readfl(pb->focus_tty, Slice{ 0, (stduint)chunk }, (byte*)::buffer);
+			if ((stduint)file->f_inode->internal_handler == (stduint)~0) {
+				// [Lock]: Protect focus_tty access and TTY I/O against
+				// RemoveVconsole which deletes VideoConsole2 under gui_lock.
+				#if _GUI_ENABLE
+				RecursiveMutexLocal guard(&gui_lock);
+				#endif
+				if (pb->focus_tty) {
+					bytes_processed = global_devfs.readfl(pb->focus_tty, Slice{ 0, (stduint)chunk }, (byte*)::buffer);
+				}
 			}
 			else if (file->f_inode && (file->f_inode->i_mode & I_TYPE_MASK) == I_CHAR_SPECIAL) {
 				// Bypass global vfs_lock spinlock for character special devices to avoid deadlocks.
@@ -370,7 +387,7 @@ void serv_file_loop()// for IDE 0:0, 0:1
 			syssend(Task_Memdisk_Serv, &retval, sizeof(retval[0]), _IMM(FiledevMsg::RUPT));
 			#if _MCCA == 0x8632
 			syssend(Task_Hdd_Serv, &retval, sizeof(retval[0]), _IMM(FiledevMsg::RUPT));// while (!fileman_hd_ready);
-			syssend(Task_Flp_Serv, &retval, sizeof(retval[0]), _IMM(FiledevMsg::RUPT));
+			// syssend(Task_Flp_Serv, &retval, sizeof(retval[0]), _IMM(FiledevMsg::RUPT));
 			#endif
 			// Filesys::Tree();
 			Consman_InitializeFreeType();

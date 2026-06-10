@@ -92,13 +92,13 @@ void syscall(NormalTaskContext* cxt);
 #else
 #endif
 struct file_proper_t {
-	stduint size;					// File size in bytes
-	stduint mode;					// File mode (type and permissions)
+	stduint size = 0;					// File size in bytes
+	stduint mode = 0;					// File mode (type and permissions)
 };
 
 struct dirent_t {
-	stduint is_dir;					// Directory flag (0: file, 1: directory)
-	char name[64];					// File name
+	stduint is_dir = 0;					// Directory flag (0: file, 1: directory)
+	char name[64] = {};					// File name
 };
 
 _ESYM_C stduint syscall(syscall_t callid, stduint p1 = 0, stduint p2 = 0, stduint p3 = 0);// MCCA 4 PARA SYSC

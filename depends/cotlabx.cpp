@@ -57,8 +57,10 @@ void _Comment(R1) serv_shell_process() {
 
 	extern const char key_map[256], key_map_shift[256];
 	while (true) {
+		bool processed_any = false;
 		if (pf_ptr) {
 			while (pf_ptr->msg_queue.Count()) {
+				processed_any = true;
 				SheetMessage smsg;
 				pf_ptr->msg_queue.Dequeue(smsg);
 				if (smsg.event == SheetEvent::onKeybd) {
@@ -137,7 +139,12 @@ void _Comment(R1) serv_shell_process() {
 		else {
 			goto shell_exit;
 		}
-		syscall(syscall_t::REST, 0, 0);
+		
+		if (!processed_any) {
+			syscall(syscall_t::REST, 1, 16); // Sleep for 16ms (approx 1 frame @ 60Hz) to save CPU
+		} else {
+			syscall(syscall_t::REST, 0, 0);  // Yield immediately if we had messages to process
+		}
 	}
 
 shell_exit:
@@ -155,11 +162,6 @@ shell_exit:
 					sys_kill(pid, SIGKILL, 0);
 				}
 			}
-		}
-		{
-			IC.enInterrupt(false);
-			Consman::RemoveVconsole(tty_target);
-			IC.enInterrupt(true);
 		}
 	}
 

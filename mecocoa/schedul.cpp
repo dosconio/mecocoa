@@ -665,6 +665,17 @@ auto Taskman::Schedule(bool omit_slice)->decltype(Schedule())
 	BindCurrentKernelEntryStack(new_tb, cpuid);
 	#endif
 
+	// [DIAG] Check stack canary for old_tb
+	#if 0
+	if (old_tb->stack_levladdr && old_tb->stack_size) {
+		stduint canary = *(stduint*)old_tb->stack_levladdr;
+		if (canary != 0xDEADBEEF) {
+			stduint* p = (stduint*)old_tb->stack_levladdr;
+			plogerro("[STACK] TID%x canary=%x [%x][%x][%x][%x]", old_tb->tid, canary, p[0], p[1], p[2], p[3]);
+		}
+	}
+	#endif
+
 	old_tb->just_schedule = 1;
 	switching_out_threads(cpuid) = old_tb;
 

@@ -205,7 +205,7 @@ word GDT_Alloc() {
 // linear allocator
 _ESYM_C void* malloc(size_t size) {
 	auto ret = (mempool.allocate(size));
-	if (!ret)
+	if (!ret || _IMM(ret) >= 0x80000000)
 		printlog(ret ? _LOG_INFO : _LOG_ERROR, "malloc %u at 0x%[x]", size, ret);
 	return ret;
 }

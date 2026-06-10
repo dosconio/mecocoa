@@ -143,11 +143,11 @@ bool Consman::Initialize() {
 	auto vcon0 = new VideoConsole2(&global_layman.getVCI(), screen0_win, Color::Black, Color::White);
 	global_vcon0 = vcon0;
 
-#if _MCCA == 0x8632
+	#if _MCCA == 0x8632
 	vcon0->setFontEngine(&fallback_engine);
-#else
+	#else
 	vcon0->setFontEngine(&loader_font_engine);
-#endif
+	#endif
 
 	vcon0->setBuffers(nullptr,
 		new BufferChar[vcon0->getCols() * vcon0->getRows()],

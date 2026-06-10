@@ -21,14 +21,12 @@ public:\
 
 extern Dchain ttys, vttys;
 struct vtty_type_t {
-	stduint blocked_pid;
+	stduint blocked_pid = 0;
 	QueueLimited innput_queue;
 	QueueLimited output_queue;
 	uni::Vector<stduint> proc_group;
 	stduint master_pid = 0;
-	stduint id; // Fixed TTY ID from Bitmap
-
-	// vtty_type_t() : innput_queue({ 0,0 }), output_queue({ 0,0 }) {}
+	stduint id = 0; // Fixed TTY ID from Bitmap
 };
 Dnode* VTTY_Append(Console_t* con);
 inline static QueueLimited* VTTY_INNQ(Dnode* nod) {
@@ -127,9 +125,9 @@ public:
 
 
 struct _RET_CreateVconsole {
-	uni::VideoConsole2* pcon;
-	::uni::Witch::Form* pform;
-	stduint tty_no;
+	uni::VideoConsole2* pcon = nullptr;
+	::uni::Witch::Form* pform = nullptr;
+	stduint tty_no = 0;
 };
 
 struct Consman {

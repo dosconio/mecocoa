@@ -285,8 +285,6 @@ static stduint _Taskman_Create_Paging(ProcessBlock *ppb, byte ring, stduint stac
 			#if _MCCA == 0x8664
 			percore->tss.RSP0 = GetCoreRingStackBase(i) + HIGHER_STACK_SIZE - 8;// for user-app in cpu0
 			#else
-			percore->tss.ESP0 = _IMM(mem.allocate(0x1000));
-			percore->tss_selector = 0;
 			#endif
 			//{} TEMP GDT_Alloc and tss.setRange
 			if (i == 0)
@@ -326,8 +324,9 @@ static stduint _Taskman_Create_Paging(ProcessBlock *ppb, byte ring, stduint stac
 			}
 			#endif
 		}
-	_Mapping_Core_Stack(kernel_paging);
-	
+		_Mapping_Core_Stack(kernel_paging);
+		PCU_CORES_PERCORE[0]->state = CoreState::Online;//
+
 	
 	#if _MCCA == 0x8632// TEMP x64 do not use LDT (no R1 and R2)
 	for0(i, PCU_CORES_MAX) {
@@ -477,6 +476,10 @@ ProcessBlock* Taskman::Create(void* entry, byte ring, bool append)
 	tb->stack_size = DEFAULT_STACK_SIZE;
 	tb->stack_lineaddr = (byte*)mempool.allocate(tb->stack_size, 12);
 	tb->stack_levladdr = ring != RING_M ? (byte*)mempool.allocate(tb->stack_size, 12) : tb->stack_lineaddr;
+	// [DIAG] Write stack canary at the bottom of the stack
+	*(stduint*)tb->stack_lineaddr = 0xDEADBEEF;
+	if (ring != RING_M && tb->stack_levladdr != tb->stack_lineaddr)
+		*(stduint*)tb->stack_levladdr = 0xDEADBEEF;
 	const stduint stack_top = _IMM(tb->stack_lineaddr) + DEFAULT_STACK_SIZE;
 	new_ctx.SP = (stack_top & ~0xFlu) - 0x10 - sizeof(stduint);
 
@@ -595,6 +598,8 @@ ProcessBlock* Taskman::CreateELF(BlockTrait* source, byte ring) {
 	auto stack_ring = ring != RING_M ? (byte*)mempool.allocate(tb->stack_size, PAGESIZE_4KB) : stack_norm;
 	tb->stack_lineaddr = (byte*)0x1000;
 	tb->stack_levladdr = stack_ring;
+	// [DIAG] Write stack canary at the bottom of the kernel stack
+	*(stduint*)stack_ring = 0xDEADBEEF;
 
 	// ---- CR3 Mapping ---- //
 	stduint kernel_size = _TEMP 0x00400000;
@@ -651,8 +656,8 @@ ProcessBlock* Taskman::CreateELF(BlockTrait* source, byte ring) {
 	#if (_MCCA & 0xFF00) == 0x8600
 	tb->context.RING = ring;
 	tb->context.SP = initial_sp;
-	ploginfo("[elf] entry=%[x] sp=%[x] stack=[%[x],%[x]) heap=[%[x],%[x]) ring=%u",
-		tb->context.IP, tb->context.SP, tb->stack_lineaddr, stack_loc_top, pb->heapbtm, pb->heaptop, ring);
+	// ploginfo("[elf] entry=%[x] sp=%[x] stack=[%[x],%[x]) heap=[%[x],%[x]) ring=%u",
+	// 	tb->context.IP, tb->context.SP, tb->stack_lineaddr, stack_loc_top, pb->heapbtm, pb->heaptop, ring);
 	SetSegment(&tb->context);
 	#if (_MCCA & 0xFF00) == 0x8600
 	// Initialize FPU/SSE context to a safe state (masked exceptions)
@@ -711,6 +716,8 @@ ProcessBlock* Taskman::CreateFork(ProcessBlock* fo, const CallgateFrame* frame) 
 	auto stack_ring = ring ? (byte*)mempool.allocate(tb->stack_size, 12) : stack_norm;
 	tb->stack_lineaddr = target_fo_thread->stack_lineaddr;
 	tb->stack_levladdr = stack_ring;
+	// [DIAG] Write stack canary at the bottom of the kernel stack
+	*(stduint*)stack_ring = 0xDEADBEEF;
 
 	// ---- Copy CR3 Mapping ---- //
 	// - Segments Mapping with coping
