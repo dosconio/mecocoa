@@ -86,12 +86,8 @@ DEFSYSC sysc_OUTC(stduint ch, stduint len) {
 	MutexLocal mutex(&outc_mutex);
 	auto th = Taskman::CurrentTB();
 	if (auto pid = th->parent_process) {
-		// [Lock]: Protect focus_tty access against RemoveVconsole which
-		// nullifies focus_tty and deletes VideoConsole2 under gui_lock.
-		#if _GUI_ENABLE
-		RecursiveMutexLocal guard(&gui_lock);
-		#endif
-		if (auto con = pid->focus_tty ? (Console_t*)pid->focus_tty->offs : 0)
+		auto focus_tty = pid->focus_tty.Lock();
+		if (auto con = *focus_tty ? (Console_t*)(*focus_tty)->offs : 0)
 		{
 			if (!len) con->OutChar(ch);
 			else while (len) {
@@ -128,12 +124,9 @@ DEFSYSC sysc_INNC(stduint blocked) {
 		syssend(Task_Console, sliceof(msgbuf), _IMM(ConsoleMsg::INNC));//
 		sysrecv(Task_Console, &ret, byteof(ret));// need Context
 	}
-	else if (ppb->focus_tty) {
-		// [Lock]: Protect focus_tty access against RemoveVconsole
-		#if _GUI_ENABLE
-		RecursiveMutexLocal guard(&gui_lock);
-		#endif
-		QueueLimited* q = VTTY_INNQ(ppb->focus_tty);
+	else {
+		auto focus_tty = ppb->focus_tty.Lock();
+		QueueLimited* q = *focus_tty ? VTTY_INNQ(*focus_tty) : nullptr;
 		if (q && -1 != (ch = q->inn())) {
 			ret = ch;
 		}
@@ -313,13 +306,9 @@ DEFSYSC sysc_READ(stduint fd, stduint addr, stduint len) {
 					}
 				}
 				Console_t* con = nullptr;
-				// [Lock]: Protect focus_tty/vttys access AND con->out() calls against
-				// RemoveVconsole which nullifies focus_tty and deletes VideoConsole2 under gui_lock.
-				#if _GUI_ENABLE
-				RecursiveMutexLocal guard(&gui_lock);
-				#endif
+				auto focus_tty = pb->focus_tty.Lock();
 				if (tty_idx == (stduint)~0) {
-					if (pb->focus_tty) con = (Console_t*)pb->focus_tty->offs;
+					if (*focus_tty) con = (Console_t*)(*focus_tty)->offs;
 				} else if (tty_idx < vttys.Count()) {
 					con = (Console_t*)vttys[tty_idx]->offs;
 				}

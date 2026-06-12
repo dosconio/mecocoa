@@ -700,6 +700,8 @@ auto Taskman::Schedule(bool omit_slice)->decltype(Schedule()) { }
 void Taskman::SleepAndRelease(Spinlock* lk) {
 	stduint cpuid = getID();
 	auto old_tb = current_thread(cpuid);
+	ploginfo("[LOCK-PROBE] SleepAndRelease tid=%u cpu=%u spin=%[x]",
+		old_tb ? old_tb->tid : (stduint)~0, cpuid, _IMM(lk));
 	bool old_if = scheduler_lock.Acquire();
 	SettleSwitchingOutThread(cpuid);
 	DequeueReady(old_tb, false);

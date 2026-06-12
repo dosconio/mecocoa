@@ -28,13 +28,14 @@ void _Comment(R1) serv_shell_process() {
 		IC.enInterrupt(false);
 		p->state = ProcessBlock::State::Hanging;
 
-		p->focus_tty = tty_target;
-		if (p->focus_tty) {
+		auto focus_tty = p->focus_tty.Lock();
+		*focus_tty = tty_target;
+		if (*focus_tty) {
 			p->Open("/dev/tty", O_RDWR); // O_RDONLY stdin
 			p->Open("/dev/tty", O_RDWR); // O_WRONLY stdout
 			p->Open("/dev/tty", O_RDWR); // O_WRONLY stderr
 		}
-		if (auto nod = (Dnode*)p->focus_tty) {
+		if (auto nod = *focus_tty) {
 			auto pblock = (vtty_type_t*)nod->type;
 			pblock->master_pid = p->pid;
 			pblock->proc_group.Append(p->pid);
@@ -48,10 +49,11 @@ void _Comment(R1) serv_shell_process() {
 
 	if (pf_ptr) {
 		auto current_pb = Taskman::CurrentPB();
-		if (current_pb->pforms.Count() == 0) {
-			current_pb->pforms.Append(pf_ptr);
+		auto pforms = current_pb->pforms.Lock();
+		if (pforms->Count() == 0) {
+			pforms->Append(pf_ptr);
 		} else {
-			current_pb->pforms[0] = pf_ptr;
+			(*pforms)[0] = pf_ptr;
 		}
 	}
 

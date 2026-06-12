@@ -1044,9 +1044,7 @@ stduint DevFs::writfl(void* fil_handler, Slice file_slice, const byte* src) {
 
 	Console_t* con = (Console_t*)tty_node->offs;
 	if (!con) return 0;
-
 	con->out((rostr)src, file_slice.length);
-
 	return file_slice.length;
 }
 

@@ -284,8 +284,8 @@ public: // Fileman
 	MutexBlock<ProcFiles> fileman;
 
 public: // UIConsole
-	Dnode* focus_tty = nullptr;
-	uni::Vector<SheetTrait*> pforms;// should registered in global_layman
+	MutexBlock<Dnode*> focus_tty;
+	MutexBlock<uni::Vector<SheetTrait*>> pforms;// should registered in global_layman
 
 public: // Signals
 	MutexBlock<ProcSignals> signals;
@@ -344,6 +344,7 @@ public _Comment(State):
 		BR_RecvMsg = 0b100,
 		BR_Waiting = 0b1000,
 		BR_Exiting = 0b10000,
+		BR_Lock = 0b100000,
 	} block_reason = BlockReason::BR_None;
 	void Block(BlockReason reason);
 	void Unblock(BlockReason reason);

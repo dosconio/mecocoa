@@ -391,7 +391,7 @@ static stduint _Taskman_Create_Paging(ProcessBlock *ppb, byte ring, stduint stac
 	kernel_thread->priority = 12;
 	kernel_thread->time_slice = 4;
 	kernel_thread->name = "kernel";
-	kernel_task->focus_tty = vttys[0];
+	*kernel_task->focus_tty.Lock() = vttys[0];
 	Taskman::AppendThread(kernel_thread);
 
 	for0(cpu_i, PCU_CORES) {
@@ -447,7 +447,7 @@ ProcessBlock* Taskman::Create(void* entry, byte ring, bool append)
 	if (!ppb) return nullptr;
 	ppb->ring = ring;
 	ppb->parent_id = Task_Kernel;
-	ppb->focus_tty = nullptr;
+	*ppb->focus_tty.Lock() = nullptr;
 	{
 		auto files = ppb->fileman.Lock();
 		files->cwd = Filesys::getRoot(); // Default to root
@@ -586,7 +586,7 @@ ProcessBlock* Taskman::CreateELF(BlockTrait* source, byte ring) {
 	ProcessBlock* pb = Taskman::AllocateTask();
 	pb->ring = ring;
 	pb->parent_id = Task_Kernel;
-	pb->focus_tty = nullptr;
+	*pb->focus_tty.Lock() = nullptr;
 	
 	auto tb = AllocateThread();
 	pb->main_thread = tb;
@@ -692,7 +692,10 @@ ProcessBlock* Taskman::CreateFork(ProcessBlock* fo, const CallgateFrame* frame) 
 	auto ring = fo->ring;
 	pb->ring = ring;
 	pb->parent_id = fo->getID();
-	pb->focus_tty = fo->focus_tty;
+	{
+		auto src_focus_tty = fo->focus_tty.Lock();
+		*pb->focus_tty.Lock() = *src_focus_tty;
+	}
 	{
 		auto src_files = fo->fileman.Lock();
 		auto dst_files = pb->fileman.Lock();
@@ -829,8 +832,9 @@ ProcessBlock* Taskman::CreateFork(ProcessBlock* fo, const CallgateFrame* frame) 
 	Taskman::Append(pb);
 	Taskman::AppendThread(tb);
 
-	if (pb->focus_tty && pb->focus_tty->type) {
-		auto pblock = (vtty_type_t*)pb->focus_tty->type;
+	auto pb_focus_tty = pb->focus_tty.Lock();
+	if (*pb_focus_tty && (*pb_focus_tty)->type) {
+		auto pblock = (vtty_type_t*)(*pb_focus_tty)->type;
 		pblock->proc_group.Append(pb->pid);
 	}
 	return pb;
@@ -926,16 +930,20 @@ ProcessBlock* Taskman::Exec(stduint parent, rostr usr_fullpath, char** usr_argv,
 		new_files->cwd = parent_files->cwd;
 		new_files->root = parent_files->root;
 	}
-	new_pb->focus_tty = parent_pb->focus_tty;
-	if (new_pb->focus_tty) {
+	{
+		auto parent_focus_tty = parent_pb->focus_tty.Lock();
+		*new_pb->focus_tty.Lock() = *parent_focus_tty;
+	}
+	auto new_focus_tty = new_pb->focus_tty.Lock();
+	if (*new_focus_tty) {
 		new_pb->Open("/dev/tty", O_RDWR); // stdin
 		new_pb->Open("/dev/tty", O_RDWR); // stdout
 		new_pb->Open("/dev/tty", O_RDWR); // stderr
 	}
 	Taskman::Append(new_pb);
 	Taskman::AppendThread(new_pb->main_thread);
-	if (new_pb->focus_tty && new_pb->focus_tty->type) {
-		auto pblock = (vtty_type_t*)new_pb->focus_tty->type;
+	if (*new_focus_tty && (*new_focus_tty)->type) {
+		auto pblock = (vtty_type_t*)(*new_focus_tty)->type;
 		pblock->proc_group.Append(new_pb->pid);
 	}
 	return new_pb;

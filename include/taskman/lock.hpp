@@ -95,6 +95,7 @@ struct RecursiveMutex {
 	RecursiveMutex();
 	void Acquire();
 	void Release();
+	bool ForceReleaseFromSignal(stduint expected_tid);
 };
 
 struct RecursiveMutexLocal {

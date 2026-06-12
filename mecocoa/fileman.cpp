@@ -83,7 +83,7 @@ stduint ProcessBlock::Rdwt(bool wr_type, stduint fid, Slice slice)
 	auto files = this->fileman.Lock();
 	_Comment(const) ProcessBlock* pb = this;
 	if (fid >= files->pfiles.Count()) {
-		plogerro("BOOM %d", fid);
+		plogwarn("ProcessBlock::Rdwt BOOM %d", fid);
 		return 0;
 	}
 	if (!pb || fid >= files->pfiles.Count() || !files->pfiles[fid] || !files->pfiles[fid]->vfile) return 0;
@@ -96,6 +96,48 @@ stduint ProcessBlock::Rdwt(bool wr_type, stduint fid, Slice slice)
 	}
 	
 	vfs_file* file = files->pfiles[fid]->vfile;
+	FileDescriptor* fd_entry = files->pfiles[fid];
+	const bool is_magic_tty = file->f_inode &&
+		(stduint)file->f_inode->internal_handler == (stduint)~0;
+
+	if (is_magic_tty) {
+		// Task_Console owns the focus_tty path so fileman only forwards the
+		// request and commits fd_pos after the synchronous reply.
+		stduint total_bytes = 0;
+		stduint bytes_left = slice.length;
+		stduint curr_addr = slice.address;
+		int local_fd_pos = fd_entry->fd_pos;
+
+		files.Unlock();
+		while (bytes_left > 0) {
+			stduint chunk = minof(bytes_left, (stduint)FSBUF_SIZE);
+			FMT_ConsoleMsg_RDWR req = { curr_addr, chunk, pb->getID() };
+			stduint ret = 0;
+			syssend(Task_Console, &req, sizeof(req), _IMM(wr_type ? ConsoleMsg::WRIT : ConsoleMsg::READ));
+			sysrecv(Task_Console, &ret, sizeof(ret));
+			if ((stdsint)ret <= 0) {
+				break;
+			}
+
+			total_bytes += ret;
+			curr_addr += ret;
+			bytes_left -= ret;
+			local_fd_pos += (int)ret;
+			if (ret < chunk) {
+				break;
+			}
+		}
+
+		auto files_commit = this->fileman.Lock();
+		if (fid < files_commit->pfiles.Count() &&
+			files_commit->pfiles[fid] == fd_entry &&
+			fd_entry->vfile == file) {
+			fd_entry->fd_pos = local_fd_pos;
+			file->f_pos = local_fd_pos;
+		}
+		return total_bytes;
+	}
+
 	if (wr_type && (files->pfiles[fid]->fd_mode & O_APPEND)) {
 		files->pfiles[fid]->fd_pos = file->f_inode->i_size;
 	}
@@ -114,18 +156,7 @@ stduint ProcessBlock::Rdwt(bool wr_type, stduint fid, Slice slice)
 
 		if (wr_type) {
 			MemCopyP(::buffer, kernel_paging, (void*)curr_addr, pb->paging, chunk);
-			// Redirect Magic TTY (~0) to focused TTY
-			if ((stduint)file->f_inode->internal_handler == (stduint)~0) {
-				// [Lock]: Protect focus_tty access and TTY I/O against
-				// RemoveVconsole which deletes VideoConsole2 under gui_lock.
-				#if _GUI_ENABLE
-				RecursiveMutexLocal guard(&gui_lock);
-				#endif
-				if (pb->focus_tty) {
-					bytes_processed = global_devfs.writfl(pb->focus_tty, Slice{ 0, (stduint)chunk }, (byte*)::buffer);
-				}
-			}
-			else if (file->f_inode && (file->f_inode->i_mode & I_TYPE_MASK) == I_CHAR_SPECIAL) {
+			if (file->f_inode && (file->f_inode->i_mode & I_TYPE_MASK) == I_CHAR_SPECIAL) {
 				// Bypass global vfs_lock spinlock for character special devices to avoid deadlocks.
 				bytes_processed = file->f_inode->i_sb->fs->writfl(file->f_inode->internal_handler, Slice{ file->f_pos, (stduint)chunk }, (const byte*)::buffer);
 			}
@@ -134,17 +165,7 @@ stduint ProcessBlock::Rdwt(bool wr_type, stduint fid, Slice slice)
 			}
 		}
 		else {
-			if ((stduint)file->f_inode->internal_handler == (stduint)~0) {
-				// [Lock]: Protect focus_tty access and TTY I/O against
-				// RemoveVconsole which deletes VideoConsole2 under gui_lock.
-				#if _GUI_ENABLE
-				RecursiveMutexLocal guard(&gui_lock);
-				#endif
-				if (pb->focus_tty) {
-					bytes_processed = global_devfs.readfl(pb->focus_tty, Slice{ 0, (stduint)chunk }, (byte*)::buffer);
-				}
-			}
-			else if (file->f_inode && (file->f_inode->i_mode & I_TYPE_MASK) == I_CHAR_SPECIAL) {
+			if (file->f_inode && (file->f_inode->i_mode & I_TYPE_MASK) == I_CHAR_SPECIAL) {
 				// Bypass global vfs_lock spinlock for character special devices to avoid deadlocks.
 				bytes_processed = file->f_inode->i_sb->fs->readfl(file->f_inode->internal_handler, Slice{ file->f_pos, (stduint)chunk }, (byte*)::buffer);
 			}
@@ -394,7 +415,7 @@ void serv_file_loop()// for IDE 0:0, 0:1
 			ProcessBlock* init_p = Taskman::CreateFile(("/md0/init"), RING_U, Task_Kernel);
 			if (init_p) {
 				init_p->main_thread->name = "init";
-				init_p->focus_tty = vttys[0];
+				*init_p->focus_tty.Lock() = vttys[0];
 				Taskman::Append(init_p);
 				Taskman::AppendThread(init_p->main_thread);
 			}
@@ -413,11 +434,14 @@ void serv_file_loop()// for IDE 0:0, 0:1
 			#else
 			ProcessBlock* p;
 			p = Taskman::CreateFile(("/md0/cot"), RING_U, Task_Kernel);
-			p->focus_tty = vttys[0];
-			if (p->focus_tty) {
-				p->Open("/dev/tty", O_RDWR); // stdin
-				p->Open("/dev/tty", O_RDWR); // stdout
-				p->Open("/dev/tty", O_RDWR); // stderr
+			{
+				auto focus_tty = p->focus_tty.Lock();
+				*focus_tty = vttys[0];
+				if (*focus_tty) {
+					p->Open("/dev/tty", O_RDWR); // stdin
+					p->Open("/dev/tty", O_RDWR); // stdout
+					p->Open("/dev/tty", O_RDWR); // stderr
+				}
 			}
 			Taskman::Append(p);
 			Taskman::AppendThread(p->main_thread);
@@ -427,7 +451,7 @@ void serv_file_loop()// for IDE 0:0, 0:1
 			syssend(Task_Memdisk_Serv, &retval, sizeof(retval[0]), _IMM(FiledevMsg::RUPT));
 			ProcessBlock* p;
 			p = Taskman::CreateFile(("/md0/lpa.elf"), RING_U, Task_Kernel);
-			p->focus_tty = vttys[0];
+			*p->focus_tty.Lock() = vttys[0];
 			Taskman::Append(p);
 			Taskman::AppendThread(p->main_thread);
 			#endif

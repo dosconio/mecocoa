@@ -123,6 +123,41 @@ void free_async_msg(pureptr_t ptr) {
 }
 
 Spinlock comm_lock;
+static bool CanCommProcess(ProcessBlock* pb) {
+	return pb && pb->state == ProcessBlock::State::Active;
+}
+
+static bool CanCommThread(ThreadBlock* th) {
+	return th &&
+		th->state != ThreadBlock::State::Invalid &&
+		th->state != ThreadBlock::State::Exited &&
+		th->state != ThreadBlock::State::Hanging &&
+		!(_IMM(th->block_reason) & _IMM(ThreadBlock::BlockReason::BR_Exiting)) &&
+		CanCommProcess(th->parent_process);
+}
+
+static bool CanUseSyncMsgState(ThreadBlock* th) {
+	return CanCommThread(th) && th->unsolved_msg;
+}
+
+static void DropQueuedSender(ThreadBlock* to_th, ThreadBlock* prev, ThreadBlock* sender) {
+	if (!to_th || !sender) return;
+	if (sender == to_th->queue_send_queuehead) {
+		to_th->queue_send_queuehead = sender->queue_send_queuenext;
+	}
+	else if (prev) {
+		prev->queue_send_queuenext = sender->queue_send_queuenext;
+	}
+	sender->send_to_whom = nullptr;
+	sender->queue_send_queuenext = nullptr;
+	sender->unsolved_msg = nullptr;
+	if (sender->state != ThreadBlock::State::Invalid &&
+		sender->state != ThreadBlock::State::Exited &&
+		sender->state != ThreadBlock::State::Hanging) {
+		sender->Unblock(ThreadBlock::BlockReason::BR_SendMsg);
+	}
+}
+
 int msg_send(ThreadBlock* fo_th, stduint too, _Comment(vaddr) CommMsg* msg, bool is_async)
 {
 	SpinlockLocal guard(&comm_lock);
@@ -131,7 +166,7 @@ int msg_send(ThreadBlock* fo_th, stduint too, _Comment(vaddr) CommMsg* msg, bool
 	if (!to_th) {
 		if (auto to_pb = Taskman::Locate(too)) to_th = to_pb->main_thread;
 	}
-	if (!to_th) return 1;
+	if (!CanCommThread(fo_th) || !CanCommThread(to_th)) return 1;
 
 	if (!is_async && msg_send_will_deadlock(fo_th, to_th)) {
 		plogerro("msg_send_will_deadlock");
@@ -222,10 +257,14 @@ int msg_recv(ThreadBlock* to_th, stduint foo, _Comment(vaddr) CommMsg* msg)
 		to_th->wait_rupt_no = nil;
 		return 0;
 	}
+	if (!CanCommThread(to_th)) return -1;
 	bool determined = false;
 	ThreadBlock* prev = nullptr;
 	ThreadBlock* fo_th = nullptr;
 	if (foo == ANYPROC) {
+		while (to_th->queue_send_queuehead && !CanUseSyncMsgState(to_th->queue_send_queuehead)) {
+			DropQueuedSender(to_th, nullptr, to_th->queue_send_queuehead);
+		}
 		if (to_th->queue_send_queuehead) {
 			fo_th = to_th->queue_send_queuehead;
 			foo = fo_th->tid;
@@ -237,7 +276,8 @@ int msg_recv(ThreadBlock* to_th, stduint foo, _Comment(vaddr) CommMsg* msg)
 		if (!fo_th) {
 			if (auto fo_pb = Taskman::Locate(foo)) fo_th = fo_pb->main_thread;
 		}
-		if (fo_th && fo_th->block_reason == ThreadBlock::BlockReason::BR_SendMsg &&
+		if (CanUseSyncMsgState(fo_th) &&
+			fo_th->block_reason == ThreadBlock::BlockReason::BR_SendMsg &&
 			fo_th->send_to_whom == to_th) {
 			ThreadBlock* crt = to_th->queue_send_queuehead;
 			while (crt) {
@@ -259,6 +299,10 @@ int msg_recv(ThreadBlock* to_th, stduint foo, _Comment(vaddr) CommMsg* msg)
 			if (!prev) { plogerro("!prev in %s", __FUNCIDEN__); return 1; }
 			asserv(prev)->queue_send_queuenext = fo_th->queue_send_queuenext;// A->[B]->C => A->C
 			fo_th->queue_send_queuenext = nullptr;
+		}
+		if (!CanUseSyncMsgState(fo_th)) {
+			fo_th->send_to_whom = nullptr;
+			return -1;
 		}
 		//
 		auto msg_fo = (CommMsg*)SeekAddress(fo_th->parent_process, (stduint)fo_th->unsolved_msg);
@@ -318,7 +362,7 @@ int msg_recv(ThreadBlock* to_th, stduint foo, _Comment(vaddr) CommMsg* msg)
 				if (!fo_th_tgt) {
 					if (auto fo_pb = Taskman::Locate(foo)) fo_th_tgt = fo_pb->main_thread;
 				}
-				if (!fo_th_tgt) return -1;
+				if (!CanCommThread(fo_th_tgt)) return -1;
 			}
 
 			to_th->Block(ThreadBlock::BlockReason::BR_RecvMsg);

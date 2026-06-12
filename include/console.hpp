@@ -53,6 +53,16 @@ enum class ConsoleMsg {
 	FDRW,// draw        (formid, shape_type, usr_shape_info)
 	FCHR,// draw-string (formid, u_point, u_str, color)
 	FTIM,// set-timer   (formid, ms)
+	// do not put above:
+	FCLEANPROC,// internal: clean one exiting process GUI resources in console owner thread
+};
+_PACKED(struct) FMT_ConsoleMsg_RDWR {
+	stduint usr_addr;
+	stduint len;
+	stduint pid;
+};
+_PACKED(struct) FMT_ConsoleMsg_FCLEANPROC {
+	pureptr_t process_block;
 };
 _PACKED(struct) FMT_ConsoleMsg_FMSG {
 	stduint pform_id;
@@ -145,6 +155,8 @@ struct Consman {
 	static bool Initialize();
 	static void enable_2buffer();
 	static _RET_CreateVconsole CreateVconsole(const Rectangle& rect, rostr title);
+	// Caller must already hold gui_lock. Detaches one Form subtree from GUI roots, clears graf input references that still point into it, and returns the dirty area that should be refreshed afterward.
+	static Rectangle DetachForm(::uni::Witch::Form* pfrm, SheetTrait* exact_sheet = nullptr);
 	static void RemoveVconsole(Dnode* nod);
 	static void SwitchForm(SheetTrait* form);
 	#endif

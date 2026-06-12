@@ -204,8 +204,11 @@ volatile bool has_pending_timer = false;
 void serv_graf_loop() {
 	SysMessage msg;// Inner Module Message System
 	#if _GUI_ENABLE == 0
+	if (auto th = Taskman::CurrentTB()) {
+		th->Block(ThreadBlock::BlockReason::BR_Waiting);
+	}
 	while (true) {
-		// HALT(); // Sleep the CPU core until the next interrupt
+		HALT(); // Sleep the CPU core until the next interrupt
 		Taskman::Schedule(true);// yield
 	}
 	#else
@@ -226,9 +229,11 @@ void serv_graf_loop() {
 		switch (msg.type) {
 		case SysMessage::RUPT_TIMER:
 			if constexpr (_GUI_ENABLE) {
+				#if _GUI_ENABLE
 				// [Lock]: Protect timer iteration against concurrent layer cleanup
 				RecursiveMutexLocal guard(&gui_lock);
 				global_layman.CheckTimers(tick);
+				#endif
 			}
 			has_pending_timer = false;
 			Consman::WakeBlockedWaiters();

@@ -14,7 +14,7 @@
 
 #define _GUI_FREETYPE 0
 
-#define _SYS_MULTICORE 0
+#define _SYS_MULTICORE 1
 
 //
 

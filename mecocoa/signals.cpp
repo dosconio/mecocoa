@@ -144,16 +144,7 @@ static void check_and_deliver_signals_generic(RegisterContext& ctx) {
 			if constexpr (_GUI_ENABLE) {
 				extern RecursiveMutex gui_lock;
 				stduint cur_tid = Taskman::CurrentTID();
-				bool old_if = scheduler_lock.Acquire();
-				if (gui_lock.owner_tid == cur_tid && gui_lock.count > 0) {
-					gui_lock.count = 0;
-					gui_lock.owner_tid = (stduint)~0;
-					scheduler_lock.Release(old_if);
-					gui_lock.mutex.Release();
-				}
-				else {
-					scheduler_lock.Release(old_if);
-				}
+				gui_lock.ForceReleaseFromSignal(cur_tid);
 			}
 			Taskman::ExitCurrent(128 + signo);
 			break;

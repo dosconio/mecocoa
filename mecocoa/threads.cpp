@@ -180,7 +180,7 @@ bool Taskman::ExitThread(stduint code) {
 		}
 	}
 	if (joiner) {
-		joiner->Unblock(ThreadBlock::BlockReason::BR_Waiting);
+		joiner->Unblock(ThreadBlock::BlockReason::BR_Lock);
 	}
 
 	// Remove the exiting worker thread from scheduler queues before marking it
@@ -227,7 +227,7 @@ stdsint Taskman::JoinThread(stduint tid, stduint usr_status) {
 			return -3;
 		}
 		caller_th->state = ThreadBlock::State::Pended;
-		caller_th->block_reason = ThreadBlock::BlockReason::BR_Waiting;
+		caller_th->block_reason = ThreadBlock::BlockReason::BR_Lock;
 		DequeueReady(caller_th, false);
 		target_th->join_wait_queue.Enqueue(caller_th);
 		}
@@ -292,7 +292,7 @@ stdsint Taskman::Futex(stduint addr, stduint op, stduint val) {
 			th->futex_wait_addr = addr;
 			DequeueReady(th, false);
 			th->state = ThreadBlock::State::Pended;
-			th->block_reason = ThreadBlock::BlockReason::BR_Waiting;
+			th->block_reason = ThreadBlock::BlockReason::BR_Lock;
 		}
 		Schedule(true);
 		return 0;
@@ -308,7 +308,7 @@ stdsint Taskman::Futex(stduint addr, stduint op, stduint val) {
 				auto target_th = cast<ThreadBlock*>(nod->offs);
 				if (target_th->parent_process != pb) continue;
 				if (target_th->state != ThreadBlock::State::Pended) continue;
-				if (target_th->block_reason != ThreadBlock::BlockReason::BR_Waiting) continue;
+				if (target_th->block_reason != ThreadBlock::BlockReason::BR_Lock) continue;
 				if (target_th->futex_wait_addr != addr) continue;
 				target_th->futex_wait_addr = 0;
 				if (target_count < numsof(targets)) {
@@ -320,7 +320,7 @@ stdsint Taskman::Futex(stduint addr, stduint op, stduint val) {
 		}
 
 		for0(i, target_count) {
-			targets[i]->Unblock(ThreadBlock::BlockReason::BR_Waiting);
+			targets[i]->Unblock(ThreadBlock::BlockReason::BR_Lock);
 		}
 		return (stdsint)woken;
 	}

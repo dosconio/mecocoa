@@ -6,6 +6,9 @@
 #include "../include/filesys.hpp"
 
 extern Spinlock scheduler_lock;
+#if _GUI_ENABLE
+extern RecursiveMutex gui_lock;
+#endif
 
 #include <c/driver/keyboard.h>
 
@@ -143,8 +146,10 @@ void Mutex::Acquire() {
 	if (this->locked) {
 		ThreadBlock* crt = Taskman::CurrentTB();
 		if (!this->wait_queue.isFull()) {
+			plogerro("[LOCK-PROBE] Mutex wait tid=%u mutex=%[x] guard=%[x] reason=locked",
+				crt ? crt->tid : (stduint)~0, _IMM(this), _IMM(&this->guard));
 			crt->state = ThreadBlock::State::Pended;
-			crt->block_reason = ThreadBlock::BlockReason::BR_Waiting;
+			crt->block_reason = ThreadBlock::BlockReason::BR_Lock;
 			this->wait_queue.Enqueue(crt);
 			Taskman::SleepAndRelease(&this->guard);
 		}
@@ -161,7 +166,7 @@ void Mutex::Release() {
 		ThreadBlock* wakeup_tb = nullptr;
 		this->wait_queue.Dequeue(wakeup_tb);
 		if (wakeup_tb) {
-			wakeup_tb->Unblock(ThreadBlock::BlockReason::BR_Waiting);
+			wakeup_tb->Unblock(ThreadBlock::BlockReason::BR_Lock);
 		}
 	}
 	else {
@@ -174,30 +179,98 @@ RecursiveMutex::RecursiveMutex() : mutex(), owner_tid((stduint)~0), count(0) {}
 
 void RecursiveMutex::Acquire() {
 	stduint current_tid = Taskman::CurrentTID();
-	if (owner_tid == current_tid) {
-		count++;
+	bool old_if = mutex.guard.Acquire();
+	if (mutex.locked) {
+		if (owner_tid == current_tid) {
+			count++;
+			mutex.guard.Release(old_if);
+			return;
+		}
+
+		ThreadBlock* crt = Taskman::CurrentTB();
+		if (!mutex.wait_queue.isFull() && crt) {
+			stduint owner_snapshot = owner_tid;
+			stduint count_snapshot = count;
+			ThreadBlock* owner_th = owner_snapshot != (stduint)~0 ?
+				Taskman::LocateThread(owner_snapshot) : nullptr;
+			// plogerro("[LOCK-PROBE] RecursiveMutex wait tid=%u rmutex=%[x] owner=%u count=%u mutex=%[x] owner_state=%u owner_reason=%u",
+			// 	current_tid, _IMM(this), owner_snapshot, count_snapshot, _IMM(&mutex),
+			// 	owner_th ? _IMM(owner_th->state) : _IMM((stduint)~0),
+			// 	owner_th ? _IMM(owner_th->block_reason) : _IMM((stduint)~0));
+
+			crt->state = ThreadBlock::State::Pended;
+			crt->block_reason = ThreadBlock::BlockReason::BR_Lock;
+			mutex.wait_queue.Enqueue(crt);
+			Taskman::SleepAndRelease(&mutex.guard);
+			if (old_if) IC.enInterrupt();
+			return;
+		}
+
+		mutex.guard.Release(old_if);
+		if (old_if) IC.enInterrupt();
 		return;
 	}
-	mutex.Acquire();
-	// After mutex.Acquire() returns, interrupts may be re-enabled and this
-	// thread can be preempted or SIGKILL'd before setting owner_tid/count.
-	// If that happens, the mutex remains locked (mutex.locked==1) but
-	// owner_tid==~0 and count==0, making the lock permanently unreleasable.
-	// Disable interrupts briefly to make owner_tid/count assignment atomic.
-	bool old_if = scheduler_lock.Acquire();
+
+	mutex.locked = 1;
 	owner_tid = current_tid;
 	count = 1;
-	scheduler_lock.Release(old_if);
+	mutex.guard.Release(old_if);
 }
 
 void RecursiveMutex::Release() {
+	bool old_if = mutex.guard.Acquire();
 	if (owner_tid == Taskman::CurrentTID()) {
-		count--;
-		if (count == 0) {
+		if (count > 1) {
+			count--;
+			mutex.guard.Release(old_if);
+			return;
+		}
+
+		if (!mutex.wait_queue.isEmpty()) {
+			ThreadBlock* wakeup_tb = nullptr;
+			mutex.wait_queue.Dequeue(wakeup_tb);
+			if (wakeup_tb) {
+				owner_tid = wakeup_tb->tid;
+				count = 1;
+#if _GUI_ENABLE
+#endif
+				wakeup_tb->Unblock(ThreadBlock::BlockReason::BR_Lock);
+			}
+		}
+		else {
+			count = 0;
 			owner_tid = (stduint)~0;
-			mutex.Release();
+			mutex.locked = 0;
 		}
 	}
+	mutex.guard.Release(old_if);
+}
+
+bool RecursiveMutex::ForceReleaseFromSignal(stduint expected_tid) {
+	bool old_if = mutex.guard.Acquire();
+	if (!mutex.locked || owner_tid != expected_tid || count == 0) {
+		mutex.guard.Release(old_if);
+		return false;
+	}
+
+	if (!mutex.wait_queue.isEmpty()) {
+		ThreadBlock* wakeup_tb = nullptr;
+		mutex.wait_queue.Dequeue(wakeup_tb);
+		if (wakeup_tb) {
+			owner_tid = wakeup_tb->tid;
+			count = 1;
+#if _GUI_ENABLE
+#endif
+			wakeup_tb->Unblock(ThreadBlock::BlockReason::BR_Lock);
+		}
+	}
+	else {
+		count = 0;
+		owner_tid = (stduint)~0;
+		mutex.locked = 0;
+	}
+	mutex.guard.Release(old_if);
+	return true;
 }
 
 RecursiveMutexLocal::RecursiveMutexLocal(RecursiveMutex* _rmutex) : rmutex(_rmutex) {
@@ -222,7 +295,7 @@ void Semaphore::Acquire() {
 			// Transition thread to pending state with waiting block reason
 			// State and BlockReason verified strictly via taskman.hpp
 			crt->state = ThreadBlock::State::Pended;
-			crt->block_reason = ThreadBlock::BlockReason::BR_Waiting;
+			crt->block_reason = ThreadBlock::BlockReason::BR_Lock;
 			this->wait_queue.Enqueue(crt);
 
 			// Yield CPU: puts thread to sleep, releases spinlock, and switches context
@@ -240,7 +313,7 @@ void Semaphore::Release() {
 		this->wait_queue.Dequeue(wakeup_tb);
 		if (wakeup_tb) {
 			// Wake up the waiting thread by moving it back to ready queue
-			wakeup_tb->Unblock(ThreadBlock::BlockReason::BR_Waiting);
+			wakeup_tb->Unblock(ThreadBlock::BlockReason::BR_Lock);
 		}
 	}
 	else {
@@ -434,7 +507,7 @@ bool Taskman::ExitCurrent(stduint code) {
 	syssend_async(Task_TaskMan, sliceof(para), _IMM(TaskmanMsg::EXIT));
 
 	if (auto th = CurrentTB()) {
-		th->Block(ThreadBlock::BlockReason::BR_Waiting);
+		th->Block(ThreadBlock::BlockReason::BR_Exiting);
 	}
 	Taskman::Schedule(true);
 	printlog(_LOG_FATAL, "Taskman::ExitCurrent unreachable");
@@ -450,16 +523,24 @@ bool Taskman::ExitCurrent(stduint code) {
 // - threads?
 static void _Exit_Cleanup(stduint pid)
 {
+	extern Spinlock scheduler_lock;
 	auto ppb = Taskman::Locate(pid);
-	if (!ppb || ppb->state == ProcessBlock::State::Invalid) return;
-	ppb->state = ProcessBlock::State::Invalid;
+	if (!ppb) return;
+	{
+		SpinlockLocal guard(&scheduler_lock);
+		if (ppb->state == ProcessBlock::State::Invalid) return;
+		ppb->state = ProcessBlock::State::Invalid;
+		ppb->fileman.raw_mutex().locked = 0;
+		#if _GUI_ENABLE
+		ppb->focus_tty.raw_mutex().locked = 0;
+		#endif
+	}
 
 	{
 		auto files = ppb->fileman.Lock();
 	}
 
 	// Hierarchical Process Tree: Unlink from parent
-	extern Spinlock scheduler_lock;
 	auto locate_nolock = [](stduint target_pid) -> ProcessBlock* {
 		for (auto nod = Taskman::chain.Root(); nod; nod = nod->next) {
 			auto p = cast<ProcessBlock*>(nod->offs);
@@ -510,25 +591,29 @@ static void _Exit_Cleanup(stduint pid)
 
 	#if _GUI_ENABLE
 	// 1. Release GUI Resources First (while threads are still valid for unblocking)
-	Global_CleanProcessForms(ppb);
+	{
+		FMT_ConsoleMsg_FCLEANPROC req = {};
+		req.process_block = (pureptr_t)ppb;
+		stduint gui_ret = (stduint)-1;
+		syssend(Task_Console, &req, sizeof(req), _IMM(ConsoleMsg::FCLEANPROC));
+		sysrecv(Task_Console, &gui_ret, sizeof(gui_ret));
+	}
 
 	// 2. Release TTY Binding
-	// [Lock]: Protect focus_tty access against RemoveVconsole which nullifies
-	// focus_tty and deletes VideoConsole2 under gui_lock.
 	{
-		RecursiveMutexLocal guard(&gui_lock);
-		if (ppb->focus_tty) {
+		auto focus_tty = ppb->focus_tty.Lock();
+		if (*focus_tty) {
 			bool is_tty_valid = false;
 			extern uni::Dchain vttys;
 			for (auto nod = vttys.Root(); nod; nod = nod->next) {
-				if (nod == ppb->focus_tty) {
+				if (nod == *focus_tty) {
 					is_tty_valid = true;
 					break;
 				}
 			}
 
-			if (is_tty_valid && ppb->focus_tty->type) {
-				auto pblock = (vtty_type_t*)ppb->focus_tty->type;
+			if (is_tty_valid && (*focus_tty)->type) {
+				auto pblock = (vtty_type_t*)(*focus_tty)->type;
 				for (stdsint i = pblock->proc_group.Count() - 1; i >= 0; --i) {
 					if (pblock->proc_group[i] == pid) {
 						pblock->proc_group.Remove(i);
@@ -536,10 +621,10 @@ static void _Exit_Cleanup(stduint pid)
 					}
 				}
 				if (pblock->master_pid == pid || (pblock->proc_group.Count() == 0 && pblock->master_pid != 0)) {
-					pblock->master_pid = 0; 
+					pblock->master_pid = 0;
 				}
 			}
-			ppb->focus_tty = nullptr;
+			*focus_tty = nullptr;
 		}
 	}
 	#endif
@@ -569,6 +654,12 @@ static void _Exit_Cleanup(stduint pid)
 	{
 		auto files = ppb->fileman.Lock();
 		files->pfiles.Clear();
+	}
+
+	// Wait until all external ProcessBlock holders have released their refs
+	// before tearing down paging-backed resources.
+	while (__atomic_load_n(&ppb->ref_count, __ATOMIC_SEQ_CST) > 1) {
+		Taskman::Schedule(true);
 	}
 
 	// 5. Final Destruction: Release Thread blocks and stacks
@@ -671,7 +762,7 @@ bool Taskman::Exit(ProcessBlock* p, stdsint exit_code)
 
 			// 1. If this system task is blocked while sending to us, unblock it and clear pointers
 			if ((th->block_reason & ThreadBlock::BlockReason::BR_SendMsg) &&
-				th->send_to_whom && th->send_to_whom->parent_process == p) {
+				th->send_to_whom && th->send_to_whom != (ThreadBlock*)INTRUPT && th->send_to_whom->parent_process == p) {
 				th->send_to_whom = nullptr;
 				th->queue_send_queuenext = nullptr;
 				th->unsolved_msg = nullptr;
@@ -680,7 +771,7 @@ bool Taskman::Exit(ProcessBlock* p, stdsint exit_code)
 
 			// 2. If this system task is blocked while receiving from us, unblock it
 			if ((th->block_reason & ThreadBlock::BlockReason::BR_RecvMsg) &&
-				th->recv_fo_whom && th->recv_fo_whom->parent_process == p) {
+				th->recv_fo_whom && th->recv_fo_whom != (ThreadBlock*)INTRUPT && th->recv_fo_whom->parent_process == p) {
 				th->recv_fo_whom = nullptr;
 				th->unsolved_msg = nullptr;
 				th->Unblock(ThreadBlock::BlockReason::BR_RecvMsg);
