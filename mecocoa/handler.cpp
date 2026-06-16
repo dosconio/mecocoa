@@ -34,9 +34,15 @@ extern "C" void exception_handler(HardwareInterruptFrame* frame);
 
 // Unified interrupt dispatcher called from assembly stubs
 extern "C" void interrupt_dispatcher(HardwareInterruptFrame* frame) {
-	stduint irq_id = frame->interrupt_id;
+	#if _MCCA == 0x8632
+	HardwareInterruptFrame frame_copy = *frame;
+	HardwareInterruptFrame* active_frame = &frame_copy;
+	#else
+	HardwareInterruptFrame* active_frame = frame;
+	#endif
+	stduint irq_id = active_frame->interrupt_id;
 	if (irq_id < 0x20) {
-		exception_handler(frame);
+		exception_handler(active_frame);
 	}
 	else {
 		if (irq_id < 256 && interrupt_handlers[irq_id]) {
@@ -45,9 +51,12 @@ extern "C" void interrupt_dispatcher(HardwareInterruptFrame* frame) {
 	}
 
 	// Check for pending signals if returning to user mode (Ring > 0)
-	if ((frame->hw_cs & 3) != 0) { // returning to Ring > 0
-		check_and_deliver_signals(frame);
+	if ((active_frame->hw_cs & 3) != 0) { // returning to Ring > 0
+		check_and_deliver_signals(active_frame);
 	}
+	#if _MCCA == 0x8632
+	*frame = frame_copy;
+	#endif
 }
 #elif (_MCCA & 0xFF00) == 0x1000
 
@@ -157,11 +166,11 @@ static inline bool FrameFromUser(const HardwareInterruptFrame* frame) {
 }
 
 static inline stduint FrameSavedEsp(const HardwareInterruptFrame* frame) {
-	return FrameFromUser(frame) ? frame->hw_esp : frame->pg_esp_old;
+	return frame->hw_esp;
 }
 
 static inline stduint FrameSavedSs(const HardwareInterruptFrame* frame) {
-	return FrameFromUser(frame) ? frame->hw_ss : frame->pg_ss;
+	return frame->hw_ss;
 }
 
 static void LogSelectorFaultContext(rostr name, HardwareInterruptFrame* frame, stduint para) {
@@ -174,7 +183,7 @@ static void LogSelectorFaultContext(rostr name, HardwareInterruptFrame* frame, s
 	printlog(_LOG_FATAL,
 		"%s with 0x%[x] on CPU%u, TID%u at EIP=0x%[x] ESP=0x%[x] CS=0x%[x] SS=0x%[x] CR3=0x%[x] "
 		"(idx=0x%[x] %s %s ext=%u) [R3SCR] hits=%u lapic=%u core=%u",
-		name, para, cpu, tid, frame->hw_eip, FrameSavedEsp(frame), frame->hw_cs, FrameSavedSs(frame), frame->pg_cr3,
+		name, para, cpu, tid, frame->hw_eip, FrameSavedEsp(frame), frame->hw_cs, FrameSavedSs(frame), frame->cr3,
 		sel_index, sel_idt ? "IDT" : (sel_ti ? "LDT" : "GDT"), sel_idt ? "vector" : "selector", sel_ext,
 		ap_ring3_iret_guard_hits, ap_ring3_iret_last_lapicid, ap_ring3_iret_last_coreid);
 }
@@ -190,7 +199,7 @@ bool exception_handler_user(HardwareInterruptFrame* frame, stduint iden, stduint
 		plogwarn("User exception %d (para %[x]) at RIP %[x], RSP %[x], CR2 %[x]", (int)iden, para, frame->hw_rip, frame->hw_rsp, getCR2());
 		#else
 		plogwarn("User exception %d (para %[x]) on CPU%u, TID%u at EIP %[x], ESP %[x], CR3 %[x]",
-			(int)iden, para, Taskman::getID(), Taskman::CurrentTID(), frame->hw_eip, FrameSavedEsp(frame), frame->pg_cr3);
+			(int)iden, para, Taskman::getID(), Taskman::CurrentTID(), frame->hw_eip, FrameSavedEsp(frame), frame->cr3);
 		#endif
 	}
 	int sig = 0;
@@ -246,7 +255,7 @@ bool exception_handler_user(HardwareInterruptFrame* frame, stduint iden, stduint
 		if (pb) {
 			#if _MCCA == 0x8632
 			plogwarn("Page fault context: pid=%u eip=0x%[x] esp=0x%[x] cs=0x%[x] cr3=0x%[x] heap=[0x%[x],0x%[x]) vmas=%u",
-				pb->pid, frame->hw_eip, FrameSavedEsp(frame), frame->hw_cs, frame->pg_cr3,
+				pb->pid, frame->hw_eip, FrameSavedEsp(frame), frame->hw_cs, frame->cr3,
 				pb->heapbtm, pb->heaptop, pb->vmas.Count());
 			#else
 			plogwarn("Page fault context");
@@ -285,7 +294,11 @@ __attribute__((target("general-regs-only"), optimize("O0")))
 void exception_handler(HardwareInterruptFrame* frame) {
 	stduint iden = frame->interrupt_id;
 	stduint para = frame->error_code;
-	stduint r15 = frame->pg_cr3;
+	#if _MCCA == 0x8632
+	stduint r15 = frame->cr3;
+	#else
+	stduint r15 = getCR3();
+	#endif
 	const bool have_para = (iden == 8 || (iden >= 10 && iden <= 14) || iden == 17 || iden == 21);
 
 	// Check if exception comes from user space (Ring 3)

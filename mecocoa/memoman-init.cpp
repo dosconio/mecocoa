@@ -286,7 +286,10 @@ bool Memory::initialize(stduint eax, byte* ebx) {
 		p_ext = (byte*)(_IMM(&FILE_ENDO) + 0x1000);
 		p_ext = (byte*)floorAlign(0x1000, _IMM(p_ext));
 	}
-	acpi_rsdp_addr = find_rsdp_bios();
+	if (eax == MULTIBOOT2_BOOTLOADER_MAGIC) { parse_grub(_IMM(ebx)); }
+	if (!acpi_rsdp_addr) {
+		acpi_rsdp_addr = find_rsdp_bios();
+	}
 	if (acpi_rsdp_addr) {
 		auto rsdp = reinterpret_cast<const uni::ACPI::RSDP*>(acpi_rsdp_addr);
 		acpi_madt_addr = find_madt_from_rsdt(rsdp->rsdt_address);
@@ -306,7 +309,6 @@ bool Memory::initialize(stduint eax, byte* ebx) {
 	else {
 		plogwarn("[ACPI] RSDP not found via BIOS scan");
 	}
-	if (eax == MULTIBOOT2_BOOTLOADER_MAGIC) { parse_grub(_IMM(ebx)); }
 	_physical_allocate = Memory::physical_allocate;
 	mecocoa_global->kernel_cr3 = 0x100000;
 	MemSet(kernel_paging.root_level_page = (PageEntry*)0x100000, 0, 0x1000);// kernel_paging.Reset();
@@ -444,26 +446,32 @@ static stduint parse_grub(stduint addr)
 	stduint count = 0;
 	stduint size = *(uint32*)addr;
 	multiboot_tag* tag = (multiboot_tag*)(addr + 8);
+	multiboot_tag_mmap* mtag = nullptr;
 	while (tag->type != MULTIBOOT_TAG_TYPE_END)
 	{
-		if (tag->type == MULTIBOOT_TAG_TYPE_MMAP)
-			break;
+		if (tag->type == MULTIBOOT_TAG_TYPE_MMAP) {
+			mtag = (multiboot_tag_mmap*)tag;
+		}
+		else if (tag->type == MULTIBOOT_TAG_TYPE_ACPI_OLD || tag->type == MULTIBOOT_TAG_TYPE_ACPI_NEW) {
+			acpi_rsdp_addr = (stduint)tag + 8;
+		}
 		tag = (multiboot_tag*)(_IMM(tag) + ((tag->size + 7) & ~7));
 	}
-	//
-	multiboot_tag_mmap* mtag = (multiboot_tag_mmap*)tag;
-	multiboot_mmap_entry* entry = mtag->entries;
-	while ((u32)entry < (u32)tag + tag->size)
-	{
-		// outsfmt("[Memoman] base 0x%[x]..0x%[x] : %d\n\r", (u32)entry->addr, (u32)entry->addr + (u32)entry->len, (u32)entry->type);
-		count++;
-		if (entry->type == MULTIBOOT_MEMORY_AVAILABLE && entry->len > 0)
+	
+	if (mtag) {
+		multiboot_mmap_entry* entry = mtag->entries;
+		while ((u32)entry < (u32)mtag + mtag->size)
 		{
-			stduint beg = vaultAlign(0x1000, entry->addr) >> 12;
-			stduint end = floorAlign(0x1000, entry->addr + entry->len) >> 12;
-			Memory::pagebmap->add_range(beg, end, true);
+			// outsfmt("[Memoman] base 0x%[x]..0x%[x] : %d\n\r", (u32)entry->addr, (u32)entry->addr + (u32)entry->len, (u32)entry->type);
+			count++;
+			if (entry->type == MULTIBOOT_MEMORY_AVAILABLE && entry->len > 0)
+			{
+				stduint beg = vaultAlign(0x1000, entry->addr) >> 12;
+				stduint end = floorAlign(0x1000, entry->addr + entry->len) >> 12;
+				Memory::pagebmap->add_range(beg, end, true);
+			}
+			cast<stduint>(entry) += mtag->entry_size;
 		}
-		cast<stduint>(entry) += mtag->entry_size;
 	}
 	return count;
 }

@@ -48,25 +48,20 @@ void Syscall::Initialize() {
 __attribute__((optimize("O0")))
 stduint syscall(syscall_t callid, stduint para1, stduint para2, stduint para3) {
 	stduint ret;
-	#if   _MCCA == 0x8632
-	__asm("mov  %0, %%ebx" : : "m"(para3));
-	__asm("mov  %0, %%edx" : : "m"(para2));
-	__asm("mov  %0, %%ecx" : : "m"(para1));
-	__asm("mov  %0, %%eax" : : "m"(callid));
-	CallFar(0, SegCall);
-	__asm("mov  %%eax, %0" : "=m"(ret));
-	#elif _MCCA == 0x8664
+	#if   (_MCCA & 0xFF00) == 0x8600
 	auto pb = Taskman::CurrentPB();
 	auto old_dir = pb->paging_redirect;
 	pb->paging_redirect = &kernel_paging;
+	#if   (_MCCA & 0xFF00) == 0x8600
 	if (_IMM(callid) >= numsof(SYSCALL_TABLE)) {
 		plogerro("syscall: callid out of range: %u", callid);
 		loop HALT();
 	}
 	ret = reinterpret_cast<stdsint(*)(stduint, stduint, stduint)>(SYSCALL_TABLE[_IMM(callid)])(para1, para2, para3);
+	#endif
 	pb->paging_redirect = 0;// old_dir;
 	// if (old_dir) ploginfo(">>> %x", old_dir);
-	return ret;
+
 	#elif (_MCCA & 0xFF00) == 0x1000
 	void syscall_body(NormalTaskContext * cxt);
 	auto th = Taskman::CurrentTB();
@@ -773,6 +768,23 @@ void syscall_body(NormalTaskContext* cxt)
 #if (_MCCA & 0xFF00) == 0x8600
 extern "C" void check_and_deliver_signals_syscall(CallgateFrame* frame);
 
+#if _MCCA == 0x8632
+static_assert(sizeof(CallgateFrame) == 20 * sizeof(stduint), "x86 CallgateFrame size mismatch");
+static_assert(offsetof(CallgateFrame, di) == 0 * sizeof(stduint), "x86 CallgateFrame.di offset mismatch");
+static_assert(offsetof(CallgateFrame, si) == 1 * sizeof(stduint), "x86 CallgateFrame.si offset mismatch");
+static_assert(offsetof(CallgateFrame, bp) == 2 * sizeof(stduint), "x86 CallgateFrame.bp offset mismatch");
+static_assert(offsetof(CallgateFrame, sp) == 3 * sizeof(stduint), "x86 CallgateFrame.sp offset mismatch");
+static_assert(offsetof(CallgateFrame, bx) == 4 * sizeof(stduint), "x86 CallgateFrame.bx offset mismatch");
+static_assert(offsetof(CallgateFrame, dx) == 5 * sizeof(stduint), "x86 CallgateFrame.dx offset mismatch");
+static_assert(offsetof(CallgateFrame, cx) == 6 * sizeof(stduint), "x86 CallgateFrame.cx offset mismatch");
+static_assert(offsetof(CallgateFrame, ax) == 7 * sizeof(stduint), "x86 CallgateFrame.ax offset mismatch");
+static_assert(offsetof(CallgateFrame, flags) == 8 * sizeof(stduint), "x86 CallgateFrame.flags offset mismatch");
+static_assert(offsetof(CallgateFrame, ip) == 9 * sizeof(stduint), "x86 CallgateFrame.ip offset mismatch");
+static_assert(offsetof(CallgateFrame, cs) == 10 * sizeof(stduint), "x86 CallgateFrame.cs offset mismatch");
+static_assert(offsetof(CallgateFrame, sp0) == 11 * sizeof(stduint), "x86 CallgateFrame.sp0 offset mismatch");
+static_assert(offsetof(CallgateFrame, ss0) == 12 * sizeof(stduint), "x86 CallgateFrame.ss0 offset mismatch");
+#endif
+
 __attribute__((optimize("O0")))
 stduint Handint_SYSCALL(CallgateFrame* frame) {
 	auto crt_th = Taskman::CurrentTB();
@@ -789,13 +801,15 @@ stduint Handint_SYSCALL(CallgateFrame* frame) {
 		}
 		#endif
 	}
-	#if _MCCA == 0x8632
-	auto callid = (syscall_t)frame->ax;
-	stduint para[4] = { frame->cx, frame->dx, frame->bx };
-	#elif _MCCA == 0x8664
 	auto pb = Taskman::CurrentPB();
 	pb->paging_redirect = 0;
-	if (&pb->paging != &kernel_paging) frame = (CallgateFrame*)(pb->paging[_IMM(frame)]);
+	#if _MCCA == 0x8632
+	CallgateFrame frame_copy = *frame;
+	CallgateFrame* active_frame = &frame_copy;
+	auto callid = (syscall_t)active_frame->ax;
+	stduint para[4] = { active_frame->cx, active_frame->dx, active_frame->bx };
+	#elif _MCCA == 0x8664
+	// frame is now always on the real kernel stack, no need to translate it via user page table
 	auto callid = (syscall_t)(frame->ax & 0x7FFFFFFFu);
 	stduint para[4] = { frame->di, frame->si, frame->dx };
 	#endif
@@ -805,8 +819,20 @@ stduint Handint_SYSCALL(CallgateFrame* frame) {
 		ret_val = (reinterpret_cast<stdsint(*)(stduint, stduint, stduint)>mglb(SYSCALL_TABLE[_IMM(callid)]))(para[0], para[1], para[2]);
 	}
 	else switch (callid) {
-	case syscall_t::FORK: ret_val = sysx_FORK(frame); break;
-	case syscall_t::SIGR: ret_val = sysc_SIGR(frame); break;
+	case syscall_t::FORK:
+		#if _MCCA == 0x8632
+		ret_val = sysx_FORK(active_frame);
+		#else
+		ret_val = sysx_FORK(frame);
+		#endif
+		break;
+	case syscall_t::SIGR:
+		#if _MCCA == 0x8632
+		ret_val = sysc_SIGR(active_frame);
+		#else
+		ret_val = sysc_SIGR(frame);
+		#endif
+		break;
 	case syscall_t::TEST: ret_val = sysc_TEST(para[0], para[1], para[2]); break;
 	
 	default:
@@ -814,8 +840,34 @@ stduint Handint_SYSCALL(CallgateFrame* frame) {
 		break;
 	}
 
+	#if _MCCA == 0x8632
+	// Is these useful?
+	if (callid == syscall_t::EXET && ret_val == 0) {
+		auto th = crt_th ? crt_th : Taskman::CurrentTB();
+
+		if (th) {
+			active_frame->ip = th->context.IP;
+			active_frame->sp0 = th->context.SP;
+			active_frame->cs = th->context.CS;
+			active_frame->ss0 = th->context.SS;
+			active_frame->flags = th->context.FLAG | 0x200;
+
+			active_frame->cr3 = th->context.CR3;
+
+			active_frame->ds = th->context.DS;
+			active_frame->es = th->context.ES;
+			active_frame->fs = th->context.FS;
+			active_frame->gs = th->context.GS;
+		}
+	}
+
+	active_frame->ax = ret_val;
+	check_and_deliver_signals_syscall(active_frame);
+	*frame = frame_copy;
+	#else
 	frame->ax = ret_val;
 	check_and_deliver_signals_syscall(frame);
+	#endif
 	if (crt_th && !was_pinned) {
 		crt_th->ring_coreid = CORE_ID_INVALID;
 	}

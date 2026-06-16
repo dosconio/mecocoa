@@ -11,6 +11,12 @@
 
 #if (_MCCA & 0xFF00) == 0x8600
 PERCORE* Taskman::PCU_CORES_PERCORE[PCU_CORES_MAX] = {};
+
+extern "C" PERCORE* C_PCU_CORES_PERCORE[PCU_CORES_MAX]; // exported for assembly use
+PERCORE* C_PCU_CORES_PERCORE[PCU_CORES_MAX] = {};       // exported for assembly use
+extern "C" uint32 C_SegTSS0;                            // exported for assembly use
+uint32 C_SegTSS0 = SegTSS0;
+
 uint32 g_lapicid_to_coreid[LAPIC_ID_MAP_SIZE] = {};
 #if _MCCA == 0x8632
 uint32 ap_lapicid_to_coreid[LAPIC_ID_MAP_SIZE] = {};
@@ -51,45 +57,6 @@ static void ReleaseSchedulerLockForSwitch() {
 	__atomic_store_n(&scheduler_lock.locked, 0, __ATOMIC_RELEASE);
 }
 
-#if   _MCCA == 0x8632
-#define _NORMAL_RINGSTACK 0xFFC01000ull
-#elif _MCCA == 0x8664
-#define _NORMAL_RINGSTACK 0xFFFFFFFFC0001000ull
-#endif
-
-#if (_MCCA & 0xFF00) == 0x8600
-static void RebindThreadKernelStackWindow(ThreadBlock* th) {
-	if (!th || !th->parent_process || !th->stack_levladdr || !th->stack_size) return;
-	stduint cpuid = Taskman::getID();
-	stduint core_stack_base = GetCoreRingStackBase(cpuid);
-
-	auto remap_stack_window = [&](Paging& pg) {
-		pg.Map(
-			core_stack_base,
-			_IMM(th->stack_levladdr),
-			th->stack_size,
-			PAGESIZE_4KB,
-			PGPROP_present | PGPROP_writable
-		);
-	};
-
-	// The currently active CR3 still needs this fixed VA window to point at the
-	// incoming thread's ring0 stack because SwitchTaskContext restores the new
-	// kernel continuation before it switches CR3.
-	remap_stack_window(kernel_paging);
-	remap_stack_window(th->parent_process->paging);
-	Paging active_pg = {};
-	active_pg.root_level_page = (PageEntry*)getCR3();
-	if (active_pg.root_level_page != kernel_paging.root_level_page &&
-		active_pg.root_level_page != th->parent_process->paging.root_level_page) {
-		remap_stack_window(active_pg);
-	}
-
-	for (stduint off = 0; off < th->stack_size; off += 0x1000) {
-		RefreshVirtualAddress(core_stack_base + off);
-	}
-}
-#endif
 
 #if _MCCA == 0x8632
 static void BindCurrentKernelEntryStack(ThreadBlock* th, stduint cpuid) {
@@ -97,13 +64,9 @@ static void BindCurrentKernelEntryStack(ThreadBlock* th, stduint cpuid) {
 	auto percore = Taskman::PCU_CORES_PERCORE[cpuid];
 	if (!percore) return;
 	if (!th->stack_levladdr || !th->stack_size) return;
-	// 8632 enters ring0 through the fixed high virtual stack window. The
-	// per-thread ring0 stack backing changes, but ESP0 must keep pointing at
-	// the remapped window top rather than the backing allocation itself.
-	RebindThreadKernelStackWindow(th);
 	percore->current_thread = th;
-	percore->kernel_stack = GetCoreRingStackBase(cpuid) + th->stack_size - 0x10;
-	percore->tss.ESP0 = percore->kernel_stack;
+	percore->kernel_stack = _IMM(th->stack_levladdr) + th->stack_size - 0x10;
+	percore->tss.ESP0 = GetCoreTransitionStackTop(cpuid);
 	percore->tss.SS0 = SegData;
 }
 
@@ -236,14 +199,22 @@ extern "C" void AP_Main(stduint core_id) {
 	loop HALT();
 }
 #elif _MCCA == 0x8664
+extern "C" void* higher_stacks[];
 static void BindCurrentKernelEntryStack(ThreadBlock* th, stduint cpuid) {
 	if (!th) return;
 	auto percore = Taskman::PCU_CORES_PERCORE[cpuid];
 	if (!percore) return;
-	RebindThreadKernelStackWindow(th);
 	percore->current_thread = th;
-	percore->kernel_rsp = GetCoreRingStackBase(cpuid) + th->stack_size;
+	// Transition stack (jump board) used for ring3 entry and SYSRET
+	percore->kernel_rsp = 0xFFFFFFFFFFFFF000ull - cpuid * 0x1000ull + 0x1000 - 0x10;
 	percore->tss.RSP0 = percore->kernel_rsp;
+	
+	// Real kernel stack for the thread
+	if (th->stack_levladdr && th->stack_size) {
+		percore->kernel_stack = _IMM(th->stack_levladdr) + th->stack_size - 0x10;
+	} else {
+		percore->kernel_stack = percore->kernel_rsp;
+	}
 	if (!percore->current_thread) {
 		printlog(_LOG_FATAL, "x64 sched assert: null current_thread on CPU%u", cpuid);
 	}
@@ -700,8 +671,6 @@ auto Taskman::Schedule(bool omit_slice)->decltype(Schedule()) { }
 void Taskman::SleepAndRelease(Spinlock* lk) {
 	stduint cpuid = getID();
 	auto old_tb = current_thread(cpuid);
-	ploginfo("[LOCK-PROBE] SleepAndRelease tid=%u cpu=%u spin=%[x]",
-		old_tb ? old_tb->tid : (stduint)~0, cpuid, _IMM(lk));
 	bool old_if = scheduler_lock.Acquire();
 	SettleSwitchingOutThread(cpuid);
 	DequeueReady(old_tb, false);

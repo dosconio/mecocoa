@@ -31,6 +31,7 @@ stduint Taskman::getID() {
 	return 0;
 }
 
+
 static void HandleRescheduleIPI() {
 	IC.SendEOI();
 }
@@ -146,8 +147,6 @@ void Mutex::Acquire() {
 	if (this->locked) {
 		ThreadBlock* crt = Taskman::CurrentTB();
 		if (!this->wait_queue.isFull()) {
-			plogerro("[LOCK-PROBE] Mutex wait tid=%u mutex=%[x] guard=%[x] reason=locked",
-				crt ? crt->tid : (stduint)~0, _IMM(this), _IMM(&this->guard));
 			crt->state = ThreadBlock::State::Pended;
 			crt->block_reason = ThreadBlock::BlockReason::BR_Lock;
 			this->wait_queue.Enqueue(crt);
@@ -409,6 +408,46 @@ ProcessBlock* ProcessBlock::AcquireActiveByPID(stduint pid) {
 }
 
 extern void free_async_msg(pureptr_t ptr);
+
+#if (_MCCA & 0xFF00) == 0x8600
+static bool Taskman_VerifyKernelStackWindow(ThreadBlock* th) {
+	#if _MCCA == 0x8632
+	if (!th || !th->stack_levladdr || !th->stack_size) return false;
+	for (stduint off = 0; off < th->stack_size; off += 0x1000) {
+		stduint addr = _IMM(th->stack_levladdr) + off;
+		if (_IMM(kernel_paging[addr]) != addr) return false;
+	}
+	return true;
+	#else
+	(void)th;
+	return true;
+	#endif
+}
+
+void Taskman_RegisterKernelStackWindow(ThreadBlock* th) {
+	#if _MCCA == 0x8632
+	if (!th || !th->stack_levladdr || !th->stack_size) return;
+	// x8632 kernel_paging already identity-maps the low physical range that
+	// currently backs kernel stacks. Do not remap a 4KB subrange here: the
+	// existing low window is built from huge pages.
+	if (!Taskman_VerifyKernelStackWindow(th)) {
+		plogerro("Taskman:RegisterKernelStackWindow: stack window not visible in kernel_paging (tid=%u, stack=%[x], size=%[x])",
+			th->tid, th->stack_levladdr, th->stack_size);
+	}
+	#else
+	(void)th;
+	#endif
+}
+
+void Taskman_UnregisterKernelStackWindow(ThreadBlock* th) {
+	#if _MCCA == 0x8632
+	(void)th;
+	#else
+	(void)th;
+	#endif
+}
+#endif
+
 auto Taskman::AllocateThread() -> ThreadBlock* {
 	auto tb = (ThreadBlock*)mempool.allocate(sizeof(ThreadBlock), 4);
 	if (!tb) {
@@ -448,6 +487,9 @@ void Taskman::DestroyThread(ThreadBlock* th) {
 		Taskman::DequeueReady(th, false);
 		Taskman::thchain.Remove(th);
 	}
+	#if (_MCCA & 0xFF00) == 0x8600
+	Taskman_UnregisterKernelStackWindow(th);
+	#endif
 	if (th->stack_lineaddr == th->stack_levladdr) {
 		free((byte*)th->stack_levladdr);
 	}

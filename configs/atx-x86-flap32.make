@@ -24,7 +24,7 @@ CXF1=-m32 -mno-red-zone -mno-sse -mno-sse2 -mno-sse3 -mno-ssse3 -mno-sse4
 CXF2=-ffreestanding -fno-omit-frame-pointer -fno-stack-protector -fno-pic -fno-exceptions -fno-unwind-tables -fno-builtin -fno-strict-aliasing -ffunction-sections -fdata-sections
 CXF=$(CXF1) $(CXF2) -fno-rtti -fno-use-cxa-atexit -static -nostdlib 
 CXW=-Wno-builtin-declaration-mismatch -Wno-volatile -Wno-multichar
-CX=g++ -I$(uincpath) -c $(flag) $(CXF) $(CXW) -std=c++2a
+CX=g++ -I$(uincpath) -Idepends/freetype/x86/include -c $(flag) $(CXF) $(CXW) -std=c++2a
 
 ker_mod=$(uobjpath)/mcca-$(arch)/*.o
 
@@ -168,7 +168,7 @@ qemu_args=-smp 4,cores=2,threads=2 \
 	-boot order=a -m 1G\
 	-drive file=$(ubinpath)/fixed2.vhd,format=vpc,if=none,id=disk0 \
 	-device ide-hd,drive=disk0,bus=ide.0,unit=0 \
-	-serial stdio \
+	-serial stdio\
 
 #	-drive file=$(ubinpath)/fixed2.vhd,format=vpc,if=none,id=disk1 \
 #	-device ide-hd,drive=disk1,bus=ide.0,unit=1 \

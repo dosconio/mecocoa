@@ -146,18 +146,40 @@ tryUD:
 ; Mecocoa ABI:  RAX=syscall#, RDI=p1, RSI=p2, RDX=p3
 GLOBAL Handint_SYSCALL_Entry
 EXTERN Handint_SYSCALL
+ROOT_PAGING EQU 0xFFFFFFFFC0000508
 Handint_SYSCALL_Entry:
-	; x64 SYSCALL does not switch stacks for us.
-	; SWAPGS gives access to the per-CPU PERCORE block:
-	;   GS:128 -> PERCORE.kernel_rsp
-	;   GS:136 -> PERCORE.scratch
 	SWAPGS
 
 	MOV [GS:136], RSP ; Save user RSP to PERCORE.scratch
-	MOV RSP, [GS:128] ; Load kernel RSP from PERCORE.kernel_rsp
+	MOV RSP, [GS:128] ; Load jump board stack from PERCORE.kernel_rsp
 
-	; Build a syscall frame on the current thread's kernel entry stack.
-	; The C handler treats this like a synthetic interrupt frame.
+	; Phase A: Switch CR3 and jump to real kernel stack
+	PUSH R12 ; Save R12 on transition stack
+	MOV R12, CR3
+	MOV [GS:144], R12 ; Save user CR3 to PERCORE.user_cr3
+
+	; Switch to unified kernel page table if needed.
+	; R12 = current/user CR3.
+	PUSH R11 ; Save original RFLAGS
+	MOV R11, ROOT_PAGING
+	MOV R11, [R11] ; R11 = kernel CR3
+	CMP R12, R11
+	JE SYSCALL_SKIP_KERNEL_CR3
+	MOV CR3, R11
+SYSCALL_SKIP_KERNEL_CR3:
+	POP R11 ; Restore RFLAGS
+	
+	; Switch RSP to the real kernel stack
+	MOV RSP, [GS:392] ; PERCORE.kernel_stack
+	
+	; [FIX] Save user CR3 on the real kernel stack to survive context switches
+	PUSH QWORD [GS:144]
+	
+	; Restore R12
+	MOV R12, [GS:128]
+	MOV R12, [R12 - 8]
+
+	; Build a syscall frame on the current thread's real kernel stack
 	PUSH QWORD [GS:136] ; push user RSP as sp0
 	PUSH RAX
 	PUSH R15
@@ -178,7 +200,7 @@ Handint_SYSCALL_Entry:
 	MOV RBP, RSP
 	AND RSP, 0xFFFFFFFFFFFFFFF0
 
-	; Save volatile registers around PG_PUSH
+	; Save volatile registers
 	PUSH RBP
 	PUSH RDI
 	PUSH RSI
@@ -187,31 +209,14 @@ Handint_SYSCALL_Entry:
 	PUSH R8
 	PUSH R9
 	PUSH RAX
-	CALL PG_PUSH
-		POP R12
-		POP R11
-	POP  RAX
-	POP  R9
-	POP  R8
-	POP  R10
-	POP  RDX
-	POP  RSI
-	POP  RDI
-	POP  RBP
-	PUSH R11
-	PUSH R12
 
 	; Dispatch to C handler
 	MOV  RDI, RBP
 	MOV  RCX, R10
 	CALL Handint_SYSCALL
-	MOV  R12, RAX
-
-	; Restore CR3
-	CALL PG_POP
+	MOV  R10, RAX ; Save return value into R10 (safe across SYSRET)
 
 	MOV  RSP, RBP
-	MOV  RAX, R12
 
 	; Restore context
 	POP  RCX ; user RIP
@@ -222,15 +227,36 @@ Handint_SYSCALL_Entry:
 	POP  RDI
 	POP  R8
 	POP  R9
-	POP  R10
+	ADD  RSP, 8 ; Skip R10 slot, we already saved it
 	POP  R11 ; user RFLAGS
 	POP  R12
 	POP  R13
 	POP  R14
 	POP  R15
 	ADD  RSP, 8 ; Skip RAX slot
-	POP  RSP ; Restore user RSP
-
+	
+	; Now stack has: user RSP
+	POP R8 ; R8 = user RSP
+	
+	; [FIX] Pop user CR3 from the real kernel stack
+	POP R9 ; R9 = user CR3
+	
+	; Switch to transition stack for return
+	MOV RSP, [GS:128]
+	
+	; Restore user CR3 if needed.
+	; R9 = user CR3.
+	MOV RAX, CR3
+	CMP RAX, R9
+	JE SYSCALL_SKIP_USER_CR3
+	MOV CR3, R9
+SYSCALL_SKIP_USER_CR3:
+	; Restore RAX (return value)
+	MOV RAX, R10
+	
+	; Restore user RSP
+	MOV RSP, R8
+	
 	; Return to the user-side GS state before SYSRET.
 	SWAPGS
 O64 SYSRET
@@ -240,24 +266,111 @@ EXTERN interrupt_dispatcher
 
 GLOBAL Handint_Common_Stub_64
 Handint_Common_Stub_64:
-	; Interrupt/exception gates from Ring 3 must pair with the SYSCALL path.
-	; We enter the kernel with the kernel-side GS state and restore the
-	; user-side GS state again before IRETQ back to Ring 3.
 	TEST QWORD [RSP + 24], 3 ; From Ring 3?
-	JZ .entry_gs_ready
+	JZ IRQ64_FROM_RING0
+	
+	; From Ring 3
 	SWAPGS
-.entry_gs_ready:
+	
+	; Save RAX so we can use it as a pointer to the transition stack
+	MOV [GS:136], RAX 
+	
+	; Save current/user CR3
+	MOV RAX, CR3
+	MOV [GS:144], RAX
+	; Switch CR3 to unified kernel CR3 if needed.
+	MOV RAX, ROOT_PAGING
+	MOV RAX, [RAX] ; RAX = kernel CR3
+	CMP [GS:144], RAX
+	JE IRQ64_SKIP_KERNEL_CR3
+
+	MOV CR3, RAX
+
+IRQ64_SKIP_KERNEL_CR3:
+	
+	; RSP points to the 7 words pushed by CPU/stub on the transition stack.
+	MOV RAX, RSP 
+	
+	; Switch RSP to the real kernel stack
+	MOV RSP, [GS:392]
+	
+	; Copy the 7 words from transition stack to real stack
+	PUSH QWORD [RAX + 48] ; SS
+	PUSH QWORD [RAX + 40] ; RSP
+	PUSH QWORD [RAX + 32] ; RFLAGS
+	PUSH QWORD [RAX + 24] ; CS
+	PUSH QWORD [RAX + 16] ; RIP
+	PUSH QWORD [RAX + 8]  ; ErrorCode
+	PUSH QWORD [RAX + 0]  ; IntNo
+	
+	; Restore RAX
+	MOV RAX, [GS:136]
+	JMP IRQ64_DO_PUSHA
+
+IRQ64_FROM_RING0:
+	; From Ring 0: already on the correct real kernel stack and CR3.
+
+IRQ64_DO_PUSHA:
 	PUSHA64
-	CALL PG_PUSH
-	MOV RDI, RSP ; Pass HardwareInterruptFrame* as the first and only argument (System V ABI convention)
+	MOV RDI, RSP ; Pass HardwareInterruptFrame*
+	
+	; Align stack to 16 bytes (System V ABI)
+	MOV RAX, RSP
+	AND RSP, -16
+	SUB RSP, 8
+	PUSH RAX
+	
 	CALL interrupt_dispatcher
-	CALL PG_POP
+	
+	POP RSP
 	POPA64
-	TEST QWORD [RSP + 24], 3 ; Return to Ring 3?
-	JZ .exit_gs_ready
+	
+	TEST QWORD [RSP + 24], 3 ; Returning to Ring 3?
+	JZ IRQ64_EXIT_RING0
+	
+	; Returning to Ring 3
+	MOV [GS:136], RAX ; Save RAX
+	
+	; Calculate transition stack address for the 7 words
+	MOV RAX, [GS:128]
+	SUB RAX, 56
+	
+	; Copy 7 words from real stack to transition stack
+	PUSH R11
+	MOV R11, [RSP + 8]  ; IntNo
+	MOV [RAX + 0], R11
+	MOV R11, [RSP + 16] ; ErrorCode
+	MOV [RAX + 8], R11
+	MOV R11, [RSP + 24] ; RIP
+	MOV [RAX + 16], R11
+	MOV R11, [RSP + 32] ; CS
+	MOV [RAX + 24], R11
+	MOV R11, [RSP + 40] ; RFLAGS
+	MOV [RAX + 32], R11
+	MOV R11, [RSP + 48] ; RSP
+	MOV [RAX + 40], R11
+	MOV R11, [RSP + 56] ; SS
+	MOV [RAX + 48], R11
+	POP R11
+	
+	; Switch RSP to transition stack
+	MOV RSP, RAX
+	
+	; Restore user CR3 if needed.
+	MOV RAX, CR3
+	CMP RAX, [GS:144]
+	JE IRQ64_SKIP_USER_CR3
+
+	MOV RAX, [GS:144]
+	MOV CR3, RAX
+
+IRQ64_SKIP_USER_CR3:
+	; Restore RAX
+	MOV RAX, [GS:136]
 	SWAPGS
-.exit_gs_ready:
-	ADD RSP, 16; Pop Vector ID and Error Code
+
+IRQ64_EXIT_RING0:
+	ADD RSP, 16 ; Skip IntNo and ErrorCode
 	IRETQ
 
 %macro IRQ_TRAMPOLINE_64 2

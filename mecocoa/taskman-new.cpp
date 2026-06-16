@@ -17,6 +17,9 @@ extern "C" {
 	void* ring3_iret_stacks[PCU_CORES_MAX] = {};
 }
 #endif
+#if (_MCCA & 0xFF00) == 0x8600
+extern void Taskman_RegisterKernelStackWindow(ThreadBlock* th);
+#endif
 
 struct AuxVector {
 	stduint type;
@@ -151,12 +154,6 @@ static int ProcCmp(pureptr_t a, pureptr_t b) {
 	treat<ProcessBlock>(((Dnode*)b)->offs).pid;
 }
 
-#if   _MCCA == 0x8632
-#define _NORMAL_RINGSTACK         0xFFC01000ull
-#elif _MCCA == 0x8664
-#define _NORMAL_RINGSTACK 0xFFFFFFFFC0001000ull
-#endif
-
 static void _Mapping_Core_Stack(Paging& paging) {
 	#if _MCCA == 0x8632
 	for0(cpu_i, PCU_CORES_MAX) {
@@ -167,7 +164,7 @@ static void _Mapping_Core_Stack(Paging& paging) {
 
 	#elif _MCCA == 0x8664
 	//{TODO} Map more cores, cpu1 at 0x0000FFFFFFFF8000ull...
-	paging.Map(0x0000FFFFFFFFF000ull, _IMM(higher_stacks[0]), 0x1000, PAGESIZE_4KB, PGPROP_present | PGPROP_writable);// High Part
+	paging.Map(0xFFFFFFFFFFFFF000ull, _IMM(higher_stacks[0]), 0x1000, PAGESIZE_4KB, PGPROP_present | PGPROP_writable);// High Part
 
 	#elif (_MCCA & 0xFF00) == 0x1000
 	// M-MCCA need not map kernel
@@ -182,17 +179,6 @@ static stduint _Taskman_Create_Paging(ProcessBlock *ppb, byte ring, stduint stac
 		ppb->paging.Reset();
 		// stack
 		ppb->paging.Map(_IMM(ppb->main_thread->stack_lineaddr), (stack_norm), ppb->main_thread->stack_size, PAGESIZE_4KB, PGPROP_present | PGPROP_writable | PGPROP_user_access);
-		for0(cpu_i, PCU_CORES_MAX) {
-			if (Taskman::PCU_CORES_PERCORE[cpu_i]) {
-				ppb->paging.Map(
-					GetCoreRingStackBase(cpu_i),
-					_IMM(ppb->main_thread->stack_levladdr),
-					ppb->main_thread->stack_size,
-					PAGESIZE_4KB,
-					PGPROP_present | PGPROP_writable
-				);
-			}
-		}
 		//
 		#if   _MCCA == 0x8632
 		ppb->paging.Map(0x80000000, 0x00000000, 0x04000000, PAGESIZE_4KB, PGPROP_present | PGPROP_writable);
@@ -242,6 +228,7 @@ static stduint _Taskman_Create_Paging(ProcessBlock *ppb, byte ring, stduint stac
 	return nil;
 }
 	extern stduint kernel_stack_top_cpu0[];
+	extern "C" PERCORE* C_PCU_CORES_PERCORE[]; // exported for assembly use
 	void Taskman::Initialize(stduint cpuid) {
 		#if (_MCCA & 0xFF00) == 0x8600
 		if (cpuid || PCU_CORES_PERCORE[0]) return; // already initialized
@@ -256,11 +243,22 @@ static stduint _Taskman_Create_Paging(ProcessBlock *ppb, byte ring, stduint stac
 			ap_lapicid_to_coreid[i] = CORE_ID_INVALID;
 			#endif
 		}
+
 		for0(i, PCU_CORES) {
 			auto percore = (PERCORE*)mem.allocate(sizeof(PERCORE), PAGESIZE_4KB);
 			MemSet(percore, 0, sizeof(PERCORE));
 			PCU_CORES_PERCORE[i] = percore;
+			C_PCU_CORES_PERCORE[i] = percore;
 			higher_stacks[i] = (mem.allocate(0x1000, PAGESIZE_4KB));
+			#if _MCCA == 0x8664
+			kernel_paging.Map(
+				PERCORE_VBASE + i * PERCORE_STRIDE,
+				_IMM(percore),
+				PERCORE_STRIDE,
+				PAGESIZE_4KB,
+				PGPROP_present | PGPROP_writable
+			);
+			#endif
 			#if _MCCA == 0x8632
 			ring3_iret_stacks[i] = (mem.allocate(0x1000, PAGESIZE_4KB));
 			ap_ring3_iret_stack_tops[i] = (0xFFFFF000u - i * 0x1000u) + 0x1000u - 0x10u;
@@ -292,11 +290,11 @@ static stduint _Taskman_Create_Paging(ProcessBlock *ppb, byte ring, stduint stac
 				mecocoa_global->gdt_ptr->tss.setRange(mglb(&PCU_CORES_PERCORE[i]->tss), sizeof(TSS_t) - 1);
 				#if _MCCA == 0x8632
 				const stduint stack_lev_top = GetCoreRingStackBase(i) + HIGHER_STACK_SIZE;
-				PCU_CORES_PERCORE[i]->tss.ESP0 = stack_lev_top - 0x10;
+				PCU_CORES_PERCORE[i]->tss.ESP0 = GetCoreTransitionStackTop(cpuid);
 				PCU_CORES_PERCORE[i]->tss.SS0 = SegData;
-				PCU_CORES_PERCORE[i]->tss.ESP1 = stack_lev_top - 0x10;
+				PCU_CORES_PERCORE[i]->tss.ESP1 = GetCoreTransitionStackTop(cpuid);
 				PCU_CORES_PERCORE[i]->tss.SS1 = 8 * 5 + 4 + 1;// 4:LDT 8*5:SS1 1:Ring1
-				PCU_CORES_PERCORE[i]->tss.ESP2 = stack_lev_top - 0x10;
+				PCU_CORES_PERCORE[i]->tss.ESP2 = GetCoreTransitionStackTop(cpuid);
 				PCU_CORES_PERCORE[i]->tss.SS2 = 8 * 6 + 4 + 2;// 4:LDT 8*6:SS2 2:Ring2
 				//
 				PCU_CORES_PERCORE[i]->tss.LDTDptr = SegGLDT + 3; // LDT yo GDT
@@ -311,10 +309,11 @@ static stduint _Taskman_Create_Paging(ProcessBlock *ppb, byte ring, stduint stac
 				descriptor_t* const GDT = (descriptor_t*)mecocoa_global->gdt_ptr;
 				word selector = GDT_Alloc();
 				Descriptor32Set(&GDT[selector / 8], mglb(&PCU_CORES_PERCORE[i]->tss), sizeof(TSS_t) - 1, _Dptr_TSS386_Available, 0, 0, 1, 0);
+				PCU_CORES_PERCORE[i]->tss.ESP0 = GetCoreTransitionStackTop(cpuid);
 				PCU_CORES_PERCORE[i]->tss.SS0 = SegData;
-				PCU_CORES_PERCORE[i]->tss.ESP1 = GetCoreRingStackBase(i) + HIGHER_STACK_SIZE - 0x10;
+				PCU_CORES_PERCORE[i]->tss.ESP1 = GetCoreTransitionStackTop(cpuid);
 				PCU_CORES_PERCORE[i]->tss.SS1 = 8 * 5 + 4 + 1;
-				PCU_CORES_PERCORE[i]->tss.ESP2 = GetCoreRingStackBase(i) + HIGHER_STACK_SIZE - 0x10;
+				PCU_CORES_PERCORE[i]->tss.ESP2 = GetCoreTransitionStackTop(cpuid);
 				PCU_CORES_PERCORE[i]->tss.SS2 = 8 * 6 + 4 + 2;
 				PCU_CORES_PERCORE[i]->tss.LDTDptr = SegGLDT + 3;
 				PCU_CORES_PERCORE[i]->tss.LDTLength = 8 * 8 - 1;
@@ -366,11 +365,12 @@ static stduint _Taskman_Create_Paging(ProcessBlock *ppb, byte ring, stduint stac
 	current_thread(cpuid) = kernel_thread;
 	#if _MCCA == 0x8664
 	PCU_CORES_PERCORE[cpuid]->current_thread = kernel_thread;
-	PCU_CORES_PERCORE[cpuid]->kernel_rsp = GetCoreRingStackBase(cpuid) + HIGHER_STACK_SIZE;
+	PCU_CORES_PERCORE[cpuid]->kernel_rsp = 0xFFFFFFFFFFFFF000ull - cpuid * 0x1000ull + 0x1000 - 0x10;
 	PCU_CORES_PERCORE[cpuid]->tss.RSP0 = PCU_CORES_PERCORE[cpuid]->kernel_rsp;
 	#elif _MCCA == 0x8632
 	if (PCU_CORES_PERCORE[cpuid]) {
 		PCU_CORES_PERCORE[cpuid]->current_thread = kernel_thread;
+		PCU_CORES_PERCORE[cpuid]->kernel_stack = _IMM(kernel_thread->stack_levladdr) + kernel_thread->stack_size - 0x10;
 	}
 	#endif
 	//
@@ -500,6 +500,9 @@ ProcessBlock* Taskman::Create(void* entry, byte ring, bool append)
 
 	tb->priority = (ring == RING_U) ? 3 : 0;
 	tb->time_slice = (ring == RING_U) ? 3 : 4;
+	#if (_MCCA & 0xFF00) == 0x8600
+	Taskman_RegisterKernelStackWindow(tb);
+	#endif
 	
 	if (append) {
 		Append(ppb);
@@ -535,6 +538,7 @@ static void _CreateELF_Carry(char* vaddr, stduint mem_length, BlockTrait* source
 		
 		if (_IMM(page_entry) == ~_IMM0 || !page_entry->isPresent()) {
 			phy = _IMM(mempool.allocate(0x1000, 12));
+			MemSet((void*)mglb(phy), 0, 0x1000);
 			pg.Map(v_start1, phy, 0x1000, PAGESIZE_4KB, PGPROP_present | PGPROP_writable | PGPROP_user_access);
 			page_entry = pg.getEntry(_IMM(v_start1));
 			if (_IMM(page_entry) == ~_IMM0 || !page_entry->isPresent()) {
@@ -678,6 +682,9 @@ ProcessBlock* Taskman::CreateELF(BlockTrait* source, byte ring) {
 
 	tb->priority = (ring == RING_U) ? 4 : 0;
 	tb->time_slice = (ring == RING_U) ? 3 : 4;
+	#if (_MCCA & 0xFF00) == 0x8600
+	Taskman_RegisterKernelStackWindow(tb);
+	#endif
 
 	return pb;
 	#endif
@@ -789,7 +796,6 @@ ProcessBlock* Taskman::CreateFork(ProcessBlock* fo, const CallgateFrame* frame) 
 	tb->context.GS = tb->context.ES;
 	
 	MemCopyP(tb->stack_lineaddr, pb->paging, target_fo_thread->stack_lineaddr, fo->paging, tb->stack_size);
-	MemCopyP(tb->stack_levladdr, kernel_paging, target_fo_thread->stack_levladdr, kernel_paging, tb->stack_size);
 
 	tb->context.AX = nil; // return from fork()
 	tb->context.CX = frame->cx;
@@ -814,6 +820,9 @@ ProcessBlock* Taskman::CreateFork(ProcessBlock* fo, const CallgateFrame* frame) 
 	tb->context.GPR[15] = frame->r15;
 	#endif
 	(tb->context.FLAG) |= 0x200;// IF
+	#if (_MCCA & 0xFF00) == 0x8600
+	Taskman_RegisterKernelStackWindow(tb);
+	#endif
 
 	// ---- File ---- //
 	{
@@ -829,6 +838,7 @@ ProcessBlock* Taskman::CreateFork(ProcessBlock* fo, const CallgateFrame* frame) 
 		}
 	}
 
+	// Taskman::DumpTask(pb);
 	Taskman::Append(pb);
 	Taskman::AppendThread(tb);
 

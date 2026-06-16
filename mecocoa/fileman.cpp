@@ -396,6 +396,7 @@ void serv_file_loop()// for IDE 0:0, 0:1
 	stduint to_args[8];// 8*4=32 bytes
 	stduint sig_type = 0, sig_src = 0;
 	stduint retval[1];
+	bool bootstrapped = false;
 	::ThreadBlock* tb;
 
 	while (true) {
@@ -403,6 +404,20 @@ void serv_file_loop()// for IDE 0:0, 0:1
 		{
 		case FilemanMsg::TEST:// (no-feedback)
 		{
+			if (bootstrapped) {
+				plogerro("Fileman TEST after bootstrapped: recv_ret=%d src=%u type=%u args=%[x] %[x] %[x] %[x]",
+					retval[0],
+					sig_src,
+					sig_type,
+					to_args[0],
+					to_args[1],
+					to_args[2],
+					to_args[3]);
+				plogerro(">>> %x", Taskman::LocateThread(sig_src)->parent_process->paging.root_level_page);
+				plogerro("Fileman: TEST message received after bootstrapped");
+				break;
+			}
+			bootstrapped = true;
 			// Init
 			#if (_MCCA & 0xFF00) == 0x8600
 			syssend(Task_Memdisk_Serv, &retval, sizeof(retval[0]), _IMM(FiledevMsg::RUPT));

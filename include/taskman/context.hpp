@@ -1,13 +1,6 @@
 #if (_MCCA & 0xFF00) == 0x8600
 #if _MCCA == 0x8632 // ----- x86 Architecture -----
 _PACKED(struct) HardwareInterruptFrame {
-	// 5 registers pushed by PG_PUSH (20 bytes)
-	stduint pg_ebp;
-	stduint pg_esp_old;
-	stduint pg_cr3;
-	stduint pg_ss;
-	stduint pg_ds;
-	
 	// 8 general registers pushed by PUSHAD (32 bytes)
 	stduint pusha_edi;
 	stduint pusha_esi;
@@ -28,14 +21,22 @@ _PACKED(struct) HardwareInterruptFrame {
 	stduint hw_eflags;
 	stduint hw_esp;
 	stduint hw_ss;
+
+	// New x86 metadata, replacing old PG_PUSH fields
+	stduint cr3;		// interrupted task CR3
+	stduint ds;
+	stduint es;
+	stduint fs;
+	stduint gs;
+	
+	// Internal return metadata.
+	// Used by assembly to copy back to the original transition frame.
+	stduint transition_frame;
+	stduint percore_ptr;
 };
 
 #elif _MCCA == 0x8664 // ----- x64 Architecture -----
 _PACKED(struct) HardwareInterruptFrame {
-	// 2 registers pushed by PG_PUSH (16 bytes)
-	uint64 pg_rsp;
-	uint64 pg_cr3;
-	
 	// Pop reversed, push ordered (RAX at high address, R15 at low address)
 	uint64 pusha_r15;
 	uint64 pusha_r14;

@@ -127,6 +127,16 @@ inline stduint GetCoreRingStackBase(stduint cpuid) {
 	return _NORMAL_RINGSTACK + cpuid * 0x10000ull;
 }
 
+#if _MCCA == 0x8632
+static inline stduint GetCoreTransitionStackBase(stduint cpuid) {
+	return 0xFFFFF000u - cpuid * 0x1000u;
+}
+
+static inline stduint GetCoreTransitionStackTop(stduint cpuid) {
+	return GetCoreTransitionStackBase(cpuid) + 0x1000u - 0x10u;
+}
+#endif
+
 
 struct ThreadBlock;
 
@@ -145,7 +155,8 @@ struct PERCORE {
 #if _MCCA == 0x8664
 	uint64 kernel_rsp;
 	uint64 scratch;
-	uint8 _pad1[128 - 16];
+	uint64 user_cr3;
+	uint8 _pad1[128 - 24];
 #endif
 	ThreadBlock* current_thread;
 	ThreadBlock* idle_thread;
@@ -156,16 +167,24 @@ struct PERCORE {
 	stduint kernel_stack;
 	#if _MCCA == 0x8632
 	stduint tss_selector;
+	stduint user_cr3;
 	#endif
 };
 static_assert(sizeof(PERCORE) <= 0x1000, "PERCORE must fit in one 4KB page");
 #if _MCCA == 0x8664
 static_assert(offsetof(PERCORE, kernel_rsp) == 128, "PERCORE.kernel_rsp offset mismatch!");
 static_assert(offsetof(PERCORE, scratch) == 136, "PERCORE.scratch offset mismatch!");
+static_assert(offsetof(PERCORE, user_cr3) == 144, "PERCORE.user_cr3 offset mismatch!");
+static_assert(offsetof(PERCORE, kernel_stack) == 392, "PERCORE.kernel_stack offset mismatch!");
+#elif _MCCA == 0x8632
+static_assert(offsetof(PERCORE, kernel_stack) == 264, "PERCORE.kernel_stack offset mismatch in x86_32!");
+static_assert(offsetof(PERCORE, tss_selector) == 268, "PERCORE.tss_selector offset mismatch in x86_32!");
+static_assert(offsetof(PERCORE, user_cr3) == 272, "PERCORE.user_cr3 offset mismatch in x86_32!");
 #endif
 extern uint32 g_lapicid_to_coreid[LAPIC_ID_MAP_SIZE];
 
 #else
+struct PERCORE;
 struct ThreadBlock;
 extern ThreadBlock* PCU_CORES_current_thread[PCU_CORES_MAX];
 extern ThreadBlock* PCU_CORES_idle_thread[PCU_CORES_MAX];
@@ -628,10 +647,8 @@ static inline stduint MccaMemCopyP(void* dest, ProcessBlock* pd, const void* sor
 	pag.root_level_page = nil;
 	return MemCopyP(dest, (pd && pd->paging_redirect) ? *pd->paging_redirect : pag,
 		sors, (ps && ps->paging_redirect) ? *ps->paging_redirect : pag, n);
-	#elif _MCCA == 0x8664
-	return MemCopyP(dest, pd ? (pd->paging_redirect ? *pd->paging_redirect : pd->paging) : kernel_paging, sors, ps ? (ps->paging_redirect ? *ps->paging_redirect : ps->paging) : kernel_paging, n);
 	#else
-	return MemCopyP(dest, pd ? pd->paging : kernel_paging, sors, ps ? ps->paging : kernel_paging, n);
+	return MemCopyP(dest, pd ? (pd->paging_redirect ? *pd->paging_redirect : pd->paging) : kernel_paging, sors, ps ? (ps->paging_redirect ? *ps->paging_redirect : ps->paging) : kernel_paging, n);
 	#endif
 }
 
