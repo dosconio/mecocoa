@@ -87,23 +87,6 @@ public:
 	const Mutex& raw_mutex() const { return lock_; }
 };
 
-struct RecursiveMutex {
-	Mutex mutex;
-	stduint owner_tid;
-	stduint count;
-
-	RecursiveMutex();
-	void Acquire();
-	void Release();
-	bool ForceReleaseFromSignal(stduint expected_tid);
-};
-
-struct RecursiveMutexLocal {
-	RecursiveMutex* rmutex;
-	RecursiveMutexLocal(RecursiveMutex* _rmutex);
-	~RecursiveMutexLocal();
-};
-
 struct Semaphore {
 	Spinlock guard;
 	stdsint value;

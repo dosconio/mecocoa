@@ -23,9 +23,6 @@ bool Consman::enable_dubuffer = false;
 SheetTrait* Consman::last_click_sheet = nullptr;// mark the focused window
 VideoControlInterface* Consman::real_pvci = nullptr;
 
-#if _GUI_ENABLE
-RecursiveMutex gui_lock;
-#endif
 
 #ifndef _UEFI
 GloScreenARGB8888 local_vci;

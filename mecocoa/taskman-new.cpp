@@ -17,9 +17,6 @@ extern "C" {
 	void* ring3_iret_stacks[PCU_CORES_MAX] = {};
 }
 #endif
-#if (_MCCA & 0xFF00) == 0x8600
-extern void Taskman_RegisterKernelStackWindow(ThreadBlock* th);
-#endif
 
 struct AuxVector {
 	stduint type;
@@ -500,9 +497,6 @@ ProcessBlock* Taskman::Create(void* entry, byte ring, bool append)
 
 	tb->priority = (ring == RING_U) ? 3 : 0;
 	tb->time_slice = (ring == RING_U) ? 3 : 4;
-	#if (_MCCA & 0xFF00) == 0x8600
-	Taskman_RegisterKernelStackWindow(tb);
-	#endif
 	
 	if (append) {
 		Append(ppb);
@@ -682,9 +676,6 @@ ProcessBlock* Taskman::CreateELF(BlockTrait* source, byte ring) {
 
 	tb->priority = (ring == RING_U) ? 4 : 0;
 	tb->time_slice = (ring == RING_U) ? 3 : 4;
-	#if (_MCCA & 0xFF00) == 0x8600
-	Taskman_RegisterKernelStackWindow(tb);
-	#endif
 
 	return pb;
 	#endif
@@ -820,9 +811,6 @@ ProcessBlock* Taskman::CreateFork(ProcessBlock* fo, const CallgateFrame* frame) 
 	tb->context.GPR[15] = frame->r15;
 	#endif
 	(tb->context.FLAG) |= 0x200;// IF
-	#if (_MCCA & 0xFF00) == 0x8600
-	Taskman_RegisterKernelStackWindow(tb);
-	#endif
 
 	// ---- File ---- //
 	{

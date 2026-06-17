@@ -378,7 +378,6 @@ void dump_lock(OstreamTrait& com1) {
 
 	// Declare the external global mutexes
 	extern Mutex outc_mutex;
-	extern RecursiveMutex gui_lock;
 	#if _MCCA == 0x8632 && _GUI_ENABLE && _GUI_FREETYPE
 	extern Mutex ft_lock;
 	#endif
@@ -397,11 +396,6 @@ void dump_lock(OstreamTrait& com1) {
 	com1.OutFormat("%p  %s     %[u]       outc_mutex\n\r", &outc_mutex, outc_mutex.locked ? "Yes" : "No ", outc_mutex.wait_queue.Count());
 	#if _MCCA == 0x8632 && _GUI_ENABLE && _GUI_FREETYPE
 	com1.OutFormat("%p  %s     %[u]       ft_lock\n\r", &ft_lock, ft_lock.locked ? "Yes" : "No ", ft_lock.wait_queue.Count());
-	#endif
-	#if  _GUI_ENABLE
-	com1.OutFormat("%p  %s     %[u]       gui_lock (Recursive: OwnerTID %[u], Count %[u])\n\r",
-		&gui_lock.mutex, gui_lock.mutex.locked ? "Yes" : "No ", gui_lock.mutex.wait_queue.Count(), 
-		(stduint)gui_lock.owner_tid, (stduint)gui_lock.count);
 	#endif
 	com1.OutFormat("\n\r=== Per-Process Locks ===\n\r");
 	com1.OutFormat("PID  Process Name        VMA Lock (Spinlock)    Sys Lock (Mutex)\n\r");

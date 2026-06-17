@@ -8,9 +8,9 @@ stdsint sys_create_form(stduint form_id, const Rectangle* rect)
 	CommMsg msg;
 	msg.data.address = _IMM(buf);
 	msg.data.length = sizeof(buf);
-	msg.type = _IMM(ConsoleMsg::FNEW);
-	syscomm(1, Task_Console, &msg);
-	syscomm(0, Task_Console, &msg);
+	msg.type = _IMM(GraphicMsg::FNEW);
+	syscomm(1, Task_ConsoleVideo, &msg);
+	syscomm(0, Task_ConsoleVideo, &msg);
 	return buf[0];
 }
 
@@ -19,9 +19,9 @@ stdsint sys_close_form(stduint form_id) {
 	CommMsg msg;
 	msg.data.address = _IMM(buf);
 	msg.data.length = sizeof(buf);
-	msg.type = _IMM(ConsoleMsg::FDEL);
-	syscomm(1, Task_Console, &msg);
-	syscomm(0, Task_Console, &msg);
+	msg.type = _IMM(GraphicMsg::FDEL);
+	syscomm(1, Task_ConsoleVideo, &msg);
+	syscomm(0, Task_ConsoleVideo, &msg);
 	return buf[0];
 }
 
@@ -34,11 +34,11 @@ stdsint sys_fetch_msg(stduint form_id, stduint if_blocked, SheetMessage* u_msg) 
 	CommMsg msg;
 	msg.data.address = _IMM(&fmsg);
 	msg.data.length = sizeof(fmsg);
-	msg.type = _IMM(ConsoleMsg::FMSG);
-	syscomm(1, Task_Console, &msg);
+	msg.type = _IMM(GraphicMsg::FMSG);
+	syscomm(1, Task_ConsoleVideo, &msg);
 	msg.data.address = _IMM(&ret);
 	msg.data.length = sizeof(ret);
-	syscomm(0, Task_Console, &msg);
+	syscomm(0, Task_ConsoleVideo, &msg);
 	return ret;
 }
 
@@ -48,9 +48,9 @@ stdsint sys_draw_default_string(stduint form_id, Point vertex, rostr string, Col
 	CommMsg msg;
 	msg.data.address = _IMM(buf);
 	msg.data.length = sizeof(buf);
-	msg.type = _IMM(ConsoleMsg::FCHR);
-	syscomm(1, Task_Console, &msg);
-	syscomm(0, Task_Console, &msg);
+	msg.type = _IMM(GraphicMsg::FCHR);
+	syscomm(1, Task_ConsoleVideo, &msg);
+	syscomm(0, Task_ConsoleVideo, &msg);
 	return buf[0];// should be 0
 }
 
@@ -64,11 +64,11 @@ stdsint sys_draw_point(stduint form_id, Point po, Color co) {
 	CommMsg msg;
 	msg.data.address = _IMM(&fdraw);
 	msg.data.length = sizeof(fdraw);
-	msg.type = _IMM(ConsoleMsg::FDRW);
-	syscomm(1, Task_Console, &msg);
+	msg.type = _IMM(GraphicMsg::FDRW);
+	syscomm(1, Task_ConsoleVideo, &msg);
 	msg.data.address = _IMM(&ret);
 	msg.data.length = sizeof(ret);
-	syscomm(0, Task_Console, &msg);
+	syscomm(0, Task_ConsoleVideo, &msg);
 	return ret;// should be 0
 }
 
@@ -82,11 +82,11 @@ stdsint sys_draw_line(stduint form_id, Point disp, Size2 size, Color co) {
 	CommMsg msg;
 	msg.data.address = _IMM(&fdraw);
 	msg.data.length = sizeof(fdraw);
-	msg.type = _IMM(ConsoleMsg::FDRW);
-	syscomm(1, Task_Console, &msg);
+	msg.type = _IMM(GraphicMsg::FDRW);
+	syscomm(1, Task_ConsoleVideo, &msg);
 	msg.data.address = _IMM(&ret);
 	msg.data.length = sizeof(ret);
-	syscomm(0, Task_Console, &msg);
+	syscomm(0, Task_ConsoleVideo, &msg);
 	return ret;// should be 0
 }
 
@@ -99,11 +99,11 @@ stdsint sys_draw_rectangle(stduint form_id, const Rectangle* rect) {
 	CommMsg msg;
 	msg.data.address = _IMM(&fdraw);
 	msg.data.length = sizeof(fdraw);
-	msg.type = _IMM(ConsoleMsg::FDRW);
-	syscomm(1, Task_Console, &msg);
+	msg.type = _IMM(GraphicMsg::FDRW);
+	syscomm(1, Task_ConsoleVideo, &msg);
 	msg.data.address = _IMM(&ret);
 	msg.data.length = sizeof(ret);
-	syscomm(0, Task_Console, &msg);
+	syscomm(0, Task_ConsoleVideo, &msg);
 	return ret;// should be 0
 }
 
@@ -112,9 +112,9 @@ stdsint sys_set_timer(stduint form_id, stduint ms) {
 	CommMsg msg;
 	msg.data.address = _IMM(buf);
 	msg.data.length = sizeof(buf);
-	msg.type = _IMM(ConsoleMsg::FTIM);
-	syscomm(1, Task_Console, &msg);
-	syscomm(0, Task_Console, &msg);
+	msg.type = _IMM(GraphicMsg::FTIM);
+	syscomm(1, Task_ConsoleVideo, &msg);
+	syscomm(0, Task_ConsoleVideo, &msg);
 	return buf[0];
 }
 
@@ -123,9 +123,9 @@ stdsint sys_set_form_buffer(stduint form_id, void* buffer) {
 	CommMsg msg;
 	msg.data.address = _IMM(buf);
 	msg.data.length = sizeof(buf);
-	msg.type = _IMM(ConsoleMsg::FBID);
-	syscomm(1, Task_Console, &msg);
-	syscomm(0, Task_Console, &msg);
+	msg.type = _IMM(GraphicMsg::FBID);
+	syscomm(1, Task_ConsoleVideo, &msg);
+	syscomm(0, Task_ConsoleVideo, &msg);
 	return buf[0];
 }
 
@@ -134,8 +134,8 @@ stdsint sys_update_form(stduint form_id, const Rectangle* rect) {
 	CommMsg msg;
 	msg.data.address = _IMM(buf);
 	msg.data.length = sizeof(buf);
-	msg.type = _IMM(ConsoleMsg::FUPD);
-	syscomm(1, Task_Console, &msg);
-	syscomm(0, Task_Console, &msg);
+	msg.type = _IMM(GraphicMsg::FUPD);
+	syscomm(1, Task_ConsoleVideo, &msg);
+	syscomm(0, Task_ConsoleVideo, &msg);
 	return buf[0];
 }

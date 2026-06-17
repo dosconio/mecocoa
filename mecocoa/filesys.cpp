@@ -1171,16 +1171,14 @@ int Filesys::ReadPipe(vfs_file* file, void* buf, stduint count) {
 				chan->lock.Release();
 				break;
 			}
-			// Wait blockedly
+			// Wait blockedly: Block first (set Pended), then release lock, then schedule.
+			// This avoids the race where Unblock happens between lock release and Block.
 			ThreadBlock* th = Taskman::CurrentTB();
 			chan->rq.Enqueue(th);
-			chan->lock.Release();
-			
-			// Block the thread
 			th->Block(ThreadBlock::BlockReason::BR_RecvMsg);
+			chan->lock.Release();
 			Taskman::Schedule(true);
-			
-			// Loop again
+			// Woken up, loop again
 			continue;
 		}
 		
@@ -1191,7 +1189,8 @@ int Filesys::ReadPipe(vfs_file* file, void* buf, stduint count) {
 			dst[bytes_read++] = (byte)ch;
 		}
 		
-		// Wake up writers
+		// Wake up writers (after releasing lock to avoid holding lock during Unblock)
+		chan->lock.Release();
 		while (!chan->wq.isEmpty()) {
 			ThreadBlock* w_th = nullptr;
 			chan->wq.Dequeue(w_th);
@@ -1199,8 +1198,6 @@ int Filesys::ReadPipe(vfs_file* file, void* buf, stduint count) {
 				w_th->Unblock(ThreadBlock::BlockReason::BR_SendMsg);
 			}
 		}
-		
-		chan->lock.Release();
 	}
 	
 	return bytes_read;
@@ -1226,13 +1223,11 @@ int Filesys::WritePipe(vfs_file* file, const void* buf, stduint count) {
 		}
 		
 		if (chan->buffer.is_full()) {
-			// Wait blockedly
+			// Wait blockedly: Block first (set Pended), then release lock, then schedule.
 			ThreadBlock* th = Taskman::CurrentTB();
 			chan->wq.Enqueue(th);
-			chan->lock.Release();
-			
-			// Block the thread
 			th->Block(ThreadBlock::BlockReason::BR_SendMsg);
+			chan->lock.Release();
 			Taskman::Schedule(true);
 			
 			continue;
@@ -1243,7 +1238,8 @@ int Filesys::WritePipe(vfs_file* file, const void* buf, stduint count) {
 		int written = chan->buffer.out((const char*)(src + bytes_written), chunk);
 		bytes_written += written;
 		
-		// Wake up readers
+		// Wake up readers (after releasing lock)
+		chan->lock.Release();
 		while (!chan->rq.isEmpty()) {
 			ThreadBlock* r_th = nullptr;
 			chan->rq.Dequeue(r_th);
@@ -1251,8 +1247,6 @@ int Filesys::WritePipe(vfs_file* file, const void* buf, stduint count) {
 				r_th->Unblock(ThreadBlock::BlockReason::BR_RecvMsg);
 			}
 		}
-		
-		chan->lock.Release();
 	}
 	
 	return bytes_written;
@@ -1263,34 +1257,44 @@ int Filesys::ClosePipe(vfs_file* file) {
 	if (!chan) return -1;
 	
 	chan->lock.Acquire();
+	Queue<::ThreadBlock*> wake_list;
 	if ((file->f_mode & O_ACCMODE) == O_RDONLY) {
 		chan->reader_count--;
 		if (chan->reader_count == 0) {
-			// Wake up blocked writers
+			// Collect blocked writers to wake after releasing lock
 			while (!chan->wq.isEmpty()) {
 				ThreadBlock* w_th = nullptr;
 				chan->wq.Dequeue(w_th);
-				if (w_th) {
-					w_th->Unblock(ThreadBlock::BlockReason::BR_SendMsg);
-				}
+				if (w_th) wake_list.Enqueue(w_th);
 			}
 		}
 	} else if ((file->f_mode & O_ACCMODE) == O_WRONLY) {
 		chan->writer_count--;
 		if (chan->writer_count == 0) {
-			// Wake up blocked readers
+			// Collect blocked readers to wake after releasing lock
 			while (!chan->rq.isEmpty()) {
 				ThreadBlock* r_th = nullptr;
 				chan->rq.Dequeue(r_th);
-				if (r_th) {
-					r_th->Unblock(ThreadBlock::BlockReason::BR_RecvMsg);
-				}
+				if (r_th) wake_list.Enqueue(r_th);
 			}
 		}
 	}
 	
 	bool destroy = (chan->reader_count == 0 && chan->writer_count == 0);
 	chan->lock.Release();
+	
+	// Unblock waiters outside the pipe lock to avoid lock-order inversion
+	// (Unblock acquires scheduler_lock, and some paths hold scheduler_lock
+	// before acquiring pipe-related Mutexes).
+	while (!wake_list.isEmpty()) {
+		ThreadBlock* th = nullptr;
+		wake_list.Dequeue(th);
+		if (th) {
+			th->Unblock((file->f_mode & O_ACCMODE) == O_RDONLY ?
+				ThreadBlock::BlockReason::BR_SendMsg :
+				ThreadBlock::BlockReason::BR_RecvMsg);
+		}
+	}
 	
 	if (destroy) {
 		delete[] (char*)chan->buffer.slice.address;

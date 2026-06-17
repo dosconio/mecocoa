@@ -135,9 +135,9 @@ int KeyboardBridge::out(const char* str, stduint len) {
 				#endif
 				if (ascii_ch) {
 					#if _GUI_ENABLE
-					// [Lock]: Delegate keyboard event to serv_graf_loop to avoid
-					// accessing last_click_sheet without gui_lock in interrupt context.
-					// Direct onrupt() here causes UAF when _CleanSingleForm deletes the sheet.
+					// Delegate keyboard event to serv_graf_loop to avoid
+					// accessing last_click_sheet in interrupt context.
+					// Direct onrupt() here causes UAF when GraphicMsg_FDEL deletes the sheet.
 					{
 						extern uni::Queue<SysMessage> message_queue_conv;
 						SysMessage msg;
@@ -174,8 +174,8 @@ int KeyboardBridge::out(const char* str, stduint len) {
 		}
 		// Forward ALL keyboard events (down/up/repeat) to focused window
 		#if _GUI_ENABLE
-		// [Lock]: Delegate keyboard event to serv_graf_loop to avoid
-		// accessing last_click_sheet without gui_lock in interrupt context.
+		// Delegate keyboard event to serv_graf_loop to avoid
+		// accessing last_click_sheet in interrupt context.
 		{
 			extern uni::Queue<SysMessage> message_queue_conv;
 			SysMessage msg;
@@ -269,9 +269,12 @@ void sysmsg_kbd(keyboard_event_t kbd_event) {
 }
 
 void hand_kboard(keyboard_event_t  kmsg) {
+	// Enqueue to message_queue_conv so serv_graf_loop (Graphic thread) processes
+	// the event. This avoids racing with GraphicMsg::FDEL on last_click_sheet.
+	extern uni::Queue<SysMessage> message_queue_conv;
 	SysMessage msg;
 	msg.type = SysMessage::RUPT_KBD;
 	msg.args.kbd_event = kmsg;
-	message_queue.Enqueue(msg);
+	message_queue_conv.Enqueue(msg);
 }
 #endif

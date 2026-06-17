@@ -1,12 +1,13 @@
 // ASCII g++ TAB4 LF
 // AllAuthor: @dosconio, @ArinaMgk
-// ModuTitle: [Service] Console - Video and Mouse
+// ModuTitle: [Service] Graphic - Video, Mouse and GUI Operations
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 #include "../include/mecocoa.hpp"
 
 #include <c/driver/mouse.h>
 #include <c/driver/keyboard.h>
 #include "../include/console.hpp"
+#include "../include/filesys.hpp"
 
 
 #if (_MCCA & 0xFF00) == 0x8600 // _GUI_ENABLE
@@ -63,9 +64,8 @@ void Cursor::setSheet(LayerManager& layman, const Point& vertex) {
 	layman.Append(this);
 }
 
-// hand_mouse
+// hand_mouse - runs only in Graphic thread, no lock needed
 void hand_mouse(MouseMessage mmsg) {
-	// ploginfo("hand_mouse (%d, %d)", displacement_x, displacement_y);
 	byte change_btns = 0;// 0RML0RML
 	if (Cursor::mouse_btnl_dn != mmsg.BtnLeft) change_btns |= 0b001;
 	if (Cursor::mouse_btnm_dn != mmsg.BtnMiddle) change_btns |= 0b010;
@@ -83,61 +83,66 @@ void hand_mouse(MouseMessage mmsg) {
 	Cursor::mouse_btnr_dn = mmsg.BtnRight;
 	Point cursor_p = Cursor::global_cursor->sheet_area.getVertex();
 
-	{
-		#if _GUI_ENABLE
-		RecursiveMutexLocal guard(&gui_lock);
-		#endif
-
-		// Handle Clicks and Z-order
-		SheetTrait* sheet = nullptr;
-		if ((change_btns & 0b111) && (sheet = global_layman.getTop(cursor_p, 1))) {
-			Point rel_p = cursor_p - sheet->sheet_area.getVertex();
-			if (Consman::last_click_sheet && Consman::last_click_sheet != sheet) {
-				Consman::last_click_sheet->onrupt(SheetEvent::onLeave, Point(0, 0), 1);
-			}
-			sheet->onrupt(SheetEvent::onClick, rel_p, change_btns);
-			Consman::last_click_sheet = sheet;
-
-			// Bring to front (Insert after subf, which is the cursor)
-			Nnode* target = &sheet->refSheetNode();
-			if (global_layman.subf && target != global_layman.subf->next && target != global_layman.subl) {
-				// Nchain::Exchange-like manual manipulation
-				Nnode* prev = target->left;
-				Nnode* next = target->next;
-				if (prev) prev->next = next;
-				if (next) next->left = prev;
-
-				Nnode* top = global_layman.subf;
-				Nnode* sec = top->next;
-
-				target->left = top;
-				target->next = sec;
-				top->next = target;
-				if (sec) sec->left = target;
-
-				global_layman.Update(nullptr, sheet->sheet_area);
-			}
+	// Handle Clicks and Z-order
+	SheetTrait* sheet = nullptr;
+	if ((change_btns & 0b111) && (sheet = global_layman.getTop(cursor_p, 1))) {
+		Point rel_p = cursor_p - sheet->sheet_area.getVertex();
+		if (Consman::last_click_sheet && Consman::last_click_sheet != sheet) {
+			Consman::last_click_sheet->onrupt(SheetEvent::onLeave, Point(0, 0), 1);
 		}
+		sheet->onrupt(SheetEvent::onClick, rel_p, change_btns);
+		Consman::last_click_sheet = sheet;
 
-		// Handle Movement
-		if (mmsg.X || mmsg.Y) {
-			global_layman.Domove(Cursor::global_cursor, { mmsg.X, mmsg.Y });
-			if (Cursor::moving_sheet) {
-				global_layman.Domove(Cursor::moving_sheet, { mmsg.X, mmsg.Y });
-			}
+		// Bring to front (Insert after subf, which is the cursor)
+		Nnode* target = &sheet->refSheetNode();
+		if (global_layman.subf && target != global_layman.subf->next && target != global_layman.subl) {
+			// Nchain::Exchange-like manual manipulation
+			Nnode* prev = target->left;
+			Nnode* next = target->next;
+			if (prev) prev->next = next;
+			if (next) next->left = prev;
 
-			static uint64 last_onmoved_tick = 0;
-			if ((change_btns & 0b111) || (tick - last_onmoved_tick >= 20)) {
-				Point current_cursor_p = Cursor::global_cursor->sheet_area.getVertex();
-				SheetTrait* hover_sheet = global_layman.getTop(current_cursor_p, 1);
-				if (hover_sheet) {
-					Point rel_p = current_cursor_p - hover_sheet->sheet_area.getVertex();
-					hover_sheet->onrupt(SheetEvent::onMoved, rel_p, change_btns);
-				}
-				last_onmoved_tick = tick;
-			}
+			Nnode* top = global_layman.subf;
+			Nnode* sec = top->next;
+
+			target->left = top;
+			target->next = sec;
+			top->next = target;
+			if (sec) sec->left = target;
+
+			global_layman.Update(nullptr, sheet->sheet_area);
 		}
 	}
+
+	// Handle Movement
+	if (mmsg.X || mmsg.Y) {
+		global_layman.Domove(Cursor::global_cursor, { mmsg.X, mmsg.Y });
+		if (Cursor::moving_sheet) {
+			global_layman.Domove(Cursor::moving_sheet, { mmsg.X, mmsg.Y });
+		}
+
+		static uint64 last_onmoved_tick = 0;
+		if ((change_btns & 0b111) || (tick - last_onmoved_tick >= 20)) {
+			Point current_cursor_p = Cursor::global_cursor->sheet_area.getVertex();
+			SheetTrait* hover_sheet = global_layman.getTop(current_cursor_p, 1);
+			if (hover_sheet) {
+				Point rel_p = current_cursor_p - hover_sheet->sheet_area.getVertex();
+				hover_sheet->onrupt(SheetEvent::onMoved, rel_p, change_btns);
+			}
+			last_onmoved_tick = tick;
+		}
+	}
+}
+
+// USB mouse callback — enqueues to message_queue_conv so serv_graf_loop
+// (Graphic thread) processes the event via hand_mouse. This avoids racing
+// with GraphicMsg::FDEL on global_layman / Consman::last_click_sheet.
+void hand_mouse_usb(MouseMessage mmsg) {
+	extern uni::Queue<SysMessage> message_queue_conv;
+	SysMessage msg;
+	msg.type = SysMessage::RUPT_MOUSE;
+	msg.args.mou_event = mmsg;
+	message_queue_conv.Enqueue(msg);
 }
 
 void LayerManager::Dorupt(SheetTrait* who, SheetEvent event, Point rel_p, para_list args) {
@@ -149,20 +154,15 @@ void LayerManager::Dorupt(SheetTrait* who, SheetEvent event, Point rel_p, para_l
 	}
 }
 
+// LayerManager2::Update - runs only in Graphic thread, no lock needed
 void LayerManager2::Update(SheetTrait* who, const Rectangle& rect) {
 	Rectangle abs_rect = who ? who->sheet_area : window;
 	abs_rect.x += rect.x;
 	abs_rect.y += rect.y;
 	Rectangle dirty_rect(Point(abs_rect.x, abs_rect.y), Size2(rect.width, rect.height));
 
-	#if _GUI_ENABLE
-	RecursiveMutexLocal guard(&gui_lock);
 	this->AddDirty(dirty_rect);
 	if (!lazy_update) UpdateForce(who, rect);
-	#else
-	this->AddDirty(dirty_rect);
-	if (!lazy_update) UpdateForce(who, rect);
-	#endif
 }
 
 void LayerManager2::UpdateForce(SheetTrait* who, const Rectangle& rect) {
@@ -201,6 +201,605 @@ void LayerManager2::UpdateForce(SheetTrait* who, const Rectangle& rect) {
 static SysMessage _BUF_Message_Conv[64];
 uni::Queue<SysMessage> message_queue_conv(_BUF_Message_Conv, numsof(_BUF_Message_Conv));
 volatile bool has_pending_timer = false;
+
+#if _MCCA == 0x8664
+extern void sysmsg_kbd(keyboard_event_t kbd_event);
+#endif
+
+// ---- ---- GUI Operation Helpers (Graphic thread only) ---- ----
+
+#if _GUI_ENABLE
+extern Mutex console_waiters_mutex;
+
+// Teardown paths use the current sheet-parent chain to check whether a
+// graf-side input reference still points into the subtree being destroyed.
+static bool IsSheetInSubtreeOrSelf(SheetTrait* target, SheetTrait* root) {
+	SheetTrait* curr = target;
+	while (curr) {
+		if (curr == root) return true;
+		curr = (SheetTrait*)curr->refSheetParent();
+	}
+	return false;
+}
+
+// Detach and clean up all child layers under the specified root layer manager.
+static void DetachLayerChildren(LayerManager* root) {
+	if (!root) return;
+	for (auto child = root->subf; child; child = child->next) {
+		if (!child->offs) continue;
+		auto sheet = cast<SheetTrait*>(child->offs);
+		sheet->refSheetParent() = nullptr;
+		global_layman.UnregisterTimer(sheet);
+	}
+	root->subf = nullptr;
+	root->subl = nullptr;
+}
+
+// Clear global TTY references to a vtty node after its GUI subtree has been detached.
+// Must NOT hold scheduler_lock while acquiring focus_tty's Mutex, because
+// Mutex::Acquire may sleep, and sleeping with a spinlock held deadlocks SMP.
+static void CleanupTTYReferences(Dnode* nod) {
+	if (!nod) return;
+	// Collect PIDs under scheduler_lock (short hold, no allocation)
+	constexpr stduint MAX_PROCS = 128;
+	stduint pids[MAX_PROCS];
+	stduint count = 0;
+	{
+		extern Spinlock scheduler_lock;
+		SpinlockLocal guard(&scheduler_lock);
+		for (auto pnod = Taskman::chain.Root(); pnod && count < MAX_PROCS; pnod = pnod->next) {
+			auto p = cast<ProcessBlock*>(pnod->offs);
+			pids[count++] = p->pid;
+		}
+	}
+	// Clear focus_tty references outside scheduler_lock
+	for (stduint i = 0; i < count; i++) {
+		ProcessBlock* pb = ProcessBlock::AcquireActiveByPID(pids[i]);
+		if (!pb) continue;
+		auto focus_tty = pb->focus_tty.Lock();
+		if (*focus_tty == nod) *focus_tty = nullptr;
+		ProcessBlock::Release(pb);
+	}
+}
+
+// Clear any pforms slot that still points at a detached Form.
+// Same rationale as CleanupTTYReferences: no Mutex acquisition under spinlock.
+static void CleanupFormReferences(::uni::Witch::Form* pfrm) {
+	if (!pfrm) return;
+	constexpr stduint MAX_PROCS = 128;
+	stduint pids[MAX_PROCS];
+	stduint count = 0;
+	{
+		extern Spinlock scheduler_lock;
+		SpinlockLocal guard(&scheduler_lock);
+		for (auto pnod = Taskman::chain.Root(); pnod && count < MAX_PROCS; pnod = pnod->next) {
+			auto p = cast<ProcessBlock*>(pnod->offs);
+			pids[count++] = p->pid;
+		}
+	}
+	for (stduint i = 0; i < count; i++) {
+		ProcessBlock* pb = ProcessBlock::AcquireActiveByPID(pids[i]);
+		if (!pb) continue;
+		auto pforms = pb->pforms.Lock();
+		for (stduint j = 0; j < pforms->Count(); j++) {
+			if ((*pforms)[j] == pfrm) {
+				(*pforms)[j] = nullptr;
+			}
+		}
+		ProcessBlock::Release(pb);
+	}
+}
+
+static stduint ProcFormsCount(ProcessBlock* pb) {
+	auto pforms = pb->pforms.Lock();
+	return pforms->Count();
+}
+
+static SheetTrait* ProcFormsGet(ProcessBlock* pb, stduint idx) {
+	auto pforms = pb->pforms.Lock();
+	return idx < pforms->Count() ? (*pforms)[idx] : nullptr;
+}
+
+static void ProcFormsSet(ProcessBlock* pb, stduint idx, SheetTrait* value) {
+	auto pforms = pb->pforms.Lock();
+	if (idx < pforms->Count()) {
+		(*pforms)[idx] = value;
+	}
+}
+
+static stdsint ProcFormsFindEmptyOrAppend(ProcessBlock* pb) {
+	auto pforms = pb->pforms.Lock();
+	for (stduint i = 0; i < pforms->Count(); i++) {
+		if ((*pforms)[i] == nullptr) {
+			return i;
+		}
+	}
+	if (pforms->Count() < DEFAULT_FILES_LIMIT) {
+		stduint slot_idx = pforms->Count();
+		pforms->Append(nullptr);
+		return slot_idx;
+	}
+	return -1;
+}
+
+// Destroy one detached vconsole/vtty node.
+static void DestroyVconsoleNode(Dnode* nod) {
+	if (!nod) return;
+	extern Mutex console_waiters_mutex;
+	MutexLocal guard(&console_waiters_mutex);
+	auto pcon = (uni::VideoConsole2*)nod->offs;
+	if (pcon) {
+		pcon->Stop();
+		delete pcon;
+		nod->offs = nullptr;
+	}
+	extern Dchain vttys;
+	vttys.Remove(nod);
+}
+
+// Resolve a Console_t base pointer back to its vtty node.
+static Dnode* FindVconsoleNodeByConsole(Console_t* con) {
+	if (!con) return nullptr;
+	extern Dchain vttys;
+	for (auto nod = vttys.Root(); nod; nod = nod->next) {
+		if (nod->offs == (pureptr_t)con) {
+			return nod;
+		}
+	}
+	return nullptr;
+}
+
+static void CleanupAndDestroyVconsoleByConsole(Console_t* con) {
+	Dnode* nod = FindVconsoleNodeByConsole(con);
+	if (!nod) return;
+	CleanupTTYReferences(nod);
+	DestroyVconsoleNode(nod);
+}
+
+// DetachForm - runs only in Graphic thread, no lock needed.
+// Detaches one Form subtree from GUI roots, clears graf input references.
+Rectangle Consman::DetachForm(::uni::Witch::Form* pfrm, SheetTrait* exact_sheet) {
+	if (!pfrm) return Rectangle{};
+
+	Rectangle area = pfrm->sheet_area;
+
+	// Clear runtime input refs so input paths cannot repopulate them before the subtree is detached.
+	if (Consman::last_click_sheet &&
+		(IsSheetInSubtreeOrSelf(Consman::last_click_sheet, pfrm) ||
+		 Consman::last_click_sheet == exact_sheet)) {
+		Consman::last_click_sheet = nullptr;
+	}
+	if (Cursor::moving_sheet &&
+		(IsSheetInSubtreeOrSelf(Cursor::moving_sheet, pfrm) ||
+		 Cursor::moving_sheet == exact_sheet)) {
+		Cursor::moving_sheet = nullptr;
+	}
+
+	global_layman.UnregisterTimer(pfrm);
+	LayerManager* parent = pfrm->refSheetParent();
+	if (parent) parent->Remove(pfrm);
+	global_layman.Remove(pfrm);
+	pfrm->refSheetParent() = nullptr;
+	DetachLayerChildren(static_cast<LayerManager*>(pfrm));
+	// Also detach Form's sheet_node.subf chain (close_btn, title_bar, client_area)
+	for (auto child = pfrm->refSheetNode().subf; child; child = child->next) {
+		if (!child->offs) continue;
+		auto sheet = cast<SheetTrait*>(child->offs);
+		sheet->refSheetParent() = nullptr;
+		global_layman.UnregisterTimer(sheet);
+	}
+	return area;
+}
+
+// SwitchForm - runs only in Graphic thread, no lock needed.
+void Consman::SwitchForm(SheetTrait* pfrm) {
+	Nnode* target = &pfrm->refSheetNode();
+	if (global_layman.subf && target != global_layman.subf) {
+		// Remove from the tail where Append put it
+		if (target->left) target->left->next = target->next;
+		if (global_layman.subl == target) global_layman.subl = target->left;
+		// Insert after the top layer (cursor)
+		Nnode* top = global_layman.subf;
+		Nnode* sec = top->next;
+		target->left = top;
+		target->next = sec;
+		top->next = target;
+		if (sec) sec->left = target;
+		else global_layman.subl = target;// target is now the new tail
+	}
+	global_layman.Update(pfrm, Rectangle(Point(0, 0), pfrm->sheet_area.getSize()));
+}
+
+// ---- ---- GUI message handlers (Graphic thread only) ---- ----
+
+struct FMT_ConsoleMsg_FNEW {
+	stduint pform_id;// in pforms
+	Rectangle* usrp_rect;
+};
+
+static stdsint GraphicMsg_FNEW(const FMT_ConsoleMsg_FNEW* data, ProcessBlock* pb) {
+	Rectangle rect; MccaMemCopyP(&rect, NULL, data->usrp_rect, pb, sizeof(rect));
+	ploginfo("FNEW: new form (%u,%u)", rect.width, rect.height);
+	stdsint slot_idx = ProcFormsFindEmptyOrAppend(pb);
+	if (slot_idx == -1) return -1;
+
+	auto pfrm = new ::uni::Witch::Form();
+	if (!pfrm) return -1;
+	pfrm->Title = "New Form";
+
+	Color* sheet_buffer = new Color[rect.getArea()];
+	if (!sheet_buffer) {
+		delete pfrm;
+		return -1;
+	}
+	pfrm->setSheet(global_layman, rect, sheet_buffer);
+
+	global_layman.Append(pfrm);
+	Consman::SwitchForm(pfrm);
+
+	ProcFormsSet(pb, slot_idx, pfrm);
+	pfrm->usrp_owner = pb;
+
+	return slot_idx;
+}
+
+static void _CleanSingleForm(ProcessBlock* pb, stduint pform_id);
+
+static stdsint GraphicMsg_FDEL(stduint pform_id, ProcessBlock* pb) {
+	if (pform_id == ~_IMM0) {
+		for (stduint i = 0, count = ProcFormsCount(pb); i < count; i++) {
+			_CleanSingleForm(pb, i);
+		}
+		return 0;
+	}
+	if (!ProcFormsGet(pb, pform_id)) return -1;
+	_CleanSingleForm(pb, pform_id);
+	return 0;
+}
+
+static void _CleanSingleForm(ProcessBlock* pb, stduint pform_id) {
+	SheetTrait* pfrm = ProcFormsGet(pb, pform_id);
+	if (!pfrm) return;
+
+	// Recursive destroy sub-forms belonging to this process that are children of this form
+	for (stduint i = 0, count = ProcFormsCount(pb); i < count; i++) {
+		SheetTrait* child_form = ProcFormsGet(pb, i);
+		if (child_form && child_form->refSheetParent() == (LayerManager*)pfrm) {
+			_CleanSingleForm(pb, i);
+		}
+	}
+
+	Rectangle area = pfrm->sheet_area;
+	area = Consman::DetachForm(static_cast<::uni::Witch::Form*>(pfrm));
+	// Delete VideoConsole2 children from client_area.subf
+	LayerManager& client = static_cast<uni::Witch::Form*>(pfrm)->getClientSheet();
+	while (client.subf) {
+		SheetTrait* child_sheet = cast<SheetTrait*>(client.subf->offs);
+		client.Remove(child_sheet);
+		if (child_sheet) {
+			child_sheet->refSheetParent() = nullptr;
+			global_layman.UnregisterTimer(child_sheet);
+			Console_t* con_base = static_cast<Console_t*>(static_cast<uni::VideoConsole2*>(child_sheet));
+			CleanupAndDestroyVconsoleByConsole(con_base);
+		}
+	}
+	DetachLayerChildren(&static_cast<uni::Witch::Form*>(pfrm)->getClientSheet());
+	pfrm->refSheetNode().subf = nullptr;
+	global_layman.Update(nullptr, area);
+
+	// Nullify any pforms slot still pointing at this detached Form before delete.
+	CleanupFormReferences(static_cast<::uni::Witch::Form*>(pfrm));
+	ProcFormsSet(pb, pform_id, nullptr);
+	if (pfrm->sheet_buffer) {
+		delete[] pfrm->sheet_buffer;
+		pfrm->sheet_buffer = nullptr;
+	}
+	delete static_cast<::uni::Witch::Form*>(pfrm);
+}
+
+void Global_CleanProcessForms(ProcessBlock* pb) {
+	if (!pb) return;
+	for (stduint pform_id = 0, count = ProcFormsCount(pb); pform_id < count; pform_id++) {
+		_CleanSingleForm(pb, pform_id);
+	}
+}
+
+static stdsint GraphicMsg_FBID(const FMT_ConsoleMsg_FBID* data, ProcessBlock* pb) {
+	::uni::Witch::Form* pf = static_cast<::uni::Witch::Form*>(ProcFormsGet(pb, data->pform_id));
+	if (!pf) return -1;
+
+	pf->usrp_buffer = data->usrp_buffer;
+	pf->usrp_owner = pb;
+
+	return 0;
+}
+
+static stdsint GraphicMsg_FUPD(const FMT_ConsoleMsg_FUPD* data, ProcessBlock* pb) {
+	SheetTrait* pfrm = ProcFormsGet(pb, data->pform_id);
+	if (!pfrm) return -1;
+
+	::uni::Witch::Form* pf = static_cast<::uni::Witch::Form*>(pfrm);
+	void* user_buf = pf->usrp_buffer;
+	if (!user_buf || !pfrm->sheet_buffer) return -1;
+
+	Rectangle client_area = pf->getClientArea();
+	ProcessBlock* owner = (ProcessBlock*)pf->usrp_owner;
+	if (!owner) owner = pb;
+
+	Rectangle dirty_rect;
+	bool has_dirty = false;
+	if (data->usrp_rect) {
+		if (MccaMemCopyP(&dirty_rect, NULL, data->usrp_rect, pb, sizeof(dirty_rect)) == sizeof(dirty_rect)) {
+			has_dirty = true;
+		}
+	}
+
+	if (has_dirty) {
+		if (dirty_rect.x >= client_area.width || dirty_rect.y >= client_area.height) {
+			return 0;
+		}
+		stduint end_x = dirty_rect.x + dirty_rect.width;
+		if (end_x < dirty_rect.x || end_x > client_area.width) {
+			dirty_rect.width = client_area.width - dirty_rect.x;
+		}
+		stduint end_y = dirty_rect.y + dirty_rect.height;
+		if (end_y < dirty_rect.y || end_y > client_area.height) {
+			dirty_rect.height = client_area.height - dirty_rect.y;
+		}
+		if (dirty_rect.width == 0 || dirty_rect.height == 0) {
+			return 0;
+		}
+	} else {
+		dirty_rect.x = 0;
+		dirty_rect.y = 0;
+		dirty_rect.width = client_area.width;
+		dirty_rect.height = client_area.height;
+	}
+
+	// Copy user pixels directly into Form's sheet_buffer at client area + dirty rect offset
+	for (stduint i = 0; i < dirty_rect.height; i++) {
+		Color* dst = pfrm->sheet_buffer + (client_area.y + dirty_rect.y + i) * pfrm->sheet_area.width + (client_area.x + dirty_rect.x);
+		Color* src = (Color*)user_buf + (dirty_rect.y + i) * client_area.width + dirty_rect.x;
+		MccaMemCopyP(dst, NULL, src, owner, dirty_rect.width * sizeof(Color));
+	}
+
+	Rectangle update_rect(
+		Point(client_area.x + dirty_rect.x, client_area.y + dirty_rect.y),
+		Size2(dirty_rect.width, dirty_rect.height)
+	);
+	global_layman.Update(pfrm, update_rect);
+	return 0;
+}
+
+static stdsint GraphicMsg_FMSG(const FMT_ConsoleMsg_FMSG* data, ProcessBlock* pb, stduint sig_src) {
+	SheetTrait* pfrm = ProcFormsGet(pb, data->pform_id);
+	if (!pfrm) return -1;
+
+	auto pf = static_cast<::uni::Witch::Form*>(pfrm);
+	if (pf->msg_queue.Count()) {
+		SheetMessage msg;
+		pf->msg_queue.Dequeue(msg);
+		MccaMemCopyP(data->message, pb, &msg, NULL, sizeof(msg));
+		return 1; // Message fetched
+	}
+
+	if (data->if_blocked) {
+		// Store blocking request to be handled later by Graphic thread
+		MutexLocal waiters_guard(&console_waiters_mutex);
+		blocked_form_msgs.Append({ sig_src, data->pform_id, data->message });
+		RefreshConsoleBlockedStateUnlocked();
+		return -2; // Signal that reply is deferred
+	}
+
+	return 0; // No message available
+}
+
+static stdsint GraphicMsg_FDRW(const FMT_ConsoleMsg_FDRW* data, ProcessBlock* pb) {
+	SheetTrait* pfrm = ProcFormsGet(pb, data->pform_id);
+	if (!pfrm) return -1;
+	switch (data->shape_type) {
+	case FMT_ConsoleMsg_FDRW::Shape::Point: {
+		FMT_ConsoleMsg_FDRW::ShapeInfo::ColorPoint cp;
+		if (MccaMemCopyP(&cp, NULL, data->usr_shape_info.cpoint, pb, sizeof(cp)) != sizeof(cp)) return -1;
+		if (!pfrm->sheet_buffer) return -1;
+		pfrm->sheet_buffer[cp.po.y * pfrm->sheet_area.width + cp.po.x] = cp.co;
+		return 0;
+	}
+	case FMT_ConsoleMsg_FDRW::Shape::Line: {
+		FMT_ConsoleMsg_FDRW::ShapeInfo::ColorLine cl;
+		if (MccaMemCopyP(&cl, NULL, data->usr_shape_info.cline, pb, sizeof(cl)) != sizeof(cl)) return -1;
+		if (!pfrm->sheet_buffer) return -1;
+
+		VideoControlInterfaceMARGB8888 vcim(pfrm->sheet_buffer, pfrm->sheet_area.getSize());
+		LayerManager lm(&vcim, Rectangle{ Point(0,0), pfrm->sheet_area.getSize() });
+
+		Size2dif off;
+		off.x = cl.size.x;
+		off.y = cl.size.y;
+		lm.DrawLine(cl.disp, off, cl.color);
+
+		stdsint x1 = cl.disp.x, y1 = cl.disp.y;
+		stdsint x2 = cl.disp.x + cl.size.x, y2 = cl.disp.y + cl.size.y;
+		stdsint rx = (x1 < x2 ? x1 : x2) - 1;
+		stdsint ry = (y1 < y2 ? y1 : y2) - 1;
+		stdsint rw = (x1 < x2 ? x2 - x1 : x1 - x2) + 3;
+		stdsint rh = (y1 < y2 ? y2 - y1 : y1 - y2) + 3;
+
+		global_layman.Update(pfrm, Rectangle(Point(rx, ry), Size2(rw, rh)));
+		return 0;
+	}
+	case FMT_ConsoleMsg_FDRW::Shape::Rect: {
+		Rectangle rect;
+		if (MccaMemCopyP(&rect, NULL, data->usr_shape_info.crect, pb, sizeof(rect)) != sizeof(rect)) return -1;
+		if (!pfrm->sheet_buffer) return -1;
+		VideoControlInterfaceMARGB8888 vcim(pfrm->sheet_buffer, pfrm->sheet_area.getSize());
+		vcim.DrawRectangle(rect);
+		global_layman.Update(pfrm, rect);
+		return 0;
+	}
+	default: return -1;
+	}
+}
+
+struct FMT_ConsoleMsg_FCHR {
+	stduint pform_id;// in pforms
+	Point* usrp_vertex;
+	const char* usrp_str;
+	Color color;
+};
+
+static stdsint GraphicMsg_FCHR(const FMT_ConsoleMsg_FCHR* data, ProcessBlock* pb) {
+	SheetTrait* pfrm = ProcFormsGet(pb, data->pform_id);
+	if (!pfrm) return -1;
+
+	Point vertex;
+	if (MccaMemCopyP(&vertex, NULL, data->usrp_vertex, pb, sizeof(vertex)) != sizeof(vertex)) return -1;
+	String buf(String::Charset::UTF8, 256);
+	stduint len = StrCopyP(buf.reflect(), kernel_paging, data->usrp_str, pb->paging, 256);
+	buf.Refresh();
+
+	// [Security Fix]: Validate drawing bounds to prevent heap corruption
+	if ((vertex.x + (stdsint)buf.getByteCount() * _TEMP 8) > pfrm->sheet_area.width ||
+		(vertex.y + 16) > pfrm->sheet_area.height) {
+		return -1;
+	}
+
+	uni::DrawString_16(*pfrm, vertex, String(buf), data->color);
+
+	Rectangle dirty_rect(vertex, Size2(buf.getByteCount() * 8, 16));
+	global_layman.Update(pfrm, dirty_rect);
+
+	return 0;
+}
+
+static stdsint GraphicMsg_FTIM(stduint pform_id, stduint ms, ProcessBlock* pb) {
+	SheetTrait* pfrm = ProcFormsGet(pb, pform_id);
+	if (!pfrm) return -1;
+
+	stduint period = ms * SysTickFreq / 1000;
+	if (ms && !period) period = 1;
+
+	global_layman.UnregisterTimer(pfrm);
+	if (period) {
+		global_layman.RegisterTimer(pfrm);
+		pfrm->timer_timeout_period = period;
+		pfrm->timer_timeout_tick = tick + period;
+		ploginfo("Timer set for form %u: period %u ticks", pform_id, period);
+	}
+	else {
+		pfrm->timer_timeout_period = 0;
+	}
+
+	return 0;
+}
+
+// CreateVconsole - runs only in Graphic thread, no lock needed.
+#if _MCCA == 0x8632
+static uni::BitmapFontEngine fallback_engine(1);
+#else
+static uni::BitmapFontEngine gui_font_engine(1);
+#endif
+
+_RET_CreateVconsole Consman::CreateVconsole(const Rectangle& rect, rostr title) {
+	_RET_CreateVconsole ret;
+	auto pcon = new VideoConsole2(NULL,
+		Rectangle(Point(2, 2), Size2(rect.width - 10, rect.height - 30)),
+		Color::Black, 0xFFFCEAF1
+	);
+
+	#if _MCCA == 0x8632
+	extern uni::FontEngine* global_ft_engine;
+	if (global_ft_engine) {
+		pcon->setFontEngine(global_ft_engine);
+	}
+	else {
+		pcon->setFontEngine(&fallback_engine);
+	}
+	#else
+	pcon->setFontEngine(&gui_font_engine);
+	#endif
+
+	ret.pcon = pcon;
+	auto text_buf = new BufferChar[pcon->getCols() * pcon->getRows()];
+	auto line_buf = new Color[pcon->getLineBufferSize()];
+	if (!text_buf || !line_buf) {
+		delete[] text_buf;
+		delete[] line_buf;
+		delete pcon;
+		plogerro("?");
+		return ret;
+	}
+	pcon->setBuffers(nullptr, text_buf, line_buf);
+
+	auto pform = new ::uni::Witch::Form();
+	if (!pform) {
+		delete pcon;
+		plogerro("?");
+		return ret;
+	}
+	ret.pform = pform;
+	pform->Title = title;
+	pcon->InitializeSheet(*pform, pcon->window.getVertex(), pcon->window.getSize());
+	pcon->Clear();
+	pform->AppendControl(pcon);
+	pform->setSheet(global_layman, rect, new Color[rect.getArea()]);
+	pform->setFocus(pcon);
+
+	global_layman.Append(pform);
+	Consman::SwitchForm(pform);
+
+	pcon->Start();
+
+	extern Dchain vttys;
+	Dnode* pnode = VTTY_Append(pcon);
+	ret.tty_node = pnode;
+	ret.tty_no = pnode ? vttys.Locate((pureptr_t)pcon, false) : 0;
+	return ret;
+}
+
+// RemoveVconsole - runs only in Graphic thread, no lock needed.
+void Consman::RemoveVconsole(Dnode* nod) {
+	if (!nod) return;
+	auto pcon = (uni::VideoConsole2*)nod->offs;
+	auto pclient = pcon ? pcon->refSheetParent() : nullptr;
+	auto pfrm = pclient ? static_cast<uni::Witch::Form*>(pclient->refSheetParent()) : nullptr;
+	Rectangle area = pfrm ? pfrm->sheet_area : (pclient ? pclient->sheet_area : Rectangle{});
+
+	if (pcon) {
+		global_layman.UnregisterTimer(pcon);
+	}
+	if (pclient) {
+		pclient->Remove(pcon);
+	}
+	if (pfrm) {
+		area = Consman::DetachForm(pfrm, pcon);
+		DetachLayerChildren(&static_cast<uni::Witch::Form*>(pfrm)->getClientSheet());
+		pfrm->refSheetNode().subf = nullptr;
+	}
+
+	if (area.width || area.height) {
+		global_layman.Update(nullptr, area);
+	}
+
+	// Phase 2: clean process ownership and blocked-waiter bookkeeping
+	CleanupFormReferences(pfrm);
+	CleanupTTYReferences(nod);
+
+	// Phase 3: destroy detached objects
+	DestroyVconsoleNode(nod);
+	if (pfrm) {
+		if (pfrm->sheet_buffer) {
+			delete[] pfrm->sheet_buffer;
+			pfrm->sheet_buffer = nullptr;
+		}
+		delete pfrm;
+	}
+}
+
+#endif // _GUI_ENABLE
+
+// ---- ---- Graphic Thread Main Loop ---- ----
+
 void serv_graf_loop() {
 	SysMessage msg;// Inner Module Message System
 	#if _GUI_ENABLE == 0
@@ -216,78 +815,240 @@ void serv_graf_loop() {
 	#endif
 	#if (_MCCA == 0x8632) || (_MCCA == 0x8664)
 	while (true) {
+		// Priority 1: check internal interrupt queue (non-blocking)
 		IC.enInterrupt(false);
-		if (!message_queue_conv.Count()) {
-			IC.enInterrupt(true);
-			HALT(); // Sleep the CPU core until the next interrupt
-			Taskman::Schedule(true);// yield
+		bool has_int_msg = message_queue_conv.Count() > 0;
+		if (has_int_msg) message_queue_conv.Dequeue(msg);
+		IC.enInterrupt(true);
+
+		if (has_int_msg) {
+			// Handle interrupt messages - no lock needed, Graphic thread is sole GUI owner
+			switch (msg.type) {
+			case SysMessage::RUPT_TIMER:
+				if constexpr (_GUI_ENABLE) {
+					global_layman.CheckTimers(tick);
+				}
+				has_pending_timer = false;
+				Consman::WakeBlockedWaiters();
+				break;
+			case SysMessage::RUPT_MOUSE:
+				hand_mouse(msg.args.mou_event);
+				Consman::WakeBlockedWaiters();
+				break;
+			case SysMessage::RUPT_KBD:
+				if constexpr (_GUI_ENABLE) {
+					#if _MCCA == 0x8664
+					// USB keyboard: sysmsg_kbd handles modifiers, LEDs, hotkeys,
+					// and forwards to last_click_sheet->onrupt — all in Graphic thread.
+					sysmsg_kbd(msg.args.kbd_event);
+					#else
+					// PS/2 keyboard: modifiers/LEDs/hotkeys already handled in
+					// interrupt context; just forward to the focused sheet.
+					auto& kbd_event = msg.args.kbd_event;
+					if (Consman::last_click_sheet) {
+						Consman::last_click_sheet->onrupt(SheetEvent::onKeybd, Point(0, 0), &kbd_event);
+					}
+					#endif
+				}
+				Consman::WakeBlockedWaiters();
+				break;
+			case SysMessage::RUPT_FLUSH:
+				// Asynchronous rendering: Compose and then Flush to screen
+				if (Consman::ento_gui && global_layman.pvci && global_layman.sheet_buffer) {
+					if (msg.args.rect.w > 0 && msg.args.rect.h > 0) {
+						global_layman.UpdateForce(nullptr, msg.args.rect.toRectangle());
+						if (Consman::real_pvci)
+							Consman::real_pvci->DrawPoints(msg.args.rect.toRectangle(), global_layman.sheet_buffer);
+					}
+				}
+				break;
+			case SysMessage::RUPT_NEW_TERM:
+			{
+				ProcessBlock* shell_p = Taskman::Create((void*)&serv_shell_process, RING_M);
+				if (shell_p) {
+					ploginfo("Create new shell-form: pid%u", shell_p->pid);
+				}
+				break;
+			}
+			default:
+				plogerro("%s Unknown int message type: %d", __FUNCIDEN__, msg.type);
+				break;
+			}
+			// After handling interrupts, check blocked form message requests
+			// since new events may have queued messages for blocked forms.
+			#if _GUI_ENABLE
+			{
+				MutexLocal waiters_guard(&console_waiters_mutex);
+				for (stduint i = 0; i < blocked_form_msgs.Count(); i++) {
+					auto& b = blocked_form_msgs[i];
+					ProcessBlock* pb = ProcessBlock::AcquireActive(b.sig_src);
+					if (!pb) {
+						blocked_form_msgs.Remove(i--);
+						continue;
+					}
+					SheetTrait* pfrm = ProcFormsGet(pb, b.pform_id);
+					if (!pfrm) {
+						ProcessBlock::Release(pb);
+						blocked_form_msgs.Remove(i--);
+						continue;
+					}
+					auto pf = static_cast<::uni::Witch::Form*>(pfrm);
+					if (pf->msg_queue.Count()) {
+						SheetMessage smsg;
+						pf->msg_queue.Dequeue(smsg);
+						MccaMemCopyP(b.usr_msg_ptr, pb, &smsg, NULL, sizeof(smsg));
+
+						stduint val = 1;
+						stduint target_sig_src = b.sig_src;
+						blocked_form_msgs.Remove(i--);
+						syssend_async(target_sig_src, &val, byteof(val));
+					}
+					ProcessBlock::Release(pb);
+				}
+				RefreshConsoleBlockedStateUnlocked();
+			}
+			#endif
+			continue;// Prioritize interrupt messages
+		}
+
+		// Priority 2: try non-blocking IPC receive
+		// Use TMSG to check for pending messages, then sysrecv only if available
+		volatile stduint sig_type = 0, sig_src;
+		volatile stduint to_args[4];
+		if (!syscall(syscall_t::TMSG)) {
+			// No IPC message pending, sleep briefly then re-check interrupts
+			syscall(syscall_t::REST, 1, 2);
 			continue;
 		}
-		message_queue_conv.Dequeue(msg);
-		IC.enInterrupt(true);
-		//
-		switch (msg.type) {
-		case SysMessage::RUPT_TIMER:
-			if constexpr (_GUI_ENABLE) {
-				#if _GUI_ENABLE
-				// [Lock]: Protect timer iteration against concurrent layer cleanup
-				RecursiveMutexLocal guard(&gui_lock);
-				global_layman.CheckTimers(tick);
-				#endif
-			}
-			has_pending_timer = false;
-			Consman::WakeBlockedWaiters();
-			break;
-		case SysMessage::RUPT_MOUSE:
-			hand_mouse(msg.args.mou_event);
-			Consman::WakeBlockedWaiters();
-			break;
-		case SysMessage::RUPT_KBD:
-			if constexpr (_GUI_ENABLE) {
-				// [Lock]: Protect last_click_sheet access against concurrent form cleanup
-				#if _GUI_ENABLE
-				RecursiveMutexLocal guard(&gui_lock);
-				#endif
-				auto& kbd_event = msg.args.kbd_event;
-				if (Consman::last_click_sheet) {
-					Consman::last_click_sheet->onrupt(SheetEvent::onKeybd, Point(0, 0), &kbd_event);
-				}
-			}
-			Consman::WakeBlockedWaiters();
-			break;
-		case SysMessage::RUPT_FLUSH:
-			// Asynchronous rendering: Compose and then Flush to screen
-			if (Consman::ento_gui && global_layman.pvci && global_layman.sheet_buffer) {
-				if (msg.args.rect.w > 0 && msg.args.rect.h > 0) {
-					{
-						// [Lock]: Protect composition against concurrent layer cleanup
-						#if _GUI_ENABLE
-						RecursiveMutexLocal guard(&gui_lock);
-						#endif
-						// Perform delayed composition (Layer Blending)
-						// ploginfo("[GRAPHIC] Flush ((%u,%u),(%u,%u))", msg.args.rect.x, msg.args.rect.y, msg.args.rect.w, msg.args.rect.h);
-						global_layman.UpdateForce(nullptr, msg.args.rect.toRectangle());
-					}
-					// Flush back-buffer to physical screen (buffer is now stable)
-					if (Consman::real_pvci)
-						Consman::real_pvci->DrawPoints(msg.args.rect.toRectangle(), global_layman.sheet_buffer);
-				}
-			}
-			break;
+		sysrecv(ANYPROC, (void*)to_args, byteof(to_args), (usize*)&sig_type, (usize*)&sig_src);
+		ProcessBlock* safe_pb = ProcessBlock::Acquire(sig_src);
+		if (!safe_pb) continue;
 
-		case SysMessage::RUPT_NEW_TERM:
+		#if _GUI_ENABLE
+		stduint ret = 0;
+		switch ((GraphicMsg)sig_type) {
+		case GraphicMsg::FNEW:
+			ret = GraphicMsg_FNEW((FMT_ConsoleMsg_FNEW*)to_args, safe_pb);
+			syssend_async(sig_src, (void*)&ret, sizeof(ret));
+			break;
+		case GraphicMsg::FDEL:
 		{
-			ProcessBlock* shell_p = Taskman::Create((void*)&serv_shell_process, RING_M);
-			if (shell_p) {
-				ploginfo("Create new shell-form: pid%u", shell_p->pid);
+			ProcessBlock* pb_target = nullptr;
+			bool need_release = false;
+			if (sig_src < TaskCount) {
+				pb_target = ProcessBlock::AcquireActiveByPID(to_args[1]);
+				need_release = true;
 			}
+			else {
+				pb_target = safe_pb;
+			}
+			if (pb_target) {
+				ret = GraphicMsg_FDEL(to_args[0], pb_target);
+				if (need_release) {
+					ProcessBlock::Release(pb_target);
+				}
+			}
+			else {
+				ret = (stduint)-1;
+			}
+		}
+		syssend_async(sig_src, (void*)&ret, sizeof(ret));
+		break;
+		case GraphicMsg::FBID:
+			ret = GraphicMsg_FBID((FMT_ConsoleMsg_FBID*)to_args, safe_pb);
+			syssend_async(sig_src, (void*)&ret, sizeof(ret));
+			break;
+		case GraphicMsg::FUPD:
+			ret = GraphicMsg_FUPD((FMT_ConsoleMsg_FUPD*)to_args, safe_pb);
+			syssend_async(sig_src, (void*)&ret, sizeof(ret));
+			break;
+		case GraphicMsg::FMSG:
+			ret = GraphicMsg_FMSG((FMT_ConsoleMsg_FMSG*)to_args, safe_pb, sig_src);
+			if ((stdsint)ret != -2) {
+				syssend_async(sig_src, (void*)&ret, sizeof(ret));
+			}
+			break;
+		case GraphicMsg::FDRW:
+			ret = GraphicMsg_FDRW((FMT_ConsoleMsg_FDRW*)to_args, safe_pb);
+			syssend_async(sig_src, (void*)&ret, sizeof(ret));
+			break;
+		case GraphicMsg::FCHR:
+			ret = GraphicMsg_FCHR((FMT_ConsoleMsg_FCHR*)to_args, safe_pb);
+			syssend_async(sig_src, (void*)&ret, sizeof(ret));
+			break;
+		case GraphicMsg::FTIM:
+			ret = GraphicMsg_FTIM(to_args[0], to_args[1], safe_pb);
+			syssend_async(sig_src, (void*)&ret, sizeof(ret));
+			break;
+		case GraphicMsg::FCLEANPROC:
+		{
+			auto data = (FMT_ConsoleMsg_FCLEANPROC*)to_args;
+			ProcessBlock* target_pb = (ProcessBlock*)data->process_block;
+			ret = target_pb ? 0 : (stduint)-1;
+			if (target_pb) {
+				Global_CleanProcessForms(target_pb);
+			}
+			syssend_async(sig_src, (void*)&ret, sizeof(ret));
+			break;
+		}
+		case GraphicMsg::VCON_CREATE:
+		{
+			// to_args: [x, y, w, h] - rectangle for the new vconsole
+			Rectangle rect(Point(to_args[0], to_args[1]), Size2(to_args[2], to_args[3]));
+			auto result = Consman::CreateVconsole(rect, "Terminal");
+			syssend_async(sig_src, &result, sizeof(result));
+			break;
+		}
+		case GraphicMsg::VCON_REMOVE:
+		{
+			// to_args[0] = Dnode* cast to stduint
+			Dnode* nod = (Dnode*)to_args[0];
+			Consman::RemoveVconsole(nod);
+			ret = 0;
+			syssend_async(sig_src, (void*)&ret, sizeof(ret));
 			break;
 		}
 		default:
-			plogerro("%s Unknown message type: %d", __FUNCIDEN__, msg.type);
+			plogerro("%s Unknown GraphicMsg type: %d", __FUNCIDEN__, sig_type);
 			break;
 		}
+		#endif // _GUI_ENABLE
 
+		ProcessBlock::Release(safe_pb);
+
+		// Handle blocked form message requests
+		#if _GUI_ENABLE
+		{
+			MutexLocal waiters_guard(&console_waiters_mutex);
+			for (stduint i = 0; i < blocked_form_msgs.Count(); i++) {
+				auto& b = blocked_form_msgs[i];
+				ProcessBlock* pb = ProcessBlock::AcquireActive(b.sig_src);
+				if (!pb) {
+					blocked_form_msgs.Remove(i--);
+					continue;
+				}
+				SheetTrait* pfrm = ProcFormsGet(pb, b.pform_id);
+				if (!pfrm) {
+					ProcessBlock::Release(pb);
+					blocked_form_msgs.Remove(i--);
+					continue;
+				}
+				auto pf = static_cast<::uni::Witch::Form*>(pfrm);
+				if (pf->msg_queue.Count()) {
+					SheetMessage msg;
+					pf->msg_queue.Dequeue(msg);
+					MccaMemCopyP(b.usr_msg_ptr, pb, &msg, NULL, sizeof(msg));
+
+					stduint val = 1;
+					stduint target_sig_src = b.sig_src;
+					blocked_form_msgs.Remove(i--);
+					syssend_async(target_sig_src, &val, byteof(val));
+				}
+				ProcessBlock::Release(pb);
+			}
+			RefreshConsoleBlockedStateUnlocked();
+		}
+		#endif
 	}
 	#else
 	loop;
@@ -475,11 +1236,7 @@ void RenderFrameFlush() {
 				last_timer_check = tick;
 				SysMessage msg;
 				msg.type = SysMessage::RUPT_TIMER;
-				#if _MCCA == 0x8664
-				message_queue.Enqueue(msg);
-				#elif _MCCA == 0x8632
 				message_queue_conv.Enqueue(msg);
-				#endif
 			}
 		}
 	}
@@ -514,12 +1271,7 @@ void RenderFrameFlush() {
 			msg.args.rect.h = h;
 			global_layman.dirty_area = {};
 			global_layman.is_dirty = false;
-			#if _MCCA == 0x8664
-			message_queue.Enqueue(msg);
-			#elif _MCCA == 0x8632
-			// Enqueue the flush message to be handled by serv_graf_loop
 			message_queue_conv.Enqueue(msg);
-			#endif
 
 			last_flush_time = tick;
 		}

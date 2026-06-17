@@ -15,9 +15,13 @@ void _Comment(R1) serv_shell_process() {
 
 	if (Consman::ento_gui) {
 		Rectangle rect{ Point(250, 160), Size2(480, 320) };
-		auto [pcon, pf, tty_no] = Consman::CreateVconsole(rect, "Terminal");
-		pf_ptr = pf;
-		tty_target = vttys[tty_no];
+		// Request Graphic thread to create vconsole via IPC
+		stduint vcon_args[4] = { (stduint)rect.x, (stduint)rect.y, (stduint)rect.width, (stduint)rect.height };
+		_RET_CreateVconsole vcon_ret = {};
+		syssend(Task_ConsoleVideo, vcon_args, sizeof(vcon_args), _IMM(GraphicMsg::VCON_CREATE));
+		sysrecv(Task_ConsoleVideo, &vcon_ret, sizeof(vcon_ret));
+		pf_ptr = vcon_ret.pform;
+		tty_target = vcon_ret.tty_node;
 		p = Taskman::CreateFile(("/md0/cot"), RING_U, Taskman::CurrentPID());
 	}
 

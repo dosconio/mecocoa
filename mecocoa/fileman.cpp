@@ -100,6 +100,13 @@ stduint ProcessBlock::Rdwt(bool wr_type, stduint fid, Slice slice)
 	const bool is_magic_tty = file->f_inode &&
 		(stduint)file->f_inode->internal_handler == (stduint)~0;
 
+	// Check if this is a pipe that may block during I/O.
+	// Pipe I/O must NOT hold fileman lock, because ReadPipe/WritePipe can
+	// block the current thread, and other threads (or process cleanup) need
+	// to acquire fileman lock to proceed.
+	const bool is_pipe = file->f_inode &&
+		(file->f_inode->i_mode & I_TYPE_MASK) == I_NAMED_PIPE;
+
 	if (is_magic_tty) {
 		// Task_Console owns the focus_tty path so fileman only forwards the
 		// request and commits fd_pos after the synchronous reply.
@@ -143,6 +150,14 @@ stduint ProcessBlock::Rdwt(bool wr_type, stduint fid, Slice slice)
 	}
 	file->f_pos = files->pfiles[fid]->fd_pos; // sync pos
 
+	// For pipes, release fileman lock before doing I/O that may block.
+	// ReadPipe/WritePipe can block the thread, and holding fileman lock
+	// during that time prevents other threads from accessing file descriptors
+	// (e.g., process exit cleanup, dup2, etc.), causing deadlocks.
+	if (is_pipe) {
+		files.Unlock();
+	}
+
 	int total_bytes = 0;
 	int bytes_left = slice.length;
 	stduint curr_addr = slice.address;
@@ -160,6 +175,9 @@ stduint ProcessBlock::Rdwt(bool wr_type, stduint fid, Slice slice)
 				// Bypass global vfs_lock spinlock for character special devices to avoid deadlocks.
 				bytes_processed = file->f_inode->i_sb->fs->writfl(file->f_inode->internal_handler, Slice{ file->f_pos, (stduint)chunk }, (const byte*)::buffer);
 			}
+			else if (is_pipe) {
+				bytes_processed = Filesys::WritePipe(file, ::buffer, chunk);
+			}
 			else {
 				bytes_processed = Filesys::Write(file, ::buffer, chunk);
 			}
@@ -169,33 +187,45 @@ stduint ProcessBlock::Rdwt(bool wr_type, stduint fid, Slice slice)
 				// Bypass global vfs_lock spinlock for character special devices to avoid deadlocks.
 				bytes_processed = file->f_inode->i_sb->fs->readfl(file->f_inode->internal_handler, Slice{ file->f_pos, (stduint)chunk }, (byte*)::buffer);
 			}
+			else if (is_pipe) {
+				bytes_processed = Filesys::ReadPipe(file, ::buffer, chunk);
+			}
 			else {
 				bytes_processed = Filesys::Read(file, ::buffer, chunk);
 			}
 			if (bytes_processed > 0) {
 				MemCopyP((void*)curr_addr, pb->paging, ::buffer, kernel_paging, bytes_processed);
 			}
-			// ploginfo("read: %x, buf: %s", pb->paging_redirect, ::buffer);
 		}
-		// address from user-space, so use MemCopyP but MccaMemCopyP
 
 		// Break if error occurred or EOF reached
 		if (bytes_processed <= 0) {
 			break;
 		}
 
-		// Update tracking variables and file descriptors
+		// Update tracking variables
 		total_bytes += bytes_processed;
 		curr_addr += bytes_processed;
 		bytes_left -= bytes_processed;
-		files->pfiles[fid]->fd_pos += bytes_processed;
-		
-		// Update the underlying VFS file position 
-		file->f_pos = files->pfiles[fid]->fd_pos;
+
+		// For pipes, fd_pos is not meaningful, skip update
+		if (!is_pipe) {
+			files->pfiles[fid]->fd_pos += bytes_processed;
+			file->f_pos = files->pfiles[fid]->fd_pos;
+		}
 
 		// If the processed bytes are less than the chunk requested, we likely hit the end of the file.
 		if (bytes_processed < chunk) {
 			break;
+		}
+	}
+
+	// Re-acquire fileman lock for pipe path to update fd_pos if needed
+	if (is_pipe) {
+		auto files_reacq = this->fileman.Lock();
+		if (fid < files_reacq->pfiles.Count() && files_reacq->pfiles[fid] == fd_entry) {
+			files_reacq->pfiles[fid]->fd_pos += total_bytes;
+			file->f_pos = files_reacq->pfiles[fid]->fd_pos;
 		}
 	}
 

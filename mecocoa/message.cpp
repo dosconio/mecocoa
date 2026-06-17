@@ -11,7 +11,6 @@ extern byte _BUF_xhc[];
 #endif
 
 
-extern void sysmsg_kbd(keyboard_event_t kbd_event);
 extern uni::Dchain TimerManager;
 void _Comment(R0) serv_sysmsg() {
 	#if _MCCA == 0x8664 && defined(_UEFI)
@@ -41,23 +40,8 @@ void _Comment(R0) serv_sysmsg() {
 				SysTimer::Append(100, 0);// spinLocked
 			}
 			break;
-		case SysMessage::RUPT_KBD:
-			// ploginfo("Kbd %[32H]", msg.args.kbd_event);
-			sysmsg_kbd(msg.args.kbd_event);
-			Consman::WakeBlockedWaiters();
-			break;
 		case SysMessage::RUPT_CONSOLE_WAKE:
 			Consman::WakeBlockedWaiters();
-			break;
-		case SysMessage::RUPT_FLUSH:
-			if (Consman::ento_gui && Consman::real_pvci && global_layman.sheet_buffer) {
-				if (msg.args.rect.w > 0 && msg.args.rect.h > 0) {
-					// Perform delayed composition (Layer Blending)
-					global_layman.UpdateForce(nullptr, msg.args.rect.toRectangle());
-					// Flush back-buffer to physical screen
-					Consman::real_pvci->DrawPoints(msg.args.rect.toRectangle(), global_layman.sheet_buffer);
-				}
-			}
 			break;
 		default:
 			plogerro("Unknown message type: %d", msg.type);

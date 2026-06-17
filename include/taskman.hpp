@@ -63,6 +63,22 @@ struct SysMessage {
 };
 extern uni::Queue<SysMessage> message_queue;
 
+// Graphic-thread IPC message types for GUI operations.
+// Console forwards Form/VConsole requests to Graphic via these.
+enum class GraphicMsg {
+	FNEW,// new-form
+	FDEL,// close-form
+	FBID,// bind user pixel buffer
+	FUPD,// update pixels from user buffer
+	FMSG,// fetch form message
+	FDRW,// draw shape
+	FCHR,// draw string
+	FTIM,// set timer
+	FCLEANPROC,// clean exiting process GUI resources
+	VCON_CREATE,// create virtual console
+	VCON_REMOVE,// remove virtual console
+};
+
 // >= 1
 #ifndef PCU_CORES_MAX
 #define PCU_CORES_MAX 16

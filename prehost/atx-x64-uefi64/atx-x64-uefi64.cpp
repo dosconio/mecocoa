@@ -78,7 +78,7 @@ void mecocoa(const UefiData& uefi_data_ref)
 
 	lapic_timer.Reset(lapic_timer.Frequency / SysTickFreq);
 	//[USB Mouse&Keyboard]
-	uni::device::SpaceUSB::HIDMouseDriver::default_observer = hand_mouse;
+	uni::device::SpaceUSB::HIDMouseDriver::default_observer = hand_mouse_usb;
 	uni::device::SpaceUSB::HIDKeyboardDriver::default_observer = hand_kboard;
 	if (auto xhc_dev = Mouse_Init_USB(pci, &xhc)) {
 		ploginfo("xHC-USB-Mouse has been found: %[8H].%[8H].%[8H]", xhc_dev->bus, xhc_dev->device, xhc_dev->function);

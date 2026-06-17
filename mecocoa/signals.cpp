@@ -138,14 +138,6 @@ static void check_and_deliver_signals_generic(RegisterContext& ctx) {
 			if (signo == SIGKILL || signo == SIGTERM) {
 				ploginfo("Process %u forced to exit due to signal %d", pb->getID(), signo);
 			}
-			// [Lock]: Force-release gui_lock if held by this thread.
-			// SIGKILL terminates the thread immediately, bypassing RAII destructors.
-			// If gui_lock is held, it will never be released, causing system-wide deadlock.
-			if constexpr (_GUI_ENABLE) {
-				extern RecursiveMutex gui_lock;
-				stduint cur_tid = Taskman::CurrentTID();
-				gui_lock.ForceReleaseFromSignal(cur_tid);
-			}
 			Taskman::ExitCurrent(128 + signo);
 			break;
 		case SIG_ACT_STOP:

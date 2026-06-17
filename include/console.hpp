@@ -56,6 +56,18 @@ enum class ConsoleMsg {
 	// do not put above:
 	FCLEANPROC,// internal: clean one exiting process GUI resources in console owner thread
 };
+struct BlockedFormMsg {
+	stduint sig_src; // thread id
+	stduint pform_id; // form index in pforms
+	SheetMessage* usr_msg_ptr; // user space buffer pointer
+
+	bool operator==(const BlockedFormMsg& other) const {
+		return sig_src == other.sig_src && pform_id == other.pform_id && usr_msg_ptr == other.usr_msg_ptr;
+	}
+};
+extern Vector<BlockedFormMsg> blocked_form_msgs;
+extern void RefreshConsoleBlockedStateUnlocked();
+
 _PACKED(struct) FMT_ConsoleMsg_RDWR {
 	stduint usr_addr;
 	stduint len;
@@ -138,6 +150,7 @@ struct _RET_CreateVconsole {
 	uni::VideoConsole2* pcon = nullptr;
 	::uni::Witch::Form* pform = nullptr;
 	stduint tty_no = 0;
+	Dnode* tty_node = nullptr; // stable pointer, avoids racy index lookup on vttys
 };
 
 struct Consman {
@@ -155,7 +168,7 @@ struct Consman {
 	static bool Initialize();
 	static void enable_2buffer();
 	static _RET_CreateVconsole CreateVconsole(const Rectangle& rect, rostr title);
-	// Caller must already hold gui_lock. Detaches one Form subtree from GUI roots, clears graf input references that still point into it, and returns the dirty area that should be refreshed afterward.
+	// Detaches one Form subtree from GUI roots, clears graf input references that still point into it, and returns the dirty area that should be refreshed afterward.
 	static Rectangle DetachForm(::uni::Witch::Form* pfrm, SheetTrait* exact_sheet = nullptr);
 	static void RemoveVconsole(Dnode* nod);
 	static void SwitchForm(SheetTrait* form);
@@ -171,6 +184,7 @@ defVconIface(GloScreenABGR8888, uint32);
 
 
 void hand_mouse(MouseMessage mmsg);
+void hand_mouse_usb(MouseMessage mmsg);
 void hand_kboard(keyboard_event_t mmsg);
 
 
@@ -179,7 +193,6 @@ class Spinlock;
 
 #if _GUI_ENABLE
 void Global_CleanProcessForms(ProcessBlock* pb);
-extern RecursiveMutex gui_lock;
 #endif
 
 #endif

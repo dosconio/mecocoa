@@ -466,7 +466,7 @@ DEFSYSC sysx_FORK(CallgateFrame* phyzik_frame) {
 }
 DEFSYSC sysc_TMSG() {
 	auto th = Taskman::CurrentTB();
-	return _IMM(th->queue_send_queuehead);
+	return _IMM(th->queue_send_queuehead) || th->async_messages.Count();
 }
 
 DEFSYSC sysc_EXEC(stduint path, stduint argv, stduint envp) {
