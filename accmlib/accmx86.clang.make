@@ -22,7 +22,11 @@ cplpref=_cc_
 cplfile=$(wildcard $(ulibpath)/c/*.c) $(wildcard $(ulibpath)/c/**/*.c) $(wildcard $(ulibpath)/c/**/**/*.c) $(wildcard accmlib/*.c)
 
 cpppref=_cx_
-cppfile=$(wildcard $(ulibpath)/cpp/*.cpp) $(wildcard $(ulibpath)/cpp/dat-block/*.cpp) $(ulibpath)/cpp/Device/Video.cpp $(ulibpath)/cpp/Device/Keyboard.cpp $(ulibpath)/cpp/Witch/Form.cpp $(wildcard accmlib/*.cpp) prehost/_auxiliary.cpp $(ulibpath)/cpp/grp-base/bstring.cpp $(ulibpath)/cpp/lango/lango-cpp.cpp
+cppfile=$(wildcard $(ulibpath)/cpp/*.cpp) \
+	$(wildcard $(ulibpath)/cpp/**/*.cpp) \
+	$(wildcard $(ulibpath)/cpp/**/**/*.cpp) \
+	$(wildcard $(ulibpath)/cpp/**/**/**/*.cpp) \
+	$(wildcard accmlib/*.cpp) prehost/_auxiliary.cpp
 
 dest_obj=$(uobjpath)/accm-$(arch)
 COMWAN = -Wno-incompatible-library-redeclaration -Wno-invalid-constexpr -Wno-empty-body

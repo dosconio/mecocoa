@@ -138,6 +138,7 @@ void hand_mouse(MouseMessage mmsg) {
 // (Graphic thread) processes the event via hand_mouse. This avoids racing
 // with GraphicMsg::FDEL on global_layman / Consman::last_click_sheet.
 void hand_mouse_usb(MouseMessage mmsg) {
+	if (!Consman::ento_gui) return; // No GUI: mouse events are meaningless
 	extern uni::Queue<SysMessage> message_queue_conv;
 	SysMessage msg;
 	msg.type = SysMessage::RUPT_MOUSE;
@@ -202,9 +203,8 @@ static SysMessage _BUF_Message_Conv[64];
 uni::Queue<SysMessage> message_queue_conv(_BUF_Message_Conv, numsof(_BUF_Message_Conv));
 volatile bool has_pending_timer = false;
 
-#if _MCCA == 0x8664
 extern void sysmsg_kbd(keyboard_event_t kbd_event);
-#endif
+
 
 // ---- ---- GUI Operation Helpers (Graphic thread only) ---- ----
 
@@ -825,18 +825,20 @@ void serv_graf_loop() {
 			// Handle interrupt messages - no lock needed, Graphic thread is sole GUI owner
 			switch (msg.type) {
 			case SysMessage::RUPT_TIMER:
-				if constexpr (_GUI_ENABLE) {
+				if (Consman::ento_gui) {
 					global_layman.CheckTimers(tick);
 				}
 				has_pending_timer = false;
 				Consman::WakeBlockedWaiters();
 				break;
 			case SysMessage::RUPT_MOUSE:
-				hand_mouse(msg.args.mou_event);
+				if (Consman::ento_gui) {
+					hand_mouse(msg.args.mou_event);
+				}
 				Consman::WakeBlockedWaiters();
 				break;
 			case SysMessage::RUPT_KBD:
-				if constexpr (_GUI_ENABLE) {
+				if (Consman::ento_gui) {
 					#if _MCCA == 0x8664
 					// USB keyboard: sysmsg_kbd handles modifiers, LEDs, hotkeys,
 					// and forwards to last_click_sheet->onrupt — all in Graphic thread.

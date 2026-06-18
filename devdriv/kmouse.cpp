@@ -33,6 +33,7 @@ static void process_mouse(byte ch) {
 	mouse_buf[3] %= 3;
 	MouseMessage& mm = *(MouseMessage*)mouse_buf;
 	if (!mouse_buf[3]) {
+		if (!Consman::ento_gui) return; // No GUI: mouse events are meaningless
 		SysMessage smsg{
 			.type = SysMessage::RUPT_MOUSE,
 		};

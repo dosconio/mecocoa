@@ -123,7 +123,7 @@ build_util:
 	echo MK appshell
 	$(CX) $(ACCM_INCF) $(XFLAGS) \
 		-o $(uobjpath)/sapp-$(arch)/cot \
-		$(uherpath)/COTLAB/src/cotlab.cpp -L$(uobjpath)/$(ACCM_LIBS) -lx64 -e _start
+		$(uherpath)/COTLAB/src/cotlab.cpp $(uherpath)/COTLAB/src/coshell.cpp -L$(uobjpath)/$(ACCM_LIBS) -lx64 -e _start
 	# ---- UNIS UTIL ---- #
 	# ---- MCCA UTIL ---- #
 	echo MK appinit

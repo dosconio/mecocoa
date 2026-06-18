@@ -10,7 +10,7 @@ MCCA_X86_CC ?= clang -target i686-unknown-none-elf
 MCCA_X86_CXX ?= clang++ -target i686-unknown-none-elf
 MCCA_X86_CRT0 = $(MCCA_X86_SYSROOT)/usr/lib/$(MCCA_X86_TRIPLE)/crt0.o
 MCCA_X86_LIBC = $(MCCA_X86_SYSROOT)/usr/lib/$(MCCA_X86_TRIPLE)/libc.a
-MCCA_X86_COMFLAGS = $(flag) -I$(uincpath) -I$(uincpath)/c/ISO_IEC_STD -I$(uincpath)/c/API-POSIX -I$(MCCA_X86_SYSROOT)/usr/include
+MCCA_X86_COMFLAGS = -D_ACCM=0x8632 -D_ARC_x86=5 -D_DEBUG  -I$(uincpath) -I$(uincpath)/c/ISO_IEC_STD -I$(uincpath)/c/API-POSIX -I$(MCCA_X86_SYSROOT)/usr/include
 
 MCCA_X86_CFLAGS = $(MCCA_X86_COMFLAGS) --sysroot=$(MCCA_X86_SYSROOT) -m32 -fno-builtin -fno-stack-protector -fno-pic -fno-pie -static -nostdlib \
 	-Wno-incompatible-library-redeclaration -Wno-invalid-constexpr -Wno-empty-body
@@ -50,9 +50,10 @@ all: $(BIN_DIR) \
 $(BIN_DIR):
 	mkdir -p $@
 
-$(BIN_DIR)/cot: $(uherpath)/COTLAB/src/cotlab.cpp $(LIBX86) $(MCCA_X86_CRT0)
+$(BIN_DIR)/cot: $(wildcard $(uherpath)/COTLAB/src/*.cpp) $(LIBX86) $(MCCA_X86_CRT0)
 	@echo "MK appshell"
-	$(MCCA_X86_CXX) $(MCCA_X86_CXXFLAGS) -o $@ $< $(MCCA_X86_LDLIBS)
+	$(MCCA_X86_CXX) $(MCCA_X86_CXXFLAGS) -o $@ $(uherpath)/COTLAB/src/*.cpp \
+		$(MCCA_X86_LDLIBS) -lm
 
 $(BIN_DIR)/%: $(UNIS_UTIL_DIR)/%.c $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
 	@echo "MK $*"

@@ -260,8 +260,20 @@ void sysmsg_kbd(keyboard_event_t kbd_event) {
 				return;
 			}
 			#endif
+			if (!Consman::ento_gui) {
+				// Ctrl + letter -> control character
+				if ((kbd_state.mod.l_ctrl || kbd_state.mod.r_ctrl) && !kbd_state.mod.l_shift && !kbd_state.mod.r_shift) {
+					if (ch >= 'a' && ch <= 'z') {
+						ch = ch - 'a' + 1;
+					}
+				}
+				auto p_vtty = vttys[Consman::current_screen_TTY];
+				if (auto* q = VTTY_INNQ(p_vtty)) {
+					q->OutChar(ch);
+				}
+				return;
+			}
 		}
-		// Forward keyboard event to focused window (for console or background)
 		if (asrtand(Consman::last_click_sheet)->refSheetNode().next) {
 			Consman::last_click_sheet->onrupt(SheetEvent::onKeybd, Point(0, 0), &kbd_event);
 		}
