@@ -22,7 +22,7 @@ enum : unsigned {
 	MCCA_FILE_STDIO     = 1u << 4,
 };
 
-#if _ACCM == 0x8632
+#if 1
 
 static __mcca_FILE g_stdin  = { 0, MCCA_FILE_CAN_READ  | MCCA_FILE_STDIO, 0, 0, nullptr };
 static __mcca_FILE g_stdout = { 1, MCCA_FILE_CAN_WRITE | MCCA_FILE_STDIO, 0, 0, nullptr };
@@ -330,6 +330,12 @@ extern "C" int fputs(const char* str, FILE* stream)
 		return 1;
 	}
 	return EOF;
+}
+extern "C" int puts(const char* str)
+{
+	auto ret = fputs(str, stdout);
+	fputs("\n\r", stdout);
+	return ret;
 }
 
 #endif

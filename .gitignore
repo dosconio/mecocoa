@@ -3,6 +3,7 @@ Cargo.lock
 subapps/_hello/rust/target/
 accmlib/lib/accmx86/target/
 accmlib/sysroot/usr/lib/x86_64-mcca/libc.a
+accmlib/sysroot/usr/lib/x86_64-mcca/libm.a
 accmlib/sysroot/usr/lib/i686-mcca/libc.a
 *.o
 *.ignore

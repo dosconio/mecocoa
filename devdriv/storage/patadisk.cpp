@@ -79,22 +79,26 @@ static HD_Info hd_info[4] = { 0 };//{TEMP} 0:0 0:1 1:0 1:1
 static bool hd_info_valid[4] = { 0 };
 
 #define	STATUS_BSY	0x80
+#define	STATUS_DRQ	0x08
 #define	HD_TIMEOUT		10000	/* in millisec */
+#define	HD_WAITFOR_TIMEOUT	(HD_TIMEOUT / 1000)
 
 static bool waitfor(Harddisk_PATA* hdd, stduint mask, stduint val, stduint timeout_second)// return seccess
 {
-	int t = syscall(syscall_t::TIME);
-	while (((syscall(syscall_t::TIME) - t)) < timeout_second)
+	int t = syscall(syscall_t::TIME, 0);
+	while (((syscall(syscall_t::TIME, 0) - t)) < timeout_second)
 		if ((hdd->getStatus() & mask) == val)
 			return 1;
 	return 0;
 }
 static bool hd_cmd_wait(Harddisk_PATA* hdd) {
-	return waitfor(hdd, STATUS_BSY, 0, HD_TIMEOUT / 1000);
+	return waitfor(hdd, STATUS_BSY, 0, HD_WAITFOR_TIMEOUT);
 }
-static void hd_int_wait() {
+
+static bool hd_int_wait() {
 	CommMsg msg;
-	syscall(syscall_t::COMM, 0b10, INTRUPT, _IMM(&msg));
+	syscall(syscall_t::COMM, COMM_RECV, INTRUPT, _IMM(&msg));
+	return true;
 }
 static void hd_rw_foreback() { lock = 0; }
 

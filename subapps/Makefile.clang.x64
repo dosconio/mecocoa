@@ -1,0 +1,100 @@
+# ASCII Makefile TAB4 LF
+# Attribute: Ubuntu(64) Shell(Bash)
+# ModuTitle: Build subapps for Mecocoa x64 (LLVM/Clang version)
+
+BIN_DIR = $(uobjpath)/sapp-$(arch)
+LIBX64 = $(uobjpath)/$(ACCM_LIBS)/libx64.a
+MCCA_X64_TRIPLE ?= x86_64-mcca
+MCCA_X64_SYSROOT ?= accmlib/sysroot
+MCCA_X64_CC ?= clang -target x86_64-unknown-none-elf
+MCCA_X64_CXX ?= clang++ -target x86_64-unknown-none-elf
+MCCA_X64_CRT0 = $(MCCA_X64_SYSROOT)/usr/lib/$(MCCA_X64_TRIPLE)/crt0.o
+MCCA_X64_LIBC = $(MCCA_X64_SYSROOT)/usr/lib/$(MCCA_X64_TRIPLE)/libc.a
+MCCA_X64_LIBDIR = $(MCCA_X64_SYSROOT)/usr/lib/$(MCCA_X64_TRIPLE)
+MCCA_X64_COMFLAGS = -D_ACCM=0x8664 -D_DEBUG -I$(uincpath) -I$(uincpath)/c/ISO_IEC_STD -I$(uincpath)/c/API-POSIX -I$(MCCA_X64_SYSROOT)/usr/include
+
+MCCA_X64_CFLAGS = $(MCCA_X64_COMFLAGS) --sysroot=$(MCCA_X64_SYSROOT) -m64 -mno-red-zone -fno-builtin -fno-stack-protector -fno-pic -fno-pie -static -nostdlib \
+	-Wno-builtin-declaration-mismatch -Wno-invalid-constexpr -Wno-empty-body -Wno-unknown-warning-option
+MCCA_X64_CXXFLAGS = $(MCCA_X64_CFLAGS) -fno-exceptions -fno-rtti -fno-use-cxa-atexit -std=c++2a
+MCCA_X64_LDLIBS = $(MCCA_X64_CRT0) $(MCCA_X64_LIBC) -L$(MCCA_X64_LIBDIR) -lm -lgcc -Wl,-m,elf_x86_64 -Wl,-z,noexecstack -no-pie -fuse-ld=lld
+STDCPP_APP_CXXFLAGS = -m64 -mno-red-zone -static -nodefaultlibs -nostartfiles -fno-omit-frame-pointer -fno-stack-protector -fno-pic -fno-builtin -fno-strict-aliasing -ffunction-sections -fdata-sections $(CXW) -std=c++2a
+STDCPP_APP_LIBS = -L$(uobjpath)/$(ACCM_LIBS) -lx64 -lstdc++ -lsupc++ -lgcc -lm
+
+UNIS_UTIL_DIR = $(ulibpath)/../demo/utilities
+UNIS_UTIL_C_SRCS = $(wildcard $(UNIS_UTIL_DIR)/*.c)
+UNIS_UTIL_CPP_SRCS = $(wildcard $(UNIS_UTIL_DIR)/*.cpp)
+UNIS_UTIL_APPS = $(sort $(addprefix $(BIN_DIR)/,$(basename $(notdir $(UNIS_UTIL_C_SRCS) $(UNIS_UTIL_CPP_SRCS)))))
+
+# ---- COTL INIT ---- #
+# ---- UNIS UTIL ---- #
+# ---- MCCA UTIL ---- #
+
+.PHONY: all clean
+
+all: $(BIN_DIR) \
+	$(BIN_DIR)/init \
+	$(BIN_DIR)/cot \
+	$(UNIS_UTIL_APPS) \
+	\
+	$(BIN_DIR)/fault \
+	\
+	$(BIN_DIR)/test \
+	$(BIN_DIR)/paint \
+	$(BIN_DIR)/cube \
+	$(BIN_DIR)/gblock \
+	$(BIN_DIR)/notepad \
+	$(BIN_DIR)/viewpic \
+	\
+
+
+$(BIN_DIR):
+	mkdir -p $@
+
+$(BIN_DIR)/cot: $(wildcard $(uherpath)/COTLAB/src/*.cpp) $(LIBX64) $(MCCA_X64_CRT0)
+	@echo "MK appshell"
+	$(MCCA_X64_CXX) $(MCCA_X64_CXXFLAGS) -o $@ $(uherpath)/COTLAB/src/*.cpp \
+		$(MCCA_X64_LDLIBS)
+
+$(BIN_DIR)/%: $(UNIS_UTIL_DIR)/%.c $(MCCA_X64_CRT0) $(MCCA_X64_LIBC)
+	@echo "MK $*"
+	$(MCCA_X64_CC) $(MCCA_X64_CFLAGS) -o $@ $< $(MCCA_X64_LDLIBS)
+
+$(BIN_DIR)/%: $(UNIS_UTIL_DIR)/%.cpp $(MCCA_X64_CRT0) $(MCCA_X64_LIBC)
+	@echo "MK $*"
+	$(MCCA_X64_CXX) $(MCCA_X64_CXXFLAGS) -o $@ $< $(MCCA_X64_LDLIBS)
+
+$(BIN_DIR)/init: subapps/init.cpp $(MCCA_X64_CRT0) $(MCCA_X64_LIBC)
+	@echo "MK appinit"
+	$(MCCA_X64_CXX) $(MCCA_X64_CXXFLAGS) -o $@ $< $(MCCA_X64_LDLIBS)
+
+$(BIN_DIR)/test: subapps/test.cpp $(MCCA_X64_CRT0) $(MCCA_X64_LIBC)
+	@echo "MK subtest"
+	$(MCCA_X64_CXX) $(MCCA_X64_CXXFLAGS) -o $@ subapps/test.cpp $(MCCA_X64_LDLIBS)
+
+$(BIN_DIR)/paint: subapps/paint.cpp $(MCCA_X64_CRT0) $(MCCA_X64_LIBC)
+	@echo "MK paint"
+	$(MCCA_X64_CXX) $(MCCA_X64_CXXFLAGS) -o $@ $< $(MCCA_X64_LDLIBS)
+
+$(BIN_DIR)/fault: subapps/fault.cpp $(MCCA_X64_CRT0) $(MCCA_X64_LIBC)
+	@echo "MK fault"
+	$(MCCA_X64_CXX) $(MCCA_X64_CXXFLAGS) -o $@ subapps/fault.cpp $(MCCA_X64_LDLIBS)
+
+$(BIN_DIR)/cube: subapps/cube.cpp $(MCCA_X64_CRT0) $(MCCA_X64_LIBC)
+	@echo "MK cube"
+	$(MCCA_X64_CXX) $(MCCA_X64_CXXFLAGS) -o $@ subapps/cube.cpp $(MCCA_X64_LDLIBS)
+
+$(BIN_DIR)/gblock: subapps/game_breakout.cpp $(MCCA_X64_CRT0) $(MCCA_X64_LIBC)
+	@echo "MK game_breakout"
+	$(MCCA_X64_CXX) $(MCCA_X64_CXXFLAGS) -o $@ subapps/game_breakout.cpp $(MCCA_X64_LDLIBS)
+
+$(BIN_DIR)/notepad: subapps/notepad.cpp $(MCCA_X64_CRT0) $(MCCA_X64_LIBC)
+	@echo "MK notepad"
+	$(MCCA_X64_CXX) $(MCCA_X64_CXXFLAGS) -o $@ subapps/notepad.cpp $(MCCA_X64_LDLIBS)
+
+$(BIN_DIR)/viewpic: subapps/viewpic.cpp $(ulibpath)/cpp/fileformat/picture/BMP.cpp $(MCCA_X64_CRT0) $(MCCA_X64_LIBC)
+	@echo "MK viewpic"
+	$(MCCA_X64_CXX) $(MCCA_X64_CXXFLAGS) -o $@ subapps/viewpic.cpp $(ulibpath)/cpp/fileformat/picture/BMP.cpp $(MCCA_X64_LDLIBS)
+
+clean:
+	@echo "RM $(BIN_DIR)"
+	@-rm -rf $(BIN_DIR) 1>/dev/null

@@ -63,9 +63,10 @@ void Handint_FLP()
 	IC.SendEOI(IRQ_Floppy);
 }
 
-static void flp_int_wait() {
+static bool flp_int_wait() {
 	CommMsg msg;
-	syscall(syscall_t::COMM, 0b10, INTRUPT, _IMM(&msg));
+	syscall(syscall_t::COMM, COMM_RECV, INTRUPT, _IMM(&msg));
+	return true;
 }
 
 static void flp_rw_foreback() { flp_lock = 0; }
@@ -78,7 +79,7 @@ void uni::FloppyDisk::Reset() {
 	outpb(PORT_FDC_DOR, 0x0C); // Enable DMA/INT, clear Reset
 	motor_state = false;
 
-	if (fn_int_wait) fn_int_wait();
+	if (fn_int_wait) fn_int_wait(); // ignore timeout on reset
 
 	// Sense interrupt status for all 4 drives to clear controller status
 	for (int i = 0; i < 4; i++) {
@@ -189,6 +190,8 @@ bool uni::FloppyDisk::Write(stduint BlockIden, const void* Sors) {
 
 	if (react_type == ReactType::Rupt && fn_int_wait) {
 		fn_int_wait();
+	} else {
+		for (volatile int i = 0; i < 100000; i++) _TEMP;
 	}
 
 	// Read 7 Status Bytes

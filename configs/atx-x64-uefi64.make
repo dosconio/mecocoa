@@ -104,7 +104,7 @@ build: clean accm $(archdir)/kerdisk.fat $(ubinpath)/$(arch).img $(asmobjs) $(cp
 
 accm:
 	@echo MK lib for ACCM-x64
-	make -f accmlib/accmx64.make
+	make -f accmlib/accmx64.clang.make
 
 $(archdir)/kerdisk.fat:
 	dd if=/dev/zero of=$@ bs=1M count=32
@@ -117,27 +117,19 @@ $(ubinpath)/$(arch).img: loader
 
 ACCM_INCF=-I$(uincpath) -Iaccmlib/sysroot/usr/include -I$(uincpath)/c/API-POSIX
 ACCM_LIBS=accm-x64
+#[Tool System] gcc clang
+TOOLSYS=clang
 build_util:
-	mkdir -p $(uobjpath)/sapp-$(arch)
-	# ---- COTL INIT ---- #
-	echo MK appshell
-	$(CX) $(ACCM_INCF) $(XFLAGS) \
-		-o $(uobjpath)/sapp-$(arch)/cot \
-		$(uherpath)/COTLAB/src/cotlab.cpp $(uherpath)/COTLAB/src/coshell.cpp -L$(uobjpath)/$(ACCM_LIBS) -lx64 -e _start
-	# ---- UNIS UTIL ---- #
-	# ---- MCCA UTIL ---- #
-	echo MK appinit
-	$(CX) $(ACCM_INCF) $(XFLAGS) \
-		-o $(uobjpath)/sapp-$(arch)/init \
-		subapps/init.cpp -L$(uobjpath)/$(ACCM_LIBS) -lx64 -e _start
-	echo MK subtest
-	$(CX) $(ACCM_INCF) $(XFLAGS) \
-		subapps/test.cpp $(ulibpath)/cpp/lango/lango-cpp.cpp -o $(uobjpath)/sapp-$(arch)/test \
-		-L$(uobjpath)/$(ACCM_LIBS) -lx64 -e _start
-	echo MK game_breakout '(FAIL)'
-	$(CX) $(ACCM_INCF) $(XFLAGS) \
-		subapps/game_breakout.cpp $(ulibpath)/cpp/lango/lango-cpp.cpp -o $(uobjpath)/sapp-$(arch)/gblock \
-		-L$(uobjpath)/$(ACCM_LIBS) -lx64 -e _start
+	@make -f subapps/Makefile.$(TOOLSYS).x64 \
+		arch=$(arch) \
+		uherpath=$(uherpath) \
+		uobjpath=$(uobjpath) \
+		uincpath=$(uincpath) \
+		ulibpath=$(ulibpath) \
+		ACCM_INCF="$(ACCM_INCF)" \
+		CFLAGS="$(CFLAGS)" \
+		XFLAGS="$(XFLAGS)" \
+		ACCM_LIBS="$(ACCM_LIBS)"
 # (ASM TEMPLATE)
 #	echo MK a
 #	aasm subapps/_hello/asm/helloa-x64.asm -felf64 -o subapps/_hello/asm/helloa-x64.o
