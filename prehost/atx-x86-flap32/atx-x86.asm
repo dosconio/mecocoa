@@ -353,9 +353,19 @@ Handint_SYSCALL_Entry:
 	MOV CR3, EBX
 .skip_user_cr3:
 
+	; Transition stack layout here is:
+	;   DI SI BP SP BX DX CX AX FLAGS IP CS SP0 SS0
+	; Reorder only the tail into IRETD order before POPAD:
+	;   DI SI BP SP BX DX CX AX IP CS FLAGS SP0 SS0
+	; This avoids restoring IF with POPFD while still on the transition stack.
+	MOV EAX, [ESP + 32]
+	MOV EBX, [ESP + 36]
+	MOV ECX, [ESP + 40]
+	MOV [ESP + 32], EBX
+	MOV [ESP + 36], ECX
+	MOV [ESP + 40], EAX
 	POPAD
-	POPFD
-	RETF
+	IRETD
 
 
 .return_ring0:

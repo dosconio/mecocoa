@@ -65,6 +65,10 @@ void _Comment(R1) serv_shell_process() {
 	while (true) {
 		bool processed_any = false;
 		if (pf_ptr) {
+			if (uint32(_IMM(pf_ptr)) == 0xDDDDDDDD || uint32(_IMM(pf_ptr)) > 0x10000000) {
+				plogerro("A");
+				break;
+			}
 			while (pf_ptr->msg_queue.Count()) {
 				processed_any = true;
 				SheetMessage smsg;
@@ -76,6 +80,10 @@ void _Comment(R1) serv_shell_process() {
 						if (ascii_ch) {
 							// Check for Ctrl+C to trigger SIGINT
 							if ((key_event->mod.l_ctrl || key_event->mod.r_ctrl) && !key_event->mod.l_shift && !key_event->mod.r_shift && ascii_ch == 'c') {
+								if ((uint32)_IMM(tty_target) == 0xDDDDDDDDu) {
+									plogerro("B");
+									goto shell_exit;
+								}
 								if (tty_target && tty_target->type) {
 									auto pblock = (vtty_type_t*)tty_target->type;
 									for (stduint idx = 0; idx < pblock->proc_group.Count(); idx++) {

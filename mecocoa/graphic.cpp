@@ -4,6 +4,13 @@
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 #include "../include/mecocoa.hpp"
 
+static void SafeLaymanUpdate(SheetTrait* sheet, const Rectangle& rect) {
+	IC.enInterrupt(false);
+	global_layman.Update(sheet, rect);
+	IC.enInterrupt(true);
+}
+
+
 #include <c/driver/mouse.h>
 #include <c/driver/keyboard.h>
 #include "../include/console.hpp"
@@ -110,7 +117,7 @@ void hand_mouse(MouseMessage mmsg) {
 			top->next = target;
 			if (sec) sec->left = target;
 
-			global_layman.Update(nullptr, sheet->sheet_area);
+			SafeLaymanUpdate(nullptr, sheet->sheet_area);
 		}
 	}
 
@@ -377,8 +384,10 @@ Rectangle Consman::DetachForm(::uni::Witch::Form* pfrm, SheetTrait* exact_sheet)
 
 	global_layman.UnregisterTimer(pfrm);
 	LayerManager* parent = pfrm->refSheetParent();
+	IC.enInterrupt(false);
 	if (parent) parent->Remove(pfrm);
 	global_layman.Remove(pfrm);
+	IC.enInterrupt(true);
 	pfrm->refSheetParent() = nullptr;
 	DetachLayerChildren(static_cast<LayerManager*>(pfrm));
 	// Also detach Form's sheet_node.subf chain (close_btn, title_bar, client_area)
@@ -407,7 +416,7 @@ void Consman::SwitchForm(SheetTrait* pfrm) {
 		if (sec) sec->left = target;
 		else global_layman.subl = target;// target is now the new tail
 	}
-	global_layman.Update(pfrm, Rectangle(Point(0, 0), pfrm->sheet_area.getSize()));
+	SafeLaymanUpdate(pfrm, Rectangle(Point(0, 0), pfrm->sheet_area.getSize()));
 }
 
 // ---- ---- GUI message handlers (Graphic thread only) ---- ----
@@ -434,8 +443,10 @@ static stdsint GraphicMsg_FNEW(const FMT_ConsoleMsg_FNEW* data, ProcessBlock* pb
 	}
 	pfrm->setSheet(global_layman, rect, sheet_buffer);
 
+	IC.enInterrupt(false);
 	global_layman.Append(pfrm);
 	Consman::SwitchForm(pfrm);
+	IC.enInterrupt(true);
 
 	ProcFormsSet(pb, slot_idx, pfrm);
 	pfrm->usrp_owner = pb;
@@ -485,7 +496,7 @@ static void _CleanSingleForm(ProcessBlock* pb, stduint pform_id) {
 	}
 	DetachLayerChildren(&static_cast<uni::Witch::Form*>(pfrm)->getClientSheet());
 	pfrm->refSheetNode().subf = nullptr;
-	global_layman.Update(nullptr, area);
+	SafeLaymanUpdate(nullptr, area);
 
 	// Nullify any pforms slot still pointing at this detached Form before delete.
 	CleanupFormReferences(static_cast<::uni::Witch::Form*>(pfrm));
@@ -567,7 +578,7 @@ static stdsint GraphicMsg_FUPD(const FMT_ConsoleMsg_FUPD* data, ProcessBlock* pb
 		Point(client_area.x + dirty_rect.x, client_area.y + dirty_rect.y),
 		Size2(dirty_rect.width, dirty_rect.height)
 	);
-	global_layman.Update(pfrm, update_rect);
+	SafeLaymanUpdate(pfrm, update_rect);
 	return 0;
 }
 
@@ -625,7 +636,7 @@ static stdsint GraphicMsg_FDRW(const FMT_ConsoleMsg_FDRW* data, ProcessBlock* pb
 		stdsint rw = (x1 < x2 ? x2 - x1 : x1 - x2) + 3;
 		stdsint rh = (y1 < y2 ? y2 - y1 : y1 - y2) + 3;
 
-		global_layman.Update(pfrm, Rectangle(Point(rx, ry), Size2(rw, rh)));
+		SafeLaymanUpdate(pfrm, Rectangle(Point(rx, ry), Size2(rw, rh)));
 		return 0;
 	}
 	case FMT_ConsoleMsg_FDRW::Shape::Rect: {
@@ -634,7 +645,7 @@ static stdsint GraphicMsg_FDRW(const FMT_ConsoleMsg_FDRW* data, ProcessBlock* pb
 		if (!pfrm->sheet_buffer) return -1;
 		VideoControlInterfaceMARGB8888 vcim(pfrm->sheet_buffer, pfrm->sheet_area.getSize());
 		vcim.DrawRectangle(rect);
-		global_layman.Update(pfrm, rect);
+		SafeLaymanUpdate(pfrm, rect);
 		return 0;
 	}
 	default: return -1;
@@ -667,7 +678,7 @@ static stdsint GraphicMsg_FCHR(const FMT_ConsoleMsg_FCHR* data, ProcessBlock* pb
 	uni::DrawString_16(*pfrm, vertex, String(buf), data->color);
 
 	Rectangle dirty_rect(vertex, Size2(buf.getByteCount() * 8, 16));
-	global_layman.Update(pfrm, dirty_rect);
+	SafeLaymanUpdate(pfrm, dirty_rect);
 
 	return 0;
 }
@@ -745,8 +756,10 @@ _RET_CreateVconsole Consman::CreateVconsole(const Rectangle& rect, rostr title) 
 	pform->setSheet(global_layman, rect, new Color[rect.getArea()]);
 	pform->setFocus(pcon);
 
+	IC.enInterrupt(false);
 	global_layman.Append(pform);
 	Consman::SwitchForm(pform);
+	IC.enInterrupt(true);
 
 	pcon->Start();
 
@@ -778,7 +791,7 @@ void Consman::RemoveVconsole(Dnode* nod) {
 	}
 
 	if (area.width || area.height) {
-		global_layman.Update(nullptr, area);
+		SafeLaymanUpdate(nullptr, area);
 	}
 
 	// Phase 2: clean process ownership and blocked-waiter bookkeeping
