@@ -97,11 +97,17 @@ _PACKED(struct) VideoInfoEntry {
 	};
 };// RGB Direct Mode Only
 
+extern stduint acpi_rsdp_addr;
+extern stduint acpi_mcfg_addr;
+extern uint64 acpi_pcie_ecam_base;
+extern uint16 acpi_pcie_segment_group;
+extern uint8 acpi_pcie_start_bus;
+extern uint8 acpi_pcie_end_bus;
+extern bool acpi_pcie_ecam_available;
 #if _MCCA == 0x8632
 #define mem_area_exten_beg 0x00101000
 // area-basic: 0x7E00 .. 0x80000
 // area-exten: mem_area_exten_beg .. mem_area_exten_beg + areax_size
-extern stduint acpi_rsdp_addr;
 #endif
 #endif
 

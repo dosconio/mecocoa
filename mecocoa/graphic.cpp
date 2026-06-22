@@ -5,9 +5,11 @@
 #include "../include/mecocoa.hpp"
 
 static void SafeLaymanUpdate(SheetTrait* sheet, const Rectangle& rect) {
+	#if _GUI_ENABLE
 	IC.enInterrupt(false);
 	global_layman.Update(sheet, rect);
 	IC.enInterrupt(true);
+	#endif
 }
 
 

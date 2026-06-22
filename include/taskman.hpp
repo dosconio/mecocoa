@@ -86,12 +86,14 @@ enum class GraphicMsg {
 
 static constexpr uint32 CORE_ID_INVALID = 0xFFFFFFFFu;
 static constexpr stduint LAPIC_ID_MAP_SIZE = 256;
-#if _MCCA == 0x8632
-static constexpr uint8 IRQ_RESCHED_IPI = 0xF1;
-static constexpr uint8 IRQ_WAKE_IPI = 0xF2;
+#if (_MCCA & 0xFF00) == 0x8600
 extern stduint acpi_madt_addr;
 extern stduint acpi_cpu_count;
 extern uint32 acpi_cpu_lapic_ids[PCU_CORES_MAX];
+#endif
+#if _MCCA == 0x8632
+static constexpr uint8 IRQ_RESCHED_IPI = 0xF1;
+static constexpr uint8 IRQ_WAKE_IPI = 0xF2;
 #ifdef __cplusplus
 extern "C" {
 #endif

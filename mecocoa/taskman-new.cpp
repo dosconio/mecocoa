@@ -125,7 +125,7 @@ static stduint _Taskman_Setup_Stack(ProcessBlock* pb, ProcessBlock* parent, char
 	return new_sp;
 }
 
-#if _MCCA == 0x8632
+#if _MCCA == 0x8632 || _MCCA == 0x8664
 constexpr unsigned ldt_entry_cnt = 8;
 alignas(16) static descriptor_t _LDT[ldt_entry_cnt];
 #define FLAT_CODE_R3_PROP 0x00CFFA00
@@ -135,6 +135,7 @@ static uint32 current_bootstrap_lapic_id() {
 	_IO_CPUID(1, 0, &a, &b, &c, &d);
 	return (b >> 24) & 0xFF;
 }
+#if _MCCA == 0x8632
 static void make_LDT(descriptor_t* ldt_alias, byte ring) {
 	for0(i, 4) {
 		ldt_alias[i]._data = (uint64(FLAT_CODE_R3_PROP) << 32) | 0x0000FFFF;
@@ -144,6 +145,7 @@ static void make_LDT(descriptor_t* ldt_alias, byte ring) {
 	}
 	// : Although the stack segment is not Expand-down, the ESP always decreases.
 }
+#endif
 #endif
 
 static int ProcCmp(pureptr_t a, pureptr_t b) {
@@ -231,6 +233,8 @@ static stduint _Taskman_Create_Paging(ProcessBlock *ppb, byte ring, stduint stac
 		if (cpuid || PCU_CORES_PERCORE[0]) return; // already initialized
 		#if _MCCA == 0x8632
 		PCU_CORES = acpi_cpu_count ? minof(acpi_cpu_count, _IMM(PCU_CORES_MAX)) : 1;
+		#elif _MCCA == 0x8664
+		PCU_CORES = acpi_cpu_count ? minof(acpi_cpu_count, _IMM(PCU_CORES_MAX)) : PCU_CORES_MAX;
 		#else
 		PCU_CORES = PCU_CORES_MAX;
 		#endif
@@ -261,12 +265,14 @@ static stduint _Taskman_Create_Paging(ProcessBlock *ppb, byte ring, stduint stac
 			ap_ring3_iret_stack_tops[i] = (0xFFFFF000u - i * 0x1000u) + 0x1000u - 0x10u;
 				ap_higher_stack_tops[i] = _IMM(higher_stacks[i]) + 0x1000 - 0x10;
 			#endif
-			#if _MCCA == 0x8632
+			#if _MCCA == 0x8632 || _MCCA == 0x8664
 			percore->lapic_id = acpi_cpu_count ? acpi_cpu_lapic_ids[i] :
 				(i == 0 ? current_bootstrap_lapic_id() : CORE_ID_INVALID);
 			if (percore->lapic_id < LAPIC_ID_MAP_SIZE) {
 				g_lapicid_to_coreid[percore->lapic_id] = i;
+				#if _MCCA == 0x8632
 				ap_lapicid_to_coreid[percore->lapic_id] = i;
+				#endif
 			}
 			else {
 				plogwarn("[COREMAN] LAPIC ID %[x] exceeds direct map size %u",
@@ -504,7 +510,7 @@ ProcessBlock* Taskman::Create(void* entry, byte ring, bool append)
 	}
 	return ppb;
 }
-static void _CreateELF_Carry(char* vaddr, stduint mem_length, BlockTrait* source, stduint file_offset, stduint file_size, Paging& pg, byte* buffer) {
+static void _CreateELF_Carry(char* vaddr, stduint mem_length, BlockTrait* source, stduint file_offset, stduint file_size, Paging& pg, byte* buffer, bool executable, bool writable, bool user) {
 	// if page !exist, map it; write it.
 	stduint compensation = _IMM(vaddr) & 0xFFF;
 	stduint v_start1 = _IMM(vaddr) & ~_IMM(0xFFF);
@@ -533,7 +539,11 @@ static void _CreateELF_Carry(char* vaddr, stduint mem_length, BlockTrait* source
 		if (_IMM(page_entry) == ~_IMM0 || !page_entry->isPresent()) {
 			phy = _IMM(mempool.allocate(0x1000, 12));
 			MemSet((void*)mglb(phy), 0, 0x1000);
-			pg.Map(v_start1, phy, 0x1000, PAGESIZE_4KB, PGPROP_present | PGPROP_writable | PGPROP_user_access);
+			stduint pgprop = PGPROP_present;
+			if (writable) pgprop |= PGPROP_writable;
+			if (user) pgprop |= PGPROP_user_access;
+			if (!executable) pgprop |= PGPROP_nonexecutable;
+			pg.Map(v_start1, phy, 0x1000, PAGESIZE_4KB, pgprop);
 			page_entry = pg.getEntry(_IMM(v_start1));
 			if (_IMM(page_entry) == ~_IMM0 || !page_entry->isPresent()) {
 				plogerro("Mapping failed %[x] -> %[x]", v_start1, phy);
@@ -620,7 +630,10 @@ ProcessBlock* Taskman::CreateELF(BlockTrait* source, byte ring) {
 		if (ph.p_type == PT_LOAD && ph.p_offset == 0 && !phdr_addr) phdr_addr = ph.p_vaddr + header.e_phoff;
 		if (ph.p_type == PT_LOAD && ph.p_memsz) 
 		{
-			_CreateELF_Carry((char*)ph.p_vaddr, ph.p_memsz, source, ph.p_offset, ph.p_filesz, pb->paging, block_buffer);
+			bool executable = !!(ph.p_flags & PF_X);
+			bool writable = !!(ph.p_flags & PF_W);
+			bool user = (ring == RING_U);
+			_CreateELF_Carry((char*)ph.p_vaddr, ph.p_memsz, source, ph.p_offset, ph.p_filesz, pb->paging, block_buffer, executable, writable, user);
 			if (load_slice_p < numsof(pb->load_slices)) {
 				pb->load_slices[load_slice_p].address = ph.p_vaddr;
 				pb->load_slices[load_slice_p].length = ph.p_memsz;
@@ -1047,7 +1060,10 @@ ProcessBlock* Taskman::Exet(stduint parent, rostr usr_fullpath, char** usr_argv,
 		struct ELF_PHT_t ph;
 		loop_device.Read(header.e_phoff + i * header.e_phentsize, &ph, sizeof(ph), block_buffer);
 		if (ph.p_type == PT_LOAD && ph.p_memsz) {
-			_CreateELF_Carry((char*)ph.p_vaddr, ph.p_memsz, &loop_device, ph.p_offset, ph.p_filesz, current_pb->paging, block_buffer);
+			bool executable = !!(ph.p_flags & PF_X);
+			bool writable = !!(ph.p_flags & PF_W);
+			bool user = (current_pb->ring == RING_U);
+			_CreateELF_Carry((char*)ph.p_vaddr, ph.p_memsz, &loop_device, ph.p_offset, ph.p_filesz, current_pb->paging, block_buffer, executable, writable, user);
 			if (load_slice_p < numsof(current_pb->load_slices)) {
 				current_pb->load_slices[load_slice_p].address = ph.p_vaddr;
 				current_pb->load_slices[load_slice_p].length = ph.p_memsz;

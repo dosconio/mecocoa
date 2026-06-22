@@ -5,6 +5,7 @@
 
 #include <c/consio.h>
 #include <cpp/Device/ACPI.hpp>
+#include <cpp/Device/Bus/PCI.hpp>
 
 _ESYM_C Handler_t FILE_ENTO, FILE_ENDO;
 
@@ -26,49 +27,33 @@ byte memoman_4G_00000000[bmapsize];
 extern memory_info_entry MemoryListData[20];
 //
 static stduint parse_norm(stduint addr);
+stduint acpi_rsdp_addr = 0;
+stduint acpi_madt_addr = 0;
+stduint acpi_mcfg_addr = 0;
+stduint acpi_cpu_count = 0;
+uint32 acpi_cpu_lapic_ids[PCU_CORES_MAX] = {};
+uint64 acpi_pcie_ecam_base = 0;
+uint16 acpi_pcie_segment_group = 0;
+uint8 acpi_pcie_start_bus = 0;
+uint8 acpi_pcie_end_bus = 0;
+bool acpi_pcie_ecam_available = false;
 #endif
 
 
 #if _MCCA == 0x8632
 
 static stduint parse_grub(stduint addr);
-stduint acpi_rsdp_addr = 0;
-stduint acpi_madt_addr = 0;
-stduint acpi_cpu_count = 0;
-uint32 acpi_cpu_lapic_ids[PCU_CORES_MAX] = {};
-static constexpr stduint kEarlyMappedPhysTop = 0x10000000;
+static constexpr stduint kAcpiPhysMapTop = 0x10000000;
 static constexpr stduint kAcpiHighWindowBase = 0x3FC00000;
 static constexpr stduint kAcpiHighWindowSize = 0x00400000;
 
-_PACKED(struct) ACPIRSDT {
-	uni::ACPI::DescriptionHeader header;
-};
+#elif _MCCA == 0x8664
 
-_PACKED(struct) ACPIMADT {
-	uni::ACPI::DescriptionHeader header;
-	uint32 lapic_address;
-	uint32 flags;
-};
+extern UefiData uefi_data;
 
-_PACKED(struct) ACPIMADTEntry {
-	uint8 type;
-	uint8 length;
-};
+#endif
 
-_PACKED(struct) ACPIMADTLocalAPIC {
-	ACPIMADTEntry entry;
-	uint8 acpi_processor_uid;
-	uint8 apic_id;
-	uint32 flags;
-};
-
-_PACKED(struct) ACPIMADTLocalX2APIC {
-	ACPIMADTEntry entry;
-	uint16 reserved;
-	uint32 x2apic_id;
-	uint32 flags;
-	uint32 acpi_processor_uid;
-};
+#if (_MCCA & 0xFF00) == 0x8600
 
 static bool rsdp_checksum_ok(const uni::ACPI::RSDP* rsdp) {
 	if (!rsdp) return false;
@@ -88,21 +73,25 @@ static bool rsdp_checksum_ok(const uni::ACPI::RSDP* rsdp) {
 static bool early_phys_range_mapped(stduint addr, stduint size) {
 	if (!size) return false;
 	if (addr + size < addr) return false;
-	if (addr < kEarlyMappedPhysTop && addr + size <= kEarlyMappedPhysTop) return true;
+	#if _MCCA == 0x8632
+	if (addr < kAcpiPhysMapTop && addr + size <= kAcpiPhysMapTop) return true;
 	if (addr >= kAcpiHighWindowBase &&
 		addr + size <= kAcpiHighWindowBase + kAcpiHighWindowSize) return true;
 	return false;
+	#else
+	return true;
+	#endif
 }
 
 static bool rsdt_candidate_valid(stduint rsdt_addr) {
 	if ((rsdt_addr & 0x3) != 0) {
 		plogwarn("[ACPI] RSDT candidate %[x] is not 4-byte aligned", rsdt_addr);
 	}
-	if (!early_phys_range_mapped(rsdt_addr, sizeof(ACPIRSDT))) {
+	if (!early_phys_range_mapped(rsdt_addr, sizeof(uni::ACPI::RSDT))) {
 		plogwarn("[ACPI] Reject RSDT candidate %[x]: outside early mapped range", rsdt_addr);
 		return false;
 	}
-	auto rsdt = reinterpret_cast<const ACPIRSDT*>(rsdt_addr);
+	auto rsdt = reinterpret_cast<const uni::ACPI::RSDT*>(rsdt_addr);
 	if (rsdt->header.length < sizeof(uni::ACPI::DescriptionHeader)) {
 		plogwarn("[ACPI] Reject RSDT candidate %[x]: bad length %[x]",
 			rsdt_addr, rsdt->header.length);
@@ -135,8 +124,8 @@ static void dump_rsdp_bytes(stduint addr) {
 
 static void log_rsdp_candidate(stduint addr, const char* source) {
 	auto rsdp = reinterpret_cast<const uni::ACPI::RSDP*>(addr);
-	ploginfo("[ACPI] RSDP candidate (%s) at %[x], rev=%u, RSDT=%[x]",
-		source, addr, rsdp->revision, rsdp->rsdt_address);
+	ploginfo("[ACPI] RSDP candidate (%s) at %[x], rev=%u, RSDT=%[x], XSDT=%[x]",
+		source, addr, rsdp->revision, rsdp->rsdt_address, rsdp->xsdt_address);
 	dump_rsdp_bytes(addr);
 }
 
@@ -192,13 +181,13 @@ static void register_acpi_cpu_lapic_id(uint32 lapic_id, uint32 bsp_lapic_id) {
 	}
 }
 
-static stduint find_madt_from_rsdt(stduint rsdt_addr) {
+static stduint find_table_from_rsdt(stduint rsdt_addr, const char* signature) {
 	if (!rsdt_addr) return 0;
-	if (!early_phys_range_mapped(rsdt_addr, sizeof(ACPIRSDT))) {
+	if (!early_phys_range_mapped(rsdt_addr, sizeof(uni::ACPI::RSDT))) {
 		plogwarn("[ACPI] RSDT at %[x] is outside early mapped range", rsdt_addr);
 		return 0;
 	}
-	auto rsdt = reinterpret_cast<const ACPIRSDT*>(rsdt_addr);
+	auto rsdt = reinterpret_cast<const uni::ACPI::RSDT*>(rsdt_addr);
 	if (!early_phys_range_mapped(rsdt_addr, rsdt->header.length) ||
 		rsdt->header.length < sizeof(uni::ACPI::DescriptionHeader)) {
 		plogwarn("[ACPI] RSDT length %[x] at %[x] is invalid for early mapping",
@@ -206,51 +195,102 @@ static stduint find_madt_from_rsdt(stduint rsdt_addr) {
 		return 0;
 	}
 	if (!rsdt->header.isValid("RSDT")) return 0;
-	auto entries = reinterpret_cast<const uint32*>(&rsdt->header + 1);
-	const stduint count =
-		(rsdt->header.length - sizeof(uni::ACPI::DescriptionHeader)) / sizeof(uint32);
+	const stduint count = rsdt->Count();
 	for0(i, count) {
-		if (!early_phys_range_mapped(entries[i], sizeof(uni::ACPI::DescriptionHeader))) {
+		const auto& header = (*rsdt)[i];
+		const stduint entry_addr = _IMM(&header);
+		if (!early_phys_range_mapped(entry_addr, sizeof(uni::ACPI::DescriptionHeader))) {
 			continue;
 		}
-		auto header = reinterpret_cast<const uni::ACPI::DescriptionHeader*>(entries[i]);
-		if (!early_phys_range_mapped(entries[i], header->length) ||
-			header->length < sizeof(uni::ACPI::DescriptionHeader)) {
+		if (!early_phys_range_mapped(entry_addr, header.length) ||
+			header.length < sizeof(uni::ACPI::DescriptionHeader)) {
 			continue;
 		}
-		if (header->isValid("APIC")) return entries[i];
+		if (header.isValid(signature)) return entry_addr;
 	}
 	return 0;
+}
+
+static stduint find_table_from_xsdt(uint64 xsdt_addr, const char* signature) {
+	if (!xsdt_addr) return 0;
+	if (xsdt_addr > (uint64)~(stduint)0) {
+		plogwarn("[ACPI] XSDT address %[x] exceeds stduint", xsdt_addr);
+		return 0;
+	}
+	const stduint xsdt_addr_native = (stduint)xsdt_addr;
+	if (!early_phys_range_mapped(xsdt_addr_native, sizeof(uni::ACPI::XSDT))) {
+		plogwarn("[ACPI] XSDT at %[x] is outside mapped range", xsdt_addr);
+		return 0;
+	}
+	auto xsdt = reinterpret_cast<const uni::ACPI::XSDT*>(xsdt_addr_native);
+	if (!early_phys_range_mapped(xsdt_addr_native, xsdt->header.length) ||
+		xsdt->header.length < sizeof(uni::ACPI::DescriptionHeader)) {
+		plogwarn("[ACPI] XSDT length %[x] at %[x] is invalid for mapped range",
+			xsdt->header.length, xsdt_addr);
+		return 0;
+	}
+	if (!xsdt->header.isValid("XSDT")) return 0;
+	const stduint count = xsdt->Count();
+	for0(i, count) {
+		const auto& header = (*xsdt)[i];
+		const stduint entry_addr = _IMM(&header);
+		if (!early_phys_range_mapped(entry_addr, sizeof(uni::ACPI::DescriptionHeader))) {
+			continue;
+		}
+		if (!early_phys_range_mapped(entry_addr, header.length) ||
+			header.length < sizeof(uni::ACPI::DescriptionHeader)) {
+			continue;
+		}
+		if (header.isValid(signature)) return entry_addr;
+	}
+	return 0;
+}
+
+static stduint find_table_from_rsdp(stduint rsdp_addr, const char* signature) {
+	if (!rsdp_addr) return 0;
+	auto rsdp = reinterpret_cast<const uni::ACPI::RSDP*>(rsdp_addr);
+	if (!rsdp_checksum_ok(rsdp)) {
+		plogwarn("[ACPI] RSDP at %[x] checksum failed", rsdp_addr);
+		return 0;
+	}
+	if (rsdp->revision >= 2 && rsdp->xsdt_address) {
+		if (auto table = find_table_from_xsdt(rsdp->xsdt_address, signature)) return table;
+	}
+	return find_table_from_rsdt(rsdp->rsdt_address, signature);
+}
+
+static stduint find_madt_from_rsdp(stduint rsdp_addr) {
+	return find_table_from_rsdp(rsdp_addr, "APIC");
 }
 
 static void enumerate_madt_cpus(stduint madt_addr) {
 	acpi_cpu_count = 0;
 	MemSet(acpi_cpu_lapic_ids, 0, sizeof(acpi_cpu_lapic_ids));
 	if (!madt_addr) return;
-	if (!early_phys_range_mapped(madt_addr, sizeof(ACPIMADT))) return;
-	auto madt = reinterpret_cast<const ACPIMADT*>(madt_addr);
+	if (!early_phys_range_mapped(madt_addr, sizeof(uni::ACPI::MADT))) return;
+	auto madt = reinterpret_cast<const uni::ACPI::MADT*>(madt_addr);
 	if (!early_phys_range_mapped(madt_addr, madt->header.length) ||
-		madt->header.length < sizeof(ACPIMADT)) {
+		madt->header.length < sizeof(uni::ACPI::MADT)) {
 		plogwarn("[ACPI] MADT length %[x] at %[x] is invalid for early mapping",
 			madt->header.length, madt_addr);
 		return;
 	}
 	if (!madt->header.isValid("APIC")) return;
 	const uint32 bsp_lapic_id = current_bootstrap_lapic_id();
-	const stduint entries_begin = madt_addr + sizeof(ACPIMADT);
+	const stduint entries_begin = madt_addr + sizeof(uni::ACPI::MADT);
 	const stduint entries_end = madt_addr + madt->header.length;
-	for (stduint addr = entries_begin; addr + sizeof(ACPIMADTEntry) <= entries_end;) {
-		auto entry = reinterpret_cast<const ACPIMADTEntry*>(addr);
-		if (entry->length < sizeof(ACPIMADTEntry)) break;
+	for (stduint addr = entries_begin; addr + sizeof(uni::ACPI::MADTEntry) <= entries_end;) {
+		auto entry = reinterpret_cast<const uni::ACPI::MADTEntry*>(addr);
+		if (entry->length < sizeof(uni::ACPI::MADTEntry)) break;
 		if (addr + entry->length > entries_end) break;
-		if (entry->type == 0 && entry->length >= sizeof(ACPIMADTLocalAPIC)) {
-			auto lapic = reinterpret_cast<const ACPIMADTLocalAPIC*>(entry);
+		if (entry->type == 0 && entry->length >= sizeof(uni::ACPI::MADTLocalAPIC)) {
+			auto lapic = reinterpret_cast<const uni::ACPI::MADTLocalAPIC*>(entry);
 			if (lapic->flags & 0x1) {
 				register_acpi_cpu_lapic_id(lapic->apic_id, bsp_lapic_id);
 			}
 		}
-		else if (entry->type == 9 && entry->length >= sizeof(ACPIMADTLocalX2APIC)) {
-			auto x2apic = reinterpret_cast<const ACPIMADTLocalX2APIC*>(entry);
+		else if (entry->type == 9 && entry->length >= sizeof(uni::ACPI::MADTLocalX2APIC)) {
+			auto x2apic = reinterpret_cast<const uni::ACPI::MADTLocalX2APIC*>(entry);
 			if (x2apic->flags & 0x1) {
 				register_acpi_cpu_lapic_id(x2apic->x2apic_id, bsp_lapic_id);
 			}
@@ -262,8 +302,110 @@ static void enumerate_madt_cpus(stduint madt_addr) {
 	}
 }
 
-#elif _MCCA == 0x8664
-//
+static void parse_mcfg(stduint mcfg_addr) {
+	acpi_pcie_ecam_available = false;
+	acpi_pcie_ecam_base = 0;
+	acpi_pcie_segment_group = 0;
+	acpi_pcie_start_bus = 0;
+	acpi_pcie_end_bus = 0;
+	uni::PCI::DisableConfigSpaceAccess();
+	if (!mcfg_addr) return;
+	if (!early_phys_range_mapped(mcfg_addr, sizeof(uni::ACPI::MCFG))) return;
+	auto mcfg = reinterpret_cast<const uni::ACPI::MCFG*>(mcfg_addr);
+	if (!early_phys_range_mapped(mcfg_addr, mcfg->header.length) ||
+		mcfg->header.length < sizeof(uni::ACPI::MCFG)) {
+		plogwarn("[ACPI] MCFG length %[x] at %[x] is invalid for mapped range",
+			mcfg->header.length, mcfg_addr);
+		return;
+	}
+	if (!mcfg->header.isValid("MCFG")) return;
+	const stduint count = mcfg->Count();
+	bool have_fallback = false;
+	uint64 fallback_base = 0;
+	uint16 fallback_segment = 0;
+	uint8 fallback_start_bus = 0;
+	uint8 fallback_end_bus = 0;
+	for0(i, count) {
+		const auto& allocation = (*mcfg)[i];
+		ploginfo("[ACPI] MCFG[%u] ECAM=%[x] segment=%u bus=%u..%u",
+			i, allocation.base_address, allocation.segment_group_number,
+			allocation.start_bus_number, allocation.end_bus_number);
+		if (allocation.end_bus_number < allocation.start_bus_number) continue;
+		if (!have_fallback) {
+			fallback_base = allocation.base_address;
+			fallback_segment = allocation.segment_group_number;
+			fallback_start_bus = allocation.start_bus_number;
+			fallback_end_bus = allocation.end_bus_number;
+			have_fallback = true;
+		}
+		if (allocation.segment_group_number == 0) {
+			acpi_pcie_ecam_base = allocation.base_address;
+			acpi_pcie_segment_group = allocation.segment_group_number;
+			acpi_pcie_start_bus = allocation.start_bus_number;
+			acpi_pcie_end_bus = allocation.end_bus_number;
+			acpi_pcie_ecam_available = true;
+			uni::PCI::SetConfigSpaceAccess(uni::PCI::ConfigSpaceAccess{
+				true,
+				acpi_pcie_ecam_base,
+				acpi_pcie_segment_group,
+				acpi_pcie_start_bus,
+				acpi_pcie_end_bus
+			});
+			return;
+		}
+	}
+	if (have_fallback) {
+		acpi_pcie_ecam_base = fallback_base;
+		acpi_pcie_segment_group = fallback_segment;
+		acpi_pcie_start_bus = fallback_start_bus;
+		acpi_pcie_end_bus = fallback_end_bus;
+		acpi_pcie_ecam_available = true;
+		uni::PCI::SetConfigSpaceAccess(uni::PCI::ConfigSpaceAccess{
+			true,
+			acpi_pcie_ecam_base,
+			acpi_pcie_segment_group,
+			acpi_pcie_start_bus,
+			acpi_pcie_end_bus
+		});
+	}
+}
+
+static void log_acpi_topology(stduint rsdp_addr) {
+	if (!rsdp_addr) {
+		plogwarn("[ACPI] RSDP not found");
+		return;
+	}
+	auto rsdp = reinterpret_cast<const uni::ACPI::RSDP*>(rsdp_addr);
+	ploginfo("[ACPI] RSDP found at %[x], rev=%u, RSDT=%[x], XSDT=%[x]",
+		rsdp_addr, rsdp->revision, rsdp->rsdt_address, rsdp->xsdt_address);
+	if (acpi_madt_addr) {
+		ploginfo("[ACPI] MADT found at %[x], CPU count=%u", acpi_madt_addr, acpi_cpu_count);
+		for0(i, acpi_cpu_count) {
+			ploginfo("[ACPI] CPU%u LAPIC ID=%[x]", i, acpi_cpu_lapic_ids[i]);
+		}
+	}
+	else {
+		plogwarn("[ACPI] MADT not found from RSDP");
+	}
+	if (acpi_mcfg_addr) {
+		ploginfo("[ACPI] MCFG found at %[x]", acpi_mcfg_addr);
+		if (acpi_pcie_ecam_available) {
+			ploginfo("[ACPI] PCIe ECAM=%[x], segment=%u, bus=%u..%u",
+				acpi_pcie_ecam_base, acpi_pcie_segment_group,
+				acpi_pcie_start_bus, acpi_pcie_end_bus);
+		}
+		else {
+			plogwarn("[ACPI] MCFG present but no usable ECAM allocation found");
+		}
+	}
+	else {
+		plogwarn("[ACPI] MCFG not found from RSDP");
+	}
+}
+
+#endif
+
+#if _MCCA == 0x8664
 static void parse_uefi(const MemoryMap& memory_map);
 
 #endif
@@ -291,20 +433,11 @@ bool Memory::initialize(stduint eax, byte* ebx) {
 		acpi_rsdp_addr = find_rsdp_bios();
 	}
 	if (acpi_rsdp_addr) {
-		auto rsdp = reinterpret_cast<const uni::ACPI::RSDP*>(acpi_rsdp_addr);
-		acpi_madt_addr = find_madt_from_rsdt(rsdp->rsdt_address);
+		acpi_madt_addr = find_madt_from_rsdp(acpi_rsdp_addr);
+		acpi_mcfg_addr = find_table_from_rsdp(acpi_rsdp_addr, "MCFG");
 		enumerate_madt_cpus(acpi_madt_addr);
-		ploginfo("[ACPI] RSDP found at %[x], rev=%u, RSDT=%[x]",
-			acpi_rsdp_addr, rsdp->revision, rsdp->rsdt_address);
-		if (acpi_madt_addr) {
-			ploginfo("[ACPI] MADT found at %[x], CPU count=%u", acpi_madt_addr, acpi_cpu_count);
-			for0(i, acpi_cpu_count) {
-				ploginfo("[ACPI] CPU%u LAPIC ID=%[x]", i, acpi_cpu_lapic_ids[i]);
-			}
-		}
-		else {
-			plogwarn("[ACPI] MADT not found from RSDT");
-		}
+		parse_mcfg(acpi_mcfg_addr);
+		log_acpi_topology(acpi_rsdp_addr);
 	}
 	else {
 		plogwarn("[ACPI] RSDP not found via BIOS scan");
@@ -336,11 +469,12 @@ bool Memory::initialize(stduint eax, byte* ebx) {
 		break;
 		#endif
 
-		#if _MCCA == 0x8664
+	#if _MCCA == 0x8664
 	case 'UEFI':
+		acpi_rsdp_addr = _IMM(uefi_data.acpi_table);
 		parse_uefi(*reinterpret_cast<MemoryMap*>(ebx));
 		break;
-		#endif
+	#endif
 	default:
 		return false;
 	}
@@ -388,6 +522,16 @@ bool Memory::initialize(stduint eax, byte* ebx) {
 	);// High Part
 	setCR3 _IMM(kernel_paging.root_level_page);
 	mecocoa_global->kernel_cr3 = _IMM(kernel_paging.root_level_page);
+	if (acpi_rsdp_addr) {
+		acpi_madt_addr = find_madt_from_rsdp(acpi_rsdp_addr);
+		acpi_mcfg_addr = find_table_from_rsdp(acpi_rsdp_addr, "MCFG");
+		enumerate_madt_cpus(acpi_madt_addr);
+		parse_mcfg(acpi_mcfg_addr);
+		log_acpi_topology(acpi_rsdp_addr);
+	}
+	else {
+		plogwarn("[ACPI] RSDP not provided by UEFI loader");
+	}
 	#endif
 	GDT_Next();
 
@@ -500,9 +644,3 @@ static void parse_uefi(const MemoryMap& memory_map) {
 
 
 #endif
-
-
-
-
-
-
