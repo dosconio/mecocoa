@@ -50,6 +50,7 @@ void mecocoa(const UefiData& uefi_data_ref)
 	Devsman::Initialize();
 	Virtman::Initialize();
 	// Syscall::Initialize();
+	// Coreman::Initialize();
 
 	//{} mem > 4G
 

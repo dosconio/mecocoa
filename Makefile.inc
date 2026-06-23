@@ -36,6 +36,7 @@ cppfile+=$(wildcard mecocoa/*.cpp) prehost/_auxiliary.cpp $(wildcard devdriv/*.c
 	$(ulibpath)/cpp/dat-block/mempool.cpp \
 	$(ulibpath)/cpp/dat-block/bmmemoman.cpp \
 	$(ulibpath)/cpp/nodes/dnode.cpp $(wildcard $(ulibpath)/cpp/nodes/dnode/*.cpp) \
+	$(ulibpath)/cpp/nodes/nnode.cpp $(wildcard $(ulibpath)/cpp/nodes/nnode/*.cpp) \
 	$(ulibpath)/cpp/filesystem/FAT.cpp $(wildcard $(ulibpath)/cpp/filesystem/FAT/*.cpp) \
 
 cplfile+= \
@@ -43,8 +44,9 @@ cplfile+= \
 	$(ulibpath)/c/debug.c \
 	$(ulibpath)/c/auxiliary/toxxxer.c \
 	$(wildcard $(ulibpath)/c/dnode/*.c) \
+	$(wildcard $(ulibpath)/c/nnode/*.c) \
 	$(ulibpath)/c/ustring/astring/salc.c \
-	$(ulibpath)/c/ustring/astring/StrHeap.c \
+	$(ulibpath)/c/ustring/astring/StrHeap.c $(ulibpath)/c/ustring/astring/StrHeapN.c \
 
 asmobjs=$(addprefix $(dest_obj)/$(asmpref),$(patsubst %asm,%o,$(notdir $(asmfile))))
 gasobjs=$(addprefix $(dest_obj)/$(gaspref),$(patsubst %S,%o,$(notdir $(gasfile))))
