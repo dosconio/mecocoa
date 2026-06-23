@@ -146,7 +146,7 @@ loader:
 	cp $(edkdir)/Build/MccaLoaderX64/DEBUG_CLANGDWARF/X64/Loader.efi $(ubinpath)/AMD64/loader.efi
 
 .PHONY : run run-only
-qemu_args=-cpu host\
+qemu_args=\
 	-drive if=pflash,format=raw,readonly=on,file=$(ubinpath)/AMD64/OVMF/OVMF_CODE.fd \
 	-drive if=pflash,format=raw,file=$(ubinpath)/AMD64/OVMF/OVMF_VARS.fd \
 	-drive if=ide,index=0,media=disk,format=raw,file=$(ubinpath)/$(arch).img \
@@ -158,7 +158,7 @@ qemu_args=-cpu host\
 
 run: build
 	@echo [ running] MCCA for $(arch)
-	@${QEMU} $(qemu_args) -m 512M -enable-kvm || ${QEMU} $(qemu_args) -m 512M
+	@${QEMU} $(qemu_args) -m 512M -enable-kvm -cpu host || ${QEMU} $(qemu_args) -m 512M
 	@echo
 	@echo 'Mount the image:' 
 	@echo '  mount -o loop $(ubinpath)/$(arch).img $(mntdir)'
@@ -167,7 +167,7 @@ run: build
 	@echo $(sudokey) | sudo -S umount $(mntdir)
 	@echo
 run-only:
-	@${QEMU} $(qemu_args) -m 512M -enable-kvm || ${QEMU} $(qemu_args) -m 512M
+	@${QEMU} $(qemu_args) -m 512M -enable-kvm -cpu host || ${QEMU} $(qemu_args) -m 512M
 
 #{TODO} debug
 

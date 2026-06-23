@@ -15,6 +15,22 @@ enum class DeviceBusType : uint16 {
 	PCI,
 };
 
+enum class DeviceResourceType : uint16 {
+	None = 0,
+	PciBarMmio,
+	PciBarIo,
+	IrqLine,
+	PciBridgeBusRange,
+};
+
+enum DeviceResourceFlags : uint16 {
+	DeviceResourceFlag_None = 0,
+	DeviceResourceFlag_Prefetchable = 1 << 0,
+	DeviceResourceFlag_Bar64 = 1 << 1,
+};
+
+constexpr uint16 DeviceNodeInlineResourceCapacity = 8;
+
 struct DeviceResource {
 	uint16 type;
 	uint16 flags;
@@ -61,6 +77,7 @@ struct DevExt {
 struct DeviceNode {
 	Nnode link;
 	DevExt fields;
+	DeviceResource inline_resources[DeviceNodeInlineResourceCapacity];
 };
 
 namespace uni {
@@ -74,6 +91,8 @@ public:
 	static DeviceNode* Root();
 	static DeviceNode* PCI_Root();
 	static DeviceNode* PrimaryPciBus();
+	static DeviceNode* FindPCIDeviceByClass(uint8 class_base, uint8 class_sub, uint8 class_if);
+	static const DeviceResource* FindResource(const DeviceNode* node, DeviceResourceType type, uint32 index = 0);
 
 };
 

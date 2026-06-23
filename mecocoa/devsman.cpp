@@ -17,7 +17,7 @@ namespace {
 	class DeviceTree final : public uni::Nchain {
 	public:
 		DeviceTree() : uni::Nchain(true) {
-			extn_field = sizeof(DevExt);
+			extn_field = sizeof(DeviceNode) - sizeof(Nnode);
 		}
 
 		DeviceNode* NewNode() {
@@ -39,25 +39,50 @@ namespace {
 	bool pci_devices_attached = false;
 
 	void init_node(DeviceNode* node, DeviceNodeType node_type, DeviceBusType bus_type, const char* name) {
-		MemSet(node, 0, sizeof(Nnode) + sizeof(DevExt));
+		MemSet(node, 0, sizeof(DeviceNode));
 		node->link.addr = const_cast<char*>(name);
 		node->fields.node_type = static_cast<uint16>(node_type);
 		node->fields.bus_type = static_cast<uint16>(bus_type);
+		node->fields.resource_capacity = DeviceNodeInlineResourceCapacity;
+		node->fields.resources = node->inline_resources;
 	}
 
 	void append_child(DeviceNode* parent, DeviceNode* child) {
 		Nnode* child_link = &child->link;
 		child_link->next = nullptr;
 		child_link->subf = nullptr;
+		child_link->pare = &parent->link;
+		child_link->left = nullptr;
 		if (!parent->link.subf) {
 			parent->link.subf = child_link;
-			child_link->pare = &parent->link;
 			return;
 		}
 		Nnode* last = parent->link.subf;
 		while (last->next) last = last->next;
 		last->next = child_link;
 		child_link->left = last;
+	}
+
+	bool detach_child(DeviceNode* parent, DeviceNode* child) {
+		if (!parent || !child || !parent->link.subf) return false;
+		Nnode* prev = nullptr;
+		for (Nnode* crt = parent->link.subf; crt; crt = crt->next) {
+			if (crt != &child->link) {
+				prev = crt;
+				continue;
+			}
+			if (prev) prev->next = crt->next;
+			else parent->link.subf = crt->next;
+			if (crt->next) {
+				auto* next_node = reinterpret_cast<DeviceNode*>(crt->next);
+				next_node->link.left = prev;
+			}
+			crt->next = nullptr;
+			crt->left = nullptr;
+			crt->pare = nullptr;
+			return true;
+		}
+		return false;
 	}
 
 	const char* heap_name(const char* fmt, stduint a0, stduint a1 = 0, stduint a2 = 0, stduint a3 = 0) {
@@ -84,6 +109,126 @@ namespace {
 		return byte(uni::PCI::read_config_register(dev, 0x08));
 	}
 
+	uint8 read_pci_interrupt_line(const uni::PCI::Device& dev) {
+		return byte(uni::PCI::read_config_register(dev, 0x3C));
+	}
+
+	uint8 read_pci_interrupt_pin(const uni::PCI::Device& dev) {
+		return byte(uni::PCI::read_config_register(dev, 0x3C) >> 8);
+	}
+
+	bool append_resource(DeviceNode* node, DeviceResourceType type, uint16 flags,
+		uint32 index, uint64 start, uint64 length, uint64 extra) {
+		if (!node->fields.resources || node->fields.resource_count >= node->fields.resource_capacity) {
+			return false;
+		}
+		auto& res = node->fields.resources[node->fields.resource_count++];
+		res.type = static_cast<uint16>(type);
+		res.flags = flags;
+		res.index = index;
+		res.start = start;
+		res.length = length;
+		res.extra = extra;
+		return true;
+	}
+
+	const char* pci_resource_type_name(uint16 type) {
+		switch (static_cast<DeviceResourceType>(type)) {
+		case DeviceResourceType::PciBarMmio:
+			return "BAR-MMIO";
+		case DeviceResourceType::PciBarIo:
+			return "BAR-IO";
+		case DeviceResourceType::IrqLine:
+			return "IRQ";
+		case DeviceResourceType::PciBridgeBusRange:
+			return "BUS-RANGE";
+		default:
+			return "Unknown";
+		}
+	}
+
+	void log_pci_resources(const DeviceNode* node) {
+		for0(i, node->fields.resource_count) {
+			const auto& res = node->fields.resources[i];
+			switch (static_cast<DeviceResourceType>(res.type)) {
+			case DeviceResourceType::PciBarMmio:
+				ploginfo("[DEVSMAN]   %s[%u] base=%[64H] flags=%[16H]",
+					pci_resource_type_name(res.type), res.index, res.start, res.flags);
+				break;
+			case DeviceResourceType::PciBarIo:
+				ploginfo("[DEVSMAN]   %s[%u] base=%[64H]",
+					pci_resource_type_name(res.type), res.index, res.start);
+				break;
+			case DeviceResourceType::IrqLine:
+				ploginfo("[DEVSMAN]   %s line=%u pin=%u",
+					pci_resource_type_name(res.type), (unsigned)res.start, (unsigned)res.extra);
+				break;
+			case DeviceResourceType::PciBridgeBusRange:
+				ploginfo("[DEVSMAN]   %s primary=%u secondary=%u subordinate=%u",
+					pci_resource_type_name(res.type),
+					(unsigned)res.start,
+					(unsigned)res.length,
+					(unsigned)res.extra);
+				break;
+			default:
+				ploginfo("[DEVSMAN]   %s[%u] start=%[64H] len=%[64H] extra=%[64H] flags=%[16H]",
+					pci_resource_type_name(res.type), res.index, res.start, res.length, res.extra, res.flags);
+				break;
+			}
+		}
+	}
+
+	void append_pci_irq_resource(DeviceNode* node, const uni::PCI::Device& dev) {
+		const uint8 irq_line = read_pci_interrupt_line(dev);
+		const uint8 irq_pin = read_pci_interrupt_pin(dev);
+		if (irq_line == 0xFF || irq_pin == 0) return;
+		append_resource(node, DeviceResourceType::IrqLine, DeviceResourceFlag_None,
+			0, irq_line, 1, irq_pin);
+	}
+
+	void append_pci_bridge_bus_range_resource(DeviceNode* node, const uni::PCI::Device& dev) {
+		if (!(dev.class_code.base == 0x06u && dev.class_code.sub == 0x04u)) return;
+		const uint32 bus_numbers = uni::PCI::read_bus_numbers(dev.bus, dev.device, dev.function);
+		const uint8 primary_bus = byte(bus_numbers);
+		const uint8 secondary_bus = byte(bus_numbers >> 8);
+		const uint8 subordinate_bus = byte(bus_numbers >> 16);
+		append_resource(node, DeviceResourceType::PciBridgeBusRange, DeviceResourceFlag_None,
+			0, primary_bus, secondary_bus, subordinate_bus);
+	}
+
+	void append_pci_bar_resources(DeviceNode* node, const uni::PCI::Device& dev) {
+		const uint8 header_type = dev.header_type & 0x7Fu;
+		const uint8 bar_count = header_type == 0x01 ? 2 : 6;
+		for (uint8 bar_index = 0; bar_index < bar_count; ++bar_index) {
+			const uint8 resource_index = bar_index;
+			const uint8 addr = 0x10 + bar_index * 4;
+			const uint32 bar_low = uni::PCI::read_config_register(dev, addr);
+			if (!bar_low) continue;
+			if (bar_low & 0x1u) {
+				const uint64 base = uint64(bar_low & ~0x3u);
+				if (!base) continue;
+				append_resource(node, DeviceResourceType::PciBarIo, DeviceResourceFlag_None,
+					resource_index, base, 0, 0);
+				continue;
+			}
+
+			uint16 flags = DeviceResourceFlag_None;
+			if (bar_low & 0x8u) flags |= DeviceResourceFlag_Prefetchable;
+
+			const uint8 mem_type = uint8((bar_low >> 1) & 0x3u);
+			uint64 base = uint64(bar_low & ~0xFu);
+			if (mem_type == 0x2u && bar_index + 1 < bar_count) {
+				const uint32 bar_high = uni::PCI::read_config_register(dev, addr + 4);
+				base |= uint64(bar_high) << 32;
+				flags |= DeviceResourceFlag_Bar64;
+				++bar_index;
+			}
+			if (!base) continue;
+			append_resource(node, DeviceResourceType::PciBarMmio, flags,
+				resource_index, base, 0, 0);
+		}
+	}
+
 	void attach_pci_device_node(const uni::PCI::Device& dev) {
 		DeviceNode* bus_node = ensure_pci_bus_node(0, dev.bus);
 		auto* dev_node = device_tree.NewNode();
@@ -100,14 +245,19 @@ namespace {
 		dev_node->fields.pci_bus = dev.bus;
 		dev_node->fields.pci_device = dev.device;
 		dev_node->fields.pci_function = dev.function;
+		append_pci_bar_resources(dev_node, dev);
+		append_pci_irq_resource(dev_node, dev);
+		append_pci_bridge_bus_range_resource(dev_node, dev);
 		append_child(bus_node, dev_node);
-		ploginfo("[DEVSMAN] PCI node: %s vend=%[16H] dev=%[16H] class=%[8H].%[8H].%[8H]",
+		ploginfo("[DEVSMAN] PCI node: %s vend=%[16H] dev=%[16H] class=%[8H].%[8H].%[8H] res=%u",
 			dev_node->link.addr,
 			dev_node->fields.vendor_id,
 			dev_node->fields.device_id,
 			dev_node->fields.class_base,
 			dev_node->fields.class_sub,
-			dev_node->fields.class_if);
+			dev_node->fields.class_if,
+			dev_node->fields.resource_count);
+		log_pci_resources(dev_node);
 	}
 
 	void initialize_device_tree() {
@@ -137,6 +287,59 @@ namespace {
 			return;
 		}
 		Devsman::AttachPCIDevices(pci);
+	}
+
+	DeviceNode* find_pci_device_by_class(uint8 class_base, uint8 class_sub, uint8 class_if) {
+		if (!pci_root) return nullptr;
+		for (Nnode* bus_link = pci_root->link.subf; bus_link; bus_link = bus_link->next) {
+			auto* bus_node = reinterpret_cast<DeviceNode*>(bus_link);
+			if (bus_node->fields.node_type != static_cast<uint16>(DeviceNodeType::PciBus)) continue;
+			for (Nnode* dev_link = bus_node->link.subf; dev_link; dev_link = dev_link->next) {
+				auto* dev_node = reinterpret_cast<DeviceNode*>(dev_link);
+				if (dev_node->fields.node_type != static_cast<uint16>(DeviceNodeType::PciDevice)) continue;
+				if (dev_node->fields.class_base == class_base &&
+					dev_node->fields.class_sub == class_sub &&
+					dev_node->fields.class_if == class_if) {
+					return dev_node;
+				}
+			}
+		}
+		return nullptr;
+	}
+
+	const DeviceResource* find_resource(const DeviceNode* node, DeviceResourceType type, uint32 index) {
+		if (!node || !node->fields.resources) return nullptr;
+		for0(i, node->fields.resource_count) {
+			const auto& res = node->fields.resources[i];
+			if (res.type != static_cast<uint16>(type)) continue;
+			if (type == DeviceResourceType::IrqLine || type == DeviceResourceType::PciBridgeBusRange) {
+				return &res;
+			}
+			if (res.index == index) return &res;
+		}
+		return nullptr;
+	}
+
+	void reparent_secondary_buses_under_bridges() {
+		if (!pci_root) return;
+		for (Nnode* bus_link = pci_root->link.subf; bus_link; bus_link = bus_link->next) {
+			auto* bus_node = reinterpret_cast<DeviceNode*>(bus_link);
+			if (bus_node->fields.node_type != static_cast<uint16>(DeviceNodeType::PciBus)) continue;
+			for (Nnode* dev_link = bus_node->link.subf; dev_link; dev_link = dev_link->next) {
+				auto* dev_node = reinterpret_cast<DeviceNode*>(dev_link);
+				const auto* range = find_resource(dev_node, DeviceResourceType::PciBridgeBusRange, 0);
+				if (!range) continue;
+				const uint8 secondary_bus = uint8(range->length);
+				if (!secondary_bus) continue;
+				DeviceNode* secondary_bus_node = pci_bus_nodes[secondary_bus];
+				if (!secondary_bus_node || secondary_bus_node == bus_node) continue;
+				if (secondary_bus_node->link.pare == &dev_node->link) continue;
+				if (!detach_child(pci_root, secondary_bus_node)) continue;
+				append_child(dev_node, secondary_bus_node);
+				ploginfo("[DEVSMAN] Reparented %s under %s",
+					secondary_bus_node->link.addr, dev_node->link.addr);
+			}
+		}
 	}
 	#endif
 }
@@ -236,10 +439,10 @@ bool Devsman::AttachPCIDevices(uni::PCI& pci) {
 		plogwarn("[DEVSMAN] PCI devices already attached");
 		return true;
 	}
-	const uni::PCI::Device* pci_devices = pci.devices.data();
 	for0(i, pci.num_device) {
-		attach_pci_device_node(pci_devices[i]);
+		attach_pci_device_node(pci.devices[i]);
 	}
+	reparent_secondary_buses_under_bridges();
 	pci_devices_attached = true;
 	ploginfo("[DEVSMAN] Attached %d PCI device nodes", pci.num_device);
 	return true;
@@ -255,5 +458,13 @@ DeviceNode* Devsman::PCI_Root() {
 
 DeviceNode* Devsman::PrimaryPciBus() {
 	return primary_pci_bus;
+}
+
+DeviceNode* Devsman::FindPCIDeviceByClass(uint8 class_base, uint8 class_sub, uint8 class_if) {
+	return find_pci_device_by_class(class_base, class_sub, class_if);
+}
+
+const DeviceResource* Devsman::FindResource(const DeviceNode* node, DeviceResourceType type, uint32 index) {
+	return find_resource(node, type, index);
 }
 #endif

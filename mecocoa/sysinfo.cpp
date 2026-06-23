@@ -110,6 +110,102 @@ String dump_availmem() {
 	return ret;
 }
 
+static rostr text_device_node_type(uint16 node_type) {
+	switch (DeviceNodeType(node_type)) {
+	case DeviceNodeType::SystemRoot: return "system-root";
+	case DeviceNodeType::PCI_Root:   return "pci-root";
+	case DeviceNodeType::PciBus:     return "pci-bus";
+	case DeviceNodeType::PciDevice:  return "pci-dev";
+	default: return "unknown";
+	}
+}
+
+static rostr text_device_resource_type(uint16 type) {
+	switch (DeviceResourceType(type)) {
+	case DeviceResourceType::PciBarMmio:        return "BAR-MMIO";
+	case DeviceResourceType::PciBarIo:          return "BAR-IO";
+	case DeviceResourceType::IrqLine:           return "IRQ";
+	case DeviceResourceType::PciBridgeBusRange: return "BUS-RANGE";
+	default: return "RES";
+	}
+}
+
+static void dump_device_tree_indent(OstreamTrait& com1, stduint depth) {
+	for0(i, depth) com1.OutFormat("  ");
+}
+
+static void dump_device_tree_resources(OstreamTrait& com1, const DeviceNode& node, stduint depth) {
+	for0(i, node.fields.resource_count) {
+		const auto& res = node.fields.resources[i];
+		dump_device_tree_indent(com1, depth);
+		switch (DeviceResourceType(res.type)) {
+		case DeviceResourceType::PciBarMmio:
+			com1.OutFormat("- %s[%[u]] base=%p flags=%04X\n\r",
+				text_device_resource_type(res.type), res.index, (void*)res.start, (unsigned)res.flags);
+			break;
+		case DeviceResourceType::PciBarIo:
+			com1.OutFormat("- %s[%[u]] base=%p\n\r",
+				text_device_resource_type(res.type), res.index, (void*)res.start);
+			break;
+		case DeviceResourceType::IrqLine:
+			com1.OutFormat("- %s line=%[u] pin=%[u]\n\r",
+				text_device_resource_type(res.type), (stduint)res.start, (stduint)res.extra);
+			break;
+		case DeviceResourceType::PciBridgeBusRange:
+			com1.OutFormat("- %s primary=%[u] secondary=%[u] subordinate=%[u]\n\r",
+				text_device_resource_type(res.type), (stduint)res.start, (stduint)res.length, (stduint)res.extra);
+			break;
+		default:
+			com1.OutFormat("- %s[%[u]] start=%p len=%p extra=%p\n\r",
+				text_device_resource_type(res.type), res.index, (void*)res.start, (void*)res.length, (void*)res.extra);
+			break;
+		}
+	}
+}
+
+static void dump_device_tree_node(OstreamTrait& com1, const DeviceNode* node, stduint depth, bool verbose) {
+	for (auto crt = node; crt; crt = cast<DeviceNode*>(crt->link.next)) {
+		dump_device_tree_indent(com1, depth);
+		const rostr name = crt->link.addr ? crt->link.addr : "(unnamed)";
+		switch (DeviceNodeType(crt->fields.node_type)) {
+		case DeviceNodeType::PciBus:
+			com1.OutFormat("%s <%s seg=%[u] bus=%[u]>\n\r",
+				name, text_device_node_type(crt->fields.node_type),
+				(stduint)crt->fields.pci_segment, (stduint)crt->fields.pci_bus);
+			break;
+		case DeviceNodeType::PciDevice:
+			com1.OutFormat("%s <%s %02X.%02X.%02X vend=%04X dev=%04X>\n\r",
+				name, text_device_node_type(crt->fields.node_type),
+				(unsigned)crt->fields.class_base, (unsigned)crt->fields.class_sub, (unsigned)crt->fields.class_if,
+				(unsigned)crt->fields.vendor_id, (unsigned)crt->fields.device_id);
+			break;
+		default:
+			com1.OutFormat("%s <%s>\n\r", name, text_device_node_type(crt->fields.node_type));
+			break;
+		}
+		if (verbose && crt->fields.resource_count) {
+			dump_device_tree_resources(com1, *crt, depth + 1);
+		}
+		if (crt->link.subf) {
+			dump_device_tree_node(com1, cast<DeviceNode*>(crt->link.subf), depth + 1, verbose);
+		}
+	}
+}
+
+void dump_device_tree(OstreamTrait& com1, bool verbose) {
+	com1.OutFormat("=== Device Tree ===\n\r");
+	auto root = Devsman::Root();
+	if (!root) {
+		com1.OutFormat("(empty)\n\r");
+		return;
+	}
+	dump_device_tree_node(com1, root, 0, verbose);
+}
+
+void dump_device_tree(OstreamTrait& com1) {
+	dump_device_tree(com1, true);
+}
+
 void dump_threads(OstreamTrait& com1) {
 	// print all threads
 	extern Spinlock scheduler_lock;

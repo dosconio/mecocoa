@@ -5,7 +5,7 @@
 extern "C" void _exit(int code)
 {
 	syscall(syscall_t::EXIT, code, nil, nil);// 戰至最後一刻！
-	*((byte*)nullptr) = nil;// 自刎歸天⚔️（介錯）
+	*((volatile byte*)nullptr) = nil;// 自刎歸天⚔️（介錯） __builtin_trap()
 	while (1);// 歸天失敗
 }
 

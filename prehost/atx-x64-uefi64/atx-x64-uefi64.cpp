@@ -81,7 +81,27 @@ void mecocoa(const UefiData& uefi_data_ref)
 	//[USB Mouse&Keyboard]
 	uni::device::SpaceUSB::HIDMouseDriver::default_observer = hand_mouse_usb;
 	uni::device::SpaceUSB::HIDKeyboardDriver::default_observer = hand_kboard;
-	if (auto xhc_dev = Mouse_Init_USB(pci, &xhc)) {
+	uni::PCI::Device xhc_tree_dev{};
+	uni::PCI::Device* xhc_dev = nullptr;
+	if (auto* xhc_node = Devsman::FindPCIDeviceByClass(ClassCodeGroup_xHC)) {
+		if (auto* mmio = Devsman::FindResource(xhc_node, DeviceResourceType::PciBarMmio, 0)) {
+			uint8 irq_line = 0xFF;
+			uint8 irq_pin = 0;
+			if (auto* irq = Devsman::FindResource(xhc_node, DeviceResourceType::IrqLine)) {
+				irq_line = uint8(irq->start);
+				irq_pin = uint8(irq->extra);
+			}
+			xhc_tree_dev.bus = xhc_node->fields.pci_bus;
+			xhc_tree_dev.device = xhc_node->fields.pci_device;
+			xhc_tree_dev.function = xhc_node->fields.pci_function;
+			xhc_tree_dev.header_type = pci.read_header_type(xhc_tree_dev.bus, xhc_tree_dev.device, xhc_tree_dev.function);
+			xhc_tree_dev.class_code.base = xhc_node->fields.class_base;
+			xhc_tree_dev.class_code.sub = xhc_node->fields.class_sub;
+			xhc_tree_dev.class_code.interface = xhc_node->fields.class_if;
+			xhc_dev = uni::device::SpaceUSB::HIDMouseDriver::Initialize(pci, xhc_tree_dev, mmio->start, irq_line, irq_pin, &xhc);
+		}
+	}
+	if (xhc_dev) {
 		ploginfo("xHC-USB-Mouse has been found: %[8H].%[8H].%[8H]", xhc_dev->bus, xhc_dev->device, xhc_dev->function);
 	}
 
