@@ -64,6 +64,7 @@ cppfile=\
 	depends/cotlabx.cpp \
 
 cplfile=\
+	$(ulibpath)/c/driver/i8259A.c \
 	$(ulibpath)/c/driver/keyboard.c \
 	$(ulibpath)/c/data/font/font-8x5.c \
 	$(ulibpath)/c/data/font/font-16x8.c \

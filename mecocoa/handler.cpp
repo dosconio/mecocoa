@@ -89,7 +89,7 @@ extern "C" void register_interrupt_handler(stduint irq_id, Handler_t handler) {
 __attribute__((target("general-regs-only"), optimize("O0")))
 void Handint_XHCI() {
 	message_queue.Enqueue(SysMessage{ SysMessage::RUPT_xHCI, {} });
-	sendEOI();
+	IC.SendEOI(IRQ_xHCI);
 }
 
 #endif

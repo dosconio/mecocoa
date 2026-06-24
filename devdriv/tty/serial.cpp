@@ -19,19 +19,20 @@ Send 0x3FA (FCR) 0xC7（Enable and Clear FIFO）,  Read 0x3FA MS2B (IIR)。
 
 _ESYM_C void R_COM1_INIT();
 
-#if _MCCA == 0x8632
+#if (_MCCA & 0xFF00) == 0x8600
 #if 1
+#if _MCCA == 0x8632
 __attribute__((section(".init.rmod")))
 RMOD_LIST RMOD_LIST_COM1{
 	.init = R_COM1_INIT,
 	.name = "COM1",
 };
 #endif
+#endif
 
 x86_COM com1;
 extern OstreamTrait* con0_out;
 void R_COM1_INIT() {
-	if (!con0_out)
 	{
 		outpb(PORT_COM1_DATA + 1, 0x00);	// Disable all interrupts
 		outpb(PORT_COM1_DATA + 3, 0x80);	// Enable DLAB (set baud rate divisor)
@@ -39,15 +40,18 @@ void R_COM1_INIT() {
 		outpb(PORT_COM1_DATA + 1, 0x00);	// Set divisor to 3 (hi byte)
 		outpb(PORT_COM1_DATA + 3, 0x03);	// 8 bits, no parity, one stop bit (DLAB = 0)
 		outpb(PORT_COM1_DATA + 2, 0xC7);	// Enable FIFO, clear them, with 14-byte threshold
-		outpb(PORT_COM1_DATA + 4, 0x0B);	// IRQs enabled, RTS/DSR set (OUT2 bit must be 1) 
-
-		// Enable "Received Data Available" interrupt explicitly after DLAB is cleared 
+		outpb(PORT_COM1_DATA + 4, 0x0B);	// IRQs enabled, RTS/DSR set (OUT2 bit must be 1)
+		// Enable "Received Data Available" interrupt explicitly after DLAB is cleared
 		outpb(PORT_COM1_DATA + 1, 0x01);
 
 		con0_out = &com1;
 	}
 	// Ensure IRQ_COM13_RS232_P1 maps to IRQ 4 (IDT index 0x24 if base is 0x20) [cite: 282]
+	#if _MCCA == 0x8664
+	IC[IRQ_COM13_RS232_P1].setModeRupt(mglb(Handint_COM1_Entry), SegCo64);
+	#else
 	IC[IRQ_COM13_RS232_P1].setRange(mglb(Handint_COM1_Entry), SegCo32);
+	#endif
 	register_interrupt_handler(IRQ_COM13_RS232_P1, Handint_COM1);
 	// flap32 prehost calls R_COM1_INIT() before Memory::initialize().
 	// Register into device tree only after Devsman has created the tree.

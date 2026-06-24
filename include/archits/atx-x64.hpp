@@ -21,6 +21,7 @@ rostr text_brand();
 
 _ESYM_C{
 	// void Handint_SYSCALL_Entry(), Handint_SYSCALL();
+	void Handint_COM1_Entry(), Handint_COM1();
 	void Handint_XHCI_Entry(), Handint_XHCI();
 	void Handint_LAPICT_Entry(), Handint_LAPICT();
 }

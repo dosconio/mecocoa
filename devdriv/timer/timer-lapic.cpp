@@ -13,7 +13,7 @@ void RenderFrameFlush();
 __attribute__((/*interrupt, */target("general-regs-only")))// the stack is ready
 void Handint_LAPICT(/*InterruptFrame* frame*/) {
 	tick = tick + 1;// mecocoa_global->system_time.mic++
-	sendEOI();
+	IC.SendEOI(IRQ_LAPICTimer);
 	{
 		extern Spinlock timer_lock;
 		SpinlockLocal guard(&timer_lock);

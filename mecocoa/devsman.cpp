@@ -38,6 +38,10 @@ namespace {
 	DeviceNode* bus_roots[8]{};
 	DeviceNode* pci_bus_nodes[256]{};
 	bool pci_devices_attached = false;
+	enum : uint32 {
+		DriverBindingState_None = 0,
+		DriverBindingState_Bound = 1,
+	};
 
 	void init_node(DeviceNode* node, DeviceNodeType node_type, DeviceBusType bus_type, const char* name) {
 		MemSet(node, 0, sizeof(DeviceNode));
@@ -180,6 +184,88 @@ namespace {
 			if (crt->link.addr && StrCompare(crt->link.addr, name) == 0) return crt;
 		}
 		return nullptr;
+	}
+
+	bool set_driver_binding(DeviceNode* node, const char* driver_name) {
+		if (!node || !driver_name) return false;
+		if (node->fields.binding.driver_name &&
+			StrCompare(node->fields.binding.driver_name, driver_name) == 0) {
+			node->fields.binding.state = DriverBindingState_Bound;
+			return false;
+		}
+		node->fields.binding.driver_name = driver_name;
+		node->fields.binding.state = DriverBindingState_Bound;
+		ploginfo("[DEVSMAN] Bind %s -> %s", node->link.addr ? node->link.addr : "(unnamed)", driver_name);
+		return true;
+	}
+
+	void bind_pci_device(DeviceNode* node) {
+		if (!node) return;
+		if (node->fields.class_base == 0x06u && node->fields.class_sub == 0x04u) {
+			set_driver_binding(node, "pci-bridge");
+		}
+		else if (node->fields.class_base == 0x0Cu && node->fields.class_sub == 0x03u && node->fields.class_if == 0x30u) {
+			set_driver_binding(node, "xhci");
+		}
+		else if (node->fields.class_base == 0x01u && node->fields.class_sub == 0x01u) {
+			set_driver_binding(node, "pata");
+		}
+	}
+
+	void bind_platform_device(DeviceNode* node) {
+		if (!node || !node->link.addr) return;
+		if (StrCompare(node->link.addr, "uart@com1") == 0) {
+			set_driver_binding(node, "uart-8250");
+		}
+		else if (StrCompare(node->link.addr, "rtc@cmos") == 0) {
+			set_driver_binding(node, "rtc-cmos");
+		}
+	}
+
+	void bind_serio_controller(DeviceNode* node) {
+		if (!node || !node->link.addr) return;
+		if (StrCompare(node->link.addr, "i8042") == 0) {
+			set_driver_binding(node, "i8042");
+		}
+	}
+
+	void bind_serio_device(DeviceNode* node) {
+		if (!node || !node->link.addr) return;
+		if (StrCompare(node->link.addr, "ps2kbd") == 0) {
+			set_driver_binding(node, "ps2-keyboard");
+		}
+		else if (StrCompare(node->link.addr, "ps2mouse") == 0) {
+			set_driver_binding(node, "ps2-mouse");
+		}
+	}
+
+	void bind_device_node(DeviceNode* node) {
+		if (!node) return;
+		switch (DeviceNodeType(node->fields.node_type)) {
+		case DeviceNodeType::PciDevice:
+			bind_pci_device(node);
+			break;
+		case DeviceNodeType::PlatformDevice:
+			bind_platform_device(node);
+			break;
+		case DeviceNodeType::SerioController:
+			bind_serio_controller(node);
+			break;
+		case DeviceNodeType::SerioDevice:
+			bind_serio_device(node);
+			break;
+		default:
+			break;
+		}
+	}
+
+	void bind_known_drivers_subtree(DeviceNode* node) {
+		for (auto* crt = node; crt; crt = reinterpret_cast<DeviceNode*>(crt->link.next)) {
+			bind_device_node(crt);
+			if (crt->link.subf) {
+				bind_known_drivers_subtree(reinterpret_cast<DeviceNode*>(crt->link.subf));
+			}
+		}
 	}
 
 	const char* pci_resource_type_name(uint16 type) {
@@ -416,6 +502,26 @@ bool Devsman::Initialize() {
 	probe_and_attach_pci_devices();
 	#endif
 
+	#if _MCCA == 0x8664
+	new (&IC) InterruptControl(mglb(mem.allocate(256 * sizeof(gate_t))));
+	IC.Reset(SegCo64, 0xFFFFFFFFC0000000ull);
+	
+	unsigned a = 0, b = 0, c = 0, d = 0;
+	_IO_CPUID(1, 0, &a, &b, &c, &d);
+	bool support_apic = cast<cpuid_1_0_edx>(d).apic;
+	// CPUID.x2apic is a capability bit only; actual mode is determined by IA32_APIC_BASE.EXTD (bit10).
+	// In UEFI, the firmware controls APIC mode at ExitBootServices time.
+	// Forcing x2APIC when UEFI left EXTD=0 would switch the LAPIC but leave the IOAPIC RTEs in
+	// xAPIC format, causing SendEOI (WRMSR 0x80B) to not clear the IOAPIC ISR → deadlock.
+	bool cpuid_x2apic = support_apic && (cast<cpuid_1_0_ecx>(c).x2apic);
+	bool hw_x2apic    = support_apic && ((getMSR(x86MSR::APIC_BASE) >> 10) & 1); // EXTD bit
+	bool support_x2apic = cpuid_x2apic && hw_x2apic; // only use x2APIC if HW is already in x2APIC mode
+	ploginfo("[DEVSMAN] IC Using: %s (CPUID x2apic=%d HW EXTD=%d)", support_apic ? support_x2apic ?
+		"x2APIC" : "APIC" : "PIC", (int)cpuid_x2apic, (int)hw_x2apic);
+	IC.Initialize(support_apic + support_x2apic);
+
+	#endif
+
 	#if (_MCCA & 0xFF00) == 0x8600 &&       (_MCCA == 0x8632)
 	unsigned a, b, c, d;
 	_IO_CPUID(1, 0, &a, &b, &c, &d);
@@ -514,8 +620,16 @@ bool Devsman::AttachPCIDevices(uni::PCI& pci) {
 	}
 	reparent_secondary_buses_under_bridges();
 	pci_devices_attached = true;
+	BindKnownDrivers();
 	ploginfo("[DEVSMAN] Attached %d PCI device nodes", pci.num_device);
 	return true;
+}
+
+void Devsman::BindKnownDrivers() {
+	#if (_MCCA & 0xFF00) == 0x8600
+	if (!device_root) return;
+	bind_known_drivers_subtree(device_root);
+	#endif
 }
 
 
@@ -524,23 +638,38 @@ DeviceNode* Devsman::RegisterPlatformDevice(const char* name) {
 	initialize_device_tree();
 	auto* root = get_bus_root(DeviceBusType::Platform);
 	if (!root || !name) return nullptr;
-	if (auto* node = find_named_child(root, DeviceNodeType::PlatformDevice, name)) return node;
-	return append_plain_device(root, DeviceNodeType::PlatformDevice, DeviceBusType::Platform, StrHeap(name));
+	if (auto* node = find_named_child(root, DeviceNodeType::PlatformDevice, name)) {
+		bind_device_node(node);
+		return node;
+	}
+	auto* node = append_plain_device(root, DeviceNodeType::PlatformDevice, DeviceBusType::Platform, StrHeap(name));
+	bind_device_node(node);
+	return node;
 }
 
 DeviceNode* Devsman::RegisterSerioController(const char* name) {
 	initialize_device_tree();
 	auto* root = get_bus_root(DeviceBusType::Serio);
 	if (!root || !name) return nullptr;
-	if (auto* node = find_named_child(root, DeviceNodeType::SerioController, name)) return node;
-	return append_plain_device(root, DeviceNodeType::SerioController, DeviceBusType::Serio, StrHeap(name));
+	if (auto* node = find_named_child(root, DeviceNodeType::SerioController, name)) {
+		bind_device_node(node);
+		return node;
+	}
+	auto* node = append_plain_device(root, DeviceNodeType::SerioController, DeviceBusType::Serio, StrHeap(name));
+	bind_device_node(node);
+	return node;
 }
 
 DeviceNode* Devsman::RegisterSerioDevice(DeviceNode* parent, const char* name) {
 	initialize_device_tree();
 	if (!parent || !name) return nullptr;
-	if (auto* node = find_named_child(parent, DeviceNodeType::SerioDevice, name)) return node;
-	return append_plain_device(parent, DeviceNodeType::SerioDevice, DeviceBusType::Serio, StrHeap(name));
+	if (auto* node = find_named_child(parent, DeviceNodeType::SerioDevice, name)) {
+		bind_device_node(node);
+		return node;
+	}
+	auto* node = append_plain_device(parent, DeviceNodeType::SerioDevice, DeviceBusType::Serio, StrHeap(name));
+	bind_device_node(node);
+	return node;
 }
 
 bool Devsman::AddIoPortResource(DeviceNode* node, uint32 index, uint64 base, uint64 length) {

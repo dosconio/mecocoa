@@ -23,9 +23,9 @@ UefiData uefi_data;
 
 
 extern OstreamTrait* con0_out;
-int x86_COM::inn() {
-	_TODO return -1;
-}
+// extern x86_COM com1;
+extern "C" void R_COM1_INIT();
+
 
 // ---- Kernel
 
@@ -40,7 +40,8 @@ void mecocoa(const UefiData& uefi_data_ref)
 	#endif
 
 	_call_serious = kernel_fail;
-	x86_COM com1; con0_out = &com1;
+	x86_COM com1;
+	con0_out = &com1;
 	if (!Memory::initialize('UEFI', (byte*)(&uefi_data.memory_map))) HALT();
 	Consman::Initialize();
 	//{} Cache_t::enAble();
@@ -49,20 +50,16 @@ void mecocoa(const UefiData& uefi_data_ref)
 	Taskman::Initialize();
 	Devsman::Initialize();
 	Virtman::Initialize();
-	// Syscall::Initialize();
+	Syscall::Initialize();
 	// Coreman::Initialize();
 
 	//{} mem > 4G
 
+	// R_COM1_INIT();
+
 	#ifdef _UEFI
 	ploginfo("Ciallo %lf, rsp=%[x]", 2025.09, rsp);
 	#endif
-
-	// IVT and Device
-	new (&IC) InterruptControl(mglb(mem.allocate(256 * sizeof(gate_t))));
-	IC.Reset(SegCo64, 0xFFFFFFFFC0000000ull);
-
-	Syscall::Initialize();
 
 	// Deivce Driver
 	auto& xhc = *reinterpret_cast<uni::device::SpaceUSB3::HostController*>(_BUF_xhc);

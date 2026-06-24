@@ -386,3 +386,6 @@ IRQ_TRAMPOLINE_64 Handint_XHCI_Entry, 0x40
 
 ; LAPIC Timer Interrupt
 IRQ_TRAMPOLINE_64 Handint_LAPICT_Entry, 0x41
+
+; COM1 Interrupt
+IRQ_TRAMPOLINE_64 Handint_COM1_Entry, 0x24

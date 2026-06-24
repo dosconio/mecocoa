@@ -189,33 +189,45 @@ static void dump_device_tree_node(OstreamTrait& com1, const DeviceNode* node, st
 	for (auto crt = node; crt; crt = cast<DeviceNode*>(crt->link.next)) {
 		dump_device_tree_indent(com1, depth);
 		const rostr name = crt->link.addr ? crt->link.addr : "(unnamed)";
+		const rostr driver_name = crt->fields.binding.driver_name ? crt->fields.binding.driver_name : nullptr;
 		switch (DeviceNodeType(crt->fields.node_type)) {
 		case DeviceNodeType::BusRoot:
 		case DeviceNodeType::PCI_Root:
-			com1.OutFormat("%s <%s bus=%s>\n\r",
+			com1.OutFormat("%s <%s bus=%s%s%s>\n\r",
 				name, text_device_node_type(crt->fields.node_type),
-				text_device_bus_type(crt->fields.bus_type));
+				text_device_bus_type(crt->fields.bus_type),
+				driver_name ? " drv=" : "",
+				driver_name ? driver_name : "");
 			break;
 		case DeviceNodeType::PciBus:
-			com1.OutFormat("%s <%s seg=%[u] bus=%[u]>\n\r",
+			com1.OutFormat("%s <%s seg=%[u] bus=%[u]%s%s>\n\r",
 				name, text_device_node_type(crt->fields.node_type),
-				(stduint)crt->fields.pci_segment, (stduint)crt->fields.pci_bus);
+				(stduint)crt->fields.pci_segment, (stduint)crt->fields.pci_bus,
+				driver_name ? " drv=" : "",
+				driver_name ? driver_name : "");
 			break;
 		case DeviceNodeType::PciDevice:
-			com1.OutFormat("%s <%s %02X.%02X.%02X vend=%04X dev=%04X>\n\r",
+			com1.OutFormat("%s <%s %02X.%02X.%02X vend=%04X dev=%04X%s%s>\n\r",
 				name, text_device_node_type(crt->fields.node_type),
 				(unsigned)crt->fields.class_base, (unsigned)crt->fields.class_sub, (unsigned)crt->fields.class_if,
-				(unsigned)crt->fields.vendor_id, (unsigned)crt->fields.device_id);
+				(unsigned)crt->fields.vendor_id, (unsigned)crt->fields.device_id,
+				driver_name ? " drv=" : "",
+				driver_name ? driver_name : "");
 			break;
 		case DeviceNodeType::PlatformDevice:
 		case DeviceNodeType::SerioController:
 		case DeviceNodeType::SerioDevice:
-			com1.OutFormat("%s <%s bus=%s>\n\r",
+			com1.OutFormat("%s <%s bus=%s%s%s>\n\r",
 				name, text_device_node_type(crt->fields.node_type),
-				text_device_bus_type(crt->fields.bus_type));
+				text_device_bus_type(crt->fields.bus_type),
+				driver_name ? " drv=" : "",
+				driver_name ? driver_name : "");
 			break;
 		default:
-			com1.OutFormat("%s <%s>\n\r", name, text_device_node_type(crt->fields.node_type));
+			com1.OutFormat("%s <%s%s%s>\n\r",
+				name, text_device_node_type(crt->fields.node_type),
+				driver_name ? " drv=" : "",
+				driver_name ? driver_name : "");
 			break;
 		}
 		if (verbose && crt->fields.resource_count) {

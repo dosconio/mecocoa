@@ -99,6 +99,7 @@ class Devsman {
 public:
 	static bool Initialize();
 	static bool AttachPCIDevices(uni::PCI& pci);
+	static void BindKnownDrivers();
 	static DeviceNode* RegisterPlatformDevice(const char* name);
 	static DeviceNode* RegisterSerioController(const char* name);
 	static DeviceNode* RegisterSerioDevice(DeviceNode* parent, const char* name);
