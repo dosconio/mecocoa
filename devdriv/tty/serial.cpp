@@ -49,6 +49,14 @@ void R_COM1_INIT() {
 	// Ensure IRQ_COM13_RS232_P1 maps to IRQ 4 (IDT index 0x24 if base is 0x20) [cite: 282]
 	IC[IRQ_COM13_RS232_P1].setRange(mglb(Handint_COM1_Entry), SegCo32);
 	register_interrupt_handler(IRQ_COM13_RS232_P1, Handint_COM1);
+	// flap32 prehost calls R_COM1_INIT() before Memory::initialize().
+	// Register into device tree only after Devsman has created the tree.
+	if (Devsman::Root()) {
+		if (auto* node = Devsman::RegisterPlatformDevice("uart@com1")) {
+			Devsman::AddIoPortResource(node, 0, PORT_COM1_DATA, 8);
+			Devsman::AddIrqResource(node, IRQ_COM13_RS232_P1);
+		}
+	}
 }
 
 

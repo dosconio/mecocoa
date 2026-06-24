@@ -29,12 +29,13 @@ namespace {
 		}
 	};
 
-	#if (_MCCA & 0xFF00) == 0x8600
-
 	DeviceTree device_tree;
 	DeviceNode* device_root = nullptr;
+	
+	#if (_MCCA & 0xFF00) == 0x8600
 	DeviceNode* pci_root = nullptr;
 	DeviceNode* primary_pci_bus = nullptr;
+	DeviceNode* bus_roots[8]{};
 	DeviceNode* pci_bus_nodes[256]{};
 	bool pci_devices_attached = false;
 
@@ -45,6 +46,23 @@ namespace {
 		node->fields.bus_type = static_cast<uint16>(bus_type);
 		node->fields.resource_capacity = DeviceNodeInlineResourceCapacity;
 		node->fields.resources = node->inline_resources;
+	}
+
+	stduint bus_root_index(DeviceBusType bus_type) {
+		return static_cast<stduint>(bus_type);
+	}
+
+	const char* default_bus_root_name(DeviceBusType bus_type) {
+		switch (bus_type) {
+		case DeviceBusType::PCI:      return "pci-root";
+		case DeviceBusType::USB:      return "usb-root";
+		case DeviceBusType::Platform: return "platform-root";
+		case DeviceBusType::I2C:      return "i2c-root";
+		case DeviceBusType::SPI:      return "spi-root";
+		case DeviceBusType::Serio:    return "serio-root";
+		case DeviceBusType::Virtio:   return "virtio-root";
+		default:                      return "bus-root";
+		}
 	}
 
 	void append_child(DeviceNode* parent, DeviceNode* child) {
@@ -87,6 +105,22 @@ namespace {
 
 	const char* heap_name(const char* fmt, stduint a0, stduint a1 = 0, stduint a2 = 0, stduint a3 = 0) {
 		return StrHeap(String::newFormat(fmt, a0, a1, a2, a3).reference());
+	}
+
+	DeviceNode* create_bus_root(DeviceBusType bus_type, const char* name = nullptr) {
+		const stduint idx = bus_root_index(bus_type);
+		if (bus_roots[idx]) return bus_roots[idx];
+		auto* root = device_tree.NewNode();
+		init_node(root, bus_type == DeviceBusType::PCI ? DeviceNodeType::PCI_Root : DeviceNodeType::BusRoot,
+			bus_type, name ? name : default_bus_root_name(bus_type));
+		append_child(device_root, root);
+		bus_roots[idx] = root;
+		if (bus_type == DeviceBusType::PCI) pci_root = root;
+		return root;
+	}
+
+	DeviceNode* get_bus_root(DeviceBusType bus_type) {
+		return bus_roots[bus_root_index(bus_type)];
 	}
 
 	DeviceNode* create_pci_bus_node(uint16 segment, uint8 bus) {
@@ -132,12 +166,30 @@ namespace {
 		return true;
 	}
 
+	DeviceNode* append_plain_device(DeviceNode* parent, DeviceNodeType node_type, DeviceBusType bus_type, const char* name) {
+		auto* node = device_tree.NewNode();
+		init_node(node, node_type, bus_type, name);
+		append_child(parent, node);
+		return node;
+	}
+
+	DeviceNode* find_named_child(DeviceNode* parent, DeviceNodeType node_type, const char* name) {
+		if (!parent || !name) return nullptr;
+		for (auto* crt = reinterpret_cast<DeviceNode*>(parent->link.subf); crt; crt = reinterpret_cast<DeviceNode*>(crt->link.next)) {
+			if (crt->fields.node_type != static_cast<uint16>(node_type)) continue;
+			if (crt->link.addr && StrCompare(crt->link.addr, name) == 0) return crt;
+		}
+		return nullptr;
+	}
+
 	const char* pci_resource_type_name(uint16 type) {
 		switch (static_cast<DeviceResourceType>(type)) {
 		case DeviceResourceType::PciBarMmio:
 			return "BAR-MMIO";
 		case DeviceResourceType::PciBarIo:
 			return "BAR-IO";
+		case DeviceResourceType::IoPortRange:
+			return "IOPORT";
 		case DeviceResourceType::IrqLine:
 			return "IRQ";
 		case DeviceResourceType::PciBridgeBusRange:
@@ -158,6 +210,10 @@ namespace {
 			case DeviceResourceType::PciBarIo:
 				ploginfo("[DEVSMAN]   %s[%u] base=%[64H]",
 					pci_resource_type_name(res.type), res.index, res.start);
+				break;
+			case DeviceResourceType::IoPortRange:
+				ploginfo("[DEVSMAN]   %s[%u] base=%[64H] len=%[64H]",
+					pci_resource_type_name(res.type), res.index, res.start, res.length);
 				break;
 			case DeviceResourceType::IrqLine:
 				ploginfo("[DEVSMAN]   %s line=%u pin=%u",
@@ -266,16 +322,20 @@ namespace {
 		device_root = device_tree.NewNode();
 		init_node(device_root, DeviceNodeType::SystemRoot, DeviceBusType::None, "system-root");
 		device_tree.SetRoot(device_root);
-
-		pci_root = device_tree.NewNode();
-		init_node(pci_root, DeviceNodeType::PCI_Root, DeviceBusType::PCI, "pci-root");
-		append_child(device_root, pci_root);
-
+		create_bus_root(DeviceBusType::PCI);
+		create_bus_root(DeviceBusType::USB);
+		create_bus_root(DeviceBusType::Platform);
+		create_bus_root(DeviceBusType::I2C);
+		create_bus_root(DeviceBusType::SPI);
+		create_bus_root(DeviceBusType::Serio);
+		create_bus_root(DeviceBusType::Virtio);
 		primary_pci_bus = create_pci_bus_node(0, 0);
 
 		ploginfo("[DEVSMAN] Device tree root ready");
 		ploginfo("[DEVSMAN] Node: %s", device_root->link.addr);
-		ploginfo("[DEVSMAN] Node: %s", pci_root->link.addr);
+		for (stduint i = 1; i < byteof(bus_roots) / byteof(bus_roots[0]); ++i) {
+			if (bus_roots[i]) ploginfo("[DEVSMAN] Node: %s", bus_roots[i]->link.addr);
+		}
 		ploginfo("[DEVSMAN] Node: %s", primary_pci_bus->link.addr);
 	}
 
@@ -289,22 +349,28 @@ namespace {
 		Devsman::AttachPCIDevices(pci);
 	}
 
-	DeviceNode* find_pci_device_by_class(uint8 class_base, uint8 class_sub, uint8 class_if) {
-		if (!pci_root) return nullptr;
-		for (Nnode* bus_link = pci_root->link.subf; bus_link; bus_link = bus_link->next) {
-			auto* bus_node = reinterpret_cast<DeviceNode*>(bus_link);
-			if (bus_node->fields.node_type != static_cast<uint16>(DeviceNodeType::PciBus)) continue;
-			for (Nnode* dev_link = bus_node->link.subf; dev_link; dev_link = dev_link->next) {
-				auto* dev_node = reinterpret_cast<DeviceNode*>(dev_link);
-				if (dev_node->fields.node_type != static_cast<uint16>(DeviceNodeType::PciDevice)) continue;
-				if (dev_node->fields.class_base == class_base &&
-					dev_node->fields.class_sub == class_sub &&
-					dev_node->fields.class_if == class_if) {
-					return dev_node;
+	DeviceNode* find_pci_device_by_class_in_subtree(DeviceNode* node, uint8 class_base, uint8 class_sub, uint8 class_if) {
+		for (auto* crt = node; crt; crt = reinterpret_cast<DeviceNode*>(crt->link.next)) {
+			if (crt->fields.node_type == static_cast<uint16>(DeviceNodeType::PciDevice) &&
+				crt->fields.class_base == class_base &&
+				crt->fields.class_sub == class_sub &&
+				crt->fields.class_if == class_if) {
+				return crt;
+			}
+			if (crt->link.subf) {
+				if (auto* found = find_pci_device_by_class_in_subtree(reinterpret_cast<DeviceNode*>(crt->link.subf),
+					class_base, class_sub, class_if)) {
+					return found;
 				}
 			}
 		}
 		return nullptr;
+	}
+
+	DeviceNode* find_pci_device_by_class(uint8 class_base, uint8 class_sub, uint8 class_if) {
+		if (!pci_root || !pci_root->link.subf) return nullptr;
+		return find_pci_device_by_class_in_subtree(reinterpret_cast<DeviceNode*>(pci_root->link.subf),
+			class_base, class_sub, class_if);
 	}
 
 	const DeviceResource* find_resource(const DeviceNode* node, DeviceResourceType type, uint32 index) {
@@ -432,6 +498,10 @@ bool Devsman::Initialize() {
 	return true;
 }
 
+DeviceNode* Devsman::Root() {
+	return device_root;
+}
+
 #if (_MCCA & 0xFF00) == 0x8600
 bool Devsman::AttachPCIDevices(uni::PCI& pci) {
 	initialize_device_tree();
@@ -448,8 +518,41 @@ bool Devsman::AttachPCIDevices(uni::PCI& pci) {
 	return true;
 }
 
-DeviceNode* Devsman::Root() {
-	return device_root;
+
+
+DeviceNode* Devsman::RegisterPlatformDevice(const char* name) {
+	initialize_device_tree();
+	auto* root = get_bus_root(DeviceBusType::Platform);
+	if (!root || !name) return nullptr;
+	if (auto* node = find_named_child(root, DeviceNodeType::PlatformDevice, name)) return node;
+	return append_plain_device(root, DeviceNodeType::PlatformDevice, DeviceBusType::Platform, StrHeap(name));
+}
+
+DeviceNode* Devsman::RegisterSerioController(const char* name) {
+	initialize_device_tree();
+	auto* root = get_bus_root(DeviceBusType::Serio);
+	if (!root || !name) return nullptr;
+	if (auto* node = find_named_child(root, DeviceNodeType::SerioController, name)) return node;
+	return append_plain_device(root, DeviceNodeType::SerioController, DeviceBusType::Serio, StrHeap(name));
+}
+
+DeviceNode* Devsman::RegisterSerioDevice(DeviceNode* parent, const char* name) {
+	initialize_device_tree();
+	if (!parent || !name) return nullptr;
+	if (auto* node = find_named_child(parent, DeviceNodeType::SerioDevice, name)) return node;
+	return append_plain_device(parent, DeviceNodeType::SerioDevice, DeviceBusType::Serio, StrHeap(name));
+}
+
+bool Devsman::AddIoPortResource(DeviceNode* node, uint32 index, uint64 base, uint64 length) {
+	if (!node) return false;
+	if (find_resource(node, DeviceResourceType::IoPortRange, index)) return true;
+	return append_resource(node, DeviceResourceType::IoPortRange, DeviceResourceFlag_None, index, base, length, 0);
+}
+
+bool Devsman::AddIrqResource(DeviceNode* node, uint64 vector, uint64 pin) {
+	if (!node) return false;
+	if (find_resource(node, DeviceResourceType::IrqLine, 0)) return true;
+	return append_resource(node, DeviceResourceType::IrqLine, DeviceResourceFlag_None, 0, vector, 1, pin);
 }
 
 DeviceNode* Devsman::PCI_Root() {

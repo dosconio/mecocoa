@@ -31,6 +31,14 @@ void R_KBD_INIT() {
 	IC[IRQ_Keyboard].setRange(mglb(Handint_KBD_Entry), SegCo32);
 	register_interrupt_handler(IRQ_Keyboard, Handint_KBD);
 	Keyboard_Init();
+	auto* i8042 = Devsman::RegisterSerioController("i8042");
+	if (i8042) {
+		Devsman::AddIoPortResource(i8042, 0, PORT_KEYBOARD_DAT, 1);
+		Devsman::AddIoPortResource(i8042, 1, PORT_KEYBOARD_CMD, 1);
+		if (auto* ps2kbd = Devsman::RegisterSerioDevice(i8042, "ps2kbd")) {
+			Devsman::AddIrqResource(ps2kbd, IRQ_Keyboard);
+		}
+	}
 }
 
 extern KeyboardBridge kbdbridge;

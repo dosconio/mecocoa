@@ -263,7 +263,7 @@ static stduint _Taskman_Create_Paging(ProcessBlock *ppb, byte ring, stduint stac
 			#if _MCCA == 0x8632
 			ring3_iret_stacks[i] = (mem.allocate(0x1000, PAGESIZE_4KB));
 			ap_ring3_iret_stack_tops[i] = (0xFFFFF000u - i * 0x1000u) + 0x1000u - 0x10u;
-				ap_higher_stack_tops[i] = _IMM(higher_stacks[i]) + 0x1000 - 0x10;
+			ap_higher_stack_tops[i] = _IMM(higher_stacks[i]) + 0x1000 - 0x10;
 			#endif
 			#if _MCCA == 0x8632 || _MCCA == 0x8664
 			percore->lapic_id = acpi_cpu_count ? acpi_cpu_lapic_ids[i] :
@@ -288,43 +288,40 @@ static stduint _Taskman_Create_Paging(ProcessBlock *ppb, byte ring, stduint stac
 			#else
 			#endif
 			//{} TEMP GDT_Alloc and tss.setRange
-			if (i == 0)
-			{
+			if (i == 0) {
 				mecocoa_global->gdt_ptr->tss.setRange(mglb(&PCU_CORES_PERCORE[i]->tss), sizeof(TSS_t) - 1);
-				#if _MCCA == 0x8632
-				const stduint stack_lev_top = GetCoreRingStackBase(i) + HIGHER_STACK_SIZE;
-				PCU_CORES_PERCORE[i]->tss.ESP0 = GetCoreTransitionStackTop(cpuid);
-				PCU_CORES_PERCORE[i]->tss.SS0 = SegData;
-				PCU_CORES_PERCORE[i]->tss.ESP1 = GetCoreTransitionStackTop(cpuid);
-				PCU_CORES_PERCORE[i]->tss.SS1 = 8 * 5 + 4 + 1;// 4:LDT 8*5:SS1 1:Ring1
-				PCU_CORES_PERCORE[i]->tss.ESP2 = GetCoreTransitionStackTop(cpuid);
-				PCU_CORES_PERCORE[i]->tss.SS2 = 8 * 6 + 4 + 2;// 4:LDT 8*6:SS2 2:Ring2
-				//
-				PCU_CORES_PERCORE[i]->tss.LDTDptr = SegGLDT + 3; // LDT yo GDT
-				PCU_CORES_PERCORE[i]->tss.LDTLength = 8 * 8 - 1;
-				PCU_CORES_PERCORE[i]->tss.STRC_15_T = 0;
-				PCU_CORES_PERCORE[i]->tss.IO_MAP = sizeof(TSS_t) - 1;
-				PCU_CORES_PERCORE[i]->tss_selector = SegTSS0;
-				#endif
 			}
+
+			// Set TSS
 			#if _MCCA == 0x8632
+			if (i == 0) {
+				PCU_CORES_PERCORE[i]->tss_selector = SegTSS0;
+			}
 			else {
 				descriptor_t* const GDT = (descriptor_t*)mecocoa_global->gdt_ptr;
 				word selector = GDT_Alloc();
 				Descriptor32Set(&GDT[selector / 8], mglb(&PCU_CORES_PERCORE[i]->tss), sizeof(TSS_t) - 1, _Dptr_TSS386_Available, 0, 0, 1, 0);
-				PCU_CORES_PERCORE[i]->tss.ESP0 = GetCoreTransitionStackTop(cpuid);
-				PCU_CORES_PERCORE[i]->tss.SS0 = SegData;
-				PCU_CORES_PERCORE[i]->tss.ESP1 = GetCoreTransitionStackTop(cpuid);
-				PCU_CORES_PERCORE[i]->tss.SS1 = 8 * 5 + 4 + 1;
-				PCU_CORES_PERCORE[i]->tss.ESP2 = GetCoreTransitionStackTop(cpuid);
-				PCU_CORES_PERCORE[i]->tss.SS2 = 8 * 6 + 4 + 2;
-				PCU_CORES_PERCORE[i]->tss.LDTDptr = SegGLDT + 3;
-				PCU_CORES_PERCORE[i]->tss.LDTLength = 8 * 8 - 1;
-				PCU_CORES_PERCORE[i]->tss.STRC_15_T = 0;
-				PCU_CORES_PERCORE[i]->tss.IO_MAP = sizeof(TSS_t) - 1;
 				PCU_CORES_PERCORE[i]->tss_selector = selector;
 			}
+
+			#elif _MCCA == 0x8664
+			//{} TODO
+			
 			#endif
+
+			#if _MCCA == 0x8632
+			PCU_CORES_PERCORE[i]->tss.ESP0 = GetCoreTransitionStackTop(i);
+			PCU_CORES_PERCORE[i]->tss.SS0 = SegData;
+			PCU_CORES_PERCORE[i]->tss.ESP1 = GetCoreTransitionStackTop(i);
+			PCU_CORES_PERCORE[i]->tss.SS1 = 8 * 5 + 4 + 1;// 4:LDT 8*5:SS1 1:Ring1
+			PCU_CORES_PERCORE[i]->tss.ESP2 = GetCoreTransitionStackTop(i);
+			PCU_CORES_PERCORE[i]->tss.SS2 = 8 * 6 + 4 + 2;// 4:LDT 8*6:SS2 2:Ring2
+			PCU_CORES_PERCORE[i]->tss.LDTDptr = SegGLDT + 3; // LDT yo GDT
+			PCU_CORES_PERCORE[i]->tss.LDTLength = 8 * 8 - 1;
+			PCU_CORES_PERCORE[i]->tss.STRC_15_T = 0;
+			PCU_CORES_PERCORE[i]->tss.IO_MAP = sizeof(TSS_t) - 1;
+			#endif
+
 		}
 		_Mapping_Core_Stack(kernel_paging);
 		PCU_CORES_PERCORE[0]->state = CoreState::Online;//

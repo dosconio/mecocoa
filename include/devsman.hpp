@@ -5,20 +5,31 @@
 
 enum class DeviceNodeType : uint16 {
 	SystemRoot = 1,
+	BusRoot,
 	PCI_Root,
 	PciBus,
 	PciDevice,
+	PlatformDevice,
+	SerioController,
+	SerioDevice,
 };
 
 enum class DeviceBusType : uint16 {
 	None = 0,
 	PCI,
+	USB,
+	Platform,
+	I2C,
+	SPI,
+	Serio,
+	Virtio,
 };
 
 enum class DeviceResourceType : uint16 {
 	None = 0,
 	PciBarMmio,
 	PciBarIo,
+	IoPortRange,
 	IrqLine,
 	PciBridgeBusRange,
 };
@@ -88,6 +99,11 @@ class Devsman {
 public:
 	static bool Initialize();
 	static bool AttachPCIDevices(uni::PCI& pci);
+	static DeviceNode* RegisterPlatformDevice(const char* name);
+	static DeviceNode* RegisterSerioController(const char* name);
+	static DeviceNode* RegisterSerioDevice(DeviceNode* parent, const char* name);
+	static bool AddIoPortResource(DeviceNode* node, uint32 index, uint64 base, uint64 length);
+	static bool AddIrqResource(DeviceNode* node, uint64 vector, uint64 pin = 0);
 	static DeviceNode* Root();
 	static DeviceNode* PCI_Root();
 	static DeviceNode* PrimaryPciBus();

@@ -21,6 +21,10 @@ void R_RTC_INIT() {
 	IC[IRQ_RTC].setRange(mglb(Handint_RTC_Entry), SegCo32);
 	register_interrupt_handler(IRQ_RTC, Handint_RTC);
 	RTC_Init();
+	if (auto* node = Devsman::RegisterPlatformDevice("rtc@cmos")) {
+		Devsman::AddIoPortResource(node, 0, PORT_CMOS_ADDR, 2);
+		Devsman::AddIrqResource(node, IRQ_RTC);
+	}
 }
 
 

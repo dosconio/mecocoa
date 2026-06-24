@@ -113,10 +113,27 @@ String dump_availmem() {
 static rostr text_device_node_type(uint16 node_type) {
 	switch (DeviceNodeType(node_type)) {
 	case DeviceNodeType::SystemRoot: return "system-root";
+	case DeviceNodeType::BusRoot:    return "bus-root";
 	case DeviceNodeType::PCI_Root:   return "pci-root";
 	case DeviceNodeType::PciBus:     return "pci-bus";
 	case DeviceNodeType::PciDevice:  return "pci-dev";
+	case DeviceNodeType::PlatformDevice: return "platform-dev";
+	case DeviceNodeType::SerioController: return "serio-ctl";
+	case DeviceNodeType::SerioDevice: return "serio-dev";
 	default: return "unknown";
+	}
+}
+
+static rostr text_device_bus_type(uint16 bus_type) {
+	switch (DeviceBusType(bus_type)) {
+	case DeviceBusType::PCI: return "pci";
+	case DeviceBusType::USB: return "usb";
+	case DeviceBusType::Platform: return "platform";
+	case DeviceBusType::I2C: return "i2c";
+	case DeviceBusType::SPI: return "spi";
+	case DeviceBusType::Serio: return "serio";
+	case DeviceBusType::Virtio: return "virtio";
+	default: return "none";
 	}
 }
 
@@ -124,6 +141,7 @@ static rostr text_device_resource_type(uint16 type) {
 	switch (DeviceResourceType(type)) {
 	case DeviceResourceType::PciBarMmio:        return "BAR-MMIO";
 	case DeviceResourceType::PciBarIo:          return "BAR-IO";
+	case DeviceResourceType::IoPortRange:       return "IOPORT";
 	case DeviceResourceType::IrqLine:           return "IRQ";
 	case DeviceResourceType::PciBridgeBusRange: return "BUS-RANGE";
 	default: return "RES";
@@ -147,6 +165,10 @@ static void dump_device_tree_resources(OstreamTrait& com1, const DeviceNode& nod
 			com1.OutFormat("- %s[%[u]] base=%p\n\r",
 				text_device_resource_type(res.type), res.index, (void*)res.start);
 			break;
+		case DeviceResourceType::IoPortRange:
+			com1.OutFormat("- %s[%[u]] base=%p len=%p\n\r",
+				text_device_resource_type(res.type), res.index, (void*)res.start, (void*)res.length);
+			break;
 		case DeviceResourceType::IrqLine:
 			com1.OutFormat("- %s line=%[u] pin=%[u]\n\r",
 				text_device_resource_type(res.type), (stduint)res.start, (stduint)res.extra);
@@ -168,6 +190,12 @@ static void dump_device_tree_node(OstreamTrait& com1, const DeviceNode* node, st
 		dump_device_tree_indent(com1, depth);
 		const rostr name = crt->link.addr ? crt->link.addr : "(unnamed)";
 		switch (DeviceNodeType(crt->fields.node_type)) {
+		case DeviceNodeType::BusRoot:
+		case DeviceNodeType::PCI_Root:
+			com1.OutFormat("%s <%s bus=%s>\n\r",
+				name, text_device_node_type(crt->fields.node_type),
+				text_device_bus_type(crt->fields.bus_type));
+			break;
 		case DeviceNodeType::PciBus:
 			com1.OutFormat("%s <%s seg=%[u] bus=%[u]>\n\r",
 				name, text_device_node_type(crt->fields.node_type),
@@ -178,6 +206,13 @@ static void dump_device_tree_node(OstreamTrait& com1, const DeviceNode* node, st
 				name, text_device_node_type(crt->fields.node_type),
 				(unsigned)crt->fields.class_base, (unsigned)crt->fields.class_sub, (unsigned)crt->fields.class_if,
 				(unsigned)crt->fields.vendor_id, (unsigned)crt->fields.device_id);
+			break;
+		case DeviceNodeType::PlatformDevice:
+		case DeviceNodeType::SerioController:
+		case DeviceNodeType::SerioDevice:
+			com1.OutFormat("%s <%s bus=%s>\n\r",
+				name, text_device_node_type(crt->fields.node_type),
+				text_device_bus_type(crt->fields.bus_type));
 			break;
 		default:
 			com1.OutFormat("%s <%s>\n\r", name, text_device_node_type(crt->fields.node_type));
