@@ -26,76 +26,6 @@ extern OstreamTrait* con0_out;
 // extern x86_COM com1;
 extern "C" void R_COM1_INIT();
 
-namespace {
-	struct USBNodeClassInfo {
-		uint8 class_base;
-		uint8 class_sub;
-		uint8 class_if;
-		const char* driver_name;
-		const char* kind_name;
-	};
-
-	USBNodeClassInfo classify_usb_interface(const uni::device::SpaceUSB::InterfaceDescriptor& if_desc) {
-		if (if_desc.interface_class == 3 && if_desc.interface_sub_class == 1) {
-			if (if_desc.interface_protocol == 1) {
-				return {if_desc.interface_class, if_desc.interface_sub_class, if_desc.interface_protocol,
-					"usb-hid-keyboard", "keyboard"};
-			}
-			if (if_desc.interface_protocol == 2) {
-				return {if_desc.interface_class, if_desc.interface_sub_class, if_desc.interface_protocol,
-					"usb-hid-mouse", "mouse"};
-			}
-		}
-		return {if_desc.interface_class, if_desc.interface_sub_class, if_desc.interface_protocol,
-			"usb-interface", "interface"};
-	}
-
-	void register_single_usb_device_for_xhci(DeviceNode* usb_bus_node,
-		uint8 port_num, uni::device::SpaceUSB3::DeviceUSB3& dev) {
-		if (!usb_bus_node || !dev.IsInitialized()) return;
-		const auto slot_id = dev.SlotID();
-		auto usb_dev_name = String::newFormat("usb-dev@port%u.slot%u", (stduint)port_num, (stduint)slot_id);
-		auto* usb_dev_node = Devsman::RegisterUSBDevice(usb_bus_node, usb_dev_name.reference(),
-			dev.VendorID(), dev.ProductID(),
-			dev.DeviceClass(), dev.DeviceSubClass(), dev.DeviceProtocol(),
-			port_num, slot_id,
-			"usb-device", &dev);
-		auto* desc = dev.Buffer();
-		if (!usb_dev_node || !desc) return;
-		const auto* conf_desc = uni::device::SpaceUSB::DescriptorDynamicCast<uni::device::SpaceUSB::ConfigurationDescriptor>(desc);
-		if (!conf_desc || conf_desc->total_length < conf_desc->length) return;
-		const auto* p = desc + conf_desc->length;
-		const auto* end = desc + conf_desc->total_length;
-		while (p + 2 <= end) {
-			const uint8 len = p[0];
-			if (len == 0 || p + len > end) break;
-			if (auto* if_desc = uni::device::SpaceUSB::DescriptorDynamicCast<uni::device::SpaceUSB::InterfaceDescriptor>(p)) {
-				auto info = classify_usb_interface(*if_desc);
-				auto usb_if_name = String::newFormat("usb-if@%u", (stduint)if_desc->interface_number);
-				Devsman::RegisterUSBInterface(usb_dev_node, usb_if_name.reference(),
-					info.class_base, info.class_sub, info.class_if,
-					info.driver_name, &dev);
-				ploginfo("USB %s attached on xHC port=%u slot=%u if=%u",
-					info.kind_name, (stduint)port_num, (stduint)slot_id, (stduint)if_desc->interface_number);
-			}
-			p += len;
-		}
-	}
-
-	void on_xhci_complete_configuration(uni::device::SpaceUSB3::HostController& xhc, uint8 port_id, uint8, uni::device::SpaceUSB3::DeviceUSB3& dev) {
-		auto* xhc_node = Devsman::FindPCIDeviceByClass(0x0Cu, 0x03u, 0x30u);
-		if (!xhc_node) return;
-		auto* current_xhc = reinterpret_cast<uni::device::SpaceUSB3::HostController*>(xhc_node->fields.binding.driver_data);
-		if (current_xhc != &xhc) return;
-		auto usb_bus_name = String::newFormat("usb-bus@%04x:%02x:%02x.%x", 0,
-			(stduint)xhc_node->fields.pci_bus,
-			(stduint)xhc_node->fields.pci_device,
-			(stduint)xhc_node->fields.pci_function);
-		auto* usb_bus_node = Devsman::RegisterUSBBus(usb_bus_name.reference(), "xhci", &xhc);
-		register_single_usb_device_for_xhci(usb_bus_node, port_id, dev);
-	}
-}
-
 static bool start_xhci_driver(DeviceNode* xhc_node) {
 	if (!xhc_node) return false;
 	auto& xhc = *reinterpret_cast<uni::device::SpaceUSB3::HostController*>(_BUF_xhc);
@@ -179,7 +109,7 @@ void mecocoa(const UefiData& uefi_data_ref)
 	//[USB Mouse&Keyboard]
 	uni::device::SpaceUSB::HIDMouseDriver::default_observer = hand_mouse_usb;
 	uni::device::SpaceUSB::HIDKeyboardDriver::default_observer = hand_kboard;
-	uni::device::SpaceUSB3::g_configuration_complete_hook = on_xhci_complete_configuration;
+	Devsman::RegisterXHCIDeviceTreeHook();
 	Devsman::RegisterDriverStarter("xhci", start_xhci_driver);
 	Devsman::StartKnownDrivers();
 

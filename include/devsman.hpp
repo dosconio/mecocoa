@@ -36,6 +36,7 @@ enum class DeviceResourceType : uint16 {
 	IrqLine,
 	PciBridgeBusRange,
 	UsbLocation,
+	UsbEndpoint,
 };
 
 enum DeviceResourceFlags : uint16 {
@@ -79,6 +80,9 @@ struct DevExt {
 
 	uint16 vendor_id;
 	uint16 device_id;
+	const char* text_manufacturer;
+	const char* text_product;
+	const char* text_serial;
 
 	uint8 revision;
 	uint8 class_base;
@@ -116,16 +120,20 @@ public:
 	static void BindKnownDrivers();
 	static void ProbeKnownDrivers();
 	static void StartKnownDrivers();
+	static void RegisterXHCIDeviceTreeHook();
 	static bool RegisterDriverStarter(const char* driver_name, DriverStartRoutine starter);
 	static DeviceNode* RegisterUSBBus(const char* name, const char* driver_name = nullptr, void* driver_data = nullptr);
 	static DeviceNode* RegisterUSBDevice(DeviceNode* parent, const char* name,
 		uint16 vendor_id, uint16 product_id,
+		const char* text_manufacturer, const char* text_product, const char* text_serial,
 		uint8 class_base, uint8 class_sub, uint8 class_if,
 		uint8 port_num, uint8 slot_id,
 		const char* driver_name = nullptr, void* driver_data = nullptr);
 	static DeviceNode* RegisterUSBInterface(DeviceNode* parent, const char* name,
 		uint8 class_base, uint8 class_sub, uint8 class_if,
 		const char* driver_name = nullptr, void* driver_data = nullptr);
+	static bool AddUSBEndpointResource(DeviceNode* node, uint32 index,
+		uint8 endpoint_addr, uint8 transfer_type, uint16 max_packet_size, uint8 interval);
 	static DeviceNode* RegisterPlatformDevice(const char* name);
 	static DeviceNode* RegisterSerioController(const char* name);
 	static DeviceNode* RegisterSerioDevice(DeviceNode* parent, const char* name);

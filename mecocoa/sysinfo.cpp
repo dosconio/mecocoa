@@ -159,7 +159,18 @@ static rostr text_device_resource_type(uint16 type) {
 	case DeviceResourceType::IrqLine:           return "IRQ";
 	case DeviceResourceType::PciBridgeBusRange: return "BUS-RANGE";
 	case DeviceResourceType::UsbLocation:       return "USB-LOC";
+	case DeviceResourceType::UsbEndpoint:       return "USB-EP";
 	default: return "RES";
+	}
+}
+
+static rostr text_usb_endpoint_transfer_type(stduint type) {
+	switch (type) {
+	case 0: return "control";
+	case 1: return "iso";
+	case 2: return "bulk";
+	case 3: return "interrupt";
+	default: return "?";
 	}
 }
 
@@ -196,11 +207,35 @@ static void dump_device_tree_resources(OstreamTrait& com1, const DeviceNode& nod
 			com1.OutFormat("- %s port=%[u] slot=%[u]\n\r",
 				text_device_resource_type(res.type), (stduint)res.start, (stduint)res.extra);
 			break;
+		case DeviceResourceType::UsbEndpoint:
+			com1.OutFormat("- %s[%[u]] addr=%[u] type=%s mps=%[u] interval=%[u]\n\r",
+				text_device_resource_type(res.type), res.index,
+				(stduint)res.start,
+				text_usb_endpoint_transfer_type(res.extra & 0xFFu),
+				(stduint)res.length,
+				(stduint)((res.extra >> 8) & 0xFFu));
+			break;
 		default:
 			com1.OutFormat("- %s[%[u]] start=%p len=%p extra=%p\n\r",
 				text_device_resource_type(res.type), res.index, (void*)res.start, (void*)res.length, (void*)res.extra);
 			break;
 		}
+	}
+}
+
+static void dump_device_tree_usb_strings(OstreamTrait& com1, const DeviceNode& node, stduint depth) {
+	if (DeviceNodeType(node.fields.node_type) != DeviceNodeType::UsbDevice) return;
+	if (node.fields.text_manufacturer) {
+		dump_device_tree_indent(com1, depth);
+		com1.OutFormat("- USB-STR manufacturer=\"%s\"\n\r", node.fields.text_manufacturer);
+	}
+	if (node.fields.text_product) {
+		dump_device_tree_indent(com1, depth);
+		com1.OutFormat("- USB-STR product=\"%s\"\n\r", node.fields.text_product);
+	}
+	if (node.fields.text_serial) {
+		dump_device_tree_indent(com1, depth);
+		com1.OutFormat("- USB-STR serial=\"%s\"\n\r", node.fields.text_serial);
 	}
 }
 
@@ -284,6 +319,9 @@ static void dump_device_tree_node(OstreamTrait& com1, const DeviceNode* node, st
 		}
 		if (verbose && crt->fields.resource_count) {
 			dump_device_tree_resources(com1, *crt, depth + 1);
+		}
+		if (verbose) {
+			dump_device_tree_usb_strings(com1, *crt, depth + 1);
 		}
 		if (crt->link.subf) {
 			dump_device_tree_node(com1, cast<DeviceNode*>(crt->link.subf), depth + 1, verbose);
