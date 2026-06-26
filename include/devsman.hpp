@@ -9,6 +9,9 @@ enum class DeviceNodeType : uint16 {
 	PCI_Root,
 	PciBus,
 	PciDevice,
+	UsbBus,
+	UsbDevice,
+	UsbInterface,
 	PlatformDevice,
 	SerioController,
 	SerioDevice,
@@ -32,6 +35,7 @@ enum class DeviceResourceType : uint16 {
 	IoPortRange,
 	IrqLine,
 	PciBridgeBusRange,
+	UsbLocation,
 };
 
 enum DeviceResourceFlags : uint16 {
@@ -51,9 +55,18 @@ struct DeviceResource {
 	uint64 extra;
 };
 
+enum class DriverBindingState : uint32 {
+	None = 0,
+	Matched,
+	Probed,
+	Started,
+	Failed,
+};
+
 struct DriverBinding {
 	const char* driver_name;
 	uint32 state;
+	int32 probe_result;
 	void* driver_data;
 };
 
@@ -97,9 +110,22 @@ namespace uni {
 
 class Devsman {
 public:
+	using DriverStartRoutine = bool (*)(DeviceNode* node);
 	static bool Initialize();
 	static bool AttachPCIDevices(uni::PCI& pci);
 	static void BindKnownDrivers();
+	static void ProbeKnownDrivers();
+	static void StartKnownDrivers();
+	static bool RegisterDriverStarter(const char* driver_name, DriverStartRoutine starter);
+	static DeviceNode* RegisterUSBBus(const char* name, const char* driver_name = nullptr, void* driver_data = nullptr);
+	static DeviceNode* RegisterUSBDevice(DeviceNode* parent, const char* name,
+		uint16 vendor_id, uint16 product_id,
+		uint8 class_base, uint8 class_sub, uint8 class_if,
+		uint8 port_num, uint8 slot_id,
+		const char* driver_name = nullptr, void* driver_data = nullptr);
+	static DeviceNode* RegisterUSBInterface(DeviceNode* parent, const char* name,
+		uint8 class_base, uint8 class_sub, uint8 class_if,
+		const char* driver_name = nullptr, void* driver_data = nullptr);
 	static DeviceNode* RegisterPlatformDevice(const char* name);
 	static DeviceNode* RegisterSerioController(const char* name);
 	static DeviceNode* RegisterSerioDevice(DeviceNode* parent, const char* name);

@@ -117,6 +117,9 @@ static rostr text_device_node_type(uint16 node_type) {
 	case DeviceNodeType::PCI_Root:   return "pci-root";
 	case DeviceNodeType::PciBus:     return "pci-bus";
 	case DeviceNodeType::PciDevice:  return "pci-dev";
+	case DeviceNodeType::UsbBus:     return "usb-bus";
+	case DeviceNodeType::UsbDevice:  return "usb-dev";
+	case DeviceNodeType::UsbInterface: return "usb-if";
 	case DeviceNodeType::PlatformDevice: return "platform-dev";
 	case DeviceNodeType::SerioController: return "serio-ctl";
 	case DeviceNodeType::SerioDevice: return "serio-dev";
@@ -137,6 +140,17 @@ static rostr text_device_bus_type(uint16 bus_type) {
 	}
 }
 
+static rostr text_driver_binding_state(uint32 state) {
+	switch (DriverBindingState(state)) {
+	case DriverBindingState::None: return "none";
+	case DriverBindingState::Matched: return "matched";
+	case DriverBindingState::Probed: return "probed";
+	case DriverBindingState::Started: return "started";
+	case DriverBindingState::Failed: return "failed";
+	default: return "?";
+	}
+}
+
 static rostr text_device_resource_type(uint16 type) {
 	switch (DeviceResourceType(type)) {
 	case DeviceResourceType::PciBarMmio:        return "BAR-MMIO";
@@ -144,6 +158,7 @@ static rostr text_device_resource_type(uint16 type) {
 	case DeviceResourceType::IoPortRange:       return "IOPORT";
 	case DeviceResourceType::IrqLine:           return "IRQ";
 	case DeviceResourceType::PciBridgeBusRange: return "BUS-RANGE";
+	case DeviceResourceType::UsbLocation:       return "USB-LOC";
 	default: return "RES";
 	}
 }
@@ -177,6 +192,10 @@ static void dump_device_tree_resources(OstreamTrait& com1, const DeviceNode& nod
 			com1.OutFormat("- %s primary=%[u] secondary=%[u] subordinate=%[u]\n\r",
 				text_device_resource_type(res.type), (stduint)res.start, (stduint)res.length, (stduint)res.extra);
 			break;
+		case DeviceResourceType::UsbLocation:
+			com1.OutFormat("- %s port=%[u] slot=%[u]\n\r",
+				text_device_resource_type(res.type), (stduint)res.start, (stduint)res.extra);
+			break;
 		default:
 			com1.OutFormat("- %s[%[u]] start=%p len=%p extra=%p\n\r",
 				text_device_resource_type(res.type), res.index, (void*)res.start, (void*)res.length, (void*)res.extra);
@@ -190,44 +209,77 @@ static void dump_device_tree_node(OstreamTrait& com1, const DeviceNode* node, st
 		dump_device_tree_indent(com1, depth);
 		const rostr name = crt->link.addr ? crt->link.addr : "(unnamed)";
 		const rostr driver_name = crt->fields.binding.driver_name ? crt->fields.binding.driver_name : nullptr;
+		const bool has_binding = driver_name && crt->fields.binding.state != static_cast<uint32>(DriverBindingState::None);
 		switch (DeviceNodeType(crt->fields.node_type)) {
 		case DeviceNodeType::BusRoot:
 		case DeviceNodeType::PCI_Root:
-			com1.OutFormat("%s <%s bus=%s%s%s>\n\r",
+			com1.OutFormat("%s <%s bus=%s%s%s%s%s>\n\r",
 				name, text_device_node_type(crt->fields.node_type),
 				text_device_bus_type(crt->fields.bus_type),
 				driver_name ? " drv=" : "",
-				driver_name ? driver_name : "");
+				driver_name ? driver_name : "",
+				has_binding ? " state=" : "",
+				has_binding ? text_driver_binding_state(crt->fields.binding.state) : "");
 			break;
 		case DeviceNodeType::PciBus:
-			com1.OutFormat("%s <%s seg=%[u] bus=%[u]%s%s>\n\r",
+			com1.OutFormat("%s <%s seg=%[u] bus=%[u]%s%s%s%s>\n\r",
 				name, text_device_node_type(crt->fields.node_type),
 				(stduint)crt->fields.pci_segment, (stduint)crt->fields.pci_bus,
 				driver_name ? " drv=" : "",
-				driver_name ? driver_name : "");
+				driver_name ? driver_name : "",
+				has_binding ? " state=" : "",
+				has_binding ? text_driver_binding_state(crt->fields.binding.state) : "");
 			break;
 		case DeviceNodeType::PciDevice:
-			com1.OutFormat("%s <%s %02X.%02X.%02X vend=%04X dev=%04X%s%s>\n\r",
+			com1.OutFormat("%s <%s %02X.%02X.%02X vend=%04X dev=%04X%s%s%s%s>\n\r",
 				name, text_device_node_type(crt->fields.node_type),
 				(unsigned)crt->fields.class_base, (unsigned)crt->fields.class_sub, (unsigned)crt->fields.class_if,
 				(unsigned)crt->fields.vendor_id, (unsigned)crt->fields.device_id,
 				driver_name ? " drv=" : "",
-				driver_name ? driver_name : "");
+				driver_name ? driver_name : "",
+				has_binding ? " state=" : "",
+				has_binding ? text_driver_binding_state(crt->fields.binding.state) : "");
 			break;
+		case DeviceNodeType::UsbDevice:
+			com1.OutFormat("%s <%s %02X.%02X.%02X vid=%04X pid=%04X bus=%s%s%s%s%s>\n\r",
+				name, text_device_node_type(crt->fields.node_type),
+				(unsigned)crt->fields.class_base, (unsigned)crt->fields.class_sub, (unsigned)crt->fields.class_if,
+				(unsigned)crt->fields.vendor_id, (unsigned)crt->fields.device_id,
+				text_device_bus_type(crt->fields.bus_type),
+				driver_name ? " drv=" : "",
+				driver_name ? driver_name : "",
+				has_binding ? " state=" : "",
+				has_binding ? text_driver_binding_state(crt->fields.binding.state) : "");
+			break;
+		case DeviceNodeType::UsbInterface:
+			com1.OutFormat("%s <%s %02X.%02X.%02X bus=%s%s%s%s%s>\n\r",
+				name, text_device_node_type(crt->fields.node_type),
+				(unsigned)crt->fields.class_base, (unsigned)crt->fields.class_sub, (unsigned)crt->fields.class_if,
+				text_device_bus_type(crt->fields.bus_type),
+				driver_name ? " drv=" : "",
+				driver_name ? driver_name : "",
+				has_binding ? " state=" : "",
+				has_binding ? text_driver_binding_state(crt->fields.binding.state) : "");
+			break;
+		case DeviceNodeType::UsbBus:
 		case DeviceNodeType::PlatformDevice:
 		case DeviceNodeType::SerioController:
 		case DeviceNodeType::SerioDevice:
-			com1.OutFormat("%s <%s bus=%s%s%s>\n\r",
+			com1.OutFormat("%s <%s bus=%s%s%s%s%s>\n\r",
 				name, text_device_node_type(crt->fields.node_type),
 				text_device_bus_type(crt->fields.bus_type),
 				driver_name ? " drv=" : "",
-				driver_name ? driver_name : "");
+				driver_name ? driver_name : "",
+				has_binding ? " state=" : "",
+				has_binding ? text_driver_binding_state(crt->fields.binding.state) : "");
 			break;
 		default:
-			com1.OutFormat("%s <%s%s%s>\n\r",
+			com1.OutFormat("%s <%s%s%s%s%s>\n\r",
 				name, text_device_node_type(crt->fields.node_type),
 				driver_name ? " drv=" : "",
-				driver_name ? driver_name : "");
+				driver_name ? driver_name : "",
+				has_binding ? " state=" : "",
+				has_binding ? text_driver_binding_state(crt->fields.binding.state) : "");
 			break;
 		}
 		if (verbose && crt->fields.resource_count) {

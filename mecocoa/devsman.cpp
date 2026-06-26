@@ -38,10 +38,65 @@ namespace {
 	DeviceNode* bus_roots[8]{};
 	DeviceNode* pci_bus_nodes[256]{};
 	bool pci_devices_attached = false;
-	enum : uint32 {
-		DriverBindingState_None = 0,
-		DriverBindingState_Bound = 1,
+	constexpr uint8 MatchAnyClassIf = 0xFF;
+
+	struct PciDriverMatchEntry {
+		uint8 class_base;
+		uint8 class_sub;
+		uint8 class_if;
+		const char* driver_name;
 	};
+
+	struct NamedDriverMatchEntry {
+		const char* node_name;
+		const char* driver_name;
+	};
+
+	struct DriverOpsEntry {
+		const char* driver_name;
+		bool (*probe)(DeviceNode*);
+	};
+
+	struct DriverStartHookEntry {
+		const char* driver_name;
+		Devsman::DriverStartRoutine starter;
+	};
+
+	constexpr PciDriverMatchEntry pci_driver_match_table[] = {
+		{0x06u, 0x04u, MatchAnyClassIf, "pci-bridge"},
+		{0x0Cu, 0x03u, 0x30u, "xhci"},
+		{0x01u, 0x01u, MatchAnyClassIf, "pata"},
+	};
+
+	constexpr NamedDriverMatchEntry platform_driver_match_table[] = {
+		{"uart@com1", "uart-8250"},
+		{"rtc@cmos", "rtc-cmos"},
+	};
+
+	constexpr NamedDriverMatchEntry serio_controller_match_table[] = {
+		{"i8042", "i8042"},
+	};
+
+	constexpr NamedDriverMatchEntry serio_device_match_table[] = {
+		{"ps2kbd", "ps2-keyboard"},
+		{"ps2mouse", "ps2-mouse"},
+	};
+
+	bool probe_xhci_device(DeviceNode* node) {
+		if (!node) return false;
+		const auto* mmio = Devsman::FindResource(node, DeviceResourceType::PciBarMmio, 0);
+		if (!mmio) return false;
+		const auto* irq = Devsman::FindResource(node, DeviceResourceType::IrqLine, 0);
+		node->fields.binding.probe_result = irq ? 0 : 1;
+		return true;
+	}
+
+	constexpr DriverOpsEntry pci_driver_ops_table[] = {
+		{"xhci", probe_xhci_device},
+	};
+
+	DriverStartHookEntry driver_start_hooks[8]{};
+	stduint driver_start_hook_count = 0;
 
 	void init_node(DeviceNode* node, DeviceNodeType node_type, DeviceBusType bus_type, const char* name) {
 		MemSet(node, 0, sizeof(DeviceNode));
@@ -190,52 +245,88 @@ namespace {
 		if (!node || !driver_name) return false;
 		if (node->fields.binding.driver_name &&
 			StrCompare(node->fields.binding.driver_name, driver_name) == 0) {
-			node->fields.binding.state = DriverBindingState_Bound;
+			node->fields.binding.state = static_cast<uint32>(DriverBindingState::Matched);
+			node->fields.binding.probe_result = 0;
 			return false;
 		}
 		node->fields.binding.driver_name = driver_name;
-		node->fields.binding.state = DriverBindingState_Bound;
+		node->fields.binding.state = static_cast<uint32>(DriverBindingState::Matched);
+		node->fields.binding.probe_result = 0;
+		node->fields.binding.driver_data = nullptr;
 		ploginfo("[DEVSMAN] Bind %s -> %s", node->link.addr ? node->link.addr : "(unnamed)", driver_name);
 		return true;
 	}
 
+	bool set_driver_probe_state(DeviceNode* node, DriverBindingState state, int32 result) {
+		if (!node || !node->fields.binding.driver_name) return false;
+		node->fields.binding.state = static_cast<uint32>(state);
+		node->fields.binding.probe_result = result;
+		return true;
+	}
+
+	const PciDriverMatchEntry* match_pci_driver(const DeviceNode* node) {
+		if (!node) return nullptr;
+		for (const auto& entry : pci_driver_match_table) {
+			if (node->fields.class_base != entry.class_base) continue;
+			if (node->fields.class_sub != entry.class_sub) continue;
+			if (entry.class_if != MatchAnyClassIf && node->fields.class_if != entry.class_if) continue;
+			return &entry;
+		}
+		return nullptr;
+	}
+
+	const NamedDriverMatchEntry* match_named_driver(const DeviceNode* node,
+		const NamedDriverMatchEntry* table, stduint count) {
+		if (!node || !node->link.addr || !table) return nullptr;
+		for0(i, count) {
+			if (StrCompare(node->link.addr, table[i].node_name) == 0) return &table[i];
+		}
+		return nullptr;
+	}
+
+	const DriverOpsEntry* find_driver_ops(const char* driver_name,
+		const DriverOpsEntry* table, stduint count) {
+		if (!driver_name || !table) return nullptr;
+		for0(i, count) {
+			if (StrCompare(driver_name, table[i].driver_name) == 0) return &table[i];
+		}
+		return nullptr;
+	}
+
+	Devsman::DriverStartRoutine find_driver_starter(const char* driver_name) {
+		if (!driver_name) return nullptr;
+		for0(i, driver_start_hook_count) {
+			if (!driver_start_hooks[i].driver_name || !driver_start_hooks[i].starter) continue;
+			if (StrCompare(driver_name, driver_start_hooks[i].driver_name) == 0) {
+				return driver_start_hooks[i].starter;
+			}
+		}
+		return nullptr;
+	}
+
 	void bind_pci_device(DeviceNode* node) {
 		if (!node) return;
-		if (node->fields.class_base == 0x06u && node->fields.class_sub == 0x04u) {
-			set_driver_binding(node, "pci-bridge");
-		}
-		else if (node->fields.class_base == 0x0Cu && node->fields.class_sub == 0x03u && node->fields.class_if == 0x30u) {
-			set_driver_binding(node, "xhci");
-		}
-		else if (node->fields.class_base == 0x01u && node->fields.class_sub == 0x01u) {
-			set_driver_binding(node, "pata");
-		}
+		if (const auto* entry = match_pci_driver(node)) set_driver_binding(node, entry->driver_name);
 	}
 
 	void bind_platform_device(DeviceNode* node) {
-		if (!node || !node->link.addr) return;
-		if (StrCompare(node->link.addr, "uart@com1") == 0) {
-			set_driver_binding(node, "uart-8250");
-		}
-		else if (StrCompare(node->link.addr, "rtc@cmos") == 0) {
-			set_driver_binding(node, "rtc-cmos");
+		if (const auto* entry = match_named_driver(node,
+			platform_driver_match_table, numsof(platform_driver_match_table))) {
+			set_driver_binding(node, entry->driver_name);
 		}
 	}
 
 	void bind_serio_controller(DeviceNode* node) {
-		if (!node || !node->link.addr) return;
-		if (StrCompare(node->link.addr, "i8042") == 0) {
-			set_driver_binding(node, "i8042");
+		if (const auto* entry = match_named_driver(node,
+			serio_controller_match_table, numsof(serio_controller_match_table))) {
+			set_driver_binding(node, entry->driver_name);
 		}
 	}
 
 	void bind_serio_device(DeviceNode* node) {
-		if (!node || !node->link.addr) return;
-		if (StrCompare(node->link.addr, "ps2kbd") == 0) {
-			set_driver_binding(node, "ps2-keyboard");
-		}
-		else if (StrCompare(node->link.addr, "ps2mouse") == 0) {
-			set_driver_binding(node, "ps2-mouse");
+		if (const auto* entry = match_named_driver(node,
+			serio_device_match_table, numsof(serio_device_match_table))) {
+			set_driver_binding(node, entry->driver_name);
 		}
 	}
 
@@ -268,6 +359,67 @@ namespace {
 		}
 	}
 
+	void probe_pci_device(DeviceNode* node) {
+		if (!node) return;
+		if (node->fields.binding.state != static_cast<uint32>(DriverBindingState::Matched)) return;
+		const auto* ops = find_driver_ops(node->fields.binding.driver_name,
+			pci_driver_ops_table, numsof(pci_driver_ops_table));
+		if (!ops || !ops->probe) return;
+		const bool ok = ops->probe(node);
+		set_driver_probe_state(node, ok ? DriverBindingState::Probed : DriverBindingState::Failed, ok ? 0 : -1);
+		ploginfo("[DEVSMAN] Probe %s -> %s", node->link.addr ? node->link.addr : "(unnamed)", ok ? "ok" : "failed");
+	}
+
+	void probe_device_node(DeviceNode* node) {
+		if (!node) return;
+		switch (DeviceNodeType(node->fields.node_type)) {
+		case DeviceNodeType::PciDevice:
+			probe_pci_device(node);
+			break;
+		default:
+			break;
+		}
+	}
+
+	void probe_known_drivers_subtree(DeviceNode* node) {
+		for (auto* crt = node; crt; crt = reinterpret_cast<DeviceNode*>(crt->link.next)) {
+			probe_device_node(crt);
+			if (crt->link.subf) {
+				probe_known_drivers_subtree(reinterpret_cast<DeviceNode*>(crt->link.subf));
+			}
+		}
+	}
+
+	void start_pci_device(DeviceNode* node) {
+		if (!node) return;
+		if (node->fields.binding.state != static_cast<uint32>(DriverBindingState::Probed)) return;
+		auto starter = find_driver_starter(node->fields.binding.driver_name);
+		if (!starter) return;
+		const bool ok = starter(node);
+		set_driver_probe_state(node, ok ? DriverBindingState::Started : DriverBindingState::Failed, ok ? 0 : -1);
+		ploginfo("[DEVSMAN] Start %s -> %s", node->link.addr ? node->link.addr : "(unnamed)", ok ? "ok" : "failed");
+	}
+
+	void start_device_node(DeviceNode* node) {
+		if (!node) return;
+		switch (DeviceNodeType(node->fields.node_type)) {
+		case DeviceNodeType::PciDevice:
+			start_pci_device(node);
+			break;
+		default:
+			break;
+		}
+	}
+
+	void start_known_drivers_subtree(DeviceNode* node) {
+		for (auto* crt = node; crt; crt = reinterpret_cast<DeviceNode*>(crt->link.next)) {
+			start_device_node(crt);
+			if (crt->link.subf) {
+				start_known_drivers_subtree(reinterpret_cast<DeviceNode*>(crt->link.subf));
+			}
+		}
+	}
+
 	const char* pci_resource_type_name(uint16 type) {
 		switch (static_cast<DeviceResourceType>(type)) {
 		case DeviceResourceType::PciBarMmio:
@@ -280,6 +432,8 @@ namespace {
 			return "IRQ";
 		case DeviceResourceType::PciBridgeBusRange:
 			return "BUS-RANGE";
+		case DeviceResourceType::UsbLocation:
+			return "USB-LOC";
 		default:
 			return "Unknown";
 		}
@@ -310,6 +464,12 @@ namespace {
 					pci_resource_type_name(res.type),
 					(unsigned)res.start,
 					(unsigned)res.length,
+					(unsigned)res.extra);
+				break;
+			case DeviceResourceType::UsbLocation:
+				ploginfo("[DEVSMAN]   %s port=%u slot=%u",
+					pci_resource_type_name(res.type),
+					(unsigned)res.start,
 					(unsigned)res.extra);
 				break;
 			default:
@@ -493,6 +653,38 @@ namespace {
 			}
 		}
 	}
+
+	void program_isa_irq_routes() {
+		uint16_t enabled_irq_mask = 0xFFFF;
+		bool mirror_irq0_to_pin2 = true;
+		#if _MCCA == 0x8664
+		// x64 UEFI can open the ISA IRQ set, but mirroring IRQ0 onto pin2
+		// currently triggers the legacy cascade path bug.
+		mirror_irq0_to_pin2 = false;
+		#endif
+		// Reset all 24 IOAPIC pins to masked state first.
+		for (int i = 0; i < 24; i++) {
+			IC.IO_Writ64(0x10 + i * 2, 0x10000); // Bit 16: Masked
+		}
+		// Then remap ISA IRQs (0-15) to the kernel vectors and clear the mask bit.
+		for (int i = 0; i < 16; i++) {
+			if ((enabled_irq_mask & (1u << i)) == 0) continue;
+			const uint8_t vector = (i < 8) ? (IRQ_PIT + i) : (IRQ_RTC + (i - 8));
+			const uint64_t rte = (uint64_t)vector; // Fixed, Physical, Edge, Active-High, Unmasked
+			if (i == 0) {
+				// Route PIT to pin 0. Some platforms also mirror it to pin 2 for legacy
+				// compatibility, but x64 UEFI currently keeps pin 2 masked while we
+				// localize the transition-stack/legacy-IRQ entry issue.
+				IC.IO_Writ64(0x10 + 0 * 2, rte);
+				if (mirror_irq0_to_pin2) {
+					IC.IO_Writ64(0x10 + 2 * 2, rte);
+				}
+			}
+			else if (i != 2) {
+				IC.IO_Writ64(0x10 + i * 2, rte);
+			}
+		}
+	}
 	#endif
 }
 
@@ -519,6 +711,9 @@ bool Devsman::Initialize() {
 	ploginfo("[DEVSMAN] IC Using: %s (CPUID x2apic=%d HW EXTD=%d)", support_apic ? support_x2apic ?
 		"x2APIC" : "APIC" : "PIC", (int)cpuid_x2apic, (int)hw_x2apic);
 	IC.Initialize(support_apic + support_x2apic);
+	if (support_apic + support_x2apic) {
+		program_isa_irq_routes();
+	}
 
 	#endif
 
@@ -571,26 +766,7 @@ bool Devsman::Initialize() {
 		} else {
 			ploginfo("[DEVSMAN] RCBA not supported, assuming IOAPIC enabled by BIOS");
 		}
-		//
-		// Reset all 24 IOAPIC pins to masked state
-		for (int i = 0; i < 24; i++) {
-			IC.IO_Writ64(0x10 + i * 2, 0x10000); // Bit 16: Masked
-		}
-		// Mapping ISA IRQs (0-15) with redundancy for PIT
-		for (int i = 0; i < 16; i++) {
-			uint8_t vector = (i < 8) ? (IRQ_PIT + i) : (IRQ_RTC + (i - 8));
-			uint64_t rte = (uint64_t)vector; // Fixed, Physical (ID 0), Edge, Active-High, Unmasked
-
-			if (i == 0) {
-				// Route PIT to both Pin 0 and Pin 2 for maximum compatibility
-				IC.IO_Writ64(0x10 + 0 * 2, rte);
-				IC.IO_Writ64(0x10 + 2 * 2, rte);
-			} else if (i == 2) {
-				// IRQ 2 is cascade, usually no device
-			} else {
-				IC.IO_Writ64(0x10 + i * 2, rte);
-			}
-		}
+		program_isa_irq_routes();
 	}
 
 
@@ -621,6 +797,7 @@ bool Devsman::AttachPCIDevices(uni::PCI& pci) {
 	reparent_secondary_buses_under_bridges();
 	pci_devices_attached = true;
 	BindKnownDrivers();
+	ProbeKnownDrivers();
 	ploginfo("[DEVSMAN] Attached %d PCI device nodes", pci.num_device);
 	return true;
 }
@@ -629,6 +806,38 @@ void Devsman::BindKnownDrivers() {
 	#if (_MCCA & 0xFF00) == 0x8600
 	if (!device_root) return;
 	bind_known_drivers_subtree(device_root);
+	#endif
+}
+
+void Devsman::ProbeKnownDrivers() {
+	#if (_MCCA & 0xFF00) == 0x8600
+	if (!device_root) return;
+	probe_known_drivers_subtree(device_root);
+	#endif
+}
+
+void Devsman::StartKnownDrivers() {
+	#if (_MCCA & 0xFF00) == 0x8600
+	if (!device_root) return;
+	start_known_drivers_subtree(device_root);
+	#endif
+}
+
+bool Devsman::RegisterDriverStarter(const char* driver_name, DriverStartRoutine starter) {
+	#if (_MCCA & 0xFF00) == 0x8600
+	if (!driver_name || !starter) return false;
+	for0(i, driver_start_hook_count) {
+		if (driver_start_hooks[i].driver_name &&
+			StrCompare(driver_start_hooks[i].driver_name, driver_name) == 0) {
+			driver_start_hooks[i].starter = starter;
+			return true;
+		}
+	}
+	if (driver_start_hook_count >= numsof(driver_start_hooks)) return false;
+	driver_start_hooks[driver_start_hook_count++] = { driver_name, starter };
+	return true;
+	#else
+	return false;
 	#endif
 }
 
@@ -644,6 +853,97 @@ DeviceNode* Devsman::RegisterPlatformDevice(const char* name) {
 	}
 	auto* node = append_plain_device(root, DeviceNodeType::PlatformDevice, DeviceBusType::Platform, StrHeap(name));
 	bind_device_node(node);
+	return node;
+}
+
+DeviceNode* Devsman::RegisterUSBBus(const char* name, const char* driver_name, void* driver_data) {
+	initialize_device_tree();
+	auto* root = get_bus_root(DeviceBusType::USB);
+	if (!root || !name) return nullptr;
+	if (auto* node = find_named_child(root, DeviceNodeType::UsbBus, name)) {
+		if (driver_name) {
+			set_driver_binding(node, driver_name);
+			node->fields.binding.state = static_cast<uint32>(DriverBindingState::Started);
+			node->fields.binding.driver_data = driver_data;
+		}
+		return node;
+	}
+	auto* node = append_plain_device(root, DeviceNodeType::UsbBus, DeviceBusType::USB, StrHeap(name));
+	if (driver_name) {
+		set_driver_binding(node, driver_name);
+		node->fields.binding.state = static_cast<uint32>(DriverBindingState::Started);
+		node->fields.binding.driver_data = driver_data;
+	}
+	return node;
+}
+
+DeviceNode* Devsman::RegisterUSBDevice(DeviceNode* parent, const char* name,
+	uint16 vendor_id, uint16 product_id,
+	uint8 class_base, uint8 class_sub, uint8 class_if,
+	uint8 port_num, uint8 slot_id,
+	const char* driver_name, void* driver_data) {
+	initialize_device_tree();
+	if (!parent || !name) return nullptr;
+	if (auto* node = find_named_child(parent, DeviceNodeType::UsbDevice, name)) {
+		node->fields.vendor_id = vendor_id;
+		node->fields.device_id = product_id;
+		node->fields.class_base = class_base;
+		node->fields.class_sub = class_sub;
+		node->fields.class_if = class_if;
+		node->fields.dev_class = (uint16(class_base) << 8) | class_sub;
+		if (!find_resource(node, DeviceResourceType::UsbLocation, 0)) {
+			append_resource(node, DeviceResourceType::UsbLocation, DeviceResourceFlag_None, 0, port_num, 1, slot_id);
+		}
+		if (driver_name) {
+			set_driver_binding(node, driver_name);
+			node->fields.binding.state = static_cast<uint32>(DriverBindingState::Started);
+			node->fields.binding.driver_data = driver_data;
+		}
+		return node;
+	}
+	auto* node = append_plain_device(parent, DeviceNodeType::UsbDevice, DeviceBusType::USB, StrHeap(name));
+	node->fields.vendor_id = vendor_id;
+	node->fields.device_id = product_id;
+	node->fields.class_base = class_base;
+	node->fields.class_sub = class_sub;
+	node->fields.class_if = class_if;
+	node->fields.dev_class = (uint16(class_base) << 8) | class_sub;
+	append_resource(node, DeviceResourceType::UsbLocation, DeviceResourceFlag_None, 0, port_num, 1, slot_id);
+	if (driver_name) {
+		set_driver_binding(node, driver_name);
+		node->fields.binding.state = static_cast<uint32>(DriverBindingState::Started);
+		node->fields.binding.driver_data = driver_data;
+	}
+	return node;
+}
+
+DeviceNode* Devsman::RegisterUSBInterface(DeviceNode* parent, const char* name,
+	uint8 class_base, uint8 class_sub, uint8 class_if,
+	const char* driver_name, void* driver_data) {
+	initialize_device_tree();
+	if (!parent || !name) return nullptr;
+	if (auto* node = find_named_child(parent, DeviceNodeType::UsbInterface, name)) {
+		node->fields.class_base = class_base;
+		node->fields.class_sub = class_sub;
+		node->fields.class_if = class_if;
+		node->fields.dev_class = (uint16(class_base) << 8) | class_sub;
+		if (driver_name) {
+			set_driver_binding(node, driver_name);
+			node->fields.binding.state = static_cast<uint32>(DriverBindingState::Started);
+			node->fields.binding.driver_data = driver_data;
+		}
+		return node;
+	}
+	auto* node = append_plain_device(parent, DeviceNodeType::UsbInterface, DeviceBusType::USB, StrHeap(name));
+	node->fields.class_base = class_base;
+	node->fields.class_sub = class_sub;
+	node->fields.class_if = class_if;
+	node->fields.dev_class = (uint16(class_base) << 8) | class_sub;
+	if (driver_name) {
+		set_driver_binding(node, driver_name);
+		node->fields.binding.state = static_cast<uint32>(DriverBindingState::Started);
+		node->fields.binding.driver_data = driver_data;
+	}
 	return node;
 }
 
