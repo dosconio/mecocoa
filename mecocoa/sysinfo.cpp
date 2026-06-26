@@ -118,6 +118,7 @@ static rostr text_device_node_type(uint16 node_type) {
 	case DeviceNodeType::PciBus:     return "pci-bus";
 	case DeviceNodeType::PciDevice:  return "pci-dev";
 	case DeviceNodeType::UsbBus:     return "usb-bus";
+	case DeviceNodeType::UsbRootHub: return "usb-root-hub";
 	case DeviceNodeType::UsbDevice:  return "usb-dev";
 	case DeviceNodeType::UsbInterface: return "usb-if";
 	case DeviceNodeType::PlatformDevice: return "platform-dev";
@@ -280,6 +281,16 @@ static void dump_device_tree_node(OstreamTrait& com1, const DeviceNode* node, st
 				name, text_device_node_type(crt->fields.node_type),
 				(unsigned)crt->fields.class_base, (unsigned)crt->fields.class_sub, (unsigned)crt->fields.class_if,
 				(unsigned)crt->fields.vendor_id, (unsigned)crt->fields.device_id,
+				text_device_bus_type(crt->fields.bus_type),
+				driver_name ? " drv=" : "",
+				driver_name ? driver_name : "",
+				has_binding ? " state=" : "",
+				has_binding ? text_driver_binding_state(crt->fields.binding.state) : "");
+			break;
+		case DeviceNodeType::UsbRootHub:
+			com1.OutFormat("%s <%s %02X.%02X.%02X bus=%s%s%s%s%s>\n\r",
+				name, text_device_node_type(crt->fields.node_type),
+				(unsigned)crt->fields.class_base, (unsigned)crt->fields.class_sub, (unsigned)crt->fields.class_if,
 				text_device_bus_type(crt->fields.bus_type),
 				driver_name ? " drv=" : "",
 				driver_name ? driver_name : "",

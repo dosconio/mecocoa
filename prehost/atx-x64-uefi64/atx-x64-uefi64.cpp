@@ -52,7 +52,8 @@ static bool start_xhci_driver(DeviceNode* xhc_node) {
 		(stduint)xhc_node->fields.pci_bus,
 		(stduint)xhc_node->fields.pci_device,
 		(stduint)xhc_node->fields.pci_function);
-	Devsman::RegisterUSBBus(usb_bus_name.reference(), "xhci", &xhc);
+	auto* usb_bus_node = Devsman::RegisterUSBBus(usb_bus_name.reference(), "xhci", &xhc);
+	Devsman::RegisterUSBRootHub(usb_bus_node, "usb-root-hub@0", 0x09u, 0x00u, 0x03u, "usb-root-hub", &xhc);
 	ploginfo("xHC-USB-Mouse has been found: %[8H].%[8H].%[8H]", xhc_dev->bus, xhc_dev->device, xhc_dev->function);
 	return true;
 }

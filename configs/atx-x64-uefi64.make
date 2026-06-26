@@ -152,10 +152,15 @@ qemu_args=\
 	-drive if=pflash,format=raw,file=$(ubinpath)/AMD64/OVMF/OVMF_VARS.fd \
 	-drive if=ide,index=0,media=disk,format=raw,file=$(ubinpath)/$(arch).img \
 	-device nec-usb-xhci,id=xhci \
-	-device usb-mouse \
-	-device usb-kbd \
+	-device usb-mouse,id=mouse0 \
+	-device usb-kbd,id=kbd0 \
 	-serial mon:stdio \
 	-no-reboot -no-shutdown  \
+
+# device_del mouse0
+# device_del kbd0
+# device_add usb-mouse,id=mouse0,bus=xhci.0
+# device_add usb-kbd,id=kbd0,bus=xhci.0
 
 run: build
 	@echo [ running] MCCA for $(arch)

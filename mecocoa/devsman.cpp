@@ -165,6 +165,32 @@ namespace {
 		return false;
 	}
 
+	void release_device_subtree(DeviceNode* node) {
+		if (!node) return;
+		for (auto* child = reinterpret_cast<DeviceNode*>(node->link.subf); child;) {
+			auto* next = reinterpret_cast<DeviceNode*>(child->link.next);
+			release_device_subtree(child);
+			child = next;
+		}
+		node->link.subf = nullptr;
+		if (node->fields.text_manufacturer) {
+			auto* text = const_cast<char*>(node->fields.text_manufacturer);
+			mfree(text);
+		}
+		if (node->fields.text_product) {
+			auto* text = const_cast<char*>(node->fields.text_product);
+			mfree(text);
+		}
+		if (node->fields.text_serial) {
+			auto* text = const_cast<char*>(node->fields.text_serial);
+			mfree(text);
+		}
+		node->fields.text_manufacturer = nullptr;
+		node->fields.text_product = nullptr;
+		node->fields.text_serial = nullptr;
+		NnodesRelease(&node->link, NnodeHeapFreeSimple);
+	}
+
 	const char* heap_name(const char* fmt, stduint a0, stduint a1 = 0, stduint a2 = 0, stduint a3 = 0) {
 		return StrHeap(String::newFormat(fmt, a0, a1, a2, a3).reference());
 	}
@@ -774,17 +800,31 @@ namespace {
 		}
 	}
 
-	void on_xhci_complete_configuration(uni::device::SpaceUSB3::HostController& xhc, uint8 port_id, uint8, uni::device::SpaceUSB3::DeviceUSB3& dev) {
+	DeviceNode* ensure_xhci_root_hub_node(uni::device::SpaceUSB3::HostController& xhc) {
 		auto* xhc_node = Devsman::FindPCIDeviceByClass(0x0Cu, 0x03u, 0x30u);
-		if (!xhc_node) return;
+		if (!xhc_node) return nullptr;
 		auto* current_xhc = reinterpret_cast<uni::device::SpaceUSB3::HostController*>(xhc_node->fields.binding.driver_data);
-		if (current_xhc != &xhc) return;
+		if (current_xhc != &xhc) return nullptr;
 		auto usb_bus_name = String::newFormat("usb-bus@%04x:%02x:%02x.%x", 0,
 			(stduint)xhc_node->fields.pci_bus,
 			(stduint)xhc_node->fields.pci_device,
 			(stduint)xhc_node->fields.pci_function);
 		auto* usb_bus_node = Devsman::RegisterUSBBus(usb_bus_name.reference(), "xhci", &xhc);
-		register_single_usb_device_for_xhci(usb_bus_node, port_id, dev);
+		return Devsman::RegisterUSBRootHub(usb_bus_node, "usb-root-hub@0", 0x09u, 0x00u, 0x03u, "usb-root-hub", &xhc);
+	}
+
+	void on_xhci_complete_configuration(uni::device::SpaceUSB3::HostController& xhc, uint8 port_id, uint8, uni::device::SpaceUSB3::DeviceUSB3& dev) {
+		auto* usb_root_hub_node = ensure_xhci_root_hub_node(xhc);
+		register_single_usb_device_for_xhci(usb_root_hub_node, port_id, dev);
+	}
+
+	void on_xhci_device_disconnect(uni::device::SpaceUSB3::HostController& xhc, uint8 port_id, uint8 slot_id) {
+		auto* usb_root_node = ensure_xhci_root_hub_node(xhc);
+		if (!usb_root_node) return;
+		auto usb_dev_name = String::newFormat("usb-dev@port%u.slot%u", (stduint)port_id, (stduint)slot_id);
+		if (Devsman::RemoveUSBDevice(usb_root_node, usb_dev_name.reference())) {
+			ploginfo("USB device detached from xHC port=%u slot=%u", (stduint)port_id, (stduint)slot_id);
+		}
 	}
 	#endif
 	#endif
@@ -946,6 +986,7 @@ bool Devsman::RegisterDriverStarter(const char* driver_name, DriverStartRoutine 
 void Devsman::RegisterXHCIDeviceTreeHook() {
 	#if _MCCA == 0x8664
 	uni::device::SpaceUSB3::g_configuration_complete_hook = on_xhci_complete_configuration;
+	uni::device::SpaceUSB3::g_device_disconnect_hook = on_xhci_device_disconnect;
 	#endif
 }
 
@@ -977,6 +1018,36 @@ DeviceNode* Devsman::RegisterUSBBus(const char* name, const char* driver_name, v
 		return node;
 	}
 	auto* node = append_plain_device(root, DeviceNodeType::UsbBus, DeviceBusType::USB, StrHeap(name));
+	if (driver_name) {
+		set_driver_binding(node, driver_name);
+		node->fields.binding.state = static_cast<uint32>(DriverBindingState::Started);
+		node->fields.binding.driver_data = driver_data;
+	}
+	return node;
+}
+
+DeviceNode* Devsman::RegisterUSBRootHub(DeviceNode* parent, const char* name,
+	uint8 class_base, uint8 class_sub, uint8 class_if,
+	const char* driver_name, void* driver_data) {
+	initialize_device_tree();
+	if (!parent || !name) return nullptr;
+	if (auto* node = find_named_child(parent, DeviceNodeType::UsbRootHub, name)) {
+		node->fields.class_base = class_base;
+		node->fields.class_sub = class_sub;
+		node->fields.class_if = class_if;
+		node->fields.dev_class = (uint16(class_base) << 8) | class_sub;
+		if (driver_name) {
+			set_driver_binding(node, driver_name);
+			node->fields.binding.state = static_cast<uint32>(DriverBindingState::Started);
+			node->fields.binding.driver_data = driver_data;
+		}
+		return node;
+	}
+	auto* node = append_plain_device(parent, DeviceNodeType::UsbRootHub, DeviceBusType::USB, StrHeap(name));
+	node->fields.class_base = class_base;
+	node->fields.class_sub = class_sub;
+	node->fields.class_if = class_if;
+	node->fields.dev_class = (uint16(class_base) << 8) | class_sub;
 	if (driver_name) {
 		set_driver_binding(node, driver_name);
 		node->fields.binding.state = static_cast<uint32>(DriverBindingState::Started);
@@ -1068,6 +1139,16 @@ bool Devsman::AddUSBEndpointResource(DeviceNode* node, uint32 index,
 	if (find_resource(node, DeviceResourceType::UsbEndpoint, index)) return true;
 	return append_resource(node, DeviceResourceType::UsbEndpoint, DeviceResourceFlag_None,
 		index, endpoint_addr, max_packet_size, uint64(transfer_type) | (uint64(interval) << 8));
+}
+
+bool Devsman::RemoveUSBDevice(DeviceNode* parent, const char* name) {
+	initialize_device_tree();
+	if (!parent || !name) return false;
+	auto* node = find_named_child(parent, DeviceNodeType::UsbDevice, name);
+	if (!node) return false;
+	if (!detach_child(parent, node)) return false;
+	release_device_subtree(node);
+	return true;
 }
 
 DeviceNode* Devsman::RegisterSerioController(const char* name) {

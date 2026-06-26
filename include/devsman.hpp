@@ -10,6 +10,7 @@ enum class DeviceNodeType : uint16 {
 	PciBus,
 	PciDevice,
 	UsbBus,
+	UsbRootHub,
 	UsbDevice,
 	UsbInterface,
 	PlatformDevice,
@@ -123,6 +124,9 @@ public:
 	static void RegisterXHCIDeviceTreeHook();
 	static bool RegisterDriverStarter(const char* driver_name, DriverStartRoutine starter);
 	static DeviceNode* RegisterUSBBus(const char* name, const char* driver_name = nullptr, void* driver_data = nullptr);
+	static DeviceNode* RegisterUSBRootHub(DeviceNode* parent, const char* name,
+		uint8 class_base, uint8 class_sub, uint8 class_if,
+		const char* driver_name = nullptr, void* driver_data = nullptr);
 	static DeviceNode* RegisterUSBDevice(DeviceNode* parent, const char* name,
 		uint16 vendor_id, uint16 product_id,
 		const char* text_manufacturer, const char* text_product, const char* text_serial,
@@ -134,6 +138,7 @@ public:
 		const char* driver_name = nullptr, void* driver_data = nullptr);
 	static bool AddUSBEndpointResource(DeviceNode* node, uint32 index,
 		uint8 endpoint_addr, uint8 transfer_type, uint16 max_packet_size, uint8 interval);
+	static bool RemoveUSBDevice(DeviceNode* parent, const char* name);
 	static DeviceNode* RegisterPlatformDevice(const char* name);
 	static DeviceNode* RegisterSerioController(const char* name);
 	static DeviceNode* RegisterSerioDevice(DeviceNode* parent, const char* name);
