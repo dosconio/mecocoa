@@ -21,13 +21,11 @@ _ESYM_C void R_COM1_INIT();
 
 #if (_MCCA & 0xFF00) == 0x8600
 #if 1
-#if _MCCA == 0x8632
 __attribute__((section(".init.rmod")))
 RMOD_LIST RMOD_LIST_COM1{
 	.init = R_COM1_INIT,
 	.name = "COM1",
 };
-#endif
 #endif
 
 x86_COM com1;

@@ -286,6 +286,14 @@ namespace {
 		return true;
 	}
 
+	void set_driver_started(DeviceNode* node, const char* driver_name, void* driver_data = nullptr) {
+		if (!node || !driver_name) return;
+		node->fields.binding.driver_name = driver_name;
+		node->fields.binding.state = static_cast<uint32>(DriverBindingState::Started);
+		node->fields.binding.probe_result = 0;
+		node->fields.binding.driver_data = driver_data;
+	}
+
 	bool set_driver_probe_state(DeviceNode* node, DriverBindingState state, int32 result) {
 		if (!node || !node->fields.binding.driver_name) return false;
 		node->fields.binding.state = static_cast<uint32>(state);
@@ -640,7 +648,7 @@ namespace {
 			if (crt->fields.node_type == static_cast<uint16>(DeviceNodeType::PciDevice) &&
 				crt->fields.class_base == class_base &&
 				crt->fields.class_sub == class_sub &&
-				crt->fields.class_if == class_if) {
+				(class_if == MatchAnyClassIf || crt->fields.class_if == class_if)) {
 				return crt;
 			}
 			if (crt->link.subf) {
@@ -651,6 +659,24 @@ namespace {
 			}
 		}
 		return nullptr;
+	}
+
+	void register_legacy_x86_platform_nodes(bool support_apic) {
+		if (auto* pic_master = Devsman::RegisterPlatformDevice("pic@8259-master", "pic-8259")) {
+			Devsman::AddIoPortResource(pic_master, 0, 0x20, 2);
+		}
+		if (auto* pic_slave = Devsman::RegisterPlatformDevice("pic@8259-slave", "pic-8259")) {
+			Devsman::AddIoPortResource(pic_slave, 0, 0xA0, 2);
+		}
+		if (support_apic) {
+			Devsman::RegisterPlatformDevice("lapic@0", "lapic");
+			Devsman::RegisterPlatformDevice("ioapic@0", "ioapic");
+		}
+		if (auto* fdc = Devsman::RegisterPlatformDevice("fdc@0")) {
+			Devsman::AddIoPortResource(fdc, 0, 0x3F0, 8);
+			Devsman::AddIrqResource(fdc, IRQ_PIT + 6);
+			Devsman::RegisterStorageDevice(fdc, "floppy@0", DeviceBusType::Platform);
+		}
 	}
 
 	DeviceNode* find_pci_device_by_class(uint8 class_base, uint8 class_sub, uint8 class_if) {
@@ -1009,14 +1035,19 @@ bool Devsman::Initialize() {
 		program_isa_irq_routes();
 	}
 
+	register_legacy_x86_platform_nodes(support_apic + support_x2apic);
 
 
+
+	#endif
+	
+	#if (_MCCA & 0xFF00) == 0x8600
 	for (auto func = __init_rmod_ento; func < __init_rmod_endo; func++) {
 		ploginfo("Loading %s", func->name);
 		(func->init)();
 	}
-
 	#endif
+
 	return true;
 }
 
@@ -1092,16 +1123,45 @@ void Devsman::RegisterXHCIDeviceTreeHook() {
 
 
 
-DeviceNode* Devsman::RegisterPlatformDevice(const char* name) {
+DeviceNode* Devsman::RegisterPlatformDevice(const char* name, const char* driver_name, void* driver_data) {
 	initialize_device_tree();
 	auto* root = get_bus_root(DeviceBusType::Platform);
 	if (!root || !name) return nullptr;
+	if (driver_name) return RegisterPlatformDevice(root, name, driver_name, driver_data);
 	if (auto* node = find_named_child(root, DeviceNodeType::PlatformDevice, name)) {
 		bind_device_node(node);
 		return node;
 	}
 	auto* node = append_plain_device(root, DeviceNodeType::PlatformDevice, DeviceBusType::Platform, StrHeap(name));
 	bind_device_node(node);
+	return node;
+}
+
+DeviceNode* Devsman::RegisterPlatformDevice(DeviceNode* parent, const char* name,
+	const char* driver_name, void* driver_data) {
+	initialize_device_tree();
+	if (!parent || !name) return nullptr;
+	if (auto* node = find_named_child(parent, DeviceNodeType::PlatformDevice, name)) {
+		if (driver_name) set_driver_started(node, driver_name, driver_data);
+		else bind_device_node(node);
+		return node;
+	}
+	auto* node = append_plain_device(parent, DeviceNodeType::PlatformDevice, DeviceBusType::Platform, StrHeap(name));
+	if (driver_name) set_driver_started(node, driver_name, driver_data);
+	else bind_device_node(node);
+	return node;
+}
+
+DeviceNode* Devsman::RegisterStorageDevice(DeviceNode* parent, const char* name,
+	DeviceBusType bus_type, const char* driver_name, void* driver_data) {
+	initialize_device_tree();
+	if (!parent || !name) return nullptr;
+	if (auto* node = find_named_child(parent, DeviceNodeType::StorageDevice, name)) {
+		if (driver_name) set_driver_started(node, driver_name, driver_data);
+		return node;
+	}
+	auto* node = append_plain_device(parent, DeviceNodeType::StorageDevice, bus_type, StrHeap(name));
+	if (driver_name) set_driver_started(node, driver_name, driver_data);
 	return node;
 }
 

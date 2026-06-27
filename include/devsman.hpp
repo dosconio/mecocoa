@@ -9,6 +9,7 @@ enum class DeviceNodeType : uint16 {
 	PCI_Root,
 	PciBus,
 	PciDevice,
+	StorageDevice,
 	UsbBus,
 	UsbRootHub,
 	UsbPort,
@@ -141,7 +142,13 @@ public:
 	static bool AddUSBEndpointResource(DeviceNode* node, uint32 index,
 		uint8 endpoint_addr, uint8 transfer_type, uint16 max_packet_size, uint8 interval);
 	static bool RemoveUSBDevice(DeviceNode* parent, const char* name);
-	static DeviceNode* RegisterPlatformDevice(const char* name);
+	static DeviceNode* RegisterPlatformDevice(const char* name,
+		const char* driver_name = nullptr, void* driver_data = nullptr);
+	static DeviceNode* RegisterPlatformDevice(DeviceNode* parent, const char* name,
+		const char* driver_name = nullptr, void* driver_data = nullptr);
+	static DeviceNode* RegisterStorageDevice(DeviceNode* parent, const char* name,
+		DeviceBusType bus_type = DeviceBusType::Platform,
+		const char* driver_name = nullptr, void* driver_data = nullptr);
 	static DeviceNode* RegisterSerioController(const char* name);
 	static DeviceNode* RegisterSerioDevice(DeviceNode* parent, const char* name);
 	static bool AddIoPortResource(DeviceNode* node, uint32 index, uint64 base, uint64 length);

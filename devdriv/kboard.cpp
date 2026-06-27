@@ -18,7 +18,7 @@ extern const char key_map[256], key_map_shift[256];
 
 #endif
 
-#if _MCCA == 0x8632
+#if (_MCCA & 0xFF00) == 0x8600
 #if 1
 __attribute__((section(".init.rmod")))
 RMOD_LIST RMOD_LIST_KBD{
@@ -28,7 +28,11 @@ RMOD_LIST RMOD_LIST_KBD{
 #endif
 
 void R_KBD_INIT() {
+	#if _MCCA == 0x8664
+	IC[IRQ_Keyboard].setModeRupt(mglb(Handint_KBD_Entry), SegCo64);
+	#else
 	IC[IRQ_Keyboard].setRange(mglb(Handint_KBD_Entry), SegCo32);
+	#endif
 	register_interrupt_handler(IRQ_Keyboard, Handint_KBD);
 	Keyboard_Init();
 	auto* i8042 = Devsman::RegisterSerioController("i8042");
@@ -47,7 +51,7 @@ void Handint_KBD() {
 	IC.SendEOI(IRQ_Keyboard); // Acknowledge interrupt
 }
 
-static void setLED() {
+static void setLED_ps2() {
 	KbdSetLED((_IMM(kbd_state.lock_caps) << 2) | (_IMM(kbd_state.lock_number) << 1) | _IMM(kbd_state.lock_scroll));
 }
 
@@ -103,13 +107,13 @@ int KeyboardBridge::out(const char* str, stduint len) {
 				return 0; // Intercept: do not pass to VTTY or other sheets
 			}
 			else if (event.method == keyboard_event_t::method_t::keydown && event.keycode == 0x39) { // CapsLock
-				kbd_state.lock_caps = !kbd_state.lock_caps; setLED();
+				kbd_state.lock_caps = !kbd_state.lock_caps; setLED_ps2();
 			}
 			else if (event.method == keyboard_event_t::method_t::keydown && event.keycode == 0x53) { // NumLock
-				kbd_state.lock_number = !kbd_state.lock_number; setLED();
+				kbd_state.lock_number = !kbd_state.lock_number; setLED_ps2();
 			}
 			else if (event.method == keyboard_event_t::method_t::keydown && event.keycode == 0x47) { // ScrollLock
-				kbd_state.lock_scroll = !kbd_state.lock_scroll; setLED();
+				kbd_state.lock_scroll = !kbd_state.lock_scroll; setLED_ps2();
 			}
 			else if (event.method == keyboard_event_t::method_t::keydown) {
 				auto ascii_ch = (kbd_state.mod.l_shift || kbd_state.mod.r_shift ? key_map_shift : key_map)[event.keycode];

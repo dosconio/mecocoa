@@ -38,6 +38,14 @@ SECTIONS
 		*(.rodata)
 	} > RAM :rodata
 
+	. = ALIGN(8);
+	.init.rmod : {
+		__init_rmod_ento = .;
+		KEEP(*(SORT(.init.rmod.*)))
+		KEEP(*(.init.rmod))
+		__init_rmod_endo = .;
+	} > RAM :data
+
 	/* C++ only */
 	. = ALIGN(8);
 	.init_array : {

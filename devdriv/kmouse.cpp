@@ -7,7 +7,7 @@
 
 _ESYM_C void R_MOU_INIT();
 
-#if _MCCA == 0x8632
+#if (_MCCA & 0xFF00) == 0x8600
 #if 1
 __attribute__((section(".init.rmod")))
 RMOD_LIST RMOD_LIST_MOU{
@@ -17,7 +17,11 @@ RMOD_LIST RMOD_LIST_MOU{
 #endif
 
 void R_MOU_INIT() {
+	#if _MCCA == 0x8664
+	IC[IRQ_PS2_Mouse].setModeRupt(mglb(Handint_MOU_Entry), SegCo64);
+	#else
 	IC[IRQ_PS2_Mouse].setRange(mglb(Handint_MOU_Entry), SegCo32);
+	#endif
 	register_interrupt_handler(IRQ_PS2_Mouse, Handint_MOU);
 	Mouse_Init();
 	auto* i8042 = Devsman::RegisterSerioController("i8042");

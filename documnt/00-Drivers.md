@@ -7,9 +7,9 @@ her-note: false
 
 ## x86/x64
 
-- CRT Video (by BIOS)
+- 【!TREE】CRT Video (by BIOS)
 - Interrupt 8259 **PIC** and **(x2)APIC**
-- **Buzzer** PC Speaker
+- 【!TREE】**Buzzer** PC Speaker
 - **KBD** Keyboard and **MOU** PS/2-Mouse
 - COMn UART
 
@@ -19,7 +19,7 @@ x64u only
 
 ### Timer
 
-- Interrupt 8254 **PIT**
+- 8254 **PIT**
 - **RTC**
 x64u only
 - LAPIC Timer and ACPI PM Timer
@@ -35,5 +35,5 @@ x64u only
 
 ## RV qemuvirt
 
-- UART
+- 【!TREE】UART
 

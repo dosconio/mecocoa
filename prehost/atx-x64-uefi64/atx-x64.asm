@@ -389,3 +389,9 @@ IRQ_TRAMPOLINE_64 Handint_LAPICT_Entry, 0x41
 
 ; COM1 Interrupt
 IRQ_TRAMPOLINE_64 Handint_COM1_Entry, 0x24
+
+; PS/2 Keyboard Interrupt
+IRQ_TRAMPOLINE_64 Handint_KBD_Entry, 0x21
+
+; PS/2 Mouse Interrupt
+IRQ_TRAMPOLINE_64 Handint_MOU_Entry, 0x74

@@ -25,6 +25,25 @@ static char hdd_buf[byteof(**disks) * numsof(disks)];
 static byte lock = 1;
 static char* single_sector = NULL;// file-hd used buffer
 
+static void register_pata_storage_nodes() {
+	auto* pata_node = Devsman::FindPCIDeviceByClass(0x01u, 0x01u, 0xFFu);
+	if (!pata_node) return;
+	for0(i, MAX_DRIVES) {
+		if (!disks[i]) continue;
+		const bool is_cdrom = disks[i]->Block_Size == 2048;
+		String node_name;
+		node_name.Format(is_cdrom ? "pata-cd@%u:%u" : "pata-disk@%u:%u",
+			(stduint)disks[i]->getHigID(),
+			(stduint)disks[i]->getLowID());
+		Devsman::RegisterStorageDevice(
+			pata_node,
+			node_name.reference(),
+			DeviceBusType::PCI,
+			is_cdrom ? "pata-cdrom" : "pata-disk",
+			disks[i]);
+	}
+}
+
 _ESYM_C void Handint_HDD1_Entry();
 
 void Handint_HDD1()
@@ -59,6 +78,7 @@ void R_HDD_INIT() {
 	if (disks[0] || disks[1]) (disks[0] ? disks[0] : disks[1])->setInterrupt(NULL);
 	if (disks[2] || disks[3]) (disks[2] ? disks[2] : disks[3])->setInterrupt(NULL); // Enable secondary channel interrupt
 	if (!single_sector) single_sector = new char[0x1000];
+	register_pata_storage_nodes();
 }
 
 void Handint_HDD()// HDD Master
