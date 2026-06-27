@@ -11,6 +11,7 @@ enum class DeviceNodeType : uint16 {
 	PciDevice,
 	UsbBus,
 	UsbRootHub,
+	UsbPort,
 	UsbDevice,
 	UsbInterface,
 	PlatformDevice,
@@ -127,6 +128,7 @@ public:
 	static DeviceNode* RegisterUSBRootHub(DeviceNode* parent, const char* name,
 		uint8 class_base, uint8 class_sub, uint8 class_if,
 		const char* driver_name = nullptr, void* driver_data = nullptr);
+	static DeviceNode* RegisterUSBPort(DeviceNode* parent, const char* name, uint8 port_num);
 	static DeviceNode* RegisterUSBDevice(DeviceNode* parent, const char* name,
 		uint16 vendor_id, uint16 product_id,
 		const char* text_manufacturer, const char* text_product, const char* text_serial,

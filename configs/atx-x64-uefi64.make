@@ -152,14 +152,23 @@ qemu_args=\
 	-drive if=pflash,format=raw,file=$(ubinpath)/AMD64/OVMF/OVMF_VARS.fd \
 	-drive if=ide,index=0,media=disk,format=raw,file=$(ubinpath)/$(arch).img \
 	-device nec-usb-xhci,id=xhci \
-	-device usb-mouse,id=mouse0 \
-	-device usb-kbd,id=kbd0 \
+	-device usb-hub,id=hub0,bus=xhci.0,port=1 \
+	-device usb-mouse,id=mouse0,bus=xhci.0,port=1.1 \
+	-device usb-kbd,id=kbd0,bus=xhci.0,port=1.2 \
 	-serial mon:stdio \
 	-no-reboot -no-shutdown  \
 
+# -device usb-mouse,id=mouse0 \
+# -device usb-kbd,id=kbd0 \
+
+# -device usb-hub,id=hub0,bus=xhci.0,port=1 \
+# -device usb-mouse,id=mouse0,bus=xhci.0,port=1.1 \
+# -device usb-kbd,id=kbd0,bus=xhci.0,port=1.2 \
+# ---- 
 # device_del mouse0
 # device_del kbd0
 # device_add usb-mouse,id=mouse0,bus=xhci.0
+#   device_add usb-mouse,id=mouse0,bus=xhci.0,port=1.1
 # device_add usb-kbd,id=kbd0,bus=xhci.0
 
 run: build

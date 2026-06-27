@@ -165,14 +165,9 @@ namespace {
 		return false;
 	}
 
-	void release_device_subtree(DeviceNode* node) {
-		if (!node) return;
-		for (auto* child = reinterpret_cast<DeviceNode*>(node->link.subf); child;) {
-			auto* next = reinterpret_cast<DeviceNode*>(child->link.next);
-			release_device_subtree(child);
-			child = next;
-		}
-		node->link.subf = nullptr;
+	void release_device_node_payload(pureptr_t inp) {
+		if (!inp) return;
+		auto* node = reinterpret_cast<DeviceNode*>(inp);
 		if (node->fields.text_manufacturer) {
 			auto* text = const_cast<char*>(node->fields.text_manufacturer);
 			mfree(text);
@@ -188,7 +183,12 @@ namespace {
 		node->fields.text_manufacturer = nullptr;
 		node->fields.text_product = nullptr;
 		node->fields.text_serial = nullptr;
-		NnodesRelease(&node->link, NnodeHeapFreeSimple);
+		NnodeHeapFreeSimple(inp);
+	}
+
+	void release_device_subtree(DeviceNode* node) {
+		if (!node) return;
+		NnodesRelease(&node->link, release_device_node_payload);
 	}
 
 	const char* heap_name(const char* fmt, stduint a0, stduint a1 = 0, stduint a2 = 0, stduint a3 = 0) {
@@ -735,6 +735,20 @@ namespace {
 		const char* kind_name;
 	};
 
+	struct USBDeviceNodeInfo {
+		const char* driver_name;
+		const char* kind_name;
+	};
+
+	DeviceNode* ensure_xhci_root_hub_node(uni::device::SpaceUSB3::HostController& xhc);
+
+	USBDeviceNodeInfo classify_usb_device(const uni::device::SpaceUSB3::DeviceUSB3& dev) {
+		if (dev.DeviceClass() == 0x09u) {
+			return {"usb-hub", "hub"};
+		}
+		return {"usb-device", "device"};
+	}
+
 	USBNodeClassInfo classify_usb_interface(const uni::device::SpaceUSB::InterfaceDescriptor& if_desc) {
 		if (if_desc.interface_class == 3 && if_desc.interface_sub_class == 1) {
 			if (if_desc.interface_protocol == 1) {
@@ -750,17 +764,63 @@ namespace {
 			"usb-interface", "interface"};
 	}
 
-	void register_single_usb_device_for_xhci(DeviceNode* usb_bus_node,
+	DeviceNode* find_device_node_by_driver_data(DeviceNode* parent, uint16 node_type, void* driver_data) {
+		if (!parent || !driver_data) return nullptr;
+		for (auto* node = reinterpret_cast<DeviceNode*>(parent->link.subf); node; node = reinterpret_cast<DeviceNode*>(node->link.next)) {
+			if (!node) continue;
+			if (node->fields.node_type == node_type &&
+				node->fields.binding.driver_data == driver_data) {
+				return node;
+			}
+			if (auto* found = find_device_node_by_driver_data(node, node_type, driver_data)) {
+				return found;
+			}
+		}
+		return nullptr;
+	}
+
+	DeviceNode* find_usb_device_node_by_driver_data(DeviceNode* parent, void* driver_data) {
+		return find_device_node_by_driver_data(parent, uint16(DeviceNodeType::UsbDevice), driver_data);
+	}
+
+	DeviceNode* find_pci_device_node_by_driver_data(DeviceNode* parent, void* driver_data) {
+		return find_device_node_by_driver_data(parent, uint16(DeviceNodeType::PciDevice), driver_data);
+	}
+
+	void ensure_usb_hub_downstream_ports(DeviceNode* usb_dev_node, uint8 num_ports) {
+		if (!usb_dev_node || num_ports == 0) return;
+		for (uint8 downstream_port = 1; downstream_port <= num_ports; ++downstream_port) {
+			auto usb_port_name = String::newFormat("usb-port@%u", (stduint)downstream_port);
+			Devsman::RegisterUSBPort(usb_dev_node, usb_port_name.reference(), downstream_port);
+		}
+	}
+
+	void ensure_usb_hub_downstream_ports_for_device(uni::device::SpaceUSB3::HostController& xhc,
+		uni::device::SpaceUSB3::DeviceUSB3& dev) {
+		if (dev.DeviceClass() != 0x09u) return;
+		auto* usb_root_hub_node = ensure_xhci_root_hub_node(xhc);
+		if (!usb_root_hub_node) return;
+		auto* usb_hub_node = find_usb_device_node_by_driver_data(usb_root_hub_node, &dev);
+		ensure_usb_hub_downstream_ports(usb_hub_node, dev.HubNumPorts());
+	}
+
+	void register_single_usb_device_for_xhci(DeviceNode* usb_parent_node,
 		uint8 port_num, uni::device::SpaceUSB3::DeviceUSB3& dev) {
-		if (!usb_bus_node || !dev.IsInitialized()) return;
+		if (!usb_parent_node || !dev.IsInitialized()) return;
 		const auto slot_id = dev.SlotID();
+		auto dev_info = classify_usb_device(dev);
+		auto usb_port_name = String::newFormat("usb-port@%u", (stduint)port_num);
+		auto* usb_port_node = Devsman::RegisterUSBPort(usb_parent_node, usb_port_name.reference(), port_num);
 		auto usb_dev_name = String::newFormat("usb-dev@port%u.slot%u", (stduint)port_num, (stduint)slot_id);
-		auto* usb_dev_node = Devsman::RegisterUSBDevice(usb_bus_node, usb_dev_name.reference(),
+		auto* usb_dev_node = Devsman::RegisterUSBDevice(usb_port_node, usb_dev_name.reference(),
 			dev.VendorID(), dev.ProductID(),
 			dev.ManufacturerString(), dev.ProductString(), dev.SerialString(),
 			dev.DeviceClass(), dev.DeviceSubClass(), dev.DeviceProtocol(),
 			port_num, slot_id,
-			"usb-device", &dev);
+			dev_info.driver_name, &dev);
+		if (dev.DeviceClass() == 0x09u) {
+			ensure_usb_hub_downstream_ports(usb_dev_node, dev.HubNumPorts());
+		}
 		auto* desc = dev.Buffer();
 		if (!usb_dev_node || !desc) return;
 		const auto* conf_desc = uni::device::SpaceUSB::DescriptorDynamicCast<uni::device::SpaceUSB::ConfigurationDescriptor>(desc);
@@ -793,18 +853,16 @@ namespace {
 					}
 					q += qlen;
 				}
-				ploginfo("USB %s attached on xHC port=%u slot=%u if=%u",
-					info.kind_name, (stduint)port_num, (stduint)slot_id, (stduint)if_desc->interface_number);
 			}
 			p += len;
 		}
 	}
 
 	DeviceNode* ensure_xhci_root_hub_node(uni::device::SpaceUSB3::HostController& xhc) {
-		auto* xhc_node = Devsman::FindPCIDeviceByClass(0x0Cu, 0x03u, 0x30u);
+		auto* root = Devsman::Root();
+		if (!root) return nullptr;
+		auto* xhc_node = find_pci_device_node_by_driver_data(root, &xhc);
 		if (!xhc_node) return nullptr;
-		auto* current_xhc = reinterpret_cast<uni::device::SpaceUSB3::HostController*>(xhc_node->fields.binding.driver_data);
-		if (current_xhc != &xhc) return nullptr;
 		auto usb_bus_name = String::newFormat("usb-bus@%04x:%02x:%02x.%x", 0,
 			(stduint)xhc_node->fields.pci_bus,
 			(stduint)xhc_node->fields.pci_device,
@@ -815,15 +873,55 @@ namespace {
 
 	void on_xhci_complete_configuration(uni::device::SpaceUSB3::HostController& xhc, uint8 port_id, uint8, uni::device::SpaceUSB3::DeviceUSB3& dev) {
 		auto* usb_root_hub_node = ensure_xhci_root_hub_node(xhc);
+		if (!usb_root_hub_node) return;
+		if (dev.ParentHubSlotID() != 0) {
+			auto* parent_hub_dev = xhc.GetDeviceManager()->FindBySlot(dev.ParentHubSlotID());
+			auto* parent_hub_node = find_usb_device_node_by_driver_data(usb_root_hub_node, parent_hub_dev);
+			register_single_usb_device_for_xhci(parent_hub_node, dev.UpstreamPortNum(), dev);
+			return;
+		}
 		register_single_usb_device_for_xhci(usb_root_hub_node, port_id, dev);
+	}
+
+	void on_usb_hub_descriptor_complete(uni::device::SpaceUSB::DeviceUSB& base_dev) {
+		auto& dev = static_cast<uni::device::SpaceUSB3::DeviceUSB3&>(base_dev);
+		auto* xhc = dev.Controller();
+		if (!xhc) return;
+		ensure_usb_hub_downstream_ports_for_device(*xhc, dev);
+	}
+
+	void on_usb_hub_port_status(uni::device::SpaceUSB::DeviceUSB& base_dev,
+		uint8 downstream_port, uint16 status, uint16 change) {
+		(void)change;
+		auto& dev = static_cast<uni::device::SpaceUSB3::DeviceUSB3&>(base_dev);
+		if ((status & 0x0001u) == 0) return;
 	}
 
 	void on_xhci_device_disconnect(uni::device::SpaceUSB3::HostController& xhc, uint8 port_id, uint8 slot_id) {
 		auto* usb_root_node = ensure_xhci_root_hub_node(xhc);
 		if (!usb_root_node) return;
-		auto usb_dev_name = String::newFormat("usb-dev@port%u.slot%u", (stduint)port_id, (stduint)slot_id);
-		if (Devsman::RemoveUSBDevice(usb_root_node, usb_dev_name.reference())) {
-			ploginfo("USB device detached from xHC port=%u slot=%u", (stduint)port_id, (stduint)slot_id);
+		auto* dev = xhc.GetDeviceManager()->FindBySlot(slot_id);
+		DeviceNode* usb_parent_node = usb_root_node;
+		uint8 upstream_port_num = port_id;
+		if (dev && dev->ParentHubSlotID() != 0) {
+			auto* parent_hub_dev = xhc.GetDeviceManager()->FindBySlot(dev->ParentHubSlotID());
+			usb_parent_node = find_usb_device_node_by_driver_data(usb_root_node, parent_hub_dev);
+			upstream_port_num = dev->UpstreamPortNum();
+		}
+		auto usb_port_name = String::newFormat("usb-port@%u", (stduint)upstream_port_num);
+		auto* usb_port_node = Devsman::RegisterUSBPort(usb_parent_node, usb_port_name.reference(), upstream_port_num);
+		auto usb_dev_name = String::newFormat("usb-dev@port%u.slot%u", (stduint)upstream_port_num, (stduint)slot_id);
+		if (Devsman::RemoveUSBDevice(usb_port_node, usb_dev_name.reference())) {
+			if (dev && dev->ParentHubSlotID() != 0) {
+				ploginfo("USB device detached from xHC root-port=%u hub-slot=%u downstream-port=%u child-slot=%u",
+					(stduint)port_id,
+					(stduint)dev->ParentHubSlotID(),
+					(stduint)upstream_port_num,
+					(stduint)slot_id);
+			} else {
+				ploginfo("USB device detached from xHC root-port=%u slot=%u",
+					(stduint)port_id, (stduint)slot_id);
+			}
 		}
 	}
 	#endif
@@ -987,6 +1085,8 @@ void Devsman::RegisterXHCIDeviceTreeHook() {
 	#if _MCCA == 0x8664
 	uni::device::SpaceUSB3::g_configuration_complete_hook = on_xhci_complete_configuration;
 	uni::device::SpaceUSB3::g_device_disconnect_hook = on_xhci_device_disconnect;
+	uni::device::SpaceUSB::g_hub_descriptor_complete_hook = on_usb_hub_descriptor_complete;
+	uni::device::SpaceUSB::g_hub_port_status_hook = on_usb_hub_port_status;
 	#endif
 }
 
@@ -1053,6 +1153,20 @@ DeviceNode* Devsman::RegisterUSBRootHub(DeviceNode* parent, const char* name,
 		node->fields.binding.state = static_cast<uint32>(DriverBindingState::Started);
 		node->fields.binding.driver_data = driver_data;
 	}
+	return node;
+}
+
+DeviceNode* Devsman::RegisterUSBPort(DeviceNode* parent, const char* name, uint8 port_num) {
+	initialize_device_tree();
+	if (!parent || !name) return nullptr;
+	if (auto* node = find_named_child(parent, DeviceNodeType::UsbPort, name)) {
+		if (!find_resource(node, DeviceResourceType::UsbLocation, 0)) {
+			append_resource(node, DeviceResourceType::UsbLocation, DeviceResourceFlag_None, 0, port_num, 1, 0);
+		}
+		return node;
+	}
+	auto* node = append_plain_device(parent, DeviceNodeType::UsbPort, DeviceBusType::USB, StrHeap(name));
+	append_resource(node, DeviceResourceType::UsbLocation, DeviceResourceFlag_None, 0, port_num, 1, 0);
 	return node;
 }
 
