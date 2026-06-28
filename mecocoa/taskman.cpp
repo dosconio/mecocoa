@@ -20,9 +20,10 @@ extern Spinlock scheduler_lock;
 #if _MCCA == 0x8632
 stduint Taskman::getID() {
 	uint32 a = 0, b = 0, c = 0, d = 0;
-	_IO_CPUID(0x0B, 0, &a, &b, &c, &d);
-	if (d < LAPIC_ID_MAP_SIZE) {
-		const auto core_id = g_lapicid_to_coreid[d];
+	_IO_CPUID(1, 0, &a, &b, &c, &d);
+	const uint32 lapic_id = (b >> 24) & 0xFF; // xAPIC LAPIC ID (Initial APIC ID), consistent with table keys
+	if (lapic_id < LAPIC_ID_MAP_SIZE) {
+		const auto core_id = g_lapicid_to_coreid[lapic_id];
 		if (core_id != CORE_ID_INVALID) return core_id;
 	}
 	return 0;
@@ -752,12 +753,23 @@ void Coreman::Initialize() {
 	}
 
 	// Active SMP-APs
-	if constexpr (true) {
+	if (IC.getType() == 2) {
 		setMSR(x86MSR::APIC_ICR_LOW, 0xC4500);// Send INIT IPI to all other processors, (5)Delivery Mode
 		TSC_Wait_MS(10 + 1);
 		setMSR(x86MSR::APIC_ICR_LOW, 0xC4600 | (ap_entry >> PAGESIZE_4KB));
 		TSC_Wait_MS(1 + 1);
 		setMSR(x86MSR::APIC_ICR_LOW, 0xC4600 | (ap_entry >> PAGESIZE_4KB));
+		TSC_Wait_MS(10 + 1);
+	}
+	else if (IC.getType() == 1) {
+		IC.WriteLAPIC(0x310, 0);
+		IC.WriteLAPIC(0x300, 0xC4500);
+		TSC_Wait_MS(10 + 1);
+		IC.WriteLAPIC(0x310, 0);
+		IC.WriteLAPIC(0x300, 0xC4600 | (ap_entry >> PAGESIZE_4KB));
+		TSC_Wait_MS(1 + 1);
+		IC.WriteLAPIC(0x310, 0);
+		IC.WriteLAPIC(0x300, 0xC4600 | (ap_entry >> PAGESIZE_4KB));
 		TSC_Wait_MS(10 + 1);
 	}
 

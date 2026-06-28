@@ -31,6 +31,8 @@ x64u only
 - PATA Disk (MBR)
 - ATAPI CD
 
+Filesys
+- FAT 12/16/32
 
 
 ## RV qemuvirt

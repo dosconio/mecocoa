@@ -111,8 +111,10 @@ TMP32:
 	LoadDataSegs SegData
 	LGDT [0x510]; GDT addr < 0x10000
 	XOR ECX, ECX
-	MOV EAX, 0x0B
+	MOV EAX, 1
 	CPUID
+	MOV EDX, EBX
+	SHR EDX, 24 ; xAPIC LAPIC ID (Initial APIC ID), consistent with table keys
 	MOV EAX, [ap_lapicid_to_coreid + EDX * 4]
 	CMP EAX, 0xFFFFFFFF
 	JE  SMP_AP_ENTRY_END
