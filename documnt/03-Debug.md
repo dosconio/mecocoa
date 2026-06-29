@@ -9,4 +9,10 @@ her-note: false
 - 栈太小
 - Rectangle() {} 是空构造函数，没有清零初始化
 
+### GPT
 
+```
+truncate -s 520M disk_pata01.vhd
+chmod 644 /home/phina/mcca/part_pata01/*.conf
+systemd-repart --empty=allow --definitions=part_pata01 --dry-run=no disk_pata01.vhd
+```

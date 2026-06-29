@@ -31,6 +31,7 @@ cppfile+=$(wildcard mecocoa/*.cpp) prehost/_auxiliary.cpp $(wildcard devdriv/*.c
 	$(ulibpath)/cpp/Device/Timer.cpp \
 	$(ulibpath)/cpp/system/paging.cpp \
 	$(ulibpath)/cpp/Device/Storage.cpp \
+	$(ulibpath)/cpp/Device/Storage/Storage-GPT.cpp \
 	$(ulibpath)/cpp/lango/lango-cpp.cpp \
 	$(ulibpath)/cpp/grp-base/bstring.cpp \
 	$(ulibpath)/cpp/dat-block/mempool.cpp \

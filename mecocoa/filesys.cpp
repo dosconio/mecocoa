@@ -599,38 +599,38 @@ void vfs_tree_physical(FilesysTrait* fs, const char* path, int depth) {
 	}
 }
 
-void vfs_tree_node(vfs_dentry* node, int depth) {
+void vfs_tree_node(uni::OstreamTrait& os, vfs_dentry* node, int depth, bool mount_expand) {
 	if (!node) return;
 	
 	for (int i = 0; i < depth; i++) {
-		Console.OutFormat("  ");
+		os.OutFormat("  ");
 	}
 	
-	Console.OutFormat("|- %s", node->d_name[0] ? node->d_name : "/");
+	os.OutFormat("|- %s", node->d_name[0] ? node->d_name : "/");
 	if (node->d_mounts) {
 		const char* type_name = "unknown/internal";
 		if (node->d_mounts->d_inode && node->d_mounts->d_inode->i_sb && node->d_mounts->d_inode->i_sb->type) {
 			type_name = node->d_mounts->d_inode->i_sb->type->name;
 		}
-		Console.OutFormat(" (Mount: %s)\n\r", type_name);
+		os.OutFormat(" (Mount: %s)\n\r", type_name);
 		// Recurse into physical filesystem if mounted
-		if (node->d_mounts->d_inode && node->d_mounts->d_inode->i_sb && node->d_mounts->d_inode->i_sb->fs) {
+		if (mount_expand && node->d_mounts->d_inode && node->d_mounts->d_inode->i_sb && node->d_mounts->d_inode->i_sb->fs) {
 			vfs_tree_physical(node->d_mounts->d_inode->i_sb->fs, "/", depth + 1);
 		}
 
-		vfs_tree_node(node->d_mounts->d_first_child, depth + 1);
+		vfs_tree_node(os, node->d_mounts->d_first_child, depth + 1, mount_expand);
 	} else {
-		Console.OutFormat("\n\r");
-		vfs_tree_node(node->d_first_child, depth + 1);
+		os.OutFormat("\n\r");
+		vfs_tree_node(os, node->d_first_child, depth + 1, mount_expand);
 	}
 	
-	vfs_tree_node(node->d_next_sibling, depth);
+	vfs_tree_node(os, node->d_next_sibling, depth, mount_expand);
 }
 
-void Filesys::Tree() {
+void Filesys::Tree(uni::OstreamTrait& os, bool mount_expand) {
 	SpinlockLocal guard(&vfs_lock);
-	Console.OutFormat("VFS Virtual Tree Structure:\n\r");
-	vfs_tree_node(vfs_root, 0);
+	os.OutFormat("VFS Virtual Tree Structure:\n\r");
+	vfs_tree_node(os, vfs_root, 0, mount_expand);
 }
 
 int Filesys::Open(const char* pathname, int flags, vfs_file** out_file, vfs_dentry* base) {
@@ -1056,34 +1056,35 @@ file_system_type fs_fat = { "fat", [](StorageTrait& storage, stduint dev) -> Fil
 		DiscPartition part(storage, dev);
 		if (part.getSlice().length == 0) return nullptr;
 		byte sys_id = part.getSlice().sys_id;
-		// Determine FAT sub-type from partition sys_id
-		int fat_ver;
-		if (sys_id == FILESYS_FAT12)           fat_ver = 12;
-		else if (sys_id == FILESYS_FAT16_CHS)  fat_ver = 16;
-		else if (sys_id == FILESYS_FAT16_CHSX) fat_ver = 16;
-		else if (sys_id == FILESYS_FAT16_LBA)  fat_ver = 16;
-		else if (sys_id == FILESYS_FAT32_CHS)  fat_ver = 32;
-		else if (sys_id == FILESYS_FAT32_LBA)  fat_ver = 32;
-		else return nullptr; // not a FAT partition
+		auto try_fat = [&](int fat_ver) -> FilesysTrait* {
+			DiscPartition* p_part = new DiscPartition(storage, dev);
+			p_part->getSlice(); // initialize internal slice
 
-		DiscPartition* p_part = new DiscPartition(storage, dev);
-		p_part->getSlice(); // initialize internal slice
+			stduint sec_size = p_part->Block_Size > 0 ? p_part->Block_Size : 512;
+			byte* fat_sec_buf = new byte[sec_size];
+			byte* fat_buf = new byte[0x1000];
+			FilesysFAT* fs = new FilesysFAT(fat_ver, *p_part, fat_sec_buf, fat_buf);
 
-		stduint sec_size = p_part->Block_Size > 0 ? p_part->Block_Size : 512;
-		byte* fat_sec_buf = new byte[sec_size];
-		byte* fat_buf = new byte[0x1000];
+			if (fs->loadfs()) {
+				return fs;
+			}
 
-		FilesysFAT* fs = new FilesysFAT(fat_ver, *p_part, fat_sec_buf, fat_buf);
+			delete fs;
+			delete p_part;
+			delete[] fat_buf;
+			delete[] fat_sec_buf;
+			return nullptr;
+		};
 
-		if (fs->loadfs()) {
-			return fs;
+		// Prefer explicit type declaration. ESP is allowed to directly try FAT.
+		if (sys_id == FILESYS_FAT12) return try_fat(12);
+		if (sys_id == FILESYS_FAT16_CHS || sys_id == FILESYS_FAT16_CHSX || sys_id == FILESYS_FAT16_LBA) return try_fat(16);
+		if (sys_id == FILESYS_FAT32_CHS || sys_id == FILESYS_FAT32_LBA) return try_fat(32);
+		if (sys_id == FILESYS_EFI_SYS) {
+			if (auto fs = try_fat(32)) return fs;
+			if (auto fs = try_fat(16)) return fs;
+			if (auto fs = try_fat(12)) return fs;
 		}
-
-		// Clean up dynamically allocated buffers on failure to prevent memory leaks
-		free(fs);
-		free(p_part);
-		free(fat_buf);
-		free(fat_sec_buf);
 		return nullptr;
 	},
 	nullptr

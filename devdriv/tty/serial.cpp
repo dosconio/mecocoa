@@ -99,6 +99,10 @@ void Handint_COM1()
 				void dump_lock(OstreamTrait & com1);
 				dump_lock(com1);
 			}
+			if (data == 'f') {
+				com1.OutFormat("\n\r");
+				Filesys::Tree(com1, false);
+			}
 			if (data == 'h') {
 				com1.OutFormat("\n\r");
 				void dump_device_tree(OstreamTrait & com1, bool verbose);

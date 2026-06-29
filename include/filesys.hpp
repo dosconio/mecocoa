@@ -106,7 +106,7 @@ public:
 	// General Path creation (for files)
 	static vfs_dentry* Create(const char* pathname, stduint mode, vfs_dentry* base = nullptr);
 	// Display the hierarchy of the virtual file system (VFS tree)
-	static void Tree();
+	static void Tree(uni::OstreamTrait& os, bool mount_expand);
 	// Register a file system driver
 	static void Register(file_system_type* fs_type);
 	// Probe a partition and if successful, mount it at the target path

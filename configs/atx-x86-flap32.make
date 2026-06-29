@@ -168,6 +168,8 @@ qemu_args=-smp 4,cores=2,threads=2 \
 	-boot order=a -m 1G\
 	-drive file=$(ubinpath)/fixed2.vhd,format=vpc,if=none,id=disk0 \
 	-device ide-hd,drive=disk0,bus=ide.0,unit=0 \
+	-drive file=/home/phina/mcca/disk_pata01.vhd,format=raw,if=none,id=disk1 \
+	-device ide-hd,drive=disk1,bus=ide.0,unit=1 \
 	-serial stdio\
 
 #	-drive file=$(ubinpath)/fixed2.vhd,format=vpc,if=none,id=disk1 \

@@ -599,15 +599,17 @@ namespace {
 		append_pci_irq_resource(dev_node, dev);
 		append_pci_bridge_bus_range_resource(dev_node, dev);
 		append_child(bus_node, dev_node);
-		ploginfo("[DEVSMAN] PCI node: %s vend=%[16H] dev=%[16H] class=%[8H].%[8H].%[8H] res=%u",
-			dev_node->link.addr,
-			dev_node->fields.vendor_id,
-			dev_node->fields.device_id,
-			dev_node->fields.class_base,
-			dev_node->fields.class_sub,
-			dev_node->fields.class_if,
-			dev_node->fields.resource_count);
-		log_pci_resources(dev_node);
+		if constexpr (0) {
+			ploginfo("[DEVSMAN] PCI node: %s vend=%[16H] dev=%[16H] class=%[8H].%[8H].%[8H] res=%u",
+				dev_node->link.addr,
+				dev_node->fields.vendor_id,
+				dev_node->fields.device_id,
+				dev_node->fields.class_base,
+				dev_node->fields.class_sub,
+				dev_node->fields.class_if,
+				dev_node->fields.resource_count);
+			log_pci_resources(dev_node);
+		}
 	}
 
 	void initialize_device_tree() {
@@ -626,11 +628,13 @@ namespace {
 		primary_pci_bus = create_pci_bus_node(0, 0);
 
 		ploginfo("[DEVSMAN] Device tree root ready");
-		ploginfo("[DEVSMAN] Node: %s", device_root->link.addr);
-		for (stduint i = 1; i < byteof(bus_roots) / byteof(bus_roots[0]); ++i) {
-			if (bus_roots[i]) ploginfo("[DEVSMAN] Node: %s", bus_roots[i]->link.addr);
+		if constexpr (0) {
+			ploginfo("[DEVSMAN] Node: %s", device_root->link.addr);
+			for (stduint i = 1; i < byteof(bus_roots) / byteof(bus_roots[0]); ++i) {
+				if (bus_roots[i]) ploginfo("[DEVSMAN] Node: %s", bus_roots[i]->link.addr);
+			}
+			ploginfo("[DEVSMAN] Node: %s", primary_pci_bus->link.addr);
 		}
-		ploginfo("[DEVSMAN] Node: %s", primary_pci_bus->link.addr);
 	}
 
 	void probe_and_attach_pci_devices() {

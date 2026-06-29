@@ -16,6 +16,15 @@ her-note: false
 x64u only
 - Bus: **PCI**
 - **KBD** USB-Keyboard and **MOU** USB-Mouse
+- USB
+	- xHCI 1.1/2.0/3.0 (QEMU)
+
+TODO:
+- USB
+	- EHCI 1.0/2.0
+	- OHCI 1.0
+	- UHCI 1.0
+	- xHCI 3.1
 
 ### Timer
 
@@ -33,6 +42,12 @@ x64u only
 
 Filesys
 - FAT 12/16/32
+
+TODO:
+- SATA
+- SCSI
+- SAS(including SATA)
+- NVMe
 
 
 ## RV qemuvirt

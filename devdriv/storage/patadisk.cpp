@@ -94,8 +94,8 @@ void Handint_HDD()// HDD Master
 }
 
 //
-
-static HD_Info hd_info[4] = { 0 };//{TEMP} 0:0 0:1 1:0 1:1
+typedef HD_Info hd_info_t[4];// 0:0 0:1 1:0 1:1
+static hd_info_t* hd_info = nullptr;
 static bool hd_info_valid[4] = { 0 };
 
 #define	STATUS_BSY	0x80
@@ -124,7 +124,7 @@ static void hd_rw_foreback() { lock = 0; }
 
 // Use after print_identify_info
 stduint uni::Harddisk_PATA::getUnits() {
-	return hd_info[getHigID() * 2 + getLowID()].primary[0].length;
+	return (*hd_info)[getHigID() * 2 + getLowID()].whole_disk.length;
 }
 
 struct iden_info_ascii {
@@ -160,31 +160,28 @@ static void print_identify_info(uint16* hdinfo, Harddisk_PATA& hd)
 	int sectors = ((int)hdinfo[61] << 16) + hdinfo[60];
 	// outsfmt("[Hrddisk] Size : %lf MB\n\r", (double)sectors * hd.Block_Size / 1024 / 1024);// care for #NM FPU Loss
 
-	hd_info[hd.getHigID() * 2 + hd.getLowID()].primary[0].address = nil;
-	hd_info[hd.getHigID() * 2 + hd.getLowID()].primary[0].length = sectors;
+	(*hd_info)[hd.getHigID() * 2 + hd.getLowID()].whole_disk.address = nil;
+	(*hd_info)[hd.getHigID() * 2 + hd.getLowID()].whole_disk.length = sectors;
 }
 
 inline static void print_hdinfo(Harddisk_PATA& hd)
 {
-	HD_Info& hdinfo = hd_info[hd.getHigID() * 2 + hd.getLowID()];
+	HD_Info& hdinfo = (*hd_info)[hd.getHigID() * 2 + hd.getLowID()];
+	auto end_lba = [](const uni::PartitionSlice& slice) -> stduint {
+		return slice.length ? slice.address + slice.length - 1 : slice.address;
+	};
 	Console.OutFormat("driver %u:%u\n\r", hd.getHigID(), hd.getLowID());
-	Console.OutFormat("device LBA\n\r");
-	for0(i, NR_PART_PER_DRIVE + 1) {
-		if (hdinfo.primary[i].length) {
-			Console.OutFormat("%u      %u..%u\n\r", i,
-				hdinfo.primary[i].address,
-				hdinfo.primary[i].address + hdinfo.primary[i].length
-			);
-		}
-		if (i) for0(j, NR_SUB_PER_PART) {
-			unsigned jj = j + NR_SUB_PER_PART * (i - 1);
-			if (hdinfo.logical[jj].length) {
-				Console.OutFormat("%u      %u..%u\n\r", jj,
-					hdinfo.logical[jj].address,
-					hdinfo.logical[jj].address + hdinfo.logical[jj].length
-				);
-			}
-		}
+	Console.OutFormat("whole  %u..%u\n\r",
+		hdinfo.whole_disk.address,
+		end_lba(hdinfo.whole_disk));
+	Console.OutFormat("parts  %u (+%u overflow)\n\r", hdinfo.part_count, hdinfo.part_overflow);
+	for0(i, hdinfo.part_count) {
+		auto part = hdinfo.parts[i];
+		Console.OutFormat("%u      %u..%u type=%x\n\r",
+			i + 1,
+			part.address,
+			end_lba(part),
+			part.sys_id);
 	}
 }
 
@@ -204,7 +201,7 @@ static void hd_open(Harddisk_PATA& hd) { // 0x00
 	if (!hd_info_valid[hd.getHigID() * 2 + low_id]) {
 		// if (_TEMP hd.getID() == 0x01) {
 		// DiscPartition dpart(hd, NR_PRIM_PER_DRIVE * low_id);
-		HD_Info& hdi = hd_info[hd.getHigID() * 2 + low_id];
+		HD_Info& hdi = (*hd_info)[hd.getHigID() * 2 + low_id];
 		if (hd.Block_Size == 512) { // Skip MBR mounting for ATAPI CD-ROMs
 			DiscPartition::Partition(hd, hdi, (byte*)single_sector, NR_PRIM_PER_DRIVE * low_id);
 		}
@@ -217,59 +214,16 @@ static void hd_close(Harddisk_PATA& hd) { // 0x02
 	hd_info_valid[hd.getHigID() * 2 + hd.getLowID()] = false;
 }
 
-static uni::PartitionSlice _LOCAL_GetPartitionSlice(unsigned device) {
-	stduint drv = DRV_OF_DEV(device);
-	if (drv >= MAX_DRIVES || !disks[drv]) {
-		uni::PartitionSlice slice = {0};
-		return slice;
-	}
-	Harddisk_PATA& hd = *disks[drv];
-	if (hd.Block_Size == 2048) { // CD-ROM raw whole disk mapping
-		if (device != MINOR_hd1a + drv * NR_SUB_PER_DRIVE) {
-			uni::PartitionSlice slice = {0};
+PartitionSlice Harddisk_PATA::getSlice(stduint dev) {
+	if (Block_Size == 2048) {
+		if (dev != 0) {
+			PartitionSlice slice = {};
 			return slice;
 		}
-		return hd.getSlice(device);
+		return StorageTrait::getSlice(dev);
 	}
-	HD_Info& hdinfo = hd_info[hd.getHigID() * 2 + hd.getLowID()];
-	return device < MINOR_hd1a ?
-		hdinfo.primary[device % NR_PRIM_PER_DRIVE] :
-		hdinfo.logical[(device - MINOR_hd1a) % NR_SUB_PER_DRIVE];//{} 2 disks
-}
-static void GetPartitionSlice(unsigned device, stduint pg_task)
-{
-	//{} hd_info_valid
-	stduint drv = DRV_OF_DEV(device);
-	if (drv >= MAX_DRIVES || !disks[drv]) {
-		uni::PartitionSlice ret = {0};
-		syssend(pg_task, &ret, byteof(ret));
-		return;
-	}
-	uni::PartitionSlice* retp;
-	Harddisk_PATA& hd = *disks[drv];
-	if (hd.Block_Size == 2048) { // CD-ROM raw whole disk mapping
-		if (device != MINOR_hd1a + drv * NR_SUB_PER_DRIVE) {
-			uni::PartitionSlice ret = {0};
-			syssend(pg_task, &ret, byteof(ret));
-			return;
-		}
-		uni::PartitionSlice ret = hd.getSlice(device);
-		syssend(pg_task, &ret, byteof(ret));
-		return;
-	}
-	HD_Info& hdinfo = hd_info[hd.getHigID() * 2 + hd.getLowID()];
-	retp = device < MINOR_hd1a ?
-		&hdinfo.primary[device % NR_PRIM_PER_DRIVE] :
-		&hdinfo.logical[(device - MINOR_hd1a) % NR_SUB_PER_DRIVE];//{} 2 disks
-	uni::PartitionSlice ret = *retp;
-	syssend(pg_task, &ret, byteof(ret));
-	// ploginfo("[Hrddisk] %s dev%u->di%u : %u..%u", __FUNCIDEN__,
-	//	device, DRV_OF_DEV(device),
-	//	retp->address, retp->address + retp->length);
-}
-
-PartitionSlice Harddisk_PATA::getSlice(stduint dev) {
-	return _LOCAL_GetPartitionSlice(dev);
+	HD_Info& hdinfo = (*hd_info)[getHigID() * 2 + getLowID()];
+	return GetPartitionSlice(hdinfo, dev);
 }
 
 struct Harddisk_PATA_Paged : public uni::Harddisk_PATA {
@@ -322,6 +276,7 @@ void serv_dev_hd_loop()
 		plogerro("Invalid BIOS_DataArea");
 		while (1);
 	}
+	hd_info = new HD_Info[1][4];
 
 	for0a(i, disks) {
 		if (disks[i]) {
@@ -355,22 +310,20 @@ void serv_dev_hd_loop()
 				}
 			}
 
-			for (int dev = 1; dev < NR_SUB_PER_DRIVE * MAX_DRIVES; dev++) { // Scan typical devs up to logical drives
-				// Probe partition type via MBR sys_id to avoid blind loadfs() attempts
-				if (dev < 0x10) {
-					if (Ranglin(dev, 1, 4) || Ranglin(dev, 6, 4)); else continue;
-				}
-				else {
-
-				}
-				byte sys_id = _LOCAL_GetPartitionSlice(dev).sys_id;
-				if (sys_id == 0x00) continue; // empty/unpartitioned, skip
-				else if (sys_id == FILESYS_EXT) continue;
-				lab = String::newFormat("/mnt%d", dev);
-				ploginfo("[Hrddisk] probe dev%u: %x", dev, sys_id);
-				if (auto fs = Filesys::Mount(*paged_disks[DRV_OF_DEV(dev)], dev, lab.reference())) {
-					if (!StrCompare(fs->name, "fat")) {
-						fat_time++;
+			for0(i, MAX_DRIVES) {
+				if (!disks[i] || disks[i]->Block_Size != 512) continue;
+				HD_Info& hdinfo = (*hd_info)[i];
+				for (unsigned part_dev = 1; part_dev <= hdinfo.part_count; part_dev++) {
+					uni::PartitionSlice slice = GetPartitionSlice(hdinfo, part_dev);
+					byte sys_id = slice.sys_id;
+					if (sys_id == 0x00) continue; // empty/unpartitioned, skip
+					else if (sys_id == FILESYS_EXT) continue;
+					lab = String::newFormat("/mnt/ide%u.%u", i, part_dev);
+					ploginfo("[Hrddisk] probe disk%u part%u: %x", i, part_dev, sys_id);
+					if (auto fs = Filesys::Mount(*paged_disks[i], part_dev, lab.reference())) {
+						if (!StrCompare(fs->name, "fat")) {
+							fat_time++;
+						}
 					}
 				}
 			}
@@ -400,9 +353,6 @@ void serv_dev_hd_loop()
 			}
 			break;
 		}
-		case FiledevMsg::GETPS:// (device 0 for all, 1~4 for primary, 5+ for logical)
-			GetPartitionSlice(args[0], sig_src);
-			break;
 		// OPEN: not support for fixed sockets
 
 		default:

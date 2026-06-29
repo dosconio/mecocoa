@@ -23,6 +23,7 @@ struct AuxVector {
 	stduint value;
 };
 
+#define DEFAULT_PATH "PATH=/md0:/mnt/ide0.4/apps"
 static stduint _Taskman_Setup_Stack(ProcessBlock* pb, ProcessBlock* parent, char** usr_argv, char** usr_envp, stduint entry, stduint phdr, stduint phnum, stduint phent) {
 	stduint argc = 0, envc = 0;
 	stduint str_len = 0;
@@ -60,7 +61,7 @@ static stduint _Taskman_Setup_Stack(ProcessBlock* pb, ProcessBlock* parent, char
 	count_and_size(usr_argv, argc);
 	if (use_default_env) {
 		envc = 3;
-		str_len += StrLength("?=0") + 1 + StrLength("PATH=/md0:/mnt34/apps") + 1 + StrLength("USER=root") + 1;
+		str_len += StrLength("?=0") + 1 + StrLength(DEFAULT_PATH) + 1 + StrLength("USER=root") + 1;
 	} else {
 		count_and_size(usr_envp, envc);
 	}
@@ -95,7 +96,7 @@ static stduint _Taskman_Setup_Stack(ProcessBlock* pb, ProcessBlock* parent, char
 
 	copy_strings(usr_argv, argc);
 	if (use_default_env) {
-		const char* defaults[] = { "?=0", "PATH=/md0:/mnt34/apps", "USER=root" };
+		const char* defaults[] = { "?=0", DEFAULT_PATH, "USER=root" };
 		for (stduint i = 0; i < 3; i++) {
 			char* dest = str_area;
 			StrCopy(dest, defaults[i]);

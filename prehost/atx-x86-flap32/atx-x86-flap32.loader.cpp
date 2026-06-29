@@ -20,7 +20,8 @@ void temp_init() {
 OstreamTrait* con0_out;// TTY0
 
 // use before loading elf-kernel
-#define ROOT_DEV_FAT0 (MINOR_hd2a + 2)
+#define ROOT_DRIVE_FAT0 0
+#define ROOT_PART_FAT0  4
 #define single_sector  ((byte*)0x100000)
 #define fatable_sector ((byte*)0x100200)
 #define hdinfo_addr    ((byte*)0x100400)
@@ -31,6 +32,12 @@ OstreamTrait* con0_out;// TTY0
 #define paging_addr    ((byte*)0x200000)
 
 static FAT_FileHandle filhan;
+
+namespace uni {
+	bool LoadGPTPartitions(StorageTrait& base, HD_Info& hdi, byte* block_buf) {
+		return false;
+	}
+}
 
 uint64 GDT64[]{
 	0x0000000000000000ull,//(SegNull) Ring0
@@ -49,13 +56,12 @@ void body() {
 	temp_init();
 	BareConsole Console(80, 50, _VIDEO_ADDR_BUFFER); con0_out = &Console;
 	Console.setShowY(0, 25);
-	Harddisk_PATA hdisk(DRV_OF_DEV(ROOT_DEV_FAT0));
+	Harddisk_PATA hdisk(ROOT_DRIVE_FAT0);
 	hdisk.Reset();
 
 	MemSet((void*)hdinfo_addr, 0, sizeof(HD_Info));
 	DiscPartition::Partition(hdisk, *(HD_Info*)hdinfo_addr, single_sector, 5);
-	// HD_Info& hdi = *(HD_Info*)hdinfo_addr;
-	DiscPartition part_fat0(hdisk, ROOT_DEV_FAT0);
+	DiscPartition part_fat0(hdisk, ROOT_PART_FAT0);
 	FilesysFAT pfs_fat0(32, part_fat0, single_sector, fatable_sector);
 	FilesysSearchArgs args = { &filhan, nullptr, nullptr, nullptr };
 	if (!pfs_fat0.loadfs()) {
@@ -115,15 +121,8 @@ _sign_entry() {
 	body();
 }
 
-static uni::PartitionSlice _LOCAL_GetPartitionSlice(unsigned device) {
-	Harddisk_PATA& hd = *disks[DRV_OF_DEV(device)];
-	HD_Info& hdinfo = *(HD_Info*)hdinfo_addr;
-	return device < MINOR_hd1a ?
-		hdinfo.primary[device % NR_PRIM_PER_DRIVE] :
-		hdinfo.logical[(device - MINOR_hd1a) % NR_SUB_PER_DRIVE];//{} 2 disks
-}
 PartitionSlice Harddisk_PATA::getSlice(stduint dev) {
-	return _LOCAL_GetPartitionSlice(dev);
+	return GetPartitionSlice(*(HD_Info*)hdinfo_addr, dev);
 }
 
 // to be thin, redefine to avoid including unisym's version:

@@ -70,7 +70,7 @@ enum class FiledevMsg {
 	CLOSE,//(diskno) noreturn
 	READ, //I(diskno, lba) O:1 O:data_sector
 	WRITE,//I(diskno, lba) O:1 O:data_sector
-	GETPS,//(partid)->Slice. GetPartitionSlice aka geometry
+	GETPS,// legacy geometry query slot, no longer used by PATA runtime path
 	OPEN,//(...) -> new_device_id
 };// for fileman-hd
 
