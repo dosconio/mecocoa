@@ -4,7 +4,7 @@
 
 代码风格：TAB缩进，参考源代码
 
-构建：让用户进行，不要擅自make run。
+构建：让用户进行，不要擅自使用 make 。
 
 仓库：禁止擅自git checkout restore stage
 

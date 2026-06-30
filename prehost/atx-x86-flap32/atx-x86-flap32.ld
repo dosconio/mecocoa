@@ -35,13 +35,7 @@ SECTIONS
 		*(.data.*)
 		*(.got)
 	} > RAM1
-	.bss : {
-		. = ALIGN(16);
-		BSS_ENTO = .;
-		*(.bss .bss.*)
-		*(COMMON)
-		BSS_ENDO = .;
-	} > RAM1
+
 
 	.boot_stack : {
 		. = ALIGN(16);
@@ -75,6 +69,16 @@ SECTIONS
 	.extdata : {
 		KEEP(*(.extdata))
 		*(.ext.freetype)
+		*(.ext.freetype.code)
+		*(.ext.freetype.vcode)
+	} > RAM2
+
+	.bss : {
+		. = ALIGN(16);
+		BSS_ENTO = .;
+		*(.bss .bss.*)
+		*(COMMON)
+		BSS_ENDO = .;
 	} > RAM2
 
 	/* Remove information from the compiler libraries */

@@ -216,11 +216,14 @@ static void hd_close(Harddisk_PATA& hd) { // 0x02
 
 PartitionSlice Harddisk_PATA::getSlice(stduint dev) {
 	if (Block_Size == 2048) {
+		PartitionSlice slice = {};
 		if (dev != 0) {
-			PartitionSlice slice = {};
 			return slice;
 		}
-		return StorageTrait::getSlice(dev);
+		slice.address = 0;
+		slice.length = (getID() < numsof(disks) && disks[getID()]) ? disks[getID()]->getUnits() : 0;
+		slice.sys_id = 0;
+		return slice;
 	}
 	HD_Info& hdinfo = (*hd_info)[getHigID() * 2 + getLowID()];
 	return GetPartitionSlice(hdinfo, dev);
@@ -306,7 +309,27 @@ void serv_dev_hd_loop()
 			for0(i, MAX_DRIVES) {
 				if (disks[i]) {
 					hd_open(*disks[i]);
-					Console.OutFormat("[Hrddisk] Detect %s on IDE%u:%u : %u MB\n\r", (disks[i]->Block_Size == 2048) ? "CD-ROM" : "Disk", i / 2, i % 2, _IMM(disks[i]->getUnits() * disks[i]->Block_Size) >> 20);
+					stduint total_units = 0;
+					if (disks[i]->Block_Size == 2048 && paged_disks[i]) {
+						total_units = paged_disks[i]->getSlice(0).length;
+					} else {
+						total_units = disks[i]->getUnits();
+					}
+					Console.OutFormat("[Hrddisk] Detect %s on IDE%u:%u : %u MB\n\r",
+						(disks[i]->Block_Size == 2048) ? "CD-ROM" : "Disk",
+						i / 2, i % 2,
+						_IMM(total_units * disks[i]->Block_Size) >> 20);
+				}
+			}
+
+			for0(i, MAX_DRIVES) {
+				if (!disks[i] || disks[i]->Block_Size != 2048) continue;
+				lab = String::newFormat("/mnt/ide%u.0", i);
+				ploginfo("[Hrddisk] probe cdrom%u whole-disk", i);
+				if (auto fs = Filesys::Mount(*paged_disks[i], 0, lab.reference())) {
+					ploginfo("[Hrddisk] mount %s on %s", fs->name, lab.reference());
+				} else {
+					ploginfo("[Hrddisk] no filesystem recognized on cdrom%u", i);
 				}
 			}
 

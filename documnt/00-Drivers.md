@@ -11,7 +11,7 @@ her-note: false
 - Interrupt 8259 **PIC** and **(x2)APIC**
 - 【!TREE】**Buzzer** PC Speaker
 - **KBD** Keyboard and **MOU** PS/2-Mouse
-- COMn UART
+- 【!TREE】COMn UART
 
 x64u only
 - Bus: **PCI**

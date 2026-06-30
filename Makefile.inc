@@ -38,6 +38,7 @@ cppfile+=$(wildcard mecocoa/*.cpp) prehost/_auxiliary.cpp $(wildcard devdriv/*.c
 	$(ulibpath)/cpp/dat-block/bmmemoman.cpp \
 	$(ulibpath)/cpp/nodes/dnode.cpp $(wildcard $(ulibpath)/cpp/nodes/dnode/*.cpp) \
 	$(ulibpath)/cpp/nodes/nnode.cpp $(wildcard $(ulibpath)/cpp/nodes/nnode/*.cpp) \
+	$(ulibpath)/cpp/filesystem/CD.cpp \
 	$(ulibpath)/cpp/filesystem/FAT.cpp $(wildcard $(ulibpath)/cpp/filesystem/FAT/*.cpp) \
 
 cplfile+= \

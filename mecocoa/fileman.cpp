@@ -5,7 +5,7 @@
 #include "../include/mecocoa.hpp"
 #include <c/format/filesys/FAT.h>
 
-extern "C" void Consman_InitializeFreeType();
+extern void Consman_InitializeFreeType();
 
 static byte* buffer = nil;
 #define FSBUF_SIZE 0x8000

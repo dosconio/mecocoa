@@ -12,7 +12,7 @@
 #define _GUI_ENABLE 0
 #endif
 
-#define _GUI_FREETYPE 0//{ISSUE}
+#define _GUI_FREETYPE 1
 
 #define _SYS_MULTICORE 1
 

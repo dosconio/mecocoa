@@ -84,11 +84,15 @@ namespace uni {
 	alignas(16) byte buf_root_sb[sizeof(vfs_super_block)];
 }
 extern file_system_type fs_fat;
+extern file_system_type fs_iso9660;
+extern file_system_type fs_udf;
 
 
 void Filesys::Initialize() {
 
 	Filesys::Register(&fs_fat);
+	Filesys::Register(&fs_iso9660);
+	Filesys::Register(&fs_udf);
 
 	vfs_root = alloc_dentry(nullptr, "/");
 	vfs_super_block* root_sb = new (buf_root_sb) vfs_super_block();
@@ -1051,6 +1055,65 @@ stduint DevFs::writfl(void* fil_handler, Slice file_slice, const byte* src) {
 // FS
 #include <c/format/filesys.h>
 #include <c/format/filesys/FAT.h>
+#include <c/format/filesys/CD.h>
+
+file_system_type fs_udf = { "udf", [](StorageTrait& storage, stduint dev) -> FilesysTrait* {
+		DiscPartition part(storage, dev);
+		if (part.Block_Size != 2048) {
+			return nullptr;
+		}
+		ploginfo("[UDF] probe dev=%u block=%u", dev, part.Block_Size);
+		PartitionSlice slice = part.getSlice();
+		ploginfo("[UDF] slice addr=%u len=%u type=%x", slice.address, slice.length, slice.sys_id);
+		if (slice.length == 0) {
+			ploginfo("[UDF] skip: empty slice");
+			return nullptr;
+		}
+
+		DiscPartition* p_part = new DiscPartition(storage, dev);
+		p_part->getSlice();
+		byte* sec_buf = new byte[p_part->Block_Size];
+		FilesysUDF* fs = new FilesysUDF(*p_part, sec_buf);
+
+		if (fs->loadfs()) {
+			return fs;
+		}
+
+		delete fs;
+		delete p_part;
+		return nullptr;
+	},
+	nullptr
+};
+
+file_system_type fs_iso9660 = { "iso9660", [](StorageTrait& storage, stduint dev) -> FilesysTrait* {
+		DiscPartition part(storage, dev);
+		if (part.Block_Size != 2048) {
+			return nullptr;
+		}
+		ploginfo("[ISO9660] probe dev=%u block=%u", dev, part.Block_Size);
+		PartitionSlice slice = part.getSlice();
+		ploginfo("[ISO9660] slice addr=%u len=%u type=%x", slice.address, slice.length, slice.sys_id);
+		if (slice.length == 0) {
+			ploginfo("[ISO9660] skip: empty slice");
+			return nullptr;
+		}
+
+		DiscPartition* p_part = new DiscPartition(storage, dev);
+		p_part->getSlice();
+		byte* sec_buf = new byte[p_part->Block_Size];
+		FilesysISO9660* fs = new FilesysISO9660(*p_part, sec_buf);
+
+		if (fs->loadfs()) {
+			return fs;
+		}
+
+		delete fs;
+		delete p_part;
+		return nullptr;
+	},
+	nullptr
+};
 
 file_system_type fs_fat = { "fat", [](StorageTrait& storage, stduint dev) -> FilesysTrait* {
 		DiscPartition part(storage, dev);

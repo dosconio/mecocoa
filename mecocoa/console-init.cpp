@@ -171,7 +171,7 @@ bool Consman::Initialize() {
 	return true;
 }
 
-_ESYM_C void Consman_InitializeFreeType() {
+void Consman_InitializeFreeType() {
 #if _MCCA == 0x8632
 	ploginfo("Consman_InitializeFreeType: [Start]");
 	extern bool InitializeFont();
