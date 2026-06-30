@@ -172,6 +172,10 @@ qemu_args=-smp 4,cores=2,threads=2 \
 	-device ide-hd,drive=disk1,bus=ide.0,unit=1 \
 	-serial stdio\
 
+# [SATA]
+#	-device ahci,id=ahci0 \
+#   -device ide-hd,drive=disk1,bus=ahci0.0 \
+# [PATA]
 #	-drive file=$(ubinpath)/fixed2.vhd,format=vpc,if=none,id=disk1 \
 #	-device ide-hd,drive=disk1,bus=ide.0,unit=1 \
 

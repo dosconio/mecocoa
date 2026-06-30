@@ -4,6 +4,7 @@
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 #include "../include/mecocoa.hpp"
 #include <cpp/Device/Bus/PCI.hpp>
+#include <c/storage/AHCI.h>
 #if _MCCA == 0x8664
 #include <cpp/Device/USB/xHCI/xHCI.hpp>
 #endif
@@ -68,6 +69,7 @@ namespace {
 	constexpr PciDriverMatchEntry pci_driver_match_table[] = {
 		{0x06u, 0x04u, MatchAnyClassIf, "pci-bridge"},
 		{0x0Cu, 0x03u, 0x30u, "xhci"},
+		{AHCI_PCI_CLASS_BASE, AHCI_PCI_CLASS_SUB, AHCI_PCI_CLASS_IF, "ahci"},
 		{0x01u, 0x01u, MatchAnyClassIf, "pata"},
 	};
 
@@ -94,8 +96,26 @@ namespace {
 		return true;
 	}
 
+	bool probe_ahci_device(DeviceNode* node) {
+		if (!node) return false;
+		const auto* abar = Devsman::FindResource(node, DeviceResourceType::PciBarMmio, 5);
+		if (!abar) {
+			plogwarn("[DEVSMAN] AHCI %s missing BAR5 ABAR resource",
+				node->link.addr ? node->link.addr : "(unnamed)");
+			return false;
+		}
+		const auto* irq = Devsman::FindResource(node, DeviceResourceType::IrqLine, 0);
+		node->fields.binding.probe_result = irq ? 0 : 1;
+		ploginfo("[DEVSMAN] AHCI %s ABAR=%[64H]%s",
+			node->link.addr ? node->link.addr : "(unnamed)",
+			abar->start,
+			irq ? "" : " irq=none");
+		return true;
+	}
+
 	constexpr DriverOpsEntry pci_driver_ops_table[] = {
 		{"xhci", probe_xhci_device},
+		{"ahci", probe_ahci_device},
 	};
 
 	DriverStartHookEntry driver_start_hooks[8]{};
@@ -130,7 +150,7 @@ namespace {
 	void append_child(DeviceNode* parent, DeviceNode* child) {
 		Nnode* child_link = &child->link;
 		child_link->next = nullptr;
-		child_link->subf = nullptr;
+		// Preserve existing children when reparenting a populated subtree.
 		child_link->pare = &parent->link;
 		child_link->left = nullptr;
 		if (!parent->link.subf) {
@@ -282,7 +302,7 @@ namespace {
 		node->fields.binding.state = static_cast<uint32>(DriverBindingState::Matched);
 		node->fields.binding.probe_result = 0;
 		node->fields.binding.driver_data = nullptr;
-		ploginfo("[DEVSMAN] Bind %s -> %s", node->link.addr ? node->link.addr : "(unnamed)", driver_name);
+		// ploginfo("[DEVSMAN] Bind %s -> %s", node->link.addr ? node->link.addr : "(unnamed)", driver_name);
 		return true;
 	}
 
@@ -546,6 +566,46 @@ namespace {
 			0, primary_bus, secondary_bus, subordinate_bus);
 	}
 
+	uint64 read_pci_mmio_bar_length(const uni::PCI::Device& dev, uint8 bar_index, uint32 bar_low, uint8 bar_count) {
+		const uint8 addr = 0x10 + bar_index * 4;
+		const uint8 mem_type = uint8((bar_low >> 1) & 0x3u);
+		if (mem_type == 0x2u && bar_index + 1 >= bar_count) return 0;
+
+		if (mem_type == 0x2u) {
+			const uint32 bar_high = uni::PCI::read_config_register(dev, addr + 4);
+			uni::PCI::write_config_register(dev, addr, 0xFFFFFFFFu);
+			uni::PCI::write_config_register(dev, addr + 4, 0xFFFFFFFFu);
+			const uint32 size_low = uni::PCI::read_config_register(dev, addr);
+			const uint32 size_high = uni::PCI::read_config_register(dev, addr + 4);
+			uni::PCI::write_config_register(dev, addr, bar_low);
+			uni::PCI::write_config_register(dev, addr + 4, bar_high);
+			const uint64 size_mask = (uint64(size_high) << 32) | (size_low & ~0xFu);
+			if (!size_mask) return 0;
+			return (~size_mask) + 1;
+		}
+
+		uni::PCI::write_config_register(dev, addr, 0xFFFFFFFFu);
+		const uint32 size_low = uni::PCI::read_config_register(dev, addr);
+		uni::PCI::write_config_register(dev, addr, bar_low);
+		const uint32 size_mask = size_low & ~0xFu;
+		if (!size_mask) return 0;
+		return uint64(~size_mask) + 1;
+	}
+
+	void map_pci_mmio_resource(uint64 base, uint64 length) {
+		if (!base || !length) return;
+		const stduint page_base = stduint(base) & ~0xFFFu;
+		const stduint page_end = stduint((base + length + 0xFFFu) & ~0xFFFu);
+		if (page_end <= page_base) return;
+		kernel_paging.Map(
+			page_base,
+			page_base,
+			page_end - page_base,
+			PAGESIZE_4KB,
+			PGPROP_present | PGPROP_writable
+		);
+	}
+
 	void append_pci_bar_resources(DeviceNode* node, const uni::PCI::Device& dev) {
 		const uint8 header_type = dev.header_type & 0x7Fu;
 		const uint8 bar_count = header_type == 0x01 ? 2 : 6;
@@ -567,15 +627,20 @@ namespace {
 
 			const uint8 mem_type = uint8((bar_low >> 1) & 0x3u);
 			uint64 base = uint64(bar_low & ~0xFu);
+			uint64 length = 0;
 			if (mem_type == 0x2u && bar_index + 1 < bar_count) {
 				const uint32 bar_high = uni::PCI::read_config_register(dev, addr + 4);
 				base |= uint64(bar_high) << 32;
 				flags |= DeviceResourceFlag_Bar64;
-				++bar_index;
 			}
 			if (!base) continue;
+			length = read_pci_mmio_bar_length(dev, resource_index, bar_low, bar_count);
 			append_resource(node, DeviceResourceType::PciBarMmio, flags,
-				resource_index, base, 0, 0);
+				resource_index, base, length, 0);
+			map_pci_mmio_resource(base, length);
+			if (mem_type == 0x2u && bar_index + 1 < bar_count) {
+				++bar_index;
+			}
 		}
 	}
 

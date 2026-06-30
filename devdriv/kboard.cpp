@@ -108,12 +108,15 @@ int KeyboardBridge::out(const char* str, stduint len) {
 			}
 			else if (event.method == keyboard_event_t::method_t::keydown && event.keycode == 0x39) { // CapsLock
 				kbd_state.lock_caps = !kbd_state.lock_caps; setLED_ps2();
+				continue;
 			}
 			else if (event.method == keyboard_event_t::method_t::keydown && event.keycode == 0x53) { // NumLock
 				kbd_state.lock_number = !kbd_state.lock_number; setLED_ps2();
+				continue;
 			}
 			else if (event.method == keyboard_event_t::method_t::keydown && event.keycode == 0x47) { // ScrollLock
 				kbd_state.lock_scroll = !kbd_state.lock_scroll; setLED_ps2();
+				continue;
 			}
 			else if (event.method == keyboard_event_t::method_t::keydown) {
 				auto ascii_ch = (kbd_state.mod.l_shift || kbd_state.mod.r_shift ? key_map_shift : key_map)[event.keycode];

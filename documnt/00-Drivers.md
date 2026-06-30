@@ -37,14 +37,15 @@ x64u only
 ### Storage
 
 - Floppy
-- PATA Disk (MBR)
+- PATA Disk (MBR, GPT) 2:2
 - ATAPI CD
+- SATA 
+	- AHCI (MBR, GPT) 4:30
 
 Filesys
 - FAT 12/16/32
 
 TODO:
-- SATA
 - SCSI
 - SAS(including SATA)
 - NVMe
