@@ -6,6 +6,10 @@ struct Spinlock {
 	bool Acquire();
 	void Release(bool old_if);
 };
+
+bool InterruptSaveDisable();
+void InterruptRestore(bool was_enabled);
+
 struct SpinlockLocal {
 	bool old_if;
 	Spinlock* spinlock;
@@ -21,6 +25,51 @@ struct SpinlockLocal {
 		}
 	}
 };
+
+template <typename T>
+class SpinlockBlock {
+	Spinlock lock_;
+	T data_;
+public:
+	SpinlockBlock() : lock_(), data_() {}
+
+	template <typename... Args>
+	SpinlockBlock(Args&&... args) : lock_(), data_(static_cast<Args&&>(args)...) {}
+
+	class Guard {
+		SpinlockBlock<T>* owner_ = nullptr;
+		bool old_if_ = false;
+	public:
+		explicit Guard(SpinlockBlock<T>* owner) : owner_(owner) {
+			old_if_ = owner_->lock_.Acquire();
+		}
+		Guard(const Guard&) = delete;
+		Guard& operator=(const Guard&) = delete;
+		Guard(Guard&& other) : owner_(other.owner_), old_if_(other.old_if_) {
+			other.owner_ = nullptr;
+		}
+		Guard& operator=(Guard&& other) = delete;
+		~Guard() {
+			Unlock();
+		}
+		void Unlock() {
+			auto owner = owner_;
+			owner_ = nullptr;
+			if (owner) owner->lock_.Release(old_if_);
+		}
+		T* operator->() { return &owner_->data_; }
+		T& operator*() { return owner_->data_; }
+		const T* operator->() const { return &owner_->data_; }
+		const T& operator*() const { return owner_->data_; }
+	};
+
+	Guard Lock() {
+		return Guard(this);
+	}
+	Spinlock& raw_spinlock() { return lock_; }
+	const Spinlock& raw_spinlock() const { return lock_; }
+};
+
 
 struct Mutex {
 	Spinlock guard;

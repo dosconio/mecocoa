@@ -7,20 +7,29 @@
 
 extern void Consman_InitializeFreeType();
 
-static byte* buffer = nil;
-#define FSBUF_SIZE 0x8000
-FileDescriptor* f_desc_table = nil;
-stduint f_desc_table_count = 0;
+#define FSBUF_SIZE 0x4000
+struct FDescData {
+	FileDescriptor* table = nullptr;
+	stduint count = 0;
+};
+SpinlockBlock<FDescData> f_desc_info;
 
 static bool CloseFileSlotUnlocked(ProcFiles& files, int fd) {
 	if (fd < 0 || fd >= (stdsint)files.pfiles.Count() || !files.pfiles[fd]) {
 		return false;
 	}
-	if (files.pfiles[fd]->vfile) {
-		if (files.pfiles[fd]->vfile->f_inode)
-			files.pfiles[fd]->vfile->f_inode->ref_count--;
-		Filesys::Close(files.pfiles[fd]->vfile);
-		files.pfiles[fd]->vfile = nullptr;
+	FileDescriptor* pfd = files.pfiles[fd];
+	vfs_file* file = pfd->vfile;
+	if (file) {
+		if (file->f_inode)
+			file->f_inode->ref_count--;
+		Filesys::Close(file);
+		{
+			auto f_desc = f_desc_info.Lock();
+			pfd->fd_mode = 0;
+			pfd->fd_pos = 0;
+			pfd->vfile = nullptr;
+		}
 	}
 	files.pfiles[fd] = nullptr;
 	return true;
@@ -48,11 +57,15 @@ stdsint ProcessBlock::Open(rostr pathname, int flags) {
 	}
 	// find a free slot in f_desc_table (reuse empty slots)
 	FileDescriptor* pfd = NULL;
-	for (stduint i = 0; i < 0x1000 / sizeof(FileDescriptor); i++) {
-		if (f_desc_table[i].vfile == nullptr) {
-			pfd = &f_desc_table[i];
-			if (i >= f_desc_table_count) f_desc_table_count = i + 1;
-			break;
+	{
+		auto f_desc = f_desc_info.Lock();
+		for (stduint i = 0; i < 0x1000 / sizeof(FileDescriptor); i++) {
+			if (f_desc->table[i].vfile == nullptr) {
+				pfd = &f_desc->table[i];
+				if (i >= f_desc->count) f_desc->count = i + 1;
+				pfd->vfile = (vfs_file*)1; // reserve
+				break;
+			}
 		}
 	}
 	if (!pfd) {
@@ -64,17 +77,18 @@ stdsint ProcessBlock::Open(rostr pathname, int flags) {
 	int ret = Filesys::Open(pathname, flags, &file, files->cwd);
 	
 	if (ret < 0 || !file) {
+		pfd->vfile = nullptr; // release reservation
 		// plogwarn("pathname %s failed to %s", pathname, (flags & O_RDWR) ? "open" : "create");
 		return -1;
 	}
 	
 	files->pfiles[fd] = pfd;
-	pfd->vfile = file;
 	pfd->fd_mode = flags;
 	pfd->fd_pos = 0;
-	if (pfd->vfile->f_inode) {
-		pfd->vfile->f_inode->ref_count++;
+	if (file->f_inode) {
+		file->f_inode->ref_count++;
 	}
+	pfd->vfile = file;
 	return fd;
 }
 
@@ -161,6 +175,7 @@ stduint ProcessBlock::Rdwt(bool wr_type, stduint fid, Slice slice)
 	int total_bytes = 0;
 	int bytes_left = slice.length;
 	stduint curr_addr = slice.address;
+	byte* buffer = new byte[FSBUF_SIZE];
 
 	// Loop to process data in chunks due to kernel buffer size limits
 	// and to safely transfer data across different address spaces.
@@ -170,31 +185,31 @@ stduint ProcessBlock::Rdwt(bool wr_type, stduint fid, Slice slice)
 		int bytes_processed = 0;
 
 		if (wr_type) {
-			MemCopyP(::buffer, kernel_paging, (void*)curr_addr, pb->paging, chunk);
+			MemCopyP(buffer, kernel_paging, (void*)curr_addr, pb->paging, chunk);
 			if (file->f_inode && (file->f_inode->i_mode & I_TYPE_MASK) == I_CHAR_SPECIAL) {
 				// Bypass global vfs_lock spinlock for character special devices to avoid deadlocks.
-				bytes_processed = file->f_inode->i_sb->fs->writfl(file->f_inode->internal_handler, Slice{ file->f_pos, (stduint)chunk }, (const byte*)::buffer);
+				bytes_processed = file->f_inode->i_sb->fs->writfl(file->f_inode->internal_handler, Slice{ file->f_pos, (stduint)chunk }, (const byte*)buffer);
 			}
 			else if (is_pipe) {
-				bytes_processed = Filesys::WritePipe(file, ::buffer, chunk);
+				bytes_processed = Filesys::WritePipe(file, buffer, chunk);
 			}
 			else {
-				bytes_processed = Filesys::Write(file, ::buffer, chunk);
+				bytes_processed = Filesys::Write(file, buffer, chunk);
 			}
 		}
 		else {
 			if (file->f_inode && (file->f_inode->i_mode & I_TYPE_MASK) == I_CHAR_SPECIAL) {
 				// Bypass global vfs_lock spinlock for character special devices to avoid deadlocks.
-				bytes_processed = file->f_inode->i_sb->fs->readfl(file->f_inode->internal_handler, Slice{ file->f_pos, (stduint)chunk }, (byte*)::buffer);
+				bytes_processed = file->f_inode->i_sb->fs->readfl(file->f_inode->internal_handler, Slice{ file->f_pos, (stduint)chunk }, (byte*)buffer);
 			}
 			else if (is_pipe) {
-				bytes_processed = Filesys::ReadPipe(file, ::buffer, chunk);
+				bytes_processed = Filesys::ReadPipe(file, buffer, chunk);
 			}
 			else {
-				bytes_processed = Filesys::Read(file, ::buffer, chunk);
+				bytes_processed = Filesys::Read(file, buffer, chunk);
 			}
 			if (bytes_processed > 0) {
-				MemCopyP((void*)curr_addr, pb->paging, ::buffer, kernel_paging, bytes_processed);
+				MemCopyP((void*)curr_addr, pb->paging, buffer, kernel_paging, bytes_processed);
 			}
 		}
 
@@ -229,6 +244,7 @@ stduint ProcessBlock::Rdwt(bool wr_type, stduint fid, Slice slice)
 		}
 	}
 
+	delete[] buffer;
 	return total_bytes > 0 ? total_bytes : 0;
 }
 
@@ -347,17 +363,20 @@ stdsint ProcessBlock::Pipe(int pipefd[2]) {
 		if (fd == -1) return -1;
 
 		FileDescriptor* pfd = nullptr;
-		for (stduint i = 0; i < 0x1000 / sizeof(FileDescriptor); i++) {
-			if (f_desc_table[i].vfile == nullptr) {
-				pfd = &f_desc_table[i];
-				if (i >= f_desc_table_count) f_desc_table_count = i + 1;
-				break;
+		{
+			auto f_desc = f_desc_info.Lock();
+			for (stduint i = 0; i < 0x1000 / sizeof(FileDescriptor); i++) {
+				if (f_desc->table[i].vfile == nullptr) {
+					pfd = &f_desc->table[i];
+					if (i >= f_desc->count) f_desc->count = i + 1;
+					pfd->vfile = file; // mark occupied
+					break;
+				}
 			}
 		}
 		if (!pfd) return -1;
 
 		files->pfiles[fd] = pfd;
-		pfd->vfile = file;
 		pfd->fd_mode = mode;
 		pfd->fd_pos = 0;
 		return fd;
@@ -381,15 +400,28 @@ stdsint ProcessBlock::Pipe(int pipefd[2]) {
 
 FileDescriptor* FileDescriptor_Clone(FileDescriptor* src) {
 	if (!src || !src->vfile) return nullptr;
-	for (stduint i = 0; i < 0x1000 / sizeof(FileDescriptor); i++) {
-		if (f_desc_table[i].vfile == nullptr) {
-			FileDescriptor* pfd = &f_desc_table[i];
-			*pfd = *src;
-			// Clone the vfs_file object to avoid shared destruction
-			vfs_file* nvfile = (vfs_file*)malc(sizeof(vfs_file));
-			if (!nvfile) return nullptr;
-			*nvfile = *(src->vfile);
-			pfd->vfile = nvfile;
+	FileDescriptor* pfd = nullptr;
+	{
+		auto f_desc = f_desc_info.Lock();
+		for (stduint i = 0; i < 0x1000 / sizeof(FileDescriptor); i++) {
+			if (f_desc->table[i].vfile == nullptr) {
+				pfd = &f_desc->table[i];
+				pfd->vfile = (vfs_file*)1; // reserve
+				break;
+			}
+		}
+	}
+	if (!pfd) return nullptr;
+
+	*pfd = *src;
+	// Clone the vfs_file object to avoid shared destruction
+	vfs_file* nvfile = (vfs_file*)malc(sizeof(vfs_file));
+	if (!nvfile) {
+		pfd->vfile = nullptr; // release reservation
+		return nullptr;
+	}
+	*nvfile = *(src->vfile);
+	pfd->vfile = nvfile;
 			// Increment ref count of the inode
 			if (pfd->vfile->f_inode) {
 				pfd->vfile->f_inode->ref_count++;
@@ -407,9 +439,6 @@ FileDescriptor* FileDescriptor_Clone(FileDescriptor* src) {
 				}
 			}
 			return pfd;
-		}
-	}
-	return nullptr;
 }
 
 //// ---- ---- SERVICE ---- ---- ////
@@ -417,9 +446,11 @@ FileDescriptor* FileDescriptor_Clone(FileDescriptor* src) {
 #if 1
 void serv_file_loop()// for IDE 0:0, 0:1
 {
-	f_desc_table = (FileDescriptor*)new byte[0x1000];
-	f_desc_table_count = nil;
-	::buffer = new byte[FSBUF_SIZE];
+	{
+		auto f_desc = f_desc_info.Lock();
+		f_desc->table = (FileDescriptor*)new byte[0x1000];
+		f_desc->count = 0;
+	}
 	constexpr stduint pathbuf_size = 512;
 	byte* const pathbuf = new byte[pathbuf_size];
 	//

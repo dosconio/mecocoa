@@ -76,6 +76,7 @@ stduint syscall(syscall_t callid, stduint para1, stduint para2, stduint para3) {
 }
 
 Mutex outc_mutex;// for con-io
+
 DEFSYSC sysc_OUTC(stduint ch, stduint len) {
 	// ploginfo("sysc_OUTC: ch = %[x], len = %[x]", ch, len);
 	MutexLocal mutex(&outc_mutex);
@@ -175,8 +176,11 @@ DEFSYSC sysc_REST(stduint unit, stduint time) {
 	}
 
 	auto th = Taskman::CurrentTB();
+	bool state_rupt = InterruptSaveDisable();
+
 	th->Block(ThreadBlock::BlockReason::BR_Resting); // Block the thread to wait for timer
 	SysTimer::Append(timeout, (stduint)th, (_tocall_ft)_TimerWakeUp);
+	InterruptRestore(state_rupt);
 	
 	Taskman::Schedule(true);
 	if (_sigset_raw(&th->pending_signals) & ~_sigset_raw(&th->blocked_signals)) {

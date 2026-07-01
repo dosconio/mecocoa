@@ -1253,11 +1253,18 @@ int Filesys::ReadPipe(vfs_file* file, void* buf, stduint count) {
 			dst[bytes_read++] = (byte)ch;
 		}
 		
-		// Wake up writers (after releasing lock to avoid holding lock during Unblock)
-		chan->lock.Release();
+		// Wake up writers (dequeue under lock to avoid corruption, then Unblock outside)
+		Queue<::ThreadBlock*> wake_list;
 		while (!chan->wq.isEmpty()) {
 			ThreadBlock* w_th = nullptr;
 			chan->wq.Dequeue(w_th);
+			if (w_th) wake_list.Enqueue(w_th);
+		}
+		chan->lock.Release();
+		
+		while (!wake_list.isEmpty()) {
+			ThreadBlock* w_th = nullptr;
+			wake_list.Dequeue(w_th);
 			if (w_th) {
 				w_th->Unblock(ThreadBlock::BlockReason::BR_SendMsg);
 			}
@@ -1302,11 +1309,18 @@ int Filesys::WritePipe(vfs_file* file, const void* buf, stduint count) {
 		int written = chan->buffer.out((const char*)(src + bytes_written), chunk);
 		bytes_written += written;
 		
-		// Wake up readers (after releasing lock)
-		chan->lock.Release();
+		// Wake up readers (dequeue under lock to avoid corruption, then Unblock outside)
+		Queue<::ThreadBlock*> wake_list;
 		while (!chan->rq.isEmpty()) {
 			ThreadBlock* r_th = nullptr;
 			chan->rq.Dequeue(r_th);
+			if (r_th) wake_list.Enqueue(r_th);
+		}
+		chan->lock.Release();
+		
+		while (!wake_list.isEmpty()) {
+			ThreadBlock* r_th = nullptr;
+			wake_list.Dequeue(r_th);
 			if (r_th) {
 				r_th->Unblock(ThreadBlock::BlockReason::BR_RecvMsg);
 			}

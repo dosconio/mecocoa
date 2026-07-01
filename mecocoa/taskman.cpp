@@ -537,6 +537,46 @@ static void _Exit_Cleanup(stduint pid)
 void Taskman::Idle() {
 	loop HALT();
 }
+
+static bool DeliverWaitResultAtomically(ProcessBlock* pparent, stduint child_pid, stduint exit_status) {
+	if (!pparent || !pparent->main_thread) return false;
+	ProcessBlock* taskman_pb = Taskman::Locate(Task_TaskMan);
+	if (!taskman_pb || !taskman_pb->main_thread) return false;
+
+	ThreadBlock* parent_th = pparent->main_thread;
+	ThreadBlock* taskman_th = taskman_pb->main_thread;
+
+	extern Spinlock comm_lock;
+	SpinlockLocal guard(&comm_lock);
+
+	if (!(parent_th->block_reason & ThreadBlock::BlockReason::BR_Waiting) ||
+		!(parent_th->block_reason & ThreadBlock::BlockReason::BR_RecvMsg)) {
+		return false;
+	}
+	if (!(parent_th->recv_fo_whom == taskman_th ||
+		(stduint)parent_th->recv_fo_whom == ANYPROC)) {
+		return false;
+	}
+
+	auto msg_to = (CommMsg*)SeekAddress(parent_th->parent_process, _IMM(parent_th->unsolved_msg));
+	if (!msg_to) return false;
+
+	stduint args[2] = { child_pid, exit_status };
+	stduint leng = minof((stduint)sizeof(args), msg_to->data.length);
+	if (leng) {
+		MccaMemCopyP((void*)msg_to->data.address, parent_th->parent_process, args, nullptr, leng);
+	}
+	msg_to->type = 0;
+	msg_to->src = taskman_th->tid;
+
+	parent_th->unsolved_msg = nullptr;
+	parent_th->recv_fo_whom = nullptr;
+	pparent->wait_for_pid = 0;
+	parent_th->Unblock(ThreadBlock::BlockReason::BR_Waiting);
+	parent_th->Unblock(ThreadBlock::BlockReason::BR_RecvMsg);
+	return true;
+}
+
 bool Taskman::Exit(ProcessBlock* p, stdsint exit_code)
 {
 	extern Spinlock scheduler_lock;
@@ -637,12 +677,12 @@ bool Taskman::Exit(ProcessBlock* p, stdsint exit_code)
 	bool parent_active = pparent && pparent->state == PBS::Active;
 
 	if (parent_active && pparent->isWaiting() && (pparent->wait_for_pid == 0 || pparent->wait_for_pid == pid)) {
-		pparent->main_thread->Unblock(ThreadBlock::BlockReason::BR_Waiting);
-		pparent->wait_for_pid = 0; // Reset after unblocking
-
-		syssend_async(parent_pid, &args, sizeof(args));
-
-		_Exit_Cleanup(pid); // Die completely
+		if (DeliverWaitResultAtomically(pparent, pid, _IMM(exit_code))) {
+			_Exit_Cleanup(pid); // Die completely
+		}
+		else {
+			p->state = PBS::Hanging; // Keep zombie if the WAIT reply cannot be delivered atomically
+		}
 	}
 	else if (!parent_active) {
 		_Exit_Cleanup(pid); // Parent is gone or exiting, die completely

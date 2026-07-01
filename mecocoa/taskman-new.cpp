@@ -1093,7 +1093,15 @@ ProcessBlock* Taskman::Exet(stduint parent, rostr usr_fullpath, char** usr_argv,
 	current_pb->main_thread->context.sp = new_sp;
 	#endif
 
-	current_pb->main_thread->unsolved_msg = nullptr;
+	{
+		extern Spinlock comm_lock;
+		SpinlockLocal guard(&comm_lock);
+		current_pb->main_thread->unsolved_msg = nullptr;
+		current_pb->main_thread->recv_fo_whom = nullptr;
+		current_pb->main_thread->send_to_whom = nullptr;
+		current_pb->main_thread->queue_send_queuehead = nullptr;
+		current_pb->main_thread->queue_send_queuenext = nullptr;
+	}
 	current_pb->main_thread->block_reason = ThreadBlock::BlockReason::BR_None;
 	
 	using TBS = ThreadBlock::State;

@@ -372,7 +372,8 @@ ThreadBlock* Taskman::PickNext() {
 }
 
 void ThreadBlock::Block(BlockReason reason) {
-	Taskman::DequeueReady(this);
+	SpinlockLocal guard(&scheduler_lock);
+	Taskman::DequeueReady(this, false);
 	state = State::Pended;
 	block_reason = BlockReason(block_reason | reason);
 }
