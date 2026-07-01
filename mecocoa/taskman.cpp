@@ -393,9 +393,10 @@ static void _Exit_Cleanup(stduint pid)
 	{
 		FMT_ConsoleMsg_FCLEANPROC req = {};
 		req.process_block = (pureptr_t)ppb;
-		stduint gui_ret = (stduint)-1;
-		syssend(Task_ConsoleVideo, &req, sizeof(req), _IMM(GraphicMsg::FCLEANPROC));
-		sysrecv(Task_ConsoleVideo, &gui_ret, sizeof(gui_ret));
+		__atomic_add_fetch(&ppb->ref_count, 1, __ATOMIC_SEQ_CST);
+		if (syssend_async(Task_ConsoleVideo, &req, sizeof(req), _IMM(GraphicMsg::FCLEANPROC))) {
+			ProcessBlock::Release(ppb);
+		}
 	}
 
 	// 2. Release TTY Binding
@@ -549,31 +550,51 @@ static bool DeliverWaitResultAtomically(ProcessBlock* pparent, stduint child_pid
 	extern Spinlock comm_lock;
 	SpinlockLocal guard(&comm_lock);
 
-	if (!(parent_th->block_reason & ThreadBlock::BlockReason::BR_Waiting) ||
-		!(parent_th->block_reason & ThreadBlock::BlockReason::BR_RecvMsg)) {
+	if (!(parent_th->block_reason & ThreadBlock::BlockReason::BR_Waiting)) {
 		return false;
 	}
-	if (!(parent_th->recv_fo_whom == taskman_th ||
-		(stduint)parent_th->recv_fo_whom == ANYPROC)) {
-		return false;
-	}
-
-	auto msg_to = (CommMsg*)SeekAddress(parent_th->parent_process, _IMM(parent_th->unsolved_msg));
-	if (!msg_to) return false;
-
 	stduint args[2] = { child_pid, exit_status };
-	stduint leng = minof((stduint)sizeof(args), msg_to->data.length);
-	if (leng) {
-		MccaMemCopyP((void*)msg_to->data.address, parent_th->parent_process, args, nullptr, leng);
-	}
-	msg_to->type = 0;
-	msg_to->src = taskman_th->tid;
 
-	parent_th->unsolved_msg = nullptr;
-	parent_th->recv_fo_whom = nullptr;
+	if (parent_th->block_reason & ThreadBlock::BlockReason::BR_RecvMsg) {
+		if (!(parent_th->recv_fo_whom == taskman_th ||
+			(stduint)parent_th->recv_fo_whom == ANYPROC)) {
+			return false;
+		}
+
+		auto msg_to = (CommMsg*)SeekAddress(parent_th->parent_process, _IMM(parent_th->unsolved_msg));
+		if (!msg_to) return false;
+
+		stduint leng = minof((stduint)sizeof(args), msg_to->data.length);
+		if (leng) {
+			MccaMemCopyP((void*)msg_to->data.address, parent_th->parent_process, args, nullptr, leng);
+		}
+		msg_to->type = 0;
+		msg_to->src = taskman_th->tid;
+
+		parent_th->unsolved_msg = nullptr;
+		parent_th->recv_fo_whom = nullptr;
+		pparent->wait_for_pid = 0;
+		parent_th->Unblock(ThreadBlock::BlockReason::BR_Waiting);
+		parent_th->Unblock(ThreadBlock::BlockReason::BR_RecvMsg);
+		return true;
+	}
+
+	if (parent_th->async_messages.Count() >= LIMIT_THREAD_AMSG) return false;
+	AsyncCommMsg* amsg = new AsyncCommMsg();
+	if (!amsg) return false;
+	byte* payload = new byte[sizeof(args)];
+	if (!payload) {
+		delete amsg;
+		return false;
+	}
+	MemCopyN(payload, args, sizeof(args));
+	amsg->msg.data.address = (stduint)payload;
+	amsg->msg.data.length = sizeof(args);
+	amsg->msg.type = 0;
+	amsg->msg.src = taskman_th->tid;
+	parent_th->async_messages.Append(amsg);
 	pparent->wait_for_pid = 0;
 	parent_th->Unblock(ThreadBlock::BlockReason::BR_Waiting);
-	parent_th->Unblock(ThreadBlock::BlockReason::BR_RecvMsg);
 	return true;
 }
 
@@ -675,6 +696,7 @@ bool Taskman::Exit(ProcessBlock* p, stdsint exit_code)
 	// Handle Self (Notify Parent or become Zombie)
 	using PBS = ProcessBlock::State;
 	bool parent_active = pparent && pparent->state == PBS::Active;
+	bool parent_is_nonwait_kernel_owner = parent_pid == Task_Kernel && pid != Task_Init;
 
 	if (parent_active && pparent->isWaiting() && (pparent->wait_for_pid == 0 || pparent->wait_for_pid == pid)) {
 		if (DeliverWaitResultAtomically(pparent, pid, _IMM(exit_code))) {
@@ -683,6 +705,9 @@ bool Taskman::Exit(ProcessBlock* p, stdsint exit_code)
 		else {
 			p->state = PBS::Hanging; // Keep zombie if the WAIT reply cannot be delivered atomically
 		}
+	}
+	else if (parent_is_nonwait_kernel_owner) {
+		_Exit_Cleanup(pid); // Kernel-owned helper processes are not reaped through wait()
 	}
 	else if (!parent_active) {
 		_Exit_Cleanup(pid); // Parent is gone or exiting, die completely
@@ -844,7 +869,6 @@ void _Comment(R0) serv_task_loop()
 				break;
 			}
 			Taskman::Exit(Taskman::Locate(to_args[0]), to_args[1]);
-			_Exit_Cleanup(to_args[0]);
 			break;
 		case TaskmanMsg::FORK: // (pid, cframe)
 			// ploginfo("Taskman fork: %u", to_args[0]);

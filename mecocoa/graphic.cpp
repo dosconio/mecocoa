@@ -1004,8 +1004,8 @@ void serv_graf_loop() {
 			ret = target_pb ? 0 : (stduint)-1;
 			if (target_pb) {
 				Global_CleanProcessForms(target_pb);
+				ProcessBlock::Release(target_pb);
 			}
-			syssend_async(sig_src, (void*)&ret, sizeof(ret));
 			break;
 		}
 		case GraphicMsg::VCON_CREATE:

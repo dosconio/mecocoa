@@ -96,14 +96,15 @@ stduint ProcessBlock::Rdwt(bool wr_type, stduint fid, Slice slice)
 {
 	auto files = this->fileman.Lock();
 	_Comment(const) ProcessBlock* pb = this;
+	if (!pb || this->state == ProcessBlock::State::Expiring || this->state == ProcessBlock::State::Invalid) {
+		return 0;
+	}
 	if (fid >= files->pfiles.Count()) {
-		plogwarn("ProcessBlock::Rdwt BOOM %d", fid);
+		plogwarn("ProcessBlock::Rdwt BOOM pid=%u state=%u fd=%u count=%u",
+			this->getID(), this->state, fid, files->pfiles.Count());
 		return 0;
 	}
 	if (!pb || fid >= files->pfiles.Count() || !files->pfiles[fid] || !files->pfiles[fid]->vfile) return 0;
-	if (this->state == ProcessBlock::State::Invalid) {
-		return 0;
-	}
 	if (wr_type) {
 		int mode = files->pfiles[fid]->fd_mode & O_ACCMODE;
 		if (mode != O_WRONLY && mode != O_RDWR) return 0;
@@ -491,7 +492,15 @@ void serv_file_loop()// for IDE 0:0, 0:1
 			ProcessBlock* init_p = Taskman::CreateFile(("/md0/init"), RING_U, Task_Kernel);
 			if (init_p) {
 				init_p->main_thread->name = "init";
-				*init_p->focus_tty.Lock() = vttys[0];
+				{
+					auto focus_tty = init_p->focus_tty.Lock();
+					*focus_tty = vttys[0];
+					if (*focus_tty) {
+						init_p->Open("/dev/tty", O_RDWR); // stdin
+						init_p->Open("/dev/tty", O_RDWR); // stdout
+						init_p->Open("/dev/tty", O_RDWR); // stderr
+					}
+				}
 				Taskman::Append(init_p);
 				Taskman::AppendThread(init_p->main_thread);
 			}
