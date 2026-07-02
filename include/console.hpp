@@ -18,6 +18,7 @@ public:\
 #include <cpp/Device/_Video.hpp>
 #include <c/driver/mouse.h>
 #include <cpp/Witch/Form.hpp>
+#include <cpp/Witch/TextChrome.hpp>
 
 extern Dchain ttys, vttys;
 struct vtty_type_t {

@@ -51,6 +51,7 @@ asmfile=prehost/$(arch)/atx-x64.asm\
 cppfile=\
 	$(ulibpath)/cpp/color.cpp \
 	$(ulibpath)/cpp/Witch/Form.cpp \
+	$(ulibpath)/cpp/Witch/_TextChrome.cpp \
 	\
 	$(ulibpath)/cpp/Device/ACPI.cpp \
 	$(ulibpath)/cpp/Device/Bus/PCI.cpp \

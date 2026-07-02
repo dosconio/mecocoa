@@ -29,9 +29,8 @@ void _Comment(R1) serv_shell_process() {
 		// Register the process globally to get a valid PID
 		Taskman::Append(p);
 		// Lock the process state during complex environment setup
-		IC.enInterrupt(false);
 		p->state = ProcessBlock::State::Hanging;
-
+		
 		auto focus_tty = p->focus_tty.Lock();
 		*focus_tty = tty_target;
 		if (*focus_tty) {
@@ -47,6 +46,7 @@ void _Comment(R1) serv_shell_process() {
 		
 		// Environment is ready, restore state and start the application thread
 		p->state = ProcessBlock::State::Active;
+		IC.enInterrupt(false);
 		Taskman::AppendThread(p->main_thread);
 		IC.enInterrupt(true);
 	}

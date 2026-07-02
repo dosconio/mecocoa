@@ -315,6 +315,40 @@ bool Taskman::ExitCurrent(stduint code) {
 // - heaps, stacks
 // - paging
 // - threads?
+static void DetachProcessTTYMembership(ProcessBlock* ppb, stduint pid)
+{
+	if (!ppb) return;
+	#if _GUI_ENABLE
+	auto focus_tty = ppb->focus_tty.Lock();
+	if (*focus_tty) {
+		bool is_tty_valid = false;
+		extern uni::Dchain vttys;
+		extern Mutex console_waiters_mutex;
+		MutexLocal vttys_guard(&console_waiters_mutex);
+		for (auto nod = vttys.Root(); nod; nod = nod->next) {
+			if (nod == *focus_tty) {
+				is_tty_valid = true;
+				break;
+			}
+		}
+
+		if (is_tty_valid && (*focus_tty)->type) {
+			auto pblock = (vtty_type_t*)(*focus_tty)->type;
+			for (stdsint i = pblock->proc_group.Count() - 1; i >= 0; --i) {
+				if (pblock->proc_group[i] == pid) {
+					pblock->proc_group.Remove(i);
+					break;
+				}
+			}
+			if (pblock->master_pid == pid || (pblock->proc_group.Count() == 0 && pblock->master_pid != 0)) {
+				pblock->master_pid = 0;
+			}
+		}
+		*focus_tty = nullptr;
+	}
+	#endif
+}
+
 static void _Exit_Cleanup(stduint pid)
 {
 	extern Spinlock scheduler_lock;
@@ -398,38 +432,10 @@ static void _Exit_Cleanup(stduint pid)
 			ProcessBlock::Release(ppb);
 		}
 	}
+	#endif
 
 	// 2. Release TTY Binding
-	{
-		auto focus_tty = ppb->focus_tty.Lock();
-		if (*focus_tty) {
-			bool is_tty_valid = false;
-			extern uni::Dchain vttys;
-			extern Mutex console_waiters_mutex;
-			MutexLocal vttys_guard(&console_waiters_mutex);
-			for (auto nod = vttys.Root(); nod; nod = nod->next) {
-				if (nod == *focus_tty) {
-					is_tty_valid = true;
-					break;
-				}
-			}
-
-			if (is_tty_valid && (*focus_tty)->type) {
-				auto pblock = (vtty_type_t*)(*focus_tty)->type;
-				for (stdsint i = pblock->proc_group.Count() - 1; i >= 0; --i) {
-					if (pblock->proc_group[i] == pid) {
-						pblock->proc_group.Remove(i);
-						break;
-					}
-				}
-				if (pblock->master_pid == pid || (pblock->proc_group.Count() == 0 && pblock->master_pid != 0)) {
-					pblock->master_pid = 0;
-				}
-			}
-			*focus_tty = nullptr;
-		}
-	}
-	#endif
+	DetachProcessTTYMembership(ppb, pid);
 
 	// 3. Unlink all threads from IPC queues (but don't delete them yet)
 	ThreadBlock* th_ptr = ppb->thread_list_head;
@@ -713,6 +719,7 @@ bool Taskman::Exit(ProcessBlock* p, stdsint exit_code)
 		_Exit_Cleanup(pid); // Parent is gone or exiting, die completely
 	}
 	else {
+		DetachProcessTTYMembership(p, pid);
 		p->state = PBS::Hanging; // Become a Zombie and wait for parent to call Wait()
 	}
 

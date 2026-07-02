@@ -429,7 +429,12 @@ struct FMT_ConsoleMsg_FNEW {
 };
 
 static stdsint GraphicMsg_FNEW(const FMT_ConsoleMsg_FNEW* data, ProcessBlock* pb) {
-	Rectangle rect; MccaMemCopyP(&rect, NULL, data->usrp_rect, pb, sizeof(rect));
+	Rectangle rect;
+	auto mmcp_len = MccaMemCopyP(&rect, NULL, data->usrp_rect, pb, sizeof(rect));
+	if (mmcp_len != sizeof(rect)) {
+		plogerro("GraphicMsg_FNEW: invalid data length (%u)", mmcp_len);
+		return -1;
+	}
 	ploginfo("FNEW: new form (%u,%u)", rect.width, rect.height);
 	stdsint slot_idx = ProcFormsFindEmptyOrAppend(pb);
 	if (slot_idx == -1) return -1;
@@ -757,11 +762,13 @@ _RET_CreateVconsole Consman::CreateVconsole(const Rectangle& rect, rostr title) 
 	pform->AppendControl(pcon);
 	pform->setSheet(global_layman, rect, new Color[rect.getArea()]);
 	pform->setFocus(pcon);
+	// ploginfo("CreateVconsole: form ready");
 
 	IC.enInterrupt(false);
 	global_layman.Append(pform);
 	Consman::SwitchForm(pform);
 	IC.enInterrupt(true);
+	// ploginfo("CreateVconsole: attached to layman");
 
 	pcon->Start();
 
@@ -769,6 +776,7 @@ _RET_CreateVconsole Consman::CreateVconsole(const Rectangle& rect, rostr title) 
 	Dnode* pnode = VTTY_Append(pcon);
 	ret.tty_node = pnode;
 	ret.tty_no = pnode ? vttys.Locate((pureptr_t)pcon, false) : 0;
+	// ploginfo("CreateVconsole: done tty_no=%u", ret.tty_no);
 	return ret;
 }
 
