@@ -163,7 +163,7 @@ prehost/$(arch)/fatvhd.ignore: build_util
 
 $(uobjpath)/mcca-$(arch)/memodisk.o: prehost/$(arch)/fatvhd.ignore
 
-qemu_args=-smp 4,cores=2,threads=2 \
+qemu_args=-smp 4,cores=2,threads=2 -M pc \
 	-drive format=raw,file=$(outs),if=floppy \
 	-boot order=a -m 1G\
 	-drive file=$(ubinpath)/fixed2.vhd,format=vpc,if=none,id=disk0 \

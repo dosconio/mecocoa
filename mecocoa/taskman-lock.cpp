@@ -51,7 +51,7 @@ void Mutex::Acquire() {
 
 	if (this->locked) {
 		ThreadBlock* crt = Taskman::CurrentTB();
-		if (!this->wait_queue.isFull()) {
+		if constexpr(1) { // (!this->wait_queue.isFull()) { <-- Queue auto-enlarging
 			crt->Block(ThreadBlock::BlockReason::BR_Lock);
 			this->wait_queue.Enqueue(crt);
 			Taskman::SleepAndRelease(&this->guard);
@@ -91,7 +91,7 @@ void Semaphore::Acquire() {
 	}
 	else {
 		ThreadBlock* crt = Taskman::CurrentTB();
-		if (!this->wait_queue.isFull()) {
+		if constexpr(1) { // (!this->wait_queue.isFull()) { <-- Queue auto-enlarging
 			// Transition through the shared Block() path so lock waiters
 			// follow the same scheduler/block_reason semantics as other sleepers.
 			crt->Block(ThreadBlock::BlockReason::BR_Lock);
