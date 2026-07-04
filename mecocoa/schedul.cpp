@@ -36,7 +36,7 @@ ThreadBlock* volatile PCU_CORES_switching_out_threads[PCU_CORES_MAX] = {};
 #ifdef _ARC_x86 // x86:
 #endif
 
-Dchain Taskman::chain = { DnodeHeapFreeSimple };;// ordered by pid
+Dchain Taskman::chain = {nullptr}; // { DnodeHeapFreeSimple };// ordered by pid
 stduint Taskman::min_available_pid;// in chain
 Dnode* Taskman::min_available_left;;
 

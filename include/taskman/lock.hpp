@@ -7,8 +7,6 @@ struct Spinlock {
 	void Release(bool old_if);
 };
 
-bool InterruptSaveDisable();
-void InterruptRestore(bool was_enabled);
 
 struct SpinlockLocal {
 	bool old_if;

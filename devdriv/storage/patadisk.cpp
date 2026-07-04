@@ -8,10 +8,12 @@
 #include "../../include/mecocoa.hpp"
 #include <c/storage/harddisk.h>
 #include <c/format/filesys.h>
+#include <cpp/atomic>
 
 _ESYM_C void R_HDD_INIT();
 
 #if _MCCA == 0x8632
+
 #if 1
 __attribute__((section(".init.rmod")))
 RMOD_LIST RMOD_LIST_HDD{
@@ -22,7 +24,7 @@ RMOD_LIST RMOD_LIST_HDD{
 
 Harddisk_PATA* disks[MAX_DRIVES];// referenced
 static char hdd_buf[byteof(**disks) * numsof(disks)];
-static byte lock = 1;
+static uni::Atomic<byte> lock[2] = {1, 1};
 static char* single_sector = NULL;// file-hd used buffer
 
 static void register_pata_storage_nodes() {
@@ -49,11 +51,10 @@ _ESYM_C void Handint_HDD1_Entry();
 void Handint_HDD1()
 {
 	if (disks[2]) disks[2]->getStatus(); // Clear Secondary IDE Channel interrupt
-	if (lock) {
+	if (lock[1].exchange(1)) {
 		IC.SendEOI(IRQ_ATA_DISK1);
 		return;
 	}
-	lock = 1;
 	rupt_proc(Task_Hdd_Serv, IRQ_ATA_DISK1);
 	IC.SendEOI(IRQ_ATA_DISK1);
 }
@@ -84,11 +85,10 @@ void R_HDD_INIT() {
 void Handint_HDD()// HDD Master
 {
 	if (disks[0]) disks[0]->getStatus();// innpb(REG_STATUS);
-	if (lock) {
+	if (lock[0].exchange(1)) {
 		IC.SendEOI(IRQ_ATA_DISK0);
 		return;
 	}
-	lock = 1;
 	rupt_proc(Task_Hdd_Serv, IRQ_ATA_DISK0);
 	IC.SendEOI(IRQ_ATA_DISK0); // Acknowledge interrupt
 }
@@ -120,7 +120,8 @@ static bool hd_int_wait() {
 	syscall(syscall_t::COMM, COMM_RECV, INTRUPT, _IMM(&msg));
 	return true;
 }
-static void hd_rw_foreback() { lock = 0; }
+static void hd_rw_foreback_0() { lock[0] = 0; }
+static void hd_rw_foreback_1() { lock[1] = 0; }
 
 // Use after print_identify_info
 stduint uni::Harddisk_PATA::getUnits() {
@@ -192,7 +193,7 @@ static void hd_open(Harddisk_PATA& hd) { // 0x00
 	HdiskCommand cmd = {};
 	cmd.command = (hd.Block_Size == 2048) ? ATAPI_CMD_IDENTIFY : ATA_IDENTIFY;
 	cmd.device = MAKE_DEVICE_REG(0, low_id, 0);
-	lock = 0;
+	lock[hd.getHigID()] = 0;
 	hd.Hdisk_OUT(&cmd);
 	hd_int_wait();
 	word io_base = hd.getHigID() == 0 ? PORT_IDE_CommandBlock_0 : PORT_IDE_CommandBlock_1;
@@ -286,7 +287,7 @@ void serv_dev_hd_loop()
 			disks[i]->fn_cmd_wait = hd_cmd_wait;
 			disks[i]->fn_int_wait = hd_int_wait;
 			disks[i]->fn_lup_wait = waitfor;
-			disks[i]->fn_feedback = hd_rw_foreback;
+			disks[i]->fn_feedback = (disks[i]->getHigID() == 0) ? hd_rw_foreback_0 : hd_rw_foreback_1;
 			disks[i]->react_type = Harddisk_PATA::ReactType::Rupt;
 		}
 	}

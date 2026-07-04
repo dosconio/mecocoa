@@ -81,6 +81,7 @@ DEFSYSC sysc_OUTC(stduint ch, stduint len) {
 	// ploginfo("sysc_OUTC: ch = %[x], len = %[x]", ch, len);
 	MutexLocal mutex(&outc_mutex);
 	auto th = Taskman::CurrentTB();
+	KASSERT(th != nullptr);
 	if (auto pid = th->parent_process) {
 		auto focus_tty = pid->focus_tty.Lock();
 		if (auto con = *focus_tty ? (Console_t*)(*focus_tty)->offs : 0)
@@ -113,6 +114,7 @@ DEFSYSC sysc_INNC(stduint blocked) {
 	int ch = -1;
 	// Read from its TTY, return -1 if the TTY is occupied
 	auto th = Taskman::CurrentTB();
+	KASSERT(th != nullptr);
 	auto ppb = th->parent_process;
 	if (blocked) {
 		msgbuf[3] = ppb->getID();
@@ -176,11 +178,11 @@ DEFSYSC sysc_REST(stduint unit, stduint time) {
 	}
 
 	auto th = Taskman::CurrentTB();
-	bool state_rupt = InterruptSaveDisable();
+	bool state_rupt = IC.TryMaskInterrupt();
 
 	th->Block(ThreadBlock::BlockReason::BR_Resting); // Block the thread to wait for timer
 	SysTimer::Append(timeout, (stduint)th, (_tocall_ft)_TimerWakeUp);
-	InterruptRestore(state_rupt);
+	if (state_rupt) IC.enInterrupt(true);
 	
 	Taskman::Schedule(true);
 	if (_sigset_raw(&th->pending_signals) & ~_sigset_raw(&th->blocked_signals)) {

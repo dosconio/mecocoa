@@ -78,6 +78,7 @@ void rupt_proc(stduint tid, stduint rupt_no)
 static bool msg_send_will_deadlock(ThreadBlock* fo_th, ThreadBlock* to_th)
 {
 	// e.g. A->B->C->A
+	KASSERT(to_th != nullptr);
 	ThreadBlock* crt = to_th;
 	while (true) {
 		if (crt->block_reason == ThreadBlock::BlockReason::BR_SendMsg) {
@@ -145,6 +146,7 @@ static void DropQueuedSender(ThreadBlock* to_th, ThreadBlock* prev, ThreadBlock*
 int msg_send(ThreadBlock* fo_th, stduint too, _Comment(vaddr) CommMsg* msg, bool is_async)
 {
 	SpinlockLocal guard(&comm_lock);
+	KASSERT(fo_th != nullptr);
 	if (!too) return 2;
 	ThreadBlock* to_th = Taskman::LocateThread(too);
 	if (!to_th) {

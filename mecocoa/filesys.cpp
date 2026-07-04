@@ -38,6 +38,7 @@ namespace uni {
 			}
 			else {
 				vfs_dentry* p = parent->d_first_child;
+				KASSERT(p != nullptr);
 				while (p->d_next_sibling) p = p->d_next_sibling;
 				p->d_next_sibling = dentry;
 			}
@@ -47,6 +48,7 @@ namespace uni {
 
 	static vfs_inode* alloc_inode(vfs_super_block* sb) {
 		vfs_inode* inode = new vfs_inode();
+		KASSERT(inode != nullptr);
 		MemSet(inode, 0, sizeof(vfs_inode));
 		inode->i_sb = sb;
 		inode->ref_count = 1;
@@ -125,6 +127,7 @@ void Filesys::Initialize() {
 }
 
 void Filesys::Register(file_system_type* fs_type) {
+	KASSERT(fs_type != nullptr);
 	fs_type->next = registered_filesystems;
 	registered_filesystems = fs_type;
 }

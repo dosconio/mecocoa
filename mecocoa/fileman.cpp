@@ -449,7 +449,7 @@ void serv_file_loop()// for IDE 0:0, 0:1
 {
 	{
 		auto f_desc = f_desc_info.Lock();
-		f_desc->table = (FileDescriptor*)new byte[0x1000];
+		f_desc->table = (FileDescriptor*)new byte[0x1000]();
 		f_desc->count = 0;
 	}
 	constexpr stduint pathbuf_size = 512;

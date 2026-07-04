@@ -16,6 +16,12 @@
 
 #define _SYS_MULTICORE 1
 
+#if 1
+#define KASSERT(x) do { if (!(x)) plogerro("assert: %s", #x); } while (0)
+#else
+#define KASSERT(x) ((void)0)
+#endif
+
 //
 
 #ifndef _STYLE_RUST

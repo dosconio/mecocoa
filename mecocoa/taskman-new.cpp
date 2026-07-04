@@ -25,6 +25,7 @@ struct AuxVector {
 
 #define DEFAULT_PATH "PATH=/md0:/mnt/ide0.4/apps"
 static stduint _Taskman_Setup_Stack(ProcessBlock* pb, ProcessBlock* parent, char** usr_argv, char** usr_envp, stduint entry, stduint phdr, stduint phnum, stduint phent) {
+	KASSERT(pb != nullptr && pb->main_thread != nullptr);
 	stduint argc = 0, envc = 0;
 	stduint str_len = 0;
 	stduint* argv_ptrs = nullptr, * envp_ptrs = nullptr;

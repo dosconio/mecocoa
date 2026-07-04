@@ -10,6 +10,7 @@
 #include <cpp/Device/_Timer.hpp>
 #include <cpp/trait/BlockTrait.hpp>
 #include <cpp/vector>
+#include <cpp/atomic>
 
 #include "fileman.hpp"
 #include "syscall.hpp"
@@ -287,7 +288,7 @@ public: // Identity / Config
 	} interface_type = InterfaceType::MCCA4;
 
 public: // Lifecycle
-	volatile int ref_count = 1;
+	uni::Atomic<int> ref_count = 1;
 	enum class State : byte {
 		Active = 0,
 		Expiring,

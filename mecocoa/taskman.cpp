@@ -131,7 +131,8 @@ auto Taskman::AllocateTask() -> ProcessBlock* {
 
 void ProcessBlock::Release(ProcessBlock* pb) {
 	if (!pb) return;
-	if (__atomic_sub_fetch(&pb->ref_count, 1, __ATOMIC_SEQ_CST) == 0) {
+	KASSERT(pb->ref_count > 0);
+	if (--pb->ref_count == 0) {
 		ploginfo("ProcessBlock::Release() [%d] [%p]", pb->getID(), pb);
 		pb->~ProcessBlock();
 		mempool.deallocate(pb);
@@ -145,7 +146,7 @@ ProcessBlock* ProcessBlock::Acquire(stduint tid) {
 		if (th->tid == tid) {
 			if (th->parent_process && th->parent_process->state != ProcessBlock::State::Invalid) {
 				ProcessBlock* pb = th->parent_process;
-				__atomic_add_fetch(&pb->ref_count, 1, __ATOMIC_SEQ_CST);
+				++pb->ref_count;
 				return pb;
 			}
 			break;
@@ -160,7 +161,7 @@ ProcessBlock* ProcessBlock::AcquireByPID(stduint pid) {
 		auto pb = cast<ProcessBlock*>(nod->offs);
 		if (pb->pid == pid) {
 			if (pb->state != ProcessBlock::State::Invalid) {
-				__atomic_add_fetch(&pb->ref_count, 1, __ATOMIC_SEQ_CST);
+				++pb->ref_count;
 				return pb;
 			}
 			break;
@@ -176,7 +177,7 @@ ProcessBlock* ProcessBlock::AcquireActive(stduint tid) {
 		if (th->tid == tid) {
 			if (th->parent_process && th->parent_process->state == ProcessBlock::State::Active) {
 				ProcessBlock* pb = th->parent_process;
-				__atomic_add_fetch(&pb->ref_count, 1, __ATOMIC_SEQ_CST);
+				++pb->ref_count;
 				return pb;
 			}
 			break;
@@ -191,7 +192,7 @@ ProcessBlock* ProcessBlock::AcquireActiveByPID(stduint pid) {
 		auto pb = cast<ProcessBlock*>(nod->offs);
 		if (pb->pid == pid) {
 			if (pb->state == ProcessBlock::State::Active) {
-				__atomic_add_fetch(&pb->ref_count, 1, __ATOMIC_SEQ_CST);
+				++pb->ref_count;
 				return pb;
 			}
 			break;
@@ -427,7 +428,7 @@ static void _Exit_Cleanup(stduint pid)
 	{
 		FMT_ConsoleMsg_FCLEANPROC req = {};
 		req.process_block = (pureptr_t)ppb;
-		__atomic_add_fetch(&ppb->ref_count, 1, __ATOMIC_SEQ_CST);
+		++ppb->ref_count;
 		if (syssend_async(Task_ConsoleVideo, &req, sizeof(req), _IMM(GraphicMsg::FCLEANPROC))) {
 			ProcessBlock::Release(ppb);
 		}
@@ -466,7 +467,7 @@ static void _Exit_Cleanup(stduint pid)
 
 	// Wait until all external ProcessBlock holders have released their refs
 	// before tearing down paging-backed resources.
-	while (__atomic_load_n(&ppb->ref_count, __ATOMIC_SEQ_CST) > 1) {
+	while (ppb->ref_count > 1) {
 		Taskman::Schedule(true);
 	}
 
@@ -883,7 +884,7 @@ void _Comment(R0) serv_task_loop()
 				auto child_ppb = Taskman::CreateFork(Taskman::Locate(to_args[0]), (CallgateFrame*)to_args[1]);
 				ret = child_ppb ? child_ppb->getID() : ~_IMM0;
 			}
-			syssend(sig_src, (void*)&ret, sizeof(ret));
+			syssend_async(sig_src, (void*)&ret, sizeof(ret));
 			break;
 		case TaskmanMsg::WAIT: // (parent_pid, target_pid) -> (*)
 			// ploginfo("Taskman wait: %u %x", to_args[0], to_args[1]);
@@ -892,13 +893,13 @@ void _Comment(R0) serv_task_loop()
 		case TaskmanMsg::EXEC:// (pid, &usr:fullpath, &usr:argv, &usr:envp) -> 0(success)
 			pb = Taskman::Exec(to_args[0], (rostr)to_args[1], (char**)to_args[2], (char**)to_args[3]);
 			ret = pb ? pb->getID() : 0;
-			syssend(sig_src, (void*)&ret, sizeof(ret));
+			syssend_async(sig_src, (void*)&ret, sizeof(ret));
 			break;
 		case TaskmanMsg::EXET:// (pid, &usr:fullpath, &usr:argv, &usr:envp)
 			pb = Taskman::Exet(to_args[0], (rostr)to_args[1], (char**)to_args[2], (char**)to_args[3]);
 			if (!pb || sig_src != to_args[0]) {
 				ret = pb ? 0 : ~_IMM0;
-				syssend(sig_src, (void*)&ret, sizeof(ret));
+				syssend_async(sig_src, (void*)&ret, sizeof(ret));
 			}
 			break;
 

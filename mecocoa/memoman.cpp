@@ -94,6 +94,7 @@ void* Memory::allocate(stduint siz, stduint alignment, stduint boundary) {
 	void* ret = nil;
 	// find a available page in bitmap
 	siz >>= 12;
+	KASSERT(Memory::pagebmap != nullptr);
 	if (!Memory::pagebmap->avail_pointer) {
 		plogerro("no avail page");
 		return nullptr;
@@ -207,6 +208,8 @@ _ESYM_C void* malloc(size_t size) {
 	auto ret = (mempool.allocate(size));
 	if (!ret)
 		printlog(ret ? _LOG_INFO : _LOG_ERROR, "malloc %u at 0x%[x]", size, ret);
+	else
+		MemSet(ret, 0xCC, size);// DEBUG
 	return ret;
 }
 _ESYM_C void* calloc(size_t nmemb, size_t size) {

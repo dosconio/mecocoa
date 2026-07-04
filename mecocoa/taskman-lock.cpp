@@ -4,33 +4,8 @@
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 #include "../include/mecocoa.hpp"
 
-bool InterruptSaveDisable() {
-	#if (_MCCA & 0xFF00) == 0x8600
-	stduint flags = getFlags();
-	bool was_enabled = (byte)cast<REG_FLAG_t>(flags).IF != 0;
-	if (was_enabled) {
-		IC.enInterrupt(false);
-	}
-	return was_enabled;
-	#elif (_MCCA & 0xFF00) == 0x1000
-	bool was_enabled = getInterrupt() != 0;
-	if (was_enabled) {
-		IC.enInterrupt(false);
-	}
-	return was_enabled;
-	#else
-	return false;
-	#endif
-}
-
-void InterruptRestore(bool was_enabled) {
-	if (was_enabled) {
-		IC.enInterrupt(true);
-	}
-}
-
 bool Spinlock::Acquire() {
-	bool state_rupt = InterruptSaveDisable();
+	bool state_rupt = IC.TryMaskInterrupt();
 	while (__atomic_exchange_n(&this->locked, 1, __ATOMIC_ACQUIRE) != 0) {
 		#if (_MCCA & 0xFF00) == 0x8600
 		asm volatile("pause" ::: "memory");
@@ -42,7 +17,7 @@ bool Spinlock::Acquire() {
 void Spinlock::Release(bool old_if) {
 	this->cpu_id = -1;
 	__atomic_store_n(&this->locked, 0, __ATOMIC_RELEASE);
-	InterruptRestore(old_if);
+	if (old_if) IC.enInterrupt(true);
 }
 
 
@@ -56,7 +31,7 @@ void Mutex::Acquire() {
 			this->wait_queue.Enqueue(crt);
 			Taskman::SleepAndRelease(&this->guard);
 		}
-		InterruptRestore(old_if);
+		if (old_if) IC.enInterrupt(true);
 	}
 	else {
 		this->locked = 1;
@@ -100,7 +75,7 @@ void Semaphore::Acquire() {
 			// Yield CPU: puts thread to sleep, releases spinlock, and switches context
 			Taskman::SleepAndRelease(&this->guard);
 		}
-		InterruptRestore(old_if); // Re-enable interrupts if they were originally enabled
+		if (old_if) IC.enInterrupt(true); // Re-enable interrupts if they were originally enabled
 	}
 }
 

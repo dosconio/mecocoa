@@ -48,9 +48,9 @@ static constexpr stduint kAcpiHighWindowBase = 0x3FC00000;
 static constexpr stduint kAcpiHighWindowSize = 0x00400000;
 
 #elif _MCCA == 0x8664
-
+#if defined(_UEFI)
 extern UefiData uefi_data;
-
+#endif
 #endif
 
 #if (_MCCA & 0xFF00) == 0x8600
@@ -469,7 +469,7 @@ bool Memory::initialize(stduint eax, byte* ebx) {
 		break;
 		#endif
 
-	#if _MCCA == 0x8664
+	#if _MCCA == 0x8664 && defined(_UEFI)
 	case 'UEFI':
 		acpi_rsdp_addr = _IMM(uefi_data.acpi_table);
 		parse_uefi(*reinterpret_cast<MemoryMap*>(ebx));
