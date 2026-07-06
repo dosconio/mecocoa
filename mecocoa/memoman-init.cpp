@@ -380,9 +380,10 @@ static void log_acpi_topology(stduint rsdp_addr) {
 		rsdp_addr, rsdp->revision, rsdp->rsdt_address, rsdp->xsdt_address);
 	if (acpi_madt_addr) {
 		ploginfo("[ACPI] MADT found at %[x], CPU count=%u", acpi_madt_addr, acpi_cpu_count);
-		for0(i, acpi_cpu_count) {
-			ploginfo("[ACPI] CPU%u LAPIC ID=%[x]", i, acpi_cpu_lapic_ids[i]);
-		}
+		// [s]
+		// for0(i, acpi_cpu_count) {
+		// 	ploginfo("[ACPI] CPU%u LAPIC ID=%[x]", i, acpi_cpu_lapic_ids[i]);
+		// }
 	}
 	else {
 		plogwarn("[ACPI] MADT not found from RSDP");

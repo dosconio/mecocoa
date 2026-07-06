@@ -141,7 +141,10 @@ static void check_and_deliver_signals_generic(RegisterContext& ctx) {
 			Taskman::ExitCurrent(128 + signo);
 			break;
 		case SIG_ACT_STOP:
-			// Suspend the thread
+			// Suspend the thread (bypasses Block() -- verify no ready-queue corruption)
+			if (crt->queue_state_next || crt->queue_state_prev)
+				plogerro("[HYP-B] SIG_ACT_STOP: TID%u still in ready queue (next=%p prev=%p), Block() skipped",
+					crt->getID(), crt->queue_state_next, crt->queue_state_prev);
 			crt->state = ThreadBlock::State::Pended;
 			crt->block_reason = ThreadBlock::BlockReason::BR_Waiting;
 			Taskman::Schedule(true);

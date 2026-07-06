@@ -50,7 +50,8 @@ _ESYM_C void Handint_HDD1_Entry();
 
 void Handint_HDD1()
 {
-	if (disks[2]) disks[2]->getStatus(); // Clear Secondary IDE Channel interrupt
+	if (disks[2]) disks[2]->getStatus();
+	else if (disks[3]) disks[3]->getStatus();
 	if (lock[1].exchange(1)) {
 		IC.SendEOI(IRQ_ATA_DISK1);
 		return;
@@ -84,9 +85,11 @@ void R_HDD_INIT() {
 
 void Handint_HDD()// HDD Master
 {
-	if (disks[0]) disks[0]->getStatus();// innpb(REG_STATUS);
+	if (disks[0]) disks[0]->getStatus();
+	else if (disks[1]) disks[1]->getStatus();
 	if (lock[0].exchange(1)) {
 		IC.SendEOI(IRQ_ATA_DISK0);
+		plogwarn(">>> Handint_HDD");
 		return;
 	}
 	rupt_proc(Task_Hdd_Serv, IRQ_ATA_DISK0);
@@ -273,6 +276,14 @@ bool Harddisk_PATA_Paged::Write(stduint BlockIden, const void* Sors) {
 static stduint args[4];
 Harddisk_PATA_Paged* paged_disks[MAX_DRIVES];
 
+static void log_read_disk() {
+	static stduint last_sec = 0;
+	if (args[1] != last_sec + 1) {
+		plogwarn("PATA%u Read %u -> %p", args[0], args[1], single_sector);
+	}
+	last_sec = args[1];
+}
+
 int fat_time = 0;
 void serv_dev_hd_loop()
 {
@@ -361,6 +372,8 @@ void serv_dev_hd_loop()
 		case FiledevMsg::READ:// [diskno, lba]
 		{
 			// ploginfo("[Hrddisk] device %u: read %u", args[0], args[1]);
+			// log_read_disk();
+
 			stduint ack = (args[0] < numsof(disks) && disks[args[0]] && disks[args[0]]->Read(args[1], single_sector)) ? 1 : 0;
 			if (sig_src) syssend(sig_src, &ack, sizeof(ack));
 			if (ack && sig_src) syssend(sig_src, single_sector, disks[args[0]]->Block_Size);

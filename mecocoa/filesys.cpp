@@ -11,7 +11,7 @@ using namespace uni;
 #include "../include/console.hpp" // for VTTY_OUTQ, SysMessage, vtty_type_t
 // VFS and DevFs Implementation
 
-extern uni::Queue<SysMessage> message_queue_conv;// defined in graphic.cpp
+extern SpinlockBlock<uni::Queue<SysMessage>> message_queue_conv;// defined in graphic.cpp
 
 namespace uni {
 
@@ -909,8 +909,8 @@ String Filesys::getAbsolutePath(vfs_dentry* dentry) {
 
 uni::DevFs uni::global_devfs;
 
-static uint32 _tty_id_bits = 0;
-static Bitmap tty_id_allocator(&_tty_id_bits, 4);
+static uint32 _tty_id_bits[8] = {};
+static Bitmap tty_id_allocator(&_tty_id_bits, 4 * 8);
 
 int DevFs::allocate_tty_id() {
 	for (int i = 0; i < 32; i++) {
@@ -919,10 +919,15 @@ int DevFs::allocate_tty_id() {
 			return i;
 		}
 	}
+	plogerro("[TTYID] allocate failed bits=%[x] offs=%[x]", _tty_id_bits, tty_id_allocator.offs);
 	return -1;
 }
 
 void DevFs::free_tty_id(int id) {
+	if (id < 0 || id >= bitsof(_tty_id_bits)) {
+		plogerro("[TTYID] free invalid id=%d (0x%[x]) bits=%[x] offs=%[x]",
+			id, (stduint)id, _tty_id_bits, tty_id_allocator.offs);
+	}
 	tty_id_allocator.setof(id, false);
 }
 
@@ -1130,6 +1135,7 @@ file_system_type fs_fat = { "fat", [](StorageTrait& storage, stduint dev) -> Fil
 			byte* fat_sec_buf = new byte[sec_size];
 			byte* fat_buf = new byte[0x1000];
 			FilesysFAT* fs = new FilesysFAT(fat_ver, *p_part, fat_sec_buf, fat_buf);
+			fs->allow_allocate = true;
 
 			if (fs->loadfs()) {
 				return fs;

@@ -19,6 +19,7 @@ public:\
 #include <c/driver/mouse.h>
 #include <cpp/Witch/Form.hpp>
 #include <cpp/Witch/TextChrome.hpp>
+#include "taskman/lock.hpp"
 
 extern Dchain ttys, vttys;
 struct vtty_type_t {
@@ -115,7 +116,7 @@ public:
 	// Force the update immediately (Composition)
 	void UpdateForce(SheetTrait* who, const Rectangle& rect);
 };
-extern LayerManager2 global_layman;
+extern SpinlockBlock<LayerManager2> global_layman;
 #endif
 
 #if (_MCCA & 0xFF00) == 0x8600

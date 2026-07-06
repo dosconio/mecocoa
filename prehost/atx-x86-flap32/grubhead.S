@@ -45,7 +45,7 @@ multiboot_entry:
 	movl    $0x7FF0, %esp
 	#else
 	# movl    $0x7000, %esp
-	movl    $(kernel_stack + 1024*4), %esp
+	movl    $(kernel_stack + 0x10000 - 0x10), %esp
 	#endif
 	/*  Reset EFLAGS. */
 	pushl   $0
@@ -79,5 +79,5 @@ menuentry 'Mx86' {
 #ifndef _LOADER
 .balign 16
 .global kernel_stack
-kernel_stack: .space 0x1000
+kernel_stack: .space 0x10000
 #endif

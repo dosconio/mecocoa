@@ -218,6 +218,23 @@ auto Taskman::AllocateThread() -> ThreadBlock* {
 
 void Taskman::DestroyThread(ThreadBlock* th) {
 	if (!th) return;
+	// [HYP-C] Verify thread is not still running on any CPU before freeing its stack
+	while (true) {
+		bool active = (th->state == ThreadBlock::State::Running);
+		if (!active) {
+			for (stduint _i = 0; _i < Taskman::PCU_CORES && _i < PCU_CORES_MAX; _i++) {
+				if (current_thread(_i) == th || switching_out_threads(_i) == th) {
+					active = true;
+					break;
+				}
+			}
+		}
+		if (active) {
+			Taskman::Schedule(true);
+		} else {
+			break;
+		}
+	}
 	ProcessBlock* ppb = th->parent_process;
 	if (ppb) {
 		SpinlockLocal guard(&scheduler_lock);
@@ -341,6 +358,17 @@ static void DetachProcessTTYMembership(ProcessBlock* ppb, stduint pid)
 					break;
 				}
 			}
+
+
+			// [HYP-A] Remaining group members will NOT receive SIGHUP when master closes
+			if (pblock->master_pid == pid && pblock->proc_group.Count() > 0) {
+				plogwarn("[HYP-A] DetachTTY: master PID%u closing, %u proc(s) orphaned (no SIGHUP sent)",
+					pid, pblock->proc_group.Count());
+				for (stdsint _j = 0; _j < (stdsint)pblock->proc_group.Count(); _j++)
+					plogwarn("[HYP-A]   orphaned PID: %u", pblock->proc_group[_j]);
+			}
+
+
 			if (pblock->master_pid == pid || (pblock->proc_group.Count() == 0 && pblock->master_pid != 0)) {
 				pblock->master_pid = 0;
 			}
@@ -430,7 +458,14 @@ static void _Exit_Cleanup(stduint pid)
 		req.process_block = (pureptr_t)ppb;
 		++ppb->ref_count;
 		if (syssend_async(Task_ConsoleVideo, &req, sizeof(req), _IMM(GraphicMsg::FCLEANPROC))) {
+			// Non-zero means failure! ConsoleVideo will not receive it, we must release ourselves
 			ProcessBlock::Release(ppb);
+			
+			const stdsint _rc = ppb->ref_count;
+			plogerro("[HYP-D] _Exit_Cleanup: syssend FCLEANPROC failed PID%u ref_count=%d", pid, _rc);
+		}
+		else {
+			// Success. ConsoleVideo will receive it and call Release later.
 		}
 	}
 	#endif

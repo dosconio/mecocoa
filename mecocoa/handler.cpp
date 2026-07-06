@@ -176,6 +176,13 @@ static inline stduint FrameSavedSs(const HardwareInterruptFrame* frame) {
 static void LogSelectorFaultContext(rostr name, HardwareInterruptFrame* frame, stduint para) {
 	const stduint cpu = Taskman::getID();
 	const stduint tid = Taskman::CurrentTID();
+	ThreadBlock* const crt = Taskman::CurrentTB();
+	PERCORE* const percore = (cpu < PCU_CORES_MAX) ? Taskman::PCU_CORES_PERCORE[cpu] : nullptr;
+	ThreadBlock* const swout = (cpu < PCU_CORES_MAX) ? Taskman::switching_out_threads(cpu) : nullptr;
+	const stduint kstack_lo = (crt && crt->stack_levladdr) ? _IMM(crt->stack_levladdr) : 0;
+	const stduint kstack_hi = (crt && crt->stack_levladdr && crt->stack_size) ? kstack_lo + crt->stack_size : 0;
+	const bool eip_in_kstack = kstack_lo && frame->hw_eip >= kstack_lo && frame->hw_eip < kstack_hi;
+	const bool esp_in_kstack = kstack_lo && FrameSavedEsp(frame) >= kstack_lo && FrameSavedEsp(frame) < kstack_hi;
 	const stduint sel_index = para >> 3;
 	const stduint sel_ti = (para >> 2) & 0x1;
 	const stduint sel_idt = (para >> 1) & 0x1;
@@ -186,6 +193,24 @@ static void LogSelectorFaultContext(rostr name, HardwareInterruptFrame* frame, s
 		name, para, cpu, tid, frame->hw_eip, FrameSavedEsp(frame), frame->hw_cs, FrameSavedSs(frame), frame->cr3,
 		sel_index, sel_idt ? "IDT" : (sel_ti ? "LDT" : "GDT"), sel_idt ? "vector" : "selector", sel_ext,
 		ap_ring3_iret_guard_hits, ap_ring3_iret_last_lapicid, ap_ring3_iret_last_coreid);
+	printlog(_LOG_FATAL,
+		"[PANIC_CTX] crt=%p pid=%u tid=%u state=%u ring=%u kstack=[0x%[x],0x%[x]) size=0x%[x] "
+		"eip_in_kstack=%u esp_in_kstack=%u ctx_ip=0x%[x] ctx_sp=0x%[x] ctx_cr3=0x%[x]",
+		crt, crt && crt->parent_process ? crt->parent_process->pid : 0, tid,
+		crt ? _IMM(crt->state) : ~_IMM0, crt && crt->parent_process ? crt->parent_process->ring : 0,
+		kstack_lo, kstack_hi, crt ? crt->stack_size : 0,
+		eip_in_kstack, esp_in_kstack,
+		crt ? crt->context.IP : 0, crt ? crt->context.SP : 0, crt ? crt->context.CR3 : 0);
+	printlog(_LOG_FATAL,
+		"[PANIC_CPU] percore=%p cur=%p cur_tid=%u swout=%p swout_tid=%u kstack_top=%p tss_esp0=%p user_cr3=%p",
+		percore,
+		percore ? percore->current_thread : nullptr,
+		percore && percore->current_thread ? percore->current_thread->tid : ~_IMM0,
+		swout,
+		swout ? swout->tid : ~_IMM0,
+		percore ? percore->kernel_stack : 0,
+		percore ? percore->tss.ESP0 : 0,
+		percore ? percore->user_cr3 : 0);
 }
 #endif
 
@@ -326,8 +351,7 @@ void exception_handler(HardwareInterruptFrame* frame) {
 		}
 		else {
 			#if _MCCA == 0x8632
-			printlog(_LOG_FATAL, " %s at EIP %[x], ESP %[x], CS %[x], CR2 %[x], TID %u",
-				ExceptionDescription[iden], frame->hw_eip, FrameSavedEsp(frame), frame->hw_cs, getCR2(), Taskman::CurrentTID());
+			LogSelectorFaultContext(ExceptionDescription[iden], frame, para);
 			#elif _MCCA == 0x8664
 			printlog(_LOG_FATAL, " %s at RIP %[x], RSP %[x], CS %[x], CR2 %[x], TID %u",
 				ExceptionDescription[iden], frame->hw_rip, frame->hw_rsp, frame->hw_cs, getCR2(), Taskman::CurrentTID());

@@ -6,10 +6,15 @@
 
 bool Spinlock::Acquire() {
 	bool state_rupt = IC.TryMaskInterrupt();
+	stduint count = 0;
 	while (__atomic_exchange_n(&this->locked, 1, __ATOMIC_ACQUIRE) != 0) {
 		#if (_MCCA & 0xFF00) == 0x8600
 		asm volatile("pause" ::: "memory");
 		#endif
+		if (++count == 0x4000000) {
+			extern void dump_lock(uni::OstreamTrait&);
+			dump_lock(uni::Console);
+		}
 	}
 	this->cpu_id = (stdsint)Taskman::getID();
 	return (bool)state_rupt;

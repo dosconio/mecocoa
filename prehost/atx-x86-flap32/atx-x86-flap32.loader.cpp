@@ -132,6 +132,8 @@ bool FilesysFAT::create(rostr fullpath, stduint flags, void* exinfo, rostr linkd
 bool FilesysFAT::truncate(void* fil_handler, stduint size) { return false; }
 bool FilesysFAT::rename(rostr src_path, rostr dst_path) { return false; }
 
+void* operator new[](size_t size) { return 0; }
 void operator delete(void* ptr, stduint size) noexcept {}
+void operator delete[](void* p) noexcept {}
 _ESYM_C void* calloc(size_t nmemb, size_t size) { return 0; }
 _ESYM_C void free(void* p) {}

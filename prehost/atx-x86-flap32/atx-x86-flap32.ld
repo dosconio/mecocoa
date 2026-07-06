@@ -36,11 +36,6 @@ SECTIONS
 		*(.got)
 	} > RAM1
 
-
-	.boot_stack : {
-		. = ALIGN(16);
-		*(.boot_stack)
-	} > RAM1
 	
 	/* MACRO-CORE */
 	. = ALIGN(8);
@@ -66,13 +61,16 @@ SECTIONS
 		__fini_array_end = .;
 	} > RAM1
 
+	.boot_stack : {
+		. = ALIGN(16);
+		*(.boot_stack)
+	} > RAM2
 	.extdata : {
 		KEEP(*(.extdata))
 		*(.ext.freetype)
 		*(.ext.freetype.code)
 		*(.ext.freetype.vcode)
 	} > RAM2
-
 	.bss : {
 		. = ALIGN(16);
 		BSS_ENTO = .;

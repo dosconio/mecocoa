@@ -1,3 +1,4 @@
+#pragma once
 
 struct Spinlock {
 	byte locked = 0;
@@ -66,6 +67,7 @@ public:
 	}
 	Spinlock& raw_spinlock() { return lock_; }
 	const Spinlock& raw_spinlock() const { return lock_; }
+	T* unsafe_ptr() { return &data_; }
 };
 
 

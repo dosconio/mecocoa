@@ -99,10 +99,10 @@ int KeyboardBridge::out(const char* str, stduint len) {
 			// Global Hotkeys
 			if (event.method == keyboard_event_t::method_t::keydown && (event.mod.l_logo || event.mod.r_logo)) {
 				if (event.keycode == 0x06) { // Win + C
-					extern uni::Queue<SysMessage> message_queue_conv;
+					extern SpinlockBlock<uni::Queue<SysMessage>> message_queue_conv;
 					SysMessage msg;
 					msg.type = SysMessage::RUPT_NEW_TERM;
-					message_queue_conv.Enqueue(msg);
+					message_queue_conv.Lock()->Enqueue(msg);
 				}
 				return 0; // Intercept: do not pass to VTTY or other sheets
 			}
@@ -154,11 +154,11 @@ int KeyboardBridge::out(const char* str, stduint len) {
 					// accessing last_click_sheet in interrupt context.
 					// Direct onrupt() here causes UAF when GraphicMsg_FDEL deletes the sheet.
 					{
-						extern uni::Queue<SysMessage> message_queue_conv;
+						extern SpinlockBlock<uni::Queue<SysMessage>> message_queue_conv;
 						SysMessage msg;
 						msg.type = SysMessage::RUPT_KBD;
 						msg.args.kbd_event = event;
-						message_queue_conv.Enqueue(msg);
+						message_queue_conv.Lock()->Enqueue(msg);
 					}
 					return 0; // Intercept: event will be forwarded in serv_graf_loop
 					#else
@@ -192,11 +192,11 @@ int KeyboardBridge::out(const char* str, stduint len) {
 		// Delegate keyboard event to serv_graf_loop to avoid
 		// accessing last_click_sheet in interrupt context.
 		{
-			extern uni::Queue<SysMessage> message_queue_conv;
+			extern SpinlockBlock<uni::Queue<SysMessage>> message_queue_conv;
 			SysMessage msg;
 			msg.type = SysMessage::RUPT_KBD;
 			msg.args.kbd_event = event;
-			message_queue_conv.Enqueue(msg);
+			message_queue_conv.Lock()->Enqueue(msg);
 		}
 		#else
 		if (Consman::last_click_sheet) {
@@ -246,10 +246,10 @@ void sysmsg_kbd(keyboard_event_t kbd_event) {
 	else if (kbd_event.method == keyboard_event_t::method_t::keydown && (kbd_state.mod.l_logo || kbd_state.mod.r_logo)) {
 		if (kbd_event.keycode == 0x06) { // Win + C
 			// Global Hotkey: Win + C
-			extern uni::Queue<SysMessage> message_queue_conv;
+			extern SpinlockBlock<uni::Queue<SysMessage>> message_queue_conv;
 			SysMessage msg;
 			msg.type = SysMessage::RUPT_NEW_TERM;
-			message_queue_conv.Enqueue(msg);
+			message_queue_conv.Lock()->Enqueue(msg);
 		}
 	}
 	else {
@@ -298,10 +298,10 @@ void sysmsg_kbd(keyboard_event_t kbd_event) {
 void hand_kboard(keyboard_event_t  kmsg) {
 	// Enqueue to message_queue_conv so serv_graf_loop (Graphic thread) processes
 	// the event. This avoids racing with GraphicMsg::FDEL on last_click_sheet.
-	extern uni::Queue<SysMessage> message_queue_conv;
+	extern SpinlockBlock<uni::Queue<SysMessage>> message_queue_conv;
 	SysMessage msg;
 	msg.type = SysMessage::RUPT_KBD;
 	msg.args.kbd_event = kmsg;
-	message_queue_conv.Enqueue(msg);
+	message_queue_conv.Lock()->Enqueue(msg);
 }
 #endif

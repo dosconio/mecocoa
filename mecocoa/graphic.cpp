@@ -6,9 +6,7 @@
 
 static void SafeLaymanUpdate(SheetTrait* sheet, const Rectangle& rect) {
 	#if _GUI_ENABLE
-	IC.enInterrupt(false);
-	global_layman.Update(sheet, rect);
-	IC.enInterrupt(true);
+	global_layman.Lock()->Update(sheet, rect);
 	#endif
 }
 
@@ -94,46 +92,68 @@ void hand_mouse(MouseMessage mmsg) {
 
 	// Handle Clicks and Z-order
 	SheetTrait* sheet = nullptr;
-	if ((change_btns & 0b111) && (sheet = global_layman.getTop(cursor_p, 1))) {
-		Point rel_p = cursor_p - sheet->sheet_area.getVertex();
-		if (Consman::last_click_sheet && Consman::last_click_sheet != sheet) {
-			Consman::last_click_sheet->onrupt(SheetEvent::onLeave, Point(0, 0), 1);
+	bool needs_update = false;
+	SheetTrait* leave_sheet = nullptr;
+	SheetTrait* click_sheet = nullptr;
+	Point click_rel_p;
+
+	{
+		auto layman = global_layman.Lock();
+		if ((change_btns & 0b111) && (sheet = layman->getTop(cursor_p, 1))) {
+			click_rel_p = cursor_p - sheet->sheet_area.getVertex();
+			if (Consman::last_click_sheet && Consman::last_click_sheet != sheet) {
+				leave_sheet = Consman::last_click_sheet;
+			}
+			click_sheet = sheet;
+			Consman::last_click_sheet = sheet;
+
+			// Bring to front (Insert after subf, which is the cursor)
+			Nnode* target = &sheet->refSheetNode();
+			if (layman->subf && target != layman->subf->next && target != layman->subl) {
+				// Nchain::Exchange-like manual manipulation
+				Nnode* prev = target->left;
+				Nnode* next = target->next;
+				if (prev) prev->next = next;
+				if (next) next->left = prev;
+
+				Nnode* top = layman->subf;
+				Nnode* sec = top->next;
+
+				target->left = top;
+				target->next = sec;
+				top->next = target;
+				if (sec) sec->left = target;
+
+				needs_update = true;
+			}
 		}
-		sheet->onrupt(SheetEvent::onClick, rel_p, change_btns);
-		Consman::last_click_sheet = sheet;
-
-		// Bring to front (Insert after subf, which is the cursor)
-		Nnode* target = &sheet->refSheetNode();
-		if (global_layman.subf && target != global_layman.subf->next && target != global_layman.subl) {
-			// Nchain::Exchange-like manual manipulation
-			Nnode* prev = target->left;
-			Nnode* next = target->next;
-			if (prev) prev->next = next;
-			if (next) next->left = prev;
-
-			Nnode* top = global_layman.subf;
-			Nnode* sec = top->next;
-
-			target->left = top;
-			target->next = sec;
-			top->next = target;
-			if (sec) sec->left = target;
-
-			SafeLaymanUpdate(nullptr, sheet->sheet_area);
-		}
+	}
+	
+	if (leave_sheet) {
+		leave_sheet->onrupt(SheetEvent::onLeave, Point(0, 0), 1);
+	}
+	if (click_sheet) {
+		click_sheet->onrupt(SheetEvent::onClick, click_rel_p, change_btns);
+	}
+	
+	if (needs_update) {
+		SafeLaymanUpdate(nullptr, sheet->sheet_area);
 	}
 
 	// Handle Movement
 	if (mmsg.X || mmsg.Y) {
-		global_layman.Domove(Cursor::global_cursor, { mmsg.X, mmsg.Y });
-		if (Cursor::moving_sheet) {
-			global_layman.Domove(Cursor::moving_sheet, { mmsg.X, mmsg.Y });
+		{
+			auto layman = global_layman.Lock();
+			layman->Domove(Cursor::global_cursor, { mmsg.X, mmsg.Y });
+			if (Cursor::moving_sheet) {
+				layman->Domove(Cursor::moving_sheet, { mmsg.X, mmsg.Y });
+			}
 		}
 
 		static uint64 last_onmoved_tick = 0;
 		if ((change_btns & 0b111) || (tick - last_onmoved_tick >= 20)) {
 			Point current_cursor_p = Cursor::global_cursor->sheet_area.getVertex();
-			SheetTrait* hover_sheet = global_layman.getTop(current_cursor_p, 1);
+			SheetTrait* hover_sheet = global_layman.Lock()->getTop(current_cursor_p, 1);
 			if (hover_sheet) {
 				Point rel_p = current_cursor_p - hover_sheet->sheet_area.getVertex();
 				hover_sheet->onrupt(SheetEvent::onMoved, rel_p, change_btns);
@@ -148,11 +168,11 @@ void hand_mouse(MouseMessage mmsg) {
 // with GraphicMsg::FDEL on global_layman / Consman::last_click_sheet.
 void hand_mouse_usb(MouseMessage mmsg) {
 	if (!Consman::ento_gui) return; // No GUI: mouse events are meaningless
-	extern uni::Queue<SysMessage> message_queue_conv;
+	extern SpinlockBlock<uni::Queue<SysMessage>> message_queue_conv;
 	SysMessage msg;
 	msg.type = SysMessage::RUPT_MOUSE;
 	msg.args.mou_event = mmsg;
-	message_queue_conv.Enqueue(msg);
+	message_queue_conv.Lock()->Enqueue(msg);
 }
 
 void LayerManager::Dorupt(SheetTrait* who, SheetEvent event, Point rel_p, para_list args) {
@@ -209,7 +229,7 @@ void LayerManager2::UpdateForce(SheetTrait* who, const Rectangle& rect) {
 // ---- ---- ---- ---- . ---- ---- ---- ----
 
 static SysMessage _BUF_Message_Conv[64];
-uni::Queue<SysMessage> message_queue_conv(_BUF_Message_Conv, numsof(_BUF_Message_Conv));
+SpinlockBlock<uni::Queue<SysMessage>> message_queue_conv(_BUF_Message_Conv, numsof(_BUF_Message_Conv));
 volatile bool has_pending_timer = false;
 
 extern void sysmsg_kbd(keyboard_event_t kbd_event);
@@ -238,7 +258,7 @@ static void DetachLayerChildren(LayerManager* root) {
 		if (!child->offs) continue;
 		auto sheet = cast<SheetTrait*>(child->offs);
 		sheet->refSheetParent() = nullptr;
-		global_layman.UnregisterTimer(sheet);
+		global_layman.Lock()->UnregisterTimer(sheet);
 	}
 	root->subf = nullptr;
 	root->subl = nullptr;
@@ -384,12 +404,10 @@ Rectangle Consman::DetachForm(::uni::Witch::Form* pfrm, SheetTrait* exact_sheet)
 		Cursor::moving_sheet = nullptr;
 	}
 
-	global_layman.UnregisterTimer(pfrm);
+	global_layman.Lock()->UnregisterTimer(pfrm);
 	LayerManager* parent = pfrm->refSheetParent();
-	IC.enInterrupt(false);
 	if (parent) parent->Remove(pfrm);
-	global_layman.Remove(pfrm);
-	IC.enInterrupt(true);
+	global_layman.Lock()->Remove(pfrm);
 	pfrm->refSheetParent() = nullptr;
 	DetachLayerChildren(static_cast<LayerManager*>(pfrm));
 	// Also detach Form's sheet_node.subf chain (close_btn, title_bar, client_area)
@@ -397,26 +415,37 @@ Rectangle Consman::DetachForm(::uni::Witch::Form* pfrm, SheetTrait* exact_sheet)
 		if (!child->offs) continue;
 		auto sheet = cast<SheetTrait*>(child->offs);
 		sheet->refSheetParent() = nullptr;
-		global_layman.UnregisterTimer(sheet);
+		global_layman.Lock()->UnregisterTimer(sheet);
 	}
 	return area;
 }
 
 // SwitchForm - runs only in Graphic thread, no lock needed.
 void Consman::SwitchForm(SheetTrait* pfrm) {
+	if (Consman::last_click_sheet && Consman::last_click_sheet != pfrm) {
+		Consman::last_click_sheet->onrupt(SheetEvent::onLeave, Point(0, 0), 1);
+	}
+	if (pfrm) {
+		pfrm->onrupt(SheetEvent::onClick, Point(0, 0), 0);
+	}
+	Consman::last_click_sheet = pfrm;
+
 	Nnode* target = &pfrm->refSheetNode();
-	if (global_layman.subf && target != global_layman.subf) {
-		// Remove from the tail where Append put it
-		if (target->left) target->left->next = target->next;
-		if (global_layman.subl == target) global_layman.subl = target->left;
-		// Insert after the top layer (cursor)
-		Nnode* top = global_layman.subf;
-		Nnode* sec = top->next;
-		target->left = top;
-		target->next = sec;
-		top->next = target;
-		if (sec) sec->left = target;
-		else global_layman.subl = target;// target is now the new tail
+	{
+		auto layman = global_layman.Lock();
+		if (layman->subf && target != layman->subf) {
+			// Remove from the tail where Append put it
+			if (target->left) target->left->next = target->next;
+			if (layman->subl == target) layman->subl = target->left;
+			// Insert after the top layer (cursor)
+			Nnode* top = layman->subf;
+			Nnode* sec = top->next;
+			target->left = top;
+			target->next = sec;
+			top->next = target;
+			if (sec) sec->left = target;
+			else layman->subl = target;// target is now the new tail
+		}
 	}
 	SafeLaymanUpdate(pfrm, Rectangle(Point(0, 0), pfrm->sheet_area.getSize()));
 }
@@ -448,10 +477,10 @@ static stdsint GraphicMsg_FNEW(const FMT_ConsoleMsg_FNEW* data, ProcessBlock* pb
 		delete pfrm;
 		return -1;
 	}
-	pfrm->setSheet(global_layman, rect, sheet_buffer);
+	pfrm->setSheet(*global_layman.Lock(), rect, sheet_buffer);
 
 	IC.enInterrupt(false);
-	global_layman.Append(pfrm);
+	global_layman.Lock()->Append(pfrm);
 	Consman::SwitchForm(pfrm);
 	IC.enInterrupt(true);
 
@@ -496,7 +525,7 @@ static void _CleanSingleForm(ProcessBlock* pb, stduint pform_id) {
 		client.Remove(child_sheet);
 		if (child_sheet) {
 			child_sheet->refSheetParent() = nullptr;
-			global_layman.UnregisterTimer(child_sheet);
+			global_layman.Lock()->UnregisterTimer(child_sheet);
 			Console_t* con_base = static_cast<Console_t*>(static_cast<uni::VideoConsole2*>(child_sheet));
 			CleanupAndDestroyVconsoleByConsole(con_base);
 		}
@@ -697,9 +726,9 @@ static stdsint GraphicMsg_FTIM(stduint pform_id, stduint ms, ProcessBlock* pb) {
 	stduint period = ms * SysTickFreq / 1000;
 	if (ms && !period) period = 1;
 
-	global_layman.UnregisterTimer(pfrm);
+	global_layman.Lock()->UnregisterTimer(pfrm);
 	if (period) {
-		global_layman.RegisterTimer(pfrm);
+		global_layman.Lock()->RegisterTimer(pfrm);
 		pfrm->timer_timeout_period = period;
 		pfrm->timer_timeout_tick = tick + period;
 		ploginfo("Timer set for form %u: period %u ticks", pform_id, period);
@@ -760,14 +789,13 @@ _RET_CreateVconsole Consman::CreateVconsole(const Rectangle& rect, rostr title) 
 	pcon->InitializeSheet(*pform, pcon->window.getVertex(), pcon->window.getSize());
 	pcon->Clear();
 	pform->AppendControl(pcon);
-	pform->setSheet(global_layman, rect, new Color[rect.getArea()]);
+	Color* form_buf = new Color[rect.getArea()];
+	pform->setSheet(*global_layman.Lock(), rect, form_buf);
 	pform->setFocus(pcon);
 	// ploginfo("CreateVconsole: form ready");
 
-	IC.enInterrupt(false);
-	global_layman.Append(pform);
+	global_layman.Lock()->Append(pform);
 	Consman::SwitchForm(pform);
-	IC.enInterrupt(true);
 	// ploginfo("CreateVconsole: attached to layman");
 
 	pcon->Start();
@@ -789,7 +817,7 @@ void Consman::RemoveVconsole(Dnode* nod) {
 	Rectangle area = pfrm ? pfrm->sheet_area : (pclient ? pclient->sheet_area : Rectangle{});
 
 	if (pcon) {
-		global_layman.UnregisterTimer(pcon);
+		global_layman.Lock()->UnregisterTimer(pcon);
 	}
 	if (pclient) {
 		pclient->Remove(pcon);
@@ -834,22 +862,24 @@ void serv_graf_loop() {
 		Taskman::Schedule(true);// yield
 	}
 	#else
-	global_layman.lazy_update = _GUI_DOUBLE_BUFFER;// Only enable lazy mode if double buffering is enabled
+	global_layman.Lock()->lazy_update = _GUI_DOUBLE_BUFFER;// Only enable lazy mode if double buffering is enabled
 	#endif
 	#if (_MCCA == 0x8632) || (_MCCA == 0x8664)
 	while (true) {
 		// Priority 1: check internal interrupt queue (non-blocking)
-		IC.enInterrupt(false);
-		bool has_int_msg = message_queue_conv.Count() > 0;
-		if (has_int_msg) message_queue_conv.Dequeue(msg);
-		IC.enInterrupt(true);
+		bool has_int_msg = false;
+		{
+			auto msg_queue = message_queue_conv.Lock();
+			has_int_msg = msg_queue->Count() > 0;
+			if (has_int_msg) msg_queue->Dequeue(msg);
+		}
 
 		if (has_int_msg) {
 			// Handle interrupt messages - no lock needed, Graphic thread is sole GUI owner
 			switch (msg.type) {
 			case SysMessage::RUPT_TIMER:
 				if (Consman::ento_gui) {
-					global_layman.CheckTimers(tick);
+					global_layman.Lock()->CheckTimers(tick);
 				}
 				has_pending_timer = false;
 				Consman::WakeBlockedWaiters();
@@ -879,11 +909,22 @@ void serv_graf_loop() {
 				break;
 			case SysMessage::RUPT_FLUSH:
 				// Asynchronous rendering: Compose and then Flush to screen
-				if (Consman::ento_gui && global_layman.pvci && global_layman.sheet_buffer) {
-					if (msg.args.rect.w > 0 && msg.args.rect.h > 0) {
-						global_layman.UpdateForce(nullptr, msg.args.rect.toRectangle());
-						if (Consman::real_pvci)
-							Consman::real_pvci->DrawPoints(msg.args.rect.toRectangle(), global_layman.sheet_buffer);
+				if (Consman::ento_gui) {
+					uni::Rectangle flush_rect;
+					Color* buf = nullptr;
+					{
+						auto layman = global_layman.Lock();
+						if (layman->pvci && layman->sheet_buffer) {
+							if (msg.args.rect.w > 0 && msg.args.rect.h > 0) {
+								layman->UpdateForce(nullptr, msg.args.rect.toRectangle());
+								flush_rect = msg.args.rect.toRectangle();
+								buf = layman->sheet_buffer;
+							}
+						}
+					}
+					// Flush to hardware outside the lock to prevent MMIO livelocks
+					if (buf && Consman::real_pvci) {
+						Consman::real_pvci->DrawPoints(flush_rect, buf);
 					}
 				}
 				break;
@@ -1141,12 +1182,12 @@ Color GloScreenRGB888::GetColor(Point p) const {
 #elif (_MCCA & 0xFF00) == 0x8600
 
 
-inline static stduint VCI_LimitX() { return global_layman.window.width; }
+inline static stduint VCI_LimitX() { return global_layman.Lock()->window.width; }
 uint32& GloScreenARGB8888::Locate(const Point& disp) const {
-	return *((uint32*)(global_layman.video_memory) + disp.x + disp.y * VCI_LimitX());
+	return *((uint32*)(global_layman.Lock()->video_memory) + disp.x + disp.y * VCI_LimitX());
 }
 uint32& GloScreenABGR8888::Locate(const Point& disp) const {
-	return *((uint32*)(global_layman.video_memory) + disp.x + disp.y * VCI_LimitX());
+	return *((uint32*)(global_layman.Lock()->video_memory) + disp.x + disp.y * VCI_LimitX());
 }
 
 
@@ -1233,21 +1274,31 @@ void Consman::enable_2buffer() {
 	// Double Buffer
 	//{} put off
 	#if _GUI_DOUBLE_BUFFER
-	auto vcon0_size = global_layman.window.getArea() * sizeof(Color);
-	global_layman.sheet_buffer = (Color*)mem.allocate(vcon0_size);
-	if (!global_layman.sheet_buffer) {
+	// Pre-calculate size and allocate without lock, since mem.allocate can log to screen and trigger SafeLaymanUpdate!
+	stduint vcon0_size = 0;
+	{
+		auto layman = global_layman.Lock();
+		vcon0_size = layman->window.getArea() * sizeof(Color);
+	}
+	Color* new_buffer = (Color*)mem.allocate(vcon0_size);
+	
+	if (!new_buffer) {
 		plogerro("Failed to allocate back buffer for Layman");
 	} else {
-		global_layman.sheet_area = global_layman.window;
-		for0(i, global_layman.window.getArea()) {
-			global_layman.sheet_buffer[i] = Color::Black;
+		// Clear buffer outside the lock to avoid spinlock timeouts
+		for0(i, vcon0_size / sizeof(Color)) {
+			new_buffer[i] = Color::Black;
 		}
+		auto layman = global_layman.Lock();
+		layman->sheet_buffer = new_buffer;
+		layman->sheet_area = layman->window;
+		
 		// Redirect global_layman's VCI to point to our back-buffer
-		Consman::real_pvci = global_layman.pvci;
+		Consman::real_pvci = layman->pvci;
 		// Allocate a static VCI for the back-buffer
 		static byte _BUF_VCI[sizeof(VideoControlInterfaceMARGB8888)];
-		VideoControlInterfaceMARGB8888* back_vci = new (_BUF_VCI) VideoControlInterfaceMARGB8888(global_layman.sheet_buffer, global_layman.window.getSize());
-		global_layman.pvci = back_vci;
+		VideoControlInterfaceMARGB8888* back_vci = new (_BUF_VCI) VideoControlInterfaceMARGB8888(layman->sheet_buffer, layman->window.getSize());
+		layman->pvci = back_vci;
 	}
 	Consman::enable_dubuffer = true;
 	#endif
@@ -1261,42 +1312,51 @@ void RenderFrameFlush() {
 				last_timer_check = tick;
 				SysMessage msg;
 				msg.type = SysMessage::RUPT_TIMER;
-				message_queue_conv.Enqueue(msg);
+				message_queue_conv.Lock()->Enqueue(msg);
 			}
 		}
 	}
 	if (!Consman::enable_dubuffer) return;
-	if (Consman::ento_gui && global_layman.pvci && global_layman.is_dirty) {
+	
+	bool is_dirty = false;
+	{
+		auto layman = global_layman.unsafe_ptr(); // Use unsafe_ptr in interrupt handler
+		if (Consman::ento_gui && layman->pvci && layman->is_dirty) {
+			is_dirty = true;
+		}
+	}
+	if (is_dirty) {
 		static uint64 last_flush_time = 0;
 		if (tick - last_flush_time >= 5) { // 100 FPS target (10ms)
-			global_layman.is_dirty = false;
 			SysMessage msg;
 			msg.type = SysMessage::RUPT_FLUSH;
-			// Safely clamp coordinates assuming entirely garbage values
-			stdsint x = global_layman.dirty_area.x;
-			stdsint y = global_layman.dirty_area.y;
-			stdsint w = global_layman.dirty_area.width;
-			stdsint h = global_layman.dirty_area.height;
+			{
+				auto layman = global_layman.Lock();
+				layman->is_dirty = false;
+				stdsint x = layman->dirty_area.x;
+				stdsint y = layman->dirty_area.y;
+				stdsint w = layman->dirty_area.width;
+				stdsint h = layman->dirty_area.height;
 
-			if (x < 0) { w += x; x = 0; }
-			if (y < 0) { h += y; y = 0; }
+				if (x < 0) { w += x; x = 0; }
+				if (y < 0) { h += y; y = 0; }
 
-			stdsint max_w = global_layman.window.width - x;
-			stdsint max_h = global_layman.window.height - y;
+				stdsint max_w = layman->window.width - x;
+				stdsint max_h = layman->window.height - y;
 
-			if (w > max_w) w = max_w;
-			if (h > max_h) h = max_h;
+				if (w > max_w) w = max_w;
+				if (h > max_h) h = max_h;
 
-			if (w < 0) w = 0;
-			if (h < 0) h = 0;
+				if (w < 0) w = 0;
+				if (h < 0) h = 0;
 
-			msg.args.rect.x = x;
-			msg.args.rect.y = y;
-			msg.args.rect.w = w;
-			msg.args.rect.h = h;
-			global_layman.dirty_area = {};
-			global_layman.is_dirty = false;
-			message_queue_conv.Enqueue(msg);
+				msg.args.rect.x = x;
+				msg.args.rect.y = y;
+				msg.args.rect.w = w;
+				msg.args.rect.h = h;
+				layman->dirty_area = {};
+			}
+			message_queue_conv.Lock()->Enqueue(msg);
 
 			last_flush_time = tick;
 		}

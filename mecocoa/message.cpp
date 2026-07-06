@@ -14,7 +14,7 @@ extern byte _BUF_xhc[];
 extern uni::Dchain TimerManager;
 void _Comment(R0) serv_sysmsg() {
 	#if _MCCA == 0x8664 && defined(_UEFI)
-	global_layman.lazy_update = _GUI_DOUBLE_BUFFER;// Only enable lazy mode if double buffering is enabled
+	global_layman.Lock()->lazy_update = _GUI_DOUBLE_BUFFER;// Only enable lazy mode if double buffering is enabled
 	while (true) {
 		IC.enInterrupt(false);
 		// auto crt_tick = tick;
@@ -59,6 +59,8 @@ void rupt_proc(stduint tid, stduint rupt_no)
 {
 	auto th = Taskman::LocateThread(tid);
 	if (!th) return;
+	extern Spinlock comm_lock;
+	SpinlockLocal guard(&comm_lock);
 	if ((_IMM(th->block_reason) & _IMM(ThreadBlock::BlockReason::BR_RecvMsg)) &&
 		((stduint)th->recv_fo_whom == ANYPROC || (stduint)th->recv_fo_whom == INTRUPT)) {
 		// ploginfo("INT-MSG: RUPT-PROC");
@@ -172,6 +174,7 @@ int msg_send(ThreadBlock* fo_th, stduint too, _Comment(vaddr) CommMsg* msg, bool
 		auto msg_to = (CommMsg*)SeekAddress(to, _IMM(to_th->unsolved_msg));
 		void* addr_to = msg_to ? (void*)msg_to->data.address : nullptr;
 		if (msg_to) MIN(leng, msg_to->data.length);
+		// if (leng > 500) ploginfo("SEND: T%u->T%u, %u bytes, %p->%p", fo_th->tid, to_th->tid, leng, addr_fo, addr_to);
 		if (leng) MccaMemCopyP(addr_to, to, addr_fo, fo, leng);
 		if (msg_to && msg_fo) msg_to->type = msg_fo->type;
 		if (msg_to) msg_to->src = fo_th->tid;
@@ -300,6 +303,7 @@ int msg_recv(ThreadBlock* to_th, stduint foo, _Comment(vaddr) CommMsg* msg)
 		void* addr_to = msg_to ? (void*)msg_to->data.address : nullptr;
 		//
 		stduint leng = minof(leng0, leng1);
+		// if (leng > 500) ploginfo("RECV: %u->%u, %u bytes, %p->%p", fo_th->tid, to_th->tid, leng, addr_fo, addr_to);
 		if (leng) MccaMemCopyP(addr_to, to_th->parent_process, addr_fo, fo_th->parent_process, leng);
 		if (msg_to && msg_fo) msg_to->type = msg_fo->type;
 		if (msg_to) msg_to->src = foo;

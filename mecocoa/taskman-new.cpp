@@ -10,10 +10,6 @@
 #if (_MCCA & 0xFF00) == 0x8600
 extern "C" {
 	void* higher_stacks[PCU_CORES_MAX] = {};// when 1 core 1 stack
-}
-#endif
-#if _MCCA == 0x8632
-extern "C" {
 	void* ring3_iret_stacks[PCU_CORES_MAX] = {};
 }
 #endif
@@ -229,6 +225,9 @@ static stduint _Taskman_Create_Paging(ProcessBlock *ppb, byte ring, stduint stac
 	return nil;
 }
 	extern stduint kernel_stack_top_cpu0[];
+	#if _MCCA == 0x8632
+	extern "C" byte kernel_stack[];
+	#endif
 	extern "C" PERCORE* C_PCU_CORES_PERCORE[]; // exported for assembly use
 	void Taskman::Initialize(stduint cpuid) {
 		#if (_MCCA & 0xFF00) == 0x8600
@@ -264,6 +263,8 @@ static stduint _Taskman_Create_Paging(ProcessBlock *ppb, byte ring, stduint stac
 			#endif
 			#if _MCCA == 0x8632
 			ring3_iret_stacks[i] = (mem.allocate(0x1000, PAGESIZE_4KB));
+			ploginfo("ring3_iret_stacks %u: %p", i, ring3_iret_stacks[i]);
+			treat<uint32>(ring3_iret_stacks[i]) = 0xdeadbeef;
 			ap_ring3_iret_stack_tops[i] = (0xFFFFF000u - i * 0x1000u) + 0x1000u - 0x10u;
 			ap_higher_stack_tops[i] = _IMM(higher_stacks[i]) + 0x1000 - 0x10;
 			#endif
@@ -362,6 +363,14 @@ static stduint _Taskman_Create_Paging(ProcessBlock *ppb, byte ring, stduint stac
 	kernel_task->paging.root_level_page = kernel_paging.root_level_page;
 	
 	kernel_thread->tid = 0;
+	#if _MCCA == 0x8632
+	kernel_thread->stack_size = 0x10000;
+	kernel_thread->stack_lineaddr = kernel_stack;
+	kernel_thread->stack_levladdr = kernel_stack;
+	treat<uint32>(kernel_thread->stack_lineaddr) = 0xDEADBEEF;
+	#elif _MCCA == 0x8664
+	// x64 bootstrap stack is managed separately.
+	#endif
 	kernel_thread->processor_id = cpuid;
 	kernel_thread->ring_coreid = cpuid; // Pin kernel thread to CPU 0
 	current_thread(cpuid) = kernel_thread;

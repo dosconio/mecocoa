@@ -39,7 +39,7 @@ uni::VideoConsole2* global_vcon0 = nullptr;
 
 //// ---- ---- STATIC CORE ---- ---- ////
 #if ((_MCCA & 0xFF00) == 0x8600)
-LayerManager2 global_layman;
+SpinlockBlock<LayerManager2> global_layman;
 #if defined(_UEFI) && _MCCA == 0x8664
 extern UefiData uefi_data;
 #endif
@@ -107,10 +107,13 @@ bool Consman::Initialize() {
 	#if !defined(_UEFI)
 	auto addr = (ModeInfoBlock*)_IMM(call_ladder(R16FN_VMOD, vmod_default));
 	Rectangle screen0_win{ Point(0,0), Size2(addr->XResolution, addr->YResolution), Color::Black };
-	global_layman.Reset(&local_vci, screen0_win);
-	global_layman.video_mode = vmod_default;
-	global_layman.video_memory = addr->PhysBasePtr;
-	global_layman.pixel_fmt = PixelFormat::ARGB8888;
+	{
+		auto layman = global_layman.Lock();
+		layman->Reset(&local_vci, screen0_win);
+		layman->video_mode = vmod_default;
+		layman->video_memory = addr->PhysBasePtr;
+		layman->pixel_fmt = PixelFormat::ARGB8888;
+	}
 	#else
 	Rectangle screen0_win{ Point(0,0), Size2(uefi_data.frame_buffer_config.horizontal_resolution, uefi_data.frame_buffer_config.vertical_resolution), Color::Black };
 	VideoControlInterface* screen;
@@ -120,24 +123,32 @@ bool Consman::Initialize() {
 	default:
 		loop HALT();
 	}
-	global_layman.Reset(screen, screen0_win);
-	global_layman.video_mode = vmod_default;
-	global_layman.video_memory = (stduint)uefi_data.frame_buffer_config.frame_buffer;
-	global_layman.pixel_fmt = uefi_data.frame_buffer_config.pixel_format;
+	{
+		auto layman = global_layman.Lock();
+		layman->Reset(screen, screen0_win);
+		layman->video_mode = vmod_default;
+		layman->video_memory = (stduint)uefi_data.frame_buffer_config.frame_buffer;
+		layman->pixel_fmt = uefi_data.frame_buffer_config.pixel_format;
+	}
 	#endif
-	const stduint vcon0_size = global_layman.window.getArea() * sizeof(Color);
+	stduint vcon0_size = 0, video_memory = 0;
+	{
+		auto layman = global_layman.Lock();
+		vcon0_size = layman->window.getArea() * sizeof(Color);
+		video_memory = layman->video_memory;
+	}
 	//
 	#if _MCCA == 0x8632
 	kernel_paging.Map(
-		global_layman.video_memory,
-		global_layman.video_memory,
+		video_memory,
+		video_memory,
 		vcon0_size,
 		PAGESIZE_4KB, PGPROP_present | PGPROP_writable
 	);// VGA
 	#endif
 
 	// main screen
-	auto vcon0 = new VideoConsole2(&global_layman.getVCI(), screen0_win, Color::Black, Color::White);
+	auto vcon0 = new VideoConsole2(&global_layman.Lock()->getVCI(), screen0_win, Color::Black, Color::White);
 	global_vcon0 = vcon0;
 
 	#if _MCCA == 0x8632
@@ -150,15 +161,15 @@ bool Consman::Initialize() {
 		new BufferChar[vcon0->getCols() * vcon0->getRows()],
 		new Color[vcon0->getLineBufferSize()]
 	);
-	vcon0->InitializeSheet(global_layman, screen0_win.getVertex(), screen0_win.getSize());
+	vcon0->InitializeSheet(*global_layman.Lock(), screen0_win.getVertex(), screen0_win.getSize());
 	VTTY_Append(vcon0);
 
 	// cursor
-	Cursor::global_cursor = new (_BUF_cursor)Cursor{ &global_layman.getVCI() };
+	Cursor::global_cursor = new (_BUF_cursor)Cursor{ &global_layman.Lock()->getVCI() };
 	const Point cursor_pos = { 300,200 };
-	Cursor::global_cursor->setSheet(global_layman, cursor_pos);
+	Cursor::global_cursor->setSheet(*global_layman.Lock(), cursor_pos);
 
-	global_layman.Append(vcon0);
+	global_layman.Lock()->Append(vcon0);
 
 	#if _GUI_DOUBLE_BUFFER
 	Consman::enable_2buffer();

@@ -35,7 +35,7 @@ void R_MOU_INIT() {
 }
 
 
-extern uni::Queue<SysMessage> message_queue_conv;
+extern SpinlockBlock<uni::Queue<SysMessage>> message_queue_conv;
 static bool fa_mouse = false;
 static byte mouse_buf[4] = { 0 };
 QueueLimited* queue_mouse;
@@ -50,8 +50,8 @@ static void process_mouse(byte ch) {
 			.type = SysMessage::RUPT_MOUSE,
 		};
 		mm.Y = -mm.Y;
-		smsg.args.mou_event = mm,
-		message_queue_conv.Enqueue(smsg);
+		smsg.args.mou_event = mm;
+		message_queue_conv.Lock()->Enqueue(smsg);
 	}
 	else if (mouse_buf[3] == 1) {
 		if (!mm.HIGH) mouse_buf[3] = 0;

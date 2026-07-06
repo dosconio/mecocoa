@@ -13,7 +13,10 @@ f/F 显示目录树
 ### 方式
 
 - K-Assert
-
+- Poison: Malloc 0xCC and Dealloc 0xDD
+- Stack: 0xDEADBEEF
+- Timeout:
+	- Spinlock
 
 ### 高频问题
 

@@ -471,10 +471,11 @@ void dump_threads(OstreamTrait& com1) {
 	}
 }
 
+extern "C" void* ring3_iret_stacks[PCU_CORES_MAX];
 void dump_processors(OstreamTrait& com1) {
 	extern Spinlock scheduler_lock;
 	SpinlockLocal guard(&scheduler_lock);
-	com1.OutFormat("CPU   STATE     LAPIC CURRENT_TID   SWITCHING_TID KSTACK\n\r");
+	com1.OutFormat("CPU   STATE     LAPIC CURRENT_TID   SWITCH_TID TRAMPOLINE KSTACK\n\r");
 	for (stduint i = 0; i < Taskman::PCU_CORES; i++) {
 		#if (_MCCA & 0xFF00) == 0x8600
 		auto percore = Taskman::PCU_CORES_PERCORE[i];
@@ -512,11 +513,8 @@ void dump_processors(OstreamTrait& com1) {
 
 		// Current Thread
 		if (percore->current_thread) {
-			com1.OutFormat("%[u]", percore->current_thread->tid);
+			com1.OutFormat("%10u    ", percore->current_thread->tid);
 			stduint tid = percore->current_thread->tid;
-			if (tid < 10) com1.OutFormat("             ");
-			else if (tid < 100) com1.OutFormat("            ");
-			else com1.OutFormat("           ");
 		}
 		else {
 			com1.OutFormat("-             ");
@@ -524,21 +522,20 @@ void dump_processors(OstreamTrait& com1) {
 
 		// Switching Out Thread
 		if (percore->switching_out_thread) {
-			com1.OutFormat("%[u]", percore->switching_out_thread->tid);
-			stduint tid = percore->switching_out_thread->tid;
-			if (tid < 10) com1.OutFormat("             ");
-			else if (tid < 100) com1.OutFormat("            ");
-			else com1.OutFormat("           ");
+			com1.OutFormat("%10u ", percore->switching_out_thread->tid);
 		}
 		else {
-			com1.OutFormat("-             ");
+			com1.OutFormat("-          ");
 		}
+
+		// TRAMPS
+		com1.OutFormat("%p ", ring3_iret_stacks[i]);
 
 		// Kernel Stack
 		com1.OutFormat("%p\n\r", percore->kernel_stack);
 
 		#else
-				// For non-x86 architectures
+		// For non-x86 architectures
 		com1.OutFormat("%[u]     Online    -     ", i);
 
 		auto cur_th = Taskman::current_thread(i);

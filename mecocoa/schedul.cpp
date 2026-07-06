@@ -63,8 +63,15 @@ static void BindCurrentKernelEntryStack(ThreadBlock* th, stduint cpuid) {
 	if (!th) return;
 	auto percore = Taskman::PCU_CORES_PERCORE[cpuid];
 	if (!percore) return;
-	if (!th->stack_levladdr || !th->stack_size) return;
 	percore->current_thread = th;
+
+	if (!th->stack_levladdr || !th->stack_size) {
+		plogerro("[CPU%u] BindCurrentKernelEntryStack skip tid=%u stack=%[x] size=%u keep_kstack=%[x]",
+			cpuid, th->tid, th->stack_levladdr, th->stack_size,
+			percore->kernel_stack);
+		return;
+	}
+	
 	percore->kernel_stack = _IMM(th->stack_levladdr) + th->stack_size - 0x10;
 	percore->tss.ESP0 = GetCoreTransitionStackTop(cpuid);
 	percore->tss.SS0 = SegData;
@@ -545,6 +552,7 @@ static void SettleSwitchingOutThread(stduint cpuid) {
 
  // before calling, the task may be pended
 #if 1
+extern "C" void* ring3_iret_stacks[PCU_CORES_MAX];
 auto Taskman::Schedule(bool omit_slice)->decltype(Schedule())
 {
 	bool old_if = scheduler_lock.Acquire();
@@ -638,14 +646,19 @@ auto Taskman::Schedule(bool omit_slice)->decltype(Schedule())
 	#endif
 
 	// [DIAG] Check stack canary for old_tb
-	#if 0
-	if (old_tb->stack_levladdr && old_tb->stack_size) {
-		stduint canary = *(stduint*)old_tb->stack_levladdr;
+	#if (_MCCA & 0xFF00) == 0x8600 && defined(_DEBUG)
+	if (old_tb->stack_levladdr) {
+		uint32* p = (uint32*)old_tb->stack_levladdr;
+		uint32 canary = *(uint32*)old_tb->stack_levladdr;
 		if (canary != 0xDEADBEEF) {
-			stduint* p = (stduint*)old_tb->stack_levladdr;
-			plogerro("[STACK] TID%x canary=%x [%x][%x][%x][%x]", old_tb->tid, canary, p[0], p[1], p[2], p[3]);
+			plogerro("[STACK] TID%x canary=%x [%x] %p", old_tb->tid, canary, p[0], p);
 		}
 	}
+	#if _MCCA == 0x8632
+	if (treat<uint32>(ring3_iret_stacks[cpuid]) != 0xdeadbeef) {
+		plogerro("[STACK] TID%x iret stack canary=%x", old_tb->tid, treat<uint32>(ring3_iret_stacks[cpuid]));
+	}
+	#endif
 	#endif
 
 	old_tb->just_schedule = 1;
