@@ -622,7 +622,7 @@ void printlog(loglevel_t level, const char* fmt, ...)
 }
 
 namespace uni {
-	extern Spinlock vfs_lock;
+	extern Mutex vfs_lock;
 }
 
 void dump_lock(OstreamTrait& com1) {
@@ -646,11 +646,11 @@ void dump_lock(OstreamTrait& com1) {
 	com1.OutFormat("%p  %s     %[i]      mempool_lock\n\r", &mempool_lock, mempool_lock.locked ? "Yes" : "No ", (stdsint)mempool_lock.cpu_id);
 	com1.OutFormat("%p  %s     %[i]      comm_lock\n\r", &comm_lock, comm_lock.locked ? "Yes" : "No ", (stdsint)comm_lock.cpu_id);
 	com1.OutFormat("%p  %s     %[i]      log_lock\n\r", &log_lock, log_lock.locked ? "Yes" : "No ", (stdsint)log_lock.cpu_id);
-	com1.OutFormat("%p  %s     %[i]      vfs_lock\n\r", &uni::vfs_lock, uni::vfs_lock.locked ? "Yes" : "No ", (stdsint)uni::vfs_lock.cpu_id);
 
 	com1.OutFormat("\n\r=== Global Mutexes ===\n\r");
 	com1.OutFormat("Address             Locked  Waiters Name\n\r");
 	com1.OutFormat("%p  %s     %[u]       outc_mutex\n\r", &outc_mutex, outc_mutex.locked ? "Yes" : "No ", outc_mutex.wait_queue.Count());
+	com1.OutFormat("%p  %s     %[u]       vfs_lock\n\r", &uni::vfs_lock, uni::vfs_lock.locked ? "Yes" : "No ", uni::vfs_lock.wait_queue.Count());
 	#if _MCCA == 0x8632 && _GUI_ENABLE && _GUI_FREETYPE
 	com1.OutFormat("%p  %s     %[u]       ft_lock\n\r", &ft_lock, ft_lock.locked ? "Yes" : "No ", ft_lock.wait_queue.Count());
 	#endif
@@ -658,8 +658,12 @@ void dump_lock(OstreamTrait& com1) {
 	com1.OutFormat("PID  Process Name        VMA Lock (Spinlock)    Sys Lock (Mutex)\n\r");
 	com1.OutFormat("                         Addr      Locked HCPUID Addr      Locked Waiters\n\r");
 
-	// Safely acquire scheduler_lock to walk the process chain Taskman::chain
-	bool old_if = scheduler_lock.Acquire();
+	// Never block here: dump_lock() is also used by spinlock timeout diagnostics.
+	bool old_if = false;
+	if (!scheduler_lock.TryAcquire(old_if)) {
+		com1.OutFormat("(skip process lock walk: scheduler_lock busy on CPU %[i])\n\r", (stdsint)scheduler_lock.cpu_id);
+		return;
+	}
 	for (auto nod = Taskman::chain.Root(); nod; nod = nod->next) {
 		auto pb = cast<ProcessBlock*>(nod->offs);
 		com1.OutFormat("%[u]    ", pb->pid);

@@ -351,16 +351,17 @@ ThreadBlock* Taskman::PickNext() {
 
 	if (!ready_bitmap) return nullptr;
 	uint32 original_bitmap = ready_bitmap;
+	bool skipped_due_to_affinity = false;
 	while (original_bitmap) {
 		uint32 idx = __builtin_ctz(original_bitmap);
 		ThreadBlock* node = priority_queues[idx].head;
 		while (node) {
 			if (!node->just_schedule && node->state != ThreadBlock::State::Running) {
+				bool runnable_here = true;
 				#if _MCCA == 0x8632
-				if (node->ring_coreid == CORE_ID_INVALID || node->ring_coreid == getID()) {
-				#else
-				if (true) {
+				runnable_here = (node->ring_coreid == CORE_ID_INVALID || node->ring_coreid == getID());
 				#endif
+				if (runnable_here) {
 					// Check whether node is in the array: 
 					for (int i = 0; i < PCU_CORES_MAX; i++) {
 						if (switching_out_threads(i) == node) {
@@ -369,12 +370,47 @@ ThreadBlock* Taskman::PickNext() {
 						}
 					}
 					return node;
+				} else {
+					#if _MCCA == 0x8632
+					skipped_due_to_affinity = true;
+					#endif
 				}
 			}
 			node = node->queue_state_next;
 		}
 		original_bitmap &= ~(1U << idx);
 	}
+
+	#if _MCCA == 0x8632
+	// Fallback: if this CPU is blocked only by affinity in the active epoch,
+	// allow it to steal a runnable task from the A-Type expired queues.
+	if (skipped_due_to_affinity && (expired_bitmap & 0xFFFF0000)) {
+		uint32 temp_expired = expired_bitmap & 0xFFFF0000;
+		while (temp_expired) {
+			uint32 idx = __builtin_ctz(temp_expired);
+			ThreadBlock* node = expired_queues[idx].head;
+			while (node) {
+				if (!node->just_schedule && node->state != ThreadBlock::State::Running) {
+					bool runnable_here = true;
+					#if _MCCA == 0x8632
+					runnable_here = (node->ring_coreid == CORE_ID_INVALID || node->ring_coreid == getID());
+					#endif
+					if (runnable_here) {
+						for (int i = 0; i < PCU_CORES_MAX; i++) {
+							if (switching_out_threads(i) == node) {
+								switching_out_threads(i) = nullptr;
+								break;
+							}
+						}
+						return node;
+					}
+				}
+				node = node->queue_state_next;
+			}
+			temp_expired &= ~(1U << idx);
+		}
+	}
+	#endif
 	return nullptr;
 }
 

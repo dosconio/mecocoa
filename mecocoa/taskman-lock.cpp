@@ -19,6 +19,17 @@ bool Spinlock::Acquire() {
 	this->cpu_id = (stdsint)Taskman::getID();
 	return (bool)state_rupt;
 }
+
+bool Spinlock::TryAcquire(bool& old_if) {
+	old_if = IC.TryMaskInterrupt();
+	if (__atomic_exchange_n(&this->locked, 1, __ATOMIC_ACQUIRE) == 0) {
+		this->cpu_id = (stdsint)Taskman::getID();
+		return true;
+	}
+	if (old_if) IC.enInterrupt(true);
+	return false;
+}
+
 void Spinlock::Release(bool old_if) {
 	this->cpu_id = -1;
 	__atomic_store_n(&this->locked, 0, __ATOMIC_RELEASE);
@@ -101,4 +112,3 @@ void Semaphore::Release() {
 
 	this->guard.Release(old_if); // Release lock and restore interrupt state
 }
-

@@ -18,7 +18,7 @@ namespace uni {
 	static file_system_type* registered_filesystems = nullptr;
 	static vfs_super_block* super_blocks = nullptr;
 	static vfs_dentry* vfs_root = nullptr; // Global root directory
-	Spinlock vfs_lock;
+	Mutex vfs_lock;
 
 	vfs_dentry* Filesys::getRoot() { return vfs_root; }
 
@@ -390,13 +390,13 @@ static vfs_dentry* _Create_unlocked(const char* pathname, stduint mode, vfs_dent
 }
 
 vfs_dentry* Filesys::Create(const char* pathname, stduint mode, vfs_dentry* base) {
-	SpinlockLocal guard(&vfs_lock);
+	MutexLocal guard(&vfs_lock);
 	return _Create_unlocked(pathname, mode, base);
 }
 
 
 bool Filesys::MountFilesys(FilesysTrait* fs, file_system_type* type, const char* target_path) {
-	SpinlockLocal guard(&vfs_lock);
+	MutexLocal guard(&vfs_lock);
 	vfs_dentry* target = _Index_unlocked(target_path, nullptr);
 	if (!target) {
 		// Auto-create intermediate directories in VFS if they don't exist
@@ -437,7 +437,7 @@ bool Filesys::MountFilesys(FilesysTrait* fs, file_system_type* type, const char*
 }
 
 bool Filesys::Unmount(const char* target_path) {
-	SpinlockLocal guard(&vfs_lock);
+	MutexLocal guard(&vfs_lock);
 	vfs_dentry* target = _Index_unlocked(target_path, nullptr);
 	if (!target || !target->d_mounts) {
 		return false;
@@ -635,7 +635,7 @@ void vfs_tree_node(uni::OstreamTrait& os, vfs_dentry* node, int depth, bool moun
 }
 
 void Filesys::Tree(uni::OstreamTrait& os, bool mount_expand) {
-	SpinlockLocal guard(&vfs_lock);
+	MutexLocal guard(&vfs_lock);
 	os.OutFormat("VFS Virtual Tree Structure:\n\r");
 	vfs_tree_node(os, vfs_root, 0, mount_expand);
 }
@@ -761,7 +761,7 @@ int Filesys::Read(vfs_file* file, void* buf, stduint count) {
 		return Filesys::ReadPipe(file, buf, count);
 	}
 	if (!file->f_inode->i_sb) return -1;
-	SpinlockLocal guard(&vfs_lock);
+	MutexLocal guard(&vfs_lock);
 	FilesysTrait* fs = file->f_inode->i_sb->fs;
 	
 	stduint bytes = fs->readfl(file->f_inode->internal_handler, Slice{ file->f_pos, count }, (byte*)buf);
@@ -775,7 +775,7 @@ int Filesys::Write(vfs_file* file, const void* buf, stduint count) {
 		return Filesys::WritePipe(file, buf, count);
 	}
 	if (!file->f_inode->i_sb) return -1;
-	SpinlockLocal guard(&vfs_lock);
+	MutexLocal guard(&vfs_lock);
 	FilesysTrait* fs = file->f_inode->i_sb->fs;
 
 	stduint bytes = fs->writfl(file->f_inode->internal_handler, Slice{ file->f_pos, count }, (const byte*)buf);
@@ -791,7 +791,7 @@ int Filesys::Close(vfs_file* file) {
 	if ((file->f_inode->i_mode & I_TYPE_MASK) == I_NAMED_PIPE) {
 		return Filesys::ClosePipe(file);
 	}
-	SpinlockLocal guard(&vfs_lock);
+	MutexLocal guard(&vfs_lock);
 	if (file) {
 		if (file->f_inode && file->f_pos > file->f_inode->i_size) {
 			file->f_inode->i_size = file->f_pos;
@@ -804,7 +804,7 @@ int Filesys::Close(vfs_file* file) {
 
 int Filesys::Enumer(vfs_file* file, void* buf, stduint count, ProcessBlock* pb) {
 	if (!file || !file->f_inode || !file->f_inode->i_sb) return -1;
-	SpinlockLocal guard(&vfs_lock);
+	MutexLocal guard(&vfs_lock);
 	FilesysTrait* fs = file->f_inode->i_sb->fs;
 
 	g_enum_cxt.pb = pb;
@@ -849,7 +849,7 @@ bool Filesys::Remove(const char* pathname, vfs_dentry* base) {
 		// Pass the pure relative path to the underlying physical FS
 		bool ret = fs->remove(rel_path);
 		if (ret) {
-			SpinlockLocal guard(&vfs_lock);
+			MutexLocal guard(&vfs_lock);
 			vfs_dentry* parent = dentry->d_parent;
 			if (parent) {
 				if (parent->d_first_child == dentry) {
@@ -1168,7 +1168,7 @@ file_system_type fs_fat = { "fat", [](StorageTrait& storage, stduint dev) -> Fil
 extern "C" stduint sys_kill(stduint pid, int sig, stduint tid);
 
 int Filesys::CreatePipe(vfs_file** out_reader, vfs_file** out_writer) {
-	SpinlockLocal guard(&vfs_lock);
+	MutexLocal guard(&vfs_lock);
 	
 	// Allocate PipeChannel on heap
 	PipeChannel* chan = new PipeChannel();
@@ -1390,7 +1390,7 @@ int Filesys::ClosePipe(vfs_file* file) {
 	}
 	
 	// Normal inode clean up
-	SpinlockLocal guard(&vfs_lock);
+	MutexLocal guard(&vfs_lock);
 	if (file->f_inode) {
 		// Inode ref_count is already decremented by ProcessBlock::Close,
 		// so we only delete it here when its ref_count reaches 0.

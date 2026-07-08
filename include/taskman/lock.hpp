@@ -5,6 +5,7 @@ struct Spinlock {
 	stdsint cpu_id = 0;
 	Spinlock() {}
 	bool Acquire();
+	bool TryAcquire(bool& old_if);
 	void Release(bool old_if);
 };
 

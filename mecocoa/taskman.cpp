@@ -660,24 +660,34 @@ bool Taskman::Exit(ProcessBlock* p, stdsint exit_code)
 		ProcessBlock* pb_sys = Taskman::Locate(i);
 		if (pb_sys && pb_sys->main_thread) {
 			ThreadBlock* th = pb_sys->main_thread;
+			bool wake_send = false;
+			bool wake_recv = false;
 			
-			extern Spinlock comm_lock;
-			SpinlockLocal guard(&comm_lock);
+			{
+				extern Spinlock comm_lock;
+				SpinlockLocal guard(&comm_lock);
 
-			// 1. If this system task is blocked while sending to us, unblock it and clear pointers
-			if ((th->block_reason & ThreadBlock::BlockReason::BR_SendMsg) &&
-				th->send_to_whom && th->send_to_whom != (ThreadBlock*)INTRUPT && th->send_to_whom->parent_process == p) {
-				th->send_to_whom = nullptr;
-				th->queue_send_queuenext = nullptr;
-				th->unsolved_msg = nullptr;
+				// 1. If this system task is blocked while sending to us, sever pointers under comm_lock
+				if ((th->block_reason & ThreadBlock::BlockReason::BR_SendMsg) &&
+					th->send_to_whom && th->send_to_whom != (ThreadBlock*)INTRUPT && th->send_to_whom->parent_process == p) {
+					th->send_to_whom = nullptr;
+					th->queue_send_queuenext = nullptr;
+					th->unsolved_msg = nullptr;
+					wake_send = true;
+				}
+
+				// 2. If this system task is blocked while receiving from us, sever pointers under comm_lock
+				if ((th->block_reason & ThreadBlock::BlockReason::BR_RecvMsg) &&
+					th->recv_fo_whom && th->recv_fo_whom != (ThreadBlock*)INTRUPT && th->recv_fo_whom->parent_process == p) {
+					th->recv_fo_whom = nullptr;
+					th->unsolved_msg = nullptr;
+					wake_recv = true;
+				}
+			}
+			if (wake_send) {
 				th->Unblock(ThreadBlock::BlockReason::BR_SendMsg);
 			}
-
-			// 2. If this system task is blocked while receiving from us, unblock it
-			if ((th->block_reason & ThreadBlock::BlockReason::BR_RecvMsg) &&
-				th->recv_fo_whom && th->recv_fo_whom != (ThreadBlock*)INTRUPT && th->recv_fo_whom->parent_process == p) {
-				th->recv_fo_whom = nullptr;
-				th->unsolved_msg = nullptr;
+			if (wake_recv) {
 				th->Unblock(ThreadBlock::BlockReason::BR_RecvMsg);
 			}
 		}
@@ -685,22 +695,31 @@ bool Taskman::Exit(ProcessBlock* p, stdsint exit_code)
 
 	// Wakeup any senders blocked by this process's main thread queue
 	if (p->main_thread) {
-		extern Spinlock comm_lock;
-		SpinlockLocal guard(&comm_lock);
+		Queue<ThreadBlock*> wake_list;
+		{
+			extern Spinlock comm_lock;
+			SpinlockLocal guard(&comm_lock);
 
-		ThreadBlock* sender = p->main_thread->queue_send_queuehead;
-		while (sender) {
-			ThreadBlock* next = sender->queue_send_queuenext;
-			
-			// Sever dangling pointers
-			sender->send_to_whom = nullptr;
-			sender->queue_send_queuenext = nullptr;
-			sender->unsolved_msg = nullptr;
-			
-			sender->Unblock(ThreadBlock::BlockReason::BR_SendMsg);
-			sender = next;
+			ThreadBlock* sender = p->main_thread->queue_send_queuehead;
+			while (sender) {
+				ThreadBlock* next = sender->queue_send_queuenext;
+				
+				// Sever dangling pointers under comm_lock, wake outside.
+				sender->send_to_whom = nullptr;
+				sender->queue_send_queuenext = nullptr;
+				sender->unsolved_msg = nullptr;
+				wake_list.Enqueue(sender);
+				sender = next;
+			}
+			p->main_thread->queue_send_queuehead = nullptr;
 		}
-		p->main_thread->queue_send_queuehead = nullptr;
+		while (!wake_list.isEmpty()) {
+			ThreadBlock* sender = nullptr;
+			wake_list.Dequeue(sender);
+			if (sender) {
+				sender->Unblock(ThreadBlock::BlockReason::BR_SendMsg);
+			}
+		}
 	}
 
 	p->exit_status = exit_code;

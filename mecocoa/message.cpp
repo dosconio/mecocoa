@@ -229,7 +229,6 @@ int msg_send(ThreadBlock* fo_th, stduint too, _Comment(vaddr) CommMsg* msg, bool
 			crt->queue_send_queuenext = fo_th;
 		}
 		fo_th->queue_send_queuenext = nullptr;// keep this at tail
-		fo_th->ring_coreid = CORE_ID_INVALID;
 		guard.~SpinlockLocal();
 		#if (_MCCA & 0xFF00) == 0x8600
 		Taskman::Schedule(true);
@@ -359,7 +358,6 @@ int msg_recv(ThreadBlock* to_th, stduint foo, _Comment(vaddr) CommMsg* msg)
 			if (to_th->unsolved_msg) plogwarn("T%u, unsolved_msg when recv(%u)", to_th->tid, foo);
 			to_th->unsolved_msg = msg;
 			to_th->recv_fo_whom = fo_th_tgt;
-			to_th->ring_coreid = CORE_ID_INVALID;
 			guard.~SpinlockLocal();
 			#if (_MCCA & 0xFF00) == 0x8600
 			Taskman::Schedule(true);
@@ -371,6 +369,9 @@ int msg_recv(ThreadBlock* to_th, stduint foo, _Comment(vaddr) CommMsg* msg)
 
 
 void msg_cleanup_thread(ThreadBlock* th) {
+	#if _MCCA == 0x8632
+	Queue<ThreadBlock*> wake_list;
+	#endif
 	SpinlockLocal guard(&comm_lock);
 	
 	// Case 1: This thread (th) was a target (Receiver), unblock all its senders
@@ -380,7 +381,9 @@ void msg_cleanup_thread(ThreadBlock* th) {
 		sender->send_to_whom = nullptr;
 		sender->queue_send_queuenext = nullptr;
 		sender->unsolved_msg = nullptr;
-		sender->Unblock(ThreadBlock::BlockReason::BR_SendMsg);
+		#if _MCCA == 0x8632
+		wake_list.Enqueue(sender);
+		#endif
 		sender = s_next;
 	}
 	th->queue_send_queuehead = nullptr;
@@ -412,6 +415,17 @@ void msg_cleanup_thread(ThreadBlock* th) {
 
 	// Case 3: Clean up all pending async messages for this thread
 	th->async_messages.Remove(0, th->async_messages.Count());
+
+	#if _MCCA == 0x8632
+	guard.~SpinlockLocal();
+	while (!wake_list.isEmpty()) {
+		ThreadBlock* wake = nullptr;
+		wake_list.Dequeue(wake);
+		if (wake) {
+			wake->Unblock(ThreadBlock::BlockReason::BR_SendMsg);
+		}
+	}
+	#endif
 }
 
 #endif

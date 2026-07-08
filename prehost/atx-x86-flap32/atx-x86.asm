@@ -339,8 +339,29 @@ Handint_SYSCALL_Entry:
 	MOV EDX, [EBP + CF_TRANS_FRAME]
 	MOV EBX, [EBP + CF_CR3]
 
-	; Copy DI..SS0 back to transition return frame.
-	COPY_DWORDS EBP, EDX, RING3_FRAME_DWORDS
+	; Copy only the POPAD restore area back to transition frame.
+	COPY_DWORDS EBP, EDX, 8
+
+	; Explicitly build the IRETD tail:
+	;   [EDX + 32] = IP
+	;   [EDX + 36] = CS
+	;   [EDX + 40] = FLAGS
+	;   [EDX + 44] = SP0
+	;   [EDX + 48] = SS0
+	MOV EAX, [EBP + CF_IP]
+	MOV [EDX + 32], EAX
+
+	MOV EAX, [EBP + CF_CS]
+	MOV [EDX + 36], EAX
+
+	MOV EAX, [EBP + CF_FLAGS]
+	MOV [EDX + 40], EAX
+
+	MOV EAX, [EBP + CF_SP0]
+	MOV [EDX + 44], EAX
+
+	MOV EAX, [EBP + CF_SS0]
+	MOV [EDX + 48], EAX
 
 	; Restore original outer-ring segment selectors.
 	RESTORE_SEGS_FROM_FRAME EBP
@@ -353,17 +374,6 @@ Handint_SYSCALL_Entry:
 	MOV CR3, EBX
 .skip_user_cr3:
 
-	; Transition stack layout here is:
-	;   DI SI BP SP BX DX CX AX FLAGS IP CS SP0 SS0
-	; Reorder only the tail into IRETD order before POPAD:
-	;   DI SI BP SP BX DX CX AX IP CS FLAGS SP0 SS0
-	; This avoids restoring IF with POPFD while still on the transition stack.
-	MOV EAX, [ESP + 32]
-	MOV EBX, [ESP + 36]
-	MOV ECX, [ESP + 40]
-	MOV [ESP + 32], EBX
-	MOV [ESP + 36], ECX
-	MOV [ESP + 40], EAX
 	POPAD
 	IRETD
 
