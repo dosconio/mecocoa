@@ -311,7 +311,6 @@ public: // Threads
 
 public: // VirtualMemory
 	uni::Paging paging;
-	uni::Paging* paging_redirect = nullptr;
 	stduint heaptop = 0;
 	stduint heapbtm = 0;// norm: max seg + 0x10000
 	uni::Vector<VirtualMemoryArea> vmas; // List of virtual memory areas
@@ -398,6 +397,7 @@ public _Comment(State):
 	uni::Queue<ThreadBlock*> join_wait_queue;
 public: // _Comment(Syscomm)
 	CommMsg* unsolved_msg = nullptr;
+	bool unsolved_msg_from_kernel = false;
 	ThreadBlock* send_to_whom = nullptr;// nullptr for none (cannot comm with base-kernel)
 	ThreadBlock* recv_fo_whom = nullptr;// nullptr for ANY
 	stduint wait_rupt_no = 0;// equals vector plus one. 0 for none, 1 for ZeroException...
@@ -584,36 +584,62 @@ enum class TaskmanMsg : stduint {
 #ifndef _ACCM
 
 // return zero for success
-int msg_send(ThreadBlock* fo, stduint to, _Comment(vaddr) CommMsg* msg, bool is_async = false);
-int msg_recv(ThreadBlock* to, stduint fo, _Comment(vaddr) CommMsg* msg);
+int msg_send(ThreadBlock* fo, stduint to, _Comment(vaddr) CommMsg* msg, bool msg_in_kernel, bool is_async = false);
+int msg_recv(ThreadBlock* to, stduint fo, _Comment(vaddr) CommMsg* msg, bool msg_in_kernel);
 
 void msg_cleanup_thread(ThreadBlock* th);
 void rupt_proc(stduint tid, stduint rupt_no);
 
-inline static stduint syssend(stduint to_whom, const void* msgaddr, stduint bytlen, stduint type = 0)
+inline static stduint syssend(stduint to_whom, const void* msgaddr, stduint bytlen, stduint type = 0, bool from_kernel = true)
 {
 	struct CommMsg msg = { };
 	msg.data.address = _IMM(msgaddr);
 	msg.data.length = bytlen;
 	msg.type = type;
-	return syscall(syscall_t::COMM, COMM_SEND, to_whom, _IMM(&msg));
+	auto th = Taskman::CurrentTB();
+
+	if (!th) {
+		plogerro("syssend: null CurrentTB");
+		return 1;
+	}
+
+	stduint ret = msg_send(th, to_whom, &msg, from_kernel, false);
+	return ret;
 }
-inline static stduint syssend_async(stduint to_whom, const void* msgaddr, stduint bytlen, stduint type = 0)
+inline static stduint syssend_async(stduint to_whom, const void* msgaddr, stduint bytlen, stduint type = 0, bool from_kernel = true)
 {
 	struct CommMsg msg = { };
 	msg.data.address = _IMM(msgaddr);
 	msg.data.length = bytlen;
 	msg.type = type;
-	return syscall(syscall_t::COMM, COMM_SEND_ASYNC, to_whom, _IMM(&msg));
+	auto th = Taskman::CurrentTB();
+
+	if (!th) {
+		plogerro("syssend_async: null CurrentTB");
+		return 1;
+	}
+
+	stduint ret = msg_send(th, to_whom, &msg, from_kernel, true);
+	if (th->state == ThreadBlock::State::Pended) {
+		Taskman::Schedule(true);
+	}
+	return ret;
 }
-inline static stduint sysrecv(stduint fo_whom, void* msgaddr, stduint bytlen, stduint* type = NULL, stduint* src = NULL)
+inline static stduint sysrecv(stduint fo_whom, void* msgaddr, stduint bytlen, stduint* type = NULL, stduint* src = NULL, bool from_kernel = true)
 {
 	struct CommMsg msg = { };
 	msg.data.address = _IMM(msgaddr);
 	msg.data.length = bytlen;
 	if (type) msg.type = *type;
 	if (src) msg.src = *src;
-	stduint ret = syscall(syscall_t::COMM, COMM_RECV, fo_whom, _IMM(&msg));
+	auto th = Taskman::CurrentTB();
+
+	if (!th) {
+		plogerro("sysrecv: null CurrentTB");
+		return 1;
+	}
+
+	stduint ret = msg_recv(th, fo_whom, &msg, from_kernel);
 	if (type) *type = msg.type;
 	if (src) *src = msg.src;
 	return ret;
@@ -624,51 +650,49 @@ inline static stduint syssdrv(stduint whom, void* msgaddr, stduint bytlen, stdui
 	return sysrecv(whom, msgaddr, bytlen, type);
 }
 
-static inline void* SeekAddress(ProcessBlock* pb, stduint addr) {
+static inline void* SeekAddress(ProcessBlock* pb, stduint addr, bool from_kernel) {
 	#if (_MCCA & 0xFF00) == 0x1000 // M-RISCV
-	uni::Paging* pag = pb->paging_redirect;
-	void* ptr = pag ? (*pag)[addr] : (void*)addr;
+	void* ptr = from_kernel ? (void*)addr : (void*)pb->paging[addr];
 	#else
-	uni::Paging* pag = pb->paging_redirect ? pb->paging_redirect : &pb->paging;
+	uni::Paging* pag = from_kernel ? &kernel_paging : &pb->paging;
 	void* ptr = (*pag)[addr];
 	#endif
+	// if (_IMM(ptr) == ~_IMM0) plogerro("SeekAddress: null ptr");
 	return _IMM(ptr) != ~_IMM0 ? ptr : nullptr;
 }
 
 extern "C" void* kernel_prefault_page(ProcessBlock* pb, stduint addr);
 
-static inline stduint MccaMemCopyP(void* dest, ProcessBlock* pd, const void* sors, ProcessBlock* ps, size_t n) {
+static inline stduint MccaMemCopyP(
+	void* dest, ProcessBlock* pd, bool dker,
+	const void* sors, ProcessBlock* ps, bool sker,
+	size_t n) {
 	extern Paging kernel_paging;
-	if (ps) {
+	if (ps && !sker) {
 		stduint start_page = (stduint)sors & ~_IMM(0xFFF);
 		stduint end_page = ((stduint)sors + n + 0xFFF) & ~_IMM(0xFFF);
 		if (end_page >= start_page) {
 			for (stduint curr = start_page; curr < end_page; curr += 0x1000) {
-				if (!SeekAddress(ps, curr)) {
+				if (!SeekAddress(ps, curr, false)) {
 					kernel_prefault_page(ps, curr);
 				}
 			}
 		}
 	}
-	if (pd) {
+	if (pd && !dker) {
 		stduint start_page = (stduint)dest & ~_IMM(0xFFF);
 		stduint end_page = ((stduint)dest + n + 0xFFF) & ~_IMM(0xFFF);
 		if (end_page >= start_page) {
 			for (stduint curr = start_page; curr < end_page; curr += 0x1000) {
-				if (!SeekAddress(pd, curr)) {
+				if (!SeekAddress(pd, curr, false)) {
 					kernel_prefault_page(pd, curr);
 				}
 			}
 		}
 	}
-	#if (_MCCA & 0xFF00) == 0x1000 // M-RISCV
-	Paging pag = {};
-	pag.root_level_page = nil;
-	return MemCopyP(dest, (pd && pd->paging_redirect) ? *pd->paging_redirect : pag,
-		sors, (ps && ps->paging_redirect) ? *ps->paging_redirect : pag, n);
-	#else
-	return MemCopyP(dest, pd ? (pd->paging_redirect ? *pd->paging_redirect : pd->paging) : kernel_paging, sors, ps ? (ps->paging_redirect ? *ps->paging_redirect : ps->paging) : kernel_paging, n);
-	#endif
+	return MemCopyP(
+		dest, pd && !dker ? pd->paging : kernel_paging,
+		sors, ps && !sker ? ps->paging : kernel_paging, n);
 }
 
 #endif

@@ -161,6 +161,7 @@ bool WakeOneIdleApForReadyWork() {
 		auto percore = Taskman::PCU_CORES_PERCORE[next_ap];
 		if (percore &&
 			percore->state == CoreState::Online &&
+			Taskman::current_thread(next_ap) == Taskman::idle_thread(next_ap) &&
 			(Taskman::switching_out_threads(next_ap) == nullptr ||
 				!Taskman::switching_out_threads(next_ap)->just_schedule)) {
 			Taskman::SendRescheduleIPI(next_ap);

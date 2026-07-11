@@ -49,9 +49,6 @@ __attribute__((optimize("O0")))
 stduint syscall(syscall_t callid, stduint para1, stduint para2, stduint para3) {
 	stduint ret;
 	#if   (_MCCA & 0xFF00) == 0x8600
-	auto pb = Taskman::CurrentPB();
-	auto old_dir = pb->paging_redirect;
-	pb->paging_redirect = &kernel_paging;
 	#if   (_MCCA & 0xFF00) == 0x8600
 	if (_IMM(callid) >= numsof(SYSCALL_TABLE)) {
 		plogerro("syscall: callid out of range: %u", callid);
@@ -59,8 +56,6 @@ stduint syscall(syscall_t callid, stduint para1, stduint para2, stduint para3) {
 	}
 	ret = reinterpret_cast<stdsint(*)(stduint, stduint, stduint)>(SYSCALL_TABLE[_IMM(callid)])(para1, para2, para3);
 	#endif
-	pb->paging_redirect = 0;// old_dir;
-	// if (old_dir) ploginfo(">>> %x", old_dir);
 
 	#elif (_MCCA & 0xFF00) == 0x1000
 	void syscall_body(NormalTaskContext * cxt);
@@ -118,7 +113,6 @@ DEFSYSC sysc_INNC(stduint blocked) {
 	auto ppb = th->parent_process;
 	if (blocked) {
 		msgbuf[3] = ppb->getID();
-		ppb->paging_redirect = nil;
 		syssend(Task_Console, sliceof(msgbuf), _IMM(ConsoleMsg::INNC));//
 		sysrecv(Task_Console, &ret, byteof(ret));// need Context
 	}
@@ -193,15 +187,16 @@ DEFSYSC sysc_REST(stduint unit, stduint time) {
 
 DEFSYSC sysc_COMM(stduint op, stduint to, stduint msg) {
 	auto th = Taskman::CurrentTB();
+	bool msg_in_kernel = false;
 	usize ret = 0;
 	// ploginfo("sysc_COMM:[th%u] op = %x, to = %x, msg = %x", th->getID(), op, to, msg);
 	if (op & (COMM_SEND | COMM_SEND_ASYNC)) { // SEND or ASYNC_SEND
 		// ploginfo("%d --> %d: 0x%[x]", pb->getID(), to, msg);
-		if (ret = msg_send(th, to, (CommMsg*)msg, (op & COMM_SEND_ASYNC) != 0)) return ret;
+		if (ret = msg_send(th, to, (CommMsg*)msg, msg_in_kernel, (op & COMM_SEND_ASYNC) != 0)) return ret;
 	}
 	if (op & COMM_RECV) { // RECV
 		// if (to && to != ~_IMM0) ploginfo("%d <-- %d", pb->getID(), to);
-		ret = msg_recv(th, to, (CommMsg*)msg);
+		ret = msg_recv(th, to, (CommMsg*)msg, msg_in_kernel);
 	}
 	if (op & (COMM_SEND | COMM_SEND_ASYNC | COMM_RECV)); else {
 		plogerro("Invalid op %x", op);
@@ -327,7 +322,10 @@ DEFSYSC sysc_READ(stduint fd, stduint addr, stduint len) {
 					continue;
 				}
 				// Store in user buffer and provide visual echo
-				MccaMemCopyP((void*)(addr + total_read), pb, &ch, NULL, 1);
+				MccaMemCopyP(
+					(void*)(addr + total_read), pb, false,
+					& ch, NULL, true,
+					1);
 				total_read++;
 				if (con) con->OutChar(ch);
 
@@ -342,7 +340,10 @@ DEFSYSC sysc_READ(stduint fd, stduint addr, stduint len) {
 
 			if (total_read > 0) {
 				byte last_char;
-				MccaMemCopyP(&last_char, NULL, (void*)(addr + total_read - 1), pb, 1);
+				MccaMemCopyP(
+					&last_char, NULL, true,
+					(void*)(addr + total_read - 1), pb, false,
+					1);
 				if (last_char == '\n') {
 					break;
 				}
@@ -410,7 +411,10 @@ DEFSYSC sysc_PORP(stduint fd, stduint usr_proper) {
 	prop.size = inode->i_size;
 	prop.mode = inode->i_mode & I_TYPE_MASK;
 
-	MccaMemCopyP((void*)usr_proper, pb, &prop, nullptr, sizeof(prop));
+	MccaMemCopyP(
+		(void*)usr_proper, pb, false,
+		&prop, nullptr, true,
+		sizeof(prop));
 	return 0; // Success
 }
 
@@ -459,7 +463,10 @@ DEFSYSC sysc_WAIT(stduint pid, stduint usr_status) {
 	stdsint ret = open_buf[0];// pid
 	if (ret && usr_status) {
 		auto pb = tb->parent_process;
-		MccaMemCopyP((void*)usr_status, pb, &open_buf[1], NULL, byteof(stduint));
+		MccaMemCopyP(
+			(void*)usr_status, pb, false,
+			&open_buf[1], NULL, true,
+			byteof(stduint));
 	}
 	return ret;
 }
@@ -792,7 +799,6 @@ stduint Handint_SYSCALL(CallgateFrame* frame) {
 		#endif
 	}
 	auto pb = Taskman::CurrentPB();
-	pb->paging_redirect = 0;
 	#if _MCCA == 0x8632
 	CallgateFrame frame_copy = *frame;
 	CallgateFrame* active_frame = &frame_copy;
@@ -853,11 +859,13 @@ stduint Handint_SYSCALL(CallgateFrame* frame) {
 
 	active_frame->ax = ret_val;
 	check_and_deliver_signals_syscall(active_frame);
+	//
 	auto resume_th = Taskman::CurrentTB();
 	const stduint resume_cpu_id = resume_th ? resume_th->processor_id : Taskman::getID();
 	if (resume_cpu_id < PCU_CORES_MAX) {
 		active_frame->percore_ptr = _IMM(Taskman::PCU_CORES_PERCORE[resume_cpu_id]);
 	}
+	//
 	*frame = frame_copy;
 	#else
 	frame->ax = ret_val;

@@ -393,8 +393,14 @@ stdsint ProcessBlock::Pipe(int pipefd[2]) {
 	}
 
 	// Safely copy fd values to user space array
-	MccaMemCopyP(pipefd, this, &fd_r, nullptr, sizeof(int));
-	MccaMemCopyP(pipefd + 1, this, &fd_w, nullptr, sizeof(int));
+	MccaMemCopyP(
+		pipefd, this, false,
+		&fd_r, nullptr, true,
+		sizeof(int));
+	MccaMemCopyP(
+		pipefd + 1, this, false,
+		&fd_w, nullptr, true,
+		sizeof(int));
 
 	return 0;
 }

@@ -589,12 +589,17 @@ static bool DeliverWaitResultAtomically(ProcessBlock* pparent, stduint child_pid
 			return false;
 		}
 
-		auto msg_to = (CommMsg*)SeekAddress(parent_th->parent_process, _IMM(parent_th->unsolved_msg));
+		auto msg_to = parent_th->unsolved_msg_from_kernel
+			? parent_th->unsolved_msg
+			: (CommMsg*)SeekAddress(parent_th->parent_process, _IMM(parent_th->unsolved_msg), false);
 		if (!msg_to) return false;
 
 		stduint leng = minof((stduint)sizeof(args), msg_to->data.length);
 		if (leng) {
-			MccaMemCopyP((void*)msg_to->data.address, parent_th->parent_process, args, nullptr, leng);
+			MccaMemCopyP(
+				(void*)msg_to->data.address, parent_th->parent_process, parent_th->unsolved_msg_from_kernel,
+				args, nullptr, true,
+				leng);
 		}
 		msg_to->type = 0;
 		msg_to->src = taskman_th->tid;

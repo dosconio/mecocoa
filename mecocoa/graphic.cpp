@@ -474,7 +474,10 @@ struct FMT_ConsoleMsg_FNEW {
 
 static stdsint GraphicMsg_FNEW(const FMT_ConsoleMsg_FNEW* data, ProcessBlock* pb) {
 	Rectangle rect;
-	auto mmcp_len = MccaMemCopyP(&rect, NULL, data->usrp_rect, pb, sizeof(rect));
+	auto mmcp_len = MccaMemCopyP(
+		&rect, NULL, true,
+		data->usrp_rect, pb, false,
+		sizeof(rect));
 	if (mmcp_len != sizeof(rect)) {
 		plogerro("GraphicMsg_FNEW: invalid data length (%u)", mmcp_len);
 		return -1;
@@ -660,7 +663,10 @@ static stdsint GraphicMsg_FUPD(const FMT_ConsoleMsg_FUPD* data, ProcessBlock* pb
 	Rectangle dirty_rect;
 	bool has_dirty = false;
 	if (data->usrp_rect) {
-		if (MccaMemCopyP(&dirty_rect, NULL, data->usrp_rect, pb, sizeof(dirty_rect)) == sizeof(dirty_rect)) {
+		if (MccaMemCopyP(
+			&dirty_rect, NULL, true,
+			data->usrp_rect, pb, false,
+			sizeof(dirty_rect)) == sizeof(dirty_rect)) {
 			has_dirty = true;
 		}
 	}
@@ -691,7 +697,10 @@ static stdsint GraphicMsg_FUPD(const FMT_ConsoleMsg_FUPD* data, ProcessBlock* pb
 	for (stduint i = 0; i < dirty_rect.height; i++) {
 		Color* dst = pfrm->sheet_buffer + (client_area.y + dirty_rect.y + i) * pfrm->sheet_area.width + (client_area.x + dirty_rect.x);
 		Color* src = (Color*)user_buf + (dirty_rect.y + i) * client_area.width + dirty_rect.x;
-		MccaMemCopyP(dst, NULL, src, owner, dirty_rect.width * sizeof(Color));
+		MccaMemCopyP(
+			dst, NULL, true,
+			src, owner, false,
+			dirty_rect.width * sizeof(Color));
 	}
 
 	Rectangle update_rect(
@@ -710,7 +719,10 @@ static stdsint GraphicMsg_FMSG(const FMT_ConsoleMsg_FMSG* data, ProcessBlock* pb
 	if (pf->msg_queue.Count()) {
 		SheetMessage msg;
 		pf->msg_queue.Dequeue(msg);
-		MccaMemCopyP(data->message, pb, &msg, NULL, sizeof(msg));
+		MccaMemCopyP(
+			data->message, pb, false,
+			&msg, NULL, true,
+			sizeof(msg));
 		return 1; // Message fetched
 	}
 
@@ -731,14 +743,20 @@ static stdsint GraphicMsg_FDRW(const FMT_ConsoleMsg_FDRW* data, ProcessBlock* pb
 	switch (data->shape_type) {
 	case FMT_ConsoleMsg_FDRW::Shape::Point: {
 		FMT_ConsoleMsg_FDRW::ShapeInfo::ColorPoint cp;
-		if (MccaMemCopyP(&cp, NULL, data->usr_shape_info.cpoint, pb, sizeof(cp)) != sizeof(cp)) return -1;
+		if (MccaMemCopyP(
+			&cp, NULL, true,
+			data->usr_shape_info.cpoint, pb, false,
+			sizeof(cp)) != sizeof(cp)) return -1;
 		if (!pfrm->sheet_buffer) return -1;
 		pfrm->sheet_buffer[cp.po.y * pfrm->sheet_area.width + cp.po.x] = cp.co;
 		return 0;
 	}
 	case FMT_ConsoleMsg_FDRW::Shape::Line: {
 		FMT_ConsoleMsg_FDRW::ShapeInfo::ColorLine cl;
-		if (MccaMemCopyP(&cl, NULL, data->usr_shape_info.cline, pb, sizeof(cl)) != sizeof(cl)) return -1;
+		if (MccaMemCopyP(
+			&cl, NULL, true,
+			data->usr_shape_info.cline, pb, false,
+			sizeof(cl)) != sizeof(cl)) return -1;
 		if (!pfrm->sheet_buffer) return -1;
 
 		VideoControlInterfaceMARGB8888 vcim(pfrm->sheet_buffer, pfrm->sheet_area.getSize());
@@ -761,7 +779,10 @@ static stdsint GraphicMsg_FDRW(const FMT_ConsoleMsg_FDRW* data, ProcessBlock* pb
 	}
 	case FMT_ConsoleMsg_FDRW::Shape::Rect: {
 		Rectangle rect;
-		if (MccaMemCopyP(&rect, NULL, data->usr_shape_info.crect, pb, sizeof(rect)) != sizeof(rect)) return -1;
+		if (MccaMemCopyP(
+			&rect, NULL, true,
+			data->usr_shape_info.crect, pb, false,
+			sizeof(rect)) != sizeof(rect)) return -1;
 		if (!pfrm->sheet_buffer) return -1;
 		VideoControlInterfaceMARGB8888 vcim(pfrm->sheet_buffer, pfrm->sheet_area.getSize());
 		vcim.DrawRectangle(rect);
@@ -784,7 +805,10 @@ static stdsint GraphicMsg_FCHR(const FMT_ConsoleMsg_FCHR* data, ProcessBlock* pb
 	if (!pfrm) return -1;
 
 	Point vertex;
-	if (MccaMemCopyP(&vertex, NULL, data->usrp_vertex, pb, sizeof(vertex)) != sizeof(vertex)) return -1;
+	if (MccaMemCopyP(
+		&vertex, NULL, true,
+		data->usrp_vertex, pb, false,
+		sizeof(vertex)) != sizeof(vertex)) return -1;
 	String buf(String::Charset::UTF8, 256);
 	stduint len = StrCopyP(buf.reflect(), kernel_paging, data->usrp_str, pb->paging, 256);
 	buf.Refresh();
@@ -1051,7 +1075,10 @@ void serv_graf_loop() {
 					if (pf->msg_queue.Count()) {
 						SheetMessage smsg;
 						pf->msg_queue.Dequeue(smsg);
-						MccaMemCopyP(b.usr_msg_ptr, pb, &smsg, NULL, sizeof(smsg));
+						MccaMemCopyP(
+							b.usr_msg_ptr, pb, false,
+							&smsg, NULL, true,
+							sizeof(smsg));
 
 						stduint val = 1;
 						stduint target_sig_src = b.sig_src;
@@ -1192,7 +1219,10 @@ void serv_graf_loop() {
 				if (pf->msg_queue.Count()) {
 					SheetMessage msg;
 					pf->msg_queue.Dequeue(msg);
-					MccaMemCopyP(b.usr_msg_ptr, pb, &msg, NULL, sizeof(msg));
+					MccaMemCopyP(
+						b.usr_msg_ptr, pb, false,
+						&msg, NULL, true,
+						sizeof(msg));
 
 					stduint val = 1;
 					stduint target_sig_src = b.sig_src;

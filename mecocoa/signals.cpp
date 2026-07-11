@@ -218,11 +218,17 @@ static void check_and_deliver_signals_generic(RegisterContext& ctx) {
 	user_sp -= 4; // Space for return address (sa_restorer), making ESP = 16n - 4 (12 mod 16)
 
 	// Write SigStackFrame (located at user_sp + 4, which is 16-byte aligned)
-	MccaMemCopyP((void*)(user_sp + 4), pb, &uframe, nullptr, sizeof(SigStackFrame));
+	MccaMemCopyP(
+		(void*)(user_sp + 4), pb, false,
+		&uframe, nullptr, true,
+		sizeof(SigStackFrame));
 
 	// Write trampoline address (sa_restorer) at user_sp
 	stduint restorer = (stduint)act.sa_restorer;
-	MccaMemCopyP((void*)user_sp, pb, &restorer, nullptr, 4);
+	MccaMemCopyP(
+		(void*)user_sp, pb, false,
+		&restorer, nullptr, true,
+		4);
 
 	// Update stack frame to execute the handler
 	*ctx.p_sp = user_sp;
@@ -234,11 +240,17 @@ static void check_and_deliver_signals_generic(RegisterContext& ctx) {
 	user_sp -= 8; // Space for return address (sa_restorer), making RSP = 16n - 8 (8 mod 16)
 
 	// Write SigStackFrame (located at user_sp + 8, which is 16-byte aligned)
-	MccaMemCopyP((void*)(user_sp + 8), pb, &uframe, nullptr, sizeof(SigStackFrame));
+	MccaMemCopyP(
+		(void*)(user_sp + 8), pb, false,
+		&uframe, nullptr, true,
+		sizeof(SigStackFrame));
 
 	// Write trampoline address (sa_restorer) at user_sp
 	stduint restorer = (stduint)act.sa_restorer;
-	MccaMemCopyP((void*)user_sp, pb, &restorer, nullptr, 8);
+	MccaMemCopyP(
+		(void*)user_sp, pb, false,
+		&restorer, nullptr, true,
+		8);
 
 	// Update stack frame to execute the handler
 	*ctx.p_sp = user_sp;
@@ -250,7 +262,10 @@ static void check_and_deliver_signals_generic(RegisterContext& ctx) {
 	user_sp &= ~0xF; // Keep 16-byte aligned
 
 	// Write SigStackFrame (located at user_sp)
-	MccaMemCopyP((void*)user_sp, pb, &uframe, nullptr, sizeof(SigStackFrame));
+	MccaMemCopyP(
+		(void*)user_sp, pb, false,
+		&uframe, nullptr, true /* ? */,
+		sizeof(SigStackFrame));
 
 	// Update context: set ra to restorer, a0 to signo, sp to user_sp, IP to handler
 	*ctx.p_di = (stduint)act.sa_restorer;
@@ -536,7 +551,10 @@ extern "C" stdsint sysc_SIGR(void* context) {
 
 	SigStackFrame uframe = {};
 	// Safely copy signal frame from user stack
-	if (MccaMemCopyP(&uframe, nullptr, (const void*)user_sp, pb, sizeof(SigStackFrame)) != sizeof(SigStackFrame)) {
+	if (MccaMemCopyP(
+		&uframe, nullptr, true,
+		(const void*)user_sp, pb, false,
+		sizeof(SigStackFrame)) != sizeof(SigStackFrame)) {
 		return -1;
 	}
 

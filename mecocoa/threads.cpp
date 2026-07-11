@@ -98,7 +98,10 @@ stdsint Taskman::CreateThread(ProcessBlock* pb, stduint entry, stduint arg, stdu
 		return -1;
 	}
 	stduint zero = 0;
-	MccaMemCopyP((void*)call_sp, pb, &zero, nullptr, sizeof(stduint));
+	MccaMemCopyP(
+		(void*)call_sp, pb, false,
+		&zero, nullptr, true,
+		sizeof(stduint));
 	tb->context.SP = call_sp;
 
 	#elif _MCCA == 0x8632
@@ -106,10 +109,16 @@ stdsint Taskman::CreateThread(ProcessBlock* pb, stduint entry, stduint arg, stdu
 	if (stack_top) {
 		stduint* sp = (stduint*)stack_top;
 		sp--;
-		MccaMemCopyP(sp, pb, &arg, nullptr, sizeof(stduint));
+		MccaMemCopyP(
+			sp, pb, false,
+			& arg, nullptr, true,
+			sizeof(stduint));
 		sp--;
 		stduint zero = 0;
-		MccaMemCopyP(sp, pb, &zero, nullptr, sizeof(stduint));
+		MccaMemCopyP(
+			sp, pb, false,
+			&zero, nullptr, true,
+			sizeof(stduint));
 		tb->context.SP = (stduint)sp;
 	}
 	#elif _MCCA == 0x1032 || _MCCA == 0x1064
@@ -207,8 +216,11 @@ stdsint Taskman::JoinThread(stduint tid, stduint usr_status) {
 	auto copy_exit_status = [&](ThreadBlock* th) {
 		if (!usr_status) return;
 		stduint code = th->exit_status;
-		MccaMemCopyP((void*)usr_status, pb, &code, nullptr, sizeof(stduint));
-	};
+		MccaMemCopyP(
+			(void*)usr_status, pb, false,
+			&code, nullptr, true,
+			sizeof(stduint));
+		};
 
 	if (target_th->state == ThreadBlock::State::Hanging) {
 		copy_exit_status(target_th);
@@ -285,7 +297,10 @@ stdsint Taskman::Futex(stduint addr, stduint op, stduint val) {
 		{
 			SpinlockLocal guard(&scheduler_lock);
 			uint32 current_val = 0;
-			MccaMemCopyP(&current_val, nullptr, (void*)addr, pb, sizeof(current_val));
+			MccaMemCopyP(
+				&current_val, nullptr, true,
+				(void*)addr, pb, false,
+				sizeof(current_val));
 			if (current_val != (uint32)val) {
 				return -1;
 			}

@@ -9,7 +9,9 @@
 #if _MCCA == 0x8664 && defined(_UEFI)
 extern byte _BUF_xhc[];
 #endif
-
+#if (_MCCA & 0xFF00) == 0x1000
+#include <c/driver/timer.h>
+#endif
 
 extern uni::Dchain TimerManager;
 void _Comment(R0) serv_sysmsg() {
@@ -66,7 +68,11 @@ void rupt_proc(stduint tid, stduint rupt_no)
 		// ploginfo("INT-MSG: RUPT-PROC");
 		CommMsg tmp_msg = { };
 		tmp_msg.type = HARDRUPT;
-		MccaMemCopyP(th->unsolved_msg, th->parent_process, &tmp_msg, 0, sizeof(tmp_msg));
+		MccaMemCopyP(
+			th->unsolved_msg, th->parent_process, th->unsolved_msg_from_kernel,
+			&tmp_msg, 0, true,
+			sizeof(tmp_msg)
+		);
 		th->wait_rupt_no = nil;
 		th->unsolved_msg = NULL;
 		th->Unblock(ThreadBlock::BlockReason::BR_RecvMsg);
@@ -145,7 +151,7 @@ static void DropQueuedSender(ThreadBlock* to_th, ThreadBlock* prev, ThreadBlock*
 	}
 }
 
-int msg_send(ThreadBlock* fo_th, stduint too, _Comment(vaddr) CommMsg* msg, bool is_async)
+int msg_send(ThreadBlock* fo_th, stduint too, _Comment(vaddr) CommMsg* msg, bool msg_in_kernel, bool is_async)
 {
 	SpinlockLocal guard(&comm_lock);
 	KASSERT(fo_th != nullptr);
@@ -167,15 +173,19 @@ int msg_send(ThreadBlock* fo_th, stduint too, _Comment(vaddr) CommMsg* msg, bool
 	if ((_IMM(to_th->block_reason) & _IMM(ThreadBlock::BlockReason::BR_RecvMsg)) &&
 		(to_th->recv_fo_whom == fo_th || (stduint)to_th->recv_fo_whom == ANYPROC)) {
 		// assert to.unsolved_msg && msg
-		void* pg_leng = SeekAddress(fo, _IMM(&msg->data.length));
+		void* pg_leng = SeekAddress(fo, _IMM(&msg->data.length), msg_in_kernel);
 		stduint leng = _IMM(pg_leng) ? *(stduint*)pg_leng : 0;
-		auto msg_fo = (CommMsg*)SeekAddress(fo, _IMM(msg));
+		auto msg_fo = (CommMsg*)SeekAddress(fo, _IMM(msg), msg_in_kernel);
 		void* addr_fo = msg_fo ? (void*)msg_fo->data.address : nullptr;
-		auto msg_to = (CommMsg*)SeekAddress(to, _IMM(to_th->unsolved_msg));
+		auto msg_to = (CommMsg*)SeekAddress(to, _IMM(to_th->unsolved_msg), to_th->unsolved_msg_from_kernel);
 		void* addr_to = msg_to ? (void*)msg_to->data.address : nullptr;
 		if (msg_to) MIN(leng, msg_to->data.length);
 		// if (leng > 500) ploginfo("SEND: T%u->T%u, %u bytes, %p->%p", fo_th->tid, to_th->tid, leng, addr_fo, addr_to);
-		if (leng) MccaMemCopyP(addr_to, to, addr_fo, fo, leng);
+		if (leng) MccaMemCopyP(
+			addr_to, to, to_th->unsolved_msg_from_kernel,
+			addr_fo, fo, msg_in_kernel,
+			leng
+		);
 		if (msg_to && msg_fo) msg_to->type = msg_fo->type;
 		if (msg_to) msg_to->src = fo_th->tid;
 		to_th->unsolved_msg = NULL;
@@ -186,9 +196,9 @@ int msg_send(ThreadBlock* fo_th, stduint too, _Comment(vaddr) CommMsg* msg, bool
 		if (to_th->async_messages.Count() >= LIMIT_THREAD_AMSG) {
 			return 3;
 		}
-		void* pg_leng = SeekAddress(fo, _IMM(&msg->data.length));
+		void* pg_leng = SeekAddress(fo, _IMM(&msg->data.length), msg_in_kernel);
 		stduint leng = _IMM(pg_leng) ? *(stduint*)pg_leng : 0;
-		auto msg_fo = (CommMsg*)SeekAddress(fo, _IMM(msg));
+		auto msg_fo = (CommMsg*)SeekAddress(fo, _IMM(msg), msg_in_kernel);
 		void* addr_fo = msg_fo ? (void*)msg_fo->data.address : nullptr;
 
 		AsyncCommMsg* amsg = new AsyncCommMsg();
@@ -200,7 +210,11 @@ int msg_send(ThreadBlock* fo_th, stduint too, _Comment(vaddr) CommMsg* msg, bool
 				delete amsg;
 				return 1;
 			}
-			MccaMemCopyP(payload, nullptr, addr_fo, fo, leng);
+			MccaMemCopyP(
+				payload, nullptr, true,
+				addr_fo, fo, msg_in_kernel,
+				leng
+			);
 		}
 
 		amsg->msg.data.address = (stduint)payload;
@@ -222,7 +236,7 @@ int msg_send(ThreadBlock* fo_th, stduint too, _Comment(vaddr) CommMsg* msg, bool
 		fo_th->Block(ThreadBlock::BlockReason::BR_SendMsg);
 		fo_th->send_to_whom = to_th;
 		if (fo_th->unsolved_msg) plogwarn("T%u, unsolved_msg when send(%u)", fo_th->tid, too);
-		fo_th->unsolved_msg = msg;
+		fo_th->unsolved_msg = msg; fo_th->unsolved_msg_from_kernel = msg_in_kernel;
 		// proc sending queue
 		if (!to_th->queue_send_queuehead) to_th->queue_send_queuehead = fo_th; else {
 			ThreadBlock* crt = to_th->queue_send_queuehead;
@@ -235,18 +249,20 @@ int msg_send(ThreadBlock* fo_th, stduint too, _Comment(vaddr) CommMsg* msg, bool
 		fo_th->queue_send_queuenext = nullptr;// keep this at tail
 		// fo_th->ring_coreid = CORE_ID_INVALID;
 		guard.~SpinlockLocal();
-		#if (_MCCA & 0xFF00) == 0x8600
 		Taskman::Schedule(true);
-		#endif
 	}
 	return 0;
 }
-int msg_recv(ThreadBlock* to_th, stduint foo, _Comment(vaddr) CommMsg* msg)
+int msg_recv(ThreadBlock* to_th, stduint foo, _Comment(vaddr) CommMsg* msg, bool msg_in_kernel)
 {
 	SpinlockLocal guard(&comm_lock);
 	_Comment(Proc - Interrupt) if ((to_th->wait_rupt_no) && (foo == ANYPROC || foo == INTRUPT)) {
 		CommMsg tmp_msg = { {0, 0}, HARDRUPT, to_th->wait_rupt_no };
-		MccaMemCopyP(msg, to_th->parent_process, &tmp_msg, 0, sizeof(tmp_msg));
+		MccaMemCopyP(
+			msg, to_th->parent_process, msg_in_kernel,
+			&tmp_msg, 0, true,
+			sizeof(tmp_msg)
+		);
 		to_th->wait_rupt_no = nil;
 		return 0;
 	}
@@ -298,17 +314,21 @@ int msg_recv(ThreadBlock* to_th, stduint foo, _Comment(vaddr) CommMsg* msg)
 			return -1;
 		}
 		//
-		auto msg_fo = (CommMsg*)SeekAddress(fo_th->parent_process, (stduint)fo_th->unsolved_msg);
+		auto msg_fo = (CommMsg*)SeekAddress(fo_th->parent_process, (stduint)fo_th->unsolved_msg, fo_th->unsolved_msg_from_kernel);
 		stduint leng0 = msg_fo ? msg_fo->data.length : 0;
 		void* addr_fo = msg_fo ? (void*)msg_fo->data.address : nullptr;
 
-		auto msg_to = (CommMsg*)SeekAddress(to_th->parent_process, _IMM(msg));
+		auto msg_to = (CommMsg*)SeekAddress(to_th->parent_process, _IMM(msg), msg_in_kernel);
 		stduint leng1 = msg_to ? msg_to->data.length : 0;
 		void* addr_to = msg_to ? (void*)msg_to->data.address : nullptr;
 		//
 		stduint leng = minof(leng0, leng1);
 		// if (leng > 500) ploginfo("RECV: %u->%u, %u bytes, %p->%p", fo_th->tid, to_th->tid, leng, addr_fo, addr_to);
-		if (leng) MccaMemCopyP(addr_to, to_th->parent_process, addr_fo, fo_th->parent_process, leng);
+		if (leng) MccaMemCopyP(
+			addr_to, to_th->parent_process, msg_in_kernel,
+			addr_fo, fo_th->parent_process, fo_th->unsolved_msg_from_kernel,
+			leng
+		);
 		if (msg_to && msg_fo) msg_to->type = msg_fo->type;
 		if (msg_to) msg_to->src = foo;
 		fo_th->unsolved_msg = NULL;
@@ -333,13 +353,17 @@ int msg_recv(ThreadBlock* to_th, stduint foo, _Comment(vaddr) CommMsg* msg)
 
 		if (target_node) {
 			amsg = (AsyncCommMsg*)target_node->offs;
-			auto msg_to = (CommMsg*)SeekAddress(to_th->parent_process, _IMM(msg));
+			auto msg_to = (CommMsg*)SeekAddress(to_th->parent_process, _IMM(msg), msg_in_kernel);
 			stduint leng1 = msg_to ? msg_to->data.length : 0;
 			void* addr_to = msg_to ? (void*)msg_to->data.address : nullptr;
 
 			stduint leng = minof(amsg->msg.data.length, leng1);
 			if (leng) {
-				MccaMemCopyP(addr_to, to_th->parent_process, (void*)amsg->msg.data.address, nullptr, leng);
+				MccaMemCopyP(
+					addr_to, to_th->parent_process, msg_in_kernel,
+					(void*)amsg->msg.data.address, nullptr, true,
+					leng
+				);
 			}
 			if (msg_to) {
 				msg_to->type = amsg->msg.type;
@@ -361,13 +385,11 @@ int msg_recv(ThreadBlock* to_th, stduint foo, _Comment(vaddr) CommMsg* msg)
 
 			to_th->Block(ThreadBlock::BlockReason::BR_RecvMsg);
 			if (to_th->unsolved_msg) plogwarn("T%u, unsolved_msg when recv(%u)", to_th->tid, foo);
-			to_th->unsolved_msg = msg;
+			to_th->unsolved_msg = msg; to_th->unsolved_msg_from_kernel = msg_in_kernel;
 			to_th->recv_fo_whom = fo_th_tgt;
 			// to_th->ring_coreid = CORE_ID_INVALID;
 			guard.~SpinlockLocal();
-			#if (_MCCA & 0xFF00) == 0x8600
 			Taskman::Schedule(true);
-			#endif
 		}
 	}
 	return 0;

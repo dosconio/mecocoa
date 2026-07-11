@@ -120,7 +120,7 @@ static bool hd_cmd_wait(Harddisk_PATA* hdd) {
 
 static bool hd_int_wait() {
 	CommMsg msg;
-	syscall(syscall_t::COMM, COMM_RECV, INTRUPT, _IMM(&msg));
+	sysrecv(INTRUPT, (&msg), 0);
 	return true;
 }
 static void hd_rw_foreback_0() { lock[0] = 0; }

@@ -64,8 +64,8 @@ void Handint_FLP()
 }
 
 static bool flp_int_wait() {
-	CommMsg msg;
-	syscall(syscall_t::COMM, COMM_RECV, INTRUPT, _IMM(&msg));
+	CommMsg msg = {};
+	sysrecv(INTRUPT, (&msg), 0);
 	return true;
 }
 

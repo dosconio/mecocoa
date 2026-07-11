@@ -90,7 +90,7 @@ void Consman::WakeBlockedWaitersDeferred() {
 	// Fallback for targets that do not run serv_sysmsg(): wake Task_Console directly.
 	CommMsg notification_msg = {};
 	notification_msg.type = (stduint)ConsoleMsg::TEST;
-	msg_send(Taskman::CurrentTB(), Task_Console, &notification_msg, true);
+	msg_send(Taskman::CurrentTB(), Task_Console, &notification_msg, true, true);
 	#endif
 }
 
@@ -125,9 +125,20 @@ static bool ifContainBlockedTTY(ProcessBlock* ppb) {
 	for0(i, blocked_vtty_pid.Count()) {
 		ProcessBlock* p = ProcessBlock::AcquireActiveByPID(blocked_vtty_pid[i]);
 		if (p) {
-			auto blocked_focus_tty = p->focus_tty.Lock();
-			auto owner_focus_tty = ppb->focus_tty.Lock();
-			bool match = (*blocked_focus_tty == *owner_focus_tty);
+			bool match = false;
+			if (p == ppb) {
+				match = true;
+			} else {
+				if ((stduint)p < (stduint)ppb) {
+					auto lock1 = p->focus_tty.Lock();
+					auto lock2 = ppb->focus_tty.Lock();
+					match = (*lock1 == *lock2);
+				} else {
+					auto lock1 = ppb->focus_tty.Lock();
+					auto lock2 = p->focus_tty.Lock();
+					match = (*lock1 == *lock2);
+				}
+			}
 			ProcessBlock::Release(p);
 			if (match) {
 				return true;
