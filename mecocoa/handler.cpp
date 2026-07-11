@@ -55,6 +55,11 @@ extern "C" void interrupt_dispatcher(HardwareInterruptFrame* frame) {
 		check_and_deliver_signals(active_frame);
 	}
 	#if _MCCA == 0x8632
+	auto resume_th = Taskman::CurrentTB();
+	const stduint resume_cpu_id = resume_th ? resume_th->processor_id : Taskman::getID();
+	if (resume_cpu_id < PCU_CORES_MAX) {
+		active_frame->percore_ptr = _IMM(Taskman::PCU_CORES_PERCORE[resume_cpu_id]);
+	}
 	*frame = frame_copy;
 	#endif
 }

@@ -213,6 +213,10 @@ int msg_send(ThreadBlock* fo_th, stduint too, _Comment(vaddr) CommMsg* msg, bool
 		amsg->msg.src = fo_th->tid;
 
 		to_th->async_messages.Append(amsg);
+		if ((_IMM(to_th->block_reason) & _IMM(ThreadBlock::BlockReason::BR_RecvMsg)) &&
+			(to_th->recv_fo_whom == fo_th || (stduint)to_th->recv_fo_whom == ANYPROC)) {
+			to_th->Unblock(ThreadBlock::BlockReason::BR_RecvMsg);
+		}
 	}
 	else {
 		fo_th->Block(ThreadBlock::BlockReason::BR_SendMsg);
@@ -229,6 +233,7 @@ int msg_send(ThreadBlock* fo_th, stduint too, _Comment(vaddr) CommMsg* msg, bool
 			crt->queue_send_queuenext = fo_th;
 		}
 		fo_th->queue_send_queuenext = nullptr;// keep this at tail
+		// fo_th->ring_coreid = CORE_ID_INVALID;
 		guard.~SpinlockLocal();
 		#if (_MCCA & 0xFF00) == 0x8600
 		Taskman::Schedule(true);
@@ -358,6 +363,7 @@ int msg_recv(ThreadBlock* to_th, stduint foo, _Comment(vaddr) CommMsg* msg)
 			if (to_th->unsolved_msg) plogwarn("T%u, unsolved_msg when recv(%u)", to_th->tid, foo);
 			to_th->unsolved_msg = msg;
 			to_th->recv_fo_whom = fo_th_tgt;
+			// to_th->ring_coreid = CORE_ID_INVALID;
 			guard.~SpinlockLocal();
 			#if (_MCCA & 0xFF00) == 0x8600
 			Taskman::Schedule(true);

@@ -12,6 +12,7 @@ f/F 显示目录树
 
 ### 方式
 
+- Specific kThread or Lock
 - K-Assert
 - Poison: Malloc 0xCC and Dealloc 0xDD
 - Stack: 0xDEADBEEF

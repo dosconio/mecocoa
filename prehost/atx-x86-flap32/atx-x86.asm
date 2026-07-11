@@ -14,6 +14,7 @@ SegCo32 EQU 8*4
 ROOT_PAGING EQU 0x00100000
 
 PERCORE_kernel_stack EQU 264
+PERCORE_tss_ESP0     EQU 4
 PERCORE_user_cr3     EQU 272
 
 [BITS 32]
@@ -43,8 +44,7 @@ CF_DS			EQU 14 * 4
 CF_ES			EQU 15 * 4
 CF_FS			EQU 16 * 4
 CF_GS			EQU 17 * 4
-CF_TRANS_FRAME	EQU 18 * 4
-CF_PERCORE		EQU 19 * 4
+CF_PERCORE		EQU 18 * 4
 
 IF_DI			EQU 0 * 4
 IF_SI			EQU 1 * 4
@@ -69,15 +69,13 @@ IF_DS			EQU 16 * 4
 IF_ES			EQU 17 * 4
 IF_FS			EQU 18 * 4
 IF_GS			EQU 19 * 4
+IF_PERCORE		EQU 20 * 4
 
-IF_TRANS_FRAME	EQU 20 * 4
-IF_PERCORE		EQU 21 * 4
-
-INTFRAME_TOTAL_SIZE		EQU 22 * 4
+INTFRAME_TOTAL_SIZE		EQU 21 * 4
 IRQ_RING3_FRAME_DWORDS	EQU 15
 IRQ_RING0_FRAME_DWORDS	EQU 13
 
-CALLGATE_TOTAL_SIZE		EQU 20 * 4
+CALLGATE_TOTAL_SIZE		EQU 19 * 4
 RING3_FRAME_DWORDS		EQU 13
 RING0_FRAME_DWORDS		EQU 11
 
@@ -246,7 +244,6 @@ Handint_SYSCALL_Entry:
 	; Fill full CallgateFrame metadata.
 	MOV [ESP + CF_CR3], EBX
 	MOV [ESP + CF_PERCORE], EDX
-	MOV [ESP + CF_TRANS_FRAME], EBP
 
 	MOV EAX, [EBP - 4]
 	MOV [ESP + CF_DS], EAX
@@ -277,7 +274,7 @@ Handint_SYSCALL_Entry:
 
 	MOV EBP, ESP
 
-	; Build a full 20-dword CallgateFrame on current thread kernel stack.
+	; Build a full CallgateFrame on current thread kernel stack.
 	SUB ESP, CALLGATE_TOTAL_SIZE
 
 	; Copy DI..CS, 11 dwords.
@@ -294,7 +291,6 @@ Handint_SYSCALL_Entry:
 
 	SAVE_SEGS_TO_FRAME ESP
 
-	MOV [ESP + CF_TRANS_FRAME], EBP
 	MOV DWORD [ESP + CF_PERCORE], 0
 
 	; C handler should run with kernel data segments.
@@ -336,8 +332,10 @@ Handint_SYSCALL_Entry:
 .return_ring3:
 	; EBP = full CallgateFrame*.
 
-	MOV EDX, [EBP + CF_TRANS_FRAME]
+	MOV EDX, [EBP + CF_PERCORE]
 	MOV EBX, [EBP + CF_CR3]
+	MOV EDX, [EDX + PERCORE_tss_ESP0]
+	SUB EDX, 14 * 4
 
 	; Copy only the POPAD restore area back to transition frame.
 	COPY_DWORDS EBP, EDX, 8
@@ -381,7 +379,7 @@ Handint_SYSCALL_Entry:
 .return_ring0:
 	; EBP = full CallgateFrame*.
 
-	MOV EDX, [EBP + CF_TRANS_FRAME]
+	LEA EDX, [EBP + CALLGATE_TOTAL_SIZE]
 
 	; Copy only DI..CS back to original ring0 return frame.
 	COPY_DWORDS EBP, EDX, RING0_FRAME_DWORDS
@@ -488,7 +486,6 @@ IRQ_SKIP_ROOT_CR3:
 	; Fill x86 metadata.
 	MOV [ESP + IF_CR3], EBX
 	MOV [ESP + IF_PERCORE], EDX
-	MOV [ESP + IF_TRANS_FRAME], EBP
 
 	MOV EAX, [EBP - 4]
 	MOV [ESP + IF_DS], EAX
@@ -554,7 +551,6 @@ IRQ_FROM_RING0_NORMAL:
 
 	SAVE_SEGS_TO_IFRAME ESP
 
-	MOV [ESP + IF_TRANS_FRAME], EBP
 	MOV DWORD [ESP + IF_PERCORE], 0
 
 	LOAD_KERNEL_SEGS
@@ -588,8 +584,10 @@ IRQ_CALL_INTERRUPT_COMMON:
 IRQ_RETURN_RING3:
 	; EBP = HardwareInterruptFrame* on thread kernel stack.
 
-	MOV EDX, [EBP + IF_TRANS_FRAME]
+	MOV EDX, [EBP + IF_PERCORE]
 	MOV EBX, [EBP + IF_CR3]
+	MOV EDX, [EDX + PERCORE_tss_ESP0]
+	SUB EDX, 15 * 4
 
 	; Copy modified frame back to transition stack.
 	COPY_DWORDS EBP, EDX, IRQ_RING3_FRAME_DWORDS
@@ -611,7 +609,7 @@ IRQ_SKIP_USER_CR3:
 IRQ_RETURN_RING0:
 	; EBP = HardwareInterruptFrame* on current kernel stack.
 
-	MOV EDX, [EBP + IF_TRANS_FRAME]
+	LEA EDX, [EBP + INTFRAME_TOTAL_SIZE]
 
 	; Copy modified frame back to original ring0 stack.
 	COPY_DWORDS EBP, EDX, IRQ_RING0_FRAME_DWORDS

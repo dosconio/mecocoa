@@ -6,15 +6,18 @@
 #define _GUI_DOUBLE_BUFFER 1
 // print logo 🏳️‍⚧️
 #define _GUI_LOGO 1
+// : unstable
+//
+#define _GUI_FREETYPE 0
+//
+#define _SYS_MULTICORE 1
+
+
 
 #if (_MCCA & 0xFF00) == 0x1000
 #undef _GUI_ENABLE
 #define _GUI_ENABLE 0
 #endif
-
-#define _GUI_FREETYPE 1
-
-#define _SYS_MULTICORE 1
 
 #if 1
 #define KASSERT(x) do { if (!(x)) plogerro("assert: %s", #x); } while (0)

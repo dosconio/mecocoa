@@ -234,6 +234,21 @@ volatile bool has_pending_timer = false;
 
 extern void sysmsg_kbd(keyboard_event_t kbd_event);
 
+struct GuiCleanupJob {
+	stduint pid = 0;
+	uni::Vector<SheetTrait*> forms;
+};
+
+static GuiCleanupJob* _BUF_PendingGuiCleanupJobs[32];
+static SpinlockBlock<uni::Queue<GuiCleanupJob*>> pending_gui_cleanup_jobs(
+	_BUF_PendingGuiCleanupJobs,
+	numsof(_BUF_PendingGuiCleanupJobs));
+
+static bool PopGuiCleanupJob(GuiCleanupJob*& out_job) {
+	out_job = nullptr;
+	return pending_gui_cleanup_jobs.Lock()->Dequeue(out_job);
+}
+
 
 // ---- ---- GUI Operation Helpers (Graphic thread only) ---- ----
 
@@ -504,6 +519,36 @@ static stdsint GraphicMsg_FDEL(stduint pform_id, ProcessBlock* pb) {
 	return 0;
 }
 
+static void DestroyDetachedForm(::uni::Witch::Form* pfrm) {
+	if (!pfrm) return;
+
+	Rectangle area = pfrm->sheet_area;
+	area = Consman::DetachForm(pfrm);
+	// Delete VideoConsole2 children from client_area.subf
+	LayerManager& client = pfrm->getClientSheet();
+	while (client.subf) {
+		SheetTrait* child_sheet = cast<SheetTrait*>(client.subf->offs);
+		client.Remove(child_sheet);
+		if (child_sheet) {
+			child_sheet->refSheetParent() = nullptr;
+			global_layman.Lock()->UnregisterTimer(child_sheet);
+			Console_t* con_base = static_cast<Console_t*>(static_cast<uni::VideoConsole2*>(child_sheet));
+			CleanupAndDestroyVconsoleByConsole(con_base);
+		}
+	}
+	DetachLayerChildren(&pfrm->getClientSheet());
+	pfrm->refSheetNode().subf = nullptr;
+	SafeLaymanUpdate(nullptr, area);
+
+	// Nullify any pforms slot still pointing at this detached Form before delete.
+	CleanupFormReferences(pfrm);
+	if (pfrm->sheet_buffer) {
+		delete[] pfrm->sheet_buffer;
+		pfrm->sheet_buffer = nullptr;
+	}
+	delete pfrm;
+}
+
 static void _CleanSingleForm(ProcessBlock* pb, stduint pform_id) {
 	SheetTrait* pfrm = ProcFormsGet(pb, pform_id);
 	if (!pfrm) return;
@@ -515,39 +560,78 @@ static void _CleanSingleForm(ProcessBlock* pb, stduint pform_id) {
 			_CleanSingleForm(pb, i);
 		}
 	}
-
-	Rectangle area = pfrm->sheet_area;
-	area = Consman::DetachForm(static_cast<::uni::Witch::Form*>(pfrm));
-	// Delete VideoConsole2 children from client_area.subf
-	LayerManager& client = static_cast<uni::Witch::Form*>(pfrm)->getClientSheet();
-	while (client.subf) {
-		SheetTrait* child_sheet = cast<SheetTrait*>(client.subf->offs);
-		client.Remove(child_sheet);
-		if (child_sheet) {
-			child_sheet->refSheetParent() = nullptr;
-			global_layman.Lock()->UnregisterTimer(child_sheet);
-			Console_t* con_base = static_cast<Console_t*>(static_cast<uni::VideoConsole2*>(child_sheet));
-			CleanupAndDestroyVconsoleByConsole(con_base);
-		}
-	}
-	DetachLayerChildren(&static_cast<uni::Witch::Form*>(pfrm)->getClientSheet());
-	pfrm->refSheetNode().subf = nullptr;
-	SafeLaymanUpdate(nullptr, area);
-
-	// Nullify any pforms slot still pointing at this detached Form before delete.
-	CleanupFormReferences(static_cast<::uni::Witch::Form*>(pfrm));
 	ProcFormsSet(pb, pform_id, nullptr);
-	if (pfrm->sheet_buffer) {
-		delete[] pfrm->sheet_buffer;
-		pfrm->sheet_buffer = nullptr;
-	}
-	delete static_cast<::uni::Witch::Form*>(pfrm);
+	DestroyDetachedForm(static_cast<::uni::Witch::Form*>(pfrm));
 }
 
 void Global_CleanProcessForms(ProcessBlock* pb) {
 	if (!pb) return;
 	for (stduint pform_id = 0, count = ProcFormsCount(pb); pform_id < count; pform_id++) {
 		_CleanSingleForm(pb, pform_id);
+	}
+}
+
+static bool GuiCleanupJobContainsParent(GuiCleanupJob* job, LayerManager* parent) {
+	if (!job || !parent) return false;
+	for0(i, job->forms.Count()) {
+		if ((LayerManager*)job->forms[i] == parent) return true;
+	}
+	return false;
+}
+
+static void RunGuiCleanupFormRecursive(GuiCleanupJob* job, ::uni::Witch::Form* pfrm) {
+	if (!job || !pfrm) return;
+	for0(i, job->forms.Count()) {
+		auto child_form = job->forms[i];
+		if (child_form && child_form->refSheetParent() == (LayerManager*)pfrm) {
+			job->forms[i] = nullptr;
+			RunGuiCleanupFormRecursive(job, static_cast<::uni::Witch::Form*>(child_form));
+		}
+	}
+	DestroyDetachedForm(pfrm);
+}
+
+static void RunGuiCleanupJob(GuiCleanupJob* job) {
+	if (!job) return;
+	for0(i, job->forms.Count()) {
+		auto form = job->forms[i];
+		if (!form) continue;
+		auto parent = form->refSheetParent();
+		if (parent && GuiCleanupJobContainsParent(job, parent)) {
+			continue;
+		}
+		job->forms[i] = nullptr;
+		RunGuiCleanupFormRecursive(job, static_cast<::uni::Witch::Form*>(form));
+	}
+	delete job;
+}
+
+void QueueGuiCleanupForProcess(ProcessBlock* pb) {
+	if (!pb) return;
+	auto job = new GuiCleanupJob();
+	if (!job) {
+		plogerro("QueueGuiCleanupForProcess: alloc job failed for pid=%u", pb->pid);
+		return;
+	}
+	job->pid = pb->pid;
+	{
+		auto pforms = pb->pforms.Lock();
+		for0(i, pforms->Count()) {
+			auto form = (*pforms)[i];
+			if (form) {
+				job->forms.Append(form);
+				(*pforms)[i] = nullptr;
+			}
+		}
+		pforms->Clear();
+	}
+	if (!job->forms.Count()) {
+		delete job;
+		return;
+	}
+	if (!pending_gui_cleanup_jobs.Lock()->Enqueue(job)) {
+		plogerro("QueueGuiCleanupForProcess: enqueue job failed for pid=%u", job->pid);
+		delete job;
 	}
 }
 
@@ -866,6 +950,11 @@ void serv_graf_loop() {
 	#endif
 	#if (_MCCA == 0x8632) || (_MCCA == 0x8664)
 	while (true) {
+		GuiCleanupJob* cleanup_job = nullptr;
+		if (PopGuiCleanupJob(cleanup_job)) {
+			RunGuiCleanupJob(cleanup_job);
+			continue;
+		}
 		// Priority 1: check internal interrupt queue (non-blocking)
 		bool has_int_msg = false;
 		{
@@ -1052,7 +1141,7 @@ void serv_graf_loop() {
 			ProcessBlock* target_pb = (ProcessBlock*)data->process_block;
 			ret = target_pb ? 0 : (stduint)-1;
 			if (target_pb) {
-				Global_CleanProcessForms(target_pb);
+				QueueGuiCleanupForProcess(target_pb);
 				ProcessBlock::Release(target_pb);
 			}
 			break;

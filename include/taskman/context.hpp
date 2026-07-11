@@ -28,10 +28,6 @@ _PACKED(struct) HardwareInterruptFrame {
 	stduint es;
 	stduint fs;
 	stduint gs;
-	
-	// Internal return metadata.
-	// Used by assembly to copy back to the original transition frame.
-	stduint transition_frame;
 	stduint percore_ptr;
 };
 

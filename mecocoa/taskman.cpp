@@ -452,22 +452,8 @@ static void _Exit_Cleanup(stduint pid)
 	}
 
 	#if _GUI_ENABLE
-	// 1. Release GUI Resources First (while threads are still valid for unblocking)
-	{
-		FMT_ConsoleMsg_FCLEANPROC req = {};
-		req.process_block = (pureptr_t)ppb;
-		++ppb->ref_count;
-		if (syssend_async(Task_ConsoleVideo, &req, sizeof(req), _IMM(GraphicMsg::FCLEANPROC))) {
-			// Non-zero means failure! ConsoleVideo will not receive it, we must release ourselves
-			ProcessBlock::Release(ppb);
-			
-			const stdsint _rc = ppb->ref_count;
-			plogerro("[HYP-D] _Exit_Cleanup: syssend FCLEANPROC failed PID%u ref_count=%d", pid, _rc);
-		}
-		else {
-			// Success. ConsoleVideo will receive it and call Release later.
-		}
-	}
+	// 1. Queue GUI cleanup work without retaining ProcessBlock lifetime.
+	QueueGuiCleanupForProcess(ppb);
 	#endif
 
 	// 2. Release TTY Binding

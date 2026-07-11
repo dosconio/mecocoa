@@ -195,6 +195,7 @@ class Spinlock;
 
 #if _GUI_ENABLE
 void Global_CleanProcessForms(ProcessBlock* pb);
+void QueueGuiCleanupForProcess(ProcessBlock* pb);
 #endif
 
 #endif

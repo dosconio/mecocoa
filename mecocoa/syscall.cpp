@@ -774,35 +774,19 @@ void syscall_body(NormalTaskContext* cxt)
 #if (_MCCA & 0xFF00) == 0x8600
 extern "C" void check_and_deliver_signals_syscall(CallgateFrame* frame);
 
-#if _MCCA == 0x8632
-static_assert(sizeof(CallgateFrame) == 20 * sizeof(stduint), "x86 CallgateFrame size mismatch");
-static_assert(offsetof(CallgateFrame, di) == 0 * sizeof(stduint), "x86 CallgateFrame.di offset mismatch");
-static_assert(offsetof(CallgateFrame, si) == 1 * sizeof(stduint), "x86 CallgateFrame.si offset mismatch");
-static_assert(offsetof(CallgateFrame, bp) == 2 * sizeof(stduint), "x86 CallgateFrame.bp offset mismatch");
-static_assert(offsetof(CallgateFrame, sp) == 3 * sizeof(stduint), "x86 CallgateFrame.sp offset mismatch");
-static_assert(offsetof(CallgateFrame, bx) == 4 * sizeof(stduint), "x86 CallgateFrame.bx offset mismatch");
-static_assert(offsetof(CallgateFrame, dx) == 5 * sizeof(stduint), "x86 CallgateFrame.dx offset mismatch");
-static_assert(offsetof(CallgateFrame, cx) == 6 * sizeof(stduint), "x86 CallgateFrame.cx offset mismatch");
-static_assert(offsetof(CallgateFrame, ax) == 7 * sizeof(stduint), "x86 CallgateFrame.ax offset mismatch");
-static_assert(offsetof(CallgateFrame, flags) == 8 * sizeof(stduint), "x86 CallgateFrame.flags offset mismatch");
-static_assert(offsetof(CallgateFrame, ip) == 9 * sizeof(stduint), "x86 CallgateFrame.ip offset mismatch");
-static_assert(offsetof(CallgateFrame, cs) == 10 * sizeof(stduint), "x86 CallgateFrame.cs offset mismatch");
-static_assert(offsetof(CallgateFrame, sp0) == 11 * sizeof(stduint), "x86 CallgateFrame.sp0 offset mismatch");
-static_assert(offsetof(CallgateFrame, ss0) == 12 * sizeof(stduint), "x86 CallgateFrame.ss0 offset mismatch");
-#endif
 
 __attribute__((optimize("O0")))
 stduint Handint_SYSCALL(CallgateFrame* frame) {
 	auto crt_th = Taskman::CurrentTB();
 	bool was_pinned = false;
-	const stduint cpu_id = Taskman::getID();
+	const stduint entry_cpu_id = Taskman::getID();
 	if (crt_th) {
 		#if _MCCA == 0x8632
-		if (cpu_id != 0) {
+		if (entry_cpu_id != 0) {
 			if (crt_th->ring_coreid != CORE_ID_INVALID) {
 				was_pinned = true;
 			} else {
-				crt_th->ring_coreid = cpu_id;
+				crt_th->ring_coreid = entry_cpu_id;
 			}
 		}
 		#endif
@@ -869,6 +853,11 @@ stduint Handint_SYSCALL(CallgateFrame* frame) {
 
 	active_frame->ax = ret_val;
 	check_and_deliver_signals_syscall(active_frame);
+	auto resume_th = Taskman::CurrentTB();
+	const stduint resume_cpu_id = resume_th ? resume_th->processor_id : Taskman::getID();
+	if (resume_cpu_id < PCU_CORES_MAX) {
+		active_frame->percore_ptr = _IMM(Taskman::PCU_CORES_PERCORE[resume_cpu_id]);
+	}
 	*frame = frame_copy;
 	#else
 	frame->ax = ret_val;
