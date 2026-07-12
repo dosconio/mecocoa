@@ -971,7 +971,7 @@ void serv_graf_loop() {
 	}
 	#else
 	global_layman.Lock()->lazy_update = _GUI_DOUBLE_BUFFER;// Only enable lazy mode if double buffering is enabled
-	#endif
+	
 	#if (_MCCA == 0x8632) || (_MCCA == 0x8664)
 	while (true) {
 		GuiCleanupJob* cleanup_job = nullptr;
@@ -1237,6 +1237,8 @@ void serv_graf_loop() {
 	}
 	#else
 	loop;
+	#endif
+
 	#endif
 }
 

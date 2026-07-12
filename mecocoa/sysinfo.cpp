@@ -93,6 +93,13 @@ rostr text_brand() {
 
 #endif
 
+extern file_system_type* registered_filesystems;
+static void dump_filesys(OstreamTrait& com1) {
+	for (file_system_type* fs_type = registered_filesystems; fs_type; fs_type = fs_type->next) {
+		com1.OutFormat("- %s \n\r", fs_type->name);
+	}
+}
+
 String dump_availmem() {
 	stduint mem = Memory::total_memsize;
 	stduint frac = 0;
@@ -688,4 +695,50 @@ void dump_lock(OstreamTrait& com1) {
 }
 
 //// ---- POWER MANAGER ---- ////
+
+
+//// ---- sysinfo ---- ////
+
+void sysinfo_classic(OstreamTrait& com1, byte func)
+{
+	switch (func)
+	{
+	case 'f':// filesys
+		com1.OutFormat("\n\r");
+		com1.OutFormat("File Systems\n\r");
+		dump_filesys(com1);
+		com1.OutFormat("\n\r");
+		Filesys::Tree(com1, false);
+		break;
+
+	case 'h': case 'H':// hardware
+		com1.OutFormat("\n\r");
+		dump_device_tree(com1, func != 'H');
+		break;
+
+	case 'l':// lock
+		com1.OutFormat("\n\r");
+		dump_lock(com1);
+		break;
+	case 'm':// mem
+		com1.OutFormat("\n\r");
+		mempool0.dump_available();
+		break;
+	case 's':// proc threads ready_queue
+		com1.OutFormat("\n\r");
+		void dump_processors(OstreamTrait & com1);
+		dump_processors(com1);
+		com1.OutFormat("\n\r");
+		void dump_threads(OstreamTrait & com1);
+		dump_threads(com1);
+		com1.OutFormat("\n\r");
+		void dump_ready_queue(OstreamTrait & com1);
+		dump_ready_queue(com1);
+		break;
+
+
+	default:
+		break;
+	}
+}
 

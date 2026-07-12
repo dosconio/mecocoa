@@ -11,11 +11,12 @@ using namespace uni;
 #include "../include/console.hpp" // for VTTY_OUTQ, SysMessage, vtty_type_t
 // VFS and DevFs Implementation
 
+file_system_type* registered_filesystems = nullptr;
+
 extern SpinlockBlock<uni::Queue<SysMessage>> message_queue_conv;// defined in graphic.cpp
 
 namespace uni {
 
-	static file_system_type* registered_filesystems = nullptr;
 	static vfs_super_block* super_blocks = nullptr;
 	static vfs_dentry* vfs_root = nullptr; // Global root directory
 	Mutex vfs_lock;

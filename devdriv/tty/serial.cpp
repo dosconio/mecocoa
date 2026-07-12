@@ -61,11 +61,6 @@ void R_COM1_INIT() {
 	}
 }
 
-
-int x86_COM::inn() {
-	_TODO return -1;
-}
-
 void Handint_COM1()
 {
 	IC.SendEOI(IRQ_COM13_RS232_P1); // Acknowledge interrupt
@@ -78,41 +73,13 @@ void Handint_COM1()
 		case 0x02: // Received Data Available 
 		case 0x06: // Character Timeout Indication (16550+ FIFO timeout)
 		{
-			uint8_t data = innpb(PORT_COM1_DATA);
+			uint8_t data = com1.inn();
 			if (data == '\r') {
 				com1.OutFormat("\n");
 			}
 			com1.OutFormat("%c", data);// com1.OutFormat("Receive %c\n\r", data);
-			if (data == 's') {
-				com1.OutFormat("\n\r");
-				void dump_processors(OstreamTrait & com1);
-				dump_processors(com1);
-				com1.OutFormat("\n\r");
-				void dump_threads(OstreamTrait & com1);
-				dump_threads(com1);
-				com1.OutFormat("\n\r");
-				void dump_ready_queue(OstreamTrait & com1);
-				dump_ready_queue(com1);
-			}
-			if (data == 'l') {
-				com1.OutFormat("\n\r");
-				void dump_lock(OstreamTrait & com1);
-				dump_lock(com1);
-			}
-			if (data == 'f') {
-				com1.OutFormat("\n\r");
-				Filesys::Tree(com1, false);
-			}
-			if (data == 'h') {
-				com1.OutFormat("\n\r");
-				void dump_device_tree(OstreamTrait & com1, bool verbose);
-				dump_device_tree(com1, false);
-			}
-			if (data == 'H') {
-				com1.OutFormat("\n\r");
-				void dump_device_tree(OstreamTrait & com1);
-				dump_device_tree(com1);
-			}
+			void sysinfo_classic(OstreamTrait & com1, byte func);
+			sysinfo_classic(com1, data);
 			break;
 		}
 		case 0x01: // Transmitter Holding Register Empty 

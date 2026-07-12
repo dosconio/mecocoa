@@ -151,6 +151,21 @@ static void DropQueuedSender(ThreadBlock* to_th, ThreadBlock* prev, ThreadBlock*
 	}
 }
 
+struct MsgInfo {
+	CommMsg* pmsg;
+	void* addr;
+	stduint leng;
+};
+
+inline static MsgInfo FetchMessage(ProcessBlock *pb, _Comment(vaddr) CommMsg* msg, bool msg_in_kernel) {
+	MsgInfo msg_info = {};
+	void* pg_leng = SeekAddress(pb, _IMM(&msg->data.length), msg_in_kernel);
+	msg_info.leng = _IMM(pg_leng) ? *(stduint*)pg_leng : 0;
+	msg_info.pmsg = (CommMsg*)SeekAddress(pb, _IMM(msg), msg_in_kernel);
+	msg_info.addr = msg_info.pmsg ? (void*)msg_info.pmsg->data.address : nullptr;
+	return msg_info;
+}
+
 int msg_send(ThreadBlock* fo_th, stduint too, _Comment(vaddr) CommMsg* msg, bool msg_in_kernel, bool is_async)
 {
 	SpinlockLocal guard(&comm_lock);
@@ -172,22 +187,16 @@ int msg_send(ThreadBlock* fo_th, stduint too, _Comment(vaddr) CommMsg* msg, bool
 
 	if ((_IMM(to_th->block_reason) & _IMM(ThreadBlock::BlockReason::BR_RecvMsg)) &&
 		(to_th->recv_fo_whom == fo_th || (stduint)to_th->recv_fo_whom == ANYPROC)) {
-		// assert to.unsolved_msg && msg
-		void* pg_leng = SeekAddress(fo, _IMM(&msg->data.length), msg_in_kernel);
-		stduint leng = _IMM(pg_leng) ? *(stduint*)pg_leng : 0;
-		auto msg_fo = (CommMsg*)SeekAddress(fo, _IMM(msg), msg_in_kernel);
-		void* addr_fo = msg_fo ? (void*)msg_fo->data.address : nullptr;
-		auto msg_to = (CommMsg*)SeekAddress(to, _IMM(to_th->unsolved_msg), to_th->unsolved_msg_from_kernel);
-		void* addr_to = msg_to ? (void*)msg_to->data.address : nullptr;
-		if (msg_to) MIN(leng, msg_to->data.length);
+		auto [fo_msg, fo_addr, fo_leng] = FetchMessage(fo, msg, msg_in_kernel);
+		auto [to_msg, to_addr, to_leng] = FetchMessage(to, to_th->unsolved_msg, to_th->unsolved_msg_from_kernel);
 		// if (leng > 500) ploginfo("SEND: T%u->T%u, %u bytes, %p->%p", fo_th->tid, to_th->tid, leng, addr_fo, addr_to);
-		if (leng) MccaMemCopyP(
-			addr_to, to, to_th->unsolved_msg_from_kernel,
-			addr_fo, fo, msg_in_kernel,
+		if (stduint leng = minof(fo_leng, to_leng)) MccaMemCopyP(
+			to_addr, to, to_th->unsolved_msg_from_kernel,
+			fo_addr, fo, msg_in_kernel,
 			leng
 		);
-		if (msg_to && msg_fo) msg_to->type = msg_fo->type;
-		if (msg_to) msg_to->src = fo_th->tid;
+		if (to_msg && fo_msg) to_msg->type = fo_msg->type;
+		if (to_msg) to_msg->src = fo_th->tid;
 		to_th->unsolved_msg = NULL;
 		to_th->recv_fo_whom = nullptr;
 		to_th->Unblock(ThreadBlock::BlockReason::BR_RecvMsg);
@@ -196,31 +205,28 @@ int msg_send(ThreadBlock* fo_th, stduint too, _Comment(vaddr) CommMsg* msg, bool
 		if (to_th->async_messages.Count() >= LIMIT_THREAD_AMSG) {
 			return 3;
 		}
-		void* pg_leng = SeekAddress(fo, _IMM(&msg->data.length), msg_in_kernel);
-		stduint leng = _IMM(pg_leng) ? *(stduint*)pg_leng : 0;
-		auto msg_fo = (CommMsg*)SeekAddress(fo, _IMM(msg), msg_in_kernel);
-		void* addr_fo = msg_fo ? (void*)msg_fo->data.address : nullptr;
+		auto [fo_msg, fo_addr, fo_leng] = FetchMessage(fo, msg, msg_in_kernel);
 
 		AsyncCommMsg* amsg = new AsyncCommMsg();
 		if (!amsg) return 1;
 		byte* payload = nullptr;
-		if (leng) {
-			payload = new byte[leng];
+		if (fo_leng) {
+			payload = new byte[fo_leng];
 			if (!payload) {
 				delete amsg;
 				return 1;
 			}
 			MccaMemCopyP(
 				payload, nullptr, true,
-				addr_fo, fo, msg_in_kernel,
-				leng
+				fo_addr, fo, msg_in_kernel,
+				fo_leng
 			);
 		}
 
 		amsg->msg.data.address = (stduint)payload;
-		amsg->msg.data.length = leng;
-		if (msg_fo) {
-			amsg->msg.type = msg_fo->type;
+		amsg->msg.data.length = fo_leng;
+		if (fo_msg) {
+			amsg->msg.type = fo_msg->type;
 		} else {
 			amsg->msg.type = 0;
 		}
@@ -313,24 +319,18 @@ int msg_recv(ThreadBlock* to_th, stduint foo, _Comment(vaddr) CommMsg* msg, bool
 			fo_th->send_to_whom = nullptr;
 			return -1;
 		}
-		//
-		auto msg_fo = (CommMsg*)SeekAddress(fo_th->parent_process, (stduint)fo_th->unsolved_msg, fo_th->unsolved_msg_from_kernel);
-		stduint leng0 = msg_fo ? msg_fo->data.length : 0;
-		void* addr_fo = msg_fo ? (void*)msg_fo->data.address : nullptr;
 
-		auto msg_to = (CommMsg*)SeekAddress(to_th->parent_process, _IMM(msg), msg_in_kernel);
-		stduint leng1 = msg_to ? msg_to->data.length : 0;
-		void* addr_to = msg_to ? (void*)msg_to->data.address : nullptr;
+		auto [fo_msg, fo_addr, fo_leng] = FetchMessage(fo_th->parent_process, fo_th->unsolved_msg, fo_th->unsolved_msg_from_kernel);
+		auto [to_msg, to_addr, to_leng] = FetchMessage(to_th->parent_process, msg, msg_in_kernel);
 		//
-		stduint leng = minof(leng0, leng1);
 		// if (leng > 500) ploginfo("RECV: %u->%u, %u bytes, %p->%p", fo_th->tid, to_th->tid, leng, addr_fo, addr_to);
-		if (leng) MccaMemCopyP(
-			addr_to, to_th->parent_process, msg_in_kernel,
-			addr_fo, fo_th->parent_process, fo_th->unsolved_msg_from_kernel,
+		if (stduint leng = minof(fo_leng, to_leng)) MccaMemCopyP(
+			to_addr, to_th->parent_process, msg_in_kernel,
+			fo_addr, fo_th->parent_process, fo_th->unsolved_msg_from_kernel,
 			leng
 		);
-		if (msg_to && msg_fo) msg_to->type = msg_fo->type;
-		if (msg_to) msg_to->src = foo;
+		if (to_msg && fo_msg) to_msg->type = fo_msg->type;
+		if (to_msg) to_msg->src = foo;
 		fo_th->unsolved_msg = NULL;
 		fo_th->send_to_whom = nullptr;
 		fo_th->Unblock(ThreadBlock::BlockReason::BR_SendMsg);
@@ -353,21 +353,19 @@ int msg_recv(ThreadBlock* to_th, stduint foo, _Comment(vaddr) CommMsg* msg, bool
 
 		if (target_node) {
 			amsg = (AsyncCommMsg*)target_node->offs;
-			auto msg_to = (CommMsg*)SeekAddress(to_th->parent_process, _IMM(msg), msg_in_kernel);
-			stduint leng1 = msg_to ? msg_to->data.length : 0;
-			void* addr_to = msg_to ? (void*)msg_to->data.address : nullptr;
+			auto [to_msg, to_addr, to_leng] = FetchMessage(to_th->parent_process, msg, msg_in_kernel);
 
-			stduint leng = minof(amsg->msg.data.length, leng1);
+			stduint leng = minof(amsg->msg.data.length, to_leng);
 			if (leng) {
 				MccaMemCopyP(
-					addr_to, to_th->parent_process, msg_in_kernel,
+					to_addr, to_th->parent_process, msg_in_kernel,
 					(void*)amsg->msg.data.address, nullptr, true,
 					leng
 				);
 			}
-			if (msg_to) {
-				msg_to->type = amsg->msg.type;
-				msg_to->src = amsg->msg.src;
+			if (to_msg) {
+				to_msg->type = amsg->msg.type;
+				to_msg->src = amsg->msg.src;
 			}
 			to_th->async_messages.Remove(target_node);
 		}
