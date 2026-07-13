@@ -1,0 +1,43 @@
+mainmenu "Mecocoa Configuration"
+
+menu "Architecture"
+	choice
+		prompt "Target Architecture"
+		default ARCH_i686
+
+	config ARCH_i686
+		bool "0x8632: i686 (x86)"
+		help
+			Select this if you are building for Intel/AMD 64-bit processors.
+
+	config ARCH_ARM64
+		bool "0x2064: AArch64 (ARM64)"
+	endchoice
+
+	config MCCA
+		hex
+		default 0x8632 if ARCH_i686
+		default 0x2064 if ARCH_ARM64
+
+endmenu
+
+menu "Parameter"
+	config SysTickFreq
+		int "Soft Tick Frequency (Hz)"
+		default 100
+
+	config LOG_LEVEL
+		int "(TODO) Kernel Log Level (0-4)"
+		range 0 4
+		default 2
+endmenu
+
+menu "Function"
+	config ENABLE_VIRTUALIZATION
+		bool "(TODO) Enable virtualization Support"
+		default y
+		help
+			Enable virtual terminal tracking through process blocks.
+
+endmenu
+

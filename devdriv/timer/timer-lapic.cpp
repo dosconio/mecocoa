@@ -25,7 +25,7 @@ void R_LAPICT_INIT() {
 	IC[IRQ_LAPICTimer].setModeRupt(mglb(Handint_LAPICT_Entry), SegCo64);
 	register_interrupt_handler(IRQ_LAPICTimer, Handint_LAPICT);
 	lapic_timer.Reset();
-	lapic_timer.Reset(lapic_timer.Frequency / SysTickFreq);
+	lapic_timer.Reset(lapic_timer.Frequency / CONFIG_SysTickFreq);
 	if (auto* node = Devsman::RegisterPlatformDevice("lapic-timer@0", "lapic-timer")) {
 		Devsman::AddIrqResource(node, IRQ_LAPICTimer);
 	}

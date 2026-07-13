@@ -1,6 +1,14 @@
 #ifndef MECOCOA_HPP_
 #define MECOCOA_HPP_
 
+#if __has_include("autoconf.h")
+#include "autoconf.h"
+
+#else
+#define CONFIG_SysTickFreq 100 // 100Hz
+
+#endif
+
 #define _GUI_ENABLE 1
 // double buffer, or the anime is disabled
 #define _GUI_DOUBLE_BUFFER 1
@@ -56,8 +64,6 @@ use crate uni;
 #include <c/proctrl/ARM.h>
 #endif
 //
-
-#define SysTickFreq 100 // 100Hz
 
 extern volatile stduint tick;
 

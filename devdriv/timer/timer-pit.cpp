@@ -47,7 +47,7 @@ void Handint_PIT()
 	}
 	static unsigned time = 0;
 	time++;
-	if (time % (1000 / SysTickFreq) == 0) {
+	if (time % (1000 / CONFIG_SysTickFreq) == 0) {
 		tick++;
 		extern Dchain TimerManager;
 		extern Spinlock timer_lock;
@@ -65,7 +65,7 @@ void Handint_PIT()
 			else break;
 		}
 	}
-	static_assert(1000 / SysTickFreq > 0, "SysTickFreq must be greater than 0");
+	static_assert(1000 / CONFIG_SysTickFreq > 0, "SysTickFreq must be greater than 0");
 	if (time >= 1000) {
 		time = 0;
 		// mecocoa_global->system_time.sec++;//{TEMP} help RTC	

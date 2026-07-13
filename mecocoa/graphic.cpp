@@ -831,7 +831,7 @@ static stdsint GraphicMsg_FTIM(stduint pform_id, stduint ms, ProcessBlock* pb) {
 	SheetTrait* pfrm = ProcFormsGet(pb, pform_id);
 	if (!pfrm) return -1;
 
-	stduint period = ms * SysTickFreq / 1000;
+	stduint period = ms * CONFIG_SysTickFreq / 1000;
 	if (ms && !period) period = 1;
 
 	global_layman.Lock()->UnregisterTimer(pfrm);

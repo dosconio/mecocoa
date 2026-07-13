@@ -7,6 +7,8 @@ accmlib/sysroot/usr/lib/x86_64-mcca/libm.a
 accmlib/sysroot/usr/lib/i686-mcca/libc.a
 *.o
 *.ignore
+.config*
+include/autoconf.h
 
 # STM32 CubeIDE
 Result/

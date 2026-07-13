@@ -13,6 +13,9 @@ arch?=atx-x86-flap32
 build:
 	@make -f configs/$(arch).make build --silent
 
+config:
+	@genconfig --header-path include/autoconf.h
+
 run:
 	@make -f configs/$(arch).make run --silent
 

@@ -136,9 +136,9 @@ DEFSYSC sysc_EXIT(stduint code) {
 DEFSYSC sysc_TIME(stduint unit) {
 	switch (unit) {
 	case 0:// second
-		return tick / SysTickFreq;// mecocoa_global->system_time.sec;
+		return tick / CONFIG_SysTickFreq;// mecocoa_global->system_time.sec;
 	case 1:// ms
-		return tick * 1000 / SysTickFreq;
+		return tick * 1000 / CONFIG_SysTickFreq;
 	default:
 		plogwarn("Invalid time unit: %u", unit);
 		return -1;
@@ -160,10 +160,10 @@ DEFSYSC sysc_REST(stduint unit, stduint time) {
 	stduint timeout = 0;
 	switch (unit) {
 	case 0: // second
-		timeout = time * SysTickFreq;
+		timeout = time * CONFIG_SysTickFreq;
 		break;
 	case 1: // ms
-		timeout = time * SysTickFreq / 1000;
+		timeout = time * CONFIG_SysTickFreq / 1000;
 		if (!timeout) timeout = 1; // At least 1 tick
 		break;
 	default:
