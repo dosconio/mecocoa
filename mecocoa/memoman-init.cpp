@@ -37,6 +37,7 @@ uint16 acpi_pcie_segment_group = 0;
 uint8 acpi_pcie_start_bus = 0;
 uint8 acpi_pcie_end_bus = 0;
 bool acpi_pcie_ecam_available = false;
+static uint8 acpi_rsdp_storage[sizeof(uni::ACPI::RSDP)] = {};
 #endif
 
 
@@ -598,7 +599,11 @@ static stduint parse_grub(stduint addr)
 			mtag = (multiboot_tag_mmap*)tag;
 		}
 		else if (tag->type == MULTIBOOT_TAG_TYPE_ACPI_OLD || tag->type == MULTIBOOT_TAG_TYPE_ACPI_NEW) {
-			acpi_rsdp_addr = (stduint)tag + 8;
+			MemSet(acpi_rsdp_storage, 0, sizeof(acpi_rsdp_storage));
+			stduint rsdp_size = tag->size > 8 ? tag->size - 8 : 0;
+			if (rsdp_size > sizeof(acpi_rsdp_storage)) rsdp_size = sizeof(acpi_rsdp_storage);
+			MemCopyN(acpi_rsdp_storage, (const void*)((stduint)tag + 8), rsdp_size);
+			acpi_rsdp_addr = (stduint)acpi_rsdp_storage;
 		}
 		tag = (multiboot_tag*)(_IMM(tag) + ((tag->size + 7) & ~7));
 	}

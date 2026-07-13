@@ -199,7 +199,7 @@ int KeyboardBridge::out(const char* str, stduint len) {
 			message_queue_conv.Lock()->Enqueue(msg);
 		}
 		#else
-		if (Consman::last_click_sheet) {
+		if (asrtand(Consman::last_click_sheet)->refSheetNode().next) {
 			Consman::last_click_sheet->onrupt(SheetEvent::onKeybd, Point(0, 0), &event);
 			Consman::WakeBlockedWaiters();
 		}

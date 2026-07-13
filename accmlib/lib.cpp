@@ -42,6 +42,16 @@ void sysrest(stduint unit, stduint num)// 4
 	syscall(syscall_t::REST, unit, num, nil);
 }
 
+void sysshutdown()
+{
+	syscall(syscall_t::MANA, 0, nil, nil);
+}
+
+void sysreboot()
+{
+	syscall(syscall_t::MANA, 1, nil, nil);
+}
+
 void syscomm(int send_recv, stduint obj, struct CommMsg* msg)
 {
 	syscall(syscall_t::COMM, send_recv ? 0b01 : 0b10, obj, _IMM(msg));

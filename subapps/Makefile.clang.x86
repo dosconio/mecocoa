@@ -44,6 +44,8 @@ all: $(BIN_DIR) \
 	$(BIN_DIR)/_rust \
 	$(BIN_DIR)/notepad \
 	$(BIN_DIR)/viewpic \
+	$(BIN_DIR)/reboot \
+	$(BIN_DIR)/shutdown \
 	\
 	$(BIN_DIR)/_thread \
 
@@ -100,6 +102,14 @@ $(BIN_DIR)/notepad: subapps/notepad.cpp $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
 $(BIN_DIR)/viewpic: subapps/viewpic.cpp $(ulibpath)/cpp/fileformat/picture/BMP.cpp $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
 	@echo "MK viewpic"
 	$(MCCA_X86_CXX) $(MCCA_X86_CXXFLAGS) -o $@ subapps/viewpic.cpp $(ulibpath)/cpp/fileformat/picture/BMP.cpp $(MCCA_X86_LDLIBS)
+
+$(BIN_DIR)/reboot: subapps/reboot.cpp $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
+	@echo "MK reboot"
+	$(MCCA_X86_CXX) $(MCCA_X86_CXXFLAGS) -o $@ subapps/reboot.cpp $(MCCA_X86_LDLIBS)
+
+$(BIN_DIR)/shutdown: subapps/shutdown.cpp $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
+	@echo "MK shutdown"
+	$(MCCA_X86_CXX) $(MCCA_X86_CXXFLAGS) -o $@ subapps/shutdown.cpp $(MCCA_X86_LDLIBS)
 
 $(BIN_DIR)/_thread: subapps/_test/thread.cpp $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
 	@echo "MK thread"

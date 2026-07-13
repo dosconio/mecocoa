@@ -569,6 +569,10 @@ class Coreman {
 public:
 	static auto
 		Initialize() -> void;// called by Bootstrap Processor
+
+public: //// ---- POWER MANAGER ---- ////
+	static void Shutdown();
+	static void Reboot();
 };
 #endif
 

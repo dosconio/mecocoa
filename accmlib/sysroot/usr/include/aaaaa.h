@@ -20,6 +20,8 @@ extern "C" {
 	int sysinnc();// 01
 	stduint syssecond();// 03
 	void sysrest(stduint unit, stduint num);// 04
+	void sysshutdown();
+	void sysreboot();
 
 	void syscomm(int send_recv, stduint obj, struct CommMsg* msg);// 05
 

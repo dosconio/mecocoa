@@ -234,6 +234,22 @@ DEFSYSC sysc_CLOS(stduint fd) {
 	return open_buf[0];// 0 for success
 }
 
+DEFSYSC sysc_MANA(stduint func, stduint arg1, stduint arg2) {
+	switch (func)
+	{
+	case 0:// shutdown
+		Coreman::Shutdown();
+		break;
+	case 1:// reboot
+		Coreman::Reboot();
+		break;
+
+	default:
+		break;
+	}
+	return 0;
+}
+
 DEFSYSC sysc_DUP2(stduint oldfd, stduint newfd) {
 	ThreadBlock* th = Taskman::CurrentTB();
 	ProcessBlock* pb = th->parent_process;
@@ -684,7 +700,7 @@ stduint SYSCALL_TABLE[] = {
 	mglb(sysc_MMAP), // 0x18 (MMAP)
 	mglb(sysc_UMAP), // 0x19 (UMAP)
 	0, // 0x1A (GET_CORE_ID)
-	0, // 0x1B (MANA)
+	mglb(sysc_MANA), // 0x1B (MANA)
 	mglb(sysc_DUP2), // 0x1C (DUP2)
 	mglb(sysc_PIPE), // 0x1D (PIPE)
 	mglb(sysc_TNEW), // 0x1E (TNEW)

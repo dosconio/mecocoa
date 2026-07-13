@@ -694,7 +694,6 @@ void dump_lock(OstreamTrait& com1) {
 	scheduler_lock.Release(old_if);
 }
 
-//// ---- POWER MANAGER ---- ////
 
 
 //// ---- sysinfo ---- ////
@@ -736,6 +735,12 @@ void sysinfo_classic(OstreamTrait& com1, byte func)
 		dump_ready_queue(com1);
 		break;
 
+	case '-':
+		Coreman::Reboot();
+		break;
+	case '+':
+		Coreman::Shutdown();
+		break;
 
 	default:
 		break;
