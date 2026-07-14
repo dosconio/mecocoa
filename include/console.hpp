@@ -192,6 +192,8 @@ void hand_kboard(keyboard_event_t mmsg);
 
 class ProcessBlock;
 class Spinlock;
+extern ProcessBlock* Bcons_pcot[TTY_NUMBER];
+ProcessBlock* Bcons_EnsureCot(unsigned tty_no);
 
 #if _GUI_ENABLE
 void Global_CleanProcessForms(ProcessBlock* pb);

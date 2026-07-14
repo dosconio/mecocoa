@@ -523,19 +523,7 @@ void serv_file_loop()// for IDE 0:0, 0:1
 			if (shell_p) shell_p->main_thread->name = "shell";
 			ploginfo("Create new shell-form: pid%u", shell_p ? shell_p->pid : 0);
 			#else
-			ProcessBlock* p;
-			p = Taskman::CreateFile(("/md0/cot"), RING_U, Task_Kernel);
-			{
-				auto focus_tty = p->focus_tty.Lock();
-				*focus_tty = vttys[0];
-				if (*focus_tty) {
-					p->Open("/dev/tty", O_RDWR); // stdin
-					p->Open("/dev/tty", O_RDWR); // stdout
-					p->Open("/dev/tty", O_RDWR); // stderr
-				}
-			}
-			Taskman::Append(p);
-			Taskman::AppendThread(p->main_thread);
+			Bcons_EnsureCot(0);
 			#endif
 
 			#elif (_MCCA & 0xFF00) == 0x1000

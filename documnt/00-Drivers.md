@@ -26,6 +26,10 @@ TODO:
 	- UHCI 1.0
 	- xHCI 3.1
 
+GUI: Single Screen; 未注册
+CLI: F1~F4; 未注册
+COM: 未注册
+
 ### Timer
 
 - 8254 **PIT**

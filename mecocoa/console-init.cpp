@@ -16,6 +16,7 @@ bool Cursor::mouse_btnr_dn = false;
 unsigned Consman::current_screen_TTY = 0;
 #if (_MCCA & 0xFF00) == 0x8600
 BareConsole Bcons[TTY_NUMBER];// TTY 0~3 and their buffer
+ProcessBlock* Bcons_pcot[TTY_NUMBER] = {};
 // consider GUI
 byte _BUF_cursor[byteof(Cursor)];
 bool Consman::ento_gui = false;

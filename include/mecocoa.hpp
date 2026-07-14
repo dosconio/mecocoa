@@ -9,7 +9,13 @@
 
 #endif
 
-#define _GUI_ENABLE 1
+// _GUI_ENABLE
+#ifdef CONFIG_ENABLE_GRAPHIC
+#define _GUI_ENABLE CONFIG_ENABLE_GRAPHIC
+#else
+#define _GUI_ENABLE 0
+#endif
+
 // double buffer, or the anime is disabled
 #define _GUI_DOUBLE_BUFFER 1
 // print logo 🏳️‍⚧️

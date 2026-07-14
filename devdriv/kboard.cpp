@@ -145,7 +145,9 @@ int KeyboardBridge::out(const char* str, stduint len) {
 				}
 				else if (Ranglin(event.keycode, 0x3A, 4))// F1~4 doshow
 				{
-					Bcons[event.keycode - 0x3A].doshow(pureptr_t(event.keycode - 0x3A));
+					unsigned tty_no = event.keycode - 0x3A;
+					Bcons_EnsureCot(tty_no);
+					Bcons[tty_no].doshow(pureptr_t(tty_no));
 				}
 				#endif
 				if (ascii_ch) {

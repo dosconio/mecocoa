@@ -14,6 +14,7 @@ build:
 	@make -f configs/$(arch).make build --silent
 
 config:
+	@menuconfig
 	@genconfig --header-path include/autoconf.h
 
 run:

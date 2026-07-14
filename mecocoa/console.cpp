@@ -95,27 +95,7 @@ void Consman::WakeBlockedWaitersDeferred() {
 }
 
 
-//// ---- ---- Bottom Impl ---- ---- ////
-#ifdef _ARC_x86 // x86:
 
-extern BareConsole Bcons[TTY_NUMBER];
-void uni::BareConsole::doshow(void* _) {
-	unsigned id = _IMM(_);
-	if (id == Consman::current_screen_TTY) return;
-	if (id >= TTY_NUMBER) {
-		plogerro("TTY Id %u", id);
-		return;
-	}
-	Bcons[Consman::current_screen_TTY].last_curposi = curget();
-	Bcons[id].setStartLine(topline + crtline);
-	Consman::current_screen_TTY = id;
-	curset(Bcons[id].last_curposi);
-	//
-	for0(i, 4) Bcons[i].auto_incbegaddr = false;
-	Bcons[id].auto_incbegaddr = true;
-}
-
-#endif
 
 //// ---- ---- DYNAMIC CORE ---- ---- ////
 

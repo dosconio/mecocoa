@@ -33,6 +33,10 @@ menu "Parameter"
 endmenu
 
 menu "Function"
+	config ENABLE_GRAPHIC
+		bool "Enable graphic Support"
+		default y
+
 	config ENABLE_VIRTUALIZATION
 		bool "(TODO) Enable virtualization Support"
 		default y
