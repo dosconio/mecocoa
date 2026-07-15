@@ -11,7 +11,9 @@
 class BochsVideoDevice : public VideoDevice {
 public:
 	FramebufferInfo fb_info;
+	uni::ScreenBridge renderer;
 	uni::BochsGrafAda hw;
+	BochsVideoDevice() : renderer(fb_info) {}
 
 	virtual const FramebufferInfo& GetFramebuffer() const override { return fb_info; }
 	virtual bool SetMode(const VideoMode& mode) override {
@@ -27,38 +29,14 @@ public:
 	}
 	virtual void Flush(const Rectangle& rect) override {}
 
-	inline uint32& Locate(const Point& disp) const {
-		return *(uint32*)((byte*)fb_info.physical_range.address + disp.y * fb_info.pitch + disp.x * 4);
-	}
-
 	virtual void SetCursor(const Point& disp) const override {}
 	virtual Point GetCursor() const override { return {0, 0}; }
-	virtual void DrawPoint(const Point& disp, Color color) const override {
-		Locate(disp) = cast<uint32>(color);
-	}
-	virtual void DrawRectangle(const Rectangle& rect) const override {
-		uint32* p = &Locate(rect.getVertex());
-		for0(y, rect.height) {
-			for0(x, rect.width) p[x] = rect.color.val;
-			p = (uint32*)((byte*)p + fb_info.pitch);
-		}
-	}
+	virtual void DrawPoint(const Point& disp, Color color) const override { renderer.DrawPoint(disp, color); }
+	virtual void DrawRectangle(const Rectangle& rect) const override { renderer.DrawRectangle(rect); }
 	virtual void DrawFont(const Point& disp, const DisplayFont& font, const String& str) const override {}
-	virtual Color GetColor(Point p) const override {
-		return cast<Color>(Locate(p));
-	}
-	virtual void DrawPoints(const Rectangle& rect, const Color* base) const override {
-		uint32* p = &Locate(rect.getVertex());
-		const Color* pbase = base + rect.y * fb_info.screen_size.x + rect.x;
-		for0(y, rect.height) {
-			for0(x, rect.width) p[x] = pbase[x].val;
-			p = (uint32*)((byte*)p + fb_info.pitch);
-			pbase += fb_info.screen_size.x;
-		}
-	}
+	virtual Color GetColor(Point p) const override { return renderer.GetColor(p); }
+	virtual void DrawPoints(const Rectangle& rect, const Color* base) const override { renderer.DrawPoints(rect, base); }
 };
-
-static BochsVideoDevice s_bochs_video;
 
 bool BochsVideo_Start(DeviceNode* node) {
 	if (!node) return false;
@@ -74,25 +52,27 @@ bool BochsVideo_Start(DeviceNode* node) {
 		return false;
 	}
 
+	auto* dev = new BochsVideoDevice();
+
 	// Read initial resolution from Bochs registers
-	uint16_t xres = s_bochs_video.hw.ReadRegister(uni::BochsGrafAda::INDEX_XRES);
-	uint16_t yres = s_bochs_video.hw.ReadRegister(uni::BochsGrafAda::INDEX_YRES);
-	uint16_t bpp = s_bochs_video.hw.ReadRegister(uni::BochsGrafAda::INDEX_BPP);
+	uint16_t xres = dev->hw.ReadRegister(uni::BochsGrafAda::INDEX_XRES);
+	uint16_t yres = dev->hw.ReadRegister(uni::BochsGrafAda::INDEX_YRES);
+	uint16_t bpp = dev->hw.ReadRegister(uni::BochsGrafAda::INDEX_BPP);
 	
 	// Default to 1024x768x32 if invalid
 	if (xres == 0 || yres == 0 || bpp != 32) {
 		xres = 1024;
 		yres = 768;
-		s_bochs_video.hw.SetResolution(xres, yres, 32);
+		dev->hw.SetResolution(xres, yres, 32);
 	}
 
-	s_bochs_video.fb_info.screen_size = Size2(xres, yres);
-	s_bochs_video.fb_info.bpp = 32;
-	s_bochs_video.fb_info.pitch = xres * 4;
-	s_bochs_video.fb_info.format = uni::PixelFormat::ARGB8888;
-	s_bochs_video.fb_info.physical_range = uni::Slice{ bar0->start, (stduint)(s_bochs_video.fb_info.pitch * yres) };
+	dev->fb_info.screen_size = Size2(xres, yres);
+	dev->fb_info.bpp = 32;
+	dev->fb_info.pitch = xres * 4;
+	dev->fb_info.format = uni::PixelFormat::ARGB8888;
+	dev->fb_info.physical_range = uni::Slice{ bar0->start, (stduint)(dev->fb_info.pitch * yres) };
 
-	node->fields.binding.driver_data = &s_bochs_video;
+	node->fields.binding.driver_data = dev;
 	
 	ploginfo("[BochsVBE] Mounted at %[x], Res: %ux%u", bar0->start, xres, yres);
 	return true;

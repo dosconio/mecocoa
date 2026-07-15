@@ -1,20 +1,6 @@
 #ifndef CONSOLE_HPP_
 #define CONSOLE_HPP_
 
-// without boundary check
-#define defVconIface(cname,unit) class cname : public VideoControlInterface {\
-public:\
-	unit& Locate(const Point& disp) const;\
-	virtual ~cname() = default; cname() {}\
-	virtual void SetCursor(const Point& disp) const override;\
-	virtual Point GetCursor() const override;\
-	virtual void DrawPoint(const Point& disp, Color color) const override;\
-	virtual void DrawRectangle(const Rectangle& rect) const override;\
-	virtual void DrawFont(const Point& disp, const DisplayFont& font, const String& str) const override;\
-	virtual Color GetColor(Point p) const override;\
-	virtual void DrawPoints(const Rectangle& rect, const Color* base) const override;\
-};
-
 #include <cpp/Device/_Video.hpp>
 #include <c/driver/mouse.h>
 #include <cpp/Witch/Form.hpp>
@@ -181,10 +167,6 @@ struct Consman {
 
 #if (_MCCA & 0xFF00) == 0x8600
 #define TTY_NUMBER 4
-
-// defVconIface(GloScreenRGB888, uint8);
-defVconIface(GloScreenARGB8888, uint32);
-defVconIface(GloScreenABGR8888, uint32);
 
 
 void hand_mouse(MouseMessage mmsg);

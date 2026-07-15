@@ -34,6 +34,7 @@ cppfile=\
 	$(ulibpath)/cpp/Device/Buzzer.cpp \
 	$(ulibpath)/cpp/Device/Keyboard.cpp \
 	$(ulibpath)/cpp/charset/Unicode.cpp \
+	$(ulibpath)/cpp/Device/Video-VCI.cpp \
 	$(ulibpath)/cpp/Device/Video.cpp $(ulibpath)/cpp/Device/Video-VideoConsole2.cpp \
 
 cplfile=\

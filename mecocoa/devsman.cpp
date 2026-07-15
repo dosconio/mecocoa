@@ -356,6 +356,13 @@ namespace {
 		return nullptr;
 	}
 
+	bool is_bochs_video_device(const DeviceNode* node) {
+		if (!node) return false;
+		// QEMU/Bochs VGA vendor ID = 0x1234, device ID = 0x1111
+		return node->fields.vendor_id == 0x1234 &&
+			node->fields.device_id == 0x1111;
+	}
+
 	Devsman::DriverStartRoutine find_driver_starter(const char* driver_name) {
 		if (!driver_name) return nullptr;
 		for0(i, driver_start_hook_count) {
@@ -369,7 +376,12 @@ namespace {
 
 	void bind_pci_device(DeviceNode* node) {
 		if (!node) return;
-		if (const auto* entry = match_pci_driver(node)) set_driver_binding(node, entry->driver_name);
+		if (const auto* entry = match_pci_driver(node)) {
+			if (StrCompare(entry->driver_name, "video-bochs") == 0 && !is_bochs_video_device(node)) {
+				return;
+			}
+			set_driver_binding(node, entry->driver_name);
+		}
 	}
 
 	void bind_platform_device(DeviceNode* node) {
