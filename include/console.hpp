@@ -21,30 +21,7 @@ public:\
 #include <cpp/Witch/TextChrome.hpp>
 #include "taskman/lock.hpp"
 
-struct FramebufferInfo {
-	uni::Slice physical_range;
-	uni::Size2 screen_size;
-	uint32 pitch;
-	uint32 bpp;
-	uni::PixelFormat format;
-};
-
 extern FramebufferInfo sys_framebuffer;
-
-struct VideoMode {
-	uni::Size2 resolution;
-	uni::PixelFormat format;
-	uint32 refresh_rate;
-	uint32 output_id;
-};
-
-class VideoDevice : public uni::VideoControlInterface {
-public:
-	virtual ~VideoDevice() = default;
-	virtual const FramebufferInfo& GetFramebuffer() const = 0;
-	virtual bool SetMode(const VideoMode& mode) { return false; }
-	virtual void Flush(const Rectangle& rect) {}
-};
 
 extern Dchain ttys, vttys;
 struct vtty_type_t {

@@ -108,23 +108,19 @@ bool Consman::Initialize() {
 	sys_framebuffer.pitch = addr->BytesPerScanLine;
 	sys_framebuffer.bpp = addr->BitsPerPixel;
 	sys_framebuffer.format = PixelFormat::ARGB8888; // Default
-	Rectangle screen0_win{ Point(0,0), sys_framebuffer.screen_size, Color::Black };
-	VideoDevice* screen = InitClassicVideo(sys_framebuffer);
-	if (!screen) loop HALT();
-	{
-		auto layman = global_layman.Lock();
-		layman->Reset(screen, screen0_win);
-		layman->video_mode = vmod_default;
-		layman->video_memory = addr->PhysBasePtr;
-		layman->pixel_fmt = PixelFormat::ARGB8888;
-	}
 	#else
 	sys_framebuffer.physical_range = Slice{ (stduint)uefi_data.frame_buffer_config.frame_buffer, uefi_data.frame_buffer_config.vertical_resolution * uefi_data.frame_buffer_config.pixels_per_scan_line * 4 };
 	sys_framebuffer.screen_size = Size2(uefi_data.frame_buffer_config.horizontal_resolution, uefi_data.frame_buffer_config.vertical_resolution);
 	sys_framebuffer.pitch = uefi_data.frame_buffer_config.pixels_per_scan_line * 4;
 	sys_framebuffer.bpp = 32;
 	sys_framebuffer.format = uefi_data.frame_buffer_config.pixel_format;
+	#endif
+
 	Rectangle screen0_win{ Point(0,0), sys_framebuffer.screen_size, Color::Black };
+	// 1. Register 'classic-video' to the system device tree, passing sys_framebuffer as driver_data
+	DeviceNode* fb_node = Devsman::RegisterPlatformDevice("video-classic", "classic-video-driver", &sys_framebuffer);
+
+	// TODO: Remove this direct initialization after driver binding is fully implemented (Step 2 and 3)
 	VideoDevice* screen = InitClassicVideo(sys_framebuffer);
 	if (!screen) {
 		loop HALT();
@@ -133,10 +129,17 @@ bool Consman::Initialize() {
 		auto layman = global_layman.Lock();
 		layman->Reset(screen, screen0_win);
 		layman->video_mode = vmod_default;
+		#if !defined(_UEFI)
+		layman->video_memory = addr->PhysBasePtr;
+		layman->pixel_fmt = PixelFormat::ARGB8888;
+		#else
 		layman->video_memory = (stduint)uefi_data.frame_buffer_config.frame_buffer;
 		layman->pixel_fmt = uefi_data.frame_buffer_config.pixel_format;
+		#endif
 	}
-	#endif
+	
+
+
 	stduint vcon0_size = 0, video_memory = 0;
 	{
 		auto layman = global_layman.Lock();

@@ -71,6 +71,7 @@ namespace {
 		{0x0Cu, 0x03u, 0x30u, "xhci"},
 		{AHCI_PCI_CLASS_BASE, AHCI_PCI_CLASS_SUB, AHCI_PCI_CLASS_IF, "ahci"},
 		{0x01u, 0x01u, MatchAnyClassIf, "pata"},
+		{0x03u, 0x00u, MatchAnyClassIf, "video-bochs"},
 	};
 
 	constexpr NamedDriverMatchEntry platform_driver_match_table[] = {
@@ -113,12 +114,17 @@ namespace {
 		return true;
 	}
 
+	bool probe_video_bochs_device(DeviceNode* node) {
+		return node != nullptr;
+	}
+
 	constexpr DriverOpsEntry pci_driver_ops_table[] = {
 		{"xhci", probe_xhci_device},
 		{"ahci", probe_ahci_device},
+		{"video-bochs", probe_video_bochs_device},
 	};
 
-	DriverStartHookEntry driver_start_hooks[8]{};
+	DriverStartHookEntry driver_start_hooks[32]{};
 	stduint driver_start_hook_count = 0;
 
 	void init_node(DeviceNode* node, DeviceNodeType node_type, DeviceBusType bus_type, const char* name) {

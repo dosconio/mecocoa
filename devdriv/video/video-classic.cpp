@@ -179,4 +179,22 @@ VideoDevice* InitClassicVideo(const FramebufferInfo& info) {
 	return &s_classic_video;
 }
 
+bool ClassicVideo_Start(DeviceNode* node) {
+	if (!node || !node->fields.binding.driver_data) return false;
+	FramebufferInfo* info = (FramebufferInfo*)node->fields.binding.driver_data;
+	
+	VideoDevice* screen = InitClassicVideo(*info);
+	if (screen) {
+		node->fields.binding.driver_data = screen;
+		return true;
+	}
+	return false;
+}
+
+static struct _ClassicVideo_AutoReg {
+	_ClassicVideo_AutoReg() {
+		Devsman::RegisterDriverStarter("classic-video-driver", ClassicVideo_Start);
+	}
+} _auto_reg;
+
 #endif
