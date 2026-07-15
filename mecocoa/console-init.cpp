@@ -25,15 +25,11 @@ SheetTrait* Consman::last_click_sheet = nullptr;// mark the focused window
 VideoControlInterface* Consman::real_pvci = nullptr;
 
 
-#ifndef _UEFI
-GloScreenARGB8888 local_vci;
-#else
-GloScreenARGB8888 vga_ARGB8888;
-GloScreenABGR8888 vga_ABGR8888;
-#endif
-
 OstreamTrait* con0_out = 0;
 #endif
+
+extern VideoDevice* InitClassicVideo(const FramebufferInfo& info);
+FramebufferInfo sys_framebuffer;
 
 uni::VideoConsole2* global_vcon0 = nullptr;
 
@@ -107,21 +103,30 @@ bool Consman::Initialize() {
 	// config layman
 	#if !defined(_UEFI)
 	auto addr = (ModeInfoBlock*)_IMM(call_ladder(R16FN_VMOD, vmod_default));
-	Rectangle screen0_win{ Point(0,0), Size2(addr->XResolution, addr->YResolution), Color::Black };
+	sys_framebuffer.physical_range = Slice{ addr->PhysBasePtr, (stduint)addr->YResolution * addr->BytesPerScanLine };
+	sys_framebuffer.screen_size = Size2(addr->XResolution, addr->YResolution);
+	sys_framebuffer.pitch = addr->BytesPerScanLine;
+	sys_framebuffer.bpp = addr->BitsPerPixel;
+	sys_framebuffer.format = PixelFormat::ARGB8888; // Default
+	Rectangle screen0_win{ Point(0,0), sys_framebuffer.screen_size, Color::Black };
+	VideoDevice* screen = InitClassicVideo(sys_framebuffer);
+	if (!screen) loop HALT();
 	{
 		auto layman = global_layman.Lock();
-		layman->Reset(&local_vci, screen0_win);
+		layman->Reset(screen, screen0_win);
 		layman->video_mode = vmod_default;
 		layman->video_memory = addr->PhysBasePtr;
 		layman->pixel_fmt = PixelFormat::ARGB8888;
 	}
 	#else
-	Rectangle screen0_win{ Point(0,0), Size2(uefi_data.frame_buffer_config.horizontal_resolution, uefi_data.frame_buffer_config.vertical_resolution), Color::Black };
-	VideoControlInterface* screen;
-	switch (uefi_data.frame_buffer_config.pixel_format) {
-	case PixelFormat::ARGB8888: screen = &vga_ARGB8888; break;
-	case PixelFormat::ABGR8888: screen = &vga_ABGR8888; break;
-	default:
+	sys_framebuffer.physical_range = Slice{ (stduint)uefi_data.frame_buffer_config.frame_buffer, uefi_data.frame_buffer_config.vertical_resolution * uefi_data.frame_buffer_config.pixels_per_scan_line * 4 };
+	sys_framebuffer.screen_size = Size2(uefi_data.frame_buffer_config.horizontal_resolution, uefi_data.frame_buffer_config.vertical_resolution);
+	sys_framebuffer.pitch = uefi_data.frame_buffer_config.pixels_per_scan_line * 4;
+	sys_framebuffer.bpp = 32;
+	sys_framebuffer.format = uefi_data.frame_buffer_config.pixel_format;
+	Rectangle screen0_win{ Point(0,0), sys_framebuffer.screen_size, Color::Black };
+	VideoDevice* screen = InitClassicVideo(sys_framebuffer);
+	if (!screen) {
 		loop HALT();
 	}
 	{

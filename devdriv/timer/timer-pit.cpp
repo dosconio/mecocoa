@@ -27,13 +27,6 @@ void R_PIT_INIT() {
 	}
 }
 
-
-void blink2() {
-	extern GloScreenARGB8888 local_vci;
-	static bool b = false;
-	local_vci.DrawRectangle(Rectangle(Point(8, 0), Size2(8, 16), b ? Color::Black : Color::White));
-	b = !b;
-}
 void RenderFrameFlush();
 void Handint_PIT()
 {
@@ -72,9 +65,6 @@ void Handint_PIT()
 		if (!Consman::ento_gui) {
 			Letvar(p, char*, 0xB8001);
 			*p ^= 0x70;// make it blink
-		}
-		else {
-			blink2();
 		}
 	}
 	static unsigned time_slice = 0;

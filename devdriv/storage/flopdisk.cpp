@@ -322,16 +322,16 @@ void serv_dev_fl_loop()
 				if (floppies[i]) {
 					floppies[i]->Reset();
 					if (floppies[i]->IsMediaPresent()) {
-						Console.OutFormat("[Floppy] Detect Floppy on Drive %c: : %u KB (%s)\n\r", 
+						ploginfo("[Floppy] Detect Floppy on Drive %c: : %u KB (%s)", 
 							'A' + i, 
 							_IMM(floppies[i]->getUnits() * floppies[i]->Block_Size) / 1024,
 							drive_type_names[static_cast<byte>(floppies[i]->getType())]);
 						lab = String::newFormat("/mnt/fl%d", i);
 						if (auto fs = Filesys::Mount(*paged_floppies[i], 0, lab.reference())) {
-							Console.OutFormat("[Floppy] Mounted on %s successfully\n\r", lab.reference());
+							ploginfo("[Floppy] Mounted on %s successfully", lab.reference());
 						}
 					} else {
-						Console.OutFormat("[Floppy] Drive %c: No Media Present\n\r", 'A' + i);
+						ploginfo("[Floppy] Drive %c: No Media Present", 'A' + i);
 					}
 				}
 			}

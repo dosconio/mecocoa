@@ -327,7 +327,7 @@ void serv_dev_hd_loop()
 					} else {
 						total_units = disks[i]->getUnits();
 					}
-					Console.OutFormat("[Hrddisk] Detect %s on IDE%u:%u : %u MB\n\r",
+					ploginfo("[Hrddisk] Detect %s on IDE%u:%u : %u MB",
 						(disks[i]->Block_Size == 2048) ? "CD-ROM" : "Disk",
 						i / 2, i % 2,
 						_IMM(total_units * disks[i]->Block_Size) >> 20);

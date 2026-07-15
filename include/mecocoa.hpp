@@ -6,6 +6,7 @@
 
 #else
 #define CONFIG_SysTickFreq 100 // 100Hz
+#define CONFIG_ECHO_LOGO 1 // print logo 🏳️‍⚧️
 
 #endif
 
@@ -18,9 +19,7 @@
 
 // double buffer, or the anime is disabled
 #define _GUI_DOUBLE_BUFFER 1
-// print logo 🏳️‍⚧️
-#define _GUI_LOGO 1
-// : unstable
+
 //
 #define _GUI_FREETYPE 0
 //

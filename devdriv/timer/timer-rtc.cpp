@@ -27,13 +27,6 @@ void R_RTC_INIT() {
 	}
 }
 
-
-void blink() {
-	extern GloScreenARGB8888 local_vci;
-	static bool b = false;
-	local_vci.DrawRectangle(Rectangle(Point(0, 0), Size2(8, 16), b ? Color::Black : Color::White));
-	b = !b;
-}
 void Handint_RTC()
 {
 	// 1Hz
@@ -47,7 +40,6 @@ void Handint_RTC()
 		Letvar(p, char*, 0xB8003);
 		*p ^= 0x70;// make it blink
 	}
-	else blink();
 
 	IC.SendEOI(IRQ_RTC); // Acknowledge interrupt
 }

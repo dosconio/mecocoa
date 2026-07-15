@@ -24,7 +24,7 @@ void mecfetch() {
 	const unsigned width = Consman::ento_gui ? 48 : 16;
 	const unsigned height = Consman::ento_gui ? 3 : 1;
 
-	#if _GUI_LOGO
+	#if CONFIG_ECHO_LOGO
 	Console.OutFormat(blue, attrl);
 	for0(j, height) { for0(i, width) Console.OutChar(' '); Console.OutFormat("\033[0m\n\r%s", blue); }
 	Console.OutFormat(pink, attrl);

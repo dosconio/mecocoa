@@ -23,22 +23,26 @@ endmenu
 
 menu "Parameter"
 	config SysTickFreq
-		int "Soft Tick Frequency (Hz)"
+		int "Soft-timer Tick Frequency (Hz)"
 		default 100
 
 	config LOG_LEVEL
 		int "(TODO) Kernel Log Level (0-4)"
 		range 0 4
 		default 2
+
+	config ECHO_LOGO
+		bool "Print Logo"
+		default n
 endmenu
 
 menu "Function"
 	config ENABLE_GRAPHIC
-		bool "Enable graphic Support"
+		bool "Enable Graphic Support"
 		default y
 
 	config ENABLE_VIRTUALIZATION
-		bool "(TODO) Enable virtualization Support"
+		bool "(TODO) Enable Virtualization Support"
 		default y
 		help
 			Enable virtual terminal tracking through process blocks.
