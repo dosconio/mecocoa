@@ -37,12 +37,12 @@ display subsystem: ... -> VTTY/VScreen -> COM/CLI/GUI
 │   ├── QEMU stdvga
 │   ├── QEMU bochs-display
 │   ├── Bochs VGA
-
-
-TODO
 ├── vmware-svga
 │   ├── VMware SVGA-II
 │   └── VirtualBox VMSVGA
+
+
+TODO
 │
 ├── virtualbox-vga
 │   ├── VBoxVGA

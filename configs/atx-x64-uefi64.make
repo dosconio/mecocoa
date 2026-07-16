@@ -60,6 +60,7 @@ cppfile=\
 	$(ulibpath)/cpp/Device/Mouse.cpp \
 	$(ulibpath)/cpp/charset/Unicode.cpp \
 	$(ulibpath)/cpp/Device/Video/Bochs-GrafAda.cpp \
+	$(ulibpath)/cpp/Device/Video/VMware-SVGA.cpp \
 	$(ulibpath)/cpp/Device/Video-VCI.cpp \
 	$(ulibpath)/cpp/Device/Video.cpp $(ulibpath)/cpp/Device/Video-VideoConsole2.cpp \
 	$(wildcard $(ulibpath)/cpp/Device/USB/*.cpp) $(wildcard $(ulibpath)/cpp/Device/USB/xHCI/*.cpp) \

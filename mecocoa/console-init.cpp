@@ -22,6 +22,7 @@ byte _BUF_cursor[byteof(Cursor)];
 bool Consman::ento_gui = false;
 bool Consman::enable_dubuffer = false;
 SheetTrait* Consman::last_click_sheet = nullptr;// mark the focused window
+VideoDevice* Consman::current_video_device = nullptr;
 VideoControlInterface* Consman::real_pvci = nullptr;
 
 
@@ -125,18 +126,8 @@ bool Consman::Initialize() {
 	if (!screen) {
 		loop HALT();
 	}
-	{
-		auto layman = global_layman.Lock();
-		layman->Reset(screen, screen0_win);
-		layman->video_mode = vmod_default;
-		#if !defined(_UEFI)
-		layman->video_memory = addr->PhysBasePtr;
-		layman->pixel_fmt = PixelFormat::ARGB8888;
-		#else
-		layman->video_memory = (stduint)uefi_data.frame_buffer_config.frame_buffer;
-		layman->pixel_fmt = uefi_data.frame_buffer_config.pixel_format;
-		#endif
-	}
+	Consman::AdoptVideoDevice(screen);
+	global_layman.Lock()->video_mode = vmod_default;
 	
 
 

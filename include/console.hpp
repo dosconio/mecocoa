@@ -153,9 +153,11 @@ struct Consman {
 	static bool ento_gui;
 	static bool enable_dubuffer;
 	static SheetTrait* last_click_sheet;
+	static VideoDevice* current_video_device;
 	static uni::VideoControlInterface* real_pvci;
 	//
 	static bool Initialize();
+	static bool AdoptVideoDevice(VideoDevice* dev);
 	static void enable_2buffer();
 	static _RET_CreateVconsole CreateVconsole(const Rectangle& rect, rostr title);
 	// Detaches one Form subtree from GUI roots, clears graf input references that still point into it, and returns the dirty area that should be refreshed afterward.

@@ -70,7 +70,7 @@ all:
 	#
 	make arch=atx-x86-flap32
 	make arch=atx-x64-uefi64
-	make arch=atx-x64-long64
+	# make arch=atx-x64-long64
 	#
 	make arch=raspi3-ac53
 	make arch=qemuvirt-a64

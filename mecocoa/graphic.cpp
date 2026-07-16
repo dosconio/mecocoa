@@ -82,14 +82,24 @@ static void ClampSheetToWindow(SheetTrait* sheet, const Rectangle& window) {
 	if (sheet->sheet_area.y > max_y) sheet->sheet_area.y = max_y;
 }
 
-static void ReconfigureForResolutionChange(VideoDevice* dev) {
-	if (!dev) return;
+bool Consman::AdoptVideoDevice(VideoDevice* dev) {
+	if (!dev) return false;
 	Rectangle screen_rect(Point(0, 0), dev->GetFramebuffer().screen_size, Color::Black);
+	bool has_runtime_gui = false;
 	{
 		auto layman = global_layman.Lock();
+		has_runtime_gui = (global_vcon0 != nullptr) || (Cursor::global_cursor != nullptr) || (layman->subf != nullptr);
 		layman->Reset(dev, screen_rect);
+		layman->sheet_area = screen_rect;
 		layman->video_memory = dev->GetFramebuffer().physical_range.address;
 		layman->pixel_fmt = dev->GetFramebuffer().format;
+	}
+	Consman::current_video_device = dev;
+
+	// Early boot only needs to bind the new device into the layman.
+	// Full redraw/reconfigure must wait until framebuffer mapping and GUI roots exist.
+	if (!has_runtime_gui) {
+		return true;
 	}
 
 	if (Consman::enable_dubuffer) {
@@ -99,6 +109,9 @@ static void ReconfigureForResolutionChange(VideoDevice* dev) {
 	{
 		auto layman = global_layman.Lock();
 		Cursor::moving_sheet = nullptr;
+		if (Cursor::global_cursor) {
+			Cursor::global_cursor->pixel_writer_ = &layman->getVCI();
+		}
 		if (global_vcon0) {
 			global_vcon0->Reconfigure(&layman->getVCI(), *layman, screen_rect);
 		}
@@ -110,6 +123,7 @@ static void ReconfigureForResolutionChange(VideoDevice* dev) {
 		layman->is_dirty = true;
 		layman->UpdateForce(nullptr, layman->window);
 	}
+	return true;
 }
 
 // hand_mouse - runs only in Graphic thread, no lock needed
@@ -262,6 +276,9 @@ void LayerManager2::UpdateForce(SheetTrait* who, const Rectangle& rect) {
 			Point(abs_rect.x, abs_rect.y),
 			Size2(rect.width, rect.height)
 		));
+	}
+	else if (!sheet_buffer && Consman::current_video_device) {
+		Consman::current_video_device->Flush(abs_rect);
 	}
 }
 
@@ -1080,6 +1097,9 @@ void serv_graf_loop() {
 					// Flush to hardware outside the lock to prevent MMIO livelocks
 					if (buf && Consman::real_pvci) {
 						Consman::real_pvci->DrawPoints(flush_rect, buf);
+						if (Consman::current_video_device) {
+							Consman::current_video_device->Flush(flush_rect);
+						}
 					}
 				}
 				break;
@@ -1097,7 +1117,7 @@ void serv_graf_loop() {
 				if (node && node->fields.binding.driver_data) {
 					VideoDevice* dev = static_cast<VideoDevice*>(node->fields.binding.driver_data);
 					if (dev->setMode(uni::VideoMode{uni::Point2(msg.args.res.width, msg.args.res.height), uni::PixelFormat::ARGB8888})) {
-						ReconfigureForResolutionChange(dev);
+						Consman::AdoptVideoDevice(dev);
 						ploginfo("[Graphic] Resolution changed to %ux%u", msg.args.res.width, msg.args.res.height);
 					}
 				}

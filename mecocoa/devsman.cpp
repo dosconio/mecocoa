@@ -71,6 +71,7 @@ namespace {
 		{0x0Cu, 0x03u, 0x30u, "xhci"},
 		{AHCI_PCI_CLASS_BASE, AHCI_PCI_CLASS_SUB, AHCI_PCI_CLASS_IF, "ahci"},
 		{0x01u, 0x01u, MatchAnyClassIf, "pata"},
+		{0x03u, 0x00u, MatchAnyClassIf, "video-vmware"},
 		{0x03u, 0x00u, MatchAnyClassIf, "video-bochs"},
 	};
 
@@ -118,9 +119,14 @@ namespace {
 		return node != nullptr;
 	}
 
+	bool probe_video_vmware_device(DeviceNode* node) {
+		return node != nullptr;
+	}
+
 	constexpr DriverOpsEntry pci_driver_ops_table[] = {
 		{"xhci", probe_xhci_device},
 		{"ahci", probe_ahci_device},
+		{"video-vmware", probe_video_vmware_device},
 		{"video-bochs", probe_video_bochs_device},
 	};
 
@@ -376,6 +382,12 @@ namespace {
 			node->fields.device_id == 0x1111;
 	}
 
+	bool is_vmware_video_device(const DeviceNode* node) {
+		if (!node) return false;
+		return node->fields.vendor_id == 0x15AD &&
+			node->fields.device_id == 0x0405;
+	}
+
 	Devsman::DriverStartRoutine find_driver_starter(const char* driver_name) {
 		if (!driver_name) return nullptr;
 		for0(i, driver_start_hook_count) {
@@ -389,7 +401,20 @@ namespace {
 
 	void bind_pci_device(DeviceNode* node) {
 		if (!node) return;
+		if (node->fields.class_base == 0x03u && node->fields.class_sub == 0x00u) {
+			if (is_vmware_video_device(node)) {
+				set_driver_binding(node, "video-vmware");
+				return;
+			}
+			if (is_bochs_video_device(node)) {
+				set_driver_binding(node, "video-bochs");
+			}
+			return;
+		}
 		if (const auto* entry = match_pci_driver(node)) {
+			if (StrCompare(entry->driver_name, "video-vmware") == 0 && !is_vmware_video_device(node)) {
+				return;
+			}
 			if (StrCompare(entry->driver_name, "video-bochs") == 0 && !is_bochs_video_device(node)) {
 				return;
 			}

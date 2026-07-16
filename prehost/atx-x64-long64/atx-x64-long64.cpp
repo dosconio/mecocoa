@@ -13,9 +13,6 @@
 // x64: GDT, MEM, PG
 
 extern OstreamTrait* con0_out;
-int x86_COM::inn() {
-	_TODO return -1;
-}
 
 _ESYM_C void mecocoa() {
 	x86_COM com1; con0_out = &com1;
@@ -40,7 +37,7 @@ _ESYM_C void mecocoa() {
 	ploginfo("[ Paging] ROOT PT at %[x]", kernel_paging.root_level_page);
 
 	#if _GUI_DOUBLE_BUFFER
-	Consman::real_pvci->DrawPoints(global_layman.window, global_layman.sheet_buffer);
+	Consman::real_pvci->DrawPoints(global_layman.unsafe_ptr()->window, global_layman.unsafe_ptr()->sheet_buffer);
 	#endif
 
 	loop HALT();

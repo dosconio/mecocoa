@@ -73,16 +73,7 @@ bool BochsVideo_Start(DeviceNode* node) {
 	dev->fb_info.physical_range = uni::Slice{ bar0->start, (stduint)(dev->fb_info.pitch * yres) };
 
 	node->fields.binding.driver_data = dev;
-
-	// Take Over
-	{
-		extern SpinlockBlock<LayerManager2> global_layman;
-		auto layman = global_layman.Lock();
-		layman->Reset(dev, Rectangle(Point(0,0), dev->fb_info.screen_size, Color::Black));
-		layman->video_memory = bar0->start;
-		layman->pixel_fmt = uni::PixelFormat::ARGB8888;
-		layman->UpdateForce(nullptr, layman->window);
-	}
+	Consman::AdoptVideoDevice(dev);
 	
 	ploginfo("[BochsVBE] Mounted at %[x], Res: %ux%u", bar0->start, xres, yres);
 	return true;
