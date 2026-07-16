@@ -9,6 +9,7 @@ enum class DeviceNodeType : uint16 {
 	PCI_Root,
 	PciBus,
 	PciDevice,
+	IsaBus,
 	StorageDevice,
 	UsbBus,
 	UsbRootHub,
@@ -23,6 +24,7 @@ enum class DeviceNodeType : uint16 {
 enum class DeviceBusType : uint16 {
 	None = 0,
 	PCI,
+	ISA,
 	USB,
 	Platform,
 	I2C,
@@ -150,6 +152,7 @@ public:
 		DeviceBusType bus_type = DeviceBusType::Platform,
 		const char* driver_name = nullptr, void* driver_data = nullptr);
 	static DeviceNode* RegisterSerioController(const char* name);
+	static DeviceNode* RegisterSerioController(DeviceNode* parent, const char* name);
 	static DeviceNode* RegisterSerioDevice(DeviceNode* parent, const char* name);
 	static bool AddIoPortResource(DeviceNode* node, uint32 index, uint64 base, uint64 length);
 	static bool AddIrqResource(DeviceNode* node, uint64 vector, uint64 pin = 0);

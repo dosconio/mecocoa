@@ -3,6 +3,7 @@
 // ModuTitle: [Service] Device Management
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 #include "../include/mecocoa.hpp"
+#include <cpp/Device/Bus/ISA.hpp>
 #include <cpp/Device/Bus/PCI.hpp>
 #include <c/storage/AHCI.h>
 #if _MCCA == 0x8664
@@ -39,7 +40,8 @@ namespace {
 	#if (_MCCA & 0xFF00) == 0x8600
 	DeviceNode* pci_root = nullptr;
 	DeviceNode* primary_pci_bus = nullptr;
-	DeviceNode* bus_roots[8]{};
+	DeviceNode* legacy_isa_bus = nullptr;
+	DeviceNode* bus_roots[9]{};
 	DeviceNode* pci_bus_nodes[256]{};
 	bool pci_devices_attached = false;
 	constexpr uint8 MatchAnyClassIf = 0xFF;
@@ -88,6 +90,20 @@ namespace {
 		{"ps2kbd", "ps2-keyboard"},
 		{"ps2mouse", "ps2-mouse"},
 	};
+
+	bool is_x86_legacy_isa_platform_name(const char* name) {
+		if (!name) return false;
+		return StrCompare(name, "pic@8259-master") == 0 ||
+			StrCompare(name, "pic@8259-slave") == 0 ||
+			StrCompare(name, "rtc@cmos") == 0 ||
+			StrCompare(name, "uart@com1") == 0 ||
+			StrCompare(name, "fdc@0") == 0;
+	}
+
+	bool is_x86_legacy_isa_serio_name(const char* name) {
+		if (!name) return false;
+		return StrCompare(name, "i8042") == 0;
+	}
 
 	bool probe_xhci_device(DeviceNode* node) {
 		if (!node) return false;
@@ -149,6 +165,7 @@ namespace {
 	const char* default_bus_root_name(DeviceBusType bus_type) {
 		switch (bus_type) {
 		case DeviceBusType::PCI:      return "pci-root";
+		case DeviceBusType::ISA:      return "isa-root";
 		case DeviceBusType::USB:      return "usb-root";
 		case DeviceBusType::Platform: return "platform-root";
 		case DeviceBusType::I2C:      return "i2c-root";
@@ -257,6 +274,24 @@ namespace {
 	DeviceNode* ensure_pci_bus_node(uint16 segment, uint8 bus) {
 		if (pci_bus_nodes[bus]) return pci_bus_nodes[bus];
 		return create_pci_bus_node(segment, bus);
+	}
+
+	DeviceNode* find_child_by_type(DeviceNode* parent, DeviceNodeType node_type) {
+		if (!parent) return nullptr;
+		for (auto* crt = reinterpret_cast<DeviceNode*>(parent->link.subf); crt; crt = reinterpret_cast<DeviceNode*>(crt->link.next)) {
+			if (crt->fields.node_type == static_cast<uint16>(node_type)) return crt;
+		}
+		return nullptr;
+	}
+
+	DeviceNode* resolve_default_platform_parent(const char* name) {
+		if (legacy_isa_bus && is_x86_legacy_isa_platform_name(name)) return legacy_isa_bus;
+		return get_bus_root(DeviceBusType::Platform);
+	}
+
+	DeviceNode* resolve_default_serio_parent(const char* name) {
+		if (legacy_isa_bus && is_x86_legacy_isa_serio_name(name)) return legacy_isa_bus;
+		return get_bus_root(DeviceBusType::Serio);
 	}
 
 	uint8 read_pci_revision_id(const uni::PCI::Device& dev) {
@@ -401,6 +436,11 @@ namespace {
 
 	void bind_pci_device(DeviceNode* node) {
 		if (!node) return;
+		if (uni::ISA::IsBridgeDevice(node->fields.vendor_id, node->fields.device_id,
+			node->fields.class_base, node->fields.class_sub)) {
+			set_driver_binding(node, "isa-bridge");
+			return;
+		}
 		if (node->fields.class_base == 0x03u && node->fields.class_sub == 0x00u) {
 			if (is_vmware_video_device(node)) {
 				set_driver_binding(node, "video-vmware");
@@ -733,6 +773,42 @@ namespace {
 		}
 	}
 
+	DeviceNode* ensure_isa_bus_node(DeviceNode* pci_bridge_node) {
+		if (!pci_bridge_node) return nullptr;
+		if (auto* node = find_child_by_type(pci_bridge_node, DeviceNodeType::IsaBus)) {
+			return node;
+		}
+		auto* isa_node = device_tree.NewNode();
+		init_node(isa_node, DeviceNodeType::IsaBus, DeviceBusType::ISA,
+			heap_name("isa@%04x:%02x:%02x.%x",
+				pci_bridge_node->fields.pci_segment,
+				pci_bridge_node->fields.pci_bus,
+				pci_bridge_node->fields.pci_device,
+				pci_bridge_node->fields.pci_function));
+		append_child(pci_bridge_node, isa_node);
+		return isa_node;
+	}
+
+	DeviceNode* attach_isa_bus_if_bridge(DeviceNode* pci_node) {
+		if (!pci_node) return nullptr;
+		const auto kind = uni::ISA::ClassifyBridge(pci_node->fields.vendor_id, pci_node->fields.device_id,
+			pci_node->fields.class_base, pci_node->fields.class_sub);
+		if (kind == uni::ISA::BridgeKind::Unknown) return nullptr;
+		if (!pci_node->fields.text_product) {
+			pci_node->fields.text_product = StrHeap(uni::ISA::BridgeKindName(kind));
+		}
+		if (!pci_node->fields.text_manufacturer && pci_node->fields.vendor_id == 0x8086u) {
+			pci_node->fields.text_manufacturer = StrHeap("Intel");
+		}
+		auto* isa_node = ensure_isa_bus_node(pci_node);
+		if (!legacy_isa_bus) legacy_isa_bus = isa_node;
+		ploginfo("[DEVSMAN] ISA bridge %s on %s -> %s",
+			uni::ISA::BridgeKindName(kind),
+			pci_node->link.addr ? pci_node->link.addr : "(unnamed)",
+			isa_node->link.addr ? isa_node->link.addr : "(unnamed)");
+		return isa_node;
+	}
+
 	void initialize_device_tree() {
 		if (device_root) return;
 
@@ -787,20 +863,21 @@ namespace {
 	}
 
 	void register_legacy_x86_platform_nodes(bool support_apic) {
-		if (auto* pic_master = Devsman::RegisterPlatformDevice("pic@8259-master", "pic-8259")) {
+		auto* legacy_bus = legacy_isa_bus ? legacy_isa_bus : get_bus_root(DeviceBusType::Platform);
+		if (auto* pic_master = Devsman::RegisterPlatformDevice(legacy_bus, "pic@8259-master", "pic-8259")) {
 			Devsman::AddIoPortResource(pic_master, 0, 0x20, 2);
 		}
-		if (auto* pic_slave = Devsman::RegisterPlatformDevice("pic@8259-slave", "pic-8259")) {
+		if (auto* pic_slave = Devsman::RegisterPlatformDevice(legacy_bus, "pic@8259-slave", "pic-8259")) {
 			Devsman::AddIoPortResource(pic_slave, 0, 0xA0, 2);
 		}
 		if (support_apic) {
 			Devsman::RegisterPlatformDevice("lapic@0", "lapic");
 			Devsman::RegisterPlatformDevice("ioapic@0", "ioapic");
 		}
-		if (auto* fdc = Devsman::RegisterPlatformDevice("fdc@0")) {
+		if (auto* fdc = Devsman::RegisterPlatformDevice(legacy_bus, "fdc@0")) {
 			Devsman::AddIoPortResource(fdc, 0, 0x3F0, 8);
 			Devsman::AddIrqResource(fdc, IRQ_PIT + 6);
-			Devsman::RegisterStorageDevice(fdc, "floppy@0", DeviceBusType::Platform);
+			Devsman::RegisterStorageDevice(fdc, "floppy@0", DeviceBusType::ISA);
 		}
 	}
 
@@ -1190,6 +1267,13 @@ bool Devsman::AttachPCIDevices(uni::PCI& pci) {
 	for0(i, pci.num_device) {
 		attach_pci_device_node(pci.devices[i]);
 	}
+	for (Nnode* bus_link = pci_root ? pci_root->link.subf : nullptr; bus_link; bus_link = bus_link->next) {
+		auto* bus_node = reinterpret_cast<DeviceNode*>(bus_link);
+		if (bus_node->fields.node_type != static_cast<uint16>(DeviceNodeType::PciBus)) continue;
+		for (Nnode* dev_link = bus_node->link.subf; dev_link; dev_link = dev_link->next) {
+			attach_isa_bus_if_bridge(reinterpret_cast<DeviceNode*>(dev_link));
+		}
+	}
 	reparent_secondary_buses_under_bridges();
 	pci_devices_attached = true;
 	BindKnownDrivers();
@@ -1250,14 +1334,17 @@ void Devsman::RegisterXHCIDeviceTreeHook() {
 
 DeviceNode* Devsman::RegisterPlatformDevice(const char* name, const char* driver_name, void* driver_data) {
 	initialize_device_tree();
-	auto* root = get_bus_root(DeviceBusType::Platform);
+	auto* root = resolve_default_platform_parent(name);
 	if (!root || !name) return nullptr;
 	if (driver_name) return RegisterPlatformDevice(root, name, driver_name, driver_data);
+	const auto root_bus_type = DeviceBusType(root->fields.bus_type);
+	const auto node_bus_type = root_bus_type == DeviceBusType::ISA ? DeviceBusType::ISA : DeviceBusType::Platform;
 	if (auto* node = find_named_child(root, DeviceNodeType::PlatformDevice, name)) {
+		node->fields.bus_type = static_cast<uint16>(node_bus_type);
 		bind_device_node(node);
 		return node;
 	}
-	auto* node = append_plain_device(root, DeviceNodeType::PlatformDevice, DeviceBusType::Platform, StrHeap(name));
+	auto* node = append_plain_device(root, DeviceNodeType::PlatformDevice, node_bus_type, StrHeap(name));
 	bind_device_node(node);
 	return node;
 }
@@ -1266,6 +1353,8 @@ DeviceNode* Devsman::RegisterPlatformDevice(DeviceNode* parent, const char* name
 	const char* driver_name, void* driver_data) {
 	initialize_device_tree();
 	if (!parent || !name) return nullptr;
+	const auto parent_bus_type = DeviceBusType(parent->fields.bus_type);
+	const auto node_bus_type = parent_bus_type == DeviceBusType::ISA ? DeviceBusType::ISA : DeviceBusType::Platform;
 	if (auto* node = find_named_child(parent, DeviceNodeType::PlatformDevice, name)) {
 		if (driver_name) {
 			if (!try_start_platform_driver(node, driver_name, driver_data)) {
@@ -1275,7 +1364,7 @@ DeviceNode* Devsman::RegisterPlatformDevice(DeviceNode* parent, const char* name
 		else bind_device_node(node);
 		return node;
 	}
-	auto* node = append_plain_device(parent, DeviceNodeType::PlatformDevice, DeviceBusType::Platform, StrHeap(name));
+	auto* node = append_plain_device(parent, DeviceNodeType::PlatformDevice, node_bus_type, StrHeap(name));
 	if (driver_name) {
 		if (!try_start_platform_driver(node, driver_name, driver_data)) {
 			set_driver_started(node, driver_name, driver_data);
@@ -1460,13 +1549,21 @@ bool Devsman::RemoveUSBDevice(DeviceNode* parent, const char* name) {
 
 DeviceNode* Devsman::RegisterSerioController(const char* name) {
 	initialize_device_tree();
-	auto* root = get_bus_root(DeviceBusType::Serio);
+	auto* root = resolve_default_serio_parent(name);
 	if (!root || !name) return nullptr;
-	if (auto* node = find_named_child(root, DeviceNodeType::SerioController, name)) {
+	return RegisterSerioController(root, name);
+}
+
+DeviceNode* Devsman::RegisterSerioController(DeviceNode* parent, const char* name) {
+	initialize_device_tree();
+	if (!parent || !name) return nullptr;
+	if (auto* node = find_named_child(parent, DeviceNodeType::SerioController, name)) {
 		bind_device_node(node);
 		return node;
 	}
-	auto* node = append_plain_device(root, DeviceNodeType::SerioController, DeviceBusType::Serio, StrHeap(name));
+	const auto parent_bus_type = DeviceBusType(parent->fields.bus_type);
+	const auto node_bus_type = parent_bus_type == DeviceBusType::ISA ? DeviceBusType::ISA : DeviceBusType::Serio;
+	auto* node = append_plain_device(parent, DeviceNodeType::SerioController, node_bus_type, StrHeap(name));
 	bind_device_node(node);
 	return node;
 }

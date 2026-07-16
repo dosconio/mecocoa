@@ -124,6 +124,7 @@ static rostr text_device_node_type(uint16 node_type) {
 	case DeviceNodeType::PCI_Root:   return "pci-root";
 	case DeviceNodeType::PciBus:     return "pci-bus";
 	case DeviceNodeType::PciDevice:  return "pci-dev";
+	case DeviceNodeType::IsaBus:     return "isa-bus";
 	case DeviceNodeType::StorageDevice: return "storage-dev";
 	case DeviceNodeType::UsbBus:     return "usb-bus";
 	case DeviceNodeType::UsbRootHub: return "usb-root-hub";
@@ -140,6 +141,7 @@ static rostr text_device_node_type(uint16 node_type) {
 static rostr text_device_bus_type(uint16 bus_type) {
 	switch (DeviceBusType(bus_type)) {
 	case DeviceBusType::PCI: return "pci";
+	case DeviceBusType::ISA: return "isa";
 	case DeviceBusType::USB: return "usb";
 	case DeviceBusType::Platform: return "platform";
 	case DeviceBusType::I2C: return "i2c";
@@ -258,6 +260,7 @@ static void dump_device_tree_node(OstreamTrait& com1, const DeviceNode* node, st
 		switch (DeviceNodeType(crt->fields.node_type)) {
 		case DeviceNodeType::BusRoot:
 		case DeviceNodeType::PCI_Root:
+		case DeviceNodeType::IsaBus:
 			com1.OutFormat("%s <%s bus=%s%s%s%s%s>\n\r",
 				name, text_device_node_type(crt->fields.node_type),
 				text_device_bus_type(crt->fields.bus_type),
@@ -712,7 +715,7 @@ void sysinfo_classic(OstreamTrait& com1, byte func)
 
 	case 'h': case 'H':// hardware
 		com1.OutFormat("\n\r");
-		dump_device_tree(com1, func != 'H');
+		dump_device_tree(com1, func != 'h');
 		break;
 
 	case 'l':// lock
