@@ -104,6 +104,18 @@ int KeyboardBridge::out(const char* str, stduint len) {
 					msg.type = SysMessage::RUPT_NEW_TERM;
 					message_queue_conv.Lock()->Enqueue(msg);
 				}
+				else if (event.keycode == 0x15) { // Win + R (R is 0x15 in USB HID)
+					// TEMP
+					extern SpinlockBlock<uni::Queue<SysMessage>> message_queue_conv;
+					SysMessage msg;
+					msg.type = SysMessage::RUPT_SET_RES;
+					static int s_res_idx = 0;
+					s_res_idx = (s_res_idx + 1) % 3;
+					if (s_res_idx == 0) { msg.args.res.width = 1024; msg.args.res.height = 768; }
+					else if (s_res_idx == 1) { msg.args.res.width = 800; msg.args.res.height = 600; }
+					else if (s_res_idx == 2) { msg.args.res.width = 1280; msg.args.res.height = 720; }
+					message_queue_conv.Lock()->Enqueue(msg);
+				}
 				return 0; // Intercept: do not pass to VTTY or other sheets
 			}
 			else if (event.method == keyboard_event_t::method_t::keydown && event.keycode == 0x39) { // CapsLock

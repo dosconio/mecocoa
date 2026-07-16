@@ -26,16 +26,43 @@ TODO:
 	- UHCI 1.0
 	- xHCI 3.1
 
-GUI: Single Screen; 未注册
-CLI: F1~F4; 未注册
-COM: 未注册
+### Video
+
+display subsystem: ... -> VTTY/VScreen -> COM/CLI/GUI
+├── classic-video
+│   ├── UEFI GOP framebuffer
+│   └── BIOS VBE linear framebuffer
+│
+├── bochs-dispi
+│   ├── QEMU stdvga
+│   ├── QEMU bochs-display
+│   ├── Bochs VGA
+
+
+TODO
+├── vmware-svga
+│   ├── VMware SVGA-II
+│   └── VirtualBox VMSVGA
+│
+├── virtualbox-vga
+│   ├── VBoxVGA
+│   └── VBoxSVGA
+│
+└── future
+    ├── virtio-gpu
+    ├── QXL
+    ├── Intel/AMD/NVIDIA
+    └── simple-framebuffer / ACPI-described framebuffer
+
+No Use
+├── qemu-ramfb
+│   └── fw_cfg configured framebuffer
 
 ### Timer
 
 - 8254 **PIT**
 - **RTC**
-x64u only
-- LAPIC Timer and ACPI PM Timer
+- (x64u only) LAPIC Timer and ACPI PM Timer
 
 
 ### Storage

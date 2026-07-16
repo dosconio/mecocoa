@@ -28,7 +28,7 @@ VideoControlInterface* Consman::real_pvci = nullptr;
 OstreamTrait* con0_out = 0;
 #endif
 
-extern VideoDevice* InitClassicVideo(const FramebufferInfo& info);
+extern "C" void R_CLASSIC_VIDEO_INIT();
 FramebufferInfo sys_framebuffer;
 
 uni::VideoConsole2* global_vcon0 = nullptr;
@@ -117,11 +117,11 @@ bool Consman::Initialize() {
 	#endif
 
 	Rectangle screen0_win{ Point(0,0), sys_framebuffer.screen_size, Color::Black };
-	// 1. Register 'classic-video' to the system device tree, passing sys_framebuffer as driver_data
+	R_CLASSIC_VIDEO_INIT();
+	// Register 'classic-video' and let its starter convert sys_framebuffer into a VideoDevice.
 	DeviceNode* fb_node = Devsman::RegisterPlatformDevice("video-classic", "classic-video-driver", &sys_framebuffer);
-
-	// TODO: Remove this direct initialization after driver binding is fully implemented (Step 2 and 3)
-	VideoDevice* screen = InitClassicVideo(sys_framebuffer);
+	VideoDevice* screen = fb_node && fb_node->fields.binding.driver_data ?
+		static_cast<VideoDevice*>(fb_node->fields.binding.driver_data) : nullptr;
 	if (!screen) {
 		loop HALT();
 	}

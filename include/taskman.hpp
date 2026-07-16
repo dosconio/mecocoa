@@ -52,6 +52,7 @@ struct SysMessage {
 		RUPT_FLUSH,
 		RUPT_CONSOLE_WAKE,
 		RUPT_NEW_TERM,
+		RUPT_SET_RES,
 		RUPT_TTY_OUT,// async TTY text ready to render (sent by DevFs::writfl)
 	} type = Type::RUPT_TIMER;
 	union {
@@ -60,6 +61,7 @@ struct SysMessage {
 		keyboard_event_t kbd_event;
 		MccaRectangle rect;// RUPT_FLUSH
 		Dnode* tty_node;// RUPT_TTY_OUT: which vtty has pending output
+		struct { uint32 width, height; } res; // RUPT_SET_RES
 	} args = {};
 };
 extern uni::Queue<SysMessage> message_queue;

@@ -6,6 +6,8 @@
 
 #if (_MCCA & 0xFF00) == 0x8600
 
+_ESYM_C void R_CLASSIC_VIDEO_INIT();
+
 class ClassicVideoDevice : public VideoDevice {
 public:
 	FramebufferInfo fb_info;
@@ -13,7 +15,7 @@ public:
 	ClassicVideoDevice(const FramebufferInfo& info) : fb_info(info), renderer(fb_info) {}
 
 	virtual const FramebufferInfo& GetFramebuffer() const override { return fb_info; }
-	virtual bool SetMode(const VideoMode& mode) override { return false; }
+	virtual bool setMode(const VideoMode& mode) override { return false; }
 	virtual void Flush(const Rectangle& rect) override {}
 
 	virtual void SetCursor(const Point& disp) const override { renderer.SetCursor(disp); }
@@ -47,10 +49,8 @@ bool ClassicVideo_Start(DeviceNode* node) {
 	return false;
 }
 
-static struct _ClassicVideo_AutoReg {
-	_ClassicVideo_AutoReg() {
-		Devsman::RegisterDriverStarter("classic-video-driver", ClassicVideo_Start);
-	}
-} _auto_reg;
+void R_CLASSIC_VIDEO_INIT() {
+	Devsman::RegisterDriverStarter("classic-video-driver", ClassicVideo_Start);
+}
 
 #endif

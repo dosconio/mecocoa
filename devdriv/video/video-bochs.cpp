@@ -3,7 +3,7 @@
 // Attribute: Arn-Covenant Any-Architect Bit-32mode Non-Dependence
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 #include "../../include/mecocoa.hpp"
-#include "../../include/devsman.hpp"
+
 #include <cpp/Device/Video/Bochs-GrafAda.hpp>
 
 #if (_MCCA & 0xFF00) == 0x8600
@@ -16,7 +16,7 @@ public:
 	BochsVideoDevice() : renderer(fb_info) {}
 
 	virtual const FramebufferInfo& GetFramebuffer() const override { return fb_info; }
-	virtual bool SetMode(const VideoMode& mode) override {
+	virtual bool setMode(const VideoMode& mode) override {
 		if (hw.SetResolution(mode.resolution.x, mode.resolution.y, 32)) {
 			fb_info.screen_size = mode.resolution;
 			fb_info.bpp = 32;
@@ -73,6 +73,16 @@ bool BochsVideo_Start(DeviceNode* node) {
 	dev->fb_info.physical_range = uni::Slice{ bar0->start, (stduint)(dev->fb_info.pitch * yres) };
 
 	node->fields.binding.driver_data = dev;
+
+	// Take Over
+	{
+		extern SpinlockBlock<LayerManager2> global_layman;
+		auto layman = global_layman.Lock();
+		layman->Reset(dev, Rectangle(Point(0,0), dev->fb_info.screen_size, Color::Black));
+		layman->video_memory = bar0->start;
+		layman->pixel_fmt = uni::PixelFormat::ARGB8888;
+		layman->UpdateForce(nullptr, layman->window);
+	}
 	
 	ploginfo("[BochsVBE] Mounted at %[x], Res: %ux%u", bar0->start, xres, yres);
 	return true;

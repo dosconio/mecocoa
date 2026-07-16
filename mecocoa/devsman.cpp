@@ -327,6 +327,19 @@ namespace {
 		return true;
 	}
 
+	Devsman::DriverStartRoutine find_driver_starter(const char* driver_name);
+
+	bool try_start_platform_driver(DeviceNode* node, const char* driver_name, void* driver_data) {
+		if (!node || !driver_name) return false;
+		auto starter = find_driver_starter(driver_name);
+		if (!starter) return false;
+		set_driver_binding(node, driver_name);
+		node->fields.binding.driver_data = driver_data;
+		const bool ok = starter(node);
+		set_driver_probe_state(node, ok ? DriverBindingState::Started : DriverBindingState::Failed, ok ? 0 : -1);
+		return true;
+	}
+
 	const PciDriverMatchEntry* match_pci_driver(const DeviceNode* node) {
 		if (!node) return nullptr;
 		for (const auto& entry : pci_driver_match_table) {
@@ -1229,12 +1242,20 @@ DeviceNode* Devsman::RegisterPlatformDevice(DeviceNode* parent, const char* name
 	initialize_device_tree();
 	if (!parent || !name) return nullptr;
 	if (auto* node = find_named_child(parent, DeviceNodeType::PlatformDevice, name)) {
-		if (driver_name) set_driver_started(node, driver_name, driver_data);
+		if (driver_name) {
+			if (!try_start_platform_driver(node, driver_name, driver_data)) {
+				set_driver_started(node, driver_name, driver_data);
+			}
+		}
 		else bind_device_node(node);
 		return node;
 	}
 	auto* node = append_plain_device(parent, DeviceNodeType::PlatformDevice, DeviceBusType::Platform, StrHeap(name));
-	if (driver_name) set_driver_started(node, driver_name, driver_data);
+	if (driver_name) {
+		if (!try_start_platform_driver(node, driver_name, driver_data)) {
+			set_driver_started(node, driver_name, driver_data);
+		}
+	}
 	else bind_device_node(node);
 	return node;
 }

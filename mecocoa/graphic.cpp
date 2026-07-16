@@ -16,6 +16,7 @@ static void SafeLaymanUpdate(SheetTrait* sheet, const Rectangle& rect) {
 #include "../include/console.hpp"
 #include "../include/filesys.hpp"
 
+extern uni::VideoConsole2* global_vcon0;
 
 #if (_MCCA & 0xFF00) == 0x8600 // _GUI_ENABLE
 
@@ -69,6 +70,46 @@ void Cursor::setSheet(LayerManager& layman, const Point& vertex) {
 	doshow(sheet_buffer);
 	InitializeSheet(layman, vertex, { kMouseCursorWidth,kMouseCursorHeight }, sheet_buffer);
 	layman.Append(this);
+}
+
+static void ClampSheetToWindow(SheetTrait* sheet, const Rectangle& window) {
+	if (!sheet) return;
+	stdsint max_x = maxof(0, (stdsint)window.width - (stdsint)minof((stduint)sheet->sheet_area.width, (stduint)window.width));
+	stdsint max_y = maxof(0, (stdsint)window.height - (stdsint)minof((stduint)sheet->sheet_area.height, (stduint)window.height));
+	if (sheet->sheet_area.x < 0) sheet->sheet_area.x = 0;
+	if (sheet->sheet_area.y < 0) sheet->sheet_area.y = 0;
+	if (sheet->sheet_area.x > max_x) sheet->sheet_area.x = max_x;
+	if (sheet->sheet_area.y > max_y) sheet->sheet_area.y = max_y;
+}
+
+static void ReconfigureForResolutionChange(VideoDevice* dev) {
+	if (!dev) return;
+	Rectangle screen_rect(Point(0, 0), dev->GetFramebuffer().screen_size, Color::Black);
+	{
+		auto layman = global_layman.Lock();
+		layman->Reset(dev, screen_rect);
+		layman->video_memory = dev->GetFramebuffer().physical_range.address;
+		layman->pixel_fmt = dev->GetFramebuffer().format;
+	}
+
+	if (Consman::enable_dubuffer) {
+		Consman::enable_2buffer();
+	}
+
+	{
+		auto layman = global_layman.Lock();
+		Cursor::moving_sheet = nullptr;
+		if (global_vcon0) {
+			global_vcon0->Reconfigure(&layman->getVCI(), *layman, screen_rect);
+		}
+		for (auto crt = layman->subf; crt; crt = crt->next) {
+			auto* sheet = (SheetTrait*)crt->offs;
+			ClampSheetToWindow(sheet, layman->window);
+		}
+		layman->dirty_area = screen_rect;
+		layman->is_dirty = true;
+		layman->UpdateForce(nullptr, layman->window);
+	}
 }
 
 // hand_mouse - runs only in Graphic thread, no lock needed
@@ -1050,6 +1091,18 @@ void serv_graf_loop() {
 				}
 				break;
 			}
+			case SysMessage::RUPT_SET_RES:
+			{
+				DeviceNode* node = Devsman::FindPCIDeviceByClass(0x03, 0x00, 0x00);
+				if (node && node->fields.binding.driver_data) {
+					VideoDevice* dev = static_cast<VideoDevice*>(node->fields.binding.driver_data);
+					if (dev->setMode(uni::VideoMode{uni::Point2(msg.args.res.width, msg.args.res.height), uni::PixelFormat::ARGB8888})) {
+						ReconfigureForResolutionChange(dev);
+						ploginfo("[Graphic] Resolution changed to %ux%u", msg.args.res.width, msg.args.res.height);
+					}
+				}
+				break;
+			}
 			default:
 				plogerro("%s Unknown int message type: %d", __FUNCIDEN__, msg.type);
 				break;
@@ -1255,18 +1308,19 @@ void Consman::enable_2buffer() {
 	stduint vcon0_size = 0;
 	{
 		auto layman = global_layman.Lock();
-		vcon0_size = layman->window.getArea() * sizeof(Color);
+		vcon0_size = layman->window.getArea();
 	}
-	Color* new_buffer = (Color*)mem.allocate(vcon0_size);
+	Color* new_buffer = new Color[vcon0_size];
 	
 	if (!new_buffer) {
 		plogerro("Failed to allocate back buffer for Layman");
 	} else {
 		// Clear buffer outside the lock to avoid spinlock timeouts
-		for0(i, vcon0_size / sizeof(Color)) {
+		for0(i, vcon0_size) {
 			new_buffer[i] = Color::Black;
 		}
 		auto layman = global_layman.Lock();
+		if (layman->sheet_buffer) delete[] layman->sheet_buffer;
 		layman->sheet_buffer = new_buffer;
 		layman->sheet_area = layman->window;
 		
