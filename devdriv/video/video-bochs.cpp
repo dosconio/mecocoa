@@ -45,6 +45,10 @@ bool BochsVideo_Start(DeviceNode* node) {
 	if (node->fields.vendor_id != 0x1234 || node->fields.device_id != 0x1111) {
 		return false;
 	}
+	if (!_GUI_ENABLE) {
+		ploginfo("[BochsVBE] Skip start because _GUI_ENABLE=0");
+		return false;
+	}
 
 	const auto* bar0 = Devsman::FindResource(node, DeviceResourceType::PciBarMmio, 0);
 	if (!bar0) {

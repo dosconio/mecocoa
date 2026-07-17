@@ -9,6 +9,7 @@
 #include <c/storage/harddisk.h>
 #include <c/format/filesys.h>
 #include <cpp/atomic>
+#include <cpp/Device/Bus/PCI.hpp>
 
 _ESYM_C void R_HDD_INIT();
 
@@ -26,6 +27,130 @@ Harddisk_PATA* disks[MAX_DRIVES];// referenced
 static char hdd_buf[byteof(**disks) * numsof(disks)];
 static uni::Atomic<byte> lock[2] = {1, 1};
 static char* single_sector = NULL;// file-hd used buffer
+
+struct PataDmaChannelState {
+	word bmide_base = 0;
+	PataBmidePrd* prdt = nullptr;
+	byte* bounce = nullptr;
+	bool ready = false;
+};
+
+static PataDmaChannelState pata_dma_channels[2];
+
+static bool build_pata_pci_device(uni::PCI::Device& pci_dev, DeviceNode*& pata_node) {
+	pata_node = Devsman::FindPCIDeviceByClass(0x01u, 0x01u, 0xFFu);
+	if (!pata_node) return false;
+	pci_dev.bus = pata_node->fields.pci_bus;
+	pci_dev.device = pata_node->fields.pci_device;
+	pci_dev.function = pata_node->fields.pci_function;
+	pci_dev.header_type = 0;
+	pci_dev.class_code.base = pata_node->fields.class_base;
+	pci_dev.class_code.sub = pata_node->fields.class_sub;
+	pci_dev.class_code.interface = pata_node->fields.class_if;
+	return true;
+}
+
+static void initialize_pata_dma_channels_once() {
+	static bool done = false;
+	if (done) return;
+	done = true;
+
+	uni::PCI::Device pci_dev{};
+	DeviceNode* pata_node = nullptr;
+	if (!build_pata_pci_device(pci_dev, pata_node)) {
+		// ploginfo("[PATA-DMA] skip channel init: no PCI IDE controller node");
+		return;
+	}
+
+	const auto* bmide_bar = Devsman::FindResource(pata_node, DeviceResourceType::PciBarIo, 4);
+	if (!bmide_bar || !bmide_bar->start) {
+		// ploginfo("[PATA-DMA] skip channel init: BAR4(BMIDE) absent");
+		return;
+	}
+
+	const word bmide_base = word(bmide_bar->start & 0xFFF8u);
+	for0(channel, 2) {
+		if (!disks[channel * 2] && !disks[channel * 2 + 1]) continue;
+		auto& state = pata_dma_channels[channel];
+		state.bmide_base = word(bmide_base + channel * 8);
+		if (!state.prdt) state.prdt = (PataBmidePrd*)mempool.allocate(0x1000, 12);
+		if (!state.bounce) state.bounce = (byte*)mempool.allocate(0x1000, 12);
+		if (state.prdt) MemSet(state.prdt, 0, 0x1000);
+		if (state.bounce) MemSet(state.bounce, 0, 0x1000);
+		state.ready = state.prdt && state.bounce;
+		ploginfo("[PATA-DMA] ch%u init ready=%u BMIDE=%[16H] prdt=%p bounce=%p",
+			(stduint)channel,
+			(stduint)(state.ready ? 1u : 0u),
+			(stduint)state.bmide_base,
+			state.prdt, state.bounce);
+	}
+}
+
+static void ensure_pata_pci_bus_master_once() {
+	static bool done = false;
+	if (done) return;
+	done = true;
+
+	uni::PCI::Device pci_dev{};
+	DeviceNode* pata_node = nullptr;
+	if (!build_pata_pci_device(pci_dev, pata_node)) {
+		// ploginfo("[PATA-DMA] no PCI IDE controller node for pci-cmd setup");
+		return;
+	}
+
+	const uint16 old_cmd = uint16(uni::PCI::read_config_register(pci_dev, 0x04) & 0xFFFFu);
+	if (old_cmd & 0x0004u) {
+		// ploginfo("[PATA-DMA] pci bus-master already enabled cmd=%[16H]", (stduint)old_cmd);
+		return;
+	}
+
+	const uint16 new_cmd = uint16(old_cmd | 0x0004u);
+	uni::PCI::write_config_register(pci_dev, 0x04, new_cmd);
+	// const uint16 verify_cmd = uint16(uni::PCI::read_config_register(pci_dev, 0x04) & 0xFFFFu);
+	// ploginfo("[PATA-DMA] pci-cmd enable bus-master %[16H] -> %[16H]",
+	// 	(stduint)old_cmd, (stduint)verify_cmd);
+}
+
+static void probe_pata_bus_master_capability_once() {
+	static bool probed = false;
+	if (probed) return;
+	probed = true;
+
+	uni::PCI::Device pci_dev{};
+	DeviceNode* pata_node = nullptr;
+	if (!build_pata_pci_device(pci_dev, pata_node)) {
+		// ploginfo("[PATA-DMA] no PCI IDE controller node");
+		return;
+	}
+
+	// const byte prog_if = pata_node->fields.class_if;
+	// const uint16 pci_cmd = uint16(uni::PCI::read_config_register(pci_dev, 0x04) & 0xFFFFu);
+	// ploginfo("[PATA-DMA] pci %02x:%02x.%u prog_if=%[8H] bus-master=%u",
+	// 	(stduint)pata_node->fields.pci_bus,
+	// 	(stduint)pata_node->fields.pci_device,
+	// 	(stduint)pata_node->fields.pci_function,
+	// 	(stduint)prog_if,
+	// 	(stduint)((prog_if & 0x80u) ? 1u : 0u));
+	// ploginfo("[PATA-DMA] pci-cmd=%[16H] io=%u bus-master-en=%u",
+	// 	(stduint)pci_cmd,
+	// 	(stduint)((pci_cmd & 0x0001u) ? 1u : 0u),
+	// 	(stduint)((pci_cmd & 0x0004u) ? 1u : 0u));
+
+	const auto* bmide_bar = Devsman::FindResource(pata_node, DeviceResourceType::PciBarIo, 4);
+	if (!bmide_bar || !bmide_bar->start) {
+		// ploginfo("[PATA-DMA] BAR4(BMIDE) absent");
+		return;
+	}
+
+	// const word bmide_base = word(bmide_bar->start & 0xFFF8u);
+	// const byte pri_cmd = innpb(bmide_base + 0);
+	// const byte pri_sts = innpb(bmide_base + 2);
+	// const byte sec_cmd = innpb(bmide_base + 8);
+	// const byte sec_sts = innpb(bmide_base + 10);
+	// ploginfo("[PATA-DMA] BAR4=%p BMIDE=%[16H]", (void*)bmide_bar->start, (stduint)bmide_base);
+	// ploginfo("[PATA-DMA] primary cmd=%[8H] sts=%[8H] secondary cmd=%[8H] sts=%[8H]",
+	// 	(stduint)pri_cmd, (stduint)pri_sts, (stduint)sec_cmd, (stduint)sec_sts);
+}
 
 static void register_pata_storage_nodes() {
 	auto* pata_node = Devsman::FindPCIDeviceByClass(0x01u, 0x01u, 0xFFu);
@@ -126,6 +251,176 @@ static bool hd_int_wait() {
 static void hd_rw_foreback_0() { lock[0] = 0; }
 static void hd_rw_foreback_1() { lock[1] = 0; }
 
+static bool hd_read_dma_once(Harddisk_PATA& hd, stduint BlockIden, void* Dest) {
+	if (hd.Block_Size != 512 || hd.getHigID() >= numsof(pata_dma_channels) || !Dest) return false;
+	auto& state = pata_dma_channels[hd.getHigID()];
+	if (!state.ready || !state.prdt || !state.bounce) return false;
+	if (!hd.fn_int_wait || !hd.fn_lup_wait) return false;
+
+	MemSet(state.prdt, 0, sizeof(*state.prdt));
+	MemSet(state.bounce, 0, 512);
+	state.prdt[0].phys_base = uint32(stduint(state.bounce));
+	state.prdt[0].byte_count = 512;
+	state.prdt[0].flags = 0x8000u;
+
+	outpb(state.bmide_base + BMIDE_REG_CMD, 0);
+	outpb(state.bmide_base + BMIDE_REG_STATUS, BMIDE_STATUS_IRQ | BMIDE_STATUS_ERROR);
+	outpd(state.bmide_base + BMIDE_REG_PRDT, uint32(stduint(state.prdt)));
+
+	HdiskCommand cmd = {};
+	cmd.feature = 0;
+	cmd.count = 1;
+	for0(i, 3) cmd.LBA[i] = (BlockIden >> (i * 8));
+	cmd.device = MAKE_DEVICE_REG(1, hd.getLowID(), (BlockIden >> 24) & 0xF);
+	cmd.command = ATA_READ_DMA;
+	asserv(hd.fn_feedback)();
+	if (!hd.Hdisk_OUT(&cmd)) return false;
+
+	outpb(state.bmide_base + BMIDE_REG_CMD, BMIDE_CMD_READ | BMIDE_CMD_START);
+
+	const bool use_loop_fallback = !hd.fn_int_wait();
+	if (use_loop_fallback) {
+		if (!PataWaitRetry(&hd, hd.fn_lup_wait, STATUS_BSY, 0)) {
+			outpb(state.bmide_base + BMIDE_REG_CMD, 0);
+			return false;
+		}
+	}
+	else if (!hd.fn_lup_wait(&hd, STATUS_BSY, 0, HD_TIMEOUT / 1000)) {
+		outpb(state.bmide_base + BMIDE_REG_CMD, 0);
+		return false;
+	}
+
+	outpb(state.bmide_base + BMIDE_REG_CMD, 0);
+	const byte bmide_status = innpb(state.bmide_base + BMIDE_REG_STATUS);
+	outpb(state.bmide_base + BMIDE_REG_STATUS, bmide_status & (BMIDE_STATUS_IRQ | BMIDE_STATUS_ERROR));
+	if (bmide_status & BMIDE_STATUS_ERROR) return false;
+	if (!use_loop_fallback && !(bmide_status & BMIDE_STATUS_IRQ)) return false;
+
+	MemCopyN(Dest, state.bounce, 512);
+	return true;
+}
+
+static bool hd_write_dma_once(Harddisk_PATA& hd, stduint BlockIden, const void* Sors) {
+	if (hd.Block_Size != 512 || hd.getHigID() >= numsof(pata_dma_channels) || !Sors) return false;
+	auto& state = pata_dma_channels[hd.getHigID()];
+	if (!state.ready || !state.prdt || !state.bounce) return false;
+	if (!hd.fn_int_wait || !hd.fn_lup_wait) return false;
+
+	MemSet(state.prdt, 0, sizeof(*state.prdt));
+	MemCopyN(state.bounce, Sors, 512);
+	state.prdt[0].phys_base = uint32(stduint(state.bounce));
+	state.prdt[0].byte_count = 512;
+	state.prdt[0].flags = 0x8000u;
+
+	outpb(state.bmide_base + BMIDE_REG_CMD, 0);
+	outpb(state.bmide_base + BMIDE_REG_STATUS, BMIDE_STATUS_IRQ | BMIDE_STATUS_ERROR);
+	outpd(state.bmide_base + BMIDE_REG_PRDT, uint32(stduint(state.prdt)));
+
+	HdiskCommand cmd = {};
+	cmd.feature = 0;
+	cmd.count = 1;
+	for0(i, 3) cmd.LBA[i] = (BlockIden >> (i * 8));
+	cmd.device = MAKE_DEVICE_REG(1, hd.getLowID(), (BlockIden >> 24) & 0xF);
+	cmd.command = ATA_WRITE_DMA;
+	asserv(hd.fn_feedback)();
+	if (!hd.Hdisk_OUT(&cmd)) return false;
+
+	outpb(state.bmide_base + BMIDE_REG_CMD, BMIDE_CMD_START);
+
+	const bool use_loop_fallback = !hd.fn_int_wait();
+	if (use_loop_fallback) {
+		if (!PataWaitRetry(&hd, hd.fn_lup_wait, STATUS_BSY, 0)) {
+			outpb(state.bmide_base + BMIDE_REG_CMD, 0);
+			return false;
+		}
+	}
+	else if (!hd.fn_lup_wait(&hd, STATUS_BSY, 0, HD_TIMEOUT / 1000)) {
+		outpb(state.bmide_base + BMIDE_REG_CMD, 0);
+		return false;
+	}
+
+	outpb(state.bmide_base + BMIDE_REG_CMD, 0);
+	const byte bmide_status = innpb(state.bmide_base + BMIDE_REG_STATUS);
+	outpb(state.bmide_base + BMIDE_REG_STATUS, bmide_status & (BMIDE_STATUS_IRQ | BMIDE_STATUS_ERROR));
+	if (bmide_status & BMIDE_STATUS_ERROR) return false;
+	if (!use_loop_fallback && !(bmide_status & BMIDE_STATUS_IRQ)) return false;
+	return true;
+}
+
+static bool hd_read_prefer_dma(byte disk_id, stduint BlockIden, void* Dest) {
+	if (disk_id >= numsof(disks) || !disks[disk_id] || !Dest) return false;
+	auto& hd = *disks[disk_id];
+	static bool logged_fallback[numsof(disks)] = {};
+	if (hd.Block_Size == 512) {
+		if (hd_read_dma_once(hd, BlockIden, Dest)) {
+			// static bool logged_dma[numsof(disks)] = {};
+			// if (!logged_dma[disk_id]) {
+			// 	logged_dma[disk_id] = true;
+			// 	ploginfo("[PATA-DMA] live dma-read on ide%u:%u",
+			// 		(stduint)hd.getHigID(), (stduint)hd.getLowID());
+			// }
+			return true;
+		}
+		if (!logged_fallback[disk_id]) {
+			logged_fallback[disk_id] = true;
+			plogwarn("[PATA-DMA] fallback to PIO for ide%u:%u reads",
+				(stduint)hd.getHigID(), (stduint)hd.getLowID());
+		}
+	}
+	return hd.Read(BlockIden, Dest);
+}
+
+static bool hd_write_prefer_dma(byte disk_id, stduint BlockIden, const void* Sors) {
+	if (disk_id >= numsof(disks) || !disks[disk_id] || !Sors) return false;
+	auto& hd = *disks[disk_id];
+	static bool logged_fallback[numsof(disks)] = {};
+	if (hd.Block_Size == 512) {
+		if (hd_write_dma_once(hd, BlockIden, Sors)) {
+			// static bool logged_dma[numsof(disks)] = {};
+			// if (!logged_dma[disk_id]) {
+			// 	logged_dma[disk_id] = true;
+			// 	ploginfo("[PATA-DMA] live dma-write on ide%u:%u",
+			// 		(stduint)hd.getHigID(), (stduint)hd.getLowID());
+			// }
+			return true;
+		}
+		if (!logged_fallback[disk_id]) {
+			logged_fallback[disk_id] = true;
+			plogwarn("[PATA-DMA] fallback to PIO for ide%u:%u writes",
+				(stduint)hd.getHigID(), (stduint)hd.getLowID());
+		}
+	}
+	return hd.Write(BlockIden, Sors);
+}
+
+static void probe_pata_dma_read_once() {
+	static bool probed = false;
+	if (probed) return;
+	probed = true;
+
+	if (!disks[0] || disks[0]->Block_Size != 512) {
+		// ploginfo("[PATA-DMA] skip dma-read probe: ide0:0 unavailable");
+		return;
+	}
+	if (!single_sector) {
+		// ploginfo("[PATA-DMA] skip dma-read probe: no sector buffer");
+		return;
+	}
+
+	const bool ok = hd_read_dma_once(*disks[0], 0, single_sector);
+	if (!ok) {
+		plogwarn("[PATA-DMA] dma-read probe ide0:0 lba0 failed");
+		return;
+	}
+	// ploginfo("[PATA-DMA] dma-read probe ide0:0 lba0 ok sig=%02X%02X",
+	// 	(unsigned)single_sector[511], (unsigned)single_sector[510]);
+	// ploginfo("[PATA-DMA] dma-read probe bytes=%02X %02X %02X %02X %02X %02X %02X %02X",
+	// 	(unsigned)single_sector[0], (unsigned)single_sector[1],
+	// 	(unsigned)single_sector[2], (unsigned)single_sector[3],
+	// 	(unsigned)single_sector[4], (unsigned)single_sector[5],
+	// 	(unsigned)single_sector[6], (unsigned)single_sector[7]);
+}
+
 // Use after print_identify_info
 stduint uni::Harddisk_PATA::getUnits() {
 	return (*hd_info)[getHigID() * 2 + getLowID()].whole_disk.length;
@@ -139,6 +434,13 @@ struct iden_info_ascii {
 	{10, 20, "HD SN"}, // Serial number in ASCII
 	{27, 40, "Model"}, // Model number in ASCII
 };
+
+static int highest_mode_bit(word value) {
+	for (int bit = 7; bit >= 0; --bit) {
+		if (value & (1u << bit)) return bit;
+	}
+	return -1;
+}
 
 // Initialize HD_Info
 static void print_identify_info(uint16* hdinfo, Harddisk_PATA& hd)
@@ -160,6 +462,21 @@ static void print_identify_info(uint16* hdinfo, Harddisk_PATA& hd)
 	int cmd_set_supported = hdinfo[83];
 	if (false) outsfmt("[Hrddisk] LBA  : %s\n\r",
 		(capabilities & 0x0200) ? (cmd_set_supported & 0x0400) ? "Supported LBA48" : "Supported" : "No");
+
+	// const word dma_caps = word(capabilities);
+	const word mwdma = hdinfo[63];
+	const word udma = hdinfo[88];
+	const int mwdma_supported = highest_mode_bit(word(mwdma & 0x00FFu));
+	const int mwdma_active = highest_mode_bit(word((mwdma >> 8) & 0x00FFu));
+	const int udma_supported = highest_mode_bit(word(udma & 0x00FFu));
+	const int udma_active = highest_mode_bit(word((udma >> 8) & 0x00FFu));
+	// ploginfo("[PATA-DMA] ide%u:%u identify dma=%u mwdma=%[16H] udma=%[16H]",
+	// 	(stduint)hd.getHigID(), (stduint)hd.getLowID(),
+	// 	(stduint)((dma_caps & 0x0100u) ? 1u : 0u),
+	// 	(stduint)mwdma, (stduint)udma);
+	ploginfo("[PATA-DMA] ide%u:%u supported mwdma=%d active=%d supported udma=%d active=%d",
+		(stduint)hd.getHigID(), (stduint)hd.getLowID(),
+		mwdma_supported, mwdma_active, udma_supported, udma_active);
 
 	int sectors = ((int)hdinfo[61] << 16) + hdinfo[60];
 	// outsfmt("[Hrddisk] Size : %lf MB\n\r", (double)sectors * hd.Block_Size / 1024 / 1024);// care for #NM FPU Loss
@@ -309,6 +626,10 @@ void serv_dev_hd_loop()
 			paged_disks[i]->Block_Size = disks[i]->Block_Size;
 		}
 	}
+	ensure_pata_pci_bus_master_once();
+	probe_pata_bus_master_capability_once();
+	initialize_pata_dma_channels_once();
+	probe_pata_dma_read_once();
 	
 	// Console.OutFormat("[Hrddisk] detect %u disks\n\r", bda->hdisk_number);
 	stduint sig_type = 0, sig_src;
@@ -374,7 +695,7 @@ void serv_dev_hd_loop()
 			// ploginfo("[Hrddisk] device %u: read %u", args[0], args[1]);
 			// log_read_disk();
 
-			stduint ack = (args[0] < numsof(disks) && disks[args[0]] && disks[args[0]]->Read(args[1], single_sector)) ? 1 : 0;
+			stduint ack = hd_read_prefer_dma((byte)args[0], args[1], single_sector) ? 1 : 0;
 			if (sig_src) syssend(sig_src, &ack, sizeof(ack));
 			if (ack && sig_src) syssend(sig_src, single_sector, disks[args[0]]->Block_Size);
 			break;
@@ -386,7 +707,7 @@ void serv_dev_hd_loop()
 			if (sig_src) syssend(sig_src, &ack, sizeof(ack));
 			if (ack && sig_src) {
 				sysrecv(sig_src, single_sector, disks[args[0]]->Block_Size);
-				disks[args[0]]->Write(args[1], single_sector);
+				ack = hd_write_prefer_dma((byte)args[0], args[1], single_sector) ? 1 : 0;
 			}
 			break;
 		}

@@ -21,7 +21,7 @@
 #define _GUI_DOUBLE_BUFFER 1
 
 //
-#define _GUI_FREETYPE 0
+#define _GUI_FREETYPE 1
 //
 #define _SYS_MULTICORE 1
 

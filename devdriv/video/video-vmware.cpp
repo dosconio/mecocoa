@@ -52,6 +52,10 @@ static bool IsVmwareSvgaDevice(const DeviceNode* node) {
 
 bool VmwareVideo_Start(DeviceNode* node) {
 	if (!IsVmwareSvgaDevice(node)) return false;
+	if (!_GUI_ENABLE) {
+		ploginfo("[VMwareSVGA] Skip start because _GUI_ENABLE=0");
+		return false;
+	}
 
 	const auto* bar_io = Devsman::FindResource(node, DeviceResourceType::PciBarIo, 0);
 	const auto* bar_fb = Devsman::FindResource(node, DeviceResourceType::PciBarMmio, 1);

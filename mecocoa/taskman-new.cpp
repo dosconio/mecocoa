@@ -263,7 +263,7 @@ static stduint _Taskman_Create_Paging(ProcessBlock *ppb, byte ring, stduint stac
 			#endif
 			#if _MCCA == 0x8632
 			ring3_iret_stacks[i] = (mem.allocate(0x1000, PAGESIZE_4KB));
-			ploginfo("ring3_iret_stacks %u: %p", i, ring3_iret_stacks[i]);
+			// ploginfo("ring3_iret_stacks %u: %p", i, ring3_iret_stacks[i]);
 			treat<uint32>(ring3_iret_stacks[i]) = 0xdeadbeef;
 			ap_ring3_iret_stack_tops[i] = (0xFFFFF000u - i * 0x1000u) + 0x1000u - 0x10u;
 			ap_higher_stack_tops[i] = _IMM(higher_stacks[i]) + 0x1000 - 0x10;
