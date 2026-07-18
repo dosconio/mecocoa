@@ -4,11 +4,6 @@
 
 int main(int argc, char** argv)
 {
-	int ribbon = spawnl("/md0/ribbon", "ribbon", nullptr);
-	if (ribbon < 0) {
-		outsfmt("[Appinit] Failed to start ribbon.\n\r");
-	}
-
 	int s;
 	while (true) {
 		int child = wait(&s);

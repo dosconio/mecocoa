@@ -518,6 +518,13 @@ void serv_file_loop()// for IDE 0:0, 0:1
 			// Shell
 			#if (_MCCA & 0xFF00) == 0x8600
 			#if _GUI_ENABLE
+			ProcessBlock* ribbon = Taskman::CreateFile(("/md0/ribbon"), RING_U, Task_Init);
+			if (!ribbon) {
+				plogwarn("[Fileman] Failed to start ribbon.");
+			}
+			Taskman::Append(ribbon);
+			Taskman::AppendThread(ribbon->main_thread);
+
 			ploginfo("Loading first Shell...");
 			ProcessBlock* shell_p = Taskman::Create((void*)&serv_shell_process, RING_M);
 			if (shell_p) shell_p->main_thread->name = "shell";

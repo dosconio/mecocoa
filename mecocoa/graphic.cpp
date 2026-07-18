@@ -548,6 +548,7 @@ static stdsint GraphicMsg_FNEW(const FMT_ConsoleMsg_FNEW* data, ProcessBlock* pb
 	auto pfrm = new ::uni::Witch::Form();
 	if (!pfrm) return -1;
 	pfrm->Title = (data->flags & GraphicFormStyle_Titleless) ? nullptr : "New Form";
+	pfrm->title_visable = !(data->flags & GraphicFormStyle_Titleless);
 
 	Color* sheet_buffer = new Color[rect.getArea()];
 	if (!sheet_buffer) {
