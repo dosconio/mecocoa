@@ -272,12 +272,6 @@ static unsigned long My_FT_Stream_Read(
 		return count;
 	}
 
-	// Call readfl directly on the filesystem trait, bypassing Filesys::Read.
-	// Filesys::Read holds vfs_lock (a spinlock that disables interrupts).
-	// Disabling interrupts prevents the scheduler from switching to Task_Hdd_Serv,
-	// which FAT::readfl depends on for disk I/O — causing a permanent hang.
-	FilesysTrait* fs = file->f_inode->i_sb->fs;
-
 	unsigned long total_read = 0;
 	unsigned long pos = offset;
 	unsigned long remaining = count;
@@ -302,11 +296,10 @@ static unsigned long My_FT_Stream_Read(
 			slot = (int)ft_cache_next;
 			ft_cache_next = (ft_cache_next + 1) % FT_BLOCK_COUNT;
 
-			// Read one aligned 512-byte sector (single storage->Read IPC)
-			stduint bytes = fs->readfl(file->f_inode->internal_handler,
-				Slice{ (stduint)(block_id * FT_BLOCK_SIZE), (stduint)FT_BLOCK_SIZE },
-				ft_cache_buf + slot * FT_BLOCK_SIZE);
-			if (bytes == 0) return total_read;
+			// SAFELY read one aligned 512-byte sector using standard VFS Filesys::Read
+			file->f_pos = block_id * FT_BLOCK_SIZE;
+			int bytes = Filesys::Read(file, ft_cache_buf + slot * FT_BLOCK_SIZE, FT_BLOCK_SIZE);
+			if (bytes <= 0) return total_read;
 			ft_cache_tag[slot] = block_id;
 		}
 
@@ -355,6 +348,7 @@ static void My_FT_Stream_Close(FT_Stream stream) {
 		}
 		stream->descriptor.pointer = nullptr; // Prevent double close
 	}
+
 	// Release prefetch buffer when the FT stream is closed (FT_Done_Face).
 	// After this point FreeType no longer reads via My_FT_Stream_Read.
 	if (ft_table_buf) {
@@ -488,14 +482,13 @@ bool InitializeFont() {
 		if (!ft_table_buf) {
 			plogerro("InitializeFont: failed to allocate %u-byte prefetch buffer", FT_TABLE_PREFETCH_BYTES);
 		} else {
-			FilesysTrait* fs = file->f_inode->i_sb->fs;
 			uint32_t to_prefetch = (font_size < FT_TABLE_PREFETCH_BYTES) ? (uint32_t)font_size : FT_TABLE_PREFETCH_BYTES;
 			uint32_t off = 0;
 			while (off < to_prefetch) {
 				uint32_t chunk = (to_prefetch - off < FT_BLOCK_SIZE) ? (to_prefetch - off) : FT_BLOCK_SIZE;
-				stduint bytes = fs->readfl(file->f_inode->internal_handler,
-					Slice{ (stduint)off, (stduint)chunk }, ft_table_buf + off);
-				if (bytes == 0) break;
+				file->f_pos = off;
+				int bytes = Filesys::Read(file, ft_table_buf + off, chunk);
+				if (bytes <= 0) break;
 				off += (uint32_t)bytes;
 			}
 			ft_table_valid = off;

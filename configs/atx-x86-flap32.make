@@ -52,23 +52,23 @@ build: lib accm prehost/$(arch)/fatvhd.ignore $(cppobjs) build_util
 	aasm prehost/$(arch)/atx-x86.asm        -felf   -o $(uobjpath)/mcca-$(arch)/mcca-$(arch)-elf16.o  -Iinclude/
 	aasm prehost/$(arch)/atx-ladder.asm     -felf   -o $(uobjpath)/mcca-$(arch)/mcca-$(arch)-ladder.o -Iinclude/ -D_MCCA=0x8632
 	aasm prehost/$(arch)/atx-x86-loader.asm -felf   -o $(uobjpath)/mcca-$(arch)/mcca-$(arch)-elf64.o
-	@echo "CX $(arch).loader.cpp"
-	$(CX) -O2 prehost/$(arch)/$(arch).loader.cpp -o $(uobjpath)/mcca-$(arch).loader.o
+#	@echo "CX $(arch).loader.cpp"
+#	$(CX) -O2 prehost/$(arch)/$(arch).loader.cpp -o $(uobjpath)/mcca-$(arch).loader.o
 	@echo "CX _auxiliary.cpp"
 	$(CX) -O2 prehost/_auxiliary.cpp -o $(uobjpath)/mcca-$(arch)._auxiliary.o
-	@echo "MK $(arch) loader"
-	$(CX) prehost/$(arch)/grubhead.S -o $(uobjpath)/mcca-$(arch).grub.o -D_LOADER
-	ld -m elf_i386 -static -nostdlib --gc-sections \
-		$(uobjpath)/mcca-$(arch).grub.o \
-		$(uobjpath)/mcca-$(arch).loader.o \
-		$(uobjpath)/mcca-$(arch)._auxiliary.o \
-		$(uobjpath)/mcca-$(arch)/mcca-$(arch)-elf64.o \
-		$(uobjpath)/CGMin32/_ae_manage.o\
-		-o $(elf_loader) -L$(ubinpath) -lm32d  \
-		-T prehost/$(arch)/$(arch).loader.ld  \
-		-Map $(elf_loader).map
-	strip --strip-all $(elf_loader)
-	rm $(uobjpath)/mcca-$(arch)/mcca-$(arch)-elf64.o
+#	@echo "MK $(arch) loader"
+#	$(CX) prehost/$(arch)/grubhead.S -o $(uobjpath)/mcca-$(arch).grub.o -D_LOADER
+#	ld -m elf_i386 -static -nostdlib --gc-sections \
+#		$(uobjpath)/mcca-$(arch).grub.o \
+#		$(uobjpath)/mcca-$(arch).loader.o \
+#		$(uobjpath)/mcca-$(arch)._auxiliary.o \
+#		$(uobjpath)/mcca-$(arch)/mcca-$(arch)-elf64.o \
+#		$(uobjpath)/CGMin32/_ae_manage.o\
+#		-o $(elf_loader) -L$(ubinpath) -lm32d  \
+#		-T prehost/$(arch)/$(arch).loader.ld  \
+#		-Map $(elf_loader).map
+#	strip --strip-all $(elf_loader)
+#	rm $(uobjpath)/mcca-$(arch)/mcca-$(arch)-elf64.o
 	#
 	@echo "CX $(arch).cpp"
 	$(CX) -O2 prehost/$(arch)/$(arch).cpp -o $(uobjpath)/mcca-$(arch).kernel.o
@@ -85,18 +85,27 @@ build: lib accm prehost/$(arch)/fatvhd.ignore $(cppobjs) build_util
 		-T prehost/$(arch)/$(arch).ld  \
 		-Map $(elf_kernel).map
 	strip --strip-all $(elf_kernel)
-	# ---- Floppy ----
-	@dd if=/dev/zero of=$(outs) bs=512 count=2880 2>>/dev/null
-	@dd if=$(boot)   of=$(outs) bs=512 count=1 conv=notrunc 2>>/dev/null
-	@echo $(sudokey) | sudo -S mkdir -p $(mnts)
-	@echo $(sudokey) | sudo -S mount -o loop $(outs) $(mnts)
-	@echo $(sudokey) | sudo -S cp $(elf_loader) $(mnts)/KEX.OBJ
-	#@echo $(sudokey) | sudo -S mkdir -p $(mnts)/apps
-	#@echo $(sudokey) | sudo -S cp $(uobjpath)/sapp-$(arch)/*    $(mnts)/apps/
-	@tree $(mnts) -s
-	@echo $(sudokey) | sudo -S umount $(mnts)
-	@perl configs/$(arch).bochsdbg.pl > $(archdir)/bochsrc.bxrc
-	@perl configs/$(arch).bochsdbg-lin.pl > $(archdir)/bochsrc-lin.bxrc
+
+	# ---- Floppy (Outdated) ----
+#	@dd if=/dev/zero of=$(outs) bs=512 count=2880 2>>/dev/null
+#	@dd if=$(boot)   of=$(outs) bs=512 count=1 conv=notrunc 2>>/dev/null
+#	@echo $(sudokey) | sudo -S mkdir -p $(mnts)
+#	@echo $(sudokey) | sudo -S mount -o loop $(outs) $(mnts)
+#	@echo $(sudokey) | sudo -S cp $(elf_loader) $(mnts)/KEX.OBJ
+#	#@echo $(sudokey) | sudo -S mkdir -p $(mnts)/apps
+#	#@echo $(sudokey) | sudo -S cp $(uobjpath)/sapp-$(arch)/*    $(mnts)/apps/
+#	@tree $(mnts) -s
+#	@echo $(sudokey) | sudo -S umount $(mnts)
+#	@perl configs/$(arch).bochsdbg.pl > $(archdir)/bochsrc.bxrc
+#	@perl configs/$(arch).bochsdbg-lin.pl > $(archdir)/bochsrc-lin.bxrc
+
+	# --- CD ---
+	mkdir -p $(ubinpath)/mecocoa/boot/grub
+	-cd $(ubinpath) && rm -rf mcca.iso
+	cp configs/grub-x86.txt $(ubinpath)/mecocoa/boot/grub/grub.cfg
+	cd $(ubinpath) && cp ./I686/mecocoa/mcca-atx-x86-flap32.elf ./mecocoa/boot/
+	cd $(ubinpath) && cp ./I686/mecocoa/mcca-atx-x86-flap32.loader.elf ./mecocoa/boot/
+	cd $(ubinpath) && grub-mkrescue -o mcca.iso mecocoa
 
 	# --- write out ---
 	@echo MK  $(arch) patadisk 0:0
@@ -164,8 +173,9 @@ prehost/$(arch)/fatvhd.ignore: build_util
 $(uobjpath)/mcca-$(arch)/memodisk.o: prehost/$(arch)/fatvhd.ignore
 
 qemu_args=-smp 4,cores=2,threads=2 -M pc \
+	-cdrom $(ubinpath)/mcca.iso \
+	-boot order=d -m 1G\
 	-drive format=raw,file=$(outs),if=floppy \
-	-boot order=a -m 1G\
 	-drive file=$(ubinpath)/fixed2.vhd,format=vpc,if=none,id=disk0 \
 	-device ide-hd,drive=disk0,bus=ide.0,unit=0 \
 	-serial stdio\
@@ -178,10 +188,6 @@ qemu_args=-smp 4,cores=2,threads=2 -M pc \
 # 	-drive file=/home/phina/mcca/disk_pata01.vhd,format=raw,if=none,id=disk1 \
 #	-device ide-hd,drive=disk1,bus=ide.0,unit=1 \
 
-
-
-pack:
-	cd $(ubinpath) && ./_mk_mcca.sh
 
 run: build run-only
 run-only:

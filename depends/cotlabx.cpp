@@ -40,7 +40,7 @@ void _Comment(R1) serv_shell_process() {
 		}
 		if (auto nod = *focus_tty) {
 			auto pblock = (vtty_type_t*)nod->type;
-			pblock->master_pid = Taskman::CurrentPID();
+			pblock->master_pid = p->pid; // not Taskman::CurrentPID();
 			pblock->proc_group.Append(p->pid);
 		}
 		

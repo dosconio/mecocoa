@@ -30,9 +30,6 @@ clean:
 clean-app:
 	@make -f configs/$(arch).make clean-app --silent
 
-pack:
-	@make -f configs/$(arch).make pack --silent
-
 read:
 	readelf -a $(ubinpath)/$(arch).elf
 

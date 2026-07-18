@@ -256,6 +256,10 @@ int msg_send(ThreadBlock* fo_th, stduint too, _Comment(vaddr) CommMsg* msg, bool
 		// fo_th->ring_coreid = CORE_ID_INVALID;
 		guard.~SpinlockLocal();
 		Taskman::Schedule(true);
+		if (fo_th->unsolved_msg == (CommMsg*)-1) {
+			fo_th->unsolved_msg = nullptr;
+			return -4;
+		}
 	}
 	return 0;
 }
@@ -388,6 +392,10 @@ int msg_recv(ThreadBlock* to_th, stduint foo, _Comment(vaddr) CommMsg* msg, bool
 			// to_th->ring_coreid = CORE_ID_INVALID;
 			guard.~SpinlockLocal();
 			Taskman::Schedule(true);
+			if (to_th->unsolved_msg == (CommMsg*)-1) {
+				to_th->unsolved_msg = nullptr;
+				return -4;
+			}
 		}
 	}
 	return 0;
@@ -432,11 +440,11 @@ void msg_cleanup_thread(ThreadBlock* th) {
 		}
 		th->send_to_whom = nullptr;
 		th->queue_send_queuenext = nullptr;
-		th->unsolved_msg = nullptr;
+		th->unsolved_msg = (CommMsg*)-1;
 	}
 	if (th->block_reason & ThreadBlock::BlockReason::BR_RecvMsg) {
 		th->recv_fo_whom = nullptr;
-		th->unsolved_msg = nullptr;
+		th->unsolved_msg = (CommMsg*)-1;
 	}
 
 	// Case 3: Clean up all pending async messages for this thread
