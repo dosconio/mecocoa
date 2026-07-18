@@ -330,7 +330,6 @@ bool Taskman::ExitCurrent(stduint code) {
 static void DetachProcessTTYMembership(ProcessBlock* ppb, stduint pid)
 {
 	if (!ppb) return;
-	#if _GUI_ENABLE
 	auto focus_tty = ppb->focus_tty.Lock();
 	if (*focus_tty) {
 		bool is_tty_valid = false;
@@ -369,7 +368,6 @@ static void DetachProcessTTYMembership(ProcessBlock* ppb, stduint pid)
 		}
 		*focus_tty = nullptr;
 	}
-	#endif
 }
 
 static void _Exit_Cleanup(stduint pid)
@@ -388,9 +386,7 @@ static void _Exit_Cleanup(stduint pid)
 	// Must be done outside scheduler_lock because Mutex::Release() -> Unblock()
 	// acquires scheduler_lock internally.
 	ppb->fileman.raw_mutex().Release();
-	#if _GUI_ENABLE
 	ppb->focus_tty.raw_mutex().Release();
-	#endif
 
 	{
 		auto files = ppb->fileman.Lock();

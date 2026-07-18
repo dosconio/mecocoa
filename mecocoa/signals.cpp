@@ -463,6 +463,13 @@ extern "C" stduint sys_kill(stduint pid, int sig, stduint tid) {
 	
 	if (sig == 0) return 0; // Check existence
 
+	{
+		auto signals = pb->signals.Lock();
+		if (signals->sig_actions[sig].sa_handler == SIG_IGN) {
+			return 0;
+		}
+	}
+
 	if (tid == 0) {
 		// Send to process (Shared)
 		{

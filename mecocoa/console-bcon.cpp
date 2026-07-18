@@ -45,6 +45,7 @@ ProcessBlock* Bcons_EnsureCot(unsigned tty_no) {
 
 	if (tty_node->type) {
 		auto pblock = (vtty_type_t*)tty_node->type;
+		pblock->master_pid = p->pid;
 		pblock->proc_group.Append(p->pid);
 	}
 
