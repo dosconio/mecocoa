@@ -44,6 +44,7 @@ all: $(BIN_DIR) \
 	$(BIN_DIR)/gblock \
 	$(BIN_DIR)/notepad \
 	$(BIN_DIR)/viewpic \
+	$(BIN_DIR)/ribbon \
 	\
 
 
@@ -94,6 +95,10 @@ $(BIN_DIR)/notepad: subapps/notepad.cpp $(MCCA_X64_CRT0) $(MCCA_X64_LIBC)
 $(BIN_DIR)/viewpic: subapps/viewpic.cpp $(ulibpath)/cpp/fileformat/picture/BMP.cpp $(MCCA_X64_CRT0) $(MCCA_X64_LIBC)
 	@echo "MK viewpic"
 	$(MCCA_X64_CXX) $(MCCA_X64_CXXFLAGS) -o $@ subapps/viewpic.cpp $(ulibpath)/cpp/fileformat/picture/BMP.cpp $(MCCA_X64_LDLIBS)
+
+$(BIN_DIR)/ribbon: subapps/ribbon.cpp $(MCCA_X64_CRT0) $(MCCA_X64_LIBC)
+	@echo "MK ribbon"
+	$(MCCA_X64_CXX) $(MCCA_X64_CXXFLAGS) -o $@ subapps/ribbon.cpp $(MCCA_X64_LDLIBS)
 
 clean:
 	@echo "RM $(BIN_DIR)"

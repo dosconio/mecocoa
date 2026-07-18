@@ -528,6 +528,7 @@ void Consman::SwitchForm(SheetTrait* pfrm) {
 struct FMT_ConsoleMsg_FNEW {
 	stduint pform_id;// in pforms
 	Rectangle* usrp_rect;
+	stduint flags;
 };
 
 static stdsint GraphicMsg_FNEW(const FMT_ConsoleMsg_FNEW* data, ProcessBlock* pb) {
@@ -546,7 +547,7 @@ static stdsint GraphicMsg_FNEW(const FMT_ConsoleMsg_FNEW* data, ProcessBlock* pb
 
 	auto pfrm = new ::uni::Witch::Form();
 	if (!pfrm) return -1;
-	pfrm->Title = "New Form";
+	pfrm->Title = (data->flags & GraphicFormStyle_Titleless) ? nullptr : "New Form";
 
 	Color* sheet_buffer = new Color[rect.getArea()];
 	if (!sheet_buffer) {
@@ -858,6 +859,11 @@ struct FMT_ConsoleMsg_FCHR {
 	Color color;
 };
 
+static stduint GraphicGlyphCellWidth(const uni::FontEngine* font_engine, uint32 unicode_char) {
+	Size2 cell_size = font_engine->GetCellSize();
+	return (unicode_char >= 0x100) ? cell_size.x * 2 : cell_size.x;
+}
+
 static stdsint GraphicMsg_FCHR(const FMT_ConsoleMsg_FCHR* data, ProcessBlock* pb) {
 	SheetTrait* pfrm = ProcFormsGet(pb, data->pform_id);
 	if (!pfrm) return -1;
@@ -868,10 +874,47 @@ static stdsint GraphicMsg_FCHR(const FMT_ConsoleMsg_FCHR* data, ProcessBlock* pb
 		data->usrp_vertex, pb, false,
 		sizeof(vertex)) != sizeof(vertex)) return -1;
 	String buf(String::Charset::UTF8, 256);
-	stduint len = StrCopyP(buf.reflect(), kernel_paging, data->usrp_str, pb->paging, 256);
+	StrCopyP(buf.reflect(), kernel_paging, data->usrp_str, pb->paging, 256);
 	buf.Refresh();
 
-	// [Security Fix]: Validate drawing bounds to prevent heap corruption
+	#if _GUI_FREETYPE && _MCCA == 0x8632
+	extern uni::FontEngine* global_ft_engine;
+	if (!global_ft_engine || !pfrm->sheet_buffer) return -1;
+
+	Size2 cell_size = global_ft_engine->GetCellSize();
+	stduint text_width = 0;
+	for (auto unicode_char : buf.chars()) {
+		text_width += GraphicGlyphCellWidth(global_ft_engine, (uint32)unicode_char);
+	}
+
+	if (!text_width) return 0;
+
+	if (vertex.x > pfrm->sheet_area.width ||
+		text_width > pfrm->sheet_area.width - vertex.x ||
+		vertex.y > pfrm->sheet_area.height ||
+		cell_size.y > pfrm->sheet_area.height - vertex.y) {
+		return -1;
+	}
+
+	Color transparent_bg = {};
+	stduint x = vertex.x;
+	for (auto unicode_char : buf.chars()) {
+		global_ft_engine->DrawChar(
+			pfrm->sheet_buffer,
+			pfrm->sheet_area.width,
+			x,
+			vertex.y,
+			(uint32)unicode_char,
+			data->color,
+			transparent_bg);
+		x += GraphicGlyphCellWidth(global_ft_engine, (uint32)unicode_char);
+	}
+
+	Rectangle dirty_rect(vertex, Size2(text_width, cell_size.y));
+	SafeLaymanUpdate(pfrm, dirty_rect);
+	return 0;
+	#else
+	// Validate drawing bounds to prevent heap corruption.
 	if ((vertex.x + (stdsint)buf.getByteCount() * _TEMP 8) > pfrm->sheet_area.width ||
 		(vertex.y + 16) > pfrm->sheet_area.height) {
 		return -1;
@@ -883,6 +926,7 @@ static stdsint GraphicMsg_FCHR(const FMT_ConsoleMsg_FCHR* data, ProcessBlock* pb
 	SafeLaymanUpdate(pfrm, dirty_rect);
 
 	return 0;
+	#endif
 }
 
 static stdsint GraphicMsg_FTIM(stduint pform_id, stduint ms, ProcessBlock* pb) {
@@ -904,6 +948,23 @@ static stdsint GraphicMsg_FTIM(stduint pform_id, stduint ms, ProcessBlock* pb) {
 	}
 
 	return 0;
+}
+
+static stdsint GraphicMsg_FSIZ(Size2* usrp_size, ProcessBlock* pb) {
+	if (!usrp_size) return -1;
+
+	Size2 screen_size;
+	if (Consman::current_video_device) {
+		screen_size = Consman::current_video_device->GetFramebuffer().screen_size;
+	}
+	else {
+		screen_size = global_layman.Lock()->window.getSize();
+	}
+
+	return MccaMemCopyP(
+		usrp_size, pb, false,
+		&screen_size, NULL, true,
+		sizeof(screen_size)) == sizeof(screen_size) ? 0 : -1;
 }
 
 // CreateVconsole - runs only in Graphic thread, no lock needed.
@@ -1234,6 +1295,10 @@ void serv_graf_loop() {
 			break;
 		case GraphicMsg::FTIM:
 			ret = GraphicMsg_FTIM(to_args[0], to_args[1], safe_pb);
+			syssend_async(sig_src, (void*)&ret, sizeof(ret));
+			break;
+		case GraphicMsg::FSIZ:
+			ret = GraphicMsg_FSIZ((Size2*)to_args[0], safe_pb);
 			syssend_async(sig_src, (void*)&ret, sizeof(ret));
 			break;
 		case GraphicMsg::FCLEANPROC:

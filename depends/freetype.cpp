@@ -79,12 +79,15 @@ public:
 		// Bypass dummy placeholder cell completely to prevent overwriting the CJK right-half glyph
 		if (unicode_char == 0xFFFFFFFF) return;
 
-		// Fill background grid (Double width for CJK characters)
+		// Fill background grid (Double width for CJK characters).
+		// A zero-alpha background means transparent: draw glyph pixels only.
 		stduint bg_w = (unicode_char >= 0x100) ? m_cell_size.x * 2 : m_cell_size.x;
-		for (stduint dy = 0; dy < m_cell_size.y; ++dy) {
-			Color* row = pixel_buffer + (px_y + dy) * pitch_pixels + px_x;
-			for (stduint dx = 0; dx < bg_w; ++dx) {
-				row[dx] = bg;
+		if (bg.a != 0) {
+			for (stduint dy = 0; dy < m_cell_size.y; ++dy) {
+				Color* row = pixel_buffer + (px_y + dy) * pitch_pixels + px_x;
+				for (stduint dx = 0; dx < bg_w; ++dx) {
+					row[dx] = bg;
+				}
 			}
 		}
 

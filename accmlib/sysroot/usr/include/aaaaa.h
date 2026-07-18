@@ -57,7 +57,7 @@ extern "C" {
 extern "C" {
 	#endif
 
-	stdsint sys_create_form(stduint form_id, const Rectangle* rect);
+	stdsint sys_create_form(stduint form_id, const Rectangle* rect, stduint flags = 0);
 
 	stdsint sys_close_form(stduint form_id);
 
@@ -73,6 +73,7 @@ extern "C" {
 	stdsint sys_set_timer(stduint form_id, stduint ms);
 	stdsint sys_set_form_buffer(stduint form_id, void* buffer);
 	stdsint sys_update_form(stduint form_id, const Rectangle* rect);
+	stdsint sys_get_screen_size(Size2* size);
 
 
 

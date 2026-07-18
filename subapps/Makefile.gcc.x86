@@ -43,6 +43,7 @@ all: $(BIN_DIR) \
 	$(BIN_DIR)/gblock \
 	$(BIN_DIR)/_rust \
 	$(BIN_DIR)/viewpic \
+	$(BIN_DIR)/ribbon \
 	\
 
 
@@ -93,6 +94,10 @@ $(BIN_DIR)/_rust: subapps/_hello/rust/src/main.rs subapps/_hello/rust/Cargo.toml
 $(BIN_DIR)/viewpic: subapps/viewpic.cpp $(ulibpath)/cpp/fileformat/picture/BMP.cpp $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
 	@echo "MK viewpic"
 	$(MCCA_X86_CXX) $(MCCA_X86_CXXFLAGS) -o $@ subapps/viewpic.cpp $(ulibpath)/cpp/fileformat/picture/BMP.cpp $(MCCA_X86_LDLIBS)
+
+$(BIN_DIR)/ribbon: subapps/ribbon.cpp $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
+	@echo "MK ribbon"
+	$(MCCA_X86_CXX) $(MCCA_X86_CXXFLAGS) -o $@ subapps/ribbon.cpp $(MCCA_X86_LDLIBS)
 
 clean:
 	@echo "RM $(BIN_DIR)"

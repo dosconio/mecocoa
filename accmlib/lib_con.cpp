@@ -2,9 +2,9 @@
 #include "c/ustring.h"
 #include "c/consio.h"
 
-stdsint sys_create_form(stduint form_id, const Rectangle* rect)
+stdsint sys_create_form(stduint form_id, const Rectangle* rect, stduint flags)
 {
-	stduint buf[4] = { form_id, _IMM(rect) };
+	stduint buf[3] = { form_id, _IMM(rect), flags };
 	CommMsg msg;
 	msg.data.address = _IMM(buf);
 	msg.data.length = sizeof(buf);
@@ -135,6 +135,17 @@ stdsint sys_update_form(stduint form_id, const Rectangle* rect) {
 	msg.data.address = _IMM(buf);
 	msg.data.length = sizeof(buf);
 	msg.type = _IMM(GraphicMsg::FUPD);
+	syscomm(1, Task_ConsoleVideo, &msg);
+	syscomm(0, Task_ConsoleVideo, &msg);
+	return buf[0];
+}
+
+stdsint sys_get_screen_size(Size2* size) {
+	stduint buf[1] = { _IMM(size) };
+	CommMsg msg;
+	msg.data.address = _IMM(buf);
+	msg.data.length = sizeof(buf);
+	msg.type = _IMM(GraphicMsg::FSIZ);
 	syscomm(1, Task_ConsoleVideo, &msg);
 	syscomm(0, Task_ConsoleVideo, &msg);
 	return buf[0];

@@ -77,9 +77,14 @@ enum class GraphicMsg {
 	FDRW,// draw shape
 	FCHR,// draw string
 	FTIM,// set timer
+	FSIZ,// get screen size
 	FCLEANPROC,// clean exiting process GUI resources
 	VCON_CREATE,// create virtual console
 	VCON_REMOVE,// remove virtual console
+};
+
+enum GraphicFormStyle {
+	GraphicFormStyle_Titleless = 0x00000001,
 };
 
 // >= 1

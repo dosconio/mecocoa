@@ -3,6 +3,7 @@
 #include "c/consio.h"
 #include "unistd.h"
 #include <c/ISO_IEC_STD/signal.h>
+#include <cpp/string>
 #include <sys/mman.h>
 
 using namespace uni;
@@ -33,7 +34,8 @@ int main(int argc, char** argv)
 		}
 		sys_update_form(form_id, nullptr);
 
-		sys_draw_default_string(form_id, Point2(50, 50), "Ciallo~", Color::Maroon);
+		auto str = "Cialloこ~"_ustr;
+		sys_draw_default_string(form_id, Point2(50, 50), str.reference(), Color::Maroon);
 		sys_draw_point(form_id, Point2(100, 100), Color::Red);
 		sys_draw_line(form_id, Point2(80, 100), Point2(40, 30), Color::Blue);
 		Rectangle rect0{ Point(16, 16), Size2(10, 40), Color::Green };

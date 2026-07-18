@@ -34,15 +34,7 @@ VPATH = $(sort $(dir $(cppfile)))
 
 sudokey=k
 elf_kernel=$(archdir)/mcca-$(arch).elf
-
-
-# cfdisk of fixed2.vhd
-# Device          Boot     Start      End  Sectors   Size  Id Type
-# fixed2.vhd1               2048     4096     2049     1M  83 Linux           
-# fixed2.vhd2               4097   163295   159199  77.7M   5 Extended
-# ├─fixed2.vhd5   *         8192    16384     8193     4M  99 unknown
-# ├─fixed2.vhd6            18433    32768    14336     7M  83 Linux
-# └─fixed2.vhd7            34817   163295   128479  62.7M   c W95 FAT32 (LBA)
+iso_kernel=$(ubinpath)/mcca.iso
 
 .PHONY: build install lib accm run clean
 
@@ -77,7 +69,7 @@ build: lib accm prehost/$(arch)/fatvhd.ignore $(cppobjs) build_util
 	mkdir -p $(ubinpath)/mecocoa/apps
 	mkdir -p $(ubinpath)/mecocoa/demo
 	-rm -rf  $(ubinpath)/mecocoa/apps/*
-	-cd $(ubinpath) && rm -rf mcca.iso
+	-rm -rf $(iso_kernel)
 	cp configs/grub-x86.txt $(ubinpath)/mecocoa/boot/grub/grub.cfg
 	cp $(elf_kernel) $(ubinpath)/mecocoa/boot/
 	cp $(uobjpath)/sapp-$(arch)/*    $(ubinpath)/mecocoa/apps/
@@ -140,13 +132,14 @@ prehost/$(arch)/fatvhd.ignore: build_util
 	@echo $(sudokey) | sudo -S mv $(uobjpath)/sapp-$(arch)/init $(mntdir)/init
 	@echo $(sudokey) | sudo -S cp $(uobjpath)/sapp-$(arch)/cot  $(mntdir)/cot
 	# from uni-utils:
-	@echo $(sudokey) | sudo -S mv $(uobjpath)/sapp-$(arch)/ls   $(mntdir)/ls
+	@echo $(sudokey) | sudo -S mv $(uobjpath)/sapp-$(arch)/ls     $(mntdir)/ls
+	@echo $(sudokey) | sudo -S mv $(uobjpath)/sapp-$(arch)/ribbon $(mntdir)/ribbon
 	@echo $(sudokey) | sudo -S umount $(mntdir)
 
 $(uobjpath)/mcca-$(arch)/memodisk.o: prehost/$(arch)/fatvhd.ignore
 
 qemu_args=-smp 4,cores=2,threads=2 -M pc \
-	-cdrom $(ubinpath)/mcca.iso \
+	-cdrom $(iso_kernel) \
 	-boot order=d -m 1G\
 	-drive format=raw,file=$(outs),if=floppy \
 	-drive file=$(ubinpath)/fixed2.vhd,format=vpc,if=none,id=disk0 \
