@@ -8,7 +8,7 @@ int main(int argc, char** argv)
 	while (true) {
 		int child = wait(&s);
 		if (child > 0) {
-			outsfmt("[Appinit] %d exited with %d.\n\r", child, s);
+			ploginfo("[Appinit] %d exited with %d.", child, s);
 			continue;
 		}
 		s = 0;

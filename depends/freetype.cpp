@@ -317,9 +317,9 @@ static unsigned long My_FT_Stream_Read(
 	if (loading_ascii) {
 		static uint32 last_logged_kb = 0;
 		ascii_bytes_read += total_read;
-		if (ascii_bytes_read / 4096 > last_logged_kb) {
-			last_logged_kb = ascii_bytes_read / 4096;
-			ploginfo("InitializeFont: Loaded %u KB of ASCII font data...", last_logged_kb * 4);
+		if (ascii_bytes_read / (4096 * 2) > last_logged_kb) {
+			last_logged_kb = ascii_bytes_read / (4096 * 2);
+			plogtrac("InitializeFont: Loaded %u KB of ASCII font data...", last_logged_kb * 8);
 		}
 	}
 	return total_read;
@@ -361,6 +361,7 @@ static void My_FT_Stream_Close(FT_Stream stream) {
 	}
 }
 
+#define _FONT_PATH "/mnt/ide2.0/font/simsun.ttf"
 __attribute__((section(".ext.freetype.code")))
 bool InitializeFont() {
 	ploginfo("InitializeFont: [Start] (Stream-based Lazy Loading Mode)");
@@ -387,9 +388,9 @@ bool InitializeFont() {
 	int open_err = 0;
 	ploginfo("InitializeFont: Opening simsun.ttf...");
 	if (Taskman::CurrentTID() == Task_FileSys) {
-		open_err = Filesys::Open("/mnt/ide0.4/simsun.ttf", 0, &file);
+		open_err = Filesys::Open(_FONT_PATH, 0, &file);
 	} else {
-		int fd = sysc_OPEN((stduint)"/mnt/ide0.4/simsun.ttf", 0);
+		int fd = sysc_OPEN((stduint)_FONT_PATH, 0);
 		if (fd >= 0) {
 			ProcessBlock* pb = ProcessBlock::Acquire(Taskman::CurrentTID());
 			if (pb) {

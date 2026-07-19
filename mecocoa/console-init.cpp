@@ -3,6 +3,7 @@
 // ModuTitle: [Service] Console - ELF32-C++ x86 Bare-Metal
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 #include "../include/mecocoa.hpp"
+#include "c/driver/UART.h"
 
 
 #if (_MCCA & 0xFF00) == 0x8600
@@ -63,6 +64,7 @@ static uni::BitmapFontEngine fallback_engine(1);
 static uni::BitmapFontEngine loader_font_engine(1);
 #endif
 
+extern x86_COM com1;
 bool Consman::Initialize() {
 	// con0_out = 0;
 	Bcons[0].Reset(bda->screen_columns, 24, _VIDEO_ADDR_BUFFER, 0 * 50); Bcons[0].setShowY(0, 24);
@@ -100,6 +102,7 @@ bool Consman::Initialize() {
 		plogwarn("There is no default 800xN-8888 Video Mode");
 		return true;
 	}
+	else VTTY_Append(&com1);
 
 	// config layman
 	#if !defined(_UEFI)

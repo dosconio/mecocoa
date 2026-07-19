@@ -68,6 +68,7 @@ build: lib accm prehost/$(arch)/fatvhd.ignore $(cppobjs) build_util
 	mkdir -p $(ubinpath)/mecocoa/boot/grub
 	mkdir -p $(ubinpath)/mecocoa/apps
 	mkdir -p $(ubinpath)/mecocoa/demo
+	mkdir -p $(ubinpath)/mecocoa/font
 	-rm -rf  $(ubinpath)/mecocoa/apps/*
 	-rm -rf $(iso_kernel)
 	cp configs/grub-x86.txt $(ubinpath)/mecocoa/boot/grub/grub.cfg
@@ -75,6 +76,7 @@ build: lib accm prehost/$(arch)/fatvhd.ignore $(cppobjs) build_util
 	cp $(uobjpath)/sapp-$(arch)/*    $(ubinpath)/mecocoa/apps/
 	echo "ようこそ，メココAの世界へ！" | sudo tee "$(ubinpath)/mecocoa/ciallo.txt" > /dev/null
 	cp $(ulibpath)/../.picture/phina.head.bmp  $(ubinpath)/mecocoa/demo/
+	cp depends/fonts/simsun.ttf                $(ubinpath)/mecocoa/font/
 	cd $(ubinpath) && grub-mkrescue -o mcca.iso mecocoa
 
 	# --- write out ---
@@ -83,7 +85,6 @@ build: lib accm prehost/$(arch)/fatvhd.ignore $(cppobjs) build_util
 	@echo $(sudokey) | sudo -S mkfs.fat -F 32 -n "DATA" /dev/mapper/loop*p7 >/dev/null
 	@echo $(sudokey) | sudo -S mount /dev/mapper/loop*p7 $(mnts) #sudo fsck.vfat -v /dev/mapper/loop0p7 # fdisk # blkid
 	@echo $(sudokey) | sudo -S cp $(elf_kernel)     $(mnts)/mx86.elf
-	@echo $(sudokey) | sudo -S cp depends/fonts/simsun.ttf                $(mnts)/
 	@tree $(mnts) -s
 	@echo $(sudokey) | sudo -S umount $(mnts)
 	@echo $(sudokey) | sudo -S kpartx -dv $(ubinpath)/fixed2.vhd >/dev/null

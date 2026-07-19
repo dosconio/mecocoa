@@ -522,6 +522,7 @@ void serv_file_loop()// for IDE 0:0, 0:1
 			if (!ribbon) {
 				plogwarn("[Fileman] Failed to start ribbon.");
 			}
+			else ribbon->main_thread->name = "ribbon";
 			Taskman::Append(ribbon);
 			Taskman::AppendThread(ribbon->main_thread);
 

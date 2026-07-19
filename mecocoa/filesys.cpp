@@ -335,6 +335,7 @@ static vfs_dentry* _Index_unlocked(const char* pathname, vfs_dentry* base) {
 }
 
 vfs_dentry* Filesys::Index(const char* pathname, vfs_dentry* base) {
+	MutexLocal guard(&vfs_lock);
 	return _Index_unlocked(pathname, base);
 }
 
@@ -642,7 +643,8 @@ void Filesys::Tree(uni::OstreamTrait& os, bool mount_expand) {
 }
 
 int Filesys::Open(const char* pathname, int flags, vfs_file** out_file, vfs_dentry* base) {
-	vfs_dentry* dentry = Filesys::Index(pathname, base);
+	MutexLocal guard(&vfs_lock);
+	vfs_dentry* dentry = _Index_unlocked(pathname, base);
 	if (dentry && dentry->d_inode) {
 		// O_DIRECTORY: If pathname refers to a non-directory file, open() shall fail.
 		if ((flags & O_DIRECTORY) && (dentry->d_inode->i_mode & I_TYPE_MASK) != I_DIRECTORY) {
@@ -676,7 +678,7 @@ int Filesys::Open(const char* pathname, int flags, vfs_file** out_file, vfs_dent
 					MemCopyN(dir_path, pathname, len);
 					dir_path[len] = '\0';
 				}
-				parent_dentry = Filesys::Index(dir_path, base);
+				parent_dentry = _Index_unlocked(dir_path, base);
 			}
 
 			if (!parent_dentry || !parent_dentry->d_inode || !parent_dentry->d_inode->i_sb) {
@@ -822,7 +824,8 @@ int Filesys::Enumer(vfs_file* file, void* buf, stduint count, ProcessBlock* pb) 
 }
 
 bool Filesys::Remove(const char* pathname, vfs_dentry* base) {
-	vfs_dentry* dentry = Filesys::Index(pathname, base);
+	MutexLocal guard(&vfs_lock);
+	vfs_dentry* dentry = _Index_unlocked(pathname, base);
 	if (!dentry || !dentry->d_inode || !dentry->d_inode->i_sb) return false;
 
 	FilesysTrait* fs = dentry->d_inode->i_sb->fs;
@@ -850,7 +853,6 @@ bool Filesys::Remove(const char* pathname, vfs_dentry* base) {
 		// Pass the pure relative path to the underlying physical FS
 		bool ret = fs->remove(rel_path);
 		if (ret) {
-			MutexLocal guard(&vfs_lock);
 			vfs_dentry* parent = dentry->d_parent;
 			if (parent) {
 				if (parent->d_first_child == dentry) {
