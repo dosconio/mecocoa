@@ -362,6 +362,29 @@ static void My_FT_Stream_Close(FT_Stream stream) {
 }
 
 #define _FONT_PATH "/mnt/ide2.0/font/simsun.ttf"
+#define _FONT_PATH2 "/mnt/ahci1.0/font/simsun.ttf"
+
+static int OpenFontPath(const char* path, vfs_file** file) {
+	if (!path || !file) return -1;
+	*file = nullptr;
+	if (Taskman::CurrentTID() == Task_FileSys) {
+		return Filesys::Open(path, 0, file);
+	}
+	int fd = sysc_OPEN((stduint)path, 0);
+	if (fd < 0) return fd;
+	ProcessBlock* pb = ProcessBlock::Acquire(Taskman::CurrentTID());
+	if (pb) {
+		auto files = pb->fileman.Lock();
+		if (fd < (stdsint)files->pfiles.Count() && files->pfiles[fd]) {
+			*file = files->pfiles[fd]->vfile;
+		}
+		ProcessBlock::Release(pb);
+	}
+	if (*file) return 0;
+	sysc_CLOS(fd);
+	return -1;
+}
+
 __attribute__((section(".ext.freetype.code")))
 bool InitializeFont() {
 	ploginfo("InitializeFont: [Start] (Stream-based Lazy Loading Mode)");
@@ -387,23 +410,10 @@ bool InitializeFont() {
 	vfs_file* file = nullptr;
 	int open_err = 0;
 	ploginfo("InitializeFont: Opening simsun.ttf...");
-	if (Taskman::CurrentTID() == Task_FileSys) {
-		open_err = Filesys::Open(_FONT_PATH, 0, &file);
-	} else {
-		int fd = sysc_OPEN((stduint)_FONT_PATH, 0);
-		if (fd >= 0) {
-			ProcessBlock* pb = ProcessBlock::Acquire(Taskman::CurrentTID());
-			if (pb) {
-				auto files = pb->fileman.Lock();
-				if (fd < (stdsint)files->pfiles.Count() && files->pfiles[fd]) {
-					file = files->pfiles[fd]->vfile;
-				}
-			}
-			ProcessBlock::Release(pb);
-			open_err = (file != nullptr) ? 0 : -1;
-		} else {
-			open_err = fd;
-		}
+	open_err = OpenFontPath(_FONT_PATH, &file);
+	if (open_err != 0 || !file) {
+		plogwarn("InitializeFont: %s unavailable, try %s", _FONT_PATH, _FONT_PATH2);
+		open_err = OpenFontPath(_FONT_PATH2, &file);
 	}
 	ploginfo("InitializeFont: Filesys::Open returned %d, file = %p", open_err, file);
 	if (open_err != 0 || !file) {
