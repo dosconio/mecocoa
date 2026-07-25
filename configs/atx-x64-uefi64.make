@@ -161,7 +161,8 @@ qemu_args=\
 	-device usb-mouse,id=mouse0,bus=xhci.0,port=1.1 \
 	-device usb-kbd,id=kbd0,bus=xhci.0,port=1.2 \
 	-serial mon:stdio \
-	-no-reboot -no-shutdown  \
+	
+# 	-no-reboot -no-shutdown  \
 
 # -device usb-mouse,id=mouse0 \
 # -device usb-kbd,id=kbd0 \

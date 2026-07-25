@@ -535,8 +535,8 @@ DEFSYSC sysc_SIGA(stduint sig, stduint act, stduint oact) {
 	stduint phys_act = act ? (stduint)pb->paging[act] : 0;
 	stduint phys_oact = oact ? (stduint)pb->paging[oact] : 0;
 	
-	const struct _POSIX_sigaction* p_act = act ? (const struct _POSIX_sigaction*)mglb(phys_act) : nullptr;
-	struct _POSIX_sigaction* p_oact = oact ? (struct _POSIX_sigaction*)mglb(phys_oact) : nullptr;
+	const struct _POSIX_sigaction* p_act = act ? (const struct _POSIX_sigaction*)(phys_act) : nullptr;
+	struct _POSIX_sigaction* p_oact = oact ? (struct _POSIX_sigaction*)(phys_oact) : nullptr;
 	
 	if (oact && _IMM(phys_oact) == ~_IMM0) {
 		plogerro("sysc_SIGA: oact address 0x%[x] not mapped in user page table!", oact);
@@ -828,7 +828,7 @@ stduint Handint_SYSCALL(CallgateFrame* frame) {
 
 	stduint ret_val = -1;
 	if (_IMM(callid) < numsof(SYSCALL_TABLE) && SYSCALL_TABLE[_IMM(callid)]) {
-		ret_val = (reinterpret_cast<stdsint(*)(stduint, stduint, stduint)>mglb(SYSCALL_TABLE[_IMM(callid)]))(para[0], para[1], para[2]);
+		ret_val = (reinterpret_cast<stdsint(*)(stduint, stduint, stduint)>(SYSCALL_TABLE[_IMM(callid)]))(para[0], para[1], para[2]);
 	}
 	else switch (callid) {
 	case syscall_t::FORK:

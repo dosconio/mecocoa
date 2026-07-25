@@ -546,7 +546,7 @@ static void _CreateELF_Carry(char* vaddr, stduint mem_length, BlockTrait* source
 		
 		if (_IMM(page_entry) == ~_IMM0 || !page_entry->isPresent()) {
 			phy = _IMM(mempool.allocate(0x1000, 12));
-			MemSet((void*)mglb(phy), 0, 0x1000);
+			MemSet((void*)phy, 0, 0x1000);
 			stduint pgprop = PGPROP_present;
 			if (writable) pgprop |= PGPROP_writable;
 			if (user) pgprop |= PGPROP_user_access;
@@ -565,7 +565,7 @@ static void _CreateELF_Carry(char* vaddr, stduint mem_length, BlockTrait* source
 		}
 
 		stduint phy_dest = phy + compensation;
-		void* kdest = (void*)mglb(phy_dest);
+		void* kdest = (void*)(phy_dest);
 
 		// xDATA or BSS 
 		if (bytes_read >= file_size) {
@@ -575,7 +575,7 @@ static void _CreateELF_Carry(char* vaddr, stduint mem_length, BlockTrait* source
 			stduint copy_size = chunk_size;
 			if (bytes_read + chunk_size > file_size) {
 				copy_size = file_size - bytes_read;
-				MemSet((void*)mglb(phy_dest + copy_size), 0, chunk_size - copy_size);
+				MemSet((void*)(phy_dest + copy_size), 0, chunk_size - copy_size);
 			}
 			auto ret = source->Read(file_offset + bytes_read, kdest, copy_size, buffer);
 			if (ret != copy_size) {
@@ -772,8 +772,8 @@ ProcessBlock* Taskman::CreateFork(ProcessBlock* fo, const CallgateFrame* frame) 
 			void* parent_phy = fo->paging[addr];
 			if (parent_phy != (void*)~_IMM0) {
 				void* child_phy = mempool.allocate(0x1000, 12);
-				MemSet((void*)mglb(child_phy), 0, 0x1000); // Zero-fill child page
-				MemCopyP((void*)mglb(child_phy), kernel_paging, (const void*)mglb(parent_phy), kernel_paging, 0x1000);
+				MemSet((void*)(child_phy), 0, 0x1000); // Zero-fill child page
+				MemCopyP((void*)(child_phy), kernel_paging, (const void*)(parent_phy), kernel_paging, 0x1000);
 				pb->paging.Map(addr, (stduint)child_phy, 0x1000, PAGESIZE_4KB, PGPROP_present | PGPROP_writable | PGPROP_user_access);
 			}
 		}

@@ -259,7 +259,7 @@ bool exception_handler_user(HardwareInterruptFrame* frame, stduint iden, stduint
 				if (fault_addr >= vma.vm_start && fault_addr < vma.vm_end) {
 					void* phy_page = mempool.allocate(0x1000, 12);
 					if (phy_page != (void*)~_IMM0) {
-						MemSet((void*)mglb(phy_page), 0, 0x1000); // Zero-fill physical page
+						MemSet((void*)(phy_page), 0, 0x1000); // Zero-fill physical page
 						stduint aligned_vaddr = fault_addr & ~_IMM(0xFFF);
 						
 						if (vma.vm_type == VMA_FILE && vma.vfile) {

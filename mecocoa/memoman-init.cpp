@@ -486,7 +486,7 @@ bool Memory::initialize(stduint eax, byte* ebx) {
 		bool b = Memory::pagebmap->bitof(i);
 		BM_FFFF.setof(i, b);
 	}
-	Memory::total_memsize = Memory::pagebmap->Count();
+	Memory::total_memsize += Memory::pagebmap->Count();
 	Memory::pagebmap->add_range(
 		floorAlign(0x1000, _IMM(&FILE_ENTO)) >> 12,
 		(vaultAlign(0x1000, _IMM(&FILE_ENDO)) >> 12) + 1,
@@ -641,6 +641,7 @@ static void parse_uefi(const MemoryMap& memory_map) {
 			if (desc->physical_start + desc->number_of_pages * 4096 >= 0x100000000ULL) {
 				ploginfo("Memory %[x] .. %[x] over 4G", desc->physical_start, desc->physical_start + desc->number_of_pages * 4096);
 				mempool.Append(Slice{ _IMM(desc->physical_start), desc->number_of_pages * 4096 });
+				Memory::total_memsize += desc->number_of_pages * 4096;
 			}
 			else Memory::pagebmap->add_range(beg, beg + desc->number_of_pages, true);
 		}

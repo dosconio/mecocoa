@@ -9,6 +9,8 @@
 #include <c/proctrl/IAx86_64.msr.h>
 #endif
 
+SpinlockBlock<unsigned> cores_count = 0;
+
 static void HandleRescheduleIPI() {
 	IC.SendEOI();
 }
@@ -39,6 +41,33 @@ void TSC_Wait_MS(uint64_t ms) {
 		// 'pause' here simply prevents the loop from burning execution units
 		// and handles hyper-threading gracefully.
 		__asm__ __volatile__("pause" ::: "memory"); 
+	}
+}
+
+// A strictly deterministic delay using PIT Channel 0 latch.
+// Since PIT Channel 0 is configured to 1kHz periodic mode, 
+// we count its reload events to wait for the specified milliseconds.
+void PIT_Wait_MS(uint64_t ms) {
+	if (!ms) return;
+	// Latch PIT Channel 0 to read initial counter value
+	outpb(0x43, 0x00);
+	uint16_t prev_count = innpb(0x40);
+	prev_count |= (uint16_t)innpb(0x40) << 8;
+
+	uint64_t elapsed_ms = 0;
+	while (elapsed_ms < ms) {
+		// Latch PIT Channel 0 counter
+		outpb(0x43, 0x00);
+		uint16_t curr_count = innpb(0x40);
+		curr_count |= (uint16_t)innpb(0x40) << 8;
+
+		// If current counter is greater than previous counter by a threshold,
+		// it indicates a reload has occurred (1ms passed).
+		if (curr_count > prev_count + 500) {
+			elapsed_ms++;
+		}
+		prev_count = curr_count;
+		__asm__ __volatile__("pause" ::: "memory");
 	}
 }
 #endif
@@ -73,6 +102,7 @@ void Coreman::Initialize() {
 				type_num - 1 < numsof(b_type_name) ? b_type_name[type_num - 1] : String::newFormat("0x%[8H]", type_num - 1).reference(),
 				a & 0x1F,
 				b & 0xFF);
+			++*cores_count.Lock();
 			// LOGP:  for logical processor
 			// Width: for different thread
 		}
@@ -82,22 +112,28 @@ void Coreman::Initialize() {
 	// Active SMP-APs
 	if (IC.getType() == 2) {
 		setMSR(x86MSR::APIC_ICR_LOW, 0xC4500);// Send INIT IPI to all other processors, (5)Delivery Mode
-		TSC_Wait_MS(10 + 1);
+		PIT_Wait_MS(10);
 		setMSR(x86MSR::APIC_ICR_LOW, 0xC4600 | (ap_entry >> PAGESIZE_4KB));
-		TSC_Wait_MS(1 + 1);
+		PIT_Wait_MS(1);
 		setMSR(x86MSR::APIC_ICR_LOW, 0xC4600 | (ap_entry >> PAGESIZE_4KB));
-		TSC_Wait_MS(10 + 1);
+		for0(i, 10) {
+			PIT_Wait_MS(1);
+			if (*cores_count.Lock() == 0) break;
+		}
 	}
 	else if (IC.getType() == 1) {
 		IC.WriteLAPIC(0x310, 0);
 		IC.WriteLAPIC(0x300, 0xC4500);
-		TSC_Wait_MS(10 + 1);
+		PIT_Wait_MS(10);
 		IC.WriteLAPIC(0x310, 0);
 		IC.WriteLAPIC(0x300, 0xC4600 | (ap_entry >> PAGESIZE_4KB));
-		TSC_Wait_MS(1 + 1);
+		PIT_Wait_MS(1);
 		IC.WriteLAPIC(0x310, 0);
 		IC.WriteLAPIC(0x300, 0xC4600 | (ap_entry >> PAGESIZE_4KB));
-		TSC_Wait_MS(10 + 1);
+		for0(i, 10) {
+			PIT_Wait_MS(1);
+			if (*cores_count.Lock() == 0) break;
+		}
 	}
 
 

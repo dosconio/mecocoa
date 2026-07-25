@@ -174,6 +174,7 @@ bool WakeOneIdleApForReadyWork() {
 	return false;
 }
 
+extern SpinlockBlock<unsigned> cores_count;
 extern "C" void AP_Main(stduint core_id) {
 	auto percore = Taskman::PCU_CORES_PERCORE[core_id];
 	if (!percore) {
@@ -202,7 +203,9 @@ extern "C" void AP_Main(stduint core_id) {
 	register_interrupt_handler(IRQ_WAKE_IPI, HandleWakeIPI);
 	EnableSSE();
 	IC.enInterrupt();
+	//
 	ploginfo("[COREMAN] AP core%u online, lapic=%[x], tss=%[x]", core_id, percore->lapic_id, percore->tss_selector);
+	--*cores_count.Lock();
 	loop HALT();
 }
 #elif _MCCA == 0x8664
@@ -710,7 +713,7 @@ auto Taskman::Schedule(bool omit_slice)->decltype(Schedule())
 		ploginfo("[CPU%u]SCH: Th%u -> Th%u", cpuid, old_tb->tid, new_tb->tid);
 	}
 	#if _MCCA == 0x8664 || _MCCA == 0x8632
-	((void(*)(NormalTaskContext*, NormalTaskContext*))mglb(SwitchTaskContext))((NormalTaskContext*)mglb(&new_tb->context), (NormalTaskContext*)mglb(&old_tb->context));
+	((void(*)(NormalTaskContext*, NormalTaskContext*))mglb(SwitchTaskContext))(&new_tb->context, &old_tb->context);
 	#else
 	SwitchTaskContext(&new_tb->context, &old_tb->context);
 	#endif
@@ -761,7 +764,7 @@ void Taskman::SleepAndRelease(Spinlock* lk) {
 	#endif
 	// No explicit unlock of scheduler_lock here, because earlier we unlock lk, but wait!
 	#if _MCCA == 0x8664 || _MCCA == 0x8632
-	((void(*)(NormalTaskContext*, NormalTaskContext*))mglb(SwitchTaskContext))((NormalTaskContext*)mglb(&new_tb->context), (NormalTaskContext*)mglb(&old_tb->context));
+	((void(*)(NormalTaskContext*, NormalTaskContext*))mglb(SwitchTaskContext))(&new_tb->context, &old_tb->context);
 	#else
 	SwitchTaskContext(&new_tb->context, &old_tb->context);
 	#endif

@@ -97,6 +97,14 @@ void setDSAll(uint16 value);
 #include "../../prehost/atx-x64-uefi64/atx-x64-uefi64.loader/loader-graph.h"
 #endif
 
-#define mglb(x) (_IMM(x) | 0xFFFFFFFFC0000000ull)
+static inline stduint mglb_checked(stduint phys_addr, const char* file, int line) {
+	if (phys_addr >= 0x40000000ull) {
+		plogerro("[mglb] phys %[x] >= 0x40000000 at %s:%d", phys_addr, file, line);
+	}
+	return phys_addr | 0xFFFFFFFFC0000000ull;
+}
+
+#define mglb(x) (mglb_checked(_IMM(x), __FILE__, __LINE__))
+// #define mglb(x) (_IMM(x) | 0xFFFFFFFFC0000000ull)
 
 #endif // _MCCA_UEFI64
