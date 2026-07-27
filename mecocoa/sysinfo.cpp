@@ -186,6 +186,32 @@ static rostr text_usb_endpoint_transfer_type(stduint type) {
 	}
 }
 
+static void dump_device_tree_indent(OstreamTrait& com1, stduint depth);
+
+static void dump_device_tree_pci_description(OstreamTrait& com1, const DeviceNode& node, stduint depth) {
+	if (DeviceNodeType(node.fields.node_type) != DeviceNodeType::PciDevice) return;
+	#if (_MCCA & 0xFF00) == 0x8600
+	const rostr class_name = Devsman::LookupPciClassName(
+		node.fields.class_base, node.fields.class_sub, node.fields.class_if);
+	rostr product_name = node.fields.text_product;
+	if (!product_name || !product_name[0]) {
+		product_name = Devsman::LookupPciDeviceName(
+			node.fields.vendor_id, node.fields.device_id, node.fields.class_base, node.fields.class_sub);
+	}
+	if ((!class_name || !class_name[0]) && (!product_name || !product_name[0])) return;
+	dump_device_tree_indent(com1, depth);
+	if (class_name && class_name[0]) {
+		com1.OutFormat("- %s", class_name);
+		if (product_name && product_name[0]) {
+			com1.OutFormat(": %s", product_name);
+		}
+		com1.OutFormat("\n\r");
+		return;
+	}
+	com1.OutFormat("- %s\n\r", product_name);
+	#endif
+}
+
 static void dump_device_tree_indent(OstreamTrait& com1, stduint depth) {
 	for0(i, depth) com1.OutFormat("  ");
 }
@@ -353,6 +379,9 @@ static void dump_device_tree_node(OstreamTrait& com1, const DeviceNode* node, st
 				has_binding ? " state=" : "",
 				has_binding ? text_driver_binding_state(crt->fields.binding.state) : "");
 			break;
+		}
+		if (verbose) {
+			dump_device_tree_pci_description(com1, *crt, depth + 1);
 		}
 		if (verbose && crt->fields.resource_count) {
 			dump_device_tree_resources(com1, *crt, depth + 1);

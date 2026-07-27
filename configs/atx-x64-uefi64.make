@@ -82,6 +82,7 @@ mntdir=/mnt/floppy
 clang=clang-14
 sudokey=k
 uherpath=/her
+loader=$(ubinpath)/AMD64/loader.efi
 
 .PHONY : build
 build: clean accm $(archdir)/kerdisk.fat $(ubinpath)/$(arch).img $(asmobjs) $(cppobjs) $(cplobjs) build_util
@@ -100,7 +101,7 @@ build: clean accm $(archdir)/kerdisk.fat $(ubinpath)/$(arch).img $(asmobjs) $(cp
 	@echo $(sudokey) | sudo -S umount $(mntdir)
 	@echo $(sudokey) | sudo -S mount -o loop $(ubinpath)/$(arch).img $(mntdir)
 	@echo $(sudokey) | sudo -S mkdir -p $(mntdir)/EFI/BOOT
-	@echo $(sudokey) | sudo -S cp $(ubinpath)/AMD64/loader.efi $(mntdir)/EFI/BOOT/BOOTX64.EFI
+	@echo $(sudokey) | sudo -S cp $(loader) $(mntdir)/EFI/BOOT/BOOTX64.EFI
 	@echo $(sudokey) | sudo -S cp $(ubinpath)/$(elf_kernel) $(mntdir)/kernel.elf
 	@echo $(sudokey) | sudo -S cp $(archdir)/kerdisk.fat $(mntdir)/
 	tree $(mntdir)
@@ -116,7 +117,7 @@ $(archdir)/kerdisk.fat:
 	dd if=/dev/zero of=$@ bs=1M count=32
 	mkfs.fat -n 'MECOCOA2' -s 2 -f 2 -R 32 -F 32 $@
 
-$(ubinpath)/$(arch).img: loader
+$(ubinpath)/$(arch).img: $(loader)
 	@echo MK DISK IMAGE
 	qemu-img create -f raw $@ 100M > /dev/null
 	mkfs.fat -n 'MECOCOA ' -s 2 -f 2 -R 32 -F 32 $@ > /dev/null
@@ -142,14 +143,13 @@ build_util:
 #	ld   -s -m elf_x86_64 -o $(uobjpath)/sapp-$(arch)/a subapps/_hello/asm/helloa-x64.o -Ttext-segment=0x10000 -e main
 
 edkdir=/home/$(USER)/soft/edk2
-.PHONY : loader
-loader:
+$(loader): prehost/$(arch)/$(arch).loader/loader.c
 	@echo MK $(arch) loader
 	mkdir -p $(edkdir)/MccaLoaderPkg
 	cp prehost/$(arch)/$(arch).loader/*    $(edkdir)/MccaLoaderPkg/
 	cp prehost/$(arch)/$(arch).loader.cfg  $(edkdir)/Conf/target.txt
 	cd $(edkdir) && bash $(ulibpath)/../../mecocoa/prehost/$(arch)/$(arch).loader/build.sh
-	cp $(edkdir)/Build/MccaLoaderX64/DEBUG_CLANGDWARF/X64/Loader.efi $(ubinpath)/AMD64/loader.efi
+	cp $(edkdir)/Build/MccaLoaderX64/DEBUG_CLANGDWARF/X64/Loader.efi $@
 
 .PHONY : run run-only
 qemu_args=\

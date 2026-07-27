@@ -7,14 +7,12 @@ her-note: false
 
 ## x86/x64
 
+- Bus: **PCI**
 - 【!TREE】CRT Video (by BIOS)
 - Interrupt 8259 **PIC** and **(x2)APIC**
 - 【!TREE】**Buzzer** PC Speaker
 - **KBD** Keyboard and **MOU** PS/2-Mouse
 - 【!TREE】COMn UART
-
-x64u only
-- Bus: **PCI**
 - **KBD** USB-Keyboard and **MOU** USB-Mouse
 - USB
 	- xHCI 1.1/2.0/3.0 (QEMU)
@@ -67,17 +65,18 @@ No Use
 
 ### Storage
 
+> ATAPI is CD
+
 - Floppy
-- PATA Disk (MBR, GPT) 2:2
-- ATAPI CD
+- PATA Disk (MBR, GPT, ATAPI) 2:2
 - SATA 
-	- AHCI (MBR, GPT) 4:30
+	- AHCI (MBR, GPT, ATAPI) 4:30
+- SCSI (MBR, GPT, ATAPI) 4:16
 
 Filesys
 - FAT 12/16/32
 
 TODO:
-- SCSI
 - SAS(including SATA)
 - NVMe
 

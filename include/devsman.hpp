@@ -161,6 +161,11 @@ public:
 	static DeviceNode* PrimaryPciBus();
 	static DeviceNode* FindPCIDeviceByClass(uint8 class_base, uint8 class_sub, uint8 class_if);
 	static const DeviceResource* FindResource(const DeviceNode* node, DeviceResourceType type, uint32 index = 0);
+	#if (_MCCA & 0xFF00) == 0x8600
+	static const char* LookupPciClassName(uint8 class_base, uint8 class_sub, uint8 class_if);
+	static const char* LookupPciDeviceName(uint16 vendor_id, uint16 device_id, uint8 class_base = 0, uint8 class_sub = 0);
+	static const char* LookupPciVendorName(uint16 vendor_id);
+	#endif
 
 };
 

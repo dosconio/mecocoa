@@ -19,6 +19,15 @@ extern RMOD_LIST __init_rmod_ento[], __init_rmod_endo[];
 #define mfence() _ASM volatile ("mfence":::"memory")
 
 namespace {
+	enum class PciDriverKind : uint8 {
+		Unknown = 0,
+		Scsi,
+		Pata,
+		Ahci,
+		PciBridge,
+		Xhci,
+	};
+
 	class DeviceTree final : public uni::Nchain {
 	public:
 		DeviceTree() : uni::Nchain(true) {
@@ -46,13 +55,6 @@ namespace {
 	bool pci_devices_attached = false;
 	constexpr uint8 MatchAnyClassIf = 0xFF;
 
-	struct PciDriverMatchEntry {
-		uint8 class_base;
-		uint8 class_sub;
-		uint8 class_if;
-		const char* driver_name;
-	};
-
 	struct NamedDriverMatchEntry {
 		const char* node_name;
 		const char* driver_name;
@@ -68,13 +70,18 @@ namespace {
 		Devsman::DriverStartRoutine starter;
 	};
 
-	constexpr PciDriverMatchEntry pci_driver_match_table[] = {
-		{0x06u, 0x04u, MatchAnyClassIf, "pci-bridge"},
-		{0x0Cu, 0x03u, 0x30u, "xhci"},
-		{AHCI_PCI_CLASS_BASE, AHCI_PCI_CLASS_SUB, AHCI_PCI_CLASS_IF, "ahci"},
-		{0x01u, 0x01u, MatchAnyClassIf, "pata"},
-		{0x03u, 0x00u, MatchAnyClassIf, "video-vmware"},
-		{0x03u, 0x00u, MatchAnyClassIf, "video-bochs"},
+	struct PciClassNameEntry {
+		uint8 class_base;
+		uint8 class_sub;
+		uint8 class_if;
+		const char* name;
+	};
+
+	struct PciDeviceNameEntry {
+		uint16 vendor_id;
+		uint16 device_id;
+		const char* vendor_name;
+		const char* product_name;
 	};
 
 	constexpr NamedDriverMatchEntry platform_driver_match_table[] = {
@@ -89,6 +96,32 @@ namespace {
 	constexpr NamedDriverMatchEntry serio_device_match_table[] = {
 		{"ps2kbd", "ps2-keyboard"},
 		{"ps2mouse", "ps2-mouse"},
+	};
+
+	constexpr PciClassNameEntry pci_class_name_table[] = {
+		{0x01u, 0x00u, MatchAnyClassIf, "SCSI storage controller"},
+		{0x01u, 0x01u, 0x8Au, "ISA Compatibility IDE controller"},
+		{0x01u, 0x01u, MatchAnyClassIf, "IDE interface"},
+		{AHCI_PCI_CLASS_BASE, AHCI_PCI_CLASS_SUB, AHCI_PCI_CLASS_IF, "AHCI SATA controller"},
+		{0x01u, 0x06u, MatchAnyClassIf, "SATA controller"},
+		{0x03u, 0x00u, MatchAnyClassIf, "VGA compatible controller"},
+		{0x06u, 0x00u, MatchAnyClassIf, "Host bridge"},
+		{0x06u, 0x01u, MatchAnyClassIf, "ISA bridge"},
+		{0x06u, 0x04u, MatchAnyClassIf, "PCI bridge"},
+		{0x06u, 0x80u, MatchAnyClassIf, "Bridge device"},
+		{0x08u, 0x80u, MatchAnyClassIf, "System peripheral"},
+	};
+
+	constexpr PciDeviceNameEntry pci_device_name_table[] = {
+		{0x8086u, 0x1237u, "Intel", "Intel 82441FX PMC host bridge"},
+		{0x8086u, 0x7000u, "Intel", "Intel 82371SB PIIX3 ISA bridge"},
+		{0x8086u, 0x7110u, "Intel", "Intel 82371AB PIIX4 ISA bridge"},
+		{0x8086u, 0x7111u, "Intel", "Intel 82371AB PIIX4 IDE"},
+		{0x104Bu, 0x1040u, "BusLogic", "BusLogic MultiMaster SCSI host adapter"},
+		{0x15ADu, 0x0405u, "VMware", "VMware SVGA II Adapter"},
+		{0x15ADu, 0x0740u, "VMware", "VMware virtual machine communication interface"},
+		{0x15ADu, 0x0790u, "VMware", "VMware PCI bridge"},
+		{0x1234u, 0x1111u, "QEMU/Bochs", "QEMU/Bochs VGA adapter"},
 	};
 
 	bool is_x86_legacy_isa_platform_name(const char* name) {
@@ -131,6 +164,32 @@ namespace {
 		return true;
 	}
 
+	bool probe_scsi_device(DeviceNode* node) {
+		if (!node) return false;
+		const auto* io_bar = Devsman::FindResource(node, DeviceResourceType::PciBarIo, 0);
+		const auto* mmio_bar = Devsman::FindResource(node, DeviceResourceType::PciBarMmio, 0);
+		if (!io_bar && !mmio_bar) {
+			plogwarn("[DEVSMAN] SCSI %s missing BAR0 resource",
+				node->link.addr ? node->link.addr : "(unnamed)");
+			return false;
+		}
+		const auto* irq = Devsman::FindResource(node, DeviceResourceType::IrqLine, 0);
+		node->fields.binding.probe_result = irq ? 0 : 1;
+		if (io_bar) {
+			ploginfo("[DEVSMAN] SCSI %s IO=%[64H]%s",
+				node->link.addr ? node->link.addr : "(unnamed)",
+				io_bar->start,
+				irq ? "" : " irq=none");
+		}
+		else {
+			ploginfo("[DEVSMAN] SCSI %s MMIO=%[64H]%s",
+				node->link.addr ? node->link.addr : "(unnamed)",
+				mmio_bar->start,
+				irq ? "" : " irq=none");
+		}
+		return true;
+	}
+
 	bool probe_video_bochs_device(DeviceNode* node) {
 		return node != nullptr;
 	}
@@ -142,6 +201,7 @@ namespace {
 	constexpr DriverOpsEntry pci_driver_ops_table[] = {
 		{"xhci", probe_xhci_device},
 		{"ahci", probe_ahci_device},
+		{"scsi", probe_scsi_device},
 		{"video-vmware", probe_video_vmware_device},
 		{"video-bochs", probe_video_bochs_device},
 	};
@@ -381,17 +441,6 @@ namespace {
 		return true;
 	}
 
-	const PciDriverMatchEntry* match_pci_driver(const DeviceNode* node) {
-		if (!node) return nullptr;
-		for (const auto& entry : pci_driver_match_table) {
-			if (node->fields.class_base != entry.class_base) continue;
-			if (node->fields.class_sub != entry.class_sub) continue;
-			if (entry.class_if != MatchAnyClassIf && node->fields.class_if != entry.class_if) continue;
-			return &entry;
-		}
-		return nullptr;
-	}
-
 	const NamedDriverMatchEntry* match_named_driver(const DeviceNode* node,
 		const NamedDriverMatchEntry* table, stduint count) {
 		if (!node || !node->link.addr || !table) return nullptr;
@@ -423,6 +472,39 @@ namespace {
 			node->fields.device_id == 0x0405;
 	}
 
+	const PciDeviceNameEntry* find_pci_device_name_entry(uint16 vendor_id, uint16 device_id) {
+		for (const auto& entry : pci_device_name_table) {
+			if (entry.vendor_id != vendor_id) continue;
+			if (entry.device_id != device_id) continue;
+			return &entry;
+		}
+		return nullptr;
+	}
+
+	PciDriverKind match_pci_driver(const DeviceNode* node) {
+		if (!node) return PciDriverKind::Unknown;
+		if (node->fields.class_base == 0x01u && node->fields.class_sub == 0x00u) {
+			return PciDriverKind::Scsi;
+		}
+		if (node->fields.class_base == 0x01u && node->fields.class_sub == 0x01u) {
+			return PciDriverKind::Pata;
+		}
+		if (node->fields.class_base == AHCI_PCI_CLASS_BASE &&
+			node->fields.class_sub == AHCI_PCI_CLASS_SUB &&
+			node->fields.class_if == AHCI_PCI_CLASS_IF) {
+			return PciDriverKind::Ahci;
+		}
+		if (node->fields.class_base == 0x06u && node->fields.class_sub == 0x04u) {
+			return PciDriverKind::PciBridge;
+		}
+		if (node->fields.class_base == 0x0Cu &&
+			node->fields.class_sub == 0x03u &&
+			node->fields.class_if == 0x30u) {
+			return PciDriverKind::Xhci;
+		}
+		return PciDriverKind::Unknown;
+	}
+
 	Devsman::DriverStartRoutine find_driver_starter(const char* driver_name) {
 		if (!driver_name) return nullptr;
 		for0(i, driver_start_hook_count) {
@@ -451,14 +533,24 @@ namespace {
 			}
 			return;
 		}
-		if (const auto* entry = match_pci_driver(node)) {
-			if (StrCompare(entry->driver_name, "video-vmware") == 0 && !is_vmware_video_device(node)) {
-				return;
-			}
-			if (StrCompare(entry->driver_name, "video-bochs") == 0 && !is_bochs_video_device(node)) {
-				return;
-			}
-			set_driver_binding(node, entry->driver_name);
+		switch (match_pci_driver(node)) {
+		case PciDriverKind::Scsi:
+			set_driver_binding(node, "scsi");
+			return;
+		case PciDriverKind::Pata:
+			set_driver_binding(node, "pata");
+			return;
+		case PciDriverKind::Ahci:
+			set_driver_binding(node, "ahci");
+			return;
+		case PciDriverKind::PciBridge:
+			set_driver_binding(node, "pci-bridge");
+			return;
+		case PciDriverKind::Xhci:
+			set_driver_binding(node, "xhci");
+			return;
+		default:
+			return;
 		}
 	}
 
@@ -756,6 +848,10 @@ namespace {
 		dev_node->fields.pci_bus = dev.bus;
 		dev_node->fields.pci_device = dev.device;
 		dev_node->fields.pci_function = dev.function;
+		if (const auto* entry = find_pci_device_name_entry(dev_node->fields.vendor_id, dev_node->fields.device_id)) {
+			dev_node->fields.text_manufacturer = StrHeap(entry->vendor_name);
+			dev_node->fields.text_product = StrHeap(entry->product_name);
+		}
 		append_pci_bar_resources(dev_node, dev);
 		append_pci_irq_resource(dev_node, dev);
 		append_pci_bridge_bus_range_resource(dev_node, dev);
@@ -1606,5 +1702,38 @@ DeviceNode* Devsman::FindPCIDeviceByClass(uint8 class_base, uint8 class_sub, uin
 
 const DeviceResource* Devsman::FindResource(const DeviceNode* node, DeviceResourceType type, uint32 index) {
 	return find_resource(node, type, index);
+}
+
+const char* Devsman::LookupPciClassName(uint8 class_base, uint8 class_sub, uint8 class_if) {
+	for (const auto& entry : pci_class_name_table) {
+		if (entry.class_base != class_base) continue;
+		if (entry.class_sub != class_sub) continue;
+		if (entry.class_if != MatchAnyClassIf && entry.class_if != class_if) continue;
+		return entry.name;
+	}
+	return nullptr;
+}
+
+const char* Devsman::LookupPciDeviceName(uint16 vendor_id, uint16 device_id, uint8 class_base, uint8 class_sub) {
+	if (class_base == 0x06u && class_sub == 0x01u) {
+		const auto kind = uni::ISA::ClassifyBridge(vendor_id, device_id, class_base, class_sub);
+		if (kind != uni::ISA::BridgeKind::Unknown) {
+			return uni::ISA::BridgeKindName(kind);
+		}
+	}
+	if (const auto* entry = find_pci_device_name_entry(vendor_id, device_id)) {
+		return entry->product_name;
+	}
+	return nullptr;
+}
+
+const char* Devsman::LookupPciVendorName(uint16 vendor_id) {
+	switch (vendor_id) {
+	case 0x8086u: return "Intel";
+	case 0x104Bu: return "BusLogic";
+	case 0x15ADu: return "VMware";
+	case 0x1234u: return "QEMU/Bochs";
+	default: return nullptr;
+	}
 }
 #endif
