@@ -754,10 +754,55 @@ namespace {
 			0, primary_bus, secondary_bus, subordinate_bus);
 	}
 
+	//{TEMP}
+	bool is_active_boot_gpu(const uni::PCI::Device& dev) {
+		if (dev.class_code.base != 0x03u) return false;
+		if (!sys_framebuffer.physical_range.address) return false;
+
+		const uint8 header_type = dev.header_type & 0x7Fu;
+		const uint8 bar_count = header_type == 0x01 ? 2 : 6;
+		for (uint8 bar_index = 0; bar_index < bar_count; ++bar_index) {
+			const uint8 addr = 0x10 + bar_index * 4;
+			const uint32 bar_low = uni::PCI::read_config_register(dev, addr);
+			if (!bar_low) continue;
+			if (bar_low & 0x1u) continue; // Skip I/O BARs
+
+			const uint8 mem_type = uint8((bar_low >> 1) & 0x3u);
+			uint64 base = uint64(bar_low & ~0xFu);
+			if (mem_type == 0x2u && bar_index + 1 < bar_count) {
+				const uint32 bar_high = uni::PCI::read_config_register(dev, addr + 4);
+				base |= uint64(bar_high) << 32;
+				bar_index++;
+			}
+
+			// Check if active framebuffer address is within this BAR window
+			if (base && sys_framebuffer.physical_range.address >= base &&
+				sys_framebuffer.physical_range.address < base + 0x100000000ull) {
+				return true;
+			}
+		}
+		return false;
+	}
+
 	uint64 read_pci_mmio_bar_length(const uni::PCI::Device& dev, uint8 bar_index, uint32 bar_low, uint8 bar_count) {
 		const uint8 addr = 0x10 + bar_index * 4;
 		const uint8 mem_type = uint8((bar_low >> 1) & 0x3u);
 		if (mem_type == 0x2u && bar_index + 1 >= bar_count) return 0;
+
+		//{TEMP}
+		// Protect the active boot GPU from write probing
+		if (is_active_boot_gpu(dev)) {
+			uint64 base = uint64(bar_low & ~0xFu);
+			if (mem_type == 0x2u) {
+				const uint32 bar_high = uni::PCI::read_config_register(dev, addr + 4);
+				base |= uint64(bar_high) << 32;
+			}
+			if (base && sys_framebuffer.physical_range.address >= base &&
+				sys_framebuffer.physical_range.address < base + 0x100000000ull) {
+				return sys_framebuffer.physical_range.length;
+			}
+			return 0; // Skip size probing for other BARs on active GPU
+		}
 
 		if (mem_type == 0x2u) {
 			const uint32 bar_high = uni::PCI::read_config_register(dev, addr + 4);

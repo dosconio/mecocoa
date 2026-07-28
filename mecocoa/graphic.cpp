@@ -11,6 +11,7 @@ static void SafeLaymanUpdate(SheetTrait* sheet, const Rectangle& rect) {
 }
 
 
+
 #include <c/driver/mouse.h>
 #include <c/driver/keyboard.h>
 #include "../include/console.hpp"
@@ -582,6 +583,17 @@ static stdsint GraphicMsg_FDEL(stduint pform_id, ProcessBlock* pb) {
 	return 0;
 }
 
+static void FocusTopFormAfterCloseIfNeeded() {
+	SheetTrait* top_form = nullptr;
+	{
+		auto layman = global_layman.Lock();
+		if (!layman->subf || !layman->subf->next || !layman->subf->next->next) return;
+		top_form = static_cast<SheetTrait*>(layman->subf->next->offs);
+	}
+	if (!top_form || Consman::last_click_sheet == top_form) return;
+	Consman::SwitchForm(top_form);
+}
+
 static void DestroyDetachedForm(::uni::Witch::Form* pfrm) {
 	if (!pfrm) return;
 
@@ -610,6 +622,7 @@ static void DestroyDetachedForm(::uni::Witch::Form* pfrm) {
 		pfrm->sheet_buffer = nullptr;
 	}
 	delete pfrm;
+	FocusTopFormAfterCloseIfNeeded();
 }
 
 static void _CleanSingleForm(ProcessBlock* pb, stduint pform_id) {

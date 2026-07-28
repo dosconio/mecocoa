@@ -528,6 +528,54 @@ DEFSYSC sysc_TEST(stduint t, stduint e, stduint s) {
 	return pb->pid;
 }
 
+void sysinfo_classic(OstreamTrait& com1, byte func);
+
+DEFSYSC sysc_DBUG(stduint func) {
+	auto th = Taskman::CurrentTB();
+	if (th && th->parent_process) {
+		ProcessBlock* pb = th->parent_process;
+		struct DbugStream : public OstreamTrait {
+			ProcessBlock* pb;
+			DbugStream(ProcessBlock* pb) : pb(pb) {}
+			virtual int out(const char* str, stduint len) override {
+				if (pb && len) {
+					auto files = pb->fileman.Lock();
+					if (1 < files->pfiles.Count() && files->pfiles[1] && files->pfiles[1]->vfile) {
+						FileDescriptor* fd_entry = files->pfiles[1];
+						vfs_file* file = fd_entry->vfile;
+						const bool is_magic_tty = file->f_inode &&
+							(file->f_inode->i_mode & I_TYPE_MASK) == I_CHAR_SPECIAL &&
+							(stduint)file->f_inode->internal_handler == (stduint)~0;
+						if (is_magic_tty) {
+							auto focus_tty = pb->focus_tty.Lock();
+							if (*focus_tty && (*focus_tty)->offs) {
+								Console_t* con = (Console_t*)(*focus_tty)->offs;
+								con->out(str, len);
+							}
+							files.Unlock();
+						} else {
+							files.Unlock();
+							Filesys::Write(file, str, len);
+							auto files_re = pb->fileman.Lock();
+							if (1 < files_re->pfiles.Count() && files_re->pfiles[1] == fd_entry && fd_entry->vfile == file) {
+								fd_entry->fd_pos = file->f_pos;
+							}
+							files_re.Unlock();
+						}
+					} else {
+						files.Unlock();
+					}
+				}
+				return len;
+			}
+		} stream(pb);
+		sysinfo_classic(stream, (byte)func);
+		// sysinfo_classic(*(Console_t*)vttys[1]->offs, (byte)func);
+		return 0;
+	}
+	return -1;
+}
+
 
 DEFSYSC sysc_SIGA(stduint sig, stduint act, stduint oact) {
 	auto pb = Taskman::CurrentPB();
@@ -846,6 +894,7 @@ stduint Handint_SYSCALL(CallgateFrame* frame) {
 		#endif
 		break;
 	case syscall_t::TEST: ret_val = sysc_TEST(para[0], para[1], para[2]); break;
+	case syscall_t::DBUG: ret_val = sysc_DBUG(para[0]); break;
 	
 	default:
 		printlog(_LOG_ERROR, "Unimplemented syscall: 0x%[32H]", _IMM(callid));

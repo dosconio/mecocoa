@@ -118,7 +118,10 @@ void Coreman::Initialize() {
 		setMSR(x86MSR::APIC_ICR_LOW, 0xC4600 | (ap_entry >> PAGESIZE_4KB));
 		for0(i, 10) {
 			PIT_Wait_MS(1);
-			if (*cores_count.Lock() == 0) break;
+			if (*cores_count.Lock() == 0) {
+				ploginfo("[Devsman] APs are ready after %dms", i);
+				break;
+			}
 		}
 	}
 	else if (IC.getType() == 1) {

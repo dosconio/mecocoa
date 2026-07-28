@@ -526,6 +526,7 @@ void serv_file_loop()// for IDE 0:0, 0:1
 			Taskman::Append(ribbon);
 			Taskman::AppendThread(ribbon->main_thread);
 
+			//{TORM}
 			ploginfo("Loading first Shell...");
 			ProcessBlock* shell_p = Taskman::Create((void*)&serv_shell_process, RING_M);
 			if (shell_p) shell_p->main_thread->name = "shell";

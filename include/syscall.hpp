@@ -57,6 +57,7 @@ enum
 	FUTX, // futex         (addr, op, val)->status       | x86 x64
 
 
+	DBUG = 0xFE, // sysinfo_classic to stdout(func)
 	TEST = 0xFF, // getpid (T,E,S)->0 | x86
 };// . stand for well for multi-thread
 // Locks usually end with `_lock;`

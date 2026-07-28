@@ -47,6 +47,7 @@ all: $(BIN_DIR) \
 	$(BIN_DIR)/ribbon \
 	$(BIN_DIR)/reboot \
 	$(BIN_DIR)/shutdown \
+	$(BIN_DIR)/sysc \
 	\
 	$(BIN_DIR)/_thread \
 
@@ -115,6 +116,10 @@ $(BIN_DIR)/reboot: subapps/reboot.cpp $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
 $(BIN_DIR)/shutdown: subapps/shutdown.cpp $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
 	@echo "MK shutdown"
 	$(MCCA_X86_CXX) $(MCCA_X86_CXXFLAGS) -o $@ subapps/shutdown.cpp $(MCCA_X86_LDLIBS)
+
+$(BIN_DIR)/sysc: subapps/sysc.cpp $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
+	@echo "MK sysc"
+	$(MCCA_X86_CXX) $(MCCA_X86_CXXFLAGS) -o $@ subapps/sysc.cpp $(MCCA_X86_LDLIBS)
 
 $(BIN_DIR)/_thread: subapps/_test/thread.cpp $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
 	@echo "MK thread"

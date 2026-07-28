@@ -45,6 +45,7 @@ all: $(BIN_DIR) \
 	$(BIN_DIR)/notepad \
 	$(BIN_DIR)/viewpic \
 	$(BIN_DIR)/ribbon \
+	$(BIN_DIR)/sysc \
 	\
 
 
@@ -99,6 +100,10 @@ $(BIN_DIR)/viewpic: subapps/viewpic.cpp $(ulibpath)/cpp/fileformat/picture/BMP.c
 $(BIN_DIR)/ribbon: subapps/ribbon.cpp $(MCCA_X64_CRT0) $(MCCA_X64_LIBC)
 	@echo "MK ribbon"
 	$(MCCA_X64_CXX) $(MCCA_X64_CXXFLAGS) -o $@ subapps/ribbon.cpp $(MCCA_X64_LDLIBS)
+
+$(BIN_DIR)/sysc: subapps/sysc.cpp $(MCCA_X64_CRT0) $(MCCA_X64_LIBC)
+	@echo "MK sysc"
+	$(MCCA_X64_CXX) $(MCCA_X64_CXXFLAGS) -o $@ subapps/sysc.cpp $(MCCA_X64_LDLIBS)
 
 clean:
 	@echo "RM $(BIN_DIR)"
