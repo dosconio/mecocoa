@@ -193,6 +193,8 @@ static void dump_device_tree_pci_description(OstreamTrait& com1, const DeviceNod
 	#if (_MCCA & 0xFF00) == 0x8600
 	const rostr class_name = Devsman::LookupPciClassName(
 		node.fields.class_base, node.fields.class_sub, node.fields.class_if);
+	const rostr vendor_name = node.fields.text_manufacturer ? node.fields.text_manufacturer :
+		Devsman::LookupPciVendorName(node.fields.vendor_id);
 	rostr product_name = node.fields.text_product;
 	if (!product_name || !product_name[0]) {
 		product_name = Devsman::LookupPciDeviceName(
@@ -200,15 +202,19 @@ static void dump_device_tree_pci_description(OstreamTrait& com1, const DeviceNod
 	}
 	if ((!class_name || !class_name[0]) && (!product_name || !product_name[0])) return;
 	dump_device_tree_indent(com1, depth);
+	com1.OutFormat("- ");
+	if (vendor_name && vendor_name[0]) {
+		com1.OutFormat("[%s] ", vendor_name);
+	}
 	if (class_name && class_name[0]) {
-		com1.OutFormat("- %s", class_name);
+		com1.OutFormat("%s", class_name);
 		if (product_name && product_name[0]) {
 			com1.OutFormat(": %s", product_name);
 		}
 		com1.OutFormat("\n\r");
 		return;
 	}
-	com1.OutFormat("- %s\n\r", product_name);
+	com1.OutFormat("%s\n\r", product_name);
 	#endif
 }
 

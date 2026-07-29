@@ -72,13 +72,13 @@ No Use
 - SATA 
 	- AHCI (MBR, GPT, ATAPI) 4:30
 - SCSI (MBR, GPT, ATAPI) 4:16
+- NVMe (MBR, GPT) 4:64
 
 Filesys
 - FAT 12/16/32
 
 TODO:
 - SAS(including SATA)
-- NVMe
 
 
 ## RV qemuvirt

@@ -1,6 +1,5 @@
 // ASCII C/C++ TAB4 CRLF
 // Docutitle: BMP Image Viewer Application
-// Codifiers: @Antigravity
 // Attribute: Mecocoa Sub-Application
 // Copyright: Dosconio Mecocoa
 

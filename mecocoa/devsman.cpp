@@ -6,6 +6,7 @@
 #include <cpp/Device/Bus/ISA.hpp>
 #include <cpp/Device/Bus/PCI.hpp>
 #include <c/storage/AHCI.h>
+#include <c/storage/NVMe.h>
 #if _MCCA == 0x8664
 #include <cpp/Device/USB/xHCI/xHCI.hpp>
 #endif
@@ -24,6 +25,7 @@ namespace {
 		Scsi,
 		Pata,
 		Ahci,
+		Nvme,
 		PciBridge,
 		Xhci,
 	};
@@ -80,7 +82,6 @@ namespace {
 	struct PciDeviceNameEntry {
 		uint16 vendor_id;
 		uint16 device_id;
-		const char* vendor_name;
 		const char* product_name;
 	};
 
@@ -102,8 +103,9 @@ namespace {
 		{0x01u, 0x00u, MatchAnyClassIf, "SCSI storage controller"},
 		{0x01u, 0x01u, 0x8Au, "ISA Compatibility IDE controller"},
 		{0x01u, 0x01u, MatchAnyClassIf, "IDE interface"},
-		{AHCI_PCI_CLASS_BASE, AHCI_PCI_CLASS_SUB, AHCI_PCI_CLASS_IF, "AHCI SATA controller"},
+		{0x01u, 0x06u, 0x01u, "AHCI SATA controller"},
 		{0x01u, 0x06u, MatchAnyClassIf, "SATA controller"},
+		{0x01, 0x08u, 0x02u, "NVM controller"},
 		{0x03u, 0x00u, MatchAnyClassIf, "VGA compatible controller"},
 		{0x06u, 0x00u, MatchAnyClassIf, "Host bridge"},
 		{0x06u, 0x01u, MatchAnyClassIf, "ISA bridge"},
@@ -113,15 +115,16 @@ namespace {
 	};
 
 	constexpr PciDeviceNameEntry pci_device_name_table[] = {
-		{0x8086u, 0x1237u, "Intel", "Intel 82441FX PMC host bridge"},
-		{0x8086u, 0x7000u, "Intel", "Intel 82371SB PIIX3 ISA bridge"},
-		{0x8086u, 0x7110u, "Intel", "Intel 82371AB PIIX4 ISA bridge"},
-		{0x8086u, 0x7111u, "Intel", "Intel 82371AB PIIX4 IDE"},
-		{0x104Bu, 0x1040u, "BusLogic", "BusLogic MultiMaster SCSI host adapter"},
-		{0x15ADu, 0x0405u, "VMware", "VMware SVGA II Adapter"},
-		{0x15ADu, 0x0740u, "VMware", "VMware virtual machine communication interface"},
-		{0x15ADu, 0x0790u, "VMware", "VMware PCI bridge"},
-		{0x1234u, 0x1111u, "QEMU/Bochs", "QEMU/Bochs VGA adapter"},
+		{0x8086u, 0x1237u, "82441FX PMC host bridge"},// PCI and Memory Controller
+		{0x8086u, 0x7190u, "440BX/ZX/DX - 82443BX/ZX/DX Host bridge"},
+		{0x8086u, 0x7000u, "82371SB PIIX3 ISA bridge"},
+		{0x8086u, 0x7110u, "82371AB PIIX4 ISA bridge"},
+		{0x8086u, 0x7111u, "82371AB PIIX4 IDE"},
+		{0x104Bu, 0x1040u, "MultiMaster SCSI host adapter"},
+		{0x15ADu, 0x0405u, "SVGA II Adapter"},
+		{0x15ADu, 0x0740u, "virtual machine communication interface"},
+		{0x15ADu, 0x0790u, "PCI bridge"},
+		{0x1234u, 0x1111u, "VGA adapter"},
 	};
 
 	bool is_x86_legacy_isa_platform_name(const char* name) {
@@ -164,6 +167,23 @@ namespace {
 		return true;
 	}
 
+	bool probe_nvme_device(DeviceNode* node) {
+		if (!node) return false;
+		const auto* bar0 = Devsman::FindResource(node, DeviceResourceType::PciBarMmio, 0);
+		if (!bar0) {
+			plogwarn("[DEVSMAN] NVMe %s missing BAR0 resource",
+				node->link.addr ? node->link.addr : "(unnamed)");
+			return false;
+		}
+		const auto* irq = Devsman::FindResource(node, DeviceResourceType::IrqLine, 0);
+		node->fields.binding.probe_result = irq ? 0 : 1;
+		ploginfo("[DEVSMAN] NVMe %s BAR0=%[64H]%s",
+			node->link.addr ? node->link.addr : "(unnamed)",
+			bar0->start,
+			irq ? "" : " irq=none");
+		return true;
+	}
+
 	bool probe_scsi_device(DeviceNode* node) {
 		if (!node) return false;
 		const auto* io_bar = Devsman::FindResource(node, DeviceResourceType::PciBarIo, 0);
@@ -201,6 +221,7 @@ namespace {
 	constexpr DriverOpsEntry pci_driver_ops_table[] = {
 		{"xhci", probe_xhci_device},
 		{"ahci", probe_ahci_device},
+		{"nvme", probe_nvme_device},
 		{"scsi", probe_scsi_device},
 		{"video-vmware", probe_video_vmware_device},
 		{"video-bochs", probe_video_bochs_device},
@@ -494,6 +515,11 @@ namespace {
 			node->fields.class_if == AHCI_PCI_CLASS_IF) {
 			return PciDriverKind::Ahci;
 		}
+		if (node->fields.class_base == NVME_PCI_CLASS_BASE &&
+			node->fields.class_sub == NVME_PCI_CLASS_SUB &&
+			node->fields.class_if == NVME_PCI_CLASS_IF) {
+			return PciDriverKind::Nvme;
+		}
 		if (node->fields.class_base == 0x06u && node->fields.class_sub == 0x04u) {
 			return PciDriverKind::PciBridge;
 		}
@@ -518,6 +544,10 @@ namespace {
 
 	void bind_pci_device(DeviceNode* node) {
 		if (!node) return;
+		if (node->fields.class_base == 0x06u && node->fields.class_sub == 0x00u) {
+			set_driver_binding(node, "host-bridge");
+			return;
+		}
 		if (uni::ISA::IsBridgeDevice(node->fields.vendor_id, node->fields.device_id,
 			node->fields.class_base, node->fields.class_sub)) {
 			set_driver_binding(node, "isa-bridge");
@@ -542,6 +572,9 @@ namespace {
 			return;
 		case PciDriverKind::Ahci:
 			set_driver_binding(node, "ahci");
+			return;
+		case PciDriverKind::Nvme:
+			set_driver_binding(node, "nvme");
 			return;
 		case PciDriverKind::PciBridge:
 			set_driver_binding(node, "pci-bridge");
@@ -895,8 +928,10 @@ namespace {
 		dev_node->fields.pci_bus = dev.bus;
 		dev_node->fields.pci_device = dev.device;
 		dev_node->fields.pci_function = dev.function;
+		if (const char* vendor_name = Devsman::LookupPciVendorName(dev_node->fields.vendor_id)) {
+			dev_node->fields.text_manufacturer = StrHeap(vendor_name);
+		}
 		if (const auto* entry = find_pci_device_name_entry(dev_node->fields.vendor_id, dev_node->fields.device_id)) {
-			dev_node->fields.text_manufacturer = StrHeap(entry->vendor_name);
 			dev_node->fields.text_product = StrHeap(entry->product_name);
 		}
 		append_pci_bar_resources(dev_node, dev);
@@ -940,8 +975,10 @@ namespace {
 		if (!pci_node->fields.text_product) {
 			pci_node->fields.text_product = StrHeap(uni::ISA::BridgeKindName(kind));
 		}
-		if (!pci_node->fields.text_manufacturer && pci_node->fields.vendor_id == 0x8086u) {
-			pci_node->fields.text_manufacturer = StrHeap("Intel");
+		if (!pci_node->fields.text_manufacturer) {
+			if (const char* vendor_name = Devsman::LookupPciVendorName(pci_node->fields.vendor_id)) {
+				pci_node->fields.text_manufacturer = StrHeap(vendor_name);
+			}
 		}
 		auto* isa_node = ensure_isa_bus_node(pci_node);
 		if (!legacy_isa_bus) legacy_isa_bus = isa_node;
@@ -1776,10 +1813,10 @@ const char* Devsman::LookupPciDeviceName(uint16 vendor_id, uint16 device_id, uin
 
 const char* Devsman::LookupPciVendorName(uint16 vendor_id) {
 	switch (vendor_id) {
-	case 0x8086u: return "Intel";
 	case 0x104Bu: return "BusLogic";
-	case 0x15ADu: return "VMware";
 	case 0x1234u: return "QEMU/Bochs";
+	case 0x15ADu: return "VMware";
+	case 0x8086u: return "Intel";
 	default: return nullptr;
 	}
 }

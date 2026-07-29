@@ -8,6 +8,20 @@
 
 #if (_MCCA & 0xFF00) == 0x8600
 
+static void EnsureFramebufferMapped(const uni::Slice& physical_range) {
+	if (!physical_range.address || !physical_range.length) return;
+	const stduint page_base = stduint(physical_range.address) & ~0xFFFu;
+	const stduint page_end = stduint((physical_range.address + physical_range.length + 0xFFFu) & ~0xFFFu);
+	if (page_end <= page_base) return;
+	kernel_paging.Map(
+		page_base,
+		page_base,
+		page_end - page_base,
+		PAGESIZE_4KB,
+		PGPROP_present | PGPROP_writable
+	);
+}
+
 class BochsVideoDevice : public VideoDevice {
 public:
 	FramebufferInfo fb_info;
@@ -23,6 +37,7 @@ public:
 			fb_info.pitch = mode.resolution.x * 4;
 			fb_info.format = uni::PixelFormat::ARGB8888;
 			fb_info.physical_range = uni::Slice{ fb_info.physical_range.address, (stduint)(fb_info.pitch * fb_info.screen_size.y) };
+			EnsureFramebufferMapped(fb_info.physical_range);
 			return true;
 		}
 		return false;
@@ -75,6 +90,7 @@ bool BochsVideo_Start(DeviceNode* node) {
 	dev->fb_info.pitch = xres * 4;
 	dev->fb_info.format = uni::PixelFormat::ARGB8888;
 	dev->fb_info.physical_range = uni::Slice{ bar0->start, (stduint)(dev->fb_info.pitch * yres) };
+	EnsureFramebufferMapped(dev->fb_info.physical_range);
 
 	node->fields.binding.driver_data = dev;
 	Consman::AdoptVideoDevice(dev);
