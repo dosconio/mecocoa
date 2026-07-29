@@ -64,6 +64,7 @@ cppfile=\
 	$(ulibpath)/cpp/Device/Video/VMware-SVGA.cpp \
 	$(ulibpath)/cpp/Device/Video-VCI.cpp \
 	$(ulibpath)/cpp/Device/Video.cpp $(ulibpath)/cpp/Device/Video-VideoConsole2.cpp \
+	$(ulibpath)/cpp/Device/Storage/Harddisk-SATA.cpp\
 	$(wildcard $(ulibpath)/cpp/Device/USB/*.cpp) $(wildcard $(ulibpath)/cpp/Device/USB/xHCI/*.cpp) \
 	\
 	depends/cotlabx.cpp \

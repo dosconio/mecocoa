@@ -1,0 +1,115 @@
+
+# ---- COTL INIT ---- #
+# ---- UNIS UTIL ---- #
+# ---- MCCA UTIL ---- #
+
+.PHONY: all clean
+
+apps += \
+	$(BIN_DIR) \
+	$(BIN_DIR)/init \
+	$(BIN_DIR)/cot \
+	$(BIN_DIR)/ribbon \
+	$(UNIS_UTIL_APPS) \
+
+apps += \
+	$(BIN_DIR)/sysc \
+	$(BIN_DIR)/fault \
+	\
+	$(BIN_DIR)/reboot \
+	$(BIN_DIR)/shutdown \
+	$(BIN_DIR)/paint \
+	$(BIN_DIR)/cube \
+	$(BIN_DIR)/gblock \
+	$(BIN_DIR)/notepad \
+	$(BIN_DIR)/viewpic \
+	\
+	$(BIN_DIR)/test \
+	$(BIN_DIR)/_thread \
+	
+
+all: $(apps)
+
+$(BIN_DIR):
+	mkdir -p $@
+
+#####
+
+$(BIN_DIR)/%: $(UNIS_UTIL_DIR)/%.c $(MCCA_CRT0) $(MCCA_LIBC)
+	@echo "MK $*"
+	$(MCCA_CC) $(MCCA_CFLAGS) -o $@ $< $(MCCA_LDLIBS)
+
+$(BIN_DIR)/%: $(UNIS_UTIL_DIR)/%.cpp $(MCCA_CRT0) $(MCCA_LIBC)
+	@echo "MK $*"
+	$(MCCA_CXX) $(MCCA_CXXFLAGS) -o $@ $< $(MCCA_LDLIBS)
+
+$(BIN_DIR)/init: subapps/init.cpp $(MCCA_CRT0) $(MCCA_LIBC)
+	@echo "MK appinit"
+	$(MCCA_CXX) $(MCCA_CXXFLAGS) -o $@ $< $(MCCA_LDLIBS)
+
+$(BIN_DIR)/cot: $(wildcard $(uherpath)/COTLAB/src/*.cpp) $(LIBNATIVE) $(MCCA_CRT0)
+	@echo "MK appshell"
+	$(MCCA_CXX) $(MCCA_CXXFLAGS) -o $@ $(uherpath)/COTLAB/src/*.cpp \
+		$(MCCA_LDLIBS) -lm
+
+$(BIN_DIR)/ribbon: subapps/ribbon.cpp $(MCCA_CRT0) $(MCCA_LIBC)
+	@echo "MK ribbon"
+	$(MCCA_CXX) $(MCCA_CXXFLAGS) -o $@ subapps/ribbon.cpp $(MCCA_LDLIBS)
+
+#####
+
+$(BIN_DIR)/sysc: subapps/sysc.cpp $(MCCA_CRT0) $(MCCA_LIBC)
+	@echo "MK sysc"
+	$(MCCA_CXX) $(MCCA_CXXFLAGS) -o $@ subapps/sysc.cpp $(MCCA_LDLIBS)
+
+
+$(BIN_DIR)/fault: subapps/fault.cpp $(MCCA_CRT0) $(MCCA_LIBC)
+	@echo "MK fault"
+	$(MCCA_CXX) $(MCCA_CXXFLAGS) -o $@ subapps/fault.cpp $(MCCA_LDLIBS)
+
+
+#
+
+$(BIN_DIR)/reboot: subapps/reboot.cpp $(MCCA_CRT0) $(MCCA_LIBC)
+	@echo "MK reboot"
+	$(MCCA_CXX) $(MCCA_CXXFLAGS) -o $@ subapps/reboot.cpp $(MCCA_LDLIBS)
+
+$(BIN_DIR)/shutdown: subapps/shutdown.cpp $(MCCA_CRT0) $(MCCA_LIBC)
+	@echo "MK shutdown"
+	$(MCCA_CXX) $(MCCA_CXXFLAGS) -o $@ subapps/shutdown.cpp $(MCCA_LDLIBS)
+
+$(BIN_DIR)/paint: subapps/paint.cpp $(MCCA_CRT0) $(MCCA_LIBC)
+	@echo "MK paint"
+	$(MCCA_CXX) $(MCCA_CXXFLAGS) -o $@ $< $(MCCA_LDLIBS)
+
+$(BIN_DIR)/cube: subapps/cube.cpp $(MCCA_CRT0) $(MCCA_LIBC)
+	@echo "MK cube"
+	$(MCCA_CXX) $(MCCA_CXXFLAGS) -o $@ subapps/cube.cpp $(MCCA_LDLIBS)
+
+$(BIN_DIR)/gblock: subapps/game_breakout.cpp $(MCCA_CRT0) $(MCCA_LIBC)
+	@echo "MK game_breakout"
+	$(MCCA_CXX) $(MCCA_CXXFLAGS) -o $@ subapps/game_breakout.cpp $(MCCA_LDLIBS)
+
+$(BIN_DIR)/notepad: subapps/notepad.cpp $(MCCA_CRT0) $(MCCA_LIBC)
+	@echo "MK notepad"
+	$(MCCA_CXX) $(MCCA_CXXFLAGS) -o $@ subapps/notepad.cpp $(MCCA_LDLIBS)
+
+$(BIN_DIR)/viewpic: subapps/viewpic.cpp $(ulibpath)/cpp/fileformat/picture/BMP.cpp $(MCCA_CRT0) $(MCCA_LIBC)
+	@echo "MK viewpic"
+	$(MCCA_CXX) $(MCCA_CXXFLAGS) -o $@ subapps/viewpic.cpp $(ulibpath)/cpp/fileformat/picture/BMP.cpp $(MCCA_LDLIBS)
+
+#
+
+$(BIN_DIR)/test: subapps/test.cpp $(MCCA_CRT0) $(MCCA_LIBC)
+	@echo "MK subtest"
+	$(MCCA_CXX) $(MCCA_CXXFLAGS) -o $@ subapps/test.cpp $(MCCA_LDLIBS)
+
+$(BIN_DIR)/_thread: subapps/_test/thread.cpp $(MCCA_CRT0) $(MCCA_LIBC)
+	@echo "MK thread"
+	$(MCCA_CXX) $(MCCA_CXXFLAGS) -o $@ subapps/_test/thread.cpp $(MCCA_LDLIBS)
+
+#####
+
+clean:
+	@echo "RM $(BIN_DIR)"
+	@-rm -rf $(BIN_DIR) 1>/dev/null

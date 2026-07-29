@@ -801,7 +801,9 @@ namespace {
 				sys_framebuffer.physical_range.address < base + 0x100000000ull) {
 				return sys_framebuffer.physical_range.length;
 			}
-			return 0; // Skip size probing for other BARs on active GPU
+			// Skip size probing for other BARs on active GPU to prevent hardware lockup,
+			// but return a safe default size (2MB) to ensure virtual page mapping is created.
+			return 2 * 1024 * 1024;
 		}
 
 		if (mem_type == 0x2u) {

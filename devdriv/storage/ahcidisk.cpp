@@ -3,7 +3,7 @@
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 
 #include "../../include/mecocoa.hpp"
-#if _MCCA == 0x8632
+#if (_MCCA & 0xFF00) == 0x8600
 #include <cpp/Device/Bus/PCI.hpp>
 #include <c/storage/harddisk.h>
 #include <c/format/filesys.h>
@@ -324,6 +324,7 @@ namespace {
 				if (port.is & AHCI_PxIS_TFES) return false;
 				return true;
 			}
+			__asm__ __volatile__("pause" ::: "memory");
 		}
 		g_ahci_controller.irq_waiting = 0;
 		return true;
@@ -425,7 +426,11 @@ void R_AHCI_INIT() {
 	if (!PCI_Init(pci)) {
 		plogwarn("[AHCI] No devices on PCI or PCI init failed.");
 	}
+	#if _MCCA == 0x8664
+	IC[IRQ_AHCI].setModeRupt(mglb(Handint_AHCI_Entry), SegCo64);
+	#else
 	IC[IRQ_AHCI].setRange(mglb(Handint_AHCI_Entry), SegCo32);
+	#endif
 	register_interrupt_handler(IRQ_AHCI, Handint_AHCI);
 	Devsman::RegisterDriverStarter("ahci", start_ahci_driver);
 	Devsman::StartKnownDrivers();
