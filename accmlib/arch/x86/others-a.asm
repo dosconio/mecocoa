@@ -8,7 +8,7 @@
 [CPU 586]
 ;%include "mecocoa/kernel.inc"
 
-GLOBAL syscall, __sigrestorer
+GLOBAL syscall, syscall_callgate, __sigrestorer
 
 section .text
 
@@ -16,6 +16,28 @@ SegCall EQU 8*7
 
 syscall:
 	;PUSHAD
+	PUSH EBX
+	PUSH ECX
+	PUSH EDX
+	PUSH ESI
+	PUSH EDI
+	PUSH EBP
+	MOV EAX, [ESP + 4*(1+6+0)]
+	MOV ECX, [ESP + 4*(1+6+1)]
+	MOV EDX, [ESP + 4*(1+6+2)]
+	MOV EBX, [ESP + 4*(1+6+3)]
+	INT 0x81
+	;POPAD;{TODO} PROC RETURN VALUE
+	POP EBP
+	POP EDI
+	POP ESI
+	POP EDX
+	POP ECX
+	POP EBX
+
+RET
+
+syscall_callgate:
 	PUSH EBX
 	PUSH ECX
 	PUSH EDX
@@ -39,6 +61,6 @@ RET
 
 __sigrestorer:
 	MOV EAX, 0x15 ; syscall_t::SIGR (0x15)
-	CALL SegCall|3:0
+	INT 0x81
 
 section .note.GNU-stack noalloc noexec nowrite progbits

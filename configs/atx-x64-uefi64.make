@@ -99,14 +99,14 @@ build: clean accm $(archdir)/kerdisk.fat $(ubinpath)/$(arch).img $(asmobjs) $(cp
 	@echo $(sudokey) | sudo -S mount -o loop $(archdir)/kerdisk.fat $(mntdir)
 	#
 	@echo $(sudokey) | sudo -S cp $(uobjpath)/sapp-$(arch)/*    $(mntdir)/
-	tree $(mntdir)
+# 	tree $(mntdir)
 	@echo $(sudokey) | sudo -S umount $(mntdir)
 	@echo $(sudokey) | sudo -S mount -o loop $(ubinpath)/$(arch).img $(mntdir)
 	@echo $(sudokey) | sudo -S mkdir -p $(mntdir)/EFI/BOOT
 	@echo $(sudokey) | sudo -S cp $(loader) $(mntdir)/EFI/BOOT/BOOTX64.EFI
 	@echo $(sudokey) | sudo -S cp $(ubinpath)/$(elf_kernel) $(mntdir)/kernel.elf
 	@echo $(sudokey) | sudo -S cp $(archdir)/kerdisk.fat $(mntdir)/
-	tree $(mntdir)
+# 	tree $(mntdir)
 	@echo $(sudokey) | sudo -S umount $(mntdir)
 	# update
 	qemu-img convert -f raw -O vpc $(ubinpath)/$(arch).img $(ubinpath)/$(arch).vhd

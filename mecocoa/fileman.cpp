@@ -315,19 +315,38 @@ stdsint ProcessBlock::Dup2(int oldfd, int newfd) {
 		return -1;
 	}
 
-	// POSIX standard: doing nothing if oldfd equals newfd
-	if (oldfd == newfd) {
-		return newfd;
+	if (newfd < 0) {
+		// Find a minimum available file slot (dup semantics)
+		for (stduint i = 0; i < files->pfiles.Count(); i++) {
+			if (!files->pfiles[i]) {
+				newfd = i;
+				break;
+			}
+		}
+		if (newfd == -1 && files->pfiles.Count() < DEFAULT_FILES_LIMIT) {
+			newfd = files->pfiles.Count();
+			files->pfiles.Append(nullptr);
+		}
+		if (newfd == -1) {
+			plogwarn("no file slot available");
+			return -1;
+		}
 	}
+	else {
+		// POSIX standard: doing nothing if oldfd equals newfd
+		if (oldfd == newfd) {
+			return newfd;
+		}
 
-	// Close the target file descriptor first if it is open
-	if (newfd >= 0 && newfd < (stdsint)files->pfiles.Count() && files->pfiles[newfd]) {
-		CloseFileSlotUnlocked(*files, newfd);
-	}
+		// Close the target file descriptor first if it is open
+		if (newfd < (stdsint)files->pfiles.Count() && files->pfiles[newfd]) {
+			CloseFileSlotUnlocked(*files, newfd);
+		}
 
-	// Expand the process file descriptors vector size if needed
-	while (files->pfiles.Count() <= (stduint)newfd) {
-		files->pfiles.Append(nullptr);
+		// Expand the process file descriptors vector size if needed
+		while (files->pfiles.Count() <= (stduint)newfd) {
+			files->pfiles.Append(nullptr);
+		}
 	}
 
 	// Duplicate descriptor to the target slot

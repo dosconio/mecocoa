@@ -125,6 +125,10 @@ extern "C" int dup2(int oldfd, int newfd) {
 	return (int)syscall(syscall_t::DUP2, (stduint)oldfd, (stduint)newfd, nil);
 }
 
+extern "C" int dup(int oldfd) {
+	return dup2(oldfd, -1);
+}
+
 extern "C" int pipe(int pipefd[2]) {
 	return (int)syscall(syscall_t::PIPE, (stduint)pipefd, nil, nil);
 }

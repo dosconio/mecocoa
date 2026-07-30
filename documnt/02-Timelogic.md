@@ -3,6 +3,12 @@ dg-publish: true
 her-note: false
 ---
 
+20260730:
+- Abandon Callgate of x86, for classic INTCALL
+
+2026Beta:
+- Abandon unisym.bootx86.loader (BIOS)
+
 Since 20250102:
 
 ```

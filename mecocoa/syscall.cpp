@@ -29,7 +29,8 @@ extern stduint SYSCALL_TABLE[37];
 
 void Syscall::Initialize() {
 	#if _MCCA == 0x8632
-	IC[IRQ_SYSCALL].setRange(mglb(Handint_INTCALL_Entry), SegCo32); IC[IRQ_SYSCALL].DPL = 3;
+	// IC[IRQ_SYSCALL].setRange(mglb(Handint_INTCALL_Entry), SegCo32); IC[IRQ_SYSCALL].DPL = 3;// outdated 20260730
+	IC[IRQ_SYSCALL].setModeRupt(mglb(Handint_INTCALL_Entry), SegCo32)->DPL = 3;
 
 	#elif _MCCA == 0x8664
 	setMSR(x86MSR::EFER, 0x0501);

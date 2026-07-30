@@ -42,11 +42,3 @@ qemu-system
 🈚️ qemu-system-xtensaeb
 ```
 
-# Reference
-
-- UNISYM
-- Teaching video of : https://github.com/StevenBaby/onix，學習內容如下
-	- 037 时间
-- Teaching video of : https://github.com/Minep/lunaix-os，學習內容如下
-	- 暂无
-	

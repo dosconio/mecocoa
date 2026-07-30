@@ -264,7 +264,7 @@ Handint_SYSCALL_Entry:
 	; EAX = return mode, 3 means privilege-changing return frame.
 	MOV EBP, ESP
 	MOV EAX, 3
-	JMP .call_handint_common
+	JMP SYSCALL_CALL_COMMON
 
 
 .from_ring0:
@@ -300,10 +300,10 @@ Handint_SYSCALL_Entry:
 	; EAX = return mode, 0 means same-ring return frame.
 	MOV EBP, ESP
 	XOR EAX, EAX
-	JMP .call_handint_common
+	JMP SYSCALL_CALL_COMMON
 
 
-.call_handint_common:
+SYSCALL_CALL_COMMON:
 	; Input:
 	;	EAX = return mode
 	;		0 = ring0 return
@@ -325,11 +325,12 @@ Handint_SYSCALL_Entry:
 
 	POP EAX
 	TEST EAX, EAX
-	JZ .return_ring0
-	JMP .return_ring3
+	JZ SYSCALL_RETURN_RING0
+	JMP SYSCALL_RETURN_RING3
 
 
-.return_ring3:
+SYSCALL_RETURN_RING3:
+	CLI                 ; Disable interrupts before switching to transition stack
 	; EBP = full CallgateFrame*.
 
 	MOV EDX, [EBP + CF_PERCORE]
@@ -368,15 +369,15 @@ Handint_SYSCALL_Entry:
 	MOV EAX, CR3
 	CMP EAX, EBX
 	MOV ESP, EDX
-	JE .skip_user_cr3
+	JE SYSCALL_SKIP_USER_CR3
 	MOV CR3, EBX
-.skip_user_cr3:
+SYSCALL_SKIP_USER_CR3:
 
 	POPAD
 	IRETD
 
 
-.return_ring0:
+SYSCALL_RETURN_RING0:
 	; EBP = full CallgateFrame*.
 
 	LEA EDX, [EBP + CALLGATE_TOTAL_SIZE]
@@ -396,8 +397,155 @@ Handint_SYSCALL_Entry:
 
 GLOBAL Handint_INTCALL_Entry; {unchk}
 Handint_INTCALL_Entry:
-; TODO
-IRETD
+	PUSHAD
+
+	; Interrupt gate frame after PUSHAD:
+	; [ESP + 32] = return IP
+	; [ESP + 36] = return CS
+	; [ESP + 40] = original EFLAGS
+	; [ESP + 44] = old ESP, only when privilege changed
+	; [ESP + 48] = old SS, only when privilege changed
+
+	MOV EAX, [ESP + 36]
+	AND EAX, 3
+	JZ INTCALL_FROM_RING0
+
+INTCALL_FROM_RING3:
+	; Save original user segment selectors on transition stack.
+	XOR EAX, EAX
+	MOV AX, DS
+	PUSH EAX
+
+	XOR EAX, EAX
+	MOV AX, ES
+	PUSH EAX
+
+	XOR EAX, EAX
+	MOV AX, FS
+	PUSH EAX
+
+	XOR EAX, EAX
+	MOV AX, GS
+	PUSH EAX
+
+	; EBP points to the original interrupt frame on transition stack.
+	LEA EBP, [ESP + 16]
+
+	; EBX = user CR3.
+	MOV EBX, CR3
+
+	; Compute CPU id from transition stack page.
+	MOV ECX, ESP
+	AND ECX, 0xFFFFF000
+
+	MOV EAX, 0xFFFFF000
+	SUB EAX, ECX
+	SHR EAX, 12
+	MOV ESI, EAX
+
+	; Access kernel high mapping while still under user CR3.
+	MOV AX, SegData
+	MOV DS, AX
+	MOV ES, AX
+
+	MOV EDI, [0x80000000 + C_PCU_CORES_PERCORE + ESI * 4]
+	MOV EDX, EDI
+
+	; Switch to root paging.
+	MOV EAX, ROOT_PAGING
+	CMP EBX, EAX
+	JE INTCALL_SKIP_ROOT_CR3
+	MOV CR3, EAX
+INTCALL_SKIP_ROOT_CR3:
+
+	; Switch to current thread's own kernel stack.
+	MOV ESP, [EDX + PERCORE_kernel_stack]
+	SUB ESP, CALLGATE_TOTAL_SIZE
+
+	; Copy POPAD restore area.
+	COPY_DWORDS EBP, ESP, 8
+
+	; Translate interrupt gate tail into CallgateFrame order.
+	MOV EAX, [EBP + 40]
+	MOV [ESP + CF_FLAGS], EAX
+	MOV EAX, [EBP + 32]
+	MOV [ESP + CF_IP], EAX
+	MOV EAX, [EBP + 36]
+	MOV [ESP + CF_CS], EAX
+	MOV EAX, [EBP + 44]
+	MOV [ESP + CF_SP0], EAX
+	MOV EAX, [EBP + 48]
+	MOV [ESP + CF_SS0], EAX
+
+	; Fill full CallgateFrame metadata.
+	MOV [ESP + CF_CR3], EBX
+	MOV [ESP + CF_PERCORE], EDX
+
+	MOV EAX, [EBP - 4]
+	MOV [ESP + CF_DS], EAX
+
+	MOV EAX, [EBP - 8]
+	MOV [ESP + CF_ES], EAX
+
+	MOV EAX, [EBP - 12]
+	MOV [ESP + CF_FS], EAX
+
+	MOV EAX, [EBP - 16]
+	MOV [ESP + CF_GS], EAX
+
+	LOAD_KERNEL_SEGS
+
+	MOV EBP, ESP
+	MOV EAX, 3
+	JMP SYSCALL_CALL_COMMON
+
+INTCALL_FROM_RING0:
+	MOV EBP, ESP
+	SUB ESP, CALLGATE_TOTAL_SIZE
+
+	; Copy POPAD restore area.
+	COPY_DWORDS EBP, ESP, 8
+
+	; Translate same-ring interrupt tail into CallgateFrame order.
+	MOV EAX, [EBP + 40]
+	MOV [ESP + CF_FLAGS], EAX
+	MOV EAX, [EBP + 32]
+	MOV [ESP + CF_IP], EAX
+	MOV EAX, [EBP + 36]
+	MOV [ESP + CF_CS], EAX
+	MOV EAX, [EBP + CF_SP]
+	MOV [ESP + CF_SP0], EAX
+	MOV DWORD [ESP + CF_SS0], SegData
+
+	MOV EAX, CR3
+	MOV [ESP + CF_CR3], EAX
+	SAVE_SEGS_TO_FRAME ESP
+	MOV DWORD [ESP + CF_PERCORE], 0
+
+	LOAD_KERNEL_SEGS
+
+	PUSH ESP
+	CALL Handint_SYSCALL
+	ADD ESP, 4
+
+	MOV EBP, ESP
+	MOV [EBP + CF_AX], EAX
+	LEA EDX, [EBP + CALLGATE_TOTAL_SIZE]
+
+	; Build original interrupt frame: POPAD area + IP/CS/EFLAGS.
+	COPY_DWORDS EBP, EDX, 8
+	MOV EAX, [EBP + CF_IP]
+	MOV [EDX + 32], EAX
+	MOV EAX, [EBP + CF_CS]
+	MOV [EDX + 36], EAX
+	MOV EAX, [EBP + CF_FLAGS]
+	MOV [EDX + 40], EAX
+
+	RESTORE_SEGS_FROM_FRAME EBP
+
+	MOV ESP, EDX
+	POPAD
+	IRETD
 
 
 GLOBAL Handint_Common_Stub
@@ -582,6 +730,7 @@ IRQ_CALL_INTERRUPT_COMMON:
 
 
 IRQ_RETURN_RING3:
+	CLI                 ; Disable interrupts before switching to transition stack
 	; EBP = HardwareInterruptFrame* on thread kernel stack.
 
 	MOV EDX, [EBP + IF_PERCORE]

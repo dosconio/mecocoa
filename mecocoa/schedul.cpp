@@ -716,9 +716,6 @@ auto Taskman::Schedule(bool omit_slice)->decltype(Schedule())
 	#else
 	SwitchTaskContext(&new_tb->context, &old_tb->context);
 	#endif
-	#if _MCCA == 0x8632
-	if (old_if) IC.enInterrupt(true);
-	#endif
 }
 #else
 auto Taskman::Schedule(bool omit_slice)->decltype(Schedule()) { }
@@ -768,8 +765,5 @@ void Taskman::SleepAndRelease(Spinlock* lk) {
 	((void(*)(NormalTaskContext*, NormalTaskContext*))mglb(SwitchTaskContext))(&new_tb->context, &old_tb->context);
 	#else
 	SwitchTaskContext(&new_tb->context, &old_tb->context);
-	#endif
-	#if _MCCA == 0x8632
-	if (old_if) IC.enInterrupt(true);
 	#endif
 }
