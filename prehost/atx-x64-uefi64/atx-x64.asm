@@ -398,3 +398,6 @@ IRQ_TRAMPOLINE_64 Handint_MOU_Entry, 0x74
 
 ; AHCI Interrupt
 IRQ_TRAMPOLINE_64 Handint_AHCI_Entry, 0x72
+
+; NVMe Interrupt
+IRQ_TRAMPOLINE_64 Handint_NVME_Entry, 0x73

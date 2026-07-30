@@ -13,12 +13,16 @@ namespace {
 	static constexpr byte NVME_ADMIN_OPC_IDENTIFY = 0x06;
 	static constexpr byte NVME_ADMIN_OPC_CREATE_IO_SQ = 0x01;
 	static constexpr byte NVME_ADMIN_OPC_CREATE_IO_CQ = 0x05;
+	static constexpr byte NVME_ADMIN_OPC_SET_FEATURES = 0x09;
 	static constexpr byte NVME_NVM_OPC_READ = 0x02;
 	static constexpr byte NVME_NVM_OPC_WRITE = 0x01;
+	static constexpr uint8 NVME_FEAT_INTERRUPT_COALESCING = 0x08;
 	static constexpr uint16 NVME_ADMIN_DEPTH_LIMIT = 64;
 	static constexpr stduint NVME_ADMIN_PAGE_SIZE = 0x1000;
 	static constexpr uint16 NVME_IO_QID = 1;
 	static constexpr uint16 NVME_IO_DEPTH_LIMIT = 64;
+	static constexpr uint8 IRQ_NVME = IRQ_RTC + 3;
+	static constexpr stduint NVME_IRQ_WAIT_SPINS = 100000u;
 	static constexpr uint32 NVME_CONTROLLER_INDEX = 0;
 	static constexpr stduint NVME_MAX_NAMESPACES = 8;
 
@@ -74,6 +78,7 @@ namespace {
 		byte* io_cq = nullptr;
 		byte* identify_ns = nullptr;
 		byte* sector_buf = nullptr;
+		uint64* io_prp_list = nullptr;
 		uint16 admin_depth = 0;
 		uint16 sq_tail = 0;
 		uint16 cq_head = 0;
@@ -86,6 +91,19 @@ namespace {
 		byte dstrd = 0;
 		uint32 controller_version = 0;
 		uint32 controller_nn = 0;
+		uint8 irq_vector = 0xFF;
+		volatile uint32 irq_count = 0;
+		volatile uint16 io_irq_wait_cid = 0;
+		volatile byte io_irq_done = 0;
+		uint32 io_irq_dw0 = 0;
+		uint32 io_irq_reserved0 = 0;
+		uint16 io_irq_sq_head = 0;
+		uint16 io_irq_sq_id = 0;
+		uint16 io_irq_cid = 0;
+		uint16 io_irq_status = 0;
+		bool msi_enabled = false;
+		bool irq_log_once = false;
+		bool io_submit_log_once = false;
 		stduint namespace_count = 0;
 		NamespaceInfo namespaces[NVME_MAX_NAMESPACES] = {};
 
@@ -104,6 +122,33 @@ namespace {
 			if (!bar0) return false;
 			regs = reinterpret_cast<volatile uni::NVME_BAR*>(stduint(bar0->start));
 			return regs != nullptr;
+		}
+
+		bool ConfigureInterrupts(const uni::PCI::Device& dev) {
+			if (!node || !regs) return false;
+			const stduint cpu_id = Taskman::getID();
+			auto* percore = (cpu_id < PCU_CORES_MAX) ? Taskman::PCU_CORES_PERCORE[cpu_id] : nullptr;
+			if (!percore || percore->lapic_id >= LAPIC_ID_MAP_SIZE) {
+				plogwarn("[NVMe] MSI setup skipped: no valid LAPIC on cpu%u", (unsigned)cpu_id);
+				return false;
+			}
+			const auto result = pci.configure_MSI_fixed_destination(dev,
+				uint8(percore->lapic_id),
+				uni::PCI::MSITriggerMode::Edge,
+				uni::PCI::MSIDeliveryMode::Fixed,
+				IRQ_NVME, 0);
+			if (result) {
+				plogwarn("[NVMe] MSI setup failed: %s", result.Name());
+				return false;
+			}
+			irq_vector = IRQ_NVME;
+			msi_enabled = true;
+			irq_count = 0;
+			Devsman::AddIrqResource(node, IRQ_NVME);
+			irq = Devsman::FindResource(node, DeviceResourceType::IrqLine, 0);
+			ploginfo("[NVMe] MSI enabled vector=%u lapic=%u",
+				(unsigned)irq_vector, (unsigned)percore->lapic_id);
+			return true;
 		}
 
 		void DumpSummary() const {
@@ -147,11 +192,13 @@ namespace {
 			if (!io_cq) io_cq = (byte*)mempool.allocate(NVME_ADMIN_PAGE_SIZE, 12);
 			if (!identify_ns) identify_ns = (byte*)mempool.allocate(NVME_ADMIN_PAGE_SIZE, 12);
 			if (!sector_buf) sector_buf = (byte*)mempool.allocate(NVME_ADMIN_PAGE_SIZE, 12);
-			if (!io_sq || !io_cq || !identify_ns || !sector_buf) return false;
+			if (!io_prp_list) io_prp_list = (uint64*)mempool.allocate(NVME_ADMIN_PAGE_SIZE, 12);
+			if (!io_sq || !io_cq || !identify_ns || !sector_buf || !io_prp_list) return false;
 			MemSet(io_sq, 0, NVME_ADMIN_PAGE_SIZE);
 			MemSet(io_cq, 0, NVME_ADMIN_PAGE_SIZE);
 			MemSet(identify_ns, 0, NVME_ADMIN_PAGE_SIZE);
 			MemSet(sector_buf, 0, NVME_ADMIN_PAGE_SIZE);
+			MemSet(io_prp_list, 0, NVME_ADMIN_PAGE_SIZE);
 			return true;
 		}
 
@@ -167,6 +214,42 @@ namespace {
 			byte* doorbell_base = (byte*)&regs->doorbells[0];
 			const stduint stride = 4u << dstrd;
 			return reinterpret_cast<volatile uint32*>(doorbell_base + stduint(2 * qid + 1) * stride);
+		}
+
+		bool ConsumeIoCompletionFromIrq() {
+			if (!io_cq || io_depth == 0 || io_irq_wait_cid == 0) return false;
+			auto* cq = reinterpret_cast<volatile NVMe_Completion*>(io_cq);
+			const volatile NVMe_Completion& entry = cq[io_cq_head];
+			if ((entry.status & 1u) != io_cq_phase) return false;
+
+			io_irq_dw0 = entry.dw0;
+			io_irq_reserved0 = entry.reserved0;
+			io_irq_sq_head = entry.sq_head;
+			io_irq_sq_id = entry.sq_id;
+			io_irq_cid = entry.cid;
+			io_irq_status = entry.status;
+			// plogtrac("[NVMe] irq cqe cid=%u status=%[16H] sqh=%u sqid=%u dw0=%[32H]",
+			// 	(unsigned)io_irq_cid, (unsigned)io_irq_status,
+			// 	(unsigned)io_irq_sq_head, (unsigned)io_irq_sq_id, (unsigned)io_irq_dw0);
+
+			++io_cq_head;
+			if (io_cq_head == io_depth) {
+				io_cq_head = 0;
+				io_cq_phase ^= 1;
+			}
+			*DoorbellCq(NVME_IO_QID) = io_cq_head;
+			nvme_fence();
+			io_irq_done = 1;
+			return true;
+		}
+
+		void LoadIoIrqCompletion(NVMe_Completion& cpl) {
+			cpl.dw0 = io_irq_dw0;
+			cpl.reserved0 = io_irq_reserved0;
+			cpl.sq_head = io_irq_sq_head;
+			cpl.sq_id = io_irq_sq_id;
+			cpl.cid = io_irq_cid;
+			cpl.status = io_irq_status;
 		}
 
 		bool WaitReady(bool want_ready) const {
@@ -253,11 +336,69 @@ namespace {
 			sq[sq_tail_ref] = cmd;
 			nvme_fence();
 			sq_tail_ref = uint16((sq_tail_ref + 1) % depth);
+			const bool irq_completion =
+				(qid == NVME_IO_QID) && msi_enabled;
+			if (irq_completion) {
+				io_irq_wait_cid = cid;
+				io_irq_done = 0;
+				io_irq_cid = 0;
+				io_irq_status = 0;
+			}
 			*DoorbellSq(qid) = sq_tail_ref;
 			nvme_fence();
 
 			const stduint loops = 5000000u;
+			if (irq_completion) {
+				for (stduint spin = 0; spin < loops; ++spin) {
+					if (io_irq_done) {
+						LoadIoIrqCompletion(cpl);
+						if (cpl.cid != cid) {
+							plogwarn("[NVMe] irq cid mismatch got=%u want=%u",
+								(unsigned)cpl.cid, (unsigned)cid);
+							io_irq_wait_cid = 0;
+							io_irq_done = 0;
+							return false;
+						}
+						if ((cpl.status >> 1) != 0) {
+							const uint16 sc = (cpl.status >> 1) & 0xFFu;
+							const uint16 sct = (cpl.status >> 9) & 0x7u;
+							plogwarn("[NVMe] irq cmd opcode=%[8H] cid=%u fail sc=%u sct=%u status=%[16H]",
+								(unsigned)cmd.opc, (unsigned)cid, (unsigned)sc, (unsigned)sct, (unsigned)cpl.status);
+							io_irq_wait_cid = 0;
+							io_irq_done = 0;
+							return false;
+						}
+						io_irq_wait_cid = 0;
+						io_irq_done = 0;
+						return true;
+					}
+					__asm__ __volatile__("pause" ::: "memory");
+				}
+			}
+
 			for (stduint spin = 0; spin < loops; ++spin) {
+				if (irq_completion && io_irq_done) {
+					LoadIoIrqCompletion(cpl);
+					if (cpl.cid != cid) {
+						plogwarn("[NVMe] irq cid mismatch got=%u want=%u",
+							(unsigned)cpl.cid, (unsigned)cid);
+						io_irq_wait_cid = 0;
+						io_irq_done = 0;
+						return false;
+					}
+					if ((cpl.status >> 1) != 0) {
+						const uint16 sc = (cpl.status >> 1) & 0xFFu;
+						const uint16 sct = (cpl.status >> 9) & 0x7u;
+						plogwarn("[NVMe] irq cmd opcode=%[8H] cid=%u fail sc=%u sct=%u status=%[16H]",
+							(unsigned)cmd.opc, (unsigned)cid, (unsigned)sc, (unsigned)sct, (unsigned)cpl.status);
+						io_irq_wait_cid = 0;
+						io_irq_done = 0;
+						return false;
+					}
+					io_irq_wait_cid = 0;
+					io_irq_done = 0;
+					return true;
+				}
 				const volatile NVMe_Completion& entry = cq[cq_head_ref];
 				if ((entry.status & 1u) != cq_phase_ref) {
 					__asm__ __volatile__("pause" ::: "memory");
@@ -269,6 +410,11 @@ namespace {
 				cpl.sq_id = entry.sq_id;
 				cpl.cid = entry.cid;
 				cpl.status = entry.status;
+				if (qid == NVME_IO_QID) {
+					// plogtrac("[NVMe] poll cqe cid=%u status=%[16H] sqh=%u sqid=%u dw0=%[32H]",
+					// 	(unsigned)cpl.cid, (unsigned)cpl.status,
+					// 	(unsigned)cpl.sq_head, (unsigned)cpl.sq_id, (unsigned)cpl.dw0);
+				}
 				if (cpl.cid != cid) {
 					plogwarn("[NVMe] admin cid mismatch got=%u want=%u",
 						(unsigned)cpl.cid, (unsigned)cid);
@@ -287,9 +433,21 @@ namespace {
 					const uint16 sct = (status_field >> 9) & 0x7u;
 					plogwarn("[NVMe] admin cmd opcode=%[8H] cid=%u fail sc=%u sct=%u status=%[16H]",
 						(unsigned)cmd.opc, (unsigned)cid, (unsigned)sc, (unsigned)sct, (unsigned)status_field);
+					if (irq_completion) {
+						io_irq_wait_cid = 0;
+						io_irq_done = 0;
+					}
 					return false;
 				}
+				if (irq_completion) {
+					io_irq_wait_cid = 0;
+					io_irq_done = 0;
+				}
 				return true;
+			}
+			if (irq_completion) {
+				io_irq_wait_cid = 0;
+				io_irq_done = 0;
 			}
 			plogwarn("[NVMe] q%u cmd opcode=%[8H] timeout tail=%u head=%u cc=%[32H] csts=%[32H]",
 				(unsigned)qid, (unsigned)cmd.opc, (unsigned)sq_tail_ref, (unsigned)cq_head_ref,
@@ -415,6 +573,20 @@ namespace {
 			return true;
 		}
 
+		bool DisableInterruptCoalescing() {
+			NVMe_Command cmd{};
+			NVMe_Completion cpl{};
+			cmd.opc = NVME_ADMIN_OPC_SET_FEATURES;
+			cmd.cdw10 = NVME_FEAT_INTERRUPT_COALESCING;
+			cmd.cdw11 = 0;
+			if (!SubmitAdminCommand(cmd, cpl)) {
+				plogwarn("[NVMe] disable interrupt coalescing failed");
+				return false;
+			}
+			ploginfo("[NVMe] interrupt coalescing disabled");
+			return true;
+		}
+
 		bool IdentifyNamespaceList() {
 			if (!identify_nslist) return false;
 			if (!SupportsActiveNamespaceList()) {
@@ -472,7 +644,11 @@ namespace {
 			cmd.opc = NVME_ADMIN_OPC_CREATE_IO_CQ;
 			cmd.prp1 = _IMM64(_IMM(io_cq));
 			cmd.cdw10 = uint32(NVME_IO_QID) | (uint32(io_depth - 1) << 16);
-			cmd.cdw11 = 0x00000001u;
+			cmd.cdw11 = msi_enabled ? 0x00000003u : 0x00000001u;
+			if (msi_enabled) {
+				regs->intmc = 0xFFFFFFFFu;
+				nvme_fence();
+			}
 			if (!SubmitAdminCommand(cmd, cpl)) return false;
 
 			cmd = {};
@@ -514,28 +690,93 @@ namespace {
 			return ns.block_size != 0 && ns.total_blocks != 0;
 		}
 
-		bool ExecuteBlocks(uint32 nsid, uint64 lba, void* data_buf, stduint block_count, bool is_write) {
-			auto* ns = FindNamespace(nsid);
-			if (!data_buf || !block_count || !ns || !ns->block_size) return false;
-			if (lba >= ns->total_blocks || lba + block_count > ns->total_blocks) return false;
-			if (ns->block_size * block_count > NVME_ADMIN_PAGE_SIZE) {
-				plogwarn("[NVMe] io size too large blocks=%u block_size=%u",
-					(unsigned)block_count, (unsigned)ns->block_size);
-				return false;
+		bool PrepareDataPrps(NVMe_Command& cmd, byte* data_buf, uint32 block_size,
+			stduint want_blocks, stduint& chunk_blocks) {
+			if (!data_buf || !block_size || !want_blocks) return false;
+			const uint64 start_addr = _IMM64(_IMM(data_buf));
+			const stduint page_mask = NVME_ADMIN_PAGE_SIZE - 1;
+			const stduint page_off = stduint(start_addr & page_mask);
+			const stduint first_page_bytes = NVME_ADMIN_PAGE_SIZE - page_off;
+			const stduint prp_entry_cap = NVME_ADMIN_PAGE_SIZE / sizeof(uint64);
+			const uint64 max_chunk_bytes =
+				uint64(first_page_bytes) + uint64(prp_entry_cap) * NVME_ADMIN_PAGE_SIZE;
+			const uint64 want_bytes = uint64(want_blocks) * block_size;
+			const uint64 chunk_bytes64 = minof(want_bytes, max_chunk_bytes);
+			chunk_blocks = stduint(chunk_bytes64 / block_size);
+			if (!chunk_blocks) return false;
+
+			const uint64 chunk_bytes = uint64(chunk_blocks) * block_size;
+			cmd.prp1 = start_addr;
+			cmd.prp2 = 0;
+			if (chunk_bytes <= first_page_bytes) {
+				return true;
 			}
+
+			const uint64 remaining_bytes = chunk_bytes - first_page_bytes;
+			const stduint extra_pages = stduint(
+				(remaining_bytes + NVME_ADMIN_PAGE_SIZE - 1) / NVME_ADMIN_PAGE_SIZE);
+			const uint64 second_page_addr =
+				(start_addr & ~uint64(page_mask)) + NVME_ADMIN_PAGE_SIZE;
+			if (extra_pages == 1) {
+				cmd.prp2 = second_page_addr;
+				return true;
+			}
+			if (!io_prp_list || extra_pages > prp_entry_cap) return false;
+			for0(i, extra_pages) {
+				io_prp_list[i] = second_page_addr + uint64(i) * NVME_ADMIN_PAGE_SIZE;
+			}
+			cmd.prp2 = _IMM64(_IMM(io_prp_list));
+			return true;
+		}
+
+		bool SubmitIoBlocks(uint32 nsid, uint64 lba, byte* data_buf,
+			uint32 block_size, stduint block_count, bool is_write) {
+			if (!data_buf || !block_count) return false;
 			NVMe_Command cmd{};
 			NVMe_Completion cpl{};
-			// ploginfo("[NVMe] io nsid=%[32H] lba=%[64H] blocks=%u buf=%p wr=%u",
-			// 	nsid, lba, (unsigned)block_count, data_buf, (unsigned)is_write);
+			stduint prepared_blocks = 0;
+			if (!PrepareDataPrps(cmd, data_buf, block_size, block_count, prepared_blocks)) {
+				return false;
+			}
+			if (prepared_blocks != block_count) return false;
+			if (!io_submit_log_once) {
+				io_submit_log_once = true;
+				// plogwarn("[NVMe] io submit nsid=%[32H] lba=%[64H] blocks=%u wr=%u",
+				// 	nsid, lba, (unsigned)block_count, (unsigned)is_write);
+			}
 			cmd.opc = is_write ? NVME_NVM_OPC_WRITE : NVME_NVM_OPC_READ;
 			cmd.nsid = nsid;
-			cmd.prp1 = _IMM64(_IMM(data_buf));
 			cmd.cdw10 = uint32(lba);
 			cmd.cdw11 = uint32(lba >> 32);
 			cmd.cdw12 = uint32(block_count - 1);
 			if (!SubmitIoCommand(cmd, cpl)) return false;
 			// ploginfo("[NVMe] io complete cid=%u sqh=%u sqid=%u dw0=%[32H] wr=%u",
 			// 	(unsigned)cpl.cid, (unsigned)cpl.sq_head, (unsigned)cpl.sq_id, cpl.dw0, (unsigned)is_write);
+			return true;
+		}
+
+		bool ExecuteBlocks(uint32 nsid, uint64 lba, void* data_buf, stduint block_count, bool is_write) {
+			auto* ns = FindNamespace(nsid);
+			if (!data_buf || !block_count || !ns || !ns->block_size) return false;
+			if (lba >= ns->total_blocks || lba + block_count > ns->total_blocks) return false;
+
+			byte* user_buf = reinterpret_cast<byte*>(data_buf);
+			uint64 current_lba = lba;
+			stduint remaining_blocks = block_count;
+			while (remaining_blocks) {
+				NVMe_Command probe{};
+				stduint chunk_blocks = 0;
+				if (!PrepareDataPrps(probe, user_buf, ns->block_size, remaining_blocks, chunk_blocks)) {
+					plogwarn("[NVMe] prp prepare failed nsid=%[32H] lba=%[64H] remain=%u",
+						nsid, current_lba, (unsigned)remaining_blocks);
+					return false;
+				}
+				if (!SubmitIoBlocks(nsid, current_lba, user_buf, ns->block_size, chunk_blocks, is_write)) return false;
+				const stduint chunk_bytes = chunk_blocks * ns->block_size;
+				user_buf += chunk_bytes;
+				current_lba += chunk_blocks;
+				remaining_blocks -= chunk_blocks;
+			}
 			return true;
 		}
 
@@ -607,6 +848,22 @@ namespace {
 
 	NVMe_Controller g_nvme_controller;
 
+	void Handint_NVME() {
+		// plogerro(">>>");
+		if (g_nvme_controller.regs) {
+			++g_nvme_controller.irq_count;
+			if (!g_nvme_controller.irq_log_once) {
+				g_nvme_controller.irq_log_once = true;
+				// plogwarn("[NVMe] irq received vector=%u",
+				// 	(unsigned)IRQ_NVME);
+			}
+			(void)g_nvme_controller.ConsumeIoCompletionFromIrq();
+		}
+		IC.SendEOI(IRQ_NVME);
+	}
+
+	_ESYM_C void Handint_NVME_Entry();
+
 	static uni::PCI::Device make_pci_device(const DeviceNode& node) {
 		uni::PCI::Device dev{};
 		dev.bus = node.fields.pci_bus;
@@ -630,12 +887,16 @@ static bool start_nvme_driver(DeviceNode* nvme_node) {
 		return false;
 	}
 	g_nvme_controller.DumpSummary();
+	if (!g_nvme_controller.ConfigureInterrupts(dev)) {
+		plogwarn("[NVMe] keep polling completion");
+	}
 	if (!g_nvme_controller.ConfigureAdminQueue()) {
 		return false;
 	}
 	if (!g_nvme_controller.IdentifyController()) {
 		return false;
 	}
+	(void)g_nvme_controller.DisableInterruptCoalescing();
 	if (!g_nvme_controller.IdentifyNamespaceList()) {
 		plogwarn("[NVMe] no active namespace reported");
 	}
@@ -658,6 +919,12 @@ void R_NVME_INIT() {
 	if (!PCI_Init(pci)) {
 		plogwarn("[NVMe] No devices on PCI or PCI init failed.");
 	}
+	#if _MCCA == 0x8664
+	IC[IRQ_NVME].setModeRupt(mglb(Handint_NVME_Entry), SegCo64);
+	#else
+	IC[IRQ_NVME].setRange(mglb(Handint_NVME_Entry), SegCo32);
+	#endif
+	register_interrupt_handler(IRQ_NVME, Handint_NVME);
 	Devsman::RegisterDriverStarter("nvme", start_nvme_driver);
 	Devsman::StartKnownDrivers();
 }

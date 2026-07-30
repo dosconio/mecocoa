@@ -704,7 +704,6 @@ auto Taskman::Schedule(bool omit_slice)->decltype(Schedule())
 	switching_out_threads(cpuid) = old_tb;
 
 	#if _MCCA == 0x8632
-	(void)old_if;
 	ReleaseSchedulerLockForSwitch();
 	#else
 	scheduler_lock.Release(old_if);
@@ -716,6 +715,9 @@ auto Taskman::Schedule(bool omit_slice)->decltype(Schedule())
 	((void(*)(NormalTaskContext*, NormalTaskContext*))mglb(SwitchTaskContext))(&new_tb->context, &old_tb->context);
 	#else
 	SwitchTaskContext(&new_tb->context, &old_tb->context);
+	#endif
+	#if _MCCA == 0x8632
+	if (old_if) IC.enInterrupt(true);
 	#endif
 }
 #else
@@ -757,7 +759,6 @@ void Taskman::SleepAndRelease(Spinlock* lk) {
 	switching_out_threads(cpuid) = old_tb;
 
 	#if _MCCA == 0x8632
-	(void)old_if;
 	ReleaseSchedulerLockForSwitch();
 	#else
 	scheduler_lock.Release(old_if);
@@ -767,5 +768,8 @@ void Taskman::SleepAndRelease(Spinlock* lk) {
 	((void(*)(NormalTaskContext*, NormalTaskContext*))mglb(SwitchTaskContext))(&new_tb->context, &old_tb->context);
 	#else
 	SwitchTaskContext(&new_tb->context, &old_tb->context);
+	#endif
+	#if _MCCA == 0x8632
+	if (old_if) IC.enInterrupt(true);
 	#endif
 }

@@ -123,6 +123,7 @@ lib:
 
 accm:
 	@echo MK lib for ACCM-x86
+	@mkdir -p $(uobjpath)/sapp-$(arch)
 	make -f accmlib/accmx86.$(TOOLSYS).make
 
 prehost/$(arch)/fatvhd.ignore: build_util
