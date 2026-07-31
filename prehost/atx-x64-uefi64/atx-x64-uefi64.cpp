@@ -29,7 +29,7 @@ void mecocoa(const UefiData& uefi_data_ref)
 	#endif
 
 	_call_serious = kernel_fail;
-	x86_COM com1;
+	UART_t com1;
 	con0_out = &com1;
 	if (!Memory::initialize('UEFI', (byte*)(&uefi_data.memory_map))) HALT();
 	Consman::Initialize();

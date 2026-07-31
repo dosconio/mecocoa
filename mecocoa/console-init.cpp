@@ -64,7 +64,7 @@ static uni::BitmapFontEngine fallback_engine(1);
 static uni::BitmapFontEngine loader_font_engine(1);
 #endif
 
-extern x86_COM com1;
+extern UART_t com1;
 bool Consman::Initialize() {
 	// con0_out = 0;
 	Bcons[0].Reset(bda->screen_columns, 24, _VIDEO_ADDR_BUFFER, 0 * 50); Bcons[0].setShowY(0, 24);

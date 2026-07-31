@@ -15,7 +15,7 @@
 extern OstreamTrait* con0_out;
 
 _ESYM_C void mecocoa() {
-	x86_COM com1; con0_out = &com1;
+	UART_t com1; con0_out = &com1;
 	if (!Memory::initialize('ANIF', NULL)) HALT();
 	Consman::Initialize();
 	//{} Cache_t::enAble();

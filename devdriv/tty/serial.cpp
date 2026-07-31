@@ -28,7 +28,7 @@ RMOD_LIST RMOD_LIST_COM1{
 };
 #endif
 
-x86_COM com1;
+UART_t com1;
 extern OstreamTrait* con0_out;
 void R_COM1_INIT() {
 	{
