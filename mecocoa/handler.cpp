@@ -105,7 +105,7 @@ void Handint_XHCI() {
 volatile timeval_t system_time = {};
 volatile stduint tick = 0;
 
-
+#if !defined (_MPU_STM32MP13) //{TEMP}
 
 static int TimerCmp(pureptr_t a, pureptr_t b) {
 	return treat<MsgTimer>(((Dnode*)a)->offs).timeout -
@@ -129,6 +129,7 @@ void SysTimer::Append(stduint timeout, stduint iden, _tocall_ft hand) {
 	// ploginfo("SysTimer::Append %u, now %u timers", timeout, TimerManager.Count());
 }
 
+#endif
 
 #if _MCCA == 0x8664 && defined(_UEFI)
 

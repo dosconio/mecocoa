@@ -204,9 +204,14 @@ bool init_clock() {
 	// - Enabling the I/O Compensation Cell : setting bit[0] of register SYSCFG_CCCSR
 	// To do this please enable the block
 	if (compensate) {
-		//{} __HAL_RCC_CSI_ENABLE() ;
-		//{} __HAL_RCC_SYSCFG_CLK_ENABLE() ;
+		RCC.CSI.enAble(true);
+		RCC.enSyscfg(true);
 		//{} HAL_EnableCompensationCell();
+		Reference cmpcr(0x50020020);
+		Reference cmpensetr(0x50020024);
+		cmpensetr = 1;
+		while (!cmpcr.bitof(8));
+		cmpcr.rstof(1);
 	}
 	return true;
 }

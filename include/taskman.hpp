@@ -295,7 +295,7 @@ public: // Identity / Config
 	} interface_type = InterfaceType::MCCA4;
 
 public: // Lifecycle
-	uni::Atomic<int> ref_count = 1;
+	uni::Atomic<int> ref_count = {1};
 	enum class State : byte {
 		Active = 0,
 		Expiring,
