@@ -283,8 +283,23 @@ static void dump_device_tree_usb_strings(OstreamTrait& com1, const DeviceNode& n
 	}
 }
 
+static bool is_partition_storage_node(const DeviceNode& node) {
+	if (DeviceNodeType(node.fields.node_type) != DeviceNodeType::StorageDevice) return false;
+	if (node.fields.binding.driver_name &&
+		StrCompare(node.fields.binding.driver_name, "storage-partition") == 0) {
+		return true;
+	}
+	if (node.link.addr && StrCompareN(node.link.addr, "partition@", 10) == 0) {
+		return true;
+	}
+	return false;
+}
+
 static void dump_device_tree_node(OstreamTrait& com1, const DeviceNode* node, stduint depth, bool verbose) {
 	for (auto crt = node; crt; crt = cast<DeviceNode*>(crt->link.next)) {
+		if (!verbose && is_partition_storage_node(*crt)) {
+			continue;
+		}
 		dump_device_tree_indent(com1, depth);
 		const rostr name = crt->link.addr ? crt->link.addr : "(unnamed)";
 		const rostr driver_name = crt->fields.binding.driver_name ? crt->fields.binding.driver_name : nullptr;

@@ -606,11 +606,18 @@ namespace {
 				node, name.reference(), DeviceBusType::PCI, "scsi-cdrom", &slot.cdrom);
 		}
 
-		bool ReadSector0(uni::Harddisk_SCSI& disk, byte target, byte lun) {
-			if (!EnsureSectorBuffer(disk.Block_Size)) return false;
-			if (!disk.Read(0, sector_buf)) {
+		bool ReadSector0(DiskSlot& slot) {
+			if (!slot.node) return false;
+			stduint block_size = 0;
+			if (Devsman::Ctrl(slot.node, (stduint)DeviceCtrlCommand::GetBlockSize, &block_size) != 0) {
+				plogwarn("[SCSI] ctrl t%ul%u get block size failed",
+					(unsigned)slot.target, (unsigned)slot.lun);
+				return false;
+			}
+			if (!block_size || !EnsureSectorBuffer(block_size)) return false;
+			if (Devsman::Read(slot.node, sector_buf, block_size, 0, 0) != (stdsint)block_size) {
 				plogwarn("[SCSI] READ(10) t%ul%u LBA0 failed",
-					(unsigned)target, (unsigned)lun);
+					(unsigned)slot.target, (unsigned)slot.lun);
 				return false;
 			}
 			return true;
@@ -622,16 +629,32 @@ namespace {
 			slot.disk.hd_info_valid = true;
 		}
 
+		void RegisterPartitionNodes(DiskSlot& slot) {
+			if (!slot.node) return;
+			auto& hdinfo = slot.disk.hd_info;
+			for (stduint part_dev = 1; part_dev <= hdinfo.part_count; ++part_dev) {
+				uni::PartitionSlice slice = GetPartitionSlice(hdinfo, part_dev);
+				if (slice.sys_id == 0x00 || slice.sys_id == FILESYS_EXT || slice.length == 0) continue;
+				String name;
+				name.Format("partition@%u", part_dev);
+				Devsman::RegisterStoragePartition(slot.node, name.reference(), slot.disk, part_dev);
+			}
+		}
+
 		void MountPartitions(DiskSlot& slot) {
 			auto& hdinfo = slot.disk.hd_info;
 			for (stduint part_dev = 1; part_dev <= hdinfo.part_count; ++part_dev) {
 				uni::PartitionSlice slice = GetPartitionSlice(hdinfo, part_dev);
 				if (slice.sys_id == 0x00) continue;
 				if (slice.sys_id == FILESYS_EXT) continue;
+				String node_name;
+				node_name.Format("partition@%u", part_dev);
+				DeviceNode* part_node = Devsman::RegisterStoragePartition(
+					slot.node, node_name.reference(), slot.disk, part_dev);
 				String lab;
 				if (slot.lun == 0) lab.Format("/mnt/scsi%u.%u", (stduint)slot.target, part_dev);
 				else lab.Format("/mnt/scsi%u-%u.%u", (stduint)slot.target, (stduint)slot.lun, part_dev);
-				if (auto fs = Filesys::Mount(slot.disk, part_dev, lab.reference())) {
+				if (auto fs = Filesys::Mount(slot.disk, part_dev, lab.reference(), part_node)) {
 					ploginfo("[SCSI] mount %s on %s", fs->name, lab.reference());
 				}
 			}
@@ -641,7 +664,7 @@ namespace {
 			String lab;
 			if (slot.lun == 0) lab.Format("/mnt/scsi%u.0", (stduint)slot.target);
 			else lab.Format("/mnt/scsi%u-%u.0", (stduint)slot.target, (stduint)slot.lun);
-			if (auto fs = Filesys::Mount(slot.cdrom, 0, lab.reference())) {
+			if (auto fs = Filesys::Mount(slot.cdrom, 0, lab.reference(), slot.node)) {
 				ploginfo("[SCSI] mount %s on %s", fs->name, lab.reference());
 			}
 			else {
@@ -744,8 +767,9 @@ namespace {
 				(unsigned)block_size,
 				total_bytes);
 			RegisterStorageNode(*slot);
-			if (!ReadSector0(slot->disk, target, lun)) return false;
+			if (!ReadSector0(*slot)) return false;
 			ParsePartitions(*slot);
+			RegisterPartitionNodes(*slot);
 			MountPartitions(*slot);
 			return true;
 		}

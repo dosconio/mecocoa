@@ -201,7 +201,7 @@ namespace {
 			if (active_atapi_port < 0) return;
 			String lab = String::newFormat("/mnt/ahci%u.0", (stduint)active_atapi_port);
 			// ploginfo("[AHCI] probe atapi port%u whole-disk", (stduint)active_atapi_port);
-			if (auto fs = Filesys::Mount(cdrom, 0, lab.reference())) {
+			if (auto fs = Filesys::Mount(cdrom, 0, lab.reference(), cdrom_node)) {
 				ploginfo("[AHCI] mount %s on %s", fs->name, lab.reference());
 			}
 			else {
@@ -222,8 +222,14 @@ namespace {
 		}
 
 		bool ReadSector(uint64 lba, byte* data_buf) {
-			if (active_port < 0 || !data_buf) return false;
-			if (!disk.ReadSectors(lba, data_buf, 1)) {
+			if (active_port < 0 || !data_buf || !storage_node) return false;
+			stduint block_size = 0;
+			if (Devsman::Ctrl(storage_node, (stduint)DeviceCtrlCommand::GetBlockSize, &block_size) != 0) {
+				plogwarn("[AHCI] port%d get block size failed", active_port);
+				return false;
+			}
+			if (!block_size) return false;
+			if (Devsman::Read(storage_node, data_buf, block_size, stduint(lba) * block_size, 0) != (stdsint)block_size) {
 				auto& port = abar->ports[active_port];
 				plogwarn("[AHCI] port%d READ LBA=%[64H] failed is=%[32H] tfd=%[32H]",
 					active_port, lba, port.is, port.tfd);
@@ -269,6 +275,17 @@ namespace {
 			disk.hd_info_valid = true;
 		}
 
+		void RegisterPartitionNodes() {
+			if (!storage_node) return;
+			auto& hdinfo = disk.hd_info;
+			for (stduint part_dev = 1; part_dev <= hdinfo.part_count; ++part_dev) {
+				uni::PartitionSlice slice = GetPartitionSlice(hdinfo, part_dev);
+				if (slice.sys_id == 0x00 || slice.sys_id == FILESYS_EXT || slice.length == 0) continue;
+				String name = String::newFormat("partition@%u", part_dev);
+				Devsman::RegisterStoragePartition(storage_node, name.reference(), disk, part_dev);
+			}
+		}
+
 		void DumpPartitions() const {
 			// const auto& hdinfo = disk.hd_info;
 			// auto end_lba = [](const uni::PartitionSlice& slice) -> stduint {
@@ -290,12 +307,15 @@ namespace {
 				byte sys_id = slice.sys_id;
 				if (sys_id == 0x00) continue;
 				if (sys_id == FILESYS_EXT) continue;
+				String node_name = String::newFormat("partition@%u", part_dev);
+				DeviceNode* part_node = Devsman::RegisterStoragePartition(
+					storage_node, node_name.reference(), disk, part_dev);
 
 				// /mnt/sataA.B
 				String lab = String::newFormat("/mnt/ahci%u.%u", (stduint)active_port, part_dev);
 				// ploginfo("[AHCI] probe port%u part%u: %x",
 				// 	(stduint)active_port, part_dev, (unsigned)sys_id);
-				if (auto fs = Filesys::Mount(disk, part_dev, lab.reference())) {
+				if (auto fs = Filesys::Mount(disk, part_dev, lab.reference(), part_node)) {
 					ploginfo("[AHCI] mount %s on %s", fs->name, lab.reference());
 				}
 			}
@@ -393,6 +413,7 @@ static bool start_ahci_driver(DeviceNode* ahci_node) {
 			if (g_ahci_controller.ReadSector0()) {
 				g_ahci_controller.DumpSector0();
 				g_ahci_controller.ParsePartitions();
+				g_ahci_controller.RegisterPartitionNodes();
 				g_ahci_controller.DumpPartitions();
 				g_ahci_controller.MountPartitions();
 			}

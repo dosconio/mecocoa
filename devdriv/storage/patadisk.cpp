@@ -24,6 +24,7 @@ RMOD_LIST RMOD_LIST_HDD{
 #endif
 
 Harddisk_PATA* disks[MAX_DRIVES];// referenced
+static DeviceNode* pata_storage_nodes[MAX_DRIVES] = {};
 static char hdd_buf[byteof(**disks) * numsof(disks)];
 static uni::Atomic<byte> lock[2] = {1, 1};
 static char* single_sector = NULL;// file-hd used buffer
@@ -156,13 +157,14 @@ static void register_pata_storage_nodes() {
 	auto* pata_node = Devsman::FindPCIDeviceByClass(0x01u, 0x01u, 0xFFu);
 	if (!pata_node) return;
 	for0(i, MAX_DRIVES) {
+		pata_storage_nodes[i] = nullptr;
 		if (!disks[i]) continue;
 		const bool is_cdrom = disks[i]->Block_Size == 2048;
 		String node_name;
 		node_name.Format(is_cdrom ? "pata-cd@%u:%u" : "pata-disk@%u:%u",
 			(stduint)disks[i]->getHigID(),
 			(stduint)disks[i]->getLowID());
-		Devsman::RegisterStorageDevice(
+		pata_storage_nodes[i] = Devsman::RegisterStorageDevice(
 			pata_node,
 			node_name.reference(),
 			DeviceBusType::PCI,
@@ -593,6 +595,21 @@ bool Harddisk_PATA_Paged::Write(stduint BlockIden, const void* Sors) {
 static stduint args[4];
 Harddisk_PATA_Paged* paged_disks[MAX_DRIVES];
 
+static void register_pata_partition_nodes(stduint disk_id) {
+	if (disk_id >= MAX_DRIVES || !pata_storage_nodes[disk_id] || !paged_disks[disk_id] || !hd_info) return;
+	HD_Info& hdinfo = (*hd_info)[disk_id];
+	for (stduint part_dev = 1; part_dev <= hdinfo.part_count; ++part_dev) {
+		uni::PartitionSlice slice = GetPartitionSlice(hdinfo, part_dev);
+		if (slice.sys_id == 0x00 || slice.sys_id == FILESYS_EXT || slice.length == 0) continue;
+		String node_name = String::newFormat("partition@%u", part_dev);
+		Devsman::RegisterStoragePartition(
+			pata_storage_nodes[disk_id],
+			node_name.reference(),
+			(*paged_disks[disk_id]),
+			part_dev);
+	}
+}
+
 static void log_read_disk() {
 	static stduint last_sec = 0;
 	if (args[1] != last_sec + 1) {
@@ -642,16 +659,31 @@ void serv_dev_hd_loop()
 			for0(i, MAX_DRIVES) {
 				if (disks[i]) {
 					hd_open(*disks[i]);
+					stduint block_size = disks[i]->Block_Size;
 					stduint total_units = 0;
-					if (disks[i]->Block_Size == 2048 && paged_disks[i]) {
-						total_units = paged_disks[i]->getSlice(0).length;
-					} else {
-						total_units = disks[i]->getUnits();
+					uint64 total_bytes = 0;
+					if (pata_storage_nodes[i]) {
+						(void)Devsman::Ctrl(pata_storage_nodes[i],
+							(stduint)DeviceCtrlCommand::GetBlockSize, &block_size);
+						(void)Devsman::Ctrl(pata_storage_nodes[i],
+							(stduint)DeviceCtrlCommand::GetUnitCount, &total_units);
+						(void)Devsman::Ctrl(pata_storage_nodes[i],
+							(stduint)DeviceCtrlCommand::GetByteSize, &total_bytes);
+					}
+					if (!total_units) {
+						if (disks[i]->Block_Size == 2048 && paged_disks[i]) {
+							total_units = paged_disks[i]->getSlice(0).length;
+						} else {
+							total_units = disks[i]->getUnits();
+						}
+					}
+					if (!total_bytes) {
+						total_bytes = uint64(total_units) * uint64(block_size);
 					}
 					ploginfo("[Hrddisk] Detect %s on IDE%u:%u : %u MB",
-						(disks[i]->Block_Size == 2048) ? "CD-ROM" : "Disk",
+						(block_size == 2048) ? "CD-ROM" : "Disk",
 						i / 2, i % 2,
-						_IMM(total_units * disks[i]->Block_Size) >> 20);
+						stduint(total_bytes >> 20));
 				}
 			}
 
@@ -659,7 +691,7 @@ void serv_dev_hd_loop()
 				if (!disks[i] || disks[i]->Block_Size != 2048) continue;
 				lab = String::newFormat("/mnt/ide%u.0", i);
 				ploginfo("[Hrddisk] probe cdrom%u whole-disk", i);
-				if (auto fs = Filesys::Mount(*paged_disks[i], 0, lab.reference())) {
+				if (auto fs = Filesys::Mount(*paged_disks[i], 0, lab.reference(), pata_storage_nodes[i])) {
 					ploginfo("[Hrddisk] mount %s on %s", fs->name, lab.reference());
 				} else {
 					ploginfo("[Hrddisk] no filesystem recognized on cdrom%u", i);
@@ -668,15 +700,19 @@ void serv_dev_hd_loop()
 
 			for0(i, MAX_DRIVES) {
 				if (!disks[i] || disks[i]->Block_Size != 512) continue;
+				register_pata_partition_nodes(i);
 				HD_Info& hdinfo = (*hd_info)[i];
 				for (unsigned part_dev = 1; part_dev <= hdinfo.part_count; part_dev++) {
 					uni::PartitionSlice slice = GetPartitionSlice(hdinfo, part_dev);
 					byte sys_id = slice.sys_id;
 					if (sys_id == 0x00) continue; // empty/unpartitioned, skip
 					else if (sys_id == FILESYS_EXT) continue;
+					String node_name = String::newFormat("partition@%u", part_dev);
+					DeviceNode* part_node = Devsman::RegisterStoragePartition(
+						pata_storage_nodes[i], node_name.reference(), (*paged_disks[i]), part_dev);
 					lab = String::newFormat("/mnt/ide%u.%u", i, part_dev);
 					ploginfo("[Hrddisk] probe disk%u part%u: %x", i, part_dev, sys_id);
-					if (auto fs = Filesys::Mount(*paged_disks[i], part_dev, lab.reference())) {
+					if (auto fs = Filesys::Mount(*paged_disks[i], part_dev, lab.reference(), part_node)) {
 						if (!StrCompare(fs->name, "fat")) {
 							fat_time++;
 						}
@@ -694,8 +730,24 @@ void serv_dev_hd_loop()
 		{
 			// ploginfo("[Hrddisk] device %u: read %u", args[0], args[1]);
 			// log_read_disk();
-
-			stduint ack = hd_read_prefer_dma((byte)args[0], args[1], single_sector) ? 1 : 0;
+			const byte disk_id = (byte)args[0];
+			stduint ack = 0;
+			if (disk_id < numsof(disks) && disks[disk_id]) {
+				stduint block_size = disks[disk_id]->Block_Size;
+				if (pata_storage_nodes[disk_id]) {
+					(void)Devsman::Ctrl(pata_storage_nodes[disk_id],
+						(stduint)DeviceCtrlCommand::GetBlockSize, &block_size);
+					ack = Devsman::Read(
+						pata_storage_nodes[disk_id],
+						single_sector,
+						block_size,
+						args[1] * block_size,
+						0) == (stdsint)block_size;
+				}
+				if (!ack) {
+					ack = hd_read_prefer_dma(disk_id, args[1], single_sector) ? 1 : 0;
+				}
+			}
 			if (sig_src) syssend(sig_src, &ack, sizeof(ack));
 			if (ack && sig_src) syssend(sig_src, single_sector, disks[args[0]]->Block_Size);
 			break;

@@ -230,6 +230,117 @@ namespace {
 	DriverStartHookEntry driver_start_hooks[32]{};
 	stduint driver_start_hook_count = 0;
 
+	void attach_builtin_node_ops(DeviceNode* node, void* driver_data);
+
+	uni::StorageTrait* storage_trait_from_node(DeviceNode* node) {
+		if (!node) return nullptr;
+		if (DeviceNodeType(node->fields.node_type) != DeviceNodeType::StorageDevice) return nullptr;
+		return static_cast<uni::StorageTrait*>(node->fields.binding.driver_data);
+	}
+
+	stdsint storage_transfer(DeviceNode* node, void* raw_buf, stduint count, stduint idx, bool is_write) {
+		auto* storage = storage_trait_from_node(node);
+		if (!storage || !raw_buf || count == 0) return 0;
+		const stduint block_size = storage->Block_Size ? storage->Block_Size : 1;
+		const uint64 total_bytes = uint64(storage->getUnits()) * uint64(block_size);
+		if (uint64(idx) >= total_bytes) return 0;
+		uint64 remaining = minof(uint64(count), total_bytes - uint64(idx));
+		byte* buf = static_cast<byte*>(raw_buf);
+		byte* bounce = nullptr;
+		stduint processed = 0;
+
+		while (remaining) {
+			const uint64 current_off = uint64(idx) + processed;
+			const stduint block_id = stduint(current_off / block_size);
+			const stduint block_off = stduint(current_off % block_size);
+			const stduint chunk = stduint(minof(remaining, uint64(block_size - block_off)));
+			const bool whole_block = block_off == 0 && chunk == block_size;
+			byte* target_buf = buf + processed;
+
+			if (whole_block) {
+				const bool ok = is_write
+					? storage->Write(block_id, target_buf)
+					: storage->Read(block_id, target_buf);
+				if (!ok) return processed ? (stdsint)processed : -1;
+			}
+			else {
+				if (!bounce) {
+					bounce = new byte[block_size];
+					if (!bounce) return processed ? (stdsint)processed : -1;
+				}
+				if (!storage->Read(block_id, bounce)) {
+					delete[] bounce;
+					return processed ? (stdsint)processed : -1;
+				}
+				if (is_write) {
+					MemCopyN(bounce + block_off, target_buf, chunk);
+					if (!storage->Write(block_id, bounce)) {
+						delete[] bounce;
+						return processed ? (stdsint)processed : -1;
+					}
+				}
+				else {
+					MemCopyN(target_buf, bounce + block_off, chunk);
+				}
+			}
+
+			processed += chunk;
+			remaining -= chunk;
+		}
+
+		if (bounce) delete[] bounce;
+		return processed;
+	}
+
+	stdsint storage_read(DeviceNode* node, void* buf, stduint count, stduint idx, stduint flags) {
+		(void)flags;
+		return storage_transfer(node, buf, count, idx, false);
+	}
+
+	stdsint storage_send(DeviceNode* node, const void* buf, stduint count, stduint idx, stduint flags) {
+		(void)flags;
+		return storage_transfer(node, const_cast<void*>(buf), count, idx, true);
+	}
+
+	stdsint storage_ctrl(DeviceNode* node, stduint cmd, void* args, stduint flags) {
+		(void)flags;
+		auto* storage = storage_trait_from_node(node);
+		if (!storage) return -1;
+		switch (DeviceCtrlCommand(cmd)) {
+		case DeviceCtrlCommand::GetBlockSize:
+			if (!args) return -1;
+			*static_cast<stduint*>(args) = storage->Block_Size;
+			return 0;
+		case DeviceCtrlCommand::GetUnitCount:
+			if (!args) return -1;
+			*static_cast<stduint*>(args) = storage->getUnits();
+			return 0;
+		case DeviceCtrlCommand::GetByteSize:
+			if (!args) return -1;
+			*static_cast<uint64*>(args) = uint64(storage->Block_Size) * uint64(storage->getUnits());
+			return 0;
+		case DeviceCtrlCommand::GetBackingObject:
+			if (!args) return -1;
+			*static_cast<void**>(args) = storage;
+			return 0;
+		default:
+			return -1;
+		}
+	}
+
+	const DeviceNodeOps storage_device_ops_impl{
+		.read = storage_read,
+		.send = storage_send,
+		.ctrl = storage_ctrl,
+	};
+
+	void attach_builtin_node_ops(DeviceNode* node, void* driver_data) {
+		if (!node || !driver_data) return;
+		if (DeviceNodeType(node->fields.node_type) == DeviceNodeType::StorageDevice) {
+			node->fields.ops = &storage_device_ops_impl;
+		}
+	}
+
 	void init_node(DeviceNode* node, DeviceNodeType node_type, DeviceBusType bus_type, const char* name) {
 		MemSet(node, 0, sizeof(DeviceNode));
 		node->link.addr = const_cast<char*>(name);
@@ -237,6 +348,7 @@ namespace {
 		node->fields.bus_type = static_cast<uint16>(bus_type);
 		node->fields.resource_capacity = DeviceNodeInlineResourceCapacity;
 		node->fields.resources = node->inline_resources;
+		node->fields.ops = nullptr;
 	}
 
 	stduint bus_root_index(DeviceBusType bus_type) {
@@ -418,6 +530,22 @@ namespace {
 		return nullptr;
 	}
 
+	DeviceNode* find_named_node_in_subtree(DeviceNode* node, DeviceNodeType node_type, const char* name) {
+		for (auto* crt = node; crt; crt = reinterpret_cast<DeviceNode*>(crt->link.next)) {
+			if (crt->fields.node_type == static_cast<uint16>(node_type) &&
+				crt->link.addr &&
+				StrCompare(crt->link.addr, name) == 0) {
+				return crt;
+			}
+			if (crt->link.subf) {
+				if (auto* found = find_named_node_in_subtree(reinterpret_cast<DeviceNode*>(crt->link.subf), node_type, name)) {
+					return found;
+				}
+			}
+		}
+		return nullptr;
+	}
+
 	bool set_driver_binding(DeviceNode* node, const char* driver_name) {
 		if (!node || !driver_name) return false;
 		if (node->fields.binding.driver_name &&
@@ -440,6 +568,7 @@ namespace {
 		node->fields.binding.state = static_cast<uint32>(DriverBindingState::Started);
 		node->fields.binding.probe_result = 0;
 		node->fields.binding.driver_data = driver_data;
+		attach_builtin_node_ops(node, driver_data);
 	}
 
 	bool set_driver_probe_state(DeviceNode* node, DriverBindingState state, int32 result) {
@@ -1058,6 +1187,7 @@ namespace {
 			Devsman::AddIoPortResource(fdc, 0, 0x3F0, 8);
 			Devsman::AddIrqResource(fdc, IRQ_PIT + 6);
 			Devsman::RegisterStorageDevice(fdc, "floppy@0", DeviceBusType::ISA);
+			Devsman::RegisterStorageDevice(fdc, "floppy@1", DeviceBusType::ISA);
 		}
 	}
 
@@ -1560,10 +1690,12 @@ DeviceNode* Devsman::RegisterStorageDevice(DeviceNode* parent, const char* name,
 	if (!parent || !name) return nullptr;
 	if (auto* node = find_named_child(parent, DeviceNodeType::StorageDevice, name)) {
 		if (driver_name) set_driver_started(node, driver_name, driver_data);
+		else attach_builtin_node_ops(node, node->fields.binding.driver_data);
 		return node;
 	}
 	auto* node = append_plain_device(parent, DeviceNodeType::StorageDevice, bus_type, StrHeap(name));
 	if (driver_name) set_driver_started(node, driver_name, driver_data);
+	else attach_builtin_node_ops(node, node->fields.binding.driver_data);
 	return node;
 }
 
@@ -1780,12 +1912,72 @@ DeviceNode* Devsman::PrimaryPciBus() {
 	return primary_pci_bus;
 }
 
+DeviceNode* Devsman::FindNamedNode(DeviceNodeType node_type, const char* name) {
+	if (!device_root || !name) return nullptr;
+	return find_named_node_in_subtree(device_root, node_type, name);
+}
+
 DeviceNode* Devsman::FindPCIDeviceByClass(uint8 class_base, uint8 class_sub, uint8 class_if) {
 	return find_pci_device_by_class(class_base, class_sub, class_if);
 }
 
 const DeviceResource* Devsman::FindResource(const DeviceNode* node, DeviceResourceType type, uint32 index) {
 	return find_resource(node, type, index);
+}
+
+bool Devsman::SetOps(DeviceNode* node, const DeviceNodeOps* ops) {
+	if (!node) return false;
+	node->fields.ops = ops;
+	return true;
+}
+
+const DeviceNodeOps* Devsman::GetOps(const DeviceNode* node) {
+	return node ? node->fields.ops : nullptr;
+}
+
+stdsint Devsman::Read(DeviceNode* node, void* buf, stduint count, stduint idx, stduint flags) {
+	if (!node || !node->fields.ops || !node->fields.ops->read) return -1;
+	return node->fields.ops->read(node, buf, count, idx, flags);
+}
+
+stdsint Devsman::Send(DeviceNode* node, const void* buf, stduint count, stduint idx, stduint flags) {
+	if (!node || !node->fields.ops || !node->fields.ops->send) return -1;
+	return node->fields.ops->send(node, buf, count, idx, flags);
+}
+
+stdsint Devsman::Ctrl(DeviceNode* node, stduint cmd, void* args, stduint flags) {
+	if (!node || !node->fields.ops || !node->fields.ops->ctrl) return -1;
+	return node->fields.ops->ctrl(node, cmd, args, flags);
+}
+
+bool Devsman::AttachStorageOps(DeviceNode* node, uni::StorageTrait* storage) {
+	if (!node || !storage) return false;
+	if (DeviceNodeType(node->fields.node_type) != DeviceNodeType::StorageDevice) return false;
+	node->fields.binding.driver_data = storage;
+	attach_builtin_node_ops(node, storage);
+	return true;
+}
+
+DeviceNode* Devsman::RegisterStoragePartition(DeviceNode* parent, const char* name,
+	uni::StorageTrait& storage, stdsint part_dev, const char* driver_name) {
+	initialize_device_tree();
+	if (!parent || !name || part_dev <= 0) return nullptr;
+	if (auto* node = find_named_child(parent, DeviceNodeType::StorageDevice, name)) {
+		if (!node->fields.binding.driver_data) {
+			auto* part = new uni::DiscPartition(storage, part_dev);
+			set_driver_started(node, driver_name, part);
+		}
+		else {
+			attach_builtin_node_ops(node, node->fields.binding.driver_data);
+		}
+		return node;
+	}
+	auto bus_type = DeviceBusType(parent->fields.bus_type);
+	if (bus_type == DeviceBusType::None) bus_type = DeviceBusType::Platform;
+	auto* part = new uni::DiscPartition(storage, part_dev);
+	auto* node = append_plain_device(parent, DeviceNodeType::StorageDevice, bus_type, StrHeap(name));
+	set_driver_started(node, driver_name, part);
+	return node;
 }
 
 const char* Devsman::LookupPciClassName(uint8 class_base, uint8 class_sub, uint8 class_if) {

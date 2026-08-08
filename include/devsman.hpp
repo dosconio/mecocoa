@@ -3,6 +3,22 @@
 
 #include <c/nnode.h>
 
+struct DeviceNode;
+
+struct DeviceNodeOps {
+	stdsint (*read)(DeviceNode* node, void* buf, stduint count, stduint idx, stduint flags);
+	stdsint (*send)(DeviceNode* node, const void* buf, stduint count, stduint idx, stduint flags);
+	stdsint (*ctrl)(DeviceNode* node, stduint cmd, void* args, stduint flags);
+};
+
+enum class DeviceCtrlCommand : uint32 {
+	None = 0,
+	GetBlockSize,
+	GetUnitCount,
+	GetByteSize,
+	GetBackingObject,
+};
+
 enum class DeviceNodeType : uint16 {
 	SystemRoot = 1,
 	BusRoot,
@@ -102,6 +118,7 @@ struct DevExt {
 	uint16 resource_count;
 	uint16 resource_capacity;
 	DeviceResource* resources;
+	const DeviceNodeOps* ops;
 
 	void* acpi_handle;
 	DriverBinding binding;
@@ -115,6 +132,8 @@ struct DeviceNode {
 
 namespace uni {
 	class PCI;
+	class StorageTrait;
+	class DiscPartition;
 }
 
 class Devsman {
@@ -159,8 +178,17 @@ public:
 	static DeviceNode* Root();
 	static DeviceNode* PCI_Root();
 	static DeviceNode* PrimaryPciBus();
+	static DeviceNode* FindNamedNode(DeviceNodeType node_type, const char* name);
 	static DeviceNode* FindPCIDeviceByClass(uint8 class_base, uint8 class_sub, uint8 class_if);
 	static const DeviceResource* FindResource(const DeviceNode* node, DeviceResourceType type, uint32 index = 0);
+	static bool SetOps(DeviceNode* node, const DeviceNodeOps* ops);
+	static const DeviceNodeOps* GetOps(const DeviceNode* node);
+	static stdsint Read(DeviceNode* node, void* buf, stduint count, stduint idx = 0, stduint flags = 0);
+	static stdsint Send(DeviceNode* node, const void* buf, stduint count, stduint idx = 0, stduint flags = 0);
+	static stdsint Ctrl(DeviceNode* node, stduint cmd, void* args, stduint flags = 0);
+	static bool AttachStorageOps(DeviceNode* node, uni::StorageTrait* storage);
+	static DeviceNode* RegisterStoragePartition(DeviceNode* parent, const char* name,
+		uni::StorageTrait& storage, stdsint part_dev, const char* driver_name = "storage-partition");
 	#if (_MCCA & 0xFF00) == 0x8600
 	static const char* LookupPciClassName(uint8 class_base, uint8 class_sub, uint8 class_if);
 	static const char* LookupPciDeviceName(uint16 vendor_id, uint16 device_id, uint8 class_base = 0, uint8 class_sub = 0);

@@ -11,6 +11,8 @@ using namespace uni;
 #include "../include/console.hpp" // for VTTY_OUTQ, SysMessage, vtty_type_t
 // VFS and DevFs Implementation
 
+static uni::vfs_dentry* _Index_unlocked(const char* pathname, uni::vfs_dentry* base);
+
 file_system_type* registered_filesystems = nullptr;
 
 extern SpinlockBlock<uni::Queue<SysMessage>> message_queue_conv;// defined in graphic.cpp
@@ -21,7 +23,64 @@ namespace uni {
 	static vfs_dentry* vfs_root = nullptr; // Global root directory
 	Mutex vfs_lock;
 
+	static stduint count_mounts_for_source_node_unlocked(DeviceNode* source_device_node) {
+		if (!source_device_node) return 0;
+		stduint count = 0;
+		for (auto* sb = super_blocks; sb; sb = sb->next) {
+			if (sb->source_device_node == source_device_node) {
+				++count;
+			}
+		}
+		return count;
+	}
+
+	static String get_first_mount_path_for_source_node_unlocked(DeviceNode* source_device_node) {
+		String res;
+		if (!source_device_node) return res;
+		for (auto* sb = super_blocks; sb; sb = sb->next) {
+			if (sb->source_device_node != source_device_node) continue;
+			if (!sb->s_root || !sb->s_root->d_mounted_on) continue;
+			return Filesys::getAbsolutePath(sb->s_root->d_mounted_on);
+		}
+		return res;
+	}
+
 	vfs_dentry* Filesys::getRoot() { return vfs_root; }
+
+	DeviceNode* Filesys::GetMountSourceNode(vfs_dentry* dentry) {
+		MutexLocal guard(&vfs_lock);
+		if (!dentry) return nullptr;
+		if (dentry->d_mounts && dentry->d_mounts->d_inode && dentry->d_mounts->d_inode->i_sb) {
+			return dentry->d_mounts->d_inode->i_sb->source_device_node;
+		}
+		if (dentry->d_inode && dentry->d_inode->i_sb) {
+			return dentry->d_inode->i_sb->source_device_node;
+		}
+		return nullptr;
+	}
+
+	DeviceNode* Filesys::GetMountSourceNode(const char* pathname, vfs_dentry* base) {
+		MutexLocal guard(&vfs_lock);
+		vfs_dentry* dentry = _Index_unlocked(pathname, base);
+		if (!dentry) return nullptr;
+		if (dentry->d_mounts && dentry->d_mounts->d_inode && dentry->d_mounts->d_inode->i_sb) {
+			return dentry->d_mounts->d_inode->i_sb->source_device_node;
+		}
+		if (dentry->d_inode && dentry->d_inode->i_sb) {
+			return dentry->d_inode->i_sb->source_device_node;
+		}
+		return nullptr;
+	}
+
+	stduint Filesys::CountMountsForSourceNode(DeviceNode* source_device_node) {
+		MutexLocal guard(&vfs_lock);
+		return count_mounts_for_source_node_unlocked(source_device_node);
+	}
+
+	String Filesys::GetFirstMountPathForSourceNode(DeviceNode* source_device_node) {
+		MutexLocal guard(&vfs_lock);
+		return get_first_mount_path_for_source_node_unlocked(source_device_node);
+	}
 
 	// Allocators
 	static vfs_dentry* alloc_dentry(vfs_dentry* parent, const char* name) {
@@ -83,7 +142,342 @@ namespace uni {
 		virtual stduint writfl(void* fil_handler, Slice file_slice, const byte* src) override { return 0; }
 	};
 
+	static constexpr stduint kDeviceTreeRootMarker = 0x2000u;
+	static constexpr stduint kDeviceTreeMountPathMarker = 0x2001u;
+	static constexpr stduint kDeviceTreeNodeTypeMarker = 0x2002u;
+	static constexpr stduint kDeviceTreeDriverNameMarker = 0x2003u;
+	static constexpr stduint kDeviceTreeBlockSizeMarker = 0x2004u;
+	static constexpr stduint kDeviceTreeUnitCountMarker = 0x2005u;
+	static constexpr stduint kDeviceTreeByteSizeMarker = 0x2006u;
+	static constexpr stduint kDeviceTreeBindingStateMarker = 0x2007u;
+	static constexpr stduint kDeviceTreeMountCountMarker = 0x2008u;
+	static constexpr stduint kDeviceTreeNodeNameMarker = 0x2009u;
+	static constexpr rostr kDeviceTreeMountPathName = "mount-path";
+	static constexpr rostr kDeviceTreeNodeTypeName = "node-type";
+	static constexpr rostr kDeviceTreeDriverNameName = "driver-name";
+	static constexpr rostr kDeviceTreeBlockSizeName = "block-size";
+	static constexpr rostr kDeviceTreeUnitCountName = "unit-count";
+	static constexpr rostr kDeviceTreeByteSizeName = "byte-size";
+	static constexpr rostr kDeviceTreeBindingStateName = "binding-state";
+	static constexpr rostr kDeviceTreeMountCountName = "mount-count";
+	static constexpr rostr kDeviceTreeNodeNameName = "node-name";
+
+	struct DeviceTreeHandle {
+		stduint marker = 0;
+		DeviceNode* node = nullptr;
+	};
+
+	static DeviceNode* device_tree_find_child(DeviceNode* parent, const char* name, stduint len) {
+		if (!parent || !name || !len) return nullptr;
+		for (auto* child = reinterpret_cast<DeviceNode*>(parent->link.subf);
+			child; child = reinterpret_cast<DeviceNode*>(child->link.next)) {
+			if (!child->link.addr) continue;
+			if (StrCompareN(child->link.addr, name, len) == 0 && child->link.addr[len] == '\0') {
+				return child;
+			}
+		}
+		return nullptr;
+	}
+
+	static DeviceTreeHandle* device_tree_set_handle(void* handle_buffer, DeviceNode* node, stduint marker) {
+		if (!handle_buffer) return nullptr;
+		auto* handle = reinterpret_cast<DeviceTreeHandle*>(handle_buffer);
+		handle->marker = marker;
+		handle->node = node;
+		return handle;
+	}
+
+	static DeviceNode* device_tree_handle_node(void* handler) {
+		if (!handler) return nullptr;
+		auto* handle = reinterpret_cast<DeviceTreeHandle*>(handler);
+		if (handle->marker != kDeviceTreeRootMarker) return handle->node;
+		return handle->node;
+	}
+
+	static bool device_tree_handle_is_root(void* handler) {
+		if (!handler) return false;
+		auto* handle = reinterpret_cast<DeviceTreeHandle*>(handler);
+		return handle->marker == kDeviceTreeRootMarker;
+	}
+
+	static const char* device_node_type_name(DeviceNodeType type) {
+		switch (type) {
+		case DeviceNodeType::SystemRoot: return "SystemRoot";
+		case DeviceNodeType::BusRoot: return "BusRoot";
+		case DeviceNodeType::PCI_Root: return "PCI_Root";
+		case DeviceNodeType::PciBus: return "PciBus";
+		case DeviceNodeType::PciDevice: return "PciDevice";
+		case DeviceNodeType::IsaBus: return "IsaBus";
+		case DeviceNodeType::StorageDevice: return "StorageDevice";
+		case DeviceNodeType::UsbBus: return "UsbBus";
+		case DeviceNodeType::UsbRootHub: return "UsbRootHub";
+		case DeviceNodeType::UsbPort: return "UsbPort";
+		case DeviceNodeType::UsbDevice: return "UsbDevice";
+		case DeviceNodeType::UsbInterface: return "UsbInterface";
+		case DeviceNodeType::PlatformDevice: return "PlatformDevice";
+		case DeviceNodeType::SerioController: return "SerioController";
+		case DeviceNodeType::SerioDevice: return "SerioDevice";
+		default: return "Unknown";
+		}
+	}
+
+	static const char* device_binding_state_name(uint32 state) {
+		switch (DriverBindingState(state)) {
+		case DriverBindingState::None: return "none";
+		case DriverBindingState::Matched: return "matched";
+		case DriverBindingState::Probed: return "probed";
+		case DriverBindingState::Started: return "started";
+		case DriverBindingState::Failed: return "failed";
+		default: return "unknown";
+		}
+	}
+
+	static bool device_tree_handle_is_property(void* handler) {
+		if (!handler) return false;
+		auto* handle = reinterpret_cast<DeviceTreeHandle*>(handler);
+		return handle->marker >= kDeviceTreeMountPathMarker && handle->marker <= kDeviceTreeNodeNameMarker;
+	}
+
+	static bool device_tree_node_is_storage(DeviceNode* node) {
+		return node && DeviceNodeType(node->fields.node_type) == DeviceNodeType::StorageDevice;
+	}
+
+	static bool device_tree_try_storage_numbers(DeviceNode* node, stduint* block_size, stduint* unit_count, uint64* byte_size) {
+		if (!device_tree_node_is_storage(node)) return false;
+		auto* storage = static_cast<uni::StorageTrait*>(node->fields.binding.driver_data);
+		if (!storage) return false;
+		stduint local_block_size = storage->Block_Size;
+		stduint local_unit_count = storage->getUnits();
+		uint64 local_byte_size = uint64(local_block_size) * uint64(local_unit_count);
+		if (block_size) *block_size = local_block_size;
+		if (unit_count) *unit_count = local_unit_count;
+		if (byte_size) *byte_size = local_byte_size;
+		return true;
+	}
+
+	static bool device_tree_property_name_to_marker(const char* name, stduint len, stduint& marker_out) {
+		struct PropertyNameMap { const char* name; stduint marker; };
+		static const PropertyNameMap maps[] = {
+			{kDeviceTreeMountPathName, kDeviceTreeMountPathMarker},
+			{kDeviceTreeNodeTypeName, kDeviceTreeNodeTypeMarker},
+			{kDeviceTreeDriverNameName, kDeviceTreeDriverNameMarker},
+			{kDeviceTreeBindingStateName, kDeviceTreeBindingStateMarker},
+			{kDeviceTreeMountCountName, kDeviceTreeMountCountMarker},
+			{kDeviceTreeNodeNameName, kDeviceTreeNodeNameMarker},
+			{kDeviceTreeBlockSizeName, kDeviceTreeBlockSizeMarker},
+			{kDeviceTreeUnitCountName, kDeviceTreeUnitCountMarker},
+			{kDeviceTreeByteSizeName, kDeviceTreeByteSizeMarker},
+		};
+		for (const auto& map : maps) {
+			if (len == StrLength(map.name) && StrCompareN(name, map.name, len) == 0) {
+				marker_out = map.marker;
+				return true;
+			}
+		}
+		return false;
+	}
+
+	static bool device_tree_property_available(DeviceNode* node, stduint marker) {
+		if (!node) return false;
+		switch (marker) {
+		case kDeviceTreeMountPathMarker:
+			return count_mounts_for_source_node_unlocked(node) != 0;
+		case kDeviceTreeNodeNameMarker:
+		case kDeviceTreeNodeTypeMarker:
+			return true;
+		case kDeviceTreeDriverNameMarker:
+			return node->fields.binding.driver_name != nullptr;
+		case kDeviceTreeBindingStateMarker:
+			return node->fields.binding.state != static_cast<uint32>(DriverBindingState::None);
+		case kDeviceTreeMountCountMarker:
+			return count_mounts_for_source_node_unlocked(node) != 0;
+		case kDeviceTreeBlockSizeMarker:
+		case kDeviceTreeUnitCountMarker:
+		case kDeviceTreeByteSizeMarker:
+			return device_tree_node_is_storage(node) && node->fields.binding.driver_data != nullptr;
+		default:
+			return false;
+		}
+	}
+
+	static stduint device_tree_property_text(DeviceNode* node, stduint marker, char* buf, stduint cap) {
+		if (!node || !buf || cap == 0) return 0;
+		buf[0] = '\0';
+		String out(buf, cap);
+		int written = 0;
+		switch (marker) {
+		case kDeviceTreeMountPathMarker: {
+			String mount_path = get_first_mount_path_for_source_node_unlocked(node);
+			written = out.Format("%s", mount_path.reference());
+			break;
+		}
+		case kDeviceTreeNodeNameMarker:
+			written = out.Format("%s", node->link.addr ? node->link.addr : "");
+			break;
+		case kDeviceTreeNodeTypeMarker:
+			written = out.Format("%s", device_node_type_name(DeviceNodeType(node->fields.node_type)));
+			break;
+		case kDeviceTreeDriverNameMarker:
+			written = out.Format("%s", node->fields.binding.driver_name ? node->fields.binding.driver_name : "");
+			break;
+		case kDeviceTreeBindingStateMarker:
+			written = out.Format("%s", device_binding_state_name(node->fields.binding.state));
+			break;
+		case kDeviceTreeMountCountMarker:
+			written = out.Format("%u", count_mounts_for_source_node_unlocked(node));
+			break;
+		case kDeviceTreeBlockSizeMarker: {
+			stduint block_size = 0;
+			if (!device_tree_try_storage_numbers(node, &block_size, nullptr, nullptr)) return 0;
+			written = out.Format("%u", block_size);
+			break;
+		}
+		case kDeviceTreeUnitCountMarker: {
+			stduint unit_count = 0;
+			if (!device_tree_try_storage_numbers(node, nullptr, &unit_count, nullptr)) return 0;
+			written = out.Format("%u", unit_count);
+			break;
+		}
+		case kDeviceTreeByteSizeMarker: {
+			uint64 byte_size = 0;
+			if (!device_tree_try_storage_numbers(node, nullptr, nullptr, &byte_size)) return 0;
+			written = out.Format("%[64d]", byte_size);
+			break;
+		}
+		default:
+			return 0;
+		}
+		return written > 0 ? stduint(written) : 0;
+	}
+
+	class DeviceTreeFs : public FilesysTrait {
+	public:
+		virtual bool makefs(rostr vol_label, void* moreinfo = 0) override { return true; }
+		virtual bool loadfs(void* moreinfo = 0) override { return true; }
+		virtual bool create(rostr fullpath, stduint flags, void* exinfo, rostr linkdest = 0) override { return false; }
+		virtual bool remove(rostr pathname) override { return false; }
+		virtual void* search(rostr fullpath, FilesysSearchArgs* args) override {
+			if (!fullpath || !*fullpath) return nullptr;
+			if (StrCompare(fullpath, "/") == 0) {
+				return device_tree_set_handle(args ? args->handle_buffer : nullptr, Devsman::Root(), kDeviceTreeRootMarker);
+			}
+			auto* node = Devsman::Root();
+			if (!node) return nullptr;
+			const char* segment = fullpath[0] == '/' ? fullpath + 1 : fullpath;
+			bool first_segment = true;
+			while (*segment) {
+				const char* slash = segment;
+				while (*slash && *slash != '/') slash++;
+				stduint seg_len = stduint(slash - segment);
+				if (!seg_len) break;
+				const bool is_last_segment = (*slash == '\0');
+				stduint property_marker = 0;
+				if (is_last_segment && device_tree_property_name_to_marker(segment, seg_len, property_marker)) {
+					if (!device_tree_property_available(node, property_marker)) return nullptr;
+					if (args && args->on_segment) {
+						auto* handle = device_tree_set_handle(args->handle_buffer, node, property_marker);
+						if (!handle) return nullptr;
+						char prop_name[VFS_MAX_FILENAME];
+						stduint copy_len = seg_len >= VFS_MAX_FILENAME ? VFS_MAX_FILENAME - 1 : seg_len;
+						MemCopyN(prop_name, segment, copy_len);
+						prop_name[copy_len] = '\0';
+						if (!args->on_segment(handle, prop_name, 0, 0, args->user_data)) return handle;
+					}
+					return device_tree_set_handle(args ? args->handle_buffer : nullptr, node, property_marker);
+				}
+				if (first_segment &&
+					node->link.addr &&
+					StrCompareN(node->link.addr, segment, seg_len) == 0 &&
+					node->link.addr[seg_len] == '\0') {
+					// "/system-root" addresses the tree root object itself.
+				}
+				else {
+					node = device_tree_find_child(node, segment, seg_len);
+					if (!node) return nullptr;
+				}
+				if (args && args->on_segment) {
+					auto* handle = device_tree_set_handle(args->handle_buffer, node, 0);
+					if (!handle) return nullptr;
+					char seg_name[VFS_MAX_FILENAME];
+					stduint copy_len = seg_len >= VFS_MAX_FILENAME ? VFS_MAX_FILENAME - 1 : seg_len;
+					MemCopyN(seg_name, segment, copy_len);
+					seg_name[copy_len] = '\0';
+					if (!args->on_segment(handle, seg_name, 1, 0, args->user_data)) return handle;
+				}
+				if (*slash == '\0') break;
+				segment = slash + 1;
+				first_segment = false;
+			}
+			return device_tree_set_handle(args ? args->handle_buffer : nullptr, node, 0);
+		}
+		virtual bool proper(void* handler, stduint cmd, const void* moreinfo = 0) override {
+			if (cmd == (stduint)FilesysCmd::FS_CMD_GET_ISDIR) {
+				if (auto* p_isdir = (bool*)moreinfo) {
+					*p_isdir = handler != nullptr && !device_tree_handle_is_property(handler);
+				}
+				return true;
+			}
+			if (cmd == (stduint)FilesysCmd::FS_CMD_GET_SIZE) {
+				if (auto* p_size = (stduint*)moreinfo) {
+					if (device_tree_handle_is_property(handler)) {
+						char text[128];
+						*p_size = device_tree_property_text(
+							device_tree_handle_node(handler),
+							reinterpret_cast<DeviceTreeHandle*>(handler)->marker,
+							text, sizeof(text));
+					}
+					else {
+						*p_size = 0;
+					}
+				}
+				return true;
+			}
+			return false;
+		}
+		virtual bool enumer(void* dir_handler, _tocall_ft _fn) override {
+			if (!_fn) return false;
+			if (device_tree_handle_is_root(dir_handler)) {
+				if (auto* root = Devsman::Root()) {
+					if (root->link.addr) _fn((void*)1, (void*)root->link.addr);
+				}
+				return true;
+			}
+			auto* node = device_tree_handle_node(dir_handler);
+			if (!node) return false;
+			for (auto* child = reinterpret_cast<DeviceNode*>(node->link.subf);
+				child; child = reinterpret_cast<DeviceNode*>(child->link.next)) {
+				if (!child->link.addr) continue;
+				_fn((void*)1, (void*)child->link.addr);
+			}
+			if (device_tree_property_available(node, kDeviceTreeNodeTypeMarker)) _fn((void*)0, (void*)kDeviceTreeNodeTypeName);
+			if (device_tree_property_available(node, kDeviceTreeNodeNameMarker)) _fn((void*)0, (void*)kDeviceTreeNodeNameName);
+			if (device_tree_property_available(node, kDeviceTreeDriverNameMarker)) _fn((void*)0, (void*)kDeviceTreeDriverNameName);
+			if (device_tree_property_available(node, kDeviceTreeBindingStateMarker)) _fn((void*)0, (void*)kDeviceTreeBindingStateName);
+			if (device_tree_property_available(node, kDeviceTreeBlockSizeMarker)) _fn((void*)0, (void*)kDeviceTreeBlockSizeName);
+			if (device_tree_property_available(node, kDeviceTreeUnitCountMarker)) _fn((void*)0, (void*)kDeviceTreeUnitCountName);
+			if (device_tree_property_available(node, kDeviceTreeByteSizeMarker)) _fn((void*)0, (void*)kDeviceTreeByteSizeName);
+			if (device_tree_property_available(node, kDeviceTreeMountCountMarker)) _fn((void*)0, (void*)kDeviceTreeMountCountName);
+			if (device_tree_property_available(node, kDeviceTreeMountPathMarker)) _fn((void*)0, (void*)kDeviceTreeMountPathName);
+			return true;
+		}
+		virtual stduint readfl(void* fil_handler, Slice file_slice, byte* dst) override {
+			if (!device_tree_handle_is_property(fil_handler) || !dst) return 0;
+			char text[128];
+			stduint full_len = device_tree_property_text(
+				device_tree_handle_node(fil_handler),
+				reinterpret_cast<DeviceTreeHandle*>(fil_handler)->marker,
+				text, sizeof(text));
+			if (file_slice.address >= full_len) return 0;
+			stduint remain = full_len - file_slice.address;
+			stduint copy_len = file_slice.length < remain ? file_slice.length : remain;
+			MemCopyN(dst, text + file_slice.address, copy_len);
+			return copy_len;
+		}
+		virtual stduint writfl(void* fil_handler, Slice file_slice, const byte* src) override { return 0; }
+	};
+
 	static RootFs global_rootfs_driver;
+	static DeviceTreeFs global_devtreefs_driver;
 	alignas(16) byte buf_root_sb[sizeof(vfs_super_block)];
 }
 extern file_system_type fs_fat;
@@ -125,6 +519,8 @@ void Filesys::Initialize() {
 		dir_inod->internal_handler = dir_dentry; // RootFs: dir_handler == its own dentry
 		dir_dentry->d_inode = dir_inod;
 	}
+
+	Filesys::MountFilesys(&global_devtreefs_driver, nullptr, "/.dev");
 }
 
 void Filesys::Register(file_system_type* fs_type) {
@@ -397,7 +793,8 @@ vfs_dentry* Filesys::Create(const char* pathname, stduint mode, vfs_dentry* base
 }
 
 
-bool Filesys::MountFilesys(FilesysTrait* fs, file_system_type* type, const char* target_path) {
+bool Filesys::MountFilesys(FilesysTrait* fs, file_system_type* type, const char* target_path,
+	DeviceNode* source_device_node, stduint device_id) {
 	MutexLocal guard(&vfs_lock);
 	vfs_dentry* target = _Index_unlocked(target_path, nullptr);
 	if (!target) {
@@ -412,6 +809,8 @@ bool Filesys::MountFilesys(FilesysTrait* fs, file_system_type* type, const char*
 	vfs_super_block* sb = new vfs_super_block();
 	sb->fs = fs;
 	sb->type = type;
+	sb->device_id = device_id;
+	sb->source_device_node = source_device_node;
 	sb->next = super_blocks;
 	super_blocks = sb;
 	
@@ -476,12 +875,13 @@ bool Filesys::Unmount(const char* target_path) {
 }
 
 
-file_system_type* Filesys::Mount(StorageTrait& storage, stduint dev, const char* target_path) {
+file_system_type* Filesys::Mount(StorageTrait& storage, stduint dev, const char* target_path,
+	DeviceNode* source_device_node) {
 	for (file_system_type* fs_type = registered_filesystems; fs_type; fs_type = fs_type->next) {
 		// probe() checks sys_id and calls loadfs() internally; non-null means ready to mount
 		FilesysTrait* fs = fs_type->probe(storage, dev);
 		if (fs) {
-			return Filesys::MountFilesys(fs, fs_type, target_path) ? fs_type : nullptr;
+			return Filesys::MountFilesys(fs, fs_type, target_path, source_device_node, dev) ? fs_type : nullptr;
 		}
 	}
 	return nullptr;
@@ -1404,4 +1804,3 @@ int Filesys::ClosePipe(vfs_file* file) {
 	free(file);
 	return 0;
 }
-

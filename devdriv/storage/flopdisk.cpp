@@ -47,6 +47,7 @@ FloppyInfo DetectFloppyDrives() {
 using namespace uni;
 
 FloppyDisk* floppies[2] = { nullptr, nullptr };
+static DeviceNode* floppy_nodes[2] = { nullptr, nullptr };
 static char flp_buf[sizeof(FloppyDisk) * 2];
 static char* floppy_sector = nullptr;
 
@@ -267,6 +268,10 @@ void R_FLP_INIT() {
 		floppies[1] = new (flp_buf + sizeof(FloppyDisk)) FloppyDisk(1, static_cast<FloppyDriveType>(info.type_b));
 		floppies[1]->setInterrupt(NULL);
 	}
+	floppy_nodes[0] = Devsman::FindNamedNode(DeviceNodeType::StorageDevice, "floppy@0");
+	floppy_nodes[1] = Devsman::FindNamedNode(DeviceNodeType::StorageDevice, "floppy@1");
+	if (floppies[0] && floppy_nodes[0]) Devsman::AttachStorageOps(floppy_nodes[0], floppies[0]);
+	if (floppies[1] && floppy_nodes[1]) Devsman::AttachStorageOps(floppy_nodes[1], floppies[1]);
 
 	// Allocate a 4KB aligned physical page for floppy DMA buffer
 	if (!floppy_sector) {
@@ -322,12 +327,23 @@ void serv_dev_fl_loop()
 				if (floppies[i]) {
 					floppies[i]->Reset();
 					if (floppies[i]->IsMediaPresent()) {
+						stduint block_size = floppies[i]->Block_Size;
+						stduint total_units = floppies[i]->getUnits();
+						uint64 total_bytes = uint64(total_units) * uint64(block_size);
+						if (floppy_nodes[i]) {
+							(void)Devsman::Ctrl(floppy_nodes[i],
+								(stduint)DeviceCtrlCommand::GetBlockSize, &block_size);
+							(void)Devsman::Ctrl(floppy_nodes[i],
+								(stduint)DeviceCtrlCommand::GetUnitCount, &total_units);
+							(void)Devsman::Ctrl(floppy_nodes[i],
+								(stduint)DeviceCtrlCommand::GetByteSize, &total_bytes);
+						}
 						ploginfo("[Floppy] Detect Floppy on Drive %c: : %u KB (%s)", 
 							'A' + i, 
-							_IMM(floppies[i]->getUnits() * floppies[i]->Block_Size) / 1024,
+							stduint(total_bytes / 1024),
 							drive_type_names[static_cast<byte>(floppies[i]->getType())]);
 						lab = String::newFormat("/mnt/fl%d", i);
-						if (auto fs = Filesys::Mount(*paged_floppies[i], 0, lab.reference())) {
+						if (auto fs = Filesys::Mount(*paged_floppies[i], 0, lab.reference(), floppy_nodes[i])) {
 							ploginfo("[Floppy] Mounted on %s successfully", lab.reference());
 						}
 					} else {
@@ -342,7 +358,19 @@ void serv_dev_fl_loop()
 			break;
 		case FiledevMsg::READ:// [diskno, lba]
 		{
-			stduint ack = (args[0] < 2 && floppies[args[0]] && floppies[args[0]]->Read(args[1], floppy_sector)) ? 1 : 0;
+			stduint ack = 0;
+			if (args[0] < 2 && floppies[args[0]]) {
+				stduint block_size = floppies[args[0]]->Block_Size;
+				if (floppy_nodes[args[0]]) {
+					(void)Devsman::Ctrl(floppy_nodes[args[0]],
+						(stduint)DeviceCtrlCommand::GetBlockSize, &block_size);
+					ack = Devsman::Read(floppy_nodes[args[0]], floppy_sector, block_size,
+						args[1] * block_size, 0) == (stdsint)block_size;
+				}
+				if (!ack) {
+					ack = floppies[args[0]]->Read(args[1], floppy_sector) ? 1 : 0;
+				}
+			}
 			if (sig_src) syssend(sig_src, &ack, sizeof(ack));
 			if (ack && sig_src) syssend(sig_src, floppy_sector, floppies[args[0]]->Block_Size);
 			break;
@@ -352,8 +380,19 @@ void serv_dev_fl_loop()
 			stduint ack = (args[0] < 2 && floppies[args[0]]) ? 1 : 0;
 			if (sig_src) syssend(sig_src, &ack, sizeof(ack));
 			if (ack && sig_src) {
-				sysrecv(sig_src, floppy_sector, floppies[args[0]]->Block_Size);
-				floppies[args[0]]->Write(args[1], floppy_sector);
+				stduint block_size = floppies[args[0]]->Block_Size;
+				if (floppy_nodes[args[0]]) {
+					(void)Devsman::Ctrl(floppy_nodes[args[0]],
+						(stduint)DeviceCtrlCommand::GetBlockSize, &block_size);
+				}
+				sysrecv(sig_src, floppy_sector, block_size);
+				if (floppy_nodes[args[0]]) {
+					ack = Devsman::Send(floppy_nodes[args[0]], floppy_sector, block_size,
+						args[1] * block_size, 0) == (stdsint)block_size;
+				}
+				else {
+					ack = floppies[args[0]]->Write(args[1], floppy_sector) ? 1 : 0;
+				}
 			}
 			break;
 		}

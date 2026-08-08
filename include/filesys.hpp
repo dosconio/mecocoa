@@ -8,6 +8,8 @@
 #include <cpp/trait/FilesysTrait.hpp>
 #include <cpp/trait/StorageTrait.hpp>
 
+struct DeviceNode;
+
 // VFS Layer for Mecocoa
 // Linux-like Virtual File System
 
@@ -32,6 +34,7 @@ struct vfs_super_block {
 	vfs_dentry* s_root = nullptr;           // Root dentry of this mount
 	file_system_type* type = nullptr;       // Pointer to the FS type
 	stduint device_id = 0;            // Underlying device id
+	DeviceNode* source_device_node = nullptr; // Source storage/partition node in device tree
 	
 	vfs_super_block* next = nullptr;
 };
@@ -111,7 +114,8 @@ public:
 	static void Register(file_system_type* fs_type);
 	// Probe a partition and if successful, mount it at the target path
 	static auto
-		Mount(StorageTrait& storage, stduint dev, const char* target_path) -> file_system_type*;
+		Mount(StorageTrait& storage, stduint dev, const char* target_path,
+			DeviceNode* source_device_node = nullptr) -> file_system_type*;
 	// Detach a filesystem from the VFS tree and release resources
 	static bool Unmount(const char* target_path);
 	// General path resolution: find dentry for a given path
@@ -119,7 +123,8 @@ public:
 
 public:
 	// Explicitly mount an instantiated FS to a path (used by DevFs and RootFs)
-	static bool MountFilesys(FilesysTrait* fs, file_system_type* type, const char* target_path);
+	static bool MountFilesys(FilesysTrait* fs, file_system_type* type, const char* target_path,
+		DeviceNode* source_device_node = nullptr, stduint device_id = 0);
 
 public:
 	static int CreatePipe(vfs_file** out_reader, vfs_file** out_writer);
@@ -137,6 +142,10 @@ public:
 	//
 	static String getAbsolutePath(vfs_dentry* dentry);
 	static vfs_dentry* getRoot();
+	static DeviceNode* GetMountSourceNode(vfs_dentry* dentry);
+	static DeviceNode* GetMountSourceNode(const char* pathname, vfs_dentry* base = nullptr);
+	static stduint CountMountsForSourceNode(DeviceNode* source_device_node);
+	static String GetFirstMountPathForSourceNode(DeviceNode* source_device_node);
 };
 
 

@@ -794,15 +794,29 @@ namespace {
 			ns.disk.hd_info_valid = true;
 		}
 
+		void RegisterPartitionNodes(NamespaceInfo& ns) {
+			if (!ns.device_node) return;
+			auto& hdinfo = ns.disk.hd_info;
+			for (stduint part_dev = 1; part_dev <= hdinfo.part_count; ++part_dev) {
+				uni::PartitionSlice slice = GetPartitionSlice(hdinfo, part_dev);
+				if (slice.sys_id == 0x00 || slice.sys_id == FILESYS_EXT || slice.length == 0) continue;
+				String name = String::newFormat("partition@%u", part_dev);
+				Devsman::RegisterStoragePartition(ns.device_node, name.reference(), ns.disk, part_dev);
+			}
+		}
+
 		void MountPartitions(NamespaceInfo& ns) {
 			auto& hdinfo = ns.disk.hd_info;
 			for (stduint part_dev = 1; part_dev <= hdinfo.part_count; ++part_dev) {
 				uni::PartitionSlice slice = GetPartitionSlice(hdinfo, part_dev);
 				if (slice.sys_id == 0x00) continue;
 				if (slice.sys_id == FILESYS_EXT) continue;
+				String node_name = String::newFormat("partition@%u", part_dev);
+				DeviceNode* part_node = Devsman::RegisterStoragePartition(
+					ns.device_node, node_name.reference(), ns.disk, part_dev);
 				String lab = String::newFormat("/mnt/nvme%un%u.%u",
 					(stduint)NVME_CONTROLLER_INDEX, (stduint)ns.nsid, part_dev);
-				if (auto fs = Filesys::Mount(ns.disk, part_dev, lab.reference())) {
+				if (auto fs = Filesys::Mount(ns.disk, part_dev, lab.reference(), part_node)) {
 					ploginfo("[NVMe] mount %s on %s", fs->name, lab.reference());
 				}
 			}
@@ -810,13 +824,21 @@ namespace {
 
 		bool ReadLba0(NamespaceInfo& ns) {
 			if (!sector_buf || ns.block_size == 0) return false;
+			DeviceNode* storage_node = ns.device_node;
+			stduint node_block_size = 0;
+			if (!storage_node) return false;
+			if (Devsman::Ctrl(storage_node, (stduint)DeviceCtrlCommand::GetBlockSize, &node_block_size) != 0) {
+				plogwarn("[NVMe] ctrl nsid=%[32H] get block size failed", ns.nsid);
+				return false;
+			}
+			if (node_block_size == 0) return false;
 			// ploginfo("[NVMe] probe lba0 begin");
 			MemSet(sector_buf, 0, NVME_ADMIN_PAGE_SIZE);
-			if (!ns.disk.Read(0, sector_buf)) {
+			if (Devsman::Read(storage_node, sector_buf, node_block_size, 0, 0) != (stdsint)node_block_size) {
 				plogwarn("[NVMe] read nsid=%[32H] lba0 failed", ns.nsid);
 				return false;
 			}
-			if (ns.block_size >= 512) {
+			if (node_block_size >= 512) {
 				// ploginfo("[NVMe] lba0 sig=%02X%02X bytes=%02X %02X %02X %02X %02X %02X %02X %02X",
 				// 	(unsigned)sector_buf[511], (unsigned)sector_buf[510],
 				// 	(unsigned)sector_buf[0], (unsigned)sector_buf[1],
@@ -841,6 +863,7 @@ namespace {
 				RegisterStorageNode(ns);
 				if (!ReadLba0(ns)) continue;
 				ParsePartitions(ns);
+				RegisterPartitionNodes(ns);
 				MountPartitions(ns);
 			}
 		}
