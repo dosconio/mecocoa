@@ -59,18 +59,30 @@ static void ReleaseSchedulerLockForSwitch() {
 
 
 #if _MCCA == 0x8632
+static bool ThreadHasSchedulableKernelStackMetadata(const ThreadBlock* th) {
+	return th && th->stack_levladdr && th->stack_size;
+}
+
+static void RequireSchedulableKernelStackMetadata(const ThreadBlock* th, rostr where) {
+	if (ThreadHasSchedulableKernelStackMetadata(th)) return;
+	printlog(_LOG_FATAL,
+		"[STACKMETA] %s invalid tid=%u pid=%u state=%u lev=%[x] line=%[x] size=%u proc=%u",
+		where,
+		th ? th->tid : ~_IMM0,
+		th && th->parent_process ? th->parent_process->pid : ~_IMM0,
+		th ? _IMM(th->state) : ~_IMM0,
+		th ? th->stack_levladdr : nullptr,
+		th ? th->stack_lineaddr : nullptr,
+		th ? th->stack_size : 0,
+		th ? th->processor_id : ~_IMM0);
+}
+
 static void BindCurrentKernelEntryStack(ThreadBlock* th, stduint cpuid) {
 	if (!th) return;
 	auto percore = Taskman::PCU_CORES_PERCORE[cpuid];
 	if (!percore) return;
+	RequireSchedulableKernelStackMetadata(th, "BindCurrentKernelEntryStack");
 	percore->current_thread = th;
-
-	if (!th->stack_levladdr || !th->stack_size) {
-		plogerro("[CPU%u] BindCurrentKernelEntryStack skip tid=%u stack=%[x] size=%u keep_kstack=%[x]",
-			cpuid, th->tid, th->stack_levladdr, th->stack_size,
-			percore->kernel_stack);
-		return;
-	}
 	
 	percore->kernel_stack = _IMM(th->stack_levladdr) + th->stack_size - 0x10;
 	percore->tss.ESP0 = GetCoreTransitionStackTop(cpuid);
@@ -246,6 +258,9 @@ void Taskman::EnqueueReady(ThreadBlock* pb, bool lock) {
 		if (lock) scheduler_lock.Release(old_if);
 		return;
 	}
+	#if _MCCA == 0x8632
+	RequireSchedulableKernelStackMetadata(pb, "EnqueueReady");
+	#endif
 	int idx = pb->priority + 16;
 	if (idx < 0) idx = 0;
 	if (idx > 31) idx = 31;
@@ -276,6 +291,9 @@ void Taskman::EnqueueExpired(ThreadBlock* pb, bool lock) {
 		if (lock) scheduler_lock.Release(old_if);
 		return;
 	}
+	#if _MCCA == 0x8632
+	RequireSchedulableKernelStackMetadata(pb, "EnqueueExpired");
+	#endif
 	int idx = pb->priority + 16;
 	if (idx < 0) idx = 0;
 	if (idx > 31) idx = 31;
@@ -497,6 +515,9 @@ bool Taskman::AppendThread(ThreadBlock* task) {
 	// 	if (cast<ThreadBlock*>(nod->offs)->tid > task->tid) break;
 	// 	insert_after = nod;
 	// }
+	#if _MCCA == 0x8632
+	RequireSchedulableKernelStackMetadata(task, "AppendThread");
+	#endif
 	thchain.Append(task, false, insert_after);
 	
 	task->state = ThreadBlock::State::Ready;

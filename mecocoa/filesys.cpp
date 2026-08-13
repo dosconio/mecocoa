@@ -438,7 +438,11 @@ namespace uni {
 			if (!_fn) return false;
 			if (device_tree_handle_is_root(dir_handler)) {
 				if (auto* root = Devsman::Root()) {
-					if (root->link.addr) _fn((void*)1, (void*)root->link.addr);
+					for (auto* child = reinterpret_cast<DeviceNode*>(root->link.subf);
+						child; child = reinterpret_cast<DeviceNode*>(child->link.next)) {
+						if (!child->link.addr) continue;
+						_fn((void*)1, (void*)child->link.addr);
+					}
 				}
 				return true;
 			}

@@ -65,6 +65,7 @@ static uni::BitmapFontEngine loader_font_engine(1);
 #endif
 
 extern UART_t com1;
+extern bool SerialCom1Available();
 bool Consman::Initialize() {
 	// con0_out = 0;
 	Bcons[0].Reset(bda->screen_columns, 24, _VIDEO_ADDR_BUFFER, 0 * 50); Bcons[0].setShowY(0, 24);
@@ -102,7 +103,8 @@ bool Consman::Initialize() {
 		plogwarn("There is no default 800xN-8888 Video Mode");
 		return true;
 	}
-	else VTTY_Append(&com1);
+	else if (SerialCom1Available()) VTTY_Append(&com1);
+	else plogwarn("COM1 unavailable, skip serial VTTY append");
 
 	// config layman
 	#if !defined(_UEFI)

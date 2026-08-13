@@ -87,6 +87,9 @@ namespace {
 
 	constexpr NamedDriverMatchEntry platform_driver_match_table[] = {
 		{"uart@com1", "uart-8250"},
+		{"uart@com2", "uart-8250"},
+		{"uart@com3", "uart-8250"},
+		{"uart@com4", "uart-8250"},
 		{"rtc@cmos", "rtc-cmos"},
 	};
 
@@ -133,6 +136,9 @@ namespace {
 			StrCompare(name, "pic@8259-slave") == 0 ||
 			StrCompare(name, "rtc@cmos") == 0 ||
 			StrCompare(name, "uart@com1") == 0 ||
+			StrCompare(name, "uart@com2") == 0 ||
+			StrCompare(name, "uart@com3") == 0 ||
+			StrCompare(name, "uart@com4") == 0 ||
 			StrCompare(name, "fdc@0") == 0;
 	}
 
