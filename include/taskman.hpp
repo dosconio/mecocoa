@@ -223,7 +223,7 @@ static constexpr const stduint INTRUPT = (~_IMM0);
 static constexpr const stduint COMM_RECV = 0b10;
 static constexpr const stduint COMM_SEND = 0b01;
 static constexpr const stduint COMM_SEND_ASYNC = 0b100;
-static constexpr const stduint LIMIT_THREAD_AMSG = 32;
+static constexpr const stduint LIMIT_THREAD_AMSG = 64;
 
 struct CommMsg {
 	uni::Slice data = {};

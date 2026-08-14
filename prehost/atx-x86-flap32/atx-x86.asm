@@ -369,12 +369,14 @@ SYSCALL_RETURN_RING3:
 	MOV EAX, CR3
 	CMP EAX, EBX
 	MOV ESP, EDX
+SYSCALL_RETURN_RING3_TAIL_BEGIN:
 	JE SYSCALL_SKIP_USER_CR3
 	MOV CR3, EBX
 SYSCALL_SKIP_USER_CR3:
 
 	POPAD
 	IRETD
+SYSCALL_RETURN_RING3_TAIL_END:
 
 
 SYSCALL_RETURN_RING0:
@@ -669,12 +671,115 @@ IRQ_FROM_RING0:
 
 
 IRQ_RING0_ON_TRANSITION_STACK:
-	; Debug stop:
-	; We are in ring0, but ESP is still in high transition-stack area.
-	; Do not call C handler on transition stack.
+	; Recover interrupts that hit while ring3 return is using the transition
+	; stack. Saved EIP may already be the IRETD target, so classify by the
+	; transition-stack offset instead of by the interrupted instruction address.
+	XOR EAX, EAX
+	MOV AX, DS
+	PUSH EAX
+
+	XOR EAX, EAX
+	MOV AX, ES
+	PUSH EAX
+
+	XOR EAX, EAX
+	MOV AX, FS
+	PUSH EAX
+
+	XOR EAX, EAX
+	MOV AX, GS
+	PUSH EAX
+
+	LEA EBP, [ESP + 16]
+	MOV EBX, CR3
+
+	; Compute CPU id from the transition stack page and get PERCORE.
+	MOV ECX, EBP
+	AND ECX, 0xFFFFF000
+
+	MOV EAX, 0xFFFFF000
+	SUB EAX, ECX
+	SHR EAX, 12
+	MOV ESI, EAX
+
+	MOV AX, SegData
+	MOV DS, AX
+	MOV ES, AX
+
+	MOV EDX, [0x80000000 + C_PCU_CORES_PERCORE + ESI * 4]
+
+	; EBP is the nested IRQ frame base after PUSHAD. Rebuild the ESP value
+	; that was active before this IRQ entered the trampoline:
+	;   CPU same-ring frame 12 + IRQ_TRAMPOLINE 8 + PUSHAD 32 = 0x34.
+	MOV ECX, [EDX + PERCORE_tss_ESP0]
+	MOV EAX, EBP
+	ADD EAX, 0x34
+	SUB ECX, EAX
+
+	CMP ECX, 14 * 4
+	JE IRQ_RING0_ON_TRANSITION_STACK_SYSCALL
+	CMP ECX, 6 * 4
+	JE IRQ_RING0_ON_TRANSITION_STACK_SYSCALL
+	CMP ECX, 15 * 4
+
+	JE IRQ_RING0_ON_TRANSITION_STACK_IRQ
+	CMP ECX, 5 * 4
+	JE IRQ_RING0_ON_TRANSITION_STACK_IRQ
+
+IRQ_RING0_ON_TRANSITION_STACK_FATAL:
 	CLI
 	HLT
-	JMP IRQ_RING0_ON_TRANSITION_STACK
+	JMP IRQ_RING0_ON_TRANSITION_STACK_FATAL
+
+IRQ_RING0_ON_TRANSITION_STACK_SYSCALL:
+	MOV EDI, CALLGATE_TOTAL_SIZE
+	JMP IRQ_RING0_ON_TRANSITION_STACK_RECOVER
+
+IRQ_RING0_ON_TRANSITION_STACK_IRQ:
+	MOV EDI, INTFRAME_TOTAL_SIZE
+
+IRQ_RING0_ON_TRANSITION_STACK_RECOVER:
+	MOV EAX, ROOT_PAGING
+	CMP EBX, EAX
+	JE IRQ_RING0_ON_TRANSITION_STACK_ROOT_READY
+	MOV CR3, EAX
+
+IRQ_RING0_ON_TRANSITION_STACK_ROOT_READY:
+	; EDI is the interrupted main-frame size. Place the nested frame below it
+	; and keep the original transition-frame pointer just above this frame.
+	MOV ESP, [EDX + PERCORE_kernel_stack]
+	SUB ESP, EDI
+	SUB ESP, 4
+	MOV [ESP], EBP
+	SUB ESP, INTFRAME_TOTAL_SIZE
+
+	COPY_DWORDS EBP, ESP, IRQ_RING0_FRAME_DWORDS
+
+	MOV EAX, [EBP + IF_SP]
+	MOV [ESP + IF_SP0], EAX
+	MOV DWORD [ESP + IF_SS0], SegData
+
+	MOV [ESP + IF_CR3], EBX
+
+	MOV EAX, [EBP - 4]
+	MOV [ESP + IF_DS], EAX
+
+	MOV EAX, [EBP - 8]
+	MOV [ESP + IF_ES], EAX
+
+	MOV EAX, [EBP - 12]
+	MOV [ESP + IF_FS], EAX
+
+	MOV EAX, [EBP - 16]
+	MOV [ESP + IF_GS], EAX
+
+	MOV [ESP + IF_PERCORE], EDX
+
+	LOAD_KERNEL_SEGS
+
+	MOV EBP, ESP
+	MOV EAX, 1
+	JMP IRQ_CALL_INTERRUPT_COMMON
 
 
 IRQ_FROM_RING0_NORMAL:
@@ -711,6 +816,7 @@ IRQ_FROM_RING0_NORMAL:
 IRQ_CALL_INTERRUPT_COMMON:
 	; EAX = return mode:
 	;   0 = ring0 return
+	;   1 = ring0 return via saved transition-stack frame
 	;   3 = ring3 return
 	; EBP = HardwareInterruptFrame*
 
@@ -726,6 +832,8 @@ IRQ_CALL_INTERRUPT_COMMON:
 
 	TEST EAX, EAX
 	JZ IRQ_RETURN_RING0
+	CMP EAX, 1
+	JE IRQ_RETURN_RING0_TRANSITION_STACK
 	JMP IRQ_RETURN_RING3
 
 
@@ -746,6 +854,7 @@ IRQ_RETURN_RING3:
 	MOV EAX, CR3
 	CMP EAX, EBX
 	MOV ESP, EDX
+IRQ_RETURN_RING3_TAIL_BEGIN:
 	JE IRQ_SKIP_USER_CR3
 	MOV CR3, EBX
 
@@ -753,6 +862,7 @@ IRQ_SKIP_USER_CR3:
 	POPAD
 	ADD ESP, 8
 	IRETD
+IRQ_RETURN_RING3_TAIL_END:
 
 
 IRQ_RETURN_RING0:
@@ -767,6 +877,28 @@ IRQ_RETURN_RING0:
 
 	MOV ESP, EDX
 
+	POPAD
+	ADD ESP, 8
+	IRETD
+
+
+IRQ_RETURN_RING0_TRANSITION_STACK:
+	; The nested exception frame lives on the kernel stack, but its original
+	; same-ring return frame is still on the transition stack.
+	MOV EDX, [EBP + INTFRAME_TOTAL_SIZE]
+	MOV EBX, [EBP + IF_CR3]
+
+	COPY_DWORDS EBP, EDX, IRQ_RING0_FRAME_DWORDS
+
+	RESTORE_SEGS_FROM_IFRAME EBP
+
+	MOV EAX, CR3
+	CMP EAX, EBX
+	MOV ESP, EDX
+	JE IRQ_RETURN_RING0_TRANSITION_SKIP_CR3
+	MOV CR3, EBX
+
+IRQ_RETURN_RING0_TRANSITION_SKIP_CR3:
 	POPAD
 	ADD ESP, 8
 	IRETD

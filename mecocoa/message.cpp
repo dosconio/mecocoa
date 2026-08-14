@@ -203,6 +203,7 @@ int msg_send(ThreadBlock* fo_th, stduint too, _Comment(vaddr) CommMsg* msg, bool
 	}
 	else if (is_async) {
 		if (to_th->async_messages.Count() >= LIMIT_THREAD_AMSG) {
+			plogerro("Too many async messages");
 			return 3;
 		}
 		auto [fo_msg, fo_addr, fo_leng] = FetchMessage(fo, msg, msg_in_kernel);
@@ -239,6 +240,8 @@ int msg_send(ThreadBlock* fo_th, stduint too, _Comment(vaddr) CommMsg* msg, bool
 		}
 	}
 	else {
+		if (_sigset_raw(&fo_th->pending_signals) & ~_sigset_raw(&fo_th->blocked_signals))
+			return -4;
 		fo_th->Block(ThreadBlock::BlockReason::BR_SendMsg);
 		fo_th->send_to_whom = to_th;
 		if (fo_th->unsolved_msg) plogwarn("T%u, unsolved_msg when send(%u)", fo_th->tid, too);
@@ -374,6 +377,8 @@ int msg_recv(ThreadBlock* to_th, stduint foo, _Comment(vaddr) CommMsg* msg, bool
 			to_th->async_messages.Remove(target_node);
 		}
 		else { // block self to wait for msg
+			if (_sigset_raw(&to_th->pending_signals) & ~_sigset_raw(&to_th->blocked_signals))
+				return -4;
 			ThreadBlock* fo_th_tgt = nullptr;
 			if (foo == ANYPROC || foo == INTRUPT) {
 				fo_th_tgt = (ThreadBlock*)foo;

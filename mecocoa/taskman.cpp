@@ -602,7 +602,10 @@ static bool DeliverWaitResultAtomically(ProcessBlock* pparent, stduint child_pid
 		return true;
 	}
 
-	if (parent_th->async_messages.Count() >= LIMIT_THREAD_AMSG) return false;
+	if (parent_th->async_messages.Count() >= LIMIT_THREAD_AMSG) {
+		plogerro("Too many async messages");
+		return false;
+	}
 	AsyncCommMsg* amsg = new AsyncCommMsg();
 	if (!amsg) return false;
 	byte* payload = new byte[sizeof(args)];
@@ -723,6 +726,12 @@ bool Taskman::Exit(ProcessBlock* p, stdsint exit_code)
 			child->sibling_next = nullptr;
 		}
 
+		// Reap Hanging children directly instead of reparenting them to Task_Init
+		if (child->state == ProcessBlock::State::Hanging) {
+			_Exit_Cleanup(child->pid);
+			continue;
+		}
+
 		// Reparent the child to Task_Init (sole source of truth from taskman.hpp)
 		child->parent_id = Task_Init;
 
@@ -738,7 +747,8 @@ bool Taskman::Exit(ProcessBlock* p, stdsint exit_code)
 	// Handle Self (Notify Parent or become Zombie)
 	using PBS = ProcessBlock::State;
 	bool parent_active = pparent && pparent->state == PBS::Active;
-	bool parent_is_nonwait_kernel_owner = parent_pid == Task_Kernel && pid != Task_Init;
+	bool parent_is_nonwait_kernel_owner = (parent_pid == Task_Kernel && pid != Task_Init)
+										|| parent_pid == Task_Init;
 
 	if (parent_active && pparent->isWaiting() && (pparent->wait_for_pid == 0 || pparent->wait_for_pid == pid)) {
 		if (DeliverWaitResultAtomically(pparent, pid, _IMM(exit_code))) {
