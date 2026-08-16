@@ -3,6 +3,7 @@
 // ModuTitle: [Service] Console - ELF32-C++ x86 Bare-Metal
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 #include "../include/mecocoa.hpp"
+#include "../devdriv/audio/au-buzzer.hpp"
 #include "c/driver/UART.h"
 
 
@@ -72,6 +73,9 @@ bool Consman::Initialize() {
 	for1(i, TTY_NUMBER - 1) {
 		Bcons[i].Reset(bda->screen_columns, 50, _VIDEO_ADDR_BUFFER, i * 50); Bcons[i].setShowY(0, 25);
 	}
+	#if _MCCA == 0x8632
+	for0a(i, Bcons) Bcons[i].setBellHandler(BuzzerBell);
+	#endif
 	#ifdef _ARC_x86 // x86:
 	InitializeBottomBar();
 	#endif
@@ -155,6 +159,9 @@ bool Consman::Initialize() {
 	// main screen
 	auto vcon0 = new VideoConsole2(&global_layman.Lock()->getVCI(), screen0_win, Color::Black, Color::White);
 	global_vcon0 = vcon0;
+	#if _MCCA == 0x8632
+	vcon0->setBellHandler(BuzzerBell);
+	#endif
 
 	#if _MCCA == 0x8632
 	vcon0->setFontEngine(&fallback_engine);

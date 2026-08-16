@@ -10,12 +10,13 @@ static void SafeLaymanUpdate(SheetTrait* sheet, const Rectangle& rect) {
 	#endif
 }
 
-
-
+#include "../devdriv/audio/au-buzzer.hpp"
 #include <c/driver/mouse.h>
 #include <c/driver/keyboard.h>
 #include "../include/console.hpp"
 #include "../include/filesys.hpp"
+
+#define _TEST_PCSpeaker
 
 extern uni::VideoConsole2* global_vcon0;
 
@@ -994,6 +995,9 @@ _RET_CreateVconsole Consman::CreateVconsole(const Rectangle& rect, rostr title) 
 		Rectangle(Point(2, 2), Size2(rect.width - 10, rect.height - 30)),
 		Color::Black, 0xFFFCEAF1
 	);
+	#if _MCCA == 0x8632
+	pcon->setBellHandler(BuzzerBell);
+	#endif
 
 	#if _MCCA == 0x8632
 	extern uni::FontEngine* global_ft_engine;
@@ -1046,6 +1050,11 @@ _RET_CreateVconsole Consman::CreateVconsole(const Rectangle& rect, rostr title) 
 	ret.tty_node = pnode;
 	ret.tty_no = pnode ? vttys.Locate((pureptr_t)pcon, false) : 0;
 	// ploginfo("CreateVconsole: done tty_no=%u", ret.tty_no);
+
+	#ifdef _TEST_PCSpeaker
+	pcon->OutChar('\a');
+	#endif
+
 	return ret;
 }
 

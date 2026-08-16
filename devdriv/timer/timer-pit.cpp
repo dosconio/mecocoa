@@ -9,6 +9,24 @@
 _ESYM_C void R_PIT_INIT();
 
 #if _MCCA == 0x8632
+namespace {
+	constexpr uint32 PIT_INPUT_FREQUENCY = 1193182;
+	Spinlock pit_channel2_lock;
+}
+
+bool PIT_SetChannel2Frequency(uint32 frequency_hz) {
+	if (!frequency_hz || frequency_hz > PIT_INPUT_FREQUENCY) return false;
+
+	uint32 divisor = (PIT_INPUT_FREQUENCY + frequency_hz / 2) / frequency_hz;
+	if (!divisor || divisor > 0xFFFF) return false;
+
+	SpinlockLocal guard(&pit_channel2_lock);
+	outpb(PORT_TIMER_MODE, 0b10110110);
+	outpb(PORT_PIT_TIMER2, byte(divisor));
+	outpb(PORT_PIT_TIMER2, byte(divisor >> 8));
+	return true;
+}
+
 #if 1
 __attribute__((section(".init.rmod")))
 RMOD_LIST RMOD_LIST_PIT{
