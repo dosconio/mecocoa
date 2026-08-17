@@ -1,4 +1,4 @@
-// UTF-8 g++ TAB4 LF 
+// UTF-8 g++ TAB4 LF
 // AllAuthor: @dosconio, @ArinaMgk
 // ModuTitle: Demonstration - ELF32-C++ x86 Bare-Metal
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
@@ -13,7 +13,7 @@
 
 
 extern uint32 _start_eax, _start_ebx;
-extern "C" void R_COM1_INIT(); 
+extern "C" void R_COM1_INIT();
 #define Systime SysTimer
 _sign_entry() {
 	_call_serious = kernel_fail;
@@ -41,6 +41,7 @@ _sign_entry() {
 	Taskman::Create((void*)&serv_dev_mem_loop, RING_M)->main_thread->name = "serv_dev_mem_loop";
 	Taskman::Create((void*)&serv_dev_hd_loop, RING_M)->main_thread->name = "serv_dev_hd_loop";
 	Taskman::Create((void*)&serv_dev_fl_loop, RING_M)->main_thread->name = "serv_dev_fl_loop";
+	Taskman::Create((void*)&serv_dev_audio_loop, RING_M)->main_thread->name = "serv_dev_audio_loop";
 
 	IC.enInterrupt();
 	// syscall(syscall_t::OUTC, 'O', 0);

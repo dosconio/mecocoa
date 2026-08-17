@@ -26,6 +26,7 @@ enum {
 	#if _MCCA == 0x8632
 	Task_Hdd_Serv,
 	Task_Flp_Serv,
+	Task_Audio_Serv,
 	#endif
 	Task_Init,
 	//

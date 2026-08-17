@@ -16,7 +16,7 @@ static void SafeLaymanUpdate(SheetTrait* sheet, const Rectangle& rect) {
 #include "../include/console.hpp"
 #include "../include/filesys.hpp"
 
-#define _TEST_PCSpeaker
+// #define _TEST_PCSpeaker
 
 extern uni::VideoConsole2* global_vcon0;
 

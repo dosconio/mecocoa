@@ -2,6 +2,7 @@
 #define DEVSMAN_HPP_
 
 #include <c/nnode.h>
+#include <cpp/Device/_Audio.hpp>
 
 struct DeviceNode;
 
@@ -198,6 +199,23 @@ public:
 	#endif
 
 };
+
+// ---- AUDIO ----
+
+enum class AudioMsg : stduint {
+	TEST,
+	PLAY_PCM_U8_MONO,
+};
+
+// Submit a synchronous PCM playback request to the audio service.
+bool AudioPlay(const uni::AudioPlayRequest& request);
+
+// Parse a RIFF/WAVE blob and submit the decoded PCM view to the audio service.
+bool AudioPlayWav(const void* wav_data, uint32 wav_size);
+
+// Submit a synchronous U8 mono PCM playback request to the audio service.
+bool SoundBlasterPlayPcmU8Mono(const uint8* data, uint32 byte_count,
+	uint16 sample_rate = 11025);
 
 
 #endif /* DEVSMAN_HPP_ */

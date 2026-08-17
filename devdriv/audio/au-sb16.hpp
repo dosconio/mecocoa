@@ -17,3 +17,13 @@ constexpr SoundBlasterPlatformConfig SoundBlasterDefaultConfig{
 	.dma8 = 1,
 	.dma16 = 5,
 };
+
+// Call from ordinary kernel context after IRQ dispatch is running.
+bool SoundBlasterRunAutoInitSmokeTest();
+
+// Call from ordinary kernel context. Current format is U8 mono PCM only.
+bool SoundBlasterPlayPcmU8MonoImmediate(const uint8* data, uint32 byte_count,
+	uint16 sample_rate = 11025);
+
+// Call from ordinary kernel context; returns the number of refilled DMA blocks.
+uint8 SoundBlasterServicePlayback();
