@@ -21,6 +21,7 @@ apps += \
 	$(BIN_DIR)/paint \
 	$(BIN_DIR)/cube \
 	$(BIN_DIR)/gblock \
+	$(BIN_DIR)/playmzk \
 	$(BIN_DIR)/notepad \
 	$(BIN_DIR)/viewpic \
 	\
@@ -89,6 +90,10 @@ $(BIN_DIR)/cube: subapps/cube.cpp $(MCCA_CRT0) $(MCCA_LIBC)
 $(BIN_DIR)/gblock: subapps/game_breakout.cpp $(MCCA_CRT0) $(MCCA_LIBC)
 	@echo "MK game_breakout"
 	$(MCCA_CXX) $(MCCA_CXXFLAGS) -o $@ subapps/game_breakout.cpp $(MCCA_LDLIBS)
+
+$(BIN_DIR)/playmzk: subapps/playmzk.cpp $(MCCA_CRT0) $(MCCA_LIBC)
+	@echo "MK playmzk"
+	$(MCCA_CXX) $(MCCA_CXXFLAGS) -o $@ subapps/playmzk.cpp $(MCCA_LDLIBS)
 
 $(BIN_DIR)/notepad: subapps/notepad.cpp $(MCCA_CRT0) $(MCCA_LIBC)
 	@echo "MK notepad"

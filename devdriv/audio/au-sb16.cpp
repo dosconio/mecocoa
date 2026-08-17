@@ -27,14 +27,39 @@ namespace {
 		CONFIG_SysTickFreq;
 	constexpr stduint SoundBlasterSingleCycleStopTimeoutExtraTicks =
 		CONFIG_SysTickFreq;
+	constexpr uint16 SoundBlasterCompatProbeSampleRate = 11025;
+	constexpr uint32 SoundBlasterCompatProbeBytes = SoundBlasterDmaBufferSize;
+	constexpr stduint SoundBlasterCompatProbeMinPercent = 75;
+	constexpr stduint SoundBlasterCompatProbeMaxPercent = 150;
+	constexpr uint16 SoundBlasterMinimumOutputRate = 5000;
+	constexpr uint16 SoundBlasterMaximumOutputRate = 45000;
 	static_assert(SoundBlasterAutoInitBlockCount * SoundBlasterAutoInitBlockBytes <=
 		SoundBlasterDmaBufferSize);
+
+	// SB16 PCM notes:
+	// - QEMU handles the modern 0x41/0xC0 8-bit single-cycle path normally.
+	// - VMware reports a usable DSP, but its timing differs: the legacy
+	//   0x40/0x14 path can finish a block immediately, while the modern path
+	//   may run too fast. Probe both paths with a silent block and keep the one
+	//   closest to the expected tick count; apply rate compensation when needed.
+	// - A block is considered complete when the IRQ handler publishes Idle.
+	//   DSP state bookkeeping may lag in virtual hardware, so normalize it
+	//   after completion instead of treating that as a playback failure.
+	// - The current user-facing WAV path still uses synchronous 4096-byte
+	//   single-cycle blocks. For gapless playback, move to service-side ring
+	//   buffering plus SB16 auto-init DMA.
 
 	enum class SoundBlasterPlaybackMode : uint8 {
 		Idle,
 		SingleCycle8,
 		AutoInit8,
 		AutoInitStopping,
+	};
+
+	enum class SoundBlasterPcmPath : uint8 {
+		Unknown,
+		Modern,
+		Legacy,
 	};
 
 	struct SoundBlasterAutoInitBufferState {
@@ -50,9 +75,19 @@ namespace {
 		uni::Atomic<uint32> refill_miss_count;
 	};
 
+	struct SoundBlasterPcmPathProbe {
+		bool completed;
+		bool compatible;
+		stduint elapsed_ticks;
+		stduint expected_ticks;
+	};
+
 	volatile uint32 sound_blaster_irq_count;
 	uni::Atomic<SoundBlasterPlaybackMode> sound_blaster_playback_mode{
 		SoundBlasterPlaybackMode::Idle};
+	SoundBlasterPcmPath sound_blaster_pcm_path = SoundBlasterPcmPath::Unknown;
+	stduint sound_blaster_rate_scale_num = 1;
+	stduint sound_blaster_rate_scale_den = 1;
 	volatile bool sound_blaster_unexpected_irq_reported;
 	uint8 sound_blaster_dma8_channel;
 	uint8* sound_blaster_dma_buffer;
@@ -219,34 +254,92 @@ namespace {
 		return true;
 	}
 
-	bool WaitSoundBlasterSingleCycleDone(uint32 byte_count, uint16 sample_rate) {
+	SoundBlasterPcmPath GetNominalSoundBlasterPcmPath() {
+		return sound_blaster.GetDspMajorVersion() >= 4 ?
+			SoundBlasterPcmPath::Modern : SoundBlasterPcmPath::Legacy;
+	}
+
+	SoundBlasterPcmPath GetEffectiveSoundBlasterPcmPath() {
+		return sound_blaster_pcm_path == SoundBlasterPcmPath::Unknown ?
+			SoundBlasterPcmPath::Modern : sound_blaster_pcm_path;
+	}
+
+	uint16 GetProgrammedSoundBlasterRate(uint16 sample_rate) {
+		stduint programmed_rate = sample_rate;
+		if (sound_blaster_rate_scale_den) {
+			programmed_rate =
+				(programmed_rate * sound_blaster_rate_scale_num +
+					sound_blaster_rate_scale_den / 2) /
+				sound_blaster_rate_scale_den;
+		}
+		if (programmed_rate < SoundBlasterMinimumOutputRate) {
+			programmed_rate = SoundBlasterMinimumOutputRate;
+		}
+		if (programmed_rate > SoundBlasterMaximumOutputRate) {
+			programmed_rate = SoundBlasterMaximumOutputRate;
+		}
+		return uint16(programmed_rate);
+	}
+
+	bool WaitSoundBlasterSingleCycleDone(uint32 byte_count, uint16 sample_rate,
+		stduint* elapsed_ticks = nullptr) {
 		const stduint playback_ticks = ((stduint)byte_count * CONFIG_SysTickFreq +
 			sample_rate - 1) / sample_rate;
 		const stduint timeout_ticks =
 			playback_ticks + SoundBlasterSingleCycleStopTimeoutExtraTicks;
 		const stduint playback_start = tick;
+		ploginfo("[SB16] Wait single-cycle start rate=%u bytes=%u timeout=%u",
+			(stduint)sample_rate, (stduint)byte_count, (stduint)timeout_ticks);
+		IC.enInterrupt();
 		while (sound_blaster_playback_mode.load(uni::MemoryOrder_Acquire) !=
 			SoundBlasterPlaybackMode::Idle &&
 			tick - playback_start < timeout_ticks) {
-			HALT();
-			Taskman::Schedule(true);
+			asm volatile("pause" ::: "memory");
 		}
 		if (sound_blaster_playback_mode.load(uni::MemoryOrder_Acquire) !=
-			SoundBlasterPlaybackMode::Idle ||
-			sound_blaster.GetState() != uni::SoundBlasterState::Ready) {
+			SoundBlasterPlaybackMode::Idle) {
 			IsaDmaMask(sound_blaster_dma8_channel);
 			sound_blaster_playback_mode.store(
 				SoundBlasterPlaybackMode::Idle, uni::MemoryOrder_Release);
 			sound_blaster.Complete8BitPlayback();
 			plogwarn("[SB16] PCM playback timed out rate=%u bytes=%u",
 				(stduint)sample_rate, (stduint)byte_count);
+			if (elapsed_ticks) *elapsed_ticks = tick - playback_start;
 			return false;
 		}
+		// if (sound_blaster.GetState() != uni::SoundBlasterState::Ready) {
+		// 	plogwarn("[SB16] PCM completed with non-ready state=%u",
+		// 		(stduint)sound_blaster.GetState());
+		// 	sound_blaster.Complete8BitPlayback();
+		// }
+		sound_blaster.Complete8BitPlayback();
+		if (elapsed_ticks) *elapsed_ticks = tick - playback_start;
+		ploginfo("[SB16] Wait single-cycle done rate=%u bytes=%u elapsed=%u",
+			(stduint)sample_rate, (stduint)byte_count,
+			(stduint)(tick - playback_start));
 		return true;
 	}
 
+	bool ProgramSoundBlasterSingleCyclePcm(uint32 byte_count,
+		uint16 sample_rate, SoundBlasterPcmPath pcm_path) {
+		const uint16 programmed_rate =
+			GetProgrammedSoundBlasterRate(sample_rate);
+		if (pcm_path == SoundBlasterPcmPath::Modern) {
+			return sound_blaster.SpeakerOn() &&
+				sound_blaster.SetOutputRate(programmed_rate) &&
+				sound_blaster.StartSingleCycle8(byte_count, false, false);
+		}
+		if (pcm_path == SoundBlasterPcmPath::Legacy) {
+			return sound_blaster.SpeakerOn() &&
+				sound_blaster.SetTimeConstant(programmed_rate) &&
+				sound_blaster.StartSingleCycle8Legacy(byte_count);
+		}
+		return false;
+	}
+
 	bool StartSoundBlasterSingleCyclePcm(DeviceNode* node, const uint8* data,
-		uint32 byte_count, uint16 sample_rate, bool log_request) {
+		uint32 byte_count, uint16 sample_rate, bool log_request,
+		SoundBlasterPcmPath pcm_path) {
 		if (!data || !byte_count || byte_count > SoundBlasterDmaBufferSize) {
 			plogwarn("[SB16] Invalid PCM request rate=%u bytes=%u",
 				(stduint)sample_rate, (stduint)byte_count);
@@ -275,28 +368,156 @@ namespace {
 		sound_blaster_playback_mode.store(
 			SoundBlasterPlaybackMode::SingleCycle8, uni::MemoryOrder_Release);
 		sound_blaster_unexpected_irq_reported = false;
-		if (!sound_blaster.SpeakerOn() ||
-			!sound_blaster.SetOutputRate(sample_rate) ||
-			!sound_blaster.StartSingleCycle8(byte_count, false, false)) {
+		if (!ProgramSoundBlasterSingleCyclePcm(
+			byte_count, sample_rate, pcm_path)) {
 			sound_blaster_playback_mode.store(
 				SoundBlasterPlaybackMode::Idle, uni::MemoryOrder_Release);
 			IsaDmaMask(sound_blaster_dma8_channel);
-			plogwarn("[SB16] Failed to start PCM playback");
+			plogwarn("[SB16] Failed to start PCM playback path=%u",
+				(stduint)pcm_path);
 			return false;
 		}
 		if (log_request) {
-			ploginfo("[SB16] PCM playback started rate=%u bytes=%u dma=%u",
-				(stduint)sample_rate, (stduint)byte_count,
-				(stduint)sound_blaster_dma8_channel);
+			ploginfo("[SB16] PCM playback started rate=%u prog=%u bytes=%u dma=%u path=%u",
+				(stduint)sample_rate,
+				(stduint)GetProgrammedSoundBlasterRate(sample_rate),
+				(stduint)byte_count,
+				(stduint)sound_blaster_dma8_channel, (stduint)pcm_path);
+		}
+		else {
+			ploginfo("[SB16] PCM playback armed rate=%u prog=%u bytes=%u dma=%u path=%u",
+				(stduint)sample_rate,
+				(stduint)GetProgrammedSoundBlasterRate(sample_rate),
+				(stduint)byte_count,
+				(stduint)sound_blaster_dma8_channel, (stduint)pcm_path);
 		}
 		return true;
+	}
+
+	stduint SoundBlasterProbeError(const SoundBlasterPcmPathProbe& probe) {
+		if (!probe.completed) return ~stduint(0);
+		return probe.elapsed_ticks > probe.expected_ticks ?
+			probe.elapsed_ticks - probe.expected_ticks :
+			probe.expected_ticks - probe.elapsed_ticks;
+	}
+
+	bool SoundBlasterProbeCanScale(const SoundBlasterPcmPathProbe& probe) {
+		return probe.completed && probe.elapsed_ticks != 0 &&
+			probe.expected_ticks != 0;
+	}
+
+	void ApplySoundBlasterProbeScale(const SoundBlasterPcmPathProbe& probe) {
+		if (!SoundBlasterProbeCanScale(probe) || probe.compatible) {
+			sound_blaster_rate_scale_num = 1;
+			sound_blaster_rate_scale_den = 1;
+			return;
+		}
+		// If a block finishes in elapsed/expected time, program future blocks at
+		// requested_rate * elapsed / expected to compensate a fast virtual DSP.
+		sound_blaster_rate_scale_num = probe.elapsed_ticks;
+		sound_blaster_rate_scale_den = probe.expected_ticks;
+		plogwarn("[SB16] PCM rate compensation %u/%u",
+			(stduint)sound_blaster_rate_scale_num,
+			(stduint)sound_blaster_rate_scale_den);
+	}
+
+	SoundBlasterPcmPathProbe ProbeSoundBlasterPcmPath(
+		DeviceNode* node, SoundBlasterPcmPath pcm_path) {
+		SoundBlasterPcmPathProbe probe{
+			.completed = false,
+			.compatible = false,
+			.elapsed_ticks = 0,
+			.expected_ticks =
+				((stduint)SoundBlasterCompatProbeBytes * CONFIG_SysTickFreq +
+					SoundBlasterCompatProbeSampleRate - 1) /
+				SoundBlasterCompatProbeSampleRate,
+		};
+		if (!PrepareSoundBlasterDma8(node)) return probe;
+		MemSet(sound_blaster_dma_buffer, 0x80, SoundBlasterCompatProbeBytes);
+		probe.completed = StartSoundBlasterSingleCyclePcm(
+			node, sound_blaster_dma_buffer, SoundBlasterCompatProbeBytes,
+			SoundBlasterCompatProbeSampleRate, false,
+			pcm_path) &&
+			WaitSoundBlasterSingleCycleDone(
+				SoundBlasterCompatProbeBytes,
+				SoundBlasterCompatProbeSampleRate,
+				&probe.elapsed_ticks);
+		if (!probe.completed) {
+			plogwarn("[SB16] PCM compat probe path=%u failed elapsed=%u expected=%u",
+				(stduint)pcm_path, (stduint)probe.elapsed_ticks,
+				(stduint)probe.expected_ticks);
+			return probe;
+		}
+		const stduint min_ticks =
+			(probe.expected_ticks * SoundBlasterCompatProbeMinPercent + 99) / 100;
+		const stduint max_ticks =
+			(probe.expected_ticks * SoundBlasterCompatProbeMaxPercent + 99) / 100;
+		probe.compatible =
+			probe.elapsed_ticks >= min_ticks && probe.elapsed_ticks <= max_ticks;
+		ploginfo("[SB16] PCM compat probe path=%u elapsed=%u expected=%u ok=%u",
+			(stduint)pcm_path, (stduint)probe.elapsed_ticks,
+			(stduint)probe.expected_ticks, (stduint)probe.compatible);
+		return probe;
+	}
+
+	bool SelectSoundBlasterPcmPath(DeviceNode* node) {
+		if (sound_blaster_pcm_path != SoundBlasterPcmPath::Unknown) return true;
+		if (sound_blaster_playback_mode.load(uni::MemoryOrder_Acquire) !=
+			SoundBlasterPlaybackMode::Idle ||
+			sound_blaster.GetState() != uni::SoundBlasterState::Ready) {
+			// The boot smoke test may still be completing when user playback starts.
+			// Do not fail the request just because the compatibility probe cannot
+			// run yet; use the modern path for this block. VMware has shown that
+			// the legacy path can complete a block immediately without audible PCM.
+			plogwarn("[SB16] PCM compat probe deferred state=%u mode=%u",
+				(stduint)sound_blaster.GetState(),
+				(stduint)sound_blaster_playback_mode.load(
+					uni::MemoryOrder_Acquire));
+			return true;
+		}
+
+		const SoundBlasterPcmPathProbe modern_probe =
+			ProbeSoundBlasterPcmPath(node, SoundBlasterPcmPath::Modern);
+		if (modern_probe.compatible) {
+			sound_blaster_pcm_path = SoundBlasterPcmPath::Modern;
+			ApplySoundBlasterProbeScale(modern_probe);
+		}
+		else {
+			if (sound_blaster.GetState() == uni::SoundBlasterState::Failed) {
+				sound_blaster.Probe();
+			}
+			const SoundBlasterPcmPathProbe legacy_probe =
+				ProbeSoundBlasterPcmPath(node, SoundBlasterPcmPath::Legacy);
+			if (legacy_probe.compatible) {
+				sound_blaster_pcm_path = SoundBlasterPcmPath::Legacy;
+				ApplySoundBlasterProbeScale(legacy_probe);
+			}
+			else {
+				const stduint modern_error = SoundBlasterProbeError(modern_probe);
+				const stduint legacy_error = SoundBlasterProbeError(legacy_probe);
+				sound_blaster_pcm_path =
+					legacy_error < modern_error ?
+					SoundBlasterPcmPath::Legacy : SoundBlasterPcmPath::Modern;
+				plogwarn("[SB16] PCM probe no exact match modern=%u/%u legacy=%u/%u",
+					(stduint)modern_probe.elapsed_ticks,
+					(stduint)modern_probe.expected_ticks,
+					(stduint)legacy_probe.elapsed_ticks,
+					(stduint)legacy_probe.expected_ticks);
+				ApplySoundBlasterProbeScale(
+					sound_blaster_pcm_path == SoundBlasterPcmPath::Legacy ?
+					legacy_probe : modern_probe);
+			}
+		}
+		ploginfo("[SB16] PCM path selected=%u", (stduint)sound_blaster_pcm_path);
+		return sound_blaster.GetState() == uni::SoundBlasterState::Ready;
 	}
 
 	bool StartSoundBlasterTestTone(DeviceNode* node) {
 		if (!PrepareSoundBlasterDma8(node)) return false;
 		GenerateSoundBlasterTestTone();
 		if (!StartSoundBlasterSingleCyclePcm(node, sound_blaster_dma_buffer,
-			SoundBlasterTestSampleCount, SoundBlasterTestSampleRate, false)) {
+			SoundBlasterTestSampleCount, SoundBlasterTestSampleRate, false,
+			GetNominalSoundBlasterPcmPath())) {
 			return false;
 		}
 		ploginfo("[SB16] PCM test started rate=%u bytes=%u dma=%u",
@@ -308,9 +529,39 @@ namespace {
 
 	bool RunSoundBlasterSingleCyclePcm(DeviceNode* node, const uint8* data,
 		uint32 byte_count, uint16 sample_rate) {
-		if (!StartSoundBlasterSingleCyclePcm(
-			node, data, byte_count, sample_rate, true)) return false;
-		return WaitSoundBlasterSingleCycleDone(byte_count, sample_rate);
+		if (!SelectSoundBlasterPcmPath(node)) return false;
+		const SoundBlasterPcmPath primary_path = GetEffectiveSoundBlasterPcmPath();
+		if (StartSoundBlasterSingleCyclePcm(
+			node, data, byte_count, sample_rate, true,
+			primary_path) &&
+			WaitSoundBlasterSingleCycleDone(byte_count, sample_rate)) {
+			return true;
+		}
+
+		if (primary_path == SoundBlasterPcmPath::Modern) return false;
+
+		const SoundBlasterPcmPath fallback_path = SoundBlasterPcmPath::Modern;
+		if (sound_blaster.GetState() == uni::SoundBlasterState::Failed) {
+			sound_blaster.Probe();
+		}
+		if (sound_blaster_playback_mode.load(uni::MemoryOrder_Acquire) ==
+			SoundBlasterPlaybackMode::Idle &&
+			sound_blaster.GetState() == uni::SoundBlasterState::Ready) {
+			plogwarn("[SB16] PCM retry with fallback path=%u after path=%u",
+				(stduint)fallback_path, (stduint)primary_path);
+			stduint fallback_elapsed_ticks = 0;
+			if (StartSoundBlasterSingleCyclePcm(
+				node, data, byte_count, sample_rate, true,
+				fallback_path) &&
+				WaitSoundBlasterSingleCycleDone(
+					byte_count, sample_rate, &fallback_elapsed_ticks)) {
+				if (fallback_elapsed_ticks) {
+					sound_blaster_pcm_path = fallback_path;
+				}
+				return true;
+			}
+		}
+		return false;
 	}
 
 	bool StartSoundBlasterAutoInitTest(DeviceNode* node) {
@@ -442,6 +693,7 @@ namespace {
 		ploginfo("[SB16] DSP version %u.%u",
 			(stduint)sound_blaster.GetDspMajorVersion(),
 			(stduint)sound_blaster.GetDspMinorVersion());
+		sound_blaster_pcm_path = SoundBlasterPcmPath::Unknown;
 		// Driver probing runs before the kernel enables normal IRQ dispatch.
 		// Keep the asynchronous single-cycle smoke test on the boot path.
 		return StartSoundBlasterTestTone(node);

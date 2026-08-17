@@ -186,7 +186,10 @@ stduint ProcessBlock::Rdwt(bool wr_type, stduint fid, Slice slice)
 		int bytes_processed = 0;
 
 		if (wr_type) {
-			MemCopyP(buffer, kernel_paging, (void*)curr_addr, pb->paging, chunk);
+			MccaMemCopyP(
+				buffer, nullptr, true,
+				(void*)curr_addr, pb, false,
+				chunk);
 			if (file->f_inode && (file->f_inode->i_mode & I_TYPE_MASK) == I_CHAR_SPECIAL) {
 				// Bypass global vfs_lock spinlock for character special devices to avoid deadlocks.
 				bytes_processed = file->f_inode->i_sb->fs->writfl(file->f_inode->internal_handler, Slice{ file->f_pos, (stduint)chunk }, (const byte*)buffer);
@@ -210,7 +213,10 @@ stduint ProcessBlock::Rdwt(bool wr_type, stduint fid, Slice slice)
 				bytes_processed = Filesys::Read(file, buffer, chunk);
 			}
 			if (bytes_processed > 0) {
-				MemCopyP((void*)curr_addr, pb->paging, buffer, kernel_paging, bytes_processed);
+				MccaMemCopyP(
+					(void*)curr_addr, pb, false,
+					buffer, nullptr, true,
+					bytes_processed);
 			}
 		}
 
