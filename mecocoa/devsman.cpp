@@ -850,6 +850,8 @@ namespace {
 			return "USB-LOC";
 		case DeviceResourceType::UsbEndpoint:
 			return "USB-EP";
+		case DeviceResourceType::DmaChannel:
+			return "DMA";
 		default:
 			return "Unknown";
 		}
@@ -1193,6 +1195,7 @@ namespace {
 		if (auto* fdc = Devsman::RegisterPlatformDevice(legacy_bus, "fdc@0")) {
 			Devsman::AddIoPortResource(fdc, 0, 0x3F0, 8);
 			Devsman::AddIrqResource(fdc, IRQ_PIT + 6);
+			Devsman::AddDmaResource(fdc, 0, 2, 8);
 			Devsman::RegisterStorageDevice(fdc, "floppy@0", DeviceBusType::ISA);
 			Devsman::RegisterStorageDevice(fdc, "floppy@1", DeviceBusType::ISA);
 		}
@@ -1909,6 +1912,13 @@ bool Devsman::AddIrqResource(DeviceNode* node, uint64 vector, uint64 pin) {
 	if (!node) return false;
 	if (find_resource(node, DeviceResourceType::IrqLine, 0)) return true;
 	return append_resource(node, DeviceResourceType::IrqLine, DeviceResourceFlag_None, 0, vector, 1, pin);
+}
+
+bool Devsman::AddDmaResource(DeviceNode* node, uint32 index, uint8 channel, uint8 width_bits) {
+	if (!node || channel > 7 || (width_bits != 8 && width_bits != 16)) return false;
+	if (find_resource(node, DeviceResourceType::DmaChannel, index)) return true;
+	return append_resource(node, DeviceResourceType::DmaChannel,
+		DeviceResourceFlag_None, index, channel, 1, width_bits);
 }
 
 DeviceNode* Devsman::PCI_Root() {

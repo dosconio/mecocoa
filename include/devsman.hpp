@@ -58,6 +58,7 @@ enum class DeviceResourceType : uint16 {
 	PciBridgeBusRange,
 	UsbLocation,
 	UsbEndpoint,
+	DmaChannel,
 };
 
 enum DeviceResourceFlags : uint16 {
@@ -175,6 +176,7 @@ public:
 	static DeviceNode* RegisterSerioDevice(DeviceNode* parent, const char* name);
 	static bool AddIoPortResource(DeviceNode* node, uint32 index, uint64 base, uint64 length);
 	static bool AddIrqResource(DeviceNode* node, uint64 vector, uint64 pin = 0);
+	static bool AddDmaResource(DeviceNode* node, uint32 index, uint8 channel, uint8 width_bits);
 	static DeviceNode* Root();
 	static DeviceNode* PCI_Root();
 	static DeviceNode* PrimaryPciBus();

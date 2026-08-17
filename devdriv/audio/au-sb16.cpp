@@ -116,6 +116,11 @@ void R_SB16_INIT() {
 		plogwarn("[SB16] Failed to register IRQ resource");
 		return;
 	}
+	if (!Devsman::AddDmaResource(node, 0, SoundBlasterDefaultConfig.dma8, 8) ||
+		!Devsman::AddDmaResource(node, 1, SoundBlasterDefaultConfig.dma16, 16)) {
+		plogwarn("[SB16] Failed to register DMA resources");
+		return;
+	}
 	IC[IRQ_SB16].setRange(mglb(Handint_SB16_Entry), SegCo32);
 	register_interrupt_handler(IRQ_SB16, Handint_SB16);
 	if (IC.getType() == 0) i8259Master_Enable(DEV_MAS_SB16);

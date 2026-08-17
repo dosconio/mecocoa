@@ -172,6 +172,7 @@ static rostr text_device_resource_type(uint16 type) {
 	case DeviceResourceType::PciBridgeBusRange: return "BUS-RANGE";
 	case DeviceResourceType::UsbLocation:       return "USB-LOC";
 	case DeviceResourceType::UsbEndpoint:       return "USB-EP";
+	case DeviceResourceType::DmaChannel:        return "DMA";
 	default: return "RES";
 	}
 }
@@ -258,6 +259,11 @@ static void dump_device_tree_resources(OstreamTrait& com1, const DeviceNode& nod
 				text_usb_endpoint_transfer_type(res.extra & 0xFFu),
 				(stduint)res.length,
 				(stduint)((res.extra >> 8) & 0xFFu));
+			break;
+		case DeviceResourceType::DmaChannel:
+			com1.OutFormat("- %s[%[u]] channel=%[u] width=%[u]\n\r",
+				text_device_resource_type(res.type), res.index,
+				(stduint)res.start, (stduint)res.extra);
 			break;
 		default:
 			com1.OutFormat("- %s[%[u]] start=%p len=%p extra=%p\n\r",

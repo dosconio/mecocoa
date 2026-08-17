@@ -4,6 +4,7 @@
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 
 #include "../../include/mecocoa.hpp"
+#include "../dma/dma-isa.hpp"
 #include <c/storage/floppy.h>
 #include <c/format/filesys.h>
 
@@ -50,6 +51,7 @@ FloppyDisk* floppies[2] = { nullptr, nullptr };
 static DeviceNode* floppy_nodes[2] = { nullptr, nullptr };
 static char flp_buf[sizeof(FloppyDisk) * 2];
 static char* floppy_sector = nullptr;
+static constexpr uint8 FloppyDmaChannel = 2;
 
 static byte flp_lock = 1;
 
@@ -101,23 +103,8 @@ void uni::FloppyDisk::Reset() {
 	Recalibrate();
 }
 
-static void dma_xfer(int channel, stduint phys_addr, stduint length, bool read) {
-	byte mode = read ? 0x46 : 0x4A; // 0x46 for read, 0x4A for write
-	outpb(0x0A, 4 + channel);       // mask channel
-	outpb(0x0C, 0);                 // clear flip-flop
-	outpb(0x0B, mode);              // set mode
-	outpb(0x04, phys_addr & 0xFF);         // address low
-	outpb(0x04, (phys_addr >> 8) & 0xFF);  // address high
-	outpb(0x81, (phys_addr >> 16) & 0xFF); // page register
-	outpb(0x0C, 0);                 // clear flip-flop again
-	stduint count = length - 1;
-	outpb(0x05, count & 0xFF);
-	outpb(0x05, (count >> 8) & 0xFF);
-	outpb(0x0A, channel);           // unmask channel
-}
-
 bool uni::FloppyDisk::Read(stduint BlockIden, void* Dest) {
-	if (BlockIden >= getUnits()) return false;
+	if (BlockIden >= getUnits() || !floppy_sector) return false;
 
 	byte cyl, head, sec;
 	LBA2CHS(BlockIden, cyl, head, sec);
@@ -129,7 +116,11 @@ bool uni::FloppyDisk::Read(stduint BlockIden, void* Dest) {
 	outpb(PORT_FDC_CCR, DATA_RATE);
 
 	// Setup ISA DMA Channel 2
-	dma_xfer(2, (stduint)floppy_sector, 512, true);
+	if (!IsaDma8Prepare(FloppyDmaChannel, (stduint)floppy_sector, 512,
+		IsaDmaDirection::DeviceToMemory)) {
+		Motor(false);
+		return false;
+	}
 
 	WriteCmd(FDC_CMD_READ_DATA);
 	WriteCmd((head << 2) | id); 
@@ -162,7 +153,7 @@ bool uni::FloppyDisk::Read(stduint BlockIden, void* Dest) {
 }
 
 bool uni::FloppyDisk::Write(stduint BlockIden, const void* Sors) {
-	if (BlockIden >= getUnits()) return false;
+	if (BlockIden >= getUnits() || !floppy_sector) return false;
 
 	// Copy data from Sors to DMA buffer
 	MemCopyN(floppy_sector, Sors, 512);
@@ -177,7 +168,11 @@ bool uni::FloppyDisk::Write(stduint BlockIden, const void* Sors) {
 	outpb(PORT_FDC_CCR, DATA_RATE);
 
 	// Setup ISA DMA Channel 2
-	dma_xfer(2, (stduint)floppy_sector, 512, false);
+	if (!IsaDma8Prepare(FloppyDmaChannel, (stduint)floppy_sector, 512,
+		IsaDmaDirection::MemoryToDevice)) {
+		Motor(false);
+		return false;
+	}
 
 	WriteCmd(FDC_CMD_WRITE_DATA);
 	WriteCmd((head << 2) | id);
@@ -275,7 +270,8 @@ void R_FLP_INIT() {
 
 	// Allocate a 4KB aligned physical page for floppy DMA buffer
 	if (!floppy_sector) {
-		floppy_sector = (char*)mempool.allocate(4096, PAGESIZE_4KB);
+		floppy_sector = (char*)mempool.allocate(4096, PAGESIZE_4KB, 16);
+		if (!floppy_sector) plogwarn("[FLOPPY] ISA DMA buffer allocation failed");
 	}
 }
 
