@@ -161,8 +161,12 @@ run: build run-only
 run-only:
 	$(qemu) \
 		$(qemu_args) -audiodev pa,id=speaker -machine pcspk-audiodev=speaker \
+		-audiodev pa,id=sb16audio \
+		-device sb16,audiodev=sb16audio,iobase=0x220,irq=5,dma=1,dma16=5 \
 		-enable-kvm -cpu host || $(qemu) \
-		$(qemu_args) -audiodev dsound,id=speaker -machine pcspk-audiodev=speaker
+		$(qemu_args) -audiodev dsound,id=speaker -machine pcspk-audiodev=speaker \
+		-audiodev dsound,id=sb16audio \
+		-device sb16,audiodev=sb16audio,iobase=0x220,irq=5,dma=1,dma16=5
 
 clean:
 	@echo ---- Mecocoa $(arch) ----#[clearing]

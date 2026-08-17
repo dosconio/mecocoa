@@ -139,6 +139,7 @@ namespace {
 			StrCompare(name, "uart@com2") == 0 ||
 			StrCompare(name, "uart@com3") == 0 ||
 			StrCompare(name, "uart@com4") == 0 ||
+			StrCompare(name, "sound-blaster") == 0 ||
 			StrCompare(name, "fdc@0") == 0;
 	}
 
