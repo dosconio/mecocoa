@@ -18,8 +18,15 @@ static void EnsureFramebufferMapped(const uni::Slice& physical_range) {
 		page_base,
 		page_end - page_base,
 		PAGESIZE_4KB,
-		PGPROP_present | PGPROP_writable
+		PGPROP_present | PGPROP_writable |
+		PGPROP_cache_disable | PGPROP_write_through
 	);
+	// BAR0 is device framebuffer memory, not ordinary RAM. Refresh every
+	// translation after changing its cache type so pixel stores reach QEMU's
+	// VRAM dirty tracking promptly.
+	for (stduint page = page_base; page < page_end; page += 0x1000) {
+		RefreshVirtualAddress(page);
+	}
 }
 
 class BochsVideoDevice : public VideoDevice {

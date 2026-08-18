@@ -19,9 +19,6 @@ const byte kKF4  = 0x3D; // F4 key
 
 int main(int argc, char** argv)
 {
-	#if __BITS__ == 64
-	_preprocess();
-	#endif
 
 	if (argc < 2 || argv[1] == nullptr) {
 		outsfmt("Usage: viewpic <filepath.bmp>\n\r");

@@ -3,7 +3,8 @@ override arch=x64
 attr = -D_DEBUG -D_ACCM=0x8664 -I$(uincpath)  -I$(uincpath)/c/API-POSIX -Iaccmlib/sysroot/usr/include
 
 asmpref=_ae_
-asmfile=$(wildcard $(ulibpath)/asm/x64/*.asm) $(wildcard $(ulibpath)/asm/x64/**/*.asm) $(wildcard accmlib/arch/x64/*.asm)
+CRT0_SRC=accmlib/arch/x64/crt0.asm
+asmfile=$(filter-out $(CRT0_SRC),$(wildcard $(ulibpath)/asm/x64/*.asm) $(wildcard $(ulibpath)/asm/x64/**/*.asm) $(wildcard accmlib/arch/x64/*.asm))
 
 cplpref=_cc_
 cplfile=$(wildcard $(ulibpath)/c/*.c) $(wildcard $(ulibpath)/c/**/*.c) $(wildcard $(ulibpath)/c/**/**/*.c) $(wildcard accmlib/*.c)

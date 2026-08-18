@@ -10,7 +10,7 @@ LD = ld.lld -m elf_x86_64
 attr = -D_DEBUG -D_ACCM=0x8664 -I$(uincpath) -I$(uincpath)/c/ISO_IEC_STD -I$(uincpath)/c/API-POSIX -Iaccmlib/sysroot/usr/include
 
 asmpref=_ae_
-CRT0_SRC=accmlib/arch/x64/others-a.asm
+CRT0_SRC=accmlib/arch/x64/crt0.asm
 CRT0_OBJ=$(dest_obj)/crt0.o
 SYSROOT_TRIPLE=x86_64-mcca
 SYSROOT_USR_LIB=accmlib/sysroot/usr/lib/$(SYSROOT_TRIPLE)

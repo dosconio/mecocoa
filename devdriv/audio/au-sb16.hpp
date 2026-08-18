@@ -25,5 +25,16 @@ bool SoundBlasterRunAutoInitSmokeTest();
 bool SoundBlasterPlayPcmU8MonoImmediate(const uint8* data, uint32 byte_count,
 	uint16 sample_rate = 11025);
 
+using SoundBlasterPcmRefill = uint32 (*)(void* context, uint8* data,
+	uint32 byte_count);
+
+// Start/stop continuous U8 mono playback backed by SB16 auto-init DMA.
+// Refills are performed only from ordinary kernel context by
+// SoundBlasterServicePlayback(); the IRQ handler only publishes completed halves.
+bool SoundBlasterStartPcmU8MonoStream(uint16 sample_rate,
+	SoundBlasterPcmRefill refill, void* context);
+bool SoundBlasterStopPcmStream();
+void SoundBlasterAbortPcmStream();
+
 // Call from ordinary kernel context; returns the number of refilled DMA blocks.
 uint8 SoundBlasterServicePlayback();

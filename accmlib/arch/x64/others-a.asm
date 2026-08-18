@@ -1,8 +1,6 @@
-
 [BITS 64]
 
-GLOBAL syscall, _start, __sigrestorer
-EXTERN main, _exit
+GLOBAL syscall, __sigrestorer
 
 section .text
 
@@ -15,18 +13,6 @@ syscall:
 	SYSCALL
 RET
 
-_start:
-	xor	rbp, rbp	; Mark the end of stack frames
-	pop	rdi			; Get argc from stack, RSP now points to argv
-	mov	rsi, rsp	; Get argv pointer
-	lea	rdx, [rsi + rdi*8 + 8] ; Get envp pointer
-	and	rsp, -16	; Ensure 16-byte alignment for System V ABI
-	call	main	; Call main(argc, argv, envp)
-	mov	rdi, rax	; Use return value as exit code
-	call	_exit	; Call exit(status)
-mov byte[0], 0
-
 __sigrestorer:
 	MOV RAX, 0x15 ; syscall_t::SIGR (0x15)
 	SYSCALL
-

@@ -9,9 +9,6 @@ using namespace uni;
 
 int main(int argc, char** argv)
 {
-	#if __BITS__ == 64
-	_preprocess();
-	#endif
 
 	// Define window rectangle
 	Rectangle win_rect{ Point(150, 100), Size2(400, 300) };

@@ -50,8 +50,34 @@ static bool ReadWholeFile(const char* path, byte*& out_data, stduint& out_size) 
 }
 
 #define outsfmt(...)
+#if __BITS__ > 32
+#define Task_Audio_Serv 0
+#endif
+
+static stdsint SendAudioRequest(AudioMsg type, const AudioPlayRequest& request) {
+	CommMsg send_msg = {};
+	send_msg.data.address = (stduint)&request;
+	send_msg.data.length = sizeof(request);
+	send_msg.type = (stduint)type;
+	syscomm(1, Task_Audio_Serv, &send_msg);
+
+	stdsint result = -1;
+	CommMsg recv_msg = {};
+	recv_msg.data.address = (stduint)&result;
+	recv_msg.data.length = sizeof(result);
+	syscomm(0, Task_Audio_Serv, &recv_msg);
+	return result;
+}
 
 static bool PlayU8Mono(const WAVPCMVIEW& wav) {
+	AudioPlayRequest begin_request = {};
+	begin_request.format.sample_format = AudioSampleFormat::U8;
+	begin_request.format.channels = wav.channel_count;
+	begin_request.format.sample_rate = wav.sample_rate;
+	if (SendAudioRequest(AudioMsg::STREAM_BEGIN, begin_request) != 0) {
+		return false;
+	}
+
 	const byte* pcm = (const byte*)wav.pcm_data;
 	uint32 remain = wav.pcm_size;
 	uint32 chunk_index = 0;
@@ -68,33 +94,37 @@ static bool PlayU8Mono(const WAVPCMVIEW& wav) {
 			(stduint)request.buffer.byte_count,
 			(stduint)remain);
 
-		CommMsg send_msg = {};
-		send_msg.data.address = (stduint)&request;
-		send_msg.data.length = sizeof(request);
-		send_msg.type = (stduint)AudioMsg::PLAY_PCM_U8_MONO;
-		syscomm(1, Task_Audio_Serv, &send_msg);
-		outsfmt("playmzk: chunk=%u sent\n\r", (stduint)chunk_index);
+		const stdsint accepted =
+			SendAudioRequest(AudioMsg::STREAM_WRITE, request);
+		outsfmt("playmzk: chunk=%u accepted=%d\n\r",
+			(stduint)chunk_index, (int)accepted);
+		if (accepted < 0 ||
+			(uint32)accepted > request.buffer.byte_count) {
+			SendAudioRequest(AudioMsg::STREAM_STOP, begin_request);
+			return false;
+		}
+		if (accepted == 0) {
+			sysrest(1, 1);
+			continue;
+		}
 
-		stdsint result = -1;
-		CommMsg recv_msg = {};
-		recv_msg.data.address = (stduint)&result;
-		recv_msg.data.length = sizeof(result);
-		outsfmt("playmzk: chunk=%u waiting reply\n\r", (stduint)chunk_index);
-		syscomm(0, Task_Audio_Serv, &recv_msg);
-		outsfmt("playmzk: chunk=%u reply=%d\n\r", (stduint)chunk_index, (int)result);
-		if (result != 0) return false;
-
-		pcm += request.buffer.byte_count;
-		remain -= request.buffer.byte_count;
+		pcm += accepted;
+		remain -= accepted;
 		++chunk_index;
 	}
-	return true;
+
+	const bool drained =
+		SendAudioRequest(AudioMsg::STREAM_DRAIN, begin_request) == 0;
+	if (!drained) {
+		SendAudioRequest(AudioMsg::STREAM_STOP, begin_request);
+	}
+	return drained;
 }
 
 int main(int argc, char** argv)
 {
 	#if __BITS__ == 64
-	_preprocess();
+	return -1;
 	#endif
 
 	if (argc < 2 || !argv[1]) {

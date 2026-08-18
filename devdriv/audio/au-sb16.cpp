@@ -25,6 +25,7 @@ namespace {
 		3 * CONFIG_SysTickFreq;
 	constexpr stduint SoundBlasterAutoInitStopTimeoutTicks =
 		CONFIG_SysTickFreq;
+	constexpr uint32 SoundBlasterAutoInitStopPollLimit = 0x100000;
 	constexpr stduint SoundBlasterSingleCycleStopTimeoutExtraTicks =
 		CONFIG_SysTickFreq;
 	constexpr uint16 SoundBlasterCompatProbeSampleRate = 11025;
@@ -45,9 +46,10 @@ namespace {
 	// - A block is considered complete when the IRQ handler publishes Idle.
 	//   DSP state bookkeeping may lag in virtual hardware, so normalize it
 	//   after completion instead of treating that as a playback failure.
-	// - The current user-facing WAV path still uses synchronous 4096-byte
-	//   single-cycle blocks. For gapless playback, move to service-side ring
-	//   buffering plus SB16 auto-init DMA.
+	// - Streaming uses a service-side ring buffer plus SB16 auto-init DMA.
+	//   The IRQ handler only publishes completed DMA halves; it must not send
+	//   messages or touch scheduler state. Ordinary audio-service context calls
+	//   SoundBlasterServicePlayback() to refill completed halves.
 
 	enum class SoundBlasterPlaybackMode : uint8 {
 		Idle,
@@ -66,6 +68,10 @@ namespace {
 		uint8* storage;
 		uint32 block_bytes;
 		uint32 phase;
+		uint16 sample_rate;
+		SoundBlasterPcmRefill refill;
+		void* refill_context;
+		uni::Atomic<uint32> underrun_count;
 		// Generation rejects refill work left over from an earlier playback.
 		uni::Atomic<uint32> generation;
 		uni::Atomic<uint8> completed_block;
@@ -95,6 +101,10 @@ namespace {
 		.storage = nullptr,
 		.block_bytes = SoundBlasterAutoInitBlockBytes,
 		.phase = 0,
+		.sample_rate = SoundBlasterTestSampleRate,
+		.refill = nullptr,
+		.refill_context = nullptr,
+		.underrun_count = 0,
 		.generation = 0,
 		.completed_block = SoundBlasterInvalidBlock,
 		.refill_pending_mask = 0,
@@ -151,6 +161,19 @@ namespace {
 	bool FillSoundBlasterAutoInitBlock(uint8 block_index) {
 		auto* block = GetSoundBlasterAutoInitBlock(block_index);
 		if (!block) return false;
+		if (sound_blaster_auto_buffer.refill) {
+			const uint32 filled = sound_blaster_auto_buffer.refill(
+				sound_blaster_auto_buffer.refill_context,
+				block,
+				sound_blaster_auto_buffer.block_bytes);
+			if (filled < sound_blaster_auto_buffer.block_bytes) {
+				MemSet(block + filled, 0x80,
+					sound_blaster_auto_buffer.block_bytes - filled);
+				sound_blaster_auto_buffer.underrun_count.fetch_add(
+					1, uni::MemoryOrder_Relaxed);
+			}
+			return true;
+		}
 		FillSoundBlasterTestTone(block, sound_blaster_auto_buffer.block_bytes,
 			sound_blaster_auto_buffer.phase);
 		return true;
@@ -159,6 +182,8 @@ namespace {
 	bool PrepareSoundBlasterAutoInitBuffers() {
 		sound_blaster_auto_buffer.storage = sound_blaster_dma_buffer;
 		sound_blaster_auto_buffer.phase = 0;
+		sound_blaster_auto_buffer.underrun_count.store(
+			0, uni::MemoryOrder_Release);
 		sound_blaster_auto_buffer.completed_block.store(
 			SoundBlasterInvalidBlock, uni::MemoryOrder_Release);
 		sound_blaster_auto_buffer.refill_pending_mask.store(
@@ -568,6 +593,9 @@ namespace {
 		if (!PrepareSoundBlasterDma8(node)) return false;
 		if (sound_blaster_playback_mode.load(uni::MemoryOrder_Acquire) !=
 			SoundBlasterPlaybackMode::Idle) return false;
+		sound_blaster_auto_buffer.sample_rate = SoundBlasterTestSampleRate;
+		sound_blaster_auto_buffer.refill = nullptr;
+		sound_blaster_auto_buffer.refill_context = nullptr;
 		if (!sound_blaster_dma_buffer || !PrepareSoundBlasterAutoInitBuffers()) {
 			plogwarn("[SB16] Auto-init DMA buffer preparation failed");
 			return false;
@@ -599,6 +627,74 @@ namespace {
 		}
 		ploginfo("[SB16] Auto-init PCM test ready rate=%u block=%u dma=%u",
 			(stduint)SoundBlasterTestSampleRate,
+			(stduint)SoundBlasterAutoInitBlockBytes,
+			(stduint)sound_blaster_dma8_channel);
+		return true;
+	}
+
+	bool StartSoundBlasterAutoInitStream(DeviceNode* node, uint16 sample_rate,
+		SoundBlasterPcmRefill refill, void* refill_context) {
+		if (!refill ||
+			sample_rate < SoundBlasterMinimumOutputRate ||
+			sample_rate > SoundBlasterMaximumOutputRate) {
+			return false;
+		}
+		if (!PrepareSoundBlasterDma8(node)) return false;
+		if (sound_blaster.GetDspMajorVersion() < 4) {
+			plogwarn("[SB16] Auto-init stream requires SB16 DSP");
+			return false;
+		}
+		if (sound_blaster_pcm_path == SoundBlasterPcmPath::Unknown) {
+			sound_blaster_pcm_path = SoundBlasterPcmPath::Modern;
+			sound_blaster_rate_scale_num = 1;
+			sound_blaster_rate_scale_den = 1;
+		}
+		if (sound_blaster_playback_mode.load(uni::MemoryOrder_Acquire) !=
+			SoundBlasterPlaybackMode::Idle ||
+			sound_blaster.GetState() != uni::SoundBlasterState::Ready) {
+			return false;
+		}
+
+		sound_blaster_auto_buffer.sample_rate = sample_rate;
+		sound_blaster_auto_buffer.refill = refill;
+		sound_blaster_auto_buffer.refill_context = refill_context;
+		if (!sound_blaster_dma_buffer || !PrepareSoundBlasterAutoInitBuffers()) {
+			sound_blaster_auto_buffer.refill = nullptr;
+			sound_blaster_auto_buffer.refill_context = nullptr;
+			plogwarn("[SB16] Auto-init stream buffer preparation failed");
+			return false;
+		}
+
+		const uint32 dma_bytes = SoundBlasterAutoInitBlockCount *
+			SoundBlasterAutoInitBlockBytes;
+		if (!IsaDma8Prepare(sound_blaster_dma8_channel,
+			(stduint)sound_blaster_dma_buffer, dma_bytes,
+			IsaDmaDirection::MemoryToDevice,
+			IsaDmaReloadMode::AutoInitialize)) {
+			sound_blaster_auto_buffer.refill = nullptr;
+			sound_blaster_auto_buffer.refill_context = nullptr;
+			plogwarn("[SB16] ISA DMA8 stream prepare failed");
+			return false;
+		}
+
+		sound_blaster_playback_mode.store(
+			SoundBlasterPlaybackMode::AutoInit8, uni::MemoryOrder_Release);
+		sound_blaster_unexpected_irq_reported = false;
+		const uint16 programmed_rate = GetProgrammedSoundBlasterRate(sample_rate);
+		if (!sound_blaster.SpeakerOn() ||
+			!sound_blaster.SetOutputRate(programmed_rate) ||
+			!sound_blaster.StartAutoInit8(
+				SoundBlasterAutoInitBlockBytes, false, false)) {
+			sound_blaster_playback_mode.store(
+				SoundBlasterPlaybackMode::Idle, uni::MemoryOrder_Release);
+			sound_blaster_auto_buffer.refill = nullptr;
+			sound_blaster_auto_buffer.refill_context = nullptr;
+			IsaDmaMask(sound_blaster_dma8_channel);
+			plogwarn("[SB16] Failed to start auto-init stream");
+			return false;
+		}
+		ploginfo("[SB16] Auto-init stream started rate=%u prog=%u block=%u dma=%u",
+			(stduint)sample_rate, (stduint)programmed_rate,
 			(stduint)SoundBlasterAutoInitBlockBytes,
 			(stduint)sound_blaster_dma8_channel);
 		return true;
@@ -694,9 +790,9 @@ namespace {
 			(stduint)sound_blaster.GetDspMajorVersion(),
 			(stduint)sound_blaster.GetDspMinorVersion());
 		sound_blaster_pcm_path = SoundBlasterPcmPath::Unknown;
-		// Driver probing runs before the kernel enables normal IRQ dispatch.
-		// Keep the asynchronous single-cycle smoke test on the boot path.
-		return StartSoundBlasterTestTone(node);
+		// Keep boot quiet. Explicit AudioMsg::TEST / playback paths can still
+		// exercise the device after normal service scheduling is available.
+		return true;
 	}
 }
 
@@ -719,6 +815,83 @@ bool SoundBlasterPlayPcmU8MonoImmediate(const uint8* data, uint32 byte_count,
 		return false;
 	}
 	return RunSoundBlasterSingleCyclePcm(node, data, byte_count, sample_rate);
+}
+
+bool SoundBlasterStartPcmU8MonoStream(uint16 sample_rate,
+	SoundBlasterPcmRefill refill, void* context) {
+	auto* node = Devsman::FindNamedNode(
+		DeviceNodeType::PlatformDevice, "sound-blaster");
+	if (!node) {
+		plogwarn("[SB16] sound-blaster node not found for PCM stream");
+		return false;
+	}
+	return StartSoundBlasterAutoInitStream(node, sample_rate, refill, context);
+}
+
+bool SoundBlasterStopPcmStream() {
+	const auto mode = sound_blaster_playback_mode.load(uni::MemoryOrder_Acquire);
+	if (mode == SoundBlasterPlaybackMode::Idle) {
+		sound_blaster_auto_buffer.refill = nullptr;
+		sound_blaster_auto_buffer.refill_context = nullptr;
+		return true;
+	}
+	if (mode != SoundBlasterPlaybackMode::AutoInit8 &&
+		mode != SoundBlasterPlaybackMode::AutoInitStopping) {
+		return false;
+	}
+	if (mode == SoundBlasterPlaybackMode::AutoInit8 &&
+		!RequestSoundBlasterAutoInitStop()) {
+		return false;
+	}
+
+	const stduint stop_start = tick;
+	uint32 stop_polls = 0;
+	while (sound_blaster_playback_mode.load(uni::MemoryOrder_Acquire) !=
+		SoundBlasterPlaybackMode::Idle &&
+		tick - stop_start < SoundBlasterAutoInitStopTimeoutTicks &&
+		stop_polls++ < SoundBlasterAutoInitStopPollLimit) {
+		SoundBlasterServicePlayback();
+		asm volatile("pause" ::: "memory");
+	}
+	const bool stopped =
+		sound_blaster_playback_mode.load(uni::MemoryOrder_Acquire) ==
+		SoundBlasterPlaybackMode::Idle;
+	if (!stopped) {
+		IsaDmaMask(sound_blaster_dma8_channel);
+		sound_blaster_playback_mode.store(
+			SoundBlasterPlaybackMode::Idle, uni::MemoryOrder_Release);
+		sound_blaster_auto_buffer.generation.fetch_add(
+			1, uni::MemoryOrder_Acq_Rel);
+		sound_blaster_auto_buffer.refill_pending_mask.store(
+			0, uni::MemoryOrder_Release);
+		sound_blaster_auto_buffer.completed_block.store(
+			SoundBlasterInvalidBlock, uni::MemoryOrder_Release);
+		sound_blaster.Complete8BitPlayback();
+		plogwarn("[SB16] PCM stream stop timed out");
+	}
+	sound_blaster_auto_buffer.refill = nullptr;
+	sound_blaster_auto_buffer.refill_context = nullptr;
+	return stopped;
+}
+
+void SoundBlasterAbortPcmStream() {
+	const auto mode = sound_blaster_playback_mode.load(uni::MemoryOrder_Acquire);
+	if (mode == SoundBlasterPlaybackMode::AutoInit8 ||
+		mode == SoundBlasterPlaybackMode::AutoInitStopping) {
+		IsaDmaMask(sound_blaster_dma8_channel);
+		(void)sound_blaster.ExitAutoInit8();
+	}
+	sound_blaster_auto_buffer.refill = nullptr;
+	sound_blaster_auto_buffer.refill_context = nullptr;
+	sound_blaster_auto_buffer.generation.fetch_add(
+		1, uni::MemoryOrder_Acq_Rel);
+	sound_blaster_auto_buffer.refill_pending_mask.store(
+		0, uni::MemoryOrder_Release);
+	sound_blaster_auto_buffer.completed_block.store(
+		SoundBlasterInvalidBlock, uni::MemoryOrder_Release);
+	sound_blaster_playback_mode.store(
+		SoundBlasterPlaybackMode::Idle, uni::MemoryOrder_Release);
+	(void)sound_blaster.Reset();
 }
 
 uint8 SoundBlasterServicePlayback() {

@@ -205,6 +205,10 @@ public:
 enum class AudioMsg : stduint {
 	TEST,
 	PLAY_PCM_U8_MONO,
+	STREAM_BEGIN,
+	STREAM_WRITE,
+	STREAM_DRAIN,
+	STREAM_STOP,
 };
 
 // Submit a synchronous PCM playback request to the audio service.

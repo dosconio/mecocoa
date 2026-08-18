@@ -146,9 +146,6 @@ static stdsint CreateRibbonForm(Size2 screen, Color** out_buffer)
 
 int main(int argc, char** argv)
 {
-	#if __BITS__ == 64
-	_preprocess();
-	#endif
 
 	Size2 screen = GetScreenSize();
 	Color* buffer = nullptr;

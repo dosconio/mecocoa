@@ -105,8 +105,5 @@ static int run_posix_thread_smoke() {
 
 int main(int argc, char** argv)
 {
-	#if __BITS__ == 64
-	_preprocess();
-	#endif
 	return run_posix_thread_smoke();
 }
