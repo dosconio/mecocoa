@@ -1,4 +1,5 @@
 #pragma once
+#if (_MCCA & 0xFF00) == 0x8600
 
 #include <cpp/Device/DMA>
 
@@ -14,3 +15,4 @@ bool IsaDma8Prepare(
 
 void IsaDmaMask(uint8 channel);
 void IsaDmaUnmask(uint8 channel);
+#endif

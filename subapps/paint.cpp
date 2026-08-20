@@ -38,7 +38,7 @@ int main(int argc, char** argv)
 				sys_draw_point(form_id, last_p, pen_color);
 			}
 			else {
-			 // STOP DRAWING: Button Released
+				// STOP DRAWING: Button Released
 				is_drawing = false;
 
 				// Close Button check (Component ID 1)

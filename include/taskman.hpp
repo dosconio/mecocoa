@@ -3,8 +3,7 @@
 #define TASKMAN_HPP_
 
 #include <c/task.h>
-#include <c/lock.h>
-#include <cpp/queue>
+#include <cpp/lock>
 #include <c/driver/mouse.h>
 #include <c/system/paging.h>
 #include <cpp/Device/_Timer.hpp>
@@ -242,7 +241,13 @@ class ThreadBlock;
 class FileDescriptor;
 class CallgateFrame;
 
-#include "taskman/lock.hpp"
+using Mutex = Mutex_T<ThreadBlock>;
+using MutexLocal = MutexLocal_T<ThreadBlock>;
+template <typename T>
+using MutexBlock = MutexBlock_T<ThreadBlock, T>;
+using Semaphore = Semaphore_T<ThreadBlock>;
+using SemaphoreLocal = SemaphoreLocal_T<ThreadBlock>;
+
 
 enum VirtualMemoryAreaType {
 	VMA_ANONYMOUS = 0,

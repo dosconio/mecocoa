@@ -54,7 +54,7 @@ Spinlock scheduler_lock;
 
 static void ReleaseSchedulerLockForSwitch() {
 	scheduler_lock.cpu_id = -1;
-	__atomic_store_n(&scheduler_lock.locked, 0, __ATOMIC_RELEASE);
+	scheduler_lock.locked.store(0, uni::MemoryOrder_Release);
 }
 
 
@@ -458,11 +458,11 @@ void ThreadBlock::Unblock(BlockReason reason) {
 	}
 }
 
-static stduint next_global_id = 1;
+static uni::Atomic<stduint> next_global_id = 1;
 
 bool Taskman::Append(ProcessBlock* task) {
 	SpinlockLocal guard(&scheduler_lock);
-	task->pid = __atomic_fetch_add(&next_global_id, 1, __ATOMIC_SEQ_CST);
+	task->pid = next_global_id.fetch_add(1, uni::MemoryOrder_Seq_Cst);
 
 	// Hierarchical Process Tree: Link to parent
 	ProcessBlock* pparent = nullptr;
@@ -506,7 +506,7 @@ bool Taskman::AppendThread(ThreadBlock* task) {
 		task->tid = task->parent_process->pid;
 	}
 	else {
-		task->tid = __atomic_fetch_add(&next_global_id, 1, __ATOMIC_SEQ_CST);
+		task->tid = next_global_id.fetch_add(1, uni::MemoryOrder_Seq_Cst);
 	}
 
 	Dnode* insert_after = thchain.Last();

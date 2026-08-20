@@ -7,7 +7,7 @@
 bool Spinlock::Acquire() {
 	bool state_rupt = IC.TryMaskInterrupt();
 	stduint count = 0;
-	while (__atomic_exchange_n(&this->locked, 1, __ATOMIC_ACQUIRE) != 0) {
+	while (this->locked.exchange(1, uni::MemoryOrder_Acquire) != 0) {
 		#if (_MCCA & 0xFF00) == 0x8600
 		asm volatile("pause" ::: "memory");
 		#endif
@@ -22,7 +22,7 @@ bool Spinlock::Acquire() {
 
 bool Spinlock::TryAcquire(bool& old_if) {
 	old_if = IC.TryMaskInterrupt();
-	if (__atomic_exchange_n(&this->locked, 1, __ATOMIC_ACQUIRE) == 0) {
+	if (this->locked.exchange(1, uni::MemoryOrder_Acquire) == 0) {
 		this->cpu_id = (stdsint)Taskman::getID();
 		return true;
 	}
@@ -32,11 +32,11 @@ bool Spinlock::TryAcquire(bool& old_if) {
 
 void Spinlock::Release(bool old_if) {
 	this->cpu_id = -1;
-	__atomic_store_n(&this->locked, 0, __ATOMIC_RELEASE);
+	this->locked.store(0, uni::MemoryOrder_Release);
 	if (old_if) IC.enInterrupt(true);
 }
 
-
+template<>
 void Mutex::Acquire() {
 	bool old_if = this->guard.Acquire();
 
@@ -54,6 +54,7 @@ void Mutex::Acquire() {
 		this->guard.Release(old_if);
 	}
 }
+template<>
 void Mutex::Release() {
 	bool old_if = this->guard.Acquire();
 	ThreadBlock* wakeup_tb = nullptr;
@@ -73,6 +74,7 @@ void Mutex::Release() {
 }
 
 
+template<>
 void Semaphore::Acquire() {
 	bool old_if = this->guard.Acquire(); // Disable interrupts and acquire lock
 
@@ -95,6 +97,7 @@ void Semaphore::Acquire() {
 	}
 }
 
+template<>
 void Semaphore::Release() {
 	bool old_if = this->guard.Acquire(); // Disable interrupts and acquire lock
 

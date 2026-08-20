@@ -5,7 +5,6 @@
 #include <c/driver/mouse.h>
 #include <cpp/Witch/Form.hpp>
 #include <cpp/Witch/TextChrome.hpp>
-#include "taskman/lock.hpp"
 
 extern FramebufferInfo sys_framebuffer;
 
