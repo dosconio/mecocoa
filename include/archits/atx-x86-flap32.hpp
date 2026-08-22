@@ -32,6 +32,8 @@ extern "C" void Handint_SB16_Entry();
 extern "C" void Handint_SB16();
 extern "C" void Handint_HDD_Entry();
 extern "C" void Handint_HDD();
+extern "C" void Handint_E1000_Entry();
+extern "C" void Handint_E1000();
 extern "C" void Handint_RESCHED_Entry();
 extern "C" void Handint_WAKE_Entry();
 

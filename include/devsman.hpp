@@ -136,6 +136,9 @@ namespace uni {
 	class PCI;
 	class StorageTrait;
 	class DiscPartition;
+	namespace Network {
+		class LinkDevice;
+	}
 }
 
 class Devsman {
@@ -193,6 +196,9 @@ public:
 	static DeviceNode* RegisterStoragePartition(DeviceNode* parent, const char* name,
 		uni::StorageTrait& storage, stdsint part_dev, const char* driver_name = "storage-partition");
 	#if (_MCCA & 0xFF00) == 0x8600
+	static bool RegisterLinkDevice(uni::Network::LinkDevice* device);
+	static stduint LinkDeviceCount();
+	static uni::Network::LinkDevice* GetLinkDevice(stduint index);
 	static const char* LookupPciClassName(uint8 class_base, uint8 class_sub, uint8 class_if);
 	static const char* LookupPciDeviceName(uint16 vendor_id, uint16 device_id, uint8 class_base = 0, uint8 class_sub = 0);
 	static const char* LookupPciVendorName(uint16 vendor_id);

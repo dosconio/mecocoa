@@ -28,6 +28,7 @@ namespace {
 		Nvme,
 		PciBridge,
 		Xhci,
+		E1000,
 	};
 
 	class DeviceTree final : public uni::Nchain {
@@ -109,6 +110,7 @@ namespace {
 		{0x01u, 0x06u, 0x01u, "AHCI SATA controller"},
 		{0x01u, 0x06u, MatchAnyClassIf, "SATA controller"},
 		{0x01, 0x08u, 0x02u, "NVM controller"},
+		{0x02u, 0x00u, MatchAnyClassIf, "Ethernet controller"},
 		{0x03u, 0x00u, MatchAnyClassIf, "VGA compatible controller"},
 		{0x06u, 0x00u, MatchAnyClassIf, "Host bridge"},
 		{0x06u, 0x01u, MatchAnyClassIf, "ISA bridge"},
@@ -123,6 +125,13 @@ namespace {
 		{0x8086u, 0x7000u, "82371SB PIIX3 ISA bridge"},
 		{0x8086u, 0x7110u, "82371AB PIIX4 ISA bridge"},
 		{0x8086u, 0x7111u, "82371AB PIIX4 IDE"},
+
+		// ETH
+		{0x8086u, 0x100Eu, "82540EM Gigabit Ethernet Controller"},
+		{0x8086u, 0x100Fu, "82545EM Gigabit Ethernet Controller"},
+		{0x8086u, 0x1010u, "82546EB Gigabit Ethernet Controller"},
+		{0x8086u, 0x10D3u, "82574L Gigabit Network Connection"},
+
 		{0x104Bu, 0x1040u, "MultiMaster SCSI host adapter"},
 		{0x15ADu, 0x0405u, "SVGA II Adapter"},
 		{0x15ADu, 0x0740u, "virtual machine communication interface"},
@@ -225,6 +234,57 @@ namespace {
 		return node != nullptr;
 	}
 
+	bool is_e1000_device(const DeviceNode* node) {
+		if (!node) return false;
+		if (DeviceNodeType(node->fields.node_type) != DeviceNodeType::PciDevice) return false;
+		if (node->fields.vendor_id != 0x8086u) return false;
+		switch (node->fields.device_id) {
+		case 0x100Eu:
+		case 0x100Fu:
+		case 0x1010u:
+		case 0x10D3u:
+			return true;
+		default:
+			return false;
+		}
+	}
+
+	const DeviceResource* find_pci_io_bar(const DeviceNode* node) {
+		if (!node) return nullptr;
+		for (uint32 bar_index = 0; bar_index < 6; ++bar_index) {
+			if (const auto* io = Devsman::FindResource(node, DeviceResourceType::PciBarIo, bar_index)) {
+				return io;
+			}
+		}
+		return nullptr;
+	}
+
+	bool probe_e1000_device(DeviceNode* node) {
+		if (!node || !is_e1000_device(node)) return false;
+		const auto* mmio = Devsman::FindResource(node, DeviceResourceType::PciBarMmio, 0);
+		const auto* io = find_pci_io_bar(node);
+		if (!mmio && !io) {
+			plogwarn("[DEVSMAN] E1000 %s missing BAR resource",
+				node->link.addr ? node->link.addr : "(unnamed)");
+			return false;
+		}
+		const auto* irq = Devsman::FindResource(node, DeviceResourceType::IrqLine, 0);
+		node->fields.binding.probe_result = irq ? 0 : 1;
+		if (mmio) {
+			ploginfo("[DEVSMAN] E1000 %s MMIO=%[64H] len=%[64H]%s",
+				node->link.addr ? node->link.addr : "(unnamed)",
+				mmio->start, mmio->length,
+				irq ? "" : " irq=none");
+		}
+		else {
+			ploginfo("[DEVSMAN] E1000 %s IO=%[64H]%s",
+				node->link.addr ? node->link.addr : "(unnamed)",
+				io->start,
+				irq ? "" : " irq=none");
+		}
+		return true;
+	}
+
 	constexpr DriverOpsEntry pci_driver_ops_table[] = {
 		{"xhci", probe_xhci_device},
 		{"ahci", probe_ahci_device},
@@ -232,6 +292,7 @@ namespace {
 		{"scsi", probe_scsi_device},
 		{"video-vmware", probe_video_vmware_device},
 		{"video-bochs", probe_video_bochs_device},
+		{"e1000", probe_e1000_device},
 	};
 
 	DriverStartHookEntry driver_start_hooks[32]{};
@@ -664,6 +725,9 @@ namespace {
 			node->fields.class_if == 0x30u) {
 			return PciDriverKind::Xhci;
 		}
+		if (is_e1000_device(node)) {
+			return PciDriverKind::E1000;
+		}
 		return PciDriverKind::Unknown;
 	}
 
@@ -717,6 +781,9 @@ namespace {
 			return;
 		case PciDriverKind::Xhci:
 			set_driver_binding(node, "xhci");
+			return;
+		case PciDriverKind::E1000:
+			set_driver_binding(node, "e1000");
 			return;
 		default:
 			return;

@@ -711,7 +711,7 @@ void serv_dev_hd_loop()
 					DeviceNode* part_node = Devsman::RegisterStoragePartition(
 						pata_storage_nodes[i], node_name.reference(), (*paged_disks[i]), part_dev);
 					lab = String::newFormat("/mnt/ide%u.%u", i, part_dev);
-					ploginfo("[Hrddisk] probe disk%u part%u: %x", i, part_dev, sys_id);
+					plogtrac("[Hrddisk] probe disk%u part%u: %x", i, part_dev, sys_id);
 					if (auto fs = Filesys::Mount(*paged_disks[i], part_dev, lab.reference(), part_node)) {
 						if (!StrCompare(fs->name, "fat")) {
 							fat_time++;

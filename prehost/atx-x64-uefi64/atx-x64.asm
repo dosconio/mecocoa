@@ -404,3 +404,6 @@ IRQ_TRAMPOLINE_64 Handint_AHCI_Entry, 0x72
 
 ; NVMe Interrupt
 IRQ_TRAMPOLINE_64 Handint_NVME_Entry, 0x73
+
+; E1000 Interrupt
+IRQ_TRAMPOLINE_64 Handint_E1000_Entry, 0x78

@@ -506,7 +506,7 @@ bool InitializeFont() {
 				off += (uint32_t)bytes;
 			}
 			ft_table_valid = off;
-			ploginfo("InitializeFont: prefetched %u bytes of TTF head (table area)", ft_table_valid);
+			// ploginfo("InitializeFont: prefetched %u bytes of TTF head (table area)", ft_table_valid);
 		}
 	}
 
@@ -515,11 +515,11 @@ bool InitializeFont() {
 	args.stream = &stream;
 
 	FT_Face face;
-	ploginfo("InitializeFont: Creating FT_Open_Face (Lazy Stream)...");
+	plogtrac("InitializeFont: Creating FT_Open_Face (Lazy Stream)...");
 	int face_err = FT_Open_Face(ft_library, &args, 0, &face);
-	ploginfo("InitializeFont: FT_Open_Face returned %d, face = %p", face_err, face);
+	// ploginfo("InitializeFont: FT_Open_Face returned %d, face = %p", face_err, face);
 	if (face_err == 0) {
-		ploginfo("InitializeFont: Setting pixel sizes...");
+		plogtrac("InitializeFont: Setting pixel sizes...");
 		FT_Set_Pixel_Sizes(face, 16, 16);
 
 		// Pre-populate ASCII glyph cache (32 to 127) while in safe Task_FileSys context
@@ -554,7 +554,7 @@ bool InitializeFont() {
 		}
 		loading_ascii = false;
 
-		ploginfo("InitializeFont: Instantiating FreeTypeFontEngine...");
+		// ploginfo("InitializeFont: Instantiating FreeTypeFontEngine...");
 		global_ft_engine = new FreeTypeFontEngine(face, uni::Size2(8, 16));
 		ploginfo("InitializeFont: FreeTypeFontEngine created at %p", global_ft_engine);
 	} else {
