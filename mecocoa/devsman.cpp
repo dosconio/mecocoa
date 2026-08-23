@@ -227,7 +227,8 @@ namespace {
 	}
 
 	bool probe_video_bochs_device(DeviceNode* node) {
-		return node != nullptr;
+		if (!node) return false;
+		return Devsman::AddIoPortResource(node, 0, 0x01CE, 2);
 	}
 
 	bool probe_video_vmware_device(DeviceNode* node) {
@@ -1274,6 +1275,29 @@ namespace {
 			class_base, class_sub, class_if);
 	}
 
+	DeviceNode* find_pci_device_by_vendor_device_in_subtree(DeviceNode* node, uint16 vendor_id, uint16 device_id) {
+		for (auto* crt = node; crt; crt = reinterpret_cast<DeviceNode*>(crt->link.next)) {
+			if (crt->fields.node_type == static_cast<uint16>(DeviceNodeType::PciDevice) &&
+				crt->fields.vendor_id == vendor_id &&
+				crt->fields.device_id == device_id) {
+				return crt;
+			}
+			if (crt->link.subf) {
+				if (auto* found = find_pci_device_by_vendor_device_in_subtree(reinterpret_cast<DeviceNode*>(crt->link.subf),
+					vendor_id, device_id)) {
+					return found;
+				}
+			}
+		}
+		return nullptr;
+	}
+
+	DeviceNode* find_pci_device_by_vendor_device(uint16 vendor_id, uint16 device_id) {
+		if (!pci_root || !pci_root->link.subf) return nullptr;
+		return find_pci_device_by_vendor_device_in_subtree(reinterpret_cast<DeviceNode*>(pci_root->link.subf),
+			vendor_id, device_id);
+	}
+
 	const DeviceResource* find_resource(const DeviceNode* node, DeviceResourceType type, uint32 index) {
 		if (!node || !node->fields.resources) return nullptr;
 		for0(i, node->fields.resource_count) {
@@ -2003,6 +2027,10 @@ DeviceNode* Devsman::FindNamedNode(DeviceNodeType node_type, const char* name) {
 
 DeviceNode* Devsman::FindPCIDeviceByClass(uint8 class_base, uint8 class_sub, uint8 class_if) {
 	return find_pci_device_by_class(class_base, class_sub, class_if);
+}
+
+DeviceNode* Devsman::FindPCIDeviceByVendorDevice(uint16 vendor_id, uint16 device_id) {
+	return find_pci_device_by_vendor_device(vendor_id, device_id);
 }
 
 const DeviceResource* Devsman::FindResource(const DeviceNode* node, DeviceResourceType type, uint32 index) {

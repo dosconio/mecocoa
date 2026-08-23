@@ -60,6 +60,32 @@ public:
 	virtual void DrawPoints(const Rectangle& rect, const Color* base) const override { renderer.DrawPoints(rect, base); }
 };
 
+static stdsint BochsVideo_Ctrl(DeviceNode* node, stduint cmd, void* args, stduint flags) {
+	(void)flags;
+	if (!node || !args) return -1;
+	auto* dev = static_cast<BochsVideoDevice*>(node->fields.binding.driver_data);
+	if (!dev) return -1;
+	if (cmd == (stduint)DeviceCtrlCommand::GetBackingObject) {
+		*static_cast<VideoDevice**>(args) = dev;
+		return 0;
+	}
+	switch (VideoCtrlCommand(cmd)) {
+	case VideoCtrlCommand::GetFramebufferInfo:
+		*static_cast<FramebufferInfo*>(args) = dev->GetFramebuffer();
+		return 0;
+	case VideoCtrlCommand::SetVideoMode:
+		return dev->setMode(*static_cast<VideoMode*>(args)) ? 0 : -1;
+	default:
+		return -1;
+	}
+}
+
+static const DeviceNodeOps bochs_video_ops{
+	.read = nullptr,
+	.send = nullptr,
+	.ctrl = BochsVideo_Ctrl,
+};
+
 bool BochsVideo_Start(DeviceNode* node) {
 	if (!node) return false;
 	
@@ -100,6 +126,7 @@ bool BochsVideo_Start(DeviceNode* node) {
 	EnsureFramebufferMapped(dev->fb_info.physical_range);
 
 	node->fields.binding.driver_data = dev;
+	Devsman::SetOps(node, &bochs_video_ops);
 	Consman::AdoptVideoDevice(dev);
 	
 	ploginfo("[BochsVBE] Mounted at %[x], Res: %ux%u", bar0->start, xres, yres);

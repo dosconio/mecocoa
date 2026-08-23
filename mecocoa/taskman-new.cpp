@@ -771,6 +771,10 @@ ProcessBlock* Taskman::CreateFork(ProcessBlock* fo, const CallgateFrame* frame) 
 		for (stduint addr = vma.vm_start; addr < vma.vm_end; addr += 0x1000) {
 			void* parent_phy = fo->paging[addr];
 			if (parent_phy != (void*)~_IMM0) {
+				if (vma.vm_type == VMA_DEVICE) {
+					pb->paging.Map(addr, (stduint)parent_phy, 0x1000, PAGESIZE_4KB, PGPROP_present | vma.vm_flags);
+					continue;
+				}
 				void* child_phy = mempool.allocate(0x1000, 12);
 				MemSet((void*)(child_phy), 0, 0x1000); // Zero-fill child page
 				MemCopyP((void*)(child_phy), kernel_paging, (const void*)(parent_phy), kernel_paging, 0x1000);
@@ -1018,7 +1022,9 @@ ProcessBlock* Taskman::Exet(stduint parent, rostr usr_fullpath, char** usr_argv,
 		for (stduint addr = vma.vm_start; addr < vma.vm_end; addr += 0x1000) {
 			void* phys_addr = current_pb->paging[addr];
 			if (phys_addr != (void*)~_IMM0) {
-				free(phys_addr);
+				if (vma.vm_type != VMA_DEVICE) {
+					free(phys_addr);
+				}
 			}
 		}
 		if (vma.vm_type == VMA_FILE && vma.vfile) {

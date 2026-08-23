@@ -194,9 +194,11 @@ static void LogSelectorFaultContext(rostr name, HardwareInterruptFrame* frame, s
 	const stduint sel_idt = (para >> 1) & 0x1;
 	const stduint sel_ext = para & 0x1;
 	printlog(_LOG_FATAL,
-		"%s with 0x%[x] on CPU%u, TID%u at EIP=0x%[x] ESP=0x%[x] CS=0x%[x] SS=0x%[x] CR3=0x%[x] "
+		"%s with 0x%[x] on CPU%u, TID%u at EIP=0x%[x] ESP=0x%[x] CS=0x%[x] SS=0x%[x] "
+		"DS=0x%[x] ES=0x%[x] FS=0x%[x] GS=0x%[x] CR3=0x%[x] "
 		"(idx=0x%[x] %s %s ext=%u) [R3SCR] hits=%u lapic=%u core=%u",
-		name, para, cpu, tid, frame->hw_eip, FrameSavedEsp(frame), frame->hw_cs, FrameSavedSs(frame), frame->cr3,
+		name, para, cpu, tid, frame->hw_eip, FrameSavedEsp(frame), frame->hw_cs, FrameSavedSs(frame),
+		frame->ds, frame->es, frame->fs, frame->gs, frame->cr3,
 		sel_index, sel_idt ? "IDT" : (sel_ti ? "LDT" : "GDT"), sel_idt ? "vector" : "selector", sel_ext,
 		ap_ring3_iret_guard_hits, ap_ring3_iret_last_lapicid, ap_ring3_iret_last_coreid);
 	printlog(_LOG_FATAL,
@@ -258,6 +260,9 @@ bool exception_handler_user(HardwareInterruptFrame* frame, stduint iden, stduint
 			for (stduint i = 0; i < pb->vmas.Count(); i++) {
 				const auto& vma = pb->vmas[i];
 				if (fault_addr >= vma.vm_start && fault_addr < vma.vm_end) {
+					if (vma.vm_type == VMA_DEVICE) {
+						break;
+					}
 					void* phy_page = mempool.allocate(0x1000, 12);
 					if (phy_page != (void*)~_IMM0) {
 						MemSet((void*)(phy_page), 0, 0x1000); // Zero-fill physical page
@@ -548,4 +553,3 @@ void Vectors(void) {
 }
 
 #endif
-

@@ -12,12 +12,27 @@ struct DeviceNodeOps {
 	stdsint (*ctrl)(DeviceNode* node, stduint cmd, void* args, stduint flags);
 };
 
+struct PowerDeviceHandleEntry {
+	DeviceNode* node = nullptr;
+	uint32 flags = 0;
+
+	bool operator==(const PowerDeviceHandleEntry& other) const {
+		return node == other.node && flags == other.flags;
+	}
+};
+
 enum class DeviceCtrlCommand : uint32 {
 	None = 0,
 	GetBlockSize,
 	GetUnitCount,
 	GetByteSize,
 	GetBackingObject,
+};
+
+enum class VideoCtrlCommand : uint32 {
+	Base = uint32(DeviceCtrlCommand::GetBackingObject),
+	GetFramebufferInfo,
+	SetVideoMode,
 };
 
 enum class DeviceNodeType : uint16 {
@@ -186,6 +201,7 @@ public:
 	static DeviceNode* PrimaryPciBus();
 	static DeviceNode* FindNamedNode(DeviceNodeType node_type, const char* name);
 	static DeviceNode* FindPCIDeviceByClass(uint8 class_base, uint8 class_sub, uint8 class_if);
+	static DeviceNode* FindPCIDeviceByVendorDevice(uint16 vendor_id, uint16 device_id);
 	static const DeviceResource* FindResource(const DeviceNode* node, DeviceResourceType type, uint32 index = 0);
 	static bool SetOps(DeviceNode* node, const DeviceNodeOps* ops);
 	static const DeviceNodeOps* GetOps(const DeviceNode* node);

@@ -254,7 +254,8 @@ using SemaphoreLocal = SemaphoreLocal_T<ThreadBlock>;
 
 enum VirtualMemoryAreaType {
 	VMA_ANONYMOUS = 0,
-	VMA_FILE = 1
+	VMA_FILE = 1,
+	VMA_DEVICE = 2,
 };
 #ifndef _ACCM
 struct ProcSignals {
@@ -335,7 +336,6 @@ public: // VirtualMemory
 
 public: // Fileman
 	MutexBlock<ProcFiles> fileman;
-
 public: // UIConsole
 	MutexBlock<Dnode*> focus_tty;
 	MutexBlock<uni::Vector<SheetTrait*>> pforms;// should registered in global_layman

@@ -372,6 +372,7 @@ static void DetachProcessTTYMembership(ProcessBlock* ppb, stduint pid)
 
 static void _Exit_Cleanup(stduint pid)
 {
+	extern void CleanupPowerProcessHandles(stduint pid);
 	extern Spinlock scheduler_lock;
 	auto ppb = Taskman::Locate(pid);
 	if (!ppb) return;
@@ -446,17 +447,20 @@ static void _Exit_Cleanup(stduint pid)
 	QueueGuiCleanupForProcess(ppb);
 	#endif
 
-	// 2. Release TTY Binding
+	// 2. Release Power Device Handles
+	CleanupPowerProcessHandles(pid);
+
+	// 3. Release TTY Binding
 	DetachProcessTTYMembership(ppb, pid);
 
-	// 3. Unlink all threads from IPC queues (but don't delete them yet)
+	// 4. Unlink all threads from IPC queues (but don't delete them yet)
 	ThreadBlock* th_ptr = ppb->thread_list_head;
 	while (th_ptr) {
 		msg_cleanup_thread(th_ptr);
 		th_ptr = th_ptr->process_thread_next;
 	}
 
-	// 4. Release Files
+	// 5. Release Files
 	stduint file_count = 0;
 	{
 		auto files = ppb->fileman.Lock();
@@ -524,7 +528,9 @@ static void _Exit_Cleanup(stduint pid)
 			for (stduint addr = vma.vm_start; addr < vma.vm_end; addr += 0x1000) {
 				void* phys_addr = ppb->paging[addr];
 				if (phys_addr != (void*)~_IMM0) {
-					free(phys_addr);
+					if (vma.vm_type != VMA_DEVICE) {
+						free(phys_addr);
+					}
 				}
 			}
 			if (vma.vm_type == VMA_FILE && vma.vfile) {
@@ -874,13 +880,16 @@ void _Comment(R0) serv_task_loop()
 extern "C" void* kernel_prefault_page(ProcessBlock* pb, stduint addr) {
 	if (!pb) return nullptr;
 	addr &= ~_IMM(0xFFF);
-	void* phy_page = mempool.allocate(0x1000, 12);
-	if (phy_page == (void*)~_IMM0) return nullptr;
-	MemSet((void*)mglb(phy_page), 0, 0x1000);
 	SpinlockLocal guard(&pb->vma_lock);
 	for (stduint i = 0; i < pb->vmas.Count(); i++) {
 		const auto& vma = pb->vmas[i];
 		if (addr >= vma.vm_start && addr < vma.vm_end) {
+			if (vma.vm_type == VMA_DEVICE) {
+				return nullptr;
+			}
+			void* phy_page = mempool.allocate(0x1000, 12);
+			if (phy_page == (void*)~_IMM0) return nullptr;
+			MemSet((void*)mglb(phy_page), 0, 0x1000);
 			if (vma.vm_type == VMA_FILE && vma.vfile) {
 				stduint offset = addr - vma.vm_start + vma.file_offset;
 				if (vma.vfile->f_inode && offset < vma.vfile->f_inode->i_size) {
@@ -889,12 +898,12 @@ extern "C" void* kernel_prefault_page(ProcessBlock* pb, stduint addr) {
 					Filesys::Read(vma.vfile, (void*)mglb(phy_page), read_len);
 				}
 			}
-			break;
+			pb->paging.Map(addr, (stduint)phy_page, 0x1000, PAGESIZE_4KB, PGPROP_present | PGPROP_writable | PGPROP_user_access);
+			RefreshVirtualAddress(addr);
+			return phy_page;
 		}
 	}
-	pb->paging.Map(addr, (stduint)phy_page, 0x1000, PAGESIZE_4KB, PGPROP_present | PGPROP_writable | PGPROP_user_access);
-	RefreshVirtualAddress(addr);
-	return phy_page;
+	return nullptr;
 }
 
 #endif

@@ -1,0 +1,40 @@
+# ASCII Makefile TAB4 LF
+# Attribute: Ubuntu(64) Shell(Bash)
+# ModuTitle: Build Ring1 Driver ELF for Mecocoa x64 (LLVM/Clang version)
+#
+# Usage:
+#   make -f devdriv/Makefile.clang.x64 \
+#       uincpath=... ubinpath=... \
+#       DRV=video-bochs \
+#       SRCS="devdriv/video/video-bochs.cpp" \
+#       build
+
+DRV_DIR ?= $(ubinpath)/mecocoa/drvs
+DRV ?=
+SRCS ?=
+
+MCCA_TRIPLE ?= x86_64-mcca
+MCCA_SYSROOT ?= accmlib/sysroot
+MCCA_CXX ?= clang++ -target x86_64-unknown-none-elf
+MCCA_CRT0 = $(MCCA_SYSROOT)/usr/lib/$(MCCA_TRIPLE)/crt0.o
+MCCA_LIBC = $(MCCA_SYSROOT)/usr/lib/$(MCCA_TRIPLE)/libc.a
+MCCA_LIBDIR = $(MCCA_SYSROOT)/usr/lib/$(MCCA_TRIPLE)
+MCCA_COMFLAGS = -D_ACCM=0x8664 -D_DEBUG -I$(uincpath) -I$(uincpath)/c/ISO_IEC_STD -I$(uincpath)/c/API-POSIX -I$(MCCA_SYSROOT)/usr/include
+
+MCCA_CFLAGS = $(MCCA_COMFLAGS) --sysroot=$(MCCA_SYSROOT) -m64 -mno-red-zone -fno-builtin -fno-stack-protector -fno-pic -fno-pie -static -nostdlib \
+	-Wno-builtin-declaration-mismatch -Wno-invalid-constexpr -Wno-empty-body -Wno-unknown-warning-option
+MCCA_CXXFLAGS = $(MCCA_CFLAGS) -fno-exceptions -fno-rtti -fno-use-cxa-atexit -std=c++2a
+MCCA_LDLIBS = $(MCCA_CRT0) $(MCCA_LIBC) -L$(MCCA_LIBDIR) -lm -lgcc -Wl,-m,elf_x86_64 -Wl,-z,noexecstack -no-pie -fuse-ld=lld
+OUT ?= $(DRV_DIR)/$(DRV).elf
+
+.PHONY: build clean
+
+build:
+	@test -n "$(DRV)" || (echo "DRV is empty"; exit 1)
+	@test -n "$(SRCS)" || (echo "SRCS is empty"; exit 1)
+	@mkdir -p $(DRV_DIR)
+	@echo "MK drv $(DRV)"
+	$(MCCA_CXX) $(MCCA_CXXFLAGS) -o $(OUT) $(SRCS) $(MCCA_LDLIBS)
+
+clean:
+	@if [ -n "$(DRV)" ]; then rm -f $(DRV_DIR)/$(DRV).elf; fi

@@ -21,6 +21,31 @@ SECTIONS
 		*mcca-atx-x86-flap32.grub.o(.text .text.*)
 	} > RAM0
 
+	.net.text : {
+		*/mcca-atx-x86-flap32/devsman-net.o(.text .text.*)
+	} > RAM2
+	.net.rodata : {
+		*/mcca-atx-x86-flap32/devsman-net.o(.rodata .rodata.*)
+	} > RAM2
+	.net.data : {
+		*/mcca-atx-x86-flap32/devsman-net.o(.data .data.*)
+		*/mcca-atx-x86-flap32/devsman-net.o(.got)
+	} > RAM2
+	.drv.text : {
+		*/mcca-atx-x86-flap32/e1000.o(.text .text.*)
+		*/mcca-atx-x86-flap32/video-vmware.o(.text .text.*)
+	} > RAM2
+	.drv.rodata : {
+		*/mcca-atx-x86-flap32/e1000.o(.rodata .rodata.*)
+		*/mcca-atx-x86-flap32/video-vmware.o(.rodata .rodata.*)
+	} > RAM2
+	.drv.data : {
+		*/mcca-atx-x86-flap32/e1000.o(.data .data.*)
+		*/mcca-atx-x86-flap32/e1000.o(.got)
+		*/mcca-atx-x86-flap32/video-vmware.o(.data .data.*)
+		*/mcca-atx-x86-flap32/video-vmware.o(.got)
+	} > RAM2
+
 	/* MultiCore */
 	.text : {
 		*mcca-atx-x86-flap32-ladder.o(.text .text.*)
@@ -41,6 +66,8 @@ SECTIONS
 	. = ALIGN(8);
 	.init.rmod : {
 		__init_rmod_ento = .;
+		*/mcca-atx-x86-flap32/e1000.o(.init.rmod)
+		*/mcca-atx-x86-flap32/video-vmware.o(.init.rmod)
 		KEEP(*(SORT(.init.rmod.*)))
 		KEEP(*(.init.rmod))
 		__init_rmod_endo = .;
@@ -49,6 +76,8 @@ SECTIONS
 	. = ALIGN(8);
 	.init_array : {
 	__init_array_start = .;
+		*/mcca-atx-x86-flap32/e1000.o(.init_array .init_array.*)
+		*/mcca-atx-x86-flap32/video-vmware.o(.init_array .init_array.*)
 		KEEP(*(SORT(.init_array.*)))
 		KEEP(*(.init_array))
 	__init_array_end = .;
@@ -56,6 +85,8 @@ SECTIONS
 	.fini_array :
 	{
 		__fini_array_start = .;
+		*/mcca-atx-x86-flap32/e1000.o(.fini_array .fini_array.*)
+		*/mcca-atx-x86-flap32/video-vmware.o(.fini_array .fini_array.*)
 		KEEP (*(SORT(.fini_array.*)))
 		KEEP (*(.fini_array))
 		__fini_array_end = .;

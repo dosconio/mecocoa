@@ -43,6 +43,10 @@ void Syscall::Initialize() {
 	#endif
 }
 
+
+bool IsPowerCall(syscall_t callid);
+stdsint HandlePowerCall(syscall_t callid, stduint p1, stduint p2, stduint p3);
+
 #if (_MCCA & 0xFF00) == 0x8600 || (_MCCA & 0xFF00) == 0x1000
 
 __attribute__((optimize("O0")))
@@ -50,11 +54,16 @@ stduint syscall(syscall_t callid, stduint para1, stduint para2, stduint para3) {
 	stduint ret;
 	#if   (_MCCA & 0xFF00) == 0x8600
 	#if   (_MCCA & 0xFF00) == 0x8600
-	if (_IMM(callid) >= numsof(SYSCALL_TABLE)) {
+	if (IsPowerCall(callid)) {
+		ret = HandlePowerCall(callid, para1, para2, para3);
+	}
+	else if (_IMM(callid) >= numsof(SYSCALL_TABLE)) {
 		plogerro("syscall: callid out of range: %u", callid);
 		loop HALT();
 	}
-	ret = reinterpret_cast<stdsint(*)(stduint, stduint, stduint)>(SYSCALL_TABLE[_IMM(callid)])(para1, para2, para3);
+	else {
+		ret = reinterpret_cast<stdsint(*)(stduint, stduint, stduint)>(SYSCALL_TABLE[_IMM(callid)])(para1, para2, para3);
+	}
 	#endif
 
 	#elif (_MCCA & 0xFF00) == 0x1000
@@ -667,7 +676,17 @@ DEFSYSC sysc_UMAP(stduint addr, stduint len) {
 	for (stduint curr = addr; curr < addr + len; curr += 0x1000) {
 		void* phys_addr = pb->paging[curr];
 		if (phys_addr != (void*)~_IMM0) {
-			free(phys_addr);
+			bool release_phys = true;
+			for (stduint i = 0; i < pb->vmas.Count(); i++) {
+				const auto& vma = pb->vmas[i];
+				if (curr >= vma.vm_start && curr < vma.vm_end) {
+					release_phys = vma.vm_type != VMA_DEVICE;
+					break;
+				}
+			}
+			if (release_phys) {
+				free(phys_addr);
+			}
 			pb->paging.Unmap(curr, 0x1000);
 			RefreshVirtualAddress(curr);
 		}
@@ -875,7 +894,10 @@ stduint Handint_SYSCALL(CallgateFrame* frame) {
 	#endif
 
 	stduint ret_val = -1;
-	if (_IMM(callid) < numsof(SYSCALL_TABLE) && SYSCALL_TABLE[_IMM(callid)]) {
+	if (IsPowerCall(callid)) {
+		ret_val = HandlePowerCall(callid, para[0], para[1], para[2]);
+	}
+	else if (_IMM(callid) < numsof(SYSCALL_TABLE) && SYSCALL_TABLE[_IMM(callid)]) {
 		ret_val = (reinterpret_cast<stdsint(*)(stduint, stduint, stduint)>(SYSCALL_TABLE[_IMM(callid)]))(para[0], para[1], para[2]);
 	}
 	else switch (callid) {
@@ -942,4 +964,3 @@ stduint Handint_SYSCALL(CallgateFrame* frame) {
 	return frame->ax;
 }
 #endif
-

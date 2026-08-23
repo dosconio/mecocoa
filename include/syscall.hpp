@@ -59,6 +59,24 @@ enum
 
 	DBUG = 0xFE, // sysinfo_classic to stdout(func)
 	TEST = 0xFF, // getpid (T,E,S)->0 | x86
+
+	POWERCALL_HELLO = 0x10000,// () -> 0
+	POWERCALL_DEV_OPEN,// (node_id, class, flags) -> dev_handle
+	POWERCALL_DEV_CLOSE,// (dev_handle, 0, 0) -> 0
+	POWERCALL_DEV_PROPER,// (dev_handle, proper, args) -> status
+	POWERCALL_DEV_READ,// (dev_handle, adr, len) -> len
+	POWERCALL_DEV_WRITE,// (dev_handle, adr, len) -> len
+	POWERCALL_DEV_CTRL,// (dev_handle, cmd, args) -> status
+	POWERCALL_DEV_MMAP,// (dev_handle, args, 0) -> addr
+	POWERCALL_DEV_UMAP,// (addr, size, flags) -> 0
+	POWERCALL_DEV_IO_READ,// (dev_handle, args, 0) -> status
+	POWERCALL_DEV_IO_WRITE,// (dev_handle, args, 0) -> 0
+	POWERCALL_DEV_WAIT,// (dev_handle, timeout, flags) -> event
+	POWERCALL_DEV_ACK,// (dev_handle, event, flags) -> 0
+	POWERCALL_DEV_DMA_ALLOC,// (dev_handle, size, flags) -> dma_handle
+	POWERCALL_DEV_DMA_FREE,// (dma_handle, 0, 0) -> 0
+	POWERCALL_DEV_DMA_MAP,// (dma_handle, info, flags) -> 0
+	POWERCALL_DEV_PUBLISH,// (dev_handle, cmd, args) -> status
 };// . stand for well for multi-thread
 // Locks usually end with `_lock;`
 
