@@ -1,6 +1,7 @@
 #ifndef CONSOLE_HPP_
 #define CONSOLE_HPP_
 
+#include "console.com.hpp"
 #include <cpp/Device/_Video.hpp>
 #include <c/driver/mouse.h>
 #include <cpp/Witch/Form.hpp>
@@ -91,7 +92,6 @@ _PACKED(struct) FMT_ConsoleMsg_FDRW {
 		Rectangle *crect;
 	} usr_shape_info;
 };
-
 
 #if (_MCCA & 0xFF00) == 0x8600
 class LayerManager2 : public uni::LayerManager {

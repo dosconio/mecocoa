@@ -1,5 +1,5 @@
 # ASCII Makefile TAB4 LF
-# Attribute: Ubuntu(64) Shell(Bash) Dest(atx-x64-uefi64){Arch(AMD64), BITS(64)}
+# Attribute: Shell(Bash) Dest(atx-x64-uefi64){Arch(AMD64), BITS(64)}
 # AllAuthor: @ArinaMgk (Phina.net)
 # ModuTitle: Build for Mecocoa
 # Copyright: Dosconio Mecocoa, BCD License Version 3
@@ -86,8 +86,8 @@ sudokey=k
 uherpath=/her
 loader=$(ubinpath)/AMD64/loader.efi
 
-.PHONY : build
-build: clean accm $(archdir)/kerdisk.fat $(ubinpath)/$(arch).img $(asmobjs) $(cppobjs) $(cplobjs) build_util
+.PHONY : build build_drvs
+build: clean accm $(archdir)/kerdisk.fat $(ubinpath)/$(arch).img $(asmobjs) $(cppobjs) $(cplobjs) build_util build_drvs
 	@echo MK $(elf_kernel)
 	$(CX) $(XFLAGS) \
 		-T prehost/$(arch)/$(arch).ld -o $(ubinpath)/$(elf_kernel) \
@@ -139,6 +139,15 @@ build_util:
 		CFLAGS="$(CFLAGS)" \
 		XFLAGS="$(XFLAGS)" \
 		ACCM_LIBS="$(ACCM_LIBS)"
+
+build_drvs:
+	@make -f devdriv/Makefile.$(TOOLSYS).x64 \
+		arch=$(arch) \
+		uincpath=$(uincpath) \
+		ubinpath=$(ubinpath) \
+		DRV=video-bochs \
+		SRCS="devdriv/video/video-bochs.cpp" \
+		build
 # (ASM TEMPLATE)
 #	echo MK a
 #	aasm subapps/_hello/asm/helloa-x64.asm -felf64 -o subapps/_hello/asm/helloa-x64.o

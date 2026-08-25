@@ -179,6 +179,48 @@ static inline stduint FrameSavedSs(const HardwareInterruptFrame* frame) {
 	return frame->hw_ss;
 }
 
+static stduint CopyUserBytesMapped(byte* dst, stduint usr_addr, stduint max_len, ProcessBlock* pb) {
+	if (!dst || !usr_addr || !max_len || !pb) return 0;
+	stduint copied = 0;
+	while (copied < max_len) {
+		const stduint addr = usr_addr + copied;
+		if ((addr & ~_IMM(0xFFF)) != (usr_addr & ~_IMM(0xFFF))) break;
+		if (_IMM(pb->paging[addr]) == ~_IMM0) break;
+		dst[copied] = *(byte*)addr;
+		copied++;
+	}
+	return copied;
+}
+
+static void LogUserExceptionContext(HardwareInterruptFrame* frame, stduint iden, stduint para) {
+	ThreadBlock* const crt = Taskman::CurrentTB();
+	ProcessBlock* const pb = crt ? crt->parent_process : nullptr;
+	byte code_bytes[16] = {};
+	stduint stack_words[4] = {};
+	const stduint code_count = CopyUserBytesMapped(code_bytes, frame->hw_eip, sizeof(code_bytes), pb);
+	const stduint stack_count = CopyUserBytesMapped((byte*)stack_words, FrameSavedEsp(frame), sizeof(stack_words), pb);
+	plogwarn("User exception %d (para %[x]) on CPU%u, PID%u, TID%u ring=%u at EIP %[x], ESP %[x], "
+		"CS %[x], SS %[x], EFLAGS %[x], CR3 %[x]",
+		(int)iden, para, Taskman::getID(),
+		pb ? pb->pid : ~_IMM0, Taskman::CurrentTID(),
+		pb ? pb->ring : ~_IMM0,
+		frame->hw_eip, FrameSavedEsp(frame),
+		frame->hw_cs, FrameSavedSs(frame), frame->hw_eflags, frame->cr3);
+	plogwarn("User exception regs: EAX %[x], EBX %[x], ECX %[x], EDX %[x], ESI %[x], EDI %[x], EBP %[x], "
+		"DS %[x], ES %[x], FS %[x], GS %[x]",
+		frame->pusha_eax, frame->pusha_ebx, frame->pusha_ecx, frame->pusha_edx,
+		frame->pusha_esi, frame->pusha_edi, frame->pusha_ebp,
+		frame->ds, frame->es, frame->fs, frame->gs);
+	plogwarn("User exception bytes(%u): %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x",
+		code_count,
+		code_bytes[0], code_bytes[1], code_bytes[2], code_bytes[3],
+		code_bytes[4], code_bytes[5], code_bytes[6], code_bytes[7],
+		code_bytes[8], code_bytes[9], code_bytes[10], code_bytes[11],
+		code_bytes[12], code_bytes[13], code_bytes[14], code_bytes[15]);
+	plogwarn("User exception stack(%u): %[x] %[x] %[x] %[x]",
+		stack_count, stack_words[0], stack_words[1], stack_words[2], stack_words[3]);
+}
+
 static void LogSelectorFaultContext(rostr name, HardwareInterruptFrame* frame, stduint para) {
 	const stduint cpu = Taskman::getID();
 	const stduint tid = Taskman::CurrentTID();
@@ -230,6 +272,8 @@ bool exception_handler_user(HardwareInterruptFrame* frame, stduint iden, stduint
 	if (iden != ERQ_Page_Fault) {
 		#if _MCCA == 0x8664
 		plogwarn("User exception %d (para %[x]) at RIP %[x], RSP %[x], CR2 %[x]", (int)iden, para, frame->hw_rip, frame->hw_rsp, getCR2());
+		#elif _MCCA == 0x8632
+		LogUserExceptionContext(frame, iden, para);
 		#else
 		plogwarn("User exception %d (para %[x]) on CPU%u, TID%u at EIP %[x], ESP %[x], CR3 %[x]",
 			(int)iden, para, Taskman::getID(), Taskman::CurrentTID(), frame->hw_eip, FrameSavedEsp(frame), frame->cr3);

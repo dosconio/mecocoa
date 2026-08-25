@@ -128,6 +128,127 @@ bool Consman::AdoptVideoDevice(VideoDevice* dev) {
 	return true;
 }
 
+class PublishedVideoProxy : public VideoDevice {
+public:
+	FramebufferInfo fb_info;
+	uni::ScreenBridge renderer;
+	stduint owner_pid = 0;
+	stduint owner_tid = 0;
+	stduint dev_handle = 0;
+	uint32 caps = 0;
+
+	PublishedVideoProxy() : renderer(fb_info) {}
+
+	virtual const FramebufferInfo& GetFramebuffer() const override { return fb_info; }
+	virtual bool setMode(const VideoMode& mode) override {
+		if (!owner_tid || !(caps & GraphicDriverCap_SetMode)) return false;
+		stduint args[4] = {
+			(stduint)mode.resolution.x,
+			(stduint)mode.resolution.y,
+			(stduint)mode.format,
+			0
+		};
+		return syssend_async(owner_tid, args, byteof(args), _IMM(GraphicMsg::DRV_SETMODE)) == 0;
+	}
+	virtual void Flush(const Rectangle& rect) override {
+		(void)rect;
+	}
+	virtual void SetCursor(const Point& disp) const override { renderer.SetCursor(disp); }
+	virtual Point GetCursor() const override { return renderer.GetCursor(); }
+	virtual void DrawPoint(const Point& disp, Color color) const override { renderer.DrawPoint(disp, color); }
+	virtual void DrawRectangle(const Rectangle& rect) const override { renderer.DrawRectangle(rect); }
+	virtual void DrawFont(const Point& disp, const DisplayFont& font, const String& str) const override { renderer.DrawFont(disp, font, str); }
+	virtual Color GetColor(Point p) const override { return renderer.GetColor(p); }
+	virtual void DrawPoints(const Rectangle& rect, const Color* base) const override { renderer.DrawPoints(rect, base); }
+};
+
+static PublishedVideoProxy* published_video_proxy = nullptr;
+
+static stduint PublishedVideoBpp(uni::PixelFormat format, uint32 width, uint32 pitch) {
+	switch (format) {
+	case uni::PixelFormat::ARGB8888:
+	case uni::PixelFormat::ABGR8888:
+	case uni::PixelFormat::RGBA8888:
+	case uni::PixelFormat::BGRA8888:
+		return 32;
+	case uni::PixelFormat::RGB565:
+	case uni::PixelFormat::BGR565:
+	case uni::PixelFormat::ARGB1555:
+	case uni::PixelFormat::ARGB4444:
+		return 16;
+	case uni::PixelFormat::RGB888:
+		return 24;
+	default:
+		return width ? (pitch * 8 / width) : 0;
+	}
+}
+
+static bool MapPublishedFramebufferToKernel(stduint physical, stduint length) {
+	if (!physical || !length) return false;
+	const stduint page_base = physical & ~_IMM(0xFFF);
+	const uint64 end64 = uint64(physical) + uint64(length);
+	const uint64 page_end64 = (end64 + 0xFFFu) & ~0xFFFu;
+	if ((uint64)(stduint)page_end64 != page_end64) return false;
+	const stduint page_end = (stduint)page_end64;
+	if (page_end <= page_base) return false;
+	kernel_paging.Map(
+		page_base,
+		page_base,
+		page_end - page_base,
+		PAGESIZE_4KB,
+		PGPROP_present | PGPROP_writable |
+		PGPROP_cache_disable | PGPROP_write_through
+	);
+	for (stduint page = page_base; page < page_end; page += 0x1000) {
+		RefreshVirtualAddress(page);
+	}
+	return true;
+}
+
+bool PowerValidateDeviceResourceRange(ProcessBlock* pb, stduint dev_handle, uint32 resource_type, uint32 resource_index, uint64 start, uint64 length);
+
+static stdsint GraphicMsg_DRV_ATTACH(FMT_GraphicMsg_DRV_ATTACH* usr_info, ProcessBlock* pb, stduint sig_src) {
+	if (!usr_info || !pb) return -1;
+	FMT_GraphicMsg_DRV_ATTACH info{};
+	MccaMemCopyP(&info, nullptr, true, usr_info, pb, false, sizeof(info));
+	if (info.version != GraphicDriverProtocolVersion) return -1;
+	if (info.resource_type != _IMM(DeviceResourceType::PciBarMmio)) return -1;
+	if (!info.dev_handle || !info.fb_length || !info.width || !info.height || !info.pitch) return -1;
+
+	const uint64 physical64 = info.fb_start + info.fb_offset;
+	if (physical64 < info.fb_start) return -1;
+	if ((uint64)(stduint)physical64 != physical64) return -1;
+	if ((uint64)(stduint)info.fb_length != info.fb_length) return -1;
+	if (!PowerValidateDeviceResourceRange(
+		pb,
+		info.dev_handle,
+		info.resource_type,
+		info.resource_index,
+		physical64,
+		info.fb_length)) {
+		return -1;
+	}
+	const stduint physical = (stduint)physical64;
+	if (!MapPublishedFramebufferToKernel(physical, (stduint)info.fb_length)) return -1;
+
+	if (!published_video_proxy) {
+		published_video_proxy = new PublishedVideoProxy();
+		if (!published_video_proxy) return -1;
+	}
+	auto* proxy = published_video_proxy;
+	proxy->owner_pid = pb->pid;
+	proxy->owner_tid = sig_src;
+	proxy->dev_handle = info.dev_handle;
+	proxy->caps = info.caps;
+	proxy->fb_info.physical_range = Slice{ physical, (stduint)info.fb_length };
+	proxy->fb_info.screen_size = Size2(info.width, info.height);
+	proxy->fb_info.pitch = info.pitch;
+	proxy->fb_info.format = uni::PixelFormat(info.format);
+	proxy->fb_info.bpp = PublishedVideoBpp(proxy->fb_info.format, info.width, info.pitch);
+
+	return Consman::AdoptVideoDevice(proxy) ? 0 : -1;
+}
+
 // hand_mouse - runs only in Graphic thread, no lock needed
 void hand_mouse(MouseMessage mmsg) {
 	byte change_btns = 0;// 0RML0RML
@@ -1101,6 +1222,22 @@ void Consman::RemoveVconsole(Dnode* nod) {
 
 // ---- ---- Graphic Thread Main Loop ---- ----
 
+static bool GraphicMsgIsDriverControl(GraphicMsg msg) {
+	switch (msg) {
+	case GraphicMsg::DRV_ATTACH:
+	case GraphicMsg::DRV_DETACH:
+	case GraphicMsg::DRV_SETMODE:
+	case GraphicMsg::DRV_FLUSH:
+		return true;
+	default:
+		return false;
+	}
+}
+
+static bool GraphicMsgSourceCanControlDriver(const ProcessBlock* pb) {
+	return pb && pb->ring == RING_S;
+}
+
 void serv_graf_loop() {
 	SysMessage msg;// Inner Module Message System
 	#if _GUI_ENABLE == 0
@@ -1197,10 +1334,19 @@ void serv_graf_loop() {
 			}
 			case SysMessage::RUPT_SET_RES:
 			{
-				DeviceNode* node = Devsman::FindPCIDeviceByClass(0x03, 0x00, 0x00);
-				if (node && node->fields.binding.driver_data) {
-					VideoDevice* dev = static_cast<VideoDevice*>(node->fields.binding.driver_data);
-					if (dev->setMode(uni::VideoMode{uni::Point2(msg.args.res.width, msg.args.res.height), uni::PixelFormat::ARGB8888})) {
+				VideoDevice* dev = nullptr;
+				if (Consman::current_video_device == published_video_proxy) {
+					dev = Consman::current_video_device;
+				}
+				else {
+					DeviceNode* node = Devsman::FindPCIDeviceByClass(0x03, 0x00, 0x00);
+					if (node && node->fields.binding.driver_data) {
+						dev = static_cast<VideoDevice*>(node->fields.binding.driver_data);
+					}
+					if (!dev) dev = Consman::current_video_device;
+				}
+				if (dev && dev->setMode(uni::VideoMode{uni::Point2(msg.args.res.width, msg.args.res.height), uni::PixelFormat::ARGB8888})) {
+					if (dev != published_video_proxy) {
 						Consman::AdoptVideoDevice(dev);
 						ploginfo("[Graphic] Resolution changed to %ux%u", msg.args.res.width, msg.args.res.height);
 					}
@@ -1266,7 +1412,14 @@ void serv_graf_loop() {
 
 		#if _GUI_ENABLE
 		stduint ret = 0;
-		switch ((GraphicMsg)sig_type) {
+		const GraphicMsg gmsg = (GraphicMsg)sig_type;
+		if (GraphicMsgIsDriverControl(gmsg) && !GraphicMsgSourceCanControlDriver(safe_pb)) {
+			ret = (stduint)-1;
+			syssend_async(sig_src, (void*)&ret, sizeof(ret));
+			ProcessBlock::Release(safe_pb);
+			continue;
+		}
+		switch (gmsg) {
 		case GraphicMsg::FNEW:
 			ret = GraphicMsg_FNEW((FMT_ConsoleMsg_FNEW*)to_args, safe_pb);
 			syssend_async(sig_src, (void*)&ret, sizeof(ret));
@@ -1352,6 +1505,16 @@ void serv_graf_loop() {
 			syssend_async(sig_src, (void*)&ret, sizeof(ret));
 			break;
 		}
+		case GraphicMsg::DRV_ATTACH:
+			ret = GraphicMsg_DRV_ATTACH((FMT_GraphicMsg_DRV_ATTACH*)to_args[0], safe_pb, sig_src);
+			syssend_async(sig_src, (void*)&ret, sizeof(ret));
+			break;
+		case GraphicMsg::DRV_DETACH:
+		case GraphicMsg::DRV_SETMODE:
+		case GraphicMsg::DRV_FLUSH:
+			ret = (stduint)-1;
+			syssend_async(sig_src, (void*)&ret, sizeof(ret));
+			break;
 		default:
 			plogerro("%s Unknown GraphicMsg type: %d", __FUNCIDEN__, sig_type);
 			break;

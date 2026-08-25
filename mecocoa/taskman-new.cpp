@@ -172,7 +172,7 @@ static stduint _Taskman_Create_Paging(ProcessBlock *ppb, byte ring, stduint stac
 	// [PHINA]: should include LDT in Paging if use jmp-tss: pb->paging.Map(_IMM(page), _IMM(page), allocsize, PAGESIZE_4KB, PGPROP_present | PGPROP_writable);
 	// keep 0x00000000 default empty page
 	#if (_MCCA & 0xFF00) == 0x8600
-	if (ring == 3) {
+	if (ring != RING_M) {
 		ppb->paging.Reset();
 		// stack
 		ppb->paging.Map(_IMM(ppb->main_thread->stack_lineaddr), (stack_norm), ppb->main_thread->stack_size, PAGESIZE_4KB, PGPROP_present | PGPROP_writable | PGPROP_user_access);
@@ -640,7 +640,7 @@ ProcessBlock* Taskman::CreateELF(BlockTrait* source, byte ring) {
 		{
 			bool executable = !!(ph.p_flags & PF_X);
 			bool writable = !!(ph.p_flags & PF_W);
-			bool user = (ring == RING_U);
+			bool user = (ring != RING_M);
 			_CreateELF_Carry((char*)ph.p_vaddr, ph.p_memsz, source, ph.p_offset, ph.p_filesz, pb->paging, block_buffer, executable, writable, user);
 			if (load_slice_p < numsof(pb->load_slices)) {
 				pb->load_slices[load_slice_p].address = ph.p_vaddr;
@@ -695,8 +695,8 @@ ProcessBlock* Taskman::CreateELF(BlockTrait* source, byte ring) {
 
 	#endif
 
-	tb->priority = (ring == RING_U) ? 4 : 0;
-	tb->time_slice = (ring == RING_U) ? 3 : 4;
+	tb->priority = (ring != RING_M) ? 4 : 0;
+	tb->time_slice = (ring != RING_M) ? 3 : 4;
 
 	return pb;
 	#endif
@@ -1076,7 +1076,7 @@ ProcessBlock* Taskman::Exet(stduint parent, rostr usr_fullpath, char** usr_argv,
 		if (ph.p_type == PT_LOAD && ph.p_memsz) {
 			bool executable = !!(ph.p_flags & PF_X);
 			bool writable = !!(ph.p_flags & PF_W);
-			bool user = (current_pb->ring == RING_U);
+			bool user = (current_pb->ring != RING_M);
 			_CreateELF_Carry((char*)ph.p_vaddr, ph.p_memsz, &loop_device, ph.p_offset, ph.p_filesz, current_pb->paging, block_buffer, executable, writable, user);
 			if (load_slice_p < numsof(current_pb->load_slices)) {
 				current_pb->load_slices[load_slice_p].address = ph.p_vaddr;

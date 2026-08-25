@@ -88,6 +88,7 @@ void serv_dev_hd_loop();
 void serv_dev_fl_loop();
 void serv_dev_audio_loop();
 void serv_file_loop();
+void serv_devs_loop();
 #include "devsman.hpp"
 #include "virtual.hpp"
 

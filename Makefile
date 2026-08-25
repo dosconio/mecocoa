@@ -1,5 +1,5 @@
 # ASCII Makefile TAB4 LF
-# Attribute: Ubuntu(64) Shell(Bash)
+# Attribute: Shell(Bash)
 # AllAuthor: @ArinaMgk (Phina.net)
 # ModuTitle: Build for Mecocoa
 # Copyright: Dosconio Mecocoa, BCD License Version 3

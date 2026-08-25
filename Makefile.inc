@@ -41,6 +41,9 @@ cppfile+=$(wildcard mecocoa/*.cpp) prehost/_auxiliary.cpp $(wildcard devdriv/*.c
 	$(ulibpath)/cpp/filesystem/CD.cpp \
 	$(ulibpath)/cpp/filesystem/FAT.cpp $(wildcard $(ulibpath)/cpp/filesystem/FAT/*.cpp) \
 
+kernel_excluded_cpp+=devdriv/video/video-bochs.cpp
+cppfile:=$(filter-out $(kernel_excluded_cpp),$(cppfile))
+
 cplfile+= \
 	$(ulibpath)/c/mcore.c \
 	$(ulibpath)/c/debug.c \

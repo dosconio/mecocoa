@@ -1,5 +1,5 @@
 # ASCII Makefile TAB4 LF
-# Attribute: Ubuntu(64) Shell(Bash) Dest(atx-x64-uefi64){Arch(AMD64), BITS(64)}
+# Attribute: Shell(Bash) Dest(atx-x64-uefi64){Arch(AMD64), BITS(64)}
 # AllAuthor: @ArinaMgk (Phina.net)
 # ModuTitle: Build for Mecocoa
 # Copyright: Dosconio Mecocoa, BCD License Version 3

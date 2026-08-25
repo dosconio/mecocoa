@@ -233,6 +233,12 @@ static stdsint HandlePowerDeviceProper(ProcessBlock* pb, DeviceNode* node, stdui
 }
 
 static const DeviceResource* FindPowerDeviceResource(const DeviceNode* node, uint32 resource_type, uint32 resource_index) {
+	#if (_MCCA & 0xFF00) != 0x8600
+	(void)node;
+	(void)resource_type;
+	(void)resource_index;
+	return nullptr;
+	#else
 	if (!node) return nullptr;
 	if (resource_type) {
 		return Devsman::FindResource(node, DeviceResourceType(resource_type), resource_index);
@@ -244,6 +250,58 @@ static const DeviceResource* FindPowerDeviceResource(const DeviceNode* node, uin
 		}
 	}
 	return nullptr;
+	#endif
+}
+
+bool PowerValidateDeviceResourceRange(ProcessBlock* pb, stduint dev_handle, uint32 resource_type, uint32 resource_index, uint64 start, uint64 length) {
+	#if (_MCCA & 0xFF00) == 0x8600
+	if (!pb || !dev_handle || !length) return false;
+	auto* node = ResolvePowerDeviceHandle(pb, dev_handle);
+	const auto* res = FindPowerDeviceResource(node, resource_type, resource_index);
+	if (!res) return false;
+	if (resource_type && res->type != resource_type) return false;
+	if (start < res->start) return false;
+	const uint64 end = start + length;
+	const uint64 resource_end = res->start + res->length;
+	if (end < start) return false;
+	if (resource_end < res->start) return false;
+	return end <= resource_end;
+	#else
+	(void)pb;
+	(void)dev_handle;
+	(void)resource_type;
+	(void)resource_index;
+	(void)start;
+	(void)length;
+	return false;
+	#endif
+}
+
+static stdsint HandlePowerDevicePublishFramebufferAperture(ProcessBlock* pb, DeviceNode* node, stduint args) {
+	#if (_MCCA & 0xFF00) == 0x8600
+	if (!pb || !node || !args) return -1;
+	PowerDeviceFramebufferAperture aperture{};
+	MccaMemCopyP(&aperture, nullptr, true, (void*)args, pb, false, sizeof(aperture));
+	if (aperture.resource_type != _IMM(DeviceResourceType::PciBarMmio)) return -1;
+	if (!aperture.start || !aperture.length) return -1;
+	if (node->fields.class_base != 0x03u) return -1;
+	for (uint32 i = 0; i < node->fields.resource_count; ++i) {
+		auto* res = &node->fields.resources[i];
+		if (res->type != aperture.resource_type || res->index != aperture.resource_index) continue;
+		if (!(res->flags & DeviceResourceFlag_SizeEstimated)) return -1;
+		if (res->start != aperture.start) return -1;
+		if (aperture.length <= res->length) return 0;
+		if (aperture.length > 256ull * 1024ull * 1024ull) return -1;
+		res->length = aperture.length;
+		return 0;
+	}
+	return -1;
+	#else
+	(void)pb;
+	(void)node;
+	(void)args;
+	return -1;
+	#endif
 }
 
 static stdsint HandlePowerDeviceMap(ProcessBlock* pb, DeviceNode* node, stduint args) {
@@ -251,9 +309,8 @@ static stdsint HandlePowerDeviceMap(ProcessBlock* pb, DeviceNode* node, stduint 
 	PowerDeviceMapRequest request{};
 	MccaMemCopyP(&request, nullptr, true, (void*)args, pb, false, sizeof(request));
 
-	const auto* res = request.resource_type
-		? FindPowerDeviceResource(node, request.resource_type, request.resource_index)
-		: Devsman::FindResource(node, DeviceResourceType::PciBarMmio, request.resource_index);
+	const uint32 resource_type = request.resource_type ? request.resource_type : _IMM(DeviceResourceType::PciBarMmio);
+	const auto* res = FindPowerDeviceResource(node, resource_type, request.resource_index);
 	if (!res || DeviceResourceType(res->type) != DeviceResourceType::PciBarMmio) return -1;
 	if (request.offset > res->length) return -1;
 
@@ -314,11 +371,10 @@ static stdsint HandlePowerDeviceIo(ProcessBlock* pb, DeviceNode* node, stduint a
 	MccaMemCopyP(&request, nullptr, true, (void*)args, pb, false, sizeof(request));
 
 	#if (_MCCA & 0xFF00) == 0x8600
-	const auto* res = request.resource_type
-		? FindPowerDeviceResource(node, request.resource_type, request.resource_index)
-		: Devsman::FindResource(node, DeviceResourceType::PciBarIo, request.resource_index);
+	const uint32 resource_type = request.resource_type ? request.resource_type : _IMM(DeviceResourceType::PciBarIo);
+	const auto* res = FindPowerDeviceResource(node, resource_type, request.resource_index);
 	if (!res) {
-		res = Devsman::FindResource(node, DeviceResourceType::IoPortRange, request.resource_index);
+		res = FindPowerDeviceResource(node, _IMM(DeviceResourceType::IoPortRange), request.resource_index);
 	}
 	if (!res) return -1;
 
@@ -446,8 +502,23 @@ stdsint HandlePowerCall(syscall_t callid, stduint p1, stduint p2, stduint p3) {
 	case syscall_t::POWERCALL_DEV_DMA_ALLOC:
 	case syscall_t::POWERCALL_DEV_DMA_FREE:
 	case syscall_t::POWERCALL_DEV_DMA_MAP:
-	case syscall_t::POWERCALL_DEV_PUBLISH:
 		return -1;
+	case syscall_t::POWERCALL_DEV_PUBLISH:
+	{
+		auto* node = ResolvePowerDeviceHandle(pb, p1);
+		if (!node) return -1;
+		switch (PowerDevicePublishCommand(p2)) {
+		case PowerDevicePublishCommand::Started:
+			if (!node->fields.binding.driver_name) return -1;
+			node->fields.binding.state = static_cast<uint32>(DriverBindingState::Started);
+			node->fields.binding.probe_result = 0;
+			return 0;
+		case PowerDevicePublishCommand::FramebufferAperture:
+			return HandlePowerDevicePublishFramebufferAperture(pb, node, p3);
+		default:
+			return -1;
+		}
+	}
 	default:
 		return -1;
 	}

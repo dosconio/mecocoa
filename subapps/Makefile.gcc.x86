@@ -1,5 +1,5 @@
 # ASCII Makefile TAB4 LF
-# Attribute: Ubuntu(64) Shell(Bash)
+# Attribute: Shell(Bash)
 # ModuTitle: Build subapps for Mecocoa x86
 
 BIN_DIR = $(uobjpath)/sapp-$(arch)

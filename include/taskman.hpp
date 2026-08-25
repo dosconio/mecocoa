@@ -13,27 +13,8 @@
 
 #include "fileman.hpp"
 #include "syscall.hpp"
+#include "taskman.com.hpp"
 #include <c/ISO_IEC_STD/signal.h>
-
-enum {
-	Task_Kernel,
-	Task_TaskMan,
-	Task_Console,
-	Task_ConsoleVideo,// [inner of Task_Console] manage mice and GUI
-	Task_FileSys,
-	Task_Memdisk_Serv,
-	#if (_MCCA & 0xFF00) == 0x8600
-	Task_Net_Serv,
-	#endif
-	#if _MCCA == 0x8632 || _ACCM == 0x8632
-	Task_Hdd_Serv,
-	Task_Flp_Serv,
-	Task_Audio_Serv,
-	#endif
-	Task_Init,
-	//
-	TaskCount
-};
 
 void serv_sysmsg();
 
@@ -68,23 +49,6 @@ struct SysMessage {
 	} args = {};
 };
 extern uni::Queue<SysMessage> message_queue;
-
-// Graphic-thread IPC message types for GUI operations.
-// Console forwards Form/VConsole requests to Graphic via these.
-enum class GraphicMsg {
-	FNEW,// new-form
-	FDEL,// close-form
-	FBID,// bind user pixel buffer
-	FUPD,// update pixels from user buffer
-	FMSG,// fetch form message
-	FDRW,// draw shape
-	FCHR,// draw string
-	FTIM,// set timer
-	FSIZ,// get screen size
-	FCLEANPROC,// clean exiting process GUI resources
-	VCON_CREATE,// create virtual console
-	VCON_REMOVE,// remove virtual console
-};
 
 enum GraphicFormStyle {
 	GraphicFormStyle_Titleless = 0x00000001,
@@ -219,20 +183,6 @@ extern ThreadBlock* PCU_CORES_current_thread[PCU_CORES_MAX];
 extern ThreadBlock* PCU_CORES_idle_thread[PCU_CORES_MAX];
 extern ThreadBlock* volatile PCU_CORES_switching_out_threads[PCU_CORES_MAX];
 #endif
-
-// Message
-static constexpr const stduint ANYPROC = (_IMM0);
-static constexpr const stduint INTRUPT = (~_IMM0);
-static constexpr const stduint COMM_RECV = 0b10;
-static constexpr const stduint COMM_SEND = 0b01;
-static constexpr const stduint COMM_SEND_ASYNC = 0b100;
-static constexpr const stduint LIMIT_THREAD_AMSG = 64;
-
-struct CommMsg {
-	uni::Slice data = {};
-	stduint type = 0;
-	stduint src = 0;// use if type is HARDRUPT
-};
 
 struct AsyncCommMsg {
 	CommMsg msg = {};

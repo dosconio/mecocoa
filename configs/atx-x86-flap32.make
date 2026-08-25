@@ -1,5 +1,5 @@
 # ASCII Makefile TAB4 LF
-# Attribute: Ubuntu(64) Shell(Bash)
+# Attribute: Shell(Bash)
 # AllAuthor: @dosconio
 # ModuTitle: Build for Mecocoa
 # Copyright: Dosconio Mecocoa, BCD License Version 3
@@ -28,7 +28,8 @@ CX=g++ -I$(uincpath) -Idepends/freetype/x86/include -c $(flag) $(CXF) $(CXW) -st
 
 ker_mod=$(uobjpath)/mcca-$(arch)/*.o
 
-cppfile=$(wildcard mecocoa/*.cpp) $(wildcard devdriv/*.cpp) $(wildcard devdriv/**/*.cpp) $(wildcard depends/*.cpp)
+kernel_excluded_cpp=devdriv/video/video-bochs.cpp
+cppfile=$(filter-out $(kernel_excluded_cpp),$(wildcard mecocoa/*.cpp) $(wildcard devdriv/*.cpp) $(wildcard devdriv/**/*.cpp) $(wildcard depends/*.cpp))
 cppobjs=$(patsubst %.cpp, $(uobjpath)/mcca-$(arch)/%.o, $(notdir $(cppfile)))
 VPATH = $(sort $(dir $(cppfile)))
 
@@ -36,9 +37,9 @@ sudokey=k
 elf_kernel=$(archdir)/mcca-$(arch).elf
 iso_kernel=$(ubinpath)/mcca.iso
 
-.PHONY: build install lib accm run clean
+.PHONY: build install lib accm run clean build_drvs
 
-build: lib accm prehost/$(arch)/fatvhd.ignore $(cppobjs) build_util
+build: lib accm prehost/$(arch)/fatvhd.ignore $(cppobjs) build_util build_drvs
 	@echo "MK $(arch) real16 support"
 	aasm prehost/$(arch)/atx-x86.asm        -felf   -o $(uobjpath)/mcca-$(arch)/mcca-$(arch)-elf16.o  -Iinclude/
 	aasm prehost/$(arch)/atx-ladder.asm     -felf   -o $(uobjpath)/mcca-$(arch)/mcca-$(arch)-ladder.o -Iinclude/ -D_MCCA=0x8632
@@ -67,6 +68,7 @@ build: lib accm prehost/$(arch)/fatvhd.ignore $(cppobjs) build_util
 	# --- CD ---
 	mkdir -p $(ubinpath)/mecocoa/boot/grub
 	mkdir -p $(ubinpath)/mecocoa/apps
+	mkdir -p $(ubinpath)/mecocoa/drvs
 	mkdir -p $(ubinpath)/mecocoa/demo
 	mkdir -p $(ubinpath)/mecocoa/font
 	-rm -rf  $(ubinpath)/mecocoa/apps/*
@@ -112,6 +114,15 @@ build_util:
 		CXF2="$(CXF2)" \
 		CXW="$(CXW)" \
 		ACCM_LIBS="$(ACCM_LIBS)"
+
+build_drvs:
+	@make -f devdriv/Makefile.$(TOOLSYS).x86 \
+		arch=$(arch) \
+		uincpath=$(uincpath) \
+		ubinpath=$(ubinpath) \
+		DRV=video-bochs \
+		SRCS="devdriv/video/video-bochs.cpp" \
+		build
 
 
 install:

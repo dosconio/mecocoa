@@ -228,7 +228,7 @@ namespace {
 
 	bool probe_video_bochs_device(DeviceNode* node) {
 		if (!node) return false;
-		return Devsman::AddIoPortResource(node, 0, 0x01CE, 2);
+		return Devsman::AddIoPortResource(node, 0, 0x01CE, 3);
 	}
 
 	bool probe_video_vmware_device(DeviceNode* node) {
@@ -1109,6 +1109,9 @@ namespace {
 			}
 			if (!base) continue;
 			length = read_pci_mmio_bar_length(dev, resource_index, bar_low, bar_count);
+			if (is_active_boot_gpu(dev)) {
+				flags |= DeviceResourceFlag_SizeEstimated;
+			}
 			append_resource(node, DeviceResourceType::PciBarMmio, flags,
 				resource_index, base, length, 0);
 			map_pci_mmio_resource(base, length);
@@ -2125,3 +2128,98 @@ const char* Devsman::LookupPciVendorName(uint16 vendor_id) {
 	}
 }
 #endif
+
+void serv_devs_loop() {
+	constexpr stduint retry_limit = 20;
+	constexpr stduint drv_batch_count = 8;
+	const char* drv_dirs[] = {
+		"/mnt/ide2.0/drvs",
+		"/mnt/ahci1.0/drvs",
+	};
+	dirent_t entries[drv_batch_count];
+
+	auto current = Taskman::CurrentTB();
+	if (!current || !current->parent_process) return;
+
+	for0(retry, retry_limit) {
+		const char* drv_dir = nullptr;
+		stdsint fd = -1;
+		for0(dir_i, numsof(drv_dirs)) {
+			drv_dir = drv_dirs[dir_i];
+			struct {
+				stduint flag;
+				stduint tid;
+				rostr usr_filepath;
+			} open_msg = { O_RDONLY | O_DIRECTORY, current->getID(), drv_dir };
+			syssend(Task_FileSys, &open_msg, sizeof(open_msg), _IMM(FilemanMsg::OPEN));
+			sysrecv(Task_FileSys, &fd, sizeof(fd));
+			if (fd >= 0) break;
+		}
+		if (fd < 0) {
+			syscall(syscall_t::REST, 1, 1000);
+			continue;
+		}
+
+		const stduint drv_dir_len = StrLength(drv_dir);
+		struct {
+			stduint fd;
+			stduint pid;
+		} close_msg = { (stduint)fd, current->parent_process->pid };
+		for (;;) {
+			MemSet(entries, 0, sizeof(entries));
+			stduint enum_msg[4] = {
+				(stduint)fd,
+				_IMM(entries),
+				drv_batch_count,
+				current->getID()
+			};
+			syssend(Task_FileSys, enum_msg, byteof(enum_msg), _IMM(FilemanMsg::ENUMER));
+			sysrecv(Task_FileSys, enum_msg, byteof(enum_msg[0]));
+			const stdsint count = (stdsint)enum_msg[0];
+			if (count <= 0) break;
+
+			for (stdsint i = 0; i < count; ++i) {
+				if (entries[i].is_dir || !entries[i].name[0] || entries[i].name[0] == '.') continue;
+
+				char path[96] = {};
+				StrCopy(path, drv_dir);
+				path[drv_dir_len] = '/';
+				StrCopy(path + drv_dir_len + 1, entries[i].name);
+				#if (_MCCA & 0xFF00) == 0x8600
+				constexpr byte drv_ring = 1;
+				#else
+				constexpr byte drv_ring = RING_M;
+				#endif
+				ProcessBlock* task = Taskman::CreateFile(path, drv_ring, Task_Devsman);
+				if (!task) {
+					plogwarn("[Devsman] load driver failed: %s", path);
+					continue;
+				}
+				{
+					auto focus_tty = task->focus_tty.Lock();
+					*focus_tty = vttys[0];
+					if (*focus_tty) {
+						task->Open("/dev/tty", O_RDWR);
+						task->Open("/dev/tty", O_RDWR);
+						task->Open("/dev/tty", O_RDWR);
+					}
+				}
+				Taskman::Append(task);
+				Taskman::AppendThread(task->main_thread);
+				ploginfo("[Devsman] load driver: %s pid=%u", path, task->pid);
+			}
+		}
+
+		stdsint close_ret = -1;
+		syssend(Task_FileSys, &close_msg, sizeof(close_msg), _IMM(FilemanMsg::CLOSE));
+		sysrecv(Task_FileSys, &close_ret, sizeof(close_ret));
+		for (;;) {
+			stduint wait_msg[3] = { Task_Devsman, 0, 0 };
+			syssend(Task_TaskMan, wait_msg, byteof(wait_msg), _IMM(TaskmanMsg::WAIT));
+			sysrecv(Task_TaskMan, wait_msg, byteof(wait_msg));
+			if (!wait_msg[0]) syscall(syscall_t::REST, 1, 1000);
+		}
+	}
+	plogwarn("[Devsman] driver directories not ready");
+	for (;;) syscall(syscall_t::REST, 1, 1000);
+}

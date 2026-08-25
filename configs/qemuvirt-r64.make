@@ -1,5 +1,5 @@
 # ASCII Makefile TAB4 LF
-# Attribute: Ubuntu(64) Shell(Bash) Dest(qemuvirt-r64){Arch(RISCV), BITS(64)}
+# Attribute: Shell(Bash) Dest(qemuvirt-r64){Arch(RISCV), BITS(64)}
 # AllAuthor: @ArinaMgk (Phina.net)
 # ModuTitle: Build for Mecocoa
 # Copyright: Dosconio Mecocoa, BCD License Version 3

@@ -57,6 +57,7 @@ void mecocoa(const UefiData& uefi_data_ref)
 	Taskman::Create((void*)&serv_cons_loop, RING_M);
 	Taskman::Create((void*)&serv_graf_loop, RING_M);
 	Taskman::Create((void*)&serv_file_loop, RING_M);
+	Taskman::Create((void*)&serv_devs_loop, RING_M);
 	//
 	Taskman::Create((void*)&serv_dev_mem_loop, RING_M);
 	Taskman::Create((void*)&serv_dev_net_loop, RING_M);

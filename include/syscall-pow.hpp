@@ -1,13 +1,27 @@
 #ifndef SYSCALL_POW_HPP_
 #define SYSCALL_POW_HPP_
 
+#include <c/stdinc.h>
 #include "syscall.hpp"
+#include "taskman.com.hpp"
 
 enum class PowerDeviceProper : uint32 {
 	None = 0,
 	GetIdentity,
 	GetResourceCount,
 	GetResource,
+};
+
+enum class PowerDeviceResourceType : uint16 {
+	None = 0,
+	PciBarMmio,
+	PciBarIo,
+	IoPortRange,
+	IrqLine,
+	PciBridgeBusRange,
+	UsbLocation,
+	UsbEndpoint,
+	DmaChannel,
 };
 
 struct PowerDeviceIdentity {
@@ -63,6 +77,21 @@ struct PowerDeviceIoRequest {
 	uint32 value = 0;
 };
 
+enum class PowerDevicePublishCommand : uint32 {
+	None = 0,
+	Started,
+	FramebufferAperture,
+};
+
+struct PowerDeviceFramebufferAperture {
+	uint32 resource_type = 0;
+	uint32 resource_index = 0;
+	uint32 reserved = 0;
+	uint32 flags = 0;
+	uint64 start = 0;
+	uint64 length = 0;
+};
+
 static inline stdsint PowerCallHello() {
 	return (stdsint)syscall(syscall_t::POWERCALL_HELLO);
 }
@@ -109,6 +138,14 @@ static inline stdsint PowerCallDevIoRead(stduint dev_handle, PowerDeviceIoReques
 
 static inline stdsint PowerCallDevIoWrite(stduint dev_handle, PowerDeviceIoRequest* args) {
 	return (stdsint)syscall(syscall_t::POWERCALL_DEV_IO_WRITE, dev_handle, _IMM(args), 0);
+}
+
+static inline stdsint PowerCallDevPublish(stduint dev_handle, PowerDevicePublishCommand cmd, void* args = nullptr) {
+	return (stdsint)syscall(syscall_t::POWERCALL_DEV_PUBLISH, dev_handle, _IMM(cmd), _IMM(args));
+}
+
+static inline stdsint PowerSysComm(stduint op, stduint to, CommMsg* msg) {
+	return (stdsint)syscall(syscall_t::COMM, op, to, _IMM(msg));
 }
 
 #endif

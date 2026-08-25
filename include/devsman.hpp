@@ -2,7 +2,7 @@
 #define DEVSMAN_HPP_
 
 #include <c/nnode.h>
-#include <cpp/Device/_Audio.hpp>
+#include <cpp/System/Audiosys.hpp>
 
 struct DeviceNode;
 
@@ -81,6 +81,7 @@ enum DeviceResourceFlags : uint16 {
 	DeviceResourceFlag_None = 0,
 	DeviceResourceFlag_Prefetchable = 1 << 0,
 	DeviceResourceFlag_Bar64 = 1 << 1,
+	DeviceResourceFlag_SizeEstimated = 1 << 2,
 };
 
 constexpr uint16 DeviceNodeInlineResourceCapacity = 8;
