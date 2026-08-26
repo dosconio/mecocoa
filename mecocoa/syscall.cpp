@@ -22,10 +22,16 @@ extern "C" stdsint sysc_TGET(stduint, stduint, stduint);
 extern "C" stdsint sysc_TDET(stduint, stduint, stduint);
 extern "C" stdsint sysc_TYLD(stduint, stduint, stduint);
 extern "C" stdsint sysc_FUTX(stduint, stduint, stduint);
+extern "C" stdsint sysc_SOCK(stduint, stduint, stduint);
+extern "C" stdsint sysc_BIND(stduint, stduint, stduint);
+extern "C" stdsint sysc_CONN(stduint, stduint, stduint);
+extern "C" stdsint sysc_SEND(stduint, stduint, stduint);
+extern "C" stdsint sysc_RECV(stduint, stduint, stduint);
+extern "C" stdsint sysc_ROUT(stduint, stduint, stduint);
 extern "C" void check_and_deliver_signals(void* context);
 
 // Syscall Wrappers
-extern stduint SYSCALL_TABLE[37];
+extern stduint SYSCALL_TABLE[43];
 
 void Syscall::Initialize() {
 	#if _MCCA == 0x8632
@@ -269,6 +275,110 @@ DEFSYSC sysc_PIPE(stduint usr_pipefd) {
 	ThreadBlock* th = Taskman::CurrentTB();
 	ProcessBlock* pb = th->parent_process;
 	return pb->Pipe((int*)usr_pipefd);
+}
+
+static stdsint CopySocketAddressFromUser(byte* buffer, stduint capacity, stduint usr_addr, stduint addr_length, ProcessBlock* pb) {
+	if (!buffer || !pb || !usr_addr || addr_length < sizeof(uni::Network::SocketAddress)) return -1;
+	uni::Network::SocketAddress head{};
+	MccaMemCopyP(&head, nullptr, true, (const void*)usr_addr, pb, false, sizeof(head));
+	if (head.length < sizeof(head) || addr_length < head.length || head.length > capacity) return -1;
+	MccaMemCopyP(buffer, nullptr, true, (const void*)usr_addr, pb, false, head.length);
+	return head.length;
+}
+
+DEFSYSC sysc_SOCK(stduint domain, stduint type, stduint protocol) {
+	ThreadBlock* th = Taskman::CurrentTB();
+	ProcessBlock* pb = th->parent_process;
+	return pb ? pb->Socket(domain, type, protocol) : -1;
+}
+
+DEFSYSC sysc_BIND(stduint fd, stduint usr_addr, stduint addr_length) {
+	ThreadBlock* th = Taskman::CurrentTB();
+	ProcessBlock* pb = th->parent_process;
+	if (!pb) return -1;
+	byte address_buffer[sizeof(uni::Network::SocketAddressIPv6)] = {};
+	const stdsint copied = CopySocketAddressFromUser(address_buffer, sizeof(address_buffer), usr_addr, addr_length, pb);
+	if (copied < 0) return -1;
+	return pb->BindSocket((int)fd,
+		reinterpret_cast<const uni::Network::SocketAddress*>(address_buffer), stduint(copied));
+}
+
+DEFSYSC sysc_CONN(stduint fd, stduint usr_addr, stduint addr_length) {
+	ThreadBlock* th = Taskman::CurrentTB();
+	ProcessBlock* pb = th->parent_process;
+	if (!pb) return -1;
+	byte address_buffer[sizeof(uni::Network::SocketAddressIPv6)] = {};
+	const stdsint copied = CopySocketAddressFromUser(address_buffer, sizeof(address_buffer), usr_addr, addr_length, pb);
+	if (copied < 0) return -1;
+	return pb->ConnectSocket((int)fd,
+		reinterpret_cast<const uni::Network::SocketAddress*>(address_buffer), stduint(copied));
+}
+
+DEFSYSC sysc_SEND(stduint fd, stduint usr_req, stduint flags) {
+	(void)flags;
+	ThreadBlock* th = Taskman::CurrentTB();
+	ProcessBlock* pb = th->parent_process;
+	if (!pb || !usr_req) return -1;
+	syscall_net_send_t req{};
+	MccaMemCopyP(&req, nullptr, true, (const void*)usr_req, pb, false, sizeof(req));
+	if (req.length && !req.payload) return -1;
+	byte address_buffer[sizeof(uni::Network::SocketAddressIPv6)] = {};
+	const uni::Network::SocketAddress* address = nullptr;
+	if (req.address || req.address_length) {
+		const stdsint copied = CopySocketAddressFromUser(address_buffer, sizeof(address_buffer),
+			(stduint)req.address, req.address_length, pb);
+		if (copied < 0) return -1;
+		address = reinterpret_cast<const uni::Network::SocketAddress*>(address_buffer);
+	}
+	byte* payload_buffer = nullptr;
+	if (req.length) {
+		payload_buffer = new byte[req.length];
+		if (!payload_buffer) return -1;
+		MccaMemCopyP(payload_buffer, nullptr, true, req.payload, pb, false, req.length);
+	}
+	const stdsint ret = pb->SendSocket((int)fd, payload_buffer, req.length, address);
+	delete[] payload_buffer;
+	return ret;
+}
+
+DEFSYSC sysc_RECV(stduint fd, stduint usr_req, stduint flags) {
+	(void)flags;
+	ThreadBlock* th = Taskman::CurrentTB();
+	ProcessBlock* pb = th->parent_process;
+	if (!pb || !usr_req) return -1;
+	syscall_net_recv_t req{};
+	MccaMemCopyP(&req, nullptr, true, (const void*)usr_req, pb, false, sizeof(req));
+	if (req.capacity && !req.payload) return -1;
+	byte* payload_buffer = nullptr;
+	if (req.capacity) {
+		payload_buffer = new byte[req.capacity];
+		if (!payload_buffer) return -1;
+	}
+	uni::Network::SocketAddressIPv6 address_buffer{};
+	stduint address_length = req.address && req.address_length ? sizeof(address_buffer) : 0;
+	const stdsint ret = pb->RecvSocket((int)fd, payload_buffer, req.capacity,
+		address_length ? reinterpret_cast<uni::Network::SocketAddress*>(&address_buffer) : nullptr,
+		address_length ? &address_length : nullptr);
+	if (ret > 0 && req.payload) {
+		MccaMemCopyP(req.payload, pb, false, payload_buffer, nullptr, true, stduint(ret));
+	}
+	if (ret >= 0 && req.address && req.address_length) {
+		stduint user_length = 0;
+		MccaMemCopyP(&user_length, nullptr, true, req.address_length, pb, false, sizeof(user_length));
+		if (user_length >= address_length && address_length) {
+			MccaMemCopyP(req.address, pb, false, &address_buffer, nullptr, true, address_length);
+			MccaMemCopyP(req.address_length, pb, false, &address_length, nullptr, true, sizeof(address_length));
+		}
+	}
+	delete[] payload_buffer;
+	return ret;
+}
+
+DEFSYSC sysc_ROUT(stduint func, stduint p1, stduint p2) {
+	(void)func;
+	(void)p1;
+	(void)p2;
+	return -1;
 }
 
 DEFSYSC sysc_READ(stduint fd, stduint addr, stduint len) {
@@ -766,10 +876,10 @@ stduint SYSCALL_TABLE[] = {
 	mglb(sysc_GETD), // 0x17 (GETD)
 	mglb(sysc_MMAP), // 0x18 (MMAP)
 	mglb(sysc_UMAP), // 0x19 (UMAP)
-	0, // 0x1A (GET_CORE_ID)
-	mglb(sysc_MANA), // 0x1B (MANA)
 	mglb(sysc_DUP2), // 0x1C (DUP2)
 	mglb(sysc_PIPE), // 0x1D (PIPE)
+	0, // 0x1A (GET_CORE_ID)
+	mglb(sysc_MANA), // 0x1B (MANA)
 	mglb(sysc_TNEW), // 0x1E (TNEW)
 	mglb(sysc_TEXI), // 0x1F (TEXI)
 	mglb(sysc_TJOI), // 0x20 (TJOI)
@@ -777,6 +887,12 @@ stduint SYSCALL_TABLE[] = {
 	mglb(sysc_TDET), // 0x22 (TDET)
 	mglb(sysc_TYLD), // 0x23 (TYLD)
 	mglb(sysc_FUTX), // 0x24 (FUTX)
+	mglb(sysc_SOCK), // 0x25 (SOCK)
+	mglb(sysc_BIND), // 0x26 (BIND)
+	mglb(sysc_CONN), // 0x27 (CONN)
+	mglb(sysc_SEND), // 0x28 (SEND)
+	mglb(sysc_RECV), // 0x29 (RECV)
+	mglb(sysc_ROUT), // 0x2A (ROUT)
 };
 #endif
 

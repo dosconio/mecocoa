@@ -1167,6 +1167,11 @@ int Filesys::Read(vfs_file* file, void* buf, stduint count) {
 	if ((file->f_inode->i_mode & I_TYPE_MASK) == I_NAMED_PIPE) {
 		return Filesys::ReadPipe(file, buf, count);
 	}
+	if ((file->f_inode->i_mode & I_TYPE_MASK) == I_SOCK) {
+		auto* socket = Filesys::GetSocket(file);
+		if (!socket || !socket->is_connected) return -1;
+		return Filesys::RecvSocket(file, buf, count, nullptr, nullptr);
+	}
 	if (!file->f_inode->i_sb) return -1;
 	MutexLocal guard(&vfs_lock);
 	FilesysTrait* fs = file->f_inode->i_sb->fs;
@@ -1180,6 +1185,11 @@ int Filesys::Write(vfs_file* file, const void* buf, stduint count) {
 	if (!file || !file->f_inode) return -1;
 	if ((file->f_inode->i_mode & I_TYPE_MASK) == I_NAMED_PIPE) {
 		return Filesys::WritePipe(file, buf, count);
+	}
+	if ((file->f_inode->i_mode & I_TYPE_MASK) == I_SOCK) {
+		auto* socket = Filesys::GetSocket(file);
+		if (!socket || !socket->is_connected) return -1;
+		return Filesys::SendSocket(file, buf, count, nullptr);
 	}
 	if (!file->f_inode->i_sb) return -1;
 	MutexLocal guard(&vfs_lock);
@@ -1197,6 +1207,9 @@ int Filesys::Close(vfs_file* file) {
 	if (!file || !file->f_inode) return -1;
 	if ((file->f_inode->i_mode & I_TYPE_MASK) == I_NAMED_PIPE) {
 		return Filesys::ClosePipe(file);
+	}
+	if ((file->f_inode->i_mode & I_TYPE_MASK) == I_SOCK) {
+		return Filesys::CloseSocket(file);
 	}
 	MutexLocal guard(&vfs_lock);
 	if (file) {
@@ -1635,6 +1648,167 @@ int Filesys::CreatePipe(vfs_file** out_reader, vfs_file** out_writer) {
 	return 0;
 }
 
+int Filesys::CreateSocket(vfs_file** out_file, Network::SocketDomain domain,
+	Network::SocketType type, Network::SocketProtocol protocol) {
+	if (!out_file) return -1;
+	MutexLocal guard(&vfs_lock);
+
+	SocketHandle* socket = new SocketHandle();
+	if (!socket) return -1;
+	socket->domain = domain;
+	socket->type = type;
+	socket->protocol = protocol;
+
+	vfs_inode* inode = alloc_inode(nullptr);
+	if (!inode) {
+		delete socket;
+		return -1;
+	}
+	inode->i_mode = I_SOCK;
+	inode->internal_handler = socket;
+	inode->ref_count = 1;
+	inode->i_size = 0;
+
+	vfs_file* file = new vfs_file();
+	if (!file) {
+		delete inode;
+		delete socket;
+		return -1;
+	}
+	file->f_dentry = nullptr;
+	file->f_inode = inode;
+	file->f_pos = 0;
+	file->f_mode = 0;
+
+	*out_file = file;
+	return 0;
+}
+
+SocketHandle* Filesys::GetSocket(vfs_file* file) {
+	if (!file || !file->f_inode) return nullptr;
+	if ((file->f_inode->i_mode & I_TYPE_MASK) != I_SOCK) return nullptr;
+	return reinterpret_cast<SocketHandle*>(file->f_inode->internal_handler);
+}
+
+int Filesys::BindSocket(vfs_file* file, const Network::SocketAddress& address) {
+	SocketHandle* socket = Filesys::GetSocket(file);
+	if (!socket || socket->is_bound) return -1;
+	if (socket->domain != Network::SocketDomain::IPv4) return -1;
+	if (socket->type != Network::SocketType::Datagram) return -1;
+	if (socket->protocol != Network::SocketProtocol::Default &&
+		socket->protocol != Network::SocketProtocol::UDP) return -1;
+	if (address.domain != uint16(Network::SocketDomain::IPv4)) return -1;
+	if (address.length < sizeof(Network::SocketAddressIPv4)) return -1;
+
+	const auto& ipv4 = reinterpret_cast<const Network::SocketAddressIPv4&>(address);
+	if (!ipv4.port) return -1;
+	#if (_MCCA & 0xFF00) != 0x8600
+	(void)ipv4;
+	return -1;
+	#else
+	if (!Devsman::BindUdpPort(ipv4.port)) return -1;
+
+	socket->local_ipv4.address = ipv4.address;
+	socket->local_ipv4.port = ipv4.port;
+	socket->protocol = Network::SocketProtocol::UDP;
+	socket->is_bound = true;
+	return 0;
+	#endif
+}
+
+int Filesys::ConnectSocket(vfs_file* file, const Network::SocketAddress& address) {
+	SocketHandle* socket = Filesys::GetSocket(file);
+	if (!socket) return -1;
+	if (socket->domain != Network::SocketDomain::IPv4) return -1;
+	if (socket->type != Network::SocketType::Datagram) return -1;
+	if (socket->protocol != Network::SocketProtocol::Default &&
+		socket->protocol != Network::SocketProtocol::UDP) return -1;
+	if (address.domain != uint16(Network::SocketDomain::IPv4)) return -1;
+	if (address.length < sizeof(Network::SocketAddressIPv4)) return -1;
+
+	const auto& target = reinterpret_cast<const Network::SocketAddressIPv4&>(address);
+	if (!target.port || target.address.IsZero()) return -1;
+
+	#if (_MCCA & 0xFF00) != 0x8600
+	(void)target;
+	return -1;
+	#else
+	if (!socket->is_bound) {
+		uint16 local_port = 0;
+		if (!Devsman::AllocateUdpPort(local_port)) return -1;
+		socket->local_ipv4.port = local_port;
+		socket->protocol = Network::SocketProtocol::UDP;
+		socket->is_bound = true;
+	}
+
+	socket->remote_ipv4.address = target.address;
+	socket->remote_ipv4.port = target.port;
+	socket->protocol = Network::SocketProtocol::UDP;
+	socket->is_connected = true;
+	return 0;
+	#endif
+}
+
+int Filesys::SendSocket(vfs_file* file, const void* payload, stduint length, const Network::SocketAddress* address) {
+	SocketHandle* socket = Filesys::GetSocket(file);
+	if (!socket) return -1;
+	if (socket->domain != Network::SocketDomain::IPv4) return -1;
+	if (socket->type != Network::SocketType::Datagram) return -1;
+	if (socket->protocol != Network::SocketProtocol::Default &&
+		socket->protocol != Network::SocketProtocol::UDP) return -1;
+
+	Network::SocketAddressIPv4 target = {};
+	if (address) {
+		if (address->domain != uint16(Network::SocketDomain::IPv4)) return -1;
+		if (address->length < sizeof(Network::SocketAddressIPv4)) return -1;
+		target = reinterpret_cast<const Network::SocketAddressIPv4&>(*address);
+	}
+	else {
+		if (!socket->is_connected) return -1;
+		Network::SocketWriteAddress(target, socket->remote_ipv4.address, socket->remote_ipv4.port);
+	}
+	if (!target.port || target.address.IsZero()) return -1;
+
+	#if (_MCCA & 0xFF00) != 0x8600
+	(void)payload;
+	(void)length;
+	return -1;
+	#else
+	const stdsint sent = Devsman::SendUdp(target.address,
+		socket->local_ipv4.port, target.port, payload, length);
+	return sent >= 0 ? stdsint(length) : sent;
+	#endif
+}
+
+int Filesys::RecvSocket(vfs_file* file, void* payload, stduint capacity,
+	Network::SocketAddress* address, stduint* address_length) {
+	SocketHandle* socket = Filesys::GetSocket(file);
+	if (!socket || !socket->is_bound) return -1;
+	if (socket->domain != Network::SocketDomain::IPv4) return -1;
+	if (socket->type != Network::SocketType::Datagram) return -1;
+	if (socket->protocol != Network::SocketProtocol::UDP &&
+		socket->protocol != Network::SocketProtocol::Default) return -1;
+
+	#if (_MCCA & 0xFF00) != 0x8600
+	(void)payload;
+	(void)capacity;
+	(void)address;
+	(void)address_length;
+	return -1;
+	#else
+	Network::UDPDatagramContext context{};
+	const stdsint received = Devsman::ReceiveUdp(socket->local_ipv4.port, context, payload, capacity);
+	if (received <= 0) return received;
+
+	if (address && address_length && *address_length >= sizeof(Network::SocketAddressIPv4)) {
+		auto* ipv4 = reinterpret_cast<Network::SocketAddressIPv4*>(address);
+		Network::SocketWriteAddress(*ipv4, context.source.address, context.source.port);
+		*address_length = sizeof(Network::SocketAddressIPv4);
+	}
+	return received;
+	#endif
+}
+
 int Filesys::ReadPipe(vfs_file* file, void* buf, stduint count) {
 	PipeChannel* chan = (PipeChannel*)file->f_inode->internal_handler;
 	if (!chan) return -1;
@@ -1804,6 +1978,25 @@ int Filesys::ClosePipe(vfs_file* file) {
 		if (file->f_inode->ref_count == 0) {
 			delete file->f_inode;
 		}
+	}
+	free(file);
+	return 0;
+}
+
+int Filesys::CloseSocket(vfs_file* file) {
+	SocketHandle* socket = Filesys::GetSocket(file);
+	if (!socket) return -1;
+
+	MutexLocal guard(&vfs_lock);
+	if (file->f_inode && file->f_inode->ref_count == 0) {
+		#if (_MCCA & 0xFF00) == 0x8600
+		if (socket->is_bound && socket->protocol == Network::SocketProtocol::UDP && socket->local_ipv4.port) {
+			Devsman::CloseUdpPort(socket->local_ipv4.port);
+		}
+		#endif
+		delete socket;
+		file->f_inode->internal_handler = nullptr;
+		delete file->f_inode;
 	}
 	free(file);
 	return 0;

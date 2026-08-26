@@ -14,6 +14,48 @@ struct FDescData {
 };
 SpinlockBlock<FDescData> f_desc_info;
 
+static int AllocateProcessFdSlot(ProcFiles& files) {
+	for (stduint i = 0; i < files.pfiles.Count(); i++) {
+		if (!files.pfiles[i]) return (int)i;
+	}
+	if (files.pfiles.Count() >= DEFAULT_FILES_LIMIT) return -1;
+	const int fd = (int)files.pfiles.Count();
+	files.pfiles.Append(nullptr);
+	return fd;
+}
+
+static FileDescriptor* AllocateGlobalFileDescriptor() {
+	auto f_desc = f_desc_info.Lock();
+	for (stduint i = 0; i < 0x1000 / sizeof(FileDescriptor); i++) {
+		if (f_desc->table[i].vfile == nullptr) {
+			if (i >= f_desc->count) f_desc->count = i + 1;
+			f_desc->table[i].fd_mode = 0;
+			f_desc->table[i].fd_pos = 0;
+			f_desc->table[i].vfile = (vfs_file*)1;
+			return &f_desc->table[i];
+		}
+	}
+	return nullptr;
+}
+
+static void ReleaseGlobalFileDescriptor(FileDescriptor* pfd) {
+	if (!pfd) return;
+	auto f_desc = f_desc_info.Lock();
+	pfd->fd_mode = 0;
+	pfd->fd_pos = 0;
+	pfd->vfile = nullptr;
+}
+
+static bool AttachProcessFileDescriptor(ProcFiles& files, int fd, FileDescriptor* pfd, vfs_file* file, int mode, bool add_inode_ref) {
+	if (fd < 0 || !pfd || !file) return false;
+	files.pfiles[fd] = pfd;
+	pfd->fd_mode = mode;
+	pfd->fd_pos = 0;
+	pfd->vfile = file;
+	if (add_inode_ref && file->f_inode) file->f_inode->ref_count++;
+	return true;
+}
+
 static bool CloseFileSlotUnlocked(ProcFiles& files, int fd) {
 	if (fd < 0 || fd >= (stdsint)files.pfiles.Count() || !files.pfiles[fd]) {
 		return false;
@@ -40,34 +82,12 @@ static bool CloseFileSlotUnlocked(ProcFiles& files, int fd) {
 //{TODO} relative path
 stdsint ProcessBlock::Open(rostr pathname, int flags) {
 	auto files = this->fileman.Lock();
-	int fd = -1;
-	for (stduint i = 0; i < files->pfiles.Count(); i++) {
-		if (!files->pfiles[i]) {
-			fd = i;// find a available fileslot
-			break;
-		}
-	}
-	if (fd == -1 && files->pfiles.Count() < DEFAULT_FILES_LIMIT) {
-		fd = files->pfiles.Count();
-		files->pfiles.Append(nullptr);
-	}
+	int fd = AllocateProcessFdSlot(*files);
 	if (fd == -1) {
 		plogwarn("no file slot available");
 		return -1;
 	}
-	// find a free slot in f_desc_table (reuse empty slots)
-	FileDescriptor* pfd = NULL;
-	{
-		auto f_desc = f_desc_info.Lock();
-		for (stduint i = 0; i < 0x1000 / sizeof(FileDescriptor); i++) {
-			if (f_desc->table[i].vfile == nullptr) {
-				pfd = &f_desc->table[i];
-				if (i >= f_desc->count) f_desc->count = i + 1;
-				pfd->vfile = (vfs_file*)1; // reserve
-				break;
-			}
-		}
-	}
+	FileDescriptor* pfd = AllocateGlobalFileDescriptor();
 	if (!pfd) {
 		plogwarn("no file desc slot available");
 		return -1;
@@ -77,19 +97,74 @@ stdsint ProcessBlock::Open(rostr pathname, int flags) {
 	int ret = Filesys::Open(pathname, flags, &file, files->cwd);
 	
 	if (ret < 0 || !file) {
-		pfd->vfile = nullptr; // release reservation
+		ReleaseGlobalFileDescriptor(pfd);
 		// plogwarn("pathname %s failed to %s", pathname, (flags & O_RDWR) ? "open" : "create");
 		return -1;
 	}
 	
-	files->pfiles[fd] = pfd;
-	pfd->fd_mode = flags;
-	pfd->fd_pos = 0;
-	if (file->f_inode) {
-		file->f_inode->ref_count++;
-	}
-	pfd->vfile = file;
+	AttachProcessFileDescriptor(*files, fd, pfd, file, flags, true);
 	return fd;
+}
+
+stdsint ProcessBlock::Socket(stduint domain, stduint type, stduint protocol) {
+	auto files = this->fileman.Lock();
+	int fd = AllocateProcessFdSlot(*files);
+	if (fd == -1) return -1;
+	FileDescriptor* pfd = AllocateGlobalFileDescriptor();
+	if (!pfd) return -1;
+
+	vfs_file* file = nullptr;
+	if (Filesys::CreateSocket(&file, uni::Network::SocketDomain(domain),
+		uni::Network::SocketType(type), uni::Network::SocketProtocol(protocol)) < 0 || !file) {
+		ReleaseGlobalFileDescriptor(pfd);
+		return -1;
+	}
+
+	if (!AttachProcessFileDescriptor(*files, fd, pfd, file, O_RDWR, false)) {
+		ReleaseGlobalFileDescriptor(pfd);
+		Filesys::Close(file);
+		return -1;
+	}
+	return fd;
+}
+
+stdsint ProcessBlock::BindSocket(int fd, const uni::Network::SocketAddress* address, stduint length) {
+	if (!address || length < sizeof(uni::Network::SocketAddress)) return -1;
+	auto files = this->fileman.Lock();
+	if (fd < 0 || fd >= (stdsint)files->pfiles.Count() || !files->pfiles[fd] || !files->pfiles[fd]->vfile) return -1;
+	auto* file = files->pfiles[fd]->vfile;
+	if (!file->f_inode || (file->f_inode->i_mode & I_TYPE_MASK) != I_SOCK) return -1;
+	if (length < address->length || address->length < sizeof(uni::Network::SocketAddress)) return -1;
+	return Filesys::BindSocket(file, *address);
+}
+
+stdsint ProcessBlock::ConnectSocket(int fd, const uni::Network::SocketAddress* address, stduint length) {
+	if (!address || length < sizeof(uni::Network::SocketAddress)) return -1;
+	auto files = this->fileman.Lock();
+	if (fd < 0 || fd >= (stdsint)files->pfiles.Count() || !files->pfiles[fd] || !files->pfiles[fd]->vfile) return -1;
+	auto* file = files->pfiles[fd]->vfile;
+	if (!file->f_inode || (file->f_inode->i_mode & I_TYPE_MASK) != I_SOCK) return -1;
+	if (length < address->length || address->length < sizeof(uni::Network::SocketAddress)) return -1;
+	return Filesys::ConnectSocket(file, *address);
+}
+
+stdsint ProcessBlock::SendSocket(int fd, const void* payload, stduint length, const uni::Network::SocketAddress* address) {
+	if (length > 0x7FFFFFFFu) return -1;
+	auto files = this->fileman.Lock();
+	if (fd < 0 || fd >= (stdsint)files->pfiles.Count() || !files->pfiles[fd] || !files->pfiles[fd]->vfile) return -1;
+	auto* file = files->pfiles[fd]->vfile;
+	if (!file->f_inode || (file->f_inode->i_mode & I_TYPE_MASK) != I_SOCK) return -1;
+	if (address && address->length < sizeof(uni::Network::SocketAddress)) return -1;
+	return Filesys::SendSocket(file, payload, length, address);
+}
+
+stdsint ProcessBlock::RecvSocket(int fd, void* payload, stduint capacity,
+	uni::Network::SocketAddress* address, stduint* address_length) {
+	auto files = this->fileman.Lock();
+	if (fd < 0 || fd >= (stdsint)files->pfiles.Count() || !files->pfiles[fd] || !files->pfiles[fd]->vfile) return -1;
+	auto* file = files->pfiles[fd]->vfile;
+	if (!file->f_inode || (file->f_inode->i_mode & I_TYPE_MASK) != I_SOCK) return -1;
+	return Filesys::RecvSocket(file, payload, capacity, address, address_length);
 }
 
 stduint ProcessBlock::Rdwt(bool wr_type, stduint fid, Slice slice)
@@ -375,36 +450,16 @@ stdsint ProcessBlock::Pipe(int pipefd[2]) {
 
 	// Helper logic to allocate fd and bind FileDescriptor in fileman
 	auto alloc_fd = [&files](vfs_file* file, int mode) -> int {
-		int fd = -1;
-		for (stduint i = 0; i < files->pfiles.Count(); i++) {
-			if (!files->pfiles[i]) {
-				fd = i;
-				break;
-			}
-		}
-		if (fd == -1 && files->pfiles.Count() < DEFAULT_FILES_LIMIT) {
-			fd = files->pfiles.Count();
-			files->pfiles.Append(nullptr);
-		}
+		int fd = AllocateProcessFdSlot(*files);
 		if (fd == -1) return -1;
 
-		FileDescriptor* pfd = nullptr;
-		{
-			auto f_desc = f_desc_info.Lock();
-			for (stduint i = 0; i < 0x1000 / sizeof(FileDescriptor); i++) {
-				if (f_desc->table[i].vfile == nullptr) {
-					pfd = &f_desc->table[i];
-					if (i >= f_desc->count) f_desc->count = i + 1;
-					pfd->vfile = file; // mark occupied
-					break;
-				}
-			}
-		}
+		FileDescriptor* pfd = AllocateGlobalFileDescriptor();
 		if (!pfd) return -1;
 
-		files->pfiles[fd] = pfd;
-		pfd->fd_mode = mode;
-		pfd->fd_pos = 0;
+		if (!AttachProcessFileDescriptor(*files, fd, pfd, file, mode, false)) {
+			ReleaseGlobalFileDescriptor(pfd);
+			return -1;
+		}
 		return fd;
 	};
 
@@ -449,7 +504,7 @@ FileDescriptor* FileDescriptor_Clone(FileDescriptor* src) {
 	// Clone the vfs_file object to avoid shared destruction
 	vfs_file* nvfile = (vfs_file*)malc(sizeof(vfs_file));
 	if (!nvfile) {
-		pfd->vfile = nullptr; // release reservation
+		ReleaseGlobalFileDescriptor(pfd);
 		return nullptr;
 	}
 	*nvfile = *(src->vfile);

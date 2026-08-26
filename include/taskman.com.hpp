@@ -12,7 +12,7 @@ enum {
 	Task_FileSys,
 	Task_Devsman,
 	Task_Memdisk_Serv,
-	#if (_MCCA & 0xFF00) == 0x8600
+	#if (_MCCA & 0xFF00) == 0x8600 || (_ACCM & 0xFF00) == 0x8600
 	Task_Net_Serv,
 	#endif
 	#if _MCCA == 0x8632 || _ACCM == 0x8632

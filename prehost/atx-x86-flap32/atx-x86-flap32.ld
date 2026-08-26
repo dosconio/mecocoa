@@ -31,6 +31,16 @@ SECTIONS
 		*/mcca-atx-x86-flap32/devsman-net.o(.data .data.*)
 		*/mcca-atx-x86-flap32/devsman-net.o(.got)
 	} > RAM2
+	.ft.text : {
+		*/mcca-atx-x86-flap32/freetype.o(.text .text.*)
+	} > RAM2
+	.ft.rodata : {
+		*/mcca-atx-x86-flap32/freetype.o(.rodata .rodata.*)
+	} > RAM2
+	.ft.data : {
+		*/mcca-atx-x86-flap32/freetype.o(.data .data.*)
+		*/mcca-atx-x86-flap32/freetype.o(.got)
+	} > RAM2
 	.drv.text : {
 		*/mcca-atx-x86-flap32/e1000.o(.text .text.*)
 		*/mcca-atx-x86-flap32/video-vmware.o(.text .text.*)
@@ -98,6 +108,9 @@ SECTIONS
 	} > RAM2
 	.extdata : {
 		KEEP(*(.extdata))
+		*/mcca-atx-x86-flap32/freetype.o(.ext.freetype)
+		*/mcca-atx-x86-flap32/freetype.o(.ext.freetype.code)
+		*/mcca-atx-x86-flap32/freetype.o(.ext.freetype.vcode)
 		*(.ext.freetype)
 		*(.ext.freetype.code)
 		*(.ext.freetype.vcode)

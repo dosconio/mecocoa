@@ -153,7 +153,10 @@ namespace uni {
 	class StorageTrait;
 	class DiscPartition;
 	namespace Network {
+		struct IPv4Address;
 		class LinkDevice;
+		struct MacAddress;
+		struct UDPDatagramContext;
 	}
 }
 
@@ -216,6 +219,15 @@ public:
 	static bool RegisterLinkDevice(uni::Network::LinkDevice* device);
 	static stduint LinkDeviceCount();
 	static uni::Network::LinkDevice* GetLinkDevice(stduint index);
+	static bool OpenUdpPort(uint16 port);
+	static bool BindUdpPort(uint16 port);
+	static bool AllocateUdpPort(uint16& port);
+	static bool CloseUdpPort(uint16 port);
+	static stdsint ReceiveUdp(uint16 port, uni::Network::UDPDatagramContext& context, void* payload, stduint capacity);
+	static stdsint SendUdp(const uni::Network::IPv4Address& target_ip,
+		uint16 source_port, uint16 destination_port, const void* payload, stduint length);
+	static stdsint SendUdp(const uni::Network::MacAddress& target_mac, const uni::Network::IPv4Address& target_ip,
+		uint16 source_port, uint16 destination_port, const void* payload, stduint length);
 	static const char* LookupPciClassName(uint8 class_base, uint8 class_sub, uint8 class_if);
 	static const char* LookupPciDeviceName(uint16 vendor_id, uint16 device_id, uint8 class_base = 0, uint8 class_sub = 0);
 	static const char* LookupPciVendorName(uint16 vendor_id);

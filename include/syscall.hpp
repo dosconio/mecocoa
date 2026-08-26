@@ -40,14 +40,14 @@ enum
 	GETD = 0x17, // getcwd (buf, size)->len   | x86
 	MMAP = 0x18, // mmap   (size,fl,fd)->addr | x86
 	UMAP = 0x19, // munmap (addr,size) ->0    | x86
-	// [Threads]
-	// TNEW
-	// TEXI
-
-	GET_CORE_ID, // getcid () | rv
-	MANA, // manage (func, op1, op2)->?|(TODO)      | shutdown reboot...
 	DUP2, // dup2   (oldfd, newfd)->newfd | x86
 	PIPE, // pipe   (pipefd)->0           | x86
+
+	// [Management]
+	GET_CORE_ID, // getcid () | rv
+	MANA, // manage (func, op1, op2)->?|(TODO)      | shutdown reboot...
+
+	// [Threads]
 	TNEW, // thread_create (entry, arg, stack_top)->tid  | x86 x64
 	TEXI, // thread_exit   (exit_code)                   | x86 x64
 	TJOI, // thread_join   (tid, &exit_code)->status     | x86 x64
@@ -56,10 +56,18 @@ enum
 	TYLD, // thread_yield  ()->0                         | x86 x64
 	FUTX, // futex         (addr, op, val)->status       | x86 x64
 
+	// [Network]
+	SOCK, // socket (domain, type, protocol)->fd        | x86 x64
+	BIND, // bind   (fd, addr, len)->status             | x86 x64
+	CONN, // conn   (fd, addr, len)->status             | x86 x64
+	SEND, // send   (fd, payload, len)->len             | x86 x64
+	RECV, // recv   (fd, payload, len)->len             | x86 x64
+	ROUT, // route  (func, p1, p2)->status              | x86 x64
 
 	DBUG = 0xFE, // sysinfo_classic to stdout(func)
 	TEST = 0xFF, // getpid (T,E,S)->0 | x86
 
+	// [Powercall] by Ring1
 	POWERCALL_HELLO = 0x10000,// () -> 0
 	POWERCALL_DEV_OPEN,// (node_id, class, flags) -> dev_handle
 	POWERCALL_DEV_CLOSE,// (dev_handle, 0, 0) -> 0
@@ -118,6 +126,20 @@ struct file_proper_t {
 struct dirent_t {
 	stduint is_dir = 0;					// Directory flag (0: file, 1: directory)
 	char name[64] = {};					// File name
+};
+
+struct syscall_net_send_t {
+	const void* payload = nullptr;
+	stduint length = 0;
+	const void* address = nullptr;
+	stduint address_length = 0;
+};
+
+struct syscall_net_recv_t {
+	void* payload = nullptr;
+	stduint capacity = 0;
+	void* address = nullptr;
+	stduint* address_length = nullptr;
 };
 
 _ESYM_C stduint syscall(syscall_t callid, stduint p1 = 0, stduint p2 = 0, stduint p3 = 0);// MCCA 4 PARA SYSC

@@ -8,11 +8,10 @@ her-note: false
 ## x86/x64
 
 - Bus: **PCI**
-- 【!TREE】CRT Video (by BIOS)
+- CRT Video (by BIOS)
 - Interrupt 8259 **PIC** and **(x2)APIC**
-- 【!TREE】**Buzzer** PC Speaker
 - **KBD** Keyboard and **MOU** PS/2-Mouse
-- 【!TREE】COMn UART
+- COMn UART
 - **KBD** USB-Keyboard and **MOU** USB-Mouse
 - USB
 	- xHCI 1.1/2.0/3.0 (QEMU)
@@ -23,6 +22,11 @@ TODO:
 	- OHCI 1.0
 	- UHCI 1.0
 	- xHCI 3.1
+
+### Video
+
+- **Buzzer** PC Speaker
+- SB16
 
 ### Video
 
@@ -79,6 +83,10 @@ Filesys
 
 TODO:
 - SAS(including SATA)
+
+### Network
+
+- E1000
 
 
 ## RV qemuvirt

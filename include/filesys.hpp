@@ -5,6 +5,8 @@
 
 // To resolve RMOD_LIST redefining issue, we ensure standard include guards
 // And we only include traits from cpp/trait
+#include <cpp/System/Network/Layer/Application/Socket.hpp>
+#include <cpp/System/Network/Layer/Transport/UDP.hpp>
 #include <cpp/trait/FilesysTrait.hpp>
 #include <cpp/trait/StorageTrait.hpp>
 
@@ -101,6 +103,17 @@ struct vfs_file {
 	stduint f_mode = 0;               // Open mode (R/W/A etc)
 };
 
+struct SocketHandle {
+	Network::SocketDomain domain = Network::SocketDomain::Unspec;
+	Network::SocketType type = Network::SocketType::Datagram;
+	Network::SocketProtocol protocol = Network::SocketProtocol::Default;
+	uint16 flags = 0;
+	bool is_bound = false;
+	bool is_connected = false;
+	Network::SocketEndpointIPv4 local_ipv4 = {};
+	Network::SocketEndpointIPv4 remote_ipv4 = {};
+};
+
 // Virtual File System
 class Filesys {
 public:
@@ -131,6 +144,15 @@ public:
 	static int ReadPipe(vfs_file* file, void* buf, stduint count);
 	static int WritePipe(vfs_file* file, const void* buf, stduint count);
 	static int ClosePipe(vfs_file* file);
+	static int CreateSocket(vfs_file** out_file, Network::SocketDomain domain,
+		Network::SocketType type, Network::SocketProtocol protocol);
+	static SocketHandle* GetSocket(vfs_file* file);
+	static int BindSocket(vfs_file* file, const Network::SocketAddress& address);
+	static int ConnectSocket(vfs_file* file, const Network::SocketAddress& address);
+	static int SendSocket(vfs_file* file, const void* payload, stduint length, const Network::SocketAddress* address);
+	static int RecvSocket(vfs_file* file, void* payload, stduint capacity,
+		Network::SocketAddress* address, stduint* address_length);
+	static int CloseSocket(vfs_file* file);
 
 public:
 	static int Open(const char* pathname, int flags, vfs_file** out_file, vfs_dentry* base = nullptr);

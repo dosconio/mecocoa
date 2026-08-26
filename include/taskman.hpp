@@ -193,6 +193,7 @@ struct AsyncCommMsg {
 class ThreadBlock;
 class FileDescriptor;
 class CallgateFrame;
+namespace uni { namespace Network { struct SocketAddress; } }
 
 using Mutex = Mutex_T<ThreadBlock>;
 using MutexLocal = MutexLocal_T<ThreadBlock>;
@@ -296,6 +297,12 @@ public: // Signals
 public:
 	ProcessBlock() = default;
 	auto Open(rostr pathname, int flags) -> stdsint;
+	auto Socket(stduint domain, stduint type, stduint protocol) -> stdsint;
+	auto BindSocket(int fd, const uni::Network::SocketAddress* address, stduint length) -> stdsint;
+	auto ConnectSocket(int fd, const uni::Network::SocketAddress* address, stduint length) -> stdsint;
+	auto SendSocket(int fd, const void* payload, stduint length, const uni::Network::SocketAddress* address) -> stdsint;
+	auto RecvSocket(int fd, void* payload, stduint capacity,
+		uni::Network::SocketAddress* address, stduint* address_length) -> stdsint;
 	auto Rdwt(bool wr_type, stduint fid, Slice slice) -> stduint;
 	auto Close(int fid) -> bool;
 	auto Seek(int fd, stdsint off, int whence) -> stdsint;
