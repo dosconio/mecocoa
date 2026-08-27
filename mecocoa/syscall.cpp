@@ -375,10 +375,24 @@ DEFSYSC sysc_RECV(stduint fd, stduint usr_req, stduint flags) {
 }
 
 DEFSYSC sysc_ROUT(stduint func, stduint p1, stduint p2) {
-	(void)func;
-	(void)p1;
-	(void)p2;
-	return -1;
+	ThreadBlock* th = Taskman::CurrentTB();
+	ProcessBlock* pb = th ? th->parent_process : nullptr;
+	if (!pb || !p1) return -1;
+	switch (syscall_net_route_func_t(func)) {
+	case syscall_net_route_func_t::IPv4Default: {
+		syscall_net_route_ipv4_t route{};
+		if (p2 < sizeof(route)) return -1;
+		#if (_MCCA & 0xFF00) == 0x8600
+		if (!Devsman::GetDefaultIPv4Route(&route, sizeof(route))) return -1;
+		MccaMemCopyP((void*)p1, pb, false, &route, nullptr, true, sizeof(route));
+		return 0;
+		#else
+		return -1;
+		#endif
+	}
+	default:
+		return -1;
+	}
 }
 
 DEFSYSC sysc_READ(stduint fd, stduint addr, stduint len) {

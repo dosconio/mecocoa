@@ -695,6 +695,33 @@ stdsint Devsman::SendUdp(const uni::Network::IPv4Address& target_ip,
 		target_ip, source_port, destination_port, payload, length, net_ipv4_identification++);
 }
 
+bool Devsman::GetDefaultIPv4Route(void* route, stduint length) {
+	if (!route || length < sizeof(syscall_net_route_ipv4_t)) return false;
+	auto* output = reinterpret_cast<syscall_net_route_ipv4_t*>(route);
+	*output = {};
+	auto* dev = FindDefaultLinkDevice();
+	if (!dev) return false;
+	for0(i, uni::Network::IPv4AddressLength) {
+		output->address[i] = net_config.ipv4_address.octet[i];
+		output->netmask[i] = net_config.ipv4_netmask.octet[i];
+		output->gateway[i] = net_config.ipv4_gateway.octet[i];
+	}
+	const auto mac = dev->GetAddress();
+	for0(i, numsof(output->hardware)) output->hardware[i] = mac.octet[i];
+	output->flags = syscall_net_route_flag_gateway;
+	if (dev->GetState() == uni::Network::LinkState::Up) output->flags |= syscall_net_route_flag_up;
+	output->mtu = uint16(dev->GetMtu());
+	output->link_state = uint16(dev->GetState());
+	const char* name = dev->GetName();
+	if (name) {
+		for0(i, numsof(output->name) - 1) {
+			if (!name[i]) break;
+			output->name[i] = name[i];
+		}
+	}
+	return true;
+}
+
 void serv_dev_net_loop() {
 	RegisterBuiltinUdpPorts();
 	ploginfo("[Net] Service thread start pid=%u", Taskman::CurrentPID());

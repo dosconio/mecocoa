@@ -50,6 +50,18 @@ extern "C" {
 
 #ifdef _INC_CPP
 }
+
+class StdMalloc : public uni::trait::Malloc {
+public:
+	virtual void* allocate(stduint size, stduint alignment = 0, stduint boundary = 0) override {
+		return malloc(size);
+	}
+	virtual bool deallocate(void* ptr, stduint size = 0) override {
+		free(ptr);
+		return true;
+	}
+};
+
 #endif
 
 // CONSOLE

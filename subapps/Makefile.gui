@@ -26,6 +26,7 @@ apps += \
 	$(BIN_DIR)/viewpic \
 	\
 	$(BIN_DIR)/test \
+	$(BIN_DIR)/testudp \
 	$(BIN_DIR)/_thread \
 	
 
@@ -99,15 +100,19 @@ $(BIN_DIR)/notepad: subapps/notepad.cpp $(MCCA_CRT0) $(MCCA_LIBC)
 	@echo "MK notepad"
 	$(MCCA_CXX) $(MCCA_CXXFLAGS) -o $@ subapps/notepad.cpp $(MCCA_LDLIBS)
 
-$(BIN_DIR)/viewpic: subapps/viewpic.cpp $(ulibpath)/cpp/fileformat/picture/BMP.cpp $(MCCA_CRT0) $(MCCA_LIBC)
+$(BIN_DIR)/viewpic: subapps/viewpic.cpp $(ulibpath)/cpp/fileformat/picture/BMP.cpp $(ulibpath)/cpp/fileformat/picture/JPEG.cpp $(MCCA_CRT0) $(MCCA_LIBC)
 	@echo "MK viewpic"
-	$(MCCA_CXX) $(MCCA_CXXFLAGS) -o $@ subapps/viewpic.cpp $(ulibpath)/cpp/fileformat/picture/BMP.cpp $(MCCA_LDLIBS)
+	$(MCCA_CXX) $(MCCA_CXXFLAGS) -o $@ subapps/viewpic.cpp $(ulibpath)/cpp/fileformat/picture/BMP.cpp $(ulibpath)/cpp/fileformat/picture/JPEG.cpp $(MCCA_LDLIBS)
 
 #
 
 $(BIN_DIR)/test: subapps/test.cpp $(MCCA_CRT0) $(MCCA_LIBC)
 	@echo "MK subtest"
 	$(MCCA_CXX) $(MCCA_CXXFLAGS) -o $@ subapps/test.cpp $(MCCA_LDLIBS)
+
+$(BIN_DIR)/testudp: subapps/testudp.cpp $(MCCA_CRT0) $(MCCA_LIBC)
+	@echo "MK testudp"
+	$(MCCA_CXX) $(MCCA_CXXFLAGS) -o $@ subapps/testudp.cpp $(MCCA_LDLIBS)
 
 $(BIN_DIR)/_thread: subapps/_test/thread.cpp $(MCCA_CRT0) $(MCCA_LIBC)
 	@echo "MK thread"

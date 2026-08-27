@@ -1774,6 +1774,14 @@ int Filesys::SendSocket(vfs_file* file, const void* payload, stduint length, con
 	(void)length;
 	return -1;
 	#else
+	if (!socket->is_bound) {
+		uint16 local_port = 0;
+		if (!Devsman::AllocateUdpPort(local_port)) return -1;
+		socket->local_ipv4.port = local_port;
+		socket->protocol = Network::SocketProtocol::UDP;
+		socket->is_bound = true;
+	}
+
 	const stdsint sent = Devsman::SendUdp(target.address,
 		socket->local_ipv4.port, target.port, payload, length);
 	return sent >= 0 ? stdsint(length) : sent;

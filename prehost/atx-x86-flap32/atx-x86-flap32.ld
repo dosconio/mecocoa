@@ -100,7 +100,7 @@ SECTIONS
 		KEEP (*(SORT(.fini_array.*)))
 		KEEP (*(.fini_array))
 		__fini_array_end = .;
-	} > RAM1
+	} > RAM2
 
 	.boot_stack : {
 		. = ALIGN(16);

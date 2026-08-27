@@ -1,5 +1,5 @@
 // ASCII C/C++ TAB4 CRLF
-// Docutitle: BMP Image Viewer Application
+// Docutitle: Image Viewer Application
 // Attribute: Mecocoa Sub-Application
 // Copyright: Dosconio Mecocoa
 
@@ -10,20 +10,10 @@
 #include <sys/stat.h>
 #include <stdlib.h>
 #include <c/format/picture/BMP.h>
+#include <c/format/picture/JPEG.h>
 #include <cpp/trait/StorageTrait.hpp>
 
 using namespace uni;
-
-class StdMalloc : public uni::trait::Malloc {
-public:
-	virtual void* allocate(stduint size, stduint alignment = 0, stduint boundary = 0) override {
-		return malloc(size);
-	}
-	virtual bool deallocate(void* ptr, stduint size = 0) override {
-		free(ptr);
-		return true;
-	}
-};
 
 // USB-HID keycodes mapping
 const byte kKEsc = 0x29; // Escape key
@@ -33,11 +23,11 @@ int main(int argc, char** argv)
 {
 
 	if (argc < 2 || argv[1] == nullptr) {
-		outsfmt("Usage: viewpic <filepath.bmp>\n\r");
+		outsfmt("Usage: viewpic <filepath>\n\r");
 		return -1;
 	}
 
-	// Open the target BMP image file
+	// Open the target image file
 	int fd = open(argv[1], O_RDONLY);
 	if (fd < 0) {
 		outsfmt("Error: Failed to open file '%s'\n\r", argv[1]);
@@ -69,23 +59,39 @@ int main(int argc, char** argv)
 		return -1;
 	}
 
-	// Decode BMP image data using the new C++ IImageCodec interface
+	// Decode image data using the C++ IImageCodec interface
 	ImageBuffer imgBuf;
 	ImageBufferClear(imgBuf);
 	StdMalloc myMalloc;
-	BMPCodec codec;
+	BMPCodec bmpCodec;
+	JPEGCodec jpegCodec;
+	const IImageCodec* codec = nullptr;
 	ImageDecodeOptions options;
 	ImageDecodeOptionsInit(options);
 
 	byte block_buf[1];
 	MemoryBlockDevice storage(Slice{ (stduint)fileData, (stduint)st.st_size }, block_buf, 1);
 
-	ImageResult imgRes = codec.Decode(storage, imgBuf, myMalloc, options);
+	// Probe image format
+	bool matched = false;
+	if (bmpCodec.Probe(storage, matched) == ImageResult::OK && matched) {
+		codec = &bmpCodec;
+	} else if (jpegCodec.Probe(storage, matched) == ImageResult::OK && matched) {
+		codec = &jpegCodec;
+	}
+
+	if (!codec) {
+		outsfmt("Error: Unsupported image format.\n\r");
+		outsfmt("Please provide a valid BMP or JPEG image file.\n\r");
+		free(fileData);
+		return -1;
+	}
+
+	ImageResult imgRes = codec->Decode(storage, imgBuf, myMalloc, options);
 	free(fileData); // Free raw file buffer immediately after decoding
 
 	if (imgRes != ImageResult::OK) {
-		outsfmt("Error: Failed to decode BMP image.\n\r");
-		outsfmt("Please ensure the file is a valid 24-bit or 32-bit uncompressed Windows BMP.\n\r");
+		outsfmt("Error: Failed to decode image with %s codec.\n\r", codec->GetName());
 		return -1;
 	}
 
