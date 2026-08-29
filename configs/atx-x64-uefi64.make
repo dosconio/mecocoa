@@ -148,6 +148,13 @@ build_drvs:
 		DRV=video-bochs \
 		SRCS="devdriv/video/video-bochs.cpp" \
 		build
+	@make -f devdriv/Makefile.$(TOOLSYS).x64 \
+		arch=$(arch) \
+		uincpath=$(uincpath) \
+		ubinpath=$(ubinpath) \
+		DRV=e1000 \
+		SRCS="devdriv/net/e1000.cpp" \
+		build
 # (ASM TEMPLATE)
 #	echo MK a
 #	aasm subapps/_hello/asm/helloa-x64.asm -felf64 -o subapps/_hello/asm/helloa-x64.o
@@ -224,4 +231,3 @@ _cx_%.o:
 	${CX} ${XFLAGS} -c -o $@ $< -MMD -MF $(patsubst %.o,%.d,$@) -MT $@
 
 -include $(dest_obj)/*.d
-

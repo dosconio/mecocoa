@@ -50,8 +50,8 @@ void Syscall::Initialize() {
 }
 
 
-bool IsPowerCall(syscall_t callid);
-stdsint HandlePowerCall(syscall_t callid, stduint p1, stduint p2, stduint p3);
+bool IsPwcall(syscall_t callid);
+stdsint HandlePwcall(syscall_t callid, stduint p1, stduint p2, stduint p3);
 
 #if (_MCCA & 0xFF00) == 0x8600 || (_MCCA & 0xFF00) == 0x1000
 
@@ -60,8 +60,8 @@ stduint syscall(syscall_t callid, stduint para1, stduint para2, stduint para3) {
 	stduint ret;
 	#if   (_MCCA & 0xFF00) == 0x8600
 	#if   (_MCCA & 0xFF00) == 0x8600
-	if (IsPowerCall(callid)) {
-		ret = HandlePowerCall(callid, para1, para2, para3);
+	if (IsPwcall(callid)) {
+		ret = HandlePwcall(callid, para1, para2, para3);
 	}
 	else if (_IMM(callid) >= numsof(SYSCALL_TABLE)) {
 		plogerro("syscall: callid out of range: %u", callid);
@@ -1024,8 +1024,8 @@ stduint Handint_SYSCALL(CallgateFrame* frame) {
 	#endif
 
 	stduint ret_val = -1;
-	if (IsPowerCall(callid)) {
-		ret_val = HandlePowerCall(callid, para[0], para[1], para[2]);
+	if (IsPwcall(callid)) {
+		ret_val = HandlePwcall(callid, para[0], para[1], para[2]);
 	}
 	else if (_IMM(callid) < numsof(SYSCALL_TABLE) && SYSCALL_TABLE[_IMM(callid)]) {
 		ret_val = (reinterpret_cast<stdsint(*)(stduint, stduint, stduint)>(SYSCALL_TABLE[_IMM(callid)]))(para[0], para[1], para[2]);

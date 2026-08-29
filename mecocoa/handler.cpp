@@ -235,6 +235,40 @@ static void LogSelectorFaultContext(rostr name, HardwareInterruptFrame* frame, s
 	const stduint sel_ti = (para >> 2) & 0x1;
 	const stduint sel_idt = (para >> 1) & 0x1;
 	const stduint sel_ext = para & 0x1;
+	const byte* code = reinterpret_cast<const byte*>(frame->hw_eip);
+
+	//{}TEMP fxrstor
+	if (code[0] == 0x0Fu && code[1] == 0xAEu) {
+		const stduint ctx_addr = frame->pusha_eax;
+		const stduint fx_addr = ctx_addr + 0x60u;
+		ThreadBlock* owner = nullptr;
+		for (auto* nod = Taskman::thchain.Root(); nod; nod = nod->next) {
+			auto* th = cast<ThreadBlock*>(nod->offs);
+			if (th && _IMM(&th->context) == ctx_addr) {
+				owner = th;
+				break;
+			}
+		}
+		if (owner) {
+			const auto* fx = reinterpret_cast<const byte*>(fx_addr);
+			plogwarn("[FXRSTOR_GP] ctx=%[x] fx=%[x] align=%u owner_tid=%u owner_pid=%u owner_state=%u owner_ring=%u "
+				"fcw=%[x] mxcsr=%[x] mxcsr_mask=%[x] ctx_ip=%[x] ctx_sp=%[x] ctx_cs=%[x] ctx_ss=%[x] ctx_cr3=%[x]",
+				ctx_addr, fx_addr, fx_addr & 0xFu,
+				owner->tid,
+				owner->parent_process ? owner->parent_process->pid : ~_IMM0,
+				_IMM(owner->state),
+				owner->parent_process ? owner->parent_process->ring : ~_IMM0,
+				treat<uint16>(fx + 0),
+				treat<uint32>(fx + 24),
+				treat<uint32>(fx + 28),
+				owner->context.IP, owner->context.SP, owner->context.CS, owner->context.SS, owner->context.CR3);
+		}
+		else {
+			plogwarn("[FXRSTOR_GP] ctx=%[x] fx=%[x] align=%u owner_tid=(none)",
+				ctx_addr, fx_addr, fx_addr & 0xFu);
+		}
+	}
+
 	printlog(_LOG_FATAL,
 		"%s with 0x%[x] on CPU%u, TID%u at EIP=0x%[x] ESP=0x%[x] CS=0x%[x] SS=0x%[x] "
 		"DS=0x%[x] ES=0x%[x] FS=0x%[x] GS=0x%[x] CR3=0x%[x] "

@@ -1,33 +1,27 @@
 // ASCII g++ TAB4 LF
-// ModuTitle: Intel e1000 bring-up
+// ModuTitle: Intel e1000 Ring1 Driver
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 
-#include "../../include/mecocoa.hpp"
+#include <c/stdinc.h>
+#include "../../include/taskman.com.hpp"
+#include "../../include/syscall-pow.hpp"
 
-#if (_MCCA & 0xFF00) == 0x8600
-#include <cpp/Device/Bus/PCI.hpp>
-#include <cpp/System/Network/Layer/Link.hpp>
+#if defined(_ACCM) && ((_ACCM & 0xFF00) == 0x8600)
 
 namespace {
-	uni::PCI pci;
-
-	constexpr uint16 e1000_pci_device_ids[] = {
+	constexpr uint16 E1000VendorId = 0x8086u;
+	constexpr uint16 E1000DeviceIds[] = {
 		0x100Eu,
 		0x100Fu,
 		0x1010u,
 		0x10D3u,
 	};
 
-	constexpr uint16 PCI_CMD_IO_SPACE = 0x0001u;
-	constexpr uint16 PCI_CMD_MEM_SPACE = 0x0002u;
-	constexpr uint16 PCI_CMD_BUS_MASTER = 0x0004u;
-
-	enum class E1000Reg {
+	enum class E1000Reg : uint32 {
 		CTRL = 0x0000u / 4,
 		STATUS = 0x0008u / 4,
 		EECD = 0x0010u / 4,
 		ICR = 0x00C0u / 4,
-		IMS = 0x00D0u / 4,
 		IMC = 0x00D8u / 4,
 		RCTL = 0x0100u / 4,
 		TCTL = 0x0400u / 4,
@@ -49,19 +43,12 @@ namespace {
 
 	constexpr uint32 E1000_CTRL_RST = 1u << 26;
 	constexpr uint32 E1000_CTRL_SLU = 1u << 6;
+	constexpr uint32 E1000_STATUS_LU = 1u << 1;
 	constexpr uint32 E1000_RCTL_EN = 1u << 1;
 	constexpr uint32 E1000_RCTL_BAM = 1u << 15;
 	constexpr uint32 E1000_RCTL_SECRC = 1u << 26;
 	constexpr uint32 E1000_TCTL_EN = 1u << 1;
 	constexpr uint32 E1000_TCTL_PSP = 1u << 3;
-	constexpr uint32 E1000_STATUS_LU = 1u << 1;
-	constexpr uint32 E1000_ICR_TXDW = 1u << 0;
-	constexpr uint32 E1000_ICR_TXQE = 1u << 1;
-	constexpr uint32 E1000_ICR_LSC = 1u << 2;
-	constexpr uint32 E1000_ICR_RXSEQ = 1u << 3;
-	constexpr uint32 E1000_ICR_RXDMT0 = 1u << 4;
-	constexpr uint32 E1000_ICR_RXO = 1u << 6;
-	constexpr uint32 E1000_ICR_RXT0 = 1u << 7;
 	constexpr uint8 E1000_RXD_STAT_DD = 1u << 0;
 	constexpr uint8 E1000_TXD_STAT_DD = 1u << 0;
 	constexpr uint8 E1000_TXD_CMD_EOP = 1u << 0;
@@ -74,16 +61,6 @@ namespace {
 	constexpr stduint E1000_ETHERNET_MIN_FRAME = 60;
 	constexpr stduint E1000_ETHERNET_MAX_FRAME = 1518;
 	constexpr stduint E1000_TX_WAIT_SPINS = 100000;
-	constexpr uint8 E1000_IRQ_VECTOR = 0x78u;
-	constexpr uint32 E1000_IRQ_MASK =
-		E1000_ICR_TXDW | E1000_ICR_TXQE | E1000_ICR_LSC |
-		E1000_ICR_RXSEQ | E1000_ICR_RXDMT0 | E1000_ICR_RXO | E1000_ICR_RXT0;
-	constexpr stduint E1000_CTRL_GET_STATS = 0xE1000001u;
-	constexpr stduint E1000_CTRL_SERVICE_EVENTS = 0xE1000002u;
-	constexpr uint32 E1000_EVENT_RX = 1u << 0;
-	constexpr uint32 E1000_EVENT_TX = 1u << 1;
-	constexpr uint32 E1000_EVENT_LINK = 1u << 2;
-	constexpr uint32 E1000_EVENT_ERROR = 1u << 3;
 
 	_PACKED(struct) E1000RxDesc {
 		uint64 address;
@@ -104,127 +81,41 @@ namespace {
 		uint16 special;
 	};
 
-	struct E1000Stats {
-		uint32 rx_packets;
-		uint32 tx_packets;
-		uint32 rx_drops;
-		uint32 rx_errors;
-		uint32 tx_busy;
-		uint32 irq_count;
-		uint32 rx_interrupts;
-		uint32 tx_interrupts;
-		uint32 link_changes;
-		uint32 rx_overruns;
-		uint32 rx_seq_errors;
-		uint32 tx_queue_empty;
-		uint32 last_icr;
-		uint32 pending_events;
-		uint8 irq_vector;
-		uint8 msi_enabled;
-		uint8 intx_enabled;
-		uint8 interrupts_enabled;
-		uint8 link_up;
-		uint8 reserved[3];
+	struct DmaRegion {
+		stduint handle = 0;
+		uint64 physical = 0;
+		uint64 length = 0;
+		uint8* address = nullptr;
 	};
 
-	bool matches_device_id(uint16 device_id) {
-		for0(i, numsof(e1000_pci_device_ids)) {
-			if (e1000_pci_device_ids[i] == device_id) return true;
-		}
-		return false;
-	}
-
-	const DeviceResource* find_any_io_bar(const DeviceNode* node) {
-		if (!node) return nullptr;
-		for (uint32 bar_index = 0; bar_index < 6; ++bar_index) {
-			if (const auto* io = Devsman::FindResource(node, DeviceResourceType::PciBarIo, bar_index)) {
-				return io;
-			}
-		}
-		return nullptr;
-	}
-
-	bool is_e1000_device(const DeviceNode* node) {
-		if (!node) return false;
-		if (DeviceNodeType(node->fields.node_type) != DeviceNodeType::PciDevice) return false;
-		return node->fields.vendor_id == 0x8086u && matches_device_id(node->fields.device_id);
-	}
-
 	struct E1000Context {
-		DeviceNode* node = nullptr;
-		const DeviceResource* mmio = nullptr;
-		const DeviceResource* io = nullptr;
-		const DeviceResource* irq = nullptr;
-		bool use_mmio = false;
-		bool rings_ready = false;
-		uint32 ctrl = 0;
-		uint32 status = 0;
-		uint32 eecd = 0;
-		uint8 mac[6]{};
+		stduint dev_handle = 0;
+		volatile uint32* regs = nullptr;
+		PwcallDeviceResourceInfo mmio = {};
+		DmaRegion rx_desc_dma = {};
+		DmaRegion tx_desc_dma = {};
+		DmaRegion rx_buf_dma = {};
+		DmaRegion tx_buf_dma = {};
 		E1000RxDesc* rx_desc = nullptr;
 		E1000TxDesc* tx_desc = nullptr;
 		uint8* rx_buffers = nullptr;
 		uint8* tx_buffers = nullptr;
+		uint8 mac[6]{};
 		uint32 rx_index = 0;
 		uint32 tx_index = 0;
-		uint32 rx_packets = 0;
-		uint32 tx_packets = 0;
-		uint64 rx_bytes = 0;
-		uint64 tx_bytes = 0;
-		uint32 rx_drops = 0;
-		uint32 rx_errors = 0;
-		uint32 tx_drops = 0;
-		uint32 tx_errors = 0;
-		uint32 tx_busy = 0;
-		uint32 irq_count = 0;
-		uint32 rx_interrupts = 0;
-		uint32 tx_interrupts = 0;
-		uint32 link_changes = 0;
-		uint32 rx_overruns = 0;
-		uint32 rx_seq_errors = 0;
-		uint32 tx_queue_empty = 0;
-		uint32 last_icr = 0;
-		uint8 irq_vector = 0xFFu;
-		bool msi_enabled = false;
-		bool intx_enabled = false;
-		bool interrupts_enabled = false;
+		bool rings_ready = false;
 		bool link_up = false;
-		uint32 pending_events = 0;
-
-		uint32 read_reg_at(stduint reg_index) const {
-			if (use_mmio && mmio) {
-				auto* base = reinterpret_cast<volatile uint32*>(stduint(mmio->start));
-				return base[reg_index];
-			}
-			if (io) {
-				outpd(uint16(io->start), uint32(reg_index << 2));
-				return innpd(uint16(io->start + 4));
-			}
-			return 0;
-		}
-
-		void write_reg_at(stduint reg_index, uint32 value) const {
-			if (use_mmio && mmio) {
-				auto* base = reinterpret_cast<volatile uint32*>(stduint(mmio->start));
-				base[reg_index] = value;
-				return;
-			}
-			if (io) {
-				outpd(uint16(io->start), uint32(reg_index << 2));
-				outpd(uint16(io->start + 4), value);
-			}
-		}
 
 		uint32 read_reg(E1000Reg reg) const {
-			return read_reg_at(_IMM(reg));
+			return regs ? regs[_IMM(reg)] : 0;
 		}
 
 		void write_reg(E1000Reg reg, uint32 value) const {
-			write_reg_at(_IMM(reg), value);
+			if (regs) regs[_IMM(reg)] = value;
 		}
 
 		void write_reg_at(E1000Reg base_reg, stduint index, uint32 value) const {
-			write_reg_at(_IMM(base_reg) + index, value);
+			if (regs) regs[_IMM(base_reg) + index] = value;
 		}
 
 		void read_mac() {
@@ -238,21 +129,8 @@ namespace {
 			mac[5] = byte(rah >> 8);
 		}
 
-		bool update_link_state() {
-			const bool current = (read_reg(E1000Reg::STATUS) & E1000_STATUS_LU) != 0;
-			const bool changed = current != link_up;
-			link_up = current;
-			return changed;
-		}
-
-		bool bind(DeviceNode* dev_node) {
-			if (!is_e1000_device(dev_node)) return false;
-			node = dev_node;
-			mmio = Devsman::FindResource(node, DeviceResourceType::PciBarMmio, 0);
-			io = find_any_io_bar(node);
-			irq = Devsman::FindResource(node, DeviceResourceType::IrqLine, 0);
-			use_mmio = mmio != nullptr;
-			return use_mmio || io != nullptr;
+		void update_link_state() {
+			link_up = (read_reg(E1000Reg::STATUS) & E1000_STATUS_LU) != 0;
 		}
 
 		void reset() {
@@ -263,32 +141,19 @@ namespace {
 			write_reg(E1000Reg::IMC, 0xFFFFFFFFu);
 			(void)read_reg(E1000Reg::ICR);
 			write_reg(E1000Reg::CTRL, read_reg(E1000Reg::CTRL) | E1000_CTRL_SLU);
-			interrupts_enabled = false;
-		}
-
-		bool allocate_rings() {
-			if (!rx_desc) rx_desc = (E1000RxDesc*)mempool.allocate(sizeof(E1000RxDesc) * E1000_RX_DESC_COUNT, 12);
-			if (!tx_desc) tx_desc = (E1000TxDesc*)mempool.allocate(sizeof(E1000TxDesc) * E1000_TX_DESC_COUNT, 12);
-			if (!rx_buffers) rx_buffers = (uint8*)mempool.allocate(E1000_FRAME_BUF_SIZE * E1000_RX_DESC_COUNT, 12);
-			if (!tx_buffers) tx_buffers = (uint8*)mempool.allocate(E1000_FRAME_BUF_SIZE * E1000_TX_DESC_COUNT, 12);
-			if (!rx_desc || !tx_desc || !rx_buffers || !tx_buffers) return false;
-			MemSet(rx_desc, 0, sizeof(E1000RxDesc) * E1000_RX_DESC_COUNT);
-			MemSet(tx_desc, 0, sizeof(E1000TxDesc) * E1000_TX_DESC_COUNT);
-			MemSet(rx_buffers, 0, E1000_FRAME_BUF_SIZE * E1000_RX_DESC_COUNT);
-			MemSet(tx_buffers, 0, E1000_FRAME_BUF_SIZE * E1000_TX_DESC_COUNT);
-			return true;
 		}
 
 		bool configure_rx() {
+			if (!rx_desc || !rx_buffers) return false;
 			write_reg(E1000Reg::RCTL, 0);
 			for0(i, 128) write_reg_at(E1000Reg::MTA, i, 0);
 			for0(i, E1000_RX_DESC_COUNT) {
-				rx_desc[i].address = uint64(stduint(rx_buffers + i * E1000_FRAME_BUF_SIZE));
+				rx_desc[i].address = rx_buf_dma.physical + uint64(i * E1000_FRAME_BUF_SIZE);
 				rx_desc[i].status = 0;
+				rx_desc[i].errors = 0;
 			}
-			const uint64 base = uint64(stduint(rx_desc));
-			write_reg(E1000Reg::RDBAL, uint32(base));
-			write_reg(E1000Reg::RDBAH, uint32(base >> 32));
+			write_reg(E1000Reg::RDBAL, uint32(rx_desc_dma.physical));
+			write_reg(E1000Reg::RDBAH, uint32(rx_desc_dma.physical >> 32));
 			write_reg(E1000Reg::RDLEN, sizeof(E1000RxDesc) * E1000_RX_DESC_COUNT);
 			write_reg(E1000Reg::RDH, 0);
 			write_reg(E1000Reg::RDT, E1000_RX_DESC_COUNT - 1);
@@ -298,14 +163,14 @@ namespace {
 		}
 
 		bool configure_tx() {
+			if (!tx_desc || !tx_buffers) return false;
 			write_reg(E1000Reg::TCTL, 0);
 			for0(i, E1000_TX_DESC_COUNT) {
-				tx_desc[i].address = uint64(stduint(tx_buffers + i * E1000_FRAME_BUF_SIZE));
+				tx_desc[i].address = tx_buf_dma.physical + uint64(i * E1000_FRAME_BUF_SIZE);
 				tx_desc[i].status = E1000_TXD_STAT_DD;
 			}
-			const uint64 base = uint64(stduint(tx_desc));
-			write_reg(E1000Reg::TDBAL, uint32(base));
-			write_reg(E1000Reg::TDBAH, uint32(base >> 32));
+			write_reg(E1000Reg::TDBAL, uint32(tx_desc_dma.physical));
+			write_reg(E1000Reg::TDBAH, uint32(tx_desc_dma.physical >> 32));
 			write_reg(E1000Reg::TDLEN, sizeof(E1000TxDesc) * E1000_TX_DESC_COUNT);
 			write_reg(E1000Reg::TDH, 0);
 			write_reg(E1000Reg::TDT, 0);
@@ -316,7 +181,6 @@ namespace {
 		}
 
 		bool configure_rings() {
-			if (!allocate_rings()) return false;
 			if (!configure_rx()) return false;
 			if (!configure_tx()) return false;
 			rings_ready = true;
@@ -324,21 +188,13 @@ namespace {
 		}
 
 		stdsint send_frame(const void* data, stduint count) {
-			if (!rings_ready || !data || count == 0 || count > E1000_ETHERNET_MAX_FRAME) {
-				++tx_errors;
-				return -1;
-			}
+			if (!rings_ready || !data || !count || count > E1000_ETHERNET_MAX_FRAME) return -1;
 			auto& desc = tx_desc[tx_index];
-			if ((desc.status & E1000_TXD_STAT_DD) == 0) {
-				++tx_busy;
-				++tx_drops;
-				return 0;
-			}
+			if ((desc.status & E1000_TXD_STAT_DD) == 0) return 0;
 			const stduint wire_len = maxof(count, E1000_ETHERNET_MIN_FRAME);
 			uint8* buffer = tx_buffers + tx_index * E1000_FRAME_BUF_SIZE;
 			MemSet(buffer, 0, wire_len);
 			MemCopyN(buffer, data, count);
-			desc.address = uint64(stduint(buffer));
 			desc.length = uint16(wire_len);
 			desc.cso = 0;
 			desc.cmd = E1000_TXD_CMD_EOP | E1000_TXD_CMD_IFCS | E1000_TXD_CMD_RS;
@@ -351,13 +207,10 @@ namespace {
 			write_reg(E1000Reg::TDT, tx_index);
 			for0(i, E1000_TX_WAIT_SPINS) {
 				if (tx_desc[used_index].status & E1000_TXD_STAT_DD) {
-					++tx_packets;
-					tx_bytes += count;
+					update_link_state();
 					return stdsint(count);
 				}
 			}
-			++tx_busy;
-			++tx_drops;
 			return 0;
 		}
 
@@ -370,369 +223,186 @@ namespace {
 		}
 
 		stdsint read_frame(void* data, stduint count) {
-			if (!rings_ready || !data || count == 0) return -1;
+			if (!rings_ready || !data || !count) return -1;
 			for0(i, E1000_RX_DESC_COUNT) {
 				auto& desc = rx_desc[rx_index];
 				if ((desc.status & E1000_RXD_STAT_DD) == 0) return 0;
 				const uint32 released = rx_index;
 				rx_index = (rx_index + 1) % E1000_RX_DESC_COUNT;
 				if (desc.errors) {
-					++rx_errors;
-					++rx_drops;
 					release_rx_descriptor(released);
 					continue;
 				}
 				const stduint frame_len = desc.length;
 				const stduint copy_len = minof(count, frame_len);
-				if (frame_len > count) ++rx_drops;
 				MemCopyN(data, rx_buffers + released * E1000_FRAME_BUF_SIZE, copy_len);
 				release_rx_descriptor(released);
-				++rx_packets;
-				rx_bytes += frame_len;
+				update_link_state();
 				return stdsint(copy_len);
 			}
 			return 0;
 		}
-
-		void enable_interrupts() {
-			(void)read_reg(E1000Reg::ICR);
-			write_reg(E1000Reg::IMS, E1000_IRQ_MASK);
-			interrupts_enabled = true;
-		}
-
-		void disable_interrupts() {
-			write_reg(E1000Reg::IMC, 0xFFFFFFFFu);
-			(void)read_reg(E1000Reg::ICR);
-			interrupts_enabled = false;
-		}
-
-		uint32 handle_interrupt() {
-			const uint32 icr = read_reg(E1000Reg::ICR);
-			if (!icr) return 0;
-			last_icr = icr;
-			++irq_count;
-			if (icr & (E1000_ICR_RXDMT0 | E1000_ICR_RXT0)) {
-				++rx_interrupts;
-				pending_events |= E1000_EVENT_RX;
-			}
-			if (icr & E1000_ICR_RXO) {
-				++rx_overruns;
-				pending_events |= E1000_EVENT_ERROR;
-			}
-			if (icr & E1000_ICR_RXSEQ) {
-				++rx_seq_errors;
-				pending_events |= E1000_EVENT_ERROR;
-			}
-			if (icr & E1000_ICR_TXDW) {
-				++tx_interrupts;
-				pending_events |= E1000_EVENT_TX;
-			}
-			if (icr & E1000_ICR_TXQE) {
-				++tx_queue_empty;
-				pending_events |= E1000_EVENT_TX;
-			}
-			if (icr & E1000_ICR_LSC) {
-				++link_changes;
-				pending_events |= E1000_EVENT_LINK;
-				update_link_state();
-			}
-			return icr;
-		}
-
-		void fill_stats(E1000Stats& stats) const {
-			stats.rx_packets = rx_packets;
-			stats.tx_packets = tx_packets;
-			stats.rx_drops = rx_drops;
-			stats.rx_errors = rx_errors;
-			stats.tx_busy = tx_busy;
-			stats.irq_count = irq_count;
-			stats.rx_interrupts = rx_interrupts;
-			stats.tx_interrupts = tx_interrupts;
-			stats.link_changes = link_changes;
-			stats.rx_overruns = rx_overruns;
-			stats.rx_seq_errors = rx_seq_errors;
-			stats.tx_queue_empty = tx_queue_empty;
-			stats.last_icr = last_icr;
-			stats.pending_events = pending_events;
-			stats.irq_vector = irq_vector;
-			stats.msi_enabled = msi_enabled;
-			stats.intx_enabled = intx_enabled;
-			stats.interrupts_enabled = interrupts_enabled;
-			stats.link_up = link_up;
-			stats.reserved[0] = stats.reserved[1] = stats.reserved[2] = 0;
-		}
-
-		uint32 service_events() {
-			const uint32 events = pending_events;
-			pending_events = 0;
-			return events;
-		}
 	};
 
-	E1000Context g_e1000;
+	E1000Context g_e1000{};
 
-	class E1000LinkDevice : public uni::Network::LinkDevice {
-	public:
-		virtual const char* GetName() const override {
-			return g_e1000.node && g_e1000.node->link.addr ? g_e1000.node->link.addr : "e1000";
+	bool MatchDeviceId(uint16 device_id) {
+		for0(i, numsof(E1000DeviceIds)) {
+			if (E1000DeviceIds[i] == device_id) return true;
 		}
+		return false;
+	}
 
-		virtual uni::Network::LinkMedium GetMedium() const override {
-			return uni::Network::LinkMedium::Ethernet;
-		}
-
-		virtual uni::Network::LinkState GetState() const override {
-			return g_e1000.link_up ? uni::Network::LinkState::Up : uni::Network::LinkState::Down;
-		}
-
-		virtual uni::Network::MacAddress GetAddress() const override {
-			uni::Network::MacAddress address{};
-			for0(i, numsof(address.octet)) address.octet[i] = g_e1000.mac[i];
-			return address;
-		}
-
-		virtual stduint GetMtu() const override {
-			return 1500;
-		}
-
-		virtual stdsint Send(const uni::Network::LinkFrameView& frame) override {
-			return g_e1000.send_frame(frame.data, frame.length);
-		}
-
-		virtual stdsint Receive(uni::Network::LinkMutableFrameView& frame) override {
-			const stdsint len = g_e1000.read_frame(frame.data, frame.capacity);
-			if (len > 0) frame.length = stduint(len);
-			return len;
-		}
-
-		virtual stdsint Control(stduint command, void* args) override {
-			switch (command) {
-			case E1000_CTRL_GET_STATS:
-				if (!args) return -1;
-				g_e1000.fill_stats(*reinterpret_cast<E1000Stats*>(args));
-				return 0;
-			case E1000_CTRL_SERVICE_EVENTS:
-				if (!args) return -1;
-				*reinterpret_cast<uint32*>(args) = g_e1000.service_events();
-				return 0;
-			default:
-				return -1;
+	bool FindResource(stduint dev_handle, PwcallDeviceResourceType type, uint32 index, PwcallDeviceResourceInfo* out) {
+		if (!out) return false;
+		const stdsint count = Powercall::DevGetResourceCount(dev_handle);
+		if (count <= 0) return false;
+		for (stdsint i = 0; i < count; ++i) {
+			PwcallDeviceResourceQuery query = {};
+			query.index = uint32(i);
+			if (Powercall::DevGetResource(dev_handle, &query) != 0) continue;
+			if (query.resource.type == _IMM(type) && query.resource.index == index) {
+				*out = query.resource;
+				return true;
 			}
 		}
+		return false;
+	}
 
-		virtual void GetStatistics(uni::Network::LinkStatistics& statistics) const override {
-			MemSet(&statistics, 0, sizeof(statistics));
-			statistics.rx_packets = g_e1000.rx_packets;
-			statistics.tx_packets = g_e1000.tx_packets;
-			statistics.rx_bytes = g_e1000.rx_bytes;
-			statistics.tx_bytes = g_e1000.tx_bytes;
-			statistics.rx_drops = g_e1000.rx_drops;
-			statistics.tx_drops = g_e1000.tx_drops;
-			statistics.rx_errors = g_e1000.rx_errors;
-			statistics.tx_errors = g_e1000.tx_errors;
-			statistics.interrupts = g_e1000.irq_count;
-			statistics.link_changes = g_e1000.link_changes;
-		}
-	};
-
-	E1000LinkDevice g_e1000_link_device;
-
-	bool configure_msi_interrupt(const uni::PCI::Device& dev) {
-		const stduint cpu_id = Taskman::getID();
-		auto* percore = (cpu_id < PCU_CORES_MAX) ? Taskman::PCU_CORES_PERCORE[cpu_id] : nullptr;
-		if (!percore || percore->lapic_id >= LAPIC_ID_MAP_SIZE) {
-			plogwarn("[E1000] MSI setup skipped: no valid LAPIC on cpu%u", (unsigned)cpu_id);
+	bool AllocDmaRegion(stduint dev_handle, stduint size, DmaRegion& region) {
+		const stdsint dma_handle = Powercall::DevDmaAlloc(dev_handle, size, 0);
+		if (dma_handle <= 0) return false;
+		region.handle = stduint(dma_handle);
+		PwcallDeviceDmaMapRequest req = {};
+		req.map_flags = _IMM(PwcallDeviceDmaMapFlag::Writable);
+		if (Powercall::DevDmaMap(region.handle, &req) != 0 || !req.address || !req.physical || !req.length) {
+			Powercall::DevDmaFree(region.handle);
+			region = {};
 			return false;
 		}
-		const auto result = pci.configure_MSI_fixed_destination(dev,
-			uint8(percore->lapic_id),
-			uni::PCI::MSITriggerMode::Edge,
-			uni::PCI::MSIDeliveryMode::Fixed,
-			E1000_IRQ_VECTOR, 0);
-		if (result) {
-			plogwarn("[E1000] MSI setup failed: %s", result.Name());
-			return false;
-		}
-		g_e1000.irq_vector = E1000_IRQ_VECTOR;
-		g_e1000.msi_enabled = true;
-		Devsman::AddIrqResource(g_e1000.node, E1000_IRQ_VECTOR);
-		g_e1000.irq = Devsman::FindResource(g_e1000.node, DeviceResourceType::IrqLine, 0);
-		ploginfo("[E1000] MSI enabled vector=%u lapic=%u",
-			(unsigned)g_e1000.irq_vector, (unsigned)percore->lapic_id);
+		region.physical = req.physical;
+		region.length = req.length;
+		region.address = reinterpret_cast<uint8*>(stduint(req.address));
+		MemSet(region.address, 0, stduint(region.length));
 		return true;
 	}
 
-	bool configure_legacy_interrupt() {
-		if (!g_e1000.irq) {
-			plogwarn("[E1000] INTx setup skipped: no IRQ line");
-			return false;
+	stduint OpenE1000() {
+		for0(i, numsof(E1000DeviceIds)) {
+			const stduint cls = (stduint(E1000VendorId) << 16) | E1000DeviceIds[i];
+			const stdsint opened = Powercall::DevOpen(0, cls, 0);
+			if (opened > 0) return stduint(opened);
 		}
-		const uint8 line = uint8(g_e1000.irq->start);
-		if (line >= 24) {
-			plogwarn("[E1000] INTx setup skipped: unsupported IRQ line=%u", (unsigned)line);
-			return false;
+		return 0;
+	}
+
+	bool PublishAttach() {
+		FMT_NetworkMsg_DRV_ATTACH attach = {};
+		attach.version = NetworkDriverProtocolVersion;
+		attach.caps = NetworkDriverCap_Poll;
+		attach.dev_handle = uint32(g_e1000.dev_handle);
+		attach.mtu = 1500;
+		for0(i, numsof(g_e1000.mac)) attach.mac[i] = g_e1000.mac[i];
+		attach.link_state = g_e1000.link_up ? 1 : 0;
+		const char* name = "e1000";
+		for0(i, NetworkDriverNameCapacity - 1) {
+			attach.name[i] = name[i];
+			if (!name[i]) break;
 		}
-		if (IC.getType() == 0) {
-			plogwarn("[E1000] INTx setup skipped: PIC vector sharing is not wired");
-			return false;
-		}
-		IC.IO_Writ64(0x10 + line * 2, E1000_IRQ_VECTOR);
-		g_e1000.irq_vector = E1000_IRQ_VECTOR;
-		g_e1000.intx_enabled = true;
-		// ploginfo("[E1000] INTx enabled line=%u vector=%u",
-		// 	(unsigned)line, (unsigned)g_e1000.irq_vector);
+		CommMsg send_msg = {};
+		send_msg.data.address = _IMM(&attach);
+		send_msg.data.length = sizeof(attach);
+		send_msg.type = _IMM(NetworkMsg::DRV_ATTACH);
+		if (Powercall::SysComm(COMM_SEND, Task_Net_Serv, &send_msg)) return false;
+
+		stdsint result = -1;
+		CommMsg recv_msg = {};
+		recv_msg.data.address = _IMM(&result);
+		recv_msg.data.length = sizeof(result);
+		if (Powercall::SysComm(COMM_RECV, Task_Net_Serv, &recv_msg)) return false;
+		return result == 0;
+	}
+
+	bool InitializeE1000() {
+		g_e1000.dev_handle = OpenE1000();
+		if (!g_e1000.dev_handle) return false;
+		PwcallDeviceIdentity identity = {};
+		if (Powercall::DevGetIdentity(g_e1000.dev_handle, &identity) != 0) return false;
+		if (identity.vendor_id != E1000VendorId || !MatchDeviceId(identity.device_id)) return false;
+		if (!FindResource(g_e1000.dev_handle, PwcallDeviceResourceType::PciBarMmio, 0, &g_e1000.mmio)) return false;
+
+		PwcallDeviceMapRequest mmio_req = {};
+		mmio_req.resource_type = _IMM(PwcallDeviceResourceType::PciBarMmio);
+		mmio_req.resource_index = g_e1000.mmio.index;
+		mmio_req.map_flags = _IMM(PwcallDeviceMapFlag::Writable);
+		const stdsint mmio_addr = Powercall::DevMmap(g_e1000.dev_handle, &mmio_req);
+		if (mmio_addr <= 0) return false;
+		g_e1000.regs = reinterpret_cast<volatile uint32*>(stduint(mmio_addr));
+
+		if (!AllocDmaRegion(g_e1000.dev_handle, sizeof(E1000RxDesc) * E1000_RX_DESC_COUNT, g_e1000.rx_desc_dma)) return false;
+		if (!AllocDmaRegion(g_e1000.dev_handle, sizeof(E1000TxDesc) * E1000_TX_DESC_COUNT, g_e1000.tx_desc_dma)) return false;
+		if (!AllocDmaRegion(g_e1000.dev_handle, E1000_FRAME_BUF_SIZE * E1000_RX_DESC_COUNT, g_e1000.rx_buf_dma)) return false;
+		if (!AllocDmaRegion(g_e1000.dev_handle, E1000_FRAME_BUF_SIZE * E1000_TX_DESC_COUNT, g_e1000.tx_buf_dma)) return false;
+
+		g_e1000.rx_desc = reinterpret_cast<E1000RxDesc*>(g_e1000.rx_desc_dma.address);
+		g_e1000.tx_desc = reinterpret_cast<E1000TxDesc*>(g_e1000.tx_desc_dma.address);
+		g_e1000.rx_buffers = g_e1000.rx_buf_dma.address;
+		g_e1000.tx_buffers = g_e1000.tx_buf_dma.address;
+
+		g_e1000.reset();
+		g_e1000.read_mac();
+		g_e1000.update_link_state();
+		if (!g_e1000.configure_rings()) return false;
 		return true;
 	}
+}
 
-	stdsint e1000_read(DeviceNode* node, void* buf, stduint count, stduint idx, stduint flags) {
-		(void)idx;
-		(void)flags;
-		if (!node || node->fields.binding.driver_data != &g_e1000) return -1;
-		return g_e1000.read_frame(buf, count);
-	}
+int main(int argc, char** argv) {
+	(void)argc;
+	(void)argv;
 
-	stdsint e1000_send(DeviceNode* node, const void* buf, stduint count, stduint idx, stduint flags) {
-		(void)idx;
-		(void)flags;
-		if (!node || node->fields.binding.driver_data != &g_e1000) return -1;
-		return g_e1000.send_frame(buf, count);
-	}
+	if (Powercall::Hello() != 0) return -1;
+	if (!InitializeE1000()) return -1;
+	if (!PublishAttach()) return -1;
+	if (Powercall::DevPublish(g_e1000.dev_handle, PwcallDevicePublishCommand::Started) != 0) return -1;
 
-	stdsint e1000_ctrl(DeviceNode* node, stduint cmd, void* args, stduint flags) {
-		(void)flags;
-		if (!node || node->fields.binding.driver_data != &g_e1000) return -1;
-		switch (cmd) {
-		case E1000_CTRL_GET_STATS:
-			if (!args) return -1;
-			g_e1000.fill_stats(*reinterpret_cast<E1000Stats*>(args));
-			return 0;
-		case E1000_CTRL_SERVICE_EVENTS:
-			if (!args) return -1;
-			*reinterpret_cast<uint32*>(args) = g_e1000.service_events();
-			return 0;
+	for (;;) {
+		FMT_NetworkMsg_DRV_FRAME frame = {};
+		CommMsg recv_msg = {};
+		recv_msg.data.address = _IMM(&frame);
+		recv_msg.data.length = sizeof(frame);
+		if (Powercall::SysComm(COMM_RECV, ANYPROC, &recv_msg)) {
+			syscall(syscall_t::REST, 1, 10);
+			continue;
+		}
+
+		switch (NetworkMsg(recv_msg.type)) {
+		case NetworkMsg::DRV_SEND:
+			frame.status = g_e1000.send_frame(frame.data, frame.length);
+			break;
+		case NetworkMsg::DRV_RECV:
+			frame.status = g_e1000.read_frame(frame.data, minof(stduint(frame.capacity), stduint(NetworkDriverFrameCapacity)));
+			frame.length = frame.status > 0 ? uint32(frame.status) : 0;
+			break;
 		default:
-			return -1;
+			frame.status = -1;
+			break;
 		}
-	}
 
-	const DeviceNodeOps e1000_ops{
-		.read = e1000_read,
-		.send = e1000_send,
-		.ctrl = e1000_ctrl,
-	};
-
-	uni::PCI::Device make_pci_device(const DeviceNode& node) {
-		uni::PCI::Device dev{};
-		dev.bus = node.fields.pci_bus;
-		dev.device = node.fields.pci_device;
-		dev.function = node.fields.pci_function;
-		dev.header_type = pci.read_header_type(dev.bus, dev.device, dev.function);
-		dev.class_code.base = node.fields.class_base;
-		dev.class_code.sub = node.fields.class_sub;
-		dev.class_code.interface = node.fields.class_if;
-		return dev;
-	}
-
-	void enable_device_access(const DeviceNode& node) {
-		auto dev = make_pci_device(node);
-		const bool has_mmio = Devsman::FindResource(&node, DeviceResourceType::PciBarMmio, 0) != nullptr;
-		const bool has_io = find_any_io_bar(&node) != nullptr;
-		uint16 cmd = uint16(uni::PCI::read_config_register(dev, 0x04) & 0xFFFFu);
-		cmd |= PCI_CMD_BUS_MASTER;
-		if (has_mmio) cmd |= PCI_CMD_MEM_SPACE;
-		if (has_io) cmd |= PCI_CMD_IO_SPACE;
-		uni::PCI::write_config_register(dev, 0x04, cmd);
-		if (has_mmio) pci.enable_MMIO(dev);
+		CommMsg reply_msg = {};
+		reply_msg.data.address = _IMM(&frame);
+		reply_msg.data.length = sizeof(frame);
+		reply_msg.type = recv_msg.type;
+		Powercall::SysComm(COMM_SEND_ASYNC, recv_msg.src, &reply_msg);
 	}
 }
 
-void Handint_E1000() {
-	const uint32 icr = g_e1000.handle_interrupt();
-	(void)icr;
-	IC.SendEOI(E1000_IRQ_VECTOR);
-}
+#else
 
-static bool start_e1000_driver(DeviceNode* node) {
-	if (!is_e1000_device(node)) return false;
-	auto dev = make_pci_device(*node);
-	enable_device_access(*node);
-	if (!g_e1000.bind(node)) {
-		plogwarn("[E1000] Missing BAR resource");
-		return false;
-	}
-	(void)configure_msi_interrupt(dev);
-	g_e1000.reset();
-	g_e1000.ctrl = g_e1000.read_reg(E1000Reg::CTRL);
-	g_e1000.status = g_e1000.read_reg(E1000Reg::STATUS);
-	g_e1000.eecd = g_e1000.read_reg(E1000Reg::EECD);
-	g_e1000.read_mac();
-	g_e1000.link_up = (g_e1000.status & E1000_STATUS_LU) != 0;
-	if (!g_e1000.configure_rings()) {
-		plogwarn("[E1000] ring allocation failed");
-		return false;
-	}
-	if (!g_e1000.msi_enabled) {
-		(void)configure_legacy_interrupt();
-	}
-	if (g_e1000.msi_enabled || g_e1000.intx_enabled) {
-		g_e1000.enable_interrupts();
-	}
-	node->fields.binding.driver_data = &g_e1000;
-	Devsman::SetOps(node, &e1000_ops);
-	if (!Devsman::RegisterLinkDevice(&g_e1000_link_device)) {
-		plogwarn("[E1000] link device registration failed");
-	}
-
-	if (g_e1000.use_mmio) {
-		ploginfo("[E1000] %s MMIO=%[64H] len=%[64H]%s",
-			node->link.addr ? node->link.addr : "(unnamed)",
-			g_e1000.mmio->start, g_e1000.mmio->length,
-			g_e1000.irq ? "" : " irq=none");
-	}
-	else {
-		ploginfo("[E1000] %s IO=%[64H]%s",
-			node->link.addr ? node->link.addr : "(unnamed)",
-			g_e1000.io->start,
-			g_e1000.irq ? "" : " irq=none");
-	}
-	// if (g_e1000.irq) {
-	// 	ploginfo("[E1000] IRQ line=%u pin=%u",
-	// 		(unsigned)g_e1000.irq->start, (unsigned)g_e1000.irq->extra);
-	// }
-	ploginfo("[E1000] ctrl=%[32H] status=%[32H] eecd=%[32H]",
-		g_e1000.ctrl, g_e1000.status, g_e1000.eecd);
-	ploginfo("[E1000] MAC=%[8H]:%[8H]:%[8H]:%[8H]:%[8H]:%[8H]",
-		(stduint)g_e1000.mac[0], (stduint)g_e1000.mac[1], (stduint)g_e1000.mac[2],
-		(stduint)g_e1000.mac[3], (stduint)g_e1000.mac[4], (stduint)g_e1000.mac[5]);
-	ploginfo("[E1000] link=%s irq-mode=%s vector=%u",
-		g_e1000.link_up ? "up" : "down",
-		g_e1000.msi_enabled ? "msi" : (g_e1000.intx_enabled ? "intx" : "polling"),
-		(unsigned)g_e1000.irq_vector);
-	ploginfo("[E1000] RX/TX rings ready rx=%u tx=%u",
-		(unsigned)E1000_RX_DESC_COUNT, (unsigned)E1000_TX_DESC_COUNT);
-	return true;
-}
-
-_ESYM_C void R_E1000_INIT();
-
-__attribute__((section(".init.rmod")))
-RMOD_LIST RMOD_LIST_E1000{
-	.init = R_E1000_INIT,
-	.name = "E1000",
-};
-
-void R_E1000_INIT() {
-	if (!PCI_Init(pci)) {
-		plogwarn("[E1000] No devices on PCI or PCI init failed.");
-	}
-	#if _MCCA == 0x8664
-	IC[E1000_IRQ_VECTOR].setModeRupt(mglb(Handint_E1000_Entry), SegCo64);
-	#else
-	IC[E1000_IRQ_VECTOR].setRange(mglb(Handint_E1000_Entry), SegCo32);
-	#endif
-	register_interrupt_handler(E1000_IRQ_VECTOR, Handint_E1000);
-	Devsman::RegisterDriverStarter("e1000", start_e1000_driver);
-	Devsman::StartKnownDrivers();
+int main(int argc, char** argv) {
+	(void)argc;
+	(void)argv;
+	return -1;
 }
 
 #endif

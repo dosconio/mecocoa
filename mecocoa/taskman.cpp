@@ -372,7 +372,7 @@ static void DetachProcessTTYMembership(ProcessBlock* ppb, stduint pid)
 
 static void _Exit_Cleanup(stduint pid)
 {
-	extern void CleanupPowerProcessHandles(stduint pid);
+	extern void CleanupPwcallProcessHandles(stduint pid);
 	extern Spinlock scheduler_lock;
 	auto ppb = Taskman::Locate(pid);
 	if (!ppb) return;
@@ -448,7 +448,7 @@ static void _Exit_Cleanup(stduint pid)
 	#endif
 
 	// 2. Release Power Device Handles
-	CleanupPowerProcessHandles(pid);
+	CleanupPwcallProcessHandles(pid);
 
 	// 3. Release TTY Binding
 	DetachProcessTTYMembership(ppb, pid);

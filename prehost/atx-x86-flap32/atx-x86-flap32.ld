@@ -39,7 +39,10 @@ SECTIONS
 	} > RAM2
 	.ft.data : {
 		*/mcca-atx-x86-flap32/freetype.o(.data .data.*)
+		depends/freetype/x86/libfreetype.a:(.data .data.*)
+		depends/freetype/x86/libfreetype.a:(.data.rel.ro .data.rel.ro.*)
 		*/mcca-atx-x86-flap32/freetype.o(.got)
+		depends/freetype/x86/libfreetype.a:(.got)
 	} > RAM2
 	.drv.text : {
 		*/mcca-atx-x86-flap32/e1000.o(.text .text.*)

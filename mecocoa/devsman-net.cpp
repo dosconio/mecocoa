@@ -112,6 +112,82 @@ namespace {
 	NetPendingUdpPacket net_pending_udp[NetPendingUdpCapacity]{};
 	uint8* net_pending_udp_payloads = nullptr;
 
+	struct NetRemoteLinkState {
+		stduint owner_tid = 0;
+		stduint dev_handle = 0;
+		uint32 caps = 0;
+		uint32 mtu = 0;
+		uni::Network::MacAddress mac{};
+		uni::Network::LinkState state = uni::Network::LinkState::Down;
+		char name[NetworkDriverNameCapacity]{};
+		bool registered = false;
+	};
+
+	NetRemoteLinkState net_remote_link{};
+
+	class NetRemoteLinkDevice : public uni::Network::LinkDevice {
+	public:
+		virtual const char* GetName() const override {
+			return net_remote_link.name[0] ? net_remote_link.name : "e1000";
+		}
+
+		virtual uni::Network::LinkMedium GetMedium() const override {
+			return uni::Network::LinkMedium::Ethernet;
+		}
+
+		virtual uni::Network::LinkState GetState() const override {
+			return net_remote_link.state;
+		}
+
+		virtual uni::Network::MacAddress GetAddress() const override {
+			return net_remote_link.mac;
+		}
+
+		virtual stduint GetMtu() const override {
+			return net_remote_link.mtu ? net_remote_link.mtu : 1500;
+		}
+
+		virtual stdsint Send(const uni::Network::LinkFrameView& frame) override {
+			if (!net_remote_link.owner_tid || !frame.data || !frame.length || frame.length > NetworkDriverFrameCapacity) {
+				return -1;
+			}
+			FMT_NetworkMsg_DRV_FRAME req{};
+			req.length = uint32(frame.length);
+			req.capacity = NetworkDriverFrameCapacity;
+			MemCopyN(req.data, frame.data, frame.length);
+			stduint type = _IMM(NetworkMsg::DRV_SEND);
+			if (syssdrv(net_remote_link.owner_tid, &req, sizeof(req), &type)) return -1;
+			return req.status;
+		}
+
+		virtual stdsint Receive(uni::Network::LinkMutableFrameView& frame) override {
+			if (!net_remote_link.owner_tid || !frame.data || !frame.capacity) return -1;
+			FMT_NetworkMsg_DRV_FRAME req{};
+			req.length = 0;
+			req.capacity = uint32(minof(frame.capacity, stduint(NetworkDriverFrameCapacity)));
+			stduint type = _IMM(NetworkMsg::DRV_RECV);
+			if (syssdrv(net_remote_link.owner_tid, &req, sizeof(req), &type)) return -1;
+			if (req.status > 0) {
+				const stduint copy_len = minof(stduint(req.length), frame.capacity);
+				MemCopyN(frame.data, req.data, copy_len);
+				frame.length = copy_len;
+			}
+			return req.status;
+		}
+
+		virtual stdsint Control(stduint command, void* args) override {
+			(void)command;
+			(void)args;
+			return -1;
+		}
+
+		virtual void GetStatistics(uni::Network::LinkStatistics& statistics) const override {
+			MemSet(&statistics, 0, sizeof(statistics));
+		}
+	};
+
+	NetRemoteLinkDevice net_remote_link_device;
+
 	bool EnsureNetServiceBuffers() {
 		if (!net_buffers.rx) net_buffers.rx = (uint8*)mempool.allocate(NetFrameBufferSize, 12);
 		if (!net_buffers.tx) net_buffers.tx = (uint8*)mempool.allocate(NetFrameBufferSize, 12);
@@ -124,6 +200,11 @@ namespace {
 	}
 
 	uni::Network::LinkDevice* FindDefaultLinkDevice() {
+		if (net_remote_link.owner_tid &&
+			net_remote_link.registered &&
+			net_remote_link.state == uni::Network::LinkState::Up) {
+			return &net_remote_link_device;
+		}
 		for0(i, net_link_device_count) {
 			auto* dev = net_link_devices[i];
 			if (dev && dev->GetState() == uni::Network::LinkState::Up) return dev;
@@ -586,6 +667,72 @@ namespace {
 			plogwarn("[Net] udp echo port registration failed");
 		}
 	}
+
+	bool NetServiceHandleAttach(stduint sig_src, const FMT_NetworkMsg_DRV_ATTACH& attach) {
+		ProcessBlock* safe_pb = ProcessBlock::Acquire(sig_src);
+		if (!safe_pb) return false;
+		const bool allowed = safe_pb->ring == RING_S;
+		ProcessBlock::Release(safe_pb);
+		if (!allowed) return false;
+		if (attach.version != NetworkDriverProtocolVersion || !attach.mtu) return false;
+
+		net_remote_link.owner_tid = sig_src;
+		net_remote_link.dev_handle = attach.dev_handle;
+		net_remote_link.caps = attach.caps;
+		net_remote_link.mtu = attach.mtu;
+		for0(i, numsof(net_remote_link.mac.octet)) net_remote_link.mac.octet[i] = attach.mac[i];
+		net_remote_link.state = attach.link_state ? uni::Network::LinkState::Up : uni::Network::LinkState::Down;
+		MemSet(net_remote_link.name, 0, sizeof(net_remote_link.name));
+		for0(i, NetworkDriverNameCapacity - 1) {
+			net_remote_link.name[i] = attach.name[i];
+			if (!attach.name[i]) break;
+		}
+		if (!net_remote_link.registered) {
+			if (!Devsman::RegisterLinkDevice(&net_remote_link_device)) return false;
+			net_remote_link.registered = true;
+		}
+		ploginfo("[Net] attached driver %s tid=%u mtu=%u",
+			net_remote_link.name[0] ? net_remote_link.name : "(unnamed)",
+			(unsigned)sig_src, (unsigned)attach.mtu);
+		return true;
+	}
+
+	void NetServiceHandleDetach(stduint sig_src) {
+		if (net_remote_link.owner_tid != sig_src) return;
+		net_remote_link.owner_tid = 0;
+		net_remote_link.dev_handle = 0;
+		net_remote_link.caps = 0;
+		net_remote_link.mtu = 0;
+		net_remote_link.state = uni::Network::LinkState::Down;
+		MemSet(&net_remote_link.mac, 0, sizeof(net_remote_link.mac));
+		MemSet(net_remote_link.name, 0, sizeof(net_remote_link.name));
+	}
+
+	void NetServiceHandleMessages() {
+		while (syscall(syscall_t::TMSG)) {
+			stduint sig_type = 0;
+			stduint sig_src = 0;
+			union {
+				FMT_NetworkMsg_DRV_ATTACH attach;
+				stdsint status;
+			} msgbuf{};
+			if (sysrecv(ANYPROC, &msgbuf, sizeof(msgbuf), &sig_type, &sig_src)) break;
+			stdsint ret = -1;
+			switch (NetworkMsg(sig_type)) {
+			case NetworkMsg::DRV_ATTACH:
+				ret = NetServiceHandleAttach(sig_src, msgbuf.attach) ? 0 : -1;
+				break;
+			case NetworkMsg::DRV_DETACH:
+				NetServiceHandleDetach(sig_src);
+				ret = 0;
+				break;
+			default:
+				ret = -1;
+				break;
+			}
+			syssend_async(sig_src, &ret, sizeof(ret));
+		}
+	}
 }
 
 bool Devsman::RegisterLinkDevice(uni::Network::LinkDevice* device) {
@@ -667,27 +814,67 @@ stdsint Devsman::ReceiveUdp(uint16 port, uni::Network::UDPDatagramContext& conte
 
 stdsint Devsman::SendUdp(const uni::Network::MacAddress& target_mac, const uni::Network::IPv4Address& target_ip,
 	uint16 source_port, uint16 destination_port, const void* payload, stduint length) {
-	if (!source_port || !destination_port) return -1;
-	if (target_mac.IsZero() || target_ip.IsZero()) return -1;
-	if (!EnsureUdpTxBuffer()) return -1;
+	if (!source_port || !destination_port) {
+		plogwarn("[Net] send udp invalid ports src=%u dst=%u",
+			(unsigned)source_port, (unsigned)destination_port);
+		return -1;
+	}
+	if (target_mac.IsZero() || target_ip.IsZero()) {
+		plogwarn("[Net] send udp invalid target mac/ip");
+		return -1;
+	}
+	if (!EnsureUdpTxBuffer()) {
+		plogwarn("[Net] send udp tx buffer unavailable");
+		return -1;
+	}
 	auto* dev = FindDefaultLinkDevice();
-	if (!dev) return -1;
+	if (!dev) {
+		plogwarn("[Net] send udp no default link device");
+		return -1;
+	}
 	return SendUdpFrame(*dev, net_buffers.udp_tx, target_mac, net_config.ipv4_address,
 		target_ip, source_port, destination_port, payload, length, net_ipv4_identification++);
 }
 
 stdsint Devsman::SendUdp(const uni::Network::IPv4Address& target_ip,
 	uint16 source_port, uint16 destination_port, const void* payload, stduint length) {
-	if (!source_port || !destination_port || target_ip.IsZero()) return -1;
-	if (!IsSameIPv4Subnet(net_config.ipv4_address, target_ip, net_config.ipv4_netmask)) return -1;
-	if (!EnsureUdpTxBuffer()) return -1;
+	if (!source_port || !destination_port || target_ip.IsZero()) {
+		plogwarn("[Net] send udp invalid args src=%u dst=%u ip=%u.%u.%u.%u",
+			(unsigned)source_port, (unsigned)destination_port,
+			(unsigned)target_ip.octet[0], (unsigned)target_ip.octet[1],
+			(unsigned)target_ip.octet[2], (unsigned)target_ip.octet[3]);
+		return -1;
+	}
+	if (!IsSameIPv4Subnet(net_config.ipv4_address, target_ip, net_config.ipv4_netmask)) {
+		plogwarn("[Net] send udp out of subnet local=%u.%u.%u.%u/%u.%u.%u.%u target=%u.%u.%u.%u",
+			(unsigned)net_config.ipv4_address.octet[0], (unsigned)net_config.ipv4_address.octet[1],
+			(unsigned)net_config.ipv4_address.octet[2], (unsigned)net_config.ipv4_address.octet[3],
+			(unsigned)net_config.ipv4_netmask.octet[0], (unsigned)net_config.ipv4_netmask.octet[1],
+			(unsigned)net_config.ipv4_netmask.octet[2], (unsigned)net_config.ipv4_netmask.octet[3],
+			(unsigned)target_ip.octet[0], (unsigned)target_ip.octet[1],
+			(unsigned)target_ip.octet[2], (unsigned)target_ip.octet[3]);
+		return -1;
+	}
+	if (!EnsureUdpTxBuffer()) {
+		plogwarn("[Net] send udp tx buffer unavailable");
+		return -1;
+	}
 	auto* dev = FindDefaultLinkDevice();
-	if (!dev) return -1;
+	if (!dev) {
+		plogwarn("[Net] send udp no default link device");
+		return -1;
+	}
 	uni::Network::MacAddress target_mac{};
 	if (!LookupArpCache(target_ip, target_mac)) {
 		const stdsint pending_index = EnqueuePendingUdp(target_ip, source_port, destination_port, payload, length);
-		if (pending_index < 0) return -1;
+		if (pending_index < 0) {
+			plogwarn("[Net] send udp pending queue full/invalid len=%u", (unsigned)length);
+			return -1;
+		}
 		if (SendArpRequest(*dev, net_buffers.udp_tx, target_ip)) return 0;
+		plogwarn("[Net] send udp arp request failed for %u.%u.%u.%u",
+			(unsigned)target_ip.octet[0], (unsigned)target_ip.octet[1],
+			(unsigned)target_ip.octet[2], (unsigned)target_ip.octet[3]);
 		ClearPendingUdp(stduint(pending_index));
 		return -1;
 	}
@@ -726,6 +913,7 @@ void serv_dev_net_loop() {
 	RegisterBuiltinUdpPorts();
 	ploginfo("[Net] Service thread start pid=%u", Taskman::CurrentPID());
 	while (true) {
+		NetServiceHandleMessages();
 		NetServicePoll();
 		NetServiceIdleWait();
 	}

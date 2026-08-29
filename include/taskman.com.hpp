@@ -46,6 +46,40 @@ enum class GraphicMsg {
 	DRV_FLUSH,// request driver dirty-rect flush
 };
 
+enum class NetworkMsg {
+	DRV_ATTACH,// driver publishes link session
+	DRV_DETACH,// driver releases link session
+	DRV_SEND,// send one raw link frame
+	DRV_RECV,// receive one raw link frame
+};
+
+enum NetworkDriverCaps : uint32 {
+	NetworkDriverCap_Poll = 1 << 0,
+};
+
+static constexpr uint32 NetworkDriverProtocolVersion = 1;
+static constexpr uint32 NetworkDriverNameCapacity = 16;
+static constexpr uint32 NetworkDriverFrameCapacity = 2048;
+
+_PACKED(struct) FMT_NetworkMsg_DRV_ATTACH {
+	uint32 version;
+	uint32 caps;
+	uint32 dev_handle;
+	uint32 mtu;
+	uint8 mac[6];
+	uint8 link_state;
+	uint8 reserved0;
+	char name[NetworkDriverNameCapacity];
+};
+
+_PACKED(struct) FMT_NetworkMsg_DRV_FRAME {
+	int32 status;
+	uint32 length;
+	uint32 capacity;
+	uint32 reserved0;
+	uint8 data[NetworkDriverFrameCapacity];
+};
+
 static constexpr const stduint ANYPROC = (_IMM0);
 static constexpr const stduint INTRUPT = (~_IMM0);
 static constexpr const stduint COMM_RECV = 0b10;

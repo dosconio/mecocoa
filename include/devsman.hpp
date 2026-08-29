@@ -12,11 +12,11 @@ struct DeviceNodeOps {
 	stdsint (*ctrl)(DeviceNode* node, stduint cmd, void* args, stduint flags);
 };
 
-struct PowerDeviceHandleEntry {
+struct PwcallDeviceHandleEntry {
 	DeviceNode* node = nullptr;
 	uint32 flags = 0;
 
-	bool operator==(const PowerDeviceHandleEntry& other) const {
+	bool operator==(const PwcallDeviceHandleEntry& other) const {
 		return node == other.node && flags == other.flags;
 	}
 };

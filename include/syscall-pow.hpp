@@ -5,14 +5,14 @@
 #include "syscall.hpp"
 #include "taskman.com.hpp"
 
-enum class PowerDeviceProper : uint32 {
+enum class PwcallDeviceProper : uint32 {
 	None = 0,
 	GetIdentity,
 	GetResourceCount,
 	GetResource,
 };
 
-enum class PowerDeviceResourceType : uint16 {
+enum class PwcallDeviceResourceType : uint16 {
 	None = 0,
 	PciBarMmio,
 	PciBarIo,
@@ -24,7 +24,7 @@ enum class PowerDeviceResourceType : uint16 {
 	DmaChannel,
 };
 
-struct PowerDeviceIdentity {
+struct PwcallDeviceIdentity {
 	uint16 node_type = 0;
 	uint16 bus_type = 0;
 	uint16 dev_class = 0;
@@ -40,7 +40,7 @@ struct PowerDeviceIdentity {
 	uint8 pci_function = 0;
 };
 
-struct PowerDeviceResourceInfo {
+struct PwcallDeviceResourceInfo {
 	uint16 type = 0;
 	uint16 flags = 0;
 	uint32 index = 0;
@@ -49,17 +49,17 @@ struct PowerDeviceResourceInfo {
 	uint64 extra = 0;
 };
 
-struct PowerDeviceResourceQuery {
+struct PwcallDeviceResourceQuery {
 	uint32 index = 0;
-	PowerDeviceResourceInfo resource = {};
+	PwcallDeviceResourceInfo resource = {};
 };
 
-enum class PowerDeviceMapFlag : uint32 {
+enum class PwcallDeviceMapFlag : uint32 {
 	None = 0,
 	Writable = 1 << 0,
 };
 
-struct PowerDeviceMapRequest {
+struct PwcallDeviceMapRequest {
 	uint32 resource_type = 0;
 	uint32 resource_index = 0;
 	uint32 map_flags = 0;
@@ -68,7 +68,7 @@ struct PowerDeviceMapRequest {
 	uint64 length = 0;
 };
 
-struct PowerDeviceIoRequest {
+struct PwcallDeviceIoRequest {
 	uint32 resource_type = 0;
 	uint32 resource_index = 0;
 	uint32 width = 4;
@@ -77,13 +77,26 @@ struct PowerDeviceIoRequest {
 	uint32 value = 0;
 };
 
-enum class PowerDevicePublishCommand : uint32 {
+enum class PwcallDeviceDmaMapFlag : uint32 {
+	None = 0,
+	Writable = 1 << 0,
+};
+
+struct PwcallDeviceDmaMapRequest {
+	uint64 physical = 0;
+	uint64 length = 0;
+	uint64 address = 0;
+	uint32 map_flags = 0;
+	uint32 reserved = 0;
+};
+
+enum class PwcallDevicePublishCommand : uint32 {
 	None = 0,
 	Started,
 	FramebufferAperture,
 };
 
-struct PowerDeviceFramebufferAperture {
+struct PwcallDeviceFramebufferAperture {
 	uint32 resource_type = 0;
 	uint32 resource_index = 0;
 	uint32 reserved = 0;
@@ -92,60 +105,84 @@ struct PowerDeviceFramebufferAperture {
 	uint64 length = 0;
 };
 
-static inline stdsint PowerCallHello() {
-	return (stdsint)syscall(syscall_t::POWERCALL_HELLO);
-}
+namespace Powercall {
 
-static inline stdsint PowerCallDevOpen(stduint node_id, stduint cls = 0, stduint flags = 0) {
-	return (stdsint)syscall(syscall_t::POWERCALL_DEV_OPEN, node_id, cls, flags);
-}
+	static inline stdsint Hello() {
+		return (stdsint)syscall(syscall_t::POWERCALL_HELLO);
+	}
 
-static inline stdsint PowerCallDevClose(stduint dev_handle) {
-	return (stdsint)syscall(syscall_t::POWERCALL_DEV_CLOSE, dev_handle, 0, 0);
-}
+	static inline stdsint DevOpen(stduint node_id, stduint cls = 0, stduint flags = 0) {
+		return (stdsint)syscall(syscall_t::POWERCALL_DEV_OPEN, node_id, cls, flags);
+	}
 
-static inline stdsint PowerCallDevProper(stduint dev_handle, PowerDeviceProper proper, void* args = nullptr) {
-	return (stdsint)syscall(syscall_t::POWERCALL_DEV_PROPER, dev_handle, _IMM(proper), _IMM(args));
-}
+	static inline stdsint DevClose(stduint dev_handle) {
+		return (stdsint)syscall(syscall_t::POWERCALL_DEV_CLOSE, dev_handle, 0, 0);
+	}
 
-static inline stdsint PowerCallDevGetIdentity(stduint dev_handle, PowerDeviceIdentity* args) {
-	return PowerCallDevProper(dev_handle, PowerDeviceProper::GetIdentity, args);
-}
+	static inline stdsint DevProper(stduint dev_handle, PwcallDeviceProper proper, void* args = nullptr) {
+		return (stdsint)syscall(syscall_t::POWERCALL_DEV_PROPER, dev_handle, _IMM(proper), _IMM(args));
+	}
 
-static inline stdsint PowerCallDevGetResourceCount(stduint dev_handle) {
-	return (stdsint)syscall(syscall_t::POWERCALL_DEV_PROPER, dev_handle, _IMM(PowerDeviceProper::GetResourceCount), 0);
-}
+	static inline stdsint DevGetIdentity(stduint dev_handle, PwcallDeviceIdentity* args) {
+		return DevProper(dev_handle, PwcallDeviceProper::GetIdentity, args);
+	}
 
-static inline stdsint PowerCallDevGetResource(stduint dev_handle, PowerDeviceResourceQuery* args) {
-	return PowerCallDevProper(dev_handle, PowerDeviceProper::GetResource, args);
-}
+	static inline stdsint DevGetResourceCount(stduint dev_handle) {
+		return (stdsint)syscall(syscall_t::POWERCALL_DEV_PROPER, dev_handle, _IMM(PwcallDeviceProper::GetResourceCount), 0);
+	}
 
-static inline stdsint PowerCallDevCtrl(stduint dev_handle, stduint cmd, void* args = nullptr) {
-	return (stdsint)syscall(syscall_t::POWERCALL_DEV_CTRL, dev_handle, cmd, _IMM(args));
-}
+	static inline stdsint DevGetResource(stduint dev_handle, PwcallDeviceResourceQuery* args) {
+		return DevProper(dev_handle, PwcallDeviceProper::GetResource, args);
+	}
 
-static inline stdsint PowerCallDevMmap(stduint dev_handle, PowerDeviceMapRequest* args) {
-	return (stdsint)syscall(syscall_t::POWERCALL_DEV_MMAP, dev_handle, _IMM(args), 0);
-}
+	static inline stdsint DevCtrl(stduint dev_handle, stduint cmd, void* args = nullptr) {
+		return (stdsint)syscall(syscall_t::POWERCALL_DEV_CTRL, dev_handle, cmd, _IMM(args));
+	}
 
-static inline stdsint PowerCallDevUmap(void* addr, stduint size, stduint flags = 0) {
-	return (stdsint)syscall(syscall_t::POWERCALL_DEV_UMAP, _IMM(addr), size, flags);
-}
+	static inline stdsint DevMmap(stduint dev_handle, PwcallDeviceMapRequest* args) {
+		return (stdsint)syscall(syscall_t::POWERCALL_DEV_MMAP, dev_handle, _IMM(args), 0);
+	}
 
-static inline stdsint PowerCallDevIoRead(stduint dev_handle, PowerDeviceIoRequest* args) {
-	return (stdsint)syscall(syscall_t::POWERCALL_DEV_IO_READ, dev_handle, _IMM(args), 0);
-}
+	static inline stdsint DevUmap(void* addr, stduint size, stduint flags = 0) {
+		return (stdsint)syscall(syscall_t::POWERCALL_DEV_UMAP, _IMM(addr), size, flags);
+	}
 
-static inline stdsint PowerCallDevIoWrite(stduint dev_handle, PowerDeviceIoRequest* args) {
-	return (stdsint)syscall(syscall_t::POWERCALL_DEV_IO_WRITE, dev_handle, _IMM(args), 0);
-}
+	static inline stdsint DevIoRead(stduint dev_handle, PwcallDeviceIoRequest* args) {
+		return (stdsint)syscall(syscall_t::POWERCALL_DEV_IO_READ, dev_handle, _IMM(args), 0);
+	}
 
-static inline stdsint PowerCallDevPublish(stduint dev_handle, PowerDevicePublishCommand cmd, void* args = nullptr) {
-	return (stdsint)syscall(syscall_t::POWERCALL_DEV_PUBLISH, dev_handle, _IMM(cmd), _IMM(args));
-}
+	static inline stdsint DevIoWrite(stduint dev_handle, PwcallDeviceIoRequest* args) {
+		return (stdsint)syscall(syscall_t::POWERCALL_DEV_IO_WRITE, dev_handle, _IMM(args), 0);
+	}
 
-static inline stdsint PowerSysComm(stduint op, stduint to, CommMsg* msg) {
-	return (stdsint)syscall(syscall_t::COMM, op, to, _IMM(msg));
+	static inline stdsint DevPublish(stduint dev_handle, PwcallDevicePublishCommand cmd, void* args = nullptr) {
+		return (stdsint)syscall(syscall_t::POWERCALL_DEV_PUBLISH, dev_handle, _IMM(cmd), _IMM(args));
+	}
+
+	static inline stdsint DevWait(stduint dev_handle, stduint timeout = 0, stduint flags = 0) {
+		return (stdsint)syscall(syscall_t::POWERCALL_DEV_WAIT, dev_handle, timeout, flags);
+	}
+
+	static inline stdsint DevAck(stduint dev_handle, stduint event, stduint flags = 0) {
+		return (stdsint)syscall(syscall_t::POWERCALL_DEV_ACK, dev_handle, event, flags);
+	}
+
+	static inline stdsint DevDmaAlloc(stduint dev_handle, stduint size, stduint flags = 0) {
+		return (stdsint)syscall(syscall_t::POWERCALL_DEV_DMA_ALLOC, dev_handle, size, flags);
+	}
+
+	static inline stdsint DevDmaFree(stduint dma_handle) {
+		return (stdsint)syscall(syscall_t::POWERCALL_DEV_DMA_FREE, dma_handle, 0, 0);
+	}
+
+	static inline stdsint DevDmaMap(stduint dma_handle, PwcallDeviceDmaMapRequest* args, stduint flags = 0) {
+		return (stdsint)syscall(syscall_t::POWERCALL_DEV_DMA_MAP, dma_handle, _IMM(args), flags);
+	}
+
+	static inline stdsint SysComm(stduint op, stduint to, CommMsg* msg) {
+		return (stdsint)syscall(syscall_t::COMM, op, to, _IMM(msg));
+	}
+
 }
 
 #endif

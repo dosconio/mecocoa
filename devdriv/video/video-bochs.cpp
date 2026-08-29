@@ -35,23 +35,23 @@ enum BochsEnable : uint16 {
 };
 
 static bool BochsIoWrite16(stduint dev_handle, uint16 port, uint16 value) {
-	PowerDeviceIoRequest request = {};
-	request.resource_type = _IMM(PowerDeviceResourceType::IoPortRange);
+	PwcallDeviceIoRequest request = {};
+	request.resource_type = _IMM(PwcallDeviceResourceType::IoPortRange);
 	request.resource_index = 0;
 	request.width = 2;
 	request.offset = port - BochsIoBase;
 	request.value = value;
-	return PowerCallDevIoWrite(dev_handle, &request) == 0;
+	return Powercall::DevIoWrite(dev_handle, &request) == 0;
 }
 
 static bool BochsIoRead16(stduint dev_handle, uint16 port, uint16* value) {
 	if (!value) return false;
-	PowerDeviceIoRequest request = {};
-	request.resource_type = _IMM(PowerDeviceResourceType::IoPortRange);
+	PwcallDeviceIoRequest request = {};
+	request.resource_type = _IMM(PwcallDeviceResourceType::IoPortRange);
 	request.resource_index = 0;
 	request.width = 2;
 	request.offset = port - BochsIoBase;
-	if (PowerCallDevIoRead(dev_handle, &request) != 0) return false;
+	if (Powercall::DevIoRead(dev_handle, &request) != 0) return false;
 	*value = uint16(request.value);
 	return true;
 }
@@ -84,14 +84,14 @@ static bool BochsSetResolution(stduint dev_handle, uint16 width, uint16 height, 
 	return actual_width == width && actual_height == height;
 }
 
-static bool FindDeviceResource(stduint dev_handle, PowerDeviceResourceType type, uint32 index, PowerDeviceResourceInfo* out) {
+static bool FindDeviceResource(stduint dev_handle, PwcallDeviceResourceType type, uint32 index, PwcallDeviceResourceInfo* out) {
 	if (!out) return false;
-	const stdsint count = PowerCallDevGetResourceCount(dev_handle);
+	const stdsint count = Powercall::DevGetResourceCount(dev_handle);
 	if (count <= 0) return false;
 	for (stdsint i = 0; i < count; ++i) {
-		PowerDeviceResourceQuery query = {};
+		PwcallDeviceResourceQuery query = {};
 		query.index = uint32(i);
-		if (PowerCallDevGetResource(dev_handle, &query) != 0) continue;
+		if (Powercall::DevGetResource(dev_handle, &query) != 0) continue;
 		if (query.resource.type == _IMM(type) && query.resource.index == index) {
 			*out = query.resource;
 			return true;
@@ -100,7 +100,7 @@ static bool FindDeviceResource(stduint dev_handle, PowerDeviceResourceType type,
 	return false;
 }
 
-static stdsint PublishFramebuffer(stduint dev_handle, const PowerDeviceResourceInfo& fb, uint32 width, uint32 height, uint32 pitch) {
+static stdsint PublishFramebuffer(stduint dev_handle, const PwcallDeviceResourceInfo& fb, uint32 width, uint32 height, uint32 pitch) {
 	const uint64 fb_length = uint64(pitch) * height;
 	if (!fb.start || !fb.length || !fb_length || fb_length > fb.length || pitch < width * 4) {
 		outsfmt("[bochs-video] publish failed %ux%u pitch=%u need=%u fb_len=%u\n\r",
@@ -112,7 +112,7 @@ static stdsint PublishFramebuffer(stduint dev_handle, const PowerDeviceResourceI
 	attach.version = GraphicDriverProtocolVersion;
 	attach.caps = GraphicDriverCap_SetMode;
 	attach.dev_handle = uint32(dev_handle);
-	attach.resource_type = _IMM(PowerDeviceResourceType::PciBarMmio);
+	attach.resource_type = _IMM(PwcallDeviceResourceType::PciBarMmio);
 	attach.resource_index = fb.index;
 	attach.format = GraphicDriverPixelFormatARGB8888;
 	attach.fb_start = fb.start;
@@ -127,25 +127,25 @@ static stdsint PublishFramebuffer(stduint dev_handle, const PowerDeviceResourceI
 	send_msg.data.address = _IMM(args);
 	send_msg.data.length = sizeof(args);
 	send_msg.type = _IMM(GraphicMsg::DRV_ATTACH);
-	if (PowerSysComm(COMM_SEND, Task_ConsoleVideo, &send_msg)) return -1;
+	if (Powercall::SysComm(COMM_SEND, Task_ConsoleVideo, &send_msg)) return -1;
 
 	stdsint result = -1;
 	CommMsg recv_msg = {};
 	recv_msg.data.address = _IMM(&result);
 	recv_msg.data.length = sizeof(result);
-	if (PowerSysComm(COMM_RECV, Task_ConsoleVideo, &recv_msg)) return -1;
+	if (Powercall::SysComm(COMM_RECV, Task_ConsoleVideo, &recv_msg)) return -1;
 	return result;
 }
 
-static bool PublishFramebufferAperture(stduint dev_handle, const PowerDeviceResourceInfo& fb, PowerDeviceResourceInfo* updated_fb) {
+static bool PublishFramebufferAperture(stduint dev_handle, const PwcallDeviceResourceInfo& fb, PwcallDeviceResourceInfo* updated_fb) {
 	uint16 video_memory_64k = 0;
 	if (!BochsReadRegister(dev_handle, BochsRegVideoMemory64K, &video_memory_64k) || !video_memory_64k) return false;
-	PowerDeviceFramebufferAperture aperture = {};
-	aperture.resource_type = _IMM(PowerDeviceResourceType::PciBarMmio);
+	PwcallDeviceFramebufferAperture aperture = {};
+	aperture.resource_type = _IMM(PwcallDeviceResourceType::PciBarMmio);
 	aperture.resource_index = fb.index;
 	aperture.start = fb.start;
 	aperture.length = uint64(video_memory_64k) * 64 * 1024;
-	if (PowerCallDevPublish(dev_handle, PowerDevicePublishCommand::FramebufferAperture, &aperture) != 0) return false;
+	if (Powercall::DevPublish(dev_handle, PwcallDevicePublishCommand::FramebufferAperture, &aperture) != 0) return false;
 	if (updated_fb) {
 		*updated_fb = fb;
 		updated_fb->length = aperture.length;
@@ -153,7 +153,7 @@ static bool PublishFramebufferAperture(stduint dev_handle, const PowerDeviceReso
 	return true;
 }
 
-static stdsint HandleSetMode(stduint dev_handle, const PowerDeviceResourceInfo& fb, const stduint* args) {
+static stdsint HandleSetMode(stduint dev_handle, const PwcallDeviceResourceInfo& fb, const stduint* args) {
 	const uint32 width = uint32(args[0]);
 	const uint32 height = uint32(args[1]);
 	if (!width || !height || width > 0xFFFF || height > 0xFFFF) return -1;
@@ -164,7 +164,7 @@ static stdsint HandleSetMode(stduint dev_handle, const PowerDeviceResourceInfo& 
 	BochsReadRegister(dev_handle, BochsRegXres, &actual_width);
 	BochsReadRegister(dev_handle, BochsRegYres, &actual_height);
 	if (!BochsReadRegister(dev_handle, BochsRegVirtWidth, &virt_width) || !virt_width) virt_width = uint16(width);
-	PowerDeviceResourceInfo updated_fb = fb;
+	PwcallDeviceResourceInfo updated_fb = fb;
 	PublishFramebufferAperture(dev_handle, fb, &updated_fb);
 	return PublishFramebuffer(dev_handle, updated_fb, actual_width, actual_height, uint32(virt_width) * 4);
 }
@@ -173,16 +173,16 @@ int main(int argc, char** argv) {
 	(void)argc;
 	(void)argv;
 
-	if (PowerCallHello() != 0) return -1;
+	if (Powercall::Hello() != 0) return -1;
 
 	const stduint cls = (stduint(BochsVendorId) << 16) | BochsDeviceId;
-	const stdsint opened = PowerCallDevOpen(0, cls, 0);
+	const stdsint opened = Powercall::DevOpen(0, cls, 0);
 	if (opened <= 0) return -1;
 	const stduint dev_handle = stduint(opened);
 
-	PowerDeviceResourceInfo fb = {};
-	if (!FindDeviceResource(dev_handle, PowerDeviceResourceType::PciBarMmio, 0, &fb)) {
-		PowerCallDevClose(dev_handle);
+	PwcallDeviceResourceInfo fb = {};
+	if (!FindDeviceResource(dev_handle, PwcallDeviceResourceType::PciBarMmio, 0, &fb)) {
+		Powercall::DevClose(dev_handle);
 		return -1;
 	}
 
@@ -199,7 +199,7 @@ int main(int argc, char** argv) {
 		xres = 1024;
 		yres = 768;
 		if (!BochsSetResolution(dev_handle, xres, yres, 32)) {
-			PowerCallDevClose(dev_handle);
+			Powercall::DevClose(dev_handle);
 			return -1;
 		}
 		virt_width = xres;
@@ -208,11 +208,11 @@ int main(int argc, char** argv) {
 
 	PublishFramebufferAperture(dev_handle, fb, &fb);
 	if (PublishFramebuffer(dev_handle, fb, xres, yres, uint32(virt_width) * 4) != 0) {
-		PowerCallDevClose(dev_handle);
+		Powercall::DevClose(dev_handle);
 		return -1;
 	}
-	if (PowerCallDevPublish(dev_handle, PowerDevicePublishCommand::Started) != 0) {
-		PowerCallDevClose(dev_handle);
+	if (Powercall::DevPublish(dev_handle, PwcallDevicePublishCommand::Started) != 0) {
+		Powercall::DevClose(dev_handle);
 		return -1;
 	}
 
@@ -221,7 +221,7 @@ int main(int argc, char** argv) {
 		CommMsg recv_msg = {};
 		recv_msg.data.address = _IMM(args);
 		recv_msg.data.length = sizeof(args);
-		if (PowerSysComm(COMM_RECV, ANYPROC, &recv_msg)) {
+		if (Powercall::SysComm(COMM_RECV, ANYPROC, &recv_msg)) {
 			syscall(syscall_t::REST, 1, 1000);
 			continue;
 		}

@@ -205,7 +205,7 @@ static bool MapPublishedFramebufferToKernel(stduint physical, stduint length) {
 	return true;
 }
 
-bool PowerValidateDeviceResourceRange(ProcessBlock* pb, stduint dev_handle, uint32 resource_type, uint32 resource_index, uint64 start, uint64 length);
+bool PwcallValidateDeviceResourceRange(ProcessBlock* pb, stduint dev_handle, uint32 resource_type, uint32 resource_index, uint64 start, uint64 length);
 
 static stdsint GraphicMsg_DRV_ATTACH(FMT_GraphicMsg_DRV_ATTACH* usr_info, ProcessBlock* pb, stduint sig_src) {
 	if (!usr_info || !pb) return -1;
@@ -219,7 +219,7 @@ static stdsint GraphicMsg_DRV_ATTACH(FMT_GraphicMsg_DRV_ATTACH* usr_info, Proces
 	if (physical64 < info.fb_start) return -1;
 	if ((uint64)(stduint)physical64 != physical64) return -1;
 	if ((uint64)(stduint)info.fb_length != info.fb_length) return -1;
-	if (!PowerValidateDeviceResourceRange(
+	if (!PwcallValidateDeviceResourceRange(
 		pb,
 		info.dev_handle,
 		info.resource_type,
