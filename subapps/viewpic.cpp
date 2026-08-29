@@ -9,8 +9,11 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <stdlib.h>
+#include <c/ustring.h>
 #include <c/format/picture/BMP.h>
 #include <c/format/picture/JPEG.h>
+#include <c/format/picture/PNG.h>
+#include <c/format/picture/GIF.h>
 #include <cpp/trait/StorageTrait.hpp>
 
 using namespace uni;
@@ -65,6 +68,8 @@ int main(int argc, char** argv)
 	StdMalloc myMalloc;
 	BMPCodec bmpCodec;
 	JPEGCodec jpegCodec;
+	PNGCodec pngCodec;
+	GIFCodec gifCodec;
 	const IImageCodec* codec = nullptr;
 	ImageDecodeOptions options;
 	ImageDecodeOptionsInit(options);
@@ -78,26 +83,66 @@ int main(int argc, char** argv)
 		codec = &bmpCodec;
 	} else if (jpegCodec.Probe(storage, matched) == ImageResult::OK && matched) {
 		codec = &jpegCodec;
+	} else if (pngCodec.Probe(storage, matched) == ImageResult::OK && matched) {
+		codec = &pngCodec;
+	} else if (gifCodec.Probe(storage, matched) == ImageResult::OK && matched) {
+		codec = &gifCodec;
 	}
 
 	if (!codec) {
 		outsfmt("Error: Unsupported image format.\n\r");
-		outsfmt("Please provide a valid BMP or JPEG image file.\n\r");
+		outsfmt("Please provide a valid BMP, JPEG, PNG, or GIF image file.\n\r");
 		free(fileData);
 		return -1;
 	}
 
-	ImageResult imgRes = codec->Decode(storage, imgBuf, myMalloc, options);
-	free(fileData); // Free raw file buffer immediately after decoding
+	// Check if this is an animated GIF
+	GIFAnimation gifAnim{};
+	bool isAnimated = false;
 
-	if (imgRes != ImageResult::OK) {
-		outsfmt("Error: Failed to decode image with %s codec.\n\r", codec->GetName());
-		return -1;
+	if (codec->GetFormat() == ImageFormat::GIF) {
+		if (DecodeGIFAnimation(fileData, (size_t)st.st_size, gifAnim) && gifAnim.frameCount > 1) {
+			isAnimated = true;
+		}
 	}
 
-	int width = (int)imgBuf.width;
-	int height = (int)imgBuf.height;
-	uni::Color* pixels = (uni::Color*)imgBuf.pixels;
+	int width = 0;
+	int height = 0;
+	uni::Color* canvas = nullptr;
+	size_t canvasSize = 0;
+	uint32 animDelay = 100;
+
+	if (isAnimated) {
+		width = (int)gifAnim.width;
+		height = (int)gifAnim.height;
+		canvasSize = (size_t)width * (size_t)height * sizeof(uni::Color);
+		canvas = (uni::Color*)malloc(canvasSize);
+		if (!canvas) {
+			outsfmt("Error: Out of memory when allocating animation canvas.\n\r");
+			FreeGIFAnimation(gifAnim);
+			free(fileData);
+			return -1;
+		}
+		MemCopyN(canvas, gifAnim.frames[0].pixels, canvasSize);
+		animDelay = gifAnim.frames[0].delayMs;
+		if (animDelay < 20) animDelay = 20; // Clamp minimal tick interval
+		free(fileData);
+	} else {
+		// Clean up partial animation struct if any
+		if (gifAnim.frames) {
+			FreeGIFAnimation(gifAnim);
+		}
+		ImageResult imgRes = codec->Decode(storage, imgBuf, myMalloc, options);
+		free(fileData); // Free raw file buffer immediately after decoding
+
+		if (imgRes != ImageResult::OK) {
+			outsfmt("Error: Failed to decode image with %s codec.\n\r", codec->GetName());
+			return -1;
+		}
+		width = (int)imgBuf.width;
+		height = (int)imgBuf.height;
+		canvas = (uni::Color*)imgBuf.pixels;
+	}
 
 	// Window dimensions: width + 2 border pixels, height + 19 title bar/border pixels
 	Rectangle rect{ Point(150, 100), Size2(width + 2, height + 19) };
@@ -106,25 +151,48 @@ int main(int argc, char** argv)
 	auto form_id = sys_create_form(-_IMM0, &rect);
 	if (form_id < 0) {
 		outsfmt("Error: Failed to create form (code %d).\n\r", form_id);
-		ImageBufferFree(imgBuf);
+		if (isAnimated) {
+			if (canvas) free(canvas);
+			FreeGIFAnimation(gifAnim);
+		} else {
+			ImageBufferFree(imgBuf);
+		}
 		return -1;
 	}
 
-	// Set the decoded pixels directly as the window's Framebuffer
-	sys_set_form_buffer(form_id, pixels);
+	// Register the canvas framebuffer ONCE with the window server
+	sys_set_form_buffer(form_id, canvas);
 
-	// Perform initial draw and synchronize the window content to kernel space
+	// Perform initial draw and synchronize window content to kernel space
 	sys_update_form(form_id, nullptr);
+
+	uint32 curFrame = 0;
+	if (isAnimated) {
+		sys_set_timer(form_id, animDelay);
+	}
 
 	// Main graphical message polling loop
 	SheetMessage smsg;
 	while (sys_fetch_msg(form_id, true, &smsg)) {
 		switch (smsg.event) {
+		case SheetEvent::onTimer:
+			if (isAnimated && gifAnim.frameCount > 1) {
+				curFrame = (curFrame + 1) % gifAnim.frameCount;
+				MemCopyN(canvas, gifAnim.frames[curFrame].pixels, canvasSize);
+				sys_update_form(form_id, nullptr);
+			}
+			break;
+
 		case SheetEvent::onClick:
 			// Close when left mouse button is released on the Close Button (args[3] == 1)
 			if (smsg.args[3] == 1 && !(smsg.args[2] & 0x10)) {
 				sys_close_form(form_id);
-				ImageBufferFree(imgBuf);
+				if (isAnimated) {
+					if (canvas) free(canvas);
+					FreeGIFAnimation(gifAnim);
+				} else {
+					ImageBufferFree(imgBuf);
+				}
 				return 0;
 			}
 			break;
@@ -139,7 +207,12 @@ int main(int argc, char** argv)
 					if ((key_event->keycode == kKF4 && (key_event->mod.l_alt || key_event->mod.r_alt)) ||
 						(key_event->keycode == kKEsc)) {
 						sys_close_form(form_id);
-						ImageBufferFree(imgBuf);
+						if (isAnimated) {
+							if (canvas) free(canvas);
+							FreeGIFAnimation(gifAnim);
+						} else {
+							ImageBufferFree(imgBuf);
+						}
 						return 0;
 					}
 				}
@@ -153,6 +226,11 @@ int main(int argc, char** argv)
 
 	// Fallback cleanup in case the loop exits unexpectedly
 	sys_close_form(form_id);
-	ImageBufferFree(imgBuf);
+	if (isAnimated) {
+		if (canvas) free(canvas);
+		FreeGIFAnimation(gifAnim);
+	} else {
+		ImageBufferFree(imgBuf);
+	}
 	return 0;
 }

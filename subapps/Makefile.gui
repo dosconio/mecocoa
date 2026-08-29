@@ -100,9 +100,9 @@ $(BIN_DIR)/notepad: subapps/notepad.cpp $(MCCA_CRT0) $(MCCA_LIBC)
 	@echo "MK notepad"
 	$(MCCA_CXX) $(MCCA_CXXFLAGS) -o $@ subapps/notepad.cpp $(MCCA_LDLIBS)
 
-$(BIN_DIR)/viewpic: subapps/viewpic.cpp $(ulibpath)/cpp/fileformat/picture/BMP.cpp $(ulibpath)/cpp/fileformat/picture/JPEG.cpp $(MCCA_CRT0) $(MCCA_LIBC)
+$(BIN_DIR)/viewpic: subapps/viewpic.cpp $(ulibpath)/cpp/fileformat/picture/BMP.cpp $(ulibpath)/cpp/fileformat/picture/JPEG.cpp $(ulibpath)/cpp/fileformat/picture/PNG.cpp $(ulibpath)/cpp/fileformat/picture/GIF.cpp $(MCCA_CRT0) $(MCCA_LIBC)
 	@echo "MK viewpic"
-	$(MCCA_CXX) $(MCCA_CXXFLAGS) -o $@ subapps/viewpic.cpp $(ulibpath)/cpp/fileformat/picture/BMP.cpp $(ulibpath)/cpp/fileformat/picture/JPEG.cpp $(MCCA_LDLIBS)
+	$(MCCA_CXX) $(MCCA_CXXFLAGS) -o $@ subapps/viewpic.cpp $(ulibpath)/cpp/fileformat/picture/BMP.cpp $(ulibpath)/cpp/fileformat/picture/JPEG.cpp $(ulibpath)/cpp/fileformat/picture/PNG.cpp $(ulibpath)/cpp/fileformat/picture/GIF.cpp $(MCCA_LDLIBS)
 
 #
 

@@ -96,9 +96,9 @@ $(BIN_DIR)/_rust: subapps/_hello/rust/src/main.rs subapps/_hello/rust/Cargo.toml
 	@cd subapps/_hello/rust/ && cargo build --release --target ../../../configs/Rust/target/cargo-i686.json
 	cp subapps/_hello/rust/target/cargo-i686/release/rust $@
 
-$(BIN_DIR)/viewpic: subapps/viewpic.cpp $(ulibpath)/cpp/fileformat/picture/BMP.cpp $(ulibpath)/cpp/fileformat/picture/JPEG.cpp $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
+$(BIN_DIR)/viewpic: subapps/viewpic.cpp $(ulibpath)/cpp/fileformat/picture/BMP.cpp $(ulibpath)/cpp/fileformat/picture/JPEG.cpp $(ulibpath)/cpp/fileformat/picture/PNG.cpp $(ulibpath)/cpp/fileformat/picture/GIF.cpp $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
 	@echo "MK viewpic"
-	$(MCCA_X86_CXX) $(MCCA_X86_CXXFLAGS) -o $@ subapps/viewpic.cpp $(ulibpath)/cpp/fileformat/picture/BMP.cpp $(ulibpath)/cpp/fileformat/picture/JPEG.cpp $(MCCA_X86_LDLIBS)
+	$(MCCA_X86_CXX) $(MCCA_X86_CXXFLAGS) -o $@ subapps/viewpic.cpp $(ulibpath)/cpp/fileformat/picture/BMP.cpp $(ulibpath)/cpp/fileformat/picture/JPEG.cpp $(ulibpath)/cpp/fileformat/picture/PNG.cpp $(ulibpath)/cpp/fileformat/picture/GIF.cpp $(MCCA_X86_LDLIBS)
 
 $(BIN_DIR)/ribbon: subapps/ribbon.cpp $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
 	@echo "MK ribbon"

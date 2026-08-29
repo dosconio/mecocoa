@@ -2196,6 +2196,18 @@ void serv_devs_loop() {
 					continue;
 				}
 				{
+					//{} unreleased name string
+					char driver_task_name[48] = {};
+					StrCopy(driver_task_name, entries[i].name);
+					for (stduint j = 0; driver_task_name[j]; ++j) {
+						if (driver_task_name[j] == '.') {
+							driver_task_name[j] = '\0';
+							break;
+						}
+					}
+					task->main_thread->name = StrHeap(driver_task_name[0] ? driver_task_name : entries[i].name);
+				}
+				{
 					auto focus_tty = task->focus_tty.Lock();
 					*focus_tty = vttys[0];
 					if (*focus_tty) {
