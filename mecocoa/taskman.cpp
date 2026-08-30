@@ -199,6 +199,7 @@ extern void free_async_msg(pureptr_t ptr);
 
 auto Taskman::AllocateThread() -> ThreadBlock* {
 	auto tb = (ThreadBlock*)mempool.allocate(sizeof(ThreadBlock), 4);
+	if (_IMM(tb) & 0xF) plogerro("Taskman::AllocateThread() [%p]", tb);
 	if (!tb) {
 		plogerro("Taskman::AllocateThread() failed");
 		return nullptr;

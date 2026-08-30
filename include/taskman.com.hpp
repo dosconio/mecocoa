@@ -51,10 +51,12 @@ enum class NetworkMsg {
 	DRV_DETACH,// driver releases link session
 	DRV_SEND,// send one raw link frame
 	DRV_RECV,// receive one raw link frame
+	DRV_RX,// driver pushes one received raw link frame
 };
 
 enum NetworkDriverCaps : uint32 {
 	NetworkDriverCap_Poll = 1 << 0,
+	NetworkDriverCap_RxEvent = 1 << 1,
 };
 
 static constexpr uint32 NetworkDriverProtocolVersion = 1;

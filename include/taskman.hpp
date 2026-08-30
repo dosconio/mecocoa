@@ -395,7 +395,7 @@ inline bool ProcessBlock::isWaiting() {
 }
 
 class Taskman {
-	static const stduint DEFAULT_STACK_SIZE = 0xE000;// 0xE000
+	static const stduint DEFAULT_STACK_SIZE = 0x10000;// 0xE000
 
 public:
 	static stduint PCU_CORES;

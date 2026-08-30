@@ -144,21 +144,39 @@ struct syscall_net_recv_t {
 
 enum class syscall_net_route_func_t : stduint {
 	IPv4Default = 0,
+	IPv4InterfaceCount,
+	IPv4Interface,
+	IPv4ArpCacheCount,
+	IPv4ArpCacheEntry,
 };
 
 constexpr uint16 syscall_net_route_flag_up = 0x0001u;
 constexpr uint16 syscall_net_route_flag_gateway = 0x0002u;
 
 struct syscall_net_route_ipv4_t {
-	uint8 address[4] = {};
+	uint8 destination[4] = {};
 	uint8 netmask[4] = {};
 	uint8 gateway[4] = {};
+	uint16 flags = 0;
+	uint16 link_index = 0;
+};
+
+struct syscall_net_interface_ipv4_t {
+	uint8 address[4] = {};
+	uint8 netmask[4] = {};
 	uint8 hardware[6] = {};
 	uint16 flags = 0;
 	uint16 mtu = 0;
 	uint16 link_index = 0;
 	uint16 link_state = 0;
 	char name[32] = {};
+};
+
+struct syscall_net_arp_ipv4_t {
+	uint8 address[4] = {};
+	uint8 hardware[6] = {};
+	uint16 flags = 0;
+	uint16 entry_index = 0;
 };
 
 _ESYM_C stduint syscall(syscall_t callid, stduint p1 = 0, stduint p2 = 0, stduint p3 = 0);// MCCA 4 PARA SYSC

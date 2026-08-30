@@ -4,9 +4,16 @@
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 #include <c/stdinc.h>
 #include <c/consio.h>
+#include "../../include/autoconf.h"
 #include "../../include/taskman.com.hpp"
 #include "../../include/console.com.hpp"
 #include "../../include/syscall-pow.hpp"
+
+#ifdef CONFIG_ENABLE_GRAPHIC
+#define _GUI_ENABLE CONFIG_ENABLE_GRAPHIC
+#else
+#define _GUI_ENABLE 0
+#endif
 
 #if defined(_ACCM) && ((_ACCM & 0xFF00) == 0x8600)
 
@@ -172,6 +179,10 @@ static stdsint HandleSetMode(stduint dev_handle, const PwcallDeviceResourceInfo&
 int main(int argc, char** argv) {
 	(void)argc;
 	(void)argv;
+	//{} TEMP
+	#if !_GUI_ENABLE
+	return -1;
+	#endif
 
 	if (Powercall::Hello() != 0) return -1;
 

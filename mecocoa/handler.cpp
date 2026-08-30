@@ -295,6 +295,19 @@ static void LogSelectorFaultContext(rostr name, HardwareInterruptFrame* frame, s
 		percore ? percore->kernel_stack : 0,
 		percore ? percore->tss.ESP0 : 0,
 		percore ? percore->user_cr3 : 0);
+	{
+		const byte* code = reinterpret_cast<const byte*>(frame->hw_eip);
+		printlog(_LOG_FATAL,
+			"[FAULT_REGS] EAX=0x%[x] EBX=0x%[x] ECX=0x%[x] EDX=0x%[x] ESI=0x%[x] EDI=0x%[x] EBP=0x%[x] EFLAGS=0x%[x]",
+			frame->pusha_eax, frame->pusha_ebx, frame->pusha_ecx, frame->pusha_edx,
+			frame->pusha_esi, frame->pusha_edi, frame->pusha_ebp, frame->hw_eflags);
+		printlog(_LOG_FATAL,
+			"[FAULT_BYTES] %02x %02x %02x %02x %02x %02x %02x %02x",
+			code[0], code[1], code[2], code[3], code[4], code[5], code[6], code[7]);
+		printlog(_LOG_FATAL,
+			"[R3SCR] hits=%u lapic=%u core=%u",
+			ap_ring3_iret_guard_hits, ap_ring3_iret_last_lapicid, ap_ring3_iret_last_coreid);
+	}
 }
 #endif
 
@@ -497,8 +510,12 @@ void exception_handler(HardwareInterruptFrame* frame) {
 		break;
 
 	default:
+		#if _MCCA == 0x8632
+		LogSelectorFaultContext(ExceptionDescription[iden], frame, para);
+		#else
 		printlog(_LOG_FATAL, have_para ? "%s with 0x%[32H]" : "%s",
 			ExceptionDescription[iden], para); // printlog will call halt machine
+		#endif
 		__asm("cli; hlt");
 		break;
 	}

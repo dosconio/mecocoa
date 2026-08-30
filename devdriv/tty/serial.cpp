@@ -31,12 +31,17 @@ RMOD_LIST RMOD_LIST_COM1{
 #endif
 
 UART_t com1(PORT_COM1_DATA);
+UART_t com2(0x02F8);
 extern OstreamTrait* con0_out;
 namespace {
 	bool g_com1_available = false;
+	bool g_com2_vtty_initialized = false;
+	Dnode* g_com2_vtty = nullptr;
+	ProcessBlock* g_com2_cot = nullptr;
 
 	enum class SerialInputPolicy : uint8 {
 		Com1Console,
+		LazyCotConsole,
 		EchoOnly,
 	};
 
@@ -50,10 +55,25 @@ namespace {
 
 	LegacyComPort legacy_com_ports[] = {
 		{"uart@com1", 0x03F8, IRQ_COM13_RS232_P1, false, SerialInputPolicy::Com1Console},
-		{"uart@com2", 0x02F8, IRQ_COM24_Serial, false, SerialInputPolicy::EchoOnly},
+		{"uart@com2", 0x02F8, IRQ_COM24_Serial, false, SerialInputPolicy::LazyCotConsole},
 		{"uart@com3", 0x03E8, IRQ_COM13_RS232_P1, false, SerialInputPolicy::EchoOnly},
 		{"uart@com4", 0x02E8, IRQ_COM24_Serial, false, SerialInputPolicy::EchoOnly},
 	};
+
+	Console_t* serial_console_for_port(const LegacyComPort& port) {
+		if (port.base == 0x03F8) return &com1;
+		if (port.base == 0x02F8) return &com2;
+		return nullptr;
+	}
+
+	void ensure_serial_lazy_vtty(LegacyComPort& port) {
+		if (port.input_policy != SerialInputPolicy::LazyCotConsole || !port.available) return;
+		if (port.base != 0x02F8 || g_com2_vtty_initialized) return;
+		auto* con = serial_console_for_port(port);
+		if (!con) return;
+		g_com2_vtty = VTTY_Append(con);
+		g_com2_vtty_initialized = g_com2_vtty != nullptr;
+	}
 
 	bool probe_legacy_uart_scratch(stduint base) {
 		// Legacy UART SCR is a software scratch register, so a read/write
@@ -125,6 +145,26 @@ namespace {
 			sysinfo_classic(com1, data);
 			return;
 		}
+		if (port.input_policy == SerialInputPolicy::LazyCotConsole) {
+			ensure_serial_lazy_vtty(port);
+			if (!g_com2_vtty) return;
+
+			byte queued = data == '\r' ? '\n' : data;
+			if (!g_com2_cot) {
+				// Provide immediate visible feedback for the first trigger before cot
+				// has a chance to drain and echo the queued character itself.
+				if (data == '\r') {
+					serial_out_byte(port, '\n');
+				}
+				serial_out_byte(port, data);
+			}
+			if (auto* q = VTTY_INNQ(g_com2_vtty)) {
+				q->OutChar(queued);
+			}
+			EnsureCotForVtty(g_com2_vtty, &g_com2_cot);
+			Consman::WakeBlockedWaitersDeferred();
+			return;
+		}
 		if (data == '\r') {
 			serial_out_byte(port, '\n');
 		}
@@ -160,6 +200,12 @@ namespace {
 
 bool SerialCom1Available() {
 	return g_com1_available;
+}
+
+void SerialInitializeLazyCotVttys() {
+	for0a(i, legacy_com_ports) {
+		ensure_serial_lazy_vtty(legacy_com_ports[i]);
+	}
 }
 
 void R_COM1_INIT() {

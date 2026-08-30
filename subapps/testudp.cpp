@@ -39,31 +39,6 @@ static void PrintUsage() {
 	printf("  conn:    testudp 10.0.2.1 7777 mecocoa conn\n\r");
 }
 
-static void PrintIPv4(const uint8 address[4]) {
-	printf("%u.%u.%u.%u", (unsigned)address[0], (unsigned)address[1],
-		(unsigned)address[2], (unsigned)address[3]);
-}
-
-static void PrintRoute() {
-	syscall_net_route_ipv4_t route{};
-	if (syscall(syscall_t::ROUT, stduint(syscall_net_route_func_t::IPv4Default),
-		_IMM(&route), sizeof(route)) < 0) {
-		return;
-	}
-	printf("testudp: route dev=%s ip=", route.name[0] ? route.name : "(none)");
-	PrintIPv4(route.address);
-	printf(" mask=");
-	PrintIPv4(route.netmask);
-	printf(" gw=");
-	PrintIPv4(route.gateway);
-	printf(" mac=%[8H]:%[8H]:%[8H]:%[8H]:%[8H]:%[8H] mtu=%u %s\n\r",
-		(stduint)route.hardware[0], (stduint)route.hardware[1],
-		(stduint)route.hardware[2], (stduint)route.hardware[3],
-		(stduint)route.hardware[4], (stduint)route.hardware[5],
-		(unsigned)route.mtu,
-		(route.flags & syscall_net_route_flag_up) ? "up" : "down");
-}
-
 int main(int argc, char** argv) {
 	if (argc >= 2 && (!StrCompare(argv[1], "-h") || !StrCompare(argv[1], "--help") ||
 		!StrCompare(argv[1], "help"))) {
@@ -80,8 +55,6 @@ int main(int argc, char** argv) {
 		PrintUsage();
 		return 1;
 	}
-
-	PrintRoute();
 
 	int fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
 	if (fd < 0) {

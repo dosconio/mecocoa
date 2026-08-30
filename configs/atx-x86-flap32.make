@@ -165,9 +165,7 @@ qemu_args=-smp 4,cores=2,threads=2 -M pc \
 	-drive file=$(ubinpath)/fixed2.vhd,format=vpc,if=none,id=disk0 \
 	-device ide-hd,drive=disk0,bus=ide.0,unit=0 \
 	-serial stdio\
-	\
-	-netdev tap,id=e1000net,ifname=tap0,script=no,downscript=no \
-	-device e1000,netdev=e1000net,mac=52:54:00:12:34:56 \
+
 
 # [SATA]
 #	-device ahci,id=ahci0 \
@@ -184,7 +182,7 @@ qemu_args=-smp 4,cores=2,threads=2 -M pc \
 ###sudo ip addr add 10.0.2.1/24 dev tap0
 ###sudo ip link set tap0 up
 ###sudo ip route replace 10.0.2.15/32 dev tap0
-
+### testudp 10.0.2.1 7777 mecocoa
 
 run: build run-only
 run-only:
@@ -192,7 +190,10 @@ run-only:
 		$(qemu_args) -audiodev pa,id=speaker -machine pcspk-audiodev=speaker \
 		-audiodev pa,id=sb16audio \
 		-device sb16,audiodev=sb16audio,iobase=0x220,irq=5,dma=1,dma16=5 \
-		-enable-kvm -cpu host || $(qemu) \
+		-enable-kvm -cpu host \
+		-netdev tap,id=e1000net,ifname=tap0,script=no,downscript=no \
+		-device e1000,netdev=e1000net,mac=52:54:00:12:34:56 \
+		|| $(qemu) \
 		$(qemu_args) -audiodev dsound,id=speaker -machine pcspk-audiodev=speaker \
 		-audiodev dsound,id=sb16audio \
 		-device sb16,audiodev=sb16audio,iobase=0x220,irq=5,dma=1,dma16=5

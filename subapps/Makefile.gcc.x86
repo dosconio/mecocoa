@@ -39,6 +39,7 @@ all: $(BIN_DIR) \
 	\
 	$(BIN_DIR)/test \
 	$(BIN_DIR)/testudp \
+	$(BIN_DIR)/netinfo \
 	$(BIN_DIR)/paint \
 	$(BIN_DIR)/cube \
 	$(BIN_DIR)/gblock \
@@ -74,6 +75,10 @@ $(BIN_DIR)/test: subapps/test.cpp $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
 $(BIN_DIR)/testudp: subapps/testudp.cpp $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
 	@echo "MK testudp"
 	$(MCCA_X86_CXX) $(MCCA_X86_CXXFLAGS) -o $@ subapps/testudp.cpp $(MCCA_X86_LDLIBS)
+
+$(BIN_DIR)/netinfo: subapps/netinfo.cpp $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
+	@echo "MK netinfo"
+	$(MCCA_X86_CXX) $(MCCA_X86_CXXFLAGS) -o $@ subapps/netinfo.cpp $(MCCA_X86_LDLIBS)
 
 $(BIN_DIR)/paint: subapps/paint.cpp $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
 	@echo "MK paint"

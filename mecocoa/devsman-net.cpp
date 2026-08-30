@@ -44,9 +44,10 @@ namespace {
 		uint8* rx;
 		uint8* tx;
 		uint8* udp_tx;
+		FMT_NetworkMsg_DRV_FRAME* driver_frame;
 
 		bool IsReady() const {
-			return rx && tx;
+			return rx && tx && driver_frame;
 		}
 
 		bool IsUdpTxReady() const {
@@ -72,6 +73,7 @@ namespace {
 
 	struct NetPendingUdpPacket {
 		uni::Network::IPv4Address target_ip;
+		uni::Network::IPv4Address next_hop;
 		uint16 source_port;
 		uint16 destination_port;
 		stduint payload_length;
@@ -161,18 +163,8 @@ namespace {
 		}
 
 		virtual stdsint Receive(uni::Network::LinkMutableFrameView& frame) override {
-			if (!net_remote_link.owner_tid || !frame.data || !frame.capacity) return -1;
-			FMT_NetworkMsg_DRV_FRAME req{};
-			req.length = 0;
-			req.capacity = uint32(minof(frame.capacity, stduint(NetworkDriverFrameCapacity)));
-			stduint type = _IMM(NetworkMsg::DRV_RECV);
-			if (syssdrv(net_remote_link.owner_tid, &req, sizeof(req), &type)) return -1;
-			if (req.status > 0) {
-				const stduint copy_len = minof(stduint(req.length), frame.capacity);
-				MemCopyN(frame.data, req.data, copy_len);
-				frame.length = copy_len;
-			}
-			return req.status;
+			(void)frame;
+			return -1;
 		}
 
 		virtual stdsint Control(stduint command, void* args) override {
@@ -191,6 +183,9 @@ namespace {
 	bool EnsureNetServiceBuffers() {
 		if (!net_buffers.rx) net_buffers.rx = (uint8*)mempool.allocate(NetFrameBufferSize, 12);
 		if (!net_buffers.tx) net_buffers.tx = (uint8*)mempool.allocate(NetFrameBufferSize, 12);
+		if (!net_buffers.driver_frame) {
+			net_buffers.driver_frame = (FMT_NetworkMsg_DRV_FRAME*)mempool.allocate(sizeof(FMT_NetworkMsg_DRV_FRAME), 4);
+		}
 		return net_buffers.IsReady();
 	}
 
@@ -212,11 +207,68 @@ namespace {
 		return nullptr;
 	}
 
+	stduint FindLinkDeviceIndex(const uni::Network::LinkDevice* target) {
+		for0(i, net_link_device_count) if (net_link_devices[i] == target) return i;
+		return stduint(-1);
+	}
+
+	bool FillIPv4Interface(stduint index, syscall_net_interface_ipv4_t& output) {
+		auto* dev = Devsman::GetLinkDevice(index);
+		if (!dev) return false;
+		output = {};
+		for0(i, uni::Network::IPv4AddressLength) {
+			output.address[i] = net_config.ipv4_address.octet[i];
+			output.netmask[i] = net_config.ipv4_netmask.octet[i];
+		}
+		const auto mac = dev->GetAddress();
+		for0(i, numsof(output.hardware)) output.hardware[i] = mac.octet[i];
+		if (dev->GetState() == uni::Network::LinkState::Up) output.flags |= syscall_net_route_flag_up;
+		output.mtu = uint16(dev->GetMtu());
+		output.link_index = uint16(index);
+		output.link_state = uint16(dev->GetState());
+		const char* name = dev->GetName();
+		if (name) {
+			for0(i, numsof(output.name) - 1) {
+				if (!name[i]) break;
+				output.name[i] = name[i];
+			}
+		}
+		return true;
+	}
+
 	bool IsSameIPv4Subnet(const uni::Network::IPv4Address& lhs, const uni::Network::IPv4Address& rhs,
 		const uni::Network::IPv4Address& mask) {
 		for0(i, uni::Network::IPv4AddressLength) {
 			if ((lhs.octet[i] & mask.octet[i]) != (rhs.octet[i] & mask.octet[i])) return false;
 		}
+		return true;
+	}
+
+	struct NetIPv4Route {
+		uni::Network::LinkDevice* dev;
+		uni::Network::IPv4Address source;
+		uni::Network::IPv4Address next_hop;
+		stduint link_index;
+		bool gateway;
+	};
+
+	bool ResolveIPv4Route(const uni::Network::IPv4Address& target_ip, NetIPv4Route& route) {
+		if (target_ip.IsZero()) return false;
+		auto* dev = FindDefaultLinkDevice();
+		if (!dev) return false;
+		const stduint index = FindLinkDeviceIndex(dev);
+		if (index == stduint(-1)) return false;
+		route = {};
+		route.dev = dev;
+		route.source = net_config.ipv4_address;
+		route.link_index = index;
+		if (IsSameIPv4Subnet(net_config.ipv4_address, target_ip, net_config.ipv4_netmask)) {
+			route.next_hop = target_ip;
+			return true;
+		}
+		if (net_config.ipv4_gateway.IsZero()) return false;
+		route.next_hop = net_config.ipv4_gateway;
+		route.gateway = true;
 		return true;
 	}
 
@@ -271,7 +323,7 @@ namespace {
 		if (index < NetPendingUdpCapacity) net_pending_udp[index].valid = false;
 	}
 
-	stdsint EnqueuePendingUdp(const uni::Network::IPv4Address& target_ip,
+	stdsint EnqueuePendingUdp(const uni::Network::IPv4Address& target_ip, const uni::Network::IPv4Address& next_hop,
 		uint16 source_port, uint16 destination_port, const void* payload, stduint length) {
 		if ((!payload && length) || length > NetPendingUdpPayloadSize) return -1;
 		if (!EnsurePendingUdpStorage()) return -1;
@@ -279,6 +331,7 @@ namespace {
 			auto& packet = net_pending_udp[i];
 			if (packet.valid) continue;
 			packet.target_ip = target_ip;
+			packet.next_hop = next_hop;
 			packet.source_port = source_port;
 			packet.destination_port = destination_port;
 			packet.payload_length = length;
@@ -484,7 +537,7 @@ namespace {
 		const uni::Network::MacAddress& target_mac) {
 		for0(i, NetPendingUdpCapacity) {
 			auto& packet = net_pending_udp[i];
-			if (!packet.valid || !(packet.target_ip == target_ip)) continue;
+			if (!packet.valid || !(packet.next_hop == target_ip)) continue;
 			const stdsint sent = SendUdpFrame(dev, net_buffers.tx, target_mac, net_config.ipv4_address,
 				packet.target_ip, packet.source_port, packet.destination_port,
 				GetPendingUdpPayloadSlot(i), packet.payload_length, net_ipv4_identification++);
@@ -627,6 +680,22 @@ namespace {
 		}
 	}
 
+	void DispatchLinkFrame(uni::Network::LinkDevice& dev, const void* data, stduint length) {
+		if (!data || !length) return;
+		uni::Network::LinkFrameView raw_frame{
+			data,
+			length,
+		};
+		uni::Network::EthernetFrameView eth_frame{};
+		if (!uni::Network::ParseEthernetFrame(raw_frame, eth_frame)) {
+			plogwarn("[Net] rx dev=%s malformed ethernet len=%u",
+				dev.GetName() ? dev.GetName() : "(unnamed)",
+				(unsigned)length);
+			return;
+		}
+		DispatchEthernetFrame(dev, eth_frame);
+	}
+
 	void NetServicePoll() {
 		if (!EnsureNetServiceBuffers()) {
 			plogwarn("[Net] frame buffer allocation failed");
@@ -643,18 +712,7 @@ namespace {
 			const stdsint len = dev->Receive(frame);
 			if (len <= 0) continue;
 			frame.length = stduint(len);
-			uni::Network::LinkFrameView raw_frame{
-				frame.data,
-				frame.length,
-			};
-			uni::Network::EthernetFrameView eth_frame{};
-			if (!uni::Network::ParseEthernetFrame(raw_frame, eth_frame)) {
-				plogwarn("[Net] rx dev=%s malformed ethernet len=%u",
-					dev->GetName() ? dev->GetName() : "(unnamed)",
-					(unsigned)frame.length);
-				continue;
-			}
-			DispatchEthernetFrame(*dev, eth_frame);
+			DispatchLinkFrame(*dev, frame.data, frame.length);
 		}
 	}
 
@@ -708,29 +766,35 @@ namespace {
 		MemSet(net_remote_link.name, 0, sizeof(net_remote_link.name));
 	}
 
-	void NetServiceHandleMessages() {
-		while (syscall(syscall_t::TMSG)) {
-			stduint sig_type = 0;
-			stduint sig_src = 0;
-			union {
-				FMT_NetworkMsg_DRV_ATTACH attach;
-				stdsint status;
-			} msgbuf{};
-			if (sysrecv(ANYPROC, &msgbuf, sizeof(msgbuf), &sig_type, &sig_src)) break;
-			stdsint ret = -1;
-			switch (NetworkMsg(sig_type)) {
-			case NetworkMsg::DRV_ATTACH:
-				ret = NetServiceHandleAttach(sig_src, msgbuf.attach) ? 0 : -1;
-				break;
-			case NetworkMsg::DRV_DETACH:
-				NetServiceHandleDetach(sig_src);
-				ret = 0;
-				break;
-			default:
-				ret = -1;
-				break;
-			}
+	void NetServiceHandleMessage() {
+		if (!EnsureNetServiceBuffers()) {
+			plogwarn("[Net] frame buffer allocation failed");
+			syscall(syscall_t::REST, 1, 10);
+			return;
+		}
+		stduint sig_type = 0;
+		stduint sig_src = 0;
+		auto* msgbuf = net_buffers.driver_frame;
+		if (sysrecv(ANYPROC, msgbuf, sizeof(*msgbuf), &sig_type, &sig_src)) return;
+		stdsint ret = -1;
+		switch (NetworkMsg(sig_type)) {
+		case NetworkMsg::DRV_ATTACH:
+			ret = NetServiceHandleAttach(sig_src, *reinterpret_cast<FMT_NetworkMsg_DRV_ATTACH*>(msgbuf)) ? 0 : -1;
 			syssend_async(sig_src, &ret, sizeof(ret));
+			return;
+		case NetworkMsg::DRV_DETACH:
+			NetServiceHandleDetach(sig_src);
+			ret = 0;
+			syssend_async(sig_src, &ret, sizeof(ret));
+			return;
+		case NetworkMsg::DRV_RX:
+			if (sig_src == net_remote_link.owner_tid && msgbuf->length <= NetworkDriverFrameCapacity) {
+				DispatchLinkFrame(net_remote_link_device, msgbuf->data, msgbuf->length);
+			}
+			return;
+		default:
+			syssend_async(sig_src, &ret, sizeof(ret));
+			return;
 		}
 	}
 }
@@ -845,77 +909,90 @@ stdsint Devsman::SendUdp(const uni::Network::IPv4Address& target_ip,
 			(unsigned)target_ip.octet[2], (unsigned)target_ip.octet[3]);
 		return -1;
 	}
-	if (!IsSameIPv4Subnet(net_config.ipv4_address, target_ip, net_config.ipv4_netmask)) {
-		plogwarn("[Net] send udp out of subnet local=%u.%u.%u.%u/%u.%u.%u.%u target=%u.%u.%u.%u",
-			(unsigned)net_config.ipv4_address.octet[0], (unsigned)net_config.ipv4_address.octet[1],
-			(unsigned)net_config.ipv4_address.octet[2], (unsigned)net_config.ipv4_address.octet[3],
-			(unsigned)net_config.ipv4_netmask.octet[0], (unsigned)net_config.ipv4_netmask.octet[1],
-			(unsigned)net_config.ipv4_netmask.octet[2], (unsigned)net_config.ipv4_netmask.octet[3],
-			(unsigned)target_ip.octet[0], (unsigned)target_ip.octet[1],
-			(unsigned)target_ip.octet[2], (unsigned)target_ip.octet[3]);
-		return -1;
-	}
 	if (!EnsureUdpTxBuffer()) {
 		plogwarn("[Net] send udp tx buffer unavailable");
 		return -1;
 	}
-	auto* dev = FindDefaultLinkDevice();
-	if (!dev) {
-		plogwarn("[Net] send udp no default link device");
+	NetIPv4Route route{};
+	if (!ResolveIPv4Route(target_ip, route)) {
+		plogwarn("[Net] send udp no route target=%u.%u.%u.%u",
+			(unsigned)target_ip.octet[0], (unsigned)target_ip.octet[1],
+			(unsigned)target_ip.octet[2], (unsigned)target_ip.octet[3]);
 		return -1;
 	}
 	uni::Network::MacAddress target_mac{};
-	if (!LookupArpCache(target_ip, target_mac)) {
-		const stdsint pending_index = EnqueuePendingUdp(target_ip, source_port, destination_port, payload, length);
+	if (!LookupArpCache(route.next_hop, target_mac)) {
+		const stdsint pending_index = EnqueuePendingUdp(target_ip, route.next_hop,
+			source_port, destination_port, payload, length);
 		if (pending_index < 0) {
 			plogwarn("[Net] send udp pending queue full/invalid len=%u", (unsigned)length);
 			return -1;
 		}
-		if (SendArpRequest(*dev, net_buffers.udp_tx, target_ip)) return 0;
+		if (SendArpRequest(*route.dev, net_buffers.udp_tx, route.next_hop)) return 0;
 		plogwarn("[Net] send udp arp request failed for %u.%u.%u.%u",
-			(unsigned)target_ip.octet[0], (unsigned)target_ip.octet[1],
-			(unsigned)target_ip.octet[2], (unsigned)target_ip.octet[3]);
+			(unsigned)route.next_hop.octet[0], (unsigned)route.next_hop.octet[1],
+			(unsigned)route.next_hop.octet[2], (unsigned)route.next_hop.octet[3]);
 		ClearPendingUdp(stduint(pending_index));
 		return -1;
 	}
-	return SendUdpFrame(*dev, net_buffers.udp_tx, target_mac, net_config.ipv4_address,
+	return SendUdpFrame(*route.dev, net_buffers.udp_tx, target_mac, route.source,
 		target_ip, source_port, destination_port, payload, length, net_ipv4_identification++);
 }
 
 bool Devsman::GetDefaultIPv4Route(void* route, stduint length) {
 	if (!route || length < sizeof(syscall_net_route_ipv4_t)) return false;
 	auto* output = reinterpret_cast<syscall_net_route_ipv4_t*>(route);
-	*output = {};
 	auto* dev = FindDefaultLinkDevice();
 	if (!dev) return false;
+	const stduint index = FindLinkDeviceIndex(dev);
+	if (index == stduint(-1)) return false;
+	*output = {};
 	for0(i, uni::Network::IPv4AddressLength) {
-		output->address[i] = net_config.ipv4_address.octet[i];
-		output->netmask[i] = net_config.ipv4_netmask.octet[i];
+		output->destination[i] = 0;
+		output->netmask[i] = 0;
 		output->gateway[i] = net_config.ipv4_gateway.octet[i];
 	}
-	const auto mac = dev->GetAddress();
-	for0(i, numsof(output->hardware)) output->hardware[i] = mac.octet[i];
 	output->flags = syscall_net_route_flag_gateway;
 	if (dev->GetState() == uni::Network::LinkState::Up) output->flags |= syscall_net_route_flag_up;
-	output->mtu = uint16(dev->GetMtu());
-	output->link_state = uint16(dev->GetState());
-	const char* name = dev->GetName();
-	if (name) {
-		for0(i, numsof(output->name) - 1) {
-			if (!name[i]) break;
-			output->name[i] = name[i];
-		}
-	}
+	output->link_index = uint16(index);
 	return true;
+}
+
+bool Devsman::GetIPv4Interface(stduint index, void* iface, stduint length) {
+	if (!iface || length < sizeof(syscall_net_interface_ipv4_t)) return false;
+	auto* output = reinterpret_cast<syscall_net_interface_ipv4_t*>(iface);
+	return FillIPv4Interface(index, *output);
+}
+
+stduint Devsman::IPv4ArpCacheCount() {
+	stduint count = 0;
+	for0(i, NetArpCacheCapacity) if (net_arp_cache[i].valid) count++;
+	return count;
+}
+
+bool Devsman::GetIPv4ArpCacheEntry(stduint index, void* entry, stduint length) {
+	if (!entry || length < sizeof(syscall_net_arp_ipv4_t)) return false;
+	auto* output = reinterpret_cast<syscall_net_arp_ipv4_t*>(entry);
+	stduint ordinal = 0;
+	for0(i, NetArpCacheCapacity) {
+		const auto& cached = net_arp_cache[i];
+		if (!cached.valid) continue;
+		if (ordinal++ != index) continue;
+		*output = {};
+		for0(j, uni::Network::IPv4AddressLength) output->address[j] = cached.protocol.octet[j];
+		for0(j, numsof(output->hardware)) output->hardware[j] = cached.hardware.octet[j];
+		output->flags = syscall_net_route_flag_up;
+		output->entry_index = uint16(index);
+		return true;
+	}
+	return false;
 }
 
 void serv_dev_net_loop() {
 	RegisterBuiltinUdpPorts();
 	ploginfo("[Net] Service thread start pid=%u", Taskman::CurrentPID());
 	while (true) {
-		NetServiceHandleMessages();
-		NetServicePoll();
-		NetServiceIdleWait();
+		NetServiceHandleMessage();
 	}
 }
 

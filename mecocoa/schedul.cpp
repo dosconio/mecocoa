@@ -733,6 +733,7 @@ auto Taskman::Schedule(bool omit_slice)->decltype(Schedule())
 		ploginfo("[CPU%u]SCH: Th%u -> Th%u", cpuid, old_tb->tid, new_tb->tid);
 	}
 	#if _MCCA == 0x8664 || _MCCA == 0x8632
+	if (_IMM(&new_tb->context) & 0xF) plogerro("Sch1(%p)", &new_tb->context);
 	((void(*)(NormalTaskContext*, NormalTaskContext*))mglb(SwitchTaskContext))(&new_tb->context, &old_tb->context);
 	#else
 	SwitchTaskContext(&new_tb->context, &old_tb->context);
@@ -783,6 +784,7 @@ void Taskman::SleepAndRelease(Spinlock* lk) {
 	#endif
 	// No explicit unlock of scheduler_lock here, because earlier we unlock lk, but wait!
 	#if _MCCA == 0x8664 || _MCCA == 0x8632
+	if (_IMM(&new_tb->context) & 0xF) plogerro("Sch2(%p)", &new_tb->context);
 	((void(*)(NormalTaskContext*, NormalTaskContext*))mglb(SwitchTaskContext))(&new_tb->context, &old_tb->context);
 	#else
 	SwitchTaskContext(&new_tb->context, &old_tb->context);

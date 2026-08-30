@@ -44,17 +44,33 @@ SECTIONS
 		*/mcca-atx-x86-flap32/freetype.o(.got)
 		depends/freetype/x86/libfreetype.a:(.got)
 	} > RAM2
+	.font.data : {
+		*/libm32d.a:_cc_font-8x5.o(.data .data.* .rodata .rodata.*)
+		*/libm32d.a:_cc_font-16x8.o(.data .data.* .rodata .rodata.*)
+	} > RAM2
 	.drv.text : {
 		*/mcca-atx-x86-flap32/e1000.o(.text .text.*)
+		*/mcca-atx-x86-flap32/au-sb16.o(.text .text.*)
+		*/mcca-atx-x86-flap32/nvmedisk.o(.text .text.*)
+		*/mcca-atx-x86-flap32/scsidisk.o(.text .text.*)
 		*/mcca-atx-x86-flap32/video-vmware.o(.text .text.*)
 	} > RAM2
 	.drv.rodata : {
 		*/mcca-atx-x86-flap32/e1000.o(.rodata .rodata.*)
+		*/mcca-atx-x86-flap32/au-sb16.o(.rodata .rodata.*)
+		*/mcca-atx-x86-flap32/nvmedisk.o(.rodata .rodata.*)
+		*/mcca-atx-x86-flap32/scsidisk.o(.rodata .rodata.*)
 		*/mcca-atx-x86-flap32/video-vmware.o(.rodata .rodata.*)
 	} > RAM2
 	.drv.data : {
 		*/mcca-atx-x86-flap32/e1000.o(.data .data.*)
 		*/mcca-atx-x86-flap32/e1000.o(.got)
+		*/mcca-atx-x86-flap32/au-sb16.o(.data .data.*)
+		*/mcca-atx-x86-flap32/au-sb16.o(.got)
+		*/mcca-atx-x86-flap32/nvmedisk.o(.data .data.*)
+		*/mcca-atx-x86-flap32/nvmedisk.o(.got)
+		*/mcca-atx-x86-flap32/scsidisk.o(.data .data.*)
+		*/mcca-atx-x86-flap32/scsidisk.o(.got)
 		*/mcca-atx-x86-flap32/video-vmware.o(.data .data.*)
 		*/mcca-atx-x86-flap32/video-vmware.o(.got)
 	} > RAM2

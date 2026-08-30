@@ -413,7 +413,7 @@ static stduint _Taskman_Create_Paging(ProcessBlock *ppb, byte ring, stduint stac
 		// not confuse idle with the kernel thread (tid 0).
 		idle_task->pid = ~_IMM0;
 		idle_task->main_thread->tid = ~_IMM0;
-		idle_task->main_thread->priority = 31; // lowest priority
+		idle_task->main_thread->priority = 12; // lowest priority
 		idle_task->main_thread->time_slice = 1;
 		idle_task->main_thread->processor_id = cpu_i;
 		idle_thread(cpu_i) = idle_task->main_thread;

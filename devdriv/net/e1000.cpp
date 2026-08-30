@@ -22,6 +22,7 @@ namespace {
 		STATUS = 0x0008u / 4,
 		EECD = 0x0010u / 4,
 		ICR = 0x00C0u / 4,
+		IMS = 0x00D0u / 4,
 		IMC = 0x00D8u / 4,
 		RCTL = 0x0100u / 4,
 		TCTL = 0x0400u / 4,
@@ -49,6 +50,13 @@ namespace {
 	constexpr uint32 E1000_RCTL_SECRC = 1u << 26;
 	constexpr uint32 E1000_TCTL_EN = 1u << 1;
 	constexpr uint32 E1000_TCTL_PSP = 1u << 3;
+	constexpr uint32 E1000_ICR_TXDW = 1u << 0;
+	constexpr uint32 E1000_ICR_TXQE = 1u << 1;
+	constexpr uint32 E1000_ICR_LSC = 1u << 2;
+	constexpr uint32 E1000_ICR_RXSEQ = 1u << 3;
+	constexpr uint32 E1000_ICR_RXDMT0 = 1u << 4;
+	constexpr uint32 E1000_ICR_RXO = 1u << 6;
+	constexpr uint32 E1000_ICR_RXT0 = 1u << 7;
 	constexpr uint8 E1000_RXD_STAT_DD = 1u << 0;
 	constexpr uint8 E1000_TXD_STAT_DD = 1u << 0;
 	constexpr uint8 E1000_TXD_CMD_EOP = 1u << 0;
@@ -61,6 +69,9 @@ namespace {
 	constexpr stduint E1000_ETHERNET_MIN_FRAME = 60;
 	constexpr stduint E1000_ETHERNET_MAX_FRAME = 1518;
 	constexpr stduint E1000_TX_WAIT_SPINS = 100000;
+	constexpr uint32 E1000_IRQ_MASK =
+		E1000_ICR_TXDW | E1000_ICR_TXQE | E1000_ICR_LSC |
+		E1000_ICR_RXSEQ | E1000_ICR_RXDMT0 | E1000_ICR_RXO | E1000_ICR_RXT0;
 
 	_PACKED(struct) E1000RxDesc {
 		uint64 address;
@@ -141,6 +152,17 @@ namespace {
 			write_reg(E1000Reg::IMC, 0xFFFFFFFFu);
 			(void)read_reg(E1000Reg::ICR);
 			write_reg(E1000Reg::CTRL, read_reg(E1000Reg::CTRL) | E1000_CTRL_SLU);
+		}
+
+		void enable_interrupts() {
+			(void)read_reg(E1000Reg::ICR);
+			write_reg(E1000Reg::IMS, E1000_IRQ_MASK);
+		}
+
+		uint32 service_interrupt() {
+			const uint32 icr = read_reg(E1000Reg::ICR);
+			if (icr & E1000_ICR_LSC) update_link_state();
+			return icr;
 		}
 
 		bool configure_rx() {
@@ -299,7 +321,7 @@ namespace {
 	bool PublishAttach() {
 		FMT_NetworkMsg_DRV_ATTACH attach = {};
 		attach.version = NetworkDriverProtocolVersion;
-		attach.caps = NetworkDriverCap_Poll;
+		attach.caps = NetworkDriverCap_Poll | NetworkDriverCap_RxEvent;
 		attach.dev_handle = uint32(g_e1000.dev_handle);
 		attach.mtu = 1500;
 		for0(i, numsof(g_e1000.mac)) attach.mac[i] = g_e1000.mac[i];
@@ -355,27 +377,52 @@ namespace {
 		if (!g_e1000.configure_rings()) return false;
 		return true;
 	}
-}
 
-int main(int argc, char** argv) {
-	(void)argc;
-	(void)argv;
+	void ProcessControlMessages() {
+		while (syscall(syscall_t::TMSG)) {
+			FMT_NetworkMsg_DRV_FRAME frame = {};
+			CommMsg recv_msg = {};
+			recv_msg.data.address = _IMM(&frame);
+			recv_msg.data.length = sizeof(frame);
+			if (Powercall::SysComm(COMM_RECV, ANYPROC, &recv_msg)) break;
 
-	if (Powercall::Hello() != 0) return -1;
-	if (!InitializeE1000()) return -1;
-	if (!PublishAttach()) return -1;
-	if (Powercall::DevPublish(g_e1000.dev_handle, PwcallDevicePublishCommand::Started) != 0) return -1;
+			switch (NetworkMsg(recv_msg.type)) {
+			case NetworkMsg::DRV_SEND:
+				frame.status = g_e1000.send_frame(frame.data, frame.length);
+				break;
+			case NetworkMsg::DRV_RECV:
+				frame.status = g_e1000.read_frame(frame.data, minof(stduint(frame.capacity), stduint(NetworkDriverFrameCapacity)));
+				frame.length = frame.status > 0 ? uint32(frame.status) : 0;
+				break;
+			default:
+				frame.status = -1;
+				break;
+			}
 
-	for (;;) {
-		FMT_NetworkMsg_DRV_FRAME frame = {};
-		CommMsg recv_msg = {};
-		recv_msg.data.address = _IMM(&frame);
-		recv_msg.data.length = sizeof(frame);
-		if (Powercall::SysComm(COMM_RECV, ANYPROC, &recv_msg)) {
-			syscall(syscall_t::REST, 1, 10);
-			continue;
+			CommMsg reply_msg = {};
+			reply_msg.data.address = _IMM(&frame);
+			reply_msg.data.length = sizeof(frame);
+			reply_msg.type = recv_msg.type;
+			Powercall::SysComm(COMM_SEND_ASYNC, recv_msg.src, &reply_msg);
 		}
+	}
 
+	void PushRxFrames() {
+		while (true) {
+			FMT_NetworkMsg_DRV_FRAME frame = {};
+			frame.capacity = NetworkDriverFrameCapacity;
+			frame.status = g_e1000.read_frame(frame.data, NetworkDriverFrameCapacity);
+			if (frame.status <= 0) return;
+			frame.length = uint32(frame.status);
+			CommMsg send_msg = {};
+			send_msg.data.address = _IMM(&frame);
+			send_msg.data.length = sizeof(frame);
+			send_msg.type = _IMM(NetworkMsg::DRV_RX);
+			if (Powercall::SysComm(COMM_SEND_ASYNC, Task_Net_Serv, &send_msg)) return;
+		}
+	}
+
+	void HandleControlMessage(CommMsg& recv_msg, FMT_NetworkMsg_DRV_FRAME& frame) {
 		switch (NetworkMsg(recv_msg.type)) {
 		case NetworkMsg::DRV_SEND:
 			frame.status = g_e1000.send_frame(frame.data, frame.length);
@@ -394,6 +441,34 @@ int main(int argc, char** argv) {
 		reply_msg.data.length = sizeof(frame);
 		reply_msg.type = recv_msg.type;
 		Powercall::SysComm(COMM_SEND_ASYNC, recv_msg.src, &reply_msg);
+	}
+}
+
+int main(int argc, char** argv) {
+	(void)argc;
+	(void)argv;
+
+	if (Powercall::Hello() != 0) return -1;
+	if (!InitializeE1000()) return -1;
+	if (!PublishAttach()) return -1;
+	if (Powercall::DevPublish(g_e1000.dev_handle, PwcallDevicePublishCommand::Started) != 0) return -1;
+	g_e1000.enable_interrupts();
+	PushRxFrames();
+
+	for (;;) {
+		ProcessControlMessages();
+		PushRxFrames();
+		FMT_NetworkMsg_DRV_FRAME frame = {};
+		CommMsg recv_msg = {};
+		recv_msg.data.address = _IMM(&frame);
+		recv_msg.data.length = sizeof(frame);
+		if (Powercall::SysComm(COMM_RECV, ANYPROC, &recv_msg)) continue;
+		if (recv_msg.data.length == 0) {
+			g_e1000.service_interrupt();
+			PushRxFrames();
+			continue;
+		}
+		HandleControlMessage(recv_msg, frame);
 	}
 }
 

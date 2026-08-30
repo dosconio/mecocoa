@@ -5,7 +5,7 @@
 #include "../include/mecocoa.hpp"
 
 //// ---- ---- Bcon Impl ---- ---- ////
-#ifdef _ARC_x86 // x86:
+#if (_MCCA & 0xFF00) == 0x8600 // x86/x64:
 
 extern BareConsole Bcons[TTY_NUMBER];
 extern Spinlock scheduler_lock;
@@ -19,13 +19,10 @@ static bool Bcons_CotAlive(ProcessBlock* p) {
 	}
 	return false;
 }
-ProcessBlock* Bcons_EnsureCot(unsigned tty_no) {
-	if (Consman::ento_gui || tty_no >= TTY_NUMBER) return nullptr;
-	if (Bcons_CotAlive(Bcons_pcot[tty_no])) return Bcons_pcot[tty_no];
-	Bcons_pcot[tty_no] = nullptr;
-
-	auto tty_node = vttys[tty_no];
-	if (!tty_node) return nullptr;
+ProcessBlock* EnsureCotForVtty(Dnode* tty_node, ProcessBlock** cache_slot) {
+	if (!tty_node || !cache_slot) return nullptr;
+	if (Bcons_CotAlive(*cache_slot)) return *cache_slot;
+	*cache_slot = nullptr;
 
 	ProcessBlock* p = Taskman::CreateFile("/md0/cot", RING_U, Task_Kernel);
 	if (!p) return nullptr;
@@ -49,8 +46,13 @@ ProcessBlock* Bcons_EnsureCot(unsigned tty_no) {
 		pblock->proc_group.Append(p->pid);
 	}
 
-	Bcons_pcot[tty_no] = p;
+	*cache_slot = p;
 	return p;
+}
+ProcessBlock* Bcons_EnsureCot(unsigned tty_no) {
+	if (Consman::ento_gui) return nullptr;
+	if (tty_no >= TTY_NUMBER) return nullptr;
+	return EnsureCotForVtty(vttys[tty_no], &Bcons_pcot[tty_no]);
 }
 
 void uni::BareConsole::doshow(void* _) {

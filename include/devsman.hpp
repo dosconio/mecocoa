@@ -229,6 +229,9 @@ public:
 	static stdsint SendUdp(const uni::Network::MacAddress& target_mac, const uni::Network::IPv4Address& target_ip,
 		uint16 source_port, uint16 destination_port, const void* payload, stduint length);
 	static bool GetDefaultIPv4Route(void* route, stduint length);
+	static bool GetIPv4Interface(stduint index, void* iface, stduint length);
+	static stduint IPv4ArpCacheCount();
+	static bool GetIPv4ArpCacheEntry(stduint index, void* entry, stduint length);
 	static const char* LookupPciClassName(uint8 class_base, uint8 class_sub, uint8 class_if);
 	static const char* LookupPciDeviceName(uint16 vendor_id, uint16 device_id, uint8 class_base = 0, uint8 class_sub = 0);
 	static const char* LookupPciVendorName(uint16 vendor_id);

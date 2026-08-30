@@ -390,6 +390,52 @@ DEFSYSC sysc_ROUT(stduint func, stduint p1, stduint p2) {
 		return -1;
 		#endif
 	}
+	case syscall_net_route_func_t::IPv4InterfaceCount: {
+		if (p2 < sizeof(stduint)) return -1;
+		#if (_MCCA & 0xFF00) == 0x8600
+		const stduint count = Devsman::LinkDeviceCount();
+		MccaMemCopyP((void*)p1, pb, false, &count, nullptr, true, sizeof(count));
+		return 0;
+		#else
+		return -1;
+		#endif
+	}
+	case syscall_net_route_func_t::IPv4Interface: {
+		#if (_MCCA & 0xFF00) == 0x8600
+		syscall_net_interface_ipv4_t iface{};
+		if (p2 < sizeof(iface)) return -1;
+		MccaMemCopyP(&iface, nullptr, true, (void*)p1, pb, false, sizeof(iface));
+		const stduint index = iface.link_index;
+		if (!Devsman::GetIPv4Interface(index, &iface, sizeof(iface))) return -1;
+		MccaMemCopyP((void*)p1, pb, false, &iface, nullptr, true, sizeof(iface));
+		return 0;
+		#else
+		return -1;
+		#endif
+	}
+	case syscall_net_route_func_t::IPv4ArpCacheCount: {
+		if (p2 < sizeof(stduint)) return -1;
+		#if (_MCCA & 0xFF00) == 0x8600
+		const stduint count = Devsman::IPv4ArpCacheCount();
+		MccaMemCopyP((void*)p1, pb, false, &count, nullptr, true, sizeof(count));
+		return 0;
+		#else
+		return -1;
+		#endif
+	}
+	case syscall_net_route_func_t::IPv4ArpCacheEntry: {
+		#if (_MCCA & 0xFF00) == 0x8600
+		syscall_net_arp_ipv4_t entry{};
+		if (p2 < sizeof(entry)) return -1;
+		MccaMemCopyP(&entry, nullptr, true, (void*)p1, pb, false, sizeof(entry));
+		const stduint index = entry.entry_index;
+		if (!Devsman::GetIPv4ArpCacheEntry(index, &entry, sizeof(entry))) return -1;
+		MccaMemCopyP((void*)p1, pb, false, &entry, nullptr, true, sizeof(entry));
+		return 0;
+		#else
+		return -1;
+		#endif
+	}
 	default:
 		return -1;
 	}

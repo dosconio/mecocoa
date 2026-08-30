@@ -257,7 +257,9 @@ int msg_send(ThreadBlock* fo_th, stduint too, _Comment(vaddr) CommMsg* msg, bool
 		}
 		fo_th->queue_send_queuenext = nullptr;// keep this at tail
 		// fo_th->ring_coreid = CORE_ID_INVALID;
-		guard.~SpinlockLocal();
+		auto* sl = guard.spinlock;
+		guard.spinlock = nullptr;
+		sl->Release(guard.old_if);
 		Taskman::Schedule(true);
 		if (fo_th->unsolved_msg == (CommMsg*)-1) {
 			fo_th->unsolved_msg = nullptr;
@@ -395,7 +397,9 @@ int msg_recv(ThreadBlock* to_th, stduint foo, _Comment(vaddr) CommMsg* msg, bool
 			to_th->unsolved_msg = msg; to_th->unsolved_msg_from_kernel = msg_in_kernel;
 			to_th->recv_fo_whom = fo_th_tgt;
 			// to_th->ring_coreid = CORE_ID_INVALID;
-			guard.~SpinlockLocal();
+			auto* sl = guard.spinlock;
+			guard.spinlock = nullptr;
+			sl->Release(guard.old_if);
 			Taskman::Schedule(true);
 			if (to_th->unsolved_msg == (CommMsg*)-1) {
 				to_th->unsolved_msg = nullptr;
@@ -456,7 +460,9 @@ void msg_cleanup_thread(ThreadBlock* th) {
 	th->async_messages.Remove(0, th->async_messages.Count());
 
 	#if _MCCA == 0x8632
-	guard.~SpinlockLocal();
+	auto* sl = guard.spinlock;
+	guard.spinlock = nullptr;
+	sl->Release(guard.old_if);
 	while (!wake_list.isEmpty()) {
 		ThreadBlock* wake = nullptr;
 		wake_list.Dequeue(wake);

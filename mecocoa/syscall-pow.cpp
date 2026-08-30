@@ -17,6 +17,9 @@ bool IsPwcall(syscall_t callid) {
 
 static constexpr stduint PwcallDeviceHandleBase = 1;
 static constexpr stduint PwcallDmaHandleBase = 0x10000;
+#if (_MCCA & 0xFF00) == 0x8600
+static constexpr uint8 PwcallNetIrqVector = 0x78;
+#endif
 
 namespace {
 	static void FreePwcallHandleSlotNode(pureptr_t inp);
@@ -45,6 +48,9 @@ namespace {
 
 	dchain_t power_handle_table = {};
 	alignas(Spinlock) byte power_handle_lock_raw[sizeof(Spinlock)] = {};
+	#if (_MCCA & 0xFF00) == 0x8600
+	stduint pwcall_net_irq_tid = 0;
+	#endif
 
 	static inline Spinlock* PwcallHandleLock() {
 		return reinterpret_cast<Spinlock*>(power_handle_lock_raw);
@@ -97,6 +103,20 @@ namespace {
 }
 
 #if (_MCCA & 0xFF00) == 0x8600
+static bool PwcallIsE1000Node(const DeviceNode* node) {
+	if (!node || DeviceNodeType(node->fields.node_type) != DeviceNodeType::PciDevice) return false;
+	if (node->fields.vendor_id != 0x8086u) return false;
+	switch (node->fields.device_id) {
+	case 0x100Eu:
+	case 0x100Fu:
+	case 0x1010u:
+	case 0x10D3u:
+		return true;
+	default:
+		return false;
+	}
+}
+
 static void PwcallEnablePciDeviceAccess(DeviceNode* node) {
 	if (!node || DeviceNodeType(node->fields.node_type) != DeviceNodeType::PciDevice) return;
 	uni::PCI::Device dev{};
@@ -116,6 +136,32 @@ static void PwcallEnablePciDeviceAccess(DeviceNode* node) {
 			DeviceResourceType(res.type) == DeviceResourceType::IoPortRange) cmd |= 0x0001u;
 	}
 	uni::PCI::write_config_register(dev, 0x04, cmd);
+}
+
+extern "C" void Handint_E1000();
+
+static bool PwcallRouteNetInterrupt(DeviceNode* node, stduint tid) {
+	if (!PwcallIsE1000Node(node) || !tid) return false;
+	const auto* irq = Devsman::FindResource(node, DeviceResourceType::IrqLine, 0);
+	if (!irq) return false;
+	const uint8 line = uint8(irq->start);
+	if (line >= 24 || IC.getType() == 0) return false;
+	#if _MCCA == 0x8664
+	IC[PwcallNetIrqVector].setModeRupt(mglb(Handint_E1000_Entry), SegCo64);
+	#else
+	IC[PwcallNetIrqVector].setRange(mglb(Handint_E1000_Entry), SegCo32);
+	#endif
+	register_interrupt_handler(PwcallNetIrqVector, Handint_E1000);
+	IC.IO_Writ64(0x10 + line * 2, PwcallNetIrqVector);
+	pwcall_net_irq_tid = tid;
+	return true;
+}
+#endif
+
+#if (_MCCA & 0xFF00) == 0x8600
+extern "C" void Handint_E1000() {
+	if (pwcall_net_irq_tid) rupt_proc(pwcall_net_irq_tid, PwcallNetIrqVector);
+	IC.SendEOI(PwcallNetIrqVector);
 }
 #endif
 
@@ -715,6 +761,9 @@ stdsint HandlePwcall(syscall_t callid, stduint p1, stduint p2, stduint p3) {
 		switch (PwcallDevicePublishCommand(p2)) {
 		case PwcallDevicePublishCommand::Started:
 			if (!node->fields.binding.driver_name) return -1;
+			#if (_MCCA & 0xFF00) == 0x8600
+			(void)PwcallRouteNetInterrupt(node, Taskman::CurrentTID());
+			#endif
 			node->fields.binding.state = static_cast<uint32>(DriverBindingState::Started);
 			node->fields.binding.probe_result = 0;
 			return 0;

@@ -67,6 +67,7 @@ static uni::BitmapFontEngine loader_font_engine(1);
 
 extern UART_t com1;
 extern bool SerialCom1Available();
+extern void SerialInitializeLazyCotVttys();
 bool Consman::Initialize() {
 	// con0_out = 0;
 	Bcons[0].Reset(bda->screen_columns, 24, _VIDEO_ADDR_BUFFER, 0 * 50); Bcons[0].setShowY(0, 24);
@@ -104,11 +105,13 @@ bool Consman::Initialize() {
 		Bcons[0].Scroll(24);
 		for0a(i, Bcons) ttys.Append(dynamic_cast<Console_t*>(&Bcons[i]));
 		for0a(i, Bcons) VTTY_Append((&Bcons[i]));
+		SerialInitializeLazyCotVttys();
 		plogwarn("There is no default 800xN-8888 Video Mode");
 		return true;
 	}
 	else if (SerialCom1Available()) VTTY_Append(&com1);
 	else plogwarn("COM1 unavailable, skip serial VTTY append");
+	SerialInitializeLazyCotVttys();
 
 	// config layman
 	#if !defined(_UEFI)
