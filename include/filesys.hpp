@@ -108,6 +108,7 @@ struct SocketHandle {
 	Network::SocketType type = Network::SocketType::Datagram;
 	Network::SocketProtocol protocol = Network::SocketProtocol::Default;
 	uint16 flags = 0;
+	stduint udp_inbox_id = stduint(-1);
 	bool is_bound = false;
 	bool is_connected = false;
 	Network::SocketEndpointIPv4 local_ipv4 = {};
@@ -152,8 +153,11 @@ public:
 	static int SendSocket(vfs_file* file, const void* payload, stduint length, const Network::SocketAddress* address);
 	static int RecvSocket(vfs_file* file, void* payload, stduint capacity,
 		Network::SocketAddress* address, stduint* address_length, stduint flags = 0);
+	static int Poll(vfs_file* file, stduint events, stduint* revents);
 	static int GetSocketAddress(vfs_file* file, bool peer,
 		Network::SocketAddress* address, stduint* address_length);
+	static int SetSocketOption(vfs_file* file, stduint level, stduint option_name, int value);
+	static int GetSocketOption(vfs_file* file, stduint level, stduint option_name, int* value);
 	static int CloseSocket(vfs_file* file);
 
 public:

@@ -221,10 +221,17 @@ public:
 	static uni::Network::LinkDevice* GetLinkDevice(stduint index);
 	static bool OpenUdpPort(uint16 port);
 	static bool BindUdpPort(uint16 port);
+	static bool BindUdpPort(uint16 port, bool reuse_address, stduint& inbox_id);
 	static bool AllocateUdpPort(uint16& port);
+	static bool AllocateUdpPort(uint16& port, stduint& inbox_id);
 	static bool CloseUdpPort(uint16 port);
+	static bool CloseUdpPort(uint16 port, stduint inbox_id);
 	static bool WaitUdp(uint16 port);
+	static bool WaitUdp(uint16 port, stduint inbox_id);
+	static bool HasUdp(uint16 port, stduint inbox_id);
 	static stdsint ReceiveUdp(uint16 port, uni::Network::UDPDatagramContext& context, void* payload, stduint capacity);
+	static stdsint ReceiveUdp(uint16 port, stduint inbox_id,
+		uni::Network::UDPDatagramContext& context, void* payload, stduint capacity);
 	static stdsint SendUdp(const uni::Network::IPv4Address& target_ip,
 		uint16 source_port, uint16 destination_port, const void* payload, stduint length);
 	static stdsint SendUdp(const uni::Network::MacAddress& target_mac, const uni::Network::IPv4Address& target_ip,

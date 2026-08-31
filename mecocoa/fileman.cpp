@@ -167,6 +167,33 @@ stdsint ProcessBlock::RecvSocket(int fd, void* payload, stduint capacity,
 	return Filesys::RecvSocket(file, payload, capacity, address, address_length, flags);
 }
 
+stdsint ProcessBlock::Poll(syscall_pollfd_t* fds, stduint nfds, stdsint timeout) {
+	if (timeout != 0) return -1;
+	if (!nfds) return 0;
+	if (!fds) return -1;
+	auto files = this->fileman.Lock();
+	stdsint ready = 0;
+	for0(i, nfds) {
+		fds[i].revents = 0;
+		const int fd = fds[i].fd;
+		if (fd < 0 || fd >= (stdsint)files->pfiles.Count() || !files->pfiles[fd] || !files->pfiles[fd]->vfile) {
+			fds[i].revents = syscall_poll_invalid;
+			ready++;
+			continue;
+		}
+		auto* file = files->pfiles[fd]->vfile;
+		stduint revents = 0;
+		if (Filesys::Poll(file, (stduint)fds[i].events, &revents) < 0) {
+			fds[i].revents = syscall_poll_error;
+			ready++;
+			continue;
+		}
+		fds[i].revents = (sint16)revents;
+		if (fds[i].revents) ready++;
+	}
+	return ready;
+}
+
 stdsint ProcessBlock::Fcntl(int fd, int cmd, stduint arg) {
 	auto files = this->fileman.Lock();
 	if (fd < 0 || fd >= (stdsint)files->pfiles.Count() || !files->pfiles[fd] || !files->pfiles[fd]->vfile) return -1;
@@ -194,6 +221,22 @@ stdsint ProcessBlock::GetSocketAddress(int fd, bool peer,
 	auto* file = files->pfiles[fd]->vfile;
 	if (!file->f_inode || (file->f_inode->i_mode & I_TYPE_MASK) != I_SOCK) return -1;
 	return Filesys::GetSocketAddress(file, peer, address, address_length);
+}
+
+stdsint ProcessBlock::SetSocketOption(int fd, stduint level, stduint option_name, int value) {
+	auto files = this->fileman.Lock();
+	if (fd < 0 || fd >= (stdsint)files->pfiles.Count() || !files->pfiles[fd] || !files->pfiles[fd]->vfile) return -1;
+	auto* file = files->pfiles[fd]->vfile;
+	if (!file->f_inode || (file->f_inode->i_mode & I_TYPE_MASK) != I_SOCK) return -1;
+	return Filesys::SetSocketOption(file, level, option_name, value);
+}
+
+stdsint ProcessBlock::GetSocketOption(int fd, stduint level, stduint option_name, int* value) {
+	auto files = this->fileman.Lock();
+	if (fd < 0 || fd >= (stdsint)files->pfiles.Count() || !files->pfiles[fd] || !files->pfiles[fd]->vfile) return -1;
+	auto* file = files->pfiles[fd]->vfile;
+	if (!file->f_inode || (file->f_inode->i_mode & I_TYPE_MASK) != I_SOCK) return -1;
+	return Filesys::GetSocketOption(file, level, option_name, value);
 }
 
 stduint ProcessBlock::Rdwt(bool wr_type, stduint fid, Slice slice)

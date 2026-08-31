@@ -4,6 +4,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 
@@ -34,13 +35,14 @@ static bool ParseIPv4(const char* text, in_addr_t* output) {
 }
 
 static void PrintUsage() {
-	printf("usage: testudp [--dontwait] [--nonblock] [--listen] [ipv4] [port] [payload] [conn]\n\r");
+	printf("usage: testudp [--dontwait] [--nonblock] [--poll] [--reuse] [--listen] [ipv4] [port] [payload] [conn]\n\r");
 	printf("  default: testudp 10.0.2.1 7 mecocoa\n\r");
 	printf("  sendto:  testudp 10.0.2.1 7777 mecocoa\n\r");
 	printf("  conn:    testudp 10.0.2.1 7777 mecocoa conn\n\r");
 	printf("  nowait:  testudp --dontwait 10.0.2.1 7777 mecocoa\n\r");
 	printf("  nbread:  testudp --nonblock 10.0.2.1 7777 mecocoa conn\n\r");
-	printf("  listen:  testudp --listen 7777\n\r");
+	printf("  poll:    testudp --poll 10.0.2.1 7777 mecocoa\n\r");
+	printf("  listen:  testudp --reuse --listen 7777\n\r");
 }
 
 static void PrintSocketAddress(const char* label, const struct sockaddr_in& address) {
@@ -65,6 +67,16 @@ static void PrintSocketNames(int fd, bool peer) {
 	}
 }
 
+static bool SetReuseAddress(int fd) {
+	int enable = 1;
+	if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &enable, sizeof(enable)) < 0) return false;
+	int value = 0;
+	socklen_t length = sizeof(value);
+	if (getsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &value, &length) < 0) return false;
+	printf("testudp: reuseaddr=%d\n\r", value);
+	return value != 0;
+}
+
 int main(int argc, char** argv) {
 	if (argc >= 2 && (!StrCompare(argv[1], "-h") || !StrCompare(argv[1], "--help") ||
 		!StrCompare(argv[1], "help"))) {
@@ -77,6 +89,8 @@ int main(int argc, char** argv) {
 	bool dont_wait = false;
 	bool nonblock = false;
 	bool listen_mode = false;
+	bool reuse_address = false;
+	bool use_poll = false;
 	for (int i = 1; i < argc; i++) {
 		if (StrCompare(argv[i], "conn") == 0) {
 			use_connect = true;
@@ -92,6 +106,14 @@ int main(int argc, char** argv) {
 		}
 		if (StrCompare(argv[i], "--listen") == 0) {
 			listen_mode = true;
+			continue;
+		}
+		if (StrCompare(argv[i], "--reuse") == 0) {
+			reuse_address = true;
+			continue;
+		}
+		if (StrCompare(argv[i], "--poll") == 0) {
+			use_poll = true;
 			continue;
 		}
 		if (positional_count >= 3) {
@@ -127,6 +149,11 @@ int main(int argc, char** argv) {
 			close(fd);
 			return 1;
 		}
+	}
+	if (reuse_address && !SetReuseAddress(fd)) {
+		printf("testudp: reuseaddr failed\n\r");
+		close(fd);
+		return 1;
 	}
 
 	if (listen_mode) {
@@ -206,6 +233,24 @@ int main(int argc, char** argv) {
 	const stduint receive_attempts = no_wait_receive ? 1 : 50;
 	const int receive_flags = dont_wait ? MSG_DONTWAIT : 0;
 	for0(i, receive_attempts) {
+		if (use_poll) {
+			struct pollfd pfd{};
+			pfd.fd = fd;
+			pfd.events = POLLIN;
+			const int poll_ready = poll(&pfd, 1, 0);
+			if (poll_ready < 0) {
+				printf("testudp: poll failed\n\r");
+				close(fd);
+				return 1;
+			}
+			if (poll_ready == 0 || !(pfd.revents & POLLIN)) {
+				if (!no_wait_receive) {
+					sysrest(1, 50);
+					continue;
+				}
+			}
+			printf("testudp: poll=%d revents=%04x\n\r", poll_ready, (unsigned)pfd.revents);
+		}
 		if (use_connect) {
 			received = dont_wait ? recv(fd, buffer, sizeof(buffer) - 1, receive_flags) :
 				read(fd, buffer, sizeof(buffer) - 1);

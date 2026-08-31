@@ -303,8 +303,11 @@ public:
 	auto SendSocket(int fd, const void* payload, stduint length, const uni::Network::SocketAddress* address) -> stdsint;
 	auto RecvSocket(int fd, void* payload, stduint capacity,
 		uni::Network::SocketAddress* address, stduint* address_length, stduint flags = 0) -> stdsint;
+	auto Poll(syscall_pollfd_t* fds, stduint nfds, stdsint timeout) -> stdsint;
 	auto GetSocketAddress(int fd, bool peer,
 		uni::Network::SocketAddress* address, stduint* address_length) -> stdsint;
+	auto SetSocketOption(int fd, stduint level, stduint option_name, int value) -> stdsint;
+	auto GetSocketOption(int fd, stduint level, stduint option_name, int* value) -> stdsint;
 	auto Rdwt(bool wr_type, stduint fid, Slice slice) -> stduint;
 	auto Close(int fid) -> bool;
 	auto Seek(int fd, stdsint off, int whence) -> stdsint;

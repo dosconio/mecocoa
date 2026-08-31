@@ -151,19 +151,27 @@ extern "C" int getpeername(int sockfd, struct sockaddr* address, socklen_t* addr
 }
 
 extern "C" int setsockopt(int sockfd, int level, int option_name, const void* option_value, socklen_t option_length) {
-	(void)sockfd;
-	(void)level;
-	(void)option_name;
-	(void)option_value;
-	(void)option_length;
-	return -1;
+	syscall_net_socket_option_t request{};
+	request.level = (stduint)level;
+	request.option_name = (stduint)option_name;
+	request.option_value = (void*)option_value;
+	request.option_length = option_length;
+	return (int)syscall(syscall_t::SOPT, (stduint)sockfd,
+		_IMM(&request), stduint(syscall_net_socket_option_func_t::Set));
 }
 
 extern "C" int getsockopt(int sockfd, int level, int option_name, void* option_value, socklen_t* option_length) {
-	(void)sockfd;
-	(void)level;
-	(void)option_name;
-	(void)option_value;
-	(void)option_length;
-	return -1;
+	if (!option_length) return -1;
+	stduint kernel_option_length = *option_length;
+	syscall_net_socket_option_t request{};
+	request.level = (stduint)level;
+	request.option_name = (stduint)option_name;
+	request.option_value = option_value;
+	request.option_length = kernel_option_length;
+	request.result_length = &kernel_option_length;
+	const int ret = (int)syscall(syscall_t::SOPT, (stduint)sockfd,
+		_IMM(&request), stduint(syscall_net_socket_option_func_t::Get));
+	if (ret < 0) return ret;
+	*option_length = (socklen_t)kernel_option_length;
+	return 0;
 }

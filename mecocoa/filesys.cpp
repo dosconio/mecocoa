@@ -23,6 +23,7 @@ namespace uni {
 	static vfs_dentry* vfs_root = nullptr; // Global root directory
 	Mutex vfs_lock;
 	static constexpr uint16 SocketHandleFlagLocalAddressAuto = 0x0001u;
+	static constexpr uint16 SocketHandleFlagReuseAddress = 0x0002u;
 
 	static stduint count_mounts_for_source_node_unlocked(DeviceNode* source_device_node) {
 		if (!source_device_node) return 0;
@@ -1708,10 +1709,13 @@ int Filesys::BindSocket(vfs_file* file, const Network::SocketAddress& address) {
 	(void)ipv4;
 	return -1;
 	#else
-	if (!Devsman::BindUdpPort(ipv4.port)) return -1;
+	stduint inbox_id = stduint(-1);
+	const bool reuse_address = (socket->flags & SocketHandleFlagReuseAddress) != 0;
+	if (!Devsman::BindUdpPort(ipv4.port, reuse_address, inbox_id)) return -1;
 
 	socket->local_ipv4.address = ipv4.address;
 	socket->local_ipv4.port = ipv4.port;
+	socket->udp_inbox_id = inbox_id;
 	socket->flags &= ~SocketHandleFlagLocalAddressAuto;
 	socket->protocol = Network::SocketProtocol::UDP;
 	socket->is_bound = true;
@@ -1738,8 +1742,10 @@ int Filesys::ConnectSocket(vfs_file* file, const Network::SocketAddress& address
 	#else
 	if (!socket->is_bound) {
 		uint16 local_port = 0;
-		if (!Devsman::AllocateUdpPort(local_port)) return -1;
+		stduint inbox_id = stduint(-1);
+		if (!Devsman::AllocateUdpPort(local_port, inbox_id)) return -1;
 		socket->local_ipv4.port = local_port;
+		socket->udp_inbox_id = inbox_id;
 		socket->flags |= SocketHandleFlagLocalAddressAuto;
 		socket->protocol = Network::SocketProtocol::UDP;
 		socket->is_bound = true;
@@ -1780,8 +1786,10 @@ int Filesys::SendSocket(vfs_file* file, const void* payload, stduint length, con
 	#else
 	if (!socket->is_bound) {
 		uint16 local_port = 0;
-		if (!Devsman::AllocateUdpPort(local_port)) return -1;
+		stduint inbox_id = stduint(-1);
+		if (!Devsman::AllocateUdpPort(local_port, inbox_id)) return -1;
 		socket->local_ipv4.port = local_port;
+		socket->udp_inbox_id = inbox_id;
 		socket->flags |= SocketHandleFlagLocalAddressAuto;
 		socket->protocol = Network::SocketProtocol::UDP;
 		socket->is_bound = true;
@@ -1811,10 +1819,12 @@ int Filesys::RecvSocket(vfs_file* file, void* payload, stduint capacity,
 	#else
 	Network::UDPDatagramContext context{};
 	if (file->f_mode & O_NONBLOCK) flags &= ~syscall_net_io_flag_wait;
-	stdsint received = Devsman::ReceiveUdp(socket->local_ipv4.port, context, payload, capacity);
+	stdsint received = Devsman::ReceiveUdp(socket->local_ipv4.port,
+		socket->udp_inbox_id, context, payload, capacity);
 	if (received == 0 && (flags & syscall_net_io_flag_wait)) {
-		if (!Devsman::WaitUdp(socket->local_ipv4.port)) return 0;
-		received = Devsman::ReceiveUdp(socket->local_ipv4.port, context, payload, capacity);
+		if (!Devsman::WaitUdp(socket->local_ipv4.port, socket->udp_inbox_id)) return 0;
+		received = Devsman::ReceiveUdp(socket->local_ipv4.port,
+			socket->udp_inbox_id, context, payload, capacity);
 	}
 	if (received <= 0) return received;
 
@@ -1824,6 +1834,57 @@ int Filesys::RecvSocket(vfs_file* file, void* payload, stduint capacity,
 		*address_length = sizeof(Network::SocketAddressIPv4);
 	}
 	return received;
+	#endif
+}
+
+int Filesys::Poll(vfs_file* file, stduint events, stduint* revents) {
+	if (!revents) return -1;
+	*revents = 0;
+	if (!file || !file->f_inode) return -1;
+	const stduint type = file->f_inode->i_mode & I_TYPE_MASK;
+
+	if (type == I_NAMED_PIPE) {
+		PipeChannel* chan = (PipeChannel*)file->f_inode->internal_handler;
+		if (!chan) return -1;
+		chan->lock.Acquire();
+		if ((events & syscall_poll_in) && (!chan->buffer.is_empty() || chan->writer_count == 0)) {
+			*revents |= syscall_poll_in;
+		}
+		if ((events & syscall_poll_out) && !chan->buffer.is_full() && chan->reader_count != 0) {
+			*revents |= syscall_poll_out;
+		}
+		if (chan->writer_count == 0) *revents |= syscall_poll_hangup;
+		if (chan->reader_count == 0) *revents |= syscall_poll_error;
+		chan->lock.Release();
+		return 0;
+	}
+
+	if (type != I_SOCK) {
+		const int access = file->f_mode & O_ACCMODE;
+		if ((events & syscall_poll_in) && access != O_WRONLY) *revents |= syscall_poll_in;
+		if ((events & syscall_poll_out) && access != O_RDONLY) *revents |= syscall_poll_out;
+		return 0;
+	}
+
+	SocketHandle* socket = Filesys::GetSocket(file);
+	if (!socket) return -1;
+	if (socket->domain != Network::SocketDomain::IPv4) return -1;
+	if (socket->type != Network::SocketType::Datagram) return -1;
+	if (socket->protocol != Network::SocketProtocol::UDP &&
+		socket->protocol != Network::SocketProtocol::Default) return -1;
+
+	#if (_MCCA & 0xFF00) != 0x8600
+	(void)events;
+	return -1;
+	#else
+	if ((events & syscall_poll_in) && socket->is_bound &&
+		Devsman::HasUdp(socket->local_ipv4.port, socket->udp_inbox_id)) {
+		*revents |= syscall_poll_in;
+	}
+	if (events & syscall_poll_out) {
+		*revents |= syscall_poll_out;
+	}
+	return 0;
 	#endif
 }
 
@@ -1859,6 +1920,34 @@ int Filesys::GetSocketAddress(vfs_file* file, bool peer,
 	Network::SocketWriteAddress(*ipv4, endpoint.address, endpoint.port);
 	*address_length = sizeof(Network::SocketAddressIPv4);
 	return 0;
+}
+
+int Filesys::SetSocketOption(vfs_file* file, stduint level, stduint option_name, int value) {
+	SocketHandle* socket = Filesys::GetSocket(file);
+	if (!socket) return -1;
+	if (level != syscall_net_socket_level_socket) return -1;
+	switch (option_name) {
+	case syscall_net_socket_option_reuse_address:
+		if (socket->is_bound) return -1;
+		if (value) socket->flags |= SocketHandleFlagReuseAddress;
+		else socket->flags &= ~SocketHandleFlagReuseAddress;
+		return 0;
+	default:
+		return -1;
+	}
+}
+
+int Filesys::GetSocketOption(vfs_file* file, stduint level, stduint option_name, int* value) {
+	SocketHandle* socket = Filesys::GetSocket(file);
+	if (!socket || !value) return -1;
+	if (level != syscall_net_socket_level_socket) return -1;
+	switch (option_name) {
+	case syscall_net_socket_option_reuse_address:
+		*value = (socket->flags & SocketHandleFlagReuseAddress) ? 1 : 0;
+		return 0;
+	default:
+		return -1;
+	}
 }
 
 int Filesys::ReadPipe(vfs_file* file, void* buf, stduint count) {
@@ -2043,7 +2132,7 @@ int Filesys::CloseSocket(vfs_file* file) {
 	if (file->f_inode && file->f_inode->ref_count == 0) {
 		#if (_MCCA & 0xFF00) == 0x8600
 		if (socket->is_bound && socket->protocol == Network::SocketProtocol::UDP && socket->local_ipv4.port) {
-			Devsman::CloseUdpPort(socket->local_ipv4.port);
+			Devsman::CloseUdpPort(socket->local_ipv4.port, socket->udp_inbox_id);
 		}
 		#endif
 		delete socket;

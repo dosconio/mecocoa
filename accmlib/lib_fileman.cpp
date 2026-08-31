@@ -1,6 +1,7 @@
 #include "aaaaa.h"
 #include <unistd.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <stdarg.h>
 
 
@@ -16,6 +17,10 @@ int fcntl(int fd, int cmd, ...) {
 	if (cmd == F_SETFL) arg = (stduint)va_arg(ap, int);
 	va_end(ap);
 	return syscall(syscall_t::FCTL, fd, cmd, arg);
+}
+
+int poll(struct pollfd* fds, nfds_t nfds, int timeout) {
+	return (int)syscall(syscall_t::POLL, _IMM(fds), (stduint)nfds, (stduint)timeout);
 }
 
 int close(int fd) {

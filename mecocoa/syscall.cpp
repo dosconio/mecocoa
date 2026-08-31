@@ -30,10 +30,12 @@ extern "C" stdsint sysc_RECV(stduint, stduint, stduint);
 extern "C" stdsint sysc_ROUT(stduint, stduint, stduint);
 extern "C" stdsint sysc_FCTL(stduint, stduint, stduint);
 extern "C" stdsint sysc_SADR(stduint, stduint, stduint);
+extern "C" stdsint sysc_SOPT(stduint, stduint, stduint);
+extern "C" stdsint sysc_POLL(stduint, stduint, stduint);
 extern "C" void check_and_deliver_signals(void* context);
 
 // Syscall Wrappers
-extern stduint SYSCALL_TABLE[45];
+extern stduint SYSCALL_TABLE[47];
 
 void Syscall::Initialize() {
 	#if _MCCA == 0x8632
@@ -415,6 +417,54 @@ DEFSYSC sysc_SADR(stduint fd, stduint usr_req, stduint func) {
 	MccaMemCopyP(req.address, pb, false, &address_buffer, nullptr, true, address_length);
 	MccaMemCopyP(req.address_length, pb, false, &address_length, nullptr, true, sizeof(address_length));
 	return 0;
+}
+
+DEFSYSC sysc_SOPT(stduint fd, stduint usr_req, stduint func) {
+	ThreadBlock* th = Taskman::CurrentTB();
+	ProcessBlock* pb = th ? th->parent_process : nullptr;
+	if (!pb || !usr_req) return -1;
+
+	syscall_net_socket_option_t req{};
+	MccaMemCopyP(&req, nullptr, true, (const void*)usr_req, pb, false, sizeof(req));
+	if (!req.option_value) return -1;
+
+	switch (syscall_net_socket_option_func_t(func)) {
+	case syscall_net_socket_option_func_t::Set: {
+		if (req.option_length < sizeof(int)) return -1;
+		int value = 0;
+		MccaMemCopyP(&value, nullptr, true, req.option_value, pb, false, sizeof(value));
+		return pb->SetSocketOption((int)fd, req.level, req.option_name, value);
+	}
+	case syscall_net_socket_option_func_t::Get: {
+		if (!req.result_length || req.option_length < sizeof(int)) return -1;
+		int value = 0;
+		const stdsint ret = pb->GetSocketOption((int)fd, req.level, req.option_name, &value);
+		if (ret < 0) return ret;
+		const stduint length = sizeof(value);
+		MccaMemCopyP(req.option_value, pb, false, &value, nullptr, true, length);
+		MccaMemCopyP(req.result_length, pb, false, &length, nullptr, true, sizeof(length));
+		return 0;
+	}
+	default:
+		return -1;
+	}
+}
+
+DEFSYSC sysc_POLL(stduint usr_fds, stduint nfds, stduint timeout) {
+	ThreadBlock* th = Taskman::CurrentTB();
+	ProcessBlock* pb = th ? th->parent_process : nullptr;
+	if (!pb || nfds > 64) return -1;
+	if (!nfds) return timeout == 0 ? 0 : -1;
+	if (!usr_fds) return -1;
+	syscall_pollfd_t* fds = new syscall_pollfd_t[nfds];
+	if (!fds) return -1;
+	MccaMemCopyP(fds, nullptr, true, (const void*)usr_fds, pb, false, sizeof(syscall_pollfd_t) * nfds);
+	const stdsint ret = pb->Poll(fds, nfds, (stdsint)timeout);
+	if (ret >= 0) {
+		MccaMemCopyP((void*)usr_fds, pb, false, fds, nullptr, true, sizeof(syscall_pollfd_t) * nfds);
+	}
+	delete[] fds;
+	return ret;
 }
 
 DEFSYSC sysc_ROUT(stduint func, stduint p1, stduint p2) {
@@ -998,6 +1048,8 @@ stduint SYSCALL_TABLE[] = {
 	mglb(sysc_ROUT), // 0x2A (ROUT)
 	mglb(sysc_FCTL), // 0x2B (FCTL)
 	mglb(sysc_SADR), // 0x2C (SADR)
+	mglb(sysc_SOPT), // 0x2D (SOPT)
+	mglb(sysc_POLL), // 0x2E (POLL)
 };
 #endif
 
@@ -1077,6 +1129,12 @@ void syscall_body(NormalTaskContext* cxt)
 		break;
 	case syscall_t::SADR:
 		cxt->a0 = sysc_SADR(cxt->a0, cxt->a1, cxt->a2);
+		break;
+	case syscall_t::SOPT:
+		cxt->a0 = sysc_SOPT(cxt->a0, cxt->a1, cxt->a2);
+		break;
+	case syscall_t::POLL:
+		cxt->a0 = sysc_POLL(cxt->a0, cxt->a1, cxt->a2);
 		break;
 	default:
 		plogerro("Unknown syscall no: %d", syscall_num);

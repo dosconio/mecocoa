@@ -101,7 +101,9 @@ namespace {
 	};
 
 	struct NetUdpInbox {
+		stduint id;
 		uint16 port;
+		bool reuse_address;
 		NetUdpInboxEntry* entries;
 		uint8* payloads;
 		stduint head;
@@ -120,6 +122,7 @@ namespace {
 	stduint net_udp_port_count = 0;
 	NetUdpInbox net_udp_inboxes[NetUdpInboxPortCapacity]{};
 	stduint net_udp_inbox_count = 0;
+	stduint net_udp_inbox_next_id = 1;
 	NetArpCacheEntry net_arp_cache[NetArpCacheCapacity]{};
 	stduint net_arp_cache_next = 0;
 	NetPendingUdpPacket net_pending_udp[NetPendingUdpCapacity]{};
@@ -488,16 +491,35 @@ namespace {
 		return nullptr;
 	}
 
+	NetUdpInbox* FindUdpInbox(uint16 port, stduint inbox_id) {
+		for0(i, net_udp_inbox_count) {
+			if (net_udp_inboxes[i].port == port && net_udp_inboxes[i].id == inbox_id) {
+				return &net_udp_inboxes[i];
+			}
+		}
+		return nullptr;
+	}
+
 	bool IsUdpPortAvailable(uint16 port) {
 		return port && !FindUdpPortHandler(port) && !FindUdpInbox(port);
 	}
 
-	NetUdpInbox* EnsureUdpInbox(uint16 port) {
+	bool UdpPortAllowsReuse(uint16 port) {
+		if (!port) return false;
+		for0(i, net_udp_inbox_count) {
+			if (net_udp_inboxes[i].port == port && !net_udp_inboxes[i].reuse_address) return false;
+		}
+		return true;
+	}
+
+	NetUdpInbox* AllocateUdpInbox(uint16 port, bool reuse_address) {
 		if (!port) return nullptr;
-		if (auto* inbox = FindUdpInbox(port)) return inbox;
 		if (net_udp_inbox_count >= NetUdpInboxPortCapacity) return nullptr;
 		auto* inbox = &net_udp_inboxes[net_udp_inbox_count++];
+		inbox->id = net_udp_inbox_next_id++;
+		if (!net_udp_inbox_next_id) net_udp_inbox_next_id = 1;
 		inbox->port = port;
+		inbox->reuse_address = reuse_address;
 		inbox->entries = nullptr;
 		inbox->payloads = nullptr;
 		inbox->head = 0;
@@ -526,9 +548,9 @@ namespace {
 		return true;
 	}
 
-	bool ReleaseUdpInbox(uint16 port) {
+	bool ReleaseUdpInbox(uint16 port, stduint inbox_id) {
 		for0(i, net_udp_inbox_count) {
-			if (net_udp_inboxes[i].port != port) continue;
+			if (net_udp_inboxes[i].port != port || net_udp_inboxes[i].id != inbox_id) continue;
 			WakeUdpInboxReaders(net_udp_inboxes[i]);
 			net_udp_inboxes[i].count = 0;
 			net_udp_inboxes[i].head = 0;
@@ -652,9 +674,13 @@ namespace {
 
 	bool HandleUdpInboxDatagram(uni::Network::LinkDevice& dev, const NetUdpPacket& packet) {
 		(void)dev;
-		auto* inbox = FindUdpInbox(packet.context.destination.port);
-		if (!inbox) return false;
-		return EnqueueUdpInbox(*inbox, packet);
+		bool accepted = false;
+		for0(i, net_udp_inbox_count) {
+			auto& inbox = net_udp_inboxes[i];
+			if (inbox.port != packet.context.destination.port) continue;
+			accepted = EnqueueUdpInbox(inbox, packet) || accepted;
+		}
+		return accepted;
 	}
 
 	void HandleArpFrame(uni::Network::LinkDevice& dev, const uni::Network::EthernetFrameView& frame) {
@@ -930,26 +956,53 @@ bool Devsman::OpenUdpPort(uint16 port) {
 	if (auto handler = FindUdpPortHandler(port)) {
 		return handler == HandleUdpInboxDatagram && FindUdpInbox(port) != nullptr;
 	}
-	auto* inbox = EnsureUdpInbox(port);
-	if (!inbox || !EnsureUdpInboxStorage(*inbox)) return false;
+	auto* inbox = AllocateUdpInbox(port, false);
+	if (!inbox) return false;
+	if (!EnsureUdpInboxStorage(*inbox)) {
+		(void)ReleaseUdpInbox(port, inbox->id);
+		return false;
+	}
 	return RegisterUdpPortHandler(port, HandleUdpInboxDatagram);
 }
 
 bool Devsman::BindUdpPort(uint16 port) {
+	stduint inbox_id = stduint(-1);
+	return BindUdpPort(port, false, inbox_id);
+}
+
+bool Devsman::BindUdpPort(uint16 port, bool reuse_address, stduint& inbox_id) {
+	inbox_id = stduint(-1);
 	if (!port) return false;
-	if (FindUdpPortHandler(port) || FindUdpInbox(port)) return false;
-	auto* inbox = EnsureUdpInbox(port);
-	if (!inbox || !EnsureUdpInboxStorage(*inbox)) return false;
-	return RegisterUdpPortHandler(port, HandleUdpInboxDatagram);
+	auto handler = FindUdpPortHandler(port);
+	if (handler && handler != HandleUdpInboxDatagram) return false;
+	if (FindUdpInbox(port) && (!reuse_address || !UdpPortAllowsReuse(port))) return false;
+	auto* inbox = AllocateUdpInbox(port, reuse_address);
+	if (!inbox) return false;
+	if (!EnsureUdpInboxStorage(*inbox)) {
+		(void)ReleaseUdpInbox(port, inbox->id);
+		return false;
+	}
+	if (!handler && !RegisterUdpPortHandler(port, HandleUdpInboxDatagram)) {
+		(void)ReleaseUdpInbox(port, inbox->id);
+		return false;
+	}
+	inbox_id = inbox->id;
+	return true;
 }
 
 bool Devsman::AllocateUdpPort(uint16& port) {
+	stduint inbox_id = stduint(-1);
+	return AllocateUdpPort(port, inbox_id);
+}
+
+bool Devsman::AllocateUdpPort(uint16& port, stduint& inbox_id) {
+	inbox_id = stduint(-1);
 	if (port && !IsUdpPortAvailable(port)) return false;
-	if (port) return BindUdpPort(port);
+	if (port) return BindUdpPort(port, false, inbox_id);
 	for (uint32 candidate = NetUdpEphemeralPortBegin; candidate <= NetUdpEphemeralPortEnd; candidate++) {
 		const uint16 trial = uint16(candidate);
 		if (!IsUdpPortAvailable(trial)) continue;
-		if (!BindUdpPort(trial)) continue;
+		if (!BindUdpPort(trial, false, inbox_id)) continue;
 		port = trial;
 		return true;
 	}
@@ -957,16 +1010,29 @@ bool Devsman::AllocateUdpPort(uint16& port) {
 }
 
 bool Devsman::CloseUdpPort(uint16 port) {
+	auto* inbox = FindUdpInbox(port);
+	if (!inbox) return false;
+	return CloseUdpPort(port, inbox->id);
+}
+
+bool Devsman::CloseUdpPort(uint16 port, stduint inbox_id) {
 	if (!port) return false;
 	auto handler = FindUdpPortHandler(port);
 	if (handler != HandleUdpInboxDatagram) return false;
-	if (!UnregisterUdpPortHandler(port, HandleUdpInboxDatagram)) return false;
-	(void)ReleaseUdpInbox(port);
+	if (!ReleaseUdpInbox(port, inbox_id)) return false;
+	if (!FindUdpInbox(port)) (void)UnregisterUdpPortHandler(port, HandleUdpInboxDatagram);
 	return true;
 }
 
 stdsint Devsman::ReceiveUdp(uint16 port, uni::Network::UDPDatagramContext& context, void* payload, stduint capacity) {
 	auto* inbox = FindUdpInbox(port);
+	if (!inbox) return 0;
+	return ReceiveUdp(port, inbox->id, context, payload, capacity);
+}
+
+stdsint Devsman::ReceiveUdp(uint16 port, stduint inbox_id,
+	uni::Network::UDPDatagramContext& context, void* payload, stduint capacity) {
+	auto* inbox = FindUdpInbox(port, inbox_id);
 	if (!inbox || !inbox->IsReady() || inbox->count == 0) return 0;
 	auto& entry = inbox->entries[inbox->head];
 	const stduint length = entry.context.payload_length;
@@ -983,6 +1049,12 @@ stdsint Devsman::ReceiveUdp(uint16 port, uni::Network::UDPDatagramContext& conte
 
 bool Devsman::WaitUdp(uint16 port) {
 	auto* inbox = FindUdpInbox(port);
+	if (!inbox) return false;
+	return WaitUdp(port, inbox->id);
+}
+
+bool Devsman::WaitUdp(uint16 port, stduint inbox_id) {
+	auto* inbox = FindUdpInbox(port, inbox_id);
 	if (!inbox || !inbox->IsReady()) return false;
 	if (inbox->count) return true;
 	auto* th = Taskman::CurrentTB();
@@ -990,7 +1062,12 @@ bool Devsman::WaitUdp(uint16 port) {
 	if (!AddUdpInboxReader(*inbox, th)) return false;
 	th->Block(ThreadBlock::BlockReason::BR_RecvMsg);
 	Taskman::Schedule(true);
-	inbox = FindUdpInbox(port);
+	inbox = FindUdpInbox(port, inbox_id);
+	return inbox && inbox->IsReady() && inbox->count != 0;
+}
+
+bool Devsman::HasUdp(uint16 port, stduint inbox_id) {
+	auto* inbox = FindUdpInbox(port, inbox_id);
 	return inbox && inbox->IsReady() && inbox->count != 0;
 }
 

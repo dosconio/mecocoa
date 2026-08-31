@@ -68,6 +68,7 @@ cppfile=\
 	$(ulibpath)/cpp/Device/Storage/Harddisk-NVMe.cpp\
 	$(wildcard $(ulibpath)/cpp/Device/USB/*.cpp) $(wildcard $(ulibpath)/cpp/Device/USB/xHCI/*.cpp) \
 	\
+	$(ulibpath)/cpp/System/Picture.cpp \
 	depends/cotlabx.cpp \
 	depends/desktop.cpp \
 

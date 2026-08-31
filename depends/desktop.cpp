@@ -3,6 +3,7 @@
 // ModuTitle: [Service] Desktop Layer Implementation
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 #include "desktop.hpp"
+#include <cpp/System/Picture.hpp>
 
 namespace uni {
 
@@ -68,20 +69,10 @@ namespace uni {
 		stduint img_w = size.x;
 		stduint img_h = size.y;
 
-		// 1. Calculate aspect-fit scaled dimensions
+		// 1. Calculate aspect-fit scaled dimensions using unisym PictureOperation::FitAspect
 		stduint dst_w = 0;
 		stduint dst_h = 0;
-		if (img_w * screen_h > screen_w * img_h) {
-			// Width-constrained: fit to screen_w
-			dst_w = screen_w;
-			dst_h = img_h * screen_w / img_w;
-			if (dst_h == 0) dst_h = 1;
-		} else {
-			// Height-constrained: fit to screen_h
-			dst_h = screen_h;
-			dst_w = img_w * screen_h / img_h;
-			if (dst_w == 0) dst_w = 1;
-		}
+		PictureOperation::FitAspect(img_w, img_h, screen_w, screen_h, dst_w, dst_h);
 
 		stduint offset_x = (screen_w > dst_w) ? (screen_w - dst_w) / 2 : 0;
 		stduint offset_y = (screen_h > dst_h) ? (screen_h - dst_h) / 2 : 0;

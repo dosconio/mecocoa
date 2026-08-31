@@ -65,6 +65,8 @@ enum
 	ROUT, // route  (func, p1, p2)->status              | x86 x64
 	FCTL, // fcntl  (fd, cmd, arg)->status             | x86 x64 rv
 	SADR, // socket address (fd, query, func)->status   | x86 x64
+	SOPT, // socket option (fd, query, func)->status    | x86 x64
+	POLL, // poll   (fds, nfds, timeout)->ready count  | x86 x64
 
 	DBUG = 0xFE, // sysinfo_classic to stdout(func)
 	TEST = 0xFF, // getpid (T,E,S)->0 | x86
@@ -149,13 +151,39 @@ struct syscall_net_socket_address_t {
 	stduint* address_length = nullptr;
 };
 
+struct syscall_net_socket_option_t {
+	stduint level = 0;
+	stduint option_name = 0;
+	void* option_value = nullptr;
+	stduint option_length = 0;
+	stduint* result_length = nullptr;
+};
+
+struct syscall_pollfd_t {
+	int fd = 0;
+	sint16 events = 0;
+	sint16 revents = 0;
+};
+
 enum class syscall_net_socket_address_func_t : stduint {
 	Local = 0,
 	Peer,
 };
 
+enum class syscall_net_socket_option_func_t : stduint {
+	Set = 0,
+	Get,
+};
+
 constexpr stduint syscall_net_io_flag_wait = 0x0001u;
 constexpr stduint syscall_net_msg_flag_dontwait = 0x0040u;
+constexpr stduint syscall_net_socket_level_socket = 1u;
+constexpr stduint syscall_net_socket_option_reuse_address = 2u;
+constexpr sint16 syscall_poll_in = 0x0001;
+constexpr sint16 syscall_poll_out = 0x0004;
+constexpr sint16 syscall_poll_error = 0x0008;
+constexpr sint16 syscall_poll_hangup = 0x0010;
+constexpr sint16 syscall_poll_invalid = 0x0020;
 
 enum class syscall_net_route_func_t : stduint {
 	IPv4Default = 0,

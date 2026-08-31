@@ -12,16 +12,6 @@
 #include <stdlib.h>
 #include <c/ustring.h>
 
-#ifndef SEEK_SET
-#define SEEK_SET 0
-#endif
-#ifndef SEEK_CUR
-#define SEEK_CUR 1
-#endif
-#ifndef SEEK_END
-#define SEEK_END 2
-#endif
-
 #include <c/format/picture/BMP.h>
 #include <c/format/picture/JPEG.h>
 #include <c/format/picture/PNG.h>
