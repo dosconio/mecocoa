@@ -44,6 +44,7 @@ enum class GraphicMsg {
 	DRV_DETACH,// driver releases display session
 	DRV_SETMODE,// request driver mode switch
 	DRV_FLUSH,// request driver dirty-rect flush
+	SET_WALLPAPER,// set desktop wallpaper (usrp_buffer, width, height)
 };
 
 enum class NetworkMsg {

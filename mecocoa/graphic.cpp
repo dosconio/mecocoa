@@ -15,6 +15,7 @@ static void SafeLaymanUpdate(SheetTrait* sheet, const Rectangle& rect) {
 #include <c/driver/keyboard.h>
 #include "../include/console.hpp"
 #include "../include/filesys.hpp"
+#include "../depends/desktop.hpp"
 
 // #define _TEST_PCSpeaker
 
@@ -1113,8 +1114,8 @@ static uni::BitmapFontEngine gui_font_engine(1);
 _RET_CreateVconsole Consman::CreateVconsole(const Rectangle& rect, rostr title) {
 	_RET_CreateVconsole ret;
 	auto pcon = new VideoConsole2(NULL,
-		Rectangle(Point(2, 2), Size2(rect.width - 10, rect.height - 30)),
-		Color::Black, 0xFFFCEAF1
+		Rectangle(Point(2, 2), Size2(rect.width - 6, rect.height - 24)),
+		Color::White, 0xFF111111
 	);
 	#if _MCCA == 0x8632
 	pcon->setBellHandler(BuzzerBell);
@@ -1515,6 +1516,42 @@ void serv_graf_loop() {
 			ret = (stduint)-1;
 			syssend_async(sig_src, (void*)&ret, sizeof(ret));
 			break;
+		case GraphicMsg::SET_WALLPAPER:
+		{
+			// to_args: [usrp_buffer, width, height]
+			void* usr_buf = (void*)to_args[0];
+			uint32 w = (uint32)to_args[1];
+			uint32 h = (uint32)to_args[2];
+			if (usr_buf && w > 0 && h > 0 && global_desktop && global_desktop->sheet_buffer) {
+				stduint screen_w = global_desktop->sheet_area.width;
+				stduint screen_h = global_desktop->sheet_area.height;
+				stduint offset_x = (screen_w > w) ? (screen_w - w) / 2 : 0;
+				stduint offset_y = (screen_h > h) ? (screen_h - h) / 2 : 0;
+				stduint draw_w = (w < screen_w - offset_x) ? w : (screen_w - offset_x);
+				stduint draw_h = (h < screen_h - offset_y) ? h : (screen_h - offset_y);
+
+				// 1. Fill background with classic color
+				global_desktop->doshow(nullptr);
+
+				// 2. Stream copy row by row directly from user-space without dynamic heap allocation
+				for0(y, draw_h) {
+					Color* dst_row = global_desktop->sheet_buffer + (offset_y + y) * screen_w + offset_x;
+					const void* src_row_usr = (const byte*)usr_buf + y * w * sizeof(Color);
+					MccaMemCopyP(
+						dst_row, NULL, true,
+						(void*)src_row_usr, safe_pb, false,
+						draw_w * sizeof(Color));
+				}
+
+				// 3. Mark dirty and update
+				global_layman.Lock()->Update(global_desktop, global_desktop->sheet_area);
+				ret = 0;
+			} else {
+				ret = (stduint)-1;
+			}
+			syssend_async(sig_src, (void*)&ret, sizeof(ret));
+			break;
+		}
 		default:
 			plogerro("%s Unknown GraphicMsg type: %d", __FUNCIDEN__, sig_type);
 			break;

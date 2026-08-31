@@ -55,9 +55,9 @@ $(BIN_DIR)/cot: $(wildcard $(uherpath)/COTLAB/src/*.cpp) $(LIBNATIVE) $(MCCA_CRT
 	$(MCCA_CXX) $(MCCA_CXXFLAGS) -o $@ $(uherpath)/COTLAB/src/*.cpp \
 		$(MCCA_LDLIBS) -lm
 
-$(BIN_DIR)/ribbon: subapps/ribbon.cpp $(MCCA_CRT0) $(MCCA_LIBC)
+$(BIN_DIR)/ribbon: subapps/ribbon.cpp $(ulibpath)/cpp/fileformat/picture/PNG.cpp $(MCCA_CRT0) $(MCCA_LIBC)
 	@echo "MK ribbon"
-	$(MCCA_CXX) $(MCCA_CXXFLAGS) -o $@ subapps/ribbon.cpp $(MCCA_LDLIBS)
+	$(MCCA_CXX) $(MCCA_CXXFLAGS) -o $@ subapps/ribbon.cpp $(ulibpath)/cpp/fileformat/picture/PNG.cpp $(MCCA_LDLIBS)
 
 #####
 

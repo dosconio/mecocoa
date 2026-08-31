@@ -86,6 +86,7 @@ extern "C" {
 	stdsint sys_set_form_buffer(stduint form_id, void* buffer);
 	stdsint sys_update_form(stduint form_id, const Rectangle* rect);
 	stdsint sys_get_screen_size(Size2* size);
+	stdsint sys_set_wallpaper(const void* buffer, uint32 width, uint32 height);
 
 
 

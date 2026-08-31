@@ -69,6 +69,7 @@ cppfile=\
 	$(wildcard $(ulibpath)/cpp/Device/USB/*.cpp) $(wildcard $(ulibpath)/cpp/Device/USB/xHCI/*.cpp) \
 	\
 	depends/cotlabx.cpp \
+	depends/desktop.cpp \
 
 cplfile=\
 	$(ulibpath)/c/driver/i8259A.c \

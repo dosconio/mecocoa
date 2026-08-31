@@ -1,6 +1,94 @@
 #include "aaaaa.h"
 #include "c/consio.h"
 #include "cpp/Witch/Control/Button.hpp"
+#include <stdio.h>
+#include <c/format/picture/PNG.h>
+#include <cpp/trait/StorageTrait.hpp>
+
+// Lightweight file-based StorageTrait for reading image files with zero full-buffer memory allocation
+class FileBlockDevice : public StorageTrait {
+private:
+	FILE*   m_fp;
+	stduint m_size;
+
+public:
+	FileBlockDevice(FILE* fp, stduint size, stduint blockSize = 512)
+		: m_fp(fp), m_size(size) {
+		Block_Size = blockSize;
+		readable = true;
+		writable = false;
+	}
+
+	virtual ~FileBlockDevice() = default;
+
+	virtual bool Read(stduint BlockIden, void* Dest) override {
+		if (BlockIden >= getUnits()) return false;
+		if (fseek(m_fp, (long)(BlockIden * Block_Size), SEEK_SET) != 0) return false;
+		size_t rd = fread(Dest, 1, Block_Size, m_fp);
+		return rd == Block_Size || (rd > 0 && BlockIden + 1 == getUnits());
+	}
+
+	virtual bool Write(stduint BlockIden, const void* Sors) override {
+		return false;
+	}
+
+	virtual stduint getUnits() override {
+		return (m_size + Block_Size - 1) / Block_Size;
+	}
+
+	virtual int operator[](uint64 bytid) override {
+		if (bytid >= m_size) return -1;
+		byte b = 0;
+		if (fseek(m_fp, (long)bytid, SEEK_SET) != 0) return -1;
+		if (fread(&b, 1, 1, m_fp) == 1) return b;
+		return -1;
+	}
+};
+
+static void TryLoadWallpaper() {
+	static const char* kWallpaperPaths[] = {
+		"/mnt/ide2.0/demo/wallpp.png",
+		"/mnt/ahci1.0/demo/wallpp.png"
+	};
+	FILE* fp = nullptr;
+	for (int retry = 0; retry < 3; ++retry) {
+		for0a(i, kWallpaperPaths) {
+			fp = fopen(kWallpaperPaths[i], "rb");
+			if (fp) break;
+		}
+		if (fp) break;
+		sysrest(1, 0); // Wait 1 second before retry
+	}
+
+	if (!fp) return;
+
+	fseek(fp, 0, SEEK_END);
+	long fileSize = ftell(fp);
+	fseek(fp, 0, SEEK_SET);
+
+	if (fileSize <= 0) {
+		fclose(fp);
+		return;
+	}
+
+	FileBlockDevice storage(fp, (stduint)fileSize);
+	PNGCodec pngCodec;
+	bool matched = false;
+	if (pngCodec.Probe(storage, matched) == ImageResult::OK && matched) {
+		ImageBuffer imgBuf;
+		ImageBufferClear(imgBuf);
+		StdMalloc myMalloc;
+		ImageDecodeOptions options;
+		ImageDecodeOptionsInit(options);
+
+		ImageResult res = pngCodec.Decode(storage, imgBuf, myMalloc, options);
+		if (res == ImageResult::OK && imgBuf.pixels && imgBuf.width > 0 && imgBuf.height > 0) {
+			sys_set_wallpaper(imgBuf.pixels, imgBuf.width, imgBuf.height);
+			ImageBufferFree(imgBuf);
+		}
+	}
+	fclose(fp);
+}
 
 using namespace uni;
 using namespace uni::witch::control;
@@ -148,6 +236,7 @@ int main(int argc, char** argv)
 {
 
 	Size2 screen = GetScreenSize();
+	TryLoadWallpaper();
 	Color* buffer = nullptr;
 	stdsint form_id = CreateRibbonForm(screen, &buffer);
 	if (form_id < 0) {

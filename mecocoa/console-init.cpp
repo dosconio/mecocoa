@@ -4,6 +4,7 @@
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 #include "../include/mecocoa.hpp"
 #include "../devdriv/audio/au-buzzer.hpp"
+#include "../depends/desktop.hpp"
 #include "c/driver/UART.h"
 
 
@@ -159,39 +160,30 @@ bool Consman::Initialize() {
 	);// VGA
 	#endif
 
-	// main screen
-	auto vcon0 = new VideoConsole2(&global_layman.Lock()->getVCI(), screen0_win, Color::Black, Color::White);
-	global_vcon0 = vcon0;
-	#if _MCCA == 0x8632
-	vcon0->setBellHandler(BuzzerBell);
-	#endif
-
-	#if _MCCA == 0x8632
-	vcon0->setFontEngine(&fallback_engine);
-	#else
-	vcon0->setFontEngine(&loader_font_engine);
-	#endif
-
-	vcon0->setBuffers(nullptr,
-		new BufferChar[vcon0->getCols() * vcon0->getRows()],
-		new Color[vcon0->getLineBufferSize()]
-	);
-	vcon0->InitializeSheet(*global_layman.Lock(), screen0_win.getVertex(), screen0_win.getSize());
-	VTTY_Append(vcon0);
-
-	// cursor
+	// cursor (Cursor is appended first, becoming subf, the top-most layer)
 	Cursor::global_cursor = new (_BUF_cursor)Cursor{ &global_layman.Lock()->getVCI() };
 	const Point cursor_pos = { 300,200 };
 	Cursor::global_cursor->setSheet(*global_layman.Lock(), cursor_pos);
 
-	global_layman.Lock()->Append(vcon0);
+	// main desktop layer (Desktop is appended after cursor, becoming subl, the bottom-most layer)
+	auto desktop = new Desktop(Desktop::kDefaultBgColor);
+	global_desktop = desktop;
+	desktop->Initialize(*global_layman.Lock(), screen0_win, Desktop::kDefaultBgColor);
+	global_layman.Lock()->Append(desktop);
 
 	#if _GUI_DOUBLE_BUFFER
 	Consman::enable_2buffer();
 	#endif
 
-	vcon0->Clear();
-	// con0_out = vcon0;
+	{
+		auto layman = global_layman.Lock();
+		layman->AddDirty(screen0_win);
+		layman->is_dirty = true;
+		layman->UpdateForce(nullptr, screen0_win);
+		if (Consman::real_pvci && layman->sheet_buffer) {
+			Consman::real_pvci->DrawPoints(screen0_win, layman->sheet_buffer);
+		}
+	}
 
 	// default tty are all bcon
 	return true;

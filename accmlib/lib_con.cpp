@@ -150,3 +150,14 @@ stdsint sys_get_screen_size(Size2* size) {
 	syscomm(0, Task_ConsoleVideo, &msg);
 	return buf[0];
 }
+
+stdsint sys_set_wallpaper(const void* buffer, uint32 width, uint32 height) {
+	stduint buf[3] = { _IMM(buffer), width, height };
+	CommMsg msg;
+	msg.data.address = _IMM(buf);
+	msg.data.length = sizeof(buf);
+	msg.type = _IMM(GraphicMsg::SET_WALLPAPER);
+	syscomm(1, Task_ConsoleVideo, &msg);
+	syscomm(0, Task_ConsoleVideo, &msg);
+	return buf[0];
+}
