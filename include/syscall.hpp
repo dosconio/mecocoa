@@ -63,6 +63,8 @@ enum
 	SEND, // send   (fd, payload, len)->len             | x86 x64
 	RECV, // recv   (fd, payload, len)->len             | x86 x64
 	ROUT, // route  (func, p1, p2)->status              | x86 x64
+	FCTL, // fcntl  (fd, cmd, arg)->status             | x86 x64 rv
+	SADR, // socket address (fd, query, func)->status   | x86 x64
 
 	DBUG = 0xFE, // sysinfo_classic to stdout(func)
 	TEST = 0xFF, // getpid (T,E,S)->0 | x86
@@ -141,6 +143,19 @@ struct syscall_net_recv_t {
 	void* address = nullptr;
 	stduint* address_length = nullptr;
 };
+
+struct syscall_net_socket_address_t {
+	void* address = nullptr;
+	stduint* address_length = nullptr;
+};
+
+enum class syscall_net_socket_address_func_t : stduint {
+	Local = 0,
+	Peer,
+};
+
+constexpr stduint syscall_net_io_flag_wait = 0x0001u;
+constexpr stduint syscall_net_msg_flag_dontwait = 0x0040u;
 
 enum class syscall_net_route_func_t : stduint {
 	IPv4Default = 0,

@@ -18,10 +18,15 @@ namespace {
 	constexpr stduint NetUdpPortCapacity = 8;
 	constexpr stduint NetUdpInboxPortCapacity = 4;
 	constexpr stduint NetUdpInboxDepth = 4;
+	constexpr stduint NetUdpInboxWaiterCapacity = 4;
 	constexpr stduint NetUdpInboxPayloadSize = 512;
 	constexpr stduint NetArpCacheCapacity = 8;
+	constexpr stduint NetArpCacheTtlTicks = 120 * CONFIG_SysTickFreq;
 	constexpr stduint NetPendingUdpCapacity = 4;
 	constexpr stduint NetPendingUdpPayloadSize = 1472;
+	constexpr stduint NetPendingUdpTimeoutTicks = 5 * CONFIG_SysTickFreq;
+	constexpr stduint NetPendingUdpArpRetryTicks = CONFIG_SysTickFreq;
+	constexpr stduint NetPendingUdpArpRetryLimit = 3;
 	constexpr uint16 NetUdpEchoPort = 7;
 	constexpr uint16 NetUdpEphemeralPortBegin = 49152;
 	constexpr uint16 NetUdpEphemeralPortEnd = 65535;
@@ -68,6 +73,7 @@ namespace {
 	struct NetArpCacheEntry {
 		uni::Network::IPv4Address protocol;
 		uni::Network::MacAddress hardware;
+		stduint updated_tick;
 		bool valid;
 	};
 
@@ -77,6 +83,9 @@ namespace {
 		uint16 source_port;
 		uint16 destination_port;
 		stduint payload_length;
+		stduint queued_tick;
+		stduint last_arp_request_tick;
+		stduint arp_request_count;
 		bool valid;
 	};
 
@@ -99,6 +108,8 @@ namespace {
 		stduint tail;
 		stduint count;
 		stduint drops;
+		ThreadBlock* read_waiters[NetUdpInboxWaiterCapacity];
+		stduint read_waiter_count;
 
 		bool IsReady() const {
 			return entries && payloads;
@@ -272,7 +283,19 @@ namespace {
 		return true;
 	}
 
+	bool IsArpCacheEntryExpired(const NetArpCacheEntry& entry) {
+		return entry.valid && tick - entry.updated_tick >= NetArpCacheTtlTicks;
+	}
+
+	void ExpireArpCache() {
+		for0(i, NetArpCacheCapacity) {
+			auto& entry = net_arp_cache[i];
+			if (IsArpCacheEntryExpired(entry)) entry.valid = false;
+		}
+	}
+
 	bool LookupArpCache(const uni::Network::IPv4Address& protocol, uni::Network::MacAddress& hardware) {
+		ExpireArpCache();
 		for0(i, NetArpCacheCapacity) {
 			const auto& entry = net_arp_cache[i];
 			if (entry.valid && entry.protocol == protocol) {
@@ -289,14 +312,17 @@ namespace {
 			auto& entry = net_arp_cache[i];
 			if (entry.valid && entry.protocol == protocol) {
 				entry.hardware = hardware;
+				entry.updated_tick = tick;
 				return;
 			}
 		}
+		ExpireArpCache();
 		for0(i, NetArpCacheCapacity) {
 			auto& entry = net_arp_cache[i];
 			if (!entry.valid) {
 				entry.protocol = protocol;
 				entry.hardware = hardware;
+				entry.updated_tick = tick;
 				entry.valid = true;
 				return;
 			}
@@ -304,6 +330,7 @@ namespace {
 		auto& entry = net_arp_cache[net_arp_cache_next];
 		entry.protocol = protocol;
 		entry.hardware = hardware;
+		entry.updated_tick = tick;
 		entry.valid = true;
 		net_arp_cache_next = (net_arp_cache_next + 1) % NetArpCacheCapacity;
 	}
@@ -323,10 +350,63 @@ namespace {
 		if (index < NetPendingUdpCapacity) net_pending_udp[index].valid = false;
 	}
 
+	bool IsPendingUdpExpired(const NetPendingUdpPacket& packet) {
+		return packet.valid && tick - packet.queued_tick >= NetPendingUdpTimeoutTicks;
+	}
+
+	void ExpirePendingUdp() {
+		for0(i, NetPendingUdpCapacity) {
+			if (IsPendingUdpExpired(net_pending_udp[i])) ClearPendingUdp(i);
+		}
+	}
+
+	bool IsSamePendingUdp(const NetPendingUdpPacket& packet,
+		const uni::Network::IPv4Address& target_ip, const uni::Network::IPv4Address& next_hop,
+		uint16 source_port, uint16 destination_port) {
+		return packet.valid &&
+			packet.target_ip == target_ip &&
+			packet.next_hop == next_hop &&
+			packet.source_port == source_port &&
+			packet.destination_port == destination_port;
+	}
+
+	bool ShouldSendPendingArpRequest(const uni::Network::IPv4Address& next_hop) {
+		ExpirePendingUdp();
+		for0(i, NetPendingUdpCapacity) {
+			const auto& packet = net_pending_udp[i];
+			if (!packet.valid || !(packet.next_hop == next_hop)) continue;
+			if (!packet.arp_request_count) return true;
+			if (packet.arp_request_count < NetPendingUdpArpRetryLimit &&
+				tick - packet.last_arp_request_tick >= NetPendingUdpArpRetryTicks) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	void MarkPendingArpRequest(const uni::Network::IPv4Address& next_hop) {
+		for0(i, NetPendingUdpCapacity) {
+			auto& packet = net_pending_udp[i];
+			if (!packet.valid || !(packet.next_hop == next_hop)) continue;
+			packet.last_arp_request_tick = tick;
+			if (packet.arp_request_count < NetPendingUdpArpRetryLimit) packet.arp_request_count++;
+		}
+	}
+
 	stdsint EnqueuePendingUdp(const uni::Network::IPv4Address& target_ip, const uni::Network::IPv4Address& next_hop,
 		uint16 source_port, uint16 destination_port, const void* payload, stduint length) {
 		if ((!payload && length) || length > NetPendingUdpPayloadSize) return -1;
 		if (!EnsurePendingUdpStorage()) return -1;
+		ExpirePendingUdp();
+		for0(i, NetPendingUdpCapacity) {
+			auto& packet = net_pending_udp[i];
+			if (!IsSamePendingUdp(packet, target_ip, next_hop, source_port, destination_port)) continue;
+			packet.payload_length = length;
+			auto* slot = GetPendingUdpPayloadSlot(i);
+			const auto* payload_bytes = reinterpret_cast<const uint8*>(payload);
+			for0(j, length) slot[j] = payload_bytes[j];
+			return stdsint(i);
+		}
 		for0(i, NetPendingUdpCapacity) {
 			auto& packet = net_pending_udp[i];
 			if (packet.valid) continue;
@@ -335,6 +415,9 @@ namespace {
 			packet.source_port = source_port;
 			packet.destination_port = destination_port;
 			packet.payload_length = length;
+			packet.queued_tick = tick;
+			packet.last_arp_request_tick = 0;
+			packet.arp_request_count = 0;
 			packet.valid = true;
 			auto* slot = GetPendingUdpPayloadSlot(i);
 			const auto* payload_bytes = reinterpret_cast<const uint8*>(payload);
@@ -421,12 +504,32 @@ namespace {
 		inbox->tail = 0;
 		inbox->count = 0;
 		inbox->drops = 0;
+		inbox->read_waiter_count = 0;
 		return inbox;
+	}
+
+	void WakeUdpInboxReaders(NetUdpInbox& inbox) {
+		for0(i, inbox.read_waiter_count) {
+			if (inbox.read_waiters[i]) {
+				inbox.read_waiters[i]->Unblock(ThreadBlock::BlockReason::BR_RecvMsg);
+				inbox.read_waiters[i] = nullptr;
+			}
+		}
+		inbox.read_waiter_count = 0;
+	}
+
+	bool AddUdpInboxReader(NetUdpInbox& inbox, ThreadBlock* th) {
+		if (!th) return false;
+		for0(i, inbox.read_waiter_count) if (inbox.read_waiters[i] == th) return true;
+		if (inbox.read_waiter_count >= NetUdpInboxWaiterCapacity) return false;
+		inbox.read_waiters[inbox.read_waiter_count++] = th;
+		return true;
 	}
 
 	bool ReleaseUdpInbox(uint16 port) {
 		for0(i, net_udp_inbox_count) {
 			if (net_udp_inboxes[i].port != port) continue;
+			WakeUdpInboxReaders(net_udp_inboxes[i]);
 			net_udp_inboxes[i].count = 0;
 			net_udp_inboxes[i].head = 0;
 			net_udp_inboxes[i].tail = 0;
@@ -457,6 +560,7 @@ namespace {
 		inbox.entries[slot].context.payload = payload;
 		inbox.tail = (inbox.tail + 1) % NetUdpInboxDepth;
 		++inbox.count;
+		WakeUdpInboxReaders(inbox);
 		return true;
 	}
 
@@ -535,6 +639,7 @@ namespace {
 
 	void FlushPendingUdpFor(uni::Network::LinkDevice& dev, const uni::Network::IPv4Address& target_ip,
 		const uni::Network::MacAddress& target_mac) {
+		ExpirePendingUdp();
 		for0(i, NetPendingUdpCapacity) {
 			auto& packet = net_pending_udp[i];
 			if (!packet.valid || !(packet.next_hop == target_ip)) continue;
@@ -876,6 +981,19 @@ stdsint Devsman::ReceiveUdp(uint16 port, uni::Network::UDPDatagramContext& conte
 	return stdsint(length);
 }
 
+bool Devsman::WaitUdp(uint16 port) {
+	auto* inbox = FindUdpInbox(port);
+	if (!inbox || !inbox->IsReady()) return false;
+	if (inbox->count) return true;
+	auto* th = Taskman::CurrentTB();
+	if (!th) return false;
+	if (!AddUdpInboxReader(*inbox, th)) return false;
+	th->Block(ThreadBlock::BlockReason::BR_RecvMsg);
+	Taskman::Schedule(true);
+	inbox = FindUdpInbox(port);
+	return inbox && inbox->IsReady() && inbox->count != 0;
+}
+
 stdsint Devsman::SendUdp(const uni::Network::MacAddress& target_mac, const uni::Network::IPv4Address& target_ip,
 	uint16 source_port, uint16 destination_port, const void* payload, stduint length) {
 	if (!source_port || !destination_port) {
@@ -896,8 +1014,9 @@ stdsint Devsman::SendUdp(const uni::Network::MacAddress& target_mac, const uni::
 		plogwarn("[Net] send udp no default link device");
 		return -1;
 	}
-	return SendUdpFrame(*dev, net_buffers.udp_tx, target_mac, net_config.ipv4_address,
+	const stdsint sent = SendUdpFrame(*dev, net_buffers.udp_tx, target_mac, net_config.ipv4_address,
 		target_ip, source_port, destination_port, payload, length, net_ipv4_identification++);
+	return sent > 0 ? stdsint(length) : sent;
 }
 
 stdsint Devsman::SendUdp(const uni::Network::IPv4Address& target_ip,
@@ -928,15 +1047,20 @@ stdsint Devsman::SendUdp(const uni::Network::IPv4Address& target_ip,
 			plogwarn("[Net] send udp pending queue full/invalid len=%u", (unsigned)length);
 			return -1;
 		}
-		if (SendArpRequest(*route.dev, net_buffers.udp_tx, route.next_hop)) return 0;
+		if (!ShouldSendPendingArpRequest(route.next_hop)) return stdsint(length);
+		if (SendArpRequest(*route.dev, net_buffers.udp_tx, route.next_hop)) {
+			MarkPendingArpRequest(route.next_hop);
+			return stdsint(length);
+		}
 		plogwarn("[Net] send udp arp request failed for %u.%u.%u.%u",
 			(unsigned)route.next_hop.octet[0], (unsigned)route.next_hop.octet[1],
 			(unsigned)route.next_hop.octet[2], (unsigned)route.next_hop.octet[3]);
 		ClearPendingUdp(stduint(pending_index));
 		return -1;
 	}
-	return SendUdpFrame(*route.dev, net_buffers.udp_tx, target_mac, route.source,
+	const stdsint sent = SendUdpFrame(*route.dev, net_buffers.udp_tx, target_mac, route.source,
 		target_ip, source_port, destination_port, payload, length, net_ipv4_identification++);
+	return sent > 0 ? stdsint(length) : sent;
 }
 
 bool Devsman::GetDefaultIPv4Route(void* route, stduint length) {
@@ -965,6 +1089,7 @@ bool Devsman::GetIPv4Interface(stduint index, void* iface, stduint length) {
 }
 
 stduint Devsman::IPv4ArpCacheCount() {
+	ExpireArpCache();
 	stduint count = 0;
 	for0(i, NetArpCacheCapacity) if (net_arp_cache[i].valid) count++;
 	return count;
@@ -972,6 +1097,7 @@ stduint Devsman::IPv4ArpCacheCount() {
 
 bool Devsman::GetIPv4ArpCacheEntry(stduint index, void* entry, stduint length) {
 	if (!entry || length < sizeof(syscall_net_arp_ipv4_t)) return false;
+	ExpireArpCache();
 	auto* output = reinterpret_cast<syscall_net_arp_ipv4_t*>(entry);
 	stduint ordinal = 0;
 	for0(i, NetArpCacheCapacity) {

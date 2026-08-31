@@ -159,12 +159,41 @@ stdsint ProcessBlock::SendSocket(int fd, const void* payload, stduint length, co
 }
 
 stdsint ProcessBlock::RecvSocket(int fd, void* payload, stduint capacity,
+	uni::Network::SocketAddress* address, stduint* address_length, stduint flags) {
+	auto files = this->fileman.Lock();
+	if (fd < 0 || fd >= (stdsint)files->pfiles.Count() || !files->pfiles[fd] || !files->pfiles[fd]->vfile) return -1;
+	auto* file = files->pfiles[fd]->vfile;
+	if (!file->f_inode || (file->f_inode->i_mode & I_TYPE_MASK) != I_SOCK) return -1;
+	return Filesys::RecvSocket(file, payload, capacity, address, address_length, flags);
+}
+
+stdsint ProcessBlock::Fcntl(int fd, int cmd, stduint arg) {
+	auto files = this->fileman.Lock();
+	if (fd < 0 || fd >= (stdsint)files->pfiles.Count() || !files->pfiles[fd] || !files->pfiles[fd]->vfile) return -1;
+	auto* entry = files->pfiles[fd];
+	auto* file = entry->vfile;
+	switch (cmd) {
+	case F_GETFL:
+		return entry->fd_mode;
+	case F_SETFL: {
+		const int status_mask = O_APPEND | O_NONBLOCK;
+		const int next_mode = (entry->fd_mode & ~status_mask) | ((int)arg & status_mask);
+		entry->fd_mode = next_mode;
+		file->f_mode = next_mode;
+		return 0;
+	}
+	default:
+		return -1;
+	}
+}
+
+stdsint ProcessBlock::GetSocketAddress(int fd, bool peer,
 	uni::Network::SocketAddress* address, stduint* address_length) {
 	auto files = this->fileman.Lock();
 	if (fd < 0 || fd >= (stdsint)files->pfiles.Count() || !files->pfiles[fd] || !files->pfiles[fd]->vfile) return -1;
 	auto* file = files->pfiles[fd]->vfile;
 	if (!file->f_inode || (file->f_inode->i_mode & I_TYPE_MASK) != I_SOCK) return -1;
-	return Filesys::RecvSocket(file, payload, capacity, address, address_length);
+	return Filesys::GetSocketAddress(file, peer, address, address_length);
 }
 
 stduint ProcessBlock::Rdwt(bool wr_type, stduint fid, Slice slice)

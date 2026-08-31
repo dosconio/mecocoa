@@ -151,6 +151,8 @@ public:
 	static int ConnectSocket(vfs_file* file, const Network::SocketAddress& address);
 	static int SendSocket(vfs_file* file, const void* payload, stduint length, const Network::SocketAddress* address);
 	static int RecvSocket(vfs_file* file, void* payload, stduint capacity,
+		Network::SocketAddress* address, stduint* address_length, stduint flags = 0);
+	static int GetSocketAddress(vfs_file* file, bool peer,
 		Network::SocketAddress* address, stduint* address_length);
 	static int CloseSocket(vfs_file* file);
 

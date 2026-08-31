@@ -9,6 +9,15 @@ int open(const char* path, int oflag, ...) {
 	return syscall(syscall_t::OPEN, _IMM(path), oflag, nil);
 }
 
+int fcntl(int fd, int cmd, ...) {
+	stduint arg = 0;
+	va_list ap;
+	va_start(ap, cmd);
+	if (cmd == F_SETFL) arg = (stduint)va_arg(ap, int);
+	va_end(ap);
+	return syscall(syscall_t::FCTL, fd, cmd, arg);
+}
+
 int close(int fd) {
 	return syscall(syscall_t::CLOS, fd, nil, nil);
 }

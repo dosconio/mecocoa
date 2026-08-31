@@ -28,10 +28,12 @@ extern "C" stdsint sysc_CONN(stduint, stduint, stduint);
 extern "C" stdsint sysc_SEND(stduint, stduint, stduint);
 extern "C" stdsint sysc_RECV(stduint, stduint, stduint);
 extern "C" stdsint sysc_ROUT(stduint, stduint, stduint);
+extern "C" stdsint sysc_FCTL(stduint, stduint, stduint);
+extern "C" stdsint sysc_SADR(stduint, stduint, stduint);
 extern "C" void check_and_deliver_signals(void* context);
 
 // Syscall Wrappers
-extern stduint SYSCALL_TABLE[43];
+extern stduint SYSCALL_TABLE[45];
 
 void Syscall::Initialize() {
 	#if _MCCA == 0x8632
@@ -342,7 +344,6 @@ DEFSYSC sysc_SEND(stduint fd, stduint usr_req, stduint flags) {
 }
 
 DEFSYSC sysc_RECV(stduint fd, stduint usr_req, stduint flags) {
-	(void)flags;
 	ThreadBlock* th = Taskman::CurrentTB();
 	ProcessBlock* pb = th->parent_process;
 	if (!pb || !usr_req) return -1;
@@ -356,9 +357,10 @@ DEFSYSC sysc_RECV(stduint fd, stduint usr_req, stduint flags) {
 	}
 	uni::Network::SocketAddressIPv6 address_buffer{};
 	stduint address_length = req.address && req.address_length ? sizeof(address_buffer) : 0;
+	const stduint io_flags = (flags & syscall_net_msg_flag_dontwait) ? 0 : syscall_net_io_flag_wait;
 	const stdsint ret = pb->RecvSocket((int)fd, payload_buffer, req.capacity,
 		address_length ? reinterpret_cast<uni::Network::SocketAddress*>(&address_buffer) : nullptr,
-		address_length ? &address_length : nullptr);
+		address_length ? &address_length : nullptr, io_flags);
 	if (ret > 0 && req.payload) {
 		MccaMemCopyP(req.payload, pb, false, payload_buffer, nullptr, true, stduint(ret));
 	}
@@ -372,6 +374,47 @@ DEFSYSC sysc_RECV(stduint fd, stduint usr_req, stduint flags) {
 	}
 	delete[] payload_buffer;
 	return ret;
+}
+
+DEFSYSC sysc_FCTL(stduint fd, stduint cmd, stduint arg) {
+	ThreadBlock* th = Taskman::CurrentTB();
+	ProcessBlock* pb = th ? th->parent_process : nullptr;
+	if (!pb) return -1;
+	return pb->Fcntl((int)fd, (int)cmd, arg);
+}
+
+DEFSYSC sysc_SADR(stduint fd, stduint usr_req, stduint func) {
+	ThreadBlock* th = Taskman::CurrentTB();
+	ProcessBlock* pb = th ? th->parent_process : nullptr;
+	if (!pb || !usr_req) return -1;
+
+	syscall_net_socket_address_t req{};
+	MccaMemCopyP(&req, nullptr, true, (const void*)usr_req, pb, false, sizeof(req));
+	if (!req.address || !req.address_length) return -1;
+
+	stduint user_length = 0;
+	MccaMemCopyP(&user_length, nullptr, true, req.address_length, pb, false, sizeof(user_length));
+	if (user_length < sizeof(uni::Network::SocketAddressIPv4)) return -1;
+
+	uni::Network::SocketAddressIPv6 address_buffer{};
+	stduint address_length = sizeof(address_buffer);
+	bool peer = false;
+	switch (syscall_net_socket_address_func_t(func)) {
+	case syscall_net_socket_address_func_t::Local:
+		break;
+	case syscall_net_socket_address_func_t::Peer:
+		peer = true;
+		break;
+	default:
+		return -1;
+	}
+	const stdsint ret = pb->GetSocketAddress((int)fd, peer,
+		reinterpret_cast<uni::Network::SocketAddress*>(&address_buffer), &address_length);
+	if (ret < 0) return ret;
+	if (user_length < address_length) return -1;
+	MccaMemCopyP(req.address, pb, false, &address_buffer, nullptr, true, address_length);
+	MccaMemCopyP(req.address_length, pb, false, &address_length, nullptr, true, sizeof(address_length));
+	return 0;
 }
 
 DEFSYSC sysc_ROUT(stduint func, stduint p1, stduint p2) {
@@ -953,6 +996,8 @@ stduint SYSCALL_TABLE[] = {
 	mglb(sysc_SEND), // 0x28 (SEND)
 	mglb(sysc_RECV), // 0x29 (RECV)
 	mglb(sysc_ROUT), // 0x2A (ROUT)
+	mglb(sysc_FCTL), // 0x2B (FCTL)
+	mglb(sysc_SADR), // 0x2C (SADR)
 };
 #endif
 
@@ -1026,6 +1071,12 @@ void syscall_body(NormalTaskContext* cxt)
 		break;
 	case syscall_t::PIPE:
 		cxt->a0 = sysc_PIPE(cxt->a0);
+		break;
+	case syscall_t::FCTL:
+		cxt->a0 = sysc_FCTL(cxt->a0, cxt->a1, cxt->a2);
+		break;
+	case syscall_t::SADR:
+		cxt->a0 = sysc_SADR(cxt->a0, cxt->a1, cxt->a2);
 		break;
 	default:
 		plogerro("Unknown syscall no: %d", syscall_num);

@@ -191,6 +191,7 @@ run-only:
 		-audiodev pa,id=sb16audio \
 		-device sb16,audiodev=sb16audio,iobase=0x220,irq=5,dma=1,dma16=5 \
 		-enable-kvm -cpu host \
+		-serial tcp:127.0.0.1:4552,server=on,wait=off,nodelay=on \
 		-netdev tap,id=e1000net,ifname=tap0,script=no,downscript=no \
 		-device e1000,netdev=e1000net,mac=52:54:00:12:34:56 \
 		|| $(qemu) \

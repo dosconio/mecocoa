@@ -223,6 +223,7 @@ public:
 	static bool BindUdpPort(uint16 port);
 	static bool AllocateUdpPort(uint16& port);
 	static bool CloseUdpPort(uint16 port);
+	static bool WaitUdp(uint16 port);
 	static stdsint ReceiveUdp(uint16 port, uni::Network::UDPDatagramContext& context, void* payload, stduint capacity);
 	static stdsint SendUdp(const uni::Network::IPv4Address& target_ip,
 		uint16 source_port, uint16 destination_port, const void* payload, stduint length);

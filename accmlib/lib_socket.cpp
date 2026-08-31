@@ -127,17 +127,27 @@ extern "C" int shutdown(int sockfd, int how) {
 }
 
 extern "C" int getsockname(int sockfd, struct sockaddr* address, socklen_t* address_length) {
-	(void)sockfd;
-	(void)address;
-	(void)address_length;
-	return -1;
+	MccaSocketAddressIPv4 kernel_address{};
+	stduint kernel_address_length = sizeof(kernel_address);
+	syscall_net_socket_address_t request{};
+	request.address = &kernel_address;
+	request.address_length = &kernel_address_length;
+	const int ret = (int)syscall(syscall_t::SADR, (stduint)sockfd,
+		_IMM(&request), stduint(syscall_net_socket_address_func_t::Local));
+	if (ret < 0) return ret;
+	return SocketAddressToPosix(address, address_length, kernel_address) ? 0 : -1;
 }
 
 extern "C" int getpeername(int sockfd, struct sockaddr* address, socklen_t* address_length) {
-	(void)sockfd;
-	(void)address;
-	(void)address_length;
-	return -1;
+	MccaSocketAddressIPv4 kernel_address{};
+	stduint kernel_address_length = sizeof(kernel_address);
+	syscall_net_socket_address_t request{};
+	request.address = &kernel_address;
+	request.address_length = &kernel_address_length;
+	const int ret = (int)syscall(syscall_t::SADR, (stduint)sockfd,
+		_IMM(&request), stduint(syscall_net_socket_address_func_t::Peer));
+	if (ret < 0) return ret;
+	return SocketAddressToPosix(address, address_length, kernel_address) ? 0 : -1;
 }
 
 extern "C" int setsockopt(int sockfd, int level, int option_name, const void* option_value, socklen_t option_length) {

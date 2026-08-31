@@ -22,6 +22,7 @@ namespace uni {
 	static vfs_super_block* super_blocks = nullptr;
 	static vfs_dentry* vfs_root = nullptr; // Global root directory
 	Mutex vfs_lock;
+	static constexpr uint16 SocketHandleFlagLocalAddressAuto = 0x0001u;
 
 	static stduint count_mounts_for_source_node_unlocked(DeviceNode* source_device_node) {
 		if (!source_device_node) return 0;
@@ -1170,7 +1171,8 @@ int Filesys::Read(vfs_file* file, void* buf, stduint count) {
 	if ((file->f_inode->i_mode & I_TYPE_MASK) == I_SOCK) {
 		auto* socket = Filesys::GetSocket(file);
 		if (!socket || !socket->is_connected) return -1;
-		return Filesys::RecvSocket(file, buf, count, nullptr, nullptr);
+		const stduint io_flags = (file->f_mode & O_NONBLOCK) ? 0 : syscall_net_io_flag_wait;
+		return Filesys::RecvSocket(file, buf, count, nullptr, nullptr, io_flags);
 	}
 	if (!file->f_inode->i_sb) return -1;
 	MutexLocal guard(&vfs_lock);
@@ -1710,6 +1712,7 @@ int Filesys::BindSocket(vfs_file* file, const Network::SocketAddress& address) {
 
 	socket->local_ipv4.address = ipv4.address;
 	socket->local_ipv4.port = ipv4.port;
+	socket->flags &= ~SocketHandleFlagLocalAddressAuto;
 	socket->protocol = Network::SocketProtocol::UDP;
 	socket->is_bound = true;
 	return 0;
@@ -1737,6 +1740,7 @@ int Filesys::ConnectSocket(vfs_file* file, const Network::SocketAddress& address
 		uint16 local_port = 0;
 		if (!Devsman::AllocateUdpPort(local_port)) return -1;
 		socket->local_ipv4.port = local_port;
+		socket->flags |= SocketHandleFlagLocalAddressAuto;
 		socket->protocol = Network::SocketProtocol::UDP;
 		socket->is_bound = true;
 	}
@@ -1778,18 +1782,19 @@ int Filesys::SendSocket(vfs_file* file, const void* payload, stduint length, con
 		uint16 local_port = 0;
 		if (!Devsman::AllocateUdpPort(local_port)) return -1;
 		socket->local_ipv4.port = local_port;
+		socket->flags |= SocketHandleFlagLocalAddressAuto;
 		socket->protocol = Network::SocketProtocol::UDP;
 		socket->is_bound = true;
 	}
 
 	const stdsint sent = Devsman::SendUdp(target.address,
 		socket->local_ipv4.port, target.port, payload, length);
-	return sent >= 0 ? stdsint(length) : sent;
+	return sent;
 	#endif
 }
 
 int Filesys::RecvSocket(vfs_file* file, void* payload, stduint capacity,
-	Network::SocketAddress* address, stduint* address_length) {
+	Network::SocketAddress* address, stduint* address_length, stduint flags) {
 	SocketHandle* socket = Filesys::GetSocket(file);
 	if (!socket || !socket->is_bound) return -1;
 	if (socket->domain != Network::SocketDomain::IPv4) return -1;
@@ -1805,7 +1810,12 @@ int Filesys::RecvSocket(vfs_file* file, void* payload, stduint capacity,
 	return -1;
 	#else
 	Network::UDPDatagramContext context{};
-	const stdsint received = Devsman::ReceiveUdp(socket->local_ipv4.port, context, payload, capacity);
+	if (file->f_mode & O_NONBLOCK) flags &= ~syscall_net_io_flag_wait;
+	stdsint received = Devsman::ReceiveUdp(socket->local_ipv4.port, context, payload, capacity);
+	if (received == 0 && (flags & syscall_net_io_flag_wait)) {
+		if (!Devsman::WaitUdp(socket->local_ipv4.port)) return 0;
+		received = Devsman::ReceiveUdp(socket->local_ipv4.port, context, payload, capacity);
+	}
 	if (received <= 0) return received;
 
 	if (address && address_length && *address_length >= sizeof(Network::SocketAddressIPv4)) {
@@ -1815,6 +1825,40 @@ int Filesys::RecvSocket(vfs_file* file, void* payload, stduint capacity,
 	}
 	return received;
 	#endif
+}
+
+int Filesys::GetSocketAddress(vfs_file* file, bool peer,
+	Network::SocketAddress* address, stduint* address_length) {
+	SocketHandle* socket = Filesys::GetSocket(file);
+	if (!socket || !address || !address_length) return -1;
+	if (socket->domain != Network::SocketDomain::IPv4) return -1;
+	if (*address_length < sizeof(Network::SocketAddressIPv4)) return -1;
+
+	Network::SocketEndpointIPv4 endpoint{};
+	if (peer) {
+		if (!socket->is_connected) return -1;
+		endpoint = socket->remote_ipv4;
+	}
+	else {
+		if (!socket->is_bound) return -1;
+		endpoint = socket->local_ipv4;
+		#if (_MCCA & 0xFF00) == 0x8600
+		if (endpoint.address.IsZero() && (socket->flags & SocketHandleFlagLocalAddressAuto)) {
+			syscall_net_route_ipv4_t route{};
+			syscall_net_interface_ipv4_t iface{};
+			if (Devsman::GetDefaultIPv4Route(&route, sizeof(route)) &&
+				Devsman::GetIPv4Interface(route.link_index, &iface, sizeof(iface))) {
+				for0(i, Network::IPv4AddressLength) endpoint.address.octet[i] = iface.address[i];
+			}
+		}
+		#endif
+	}
+	if (!endpoint.port) return -1;
+
+	auto* ipv4 = reinterpret_cast<Network::SocketAddressIPv4*>(address);
+	Network::SocketWriteAddress(*ipv4, endpoint.address, endpoint.port);
+	*address_length = sizeof(Network::SocketAddressIPv4);
+	return 0;
 }
 
 int Filesys::ReadPipe(vfs_file* file, void* buf, stduint count) {
