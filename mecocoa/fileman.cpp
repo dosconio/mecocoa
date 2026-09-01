@@ -148,6 +148,14 @@ stdsint ProcessBlock::ConnectSocket(int fd, const uni::Network::SocketAddress* a
 	return Filesys::ConnectSocket(file, *address);
 }
 
+stdsint ProcessBlock::ListenSocket(int fd, stduint backlog) {
+	auto files = this->fileman.Lock();
+	if (fd < 0 || fd >= (stdsint)files->pfiles.Count() || !files->pfiles[fd] || !files->pfiles[fd]->vfile) return -1;
+	auto* file = files->pfiles[fd]->vfile;
+	if (!file->f_inode || (file->f_inode->i_mode & I_TYPE_MASK) != I_SOCK) return -1;
+	return Filesys::ListenSocket(file, backlog);
+}
+
 stdsint ProcessBlock::SendSocket(int fd, const void* payload, stduint length, const uni::Network::SocketAddress* address) {
 	if (length > 0x7FFFFFFFu) return -1;
 	auto files = this->fileman.Lock();
@@ -168,30 +176,50 @@ stdsint ProcessBlock::RecvSocket(int fd, void* payload, stduint capacity,
 }
 
 stdsint ProcessBlock::Poll(syscall_pollfd_t* fds, stduint nfds, stdsint timeout) {
-	if (timeout != 0) return -1;
-	if (!nfds) return 0;
-	if (!fds) return -1;
-	auto files = this->fileman.Lock();
-	stdsint ready = 0;
-	for0(i, nfds) {
-		fds[i].revents = 0;
-		const int fd = fds[i].fd;
-		if (fd < 0 || fd >= (stdsint)files->pfiles.Count() || !files->pfiles[fd] || !files->pfiles[fd]->vfile) {
-			fds[i].revents = syscall_poll_invalid;
-			ready++;
-			continue;
-		}
-		auto* file = files->pfiles[fd]->vfile;
-		stduint revents = 0;
-		if (Filesys::Poll(file, (stduint)fds[i].events, &revents) < 0) {
-			fds[i].revents = syscall_poll_error;
-			ready++;
-			continue;
-		}
-		fds[i].revents = (sint16)revents;
-		if (fds[i].revents) ready++;
+	if (!nfds) {
+		if (timeout > 0) syscall(syscall_t::REST, 1, (stduint)timeout);
+		return 0;
 	}
-	return ready;
+	if (!fds) return -1;
+	const stduint start_tick = tick;
+	const stduint timeout_ticks = timeout > 0 ?
+		((stduint)timeout * CONFIG_SysTickFreq + 999) / 1000 : 0;
+
+	for (;;) {
+		stdsint ready = 0;
+		{
+			auto files = this->fileman.Lock();
+			for0(i, nfds) {
+				fds[i].revents = 0;
+				const int fd = fds[i].fd;
+				if (fd < 0 || fd >= (stdsint)files->pfiles.Count() || !files->pfiles[fd] || !files->pfiles[fd]->vfile) {
+					fds[i].revents = syscall_poll_invalid;
+					ready++;
+					continue;
+				}
+				auto* file = files->pfiles[fd]->vfile;
+				stduint revents = 0;
+				if (Filesys::Poll(file, (stduint)fds[i].events, &revents) < 0) {
+					fds[i].revents = syscall_poll_error;
+					ready++;
+					continue;
+				}
+				fds[i].revents = (sint16)revents;
+				if (fds[i].revents) ready++;
+			}
+		}
+		if (ready || timeout == 0) return ready;
+		if (timeout > 0 && tick - start_tick >= timeout_ticks) return 0;
+		stduint sleep_ms = 10;
+		if (timeout > 0) {
+			const stduint elapsed_ticks = tick - start_tick;
+			const stduint remaining_ticks = elapsed_ticks < timeout_ticks ? timeout_ticks - elapsed_ticks : 0;
+			if (!remaining_ticks) return 0;
+			const stduint remaining_ms = (remaining_ticks * 1000 + CONFIG_SysTickFreq - 1) / CONFIG_SysTickFreq;
+			if (remaining_ms < sleep_ms) sleep_ms = remaining_ms ? remaining_ms : 1;
+		}
+		syscall(syscall_t::REST, 1, sleep_ms);
+	}
 }
 
 stdsint ProcessBlock::Fcntl(int fd, int cmd, stduint arg) {

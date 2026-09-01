@@ -2,6 +2,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <poll.h>
+#include <sys/select.h>
 #include <stdarg.h>
 
 
@@ -21,6 +22,37 @@ int fcntl(int fd, int cmd, ...) {
 
 int poll(struct pollfd* fds, nfds_t nfds, int timeout) {
 	return (int)syscall(syscall_t::POLL, _IMM(fds), (stduint)nfds, (stduint)timeout);
+}
+
+int select(int nfds, fd_set* readfds, fd_set* writefds, fd_set* exceptfds, struct timeval* timeout) {
+	if (nfds < 0 || nfds > FD_SETSIZE) return -1;
+	const int timeout_ms = timeout ?
+		(int)(timeout->tv_sec * 1000 + (timeout->tv_usec + 999) / 1000) : -1;
+	if (nfds == 0) return poll(nullptr, 0, timeout_ms);
+
+	struct pollfd pollfds[FD_SETSIZE] = {};
+	nfds_t poll_count = 0;
+	for (int fd = 0; fd < nfds; fd++) {
+		short events = 0;
+		if (readfds && FD_ISSET(fd, readfds)) events |= POLLIN;
+		if (writefds && FD_ISSET(fd, writefds)) events |= POLLOUT;
+		if (!events) continue;
+		pollfds[poll_count].fd = fd;
+		pollfds[poll_count].events = events;
+		poll_count++;
+	}
+	const int ready = poll(pollfds, poll_count, timeout_ms);
+	if (ready < 0) return ready;
+
+	if (readfds) FD_ZERO(readfds);
+	if (writefds) FD_ZERO(writefds);
+	if (exceptfds) FD_ZERO(exceptfds);
+	for (nfds_t i = 0; i < poll_count; i++) {
+		const int fd = pollfds[i].fd;
+		if (readfds && (pollfds[i].revents & (POLLIN | POLLHUP | POLLERR | POLLNVAL))) FD_SET(fd, readfds);
+		if (writefds && (pollfds[i].revents & (POLLOUT | POLLERR | POLLNVAL))) FD_SET(fd, writefds);
+	}
+	return ready;
 }
 
 int close(int fd) {

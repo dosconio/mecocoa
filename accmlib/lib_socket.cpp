@@ -108,9 +108,7 @@ extern "C" stdsint recvfrom(int sockfd, void* buffer, size_t length, int flags,
 }
 
 extern "C" int listen(int sockfd, int backlog) {
-	(void)sockfd;
-	(void)backlog;
-	return -1;
+	return (int)syscall(syscall_t::LIST, (stduint)sockfd, (stduint)backlog, 0);
 }
 
 extern "C" int accept(int sockfd, struct sockaddr* address, socklen_t* address_length) {

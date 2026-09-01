@@ -5,6 +5,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <poll.h>
+#include <sys/select.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 
@@ -35,13 +36,14 @@ static bool ParseIPv4(const char* text, in_addr_t* output) {
 }
 
 static void PrintUsage() {
-	printf("usage: testudp [--dontwait] [--nonblock] [--poll] [--reuse] [--listen] [ipv4] [port] [payload] [conn]\n\r");
+	printf("usage: testudp [--dontwait] [--nonblock] [--poll] [--select] [--reuse] [--listen] [ipv4] [port] [payload] [conn]\n\r");
 	printf("  default: testudp 10.0.2.1 7 mecocoa\n\r");
 	printf("  sendto:  testudp 10.0.2.1 7777 mecocoa\n\r");
 	printf("  conn:    testudp 10.0.2.1 7777 mecocoa conn\n\r");
 	printf("  nowait:  testudp --dontwait 10.0.2.1 7777 mecocoa\n\r");
 	printf("  nbread:  testudp --nonblock 10.0.2.1 7777 mecocoa conn\n\r");
 	printf("  poll:    testudp --poll 10.0.2.1 7777 mecocoa\n\r");
+	printf("  select:  testudp --select 10.0.2.1 7777 mecocoa\n\r");
 	printf("  listen:  testudp --reuse --listen 7777\n\r");
 }
 
@@ -77,6 +79,10 @@ static bool SetReuseAddress(int fd) {
 	return value != 0;
 }
 
+static stduint NowMs() {
+	return syscall(syscall_t::TIME, 1, nil, nil);
+}
+
 int main(int argc, char** argv) {
 	if (argc >= 2 && (!StrCompare(argv[1], "-h") || !StrCompare(argv[1], "--help") ||
 		!StrCompare(argv[1], "help"))) {
@@ -91,6 +97,7 @@ int main(int argc, char** argv) {
 	bool listen_mode = false;
 	bool reuse_address = false;
 	bool use_poll = false;
+	bool use_select = false;
 	for (int i = 1; i < argc; i++) {
 		if (StrCompare(argv[i], "conn") == 0) {
 			use_connect = true;
@@ -114,6 +121,10 @@ int main(int argc, char** argv) {
 		}
 		if (StrCompare(argv[i], "--poll") == 0) {
 			use_poll = true;
+			continue;
+		}
+		if (StrCompare(argv[i], "--select") == 0) {
+			use_select = true;
 			continue;
 		}
 		if (positional_count >= 3) {
@@ -230,26 +241,54 @@ int main(int argc, char** argv) {
 	socklen_t source_length = sizeof(source);
 	stdsint received = 0;
 	const bool no_wait_receive = dont_wait || nonblock;
-	const stduint receive_attempts = no_wait_receive ? 1 : 50;
+	const stduint receive_attempts = (no_wait_receive || use_poll || use_select) ? 1 : 50;
 	const int receive_flags = dont_wait ? MSG_DONTWAIT : 0;
 	for0(i, receive_attempts) {
 		if (use_poll) {
 			struct pollfd pfd{};
 			pfd.fd = fd;
 			pfd.events = POLLIN;
-			const int poll_ready = poll(&pfd, 1, 0);
+			const int poll_timeout = no_wait_receive ? 0 : 2500;
+			const stduint poll_start = NowMs();
+			const int poll_ready = poll(&pfd, 1, poll_timeout);
+			const stduint poll_elapsed = NowMs() - poll_start;
 			if (poll_ready < 0) {
 				printf("testudp: poll failed\n\r");
 				close(fd);
 				return 1;
 			}
+			printf("testudp: poll=%d revents=%04x elapsed=%ums\n\r",
+				poll_ready, (unsigned)pfd.revents, (unsigned)poll_elapsed);
 			if (poll_ready == 0 || !(pfd.revents & POLLIN)) {
 				if (!no_wait_receive) {
 					sysrest(1, 50);
 					continue;
 				}
 			}
-			printf("testudp: poll=%d revents=%04x\n\r", poll_ready, (unsigned)pfd.revents);
+		}
+		if (use_select) {
+			fd_set readfds;
+			FD_ZERO(&readfds);
+			FD_SET(fd, &readfds);
+			struct timeval timeout{};
+			timeout.tv_sec = no_wait_receive ? 0 : 2;
+			timeout.tv_usec = no_wait_receive ? 0 : 500000;
+			const stduint select_start = NowMs();
+			const int select_ready = select(fd + 1, &readfds, nullptr, nullptr, &timeout);
+			const stduint select_elapsed = NowMs() - select_start;
+			if (select_ready < 0) {
+				printf("testudp: select failed\n\r");
+				close(fd);
+				return 1;
+			}
+			printf("testudp: select=%d isset=%d elapsed=%ums\n\r",
+				select_ready, FD_ISSET(fd, &readfds) ? 1 : 0, (unsigned)select_elapsed);
+			if (select_ready == 0 || !FD_ISSET(fd, &readfds)) {
+				if (!no_wait_receive) {
+					sysrest(1, 50);
+					continue;
+				}
+			}
 		}
 		if (use_connect) {
 			received = dont_wait ? recv(fd, buffer, sizeof(buffer) - 1, receive_flags) :

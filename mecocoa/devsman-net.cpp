@@ -8,6 +8,7 @@
 #include <cpp/System/Network/Layer/Network/ARP.hpp>
 #include <cpp/System/Network/Layer/Network/IPv4.hpp>
 #include <cpp/System/Network/Layer/Network/IPv4/ICMP.hpp>
+#include <cpp/System/Network/Layer/Transport/TCP.hpp>
 #include <cpp/System/Network/Layer/Transport/UDP.hpp>
 
 #if (_MCCA & 0xFF00) == 0x8600
@@ -27,6 +28,8 @@ namespace {
 	constexpr stduint NetPendingUdpTimeoutTicks = 5 * CONFIG_SysTickFreq;
 	constexpr stduint NetPendingUdpArpRetryTicks = CONFIG_SysTickFreq;
 	constexpr stduint NetPendingUdpArpRetryLimit = 3;
+	constexpr stduint NetTcpListenCapacity = 4;
+	constexpr uint16 NetTcpWindowSize = 4096;
 	constexpr uint16 NetUdpEchoPort = 7;
 	constexpr uint16 NetUdpEphemeralPortBegin = 49152;
 	constexpr uint16 NetUdpEphemeralPortEnd = 65535;
@@ -96,6 +99,11 @@ namespace {
 		NetUdpPortHandler handler;
 	};
 
+	struct NetTcpListener {
+		uint16 port;
+		stduint backlog;
+	};
+
 	struct NetUdpInboxEntry {
 		uni::Network::UDPDatagramContext context;
 	};
@@ -127,6 +135,9 @@ namespace {
 	stduint net_arp_cache_next = 0;
 	NetPendingUdpPacket net_pending_udp[NetPendingUdpCapacity]{};
 	uint8* net_pending_udp_payloads = nullptr;
+	NetTcpListener net_tcp_listeners[NetTcpListenCapacity]{};
+	stduint net_tcp_listener_count = 0;
+	uint32 net_tcp_next_sequence = 0x10000000u;
 
 	struct NetRemoteLinkState {
 		stduint owner_tid = 0;
@@ -474,6 +485,13 @@ namespace {
 		return nullptr;
 	}
 
+	NetTcpListener* FindTcpListener(uint16 port) {
+		for0(i, net_tcp_listener_count) {
+			if (net_tcp_listeners[i].port == port) return &net_tcp_listeners[i];
+		}
+		return nullptr;
+	}
+
 	uint8* GetUdpInboxPayloadSlot(NetUdpInbox& inbox, stduint index) {
 		return inbox.payloads + index * NetUdpInboxPayloadSize;
 	}
@@ -776,6 +794,73 @@ namespace {
 		(void)handler(dev, packet);
 	}
 
+	void HandleTCPv4Frame(uni::Network::LinkDevice& dev,
+		const uni::Network::EthernetFrameView& frame, const uni::Network::IPv4PacketView& ipv4) {
+		uni::Network::TCPSegmentView tcp{};
+		if (!uni::Network::ParseTCPSegment(ipv4, tcp)) {
+			plogwarn("[Net] tcp malformed");
+			return;
+		}
+		if (!uni::Network::ValidateTCPIPv4Checksum(ipv4, tcp)) {
+			plogwarn("[Net] tcp checksum invalid");
+			return;
+		}
+		if (tcp.flags & uni::Network::TCPFlagRST) return;
+		if (FindTcpListener(tcp.destination_port)) {
+			if ((tcp.flags & uni::Network::TCPFlagSYN) && !(tcp.flags & uni::Network::TCPFlagACK)) {
+				const auto local_mac = dev.GetAddress();
+				const stduint synack_len = uni::Network::BuildTCPIPv4SynAck(net_buffers.tx, NetFrameBufferSize,
+					local_mac, frame.source, net_config.ipv4_address, ipv4, tcp,
+					net_tcp_next_sequence++, NetTcpWindowSize, net_ipv4_identification++);
+				if (!synack_len) {
+					plogwarn("[Net] tcp syn-ack build failed");
+					return;
+				}
+				uni::Network::LinkFrameView synack{
+					net_buffers.tx,
+					synack_len,
+				};
+				const stdsint sent = dev.Send(synack);
+				if (sent <= 0) plogwarn("[Net] tcp syn-ack send failed");
+				return;
+			}
+			if (tcp.flags & uni::Network::TCPFlagFIN) {
+				const auto local_mac = dev.GetAddress();
+				uint32 acknowledgment = tcp.sequence + uint32(tcp.payload_length) + 1;
+				const stduint ack_len = uni::Network::BuildTCPIPv4Ack(net_buffers.tx, NetFrameBufferSize,
+					local_mac, frame.source, net_config.ipv4_address, ipv4, tcp,
+					tcp.acknowledgment, acknowledgment, NetTcpWindowSize, net_ipv4_identification++);
+				if (!ack_len) {
+					plogwarn("[Net] tcp ack build failed");
+					return;
+				}
+				uni::Network::LinkFrameView ack{
+					net_buffers.tx,
+					ack_len,
+				};
+				const stdsint sent = dev.Send(ack);
+				if (sent <= 0) plogwarn("[Net] tcp ack send failed");
+				return;
+			}
+			if (tcp.flags & uni::Network::TCPFlagACK) return;
+		}
+		const auto local_mac = dev.GetAddress();
+		const stduint reset_len = uni::Network::BuildTCPIPv4Reset(net_buffers.tx, NetFrameBufferSize,
+			local_mac, frame.source, net_config.ipv4_address, ipv4, tcp, net_ipv4_identification++);
+		if (!reset_len) {
+			plogwarn("[Net] tcp reset build failed");
+			return;
+		}
+		uni::Network::LinkFrameView reset{
+			net_buffers.tx,
+			reset_len,
+		};
+		const stdsint sent = dev.Send(reset);
+		if (sent <= 0) {
+			plogwarn("[Net] tcp reset send failed");
+		}
+	}
+
 	void HandleIPv4FrameByProtocol(uni::Network::LinkDevice& dev, const uni::Network::EthernetFrameView& frame) {
 		uni::Network::IPv4PacketView ipv4{};
 		if (!uni::Network::ParseIPv4Packet(frame, ipv4)) {
@@ -789,6 +874,9 @@ namespace {
 			return;
 		case uni::Network::IPv4Protocol::UDP:
 			DispatchUDPFrame(dev, frame, ipv4);
+			return;
+		case uni::Network::IPv4Protocol::TCP:
+			HandleTCPv4Frame(dev, frame, ipv4);
 			return;
 		default:
 			return;
@@ -1022,6 +1110,33 @@ bool Devsman::CloseUdpPort(uint16 port, stduint inbox_id) {
 	if (!ReleaseUdpInbox(port, inbox_id)) return false;
 	if (!FindUdpInbox(port)) (void)UnregisterUdpPortHandler(port, HandleUdpInboxDatagram);
 	return true;
+}
+
+bool Devsman::ListenTcpPort(uint16 port, stduint backlog) {
+	if (!port) return false;
+	auto* listener = FindTcpListener(port);
+	if (listener) {
+		listener->backlog = backlog;
+		return true;
+	}
+	if (net_tcp_listener_count >= NetTcpListenCapacity) return false;
+	net_tcp_listeners[net_tcp_listener_count++] = { port, backlog };
+	return true;
+}
+
+bool Devsman::CloseTcpPort(uint16 port) {
+	for0(i, net_tcp_listener_count) {
+		if (net_tcp_listeners[i].port != port) continue;
+		net_tcp_listeners[i] = net_tcp_listeners[net_tcp_listener_count - 1];
+		net_tcp_listeners[net_tcp_listener_count - 1] = {};
+		--net_tcp_listener_count;
+		return true;
+	}
+	return false;
+}
+
+bool Devsman::IsTcpPortListening(uint16 port) {
+	return FindTcpListener(port) != nullptr;
 }
 
 stdsint Devsman::ReceiveUdp(uint16 port, uni::Network::UDPDatagramContext& context, void* payload, stduint capacity) {

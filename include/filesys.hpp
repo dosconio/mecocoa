@@ -101,6 +101,7 @@ struct vfs_file {
 	vfs_inode* f_inode = nullptr;
 	stduint f_pos = 0;                // Current read/write position
 	stduint f_mode = 0;               // Open mode (R/W/A etc)
+	FilesysEnumState f_enum_state = {};
 };
 
 struct SocketHandle {
@@ -111,6 +112,7 @@ struct SocketHandle {
 	stduint udp_inbox_id = stduint(-1);
 	bool is_bound = false;
 	bool is_connected = false;
+	bool is_listening = false;
 	Network::SocketEndpointIPv4 local_ipv4 = {};
 	Network::SocketEndpointIPv4 remote_ipv4 = {};
 };
@@ -150,6 +152,7 @@ public:
 	static SocketHandle* GetSocket(vfs_file* file);
 	static int BindSocket(vfs_file* file, const Network::SocketAddress& address);
 	static int ConnectSocket(vfs_file* file, const Network::SocketAddress& address);
+	static int ListenSocket(vfs_file* file, stduint backlog);
 	static int SendSocket(vfs_file* file, const void* payload, stduint length, const Network::SocketAddress* address);
 	static int RecvSocket(vfs_file* file, void* payload, stduint capacity,
 		Network::SocketAddress* address, stduint* address_length, stduint flags = 0);
@@ -189,7 +192,7 @@ public:
 	virtual bool remove(rostr pathname) override;
 	virtual void* search(rostr fullpath, FilesysSearchArgs* args) override;
 	virtual bool proper(void* handler, stduint cmd, const void* moreinfo = 0) override;
-	virtual bool enumer(void* dir_handler, _tocall_ft _fn) override;
+	virtual bool enumer(void* dir_handler, _tocall_ft _fn, FilesysEnumState* state = nullptr) override;
 	virtual stduint readfl(void* fil_handler, Slice file_slice, byte* dst) override;
 	virtual stduint writfl(void* fil_handler, Slice file_slice, const byte* src) override;
 public:

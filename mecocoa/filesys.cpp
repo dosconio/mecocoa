@@ -117,6 +117,22 @@ namespace uni {
 		return inode;
 	}
 
+	static bool vfs_enum_emit(FilesysEnumState* state, _tocall_ft callback, void* is_dir, void* name) {
+		if (!callback) return false;
+		if (!state) {
+			callback(is_dir, name);
+			return true;
+		}
+		if (state->finished || state->full()) return false;
+		if (state->should_emit()) {
+			callback(is_dir, name);
+			state->emit_one();
+			return !state->full();
+		}
+		state->skip_one();
+		return true;
+	}
+
 
 	// A Pseudo Memory Filesystem to serve as Rootfs
 	class RootFs : public FilesysTrait {
@@ -127,17 +143,19 @@ namespace uni {
 		virtual bool remove(rostr pathname) override { return false; }
 		virtual void* search(rostr fullpath, FilesysSearchArgs* args) override { return nullptr; }
 		virtual bool proper(void* handler, stduint cmd, const void* moreinfo = 0) override { return false; }
-		virtual bool enumer(void* dir_handler, _tocall_ft _fn) override {
+		virtual bool enumer(void* dir_handler, _tocall_ft _fn, FilesysEnumState* state = nullptr) override {
 			// dir_handler is the vfs_dentry* of this directory (set at inode creation)
 			vfs_dentry* dir = (vfs_dentry*)dir_handler;
 			if (!dir || !_fn) return false;
+			if (state && (state->finished || state->full())) return true;
 			vfs_dentry* child = dir->d_first_child;
 			while (child) {
 				bool is_dir = child->d_inode &&
 					(child->d_inode->i_mode & I_TYPE_MASK) == I_DIRECTORY;
-				_fn((void*)(stduint)is_dir, (void*)child->d_name);
+				if (!vfs_enum_emit(state, _fn, (void*)(stduint)is_dir, (void*)child->d_name)) break;
 				child = child->d_next_sibling;
 			}
+			if (state && !state->full()) state->mark_finished();
 			return true;
 		}
 		virtual stduint readfl(void* fil_handler, Slice file_slice, byte* dst) override { return 0; }
@@ -436,16 +454,18 @@ namespace uni {
 			}
 			return false;
 		}
-		virtual bool enumer(void* dir_handler, _tocall_ft _fn) override {
+		virtual bool enumer(void* dir_handler, _tocall_ft _fn, FilesysEnumState* state = nullptr) override {
 			if (!_fn) return false;
+			if (state && (state->finished || state->full())) return true;
 			if (device_tree_handle_is_root(dir_handler)) {
 				if (auto* root = Devsman::Root()) {
 					for (auto* child = reinterpret_cast<DeviceNode*>(root->link.subf);
 						child; child = reinterpret_cast<DeviceNode*>(child->link.next)) {
 						if (!child->link.addr) continue;
-						_fn((void*)1, (void*)child->link.addr);
+						if (!vfs_enum_emit(state, _fn, (void*)1, (void*)child->link.addr)) break;
 					}
 				}
+				if (state && !state->full()) state->mark_finished();
 				return true;
 			}
 			auto* node = device_tree_handle_node(dir_handler);
@@ -453,17 +473,27 @@ namespace uni {
 			for (auto* child = reinterpret_cast<DeviceNode*>(node->link.subf);
 				child; child = reinterpret_cast<DeviceNode*>(child->link.next)) {
 				if (!child->link.addr) continue;
-				_fn((void*)1, (void*)child->link.addr);
+				if (!vfs_enum_emit(state, _fn, (void*)1, (void*)child->link.addr)) return true;
 			}
-			if (device_tree_property_available(node, kDeviceTreeNodeTypeMarker)) _fn((void*)0, (void*)kDeviceTreeNodeTypeName);
-			if (device_tree_property_available(node, kDeviceTreeNodeNameMarker)) _fn((void*)0, (void*)kDeviceTreeNodeNameName);
-			if (device_tree_property_available(node, kDeviceTreeDriverNameMarker)) _fn((void*)0, (void*)kDeviceTreeDriverNameName);
-			if (device_tree_property_available(node, kDeviceTreeBindingStateMarker)) _fn((void*)0, (void*)kDeviceTreeBindingStateName);
-			if (device_tree_property_available(node, kDeviceTreeBlockSizeMarker)) _fn((void*)0, (void*)kDeviceTreeBlockSizeName);
-			if (device_tree_property_available(node, kDeviceTreeUnitCountMarker)) _fn((void*)0, (void*)kDeviceTreeUnitCountName);
-			if (device_tree_property_available(node, kDeviceTreeByteSizeMarker)) _fn((void*)0, (void*)kDeviceTreeByteSizeName);
-			if (device_tree_property_available(node, kDeviceTreeMountCountMarker)) _fn((void*)0, (void*)kDeviceTreeMountCountName);
-			if (device_tree_property_available(node, kDeviceTreeMountPathMarker)) _fn((void*)0, (void*)kDeviceTreeMountPathName);
+			if (device_tree_property_available(node, kDeviceTreeNodeTypeMarker) &&
+				!vfs_enum_emit(state, _fn, (void*)0, (void*)kDeviceTreeNodeTypeName)) return true;
+			if (device_tree_property_available(node, kDeviceTreeNodeNameMarker) &&
+				!vfs_enum_emit(state, _fn, (void*)0, (void*)kDeviceTreeNodeNameName)) return true;
+			if (device_tree_property_available(node, kDeviceTreeDriverNameMarker) &&
+				!vfs_enum_emit(state, _fn, (void*)0, (void*)kDeviceTreeDriverNameName)) return true;
+			if (device_tree_property_available(node, kDeviceTreeBindingStateMarker) &&
+				!vfs_enum_emit(state, _fn, (void*)0, (void*)kDeviceTreeBindingStateName)) return true;
+			if (device_tree_property_available(node, kDeviceTreeBlockSizeMarker) &&
+				!vfs_enum_emit(state, _fn, (void*)0, (void*)kDeviceTreeBlockSizeName)) return true;
+			if (device_tree_property_available(node, kDeviceTreeUnitCountMarker) &&
+				!vfs_enum_emit(state, _fn, (void*)0, (void*)kDeviceTreeUnitCountName)) return true;
+			if (device_tree_property_available(node, kDeviceTreeByteSizeMarker) &&
+				!vfs_enum_emit(state, _fn, (void*)0, (void*)kDeviceTreeByteSizeName)) return true;
+			if (device_tree_property_available(node, kDeviceTreeMountCountMarker) &&
+				!vfs_enum_emit(state, _fn, (void*)0, (void*)kDeviceTreeMountCountName)) return true;
+			if (device_tree_property_available(node, kDeviceTreeMountPathMarker) &&
+				!vfs_enum_emit(state, _fn, (void*)0, (void*)kDeviceTreeMountPathName)) return true;
+			if (state) state->mark_finished();
 			return true;
 		}
 		virtual stduint readfl(void* fil_handler, Slice file_slice, byte* dst) override {
@@ -1227,19 +1257,21 @@ int Filesys::Close(vfs_file* file) {
 
 int Filesys::Enumer(vfs_file* file, void* buf, stduint count, ProcessBlock* pb) {
 	if (!file || !file->f_inode || !file->f_inode->i_sb) return -1;
+	if (count == 0) return 0;
 	MutexLocal guard(&vfs_lock);
 	FilesysTrait* fs = file->f_inode->i_sb->fs;
+	file->f_enum_state.begin(count);
 
 	g_enum_cxt.pb = pb;
 	g_enum_cxt.user_addr = buf;
 	g_enum_cxt.max_count = count;
-	g_enum_cxt.skip_count = file->f_pos;
+	g_enum_cxt.skip_count = 0;
 	g_enum_cxt.current_idx = 0;
 	g_enum_cxt.filled_count = 0;
 
-	fs->enumer(file->f_inode->internal_handler, (_tocall_ft)user_enumer_callback);
+	fs->enumer(file->f_inode->internal_handler, (_tocall_ft)user_enumer_callback, &file->f_enum_state);
 
-	file->f_pos += g_enum_cxt.filled_count;
+	file->f_pos = file->f_enum_state.position;
 	return g_enum_cxt.filled_count;
 }
 
@@ -1402,18 +1434,22 @@ bool DevFs::proper(void* handler, stduint cmd, const void* moreinfo) {
 	return false;
 }
 
-bool DevFs::enumer(void* dir_handler, _tocall_ft _fn) {
+bool DevFs::enumer(void* dir_handler, _tocall_ft _fn, FilesysEnumState* state) {
+	if (!_fn) return false;
+	if (state && (state->finished || state->full())) return true;
 	if (dir_handler == (void*)~0 || dir_handler == nullptr) { // Root of /dev
-		_fn((void*)0, (void*)"tty");
-		_fn((void*)1, (void*)"pts");
+		if (!uni::vfs_enum_emit(state, _fn, (void*)0, (void*)"tty")) return true;
+		if (!uni::vfs_enum_emit(state, _fn, (void*)1, (void*)"pts")) return true;
+		if (state) state->mark_finished();
 		return true;
 	}
 	if (dir_handler == (void*)0x1000) { // /dev/pts
 		for (auto nod = vttys.Root(); nod; nod = nod->next) {
 			char name[16];
 			String(name, 16).Format("%u", ((vtty_type_t*)nod->type)->id);
-			_fn((void*)0, (void*)name);
+			if (!uni::vfs_enum_emit(state, _fn, (void*)0, (void*)name)) return true;
 		}
+		if (state) state->mark_finished();
 		return true;
 	}
 	return false;
@@ -1697,9 +1733,6 @@ int Filesys::BindSocket(vfs_file* file, const Network::SocketAddress& address) {
 	SocketHandle* socket = Filesys::GetSocket(file);
 	if (!socket || socket->is_bound) return -1;
 	if (socket->domain != Network::SocketDomain::IPv4) return -1;
-	if (socket->type != Network::SocketType::Datagram) return -1;
-	if (socket->protocol != Network::SocketProtocol::Default &&
-		socket->protocol != Network::SocketProtocol::UDP) return -1;
 	if (address.domain != uint16(Network::SocketDomain::IPv4)) return -1;
 	if (address.length < sizeof(Network::SocketAddressIPv4)) return -1;
 
@@ -1709,6 +1742,19 @@ int Filesys::BindSocket(vfs_file* file, const Network::SocketAddress& address) {
 	(void)ipv4;
 	return -1;
 	#else
+	if (socket->type == Network::SocketType::Stream) {
+		if (socket->protocol != Network::SocketProtocol::Default &&
+			socket->protocol != Network::SocketProtocol::TCP) return -1;
+		socket->local_ipv4.address = ipv4.address;
+		socket->local_ipv4.port = ipv4.port;
+		socket->flags &= ~SocketHandleFlagLocalAddressAuto;
+		socket->protocol = Network::SocketProtocol::TCP;
+		socket->is_bound = true;
+		return 0;
+	}
+	if (socket->type != Network::SocketType::Datagram) return -1;
+	if (socket->protocol != Network::SocketProtocol::Default &&
+		socket->protocol != Network::SocketProtocol::UDP) return -1;
 	stduint inbox_id = stduint(-1);
 	const bool reuse_address = (socket->flags & SocketHandleFlagReuseAddress) != 0;
 	if (!Devsman::BindUdpPort(ipv4.port, reuse_address, inbox_id)) return -1;
@@ -1719,6 +1765,26 @@ int Filesys::BindSocket(vfs_file* file, const Network::SocketAddress& address) {
 	socket->flags &= ~SocketHandleFlagLocalAddressAuto;
 	socket->protocol = Network::SocketProtocol::UDP;
 	socket->is_bound = true;
+	return 0;
+	#endif
+}
+
+int Filesys::ListenSocket(vfs_file* file, stduint backlog) {
+	SocketHandle* socket = Filesys::GetSocket(file);
+	if (!socket || !socket->is_bound || socket->is_connected || socket->is_listening) return -1;
+	if (socket->domain != Network::SocketDomain::IPv4) return -1;
+	if (socket->type != Network::SocketType::Stream) return -1;
+	if (socket->protocol != Network::SocketProtocol::Default &&
+		socket->protocol != Network::SocketProtocol::TCP) return -1;
+	if (!socket->local_ipv4.port) return -1;
+
+	#if (_MCCA & 0xFF00) != 0x8600
+	(void)backlog;
+	return -1;
+	#else
+	if (!Devsman::ListenTcpPort(socket->local_ipv4.port, backlog)) return -1;
+	socket->protocol = Network::SocketProtocol::TCP;
+	socket->is_listening = true;
 	return 0;
 	#endif
 }
@@ -2133,6 +2199,9 @@ int Filesys::CloseSocket(vfs_file* file) {
 		#if (_MCCA & 0xFF00) == 0x8600
 		if (socket->is_bound && socket->protocol == Network::SocketProtocol::UDP && socket->local_ipv4.port) {
 			Devsman::CloseUdpPort(socket->local_ipv4.port, socket->udp_inbox_id);
+		}
+		if (socket->is_listening && socket->protocol == Network::SocketProtocol::TCP && socket->local_ipv4.port) {
+			Devsman::CloseTcpPort(socket->local_ipv4.port);
 		}
 		#endif
 		delete socket;

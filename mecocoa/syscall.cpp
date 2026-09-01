@@ -32,10 +32,11 @@ extern "C" stdsint sysc_FCTL(stduint, stduint, stduint);
 extern "C" stdsint sysc_SADR(stduint, stduint, stduint);
 extern "C" stdsint sysc_SOPT(stduint, stduint, stduint);
 extern "C" stdsint sysc_POLL(stduint, stduint, stduint);
+extern "C" stdsint sysc_LIST(stduint, stduint, stduint);
 extern "C" void check_and_deliver_signals(void* context);
 
 // Syscall Wrappers
-extern stduint SYSCALL_TABLE[47];
+extern stduint SYSCALL_TABLE[48];
 
 void Syscall::Initialize() {
 	#if _MCCA == 0x8632
@@ -454,7 +455,7 @@ DEFSYSC sysc_POLL(stduint usr_fds, stduint nfds, stduint timeout) {
 	ThreadBlock* th = Taskman::CurrentTB();
 	ProcessBlock* pb = th ? th->parent_process : nullptr;
 	if (!pb || nfds > 64) return -1;
-	if (!nfds) return timeout == 0 ? 0 : -1;
+	if (!nfds) return pb->Poll(nullptr, 0, (stdsint)timeout);
 	if (!usr_fds) return -1;
 	syscall_pollfd_t* fds = new syscall_pollfd_t[nfds];
 	if (!fds) return -1;
@@ -465,6 +466,13 @@ DEFSYSC sysc_POLL(stduint usr_fds, stduint nfds, stduint timeout) {
 	}
 	delete[] fds;
 	return ret;
+}
+
+DEFSYSC sysc_LIST(stduint fd, stduint backlog, stduint) {
+	ThreadBlock* th = Taskman::CurrentTB();
+	ProcessBlock* pb = th ? th->parent_process : nullptr;
+	if (!pb) return -1;
+	return pb->ListenSocket((int)fd, backlog);
 }
 
 DEFSYSC sysc_ROUT(stduint func, stduint p1, stduint p2) {
@@ -1050,6 +1058,7 @@ stduint SYSCALL_TABLE[] = {
 	mglb(sysc_SADR), // 0x2C (SADR)
 	mglb(sysc_SOPT), // 0x2D (SOPT)
 	mglb(sysc_POLL), // 0x2E (POLL)
+	mglb(sysc_LIST), // 0x2F (LIST)
 };
 #endif
 
@@ -1135,6 +1144,9 @@ void syscall_body(NormalTaskContext* cxt)
 		break;
 	case syscall_t::POLL:
 		cxt->a0 = sysc_POLL(cxt->a0, cxt->a1, cxt->a2);
+		break;
+	case syscall_t::LIST:
+		cxt->a0 = sysc_LIST(cxt->a0, cxt->a1, cxt->a2);
 		break;
 	default:
 		plogerro("Unknown syscall no: %d", syscall_num);

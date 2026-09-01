@@ -27,6 +27,7 @@ apps += \
 	\
 	$(BIN_DIR)/test \
 	$(BIN_DIR)/testudp \
+	$(BIN_DIR)/testtcp \
 	$(BIN_DIR)/netinfo \
 	$(BIN_DIR)/_thread \
 	
@@ -114,6 +115,10 @@ $(BIN_DIR)/test: subapps/test.cpp $(MCCA_CRT0) $(MCCA_LIBC)
 $(BIN_DIR)/testudp: subapps/testudp.cpp $(MCCA_CRT0) $(MCCA_LIBC)
 	@echo "MK testudp"
 	$(MCCA_CXX) $(MCCA_CXXFLAGS) -o $@ subapps/testudp.cpp $(MCCA_LDLIBS)
+
+$(BIN_DIR)/testtcp: subapps/testtcp.cpp $(MCCA_CRT0) $(MCCA_LIBC)
+	@echo "MK testtcp"
+	$(MCCA_CXX) $(MCCA_CXXFLAGS) -o $@ subapps/testtcp.cpp $(MCCA_LDLIBS)
 
 $(BIN_DIR)/netinfo: subapps/netinfo.cpp $(MCCA_CRT0) $(MCCA_LIBC)
 	@echo "MK netinfo"

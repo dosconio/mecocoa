@@ -232,6 +232,9 @@ public:
 	static stdsint ReceiveUdp(uint16 port, uni::Network::UDPDatagramContext& context, void* payload, stduint capacity);
 	static stdsint ReceiveUdp(uint16 port, stduint inbox_id,
 		uni::Network::UDPDatagramContext& context, void* payload, stduint capacity);
+	static bool ListenTcpPort(uint16 port, stduint backlog);
+	static bool CloseTcpPort(uint16 port);
+	static bool IsTcpPortListening(uint16 port);
 	static stdsint SendUdp(const uni::Network::IPv4Address& target_ip,
 		uint16 source_port, uint16 destination_port, const void* payload, stduint length);
 	static stdsint SendUdp(const uni::Network::MacAddress& target_mac, const uni::Network::IPv4Address& target_ip,
