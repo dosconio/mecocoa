@@ -6,6 +6,7 @@
 // To resolve RMOD_LIST redefining issue, we ensure standard include guards
 // And we only include traits from cpp/trait
 #include <cpp/System/Network/Layer/Application/Socket.hpp>
+#include <cpp/System/Network/Layer/Transport/TCP.hpp>
 #include <cpp/System/Network/Layer/Transport/UDP.hpp>
 #include <cpp/trait/FilesysTrait.hpp>
 #include <cpp/trait/StorageTrait.hpp>
@@ -153,6 +154,8 @@ public:
 	static int BindSocket(vfs_file* file, const Network::SocketAddress& address);
 	static int ConnectSocket(vfs_file* file, const Network::SocketAddress& address);
 	static int ListenSocket(vfs_file* file, stduint backlog);
+	static int AcceptSocket(vfs_file* file, vfs_file** out_file,
+		Network::SocketAddress* address, stduint* address_length);
 	static int SendSocket(vfs_file* file, const void* payload, stduint length, const Network::SocketAddress* address);
 	static int RecvSocket(vfs_file* file, void* payload, stduint capacity,
 		Network::SocketAddress* address, stduint* address_length, stduint flags = 0);

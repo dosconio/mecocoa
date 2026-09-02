@@ -112,10 +112,17 @@ extern "C" int listen(int sockfd, int backlog) {
 }
 
 extern "C" int accept(int sockfd, struct sockaddr* address, socklen_t* address_length) {
-	(void)sockfd;
-	(void)address;
-	(void)address_length;
-	return -1;
+	if ((address && !address_length) || (!address && address_length)) return -1;
+	MccaSocketAddressIPv4 kernel_address{};
+	stduint kernel_address_length = sizeof(kernel_address);
+	const int ret = (int)syscall(syscall_t::ACPT, (stduint)sockfd,
+		address ? _IMM(&kernel_address) : 0,
+		address_length ? _IMM(&kernel_address_length) : 0);
+	if (ret < 0) return ret;
+	if (address && address_length) {
+		if (!SocketAddressToPosix(address, address_length, kernel_address)) return -1;
+	}
+	return ret;
 }
 
 extern "C" int shutdown(int sockfd, int how) {

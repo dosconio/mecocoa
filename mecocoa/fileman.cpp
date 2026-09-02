@@ -156,6 +156,44 @@ stdsint ProcessBlock::ListenSocket(int fd, stduint backlog) {
 	return Filesys::ListenSocket(file, backlog);
 }
 
+stdsint ProcessBlock::AcceptSocket(int fd, uni::Network::SocketAddress* address, stduint* address_length) {
+	vfs_file* file = nullptr;
+	{
+		auto files = this->fileman.Lock();
+		if (fd < 0 || fd >= (stdsint)files->pfiles.Count() || !files->pfiles[fd] || !files->pfiles[fd]->vfile) return -1;
+		file = files->pfiles[fd]->vfile;
+		if (!file->f_inode || (file->f_inode->i_mode & I_TYPE_MASK) != I_SOCK) return -1;
+		file->f_inode->ref_count++;
+	}
+
+	vfs_file* accepted_file = nullptr;
+	const stdsint accepted = Filesys::AcceptSocket(file, &accepted_file, address, address_length);
+	{
+		auto files = this->fileman.Lock();
+		if (file->f_inode && file->f_inode->ref_count) file->f_inode->ref_count--;
+	}
+	if (accepted <= 0) return accepted;
+
+	auto files = this->fileman.Lock();
+	const int new_fd = AllocateProcessFdSlot(*files);
+	if (new_fd == -1) {
+		Filesys::Close(accepted_file);
+		return -1;
+	}
+	FileDescriptor* pfd = AllocateGlobalFileDescriptor();
+	if (!pfd) {
+		files->pfiles[new_fd] = nullptr;
+		Filesys::Close(accepted_file);
+		return -1;
+	}
+	if (!AttachProcessFileDescriptor(*files, new_fd, pfd, accepted_file, O_RDWR, false)) {
+		ReleaseGlobalFileDescriptor(pfd);
+		Filesys::Close(accepted_file);
+		return -1;
+	}
+	return new_fd;
+}
+
 stdsint ProcessBlock::SendSocket(int fd, const void* payload, stduint length, const uni::Network::SocketAddress* address) {
 	if (length > 0x7FFFFFFFu) return -1;
 	auto files = this->fileman.Lock();

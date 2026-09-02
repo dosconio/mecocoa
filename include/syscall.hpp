@@ -68,6 +68,7 @@ enum
 	SOPT, // socket option (fd, query, func)->status    | x86 x64
 	POLL, // poll   (fds, nfds, timeout)->ready count  | x86 x64
 	LIST, // listen (fd, backlog)->status              | x86 x64
+	ACPT, // accept (fd, address, address_length)->fd   | x86 x64
 
 	DBUG = 0xFE, // sysinfo_classic to stdout(func)
 	TEST = 0xFF, // getpid (T,E,S)->0 | x86

@@ -1,4 +1,5 @@
 #include "aaaaa.h"
+#include <cpp/atomic>
 #include <unistd.h>
 #include <pthread.h>
 #include <sched.h>
@@ -14,13 +15,13 @@ struct pthread_meta {
 };
 
 #define MAX_THREADS 64
-static pthread_meta* active_threads[MAX_THREADS] = {nullptr};
-static void* dead_stacks[MAX_THREADS] = {nullptr};
+static Atomic<pthread_meta*> active_threads[MAX_THREADS] = {};
+static Atomic<void*> dead_stacks[MAX_THREADS] = {};
 
 // Lock-free collection of detached thread stacks
 static void collect_dead_stacks() {
 	for (int i = 0; i < MAX_THREADS; i++) {
-		void* stack = __atomic_exchange_n(&dead_stacks[i], nullptr, __ATOMIC_SEQ_CST);
+		void* stack = dead_stacks[i].exchange(nullptr, MemoryOrder_Seq_Cst);
 		if (stack) {
 			free(stack);
 		}
@@ -30,9 +31,9 @@ static void collect_dead_stacks() {
 // Register thread metadata
 static void register_thread(pthread_meta* meta) {
 	for (int i = 0; i < MAX_THREADS; i++) {
-		if (__atomic_load_n(&active_threads[i], __ATOMIC_RELAXED) == nullptr) {
+		if (active_threads[i].load(MemoryOrder_Relaxed) == nullptr) {
 			pthread_meta* expected = nullptr;
-			if (__atomic_compare_exchange_n(&active_threads[i], &expected, meta, false, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)) {
+			if (active_threads[i].compare_exchange(expected, meta, MemoryOrder_Seq_Cst, MemoryOrder_Seq_Cst)) {
 				break;
 			}
 		}
@@ -42,7 +43,7 @@ static void register_thread(pthread_meta* meta) {
 // Find thread metadata by tid
 static pthread_meta* find_thread(stduint tid) {
 	for (int i = 0; i < MAX_THREADS; i++) {
-		pthread_meta* m = __atomic_load_n(&active_threads[i], __ATOMIC_SEQ_CST);
+		pthread_meta* m = active_threads[i].load(MemoryOrder_Seq_Cst);
 		if (m && m->tid == tid) {
 			return m;
 		}
@@ -53,8 +54,8 @@ static pthread_meta* find_thread(stduint tid) {
 // Unregister thread metadata
 static void unregister_thread(pthread_meta* meta) {
 	for (int i = 0; i < MAX_THREADS; i++) {
-		if (__atomic_load_n(&active_threads[i], __ATOMIC_RELAXED) == meta) {
-			__atomic_store_n(&active_threads[i], (pthread_meta*)nullptr, __ATOMIC_SEQ_CST);
+		if (active_threads[i].load(MemoryOrder_Relaxed) == meta) {
+			active_threads[i].store(nullptr, MemoryOrder_Seq_Cst);
 			break;
 		}
 	}
@@ -120,7 +121,7 @@ extern "C" void pthread_exit(void* retval) {
 			// Schedule stack for deferred cleanup to avoid crashing
 			for (int j = 0; j < MAX_THREADS; j++) {
 				void* expected = nullptr;
-				if (__atomic_compare_exchange_n(&dead_stacks[j], &expected, stack, false, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)) {
+				if (dead_stacks[j].compare_exchange(expected, stack, MemoryOrder_Seq_Cst, MemoryOrder_Seq_Cst)) {
 					break;
 				}
 			}
@@ -176,7 +177,7 @@ extern "C" int pthread_mutex_init(pthread_mutex_t* mutex, const pthread_mutexatt
 extern "C" int pthread_mutex_lock(pthread_mutex_t* mutex) {
 	if (!mutex) return -1;
 	// Atomic swap with acquire barrier
-	while (__atomic_exchange_n(&mutex->lock_value, 1, __ATOMIC_ACQUIRE) != 0) {
+	while (reinterpret_cast<volatile Atomic<uint32>*>(&mutex->lock_value)->exchange(1, MemoryOrder_Acquire) != 0) {
 		// Wait on lock_value address in kernel
 		syscall(syscall_t::FUTX, _IMM(&mutex->lock_value), 0, 1);
 	}
@@ -186,7 +187,7 @@ extern "C" int pthread_mutex_lock(pthread_mutex_t* mutex) {
 extern "C" int pthread_mutex_unlock(pthread_mutex_t* mutex) {
 	if (!mutex) return -1;
 	// Store 0 with release barrier
-	__atomic_store_n(&mutex->lock_value, 0, __ATOMIC_RELEASE);
+	reinterpret_cast<volatile Atomic<uint32>*>(&mutex->lock_value)->store(0, MemoryOrder_Release);
 	// Wake up 1 waiting thread
 	syscall(syscall_t::FUTX, _IMM(&mutex->lock_value), 1, 1);
 	return 0;

@@ -1789,6 +1789,56 @@ int Filesys::ListenSocket(vfs_file* file, stduint backlog) {
 	#endif
 }
 
+int Filesys::AcceptSocket(vfs_file* file, vfs_file** out_file,
+	Network::SocketAddress* address, stduint* address_length) {
+	if (!out_file) return -1;
+	*out_file = nullptr;
+	SocketHandle* socket = Filesys::GetSocket(file);
+	if (!socket || !socket->is_bound || !socket->is_listening) return -1;
+	if (socket->domain != Network::SocketDomain::IPv4) return -1;
+	if (socket->type != Network::SocketType::Stream) return -1;
+	if (socket->protocol != Network::SocketProtocol::TCP &&
+		socket->protocol != Network::SocketProtocol::Default) return -1;
+
+	#if (_MCCA & 0xFF00) != 0x8600
+	(void)address;
+	(void)address_length;
+	return -1;
+	#else
+	Network::TCPConnectionContext context{};
+	stdsint accepted = Devsman::AcceptTcpConnection(socket->local_ipv4.port, context);
+	if (accepted == 0 && !(file->f_mode & O_NONBLOCK)) {
+		if (!Devsman::WaitTcpAccept(socket->local_ipv4.port)) return -1;
+		accepted = Devsman::AcceptTcpConnection(socket->local_ipv4.port, context);
+	}
+	if (accepted <= 0) return -1;
+
+	vfs_file* accepted_file = nullptr;
+	if (Filesys::CreateSocket(&accepted_file, Network::SocketDomain::IPv4,
+		Network::SocketType::Stream, Network::SocketProtocol::TCP) < 0 || !accepted_file) {
+		return -1;
+	}
+	SocketHandle* accepted_socket = Filesys::GetSocket(accepted_file);
+	if (!accepted_socket) {
+		Filesys::Close(accepted_file);
+		return -1;
+	}
+	accepted_socket->local_ipv4 = { context.local.address, context.local.port };
+	accepted_socket->remote_ipv4 = { context.remote.address, context.remote.port };
+	accepted_socket->protocol = Network::SocketProtocol::TCP;
+	accepted_socket->is_bound = true;
+	accepted_socket->is_connected = true;
+
+	if (address && address_length && *address_length >= sizeof(Network::SocketAddressIPv4)) {
+		auto* ipv4 = reinterpret_cast<Network::SocketAddressIPv4*>(address);
+		Network::SocketWriteAddress(*ipv4, context.remote.address, context.remote.port);
+		*address_length = sizeof(Network::SocketAddressIPv4);
+	}
+	*out_file = accepted_file;
+	return 1;
+	#endif
+}
+
 int Filesys::ConnectSocket(vfs_file* file, const Network::SocketAddress& address) {
 	SocketHandle* socket = Filesys::GetSocket(file);
 	if (!socket) return -1;
@@ -1800,7 +1850,7 @@ int Filesys::ConnectSocket(vfs_file* file, const Network::SocketAddress& address
 	if (address.length < sizeof(Network::SocketAddressIPv4)) return -1;
 
 	const auto& target = reinterpret_cast<const Network::SocketAddressIPv4&>(address);
-	if (!target.port || target.address.IsZero()) return -1;
+	if (!target.port || target.address.isZero()) return -1;
 
 	#if (_MCCA & 0xFF00) != 0x8600
 	(void)target;
@@ -1843,7 +1893,7 @@ int Filesys::SendSocket(vfs_file* file, const void* payload, stduint length, con
 		if (!socket->is_connected) return -1;
 		Network::SocketWriteAddress(target, socket->remote_ipv4.address, socket->remote_ipv4.port);
 	}
-	if (!target.port || target.address.IsZero()) return -1;
+	if (!target.port || target.address.isZero()) return -1;
 
 	#if (_MCCA & 0xFF00) != 0x8600
 	(void)payload;
@@ -1872,6 +1922,32 @@ int Filesys::RecvSocket(vfs_file* file, void* payload, stduint capacity,
 	SocketHandle* socket = Filesys::GetSocket(file);
 	if (!socket || !socket->is_bound) return -1;
 	if (socket->domain != Network::SocketDomain::IPv4) return -1;
+	if (socket->type == Network::SocketType::Stream) {
+		if (!socket->is_connected) return -1;
+		if (socket->protocol != Network::SocketProtocol::TCP &&
+			socket->protocol != Network::SocketProtocol::Default) return -1;
+		#if (_MCCA & 0xFF00) != 0x8600
+		(void)payload;
+		(void)capacity;
+		(void)address;
+		(void)address_length;
+		return -1;
+		#else
+		Network::TCPConnectionContext context{
+			{ socket->local_ipv4.address, socket->local_ipv4.port },
+			{ socket->remote_ipv4.address, socket->remote_ipv4.port },
+		};
+		if (file->f_mode & O_NONBLOCK) flags &= ~syscall_net_io_flag_wait;
+		stdsint received = Devsman::ReceiveTcp(context, payload, capacity);
+		if (received == 0 && (flags & syscall_net_io_flag_wait)) {
+			if (!Devsman::WaitTcpReceive(context)) return 0;
+			received = Devsman::ReceiveTcp(context, payload, capacity);
+		}
+		(void)address;
+		(void)address_length;
+		return received;
+		#endif
+	}
 	if (socket->type != Network::SocketType::Datagram) return -1;
 	if (socket->protocol != Network::SocketProtocol::UDP &&
 		socket->protocol != Network::SocketProtocol::Default) return -1;
@@ -1935,6 +2011,30 @@ int Filesys::Poll(vfs_file* file, stduint events, stduint* revents) {
 	SocketHandle* socket = Filesys::GetSocket(file);
 	if (!socket) return -1;
 	if (socket->domain != Network::SocketDomain::IPv4) return -1;
+	if (socket->type == Network::SocketType::Stream) {
+		if (socket->protocol != Network::SocketProtocol::TCP &&
+			socket->protocol != Network::SocketProtocol::Default) return -1;
+		#if (_MCCA & 0xFF00) != 0x8600
+		(void)events;
+		return -1;
+		#else
+		if ((events & syscall_poll_in) && socket->is_listening &&
+			Devsman::HasTcpAccept(socket->local_ipv4.port)) {
+			*revents |= syscall_poll_in;
+		}
+		if ((events & syscall_poll_in) && socket->is_connected) {
+			Network::TCPConnectionContext context{
+				{ socket->local_ipv4.address, socket->local_ipv4.port },
+				{ socket->remote_ipv4.address, socket->remote_ipv4.port },
+			};
+			if (Devsman::HasTcpReceive(context)) *revents |= syscall_poll_in;
+		}
+		if ((events & syscall_poll_out) && socket->is_connected) {
+			*revents |= syscall_poll_out;
+		}
+		return 0;
+		#endif
+	}
 	if (socket->type != Network::SocketType::Datagram) return -1;
 	if (socket->protocol != Network::SocketProtocol::UDP &&
 		socket->protocol != Network::SocketProtocol::Default) return -1;
@@ -1970,7 +2070,7 @@ int Filesys::GetSocketAddress(vfs_file* file, bool peer,
 		if (!socket->is_bound) return -1;
 		endpoint = socket->local_ipv4;
 		#if (_MCCA & 0xFF00) == 0x8600
-		if (endpoint.address.IsZero() && (socket->flags & SocketHandleFlagLocalAddressAuto)) {
+		if (endpoint.address.isZero() && (socket->flags & SocketHandleFlagLocalAddressAuto)) {
 			syscall_net_route_ipv4_t route{};
 			syscall_net_interface_ipv4_t iface{};
 			if (Devsman::GetDefaultIPv4Route(&route, sizeof(route)) &&
@@ -2199,6 +2299,14 @@ int Filesys::CloseSocket(vfs_file* file) {
 		#if (_MCCA & 0xFF00) == 0x8600
 		if (socket->is_bound && socket->protocol == Network::SocketProtocol::UDP && socket->local_ipv4.port) {
 			Devsman::CloseUdpPort(socket->local_ipv4.port, socket->udp_inbox_id);
+		}
+		if (socket->is_connected && !socket->is_listening &&
+			socket->protocol == Network::SocketProtocol::TCP && socket->local_ipv4.port) {
+			Network::TCPConnectionContext context{
+				{ socket->local_ipv4.address, socket->local_ipv4.port },
+				{ socket->remote_ipv4.address, socket->remote_ipv4.port },
+			};
+			Devsman::CloseTcpConnection(context);
 		}
 		if (socket->is_listening && socket->protocol == Network::SocketProtocol::TCP && socket->local_ipv4.port) {
 			Devsman::CloseTcpPort(socket->local_ipv4.port);

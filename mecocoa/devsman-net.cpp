@@ -29,6 +29,12 @@ namespace {
 	constexpr stduint NetPendingUdpArpRetryTicks = CONFIG_SysTickFreq;
 	constexpr stduint NetPendingUdpArpRetryLimit = 3;
 	constexpr stduint NetTcpListenCapacity = 4;
+	constexpr stduint NetTcpConnectionCapacity = 8;
+	constexpr stduint NetTcpAcceptQueueDepth = 4;
+	constexpr stduint NetTcpAcceptWaiterCapacity = 4;
+	constexpr stduint NetTcpRxQueueDepth = 2;
+	constexpr stduint NetTcpRxPayloadSize = 512;
+	constexpr stduint NetTcpRxWaiterCapacity = 2;
 	constexpr uint16 NetTcpWindowSize = 4096;
 	constexpr uint16 NetUdpEchoPort = 7;
 	constexpr uint16 NetUdpEphemeralPortBegin = 49152;
@@ -101,7 +107,22 @@ namespace {
 
 	struct NetTcpListener {
 		uint16 port;
-		stduint backlog;
+		uni::Network::TCPObject* tcp;
+		uni::Network::TCPConnectionContext pending[NetTcpAcceptQueueDepth];
+		ThreadBlock* accept_waiters[NetTcpAcceptWaiterCapacity];
+		stduint accept_waiter_count;
+	};
+
+	struct NetTcpConnection {
+		uni::Network::TCPObject* tcp;
+		uint8* rx_payloads;
+		stduint rx_length[NetTcpRxQueueDepth];
+		stduint rx_head;
+		stduint rx_tail;
+		stduint rx_count;
+		ThreadBlock* rx_waiters[NetTcpRxWaiterCapacity];
+		stduint rx_waiter_count;
+		bool valid;
 	};
 
 	struct NetUdpInboxEntry {
@@ -136,7 +157,7 @@ namespace {
 	NetPendingUdpPacket net_pending_udp[NetPendingUdpCapacity]{};
 	uint8* net_pending_udp_payloads = nullptr;
 	NetTcpListener net_tcp_listeners[NetTcpListenCapacity]{};
-	stduint net_tcp_listener_count = 0;
+	NetTcpConnection net_tcp_connections[NetTcpConnectionCapacity]{};
 	uint32 net_tcp_next_sequence = 0x10000000u;
 
 	struct NetRemoteLinkState {
@@ -152,25 +173,27 @@ namespace {
 
 	NetRemoteLinkState net_remote_link{};
 
+	void DispatchLinkFrame(uni::Network::LinkDevice& dev, const void* data, stduint length);
+
 	class NetRemoteLinkDevice : public uni::Network::LinkDevice {
 	public:
-		virtual const char* GetName() const override {
+		virtual const char* getName() const override {
 			return net_remote_link.name[0] ? net_remote_link.name : "e1000";
 		}
 
-		virtual uni::Network::LinkMedium GetMedium() const override {
+		virtual uni::Network::LinkMedium getMedium() const override {
 			return uni::Network::LinkMedium::Ethernet;
 		}
 
-		virtual uni::Network::LinkState GetState() const override {
+		virtual uni::Network::LinkState getState() const override {
 			return net_remote_link.state;
 		}
 
-		virtual uni::Network::MacAddress GetAddress() const override {
+		virtual uni::Network::MacAddress getAddress() const override {
 			return net_remote_link.mac;
 		}
 
-		virtual stduint GetMtu() const override {
+		virtual stduint getMtu() const override {
 			return net_remote_link.mtu ? net_remote_link.mtu : 1500;
 		}
 
@@ -182,9 +205,23 @@ namespace {
 			req.length = uint32(frame.length);
 			req.capacity = NetworkDriverFrameCapacity;
 			MemCopyN(req.data, frame.data, frame.length);
-			stduint type = _IMM(NetworkMsg::DRV_SEND);
-			if (syssdrv(net_remote_link.owner_tid, &req, sizeof(req), &type)) return -1;
-			return req.status;
+			if (syssend(net_remote_link.owner_tid, &req, sizeof(req), _IMM(NetworkMsg::DRV_SEND))) return -1;
+			while (true) {
+				FMT_NetworkMsg_DRV_FRAME reply{};
+				stduint type = 0;
+				if (sysrecv(net_remote_link.owner_tid, &reply, sizeof(reply), &type)) return -1;
+				switch (NetworkMsg(type)) {
+				case NetworkMsg::DRV_SEND:
+					return reply.status;
+				case NetworkMsg::DRV_RX:
+					if (reply.length <= NetworkDriverFrameCapacity) {
+						DispatchLinkFrame(*this, reply.data, reply.length);
+					}
+					break;
+				default:
+					break;
+				}
+			}
 		}
 
 		virtual stdsint Receive(uni::Network::LinkMutableFrameView& frame) override {
@@ -198,7 +235,7 @@ namespace {
 			return -1;
 		}
 
-		virtual void GetStatistics(uni::Network::LinkStatistics& statistics) const override {
+		virtual void getStatistics(uni::Network::LinkStatistics& statistics) const override {
 			MemSet(&statistics, 0, sizeof(statistics));
 		}
 	};
@@ -227,7 +264,7 @@ namespace {
 		}
 		for0(i, net_link_device_count) {
 			auto* dev = net_link_devices[i];
-			if (dev && dev->GetState() == uni::Network::LinkState::Up) return dev;
+			if (dev && dev->getState() == uni::Network::LinkState::Up) return dev;
 		}
 		return nullptr;
 	}
@@ -245,13 +282,13 @@ namespace {
 			output.address[i] = net_config.ipv4_address.octet[i];
 			output.netmask[i] = net_config.ipv4_netmask.octet[i];
 		}
-		const auto mac = dev->GetAddress();
+		const auto mac = dev->getAddress();
 		for0(i, numsof(output.hardware)) output.hardware[i] = mac.octet[i];
-		if (dev->GetState() == uni::Network::LinkState::Up) output.flags |= syscall_net_route_flag_up;
-		output.mtu = uint16(dev->GetMtu());
+		if (dev->getState() == uni::Network::LinkState::Up) output.flags |= syscall_net_route_flag_up;
+		output.mtu = uint16(dev->getMtu());
 		output.link_index = uint16(index);
-		output.link_state = uint16(dev->GetState());
-		const char* name = dev->GetName();
+		output.link_state = uint16(dev->getState());
+		const char* name = dev->getName();
 		if (name) {
 			for0(i, numsof(output.name) - 1) {
 				if (!name[i]) break;
@@ -278,7 +315,7 @@ namespace {
 	};
 
 	bool ResolveIPv4Route(const uni::Network::IPv4Address& target_ip, NetIPv4Route& route) {
-		if (target_ip.IsZero()) return false;
+		if (target_ip.isZero()) return false;
 		auto* dev = FindDefaultLinkDevice();
 		if (!dev) return false;
 		const stduint index = FindLinkDeviceIndex(dev);
@@ -291,7 +328,7 @@ namespace {
 			route.next_hop = target_ip;
 			return true;
 		}
-		if (net_config.ipv4_gateway.IsZero()) return false;
+		if (net_config.ipv4_gateway.isZero()) return false;
 		route.next_hop = net_config.ipv4_gateway;
 		route.gateway = true;
 		return true;
@@ -321,7 +358,7 @@ namespace {
 	}
 
 	void LearnArpCache(const uni::Network::IPv4Address& protocol, const uni::Network::MacAddress& hardware) {
-		if (protocol.IsZero() || hardware.IsZero() || hardware.IsBroadcast()) return;
+		if (protocol.isZero() || hardware.isZero() || hardware.isBroadcast()) return;
 		for0(i, NetArpCacheCapacity) {
 			auto& entry = net_arp_cache[i];
 			if (entry.valid && entry.protocol == protocol) {
@@ -444,7 +481,7 @@ namespace {
 	bool SendArpRequest(uni::Network::LinkDevice& dev, uint8* buffer, const uni::Network::IPv4Address& target_ip) {
 		if (!buffer) return false;
 		const stduint request_len = uni::Network::BuildArpEthernetIPv4Request(buffer, NetFrameBufferSize,
-			dev.GetAddress(), net_config.ipv4_address, target_ip);
+			dev.getAddress(), net_config.ipv4_address, target_ip);
 		if (!request_len) return false;
 		uni::Network::LinkFrameView request{
 			buffer,
@@ -486,10 +523,185 @@ namespace {
 	}
 
 	NetTcpListener* FindTcpListener(uint16 port) {
-		for0(i, net_tcp_listener_count) {
+		if (!port) return nullptr;
+		for0(i, NetTcpListenCapacity) {
 			if (net_tcp_listeners[i].port == port) return &net_tcp_listeners[i];
 		}
 		return nullptr;
+	}
+
+	bool EnsureTcpListenerObject(NetTcpListener& listener, stduint backlog) {
+		if (!listener.tcp) {
+			auto* storage = mempool.allocate(sizeof(uni::Network::TCPObject), 4);
+			if (!storage) return false;
+			listener.tcp = new (storage) uni::Network::TCPObject();
+		}
+		listener.tcp->Reset();
+		listener.tcp->setAcceptQueue(listener.pending, NetTcpAcceptQueueDepth);
+		return listener.tcp->Listen(backlog) == 0;
+	}
+
+	NetTcpConnection* FindTcpConnection(const uni::Network::IPv4Address& local_ip, uint16 local_port,
+		const uni::Network::IPv4Address& remote_ip, uint16 remote_port) {
+		for0(i, NetTcpConnectionCapacity) {
+			auto& connection = net_tcp_connections[i];
+			if (!connection.valid || !connection.tcp) continue;
+			const auto& context = connection.tcp->getControl().context;
+			if (context.local.port != local_port || context.remote.port != remote_port) continue;
+			if (!(context.local.address == local_ip) || !(context.remote.address == remote_ip)) continue;
+			return &connection;
+		}
+		return nullptr;
+	}
+
+	bool EnsureTcpObject(NetTcpConnection& connection) {
+		if (!connection.tcp) {
+			auto* storage = mempool.allocate(sizeof(uni::Network::TCPObject), 4);
+			if (!storage) return false;
+			connection.tcp = new (storage) uni::Network::TCPObject();
+		}
+		connection.tcp->Reset();
+		connection.tcp->setWindow(NetTcpWindowSize);
+		return true;
+	}
+
+	NetTcpConnection* AllocateTcpConnection(const uni::Network::IPv4Address& local_ip, uint16 local_port,
+		const uni::Network::IPv4Address& remote_ip, uint16 remote_port) {
+		for0(i, NetTcpConnectionCapacity) {
+			auto& connection = net_tcp_connections[i];
+			if (connection.valid) continue;
+			auto* tcp = connection.tcp;
+			uint8* rx_payloads = connection.rx_payloads;
+			connection = {};
+			connection.tcp = tcp;
+			connection.rx_payloads = rx_payloads;
+			if (!EnsureTcpObject(connection)) return nullptr;
+			connection.tcp->Bind({ uni::Network::NetworkAddressIPv4(local_ip), local_port });
+			connection.tcp->Connect({ uni::Network::NetworkAddressIPv4(remote_ip), remote_port });
+			connection.rx_head = 0;
+			connection.rx_tail = 0;
+			connection.rx_count = 0;
+			connection.rx_waiter_count = 0;
+			connection.valid = true;
+			return &connection;
+		}
+		return nullptr;
+	}
+
+	void WakeTcpAcceptWaiters(NetTcpListener& listener) {
+		for0(i, listener.accept_waiter_count) {
+			if (listener.accept_waiters[i]) {
+				listener.accept_waiters[i]->Unblock(ThreadBlock::BlockReason::BR_RecvMsg);
+				listener.accept_waiters[i] = nullptr;
+			}
+		}
+		listener.accept_waiter_count = 0;
+	}
+
+	bool AddTcpAcceptWaiter(NetTcpListener& listener, ThreadBlock* th) {
+		if (!th) return false;
+		for0(i, listener.accept_waiter_count) if (listener.accept_waiters[i] == th) return true;
+		if (listener.accept_waiter_count >= NetTcpAcceptWaiterCapacity) return false;
+		listener.accept_waiters[listener.accept_waiter_count++] = th;
+		return true;
+	}
+
+	bool EnqueueTcpAccept(NetTcpListener& listener, const NetTcpConnection& connection) {
+		if (!connection.tcp || !listener.tcp) return false;
+		if (!listener.tcp->EnqueueAccept(connection.tcp->getControl().context)) return false;
+		WakeTcpAcceptWaiters(listener);
+		return true;
+	}
+
+	bool DequeueTcpAccept(NetTcpListener& listener, uni::Network::TCPConnectionContext& context) {
+		return listener.tcp && listener.tcp->Accept(context);
+	}
+
+	void WakeTcpRxReaders(NetTcpConnection& connection);
+
+	void ReleaseTcpConnectionsByLocalPort(uint16 port) {
+		for0(i, NetTcpConnectionCapacity) {
+			if (net_tcp_connections[i].valid && net_tcp_connections[i].tcp &&
+				net_tcp_connections[i].tcp->getControl().context.local.port == port) {
+				WakeTcpRxReaders(net_tcp_connections[i]);
+				auto* tcp = net_tcp_connections[i].tcp;
+				uint8* rx_payloads = net_tcp_connections[i].rx_payloads;
+				net_tcp_connections[i] = {};
+				net_tcp_connections[i].tcp = tcp;
+				net_tcp_connections[i].tcp->Reset();
+				net_tcp_connections[i].rx_payloads = rx_payloads;
+			}
+		}
+	}
+
+	bool ReleaseTcpConnection(const uni::Network::TCPConnectionContext& context) {
+		auto* connection = FindTcpConnection(context.local.address, context.local.port,
+			context.remote.address, context.remote.port);
+		if (!connection) return false;
+		WakeTcpRxReaders(*connection);
+		auto* tcp = connection->tcp;
+		uint8* rx_payloads = connection->rx_payloads;
+		*connection = {};
+		connection->tcp = tcp;
+		connection->tcp->Reset();
+		connection->rx_payloads = rx_payloads;
+		return true;
+	}
+
+	uint8* GetTcpRxPayloadSlot(NetTcpConnection& connection, stduint index) {
+		return connection.rx_payloads + index * NetTcpRxPayloadSize;
+	}
+
+	bool EnsureTcpRxStorage(NetTcpConnection& connection) {
+		if (!connection.rx_payloads) {
+			connection.rx_payloads = (uint8*)mempool.allocate(NetTcpRxPayloadSize * NetTcpRxQueueDepth, 12);
+		}
+		return connection.rx_payloads != nullptr;
+	}
+
+	void WakeTcpRxReaders(NetTcpConnection& connection) {
+		for0(i, connection.rx_waiter_count) {
+			if (connection.rx_waiters[i]) {
+				connection.rx_waiters[i]->Unblock(ThreadBlock::BlockReason::BR_RecvMsg);
+				connection.rx_waiters[i] = nullptr;
+			}
+		}
+		connection.rx_waiter_count = 0;
+	}
+
+	bool AddTcpRxReader(NetTcpConnection& connection, ThreadBlock* th) {
+		if (!th) return false;
+		for0(i, connection.rx_waiter_count) if (connection.rx_waiters[i] == th) return true;
+		if (connection.rx_waiter_count >= NetTcpRxWaiterCapacity) return false;
+		connection.rx_waiters[connection.rx_waiter_count++] = th;
+		return true;
+	}
+
+	bool EnqueueTcpRx(NetTcpConnection& connection, const uni::Network::TCPSegmentView& tcp) {
+		if (!tcp.payload_length) return true;
+		if (tcp.payload_length > NetTcpRxPayloadSize) return false;
+		if (connection.rx_count >= NetTcpRxQueueDepth) return false;
+		if (!EnsureTcpRxStorage(connection)) return false;
+		uint8* slot = GetTcpRxPayloadSlot(connection, connection.rx_tail);
+		for0(i, tcp.payload_length) slot[i] = tcp.payload[i];
+		connection.rx_length[connection.rx_tail] = tcp.payload_length;
+		connection.rx_tail = (connection.rx_tail + 1) % NetTcpRxQueueDepth;
+		connection.rx_count++;
+		WakeTcpRxReaders(connection);
+		return true;
+	}
+
+	stdsint DequeueTcpRx(NetTcpConnection& connection, void* payload, stduint capacity) {
+		if (!connection.rx_count) return 0;
+		const stduint length = connection.rx_length[connection.rx_head];
+		if (!payload || capacity < length) return -1;
+		uint8* output = reinterpret_cast<uint8*>(payload);
+		uint8* slot = GetTcpRxPayloadSlot(connection, connection.rx_head);
+		for0(i, length) output[i] = slot[i];
+		connection.rx_length[connection.rx_head] = 0;
+		connection.rx_head = (connection.rx_head + 1) % NetTcpRxQueueDepth;
+		connection.rx_count--;
+		return stdsint(length);
 	}
 
 	uint8* GetUdpInboxPayloadSlot(NetUdpInbox& inbox, stduint index) {
@@ -621,7 +833,7 @@ namespace {
 
 	void LogEthernetFrame(uni::Network::LinkDevice& dev, const uni::Network::EthernetFrameView& frame) {
 		ploginfo("[Net] rx dev=%s dst=%[8H]:%[8H]:%[8H]:%[8H]:%[8H]:%[8H] src=%[8H]:%[8H]:%[8H]:%[8H]:%[8H]:%[8H] type=%[16H] %s payload=%u",
-			dev.GetName() ? dev.GetName() : "(unnamed)",
+			dev.getName() ? dev.getName() : "(unnamed)",
 			(stduint)frame.destination.octet[0], (stduint)frame.destination.octet[1],
 			(stduint)frame.destination.octet[2], (stduint)frame.destination.octet[3],
 			(stduint)frame.destination.octet[4], (stduint)frame.destination.octet[5],
@@ -637,54 +849,92 @@ namespace {
 			(unsigned)address.octet[2], (unsigned)address.octet[3]);
 	}
 
-	stdsint SendUdpFrame(uni::Network::LinkDevice& dev, uint8* buffer,
-		const uni::Network::MacAddress& target_mac, const uni::Network::IPv4Address& source_ip,
-		const uni::Network::IPv4Address& target_ip, uint16 source_port, uint16 destination_port,
-		const void* payload, stduint length, uint16 identification) {
-		if (!buffer || (!payload && length)) return -1;
-		const stduint udp_length = uni::Network::UDPHeaderLength + length;
-		const stduint ipv4_length = uni::Network::IPv4MinHeaderLength + udp_length;
+	stdsint SendIPv4PacketFrame(uni::Network::LinkDevice& dev, const uni::Network::MacAddress& target_mac,
+		const uni::Network::NetworkPacketContext& packet) {
+		if (!net_buffers.tx || !packet.payload || target_mac.isZero()) return -1;
+		uni::Network::IPv4Address source{};
+		uni::Network::IPv4Address destination{};
+		if (!uni::Network::NetworkReadIPv4Address(packet.source, source)) return -1;
+		if (!uni::Network::NetworkReadIPv4Address(packet.destination, destination)) return -1;
+		const stduint ipv4_length = uni::Network::IPv4MinHeaderLength + packet.payload_length;
 		const stduint frame_length = uni::Network::EthernetHeaderLength + ipv4_length;
-		if (frame_length > NetFrameBufferSize || ipv4_length > dev.GetMtu()) return -1;
+		if (frame_length > NetFrameBufferSize || ipv4_length > dev.getMtu()) return -1;
 
-		const auto local_mac = dev.GetAddress();
-		auto* ethernet = reinterpret_cast<uni::Network::EthernetHeader*>(buffer);
+		const auto local_mac = dev.getAddress();
+		auto* ethernet = reinterpret_cast<uni::Network::EthernetHeader*>(net_buffers.tx);
 		uni::Network::EthernetWriteAddress(ethernet->destination, target_mac);
 		uni::Network::EthernetWriteAddress(ethernet->source, local_mac);
 		uni::Network::EthernetWrite16(ethernet->type, uint16(uni::Network::EthernetType::IPv4));
 
 		auto* ipv4 = reinterpret_cast<uni::Network::IPv4Header*>(
-			buffer + uni::Network::EthernetHeaderLength);
-		uni::Network::BuildIPv4Header(*ipv4, source_ip, target_ip,
-			uint8(uni::Network::IPv4Protocol::UDP), uint16(ipv4_length), identification);
+			net_buffers.tx + uni::Network::EthernetHeaderLength);
+		uni::Network::BuildIPv4Header(*ipv4, source, destination,
+			uint8(packet.protocol), uint16(ipv4_length), packet.identification, packet.ttl ? packet.ttl : 64);
 
-		auto* udp = reinterpret_cast<uni::Network::UDPHeader*>(
-			buffer + uni::Network::EthernetHeaderLength + uni::Network::IPv4MinHeaderLength);
-		uni::Network::BuildUDPHeader(*udp, source_port, destination_port, uint16(udp_length));
-
-		auto* udp_payload = buffer + uni::Network::EthernetHeaderLength +
-			uni::Network::IPv4MinHeaderLength + uni::Network::UDPHeaderLength;
-		const auto* payload_bytes = reinterpret_cast<const uint8*>(payload);
-		for0(i, length) udp_payload[i] = payload_bytes[i];
-
-		const uint16 checksum = uni::Network::UDPIPv4Checksum(source_ip, target_ip, udp, udp_length);
-		uni::Network::EthernetWrite16(udp->checksum, checksum);
+		auto* payload = net_buffers.tx + uni::Network::EthernetHeaderLength + uni::Network::IPv4MinHeaderLength;
+		const auto* bytes = reinterpret_cast<const uint8*>(packet.payload);
+		for0(i, packet.payload_length) payload[i] = bytes[i];
 
 		uni::Network::LinkFrameView frame{
-			buffer,
+			net_buffers.tx,
 			frame_length,
 		};
 		return dev.Send(frame);
 	}
 
-	void FlushPendingUdpFor(uni::Network::LinkDevice& dev, const uni::Network::IPv4Address& target_ip,
-		const uni::Network::MacAddress& target_mac) {
+	class NetIPv4Interface : public uni::Network::NetworkInterface {
+	public:
+		uni::Network::NetworkAddress getAddress() const override {
+			return uni::Network::NetworkAddressIPv4(net_config.ipv4_address);
+		}
+
+		stduint getPayloadMtu() const override {
+			auto* dev = FindDefaultLinkDevice();
+			if (!dev || dev->getMtu() <= uni::Network::IPv4MinHeaderLength) return 0;
+			return dev->getMtu() - uni::Network::IPv4MinHeaderLength;
+		}
+
+		stdsint SendPacket(const uni::Network::NetworkPacketContext& packet) override {
+			uni::Network::IPv4Address target{};
+			if (!uni::Network::NetworkReadIPv4Address(packet.destination, target)) return -1;
+			NetIPv4Route route{};
+			if (!ResolveIPv4Route(target, route)) return -1;
+			uni::Network::MacAddress target_mac{};
+			if (!LookupArpCache(route.next_hop, target_mac)) return 0;
+			return SendIPv4PacketFrame(*route.dev, target_mac, packet);
+		}
+	};
+
+	NetIPv4Interface net_ipv4_interface;
+
+	stdsint SendUdpDatagram(uni::Network::NetworkInterface& network, uint8* buffer,
+		const uni::Network::IPv4Address& source_ip, const uni::Network::IPv4Address& target_ip,
+		uint16 source_port, uint16 destination_port,
+		const void* payload, stduint length, uint16 identification) {
+		uni::Network::UDPObject udp(&network, buffer, NetFrameBufferSize);
+		udp.setIdentification(identification);
+		udp.Bind({ uni::Network::NetworkAddressIPv4(source_ip), source_port });
+		udp.Connect({ uni::Network::NetworkAddressIPv4(target_ip), destination_port });
+		uni::Network::TransportPayloadContext context{
+			{
+				{ uni::Network::NetworkAddressIPv4(source_ip), source_port },
+				{ uni::Network::NetworkAddressIPv4(target_ip), destination_port },
+			},
+			payload,
+			length,
+		};
+		const stdsint sent = udp.Send(context);
+		return sent > 0 ? stdsint(length) : sent;
+	}
+
+	void FlushPendingUdpFor(const uni::Network::IPv4Address& target_ip, const uni::Network::MacAddress& target_mac) {
+		LearnArpCache(target_ip, target_mac);
 		ExpirePendingUdp();
 		for0(i, NetPendingUdpCapacity) {
 			auto& packet = net_pending_udp[i];
 			if (!packet.valid || !(packet.next_hop == target_ip)) continue;
-			const stdsint sent = SendUdpFrame(dev, net_buffers.tx, target_mac, net_config.ipv4_address,
-				packet.target_ip, packet.source_port, packet.destination_port,
+			const stdsint sent = SendUdpDatagram(net_ipv4_interface, net_buffers.udp_tx,
+				net_config.ipv4_address, packet.target_ip, packet.source_port, packet.destination_port,
 				GetPendingUdpPayloadSlot(i), packet.payload_length, net_ipv4_identification++);
 			if (sent > 0) packet.valid = false;
 		}
@@ -708,10 +958,10 @@ namespace {
 			return;
 		}
 		LearnArpCache(arp.sender_protocol, arp.sender_hardware);
-		FlushPendingUdpFor(dev, arp.sender_protocol, arp.sender_hardware);
+		FlushPendingUdpFor(arp.sender_protocol, arp.sender_hardware);
 		if (arp.operation != uint16(uni::Network::ArpOperation::Request)) return;
 		if (!(arp.target_protocol == net_config.ipv4_address)) return;
-		const auto local_mac = dev.GetAddress();
+		const auto local_mac = dev.getAddress();
 		const stduint reply_len = uni::Network::BuildArpEthernetIPv4Reply(net_buffers.tx, NetFrameBufferSize,
 			local_mac, net_config.ipv4_address, arp.sender_hardware, arp.sender_protocol);
 		if (!reply_len) {
@@ -733,7 +983,7 @@ namespace {
 		const uni::Network::EthernetFrameView& frame, const uni::Network::IPv4PacketView& ipv4) {
 		uni::Network::ICMPv4EchoView echo{};
 		if (!uni::Network::ParseICMPv4EchoRequest(ipv4, echo)) return;
-		const auto local_mac = dev.GetAddress();
+		const auto local_mac = dev.getAddress();
 		const stduint reply_len = uni::Network::BuildICMPv4EchoReply(net_buffers.tx, NetFrameBufferSize,
 			local_mac, frame.source, net_config.ipv4_address, ipv4);
 		if (!reply_len) {
@@ -752,11 +1002,13 @@ namespace {
 	}
 
 	bool HandleUdpEchoDatagram(uni::Network::LinkDevice& dev, const NetUdpPacket& packet) {
+		(void)dev;
 		const auto& frame = *packet.ethernet;
 		const auto& ipv4 = *packet.ipv4;
 		const auto& udp = *packet.udp;
 		const uint16 identification = uni::Network::EthernetRead16(ipv4.header->identification);
-		const stdsint sent = SendUdpFrame(dev, net_buffers.tx, frame.source,
+		LearnArpCache(ipv4.source, frame.source);
+		const stdsint sent = SendUdpDatagram(net_ipv4_interface, net_buffers.udp_tx,
 			net_config.ipv4_address, ipv4.source, NetUdpEchoPort, udp.source_port,
 			packet.context.payload, packet.context.payload_length, identification);
 		if (sent <= 0) {
@@ -806,12 +1058,29 @@ namespace {
 			return;
 		}
 		if (tcp.flags & uni::Network::TCPFlagRST) return;
-		if (FindTcpListener(tcp.destination_port)) {
+		auto* listener_for_port = FindTcpListener(tcp.destination_port);
+		if (listener_for_port) {
+			auto* connection = FindTcpConnection(ipv4.destination, tcp.destination_port,
+				ipv4.source, tcp.source_port);
 			if ((tcp.flags & uni::Network::TCPFlagSYN) && !(tcp.flags & uni::Network::TCPFlagACK)) {
-				const auto local_mac = dev.GetAddress();
+				if (!connection) {
+					connection = AllocateTcpConnection(ipv4.destination, tcp.destination_port,
+						ipv4.source, tcp.source_port);
+				}
+				if (!connection) {
+					plogwarn("[Net] tcp connection table full");
+					return;
+				}
+				auto& control = connection->tcp->getControl();
+				uint32 initial_sequence = control.local_next_sequence ?
+					control.local_next_sequence - 1 : net_tcp_next_sequence++;
+				connection->tcp->BeginPassiveConnection(
+					ipv4.destination, tcp.destination_port, ipv4.source, tcp.source_port,
+					tcp, initial_sequence);
+				const auto local_mac = dev.getAddress();
 				const stduint synack_len = uni::Network::BuildTCPIPv4SynAck(net_buffers.tx, NetFrameBufferSize,
 					local_mac, frame.source, net_config.ipv4_address, ipv4, tcp,
-					net_tcp_next_sequence++, NetTcpWindowSize, net_ipv4_identification++);
+					initial_sequence, NetTcpWindowSize, net_ipv4_identification++);
 				if (!synack_len) {
 					plogwarn("[Net] tcp syn-ack build failed");
 					return;
@@ -824,12 +1093,45 @@ namespace {
 				if (sent <= 0) plogwarn("[Net] tcp syn-ack send failed");
 				return;
 			}
-			if (tcp.flags & uni::Network::TCPFlagFIN) {
-				const auto local_mac = dev.GetAddress();
-				uint32 acknowledgment = tcp.sequence + uint32(tcp.payload_length) + 1;
+			if (connection && tcp.payload_length) {
+				auto& control = connection->tcp->getControl();
+				const bool in_order = connection->tcp->isExpectedSegment(tcp);
+				if (in_order) {
+					if (!EnqueueTcpRx(*connection, tcp)) {
+						plogwarn("[Net] tcp rx queue full");
+						return;
+					}
+					connection->tcp->ConsumeExpectedSegment(tcp);
+				}
+				const auto local_mac = dev.getAddress();
 				const stduint ack_len = uni::Network::BuildTCPIPv4Ack(net_buffers.tx, NetFrameBufferSize,
 					local_mac, frame.source, net_config.ipv4_address, ipv4, tcp,
-					tcp.acknowledgment, acknowledgment, NetTcpWindowSize, net_ipv4_identification++);
+					control.local_next_sequence, control.remote_next_sequence,
+					NetTcpWindowSize, net_ipv4_identification++);
+				if (!ack_len) {
+					plogwarn("[Net] tcp data ack build failed");
+					return;
+				}
+				uni::Network::LinkFrameView ack{
+					net_buffers.tx,
+					ack_len,
+				};
+				const stdsint sent = dev.Send(ack);
+				if (sent <= 0) plogwarn("[Net] tcp data ack send failed");
+				return;
+			}
+			if (tcp.flags & uni::Network::TCPFlagFIN) {
+				const auto local_mac = dev.getAddress();
+				const uint32 remote_next_sequence = tcp.sequence + uint32(tcp.payload_length) + 1;
+				uint32 local_next_sequence = tcp.acknowledgment;
+				if (connection) {
+					connection->tcp->ConsumeExpectedSegment(tcp);
+					local_next_sequence = connection->tcp->getControl().local_next_sequence;
+				}
+				const stduint ack_len = uni::Network::BuildTCPIPv4Ack(net_buffers.tx, NetFrameBufferSize,
+					local_mac, frame.source, net_config.ipv4_address, ipv4, tcp,
+					local_next_sequence, connection ? connection->tcp->getControl().remote_next_sequence : remote_next_sequence,
+					NetTcpWindowSize, net_ipv4_identification++);
 				if (!ack_len) {
 					plogwarn("[Net] tcp ack build failed");
 					return;
@@ -842,9 +1144,17 @@ namespace {
 				if (sent <= 0) plogwarn("[Net] tcp ack send failed");
 				return;
 			}
-			if (tcp.flags & uni::Network::TCPFlagACK) return;
+			if (connection && (tcp.flags & uni::Network::TCPFlagACK)) {
+				if (connection->tcp->AcceptHandshakeAck(tcp)) {
+					auto* listener = FindTcpListener(connection->tcp->getControl().context.local.port);
+					if (listener && !EnqueueTcpAccept(*listener, *connection)) {
+						plogwarn("[Net] tcp accept queue full");
+					}
+				}
+				return;
+			}
 		}
-		const auto local_mac = dev.GetAddress();
+		const auto local_mac = dev.getAddress();
 		const stduint reset_len = uni::Network::BuildTCPIPv4Reset(net_buffers.tx, NetFrameBufferSize,
 			local_mac, frame.source, net_config.ipv4_address, ipv4, tcp, net_ipv4_identification++);
 		if (!reset_len) {
@@ -908,7 +1218,7 @@ namespace {
 		uni::Network::EthernetFrameView eth_frame{};
 		if (!uni::Network::ParseEthernetFrame(raw_frame, eth_frame)) {
 			plogwarn("[Net] rx dev=%s malformed ethernet len=%u",
-				dev.GetName() ? dev.GetName() : "(unnamed)",
+				dev.getName() ? dev.getName() : "(unnamed)",
 				(unsigned)length);
 			return;
 		}
@@ -922,7 +1232,7 @@ namespace {
 		}
 		for0(i, net_link_device_count) {
 			auto* dev = net_link_devices[i];
-			if (!dev || dev->GetState() != uni::Network::LinkState::Up) continue;
+			if (!dev || dev->getState() != uni::Network::LinkState::Up) continue;
 			uni::Network::LinkMutableFrameView frame{
 				net_buffers.rx,
 				NetFrameBufferSize,
@@ -1010,6 +1320,10 @@ namespace {
 			if (sig_src == net_remote_link.owner_tid && msgbuf->length <= NetworkDriverFrameCapacity) {
 				DispatchLinkFrame(net_remote_link_device, msgbuf->data, msgbuf->length);
 			}
+			else {
+				plogwarn("[Net] driver rx rejected src=%u owner=%u len=%u",
+					(unsigned)sig_src, (unsigned)net_remote_link.owner_tid, (unsigned)msgbuf->length);
+			}
 			return;
 		default:
 			syssend_async(sig_src, &ret, sizeof(ret));
@@ -1026,8 +1340,8 @@ bool Devsman::RegisterLinkDevice(uni::Network::LinkDevice* device) {
 	if (net_link_device_count >= NetLinkDeviceCapacity) return false;
 	net_link_devices[net_link_device_count++] = device;
 	ploginfo("[Net] registered link device %s mtu=%u",
-		device->GetName() ? device->GetName() : "(unnamed)",
-		(unsigned)device->GetMtu());
+		device->getName() ? device->getName() : "(unnamed)",
+		(unsigned)device->getMtu());
 	return true;
 }
 
@@ -1116,20 +1430,34 @@ bool Devsman::ListenTcpPort(uint16 port, stduint backlog) {
 	if (!port) return false;
 	auto* listener = FindTcpListener(port);
 	if (listener) {
-		listener->backlog = backlog;
-		return true;
+		if (!listener->tcp) return EnsureTcpListenerObject(*listener, backlog);
+		return listener->tcp->Listen(backlog) == 0;
 	}
-	if (net_tcp_listener_count >= NetTcpListenCapacity) return false;
-	net_tcp_listeners[net_tcp_listener_count++] = { port, backlog };
-	return true;
+	for0(i, NetTcpListenCapacity) {
+		if (net_tcp_listeners[i].port) continue;
+		auto* tcp = net_tcp_listeners[i].tcp;
+		net_tcp_listeners[i] = {};
+		net_tcp_listeners[i].tcp = tcp;
+		net_tcp_listeners[i].port = port;
+		if (EnsureTcpListenerObject(net_tcp_listeners[i], backlog)) return true;
+		net_tcp_listeners[i].port = 0;
+		return false;
+	}
+	return false;
 }
 
 bool Devsman::CloseTcpPort(uint16 port) {
-	for0(i, net_tcp_listener_count) {
+	for0(i, NetTcpListenCapacity) {
 		if (net_tcp_listeners[i].port != port) continue;
-		net_tcp_listeners[i] = net_tcp_listeners[net_tcp_listener_count - 1];
-		net_tcp_listeners[net_tcp_listener_count - 1] = {};
-		--net_tcp_listener_count;
+		WakeTcpAcceptWaiters(net_tcp_listeners[i]);
+		ReleaseTcpConnectionsByLocalPort(port);
+		auto* tcp = net_tcp_listeners[i].tcp;
+		net_tcp_listeners[i] = {};
+		net_tcp_listeners[i].tcp = tcp;
+		if (net_tcp_listeners[i].tcp) {
+			net_tcp_listeners[i].tcp->Reset();
+			net_tcp_listeners[i].tcp->setAcceptQueue(net_tcp_listeners[i].pending, NetTcpAcceptQueueDepth);
+		}
 		return true;
 	}
 	return false;
@@ -1137,6 +1465,63 @@ bool Devsman::CloseTcpPort(uint16 port) {
 
 bool Devsman::IsTcpPortListening(uint16 port) {
 	return FindTcpListener(port) != nullptr;
+}
+
+bool Devsman::WaitTcpAccept(uint16 port) {
+	auto* listener = FindTcpListener(port);
+	if (!listener) return false;
+	if (listener->tcp && listener->tcp->getPendingAcceptCount()) return true;
+	auto* th = Taskman::CurrentTB();
+	if (!th) return false;
+	if (!AddTcpAcceptWaiter(*listener, th)) return false;
+	th->Block(ThreadBlock::BlockReason::BR_RecvMsg);
+	Taskman::Schedule(true);
+	listener = FindTcpListener(port);
+	return listener && listener->tcp && listener->tcp->getPendingAcceptCount() != 0;
+}
+
+bool Devsman::HasTcpAccept(uint16 port) {
+	auto* listener = FindTcpListener(port);
+	return listener && listener->tcp && listener->tcp->getPendingAcceptCount() != 0;
+}
+
+stdsint Devsman::AcceptTcpConnection(uint16 port, uni::Network::TCPConnectionContext& context) {
+	auto* listener = FindTcpListener(port);
+	if (!listener) return -1;
+	if (!DequeueTcpAccept(*listener, context)) return 0;
+	return 1;
+}
+
+bool Devsman::CloseTcpConnection(const uni::Network::TCPConnectionContext& context) {
+	return ReleaseTcpConnection(context);
+}
+
+bool Devsman::WaitTcpReceive(const uni::Network::TCPConnectionContext& context) {
+	auto* connection = FindTcpConnection(context.local.address, context.local.port,
+		context.remote.address, context.remote.port);
+	if (!connection) return false;
+	if (connection->rx_count) return true;
+	auto* th = Taskman::CurrentTB();
+	if (!th) return false;
+	if (!AddTcpRxReader(*connection, th)) return false;
+	th->Block(ThreadBlock::BlockReason::BR_RecvMsg);
+	Taskman::Schedule(true);
+	connection = FindTcpConnection(context.local.address, context.local.port,
+		context.remote.address, context.remote.port);
+	return connection && connection->rx_count != 0;
+}
+
+bool Devsman::HasTcpReceive(const uni::Network::TCPConnectionContext& context) {
+	auto* connection = FindTcpConnection(context.local.address, context.local.port,
+		context.remote.address, context.remote.port);
+	return connection && connection->rx_count != 0;
+}
+
+stdsint Devsman::ReceiveTcp(const uni::Network::TCPConnectionContext& context, void* payload, stduint capacity) {
+	auto* connection = FindTcpConnection(context.local.address, context.local.port,
+		context.remote.address, context.remote.port);
+	if (!connection) return -1;
+	return DequeueTcpRx(*connection, payload, capacity);
 }
 
 stdsint Devsman::ReceiveUdp(uint16 port, uni::Network::UDPDatagramContext& context, void* payload, stduint capacity) {
@@ -1193,7 +1578,7 @@ stdsint Devsman::SendUdp(const uni::Network::MacAddress& target_mac, const uni::
 			(unsigned)source_port, (unsigned)destination_port);
 		return -1;
 	}
-	if (target_mac.IsZero() || target_ip.IsZero()) {
+	if (target_mac.isZero() || target_ip.isZero()) {
 		plogwarn("[Net] send udp invalid target mac/ip");
 		return -1;
 	}
@@ -1206,14 +1591,29 @@ stdsint Devsman::SendUdp(const uni::Network::MacAddress& target_mac, const uni::
 		plogwarn("[Net] send udp no default link device");
 		return -1;
 	}
-	const stdsint sent = SendUdpFrame(*dev, net_buffers.udp_tx, target_mac, net_config.ipv4_address,
-		target_ip, source_port, destination_port, payload, length, net_ipv4_identification++);
+	uni::Network::UDPObject udp(&net_ipv4_interface, net_buffers.udp_tx, NetFrameBufferSize);
+	udp.setIdentification(net_ipv4_identification++);
+	udp.Bind({ uni::Network::NetworkAddressIPv4(net_config.ipv4_address), source_port });
+	udp.Connect({ uni::Network::NetworkAddressIPv4(target_ip), destination_port });
+	uni::Network::TransportPayloadContext context{
+		{
+			{ uni::Network::NetworkAddressIPv4(net_config.ipv4_address), source_port },
+			{ uni::Network::NetworkAddressIPv4(target_ip), destination_port },
+		},
+		payload,
+		length,
+	};
+	uni::Network::NetworkPacketContext packet{};
+	if (udp.BuildPacket(packet, context) < 0) {
+		return -1;
+	}
+	const stdsint sent = SendIPv4PacketFrame(*dev, target_mac, packet);
 	return sent > 0 ? stdsint(length) : sent;
 }
 
 stdsint Devsman::SendUdp(const uni::Network::IPv4Address& target_ip,
 	uint16 source_port, uint16 destination_port, const void* payload, stduint length) {
-	if (!source_port || !destination_port || target_ip.IsZero()) {
+	if (!source_port || !destination_port || target_ip.isZero()) {
 		plogwarn("[Net] send udp invalid args src=%u dst=%u ip=%u.%u.%u.%u",
 			(unsigned)source_port, (unsigned)destination_port,
 			(unsigned)target_ip.octet[0], (unsigned)target_ip.octet[1],
@@ -1250,8 +1650,9 @@ stdsint Devsman::SendUdp(const uni::Network::IPv4Address& target_ip,
 		ClearPendingUdp(stduint(pending_index));
 		return -1;
 	}
-	const stdsint sent = SendUdpFrame(*route.dev, net_buffers.udp_tx, target_mac, route.source,
-		target_ip, source_port, destination_port, payload, length, net_ipv4_identification++);
+	const stdsint sent = SendUdpDatagram(net_ipv4_interface, net_buffers.udp_tx,
+		route.source, target_ip, source_port, destination_port,
+		payload, length, net_ipv4_identification++);
 	return sent > 0 ? stdsint(length) : sent;
 }
 
@@ -1269,7 +1670,7 @@ bool Devsman::GetDefaultIPv4Route(void* route, stduint length) {
 		output->gateway[i] = net_config.ipv4_gateway.octet[i];
 	}
 	output->flags = syscall_net_route_flag_gateway;
-	if (dev->GetState() == uni::Network::LinkState::Up) output->flags |= syscall_net_route_flag_up;
+	if (dev->getState() == uni::Network::LinkState::Up) output->flags |= syscall_net_route_flag_up;
 	output->link_index = uint16(index);
 	return true;
 }

@@ -537,6 +537,7 @@ bool Memory::initialize(stduint eax, byte* ebx) {
 	#endif
 	GDT_Next();
 
+	mempool0.dump_available();
 
 	return true;
 }

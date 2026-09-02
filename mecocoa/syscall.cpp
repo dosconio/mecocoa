@@ -33,10 +33,11 @@ extern "C" stdsint sysc_SADR(stduint, stduint, stduint);
 extern "C" stdsint sysc_SOPT(stduint, stduint, stduint);
 extern "C" stdsint sysc_POLL(stduint, stduint, stduint);
 extern "C" stdsint sysc_LIST(stduint, stduint, stduint);
+extern "C" stdsint sysc_ACPT(stduint, stduint, stduint);
 extern "C" void check_and_deliver_signals(void* context);
 
 // Syscall Wrappers
-extern stduint SYSCALL_TABLE[48];
+extern stduint SYSCALL_TABLE[49];
 
 void Syscall::Initialize() {
 	#if _MCCA == 0x8632
@@ -473,6 +474,33 @@ DEFSYSC sysc_LIST(stduint fd, stduint backlog, stduint) {
 	ProcessBlock* pb = th ? th->parent_process : nullptr;
 	if (!pb) return -1;
 	return pb->ListenSocket((int)fd, backlog);
+}
+
+DEFSYSC sysc_ACPT(stduint fd, stduint usr_addr, stduint usr_addr_length) {
+	ThreadBlock* th = Taskman::CurrentTB();
+	ProcessBlock* pb = th ? th->parent_process : nullptr;
+	if (!pb) return -1;
+
+	uni::Network::SocketAddressIPv6 address_buffer{};
+	stduint address_length = sizeof(address_buffer);
+	uni::Network::SocketAddress* address = nullptr;
+	stduint* address_length_ptr = nullptr;
+	if (usr_addr || usr_addr_length) {
+		if (!usr_addr || !usr_addr_length) return -1;
+		stduint user_length = 0;
+		MccaMemCopyP(&user_length, nullptr, true, (const void*)usr_addr_length, pb, false, sizeof(user_length));
+		if (user_length < sizeof(uni::Network::SocketAddressIPv4)) return -1;
+		address = reinterpret_cast<uni::Network::SocketAddress*>(&address_buffer);
+		address_length_ptr = &address_length;
+	}
+
+	const stdsint new_fd = pb->AcceptSocket((int)fd, address, address_length_ptr);
+	if (new_fd < 0) return new_fd;
+	if (new_fd >= 0 && address && address_length_ptr) {
+		MccaMemCopyP((void*)usr_addr, pb, false, address, nullptr, true, *address_length_ptr);
+		MccaMemCopyP((void*)usr_addr_length, pb, false, address_length_ptr, nullptr, true, sizeof(*address_length_ptr));
+	}
+	return new_fd;
 }
 
 DEFSYSC sysc_ROUT(stduint func, stduint p1, stduint p2) {
@@ -1059,6 +1087,7 @@ stduint SYSCALL_TABLE[] = {
 	mglb(sysc_SOPT), // 0x2D (SOPT)
 	mglb(sysc_POLL), // 0x2E (POLL)
 	mglb(sysc_LIST), // 0x2F (LIST)
+	mglb(sysc_ACPT), // 0x30 (ACPT)
 };
 #endif
 
@@ -1147,6 +1176,9 @@ void syscall_body(NormalTaskContext* cxt)
 		break;
 	case syscall_t::LIST:
 		cxt->a0 = sysc_LIST(cxt->a0, cxt->a1, cxt->a2);
+		break;
+	case syscall_t::ACPT:
+		cxt->a0 = sysc_ACPT(cxt->a0, cxt->a1, cxt->a2);
 		break;
 	default:
 		plogerro("Unknown syscall no: %d", syscall_num);

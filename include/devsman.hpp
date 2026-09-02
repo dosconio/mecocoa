@@ -156,6 +156,7 @@ namespace uni {
 		struct IPv4Address;
 		class LinkDevice;
 		struct MacAddress;
+		struct TCPConnectionContext;
 		struct UDPDatagramContext;
 	}
 }
@@ -235,6 +236,13 @@ public:
 	static bool ListenTcpPort(uint16 port, stduint backlog);
 	static bool CloseTcpPort(uint16 port);
 	static bool IsTcpPortListening(uint16 port);
+	static bool WaitTcpAccept(uint16 port);
+	static bool HasTcpAccept(uint16 port);
+	static stdsint AcceptTcpConnection(uint16 port, uni::Network::TCPConnectionContext& context);
+	static bool CloseTcpConnection(const uni::Network::TCPConnectionContext& context);
+	static bool WaitTcpReceive(const uni::Network::TCPConnectionContext& context);
+	static bool HasTcpReceive(const uni::Network::TCPConnectionContext& context);
+	static stdsint ReceiveTcp(const uni::Network::TCPConnectionContext& context, void* payload, stduint capacity);
 	static stdsint SendUdp(const uni::Network::IPv4Address& target_ip,
 		uint16 source_port, uint16 destination_port, const void* payload, stduint length);
 	static stdsint SendUdp(const uni::Network::MacAddress& target_mac, const uni::Network::IPv4Address& target_ip,

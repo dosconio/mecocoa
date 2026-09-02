@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <poll.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 
@@ -9,6 +10,8 @@ static void PrintUsage() {
 	printf("usage: testtcp [--reuse] --listen [port]\n\r");
 	printf("  listen: testtcp --listen 80\n\r");
 	printf("  reuse:  testtcp --reuse --listen 80\n\r");
+	printf("  host:   nc -vz -w 1 10.0.2.15 80\n\r");
+	printf("  data:   printf hello | nc -w 1 10.0.2.15 80\n\r");
 }
 
 static void PrintSocketAddress(const char* label, const struct sockaddr_in& address) {
@@ -96,5 +99,38 @@ int main(int argc, char** argv) {
 		PrintSocketAddress("local", bound);
 	}
 	printf("testtcp: listening backlog=4\n\r");
-	for (;;) sysrest(1, 1000);
+	for (;;) {
+		struct sockaddr_in peer{};
+		socklen_t peer_length = sizeof(peer);
+		const int client = accept(fd, (struct sockaddr*)&peer, &peer_length);
+		if (client < 0) {
+			printf("testtcp: accept failed\n\r");
+			return 1;
+		}
+		PrintSocketAddress("accepted", peer);
+		struct pollfd pfd{};
+		pfd.fd = client;
+		pfd.events = POLLIN;
+		const int ready = poll(&pfd, 1, 3000);
+		if (ready < 0) {
+			printf("testtcp: poll failed\n\r");
+			close(client);
+			return 1;
+		}
+		if (ready > 0 && (pfd.revents & POLLIN)) {
+			char buffer[513] = {};
+			const stdsint received = recv(client, buffer, sizeof(buffer) - 1, 0);
+			if (received < 0) {
+				printf("testtcp: recv failed\n\r");
+				close(client);
+				return 1;
+			}
+			buffer[received] = 0;
+			printf("testtcp: recv %d bytes: %s\n\r", (int)received, buffer);
+		}
+		else {
+			printf("testtcp: no data\n\r");
+		}
+		close(client);
+	}
 }

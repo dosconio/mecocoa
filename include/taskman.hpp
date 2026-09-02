@@ -301,6 +301,7 @@ public:
 	auto BindSocket(int fd, const uni::Network::SocketAddress* address, stduint length) -> stdsint;
 	auto ConnectSocket(int fd, const uni::Network::SocketAddress* address, stduint length) -> stdsint;
 	auto ListenSocket(int fd, stduint backlog) -> stdsint;
+	auto AcceptSocket(int fd, uni::Network::SocketAddress* address, stduint* address_length) -> stdsint;
 	auto SendSocket(int fd, const void* payload, stduint length, const uni::Network::SocketAddress* address) -> stdsint;
 	auto RecvSocket(int fd, void* payload, stduint capacity,
 		uni::Network::SocketAddress* address, stduint* address_length, stduint flags = 0) -> stdsint;

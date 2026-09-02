@@ -60,28 +60,30 @@ Dnode* VTTY_Append(Console_t* con) {
 Dchain vttys = { VTTY_Free };// offs->ConT*, type->vtty_type_t
 
 #endif
+
+#include <cpp/atomic>
 Vector<stduint> blocked_vtty_pid;
 
 
 Vector<BlockedFormMsg> blocked_form_msgs;
 Mutex console_waiters_mutex;
-static volatile byte console_has_blocked_waiters = 0;
-static volatile byte console_wake_pending = 0;
+static Atomic<byte> console_has_blocked_waiters = 0;
+static Atomic<byte> console_wake_pending = 0;
 
 void RefreshConsoleBlockedStateUnlocked() {
 	byte has_waiters = blocked_vtty_pid.Count() || blocked_form_msgs.Count();
-	__atomic_store_n(&console_has_blocked_waiters, has_waiters, __ATOMIC_RELEASE);
+	console_has_blocked_waiters.store(has_waiters, MemoryOrder_Release);
 }
 
 void Consman::WakeBlockedWaiters() {
-	if (!__atomic_load_n(&console_has_blocked_waiters, __ATOMIC_ACQUIRE)) return;
-	if (__atomic_exchange_n(&console_wake_pending, 1, __ATOMIC_ACQ_REL)) return;
+	if (!console_has_blocked_waiters.load(MemoryOrder_Acquire)) return;
+	if (console_wake_pending.exchange(1, MemoryOrder_Acq_Rel)) return;
 	syssend_async(Task_Console, nullptr, 0, (stduint)ConsoleMsg::TEST);
 }
 
 void Consman::WakeBlockedWaitersDeferred() {
-	if (!__atomic_load_n(&console_has_blocked_waiters, __ATOMIC_ACQUIRE)) return;
-	if (__atomic_exchange_n(&console_wake_pending, 1, __ATOMIC_ACQ_REL)) return;
+	if (!console_has_blocked_waiters.load(MemoryOrder_Acquire)) return;
+	if (console_wake_pending.exchange(1, MemoryOrder_Acq_Rel)) return;
 	#if _MCCA == 0x8664 && defined(_UEFI)
 	SysMessage msg = {};
 	msg.type = SysMessage::RUPT_CONSOLE_WAKE;
@@ -214,7 +216,7 @@ void _Comment(R1) serv_cons_loop()
 		bool skip_waiter_maintenance = false;
 		// Block here to wait for messages or wake notifications
 		sysrecv(ANYPROC, (void*)to_args, byteof(to_args), (usize*)&sig_type, (usize*)&sig_src);
-		__atomic_store_n(&console_wake_pending, 0, __ATOMIC_RELEASE);
+		console_wake_pending.store(0, MemoryOrder_Release);
 		ProcessBlock* safe_pb = ProcessBlock::Acquire(sig_src);
 		if (safe_pb) {
 			switch (ConsoleMsg(sig_type)) {
