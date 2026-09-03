@@ -270,7 +270,11 @@ namespace {
 		sound_blaster_dma8_channel = uint8(dma_resource->start);
 		if (!sound_blaster_dma_buffer) {
 			sound_blaster_dma_buffer = static_cast<uint8*>(
-				mempool.allocate(SoundBlasterDmaBufferSize, PAGESIZE_4KB, 16));
+				DmaLowAlloc(SoundBlasterDmaBufferSize));
+			if (!sound_blaster_dma_buffer) {
+				sound_blaster_dma_buffer = static_cast<uint8*>(
+					mempool.allocate(SoundBlasterDmaBufferSize, PAGESIZE_4KB, 16));
+			}
 		}
 		if (!sound_blaster_dma_buffer) {
 			plogwarn("[SB16] ISA DMA buffer allocation failed");
@@ -790,6 +794,7 @@ namespace {
 			(stduint)sound_blaster.GetDspMajorVersion(),
 			(stduint)sound_blaster.GetDspMinorVersion());
 		sound_blaster_pcm_path = SoundBlasterPcmPath::Unknown;
+		(void)PrepareSoundBlasterDma8(node);
 		// Keep boot quiet. Explicit AudioMsg::TEST / playback paths can still
 		// exercise the device after normal service scheduling is available.
 		return true;

@@ -16,12 +16,7 @@ _PACKED(struct) memory_info_entry {
 	uint32 type;// 1 for avail, 2 for not
 };// ARDS
 
-byte _BUF_pagebmap[sizeof(BmMemoman)];
 
-const stduint bmapsize = 0x100000 / 8;
-
-// 0x0000000000000000 .. 0x0000000100000000
-byte memoman_4G_00000000[bmapsize];
 
 #if (_MCCA & 0xFF00) == 0x8600
 extern memory_info_entry MemoryListData[20];
@@ -413,16 +408,48 @@ static void parse_uefi(const MemoryMap& memory_map);
 #endif
 
 
-// **initialize**: fill the mbitmap
+static void mempool_append_available_range(stduint beg, stduint end) {
+	beg = ceilAlign(0x1000, beg);
+	end = floorAlign(0x1000, end);
+	if (beg >= end) return;
+
+	#if (_MCCA & 0xFF00) == 0x8600
+	// Exclude low 1MB (IVT, BDA, EBDA, Video buffer, BIOS ROM)
+	if (beg < 0x100000) {
+		if (end <= 0x100000) return;
+		beg = 0x100000;
+	}
+	#endif
+
+	// Exclude Kernel Image: FILE_ENTO .. FILE_ENDO
+	stduint k_beg = floorAlign(0x1000, _IMM(&FILE_ENTO));
+	stduint k_end = ceilAlign(0x1000, _IMM(&FILE_ENDO));
+
+	if (end <= k_beg || beg >= k_end) {
+		mempool.Append(Slice{ beg, end - beg });
+		Memory::total_memsize += end - beg;
+	}
+	else {
+		if (beg < k_beg) {
+			mempool.Append(Slice{ beg, k_beg - beg });
+			Memory::total_memsize += k_beg - beg;
+		}
+		if (end > k_end) {
+			mempool.Append(Slice{ k_end, end - k_end });
+			Memory::total_memsize += end - k_end;
+		}
+	}
+}
+
+// **initialize**: fill the mempool
 // - init
 // - allocate (which be with pagemap)
-// - free (which be with unmap) [TODO]
+// - free (which be with unmap)
 #if (_MCCA & 0xFF00) == 0x8600
 bool Memory::initialize(stduint eax, byte* ebx) {
-	void* mapaddr = memoman_4G_00000000;
-	MemSet(mapaddr, 0, bmapsize);
-	Memory::pagebmap = new (_BUF_pagebmap) BmMemoman(mapaddr, bmapsize);
+	mempool0.expand_only_from_self = true;
 	mempool.Reset();
+	Memory::total_memsize = 0;
 
 	// x64 has default paging now
 	#if _MCCA == 0x8632
@@ -480,35 +507,10 @@ bool Memory::initialize(stduint eax, byte* ebx) {
 	default:
 		return false;
 	}
-	byte bmap_FFFF[2];// 0x10 pages / 8 = 2
-	Bitmap BM_FFFF(bmap_FFFF, 2);
-	for0(i, 0x10) {
-		bool b = Memory::pagebmap->bitof(i);
-		BM_FFFF.setof(i, b);
-	}
-	Memory::total_memsize += Memory::pagebmap->Count();
-	Memory::pagebmap->add_range(
-		floorAlign(0x1000, _IMM(&FILE_ENTO)) >> 12,
-		(vaultAlign(0x1000, _IMM(&FILE_ENDO)) >> 12) + 1,
-		false
-	);// kernel
-	Memory::pagebmap->add_range(0, 0x10, false);
-	Memory::pagebmap->add_range(0x78, 0x100, false);
-	// - 0x78000~0x7FFFF Video Modes List
-	// - 0x80000~0xFFFFF BIOS and Upper Memory Area
-	
-	// Protect Kernel PageDirectory and dynamically populated PageTables
-	#if _MCCA == 0x8632
-	stduint end_ext = vaultAlign(0x1000, _IMM(Memory::p_ext)) >> 12;
-	Memory::pagebmap->add_range(0x100000 >> 12, end_ext, false);
-	#endif
 
 	map_ready = true;
 
-	uni_default_allocator = &mem;
-	// mempool (kernel heap)
-	const unsigned mempool_len0 = 0x4000;
-	mempool.Append(Slice{ _IMM(mem.allocate(mempool_len0)), mempool_len0 });
+	uni_default_allocator = &mempool;
 	uni_hostenv_allocator = &mempool;
 
 	// paging
@@ -537,6 +539,16 @@ bool Memory::initialize(stduint eax, byte* ebx) {
 	#endif
 	GDT_Next();
 
+	#if (_MCCA & 0xFF00) == 0x8600
+	void* dma_phys = mempool.allocate(0x10000, 16, 16);
+	if (dma_phys && stduint(dma_phys) + 0x10000 <= 0x01000000) {
+		DmaLowPoolInit(stduint(dma_phys));
+		ploginfo("[MEM] ISA DMA 64KB low pool reserved at %[x]", (stduint)dma_phys);
+	}
+	else {
+		plogwarn("[MEM] Failed to reserve ISA DMA low pool (<16MB)");
+	}
+	#endif
 	mempool0.dump_available();
 
 	return true;
@@ -545,20 +557,15 @@ bool Memory::initialize(stduint eax, byte* ebx) {
 #elif (_MCCA & 0xFF00) == 0x1000
 _ESYM_C void _heap_ento(), _heap_endo();
 bool Memory::initialize(stduint eax, byte* ebx) {
-	stduint beg = vaultAlign(0x1000, _IMM(_heap_ento)) >> 12;
-	stduint end = floorAlign(0x1000, _IMM(_heap_endo)) >> 12;
-	end &= 0xFFFFFFFFul;
-	Memory::total_memsize = (end - beg) << 12;
-	void* mapaddr = memoman_4G_00000000;
-	MemSet(mapaddr, 0, bmapsize);
-	Memory::pagebmap = new (_BUF_pagebmap) BmMemoman(mapaddr, bmapsize);
-	Memory::pagebmap->add_range(beg, end, true);
+	stduint beg = vaultAlign(0x1000, _IMM(_heap_ento));
+	stduint end = floorAlign(0x1000, _IMM(_heap_endo));
+	Memory::total_memsize = end - beg;
+	mempool0.expand_only_from_self = true;
+	mempool.Reset(Slice{ beg, end - beg });
 	map_ready = true;
 
 	// Mempool
-	uni_default_allocator = &mem;
-	const unsigned mempool_len0 = 0x10000;
-	mempool.Reset(Slice{ _IMM(mem.allocate(mempool_len0)), mempool_len0 });
+	uni_default_allocator = &mempool;
 	uni_hostenv_allocator = &mempool;
 
 	return true;
@@ -574,11 +581,8 @@ static stduint parse_norm(stduint addr) {
 	for0(i, numsof(MemoryListData)) {
 		if (!entry->addr && !entry->len) break;
 		count++;
-		// outsfmt("[Memoman] 0x%[64H]..0x%[64H] : 0x%x\n\r", entry->addr, entry->addr + entry->len, entry->type);
-		if (entry->type == 1) {
-			stduint beg = vaultAlign(0x1000, entry->addr) >> 12;
-			stduint end = floorAlign(0x1000, entry->addr + entry->len) >> 12;
-			Memory::pagebmap->add_range(beg, end, true);
+		if (entry->type == 1 && entry->len > 0) {
+			mempool_append_available_range(entry->addr, entry->addr + entry->len);
 		}
 		entry++;
 	}
@@ -613,13 +617,10 @@ static stduint parse_grub(stduint addr)
 		multiboot_mmap_entry* entry = mtag->entries;
 		while ((u32)entry < (u32)mtag + mtag->size)
 		{
-			// outsfmt("[Memoman] base 0x%[x]..0x%[x] : %d\n\r", (u32)entry->addr, (u32)entry->addr + (u32)entry->len, (u32)entry->type);
 			count++;
 			if (entry->type == MULTIBOOT_MEMORY_AVAILABLE && entry->len > 0)
 			{
-				stduint beg = vaultAlign(0x1000, entry->addr) >> 12;
-				stduint end = floorAlign(0x1000, entry->addr + entry->len) >> 12;
-				Memory::pagebmap->add_range(beg, end, true);
+				mempool_append_available_range(entry->addr, entry->addr + entry->len);
 			}
 			cast<stduint>(entry) += mtag->entry_size;
 		}
@@ -631,23 +632,15 @@ static stduint parse_grub(stduint addr)
 
 
 static void parse_uefi(const MemoryMap& memory_map) {
-	
-	// UEFI had reduced the area that the kernel used
 	stduint top = _IMM(memory_map.buffer) + memory_map.map_size;
 	for (stduint iter = _IMM(memory_map.buffer); iter < top; iter += memory_map.descriptor_size) {
 		auto desc = reinterpret_cast<MemoryDescriptor*>(iter);
 		if (MemIsAvailable((MemoryType)desc->type)) {
-			// ploginfo("type = %u, %[x]..%[x], attr=0x%[x]", desc->type, desc->physical_start, desc->physical_start + desc->number_of_pages * 4096, desc->attribute);
-			stduint beg = vaultAlign(0x1000, desc->physical_start) >> 12;
-			if (desc->physical_start + desc->number_of_pages * 4096 >= 0x100000000ULL) {
-				ploginfo("Memory %[x] .. %[x] over 4G", desc->physical_start, desc->physical_start + desc->number_of_pages * 4096);
-				mempool.Append(Slice{ _IMM(desc->physical_start), desc->number_of_pages * 4096 });
-				Memory::total_memsize += desc->number_of_pages * 4096;
-			}
-			else Memory::pagebmap->add_range(beg, beg + desc->number_of_pages, true);
+			stduint beg = desc->physical_start;
+			stduint len = desc->number_of_pages * 4096;
+			mempool_append_available_range(beg, beg + len);
 		}
 	}
-	Memory::pagebmap->add_range(_IMM(memory_map.buffer) >> 12, vaultAlign(0x1000, top) >> 12, false);
 }
 
 

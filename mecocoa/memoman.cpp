@@ -8,7 +8,6 @@
 _ESYM_C Handler_t FILE_ENTO, FILE_ENDO;
 
 Memory mem;
-BmMemoman* Memory::pagebmap = NULL;
 stduint Memory::total_memsize = 0;
 bool map_ready = false;
 
@@ -85,44 +84,17 @@ void* (*uni::_physical_allocate)(stduint size) = 0;
 #endif
 
 void* Memory::allocate(stduint siz, stduint alignment, stduint boundary) {
-	(void)boundary;
 	if (!map_ready) {
 		plogerro("no pg-mapping");
 		return nullptr;
 	}
-	if (siz & 0xFFF) siz = (siz & ~_IMM(0xFFF)) + 0x1000;
-	void* ret = nil;
-	// find a available page in bitmap
-	siz >>= 12;
-	KASSERT(Memory::pagebmap != nullptr);
-	if (!Memory::pagebmap->avail_pointer) {
-		plogerro("no avail page");
-		return nullptr;
-	}
-	stduint sum_cont = 0;
-	stduint sum_beg = Memory::pagebmap->avail_pointer;
-	for (stduint p = Memory::pagebmap->avail_pointer; p < 0x100000; p++) {
-		if (Memory::pagebmap->bitof(p)) {
-			if (!sum_cont) sum_beg = p;
-			sum_cont++;
-			if (sum_cont >= siz) break;
-		}
-		else {
-			sum_cont = 0;
-		}
-	}
-	if (!(sum_cont >= siz)) {
-		plogerro("no avail pages");
-		return nullptr;
-	}
-	ret = (void*)(sum_beg << 12);
-	Memory::pagebmap->add_range(sum_beg, sum_beg + siz, false);
-
-	// printlog(_LOG_INFO, "malloc(0x%[32H], %[x])", ret, siz << 12);
-	return ret;
+	return mempool.allocate(siz, alignment, boundary);
 }
 bool Memory::deallocate(void* ptr, stduint size _Comment(zero_for_block)) {
-	_TODO return false;
+	if (!map_ready) {
+		return false;
+	}
+	return mempool.deallocate(ptr, size);
 }
 
 #endif
@@ -278,6 +250,72 @@ _ESYM_C void* realloc(void* ptr, size_t size) {
 		free(ptr);
 	}
 	return new_ptr;
+}
+#endif
+
+// ---- DMA LOW POOL (< 16MB) ----
+#if (_MCCA & 0xFF00) == 0x8600
+namespace {
+	struct DmaLowPool {
+		stduint base_phys = 0;
+		uint16 page_bitmap = 0; // 1 bit per 4KB page (0: free, 1: used), 16 pages = 64KB
+		Spinlock lock;
+
+		void Init(stduint base) {
+			base_phys = base;
+			page_bitmap = 0;
+		}
+
+		void* Allocate(stduint bytes) {
+			if (!base_phys || !bytes) return nullptr;
+			stduint pages = (bytes + 0xFFF) >> 12;
+			if (pages > 16) return nullptr;
+			SpinlockLocal guard(&lock);
+			for (stduint i = 0; i <= 16 - pages; ++i) {
+				uint16 mask = uint16(((1u << pages) - 1u) << i);
+				if ((page_bitmap & mask) == 0) {
+					page_bitmap |= mask;
+					return reinterpret_cast<void*>(base_phys + (i << 12));
+				}
+			}
+			return nullptr;
+		}
+
+		bool Deallocate(void* ptr, stduint bytes) {
+			stduint addr = reinterpret_cast<stduint>(ptr);
+			if (!base_phys || addr < base_phys || addr >= base_phys + 0x10000) return false;
+			stduint start_page = (addr - base_phys) >> 12;
+			stduint pages = bytes ? ((bytes + 0xFFF) >> 12) : 1;
+			if (start_page + pages > 16) pages = 16 - start_page;
+			uint16 mask = uint16(((1u << pages) - 1u) << start_page);
+			SpinlockLocal guard(&lock);
+			page_bitmap &= ~mask;
+			return true;
+		}
+
+		bool IsInRange(void* ptr) const {
+			stduint addr = reinterpret_cast<stduint>(ptr);
+			return base_phys && addr >= base_phys && addr < base_phys + 0x10000;
+		}
+	};
+
+	DmaLowPool dma_low_pool;
+}
+
+void DmaLowPoolInit(stduint base_phys) {
+	dma_low_pool.Init(base_phys);
+}
+
+void* DmaLowAlloc(stduint bytes) {
+	return dma_low_pool.Allocate(bytes);
+}
+
+bool DmaLowFree(void* ptr, stduint bytes) {
+	return dma_low_pool.Deallocate(ptr, bytes);
+}
+
+bool DmaLowIsInRange(void* ptr) {
+	return dma_low_pool.IsInRange(ptr);
 }
 #endif
 

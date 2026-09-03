@@ -270,7 +270,10 @@ void R_FLP_INIT() {
 
 	// Allocate a 4KB aligned physical page for floppy DMA buffer
 	if (!floppy_sector) {
-		floppy_sector = (char*)mempool.allocate(4096, PAGESIZE_4KB, 16);
+		floppy_sector = (char*)DmaLowAlloc(4096);
+		if (!floppy_sector) {
+			floppy_sector = (char*)mempool.allocate(4096, PAGESIZE_4KB, 16);
+		}
 		if (!floppy_sector) plogwarn("[FLOPPY] ISA DMA buffer allocation failed");
 	}
 }

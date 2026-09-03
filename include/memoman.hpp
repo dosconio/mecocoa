@@ -141,7 +141,6 @@ public: // previously used
 	#endif
 public:
 	static stduint total_memsize;
-	static BmMemoman* pagebmap;// 1 map for first 4G, 0x100000 pages / 8 bpB = 0x20000 bytes
 	public:
 	static void clear_bss();
 	static bool initialize(stduint eax, byte* ebx);
@@ -165,6 +164,13 @@ void GDT_Next();
 word GDT_GetNumber();
 word GDT_Alloc();
 #endif
+#endif
+
+#if (_MCCA & 0xFF00) == 0x8600
+void DmaLowPoolInit(stduint base_phys);
+void* DmaLowAlloc(stduint bytes);
+bool DmaLowFree(void* ptr, stduint bytes = 0);
+bool DmaLowIsInRange(void* ptr);
 #endif
 
 #endif // __MEMOMAN_HPP__

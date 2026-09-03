@@ -75,7 +75,16 @@ namespace {
 		auto* slot = node ? reinterpret_cast<PwcallDmaSlot*>(node->offs) : nullptr;
 		if (!slot) return;
 		if (slot->physical && slot->size) {
+			#if (_MCCA & 0xFF00) == 0x8600
+			if (DmaLowIsInRange((void*)slot->physical)) {
+				DmaLowFree((void*)slot->physical, slot->size);
+			}
+			else {
+				mempool.deallocate((void*)slot->physical, slot->size);
+			}
+			#else
 			mempool.deallocate((void*)slot->physical, slot->size);
+			#endif
 		}
 		memf(slot);
 	}
@@ -329,18 +338,34 @@ static stdsint HandlePwcallDeviceDmaAlloc(ProcessBlock* pb, stduint dev_handle, 
 	if (!pb || !dev_handle || !size) return -1;
 	if (!ResolvePwcallDeviceHandle(pb, dev_handle)) return -1;
 	const stduint alloc_size = (size + 0xFFFu) & ~0xFFFu;
-	void* phys = mempool.allocate(alloc_size, 12);
+	void* phys = nullptr;
+	#if (_MCCA & 0xFF00) == 0x8600
+	phys = DmaLowAlloc(alloc_size);
+	#endif
+	if (!phys) {
+		phys = mempool.allocate(alloc_size, 12);
+	}
 	if (!phys) return -1;
 
 	SpinlockLocal guard(PwcallHandleLock());
 	auto* owner = GetOrCreatePwcallProcessHandles(pb->pid);
 	if (!owner) {
+		#if (_MCCA & 0xFF00) == 0x8600
+		if (DmaLowIsInRange(phys)) DmaLowFree(phys, alloc_size);
+		else mempool.deallocate(phys, alloc_size);
+		#else
 		mempool.deallocate(phys, alloc_size);
+		#endif
 		return -1;
 	}
 	auto* slot = zalcof(PwcallDmaSlot);
 	if (!slot) {
+		#if (_MCCA & 0xFF00) == 0x8600
+		if (DmaLowIsInRange(phys)) DmaLowFree(phys, alloc_size);
+		else mempool.deallocate(phys, alloc_size);
+		#else
 		mempool.deallocate(phys, alloc_size);
+		#endif
 		return -1;
 	}
 	slot->handle_id = owner->next_dma_handle++;
@@ -362,6 +387,20 @@ static stdsint HandlePwcallDeviceDmaFree(ProcessBlock* pb, stduint dma_handle) {
 	if (slot && slot->mapped_addr && slot->size) {
 		sysc_UMAP(slot->mapped_addr, slot->size);
 		slot->mapped_addr = 0;
+	}
+	if (slot && slot->physical && slot->size) {
+		#if (_MCCA & 0xFF00) == 0x8600
+		if (DmaLowIsInRange((void*)slot->physical)) {
+			DmaLowFree((void*)slot->physical, slot->size);
+		}
+		else {
+			mempool.deallocate((void*)slot->physical, slot->size);
+		}
+		#else
+		mempool.deallocate((void*)slot->physical, slot->size);
+		#endif
+		slot->physical = 0;
+		slot->size = 0;
 	}
 	RemovePwcallHandleChainNode(&owner->dmas, slot_node);
 	return 0;

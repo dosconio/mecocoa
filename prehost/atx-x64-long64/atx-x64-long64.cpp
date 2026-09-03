@@ -30,7 +30,7 @@ _ESYM_C void mecocoa() {
 
 	tryUD();
 
-	Memory::pagebmap->dump_avail_memory();
+	mempool0.dump_available();
 	int* ptr;
 	delete (ptr = new int);
 	ploginfo("[Mempool] I try a new int, and it was at %[x]", ptr);
