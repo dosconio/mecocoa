@@ -554,40 +554,48 @@ PartitionSlice Harddisk_PATA::getSlice(stduint dev) {
 
 struct Harddisk_PATA_Paged : public uni::Harddisk_PATA {
 	Harddisk_PATA_Paged(byte _id = 0, HarddiskType type = HarddiskType::ATA) : Harddisk_PATA(_id, type) {}
-	virtual bool Read(stduint BlockIden, void* Dest);
-	virtual bool Write(stduint BlockIden, const void* Sors);
+	virtual bool Read(stduint BlockIden, void* Dest, stduint Times = 1) override;
+	virtual bool Write(stduint BlockIden, const void* Sors, stduint Times = 1) override;
 };
-bool Harddisk_PATA_Paged::Read(stduint BlockIden, void* Dest) {
+bool Harddisk_PATA_Paged::Read(stduint BlockIden, void* Dest, stduint Times) {
 	if (Taskman::CurrentPID() == Task_Hdd_Serv) {
 		if (!disks[getID()]) return false;
-		return disks[getID()]->Read(BlockIden, Dest);
+		return disks[getID()]->Read(BlockIden, Dest, Times);
 	}
-	stduint to_args[2];
-	to_args[0] = getID();
-	to_args[1] = BlockIden;
-	syssend(Task_Hdd_Serv, sliceof(to_args), _IMM(FiledevMsg::READ));
-	// Receive ACK before data transfer
-	stduint ack;
-	sysrecv(Task_Hdd_Serv, &ack, sizeof(ack));
-	if (!ack) return false;
-	sysrecv(Task_Hdd_Serv, Dest, Block_Size);
+	for0(t, Times) {
+		stduint blk = BlockIden + t;
+		byte* dst = (byte*)Dest + t * Block_Size;
+		stduint to_args[2];
+		to_args[0] = getID();
+		to_args[1] = blk;
+		syssend(Task_Hdd_Serv, sliceof(to_args), _IMM(FiledevMsg::READ));
+		// Receive ACK before data transfer
+		stduint ack;
+		sysrecv(Task_Hdd_Serv, &ack, sizeof(ack));
+		if (!ack) return false;
+		sysrecv(Task_Hdd_Serv, dst, Block_Size);
+	}
 	return true;
 }
 
-bool Harddisk_PATA_Paged::Write(stduint BlockIden, const void* Sors) {
+bool Harddisk_PATA_Paged::Write(stduint BlockIden, const void* Sors, stduint Times) {
 	if (Taskman::CurrentPID() == Task_Hdd_Serv) {
 		if (!disks[getID()]) return false;
-		return disks[getID()]->Write(BlockIden, Sors);
+		return disks[getID()]->Write(BlockIden, Sors, Times);
 	}
-	stduint to_args[2];
-	to_args[0] = getID();
-	to_args[1] = BlockIden;
-	syssend(Task_Hdd_Serv, sliceof(to_args), _IMM(FiledevMsg::WRITE));
-	// Receive ACK before data transfer
-	stduint ack;
-	sysrecv(Task_Hdd_Serv, &ack, sizeof(ack));
-	if (!ack) return false;
-	syssend(Task_Hdd_Serv, Sors, Block_Size);
+	for0(t, Times) {
+		stduint blk = BlockIden + t;
+		const byte* src = (const byte*)Sors + t * Block_Size;
+		stduint to_args[2];
+		to_args[0] = getID();
+		to_args[1] = blk;
+		syssend(Task_Hdd_Serv, sliceof(to_args), _IMM(FiledevMsg::WRITE));
+		// Receive ACK before data transfer
+		stduint ack;
+		sysrecv(Task_Hdd_Serv, &ack, sizeof(ack));
+		if (!ack) return false;
+		syssend(Task_Hdd_Serv, src, Block_Size);
+	}
 	return true;
 }
 

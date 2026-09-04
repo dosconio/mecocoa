@@ -40,14 +40,15 @@ public:
 
 	virtual ~FileBlockDevice() = default;
 
-	virtual bool Read(stduint BlockIden, void* Dest) override {
-		if (BlockIden >= getUnits()) return false;
+	virtual bool Read(stduint BlockIden, void* Dest, stduint Times = 1) override {
+		if (BlockIden + Times > getUnits()) return false;
 		if (fseek(m_fp, (long)(BlockIden * Block_Size), SEEK_SET) != 0) return false;
-		size_t rd = fread(Dest, 1, Block_Size, m_fp);
-		return rd == Block_Size || (rd > 0 && BlockIden + 1 == getUnits());
+		stduint total_bytes = Times * Block_Size;
+		size_t rd = fread(Dest, 1, total_bytes, m_fp);
+		return rd == total_bytes || (rd > 0 && BlockIden + Times == getUnits());
 	}
 
-	virtual bool Write(stduint BlockIden, const void* Sors) override {
+	virtual bool Write(stduint BlockIden, const void* Sors, stduint Times = 1) override {
 		return false;
 	}
 

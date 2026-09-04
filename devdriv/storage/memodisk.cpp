@@ -69,10 +69,10 @@ Vector<Memodisk*> mem_disks;
 struct Harddisk_Memdisk_Paged : public StorageTrait {
 	stduint id;
 	Harddisk_Memdisk_Paged(byte _id = 0) : id(_id) {}
-	virtual bool Read(stduint BlockIden, void* Dest);
-	virtual bool Write(stduint BlockIden, const void* Sors);
+	virtual bool Read(stduint BlockIden, void* Dest, stduint Times = 1) override;
+	virtual bool Write(stduint BlockIden, const void* Sors, stduint Times = 1) override;
 };
-bool Harddisk_Memdisk_Paged::Read(stduint BlockIden, void* Dest) {
+bool Harddisk_Memdisk_Paged::Read(stduint BlockIden, void* Dest, stduint Times) {
 	if (Taskman::CurrentPID() == Task_Memdisk_Serv) {
 		Memodisk* mdisk = nullptr;
 		for0(i, mem_disks.Count()) {
@@ -81,21 +81,25 @@ bool Harddisk_Memdisk_Paged::Read(stduint BlockIden, void* Dest) {
 				break;
 			}
 		}
-		return mdisk ? mdisk->Read(BlockIden, Dest) : false;
+		return mdisk ? mdisk->Read(BlockIden, Dest, Times) : false;
 	}
-	stduint to_args[2];
-	to_args[0] = id;
-	to_args[1] = BlockIden;
-	syssend(Task_Memdisk_Serv, sliceof(to_args), _IMM(FiledevMsg::READ));
-	// Receive ACK before data transfer
-	stduint ack;
-	sysrecv(Task_Memdisk_Serv, &ack, sizeof(ack));
-	if (!ack) return false;
-	sysrecv(Task_Memdisk_Serv, Dest, Block_Size);
+	for0(t, Times) {
+		stduint blk = BlockIden + t;
+		byte* dst = (byte*)Dest + t * Block_Size;
+		stduint to_args[2];
+		to_args[0] = id;
+		to_args[1] = blk;
+		syssend(Task_Memdisk_Serv, sliceof(to_args), _IMM(FiledevMsg::READ));
+		// Receive ACK before data transfer
+		stduint ack;
+		sysrecv(Task_Memdisk_Serv, &ack, sizeof(ack));
+		if (!ack) return false;
+		sysrecv(Task_Memdisk_Serv, dst, Block_Size);
+	}
 	return true;
 }
 
-bool Harddisk_Memdisk_Paged::Write(stduint BlockIden, const void* Sors) {
+bool Harddisk_Memdisk_Paged::Write(stduint BlockIden, const void* Sors, stduint Times) {
 	if (Taskman::CurrentPID() == Task_Memdisk_Serv) {
 		Memodisk* mdisk = nullptr;
 		for0(i, mem_disks.Count()) {
@@ -104,17 +108,21 @@ bool Harddisk_Memdisk_Paged::Write(stduint BlockIden, const void* Sors) {
 				break;
 			}
 		}
-		return mdisk ? mdisk->Write(BlockIden, Sors) : false;
+		return mdisk ? mdisk->Write(BlockIden, Sors, Times) : false;
 	}
-	stduint to_args[2];
-	to_args[0] = id;
-	to_args[1] = BlockIden;
-	syssend(Task_Memdisk_Serv, sliceof(to_args), _IMM(FiledevMsg::WRITE));
-	// Receive ACK before data transfer
-	stduint ack;
-	sysrecv(Task_Memdisk_Serv, &ack, sizeof(ack));
-	if (!ack) return false;
-	syssend(Task_Memdisk_Serv, Sors, Block_Size);
+	for0(t, Times) {
+		stduint blk = BlockIden + t;
+		const byte* src = (const byte*)Sors + t * Block_Size;
+		stduint to_args[2];
+		to_args[0] = id;
+		to_args[1] = blk;
+		syssend(Task_Memdisk_Serv, sliceof(to_args), _IMM(FiledevMsg::WRITE));
+		// Receive ACK before data transfer
+		stduint ack;
+		sysrecv(Task_Memdisk_Serv, &ack, sizeof(ack));
+		if (!ack) return false;
+		syssend(Task_Memdisk_Serv, src, Block_Size);
+	}
 	return true;
 }
 

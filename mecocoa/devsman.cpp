@@ -1384,7 +1384,7 @@ namespace {
 
 	DeviceNode* ensure_xhci_root_hub_node(uni::device::SpaceUSB3::HostController& xhc);
 
-	USBDeviceNodeInfo classify_usb_device(const uni::device::SpaceUSB3::DeviceUSB3& dev) {
+	USBDeviceNodeInfo classify_usb_device(const uni::device::SpaceUSB3::USBHostDevice_v3& dev) {
 		if (dev.DeviceClass() == 0x09u) {
 			return {"usb-hub", "hub"};
 		}
@@ -1438,7 +1438,7 @@ namespace {
 	}
 
 	void ensure_usb_hub_downstream_ports_for_device(uni::device::SpaceUSB3::HostController& xhc,
-		uni::device::SpaceUSB3::DeviceUSB3& dev) {
+		uni::device::SpaceUSB3::USBHostDevice_v3& dev) {
 		if (dev.DeviceClass() != 0x09u) return;
 		auto* usb_root_hub_node = ensure_xhci_root_hub_node(xhc);
 		if (!usb_root_hub_node) return;
@@ -1447,7 +1447,7 @@ namespace {
 	}
 
 	void register_single_usb_device_for_xhci(DeviceNode* usb_parent_node,
-		uint8 port_num, uni::device::SpaceUSB3::DeviceUSB3& dev) {
+		uint8 port_num, uni::device::SpaceUSB3::USBHostDevice_v3& dev) {
 		if (!usb_parent_node || !dev.IsInitialized()) return;
 		const auto slot_id = dev.SlotID();
 		auto dev_info = classify_usb_device(dev);
@@ -1513,7 +1513,7 @@ namespace {
 		return Devsman::RegisterUSBRootHub(usb_bus_node, "usb-root-hub@0", 0x09u, 0x00u, 0x03u, "usb-root-hub", &xhc);
 	}
 
-	void on_xhci_complete_configuration(uni::device::SpaceUSB3::HostController& xhc, uint8 port_id, uint8, uni::device::SpaceUSB3::DeviceUSB3& dev) {
+	void on_xhci_complete_configuration(uni::device::SpaceUSB3::HostController& xhc, uint8 port_id, uint8, uni::device::SpaceUSB3::USBHostDevice_v3& dev) {
 		auto* usb_root_hub_node = ensure_xhci_root_hub_node(xhc);
 		if (!usb_root_hub_node) return;
 		if (dev.ParentHubSlotID() != 0) {
@@ -1525,17 +1525,17 @@ namespace {
 		register_single_usb_device_for_xhci(usb_root_hub_node, port_id, dev);
 	}
 
-	void on_usb_hub_descriptor_complete(uni::device::SpaceUSB::DeviceUSB& base_dev) {
-		auto& dev = static_cast<uni::device::SpaceUSB3::DeviceUSB3&>(base_dev);
+	void on_usb_hub_descriptor_complete(uni::device::SpaceUSB::USBHostDevice& base_dev) {
+		auto& dev = static_cast<uni::device::SpaceUSB3::USBHostDevice_v3&>(base_dev);
 		auto* xhc = dev.Controller();
 		if (!xhc) return;
 		ensure_usb_hub_downstream_ports_for_device(*xhc, dev);
 	}
 
-	void on_usb_hub_port_status(uni::device::SpaceUSB::DeviceUSB& base_dev,
+	void on_usb_hub_port_status(uni::device::SpaceUSB::USBHostDevice& base_dev,
 		uint8 downstream_port, uint16 status, uint16 change) {
 		(void)change;
-		auto& dev = static_cast<uni::device::SpaceUSB3::DeviceUSB3&>(base_dev);
+		auto& dev = static_cast<uni::device::SpaceUSB3::USBHostDevice_v3&>(base_dev);
 		if ((status & 0x0001u) == 0) return;
 	}
 

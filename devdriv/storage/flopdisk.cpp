@@ -103,100 +103,110 @@ void uni::FloppyDisk::Reset() {
 	Recalibrate();
 }
 
-bool uni::FloppyDisk::Read(stduint BlockIden, void* Dest) {
-	if (BlockIden >= getUnits() || !floppy_sector) return false;
+bool uni::FloppyDisk::Read(stduint BlockIden, void* Dest, stduint Times) {
+	if (BlockIden + Times > getUnits() || !floppy_sector) return false;
 
-	byte cyl, head, sec;
-	LBA2CHS(BlockIden, cyl, head, sec);
+	for0(t, Times) {
+		stduint blk = BlockIden + t;
+		byte* dst = (byte*)Dest + t * Block_Size;
 
-	Motor(true);
-	asserv(fn_feedback)();
+		byte cyl, head, sec;
+		LBA2CHS(blk, cyl, head, sec);
 
-	// Configure data transfer rate dynamically based on drive type
-	outpb(PORT_FDC_CCR, DATA_RATE);
+		Motor(true);
+		asserv(fn_feedback)();
 
-	// Setup ISA DMA Channel 2
-	if (!IsaDma8Prepare(FloppyDmaChannel, (stduint)floppy_sector, 512,
-		IsaDmaDirection::DeviceToMemory)) {
+		// Configure data transfer rate dynamically based on drive type
+		outpb(PORT_FDC_CCR, DATA_RATE);
+
+		// Setup ISA DMA Channel 2
+		if (!IsaDma8Prepare(FloppyDmaChannel, (stduint)floppy_sector, 512,
+			IsaDmaDirection::DeviceToMemory)) {
+			Motor(false);
+			return false;
+		}
+
+		WriteCmd(FDC_CMD_READ_DATA);
+		WriteCmd((head << 2) | id); 
+		WriteCmd(cyl);
+		WriteCmd(head);
+		WriteCmd(sec);
+		WriteCmd(0x02); // 512 Bytes/Sector
+		WriteCmd(SECTORS_PER_TRACK);
+		WriteCmd(GAP3_LENGTH);
+		WriteCmd(0xFF); // DTL
+
+		if (react_type == ReactType::Rupt && fn_int_wait) {
+			fn_int_wait();
+		} else {
+			for (volatile int i = 0; i < 100000; i++) _TEMP;
+		}
+
+		// Read 7 Status Bytes after operation completion
+		byte st0 = ReadData();
+		for (int i = 0; i < 6; i++) ReadData(); 
+
 		Motor(false);
-		return false;
+
+		// Check for errors in ST0
+		if ((st0 & 0xC0) != 0x00) return false;
+
+		// Copy data to Dest
+		MemCopyN(dst, floppy_sector, 512);
 	}
-
-	WriteCmd(FDC_CMD_READ_DATA);
-	WriteCmd((head << 2) | id); 
-	WriteCmd(cyl);
-	WriteCmd(head);
-	WriteCmd(sec);
-	WriteCmd(0x02); // 512 Bytes/Sector
-	WriteCmd(SECTORS_PER_TRACK);
-	WriteCmd(GAP3_LENGTH);
-	WriteCmd(0xFF); // DTL
-
-	if (react_type == ReactType::Rupt && fn_int_wait) {
-		fn_int_wait();
-	} else {
-		for (volatile int i = 0; i < 100000; i++) _TEMP;
-	}
-
-	// Read 7 Status Bytes after operation completion
-	byte st0 = ReadData();
-	for (int i = 0; i < 6; i++) ReadData(); 
-
-	Motor(false);
-
-	// Check for errors in ST0
-	if ((st0 & 0xC0) != 0x00) return false;
-
-	// Copy data to Dest
-	MemCopyN(Dest, floppy_sector, 512);
 	return true;
 }
 
-bool uni::FloppyDisk::Write(stduint BlockIden, const void* Sors) {
-	if (BlockIden >= getUnits() || !floppy_sector) return false;
+bool uni::FloppyDisk::Write(stduint BlockIden, const void* Sors, stduint Times) {
+	if (BlockIden + Times > getUnits() || !floppy_sector) return false;
 
-	// Copy data from Sors to DMA buffer
-	MemCopyN(floppy_sector, Sors, 512);
+	for0(t, Times) {
+		stduint blk = BlockIden + t;
+		const byte* src = (const byte*)Sors + t * Block_Size;
 
-	byte cyl, head, sec;
-	LBA2CHS(BlockIden, cyl, head, sec);
+		// Copy data from Sors to DMA buffer
+		MemCopyN(floppy_sector, src, 512);
 
-	Motor(true);
-	asserv(fn_feedback)();
+		byte cyl, head, sec;
+		LBA2CHS(blk, cyl, head, sec);
 
-	// Configure data transfer rate dynamically
-	outpb(PORT_FDC_CCR, DATA_RATE);
+		Motor(true);
+		asserv(fn_feedback)();
 
-	// Setup ISA DMA Channel 2
-	if (!IsaDma8Prepare(FloppyDmaChannel, (stduint)floppy_sector, 512,
-		IsaDmaDirection::MemoryToDevice)) {
+		// Configure data transfer rate dynamically
+		outpb(PORT_FDC_CCR, DATA_RATE);
+
+		// Setup ISA DMA Channel 2
+		if (!IsaDma8Prepare(FloppyDmaChannel, (stduint)floppy_sector, 512,
+			IsaDmaDirection::MemoryToDevice)) {
+			Motor(false);
+			return false;
+		}
+
+		WriteCmd(FDC_CMD_WRITE_DATA);
+		WriteCmd((head << 2) | id);
+		WriteCmd(cyl);
+		WriteCmd(head);
+		WriteCmd(sec);
+		WriteCmd(0x02); 
+		WriteCmd(SECTORS_PER_TRACK);
+		WriteCmd(GAP3_LENGTH);
+		WriteCmd(0xFF); 
+
+		if (react_type == ReactType::Rupt && fn_int_wait) {
+			fn_int_wait();
+		} else {
+			for (volatile int i = 0; i < 100000; i++) _TEMP;
+		}
+
+		// Read 7 Status Bytes
+		byte st0 = ReadData();
+		for (int i = 0; i < 6; i++) ReadData(); 
+
 		Motor(false);
-		return false;
+		
+		if ((st0 & 0xC0) != 0x00) return false;
 	}
-
-	WriteCmd(FDC_CMD_WRITE_DATA);
-	WriteCmd((head << 2) | id);
-	WriteCmd(cyl);
-	WriteCmd(head);
-	WriteCmd(sec);
-	WriteCmd(0x02); 
-	WriteCmd(SECTORS_PER_TRACK);
-	WriteCmd(GAP3_LENGTH);
-	WriteCmd(0xFF); 
-
-	if (react_type == ReactType::Rupt && fn_int_wait) {
-		fn_int_wait();
-	} else {
-		for (volatile int i = 0; i < 100000; i++) _TEMP;
-	}
-
-	// Read 7 Status Bytes
-	byte st0 = ReadData();
-	for (int i = 0; i < 6; i++) ReadData(); 
-
-	Motor(false);
-	
-	if ((st0 & 0xC0) != 0x00) return false;
 	return true;
 }
 
@@ -210,41 +220,49 @@ PartitionSlice uni::FloppyDisk::getSlice(stduint dev) {
 
 struct FloppyDisk_Paged : public uni::FloppyDisk {
 	FloppyDisk_Paged(byte _id = 0, FloppyDriveType type = FloppyDriveType::Drive_1_44MB_3_5) : FloppyDisk(_id, type) {}
-	virtual bool Read(stduint BlockIden, void* Dest) override;
-	virtual bool Write(stduint BlockIden, const void* Sors) override;
+	virtual bool Read(stduint BlockIden, void* Dest, stduint Times = 1) override;
+	virtual bool Write(stduint BlockIden, const void* Sors, stduint Times = 1) override;
 };
 
-bool FloppyDisk_Paged::Read(stduint BlockIden, void* Dest) {
+bool FloppyDisk_Paged::Read(stduint BlockIden, void* Dest, stduint Times) {
 	if (Taskman::CurrentPID() == Task_Flp_Serv) {
 		// Delegate to the actual physical floppy disk instance to keep motor state in sync
-		return floppies[getID()]->Read(BlockIden, Dest);
+		return floppies[getID()]->Read(BlockIden, Dest, Times);
 	}
-	stduint to_args[2];
-	to_args[0] = getID();
-	to_args[1] = BlockIden;
-	syssend(Task_Flp_Serv, sliceof(to_args), _IMM(FiledevMsg::READ));
-	// Receive ACK before data transfer
-	stduint ack;
-	sysrecv(Task_Flp_Serv, &ack, sizeof(ack));
-	if (!ack) return false;
-	sysrecv(Task_Flp_Serv, Dest, Block_Size);
+	for0(t, Times) {
+		stduint blk = BlockIden + t;
+		byte* dst = (byte*)Dest + t * Block_Size;
+		stduint to_args[2];
+		to_args[0] = getID();
+		to_args[1] = blk;
+		syssend(Task_Flp_Serv, sliceof(to_args), _IMM(FiledevMsg::READ));
+		// Receive ACK before data transfer
+		stduint ack;
+		sysrecv(Task_Flp_Serv, &ack, sizeof(ack));
+		if (!ack) return false;
+		sysrecv(Task_Flp_Serv, dst, Block_Size);
+	}
 	return true;
 }
 
-bool FloppyDisk_Paged::Write(stduint BlockIden, const void* Sors) {
+bool FloppyDisk_Paged::Write(stduint BlockIden, const void* Sors, stduint Times) {
 	if (Taskman::CurrentPID() == Task_Flp_Serv) {
 		// Delegate to the actual physical floppy disk instance to keep motor state in sync
-		return floppies[getID()]->Write(BlockIden, Sors);
+		return floppies[getID()]->Write(BlockIden, Sors, Times);
 	}
-	stduint to_args[2];
-	to_args[0] = getID();
-	to_args[1] = BlockIden;
-	syssend(Task_Flp_Serv, sliceof(to_args), _IMM(FiledevMsg::WRITE));
-	// Receive ACK before data transfer
-	stduint ack;
-	sysrecv(Task_Flp_Serv, &ack, sizeof(ack));
-	if (!ack) return false;
-	syssend(Task_Flp_Serv, Sors, Block_Size);
+	for0(t, Times) {
+		stduint blk = BlockIden + t;
+		const byte* src = (const byte*)Sors + t * Block_Size;
+		stduint to_args[2];
+		to_args[0] = getID();
+		to_args[1] = blk;
+		syssend(Task_Flp_Serv, sliceof(to_args), _IMM(FiledevMsg::WRITE));
+		// Receive ACK before data transfer
+		stduint ack;
+		sysrecv(Task_Flp_Serv, &ack, sizeof(ack));
+		if (!ack) return false;
+		syssend(Task_Flp_Serv, src, Block_Size);
+	}
 	return true;
 }
 
