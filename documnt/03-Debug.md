@@ -11,6 +11,9 @@ l 显示锁
 m 内存使用信息
 s 显示核调度状态以及所有线程
 
+LOGO+c 创建终端
+LOGO+r 切换分辨率
+
 ### 方式
 
 - Specific kThread or Lock

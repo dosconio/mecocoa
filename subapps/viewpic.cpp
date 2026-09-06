@@ -24,46 +24,6 @@ using namespace uni;
 const byte kKEsc = 0x29; // Escape key
 const byte kKF4  = 0x3D; // F4 key
 
-// Lightweight file-based StorageTrait for reading image files with zero full-buffer memory allocation
-class FileBlockDevice : public StorageTrait {
-private:
-	FILE*   m_fp;
-	stduint m_size;
-
-public:
-	FileBlockDevice(FILE* fp, stduint size, stduint blockSize = 512)
-		: m_fp(fp), m_size(size) {
-		Block_Size = blockSize;
-		readable = true;
-		writable = false;
-	}
-
-	virtual ~FileBlockDevice() = default;
-
-	virtual bool Read(stduint BlockIden, void* Dest, stduint Times = 1) override {
-		if (BlockIden + Times > getUnits()) return false;
-		if (fseek(m_fp, (long)(BlockIden * Block_Size), SEEK_SET) != 0) return false;
-		stduint total_bytes = Times * Block_Size;
-		size_t rd = fread(Dest, 1, total_bytes, m_fp);
-		return rd == total_bytes || (rd > 0 && BlockIden + Times == getUnits());
-	}
-
-	virtual bool Write(stduint BlockIden, const void* Sors, stduint Times = 1) override {
-		return false;
-	}
-
-	virtual stduint getUnits() override {
-		return (m_size + Block_Size - 1) / Block_Size;
-	}
-
-	virtual int operator[](uint64 bytid) override {
-		if (bytid >= m_size) return -1;
-		byte b = 0;
-		if (fseek(m_fp, (long)bytid, SEEK_SET) != 0) return -1;
-		if (fread(&b, 1, 1, m_fp) == 1) return b;
-		return -1;
-	}
-};
 
 int main(int argc, char** argv)
 {
@@ -194,6 +154,7 @@ int main(int argc, char** argv)
 		}
 		return -1;
 	}
+	sys_set_form_title(form_id, (argc > 1 && argv[1]) ? argv[1] : "Image Viewer");
 
 	// Register the canvas framebuffer ONCE with the window server
 	sys_set_form_buffer(form_id, canvas);

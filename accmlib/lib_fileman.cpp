@@ -67,6 +67,11 @@ stdsint write(int fd, const void* buf, size_t nbyte) {
 	return syscall(syscall_t::WRIT, fd, _IMM(buf), nbyte);
 }
 
+off_t lseek(int fd, off_t offset, int whence) {
+	return (off_t)syscall(syscall_t::SEEK, fd, (stduint)offset, (stduint)whence);
+}
+
+
 int chdir(const char* path) {
 	// Invoke the SETD system call
 	return syscall(syscall_t::SETD, _IMM(path), nil, nil);

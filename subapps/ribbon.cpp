@@ -5,47 +5,6 @@
 #include <c/format/picture/PNG.h>
 #include <cpp/trait/StorageTrait.hpp>
 
-// Lightweight file-based StorageTrait for reading image files with zero full-buffer memory allocation
-class FileBlockDevice : public StorageTrait {
-private:
-	FILE*   m_fp;
-	stduint m_size;
-
-public:
-	FileBlockDevice(FILE* fp, stduint size, stduint blockSize = 512)
-		: m_fp(fp), m_size(size) {
-		Block_Size = blockSize;
-		readable = true;
-		writable = false;
-	}
-
-	virtual ~FileBlockDevice() = default;
-
-	virtual bool Read(stduint BlockIden, void* Dest, stduint Times = 1) override {
-		if (BlockIden + Times > getUnits()) return false;
-		if (fseek(m_fp, (long)(BlockIden * Block_Size), SEEK_SET) != 0) return false;
-		stduint total_bytes = Times * Block_Size;
-		size_t rd = fread(Dest, 1, total_bytes, m_fp);
-		return rd == total_bytes || (rd > 0 && BlockIden + Times == getUnits());
-	}
-
-	virtual bool Write(stduint BlockIden, const void* Sors, stduint Times = 1) override {
-		return false;
-	}
-
-	virtual stduint getUnits() override {
-		return (m_size + Block_Size - 1) / Block_Size;
-	}
-
-	virtual int operator[](uint64 bytid) override {
-		if (bytid >= m_size) return -1;
-		byte b = 0;
-		if (fseek(m_fp, (long)bytid, SEEK_SET) != 0) return -1;
-		if (fread(&b, 1, 1, m_fp) == 1) return b;
-		return -1;
-	}
-};
-
 static void TryLoadWallpaper() {
 	static const char* kWallpaperPaths[] = {
 		"/mnt/ide2.0/demo/wallpp.png",
@@ -128,14 +87,14 @@ static void DrawRibbon(Color* buffer, stduint width, stduint height)
 
 	stduint button_y = 3;
 	stduint button_h = height > 6 ? height - 6 : height;
-	
+
 	start_btn.sheet_area = Rectangle(Point(3, button_y), Size2(kStartButtonWidth, button_h));
 	start_btn.doshow(nullptr);
-	
+
 	if (start_btn.sheet_buffer) {
 		for0(y, start_btn.sheet_area.height) {
 			for0(x, start_btn.sheet_area.width) {
-				buffer[(start_btn.sheet_area.y + y) * width + start_btn.sheet_area.x + x] = 
+				buffer[(start_btn.sheet_area.y + y) * width + start_btn.sheet_area.x + x] =
 					start_btn.sheet_buffer[y * start_btn.sheet_area.width + x];
 			}
 		}
@@ -163,7 +122,7 @@ static void DrawStartMenu(Color* buffer, stduint menu_w, stduint menu_h) {
 	if (btn_shutdown.sheet_buffer) {
 		for0(y, btn_shutdown.sheet_area.height) {
 			for0(x, btn_shutdown.sheet_area.width) {
-				buffer[(btn_shutdown.sheet_area.y + y) * menu_w + btn_shutdown.sheet_area.x + x] = 
+				buffer[(btn_shutdown.sheet_area.y + y) * menu_w + btn_shutdown.sheet_area.x + x] =
 					btn_shutdown.sheet_buffer[y * btn_shutdown.sheet_area.width + x];
 			}
 		}
@@ -174,7 +133,7 @@ static void DrawStartMenu(Color* buffer, stduint menu_w, stduint menu_h) {
 	if (btn_reboot.sheet_buffer) {
 		for0(y, btn_reboot.sheet_area.height) {
 			for0(x, btn_reboot.sheet_area.width) {
-				buffer[(btn_reboot.sheet_area.y + y) * menu_w + btn_reboot.sheet_area.x + x] = 
+				buffer[(btn_reboot.sheet_area.y + y) * menu_w + btn_reboot.sheet_area.x + x] =
 					btn_reboot.sheet_buffer[y * btn_reboot.sheet_area.width + x];
 			}
 		}
@@ -264,30 +223,30 @@ int main(int argc, char** argv)
 		else if (smsg.event == SheetEvent::onClick || smsg.event == SheetEvent::onLeave || smsg.event == SheetEvent::onMoved) {
 			Point rel_p(smsg.args[0], smsg.args[1]);
 			stduint para1 = smsg.args[2];
-			
+
 			bool was_pressed = start_btn.pressed;
-			
+
 			if (start_btn.sheet_area.ifContain(rel_p)) {
 				start_btn.onrupt(smsg.event, rel_p - start_btn.sheet_area.getVertex(), para1);
 			} else {
 				start_btn.onrupt(SheetEvent::onLeave, rel_p, 1);
 			}
-			
+
 			bool clicked = (was_pressed && !start_btn.pressed && smsg.event == SheetEvent::onClick && start_btn.sheet_area.ifContain(rel_p));
-			
+
 			if (was_pressed != start_btn.pressed && buffer) {
 				if (clicked) {
 					start_btn.pressed = true; // Keep visually pressed while menu is open
 				}
 				DrawRibbon(buffer, screen.x, kRibbonClientHeight);
 				sys_update_form(form_id, nullptr);
-				
+
 				if (clicked) {
 					stduint menu_w = 200;
 					stduint menu_h = 300;
 					Color* sm_buf = nullptr;
 					stdsint sm_id = CreateStartMenuForm(screen, &sm_buf, menu_w, menu_h);
-					
+
 					if (sm_id >= 0) {
 						bool menu_open = true;
 						while (menu_open) {
@@ -300,26 +259,26 @@ int main(int argc, char** argv)
 								if (mmsg.event == SheetEvent::onClick || mmsg.event == SheetEvent::onLeave || mmsg.event == SheetEvent::onMoved) {
 									Point rel_p(mmsg.args[0], mmsg.args[1]);
 									stduint para1 = mmsg.args[2];
-									
+
 									bool sd_was_pressed = btn_shutdown.pressed;
 									if (btn_shutdown.sheet_area.ifContain(rel_p)) {
 										btn_shutdown.onrupt(mmsg.event, rel_p - btn_shutdown.sheet_area.getVertex(), para1);
 									} else {
 										btn_shutdown.onrupt(SheetEvent::onLeave, rel_p, 1);
 									}
-									
+
 									bool rb_was_pressed = btn_reboot.pressed;
 									if (btn_reboot.sheet_area.ifContain(rel_p)) {
 										btn_reboot.onrupt(mmsg.event, rel_p - btn_reboot.sheet_area.getVertex(), para1);
 									} else {
 										btn_reboot.onrupt(SheetEvent::onLeave, rel_p, 1);
 									}
-									
+
 									if (sd_was_pressed != btn_shutdown.pressed || rb_was_pressed != btn_reboot.pressed) {
 										DrawStartMenu(sm_buf, menu_w, menu_h);
 										sys_update_form(sm_id, nullptr);
 									}
-									
+
 									if (sd_was_pressed && !btn_shutdown.pressed && mmsg.event == SheetEvent::onClick && btn_shutdown.sheet_area.ifContain(rel_p)) {
 										sysshutdown();
 										menu_open = false;
@@ -330,14 +289,14 @@ int main(int argc, char** argv)
 								}
 							}
 						}
-						
+
 						sys_close_form(sm_id);
 						free(sm_buf);
-						
+
 						SheetMessage flush_msg;
 						while (sys_fetch_msg(form_id, false, &flush_msg) == 1) {
 						}
-						
+
 						start_btn.pressed = false;
 						btn_shutdown.pressed = false;
 						btn_reboot.pressed = false;

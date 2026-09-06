@@ -1,55 +1,20 @@
 #include "aaaaa.h"
 #include "c/consio.h"
 #include "unistd.h"
-#include <fcntl.h>
-#include <sys/stat.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <c/format/audio/WAV.h>
+#include <cpp/trait/StorageTrait.hpp>
 #include "../include/devsman.hpp"
 
 using namespace uni;
 
 static constexpr uint32 kPlayChunkBytes = 4096;
 
-static bool ReadWholeFile(const char* path, byte*& out_data, stduint& out_size) {
-	out_data = nullptr;
-	out_size = 0;
-	if (!path) return false;
+// Static buffer allocated in BSS section to avoid stack consumption
+static byte s_play_chunk_buffer[kPlayChunkBytes];
 
-	int fd = open(path, O_RDONLY);
-	if (fd < 0) {
-		outsfmt("playmzk: failed to open '%s'\n\r", path);
-		return false;
-	}
-
-	struct stat st = {};
-	if (fstat(fd, &st) != 0 || st.st_size <= 0) {
-		outsfmt("playmzk: bad file size '%s'\n\r", path);
-		close(fd);
-		return false;
-	}
-
-	byte* file_data = (byte*)malloc((size_t)st.st_size);
-	if (!file_data) {
-		outsfmt("playmzk: out of memory (%u bytes)\n\r", (stduint)st.st_size);
-		close(fd);
-		return false;
-	}
-
-	stdsint read_bytes = read(fd, file_data, st.st_size);
-	close(fd);
-	if (read_bytes != st.st_size) {
-		outsfmt("playmzk: read failed %d/%d\n\r", (int)read_bytes, (int)st.st_size);
-		free(file_data);
-		return false;
-	}
-
-	out_data = file_data;
-	out_size = (stduint)st.st_size;
-	return true;
-}
-
-#define outsfmt(...)
+#define outsfmt(...) printf(__VA_ARGS__)
 #if __BITS__ > 32
 #define Task_Audio_Serv 0
 #endif
@@ -69,47 +34,49 @@ static stdsint SendAudioRequest(AudioMsg type, const AudioPlayRequest& request) 
 	return result;
 }
 
-static bool PlayU8Mono(const WAVPCMVIEW& wav) {
+static bool PlayAudioStream(IAudioStream* stream, const AudioInfo& info) {
+	if (!stream) return false;
+
 	AudioPlayRequest begin_request = {};
-	begin_request.format.sample_format = AudioSampleFormat::U8;
-	begin_request.format.channels = wav.channel_count;
-	begin_request.format.sample_rate = wav.sample_rate;
+	begin_request.format = info.format;
 	if (SendAudioRequest(AudioMsg::STREAM_BEGIN, begin_request) != 0) {
 		return false;
 	}
 
-	const byte* pcm = (const byte*)wav.pcm_data;
-	uint32 remain = wav.pcm_size;
 	uint32 chunk_index = 0;
-	while (remain) {
-		AudioPlayRequest request = {};
-		request.format.sample_format = AudioSampleFormat::U8;
-		request.format.channels = wav.channel_count;
-		request.format.sample_rate = wav.sample_rate;
-		request.buffer.data = pcm;
-		request.buffer.byte_count = remain > kPlayChunkBytes ?
-			kPlayChunkBytes : remain;
-		outsfmt("playmzk: chunk=%u send bytes=%u remain=%u\n\r",
-			(stduint)chunk_index,
-			(stduint)request.buffer.byte_count,
-			(stduint)remain);
-
-		const stdsint accepted =
-			SendAudioRequest(AudioMsg::STREAM_WRITE, request);
-		outsfmt("playmzk: chunk=%u accepted=%d\n\r",
-			(stduint)chunk_index, (int)accepted);
-		if (accepted < 0 ||
-			(uint32)accepted > request.buffer.byte_count) {
+	while (true) {
+		uint32 bytes_read = 0;
+		AudioResult res = stream->ReadSamples(
+			s_play_chunk_buffer, sizeof(s_play_chunk_buffer), bytes_read);
+		if (res == AudioResult::EndOfStream || (res == AudioResult::OK && bytes_read == 0)) {
+			break;
+		}
+		if (res != AudioResult::OK) {
 			SendAudioRequest(AudioMsg::STREAM_STOP, begin_request);
 			return false;
 		}
-		if (accepted == 0) {
-			sysrest(1, 1);
-			continue;
-		}
 
-		pcm += accepted;
-		remain -= accepted;
+		uint32 offset = 0;
+		while (offset < bytes_read) {
+			AudioPlayRequest request = {};
+			request.format = info.format;
+			request.buffer.data = s_play_chunk_buffer + offset;
+			request.buffer.byte_count = bytes_read - offset;
+
+			const stdsint accepted =
+				SendAudioRequest(AudioMsg::STREAM_WRITE, request);
+			if (accepted < 0 ||
+				(uint32)accepted > request.buffer.byte_count) {
+				SendAudioRequest(AudioMsg::STREAM_STOP, begin_request);
+				return false;
+			}
+			if (accepted == 0) {
+				sysrest(1, 1);
+				continue;
+			}
+
+			offset += (uint32)accepted;
+		}
 		++chunk_index;
 	}
 
@@ -129,43 +96,61 @@ int main(int argc, char** argv)
 
 	if (argc < 2 || !argv[1]) {
 		outsfmt("Usage: playmzk <file.wav>\n\r");
-		outsfmt("Only PCM U8 mono WAV is supported for now.\n\r");
+		outsfmt("Supports 8/16-bit mono/stereo PCM WAV.\n\r");
 		return -1;
 	}
 
-	byte* wav_file = nullptr;
-	stduint wav_size = 0;
-	if (!ReadWholeFile(argv[1], wav_file, wav_size)) {
+	FILE* fp = fopen(argv[1], "rb");
+	if (!fp) {
+		outsfmt("playmzk: failed to open '%s'\n\r", argv[1]);
 		return -1;
 	}
 
-	WAVPCMVIEW wav = {};
-	if (!WAV_ParsePCM(wav_file, wav_size, &wav)) {
-		outsfmt("playmzk: invalid wav file\n\r");
-		free(wav_file);
+	if (fseek(fp, 0, SEEK_END) != 0) {
+		fclose(fp);
 		return -1;
 	}
+	long file_size = ftell(fp);
+	if (file_size <= 0) {
+		outsfmt("playmzk: bad file size '%s'\n\r", argv[1]);
+		fclose(fp);
+		return -1;
+	}
+	fseek(fp, 0, SEEK_SET);
+
+	FileBlockDevice storage(fp, (stduint)file_size);
+	StdMalloc my_malloc;
+	WAVCodec wav_codec;
+
+	IAudioStream* stream = nullptr;
+	AudioResult res = wav_codec.OpenStream(storage, stream, my_malloc);
+	if (res != AudioResult::OK || !stream) {
+		outsfmt("playmzk: invalid or unsupported wav file\n\r");
+		fclose(fp);
+		return -1;
+	}
+
+	AudioInfo info{};
+	stream->GetInfo(info);
 
 	outsfmt("playmzk: format=%u ch=%u rate=%u bits=%u bytes=%u\n\r",
-		(stduint)wav.audio_format,
-		(stduint)wav.channel_count,
-		(stduint)wav.sample_rate,
-		(stduint)wav.bits_per_sample,
-		(stduint)wav.pcm_size);
+		(stduint)info.format.sample_format,
+		(stduint)info.format.channels,
+		(stduint)info.format.sample_rate,
+		(stduint)info.bitsPerSample,
+		(stduint)info.dataByteLength);
 
-	if (wav.audio_format != WAV_FORMAT_PCM) {
-		outsfmt("playmzk: only PCM wav is supported\n\r");
-		free(wav_file);
-		return -1;
-	}
-	if (wav.bits_per_sample != 8 || wav.channel_count != 1) {
-		outsfmt("playmzk: only U8 mono wav is supported for now\n\r");
-		free(wav_file);
+	if ((info.bitsPerSample != 8 && info.bitsPerSample != 16) ||
+		(info.format.channels != 1 && info.format.channels != 2)) {
+		outsfmt("playmzk: only 8/16-bit mono/stereo wav is supported\n\r");
+		stream->Release();
+		fclose(fp);
 		return -1;
 	}
 
-	const bool ok = PlayU8Mono(wav);
-	free(wav_file);
+	const bool ok = PlayAudioStream(stream, info);
+	stream->Release();
+	fclose(fp);
 
 	if (!ok) {
 		outsfmt("playmzk: playback failed\n\r");

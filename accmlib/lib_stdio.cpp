@@ -137,34 +137,31 @@ extern "C" FILE* fopen(const char* filename, const char* mode)
 	stream->size = 0;
 	stream->buffer = nullptr;
 
-	// Without lseek support, read-capable regular files are loaded into memory once.
-	if (stream->flags & MCCA_FILE_CAN_READ) {
-		struct stat st;
-		if (fstat(fd, &st) == 0 && st.st_size >= 0) {
-			stream->size = (size_t)st.st_size;
-			if (stream->size > 0) {
-				stream->buffer = (char*)malloc(stream->size);
-				if (!stream->buffer) {
-					close(fd);
-					free(stream);
-					return nullptr;
-				}
-
-				size_t done = 0;
-				while (done < stream->size) {
-					stdsint got = read(fd, stream->buffer + done, stream->size - done);
-					if (got <= 0) {
-						free(stream->buffer);
-						close(fd);
-						free(stream);
-						return nullptr;
-					}
-					done += (size_t)got;
-				}
-			}
-			stream->flags |= MCCA_FILE_MEMORY;
-		}
-	}
+	//{}TEMP Pre-load small regular files into memory buffer for ultra-fast in-memory parsing without syscalls
+	constexpr size_t kMaxMemoryFileSize = 1024 * 4;
+	// if (stream->flags & MCCA_FILE_CAN_READ) {
+	// 	struct stat st;
+	// 	if (fstat(fd, &st) == 0 && st.st_size >= 0) {
+	// 		stream->size = (size_t)st.st_size;
+	// 		if (stream->size > 0 && stream->size <= kMaxMemoryFileSize) {
+	// 			stream->buffer = (char*)malloc(stream->size);
+	// 			if (stream->buffer) {
+	// 				size_t done = 0;
+	// 				while (done < stream->size) {
+	// 					stdsint got = read(fd, stream->buffer + done, stream->size - done);
+	// 					if (got <= 0) break;
+	// 					done += (size_t)got;
+	// 				}
+	// 				if (done == stream->size) {
+	// 					stream->flags |= MCCA_FILE_MEMORY;
+	// 				} else {
+	// 					free(stream->buffer);
+	// 					stream->buffer = nullptr;
+	// 				}
+	// 			}
+	// 		}
+	// 	}
+	// }
 
 	if (primary == 'a') {
 		stream->pos = stream->size;
@@ -233,12 +230,18 @@ extern "C" int fseek(FILE* stream, long offset, int whence)
 {
 	if (!stream) return -1;
 
-	size_t next_pos = 0;
-	if (mcca_calc_seek_pos(stream, offset, whence, &next_pos) < 0) {
-		return -1;
+	if (stream->flags & MCCA_FILE_MEMORY) {
+		size_t next_pos = 0;
+		if (mcca_calc_seek_pos(stream, offset, whence, &next_pos) < 0) {
+			return -1;
+		}
+		stream->pos = next_pos;
+		return 0;
 	}
 
-	stream->pos = next_pos;
+	off_t res = lseek(stream->fd, (off_t)offset, whence);
+	if (res < 0) return -1;
+	stream->pos = (size_t)res;
 	return 0;
 }
 

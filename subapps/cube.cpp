@@ -104,6 +104,7 @@ int main(int argc, char** argv) {
 	Rectangle rect = { Point(200, 200), Size2(kCanvasWidth + 2, kCanvasHeight + 19) };
 	stdsint form_id = sys_create_form(-1, &rect);
 	if (form_id < 0) return -1;
+	sys_set_form_title(form_id, "3D Cube");
 
 	for0 (i, kCanvasWidth * kCanvasHeight) cube_buffer[i] = (0xFFFFFFFF);
 	sys_set_form_buffer(form_id, cube_buffer);

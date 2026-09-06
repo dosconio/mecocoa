@@ -38,11 +38,12 @@ enum class ConsoleMsg {
 	FNEW,// new-form    (formid, u_rect)->formid
 	FDEL,// close-form  (formid)
 	FBID,//(UNDO)
-	FUPD,//(UNDO)
+	FUPD,// update-area (formid, &rect)
 	FMSG,// fetch-msg   (formid, if_blocked, &u_msg) -> 1 Ok 0 No-Msg
 	FDRW,// draw        (formid, shape_type, usr_shape_info)
 	FCHR,// draw-string (formid, u_point, u_str, color)
 	FTIM,// set-timer   (formid, ms)
+	FSET,// set-prop    (formid, prop, value)
 	// do not put above:
 	FCLEANPROC,// internal: clean one exiting process GUI resources in console owner thread
 };
@@ -91,6 +92,11 @@ _PACKED(struct) FMT_ConsoleMsg_FDRW {
 		struct ColorLine { Point disp; Size2 size; Color color; } *cline;
 		Rectangle *crect;
 	} usr_shape_info;
+};
+_PACKED(struct) FMT_ConsoleMsg_FSET {
+	stduint pform_id;// in pforms
+	stduint prop;
+	void* value;
 };
 
 #if (_MCCA & 0xFF00) == 0x8600

@@ -42,6 +42,7 @@ enum
 	UMAP = 0x19, // munmap (addr,size) ->0    | x86
 	DUP2, // dup2   (oldfd, newfd)->newfd | x86
 	PIPE, // pipe   (pipefd)->0           | x86
+	SEEK, // lseek  (fd, offset, whence)->pos | x86
 
 	// [Management]
 	GET_CORE_ID, // getcid () | rv
@@ -69,6 +70,8 @@ enum
 	POLL, // poll   (fds, nfds, timeout)->ready count  | x86 x64
 	LIST, // listen (fd, backlog)->status              | x86 x64
 	ACPT, // accept (fd, address, address_length)->fd   | x86 x64
+
+
 
 	DBUG = 0xFE, // sysinfo_classic to stdout(func)
 	TEST = 0xFF, // getpid (T,E,S)->0 | x86

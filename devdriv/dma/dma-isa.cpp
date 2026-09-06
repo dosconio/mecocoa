@@ -28,6 +28,13 @@ bool IsaDma8Prepare(uint8 channel, stduint physical_address, uint32 length,
 		channel, physical_address, length, direction, reload_mode);
 }
 
+bool IsaDma16Prepare(uint8 channel, stduint physical_address, uint32 length,
+	IsaDmaDirection direction, IsaDmaReloadMode reload_mode) {
+	SpinlockLocal guard(&isa_dma_lock);
+	return isa_dma.Transfer16(
+		channel, physical_address, length, direction, reload_mode);
+}
+
 void IsaDmaMask(uint8 channel) {
 	SpinlockLocal guard(&isa_dma_lock);
 	isa_dma.Abort(channel);

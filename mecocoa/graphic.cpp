@@ -1104,6 +1104,26 @@ static stdsint GraphicMsg_FSIZ(Size2* usrp_size, ProcessBlock* pb) {
 		sizeof(screen_size)) == sizeof(screen_size) ? 0 : -1;
 }
 
+static stdsint GraphicMsg_FSET(const FMT_ConsoleMsg_FSET* data, ProcessBlock* pb) {
+	if (!data) return -1;
+	SheetTrait* st = ProcFormsGet(pb, data->pform_id);
+	if (!st) return -1;
+	auto pfrm = static_cast<::uni::Witch::Form*>(st);
+
+	switch (data->prop) {
+	case 1: { // 1: Title
+		if (!data->value) return -1;
+		String buf(String::Charset::UTF8, 256);
+		StrCopyP(buf.reflect(), kernel_paging, (const char*)data->value, pb->paging, 256);
+		buf.Refresh();
+		pfrm->setTitle(buf);
+		return 0;
+	}
+	default:
+		return -1;
+	}
+}
+
 // CreateVconsole - runs only in Graphic thread, no lock needed.
 #if _MCCA == 0x8632
 static uni::BitmapFontEngine fallback_engine(1);
@@ -1476,6 +1496,10 @@ void serv_graf_loop() {
 			break;
 		case GraphicMsg::FSIZ:
 			ret = GraphicMsg_FSIZ((Size2*)to_args[0], safe_pb);
+			syssend_async(sig_src, (void*)&ret, sizeof(ret));
+			break;
+		case GraphicMsg::FSET:
+			ret = GraphicMsg_FSET((FMT_ConsoleMsg_FSET*)to_args, safe_pb);
 			syssend_async(sig_src, (void*)&ret, sizeof(ret));
 			break;
 		case GraphicMsg::FCLEANPROC:

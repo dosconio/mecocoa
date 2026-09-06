@@ -37,6 +37,7 @@ enum class GraphicMsg {
 	FCHR,// draw string
 	FTIM,// set timer
 	FSIZ,// get screen size
+	FSET,// set-prop
 	FCLEANPROC,// clean exiting process GUI resources
 	VCON_CREATE,// create virtual console
 	VCON_REMOVE,// remove virtual console

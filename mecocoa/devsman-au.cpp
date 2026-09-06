@@ -11,8 +11,8 @@
 
 namespace {
 	constexpr uint32 AudioStreamChunkBytes = 4096;
-	constexpr uint32 AudioStreamRingBytes = AudioStreamChunkBytes * 8;
-	constexpr uint32 AudioStreamDmaPrimeBytes = 1024 * 2;
+	constexpr uint32 AudioStreamRingBytes = AudioStreamChunkBytes * 16;
+	constexpr uint32 AudioStreamDmaPrimeBytes = 4096 * 4;
 
 	struct AudioStreamState {
 		uint8 ring[AudioStreamRingBytes];
@@ -21,6 +21,8 @@ namespace {
 		uint32 used;
 		stduint owner_tid;
 		uint16 sample_rate;
+		uni::AudioSampleFormat sample_format;
+		uint8 channels;
 		bool open;
 		bool started;
 	};
@@ -28,8 +30,12 @@ namespace {
 	AudioStreamState audio_stream{};
 
 	bool IsSupportedPcmFormat(const uni::AudioPlayRequest& request) {
-		return request.format.sample_format == uni::AudioSampleFormat::U8 &&
-			request.format.channels == 1 &&
+		const bool valid_format =
+			(request.format.sample_format == uni::AudioSampleFormat::U8 ||
+			 request.format.sample_format == uni::AudioSampleFormat::S16LE);
+		const bool valid_channels =
+			(request.format.channels == 1 || request.format.channels == 2);
+		return valid_format && valid_channels &&
 			request.format.sample_rate >= 5000 &&
 			request.format.sample_rate <= 45000;
 	}
@@ -84,6 +90,8 @@ namespace {
 		AudioRingReset();
 		audio_stream.owner_tid = 0;
 		audio_stream.sample_rate = 0;
+		audio_stream.sample_format = uni::AudioSampleFormat::U8;
+		audio_stream.channels = 1;
 		audio_stream.open = false;
 		audio_stream.started = false;
 	}
@@ -116,10 +124,14 @@ namespace {
 		if (!audio_stream.open || audio_stream.started) return true;
 		if (!force && audio_stream.used < AudioStreamDmaPrimeBytes) return true;
 		if (!audio_stream.used) return true;
-		if (!SoundBlasterStartPcmU8MonoStream(
-			audio_stream.sample_rate, AudioStreamRefill, nullptr)) {
-			plogwarn("[Audio] Failed to start PCM stream rate=%u used=%u",
-				(stduint)audio_stream.sample_rate, (stduint)audio_stream.used);
+		if (!SoundBlasterStartPcmStream(
+			audio_stream.sample_rate,
+			audio_stream.sample_format,
+			audio_stream.channels,
+			AudioStreamRefill, nullptr)) {
+			plogwarn("[Audio] Failed to start PCM stream rate=%u used=%u fmt=%u ch=%u",
+				(stduint)audio_stream.sample_rate, (stduint)audio_stream.used,
+				(stduint)audio_stream.sample_format, (stduint)audio_stream.channels);
 			return false;
 		}
 		audio_stream.started = true;
@@ -131,6 +143,8 @@ namespace {
 		AudioStreamAbort();
 		audio_stream.owner_tid = owner_tid;
 		audio_stream.sample_rate = uint16(request.format.sample_rate);
+		audio_stream.sample_format = request.format.sample_format;
+		audio_stream.channels = request.format.channels ? request.format.channels : 1;
 		audio_stream.open = true;
 		return true;
 	}
@@ -173,6 +187,8 @@ namespace {
 		ProcessBlock* source_process, stduint source_tid) {
 		if (!audio_stream.open || !IsSupportedPcmRequest(request) ||
 			uint16(request.format.sample_rate) != audio_stream.sample_rate ||
+			request.format.sample_format != audio_stream.sample_format ||
+			request.format.channels != audio_stream.channels ||
 			source_tid != audio_stream.owner_tid) {
 			return -1;
 		}
@@ -188,10 +204,13 @@ namespace {
 		if (!audio_stream.open) return 0;
 		if (!AudioStreamStartIfReady(true)) return -1;
 
+		const uint8 frame_size = (audio_stream.sample_format == uni::AudioSampleFormat::S16LE ? 2 : 1) * audio_stream.channels;
+		const stduint bytes_per_sec = (stduint)audio_stream.sample_rate * (frame_size ? frame_size : 1);
+
 		const stduint drain_timeout =
 			((stduint)(audio_stream.used + AudioStreamDmaPrimeBytes) *
-				CONFIG_SysTickFreq + audio_stream.sample_rate - 1) /
-			audio_stream.sample_rate + 2 * CONFIG_SysTickFreq;
+				CONFIG_SysTickFreq + bytes_per_sec - 1) /
+			bytes_per_sec + 2 * CONFIG_SysTickFreq;
 		const stduint drain_start = tick;
 		while (audio_stream.open && audio_stream.used &&
 			tick - drain_start < drain_timeout) {
@@ -208,8 +227,8 @@ namespace {
 
 		const stduint tail_ticks =
 			((stduint)AudioStreamDmaPrimeBytes * CONFIG_SysTickFreq +
-				audio_stream.sample_rate - 1) /
-			audio_stream.sample_rate + CONFIG_SysTickFreq / 10 + 1;
+				bytes_per_sec - 1) /
+			bytes_per_sec + CONFIG_SysTickFreq / 10 + 1;
 		const stduint tail_start = tick;
 		while (audio_stream.open && audio_stream.started &&
 			tick - tail_start < tail_ticks) {
@@ -252,10 +271,12 @@ namespace {
 			pcm_data = copied_pcm;
 		}
 
-		const bool ok = SoundBlasterPlayPcmU8MonoImmediate(
+		const bool ok = SoundBlasterPlayPcmImmediate(
 			pcm_data,
 			request.buffer.byte_count,
-			uint16(request.format.sample_rate));
+			uint16(request.format.sample_rate),
+			request.format.sample_format,
+			request.format.channels ? request.format.channels : 1);
 		delete[] copied_pcm;
 		return ok;
 	}
@@ -316,7 +337,7 @@ bool AudioPlay(const uni::AudioPlayRequest& request) {
 	if (!IsSupportedPcmRequest(request)) return false;
 	stdsint result = -1;
 	if (syssend(Task_Audio_Serv, &request, sizeof(request),
-		_IMM(AudioMsg::PLAY_PCM_U8_MONO))) return false;
+		_IMM(AudioMsg::PLAY_PCM))) return false;
 	if (sysrecv(Task_Audio_Serv, &result, sizeof(result))) return false;
 	return result == 0;
 }
@@ -384,7 +405,7 @@ void serv_dev_audio_loop() {
 			if (sig_src) syssend(sig_src, &result, sizeof(result));
 			break;
 		}
-		case AudioMsg::PLAY_PCM_U8_MONO:
+		case AudioMsg::PLAY_PCM:
 		{
 			ProcessBlock* source_process = nullptr;
 			if (auto* source_thread = Taskman::LocateThread(sig_src)) {

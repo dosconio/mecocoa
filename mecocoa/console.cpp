@@ -38,7 +38,7 @@ Dnode* VTTY_Append(Console_t* con) {
 	// VTTY registration is console/TTY bookkeeping and does not need GUI tree ownership.
 	auto p = vttys.Append(con);
 	if (!p) return nullptr;
-	const stduint SIZE_INN_BUF = 64;
+	const stduint SIZE_INN_BUF = 4096;
 	auto p_innbuf = new byte[SIZE_INN_BUF];
 	const stduint SIZE_OUT_BUF = 4096;// ring buffer for async TTY text output
 	auto p_outbuf = new byte[SIZE_OUT_BUF];
@@ -293,4 +293,3 @@ void _Comment(R1) serv_cons_loop()
 		}
 	}
 }
-

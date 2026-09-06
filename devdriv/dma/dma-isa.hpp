@@ -13,6 +13,13 @@ bool IsaDma8Prepare(
 	IsaDmaDirection direction,
 	IsaDmaReloadMode reload_mode = IsaDmaReloadMode::OneShot);
 
+bool IsaDma16Prepare(
+	uint8 channel,
+	stduint physical_address,
+	uint32 length,
+	IsaDmaDirection direction,
+	IsaDmaReloadMode reload_mode = IsaDmaReloadMode::OneShot);
+
 void IsaDmaMask(uint8 channel);
 void IsaDmaUnmask(uint8 channel);
 #endif

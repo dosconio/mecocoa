@@ -22,6 +22,7 @@ int main(int argc, char** argv)
 	Rectangle rect{ Point(100, 80), Size2(320, 240) };
 	auto form_id = sys_create_form(-_IMM0, &rect);
 	if (form_id >= 0) {
+		sys_set_form_title(form_id, "Form Test");
 		sys_set_form_buffer(form_id, test_buffer);
 		for (int i = 0; i < 318 * 221; i++) {
 			test_buffer[i].r = 0xFF;

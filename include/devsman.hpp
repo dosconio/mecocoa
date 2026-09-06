@@ -262,7 +262,8 @@ public:
 
 enum class AudioMsg : stduint {
 	TEST,
-	PLAY_PCM_U8_MONO,
+	PLAY_PCM,
+	PLAY_PCM_U8_MONO = PLAY_PCM,
 	STREAM_BEGIN,
 	STREAM_WRITE,
 	STREAM_DRAIN,

@@ -161,3 +161,18 @@ stdsint sys_set_wallpaper(const void* buffer, uint32 width, uint32 height) {
 	syscomm(0, Task_ConsoleVideo, &msg);
 	return buf[0];
 }
+
+stdsint sys_set_form_prop(stduint form_id, stduint prop, void* value) {
+	stduint buf[3] = { form_id, prop, _IMM(value) };
+	CommMsg msg;
+	msg.data.address = _IMM(buf);
+	msg.data.length = sizeof(buf);
+	msg.type = _IMM(GraphicMsg::FSET);
+	syscomm(1, Task_ConsoleVideo, &msg);
+	syscomm(0, Task_ConsoleVideo, &msg);
+	return buf[0];
+}
+
+stdsint sys_set_form_title(stduint form_id, rostr title) {
+	return sys_set_form_prop(form_id, 1, (void*)title);
+}

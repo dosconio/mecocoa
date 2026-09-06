@@ -20,6 +20,9 @@ GraphicForm::GraphicForm(const uni::Rectangle& rect, const char* title) {
 	// Create form in kernel space
 	form_id_ = sys_create_form(-_IMM0, &rect_);
 	if (form_id_ >= 0) {
+		if (title) {
+			sys_set_form_title(form_id_, title);
+		}
 		sys_set_form_buffer(form_id_, fb_buffer_);
 
 		// Set default background (Solarized Light warm background: 0xFFFDF6E3)
@@ -117,4 +120,10 @@ void GraphicForm::HandleEvent(const uni::SheetMessage& smsg) {
 
 void GraphicForm::DrawString(const uni::Point& vertex, const char* str, uni::Color col) {
 	sys_draw_default_string(form_id_, vertex, str, col);
+}
+
+void GraphicForm::setTitle(const char* title) {
+	if (form_id_ >= 0 && title) {
+		sys_set_form_title(form_id_, title);
+	}
 }

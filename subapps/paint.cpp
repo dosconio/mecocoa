@@ -18,6 +18,7 @@ int main(int argc, char** argv)
 		outsfmt("Failed to create window\n\r");
 		return -1;
 	}
+	sys_set_form_title(form_id, "Paint");
 
 	bool is_drawing = false;
 	Point last_p = {0, 0};

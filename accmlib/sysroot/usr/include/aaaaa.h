@@ -7,6 +7,7 @@ using namespace uni;
 #include "../../../../include/taskman.hpp"
 #include "../../../../include/fileman.hpp"
 #include "../../../../include/console.hpp"
+#include "../../../../include/include/FileBlockDevice.hpp"
 
 #define sysrecv(pid,msg) syscomm(0,pid,msg)
 #define syssend(pid,msg) syscomm(1,pid,msg)
@@ -87,8 +88,8 @@ extern "C" {
 	stdsint sys_update_form(stduint form_id, const Rectangle* rect);
 	stdsint sys_get_screen_size(Size2* size);
 	stdsint sys_set_wallpaper(const void* buffer, uint32 width, uint32 height);
-
-
+	stdsint sys_set_form_prop(stduint form_id, stduint prop, void* value);
+	stdsint sys_set_form_title(stduint form_id, rostr title);
 
 	#ifdef _INC_CPP
 }
@@ -113,6 +114,7 @@ public:
 	stduint getClientHeight() const;
 	void HandleEvent(const uni::SheetMessage& smsg);
 	void DrawString(const uni::Point& vertex, const char* str, uni::Color col);
+	void setTitle(const char* title);
 };
 #endif
 

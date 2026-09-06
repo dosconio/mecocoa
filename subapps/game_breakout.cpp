@@ -220,6 +220,7 @@ int main(int argc, char **argv) {
 	Rectangle rect{ Point(120, 80), Size2(kCW + 2, kCH + 19) };
 	stdsint form_id = sys_create_form(-1, &rect);
 	if (form_id < 0) return -1;
+	sys_set_form_title(form_id, "Breakout Game");
 
 	for (int i = 0; i < kCW * kCH; i++) canvas[i] = kCBg;
 	sys_set_form_buffer(form_id, canvas);

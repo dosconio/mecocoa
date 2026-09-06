@@ -37,7 +37,7 @@ extern "C" stdsint sysc_ACPT(stduint, stduint, stduint);
 extern "C" void check_and_deliver_signals(void* context);
 
 // Syscall Wrappers
-extern stduint SYSCALL_TABLE[49];
+extern stduint SYSCALL_TABLE[50];
 
 void Syscall::Initialize() {
 	#if _MCCA == 0x8632
@@ -502,6 +502,14 @@ DEFSYSC sysc_ACPT(stduint fd, stduint usr_addr, stduint usr_addr_length) {
 	}
 	return new_fd;
 }
+
+DEFSYSC sysc_SEEK(stduint fd, stduint off, stduint whence) {
+	ThreadBlock* th = Taskman::CurrentTB();
+	ProcessBlock* pb = th ? th->parent_process : nullptr;
+	if (!pb) return -1;
+	return pb->Seek((int)fd, (stdsint)off, (int)whence);
+}
+
 
 DEFSYSC sysc_ROUT(stduint func, stduint p1, stduint p2) {
 	ThreadBlock* th = Taskman::CurrentTB();
@@ -1065,29 +1073,30 @@ stduint SYSCALL_TABLE[] = {
 	mglb(sysc_GETD), // 0x17 (GETD)
 	mglb(sysc_MMAP), // 0x18 (MMAP)
 	mglb(sysc_UMAP), // 0x19 (UMAP)
-	mglb(sysc_DUP2), // 0x1C (DUP2)
-	mglb(sysc_PIPE), // 0x1D (PIPE)
-	0, // 0x1A (GET_CORE_ID)
-	mglb(sysc_MANA), // 0x1B (MANA)
-	mglb(sysc_TNEW), // 0x1E (TNEW)
-	mglb(sysc_TEXI), // 0x1F (TEXI)
-	mglb(sysc_TJOI), // 0x20 (TJOI)
-	mglb(sysc_TGET), // 0x21 (TGET)
-	mglb(sysc_TDET), // 0x22 (TDET)
-	mglb(sysc_TYLD), // 0x23 (TYLD)
-	mglb(sysc_FUTX), // 0x24 (FUTX)
-	mglb(sysc_SOCK), // 0x25 (SOCK)
-	mglb(sysc_BIND), // 0x26 (BIND)
-	mglb(sysc_CONN), // 0x27 (CONN)
-	mglb(sysc_SEND), // 0x28 (SEND)
-	mglb(sysc_RECV), // 0x29 (RECV)
-	mglb(sysc_ROUT), // 0x2A (ROUT)
-	mglb(sysc_FCTL), // 0x2B (FCTL)
-	mglb(sysc_SADR), // 0x2C (SADR)
-	mglb(sysc_SOPT), // 0x2D (SOPT)
-	mglb(sysc_POLL), // 0x2E (POLL)
-	mglb(sysc_LIST), // 0x2F (LIST)
-	mglb(sysc_ACPT), // 0x30 (ACPT)
+	mglb(sysc_DUP2), // 0x1A (DUP2)
+	mglb(sysc_PIPE), // 0x1B (PIPE)
+	mglb(sysc_SEEK), // 0x1C (SEEK)
+	0, // 0x1D (GET_CORE_ID)
+	mglb(sysc_MANA),
+	mglb(sysc_TNEW),
+	mglb(sysc_TEXI),
+	mglb(sysc_TJOI),
+	mglb(sysc_TGET),
+	mglb(sysc_TDET),
+	mglb(sysc_TYLD),
+	mglb(sysc_FUTX),
+	mglb(sysc_SOCK),
+	mglb(sysc_BIND),
+	mglb(sysc_CONN),
+	mglb(sysc_SEND),
+	mglb(sysc_RECV),
+	mglb(sysc_ROUT),
+	mglb(sysc_FCTL),
+	mglb(sysc_SADR),
+	mglb(sysc_SOPT),
+	mglb(sysc_POLL),
+	mglb(sysc_LIST),
+	mglb(sysc_ACPT),
 };
 #endif
 
@@ -1180,6 +1189,10 @@ void syscall_body(NormalTaskContext* cxt)
 	case syscall_t::ACPT:
 		cxt->a0 = sysc_ACPT(cxt->a0, cxt->a1, cxt->a2);
 		break;
+	case syscall_t::SEEK:
+		cxt->a0 = sysc_SEEK(cxt->a0, cxt->a1, cxt->a2);
+		break;
+
 	default:
 		plogerro("Unknown syscall no: %d", syscall_num);
 		loop HALT();
