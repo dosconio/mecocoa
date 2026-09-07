@@ -244,25 +244,37 @@ namespace {
 			write_reg(E1000Reg::RDT, index);
 		}
 
-		stdsint read_frame(void* data, stduint count) {
+		stdsint peek_frame(void* data, stduint count, uint32& index) {
 			if (!rings_ready || !data || !count) return -1;
 			for0(i, E1000_RX_DESC_COUNT) {
 				auto& desc = rx_desc[rx_index];
 				if ((desc.status & E1000_RXD_STAT_DD) == 0) return 0;
-				const uint32 released = rx_index;
-				rx_index = (rx_index + 1) % E1000_RX_DESC_COUNT;
+				index = rx_index;
 				if (desc.errors) {
-					release_rx_descriptor(released);
+					rx_index = (rx_index + 1) % E1000_RX_DESC_COUNT;
+					release_rx_descriptor(index);
 					continue;
 				}
 				const stduint frame_len = desc.length;
 				const stduint copy_len = minof(count, frame_len);
-				MemCopyN(data, rx_buffers + released * E1000_FRAME_BUF_SIZE, copy_len);
-				release_rx_descriptor(released);
-				update_link_state();
+				MemCopyN(data, rx_buffers + index * E1000_FRAME_BUF_SIZE, copy_len);
 				return stdsint(copy_len);
 			}
 			return 0;
+		}
+
+		void consume_frame(uint32 index) {
+			if (index != rx_index) return;
+			rx_index = (rx_index + 1) % E1000_RX_DESC_COUNT;
+			release_rx_descriptor(index);
+			update_link_state();
+		}
+
+		stdsint read_frame(void* data, stduint count) {
+			uint32 index = 0;
+			const stdsint length = peek_frame(data, count, index);
+			if (length > 0) consume_frame(index);
+			return length;
 		}
 	};
 
@@ -407,41 +419,23 @@ namespace {
 		}
 	}
 
-	void PushRxFrames() {
+	bool PushRxFrames() {
 		while (true) {
 			FMT_NetworkMsg_DRV_FRAME frame = {};
 			frame.capacity = NetworkDriverFrameCapacity;
-			frame.status = g_e1000.read_frame(frame.data, NetworkDriverFrameCapacity);
-			if (frame.status <= 0) return;
+			uint32 rx_index = 0;
+			frame.status = g_e1000.peek_frame(frame.data, NetworkDriverFrameCapacity, rx_index);
+			if (frame.status <= 0) return true;
 			frame.length = uint32(frame.status);
 			CommMsg send_msg = {};
 			send_msg.data.address = _IMM(&frame);
 			send_msg.data.length = sizeof(frame);
 			send_msg.type = _IMM(NetworkMsg::DRV_RX);
-			if (Powercall::SysComm(COMM_SEND_ASYNC, Task_Net_Serv, &send_msg)) return;
+			if (Powercall::SysComm(COMM_SEND_ASYNC, Task_Net_Serv, &send_msg)) return false;
+			g_e1000.consume_frame(rx_index);
 		}
 	}
 
-	void HandleControlMessage(CommMsg& recv_msg, FMT_NetworkMsg_DRV_FRAME& frame) {
-		switch (NetworkMsg(recv_msg.type)) {
-		case NetworkMsg::DRV_SEND:
-			frame.status = g_e1000.send_frame(frame.data, frame.length);
-			break;
-		case NetworkMsg::DRV_RECV:
-			frame.status = g_e1000.read_frame(frame.data, minof(stduint(frame.capacity), stduint(NetworkDriverFrameCapacity)));
-			frame.length = frame.status > 0 ? uint32(frame.status) : 0;
-			break;
-		default:
-			frame.status = -1;
-			break;
-		}
-
-		CommMsg reply_msg = {};
-		reply_msg.data.address = _IMM(&frame);
-		reply_msg.data.length = sizeof(frame);
-		reply_msg.type = recv_msg.type;
-		Powercall::SysComm(COMM_SEND_ASYNC, recv_msg.src, &reply_msg);
-	}
 }
 
 int main(int argc, char** argv) {
@@ -453,22 +447,16 @@ int main(int argc, char** argv) {
 	if (!PublishAttach()) return -1;
 	if (Powercall::DevPublish(g_e1000.dev_handle, PwcallDevicePublishCommand::Started) != 0) return -1;
 	g_e1000.enable_interrupts();
-	PushRxFrames();
+	(void)PushRxFrames();
 
 	for (;;) {
 		ProcessControlMessages();
-		PushRxFrames();
-		FMT_NetworkMsg_DRV_FRAME frame = {};
-		CommMsg recv_msg = {};
-		recv_msg.data.address = _IMM(&frame);
-		recv_msg.data.length = sizeof(frame);
-		if (Powercall::SysComm(COMM_RECV, ANYPROC, &recv_msg)) continue;
-		if (recv_msg.data.length == 0) {
-			g_e1000.service_interrupt();
-			PushRxFrames();
+		(void)g_e1000.service_interrupt();
+		if (!PushRxFrames()) {
+			syscall(syscall_t::REST, 1, 1);
 			continue;
 		}
-		HandleControlMessage(recv_msg, frame);
+		if (!syscall(syscall_t::TMSG)) syscall(syscall_t::REST, 1, 1);
 	}
 }
 

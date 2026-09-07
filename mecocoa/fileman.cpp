@@ -470,13 +470,27 @@ stduint ProcessBlock::Rdwt(bool wr_type, stduint fid, Slice slice)
 
 bool ProcessBlock::Close(int fid)
 {
-	auto files = this->fileman.Lock();
 	int fd = fid;
-	if (fd < 0 || fd >= (stdsint)files->pfiles.Count() || !files->pfiles[fd]) {
-		ploginfo("%s %d skip", __FUNCIDEN__, fd);
-		return false;
+	vfs_file* file = nullptr;
+	{
+		auto files = this->fileman.Lock();
+		if (fd < 0 || fd >= (stdsint)files->pfiles.Count() || !files->pfiles[fd]) {
+			ploginfo("%s %d skip", __FUNCIDEN__, fd);
+			return false;
+		}
+		FileDescriptor* pfd = files->pfiles[fd];
+		file = pfd->vfile;
+		if (file && file->f_inode) file->f_inode->ref_count--;
+		{
+			auto f_desc = f_desc_info.Lock();
+			pfd->fd_mode = 0;
+			pfd->fd_pos = 0;
+			pfd->vfile = nullptr;
+		}
+		files->pfiles[fd] = nullptr;
 	}
-	return CloseFileSlotUnlocked(*files, fd);
+	if (file) Filesys::Close(file);
+	return true;
 }
 
 //{} unchk unused

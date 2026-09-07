@@ -23,8 +23,10 @@ namespace {
 		uint16 sample_rate;
 		uni::AudioSampleFormat sample_format;
 		uint8 channels;
+		uint64 played_bytes;
 		bool open;
 		bool started;
+		bool paused;
 	};
 
 	AudioStreamState audio_stream{};
@@ -69,12 +71,14 @@ namespace {
 			audio_stream.read_pos =
 				(audio_stream.read_pos + chunk) % AudioStreamRingBytes;
 			audio_stream.used -= chunk;
+			audio_stream.played_bytes += chunk;
 			done += chunk;
 		}
 		return done;
 	}
 
 	uint32 AudioStreamRefill(void*, uint8* destination, uint32 byte_count) {
+		if (audio_stream.paused) return 0;
 		return AudioRingRead(destination, byte_count);
 	}
 
@@ -92,8 +96,10 @@ namespace {
 		audio_stream.sample_rate = 0;
 		audio_stream.sample_format = uni::AudioSampleFormat::U8;
 		audio_stream.channels = 1;
+		audio_stream.played_bytes = 0;
 		audio_stream.open = false;
 		audio_stream.started = false;
+		audio_stream.paused = false;
 	}
 
 	void AudioStreamAbort() {
@@ -121,7 +127,7 @@ namespace {
 	}
 
 	bool AudioStreamStartIfReady(bool force) {
-		if (!audio_stream.open || audio_stream.started) return true;
+		if (!audio_stream.open || audio_stream.started || audio_stream.paused) return true;
 		if (!force && audio_stream.used < AudioStreamDmaPrimeBytes) return true;
 		if (!audio_stream.used) return true;
 		if (!SoundBlasterStartPcmStream(
@@ -392,8 +398,8 @@ void serv_dev_audio_loop() {
 	stduint sig_src = 0;
 	uni::AudioPlayRequest request{};
 	while (true) {
+		AudioServicePollStream();
 		if (audio_stream.open && !AudioServiceHasMessage()) {
-			AudioServicePollStream();
 			AudioServiceIdleWait();
 			continue;
 		}
@@ -442,6 +448,77 @@ void serv_dev_audio_loop() {
 			AudioStreamAbort();
 			stdsint result = 0;
 			if (sig_src) syssend(sig_src, &result, sizeof(result));
+			break;
+		}
+		case AudioMsg::STREAM_PAUSE:
+		{
+			stdsint result = -1;
+			if (audio_stream.open && sig_src == audio_stream.owner_tid) {
+				audio_stream.paused = true;
+				if (audio_stream.started) {
+					SoundBlasterPausePcmStream();
+				}
+				result = 0;
+			}
+			if (sig_src) syssend(sig_src, &result, sizeof(result));
+			break;
+		}
+		case AudioMsg::STREAM_RESUME:
+		{
+			stdsint result = -1;
+			if (audio_stream.open && sig_src == audio_stream.owner_tid) {
+				audio_stream.paused = false;
+				if (audio_stream.started) {
+					SoundBlasterResumePcmStream();
+				} else {
+					AudioStreamStartIfReady(false);
+				}
+				result = 0;
+			}
+			if (sig_src) syssend(sig_src, &result, sizeof(result));
+			break;
+		}
+		case AudioMsg::STREAM_GET_POS:
+		{
+			AudioStreamPosition pos{};
+			pos.is_active = audio_stream.open;
+			pos.is_paused = audio_stream.paused;
+			if (audio_stream.open) {
+				pos.played_bytes = audio_stream.played_bytes;
+				const uint8 frame_size =
+					(audio_stream.sample_format == uni::AudioSampleFormat::S16LE ? 2 : 1) *
+					(audio_stream.channels ? audio_stream.channels : 1);
+				if (frame_size) {
+					pos.played_samples = uint32(pos.played_bytes / frame_size);
+				}
+				if (audio_stream.sample_rate) {
+					pos.played_ms = uint32(((uint64)pos.played_samples * 1000) / audio_stream.sample_rate);
+				}
+			}
+			if (sig_src) syssend(sig_src, &pos, sizeof(pos));
+			break;
+		}
+		case AudioMsg::SET_VOLUME:
+		{
+			const auto* vol_req = reinterpret_cast<const AudioVolumeRequest*>(&request);
+			stdsint result = -1;
+			if (vol_req->mute) {
+				result = SoundBlasterSetMute(vol_req->channel, true) ? 0 : -1;
+			} else {
+				result = SoundBlasterSetVolume(vol_req->channel, vol_req->left, vol_req->right) ? 0 : -1;
+			}
+			if (sig_src) syssend(sig_src, &result, sizeof(result));
+			break;
+		}
+		case AudioMsg::GET_VOLUME:
+		{
+			const auto* in_req = reinterpret_cast<const AudioVolumeRequest*>(&request);
+			AudioVolumeRequest resp = *in_req;
+			if (!SoundBlasterGetVolume(in_req->channel, resp.left, resp.right)) {
+				resp.left = resp.right = 0;
+			}
+			resp.mute = (resp.left == 0 && resp.right == 0);
+			if (sig_src) syssend(sig_src, &resp, sizeof(resp));
 			break;
 		}
 		default:

@@ -76,7 +76,7 @@ build: lib accm prehost/$(arch)/fatvhd.ignore $(cppobjs) build_util build_drvs
 	cp configs/grub-x86.txt $(ubinpath)/mecocoa/boot/grub/grub.cfg
 	cp $(elf_kernel) $(ubinpath)/mecocoa/boot/
 	cp $(uobjpath)/sapp-$(arch)/*    $(ubinpath)/mecocoa/apps/
-	echo "ようこそ，メココAの世界へ！" | sudo tee "$(ubinpath)/mecocoa/ciallo.txt" > /dev/null
+	# echo "ようこそ，メココAの世界へ！" | sudo tee "$(ubinpath)/mecocoa/ciallo.txt" > /dev/null
 	cp $(ulibpath)/../.picture/phina.head.bmp  $(ubinpath)/mecocoa/demo/
 	cp depends/fonts/simsun.ttf                $(ubinpath)/mecocoa/font/
 	cd $(ubinpath) && grub-mkrescue -o mcca.iso mecocoa

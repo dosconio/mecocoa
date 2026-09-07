@@ -57,6 +57,8 @@ namespace {
 		SingleCycle16,
 		AutoInit8,
 		AutoInit16,
+		AutoInit8Paused,
+		AutoInit16Paused,
 		AutoInitStopping,
 	};
 
@@ -183,11 +185,15 @@ namespace {
 				const uint8 silence = sound_blaster_auto_buffer.is_signed ? 0x00 : 0x80;
 				MemSet(block + filled, silence,
 					sound_blaster_auto_buffer.block_bytes - filled);
-				const uint32 underruns = sound_blaster_auto_buffer.underrun_count.fetch_add(
-					1, uni::MemoryOrder_Relaxed) + 1;
-				plogwarn("[SB16] Underrun block=%u filled=%u/%u total_underruns=%u",
-					(stduint)block_index, (stduint)filled,
-					(stduint)sound_blaster_auto_buffer.block_bytes, (stduint)underruns);
+				const auto mode = sound_blaster_playback_mode.load(uni::MemoryOrder_Relaxed);
+				if (mode != SoundBlasterPlaybackMode::AutoInit8Paused &&
+					mode != SoundBlasterPlaybackMode::AutoInit16Paused) {
+					const uint32 underruns = sound_blaster_auto_buffer.underrun_count.fetch_add(
+						1, uni::MemoryOrder_Relaxed) + 1;
+					plogwarn("[SB16] Underrun block=%u filled=%u/%u total_underruns=%u",
+						(stduint)block_index, (stduint)filled,
+						(stduint)sound_blaster_auto_buffer.block_bytes, (stduint)underruns);
+				}
 			}
 			return true;
 		}
@@ -811,17 +817,14 @@ namespace {
 	bool RequestSoundBlasterAutoInitStop() {
 		auto mode = sound_blaster_playback_mode.load(uni::MemoryOrder_Acquire);
 		if (mode != SoundBlasterPlaybackMode::AutoInit8 &&
-			mode != SoundBlasterPlaybackMode::AutoInit16) return false;
+			mode != SoundBlasterPlaybackMode::AutoInit16 &&
+			mode != SoundBlasterPlaybackMode::AutoInit8Paused &&
+			mode != SoundBlasterPlaybackMode::AutoInit16Paused) return false;
 		if (!sound_blaster_playback_mode.compare_exchange(
 			mode, SoundBlasterPlaybackMode::AutoInitStopping,
 			uni::MemoryOrder_Acq_Rel, uni::MemoryOrder_Acquire)) return false;
 
-		bool exit_ok = false;
-		if (mode == SoundBlasterPlaybackMode::AutoInit16) {
-			exit_ok = sound_blaster.ExitAutoInit16();
-		} else {
-			exit_ok = sound_blaster.ExitAutoInit8();
-		}
+		const bool exit_ok = sound_blaster.ExitAutoInit();
 		if (exit_ok) return true;
 
 		// A failed DSP command cannot provide the expected final block IRQ.
@@ -910,6 +913,9 @@ namespace {
 			(stduint)sound_blaster.GetDspMinorVersion());
 		sound_blaster_pcm_path = SoundBlasterPcmPath::Unknown;
 		(void)PrepareSoundBlasterDma(node);
+		(void)sound_blaster.ResetMixer();
+		(void)sound_blaster.SetVolume(uni::SoundBlasterMixerChannel::MasterVolume, 204, 204);
+		(void)sound_blaster.SetVolume(uni::SoundBlasterMixerChannel::VoiceVolume, 204, 204);
 		// Keep boot quiet. Explicit AudioMsg::TEST / playback paths can still
 		// exercise the device after normal service scheduling is available.
 		return true;
@@ -968,10 +974,13 @@ bool SoundBlasterStopPcmStream() {
 	}
 	if (mode != SoundBlasterPlaybackMode::AutoInit8 &&
 		mode != SoundBlasterPlaybackMode::AutoInit16 &&
+		mode != SoundBlasterPlaybackMode::AutoInit8Paused &&
+		mode != SoundBlasterPlaybackMode::AutoInit16Paused &&
 		mode != SoundBlasterPlaybackMode::AutoInitStopping) {
 		return false;
 	}
-	if ((mode == SoundBlasterPlaybackMode::AutoInit8 || mode == SoundBlasterPlaybackMode::AutoInit16) &&
+	if ((mode == SoundBlasterPlaybackMode::AutoInit8 || mode == SoundBlasterPlaybackMode::AutoInit16 ||
+		mode == SoundBlasterPlaybackMode::AutoInit8Paused || mode == SoundBlasterPlaybackMode::AutoInit16Paused) &&
 		!RequestSoundBlasterAutoInitStop()) {
 		return false;
 	}
@@ -1017,14 +1026,12 @@ void SoundBlasterAbortPcmStream() {
 	const auto mode = sound_blaster_playback_mode.load(uni::MemoryOrder_Acquire);
 	if (mode == SoundBlasterPlaybackMode::AutoInit8 ||
 		mode == SoundBlasterPlaybackMode::AutoInit16 ||
+		mode == SoundBlasterPlaybackMode::AutoInit8Paused ||
+		mode == SoundBlasterPlaybackMode::AutoInit16Paused ||
 		mode == SoundBlasterPlaybackMode::AutoInitStopping) {
 		IsaDmaMask(sound_blaster_dma8_channel);
 		IsaDmaMask(sound_blaster_dma16_channel);
-		if (mode == SoundBlasterPlaybackMode::AutoInit16) {
-			(void)sound_blaster.ExitAutoInit16();
-		} else {
-			(void)sound_blaster.ExitAutoInit8();
-		}
+		(void)sound_blaster.ExitAutoInit();
 	}
 	sound_blaster_auto_buffer.refill = nullptr;
 	sound_blaster_auto_buffer.refill_context = nullptr;
@@ -1037,6 +1044,100 @@ void SoundBlasterAbortPcmStream() {
 	sound_blaster_playback_mode.store(
 		SoundBlasterPlaybackMode::Idle, uni::MemoryOrder_Release);
 	(void)sound_blaster.Reset();
+}
+
+	uint8 sound_blaster_master_vol_l = 204;
+	uint8 sound_blaster_master_vol_r = 204;
+	bool sound_blaster_master_mute = false;
+
+	bool SoundBlasterPausePcmStream() {
+		auto mode = sound_blaster_playback_mode.load(uni::MemoryOrder_Acquire);
+		if (mode == SoundBlasterPlaybackMode::AutoInit8Paused ||
+			mode == SoundBlasterPlaybackMode::AutoInit16Paused) {
+			return true;
+		}
+		if (mode != SoundBlasterPlaybackMode::AutoInit8 &&
+			mode != SoundBlasterPlaybackMode::AutoInit16) {
+			return false;
+		}
+		const auto paused_mode = (mode == SoundBlasterPlaybackMode::AutoInit16) ?
+			SoundBlasterPlaybackMode::AutoInit16Paused :
+			SoundBlasterPlaybackMode::AutoInit8Paused;
+		sound_blaster_playback_mode.store(paused_mode, uni::MemoryOrder_Release);
+
+		// Overwrite all pending buffer blocks with silence immediately
+		const uint8 last_completed = sound_blaster_auto_buffer.completed_block.load(uni::MemoryOrder_Acquire);
+		const uint8 active_block = (last_completed == SoundBlasterInvalidBlock) ? 0 :
+			uint8((last_completed + 1) % SoundBlasterAutoInitBlockCount);
+		const uint8 silence = sound_blaster_auto_buffer.is_signed ? 0x00 : 0x80;
+		for (uint8 block_index = 0; block_index < SoundBlasterAutoInitBlockCount; ++block_index) {
+			if (block_index == active_block) continue;
+			auto* block = GetSoundBlasterAutoInitBlock(block_index);
+			if (block) {
+				MemSet(block, silence, sound_blaster_auto_buffer.block_bytes);
+			}
+		}
+
+		ploginfo("[SB16] Stream paused");
+		return true;
+	}
+
+	bool SoundBlasterResumePcmStream() {
+		auto mode = sound_blaster_playback_mode.load(uni::MemoryOrder_Acquire);
+		if (mode == SoundBlasterPlaybackMode::AutoInit8 ||
+			mode == SoundBlasterPlaybackMode::AutoInit16) {
+			return true;
+		}
+		if (mode != SoundBlasterPlaybackMode::AutoInit8Paused &&
+			mode != SoundBlasterPlaybackMode::AutoInit16Paused) {
+			return false;
+		}
+		const auto resumed_mode = (mode == SoundBlasterPlaybackMode::AutoInit16Paused) ?
+			SoundBlasterPlaybackMode::AutoInit16 :
+			SoundBlasterPlaybackMode::AutoInit8;
+		sound_blaster_playback_mode.store(resumed_mode, uni::MemoryOrder_Release);
+
+		// Immediately refill upcoming blocks with real stream data
+		const uint8 last_completed = sound_blaster_auto_buffer.completed_block.load(uni::MemoryOrder_Acquire);
+		const uint8 active_block = (last_completed == SoundBlasterInvalidBlock) ? 0 :
+			uint8((last_completed + 1) % SoundBlasterAutoInitBlockCount);
+		for (uint8 pass = 1; pass < SoundBlasterAutoInitBlockCount; ++pass) {
+			const uint8 block_index = uint8((active_block + pass) % SoundBlasterAutoInitBlockCount);
+			FillSoundBlasterAutoInitBlock(block_index);
+		}
+
+		(void)SoundBlasterServicePlayback();
+		ploginfo("[SB16] Stream resumed");
+		return true;
+	}
+
+	uint64 SoundBlasterGetPlayedBytes() {
+		const uint64 completed = sound_blaster_auto_buffer.completed_count.load(
+			uni::MemoryOrder_Relaxed);
+		return completed * sound_blaster_auto_buffer.block_bytes;
+	}
+
+	bool SoundBlasterSetVolume(uni::SoundBlasterMixerChannel channel, uint8 left, uint8 right) {
+		if (channel == uni::SoundBlasterMixerChannel::MasterVolume) {
+			sound_blaster_master_vol_l = left;
+			sound_blaster_master_vol_r = right;
+		}
+		return sound_blaster.SetVolume(channel, left, right);
+	}
+
+	bool SoundBlasterGetVolume(uni::SoundBlasterMixerChannel channel, uint8& left, uint8& right) {
+		return sound_blaster.GetVolume(channel, left, right);
+	}
+
+	bool SoundBlasterSetMute(uni::SoundBlasterMixerChannel channel, bool mute) {
+		if (channel == uni::SoundBlasterMixerChannel::MasterVolume) {
+			sound_blaster_master_mute = mute;
+		}
+		return sound_blaster.SetMute(channel, mute);
+	}
+
+bool SoundBlasterResetMixer() {
+	return sound_blaster.ResetMixer();
 }
 
 uint8 SoundBlasterServicePlayback() {
@@ -1057,14 +1158,16 @@ void Handint_SB16() {
 	sound_blaster_irq_count = count;
 	const auto playback_mode = sound_blaster_playback_mode.load(
 		uni::MemoryOrder_Acquire);
-	const bool playing = sound_blaster.GetState() ==
-		uni::SoundBlasterState::Playing;
-	const bool single_cycle_completed = playing &&
+	const bool active = (sound_blaster.GetState() == uni::SoundBlasterState::Playing) ||
+		(sound_blaster.GetState() == uni::SoundBlasterState::Paused);
+	const bool single_cycle_completed = (sound_blaster.GetState() == uni::SoundBlasterState::Playing) &&
 		(playback_mode == SoundBlasterPlaybackMode::SingleCycle8 ||
 		 playback_mode == SoundBlasterPlaybackMode::SingleCycle16);
-	const bool auto_init_block_completed = playing &&
+	const bool auto_init_block_completed = active &&
 		(playback_mode == SoundBlasterPlaybackMode::AutoInit8 ||
-		 playback_mode == SoundBlasterPlaybackMode::AutoInit16);
+		 playback_mode == SoundBlasterPlaybackMode::AutoInit16 ||
+		 playback_mode == SoundBlasterPlaybackMode::AutoInit8Paused ||
+		 playback_mode == SoundBlasterPlaybackMode::AutoInit16Paused);
 	const bool auto_init_stop_completed =
 		playback_mode == SoundBlasterPlaybackMode::AutoInitStopping &&
 		sound_blaster.GetState() == uni::SoundBlasterState::Stopping;

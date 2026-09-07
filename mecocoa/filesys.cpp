@@ -1843,9 +1843,6 @@ int Filesys::ConnectSocket(vfs_file* file, const Network::SocketAddress& address
 	SocketHandle* socket = Filesys::GetSocket(file);
 	if (!socket) return -1;
 	if (socket->domain != Network::SocketDomain::IPv4) return -1;
-	if (socket->type != Network::SocketType::Datagram) return -1;
-	if (socket->protocol != Network::SocketProtocol::Default &&
-		socket->protocol != Network::SocketProtocol::UDP) return -1;
 	if (address.domain != uint16(Network::SocketDomain::IPv4)) return -1;
 	if (address.length < sizeof(Network::SocketAddressIPv4)) return -1;
 
@@ -1856,6 +1853,27 @@ int Filesys::ConnectSocket(vfs_file* file, const Network::SocketAddress& address
 	(void)target;
 	return -1;
 	#else
+	if (socket->type == Network::SocketType::Stream) {
+		if (socket->protocol != Network::SocketProtocol::Default &&
+			socket->protocol != Network::SocketProtocol::TCP) return -1;
+		if (socket->is_connected || socket->is_listening) return -1;
+		uint16 local_port = socket->is_bound ? socket->local_ipv4.port : 0;
+		Network::TCPConnectionContext context{};
+		const stdsint connected = Devsman::ConnectTcp(target.address, target.port, local_port, context);
+		if (connected <= 0) return -1;
+		socket->local_ipv4.address = context.local.address;
+		socket->local_ipv4.port = context.local.port;
+		socket->remote_ipv4.address = context.remote.address;
+		socket->remote_ipv4.port = context.remote.port;
+		if (!socket->is_bound) socket->flags |= SocketHandleFlagLocalAddressAuto;
+		socket->protocol = Network::SocketProtocol::TCP;
+		socket->is_bound = true;
+		socket->is_connected = true;
+		return 0;
+	}
+	if (socket->type != Network::SocketType::Datagram) return -1;
+	if (socket->protocol != Network::SocketProtocol::Default &&
+		socket->protocol != Network::SocketProtocol::UDP) return -1;
 	if (!socket->is_bound) {
 		uint16 local_port = 0;
 		stduint inbox_id = stduint(-1);
@@ -1879,6 +1897,23 @@ int Filesys::SendSocket(vfs_file* file, const void* payload, stduint length, con
 	SocketHandle* socket = Filesys::GetSocket(file);
 	if (!socket) return -1;
 	if (socket->domain != Network::SocketDomain::IPv4) return -1;
+	if (socket->type == Network::SocketType::Stream) {
+		if (address) return -1;
+		if (!socket->is_connected) return -1;
+		if (socket->protocol != Network::SocketProtocol::TCP &&
+			socket->protocol != Network::SocketProtocol::Default) return -1;
+		#if (_MCCA & 0xFF00) != 0x8600
+		(void)payload;
+		(void)length;
+		return -1;
+		#else
+		Network::TCPConnectionContext context{
+			{ socket->local_ipv4.address, socket->local_ipv4.port },
+			{ socket->remote_ipv4.address, socket->remote_ipv4.port },
+		};
+		return Devsman::SendTcp(context, payload, length);
+		#endif
+	}
 	if (socket->type != Network::SocketType::Datagram) return -1;
 	if (socket->protocol != Network::SocketProtocol::Default &&
 		socket->protocol != Network::SocketProtocol::UDP) return -1;
@@ -2294,24 +2329,51 @@ int Filesys::CloseSocket(vfs_file* file) {
 	SocketHandle* socket = Filesys::GetSocket(file);
 	if (!socket) return -1;
 
-	MutexLocal guard(&vfs_lock);
-	if (file->f_inode && file->f_inode->ref_count == 0) {
-		#if (_MCCA & 0xFF00) == 0x8600
-		if (socket->is_bound && socket->protocol == Network::SocketProtocol::UDP && socket->local_ipv4.port) {
-			Devsman::CloseUdpPort(socket->local_ipv4.port, socket->udp_inbox_id);
+	bool destroy = false;
+	Network::SocketDomain domain = Network::SocketDomain::Unspec;
+	Network::SocketProtocol protocol = Network::SocketProtocol::Default;
+	stduint udp_inbox_id = stduint(-1);
+	bool is_bound = false;
+	bool is_connected = false;
+	bool is_listening = false;
+	Network::SocketEndpointIPv4 local_ipv4 = {};
+	Network::SocketEndpointIPv4 remote_ipv4 = {};
+	{
+		MutexLocal guard(&vfs_lock);
+		destroy = file->f_inode && file->f_inode->ref_count == 0;
+		if (destroy) {
+			domain = socket->domain;
+			protocol = socket->protocol;
+			udp_inbox_id = socket->udp_inbox_id;
+			is_bound = socket->is_bound;
+			is_connected = socket->is_connected;
+			is_listening = socket->is_listening;
+			local_ipv4 = socket->local_ipv4;
+			remote_ipv4 = socket->remote_ipv4;
 		}
-		if (socket->is_connected && !socket->is_listening &&
-			socket->protocol == Network::SocketProtocol::TCP && socket->local_ipv4.port) {
+	}
+
+	if (destroy) {
+		#if (_MCCA & 0xFF00) == 0x8600
+		if (domain == Network::SocketDomain::IPv4 &&
+			is_bound && protocol == Network::SocketProtocol::UDP && local_ipv4.port) {
+			Devsman::CloseUdpPort(local_ipv4.port, udp_inbox_id);
+		}
+		if (domain == Network::SocketDomain::IPv4 &&
+			is_connected && !is_listening &&
+			protocol == Network::SocketProtocol::TCP && local_ipv4.port) {
 			Network::TCPConnectionContext context{
-				{ socket->local_ipv4.address, socket->local_ipv4.port },
-				{ socket->remote_ipv4.address, socket->remote_ipv4.port },
+				{ local_ipv4.address, local_ipv4.port },
+				{ remote_ipv4.address, remote_ipv4.port },
 			};
 			Devsman::CloseTcpConnection(context);
 		}
-		if (socket->is_listening && socket->protocol == Network::SocketProtocol::TCP && socket->local_ipv4.port) {
-			Devsman::CloseTcpPort(socket->local_ipv4.port);
+		if (domain == Network::SocketDomain::IPv4 &&
+			is_listening && protocol == Network::SocketProtocol::TCP && local_ipv4.port) {
+			Devsman::CloseTcpPort(local_ipv4.port);
 		}
 		#endif
+		MutexLocal guard(&vfs_lock);
 		delete socket;
 		file->f_inode->internal_handler = nullptr;
 		delete file->f_inode;

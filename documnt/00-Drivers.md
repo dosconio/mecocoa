@@ -23,7 +23,7 @@ TODO:
 	- UHCI 1.0
 	- xHCI 3.1
 
-### Video
+### Audio
 
 - **Buzzer** PC Speaker
 - SB16

@@ -45,6 +45,13 @@ bool SoundBlasterStartPcmU8MonoStream(uint16 sample_rate,
 	SoundBlasterPcmRefill refill, void* context);
 bool SoundBlasterStopPcmStream();
 void SoundBlasterAbortPcmStream();
+bool SoundBlasterPausePcmStream();
+bool SoundBlasterResumePcmStream();
+uint64 SoundBlasterGetPlayedBytes();
+bool SoundBlasterSetVolume(uni::SoundBlasterMixerChannel channel, uint8 left, uint8 right);
+bool SoundBlasterGetVolume(uni::SoundBlasterMixerChannel channel, uint8& left, uint8& right);
+bool SoundBlasterSetMute(uni::SoundBlasterMixerChannel channel, bool mute);
+bool SoundBlasterResetMixer();
 
 // Call from ordinary kernel context; returns the number of refilled DMA blocks.
 uint8 SoundBlasterServicePlayback();

@@ -3,6 +3,7 @@
 
 #include <c/nnode.h>
 #include <cpp/System/Audiosys.hpp>
+#include <cpp/Device/Audio/SoundBlaster.hpp>
 
 struct DeviceNode;
 
@@ -239,10 +240,13 @@ public:
 	static bool WaitTcpAccept(uint16 port);
 	static bool HasTcpAccept(uint16 port);
 	static stdsint AcceptTcpConnection(uint16 port, uni::Network::TCPConnectionContext& context);
+	static stdsint ConnectTcp(const uni::Network::IPv4Address& target_ip,
+		uint16 destination_port, uint16& source_port, uni::Network::TCPConnectionContext& context);
 	static bool CloseTcpConnection(const uni::Network::TCPConnectionContext& context);
 	static bool WaitTcpReceive(const uni::Network::TCPConnectionContext& context);
 	static bool HasTcpReceive(const uni::Network::TCPConnectionContext& context);
 	static stdsint ReceiveTcp(const uni::Network::TCPConnectionContext& context, void* payload, stduint capacity);
+	static stdsint SendTcp(const uni::Network::TCPConnectionContext& context, const void* payload, stduint length);
 	static stdsint SendUdp(const uni::Network::IPv4Address& target_ip,
 		uint16 source_port, uint16 destination_port, const void* payload, stduint length);
 	static stdsint SendUdp(const uni::Network::MacAddress& target_mac, const uni::Network::IPv4Address& target_ip,
@@ -268,6 +272,26 @@ enum class AudioMsg : stduint {
 	STREAM_WRITE,
 	STREAM_DRAIN,
 	STREAM_STOP,
+	STREAM_PAUSE,
+	STREAM_RESUME,
+	STREAM_GET_POS,
+	SET_VOLUME,
+	GET_VOLUME,
+};
+
+struct AudioVolumeRequest {
+	uni::SoundBlasterMixerChannel channel;
+	uint8 left;
+	uint8 right;
+	bool mute;
+};
+
+struct AudioStreamPosition {
+	uint64 played_bytes;
+	uint32 played_samples;
+	uint32 played_ms;
+	bool is_paused;
+	bool is_active;
 };
 
 // Submit a synchronous PCM playback request to the audio service.
