@@ -268,35 +268,7 @@ public:
 
 // ---- AUDIO ----
 
-enum class AudioMsg : stduint {
-	TEST,
-	PLAY_PCM,
-	PLAY_PCM_U8_MONO = PLAY_PCM,
-	STREAM_BEGIN,
-	STREAM_WRITE,
-	STREAM_DRAIN,
-	STREAM_STOP,
-	STREAM_PAUSE,
-	STREAM_RESUME,
-	STREAM_GET_POS,
-	SET_VOLUME,
-	GET_VOLUME,
-};
-
-struct AudioVolumeRequest {
-	uni::SoundBlasterMixerChannel channel;
-	uint8 left;
-	uint8 right;
-	bool mute;
-};
-
-struct AudioStreamPosition {
-	uint64 played_bytes;
-	uint32 played_samples;
-	uint32 played_ms;
-	bool is_paused;
-	bool is_active;
-};
+#include "devsman.com.hpp"
 
 // Submit a synchronous PCM playback request to the audio service.
 bool AudioPlay(const uni::AudioPlayRequest& request);

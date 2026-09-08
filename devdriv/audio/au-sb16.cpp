@@ -1111,6 +1111,28 @@ void SoundBlasterAbortPcmStream() {
 		return true;
 	}
 
+	bool SoundBlasterFlushPcmStream() {
+		auto mode = sound_blaster_playback_mode.load(uni::MemoryOrder_Acquire);
+		if (mode != SoundBlasterPlaybackMode::AutoInit8 &&
+			mode != SoundBlasterPlaybackMode::AutoInit16 &&
+			mode != SoundBlasterPlaybackMode::AutoInit8Paused &&
+			mode != SoundBlasterPlaybackMode::AutoInit16Paused) {
+			return false;
+		}
+
+		// Immediately refill upcoming blocks with real stream data from new seek position
+		const uint8 last_completed = sound_blaster_auto_buffer.completed_block.load(uni::MemoryOrder_Acquire);
+		const uint8 active_block = (last_completed == SoundBlasterInvalidBlock) ? 0 :
+			uint8((last_completed + 1) % SoundBlasterAutoInitBlockCount);
+		for (uint8 pass = 1; pass < SoundBlasterAutoInitBlockCount; ++pass) {
+			const uint8 block_index = uint8((active_block + pass) % SoundBlasterAutoInitBlockCount);
+			FillSoundBlasterAutoInitBlock(block_index);
+		}
+
+		(void)SoundBlasterServicePlayback();
+		return true;
+	}
+
 	uint64 SoundBlasterGetPlayedBytes() {
 		const uint64 completed = sound_blaster_auto_buffer.completed_count.load(
 			uni::MemoryOrder_Relaxed);

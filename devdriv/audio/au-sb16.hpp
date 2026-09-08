@@ -47,6 +47,7 @@ bool SoundBlasterStopPcmStream();
 void SoundBlasterAbortPcmStream();
 bool SoundBlasterPausePcmStream();
 bool SoundBlasterResumePcmStream();
+bool SoundBlasterFlushPcmStream();
 uint64 SoundBlasterGetPlayedBytes();
 bool SoundBlasterSetVolume(uni::SoundBlasterMixerChannel channel, uint8 left, uint8 right);
 bool SoundBlasterGetVolume(uni::SoundBlasterMixerChannel channel, uint8& left, uint8& right);

@@ -521,6 +521,24 @@ void serv_dev_audio_loop() {
 			if (sig_src) syssend(sig_src, &resp, sizeof(resp));
 			break;
 		}
+		case AudioMsg::STREAM_SEEK:
+		{
+			const auto* seek_req = reinterpret_cast<const AudioSeekRequest*>(&request);
+			stdsint result = -1;
+			if (audio_stream.open && sig_src == audio_stream.owner_tid) {
+				AudioRingReset();
+				const uint8 frame_size =
+					(audio_stream.sample_format == uni::AudioSampleFormat::S16LE ? 2 : 1) *
+					(audio_stream.channels ? audio_stream.channels : 1);
+				audio_stream.played_bytes = seek_req->target_samples * frame_size;
+				if (audio_stream.started) {
+					SoundBlasterFlushPcmStream();
+				}
+				result = 0;
+			}
+			if (sig_src) syssend(sig_src, &result, sizeof(result));
+			break;
+		}
 		default:
 			plogwarn("[Audio] Unknown message type=%u src=%u",
 				sig_type, sig_src);
