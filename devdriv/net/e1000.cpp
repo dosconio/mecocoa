@@ -69,6 +69,11 @@ namespace {
 	constexpr stduint E1000_ETHERNET_MIN_FRAME = 60;
 	constexpr stduint E1000_ETHERNET_MAX_FRAME = 1518;
 	constexpr stduint E1000_TX_WAIT_SPINS = 100000;
+	constexpr stduint E1000_IDLE_REST_MIN = 1;
+	constexpr stduint E1000_IDLE_REST_STEP1 = 2;
+	constexpr stduint E1000_IDLE_REST_STEP2 = 5;
+	constexpr stduint E1000_IDLE_REST_STEP3 = 10;
+	constexpr stduint E1000_IDLE_REST_MAX = 20;
 	constexpr uint32 E1000_IRQ_MASK =
 		E1000_ICR_TXDW | E1000_ICR_TXQE | E1000_ICR_LSC |
 		E1000_ICR_RXSEQ | E1000_ICR_RXDMT0 | E1000_ICR_RXO | E1000_ICR_RXT0;
@@ -390,7 +395,8 @@ namespace {
 		return true;
 	}
 
-	void ProcessControlMessages() {
+	bool ProcessControlMessages() {
+		bool handled = false;
 		while (syscall(syscall_t::TMSG)) {
 			FMT_NetworkMsg_DRV_FRAME frame = {};
 			CommMsg recv_msg = {};
@@ -416,24 +422,35 @@ namespace {
 			reply_msg.data.length = sizeof(frame);
 			reply_msg.type = recv_msg.type;
 			Powercall::SysComm(COMM_SEND_ASYNC, recv_msg.src, &reply_msg);
+			handled = true;
 		}
+		return handled;
 	}
 
-	bool PushRxFrames() {
+	stdsint PushRxFrames() {
+		stdsint pushed = 0;
 		while (true) {
 			FMT_NetworkMsg_DRV_FRAME frame = {};
 			frame.capacity = NetworkDriverFrameCapacity;
 			uint32 rx_index = 0;
 			frame.status = g_e1000.peek_frame(frame.data, NetworkDriverFrameCapacity, rx_index);
-			if (frame.status <= 0) return true;
+			if (frame.status <= 0) return pushed;
 			frame.length = uint32(frame.status);
 			CommMsg send_msg = {};
 			send_msg.data.address = _IMM(&frame);
 			send_msg.data.length = sizeof(frame);
 			send_msg.type = _IMM(NetworkMsg::DRV_RX);
-			if (Powercall::SysComm(COMM_SEND_ASYNC, Task_Net_Serv, &send_msg)) return false;
+			if (Powercall::SysComm(COMM_SEND_ASYNC, Task_Net_Serv, &send_msg)) return -1;
 			g_e1000.consume_frame(rx_index);
+			pushed++;
 		}
+	}
+
+	stduint NextIdleRest(stduint current) {
+		if (current < E1000_IDLE_REST_STEP1) return E1000_IDLE_REST_STEP1;
+		if (current < E1000_IDLE_REST_STEP2) return E1000_IDLE_REST_STEP2;
+		if (current < E1000_IDLE_REST_STEP3) return E1000_IDLE_REST_STEP3;
+		return E1000_IDLE_REST_MAX;
 	}
 
 }
@@ -448,15 +465,24 @@ int main(int argc, char** argv) {
 	if (Powercall::DevPublish(g_e1000.dev_handle, PwcallDevicePublishCommand::Started) != 0) return -1;
 	g_e1000.enable_interrupts();
 	(void)PushRxFrames();
+	stduint idle_rest = E1000_IDLE_REST_MIN;
 
 	for (;;) {
-		ProcessControlMessages();
-		(void)g_e1000.service_interrupt();
-		if (!PushRxFrames()) {
-			syscall(syscall_t::REST, 1, 1);
+		bool active = ProcessControlMessages();
+		if (g_e1000.service_interrupt()) active = true;
+		const stdsint pushed = PushRxFrames();
+		if (pushed < 0) {
+			idle_rest = E1000_IDLE_REST_MIN;
+			syscall(syscall_t::REST, 1, idle_rest);
 			continue;
 		}
-		if (!syscall(syscall_t::TMSG)) syscall(syscall_t::REST, 1, 1);
+		if (pushed > 0) active = true;
+		if (active) {
+			idle_rest = E1000_IDLE_REST_MIN;
+			continue;
+		}
+		syscall(syscall_t::REST, 1, idle_rest);
+		idle_rest = NextIdleRest(idle_rest);
 	}
 }
 

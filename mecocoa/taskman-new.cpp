@@ -787,14 +787,16 @@ ProcessBlock* Taskman::CreateFork(ProcessBlock* fo, const CallgateFrame* frame) 
 		pb->load_slices[i] = fo->load_slices[i];
 		stduint appendix = fo->load_slices[i].address & _IMM(PAGE_SIZE - 1);
 		stduint pagesize = vaultAlignHexpow(PAGE_SIZE, fo->load_slices[i].length + appendix);
-		stduint newaddr = (stduint)mempool.allocate(pagesize, 12);
 		stduint mapsrc = fo->load_slices[i].address & ~_IMM(PAGE_SIZE - 1);
-		// ploginfo("fork.map: 0x%x->0x%x(0x%x)", mapsrc, newaddr, pagesize);
-		pb->paging.Map(mapsrc, newaddr, pagesize, PAGESIZE_4KB, _TEMP PGPROP_present | PGPROP_writable | PGPROP_user_access);// Map and allocation
-		// ploginfo("memcpyp: %x+%x, ., %x, ., %x", mapsrc, appendix, fo->load_slices[i].address, fo->load_slices[i].length);
-		MemCopyP((char*)mapsrc + appendix, pb->paging,
-			(void*)fo->load_slices[i].address, fo->paging,
-			fo->load_slices[i].length);
+		for (stduint vaddr = mapsrc; vaddr < mapsrc + pagesize; vaddr += PAGE_SIZE) {
+			void* parent_phy = fo->paging[vaddr];
+			if (parent_phy != (void*)~_IMM0 && pb->paging[vaddr] == (void*)~_IMM0) {
+				void* child_phy = mempool.allocate(PAGE_SIZE, 12);
+				pb->paging.Map(vaddr, (stduint)child_phy, PAGE_SIZE, PAGESIZE_4KB, _TEMP PGPROP_present | PGPROP_writable | PGPROP_user_access);
+				// ploginfo("memcpyp: %x+%x, ., %x, ., %x", mapsrc, appendix, fo->load_slices[i].address, fo->load_slices[i].length);
+				MemCopyP((void*)vaddr, pb->paging, (void*)vaddr, fo->paging, PAGE_SIZE);
+			}
+		}
 	}
 
 	tb->priority = target_fo_thread->priority;
@@ -1037,16 +1039,15 @@ ProcessBlock* Taskman::Exet(stduint parent, rostr usr_fullpath, char** usr_argv,
 	current_pb->vmas.Clear();
 
 	for0a(i, current_pb->load_slices) {
-		if (!current_pb->load_slices[i].address) break;
-		if (current_pb->load_slices[i].length >= PAGE_SIZE &&
-			(byte*)current_pb->paging[(current_pb->load_slices[i].address) & ~0xFFF] + PAGE_SIZE ==
-			(byte*)current_pb->paging[(current_pb->load_slices[i].address + PAGE_SIZE) & ~0xFFF]) {
-			free((byte*)current_pb->paging[(current_pb->load_slices[i].address) & ~0xFFF]);
-		}
-		else while (current_pb->load_slices[i].length) {
-			free((byte*)current_pb->paging[(current_pb->load_slices[i].address) & ~0xFFF]);
-			current_pb->load_slices[i].address += 0x1000;
-			current_pb->load_slices[i].length -= minof(0x1000, current_pb->load_slices[i].length);
+		if (!current_pb->load_slices[i].length) continue;
+		stduint vstart = current_pb->load_slices[i].address & ~_IMM(PAGE_SIZE - 1);
+		stduint vend = (current_pb->load_slices[i].address + current_pb->load_slices[i].length + PAGE_SIZE - 1) & ~_IMM(PAGE_SIZE - 1);
+		for (stduint vaddr = vstart; vaddr < vend; vaddr += PAGE_SIZE) {
+			void* phy = current_pb->paging[vaddr];
+			if (phy != (void*)~_IMM0) {
+				free(phy);
+				current_pb->paging.Unmap(vaddr, PAGE_SIZE);
+			}
 		}
 		current_pb->load_slices[i].address = 0;
 		current_pb->load_slices[i].length = 0;

@@ -495,19 +495,18 @@ static void _Exit_Cleanup(stduint pid)
 
 	// Release Segments
 	for0a(i, ppb->load_slices) {
-		if (!ppb->load_slices[i].address) break;
-		if (ppb->load_slices[i].length >= PAGE_SIZE&&
-			(byte*)ppb->paging[(ppb->load_slices[i].address) & ~0xFFF] + PAGE_SIZE ==
-			(byte*)ppb->paging[(ppb->load_slices[i].address + PAGE_SIZE) & ~0xFFF]) {// once allocated
-			// ploginfo("freeing segment: %[x] %[x]", ppb->load_slices[i].address, ppb->load_slices[i].length);
-			free((byte*)ppb->paging[(ppb->load_slices[i].address) & ~0xFFF]);
+		if (!ppb->load_slices[i].length) continue;
+		stduint vstart = ppb->load_slices[i].address & ~_IMM(PAGE_SIZE - 1);
+		stduint vend = (ppb->load_slices[i].address + ppb->load_slices[i].length + PAGE_SIZE - 1) & ~_IMM(PAGE_SIZE - 1);
+		for (stduint vaddr = vstart; vaddr < vend; vaddr += PAGE_SIZE) {
+			void* phy = ppb->paging[vaddr];
+			if (phy != (void*)~_IMM0) {
+				free(phy);
+				ppb->paging.Unmap(vaddr, PAGE_SIZE);
+			}
 		}
-		else while (ppb->load_slices[i].length) {
-			// ploginfo("freeing segment: %[x] %[x]", ppb->load_slices[i].address, ppb->load_slices[i].length);
-			free((byte*)ppb->paging[(ppb->load_slices[i].address) & ~0xFFF]);
-			ppb->load_slices[i].address += 0x1000;
-			ppb->load_slices[i].length -= minof(0x1000, ppb->load_slices[i].length);
-		}
+		ppb->load_slices[i].address = 0;
+		ppb->load_slices[i].length = 0;
 	}
 	// Heap
 	if (1) {

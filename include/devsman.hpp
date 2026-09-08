@@ -255,6 +255,10 @@ public:
 	static bool GetIPv4Interface(stduint index, void* iface, stduint length);
 	static stduint IPv4ArpCacheCount();
 	static bool GetIPv4ArpCacheEntry(stduint index, void* entry, stduint length);
+	static stduint TcpListenerCount();
+	static bool GetTcpListenerEntry(stduint index, void* entry, stduint length);
+	static stduint TcpConnectionCount();
+	static bool GetTcpConnectionEntry(stduint index, void* entry, stduint length);
 	static const char* LookupPciClassName(uint8 class_base, uint8 class_sub, uint8 class_if);
 	static const char* LookupPciDeviceName(uint16 vendor_id, uint16 device_id, uint8 class_base = 0, uint8 class_sub = 0);
 	static const char* LookupPciVendorName(uint16 vendor_id);

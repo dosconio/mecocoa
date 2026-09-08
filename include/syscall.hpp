@@ -196,6 +196,10 @@ enum class syscall_net_route_func_t : stduint {
 	IPv4Interface,
 	IPv4ArpCacheCount,
 	IPv4ArpCacheEntry,
+	TCPListenerCount,
+	TCPListenerEntry,
+	TCPConnectionCount,
+	TCPConnectionEntry,
 };
 
 constexpr uint16 syscall_net_route_flag_up = 0x0001u;
@@ -225,6 +229,27 @@ struct syscall_net_arp_ipv4_t {
 	uint8 hardware[6] = {};
 	uint16 flags = 0;
 	uint16 entry_index = 0;
+};
+
+struct syscall_net_tcp_listener_t {
+	uint16 port = 0;
+	uint16 flags = 0;
+	uint16 backlog = 0;
+	uint16 pending = 0;
+	uint16 entry_index = 0;
+};
+
+struct syscall_net_tcp_connection_t {
+	uint8 local_address[4] = {};
+	uint8 remote_address[4] = {};
+	uint16 local_port = 0;
+	uint16 remote_port = 0;
+	uint16 state = 0;
+	uint16 flags = 0;
+	uint16 entry_index = 0;
+	uint16 rx_bytes = 0;
+	uint16 tx_pending = 0;
+	uint16 tx_retry_count = 0;
 };
 
 _ESYM_C stduint syscall(syscall_t callid, stduint p1 = 0, stduint p2 = 0, stduint p3 = 0);// MCCA 4 PARA SYSC

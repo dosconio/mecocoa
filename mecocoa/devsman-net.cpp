@@ -32,10 +32,18 @@ namespace {
 	constexpr stduint NetTcpConnectionCapacity = 8;
 	constexpr stduint NetTcpAcceptQueueDepth = 4;
 	constexpr stduint NetTcpAcceptWaiterCapacity = 4;
-	constexpr stduint NetTcpConnectWaiterCapacity = 2;
-	constexpr stduint NetTcpRxQueueDepth = 2;
-	constexpr stduint NetTcpRxPayloadSize = 512;
+	constexpr stduint NetTcpConnectTimeoutTicks = 3 * CONFIG_SysTickFreq;
+	constexpr stduint NetTcpConnectRetryTicks = CONFIG_SysTickFreq;
+	constexpr stduint NetTcpConnectRetryLimit = 3;
+	constexpr stduint NetTcpControlRetryTicks = CONFIG_SysTickFreq;
+	constexpr stduint NetTcpControlRetryLimit = 3;
+	constexpr stduint NetTcpRxStreamSize = 2048;
 	constexpr stduint NetTcpRxWaiterCapacity = 2;
+	constexpr stduint NetTcpTxPendingCapacity = 4;
+	constexpr stduint NetTcpTxPayloadSize = 512;
+	constexpr stduint NetTcpTxRetryTicks = CONFIG_SysTickFreq;
+	constexpr stduint NetTcpTxRetryLimit = 3;
+	constexpr stduint NetTcpTimeWaitTicks = 2 * CONFIG_SysTickFreq;
 	constexpr uint16 NetTcpWindowSize = 4096;
 	constexpr uint16 NetUdpEchoPort = 7;
 	constexpr uint16 NetUdpEphemeralPortBegin = 49152;
@@ -120,18 +128,46 @@ namespace {
 		stduint accept_waiter_count;
 	};
 
+	struct NetTcpTxPending {
+		uint32 sequence;
+		stduint length;
+		stduint last_tick;
+		stduint retry_count;
+		bool valid;
+	};
+
+	enum class NetTcpClosePhase : uint8 {
+		None,
+		FinWait1,
+		FinWait2,
+		Closing,
+		TimeWait,
+	};
+
 	struct NetTcpConnection {
 		uni::Network::TCPObject* tcp;
-		uint8* rx_payloads;
-		stduint rx_length[NetTcpRxQueueDepth];
+		uint8* rx_stream;
 		stduint rx_head;
 		stduint rx_tail;
 		stduint rx_count;
-		ThreadBlock* connect_waiters[NetTcpConnectWaiterCapacity];
-		stduint connect_waiter_count;
+		uint8* tx_payloads;
+		NetTcpTxPending tx_pending[NetTcpTxPendingCapacity];
+		stduint tx_head;
+		stduint tx_tail;
+		stduint tx_count;
 		ThreadBlock* rx_waiters[NetTcpRxWaiterCapacity];
 		stduint rx_waiter_count;
+		stduint connect_started_tick;
+		stduint last_syn_tick;
+		stduint syn_retry_count;
+		stduint last_synack_tick;
+		stduint synack_retry_count;
+		stduint last_fin_tick;
+		stduint fin_retry_count;
+		stduint time_wait_tick;
+		NetTcpClosePhase close_phase;
 		bool active_open;
+		bool local_fin_acknowledged;
 		bool valid;
 	};
 
@@ -596,19 +632,28 @@ namespace {
 			auto& connection = net_tcp_connections[i];
 			if (connection.valid) continue;
 			auto* tcp = connection.tcp;
-			uint8* rx_payloads = connection.rx_payloads;
+			uint8* rx_stream = connection.rx_stream;
+			uint8* tx_payloads = connection.tx_payloads;
 			connection = {};
 			connection.tcp = tcp;
-			connection.rx_payloads = rx_payloads;
+			connection.rx_stream = rx_stream;
+			connection.tx_payloads = tx_payloads;
 			if (!EnsureTcpObject(connection)) return nullptr;
 			connection.tcp->Bind({ uni::Network::NetworkAddressIPv4(local_ip), local_port });
 			connection.tcp->Connect({ uni::Network::NetworkAddressIPv4(remote_ip), remote_port });
 			connection.rx_head = 0;
 			connection.rx_tail = 0;
 			connection.rx_count = 0;
-			connection.connect_waiter_count = 0;
 			connection.rx_waiter_count = 0;
+			connection.connect_started_tick = 0;
+			connection.last_syn_tick = 0;
+			connection.syn_retry_count = 0;
+			connection.last_synack_tick = 0;
+			connection.synack_retry_count = 0;
+			connection.last_fin_tick = 0;
+			connection.fin_retry_count = 0;
 			connection.active_open = false;
+			connection.local_fin_acknowledged = false;
 			connection.valid = true;
 			return &connection;
 		}
@@ -645,24 +690,6 @@ namespace {
 		listener.accept_waiter_count = 0;
 	}
 
-	void WakeTcpConnectWaiters(NetTcpConnection& connection) {
-		for0(i, connection.connect_waiter_count) {
-			if (connection.connect_waiters[i]) {
-				connection.connect_waiters[i]->Unblock(ThreadBlock::BlockReason::BR_RecvMsg);
-				connection.connect_waiters[i] = nullptr;
-			}
-		}
-		connection.connect_waiter_count = 0;
-	}
-
-	bool AddTcpConnectWaiter(NetTcpConnection& connection, ThreadBlock* th) {
-		if (!th) return false;
-		for0(i, connection.connect_waiter_count) if (connection.connect_waiters[i] == th) return true;
-		if (connection.connect_waiter_count >= NetTcpConnectWaiterCapacity) return false;
-		connection.connect_waiters[connection.connect_waiter_count++] = th;
-		return true;
-	}
-
 	bool IsTcpConnectReady(const NetTcpConnection& connection) {
 		return connection.tcp &&
 			connection.tcp->getControl().state == uni::Network::TCPConnectionState::Established;
@@ -694,14 +721,15 @@ namespace {
 		for0(i, NetTcpConnectionCapacity) {
 			if (net_tcp_connections[i].valid && net_tcp_connections[i].tcp &&
 				net_tcp_connections[i].tcp->getControl().context.local.port == port) {
-				WakeTcpConnectWaiters(net_tcp_connections[i]);
 				WakeTcpRxReaders(net_tcp_connections[i]);
 				auto* tcp = net_tcp_connections[i].tcp;
-				uint8* rx_payloads = net_tcp_connections[i].rx_payloads;
+				uint8* rx_stream = net_tcp_connections[i].rx_stream;
+				uint8* tx_payloads = net_tcp_connections[i].tx_payloads;
 				net_tcp_connections[i] = {};
 				net_tcp_connections[i].tcp = tcp;
 				net_tcp_connections[i].tcp->Reset();
-				net_tcp_connections[i].rx_payloads = rx_payloads;
+				net_tcp_connections[i].rx_stream = rx_stream;
+				net_tcp_connections[i].tx_payloads = tx_payloads;
 			}
 		}
 	}
@@ -710,26 +738,23 @@ namespace {
 		auto* connection = FindTcpConnection(context.local.address, context.local.port,
 			context.remote.address, context.remote.port);
 		if (!connection) return false;
-		WakeTcpConnectWaiters(*connection);
 		WakeTcpRxReaders(*connection);
 		auto* tcp = connection->tcp;
-		uint8* rx_payloads = connection->rx_payloads;
+		uint8* rx_stream = connection->rx_stream;
+		uint8* tx_payloads = connection->tx_payloads;
 		*connection = {};
 		connection->tcp = tcp;
 		connection->tcp->Reset();
-		connection->rx_payloads = rx_payloads;
+		connection->rx_stream = rx_stream;
+		connection->tx_payloads = tx_payloads;
 		return true;
 	}
 
-	uint8* GetTcpRxPayloadSlot(NetTcpConnection& connection, stduint index) {
-		return connection.rx_payloads + index * NetTcpRxPayloadSize;
-	}
-
 	bool EnsureTcpRxStorage(NetTcpConnection& connection) {
-		if (!connection.rx_payloads) {
-			connection.rx_payloads = (uint8*)mempool.allocate(NetTcpRxPayloadSize * NetTcpRxQueueDepth, 12);
+		if (!connection.rx_stream) {
+			connection.rx_stream = (uint8*)mempool.allocate(NetTcpRxStreamSize, 12);
 		}
-		return connection.rx_payloads != nullptr;
+		return connection.rx_stream != nullptr;
 	}
 
 	void WakeTcpRxReaders(NetTcpConnection& connection) {
@@ -758,29 +783,29 @@ namespace {
 
 	bool EnqueueTcpRx(NetTcpConnection& connection, const uni::Network::TCPSegmentView& tcp) {
 		if (!tcp.payload_length) return true;
-		if (tcp.payload_length > NetTcpRxPayloadSize) return false;
-		if (connection.rx_count >= NetTcpRxQueueDepth) return false;
+		if (tcp.payload_length > NetTcpRxStreamSize - connection.rx_count) return false;
 		if (!EnsureTcpRxStorage(connection)) return false;
-		uint8* slot = GetTcpRxPayloadSlot(connection, connection.rx_tail);
-		for0(i, tcp.payload_length) slot[i] = tcp.payload[i];
-		connection.rx_length[connection.rx_tail] = tcp.payload_length;
-		connection.rx_tail = (connection.rx_tail + 1) % NetTcpRxQueueDepth;
-		connection.rx_count++;
+		for0(i, tcp.payload_length) {
+			connection.rx_stream[connection.rx_tail] = tcp.payload[i];
+			connection.rx_tail = (connection.rx_tail + 1) % NetTcpRxStreamSize;
+		}
+		connection.rx_count += tcp.payload_length;
 		WakeTcpRxReaders(connection);
 		return true;
 	}
 
 	stdsint DequeueTcpRx(NetTcpConnection& connection, void* payload, stduint capacity) {
 		if (!connection.rx_count) return 0;
-		const stduint length = connection.rx_length[connection.rx_head];
-		if (!payload || capacity < length) return -1;
+		if (!capacity) return 0;
+		if (!payload) return -1;
+		const stduint copied = capacity < connection.rx_count ? capacity : connection.rx_count;
 		uint8* output = reinterpret_cast<uint8*>(payload);
-		uint8* slot = GetTcpRxPayloadSlot(connection, connection.rx_head);
-		for0(i, length) output[i] = slot[i];
-		connection.rx_length[connection.rx_head] = 0;
-		connection.rx_head = (connection.rx_head + 1) % NetTcpRxQueueDepth;
-		connection.rx_count--;
-		return stdsint(length);
+		for0(i, copied) {
+			output[i] = connection.rx_stream[connection.rx_head];
+			connection.rx_head = (connection.rx_head + 1) % NetTcpRxStreamSize;
+		}
+		connection.rx_count -= copied;
+		return stdsint(copied);
 	}
 
 	uint8* GetUdpInboxPayloadSlot(NetUdpInbox& inbox, stduint index) {
@@ -988,6 +1013,8 @@ namespace {
 
 	bool SendTcpSyn(NetTcpConnection& connection) {
 		if (!connection.tcp || !EnsureTcpTxBuffer()) return false;
+		connection.last_syn_tick = tick;
+		connection.syn_retry_count++;
 		auto& control = connection.tcp->getControl();
 		const auto& local = control.context.local;
 		const auto& remote = control.context.remote;
@@ -1019,6 +1046,277 @@ namespace {
 		};
 		const stdsint sent = SendIPv4PacketFrame(*route.dev, target_mac, packet);
 		return sent > 0;
+	}
+
+	bool SendTcpControl(NetTcpConnection& connection, uint8 flags, uint32 sequence, uint32 acknowledgment) {
+		if (!connection.tcp || !EnsureTcpTxBuffer()) return false;
+		auto& control = connection.tcp->getControl();
+		const auto& local = control.context.local;
+		const auto& remote = control.context.remote;
+		if (!local.port || !remote.port || local.address.isZero() || remote.address.isZero()) return false;
+
+		NetIPv4Route route{};
+		if (!ResolveIPv4Route(remote.address, route)) return false;
+		uni::Network::MacAddress target_mac{};
+		if (!LookupArpCache(route.next_hop, target_mac)) {
+			return SendArpRequest(*route.dev, net_buffers.tcp_tx, route.next_hop);
+		}
+
+		auto* tcp = reinterpret_cast<uni::Network::TCPHeader*>(net_buffers.tcp_tx);
+		uni::Network::BuildTCPHeader(*tcp, local.port, remote.port,
+			sequence, acknowledgment, flags, NetTcpWindowSize);
+		const uint16 checksum = uni::Network::TCPIPv4Checksum(local.address, remote.address,
+			tcp, uni::Network::TCPMinHeaderLength);
+		uni::Network::EthernetWrite16(tcp->checksum, checksum);
+
+		uni::Network::NetworkPacketContext packet{
+			uni::Network::NetworkAddressIPv4(local.address),
+			uni::Network::NetworkAddressIPv4(remote.address),
+			uint8(uni::Network::IPv4Protocol::TCP),
+			net_buffers.tcp_tx,
+			uni::Network::TCPMinHeaderLength,
+			net_ipv4_identification++,
+			64,
+		};
+		const stdsint sent = SendIPv4PacketFrame(*route.dev, target_mac, packet);
+		return sent > 0;
+	}
+
+	bool SendTcpSynAck(NetTcpConnection& connection) {
+		if (!connection.tcp) return false;
+		const auto& control = connection.tcp->getControl();
+		if (!control.local_next_sequence) return false;
+		if (!SendTcpControl(connection, uni::Network::TCPFlagSYN | uni::Network::TCPFlagACK,
+			control.local_next_sequence - 1, control.remote_next_sequence)) return false;
+		connection.last_synack_tick = tick;
+		connection.synack_retry_count++;
+		return true;
+	}
+
+	bool SendTcpFin(NetTcpConnection& connection) {
+		if (!connection.tcp) return false;
+		const auto& control = connection.tcp->getControl();
+		if (!control.local_next_sequence) return false;
+		if (!SendTcpControl(connection, uni::Network::TCPFlagFIN | uni::Network::TCPFlagACK,
+			control.local_next_sequence - 1, control.remote_next_sequence)) return false;
+		connection.last_fin_tick = tick;
+		connection.fin_retry_count++;
+		return true;
+	}
+
+	uint8* GetTcpTxPayloadSlot(NetTcpConnection& connection, stduint index) {
+		return connection.tx_payloads + index * NetTcpTxPayloadSize;
+	}
+
+	bool EnsureTcpTxStorage(NetTcpConnection& connection) {
+		if (!connection.tx_payloads) {
+			connection.tx_payloads = (uint8*)mempool.allocate(NetTcpTxPayloadSize * NetTcpTxPendingCapacity, 12);
+		}
+		return connection.tx_payloads != nullptr;
+	}
+
+	bool HasTcpTxPendingSpace(NetTcpConnection& connection) {
+		return connection.tx_count < NetTcpTxPendingCapacity && EnsureTcpTxStorage(connection);
+	}
+
+	bool IsTcpTxRetryExhausted(const NetTcpConnection& connection) {
+		if (!connection.tx_count) return false;
+		const auto& pending = connection.tx_pending[connection.tx_head];
+		return pending.valid && pending.length && pending.retry_count >= NetTcpTxRetryLimit;
+	}
+
+	void MarkTcpFinAcknowledged(NetTcpConnection& connection) {
+		connection.local_fin_acknowledged = true;
+		if (connection.close_phase == NetTcpClosePhase::FinWait1) {
+			connection.close_phase = NetTcpClosePhase::FinWait2;
+		}
+		else if (connection.close_phase == NetTcpClosePhase::Closing) {
+			connection.close_phase = NetTcpClosePhase::TimeWait;
+			connection.time_wait_tick = tick;
+		}
+	}
+
+	void MarkTcpActiveFinReceived(NetTcpConnection& connection) {
+		if (connection.close_phase == NetTcpClosePhase::FinWait1 &&
+			!connection.local_fin_acknowledged) {
+			connection.close_phase = NetTcpClosePhase::Closing;
+			return;
+		}
+		if (connection.close_phase == NetTcpClosePhase::FinWait2 ||
+			connection.local_fin_acknowledged) {
+			connection.close_phase = NetTcpClosePhase::TimeWait;
+			connection.time_wait_tick = tick;
+		}
+	}
+
+	bool EnqueueTcpTxPending(NetTcpConnection& connection,
+		uint32 sequence, const void* payload, stduint length) {
+		if (!length) return true;
+		if (length > NetTcpTxPayloadSize) return false;
+		if (!HasTcpTxPendingSpace(connection)) return false;
+		auto& pending = connection.tx_pending[connection.tx_tail];
+		uint8* slot = GetTcpTxPayloadSlot(connection, connection.tx_tail);
+		const auto* input = reinterpret_cast<const uint8*>(payload);
+		for0(i, length) slot[i] = input[i];
+		pending.sequence = sequence;
+		pending.length = length;
+		pending.last_tick = tick;
+		pending.retry_count = 0;
+		pending.valid = true;
+		connection.tx_tail = (connection.tx_tail + 1) % NetTcpTxPendingCapacity;
+		connection.tx_count++;
+		return true;
+	}
+
+	void AcknowledgeTcpTxPending(NetTcpConnection& connection, uint32 acknowledgment) {
+		while (connection.tx_count) {
+			auto& pending = connection.tx_pending[connection.tx_head];
+			if (!pending.valid || !pending.length) {
+				pending = {};
+				connection.tx_head = (connection.tx_head + 1) % NetTcpTxPendingCapacity;
+				connection.tx_count--;
+				continue;
+			}
+			const uint32 end_sequence = pending.sequence + uint32(pending.length);
+			if (acknowledgment <= pending.sequence) return;
+			if (acknowledgment >= end_sequence) {
+				pending = {};
+				connection.tx_head = (connection.tx_head + 1) % NetTcpTxPendingCapacity;
+				connection.tx_count--;
+				continue;
+			}
+			const stduint consumed = stduint(acknowledgment - pending.sequence);
+			uint8* slot = GetTcpTxPayloadSlot(connection, connection.tx_head);
+			const stduint remaining = pending.length - consumed;
+			for0(i, remaining) slot[i] = slot[consumed + i];
+			pending.sequence = acknowledgment;
+			pending.length = remaining;
+			return;
+		}
+	}
+
+	bool SendTcpPendingData(NetTcpConnection& connection, stduint index) {
+		if (index >= NetTcpTxPendingCapacity) return false;
+		auto& pending = connection.tx_pending[index];
+		if (!connection.tcp || !pending.valid || !pending.length) return false;
+		if (!EnsureTcpTxBuffer()) return false;
+		auto& control = connection.tcp->getControl();
+		const auto& local = control.context.local;
+		const auto& remote = control.context.remote;
+		if (!local.port || !remote.port || local.address.isZero() || remote.address.isZero()) return false;
+
+		NetIPv4Route route{};
+		if (!ResolveIPv4Route(remote.address, route)) return false;
+		uni::Network::MacAddress target_mac{};
+		if (!LookupArpCache(route.next_hop, target_mac)) {
+			return SendArpRequest(*route.dev, net_buffers.tcp_tx, route.next_hop);
+		}
+
+		auto* tcp = reinterpret_cast<uni::Network::TCPHeader*>(net_buffers.tcp_tx);
+		uni::Network::BuildTCPHeader(*tcp, local.port, remote.port,
+			pending.sequence, control.remote_next_sequence,
+			uint8(uni::Network::TCPFlagACK | uni::Network::TCPFlagPSH), NetTcpWindowSize);
+		uint8* target = net_buffers.tcp_tx + uni::Network::TCPMinHeaderLength;
+		uint8* source = GetTcpTxPayloadSlot(connection, index);
+		for0(i, pending.length) target[i] = source[i];
+		const stduint tcp_length = uni::Network::TCPMinHeaderLength + pending.length;
+		const uint16 checksum = uni::Network::TCPIPv4Checksum(local.address, remote.address, tcp, tcp_length);
+		uni::Network::EthernetWrite16(tcp->checksum, checksum);
+
+		uni::Network::NetworkPacketContext packet{
+			uni::Network::NetworkAddressIPv4(local.address),
+			uni::Network::NetworkAddressIPv4(remote.address),
+			uint8(uni::Network::IPv4Protocol::TCP),
+			net_buffers.tcp_tx,
+			tcp_length,
+			net_ipv4_identification++,
+			64,
+		};
+		const stdsint sent = SendIPv4PacketFrame(*route.dev, target_mac, packet);
+		if (sent <= 0) return false;
+		pending.last_tick = tick;
+		pending.retry_count++;
+		return true;
+	}
+
+	bool IsTcpConnectExpired(const NetTcpConnection& connection) {
+		return connection.connect_started_tick &&
+			tick - connection.connect_started_tick >= NetTcpConnectTimeoutTicks;
+	}
+
+	bool ShouldRetryTcpConnect(const NetTcpConnection& connection) {
+		if (connection.syn_retry_count >= NetTcpConnectRetryLimit) return false;
+		return !connection.last_syn_tick ||
+			tick - connection.last_syn_tick >= NetTcpConnectRetryTicks;
+	}
+
+	void ProcessTcpConnectTimers() {
+		for0(i, NetTcpConnectionCapacity) {
+			auto& connection = net_tcp_connections[i];
+			if (!connection.valid || !connection.active_open || !connection.tcp) continue;
+			if (IsTcpConnectReady(connection)) continue;
+			if (IsTcpConnectExpired(connection)) {
+				const auto context = connection.tcp->getControl().context;
+				ReleaseTcpConnection(context);
+				continue;
+			}
+			if (ShouldRetryTcpConnect(connection)) {
+				(void)SendTcpSyn(connection);
+			}
+		}
+	}
+
+	void ProcessTcpControlTimers() {
+		for0(i, NetTcpConnectionCapacity) {
+			auto& connection = net_tcp_connections[i];
+			if (!connection.valid || !connection.tcp) continue;
+			const auto& control = connection.tcp->getControl();
+			if (connection.close_phase == NetTcpClosePhase::TimeWait &&
+				tick - connection.time_wait_tick >= NetTcpTimeWaitTicks) {
+				const auto context = control.context;
+				ReleaseTcpConnection(context);
+				continue;
+			}
+			if (connection.tx_count) {
+				auto& pending = connection.tx_pending[connection.tx_head];
+				if (pending.valid && pending.length &&
+					pending.retry_count < NetTcpTxRetryLimit &&
+					tick - pending.last_tick >= NetTcpTxRetryTicks) {
+					(void)SendTcpPendingData(connection, connection.tx_head);
+					continue;
+				}
+			}
+			if (!connection.active_open &&
+				control.state == uni::Network::TCPConnectionState::SynReceived &&
+				connection.synack_retry_count < NetTcpControlRetryLimit &&
+				(!connection.last_synack_tick || tick - connection.last_synack_tick >= NetTcpControlRetryTicks)) {
+				(void)SendTcpSynAck(connection);
+				continue;
+			}
+			if (control.state == uni::Network::TCPConnectionState::LastAck &&
+				connection.fin_retry_count < NetTcpControlRetryLimit &&
+				(!connection.last_fin_tick || tick - connection.last_fin_tick >= NetTcpControlRetryTicks)) {
+				(void)SendTcpFin(connection);
+			}
+		}
+	}
+
+	bool HasTcpTimersPending() {
+		for0(i, NetTcpConnectionCapacity) {
+			auto& connection = net_tcp_connections[i];
+			if (!connection.valid || !connection.tcp) continue;
+			const auto& control = connection.tcp->getControl();
+			if (connection.active_open && !IsTcpConnectReady(connection)) return true;
+			if (!connection.active_open &&
+				control.state == uni::Network::TCPConnectionState::SynReceived &&
+				connection.synack_retry_count < NetTcpControlRetryLimit) return true;
+			if (control.state == uni::Network::TCPConnectionState::LastAck &&
+				connection.fin_retry_count < NetTcpControlRetryLimit) return true;
+			if (connection.close_phase == NetTcpClosePhase::TimeWait) return true;
+			if (connection.tx_count &&
+				connection.tx_pending[connection.tx_head].retry_count < NetTcpTxRetryLimit) return true;
+		}
+		return false;
 	}
 
 	void FlushPendingTcpConnectsFor(const uni::Network::IPv4Address& target_ip) {
@@ -1055,6 +1353,35 @@ namespace {
 			return false;
 		}
 		return true;
+	}
+
+	bool SendTcpResetForSegment(uni::Network::LinkDevice& dev,
+		const uni::Network::EthernetFrameView& frame, const uni::Network::IPv4PacketView& ipv4,
+		const uni::Network::TCPSegmentView& tcp) {
+		const auto local_mac = dev.getAddress();
+		const stduint reset_len = uni::Network::BuildTCPIPv4Reset(net_buffers.tx, NetFrameBufferSize,
+			local_mac, frame.source, net_config.ipv4_address, ipv4, tcp, net_ipv4_identification++);
+		if (!reset_len) {
+			plogwarn("[Net] tcp reset build failed");
+			return false;
+		}
+		uni::Network::LinkFrameView reset{
+			net_buffers.tx,
+			reset_len,
+		};
+		const stdsint sent = dev.Send(reset);
+		if (sent <= 0) {
+			plogwarn("[Net] tcp reset send failed");
+			return false;
+		}
+		return true;
+	}
+
+	bool IsTcpAcknowledgmentInRange(const NetTcpConnection& connection,
+		const uni::Network::TCPSegmentView& tcp) {
+		if (!(tcp.flags & uni::Network::TCPFlagACK)) return true;
+		if (!connection.tcp) return false;
+		return tcp.acknowledgment <= connection.tcp->getControl().local_next_sequence;
 	}
 
 	bool PrepareTcpTransmit(NetTcpConnection& connection) {
@@ -1220,12 +1547,22 @@ namespace {
 		auto* listener_for_port = FindTcpListener(tcp.destination_port);
 		auto* connection = FindTcpConnection(ipv4.destination, tcp.destination_port,
 			ipv4.source, tcp.source_port);
+		LearnArpCache(ipv4.source, frame.source);
 		if (tcp.flags & uni::Network::TCPFlagRST) {
 			if (connection) {
 				const auto context = connection->tcp->getControl().context;
 				ReleaseTcpConnection(context);
 			}
 			return;
+		}
+		if (connection && !IsTcpAcknowledgmentInRange(*connection, tcp)) return;
+		if (connection && (tcp.flags & uni::Network::TCPFlagACK)) {
+			AcknowledgeTcpTxPending(*connection, tcp.acknowledgment);
+			if (connection->active_open &&
+				connection->tcp->getControl().state == uni::Network::TCPConnectionState::LastAck &&
+				tcp.acknowledgment == connection->tcp->getControl().local_next_sequence) {
+				MarkTcpFinAcknowledged(*connection);
+			}
 		}
 		if (connection && connection->active_open &&
 			(tcp.flags & (uni::Network::TCPFlagSYN | uni::Network::TCPFlagACK)) ==
@@ -1240,7 +1577,6 @@ namespace {
 			SendTcpAckForSegment(dev, frame, ipv4, tcp,
 				control.local_next_sequence, control.remote_next_sequence,
 				"[Net] tcp connect ack");
-			WakeTcpConnectWaiters(*connection);
 			return;
 		}
 		if (listener_for_port) {
@@ -1253,6 +1589,7 @@ namespace {
 				}
 				if (!connection) {
 					plogwarn("[Net] tcp connection table full");
+					SendTcpResetForSegment(dev, frame, ipv4, tcp);
 					return;
 				}
 				auto& control = connection->tcp->getControl();
@@ -1295,18 +1632,34 @@ namespace {
 					synack_len,
 				};
 				const stdsint sent = dev.Send(synack);
-				if (sent <= 0) plogwarn("[Net] tcp syn-ack send failed");
+				if (sent > 0) {
+					connection->last_synack_tick = tick;
+					connection->synack_retry_count++;
+				}
+				else {
+					plogwarn("[Net] tcp syn-ack send failed");
+				}
 				return;
 			}
 			if (connection && tcp.payload_length) {
 				auto& control = connection->tcp->getControl();
 				const bool in_order = connection->tcp->isExpectedSegment(tcp);
+				bool release_active_close = false;
 				if (in_order) {
 					if (!EnqueueTcpRx(*connection, tcp)) {
 						plogwarn("[Net] tcp rx queue full");
+						SendTcpAckForSegment(dev, frame, ipv4, tcp,
+							control.local_next_sequence, control.remote_next_sequence,
+							"[Net] tcp rx full ack");
 						return;
 					}
 					connection->tcp->ConsumeExpectedSegment(tcp);
+					release_active_close = (tcp.flags & uni::Network::TCPFlagFIN) &&
+						connection->active_open &&
+						connection->tcp->getControl().state == uni::Network::TCPConnectionState::LastAck &&
+						(connection->local_fin_acknowledged ||
+							((tcp.flags & uni::Network::TCPFlagACK) &&
+								tcp.acknowledgment == connection->tcp->getControl().local_next_sequence));
 					if (tcp.flags & uni::Network::TCPFlagFIN) WakeTcpRxReaders(*connection);
 				}
 				const auto local_mac = dev.getAddress();
@@ -1324,16 +1677,25 @@ namespace {
 				};
 				const stdsint sent = dev.Send(ack);
 				if (sent <= 0) plogwarn("[Net] tcp data ack send failed");
+				if (release_active_close) {
+					MarkTcpActiveFinReceived(*connection);
+				}
 				return;
 			}
 			if (tcp.flags & uni::Network::TCPFlagFIN) {
 				const auto local_mac = dev.getAddress();
 				const uint32 remote_next_sequence = tcp.sequence + uint32(tcp.payload_length) + 1;
 				uint32 local_next_sequence = tcp.acknowledgment;
+				bool release_active_close = false;
 				if (connection) {
-					connection->tcp->ConsumeExpectedSegment(tcp);
+					const bool in_order = connection->tcp->ConsumeExpectedSegment(tcp);
 					local_next_sequence = connection->tcp->getControl().local_next_sequence;
-					WakeTcpRxReaders(*connection);
+					release_active_close = connection->active_open &&
+						connection->tcp->getControl().state == uni::Network::TCPConnectionState::LastAck &&
+						(connection->local_fin_acknowledged ||
+							((tcp.flags & uni::Network::TCPFlagACK) &&
+								tcp.acknowledgment == connection->tcp->getControl().local_next_sequence));
+					if (in_order) WakeTcpRxReaders(*connection);
 				}
 				const stduint ack_len = uni::Network::BuildTCPIPv4Ack(net_buffers.tx, NetFrameBufferSize,
 					local_mac, frame.source, net_config.ipv4_address, ipv4, tcp,
@@ -1349,7 +1711,10 @@ namespace {
 				};
 				const stdsint sent = dev.Send(ack);
 				if (sent <= 0) plogwarn("[Net] tcp ack send failed");
-				if (connection && connection->tcp->AcceptCloseAck(tcp)) {
+				if (connection && release_active_close) {
+					MarkTcpActiveFinReceived(*connection);
+				}
+				else if (connection && !connection->active_open && connection->tcp->AcceptCloseAck(tcp)) {
 					const auto context = connection->tcp->getControl().context;
 					ReleaseTcpConnection(context);
 				}
@@ -1360,12 +1725,19 @@ namespace {
 					auto* listener = FindTcpListener(connection->tcp->getControl().context.local.port);
 					if (listener && !EnqueueTcpAccept(*listener, *connection)) {
 						plogwarn("[Net] tcp accept queue full");
+						SendTcpResetForSegment(dev, frame, ipv4, tcp);
 						const auto context = connection->tcp->getControl().context;
 						ReleaseTcpConnection(context);
 					}
 					return;
 				}
-				if (connection->tcp->AcceptCloseAck(tcp)) {
+				if (connection->active_open &&
+					connection->tcp->getControl().state == uni::Network::TCPConnectionState::LastAck &&
+					tcp.acknowledgment == connection->tcp->getControl().local_next_sequence) {
+					MarkTcpFinAcknowledged(*connection);
+					return;
+				}
+				if (!connection->active_open && connection->tcp->AcceptCloseAck(tcp)) {
 					const auto context = connection->tcp->getControl().context;
 					ReleaseTcpConnection(context);
 				}
@@ -1375,54 +1747,66 @@ namespace {
 		if (connection && tcp.payload_length) {
 			auto& control = connection->tcp->getControl();
 			const bool in_order = connection->tcp->isExpectedSegment(tcp);
+			bool release_active_close = false;
 			if (in_order) {
 				if (!EnqueueTcpRx(*connection, tcp)) {
 					plogwarn("[Net] tcp rx queue full");
+					SendTcpAckForSegment(dev, frame, ipv4, tcp,
+						control.local_next_sequence, control.remote_next_sequence,
+						"[Net] tcp rx full ack");
 					return;
 				}
 				connection->tcp->ConsumeExpectedSegment(tcp);
+				release_active_close = (tcp.flags & uni::Network::TCPFlagFIN) &&
+					connection->active_open &&
+					connection->tcp->getControl().state == uni::Network::TCPConnectionState::LastAck &&
+					(connection->local_fin_acknowledged ||
+						((tcp.flags & uni::Network::TCPFlagACK) &&
+							tcp.acknowledgment == connection->tcp->getControl().local_next_sequence));
 				if (tcp.flags & uni::Network::TCPFlagFIN) WakeTcpRxReaders(*connection);
 			}
 			SendTcpAckForSegment(dev, frame, ipv4, tcp,
 				control.local_next_sequence, control.remote_next_sequence,
 				"[Net] tcp data ack");
+			if (release_active_close) {
+				MarkTcpActiveFinReceived(*connection);
+			}
 			return;
 		}
 		if (connection && (tcp.flags & uni::Network::TCPFlagFIN)) {
-			connection->tcp->ConsumeExpectedSegment(tcp);
-			WakeTcpRxReaders(*connection);
+			const bool in_order = connection->tcp->ConsumeExpectedSegment(tcp);
+			if (in_order) WakeTcpRxReaders(*connection);
 			auto& control = connection->tcp->getControl();
 			SendTcpAckForSegment(dev, frame, ipv4, tcp,
 				control.local_next_sequence, control.remote_next_sequence,
 				"[Net] tcp ack");
-			if (connection->tcp->AcceptCloseAck(tcp)) {
+			if (connection->active_open &&
+				control.state == uni::Network::TCPConnectionState::LastAck &&
+				(connection->local_fin_acknowledged ||
+					((tcp.flags & uni::Network::TCPFlagACK) &&
+						tcp.acknowledgment == control.local_next_sequence))) {
+				MarkTcpActiveFinReceived(*connection);
+			}
+			else if (!connection->active_open && connection->tcp->AcceptCloseAck(tcp)) {
 				const auto context = connection->tcp->getControl().context;
 				ReleaseTcpConnection(context);
 			}
 			return;
 		}
 		if (connection && (tcp.flags & uni::Network::TCPFlagACK)) {
-			if (connection->tcp->AcceptCloseAck(tcp)) {
+			if (connection->active_open &&
+				connection->tcp->getControl().state == uni::Network::TCPConnectionState::LastAck &&
+				tcp.acknowledgment == connection->tcp->getControl().local_next_sequence) {
+				MarkTcpFinAcknowledged(*connection);
+				return;
+			}
+			if (!connection->active_open && connection->tcp->AcceptCloseAck(tcp)) {
 				const auto context = connection->tcp->getControl().context;
 				ReleaseTcpConnection(context);
 			}
 			return;
 		}
-		const auto local_mac = dev.getAddress();
-		const stduint reset_len = uni::Network::BuildTCPIPv4Reset(net_buffers.tx, NetFrameBufferSize,
-			local_mac, frame.source, net_config.ipv4_address, ipv4, tcp, net_ipv4_identification++);
-		if (!reset_len) {
-			plogwarn("[Net] tcp reset build failed");
-			return;
-		}
-		uni::Network::LinkFrameView reset{
-			net_buffers.tx,
-			reset_len,
-		};
-		const stdsint sent = dev.Send(reset);
-		if (sent <= 0) {
-			plogwarn("[Net] tcp reset send failed");
-		}
+		SendTcpResetForSegment(dev, frame, ipv4, tcp);
 	}
 
 	void HandleIPv4FrameByProtocol(uni::Network::LinkDevice& dev, const uni::Network::EthernetFrameView& frame) {
@@ -1484,6 +1868,8 @@ namespace {
 			plogwarn("[Net] frame buffer allocation failed");
 			return;
 		}
+		ProcessTcpConnectTimers();
+		ProcessTcpControlTimers();
 		for0(i, net_link_device_count) {
 			auto* dev = net_link_devices[i];
 			if (!dev || dev->getState() != uni::Network::LinkState::Up) continue;
@@ -1558,6 +1944,12 @@ namespace {
 		stduint sig_type = 0;
 		stduint sig_src = 0;
 		auto* msgbuf = net_buffers.driver_frame;
+		if (!syscall(syscall_t::TMSG) && HasTcpTimersPending()) {
+			ProcessTcpConnectTimers();
+			ProcessTcpControlTimers();
+			syscall(syscall_t::REST, 1, 10);
+			return;
+		}
 		if (sysrecv(ANYPROC, msgbuf, sizeof(*msgbuf), &sig_type, &sig_src)) return;
 		stdsint ret = -1;
 		switch (NetworkMsg(sig_type)) {
@@ -1761,27 +2153,19 @@ stdsint Devsman::ConnectTcp(const uni::Network::IPv4Address& target_ip,
 	control.local_next_sequence = initial_sequence + 1;
 	control.remote_next_sequence = 0;
 	control.state = uni::Network::TCPConnectionState::SynReceived;
+	connection->connect_started_tick = tick;
 	context = control.context;
 	if (!SendTcpSyn(*connection)) {
 		ReleaseTcpConnection(context);
 		return -1;
 	}
-	if (!IsTcpConnectReady(*connection)) {
-		auto* th = Taskman::CurrentTB();
-		if (!AddTcpConnectWaiter(*connection, th)) {
-			ReleaseTcpConnection(context);
-			return -1;
-		}
-		if (!IsTcpConnectReady(*connection)) {
-			th->Block(ThreadBlock::BlockReason::BR_RecvMsg);
-			Taskman::Schedule(true);
-		}
-		else {
-			WakeTcpConnectWaiters(*connection);
-		}
+	while (!IsTcpConnectReady(*connection)) {
+		ProcessTcpConnectTimers();
 		connection = FindTcpConnection(context.local.address, context.local.port,
 			context.remote.address, context.remote.port);
-		if (!connection || !IsTcpConnectReady(*connection)) return -1;
+		if (!connection) return -1;
+		if (IsTcpConnectReady(*connection)) break;
+		syscall(syscall_t::REST, 1, 10);
 	}
 	context = connection->tcp->getControl().context;
 	return 1;
@@ -1791,12 +2175,26 @@ bool Devsman::CloseTcpConnection(const uni::Network::TCPConnectionContext& conte
 	auto* connection = FindTcpConnection(context.local.address, context.local.port,
 		context.remote.address, context.remote.port);
 	if (!connection || !connection->tcp) return false;
+	while (connection->tx_count && !IsTcpTxRetryExhausted(*connection)) {
+		ProcessTcpControlTimers();
+		connection = FindTcpConnection(context.local.address, context.local.port,
+			context.remote.address, context.remote.port);
+		if (!connection || !connection->tcp) return false;
+		if (!connection->tx_count) break;
+		syscall(syscall_t::REST, 1, 10);
+	}
+	if (connection->tx_count) return ReleaseTcpConnection(context);
 	if (!PrepareTcpTransmit(*connection)) {
 		plogwarn("[Net] close tcp tx buffer unavailable");
 		return ReleaseTcpConnection(context);
 	}
 	const stdsint sent = connection->tcp->Close();
-	if (sent > 0) return true;
+	if (sent > 0) {
+		connection->last_fin_tick = tick;
+		connection->fin_retry_count++;
+		if (connection->active_open) connection->close_phase = NetTcpClosePhase::FinWait1;
+		return true;
+	}
 	return ReleaseTcpConnection(context);
 }
 
@@ -1833,19 +2231,51 @@ stdsint Devsman::SendTcp(const uni::Network::TCPConnectionContext& context, cons
 		context.remote.address, context.remote.port);
 	if (!connection || !connection->tcp) return -1;
 	if (connection->tcp->getControl().state == uni::Network::TCPConnectionState::LastAck) return -1;
+	if (!length) return 0;
+	if (!payload) return -1;
 	if (!PrepareTcpTransmit(*connection)) {
 		plogwarn("[Net] send tcp tx buffer unavailable");
 		return -1;
 	}
-	uni::Network::TransportPayloadContext packet{
-		{
-			{ uni::Network::NetworkAddressIPv4(context.local.address), context.local.port },
-			{ uni::Network::NetworkAddressIPv4(context.remote.address), context.remote.port },
-		},
-		payload,
-		length,
-	};
-	return connection->tcp->Send(packet);
+	const stduint network_mtu = net_ipv4_interface.getPayloadMtu();
+	if (network_mtu <= uni::Network::TCPMinHeaderLength) return -1;
+	stduint chunk_capacity = network_mtu - uni::Network::TCPMinHeaderLength;
+	const stduint buffer_capacity = NetFrameBufferSize - uni::Network::TCPMinHeaderLength;
+	if (chunk_capacity > buffer_capacity) chunk_capacity = buffer_capacity;
+	if (chunk_capacity > NetTcpTxPayloadSize) chunk_capacity = NetTcpTxPayloadSize;
+	const auto* bytes = reinterpret_cast<const uint8*>(payload);
+	stduint total = 0;
+	while (total < length) {
+		while (connection->tx_count >= NetTcpTxPendingCapacity) {
+			if (IsTcpTxRetryExhausted(*connection)) return total ? stdsint(total) : -1;
+			ProcessTcpControlTimers();
+			connection = FindTcpConnection(context.local.address, context.local.port,
+				context.remote.address, context.remote.port);
+			if (!connection || !connection->tcp) return total ? stdsint(total) : -1;
+			if (!connection->tx_count) break;
+			syscall(syscall_t::REST, 1, 10);
+		}
+		if (!EnsureTcpTxStorage(*connection)) return total ? stdsint(total) : -1;
+		const stduint remaining = length - total;
+		const stduint chunk = remaining < chunk_capacity ? remaining : chunk_capacity;
+		const uint32 sequence = connection->tcp->getControl().local_next_sequence;
+		uni::Network::TransportPayloadContext packet{
+			{
+				{ uni::Network::NetworkAddressIPv4(context.local.address), context.local.port },
+				{ uni::Network::NetworkAddressIPv4(context.remote.address), context.remote.port },
+			},
+			bytes + total,
+			chunk,
+		};
+		const stdsint sent = connection->tcp->Send(packet);
+		if (sent <= 0) return total ? stdsint(total) : sent;
+		if (!EnqueueTcpTxPending(*connection, sequence, bytes + total, stduint(sent))) {
+			return total ? stdsint(total) : -1;
+		}
+		total += stduint(sent);
+		if (stduint(sent) < chunk) break;
+	}
+	return stdsint(total);
 }
 
 stdsint Devsman::ReceiveUdp(uint16 port, uni::Network::UDPDatagramContext& context, void* payload, stduint capacity) {
@@ -2026,6 +2456,88 @@ bool Devsman::GetIPv4ArpCacheEntry(stduint index, void* entry, stduint length) {
 		for0(j, numsof(output->hardware)) output->hardware[j] = cached.hardware.octet[j];
 		output->flags = syscall_net_route_flag_up;
 		output->entry_index = uint16(index);
+		return true;
+	}
+	return false;
+}
+
+stduint Devsman::TcpListenerCount() {
+	stduint count = 0;
+	for0(i, NetTcpListenCapacity) {
+		if (net_tcp_listeners[i].port && net_tcp_listeners[i].tcp) count++;
+	}
+	return count;
+}
+
+bool Devsman::GetTcpListenerEntry(stduint index, void* entry, stduint length) {
+	if (!entry || length < sizeof(syscall_net_tcp_listener_t)) return false;
+	auto* output = reinterpret_cast<syscall_net_tcp_listener_t*>(entry);
+	stduint ordinal = 0;
+	for0(i, NetTcpListenCapacity) {
+		auto& listener = net_tcp_listeners[i];
+		if (!listener.port || !listener.tcp) continue;
+		if (ordinal++ != index) continue;
+		*output = {};
+		output->port = listener.port;
+		output->flags = syscall_net_route_flag_up;
+		output->backlog = uint16(TcpListenerBacklogLimit(listener));
+		output->pending = uint16(listener.tcp->getPendingAcceptCount());
+		output->entry_index = uint16(index);
+		return true;
+	}
+	return false;
+}
+
+stduint Devsman::TcpConnectionCount() {
+	stduint count = 0;
+	for0(i, NetTcpConnectionCapacity) {
+		if (net_tcp_connections[i].valid && net_tcp_connections[i].tcp) count++;
+	}
+	return count;
+}
+
+bool Devsman::GetTcpConnectionEntry(stduint index, void* entry, stduint length) {
+	if (!entry || length < sizeof(syscall_net_tcp_connection_t)) return false;
+	auto* output = reinterpret_cast<syscall_net_tcp_connection_t*>(entry);
+	stduint ordinal = 0;
+	for0(i, NetTcpConnectionCapacity) {
+		auto& connection = net_tcp_connections[i];
+		if (!connection.valid || !connection.tcp) continue;
+		if (ordinal++ != index) continue;
+		const auto& control = connection.tcp->getControl();
+		*output = {};
+		for0(j, uni::Network::IPv4AddressLength) {
+			output->local_address[j] = control.context.local.address.octet[j];
+			output->remote_address[j] = control.context.remote.address.octet[j];
+		}
+		output->local_port = control.context.local.port;
+		output->remote_port = control.context.remote.port;
+		switch (connection.close_phase) {
+		case NetTcpClosePhase::FinWait1:
+			output->state = 4;
+			break;
+		case NetTcpClosePhase::FinWait2:
+			output->state = 5;
+			break;
+		case NetTcpClosePhase::Closing:
+			output->state = 6;
+			break;
+		case NetTcpClosePhase::TimeWait:
+			output->state = 7;
+			break;
+		default:
+			output->state = uint16(control.state);
+			break;
+		}
+		output->flags = syscall_net_route_flag_up;
+		if (connection.active_open) output->flags |= 0x0100u;
+		if (connection.local_fin_acknowledged) output->flags |= 0x0200u;
+		if (IsTcpTxRetryExhausted(connection)) output->flags |= 0x0400u;
+		output->entry_index = uint16(index);
+		output->rx_bytes = uint16(connection.rx_count);
+		output->tx_pending = uint16(connection.tx_count);
+		output->tx_retry_count = connection.tx_count ?
+			uint16(connection.tx_pending[connection.tx_head].retry_count) : 0;
 		return true;
 	}
 	return false;

@@ -7,6 +7,7 @@ static void PrintUsage() {
 	printf("  fields: index device ip mask mac mtu state\n\r");
 	printf("  also prints the default IPv4 route\n\r");
 	printf("  also prints IPv4 ARP cache entries\n\r");
+	printf("  also prints TCP listener and connection state\n\r");
 }
 
 static void PrintIPv4(const uint8 address[4]) {
@@ -61,6 +62,70 @@ static void PrintArpCache() {
 	}
 }
 
+static const char* TcpStateName(uint16 state) {
+	switch (state) {
+	case 0: return "syn-received";
+	case 1: return "established";
+	case 2: return "close-wait";
+	case 3: return "last-ack";
+	case 4: return "fin-wait1";
+	case 5: return "fin-wait2";
+	case 6: return "closing";
+	case 7: return "time-wait";
+	default: return "unknown";
+	}
+}
+
+static void PrintTcpState() {
+	stduint listener_count = 0;
+	if (syscall(syscall_t::ROUT, stduint(syscall_net_route_func_t::TCPListenerCount),
+		_IMM(&listener_count), sizeof(listener_count)) < 0) {
+		printf("netinfo: tcp listener query failed\n\r");
+		return;
+	}
+	printf("netinfo: tcp listeners=%u\n\r", (unsigned)listener_count);
+	for0(i, listener_count) {
+		syscall_net_tcp_listener_t listener{};
+		listener.entry_index = uint16(i);
+		if (syscall(syscall_t::ROUT, stduint(syscall_net_route_func_t::TCPListenerEntry),
+			_IMM(&listener), sizeof(listener)) < 0) {
+			printf("netinfo: tcp listener%u query failed\n\r", (unsigned)i);
+			continue;
+		}
+		printf("netinfo: tcp-listen%u port=%u backlog=%u pending=%u %s\n\r",
+			(unsigned)i, (unsigned)listener.port, (unsigned)listener.backlog,
+			(unsigned)listener.pending,
+			(listener.flags & syscall_net_route_flag_up) ? "up" : "down");
+	}
+
+	stduint connection_count = 0;
+	if (syscall(syscall_t::ROUT, stduint(syscall_net_route_func_t::TCPConnectionCount),
+		_IMM(&connection_count), sizeof(connection_count)) < 0) {
+		printf("netinfo: tcp connection query failed\n\r");
+		return;
+	}
+	printf("netinfo: tcp connections=%u\n\r", (unsigned)connection_count);
+	for0(i, connection_count) {
+		syscall_net_tcp_connection_t connection{};
+		connection.entry_index = uint16(i);
+		if (syscall(syscall_t::ROUT, stduint(syscall_net_route_func_t::TCPConnectionEntry),
+			_IMM(&connection), sizeof(connection)) < 0) {
+			printf("netinfo: tcp connection%u query failed\n\r", (unsigned)i);
+			continue;
+		}
+		printf("netinfo: tcp%u local=", (unsigned)i);
+		PrintIPv4(connection.local_address);
+		printf(":%u peer=", (unsigned)connection.local_port);
+		PrintIPv4(connection.remote_address);
+		printf(":%u state=%s rx=%u tx=%u retry=%u%s%s\n\r",
+			(unsigned)connection.remote_port, TcpStateName(connection.state),
+			(unsigned)connection.rx_bytes, (unsigned)connection.tx_pending,
+			(unsigned)connection.tx_retry_count,
+			(connection.flags & 0x0100u) ? " active" : " passive",
+			(connection.flags & 0x0400u) ? " tx-exhausted" : "");
+	}
+}
+
 int main(int argc, char** argv) {
 	if (argc >= 2 && (!StrCompare(argv[1], "-h") || !StrCompare(argv[1], "--help") ||
 		!StrCompare(argv[1], "help"))) {
@@ -95,5 +160,6 @@ int main(int argc, char** argv) {
 	}
 	PrintDefaultRoute();
 	PrintArpCache();
+	PrintTcpState();
 	return 0;
 }
