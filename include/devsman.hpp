@@ -245,6 +245,9 @@ public:
 	static bool CloseTcpConnection(const uni::Network::TCPConnectionContext& context);
 	static bool WaitTcpReceive(const uni::Network::TCPConnectionContext& context);
 	static bool HasTcpReceive(const uni::Network::TCPConnectionContext& context);
+	static bool IsTcpReceiveClosed(const uni::Network::TCPConnectionContext& context);
+	static bool HasTcpError(const uni::Network::TCPConnectionContext& context);
+	static bool HasTcpSendSpace(const uni::Network::TCPConnectionContext& context);
 	static stdsint ReceiveTcp(const uni::Network::TCPConnectionContext& context, void* payload, stduint capacity);
 	static stdsint SendTcp(const uni::Network::TCPConnectionContext& context, const void* payload, stduint length);
 	static stdsint SendUdp(const uni::Network::IPv4Address& target_ip,
@@ -264,11 +267,35 @@ public:
 	static const char* LookupPciVendorName(uint16 vendor_id);
 	#endif
 
+	// Audio Backend Routing
+	static bool RegisterAudioBackend(const struct AudioBackendDriver* driver);
+	static const struct AudioBackendDriver* GetActiveAudioBackend();
+	static bool SetActiveAudioBackend(const char* name);
+	static stduint AudioBackendCount();
+	static const struct AudioBackendDriver* GetAudioBackend(stduint index);
+
 };
 
 // ---- AUDIO ----
 
 #include "devsman.com.hpp"
+
+using AudioPcmRefill = uint32 (*)(void* context, uint8* destination, uint32 byte_count);
+
+struct AudioBackendDriver {
+	const char* name;
+	bool (*start_stream)(uint16 sample_rate, uni::AudioSampleFormat sample_format, uint8 channels,
+		AudioPcmRefill refill, void* context);
+	bool (*stop_stream)();
+	bool (*pause_stream)();
+	bool (*resume_stream)();
+	bool (*flush_stream)();
+	bool (*set_volume)(uni::SoundBlasterMixerChannel channel, uint8 left, uint8 right);
+	bool (*get_volume)(uni::SoundBlasterMixerChannel channel, uint8& left, uint8& right);
+	bool (*set_mute)(uni::SoundBlasterMixerChannel channel, bool mute);
+	bool (*watchdog_check)();
+	uint8 (*service_playback)();
+};
 
 // Submit a synchronous PCM playback request to the audio service.
 bool AudioPlay(const uni::AudioPlayRequest& request);

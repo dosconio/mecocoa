@@ -72,6 +72,7 @@ static const char* TcpStateName(uint16 state) {
 	case 5: return "fin-wait2";
 	case 6: return "closing";
 	case 7: return "time-wait";
+	case 8: return "reset";
 	default: return "unknown";
 	}
 }
@@ -122,7 +123,8 @@ static void PrintTcpState() {
 			(unsigned)connection.rx_bytes, (unsigned)connection.tx_pending,
 			(unsigned)connection.tx_retry_count,
 			(connection.flags & 0x0100u) ? " active" : " passive",
-			(connection.flags & 0x0400u) ? " tx-exhausted" : "");
+			(connection.flags & 0x0800u) ? " reset" :
+				((connection.flags & 0x0400u) ? " tx-exhausted" : ""));
 	}
 }
 

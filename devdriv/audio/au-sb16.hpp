@@ -56,3 +56,7 @@ bool SoundBlasterResetMixer();
 
 // Call from ordinary kernel context; returns the number of refilled DMA blocks.
 uint8 SoundBlasterServicePlayback();
+
+// Device exception recovery and software watchdog
+bool SoundBlasterRecoverDevice();
+bool SoundBlasterWatchdogCheck();

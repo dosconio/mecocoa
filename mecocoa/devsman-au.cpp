@@ -10,11 +10,16 @@
 #if _MCCA == 0x8632
 
 namespace {
+	constexpr uint32 AudioMaxTracks = 8;
 	constexpr uint32 AudioStreamChunkBytes = 4096;
 	constexpr uint32 AudioStreamRingBytes = AudioStreamChunkBytes * 16;
 	constexpr uint32 AudioStreamDmaPrimeBytes = 4096 * 4;
 
-	struct AudioStreamState {
+	constexpr uint16 AudioMasterSampleRate = 44100;
+	constexpr uni::AudioSampleFormat AudioMasterFormat = uni::AudioSampleFormat::U8;
+	constexpr uint8 AudioMasterChannels = 2; // Stereo
+
+	struct AudioTrackState {
 		uint8 ring[AudioStreamRingBytes];
 		uint32 read_pos;
 		uint32 write_pos;
@@ -24,12 +29,30 @@ namespace {
 		uni::AudioSampleFormat sample_format;
 		uint8 channels;
 		uint64 played_bytes;
+		uint32 volume_percent; // 0..100
+		bool muted;
 		bool open;
-		bool started;
 		bool paused;
+		bool is_temporary;
+
+		// Resampling state
+		uint32 phase; // 16.16 fixed point
+		int32 curr_l;
+		int32 curr_r;
+		int32 next_l;
+		int32 next_r;
+		bool has_frames;
 	};
 
-	AudioStreamState audio_stream{};
+	AudioTrackState audio_tracks[AudioMaxTracks]{};
+	bool master_stream_started = false;
+	stduint master_last_active_tick = 0;
+
+	static inline int16 ClampS16(int32 val) {
+		if (val > 32767) return 32767;
+		if (val < -32768) return -32768;
+		return (int16)val;
+	}
 
 	bool IsSupportedPcmFormat(const uni::AudioPlayRequest& request) {
 		const bool valid_format =
@@ -39,7 +62,7 @@ namespace {
 			(request.format.channels == 1 || request.format.channels == 2);
 		return valid_format && valid_channels &&
 			request.format.sample_rate >= 5000 &&
-			request.format.sample_rate <= 45000;
+			request.format.sample_rate <= 48000;
 	}
 
 	bool IsSupportedPcmRequest(const uni::AudioPlayRequest& request) {
@@ -48,74 +71,256 @@ namespace {
 			IsSupportedPcmFormat(request);
 	}
 
-	uint32 AudioRingFree() {
-		return AudioStreamRingBytes - audio_stream.used;
+	void ResetTrackState(AudioTrackState& track) {
+		track.read_pos = 0;
+		track.write_pos = 0;
+		track.used = 0;
+		track.owner_tid = 0;
+		track.sample_rate = 0;
+		track.sample_format = uni::AudioSampleFormat::U8;
+		track.channels = 1;
+		track.played_bytes = 0;
+		track.volume_percent = 100;
+		track.muted = false;
+		track.open = false;
+		track.paused = false;
+		track.is_temporary = false;
+		track.phase = 0;
+		track.curr_l = 0;
+		track.curr_r = 0;
+		track.next_l = 0;
+		track.next_r = 0;
+		track.has_frames = false;
 	}
 
-	void AudioRingReset() {
-		audio_stream.read_pos = 0;
-		audio_stream.write_pos = 0;
-		audio_stream.used = 0;
-	}
-
-	uint32 AudioRingRead(uint8* destination, uint32 byte_count) {
-		if (!destination || !byte_count || !audio_stream.used) return 0;
-		uint32 done = 0;
-		while (done < byte_count && audio_stream.used) {
-			uint32 chunk = byte_count - done;
-			const uint32 until_end = AudioStreamRingBytes - audio_stream.read_pos;
-			if (chunk > audio_stream.used) chunk = audio_stream.used;
-			if (chunk > until_end) chunk = until_end;
-			MemCopyN(destination + done, audio_stream.ring + audio_stream.read_pos,
-				chunk);
-			audio_stream.read_pos =
-				(audio_stream.read_pos + chunk) % AudioStreamRingBytes;
-			audio_stream.used -= chunk;
-			audio_stream.played_bytes += chunk;
-			done += chunk;
+	AudioTrackState* FindTrackByOwner(stduint owner_tid) {
+		if (!owner_tid) return nullptr;
+		for (uint32 i = 0; i < AudioMaxTracks; ++i) {
+			if (audio_tracks[i].open && audio_tracks[i].owner_tid == owner_tid) {
+				return &audio_tracks[i];
+			}
 		}
-		return done;
+		return nullptr;
 	}
 
-	uint32 AudioStreamRefill(void*, uint8* destination, uint32 byte_count) {
-		if (audio_stream.paused) return 0;
-		return AudioRingRead(destination, byte_count);
+	AudioTrackState* AllocateTrack(stduint owner_tid, bool is_temporary = false) {
+		AudioTrackState* existing = FindTrackByOwner(owner_tid);
+		if (existing) {
+			ResetTrackState(*existing);
+			existing->owner_tid = owner_tid;
+			existing->open = true;
+			existing->is_temporary = is_temporary;
+			return existing;
+		}
+		for (uint32 i = 0; i < AudioMaxTracks; ++i) {
+			if (!audio_tracks[i].open) {
+				ResetTrackState(audio_tracks[i]);
+				audio_tracks[i].owner_tid = owner_tid;
+				audio_tracks[i].open = true;
+				audio_tracks[i].is_temporary = is_temporary;
+				return &audio_tracks[i];
+			}
+		}
+		return nullptr;
 	}
 
-	bool IsAudioStreamOwnerAlive() {
-		if (!audio_stream.owner_tid) return true;
-		auto* owner_process = ProcessBlock::AcquireActive(audio_stream.owner_tid);
+	void FreeTrack(AudioTrackState& track) {
+		ResetTrackState(track);
+	}
+
+	uint32 CountActiveTracks() {
+		uint32 count = 0;
+		for (uint32 i = 0; i < AudioMaxTracks; ++i) {
+			if (audio_tracks[i].open && (audio_tracks[i].used > 0 || !audio_tracks[i].is_temporary)) {
+				++count;
+			}
+		}
+		return count;
+	}
+
+	uint32 TrackRingFree(const AudioTrackState& track) {
+		return AudioStreamRingBytes - track.used;
+	}
+
+	bool FetchTrackFrame(AudioTrackState& track, int32& out_l, int32& out_r) {
+		const uint32 bytes_per_frame = (track.sample_format == uni::AudioSampleFormat::S16LE ? 2 : 1) * track.channels;
+		if (track.used < bytes_per_frame) {
+			out_l = 0;
+			out_r = 0;
+			return false;
+		}
+
+		if (track.sample_format == uni::AudioSampleFormat::U8) {
+			if (track.channels == 1) {
+				uint8 s0 = track.ring[track.read_pos];
+				out_l = ((int32)s0 - 128) << 8;
+				out_r = out_l;
+			} else {
+				uint8 s0 = track.ring[track.read_pos];
+				uint8 s1 = track.ring[(track.read_pos + 1) % AudioStreamRingBytes];
+				out_l = ((int32)s0 - 128) << 8;
+				out_r = ((int32)s1 - 128) << 8;
+			}
+		} else { // S16LE
+			if (track.channels == 1) {
+				uint8 b0 = track.ring[track.read_pos];
+				uint8 b1 = track.ring[(track.read_pos + 1) % AudioStreamRingBytes];
+				int16 s0 = (int16)(uint16(b0) | (uint16(b1) << 8));
+				out_l = (int32)s0;
+				out_r = out_l;
+			} else {
+				uint8 b0 = track.ring[track.read_pos];
+				uint8 b1 = track.ring[(track.read_pos + 1) % AudioStreamRingBytes];
+				uint8 b2 = track.ring[(track.read_pos + 2) % AudioStreamRingBytes];
+				uint8 b3 = track.ring[(track.read_pos + 3) % AudioStreamRingBytes];
+				int16 s0 = (int16)(uint16(b0) | (uint16(b1) << 8));
+				int16 s1 = (int16)(uint16(b2) | (uint16(b3) << 8));
+				out_l = (int32)s0;
+				out_r = (int32)s1;
+			}
+		}
+
+		track.read_pos = (track.read_pos + bytes_per_frame) % AudioStreamRingBytes;
+		track.used -= bytes_per_frame;
+		track.played_bytes += bytes_per_frame;
+		return true;
+	}
+
+	bool GetNextTrackSample(AudioTrackState& track, int32& out_l, int32& out_r) {
+		if (track.sample_rate == AudioMasterSampleRate) {
+			if (!FetchTrackFrame(track, out_l, out_r)) return false;
+		} else {
+			const uint32 step = uint32(((uint64)track.sample_rate << 16) / AudioMasterSampleRate);
+			if (!track.has_frames) {
+				if (!FetchTrackFrame(track, track.curr_l, track.curr_r)) return false;
+				if (!FetchTrackFrame(track, track.next_l, track.next_r)) {
+					track.next_l = track.curr_l;
+					track.next_r = track.curr_r;
+				}
+				track.has_frames = true;
+				track.phase = 0;
+			}
+
+			const int32 frac = int32(track.phase & 0xFFFF);
+			out_l = track.curr_l + (int32)(((int64)(track.next_l - track.curr_l) * frac) >> 16);
+			out_r = track.curr_r + (int32)(((int64)(track.next_r - track.curr_r) * frac) >> 16);
+
+			track.phase += step;
+			while (track.phase >= 0x10000) {
+				track.phase -= 0x10000;
+				track.curr_l = track.next_l;
+				track.curr_r = track.next_r;
+				if (!FetchTrackFrame(track, track.next_l, track.next_r)) {
+					track.has_frames = false;
+					break;
+				}
+			}
+		}
+
+		if (track.muted || track.volume_percent == 0) {
+			out_l = 0;
+			out_r = 0;
+		} else if (track.volume_percent < 100) {
+			out_l = (out_l * (int32)track.volume_percent) / 100;
+			out_r = (out_r * (int32)track.volume_percent) / 100;
+		}
+		return true;
+	}
+
+	uint32 AudioMasterMixerRefill(void*, uint8* destination, uint32 byte_count) {
+		if (!destination || !byte_count) return 0;
+		const uint32 frame_count = byte_count / 2; // 8-bit stereo = 2 bytes per frame
+
+		for (uint32 f = 0; f < frame_count; ++f) {
+			int32 sum_l = 0;
+			int32 sum_r = 0;
+
+			for (uint32 t = 0; t < AudioMaxTracks; ++t) {
+				AudioTrackState& track = audio_tracks[t];
+				if (!track.open || track.paused) continue;
+
+				int32 l = 0, r = 0;
+				if (GetNextTrackSample(track, l, r)) {
+					sum_l += l;
+					sum_r += r;
+				} else if (track.is_temporary && track.used == 0) {
+					FreeTrack(track);
+				}
+			}
+
+			const int16 final_l = ClampS16(sum_l);
+			const int16 final_r = ClampS16(sum_r);
+
+			// Convert signed 16-bit to unsigned 8-bit PCM [0..255]
+			destination[f * 2 + 0] = uint8((final_l >> 8) + 128);
+			destination[f * 2 + 1] = uint8((final_r >> 8) + 128);
+		}
+
+		return byte_count;
+	}
+
+	bool AudioMasterEnsureRunning() {
+		if (master_stream_started) return true;
+		const auto* backend = Devsman::GetActiveAudioBackend();
+		if (!backend || !backend->start_stream) {
+			plogwarn("[Audio] No active audio backend available");
+			return false;
+		}
+		if (!backend->start_stream(
+			AudioMasterSampleRate,
+			AudioMasterFormat,
+			AudioMasterChannels,
+			AudioMasterMixerRefill, nullptr)) {
+			plogwarn("[Audio] Failed to start master audio mixer stream on backend %s",
+				backend->name ? backend->name : "unknown");
+			return false;
+		}
+		master_stream_started = true;
+		master_last_active_tick = tick;
+		ploginfo("[Audio] Master mixer started 44.1kHz U8 Stereo on %s",
+			backend->name ? backend->name : "unknown");
+		return true;
+	}
+
+	bool IsTrackOwnerAlive(stduint owner_tid) {
+		if (!owner_tid) return true;
+		auto* owner_process = ProcessBlock::AcquireActive(owner_tid);
 		if (!owner_process) return false;
 		ProcessBlock::Release(owner_process);
 		return true;
 	}
 
-	void AudioStreamClear() {
-		AudioRingReset();
-		audio_stream.owner_tid = 0;
-		audio_stream.sample_rate = 0;
-		audio_stream.sample_format = uni::AudioSampleFormat::U8;
-		audio_stream.channels = 1;
-		audio_stream.played_bytes = 0;
-		audio_stream.open = false;
-		audio_stream.started = false;
-		audio_stream.paused = false;
-	}
-
-	void AudioStreamAbort() {
-		SoundBlasterAbortPcmStream();
-		AudioStreamClear();
-	}
-
 	void AudioServicePollStream() {
-		if (!audio_stream.open) return;
-		if (!IsAudioStreamOwnerAlive()) {
-			plogwarn("[Audio] PCM stream owner gone tid=%u, abort",
-				(stduint)audio_stream.owner_tid);
-			AudioStreamAbort();
-			return;
+		uint32 active_tracks = 0;
+		for (uint32 i = 0; i < AudioMaxTracks; ++i) {
+			if (audio_tracks[i].open && !audio_tracks[i].is_temporary) {
+				if (!IsTrackOwnerAlive(audio_tracks[i].owner_tid)) {
+					plogwarn("[Audio] Track %u owner gone tid=%u, free track",
+						(stduint)i, (stduint)audio_tracks[i].owner_tid);
+					FreeTrack(audio_tracks[i]);
+				} else if (!audio_tracks[i].paused && audio_tracks[i].used > 0) {
+					++active_tracks;
+				}
+			}
 		}
-		SoundBlasterServicePlayback();
+
+		if (master_stream_started) {
+			const auto* backend = Devsman::GetActiveAudioBackend();
+			if (active_tracks > 0) {
+				master_last_active_tick = tick;
+				if (backend && backend->watchdog_check && !backend->watchdog_check()) {
+					plogwarn("[Audio] Watchdog: device recovery failed");
+				}
+			} else if (CountActiveTracks() == 0) {
+				if (tick - master_last_active_tick > (CONFIG_SysTickFreq / 4)) {
+					// Stop hardware DMA stream when completely idle to save CPU/DMA cycles and prevent loop residue
+					if (backend && backend->stop_stream) backend->stop_stream();
+					master_stream_started = false;
+					ploginfo("[Audio] Master mixer entered idle sleep");
+				}
+			}
+			if (backend && backend->service_playback) backend->service_playback();
+		}
 	}
 
 	void AudioServiceIdleWait() {
@@ -126,44 +331,30 @@ namespace {
 		return syscall(syscall_t::TMSG) != 0;
 	}
 
-	bool AudioStreamStartIfReady(bool force) {
-		if (!audio_stream.open || audio_stream.started || audio_stream.paused) return true;
-		if (!force && audio_stream.used < AudioStreamDmaPrimeBytes) return true;
-		if (!audio_stream.used) return true;
-		if (!SoundBlasterStartPcmStream(
-			audio_stream.sample_rate,
-			audio_stream.sample_format,
-			audio_stream.channels,
-			AudioStreamRefill, nullptr)) {
-			plogwarn("[Audio] Failed to start PCM stream rate=%u used=%u fmt=%u ch=%u",
-				(stduint)audio_stream.sample_rate, (stduint)audio_stream.used,
-				(stduint)audio_stream.sample_format, (stduint)audio_stream.channels);
-			return false;
-		}
-		audio_stream.started = true;
-		return true;
-	}
-
 	bool AudioStreamBegin(const uni::AudioPlayRequest& request, stduint owner_tid) {
 		if (!IsSupportedPcmFormat(request)) return false;
-		AudioStreamAbort();
-		audio_stream.owner_tid = owner_tid;
-		audio_stream.sample_rate = uint16(request.format.sample_rate);
-		audio_stream.sample_format = request.format.sample_format;
-		audio_stream.channels = request.format.channels ? request.format.channels : 1;
-		audio_stream.open = true;
-		return true;
+		AudioTrackState* track = AllocateTrack(owner_tid, false);
+		if (!track) return false;
+
+		track->sample_rate = uint16(request.format.sample_rate);
+		track->sample_format = request.format.sample_format;
+		track->channels = request.format.channels ? request.format.channels : 1;
+		track->volume_percent = 100;
+		track->muted = false;
+		track->open = true;
+		track->paused = false;
+
+		return AudioMasterEnsureRunning();
 	}
 
-	stduint CopyPcmToRing(const void* source, ProcessBlock* source_process,
-		uint32 byte_count) {
+	stduint CopyPcmToTrackRing(AudioTrackState& track, const void* source,
+		ProcessBlock* source_process, uint32 byte_count) {
 		if (!source || !byte_count) return 0;
 		uint32 copied_total = 0;
-		while (copied_total < byte_count && AudioRingFree()) {
+		while (copied_total < byte_count && TrackRingFree(track)) {
 			uint32 chunk = byte_count - copied_total;
-			const uint32 free_bytes = AudioRingFree();
-			const uint32 until_end =
-				AudioStreamRingBytes - audio_stream.write_pos;
+			const uint32 free_bytes = TrackRingFree(track);
+			const uint32 until_end = AudioStreamRingBytes - track.write_pos;
 			if (chunk > free_bytes) chunk = free_bytes;
 			if (chunk > until_end) chunk = until_end;
 
@@ -171,19 +362,17 @@ namespace {
 				(stduint)source + copied_total);
 			if (source_process && source_process->ring != RING_M) {
 				const stduint copied = MccaMemCopyP(
-					audio_stream.ring + audio_stream.write_pos,
+					track.ring + track.write_pos,
 					nullptr, true,
 					source_at, source_process, false,
 					chunk);
 				if (copied != chunk) return copied_total + copied;
 			}
 			else {
-				MemCopyN(audio_stream.ring + audio_stream.write_pos,
-					source_at, chunk);
+				MemCopyN(track.ring + track.write_pos, source_at, chunk);
 			}
-			audio_stream.write_pos =
-				(audio_stream.write_pos + chunk) % AudioStreamRingBytes;
-			audio_stream.used += chunk;
+			track.write_pos = (track.write_pos + chunk) % AudioStreamRingBytes;
+			track.used += chunk;
 			copied_total += chunk;
 		}
 		return copied_total;
@@ -191,64 +380,42 @@ namespace {
 
 	stdsint AudioStreamWrite(const uni::AudioPlayRequest& request,
 		ProcessBlock* source_process, stduint source_tid) {
-		if (!audio_stream.open || !IsSupportedPcmRequest(request) ||
-			uint16(request.format.sample_rate) != audio_stream.sample_rate ||
-			request.format.sample_format != audio_stream.sample_format ||
-			request.format.channels != audio_stream.channels ||
-			source_tid != audio_stream.owner_tid) {
+		AudioTrackState* track = FindTrackByOwner(source_tid);
+		if (!track || !track->open || !IsSupportedPcmRequest(request) ||
+			uint16(request.format.sample_rate) != track->sample_rate ||
+			request.format.sample_format != track->sample_format ||
+			request.format.channels != track->channels) {
 			return -1;
 		}
 		AudioServicePollStream();
-		if (!audio_stream.open) return -1;
-		const stduint copied = CopyPcmToRing(
-			request.buffer.data, source_process, request.buffer.byte_count);
-		if (!AudioStreamStartIfReady(false) && !copied) return -1;
+		if (!track->open) return -1;
+		const stduint copied = CopyPcmToTrackRing(
+			*track, request.buffer.data, source_process, request.buffer.byte_count);
+		if (!master_stream_started && track->used >= AudioStreamDmaPrimeBytes) {
+			AudioMasterEnsureRunning();
+		}
 		return stdsint(copied);
 	}
 
-	stdsint AudioStreamDrain() {
-		if (!audio_stream.open) return 0;
-		if (!AudioStreamStartIfReady(true)) return -1;
+	stdsint AudioStreamDrain(stduint source_tid) {
+		AudioTrackState* track = FindTrackByOwner(source_tid);
+		if (!track || !track->open) return 0;
+		AudioMasterEnsureRunning();
 
-		const uint8 frame_size = (audio_stream.sample_format == uni::AudioSampleFormat::S16LE ? 2 : 1) * audio_stream.channels;
-		const stduint bytes_per_sec = (stduint)audio_stream.sample_rate * (frame_size ? frame_size : 1);
+		const uint8 frame_size = (track->sample_format == uni::AudioSampleFormat::S16LE ? 2 : 1) * track->channels;
+		const stduint bytes_per_sec = (stduint)track->sample_rate * (frame_size ? frame_size : 1);
 
 		const stduint drain_timeout =
-			((stduint)(audio_stream.used + AudioStreamDmaPrimeBytes) *
+			((stduint)(track->used + AudioStreamDmaPrimeBytes) *
 				CONFIG_SysTickFreq + bytes_per_sec - 1) /
-			bytes_per_sec + 2 * CONFIG_SysTickFreq;
+			(bytes_per_sec ? bytes_per_sec : 1) + 2 * CONFIG_SysTickFreq;
 		const stduint drain_start = tick;
-		while (audio_stream.open && audio_stream.used &&
+		while (track->open && track->used &&
 			tick - drain_start < drain_timeout) {
 			AudioServicePollStream();
 			AudioServiceIdleWait();
 		}
-		if (!audio_stream.open) return -1;
-		if (audio_stream.used) {
-			plogwarn("[Audio] PCM stream drain timed out used=%u",
-				(stduint)audio_stream.used);
-			AudioStreamAbort();
-			return -1;
-		}
-
-		const stduint tail_ticks =
-			((stduint)AudioStreamDmaPrimeBytes * CONFIG_SysTickFreq +
-				bytes_per_sec - 1) /
-			bytes_per_sec + CONFIG_SysTickFreq / 10 + 1;
-		const stduint tail_start = tick;
-		while (audio_stream.open && audio_stream.started &&
-			tick - tail_start < tail_ticks) {
-			AudioServicePollStream();
-			AudioServiceIdleWait();
-		}
-		const bool stopped = SoundBlasterStopPcmStream();
-		if (!stopped) {
-			SoundBlasterAbortPcmStream();
-		}
-		AudioStreamClear();
-		if (!stopped) {
-			plogwarn("[Audio] PCM stream drained, stop completed by fallback");
-		}
+		FreeTrack(*track);
 		return 0;
 	}
 
@@ -275,6 +442,26 @@ namespace {
 				return false;
 			}
 			pcm_data = copied_pcm;
+		}
+
+		// If master mixer is active, mix as temporary track concurrently
+		if (master_stream_started || CountActiveTracks() > 0) {
+			static stduint s_temp_counter = 0x80000000;
+			AudioTrackState* temp_track = AllocateTrack(++s_temp_counter, true);
+			if (temp_track) {
+				temp_track->sample_rate = uint16(request.format.sample_rate);
+				temp_track->sample_format = request.format.sample_format;
+				temp_track->channels = request.format.channels ? request.format.channels : 1;
+				temp_track->volume_percent = 100;
+				temp_track->muted = false;
+				temp_track->open = true;
+				temp_track->paused = false;
+
+				CopyPcmToTrackRing(*temp_track, pcm_data, nullptr, request.buffer.byte_count);
+				AudioMasterEnsureRunning();
+				delete[] copied_pcm;
+				return true;
+			}
 		}
 
 		const bool ok = SoundBlasterPlayPcmImmediate(
@@ -399,7 +586,7 @@ void serv_dev_audio_loop() {
 	uni::AudioPlayRequest request{};
 	while (true) {
 		AudioServicePollStream();
-		if (audio_stream.open && !AudioServiceHasMessage()) {
+		if ((master_stream_started || CountActiveTracks() > 0) && !AudioServiceHasMessage()) {
 			AudioServiceIdleWait();
 			continue;
 		}
@@ -439,25 +626,29 @@ void serv_dev_audio_loop() {
 		}
 		case AudioMsg::STREAM_DRAIN:
 		{
-			stdsint result = AudioStreamDrain();
+			stdsint result = AudioStreamDrain(sig_src);
 			if (sig_src) syssend(sig_src, &result, sizeof(result));
 			break;
 		}
 		case AudioMsg::STREAM_STOP:
 		{
-			AudioStreamAbort();
+			AudioTrackState* track = FindTrackByOwner(sig_src);
+			if (track) FreeTrack(*track);
+			if (CountActiveTracks() == 0 && master_stream_started) {
+				const auto* backend = Devsman::GetActiveAudioBackend();
+				if (backend && backend->stop_stream) backend->stop_stream();
+				master_stream_started = false;
+			}
 			stdsint result = 0;
 			if (sig_src) syssend(sig_src, &result, sizeof(result));
 			break;
 		}
 		case AudioMsg::STREAM_PAUSE:
 		{
+			AudioTrackState* track = FindTrackByOwner(sig_src);
 			stdsint result = -1;
-			if (audio_stream.open && sig_src == audio_stream.owner_tid) {
-				audio_stream.paused = true;
-				if (audio_stream.started) {
-					SoundBlasterPausePcmStream();
-				}
+			if (track && track->open) {
+				track->paused = true;
 				result = 0;
 			}
 			if (sig_src) syssend(sig_src, &result, sizeof(result));
@@ -465,14 +656,11 @@ void serv_dev_audio_loop() {
 		}
 		case AudioMsg::STREAM_RESUME:
 		{
+			AudioTrackState* track = FindTrackByOwner(sig_src);
 			stdsint result = -1;
-			if (audio_stream.open && sig_src == audio_stream.owner_tid) {
-				audio_stream.paused = false;
-				if (audio_stream.started) {
-					SoundBlasterResumePcmStream();
-				} else {
-					AudioStreamStartIfReady(false);
-				}
+			if (track && track->open) {
+				track->paused = false;
+				AudioMasterEnsureRunning();
 				result = 0;
 			}
 			if (sig_src) syssend(sig_src, &result, sizeof(result));
@@ -480,19 +668,20 @@ void serv_dev_audio_loop() {
 		}
 		case AudioMsg::STREAM_GET_POS:
 		{
+			AudioTrackState* track = FindTrackByOwner(sig_src);
 			AudioStreamPosition pos{};
-			pos.is_active = audio_stream.open;
-			pos.is_paused = audio_stream.paused;
-			if (audio_stream.open) {
-				pos.played_bytes = audio_stream.played_bytes;
+			if (track && track->open) {
+				pos.is_active = true;
+				pos.is_paused = track->paused;
+				pos.played_bytes = track->played_bytes;
 				const uint8 frame_size =
-					(audio_stream.sample_format == uni::AudioSampleFormat::S16LE ? 2 : 1) *
-					(audio_stream.channels ? audio_stream.channels : 1);
+					(track->sample_format == uni::AudioSampleFormat::S16LE ? 2 : 1) *
+					(track->channels ? track->channels : 1);
 				if (frame_size) {
 					pos.played_samples = uint32(pos.played_bytes / frame_size);
 				}
-				if (audio_stream.sample_rate) {
-					pos.played_ms = uint32(((uint64)pos.played_samples * 1000) / audio_stream.sample_rate);
+				if (track->sample_rate) {
+					pos.played_ms = uint32(((uint64)pos.played_samples * 1000) / track->sample_rate);
 				}
 			}
 			if (sig_src) syssend(sig_src, &pos, sizeof(pos));
@@ -501,11 +690,14 @@ void serv_dev_audio_loop() {
 		case AudioMsg::SET_VOLUME:
 		{
 			const auto* vol_req = reinterpret_cast<const AudioVolumeRequest*>(&request);
+			const auto* backend = Devsman::GetActiveAudioBackend();
 			stdsint result = -1;
-			if (vol_req->mute) {
-				result = SoundBlasterSetMute(vol_req->channel, true) ? 0 : -1;
-			} else {
-				result = SoundBlasterSetVolume(vol_req->channel, vol_req->left, vol_req->right) ? 0 : -1;
+			if (backend) {
+				if (vol_req->mute) {
+					result = (backend->set_mute && backend->set_mute(vol_req->channel, true)) ? 0 : -1;
+				} else {
+					result = (backend->set_volume && backend->set_volume(vol_req->channel, vol_req->left, vol_req->right)) ? 0 : -1;
+				}
 			}
 			if (sig_src) syssend(sig_src, &result, sizeof(result));
 			break;
@@ -513,8 +705,9 @@ void serv_dev_audio_loop() {
 		case AudioMsg::GET_VOLUME:
 		{
 			const auto* in_req = reinterpret_cast<const AudioVolumeRequest*>(&request);
+			const auto* backend = Devsman::GetActiveAudioBackend();
 			AudioVolumeRequest resp = *in_req;
-			if (!SoundBlasterGetVolume(in_req->channel, resp.left, resp.right)) {
+			if (!backend || !backend->get_volume || !backend->get_volume(in_req->channel, resp.left, resp.right)) {
 				resp.left = resp.right = 0;
 			}
 			resp.mute = (resp.left == 0 && resp.right == 0);
@@ -524,16 +717,18 @@ void serv_dev_audio_loop() {
 		case AudioMsg::STREAM_SEEK:
 		{
 			const auto* seek_req = reinterpret_cast<const AudioSeekRequest*>(&request);
+			AudioTrackState* track = FindTrackByOwner(sig_src);
 			stdsint result = -1;
-			if (audio_stream.open && sig_src == audio_stream.owner_tid) {
-				AudioRingReset();
+			if (track && track->open) {
+				track->read_pos = 0;
+				track->write_pos = 0;
+				track->used = 0;
+				track->has_frames = false;
+				track->phase = 0;
 				const uint8 frame_size =
-					(audio_stream.sample_format == uni::AudioSampleFormat::S16LE ? 2 : 1) *
-					(audio_stream.channels ? audio_stream.channels : 1);
-				audio_stream.played_bytes = seek_req->target_samples * frame_size;
-				if (audio_stream.started) {
-					SoundBlasterFlushPcmStream();
-				}
+					(track->sample_format == uni::AudioSampleFormat::S16LE ? 2 : 1) *
+					(track->channels ? track->channels : 1);
+				track->played_bytes = seek_req->target_samples * frame_size;
 				result = 0;
 			}
 			if (sig_src) syssend(sig_src, &result, sizeof(result));

@@ -3,9 +3,17 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <fcntl.h>
 #include <poll.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+
+#ifndef SO_TYPE
+#define SO_TYPE 3
+#endif
+#ifndef SO_ERROR
+#define SO_ERROR 4
+#endif
 
 static bool ParseIPv4(const char* text, in_addr_t* output) {
 	if (!text || !output) return false;
@@ -34,15 +42,21 @@ static bool ParseIPv4(const char* text, in_addr_t* output) {
 }
 
 static void PrintUsage() {
-	printf("usage: testtcp [--reuse] [--count n] --listen [port]\n\r");
-	printf("       testtcp [--repeat n] [--burst n] [--fill n] [--read-size n] [--write-size n] ipv4 port [payload]\n\r");
+	printf("usage: testtcp [--reuse] [--nonblock] [--poll-accept] [--backlog n] [--accept-delay ms] [--count n] [--sockopt] --listen [port]\n\r");
+	printf("       testtcp [--repeat n] [--burst n] [--fill n] [--read-size n] [--write-size n] [--poll-after-recv] [--sockopt] ipv4 port [payload]\n\r");
 	printf("  listen: testtcp --listen 80\n\r");
 	printf("  reuse:  testtcp --reuse --listen 80\n\r");
+	printf("  nbacc:  testtcp --nonblock --listen 80\n\r");
+	printf("  lpoll:  testtcp --poll-accept --listen 80\n\r");
+	printf("  bklg:   testtcp --backlog 1 --listen 80\n\r");
+	printf("  delay:  testtcp --backlog 1 --accept-delay 3000 --listen 80\n\r");
 	printf("  count:  testtcp --listen 80 --count 3\n\r");
 	printf("  burst:  testtcp --burst 3 10.0.2.1 7777 hello\n\r");
 	printf("  fill:   testtcp --fill 1500 10.0.2.1 7777\n\r");
 	printf("  read:   testtcp --read-size 2 10.0.2.1 7777 hello\n\r");
 	printf("  write:  testtcp --write-size 2 10.0.2.1 7777 hello\n\r");
+	printf("  poll:   testtcp --poll-after-recv 10.0.2.1 7777 hello\n\r");
+	printf("  opt:    testtcp --sockopt 10.0.2.1 7777 hello\n\r");
 	printf("  client: testtcp 10.0.2.1 7777 hello\n\r");
 	printf("  repeat: testtcp --repeat 3 10.0.2.1 7777 hello\n\r");
 	printf("  host:   nc -vz -w 1 10.0.2.15 80\n\r");
@@ -66,6 +80,18 @@ static bool SetReuseAddress(int fd) {
 	return value != 0;
 }
 
+static void PrintSocketOptions(int fd) {
+	int value = 0;
+	socklen_t length = sizeof(value);
+	if (getsockopt(fd, SOL_SOCKET, SO_TYPE, &value, &length) == 0) {
+		printf("testtcp: so_type=%d\n\r", value);
+	}
+	length = sizeof(value);
+	if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &value, &length) == 0) {
+		printf("testtcp: so_error=%d\n\r", value);
+	}
+}
+
 int main(int argc, char** argv) {
 	if (argc >= 2 && (!StrCompare(argv[1], "-h") || !StrCompare(argv[1], "--help") ||
 		!StrCompare(argv[1], "help"))) {
@@ -75,12 +101,18 @@ int main(int argc, char** argv) {
 
 	bool listen_mode = false;
 	bool reuse_address = false;
+	bool nonblock = false;
+	bool poll_accept = false;
 	int accept_limit = 0;
+	int listen_backlog = 4;
+	int accept_delay = 0;
 	int repeat_count = 1;
 	int burst_count = 1;
 	int read_size = 512;
 	int write_size = 512;
 	int fill_length = 0;
+	bool poll_after_recv = false;
+	bool show_sockopt = false;
 	const char* positional[3] = {};
 	stduint positional_count = 0;
 	for (int i = 1; i < argc; i++) {
@@ -90,6 +122,38 @@ int main(int argc, char** argv) {
 		}
 		if (StrCompare(argv[i], "--reuse") == 0) {
 			reuse_address = true;
+			continue;
+		}
+		if (StrCompare(argv[i], "--nonblock") == 0) {
+			nonblock = true;
+			continue;
+		}
+		if (StrCompare(argv[i], "--poll-accept") == 0) {
+			poll_accept = true;
+			continue;
+		}
+		if (StrCompare(argv[i], "--backlog") == 0) {
+			if (++i >= argc) {
+				PrintUsage();
+				return 1;
+			}
+			listen_backlog = atoi(argv[i]);
+			if (listen_backlog <= 0) {
+				PrintUsage();
+				return 1;
+			}
+			continue;
+		}
+		if (StrCompare(argv[i], "--accept-delay") == 0) {
+			if (++i >= argc) {
+				PrintUsage();
+				return 1;
+			}
+			accept_delay = atoi(argv[i]);
+			if (accept_delay < 0) {
+				PrintUsage();
+				return 1;
+			}
 			continue;
 		}
 		if (StrCompare(argv[i], "--count") == 0) {
@@ -164,6 +228,14 @@ int main(int argc, char** argv) {
 			}
 			continue;
 		}
+		if (StrCompare(argv[i], "--poll-after-recv") == 0) {
+			poll_after_recv = true;
+			continue;
+		}
+		if (StrCompare(argv[i], "--sockopt") == 0) {
+			show_sockopt = true;
+			continue;
+		}
 		if (positional_count >= 3) {
 			PrintUsage();
 			return 1;
@@ -172,7 +244,7 @@ int main(int argc, char** argv) {
 	}
 
 	if (!listen_mode) {
-		if (reuse_address || accept_limit ||
+		if (reuse_address || nonblock || poll_accept || accept_limit || listen_backlog != 4 || accept_delay ||
 			(fill_length ? positional_count != 2 : positional_count != 3)) {
 			PrintUsage();
 			return 1;
@@ -203,6 +275,7 @@ int main(int argc, char** argv) {
 				if (fill_payload) free(fill_payload);
 				return 1;
 			}
+			if (show_sockopt) PrintSocketOptions(fd);
 			struct sockaddr_in target{};
 			target.sin_family = AF_INET;
 			target.sin_port = htons((uint16)target_port);
@@ -219,6 +292,7 @@ int main(int argc, char** argv) {
 				PrintSocketAddress("local", local);
 			}
 			PrintSocketAddress("peer", target);
+			if (show_sockopt) PrintSocketOptions(fd);
 			const size_t payload_length = strlen(payload);
 			stduint sent_total = 0;
 			for (int burst = 0; burst < burst_count; burst++) {
@@ -243,6 +317,20 @@ int main(int argc, char** argv) {
 			char buffer[513] = {};
 			stduint received_total = 0;
 			while (received_total < sent_total) {
+				struct pollfd read_pfd{};
+				read_pfd.fd = fd;
+				read_pfd.events = POLLIN;
+				const int read_ready = poll(&read_pfd, 1, 2500);
+				if (read_ready < 0) {
+					printf("testtcp: poll failed\n\r");
+					close(fd);
+					if (fill_payload) free(fill_payload);
+					return 1;
+				}
+				if (read_ready == 0 || !(read_pfd.revents & POLLIN)) {
+					printf("testtcp: no data received\n\r");
+					break;
+				}
 				const stdsint received = read(fd, buffer, read_size);
 				if (received < 0) {
 					printf("testtcp: recv failed\n\r");
@@ -255,6 +343,20 @@ int main(int argc, char** argv) {
 				printf("testtcp: recv %d bytes: %s\n\r", (int)received, buffer);
 				received_total += stduint(received);
 			}
+			if (poll_after_recv) {
+				struct pollfd pfd{};
+				pfd.fd = fd;
+				pfd.events = POLLIN | POLLOUT;
+				const int ready = poll(&pfd, 1, 1000);
+				if (ready < 0) {
+					printf("testtcp: poll-after-recv failed\n\r");
+					close(fd);
+					if (fill_payload) free(fill_payload);
+					return 1;
+				}
+				printf("testtcp: poll-after-recv=%d revents=%[16H]\n\r",
+					ready, (stduint)pfd.revents);
+			}
 			if (close(fd) < 0) {
 				printf("testtcp: close failed\n\r");
 				if (fill_payload) free(fill_payload);
@@ -266,7 +368,7 @@ int main(int argc, char** argv) {
 		return 0;
 	}
 
-	if (repeat_count != 1 || burst_count != 1 || fill_length || positional_count > 1) {
+	if (repeat_count != 1 || burst_count != 1 || fill_length || poll_after_recv || positional_count > 1) {
 		PrintUsage();
 		return 1;
 	}
@@ -281,10 +383,20 @@ int main(int argc, char** argv) {
 		printf("testtcp: socket failed\n\r");
 		return 1;
 	}
+	if (show_sockopt) PrintSocketOptions(fd);
 	if (reuse_address && !SetReuseAddress(fd)) {
 		printf("testtcp: reuseaddr failed\n\r");
 		close(fd);
 		return 1;
+	}
+	if (nonblock) {
+		const int flags = fcntl(fd, F_GETFL);
+		if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) {
+			printf("testtcp: nonblock failed\n\r");
+			close(fd);
+			return 1;
+		}
+		printf("testtcp: nonblock=1\n\r");
 	}
 
 	struct sockaddr_in local{};
@@ -296,7 +408,7 @@ int main(int argc, char** argv) {
 		close(fd);
 		return 1;
 	}
-	if (listen(fd, 4) < 0) {
+	if (listen(fd, listen_backlog) < 0) {
 		printf("testtcp: listen failed\n\r");
 		close(fd);
 		return 1;
@@ -307,13 +419,41 @@ int main(int argc, char** argv) {
 	if (getsockname(fd, (struct sockaddr*)&bound, &bound_length) == 0) {
 		PrintSocketAddress("local", bound);
 	}
-	printf("testtcp: listening backlog=4\n\r");
+	printf("testtcp: listening backlog=%d\n\r", listen_backlog);
+	if (accept_delay > 0) {
+		printf("testtcp: accept delay=%dms\n\r", accept_delay);
+		poll(nullptr, 0, accept_delay);
+	}
 	int accepted_total = 0;
 	for (;;) {
+		if (poll_accept) {
+			struct pollfd listen_pfd{};
+			listen_pfd.fd = fd;
+			listen_pfd.events = POLLIN;
+			const int listen_ready = poll(&listen_pfd, 1, 3000);
+			if (listen_ready < 0) {
+				printf("testtcp: listen poll failed\n\r");
+				close(fd);
+				return 1;
+			}
+			printf("testtcp: listen poll=%d revents=%[16H]\n\r",
+				listen_ready, (stduint)listen_pfd.revents);
+			if (listen_ready == 0) {
+				if (nonblock) {
+					printf("testtcp: accept would block\n\r");
+					break;
+				}
+				continue;
+			}
+		}
 		struct sockaddr_in peer{};
 		socklen_t peer_length = sizeof(peer);
 		const int client = accept(fd, (struct sockaddr*)&peer, &peer_length);
 		if (client < 0) {
+			if (nonblock) {
+				printf("testtcp: accept would block\n\r");
+				break;
+			}
 			printf("testtcp: accept failed\n\r");
 			return 1;
 		}
@@ -364,6 +504,8 @@ int main(int argc, char** argv) {
 					close(client);
 					return 1;
 				}
+				printf("testtcp: eof poll=%d revents=%[16H]\n\r",
+					close_ready, (stduint)pfd.revents);
 				if (!close_ready || !(pfd.revents & POLLIN)) {
 					printf("testtcp: no eof\n\r");
 					break;

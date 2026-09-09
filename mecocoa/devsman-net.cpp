@@ -142,6 +142,7 @@ namespace {
 		FinWait2,
 		Closing,
 		TimeWait,
+		Reset,
 	};
 
 	struct NetTcpConnection {
@@ -168,6 +169,7 @@ namespace {
 		NetTcpClosePhase close_phase;
 		bool active_open;
 		bool local_fin_acknowledged;
+		bool reset_received;
 		bool valid;
 	};
 
@@ -778,6 +780,7 @@ namespace {
 	bool IsTcpReceiveReady(const NetTcpConnection& connection) {
 		if (connection.rx_count) return true;
 		if (!connection.tcp) return false;
+		if (connection.reset_received) return true;
 		return connection.tcp->getControl().state == uni::Network::TCPConnectionState::CloseWait;
 	}
 
@@ -1119,6 +1122,16 @@ namespace {
 		return connection.tx_count < NetTcpTxPendingCapacity && EnsureTcpTxStorage(connection);
 	}
 
+	void MarkTcpReset(NetTcpConnection& connection) {
+		connection.reset_received = true;
+		connection.close_phase = NetTcpClosePhase::Reset;
+		for0(i, NetTcpTxPendingCapacity) connection.tx_pending[i] = {};
+		connection.tx_head = 0;
+		connection.tx_tail = 0;
+		connection.tx_count = 0;
+		WakeTcpRxReaders(connection);
+	}
+
 	bool IsTcpTxRetryExhausted(const NetTcpConnection& connection) {
 		if (!connection.tx_count) return false;
 		const auto& pending = connection.tx_pending[connection.tx_head];
@@ -1254,6 +1267,11 @@ namespace {
 		for0(i, NetTcpConnectionCapacity) {
 			auto& connection = net_tcp_connections[i];
 			if (!connection.valid || !connection.active_open || !connection.tcp) continue;
+			if (connection.reset_received) {
+				const auto context = connection.tcp->getControl().context;
+				ReleaseTcpConnection(context);
+				continue;
+			}
 			if (IsTcpConnectReady(connection)) continue;
 			if (IsTcpConnectExpired(connection)) {
 				const auto context = connection.tcp->getControl().context;
@@ -1488,6 +1506,47 @@ namespace {
 		// if (sent > 0) LogIPv4Address("[Net] icmp echo reply ", ipv4.source);
 	}
 
+	void SendICMPv4PortUnreachable(uni::Network::LinkDevice& dev,
+		const uni::Network::EthernetFrameView& frame, const uni::Network::IPv4PacketView& ipv4) {
+		const stduint quoted_payload = minof(stduint(8), ipv4.payload_length);
+		const stduint quoted_length = ipv4.header_length + quoted_payload;
+		const stduint icmp_length = uni::Network::ICMPv4HeaderLength + quoted_length;
+		const stduint ipv4_length = uni::Network::IPv4MinHeaderLength + icmp_length;
+		const stduint frame_length = uni::Network::EthernetHeaderLength + ipv4_length;
+		if (!net_buffers.tx || frame_length > NetFrameBufferSize) return;
+
+		const auto local_mac = dev.getAddress();
+		auto* ethernet = reinterpret_cast<uni::Network::EthernetHeader*>(net_buffers.tx);
+		uni::Network::EthernetWriteAddress(ethernet->destination, frame.source);
+		uni::Network::EthernetWriteAddress(ethernet->source, local_mac);
+		uni::Network::EthernetWrite16(ethernet->type, uint16(uni::Network::EthernetType::IPv4));
+
+		auto* response_ipv4 = reinterpret_cast<uni::Network::IPv4Header*>(
+			net_buffers.tx + uni::Network::EthernetHeaderLength);
+		uni::Network::BuildIPv4Header(*response_ipv4, net_config.ipv4_address, ipv4.source,
+			uint8(uni::Network::IPv4Protocol::ICMP), uint16(ipv4_length), net_ipv4_identification++);
+
+		auto* icmp = net_buffers.tx + uni::Network::EthernetHeaderLength + uni::Network::IPv4MinHeaderLength;
+		auto* icmp_header = reinterpret_cast<uni::Network::ICMPv4Header*>(icmp);
+		icmp_header->type = 3;
+		icmp_header->code = 3;
+		uni::Network::EthernetWrite16(icmp_header->checksum, 0);
+		uni::Network::EthernetWrite16(icmp_header->identifier, 0);
+		uni::Network::EthernetWrite16(icmp_header->sequence, 0);
+		auto* quoted = icmp + uni::Network::ICMPv4HeaderLength;
+		const auto* original = reinterpret_cast<const uint8*>(ipv4.header);
+		for0(i, quoted_length) quoted[i] = original[i];
+		uni::Network::EthernetWrite16(icmp_header->checksum,
+			uni::Network::NetworkChecksum(icmp, icmp_length));
+
+		uni::Network::LinkFrameView reply{
+			net_buffers.tx,
+			frame_length,
+		};
+		const stdsint sent = dev.Send(reply);
+		if (sent <= 0) plogwarn("[Net] icmp port unreachable send failed");
+	}
+
 	bool HandleUdpEchoDatagram(uni::Network::LinkDevice& dev, const NetUdpPacket& packet) {
 		(void)dev;
 		const auto& frame = *packet.ethernet;
@@ -1518,7 +1577,10 @@ namespace {
 			return;
 		}
 		auto handler = FindUdpPortHandler(udp.destination_port);
-		if (!handler) return;
+		if (!handler) {
+			SendICMPv4PortUnreachable(dev, frame, ipv4);
+			return;
+		}
 		NetUdpPacket packet{
 			&frame,
 			&ipv4,
@@ -1550,8 +1612,7 @@ namespace {
 		LearnArpCache(ipv4.source, frame.source);
 		if (tcp.flags & uni::Network::TCPFlagRST) {
 			if (connection) {
-				const auto context = connection->tcp->getControl().context;
-				ReleaseTcpConnection(context);
+				MarkTcpReset(*connection);
 			}
 			return;
 		}
@@ -1583,6 +1644,10 @@ namespace {
 			if ((tcp.flags & uni::Network::TCPFlagSYN) && !(tcp.flags & uni::Network::TCPFlagACK)) {
 				bool new_connection = false;
 				if (!connection) {
+					if (IsTcpAcceptBacklogFull(*listener_for_port)) {
+						SendTcpResetForSegment(dev, frame, ipv4, tcp);
+						return;
+					}
 					connection = AllocateTcpConnection(ipv4.destination, tcp.destination_port,
 						ipv4.source, tcp.source_port);
 					new_connection = connection != nullptr;
@@ -2164,6 +2229,10 @@ stdsint Devsman::ConnectTcp(const uni::Network::IPv4Address& target_ip,
 		connection = FindTcpConnection(context.local.address, context.local.port,
 			context.remote.address, context.remote.port);
 		if (!connection) return -1;
+		if (connection->reset_received) {
+			ReleaseTcpConnection(context);
+			return -1;
+		}
 		if (IsTcpConnectReady(*connection)) break;
 		syscall(syscall_t::REST, 1, 10);
 	}
@@ -2175,6 +2244,7 @@ bool Devsman::CloseTcpConnection(const uni::Network::TCPConnectionContext& conte
 	auto* connection = FindTcpConnection(context.local.address, context.local.port,
 		context.remote.address, context.remote.port);
 	if (!connection || !connection->tcp) return false;
+	if (connection->reset_received) return ReleaseTcpConnection(context);
 	while (connection->tx_count && !IsTcpTxRetryExhausted(*connection)) {
 		ProcessTcpControlTimers();
 		connection = FindTcpConnection(context.local.address, context.local.port,
@@ -2219,10 +2289,36 @@ bool Devsman::HasTcpReceive(const uni::Network::TCPConnectionContext& context) {
 	return connection && IsTcpReceiveReady(*connection);
 }
 
+bool Devsman::IsTcpReceiveClosed(const uni::Network::TCPConnectionContext& context) {
+	auto* connection = FindTcpConnection(context.local.address, context.local.port,
+		context.remote.address, context.remote.port);
+	if (!connection || !connection->tcp) return true;
+	if (connection->reset_received) return false;
+	return !connection->rx_count &&
+		connection->tcp->getControl().state == uni::Network::TCPConnectionState::CloseWait;
+}
+
+bool Devsman::HasTcpError(const uni::Network::TCPConnectionContext& context) {
+	auto* connection = FindTcpConnection(context.local.address, context.local.port,
+		context.remote.address, context.remote.port);
+	return connection && connection->reset_received;
+}
+
+bool Devsman::HasTcpSendSpace(const uni::Network::TCPConnectionContext& context) {
+	auto* connection = FindTcpConnection(context.local.address, context.local.port,
+		context.remote.address, context.remote.port);
+	if (!connection || !connection->tcp) return false;
+	if (connection->reset_received) return false;
+	if (connection->close_phase != NetTcpClosePhase::None) return false;
+	if (connection->tcp->getControl().state == uni::Network::TCPConnectionState::LastAck) return false;
+	return connection->tx_count < NetTcpTxPendingCapacity && !IsTcpTxRetryExhausted(*connection);
+}
+
 stdsint Devsman::ReceiveTcp(const uni::Network::TCPConnectionContext& context, void* payload, stduint capacity) {
 	auto* connection = FindTcpConnection(context.local.address, context.local.port,
 		context.remote.address, context.remote.port);
 	if (!connection) return -1;
+	if (connection->reset_received) return -1;
 	return DequeueTcpRx(*connection, payload, capacity);
 }
 
@@ -2230,6 +2326,7 @@ stdsint Devsman::SendTcp(const uni::Network::TCPConnectionContext& context, cons
 	auto* connection = FindTcpConnection(context.local.address, context.local.port,
 		context.remote.address, context.remote.port);
 	if (!connection || !connection->tcp) return -1;
+	if (connection->reset_received) return -1;
 	if (connection->tcp->getControl().state == uni::Network::TCPConnectionState::LastAck) return -1;
 	if (!length) return 0;
 	if (!payload) return -1;
@@ -2525,6 +2622,9 @@ bool Devsman::GetTcpConnectionEntry(stduint index, void* entry, stduint length) 
 		case NetTcpClosePhase::TimeWait:
 			output->state = 7;
 			break;
+		case NetTcpClosePhase::Reset:
+			output->state = 8;
+			break;
 		default:
 			output->state = uint16(control.state);
 			break;
@@ -2533,6 +2633,7 @@ bool Devsman::GetTcpConnectionEntry(stduint index, void* entry, stduint length) 
 		if (connection.active_open) output->flags |= 0x0100u;
 		if (connection.local_fin_acknowledged) output->flags |= 0x0200u;
 		if (IsTcpTxRetryExhausted(connection)) output->flags |= 0x0400u;
+		if (connection.reset_received) output->flags |= 0x0800u;
 		output->entry_index = uint16(index);
 		output->rx_bytes = uint16(connection.rx_count);
 		output->tx_pending = uint16(connection.tx_count);

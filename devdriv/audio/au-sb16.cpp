@@ -10,6 +10,8 @@
 #include <cpp/atomic>
 
 #if _MCCA == 0x8632
+extern const AudioBackendDriver g_sb16_audio_backend;
+
 namespace {
 	constexpr uint16 SoundBlasterTestSampleRate = 11025;
 	constexpr uint16 SoundBlasterTestFrequency = 440;
@@ -104,6 +106,7 @@ namespace {
 	stduint sound_blaster_rate_scale_num = 1;
 	stduint sound_blaster_rate_scale_den = 1;
 	volatile bool sound_blaster_unexpected_irq_reported;
+	volatile stduint sound_blaster_last_activity_tick = 0;
 	uint8 sound_blaster_dma8_channel = SoundBlasterDefaultConfig.dma8;
 	uint8 sound_blaster_dma16_channel = SoundBlasterDefaultConfig.dma16;
 	uint8* sound_blaster_dma_buffer;
@@ -251,6 +254,7 @@ namespace {
 			sound_blaster_auto_buffer.refill_miss_count.fetch_add(
 				1, uni::MemoryOrder_Relaxed);
 		}
+		sound_blaster_last_activity_tick = tick;
 		return completed_block;
 	}
 
@@ -784,9 +788,7 @@ namespace {
 
 		sound_blaster_unexpected_irq_reported = false;
 		const uint16 programmed_rate = GetProgrammedSoundBlasterRate(sample_rate);
-		const uint32 dsp_count = is_16bit ?
-			(SoundBlasterAutoInitBlockBytes / 2) :
-			SoundBlasterAutoInitBlockBytes;
+		const uint32 dsp_count = is_16bit ? (SoundBlasterAutoInitBlockBytes / 2) : SoundBlasterAutoInitBlockBytes;
 		bool start_ok = false;
 		if (sound_blaster.SpeakerOn() && sound_blaster.SetOutputRate(programmed_rate)) {
 			if (is_16bit) {
@@ -806,6 +808,7 @@ namespace {
 			plogwarn("[SB16] Failed to start auto-init stream");
 			return false;
 		}
+		sound_blaster_last_activity_tick = tick;
 		ploginfo("[SB16] Auto-init stream started rate=%u prog=%u block=%u dma=%u fmt=%u ch=%u",
 			(stduint)sample_rate, (stduint)programmed_rate,
 			(stduint)SoundBlasterAutoInitBlockBytes,
@@ -916,6 +919,8 @@ namespace {
 		(void)sound_blaster.ResetMixer();
 		(void)sound_blaster.SetVolume(uni::SoundBlasterMixerChannel::MasterVolume, 204, 204);
 		(void)sound_blaster.SetVolume(uni::SoundBlasterMixerChannel::VoiceVolume, 204, 204);
+		// Register as unified audio backend in Devsman
+		(void)Devsman::RegisterAudioBackend(&::g_sb16_audio_backend);
 		// Keep boot quiet. Explicit AudioMsg::TEST / playback paths can still
 		// exercise the device after normal service scheduling is available.
 		return true;
@@ -1169,13 +1174,139 @@ uint8 SoundBlasterServicePlayback() {
 	if (refilled) {
 		sound_blaster_auto_buffer.refilled_count.fetch_add(
 			refilled, uni::MemoryOrder_Relaxed);
+		sound_blaster_last_activity_tick = tick;
 	}
 	return refilled;
 }
 
+bool SoundBlasterRecoverDevice() {
+	auto mode = sound_blaster_playback_mode.load(uni::MemoryOrder_Acquire);
+	const bool was_streaming = (mode == SoundBlasterPlaybackMode::AutoInit8 ||
+		mode == SoundBlasterPlaybackMode::AutoInit16 ||
+		mode == SoundBlasterPlaybackMode::AutoInit8Paused ||
+		mode == SoundBlasterPlaybackMode::AutoInit16Paused);
+
+	plogwarn("[SB16] Initiating device recovery and hardware reset");
+
+	// 1. Mask DMA channels
+	IsaDmaMask(sound_blaster_dma8_channel);
+	IsaDmaMask(sound_blaster_dma16_channel);
+
+	// 2. Reset DSP
+	if (!sound_blaster.Reset()) {
+		plogwarn("[SB16] Recovery failed: DSP reset failed");
+		return false;
+	}
+
+	// 3. Restore mixer settings
+	sound_blaster.SetVolume(uni::SoundBlasterMixerChannel::MasterVolume,
+		sound_blaster_master_vol_l, sound_blaster_master_vol_r);
+	if (sound_blaster_master_mute) {
+		sound_blaster.SetMute(uni::SoundBlasterMixerChannel::MasterVolume, true);
+	}
+	sound_blaster.SetVolume(uni::SoundBlasterMixerChannel::VoiceVolume, 204, 204);
+
+	// 4. If we were streaming, re-arm the auto-init DMA
+	if (was_streaming && sound_blaster_auto_buffer.refill) {
+		const bool is_16bit = sound_blaster_auto_buffer.is_16bit;
+		const bool stereo = sound_blaster_auto_buffer.stereo;
+		const uint32 dma_bytes = SoundBlasterAutoInitBlockCount * SoundBlasterAutoInitBlockBytes;
+
+		if (is_16bit) {
+			if (!IsaDma16Prepare(sound_blaster_dma16_channel,
+				(stduint)sound_blaster_dma_buffer, dma_bytes,
+				IsaDmaDirection::MemoryToDevice,
+				IsaDmaReloadMode::AutoInitialize)) {
+				plogwarn("[SB16] Recovery failed: ISA DMA16 prepare failed");
+				return false;
+			}
+		} else {
+			if (!IsaDma8Prepare(sound_blaster_dma8_channel,
+				(stduint)sound_blaster_dma_buffer, dma_bytes,
+				IsaDmaDirection::MemoryToDevice,
+				IsaDmaReloadMode::AutoInitialize)) {
+				plogwarn("[SB16] Recovery failed: ISA DMA8 prepare failed");
+				return false;
+			}
+		}
+
+		sound_blaster.Acknowledge8BitIrq();
+		sound_blaster.Acknowledge16BitIrq();
+
+		const uint16 prog_rate = GetProgrammedSoundBlasterRate(sound_blaster_auto_buffer.sample_rate);
+		const uint32 dsp_count = is_16bit ? (SoundBlasterAutoInitBlockBytes / 2) : SoundBlasterAutoInitBlockBytes;
+
+		bool start_ok = false;
+		if (sound_blaster.SpeakerOn() && sound_blaster.SetOutputRate(prog_rate)) {
+			if (is_16bit) {
+				start_ok = sound_blaster.StartAutoInit16(dsp_count,
+					sound_blaster_auto_buffer.is_signed,
+					sound_blaster_auto_buffer.stereo);
+			} else {
+				start_ok = sound_blaster.StartAutoInit8(dsp_count,
+					sound_blaster_auto_buffer.is_signed,
+					sound_blaster_auto_buffer.stereo);
+			}
+		}
+
+		if (!start_ok) {
+			if (is_16bit) IsaDmaMask(sound_blaster_dma16_channel);
+			else IsaDmaMask(sound_blaster_dma8_channel);
+			plogwarn("[SB16] Recovery failed: DSP auto-init re-start failed");
+			return false;
+		}
+
+		sound_blaster_last_activity_tick = tick;
+		ploginfo("[SB16] Audio stream successfully recovered and re-armed");
+	}
+
+	return true;
+}
+
+bool SoundBlasterWatchdogCheck() {
+	auto mode = sound_blaster_playback_mode.load(uni::MemoryOrder_Acquire);
+	if (mode != SoundBlasterPlaybackMode::AutoInit8 &&
+		mode != SoundBlasterPlaybackMode::AutoInit16) {
+		return true; // Not actively playing
+	}
+
+	const uint8 frame_size = (sound_blaster_auto_buffer.is_16bit ? 2 : 1) *
+		sound_blaster_auto_buffer.channels;
+	const stduint bytes_per_sec = (stduint)sound_blaster_auto_buffer.sample_rate * (frame_size ? frame_size : 1);
+	stduint timeout_ticks = 3 * CONFIG_SysTickFreq;
+	if (bytes_per_sec > 0) {
+		const stduint expected_block_ticks =
+			((stduint)SoundBlasterAutoInitBlockBytes * CONFIG_SysTickFreq * 4) / bytes_per_sec;
+		timeout_ticks = expected_block_ticks + 3 * CONFIG_SysTickFreq;
+	}
+
+	if (tick - sound_blaster_last_activity_tick > timeout_ticks) {
+		plogwarn("[SB16] Watchdog: Audio playback stalled for %u ticks! Attempting recovery...",
+			(stduint)(tick - sound_blaster_last_activity_tick));
+		sound_blaster_last_activity_tick = tick;
+		return SoundBlasterRecoverDevice();
+	}
+	return true;
+}
+
+const AudioBackendDriver g_sb16_audio_backend{
+	.name = "sb16",
+	.start_stream = SoundBlasterStartPcmStream,
+	.stop_stream = SoundBlasterStopPcmStream,
+	.pause_stream = SoundBlasterPausePcmStream,
+	.resume_stream = SoundBlasterResumePcmStream,
+	.flush_stream = SoundBlasterFlushPcmStream,
+	.set_volume = SoundBlasterSetVolume,
+	.get_volume = SoundBlasterGetVolume,
+	.set_mute = SoundBlasterSetMute,
+	.watchdog_check = SoundBlasterWatchdogCheck,
+	.service_playback = SoundBlasterServicePlayback,
+};
+
 void Handint_SB16() {
 	sound_blaster.Acknowledge8BitIrq();
 	sound_blaster.Acknowledge16BitIrq();
+	sound_blaster_last_activity_tick = tick;
 	const uint32 count = sound_blaster_irq_count + 1;
 	sound_blaster_irq_count = count;
 	const auto playback_mode = sound_blaster_playback_mode.load(

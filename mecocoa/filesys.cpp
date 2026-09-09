@@ -11,6 +11,10 @@ using namespace uni;
 #include "../include/console.hpp" // for VTTY_OUTQ, SysMessage, vtty_type_t
 // VFS and DevFs Implementation
 
+#ifndef ECONNRESET
+#define ECONNRESET 104
+#endif
+
 static uni::vfs_dentry* _Index_unlocked(const char* pathname, uni::vfs_dentry* base);
 
 file_system_type* registered_filesystems = nullptr;
@@ -24,6 +28,22 @@ namespace uni {
 	Mutex vfs_lock;
 	static constexpr uint16 SocketHandleFlagLocalAddressAuto = 0x0001u;
 	static constexpr uint16 SocketHandleFlagReuseAddress = 0x0002u;
+
+	static bool IsLocalBindIPv4AddressAllowed(const Network::IPv4Address& address) {
+		if (address.isZero()) return true;
+		#if (_MCCA & 0xFF00) != 0x8600
+		return false;
+		#else
+		syscall_net_route_ipv4_t route{};
+		syscall_net_interface_ipv4_t iface{};
+		if (!Devsman::GetDefaultIPv4Route(&route, sizeof(route))) return false;
+		if (!Devsman::GetIPv4Interface(route.link_index, &iface, sizeof(iface))) return false;
+		for0(i, Network::IPv4AddressLength) {
+			if (address.octet[i] != iface.address[i]) return false;
+		}
+		return true;
+		#endif
+	}
 
 	static stduint count_mounts_for_source_node_unlocked(DeviceNode* source_device_node) {
 		if (!source_device_node) return 0;
@@ -1738,6 +1758,7 @@ int Filesys::BindSocket(vfs_file* file, const Network::SocketAddress& address) {
 
 	const auto& ipv4 = reinterpret_cast<const Network::SocketAddressIPv4&>(address);
 	if (!ipv4.port) return -1;
+	if (!IsLocalBindIPv4AddressAllowed(ipv4.address)) return -1;
 	#if (_MCCA & 0xFF00) != 0x8600
 	(void)ipv4;
 	return -1;
@@ -1996,12 +2017,18 @@ int Filesys::RecvSocket(vfs_file* file, void* payload, stduint capacity,
 	#else
 	Network::UDPDatagramContext context{};
 	if (file->f_mode & O_NONBLOCK) flags &= ~syscall_net_io_flag_wait;
-	stdsint received = Devsman::ReceiveUdp(socket->local_ipv4.port,
-		socket->udp_inbox_id, context, payload, capacity);
-	if (received == 0 && (flags & syscall_net_io_flag_wait)) {
-		if (!Devsman::WaitUdp(socket->local_ipv4.port, socket->udp_inbox_id)) return 0;
+	stdsint received = 0;
+	for (;;) {
 		received = Devsman::ReceiveUdp(socket->local_ipv4.port,
 			socket->udp_inbox_id, context, payload, capacity);
+		if (received > 0 && socket->is_connected &&
+			!(context.source.address == socket->remote_ipv4.address &&
+				context.source.port == socket->remote_ipv4.port)) {
+			continue;
+		}
+		if (received != 0) break;
+		if (!(flags & syscall_net_io_flag_wait)) break;
+		if (!Devsman::WaitUdp(socket->local_ipv4.port, socket->udp_inbox_id)) return 0;
 	}
 	if (received <= 0) return received;
 
@@ -2062,10 +2089,23 @@ int Filesys::Poll(vfs_file* file, stduint events, stduint* revents) {
 				{ socket->local_ipv4.address, socket->local_ipv4.port },
 				{ socket->remote_ipv4.address, socket->remote_ipv4.port },
 			};
+			if (Devsman::HasTcpError(context)) {
+				*revents |= syscall_poll_error | syscall_poll_hangup;
+				return 0;
+			}
 			if (Devsman::HasTcpReceive(context)) *revents |= syscall_poll_in;
+			if (Devsman::IsTcpReceiveClosed(context)) *revents |= syscall_poll_hangup;
 		}
 		if ((events & syscall_poll_out) && socket->is_connected) {
-			*revents |= syscall_poll_out;
+			Network::TCPConnectionContext context{
+				{ socket->local_ipv4.address, socket->local_ipv4.port },
+				{ socket->remote_ipv4.address, socket->remote_ipv4.port },
+			};
+			if (Devsman::HasTcpError(context)) {
+				*revents |= syscall_poll_error | syscall_poll_hangup;
+				return 0;
+			}
+			if (Devsman::HasTcpSendSpace(context)) *revents |= syscall_poll_out;
 		}
 		return 0;
 		#endif
@@ -2145,6 +2185,24 @@ int Filesys::GetSocketOption(vfs_file* file, stduint level, stduint option_name,
 	switch (option_name) {
 	case syscall_net_socket_option_reuse_address:
 		*value = (socket->flags & SocketHandleFlagReuseAddress) ? 1 : 0;
+		return 0;
+	case syscall_net_socket_option_type:
+		*value = int(socket->type);
+		return 0;
+	case syscall_net_socket_option_error:
+		*value = 0;
+		#if (_MCCA & 0xFF00) == 0x8600
+		if (socket->domain == Network::SocketDomain::IPv4 &&
+			socket->type == Network::SocketType::Stream &&
+			socket->protocol == Network::SocketProtocol::TCP &&
+			socket->is_connected) {
+			Network::TCPConnectionContext context{
+				{ socket->local_ipv4.address, socket->local_ipv4.port },
+				{ socket->remote_ipv4.address, socket->remote_ipv4.port },
+			};
+			if (Devsman::HasTcpError(context)) *value = ECONNRESET;
+		}
+		#endif
 		return 0;
 	default:
 		return -1;

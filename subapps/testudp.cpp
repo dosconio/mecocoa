@@ -9,6 +9,13 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 
+#ifndef SO_TYPE
+#define SO_TYPE 3
+#endif
+#ifndef SO_ERROR
+#define SO_ERROR 4
+#endif
+
 static bool ParseIPv4(const char* text, in_addr_t* output) {
 	if (!text || !output) return false;
 	uint8 octets[4] = {};
@@ -36,7 +43,7 @@ static bool ParseIPv4(const char* text, in_addr_t* output) {
 }
 
 static void PrintUsage() {
-	printf("usage: testudp [--dontwait] [--nonblock] [--poll] [--select] [--reuse] [--listen] [ipv4] [port] [payload] [conn]\n\r");
+	printf("usage: testudp [--dontwait] [--nonblock] [--poll] [--select] [--reuse] [--sockopt] [--bind-ip ipv4] [--listen] [ipv4] [port] [payload] [conn]\n\r");
 	printf("  default: testudp 10.0.2.1 7 mecocoa\n\r");
 	printf("  sendto:  testudp 10.0.2.1 7777 mecocoa\n\r");
 	printf("  conn:    testudp 10.0.2.1 7777 mecocoa conn\n\r");
@@ -44,6 +51,8 @@ static void PrintUsage() {
 	printf("  nbread:  testudp --nonblock 10.0.2.1 7777 mecocoa conn\n\r");
 	printf("  poll:    testudp --poll 10.0.2.1 7777 mecocoa\n\r");
 	printf("  select:  testudp --select 10.0.2.1 7777 mecocoa\n\r");
+	printf("  opt:     testudp --sockopt 10.0.2.1 7777 mecocoa\n\r");
+	printf("  bindip:  testudp --bind-ip 10.0.2.15 --listen 7777\n\r");
 	printf("  listen:  testudp --reuse --listen 7777\n\r");
 }
 
@@ -79,6 +88,18 @@ static bool SetReuseAddress(int fd) {
 	return value != 0;
 }
 
+static void PrintSocketOptions(int fd) {
+	int value = 0;
+	socklen_t length = sizeof(value);
+	if (getsockopt(fd, SOL_SOCKET, SO_TYPE, &value, &length) == 0) {
+		printf("testudp: so_type=%d\n\r", value);
+	}
+	length = sizeof(value);
+	if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &value, &length) == 0) {
+		printf("testudp: so_error=%d\n\r", value);
+	}
+}
+
 static stduint NowMs() {
 	return syscall(syscall_t::TIME, 1, nil, nil);
 }
@@ -98,6 +119,9 @@ int main(int argc, char** argv) {
 	bool reuse_address = false;
 	bool use_poll = false;
 	bool use_select = false;
+	bool show_sockopt = false;
+	bool bind_ip_set = false;
+	in_addr_t bind_ip = 0;
 	for (int i = 1; i < argc; i++) {
 		if (StrCompare(argv[i], "conn") == 0) {
 			use_connect = true;
@@ -125,6 +149,18 @@ int main(int argc, char** argv) {
 		}
 		if (StrCompare(argv[i], "--select") == 0) {
 			use_select = true;
+			continue;
+		}
+		if (StrCompare(argv[i], "--sockopt") == 0) {
+			show_sockopt = true;
+			continue;
+		}
+		if (StrCompare(argv[i], "--bind-ip") == 0) {
+			if (++i >= argc || !ParseIPv4(argv[i], &bind_ip)) {
+				PrintUsage();
+				return 1;
+			}
+			bind_ip_set = true;
 			continue;
 		}
 		if (positional_count >= 3) {
@@ -166,12 +202,13 @@ int main(int argc, char** argv) {
 		close(fd);
 		return 1;
 	}
+	if (show_sockopt) PrintSocketOptions(fd);
 
 	if (listen_mode) {
 		struct sockaddr_in local{};
 		local.sin_family = AF_INET;
 		local.sin_port = htons((uint16)listen_port);
-		local.sin_addr.s_addr = 0;
+		local.sin_addr.s_addr = bind_ip_set ? htonl(bind_ip) : 0;
 		if (bind(fd, (const struct sockaddr*)&local, sizeof(local)) < 0) {
 			printf("testudp: bind failed\n\r");
 			close(fd);
@@ -215,6 +252,17 @@ int main(int argc, char** argv) {
 
 	const size_t payload_length = strlen(payload);
 	stdsint sent = 0;
+	if (bind_ip_set) {
+		struct sockaddr_in local{};
+		local.sin_family = AF_INET;
+		local.sin_port = htons(49152);
+		local.sin_addr.s_addr = htonl(bind_ip);
+		if (bind(fd, (const struct sockaddr*)&local, sizeof(local)) < 0) {
+			printf("testudp: bind failed\n\r");
+			close(fd);
+			return 1;
+		}
+	}
 	if (use_connect) {
 		if (connect(fd, (const struct sockaddr*)&target, sizeof(target)) < 0) {
 			printf("testudp: connect failed\n\r");
@@ -289,6 +337,18 @@ int main(int argc, char** argv) {
 					continue;
 				}
 			}
+		}
+		if (!use_poll && !use_select && !no_wait_receive) {
+			struct pollfd pfd{};
+			pfd.fd = fd;
+			pfd.events = POLLIN;
+			const int poll_ready = poll(&pfd, 1, 2500);
+			if (poll_ready < 0) {
+				printf("testudp: poll failed\n\r");
+				close(fd);
+				return 1;
+			}
+			if (poll_ready == 0 || !(pfd.revents & POLLIN)) break;
 		}
 		if (use_connect) {
 			received = dont_wait ? recv(fd, buffer, sizeof(buffer) - 1, receive_flags) :
