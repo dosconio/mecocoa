@@ -10,7 +10,60 @@
 #include <cpp/atomic>
 
 #if _MCCA == 0x8632
-extern const AudioBackendDriver g_sb16_audio_backend;
+class SoundBlasterAudioDevice : public uni::AudioControlInterface {
+public:
+	virtual bool StartStream(const uni::AudioFormat& format,
+		uni::AudioPcmRefillHandler refill_cb, void* context) override {
+		return SoundBlasterStartPcmStream(
+			uint16(format.sample_rate), format.sample_format, uint8(format.channels),
+			refill_cb, context);
+	}
+
+	virtual bool StopStream() override {
+		return SoundBlasterStopPcmStream();
+	}
+
+	virtual bool PauseStream() override {
+		return SoundBlasterPausePcmStream();
+	}
+
+	virtual bool ResumeStream() override {
+		return SoundBlasterResumePcmStream();
+	}
+
+	using uni::AudioControlInterface::setVolume;
+
+	virtual void setVolume(uint32 percent) override {
+		if (percent > 100) percent = 100;
+		uint8 raw = uint8((percent * 255) / 100);
+		SoundBlasterSetVolume(uni::SoundBlasterMixerChannel::MasterVolume, raw, raw);
+	}
+
+	virtual void setVolume(uint32 left, uint32 right) override {
+		if (left > 100) left = 100;
+		if (right > 100) right = 100;
+		uint8 raw_l = uint8((left * 255) / 100);
+		uint8 raw_r = uint8((right * 255) / 100);
+		SoundBlasterSetVolume(uni::SoundBlasterMixerChannel::MasterVolume, raw_l, raw_r);
+	}
+
+	virtual uint32 getVolume() const override {
+		uint8 raw_l = 0, raw_r = 0;
+		if (!SoundBlasterGetVolume(uni::SoundBlasterMixerChannel::MasterVolume, raw_l, raw_r)) return 0;
+		uint32 avg_raw = (uint32(raw_l) + uint32(raw_r)) / 2;
+		return (avg_raw * 100) / 255;
+	}
+
+	virtual void setMute(bool mute = true) override {
+		SoundBlasterSetMute(uni::SoundBlasterMixerChannel::MasterVolume, mute);
+	}
+
+	virtual uint8 ServicePlayback() override {
+		return SoundBlasterServicePlayback();
+	}
+};
+
+extern SoundBlasterAudioDevice g_sb16_audio_device;
 
 namespace {
 	constexpr uint16 SoundBlasterTestSampleRate = 11025;
@@ -920,7 +973,7 @@ namespace {
 		(void)sound_blaster.SetVolume(uni::SoundBlasterMixerChannel::MasterVolume, 204, 204);
 		(void)sound_blaster.SetVolume(uni::SoundBlasterMixerChannel::VoiceVolume, 204, 204);
 		// Register as unified audio backend in Devsman
-		(void)Devsman::RegisterAudioBackend(&::g_sb16_audio_backend);
+		(void)Devsman::RegisterAudioBackend("sb16", &::g_sb16_audio_device);
 		// Keep boot quiet. Explicit AudioMsg::TEST / playback paths can still
 		// exercise the device after normal service scheduling is available.
 		return true;
@@ -1289,19 +1342,7 @@ bool SoundBlasterWatchdogCheck() {
 	return true;
 }
 
-const AudioBackendDriver g_sb16_audio_backend{
-	.name = "sb16",
-	.start_stream = SoundBlasterStartPcmStream,
-	.stop_stream = SoundBlasterStopPcmStream,
-	.pause_stream = SoundBlasterPausePcmStream,
-	.resume_stream = SoundBlasterResumePcmStream,
-	.flush_stream = SoundBlasterFlushPcmStream,
-	.set_volume = SoundBlasterSetVolume,
-	.get_volume = SoundBlasterGetVolume,
-	.set_mute = SoundBlasterSetMute,
-	.watchdog_check = SoundBlasterWatchdogCheck,
-	.service_playback = SoundBlasterServicePlayback,
-};
+SoundBlasterAudioDevice g_sb16_audio_device;
 
 void Handint_SB16() {
 	sound_blaster.Acknowledge8BitIrq();

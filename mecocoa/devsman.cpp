@@ -2238,138 +2238,117 @@ void serv_devs_loop() {
 
 namespace {
 	constexpr stduint AudioMaxBackends = 4;
-	const AudioBackendDriver* s_audio_backends[AudioMaxBackends] = {};
+	struct AudioBackendEntry {
+		const char* name;
+		uni::AudioControlInterface* backend;
+	};
+	AudioBackendEntry s_audio_backends[AudioMaxBackends] = {};
 	stduint s_audio_backend_count = 0;
-	const AudioBackendDriver* s_active_audio_backend = nullptr;
+	uni::AudioControlInterface* s_active_audio_backend = nullptr;
 
-	// Built-in Dummy Audio Backend
-	// Emulates continuous silent consumption of PCM when no physical sound card is present
-	struct DummyAudioState {
+	// Built-in Dummy Audio Device
+	class DummyAudioDevice : public uni::AudioControlInterface {
+	private:
 		bool running;
 		uint16 sample_rate;
 		uni::AudioSampleFormat format;
 		uint8 channels;
-		AudioPcmRefill refill;
+		uni::AudioPcmRefillHandler refill;
 		void* context;
 		stduint last_tick;
 		uint8 buffer[4096];
-	} s_dummy_audio{};
+		uint32 volume;
+		bool muted;
 
-	bool DummyAudioStartStream(uint16 sample_rate, uni::AudioSampleFormat format, uint8 channels,
-		AudioPcmRefill refill, void* context) {
-		s_dummy_audio.running = true;
-		s_dummy_audio.sample_rate = sample_rate ? sample_rate : 44100;
-		s_dummy_audio.format = format;
-		s_dummy_audio.channels = channels ? channels : 2;
-		s_dummy_audio.refill = refill;
-		s_dummy_audio.context = context;
-		s_dummy_audio.last_tick = tick;
-		ploginfo("[Audio] Dummy backend stream started rate=%u ch=%u",
-			(stduint)s_dummy_audio.sample_rate, (stduint)s_dummy_audio.channels);
-		return true;
-	}
+	public:
+		DummyAudioDevice() : running(false), sample_rate(44100),
+			format(uni::AudioSampleFormat::U8), channels(2),
+			refill(nullptr), context(nullptr), last_tick(0),
+			volume(100), muted(false) { }
 
-	bool DummyAudioStopStream() {
-		s_dummy_audio.running = false;
-		s_dummy_audio.refill = nullptr;
-		s_dummy_audio.context = nullptr;
-		ploginfo("[Audio] Dummy backend stream stopped");
-		return true;
-	}
-
-	bool DummyAudioPauseStream() {
-		return true;
-	}
-
-	bool DummyAudioResumeStream() {
-		return true;
-	}
-
-	bool DummyAudioFlushStream() {
-		return true;
-	}
-
-	bool DummyAudioSetVolume(uni::SoundBlasterMixerChannel, uint8, uint8) {
-		return true;
-	}
-
-	bool DummyAudioGetVolume(uni::SoundBlasterMixerChannel, uint8& left, uint8& right) {
-		left = 204;
-		right = 204;
-		return true;
-	}
-
-	bool DummyAudioSetMute(uni::SoundBlasterMixerChannel, bool) {
-		return true;
-	}
-
-	bool DummyAudioWatchdogCheck() {
-		return true;
-	}
-
-	uint8 DummyAudioServicePlayback() {
-		if (!s_dummy_audio.running || !s_dummy_audio.refill) return 0;
-		const uint32 bytes_per_sec = (uint32)s_dummy_audio.sample_rate *
-			(s_dummy_audio.format == uni::AudioSampleFormat::S16LE ? 2 : 1) *
-			s_dummy_audio.channels;
-		const stduint elapsed_ticks = tick - s_dummy_audio.last_tick;
-		const stduint block_ticks = ((stduint)sizeof(s_dummy_audio.buffer) * CONFIG_SysTickFreq) /
-			(bytes_per_sec ? bytes_per_sec : 1);
-		if (elapsed_ticks >= (block_ticks ? block_ticks : 1)) {
-			s_dummy_audio.last_tick = tick;
-			s_dummy_audio.refill(s_dummy_audio.context, s_dummy_audio.buffer, sizeof(s_dummy_audio.buffer));
-			return 1;
+		virtual bool StartStream(const uni::AudioFormat& fmt,
+			uni::AudioPcmRefillHandler refill_cb, void* ctx) override {
+			running = true;
+			sample_rate = fmt.sample_rate ? uint16(fmt.sample_rate) : 44100;
+			format = fmt.sample_format;
+			channels = fmt.channels ? uint8(fmt.channels) : 2;
+			refill = refill_cb;
+			context = ctx;
+			last_tick = tick;
+			ploginfo("[Audio] Dummy backend stream started rate=%u ch=%u",
+				(stduint)sample_rate, (stduint)channels);
+			return true;
 		}
-		return 0;
-	}
 
-	const AudioBackendDriver s_dummy_audio_backend{
-		.name = "dummy",
-		.start_stream = DummyAudioStartStream,
-		.stop_stream = DummyAudioStopStream,
-		.pause_stream = DummyAudioPauseStream,
-		.resume_stream = DummyAudioResumeStream,
-		.flush_stream = DummyAudioFlushStream,
-		.set_volume = DummyAudioSetVolume,
-		.get_volume = DummyAudioGetVolume,
-		.set_mute = DummyAudioSetMute,
-		.watchdog_check = DummyAudioWatchdogCheck,
-		.service_playback = DummyAudioServicePlayback,
-	};
+		virtual bool StopStream() override {
+			running = false;
+			refill = nullptr;
+			context = nullptr;
+			ploginfo("[Audio] Dummy backend stream stopped");
+			return true;
+		}
+
+		virtual bool PauseStream() override { return true; }
+		virtual bool ResumeStream() override { return true; }
+
+		virtual void setVolume(uint32 percent) override {
+			volume = percent > 100 ? 100 : percent;
+		}
+
+		virtual uint32 getVolume() const override { return volume; }
+
+		virtual void setMute(bool mute = true) override {
+			muted = mute;
+		}
+
+		virtual uint8 ServicePlayback() override {
+			if (!running || !refill) return 0;
+			const uint32 bytes_per_sec = (uint32)sample_rate *
+				(format == uni::AudioSampleFormat::S16LE ? 2 : 1) * channels;
+			const stduint elapsed_ticks = tick - last_tick;
+			const stduint block_ticks = ((stduint)sizeof(buffer) * CONFIG_SysTickFreq) /
+				(bytes_per_sec ? bytes_per_sec : 1);
+			if (elapsed_ticks >= (block_ticks ? block_ticks : 1)) {
+				last_tick = tick;
+				refill(context, buffer, sizeof(buffer));
+				return 1;
+			}
+			return 0;
+		}
+	} s_dummy_audio_device;
 }
 
-bool Devsman::RegisterAudioBackend(const AudioBackendDriver* driver) {
-	if (!driver || !driver->name) return false;
+bool Devsman::RegisterAudioBackend(const char* name, uni::AudioControlInterface* backend) {
+	if (!name || !backend) return false;
 	for (stduint i = 0; i < s_audio_backend_count; ++i) {
-		if (s_audio_backends[i] && StrCompare(s_audio_backends[i]->name, driver->name) == 0) {
-			s_audio_backends[i] = driver;
+		if (s_audio_backends[i].name && StrCompare(s_audio_backends[i].name, name) == 0) {
+			s_audio_backends[i].backend = backend;
 			return true;
 		}
 	}
 	if (s_audio_backend_count >= AudioMaxBackends) return false;
-	s_audio_backends[s_audio_backend_count++] = driver;
-	// Auto-select first physical backend over dummy
-	if (!s_active_audio_backend || StrCompare(s_active_audio_backend->name, "dummy") == 0) {
-		s_active_audio_backend = driver;
+	s_audio_backends[s_audio_backend_count++] = { name, backend };
+	if (!s_active_audio_backend || s_active_audio_backend == &s_dummy_audio_device) {
+		s_active_audio_backend = backend;
 	}
-	ploginfo("[Devsman] Registered audio backend: %s", driver->name);
+	ploginfo("[Devsman] Registered audio backend: %s", name);
 	return true;
 }
 
-const AudioBackendDriver* Devsman::GetActiveAudioBackend() {
+uni::AudioControlInterface* Devsman::GetActiveAudioBackend() {
 	if (s_active_audio_backend) return s_active_audio_backend;
-	return &s_dummy_audio_backend;
+	return &s_dummy_audio_device;
 }
 
 bool Devsman::SetActiveAudioBackend(const char* name) {
 	if (!name) return false;
 	if (StrCompare(name, "dummy") == 0) {
-		s_active_audio_backend = &s_dummy_audio_backend;
+		s_active_audio_backend = &s_dummy_audio_device;
 		return true;
 	}
 	for (stduint i = 0; i < s_audio_backend_count; ++i) {
-		if (s_audio_backends[i] && StrCompare(s_audio_backends[i]->name, name) == 0) {
-			s_active_audio_backend = s_audio_backends[i];
+		if (s_audio_backends[i].name && StrCompare(s_audio_backends[i].name, name) == 0) {
+			s_active_audio_backend = s_audio_backends[i].backend;
 			ploginfo("[Devsman] Switched active audio backend to %s", name);
 			return true;
 		}
@@ -2381,7 +2360,10 @@ stduint Devsman::AudioBackendCount() {
 	return s_audio_backend_count;
 }
 
-const AudioBackendDriver* Devsman::GetAudioBackend(stduint index) {
-	if (index < s_audio_backend_count) return s_audio_backends[index];
+uni::AudioControlInterface* Devsman::GetAudioBackend(stduint index, const char** out_name) {
+	if (index < s_audio_backend_count) {
+		if (out_name) *out_name = s_audio_backends[index].name;
+		return s_audio_backends[index].backend;
+	}
 	return nullptr;
 }

@@ -267,35 +267,18 @@ public:
 	static const char* LookupPciVendorName(uint16 vendor_id);
 	#endif
 
-	// Audio Backend Routing
-	static bool RegisterAudioBackend(const struct AudioBackendDriver* driver);
-	static const struct AudioBackendDriver* GetActiveAudioBackend();
+	// Audio Backend Routing (ACI)
+	static bool RegisterAudioBackend(const char* name, uni::AudioControlInterface* backend);
+	static uni::AudioControlInterface* GetActiveAudioBackend();
 	static bool SetActiveAudioBackend(const char* name);
 	static stduint AudioBackendCount();
-	static const struct AudioBackendDriver* GetAudioBackend(stduint index);
+	static uni::AudioControlInterface* GetAudioBackend(stduint index, const char** out_name = nullptr);
 
 };
 
 // ---- AUDIO ----
 
 #include "devsman.com.hpp"
-
-using AudioPcmRefill = uint32 (*)(void* context, uint8* destination, uint32 byte_count);
-
-struct AudioBackendDriver {
-	const char* name;
-	bool (*start_stream)(uint16 sample_rate, uni::AudioSampleFormat sample_format, uint8 channels,
-		AudioPcmRefill refill, void* context);
-	bool (*stop_stream)();
-	bool (*pause_stream)();
-	bool (*resume_stream)();
-	bool (*flush_stream)();
-	bool (*set_volume)(uni::SoundBlasterMixerChannel channel, uint8 left, uint8 right);
-	bool (*get_volume)(uni::SoundBlasterMixerChannel channel, uint8& left, uint8& right);
-	bool (*set_mute)(uni::SoundBlasterMixerChannel channel, bool mute);
-	bool (*watchdog_check)();
-	uint8 (*service_playback)();
-};
 
 // Submit a synchronous PCM playback request to the audio service.
 bool AudioPlay(const uni::AudioPlayRequest& request);

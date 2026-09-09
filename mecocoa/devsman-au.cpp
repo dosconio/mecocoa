@@ -261,24 +261,23 @@ namespace {
 
 	bool AudioMasterEnsureRunning() {
 		if (master_stream_started) return true;
-		const auto* backend = Devsman::GetActiveAudioBackend();
-		if (!backend || !backend->start_stream) {
+		auto* backend = Devsman::GetActiveAudioBackend();
+		if (!backend) {
 			plogwarn("[Audio] No active audio backend available");
 			return false;
 		}
-		if (!backend->start_stream(
-			AudioMasterSampleRate,
-			AudioMasterFormat,
-			AudioMasterChannels,
-			AudioMasterMixerRefill, nullptr)) {
-			plogwarn("[Audio] Failed to start master audio mixer stream on backend %s",
-				backend->name ? backend->name : "unknown");
+		uni::AudioFormat master_fmt{
+			.sample_format = AudioMasterFormat,
+			.channels = AudioMasterChannels,
+			.sample_rate = AudioMasterSampleRate,
+		};
+		if (!backend->StartStream(master_fmt, AudioMasterMixerRefill, nullptr)) {
+			plogwarn("[Audio] Failed to start master audio mixer stream via ACI");
 			return false;
 		}
 		master_stream_started = true;
 		master_last_active_tick = tick;
-		ploginfo("[Audio] Master mixer started 44.1kHz U8 Stereo on %s",
-			backend->name ? backend->name : "unknown");
+		ploginfo("[Audio] Master mixer started 44.1kHz U8 Stereo via ACI");
 		return true;
 	}
 
@@ -305,21 +304,21 @@ namespace {
 		}
 
 		if (master_stream_started) {
-			const auto* backend = Devsman::GetActiveAudioBackend();
+			auto* backend = Devsman::GetActiveAudioBackend();
 			if (active_tracks > 0) {
 				master_last_active_tick = tick;
-				if (backend && backend->watchdog_check && !backend->watchdog_check()) {
+				if (!SoundBlasterWatchdogCheck()) {
 					plogwarn("[Audio] Watchdog: device recovery failed");
 				}
 			} else if (CountActiveTracks() == 0) {
 				if (tick - master_last_active_tick > (CONFIG_SysTickFreq / 4)) {
 					// Stop hardware DMA stream when completely idle to save CPU/DMA cycles and prevent loop residue
-					if (backend && backend->stop_stream) backend->stop_stream();
+					if (backend) backend->StopStream();
 					master_stream_started = false;
 					ploginfo("[Audio] Master mixer entered idle sleep");
 				}
 			}
-			if (backend && backend->service_playback) backend->service_playback();
+			if (backend) backend->ServicePlayback();
 		}
 	}
 
@@ -635,8 +634,8 @@ void serv_dev_audio_loop() {
 			AudioTrackState* track = FindTrackByOwner(sig_src);
 			if (track) FreeTrack(*track);
 			if (CountActiveTracks() == 0 && master_stream_started) {
-				const auto* backend = Devsman::GetActiveAudioBackend();
-				if (backend && backend->stop_stream) backend->stop_stream();
+				auto* backend = Devsman::GetActiveAudioBackend();
+				if (backend) backend->StopStream();
 				master_stream_started = false;
 			}
 			stdsint result = 0;
@@ -690,14 +689,17 @@ void serv_dev_audio_loop() {
 		case AudioMsg::SET_VOLUME:
 		{
 			const auto* vol_req = reinterpret_cast<const AudioVolumeRequest*>(&request);
-			const auto* backend = Devsman::GetActiveAudioBackend();
+			auto* backend = Devsman::GetActiveAudioBackend();
 			stdsint result = -1;
 			if (backend) {
 				if (vol_req->mute) {
-					result = (backend->set_mute && backend->set_mute(vol_req->channel, true)) ? 0 : -1;
+					backend->setMute(true);
 				} else {
-					result = (backend->set_volume && backend->set_volume(vol_req->channel, vol_req->left, vol_req->right)) ? 0 : -1;
+					uint32 vl = (uint32(vol_req->left) * 100) / 255;
+					uint32 vr = (uint32(vol_req->right) * 100) / 255;
+					backend->setVolume(vl, vr);
 				}
+				result = 0;
 			}
 			if (sig_src) syssend(sig_src, &result, sizeof(result));
 			break;
@@ -705,9 +707,12 @@ void serv_dev_audio_loop() {
 		case AudioMsg::GET_VOLUME:
 		{
 			const auto* in_req = reinterpret_cast<const AudioVolumeRequest*>(&request);
-			const auto* backend = Devsman::GetActiveAudioBackend();
+			auto* backend = Devsman::GetActiveAudioBackend();
 			AudioVolumeRequest resp = *in_req;
-			if (!backend || !backend->get_volume || !backend->get_volume(in_req->channel, resp.left, resp.right)) {
+			if (backend) {
+				uint32 vol = backend->getVolume();
+				resp.left = resp.right = uint8((vol * 255) / 100);
+			} else {
 				resp.left = resp.right = 0;
 			}
 			resp.mute = (resp.left == 0 && resp.right == 0);
