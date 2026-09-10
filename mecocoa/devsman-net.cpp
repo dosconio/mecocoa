@@ -40,10 +40,14 @@ namespace {
 	constexpr stduint NetTcpRxStreamSize = 2048;
 	constexpr stduint NetTcpRxWaiterCapacity = 2;
 	constexpr stduint NetTcpTxPendingCapacity = 4;
-	constexpr stduint NetTcpTxPayloadSize = 512;
+	constexpr stduint NetTcpTxPayloadSize = 1460;
 	constexpr stduint NetTcpTxRetryTicks = CONFIG_SysTickFreq;
 	constexpr stduint NetTcpTxRetryLimit = 3;
 	constexpr stduint NetTcpTimeWaitTicks = 2 * CONFIG_SysTickFreq;
+	constexpr stduint NetTcpOptionMssLength = 4;
+	constexpr uint8 NetTcpOptionEnd = 0;
+	constexpr uint8 NetTcpOptionNoop = 1;
+	constexpr uint8 NetTcpOptionMss = 2;
 	constexpr uint16 NetTcpWindowSize = 4096;
 	constexpr uint16 NetUdpEchoPort = 7;
 	constexpr uint16 NetUdpEphemeralPortBegin = 49152;
@@ -167,6 +171,8 @@ namespace {
 		stduint fin_retry_count;
 		stduint time_wait_tick;
 		NetTcpClosePhase close_phase;
+		uint16 local_mss;
+		uint16 peer_mss;
 		bool active_open;
 		bool local_fin_acknowledged;
 		bool reset_received;
@@ -207,6 +213,9 @@ namespace {
 	NetTcpListener net_tcp_listeners[NetTcpListenCapacity]{};
 	NetTcpConnection net_tcp_connections[NetTcpConnectionCapacity]{};
 	uint32 net_tcp_next_sequence = 0x10000000u;
+
+	uint16 NetTcpLocalMss();
+	stduint NetTcpSendMss(const NetTcpConnection& connection);
 
 	struct NetRemoteLinkState {
 		stduint owner_tid = 0;
@@ -654,6 +663,8 @@ namespace {
 			connection.synack_retry_count = 0;
 			connection.last_fin_tick = 0;
 			connection.fin_retry_count = 0;
+			connection.local_mss = NetTcpLocalMss();
+			connection.peer_mss = 0;
 			connection.active_open = false;
 			connection.local_fin_acknowledged = false;
 			connection.valid = true;
@@ -1014,6 +1025,73 @@ namespace {
 
 	NetIPv4Interface net_ipv4_interface;
 
+	uint16 NetTcpLocalMss() {
+		const stduint payload_mtu = net_ipv4_interface.getPayloadMtu();
+		if (payload_mtu <= uni::Network::TCPMinHeaderLength) return 0;
+		stduint mss = payload_mtu - uni::Network::TCPMinHeaderLength;
+		if (mss > 0xFFFFu) mss = 0xFFFFu;
+		return uint16(mss);
+	}
+
+	stduint NetTcpSendMss(const NetTcpConnection& connection) {
+		stduint mss = connection.local_mss ? connection.local_mss : NetTcpLocalMss();
+		if (connection.peer_mss && (!mss || connection.peer_mss < mss)) mss = connection.peer_mss;
+		if (!mss || mss > NetTcpTxPayloadSize) mss = NetTcpTxPayloadSize;
+		return mss;
+	}
+
+	uint16 ParseTcpMssOption(const uni::Network::TCPSegmentView& tcp) {
+		if (!tcp.header || tcp.header_length <= uni::Network::TCPMinHeaderLength) return 0;
+		const auto* option = reinterpret_cast<const uint8*>(tcp.header) + uni::Network::TCPMinHeaderLength;
+		stduint remaining = tcp.header_length - uni::Network::TCPMinHeaderLength;
+		while (remaining) {
+			const uint8 kind = option[0];
+			if (kind == NetTcpOptionEnd) return 0;
+			if (kind == NetTcpOptionNoop) {
+				option++;
+				remaining--;
+				continue;
+			}
+			if (remaining < 2) return 0;
+			const uint8 length = option[1];
+			if (length < 2 || length > remaining) return 0;
+			if (kind == NetTcpOptionMss && length == NetTcpOptionMssLength) {
+				return uint16((uint16(option[2]) << 8) | uint16(option[3]));
+			}
+			option += length;
+			remaining -= length;
+		}
+		return 0;
+	}
+
+	void WriteTcpMssOption(uni::Network::TCPHeader& tcp, uint16 mss) {
+		auto* option = reinterpret_cast<uint8*>(&tcp) + uni::Network::TCPMinHeaderLength;
+		option[0] = NetTcpOptionMss;
+		option[1] = NetTcpOptionMssLength;
+		option[2] = uint8(mss >> 8);
+		option[3] = uint8(mss);
+	}
+
+	stduint BuildTcpControlHeader(NetTcpConnection& connection,
+		uint8 flags, uint32 sequence, uint32 acknowledgment) {
+		if (!connection.tcp) return 0;
+		auto& control = connection.tcp->getControl();
+		const auto& local = control.context.local;
+		const auto& remote = control.context.remote;
+		auto* tcp = reinterpret_cast<uni::Network::TCPHeader*>(net_buffers.tcp_tx);
+		const uint16 local_mss = connection.local_mss ? connection.local_mss : NetTcpLocalMss();
+		const bool use_mss = (flags & uni::Network::TCPFlagSYN) && local_mss;
+		const uint8 header_length = uint8(uni::Network::TCPMinHeaderLength +
+			(use_mss ? NetTcpOptionMssLength : 0));
+		uni::Network::BuildTCPHeader(*tcp, local.port, remote.port,
+			sequence, acknowledgment, flags, NetTcpWindowSize, 0, 0, header_length);
+		if (use_mss) WriteTcpMssOption(*tcp, local_mss);
+		const uint16 checksum = uni::Network::TCPIPv4Checksum(local.address, remote.address,
+			tcp, header_length);
+		uni::Network::EthernetWrite16(tcp->checksum, checksum);
+		return header_length;
+	}
+
 	bool SendTcpSyn(NetTcpConnection& connection) {
 		if (!connection.tcp || !EnsureTcpTxBuffer()) return false;
 		connection.last_syn_tick = tick;
@@ -1031,19 +1109,16 @@ namespace {
 			return SendArpRequest(*route.dev, net_buffers.tcp_tx, route.next_hop);
 		}
 
-		auto* tcp = reinterpret_cast<uni::Network::TCPHeader*>(net_buffers.tcp_tx);
-		uni::Network::BuildTCPHeader(*tcp, local.port, remote.port,
-			control.local_next_sequence - 1, 0, uni::Network::TCPFlagSYN, NetTcpWindowSize);
-		const uint16 checksum = uni::Network::TCPIPv4Checksum(local.address, remote.address,
-			tcp, uni::Network::TCPMinHeaderLength);
-		uni::Network::EthernetWrite16(tcp->checksum, checksum);
+		const stduint tcp_length = BuildTcpControlHeader(connection,
+			uni::Network::TCPFlagSYN, control.local_next_sequence - 1, 0);
+		if (!tcp_length) return false;
 
 		uni::Network::NetworkPacketContext packet{
 			uni::Network::NetworkAddressIPv4(local.address),
 			uni::Network::NetworkAddressIPv4(remote.address),
 			uint8(uni::Network::IPv4Protocol::TCP),
 			net_buffers.tcp_tx,
-			uni::Network::TCPMinHeaderLength,
+			tcp_length,
 			net_ipv4_identification++,
 			64,
 		};
@@ -1065,19 +1140,16 @@ namespace {
 			return SendArpRequest(*route.dev, net_buffers.tcp_tx, route.next_hop);
 		}
 
-		auto* tcp = reinterpret_cast<uni::Network::TCPHeader*>(net_buffers.tcp_tx);
-		uni::Network::BuildTCPHeader(*tcp, local.port, remote.port,
-			sequence, acknowledgment, flags, NetTcpWindowSize);
-		const uint16 checksum = uni::Network::TCPIPv4Checksum(local.address, remote.address,
-			tcp, uni::Network::TCPMinHeaderLength);
-		uni::Network::EthernetWrite16(tcp->checksum, checksum);
+		const stduint tcp_length = BuildTcpControlHeader(connection,
+			flags, sequence, acknowledgment);
+		if (!tcp_length) return false;
 
 		uni::Network::NetworkPacketContext packet{
 			uni::Network::NetworkAddressIPv4(local.address),
 			uni::Network::NetworkAddressIPv4(remote.address),
 			uint8(uni::Network::IPv4Protocol::TCP),
 			net_buffers.tcp_tx,
-			uni::Network::TCPMinHeaderLength,
+			tcp_length,
 			net_ipv4_identification++,
 			64,
 		};
@@ -1179,6 +1251,14 @@ namespace {
 		connection.tx_tail = (connection.tx_tail + 1) % NetTcpTxPendingCapacity;
 		connection.tx_count++;
 		return true;
+	}
+
+	void CancelTcpNewestTxPending(NetTcpConnection& connection) {
+		if (!connection.tx_count) return;
+		connection.tx_tail = (connection.tx_tail + NetTcpTxPendingCapacity - 1) % NetTcpTxPendingCapacity;
+		connection.tx_pending[connection.tx_tail] = {};
+		connection.tx_count--;
+		if (!connection.tx_count) connection.tx_head = connection.tx_tail;
 	}
 
 	void AcknowledgeTcpTxPending(NetTcpConnection& connection, uint32 acknowledgment) {
@@ -1633,6 +1713,8 @@ namespace {
 				plogwarn("[Net] tcp syn-ack invalid ack");
 				return;
 			}
+			const uint16 peer_mss = ParseTcpMssOption(tcp);
+			if (peer_mss) connection->peer_mss = peer_mss;
 			control.remote_next_sequence = tcp.sequence + 1;
 			control.state = uni::Network::TCPConnectionState::Established;
 			SendTcpAckForSegment(dev, frame, ipv4, tcp,
@@ -1684,24 +1766,9 @@ namespace {
 						ipv4.destination, tcp.destination_port, ipv4.source, tcp.source_port,
 						tcp, initial_sequence);
 				}
-				const auto local_mac = dev.getAddress();
-				const stduint synack_len = uni::Network::BuildTCPIPv4SynAck(net_buffers.tx, NetFrameBufferSize,
-					local_mac, frame.source, net_config.ipv4_address, ipv4, tcp,
-					initial_sequence, NetTcpWindowSize, net_ipv4_identification++);
-				if (!synack_len) {
-					plogwarn("[Net] tcp syn-ack build failed");
-					return;
-				}
-				uni::Network::LinkFrameView synack{
-					net_buffers.tx,
-					synack_len,
-				};
-				const stdsint sent = dev.Send(synack);
-				if (sent > 0) {
-					connection->last_synack_tick = tick;
-					connection->synack_retry_count++;
-				}
-				else {
+				const uint16 peer_mss = ParseTcpMssOption(tcp);
+				if (peer_mss) connection->peer_mss = peer_mss;
+				if (!SendTcpSynAck(*connection)) {
 					plogwarn("[Net] tcp syn-ack send failed");
 				}
 				return;
@@ -2141,10 +2208,11 @@ bool Devsman::ListenTcpPort(uint16 port, stduint backlog) {
 	if (!port) return false;
 	auto* listener = FindTcpListener(port);
 	if (listener) {
+		ReleaseTcpConnectionsByLocalPort(port);
 		listener->backlog = backlog;
-		if (!listener->tcp) return EnsureTcpListenerObject(*listener, backlog);
-		return listener->tcp->Listen(backlog) == 0;
+		return EnsureTcpListenerObject(*listener, backlog);
 	}
+	ReleaseTcpConnectionsByLocalPort(port);
 	for0(i, NetTcpListenCapacity) {
 		if (net_tcp_listeners[i].port) continue;
 		auto* tcp = net_tcp_listeners[i].tcp;
@@ -2334,12 +2402,10 @@ stdsint Devsman::SendTcp(const uni::Network::TCPConnectionContext& context, cons
 		plogwarn("[Net] send tcp tx buffer unavailable");
 		return -1;
 	}
-	const stduint network_mtu = net_ipv4_interface.getPayloadMtu();
-	if (network_mtu <= uni::Network::TCPMinHeaderLength) return -1;
-	stduint chunk_capacity = network_mtu - uni::Network::TCPMinHeaderLength;
+	stduint chunk_capacity = NetTcpSendMss(*connection);
+	if (!chunk_capacity) return -1;
 	const stduint buffer_capacity = NetFrameBufferSize - uni::Network::TCPMinHeaderLength;
 	if (chunk_capacity > buffer_capacity) chunk_capacity = buffer_capacity;
-	if (chunk_capacity > NetTcpTxPayloadSize) chunk_capacity = NetTcpTxPayloadSize;
 	const auto* bytes = reinterpret_cast<const uint8*>(payload);
 	stduint total = 0;
 	while (total < length) {
@@ -2364,10 +2430,19 @@ stdsint Devsman::SendTcp(const uni::Network::TCPConnectionContext& context, cons
 			bytes + total,
 			chunk,
 		};
-		const stdsint sent = connection->tcp->Send(packet);
-		if (sent <= 0) return total ? stdsint(total) : sent;
-		if (!EnqueueTcpTxPending(*connection, sequence, bytes + total, stduint(sent))) {
+		if (!EnqueueTcpTxPending(*connection, sequence, bytes + total, chunk)) {
 			return total ? stdsint(total) : -1;
+		}
+		const stdsint sent = connection->tcp->Send(packet);
+		if (sent <= 0) {
+			CancelTcpNewestTxPending(*connection);
+			return total ? stdsint(total) : sent;
+		}
+		if (stduint(sent) < chunk) {
+			CancelTcpNewestTxPending(*connection);
+			if (!EnqueueTcpTxPending(*connection, sequence, bytes + total, stduint(sent))) {
+				return total ? stdsint(total) : -1;
+			}
 		}
 		total += stduint(sent);
 		if (stduint(sent) < chunk) break;
@@ -2639,6 +2714,9 @@ bool Devsman::GetTcpConnectionEntry(stduint index, void* entry, stduint length) 
 		output->tx_pending = uint16(connection.tx_count);
 		output->tx_retry_count = connection.tx_count ?
 			uint16(connection.tx_pending[connection.tx_head].retry_count) : 0;
+		output->local_mss = connection.local_mss;
+		output->peer_mss = connection.peer_mss;
+		output->send_mss = uint16(NetTcpSendMss(connection));
 		return true;
 	}
 	return false;

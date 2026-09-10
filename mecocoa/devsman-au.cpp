@@ -261,7 +261,7 @@ namespace {
 
 	bool AudioMasterEnsureRunning() {
 		if (master_stream_started) return true;
-		auto* backend = Devsman::GetActiveAudioBackend();
+		auto* backend = audio_manager.getSelectedCard();
 		if (!backend) {
 			plogwarn("[Audio] No active audio backend available");
 			return false;
@@ -304,7 +304,7 @@ namespace {
 		}
 
 		if (master_stream_started) {
-			auto* backend = Devsman::GetActiveAudioBackend();
+			auto* backend = audio_manager.getSelectedCard();
 			if (active_tracks > 0) {
 				master_last_active_tick = tick;
 				if (!SoundBlasterWatchdogCheck()) {
@@ -634,7 +634,7 @@ void serv_dev_audio_loop() {
 			AudioTrackState* track = FindTrackByOwner(sig_src);
 			if (track) FreeTrack(*track);
 			if (CountActiveTracks() == 0 && master_stream_started) {
-				auto* backend = Devsman::GetActiveAudioBackend();
+				auto* backend = audio_manager.getSelectedCard();
 				if (backend) backend->StopStream();
 				master_stream_started = false;
 			}
@@ -689,7 +689,7 @@ void serv_dev_audio_loop() {
 		case AudioMsg::SET_VOLUME:
 		{
 			const auto* vol_req = reinterpret_cast<const AudioVolumeRequest*>(&request);
-			auto* backend = Devsman::GetActiveAudioBackend();
+			auto* backend = audio_manager.getSelectedCard();
 			stdsint result = -1;
 			if (backend) {
 				if (vol_req->mute) {
@@ -707,7 +707,7 @@ void serv_dev_audio_loop() {
 		case AudioMsg::GET_VOLUME:
 		{
 			const auto* in_req = reinterpret_cast<const AudioVolumeRequest*>(&request);
-			auto* backend = Devsman::GetActiveAudioBackend();
+			auto* backend = audio_manager.getSelectedCard();
 			AudioVolumeRequest resp = *in_req;
 			if (backend) {
 				uint32 vol = backend->getVolume();

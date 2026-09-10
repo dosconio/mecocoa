@@ -4,6 +4,9 @@
 #include <c/nnode.h>
 #include <cpp/System/Audiosys.hpp>
 #include <cpp/Device/Audio/SoundBlaster.hpp>
+#include <cpp/System/Audiosys/AudioManager.hpp>
+
+extern uni::AudioManager audio_manager;
 
 struct DeviceNode;
 
@@ -266,13 +269,6 @@ public:
 	static const char* LookupPciDeviceName(uint16 vendor_id, uint16 device_id, uint8 class_base = 0, uint8 class_sub = 0);
 	static const char* LookupPciVendorName(uint16 vendor_id);
 	#endif
-
-	// Audio Backend Routing (ACI)
-	static bool RegisterAudioBackend(const char* name, uni::AudioControlInterface* backend);
-	static uni::AudioControlInterface* GetActiveAudioBackend();
-	static bool SetActiveAudioBackend(const char* name);
-	static stduint AudioBackendCount();
-	static uni::AudioControlInterface* GetAudioBackend(stduint index, const char** out_name = nullptr);
 
 };
 

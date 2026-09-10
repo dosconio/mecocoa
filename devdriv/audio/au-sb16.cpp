@@ -973,7 +973,7 @@ namespace {
 		(void)sound_blaster.SetVolume(uni::SoundBlasterMixerChannel::MasterVolume, 204, 204);
 		(void)sound_blaster.SetVolume(uni::SoundBlasterMixerChannel::VoiceVolume, 204, 204);
 		// Register as unified audio backend in Devsman
-		(void)Devsman::RegisterAudioBackend("sb16", &::g_sb16_audio_device);
+		(void)audio_manager.AppendCard("sb16", &::g_sb16_audio_device);
 		// Keep boot quiet. Explicit AudioMsg::TEST / playback paths can still
 		// exercise the device after normal service scheduling is available.
 		return true;

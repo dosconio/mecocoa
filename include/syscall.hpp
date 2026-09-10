@@ -252,6 +252,9 @@ struct syscall_net_tcp_connection_t {
 	uint16 rx_bytes = 0;
 	uint16 tx_pending = 0;
 	uint16 tx_retry_count = 0;
+	uint16 local_mss = 0;
+	uint16 peer_mss = 0;
+	uint16 send_mss = 0;
 };
 
 _ESYM_C stduint syscall(syscall_t callid, stduint p1 = 0, stduint p2 = 0, stduint p3 = 0);// MCCA 4 PARA SYSC

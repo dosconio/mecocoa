@@ -118,10 +118,12 @@ static void PrintTcpState() {
 		PrintIPv4(connection.local_address);
 		printf(":%u peer=", (unsigned)connection.local_port);
 		PrintIPv4(connection.remote_address);
-		printf(":%u state=%s rx=%u tx=%u retry=%u%s%s\n\r",
+		printf(":%u state=%s rx=%u tx=%u retry=%u mss=%u/%u send=%u%s%s\n\r",
 			(unsigned)connection.remote_port, TcpStateName(connection.state),
 			(unsigned)connection.rx_bytes, (unsigned)connection.tx_pending,
 			(unsigned)connection.tx_retry_count,
+			(unsigned)connection.local_mss, (unsigned)connection.peer_mss,
+			(unsigned)connection.send_mss,
 			(connection.flags & 0x0100u) ? " active" : " passive",
 			(connection.flags & 0x0800u) ? " reset" :
 				((connection.flags & 0x0400u) ? " tx-exhausted" : ""));
