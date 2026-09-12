@@ -234,6 +234,8 @@ public:
 	static bool WaitUdp(uint16 port);
 	static bool WaitUdp(uint16 port, stduint inbox_id);
 	static bool HasUdp(uint16 port, stduint inbox_id);
+	static int ConsumeUdpError(uint16 local_port,
+		const uni::Network::IPv4Address& remote_ip, uint16 remote_port);
 	static stdsint ReceiveUdp(uint16 port, uni::Network::UDPDatagramContext& context, void* payload, stduint capacity);
 	static stdsint ReceiveUdp(uint16 port, stduint inbox_id,
 		uni::Network::UDPDatagramContext& context, void* payload, stduint capacity);

@@ -111,9 +111,9 @@ $(BIN_DIR)/viewpic: subapps/viewpic.cpp $(ulibpath)/cpp/fileformat/picture/BMP.c
 	@echo "MK viewpic"
 	$(MCCA_X86_CXX) $(MCCA_X86_CXXFLAGS) -o $@ subapps/viewpic.cpp $(ulibpath)/cpp/fileformat/picture/BMP.cpp $(ulibpath)/cpp/fileformat/picture/JPEG.cpp $(ulibpath)/cpp/fileformat/picture/PNG.cpp $(ulibpath)/cpp/fileformat/picture/GIF.cpp $(MCCA_X86_LDLIBS)
 
-$(BIN_DIR)/playmzk: subapps/playmzk.cpp $(ulibpath)/cpp/fileformat/audio/WAV.cpp $(ulibpath)/cpp/System/Audiosys/Resampler.cpp $(ulibpath)/cpp/System/Audiosys/HostMusic.cpp $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
+$(BIN_DIR)/playmzk: subapps/playmzk.cpp $(ulibpath)/cpp/fileformat/audio/WAV.cpp $(ulibpath)/cpp/fileformat/audio/MP3.cpp $(ulibpath)/cpp/fileformat/audio/FLAC.cpp $(ulibpath)/cpp/fileformat/audio/OGG.cpp $(ulibpath)/cpp/System/Audiosys/Resampler.cpp $(ulibpath)/cpp/System/Audiosys/HostMusic.cpp $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
 	@echo "MK playmzk"
-	$(MCCA_X86_CXX) $(MCCA_X86_CXXFLAGS) -o $@ subapps/playmzk.cpp $(ulibpath)/cpp/fileformat/audio/WAV.cpp $(ulibpath)/cpp/System/Audiosys/Resampler.cpp $(ulibpath)/cpp/System/Audiosys/HostMusic.cpp $(MCCA_X86_LDLIBS)
+	$(MCCA_X86_CXX) $(MCCA_X86_CXXFLAGS) -o $@ subapps/playmzk.cpp $(ulibpath)/cpp/fileformat/audio/WAV.cpp $(ulibpath)/cpp/fileformat/audio/MP3.cpp $(ulibpath)/cpp/fileformat/audio/FLAC.cpp $(ulibpath)/cpp/fileformat/audio/OGG.cpp $(ulibpath)/cpp/System/Audiosys/Resampler.cpp $(ulibpath)/cpp/System/Audiosys/HostMusic.cpp $(MCCA_X86_LDLIBS)
 
 $(BIN_DIR)/ribbon: subapps/ribbon.cpp $(ulibpath)/cpp/fileformat/picture/PNG.cpp $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
 	@echo "MK ribbon"

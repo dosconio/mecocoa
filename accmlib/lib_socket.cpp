@@ -126,9 +126,7 @@ extern "C" int accept(int sockfd, struct sockaddr* address, socklen_t* address_l
 }
 
 extern "C" int shutdown(int sockfd, int how) {
-	(void)sockfd;
-	(void)how;
-	return -1;
+	return (int)syscall(syscall_t::SCLS, (stduint)sockfd, (stduint)how, 0);
 }
 
 extern "C" int getsockname(int sockfd, struct sockaddr* address, socklen_t* address_length) {

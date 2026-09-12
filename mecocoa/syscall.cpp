@@ -34,10 +34,11 @@ extern "C" stdsint sysc_SOPT(stduint, stduint, stduint);
 extern "C" stdsint sysc_POLL(stduint, stduint, stduint);
 extern "C" stdsint sysc_LIST(stduint, stduint, stduint);
 extern "C" stdsint sysc_ACPT(stduint, stduint, stduint);
+extern "C" stdsint sysc_SCLS(stduint, stduint, stduint);
 extern "C" void check_and_deliver_signals(void* context);
 
 // Syscall Wrappers
-extern stduint SYSCALL_TABLE[50];
+extern stduint SYSCALL_TABLE[51];
 
 void Syscall::Initialize() {
 	#if _MCCA == 0x8632
@@ -501,6 +502,13 @@ DEFSYSC sysc_ACPT(stduint fd, stduint usr_addr, stduint usr_addr_length) {
 		MccaMemCopyP((void*)usr_addr_length, pb, false, address_length_ptr, nullptr, true, sizeof(*address_length_ptr));
 	}
 	return new_fd;
+}
+
+DEFSYSC sysc_SCLS(stduint fd, stduint how, stduint) {
+	ThreadBlock* th = Taskman::CurrentTB();
+	ProcessBlock* pb = th ? th->parent_process : nullptr;
+	if (!pb) return -1;
+	return pb->ShutdownSocket((int)fd, how);
 }
 
 DEFSYSC sysc_SEEK(stduint fd, stduint off, stduint whence) {
@@ -1143,6 +1151,7 @@ stduint SYSCALL_TABLE[] = {
 	mglb(sysc_POLL),
 	mglb(sysc_LIST),
 	mglb(sysc_ACPT),
+	mglb(sysc_SCLS),
 };
 #endif
 
@@ -1234,6 +1243,9 @@ void syscall_body(NormalTaskContext* cxt)
 		break;
 	case syscall_t::ACPT:
 		cxt->a0 = sysc_ACPT(cxt->a0, cxt->a1, cxt->a2);
+		break;
+	case syscall_t::SCLS:
+		cxt->a0 = sysc_SCLS(cxt->a0, cxt->a1, cxt->a2);
 		break;
 	case syscall_t::SEEK:
 		cxt->a0 = sysc_SEEK(cxt->a0, cxt->a1, cxt->a2);

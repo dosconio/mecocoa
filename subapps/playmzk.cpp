@@ -8,6 +8,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <c/format/audio/WAV.h>
+#include <c/format/audio/MP3.h>
+#include <c/format/audio/FLAC.h>
+#include <c/format/audio/OGG.h>
+#include <c/format/audio/MIDI.h>
 #include <cpp/System/Audiosys.hpp>
 #include <cpp/System/Audiosys/Lyrics.hpp>
 #include "../include/syscall.hpp"
@@ -17,8 +21,8 @@ using namespace uni;
 #define outsfmt(...) printf(__VA_ARGS__)
 
 static void PrintUsage(const char* prog_name) {
-	outsfmt("Mecocoa PCM Music Player\n\r\n\r");
-	outsfmt("Usage: %s [options] <file.wav>\n\r\n\r", prog_name ? prog_name : "playmzk");
+	outsfmt("Mecocoa Audio Music Player\n\r\n\r");
+	outsfmt("Usage: %s [options] <file.wav | file.mp3 | file.flac | file.ogg | file.mid>\n\r\n\r", prog_name ? prog_name : "playmzk");
 	outsfmt("Interactive Controls (during playback):\n\r");
 	outsfmt("  [Space] / [P]   : Pause or Resume playback\n\r");
 	outsfmt("  [+]     / [-]   : Increase / Decrease Volume (+/- 5%%)\n\r");
@@ -33,7 +37,11 @@ static void PrintUsage(const char* prog_name) {
 	outsfmt("  -l, --loop           : Enable loop playback mode\n\r");
 	outsfmt("  -c, --lyric <file>   : Specify LRC lyrics file\n\r\n\r");
 	outsfmt("Supported Formats:\n\r");
-	outsfmt("  PCM (8/16/24/32-bit), IEEE Float (32-bit), ADPCM (MS/IMA), A-law, mu-law\n\r");
+	outsfmt("  WAV:  PCM (8/16/24/32-bit), IEEE Float, ADPCM (MS/IMA), A-law, mu-law\n\r");
+	outsfmt("  MP3:  MPEG-1/2/2.5 Layer III / II / I\n\r");
+	outsfmt("  FLAC: Free Lossless Audio Codec (1..8ch, 8..32-bit, Constant/Verbatim/Fixed/LPC)\n\r");
+	outsfmt("  OGG:  Ogg Vorbis (1..8ch, 8000..192000Hz, Floor 1, Residue 0/1/2)\n\r");
+	outsfmt("  MIDI: Standard MIDI File (SMF 0/1, 16ch GM Software Synthesizer, 64 Polyphony)\n\r");
 }
 
 static int TryGetKeyboardChar() {
@@ -324,9 +332,16 @@ int main(int argc, char** argv)
 		return -1;
 	}
 
+	FILE* test_fp = fopen(file_path, "rb");
+	if (!test_fp) {
+		outsfmt("playmzk: cannot open file '%s' (file not found or unreadable)\n\r", file_path);
+		return -1;
+	}
+	fclose(test_fp);
+
 	HostMusic music;
 	if (!music.Open(file_path, loop_mode)) {
-		outsfmt("playmzk: failed to open or parse audio '%s'\n\r", file_path);
+		outsfmt("playmzk: failed to parse audio '%s' (unsupported or corrupted format)\n\r", file_path);
 		return -1;
 	}
 

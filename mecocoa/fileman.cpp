@@ -305,6 +305,14 @@ stdsint ProcessBlock::GetSocketOption(int fd, stduint level, stduint option_name
 	return Filesys::GetSocketOption(file, level, option_name, value);
 }
 
+stdsint ProcessBlock::ShutdownSocket(int fd, stduint how) {
+	auto files = this->fileman.Lock();
+	if (fd < 0 || fd >= (stdsint)files->pfiles.Count() || !files->pfiles[fd] || !files->pfiles[fd]->vfile) return -1;
+	auto* file = files->pfiles[fd]->vfile;
+	if (!file->f_inode || (file->f_inode->i_mode & I_TYPE_MASK) != I_SOCK) return -1;
+	return Filesys::ShutdownSocket(file, how);
+}
+
 stduint ProcessBlock::Rdwt(bool wr_type, stduint fid, Slice slice)
 {
 	auto files = this->fileman.Lock();

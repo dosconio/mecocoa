@@ -310,6 +310,7 @@ public:
 		uni::Network::SocketAddress* address, stduint* address_length) -> stdsint;
 	auto SetSocketOption(int fd, stduint level, stduint option_name, int value) -> stdsint;
 	auto GetSocketOption(int fd, stduint level, stduint option_name, int* value) -> stdsint;
+	auto ShutdownSocket(int fd, stduint how) -> stdsint;
 	auto Rdwt(bool wr_type, stduint fid, Slice slice) -> stduint;
 	auto Close(int fid) -> bool;
 	auto Seek(int fd, stdsint off, int whence) -> stdsint;

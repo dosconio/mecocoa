@@ -43,7 +43,7 @@ static bool ParseIPv4(const char* text, in_addr_t* output) {
 
 static void PrintUsage() {
 	printf("usage: testtcp [--reuse] [--nonblock] [--poll-accept] [--backlog n] [--accept-delay ms] [--count n] [--sockopt] --listen [port]\n\r");
-	printf("       testtcp [--repeat n] [--burst n] [--fill n] [--read-size n] [--write-size n] [--poll-after-recv] [--sockopt] ipv4 port [payload]\n\r");
+	printf("       testtcp [--repeat n] [--burst n] [--fill n] [--read-size n] [--write-size n] [--poll-after-recv] [--shutdown-write] [--shutdown-read] [--send-after-shutdown] [--sockopt] [--sockerr-twice] ipv4 port [payload]\n\r");
 	printf("  listen: testtcp --listen 80\n\r");
 	printf("  reuse:  testtcp --reuse --listen 80\n\r");
 	printf("  nbacc:  testtcp --nonblock --listen 80\n\r");
@@ -56,6 +56,8 @@ static void PrintUsage() {
 	printf("  read:   testtcp --read-size 2 10.0.2.1 7777 hello\n\r");
 	printf("  write:  testtcp --write-size 2 10.0.2.1 7777 hello\n\r");
 	printf("  poll:   testtcp --poll-after-recv 10.0.2.1 7777 hello\n\r");
+	printf("  sdown:  testtcp --shutdown-write 10.0.2.1 7777 hello\n\r");
+	printf("  rdcls:  testtcp --shutdown-read 10.0.2.1 7777 hello\n\r");
 	printf("  opt:    testtcp --sockopt 10.0.2.1 7777 hello\n\r");
 	printf("  client: testtcp 10.0.2.1 7777 hello\n\r");
 	printf("  repeat: testtcp --repeat 3 10.0.2.1 7777 hello\n\r");
@@ -113,6 +115,10 @@ int main(int argc, char** argv) {
 	int fill_length = 0;
 	bool poll_after_recv = false;
 	bool show_sockopt = false;
+	bool sockerr_twice = false;
+	bool shutdown_write = false;
+	bool shutdown_read = false;
+	bool send_after_shutdown = false;
 	const char* positional[3] = {};
 	stduint positional_count = 0;
 	for (int i = 1; i < argc; i++) {
@@ -236,6 +242,24 @@ int main(int argc, char** argv) {
 			show_sockopt = true;
 			continue;
 		}
+		if (StrCompare(argv[i], "--sockerr-twice") == 0) {
+			sockerr_twice = true;
+			show_sockopt = true;
+			continue;
+		}
+		if (StrCompare(argv[i], "--shutdown-write") == 0) {
+			shutdown_write = true;
+			continue;
+		}
+		if (StrCompare(argv[i], "--shutdown-read") == 0) {
+			shutdown_read = true;
+			continue;
+		}
+		if (StrCompare(argv[i], "--send-after-shutdown") == 0) {
+			send_after_shutdown = true;
+			shutdown_write = true;
+			continue;
+		}
 		if (positional_count >= 3) {
 			PrintUsage();
 			return 1;
@@ -293,6 +317,7 @@ int main(int argc, char** argv) {
 			}
 			PrintSocketAddress("peer", target);
 			if (show_sockopt) PrintSocketOptions(fd);
+			if (sockerr_twice) PrintSocketOptions(fd);
 			const size_t payload_length = strlen(payload);
 			stduint sent_total = 0;
 			for (int burst = 0; burst < burst_count; burst++) {
@@ -313,6 +338,30 @@ int main(int argc, char** argv) {
 					payload_sent += stduint(sent);
 					sent_total += stduint(sent);
 				}
+			}
+			if (shutdown_write) {
+				if (shutdown(fd, SHUT_WR) < 0) {
+					printf("testtcp: shutdown write failed\n\r");
+					close(fd);
+					if (fill_payload) free(fill_payload);
+					return 1;
+				}
+				printf("testtcp: shutdown write\n\r");
+			}
+			if (send_after_shutdown) {
+				const stdsint sent = write(fd, "X", 1);
+				printf("testtcp: send-after-shutdown=%d\n\r", (int)sent);
+				if (show_sockopt) PrintSocketOptions(fd);
+				if (sockerr_twice) PrintSocketOptions(fd);
+			}
+			if (shutdown_read) {
+				if (shutdown(fd, SHUT_RD) < 0) {
+					printf("testtcp: shutdown read failed\n\r");
+					close(fd);
+					if (fill_payload) free(fill_payload);
+					return 1;
+				}
+				printf("testtcp: shutdown read\n\r");
 			}
 			char buffer[513] = {};
 			stduint received_total = 0;

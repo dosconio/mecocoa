@@ -588,6 +588,7 @@ static void SettleSwitchingOutThread(stduint cpuid) {
 		if (completed_th->state == ThreadBlock::State::Hanging && completed_th->is_detached) {
 			Taskman::DestroyThread(completed_th);
 		}
+		completed_th->just_schedule = 0;
 		Taskman::switching_out_threads(cpuid) = nullptr;
 	}
 }

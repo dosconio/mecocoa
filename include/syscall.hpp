@@ -70,6 +70,7 @@ enum
 	POLL, // poll   (fds, nfds, timeout)->ready count  | x86 x64
 	LIST, // listen (fd, backlog)->status              | x86 x64
 	ACPT, // accept (fd, address, address_length)->fd   | x86 x64
+	SCLS, // socket close direction (fd, how)->status   | x86 x64
 
 
 
@@ -186,6 +187,9 @@ constexpr stduint syscall_net_socket_level_socket = 1u;
 constexpr stduint syscall_net_socket_option_reuse_address = 2u;
 constexpr stduint syscall_net_socket_option_type = 3u;
 constexpr stduint syscall_net_socket_option_error = 4u;
+constexpr stduint syscall_net_shutdown_read = 0u;
+constexpr stduint syscall_net_shutdown_write = 1u;
+constexpr stduint syscall_net_shutdown_both = 2u;
 constexpr sint16 syscall_poll_in = 0x0001;
 constexpr sint16 syscall_poll_out = 0x0004;
 constexpr sint16 syscall_poll_error = 0x0008;
@@ -255,6 +259,11 @@ struct syscall_net_tcp_connection_t {
 	uint16 local_mss = 0;
 	uint16 peer_mss = 0;
 	uint16 send_mss = 0;
+	uint16 rx_window = 0;
+	uint16 rx_duplicate = 0;
+	uint16 rx_out_of_order = 0;
+	uint16 rx_window_full = 0;
+	uint16 tx_retransmit = 0;
 };
 
 _ESYM_C stduint syscall(syscall_t callid, stduint p1 = 0, stduint p2 = 0, stduint p3 = 0);// MCCA 4 PARA SYSC

@@ -364,11 +364,13 @@ int main(int argc, char** argv) {
 	}
 	if (received < 0) {
 		printf("testudp: recv failed\n\r");
+		if (show_sockopt) PrintSocketOptions(fd);
 		close(fd);
 		return 1;
 	}
 	if (received == 0) {
 		printf("testudp: no packet received\n\r");
+		if (show_sockopt) PrintSocketOptions(fd);
 		close(fd);
 		return 2;
 	}
@@ -376,6 +378,7 @@ int main(int argc, char** argv) {
 	buffer[received] = 0;
 	printf("testudp: recv %d bytes via %s: %s\n\r",
 		(int)received, use_connect ? (dont_wait ? "recv" : "read") : "recvfrom", buffer);
+	if (show_sockopt) PrintSocketOptions(fd);
 	close(fd);
 	return 0;
 }

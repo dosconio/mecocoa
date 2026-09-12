@@ -110,6 +110,7 @@ struct SocketHandle {
 	Network::SocketType type = Network::SocketType::Datagram;
 	Network::SocketProtocol protocol = Network::SocketProtocol::Default;
 	uint16 flags = 0;
+	int last_error = 0;
 	stduint udp_inbox_id = stduint(-1);
 	bool is_bound = false;
 	bool is_connected = false;
@@ -164,6 +165,7 @@ public:
 		Network::SocketAddress* address, stduint* address_length);
 	static int SetSocketOption(vfs_file* file, stduint level, stduint option_name, int value);
 	static int GetSocketOption(vfs_file* file, stduint level, stduint option_name, int* value);
+	static int ShutdownSocket(vfs_file* file, stduint how);
 	static int CloseSocket(vfs_file* file);
 
 public:
