@@ -2237,4 +2237,6 @@ void serv_devs_loop() {
 	for (;;) syscall(syscall_t::REST, 1, 1000);
 }
 
+#if (_MCCA & 0xFF00) == 0x8600
 uni::AudioManager audio_manager;
+#endif

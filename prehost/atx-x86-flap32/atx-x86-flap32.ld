@@ -51,6 +51,8 @@ SECTIONS
 	.drv.text : {
 		*/mcca-atx-x86-flap32/e1000.o(.text .text.*)
 		*/mcca-atx-x86-flap32/au-sb16.o(.text .text.*)
+		*/mcca-atx-x86-flap32/au-buzzer.o(.text .text.*)
+		*/mcca-atx-x86-flap32/devsman-au.o(.text .text.*)
 		*/mcca-atx-x86-flap32/nvmedisk.o(.text .text.*)
 		*/mcca-atx-x86-flap32/scsidisk.o(.text .text.*)
 		*/mcca-atx-x86-flap32/video-vmware.o(.text .text.*)
@@ -58,6 +60,8 @@ SECTIONS
 	.drv.rodata : {
 		*/mcca-atx-x86-flap32/e1000.o(.rodata .rodata.*)
 		*/mcca-atx-x86-flap32/au-sb16.o(.rodata .rodata.*)
+		*/mcca-atx-x86-flap32/au-buzzer.o(.rodata .rodata.*)
+		*/mcca-atx-x86-flap32/devsman-au.o(.rodata .rodata.*)
 		*/mcca-atx-x86-flap32/nvmedisk.o(.rodata .rodata.*)
 		*/mcca-atx-x86-flap32/scsidisk.o(.rodata .rodata.*)
 		*/mcca-atx-x86-flap32/video-vmware.o(.rodata .rodata.*)
@@ -67,6 +71,10 @@ SECTIONS
 		*/mcca-atx-x86-flap32/e1000.o(.got)
 		*/mcca-atx-x86-flap32/au-sb16.o(.data .data.*)
 		*/mcca-atx-x86-flap32/au-sb16.o(.got)
+		*/mcca-atx-x86-flap32/au-buzzer.o(.data .data.*)
+		*/mcca-atx-x86-flap32/au-buzzer.o(.got)
+		*/mcca-atx-x86-flap32/devsman-au.o(.data .data.*)
+		*/mcca-atx-x86-flap32/devsman-au.o(.got)
 		*/mcca-atx-x86-flap32/nvmedisk.o(.data .data.*)
 		*/mcca-atx-x86-flap32/nvmedisk.o(.got)
 		*/mcca-atx-x86-flap32/scsidisk.o(.data .data.*)

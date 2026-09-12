@@ -952,7 +952,9 @@ void serv_file_loop()// for IDE 0:0, 0:1
 			plogerro("Bad TYPE in %s %s", __FILE__, __FUNCIDEN__);
 			break;
 		}
-		sysrecv(ANYPROC, to_args, byteof(to_args), &sig_type, &sig_src);
+		if (sysrecv(ANYPROC, to_args, byteof(to_args), &sig_type, &sig_src) != 0) {
+			continue;
+		}
 		// plogwarn("Fileman: get from %d", sig_src);
 	}
 }

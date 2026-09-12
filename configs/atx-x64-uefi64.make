@@ -66,6 +66,7 @@ cppfile=\
 	$(ulibpath)/cpp/Device/Video.cpp $(ulibpath)/cpp/Device/Video-VideoConsole2.cpp \
 	$(ulibpath)/cpp/Device/Storage/Harddisk-SATA.cpp\
 	$(ulibpath)/cpp/Device/Storage/Harddisk-NVMe.cpp\
+	$(ulibpath)/cpp/System/Audiosys/AudioManager.cpp \
 	$(wildcard $(ulibpath)/cpp/Device/USB/*.cpp) $(wildcard $(ulibpath)/cpp/Device/USB/xHCI/*.cpp) \
 	$(wildcard $(ulibpath)/cpp/System/Network/Layer/*/*.cpp) \
 	\

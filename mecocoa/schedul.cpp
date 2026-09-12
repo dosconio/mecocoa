@@ -127,7 +127,8 @@ static bool WakeThreadOnRecordedCpu(ThreadBlock* th) {
 	if (target_cpu == current_cpu) return false;
 	auto percore = Taskman::PCU_CORES_PERCORE[target_cpu];
 	if (!percore || percore->state != CoreState::Online) return false;
-	Taskman::SendWakeIPI(target_cpu);
+	// Taskman::SendWakeIPI(target_cpu);
+	Taskman::SendRescheduleIPI(target_cpu);
 	return true;
 }
 
@@ -173,12 +174,18 @@ bool WakeOneIdleApForReadyWork() {
 		auto percore = Taskman::PCU_CORES_PERCORE[next_ap];
 		if (percore &&
 			percore->state == CoreState::Online &&
-			Taskman::current_thread(next_ap) == Taskman::idle_thread(next_ap) &&
-			(Taskman::switching_out_threads(next_ap) == nullptr ||
-				!Taskman::switching_out_threads(next_ap)->just_schedule)) {
-			Taskman::SendRescheduleIPI(next_ap);
-			next_ap++;
-			return true;
+			Taskman::current_thread(next_ap) == Taskman::idle_thread(next_ap)) {
+			if (Taskman::switching_out_threads(next_ap) != nullptr &&
+				Taskman::switching_out_threads(next_ap) != Taskman::idle_thread(next_ap)) {
+				Taskman::switching_out_threads(next_ap)->just_schedule = 0;
+				Taskman::switching_out_threads(next_ap) = nullptr;
+			}
+			if (Taskman::switching_out_threads(next_ap) == nullptr ||
+				!Taskman::switching_out_threads(next_ap)->just_schedule) {
+				Taskman::SendRescheduleIPI(next_ap);
+				next_ap++;
+				return true;
+			}
 		}
 		next_ap++;
 	}
@@ -371,6 +378,7 @@ ThreadBlock* Taskman::PickNext() {
 	}
 
 	if (!ready_bitmap) return nullptr;
+	const stduint current_cpuid = getID();
 	uint32 original_bitmap = ready_bitmap;
 	bool skipped_due_to_affinity = false;
 	while (original_bitmap) {
@@ -378,23 +386,35 @@ ThreadBlock* Taskman::PickNext() {
 		ThreadBlock* node = priority_queues[idx].head;
 		while (node) {
 			if (!node->just_schedule && node->state != ThreadBlock::State::Running) {
-				bool runnable_here = true;
-				#if _MCCA == 0x8632
-				runnable_here = (node->ring_coreid == CORE_ID_INVALID || node->ring_coreid == getID());
-				#endif
-				if (runnable_here) {
-					// Check whether node is in the array: 
-					for (int i = 0; i < PCU_CORES_MAX; i++) {
-						if (switching_out_threads(i) == node) {
-							switching_out_threads(i) = nullptr;
-							break;
-						}
+				bool active_on_other_cpu = false;
+				for (int c = 0; c < PCU_CORES_MAX; c++) {
+					if (c != (int)current_cpuid && current_thread(c) == node) {
+						active_on_other_cpu = true;
+						#if 0 && defined(_DEBUG)
+						ploginfo("[SMP] PickNext: Th%u already running on CPU%u, attempted pick on CPU%u!", node->tid, (unsigned)c, (unsigned)current_cpuid);
+						#endif
+						break;
 					}
-					return node;
-				} else {
+				}
+				if (!active_on_other_cpu) {
+					bool runnable_here = true;
 					#if _MCCA == 0x8632
-					skipped_due_to_affinity = true;
+					runnable_here = (node->ring_coreid == CORE_ID_INVALID || node->ring_coreid == current_cpuid);
 					#endif
+					if (runnable_here) {
+						// Check whether node is in the array: 
+						for (int i = 0; i < PCU_CORES_MAX; i++) {
+							if (switching_out_threads(i) == node) {
+								switching_out_threads(i) = nullptr;
+								break;
+							}
+						}
+						return node;
+					} else {
+						#if _MCCA == 0x8632
+						skipped_due_to_affinity = true;
+						#endif
+					}
 				}
 			}
 			node = node->queue_state_next;
@@ -412,18 +432,27 @@ ThreadBlock* Taskman::PickNext() {
 			ThreadBlock* node = expired_queues[idx].head;
 			while (node) {
 				if (!node->just_schedule && node->state != ThreadBlock::State::Running) {
-					bool runnable_here = true;
-					#if _MCCA == 0x8632
-					runnable_here = (node->ring_coreid == CORE_ID_INVALID || node->ring_coreid == getID());
-					#endif
-					if (runnable_here) {
-						for (int i = 0; i < PCU_CORES_MAX; i++) {
-							if (switching_out_threads(i) == node) {
-								switching_out_threads(i) = nullptr;
-								break;
-							}
+					bool active_on_other_cpu = false;
+					for (int c = 0; c < PCU_CORES_MAX; c++) {
+						if (c != (int)current_cpuid && current_thread(c) == node) {
+							active_on_other_cpu = true;
+							#if 0 && defined(_DEBUG)
+							ploginfo("[SMP] PickNext (expired): Th%u already running on CPU%u, attempted pick on CPU%u!", node->tid, (unsigned)c, (unsigned)current_cpuid);
+							#endif
+							break;
 						}
-						return node;
+					}
+					if (!active_on_other_cpu) {
+						bool runnable_here = (node->ring_coreid == CORE_ID_INVALID || node->ring_coreid == current_cpuid);
+						if (runnable_here) {
+							for (int i = 0; i < PCU_CORES_MAX; i++) {
+								if (switching_out_threads(i) == node) {
+									switching_out_threads(i) = nullptr;
+									break;
+								}
+							}
+							return node;
+						}
 					}
 				}
 				node = node->queue_state_next;
@@ -446,6 +475,9 @@ void ThreadBlock::Unblock(BlockReason reason) {
 	SpinlockLocal guard(&scheduler_lock);
 	block_reason = BlockReason(block_reason & ~reason);
 	if (block_reason == BlockReason::BR_None) {
+		if (state == State::Running) {
+			return;
+		}
 		state = State::Ready;//{} else panic...
 		if (this->is_expired) {
 			Taskman::EnqueueExpired(this, false);

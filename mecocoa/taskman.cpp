@@ -571,62 +571,70 @@ static bool DeliverWaitResultAtomically(ProcessBlock* pparent, stduint child_pid
 	ThreadBlock* parent_th = pparent->main_thread;
 	ThreadBlock* taskman_th = taskman_pb->main_thread;
 
-	extern Spinlock comm_lock;
-	SpinlockLocal guard(&comm_lock);
+	bool unblock_wait = false;
+	bool unblock_recv = false;
 
-	if (!(parent_th->block_reason & ThreadBlock::BlockReason::BR_Waiting)) {
-		return false;
-	}
-	stduint args[2] = { child_pid, exit_status };
+	{
+		extern Spinlock comm_lock;
+		SpinlockLocal guard(&comm_lock);
 
-	if (parent_th->block_reason & ThreadBlock::BlockReason::BR_RecvMsg) {
-		if (!(parent_th->recv_fo_whom == taskman_th ||
-			(stduint)parent_th->recv_fo_whom == ANYPROC)) {
+		if (!(parent_th->block_reason & ThreadBlock::BlockReason::BR_Waiting)) {
 			return false;
 		}
+		stduint args[2] = { child_pid, exit_status };
 
-		auto msg_to = parent_th->unsolved_msg_from_kernel
-			? parent_th->unsolved_msg
-			: (CommMsg*)SeekAddress(parent_th->parent_process, _IMM(parent_th->unsolved_msg), false);
-		if (!msg_to) return false;
+		if (parent_th->block_reason & ThreadBlock::BlockReason::BR_RecvMsg) {
+			if (!(parent_th->recv_fo_whom == taskman_th ||
+				(stduint)parent_th->recv_fo_whom == ANYPROC)) {
+				return false;
+			}
 
-		stduint leng = minof((stduint)sizeof(args), msg_to->data.length);
-		if (leng) {
-			MccaMemCopyP(
-				(void*)msg_to->data.address, parent_th->parent_process, parent_th->unsolved_msg_from_kernel,
-				args, nullptr, true,
-				leng);
+			auto msg_to = parent_th->unsolved_msg_from_kernel
+				? parent_th->unsolved_msg
+				: (CommMsg*)SeekAddress(parent_th->parent_process, _IMM(parent_th->unsolved_msg), false);
+			if (!msg_to) return false;
+
+			stduint leng = minof((stduint)sizeof(args), msg_to->data.length);
+			if (leng) {
+				MccaMemCopyP(
+					(void*)msg_to->data.address, parent_th->parent_process, parent_th->unsolved_msg_from_kernel,
+					args, nullptr, true,
+					leng);
+			}
+			msg_to->type = 0;
+			msg_to->src = taskman_th->tid;
+
+			parent_th->unsolved_msg = nullptr;
+			parent_th->recv_fo_whom = nullptr;
+			pparent->wait_for_pid = 0;
+			unblock_wait = true;
+			unblock_recv = true;
 		}
-		msg_to->type = 0;
-		msg_to->src = taskman_th->tid;
-
-		parent_th->unsolved_msg = nullptr;
-		parent_th->recv_fo_whom = nullptr;
-		pparent->wait_for_pid = 0;
-		parent_th->Unblock(ThreadBlock::BlockReason::BR_Waiting);
-		parent_th->Unblock(ThreadBlock::BlockReason::BR_RecvMsg);
-		return true;
+		else {
+			if (parent_th->async_messages.Count() >= LIMIT_THREAD_AMSG) {
+				plogerro("Too many async messages");
+				return false;
+			}
+			AsyncCommMsg* amsg = new AsyncCommMsg();
+			if (!amsg) return false;
+			byte* payload = new byte[sizeof(args)];
+			if (!payload) {
+				delete amsg;
+				return false;
+			}
+			MemCopyN(payload, args, sizeof(args));
+			amsg->msg.data.address = (stduint)payload;
+			amsg->msg.data.length = sizeof(args);
+			amsg->msg.type = 0;
+			amsg->msg.src = taskman_th->tid;
+			parent_th->async_messages.Append(amsg);
+			pparent->wait_for_pid = 0;
+			unblock_wait = true;
+		}
 	}
 
-	if (parent_th->async_messages.Count() >= LIMIT_THREAD_AMSG) {
-		plogerro("Too many async messages");
-		return false;
-	}
-	AsyncCommMsg* amsg = new AsyncCommMsg();
-	if (!amsg) return false;
-	byte* payload = new byte[sizeof(args)];
-	if (!payload) {
-		delete amsg;
-		return false;
-	}
-	MemCopyN(payload, args, sizeof(args));
-	amsg->msg.data.address = (stduint)payload;
-	amsg->msg.data.length = sizeof(args);
-	amsg->msg.type = 0;
-	amsg->msg.src = taskman_th->tid;
-	parent_th->async_messages.Append(amsg);
-	pparent->wait_for_pid = 0;
-	parent_th->Unblock(ThreadBlock::BlockReason::BR_Waiting);
+	if (unblock_wait) parent_th->Unblock(ThreadBlock::BlockReason::BR_Waiting);
+	if (unblock_recv) parent_th->Unblock(ThreadBlock::BlockReason::BR_RecvMsg);
 	return true;
 }
 
@@ -659,7 +667,8 @@ bool Taskman::Exit(ProcessBlock* p, stdsint exit_code)
 
 				// 1. If this system task is blocked while sending to us, sever pointers under comm_lock
 				if ((th->block_reason & ThreadBlock::BlockReason::BR_SendMsg) &&
-					th->send_to_whom && th->send_to_whom != (ThreadBlock*)INTRUPT && th->send_to_whom->parent_process == p) {
+					th->send_to_whom && th->send_to_whom != (ThreadBlock*)INTRUPT &&
+					th->send_to_whom != (ThreadBlock*)ANYPROC && th->send_to_whom->parent_process == p) {
 					th->send_to_whom = nullptr;
 					th->queue_send_queuenext = nullptr;
 					th->unsolved_msg = nullptr;
@@ -668,7 +677,8 @@ bool Taskman::Exit(ProcessBlock* p, stdsint exit_code)
 
 				// 2. If this system task is blocked while receiving from us, sever pointers under comm_lock
 				if ((th->block_reason & ThreadBlock::BlockReason::BR_RecvMsg) &&
-					th->recv_fo_whom && th->recv_fo_whom != (ThreadBlock*)INTRUPT && th->recv_fo_whom->parent_process == p) {
+					th->recv_fo_whom && th->recv_fo_whom != (ThreadBlock*)INTRUPT &&
+					th->recv_fo_whom != (ThreadBlock*)ANYPROC && th->recv_fo_whom->parent_process == p) {
 					th->recv_fo_whom = nullptr;
 					th->unsolved_msg = nullptr;
 					wake_recv = true;
