@@ -287,8 +287,28 @@ namespace {
 		return true;
 	}
 
+	bool probe_pata_device(DeviceNode* node) {
+		if (!node) return false;
+		const auto* bmide = Devsman::FindResource(node, DeviceResourceType::PciBarIo, 4);
+		const auto* irq = Devsman::FindResource(node, DeviceResourceType::IrqLine, 0);
+		node->fields.binding.probe_result = 0;
+		if (bmide) {
+			ploginfo("[DEVSMAN] PATA %s BMIDE=%[64H]%s",
+				node->link.addr ? node->link.addr : "(unnamed)",
+				bmide->start,
+				irq ? "" : " irq=none");
+		}
+		else {
+			ploginfo("[DEVSMAN] PATA %s (legacy IO ports)%s",
+				node->link.addr ? node->link.addr : "(unnamed)",
+				irq ? "" : " irq=none");
+		}
+		return true;
+	}
+
 	constexpr DriverOpsEntry pci_driver_ops_table[] = {
 		{"xhci", probe_xhci_device},
+		{"pata", probe_pata_device},
 		{"ahci", probe_ahci_device},
 		{"nvme", probe_nvme_device},
 		{"scsi", probe_scsi_device},

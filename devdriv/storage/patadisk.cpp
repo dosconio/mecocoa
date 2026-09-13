@@ -26,7 +26,12 @@ RMOD_LIST RMOD_LIST_HDD{
 Harddisk_PATA* disks[MAX_DRIVES];// referenced
 static DeviceNode* pata_storage_nodes[MAX_DRIVES] = {};
 static char hdd_buf[byteof(**disks) * numsof(disks)];
-static uni::Atomic<byte> lock[2] = {1, 1};
+struct IdeChannelState {
+	Spinlock lock;
+	volatile byte irq_waiting = 0;
+	volatile byte irq_seen = 0;
+};
+static IdeChannelState g_ide_channels[2];
 static char* single_sector = NULL;// file-hd used buffer
 
 struct PataDmaChannelState {
@@ -71,7 +76,6 @@ static void initialize_pata_dma_channels_once() {
 
 	const word bmide_base = word(bmide_bar->start & 0xFFF8u);
 	for0(channel, 2) {
-		if (!disks[channel * 2] && !disks[channel * 2 + 1]) continue;
 		auto& state = pata_dma_channels[channel];
 		state.bmide_base = word(bmide_base + channel * 8);
 		if (!state.prdt) state.prdt = (PataBmidePrd*)mempool.allocate(0x1000, 12);
@@ -153,8 +157,8 @@ static void probe_pata_bus_master_capability_once() {
 	// 	(stduint)pri_cmd, (stduint)pri_sts, (stduint)sec_cmd, (stduint)sec_sts);
 }
 
-static void register_pata_storage_nodes() {
-	auto* pata_node = Devsman::FindPCIDeviceByClass(0x01u, 0x01u, 0xFFu);
+static void register_pata_storage_nodes(DeviceNode* pata_node) {
+	if (!pata_node) pata_node = Devsman::FindPCIDeviceByClass(0x01u, 0x01u, 0xFFu);
 	if (!pata_node) return;
 	for0(i, MAX_DRIVES) {
 		pata_storage_nodes[i] = nullptr;
@@ -174,52 +178,30 @@ static void register_pata_storage_nodes() {
 }
 
 _ESYM_C void Handint_HDD1_Entry();
+_ESYM_C void Handint_HDD_Entry();
+static bool start_pata_driver(DeviceNode* pata_node);
 
 void Handint_HDD1()
 {
 	if (disks[2]) disks[2]->getStatus();
 	else if (disks[3]) disks[3]->getStatus();
-	if (lock[1].exchange(1)) {
-		IC.SendEOI(IRQ_ATA_DISK1);
-		return;
+	auto& ch = g_ide_channels[1];
+	if (ch.irq_waiting) {
+		ch.irq_seen = 1;
+		ch.irq_waiting = 0;
 	}
-	rupt_proc(Task_Hdd_Serv, IRQ_ATA_DISK1);
 	IC.SendEOI(IRQ_ATA_DISK1);
-}
-
-void R_HDD_INIT() {
-	IC[IRQ_ATA_DISK0].setRange(mglb(Handint_HDD_Entry), SegCo32);
-	register_interrupt_handler(IRQ_ATA_DISK0, Handint_HDD);
-	IC[IRQ_ATA_DISK1].setRange(mglb(Handint_HDD1_Entry), SegCo32);
-	register_interrupt_handler(IRQ_ATA_DISK1, Handint_HDD1);
-	
-	for0(i, MAX_DRIVES) {
-		Harddisk_PATA probe(i);
-		byte dev_type = probe.ProbeDevice();
-		if (dev_type == 1) {
-			disks[i] = new (hdd_buf + i * byteof(**disks)) Harddisk_PATA(i);
-		} else if (dev_type == 2) {
-			disks[i] = new (hdd_buf + i * byteof(**disks)) xCD_ATAPI(i);
-		} else {
-			disks[i] = nullptr;
-		}
-	}
-	if (disks[0] || disks[1]) (disks[0] ? disks[0] : disks[1])->setInterrupt(NULL);
-	if (disks[2] || disks[3]) (disks[2] ? disks[2] : disks[3])->setInterrupt(NULL); // Enable secondary channel interrupt
-	if (!single_sector) single_sector = new char[0x1000];
-	register_pata_storage_nodes();
 }
 
 void Handint_HDD()// HDD Master
 {
 	if (disks[0]) disks[0]->getStatus();
 	else if (disks[1]) disks[1]->getStatus();
-	if (lock[0].exchange(1)) {
-		IC.SendEOI(IRQ_ATA_DISK0);
-		plogwarn(">>> Handint_HDD");
-		return;
+	auto& ch = g_ide_channels[0];
+	if (ch.irq_waiting) {
+		ch.irq_seen = 1;
+		ch.irq_waiting = 0;
 	}
-	rupt_proc(Task_Hdd_Serv, IRQ_ATA_DISK0);
 	IC.SendEOI(IRQ_ATA_DISK0); // Acknowledge interrupt
 }
 
@@ -235,23 +217,75 @@ static bool hd_info_valid[4] = { 0 };
 
 static bool waitfor(Harddisk_PATA* hdd, stduint mask, stduint val, stduint timeout_second)// return seccess
 {
-	int t = syscall(syscall_t::TIME, 0);
-	while (((syscall(syscall_t::TIME, 0) - t)) < timeout_second)
+	if (!hdd) return false;
+	const stduint safe_timeout = timeout_second ? timeout_second : 1;
+	const stduint timeout_ticks = safe_timeout * CONFIG_SysTickFreq;
+	const stduint start_tick = tick;
+	const stduint max_spins = safe_timeout * 2000000;
+	stduint spin = 0;
+
+	while (true) {
 		if ((hdd->getStatus() & mask) == val)
-			return 1;
-	return 0;
+			return true;
+		if (tick != start_tick && (tick - start_tick >= timeout_ticks))
+			return false;
+		if (++spin >= max_spins)
+			return false;
+		__asm__ __volatile__("pause" ::: "memory");
+	}
 }
 static bool hd_cmd_wait(Harddisk_PATA* hdd) {
 	return waitfor(hdd, STATUS_BSY, 0, HD_WAITFOR_TIMEOUT);
 }
 
-static bool hd_int_wait() {
-	CommMsg msg;
-	sysrecv(INTRUPT, (&msg), 0);
-	return true;
+static bool hd_int_wait_channel(byte channel) {
+	if (channel >= 2) return false;
+	auto& ch = g_ide_channels[channel];
+	const word io_base = (channel == 0) ? PORT_IDE_CommandBlock_0 : PORT_IDE_CommandBlock_1;
+	const stduint start_tick = tick;
+	const stduint timeout_ticks = HD_WAITFOR_TIMEOUT * CONFIG_SysTickFreq;
+	const stduint max_spins = HD_WAITFOR_TIMEOUT * 2000000;
+	stduint spin = 0;
+
+	while (true) {
+		if (ch.irq_seen) {
+			ch.irq_seen = 0;
+			ch.irq_waiting = 0;
+			return true;
+		}
+		const byte status = innpb(io_base + 7);
+		if (!(status & STATUS_BSY)) {
+			ch.irq_seen = 0;
+			ch.irq_waiting = 0;
+			return true;
+		}
+		if (tick != start_tick && (tick - start_tick >= timeout_ticks))
+			break;
+		if (++spin >= max_spins)
+			break;
+		__asm__ __volatile__("pause" ::: "memory");
+	}
+	ch.irq_waiting = 0;
+	return false;
 }
-static void hd_rw_foreback_0() { lock[0] = 0; }
-static void hd_rw_foreback_1() { lock[1] = 0; }
+
+static bool hd_int_wait_0() {
+	return hd_int_wait_channel(0);
+}
+
+static bool hd_int_wait_1() {
+	return hd_int_wait_channel(1);
+}
+
+static void hd_rw_foreback_0() {
+	g_ide_channels[0].irq_seen = 0;
+	g_ide_channels[0].irq_waiting = 1;
+}
+
+static void hd_rw_foreback_1() {
+	g_ide_channels[1].irq_seen = 0;
+	g_ide_channels[1].irq_waiting = 1;
+}
 
 static bool hd_read_dma_once(Harddisk_PATA& hd, stduint BlockIden, void* Dest) {
 	if (hd.Block_Size != 512 || hd.getHigID() >= numsof(pata_dma_channels) || !Dest) return false;
@@ -280,23 +314,38 @@ static bool hd_read_dma_once(Harddisk_PATA& hd, stduint BlockIden, void* Dest) {
 
 	outpb(state.bmide_base + BMIDE_REG_CMD, BMIDE_CMD_READ | BMIDE_CMD_START);
 
-	const bool use_loop_fallback = !hd.fn_int_wait();
-	if (use_loop_fallback) {
-		if (!PataWaitRetry(&hd, hd.fn_lup_wait, STATUS_BSY, 0)) {
-			outpb(state.bmide_base + BMIDE_REG_CMD, 0);
-			return false;
+	const word io_base = (hd.getHigID() == 0) ? PORT_IDE_CommandBlock_0 : PORT_IDE_CommandBlock_1;
+	const stduint start_tick = tick;
+	const stduint timeout_ticks = (HD_TIMEOUT / 1000) * CONFIG_SysTickFreq;
+	const stduint max_spins = (HD_TIMEOUT / 1000) * 2000000;
+	stduint spin = 0;
+	bool completed = false;
+
+	while (true) {
+		const byte bmide_status = innpb(state.bmide_base + BMIDE_REG_STATUS);
+		if (bmide_status & BMIDE_STATUS_ERROR) break;
+		if ((bmide_status & BMIDE_STATUS_IRQ) || g_ide_channels[hd.getHigID()].irq_seen) {
+			const byte status = innpb(io_base + 7);
+			if (!(status & STATUS_BSY)) {
+				completed = true;
+				break;
+			}
 		}
-	}
-	else if (!hd.fn_lup_wait(&hd, STATUS_BSY, 0, HD_TIMEOUT / 1000)) {
-		outpb(state.bmide_base + BMIDE_REG_CMD, 0);
-		return false;
+		if (tick != start_tick && (tick - start_tick >= timeout_ticks))
+			break;
+		if (++spin >= max_spins)
+			break;
+		__asm__ __volatile__("pause" ::: "memory");
 	}
 
 	outpb(state.bmide_base + BMIDE_REG_CMD, 0);
 	const byte bmide_status = innpb(state.bmide_base + BMIDE_REG_STATUS);
 	outpb(state.bmide_base + BMIDE_REG_STATUS, bmide_status & (BMIDE_STATUS_IRQ | BMIDE_STATUS_ERROR));
-	if (bmide_status & BMIDE_STATUS_ERROR) return false;
-	if (!use_loop_fallback && !(bmide_status & BMIDE_STATUS_IRQ)) return false;
+	if (!completed || (bmide_status & BMIDE_STATUS_ERROR)) return false;
+	if (!(bmide_status & BMIDE_STATUS_IRQ) && !g_ide_channels[hd.getHigID()].irq_seen) return false;
+
+	const byte ata_status = innpb(io_base + 7);
+	if (ata_status & STATUS_BSY) return false;
 
 	MemCopyN(Dest, state.bounce, 512);
 	return true;
@@ -329,71 +378,43 @@ static bool hd_write_dma_once(Harddisk_PATA& hd, stduint BlockIden, const void* 
 
 	outpb(state.bmide_base + BMIDE_REG_CMD, BMIDE_CMD_START);
 
-	const bool use_loop_fallback = !hd.fn_int_wait();
-	if (use_loop_fallback) {
-		if (!PataWaitRetry(&hd, hd.fn_lup_wait, STATUS_BSY, 0)) {
-			outpb(state.bmide_base + BMIDE_REG_CMD, 0);
-			return false;
+	const word io_base = (hd.getHigID() == 0) ? PORT_IDE_CommandBlock_0 : PORT_IDE_CommandBlock_1;
+	const stduint start_tick = tick;
+	const stduint timeout_ticks = (HD_TIMEOUT / 1000) * CONFIG_SysTickFreq;
+	const stduint max_spins = (HD_TIMEOUT / 1000) * 2000000;
+	stduint spin = 0;
+	bool completed = false;
+
+	while (true) {
+		const byte bmide_status = innpb(state.bmide_base + BMIDE_REG_STATUS);
+		if (bmide_status & BMIDE_STATUS_ERROR) break;
+		if ((bmide_status & BMIDE_STATUS_IRQ) || g_ide_channels[hd.getHigID()].irq_seen) {
+			const byte status = innpb(io_base + 7);
+			if (!(status & STATUS_BSY)) {
+				completed = true;
+				break;
+			}
 		}
-	}
-	else if (!hd.fn_lup_wait(&hd, STATUS_BSY, 0, HD_TIMEOUT / 1000)) {
-		outpb(state.bmide_base + BMIDE_REG_CMD, 0);
-		return false;
+		if (tick != start_tick && (tick - start_tick >= timeout_ticks))
+			break;
+		if (++spin >= max_spins)
+			break;
+		__asm__ __volatile__("pause" ::: "memory");
 	}
 
 	outpb(state.bmide_base + BMIDE_REG_CMD, 0);
 	const byte bmide_status = innpb(state.bmide_base + BMIDE_REG_STATUS);
 	outpb(state.bmide_base + BMIDE_REG_STATUS, bmide_status & (BMIDE_STATUS_IRQ | BMIDE_STATUS_ERROR));
-	if (bmide_status & BMIDE_STATUS_ERROR) return false;
-	if (!use_loop_fallback && !(bmide_status & BMIDE_STATUS_IRQ)) return false;
+	if (!completed || (bmide_status & BMIDE_STATUS_ERROR)) return false;
+	if (!(bmide_status & BMIDE_STATUS_IRQ) && !g_ide_channels[hd.getHigID()].irq_seen) return false;
+
+	const byte ata_status = innpb(io_base + 7);
+	if (ata_status & STATUS_BSY) return false;
+
 	return true;
 }
 
-static bool hd_read_prefer_dma(byte disk_id, stduint BlockIden, void* Dest) {
-	if (disk_id >= numsof(disks) || !disks[disk_id] || !Dest) return false;
-	auto& hd = *disks[disk_id];
-	static bool logged_fallback[numsof(disks)] = {};
-	if (hd.Block_Size == 512) {
-		if (hd_read_dma_once(hd, BlockIden, Dest)) {
-			// static bool logged_dma[numsof(disks)] = {};
-			// if (!logged_dma[disk_id]) {
-			// 	logged_dma[disk_id] = true;
-			// 	ploginfo("[PATA-DMA] live dma-read on ide%u:%u",
-			// 		(stduint)hd.getHigID(), (stduint)hd.getLowID());
-			// }
-			return true;
-		}
-		if (!logged_fallback[disk_id]) {
-			logged_fallback[disk_id] = true;
-			plogwarn("[PATA-DMA] fallback to PIO for ide%u:%u reads",
-				(stduint)hd.getHigID(), (stduint)hd.getLowID());
-		}
-	}
-	return hd.Read(BlockIden, Dest);
-}
 
-static bool hd_write_prefer_dma(byte disk_id, stduint BlockIden, const void* Sors) {
-	if (disk_id >= numsof(disks) || !disks[disk_id] || !Sors) return false;
-	auto& hd = *disks[disk_id];
-	static bool logged_fallback[numsof(disks)] = {};
-	if (hd.Block_Size == 512) {
-		if (hd_write_dma_once(hd, BlockIden, Sors)) {
-			// static bool logged_dma[numsof(disks)] = {};
-			// if (!logged_dma[disk_id]) {
-			// 	logged_dma[disk_id] = true;
-			// 	ploginfo("[PATA-DMA] live dma-write on ide%u:%u",
-			// 		(stduint)hd.getHigID(), (stduint)hd.getLowID());
-			// }
-			return true;
-		}
-		if (!logged_fallback[disk_id]) {
-			logged_fallback[disk_id] = true;
-			plogwarn("[PATA-DMA] fallback to PIO for ide%u:%u writes",
-				(stduint)hd.getHigID(), (stduint)hd.getLowID());
-		}
-	}
-	return hd.Write(BlockIden, Sors);
-}
 
 static void probe_pata_dma_read_once() {
 	static bool probed = false;
@@ -511,25 +532,28 @@ inline static void print_hdinfo(Harddisk_PATA& hd)
 enum { REG_DATA = 0 };
 //{TODO} into harddisk.cpp:Open()
 static void hd_open(Harddisk_PATA& hd) { // 0x00
-	byte low_id = hd.getLowID();
-	HdiskCommand cmd = {};
-	cmd.command = (hd.Block_Size == 2048) ? ATAPI_CMD_IDENTIFY : ATA_IDENTIFY;
-	cmd.device = MAKE_DEVICE_REG(0, low_id, 0);
-	lock[hd.getHigID()] = 0;
-	hd.Hdisk_OUT(&cmd);
-	hd_int_wait();
-	word io_base = hd.getHigID() == 0 ? PORT_IDE_CommandBlock_0 : PORT_IDE_CommandBlock_1;
-	IN_wn(io_base + REG_DATA, (word*)single_sector, 512); // IDENTIFY payload is always 512 bytes
-	print_identify_info((uint16*)single_sector, hd);
-	if (!hd_info_valid[hd.getHigID() * 2 + low_id]) {
-		// if (_TEMP hd.getID() == 0x01) {
-		// DiscPartition dpart(hd, NR_PRIM_PER_DRIVE * low_id);
-		HD_Info& hdi = (*hd_info)[hd.getHigID() * 2 + low_id];
+	const byte ch = hd.getHigID();
+	const byte low_id = hd.getLowID();
+	{
+		SpinlockLocal lock(&g_ide_channels[ch].lock);
+		HdiskCommand cmd = {};
+		cmd.command = (hd.Block_Size == 2048) ? ATAPI_CMD_IDENTIFY : ATA_IDENTIFY;
+		cmd.device = MAKE_DEVICE_REG(0, low_id, 0);
+		if (ch == 0) hd_rw_foreback_0();
+		else hd_rw_foreback_1();
+		hd.Hdisk_OUT(&cmd);
+		if (ch == 0) hd_int_wait_0();
+		else hd_int_wait_1();
+		word io_base = ch == 0 ? PORT_IDE_CommandBlock_0 : PORT_IDE_CommandBlock_1;
+		IN_wn(io_base + REG_DATA, (word*)single_sector, 512); // IDENTIFY payload is always 512 bytes
+		print_identify_info((uint16*)single_sector, hd);
+	}
+	if (!hd_info_valid[ch * 2 + low_id]) {
+		HD_Info& hdi = (*hd_info)[ch * 2 + low_id];
 		if (hd.Block_Size == 512) { // Skip MBR mounting for ATAPI CD-ROMs
 			DiscPartition::Partition(hd, hdi, (byte*)single_sector, NR_PRIM_PER_DRIVE * low_id);
 		}
-		// if (1) print_hdinfo(hd);
-		hd_info_valid[hd.getHigID() * 2 + low_id] = true;
+		hd_info_valid[ch * 2 + low_id] = true;
 	}
 }
 
@@ -552,59 +576,78 @@ PartitionSlice Harddisk_PATA::getSlice(stduint dev) {
 	return GetPartitionSlice(hdinfo, dev);
 }
 
-struct Harddisk_PATA_Paged : public uni::Harddisk_PATA {
-	Harddisk_PATA_Paged(byte _id = 0, HarddiskType type = HarddiskType::ATA) : Harddisk_PATA(_id, type) {}
-	virtual bool Read(stduint BlockIden, void* Dest, stduint Times = 1) override;
-	virtual bool Write(stduint BlockIden, const void* Sors, stduint Times = 1) override;
-};
-bool Harddisk_PATA_Paged::Read(stduint BlockIden, void* Dest, stduint Times) {
-	if (Taskman::CurrentPID() == Task_Hdd_Serv) {
-		if (!disks[getID()]) return false;
-		return disks[getID()]->Read(BlockIden, Dest, Times);
-	}
+bool Harddisk_PATA::Read(stduint BlockIden, void* Dest, stduint Times) {
+	if (BlockIden + Times > getUnits() || !Dest) return false;
+	const byte ch = getHigID();
+	if (ch >= 2) return false;
+	SpinlockLocal lock(&g_ide_channels[ch].lock);
 	for0(t, Times) {
 		stduint blk = BlockIden + t;
 		byte* dst = (byte*)Dest + t * Block_Size;
-		stduint to_args[2];
-		to_args[0] = getID();
-		to_args[1] = blk;
-		syssend(Task_Hdd_Serv, sliceof(to_args), _IMM(FiledevMsg::READ));
-		// Receive ACK before data transfer
-		stduint ack;
-		sysrecv(Task_Hdd_Serv, &ack, sizeof(ack));
-		if (!ack) return false;
-		sysrecv(Task_Hdd_Serv, dst, Block_Size);
+		if (Block_Size == 512 && hd_read_dma_once(*this, blk, dst)) {
+			continue;
+		}
+		// Fallback to PIO
+		HdiskCommand cmd = {};
+		cmd.feature = 0;
+		cmd.count = 1;
+		for0(i, 3) cmd.LBA[i] = (blk >> (i * 8));
+		cmd.device = MAKE_DEVICE_REG(1, getLowID(), (blk >> 24) & 0xF);
+		cmd.command = ATA_READ;
+		asserv(fn_feedback)();
+		Harddisk_PATA::Hdisk_OUT(&cmd);
+		if (fn_int_wait && fn_lup_wait) {
+			const bool use_loop_fallback = !fn_int_wait();
+			if (use_loop_fallback) {
+				if (!PataWaitRetry(this, fn_lup_wait, STATUS_DRQ, STATUS_DRQ)) return false;
+			}
+			else if (!fn_lup_wait(this, STATUS_DRQ, STATUS_DRQ, HD_TIMEOUT / 1000)) {
+				return false;
+			}
+			word io_base = (ch == 0) ? PORT_IDE_CommandBlock_0 : PORT_IDE_CommandBlock_1;
+			IN_wn(io_base + 0, (word*)dst, Block_Size);
+		}
+		else return false;
 	}
 	return true;
 }
 
-bool Harddisk_PATA_Paged::Write(stduint BlockIden, const void* Sors, stduint Times) {
-	if (Taskman::CurrentPID() == Task_Hdd_Serv) {
-		if (!disks[getID()]) return false;
-		return disks[getID()]->Write(BlockIden, Sors, Times);
-	}
+bool Harddisk_PATA::Write(stduint BlockIden, const void* Sors, stduint Times) {
+	if (BlockIden + Times > getUnits() || !Sors) return false;
+	const byte ch = getHigID();
+	if (ch >= 2) return false;
+	SpinlockLocal lock(&g_ide_channels[ch].lock);
 	for0(t, Times) {
 		stduint blk = BlockIden + t;
 		const byte* src = (const byte*)Sors + t * Block_Size;
-		stduint to_args[2];
-		to_args[0] = getID();
-		to_args[1] = blk;
-		syssend(Task_Hdd_Serv, sliceof(to_args), _IMM(FiledevMsg::WRITE));
-		// Receive ACK before data transfer
-		stduint ack;
-		sysrecv(Task_Hdd_Serv, &ack, sizeof(ack));
-		if (!ack) return false;
-		syssend(Task_Hdd_Serv, src, Block_Size);
+		if (Block_Size == 512 && hd_write_dma_once(*this, blk, src)) {
+			continue;
+		}
+		// Fallback to PIO
+		HdiskCommand cmd = {};
+		cmd.feature = 0;
+		cmd.count = 1;
+		for0(i, 3) cmd.LBA[i] = (blk >> (i * 8));
+		cmd.device = MAKE_DEVICE_REG(1, getLowID(), (blk >> 24) & 0xF);
+		cmd.command = ATA_WRITE;
+		asserv(fn_feedback)();
+		Harddisk_PATA::Hdisk_OUT(&cmd);
+		if (fn_int_wait && fn_lup_wait) {
+			if (!fn_lup_wait(this, STATUS_DRQ, STATUS_DRQ, HD_TIMEOUT / 1000)) return false;
+			word io_base = (ch == 0) ? PORT_IDE_CommandBlock_0 : PORT_IDE_CommandBlock_1;
+			OUT_wn(io_base + 0, (word*)src, Block_Size);
+			const bool use_loop_fallback = !fn_int_wait();
+			if (use_loop_fallback) {
+				if (!PataWaitRetry(this, fn_lup_wait, STATUS_BSY, 0)) return false;
+			}
+		}
+		else return false;
 	}
 	return true;
 }
 
-//// ---- ---- SERVICE ---- ---- ////
-static stduint args[4];
-Harddisk_PATA_Paged* paged_disks[MAX_DRIVES];
-
 static void register_pata_partition_nodes(stduint disk_id) {
-	if (disk_id >= MAX_DRIVES || !pata_storage_nodes[disk_id] || !paged_disks[disk_id] || !hd_info) return;
+	if (disk_id >= MAX_DRIVES || !pata_storage_nodes[disk_id] || !disks[disk_id] || !hd_info) return;
 	HD_Info& hdinfo = (*hd_info)[disk_id];
 	for (stduint part_dev = 1; part_dev <= hdinfo.part_count; ++part_dev) {
 		uni::PartitionSlice slice = GetPartitionSlice(hdinfo, part_dev);
@@ -613,172 +656,114 @@ static void register_pata_partition_nodes(stduint disk_id) {
 		Devsman::RegisterStoragePartition(
 			pata_storage_nodes[disk_id],
 			node_name.reference(),
-			(*paged_disks[disk_id]),
+			(*disks[disk_id]),
 			part_dev);
 	}
 }
 
-static void log_read_disk() {
-	static stduint last_sec = 0;
-	if (args[1] != last_sec + 1) {
-		plogwarn("PATA%u Read %u -> %p", args[0], args[1], single_sector);
-	}
-	last_sec = args[1];
-}
+static bool start_pata_driver(DeviceNode* pata_node) {
+	if (!pata_node) return false;
+	ensure_pata_pci_bus_master_once();
+	probe_pata_bus_master_capability_once();
 
-int fat_time = 0;
-void serv_dev_hd_loop()
-{
-	if (_IMM(&bda->hdisk_number) != 0x475) {
-		plogerro("Invalid BIOS_DataArea");
-		while (1);
-	}
-	hd_info = new HD_Info[1][4];
-
-	for0a(i, disks) {
+	for0(i, MAX_DRIVES) {
+		Harddisk_PATA probe(i);
+		byte dev_type = probe.ProbeDevice();
+		if (dev_type == 1) {
+			disks[i] = new (hdd_buf + i * byteof(**disks)) Harddisk_PATA(i);
+		} else if (dev_type == 2) {
+			disks[i] = new (hdd_buf + i * byteof(**disks)) xCD_ATAPI(i);
+		} else {
+			disks[i] = nullptr;
+		}
 		if (disks[i]) {
 			disks[i]->fn_cmd_wait = hd_cmd_wait;
-			disks[i]->fn_int_wait = hd_int_wait;
+			disks[i]->fn_int_wait = (disks[i]->getHigID() == 0) ? hd_int_wait_0 : hd_int_wait_1;
 			disks[i]->fn_lup_wait = waitfor;
 			disks[i]->fn_feedback = (disks[i]->getHigID() == 0) ? hd_rw_foreback_0 : hd_rw_foreback_1;
 			disks[i]->react_type = Harddisk_PATA::ReactType::Rupt;
 		}
 	}
-	// Initialize the paged proxy disks
-	for0a(i, paged_disks) {
-		paged_disks[i] = new Harddisk_PATA_Paged(i);
-		if (disks[i]) {
-			paged_disks[i]->Block_Size = disks[i]->Block_Size;
-		}
-	}
-	ensure_pata_pci_bus_master_once();
-	probe_pata_bus_master_capability_once();
+	if (disks[0] || disks[1]) (disks[0] ? disks[0] : disks[1])->setInterrupt(NULL);
+	if (disks[2] || disks[3]) (disks[2] ? disks[2] : disks[3])->setInterrupt(NULL);
+
 	initialize_pata_dma_channels_once();
-	probe_pata_dma_read_once();
-	
-	// Console.OutFormat("[Hrddisk] detect %u disks\n\r", bda->hdisk_number);
-	stduint sig_type = 0, sig_src;
-	String lab_fat;
-	String lab;
-	while (true) {
-		switch ((FiledevMsg)sig_type)
-		{
-		case FiledevMsg::TEST:// (no-feedback)
-			for0(i, MAX_DRIVES) {
-				if (disks[i]) {
-					hd_open(*disks[i]);
-					stduint block_size = disks[i]->Block_Size;
-					stduint total_units = 0;
-					uint64 total_bytes = 0;
-					if (pata_storage_nodes[i]) {
-						(void)Devsman::Ctrl(pata_storage_nodes[i],
-							(stduint)DeviceCtrlCommand::GetBlockSize, &block_size);
-						(void)Devsman::Ctrl(pata_storage_nodes[i],
-							(stduint)DeviceCtrlCommand::GetUnitCount, &total_units);
-						(void)Devsman::Ctrl(pata_storage_nodes[i],
-							(stduint)DeviceCtrlCommand::GetByteSize, &total_bytes);
-					}
-					if (!total_units) {
-						if (disks[i]->Block_Size == 2048 && paged_disks[i]) {
-							total_units = paged_disks[i]->getSlice(0).length;
-						} else {
-							total_units = disks[i]->getUnits();
-						}
-					}
-					if (!total_bytes) {
-						total_bytes = uint64(total_units) * uint64(block_size);
-					}
-					ploginfo("[Hrddisk] Detect %s on IDE%u:%u : %u MB",
-						(block_size == 2048) ? "CD-ROM" : "Disk",
-						i / 2, i % 2,
-						stduint(total_bytes >> 20));
-				}
-			}
 
-			for0(i, MAX_DRIVES) {
-				if (!disks[i] || disks[i]->Block_Size != 2048) continue;
-				lab = String::newFormat("/mnt/ide%u.0", i);
-				ploginfo("[Hrddisk] probe cdrom%u whole-disk", i);
-				if (auto fs = Filesys::Mount(*paged_disks[i], 0, lab.reference(), pata_storage_nodes[i])) {
-					ploginfo("[Hrddisk] mount %s on %s", fs->name, lab.reference());
-				} else {
-					ploginfo("[Hrddisk] no filesystem recognized on cdrom%u", i);
-				}
-			}
+	if (!single_sector) single_sector = new char[0x1000];
+	if (!hd_info) hd_info = new HD_Info[1][4];
 
-			for0(i, MAX_DRIVES) {
-				if (!disks[i] || disks[i]->Block_Size != 512) continue;
-				register_pata_partition_nodes(i);
-				HD_Info& hdinfo = (*hd_info)[i];
-				for (unsigned part_dev = 1; part_dev <= hdinfo.part_count; part_dev++) {
-					uni::PartitionSlice slice = GetPartitionSlice(hdinfo, part_dev);
-					byte sys_id = slice.sys_id;
-					if (sys_id == 0x00) continue; // empty/unpartitioned, skip
-					else if (sys_id == FILESYS_EXT) continue;
-					String node_name = String::newFormat("partition@%u", part_dev);
-					DeviceNode* part_node = Devsman::RegisterStoragePartition(
-						pata_storage_nodes[i], node_name.reference(), (*paged_disks[i]), part_dev);
-					lab = String::newFormat("/mnt/ide%u.%u", i, part_dev);
-					plogtrac("[Hrddisk] probe disk%u part%u: %x", i, part_dev, sys_id);
-					if (auto fs = Filesys::Mount(*paged_disks[i], part_dev, lab.reference(), part_node)) {
-						if (!StrCompare(fs->name, "fat")) {
-							fat_time++;
-						}
-					}
-				}
-			}
-			break;
-		case FiledevMsg::RUPT:// (usercall-forbidden, no feedback)
-			break;
-		case FiledevMsg::CLOSE:// [diskno]
-			ploginfo("[Hrddisk] close %u", (unsigned)(byte)args[0]);
-			hd_close(*disks[(byte)args[0]]);// assert msg.data.length == 0
-			break;
-		case FiledevMsg::READ:// [diskno, lba]
-		{
-			// ploginfo("[Hrddisk] device %u: read %u", args[0], args[1]);
-			// log_read_disk();
-			const byte disk_id = (byte)args[0];
-			stduint ack = 0;
-			if (disk_id < numsof(disks) && disks[disk_id]) {
-				stduint block_size = disks[disk_id]->Block_Size;
-				if (pata_storage_nodes[disk_id]) {
-					(void)Devsman::Ctrl(pata_storage_nodes[disk_id],
-						(stduint)DeviceCtrlCommand::GetBlockSize, &block_size);
-					ack = Devsman::Read(
-						pata_storage_nodes[disk_id],
-						single_sector,
-						block_size,
-						args[1] * block_size,
-						0) == (stdsint)block_size;
-				}
-				if (!ack) {
-					ack = hd_read_prefer_dma(disk_id, args[1], single_sector) ? 1 : 0;
-				}
-			}
-			if (sig_src) syssend(sig_src, &ack, sizeof(ack));
-			if (ack && sig_src) syssend(sig_src, single_sector, disks[args[0]]->Block_Size);
-			break;
-		}
-		case FiledevMsg::WRITE:// [diskno, lba]
-		{
-			// ploginfo("[Hrddisk] device %u: write %u", (unsigned)(byte)args[0], slice.address);
-			stduint ack = (args[0] < numsof(disks) && disks[args[0]]) ? 1 : 0;
-			if (sig_src) syssend(sig_src, &ack, sizeof(ack));
-			if (ack && sig_src) {
-				sysrecv(sig_src, single_sector, disks[args[0]]->Block_Size);
-				ack = hd_write_prefer_dma((byte)args[0], args[1], single_sector) ? 1 : 0;
-			}
-			break;
-		}
-		// OPEN: not support for fixed sockets
+	register_pata_storage_nodes(pata_node);
 
-		default:
-			plogerro("Bad TYPE in %s %s", __FILE__, __FUNCIDEN__);
-			break;
+	for0(i, MAX_DRIVES) {
+		if (disks[i]) {
+			hd_open(*disks[i]);
+			stduint block_size = disks[i]->Block_Size;
+			stduint total_units = 0;
+			uint64 total_bytes = 0;
+			if (pata_storage_nodes[i]) {
+				(void)Devsman::Ctrl(pata_storage_nodes[i],
+					(stduint)DeviceCtrlCommand::GetBlockSize, &block_size);
+				(void)Devsman::Ctrl(pata_storage_nodes[i],
+					(stduint)DeviceCtrlCommand::GetUnitCount, &total_units);
+				(void)Devsman::Ctrl(pata_storage_nodes[i],
+					(stduint)DeviceCtrlCommand::GetByteSize, &total_bytes);
+			}
+			if (!total_units) {
+				total_units = disks[i]->getUnits();
+			}
+			if (!total_bytes) {
+				total_bytes = uint64(total_units) * uint64(block_size);
+			}
+			ploginfo("[Hrddisk] Detect %s on IDE%u:%u : %u MB",
+				(block_size == 2048) ? "CD-ROM" : "Disk",
+				i / 2, i % 2,
+				stduint(total_bytes >> 20));
 		}
-		sysrecv(ANYPROC, sliceof(args), &sig_type, &sig_src);
 	}
+
+	probe_pata_dma_read_once();
+
+	for0(i, MAX_DRIVES) {
+		if (!disks[i] || disks[i]->Block_Size != 2048) continue;
+		String lab = String::newFormat("/mnt/ide%u.0", i);
+		ploginfo("[Hrddisk] probe cdrom%u whole-disk", i);
+		if (auto fs = Filesys::Mount(*disks[i], 0, lab.reference(), pata_storage_nodes[i])) {
+			ploginfo("[Hrddisk] mount %s on %s", fs->name, lab.reference());
+		} else {
+			ploginfo("[Hrddisk] no filesystem recognized on cdrom%u", i);
+		}
+	}
+
+	for0(i, MAX_DRIVES) {
+		if (!disks[i] || disks[i]->Block_Size != 512) continue;
+		register_pata_partition_nodes(i);
+		HD_Info& hdinfo = (*hd_info)[i];
+		for (unsigned part_dev = 1; part_dev <= hdinfo.part_count; part_dev++) {
+			uni::PartitionSlice slice = GetPartitionSlice(hdinfo, part_dev);
+			byte sys_id = slice.sys_id;
+			if (sys_id == 0x00 || slice.sys_id == FILESYS_EXT || slice.length == 0) continue;
+			String node_name = String::newFormat("partition@%u", part_dev);
+			DeviceNode* part_node = Devsman::RegisterStoragePartition(
+				pata_storage_nodes[i], node_name.reference(), (*disks[i]), part_dev);
+			String lab = String::newFormat("/mnt/ide%u.%u", i, part_dev);
+			plogtrac("[Hrddisk] probe disk%u part%u: %x", i, part_dev, sys_id);
+			if (auto fs = Filesys::Mount(*disks[i], part_dev, lab.reference(), part_node)) {
+				ploginfo("[Hrddisk] mount %s on %s", fs->name, lab.reference());
+			}
+		}
+	}
+
+	pata_node->fields.binding.driver_data = disks;
+	return true;
+}
+
+void R_HDD_INIT() {
+	IC[IRQ_ATA_DISK0].setRange(mglb(Handint_HDD_Entry), SegCo32);
+	register_interrupt_handler(IRQ_ATA_DISK0, Handint_HDD);
+	IC[IRQ_ATA_DISK1].setRange(mglb(Handint_HDD1_Entry), SegCo32);
+	register_interrupt_handler(IRQ_ATA_DISK1, Handint_HDD1);
+	Devsman::RegisterDriverStarter("pata", start_pata_driver);
+	Devsman::StartKnownDrivers();
 }
 
 

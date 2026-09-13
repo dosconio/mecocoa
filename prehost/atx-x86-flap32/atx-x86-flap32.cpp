@@ -41,7 +41,6 @@ _sign_entry() {
 	//
 	Taskman::Create((void*)&serv_dev_mem_loop, RING_M)->main_thread->name = "serv_dev_mem_loop";
 	Taskman::Create((void*)&serv_dev_net_loop, RING_M)->main_thread->name = "serv_dev_net_loop";
-	Taskman::Create((void*)&serv_dev_hd_loop, RING_M)->main_thread->name = "serv_dev_hd_loop";
 	Taskman::Create((void*)&serv_dev_fl_loop, RING_M)->main_thread->name = "serv_dev_fl_loop";
 	Taskman::Create((void*)&serv_dev_audio_loop, RING_M)->main_thread->name = "serv_dev_audio_loop";
 

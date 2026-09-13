@@ -16,7 +16,6 @@ enum {
 	Task_Net_Serv,
 	#endif
 	#if _MCCA == 0x8632 || _ACCM == 0x8632
-	Task_Hdd_Serv,
 	Task_Flp_Serv,
 	Task_Audio_Serv,
 	#endif

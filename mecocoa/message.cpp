@@ -268,9 +268,6 @@ int msg_send(ThreadBlock* fo_th, stduint too, _Comment(vaddr) CommMsg* msg, bool
 				crt->queue_send_queuenext = fo_th;
 			}
 			fo_th->queue_send_queuenext = nullptr;// keep this at tail
-			if (to_th->recv_fo_whom == fo_th || (stduint)to_th->recv_fo_whom == ANYPROC) {
-				wake_th = to_th;
-			}
 			do_block = true;
 		}
 	}
@@ -279,30 +276,53 @@ int msg_send(ThreadBlock* fo_th, stduint too, _Comment(vaddr) CommMsg* msg, bool
 		wake_th->Unblock(ThreadBlock::BlockReason::BR_RecvMsg);
 	}
 	if (do_block) {
-		fo_th->Block(ThreadBlock::BlockReason::BR_SendMsg);
-		bool need_schedule = true;
-		{
-			SpinlockLocal guard(&comm_lock);
-			if (!fo_th->unsolved_msg && !fo_th->send_to_whom) {
-				need_schedule = false;
+		while (true) {
+			fo_th->Block(ThreadBlock::BlockReason::BR_SendMsg);
+			bool need_schedule = true;
+			{
+				SpinlockLocal guard(&comm_lock);
+				if (!fo_th->unsolved_msg && !fo_th->send_to_whom) {
+					need_schedule = false;
+				}
 			}
-		}
-		if (need_schedule) {
-			Taskman::Schedule(true);
-			if (fo_th->unsolved_msg == (CommMsg*)-1) {
+			if (need_schedule) {
+				Taskman::Schedule(true);
+				if (fo_th->unsolved_msg == (CommMsg*)-1) {
+					fo_th->unsolved_msg = nullptr;
+					return -4;
+				}
+			}
+			else {
+				fo_th->Unblock(ThreadBlock::BlockReason::BR_SendMsg);
+			}
+
+			if (!fo_th->unsolved_msg) {
+				return 0;
+			}
+
+			if (_sigset_raw(&fo_th->pending_signals) & ~_sigset_raw(&fo_th->blocked_signals)) {
+				// Interrupted by signal: unlink from to_th queue safely under comm_lock
+				SpinlockLocal guard(&comm_lock);
+				if (to_th && fo_th->send_to_whom == to_th) {
+					if (to_th->queue_send_queuehead == fo_th) {
+						to_th->queue_send_queuehead = fo_th->queue_send_queuenext;
+					}
+					else {
+						ThreadBlock* prev = to_th->queue_send_queuehead;
+						while (prev && prev->queue_send_queuenext != fo_th) {
+							prev = prev->queue_send_queuenext;
+						}
+						if (prev) {
+							prev->queue_send_queuenext = fo_th->queue_send_queuenext;
+						}
+					}
+				}
+				fo_th->send_to_whom = nullptr;
+				fo_th->queue_send_queuenext = nullptr;
 				fo_th->unsolved_msg = nullptr;
 				return -4;
 			}
 		}
-		else {
-			fo_th->Unblock(ThreadBlock::BlockReason::BR_SendMsg);
-		}
-		if (!fo_th->unsolved_msg) {
-			return 0;
-		}
-		fo_th->unsolved_msg = nullptr;
-		fo_th->send_to_whom = nullptr;
-		return -4;
 	}
 	return 0;
 }
@@ -459,72 +479,162 @@ int msg_recv(ThreadBlock* to_th, stduint foo, _Comment(vaddr) CommMsg* msg, bool
 		return 0;
 	}
 	if (do_block) {
-		to_th->Block(ThreadBlock::BlockReason::BR_RecvMsg);
-		bool need_schedule = true;
-		{
-			SpinlockLocal guard(&comm_lock);
-			if (!to_th->unsolved_msg && !to_th->recv_fo_whom) {
-				need_schedule = false;
-			}
-		}
-		if (need_schedule) {
-			Taskman::Schedule(true);
-			if (to_th->unsolved_msg == (CommMsg*)-1) {
-				to_th->unsolved_msg = nullptr;
-				return -4;
-			}
-		}
-		else {
-			to_th->Unblock(ThreadBlock::BlockReason::BR_RecvMsg);
-		}
-
-		// If woke up or already delivered with unsolved_msg == nullptr, message (sync/interrupt) was already copied directly!
-		if (!to_th->unsolved_msg) {
-			return 0;
-		}
-
-		// Otherwise, if woken up with an async message queued in async_messages
-		{
-			SpinlockLocal guard(&comm_lock);
-			Dnode* target_node = nullptr;
-			AsyncCommMsg* amsg = nullptr;
-			if (foo == ANYPROC) {
-				target_node = to_th->async_messages.Root();
-			}
-			else if (foo != INTRUPT) {
-				for (Dnode* nod = to_th->async_messages.Root(); nod; nod = nod->next) {
-					auto* candidate = (AsyncCommMsg*)nod->offs;
-					if (candidate && candidate->msg.src == foo) {
-						target_node = nod;
-						break;
-					}
+		while (true) {
+			to_th->Block(ThreadBlock::BlockReason::BR_RecvMsg);
+			bool need_schedule = true;
+			{
+				SpinlockLocal guard(&comm_lock);
+				if (!to_th->unsolved_msg && !to_th->recv_fo_whom) {
+					need_schedule = false;
 				}
 			}
-
-			if (target_node) {
-				amsg = (AsyncCommMsg*)target_node->offs;
-				auto [to_msg, to_addr, to_leng] = FetchMessage(to_th->parent_process, msg, msg_in_kernel);
-
-				stduint leng = minof(amsg->msg.data.length, to_leng);
-				if (leng) {
-					MccaMemCopyP(
-						to_addr, to_th->parent_process, msg_in_kernel,
-						(void*)amsg->msg.data.address, nullptr, true,
-						leng
-					);
+			if (need_schedule) {
+				Taskman::Schedule(true);
+				if (to_th->unsolved_msg == (CommMsg*)-1) {
+					to_th->unsolved_msg = nullptr;
+					to_th->recv_fo_whom = nullptr;
+					return -4;
 				}
-				if (to_msg) {
-					to_msg->type = amsg->msg.type;
-					to_msg->src = amsg->msg.src;
-				}
-				to_th->async_messages.Remove(target_node);
-				to_th->unsolved_msg = nullptr;
-				to_th->recv_fo_whom = nullptr;
+			}
+			else {
+				to_th->Unblock(ThreadBlock::BlockReason::BR_RecvMsg);
+			}
+
+			// If woke up or already delivered with unsolved_msg == nullptr, message (sync/interrupt) was already copied directly!
+			if (!to_th->unsolved_msg) {
 				return 0;
 			}
-			to_th->unsolved_msg = nullptr;
-			to_th->recv_fo_whom = nullptr;
-			return -4;
+
+			// Check for pending unblocked signals
+			if (_sigset_raw(&to_th->pending_signals) & ~_sigset_raw(&to_th->blocked_signals)) {
+				SpinlockLocal guard(&comm_lock);
+				to_th->unsolved_msg = nullptr;
+				to_th->recv_fo_whom = nullptr;
+				return -4;
+			}
+
+			// Check for sync queued senders attached while waiting
+			{
+				ThreadBlock* wake_sync_fo = nullptr;
+				ThreadBlock* wake_dropped_head = nullptr;
+				{
+					SpinlockLocal guard(&comm_lock);
+					bool determined = false;
+					ThreadBlock* prev = nullptr;
+					ThreadBlock* fo_th = nullptr;
+
+					if (foo == ANYPROC) {
+						while (to_th->queue_send_queuehead && !CanUseSyncMsgState(to_th->queue_send_queuehead)) {
+							ThreadBlock* dropped = DropQueuedSender(to_th, nullptr, to_th->queue_send_queuehead);
+							if (dropped) {
+								dropped->queue_send_queuenext = wake_dropped_head;
+								wake_dropped_head = dropped;
+							}
+						}
+						if (to_th->queue_send_queuehead) {
+							fo_th = to_th->queue_send_queuehead;
+							foo = fo_th->tid;
+							determined = true;
+						}
+					}
+					else if (foo != INTRUPT) {
+						fo_th = fo_th_lookup;
+						if (CanUseSyncMsgState(fo_th) && fo_th->send_to_whom == to_th) {
+							ThreadBlock* crt = to_th->queue_send_queuehead;
+							while (crt) {
+								if (crt == fo_th) {
+									determined = true;
+									break;
+								}
+								prev = crt;
+								crt = crt->queue_send_queuenext;
+							}
+						}
+					}
+
+					if (determined && fo_th) {
+						if (fo_th == to_th->queue_send_queuehead) {
+							to_th->queue_send_queuehead = fo_th->queue_send_queuenext;
+							fo_th->queue_send_queuenext = nullptr;
+						}
+						else if (prev) {
+							prev->queue_send_queuenext = fo_th->queue_send_queuenext;
+							fo_th->queue_send_queuenext = nullptr;
+						}
+
+						auto [fo_msg, fo_addr, fo_leng] = FetchMessage(fo_th->parent_process, fo_th->unsolved_msg, fo_th->unsolved_msg_from_kernel);
+						auto [to_msg, to_addr, to_leng] = FetchMessage(to_th->parent_process, msg, msg_in_kernel);
+
+						if (stduint leng = minof(fo_leng, to_leng)) {
+							MccaMemCopyP(
+								to_addr, to_th->parent_process, msg_in_kernel,
+								fo_addr, fo_th->parent_process, fo_th->unsolved_msg_from_kernel,
+								leng
+							);
+						}
+						if (to_msg && fo_msg) to_msg->type = fo_msg->type;
+						if (to_msg) to_msg->src = foo;
+
+						fo_th->unsolved_msg = nullptr;
+						fo_th->send_to_whom = nullptr;
+						to_th->unsolved_msg = nullptr;
+						to_th->recv_fo_whom = nullptr;
+						wake_sync_fo = fo_th;
+					}
+				}
+
+				while (wake_dropped_head) {
+					ThreadBlock* dropped = wake_dropped_head;
+					wake_dropped_head = dropped->queue_send_queuenext;
+					dropped->queue_send_queuenext = nullptr;
+					dropped->Unblock(ThreadBlock::BlockReason::BR_SendMsg);
+				}
+				if (wake_sync_fo) {
+					wake_sync_fo->Unblock(ThreadBlock::BlockReason::BR_SendMsg);
+					return 0;
+				}
+			}
+
+			// Check for async messages queued while waiting
+			{
+				SpinlockLocal guard(&comm_lock);
+				Dnode* target_node = nullptr;
+				AsyncCommMsg* amsg = nullptr;
+				if (foo == ANYPROC) {
+					target_node = to_th->async_messages.Root();
+				}
+				else if (foo != INTRUPT) {
+					for (Dnode* nod = to_th->async_messages.Root(); nod; nod = nod->next) {
+						auto* candidate = (AsyncCommMsg*)nod->offs;
+						if (candidate && candidate->msg.src == foo) {
+							target_node = nod;
+							break;
+						}
+					}
+				}
+
+				if (target_node) {
+					amsg = (AsyncCommMsg*)target_node->offs;
+					auto [to_msg, to_addr, to_leng] = FetchMessage(to_th->parent_process, msg, msg_in_kernel);
+
+					stduint leng = minof(amsg->msg.data.length, to_leng);
+					if (leng) {
+						MccaMemCopyP(
+							to_addr, to_th->parent_process, msg_in_kernel,
+							(void*)amsg->msg.data.address, nullptr, true,
+							leng
+						);
+					}
+					if (to_msg) {
+						to_msg->type = amsg->msg.type;
+						to_msg->src = amsg->msg.src;
+					}
+					to_th->async_messages.Remove(target_node);
+					to_th->unsolved_msg = nullptr;
+					to_th->recv_fo_whom = nullptr;
+					return 0;
+				}
+			}
 		}
 	}
 	return 0;
