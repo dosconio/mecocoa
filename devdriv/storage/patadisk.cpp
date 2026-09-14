@@ -42,6 +42,9 @@ struct PataDmaChannelState {
 };
 
 static PataDmaChannelState pata_dma_channels[2];
+// Cleared to true by probe_pata_dma_read_once() when bus-master DMA cannot be
+// trusted (fails outright, or disagrees with a PIO read of the same sector).
+static bool pata_dma_disabled = false;
 
 static bool build_pata_pci_device(uni::PCI::Device& pci_dev, DeviceNode*& pata_node) {
 	pata_node = Devsman::FindPCIDeviceByClass(0x01u, 0x01u, 0xFFu);
@@ -78,16 +81,21 @@ static void initialize_pata_dma_channels_once() {
 	for0(channel, 2) {
 		auto& state = pata_dma_channels[channel];
 		state.bmide_base = word(bmide_base + channel * 8);
+		// DMA descriptors and the bounce buffer must be device-reachable; the pool
+		// guarantees a physical address below 16MB (memoman-init.cpp reserves it).
+		if (!state.prdt) state.prdt = (PataBmidePrd*)DmaLowAlloc(0x1000);
+		if (!state.bounce) state.bounce = (byte*)DmaLowAlloc(0x1000);
 		if (!state.prdt) state.prdt = (PataBmidePrd*)mempool.allocate(0x1000, 12);
 		if (!state.bounce) state.bounce = (byte*)mempool.allocate(0x1000, 12);
 		if (state.prdt) MemSet(state.prdt, 0, 0x1000);
 		if (state.bounce) MemSet(state.bounce, 0, 0x1000);
 		state.ready = state.prdt && state.bounce;
-		ploginfo("[PATA-DMA] ch%u init ready=%u BMIDE=%[16H] prdt=%p bounce=%p",
+		ploginfo("[PATA-DMA] ch%u init ready=%u BMIDE=%[16H] prdt=%p bounce=%p low=%u",
 			(stduint)channel,
 			(stduint)(state.ready ? 1u : 0u),
 			(stduint)state.bmide_base,
-			state.prdt, state.bounce);
+			state.prdt, state.bounce,
+			(stduint)((state.prdt && DmaLowIsInRange(state.prdt)) ? 1u : 0u));
 	}
 }
 
@@ -430,18 +438,41 @@ static void probe_pata_dma_read_once() {
 		return;
 	}
 
-	const bool ok = hd_read_dma_once(*disks[0], 0, single_sector);
-	if (!ok) {
-		plogwarn("[PATA-DMA] dma-read probe ide0:0 lba0 failed");
+	// Reference: plain PIO read of LBA 0.
+	static byte pio_sector[512];
+	static byte dma_sector[512];
+	pata_dma_disabled = true;
+	const bool pio_ok = disks[0]->Read(0, pio_sector, 1);
+	pata_dma_disabled = false;
+	if (!pio_ok) {
+		plogwarn("[PATA-DMA] pio reference read lba0 failed, DMA left disabled");
+		pata_dma_disabled = true;
 		return;
 	}
-	// ploginfo("[PATA-DMA] dma-read probe ide0:0 lba0 ok sig=%02X%02X",
-	// 	(unsigned)single_sector[511], (unsigned)single_sector[510]);
-	// ploginfo("[PATA-DMA] dma-read probe bytes=%02X %02X %02X %02X %02X %02X %02X %02X",
-	// 	(unsigned)single_sector[0], (unsigned)single_sector[1],
-	// 	(unsigned)single_sector[2], (unsigned)single_sector[3],
-	// 	(unsigned)single_sector[4], (unsigned)single_sector[5],
-	// 	(unsigned)single_sector[6], (unsigned)single_sector[7]);
+
+	const bool dma_ok = hd_read_dma_once(*disks[0], 0, dma_sector);
+	if (!dma_ok) {
+		plogwarn("[PATA-DMA] dma-read probe ide0:0 lba0 failed, using PIO");
+		pata_dma_disabled = true;
+		return;
+	}
+
+	stduint diff = 0;
+	for0(i, sizeof(dma_sector)) {
+		if (dma_sector[i] != pio_sector[i]) diff++;
+	}
+	if (diff) {
+		plogwarn("[PATA-DMA] dma/pio mismatch on lba0 (%u bytes differ), using PIO",
+			diff);
+		plogwarn("[PATA-DMA] dma=%02X %02X %02X %02X pio=%02X %02X %02X %02X",
+			(unsigned)dma_sector[0], (unsigned)dma_sector[1],
+			(unsigned)dma_sector[2], (unsigned)dma_sector[3],
+			(unsigned)pio_sector[0], (unsigned)pio_sector[1],
+			(unsigned)pio_sector[2], (unsigned)pio_sector[3]);
+		pata_dma_disabled = true;
+		return;
+	}
+	ploginfo("[PATA-DMA] dma-read verified against PIO on lba0");
 }
 
 // Use after print_identify_info
@@ -584,7 +615,7 @@ bool Harddisk_PATA::Read(stduint BlockIden, void* Dest, stduint Times) {
 	for0(t, Times) {
 		stduint blk = BlockIden + t;
 		byte* dst = (byte*)Dest + t * Block_Size;
-		if (Block_Size == 512 && hd_read_dma_once(*this, blk, dst)) {
+		if (Block_Size == 512 && !pata_dma_disabled && hd_read_dma_once(*this, blk, dst)) {
 			continue;
 		}
 		// Fallback to PIO
@@ -661,6 +692,29 @@ static void register_pata_partition_nodes(stduint disk_id) {
 	}
 }
 
+// xCD_ATAPI::Read overrides Harddisk_PATA::Read, so the channel lock taken there
+// is never held for a CD-ROM. While the disk was serviced by its own process every
+// ATAPI transaction was serialised; now any thread drives the register sequence in
+// place, so two readers interleaving on one drive leave it in an error state.
+struct MecocoaCD_ATAPI : public xCD_ATAPI {
+	MecocoaCD_ATAPI(byte id = 0) : xCD_ATAPI(id) {}
+	virtual bool Read(stduint BlockIden, void* Dest, stduint Times = 1) override {
+		const byte ch = getHigID();
+		if (ch >= 2) return false;
+		SpinlockLocal lock(&g_ide_channels[ch].lock);
+		const bool ok = xCD_ATAPI::Read(BlockIden, Dest, Times);
+		if (!ok) {
+			// 1 = Error, 7 = Status: 0x80 BSY, 0x08 DRQ, 0x01 ERR
+			const byte status = innpb(io_base + 7);
+			plogwarn("[PATA-CD] atapi read fail lba=%u times=%u ch=%u status=%u err=%u%s",
+				(stduint)BlockIden, (stduint)Times, (stduint)ch,
+				(stduint)status, (stduint)innpb(io_base + 1),
+				(status & 0x80) ? " busy" : ((status & 0x01) ? " err" : ""));
+		}
+		return ok;
+	}
+};
+
 static bool start_pata_driver(DeviceNode* pata_node) {
 	if (!pata_node) return false;
 	ensure_pata_pci_bus_master_once();
@@ -672,7 +726,7 @@ static bool start_pata_driver(DeviceNode* pata_node) {
 		if (dev_type == 1) {
 			disks[i] = new (hdd_buf + i * byteof(**disks)) Harddisk_PATA(i);
 		} else if (dev_type == 2) {
-			disks[i] = new (hdd_buf + i * byteof(**disks)) xCD_ATAPI(i);
+			disks[i] = new (hdd_buf + i * byteof(**disks)) MecocoaCD_ATAPI(i);
 		} else {
 			disks[i] = nullptr;
 		}

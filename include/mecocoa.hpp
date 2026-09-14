@@ -82,8 +82,7 @@ void serv_shell_process();
 void serv_graf_loop();
 #include "filesys.hpp"
 #include "fileman.hpp"
-void serv_dev_mem_loop();
-void serv_dev_net_loop();
+void serv_netw_loop();
 void serv_dev_fl_loop();
 void serv_dev_audio_loop();
 void serv_file_loop();

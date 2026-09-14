@@ -396,7 +396,7 @@ static void log_acpi_topology(stduint rsdp_addr) {
 		}
 	}
 	else {
-		plogwarn("[ACPI] MCFG not found from RSDP");
+		ploginfo("[ACPI]!MCFG not found from RSDP");
 	}
 }
 

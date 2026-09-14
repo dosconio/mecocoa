@@ -16,6 +16,8 @@ constexpr inline static stduint operator ""_Baud(unsigned long long i) { return 
 
 
 extern uint64 last_schepoint;
+
+_ESYM_C void R_MEMDISK_INIT();
 _ESYM_C
 void _entry()
 {
@@ -27,6 +29,7 @@ void _entry()
 	}
 	//{} Cache_t::enAble();
 	Filesys::Initialize();
+	R_MEMDISK_INIT();
 	Taskman::Initialize();
 
 	IC.Reset();
@@ -43,8 +46,6 @@ void _entry()
 	Taskman::Create((void*)&serv_graf_loop, RING_M);
 	Taskman::Create((void*)&serv_file_loop, RING_M);
 	Taskman::Create((void*)&serv_devs_loop, RING_M);
-	//
-	Taskman::Create((void*)&serv_dev_mem_loop, RING_M);
 
 	if (Taskman::chain.Count() <= 1) {
 		ploginfo("Nothing to do.");

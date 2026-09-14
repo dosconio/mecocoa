@@ -736,7 +736,6 @@ void serv_file_loop()// for IDE 0:0, 0:1
 			bootstrapped = true;
 			// Init
 			#if (_MCCA & 0xFF00) == 0x8600
-			syssend(Task_Memdisk_Serv, &retval, sizeof(retval[0]), _IMM(FiledevMsg::RUPT));
 			#if _MCCA == 0x8632
 			// syssend(Task_Flp_Serv, &retval, sizeof(retval[0]), _IMM(FiledevMsg::RUPT));
 			#endif
@@ -783,7 +782,6 @@ void serv_file_loop()// for IDE 0:0, 0:1
 			#endif
 
 			#elif (_MCCA & 0xFF00) == 0x1000
-			syssend(Task_Memdisk_Serv, &retval, sizeof(retval[0]), _IMM(FiledevMsg::RUPT));
 			ProcessBlock* p;
 			p = Taskman::CreateFile(("/md0/lpa.elf"), RING_U, Task_Kernel);
 			*p->focus_tty.Lock() = vttys[0];

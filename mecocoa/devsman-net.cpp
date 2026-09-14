@@ -3279,7 +3279,7 @@ bool Devsman::GetTcpConnectionEntry(stduint index, void* entry, stduint length) 
 	return false;
 }
 
-void serv_dev_net_loop() {
+void serv_netw_loop() {
 	RegisterBuiltinUdpPorts();
 	ploginfo("[Net] Service thread start pid=%u", Taskman::CurrentPID());
 	while (true) {

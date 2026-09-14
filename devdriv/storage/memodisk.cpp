@@ -6,6 +6,16 @@
 #include "../../include/mecocoa.hpp"
 #include <c/format/filesys.h>
 
+_ESYM_C void R_MEMDISK_INIT();
+
+#if 1
+__attribute__((section(".init.rmod")))
+RMOD_LIST RMOD_LIST_MEMDISK{
+	.init = R_MEMDISK_INIT,
+	.name = "DISK-MEM",
+};
+#endif
+
 static stduint next_id = 0;
 
 __attribute__((section(".extdata")))
@@ -66,68 +76,6 @@ public:
 Vector<Memodisk*> mem_disks;
 
 
-struct Harddisk_Memdisk_Paged : public StorageTrait {
-	stduint id;
-	Harddisk_Memdisk_Paged(byte _id = 0) : id(_id) {}
-	virtual bool Read(stduint BlockIden, void* Dest, stduint Times = 1) override;
-	virtual bool Write(stduint BlockIden, const void* Sors, stduint Times = 1) override;
-};
-bool Harddisk_Memdisk_Paged::Read(stduint BlockIden, void* Dest, stduint Times) {
-	if (Taskman::CurrentPID() == Task_Memdisk_Serv) {
-		Memodisk* mdisk = nullptr;
-		for0(i, mem_disks.Count()) {
-			if (mem_disks[i] && mem_disks[i]->id == id) {
-				mdisk = mem_disks[i];
-				break;
-			}
-		}
-		return mdisk ? mdisk->Read(BlockIden, Dest, Times) : false;
-	}
-	for0(t, Times) {
-		stduint blk = BlockIden + t;
-		byte* dst = (byte*)Dest + t * Block_Size;
-		stduint to_args[2];
-		to_args[0] = id;
-		to_args[1] = blk;
-		syssend(Task_Memdisk_Serv, sliceof(to_args), _IMM(FiledevMsg::READ));
-		// Receive ACK before data transfer
-		stduint ack;
-		sysrecv(Task_Memdisk_Serv, &ack, sizeof(ack));
-		if (!ack) return false;
-		sysrecv(Task_Memdisk_Serv, dst, Block_Size);
-	}
-	return true;
-}
-
-bool Harddisk_Memdisk_Paged::Write(stduint BlockIden, const void* Sors, stduint Times) {
-	if (Taskman::CurrentPID() == Task_Memdisk_Serv) {
-		Memodisk* mdisk = nullptr;
-		for0(i, mem_disks.Count()) {
-			if (mem_disks[i] && mem_disks[i]->id == id) {
-				mdisk = mem_disks[i];
-				break;
-			}
-		}
-		return mdisk ? mdisk->Write(BlockIden, Sors, Times) : false;
-	}
-	for0(t, Times) {
-		stduint blk = BlockIden + t;
-		const byte* src = (const byte*)Sors + t * Block_Size;
-		stduint to_args[2];
-		to_args[0] = id;
-		to_args[1] = blk;
-		syssend(Task_Memdisk_Serv, sliceof(to_args), _IMM(FiledevMsg::WRITE));
-		// Receive ACK before data transfer
-		stduint ack;
-		sysrecv(Task_Memdisk_Serv, &ack, sizeof(ack));
-		if (!ack) return false;
-		syssend(Task_Memdisk_Serv, src, Block_Size);
-	}
-	return true;
-}
-
-
-#if 1
 static Memodisk* locate(stduint diskno) {
 	for0(i, mem_disks.Count()) {
 		if (mem_disks[i] && mem_disks[i]->id == diskno) {
@@ -149,71 +97,21 @@ static bool read(stduint diskno, stduint lba, void* buffer) {
 	return mdisk && mdisk->Read(lba, buffer);
 }
 
-void serv_dev_mem_loop() {
-	stduint sig_type = 0, sig_src = 0;
-	stduint args[4];
-	stduint ret;
-	byte* rw_buffer = new byte[512];
-	Memodisk* mdisk;
-	while (true) {
-		switch ((FiledevMsg)sig_type) {
-		case FiledevMsg::TEST:// (no-feedback)
-			if (1) {
-				#if (_MCCA & 0xFF00) == 0x1000 || _MCCA == 0x8632
-				ploginfo("[Memdisk] Default FATVHD Size: %[x]", sizeof(_FOLLOW_VHD));
-				stduint sectype = FILESYS_FAT32_LBA;
-				auto dev0 = open(sliceof(_FOLLOW_VHD), sectype);
-				printlog(dev0 >= 0 ? _LOG_INFO : _LOG_ERROR, "[Memdisk] Created Memdisk %u, trying FAT", dev0);
-				if (auto fs = Filesys::Mount(*locate(0), 0, "/md0")) {//{} "/dev/md0"
-					ploginfo("[Memdisk] Loaded %s", fs->name);
-				}
-
-				#elif _MCCA == 0x8664 && defined(_UEFI)
-				auto dev0 = open(uefi_data.fatvhd_addr, 32 * 1024 * 1024, FILESYS_FAT32_LBA);
-				printlog(dev0 >= 0 ? _LOG_INFO : _LOG_ERROR, "[Memdisk] Created Memdisk %u, trying FAT32", dev0);
-				if (auto fs = Filesys::Mount(*locate(0), 0, "/md0")) {//{} "/dev/md0"
-					ploginfo("[Memdisk] Loaded %s", fs->name);
-				}
-				#endif
-			}
-			break;
-		case FiledevMsg::RUPT:// (usercall-forbidden, no feedback)
-			break;
-		case FiledevMsg::CLOSE:// [diskno]
-			// TODO
-			break;
-		case FiledevMsg::READ:// [diskno, lba]
-		{
-			mdisk = locate(args[0]);
-			stduint ack = (mdisk && mdisk->Read(args[1], rw_buffer)) ? 1 : 0;
-			if (sig_src) syssend(sig_src, &ack, sizeof(ack));
-			if (ack && sig_src) syssend(sig_src, rw_buffer, mdisk->Block_Size);
-			break;
-		}
-		case FiledevMsg::WRITE:// [diskno, lba]
-		{
-			mdisk = locate(args[0]);
-			stduint ack = mdisk ? 1 : 0;
-			if (sig_src) syssend(sig_src, &ack, sizeof(ack));
-			if (ack && sig_src) {
-				sysrecv(sig_src, rw_buffer, mdisk->Block_Size);
-				mdisk->Write(args[1], rw_buffer);
-			}
-			break;
-		}
-		case FiledevMsg::GETPS:
-			// UNSUPPORTED
-			break;
-		case FiledevMsg::OPEN://(memaddr, memolen, sectype) | memdisk only params
-			ret = open((void*)args[0], args[1], args[2]);
-			ploginfo("%u wo Create Memdisk %d", sig_src, ret);
-			syssend(sig_src, &ret, sizeof(ret));
-			break;
-
-		}
-		sysrecv(ANYPROC, sliceof(args), &sig_type, &sig_src);
+void R_MEMDISK_INIT() {
+	#if (_MCCA & 0xFF00) == 0x1000 || _MCCA == 0x8632
+	ploginfo("[Memdisk] Default FATVHD Size: %[x]", sizeof(_FOLLOW_VHD));
+	stduint sectype = FILESYS_FAT32_LBA;
+	auto dev0 = open(sliceof(_FOLLOW_VHD), sectype);
+	printlog(dev0 >= 0 ? _LOG_INFO : _LOG_ERROR, "[Memdisk] Created Memdisk %u, trying FAT", dev0);
+	if (auto fs = Filesys::Mount(*locate(0), 0, "/md0")) {
+		ploginfo("[Memdisk] Loaded %s", fs->name);
 	}
-
+	#elif _MCCA == 0x8664 && defined(_UEFI)
+	auto dev0 = open(uefi_data.fatvhd_addr, 32 * 1024 * 1024, FILESYS_FAT32_LBA);
+	printlog(dev0 >= 0 ? _LOG_INFO : _LOG_ERROR, "[Memdisk] Created Memdisk %u, trying FAT32", dev0);
+	if (auto fs = Filesys::Mount(*locate(0), 0, "/md0")) {
+		ploginfo("[Memdisk] Loaded %s", fs->name);
+	}
+	#endif
 }
 
-#endif

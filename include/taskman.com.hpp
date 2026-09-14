@@ -11,7 +11,6 @@ enum {
 	Task_ConsoleVideo,// [inner of Task_Console] manage mice and GUI
 	Task_FileSys,
 	Task_Devsman,
-	Task_Memdisk_Serv,
 	#if (_MCCA & 0xFF00) == 0x8600 || (_ACCM & 0xFF00) == 0x8600
 	Task_Net_Serv,
 	#endif
