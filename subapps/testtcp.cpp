@@ -7,43 +7,11 @@
 #include <poll.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
-
-#ifndef SO_TYPE
-#define SO_TYPE 3
-#endif
-#ifndef SO_ERROR
-#define SO_ERROR 4
-#endif
-
-static bool ParseIPv4(const char* text, in_addr_t* output) {
-	if (!text || !output) return false;
-	uint8 octets[4] = {};
-	const char* cursor = text;
-	for0(i, 4) {
-		if (*cursor < '0' || *cursor > '9') return false;
-		int value = 0;
-		while (*cursor >= '0' && *cursor <= '9') {
-			value = value * 10 + (*cursor - '0');
-			if (value > 255) return false;
-			cursor++;
-		}
-		octets[i] = (uint8)value;
-		if (i < 3) {
-			if (*cursor != '.') return false;
-			cursor++;
-		}
-	}
-	if (*cursor) return false;
-	*output = ((in_addr_t)octets[0] << 24) |
-		((in_addr_t)octets[1] << 16) |
-		((in_addr_t)octets[2] << 8) |
-		((in_addr_t)octets[3]);
-	return true;
-}
+#include <arpa/inet.h>
 
 static void PrintUsage() {
 	printf("usage: testtcp [--reuse] [--nonblock] [--poll-accept] [--backlog n] [--accept-delay ms] [--count n] [--sockopt] --listen [port]\n\r");
-	printf("       testtcp [--repeat n] [--burst n] [--fill n] [--read-size n] [--write-size n] [--poll-after-recv] [--shutdown-write] [--shutdown-read] [--send-after-shutdown] [--sockopt] [--sockerr-twice] ipv4 port [payload]\n\r");
+	printf("       testtcp [--repeat n] [--burst n] [--fill n] [--read-size n] [--write-size n] [--poll-after-recv] [--shutdown-write] [--shutdown-read] [--send-after-shutdown] [--sockopt] [--sockerr-twice] [--http] host port [payload]\n\r");
 	printf("  listen: testtcp --listen 80\n\r");
 	printf("  reuse:  testtcp --reuse --listen 80\n\r");
 	printf("  nbacc:  testtcp --nonblock --listen 80\n\r");
@@ -60,6 +28,9 @@ static void PrintUsage() {
 	printf("  rdcls:  testtcp --shutdown-read 10.0.2.1 7777 hello\n\r");
 	printf("  opt:    testtcp --sockopt 10.0.2.1 7777 hello\n\r");
 	printf("  client: testtcp 10.0.2.1 7777 hello\n\r");
+	printf("  dns:    testtcp example.com 80 hello\n\r");
+	printf("  http:   testtcp --http example.com 80\n\r");
+	printf("  path:   testtcp --http --http-path / example.com 80\n\r");
 	printf("  repeat: testtcp --repeat 3 10.0.2.1 7777 hello\n\r");
 	printf("  host:   nc -vz -w 1 10.0.2.15 80\n\r");
 	printf("  data:   printf hello | nc -w 1 10.0.2.15 80\n\r");
@@ -94,6 +65,170 @@ static void PrintSocketOptions(int fd) {
 	}
 }
 
+static uint16 ReadNet16(const uint8* data) {
+	return uint16((uint16(data[0]) << 8) | data[1]);
+}
+
+static void WriteNet16(uint8* data, uint16 value) {
+	data[0] = uint8(value >> 8);
+	data[1] = uint8(value);
+}
+
+static bool GetConfiguredDnsServer(struct in_addr* output) {
+	if (!output) return false;
+	stduint count = 0;
+	if (syscall(syscall_t::ROUT, stduint(syscall_net_route_func_t::IPv4InterfaceCount),
+		_IMM(&count), sizeof(count)) < 0) return false;
+	for0(i, count) {
+		syscall_net_interface_ipv4_t iface{};
+		iface.link_index = uint16(i);
+		if (syscall(syscall_t::ROUT, stduint(syscall_net_route_func_t::IPv4Interface),
+			_IMM(&iface), sizeof(iface)) < 0) continue;
+		if (!iface.dns[0] && !iface.dns[1] && !iface.dns[2] && !iface.dns[3]) continue;
+		uint8* target = (uint8*)&output->s_addr;
+		for0(j, 4) target[j] = iface.dns[j];
+		return true;
+	}
+	return false;
+}
+
+static bool EncodeDnsName(uint8* output, stduint capacity, const char* host, stduint* length) {
+	if (!output || !host || !length) return false;
+	stduint out = 0;
+	const char* label = host;
+	while (*label) {
+		const char* cursor = label;
+		stduint label_length = 0;
+		while (*cursor && *cursor != '.') {
+			label_length++;
+			cursor++;
+		}
+		if (!label_length || label_length > 63 || out + 1 + label_length >= capacity) return false;
+		output[out++] = uint8(label_length);
+		for0(i, label_length) output[out++] = uint8(label[i]);
+		label = *cursor == '.' ? cursor + 1 : cursor;
+	}
+	if (out >= capacity) return false;
+	output[out++] = 0;
+	*length = out;
+	return true;
+}
+
+static bool SkipDnsName(const uint8* packet, stduint packet_length, stduint* offset) {
+	if (!packet || !offset) return false;
+	stduint cursor = *offset;
+	for0(depth, 32) {
+		if (cursor >= packet_length) return false;
+		const uint8 label = packet[cursor++];
+		if (!label) {
+			*offset = cursor;
+			return true;
+		}
+		if ((label & 0xC0u) == 0xC0u) {
+			if (cursor >= packet_length) return false;
+			*offset = cursor + 1;
+			return true;
+		}
+		if (label & 0xC0u) return false;
+		cursor += label;
+		if (cursor > packet_length) return false;
+	}
+	return false;
+}
+
+static bool ResolveDnsA(const char* host, struct in_addr* output) {
+	if (!host || !output) return false;
+	if (inet_aton(host, output)) return true;
+	struct in_addr dns{};
+	if (!GetConfiguredDnsServer(&dns)) {
+		printf("testtcp: no dns server\n\r");
+		return false;
+	}
+
+	uint8 query[256] = {};
+	static uint16 next_id = 0x4D43;
+	const uint16 query_id = next_id++;
+	WriteNet16(query + 0, query_id);
+	WriteNet16(query + 2, 0x0100u);
+	WriteNet16(query + 4, 1);
+	stduint name_length = 0;
+	if (!EncodeDnsName(query + 12, sizeof(query) - 16, host, &name_length)) return false;
+	stduint query_length = 12 + name_length;
+	WriteNet16(query + query_length, 1);
+	WriteNet16(query + query_length + 2, 1);
+	query_length += 4;
+
+	int fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+	if (fd < 0) return false;
+	struct sockaddr_in server{};
+	server.sin_family = AF_INET;
+	server.sin_port = htons(53);
+	server.sin_addr = dns;
+	const stdsint sent = sendto(fd, query, query_length, 0,
+		(const struct sockaddr*)&server, sizeof(server));
+	if (sent != stdsint(query_length)) {
+		close(fd);
+		return false;
+	}
+	struct pollfd pfd{};
+	pfd.fd = fd;
+	pfd.events = POLLIN;
+	if (poll(&pfd, 1, 2500) <= 0 || !(pfd.revents & POLLIN)) {
+		close(fd);
+		return false;
+	}
+	uint8 response[512] = {};
+	const stdsint received = recvfrom(fd, response, sizeof(response), 0, nullptr, nullptr);
+	close(fd);
+	if (received < 12) return false;
+	const stduint response_length = stduint(received);
+	if (ReadNet16(response) != query_id) return false;
+	if ((ReadNet16(response + 2) & 0x000Fu) != 0) return false;
+	const uint16 question_count = ReadNet16(response + 4);
+	const uint16 answer_count = ReadNet16(response + 6);
+	stduint offset = 12;
+	for0(i, question_count) {
+		if (!SkipDnsName(response, response_length, &offset)) return false;
+		if (offset + 4 > response_length) return false;
+		offset += 4;
+	}
+	for0(i, answer_count) {
+		if (!SkipDnsName(response, response_length, &offset)) return false;
+		if (offset + 10 > response_length) return false;
+		const uint16 type = ReadNet16(response + offset);
+		const uint16 dns_class = ReadNet16(response + offset + 2);
+		const uint16 rdlength = ReadNet16(response + offset + 8);
+		offset += 10;
+		if (offset + rdlength > response_length) return false;
+		if (type == 1 && dns_class == 1 && rdlength == 4) {
+			uint8* target = (uint8*)&output->s_addr;
+			for0(j, 4) target[j] = response[offset + j];
+			return true;
+		}
+		offset += rdlength;
+	}
+	return false;
+}
+
+static char* BuildHttpRequest(const char* host, const char* path) {
+	if (!host) return nullptr;
+	if (!path || !path[0]) path = "/";
+	const char* prefix = "GET ";
+	const char* middle = " HTTP/1.0\r\nHost: ";
+	const char* suffix = "\r\nConnection: close\r\n\r\n";
+	const stduint length = strlen(prefix) + strlen(path) + strlen(middle) + strlen(host) + strlen(suffix);
+	char* request = (char*)malloc(length + 1);
+	if (!request) return nullptr;
+	char* cursor = request;
+	const char* parts[] = { prefix, path, middle, host, suffix };
+	for0(i, numsof(parts)) {
+		const char* part = parts[i];
+		while (*part) *cursor++ = *part++;
+	}
+	*cursor = 0;
+	return request;
+}
+
 int main(int argc, char** argv) {
 	if (argc >= 2 && (!StrCompare(argv[1], "-h") || !StrCompare(argv[1], "--help") ||
 		!StrCompare(argv[1], "help"))) {
@@ -119,6 +254,8 @@ int main(int argc, char** argv) {
 	bool shutdown_write = false;
 	bool shutdown_read = false;
 	bool send_after_shutdown = false;
+	bool http_mode = false;
+	const char* http_path = "/";
 	const char* positional[3] = {};
 	stduint positional_count = 0;
 	for (int i = 1; i < argc; i++) {
@@ -260,6 +397,19 @@ int main(int argc, char** argv) {
 			shutdown_write = true;
 			continue;
 		}
+		if (StrCompare(argv[i], "--http") == 0) {
+			http_mode = true;
+			continue;
+		}
+		if (StrCompare(argv[i], "--http-path") == 0) {
+			if (++i >= argc) {
+				PrintUsage();
+				return 1;
+			}
+			http_mode = true;
+			http_path = argv[i];
+			continue;
+		}
 		if (positional_count >= 3) {
 			PrintUsage();
 			return 1;
@@ -269,18 +419,24 @@ int main(int argc, char** argv) {
 
 	if (!listen_mode) {
 		if (reuse_address || nonblock || poll_accept || accept_limit || listen_backlog != 4 || accept_delay ||
-			(fill_length ? positional_count != 2 : positional_count != 3)) {
+			(fill_length ? positional_count != 2 : (http_mode ? positional_count != 2 : positional_count != 3))) {
 			PrintUsage();
 			return 1;
 		}
-		in_addr_t target_ip = 0;
+		struct in_addr target_address{};
 		const int target_port = atoi(positional[1]);
 		char* fill_payload = nullptr;
-		const char* payload = fill_length ? nullptr : positional[2];
-		if (!ParseIPv4(positional[0], &target_ip) || target_port <= 0 || target_port > 65535) {
+		char* http_payload = nullptr;
+		const char* payload = fill_length || http_mode ? nullptr : positional[2];
+		if (target_port <= 0 || target_port > 65535) {
 			PrintUsage();
 			return 1;
 		}
+		if (!ResolveDnsA(positional[0], &target_address)) {
+			printf("testtcp: resolve failed\n\r");
+			return 1;
+		}
+		printf("testtcp: target=%s ip=%s\n\r", positional[0], inet_ntoa(target_address));
 		if (fill_length) {
 			fill_payload = (char*)malloc(stduint(fill_length) + 1);
 			if (!fill_payload) {
@@ -291,23 +447,34 @@ int main(int argc, char** argv) {
 			fill_payload[fill_length] = 0;
 			payload = fill_payload;
 		}
+		if (http_mode) {
+			http_payload = BuildHttpRequest(positional[0], http_path);
+			if (!http_payload) {
+				printf("testtcp: http request alloc failed\n\r");
+				if (fill_payload) free(fill_payload);
+				return 1;
+			}
+			payload = http_payload;
+		}
 		for (int repeat = 0; repeat < repeat_count; repeat++) {
 			if (repeat_count > 1) printf("testtcp: repeat %d/%d\n\r", repeat + 1, repeat_count);
 			int fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 			if (fd < 0) {
 				printf("testtcp: socket failed\n\r");
 				if (fill_payload) free(fill_payload);
+				if (http_payload) free(http_payload);
 				return 1;
 			}
 			if (show_sockopt) PrintSocketOptions(fd);
 			struct sockaddr_in target{};
 			target.sin_family = AF_INET;
 			target.sin_port = htons((uint16)target_port);
-			target.sin_addr.s_addr = htonl(target_ip);
+			target.sin_addr = target_address;
 			if (connect(fd, (const struct sockaddr*)&target, sizeof(target)) < 0) {
 				printf("testtcp: connect failed\n\r");
 				close(fd);
 				if (fill_payload) free(fill_payload);
+				if (http_payload) free(http_payload);
 				return 1;
 			}
 			struct sockaddr_in local{};
@@ -331,6 +498,7 @@ int main(int argc, char** argv) {
 						printf("testtcp: send failed\n\r");
 						close(fd);
 						if (fill_payload) free(fill_payload);
+						if (http_payload) free(http_payload);
 						return 1;
 					}
 					printf("testtcp: sent %d bytes\n\r", (int)sent);
@@ -344,6 +512,7 @@ int main(int argc, char** argv) {
 					printf("testtcp: shutdown write failed\n\r");
 					close(fd);
 					if (fill_payload) free(fill_payload);
+					if (http_payload) free(http_payload);
 					return 1;
 				}
 				printf("testtcp: shutdown write\n\r");
@@ -359,13 +528,14 @@ int main(int argc, char** argv) {
 					printf("testtcp: shutdown read failed\n\r");
 					close(fd);
 					if (fill_payload) free(fill_payload);
+					if (http_payload) free(http_payload);
 					return 1;
 				}
 				printf("testtcp: shutdown read\n\r");
 			}
 			char buffer[513] = {};
 			stduint received_total = 0;
-			while (received_total < sent_total) {
+			while (http_mode || received_total < sent_total) {
 				struct pollfd read_pfd{};
 				read_pfd.fd = fd;
 				read_pfd.events = POLLIN;
@@ -374,10 +544,11 @@ int main(int argc, char** argv) {
 					printf("testtcp: poll failed\n\r");
 					close(fd);
 					if (fill_payload) free(fill_payload);
+					if (http_payload) free(http_payload);
 					return 1;
 				}
 				if (read_ready == 0 || !(read_pfd.revents & POLLIN)) {
-					printf("testtcp: no data received\n\r");
+					if (!http_mode) printf("testtcp: no data received\n\r");
 					break;
 				}
 				const stdsint received = read(fd, buffer, read_size);
@@ -385,6 +556,7 @@ int main(int argc, char** argv) {
 					printf("testtcp: recv failed\n\r");
 					close(fd);
 					if (fill_payload) free(fill_payload);
+					if (http_payload) free(http_payload);
 					return 1;
 				}
 				if (!received) break;
@@ -401,6 +573,7 @@ int main(int argc, char** argv) {
 					printf("testtcp: poll-after-recv failed\n\r");
 					close(fd);
 					if (fill_payload) free(fill_payload);
+					if (http_payload) free(http_payload);
 					return 1;
 				}
 				printf("testtcp: poll-after-recv=%d revents=%[16H]\n\r",
@@ -409,15 +582,17 @@ int main(int argc, char** argv) {
 			if (close(fd) < 0) {
 				printf("testtcp: close failed\n\r");
 				if (fill_payload) free(fill_payload);
+				if (http_payload) free(http_payload);
 				return 1;
 			}
 			printf("testtcp: closed\n\r");
 		}
 		if (fill_payload) free(fill_payload);
+		if (http_payload) free(http_payload);
 		return 0;
 	}
 
-	if (repeat_count != 1 || burst_count != 1 || fill_length || poll_after_recv || positional_count > 1) {
+	if (repeat_count != 1 || burst_count != 1 || fill_length || poll_after_recv || http_mode || positional_count > 1) {
 		PrintUsage();
 		return 1;
 	}

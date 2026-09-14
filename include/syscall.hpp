@@ -206,6 +206,7 @@ enum class syscall_net_route_func_t : stduint {
 	TCPListenerEntry,
 	TCPConnectionCount,
 	TCPConnectionEntry,
+	NetStats,
 };
 
 constexpr uint16 syscall_net_route_flag_up = 0x0001u;
@@ -213,6 +214,16 @@ constexpr uint16 syscall_net_route_flag_gateway = 0x0002u;
 constexpr uint16 syscall_net_config_source_static = 0u;
 constexpr uint16 syscall_net_config_source_dhcp_offered = 1u;
 constexpr uint16 syscall_net_config_source_dhcp_bound = 2u;
+constexpr uint16 syscall_net_config_source_dhcp_nak = 3u;
+constexpr uint16 syscall_net_config_source_dhcp_failed = 4u;
+
+constexpr uint16 syscall_net_dhcp_state_none = 0u;
+constexpr uint16 syscall_net_dhcp_state_init = 1u;
+constexpr uint16 syscall_net_dhcp_state_discovering = 2u;
+constexpr uint16 syscall_net_dhcp_state_offered = 3u;
+constexpr uint16 syscall_net_dhcp_state_requesting = 4u;
+constexpr uint16 syscall_net_dhcp_state_bound = 5u;
+constexpr uint16 syscall_net_dhcp_state_nak = 6u;
 
 struct syscall_net_route_ipv4_t {
 	uint8 destination[4] = {};
@@ -232,6 +243,13 @@ struct syscall_net_interface_ipv4_t {
 	uint16 link_state = 0;
 	uint16 config_source = 0;
 	char name[32] = {};
+	uint8 gateway[4] = {};
+	uint8 dhcp_server[4] = {};
+	uint8 dns[4] = {};
+	uint32 dhcp_lease_time = 0;
+	uint32 dhcp_xid = 0;
+	uint16 dhcp_state = 0;
+	uint16 dhcp_retry_count = 0;
 };
 
 struct syscall_net_arp_ipv4_t {
@@ -268,6 +286,33 @@ struct syscall_net_tcp_connection_t {
 	uint16 rx_out_of_order = 0;
 	uint16 rx_window_full = 0;
 	uint16 tx_retransmit = 0;
+	uint16 time_wait_age = 0;
+	uint16 time_wait_remaining = 0;
+};
+
+struct syscall_net_stats_t {
+	uint32 rx_frames = 0;
+	uint32 tx_frames = 0;
+	uint32 rx_arp = 0;
+	uint32 tx_arp = 0;
+	uint32 rx_ipv4 = 0;
+	uint32 rx_icmp = 0;
+	uint32 tx_icmp = 0;
+	uint32 rx_udp = 0;
+	uint32 tx_udp = 0;
+	uint32 rx_tcp = 0;
+	uint32 tx_tcp = 0;
+	uint32 rx_malformed = 0;
+	uint32 rx_checksum_error = 0;
+	uint32 udp_no_port = 0;
+	uint32 udp_drop = 0;
+	uint32 icmp_unreachable_tx = 0;
+	uint32 icmp_unreachable_rx = 0;
+	uint32 tcp_rst_tx = 0;
+	uint32 tcp_rst_rx = 0;
+	uint32 tcp_retransmit = 0;
+	uint32 tcp_connect_timeout = 0;
+	uint32 tcp_timewait_expire = 0;
 };
 
 _ESYM_C stduint syscall(syscall_t callid, stduint p1 = 0, stduint p2 = 0, stduint p3 = 0);// MCCA 4 PARA SYSC

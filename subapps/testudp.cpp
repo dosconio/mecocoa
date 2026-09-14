@@ -9,13 +9,6 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 
-#ifndef SO_TYPE
-#define SO_TYPE 3
-#endif
-#ifndef SO_ERROR
-#define SO_ERROR 4
-#endif
-
 static bool ParseIPv4(const char* text, in_addr_t* output) {
 	if (!text || !output) return false;
 	uint8 octets[4] = {};

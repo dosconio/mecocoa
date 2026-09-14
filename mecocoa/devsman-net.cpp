@@ -47,6 +47,8 @@ namespace {
 	constexpr stduint NetTcpTxRetryTicks = CONFIG_SysTickFreq;
 	constexpr stduint NetTcpTxRetryLimit = 3;
 	constexpr stduint NetTcpTimeWaitTicks = 2 * CONFIG_SysTickFreq;
+	constexpr stduint NetDhcpRetryTicks = 5 * CONFIG_SysTickFreq;
+	constexpr stduint NetDhcpRetryLimit = 6;
 	constexpr stduint NetTcpOptionMssLength = 4;
 	constexpr uint8 NetTcpOptionEnd = 0;
 	constexpr uint8 NetTcpOptionNoop = 1;
@@ -63,12 +65,17 @@ namespace {
 		Static,
 		DhcpOffered,
 		DhcpBound,
+		DhcpNak,
+		DhcpFailed,
 	};
 
 	struct NetInterfaceConfig {
 		uni::Network::IPv4Address ipv4_address;
 		uni::Network::IPv4Address ipv4_netmask;
 		uni::Network::IPv4Address ipv4_gateway;
+		uni::Network::IPv4Address dhcp_server;
+		uni::Network::IPv4Address dns_server;
+		uint32 dhcp_lease_time;
 		NetIPv4ConfigSource source;
 	};
 
@@ -76,6 +83,9 @@ namespace {
 		.ipv4_address = {{ 10, 0, 2, 15 }},
 		.ipv4_netmask = {{ 255, 255, 255, 0 }},
 		.ipv4_gateway = {{ 10, 0, 2, 1 }},
+		.dhcp_server = {},
+		.dns_server = {},
+		.dhcp_lease_time = 0,
 		.source = NetIPv4ConfigSource::Static,
 	};
 
@@ -101,6 +111,7 @@ namespace {
 
 	NetServiceBuffers net_buffers{};
 	uint16 net_ipv4_identification = 1;
+	syscall_net_stats_t net_stats{};
 
 	struct NetUdpPacket {
 		const uni::Network::EthernetFrameView* ethernet;
@@ -244,14 +255,22 @@ namespace {
 	NetTcpConnection net_tcp_connections[NetTcpConnectionCapacity]{};
 	Spinlock net_socket_wait_lock;
 	uint32 net_tcp_next_sequence = 0x10000000u;
-	uint8 net_dhcp_payload[300]{};
-	uni::Network::DHCPClientObject* net_dhcp_client = nullptr;
-	bool net_dhcp_discover_sent = false;
+
+	struct NetDhcpRuntime {
+		uint8 payload[300];
+		uni::Network::DHCPClientObject* client;
+		stduint last_tick;
+		stduint retry_count;
+	};
+
+	NetDhcpRuntime net_dhcp{};
 
 	uint16 NetTcpLocalMss();
 	stduint NetTcpSendMss(const NetTcpConnection& connection);
 	uint16 TcpReceiveWindow(const NetTcpConnection& connection);
 	bool SendTcpControl(NetTcpConnection& connection, uint8 flags, uint32 sequence, uint32 acknowledgment);
+	bool SendDhcpDiscover();
+	bool SendDhcpRequest();
 	void DispatchEthernetFrame(uni::Network::LinkDevice& dev, const uni::Network::EthernetFrameView& frame);
 
 	struct NetRemoteLinkState {
@@ -306,6 +325,7 @@ namespace {
 				if (sysrecv(net_remote_link.owner_tid, &reply, sizeof(reply), &type)) return -1;
 				switch (NetworkMsg(type)) {
 				case NetworkMsg::DRV_SEND:
+					if (reply.status > 0) net_stats.tx_frames++;
 					return reply.status;
 				case NetworkMsg::DRV_RX:
 					if (reply.length <= NetworkDriverFrameCapacity) {
@@ -356,17 +376,29 @@ namespace {
 	}
 
 	bool EnsureDhcpClientObject() {
-		if (!net_dhcp_client) {
+		if (!net_dhcp.client) {
 			auto* storage = mempool.allocate(sizeof(uni::Network::DHCPClientObject), 4);
 			if (!storage) return false;
-			net_dhcp_client = new (storage) uni::Network::DHCPClientObject();
+			net_dhcp.client = new (storage) uni::Network::DHCPClientObject();
 		}
 		return true;
 	}
 
 	void ResetDhcpClient() {
-		net_dhcp_discover_sent = false;
-		if (net_dhcp_client) net_dhcp_client->Reset();
+		net_dhcp.last_tick = 0;
+		net_dhcp.retry_count = 0;
+		if (net_dhcp.client) net_dhcp.client->Reset();
+	}
+
+	bool StartDhcpDiscovery() {
+		if (!EnsureDhcpClientObject()) {
+			net_config.source = NetIPv4ConfigSource::DhcpFailed;
+			return false;
+		}
+		net_dhcp.client->Begin(0x4D434341u ^ uint32(tick));
+		net_dhcp.last_tick = 0;
+		net_dhcp.retry_count = 0;
+		return true;
 	}
 
 	uni::Network::LinkDevice* FindDefaultLinkDevice() {
@@ -387,6 +419,26 @@ namespace {
 		return stduint(-1);
 	}
 
+	uint16 DhcpStateCode() {
+		if (!net_dhcp.client) return syscall_net_dhcp_state_none;
+		switch (net_dhcp.client->getState()) {
+		case uni::Network::DHCPClientState::Init:
+			return syscall_net_dhcp_state_init;
+		case uni::Network::DHCPClientState::Discovering:
+			return syscall_net_dhcp_state_discovering;
+		case uni::Network::DHCPClientState::Offered:
+			return syscall_net_dhcp_state_offered;
+		case uni::Network::DHCPClientState::Requesting:
+			return syscall_net_dhcp_state_requesting;
+		case uni::Network::DHCPClientState::Bound:
+			return syscall_net_dhcp_state_bound;
+		case uni::Network::DHCPClientState::Nak:
+			return syscall_net_dhcp_state_nak;
+		default:
+			return syscall_net_dhcp_state_none;
+		}
+	}
+
 	bool FillIPv4Interface(stduint index, syscall_net_interface_ipv4_t& output) {
 		auto* dev = Devsman::GetLinkDevice(index);
 		if (!dev) return false;
@@ -394,6 +446,9 @@ namespace {
 		for0(i, uni::Network::IPv4AddressLength) {
 			output.address[i] = net_config.ipv4_address.octet[i];
 			output.netmask[i] = net_config.ipv4_netmask.octet[i];
+			output.gateway[i] = net_config.ipv4_gateway.octet[i];
+			output.dhcp_server[i] = net_config.dhcp_server.octet[i];
+			output.dns[i] = net_config.dns_server.octet[i];
 		}
 		const auto mac = dev->getAddress();
 		for0(i, numsof(output.hardware)) output.hardware[i] = mac.octet[i];
@@ -408,10 +463,20 @@ namespace {
 		case NetIPv4ConfigSource::DhcpBound:
 			output.config_source = syscall_net_config_source_dhcp_bound;
 			break;
+		case NetIPv4ConfigSource::DhcpNak:
+			output.config_source = syscall_net_config_source_dhcp_nak;
+			break;
+		case NetIPv4ConfigSource::DhcpFailed:
+			output.config_source = syscall_net_config_source_dhcp_failed;
+			break;
 		default:
 			output.config_source = syscall_net_config_source_static;
 			break;
 		}
+		output.dhcp_lease_time = net_config.dhcp_lease_time;
+		output.dhcp_xid = net_dhcp.client ? net_dhcp.client->getTransactionId() : 0;
+		output.dhcp_state = DhcpStateCode();
+		output.dhcp_retry_count = uint16(net_dhcp.retry_count);
 		const char* name = dev->getName();
 		if (name) {
 			for0(i, numsof(output.name) - 1) {
@@ -430,6 +495,12 @@ namespace {
 		if (!netmask.isZero()) net_config.ipv4_netmask = netmask;
 		net_config.ipv4_gateway = gateway;
 		net_config.source = source;
+	}
+
+	void ApplyDhcpMetadata(const uni::Network::DHCPClientConfig& config) {
+		net_config.dhcp_server = config.has_server ? config.server : uni::Network::IPv4Address{};
+		net_config.dns_server = config.has_dns ? config.dns : uni::Network::IPv4Address{};
+		net_config.dhcp_lease_time = config.has_lease_time ? config.lease_time : 0;
 	}
 
 	bool IsSameIPv4Subnet(const uni::Network::IPv4Address& lhs, const uni::Network::IPv4Address& rhs,
@@ -577,6 +648,14 @@ namespace {
 		net_arp_cache_next = (net_arp_cache_next + 1) % NetArpCacheCapacity;
 	}
 
+	void InvalidateArpCache(const uni::Network::IPv4Address& protocol) {
+		if (protocol.isZero()) return;
+		for0(i, NetArpCacheCapacity) {
+			auto& entry = net_arp_cache[i];
+			if (entry.valid && entry.protocol == protocol) entry.valid = false;
+		}
+	}
+
 	uint8* GetPendingUdpPayloadSlot(stduint index) {
 		return net_pending_udp_payloads + index * NetPendingUdpPayloadSize;
 	}
@@ -678,7 +757,9 @@ namespace {
 			buffer,
 			request_len,
 		};
-		return dev.Send(request) > 0;
+		const bool sent = dev.Send(request) > 0;
+		if (sent) net_stats.tx_arp++;
+		return sent;
 	}
 
 	bool RegisterUdpPortHandler(uint16 port, NetUdpPortHandler handler) {
@@ -1224,10 +1305,12 @@ namespace {
 		if (!EnsureUdpInboxStorage(inbox)) return false;
 		if (packet.context.payload_length > NetUdpInboxPayloadSize) {
 			++inbox.drops;
+			net_stats.udp_drop++;
 			return false;
 		}
 		if (inbox.count >= NetUdpInboxDepth) {
 			++inbox.drops;
+			net_stats.udp_drop++;
 			return false;
 		}
 		const stduint slot = inbox.tail;
@@ -1307,6 +1390,7 @@ namespace {
 		if (IsIPv4LocalAddress(destination)) {
 			uni::Network::EthernetFrameView local_frame{};
 			if (!uni::Network::ParseEthernetFrame(frame, local_frame)) return -1;
+			net_stats.tx_frames++;
 			DispatchEthernetFrame(dev, local_frame);
 			return stdsint(packet.payload_length);
 		}
@@ -1318,6 +1402,7 @@ namespace {
 		if (IsIPv4LocalAddress(destination)) {
 			uni::Network::EthernetFrameView local_frame{};
 			if (!uni::Network::ParseEthernetFrame(frame, local_frame)) return -1;
+			net_stats.tx_frames++;
 			DispatchEthernetFrame(dev, local_frame);
 			return stdsint(frame.length);
 		}
@@ -1455,6 +1540,7 @@ namespace {
 			64,
 		};
 		const stdsint sent = SendIPv4PacketFrame(*route.dev, target_mac, packet);
+		if (sent > 0) net_stats.tx_tcp++;
 		return sent > 0;
 	}
 
@@ -1486,6 +1572,7 @@ namespace {
 			64,
 		};
 		const stdsint sent = SendIPv4PacketFrame(*route.dev, target_mac, packet);
+		if (sent > 0) net_stats.tx_tcp++;
 		return sent > 0;
 	}
 
@@ -1662,6 +1749,8 @@ namespace {
 		pending.last_tick = tick;
 		pending.retry_count++;
 		connection.tx_retransmit++;
+		net_stats.tx_tcp++;
+		net_stats.tcp_retransmit++;
 		return true;
 	}
 
@@ -1688,6 +1777,7 @@ namespace {
 			if (IsTcpConnectReady(connection)) continue;
 			if (IsTcpConnectExpired(connection)) {
 				const auto context = connection.tcp->getControl().context;
+				net_stats.tcp_connect_timeout++;
 				ReleaseTcpConnection(context);
 				continue;
 			}
@@ -1705,6 +1795,7 @@ namespace {
 			if (connection.close_phase == NetTcpClosePhase::TimeWait &&
 				tick - connection.time_wait_tick >= NetTcpTimeWaitTicks) {
 				const auto context = control.context;
+				net_stats.tcp_timewait_expire++;
 				ReleaseTcpConnection(context);
 				continue;
 			}
@@ -1750,6 +1841,39 @@ namespace {
 		return false;
 	}
 
+	bool HasDhcpRetryPending() {
+		if (!net_dhcp.client) return false;
+		if (net_dhcp.retry_count >= NetDhcpRetryLimit) return false;
+		switch (net_dhcp.client->getState()) {
+		case uni::Network::DHCPClientState::Discovering:
+		case uni::Network::DHCPClientState::Offered:
+		case uni::Network::DHCPClientState::Requesting:
+			return true;
+		default:
+			return false;
+		}
+	}
+
+	void ProcessDhcpRetryTimer() {
+		if (!HasDhcpRetryPending()) return;
+		if (net_dhcp.last_tick && tick - net_dhcp.last_tick < NetDhcpRetryTicks) return;
+		switch (net_dhcp.client->getState()) {
+		case uni::Network::DHCPClientState::Discovering:
+			(void)SendDhcpDiscover();
+			break;
+		case uni::Network::DHCPClientState::Offered:
+		case uni::Network::DHCPClientState::Requesting:
+			(void)SendDhcpRequest();
+			break;
+		default:
+			break;
+		}
+		if (net_dhcp.retry_count >= NetDhcpRetryLimit &&
+			net_dhcp.client && !net_dhcp.client->isBound()) {
+			net_config.source = NetIPv4ConfigSource::DhcpFailed;
+		}
+	}
+
 	void FlushPendingTcpConnectsFor(const uni::Network::IPv4Address& target_ip) {
 		for0(i, NetTcpConnectionCapacity) {
 			auto& connection = net_tcp_connections[i];
@@ -1783,6 +1907,7 @@ namespace {
 			plogwarn("%s send failed", warning);
 			return false;
 		}
+		net_stats.tx_tcp++;
 		return true;
 	}
 
@@ -1805,6 +1930,8 @@ namespace {
 			plogwarn("[Net] tcp reset send failed");
 			return false;
 		}
+		net_stats.tx_tcp++;
+		net_stats.tcp_rst_tx++;
 		return true;
 	}
 
@@ -1842,18 +1969,19 @@ namespace {
 			length,
 		};
 		const stdsint sent = udp.Send(context);
+		if (sent > 0) net_stats.tx_udp++;
 		return sent > 0 ? stdsint(length) : sent;
 	}
 
 	bool SendDhcpPacket(stduint payload_length) {
-		if (!payload_length || payload_length > sizeof(net_dhcp_payload)) return false;
+		if (!payload_length || payload_length > sizeof(net_dhcp.payload)) return false;
 		auto* dev = FindDefaultLinkDevice();
 		if (!dev || !EnsureUdpTxBuffer()) return false;
 		auto* udp = reinterpret_cast<uni::Network::UDPHeader*>(net_buffers.udp_tx);
 		const uint16 udp_length = uint16(uni::Network::UDPHeaderLength + payload_length);
 		uni::Network::BuildUDPHeader(*udp, uni::Network::DHCPClientPort, uni::Network::DHCPServerPort, udp_length);
 		auto* payload = net_buffers.udp_tx + uni::Network::UDPHeaderLength;
-		for0(i, payload_length) payload[i] = net_dhcp_payload[i];
+		for0(i, payload_length) payload[i] = net_dhcp.payload[i];
 		uni::Network::IPv4Address source{};
 		uni::Network::IPv4Address destination = IPv4LimitedBroadcastAddress();
 		uni::Network::EthernetWrite16(udp->checksum,
@@ -1868,34 +1996,45 @@ namespace {
 			64,
 		};
 		const stdsint sent = SendIPv4PacketFrame(*dev, EthernetBroadcastAddress(), packet);
+		if (sent > 0) net_stats.tx_udp++;
 		return sent > 0;
 	}
 
 	bool SendDhcpDiscover() {
-		if (net_dhcp_discover_sent) return true;
 		auto* dev = FindDefaultLinkDevice();
 		if (!dev) return false;
 		const auto mac = dev->getAddress();
 		if (mac.isZero()) return false;
-		if (!EnsureDhcpClientObject()) return false;
-		net_dhcp_client->Begin(0x4D434341u ^ uint32(tick));
-		const stduint length = net_dhcp_client->BuildDiscover(net_dhcp_payload,
-			sizeof(net_dhcp_payload), mac);
-		if (!length) return false;
-		if (!SendDhcpPacket(length)) return false;
-		net_dhcp_discover_sent = true;
+		if (!EnsureDhcpClientObject()) {
+			net_config.source = NetIPv4ConfigSource::DhcpFailed;
+			return false;
+		}
+		if (!net_dhcp.client->getTransactionId()) {
+			net_dhcp.client->Begin(0x4D434341u ^ uint32(tick));
+		}
+		const stduint length = net_dhcp.client->BuildDiscover(net_dhcp.payload,
+			sizeof(net_dhcp.payload), mac);
+		if (!length || !SendDhcpPacket(length)) {
+			net_config.source = NetIPv4ConfigSource::DhcpFailed;
+			return false;
+		}
+		net_dhcp.last_tick = tick;
+		net_dhcp.retry_count++;
 		return true;
 	}
 
 	bool SendDhcpRequest() {
 		auto* dev = FindDefaultLinkDevice();
-		if (!dev || !net_dhcp_client) return false;
+		if (!dev || !net_dhcp.client) return false;
 		const auto mac = dev->getAddress();
 		if (mac.isZero()) return false;
-		const stduint length = net_dhcp_client->BuildRequest(net_dhcp_payload,
-			sizeof(net_dhcp_payload), mac);
+		const stduint length = net_dhcp.client->BuildRequest(net_dhcp.payload,
+			sizeof(net_dhcp.payload), mac);
 		if (!length) return false;
-		return SendDhcpPacket(length);
+		if (!SendDhcpPacket(length)) return false;
+		net_dhcp.last_tick = tick;
+		net_dhcp.retry_count++;
+		return true;
 	}
 
 	void FlushPendingUdpFor(const uni::Network::IPv4Address& target_ip, const uni::Network::MacAddress& target_mac) {
@@ -1925,9 +2064,11 @@ namespace {
 	void HandleArpFrame(uni::Network::LinkDevice& dev, const uni::Network::EthernetFrameView& frame) {
 		uni::Network::ArpEthernetIPv4View arp{};
 		if (!uni::Network::ParseArpEthernetIPv4(frame, arp)) {
+			net_stats.rx_malformed++;
 			plogwarn("[Net] arp malformed");
 			return;
 		}
+		net_stats.rx_arp++;
 		LearnArpCache(arp.sender_protocol, arp.sender_hardware);
 		FlushPendingUdpFor(arp.sender_protocol, arp.sender_hardware);
 		FlushPendingTcpConnectsFor(arp.sender_protocol);
@@ -1948,6 +2089,9 @@ namespace {
 		if (sent <= 0) {
 			plogwarn("[Net] arp reply send failed");
 		}
+		else {
+			net_stats.tx_arp++;
+		}
 		// if (sent > 0) LogIPv4Address("[Net] arp reply ", arp.sender_protocol);
 	}
 
@@ -1956,9 +2100,11 @@ namespace {
 		if (ipv4.protocol == uint8(uni::Network::IPv4Protocol::ICMP) &&
 			ipv4.payload && ipv4.payload_length >= uni::Network::ICMPv4HeaderLength &&
 			uni::Network::NetworkChecksum(ipv4.payload, ipv4.payload_length) == 0) {
+			net_stats.rx_icmp++;
 			const auto* icmp = reinterpret_cast<const uni::Network::ICMPv4Header*>(ipv4.payload);
 			if (icmp->type == 3 && icmp->code == 3 &&
 				ipv4.payload_length >= uni::Network::ICMPv4HeaderLength + uni::Network::IPv4MinHeaderLength) {
+				net_stats.icmp_unreachable_rx++;
 				const auto* quoted_bytes = ipv4.payload + uni::Network::ICMPv4HeaderLength;
 				const auto* quoted_header = reinterpret_cast<const uni::Network::IPv4Header*>(quoted_bytes);
 				const uint8 quoted_ihl = quoted_header->version_ihl & 0x0Fu;
@@ -2004,6 +2150,9 @@ namespace {
 		if (sent <= 0) {
 			plogwarn("[Net] icmp echo reply send failed");
 		}
+		else {
+			net_stats.tx_icmp++;
+		}
 		// if (sent > 0) LogIPv4Address("[Net] icmp echo reply ", ipv4.source);
 	}
 
@@ -2046,6 +2195,10 @@ namespace {
 		};
 		const stdsint sent = SendLinkFrameOrLoopback(dev, reply, ipv4.source);
 		if (sent <= 0) plogwarn("[Net] icmp port unreachable send failed");
+		else {
+			net_stats.tx_icmp++;
+			net_stats.icmp_unreachable_tx++;
+		}
 	}
 
 	bool HandleUdpEchoDatagram(uni::Network::LinkDevice& dev, const NetUdpPacket& packet) {
@@ -2070,11 +2223,12 @@ namespace {
 		(void)dev;
 		const auto* payload = packet.context.payload;
 		const stduint length = packet.context.payload_length;
-		if (!net_dhcp_client) return false;
+		if (!net_dhcp.client) return false;
 		uni::Network::DHCPClientConfig config{};
-		if (!net_dhcp_client->AcceptMessage(payload, length, config)) return false;
+		if (!net_dhcp.client->AcceptMessage(payload, length, config)) return false;
 		switch (config.message_type) {
 		case uni::Network::DHCPMessageType::Offer:
+			ApplyDhcpMetadata(config);
 			ApplyIPv4Config(net_config.ipv4_address, net_config.ipv4_netmask,
 				net_config.ipv4_gateway, NetIPv4ConfigSource::DhcpOffered);
 			ploginfo("[Net] dhcp offer yiaddr=%u.%u.%u.%u",
@@ -2083,15 +2237,26 @@ namespace {
 			(void)SendDhcpRequest();
 			return true;
 		case uni::Network::DHCPMessageType::Ack:
-			if (config.has_address && config.has_netmask && config.has_router) {
-				ApplyIPv4Config(config.address, config.netmask, config.router,
+			ApplyDhcpMetadata(config);
+			if (config.has_address && config.has_netmask) {
+				const auto old_gateway = net_config.ipv4_gateway;
+				const auto gateway = config.has_router ? config.router : uni::Network::IPv4Address{};
+				ApplyIPv4Config(config.address, config.netmask, gateway,
 					NetIPv4ConfigSource::DhcpBound);
+				net_dhcp.last_tick = 0;
+				net_dhcp.retry_count = 0;
+				if (!(old_gateway == gateway)) {
+					InvalidateArpCache(old_gateway);
+					InvalidateArpCache(gateway);
+				}
 			}
 			ploginfo("[Net] dhcp ack yiaddr=%u.%u.%u.%u",
 				(unsigned)config.address.octet[0], (unsigned)config.address.octet[1],
 				(unsigned)config.address.octet[2], (unsigned)config.address.octet[3]);
 			return true;
 		case uni::Network::DHCPMessageType::Nak:
+			ApplyIPv4Config(net_config.ipv4_address, net_config.ipv4_netmask,
+				net_config.ipv4_gateway, NetIPv4ConfigSource::DhcpNak);
 			plogwarn("[Net] dhcp nak");
 			return true;
 		default:
@@ -2103,15 +2268,19 @@ namespace {
 		const uni::Network::EthernetFrameView& frame, const uni::Network::IPv4PacketView& ipv4) {
 		uni::Network::UDPDatagramView udp{};
 		if (!uni::Network::ParseUDPDatagram(ipv4, udp)) {
+			net_stats.rx_malformed++;
 			plogwarn("[Net] udp malformed");
 			return;
 		}
 		if (!uni::Network::ValidateUDPIPv4Checksum(ipv4, udp)) {
+			net_stats.rx_checksum_error++;
 			plogwarn("[Net] udp checksum invalid");
 			return;
 		}
+		net_stats.rx_udp++;
 		auto handler = FindUdpPortHandler(udp.destination_port);
 		if (!handler) {
+			net_stats.udp_no_port++;
 			SendICMPv4PortUnreachable(dev, frame, ipv4);
 			return;
 		}
@@ -2133,18 +2302,22 @@ namespace {
 		const uni::Network::EthernetFrameView& frame, const uni::Network::IPv4PacketView& ipv4) {
 		uni::Network::TCPSegmentView tcp{};
 		if (!uni::Network::ParseTCPSegment(ipv4, tcp)) {
+			net_stats.rx_malformed++;
 			plogwarn("[Net] tcp malformed");
 			return;
 		}
 		if (!uni::Network::ValidateTCPIPv4Checksum(ipv4, tcp)) {
+			net_stats.rx_checksum_error++;
 			plogwarn("[Net] tcp checksum invalid");
 			return;
 		}
+		net_stats.rx_tcp++;
 		auto* listener_for_port = FindTcpListener(tcp.destination_port);
 		auto* connection = FindTcpConnection(ipv4.destination, tcp.destination_port,
 			ipv4.source, tcp.source_port);
 		LearnArpCache(ipv4.source, frame.source);
 		if (tcp.flags & uni::Network::TCPFlagRST) {
+			net_stats.tcp_rst_rx++;
 			if (connection) {
 				MarkTcpReset(*connection);
 			}
@@ -2210,6 +2383,7 @@ namespace {
 					};
 					const stdsint sent = SendLinkFrameOrLoopback(dev, ack, ipv4.source);
 					if (sent <= 0) plogwarn("[Net] tcp duplicate syn ack send failed");
+					else net_stats.tx_tcp++;
 					return;
 				}
 				if (control.state != uni::Network::TCPConnectionState::SynReceived) return;
@@ -2261,6 +2435,7 @@ namespace {
 				};
 				const stdsint sent = SendLinkFrameOrLoopback(dev, ack, ipv4.source);
 				if (sent <= 0) plogwarn("[Net] tcp data ack send failed");
+				else net_stats.tx_tcp++;
 				if (release_active_close) {
 					MarkTcpActiveFinReceived(*connection);
 				}
@@ -2295,6 +2470,7 @@ namespace {
 				};
 				const stdsint sent = SendLinkFrameOrLoopback(dev, ack, ipv4.source);
 				if (sent <= 0) plogwarn("[Net] tcp ack send failed");
+				else net_stats.tx_tcp++;
 				if (connection && release_active_close) {
 					MarkTcpActiveFinReceived(*connection);
 				}
@@ -2391,13 +2567,23 @@ namespace {
 		SendTcpResetForSegment(dev, frame, ipv4, tcp);
 	}
 
+	bool IsDhcpClientIPv4Packet(const uni::Network::IPv4PacketView& ipv4) {
+		if (ipv4.protocol != uint8(uni::Network::IPv4Protocol::UDP)) return false;
+		if (!ipv4.payload || ipv4.payload_length < uni::Network::UDPHeaderLength) return false;
+		const auto* udp = reinterpret_cast<const uni::Network::UDPHeader*>(ipv4.payload);
+		return uni::Network::EthernetRead16(udp->destination_port) == uni::Network::DHCPClientPort;
+	}
+
 	void HandleIPv4FrameByProtocol(uni::Network::LinkDevice& dev, const uni::Network::EthernetFrameView& frame) {
 		uni::Network::IPv4PacketView ipv4{};
 		if (!uni::Network::ParseIPv4Packet(frame, ipv4)) {
+			net_stats.rx_malformed++;
 			plogwarn("[Net] ipv4 malformed");
 			return;
 		}
-		if (!IsIPv4LocalAddress(ipv4.destination) && !IsIPv4Broadcast(ipv4.destination)) return;
+		net_stats.rx_ipv4++;
+		if (!IsIPv4LocalAddress(ipv4.destination) && !IsIPv4Broadcast(ipv4.destination) &&
+			!IsDhcpClientIPv4Packet(ipv4)) return;
 		switch (uni::Network::IPv4Protocol(ipv4.protocol)) {
 		case uni::Network::IPv4Protocol::ICMP:
 			HandleICMPv4Frame(dev, frame, ipv4);
@@ -2431,12 +2617,14 @@ namespace {
 
 	void DispatchLinkFrame(uni::Network::LinkDevice& dev, const void* data, stduint length) {
 		if (!data || !length) return;
+		net_stats.rx_frames++;
 		uni::Network::LinkFrameView raw_frame{
 			data,
 			length,
 		};
 		uni::Network::EthernetFrameView eth_frame{};
 		if (!uni::Network::ParseEthernetFrame(raw_frame, eth_frame)) {
+			net_stats.rx_malformed++;
 			plogwarn("[Net] rx dev=%s malformed ethernet len=%u",
 				dev.getName() ? dev.getName() : "(unnamed)",
 				(unsigned)length);
@@ -2452,6 +2640,7 @@ namespace {
 		}
 		ProcessTcpConnectTimers();
 		ProcessTcpControlTimers();
+		ProcessDhcpRetryTimer();
 		for0(i, net_link_device_count) {
 			auto* dev = net_link_devices[i];
 			if (!dev || dev->getState() != uni::Network::LinkState::Up) continue;
@@ -2507,7 +2696,7 @@ namespace {
 			net_remote_link.name[0] ? net_remote_link.name : "(unnamed)",
 			(unsigned)sig_src, (unsigned)attach.mtu);
 		if (net_remote_link.state == uni::Network::LinkState::Up) {
-			(void)SendDhcpDiscover();
+			(void)StartDhcpDiscovery();
 		}
 		return true;
 	}
@@ -2533,9 +2722,10 @@ namespace {
 		stduint sig_type = 0;
 		stduint sig_src = 0;
 		auto* msgbuf = net_buffers.driver_frame;
-		if (!syscall(syscall_t::TMSG) && HasTcpTimersPending()) {
+		if (!syscall(syscall_t::TMSG) && (HasTcpTimersPending() || HasDhcpRetryPending())) {
 			ProcessTcpConnectTimers();
 			ProcessTcpControlTimers();
+			ProcessDhcpRetryTimer();
 			syscall(syscall_t::REST, 1, 10);
 			return;
 		}
@@ -2947,6 +3137,7 @@ stdsint Devsman::SendTcp(const uni::Network::TCPConnectionContext& context, cons
 			CancelTcpNewestTxPending(*connection);
 			return total ? stdsint(total) : sent;
 		}
+		net_stats.tx_tcp++;
 		if (stduint(sent) < chunk) {
 			CancelTcpNewestTxPending(*connection);
 			if (!EnqueueTcpTxPending(*connection, sequence, bytes + total, stduint(sent))) {
@@ -3074,6 +3265,7 @@ stdsint Devsman::SendUdp(const uni::Network::MacAddress& target_mac, const uni::
 		return -1;
 	}
 	const stdsint sent = SendIPv4PacketFrame(*dev, target_mac, packet);
+	if (sent > 0) net_stats.tx_udp++;
 	return sent > 0 ? stdsint(length) : sent;
 }
 
@@ -3274,9 +3466,22 @@ bool Devsman::GetTcpConnectionEntry(stduint index, void* entry, stduint length) 
 		output->rx_out_of_order = connection.rx_out_of_order;
 		output->rx_window_full = connection.rx_window_full;
 		output->tx_retransmit = connection.tx_retransmit;
+		if (connection.close_phase == NetTcpClosePhase::TimeWait) {
+			const stduint age = tick - connection.time_wait_tick;
+			const stduint remaining = age >= NetTcpTimeWaitTicks ? 0 : NetTcpTimeWaitTicks - age;
+			output->time_wait_age = uint16(age);
+			output->time_wait_remaining = uint16(remaining);
+		}
 		return true;
 	}
 	return false;
+}
+
+bool Devsman::GetNetStats(void* stats, stduint length) {
+	if (!stats || length < sizeof(syscall_net_stats_t)) return false;
+	auto* output = reinterpret_cast<syscall_net_stats_t*>(stats);
+	*output = net_stats;
+	return true;
 }
 
 void serv_netw_loop() {

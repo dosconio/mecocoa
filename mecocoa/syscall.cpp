@@ -627,6 +627,17 @@ DEFSYSC sysc_ROUT(stduint func, stduint p1, stduint p2) {
 		return -1;
 		#endif
 	}
+	case syscall_net_route_func_t::NetStats: {
+		#if (_MCCA & 0xFF00) == 0x8600
+		syscall_net_stats_t stats{};
+		if (p2 < sizeof(stats)) return -1;
+		if (!Devsman::GetNetStats(&stats, sizeof(stats))) return -1;
+		MccaMemCopyP((void*)p1, pb, false, &stats, nullptr, true, sizeof(stats));
+		return 0;
+		#else
+		return -1;
+		#endif
+	}
 	default:
 		return -1;
 	}

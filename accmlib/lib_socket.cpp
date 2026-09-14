@@ -1,6 +1,48 @@
 #include "aaaaa.h"
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <arpa/inet.h>
+
+#ifndef INADDR_NONE
+#define INADDR_NONE ((in_addr_t)0xFFFFFFFFu)
+#endif
+
+static bool ParseIPv4Text(const char* text, uint8 output[4]) {
+	if (!text || !output) return false;
+	const char* cursor = text;
+	for0(i, 4) {
+		if (*cursor < '0' || *cursor > '9') return false;
+		int value = 0;
+		while (*cursor >= '0' && *cursor <= '9') {
+			value = value * 10 + (*cursor - '0');
+			if (value > 255) return false;
+			cursor++;
+		}
+		output[i] = uint8(value);
+		if (i < 3) {
+			if (*cursor != '.') return false;
+			cursor++;
+		}
+	}
+	return *cursor == 0;
+}
+
+static char* WriteDecimalByte(char* cursor, uint8 value) {
+	if (value >= 100) {
+		*cursor++ = char('0' + value / 100);
+		value %= 100;
+		*cursor++ = char('0' + value / 10);
+		*cursor++ = char('0' + value % 10);
+	}
+	else if (value >= 10) {
+		*cursor++ = char('0' + value / 10);
+		*cursor++ = char('0' + value % 10);
+	}
+	else {
+		*cursor++ = char('0' + value);
+	}
+	return cursor;
+}
 
 struct MccaSocketAddress {
 	uint16 domain;
@@ -48,6 +90,32 @@ static bool SocketAddressToPosix(struct sockaddr* address, socklen_t* address_le
 
 extern "C" int socket(int domain, int type, int protocol) {
 	return (int)syscall(syscall_t::SOCK, (stduint)domain, (stduint)type, (stduint)protocol);
+}
+
+extern "C" int inet_aton(const char* cp, struct in_addr* inp) {
+	uint8 octets[4] = {};
+	if (!inp || !ParseIPv4Text(cp, octets)) return 0;
+	uint8* target = (uint8*)&inp->s_addr;
+	for0(i, 4) target[i] = octets[i];
+	return 1;
+}
+
+extern "C" in_addr_t inet_addr(const char* cp) {
+	struct in_addr address{};
+	if (!inet_aton(cp, &address)) return INADDR_NONE;
+	return address.s_addr;
+}
+
+extern "C" char* inet_ntoa(struct in_addr in) {
+	static char buffer[16];
+	const uint8* octets = (const uint8*)&in.s_addr;
+	char* cursor = buffer;
+	for0(i, 4) {
+		if (i) *cursor++ = '.';
+		cursor = WriteDecimalByte(cursor, octets[i]);
+	}
+	*cursor = 0;
+	return buffer;
 }
 
 extern "C" int bind(int sockfd, const struct sockaddr* address, socklen_t address_length) {
