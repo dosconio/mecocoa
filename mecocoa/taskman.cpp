@@ -457,7 +457,11 @@ static void _Exit_Cleanup(stduint pid)
 	// 4. Unlink all threads from IPC queues (but don't delete them yet)
 	ThreadBlock* th_ptr = ppb->thread_list_head;
 	while (th_ptr) {
-		msg_cleanup_thread(th_ptr);
+		Filesys::CancelPipeWait(th_ptr, true);
+		#if (_MCCA & 0xFF00) == 0x8600
+		Devsman::CancelSocketWait(th_ptr);
+		#endif
+		msg_cleanup_thread(th_ptr, true);
 		th_ptr = th_ptr->process_thread_next;
 	}
 
@@ -604,6 +608,7 @@ static bool DeliverWaitResultAtomically(ProcessBlock* pparent, stduint child_pid
 			msg_to->type = 0;
 			msg_to->src = taskman_th->tid;
 
+			UnlinkWaitEntry(parent_th);
 			parent_th->unsolved_msg = nullptr;
 			parent_th->recv_fo_whom = nullptr;
 			pparent->wait_for_pid = 0;
@@ -653,6 +658,7 @@ bool Taskman::Exit(ProcessBlock* p, stdsint exit_code)
 
 	// [Canceled] Hierarchical Process Tree: Recursive Kill
 
+	//? Optional ?
 	// Check all system tasks to see if they are blocked by the exiting process
 	for (stduint i = 0; i < TaskCount; i++) {
 		ProcessBlock* pb_sys = Taskman::Locate(i);
@@ -669,6 +675,19 @@ bool Taskman::Exit(ProcessBlock* p, stdsint exit_code)
 				if ((th->block_reason & ThreadBlock::BlockReason::BR_SendMsg) &&
 					th->send_to_whom && th->send_to_whom != (ThreadBlock*)INTRUPT &&
 					th->send_to_whom != (ThreadBlock*)ANYPROC && th->send_to_whom->parent_process == p) {
+					ThreadBlock* target_th = th->send_to_whom;
+					if (target_th->queue_send_queuehead == th) {
+						target_th->queue_send_queuehead = th->queue_send_queuenext;
+					}
+					else {
+						ThreadBlock* prev = target_th->queue_send_queuehead;
+						while (prev && prev->queue_send_queuenext != th) {
+							prev = prev->queue_send_queuenext;
+						}
+						if (prev) {
+							prev->queue_send_queuenext = th->queue_send_queuenext;
+						}
+					}
 					th->send_to_whom = nullptr;
 					th->queue_send_queuenext = nullptr;
 					th->unsolved_msg = nullptr;
@@ -679,6 +698,7 @@ bool Taskman::Exit(ProcessBlock* p, stdsint exit_code)
 				if ((th->block_reason & ThreadBlock::BlockReason::BR_RecvMsg) &&
 					th->recv_fo_whom && th->recv_fo_whom != (ThreadBlock*)INTRUPT &&
 					th->recv_fo_whom != (ThreadBlock*)ANYPROC && th->recv_fo_whom->parent_process == p) {
+					UnlinkWaitEntry(th);
 					th->recv_fo_whom = nullptr;
 					th->unsolved_msg = nullptr;
 					wake_recv = true;

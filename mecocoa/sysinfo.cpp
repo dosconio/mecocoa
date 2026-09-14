@@ -441,7 +441,7 @@ void dump_threads(OstreamTrait& com1) {
 	extern Spinlock scheduler_lock;
 	SpinlockLocal guard(&scheduler_lock);
 	com1.OutFormat("TID  PID   STATE     REASON   CPU PRI  IP          SP\n\r");
-	com1.OutFormat("           NAME      SEND    RECV    QHEAD    QNEXT\n\r");
+	com1.OutFormat("           NAME      SEND    RECV    QHEAD    QNEXT    UMSG     BR\n\r");
 	for (auto nod = Taskman::thchain.Root(); nod; nod = nod->next) {
 		auto th = cast<ThreadBlock*>(nod->offs);
 
@@ -484,6 +484,10 @@ void dump_threads(OstreamTrait& com1) {
 			else if (_IMM(th->block_reason) & _IMM(ThreadBlock::BlockReason::BR_RecvMsg)) reason_name = "Recv";
 			else if (_IMM(th->block_reason) & _IMM(ThreadBlock::BlockReason::BR_Waiting)) reason_name = "Wait";
 			else if (_IMM(th->block_reason) & _IMM(ThreadBlock::BlockReason::BR_Lock)) reason_name = "Lock";
+			else if (_IMM(th->block_reason) & _IMM(ThreadBlock::BlockReason::BR_SendPipe)) reason_name = "PipeW";
+			else if (_IMM(th->block_reason) & _IMM(ThreadBlock::BlockReason::BR_RecvPipe)) reason_name = "PipeR";
+			else if (_IMM(th->block_reason) & _IMM(ThreadBlock::BlockReason::BR_SendSock)) reason_name = "SockW";
+			else if (_IMM(th->block_reason) & _IMM(ThreadBlock::BlockReason::BR_RecvSock)) reason_name = "SockR";
 			else if (_IMM(th->block_reason) & _IMM(ThreadBlock::BlockReason::BR_Exiting)) reason_name = "Exit";
 		}
 		com1.OutFormat("%s", reason_name);
@@ -517,12 +521,13 @@ void dump_threads(OstreamTrait& com1) {
 
 		// IP and SP
 		com1.OutFormat("%p  %p\n\r", th->context.IP, th->context.SP);
-		String str[4]{ "(null)", "(null)", "(null)", "(null)" };
+		String str[6]{ "(null)", "(null)", "(null)", "(null)", "(null)", "0" };
 		if (th->send_to_whom) {
 			str[0].Format("%u", th->send_to_whom->getID());
 		}
 		if (th->recv_fo_whom) {
-			if (_IMM(th->recv_fo_whom) == ~_IMM0) str[1] = "(RUPT)";
+			if ((stduint)th->recv_fo_whom == INTRUPT) str[1] = "(RUPT)";
+			else if ((stduint)th->recv_fo_whom == ANYPROC) str[1] = "(ANY)";
 			else str[1].Format("%u", th->recv_fo_whom->getID());
 		}
 		if (th->queue_send_queuehead) {
@@ -531,9 +536,15 @@ void dump_threads(OstreamTrait& com1) {
 		if (th->queue_send_queuenext) {
 			str[3].Format("%u", th->queue_send_queuenext->getID());
 		}
+		if (th->unsolved_msg) {
+			if (_IMM(th->unsolved_msg) == ~_IMM0) str[4] = "(DEAD)";
+			else str[4].Format("%p", (void*)th->unsolved_msg);
+		}
+		str[5].Format("%u", _IMM(th->block_reason));
 
-		com1.OutFormat("           %s %s %s %s %s\n\r",
-			th->name, str[0].reference(), str[1].reference(), str[2].reference(), str[3].reference());
+		com1.OutFormat("           %s %s %s %s %s %s %s\n\r",
+			th->name, str[0].reference(), str[1].reference(), str[2].reference(), str[3].reference(),
+			str[4].reference(), str[5].reference());
 	}
 }
 

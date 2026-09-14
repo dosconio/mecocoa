@@ -21,6 +21,17 @@ static void PrintMac(const uint8 address[6]) {
 		(stduint)address[3], (stduint)address[4], (stduint)address[5]);
 }
 
+static const char* ConfigSourceName(uint16 source) {
+	switch (source) {
+	case syscall_net_config_source_dhcp_offered:
+		return "dhcp-offered";
+	case syscall_net_config_source_dhcp_bound:
+		return "dhcp-bound";
+	default:
+		return "static";
+	}
+}
+
 static void PrintDefaultRoute() {
 	syscall_net_route_ipv4_t route{};
 	if (syscall(syscall_t::ROUT, stduint(syscall_net_route_func_t::IPv4Default),
@@ -162,7 +173,8 @@ int main(int argc, char** argv) {
 		PrintIPv4(iface.netmask);
 		printf(" mac=");
 		PrintMac(iface.hardware);
-		printf(" mtu=%u %s\n\r", (unsigned)iface.mtu,
+		printf(" mtu=%u src=%s %s\n\r", (unsigned)iface.mtu,
+			ConfigSourceName(iface.config_source),
 			(iface.flags & syscall_net_route_flag_up) ? "up" : "down");
 	}
 	PrintDefaultRoute();

@@ -518,7 +518,7 @@ ProcessBlock* Taskman::Create(void* entry, byte ring, bool append)
 	}
 	return ppb;
 }
-static void _CreateELF_Carry(char* vaddr, stduint mem_length, BlockTrait* source, stduint file_offset, stduint file_size, Paging& pg, byte* buffer, bool executable, bool writable, bool user) {
+static bool _CreateELF_Carry(char* vaddr, stduint mem_length, BlockTrait* source, stduint file_offset, stduint file_size, Paging& pg, byte* buffer, bool executable, bool writable, bool user) {
 	// if page !exist, map it; write it.
 	stduint compensation = _IMM(vaddr) & 0xFFF;
 	stduint v_start1 = _IMM(vaddr) & ~_IMM(0xFFF);
@@ -579,7 +579,8 @@ static void _CreateELF_Carry(char* vaddr, stduint mem_length, BlockTrait* source
 			}
 			auto ret = source->Read(file_offset + bytes_read, kdest, copy_size, buffer);
 			if (ret != copy_size) {
-				plogwarn("%s %u: Read failed", __FUNCIDEN__, __LINE__);
+				plogwarn("%s %u: Read failed, %u != %u", __FUNCIDEN__, __LINE__, ret, copy_size);
+				return false;
 			}
 		}
 
@@ -587,6 +588,7 @@ static void _CreateELF_Carry(char* vaddr, stduint mem_length, BlockTrait* source
 		v_start1 += 0x1000;
 		compensation = 0; 
 	}
+	return true;
 }
 ProcessBlock* Taskman::CreateELF(BlockTrait* source, byte ring) {
 	#if (_MCCA & 0xFF00) == 0x8600 || (_MCCA & 0xFF00) == 0x1000
@@ -641,7 +643,11 @@ ProcessBlock* Taskman::CreateELF(BlockTrait* source, byte ring) {
 			bool executable = !!(ph.p_flags & PF_X);
 			bool writable = !!(ph.p_flags & PF_W);
 			bool user = (ring != RING_M);
-			_CreateELF_Carry((char*)ph.p_vaddr, ph.p_memsz, source, ph.p_offset, ph.p_filesz, pb->paging, block_buffer, executable, writable, user);
+			if (!_CreateELF_Carry((char*)ph.p_vaddr, ph.p_memsz, source, ph.p_offset, ph.p_filesz, pb->paging, block_buffer, executable, writable, user)) {
+				plogerro("%s: segment load failed (vaddr=%[x] memsz=%u)", __FUNCIDEN__, ph.p_vaddr, ph.p_memsz);
+				free(block_buffer);
+				return nullptr;
+			}
 			if (load_slice_p < numsof(pb->load_slices)) {
 				pb->load_slices[load_slice_p].address = ph.p_vaddr;
 				pb->load_slices[load_slice_p].length = ph.p_memsz;
@@ -1078,7 +1084,11 @@ ProcessBlock* Taskman::Exet(stduint parent, rostr usr_fullpath, char** usr_argv,
 			bool executable = !!(ph.p_flags & PF_X);
 			bool writable = !!(ph.p_flags & PF_W);
 			bool user = (current_pb->ring != RING_M);
-			_CreateELF_Carry((char*)ph.p_vaddr, ph.p_memsz, &loop_device, ph.p_offset, ph.p_filesz, current_pb->paging, block_buffer, executable, writable, user);
+			if (!_CreateELF_Carry((char*)ph.p_vaddr, ph.p_memsz, &loop_device, ph.p_offset, ph.p_filesz, current_pb->paging, block_buffer, executable, writable, user)) {
+				plogerro("%s: segment load failed (vaddr=%[x] memsz=%u)", __FUNCIDEN__, ph.p_vaddr, ph.p_memsz);
+				delete[] block_buffer;
+				return nullptr;
+			}
 			if (load_slice_p < numsof(current_pb->load_slices)) {
 				current_pb->load_slices[load_slice_p].address = ph.p_vaddr;
 				current_pb->load_slices[load_slice_p].length = ph.p_memsz;

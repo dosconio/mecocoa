@@ -91,9 +91,12 @@ struct PipeChannel {
 	QueueLimited buffer;          // Circular ring buffer
 	stduint reader_count = 0;         // Reader descriptors counter
 	stduint writer_count = 0;         // Writer descriptors counter
-	Mutex lock;                   // Mutex to protect concurrent operations
-	Queue<::ThreadBlock*> rq;     // Read waiting queue
-	Queue<::ThreadBlock*> wq;     // Write waiting queue
+	stduint active_io = 0;            // ReadPipe/WritePipe frames currently using this channel
+	bool closing = false;             // Last fd closed; free after active_io drains
+	Spinlock lock;                    // Protects buffer state and wait lists; must not sleep
+	::ThreadBlock* read_wait_head = nullptr;
+	::ThreadBlock* write_wait_head = nullptr;
+	PipeChannel* global_next = nullptr;
 };
 
 // Opened file representation (File descriptor struct)
@@ -146,8 +149,13 @@ public:
 
 public:
 	static int CreatePipe(vfs_file** out_reader, vfs_file** out_writer);
+	static PipeChannel* AcquirePipeChannel(vfs_file* file);
+	static void ReleasePipeChannel(PipeChannel* chan);
 	static int ReadPipe(vfs_file* file, void* buf, stduint count);
+	static int ReadPipe(PipeChannel* chan, void* buf, stduint count);
 	static int WritePipe(vfs_file* file, const void* buf, stduint count);
+	static int WritePipe(PipeChannel* chan, const void* buf, stduint count);
+	static void CancelPipeWait(::ThreadBlock* th, bool release_io = false);
 	static int ClosePipe(vfs_file* file);
 	static int CreateSocket(vfs_file** out_file, Network::SocketDomain domain,
 		Network::SocketType type, Network::SocketProtocol protocol);

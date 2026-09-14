@@ -233,6 +233,7 @@ public:
 	static bool CloseUdpPort(uint16 port, stduint inbox_id);
 	static bool WaitUdp(uint16 port);
 	static bool WaitUdp(uint16 port, stduint inbox_id);
+	static void CancelSocketWait(::ThreadBlock* th);
 	static bool HasUdp(uint16 port, stduint inbox_id);
 	static int ConsumeUdpError(uint16 local_port,
 		const uni::Network::IPv4Address& remote_ip, uint16 remote_port);

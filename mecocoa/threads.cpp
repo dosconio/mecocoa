@@ -239,7 +239,7 @@ stdsint Taskman::JoinThread(stduint tid, stduint usr_status) {
 			return -3;
 		}
 		caller_th->state = ThreadBlock::State::Pended;
-		caller_th->block_reason = ThreadBlock::BlockReason::BR_Lock;
+		caller_th->block_reason = ThreadBlock::BlockReason(_IMM(caller_th->block_reason) | _IMM(ThreadBlock::BlockReason::BR_Lock));
 		DequeueReady(caller_th, false);
 		target_th->join_wait_queue.Enqueue(caller_th);
 		}
@@ -307,7 +307,7 @@ stdsint Taskman::Futex(stduint addr, stduint op, stduint val) {
 			th->futex_wait_addr = addr;
 			DequeueReady(th, false);
 			th->state = ThreadBlock::State::Pended;
-			th->block_reason = ThreadBlock::BlockReason::BR_Lock;
+			th->block_reason = ThreadBlock::BlockReason(_IMM(th->block_reason) | _IMM(ThreadBlock::BlockReason::BR_Lock));
 		}
 		Schedule(true);
 		return 0;
@@ -323,7 +323,7 @@ stdsint Taskman::Futex(stduint addr, stduint op, stduint val) {
 				auto target_th = cast<ThreadBlock*>(nod->offs);
 				if (target_th->parent_process != pb) continue;
 				if (target_th->state != ThreadBlock::State::Pended) continue;
-				if (target_th->block_reason != ThreadBlock::BlockReason::BR_Lock) continue;
+				if (!(_IMM(target_th->block_reason) & _IMM(ThreadBlock::BlockReason::BR_Lock))) continue;
 				if (target_th->futex_wait_addr != addr) continue;
 				target_th->futex_wait_addr = 0;
 				if (target_count < numsof(targets)) {

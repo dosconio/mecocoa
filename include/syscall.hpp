@@ -210,6 +210,9 @@ enum class syscall_net_route_func_t : stduint {
 
 constexpr uint16 syscall_net_route_flag_up = 0x0001u;
 constexpr uint16 syscall_net_route_flag_gateway = 0x0002u;
+constexpr uint16 syscall_net_config_source_static = 0u;
+constexpr uint16 syscall_net_config_source_dhcp_offered = 1u;
+constexpr uint16 syscall_net_config_source_dhcp_bound = 2u;
 
 struct syscall_net_route_ipv4_t {
 	uint8 destination[4] = {};
@@ -227,6 +230,7 @@ struct syscall_net_interface_ipv4_t {
 	uint16 mtu = 0;
 	uint16 link_index = 0;
 	uint16 link_state = 0;
+	uint16 config_source = 0;
 	char name[32] = {};
 };
 

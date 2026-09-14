@@ -83,8 +83,10 @@ _PACKED(struct) FMT_NetworkMsg_DRV_FRAME {
 	uint8 data[NetworkDriverFrameCapacity];
 };
 
-static constexpr const stduint ANYPROC = (_IMM0);
-static constexpr const stduint INTRUPT = (~_IMM0);
+static constexpr const stduint SENTINEL_NONE = (_IMM0);
+static constexpr const stduint SENTINEL_DEAD = (~_IMM0);
+static constexpr const stduint ANYPROC = (SENTINEL_DEAD - 1);
+static constexpr const stduint INTRUPT = (SENTINEL_DEAD - 2);
 static constexpr const stduint COMM_RECV = 0b10;
 static constexpr const stduint COMM_SEND = 0b01;
 static constexpr const stduint COMM_SEND_ASYNC = 0b100;

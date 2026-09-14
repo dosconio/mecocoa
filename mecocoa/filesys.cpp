@@ -1653,6 +1653,13 @@ file_system_type fs_fat = { "fat", [](StorageTrait& storage, stduint dev) -> Fil
 // ---- VFS Pipe Implementation ----
 
 extern "C" stduint sys_kill(stduint pid, int sig, stduint tid);
+static Spinlock pipe_channel_list_lock;
+static PipeChannel* pipe_channel_list = nullptr;
+static void PipeAddWaiter(ThreadBlock*& head, PipeChannel* chan, ThreadBlock* th);
+static bool PipeRemoveWaiter(ThreadBlock*& head, ThreadBlock* th);
+static ThreadBlock* PipeTakeWaitList(ThreadBlock*& head);
+static void PipeWakeList(ThreadBlock* head, ThreadBlock::BlockReason reason);
+static bool PipeInterrupted(ThreadBlock* th);
 
 int Filesys::CreatePipe(vfs_file** out_reader, vfs_file** out_writer) {
 	MutexLocal guard(&vfs_lock);
@@ -1709,6 +1716,12 @@ int Filesys::CreatePipe(vfs_file** out_reader, vfs_file** out_writer) {
 	file_w->f_inode = inode;
 	file_w->f_pos = 0;
 	file_w->f_mode = O_WRONLY;
+
+	{
+		SpinlockLocal guard(&pipe_channel_list_lock);
+		chan->global_next = pipe_channel_list;
+		pipe_channel_list = chan;
+	}
 	
 	*out_reader = file_r;
 	*out_writer = file_w;
@@ -1818,6 +1831,10 @@ int Filesys::ListenSocket(vfs_file* file, stduint backlog) {
 	#endif
 }
 
+static bool ThreadHasUnblockedSignal(ThreadBlock* th) {
+	return th && (_sigset_raw(&th->pending_signals) & ~_sigset_raw(&th->blocked_signals));
+}
+
 int Filesys::AcceptSocket(vfs_file* file, vfs_file** out_file,
 	Network::SocketAddress* address, stduint* address_length) {
 	if (!out_file) return -1;
@@ -1837,7 +1854,9 @@ int Filesys::AcceptSocket(vfs_file* file, vfs_file** out_file,
 	Network::TCPConnectionContext context{};
 	stdsint accepted = Devsman::AcceptTcpConnection(socket->local_ipv4.port, context);
 	if (accepted == 0 && !(file->f_mode & O_NONBLOCK)) {
-		if (!Devsman::WaitTcpAccept(socket->local_ipv4.port)) return -1;
+		if (!Devsman::WaitTcpAccept(socket->local_ipv4.port)) {
+			return ThreadHasUnblockedSignal(Taskman::CurrentTB()) ? -4 : -1;
+		}
 		accepted = Devsman::AcceptTcpConnection(socket->local_ipv4.port, context);
 	}
 	if (accepted <= 0) return -1;
@@ -2024,7 +2043,9 @@ int Filesys::RecvSocket(vfs_file* file, void* payload, stduint capacity,
 		stdsint received = Devsman::ReceiveTcp(context, payload, capacity);
 		if (received < 0 && Devsman::HasTcpError(context)) socket->last_error = ECONNRESET;
 		if (received == 0 && (flags & syscall_net_io_flag_wait)) {
-			if (!Devsman::WaitTcpReceive(context)) return 0;
+			if (!Devsman::WaitTcpReceive(context)) {
+				return ThreadHasUnblockedSignal(Taskman::CurrentTB()) ? -4 : 0;
+			}
 			received = Devsman::ReceiveTcp(context, payload, capacity);
 			if (received < 0 && Devsman::HasTcpError(context)) socket->last_error = ECONNRESET;
 		}
@@ -2066,7 +2087,9 @@ int Filesys::RecvSocket(vfs_file* file, void* payload, stduint capacity,
 		}
 		if (received != 0) break;
 		if (!(flags & syscall_net_io_flag_wait)) break;
-		if (!Devsman::WaitUdp(socket->local_ipv4.port, socket->udp_inbox_id)) return 0;
+		if (!Devsman::WaitUdp(socket->local_ipv4.port, socket->udp_inbox_id)) {
+			return ThreadHasUnblockedSignal(Taskman::CurrentTB()) ? -4 : 0;
+		}
 	}
 	if (received <= 0) return received;
 
@@ -2088,7 +2111,7 @@ int Filesys::Poll(vfs_file* file, stduint events, stduint* revents) {
 	if (type == I_NAMED_PIPE) {
 		PipeChannel* chan = (PipeChannel*)file->f_inode->internal_handler;
 		if (!chan) return -1;
-		chan->lock.Acquire();
+		bool old_if = chan->lock.Acquire();
 		if ((events & syscall_poll_in) && (!chan->buffer.is_empty() || chan->writer_count == 0)) {
 			*revents |= syscall_poll_in;
 		}
@@ -2097,7 +2120,7 @@ int Filesys::Poll(vfs_file* file, stduint events, stduint* revents) {
 		}
 		if (chan->writer_count == 0) *revents |= syscall_poll_hangup;
 		if (chan->reader_count == 0) *revents |= syscall_poll_error;
-		chan->lock.Release();
+		chan->lock.Release(old_if);
 		return 0;
 	}
 
@@ -2309,29 +2332,41 @@ int Filesys::ShutdownSocket(vfs_file* file, stduint how) {
 	return 0;
 }
 
-int Filesys::ReadPipe(vfs_file* file, void* buf, stduint count) {
-	PipeChannel* chan = (PipeChannel*)file->f_inode->internal_handler;
+int Filesys::ReadPipe(PipeChannel* chan, void* buf, stduint count) {
 	if (!chan) return -1;
-
 	stduint bytes_read = 0;
 	byte* dst = (byte*)buf;
 	
 	while (bytes_read < count) {
-		chan->lock.Acquire();
+		bool old_if = chan->lock.Acquire();
 		
 		if (chan->buffer.is_empty()) {
 			if (chan->writer_count == 0) {
 				// EOF
-				chan->lock.Release();
+				chan->lock.Release(old_if);
 				break;
 			}
-			// Wait blockedly: Block first (set Pended), then release lock, then schedule.
-			// This avoids the race where Unblock happens between lock release and Block.
 			ThreadBlock* th = Taskman::CurrentTB();
-			chan->rq.Enqueue(th);
-			th->Block(ThreadBlock::BlockReason::BR_RecvMsg);
-			chan->lock.Release();
+			PipeAddWaiter(chan->read_wait_head, chan, th);
+			chan->lock.Release(old_if);
+			// Block() takes scheduler_lock, so it must run after pipe Spinlock
+			// release. If an event wins this window, Unblock() records pending_wake;
+			// if a signal wins while the thread is still Running, cancel the waiter here.
+			if (PipeInterrupted(th)) {
+				Filesys::CancelPipeWait(th);
+				return bytes_read ? bytes_read : -4;
+			}
+			th->Block(ThreadBlock::BlockReason::BR_RecvPipe);
+			if (th->state != ThreadBlock::State::Pended) {
+				continue;
+			}
+			if (PipeInterrupted(th)) {
+				Filesys::CancelPipeWait(th);
+				th->Unblock(ThreadBlock::BlockReason::BR_RecvPipe);
+				return bytes_read ? bytes_read : -4;
+			}
 			Taskman::Schedule(true);
+			if (PipeInterrupted(th)) return bytes_read ? bytes_read : -4;
 			// Woken up, loop again
 			continue;
 		}
@@ -2343,40 +2378,26 @@ int Filesys::ReadPipe(vfs_file* file, void* buf, stduint count) {
 			dst[bytes_read++] = (byte)ch;
 		}
 		
-		// Wake up writers (dequeue under lock to avoid corruption, then Unblock outside)
-		Queue<::ThreadBlock*> wake_list;
-		while (!chan->wq.isEmpty()) {
-			ThreadBlock* w_th = nullptr;
-			chan->wq.Dequeue(w_th);
-			if (w_th) wake_list.Enqueue(w_th);
-		}
-		chan->lock.Release();
+		ThreadBlock* wake_list = PipeTakeWaitList(chan->write_wait_head);
+		chan->lock.Release(old_if);
 		
-		while (!wake_list.isEmpty()) {
-			ThreadBlock* w_th = nullptr;
-			wake_list.Dequeue(w_th);
-			if (w_th) {
-				w_th->Unblock(ThreadBlock::BlockReason::BR_SendMsg);
-			}
-		}
+		PipeWakeList(wake_list, ThreadBlock::BlockReason::BR_SendPipe);
 	}
 	
 	return bytes_read;
 }
 
-int Filesys::WritePipe(vfs_file* file, const void* buf, stduint count) {
-	PipeChannel* chan = (PipeChannel*)file->f_inode->internal_handler;
+int Filesys::WritePipe(PipeChannel* chan, const void* buf, stduint count) {
 	if (!chan) return -1;
-
 	stduint bytes_written = 0;
 	const byte* src = (const byte*)buf;
 	
 	while (bytes_written < count) {
-		chan->lock.Acquire();
+		bool old_if = chan->lock.Acquire();
 		
 		if (chan->reader_count == 0) {
 			// POSIX: write to pipe with no readers -> SIGPIPE
-			chan->lock.Release();
+			chan->lock.Release(old_if);
 			// Send SIGPIPE to current process
 			ThreadBlock* th = Taskman::CurrentTB();
 			sys_kill(th->parent_process->pid, SIGPIPE, 0);
@@ -2384,12 +2405,27 @@ int Filesys::WritePipe(vfs_file* file, const void* buf, stduint count) {
 		}
 		
 		if (chan->buffer.is_full()) {
-			// Wait blockedly: Block first (set Pended), then release lock, then schedule.
 			ThreadBlock* th = Taskman::CurrentTB();
-			chan->wq.Enqueue(th);
-			th->Block(ThreadBlock::BlockReason::BR_SendMsg);
-			chan->lock.Release();
+			PipeAddWaiter(chan->write_wait_head, chan, th);
+			chan->lock.Release(old_if);
+			// Block() takes scheduler_lock, so it must run after pipe Spinlock
+			// release. If an event wins this window, Unblock() records pending_wake;
+			// if a signal wins while the thread is still Running, cancel the waiter here.
+			if (PipeInterrupted(th)) {
+				Filesys::CancelPipeWait(th);
+				return bytes_written ? bytes_written : -4;
+			}
+			th->Block(ThreadBlock::BlockReason::BR_SendPipe);
+			if (th->state != ThreadBlock::State::Pended) {
+				continue;
+			}
+			if (PipeInterrupted(th)) {
+				Filesys::CancelPipeWait(th);
+				th->Unblock(ThreadBlock::BlockReason::BR_SendPipe);
+				return bytes_written ? bytes_written : -4;
+			}
 			Taskman::Schedule(true);
+			if (PipeInterrupted(th)) return bytes_written ? bytes_written : -4;
 			
 			continue;
 		}
@@ -2399,76 +2435,186 @@ int Filesys::WritePipe(vfs_file* file, const void* buf, stduint count) {
 		int written = chan->buffer.out((const char*)(src + bytes_written), chunk);
 		bytes_written += written;
 		
-		// Wake up readers (dequeue under lock to avoid corruption, then Unblock outside)
-		Queue<::ThreadBlock*> wake_list;
-		while (!chan->rq.isEmpty()) {
-			ThreadBlock* r_th = nullptr;
-			chan->rq.Dequeue(r_th);
-			if (r_th) wake_list.Enqueue(r_th);
-		}
-		chan->lock.Release();
+		ThreadBlock* wake_list = PipeTakeWaitList(chan->read_wait_head);
+		chan->lock.Release(old_if);
 		
-		while (!wake_list.isEmpty()) {
-			ThreadBlock* r_th = nullptr;
-			wake_list.Dequeue(r_th);
-			if (r_th) {
-				r_th->Unblock(ThreadBlock::BlockReason::BR_RecvMsg);
-			}
-		}
+		PipeWakeList(wake_list, ThreadBlock::BlockReason::BR_RecvPipe);
 	}
 	
 	return bytes_written;
+}
+
+static void PipeClearWaiter(ThreadBlock* th) {
+	if (!th) return;
+	th->pipe_wait_channel = nullptr;
+	th->pipe_wait_prev = nullptr;
+	th->pipe_wait_next = nullptr;
+}
+
+static void PipeAddWaiter(ThreadBlock*& head, PipeChannel* chan, ThreadBlock* th) {
+	if (!th) return;
+	PipeClearWaiter(th);
+	th->pipe_wait_channel = chan;
+	th->pipe_wait_next = head;
+	if (head) head->pipe_wait_prev = th;
+	head = th;
+}
+
+static bool PipeRemoveWaiter(ThreadBlock*& head, ThreadBlock* th) {
+	if (!th) return false;
+	ThreadBlock* crt = head;
+	while (crt && crt != th) crt = crt->pipe_wait_next;
+	if (!crt) return false;
+	if (crt->pipe_wait_prev) crt->pipe_wait_prev->pipe_wait_next = crt->pipe_wait_next;
+	else head = crt->pipe_wait_next;
+	if (crt->pipe_wait_next) crt->pipe_wait_next->pipe_wait_prev = crt->pipe_wait_prev;
+	PipeClearWaiter(crt);
+	return true;
+}
+
+static ThreadBlock* PipeTakeWaitList(ThreadBlock*& head) {
+	ThreadBlock* wake_head = nullptr;
+	while (head) {
+		ThreadBlock* th = head;
+		head = th->pipe_wait_next;
+		PipeClearWaiter(th);
+		th->pipe_wait_next = wake_head;
+		wake_head = th;
+	}
+	return wake_head;
+}
+
+static void PipeWakeList(ThreadBlock* head, ThreadBlock::BlockReason reason) {
+	while (head) {
+		ThreadBlock* th = head;
+		head = th->pipe_wait_next;
+		th->pipe_wait_next = nullptr;
+		th->Unblock(reason);
+	}
+}
+
+static bool PipeInterrupted(ThreadBlock* th) {
+	return ThreadHasUnblockedSignal(th);
+}
+
+static void DestroyPipeChannel(PipeChannel* chan) {
+	if (!chan) return;
+	{
+		SpinlockLocal guard(&pipe_channel_list_lock);
+		PipeChannel* prev = nullptr;
+		PipeChannel* crt = pipe_channel_list;
+		while (crt && crt != chan) {
+			prev = crt;
+			crt = crt->global_next;
+		}
+		if (crt) {
+			if (prev) prev->global_next = crt->global_next;
+			else pipe_channel_list = crt->global_next;
+		}
+		chan->global_next = nullptr;
+	}
+	delete[] (char*)chan->buffer.slice.address;
+	delete chan;
+}
+
+PipeChannel* Filesys::AcquirePipeChannel(vfs_file* file) {
+	if (!file || !file->f_inode) return nullptr;
+	PipeChannel* chan = (PipeChannel*)file->f_inode->internal_handler;
+	if (!chan) return nullptr;
+	ThreadBlock* th = Taskman::CurrentTB();
+	bool old_if = chan->lock.Acquire();
+	if (chan->closing) {
+		chan->lock.Release(old_if);
+		return nullptr;
+	}
+	chan->active_io++;
+	if (th) th->pipe_io_channel = chan;
+	chan->lock.Release(old_if);
+	return chan;
+}
+
+void Filesys::ReleasePipeChannel(PipeChannel* chan) {
+	if (!chan) return;
+	ThreadBlock* th = Taskman::CurrentTB();
+	bool old_if = chan->lock.Acquire();
+	if (chan->active_io) chan->active_io--;
+	if (th && th->pipe_io_channel == chan) th->pipe_io_channel = nullptr;
+	const bool destroy = chan->closing && chan->active_io == 0;
+	chan->lock.Release(old_if);
+	if (destroy) DestroyPipeChannel(chan);
+}
+
+int Filesys::ReadPipe(vfs_file* file, void* buf, stduint count) {
+	PipeChannel* chan = AcquirePipeChannel(file);
+	if (!chan) return -1;
+	int ret = ReadPipe(chan, buf, count);
+	ReleasePipeChannel(chan);
+	return ret;
+}
+
+int Filesys::WritePipe(vfs_file* file, const void* buf, stduint count) {
+	PipeChannel* chan = AcquirePipeChannel(file);
+	if (!chan) return -1;
+	int ret = WritePipe(chan, buf, count);
+	ReleasePipeChannel(chan);
+	return ret;
+}
+
+void Filesys::CancelPipeWait(::ThreadBlock* th, bool release_io) {
+	if (!th) return;
+	// pipe_wait_channel is only non-null while the thread is linked in a pipe
+	// wait list; pipe_io_channel covers the dying-thread window after wake.
+	PipeChannel* chan = th->pipe_wait_channel ? th->pipe_wait_channel : th->pipe_io_channel;
+	if (!chan) return;
+	PipeChannel* destroy_chan = nullptr;
+	bool old_if = chan->lock.Acquire();
+	PipeRemoveWaiter(chan->read_wait_head, th);
+	PipeRemoveWaiter(chan->write_wait_head, th);
+	// release_io is only for process/thread death: the interrupted thread will
+	// never return to its pipe frame and therefore cannot call ReleasePipeChannel.
+	if (release_io && th->pipe_io_channel == chan && chan->active_io) {
+		chan->active_io--;
+		th->pipe_io_channel = nullptr;
+		if (chan->closing && chan->active_io == 0) destroy_chan = chan;
+	}
+	chan->lock.Release(old_if);
+	if (destroy_chan) DestroyPipeChannel(destroy_chan);
 }
 
 int Filesys::ClosePipe(vfs_file* file) {
 	PipeChannel* chan = (PipeChannel*)file->f_inode->internal_handler;
 	if (!chan) return -1;
 	
-	chan->lock.Acquire();
-	Queue<::ThreadBlock*> wake_list;
+	bool old_if = chan->lock.Acquire();
+	ThreadBlock* wake_list = nullptr;
+	ThreadBlock::BlockReason wake_reason = ThreadBlock::BlockReason::BR_None;
 	if ((file->f_mode & O_ACCMODE) == O_RDONLY) {
 		chan->reader_count--;
 		if (chan->reader_count == 0) {
-			// Collect blocked writers to wake after releasing lock
-			while (!chan->wq.isEmpty()) {
-				ThreadBlock* w_th = nullptr;
-				chan->wq.Dequeue(w_th);
-				if (w_th) wake_list.Enqueue(w_th);
-			}
+			wake_list = PipeTakeWaitList(chan->write_wait_head);
+			wake_reason = ThreadBlock::BlockReason::BR_SendPipe;
 		}
 	} else if ((file->f_mode & O_ACCMODE) == O_WRONLY) {
 		chan->writer_count--;
 		if (chan->writer_count == 0) {
-			// Collect blocked readers to wake after releasing lock
-			while (!chan->rq.isEmpty()) {
-				ThreadBlock* r_th = nullptr;
-				chan->rq.Dequeue(r_th);
-				if (r_th) wake_list.Enqueue(r_th);
-			}
+			wake_list = PipeTakeWaitList(chan->read_wait_head);
+			wake_reason = ThreadBlock::BlockReason::BR_RecvPipe;
 		}
 	}
 	
 	bool destroy = (chan->reader_count == 0 && chan->writer_count == 0);
-	chan->lock.Release();
+	if (destroy) {
+		chan->closing = true;
+		if (file->f_inode) file->f_inode->internal_handler = nullptr;
+		destroy = chan->active_io == 0;
+	}
+	chan->lock.Release(old_if);
 	
 	// Unblock waiters outside the pipe lock to avoid lock-order inversion
-	// (Unblock acquires scheduler_lock, and some paths hold scheduler_lock
-	// before acquiring pipe-related Mutexes).
-	while (!wake_list.isEmpty()) {
-		ThreadBlock* th = nullptr;
-		wake_list.Dequeue(th);
-		if (th) {
-			th->Unblock((file->f_mode & O_ACCMODE) == O_RDONLY ?
-				ThreadBlock::BlockReason::BR_SendMsg :
-				ThreadBlock::BlockReason::BR_RecvMsg);
-		}
-	}
+	// (Unblock acquires scheduler_lock; keep pipe Spinlock out of that path).
+	PipeWakeList(wake_list, wake_reason);
 	
-	if (destroy) {
-		delete[] (char*)chan->buffer.slice.address;
-		delete chan;
-		file->f_inode->internal_handler = nullptr;
-	}
+	if (destroy) DestroyPipeChannel(chan);
 	
 	// Normal inode clean up
 	MutexLocal guard(&vfs_lock);

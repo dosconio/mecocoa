@@ -146,7 +146,7 @@ static void check_and_deliver_signals_generic(RegisterContext& ctx) {
 				plogerro("[HYP-B] SIG_ACT_STOP: TID%u still in ready queue (next=%p prev=%p), Block() skipped",
 					crt->getID(), crt->queue_state_next, crt->queue_state_prev);
 			crt->state = ThreadBlock::State::Pended;
-			crt->block_reason = ThreadBlock::BlockReason::BR_Waiting;
+			crt->block_reason = ThreadBlock::BlockReason::BR_Stopped;
 			Taskman::Schedule(true);
 			break;
 		case SIG_ACT_CONT:
@@ -424,10 +424,7 @@ extern "C" stduint sys_sigaction(int sig, const struct _POSIX_sigaction* act, st
 
 static void wakeup_thread_for_signal(ThreadBlock* th, int sig) {
 	if (th->state == ThreadBlock::State::Pended) {
-		if (th->block_reason & (ThreadBlock::BlockReason::BR_Resting | 
-								ThreadBlock::BlockReason::BR_RecvMsg | 
-								ThreadBlock::BlockReason::BR_SendMsg | 
-								ThreadBlock::BlockReason::BR_Waiting)) {
+		if (_IMM(th->block_reason) & ThreadBlock::BR_Interruptible) {
 			// 1. Sleep Timer Cleanup
 			if (th->block_reason & ThreadBlock::BlockReason::BR_Resting) {
 				extern Spinlock timer_lock;
@@ -445,11 +442,28 @@ static void wakeup_thread_for_signal(ThreadBlock* th, int sig) {
 			}
 
 			// 2. IPC Message Cleanup
-			if (th->block_reason & (ThreadBlock::BlockReason::BR_RecvMsg | ThreadBlock::BlockReason::BR_SendMsg)) {
-				msg_cleanup_thread(th);
+			if (_IMM(th->block_reason) & ThreadBlock::BR_IPC) {
+				msg_cleanup_thread(th, false);
 			}
 
-			// 3. Unblock the thread and enqueue it
+			// 3. Pipe/Socket Cleanup
+			// Signals may interrupt these waits before the I/O event fires. Remove the
+			// waiter now so a stale queue entry cannot later set pending_wake and skip
+			// an unrelated future pipe/socket block.
+			const uint32 pipe_wait_mask = _IMM(ThreadBlock::BlockReason::BR_SendPipe) |
+				_IMM(ThreadBlock::BlockReason::BR_RecvPipe);
+			if (_IMM(th->block_reason) & pipe_wait_mask) {
+				Filesys::CancelPipeWait(th);
+			}
+			#if (_MCCA & 0xFF00) == 0x8600
+			const uint32 sock_wait_mask = _IMM(ThreadBlock::BlockReason::BR_SendSock) |
+				_IMM(ThreadBlock::BlockReason::BR_RecvSock);
+			if (_IMM(th->block_reason) & sock_wait_mask) {
+				Devsman::CancelSocketWait(th);
+			}
+			#endif
+
+			// 4. Unblock the thread and enqueue it
 			th->Unblock(th->block_reason);
 		}
 	}
@@ -487,10 +501,7 @@ extern "C" stduint sys_kill(stduint pid, int sig, stduint tid) {
 					target_th = curr_th;
 					break;
 				} else if (curr_th->state == ThreadBlock::State::Pended && 
-						   (curr_th->block_reason & (ThreadBlock::BlockReason::BR_Resting | 
-													 ThreadBlock::BlockReason::BR_RecvMsg | 
-													 ThreadBlock::BlockReason::BR_SendMsg | 
-													 ThreadBlock::BlockReason::BR_Waiting))) {
+						   (_IMM(curr_th->block_reason) & ThreadBlock::BR_Interruptible)) {
 					target_th = curr_th;
 				}
 			}

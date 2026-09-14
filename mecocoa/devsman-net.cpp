@@ -5,6 +5,7 @@
 #include "../include/mecocoa.hpp"
 #include <cpp/System/Network/Layer/Link.hpp>
 #include <cpp/System/Network/Layer/Link/Ethernet.hpp>
+#include <cpp/System/Network/Layer/Application/DHCP.hpp>
 #include <cpp/System/Network/Layer/Network/ARP.hpp>
 #include <cpp/System/Network/Layer/Network/IPv4.hpp>
 #include <cpp/System/Network/Layer/Network/IPv4/ICMP.hpp>
@@ -53,25 +54,29 @@ namespace {
 	constexpr uint16 NetTcpWindowSize = 4096;
 	constexpr int NetErrConnectionRefused = 111;
 	constexpr uint16 NetUdpEchoPort = 7;
-	constexpr uint16 NetDhcpServerPort = 67;
-	constexpr uint16 NetDhcpClientPort = 68;
 	constexpr uint16 NetUdpEphemeralPortBegin = 49152;
 	constexpr uint16 NetUdpEphemeralPortEnd = 65535;
-	constexpr stduint NetDhcpMinMessageLength = 240;
-	constexpr stduint NetDhcpDiscoverLength = 244;
 	uni::Network::LinkDevice* net_link_devices[NetLinkDeviceCapacity]{};
 	stduint net_link_device_count = 0;
+
+	enum class NetIPv4ConfigSource : uint8 {
+		Static,
+		DhcpOffered,
+		DhcpBound,
+	};
 
 	struct NetInterfaceConfig {
 		uni::Network::IPv4Address ipv4_address;
 		uni::Network::IPv4Address ipv4_netmask;
 		uni::Network::IPv4Address ipv4_gateway;
+		NetIPv4ConfigSource source;
 	};
 
 	NetInterfaceConfig net_config{
 		.ipv4_address = {{ 10, 0, 2, 15 }},
 		.ipv4_netmask = {{ 255, 255, 255, 0 }},
 		.ipv4_gateway = {{ 10, 0, 2, 1 }},
+		.source = NetIPv4ConfigSource::Static,
 	};
 
 	struct NetServiceBuffers {
@@ -237,8 +242,10 @@ namespace {
 	stduint net_udp_error_next = 0;
 	NetTcpListener net_tcp_listeners[NetTcpListenCapacity]{};
 	NetTcpConnection net_tcp_connections[NetTcpConnectionCapacity]{};
+	Spinlock net_socket_wait_lock;
 	uint32 net_tcp_next_sequence = 0x10000000u;
-	uint8 net_dhcp_payload[NetDhcpDiscoverLength]{};
+	uint8 net_dhcp_payload[300]{};
+	uni::Network::DHCPClientObject* net_dhcp_client = nullptr;
 	bool net_dhcp_discover_sent = false;
 
 	uint16 NetTcpLocalMss();
@@ -348,6 +355,20 @@ namespace {
 		return net_buffers.IsTcpTxReady();
 	}
 
+	bool EnsureDhcpClientObject() {
+		if (!net_dhcp_client) {
+			auto* storage = mempool.allocate(sizeof(uni::Network::DHCPClientObject), 4);
+			if (!storage) return false;
+			net_dhcp_client = new (storage) uni::Network::DHCPClientObject();
+		}
+		return true;
+	}
+
+	void ResetDhcpClient() {
+		net_dhcp_discover_sent = false;
+		if (net_dhcp_client) net_dhcp_client->Reset();
+	}
+
 	uni::Network::LinkDevice* FindDefaultLinkDevice() {
 		if (net_remote_link.owner_tid &&
 			net_remote_link.registered &&
@@ -380,6 +401,17 @@ namespace {
 		output.mtu = uint16(dev->getMtu());
 		output.link_index = uint16(index);
 		output.link_state = uint16(dev->getState());
+		switch (net_config.source) {
+		case NetIPv4ConfigSource::DhcpOffered:
+			output.config_source = syscall_net_config_source_dhcp_offered;
+			break;
+		case NetIPv4ConfigSource::DhcpBound:
+			output.config_source = syscall_net_config_source_dhcp_bound;
+			break;
+		default:
+			output.config_source = syscall_net_config_source_static;
+			break;
+		}
 		const char* name = dev->getName();
 		if (name) {
 			for0(i, numsof(output.name) - 1) {
@@ -388,6 +420,16 @@ namespace {
 			}
 		}
 		return true;
+	}
+
+	void ApplyIPv4Config(const uni::Network::IPv4Address& address,
+		const uni::Network::IPv4Address& netmask,
+		const uni::Network::IPv4Address& gateway,
+		NetIPv4ConfigSource source) {
+		if (!address.isZero()) net_config.ipv4_address = address;
+		if (!netmask.isZero()) net_config.ipv4_netmask = netmask;
+		net_config.ipv4_gateway = gateway;
+		net_config.source = source;
 	}
 
 	bool IsSameIPv4Subnet(const uni::Network::IPv4Address& lhs, const uni::Network::IPv4Address& rhs,
@@ -783,13 +825,18 @@ namespace {
 	}
 
 	void WakeTcpAcceptWaiters(NetTcpListener& listener) {
+		ThreadBlock* wake_list[NetTcpAcceptWaiterCapacity]{};
+		stduint wake_count = 0;
+		bool old_if = net_socket_wait_lock.Acquire();
 		for0(i, listener.accept_waiter_count) {
 			if (listener.accept_waiters[i]) {
-				listener.accept_waiters[i]->Unblock(ThreadBlock::BlockReason::BR_RecvMsg);
+				wake_list[wake_count++] = listener.accept_waiters[i];
 				listener.accept_waiters[i] = nullptr;
 			}
 		}
 		listener.accept_waiter_count = 0;
+		net_socket_wait_lock.Release(old_if);
+		for0(i, wake_count) wake_list[i]->Unblock(ThreadBlock::BlockReason::BR_RecvSock);
 	}
 
 	bool IsTcpConnectReady(const NetTcpConnection& connection) {
@@ -799,9 +846,17 @@ namespace {
 
 	bool AddTcpAcceptWaiter(NetTcpListener& listener, ThreadBlock* th) {
 		if (!th) return false;
-		for0(i, listener.accept_waiter_count) if (listener.accept_waiters[i] == th) return true;
-		if (listener.accept_waiter_count >= NetTcpAcceptWaiterCapacity) return false;
+		bool old_if = net_socket_wait_lock.Acquire();
+		for0(i, listener.accept_waiter_count) if (listener.accept_waiters[i] == th) {
+			net_socket_wait_lock.Release(old_if);
+			return true;
+		}
+		if (listener.accept_waiter_count >= NetTcpAcceptWaiterCapacity) {
+			net_socket_wait_lock.Release(old_if);
+			return false;
+		}
 		listener.accept_waiters[listener.accept_waiter_count++] = th;
+		net_socket_wait_lock.Release(old_if);
 		return true;
 	}
 
@@ -871,20 +926,33 @@ namespace {
 	}
 
 	void WakeTcpRxReaders(NetTcpConnection& connection) {
+		ThreadBlock* wake_list[NetTcpRxWaiterCapacity]{};
+		stduint wake_count = 0;
+		bool old_if = net_socket_wait_lock.Acquire();
 		for0(i, connection.rx_waiter_count) {
 			if (connection.rx_waiters[i]) {
-				connection.rx_waiters[i]->Unblock(ThreadBlock::BlockReason::BR_RecvMsg);
+				wake_list[wake_count++] = connection.rx_waiters[i];
 				connection.rx_waiters[i] = nullptr;
 			}
 		}
 		connection.rx_waiter_count = 0;
+		net_socket_wait_lock.Release(old_if);
+		for0(i, wake_count) wake_list[i]->Unblock(ThreadBlock::BlockReason::BR_RecvSock);
 	}
 
 	bool AddTcpRxReader(NetTcpConnection& connection, ThreadBlock* th) {
 		if (!th) return false;
-		for0(i, connection.rx_waiter_count) if (connection.rx_waiters[i] == th) return true;
-		if (connection.rx_waiter_count >= NetTcpRxWaiterCapacity) return false;
+		bool old_if = net_socket_wait_lock.Acquire();
+		for0(i, connection.rx_waiter_count) if (connection.rx_waiters[i] == th) {
+			net_socket_wait_lock.Release(old_if);
+			return true;
+		}
+		if (connection.rx_waiter_count >= NetTcpRxWaiterCapacity) {
+			net_socket_wait_lock.Release(old_if);
+			return false;
+		}
 		connection.rx_waiters[connection.rx_waiter_count++] = th;
+		net_socket_wait_lock.Release(old_if);
 		return true;
 	}
 
@@ -1070,21 +1138,48 @@ namespace {
 	}
 
 	void WakeUdpInboxReaders(NetUdpInbox& inbox) {
+		ThreadBlock* wake_list[NetUdpInboxWaiterCapacity]{};
+		stduint wake_count = 0;
+		bool old_if = net_socket_wait_lock.Acquire();
 		for0(i, inbox.read_waiter_count) {
 			if (inbox.read_waiters[i]) {
-				inbox.read_waiters[i]->Unblock(ThreadBlock::BlockReason::BR_RecvMsg);
+				wake_list[wake_count++] = inbox.read_waiters[i];
 				inbox.read_waiters[i] = nullptr;
 			}
 		}
 		inbox.read_waiter_count = 0;
+		net_socket_wait_lock.Release(old_if);
+		for0(i, wake_count) wake_list[i]->Unblock(ThreadBlock::BlockReason::BR_RecvSock);
 	}
 
 	bool AddUdpInboxReader(NetUdpInbox& inbox, ThreadBlock* th) {
 		if (!th) return false;
-		for0(i, inbox.read_waiter_count) if (inbox.read_waiters[i] == th) return true;
-		if (inbox.read_waiter_count >= NetUdpInboxWaiterCapacity) return false;
+		bool old_if = net_socket_wait_lock.Acquire();
+		for0(i, inbox.read_waiter_count) if (inbox.read_waiters[i] == th) {
+			net_socket_wait_lock.Release(old_if);
+			return true;
+		}
+		if (inbox.read_waiter_count >= NetUdpInboxWaiterCapacity) {
+			net_socket_wait_lock.Release(old_if);
+			return false;
+		}
 		inbox.read_waiters[inbox.read_waiter_count++] = th;
+		net_socket_wait_lock.Release(old_if);
 		return true;
+	}
+
+	template <stduint Capacity>
+	void RemoveSocketWaiter(ThreadBlock* (&waiters)[Capacity], stduint& count, ThreadBlock* th) {
+		stduint out = 0;
+		for0(i, count) {
+			if (waiters[i] && waiters[i] != th) waiters[out++] = waiters[i];
+		}
+		for (stduint i = out; i < count; i++) waiters[i] = nullptr;
+		count = out;
+	}
+
+	bool SocketInterrupted(ThreadBlock* th) {
+		return th && (_sigset_raw(&th->pending_signals) & ~_sigset_raw(&th->blocked_signals));
 	}
 
 	void RecordUdpError(const uni::Network::IPv4Address& remote_ip,
@@ -1750,42 +1845,15 @@ namespace {
 		return sent > 0 ? stdsint(length) : sent;
 	}
 
-	void EthernetWrite32(uint8* data, uint32 value) {
-		data[0] = uint8(value >> 24);
-		data[1] = uint8(value >> 16);
-		data[2] = uint8(value >> 8);
-		data[3] = uint8(value);
-	}
-
-	bool SendDhcpDiscover() {
-		if (net_dhcp_discover_sent) return true;
+	bool SendDhcpPacket(stduint payload_length) {
+		if (!payload_length || payload_length > sizeof(net_dhcp_payload)) return false;
 		auto* dev = FindDefaultLinkDevice();
 		if (!dev || !EnsureUdpTxBuffer()) return false;
-		const auto mac = dev->getAddress();
-		if (mac.isZero()) return false;
-
-		MemSet(net_dhcp_payload, 0, sizeof(net_dhcp_payload));
-		net_dhcp_payload[0] = 1; // BOOTREQUEST
-		net_dhcp_payload[1] = 1; // Ethernet
-		net_dhcp_payload[2] = uni::Network::EthernetAddressLength;
-		const uint32 xid = 0x4D434341u ^ uint32(tick);
-		EthernetWrite32(net_dhcp_payload + 4, xid);
-		uni::Network::EthernetWrite16(net_dhcp_payload + 10, 0x8000u);
-		for0(i, uni::Network::EthernetAddressLength) net_dhcp_payload[28 + i] = mac.octet[i];
-		net_dhcp_payload[236] = 99;
-		net_dhcp_payload[237] = 130;
-		net_dhcp_payload[238] = 83;
-		net_dhcp_payload[239] = 99;
-		net_dhcp_payload[240] = 53;
-		net_dhcp_payload[241] = 1;
-		net_dhcp_payload[242] = 1; // DHCPDISCOVER
-		net_dhcp_payload[243] = 255;
-
 		auto* udp = reinterpret_cast<uni::Network::UDPHeader*>(net_buffers.udp_tx);
-		const uint16 udp_length = uint16(uni::Network::UDPHeaderLength + sizeof(net_dhcp_payload));
-		uni::Network::BuildUDPHeader(*udp, NetDhcpClientPort, NetDhcpServerPort, udp_length);
+		const uint16 udp_length = uint16(uni::Network::UDPHeaderLength + payload_length);
+		uni::Network::BuildUDPHeader(*udp, uni::Network::DHCPClientPort, uni::Network::DHCPServerPort, udp_length);
 		auto* payload = net_buffers.udp_tx + uni::Network::UDPHeaderLength;
-		for0(i, sizeof(net_dhcp_payload)) payload[i] = net_dhcp_payload[i];
+		for0(i, payload_length) payload[i] = net_dhcp_payload[i];
 		uni::Network::IPv4Address source{};
 		uni::Network::IPv4Address destination = IPv4LimitedBroadcastAddress();
 		uni::Network::EthernetWrite16(udp->checksum,
@@ -1800,9 +1868,34 @@ namespace {
 			64,
 		};
 		const stdsint sent = SendIPv4PacketFrame(*dev, EthernetBroadcastAddress(), packet);
-		if (sent <= 0) return false;
+		return sent > 0;
+	}
+
+	bool SendDhcpDiscover() {
+		if (net_dhcp_discover_sent) return true;
+		auto* dev = FindDefaultLinkDevice();
+		if (!dev) return false;
+		const auto mac = dev->getAddress();
+		if (mac.isZero()) return false;
+		if (!EnsureDhcpClientObject()) return false;
+		net_dhcp_client->Begin(0x4D434341u ^ uint32(tick));
+		const stduint length = net_dhcp_client->BuildDiscover(net_dhcp_payload,
+			sizeof(net_dhcp_payload), mac);
+		if (!length) return false;
+		if (!SendDhcpPacket(length)) return false;
 		net_dhcp_discover_sent = true;
 		return true;
+	}
+
+	bool SendDhcpRequest() {
+		auto* dev = FindDefaultLinkDevice();
+		if (!dev || !net_dhcp_client) return false;
+		const auto mac = dev->getAddress();
+		if (mac.isZero()) return false;
+		const stduint length = net_dhcp_client->BuildRequest(net_dhcp_payload,
+			sizeof(net_dhcp_payload), mac);
+		if (!length) return false;
+		return SendDhcpPacket(length);
 	}
 
 	void FlushPendingUdpFor(const uni::Network::IPv4Address& target_ip, const uni::Network::MacAddress& target_mac) {
@@ -1973,44 +2066,32 @@ namespace {
 		return true;
 	}
 
-	uint8 DhcpMessageType(const uint8* payload, stduint length) {
-		if (!payload || length < NetDhcpMinMessageLength) return 0;
-		if (payload[236] != 99 || payload[237] != 130 ||
-			payload[238] != 83 || payload[239] != 99) return 0;
-		stduint index = 240;
-		while (index < length) {
-			const uint8 option = payload[index++];
-			if (option == 0) continue;
-			if (option == 255) break;
-			if (index >= length) break;
-			const uint8 option_length = payload[index++];
-			if (index + option_length > length) break;
-			if (option == 53 && option_length == 1) return payload[index];
-			index += option_length;
-		}
-		return 0;
-	}
-
 	bool HandleDhcpClientDatagram(uni::Network::LinkDevice& dev, const NetUdpPacket& packet) {
 		(void)dev;
 		const auto* payload = packet.context.payload;
 		const stduint length = packet.context.payload_length;
-		const uint8 message_type = DhcpMessageType(payload, length);
-		if (!message_type) return false;
-		uni::Network::IPv4Address offered{};
-		if (length >= 20) for0(i, uni::Network::IPv4AddressLength) offered.octet[i] = payload[16 + i];
-		switch (message_type) {
-		case 2:
+		if (!net_dhcp_client) return false;
+		uni::Network::DHCPClientConfig config{};
+		if (!net_dhcp_client->AcceptMessage(payload, length, config)) return false;
+		switch (config.message_type) {
+		case uni::Network::DHCPMessageType::Offer:
+			ApplyIPv4Config(net_config.ipv4_address, net_config.ipv4_netmask,
+				net_config.ipv4_gateway, NetIPv4ConfigSource::DhcpOffered);
 			ploginfo("[Net] dhcp offer yiaddr=%u.%u.%u.%u",
-				(unsigned)offered.octet[0], (unsigned)offered.octet[1],
-				(unsigned)offered.octet[2], (unsigned)offered.octet[3]);
+				(unsigned)config.address.octet[0], (unsigned)config.address.octet[1],
+				(unsigned)config.address.octet[2], (unsigned)config.address.octet[3]);
+			(void)SendDhcpRequest();
 			return true;
-		case 5:
+		case uni::Network::DHCPMessageType::Ack:
+			if (config.has_address && config.has_netmask && config.has_router) {
+				ApplyIPv4Config(config.address, config.netmask, config.router,
+					NetIPv4ConfigSource::DhcpBound);
+			}
 			ploginfo("[Net] dhcp ack yiaddr=%u.%u.%u.%u",
-				(unsigned)offered.octet[0], (unsigned)offered.octet[1],
-				(unsigned)offered.octet[2], (unsigned)offered.octet[3]);
+				(unsigned)config.address.octet[0], (unsigned)config.address.octet[1],
+				(unsigned)config.address.octet[2], (unsigned)config.address.octet[3]);
 			return true;
-		case 6:
+		case uni::Network::DHCPMessageType::Nak:
 			plogwarn("[Net] dhcp nak");
 			return true;
 		default:
@@ -2394,7 +2475,7 @@ namespace {
 		if (!RegisterUdpPortHandler(NetUdpEchoPort, HandleUdpEchoDatagram)) {
 			plogwarn("[Net] udp echo port registration failed");
 		}
-		if (!RegisterUdpPortHandler(NetDhcpClientPort, HandleDhcpClientDatagram)) {
+		if (!RegisterUdpPortHandler(uni::Network::DHCPClientPort, HandleDhcpClientDatagram)) {
 			plogwarn("[Net] dhcp client port registration failed");
 		}
 	}
@@ -2433,6 +2514,7 @@ namespace {
 
 	void NetServiceHandleDetach(stduint sig_src) {
 		if (net_remote_link.owner_tid != sig_src) return;
+		ResetDhcpClient();
 		net_remote_link.owner_tid = 0;
 		net_remote_link.dev_handle = 0;
 		net_remote_link.caps = 0;
@@ -2496,6 +2578,24 @@ bool Devsman::RegisterLinkDevice(uni::Network::LinkDevice* device) {
 		device->getName() ? device->getName() : "(unnamed)",
 		(unsigned)device->getMtu());
 	return true;
+}
+
+void Devsman::CancelSocketWait(::ThreadBlock* th) {
+	if (!th) return;
+	bool old_if = net_socket_wait_lock.Acquire();
+	for0(i, NetTcpListenCapacity) {
+		RemoveSocketWaiter(net_tcp_listeners[i].accept_waiters,
+			net_tcp_listeners[i].accept_waiter_count, th);
+	}
+	for0(i, NetTcpConnectionCapacity) {
+		RemoveSocketWaiter(net_tcp_connections[i].rx_waiters,
+			net_tcp_connections[i].rx_waiter_count, th);
+	}
+	for0(i, net_udp_inbox_count) {
+		RemoveSocketWaiter(net_udp_inboxes[i].read_waiters,
+			net_udp_inboxes[i].read_waiter_count, th);
+	}
+	net_socket_wait_lock.Release(old_if);
 }
 
 stduint Devsman::LinkDeviceCount() {
@@ -2630,7 +2730,24 @@ bool Devsman::WaitTcpAccept(uint16 port) {
 	auto* th = Taskman::CurrentTB();
 	if (!th) return false;
 	if (!AddTcpAcceptWaiter(*listener, th)) return false;
-	th->Block(ThreadBlock::BlockReason::BR_RecvMsg);
+	if (listener->tcp && listener->tcp->getPendingAcceptCount()) {
+		Devsman::CancelSocketWait(th);
+		return true;
+	}
+	if (SocketInterrupted(th)) {
+		Devsman::CancelSocketWait(th);
+		return false;
+	}
+	th->Block(ThreadBlock::BlockReason::BR_RecvSock);
+	if (th->state != ThreadBlock::State::Pended) {
+		Devsman::CancelSocketWait(th);
+		return true;
+	}
+	if (SocketInterrupted(th)) {
+		Devsman::CancelSocketWait(th);
+		th->Unblock(ThreadBlock::BlockReason::BR_RecvSock);
+		return false;
+	}
 	Taskman::Schedule(true);
 	listener = FindTcpListener(port);
 	return listener && listener->tcp && listener->tcp->getPendingAcceptCount() != 0;
@@ -2719,7 +2836,24 @@ bool Devsman::WaitTcpReceive(const uni::Network::TCPConnectionContext& context) 
 	auto* th = Taskman::CurrentTB();
 	if (!th) return false;
 	if (!AddTcpRxReader(*connection, th)) return false;
-	th->Block(ThreadBlock::BlockReason::BR_RecvMsg);
+	if (IsTcpReceiveReady(*connection)) {
+		Devsman::CancelSocketWait(th);
+		return true;
+	}
+	if (SocketInterrupted(th)) {
+		Devsman::CancelSocketWait(th);
+		return false;
+	}
+	th->Block(ThreadBlock::BlockReason::BR_RecvSock);
+	if (th->state != ThreadBlock::State::Pended) {
+		Devsman::CancelSocketWait(th);
+		return true;
+	}
+	if (SocketInterrupted(th)) {
+		Devsman::CancelSocketWait(th);
+		th->Unblock(ThreadBlock::BlockReason::BR_RecvSock);
+		return false;
+	}
 	Taskman::Schedule(true);
 	connection = FindTcpConnection(context.local.address, context.local.port,
 		context.remote.address, context.remote.port);
@@ -2861,7 +2995,24 @@ bool Devsman::WaitUdp(uint16 port, stduint inbox_id) {
 	auto* th = Taskman::CurrentTB();
 	if (!th) return false;
 	if (!AddUdpInboxReader(*inbox, th)) return false;
-	th->Block(ThreadBlock::BlockReason::BR_RecvMsg);
+	if (inbox->count) {
+		Devsman::CancelSocketWait(th);
+		return true;
+	}
+	if (SocketInterrupted(th)) {
+		Devsman::CancelSocketWait(th);
+		return false;
+	}
+	th->Block(ThreadBlock::BlockReason::BR_RecvSock);
+	if (th->state != ThreadBlock::State::Pended) {
+		Devsman::CancelSocketWait(th);
+		return true;
+	}
+	if (SocketInterrupted(th)) {
+		Devsman::CancelSocketWait(th);
+		th->Unblock(ThreadBlock::BlockReason::BR_RecvSock);
+		return false;
+	}
 	Taskman::Schedule(true);
 	inbox = FindUdpInbox(port, inbox_id);
 	return inbox && inbox->IsReady() && inbox->count != 0;

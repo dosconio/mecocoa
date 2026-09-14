@@ -342,6 +342,7 @@ stduint ProcessBlock::Rdwt(bool wr_type, stduint fid, Slice slice)
 	// to acquire fileman lock to proceed.
 	const bool is_pipe = file->f_inode &&
 		(file->f_inode->i_mode & I_TYPE_MASK) == I_NAMED_PIPE;
+	PipeChannel* pipe_chan = nullptr;
 
 	if (is_magic_tty) {
 		// Task_Console owns the focus_tty path so fileman only forwards the
@@ -391,11 +392,14 @@ stduint ProcessBlock::Rdwt(bool wr_type, stduint fid, Slice slice)
 	// during that time prevents other threads from accessing file descriptors
 	// (e.g., process exit cleanup, dup2, etc.), causing deadlocks.
 	if (is_pipe) {
+		pipe_chan = Filesys::AcquirePipeChannel(file);
+		if (!pipe_chan) return 0;
 		files.Unlock();
 	}
 
 	int total_bytes = 0;
 	int bytes_left = slice.length;
+	int io_error = 0;
 	stduint curr_addr = slice.address;
 	byte* buffer = new byte[FSBUF_SIZE];
 
@@ -411,24 +415,24 @@ stduint ProcessBlock::Rdwt(bool wr_type, stduint fid, Slice slice)
 				buffer, nullptr, true,
 				(void*)curr_addr, pb, false,
 				chunk);
-			if (file->f_inode && (file->f_inode->i_mode & I_TYPE_MASK) == I_CHAR_SPECIAL) {
+			if (is_pipe) {
+				bytes_processed = Filesys::WritePipe(pipe_chan, buffer, chunk);
+			}
+			else if (file->f_inode && (file->f_inode->i_mode & I_TYPE_MASK) == I_CHAR_SPECIAL) {
 				// Bypass global vfs_lock spinlock for character special devices to avoid deadlocks.
 				bytes_processed = file->f_inode->i_sb->fs->writfl(file->f_inode->internal_handler, Slice{ file->f_pos, (stduint)chunk }, (const byte*)buffer);
-			}
-			else if (is_pipe) {
-				bytes_processed = Filesys::WritePipe(file, buffer, chunk);
 			}
 			else {
 				bytes_processed = Filesys::Write(file, buffer, chunk);
 			}
 		}
 		else {
-			if (file->f_inode && (file->f_inode->i_mode & I_TYPE_MASK) == I_CHAR_SPECIAL) {
+			if (is_pipe) {
+				bytes_processed = Filesys::ReadPipe(pipe_chan, buffer, chunk);
+			}
+			else if (file->f_inode && (file->f_inode->i_mode & I_TYPE_MASK) == I_CHAR_SPECIAL) {
 				// Bypass global vfs_lock spinlock for character special devices to avoid deadlocks.
 				bytes_processed = file->f_inode->i_sb->fs->readfl(file->f_inode->internal_handler, Slice{ file->f_pos, (stduint)chunk }, (byte*)buffer);
-			}
-			else if (is_pipe) {
-				bytes_processed = Filesys::ReadPipe(file, buffer, chunk);
 			}
 			else {
 				bytes_processed = Filesys::Read(file, buffer, chunk);
@@ -443,6 +447,7 @@ stduint ProcessBlock::Rdwt(bool wr_type, stduint fid, Slice slice)
 
 		// Break if error occurred or EOF reached
 		if (bytes_processed <= 0) {
+			if (bytes_processed < 0) io_error = bytes_processed;
 			break;
 		}
 
@@ -466,14 +471,17 @@ stduint ProcessBlock::Rdwt(bool wr_type, stduint fid, Slice slice)
 	// Re-acquire fileman lock for pipe path to update fd_pos if needed
 	if (is_pipe) {
 		auto files_reacq = this->fileman.Lock();
-		if (fid < files_reacq->pfiles.Count() && files_reacq->pfiles[fid] == fd_entry) {
+		if (fid < files_reacq->pfiles.Count() &&
+			files_reacq->pfiles[fid] == fd_entry &&
+			fd_entry->vfile == file) {
 			files_reacq->pfiles[fid]->fd_pos += total_bytes;
 			file->f_pos = files_reacq->pfiles[fid]->fd_pos;
 		}
 	}
 
 	delete[] buffer;
-	return total_bytes > 0 ? total_bytes : 0;
+	if (pipe_chan) Filesys::ReleasePipeChannel(pipe_chan);
+	return total_bytes > 0 ? total_bytes : io_error;
 }
 
 bool ProcessBlock::Close(int fid)
@@ -675,13 +683,13 @@ FileDescriptor* FileDescriptor_Clone(FileDescriptor* src) {
 				if ((pfd->vfile->f_inode->i_mode & I_TYPE_MASK) == I_NAMED_PIPE) {
 					PipeChannel* chan = (PipeChannel*)pfd->vfile->f_inode->internal_handler;
 					if (chan) {
-						chan->lock.Acquire();
+						bool old_if = chan->lock.Acquire();
 						if ((pfd->vfile->f_mode & O_ACCMODE) == O_RDONLY) {
 							chan->reader_count++;
 						} else if ((pfd->vfile->f_mode & O_ACCMODE) == O_WRONLY) {
 							chan->writer_count++;
 						}
-						chan->lock.Release();
+						chan->lock.Release(old_if);
 					}
 				}
 			}

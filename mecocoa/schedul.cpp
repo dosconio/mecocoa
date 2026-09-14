@@ -467,6 +467,11 @@ ThreadBlock* Taskman::PickNext() {
 void ThreadBlock::Block(BlockReason reason) {
 	SpinlockLocal guard(&scheduler_lock);
 	Taskman::DequeueReady(this, false);
+	if (pending_wake & reason) {
+		pending_wake = BlockReason(pending_wake & ~reason);
+		block_reason = BlockReason(block_reason & ~reason);
+		return;
+	}
 	state = State::Pended;
 	block_reason = BlockReason(block_reason | reason);
 }
@@ -476,8 +481,10 @@ void ThreadBlock::Unblock(BlockReason reason) {
 	block_reason = BlockReason(block_reason & ~reason);
 	if (block_reason == BlockReason::BR_None) {
 		if (state == State::Running) {
+			pending_wake = BlockReason(pending_wake | reason);
 			return;
 		}
+		if (state == State::Ready) return;
 		state = State::Ready;//{} else panic...
 		if (this->is_expired) {
 			Taskman::EnqueueExpired(this, false);

@@ -17,6 +17,7 @@
 #include <c/ISO_IEC_STD/signal.h>
 
 void serv_sysmsg();
+namespace uni { struct PipeChannel; }
 
 struct MsgTimer {
 	stduint timeout = 0;
@@ -364,7 +365,16 @@ public _Comment(State):
 		BR_Waiting = 0b1000,
 		BR_Exiting = 0b10000,
 		BR_Lock = 0b100000,
+		BR_SendPipe = 0b1000000,
+		BR_RecvPipe = 0b10000000,
+		BR_SendSock = 0b100000000,
+		BR_RecvSock = 0b1000000000,
+		BR_Stopped = 0b10000000000,
 	} block_reason = BlockReason::BR_None;
+	static constexpr uint32 BR_IPC = BR_SendMsg | BR_RecvMsg;
+	static constexpr uint32 BR_Interruptible = BR_Resting | BR_Waiting | BR_IPC |
+		BR_SendPipe | BR_RecvPipe | BR_SendSock | BR_RecvSock | BR_Stopped;
+	BlockReason pending_wake = BlockReason::BR_None;
 	void Block(BlockReason reason);
 	void Unblock(BlockReason reason);
 	ThreadBlock* queue_state_prev = nullptr, * queue_state_next = nullptr;// for ready queue
@@ -381,11 +391,18 @@ public: // _Comment(Syscomm)
 	CommMsg* unsolved_msg = nullptr;
 	bool unsolved_msg_from_kernel = false;
 	ThreadBlock* send_to_whom = nullptr;// nullptr for none (cannot comm with base-kernel)
-	ThreadBlock* recv_fo_whom = nullptr;// nullptr for ANY
+	ThreadBlock* recv_fo_whom = nullptr;// nullptr for none, ANYPROC for anyone, INTRUPT for rupt
 	stduint wait_rupt_no = 0;// equals vector plus one. 0 for none, 1 for ZeroException...
 	// if B->A, C->A. Then: A.qhead = B, B.qnext = C, C.qnext = none
 	ThreadBlock* queue_send_queuehead = nullptr;// nullptr for none
 	ThreadBlock* queue_send_queuenext = nullptr;
+	// everyone waiting on this thread (specific-peer recv): prepend-linked
+	ThreadBlock* queue_wait_queuehead = nullptr;
+	ThreadBlock* queue_wait_queuenext = nullptr;
+	uni::PipeChannel* pipe_wait_channel = nullptr;
+	uni::PipeChannel* pipe_io_channel = nullptr;
+	ThreadBlock* pipe_wait_prev = nullptr;
+	ThreadBlock* pipe_wait_next = nullptr;
 	Dchain async_messages;
 public:
 	inline stduint getID() const { return tid; }
@@ -573,7 +590,8 @@ enum class TaskmanMsg : stduint {
 int msg_send(ThreadBlock* fo, stduint to, _Comment(vaddr) CommMsg* msg, bool msg_in_kernel, bool is_async = false);
 int msg_recv(ThreadBlock* to, stduint fo, _Comment(vaddr) CommMsg* msg, bool msg_in_kernel);
 
-void msg_cleanup_thread(ThreadBlock* th);
+void msg_cleanup_thread(ThreadBlock* th, bool dying);
+void UnlinkWaitEntry(ThreadBlock* th);
 void rupt_proc(stduint tid, stduint rupt_no);
 
 inline static stduint syssend(stduint to_whom, const void* msgaddr, stduint bytlen, stduint type = 0, bool from_kernel = true)
