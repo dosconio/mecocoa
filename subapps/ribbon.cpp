@@ -1,6 +1,8 @@
 #include "aaaaa.h"
 #include "c/consio.h"
 #include "cpp/Witch/Control/Button.hpp"
+#include "cpp/Witch/Control/Control-Label.hpp"
+#include <time.h>
 #include <stdio.h>
 #include <c/format/picture/PNG.h>
 #include <cpp/trait/StorageTrait.hpp>
@@ -56,6 +58,8 @@ using namespace uni::witch::control;
 static Button start_btn("Start");
 static Button btn_shutdown("Shut down");
 static Button btn_reboot("Reboot");
+static Label time_label("");
+static char cached_time_str[32] = "";
 
 static constexpr stduint kRibbonClientHeight = 30;
 static constexpr stduint kStartButtonWidth = 54;
@@ -121,9 +125,53 @@ static void DrawRibbon(Color* buffer, stduint width, stduint height)
 		}
 	}
 
+	// Clock display on the bottom right
+	constexpr stduint kClockWidth = 96;
+	stduint clock_x = width > (kClockWidth + 6) ? width - kClockWidth - 4 : 0;
+	stduint clock_y = button_y;
+
+	// Sunken box background & borders
+	FillRect(buffer, width, width, height, clock_x, clock_y, kClockWidth, button_h, RColor(0xFFC0C0C0));
+	FillRect(buffer, width, width, height, clock_x, clock_y, kClockWidth, 1, RColor(0xFF808080));
+	FillRect(buffer, width, width, height, clock_x, clock_y, 1, button_h, RColor(0xFF808080));
+	FillRect(buffer, width, width, height, clock_x, clock_y + button_h - 1, kClockWidth, 1, RColor(0xFFFFFFFF));
+	FillRect(buffer, width, width, height, clock_x + kClockWidth - 1, clock_y, 1, button_h, RColor(0xFFFFFFFF));
+
+	// Get current time string (e.g. "Jan02:18:08")
+	time_t cur_time = time(nullptr);
+	struct tm* tm_info = localtime(&cur_time);
+	char time_buf[32] = {0};
+	if (tm_info) {
+		strftime(time_buf, sizeof(time_buf), "%b%d:%H:%M", tm_info);
+	}
+	for0(i, 32) cached_time_str[i] = time_buf[i];
+
+	time_label.text = time_buf;
+	constexpr stduint kTextWidth = 11 * 8; // 88 px
+	constexpr stduint kTextHeight = 16;
+	stdsint text_x = clock_x + (kClockWidth > kTextWidth ? (kClockWidth - kTextWidth) / 2 : 2);
+	stdsint text_y = clock_y + (button_h > kTextHeight ? (button_h - kTextHeight) / 2 : 2);
+	time_label.sheet_area = Rectangle(Point(text_x, text_y), Size2(kTextWidth, kTextHeight));
+	if (time_label.sheet_buffer) {
+		free(time_label.sheet_buffer);
+		time_label.sheet_buffer = nullptr;
+	}
+	time_label.doshow(nullptr);
+	if (time_label.sheet_buffer) {
+		for0(y, time_label.sheet_area.height) {
+			for0(x, time_label.sheet_area.width) {
+				Color c = time_label.sheet_buffer[y * time_label.sheet_area.width + x];
+				if (c != 0) {
+					buffer[(time_label.sheet_area.y + y) * width + time_label.sheet_area.x + x] = c;
+				}
+			}
+		}
+	}
+
 	// Layout and render taskbar buttons from cached_win_list
 	stduint cur_x = kStartButtonWidth + 8;
-	stduint avail_w = width > cur_x + 8 ? width - cur_x - 8 : 0;
+	stduint right_bound = clock_x > 8 ? clock_x - 8 : cur_x;
+	stduint avail_w = right_bound > cur_x ? right_bound - cur_x : 0;
 	stduint item_w = 120;
 	if (cached_win_count > 0 && cached_win_count * item_w > avail_w) {
 		item_w = avail_w / cached_win_count;
@@ -131,7 +179,7 @@ static void DrawRibbon(Color* buffer, stduint width, stduint height)
 	}
 
 	for (stduint i = 0; i < cached_win_count; i++) {
-		if (cur_x + item_w > width) break;
+		if (cur_x + item_w > right_bound) break;
 		if (!taskbar_buttons[i]) {
 			taskbar_buttons[i] = new Button("");
 		}
@@ -288,28 +336,39 @@ int main(int argc, char** argv)
 				continue;
 			}
 
+			// Check if time changed
+			time_t now_time = time(nullptr);
+			struct tm* tm_now = localtime(&now_time);
+			char now_str[32] = {0};
+			if (tm_now) {
+				strftime(now_str, sizeof(now_str), "%b%d:%H:%M", tm_now);
+			}
+			bool time_changed = (StrCompare(now_str, cached_time_str) != 0);
+
 			// Query latest window list from kernel
 			WindowInfo latest_wins[kMaxTaskbarWindows];
 			stduint total_w = 0;
 			stduint filtered_count = 0;
 			WindowInfo filtered_wins[kMaxTaskbarWindows];
+			bool win_changed = false;
 			if (sys_get_window_list(latest_wins, kMaxTaskbarWindows, &total_w) == 0) {
 				for (stduint i = 0; i < total_w && filtered_count < kMaxTaskbarWindows; i++) {
 					if (latest_wins[i].title[0] == '\0') continue;
 					filtered_wins[filtered_count++] = latest_wins[i];
 				}
 
-				// Only redraw if the window list, titles, focus, or states changed!
-				if (CheckWindowListChanged(filtered_wins, filtered_count, cached_win_list, cached_win_count)) {
+				win_changed = CheckWindowListChanged(filtered_wins, filtered_count, cached_win_list, cached_win_count);
+				if (win_changed) {
 					cached_win_count = filtered_count;
 					for (stduint i = 0; i < filtered_count; i++) {
 						cached_win_list[i] = filtered_wins[i];
 					}
-					if (buffer) {
-						DrawRibbon(buffer, screen.x, kRibbonClientHeight);
-						sys_update_form(form_id, nullptr);
-					}
 				}
+			}
+
+			if ((time_changed || win_changed) && buffer) {
+				DrawRibbon(buffer, screen.x, kRibbonClientHeight);
+				sys_update_form(form_id, nullptr);
 			}
 		}
 		else if (smsg.event == SheetEvent::onClick || smsg.event == SheetEvent::onLeave || smsg.event == SheetEvent::onMoved) {

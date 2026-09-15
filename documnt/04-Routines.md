@@ -30,7 +30,7 @@ Rule
 | 00  | OUTC           |           | (char)            | putchar current tty                       |
 | 01  | INNC           |           | (block_mode)→word | getchar<br>高字节包含键盘状态<br>**TODO**          |
 | 02  | EXIT           |           | (code)            | terminate program<br>uncheck for new      |
-| 03  | TIME           | syssecond | ()→second         | 获取秒数                                      |
+| 03  | TIME           | syssecond<br>sysdate<br>systime | (0/1/0x10/0x11)→val | 获取时间:<br>0: 运行秒数<br>1: 运行毫秒数<br>0x10: BCD日期 0xYYYYMMDD<br>0x11: BCD时间 0x00HHMMSS |
 | 04  | REST           | sysrest   |                   | HLT 直到下一次中断发生                             |
 | 05  | COMM           | syscomm   |                   | communication: send/receive<br>同步(阻塞)收发信息 |
 |     |                |           |                   |                                           |

@@ -37,6 +37,18 @@ stduint syssecond()// 3
 	return syscall(syscall_t::TIME, 0, nil, nil);
 }
 
+_ESYM_C
+uint32 sysdate()
+{
+	return (uint32)syscall(syscall_t::TIME, 0x10, nil, nil);
+}
+
+_ESYM_C
+uint32 systime()
+{
+	return (uint32)syscall(syscall_t::TIME, 0x11, nil, nil);
+}
+
 void sysrest(stduint unit, stduint num)// 4
 {
 	syscall(syscall_t::REST, unit, num, nil);
