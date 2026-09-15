@@ -85,6 +85,12 @@ stduint GraphicForm::getClientHeight() const {
 void GraphicForm::HandleEvent(const uni::SheetMessage& smsg) {
 	if (!playman_) return;
 
+	// Intercept Minimize button click (component ID 3, button released)
+	if (smsg.event == uni::SheetEvent::onClick && smsg.args[3] == 3 && !(smsg.args[2] & 0x10)) {
+		minimize();
+		return;
+	}
+
 	if (smsg.event == uni::SheetEvent::onTimer) {
 		playman_->CheckTimers(smsg.args[3]);
 	}
@@ -125,5 +131,17 @@ void GraphicForm::DrawString(const uni::Point& vertex, const char* str, uni::Col
 void GraphicForm::setTitle(const char* title) {
 	if (form_id_ >= 0 && title) {
 		sys_set_form_title(form_id_, title);
+	}
+}
+
+void GraphicForm::minimize() {
+	if (form_id_ >= 0) {
+		sys_minimize_form(form_id_);
+	}
+}
+
+void GraphicForm::restore() {
+	if (form_id_ >= 0) {
+		sys_restore_form(form_id_);
 	}
 }

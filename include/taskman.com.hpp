@@ -36,6 +36,9 @@ enum class GraphicMsg {
 	FTIM,// set timer
 	FSIZ,// get screen size
 	FSET,// set-prop
+	FMIN,// minimize-form
+	FRES,// restore-form
+	FENUM,// enumerate-windows
 	FCLEANPROC,// clean exiting process GUI resources
 	VCON_CREATE,// create virtual console
 	VCON_REMOVE,// remove virtual console
@@ -44,6 +47,19 @@ enum class GraphicMsg {
 	DRV_SETMODE,// request driver mode switch
 	DRV_FLUSH,// request driver dirty-rect flush
 	SET_WALLPAPER,// set desktop wallpaper (usrp_buffer, width, height)
+};
+
+_PACKED(struct) WindowInfo {
+	uint32 pid;
+	uint32 form_id;
+	uint8 state; // FormState
+	uint8 is_top; // 1 if top active window, 0 otherwise
+	uint8 reserved[2];
+	int32 x;
+	int32 y;
+	uint32 width;
+	uint32 height;
+	char title[64];
 };
 
 enum class NetworkMsg {

@@ -69,6 +69,9 @@ int main(int argc, char** argv)
 				ploginfo("msg: _close requested via button");
 				sys_close_form(form_id);
 				return 0;
+			} else if (smsg.args[3] == 3 && !(smsg.args[2] & 0x10)) {
+				// Left button release on Minimize Button
+				sys_minimize_form(form_id);
 			} else {
 				ploginfo("msg: _click at (%d, %d), comp=%x", smsg.args[0], smsg.args[1], smsg.args[2]);
 			}

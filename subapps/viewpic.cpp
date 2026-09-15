@@ -191,6 +191,9 @@ int main(int argc, char** argv)
 				}
 				return 0;
 			}
+			else if (smsg.args[3] == 3 && !(smsg.args[2] & 0x10)) {
+				sys_minimize_form(form_id);
+			}
 			break;
 
 		case SheetEvent::onKeybd:

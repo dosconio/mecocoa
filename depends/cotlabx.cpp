@@ -140,6 +140,12 @@ void _Comment(R1) serv_shell_process() {
 						}
 						goto shell_exit;
 					}
+					else if (smsg.args[3] == 3 && !left_down) {
+						stduint args[2] = { 0, Taskman::CurrentPID() };
+						syssend(Task_ConsoleVideo, args, sizeof(args), _IMM(GraphicMsg::FMIN));
+						stduint ret = 0;
+						sysrecv(Task_ConsoleVideo, &ret, sizeof(ret));
+					}
 				}
 			}
 		}

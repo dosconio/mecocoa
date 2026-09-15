@@ -268,6 +268,9 @@ int main(int argc, char **argv) {
 			if (smsg.args[3] == 1 && !(smsg.args[2] & 0x10)) {
 				sys_close_form(form_id); return 0;
 			}
+			else if (smsg.args[3] == 3 && !(smsg.args[2] & 0x10)) {
+				sys_minimize_form(form_id);
+			}
 			break;
 
 		default:

@@ -53,6 +53,7 @@ extern uni::Queue<SysMessage> message_queue;
 
 enum GraphicFormStyle {
 	GraphicFormStyle_Titleless = 0x00000001,
+	GraphicFormStyle_Dock      = 0x00000002,
 };
 
 // >= 1

@@ -44,6 +44,9 @@ enum class ConsoleMsg {
 	FCHR,// draw-string (formid, u_point, u_str, color)
 	FTIM,// set-timer   (formid, ms)
 	FSET,// set-prop    (formid, prop, value)
+	FMIN,// minimize    (formid)
+	FRES,// restore     (formid)
+	FENUM,// enumerate   (&WindowInfo, max_count, &out_count)
 	// do not put above:
 	FCLEANPROC,// internal: clean one exiting process GUI resources in console owner thread
 };
@@ -169,6 +172,8 @@ struct Consman {
 	static Rectangle DetachForm(::uni::Witch::Form* pfrm, SheetTrait* exact_sheet = nullptr);
 	static void RemoveVconsole(Dnode* nod);
 	static void SwitchForm(SheetTrait* form);
+	static void MinimizeForm(::uni::Witch::Form* pfrm);
+	static void RestoreForm(::uni::Witch::Form* pfrm);
 	#endif
 };
 

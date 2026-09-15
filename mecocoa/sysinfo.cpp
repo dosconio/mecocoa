@@ -9,6 +9,7 @@
 #include <c/driver/keyboard.h>
 #include <c/driver/RealtimeClock.h>
 #include "../include/console.hpp"
+#include "../depends/desktop.hpp"
 
 String dump_availmem();
 rostr text_cpu_factory();
@@ -766,7 +767,144 @@ void dump_lock(OstreamTrait& com1) {
 
 
 
-//// ---- sysinfo ---- ////
+#if _GUI_ENABLE
+static const char* find_video_driver_name_recursive(const DeviceNode* root, void* driver_data) {
+	if (!root) return nullptr;
+	for (auto crt = root; crt; crt = cast<DeviceNode*>(crt->link.next)) {
+		if (crt->fields.binding.driver_data == driver_data && crt->fields.binding.driver_name) {
+			return crt->fields.binding.driver_name;
+		}
+		if (crt->link.subf) {
+			auto res = find_video_driver_name_recursive(cast<DeviceNode*>(crt->link.subf), driver_data);
+			if (res) return res;
+		}
+	}
+	return nullptr;
+}
+#endif
+
+void dump_screens_and_forms(OstreamTrait& com1) {
+	com1.OutFormat("=== Display & Screen Devices ===\n\r");
+	#if _GUI_ENABLE && ((_MCCA & 0xFF00) == 0x8600)
+	if (Consman::current_video_device) {
+		auto fb = Consman::current_video_device->GetFramebuffer();
+		const char* drv_name = find_video_driver_name_recursive(Devsman::Root(), Consman::current_video_device);
+		if (!drv_name) drv_name = "classic-video-driver";
+
+		const char* fmt_str = "Unknown";
+		if (fb.format == PixelFormat::ARGB8888) fmt_str = "ARGB8888";
+		else if (fb.format == PixelFormat::RGB565) fmt_str = "RGB565";
+		else if (fb.format == PixelFormat::RGB888) fmt_str = "RGB888";
+		else if (fb.format == PixelFormat::RGBA8888) fmt_str = "RGBA8888";
+
+		com1.OutFormat("Screen 0: [Active] %[u]x%[u] (%[u] bpp, %s) | Driver: %s\n\r",
+			(stduint)fb.screen_size.x, (stduint)fb.screen_size.y,
+			(stduint)fb.bpp, fmt_str, drv_name);
+		com1.OutFormat("          FB Physical Address: %p, Pitch: %[u] bytes, Size: %[u] bytes\n\r",
+			(void*)fb.physical_range.address, (stduint)fb.pitch, (stduint)fb.physical_range.length);
+	} else {
+		com1.OutFormat("No active video device.\n\r");
+	}
+
+	com1.OutFormat("\n\r=== Window / Form Topology ===\n\r");
+	com1.OutFormat("PID  FormID State        Z-Index  Position & Size       Title\n\r");
+
+	extern Spinlock scheduler_lock;
+	bool old_if = false;
+	if (!scheduler_lock.TryAcquire(old_if)) {
+		com1.OutFormat("(skip form walk: scheduler_lock busy on CPU %[i])\n\r", (stdsint)scheduler_lock.cpu_id);
+		return;
+	}
+
+	constexpr stduint MAX_PROCS = 128;
+	stduint pids[MAX_PROCS];
+	stduint proc_count = 0;
+	for (auto pnod = Taskman::chain.Root(); pnod && proc_count < MAX_PROCS; pnod = pnod->next) {
+		auto p = cast<ProcessBlock*>(pnod->offs);
+		pids[proc_count++] = p->pid;
+	}
+	scheduler_lock.Release(old_if);
+
+	stduint total_forms = 0;
+	for (stduint i = 0; i < proc_count; i++) {
+		ProcessBlock* pb = ProcessBlock::AcquireActiveByPID(pids[i]);
+		if (!pb) continue;
+		auto pforms = pb->pforms.Lock();
+		for (stduint j = 0; j < pforms->Count(); j++) {
+			SheetTrait* st = (*pforms)[j];
+			if (!st) continue;
+			total_forms++;
+			auto pfrm = static_cast<::uni::Witch::Form*>(st);
+
+			// Calculate Z-index in global_layman (from bottom to top)
+			stdsint z_index = -1;
+			bool is_top = false;
+			{
+				auto layman = global_layman.Lock();
+				stduint cur_z = 0;
+				for (auto nod = layman->subl; nod; nod = nod->left) {
+					if (nod->offs == pfrm) {
+						z_index = (stdsint)cur_z;
+					}
+					cur_z++;
+				}
+				for (auto nod = layman->subf ? layman->subf->next : nullptr; nod; nod = nod->next) {
+					if (!nod->offs || nod->offs == global_desktop || nod->offs == Cursor::global_cursor) continue;
+					auto nod_frm = static_cast<::uni::Witch::Form*>(nod->offs);
+					if (!nod_frm->is_dock) {
+						if (nod_frm == pfrm) {
+							is_top = true;
+						}
+						break;
+					}
+				}
+			}
+
+			const char* state_str = "[NORMAL]   ";
+			if (pfrm->is_dock) {
+				state_str = "[DOCK]     ";
+			} else if (pfrm->state == ::uni::Witch::FormState::Minimized) {
+				state_str = "[MINIMIZED]";
+			} else if (pfrm->state == ::uni::Witch::FormState::Maximized) {
+				state_str = "[MAXIMIZED]";
+			} else if (pfrm->state == ::uni::Witch::FormState::Hidden) {
+				state_str = "[HIDDEN]   ";
+			}
+
+			com1.OutFormat("%[u]    %[u]      %s  ", pb->pid, j, state_str);
+
+			if (z_index >= 0) {
+				if (is_top) {
+					com1.OutFormat("Z=%[i] (Top) ", z_index);
+				} else {
+					com1.OutFormat("Z=%[i]       ", z_index);
+				}
+			} else {
+				com1.OutFormat("-           ");
+			}
+
+			com1.OutFormat("(%[i], %[i]) %[u]x%[u] ",
+				(stdsint)pfrm->sheet_area.x, (stdsint)pfrm->sheet_area.y,
+				(stduint)pfrm->sheet_area.width, (stduint)pfrm->sheet_area.height);
+
+			if (pfrm->Title.reference() && pfrm->Title.reference()[0] != '\0') {
+				com1.OutFormat("%s\n\r", pfrm->Title.reference());
+			} else if (pfrm->is_dock) {
+				com1.OutFormat("(Dock)\n\r");
+			} else {
+				com1.OutFormat("(Titleless)\n\r");
+			}
+		}
+		ProcessBlock::Release(pb);
+	}
+
+	if (total_forms == 0) {
+		com1.OutFormat("(no active forms in system)\n\r");
+	}
+	#else
+	com1.OutFormat("GUI not enabled or non-x86 architecture.\n\r");
+	#endif
+}
 
 void sysinfo_classic(OstreamTrait& com1, byte func)
 {
@@ -803,6 +941,11 @@ void sysinfo_classic(OstreamTrait& com1, byte func)
 		com1.OutFormat("\n\r");
 		void dump_ready_queue(OstreamTrait & com1);
 		dump_ready_queue(com1);
+		break;
+
+	case 'w': case 'W':// window and display topology
+		com1.OutFormat("\n\r");
+		dump_screens_and_forms(com1);
 		break;
 
 	case '-':

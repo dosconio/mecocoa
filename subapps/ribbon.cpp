@@ -77,7 +77,28 @@ static void FillRect(Color* buffer, stduint pitch, stduint width, stduint height
 	}
 }
 
-// Removed DrawStartLogo as we now use Button with "Start" text
+static constexpr stduint kMaxTaskbarWindows = 16;
+static WindowInfo cached_win_list[kMaxTaskbarWindows] = {};
+static stduint cached_win_count = 0;
+static Button* taskbar_buttons[kMaxTaskbarWindows] = {};
+static bool taskbar_btn_was_pressed[kMaxTaskbarWindows] = {};
+
+static bool CheckWindowListChanged(const WindowInfo* new_list, stduint new_count, const WindowInfo* old_list, stduint old_count) {
+	if (new_count != old_count) return true;
+	for (stduint i = 0; i < new_count; i++) {
+		if (new_list[i].pid != old_list[i].pid ||
+			new_list[i].form_id != old_list[i].form_id ||
+			new_list[i].state != old_list[i].state ||
+			new_list[i].is_top != old_list[i].is_top) {
+			return true;
+		}
+		const char* s1 = new_list[i].title;
+		const char* s2 = old_list[i].title;
+		while (*s1 && *s1 == *s2) { s1++; s2++; }
+		if (*s1 != *s2) return true;
+	}
+	return false;
+}
 
 static void DrawRibbon(Color* buffer, stduint width, stduint height)
 {
@@ -98,6 +119,40 @@ static void DrawRibbon(Color* buffer, stduint width, stduint height)
 					start_btn.sheet_buffer[y * start_btn.sheet_area.width + x];
 			}
 		}
+	}
+
+	// Layout and render taskbar buttons from cached_win_list
+	stduint cur_x = kStartButtonWidth + 8;
+	stduint avail_w = width > cur_x + 8 ? width - cur_x - 8 : 0;
+	stduint item_w = 120;
+	if (cached_win_count > 0 && cached_win_count * item_w > avail_w) {
+		item_w = avail_w / cached_win_count;
+		if (item_w < 36) item_w = 36;
+	}
+
+	for (stduint i = 0; i < cached_win_count; i++) {
+		if (cur_x + item_w > width) break;
+		if (!taskbar_buttons[i]) {
+			taskbar_buttons[i] = new Button("");
+		}
+		taskbar_buttons[i]->text = cached_win_list[i].title;
+		// Top active window is visually pressed; background/minimized is unpressed
+		taskbar_buttons[i]->pressed = (cached_win_list[i].is_top != 0 && cached_win_list[i].state == 0);
+		taskbar_buttons[i]->sheet_area = Rectangle(Point(cur_x, button_y), Size2(item_w > 4 ? item_w - 4 : item_w, button_h));
+		if (taskbar_buttons[i]->sheet_buffer) {
+			free(taskbar_buttons[i]->sheet_buffer);
+			taskbar_buttons[i]->sheet_buffer = nullptr;
+		}
+		taskbar_buttons[i]->doshow(nullptr);
+		if (taskbar_buttons[i]->sheet_buffer) {
+			for0(y, taskbar_buttons[i]->sheet_area.height) {
+				for0(x, taskbar_buttons[i]->sheet_area.width) {
+					buffer[(taskbar_buttons[i]->sheet_area.y + y) * width + taskbar_buttons[i]->sheet_area.x + x] =
+						taskbar_buttons[i]->sheet_buffer[y * taskbar_buttons[i]->sheet_area.width + x];
+				}
+			}
+		}
+		cur_x += item_w;
 	}
 }
 
@@ -147,7 +202,7 @@ static stdsint CreateStartMenuForm(Size2 screen, Color** out_buffer, stduint men
 		Size2(menu_w, menu_h)
 	};
 
-	stdsint form_id = sys_create_form(~_IMM0, &rect, GraphicFormStyle_Titleless);
+	stdsint form_id = sys_create_form(~_IMM0, &rect, GraphicFormStyle_Titleless | GraphicFormStyle_Dock);
 	if (form_id < 0) return form_id;
 
 	Color* buffer = (Color*)malloc(menu_w * menu_h * sizeof(Color));
@@ -172,7 +227,7 @@ static stdsint CreateRibbonForm(Size2 screen, Color** out_buffer)
 		Size2(screen.x, form_height)
 	};
 
-	stdsint form_id = sys_create_form(~_IMM0, &rect, GraphicFormStyle_Titleless);
+	stdsint form_id = sys_create_form(~_IMM0, &rect, GraphicFormStyle_Titleless | GraphicFormStyle_Dock);
 	if (form_id < 0) return form_id;
 
 	stduint client_w = rect.width;
@@ -184,9 +239,21 @@ static stdsint CreateRibbonForm(Size2 screen, Color** out_buffer)
 	}
 
 	sys_set_form_buffer(form_id, buffer);
+
+	// Initial window list fetch
+	WindowInfo all_wins[kMaxTaskbarWindows];
+	stduint total_w = 0;
+	cached_win_count = 0;
+	if (sys_get_window_list(all_wins, kMaxTaskbarWindows, &total_w) == 0) {
+		for (stduint i = 0; i < total_w && cached_win_count < kMaxTaskbarWindows; i++) {
+			if (all_wins[i].title[0] == '\0') continue;
+			cached_win_list[cached_win_count++] = all_wins[i];
+		}
+	}
+
 	DrawRibbon(buffer, client_w, client_h);
 	sys_update_form(form_id, nullptr);
-	sys_set_timer(form_id, 10000);
+	sys_set_timer(form_id, 200);
 
 	*out_buffer = buffer;
 	return form_id;
@@ -208,16 +275,41 @@ int main(int argc, char** argv)
 	while (sys_fetch_msg(form_id, true, &smsg)) {
 		if (smsg.event == SheetEvent::onTimer) {
 			Size2 next_screen = GetScreenSize();
-			if (next_screen.x == screen.x && next_screen.y == screen.y) continue;
+			if (next_screen.x != screen.x || next_screen.y != screen.y) {
+				screen = next_screen;
+				sys_close_form(form_id);
+				if (buffer) free(buffer);
+				buffer = nullptr;
+				form_id = CreateRibbonForm(screen, &buffer);
+				if (form_id < 0) {
+					outsfmt("Ribbon: Failed to recreate form.\r\n");
+					return -1;
+				}
+				continue;
+			}
 
-			screen = next_screen;
-			sys_close_form(form_id);
-			if (buffer) free(buffer);
-			buffer = nullptr;
-			form_id = CreateRibbonForm(screen, &buffer);
-			if (form_id < 0) {
-				outsfmt("Ribbon: Failed to recreate form.\r\n");
-				return -1;
+			// Query latest window list from kernel
+			WindowInfo latest_wins[kMaxTaskbarWindows];
+			stduint total_w = 0;
+			stduint filtered_count = 0;
+			WindowInfo filtered_wins[kMaxTaskbarWindows];
+			if (sys_get_window_list(latest_wins, kMaxTaskbarWindows, &total_w) == 0) {
+				for (stduint i = 0; i < total_w && filtered_count < kMaxTaskbarWindows; i++) {
+					if (latest_wins[i].title[0] == '\0') continue;
+					filtered_wins[filtered_count++] = latest_wins[i];
+				}
+
+				// Only redraw if the window list, titles, focus, or states changed!
+				if (CheckWindowListChanged(filtered_wins, filtered_count, cached_win_list, cached_win_count)) {
+					cached_win_count = filtered_count;
+					for (stduint i = 0; i < filtered_count; i++) {
+						cached_win_list[i] = filtered_wins[i];
+					}
+					if (buffer) {
+						DrawRibbon(buffer, screen.x, kRibbonClientHeight);
+						sys_update_form(form_id, nullptr);
+					}
+				}
 			}
 		}
 		else if (smsg.event == SheetEvent::onClick || smsg.event == SheetEvent::onLeave || smsg.event == SheetEvent::onMoved) {
@@ -303,6 +395,41 @@ int main(int argc, char** argv)
 						DrawRibbon(buffer, screen.x, kRibbonClientHeight);
 						sys_update_form(form_id, nullptr);
 					}
+				}
+			}
+
+			// Handle Taskbar button clicks
+			for (stduint i = 0; i < cached_win_count; i++) {
+				if (!taskbar_buttons[i]) continue;
+				bool was_p = taskbar_btn_was_pressed[i];
+				if (taskbar_buttons[i]->sheet_area.ifContain(rel_p)) {
+					taskbar_buttons[i]->onrupt(smsg.event, rel_p - taskbar_buttons[i]->sheet_area.getVertex(), para1);
+				} else {
+					taskbar_buttons[i]->onrupt(SheetEvent::onLeave, rel_p, 1);
+				}
+				taskbar_btn_was_pressed[i] = taskbar_buttons[i]->pressed;
+
+				bool task_clicked = (was_p && !taskbar_buttons[i]->pressed && smsg.event == SheetEvent::onClick && taskbar_buttons[i]->sheet_area.ifContain(rel_p));
+				if (task_clicked) {
+					if (cached_win_list[i].is_top != 0 && cached_win_list[i].state == 0) {
+						// Already top active: minimize it
+						sys_minimize_form(cached_win_list[i].form_id, cached_win_list[i].pid);
+						cached_win_list[i].state = 1;
+						cached_win_list[i].is_top = 0;
+					} else {
+						// Background or minimized: restore and bring to top
+						sys_restore_form(cached_win_list[i].form_id, cached_win_list[i].pid);
+						for (stduint k = 0; k < cached_win_count; k++) {
+							cached_win_list[k].is_top = 0;
+						}
+						cached_win_list[i].state = 0;
+						cached_win_list[i].is_top = 1;
+					}
+					if (buffer) {
+						DrawRibbon(buffer, screen.x, kRibbonClientHeight);
+						sys_update_form(form_id, nullptr);
+					}
+					break;
 				}
 			}
 		}

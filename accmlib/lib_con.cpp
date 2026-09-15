@@ -176,3 +176,36 @@ stdsint sys_set_form_prop(stduint form_id, stduint prop, void* value) {
 stdsint sys_set_form_title(stduint form_id, rostr title) {
 	return sys_set_form_prop(form_id, 1, (void*)title);
 }
+
+stdsint sys_minimize_form(stduint form_id, stduint pid) {
+	stduint buf[2] = { form_id, pid };
+	CommMsg msg;
+	msg.data.address = _IMM(buf);
+	msg.data.length = sizeof(buf);
+	msg.type = _IMM(GraphicMsg::FMIN);
+	syscomm(1, Task_ConsoleVideo, &msg);
+	syscomm(0, Task_ConsoleVideo, &msg);
+	return buf[0];
+}
+
+stdsint sys_restore_form(stduint form_id, stduint pid) {
+	stduint buf[2] = { form_id, pid };
+	CommMsg msg;
+	msg.data.address = _IMM(buf);
+	msg.data.length = sizeof(buf);
+	msg.type = _IMM(GraphicMsg::FRES);
+	syscomm(1, Task_ConsoleVideo, &msg);
+	syscomm(0, Task_ConsoleVideo, &msg);
+	return buf[0];
+}
+
+stdsint sys_get_window_list(WindowInfo* out_buf, stduint max_count, stduint* out_count) {
+	stduint buf[3] = { _IMM(out_buf), max_count, _IMM(out_count) };
+	CommMsg msg;
+	msg.data.address = _IMM(buf);
+	msg.data.length = sizeof(buf);
+	msg.type = _IMM(GraphicMsg::FENUM);
+	syscomm(1, Task_ConsoleVideo, &msg);
+	syscomm(0, Task_ConsoleVideo, &msg);
+	return buf[0];
+}

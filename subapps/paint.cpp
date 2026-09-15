@@ -47,6 +47,9 @@ int main(int argc, char** argv)
 					sys_close_form(form_id);
 					return 0;
 				}
+				else if (smsg.args[3] == 3) {
+					sys_minimize_form(form_id);
+				}
 			}
 			break;
 		}

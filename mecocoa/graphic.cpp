@@ -617,6 +617,8 @@ Rectangle Consman::DetachForm(::uni::Witch::Form* pfrm, SheetTrait* exact_sheet)
 	return area;
 }
 
+static void FocusTopFormAfterCloseIfNeeded();
+
 // SwitchForm - runs only in Graphic thread, no lock needed.
 void Consman::SwitchForm(SheetTrait* pfrm) {
 	if (Consman::last_click_sheet && Consman::last_click_sheet != pfrm) {
@@ -647,6 +649,48 @@ void Consman::SwitchForm(SheetTrait* pfrm) {
 	SafeLaymanUpdate(pfrm, Rectangle(Point(0, 0), pfrm->sheet_area.getSize()));
 }
 
+// MinimizeForm - runs only in Graphic thread, no lock needed.
+void Consman::MinimizeForm(::uni::Witch::Form* pfrm) {
+	if (!pfrm || pfrm->state == ::uni::Witch::FormState::Minimized) return;
+
+	Rectangle area = pfrm->sheet_area;
+
+	// Clear runtime input refs so input paths do not reference minimized form
+	if (Consman::last_click_sheet &&
+		(IsSheetInSubtreeOrSelf(Consman::last_click_sheet, pfrm) ||
+		 Consman::last_click_sheet == pfrm)) {
+		Consman::last_click_sheet = nullptr;
+	}
+	if (Cursor::moving_sheet &&
+		(IsSheetInSubtreeOrSelf(Cursor::moving_sheet, pfrm) ||
+		 Cursor::moving_sheet == pfrm)) {
+		Cursor::moving_sheet = nullptr;
+	}
+
+	LayerManager* parent = pfrm->refSheetParent();
+	if (parent) parent->Remove(pfrm);
+	global_layman.Lock()->Remove(pfrm);
+	pfrm->refSheetParent() = nullptr;
+	pfrm->state = ::uni::Witch::FormState::Minimized;
+
+	// Refresh background where form was displayed
+	SafeLaymanUpdate(nullptr, area);
+
+	// Switch focus to remaining top form
+	FocusTopFormAfterCloseIfNeeded();
+}
+
+// RestoreForm - runs only in Graphic thread, no lock needed.
+void Consman::RestoreForm(::uni::Witch::Form* pfrm) {
+	if (!pfrm) return;
+	if (pfrm->state == ::uni::Witch::FormState::Minimized) {
+		pfrm->refSheetParent() = global_layman.unsafe_ptr();
+		global_layman.Lock()->Append(pfrm);
+		pfrm->state = ::uni::Witch::FormState::Normal;
+	}
+	Consman::SwitchForm(pfrm);
+}
+
 // ---- ---- GUI message handlers (Graphic thread only) ---- ----
 
 struct FMT_ConsoleMsg_FNEW {
@@ -671,8 +715,11 @@ static stdsint GraphicMsg_FNEW(const FMT_ConsoleMsg_FNEW* data, ProcessBlock* pb
 
 	auto pfrm = new ::uni::Witch::Form();
 	if (!pfrm) return -1;
-	pfrm->Title = (data->flags & GraphicFormStyle_Titleless) ? nullptr : "New Form";
+	pfrm->Title = (data->flags & GraphicFormStyle_Dock) ? nullptr : ((data->flags & GraphicFormStyle_Titleless) ? "Untitled" : "New Form");
 	pfrm->title_visable = !(data->flags & GraphicFormStyle_Titleless);
+	pfrm->is_dock = (data->flags & GraphicFormStyle_Dock) != 0;
+	pfrm->state = ::uni::Witch::FormState::Normal;
+	pfrm->normal_rect = rect;
 
 	Color* sheet_buffer = new Color[rect.getArea()];
 	if (!sheet_buffer) {
@@ -710,8 +757,14 @@ static void FocusTopFormAfterCloseIfNeeded() {
 	SheetTrait* top_form = nullptr;
 	{
 		auto layman = global_layman.Lock();
-		if (!layman->subf || !layman->subf->next || !layman->subf->next->next) return;
-		top_form = static_cast<SheetTrait*>(layman->subf->next->offs);
+		for (auto nod = layman->subf ? layman->subf->next : nullptr; nod; nod = nod->next) {
+			if (!nod->offs || nod->offs == global_desktop || nod->offs == Cursor::global_cursor) continue;
+			auto nod_frm = static_cast<::uni::Witch::Form*>(nod->offs);
+			if (!nod_frm->is_dock) {
+				top_form = nod_frm;
+				break;
+			}
+		}
 	}
 	if (!top_form || Consman::last_click_sheet == top_form) return;
 	Consman::SwitchForm(top_form);
@@ -1502,6 +1555,146 @@ void serv_graf_loop() {
 			ret = GraphicMsg_FSET((FMT_ConsoleMsg_FSET*)to_args, safe_pb);
 			syssend_async(sig_src, (void*)&ret, sizeof(ret));
 			break;
+		case GraphicMsg::FMIN:
+		{
+			ProcessBlock* pb_target = nullptr;
+			bool need_release = false;
+			stduint target_pid = to_args[1];
+			if (target_pid != 0 && target_pid != safe_pb->pid) {
+				pb_target = ProcessBlock::AcquireActiveByPID(target_pid);
+				need_release = true;
+			}
+			else {
+				pb_target = safe_pb;
+			}
+			if (pb_target) {
+				SheetTrait* st = ProcFormsGet(pb_target, to_args[0]);
+				if (st) {
+					Consman::MinimizeForm(static_cast<::uni::Witch::Form*>(st));
+					ret = 0;
+				} else {
+					ret = (stduint)-1;
+				}
+				if (need_release) {
+					ProcessBlock::Release(pb_target);
+				}
+			}
+			else {
+				ret = (stduint)-1;
+			}
+			syssend_async(sig_src, (void*)&ret, sizeof(ret));
+			break;
+		}
+		case GraphicMsg::FRES:
+		{
+			ProcessBlock* pb_target = nullptr;
+			bool need_release = false;
+			stduint target_pid = to_args[1];
+			if (target_pid != 0 && target_pid != safe_pb->pid) {
+				pb_target = ProcessBlock::AcquireActiveByPID(target_pid);
+				need_release = true;
+			}
+			else {
+				pb_target = safe_pb;
+			}
+			if (pb_target) {
+				SheetTrait* st = ProcFormsGet(pb_target, to_args[0]);
+				if (st) {
+					Consman::RestoreForm(static_cast<::uni::Witch::Form*>(st));
+					ret = 0;
+				} else {
+					ret = (stduint)-1;
+				}
+				if (need_release) {
+					ProcessBlock::Release(pb_target);
+				}
+			}
+			else {
+				ret = (stduint)-1;
+			}
+			syssend_async(sig_src, (void*)&ret, sizeof(ret));
+			break;
+		}
+		case GraphicMsg::FENUM:
+		{
+			WindowInfo* usr_buf = (WindowInfo*)to_args[0];
+			stduint max_count = to_args[1];
+			stduint* usr_out_count = (stduint*)to_args[2];
+
+			constexpr stduint MAX_PROCS = 128;
+			stduint pids[MAX_PROCS];
+			stduint proc_count = 0;
+			{
+				extern Spinlock scheduler_lock;
+				SpinlockLocal guard(&scheduler_lock);
+				for (auto pnod = Taskman::chain.Root(); pnod && proc_count < MAX_PROCS; pnod = pnod->next) {
+					auto p = cast<ProcessBlock*>(pnod->offs);
+					pids[proc_count++] = p->pid;
+				}
+			}
+
+			stduint written_count = 0;
+			for (stduint i = 0; i < proc_count && written_count < max_count; i++) {
+				ProcessBlock* pb = ProcessBlock::AcquireActiveByPID(pids[i]);
+				if (!pb) continue;
+				auto pforms = pb->pforms.Lock();
+				for (stduint j = 0; j < pforms->Count() && written_count < max_count; j++) {
+					SheetTrait* st = (*pforms)[j];
+					if (!st) continue;
+					auto pfrm = static_cast<::uni::Witch::Form*>(st);
+
+					WindowInfo win_info = {};
+					win_info.pid = pb->pid;
+					win_info.form_id = j;
+					win_info.state = (uint8)pfrm->state;
+					{
+						auto layman = global_layman.Lock();
+						for (auto nod = layman->subf ? layman->subf->next : nullptr; nod; nod = nod->next) {
+							if (!nod->offs || nod->offs == global_desktop || nod->offs == Cursor::global_cursor) continue;
+							auto nod_frm = static_cast<::uni::Witch::Form*>(nod->offs);
+							if (!nod_frm->is_dock) {
+								if (nod_frm == pfrm) {
+									win_info.is_top = 1;
+								}
+								break;
+							}
+						}
+					}
+					win_info.x = pfrm->sheet_area.x;
+					win_info.y = pfrm->sheet_area.y;
+					win_info.width = pfrm->sheet_area.width;
+					win_info.height = pfrm->sheet_area.height;
+					if (!pfrm->is_dock) {
+						if (pfrm->Title.reference() && pfrm->Title.reference()[0] != '\0') {
+							StrCopyN(win_info.title, pfrm->Title.reference(), sizeof(win_info.title) - 1);
+							win_info.title[sizeof(win_info.title) - 1] = '\0';
+						} else {
+							StrCopyN(win_info.title, "Untitled", sizeof(win_info.title) - 1);
+							win_info.title[sizeof(win_info.title) - 1] = '\0';
+						}
+					} else {
+						win_info.title[0] = '\0';
+					}
+
+					MccaMemCopyP(
+						usr_buf + written_count, safe_pb, false,
+						&win_info, NULL, true,
+						sizeof(WindowInfo));
+					written_count++;
+				}
+				ProcessBlock::Release(pb);
+			}
+
+			if (usr_out_count) {
+				MccaMemCopyP(
+					usr_out_count, safe_pb, false,
+					&written_count, NULL, true,
+					sizeof(stduint));
+			}
+			ret = 0;
+			syssend_async(sig_src, (void*)&ret, sizeof(ret));
+			break;
+		}
 		case GraphicMsg::FCLEANPROC:
 		{
 			auto data = (FMT_ConsoleMsg_FCLEANPROC*)to_args;

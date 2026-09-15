@@ -56,6 +56,7 @@ SECTIONS
 		*/mcca-atx-x86-flap32/nvmedisk.o(.text .text.*)
 		*/mcca-atx-x86-flap32/scsidisk.o(.text .text.*)
 		*/mcca-atx-x86-flap32/video-vmware.o(.text .text.*)
+		*/mcca-atx-x86-flap32/syscall-pow.o(.text .text.*)
 	} > RAM2
 	.drv.rodata : {
 		*/mcca-atx-x86-flap32/e1000.o(.rodata .rodata.*)
@@ -65,6 +66,7 @@ SECTIONS
 		*/mcca-atx-x86-flap32/nvmedisk.o(.rodata .rodata.*)
 		*/mcca-atx-x86-flap32/scsidisk.o(.rodata .rodata.*)
 		*/mcca-atx-x86-flap32/video-vmware.o(.rodata .rodata.*)
+		*/mcca-atx-x86-flap32/syscall-pow.o(.rodata .rodata.*)
 	} > RAM2
 	.drv.data : {
 		*/mcca-atx-x86-flap32/e1000.o(.data .data.*)
@@ -81,6 +83,8 @@ SECTIONS
 		*/mcca-atx-x86-flap32/scsidisk.o(.got)
 		*/mcca-atx-x86-flap32/video-vmware.o(.data .data.*)
 		*/mcca-atx-x86-flap32/video-vmware.o(.got)
+		*/mcca-atx-x86-flap32/syscall-pow.o(.data .data.*)
+		*/mcca-atx-x86-flap32/syscall-pow.o(.got)
 	} > RAM2
 
 	/* MultiCore */
