@@ -188,6 +188,17 @@ stdsint sys_minimize_form(stduint form_id, stduint pid) {
 	return buf[0];
 }
 
+stdsint sys_maximize_form(stduint form_id, stduint pid) {
+	stduint buf[2] = { form_id, pid };
+	CommMsg msg;
+	msg.data.address = _IMM(buf);
+	msg.data.length = sizeof(buf);
+	msg.type = _IMM(GraphicMsg::FMAX);
+	syscomm(1, Task_ConsoleVideo, &msg);
+	syscomm(0, Task_ConsoleVideo, &msg);
+	return buf[0];
+}
+
 stdsint sys_restore_form(stduint form_id, stduint pid) {
 	stduint buf[2] = { form_id, pid };
 	CommMsg msg;

@@ -118,6 +118,9 @@ bool Consman::AdoptVideoDevice(VideoDevice* dev) {
 		if (global_vcon0) {
 			global_vcon0->Reconfigure(&layman->getVCI(), *layman, screen_rect);
 		}
+		if (global_desktop) {
+			global_desktop->Reconfigure(*layman, screen_rect);
+		}
 		for (auto crt = layman->subf; crt; crt = crt->next) {
 			auto* sheet = (SheetTrait*)crt->offs;
 			ClampSheetToWindow(sheet, layman->window);
@@ -629,21 +632,28 @@ void Consman::SwitchForm(SheetTrait* pfrm) {
 	}
 	Consman::last_click_sheet = pfrm;
 
+	if (!pfrm) return;
+
 	Nnode* target = &pfrm->refSheetNode();
 	{
 		auto layman = global_layman.Lock();
-		if (layman->subf && target != layman->subf) {
-			// Remove from the tail where Append put it
+		if (layman->subf && target != layman->subf && target != layman->subf->next) {
+			// Remove from current position
 			if (target->left) target->left->next = target->next;
-			if (layman->subl == target) layman->subl = target->left;
+			else layman->subf = target->next;
+
+			if (target->next) target->next->left = target->left;
+			else layman->subl = target->left;
+
 			// Insert after the top layer (cursor)
 			Nnode* top = layman->subf;
-			Nnode* sec = top->next;
+			Nnode* sec = top ? top->next : nullptr;
+
 			target->left = top;
 			target->next = sec;
-			top->next = target;
+			if (top) top->next = target;
 			if (sec) sec->left = target;
-			else layman->subl = target;// target is now the new tail
+			else layman->subl = target;
 		}
 	}
 	SafeLaymanUpdate(pfrm, Rectangle(Point(0, 0), pfrm->sheet_area.getSize()));
@@ -680,13 +690,94 @@ void Consman::MinimizeForm(::uni::Witch::Form* pfrm) {
 	FocusTopFormAfterCloseIfNeeded();
 }
 
+Rectangle Consman::GetWorkArea() {
+	Size2 scr_size;
+	stduint bottom_dock_h = 0;
+	stduint top_dock_h = 0;
+	{
+		auto layman = global_layman.Lock();
+		scr_size = layman->window.getSize();
+		for (auto nod = layman->subf ? layman->subf->next : nullptr; nod; nod = nod->next) {
+			if (!nod->offs || nod->offs == global_desktop || nod->offs == Cursor::global_cursor) continue;
+			auto f = static_cast<::uni::Witch::Form*>(nod->offs);
+			if (f->is_dock) {
+				if (f->sheet_area.y == 0 && f->sheet_area.height < scr_size.y) {
+					if (f->sheet_area.height > top_dock_h) top_dock_h = f->sheet_area.height;
+				} else if (f->sheet_area.y + f->sheet_area.height >= scr_size.y) {
+					if (f->sheet_area.height > bottom_dock_h) bottom_dock_h = f->sheet_area.height;
+				}
+			}
+		}
+	}
+	stduint work_y = top_dock_h;
+	stduint work_h = scr_size.y > (bottom_dock_h + top_dock_h) ? scr_size.y - (bottom_dock_h + top_dock_h) : scr_size.y;
+	return Rectangle(Point(0, work_y), Size2(scr_size.x, work_h));
+}
+
+// MaximizeForm - runs only in Graphic thread, no lock needed.
+void Consman::MaximizeForm(::uni::Witch::Form* pfrm) {
+	if (!pfrm || pfrm->is_dock) return;
+
+	if (pfrm->isMaximized()) {
+		// Restore to normal size
+		Rectangle old_rect = pfrm->sheet_area;
+		Rectangle new_rect = pfrm->normal_rect;
+		if (new_rect.width < 50 || new_rect.height < 30) {
+			new_rect = Rectangle(Point(100, 100), Size2(400, 300));
+		}
+		pfrm->SetMaximized(false);
+		Color* new_buf = new Color[new_rect.getArea()];
+		if (new_buf) {
+			if (pfrm->sheet_buffer) delete[] pfrm->sheet_buffer;
+			pfrm->Resize(new_rect, new_buf);
+		}
+
+		SheetMessage smsg;
+		smsg.event = SheetEvent::onResize;
+		smsg.args[0] = new_rect.width;
+		smsg.args[1] = new_rect.height;
+		smsg.args[2] = old_rect.width;
+		smsg.args[3] = old_rect.height;
+		pfrm->PushMessage(smsg);
+
+		SafeLaymanUpdate(nullptr, old_rect);
+		SafeLaymanUpdate(pfrm, new_rect);
+		Consman::SwitchForm(pfrm);
+	}
+	else {
+		// Maximize to fill screen work area (avoiding dock)
+		pfrm->normal_rect = pfrm->sheet_area;
+		Rectangle old_rect = pfrm->sheet_area;
+		Rectangle new_rect = Consman::GetWorkArea();
+
+		pfrm->SetMaximized(true);
+		Color* new_buf = new Color[new_rect.getArea()];
+		if (new_buf) {
+			if (pfrm->sheet_buffer) delete[] pfrm->sheet_buffer;
+			pfrm->Resize(new_rect, new_buf);
+		}
+
+		SheetMessage smsg;
+		smsg.event = SheetEvent::onResize;
+		smsg.args[0] = new_rect.width;
+		smsg.args[1] = new_rect.height;
+		smsg.args[2] = old_rect.width;
+		smsg.args[3] = old_rect.height;
+		pfrm->PushMessage(smsg);
+
+		SafeLaymanUpdate(nullptr, old_rect);
+		SafeLaymanUpdate(pfrm, new_rect);
+		Consman::SwitchForm(pfrm);
+	}
+}
+
 // RestoreForm - runs only in Graphic thread, no lock needed.
 void Consman::RestoreForm(::uni::Witch::Form* pfrm) {
 	if (!pfrm) return;
 	if (pfrm->state == ::uni::Witch::FormState::Minimized) {
 		pfrm->refSheetParent() = global_layman.unsafe_ptr();
 		global_layman.Lock()->Append(pfrm);
-		pfrm->state = ::uni::Witch::FormState::Normal;
+		pfrm->state = pfrm->isMaximized() ? ::uni::Witch::FormState::Maximized : ::uni::Witch::FormState::Normal;
 	}
 	Consman::SwitchForm(pfrm);
 }
@@ -718,6 +809,9 @@ static stdsint GraphicMsg_FNEW(const FMT_ConsoleMsg_FNEW* data, ProcessBlock* pb
 	pfrm->Title = (data->flags & GraphicFormStyle_Dock) ? nullptr : ((data->flags & GraphicFormStyle_Titleless) ? "Untitled" : "New Form");
 	pfrm->title_visable = !(data->flags & GraphicFormStyle_Titleless);
 	pfrm->is_dock = (data->flags & GraphicFormStyle_Dock) != 0;
+	if ((data->flags & GraphicFormStyle_MaximizeBox) || (!(data->flags & GraphicFormStyle_Titleless) && !(data->flags & GraphicFormStyle_Dock))) {
+		pfrm->EnableMaximizeBox(true);
+	}
 	pfrm->state = ::uni::Witch::FormState::Normal;
 	pfrm->normal_rect = rect;
 
@@ -1585,6 +1679,36 @@ void serv_graf_loop() {
 			syssend_async(sig_src, (void*)&ret, sizeof(ret));
 			break;
 		}
+		case GraphicMsg::FMAX:
+		{
+			ProcessBlock* pb_target = nullptr;
+			bool need_release = false;
+			stduint target_pid = to_args[1];
+			if (target_pid != 0 && target_pid != safe_pb->pid) {
+				pb_target = ProcessBlock::AcquireActiveByPID(target_pid);
+				need_release = true;
+			}
+			else {
+				pb_target = safe_pb;
+			}
+			if (pb_target) {
+				SheetTrait* st = ProcFormsGet(pb_target, to_args[0]);
+				if (st) {
+					Consman::MaximizeForm(static_cast<::uni::Witch::Form*>(st));
+					ret = 0;
+				} else {
+					ret = (stduint)-1;
+				}
+				if (need_release) {
+					ProcessBlock::Release(pb_target);
+				}
+			}
+			else {
+				ret = (stduint)-1;
+			}
+			syssend_async(sig_src, (void*)&ret, sizeof(ret));
+			break;
+		}
 		case GraphicMsg::FRES:
 		{
 			ProcessBlock* pb_target = nullptr;
@@ -1633,6 +1757,19 @@ void serv_graf_loop() {
 				}
 			}
 
+			::uni::Witch::Form* top_form = nullptr;
+			if (Consman::last_click_sheet && Consman::last_click_sheet != global_desktop) {
+				auto layman = global_layman.Lock();
+				for (auto nod = layman->subf ? layman->subf->next : nullptr; nod; nod = nod->next) {
+					if (!nod->offs || nod->offs == global_desktop || nod->offs == Cursor::global_cursor) continue;
+					auto nod_frm = static_cast<::uni::Witch::Form*>(nod->offs);
+					if (!nod_frm->is_dock) {
+						top_form = nod_frm;
+						break;
+					}
+				}
+			}
+
 			stduint written_count = 0;
 			for (stduint i = 0; i < proc_count && written_count < max_count; i++) {
 				ProcessBlock* pb = ProcessBlock::AcquireActiveByPID(pids[i]);
@@ -1647,19 +1784,7 @@ void serv_graf_loop() {
 					win_info.pid = pb->pid;
 					win_info.form_id = j;
 					win_info.state = (uint8)pfrm->state;
-					{
-						auto layman = global_layman.Lock();
-						for (auto nod = layman->subf ? layman->subf->next : nullptr; nod; nod = nod->next) {
-							if (!nod->offs || nod->offs == global_desktop || nod->offs == Cursor::global_cursor) continue;
-							auto nod_frm = static_cast<::uni::Witch::Form*>(nod->offs);
-							if (!nod_frm->is_dock) {
-								if (nod_frm == pfrm) {
-									win_info.is_top = 1;
-								}
-								break;
-							}
-						}
-					}
+					win_info.is_top = (pfrm == top_form) ? 1 : 0;
 					win_info.x = pfrm->sheet_area.x;
 					win_info.y = pfrm->sheet_area.y;
 					win_info.width = pfrm->sheet_area.width;

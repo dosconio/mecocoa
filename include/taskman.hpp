@@ -52,8 +52,9 @@ struct SysMessage {
 extern uni::Queue<SysMessage> message_queue;
 
 enum GraphicFormStyle {
-	GraphicFormStyle_Titleless = 0x00000001,
-	GraphicFormStyle_Dock      = 0x00000002,
+	GraphicFormStyle_Titleless   = 0x00000001,
+	GraphicFormStyle_Dock        = 0x00000002,
+	GraphicFormStyle_MaximizeBox = 0x00000004,
 };
 
 // >= 1

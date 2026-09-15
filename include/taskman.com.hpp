@@ -37,6 +37,7 @@ enum class GraphicMsg {
 	FSIZ,// get screen size
 	FSET,// set-prop
 	FMIN,// minimize-form
+	FMAX,// maximize/restore-form
 	FRES,// restore-form
 	FENUM,// enumerate-windows
 	FCLEANPROC,// clean exiting process GUI resources

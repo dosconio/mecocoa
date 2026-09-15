@@ -93,6 +93,7 @@ extern "C" {
 	stdsint sys_set_form_prop(stduint form_id, stduint prop, void* value);
 	stdsint sys_set_form_title(stduint form_id, rostr title);
 	stdsint sys_minimize_form(stduint form_id, stduint pid = 0);
+	stdsint sys_maximize_form(stduint form_id, stduint pid = 0);
 	stdsint sys_restore_form(stduint form_id, stduint pid = 0);
 	stdsint sys_get_window_list(WindowInfo* out_buf, stduint max_count, stduint* out_count);
 
@@ -121,6 +122,7 @@ public:
 	void DrawString(const uni::Point& vertex, const char* str, uni::Color col);
 	void setTitle(const char* title);
 	void minimize();
+	void maximize();
 	void restore();
 };
 #endif

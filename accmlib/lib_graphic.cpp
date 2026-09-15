@@ -85,9 +85,46 @@ stduint GraphicForm::getClientHeight() const {
 void GraphicForm::HandleEvent(const uni::SheetMessage& smsg) {
 	if (!playman_) return;
 
+	// Intercept Maximize button click (component ID 2, button released)
+	if (smsg.event == uni::SheetEvent::onClick && smsg.args[3] == 2 && !(smsg.args[2] & 0x10)) {
+		maximize();
+		return;
+	}
+
 	// Intercept Minimize button click (component ID 3, button released)
 	if (smsg.event == uni::SheetEvent::onClick && smsg.args[3] == 3 && !(smsg.args[2] & 0x10)) {
 		minimize();
+		return;
+	}
+
+	if (smsg.event == uni::SheetEvent::onResize) {
+		stduint new_w = smsg.args[0];
+		stduint new_h = smsg.args[1];
+		rect_.width = new_w;
+		rect_.height = new_h;
+
+		stduint client_w = new_w > 2 ? new_w - 2 : 0;
+		stduint client_h = new_h > 19 ? new_h - 19 : 0;
+
+		uni::Color* new_buf = (uni::Color*)realloc(fb_buffer_, client_w * client_h * sizeof(uni::Color));
+		if (new_buf) {
+			fb_buffer_ = new_buf;
+			sys_set_form_buffer(form_id_, fb_buffer_);
+
+			// Set default background
+			uni::Color bg_color = uni::Color::FromRGB888(0xFFFDF6E3);
+			for (stduint i = 0; i < client_w * client_h; i++) {
+				fb_buffer_[i] = bg_color;
+			}
+
+			if (pvci_) pvci_->setBuffer(fb_buffer_, uni::Size2(client_w, client_h));
+			if (playman_) {
+				playman_->sheet_area = uni::Rectangle(uni::Point(0, 0), uni::Size2(client_w, client_h));
+				playman_->window = playman_->sheet_area;
+			}
+		}
+		// Dispatch onResize to user-space child sheets as well
+		playman_->onrupt(smsg.event, uni::Point(0, 0), smsg.args[0], smsg.args[1], smsg.args[2], smsg.args[3]);
 		return;
 	}
 
@@ -137,6 +174,12 @@ void GraphicForm::setTitle(const char* title) {
 void GraphicForm::minimize() {
 	if (form_id_ >= 0) {
 		sys_minimize_form(form_id_);
+	}
+}
+
+void GraphicForm::maximize() {
+	if (form_id_ >= 0) {
+		sys_maximize_form(form_id_);
 	}
 }
 

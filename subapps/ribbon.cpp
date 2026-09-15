@@ -7,7 +7,22 @@
 #include <c/format/picture/PNG.h>
 #include <cpp/trait/StorageTrait.hpp>
 
-static void TryLoadWallpaper() {
+static void ScaleImage(const Color* src, stduint src_w, stduint src_h,
+	Color* dst, stduint dst_w, stduint dst_h)
+{
+	if (!src || !dst || !src_w || !src_h || !dst_w || !dst_h) return;
+	for0(dy, dst_h) {
+		stduint sy = (dy * src_h) / dst_h;
+		if (sy >= src_h) sy = src_h - 1;
+		for0(dx, dst_w) {
+			stduint sx = (dx * src_w) / dst_w;
+			if (sx >= src_w) sx = src_w - 1;
+			dst[dy * dst_w + dx] = src[sy * src_w + sx];
+		}
+	}
+}
+
+static void TryLoadWallpaper(Size2 target_screen) {
 	static const char* kWallpaperPaths[] = {
 		"/mnt/ide2.0/demo/wallpp.png",
 		"/mnt/ahci1.0/demo/wallpp.png"
@@ -45,7 +60,19 @@ static void TryLoadWallpaper() {
 
 		ImageResult res = pngCodec.Decode(storage, imgBuf, myMalloc, options);
 		if (res == ImageResult::OK && imgBuf.pixels && imgBuf.width > 0 && imgBuf.height > 0) {
-			sys_set_wallpaper(imgBuf.pixels, imgBuf.width, imgBuf.height);
+			if (target_screen.x > 0 && target_screen.y > 0 &&
+				(imgBuf.width != target_screen.x || imgBuf.height != target_screen.y)) {
+				Color* scaled = (Color*)malloc(target_screen.x * target_screen.y * sizeof(Color));
+				if (scaled) {
+					ScaleImage((Color*)imgBuf.pixels, imgBuf.width, imgBuf.height, scaled, target_screen.x, target_screen.y);
+					sys_set_wallpaper(scaled, target_screen.x, target_screen.y);
+					free(scaled);
+				} else {
+					sys_set_wallpaper(imgBuf.pixels, imgBuf.width, imgBuf.height);
+				}
+			} else {
+				sys_set_wallpaper(imgBuf.pixels, imgBuf.width, imgBuf.height);
+			}
 			ImageBufferFree(imgBuf);
 		}
 	}
@@ -185,7 +212,7 @@ static void DrawRibbon(Color* buffer, stduint width, stduint height)
 		}
 		taskbar_buttons[i]->text = cached_win_list[i].title;
 		// Top active window is visually pressed; background/minimized is unpressed
-		taskbar_buttons[i]->pressed = (cached_win_list[i].is_top != 0 && cached_win_list[i].state == 0);
+		taskbar_buttons[i]->pressed = (cached_win_list[i].is_top != 0 && cached_win_list[i].state != 1);
 		taskbar_buttons[i]->sheet_area = Rectangle(Point(cur_x, button_y), Size2(item_w > 4 ? item_w - 4 : item_w, button_h));
 		if (taskbar_buttons[i]->sheet_buffer) {
 			free(taskbar_buttons[i]->sheet_buffer);
@@ -311,7 +338,7 @@ int main(int argc, char** argv)
 {
 
 	Size2 screen = GetScreenSize();
-	TryLoadWallpaper();
+	TryLoadWallpaper(screen);
 	Color* buffer = nullptr;
 	stdsint form_id = CreateRibbonForm(screen, &buffer);
 	if (form_id < 0) {
@@ -325,6 +352,7 @@ int main(int argc, char** argv)
 			Size2 next_screen = GetScreenSize();
 			if (next_screen.x != screen.x || next_screen.y != screen.y) {
 				screen = next_screen;
+				TryLoadWallpaper(screen);
 				sys_close_form(form_id);
 				if (buffer) free(buffer);
 				buffer = nullptr;
@@ -470,7 +498,7 @@ int main(int argc, char** argv)
 
 				bool task_clicked = (was_p && !taskbar_buttons[i]->pressed && smsg.event == SheetEvent::onClick && taskbar_buttons[i]->sheet_area.ifContain(rel_p));
 				if (task_clicked) {
-					if (cached_win_list[i].is_top != 0 && cached_win_list[i].state == 0) {
+					if (cached_win_list[i].is_top != 0 && cached_win_list[i].state != 1) {
 						// Already top active: minimize it
 						sys_minimize_form(cached_win_list[i].form_id, cached_win_list[i].pid);
 						cached_win_list[i].state = 1;
@@ -481,7 +509,9 @@ int main(int argc, char** argv)
 						for (stduint k = 0; k < cached_win_count; k++) {
 							cached_win_list[k].is_top = 0;
 						}
-						cached_win_list[i].state = 0;
+						if (cached_win_list[i].state == 1) {
+							cached_win_list[i].state = 0;
+						}
 						cached_win_list[i].is_top = 1;
 					}
 					if (buffer) {

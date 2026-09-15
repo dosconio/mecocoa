@@ -826,76 +826,92 @@ void dump_screens_and_forms(OstreamTrait& com1) {
 	scheduler_lock.Release(old_if);
 
 	stduint total_forms = 0;
-	for (stduint i = 0; i < proc_count; i++) {
+	struct FormItem {
+		stduint pid;
+		stduint form_id;
+		::uni::Witch::Form* pfrm;
+	};
+	constexpr stduint MAX_DUMP_FORMS = 128;
+	FormItem items[MAX_DUMP_FORMS];
+	stduint item_count = 0;
+
+	for (stduint i = 0; i < proc_count && item_count < MAX_DUMP_FORMS; i++) {
 		ProcessBlock* pb = ProcessBlock::AcquireActiveByPID(pids[i]);
 		if (!pb) continue;
-		auto pforms = pb->pforms.Lock();
-		for (stduint j = 0; j < pforms->Count(); j++) {
-			SheetTrait* st = (*pforms)[j];
-			if (!st) continue;
-			total_forms++;
-			auto pfrm = static_cast<::uni::Witch::Form*>(st);
-
-			// Calculate Z-index in global_layman (from bottom to top)
-			stdsint z_index = -1;
-			bool is_top = false;
-			{
-				auto layman = global_layman.Lock();
-				stduint cur_z = 0;
-				for (auto nod = layman->subl; nod; nod = nod->left) {
-					if (nod->offs == pfrm) {
-						z_index = (stdsint)cur_z;
-					}
-					cur_z++;
-				}
-				for (auto nod = layman->subf ? layman->subf->next : nullptr; nod; nod = nod->next) {
-					if (!nod->offs || nod->offs == global_desktop || nod->offs == Cursor::global_cursor) continue;
-					auto nod_frm = static_cast<::uni::Witch::Form*>(nod->offs);
-					if (!nod_frm->is_dock) {
-						if (nod_frm == pfrm) {
-							is_top = true;
-						}
-						break;
-					}
-				}
-			}
-
-			const char* state_str = "[NORMAL]   ";
-			if (pfrm->is_dock) {
-				state_str = "[DOCK]     ";
-			} else if (pfrm->state == ::uni::Witch::FormState::Minimized) {
-				state_str = "[MINIMIZED]";
-			} else if (pfrm->state == ::uni::Witch::FormState::Maximized) {
-				state_str = "[MAXIMIZED]";
-			} else if (pfrm->state == ::uni::Witch::FormState::Hidden) {
-				state_str = "[HIDDEN]   ";
-			}
-
-			com1.OutFormat("%[u]    %[u]      %s  ", pb->pid, j, state_str);
-
-			if (z_index >= 0) {
-				if (is_top) {
-					com1.OutFormat("Z=%[i] (Top) ", z_index);
-				} else {
-					com1.OutFormat("Z=%[i]       ", z_index);
-				}
-			} else {
-				com1.OutFormat("-           ");
-			}
-
-			com1.OutFormat("(%[i], %[i]) %[u]x%[u] ",
-				(stdsint)pfrm->sheet_area.x, (stdsint)pfrm->sheet_area.y,
-				(stduint)pfrm->sheet_area.width, (stduint)pfrm->sheet_area.height);
-
-			if (pfrm->Title.reference() && pfrm->Title.reference()[0] != '\0') {
-				com1.OutFormat("%s\n\r", pfrm->Title.reference());
-			} else if (pfrm->is_dock) {
-				com1.OutFormat("(Dock)\n\r");
-			} else {
-				com1.OutFormat("(Titleless)\n\r");
+		{
+			auto pforms = pb->pforms.Lock();
+			for (stduint j = 0; j < pforms->Count() && item_count < MAX_DUMP_FORMS; j++) {
+				SheetTrait* st = (*pforms)[j];
+				if (!st) continue;
+				items[item_count++] = { pb->pid, j, static_cast<::uni::Witch::Form*>(st) };
 			}
 		}
 		ProcessBlock::Release(pb);
+	}
+
+	for (stduint k = 0; k < item_count; k++) {
+		auto& item = items[k];
+		auto pfrm = item.pfrm;
+		total_forms++;
+
+		// Calculate Z-index in global_layman (from bottom to top)
+		stdsint z_index = -1;
+		bool is_top = false;
+		{
+			auto layman = global_layman.Lock();
+			stduint cur_z = 0;
+			for (auto nod = layman->subl; nod; nod = nod->left) {
+				if (nod->offs == pfrm) {
+					z_index = (stdsint)cur_z;
+				}
+				cur_z++;
+			}
+			for (auto nod = layman->subf ? layman->subf->next : nullptr; nod; nod = nod->next) {
+				if (!nod->offs || nod->offs == global_desktop || nod->offs == Cursor::global_cursor) continue;
+				auto nod_frm = static_cast<::uni::Witch::Form*>(nod->offs);
+				if (!nod_frm->is_dock) {
+					if (nod_frm == pfrm) {
+						is_top = true;
+					}
+					break;
+				}
+			}
+		}
+
+		const char* state_str = "[NORMAL]   ";
+		if (pfrm->is_dock) {
+			state_str = "[DOCK]     ";
+		} else if (pfrm->state == ::uni::Witch::FormState::Minimized) {
+			state_str = "[MINIMIZED]";
+		} else if (pfrm->state == ::uni::Witch::FormState::Maximized) {
+			state_str = "[MAXIMIZED]";
+		} else if (pfrm->state == ::uni::Witch::FormState::Hidden) {
+			state_str = "[HIDDEN]   ";
+		}
+
+		com1.OutFormat("%[u]    %[u]      %s  ", item.pid, item.form_id, state_str);
+
+		if (z_index >= 0) {
+			if (is_top) {
+				com1.OutFormat("Z=%[i] (Top) ", z_index);
+			} else {
+				com1.OutFormat("Z=%[i]       ", z_index);
+			}
+		} else {
+			com1.OutFormat("-           ");
+		}
+
+		com1.OutFormat("(%[i], %[i]) %[u]x%[u] ",
+			(stdsint)pfrm->sheet_area.x, (stdsint)pfrm->sheet_area.y,
+			(stduint)pfrm->sheet_area.width, (stduint)pfrm->sheet_area.height);
+
+		if (pfrm->Title.reference() && pfrm->Title.reference()[0] != '\0') {
+			com1.OutFormat("%s\n\r", pfrm->Title.reference());
+		} else if (pfrm->is_dock) {
+			com1.OutFormat("(Dock)\n\r");
+		} else {
+			com1.OutFormat("(Titleless)\n\r");
+		}
 	}
 
 	if (total_forms == 0) {

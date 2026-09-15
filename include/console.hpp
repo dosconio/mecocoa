@@ -173,7 +173,9 @@ struct Consman {
 	static void RemoveVconsole(Dnode* nod);
 	static void SwitchForm(SheetTrait* form);
 	static void MinimizeForm(::uni::Witch::Form* pfrm);
+	static void MaximizeForm(::uni::Witch::Form* pfrm);
 	static void RestoreForm(::uni::Witch::Form* pfrm);
+	static Rectangle GetWorkArea();
 	#endif
 };
 

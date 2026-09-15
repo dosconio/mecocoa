@@ -74,6 +74,21 @@ int main(int argc, char** argv)
 
 		// Automatically translate coordinates and dispatch event to user-space LayerManager
 		form.HandleEvent(smsg);
+
+		// Handle onResize to adapt TextBox dimensions
+		if (smsg.event == SheetEvent::onResize) {
+			stduint cw = form.getClientWidth();
+			stduint ch = form.getClientHeight();
+			stduint tb_w = cw > 20 ? cw - 20 : cw;
+			stduint tb_h = ch > 20 ? ch - 20 : ch;
+			if (textbox.sheet_buffer) {
+				free(textbox.sheet_buffer);
+				textbox.sheet_buffer = nullptr;
+			}
+			textbox.sheet_area = Rectangle(Point(10, 10), Size2(tb_w, tb_h));
+			textbox.doshow(nullptr);
+			sys_update_form(form.getFormId(), nullptr);
+		}
 	}
 
 	return 0;
