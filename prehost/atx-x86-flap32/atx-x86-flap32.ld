@@ -31,6 +31,16 @@ SECTIONS
 		*/mcca-atx-x86-flap32/devsman-net.o(.data .data.*)
 		*/mcca-atx-x86-flap32/devsman-net.o(.got)
 	} > RAM2
+	.graf.text : {
+		*/mcca-atx-x86-flap32/graphic.o(.text .text.*)
+	} > RAM2
+	.graf.rodata : {
+		*/mcca-atx-x86-flap32/graphic.o(.rodata .rodata.*)
+	} > RAM2
+	.graf.data : {
+		*/mcca-atx-x86-flap32/graphic.o(.data .data.*)
+		*/mcca-atx-x86-flap32/graphic.o(.got)
+	} > RAM2
 	.ft.text : {
 		*/mcca-atx-x86-flap32/freetype.o(.text .text.*)
 	} > RAM2

@@ -30,6 +30,7 @@ namespace {
 	constexpr stduint NetPendingUdpTimeoutTicks = 5 * CONFIG_SysTickFreq;
 	constexpr stduint NetPendingUdpArpRetryTicks = CONFIG_SysTickFreq;
 	constexpr stduint NetPendingUdpArpRetryLimit = 3;
+	constexpr stduint NetTcpConnectErrorCapacity = 8;
 	constexpr stduint NetTcpListenCapacity = 4;
 	constexpr stduint NetTcpConnectionCapacity = 8;
 	constexpr stduint NetTcpAcceptQueueDepth = 4;
@@ -55,9 +56,18 @@ namespace {
 	constexpr uint8 NetTcpOptionMss = 2;
 	constexpr uint16 NetTcpWindowSize = 4096;
 	constexpr int NetErrConnectionRefused = 111;
+	constexpr int NetErrNetworkUnreachable = 114;
+	constexpr int NetErrTimedOut = 116;
+	constexpr int NetErrHostUnreachable = 118;
+	constexpr int NetErrAddressInUse = 112;
+	constexpr int NetErrNoBuffer = 105;
+	constexpr int NetErrDestinationRequired = 121;
 	constexpr uint16 NetUdpEchoPort = 7;
 	constexpr uint16 NetUdpEphemeralPortBegin = 49152;
 	constexpr uint16 NetUdpEphemeralPortEnd = 65535;
+	const uni::Network::IPv4Address NetStaticIPv4Address = {{ 10, 0, 2, 15 }};
+	const uni::Network::IPv4Address NetStaticIPv4Netmask = {{ 255, 255, 255, 0 }};
+	const uni::Network::IPv4Address NetStaticIPv4Gateway = {{ 10, 0, 2, 1 }};
 	uni::Network::LinkDevice* net_link_devices[NetLinkDeviceCapacity]{};
 	stduint net_link_device_count = 0;
 
@@ -80,9 +90,9 @@ namespace {
 	};
 
 	NetInterfaceConfig net_config{
-		.ipv4_address = {{ 10, 0, 2, 15 }},
-		.ipv4_netmask = {{ 255, 255, 255, 0 }},
-		.ipv4_gateway = {{ 10, 0, 2, 1 }},
+		.ipv4_address = NetStaticIPv4Address,
+		.ipv4_netmask = NetStaticIPv4Netmask,
+		.ipv4_gateway = NetStaticIPv4Gateway,
 		.dhcp_server = {},
 		.dns_server = {},
 		.dhcp_lease_time = 0,
@@ -140,6 +150,15 @@ namespace {
 	};
 
 	struct NetUdpError {
+		uni::Network::IPv4Address remote_ip;
+		uint16 local_port;
+		uint16 remote_port;
+		int error;
+		bool valid;
+	};
+
+	struct NetTcpConnectError {
+		uni::Network::IPv4Address local_ip;
 		uni::Network::IPv4Address remote_ip;
 		uint16 local_port;
 		uint16 remote_port;
@@ -205,6 +224,7 @@ namespace {
 		stduint fin_retry_count;
 		stduint time_wait_tick;
 		NetTcpClosePhase close_phase;
+		int connect_error;
 		uint16 local_mss;
 		uint16 peer_mss;
 		uint16 rx_duplicate;
@@ -214,6 +234,8 @@ namespace {
 		bool active_open;
 		bool local_fin_acknowledged;
 		bool reset_received;
+		bool arp_resolved;
+		bool syn_sent;
 		bool rx_ooo_valid;
 		bool valid;
 	};
@@ -251,6 +273,8 @@ namespace {
 	uint8* net_pending_udp_payloads = nullptr;
 	NetUdpError net_udp_errors[NetUdpErrorCapacity]{};
 	stduint net_udp_error_next = 0;
+	NetTcpConnectError net_tcp_connect_errors[NetTcpConnectErrorCapacity]{};
+	stduint net_tcp_connect_error_next = 0;
 	NetTcpListener net_tcp_listeners[NetTcpListenCapacity]{};
 	NetTcpConnection net_tcp_connections[NetTcpConnectionCapacity]{};
 	Spinlock net_socket_wait_lock;
@@ -261,6 +285,7 @@ namespace {
 		uni::Network::DHCPClientObject* client;
 		stduint last_tick;
 		stduint retry_count;
+		stduint bound_tick;
 	};
 
 	NetDhcpRuntime net_dhcp{};
@@ -387,6 +412,7 @@ namespace {
 	void ResetDhcpClient() {
 		net_dhcp.last_tick = 0;
 		net_dhcp.retry_count = 0;
+		net_dhcp.bound_tick = 0;
 		if (net_dhcp.client) net_dhcp.client->Reset();
 	}
 
@@ -398,7 +424,19 @@ namespace {
 		net_dhcp.client->Begin(0x4D434341u ^ uint32(tick));
 		net_dhcp.last_tick = 0;
 		net_dhcp.retry_count = 0;
+		net_dhcp.bound_tick = 0;
 		return true;
+	}
+
+	void ApplyStaticIPv4Config() {
+		net_config.ipv4_address = NetStaticIPv4Address;
+		net_config.ipv4_netmask = NetStaticIPv4Netmask;
+		net_config.ipv4_gateway = NetStaticIPv4Gateway;
+		net_config.dhcp_server = {};
+		net_config.dns_server = {};
+		net_config.dhcp_lease_time = 0;
+		net_config.source = NetIPv4ConfigSource::Static;
+		ResetDhcpClient();
 	}
 
 	uni::Network::LinkDevice* FindDefaultLinkDevice() {
@@ -474,6 +512,8 @@ namespace {
 			break;
 		}
 		output.dhcp_lease_time = net_config.dhcp_lease_time;
+		output.dhcp_bound_age = (net_dhcp.client && net_dhcp.client->isBound() && net_dhcp.bound_tick) ?
+			uint32((tick - net_dhcp.bound_tick) / CONFIG_SysTickFreq) : 0;
 		output.dhcp_xid = net_dhcp.client ? net_dhcp.client->getTransactionId() : 0;
 		output.dhcp_state = DhcpStateCode();
 		output.dhcp_retry_count = uint16(net_dhcp.retry_count);
@@ -1284,6 +1324,40 @@ namespace {
 		net_udp_error_next = (net_udp_error_next + 1) % NetUdpErrorCapacity;
 	}
 
+	void RecordTcpConnectError(const uni::Network::TCPConnectionContext& context, int error) {
+		if (!context.local.port || !context.remote.port || !error) return;
+		for0(i, NetTcpConnectErrorCapacity) {
+			auto& entry = net_tcp_connect_errors[i];
+			if (!entry.valid) continue;
+			if (entry.local_port == context.local.port && entry.remote_port == context.remote.port &&
+				entry.local_ip == context.local.address && entry.remote_ip == context.remote.address) {
+				entry.error = error;
+				return;
+			}
+		}
+		auto& entry = net_tcp_connect_errors[net_tcp_connect_error_next];
+		entry.local_ip = context.local.address;
+		entry.remote_ip = context.remote.address;
+		entry.local_port = context.local.port;
+		entry.remote_port = context.remote.port;
+		entry.error = error;
+		entry.valid = true;
+		net_tcp_connect_error_next = (net_tcp_connect_error_next + 1) % NetTcpConnectErrorCapacity;
+	}
+
+	int ConsumeTcpConnectError(const uni::Network::TCPConnectionContext& context) {
+		for0(i, NetTcpConnectErrorCapacity) {
+			auto& entry = net_tcp_connect_errors[i];
+			if (!entry.valid) continue;
+			if (entry.local_port != context.local.port || entry.remote_port != context.remote.port) continue;
+			if (!(entry.local_ip == context.local.address) || !(entry.remote_ip == context.remote.address)) continue;
+			const int error = entry.error;
+			entry = {};
+			return error;
+		}
+		return 0;
+	}
+
 	bool ReleaseUdpInbox(uint16 port, stduint inbox_id) {
 		for0(i, net_udp_inbox_count) {
 			if (net_udp_inboxes[i].port != port || net_udp_inboxes[i].id != inbox_id) continue;
@@ -1520,11 +1594,19 @@ namespace {
 		if (!control.local_next_sequence) return false;
 
 		NetIPv4Route route{};
-		if (!ResolveIPv4Route(remote.address, route)) return false;
+		if (!ResolveIPv4Route(remote.address, route)) {
+			connection.connect_error = NetErrNetworkUnreachable;
+			return false;
+		}
 		uni::Network::MacAddress target_mac{};
 		if (!LookupArpCache(route.next_hop, target_mac)) {
-			return SendArpRequest(*route.dev, net_buffers.tcp_tx, route.next_hop);
+			if (!SendArpRequest(*route.dev, net_buffers.tcp_tx, route.next_hop)) {
+				connection.connect_error = NetErrHostUnreachable;
+				return false;
+			}
+			return true;
 		}
+		connection.arp_resolved = true;
 
 		const stduint tcp_length = BuildTcpControlHeader(connection,
 			uni::Network::TCPFlagSYN, control.local_next_sequence - 1, 0);
@@ -1540,7 +1622,10 @@ namespace {
 			64,
 		};
 		const stdsint sent = SendIPv4PacketFrame(*route.dev, target_mac, packet);
-		if (sent > 0) net_stats.tx_tcp++;
+		if (sent > 0) {
+			connection.syn_sent = true;
+			net_stats.tx_tcp++;
+		}
 		return sent > 0;
 	}
 
@@ -1615,6 +1700,10 @@ namespace {
 
 	void MarkTcpReset(NetTcpConnection& connection) {
 		connection.reset_received = true;
+		if (connection.active_open) {
+			connection.connect_error = NetErrConnectionRefused;
+			if (connection.tcp) RecordTcpConnectError(connection.tcp->getControl().context, NetErrConnectionRefused);
+		}
 		connection.close_phase = NetTcpClosePhase::Reset;
 		for0(i, NetTcpTxPendingCapacity) connection.tx_pending[i] = {};
 		connection.tx_head = 0;
@@ -1777,6 +1866,10 @@ namespace {
 			if (IsTcpConnectReady(connection)) continue;
 			if (IsTcpConnectExpired(connection)) {
 				const auto context = connection.tcp->getControl().context;
+				if (!connection.connect_error) {
+					connection.connect_error =
+						(connection.syn_sent || connection.arp_resolved) ? NetErrTimedOut : NetErrHostUnreachable;
+				}
 				net_stats.tcp_connect_timeout++;
 				ReleaseTcpConnection(context);
 				continue;
@@ -2245,6 +2338,7 @@ namespace {
 					NetIPv4ConfigSource::DhcpBound);
 				net_dhcp.last_tick = 0;
 				net_dhcp.retry_count = 0;
+				net_dhcp.bound_tick = tick;
 				if (!(old_gateway == gateway)) {
 					InvalidateArpCache(old_gateway);
 					InvalidateArpCache(gateway);
@@ -2957,11 +3051,11 @@ stdsint Devsman::AcceptTcpConnection(uint16 port, uni::Network::TCPConnectionCon
 
 stdsint Devsman::ConnectTcp(const uni::Network::IPv4Address& target_ip,
 	uint16 destination_port, uint16& source_port, uni::Network::TCPConnectionContext& context) {
-	if (target_ip.isZero() || !destination_port) return -1;
-	if (!AllocateTcpPort(source_port)) return -1;
+	if (target_ip.isZero() || !destination_port) return -NetErrDestinationRequired;
+	if (!AllocateTcpPort(source_port)) return -NetErrAddressInUse;
 	auto* connection = AllocateTcpConnection(net_config.ipv4_address, source_port,
 		target_ip, destination_port);
-	if (!connection || !connection->tcp) return -1;
+	if (!connection || !connection->tcp) return -NetErrNoBuffer;
 	connection->active_open = true;
 	auto& control = connection->tcp->getControl();
 	const uint32 initial_sequence = net_tcp_next_sequence++;
@@ -2971,20 +3065,36 @@ stdsint Devsman::ConnectTcp(const uni::Network::IPv4Address& target_ip,
 	connection->connect_started_tick = tick;
 	context = control.context;
 	if (!SendTcpSyn(*connection)) {
+		const int error = connection->connect_error ? connection->connect_error : NetErrHostUnreachable;
 		ReleaseTcpConnection(context);
-		return -1;
+		return -error;
 	}
 	while (!IsTcpConnectReady(*connection)) {
-		ProcessTcpConnectTimers();
-		connection = FindTcpConnection(context.local.address, context.local.port,
-			context.remote.address, context.remote.port);
-		if (!connection) return -1;
 		if (connection->reset_received) {
+			const int error = connection->connect_error ? connection->connect_error : NetErrConnectionRefused;
 			ReleaseTcpConnection(context);
-			return -1;
+			return -error;
+		}
+		if (IsTcpConnectExpired(*connection)) {
+			const int error = connection->connect_error ? connection->connect_error :
+				((connection->syn_sent || connection->arp_resolved) ? NetErrTimedOut : NetErrHostUnreachable);
+			net_stats.tcp_connect_timeout++;
+			ReleaseTcpConnection(context);
+			return -error;
+		}
+		if (ShouldRetryTcpConnect(*connection) && !SendTcpSyn(*connection)) {
+			const int error = connection->connect_error ? connection->connect_error : NetErrHostUnreachable;
+			ReleaseTcpConnection(context);
+			return -error;
 		}
 		if (IsTcpConnectReady(*connection)) break;
 		syscall(syscall_t::REST, 1, 10);
+		connection = FindTcpConnection(context.local.address, context.local.port,
+			context.remote.address, context.remote.port);
+		if (!connection) {
+			const int error = ConsumeTcpConnectError(context);
+			return -(error ? error : NetErrConnectionRefused);
+		}
 	}
 	context = connection->tcp->getControl().context;
 	return 1;
@@ -3481,6 +3591,16 @@ bool Devsman::GetNetStats(void* stats, stduint length) {
 	if (!stats || length < sizeof(syscall_net_stats_t)) return false;
 	auto* output = reinterpret_cast<syscall_net_stats_t*>(stats);
 	*output = net_stats;
+	return true;
+}
+
+bool Devsman::RenewDhcp() {
+	if (!StartDhcpDiscovery()) return false;
+	return SendDhcpDiscover();
+}
+
+bool Devsman::ReleaseDhcp() {
+	ApplyStaticIPv4Config();
 	return true;
 }
 

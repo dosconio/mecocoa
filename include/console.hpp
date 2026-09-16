@@ -111,6 +111,7 @@ public:
 	virtual void Update(SheetTrait* who, const Rectangle& rect) override;
 	// Force the update immediately (Composition)
 	void UpdateForce(SheetTrait* who, const Rectangle& rect);
+	virtual void setCursorType(uni::CursorType type) override;
 };
 extern SpinlockBlock<LayerManager2> global_layman;
 #endif
@@ -129,12 +130,19 @@ class Cursor: public uni::SheetTrait
 public:
 	virtual void doshow(void* _) override;
 	virtual void onrupt(uni::SheetEvent event, Point rel_p, ...) override {}
+	void setType(uni::CursorType type);
 public:// single instance
 	static Cursor* global_cursor;
 	static SheetTrait* moving_sheet;
+	static SheetTrait* resizing_sheet;
+	static uni::Witch::FormHitTest resize_hit_mode;
+	static Point resize_start_cursor;
+	static Rectangle resize_start_rect;
+	static Rectangle ghost_rect;
 	static bool mouse_btnl_dn;
 	static bool mouse_btnm_dn;
 	static bool mouse_btnr_dn;
+	uni::CursorType cur_type = uni::CursorType::Normal;
 public:
 	Cursor(uni::VideoControlInterface* writer) : uni::SheetTrait(), pixel_writer_{ writer } {}
 	void setSheet(LayerManager& layman, const Point& vertex);

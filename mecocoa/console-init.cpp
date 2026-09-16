@@ -11,6 +11,14 @@
 #if (_MCCA & 0xFF00) == 0x8600
 Cursor* Cursor::global_cursor = nullptr;
 SheetTrait* Cursor::moving_sheet = nullptr;
+
+// Resize
+SheetTrait* Cursor::resizing_sheet = nullptr;
+uni::Witch::FormHitTest Cursor::resize_hit_mode = uni::Witch::FormHitTest::None;
+Point Cursor::resize_start_cursor = {};
+Rectangle Cursor::resize_start_rect = {};
+Rectangle Cursor::ghost_rect = {};
+
 bool Cursor::mouse_btnl_dn = false;
 bool Cursor::mouse_btnm_dn = false;
 bool Cursor::mouse_btnr_dn = false;

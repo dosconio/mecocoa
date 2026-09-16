@@ -65,6 +65,26 @@ static void PrintSocketOptions(int fd) {
 	}
 }
 
+static const char* SocketErrorName(int error) {
+	switch (error) {
+	case 0: return "none";
+	case 111: return "refused";
+	case 114: return "net-unreach";
+	case 116: return "timeout";
+	case 118: return "host-unreach";
+	case 121: return "dest-required";
+	default: return "error";
+	}
+}
+
+static void PrintSocketError(int fd, const char* label) {
+	int value = 0;
+	socklen_t length = sizeof(value);
+	if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &value, &length) == 0) {
+		printf("testtcp: %s=%d %s\n\r", label, value, SocketErrorName(value));
+	}
+}
+
 static uint16 ReadNet16(const uint8* data) {
 	return uint16((uint16(data[0]) << 8) | data[1]);
 }
@@ -472,6 +492,7 @@ int main(int argc, char** argv) {
 			target.sin_addr = target_address;
 			if (connect(fd, (const struct sockaddr*)&target, sizeof(target)) < 0) {
 				printf("testtcp: connect failed\n\r");
+				PrintSocketError(fd, "connect-error");
 				close(fd);
 				if (fill_payload) free(fill_payload);
 				if (http_payload) free(http_payload);

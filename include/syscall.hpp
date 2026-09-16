@@ -207,6 +207,8 @@ enum class syscall_net_route_func_t : stduint {
 	TCPConnectionCount,
 	TCPConnectionEntry,
 	NetStats,
+	DHCPRenew,
+	DHCPRelease,
 };
 
 constexpr uint16 syscall_net_route_flag_up = 0x0001u;
@@ -247,6 +249,7 @@ struct syscall_net_interface_ipv4_t {
 	uint8 dhcp_server[4] = {};
 	uint8 dns[4] = {};
 	uint32 dhcp_lease_time = 0;
+	uint32 dhcp_bound_age = 0;
 	uint32 dhcp_xid = 0;
 	uint16 dhcp_state = 0;
 	uint16 dhcp_retry_count = 0;

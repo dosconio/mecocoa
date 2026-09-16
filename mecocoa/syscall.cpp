@@ -658,6 +658,20 @@ DEFSYSC sysc_ROUT(stduint func, stduint p1, stduint p2) {
 		return -1;
 		#endif
 	}
+	case syscall_net_route_func_t::DHCPRenew: {
+		#if (_MCCA & 0xFF00) == 0x8600
+		return Devsman::RenewDhcp() ? 0 : -1;
+		#else
+		return -1;
+		#endif
+	}
+	case syscall_net_route_func_t::DHCPRelease: {
+		#if (_MCCA & 0xFF00) == 0x8600
+		return Devsman::ReleaseDhcp() ? 0 : -1;
+		#else
+		return -1;
+		#endif
+	}
 	default:
 		return -1;
 	}

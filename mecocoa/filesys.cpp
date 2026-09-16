@@ -17,6 +17,24 @@ using namespace uni;
 #ifndef ECONNREFUSED
 #define ECONNREFUSED 111
 #endif
+#ifndef EADDRINUSE
+#define EADDRINUSE 112
+#endif
+#ifndef ENETUNREACH
+#define ENETUNREACH 114
+#endif
+#ifndef ETIMEDOUT
+#define ETIMEDOUT 116
+#endif
+#ifndef EHOSTUNREACH
+#define EHOSTUNREACH 118
+#endif
+#ifndef EDESTADDRREQ
+#define EDESTADDRREQ 121
+#endif
+#ifndef ENOBUFS
+#define ENOBUFS 105
+#endif
 #ifndef EPIPE
 #define EPIPE 32
 #endif
@@ -1908,7 +1926,10 @@ int Filesys::ConnectSocket(vfs_file* file, const Network::SocketAddress& address
 		uint16 local_port = socket->is_bound ? socket->local_ipv4.port : 0;
 		Network::TCPConnectionContext context{};
 		const stdsint connected = Devsman::ConnectTcp(target.address, target.port, local_port, context);
-		if (connected <= 0) return -1;
+		if (connected <= 0) {
+			socket->last_error = connected < 0 ? int(-connected) : ETIMEDOUT;
+			return -1;
+		}
 		socket->local_ipv4.address = context.local.address;
 		socket->local_ipv4.port = context.local.port;
 		socket->remote_ipv4.address = context.remote.address;

@@ -79,6 +79,7 @@ cplfile=\
 	$(ulibpath)/c/driver/keyboard.c \
 	$(ulibpath)/c/data/font/font-8x5.c \
 	$(ulibpath)/c/data/font/font-16x8.c \
+	$(ulibpath)/c/driver/toki/rtclock.c \
 
 include Makefile.inc
 

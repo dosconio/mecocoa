@@ -52,19 +52,158 @@ char mouse_cursor_shape[kMouseCursorHeight][kMouseCursorWidth + 1] = {
 	"               ",
 };
 
+char mouse_cursor_resize_v[kMouseCursorHeight][kMouseCursorWidth + 1] = {
+	"@              ",
+	"       @       ",
+	"      @@@      ",
+	"     @.@.@     ",
+	"    @..@..@    ",
+	"   @...@...@   ",
+	"  @@@@@@@@@@@  ",
+	"     @.@.@     ",
+	"     @...@     ",
+	"     @...@     ",
+	"     @...@     ",
+	"     @...@     ",
+	"     @...@     ",
+	"     @...@     ",
+	"     @...@     ",
+	"     @.@.@     ",
+	"  @@@@@@@@@@@  ",
+	"   @...@...@   ",
+	"    @..@..@    ",
+	"     @.@.@     ",
+	"      @@@      ",
+	"       @       ",
+	"               ",
+	"               ",
+};
+
+char mouse_cursor_resize_h[kMouseCursorHeight][kMouseCursorWidth + 1] = {
+	"@              ",
+	"               ",
+	"               ",
+	"               ",
+	"               ",
+	"               ",
+	"     @   @     ",
+	"    @@   @@    ",
+	"   @.@   @.@   ",
+	"  @..@@@@@..@  ",
+	" @...........@ ",
+	"@@@@@@@@@@@@@@@",
+	" @...........@ ",
+	"  @..@@@@@..@  ",
+	"   @.@   @.@   ",
+	"    @@   @@    ",
+	"     @   @     ",
+	"               ",
+	"               ",
+	"               ",
+	"               ",
+	"               ",
+	"               ",
+	"               ",
+};
+
+char mouse_cursor_resize_nwse[kMouseCursorHeight][kMouseCursorWidth + 1] = {
+	"@              ",
+	" @@@@@@        ",
+	" @....@        ",
+	" @.@@@         ",
+	" @.@ @.@       ",
+	" @@@  @.@      ",
+	"       @.@     ",
+	"       @.@     ",
+	"        @.@    ",
+	"        @.@    ",
+	"       @.@ @@@ ",
+	"       @.@ @.@ ",
+	"        @@@ .@ ",
+	"        @....@ ",
+	"        @@@@@@ ",
+	"               ",
+	"               ",
+	"               ",
+	"               ",
+	"               ",
+	"               ",
+	"               ",
+	"               ",
+	"               ",
+};
+
+char mouse_cursor_resize_nesw[kMouseCursorHeight][kMouseCursorWidth + 1] = {
+	"@              ",
+	"        @@@@@@ ",
+	"        @....@ ",
+	"         @@@.@ ",
+	"       @.@ @.@ ",
+	"      @.@  @@@ ",
+	"     @.@       ",
+	"     @.@       ",
+	"    @.@        ",
+	"    @.@        ",
+	" @@@ @.@       ",
+	" @.@ @.@       ",
+	" @. @@@        ",
+	" @....@        ",
+	" @@@@@@        ",
+	"               ",
+	"               ",
+	"               ",
+	"               ",
+	"               ",
+	"               ",
+	"               ",
+	"               ",
+	"               ",
+};
+
 void Cursor::doshow(void* _) {
 	auto p = _ ? (Color*)_ : sheet_buffer;
 	if (!p) return;
+	const char (*shape)[kMouseCursorWidth + 1] = mouse_cursor_shape;
+	switch (cur_type) {
+	case uni::CursorType::ResizeV:
+		shape = mouse_cursor_resize_v;
+		break;
+	case uni::CursorType::ResizeH:
+		shape = mouse_cursor_resize_h;
+		break;
+	case uni::CursorType::ResizeNWSE:
+		shape = mouse_cursor_resize_nwse;
+		break;
+	case uni::CursorType::ResizeNESW:
+		shape = mouse_cursor_resize_nesw;
+		break;
+	default:
+		shape = mouse_cursor_shape;
+		break;
+	}
 	for0(dy, kMouseCursorHeight) for0(dx, kMouseCursorWidth) {
-		if (mouse_cursor_shape[dy][dx] == '@') {
+		if (shape[dy][dx] == '@') {
 			*p++ = 0xFF000000;// Point(position.x + dx, position.y + dy)
 		}
-		else if (mouse_cursor_shape[dy][dx] == '.') {
+		else if (shape[dy][dx] == '.') {
 			*p++ = 0x7FFFFFFF;
 		}
 		else {
 			*p++ = 0x00FFFFFF;
 		}
+	}
+}
+
+void Cursor::setType(uni::CursorType type) {
+	if (cur_type == type) return;
+	cur_type = type;
+	doshow(sheet_buffer);
+	SafeLaymanUpdate(this, Rectangle(Point(0, 0), sheet_area.getSize()));
+}
+
+void LayerManager2::setCursorType(uni::CursorType type) {
+	if (Cursor::global_cursor) {
+		Cursor::global_cursor->setType(type);
 	}
 }
 
@@ -265,6 +404,44 @@ void hand_mouse(MouseMessage mmsg) {
 
 	if ((change_btns & 0b1) && !mmsg.BtnLeft) {
 		Cursor::moving_sheet = nullptr;
+		// Shape of Cursor
+		if (Cursor::resizing_sheet) {
+			SheetTrait* r_sheet = Cursor::resizing_sheet;
+			Rectangle old_ghost = Cursor::ghost_rect;
+			Rectangle final_rect = Cursor::ghost_rect;
+			Cursor::resizing_sheet = nullptr;
+			Cursor::ghost_rect = Rectangle();
+
+			SafeLaymanUpdate(nullptr, old_ghost);
+
+			::uni::Witch::Form* pfrm = static_cast<::uni::Witch::Form*>(r_sheet);
+			if (pfrm) {
+				Rectangle old_rect = pfrm->sheet_area;
+				if (final_rect.width != old_rect.width || final_rect.height != old_rect.height ||
+					final_rect.x != old_rect.x || final_rect.y != old_rect.y) {
+					Color* new_buf = new Color[final_rect.getArea()];
+					if (new_buf) {
+						if (pfrm->sheet_buffer) delete[] pfrm->sheet_buffer;
+						pfrm->Resize(final_rect, new_buf);
+						pfrm->normal_rect = final_rect;
+					}
+					SheetMessage smsg;
+					smsg.event = SheetEvent::onResize;
+					smsg.args[0] = final_rect.width;
+					smsg.args[1] = final_rect.height;
+					smsg.args[2] = old_rect.width;
+					smsg.args[3] = old_rect.height;
+					pfrm->PushMessage(smsg);
+
+					SafeLaymanUpdate(nullptr, old_rect);
+					SafeLaymanUpdate(pfrm, final_rect);
+					Consman::SwitchForm(pfrm);
+				}
+			}
+			if (Cursor::global_cursor) {
+				Cursor::global_cursor->setType(uni::CursorType::Normal);
+			}
+		}
 	}
 
 	Cursor::mouse_btnl_dn = mmsg.BtnLeft;
@@ -331,9 +508,120 @@ void hand_mouse(MouseMessage mmsg) {
 				layman->Domove(Cursor::moving_sheet, { mmsg.X, mmsg.Y });
 			}
 		}
+		// Shape of Cursor
+		if (Cursor::resizing_sheet) {
+			Point current_cursor_p = Cursor::global_cursor->sheet_area.getVertex();
+			stdsint delta_x = current_cursor_p.x - Cursor::resize_start_cursor.x;
+			stdsint delta_y = current_cursor_p.y - Cursor::resize_start_cursor.y;
+			Rectangle old_ghost = Cursor::ghost_rect;
+			Rectangle new_ghost = Cursor::resize_start_rect;
+
+			const stdsint min_w = 120;
+			const stdsint min_h = 60;
+
+			switch (Cursor::resize_hit_mode) {
+			case uni::Witch::FormHitTest::BorderLeft:
+				if ((stdsint)new_ghost.width - delta_x >= min_w) {
+					new_ghost.x += delta_x;
+					new_ghost.width -= delta_x;
+				} else {
+					new_ghost.x += ((stdsint)new_ghost.width - min_w);
+					new_ghost.width = min_w;
+				}
+				break;
+			case uni::Witch::FormHitTest::BorderRight:
+				if ((stdsint)new_ghost.width + delta_x >= min_w) {
+					new_ghost.width += delta_x;
+				} else {
+					new_ghost.width = min_w;
+				}
+				break;
+			case uni::Witch::FormHitTest::BorderTop:
+				if ((stdsint)new_ghost.height - delta_y >= min_h) {
+					new_ghost.y += delta_y;
+					new_ghost.height -= delta_y;
+				} else {
+					new_ghost.y += ((stdsint)new_ghost.height - min_h);
+					new_ghost.height = min_h;
+				}
+				break;
+			case uni::Witch::FormHitTest::BorderBottom:
+				if ((stdsint)new_ghost.height + delta_y >= min_h) {
+					new_ghost.height += delta_y;
+				} else {
+					new_ghost.height = min_h;
+				}
+				break;
+			case uni::Witch::FormHitTest::CornerTopLeft:
+				if ((stdsint)new_ghost.width - delta_x >= min_w) {
+					new_ghost.x += delta_x;
+					new_ghost.width -= delta_x;
+				} else {
+					new_ghost.x += ((stdsint)new_ghost.width - min_w);
+					new_ghost.width = min_w;
+				}
+				if ((stdsint)new_ghost.height - delta_y >= min_h) {
+					new_ghost.y += delta_y;
+					new_ghost.height -= delta_y;
+				} else {
+					new_ghost.y += ((stdsint)new_ghost.height - min_h);
+					new_ghost.height = min_h;
+				}
+				break;
+			case uni::Witch::FormHitTest::CornerTopRight:
+				if ((stdsint)new_ghost.width + delta_x >= min_w) {
+					new_ghost.width += delta_x;
+				} else {
+					new_ghost.width = min_w;
+				}
+				if ((stdsint)new_ghost.height - delta_y >= min_h) {
+					new_ghost.y += delta_y;
+					new_ghost.height -= delta_y;
+				} else {
+					new_ghost.y += ((stdsint)new_ghost.height - min_h);
+					new_ghost.height = min_h;
+				}
+				break;
+			case uni::Witch::FormHitTest::CornerBottomLeft:
+				if ((stdsint)new_ghost.width - delta_x >= min_w) {
+					new_ghost.x += delta_x;
+					new_ghost.width -= delta_x;
+				} else {
+					new_ghost.x += ((stdsint)new_ghost.width - min_w);
+					new_ghost.width = min_w;
+				}
+				if ((stdsint)new_ghost.height + delta_y >= min_h) {
+					new_ghost.height += delta_y;
+				} else {
+					new_ghost.height = min_h;
+				}
+				break;
+			case uni::Witch::FormHitTest::CornerBottomRight:
+				if ((stdsint)new_ghost.width + delta_x >= min_w) {
+					new_ghost.width += delta_x;
+				} else {
+					new_ghost.width = min_w;
+				}
+				if ((stdsint)new_ghost.height + delta_y >= min_h) {
+					new_ghost.height += delta_y;
+				} else {
+					new_ghost.height = min_h;
+				}
+				break;
+			default:
+				break;
+			}
+
+			if (new_ghost.x != old_ghost.x || new_ghost.y != old_ghost.y ||
+				new_ghost.width != old_ghost.width || new_ghost.height != old_ghost.height) {
+				Cursor::ghost_rect = new_ghost;
+				SafeLaymanUpdate(nullptr, old_ghost);
+				SafeLaymanUpdate(nullptr, new_ghost);
+			}
+		}
 
 		static uint64 last_onmoved_tick = 0;
-		if ((change_btns & 0b111) || (tick - last_onmoved_tick >= 20)) {
+		if (!Cursor::resizing_sheet && ((change_btns & 0b111) || (tick - last_onmoved_tick >= 20))) {
 			Point current_cursor_p = Cursor::global_cursor->sheet_area.getVertex();
 			SheetTrait* hover_sheet = global_layman.Lock()->getTop(current_cursor_p, 1);
 			if (hover_sheet) {
@@ -361,7 +649,23 @@ void LayerManager::Dorupt(SheetTrait* who, SheetEvent event, Point rel_p, para_l
 	if (event == SheetEvent::onClick) {
 		byte state = para_next(args, stduint);
 		if ((state & 0b10001) == 0b10001) {
+			// Shape of Cursor
+			::uni::Witch::Form* pfrm = static_cast<::uni::Witch::Form*>(who);
+			if (pfrm) {
+				uni::Witch::FormHitTest hit = pfrm->HitTest(rel_p);
+				if (hit >= uni::Witch::FormHitTest::BorderTop && hit <= uni::Witch::FormHitTest::CornerBottomRight) {
+					Cursor::moving_sheet = nullptr;
+					Cursor::resizing_sheet = who;
+					Cursor::resize_hit_mode = hit;
+					Cursor::resize_start_cursor = Cursor::global_cursor ? Cursor::global_cursor->sheet_area.getVertex() : Point();
+					Cursor::resize_start_rect = who->sheet_area;
+					Cursor::ghost_rect = who->sheet_area;
+					SafeLaymanUpdate(nullptr, Cursor::ghost_rect);
+					return;
+				}
+			}
 			Cursor::moving_sheet = who;
+			Cursor::resizing_sheet = nullptr;
 		}
 	}
 }
@@ -395,6 +699,34 @@ void LayerManager2::UpdateForce(SheetTrait* who, const Rectangle& rect) {
 			}
 			else if (pvci) pvci->DrawPoint(point, EvaluateColor(point));
 			point.x++;
+		}
+	}
+	// Shape of Cursor
+	if (Cursor::resizing_sheet && Cursor::ghost_rect.getArea() > 0) {
+		Rectangle gr = Cursor::ghost_rect;
+		stdsint x1 = gr.x;
+		stdsint y1 = gr.y;
+		stdsint x2 = gr.x + (stdsint)gr.width - 1;
+		stdsint y2 = gr.y + (stdsint)gr.height - 1;
+
+		auto draw_dashed_pixel = [&](Point p) {
+			if (p.x >= abs_rect.x && p.x < abs_rect.x + (stdsint)rect.width &&
+				p.y >= abs_rect.y && p.y < abs_rect.y + (stdsint)rect.height &&
+				p.x >= 0 && p.x < (stdsint)window.width &&
+				p.y >= 0 && p.y < (stdsint)window.height) {
+				Color c = (((p.x + p.y) / 4) % 2 == 0) ? Color::Black : Color::White;
+				if (sheet_buffer) vcim.DrawPoint(p, c);
+				else if (pvci) pvci->DrawPoint(p, c);
+			}
+		};
+
+		for (stdsint x = x1; x <= x2; ++x) {
+			draw_dashed_pixel(Point(x, y1));
+			draw_dashed_pixel(Point(x, y2));
+		}
+		for (stdsint y = y1; y <= y2; ++y) {
+			draw_dashed_pixel(Point(x1, y));
+			draw_dashed_pixel(Point(x2, y));
 		}
 	}
 	// Propagate to parent if exists
