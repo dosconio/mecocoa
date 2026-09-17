@@ -261,6 +261,9 @@ struct syscall_net_interface_ipv4_t {
 	uint8 dns[4] = {};
 	uint32 dhcp_lease_time = 0;
 	uint32 dhcp_bound_age = 0;
+	uint32 dhcp_t1_time = 0;
+	uint32 dhcp_t2_time = 0;
+	uint32 dhcp_renew_in = 0;
 	uint32 dhcp_xid = 0;
 	uint16 dhcp_state = 0;
 	uint16 dhcp_retry_count = 0;

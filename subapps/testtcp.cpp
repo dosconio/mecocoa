@@ -12,7 +12,7 @@
 
 static void PrintUsage() {
 	printf("usage: testtcp [--reuse] [--nonblock] [--poll-accept] [--backlog n] [--accept-delay ms] [--count n] [--sockopt] --listen [port]\n\r");
-	printf("       testtcp [--repeat n] [--burst n] [--fill n] [--read-size n] [--write-size n] [--poll-after-recv] [--select-after-recv] [--shutdown-write] [--shutdown-read] [--send-after-shutdown] [--sockopt] [--sockerr-twice] [--http] host port [payload]\n\r");
+	printf("       testtcp [--repeat n] [--burst n] [--fill n] [--read-size n] [--write-size n] [--hold ms] [--poll-after-recv] [--select-after-recv] [--shutdown-write] [--shutdown-read] [--send-after-shutdown] [--sockopt] [--sockerr-twice] [--http] host port [payload]\n\r");
 	printf("  listen: testtcp --listen 80\n\r");
 	printf("  reuse:  testtcp --reuse --listen 80\n\r");
 	printf("  nbacc:  testtcp --nonblock --listen 80\n\r");
@@ -39,6 +39,7 @@ static void PrintUsage() {
 	printf("  path:   testtcp --http --http-path / example.com 80\n\r");
 	printf("  repeat: testtcp --repeat 3 10.0.2.1 7777 hello\n\r");
 	printf("  rounds: testtcp --listen 80 --rounds 3\n\r");
+	printf("  hold:   testtcp --hold 5000 10.0.2.1 7777 hello\n\r");
 	printf("  host:   nc -vz -w 1 10.0.2.15 80\n\r");
 	printf("  data:   printf hello | nc -w 1 10.0.2.15 80\n\r");
 }
@@ -63,12 +64,27 @@ static bool SetReuseAddress(int fd) {
 static void PrintSocketOptions(int fd) {
 	int value = 0;
 	socklen_t length = sizeof(value);
+	if (getsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &value, &length) == 0) {
+		printf("testtcp: so_reuseaddr=%d\n\r", value);
+	}
+	length = sizeof(value);
 	if (getsockopt(fd, SOL_SOCKET, SO_TYPE, &value, &length) == 0) {
 		printf("testtcp: so_type=%d\n\r", value);
 	}
 	length = sizeof(value);
 	if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &value, &length) == 0) {
 		printf("testtcp: so_error=%d %s\n\r", value, mcca_net_socket_error_name(value));
+	}
+	struct timeval timeout{};
+	length = sizeof(timeout);
+	if (getsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, &length) == 0) {
+		printf("testtcp: so_rcvtimeo=%ums\n\r",
+			(unsigned)(timeout.tv_sec * 1000 + (timeout.tv_usec + 999) / 1000));
+	}
+	length = sizeof(timeout);
+	if (getsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, &length) == 0) {
+		printf("testtcp: so_sndtimeo=%ums\n\r",
+			(unsigned)(timeout.tv_sec * 1000 + (timeout.tv_usec + 999) / 1000));
 	}
 }
 
@@ -145,6 +161,7 @@ int main(int argc, char** argv) {
 	int serve_rounds = 0;
 	int receive_timeout = -1;
 	int send_timeout = -1;
+	int hold_time = 0;
 	const char* http_path = "/";
 	const char* positional[3] = {};
 	stduint positional_count = 0;
@@ -306,6 +323,18 @@ int main(int argc, char** argv) {
 			show_sockopt = true;
 			continue;
 		}
+		if (StrCompare(argv[i], "--hold") == 0) {
+			if (++i >= argc) {
+				PrintUsage();
+				return 1;
+			}
+			hold_time = atoi(argv[i]);
+			if (hold_time < 0) {
+				PrintUsage();
+				return 1;
+			}
+			continue;
+		}
 		if (StrCompare(argv[i], "--sockerr-twice") == 0) {
 			sockerr_twice = true;
 			show_sockopt = true;
@@ -371,7 +400,7 @@ int main(int argc, char** argv) {
 				listen_backlog != 4 || accept_delay || repeat_count != 1 || burst_count != 1 ||
 				fill_length || poll_after_recv || select_after_recv || poll_connect || nonblock_connect ||
 				show_sockopt || sockerr_twice || shutdown_write || shutdown_read || send_after_shutdown ||
-				http_mode || serve_rounds || receive_timeout >= 0 || send_timeout >= 0) {
+				http_mode || serve_rounds || receive_timeout >= 0 || send_timeout >= 0 || hold_time) {
 				PrintUsage();
 				return 1;
 			}
@@ -388,6 +417,10 @@ int main(int argc, char** argv) {
 				if (mcca_net_dns_answer_count()) {
 					printf("testtcp: dns answers=%u\n\r", (unsigned)mcca_net_dns_answer_count());
 				}
+				if (mcca_net_dns_cname_count() || mcca_net_dns_non_a_count()) {
+					printf("testtcp: dns cname=%u non-a=%u\n\r",
+						(unsigned)mcca_net_dns_cname_count(), (unsigned)mcca_net_dns_non_a_count());
+				}
 			}
 			return 0;
 		}
@@ -398,11 +431,11 @@ int main(int argc, char** argv) {
 			return 1;
 		}
 		struct in_addr target_address{};
-		const int target_port = atoi(positional[1]);
+		uint16 target_port = 0;
 		char* fill_payload = nullptr;
 		char* http_payload = nullptr;
 		const char* payload = fill_length || http_mode ? nullptr : positional[2];
-		if (target_port <= 0 || target_port > 65535) {
+		if (!mcca_net_parse_port(positional[1], &target_port)) {
 			PrintUsage();
 			return 1;
 		}
@@ -467,7 +500,7 @@ int main(int argc, char** argv) {
 			}
 			struct sockaddr_in target{};
 			target.sin_family = AF_INET;
-			target.sin_port = htons((uint16)target_port);
+			target.sin_port = htons(target_port);
 			target.sin_addr = target_address;
 			if (connect(fd, (const struct sockaddr*)&target, sizeof(target)) < 0) {
 				if (!nonblock_connect) {
@@ -651,6 +684,10 @@ int main(int argc, char** argv) {
 					FD_ISSET(fd, &writefds) ? 1 : 0,
 					FD_ISSET(fd, &exceptfds) ? 1 : 0);
 			}
+			if (hold_time > 0) {
+				printf("testtcp: hold=%dms\n\r", hold_time);
+				poll(nullptr, 0, hold_time);
+			}
 			if (close(fd) < 0) {
 				printf("testtcp: close failed\n\r");
 				if (fill_payload) free(fill_payload);
@@ -669,8 +706,8 @@ int main(int argc, char** argv) {
 		PrintUsage();
 		return 1;
 	}
-	const int port = positional_count ? atoi(positional[0]) : 80;
-	if (port <= 0 || port > 65535) {
+	uint16 port = 80;
+	if (positional_count && !mcca_net_parse_port(positional[0], &port)) {
 		PrintUsage();
 		return 1;
 	}
@@ -841,6 +878,10 @@ int main(int argc, char** argv) {
 		else {
 			printf("testtcp: no data revents=%[16H]\n\r", (stduint)pfd.revents);
 			PrintSocketError(client, "recv-error");
+		}
+		if (hold_time > 0) {
+			printf("testtcp: hold=%dms\n\r", hold_time);
+			poll(nullptr, 0, hold_time);
 		}
 		close(client);
 		printf("testtcp: closed\n\r");

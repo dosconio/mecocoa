@@ -56,6 +56,12 @@ namespace uni {
 	static constexpr uint16 SocketHandleFlagWriteShutdown = 0x0008u;
 	static constexpr uint16 SocketHandleFlagTcpErrorConsumed = 0x0010u;
 
+	static void SetSocketError(SocketHandle* socket, int error) {
+		if (!socket) return;
+		socket->last_error = error;
+		if (error) socket->flags &= ~SocketHandleFlagTcpErrorConsumed;
+	}
+
 	static bool IsLocalBindIPv4AddressAllowed(const Network::IPv4Address& address) {
 		if (address.isZero()) return true;
 		#if (_MCCA & 0xFF00) != 0x8600
@@ -1806,6 +1812,7 @@ int Filesys::BindSocket(vfs_file* file, const Network::SocketAddress& address) {
 	if (socket->type == Network::SocketType::Stream) {
 		if (socket->protocol != Network::SocketProtocol::Default &&
 			socket->protocol != Network::SocketProtocol::TCP) return -1;
+		if (Devsman::IsTcpPortListening(ipv4.port)) return -1;
 		socket->local_ipv4.address = ipv4.address;
 		socket->local_ipv4.port = ipv4.port;
 		socket->flags &= ~SocketHandleFlagLocalAddressAuto;
@@ -1890,8 +1897,7 @@ static bool RefreshTcpConnect(SocketHandle* socket) {
 		return true;
 	}
 	if (status < 0) {
-		socket->last_error = int(-status);
-		socket->flags &= ~SocketHandleFlagTcpErrorConsumed;
+		SetSocketError(socket, int(-status));
 		socket->is_connecting = false;
 	}
 	return false;
@@ -1991,8 +1997,7 @@ int Filesys::ConnectSocket(vfs_file* file, const Network::SocketAddress& address
 			Devsman::StartTcpConnect(target.address, target.port, local_port, context) :
 			Devsman::ConnectTcp(target.address, target.port, local_port, context);
 		if (connected <= 0) {
-			socket->last_error = connected < 0 ? int(-connected) : ETIMEDOUT;
-			socket->flags &= ~SocketHandleFlagTcpErrorConsumed;
+			SetSocketError(socket, connected < 0 ? int(-connected) : ETIMEDOUT);
 			return -1;
 		}
 		socket->local_ipv4.address = context.local.address;
@@ -2038,7 +2043,7 @@ int Filesys::SendSocket(vfs_file* file, const void* payload, stduint length, con
 		if (socket->is_connecting) RefreshTcpConnect(socket);
 		if (!socket->is_connected) return -1;
 		if (socket->flags & SocketHandleFlagWriteShutdown) {
-			socket->last_error = EPIPE;
+			SetSocketError(socket, EPIPE);
 			return -1;
 		}
 		if (socket->protocol != Network::SocketProtocol::TCP &&
@@ -2064,8 +2069,7 @@ int Filesys::SendSocket(vfs_file* file, const void* payload, stduint length, con
 		const stdsint sent = Devsman::SendTcp(context, payload, length);
 		if (sent < 0) {
 			if (Devsman::HasTcpError(context)) {
-				socket->last_error = ECONNRESET;
-				socket->flags &= ~SocketHandleFlagTcpErrorConsumed;
+				SetSocketError(socket, ECONNRESET);
 			}
 		}
 		return sent;
@@ -2087,7 +2091,7 @@ int Filesys::SendSocket(vfs_file* file, const void* payload, stduint length, con
 	}
 	if (!target.port || target.address.isZero()) return -1;
 	if (socket->flags & SocketHandleFlagWriteShutdown) {
-		socket->last_error = EPIPE;
+		SetSocketError(socket, EPIPE);
 		return -1;
 	}
 
@@ -2110,7 +2114,7 @@ int Filesys::SendSocket(vfs_file* file, const void* payload, stduint length, con
 		const int error = Devsman::ConsumeUdpError(socket->local_ipv4.port,
 			socket->remote_ipv4.address, socket->remote_ipv4.port);
 		if (error) {
-			socket->last_error = error;
+			SetSocketError(socket, error);
 			return -1;
 		}
 	}
@@ -2146,8 +2150,7 @@ int Filesys::RecvSocket(vfs_file* file, void* payload, stduint capacity,
 		if (file->f_mode & O_NONBLOCK) flags &= ~syscall_net_io_flag_wait;
 		stdsint received = Devsman::ReceiveTcp(context, payload, capacity);
 		if (received < 0 && Devsman::HasTcpError(context)) {
-			socket->last_error = ECONNRESET;
-			socket->flags &= ~SocketHandleFlagTcpErrorConsumed;
+			SetSocketError(socket, ECONNRESET);
 		}
 		if (received == 0 && (flags & syscall_net_io_flag_wait)) {
 			if (!socket->receive_timeout_ms) {
@@ -2165,8 +2168,7 @@ int Filesys::RecvSocket(vfs_file* file, void* payload, stduint capacity,
 			}
 			received = Devsman::ReceiveTcp(context, payload, capacity);
 			if (received < 0 && Devsman::HasTcpError(context)) {
-				socket->last_error = ECONNRESET;
-				socket->flags &= ~SocketHandleFlagTcpErrorConsumed;
+				SetSocketError(socket, ECONNRESET);
 			}
 		}
 		(void)address;
@@ -2192,7 +2194,7 @@ int Filesys::RecvSocket(vfs_file* file, void* payload, stduint capacity,
 		const int error = Devsman::ConsumeUdpError(socket->local_ipv4.port,
 			socket->remote_ipv4.address, socket->remote_ipv4.port);
 		if (error) {
-			socket->last_error = error;
+			SetSocketError(socket, error);
 			return -1;
 		}
 	}
@@ -2296,8 +2298,7 @@ int Filesys::Poll(vfs_file* file, stduint events, stduint* revents) {
 			const bool tcp_error = Devsman::HasTcpError(context);
 			if (socket->last_error || (tcp_error && !(socket->flags & SocketHandleFlagTcpErrorConsumed))) {
 				if (!socket->last_error) {
-					socket->last_error = ECONNRESET;
-					socket->flags &= ~SocketHandleFlagTcpErrorConsumed;
+					SetSocketError(socket, ECONNRESET);
 				}
 				*revents |= syscall_poll_error | syscall_poll_hangup;
 				return 0;
@@ -2338,7 +2339,7 @@ int Filesys::Poll(vfs_file* file, stduint events, stduint* revents) {
 		const int error = Devsman::ConsumeUdpError(socket->local_ipv4.port,
 			socket->remote_ipv4.address, socket->remote_ipv4.port);
 		if (error) {
-			socket->last_error = error;
+			SetSocketError(socket, error);
 			*revents |= syscall_poll_error;
 			return 0;
 		}

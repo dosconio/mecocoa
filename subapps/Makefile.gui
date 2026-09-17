@@ -22,6 +22,7 @@ apps += \
 	$(BIN_DIR)/cube \
 	$(BIN_DIR)/gblock \
 	$(BIN_DIR)/playmzk \
+	$(BIN_DIR)/playvdo \
 	$(BIN_DIR)/notepad \
 	$(BIN_DIR)/viewpic \
 	\
@@ -97,6 +98,10 @@ $(BIN_DIR)/gblock: subapps/game_breakout.cpp $(MCCA_CRT0) $(MCCA_LIBC)
 $(BIN_DIR)/playmzk: subapps/playmzk.cpp $(ulibpath)/cpp/fileformat/audio/WAV.cpp $(ulibpath)/cpp/fileformat/audio/MP3.cpp $(ulibpath)/cpp/fileformat/audio/FLAC.cpp $(ulibpath)/cpp/fileformat/audio/OGG.cpp $(ulibpath)/cpp/System/Audiosys/Resampler.cpp $(ulibpath)/cpp/System/Audiosys/HostMusic.cpp $(MCCA_CRT0) $(MCCA_LIBC)
 	@echo "MK playmzk"
 	$(MCCA_CXX) $(MCCA_CXXFLAGS) -o $@ subapps/playmzk.cpp $(ulibpath)/cpp/fileformat/audio/WAV.cpp $(ulibpath)/cpp/fileformat/audio/MP3.cpp $(ulibpath)/cpp/fileformat/audio/FLAC.cpp $(ulibpath)/cpp/fileformat/audio/OGG.cpp $(ulibpath)/cpp/System/Audiosys/Resampler.cpp $(ulibpath)/cpp/System/Audiosys/HostMusic.cpp $(MCCA_LDLIBS)
+
+$(BIN_DIR)/playvdo: subapps/playvdo.cpp $(ulibpath)/cpp/fileformat/video/AVI.cpp $(ulibpath)/cpp/fileformat/picture/JPEG.cpp $(ulibpath)/cpp/System/Videosys/HostVideo.cpp $(MCCA_CRT0) $(MCCA_LIBC)
+	@echo "MK playvdo"
+	$(MCCA_CXX) $(MCCA_CXXFLAGS) -o $@ subapps/playvdo.cpp $(ulibpath)/cpp/fileformat/video/AVI.cpp $(ulibpath)/cpp/fileformat/picture/JPEG.cpp $(ulibpath)/cpp/System/Videosys/HostVideo.cpp $(MCCA_LDLIBS)
 
 $(BIN_DIR)/notepad: subapps/notepad.cpp $(MCCA_CRT0) $(MCCA_LIBC)
 	@echo "MK notepad"

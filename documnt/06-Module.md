@@ -7,7 +7,7 @@ her-note: false
 
 [x] 流式图片加载 BMP/JPG/PNG/GIF
 [x] 流式音乐播放 WAV/MP3/FLAC/MIDI/OGG
-[ ] 流式视频播放
+[ ] 流式视频播放 AVI(MJPEG;PCM)
 
 
 ### 网络系统

@@ -287,6 +287,7 @@ namespace {
 		stduint last_tick;
 		stduint retry_count;
 		stduint bound_tick;
+		bool renew_started;
 	};
 
 	NetDhcpRuntime net_dhcp{};
@@ -414,6 +415,7 @@ namespace {
 		net_dhcp.last_tick = 0;
 		net_dhcp.retry_count = 0;
 		net_dhcp.bound_tick = 0;
+		net_dhcp.renew_started = false;
 		if (net_dhcp.client) net_dhcp.client->Reset();
 	}
 
@@ -426,6 +428,7 @@ namespace {
 		net_dhcp.last_tick = 0;
 		net_dhcp.retry_count = 0;
 		net_dhcp.bound_tick = 0;
+		net_dhcp.renew_started = false;
 		return true;
 	}
 
@@ -513,8 +516,12 @@ namespace {
 			break;
 		}
 		output.dhcp_lease_time = net_config.dhcp_lease_time;
-		output.dhcp_bound_age = (net_dhcp.client && net_dhcp.client->isBound() && net_dhcp.bound_tick) ?
+		const uint32 bound_age = (net_dhcp.client && net_dhcp.client->isBound() && net_dhcp.bound_tick) ?
 			uint32((tick - net_dhcp.bound_tick) / CONFIG_SysTickFreq) : 0;
+		output.dhcp_bound_age = bound_age;
+		output.dhcp_t1_time = net_config.dhcp_lease_time ? (net_config.dhcp_lease_time / 2) : 0;
+		output.dhcp_t2_time = net_config.dhcp_lease_time ? ((net_config.dhcp_lease_time * 7) / 8) : 0;
+		output.dhcp_renew_in = (output.dhcp_t1_time > bound_age) ? (output.dhcp_t1_time - bound_age) : 0;
 		output.dhcp_xid = net_dhcp.client ? net_dhcp.client->getTransactionId() : 0;
 		output.dhcp_state = DhcpStateCode();
 		output.dhcp_retry_count = uint16(net_dhcp.retry_count);
@@ -1971,6 +1978,20 @@ namespace {
 		}
 	}
 
+	bool HasDhcpLeaseTimerPending() {
+		if (!net_dhcp.client || !net_dhcp.client->isBound()) return false;
+		if (!net_dhcp.bound_tick || !net_config.dhcp_lease_time || net_dhcp.renew_started) return false;
+		const stduint t1_ticks = (stduint(net_config.dhcp_lease_time) * CONFIG_SysTickFreq) / 2;
+		return t1_ticks && tick - net_dhcp.bound_tick >= t1_ticks;
+	}
+
+	void ProcessDhcpLeaseTimer() {
+		if (!HasDhcpLeaseTimerPending()) return;
+		net_dhcp.renew_started = true;
+		(void)StartDhcpDiscovery();
+		(void)SendDhcpDiscover();
+	}
+
 	void FlushPendingTcpConnectsFor(const uni::Network::IPv4Address& target_ip) {
 		for0(i, NetTcpConnectionCapacity) {
 			auto& connection = net_tcp_connections[i];
@@ -2347,6 +2368,7 @@ namespace {
 				net_dhcp.last_tick = 0;
 				net_dhcp.retry_count = 0;
 				net_dhcp.bound_tick = tick;
+				net_dhcp.renew_started = false;
 				if (!(old_gateway == gateway)) {
 					InvalidateArpCache(old_gateway);
 					InvalidateArpCache(gateway);
@@ -2744,6 +2766,7 @@ namespace {
 		ProcessTcpConnectTimers();
 		ProcessTcpControlTimers();
 		ProcessDhcpRetryTimer();
+		ProcessDhcpLeaseTimer();
 		for0(i, net_link_device_count) {
 			auto* dev = net_link_devices[i];
 			if (!dev || dev->getState() != uni::Network::LinkState::Up) continue;
@@ -2825,10 +2848,12 @@ namespace {
 		stduint sig_type = 0;
 		stduint sig_src = 0;
 		auto* msgbuf = net_buffers.driver_frame;
-		if (!syscall(syscall_t::TMSG) && (HasTcpTimersPending() || HasDhcpRetryPending())) {
+		if (!syscall(syscall_t::TMSG) &&
+			(HasTcpTimersPending() || HasDhcpRetryPending() || HasDhcpLeaseTimerPending())) {
 			ProcessTcpConnectTimers();
 			ProcessTcpControlTimers();
 			ProcessDhcpRetryTimer();
+			ProcessDhcpLeaseTimer();
 			syscall(syscall_t::REST, 1, 10);
 			return;
 		}
@@ -2974,13 +2999,7 @@ bool Devsman::CloseUdpPort(uint16 port, stduint inbox_id) {
 
 bool Devsman::ListenTcpPort(uint16 port, stduint backlog) {
 	if (!port) return false;
-	auto* listener = FindTcpListener(port);
-	if (listener) {
-		ReleaseTcpConnectionsByLocalPort(port);
-		listener->backlog = backlog;
-		return EnsureTcpListenerObject(*listener, backlog);
-	}
-	ReleaseTcpConnectionsByLocalPort(port);
+	if (!IsTcpLocalPortAvailable(port)) return false;
 	for0(i, NetTcpListenCapacity) {
 		if (net_tcp_listeners[i].port) continue;
 		auto* tcp = net_tcp_listeners[i].tcp;

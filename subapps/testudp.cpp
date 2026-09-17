@@ -9,32 +9,6 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 
-static bool ParseIPv4(const char* text, in_addr_t* output) {
-	if (!text || !output) return false;
-	uint8 octets[4] = {};
-	const char* cursor = text;
-	for0(i, 4) {
-		if (*cursor < '0' || *cursor > '9') return false;
-		int value = 0;
-		while (*cursor >= '0' && *cursor <= '9') {
-			value = value * 10 + (*cursor - '0');
-			if (value > 255) return false;
-			cursor++;
-		}
-		octets[i] = (uint8)value;
-		if (i < 3) {
-			if (*cursor != '.') return false;
-			cursor++;
-		}
-	}
-	if (*cursor) return false;
-	*output = ((in_addr_t)octets[0] << 24) |
-		((in_addr_t)octets[1] << 16) |
-		((in_addr_t)octets[2] << 8) |
-		((in_addr_t)octets[3]);
-	return true;
-}
-
 static void PrintUsage() {
 	printf("usage: testudp [--dontwait] [--nonblock] [--poll] [--select] [--reuse] [--sockopt] [--bind-ip ipv4] [--listen] [ipv4] [port] [payload] [conn]\n\r");
 	printf("  default: testudp 10.0.2.1 7 mecocoa\n\r");
@@ -84,12 +58,27 @@ static bool SetReuseAddress(int fd) {
 static void PrintSocketOptions(int fd) {
 	int value = 0;
 	socklen_t length = sizeof(value);
+	if (getsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &value, &length) == 0) {
+		printf("testudp: so_reuseaddr=%d\n\r", value);
+	}
+	length = sizeof(value);
 	if (getsockopt(fd, SOL_SOCKET, SO_TYPE, &value, &length) == 0) {
 		printf("testudp: so_type=%d\n\r", value);
 	}
 	length = sizeof(value);
 	if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &value, &length) == 0) {
 		printf("testudp: so_error=%d %s\n\r", value, mcca_net_socket_error_name(value));
+	}
+	struct timeval timeout{};
+	length = sizeof(timeout);
+	if (getsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, &length) == 0) {
+		printf("testudp: so_rcvtimeo=%ums\n\r",
+			(unsigned)(timeout.tv_sec * 1000 + (timeout.tv_usec + 999) / 1000));
+	}
+	length = sizeof(timeout);
+	if (getsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, &length) == 0) {
+		printf("testudp: so_sndtimeo=%ums\n\r",
+			(unsigned)(timeout.tv_sec * 1000 + (timeout.tv_usec + 999) / 1000));
 	}
 }
 
@@ -114,7 +103,7 @@ int main(int argc, char** argv) {
 	bool use_select = false;
 	bool show_sockopt = false;
 	bool bind_ip_set = false;
-	in_addr_t bind_ip = 0;
+	uint32 bind_ip = 0;
 	for (int i = 1; i < argc; i++) {
 		if (StrCompare(argv[i], "conn") == 0) {
 			use_connect = true;
@@ -149,7 +138,7 @@ int main(int argc, char** argv) {
 			continue;
 		}
 		if (StrCompare(argv[i], "--bind-ip") == 0) {
-			if (++i >= argc || !ParseIPv4(argv[i], &bind_ip)) {
+			if (++i >= argc || !mcca_net_parse_ipv4_host(argv[i], &bind_ip)) {
 				PrintUsage();
 				return 1;
 			}
@@ -163,16 +152,20 @@ int main(int argc, char** argv) {
 		positional[positional_count++] = argv[i];
 	}
 	const char* target_text = positional_count >= 1 ? positional[0] : "10.0.2.1";
-	const int target_port = positional_count >= 2 ? atoi(positional[1]) : 7;
+	uint16 target_port = 7;
 	const char* payload = positional_count >= 3 ? positional[2] : "mecocoa";
-	const int listen_port = positional_count >= 1 ? atoi(positional[0]) : 7;
+	uint16 listen_port = 7;
 
-	in_addr_t target_ip = 0;
-	if (!listen_mode && (!ParseIPv4(target_text, &target_ip) || target_port <= 0 || target_port > 65535)) {
+	uint32 target_ip = 0;
+	uint16 parsed_target_port = 0;
+	if (!listen_mode && (!mcca_net_parse_ipv4_host(target_text, &target_ip) ||
+		!mcca_net_parse_port(positional_count >= 2 ? positional[1] : "7", &parsed_target_port))) {
 		PrintUsage();
 		return 1;
 	}
-	if (listen_mode && (listen_port <= 0 || listen_port > 65535 || positional_count > 1 || use_connect)) {
+	if (!listen_mode) target_port = parsed_target_port;
+	if (listen_mode && ((positional_count >= 1 && !mcca_net_parse_port(positional[0], &listen_port)) ||
+		positional_count > 1 || use_connect)) {
 		PrintUsage();
 		return 1;
 	}
