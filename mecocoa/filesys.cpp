@@ -54,6 +54,7 @@ namespace uni {
 	static constexpr uint16 SocketHandleFlagReuseAddress = 0x0002u;
 	static constexpr uint16 SocketHandleFlagReadShutdown = 0x0004u;
 	static constexpr uint16 SocketHandleFlagWriteShutdown = 0x0008u;
+	static constexpr uint16 SocketHandleFlagTcpErrorConsumed = 0x0010u;
 
 	static bool IsLocalBindIPv4AddressAllowed(const Network::IPv4Address& address) {
 		if (address.isZero()) return true;
@@ -1853,6 +1854,50 @@ static bool ThreadHasUnblockedSignal(ThreadBlock* th) {
 	return th && (_sigset_raw(&th->pending_signals) & ~_sigset_raw(&th->blocked_signals));
 }
 
+static stduint TimeoutTicksFromMs(stduint timeout_ms) {
+	return (timeout_ms * CONFIG_SysTickFreq + 999) / 1000;
+}
+
+static bool TimeoutExpired(stduint start_tick, stduint timeout_ms) {
+	return timeout_ms && tick - start_tick >= TimeoutTicksFromMs(timeout_ms);
+}
+
+static void SleepSocketPollStep(stduint start_tick, stduint timeout_ms) {
+	stduint sleep_ms = 10;
+	if (timeout_ms) {
+		const stduint timeout_ticks = TimeoutTicksFromMs(timeout_ms);
+		const stduint elapsed_ticks = tick - start_tick;
+		const stduint remaining_ticks = elapsed_ticks < timeout_ticks ? timeout_ticks - elapsed_ticks : 0;
+		const stduint remaining_ms = (remaining_ticks * 1000 + CONFIG_SysTickFreq - 1) / CONFIG_SysTickFreq;
+		if (remaining_ms < sleep_ms) sleep_ms = remaining_ms ? remaining_ms : 1;
+	}
+	syscall(syscall_t::REST, 1, sleep_ms);
+}
+
+static bool RefreshTcpConnect(SocketHandle* socket) {
+	if (!socket || !socket->is_connecting) return socket && socket->is_connected;
+	#if (_MCCA & 0xFF00) != 0x8600
+	return false;
+	#else
+	Network::TCPConnectionContext context{
+		{ socket->local_ipv4.address, socket->local_ipv4.port },
+		{ socket->remote_ipv4.address, socket->remote_ipv4.port },
+	};
+	const stdsint status = Devsman::CheckTcpConnect(context);
+	if (status > 0) {
+		socket->is_connecting = false;
+		socket->is_connected = true;
+		return true;
+	}
+	if (status < 0) {
+		socket->last_error = int(-status);
+		socket->flags &= ~SocketHandleFlagTcpErrorConsumed;
+		socket->is_connecting = false;
+	}
+	return false;
+	#endif
+}
+
 int Filesys::AcceptSocket(vfs_file* file, vfs_file** out_file,
 	Network::SocketAddress* address, stduint* address_length) {
 	if (!out_file) return -1;
@@ -1872,8 +1917,18 @@ int Filesys::AcceptSocket(vfs_file* file, vfs_file** out_file,
 	Network::TCPConnectionContext context{};
 	stdsint accepted = Devsman::AcceptTcpConnection(socket->local_ipv4.port, context);
 	if (accepted == 0 && !(file->f_mode & O_NONBLOCK)) {
-		if (!Devsman::WaitTcpAccept(socket->local_ipv4.port)) {
-			return ThreadHasUnblockedSignal(Taskman::CurrentTB()) ? -4 : -1;
+		if (!socket->receive_timeout_ms) {
+			if (!Devsman::WaitTcpAccept(socket->local_ipv4.port)) {
+				return ThreadHasUnblockedSignal(Taskman::CurrentTB()) ? -4 : -1;
+			}
+		}
+		else {
+			const stduint start_tick = tick;
+			while (!Devsman::HasTcpAccept(socket->local_ipv4.port)) {
+				if (ThreadHasUnblockedSignal(Taskman::CurrentTB())) return -4;
+				if (TimeoutExpired(start_tick, socket->receive_timeout_ms)) return -1;
+				SleepSocketPollStep(start_tick, socket->receive_timeout_ms);
+			}
 		}
 		accepted = Devsman::AcceptTcpConnection(socket->local_ipv4.port, context);
 	}
@@ -1894,6 +1949,8 @@ int Filesys::AcceptSocket(vfs_file* file, vfs_file** out_file,
 	accepted_socket->protocol = Network::SocketProtocol::TCP;
 	accepted_socket->is_bound = true;
 	accepted_socket->is_connected = true;
+	accepted_socket->receive_timeout_ms = socket->receive_timeout_ms;
+	accepted_socket->send_timeout_ms = socket->send_timeout_ms;
 
 	if (address && address_length && *address_length >= sizeof(Network::SocketAddressIPv4)) {
 		auto* ipv4 = reinterpret_cast<Network::SocketAddressIPv4*>(address);
@@ -1922,23 +1979,33 @@ int Filesys::ConnectSocket(vfs_file* file, const Network::SocketAddress& address
 	if (socket->type == Network::SocketType::Stream) {
 		if (socket->protocol != Network::SocketProtocol::Default &&
 			socket->protocol != Network::SocketProtocol::TCP) return -1;
+		if (socket->is_connecting) {
+			if (RefreshTcpConnect(socket)) return 0;
+			return -1;
+		}
 		if (socket->is_connected || socket->is_listening) return -1;
 		uint16 local_port = socket->is_bound ? socket->local_ipv4.port : 0;
 		Network::TCPConnectionContext context{};
-		const stdsint connected = Devsman::ConnectTcp(target.address, target.port, local_port, context);
+		const bool nonblock = (file->f_mode & O_NONBLOCK) != 0;
+		const stdsint connected = nonblock ?
+			Devsman::StartTcpConnect(target.address, target.port, local_port, context) :
+			Devsman::ConnectTcp(target.address, target.port, local_port, context);
 		if (connected <= 0) {
 			socket->last_error = connected < 0 ? int(-connected) : ETIMEDOUT;
+			socket->flags &= ~SocketHandleFlagTcpErrorConsumed;
 			return -1;
 		}
 		socket->local_ipv4.address = context.local.address;
 		socket->local_ipv4.port = context.local.port;
 		socket->remote_ipv4.address = context.remote.address;
 		socket->remote_ipv4.port = context.remote.port;
+		socket->last_error = 0;
 		if (!socket->is_bound) socket->flags |= SocketHandleFlagLocalAddressAuto;
 		socket->protocol = Network::SocketProtocol::TCP;
 		socket->is_bound = true;
-		socket->is_connected = true;
-		return 0;
+		socket->is_connected = !nonblock;
+		socket->is_connecting = nonblock;
+		return nonblock ? -1 : 0;
 	}
 	if (socket->type != Network::SocketType::Datagram) return -1;
 	if (socket->protocol != Network::SocketProtocol::Default &&
@@ -1968,6 +2035,7 @@ int Filesys::SendSocket(vfs_file* file, const void* payload, stduint length, con
 	if (socket->domain != Network::SocketDomain::IPv4) return -1;
 	if (socket->type == Network::SocketType::Stream) {
 		if (address) return -1;
+		if (socket->is_connecting) RefreshTcpConnect(socket);
 		if (!socket->is_connected) return -1;
 		if (socket->flags & SocketHandleFlagWriteShutdown) {
 			socket->last_error = EPIPE;
@@ -1984,8 +2052,22 @@ int Filesys::SendSocket(vfs_file* file, const void* payload, stduint length, con
 			{ socket->local_ipv4.address, socket->local_ipv4.port },
 			{ socket->remote_ipv4.address, socket->remote_ipv4.port },
 		};
+		if (!Devsman::HasTcpSendSpace(context)) {
+			if (file->f_mode & O_NONBLOCK) return -1;
+			const stduint start_tick = tick;
+			while (!Devsman::HasTcpSendSpace(context)) {
+				if (ThreadHasUnblockedSignal(Taskman::CurrentTB())) return -4;
+				if (socket->send_timeout_ms && TimeoutExpired(start_tick, socket->send_timeout_ms)) return 0;
+				SleepSocketPollStep(start_tick, socket->send_timeout_ms);
+			}
+		}
 		const stdsint sent = Devsman::SendTcp(context, payload, length);
-		if (sent < 0 && Devsman::HasTcpError(context)) socket->last_error = ECONNRESET;
+		if (sent < 0) {
+			if (Devsman::HasTcpError(context)) {
+				socket->last_error = ECONNRESET;
+				socket->flags &= ~SocketHandleFlagTcpErrorConsumed;
+			}
+		}
 		return sent;
 		#endif
 	}
@@ -2045,6 +2127,7 @@ int Filesys::RecvSocket(vfs_file* file, void* payload, stduint capacity,
 	if (!socket || !socket->is_bound) return -1;
 	if (socket->domain != Network::SocketDomain::IPv4) return -1;
 	if (socket->type == Network::SocketType::Stream) {
+		if (socket->is_connecting) RefreshTcpConnect(socket);
 		if (!socket->is_connected) return -1;
 		if (socket->flags & SocketHandleFlagReadShutdown) return 0;
 		if (socket->protocol != Network::SocketProtocol::TCP &&
@@ -2062,13 +2145,29 @@ int Filesys::RecvSocket(vfs_file* file, void* payload, stduint capacity,
 		};
 		if (file->f_mode & O_NONBLOCK) flags &= ~syscall_net_io_flag_wait;
 		stdsint received = Devsman::ReceiveTcp(context, payload, capacity);
-		if (received < 0 && Devsman::HasTcpError(context)) socket->last_error = ECONNRESET;
+		if (received < 0 && Devsman::HasTcpError(context)) {
+			socket->last_error = ECONNRESET;
+			socket->flags &= ~SocketHandleFlagTcpErrorConsumed;
+		}
 		if (received == 0 && (flags & syscall_net_io_flag_wait)) {
-			if (!Devsman::WaitTcpReceive(context)) {
-				return ThreadHasUnblockedSignal(Taskman::CurrentTB()) ? -4 : 0;
+			if (!socket->receive_timeout_ms) {
+				if (!Devsman::WaitTcpReceive(context)) {
+					return ThreadHasUnblockedSignal(Taskman::CurrentTB()) ? -4 : 0;
+				}
+			}
+			else {
+				const stduint start_tick = tick;
+				while (!Devsman::HasTcpReceive(context)) {
+					if (ThreadHasUnblockedSignal(Taskman::CurrentTB())) return -4;
+					if (TimeoutExpired(start_tick, socket->receive_timeout_ms)) return 0;
+					SleepSocketPollStep(start_tick, socket->receive_timeout_ms);
+				}
 			}
 			received = Devsman::ReceiveTcp(context, payload, capacity);
-			if (received < 0 && Devsman::HasTcpError(context)) socket->last_error = ECONNRESET;
+			if (received < 0 && Devsman::HasTcpError(context)) {
+				socket->last_error = ECONNRESET;
+				socket->flags &= ~SocketHandleFlagTcpErrorConsumed;
+			}
 		}
 		(void)address;
 		(void)address_length;
@@ -2108,8 +2207,18 @@ int Filesys::RecvSocket(vfs_file* file, void* payload, stduint capacity,
 		}
 		if (received != 0) break;
 		if (!(flags & syscall_net_io_flag_wait)) break;
-		if (!Devsman::WaitUdp(socket->local_ipv4.port, socket->udp_inbox_id)) {
-			return ThreadHasUnblockedSignal(Taskman::CurrentTB()) ? -4 : 0;
+		if (!socket->receive_timeout_ms) {
+			if (!Devsman::WaitUdp(socket->local_ipv4.port, socket->udp_inbox_id)) {
+				return ThreadHasUnblockedSignal(Taskman::CurrentTB()) ? -4 : 0;
+			}
+		}
+		else {
+			const stduint start_tick = tick;
+			while (!Devsman::HasUdp(socket->local_ipv4.port, socket->udp_inbox_id)) {
+				if (ThreadHasUnblockedSignal(Taskman::CurrentTB())) return -4;
+				if (TimeoutExpired(start_tick, socket->receive_timeout_ms)) return 0;
+				SleepSocketPollStep(start_tick, socket->receive_timeout_ms);
+			}
 		}
 	}
 	if (received <= 0) return received;
@@ -2166,35 +2275,48 @@ int Filesys::Poll(vfs_file* file, stduint events, stduint* revents) {
 			Devsman::HasTcpAccept(socket->local_ipv4.port)) {
 			*revents |= syscall_poll_in;
 		}
-		if ((events & syscall_poll_in) && socket->is_connected) {
+		if (socket->last_error && !socket->is_connected) {
+			*revents |= syscall_poll_error | syscall_poll_hangup;
+			return 0;
+		}
+		if (socket->is_connecting) {
+			if (RefreshTcpConnect(socket)) {
+				if (events & syscall_poll_out) *revents |= syscall_poll_out;
+			}
+			else if (socket->last_error) {
+				*revents |= syscall_poll_error | syscall_poll_hangup;
+			}
+			return 0;
+		}
+		if (socket->is_connected) {
 			Network::TCPConnectionContext context{
 				{ socket->local_ipv4.address, socket->local_ipv4.port },
 				{ socket->remote_ipv4.address, socket->remote_ipv4.port },
 			};
-			if (socket->last_error || Devsman::HasTcpError(context)) {
-				if (!socket->last_error) socket->last_error = ECONNRESET;
+			const bool tcp_error = Devsman::HasTcpError(context);
+			if (socket->last_error || (tcp_error && !(socket->flags & SocketHandleFlagTcpErrorConsumed))) {
+				if (!socket->last_error) {
+					socket->last_error = ECONNRESET;
+					socket->flags &= ~SocketHandleFlagTcpErrorConsumed;
+				}
 				*revents |= syscall_poll_error | syscall_poll_hangup;
+				return 0;
+			}
+			if (tcp_error) {
+				*revents |= syscall_poll_hangup;
 				return 0;
 			}
 			if (socket->flags & SocketHandleFlagReadShutdown) {
 				*revents |= syscall_poll_hangup;
 			}
 			else {
-				if (Devsman::HasTcpReceive(context)) *revents |= syscall_poll_in;
-				if (Devsman::IsTcpReceiveClosed(context)) *revents |= syscall_poll_hangup;
+				const bool receive_closed = Devsman::IsTcpReceiveClosed(context);
+				if ((events & syscall_poll_in) && (Devsman::HasTcpReceive(context) || receive_closed)) {
+					*revents |= syscall_poll_in;
+				}
+				if (receive_closed) *revents |= syscall_poll_hangup;
 			}
-		}
-		if ((events & syscall_poll_out) && socket->is_connected) {
-			Network::TCPConnectionContext context{
-				{ socket->local_ipv4.address, socket->local_ipv4.port },
-				{ socket->remote_ipv4.address, socket->remote_ipv4.port },
-			};
-			if (socket->last_error || Devsman::HasTcpError(context)) {
-				if (!socket->last_error) socket->last_error = ECONNRESET;
-				*revents |= syscall_poll_error | syscall_poll_hangup;
-				return 0;
-			}
-			if (!(socket->flags & SocketHandleFlagWriteShutdown) &&
+			if ((events & syscall_poll_out) && !(socket->flags & SocketHandleFlagWriteShutdown) &&
 				Devsman::HasTcpSendSpace(context)) *revents |= syscall_poll_out;
 		}
 		return 0;
@@ -2276,6 +2398,14 @@ int Filesys::SetSocketOption(vfs_file* file, stduint level, stduint option_name,
 		if (value) socket->flags |= SocketHandleFlagReuseAddress;
 		else socket->flags &= ~SocketHandleFlagReuseAddress;
 		return 0;
+	case syscall_net_socket_option_receive_timeout:
+		if (value < 0) return -1;
+		socket->receive_timeout_ms = stduint(value);
+		return 0;
+	case syscall_net_socket_option_send_timeout:
+		if (value < 0) return -1;
+		socket->send_timeout_ms = stduint(value);
+		return 0;
 	default:
 		return -1;
 	}
@@ -2292,9 +2422,17 @@ int Filesys::GetSocketOption(vfs_file* file, stduint level, stduint option_name,
 	case syscall_net_socket_option_type:
 		*value = int(socket->type);
 		return 0;
-	case syscall_net_socket_option_error:
+	case syscall_net_socket_option_receive_timeout:
+		*value = int(socket->receive_timeout_ms);
+		return 0;
+	case syscall_net_socket_option_send_timeout:
+		*value = int(socket->send_timeout_ms);
+		return 0;
+	case syscall_net_socket_option_error: {
+		if (socket->is_connecting) RefreshTcpConnect(socket);
 		*value = socket->last_error;
 		#if (_MCCA & 0xFF00) == 0x8600
+		bool has_tcp_error = false;
 		if (!*value &&
 			socket->domain == Network::SocketDomain::IPv4 &&
 			socket->type == Network::SocketType::Stream &&
@@ -2304,8 +2442,23 @@ int Filesys::GetSocketOption(vfs_file* file, stduint level, stduint option_name,
 				{ socket->local_ipv4.address, socket->local_ipv4.port },
 				{ socket->remote_ipv4.address, socket->remote_ipv4.port },
 			};
-			if (Devsman::HasTcpError(context)) *value = ECONNRESET;
+			has_tcp_error = Devsman::HasTcpError(context);
+			if (has_tcp_error && !(socket->flags & SocketHandleFlagTcpErrorConsumed)) {
+				*value = ECONNRESET;
+			}
 		}
+		else if (*value &&
+			socket->domain == Network::SocketDomain::IPv4 &&
+			socket->type == Network::SocketType::Stream &&
+			socket->protocol == Network::SocketProtocol::TCP &&
+			socket->is_connected) {
+			Network::TCPConnectionContext context{
+				{ socket->local_ipv4.address, socket->local_ipv4.port },
+				{ socket->remote_ipv4.address, socket->remote_ipv4.port },
+			};
+			has_tcp_error = Devsman::HasTcpError(context);
+		}
+		if (*value && has_tcp_error) socket->flags |= SocketHandleFlagTcpErrorConsumed;
 		if (!*value &&
 			socket->domain == Network::SocketDomain::IPv4 &&
 			socket->type == Network::SocketType::Datagram &&
@@ -2317,6 +2470,7 @@ int Filesys::GetSocketOption(vfs_file* file, stduint level, stduint option_name,
 		#endif
 		socket->last_error = 0;
 		return 0;
+	}
 	default:
 		return -1;
 	}

@@ -455,7 +455,16 @@ DEFSYSC sysc_SOPT(stduint fd, stduint usr_req, stduint func) {
 	case syscall_net_socket_option_func_t::Set: {
 		if (req.option_length < sizeof(int)) return -1;
 		int value = 0;
-		MccaMemCopyP(&value, nullptr, true, req.option_value, pb, false, sizeof(value));
+		if ((req.option_name == syscall_net_socket_option_receive_timeout ||
+			req.option_name == syscall_net_socket_option_send_timeout) &&
+			req.option_length >= sizeof(syscall_timeval_t)) {
+			syscall_timeval_t timeout{};
+			MccaMemCopyP(&timeout, nullptr, true, req.option_value, pb, false, sizeof(timeout));
+			value = int(timeout.tv_sec * 1000 + (timeout.tv_usec + 999) / 1000);
+		}
+		else {
+			MccaMemCopyP(&value, nullptr, true, req.option_value, pb, false, sizeof(value));
+		}
 		return pb->SetSocketOption((int)fd, req.level, req.option_name, value);
 	}
 	case syscall_net_socket_option_func_t::Get: {
@@ -463,8 +472,19 @@ DEFSYSC sysc_SOPT(stduint fd, stduint usr_req, stduint func) {
 		int value = 0;
 		const stdsint ret = pb->GetSocketOption((int)fd, req.level, req.option_name, &value);
 		if (ret < 0) return ret;
-		const stduint length = sizeof(value);
-		MccaMemCopyP(req.option_value, pb, false, &value, nullptr, true, length);
+		stduint length = sizeof(value);
+		if ((req.option_name == syscall_net_socket_option_receive_timeout ||
+			req.option_name == syscall_net_socket_option_send_timeout) &&
+			req.option_length >= sizeof(syscall_timeval_t)) {
+			syscall_timeval_t timeout{};
+			timeout.tv_sec = stduint(value / 1000);
+			timeout.tv_usec = stduint(value % 1000) * 1000;
+			length = sizeof(timeout);
+			MccaMemCopyP(req.option_value, pb, false, &timeout, nullptr, true, length);
+		}
+		else {
+			MccaMemCopyP(req.option_value, pb, false, &value, nullptr, true, length);
+		}
 		MccaMemCopyP(req.result_length, pb, false, &length, nullptr, true, sizeof(length));
 		return 0;
 	}
@@ -668,6 +688,52 @@ DEFSYSC sysc_ROUT(stduint func, stduint p1, stduint p2) {
 	case syscall_net_route_func_t::DHCPRelease: {
 		#if (_MCCA & 0xFF00) == 0x8600
 		return Devsman::ReleaseDhcp() ? 0 : -1;
+		#else
+		return -1;
+		#endif
+	}
+	case syscall_net_route_func_t::UDPInboxCount: {
+		if (p2 < sizeof(stduint)) return -1;
+		#if (_MCCA & 0xFF00) == 0x8600
+		const stduint count = Devsman::UdpInboxCount();
+		MccaMemCopyP((void*)p1, pb, false, &count, nullptr, true, sizeof(count));
+		return 0;
+		#else
+		return -1;
+		#endif
+	}
+	case syscall_net_route_func_t::UDPInboxEntry: {
+		#if (_MCCA & 0xFF00) == 0x8600
+		syscall_net_udp_inbox_t entry{};
+		if (p2 < sizeof(entry)) return -1;
+		MccaMemCopyP(&entry, nullptr, true, (void*)p1, pb, false, sizeof(entry));
+		const stduint index = entry.entry_index;
+		if (!Devsman::GetUdpInboxEntry(index, &entry, sizeof(entry))) return -1;
+		MccaMemCopyP((void*)p1, pb, false, &entry, nullptr, true, sizeof(entry));
+		return 0;
+		#else
+		return -1;
+		#endif
+	}
+	case syscall_net_route_func_t::UDPPendingCount: {
+		if (p2 < sizeof(stduint)) return -1;
+		#if (_MCCA & 0xFF00) == 0x8600
+		const stduint count = Devsman::PendingUdpCount();
+		MccaMemCopyP((void*)p1, pb, false, &count, nullptr, true, sizeof(count));
+		return 0;
+		#else
+		return -1;
+		#endif
+	}
+	case syscall_net_route_func_t::UDPPendingEntry: {
+		#if (_MCCA & 0xFF00) == 0x8600
+		syscall_net_pending_udp_t entry{};
+		if (p2 < sizeof(entry)) return -1;
+		MccaMemCopyP(&entry, nullptr, true, (void*)p1, pb, false, sizeof(entry));
+		const stduint index = entry.entry_index;
+		if (!Devsman::GetPendingUdpEntry(index, &entry, sizeof(entry))) return -1;
+		MccaMemCopyP((void*)p1, pb, false, &entry, nullptr, true, sizeof(entry));
+		return 0;
 		#else
 		return -1;
 		#endif

@@ -37,8 +37,16 @@ menu "Parameter"
 endmenu
 
 menu "Function"
+	config ENABLE_MMU
+		bool "(TODO) Enable Paging Support"
+		default y
+		
 	config ENABLE_GRAPHIC
 		bool "Enable Graphic Support"
+		default y
+		
+	config ENABLE_NETWORK
+		bool "(TODO) Enable Network Support"
 		default y
 
 	config ENABLE_VIRTUALIZATION

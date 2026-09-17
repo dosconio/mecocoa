@@ -50,10 +50,10 @@ static void PrintUsage() {
 }
 
 static void PrintSocketAddress(const char* label, const struct sockaddr_in& address) {
-	const uint8* octet = (const uint8*)&address.sin_addr.s_addr;
-	printf("testudp: %s=%u.%u.%u.%u:%u\n\r", label,
-		(unsigned)octet[0], (unsigned)octet[1], (unsigned)octet[2], (unsigned)octet[3],
-		(unsigned)ntohs(address.sin_port));
+	char text[32] = {};
+	if (mcca_net_format_sockaddr_ipv4(text, sizeof(text), &address)) {
+		printf("testudp: %s=%s\n\r", label, text);
+	}
 }
 
 static void PrintSocketNames(int fd, bool peer) {
@@ -89,7 +89,7 @@ static void PrintSocketOptions(int fd) {
 	}
 	length = sizeof(value);
 	if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &value, &length) == 0) {
-		printf("testudp: so_error=%d\n\r", value);
+		printf("testudp: so_error=%d %s\n\r", value, mcca_net_socket_error_name(value));
 	}
 }
 

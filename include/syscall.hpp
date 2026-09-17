@@ -165,6 +165,11 @@ struct syscall_net_socket_option_t {
 	stduint* result_length = nullptr;
 };
 
+struct syscall_timeval_t {
+	stduint tv_sec = 0;
+	stduint tv_usec = 0;
+};
+
 struct syscall_pollfd_t {
 	int fd = 0;
 	sint16 events = 0;
@@ -187,6 +192,8 @@ constexpr stduint syscall_net_socket_level_socket = 1u;
 constexpr stduint syscall_net_socket_option_reuse_address = 2u;
 constexpr stduint syscall_net_socket_option_type = 3u;
 constexpr stduint syscall_net_socket_option_error = 4u;
+constexpr stduint syscall_net_socket_option_receive_timeout = 5u;
+constexpr stduint syscall_net_socket_option_send_timeout = 6u;
 constexpr stduint syscall_net_shutdown_read = 0u;
 constexpr stduint syscall_net_shutdown_write = 1u;
 constexpr stduint syscall_net_shutdown_both = 2u;
@@ -209,6 +216,10 @@ enum class syscall_net_route_func_t : stduint {
 	NetStats,
 	DHCPRenew,
 	DHCPRelease,
+	UDPInboxCount,
+	UDPInboxEntry,
+	UDPPendingCount,
+	UDPPendingEntry,
 };
 
 constexpr uint16 syscall_net_route_flag_up = 0x0001u;
@@ -277,6 +288,8 @@ struct syscall_net_tcp_connection_t {
 	uint16 remote_port = 0;
 	uint16 state = 0;
 	uint16 flags = 0;
+	uint16 error = 0;
+	uint16 close_phase = 0;
 	uint16 entry_index = 0;
 	uint16 rx_bytes = 0;
 	uint16 tx_pending = 0;
@@ -291,6 +304,27 @@ struct syscall_net_tcp_connection_t {
 	uint16 tx_retransmit = 0;
 	uint16 time_wait_age = 0;
 	uint16 time_wait_remaining = 0;
+};
+
+struct syscall_net_udp_inbox_t {
+	uint16 port = 0;
+	uint16 flags = 0;
+	uint16 entry_index = 0;
+	uint16 queued = 0;
+	uint16 drops = 0;
+	uint16 waiters = 0;
+	stduint inbox_id = 0;
+};
+
+struct syscall_net_pending_udp_t {
+	uint8 target_address[4] = {};
+	uint8 next_hop[4] = {};
+	uint16 source_port = 0;
+	uint16 destination_port = 0;
+	uint16 entry_index = 0;
+	uint16 payload_length = 0;
+	uint16 arp_requests = 0;
+	uint16 age_ticks = 0;
 };
 
 struct syscall_net_stats_t {
@@ -316,6 +350,13 @@ struct syscall_net_stats_t {
 	uint32 tcp_retransmit = 0;
 	uint32 tcp_connect_timeout = 0;
 	uint32 tcp_timewait_expire = 0;
+	uint32 dhcp_discover_tx = 0;
+	uint32 dhcp_request_tx = 0;
+	uint32 dhcp_offer_rx = 0;
+	uint32 dhcp_ack_rx = 0;
+	uint32 dhcp_nak_rx = 0;
+	uint32 tcp_accept = 0;
+	uint32 tcp_connect_failed = 0;
 };
 
 _ESYM_C stduint syscall(syscall_t callid, stduint p1 = 0, stduint p2 = 0, stduint p3 = 0);// MCCA 4 PARA SYSC

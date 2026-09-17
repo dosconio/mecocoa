@@ -246,6 +246,9 @@ public:
 	static bool WaitTcpAccept(uint16 port);
 	static bool HasTcpAccept(uint16 port);
 	static stdsint AcceptTcpConnection(uint16 port, uni::Network::TCPConnectionContext& context);
+	static stdsint StartTcpConnect(const uni::Network::IPv4Address& target_ip,
+		uint16 destination_port, uint16& source_port, uni::Network::TCPConnectionContext& context);
+	static stdsint CheckTcpConnect(const uni::Network::TCPConnectionContext& context);
 	static stdsint ConnectTcp(const uni::Network::IPv4Address& target_ip,
 		uint16 destination_port, uint16& source_port, uni::Network::TCPConnectionContext& context);
 	static bool CloseTcpConnection(const uni::Network::TCPConnectionContext& context);
@@ -264,6 +267,10 @@ public:
 	static bool GetIPv4Interface(stduint index, void* iface, stduint length);
 	static stduint IPv4ArpCacheCount();
 	static bool GetIPv4ArpCacheEntry(stduint index, void* entry, stduint length);
+	static stduint UdpInboxCount();
+	static bool GetUdpInboxEntry(stduint index, void* entry, stduint length);
+	static stduint PendingUdpCount();
+	static bool GetPendingUdpEntry(stduint index, void* entry, stduint length);
 	static stduint TcpListenerCount();
 	static bool GetTcpListenerEntry(stduint index, void* entry, stduint length);
 	static stduint TcpConnectionCount();

@@ -16,13 +16,14 @@ static void PrintUsage() {
 	printf("  also prints IPv4 ARP cache entries\n\r");
 	printf("  also prints TCP listener and connection state\n\r");
 	printf("  also prints network packet counters\n\r");
+	printf("  views: netinfo --if | --route | --arp | --udp | --tcp | --stats\n\r");
 	printf("  dns: netinfo --dns example.com\n\r");
 	printf("  dhcp: netinfo --dhcp-renew | --dhcp-release\n\r");
 }
 
 static void PrintIPv4(const uint8 address[4]) {
-	printf("%u.%u.%u.%u", (unsigned)address[0], (unsigned)address[1],
-		(unsigned)address[2], (unsigned)address[3]);
+	char text[16] = {};
+	if (mcca_net_format_ipv4(text, sizeof(text), address)) printf("%s", text);
 }
 
 static void PrintMac(const uint8 address[6]) {
@@ -106,6 +107,55 @@ static void PrintArpCache() {
 	}
 }
 
+static void PrintUdpState() {
+	stduint inbox_count = 0;
+	if (syscall(syscall_t::ROUT, stduint(syscall_net_route_func_t::UDPInboxCount),
+		_IMM(&inbox_count), sizeof(inbox_count)) < 0) {
+		printf("netinfo: udp inbox query failed\n\r");
+		return;
+	}
+	printf("netinfo: udp inboxes=%u\n\r", (unsigned)inbox_count);
+	for0(i, inbox_count) {
+		syscall_net_udp_inbox_t inbox{};
+		inbox.entry_index = uint16(i);
+		if (syscall(syscall_t::ROUT, stduint(syscall_net_route_func_t::UDPInboxEntry),
+			_IMM(&inbox), sizeof(inbox)) < 0) {
+			printf("netinfo: udp inbox%u query failed\n\r", (unsigned)i);
+			continue;
+		}
+		printf("netinfo: udp%u port=%u queued=%u drops=%u waiters=%u inbox=%u %s%s\n\r",
+			(unsigned)i, (unsigned)inbox.port, (unsigned)inbox.queued,
+			(unsigned)inbox.drops, (unsigned)inbox.waiters, (unsigned)inbox.inbox_id,
+			(inbox.flags & syscall_net_route_flag_up) ? "up" : "down",
+			(inbox.flags & 0x0100u) ? " reuse" : "");
+	}
+
+	stduint pending_count = 0;
+	if (syscall(syscall_t::ROUT, stduint(syscall_net_route_func_t::UDPPendingCount),
+		_IMM(&pending_count), sizeof(pending_count)) < 0) {
+		printf("netinfo: udp pending query failed\n\r");
+		return;
+	}
+	printf("netinfo: udp pending=%u\n\r", (unsigned)pending_count);
+	for0(i, pending_count) {
+		syscall_net_pending_udp_t pending{};
+		pending.entry_index = uint16(i);
+		if (syscall(syscall_t::ROUT, stduint(syscall_net_route_func_t::UDPPendingEntry),
+			_IMM(&pending), sizeof(pending)) < 0) {
+			printf("netinfo: udp pending%u query failed\n\r", (unsigned)i);
+			continue;
+		}
+		printf("netinfo: udp-pending%u target=", (unsigned)i);
+		PrintIPv4(pending.target_address);
+		printf(" next-hop=");
+		PrintIPv4(pending.next_hop);
+		printf(" src=%u dst=%u len=%u arp=%u age=%u\n\r",
+			(unsigned)pending.source_port, (unsigned)pending.destination_port,
+			(unsigned)pending.payload_length, (unsigned)pending.arp_requests,
+			(unsigned)pending.age_ticks);
+	}
+}
+
 static const char* TcpStateName(uint16 state) {
 	switch (state) {
 	case 0: return "syn-received";
@@ -119,6 +169,27 @@ static const char* TcpStateName(uint16 state) {
 	case 8: return "reset";
 	default: return "unknown";
 	}
+}
+
+static const char* TcpStateDisplayName(const syscall_net_tcp_connection_t& connection) {
+	if (connection.state == 0 && (connection.flags & 0x0100u)) return "syn-sent";
+	return TcpStateName(connection.state);
+}
+
+static const char* TcpClosePhaseName(uint16 phase) {
+	switch (phase) {
+	case 0: return "none";
+	case 1: return "fin-wait1";
+	case 2: return "fin-wait2";
+	case 3: return "closing";
+	case 4: return "time-wait";
+	case 5: return "reset";
+	default: return "unknown";
+	}
+}
+
+static const char* TcpDirectionName(uint16 flags) {
+	return (flags & 0x0100u) ? "active" : "passive";
 }
 
 static void PrintTcpState() {
@@ -162,8 +233,10 @@ static void PrintTcpState() {
 		PrintIPv4(connection.local_address);
 		printf(":%u peer=", (unsigned)connection.local_port);
 		PrintIPv4(connection.remote_address);
-		printf(":%u state=%s rx=%u win=%u tx=%u retry=%u rexmit=%u mss=%u/%u send=%u dup=%u ooo=%u full=%u",
-			(unsigned)connection.remote_port, TcpStateName(connection.state),
+		printf(":%u state=%s phase=%s dir=%s err=%u/%s rx=%u win=%u tx=%u retry=%u rexmit=%u mss=%u/%u send=%u dup=%u ooo=%u full=%u",
+			(unsigned)connection.remote_port, TcpStateDisplayName(connection),
+			TcpClosePhaseName(connection.close_phase), TcpDirectionName(connection.flags),
+			(unsigned)connection.error, mcca_net_socket_error_name(connection.error),
 			(unsigned)connection.rx_bytes, (unsigned)connection.rx_window,
 			(unsigned)connection.tx_pending, (unsigned)connection.tx_retry_count,
 			(unsigned)connection.tx_retransmit,
@@ -175,10 +248,10 @@ static void PrintTcpState() {
 			printf(" tw-age=%u tw-left=%u",
 				(unsigned)connection.time_wait_age, (unsigned)connection.time_wait_remaining);
 		}
-		printf("%s%s\n\r",
-			(connection.flags & 0x0100u) ? " active" : " passive",
-			(connection.flags & 0x0800u) ? " reset" :
-				((connection.flags & 0x0400u) ? " tx-exhausted" : ""));
+		if (connection.flags & 0x0200u) printf(" fin-ack");
+		if (connection.flags & 0x0400u) printf(" tx-exhausted");
+		if (connection.flags & 0x0800u) printf(" reset");
+		printf("\n\r");
 	}
 }
 
@@ -203,161 +276,27 @@ static void PrintNetStats() {
 		(unsigned)stats.tcp_rst_rx, (unsigned)stats.tcp_rst_tx,
 		(unsigned)stats.tcp_retransmit, (unsigned)stats.tcp_connect_timeout,
 		(unsigned)stats.tcp_timewait_expire);
-}
-
-static uint16 ReadNet16(const uint8* data) {
-	return uint16((uint16(data[0]) << 8) | data[1]);
-}
-
-static void WriteNet16(uint8* data, uint16 value) {
-	data[0] = uint8(value >> 8);
-	data[1] = uint8(value);
-}
-
-static bool GetConfiguredDnsServer(struct in_addr* output) {
-	if (!output) return false;
-	stduint count = 0;
-	if (syscall(syscall_t::ROUT, stduint(syscall_net_route_func_t::IPv4InterfaceCount),
-		_IMM(&count), sizeof(count)) < 0) return false;
-	for0(i, count) {
-		syscall_net_interface_ipv4_t iface{};
-		iface.link_index = uint16(i);
-		if (syscall(syscall_t::ROUT, stduint(syscall_net_route_func_t::IPv4Interface),
-			_IMM(&iface), sizeof(iface)) < 0) continue;
-		if (!iface.dns[0] && !iface.dns[1] && !iface.dns[2] && !iface.dns[3]) continue;
-		uint8* target = (uint8*)&output->s_addr;
-		for0(j, 4) target[j] = iface.dns[j];
-		return true;
-	}
-	return false;
-}
-
-static bool EncodeDnsName(uint8* output, stduint capacity, const char* host, stduint* length) {
-	if (!output || !host || !length) return false;
-	stduint out = 0;
-	const char* label = host;
-	while (*label) {
-		const char* cursor = label;
-		stduint label_length = 0;
-		while (*cursor && *cursor != '.') {
-			label_length++;
-			cursor++;
-		}
-		if (!label_length || label_length > 63 || out + 1 + label_length >= capacity) return false;
-		output[out++] = uint8(label_length);
-		for0(i, label_length) output[out++] = uint8(label[i]);
-		label = *cursor == '.' ? cursor + 1 : cursor;
-	}
-	if (out >= capacity) return false;
-	output[out++] = 0;
-	*length = out;
-	return true;
-}
-
-static bool SkipDnsName(const uint8* packet, stduint packet_length, stduint* offset) {
-	if (!packet || !offset) return false;
-	stduint cursor = *offset;
-	for0(depth, 32) {
-		if (cursor >= packet_length) return false;
-		const uint8 label = packet[cursor++];
-		if (!label) {
-			*offset = cursor;
-			return true;
-		}
-		if ((label & 0xC0u) == 0xC0u) {
-			if (cursor >= packet_length) return false;
-			*offset = cursor + 1;
-			return true;
-		}
-		if (label & 0xC0u) return false;
-		cursor += label;
-		if (cursor > packet_length) return false;
-	}
-	return false;
-}
-
-static bool ResolveDnsA(const char* host, struct in_addr* output) {
-	if (!host || !output) return false;
-	if (inet_aton(host, output)) return true;
-	struct in_addr dns{};
-	if (!GetConfiguredDnsServer(&dns)) {
-		printf("netinfo: no dns server\n\r");
-		return false;
-	}
-	uint8 query[256] = {};
-	static uint16 next_id = 0x4E49;
-	const uint16 query_id = next_id++;
-	WriteNet16(query, query_id);
-	WriteNet16(query + 2, 0x0100u);
-	WriteNet16(query + 4, 1);
-	stduint name_length = 0;
-	if (!EncodeDnsName(query + 12, sizeof(query) - 16, host, &name_length)) return false;
-	stduint query_length = 12 + name_length;
-	WriteNet16(query + query_length, 1);
-	WriteNet16(query + query_length + 2, 1);
-	query_length += 4;
-
-	int fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-	if (fd < 0) return false;
-	struct sockaddr_in server{};
-	server.sin_family = AF_INET;
-	server.sin_port = htons(53);
-	server.sin_addr = dns;
-	const stdsint sent = sendto(fd, query, query_length, 0,
-		(const struct sockaddr*)&server, sizeof(server));
-	if (sent != stdsint(query_length)) {
-		close(fd);
-		return false;
-	}
-	struct pollfd pfd{};
-	pfd.fd = fd;
-	pfd.events = POLLIN;
-	if (poll(&pfd, 1, 2500) <= 0 || !(pfd.revents & POLLIN)) {
-		close(fd);
-		return false;
-	}
-	uint8 response[512] = {};
-	const stdsint received = recvfrom(fd, response, sizeof(response), 0, nullptr, nullptr);
-	close(fd);
-	if (received < 12) return false;
-	const stduint response_length = stduint(received);
-	if (ReadNet16(response) != query_id) return false;
-	if ((ReadNet16(response + 2) & 0x000Fu) != 0) return false;
-	const uint16 question_count = ReadNet16(response + 4);
-	const uint16 answer_count = ReadNet16(response + 6);
-	stduint offset = 12;
-	for0(i, question_count) {
-		if (!SkipDnsName(response, response_length, &offset)) return false;
-		if (offset + 4 > response_length) return false;
-		offset += 4;
-	}
-	for0(i, answer_count) {
-		if (!SkipDnsName(response, response_length, &offset)) return false;
-		if (offset + 10 > response_length) return false;
-		const uint16 type = ReadNet16(response + offset);
-		const uint16 dns_class = ReadNet16(response + offset + 2);
-		const uint16 rdlength = ReadNet16(response + offset + 8);
-		offset += 10;
-		if (offset + rdlength > response_length) return false;
-		if (type == 1 && dns_class == 1 && rdlength == 4) {
-			uint8* target = (uint8*)&output->s_addr;
-			for0(j, 4) target[j] = response[offset + j];
-			return true;
-		}
-		offset += rdlength;
-	}
-	return false;
+	printf("netinfo: proto dhcp=%u/%u/%u/%u/%u tcp-accept=%u tcp-connect-failed=%u\n\r",
+		(unsigned)stats.dhcp_discover_tx, (unsigned)stats.dhcp_request_tx,
+		(unsigned)stats.dhcp_offer_rx, (unsigned)stats.dhcp_ack_rx,
+		(unsigned)stats.dhcp_nak_rx, (unsigned)stats.tcp_accept,
+		(unsigned)stats.tcp_connect_failed);
 }
 
 static int PrintDnsLookup(const char* host) {
 	struct in_addr address{};
-	if (!ResolveDnsA(host, &address)) {
-		printf("netinfo: dns failed\n\r");
+	if (!mcca_net_resolve_ipv4(host, &address)) {
+		printf("netinfo: dns failed: %s\n\r", mcca_net_dns_status());
 		return 1;
 	}
 	const uint8* octet = (const uint8*)&address.s_addr;
-	printf("netinfo: dns %s A=%u.%u.%u.%u\n\r", host,
-		(unsigned)octet[0], (unsigned)octet[1], (unsigned)octet[2], (unsigned)octet[3]);
+	printf("netinfo: dns %s A=%u.%u.%u.%u status=%s\n\r", host,
+		(unsigned)octet[0], (unsigned)octet[1], (unsigned)octet[2], (unsigned)octet[3],
+		mcca_net_dns_status());
+	if (mcca_net_dns_ttl()) printf("netinfo: dns ttl=%u\n\r", (unsigned)mcca_net_dns_ttl());
+	if (mcca_net_dns_answer_count()) {
+		printf("netinfo: dns answers=%u\n\r", (unsigned)mcca_net_dns_answer_count());
+	}
 	return 0;
 }
 
@@ -386,50 +325,64 @@ int main(int argc, char** argv) {
 		printf("netinfo: dhcp released\n\r");
 		return 0;
 	}
-
-	stduint count = 0;
-	if (syscall(syscall_t::ROUT, stduint(syscall_net_route_func_t::IPv4InterfaceCount),
-		_IMM(&count), sizeof(count)) < 0) {
-		printf("netinfo: interface query failed\n\r");
+	const bool view_all = argc == 1;
+	const bool view_if = view_all || (argc == 2 && !StrCompare(argv[1], "--if"));
+	const bool view_route = view_all || (argc == 2 && !StrCompare(argv[1], "--route"));
+	const bool view_arp = view_all || (argc == 2 && !StrCompare(argv[1], "--arp"));
+	const bool view_udp = view_all || (argc == 2 && !StrCompare(argv[1], "--udp"));
+	const bool view_tcp = view_all || (argc == 2 && !StrCompare(argv[1], "--tcp"));
+	const bool view_stats = view_all || (argc == 2 && !StrCompare(argv[1], "--stats"));
+	if (!view_if && !view_route && !view_arp && !view_udp && !view_tcp && !view_stats) {
+		PrintUsage();
 		return 1;
 	}
 
-	printf("netinfo: interfaces=%u\n\r", (unsigned)count);
-	for0(i, count) {
-		syscall_net_interface_ipv4_t iface{};
-		iface.link_index = uint16(i);
-		if (syscall(syscall_t::ROUT, stduint(syscall_net_route_func_t::IPv4Interface),
-			_IMM(&iface), sizeof(iface)) < 0) {
-			printf("netinfo: if%u query failed\n\r", (unsigned)i);
-			continue;
+	if (view_if) {
+		stduint count = 0;
+		if (syscall(syscall_t::ROUT, stduint(syscall_net_route_func_t::IPv4InterfaceCount),
+			_IMM(&count), sizeof(count)) < 0) {
+			printf("netinfo: interface query failed\n\r");
+			return 1;
 		}
-		printf("netinfo: if%u dev=%s ip=", (unsigned)i, iface.name[0] ? iface.name : "(none)");
-		PrintIPv4(iface.address);
-		printf(" mask=");
-		PrintIPv4(iface.netmask);
-		printf(" mac=");
-		PrintMac(iface.hardware);
-		printf(" mtu=%u src=%s dhcp=%s", (unsigned)iface.mtu,
-			ConfigSourceName(iface.config_source),
-			DhcpStateName(iface.dhcp_state));
-		if (iface.dhcp_xid) printf(" xid=%[32H]", (stduint)iface.dhcp_xid);
-		if (iface.dhcp_retry_count) printf(" retry=%u", (unsigned)iface.dhcp_retry_count);
-		if (iface.dhcp_lease_time) printf(" lease=%u", (unsigned)iface.dhcp_lease_time);
-		if (iface.dhcp_bound_age) printf(" age=%u", (unsigned)iface.dhcp_bound_age);
-		if (iface.dhcp_server[0] || iface.dhcp_server[1] || iface.dhcp_server[2] || iface.dhcp_server[3]) {
-			printf(" server=");
-			PrintIPv4(iface.dhcp_server);
+
+		printf("netinfo: interfaces=%u\n\r", (unsigned)count);
+		for0(i, count) {
+			syscall_net_interface_ipv4_t iface{};
+			iface.link_index = uint16(i);
+			if (syscall(syscall_t::ROUT, stduint(syscall_net_route_func_t::IPv4Interface),
+				_IMM(&iface), sizeof(iface)) < 0) {
+				printf("netinfo: if%u query failed\n\r", (unsigned)i);
+				continue;
+			}
+			printf("netinfo: if%u dev=%s ip=", (unsigned)i, iface.name[0] ? iface.name : "(none)");
+			PrintIPv4(iface.address);
+			printf(" mask=");
+			PrintIPv4(iface.netmask);
+			printf(" mac=");
+			PrintMac(iface.hardware);
+			printf(" mtu=%u src=%s dhcp=%s", (unsigned)iface.mtu,
+				ConfigSourceName(iface.config_source),
+				DhcpStateName(iface.dhcp_state));
+			if (iface.dhcp_xid) printf(" xid=%[32H]", (stduint)iface.dhcp_xid);
+			if (iface.dhcp_retry_count) printf(" retry=%u", (unsigned)iface.dhcp_retry_count);
+			if (iface.dhcp_lease_time) printf(" lease=%u", (unsigned)iface.dhcp_lease_time);
+			if (iface.dhcp_bound_age) printf(" age=%u", (unsigned)iface.dhcp_bound_age);
+			if (iface.dhcp_server[0] || iface.dhcp_server[1] || iface.dhcp_server[2] || iface.dhcp_server[3]) {
+				printf(" server=");
+				PrintIPv4(iface.dhcp_server);
+			}
+			if (iface.dns[0] || iface.dns[1] || iface.dns[2] || iface.dns[3]) {
+				printf(" dns=");
+				PrintIPv4(iface.dns);
+			}
+			printf(" %s\n\r",
+				(iface.flags & syscall_net_route_flag_up) ? "up" : "down");
 		}
-		if (iface.dns[0] || iface.dns[1] || iface.dns[2] || iface.dns[3]) {
-			printf(" dns=");
-			PrintIPv4(iface.dns);
-		}
-		printf(" %s\n\r",
-			(iface.flags & syscall_net_route_flag_up) ? "up" : "down");
 	}
-	PrintDefaultRoute();
-	PrintArpCache();
-	PrintTcpState();
-	PrintNetStats();
+	if (view_route) PrintDefaultRoute();
+	if (view_arp) PrintArpCache();
+	if (view_udp) PrintUdpState();
+	if (view_tcp) PrintTcpState();
+	if (view_stats) PrintNetStats();
 	return 0;
 }

@@ -114,9 +114,12 @@ struct SocketHandle {
 	Network::SocketProtocol protocol = Network::SocketProtocol::Default;
 	uint16 flags = 0;
 	int last_error = 0;
+	stduint receive_timeout_ms = 0;
+	stduint send_timeout_ms = 0;
 	stduint udp_inbox_id = stduint(-1);
 	bool is_bound = false;
 	bool is_connected = false;
+	bool is_connecting = false;
 	bool is_listening = false;
 	Network::SocketEndpointIPv4 local_ipv4 = {};
 	Network::SocketEndpointIPv4 remote_ipv4 = {};

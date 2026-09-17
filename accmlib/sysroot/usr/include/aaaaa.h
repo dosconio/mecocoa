@@ -8,9 +8,17 @@ using namespace uni;
 #include "../../../../include/fileman.hpp"
 #include "../../../../include/console.hpp"
 #include "../../../../include/include/FileBlockDevice.hpp"
+#include "../../../lib_network.hpp"
 
 #define sysrecv(pid,msg) syscomm(0,pid,msg)
 #define syssend(pid,msg) syscomm(1,pid,msg)
+
+#ifndef SO_RCVTIMEO
+#define SO_RCVTIMEO 5
+#endif
+#ifndef SO_SNDTIMEO
+#define SO_SNDTIMEO 6
+#endif
 
 #ifdef _INC_CPP
 extern "C" {
@@ -126,4 +134,3 @@ public:
 	void restore();
 };
 #endif
-
