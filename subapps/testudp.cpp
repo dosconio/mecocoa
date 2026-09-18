@@ -21,6 +21,16 @@ static void PrintUsage() {
 	printf("  opt:     testudp --sockopt 10.0.2.1 7777 mecocoa\n\r");
 	printf("  bindip:  testudp --bind-ip 10.0.2.15 --listen 7777\n\r");
 	printf("  listen:  testudp --reuse --listen 7777\n\r");
+	printf("  reuseck: testudp --reuse-check 7777\n\r");
+}
+
+static bool ParseUdpListenPort(const char* text, uint16* output) {
+	if (!text || !output) return false;
+	if (text[0] == '0' && !text[1]) {
+		*output = 0;
+		return true;
+	}
+	return mcca_net_parse_port(text, output) != 0;
 }
 
 static void PrintSocketAddress(const char* label, const struct sockaddr_in& address) {
@@ -57,33 +67,54 @@ static bool SetReuseAddress(int fd) {
 
 static void PrintSocketOptions(int fd) {
 	int value = 0;
-	socklen_t length = sizeof(value);
-	if (getsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &value, &length) == 0) {
+	if (mcca_net_get_socket_option_int(fd, SO_REUSEADDR, &value)) {
 		printf("testudp: so_reuseaddr=%d\n\r", value);
 	}
-	length = sizeof(value);
-	if (getsockopt(fd, SOL_SOCKET, SO_TYPE, &value, &length) == 0) {
+	if (mcca_net_get_socket_option_int(fd, SO_TYPE, &value)) {
 		printf("testudp: so_type=%d\n\r", value);
 	}
-	length = sizeof(value);
-	if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &value, &length) == 0) {
+	if (mcca_net_get_socket_option_int(fd, SO_ERROR, &value)) {
 		printf("testudp: so_error=%d %s\n\r", value, mcca_net_socket_error_name(value));
 	}
 	struct timeval timeout{};
-	length = sizeof(timeout);
+	socklen_t length = sizeof(timeout);
 	if (getsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, &length) == 0) {
 		printf("testudp: so_rcvtimeo=%ums\n\r",
-			(unsigned)(timeout.tv_sec * 1000 + (timeout.tv_usec + 999) / 1000));
+			(unsigned)mcca_net_timeval_milliseconds(&timeout));
 	}
 	length = sizeof(timeout);
 	if (getsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, &length) == 0) {
 		printf("testudp: so_sndtimeo=%ums\n\r",
-			(unsigned)(timeout.tv_sec * 1000 + (timeout.tv_usec + 999) / 1000));
+			(unsigned)mcca_net_timeval_milliseconds(&timeout));
 	}
 }
 
 static stduint NowMs() {
 	return syscall(syscall_t::TIME, 1, nil, nil);
+}
+
+static int BindUdpForReuseCheck(uint16 port, bool reuse_address) {
+	int fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+	if (fd < 0) return -1;
+	if (reuse_address && !SetReuseAddress(fd)) {
+		close(fd);
+		return -1;
+	}
+	struct sockaddr_in local{};
+	local.sin_family = AF_INET;
+	local.sin_port = htons(port);
+	local.sin_addr.s_addr = 0;
+	if (bind(fd, (const struct sockaddr*)&local, sizeof(local)) < 0) {
+		const int error = mcca_net_get_socket_error(fd);
+		printf("testudp: bind port=%u reuse=%d failed error=%d %s\n\r",
+			(unsigned)port, reuse_address ? 1 : 0,
+			error, mcca_net_socket_error_name(error));
+		close(fd);
+		return -1;
+	}
+	printf("testudp: bind port=%u reuse=%d ok\n\r",
+		(unsigned)port, reuse_address ? 1 : 0);
+	return fd;
 }
 
 int main(int argc, char** argv) {
@@ -103,6 +134,7 @@ int main(int argc, char** argv) {
 	bool use_select = false;
 	bool show_sockopt = false;
 	bool bind_ip_set = false;
+	bool reuse_check = false;
 	uint32 bind_ip = 0;
 	for (int i = 1; i < argc; i++) {
 		if (StrCompare(argv[i], "conn") == 0) {
@@ -123,6 +155,10 @@ int main(int argc, char** argv) {
 		}
 		if (StrCompare(argv[i], "--reuse") == 0) {
 			reuse_address = true;
+			continue;
+		}
+		if (StrCompare(argv[i], "--reuse-check") == 0) {
+			reuse_check = true;
 			continue;
 		}
 		if (StrCompare(argv[i], "--poll") == 0) {
@@ -156,6 +192,31 @@ int main(int argc, char** argv) {
 	const char* payload = positional_count >= 3 ? positional[2] : "mecocoa";
 	uint16 listen_port = 7;
 
+	if (reuse_check) {
+		if (positional_count > 1 || listen_mode || use_connect || dont_wait || nonblock ||
+			reuse_address || use_poll || use_select || show_sockopt || bind_ip_set) {
+			PrintUsage();
+			return 1;
+		}
+		uint16 port = 7777;
+		if (positional_count == 1 && !mcca_net_parse_port(positional[0], &port)) {
+			PrintUsage();
+			return 1;
+		}
+		printf("testudp: reuse-check port=%u\n\r", (unsigned)port);
+		int first = BindUdpForReuseCheck(port, false);
+		int second = BindUdpForReuseCheck(port, false);
+		printf("testudp: no-reuse second=%s\n\r", second >= 0 ? "unexpected-ok" : "blocked");
+		if (second >= 0) close(second);
+		if (first >= 0) close(first);
+		first = BindUdpForReuseCheck(port, true);
+		second = BindUdpForReuseCheck(port, true);
+		printf("testudp: reuse second=%s\n\r", second >= 0 ? "ok" : "blocked");
+		if (second >= 0) close(second);
+		if (first >= 0) close(first);
+		return second >= 0 ? 0 : 1;
+	}
+
 	uint32 target_ip = 0;
 	uint16 parsed_target_port = 0;
 	if (!listen_mode && (!mcca_net_parse_ipv4_host(target_text, &target_ip) ||
@@ -164,7 +225,7 @@ int main(int argc, char** argv) {
 		return 1;
 	}
 	if (!listen_mode) target_port = parsed_target_port;
-	if (listen_mode && ((positional_count >= 1 && !mcca_net_parse_port(positional[0], &listen_port)) ||
+	if (listen_mode && ((positional_count >= 1 && !ParseUdpListenPort(positional[0], &listen_port)) ||
 		positional_count > 1 || use_connect)) {
 		PrintUsage();
 		return 1;

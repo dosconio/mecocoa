@@ -271,6 +271,10 @@ public:
 	static bool GetUdpInboxEntry(stduint index, void* entry, stduint length);
 	static stduint PendingUdpCount();
 	static bool GetPendingUdpEntry(stduint index, void* entry, stduint length);
+	static stduint DnsCacheCount();
+	static bool GetDnsCacheEntry(stduint index, void* entry, stduint length);
+	static bool StoreDnsCacheEntry(const void* entry, stduint length);
+	static bool ClearDnsCache();
 	static stduint TcpListenerCount();
 	static bool GetTcpListenerEntry(stduint index, void* entry, stduint length);
 	static stduint TcpConnectionCount();

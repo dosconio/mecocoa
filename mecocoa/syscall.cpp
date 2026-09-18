@@ -738,6 +738,46 @@ DEFSYSC sysc_ROUT(stduint func, stduint p1, stduint p2) {
 		return -1;
 		#endif
 	}
+	case syscall_net_route_func_t::DNSCacheCount: {
+		if (p2 < sizeof(stduint)) return -1;
+		#if (_MCCA & 0xFF00) == 0x8600
+		const stduint count = Devsman::DnsCacheCount();
+		MccaMemCopyP((void*)p1, pb, false, &count, nullptr, true, sizeof(count));
+		return 0;
+		#else
+		return -1;
+		#endif
+	}
+	case syscall_net_route_func_t::DNSCacheEntry: {
+		#if (_MCCA & 0xFF00) == 0x8600
+		syscall_net_dns_cache_t entry{};
+		if (p2 < sizeof(entry)) return -1;
+		MccaMemCopyP(&entry, nullptr, true, (void*)p1, pb, false, sizeof(entry));
+		const stduint index = entry.entry_index;
+		if (!Devsman::GetDnsCacheEntry(index, &entry, sizeof(entry))) return -1;
+		MccaMemCopyP((void*)p1, pb, false, &entry, nullptr, true, sizeof(entry));
+		return 0;
+		#else
+		return -1;
+		#endif
+	}
+	case syscall_net_route_func_t::DNSCacheStore: {
+		#if (_MCCA & 0xFF00) == 0x8600
+		syscall_net_dns_cache_t entry{};
+		if (p2 < sizeof(entry)) return -1;
+		MccaMemCopyP(&entry, nullptr, true, (void*)p1, pb, false, sizeof(entry));
+		return Devsman::StoreDnsCacheEntry(&entry, sizeof(entry)) ? 0 : -1;
+		#else
+		return -1;
+		#endif
+	}
+	case syscall_net_route_func_t::DNSCacheClear: {
+		#if (_MCCA & 0xFF00) == 0x8600
+		return Devsman::ClearDnsCache() ? 0 : -1;
+		#else
+		return -1;
+		#endif
+	}
 	default:
 		return -1;
 	}

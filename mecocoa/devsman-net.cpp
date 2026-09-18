@@ -30,6 +30,8 @@ namespace {
 	constexpr stduint NetPendingUdpTimeoutTicks = 5 * CONFIG_SysTickFreq;
 	constexpr stduint NetPendingUdpArpRetryTicks = CONFIG_SysTickFreq;
 	constexpr stduint NetPendingUdpArpRetryLimit = 3;
+	constexpr stduint NetDnsCacheCapacity = 8;
+	constexpr stduint NetDnsCacheFailureTtlSeconds = 3;
 	constexpr stduint NetTcpConnectErrorCapacity = 8;
 	constexpr stduint NetTcpListenCapacity = 4;
 	constexpr stduint NetTcpConnectionCapacity = 8;
@@ -167,6 +169,18 @@ namespace {
 		bool valid;
 	};
 
+	struct NetDnsCacheEntry {
+		uni::Network::IPv4Address address;
+		uni::Network::IPv4Address addresses[syscall_net_dns_cache_address_capacity];
+		stduint expire_tick;
+		stduint answer_count;
+		stduint address_count;
+		char host[64];
+		char status[24];
+		bool negative;
+		bool valid;
+	};
+
 	using NetUdpPortHandler = bool (*)(uni::Network::LinkDevice& dev, const NetUdpPacket& packet);
 
 	struct NetUdpPortBinding {
@@ -223,11 +237,14 @@ namespace {
 		stduint synack_retry_count;
 		stduint last_fin_tick;
 		stduint fin_retry_count;
+		stduint last_rx_tick;
+		stduint last_tx_tick;
 		stduint time_wait_tick;
 		NetTcpClosePhase close_phase;
 		int connect_error;
 		uint16 local_mss;
 		uint16 peer_mss;
+		uint16 peer_window;
 		uint16 rx_duplicate;
 		uint16 rx_out_of_order;
 		uint16 rx_window_full;
@@ -276,6 +293,8 @@ namespace {
 	stduint net_udp_error_next = 0;
 	NetTcpConnectError net_tcp_connect_errors[NetTcpConnectErrorCapacity]{};
 	stduint net_tcp_connect_error_next = 0;
+	NetDnsCacheEntry net_dns_cache[NetDnsCacheCapacity]{};
+	stduint net_dns_cache_next = 0;
 	NetTcpListener net_tcp_listeners[NetTcpListenCapacity]{};
 	NetTcpConnection net_tcp_connections[NetTcpConnectionCapacity]{};
 	Spinlock net_socket_wait_lock;
@@ -459,6 +478,54 @@ namespace {
 	stduint FindLinkDeviceIndex(const uni::Network::LinkDevice* target) {
 		for0(i, net_link_device_count) if (net_link_devices[i] == target) return i;
 		return stduint(-1);
+	}
+
+	stduint NetStringLength(const char* text, stduint capacity) {
+		if (!text) return 0;
+		stduint length = 0;
+		while (length < capacity && text[length]) length++;
+		return length;
+	}
+
+	bool NetStringEqual(const char* lhs, const char* rhs) {
+		if (!lhs || !rhs) return false;
+		stduint i = 0;
+		while (lhs[i] && rhs[i]) {
+			if (lhs[i] != rhs[i]) return false;
+			i++;
+		}
+		return lhs[i] == rhs[i];
+	}
+
+	void NetStringCopy(char* output, stduint capacity, const char* input) {
+		if (!output || !capacity) return;
+		stduint i = 0;
+		if (input) {
+			for(; i + 1 < capacity && input[i]; i++) output[i] = input[i];
+		}
+		output[i] = 0;
+	}
+
+	bool IsDnsCacheEntryActive(const NetDnsCacheEntry& entry) {
+		if (!entry.valid || !entry.host[0] || !entry.expire_tick) return false;
+		return tick < entry.expire_tick;
+	}
+
+	void ExpireDnsCache() {
+		for0(i, NetDnsCacheCapacity) {
+			auto& entry = net_dns_cache[i];
+			if (entry.valid && !IsDnsCacheEntryActive(entry)) entry.valid = false;
+		}
+	}
+
+	NetDnsCacheEntry* FindDnsCacheEntry(const char* host) {
+		if (!host || !host[0]) return nullptr;
+		ExpireDnsCache();
+		for0(i, NetDnsCacheCapacity) {
+			auto& entry = net_dns_cache[i];
+			if (entry.valid && NetStringEqual(entry.host, host)) return &entry;
+		}
+		return nullptr;
 	}
 
 	uint16 DhcpStateCode() {
@@ -923,8 +990,11 @@ namespace {
 			connection.synack_retry_count = 0;
 			connection.last_fin_tick = 0;
 			connection.fin_retry_count = 0;
+			connection.last_rx_tick = tick;
+			connection.last_tx_tick = tick;
 			connection.local_mss = NetTcpLocalMss();
 			connection.peer_mss = 0;
+			connection.peer_window = NetTcpWindowSize;
 			connection.active_open = false;
 			connection.local_fin_acknowledged = false;
 			connection.valid = true;
@@ -1353,6 +1423,29 @@ namespace {
 		net_tcp_connect_error_next = (net_tcp_connect_error_next + 1) % NetTcpConnectErrorCapacity;
 	}
 
+	void NoteTcpConnectFailure(int error) {
+		net_stats.tcp_connect_failed++;
+		switch (error) {
+		case NetErrConnectionRefused:
+			net_stats.tcp_connect_refused++;
+			break;
+		case NetErrHostUnreachable:
+			net_stats.tcp_connect_host_unreach++;
+			break;
+		case NetErrNetworkUnreachable:
+			net_stats.tcp_connect_net_unreach++;
+			break;
+		case NetErrNoBuffer:
+			net_stats.tcp_connect_no_buffer++;
+			break;
+		case NetErrAddressInUse:
+			net_stats.tcp_connect_addr_in_use++;
+			break;
+		default:
+			break;
+		}
+	}
+
 	int ConsumeTcpConnectError(const uni::Network::TCPConnectionContext& context) {
 		for0(i, NetTcpConnectErrorCapacity) {
 			auto& entry = net_tcp_connect_errors[i];
@@ -1539,6 +1632,24 @@ namespace {
 		return mss;
 	}
 
+	stduint TcpOutstandingBytes(const NetTcpConnection& connection) {
+		stduint outstanding = 0;
+		for0(i, connection.tx_count) {
+			const stduint index = (connection.tx_head + i) % NetTcpTxPendingCapacity;
+			if (connection.tx_pending[index].valid) outstanding += connection.tx_pending[index].length;
+		}
+		return outstanding;
+	}
+
+	stduint TcpPeerSendWindow(const NetTcpConnection& connection) {
+		const stduint outstanding = TcpOutstandingBytes(connection);
+		return connection.peer_window > outstanding ? connection.peer_window - outstanding : 0;
+	}
+
+	void UpdateTcpPeerWindow(NetTcpConnection& connection, const uni::Network::TCPSegmentView& tcp) {
+		connection.peer_window = tcp.window;
+	}
+
 	uint16 ParseTcpMssOption(const uni::Network::TCPSegmentView& tcp) {
 		if (!tcp.header || tcp.header_length <= uni::Network::TCPMinHeaderLength) return 0;
 		const auto* option = reinterpret_cast<const uint8*>(tcp.header) + uni::Network::TCPMinHeaderLength;
@@ -1632,6 +1743,7 @@ namespace {
 		const stdsint sent = SendIPv4PacketFrame(*route.dev, target_mac, packet);
 		if (sent > 0) {
 			connection.syn_sent = true;
+			connection.last_tx_tick = tick;
 			net_stats.tx_tcp++;
 		}
 		return sent > 0;
@@ -1665,7 +1777,10 @@ namespace {
 			64,
 		};
 		const stdsint sent = SendIPv4PacketFrame(*route.dev, target_mac, packet);
-		if (sent > 0) net_stats.tx_tcp++;
+		if (sent > 0) {
+			connection.last_tx_tick = tick;
+			net_stats.tx_tcp++;
+		}
 		return sent > 0;
 	}
 
@@ -1845,6 +1960,7 @@ namespace {
 		if (sent <= 0) return false;
 		pending.last_tick = tick;
 		pending.retry_count++;
+		connection.last_tx_tick = tick;
 		connection.tx_retransmit++;
 		net_stats.tx_tcp++;
 		net_stats.tcp_retransmit++;
@@ -1868,7 +1984,7 @@ namespace {
 			if (!connection.valid || !connection.active_open || !connection.tcp) continue;
 			if (connection.reset_received) {
 				const auto context = connection.tcp->getControl().context;
-				net_stats.tcp_connect_failed++;
+				NoteTcpConnectFailure(connection.connect_error ? connection.connect_error : NetErrConnectionRefused);
 				ReleaseTcpConnection(context);
 				continue;
 			}
@@ -1881,7 +1997,7 @@ namespace {
 				}
 				RecordTcpConnectError(context, connection.connect_error);
 				net_stats.tcp_connect_timeout++;
-				net_stats.tcp_connect_failed++;
+				NoteTcpConnectFailure(connection.connect_error);
 				ReleaseTcpConnection(context);
 				continue;
 			}
@@ -2440,6 +2556,7 @@ namespace {
 		auto* listener_for_port = FindTcpListener(tcp.destination_port);
 		auto* connection = FindTcpConnection(ipv4.destination, tcp.destination_port,
 			ipv4.source, tcp.source_port);
+		if (connection) connection->last_rx_tick = tick;
 		LearnArpCache(ipv4.source, frame.source);
 		if (tcp.flags & uni::Network::TCPFlagRST) {
 			net_stats.tcp_rst_rx++;
@@ -2448,6 +2565,7 @@ namespace {
 			}
 			return;
 		}
+		if (connection) UpdateTcpPeerWindow(*connection, tcp);
 		if (connection && !IsTcpAcknowledgmentInRange(*connection, tcp)) return;
 		if (connection && (tcp.flags & uni::Network::TCPFlagACK)) {
 			AcknowledgeTcpTxPending(*connection, tcp.acknowledgment);
@@ -2467,6 +2585,7 @@ namespace {
 			}
 			const uint16 peer_mss = ParseTcpMssOption(tcp);
 			if (peer_mss) connection->peer_mss = peer_mss;
+			UpdateTcpPeerWindow(*connection, tcp);
 			control.remote_next_sequence = tcp.sequence + 1;
 			control.state = uni::Network::TCPConnectionState::Established;
 			SendTcpAckForSegment(dev, frame, ipv4, tcp,
@@ -2521,6 +2640,7 @@ namespace {
 				}
 				const uint16 peer_mss = ParseTcpMssOption(tcp);
 				if (peer_mss) connection->peer_mss = peer_mss;
+				UpdateTcpPeerWindow(*connection, tcp);
 				if (!SendTcpSynAck(*connection)) {
 					plogwarn("[Net] tcp syn-ack send failed");
 				}
@@ -3026,6 +3146,7 @@ bool Devsman::CloseTcpPort(uint16 port) {
 			net_tcp_listeners[i].tcp->Reset();
 			net_tcp_listeners[i].tcp->setAcceptQueue(net_tcp_listeners[i].pending, NetTcpAcceptQueueDepth);
 		}
+		net_stats.tcp_listener_close++;
 		return true;
 	}
 	return false;
@@ -3081,17 +3202,17 @@ stdsint Devsman::AcceptTcpConnection(uint16 port, uni::Network::TCPConnectionCon
 stdsint Devsman::StartTcpConnect(const uni::Network::IPv4Address& target_ip,
 	uint16 destination_port, uint16& source_port, uni::Network::TCPConnectionContext& context) {
 	if (target_ip.isZero() || !destination_port) {
-		net_stats.tcp_connect_failed++;
+		NoteTcpConnectFailure(NetErrDestinationRequired);
 		return -NetErrDestinationRequired;
 	}
 	if (!AllocateTcpPort(source_port)) {
-		net_stats.tcp_connect_failed++;
+		NoteTcpConnectFailure(NetErrAddressInUse);
 		return -NetErrAddressInUse;
 	}
 	auto* connection = AllocateTcpConnection(net_config.ipv4_address, source_port,
 		target_ip, destination_port);
 	if (!connection || !connection->tcp) {
-		net_stats.tcp_connect_failed++;
+		NoteTcpConnectFailure(NetErrNoBuffer);
 		return -NetErrNoBuffer;
 	}
 	connection->active_open = true;
@@ -3105,7 +3226,7 @@ stdsint Devsman::StartTcpConnect(const uni::Network::IPv4Address& target_ip,
 	if (!SendTcpSyn(*connection)) {
 		const int error = connection->connect_error ? connection->connect_error : NetErrHostUnreachable;
 		ReleaseTcpConnection(context);
-		net_stats.tcp_connect_failed++;
+		NoteTcpConnectFailure(error);
 		return -error;
 	}
 	return 1;
@@ -3117,14 +3238,14 @@ stdsint Devsman::CheckTcpConnect(const uni::Network::TCPConnectionContext& conte
 	if (!connection || !connection->tcp) {
 		const int error = ConsumeTcpConnectError(context);
 		if (error) return -error;
-		net_stats.tcp_connect_failed++;
+		NoteTcpConnectFailure(NetErrConnectionRefused);
 		return -NetErrConnectionRefused;
 	}
 	if (IsTcpConnectReady(*connection)) return 1;
 	if (connection->reset_received) {
 		const int error = connection->connect_error ? connection->connect_error : NetErrConnectionRefused;
 		ReleaseTcpConnection(context);
-		net_stats.tcp_connect_failed++;
+		NoteTcpConnectFailure(error);
 		return -error;
 	}
 	if (IsTcpConnectExpired(*connection)) {
@@ -3133,13 +3254,13 @@ stdsint Devsman::CheckTcpConnect(const uni::Network::TCPConnectionContext& conte
 		RecordTcpConnectError(context, error);
 		net_stats.tcp_connect_timeout++;
 		ReleaseTcpConnection(context);
-		net_stats.tcp_connect_failed++;
+		NoteTcpConnectFailure(error);
 		return -error;
 	}
 	if (ShouldRetryTcpConnect(*connection) && !SendTcpSyn(*connection)) {
 		const int error = connection->connect_error ? connection->connect_error : NetErrHostUnreachable;
 		ReleaseTcpConnection(context);
-		net_stats.tcp_connect_failed++;
+		NoteTcpConnectFailure(error);
 		return -error;
 	}
 	return IsTcpConnectReady(*connection) ? 1 : 0;
@@ -3244,7 +3365,8 @@ bool Devsman::HasTcpSendSpace(const uni::Network::TCPConnectionContext& context)
 	if (connection->reset_received) return false;
 	if (connection->close_phase != NetTcpClosePhase::None) return false;
 	if (connection->tcp->getControl().state == uni::Network::TCPConnectionState::LastAck) return false;
-	return connection->tx_count < NetTcpTxPendingCapacity && !IsTcpTxRetryExhausted(*connection);
+	return connection->tx_count < NetTcpTxPendingCapacity &&
+		TcpPeerSendWindow(*connection) != 0 && !IsTcpTxRetryExhausted(*connection);
 }
 
 stdsint Devsman::ReceiveTcp(const uni::Network::TCPConnectionContext& context, void* payload, stduint capacity) {
@@ -3274,18 +3396,26 @@ stdsint Devsman::SendTcp(const uni::Network::TCPConnectionContext& context, cons
 	const auto* bytes = reinterpret_cast<const uint8*>(payload);
 	stduint total = 0;
 	while (total < length) {
-		while (connection->tx_count >= NetTcpTxPendingCapacity) {
+		while (connection->tx_count >= NetTcpTxPendingCapacity || !TcpPeerSendWindow(*connection)) {
 			if (IsTcpTxRetryExhausted(*connection)) return total ? stdsint(total) : -1;
 			ProcessTcpControlTimers();
 			connection = FindTcpConnection(context.local.address, context.local.port,
 				context.remote.address, context.remote.port);
 			if (!connection || !connection->tcp) return total ? stdsint(total) : -1;
-			if (!connection->tx_count) break;
+			if (connection->reset_received) return total ? stdsint(total) : -1;
+			if (connection->close_phase != NetTcpClosePhase::None) return total ? stdsint(total) : -1;
+			if (connection->tcp->getControl().state == uni::Network::TCPConnectionState::LastAck) {
+				return total ? stdsint(total) : -1;
+			}
+			if (connection->tx_count < NetTcpTxPendingCapacity && TcpPeerSendWindow(*connection)) break;
 			syscall(syscall_t::REST, 1, 10);
 		}
 		if (!EnsureTcpTxStorage(*connection)) return total ? stdsint(total) : -1;
 		const stduint remaining = length - total;
-		const stduint chunk = remaining < chunk_capacity ? remaining : chunk_capacity;
+		stduint send_window = TcpPeerSendWindow(*connection);
+		if (!send_window) return total ? stdsint(total) : 0;
+		stduint chunk = remaining < chunk_capacity ? remaining : chunk_capacity;
+		if (chunk > send_window) chunk = send_window;
 		const uint32 sequence = connection->tcp->getControl().local_next_sequence;
 		uni::Network::TransportPayloadContext packet{
 			{
@@ -3304,6 +3434,7 @@ stdsint Devsman::SendTcp(const uni::Network::TCPConnectionContext& context, cons
 			return total ? stdsint(total) : sent;
 		}
 		net_stats.tx_tcp++;
+		connection->last_tx_tick = tick;
 		if (stduint(sent) < chunk) {
 			CancelTcpNewestTxPending(*connection);
 			if (!EnqueueTcpTxPending(*connection, sequence, bytes + total, stduint(sent))) {
@@ -3596,6 +3727,95 @@ bool Devsman::GetPendingUdpEntry(stduint index, void* entry, stduint length) {
 	return false;
 }
 
+stduint Devsman::DnsCacheCount() {
+	ExpireDnsCache();
+	stduint count = 0;
+	for0(i, NetDnsCacheCapacity) if (net_dns_cache[i].valid) count++;
+	return count;
+}
+
+bool Devsman::GetDnsCacheEntry(stduint index, void* entry, stduint length) {
+	if (!entry || length < sizeof(syscall_net_dns_cache_t)) return false;
+	ExpireDnsCache();
+	auto* output = reinterpret_cast<syscall_net_dns_cache_t*>(entry);
+	stduint ordinal = 0;
+	for0(i, NetDnsCacheCapacity) {
+		const auto& cached = net_dns_cache[i];
+		if (!cached.valid) continue;
+		if (ordinal++ != index) continue;
+		*output = {};
+		for0(j, uni::Network::IPv4AddressLength) output->address[j] = cached.address.octet[j];
+		stduint address_count = cached.address_count;
+		if (!address_count && !cached.address.isZero()) address_count = 1;
+		if (address_count > syscall_net_dns_cache_address_capacity) {
+			address_count = syscall_net_dns_cache_address_capacity;
+		}
+		output->address_count = uint16(address_count);
+		for0(a, address_count) {
+			for0(j, uni::Network::IPv4AddressLength) {
+				output->addresses[a][j] = cached.addresses[a].octet[j];
+			}
+		}
+		output->flags = cached.negative ? syscall_net_dns_cache_flag_negative : 0;
+		output->entry_index = uint16(index);
+		const stduint remaining_ticks = cached.expire_tick - tick;
+		output->ttl = uint32((remaining_ticks + CONFIG_SysTickFreq - 1) / CONFIG_SysTickFreq);
+		output->answer_count = uint32(cached.answer_count);
+		NetStringCopy(output->host, numsof(output->host), cached.host);
+		NetStringCopy(output->status, numsof(output->status), cached.status);
+		return true;
+	}
+	return false;
+}
+
+bool Devsman::StoreDnsCacheEntry(const void* entry, stduint length) {
+	if (!entry || length < sizeof(syscall_net_dns_cache_t)) return false;
+	const auto* input = reinterpret_cast<const syscall_net_dns_cache_t*>(entry);
+	if (!input->host[0]) return false;
+	if (NetStringLength(input->host, numsof(input->host)) >= numsof(input->host)) return false;
+	const bool negative = (input->flags & syscall_net_dns_cache_flag_negative) != 0;
+	stduint ttl = input->ttl;
+	if (!ttl && negative) ttl = NetDnsCacheFailureTtlSeconds;
+	if (!ttl) return false;
+	if (ttl > 86400u) ttl = 86400u;
+	auto* target = FindDnsCacheEntry(input->host);
+	if (!target) {
+		target = &net_dns_cache[net_dns_cache_next];
+		net_dns_cache_next = (net_dns_cache_next + 1) % NetDnsCacheCapacity;
+	}
+	*target = {};
+	for0(i, uni::Network::IPv4AddressLength) target->address.octet[i] = input->address[i];
+	stduint address_count = input->address_count;
+	if (address_count > syscall_net_dns_cache_address_capacity) {
+		address_count = syscall_net_dns_cache_address_capacity;
+	}
+	for0(a, address_count) {
+		for0(i, uni::Network::IPv4AddressLength) {
+			target->addresses[a].octet[i] = input->addresses[a][i];
+		}
+	}
+	if (!address_count && !target->address.isZero()) {
+		target->addresses[0] = target->address;
+		address_count = 1;
+	}
+	if (address_count && target->address.isZero()) target->address = target->addresses[0];
+	target->address_count = address_count;
+	NetStringCopy(target->host, numsof(target->host), input->host);
+	if (input->status[0]) NetStringCopy(target->status, numsof(target->status), input->status);
+	else NetStringCopy(target->status, numsof(target->status), negative ? "cached-fail" : "ok");
+	target->expire_tick = tick + ttl * CONFIG_SysTickFreq;
+	target->answer_count = input->answer_count;
+	target->negative = negative;
+	target->valid = true;
+	return true;
+}
+
+bool Devsman::ClearDnsCache() {
+	for0(i, NetDnsCacheCapacity) net_dns_cache[i] = {};
+	net_dns_cache_next = 0;
+	return true;
+}
+
 stduint Devsman::TcpListenerCount() {
 	stduint count = 0;
 	for0(i, NetTcpListenCapacity) {
@@ -3685,6 +3905,7 @@ bool Devsman::GetTcpConnectionEntry(stduint index, void* entry, stduint length) 
 		output->peer_mss = connection.peer_mss;
 		output->send_mss = uint16(NetTcpSendMss(connection));
 		output->rx_window = TcpReceiveWindow(connection);
+		output->peer_window = connection.peer_window;
 		output->rx_duplicate = connection.rx_duplicate;
 		output->rx_out_of_order = connection.rx_out_of_order;
 		output->rx_window_full = connection.rx_window_full;
@@ -3695,6 +3916,8 @@ bool Devsman::GetTcpConnectionEntry(stduint index, void* entry, stduint length) 
 			output->time_wait_age = uint16(age);
 			output->time_wait_remaining = uint16(remaining);
 		}
+		output->rx_idle_ticks = connection.last_rx_tick ? uint16(tick - connection.last_rx_tick) : 0;
+		output->tx_idle_ticks = connection.last_tx_tick ? uint16(tick - connection.last_tx_tick) : 0;
 		return true;
 	}
 	return false;

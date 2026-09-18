@@ -220,10 +220,16 @@ enum class syscall_net_route_func_t : stduint {
 	UDPInboxEntry,
 	UDPPendingCount,
 	UDPPendingEntry,
+	DNSCacheCount,
+	DNSCacheEntry,
+	DNSCacheStore,
+	DNSCacheClear,
 };
 
 constexpr uint16 syscall_net_route_flag_up = 0x0001u;
 constexpr uint16 syscall_net_route_flag_gateway = 0x0002u;
+constexpr uint16 syscall_net_dns_cache_flag_negative = 0x0001u;
+constexpr stduint syscall_net_dns_cache_address_capacity = 4u;
 constexpr uint16 syscall_net_config_source_static = 0u;
 constexpr uint16 syscall_net_config_source_dhcp_offered = 1u;
 constexpr uint16 syscall_net_config_source_dhcp_bound = 2u;
@@ -301,12 +307,15 @@ struct syscall_net_tcp_connection_t {
 	uint16 peer_mss = 0;
 	uint16 send_mss = 0;
 	uint16 rx_window = 0;
+	uint16 peer_window = 0;
 	uint16 rx_duplicate = 0;
 	uint16 rx_out_of_order = 0;
 	uint16 rx_window_full = 0;
 	uint16 tx_retransmit = 0;
 	uint16 time_wait_age = 0;
 	uint16 time_wait_remaining = 0;
+	uint16 rx_idle_ticks = 0;
+	uint16 tx_idle_ticks = 0;
 };
 
 struct syscall_net_udp_inbox_t {
@@ -328,6 +337,19 @@ struct syscall_net_pending_udp_t {
 	uint16 payload_length = 0;
 	uint16 arp_requests = 0;
 	uint16 age_ticks = 0;
+};
+
+struct syscall_net_dns_cache_t {
+	uint8 address[4] = {};
+	uint16 flags = 0;
+	uint16 entry_index = 0;
+	uint32 ttl = 0;
+	uint32 answer_count = 0;
+	char host[64] = {};
+	char status[24] = {};
+	uint16 address_count = 0;
+	uint16 reserved = 0;
+	uint8 addresses[syscall_net_dns_cache_address_capacity][4] = {};
 };
 
 struct syscall_net_stats_t {
@@ -360,6 +382,12 @@ struct syscall_net_stats_t {
 	uint32 dhcp_nak_rx = 0;
 	uint32 tcp_accept = 0;
 	uint32 tcp_connect_failed = 0;
+	uint32 tcp_connect_refused = 0;
+	uint32 tcp_connect_host_unreach = 0;
+	uint32 tcp_connect_net_unreach = 0;
+	uint32 tcp_connect_no_buffer = 0;
+	uint32 tcp_connect_addr_in_use = 0;
+	uint32 tcp_listener_close = 0;
 };
 
 _ESYM_C stduint syscall(syscall_t callid, stduint p1 = 0, stduint p2 = 0, stduint p3 = 0);// MCCA 4 PARA SYSC
