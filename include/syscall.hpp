@@ -347,6 +347,7 @@ struct syscall_net_dns_cache_t {
 	uint32 answer_count = 0;
 	char host[64] = {};
 	char status[24] = {};
+	char cname_target[64] = {};
 	uint16 address_count = 0;
 	uint16 reserved = 0;
 	uint8 addresses[syscall_net_dns_cache_address_capacity][4] = {};
@@ -388,6 +389,12 @@ struct syscall_net_stats_t {
 	uint32 tcp_connect_no_buffer = 0;
 	uint32 tcp_connect_addr_in_use = 0;
 	uint32 tcp_listener_close = 0;
+	uint8 tcp_connect_last_local_address[4] = {};
+	uint8 tcp_connect_last_remote_address[4] = {};
+	uint16 tcp_connect_last_local_port = 0;
+	uint16 tcp_connect_last_remote_port = 0;
+	uint16 tcp_connect_last_error = 0;
+	uint16 tcp_connect_reserved = 0;
 };
 
 _ESYM_C stduint syscall(syscall_t callid, stduint p1 = 0, stduint p2 = 0, stduint p3 = 0);// MCCA 4 PARA SYSC

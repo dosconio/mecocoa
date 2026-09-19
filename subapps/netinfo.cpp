@@ -303,6 +303,17 @@ static void PrintTcpState() {
 			(unsigned)count_close_wait, (unsigned)count_closing,
 			(unsigned)count_time_wait, (unsigned)count_reset);
 	}
+	syscall_net_stats_t stats{};
+	if (syscall(syscall_t::ROUT, stduint(syscall_net_route_func_t::NetStats),
+		_IMM(&stats), sizeof(stats)) >= 0 && stats.tcp_connect_last_error) {
+		printf("netinfo: tcp last-fail local=");
+		PrintIPv4(stats.tcp_connect_last_local_address);
+		printf(":%u peer=", (unsigned)stats.tcp_connect_last_local_port);
+		PrintIPv4(stats.tcp_connect_last_remote_address);
+		printf(":%u err=%u/%s\n\r", (unsigned)stats.tcp_connect_last_remote_port,
+			(unsigned)stats.tcp_connect_last_error,
+			mcca_net_socket_error_name(stats.tcp_connect_last_error));
+	}
 }
 
 static void PrintTcpConnectingOnly() {
@@ -440,6 +451,27 @@ static void PrintNetworkConfig() {
 		}
 		printf(" %s\n\r", (iface.flags & syscall_net_route_flag_up) ? "up" : "down");
 	}
+	uni::Network::NetworkConfigSnapshot config{};
+	if (count && mcca_net_read_config(config, 0)) {
+		uint8 address[4] = {};
+		uint8 netmask[4] = {};
+		uint8 gateway[4] = {};
+		uint8 dns[4] = {};
+		uni::Network::IPv4WriteAddress(address, config.ipv4.address);
+		uni::Network::IPv4WriteAddress(netmask, config.ipv4.netmask);
+		uni::Network::IPv4WriteAddress(gateway, config.default_route.gateway);
+		uni::Network::IPv4WriteAddress(dns, config.ipv4.dns);
+		printf("netinfo: config snapshot if%u ip=", (unsigned)config.interface_index);
+		PrintIPv4(address);
+		printf(" mask=");
+		PrintIPv4(netmask);
+		printf(" gw=");
+		PrintIPv4(gateway);
+		printf(" dns=");
+		PrintIPv4(dns);
+		printf(" lease=%u %s\n\r", (unsigned)config.ipv4.lease_seconds,
+			config.link_up ? "up" : "down");
+	}
 	PrintDefaultRoute();
 }
 
@@ -474,6 +506,10 @@ static int PrintDnsLookup(const char* host) {
 		printf("netinfo: dns cname=%u non-a=%u\n\r",
 			(unsigned)mcca_net_dns_cname_count(), (unsigned)mcca_net_dns_non_a_count());
 	}
+	const char* cname = mcca_net_dns_cname_target();
+	if (cname) {
+		printf("netinfo: dns cname-target=%s\n\r", cname);
+	}
 	return 0;
 }
 
@@ -488,6 +524,10 @@ static int PrintDns6Probe(const char* host) {
 	if (mcca_net_dns_cname_count() || mcca_net_dns_non_a_count()) {
 		printf("netinfo: dns6 cname=%u non-a=%u\n\r",
 			(unsigned)mcca_net_dns_cname_count(), (unsigned)mcca_net_dns_non_a_count());
+	}
+	const char* cname = mcca_net_dns_cname_target();
+	if (cname) {
+		printf("netinfo: dns6 cname-target=%s\n\r", cname);
 	}
 	return ok ? 0 : 1;
 }
@@ -519,6 +559,8 @@ static int PrintDnsCache(const char* host) {
 			(unsigned)octet[3], (unsigned)ttl);
 		printf("netinfo: dns-cache%u status-code=%d\n\r",
 			(unsigned)i, mcca_net_dns_status_text_code(status));
+		const char* cname = mcca_net_dns_cache_entry_cname_target(i);
+		if (cname) printf("netinfo: dns-cache%u cname-target=%s\n\r", (unsigned)i, cname);
 		const stduint address_count = mcca_net_dns_cache_entry_address_count(i);
 		if (address_count > 1) {
 			printf("netinfo: dns-cache%u addresses=%u\n\r", (unsigned)i, (unsigned)address_count);

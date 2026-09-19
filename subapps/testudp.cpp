@@ -10,7 +10,7 @@
 #include <netinet/in.h>
 
 static void PrintUsage() {
-	printf("usage: testudp [--dontwait] [--nonblock] [--poll] [--select] [--reuse] [--sockopt] [--bind-ip ipv4] [--listen] [ipv4] [port] [payload] [conn]\n\r");
+	printf("usage: testudp [--dontwait] [--nonblock] [--poll] [--select] [--reuse] [--sockopt] [--bind-ip ipv4] [--listen] [--once] [--count n] [ipv4] [port] [payload] [conn]\n\r");
 	printf("  default: testudp 10.0.2.1 7 mecocoa\n\r");
 	printf("  sendto:  testudp 10.0.2.1 7777 mecocoa\n\r");
 	printf("  conn:    testudp 10.0.2.1 7777 mecocoa conn\n\r");
@@ -21,6 +21,7 @@ static void PrintUsage() {
 	printf("  opt:     testudp --sockopt 10.0.2.1 7777 mecocoa\n\r");
 	printf("  bindip:  testudp --bind-ip 10.0.2.15 --listen 7777\n\r");
 	printf("  listen:  testudp --reuse --listen 7777\n\r");
+	printf("  count:   testudp --reuse --listen --count 3 7777\n\r");
 	printf("  reuseck: testudp --reuse-check 7777\n\r");
 }
 
@@ -135,6 +136,7 @@ int main(int argc, char** argv) {
 	bool show_sockopt = false;
 	bool bind_ip_set = false;
 	bool reuse_check = false;
+	int listen_count = 1;
 	uint32 bind_ip = 0;
 	for (int i = 1; i < argc; i++) {
 		if (StrCompare(argv[i], "conn") == 0) {
@@ -159,6 +161,22 @@ int main(int argc, char** argv) {
 		}
 		if (StrCompare(argv[i], "--reuse-check") == 0) {
 			reuse_check = true;
+			continue;
+		}
+		if (StrCompare(argv[i], "--once") == 0) {
+			listen_count = 1;
+			continue;
+		}
+		if (StrCompare(argv[i], "--count") == 0) {
+			if (++i >= argc) {
+				PrintUsage();
+				return 1;
+			}
+			listen_count = atoi(argv[i]);
+			if (listen_count <= 0) {
+				PrintUsage();
+				return 1;
+			}
 			continue;
 		}
 		if (StrCompare(argv[i], "--poll") == 0) {
@@ -194,7 +212,8 @@ int main(int argc, char** argv) {
 
 	if (reuse_check) {
 		if (positional_count > 1 || listen_mode || use_connect || dont_wait || nonblock ||
-			reuse_address || use_poll || use_select || show_sockopt || bind_ip_set) {
+			reuse_address || use_poll || use_select || show_sockopt || bind_ip_set ||
+			listen_count != 1) {
 			PrintUsage();
 			return 1;
 		}
@@ -219,6 +238,10 @@ int main(int argc, char** argv) {
 
 	uint32 target_ip = 0;
 	uint16 parsed_target_port = 0;
+	if (!listen_mode && listen_count != 1) {
+		PrintUsage();
+		return 1;
+	}
 	if (!listen_mode && (!mcca_net_parse_ipv4_host(target_text, &target_ip) ||
 		!mcca_net_parse_port(positional_count >= 2 ? positional[1] : "7", &parsed_target_port))) {
 		PrintUsage();
@@ -274,20 +297,44 @@ int main(int argc, char** argv) {
 			close(fd);
 			return 1;
 		}
-		if (received == 0) {
-			printf("testudp: no packet received\n\r");
-			close(fd);
-			return 2;
+		for (int handled = 0; handled < listen_count; handled++) {
+			if (handled) {
+				source = {};
+				source_length = sizeof(source);
+				const stdsint next = recvfrom(fd, buffer, sizeof(buffer), receive_flags,
+					(struct sockaddr*)&source, &source_length);
+				if (next <= 0) {
+					printf("testudp: no packet received\n\r");
+					close(fd);
+					return 2;
+				}
+				buffer[next < stdsint(sizeof(buffer)) ? next : stdsint(sizeof(buffer) - 1)] = 0;
+				const stdsint sent = sendto(fd, buffer, (size_t)next, 0,
+					(const struct sockaddr*)&source, source_length);
+				if (sent < 0) {
+					printf("testudp: send failed\n\r");
+					close(fd);
+					return 1;
+				}
+				PrintSocketAddress("source", source);
+				printf("testudp: echoed %d bytes\n\r", (int)sent);
+				continue;
+			}
+			if (received == 0) {
+				printf("testudp: no packet received\n\r");
+				close(fd);
+				return 2;
+			}
+			PrintSocketAddress("source", source);
+			const stdsint sent = sendto(fd, buffer, (size_t)received, 0,
+				(const struct sockaddr*)&source, source_length);
+			if (sent < 0) {
+				printf("testudp: send failed\n\r");
+				close(fd);
+				return 1;
+			}
+			printf("testudp: echoed %d bytes\n\r", (int)sent);
 		}
-		PrintSocketAddress("source", source);
-		const stdsint sent = sendto(fd, buffer, (size_t)received, 0,
-			(const struct sockaddr*)&source, source_length);
-		if (sent < 0) {
-			printf("testudp: send failed\n\r");
-			close(fd);
-			return 1;
-		}
-		printf("testudp: echoed %d bytes\n\r", (int)sent);
 		close(fd);
 		return 0;
 	}

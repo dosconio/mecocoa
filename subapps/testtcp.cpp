@@ -12,7 +12,7 @@
 #include <netdb.h>
 
 static void PrintUsage() {
-	printf("usage: testtcp [--reuse] [--nonblock] [--poll-accept] [--backlog n] [--accept-delay ms] [--accept-timeout ms] [--count n] [--sockopt] --listen [port]\n\r");
+	printf("usage: testtcp [--reuse] [--nonblock] [--poll-accept] [--backlog n] [--accept-delay ms] [--accept-timeout ms] [--once] [--count n] [--sockopt] --listen [port]\n\r");
 	printf("       testtcp [--repeat n] [--burst n] [--fill n] [--read-size n] [--write-size n] [--hold ms] [--poll-after-recv] [--select-after-recv] [--shutdown-write] [--shutdown-read] [--send-after-shutdown] [--zero-io] [--sockopt] [--sockerr-twice] [--http] host port [payload]\n\r");
 	printf("  listen: testtcp --listen 80\n\r");
 	printf("  reuse:  testtcp --reuse --listen 80\n\r");
@@ -21,6 +21,7 @@ static void PrintUsage() {
 	printf("  bklg:   testtcp --backlog 1 --listen 80\n\r");
 	printf("  delay:  testtcp --backlog 1 --accept-delay 3000 --listen 80\n\r");
 	printf("  atime:  testtcp --accept-timeout 3000 --listen 80 --count 3\n\r");
+	printf("  once:   testtcp --listen 80 --once\n\r");
 	printf("  count:  testtcp --listen 80 --count 3\n\r");
 	printf("  burst:  testtcp --burst 3 10.0.2.1 7777 hello\n\r");
 	printf("  fill:   testtcp --fill 1500 10.0.2.1 7777\n\r");
@@ -38,8 +39,10 @@ static void PrintUsage() {
 	printf("  resolve:testtcp --resolve example.com\n\r");
 	printf("  rcached:testtcp --resolve-twice example.com\n\r");
 	printf("  gai:    testtcp --gai example.com 80\n\r");
+	printf("  gaiany: testtcp --gai-any example.com http\n\r");
 	printf("  gaipsv: testtcp --gai-passive 80\n\r");
 	printf("  gainum: testtcp --gai-numeric 10.0.2.1 7777\n\r");
+	printf("  gainms: testtcp --gai-numeric-serv 10.0.2.1 7777\n\r");
 	printf("  dns:    testtcp example.com 80 hello\n\r");
 	printf("  http:   testtcp --http example.com 80\n\r");
 	printf("  path:   testtcp --http --http-path / example.com 80\n\r");
@@ -202,9 +205,14 @@ static void PrintDnsIPv4Result(const char* host) {
 	}
 }
 
-static int PrintGetAddrInfo(const char* host, const char* service, int flags) {
+static void PrintDnsCnameTarget() {
+	const char* cname = mcca_net_dns_cname_target();
+	if (cname) printf("testtcp: dns cname-target=%s\n\r", cname);
+}
+
+static int PrintGetAddrInfo(const char* host, const char* service, int flags, int family) {
 	struct addrinfo hints{};
-	hints.ai_family = AF_INET;
+	hints.ai_family = family;
 	hints.ai_socktype = SOCK_STREAM;
 	hints.ai_protocol = IPPROTO_TCP;
 	hints.ai_flags = flags;
@@ -261,6 +269,7 @@ int main(int argc, char** argv) {
 	bool resolve_twice = false;
 	bool gai_mode = false;
 	int gai_flags = 0;
+	int gai_family = AF_INET;
 	int serve_rounds = 0;
 	int receive_timeout = -1;
 	int send_timeout = -1;
@@ -331,6 +340,10 @@ int main(int argc, char** argv) {
 				PrintUsage();
 				return 1;
 			}
+			continue;
+		}
+		if (StrCompare(argv[i], "--once") == 0) {
+			accept_limit = 1;
 			continue;
 		}
 		if (StrCompare(argv[i], "--repeat") == 0) {
@@ -489,6 +502,11 @@ int main(int argc, char** argv) {
 			gai_mode = true;
 			continue;
 		}
+		if (StrCompare(argv[i], "--gai-any") == 0) {
+			gai_mode = true;
+			gai_family = AF_UNSPEC;
+			continue;
+		}
 		if (StrCompare(argv[i], "--gai-passive") == 0) {
 			gai_mode = true;
 			gai_flags |= AI_PASSIVE;
@@ -497,6 +515,11 @@ int main(int argc, char** argv) {
 		if (StrCompare(argv[i], "--gai-numeric") == 0) {
 			gai_mode = true;
 			gai_flags |= AI_NUMERICHOST;
+			continue;
+		}
+		if (StrCompare(argv[i], "--gai-numeric-serv") == 0) {
+			gai_mode = true;
+			gai_flags |= AI_NUMERICSERV;
 			continue;
 		}
 		if (StrCompare(argv[i], "--http-path") == 0) {
@@ -556,7 +579,7 @@ int main(int argc, char** argv) {
 				host = positional[0];
 				service = positional[1];
 			}
-			return PrintGetAddrInfo(host, service, gai_flags);
+			return PrintGetAddrInfo(host, service, gai_flags, gai_family);
 		}
 		if (resolve_only) {
 			if (positional_count != 1 || reuse_address || nonblock || poll_accept || accept_limit ||
@@ -595,6 +618,7 @@ int main(int argc, char** argv) {
 					printf("testtcp: dns cname=%u non-a=%u\n\r",
 						(unsigned)mcca_net_dns_cname_count(), (unsigned)mcca_net_dns_non_a_count());
 				}
+				PrintDnsCnameTarget();
 				if (i == 0) {
 					PrintDnsIPv4Result(positional[0]);
 					PrintAddrinfoIPv4(positional[0]);
@@ -670,6 +694,8 @@ int main(int argc, char** argv) {
 			if (repeat_count > 1) printf("testtcp: repeat %d/%d\n\r", repeat + 1, repeat_count);
 			int fd = -1;
 			bool connected = false;
+			int connect_errors[4] = {};
+			bool connect_error_valid[4] = {};
 			for0(address_index, target_address_count) {
 				fd = OpenTcpClientSocket(nonblock, show_sockopt, receive_timeout, send_timeout);
 				if (fd < 0) {
@@ -687,9 +713,13 @@ int main(int argc, char** argv) {
 						inet_ntoa(target.sin_addr));
 				}
 				if (connect(fd, (const struct sockaddr*)&target, sizeof(target)) < 0) {
+					const int error = mcca_net_get_socket_error(fd);
+					if (address_index < numsof(connect_errors)) {
+						connect_errors[address_index] = error;
+						connect_error_valid[address_index] = true;
+					}
 					if (!nonblock_connect &&
 						!nonblock && !poll_connect && address_index + 1 < target_address_count) {
-						const int error = mcca_net_get_socket_error(fd);
 						printf("testtcp: connect failed ip=%s error=%d %s\n\r",
 							inet_ntoa(target.sin_addr), error,
 							mcca_net_socket_error_name(error));
@@ -699,7 +729,17 @@ int main(int argc, char** argv) {
 					}
 					if (!nonblock_connect) {
 						printf("testtcp: connect failed\n\r");
-						PrintSocketError(fd, "connect-error");
+						printf("testtcp: connect-error=%d %s\n\r",
+							error, mcca_net_socket_error_name(error));
+						if (target_address_count > 1) {
+							printf("testtcp: connect summary failed=%u\n\r", (unsigned)target_address_count);
+							for0(i, target_address_count) {
+								if (i >= numsof(connect_errors) || !connect_error_valid[i]) continue;
+								printf("testtcp: connect summary A%u=%s error=%d %s\n\r",
+									(unsigned)i, inet_ntoa(target_addresses[i]),
+									connect_errors[i], mcca_net_socket_error_name(connect_errors[i]));
+							}
+						}
 						if (sockerr_twice) PrintSocketError(fd, "connect-error-again");
 						close(fd);
 						if (fill_payload) free(fill_payload);
@@ -807,11 +847,14 @@ int main(int argc, char** argv) {
 			char buffer[513] = {};
 			stduint received_total = 0;
 			char http_status[80] = {};
+			int http_status_code = 0;
 			bool http_status_ready = false;
 			bool http_header_ready = false;
 			stduint http_header_length = 0;
 			bool http_content_length_ready = false;
 			stduint http_content_length = 0;
+			bool http_content_type_ready = false;
+			char http_content_type[80] = {};
 			while (http_mode || received_total < sent_total) {
 				struct pollfd read_pfd{};
 				read_pfd.fd = fd;
@@ -855,24 +898,37 @@ int main(int argc, char** argv) {
 					}
 					http_status[line_length] = 0;
 					http_status_ready = line_length != 0;
-					http_header_length = mcca_net_http_header_length(buffer, stduint(received));
-					http_header_ready = http_header_length != 0;
-					http_content_length_ready =
-						mcca_net_http_content_length(buffer, stduint(received), &http_content_length) != 0;
+					const char* header_value = nullptr;
+					stduint header_value_length = 0;
+					if (mcca_net_http_parse_response(buffer, stduint(received), &http_status_code,
+						&http_header_length, &http_content_length, &header_value, &header_value_length)) {
+						http_header_ready = http_header_length != 0;
+						http_content_length_ready = http_content_length != 0;
+					}
+					if (header_value && header_value_length) {
+						if (header_value_length >= sizeof(http_content_type)) {
+							header_value_length = sizeof(http_content_type) - 1;
+						}
+						for0(i, header_value_length) http_content_type[i] = header_value[i];
+						http_content_type[header_value_length] = 0;
+						http_content_type_ready = true;
+					}
 				}
 				printf("testtcp: recv %d bytes: %s\n\r", (int)received, buffer);
 				received_total += stduint(received);
 			}
 			if (http_mode) {
 				if (http_status_ready) printf("testtcp: http status: %s\n\r", http_status);
-				const int status_code = mcca_net_http_status_code(http_status, strlen(http_status));
-				if (status_code) printf("testtcp: http code=%d\n\r", status_code);
+				if (http_status_code) printf("testtcp: http code=%d\n\r", http_status_code);
 				if (http_header_ready) {
 					printf("testtcp: http header=%u body-offset=%u\n\r",
 						(unsigned)http_header_length, (unsigned)http_header_length);
 				}
 				if (http_content_length_ready) {
 					printf("testtcp: http content-length=%u\n\r", (unsigned)http_content_length);
+				}
+				if (http_content_type_ready) {
+					printf("testtcp: http content-type=%s\n\r", http_content_type);
 				}
 				printf("testtcp: http bytes=%u\n\r", (unsigned)received_total);
 			}

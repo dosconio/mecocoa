@@ -177,6 +177,7 @@ namespace {
 		stduint address_count;
 		char host[64];
 		char status[24];
+		char cname_target[64];
 		bool negative;
 		bool valid;
 	};
@@ -1404,6 +1405,13 @@ namespace {
 
 	void RecordTcpConnectError(const uni::Network::TCPConnectionContext& context, int error) {
 		if (!context.local.port || !context.remote.port || !error) return;
+		for0(i, uni::Network::IPv4AddressLength) {
+			net_stats.tcp_connect_last_local_address[i] = context.local.address.octet[i];
+			net_stats.tcp_connect_last_remote_address[i] = context.remote.address.octet[i];
+		}
+		net_stats.tcp_connect_last_local_port = context.local.port;
+		net_stats.tcp_connect_last_remote_port = context.remote.port;
+		net_stats.tcp_connect_last_error = uint16(error);
 		for0(i, NetTcpConnectErrorCapacity) {
 			auto& entry = net_tcp_connect_errors[i];
 			if (!entry.valid) continue;
@@ -3763,6 +3771,7 @@ bool Devsman::GetDnsCacheEntry(stduint index, void* entry, stduint length) {
 		output->answer_count = uint32(cached.answer_count);
 		NetStringCopy(output->host, numsof(output->host), cached.host);
 		NetStringCopy(output->status, numsof(output->status), cached.status);
+		NetStringCopy(output->cname_target, numsof(output->cname_target), cached.cname_target);
 		return true;
 	}
 	return false;
@@ -3803,6 +3812,7 @@ bool Devsman::StoreDnsCacheEntry(const void* entry, stduint length) {
 	NetStringCopy(target->host, numsof(target->host), input->host);
 	if (input->status[0]) NetStringCopy(target->status, numsof(target->status), input->status);
 	else NetStringCopy(target->status, numsof(target->status), negative ? "cached-fail" : "ok");
+	NetStringCopy(target->cname_target, numsof(target->cname_target), input->cname_target);
 	target->expire_tick = tick + ttl * CONFIG_SysTickFreq;
 	target->answer_count = input->answer_count;
 	target->negative = negative;

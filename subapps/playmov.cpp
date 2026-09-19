@@ -54,7 +54,7 @@ static void PrintUsage(const char* prog_name) {
 	outsfmt("  -h, --help      : Display this help message\n\r");
 	outsfmt("  -l, --loop      : Enable loop playback mode\n\r\n\r");
 	outsfmt("Supported Formats:\n\r");
-	outsfmt("  AVI:   Motion JPEG (MJPEG), Raw RGB/DIB\n\r");
+	outsfmt("  AVI:   MPEG-4 Part 2 (DivX / Xvid / MP4V / DX50), Motion JPEG (MJPEG), Raw RGB/DIB\n\r");
 	outsfmt("  MPEG:  MPEG-1 / MPEG-2 Video & Program Stream (.mpg, .mpeg, .m1v, .m2v, .vob, .dat)\n\r");
 }
 
