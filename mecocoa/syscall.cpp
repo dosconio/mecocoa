@@ -773,6 +773,11 @@ DEFSYSC sysc_ROUT(stduint func, stduint p1, stduint p2) {
 	}
 	case syscall_net_route_func_t::DNSCacheClear: {
 		#if (_MCCA & 0xFF00) == 0x8600
+		if (p1 && p2 >= sizeof(syscall_net_dns_cache_t)) {
+			syscall_net_dns_cache_t entry{};
+			MccaMemCopyP(&entry, nullptr, true, (void*)p1, pb, false, sizeof(entry));
+			return Devsman::ClearDnsCache(entry.host) ? 0 : -1;
+		}
 		return Devsman::ClearDnsCache() ? 0 : -1;
 		#else
 		return -1;

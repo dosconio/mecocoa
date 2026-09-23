@@ -57,9 +57,9 @@ $(BIN_DIR)/cot: $(wildcard $(uherpath)/COTLAB/src/*.cpp) $(LIBNATIVE) $(MCCA_CRT
 	$(MCCA_CXX) $(MCCA_CXXFLAGS) -o $@ $(uherpath)/COTLAB/src/*.cpp \
 		$(MCCA_LDLIBS) -lm
 
-$(BIN_DIR)/ribbon: subapps/ribbon.cpp $(ulibpath)/cpp/fileformat/picture/PNG.cpp $(MCCA_CRT0) $(MCCA_LIBC)
+$(BIN_DIR)/ribbon: subapps/ribbon.cpp $(MCCA_CRT0) $(MCCA_LIBC)
 	@echo "MK ribbon"
-	$(MCCA_CXX) $(MCCA_CXXFLAGS) -o $@ subapps/ribbon.cpp $(ulibpath)/cpp/fileformat/picture/PNG.cpp $(MCCA_LDLIBS)
+	$(MCCA_CXX) $(MCCA_CXXFLAGS) -o $@ subapps/ribbon.cpp $(MCCA_LDLIBS)
 
 #####
 
@@ -95,22 +95,22 @@ $(BIN_DIR)/gblock: subapps/game_breakout.cpp $(MCCA_CRT0) $(MCCA_LIBC)
 	@echo "MK game_breakout"
 	$(MCCA_CXX) $(MCCA_CXXFLAGS) -o $@ subapps/game_breakout.cpp $(MCCA_LDLIBS)
 
-$(BIN_DIR)/playmzk: subapps/playmzk.cpp $(ulibpath)/cpp/fileformat/audio/WAV.cpp $(ulibpath)/cpp/fileformat/audio/MP3.cpp $(ulibpath)/cpp/fileformat/audio/FLAC.cpp $(ulibpath)/cpp/fileformat/audio/OGG.cpp $(ulibpath)/cpp/System/Audiosys/Resampler.cpp $(ulibpath)/cpp/System/Audiosys/HostMusic.cpp $(MCCA_CRT0) $(MCCA_LIBC)
+$(BIN_DIR)/playmzk: subapps/playmzk.cpp $(MCCA_CRT0) $(MCCA_LIBC)
 	@echo "MK playmzk"
-	$(MCCA_CXX) $(MCCA_CXXFLAGS) -o $@ subapps/playmzk.cpp $(ulibpath)/cpp/fileformat/audio/WAV.cpp $(ulibpath)/cpp/fileformat/audio/MP3.cpp $(ulibpath)/cpp/fileformat/audio/FLAC.cpp $(ulibpath)/cpp/fileformat/audio/OGG.cpp $(ulibpath)/cpp/System/Audiosys/Resampler.cpp $(ulibpath)/cpp/System/Audiosys/HostMusic.cpp $(MCCA_LDLIBS)
+	$(MCCA_CXX) $(MCCA_CXXFLAGS) -o $@ subapps/playmzk.cpp $(MCCA_LDLIBS)
 
-$(BIN_DIR)/playmov: subapps/playmov.cpp $(ulibpath)/cpp/fileformat/video/AVI.cpp $(ulibpath)/cpp/fileformat/video/MPEG.cpp $(ulibpath)/cpp/fileformat/video/MPEG4.cpp $(ulibpath)/c/arith/dct.c $(ulibpath)/cpp/fileformat/audio/MP3.cpp $(ulibpath)/cpp/fileformat/picture/JPEG.cpp $(ulibpath)/cpp/System/Videosys/HostVideo.cpp $(MCCA_CRT0) $(MCCA_LIBC)
+$(BIN_DIR)/playmov: subapps/playmov.cpp $(MCCA_CRT0) $(MCCA_LIBC)
 	@echo "MK playmov"
-	$(MCCA_CXX) $(MCCA_CXXFLAGS) -o $@ subapps/playmov.cpp $(ulibpath)/cpp/fileformat/video/AVI.cpp $(ulibpath)/cpp/fileformat/video/MPEG.cpp $(ulibpath)/cpp/fileformat/video/MPEG4.cpp $(ulibpath)/c/arith/dct.c $(ulibpath)/cpp/fileformat/audio/MP3.cpp $(ulibpath)/cpp/fileformat/picture/JPEG.cpp $(ulibpath)/cpp/System/Videosys/HostVideo.cpp $(MCCA_LDLIBS)
+	$(MCCA_CXX) $(MCCA_CXXFLAGS) -o $@ subapps/playmov.cpp $(MCCA_LDLIBS)
 
 
 $(BIN_DIR)/notepad: subapps/notepad.cpp $(MCCA_CRT0) $(MCCA_LIBC)
 	@echo "MK notepad"
 	$(MCCA_CXX) $(MCCA_CXXFLAGS) -o $@ subapps/notepad.cpp $(MCCA_LDLIBS)
 
-$(BIN_DIR)/viewpic: subapps/viewpic.cpp $(ulibpath)/cpp/fileformat/picture/BMP.cpp $(ulibpath)/cpp/fileformat/picture/JPEG.cpp $(ulibpath)/cpp/fileformat/picture/PNG.cpp $(ulibpath)/cpp/fileformat/picture/GIF.cpp $(MCCA_CRT0) $(MCCA_LIBC)
+$(BIN_DIR)/viewpic: subapps/viewpic.cpp  $(MCCA_CRT0) $(MCCA_LIBC)
 	@echo "MK viewpic"
-	$(MCCA_CXX) $(MCCA_CXXFLAGS) -o $@ subapps/viewpic.cpp $(ulibpath)/cpp/fileformat/picture/BMP.cpp $(ulibpath)/cpp/fileformat/picture/JPEG.cpp $(ulibpath)/cpp/fileformat/picture/PNG.cpp $(ulibpath)/cpp/fileformat/picture/GIF.cpp $(MCCA_LDLIBS)
+	$(MCCA_CXX) $(MCCA_CXXFLAGS) -o $@ subapps/viewpic.cpp $(MCCA_LDLIBS)
 
 #
 

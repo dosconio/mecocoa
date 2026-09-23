@@ -275,6 +275,7 @@ public:
 	static bool GetDnsCacheEntry(stduint index, void* entry, stduint length);
 	static bool StoreDnsCacheEntry(const void* entry, stduint length);
 	static bool ClearDnsCache();
+	static bool ClearDnsCache(const char* host);
 	static stduint TcpListenerCount();
 	static bool GetTcpListenerEntry(stduint index, void* entry, stduint length);
 	static stduint TcpConnectionCount();

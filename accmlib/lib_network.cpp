@@ -25,13 +25,16 @@ static void MccaWriteNet16(uint8* data, uint16 value) {
 constexpr stduint MccaDnsCacheCapacity = 4;
 constexpr stduint MccaDnsAddressCapacity = 4;
 constexpr stduint MccaDnsResolveDepthLimit = 4;
+constexpr stduint MccaDnsPositiveCacheMinSeconds = 2;
 
 struct MccaDnsCacheEntry {
 	char host[64];
 	char status[24];
 	struct in_addr address;
 	struct in_addr addresses[MccaDnsAddressCapacity];
+	stduint created_second;
 	stduint expire_second;
+	stduint ttl_seconds;
 	stduint answer_count;
 	stduint address_count;
 	char cname_target[64];
@@ -212,6 +215,7 @@ static void MccaLoadKernelDnsAnswers(const syscall_net_dns_cache_t& entry) {
 
 static void MccaRememberDnsCache(const char* host, const struct in_addr* address, stduint ttl, stduint answer_count) {
 	if (!host || !address || !ttl || strlen(host) >= sizeof(mcca_dns_cache[0].host)) return;
+	const stduint cache_ttl = ttl < MccaDnsPositiveCacheMinSeconds ? MccaDnsPositiveCacheMinSeconds : ttl;
 	MccaDnsCacheEntry* entry = MccaDnsCacheFind(host);
 	if (!entry) {
 		entry = &mcca_dns_cache[mcca_dns_cache_next];
@@ -231,11 +235,13 @@ static void MccaRememberDnsCache(const char* host, const struct in_addr* address
 		entry->addresses[0] = *address;
 		entry->address_count = 1;
 	}
-	entry->expire_second = syssecond() + ttl;
+	entry->expire_second = syssecond() + cache_ttl;
+	entry->created_second = syssecond();
+	entry->ttl_seconds = cache_ttl;
 	entry->answer_count = answer_count;
 	MccaCopyText(entry->cname_target, sizeof(entry->cname_target), mcca_dns_last_cname_target);
 	entry->negative = false;
-	MccaStoreKernelDnsCache(host, address, "ok", ttl, answer_count, false);
+	MccaStoreKernelDnsCache(host, address, "ok", cache_ttl, answer_count, false);
 }
 
 static void MccaRememberDnsFailure(const char* host, const char* status) {
@@ -255,6 +261,8 @@ static void MccaRememberDnsFailure(const char* host, const char* status) {
 	entry->address_count = 0;
 	for0(i, MccaDnsAddressCapacity) entry->addresses[i] = {};
 	entry->expire_second = syssecond() + 3;
+	entry->created_second = syssecond();
+	entry->ttl_seconds = 3;
 	entry->answer_count = 0;
 	MccaCopyText(entry->cname_target, sizeof(entry->cname_target), mcca_dns_last_cname_target);
 	entry->negative = true;
@@ -565,6 +573,19 @@ extern "C" const char* mcca_net_dns_cache_entry_status(stduint index) {
 	return nullptr;
 }
 
+extern "C" const char* mcca_net_dns_cache_entry_source(stduint index) {
+	MccaExpireDnsCache();
+	syscall_net_dns_cache_t kernel_entry{};
+	if (MccaGetKernelDnsCacheEntry(index, kernel_entry)) return "kernel";
+	stduint ordinal = 0;
+	for0(i, MccaDnsCacheCapacity) {
+		auto& entry = mcca_dns_cache[i];
+		if (!MccaDnsCacheEntryTtl(entry)) continue;
+		if (ordinal++ == index) return "local";
+	}
+	return nullptr;
+}
+
 extern "C" const char* mcca_net_dns_cache_entry_cname_target(stduint index) {
 	MccaExpireDnsCache();
 	syscall_net_dns_cache_t kernel_entry{};
@@ -582,6 +603,21 @@ extern "C" const char* mcca_net_dns_cache_entry_cname_target(stduint index) {
 		return entry.cname_target[0] ? entry.cname_target : nullptr;
 	}
 	return nullptr;
+}
+
+extern "C" stduint mcca_net_dns_cache_entry_age(stduint index) {
+	MccaExpireDnsCache();
+	syscall_net_dns_cache_t kernel_entry{};
+	if (MccaGetKernelDnsCacheEntry(index, kernel_entry)) return kernel_entry.age;
+	stduint ordinal = 0;
+	const stduint now = syssecond();
+	for0(i, MccaDnsCacheCapacity) {
+		auto& entry = mcca_dns_cache[i];
+		if (!MccaDnsCacheEntryTtl(entry)) continue;
+		if (ordinal++ != index) continue;
+		return entry.created_second && now >= entry.created_second ? now - entry.created_second : 0;
+	}
+	return 0;
 }
 
 extern "C" stduint mcca_net_dns_cache_entry_address_count(stduint index) {
@@ -659,6 +695,22 @@ extern "C" int mcca_net_dns_cache_clear() {
 	return syscall(syscall_t::ROUT, stduint(syscall_net_route_func_t::DNSCacheClear), 1, 0) >= 0;
 }
 
+extern "C" int mcca_net_dns_cache_clear_host(const char* host) {
+	if (!host || !host[0]) return mcca_net_dns_cache_clear();
+	MccaExpireDnsCache();
+	for0(i, MccaDnsCacheCapacity) {
+		if (!MccaDnsCacheEntryTtl(mcca_dns_cache[i])) continue;
+		if (strcmp(mcca_dns_cache[i].host, host) == 0) {
+			mcca_dns_cache[i] = {};
+			if (mcca_dns_cache_last == i) mcca_dns_cache_last = stduint(-1);
+		}
+	}
+	syscall_net_dns_cache_t entry{};
+	MccaCopyText(entry.host, sizeof(entry.host), host);
+	return syscall(syscall_t::ROUT, stduint(syscall_net_route_func_t::DNSCacheClear),
+		_IMM(&entry), sizeof(entry)) >= 0;
+}
+
 extern "C" const char* mcca_net_dns_cache_host() {
 	MccaExpireDnsCache();
 	if (mcca_dns_cache_last >= MccaDnsCacheCapacity) return nullptr;
@@ -679,6 +731,51 @@ extern "C" int mcca_net_dns_cache_address(struct in_addr* output) {
 		mcca_dns_cache[mcca_dns_cache_last].negative) return 0;
 	*output = mcca_dns_cache[mcca_dns_cache_last].address;
 	return 1;
+}
+
+extern "C" void mcca_net_print_dns_result(const char* prefix, const char* host) {
+	if (!prefix) prefix = "net";
+	if (!host) printf("%s: dns status=%s\n\r", prefix, mcca_net_dns_status());
+	printf("%s: dns status-code=%d\n\r", prefix, mcca_net_dns_status_code());
+	if (mcca_net_dns_ttl()) printf("%s: dns ttl=%u\n\r", prefix, (unsigned)mcca_net_dns_ttl());
+	if (mcca_net_dns_answer_count()) {
+		printf("%s: dns answers=%u\n\r", prefix, (unsigned)mcca_net_dns_answer_count());
+	}
+	if (mcca_net_dns_address_count()) {
+		printf("%s: dns addresses=%u\n\r", prefix, (unsigned)mcca_net_dns_address_count());
+		for0(i, mcca_net_dns_address_count()) {
+			struct in_addr item{};
+			if (!mcca_net_dns_address(i, &item)) continue;
+			const uint8* octet = (const uint8*)&item.s_addr;
+			printf("%s: dns A%u=%u.%u.%u.%u\n\r", prefix, (unsigned)i,
+				(unsigned)octet[0], (unsigned)octet[1],
+				(unsigned)octet[2], (unsigned)octet[3]);
+		}
+	}
+	if (mcca_net_dns_cname_count() || mcca_net_dns_non_a_count()) {
+		printf("%s: dns cname=%u non-a=%u\n\r", prefix,
+			(unsigned)mcca_net_dns_cname_count(), (unsigned)mcca_net_dns_non_a_count());
+	}
+	const char* cname = mcca_net_dns_cname_target();
+	if (cname) printf("%s: dns cname-target=%s\n\r", prefix, cname);
+}
+
+extern "C" void mcca_net_print_addrinfo(const char* prefix, const struct addrinfo* result) {
+	if (!prefix) prefix = "net";
+	stduint count = 0;
+	for (auto* item = result; item; item = item->ai_next) {
+		if (!item->ai_addr || item->ai_addrlen < sizeof(struct sockaddr_in)) continue;
+		const auto* ipv4 = (const struct sockaddr_in*)item->ai_addr;
+		printf("%s: gai%u family=%d type=%d proto=%d addr=%s:%u\n\r",
+			prefix, (unsigned)count, item->ai_family, item->ai_socktype,
+			item->ai_protocol, inet_ntoa(ipv4->sin_addr),
+			(unsigned)ntohs(ipv4->sin_port));
+		if (item->ai_canonname) {
+			printf("%s: gai%u canon=%s\n\r", prefix, (unsigned)count, item->ai_canonname);
+		}
+		count++;
+	}
+	printf("%s: gai count=%u\n\r", prefix, (unsigned)count);
 }
 
 extern "C" int mcca_net_dns_set_server_ipv4(const struct in_addr* address) {
@@ -1006,6 +1103,66 @@ extern "C" int mcca_net_get_socket_option_int(int fd, int option_name, int* outp
 extern "C" stduint mcca_net_timeval_milliseconds(const struct timeval* timeout) {
 	if (!timeout) return 0;
 	return stduint(timeout->tv_sec) * 1000u + stduint((timeout->tv_usec + 999) / 1000);
+}
+
+extern "C" void mcca_net_print_socket_options(const char* prefix, int fd) {
+	if (!prefix) prefix = "net";
+	int value = 0;
+	if (mcca_net_get_socket_option_int(fd, SO_REUSEADDR, &value)) {
+		printf("%s: so_reuseaddr=%d\n\r", prefix, value);
+	}
+	if (mcca_net_get_socket_option_int(fd, SO_TYPE, &value)) {
+		printf("%s: so_type=%d\n\r", prefix, value);
+	}
+	if (mcca_net_get_socket_option_int(fd, SO_ERROR, &value)) {
+		printf("%s: so_error=%d %s\n\r", prefix, value, mcca_net_socket_error_name(value));
+	}
+	struct timeval timeout{};
+	socklen_t length = sizeof(timeout);
+	if (getsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, &length) == 0) {
+		printf("%s: so_rcvtimeo=%ums\n\r", prefix,
+			(unsigned)mcca_net_timeval_milliseconds(&timeout));
+	}
+	length = sizeof(timeout);
+	if (getsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, &length) == 0) {
+		printf("%s: so_sndtimeo=%ums\n\r", prefix,
+			(unsigned)mcca_net_timeval_milliseconds(&timeout));
+	}
+}
+
+extern "C" void mcca_net_print_socket_address(const char* prefix, const char* label,
+	const struct sockaddr_in* address) {
+	if (!prefix) prefix = "net";
+	if (!label || !address) return;
+	char text[32] = {};
+	if (mcca_net_format_sockaddr_ipv4(text, sizeof(text), address)) {
+		printf("%s: %s=%s\n\r", prefix, label, text);
+	}
+}
+
+extern "C" void mcca_net_print_socket_names(const char* prefix, int fd, int include_peer) {
+	struct sockaddr_in local{};
+	socklen_t local_length = sizeof(local);
+	if (getsockname(fd, (struct sockaddr*)&local, &local_length) == 0) {
+		mcca_net_print_socket_address(prefix, "local", &local);
+	}
+	if (include_peer) {
+		struct sockaddr_in remote{};
+		socklen_t remote_length = sizeof(remote);
+		if (getpeername(fd, (struct sockaddr*)&remote, &remote_length) == 0) {
+			mcca_net_print_socket_address(prefix, "peer", &remote);
+		}
+	}
+}
+
+extern "C" int mcca_net_print_connect_error(const char* prefix, int fd, const char* label) {
+	if (!prefix) prefix = "net";
+	if (!label) label = "connect-error";
+	if (fd >= 0) mcca_net_print_socket_names(prefix, fd, 0);
+	const int value = fd >= 0 ? mcca_net_get_socket_error(fd) : -1;
+	if (value >= 0) printf("%s: %s=%d %s\n\r", prefix, label, value, mcca_net_socket_error_name(value));
+	else printf("%s: %s=query-failed\n\r", prefix, label);
+	return value;
 }
 
 extern "C" int mcca_net_parse_ipv4(const char* text, uint8 output[4]) {
@@ -1454,7 +1611,8 @@ extern "C" int getaddrinfo(const char* node, const char* service,
 		info->ai_addrlen = sizeof(struct sockaddr_in);
 		info->ai_addr = (struct sockaddr*)addr;
 		if ((flags & AI_CANONNAME) && !head && node && node[0]) {
-			info->ai_canonname = MccaDuplicateText(node);
+			const char* canon = (flags & AI_NUMERICHOST) ? nullptr : mcca_net_dns_cname_target();
+			info->ai_canonname = MccaDuplicateText(canon ? canon : node);
 			if (!info->ai_canonname) {
 				freeaddrinfo(info);
 				freeaddrinfo(head);

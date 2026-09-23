@@ -8,9 +8,11 @@
 #include <sys/select.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <arpa/inet.h>
+#include <netdb.h>
 
 static void PrintUsage() {
-	printf("usage: testudp [--dontwait] [--nonblock] [--poll] [--select] [--reuse] [--sockopt] [--bind-ip ipv4] [--listen] [--once] [--count n] [ipv4] [port] [payload] [conn]\n\r");
+	printf("usage: testudp [--dontwait] [--nonblock] [--poll] [--select] [--reuse] [--sockopt] [--bind-ip ipv4] [--listen] [--once] [--count n] [--hold ms] [ipv4] [port] [payload] [conn]\n\r");
 	printf("  default: testudp 10.0.2.1 7 mecocoa\n\r");
 	printf("  sendto:  testudp 10.0.2.1 7777 mecocoa\n\r");
 	printf("  conn:    testudp 10.0.2.1 7777 mecocoa conn\n\r");
@@ -22,6 +24,11 @@ static void PrintUsage() {
 	printf("  bindip:  testudp --bind-ip 10.0.2.15 --listen 7777\n\r");
 	printf("  listen:  testudp --reuse --listen 7777\n\r");
 	printf("  count:   testudp --reuse --listen --count 3 7777\n\r");
+	printf("  hold:    testudp --reuse --listen --hold 5000 7777\n\r");
+	printf("  gai:     testudp --gai 10.0.2.1 echo\n\r");
+	printf("  gaipsv:  testudp --gai-passive echo\n\r");
+	printf("  gainum:  testudp --gai-numeric-host 10.0.2.1 7777\n\r");
+	printf("  gainms:  testudp --gai-numeric-serv 10.0.2.1 7777\n\r");
 	printf("  reuseck: testudp --reuse-check 7777\n\r");
 }
 
@@ -35,25 +42,11 @@ static bool ParseUdpListenPort(const char* text, uint16* output) {
 }
 
 static void PrintSocketAddress(const char* label, const struct sockaddr_in& address) {
-	char text[32] = {};
-	if (mcca_net_format_sockaddr_ipv4(text, sizeof(text), &address)) {
-		printf("testudp: %s=%s\n\r", label, text);
-	}
+	mcca_net_print_socket_address("testudp", label, &address);
 }
 
 static void PrintSocketNames(int fd, bool peer) {
-	struct sockaddr_in local{};
-	socklen_t local_length = sizeof(local);
-	if (getsockname(fd, (struct sockaddr*)&local, &local_length) == 0) {
-		PrintSocketAddress("local", local);
-	}
-	if (peer) {
-		struct sockaddr_in remote{};
-		socklen_t remote_length = sizeof(remote);
-		if (getpeername(fd, (struct sockaddr*)&remote, &remote_length) == 0) {
-			PrintSocketAddress("peer", remote);
-		}
-	}
+	mcca_net_print_socket_names("testudp", fd, peer ? 1 : 0);
 }
 
 static bool SetReuseAddress(int fd) {
@@ -67,27 +60,7 @@ static bool SetReuseAddress(int fd) {
 }
 
 static void PrintSocketOptions(int fd) {
-	int value = 0;
-	if (mcca_net_get_socket_option_int(fd, SO_REUSEADDR, &value)) {
-		printf("testudp: so_reuseaddr=%d\n\r", value);
-	}
-	if (mcca_net_get_socket_option_int(fd, SO_TYPE, &value)) {
-		printf("testudp: so_type=%d\n\r", value);
-	}
-	if (mcca_net_get_socket_option_int(fd, SO_ERROR, &value)) {
-		printf("testudp: so_error=%d %s\n\r", value, mcca_net_socket_error_name(value));
-	}
-	struct timeval timeout{};
-	socklen_t length = sizeof(timeout);
-	if (getsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, &length) == 0) {
-		printf("testudp: so_rcvtimeo=%ums\n\r",
-			(unsigned)mcca_net_timeval_milliseconds(&timeout));
-	}
-	length = sizeof(timeout);
-	if (getsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, &length) == 0) {
-		printf("testudp: so_sndtimeo=%ums\n\r",
-			(unsigned)mcca_net_timeval_milliseconds(&timeout));
-	}
+	mcca_net_print_socket_options("testudp", fd);
 }
 
 static stduint NowMs() {
@@ -118,6 +91,21 @@ static int BindUdpForReuseCheck(uint16 port, bool reuse_address) {
 	return fd;
 }
 
+static int PrintUdpGetAddrInfo(const char* host, const char* service, int flags) {
+	struct addrinfo hints{};
+	hints.ai_family = AF_INET;
+	hints.ai_socktype = SOCK_DGRAM;
+	hints.ai_protocol = IPPROTO_UDP;
+	hints.ai_flags = flags;
+	struct addrinfo* result = nullptr;
+	const int ret = getaddrinfo(host, service, &hints, &result);
+	printf("testudp: gai status=%d %s\n\r", ret, gai_strerror(ret));
+	if (ret) return 1;
+	mcca_net_print_addrinfo("testudp", result);
+	freeaddrinfo(result);
+	return 0;
+}
+
 int main(int argc, char** argv) {
 	if (argc >= 2 && (!StrCompare(argv[1], "-h") || !StrCompare(argv[1], "--help") ||
 		!StrCompare(argv[1], "help"))) {
@@ -136,7 +124,10 @@ int main(int argc, char** argv) {
 	bool show_sockopt = false;
 	bool bind_ip_set = false;
 	bool reuse_check = false;
+	bool gai_mode = false;
+	int gai_flags = 0;
 	int listen_count = 1;
+	int hold_time = 0;
 	uint32 bind_ip = 0;
 	for (int i = 1; i < argc; i++) {
 		if (StrCompare(argv[i], "conn") == 0) {
@@ -163,6 +154,25 @@ int main(int argc, char** argv) {
 			reuse_check = true;
 			continue;
 		}
+		if (StrCompare(argv[i], "--gai") == 0) {
+			gai_mode = true;
+			continue;
+		}
+		if (StrCompare(argv[i], "--gai-passive") == 0) {
+			gai_mode = true;
+			gai_flags |= AI_PASSIVE;
+			continue;
+		}
+		if (StrCompare(argv[i], "--gai-numeric-host") == 0) {
+			gai_mode = true;
+			gai_flags |= AI_NUMERICHOST;
+			continue;
+		}
+		if (StrCompare(argv[i], "--gai-numeric-serv") == 0) {
+			gai_mode = true;
+			gai_flags |= AI_NUMERICSERV;
+			continue;
+		}
 		if (StrCompare(argv[i], "--once") == 0) {
 			listen_count = 1;
 			continue;
@@ -174,6 +184,18 @@ int main(int argc, char** argv) {
 			}
 			listen_count = atoi(argv[i]);
 			if (listen_count <= 0) {
+				PrintUsage();
+				return 1;
+			}
+			continue;
+		}
+		if (StrCompare(argv[i], "--hold") == 0) {
+			if (++i >= argc) {
+				PrintUsage();
+				return 1;
+			}
+			hold_time = atoi(argv[i]);
+			if (hold_time < 0) {
 				PrintUsage();
 				return 1;
 			}
@@ -210,10 +232,22 @@ int main(int argc, char** argv) {
 	const char* payload = positional_count >= 3 ? positional[2] : "mecocoa";
 	uint16 listen_port = 7;
 
+	if (gai_mode) {
+		const bool passive = (gai_flags & AI_PASSIVE) != 0;
+		if (positional_count != (passive ? 1u : 2u) || listen_mode || use_connect || dont_wait || nonblock ||
+			reuse_address || use_poll || use_select || show_sockopt || bind_ip_set ||
+			reuse_check || listen_count != 1 || hold_time) {
+			PrintUsage();
+			return 1;
+		}
+		return PrintUdpGetAddrInfo(passive ? nullptr : positional[0],
+			passive ? positional[0] : positional[1], gai_flags);
+	}
+
 	if (reuse_check) {
 		if (positional_count > 1 || listen_mode || use_connect || dont_wait || nonblock ||
 			reuse_address || use_poll || use_select || show_sockopt || bind_ip_set ||
-			listen_count != 1) {
+			listen_count != 1 || hold_time) {
 			PrintUsage();
 			return 1;
 		}
@@ -238,7 +272,7 @@ int main(int argc, char** argv) {
 
 	uint32 target_ip = 0;
 	uint16 parsed_target_port = 0;
-	if (!listen_mode && listen_count != 1) {
+	if (!listen_mode && (listen_count != 1 || hold_time)) {
 		PrintUsage();
 		return 1;
 	}
@@ -285,40 +319,24 @@ int main(int argc, char** argv) {
 			return 1;
 		}
 		PrintSocketNames(fd, false);
+		if (hold_time > 0) {
+			printf("testudp: hold=%dms\n\r", hold_time);
+			poll(nullptr, 0, hold_time);
+		}
 
 		char buffer[1500] = {};
 		struct sockaddr_in source{};
 		socklen_t source_length = sizeof(source);
 		const int receive_flags = dont_wait ? MSG_DONTWAIT : 0;
-		const stdsint received = recvfrom(fd, buffer, sizeof(buffer), receive_flags,
-			(struct sockaddr*)&source, &source_length);
-		if (received < 0) {
-			printf("testudp: recv failed\n\r");
-			close(fd);
-			return 1;
-		}
 		for (int handled = 0; handled < listen_count; handled++) {
-			if (handled) {
-				source = {};
-				source_length = sizeof(source);
-				const stdsint next = recvfrom(fd, buffer, sizeof(buffer), receive_flags,
-					(struct sockaddr*)&source, &source_length);
-				if (next <= 0) {
-					printf("testudp: no packet received\n\r");
-					close(fd);
-					return 2;
-				}
-				buffer[next < stdsint(sizeof(buffer)) ? next : stdsint(sizeof(buffer) - 1)] = 0;
-				const stdsint sent = sendto(fd, buffer, (size_t)next, 0,
-					(const struct sockaddr*)&source, source_length);
-				if (sent < 0) {
-					printf("testudp: send failed\n\r");
-					close(fd);
-					return 1;
-				}
-				PrintSocketAddress("source", source);
-				printf("testudp: echoed %d bytes\n\r", (int)sent);
-				continue;
+			source = {};
+			source_length = sizeof(source);
+			const stdsint received = recvfrom(fd, buffer, sizeof(buffer), receive_flags,
+				(struct sockaddr*)&source, &source_length);
+			if (received < 0) {
+				printf("testudp: recv failed\n\r");
+				close(fd);
+				return 1;
 			}
 			if (received == 0) {
 				printf("testudp: no packet received\n\r");
@@ -334,6 +352,7 @@ int main(int argc, char** argv) {
 				return 1;
 			}
 			printf("testudp: echoed %d bytes\n\r", (int)sent);
+			printf("testudp: progress %d/%d\n\r", handled + 1, listen_count);
 		}
 		close(fd);
 		return 0;

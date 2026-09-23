@@ -20,7 +20,7 @@ static void PrintUsage() {
 	printf("  dns: netinfo --dns example.com\n\r");
 	printf("  dns6: netinfo --dns6 example.com\n\r");
 	printf("  dns cache: netinfo --dns-cache [example.com]\n\r");
-	printf("  dns clear: netinfo --dns-cache-clear\n\r");
+	printf("  dns clear: netinfo --dns-cache-clear [example.com]\n\r");
 	printf("  dhcp: netinfo --dhcp-renew | --dhcp-release\n\r");
 }
 
@@ -126,9 +126,14 @@ static void PrintUdpState() {
 			printf("netinfo: udp inbox%u query failed\n\r", (unsigned)i);
 			continue;
 		}
-		printf("netinfo: udp%u port=%u queued=%u drops=%u waiters=%u inbox=%u %s%s\n\r",
-			(unsigned)i, (unsigned)inbox.port, (unsigned)inbox.queued,
-			(unsigned)inbox.drops, (unsigned)inbox.waiters, (unsigned)inbox.inbox_id,
+		printf("netinfo: udp%u local=", (unsigned)i);
+		PrintIPv4(inbox.local_address);
+		printf(":%u queued=%u/%u drops=%u waiters=%u/%u payload=%u inbox=%u %s%s\n\r",
+			(unsigned)inbox.port, (unsigned)inbox.queued,
+			(unsigned)inbox.queue_capacity,
+			(unsigned)inbox.drops, (unsigned)inbox.waiters,
+			(unsigned)inbox.waiter_capacity,
+			(unsigned)inbox.payload_capacity, (unsigned)inbox.inbox_id,
 			(inbox.flags & syscall_net_route_flag_up) ? "up" : "down",
 			(inbox.flags & 0x0100u) ? " reuse" : "");
 	}
@@ -255,6 +260,7 @@ static void PrintTcpState() {
 	stduint count_established = 0;
 	stduint count_close_wait = 0;
 	stduint count_closing = 0;
+	stduint count_fin_wait = 0;
 	stduint count_time_wait = 0;
 	stduint count_reset = 0;
 	for0(i, connection_count) {
@@ -268,7 +274,10 @@ static void PrintTcpState() {
 		if (connection.state == 0 && (connection.flags & 0x0100u)) count_connecting++;
 		else if (connection.state == 1) count_established++;
 		else if (connection.state == 2) count_close_wait++;
-		else if (connection.state == 4 || connection.state == 5 || connection.state == 6) count_closing++;
+		else if (connection.state == 4 || connection.state == 5 || connection.state == 6) {
+			count_closing++;
+			if (connection.state == 4 || connection.state == 5) count_fin_wait++;
+		}
 		else if (connection.state == 7) count_time_wait++;
 		else if (connection.state == 8) count_reset++;
 		printf("netinfo: tcp%u local=", (unsigned)i);
@@ -292,16 +301,19 @@ static void PrintTcpState() {
 			printf(" tw-age=%u tw-left=%u",
 				(unsigned)connection.time_wait_age, (unsigned)connection.time_wait_remaining);
 		}
+		if (connection.fin_age_ticks) printf(" fin-age=%u", (unsigned)connection.fin_age_ticks);
+		if (connection.fin_retry_count) printf(" fin-retry=%u", (unsigned)connection.fin_retry_count);
 		if (connection.flags & 0x0200u) printf(" fin-ack");
 		if (connection.flags & 0x0400u) printf(" tx-exhausted");
 		if (connection.flags & 0x0800u) printf(" reset");
 		printf("\n\r");
 	}
 	if (connection_count) {
-		printf("netinfo: tcp summary connecting=%u established=%u close-wait=%u closing=%u time-wait=%u reset=%u\n\r",
+		printf("netinfo: tcp summary connecting=%u established=%u close-wait=%u fin-wait=%u closing=%u time-wait=%u reset=%u\n\r",
 			(unsigned)count_connecting, (unsigned)count_established,
-			(unsigned)count_close_wait, (unsigned)count_closing,
-			(unsigned)count_time_wait, (unsigned)count_reset);
+			(unsigned)count_close_wait, (unsigned)count_fin_wait,
+			(unsigned)count_closing, (unsigned)count_time_wait,
+			(unsigned)count_reset);
 	}
 	syscall_net_stats_t stats{};
 	if (syscall(syscall_t::ROUT, stduint(syscall_net_route_func_t::NetStats),
@@ -310,9 +322,13 @@ static void PrintTcpState() {
 		PrintIPv4(stats.tcp_connect_last_local_address);
 		printf(":%u peer=", (unsigned)stats.tcp_connect_last_local_port);
 		PrintIPv4(stats.tcp_connect_last_remote_address);
-		printf(":%u err=%u/%s\n\r", (unsigned)stats.tcp_connect_last_remote_port,
+		printf(":%u err=%u/%s age=%u\n\r", (unsigned)stats.tcp_connect_last_remote_port,
 			(unsigned)stats.tcp_connect_last_error,
-			mcca_net_socket_error_name(stats.tcp_connect_last_error));
+			mcca_net_socket_error_name(stats.tcp_connect_last_error),
+			(unsigned)stats.tcp_connect_last_age);
+	}
+	else {
+		printf("netinfo: tcp last-fail none\n\r");
 	}
 }
 
@@ -420,6 +436,12 @@ static void PrintNetStats() {
 		(unsigned)stats.tcp_connect_timeout,
 		(unsigned)stats.tcp_connect_refused,
 		(unsigned)(stats.tcp_connect_host_unreach + stats.tcp_connect_net_unreach));
+	if (stats.tcp_connect_last_error) {
+		printf("netinfo: tcp-connect recent err=%u/%s age=%u\n\r",
+			(unsigned)stats.tcp_connect_last_error,
+			mcca_net_socket_error_name(stats.tcp_connect_last_error),
+			(unsigned)stats.tcp_connect_last_age);
+	}
 }
 
 static void PrintNetworkConfig() {
@@ -445,6 +467,12 @@ static void PrintNetworkConfig() {
 		printf(" src=%s dhcp=%s lease=%u age=%u",
 			ConfigSourceName(iface.config_source), DhcpStateName(iface.dhcp_state),
 			(unsigned)iface.dhcp_lease_time, (unsigned)iface.dhcp_bound_age);
+		if (iface.dns[0] || iface.dns[1] || iface.dns[2] || iface.dns[3]) {
+			printf(" dns-source=%s", ConfigSourceName(iface.config_source));
+		}
+		if (iface.gateway[0] || iface.gateway[1] || iface.gateway[2] || iface.gateway[3]) {
+			printf(" route-source=%s", ConfigSourceName(iface.config_source));
+		}
 		if (iface.dhcp_server[0] || iface.dhcp_server[1] || iface.dhcp_server[2] || iface.dhcp_server[3]) {
 			printf(" server=");
 			PrintIPv4(iface.dhcp_server);
@@ -486,30 +514,7 @@ static int PrintDnsLookup(const char* host) {
 	printf("netinfo: dns %s A=%u.%u.%u.%u status=%s\n\r", host,
 		(unsigned)octet[0], (unsigned)octet[1], (unsigned)octet[2], (unsigned)octet[3],
 		mcca_net_dns_status());
-	printf("netinfo: dns status-code=%d\n\r", mcca_net_dns_status_code());
-	if (mcca_net_dns_ttl()) printf("netinfo: dns ttl=%u\n\r", (unsigned)mcca_net_dns_ttl());
-	if (mcca_net_dns_answer_count()) {
-		printf("netinfo: dns answers=%u\n\r", (unsigned)mcca_net_dns_answer_count());
-	}
-	if (mcca_net_dns_address_count() > 1) {
-		printf("netinfo: dns addresses=%u\n\r", (unsigned)mcca_net_dns_address_count());
-		for0(i, mcca_net_dns_address_count()) {
-			struct in_addr item{};
-			if (!mcca_net_dns_address(i, &item)) continue;
-			const uint8* item_octet = (const uint8*)&item.s_addr;
-			printf("netinfo: dns A%u=%u.%u.%u.%u\n\r", (unsigned)i,
-				(unsigned)item_octet[0], (unsigned)item_octet[1],
-				(unsigned)item_octet[2], (unsigned)item_octet[3]);
-		}
-	}
-	if (mcca_net_dns_cname_count() || mcca_net_dns_non_a_count()) {
-		printf("netinfo: dns cname=%u non-a=%u\n\r",
-			(unsigned)mcca_net_dns_cname_count(), (unsigned)mcca_net_dns_non_a_count());
-	}
-	const char* cname = mcca_net_dns_cname_target();
-	if (cname) {
-		printf("netinfo: dns cname-target=%s\n\r", cname);
-	}
+	mcca_net_print_dns_result("netinfo", nullptr);
 	return 0;
 }
 
@@ -533,6 +538,7 @@ static int PrintDns6Probe(const char* host) {
 }
 
 static int PrintDnsCache(const char* host) {
+	bool had_host = host && host[0];
 	if (host) {
 		struct in_addr resolved{};
 		if (!mcca_net_resolve_ipv4(host, &resolved)) {
@@ -541,7 +547,7 @@ static int PrintDnsCache(const char* host) {
 	}
 	const stduint count = mcca_net_dns_cache_count();
 	if (!count) {
-		printf("netinfo: dns-cache empty\n\r");
+		printf("netinfo: dns-cache %s\n\r", had_host ? "miss" : "empty");
 		return 0;
 	}
 	printf("netinfo: dns-cache entries=%u\n\r", (unsigned)count);
@@ -551,12 +557,16 @@ static int PrintDnsCache(const char* host) {
 		stduint ttl = 0;
 		if (!mcca_net_dns_cache_entry(i, &cached_host, &address, &ttl)) continue;
 		const char* status = mcca_net_dns_cache_entry_status(i);
+		const char* source = mcca_net_dns_cache_entry_source(i);
+		const stduint age = mcca_net_dns_cache_entry_age(i);
+		const stduint lifetime = ttl + age;
 		const uint8* octet = (const uint8*)&address.s_addr;
-		printf("netinfo: dns-cache%u host=%s status=%s A=%u.%u.%u.%u ttl=%u\n\r",
+		printf("netinfo: dns-cache%u host=%s src=%s status=%s A=%u.%u.%u.%u ttl=%u age=%u expire-in=%u\n\r",
 			(unsigned)i, cached_host ? cached_host : "(none)",
+			source ? source : "unknown",
 			status ? status : "unknown",
 			(unsigned)octet[0], (unsigned)octet[1], (unsigned)octet[2],
-			(unsigned)octet[3], (unsigned)ttl);
+			(unsigned)octet[3], (unsigned)lifetime, (unsigned)age, (unsigned)ttl);
 		printf("netinfo: dns-cache%u status-code=%d\n\r",
 			(unsigned)i, mcca_net_dns_status_text_code(status));
 		const char* cname = mcca_net_dns_cache_entry_cname_target(i);
@@ -593,12 +603,15 @@ int main(int argc, char** argv) {
 	if ((argc == 2 || argc == 3) && !StrCompare(argv[1], "--dns-cache")) {
 		return PrintDnsCache(argc == 3 ? argv[2] : nullptr);
 	}
-	if (argc == 2 && !StrCompare(argv[1], "--dns-cache-clear")) {
-		if (!mcca_net_dns_cache_clear()) {
+	if ((argc == 2 || argc == 3) && !StrCompare(argv[1], "--dns-cache-clear")) {
+		const char* host = argc == 3 ? argv[2] : nullptr;
+		const int ok = host ? mcca_net_dns_cache_clear_host(host) : mcca_net_dns_cache_clear();
+		if (!ok) {
 			printf("netinfo: dns-cache clear failed\n\r");
 			return 1;
 		}
-		printf("netinfo: dns-cache cleared\n\r");
+		if (host) printf("netinfo: dns-cache cleared host=%s\n\r", host);
+		else printf("netinfo: dns-cache cleared\n\r");
 		return 0;
 	}
 	if (argc == 2 && !StrCompare(argv[1], "--dhcp-renew")) {
@@ -681,8 +694,11 @@ int main(int argc, char** argv) {
 	if (view_tcp) PrintTcpState();
 	if (view_dhcp) PrintDhcpState();
 	if (view_pending) {
+		printf("netinfo: pending arp\n\r");
 		PrintArpCache();
+		printf("netinfo: pending udp\n\r");
 		PrintUdpPendingOnly();
+		printf("netinfo: pending tcp\n\r");
 		PrintTcpConnectingOnly();
 	}
 	if (view_stats) PrintNetStats();

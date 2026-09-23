@@ -316,15 +316,21 @@ struct syscall_net_tcp_connection_t {
 	uint16 time_wait_remaining = 0;
 	uint16 rx_idle_ticks = 0;
 	uint16 tx_idle_ticks = 0;
+	uint16 fin_age_ticks = 0;
+	uint16 fin_retry_count = 0;
 };
 
 struct syscall_net_udp_inbox_t {
+	uint8 local_address[4] = {};
 	uint16 port = 0;
 	uint16 flags = 0;
 	uint16 entry_index = 0;
 	uint16 queued = 0;
 	uint16 drops = 0;
 	uint16 waiters = 0;
+	uint16 queue_capacity = 0;
+	uint16 waiter_capacity = 0;
+	uint16 payload_capacity = 0;
 	stduint inbox_id = 0;
 };
 
@@ -344,6 +350,7 @@ struct syscall_net_dns_cache_t {
 	uint16 flags = 0;
 	uint16 entry_index = 0;
 	uint32 ttl = 0;
+	uint32 age = 0;
 	uint32 answer_count = 0;
 	char host[64] = {};
 	char status[24] = {};
@@ -394,7 +401,7 @@ struct syscall_net_stats_t {
 	uint16 tcp_connect_last_local_port = 0;
 	uint16 tcp_connect_last_remote_port = 0;
 	uint16 tcp_connect_last_error = 0;
-	uint16 tcp_connect_reserved = 0;
+	uint16 tcp_connect_last_age = 0;
 };
 
 _ESYM_C stduint syscall(syscall_t callid, stduint p1 = 0, stduint p2 = 0, stduint p3 = 0);// MCCA 4 PARA SYSC

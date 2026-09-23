@@ -172,7 +172,9 @@ namespace {
 	struct NetDnsCacheEntry {
 		uni::Network::IPv4Address address;
 		uni::Network::IPv4Address addresses[syscall_net_dns_cache_address_capacity];
+		stduint created_tick;
 		stduint expire_tick;
+		stduint ttl_seconds;
 		stduint answer_count;
 		stduint address_count;
 		char host[64];
@@ -294,6 +296,7 @@ namespace {
 	stduint net_udp_error_next = 0;
 	NetTcpConnectError net_tcp_connect_errors[NetTcpConnectErrorCapacity]{};
 	stduint net_tcp_connect_error_next = 0;
+	stduint net_tcp_connect_last_tick = 0;
 	NetDnsCacheEntry net_dns_cache[NetDnsCacheCapacity]{};
 	stduint net_dns_cache_next = 0;
 	NetTcpListener net_tcp_listeners[NetTcpListenCapacity]{};
@@ -308,6 +311,7 @@ namespace {
 		stduint retry_count;
 		stduint bound_tick;
 		bool renew_started;
+		bool rebind_started;
 	};
 
 	NetDhcpRuntime net_dhcp{};
@@ -436,6 +440,7 @@ namespace {
 		net_dhcp.retry_count = 0;
 		net_dhcp.bound_tick = 0;
 		net_dhcp.renew_started = false;
+		net_dhcp.rebind_started = false;
 		if (net_dhcp.client) net_dhcp.client->Reset();
 	}
 
@@ -449,6 +454,7 @@ namespace {
 		net_dhcp.retry_count = 0;
 		net_dhcp.bound_tick = 0;
 		net_dhcp.renew_started = false;
+		net_dhcp.rebind_started = false;
 		return true;
 	}
 
@@ -1412,6 +1418,7 @@ namespace {
 		net_stats.tcp_connect_last_local_port = context.local.port;
 		net_stats.tcp_connect_last_remote_port = context.remote.port;
 		net_stats.tcp_connect_last_error = uint16(error);
+		net_tcp_connect_last_tick = tick;
 		for0(i, NetTcpConnectErrorCapacity) {
 			auto& entry = net_tcp_connect_errors[i];
 			if (!entry.valid) continue;
@@ -1429,6 +1436,35 @@ namespace {
 		entry.error = error;
 		entry.valid = true;
 		net_tcp_connect_error_next = (net_tcp_connect_error_next + 1) % NetTcpConnectErrorCapacity;
+	}
+
+	void ClearTcpConnectError(const uni::Network::TCPConnectionContext& context) {
+		for0(i, NetTcpConnectErrorCapacity) {
+			auto& entry = net_tcp_connect_errors[i];
+			if (!entry.valid) continue;
+			if (entry.local_port == context.local.port && entry.remote_port == context.remote.port &&
+				entry.local_ip == context.local.address && entry.remote_ip == context.remote.address) {
+				entry = {};
+			}
+		}
+		bool same_last = net_stats.tcp_connect_last_error &&
+			net_stats.tcp_connect_last_local_port == context.local.port &&
+			net_stats.tcp_connect_last_remote_port == context.remote.port;
+		for0(i, uni::Network::IPv4AddressLength) {
+			same_last = same_last &&
+				net_stats.tcp_connect_last_local_address[i] == context.local.address.octet[i] &&
+				net_stats.tcp_connect_last_remote_address[i] == context.remote.address.octet[i];
+		}
+		if (same_last) {
+			for0(i, uni::Network::IPv4AddressLength) {
+				net_stats.tcp_connect_last_local_address[i] = 0;
+				net_stats.tcp_connect_last_remote_address[i] = 0;
+			}
+			net_stats.tcp_connect_last_local_port = 0;
+			net_stats.tcp_connect_last_remote_port = 0;
+			net_stats.tcp_connect_last_error = 0;
+			net_tcp_connect_last_tick = 0;
+		}
 	}
 
 	void NoteTcpConnectFailure(int error) {
@@ -1843,6 +1879,15 @@ namespace {
 		WakeTcpRxReaders(connection);
 	}
 
+	void MarkTcpTxTimeout(NetTcpConnection& connection) {
+		if (connection.connect_error == NetErrTimedOut) return;
+		connection.connect_error = NetErrTimedOut;
+		if (connection.tcp && connection.active_open && !IsTcpConnectReady(connection)) {
+			RecordTcpConnectError(connection.tcp->getControl().context, NetErrTimedOut);
+		}
+		WakeTcpRxReaders(connection);
+	}
+
 	bool IsTcpTxRetryExhausted(const NetTcpConnection& connection) {
 		if (!connection.tx_count) return false;
 		const auto& pending = connection.tx_pending[connection.tx_head];
@@ -2035,12 +2080,35 @@ namespace {
 					(void)SendTcpPendingData(connection, connection.tx_head);
 					continue;
 				}
+				if (pending.valid && pending.length &&
+					pending.retry_count >= NetTcpTxRetryLimit &&
+					tick - pending.last_tick >= NetTcpTxRetryTicks) {
+					MarkTcpTxTimeout(connection);
+					continue;
+				}
+			}
+			if (!connection.active_open &&
+				control.state == uni::Network::TCPConnectionState::SynReceived &&
+				connection.synack_retry_count >= NetTcpControlRetryLimit &&
+				connection.last_synack_tick &&
+				tick - connection.last_synack_tick >= NetTcpControlRetryTicks) {
+				const auto context = control.context;
+				ReleaseTcpConnection(context);
+				continue;
 			}
 			if (!connection.active_open &&
 				control.state == uni::Network::TCPConnectionState::SynReceived &&
 				connection.synack_retry_count < NetTcpControlRetryLimit &&
 				(!connection.last_synack_tick || tick - connection.last_synack_tick >= NetTcpControlRetryTicks)) {
 				(void)SendTcpSynAck(connection);
+				continue;
+			}
+			if (control.state == uni::Network::TCPConnectionState::LastAck &&
+				connection.fin_retry_count >= NetTcpControlRetryLimit &&
+				connection.last_fin_tick &&
+				tick - connection.last_fin_tick >= NetTcpControlRetryTicks) {
+				const auto context = control.context;
+				ReleaseTcpConnection(context);
 				continue;
 			}
 			if (control.state == uni::Network::TCPConnectionState::LastAck &&
@@ -2102,18 +2170,60 @@ namespace {
 		}
 	}
 
+	stduint DhcpLeaseAgeTicks() {
+		if (!net_dhcp.bound_tick || !net_config.dhcp_lease_time) return 0;
+		return tick - net_dhcp.bound_tick;
+	}
+
+	stduint DhcpLeaseTicks() {
+		return stduint(net_config.dhcp_lease_time) * CONFIG_SysTickFreq;
+	}
+
+	stduint DhcpT1Ticks() {
+		return DhcpLeaseTicks() / 2;
+	}
+
+	stduint DhcpT2Ticks() {
+		return (DhcpLeaseTicks() * 7) / 8;
+	}
+
 	bool HasDhcpLeaseTimerPending() {
-		if (!net_dhcp.client || !net_dhcp.client->isBound()) return false;
-		if (!net_dhcp.bound_tick || !net_config.dhcp_lease_time || net_dhcp.renew_started) return false;
-		const stduint t1_ticks = (stduint(net_config.dhcp_lease_time) * CONFIG_SysTickFreq) / 2;
-		return t1_ticks && tick - net_dhcp.bound_tick >= t1_ticks;
+		if (!net_dhcp.client || !net_dhcp.bound_tick || !net_config.dhcp_lease_time) return false;
+		const stduint age_ticks = DhcpLeaseAgeTicks();
+		const stduint lease_ticks = DhcpLeaseTicks();
+		if (lease_ticks && age_ticks >= lease_ticks) return true;
+		if (!net_dhcp.rebind_started && DhcpT2Ticks() && age_ticks >= DhcpT2Ticks()) return true;
+		if (!net_dhcp.renew_started && DhcpT1Ticks() && age_ticks >= DhcpT1Ticks()) return true;
+		return false;
 	}
 
 	void ProcessDhcpLeaseTimer() {
-		if (!HasDhcpLeaseTimerPending()) return;
-		net_dhcp.renew_started = true;
-		(void)StartDhcpDiscovery();
-		(void)SendDhcpDiscover();
+		if (!net_dhcp.client || !net_dhcp.bound_tick || !net_config.dhcp_lease_time) return;
+		const stduint lease_ticks = DhcpLeaseTicks();
+		const stduint age_ticks = DhcpLeaseAgeTicks();
+		if (lease_ticks && age_ticks >= lease_ticks) {
+			ApplyStaticIPv4Config();
+			(void)StartDhcpDiscovery();
+			(void)SendDhcpDiscover();
+			return;
+		}
+		if (!net_dhcp.rebind_started && DhcpT2Ticks() && age_ticks >= DhcpT2Ticks()) {
+			net_dhcp.rebind_started = true;
+			net_dhcp.renew_started = true;
+			(void)StartDhcpDiscovery();
+			(void)SendDhcpDiscover();
+			return;
+		}
+		if (!net_dhcp.renew_started && DhcpT1Ticks() && age_ticks >= DhcpT1Ticks()) {
+			net_dhcp.renew_started = true;
+			net_dhcp.last_tick = 0;
+			net_dhcp.retry_count = 0;
+			if (!SendDhcpRequest()) {
+				net_dhcp.rebind_started = true;
+				(void)StartDhcpDiscovery();
+				(void)SendDhcpDiscover();
+			}
+		}
 	}
 
 	void FlushPendingTcpConnectsFor(const uni::Network::IPv4Address& target_ip) {
@@ -2493,6 +2603,7 @@ namespace {
 				net_dhcp.retry_count = 0;
 				net_dhcp.bound_tick = tick;
 				net_dhcp.renew_started = false;
+				net_dhcp.rebind_started = false;
 				if (!(old_gateway == gateway)) {
 					InvalidateArpCache(old_gateway);
 					InvalidateArpCache(gateway);
@@ -2596,6 +2707,7 @@ namespace {
 			UpdateTcpPeerWindow(*connection, tcp);
 			control.remote_next_sequence = tcp.sequence + 1;
 			control.state = uni::Network::TCPConnectionState::Established;
+			ClearTcpConnectError(control.context);
 			SendTcpAckForSegment(dev, frame, ipv4, tcp,
 				control.local_next_sequence, control.remote_next_sequence,
 				"[Net] tcp connect ack", TcpReceiveWindow(*connection));
@@ -3363,7 +3475,8 @@ bool Devsman::IsTcpReceiveClosed(const uni::Network::TCPConnectionContext& conte
 bool Devsman::HasTcpError(const uni::Network::TCPConnectionContext& context) {
 	auto* connection = FindTcpConnection(context.local.address, context.local.port,
 		context.remote.address, context.remote.port);
-	return connection && (connection->reset_received || IsTcpTxRetryExhausted(*connection));
+	return connection && (connection->reset_received || connection->connect_error ||
+		IsTcpTxRetryExhausted(*connection));
 }
 
 bool Devsman::HasTcpSendSpace(const uni::Network::TCPConnectionContext& context) {
@@ -3382,6 +3495,7 @@ stdsint Devsman::ReceiveTcp(const uni::Network::TCPConnectionContext& context, v
 		context.remote.address, context.remote.port);
 	if (!connection) return -1;
 	if (connection->reset_received) return -1;
+	if (connection->connect_error && !connection->rx_count) return -1;
 	return DequeueTcpRx(*connection, payload, capacity);
 }
 
@@ -3390,6 +3504,7 @@ stdsint Devsman::SendTcp(const uni::Network::TCPConnectionContext& context, cons
 		context.remote.address, context.remote.port);
 	if (!connection || !connection->tcp) return -1;
 	if (connection->reset_received) return -1;
+	if (connection->connect_error) return -1;
 	if (connection->tcp->getControl().state == uni::Network::TCPConnectionState::LastAck) return -1;
 	if (!length) return 0;
 	if (!payload) return -1;
@@ -3699,6 +3814,9 @@ bool Devsman::GetUdpInboxEntry(stduint index, void* entry, stduint length) {
 	output->queued = uint16(inbox.count);
 	output->drops = uint16(inbox.drops);
 	output->waiters = uint16(inbox.read_waiter_count);
+	output->queue_capacity = uint16(NetUdpInboxDepth);
+	output->waiter_capacity = uint16(NetUdpInboxWaiterCapacity);
+	output->payload_capacity = uint16(NetUdpInboxPayloadSize);
 	output->inbox_id = inbox.id;
 	return true;
 }
@@ -3768,6 +3886,8 @@ bool Devsman::GetDnsCacheEntry(stduint index, void* entry, stduint length) {
 		output->entry_index = uint16(index);
 		const stduint remaining_ticks = cached.expire_tick - tick;
 		output->ttl = uint32((remaining_ticks + CONFIG_SysTickFreq - 1) / CONFIG_SysTickFreq);
+		output->age = cached.created_tick && tick >= cached.created_tick ?
+			uint32((tick - cached.created_tick) / CONFIG_SysTickFreq) : 0;
 		output->answer_count = uint32(cached.answer_count);
 		NetStringCopy(output->host, numsof(output->host), cached.host);
 		NetStringCopy(output->status, numsof(output->status), cached.status);
@@ -3814,6 +3934,8 @@ bool Devsman::StoreDnsCacheEntry(const void* entry, stduint length) {
 	else NetStringCopy(target->status, numsof(target->status), negative ? "cached-fail" : "ok");
 	NetStringCopy(target->cname_target, numsof(target->cname_target), input->cname_target);
 	target->expire_tick = tick + ttl * CONFIG_SysTickFreq;
+	target->created_tick = tick;
+	target->ttl_seconds = ttl;
 	target->answer_count = input->answer_count;
 	target->negative = negative;
 	target->valid = true;
@@ -3823,6 +3945,16 @@ bool Devsman::StoreDnsCacheEntry(const void* entry, stduint length) {
 bool Devsman::ClearDnsCache() {
 	for0(i, NetDnsCacheCapacity) net_dns_cache[i] = {};
 	net_dns_cache_next = 0;
+	return true;
+}
+
+bool Devsman::ClearDnsCache(const char* host) {
+	if (!host || !host[0]) return ClearDnsCache();
+	for0(i, NetDnsCacheCapacity) {
+		auto& entry = net_dns_cache[i];
+		if (!entry.valid || !NetStringEqual(entry.host, host)) continue;
+		entry = {};
+	}
 	return true;
 }
 
@@ -3928,6 +4060,9 @@ bool Devsman::GetTcpConnectionEntry(stduint index, void* entry, stduint length) 
 		}
 		output->rx_idle_ticks = connection.last_rx_tick ? uint16(tick - connection.last_rx_tick) : 0;
 		output->tx_idle_ticks = connection.last_tx_tick ? uint16(tick - connection.last_tx_tick) : 0;
+		output->fin_age_ticks = connection.last_fin_tick && tick >= connection.last_fin_tick ?
+			uint16(tick - connection.last_fin_tick) : 0;
+		output->fin_retry_count = uint16(connection.fin_retry_count);
 		return true;
 	}
 	return false;
@@ -3937,6 +4072,8 @@ bool Devsman::GetNetStats(void* stats, stduint length) {
 	if (!stats || length < sizeof(syscall_net_stats_t)) return false;
 	auto* output = reinterpret_cast<syscall_net_stats_t*>(stats);
 	*output = net_stats;
+	output->tcp_connect_last_age = net_tcp_connect_last_tick && tick >= net_tcp_connect_last_tick ?
+		uint16(tick - net_tcp_connect_last_tick) : 0;
 	return true;
 }
 

@@ -87,9 +87,23 @@ int main(int argc, char** argv)
 		return -1;
 	}
 
+	FILE* fp_test = fopen(file_path, "rb");
+	if (!fp_test) {
+		outsfmt("playmov: cannot open file '%s' (file not found or access denied)\n\r", file_path);
+		return -1;
+	}
+	fseek(fp_test, 0, SEEK_END);
+	long file_size = ftell(fp_test);
+	fclose(fp_test);
+
+	if (file_size <= 0) {
+		outsfmt("playmov: file '%s' is empty (0 bytes)\n\r", file_path);
+		return -1;
+	}
+
 	HostVideo video;
 	if (!video.Open(file_path, loop_mode)) {
-		outsfmt("playmov: failed to open or parse video '%s'\n\r", file_path);
+		outsfmt("playmov: failed to parse video '%s' (unsupported container format or codec)\n\r", file_path);
 		return -1;
 	}
 

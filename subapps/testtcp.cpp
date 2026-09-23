@@ -13,7 +13,7 @@
 
 static void PrintUsage() {
 	printf("usage: testtcp [--reuse] [--nonblock] [--poll-accept] [--backlog n] [--accept-delay ms] [--accept-timeout ms] [--once] [--count n] [--sockopt] --listen [port]\n\r");
-	printf("       testtcp [--repeat n] [--burst n] [--fill n] [--read-size n] [--write-size n] [--hold ms] [--poll-after-recv] [--select-after-recv] [--shutdown-write] [--shutdown-read] [--send-after-shutdown] [--zero-io] [--sockopt] [--sockerr-twice] [--http] host port [payload]\n\r");
+	printf("       testtcp [--repeat n] [--burst n] [--fill n] [--read-size n] [--write-size n] [--hold ms] [--hold-before-close ms] [--poll-after-recv] [--select-after-recv] [--shutdown-write] [--shutdown-read] [--send-after-shutdown] [--zero-io] [--sockopt] [--sockerr-twice] [--http] host port [payload]\n\r");
 	printf("  listen: testtcp --listen 80\n\r");
 	printf("  reuse:  testtcp --reuse --listen 80\n\r");
 	printf("  nbacc:  testtcp --nonblock --listen 80\n\r");
@@ -40,8 +40,9 @@ static void PrintUsage() {
 	printf("  rcached:testtcp --resolve-twice example.com\n\r");
 	printf("  gai:    testtcp --gai example.com 80\n\r");
 	printf("  gaiany: testtcp --gai-any example.com http\n\r");
+	printf("  gaican: testtcp --gai-canon example.com http\n\r");
 	printf("  gaipsv: testtcp --gai-passive 80\n\r");
-	printf("  gainum: testtcp --gai-numeric 10.0.2.1 7777\n\r");
+	printf("  gainum: testtcp --gai-numeric-host 10.0.2.1 7777\n\r");
 	printf("  gainms: testtcp --gai-numeric-serv 10.0.2.1 7777\n\r");
 	printf("  dns:    testtcp example.com 80 hello\n\r");
 	printf("  http:   testtcp --http example.com 80\n\r");
@@ -49,15 +50,13 @@ static void PrintUsage() {
 	printf("  repeat: testtcp --repeat 3 10.0.2.1 7777 hello\n\r");
 	printf("  rounds: testtcp --listen 80 --rounds 3\n\r");
 	printf("  hold:   testtcp --hold 5000 10.0.2.1 7777 hello\n\r");
+	printf("  hclose: testtcp --hold-before-close 5000 10.0.2.1 7777 hello\n\r");
 	printf("  host:   nc -vz -w 1 10.0.2.15 80\n\r");
 	printf("  data:   printf hello | nc -w 1 10.0.2.15 80\n\r");
 }
 
 static void PrintSocketAddress(const char* label, const struct sockaddr_in& address) {
-	char text[32] = {};
-	if (mcca_net_format_sockaddr_ipv4(text, sizeof(text), &address)) {
-		printf("testtcp: %s=%s\n\r", label, text);
-	}
+	mcca_net_print_socket_address("testtcp", label, &address);
 }
 
 static bool SetReuseAddress(int fd) {
@@ -71,27 +70,7 @@ static bool SetReuseAddress(int fd) {
 }
 
 static void PrintSocketOptions(int fd) {
-	int value = 0;
-	if (mcca_net_get_socket_option_int(fd, SO_REUSEADDR, &value)) {
-		printf("testtcp: so_reuseaddr=%d\n\r", value);
-	}
-	if (mcca_net_get_socket_option_int(fd, SO_TYPE, &value)) {
-		printf("testtcp: so_type=%d\n\r", value);
-	}
-	if (mcca_net_get_socket_option_int(fd, SO_ERROR, &value)) {
-		printf("testtcp: so_error=%d %s\n\r", value, mcca_net_socket_error_name(value));
-	}
-	struct timeval timeout{};
-	socklen_t length = sizeof(timeout);
-	if (getsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, &length) == 0) {
-		printf("testtcp: so_rcvtimeo=%ums\n\r",
-			(unsigned)mcca_net_timeval_milliseconds(&timeout));
-	}
-	length = sizeof(timeout);
-	if (getsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, &length) == 0) {
-		printf("testtcp: so_sndtimeo=%ums\n\r",
-			(unsigned)mcca_net_timeval_milliseconds(&timeout));
-	}
+	mcca_net_print_socket_options("testtcp", fd);
 }
 
 static void PrintSocketError(int fd, const char* label) {
@@ -99,6 +78,10 @@ static void PrintSocketError(int fd, const char* label) {
 	if (value >= 0) {
 		printf("testtcp: %s=%d %s\n\r", label, value, mcca_net_socket_error_name(value));
 	}
+}
+
+static int PrintConnectError(int fd, const char* label) {
+	return mcca_net_print_connect_error("testtcp", fd, label);
 }
 
 static bool SetSocketTimeoutOption(int fd, int option_name, int timeout_ms, const char* label) {
@@ -196,6 +179,7 @@ static void PrintDnsIPv4Result(const char* host) {
 	uni::Network::DNSIPv4Result result{};
 	if (!mcca_net_resolve_ipv4_result(host, result)) return;
 	if (!result.address_count) return;
+	mcca_net_print_dns_result("testtcp", host);
 	printf("testtcp: dns-result addresses=%u\n\r", (unsigned)result.address_count);
 	for0(i, result.address_count) {
 		struct in_addr address{};
@@ -220,16 +204,7 @@ static int PrintGetAddrInfo(const char* host, const char* service, int flags, in
 	const int ret = getaddrinfo(host, service, &hints, &result);
 	printf("testtcp: gai status=%d %s\n\r", ret, gai_strerror(ret));
 	if (ret) return 1;
-	stduint count = 0;
-	for (auto* item = result; item; item = item->ai_next) {
-		if (!item->ai_addr || item->ai_addrlen < sizeof(struct sockaddr_in)) continue;
-		const auto* ipv4 = (const struct sockaddr_in*)item->ai_addr;
-		printf("testtcp: gai%u family=%d type=%d proto=%d addr=%s:%u\n\r",
-			(unsigned)count, item->ai_family, item->ai_socktype, item->ai_protocol,
-			inet_ntoa(ipv4->sin_addr), (unsigned)ntohs(ipv4->sin_port));
-		count++;
-	}
-	printf("testtcp: gai count=%u\n\r", (unsigned)count);
+	mcca_net_print_addrinfo("testtcp", result);
 	freeaddrinfo(result);
 	return 0;
 }
@@ -451,7 +426,8 @@ int main(int argc, char** argv) {
 			show_sockopt = true;
 			continue;
 		}
-		if (StrCompare(argv[i], "--hold") == 0) {
+		if (StrCompare(argv[i], "--hold") == 0 ||
+			StrCompare(argv[i], "--hold-before-close") == 0) {
 			if (++i >= argc) {
 				PrintUsage();
 				return 1;
@@ -507,12 +483,18 @@ int main(int argc, char** argv) {
 			gai_family = AF_UNSPEC;
 			continue;
 		}
+		if (StrCompare(argv[i], "--gai-canon") == 0) {
+			gai_mode = true;
+			gai_flags |= AI_CANONNAME;
+			continue;
+		}
 		if (StrCompare(argv[i], "--gai-passive") == 0) {
 			gai_mode = true;
 			gai_flags |= AI_PASSIVE;
 			continue;
 		}
-		if (StrCompare(argv[i], "--gai-numeric") == 0) {
+		if (StrCompare(argv[i], "--gai-numeric") == 0 ||
+			StrCompare(argv[i], "--gai-numeric-host") == 0) {
 			gai_mode = true;
 			gai_flags |= AI_NUMERICHOST;
 			continue;
@@ -713,7 +695,8 @@ int main(int argc, char** argv) {
 						inet_ntoa(target.sin_addr));
 				}
 				if (connect(fd, (const struct sockaddr*)&target, sizeof(target)) < 0) {
-					const int error = mcca_net_get_socket_error(fd);
+					const int error = nonblock_connect ? mcca_net_get_socket_error(fd) :
+						PrintConnectError(fd, "connect-error");
 					if (address_index < numsof(connect_errors)) {
 						connect_errors[address_index] = error;
 						connect_error_valid[address_index] = true;
@@ -729,8 +712,6 @@ int main(int argc, char** argv) {
 					}
 					if (!nonblock_connect) {
 						printf("testtcp: connect failed\n\r");
-						printf("testtcp: connect-error=%d %s\n\r",
-							error, mcca_net_socket_error_name(error));
 						if (target_address_count > 1) {
 							printf("testtcp: connect summary failed=%u\n\r", (unsigned)target_address_count);
 							for0(i, target_address_count) {
@@ -754,7 +735,7 @@ int main(int argc, char** argv) {
 			if (!connected || fd < 0) {
 				printf("testtcp: connect failed\n\r");
 				if (fd >= 0) {
-					PrintSocketError(fd, "connect-error");
+					PrintConnectError(fd, "connect-error");
 					close(fd);
 				}
 				if (fill_payload) free(fill_payload);
@@ -768,7 +749,7 @@ int main(int argc, char** argv) {
 				const int ready = poll(&connect_pfd, 1, 3500);
 				printf("testtcp: connect poll=%d revents=%[16H]\n\r",
 					ready, (stduint)connect_pfd.revents);
-				PrintSocketError(fd, "connect-error");
+				PrintConnectError(fd, "connect-error");
 				if (sockerr_twice) PrintSocketError(fd, "connect-error-again");
 				if (ready <= 0 || !(connect_pfd.revents & POLLOUT)) {
 					close(fd);
@@ -777,16 +758,7 @@ int main(int argc, char** argv) {
 					return 1;
 				}
 			}
-			struct sockaddr_in local{};
-			socklen_t local_length = sizeof(local);
-			if (getsockname(fd, (struct sockaddr*)&local, &local_length) == 0) {
-				PrintSocketAddress("local", local);
-			}
-			struct sockaddr_in peer{};
-			socklen_t peer_length = sizeof(peer);
-			if (getpeername(fd, (struct sockaddr*)&peer, &peer_length) == 0) {
-				PrintSocketAddress("peer", peer);
-			}
+			mcca_net_print_socket_names("testtcp", fd, 1);
 			if (show_sockopt) PrintSocketOptions(fd);
 			if (sockerr_twice) PrintSocketOptions(fd);
 			if (zero_io) {
