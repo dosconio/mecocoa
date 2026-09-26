@@ -38,6 +38,9 @@ using namespace uni;
 #ifndef EPIPE
 #define EPIPE 32
 #endif
+#ifndef EAGAIN
+#define EAGAIN 11
+#endif
 
 static uni::vfs_dentry* _Index_unlocked(const char* pathname, uni::vfs_dentry* base);
 
@@ -1811,14 +1814,19 @@ int Filesys::BindSocket(vfs_file* file, const Network::SocketAddress& address) {
 	if (socket->type == Network::SocketType::Stream) {
 		if (socket->protocol != Network::SocketProtocol::Default &&
 			socket->protocol != Network::SocketProtocol::TCP) return -1;
-		if (!ipv4.port) return -1;
-		if (Devsman::IsTcpPortListening(ipv4.port)) {
+		uint16 local_port = ipv4.port;
+		if (!local_port && !Devsman::AllocateTcpPort(ipv4.address, local_port)) {
+			SetSocketError(socket, ENOBUFS);
+			return -1;
+		}
+		if (Devsman::IsTcpPortListening(ipv4.address, local_port)) {
 			SetSocketError(socket, EADDRINUSE);
 			return -1;
 		}
 		socket->local_ipv4.address = ipv4.address;
-		socket->local_ipv4.port = ipv4.port;
-		socket->flags &= ~SocketHandleFlagLocalAddressAuto;
+		socket->local_ipv4.port = local_port;
+		if (ipv4.port) socket->flags &= ~SocketHandleFlagLocalAddressAuto;
+		else socket->flags |= SocketHandleFlagLocalAddressAuto;
 		socket->protocol = Network::SocketProtocol::TCP;
 		socket->is_bound = true;
 		return 0;
@@ -1830,13 +1838,13 @@ int Filesys::BindSocket(vfs_file* file, const Network::SocketAddress& address) {
 	const bool reuse_address = (socket->flags & SocketHandleFlagReuseAddress) != 0;
 	uint16 local_port = ipv4.port;
 	if (local_port) {
-		if (!Devsman::BindUdpPort(local_port, reuse_address, inbox_id)) {
+		if (!Devsman::BindUdpPort(ipv4.address, local_port, reuse_address, inbox_id)) {
 			SetSocketError(socket, EADDRINUSE);
 			return -1;
 		}
 	}
 	else {
-		if (!Devsman::AllocateUdpPort(local_port, inbox_id)) {
+		if (!Devsman::AllocateUdpPort(ipv4.address, local_port, inbox_id)) {
 			SetSocketError(socket, ENOBUFS);
 			return -1;
 		}
@@ -1866,7 +1874,7 @@ int Filesys::ListenSocket(vfs_file* file, stduint backlog) {
 	(void)backlog;
 	return -1;
 	#else
-	if (!Devsman::ListenTcpPort(socket->local_ipv4.port, backlog)) return -1;
+	if (!Devsman::ListenTcpPort(socket->local_ipv4.address, socket->local_ipv4.port, backlog)) return -1;
 	socket->protocol = Network::SocketProtocol::TCP;
 	socket->is_listening = true;
 	return 0;
@@ -1937,22 +1945,22 @@ int Filesys::AcceptSocket(vfs_file* file, vfs_file** out_file,
 	return -1;
 	#else
 	Network::TCPConnectionContext context{};
-	stdsint accepted = Devsman::AcceptTcpConnection(socket->local_ipv4.port, context);
+	stdsint accepted = Devsman::AcceptTcpConnection(socket->local_ipv4.address, socket->local_ipv4.port, context);
 	if (accepted == 0 && !(file->f_mode & O_NONBLOCK)) {
 		if (!socket->receive_timeout_ms) {
-			if (!Devsman::WaitTcpAccept(socket->local_ipv4.port)) {
+			if (!Devsman::WaitTcpAccept(socket->local_ipv4.address, socket->local_ipv4.port)) {
 				return ThreadHasUnblockedSignal(Taskman::CurrentTB()) ? -4 : -1;
 			}
 		}
 		else {
 			const stduint start_tick = tick;
-			while (!Devsman::HasTcpAccept(socket->local_ipv4.port)) {
+			while (!Devsman::HasTcpAccept(socket->local_ipv4.address, socket->local_ipv4.port)) {
 				if (ThreadHasUnblockedSignal(Taskman::CurrentTB())) return -4;
 				if (TimeoutExpired(start_tick, socket->receive_timeout_ms)) return -1;
 				SleepSocketPollStep(start_tick, socket->receive_timeout_ms);
 			}
 		}
-		accepted = Devsman::AcceptTcpConnection(socket->local_ipv4.port, context);
+		accepted = Devsman::AcceptTcpConnection(socket->local_ipv4.address, socket->local_ipv4.port, context);
 	}
 	if (accepted <= 0) return -1;
 
@@ -2009,9 +2017,10 @@ int Filesys::ConnectSocket(vfs_file* file, const Network::SocketAddress& address
 		uint16 local_port = socket->is_bound ? socket->local_ipv4.port : 0;
 		Network::TCPConnectionContext context{};
 		const bool nonblock = (file->f_mode & O_NONBLOCK) != 0;
+		const auto local_address = socket->is_bound ? socket->local_ipv4.address : Network::IPv4Address{};
 		const stdsint connected = nonblock ?
-			Devsman::StartTcpConnect(target.address, target.port, local_port, context) :
-			Devsman::ConnectTcp(target.address, target.port, local_port, context);
+			Devsman::StartTcpConnect(local_address, target.address, target.port, local_port, context) :
+			Devsman::ConnectTcp(local_address, target.address, target.port, local_port, context);
 		if (connected <= 0) {
 			SetSocketError(socket, connected < 0 ? int(-connected) : ETIMEDOUT);
 			return -1;
@@ -2034,7 +2043,7 @@ int Filesys::ConnectSocket(vfs_file* file, const Network::SocketAddress& address
 	if (!socket->is_bound) {
 		uint16 local_port = 0;
 		stduint inbox_id = stduint(-1);
-		if (!Devsman::AllocateUdpPort(local_port, inbox_id)) {
+		if (!Devsman::AllocateUdpPort(socket->local_ipv4.address, local_port, inbox_id)) {
 			SetSocketError(socket, ENOBUFS);
 			return -1;
 		}
@@ -2082,7 +2091,10 @@ int Filesys::SendSocket(vfs_file* file, const void* payload, stduint length, con
 			return -1;
 		}
 		if (!Devsman::HasTcpSendSpace(context)) {
-			if (file->f_mode & O_NONBLOCK) return -1;
+			if (file->f_mode & O_NONBLOCK) {
+				SetSocketError(socket, EAGAIN);
+				return -1;
+			}
 			const stduint start_tick = tick;
 			while (!Devsman::HasTcpSendSpace(context)) {
 				if (Devsman::HasTcpError(context)) {
@@ -2090,7 +2102,10 @@ int Filesys::SendSocket(vfs_file* file, const void* payload, stduint length, con
 					return -1;
 				}
 				if (ThreadHasUnblockedSignal(Taskman::CurrentTB())) return -4;
-				if (socket->send_timeout_ms && TimeoutExpired(start_tick, socket->send_timeout_ms)) return 0;
+				if (socket->send_timeout_ms && TimeoutExpired(start_tick, socket->send_timeout_ms)) {
+					SetSocketError(socket, EAGAIN);
+					return -1;
+				}
 				SleepSocketPollStep(start_tick, socket->send_timeout_ms);
 			}
 		}
@@ -2099,6 +2114,13 @@ int Filesys::SendSocket(vfs_file* file, const void* payload, stduint length, con
 			if (Devsman::HasTcpError(context)) {
 				SetSocketError(socket, ECONNRESET);
 			}
+			else {
+				SetSocketError(socket, EPIPE);
+			}
+		}
+		else if (sent == 0 && length) {
+			SetSocketError(socket, EAGAIN);
+			return -1;
 		}
 		return sent;
 		#endif
@@ -2131,7 +2153,7 @@ int Filesys::SendSocket(vfs_file* file, const void* payload, stduint length, con
 	if (!socket->is_bound) {
 		uint16 local_port = 0;
 		stduint inbox_id = stduint(-1);
-		if (!Devsman::AllocateUdpPort(local_port, inbox_id)) {
+		if (!Devsman::AllocateUdpPort(socket->local_ipv4.address, local_port, inbox_id)) {
 			SetSocketError(socket, ENOBUFS);
 			return -1;
 		}
@@ -2150,7 +2172,7 @@ int Filesys::SendSocket(vfs_file* file, const void* payload, stduint length, con
 		}
 	}
 
-	const stdsint sent = Devsman::SendUdp(target.address,
+	const stdsint sent = Devsman::SendUdp(socket->local_ipv4.address, target.address,
 		socket->local_ipv4.port, target.port, payload, length);
 	return sent;
 	#endif
@@ -2178,10 +2200,13 @@ int Filesys::RecvSocket(vfs_file* file, void* payload, stduint capacity,
 			{ socket->local_ipv4.address, socket->local_ipv4.port },
 			{ socket->remote_ipv4.address, socket->remote_ipv4.port },
 		};
-		if ((socket->flags & SocketHandleFlagReadShutdown) && !Devsman::HasTcpReceive(context)) return 0;
+		if (socket->flags & SocketHandleFlagReadShutdown) return 0;
 		if (file->f_mode & O_NONBLOCK) flags &= ~syscall_net_io_flag_wait;
 		stdsint received = Devsman::ReceiveTcp(context, payload, capacity);
 		if (received < 0 && Devsman::HasTcpError(context)) {
+			SetSocketError(socket, ECONNRESET);
+		}
+		else if (received < 0) {
 			SetSocketError(socket, ECONNRESET);
 		}
 		if (received == 0 && (flags & syscall_net_io_flag_wait)) {
@@ -2194,12 +2219,18 @@ int Filesys::RecvSocket(vfs_file* file, void* payload, stduint capacity,
 				const stduint start_tick = tick;
 				while (!Devsman::HasTcpReceive(context)) {
 					if (ThreadHasUnblockedSignal(Taskman::CurrentTB())) return -4;
-					if (TimeoutExpired(start_tick, socket->receive_timeout_ms)) return 0;
+					if (TimeoutExpired(start_tick, socket->receive_timeout_ms)) {
+						SetSocketError(socket, EAGAIN);
+						return -1;
+					}
 					SleepSocketPollStep(start_tick, socket->receive_timeout_ms);
 				}
 			}
 			received = Devsman::ReceiveTcp(context, payload, capacity);
 			if (received < 0 && Devsman::HasTcpError(context)) {
+				SetSocketError(socket, ECONNRESET);
+			}
+			else if (received < 0) {
 				SetSocketError(socket, ECONNRESET);
 			}
 		}
@@ -2250,7 +2281,10 @@ int Filesys::RecvSocket(vfs_file* file, void* payload, stduint capacity,
 			const stduint start_tick = tick;
 			while (!Devsman::HasUdp(socket->local_ipv4.port, socket->udp_inbox_id)) {
 				if (ThreadHasUnblockedSignal(Taskman::CurrentTB())) return -4;
-				if (TimeoutExpired(start_tick, socket->receive_timeout_ms)) return 0;
+				if (TimeoutExpired(start_tick, socket->receive_timeout_ms)) {
+					SetSocketError(socket, EAGAIN);
+					return -1;
+				}
 				SleepSocketPollStep(start_tick, socket->receive_timeout_ms);
 			}
 		}
@@ -2306,7 +2340,7 @@ int Filesys::Poll(vfs_file* file, stduint events, stduint* revents) {
 		return -1;
 		#else
 		if ((events & syscall_poll_in) && socket->is_listening &&
-			Devsman::HasTcpAccept(socket->local_ipv4.port)) {
+			Devsman::HasTcpAccept(socket->local_ipv4.address, socket->local_ipv4.port)) {
 			*revents |= syscall_poll_in;
 		}
 		if (socket->last_error && !socket->is_connected) {
@@ -2350,8 +2384,14 @@ int Filesys::Poll(vfs_file* file, stduint events, stduint* revents) {
 				}
 				if (receive_closed) *revents |= syscall_poll_hangup;
 			}
-			if ((events & syscall_poll_out) && !(socket->flags & SocketHandleFlagWriteShutdown) &&
-				Devsman::HasTcpSendSpace(context)) *revents |= syscall_poll_out;
+			if (events & syscall_poll_out) {
+				if (socket->flags & SocketHandleFlagWriteShutdown) {
+					*revents |= syscall_poll_error;
+				}
+				else if (Devsman::HasTcpSendSpace(context)) {
+					*revents |= syscall_poll_out;
+				}
+			}
 		}
 		return 0;
 		#endif
@@ -2377,9 +2417,12 @@ int Filesys::Poll(vfs_file* file, stduint events, stduint* revents) {
 			return 0;
 		}
 	}
-	if ((events & syscall_poll_in) && socket->is_bound &&
-		Devsman::HasUdp(socket->local_ipv4.port, socket->udp_inbox_id)) {
-		*revents |= syscall_poll_in;
+	if ((events & syscall_poll_in) && socket->is_bound) {
+		const bool udp_ready = socket->is_connected ?
+			Devsman::HasUdpFrom(socket->local_ipv4.port, socket->udp_inbox_id,
+				socket->remote_ipv4.address, socket->remote_ipv4.port) :
+			Devsman::HasUdp(socket->local_ipv4.port, socket->udp_inbox_id);
+		if (udp_ready) *revents |= syscall_poll_in;
 	}
 	if (events & syscall_poll_out) {
 		*revents |= syscall_poll_out;
@@ -2401,8 +2444,7 @@ int Filesys::GetSocketAddress(vfs_file* file, bool peer,
 		endpoint = socket->remote_ipv4;
 	}
 	else {
-		if (!socket->is_bound) return -1;
-		endpoint = socket->local_ipv4;
+		if (socket->is_bound) endpoint = socket->local_ipv4;
 		#if (_MCCA & 0xFF00) == 0x8600
 		if (endpoint.address.isZero() && (socket->flags & SocketHandleFlagLocalAddressAuto)) {
 			syscall_net_route_ipv4_t route{};
@@ -2414,7 +2456,7 @@ int Filesys::GetSocketAddress(vfs_file* file, bool peer,
 		}
 		#endif
 	}
-	if (!endpoint.port) return -1;
+	if (peer && !endpoint.port) return -1;
 
 	auto* ipv4 = reinterpret_cast<Network::SocketAddressIPv4*>(address);
 	Network::SocketWriteAddress(*ipv4, endpoint.address, endpoint.port);
@@ -2519,6 +2561,19 @@ int Filesys::ShutdownSocket(vfs_file* file, stduint how) {
 	if (socket->domain != Network::SocketDomain::IPv4) return -1;
 
 	if (how == syscall_net_shutdown_read || how == syscall_net_shutdown_both) {
+		if (socket->type == Network::SocketType::Stream &&
+			socket->protocol == Network::SocketProtocol::TCP &&
+			socket->is_connected) {
+			#if (_MCCA & 0xFF00) == 0x8600
+			Network::TCPConnectionContext context{
+				{ socket->local_ipv4.address, socket->local_ipv4.port },
+				{ socket->remote_ipv4.address, socket->remote_ipv4.port },
+			};
+			if (!Devsman::ShutdownTcpReceive(context)) return -1;
+			#else
+			return -1;
+			#endif
+		}
 		socket->flags |= SocketHandleFlagReadShutdown;
 	}
 	if (how == syscall_net_shutdown_write || how == syscall_net_shutdown_both) {
@@ -2883,7 +2938,7 @@ int Filesys::CloseSocket(vfs_file* file) {
 		}
 		if (domain == Network::SocketDomain::IPv4 &&
 			is_listening && protocol == Network::SocketProtocol::TCP && local_ipv4.port) {
-			Devsman::CloseTcpPort(local_ipv4.port);
+			Devsman::CloseTcpPort(local_ipv4.address, local_ipv4.port);
 		}
 		#endif
 		MutexLocal guard(&vfs_lock);

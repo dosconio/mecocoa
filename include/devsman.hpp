@@ -227,29 +227,50 @@ public:
 	static bool OpenUdpPort(uint16 port);
 	static bool BindUdpPort(uint16 port);
 	static bool BindUdpPort(uint16 port, bool reuse_address, stduint& inbox_id);
+	static bool BindUdpPort(const uni::Network::IPv4Address& local_address,
+		uint16 port, bool reuse_address, stduint& inbox_id);
 	static bool AllocateUdpPort(uint16& port);
 	static bool AllocateUdpPort(uint16& port, stduint& inbox_id);
+	static bool AllocateUdpPort(const uni::Network::IPv4Address& local_address,
+		uint16& port, stduint& inbox_id);
 	static bool CloseUdpPort(uint16 port);
 	static bool CloseUdpPort(uint16 port, stduint inbox_id);
 	static bool WaitUdp(uint16 port);
 	static bool WaitUdp(uint16 port, stduint inbox_id);
 	static void CancelSocketWait(::ThreadBlock* th);
 	static bool HasUdp(uint16 port, stduint inbox_id);
+	static bool HasUdpFrom(uint16 port, stduint inbox_id,
+		const uni::Network::IPv4Address& remote_ip, uint16 remote_port);
 	static int ConsumeUdpError(uint16 local_port,
 		const uni::Network::IPv4Address& remote_ip, uint16 remote_port);
 	static stdsint ReceiveUdp(uint16 port, uni::Network::UDPDatagramContext& context, void* payload, stduint capacity);
 	static stdsint ReceiveUdp(uint16 port, stduint inbox_id,
 		uni::Network::UDPDatagramContext& context, void* payload, stduint capacity);
 	static bool ListenTcpPort(uint16 port, stduint backlog);
+	static bool ListenTcpPort(const uni::Network::IPv4Address& local_address,
+		uint16 port, stduint backlog);
 	static bool CloseTcpPort(uint16 port);
+	static bool CloseTcpPort(const uni::Network::IPv4Address& local_address, uint16 port);
+	static bool AllocateTcpPort(const uni::Network::IPv4Address& local_address, uint16& port);
 	static bool IsTcpPortListening(uint16 port);
+	static bool IsTcpPortListening(const uni::Network::IPv4Address& local_address, uint16 port);
 	static bool WaitTcpAccept(uint16 port);
+	static bool WaitTcpAccept(const uni::Network::IPv4Address& local_address, uint16 port);
 	static bool HasTcpAccept(uint16 port);
+	static bool HasTcpAccept(const uni::Network::IPv4Address& local_address, uint16 port);
 	static stdsint AcceptTcpConnection(uint16 port, uni::Network::TCPConnectionContext& context);
+	static stdsint AcceptTcpConnection(const uni::Network::IPv4Address& local_address,
+		uint16 port, uni::Network::TCPConnectionContext& context);
 	static stdsint StartTcpConnect(const uni::Network::IPv4Address& target_ip,
+		uint16 destination_port, uint16& source_port, uni::Network::TCPConnectionContext& context);
+	static stdsint StartTcpConnect(const uni::Network::IPv4Address& local_ip,
+		const uni::Network::IPv4Address& target_ip,
 		uint16 destination_port, uint16& source_port, uni::Network::TCPConnectionContext& context);
 	static stdsint CheckTcpConnect(const uni::Network::TCPConnectionContext& context);
 	static stdsint ConnectTcp(const uni::Network::IPv4Address& target_ip,
+		uint16 destination_port, uint16& source_port, uni::Network::TCPConnectionContext& context);
+	static stdsint ConnectTcp(const uni::Network::IPv4Address& local_ip,
+		const uni::Network::IPv4Address& target_ip,
 		uint16 destination_port, uint16& source_port, uni::Network::TCPConnectionContext& context);
 	static bool CloseTcpConnection(const uni::Network::TCPConnectionContext& context);
 	static bool WaitTcpReceive(const uni::Network::TCPConnectionContext& context);
@@ -257,8 +278,12 @@ public:
 	static bool IsTcpReceiveClosed(const uni::Network::TCPConnectionContext& context);
 	static bool HasTcpError(const uni::Network::TCPConnectionContext& context);
 	static bool HasTcpSendSpace(const uni::Network::TCPConnectionContext& context);
+	static bool ShutdownTcpReceive(const uni::Network::TCPConnectionContext& context);
 	static stdsint ReceiveTcp(const uni::Network::TCPConnectionContext& context, void* payload, stduint capacity);
 	static stdsint SendTcp(const uni::Network::TCPConnectionContext& context, const void* payload, stduint length);
+	static stdsint SendUdp(const uni::Network::IPv4Address& source_ip,
+		const uni::Network::IPv4Address& target_ip,
+		uint16 source_port, uint16 destination_port, const void* payload, stduint length);
 	static stdsint SendUdp(const uni::Network::IPv4Address& target_ip,
 		uint16 source_port, uint16 destination_port, const void* payload, stduint length);
 	static stdsint SendUdp(const uni::Network::MacAddress& target_mac, const uni::Network::IPv4Address& target_ip,
@@ -276,6 +301,7 @@ public:
 	static bool StoreDnsCacheEntry(const void* entry, stduint length);
 	static bool ClearDnsCache();
 	static bool ClearDnsCache(const char* host);
+	static bool SetDnsServer(const uni::Network::IPv4Address& address);
 	static stduint TcpListenerCount();
 	static bool GetTcpListenerEntry(stduint index, void* entry, stduint length);
 	static stduint TcpConnectionCount();

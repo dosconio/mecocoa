@@ -224,6 +224,7 @@ enum class syscall_net_route_func_t : stduint {
 	DNSCacheEntry,
 	DNSCacheStore,
 	DNSCacheClear,
+	DNSSetServer,
 };
 
 constexpr uint16 syscall_net_route_flag_up = 0x0001u;
@@ -235,6 +236,7 @@ constexpr uint16 syscall_net_config_source_dhcp_offered = 1u;
 constexpr uint16 syscall_net_config_source_dhcp_bound = 2u;
 constexpr uint16 syscall_net_config_source_dhcp_nak = 3u;
 constexpr uint16 syscall_net_config_source_dhcp_failed = 4u;
+constexpr uint16 syscall_net_config_source_temporary = 5u;
 
 constexpr uint16 syscall_net_dhcp_state_none = 0u;
 constexpr uint16 syscall_net_dhcp_state_init = 1u;
@@ -273,6 +275,8 @@ struct syscall_net_interface_ipv4_t {
 	uint32 dhcp_xid = 0;
 	uint16 dhcp_state = 0;
 	uint16 dhcp_retry_count = 0;
+	uint16 dns_source = 0;
+	uint16 route_source = 0;
 };
 
 struct syscall_net_arp_ipv4_t {
@@ -283,6 +287,7 @@ struct syscall_net_arp_ipv4_t {
 };
 
 struct syscall_net_tcp_listener_t {
+	uint8 local_address[4] = {};
 	uint16 port = 0;
 	uint16 flags = 0;
 	uint16 backlog = 0;
@@ -335,6 +340,7 @@ struct syscall_net_udp_inbox_t {
 };
 
 struct syscall_net_pending_udp_t {
+	uint8 source_address[4] = {};
 	uint8 target_address[4] = {};
 	uint8 next_hop[4] = {};
 	uint16 source_port = 0;
@@ -358,6 +364,10 @@ struct syscall_net_dns_cache_t {
 	uint16 address_count = 0;
 	uint16 reserved = 0;
 	uint8 addresses[syscall_net_dns_cache_address_capacity][4] = {};
+};
+
+struct syscall_net_dns_server_t {
+	uint8 address[4] = {};
 };
 
 struct syscall_net_stats_t {

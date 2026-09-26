@@ -783,6 +783,18 @@ DEFSYSC sysc_ROUT(stduint func, stduint p1, stduint p2) {
 		return -1;
 		#endif
 	}
+	case syscall_net_route_func_t::DNSSetServer: {
+		#if (_MCCA & 0xFF00) == 0x8600
+		syscall_net_dns_server_t server{};
+		if (p2 < sizeof(server)) return -1;
+		MccaMemCopyP(&server, nullptr, true, (void*)p1, pb, false, sizeof(server));
+		uni::Network::IPv4Address address{};
+		for0(i, uni::Network::IPv4AddressLength) address.octet[i] = server.address[i];
+		return Devsman::SetDnsServer(address) ? 0 : -1;
+		#else
+		return -1;
+		#endif
+	}
 	default:
 		return -1;
 	}

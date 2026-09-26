@@ -12,8 +12,8 @@
 #include <netdb.h>
 
 static void PrintUsage() {
-	printf("usage: testtcp [--reuse] [--nonblock] [--poll-accept] [--backlog n] [--accept-delay ms] [--accept-timeout ms] [--once] [--count n] [--sockopt] --listen [port]\n\r");
-	printf("       testtcp [--repeat n] [--burst n] [--fill n] [--read-size n] [--write-size n] [--hold ms] [--hold-before-close ms] [--poll-after-recv] [--select-after-recv] [--shutdown-write] [--shutdown-read] [--send-after-shutdown] [--zero-io] [--sockopt] [--sockerr-twice] [--http] host port [payload]\n\r");
+	printf("usage: testtcp [--reuse] [--nonblock] [--poll-accept] [--backlog n] [--accept-delay ms] [--accept-timeout ms] [--once] [--count n] [--sockopt] [--bind-ip ipv4] --listen [port]\n\r");
+	printf("       testtcp [--repeat n] [--burst n] [--fill n] [--read-size n] [--write-size n] [--hold ms] [--hold-before-close ms] [--poll-after-recv] [--select-after-recv] [--shutdown-write] [--shutdown-read] [--send-after-shutdown] [--zero-io] [--sockopt] [--bind-ip ipv4] [--sockerr-twice] [--http] host port [payload]\n\r");
 	printf("  listen: testtcp --listen 80\n\r");
 	printf("  reuse:  testtcp --reuse --listen 80\n\r");
 	printf("  nbacc:  testtcp --nonblock --listen 80\n\r");
@@ -21,6 +21,7 @@ static void PrintUsage() {
 	printf("  bklg:   testtcp --backlog 1 --listen 80\n\r");
 	printf("  delay:  testtcp --backlog 1 --accept-delay 3000 --listen 80\n\r");
 	printf("  atime:  testtcp --accept-timeout 3000 --listen 80 --count 3\n\r");
+	printf("  bindip: testtcp --bind-ip 10.0.2.15 --listen 80\n\r");
 	printf("  once:   testtcp --listen 80 --once\n\r");
 	printf("  count:  testtcp --listen 80 --count 3\n\r");
 	printf("  burst:  testtcp --burst 3 10.0.2.1 7777 hello\n\r");
@@ -35,6 +36,7 @@ static void PrintUsage() {
 	printf("  opt:    testtcp --sockopt 10.0.2.1 7777 hello\n\r");
 	printf("  nbconn: testtcp --nonblock-connect --poll-connect 10.0.2.1 7777 hello\n\r");
 	printf("  timeo:  testtcp --rcvtimeo 1000 --sndtimeo 1000 10.0.2.1 7777 hello\n\r");
+	printf("  bindc:  testtcp --bind-ip 10.0.2.41 10.0.2.1 7777 hello\n\r");
 	printf("  client: testtcp 10.0.2.1 7777 hello\n\r");
 	printf("  resolve:testtcp --resolve example.com\n\r");
 	printf("  rcached:testtcp --resolve-twice example.com\n\r");
@@ -97,7 +99,8 @@ static bool SetSocketTimeoutOption(int fd, int option_name, int timeout_ms, cons
 	return true;
 }
 
-static int OpenTcpClientSocket(bool nonblock, bool show_sockopt, int receive_timeout, int send_timeout) {
+static int OpenTcpClientSocket(bool nonblock, bool show_sockopt, int receive_timeout, int send_timeout,
+	bool bind_ip_set, uint32 bind_ip) {
 	int fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 	if (fd < 0) {
 		printf("testtcp: socket failed\n\r");
@@ -113,6 +116,17 @@ static int OpenTcpClientSocket(bool nonblock, bool show_sockopt, int receive_tim
 		printf("testtcp: sndtimeo failed\n\r");
 		close(fd);
 		return -1;
+	}
+	if (bind_ip_set) {
+		struct sockaddr_in local{};
+		local.sin_family = AF_INET;
+		local.sin_port = 0;
+		local.sin_addr.s_addr = htonl(bind_ip);
+		if (bind(fd, (const struct sockaddr*)&local, sizeof(local)) < 0) {
+			printf("testtcp: bind failed\n\r");
+			close(fd);
+			return -1;
+		}
 	}
 	if (nonblock) {
 		const int flags = fcntl(fd, F_GETFL);
@@ -249,6 +263,8 @@ int main(int argc, char** argv) {
 	int receive_timeout = -1;
 	int send_timeout = -1;
 	int hold_time = 0;
+	bool bind_ip_set = false;
+	uint32 bind_ip = 0;
 	const char* http_path = "/";
 	const char* positional[3] = {};
 	stduint positional_count = 0;
@@ -426,6 +442,14 @@ int main(int argc, char** argv) {
 			show_sockopt = true;
 			continue;
 		}
+		if (StrCompare(argv[i], "--bind-ip") == 0) {
+			if (++i >= argc || !mcca_net_parse_ipv4_host(argv[i], &bind_ip)) {
+				PrintUsage();
+				return 1;
+			}
+			bind_ip_set = true;
+			continue;
+		}
 		if (StrCompare(argv[i], "--hold") == 0 ||
 			StrCompare(argv[i], "--hold-before-close") == 0) {
 			if (++i >= argc) {
@@ -540,7 +564,8 @@ int main(int argc, char** argv) {
 				poll_after_recv || select_after_recv || poll_connect || nonblock_connect ||
 				show_sockopt || sockerr_twice || shutdown_write || shutdown_read ||
 				send_after_shutdown || zero_io || http_mode || resolve_only ||
-				serve_rounds || receive_timeout >= 0 || send_timeout >= 0 || hold_time) {
+				serve_rounds || receive_timeout >= 0 || send_timeout >= 0 || hold_time ||
+				bind_ip_set) {
 				PrintUsage();
 				return 1;
 			}
@@ -569,7 +594,8 @@ int main(int argc, char** argv) {
 				repeat_count != 1 || burst_count != 1 ||
 				fill_length || poll_after_recv || select_after_recv || poll_connect || nonblock_connect ||
 				show_sockopt || sockerr_twice || shutdown_write || shutdown_read || send_after_shutdown || zero_io ||
-				http_mode || serve_rounds || receive_timeout >= 0 || send_timeout >= 0 || hold_time) {
+				http_mode || serve_rounds || receive_timeout >= 0 || send_timeout >= 0 || hold_time ||
+				bind_ip_set) {
 				PrintUsage();
 				return 1;
 			}
@@ -679,7 +705,8 @@ int main(int argc, char** argv) {
 			int connect_errors[4] = {};
 			bool connect_error_valid[4] = {};
 			for0(address_index, target_address_count) {
-				fd = OpenTcpClientSocket(nonblock, show_sockopt, receive_timeout, send_timeout);
+				fd = OpenTcpClientSocket(nonblock, show_sockopt, receive_timeout, send_timeout,
+					bind_ip_set, bind_ip);
 				if (fd < 0) {
 					if (fill_payload) free(fill_payload);
 					if (http_payload) free(http_payload);
@@ -817,6 +844,9 @@ int main(int argc, char** argv) {
 				printf("testtcp: shutdown read\n\r");
 			}
 			char buffer[513] = {};
+			char http_response[2048] = {};
+			stduint http_response_length = 0;
+			stduint http_complete_body_length = 0;
 			stduint received_total = 0;
 			char http_status[80] = {};
 			int http_status_code = 0;
@@ -861,6 +891,14 @@ int main(int argc, char** argv) {
 					break;
 				}
 				buffer[received] = 0;
+				if (http_mode && http_response_length < sizeof(http_response)) {
+					stduint copy = stduint(received);
+					if (copy > sizeof(http_response) - http_response_length) {
+						copy = sizeof(http_response) - http_response_length;
+					}
+					for0(i, copy) http_response[http_response_length + i] = buffer[i];
+					http_response_length += copy;
+				}
 				if (http_mode && !http_status_ready) {
 					stduint line_length = 0;
 					while (line_length < stduint(received) && line_length + 1 < sizeof(http_status) &&
@@ -888,6 +926,14 @@ int main(int argc, char** argv) {
 				}
 				printf("testtcp: recv %d bytes: %s\n\r", (int)received, buffer);
 				received_total += stduint(received);
+				if (http_mode) {
+					const char* body = nullptr;
+					stduint body_length = 0;
+					if (mcca_net_http_complete_body(http_response, http_response_length, &body, &body_length)) {
+						http_complete_body_length = body_length;
+						break;
+					}
+				}
 			}
 			if (http_mode) {
 				if (http_status_ready) printf("testtcp: http status: %s\n\r", http_status);
@@ -898,6 +944,9 @@ int main(int argc, char** argv) {
 				}
 				if (http_content_length_ready) {
 					printf("testtcp: http content-length=%u\n\r", (unsigned)http_content_length);
+				}
+				if (http_complete_body_length) {
+					printf("testtcp: http body=%u\n\r", (unsigned)http_complete_body_length);
 				}
 				if (http_content_type_ready) {
 					printf("testtcp: http content-type=%s\n\r", http_content_type);
@@ -1008,7 +1057,7 @@ int main(int argc, char** argv) {
 	struct sockaddr_in local{};
 	local.sin_family = AF_INET;
 	local.sin_port = htons((uint16)port);
-	local.sin_addr.s_addr = 0;
+	local.sin_addr.s_addr = bind_ip_set ? htonl(bind_ip) : 0;
 	if (bind(fd, (const struct sockaddr*)&local, sizeof(local)) < 0) {
 		printf("testtcp: bind failed\n\r");
 		close(fd);

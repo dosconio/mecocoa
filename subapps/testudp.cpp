@@ -22,6 +22,7 @@ static void PrintUsage() {
 	printf("  select:  testudp --select 10.0.2.1 7777 mecocoa\n\r");
 	printf("  opt:     testudp --sockopt 10.0.2.1 7777 mecocoa\n\r");
 	printf("  bindip:  testudp --bind-ip 10.0.2.15 --listen 7777\n\r");
+	printf("  bindc:   testudp --bind-ip 10.0.2.41 10.0.2.1 7777 mecocoa\n\r");
 	printf("  listen:  testudp --reuse --listen 7777\n\r");
 	printf("  count:   testudp --reuse --listen --count 3 7777\n\r");
 	printf("  hold:    testudp --reuse --listen --hold 5000 7777\n\r");
@@ -368,7 +369,7 @@ int main(int argc, char** argv) {
 	if (bind_ip_set) {
 		struct sockaddr_in local{};
 		local.sin_family = AF_INET;
-		local.sin_port = htons(49152);
+		local.sin_port = 0;
 		local.sin_addr.s_addr = htonl(bind_ip);
 		if (bind(fd, (const struct sockaddr*)&local, sizeof(local)) < 0) {
 			printf("testudp: bind failed\n\r");

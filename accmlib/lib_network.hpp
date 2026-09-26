@@ -69,6 +69,8 @@ int mcca_net_http_find_header(const char* response, stduint length, const char* 
 	const char** value, stduint* value_length);
 int mcca_net_http_body(const char* response, stduint length, const char** body, stduint* body_length);
 int mcca_net_http_content_length(const char* response, stduint length, stduint* output);
+int mcca_net_http_response_complete(const char* response, stduint length);
+int mcca_net_http_complete_body(const char* response, stduint length, const char** body, stduint* body_length);
 int mcca_net_http_parse_response(const char* response, stduint length, int* status_code,
 	stduint* header_length, stduint* content_length, const char** content_type,
 	stduint* content_type_length);
