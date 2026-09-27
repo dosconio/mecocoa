@@ -51,6 +51,7 @@ namespace {
 	constexpr stduint NetTcpTxRetryTicks = CONFIG_SysTickFreq;
 	constexpr stduint NetTcpTxRetryLimit = 3;
 	constexpr stduint NetTcpTimeWaitTicks = 2 * CONFIG_SysTickFreq;
+	constexpr stduint NetTcpKeepAliveTicks = 30 * CONFIG_SysTickFreq;
 	constexpr stduint NetDhcpRetryTicks = 5 * CONFIG_SysTickFreq;
 	constexpr stduint NetDhcpRetryLimit = 6;
 	constexpr stduint NetTcpOptionMssLength = 4;
@@ -1231,11 +1232,35 @@ enum class NetIPv4ConfigSource : uint8 {
 		return true;
 	}
 
+	bool IsTcpPeerFinClosed(const NetTcpConnection& connection) {
+		if (!connection.tcp) return true;
+		if (connection.close_phase == NetTcpClosePhase::Closing ||
+			connection.close_phase == NetTcpClosePhase::TimeWait) return true;
+		return connection.tcp->getControl().state == uni::Network::TCPConnectionState::CloseWait;
+	}
+
+	uint16 TcpCloseReasonCode(const NetTcpConnection& connection) {
+		if (connection.reset_received || connection.close_phase == NetTcpClosePhase::Reset) return 5;
+		if (connection.tx_count) {
+			const auto& pending = connection.tx_pending[connection.tx_head];
+			if (pending.valid && pending.length && pending.retry_count >= NetTcpTxRetryLimit) return 6;
+		}
+		if (connection.connect_error) return 7;
+		if (connection.close_phase == NetTcpClosePhase::TimeWait) return 4;
+		if (connection.local_fin_acknowledged) return 3;
+		if (connection.close_phase == NetTcpClosePhase::FinWait1 ||
+			connection.close_phase == NetTcpClosePhase::FinWait2 ||
+			connection.close_phase == NetTcpClosePhase::Closing) return 2;
+		if (connection.tcp &&
+			connection.tcp->getControl().state == uni::Network::TCPConnectionState::CloseWait) return 1;
+		return 0;
+	}
+
 	bool IsTcpReceiveReady(const NetTcpConnection& connection) {
 		if (connection.rx_count) return true;
 		if (!connection.tcp) return false;
 		if (connection.reset_received) return true;
-		return connection.tcp->getControl().state == uni::Network::TCPConnectionState::CloseWait;
+		return IsTcpPeerFinClosed(connection);
 	}
 
 	uint16 TcpReceiveWindow(const NetTcpConnection& connection) {
@@ -1986,6 +2011,14 @@ enum class NetIPv4ConfigSource : uint8 {
 		return true;
 	}
 
+	bool SendTcpKeepAliveProbe(NetTcpConnection& connection) {
+		if (!connection.tcp) return false;
+		const auto& control = connection.tcp->getControl();
+		if (!control.local_next_sequence) return false;
+		return SendTcpControl(connection, uni::Network::TCPFlagACK,
+			control.local_next_sequence - 1, control.remote_next_sequence);
+	}
+
 	uint8* GetTcpTxPayloadSlot(NetTcpConnection& connection, stduint index) {
 		return connection.tx_payloads + index * NetTcpTxPayloadSize;
 	}
@@ -2273,6 +2306,16 @@ enum class NetIPv4ConfigSource : uint8 {
 					continue;
 				}
 			}
+			if (!connection.tx_count &&
+				connection.close_phase == NetTcpClosePhase::None &&
+				(control.state == uni::Network::TCPConnectionState::Established ||
+					control.state == uni::Network::TCPConnectionState::CloseWait) &&
+				connection.last_rx_tick &&
+				tick - connection.last_rx_tick >= NetTcpKeepAliveTicks &&
+				(!connection.last_tx_tick || tick - connection.last_tx_tick >= NetTcpKeepAliveTicks)) {
+				(void)SendTcpKeepAliveProbe(connection);
+				continue;
+			}
 			if (!connection.active_open &&
 				control.state == uni::Network::TCPConnectionState::SynReceived &&
 				connection.synack_retry_count >= NetTcpControlRetryLimit &&
@@ -2340,6 +2383,13 @@ enum class NetIPv4ConfigSource : uint8 {
 					connection.close_phase == NetTcpClosePhase::Closing) &&
 				connection.fin_retry_count < NetTcpControlRetryLimit) return true;
 			if (connection.close_phase == NetTcpClosePhase::TimeWait) return true;
+			if (!connection.tx_count &&
+				connection.close_phase == NetTcpClosePhase::None &&
+				(control.state == uni::Network::TCPConnectionState::Established ||
+					control.state == uni::Network::TCPConnectionState::CloseWait) &&
+				connection.last_rx_tick &&
+				tick - connection.last_rx_tick >= NetTcpKeepAliveTicks &&
+				(!connection.last_tx_tick || tick - connection.last_tx_tick >= NetTcpKeepAliveTicks)) return true;
 			if (connection.tx_count &&
 				connection.tx_pending[connection.tx_head].retry_count < NetTcpTxRetryLimit) return true;
 		}
@@ -2939,6 +2989,20 @@ enum class NetIPv4ConfigSource : uint8 {
 			SendTcpAckForSegment(dev, frame, ipv4, tcp,
 				control.local_next_sequence, control.remote_next_sequence,
 				"[Net] tcp connect ack", TcpReceiveWindow(*connection));
+			return;
+		}
+		if (connection && connection->close_phase == NetTcpClosePhase::TimeWait) {
+			auto& control = connection->tcp->getControl();
+			if (!tcp.payload_length &&
+				(tcp.flags & (uni::Network::TCPFlagACK | uni::Network::TCPFlagFIN))) {
+				SendTcpAckForSegment(dev, frame, ipv4, tcp,
+					control.local_next_sequence, control.remote_next_sequence,
+					"[Net] tcp time-wait ack", TcpReceiveWindow(*connection));
+				connection->time_wait_tick = tick;
+			}
+			else {
+				SendTcpResetForSegment(dev, frame, ipv4, tcp);
+			}
 			return;
 		}
 		if (listener_for_port) {
@@ -3772,8 +3836,7 @@ bool Devsman::IsTcpReceiveClosed(const uni::Network::TCPConnectionContext& conte
 		context.remote.address, context.remote.port);
 	if (!connection || !connection->tcp) return true;
 	if (connection->reset_received) return false;
-	return !connection->rx_count &&
-		connection->tcp->getControl().state == uni::Network::TCPConnectionState::CloseWait;
+	return !connection->rx_count && IsTcpPeerFinClosed(*connection);
 }
 
 bool Devsman::HasTcpError(const uni::Network::TCPConnectionContext& context) {
@@ -4297,6 +4360,7 @@ bool Devsman::ClearDnsCache(const char* host) {
 bool Devsman::SetDnsServer(const uni::Network::IPv4Address& address) {
 	net_config.dns_server = address;
 	net_config.dns_source = address.isZero() ? net_config.source : NetIPv4ConfigSource::Temporary;
+	ClearDnsCache();
 	return true;
 }
 
@@ -4373,6 +4437,7 @@ bool Devsman::GetTcpConnectionEntry(stduint index, void* entry, stduint length) 
 			break;
 		}
 		output->close_phase = uint16(connection.close_phase);
+		output->close_reason = TcpCloseReasonCode(connection);
 		if (connection.reset_received) output->error = uint16(NetErrConnectionReset);
 		else if (IsTcpTxRetryExhausted(connection)) output->error = uint16(NetErrTimedOut);
 		else if (connection.connect_error > 0) output->error = uint16(connection.connect_error);
@@ -4418,6 +4483,28 @@ bool Devsman::GetNetStats(void* stats, stduint length) {
 	output->tcp_connect_last_age = net_tcp_connect_last_tick && tick >= net_tcp_connect_last_tick ?
 		uint16(tick - net_tcp_connect_last_tick) : 0;
 	return true;
+}
+
+void Devsman::RecordSocketError(int error) {
+	switch (error) {
+	case NetErrConnectionRefused:
+	case NetErrHostUnreachable:
+	case NetErrNetworkUnreachable:
+		net_stats.socket_error_icmp++;
+		break;
+	case NetErrConnectionReset:
+		net_stats.socket_error_rst++;
+		break;
+	case NetErrTimedOut:
+	case 11:
+		net_stats.socket_error_timeout++;
+		break;
+	case 32:
+		net_stats.socket_error_shutdown++;
+		break;
+	default:
+		break;
+	}
 }
 
 bool Devsman::RenewDhcp() {

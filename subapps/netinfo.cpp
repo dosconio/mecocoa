@@ -53,6 +53,22 @@ static const char* ConfigSourceName(uint16 source) {
 	}
 }
 
+static const char* ConfigSourceName(uni::Network::NetworkConfigSource source) {
+	switch (source) {
+	case uni::Network::NetworkConfigSource::DHCP:
+		return "dhcp";
+	case uni::Network::NetworkConfigSource::Temporary:
+		return "temporary";
+	case uni::Network::NetworkConfigSource::Failed:
+		return "failed";
+	case uni::Network::NetworkConfigSource::None:
+		return "none";
+	case uni::Network::NetworkConfigSource::Static:
+	default:
+		return "static";
+	}
+}
+
 static const char* DhcpStateName(uint16 state) {
 	switch (state) {
 	case syscall_net_dhcp_state_init:
@@ -230,6 +246,20 @@ static const char* TcpClosePhaseName(uint16 phase) {
 	}
 }
 
+static const char* TcpCloseReasonName(uint16 reason) {
+	switch (reason) {
+	case 0: return "none";
+	case 1: return "peer-fin";
+	case 2: return "active-fin";
+	case 3: return "fin-ack";
+	case 4: return "time-wait";
+	case 5: return "reset";
+	case 6: return "tx-timeout";
+	case 7: return "connect-error";
+	default: return "unknown";
+	}
+}
+
 static const char* TcpDirectionName(uint16 flags) {
 	return (flags & 0x0100u) ? "active" : "passive";
 }
@@ -292,9 +322,10 @@ static void PrintTcpState() {
 		PrintIPv4(connection.local_address);
 		printf(":%u peer=", (unsigned)connection.local_port);
 		PrintIPv4(connection.remote_address);
-		printf(":%u state=%s phase=%s dir=%s err=%u/%s rx=%u win=%u peerwin=%u tx=%u retry=%u rexmit=%u mss=%u/%u send=%u dup=%u ooo=%u full=%u idle=%u/%u",
+		printf(":%u state=%s phase=%s reason=%s dir=%s err=%u/%s rx=%u win=%u peerwin=%u tx=%u retry=%u rexmit=%u mss=%u/%u send=%u dup=%u ooo=%u full=%u idle=%u/%u",
 			(unsigned)connection.remote_port, TcpStateDisplayName(connection),
-			TcpClosePhaseName(connection.close_phase), TcpDirectionName(connection.flags),
+			TcpClosePhaseName(connection.close_phase), TcpCloseReasonName(connection.close_reason),
+			TcpDirectionName(connection.flags),
 			(unsigned)connection.error, mcca_net_socket_error_name(connection.error),
 			(unsigned)connection.rx_bytes, (unsigned)connection.rx_window,
 			(unsigned)connection.peer_window,
@@ -433,6 +464,9 @@ static void PrintNetStats() {
 		(unsigned)stats.dhcp_nak_rx, (unsigned)stats.tcp_accept,
 		(unsigned)stats.tcp_listener_close,
 		(unsigned)stats.tcp_connect_failed);
+	printf("netinfo: socket-errors icmp=%u rst=%u timeout=%u shutdown=%u\n\r",
+		(unsigned)stats.socket_error_icmp, (unsigned)stats.socket_error_rst,
+		(unsigned)stats.socket_error_timeout, (unsigned)stats.socket_error_shutdown);
 	printf("netinfo: tcp-connect reasons refused=%u host=%u net=%u nobuf=%u addr=%u\n\r",
 		(unsigned)stats.tcp_connect_refused,
 		(unsigned)stats.tcp_connect_host_unreach,
@@ -488,7 +522,8 @@ static void PrintNetworkConfig() {
 		printf(" %s\n\r", (iface.flags & syscall_net_route_flag_up) ? "up" : "down");
 	}
 	uni::Network::NetworkConfigSnapshot config{};
-	if (count && mcca_net_read_config(config, 0)) {
+	auto* config_interface = mcca_net_config();
+	if (count && config_interface && config_interface->ReadConfig(config) > 0) {
 		uint8 address[4] = {};
 		uint8 netmask[4] = {};
 		uint8 gateway[4] = {};
@@ -505,7 +540,8 @@ static void PrintNetworkConfig() {
 		PrintIPv4(gateway);
 		printf(" dns=");
 		PrintIPv4(dns);
-		printf(" lease=%u %s\n\r", (unsigned)config.ipv4.lease_seconds,
+		printf(" src=%s lease=%u %s\n\r", ConfigSourceName(config.ipv4.source),
+			(unsigned)config.ipv4.lease_seconds,
 			config.link_up ? "up" : "down");
 	}
 	PrintDefaultRoute();
@@ -522,7 +558,7 @@ static int PrintDnsLookup(const char* host) {
 	printf("netinfo: dns %s A=%u.%u.%u.%u status=%s\n\r", host,
 		(unsigned)octet[0], (unsigned)octet[1], (unsigned)octet[2], (unsigned)octet[3],
 		mcca_net_dns_status());
-	mcca_net_print_dns_result("netinfo", nullptr);
+	mcca_net_print_dns_result("netinfo", host);
 	return 0;
 }
 

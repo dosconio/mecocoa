@@ -13,7 +13,7 @@
 
 static void PrintUsage() {
 	printf("usage: testtcp [--reuse] [--nonblock] [--poll-accept] [--backlog n] [--accept-delay ms] [--accept-timeout ms] [--once] [--count n] [--sockopt] [--bind-ip ipv4] --listen [port]\n\r");
-	printf("       testtcp [--repeat n] [--burst n] [--fill n] [--read-size n] [--write-size n] [--hold ms] [--hold-before-close ms] [--poll-after-recv] [--select-after-recv] [--shutdown-write] [--shutdown-read] [--send-after-shutdown] [--zero-io] [--sockopt] [--bind-ip ipv4] [--sockerr-twice] [--http] host port [payload]\n\r");
+	printf("       testtcp [--repeat n] [--burst n] [--fill n] [--read-size n] [--write-size n] [--hold ms] [--hold-before-close ms] [--poll-after-recv] [--select-after-recv] [--shutdown-write] [--shutdown-read] [--shutdown-both] [--send-after-shutdown] [--write-after-eof] [--zero-io] [--sockopt] [--bind-ip ipv4] [--sockerr-twice] [--http] host port [payload]\n\r");
 	printf("  listen: testtcp --listen 80\n\r");
 	printf("  reuse:  testtcp --reuse --listen 80\n\r");
 	printf("  nbacc:  testtcp --nonblock --listen 80\n\r");
@@ -32,6 +32,8 @@ static void PrintUsage() {
 	printf("  select: testtcp --select-after-recv 10.0.2.1 7777 hello\n\r");
 	printf("  sdown:  testtcp --shutdown-write 10.0.2.1 7777 hello\n\r");
 	printf("  rdcls:  testtcp --shutdown-read 10.0.2.1 7777 hello\n\r");
+	printf("  both:   testtcp --shutdown-both 10.0.2.1 7777 hello\n\r");
+	printf("  eofwr:  testtcp --write-after-eof 10.0.2.1 7777 hello\n\r");
 	printf("  zero:   testtcp --zero-io 10.0.2.1 7777 hello\n\r");
 	printf("  opt:    testtcp --sockopt 10.0.2.1 7777 hello\n\r");
 	printf("  nbconn: testtcp --nonblock-connect --poll-connect 10.0.2.1 7777 hello\n\r");
@@ -251,7 +253,9 @@ int main(int argc, char** argv) {
 	bool sockerr_twice = false;
 	bool shutdown_write = false;
 	bool shutdown_read = false;
+	bool shutdown_both = false;
 	bool send_after_shutdown = false;
+	bool write_after_eof = false;
 	bool zero_io = false;
 	bool http_mode = false;
 	bool resolve_only = false;
@@ -476,9 +480,20 @@ int main(int argc, char** argv) {
 			shutdown_read = true;
 			continue;
 		}
+		if (StrCompare(argv[i], "--shutdown-both") == 0) {
+			shutdown_both = true;
+			shutdown_read = true;
+			shutdown_write = true;
+			continue;
+		}
 		if (StrCompare(argv[i], "--send-after-shutdown") == 0) {
 			send_after_shutdown = true;
 			shutdown_write = true;
+			continue;
+		}
+		if (StrCompare(argv[i], "--write-after-eof") == 0) {
+			write_after_eof = true;
+			show_sockopt = true;
 			continue;
 		}
 		if (StrCompare(argv[i], "--zero-io") == 0) {
@@ -563,7 +578,7 @@ int main(int argc, char** argv) {
 				repeat_count != 1 || burst_count != 1 || fill_length ||
 				poll_after_recv || select_after_recv || poll_connect || nonblock_connect ||
 				show_sockopt || sockerr_twice || shutdown_write || shutdown_read ||
-				send_after_shutdown || zero_io || http_mode || resolve_only ||
+				send_after_shutdown || write_after_eof || zero_io || http_mode || resolve_only ||
 				serve_rounds || receive_timeout >= 0 || send_timeout >= 0 || hold_time ||
 				bind_ip_set) {
 				PrintUsage();
@@ -593,7 +608,8 @@ int main(int argc, char** argv) {
 				listen_backlog != 4 || accept_delay || accept_timeout >= 0 ||
 				repeat_count != 1 || burst_count != 1 ||
 				fill_length || poll_after_recv || select_after_recv || poll_connect || nonblock_connect ||
-				show_sockopt || sockerr_twice || shutdown_write || shutdown_read || send_after_shutdown || zero_io ||
+				show_sockopt || sockerr_twice || shutdown_write || shutdown_read ||
+				send_after_shutdown || write_after_eof || zero_io ||
 				http_mode || serve_rounds || receive_timeout >= 0 || send_timeout >= 0 || hold_time ||
 				bind_ip_set) {
 				PrintUsage();
@@ -817,7 +833,17 @@ int main(int argc, char** argv) {
 					sent_total += stduint(sent);
 				}
 			}
-			if (shutdown_write) {
+			if (shutdown_both) {
+				if (shutdown(fd, SHUT_RDWR) < 0) {
+					printf("testtcp: shutdown both failed\n\r");
+					close(fd);
+					if (fill_payload) free(fill_payload);
+					if (http_payload) free(http_payload);
+					return 1;
+				}
+				printf("testtcp: shutdown both\n\r");
+			}
+			else if (shutdown_write) {
 				if (shutdown(fd, SHUT_WR) < 0) {
 					printf("testtcp: shutdown write failed\n\r");
 					close(fd);
@@ -833,7 +859,7 @@ int main(int argc, char** argv) {
 				if (show_sockopt) PrintSocketOptions(fd);
 				if (sockerr_twice) PrintSocketOptions(fd);
 			}
-			if (shutdown_read) {
+			if (shutdown_read && !shutdown_both) {
 				if (shutdown(fd, SHUT_RD) < 0) {
 					printf("testtcp: shutdown read failed\n\r");
 					close(fd);
@@ -852,6 +878,7 @@ int main(int argc, char** argv) {
 			int http_status_code = 0;
 			bool http_status_ready = false;
 			bool http_header_ready = false;
+			bool saw_eof = false;
 			stduint http_header_length = 0;
 			bool http_content_length_ready = false;
 			stduint http_content_length = 0;
@@ -888,6 +915,7 @@ int main(int argc, char** argv) {
 				}
 				if (!received) {
 					printf("testtcp: eof\n\r");
+					saw_eof = true;
 					break;
 				}
 				buffer[received] = 0;
@@ -994,6 +1022,17 @@ int main(int argc, char** argv) {
 					FD_ISSET(fd, &writefds) ? 1 : 0,
 					FD_ISSET(fd, &exceptfds) ? 1 : 0);
 			}
+			if (write_after_eof) {
+				if (!saw_eof) {
+					printf("testtcp: write-after-eof skipped\n\r");
+				}
+				else {
+					const stdsint sent = write(fd, "E", 1);
+					printf("testtcp: write-after-eof=%d\n\r", (int)sent);
+					PrintSocketOptions(fd);
+					if (sockerr_twice) PrintSocketOptions(fd);
+				}
+			}
 			if (hold_time > 0) {
 				printf("testtcp: hold=%dms\n\r", hold_time);
 				poll(nullptr, 0, hold_time);
@@ -1013,7 +1052,7 @@ int main(int argc, char** argv) {
 
 	if (repeat_count != 1 || burst_count != 1 || fill_length || poll_after_recv || select_after_recv ||
 		poll_connect || nonblock_connect || http_mode || resolve_only || gai_mode ||
-		zero_io || positional_count > 1) {
+		write_after_eof || zero_io || positional_count > 1) {
 		PrintUsage();
 		return 1;
 	}

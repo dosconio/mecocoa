@@ -63,6 +63,9 @@ namespace uni {
 		if (!socket) return;
 		socket->last_error = error;
 		if (error) socket->flags &= ~SocketHandleFlagTcpErrorConsumed;
+		#if (_MCCA & 0xFF00) == 0x8600
+		if (error) Devsman::RecordSocketError(error);
+		#endif
 	}
 
 	static bool IsLocalBindIPv4AddressAllowed(const Network::IPv4Address& address) {
@@ -2109,20 +2112,42 @@ int Filesys::SendSocket(vfs_file* file, const void* payload, stduint length, con
 				SleepSocketPollStep(start_tick, socket->send_timeout_ms);
 			}
 		}
-		const stdsint sent = Devsman::SendTcp(context, payload, length);
-		if (sent < 0) {
-			if (Devsman::HasTcpError(context)) {
-				SetSocketError(socket, ECONNRESET);
+		const auto* bytes = reinterpret_cast<const uint8*>(payload);
+		stduint total = 0;
+		const stduint start_tick = tick;
+		while (total < length) {
+			const stdsint sent = Devsman::SendTcp(context, bytes + total, length - total);
+			if (sent < 0) {
+				if (Devsman::HasTcpError(context)) SetSocketError(socket, ECONNRESET);
+				else SetSocketError(socket, EPIPE);
+				return total ? stdsint(total) : -1;
 			}
-			else {
-				SetSocketError(socket, EPIPE);
+			if (sent > 0) {
+				total += stduint(sent);
+				continue;
+			}
+			if (file->f_mode & O_NONBLOCK) {
+				SetSocketError(socket, EAGAIN);
+				return total ? stdsint(total) : -1;
+			}
+			if (socket->send_timeout_ms && TimeoutExpired(start_tick, socket->send_timeout_ms)) {
+				SetSocketError(socket, EAGAIN);
+				return total ? stdsint(total) : -1;
+			}
+			while (!Devsman::HasTcpSendSpace(context)) {
+				if (Devsman::HasTcpError(context)) {
+					SetSocketError(socket, ECONNRESET);
+					return total ? stdsint(total) : -1;
+				}
+				if (ThreadHasUnblockedSignal(Taskman::CurrentTB())) return total ? stdsint(total) : -4;
+				if (socket->send_timeout_ms && TimeoutExpired(start_tick, socket->send_timeout_ms)) {
+					SetSocketError(socket, EAGAIN);
+					return total ? stdsint(total) : -1;
+				}
+				SleepSocketPollStep(start_tick, socket->send_timeout_ms);
 			}
 		}
-		else if (sent == 0 && length) {
-			SetSocketError(socket, EAGAIN);
-			return -1;
-		}
-		return sent;
+		return stdsint(total);
 		#endif
 	}
 	if (socket->type != Network::SocketType::Datagram) return -1;

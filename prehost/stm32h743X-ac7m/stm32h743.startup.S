@@ -1,44 +1,12 @@
-;******************** (C) COPYRIGHT 2017 STMicroelectronics ********************
-;* File Name          : startup_stm32h743xx.s
-;* @author  MCD Application Team
-;* version            : V1.2.0
-;* Date               : 29-December-2017
-;* Description        : STM32H7xx devices vector table for MDK-ARM toolchain. 
-;*                      This module performs:
-;*                      - Set the initial SP
-;*                      - Set the initial PC == Reset_Handler
-;*                      - Set the vector table entries with the exceptions ISR address
-;*                      - Branches to __main in the C library (which eventually
-;*                        calls main()).
-;*                      After Reset the Cortex-M processor is in Thread mode,
-;*                      priority is Privileged, and the Stack is set to Main.
-;* <<< Use Configuration Wizard in Context Menu >>>   
-;*******************************************************************************
-; 
-; Licensed under MCD-ST Liberty SW License Agreement V2, (the "License");
-; You may not use this file except in compliance with the License.
-; You may obtain a copy of the License at:
-; 
-;        http://www.st.com/software_license_agreement_liberty_v2
-; 
-; Unless required by applicable law or agreed to in writing, software 
-; distributed under the License is distributed on an "AS IS" BASIS, 
-; WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-; See the License for the specific language governing permissions and
-; limitations under the License.
-; 
-;*******************************************************************************
-
-; Amount of memory (in bytes) allocated for Stack
-; Tailor this value to your application needs
-; <h> Stack Configuration
-;   <o> Stack Size (in Bytes) <0x0-0xFFFFFFFF:8>
-; </h>
 
 Stack_Size      EQU     0x00008000
 
                 AREA    STACK, NOINIT, READWRITE, ALIGN=3
+BSS_ENTO
 Stack_Mem       SPACE   Stack_Size
+BSS_ENDO
+	EXPORT BSS_ENTO
+	EXPORT BSS_ENDO
 __initial_sp
 
 

@@ -304,6 +304,7 @@ struct syscall_net_tcp_connection_t {
 	uint16 flags = 0;
 	uint16 error = 0;
 	uint16 close_phase = 0;
+	uint16 close_reason = 0;
 	uint16 entry_index = 0;
 	uint16 rx_bytes = 0;
 	uint16 tx_pending = 0;
@@ -406,6 +407,10 @@ struct syscall_net_stats_t {
 	uint32 tcp_connect_no_buffer = 0;
 	uint32 tcp_connect_addr_in_use = 0;
 	uint32 tcp_listener_close = 0;
+	uint32 socket_error_icmp = 0;
+	uint32 socket_error_rst = 0;
+	uint32 socket_error_timeout = 0;
+	uint32 socket_error_shutdown = 0;
 	uint8 tcp_connect_last_local_address[4] = {};
 	uint8 tcp_connect_last_remote_address[4] = {};
 	uint16 tcp_connect_last_local_port = 0;

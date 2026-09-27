@@ -43,8 +43,11 @@
 #ifndef _STYLE_RUST
 #define _STYLE_RUST
 #endif
+#include <c/stdinc.h>
+#ifndef _DEV_KEIL
 #define _HER_TIME_H
 #define _TIME_H	1
+#endif
 
 #include <c/consio.h>
 #include <c/datime.h>
@@ -92,9 +95,7 @@ void serv_devs_loop();
 
 
 // ---- handler ----
-#if (_MCCA & 0xFF00) == 0x1000 || (_MCCA & 0xFF00) == 0x8600
 extern InterruptControl IC;
-#endif
 
 struct RMOD_LIST {
 	Handler_t init = nullptr;

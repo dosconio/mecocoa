@@ -356,8 +356,9 @@ extern "C" int printf(const char* fmt, ...) {
 // TODO:
 extern "C" void __stack_chk_fail_local() { loop; }
 extern "C" void atexit() {  }
+int* _errno(void) { static int _errno_value = 0; return &_errno_value; }
 extern "C" {
-	int errno = 0;
+	int _accm_errno = 0;
 	void* _Unwind_Resume = 0;
 	void* __gcc_personality_v0 = 0;
 }

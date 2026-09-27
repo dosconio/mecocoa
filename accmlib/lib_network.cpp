@@ -49,6 +49,8 @@ static char mcca_dns_kernel_status[24] = {};
 static char mcca_dns_kernel_cname_target[64] = {};
 static struct in_addr mcca_dns_override_server = {};
 static bool mcca_dns_override_server_valid = false;
+static struct in_addr mcca_dns_last_good_server = {};
+static bool mcca_dns_last_good_server_valid = false;
 static const char* mcca_dns_last_status = "none";
 static stduint mcca_dns_last_ttl = 0;
 static stduint mcca_dns_last_answer_count = 0;
@@ -358,6 +360,9 @@ static bool MccaGetConfiguredDnsServerAt(stduint index, struct in_addr* output) 
 	if (mcca_dns_override_server_valid &&
 		MccaSelectDnsCandidate(index, ordinal, previous, numsof(previous),
 			previous_count, mcca_dns_override_server, output)) return true;
+	if (mcca_dns_last_good_server_valid &&
+		MccaSelectDnsCandidate(index, ordinal, previous, numsof(previous),
+			previous_count, mcca_dns_last_good_server, output)) return true;
 	stduint count = 0;
 	if (syscall(syscall_t::ROUT, stduint(syscall_net_route_func_t::IPv4InterfaceCount),
 		_IMM(&count), sizeof(count)) < 0) return false;
@@ -845,6 +850,7 @@ extern "C" int mcca_net_dns_probe_aaaa(const char* host, stduint* ttl) {
 	uint8 response[512] = {};
 	stdsint received = -1;
 	const char* io_status = "no-dns-server";
+	struct in_addr successful_dns{};
 	for0(candidate_index, 4) {
 		struct in_addr dns{};
 		if (!MccaGetConfiguredDnsServerAt(candidate_index, &dns)) break;
@@ -874,6 +880,28 @@ extern "C" int mcca_net_dns_probe_aaaa(const char* host, stduint* ttl) {
 		}
 		received = recvfrom(fd, response, sizeof(response), 0, nullptr, nullptr);
 		close(fd);
+		if (received < 12) {
+			io_status = "short-reply";
+			received = -1;
+			continue;
+		}
+		if (MccaReadNet16(response) != query_id) {
+			io_status = "bad-xid";
+			received = -1;
+			continue;
+		}
+		const uint16 candidate_flags = MccaReadNet16(response + 2);
+		if (!(candidate_flags & 0x8000u)) {
+			io_status = "not-response";
+			received = -1;
+			continue;
+		}
+		if ((candidate_flags & 0x000Fu) == 2) {
+			io_status = "servfail";
+			received = -1;
+			continue;
+		}
+		successful_dns = dns;
 		break;
 	}
 	if (received < 0) {
@@ -898,6 +926,10 @@ extern "C" int mcca_net_dns_probe_aaaa(const char* host, stduint* ttl) {
 	if (dns_rcode != 0) {
 		mcca_dns_last_status = MccaDnsRcodeStatus(dns_rcode);
 		return 0;
+	}
+	if (!MccaIPv4IsZero(successful_dns)) {
+		mcca_dns_last_good_server = successful_dns;
+		mcca_dns_last_good_server_valid = true;
 	}
 	const uint16 question_count = MccaReadNet16(response + 4);
 	const uint16 answer_count = MccaReadNet16(response + 6);
@@ -1349,6 +1381,9 @@ static int MccaResolveIPv4Query(const char* host, struct in_addr* output, stduin
 			if (resolved && mcca_dns_last_ttl) {
 				MccaRememberDnsCache(host, output, mcca_dns_last_ttl, mcca_dns_last_answer_count);
 			}
+			else {
+				MccaRememberDnsFailure(host, mcca_dns_last_status);
+			}
 			return resolved;
 		}
 		if (!mcca_dns_last_address_count) return MccaResolveDnsFail(host, "cached-no-a");
@@ -1391,6 +1426,9 @@ static int MccaResolveIPv4Query(const char* host, struct in_addr* output, stduin
 			if (resolved && mcca_dns_last_ttl) {
 				MccaRememberDnsCache(host, output, mcca_dns_last_ttl, mcca_dns_last_answer_count);
 			}
+			else {
+				MccaRememberDnsFailure(host, mcca_dns_last_status);
+			}
 			return resolved;
 		}
 		if (!mcca_dns_last_address_count) return MccaResolveDnsFail(host, "cached-no-a");
@@ -1424,6 +1462,7 @@ static int MccaResolveIPv4Query(const char* host, struct in_addr* output, stduin
 	uint8 response[512] = {};
 	stdsint received = -1;
 	const char* io_status = "no-dns-server";
+	struct in_addr successful_dns{};
 	for0(candidate_index, 4) {
 		struct in_addr dns{};
 		if (!MccaGetConfiguredDnsServerAt(candidate_index, &dns)) break;
@@ -1453,6 +1492,28 @@ static int MccaResolveIPv4Query(const char* host, struct in_addr* output, stduin
 		}
 		received = recvfrom(fd, response, sizeof(response), 0, nullptr, nullptr);
 		close(fd);
+		if (received < 12) {
+			io_status = "short-reply";
+			received = -1;
+			continue;
+		}
+		if (MccaReadNet16(response) != query_id) {
+			io_status = "bad-xid";
+			received = -1;
+			continue;
+		}
+		const uint16 candidate_flags = MccaReadNet16(response + 2);
+		if (!(candidate_flags & 0x8000u)) {
+			io_status = "not-response";
+			received = -1;
+			continue;
+		}
+		if ((candidate_flags & 0x000Fu) == 2) {
+			io_status = "servfail";
+			received = -1;
+			continue;
+		}
+		successful_dns = dns;
 		break;
 	}
 	if (received < 0) return MccaResolveDnsFail(host, io_status);
@@ -1463,6 +1524,10 @@ static int MccaResolveIPv4Query(const char* host, struct in_addr* output, stduin
 	const uint16 dns_rcode = dns_flags & 0x000Fu;
 	if (!(dns_flags & 0x8000u)) return MccaResolveDnsFail(host, "not-response");
 	if (dns_rcode != 0) return MccaResolveDnsFail(host, MccaDnsRcodeStatus(dns_rcode));
+	if (!MccaIPv4IsZero(successful_dns)) {
+		mcca_dns_last_good_server = successful_dns;
+		mcca_dns_last_good_server_valid = true;
+	}
 	const uint16 question_count = MccaReadNet16(response + 4);
 	const uint16 answer_count = MccaReadNet16(response + 6);
 	mcca_dns_last_answer_count = answer_count;
@@ -1515,6 +1580,7 @@ static int MccaResolveIPv4Query(const char* host, struct in_addr* output, stduin
 		*output = mcca_dns_last_addresses[mcca_dns_rotation++ % mcca_dns_last_address_count];
 		mcca_dns_last_status = "ok";
 		mcca_dns_last_ttl = first_ttl;
+		if (first_cname[0]) MccaRememberDnsCnameTarget(first_cname);
 		MccaRememberDnsCache(host, output, mcca_dns_last_ttl, mcca_dns_last_answer_count);
 		return 1;
 	}
@@ -1529,6 +1595,9 @@ static int MccaResolveIPv4Query(const char* host, struct in_addr* output, stduin
 		if (resolved && mcca_dns_last_ttl) {
 			mcca_dns_last_answer_count += original_answer_count;
 			MccaRememberDnsCache(host, output, mcca_dns_last_ttl, mcca_dns_last_answer_count);
+		}
+		else {
+			MccaRememberDnsFailure(host, mcca_dns_last_status);
 		}
 		return resolved;
 	}

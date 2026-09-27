@@ -307,6 +307,7 @@ public:
 	static stduint TcpConnectionCount();
 	static bool GetTcpConnectionEntry(stduint index, void* entry, stduint length);
 	static bool GetNetStats(void* stats, stduint length);
+	static void RecordSocketError(int error);
 	static bool RenewDhcp();
 	static bool ReleaseDhcp();
 	static const char* LookupPciClassName(uint8 class_base, uint8 class_sub, uint8 class_if);
