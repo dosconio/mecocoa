@@ -7,6 +7,7 @@
 #else
 #define CONFIG_SysTickFreq 100 // 100Hz
 #define CONFIG_ECHO_LOGO 1 // print logo 🏳️‍⚧️
+#define CONFIG_ENABLE_MMU 1
 
 #endif
 
@@ -25,7 +26,11 @@
 //
 #define _SYS_MULTICORE 1
 
-
+#ifdef  _MCU_STM32H7x
+#define _MCCA_LITE // another addition for debug but _DEBUG
+#undef  CONFIG_ENABLE_MMU
+#define CONFIG_ENABLE_MMU 0
+#endif
 
 #if (_MCCA & 0xFF00) == 0x1000
 #undef _GUI_ENABLE

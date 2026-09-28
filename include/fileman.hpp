@@ -39,8 +39,6 @@ fixed2.vhd1        0x01
     └─fixed2.vhd7  0x22
 */
 
-void DEV_Init();
-
 
 enum MajorDevice {
 	DEV_NULL = 0,
@@ -112,7 +110,6 @@ inline static stduint get_drv_pid(u32 dev) {
 }
 
 FileDescriptor* FileDescriptor_Clone(FileDescriptor* src);
-bool strip_path(char* filename, const char* pathname, inode** ppinode);
 
 #ifndef _ACCM
 struct ProcFiles {

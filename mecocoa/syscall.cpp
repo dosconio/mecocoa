@@ -598,6 +598,16 @@ DEFSYSC sysc_ROUT(stduint func, stduint p1, stduint p2) {
 		return -1;
 		#endif
 	}
+	case syscall_net_route_func_t::IPv4ApplyConfig: {
+		#if (_MCCA & 0xFF00) == 0x8600
+		syscall_net_config_ipv4_t config{};
+		if (p2 < sizeof(config)) return -1;
+		MccaMemCopyP(&config, nullptr, true, (void*)p1, pb, false, sizeof(config));
+		return Devsman::ApplyIPv4Config(&config, sizeof(config)) ? 0 : -1;
+		#else
+		return -1;
+		#endif
+	}
 	case syscall_net_route_func_t::IPv4ArpCacheCount: {
 		if (p2 < sizeof(stduint)) return -1;
 		#if (_MCCA & 0xFF00) == 0x8600
@@ -786,11 +796,45 @@ DEFSYSC sysc_ROUT(stduint func, stduint p1, stduint p2) {
 	case syscall_net_route_func_t::DNSSetServer: {
 		#if (_MCCA & 0xFF00) == 0x8600
 		syscall_net_dns_server_t server{};
+		if (p2 < sizeof(server.address)) return -1;
+		const stduint copy_length = p2 < sizeof(server) ? p2 : sizeof(server);
+		MccaMemCopyP(&server, nullptr, true, (void*)p1, pb, false, copy_length);
+		uni::Network::IPv4Address addresses[syscall_net_dns_server_capacity]{};
+		stduint count = server.count;
+		if (count > syscall_net_dns_server_capacity) count = syscall_net_dns_server_capacity;
+		if (!count) {
+			bool legacy_address = false;
+			for0(i, uni::Network::IPv4AddressLength) legacy_address |= server.address[i] != 0;
+			if (legacy_address) {
+				for0(i, uni::Network::IPv4AddressLength) addresses[0].octet[i] = server.address[i];
+				count = 1;
+			}
+		}
+		else {
+			for0(a, count) for0(i, uni::Network::IPv4AddressLength) {
+				addresses[a].octet[i] = server.addresses[a][i];
+			}
+		}
+		return Devsman::SetDnsServers(addresses, count) ? 0 : -1;
+		#else
+		return -1;
+		#endif
+	}
+	case syscall_net_route_func_t::DNSGetServers: {
+		#if (_MCCA & 0xFF00) == 0x8600
+		syscall_net_dns_server_t server{};
 		if (p2 < sizeof(server)) return -1;
-		MccaMemCopyP(&server, nullptr, true, (void*)p1, pb, false, sizeof(server));
-		uni::Network::IPv4Address address{};
-		for0(i, uni::Network::IPv4AddressLength) address.octet[i] = server.address[i];
-		return Devsman::SetDnsServer(address) ? 0 : -1;
+		uni::Network::IPv4Address addresses[syscall_net_dns_server_capacity]{};
+		const stduint count = Devsman::GetDnsServers(addresses, numsof(addresses));
+		server.count = uint16(count);
+		if (count) {
+			for0(i, uni::Network::IPv4AddressLength) server.address[i] = addresses[0].octet[i];
+		}
+		for0(a, count) for0(i, uni::Network::IPv4AddressLength) {
+			server.addresses[a][i] = addresses[a].octet[i];
+		}
+		MccaMemCopyP((void*)p1, pb, false, &server, nullptr, true, sizeof(server));
+		return 0;
 		#else
 		return -1;
 		#endif

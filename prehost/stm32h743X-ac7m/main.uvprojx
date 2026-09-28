@@ -406,9 +406,9 @@
               <FilePath>..\..\mecocoa\taskman-lock.cpp</FilePath>
             </File>
             <File>
-              <FileName>GPIO.cpp</FileName>
+              <FileName>handler.cpp</FileName>
               <FileType>8</FileType>
-              <FilePath>..\..\..\unisym\lib\cpp\Device\GPIO.cpp</FilePath>
+              <FilePath>..\..\mecocoa\handler.cpp</FilePath>
             </File>
           </Files>
         </Group>

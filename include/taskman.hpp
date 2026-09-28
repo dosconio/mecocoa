@@ -50,6 +50,7 @@ struct SysMessage {
 	} args = {};
 };
 extern uni::Queue<SysMessage> message_queue;
+extern SpinlockBlock<uni::Queue<SysMessage>> message_queue_conv;// for serv_graf_loop
 
 enum GraphicFormStyle {
 	GraphicFormStyle_Titleless   = 0x00000001,
@@ -656,6 +657,7 @@ inline static stduint syssdrv(stduint whom, void* msgaddr, stduint bytlen, stdui
 	return sysrecv(whom, msgaddr, bytlen, type);
 }
 
+#if CONFIG_ENABLE_MMU
 static inline void* SeekAddress(ProcessBlock* pb, stduint addr, bool from_kernel) {
 	#if (_MCCA & 0xFF00) == 0x1000 // M-RISCV
 	void* ptr = from_kernel ? (void*)addr : (void*)pb->paging[addr];
@@ -666,6 +668,9 @@ static inline void* SeekAddress(ProcessBlock* pb, stduint addr, bool from_kernel
 	// if (_IMM(ptr) == ~_IMM0) plogerro("SeekAddress: null ptr");
 	return _IMM(ptr) != ~_IMM0 ? ptr : nullptr;
 }
+#else
+#define SeekAddress(pb, addr, from_kernel) ((void*)addr)
+#endif
 
 extern "C" void* kernel_prefault_page(ProcessBlock* pb, stduint addr);
 

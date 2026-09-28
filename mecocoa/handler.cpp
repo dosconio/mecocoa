@@ -21,6 +21,9 @@ InterruptControl IC = { mglb(0x800) };
 #elif (_MCCA & 0xFF00) == 0x1000
 _ESYM_C Handler_t trap_vector[];
 InterruptControl IC = { _IMM(trap_vector) };
+#elif _MCCA == 0x1A072032
+_ESYM_C Handler_t __Vectors[];
+InterruptControl IC = { _IMM(__Vectors) };
 #endif
 
 // Unified interrupt handler array

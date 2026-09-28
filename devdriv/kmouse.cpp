@@ -35,7 +35,6 @@ void R_MOU_INIT() {
 }
 
 
-extern SpinlockBlock<uni::Queue<SysMessage>> message_queue_conv;
 static bool fa_mouse = false;
 static byte mouse_buf[4] = { 0 };
 QueueLimited* queue_mouse;

@@ -13,6 +13,8 @@ extern byte _BUF_xhc[];
 #include <c/driver/timer.h>
 #endif
 
+SpinlockBlock<uni::Queue<SysMessage>> message_queue_conv;
+
 extern uni::Dchain TimerManager;
 void _Comment(R0) serv_sysmsg() {
 	#if _MCCA == 0x8664 && defined(_UEFI)

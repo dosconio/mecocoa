@@ -99,14 +99,12 @@ int KeyboardBridge::out(const char* str, stduint len) {
 			// Global Hotkeys
 			if (event.method == keyboard_event_t::method_t::keydown && (event.mod.l_logo || event.mod.r_logo)) {
 				if (event.keycode == 0x06) { // Win + C
-					extern SpinlockBlock<uni::Queue<SysMessage>> message_queue_conv;
 					SysMessage msg;
 					msg.type = SysMessage::RUPT_NEW_TERM;
 					message_queue_conv.Lock()->Enqueue(msg);
 				}
 				else if (event.keycode == 0x15) { // Win + R (R is 0x15 in USB HID)
 					// TEMP
-					extern SpinlockBlock<uni::Queue<SysMessage>> message_queue_conv;
 					SysMessage msg;
 					msg.type = SysMessage::RUPT_SET_RES;
 					static int s_res_idx = 0;
@@ -118,15 +116,15 @@ int KeyboardBridge::out(const char* str, stduint len) {
 				}
 				return 0; // Intercept: do not pass to VTTY or other sheets
 			}
-			else if (event.method == keyboard_event_t::method_t::keydown && event.keycode == 0x39) { // CapsLock
+			else if (event.method == keyboard_event_t::method_t::keydown && event.keycode == _USB_IF_KEYENUM::_UKEY_CAPSLOCK) {
 				kbd_state.lock_caps = !kbd_state.lock_caps; setLED_ps2();
 				continue;
 			}
-			else if (event.method == keyboard_event_t::method_t::keydown && event.keycode == 0x53) { // NumLock
+			else if (event.method == keyboard_event_t::method_t::keydown && event.keycode == _USB_IF_KEYENUM::_UKEY_NUMLOCK) {
 				kbd_state.lock_number = !kbd_state.lock_number; setLED_ps2();
 				continue;
 			}
-			else if (event.method == keyboard_event_t::method_t::keydown && event.keycode == 0x47) { // ScrollLock
+			else if (event.method == keyboard_event_t::method_t::keydown && event.keycode == _USB_IF_KEYENUM::_UKEY_SCROLLLOCK) {
 				kbd_state.lock_scroll = !kbd_state.lock_scroll; setLED_ps2();
 				continue;
 			}
@@ -147,11 +145,11 @@ int KeyboardBridge::out(const char* str, stduint len) {
 				}
 				#endif
 				#if !_GUI_ENABLE
-				if (event.keycode == 0x4B && ttycon->crtline > 0) { // PgUp -> PageUp VKC
+				if (event.keycode == _USB_IF_KEYENUM::_UKEY_PAGEUP && ttycon->crtline > 0) {
 					ttycon->auto_incbegaddr = 0;
 					ttycon->setStartLine(--ttycon->crtline + ttycon->topline);
 				}
-				else if (event.keycode == 0x4E && ttycon->crtline < ttycon->area_total.y - ttycon->area_show.height) { // PgDn -> PageDown VKC
+				else if (event.keycode == _USB_IF_KEYENUM::_UKEY_PAGEDOWN && ttycon->crtline < ttycon->area_total.y - ttycon->area_show.height) {
 					ttycon->auto_incbegaddr = 0;
 					ttycon->setStartLine(++ttycon->crtline + ttycon->topline);
 				}
@@ -168,7 +166,6 @@ int KeyboardBridge::out(const char* str, stduint len) {
 					// accessing last_click_sheet in interrupt context.
 					// Direct onrupt() here causes UAF when GraphicMsg_FDEL deletes the sheet.
 					{
-						extern SpinlockBlock<uni::Queue<SysMessage>> message_queue_conv;
 						SysMessage msg;
 						msg.type = SysMessage::RUPT_KBD;
 						msg.args.kbd_event = event;
@@ -206,7 +203,6 @@ int KeyboardBridge::out(const char* str, stduint len) {
 		// Delegate keyboard event to serv_graf_loop to avoid
 		// accessing last_click_sheet in interrupt context.
 		{
-			extern SpinlockBlock<uni::Queue<SysMessage>> message_queue_conv;
 			SysMessage msg;
 			msg.type = SysMessage::RUPT_KBD;
 			msg.args.kbd_event = event;
@@ -260,7 +256,6 @@ void sysmsg_kbd(keyboard_event_t kbd_event) {
 	else if (kbd_event.method == keyboard_event_t::method_t::keydown && (kbd_state.mod.l_logo || kbd_state.mod.r_logo)) {
 		if (kbd_event.keycode == 0x06) { // Win + C
 			// Global Hotkey: Win + C
-			extern SpinlockBlock<uni::Queue<SysMessage>> message_queue_conv;
 			SysMessage msg;
 			msg.type = SysMessage::RUPT_NEW_TERM;
 			message_queue_conv.Lock()->Enqueue(msg);
@@ -312,7 +307,6 @@ void sysmsg_kbd(keyboard_event_t kbd_event) {
 void hand_kboard(keyboard_event_t  kmsg) {
 	// Enqueue to message_queue_conv so serv_graf_loop (Graphic thread) processes
 	// the event. This avoids racing with GraphicMsg::FDEL on last_click_sheet.
-	extern SpinlockBlock<uni::Queue<SysMessage>> message_queue_conv;
 	SysMessage msg;
 	msg.type = SysMessage::RUPT_KBD;
 	msg.args.kbd_event = kmsg;

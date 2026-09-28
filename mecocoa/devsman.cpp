@@ -2153,29 +2153,29 @@ const char* Devsman::LookupPciVendorName(uint16 vendor_id) {
 void serv_devs_loop() {
 	constexpr stduint retry_limit = 20;
 	constexpr stduint drv_batch_count = 8;
-	const char* drv_dirs[] = {
-		"/mnt/ide2.0/drvs",
-		"/mnt/ahci1.0/drvs",
-	};
 	dirent_t entries[drv_batch_count];
 
 	auto current = Taskman::CurrentTB();
 	if (!current || !current->parent_process) return;
 
 	for0(retry, retry_limit) {
-		const char* drv_dir = nullptr;
-		stdsint fd = -1;
-		for0(dir_i, numsof(drv_dirs)) {
-			drv_dir = drv_dirs[dir_i];
-			struct {
-				stduint flag;
-				stduint tid;
-				rostr usr_filepath;
-			} open_msg = { O_RDONLY | O_DIRECTORY, current->getID(), drv_dir };
-			syssend(Task_FileSys, &open_msg, sizeof(open_msg), _IMM(FilemanMsg::OPEN));
-			sysrecv(Task_FileSys, &fd, sizeof(fd));
-			if (fd >= 0) break;
+		const auto& vroot = Filesys::GetSystemVirtualRootPath();
+		if (!vroot.getByteCount()) {
+			syscall(syscall_t::REST, 1, 1000);
+			continue;
 		}
+
+		String drv_dir_str = String::newFormat("%s/drvs", vroot.reference());
+		const char* drv_dir = drv_dir_str.reference();
+		stdsint fd = -1;
+		struct {
+			stduint flag;
+			stduint tid;
+			rostr usr_filepath;
+		} open_msg = { O_RDONLY | O_DIRECTORY, current->getID(), drv_dir };
+		syssend(Task_FileSys, &open_msg, sizeof(open_msg), _IMM(FilemanMsg::OPEN));
+		sysrecv(Task_FileSys, &fd, sizeof(fd));
+
 		if (fd < 0) {
 			syscall(syscall_t::REST, 1, 1000);
 			continue;

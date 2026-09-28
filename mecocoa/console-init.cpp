@@ -78,6 +78,7 @@ extern UART_t com1;
 extern bool SerialCom1Available();
 extern void SerialInitializeLazyCotVttys();
 bool Consman::Initialize() {
+	new (&message_queue_conv) SpinlockBlock<uni::Queue<SysMessage>>(64);
 	// con0_out = 0;
 	Bcons[0].Reset(bda->screen_columns, 24, _VIDEO_ADDR_BUFFER, 0 * 50); Bcons[0].setShowY(0, 24);
 	for1(i, TTY_NUMBER - 1) {

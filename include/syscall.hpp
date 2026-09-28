@@ -189,11 +189,16 @@ enum class syscall_net_socket_option_func_t : stduint {
 constexpr stduint syscall_net_io_flag_wait = 0x0001u;
 constexpr stduint syscall_net_msg_flag_dontwait = 0x0040u;
 constexpr stduint syscall_net_socket_level_socket = 1u;
+constexpr stduint syscall_net_socket_level_tcp = 6u;
 constexpr stduint syscall_net_socket_option_reuse_address = 2u;
 constexpr stduint syscall_net_socket_option_type = 3u;
 constexpr stduint syscall_net_socket_option_error = 4u;
 constexpr stduint syscall_net_socket_option_receive_timeout = 5u;
 constexpr stduint syscall_net_socket_option_send_timeout = 6u;
+constexpr stduint syscall_net_socket_option_keepalive = 9u;
+constexpr stduint syscall_net_tcp_option_keep_idle = 4u;
+constexpr stduint syscall_net_tcp_option_keep_interval = 5u;
+constexpr stduint syscall_net_tcp_option_keep_count = 6u;
 constexpr stduint syscall_net_shutdown_read = 0u;
 constexpr stduint syscall_net_shutdown_write = 1u;
 constexpr stduint syscall_net_shutdown_both = 2u;
@@ -225,12 +230,16 @@ enum class syscall_net_route_func_t : stduint {
 	DNSCacheStore,
 	DNSCacheClear,
 	DNSSetServer,
+	DNSGetServers,
+	IPv4ApplyConfig,
 };
 
 constexpr uint16 syscall_net_route_flag_up = 0x0001u;
 constexpr uint16 syscall_net_route_flag_gateway = 0x0002u;
+constexpr uint16 syscall_net_config_flag_route_up = 0x0001u;
 constexpr uint16 syscall_net_dns_cache_flag_negative = 0x0001u;
 constexpr stduint syscall_net_dns_cache_address_capacity = 4u;
+constexpr stduint syscall_net_dns_server_capacity = 4u;
 constexpr uint16 syscall_net_config_source_static = 0u;
 constexpr uint16 syscall_net_config_source_dhcp_offered = 1u;
 constexpr uint16 syscall_net_config_source_dhcp_bound = 2u;
@@ -279,6 +288,21 @@ struct syscall_net_interface_ipv4_t {
 	uint16 route_source = 0;
 };
 
+struct syscall_net_config_ipv4_t {
+	uint8 address[4] = {};
+	uint8 netmask[4] = {};
+	uint8 gateway[4] = {};
+	uint8 dns[4] = {};
+	uint8 dns_servers[syscall_net_dns_server_capacity][4] = {};
+	uint16 interface_index = 0;
+	uint16 flags = 0;
+	uint16 source = syscall_net_config_source_temporary;
+	uint16 dns_source = syscall_net_config_source_temporary;
+	uint16 route_source = syscall_net_config_source_temporary;
+	uint16 dns_count = 0;
+	uint32 lease_seconds = 0;
+};
+
 struct syscall_net_arp_ipv4_t {
 	uint8 address[4] = {};
 	uint8 hardware[6] = {};
@@ -324,6 +348,12 @@ struct syscall_net_tcp_connection_t {
 	uint16 tx_idle_ticks = 0;
 	uint16 fin_age_ticks = 0;
 	uint16 fin_retry_count = 0;
+	uint16 keepalive_probe_count = 0;
+	uint32 keepalive_idle_ticks = 0;
+	uint32 keepalive_interval_ticks = 0;
+	uint32 keepalive_probe_limit = 0;
+	uint16 close_age_ticks = 0;
+	uint16 close_remaining_ticks = 0;
 };
 
 struct syscall_net_udp_inbox_t {
@@ -369,6 +399,9 @@ struct syscall_net_dns_cache_t {
 
 struct syscall_net_dns_server_t {
 	uint8 address[4] = {};
+	uint16 count = 0;
+	uint16 reserved = 0;
+	uint8 addresses[syscall_net_dns_server_capacity][4] = {};
 };
 
 struct syscall_net_stats_t {

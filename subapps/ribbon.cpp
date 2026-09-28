@@ -26,7 +26,7 @@ static void TryLoadWallpaper(Size2 target_screen) {
 	static const char* kWallpaperPaths[] = {
 		"/mnt/ide2.0/demo/wallpp.png",
 		"/mnt/ahci1.0/demo/wallpp.png"
-	};
+	};//{TODO} wait for environment var of VrootPath
 	FILE* fp = nullptr;
 	for (int retry = 0; retry < 3; ++retry) {
 		for0a(i, kWallpaperPaths) {

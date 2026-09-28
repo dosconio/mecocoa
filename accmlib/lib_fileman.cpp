@@ -5,6 +5,14 @@
 #include <sys/select.h>
 #include <stdarg.h>
 
+static stdsint PosixIoResult(stdsint result) {
+	if (result < -1) {
+		errno = int(-result);
+		return -1;
+	}
+	return result;
+}
+
 
 int open(const char* path, int oflag, ...) {
 	// Note: mode is ignored for now as Mecocoa filesystem doesn't support complex permissions yet
@@ -36,7 +44,8 @@ int select(int nfds, fd_set* readfds, fd_set* writefds, fd_set* exceptfds, struc
 		short events = 0;
 		if (readfds && FD_ISSET(fd, readfds)) events |= POLLIN;
 		if (writefds && FD_ISSET(fd, writefds)) events |= POLLOUT;
-		if (!events) continue;
+		const bool watch_except = exceptfds && FD_ISSET(fd, exceptfds);
+		if (!events && !watch_except) continue;
 		pollfds[poll_count].fd = fd;
 		pollfds[poll_count].events = events;
 		poll_count++;
@@ -47,12 +56,25 @@ int select(int nfds, fd_set* readfds, fd_set* writefds, fd_set* exceptfds, struc
 	if (readfds) FD_ZERO(readfds);
 	if (writefds) FD_ZERO(writefds);
 	if (exceptfds) FD_ZERO(exceptfds);
+	int selected = 0;
 	for (nfds_t i = 0; i < poll_count; i++) {
 		const int fd = pollfds[i].fd;
-		if (readfds && (pollfds[i].revents & (POLLIN | POLLHUP | POLLERR | POLLNVAL))) FD_SET(fd, readfds);
-		if (writefds && (pollfds[i].revents & (POLLOUT | POLLERR | POLLNVAL))) FD_SET(fd, writefds);
+		bool selected_fd = false;
+		if (readfds && (pollfds[i].revents & (POLLIN | POLLHUP | POLLERR | POLLNVAL))) {
+			FD_SET(fd, readfds);
+			selected_fd = true;
+		}
+		if (writefds && (pollfds[i].revents & (POLLOUT | POLLHUP | POLLERR | POLLNVAL))) {
+			FD_SET(fd, writefds);
+			selected_fd = true;
+		}
+		if (exceptfds && (pollfds[i].revents & (POLLHUP | POLLERR | POLLNVAL))) {
+			FD_SET(fd, exceptfds);
+			selected_fd = true;
+		}
+		if (selected_fd) selected++;
 	}
-	return ready;
+	return selected;
 }
 
 int close(int fd) {
@@ -60,11 +82,11 @@ int close(int fd) {
 }
 
 stdsint read(int fd, void* buf, stduint nbyte) {
-	return syscall(syscall_t::READ, fd, _IMM(buf), nbyte);
+	return PosixIoResult((stdsint)syscall(syscall_t::READ, fd, _IMM(buf), nbyte));
 }
 
 stdsint write(int fd, const void* buf, size_t nbyte) {
-	return syscall(syscall_t::WRIT, fd, _IMM(buf), nbyte);
+	return PosixIoResult((stdsint)syscall(syscall_t::WRIT, fd, _IMM(buf), nbyte));
 }
 
 off_t lseek(int fd, off_t offset, int whence) {

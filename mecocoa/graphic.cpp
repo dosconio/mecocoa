@@ -638,7 +638,6 @@ void hand_mouse(MouseMessage mmsg) {
 // with GraphicMsg::FDEL on global_layman / Consman::last_click_sheet.
 void hand_mouse_usb(MouseMessage mmsg) {
 	if (!Consman::ento_gui) return; // No GUI: mouse events are meaningless
-	extern SpinlockBlock<uni::Queue<SysMessage>> message_queue_conv;
 	SysMessage msg;
 	msg.type = SysMessage::RUPT_MOUSE;
 	msg.args.mou_event = mmsg;
@@ -745,8 +744,6 @@ void LayerManager2::UpdateForce(SheetTrait* who, const Rectangle& rect) {
 
 // ---- ---- ---- ---- . ---- ---- ---- ----
 
-static SysMessage _BUF_Message_Conv[64];
-SpinlockBlock<uni::Queue<SysMessage>> message_queue_conv(_BUF_Message_Conv, numsof(_BUF_Message_Conv));
 volatile bool has_pending_timer = false;
 
 extern void sysmsg_kbd(keyboard_event_t kbd_event);

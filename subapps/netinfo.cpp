@@ -21,7 +21,7 @@ static void PrintUsage() {
 	printf("  dns6: netinfo --dns6 example.com\n\r");
 	printf("  dns cache: netinfo --dns-cache [example.com]\n\r");
 	printf("  dns clear: netinfo --dns-cache-clear [example.com]\n\r");
-	printf("  dns srv: netinfo --dns-server 10.0.2.1|none\n\r");
+	printf("  dns srv: netinfo --dns-server 10.0.2.1 [1.1.1.1 ...]|none\n\r");
 	printf("  dhcp: netinfo --dhcp-renew | --dhcp-release\n\r");
 }
 
@@ -225,6 +225,7 @@ static const char* TcpStateName(uint16 state) {
 	case 6: return "closing";
 	case 7: return "time-wait";
 	case 8: return "reset";
+	case 9: return "closed";
 	default: return "unknown";
 	}
 }
@@ -242,6 +243,7 @@ static const char* TcpClosePhaseName(uint16 phase) {
 	case 3: return "closing";
 	case 4: return "time-wait";
 	case 5: return "reset";
+	case 6: return "closed";
 	default: return "unknown";
 	}
 }
@@ -256,6 +258,8 @@ static const char* TcpCloseReasonName(uint16 reason) {
 	case 5: return "reset";
 	case 6: return "tx-timeout";
 	case 7: return "connect-error";
+	case 8: return "keepalive-timeout";
+	case 9: return "fin-pending";
 	default: return "unknown";
 	}
 }
@@ -301,6 +305,7 @@ static void PrintTcpState() {
 	stduint count_fin_wait = 0;
 	stduint count_time_wait = 0;
 	stduint count_reset = 0;
+	stduint count_closed = 0;
 	for0(i, connection_count) {
 		syscall_net_tcp_connection_t connection{};
 		connection.entry_index = uint16(i);
@@ -318,6 +323,7 @@ static void PrintTcpState() {
 		}
 		else if (connection.state == 7) count_time_wait++;
 		else if (connection.state == 8) count_reset++;
+		else if (connection.state == 9) count_closed++;
 		printf("netinfo: tcp%u local=", (unsigned)i);
 		PrintIPv4(connection.local_address);
 		printf(":%u peer=", (unsigned)connection.local_port);
@@ -342,17 +348,33 @@ static void PrintTcpState() {
 		}
 		if (connection.fin_age_ticks) printf(" fin-age=%u", (unsigned)connection.fin_age_ticks);
 		if (connection.fin_retry_count) printf(" fin-retry=%u", (unsigned)connection.fin_retry_count);
+		if (connection.close_age_ticks || connection.close_remaining_ticks) {
+			printf(" close-age=%u close-left=%u",
+				(unsigned)connection.close_age_ticks, (unsigned)connection.close_remaining_ticks);
+		}
+		if (connection.keepalive_idle_ticks) {
+			printf(" keepalive=on/%u/%u/%u probes=%u",
+				(unsigned)connection.keepalive_idle_ticks,
+				(unsigned)connection.keepalive_interval_ticks,
+				(unsigned)connection.keepalive_probe_limit,
+				(unsigned)connection.keepalive_probe_count);
+		}
+		else printf(" keepalive=off");
 		if (connection.flags & 0x0200u) printf(" fin-ack");
 		if (connection.flags & 0x0400u) printf(" tx-exhausted");
 		if (connection.flags & 0x0800u) printf(" reset");
+		if (connection.flags & 0x1000u) printf(" rx-shutdown");
+		if (connection.flags & 0x2000u) printf(" peer-fin");
+		if (connection.flags & 0x4000u) printf(" keepalive-timeout");
+		if (connection.flags & 0x8000u) printf(" tx-shutdown");
 		printf("\n\r");
 	}
 	if (connection_count) {
-		printf("netinfo: tcp summary connecting=%u established=%u close-wait=%u fin-wait=%u closing=%u time-wait=%u reset=%u\n\r",
+		printf("netinfo: tcp summary connecting=%u established=%u close-wait=%u fin-wait=%u closing=%u time-wait=%u reset=%u closed=%u\n\r",
 			(unsigned)count_connecting, (unsigned)count_established,
 			(unsigned)count_close_wait, (unsigned)count_fin_wait,
 			(unsigned)count_closing, (unsigned)count_time_wait,
-			(unsigned)count_reset);
+			(unsigned)count_reset, (unsigned)count_closed);
 	}
 	syscall_net_stats_t stats{};
 	if (syscall(syscall_t::ROUT, stduint(syscall_net_route_func_t::NetStats),
@@ -550,14 +572,11 @@ static void PrintNetworkConfig() {
 static int PrintDnsLookup(const char* host) {
 	struct in_addr address{};
 	if (!mcca_net_resolve_ipv4(host, &address)) {
-		printf("netinfo: dns failed: %s\n\r", mcca_net_dns_status());
-		printf("netinfo: dns status-code=%d\n\r", mcca_net_dns_status_code());
+		printf("netinfo: dns host=%s status=%s\n\r", host, mcca_net_dns_status());
+		mcca_net_print_dns_result("netinfo", host);
 		return 1;
 	}
-	const uint8* octet = (const uint8*)&address.s_addr;
-	printf("netinfo: dns %s A=%u.%u.%u.%u status=%s\n\r", host,
-		(unsigned)octet[0], (unsigned)octet[1], (unsigned)octet[2], (unsigned)octet[3],
-		mcca_net_dns_status());
+	printf("netinfo: dns host=%s status=%s\n\r", host, mcca_net_dns_status());
 	mcca_net_print_dns_result("netinfo", host);
 	return 0;
 }
@@ -567,6 +586,20 @@ static int PrintDns6Probe(const char* host) {
 	const int ok = mcca_net_dns_probe_aaaa(host, &ttl);
 	printf("netinfo: dns6 %s status=%s\n\r", host, mcca_net_dns_status());
 	if (ok && ttl) printf("netinfo: dns6 ttl=%u\n\r", (unsigned)ttl);
+	const stduint address_count = mcca_net_dns_ipv6_address_count();
+	if (address_count) {
+		printf("netinfo: dns6 addresses=%u\n\r", (unsigned)address_count);
+		for0(a, address_count) {
+			uint8 address[16]{};
+			if (!mcca_net_dns_ipv6_address(a, address)) continue;
+			printf("netinfo: dns6 AAAA%u=", (unsigned)a);
+			for0(i, 8) {
+				if (i) printf(":");
+				printf("%x", (unsigned)((uint16(address[i * 2]) << 8) | address[i * 2 + 1]));
+			}
+			printf("\n\r");
+		}
+	}
 	if (mcca_net_dns_answer_count()) {
 		printf("netinfo: dns6 answers=%u\n\r", (unsigned)mcca_net_dns_answer_count());
 	}
@@ -668,8 +701,12 @@ int main(int argc, char** argv) {
 		else printf("netinfo: dns-cache cleared\n\r");
 		return 0;
 	}
-	if (argc == 3 && !StrCompare(argv[1], "--dns-server")) {
+	if (argc >= 3 && argc <= 6 && !StrCompare(argv[1], "--dns-server")) {
 		if (!StrCompare(argv[2], "none") || !StrCompare(argv[2], "clear")) {
+			if (argc != 3) {
+				PrintUsage();
+				return 1;
+			}
 			if (!mcca_net_dns_set_server_ipv4(nullptr)) {
 				printf("netinfo: dns-server clear failed\n\r");
 				return 1;
@@ -677,20 +714,26 @@ int main(int argc, char** argv) {
 			printf("netinfo: dns-server cleared\n\r");
 			return 0;
 		}
-		uint32 address = 0;
-		if (!mcca_net_parse_ipv4_host(argv[2], &address)) {
-			PrintUsage();
-			return 1;
+		struct in_addr servers[4]{};
+		const stduint server_count = stduint(argc - 2);
+		for0(i, server_count) {
+			uint32 address = 0;
+			if (!mcca_net_parse_ipv4_host(argv[i + 2], &address)) {
+				PrintUsage();
+				return 1;
+			}
+			servers[i].s_addr = htonl(address);
 		}
-		struct in_addr server{};
-		server.s_addr = htonl(address);
-		if (!mcca_net_dns_set_server_ipv4(&server)) {
+		if (!mcca_net_dns_set_servers_ipv4(servers, server_count)) {
 			printf("netinfo: dns-server failed\n\r");
 			return 1;
 		}
-		printf("netinfo: dns-server=");
-		PrintIPv4(reinterpret_cast<const uint8*>(&server.s_addr));
-		printf("\n\r");
+		printf("netinfo: dns-servers=%u\n\r", (unsigned)server_count);
+		for0(i, server_count) {
+			printf("netinfo: dns-server%u=", (unsigned)i);
+			PrintIPv4(reinterpret_cast<const uint8*>(&servers[i].s_addr));
+			printf("\n\r");
+		}
 		return 0;
 	}
 	if (argc == 2 && !StrCompare(argv[1], "--dhcp-renew")) {

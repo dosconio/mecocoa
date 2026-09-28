@@ -3,6 +3,19 @@ dg-publish: true
 her-note: false
 ---
 
+```
++---.mcca.root
++---apps
++---boot
+|   \---grub
++---demo
+|   +---mov
+|   +---mzk
+|   \---pic
++---drvs
+\---font
+```
+
 ### 串口快捷键
 
 f/F 显示目录树

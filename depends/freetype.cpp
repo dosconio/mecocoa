@@ -361,9 +361,6 @@ static void My_FT_Stream_Close(FT_Stream stream) {
 	}
 }
 
-#define _FONT_PATH "/mnt/ide2.0/font/simsun.ttf"
-#define _FONT_PATH2 "/mnt/ahci1.0/font/simsun.ttf"
-
 static int OpenFontPath(const char* path, vfs_file** file) {
 	if (!path || !file) return -1;
 	*file = nullptr;
@@ -408,14 +405,16 @@ bool InitializeFont() {
 	ploginfo("InitializeFont: FT_Init_FreeType success, ft_library = %p", ft_library);
 
 	vfs_file* file = nullptr;
-	int open_err = 0;
-	ploginfo("InitializeFont: Opening simsun.ttf...");
-	open_err = OpenFontPath(_FONT_PATH, &file);
-	if (open_err != 0 || !file) {
-		plogwarn("InitializeFont: %s unavailable, try %s", _FONT_PATH, _FONT_PATH2);
-		open_err = OpenFontPath(_FONT_PATH2, &file);
+	int open_err = -1;
+	const auto& vroot = Filesys::GetSystemVirtualRootPath();
+	if (vroot.getByteCount()) {
+		String font_path = String::newFormat("%s/font/simsun.ttf", vroot.reference());
+		ploginfo("InitializeFont: Opening %s...", font_path.reference());
+		open_err = OpenFontPath(font_path.reference(), &file);
+	} else {
+		plogwarn("InitializeFont: System virtual root path is not set");
 	}
-	ploginfo("InitializeFont: Filesys::Open returned %d, file = %p", open_err, file);
+	ploginfo("InitializeFont: OpenFontPath returned %d, file = %p", open_err, file);
 	if (open_err != 0 || !file) {
 		plogerro("InitializeFont: Failed to open simsun.ttf");
 		FT_Done_FreeType(ft_library);

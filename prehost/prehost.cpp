@@ -7,5 +7,5 @@
 _ESYM_C void mecocoa()
 {
 	if (!Memory::initialize(0, 0)) erro();
-	loop { }
+	// loop { }
 }

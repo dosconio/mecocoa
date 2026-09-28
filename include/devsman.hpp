@@ -267,17 +267,23 @@ public:
 		const uni::Network::IPv4Address& target_ip,
 		uint16 destination_port, uint16& source_port, uni::Network::TCPConnectionContext& context);
 	static stdsint CheckTcpConnect(const uni::Network::TCPConnectionContext& context);
+	static bool CancelTcpConnect(const uni::Network::TCPConnectionContext& context, int error = 0);
 	static stdsint ConnectTcp(const uni::Network::IPv4Address& target_ip,
 		uint16 destination_port, uint16& source_port, uni::Network::TCPConnectionContext& context);
 	static stdsint ConnectTcp(const uni::Network::IPv4Address& local_ip,
 		const uni::Network::IPv4Address& target_ip,
 		uint16 destination_port, uint16& source_port, uni::Network::TCPConnectionContext& context);
 	static bool CloseTcpConnection(const uni::Network::TCPConnectionContext& context);
+	static bool ShutdownTcpWrite(const uni::Network::TCPConnectionContext& context);
 	static bool WaitTcpReceive(const uni::Network::TCPConnectionContext& context);
 	static bool HasTcpReceive(const uni::Network::TCPConnectionContext& context);
 	static bool IsTcpReceiveClosed(const uni::Network::TCPConnectionContext& context);
 	static bool HasTcpError(const uni::Network::TCPConnectionContext& context);
+	static int TcpErrorCode(const uni::Network::TCPConnectionContext& context);
+	static bool IsTcpSendClosed(const uni::Network::TCPConnectionContext& context);
 	static bool HasTcpSendSpace(const uni::Network::TCPConnectionContext& context);
+	static bool ConfigureTcpKeepAlive(const uni::Network::TCPConnectionContext& context,
+		bool enabled, stduint idle_ticks, stduint interval_ticks, stduint probe_limit);
 	static bool ShutdownTcpReceive(const uni::Network::TCPConnectionContext& context);
 	static stdsint ReceiveTcp(const uni::Network::TCPConnectionContext& context, void* payload, stduint capacity);
 	static stdsint SendTcp(const uni::Network::TCPConnectionContext& context, const void* payload, stduint length);
@@ -290,6 +296,7 @@ public:
 		uint16 source_port, uint16 destination_port, const void* payload, stduint length);
 	static bool GetDefaultIPv4Route(void* route, stduint length);
 	static bool GetIPv4Interface(stduint index, void* iface, stduint length);
+	static bool ApplyIPv4Config(const void* config, stduint length);
 	static stduint IPv4ArpCacheCount();
 	static bool GetIPv4ArpCacheEntry(stduint index, void* entry, stduint length);
 	static stduint UdpInboxCount();
@@ -302,12 +309,20 @@ public:
 	static bool ClearDnsCache();
 	static bool ClearDnsCache(const char* host);
 	static bool SetDnsServer(const uni::Network::IPv4Address& address);
+	static bool SetDnsServers(const uni::Network::IPv4Address* addresses, stduint count);
+	static stduint GetDnsServers(uni::Network::IPv4Address* addresses, stduint capacity);
 	static stduint TcpListenerCount();
 	static bool GetTcpListenerEntry(stduint index, void* entry, stduint length);
 	static stduint TcpConnectionCount();
 	static bool GetTcpConnectionEntry(stduint index, void* entry, stduint length);
 	static bool GetNetStats(void* stats, stduint length);
-	static void RecordSocketError(int error);
+	enum class NetSocketErrorSource : uint8 {
+		Icmp,
+		Reset,
+		Timeout,
+		Shutdown,
+	};
+	static void RecordSocketError(NetSocketErrorSource source);
 	static bool RenewDhcp();
 	static bool ReleaseDhcp();
 	static const char* LookupPciClassName(uint8 class_base, uint8 class_sub, uint8 class_if);

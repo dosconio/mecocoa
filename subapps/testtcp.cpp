@@ -8,12 +8,13 @@
 #include <sys/select.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <arpa/inet.h>
 #include <netdb.h>
 
 static void PrintUsage() {
-	printf("usage: testtcp [--reuse] [--nonblock] [--poll-accept] [--backlog n] [--accept-delay ms] [--accept-timeout ms] [--once] [--count n] [--sockopt] [--bind-ip ipv4] --listen [port]\n\r");
-	printf("       testtcp [--repeat n] [--burst n] [--fill n] [--read-size n] [--write-size n] [--hold ms] [--hold-before-close ms] [--poll-after-recv] [--select-after-recv] [--shutdown-write] [--shutdown-read] [--shutdown-both] [--send-after-shutdown] [--write-after-eof] [--zero-io] [--sockopt] [--bind-ip ipv4] [--sockerr-twice] [--http] host port [payload]\n\r");
+	printf("usage: testtcp [--reuse] [--nonblock] [--poll-accept] [--backlog n] [--accept-delay ms] [--accept-timeout ms] [--keepalive idle interval count] [--once] [--count n] [--sockopt] [--bind-ip ipv4] --listen [port]\n\r");
+	printf("       testtcp [--repeat n] [--burst n] [--fill n] [--read-size n] [--write-size n] [--hold ms] [--hold-before-close ms] [--keepalive idle interval count] [--poll-after-recv] [--select-after-recv] [--shutdown-write] [--shutdown-read] [--shutdown-both] [--send-after-shutdown] [--write-after-eof] [--zero-io] [--sockopt] [--bind-ip ipv4] [--sockerr-twice] [--http] host port [payload]\n\r");
 	printf("  listen: testtcp --listen 80\n\r");
 	printf("  reuse:  testtcp --reuse --listen 80\n\r");
 	printf("  nbacc:  testtcp --nonblock --listen 80\n\r");
@@ -38,6 +39,7 @@ static void PrintUsage() {
 	printf("  opt:    testtcp --sockopt 10.0.2.1 7777 hello\n\r");
 	printf("  nbconn: testtcp --nonblock-connect --poll-connect 10.0.2.1 7777 hello\n\r");
 	printf("  timeo:  testtcp --rcvtimeo 1000 --sndtimeo 1000 10.0.2.1 7777 hello\n\r");
+	printf("  keep:   testtcp --keepalive 30 1 3 10.0.2.1 7777 hello\n\r");
 	printf("  bindc:  testtcp --bind-ip 10.0.2.41 10.0.2.1 7777 hello\n\r");
 	printf("  client: testtcp 10.0.2.1 7777 hello\n\r");
 	printf("  resolve:testtcp --resolve example.com\n\r");
@@ -101,8 +103,31 @@ static bool SetSocketTimeoutOption(int fd, int option_name, int timeout_ms, cons
 	return true;
 }
 
+static bool SetKeepAliveOptions(int fd, int idle_seconds, int interval_seconds, int probe_count) {
+	int enable = 1;
+	if (setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &enable, sizeof(enable)) < 0 ||
+		setsockopt(fd, IPPROTO_TCP, TCP_KEEPIDLE, &idle_seconds, sizeof(idle_seconds)) < 0 ||
+		setsockopt(fd, IPPROTO_TCP, TCP_KEEPINTVL, &interval_seconds, sizeof(interval_seconds)) < 0 ||
+		setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT, &probe_count, sizeof(probe_count)) < 0) return false;
+	int enabled = 0;
+	int idle = 0;
+	int interval = 0;
+	int count = 0;
+	socklen_t length = sizeof(int);
+	if (getsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &enabled, &length) < 0) return false;
+	length = sizeof(int);
+	if (getsockopt(fd, IPPROTO_TCP, TCP_KEEPIDLE, &idle, &length) < 0) return false;
+	length = sizeof(int);
+	if (getsockopt(fd, IPPROTO_TCP, TCP_KEEPINTVL, &interval, &length) < 0) return false;
+	length = sizeof(int);
+	if (getsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT, &count, &length) < 0) return false;
+	printf("testtcp: keepalive=%d idle=%d interval=%d count=%d\n\r",
+		enabled, idle, interval, count);
+	return enabled && idle == idle_seconds && interval == interval_seconds && count == probe_count;
+}
+
 static int OpenTcpClientSocket(bool nonblock, bool show_sockopt, int receive_timeout, int send_timeout,
-	bool bind_ip_set, uint32 bind_ip) {
+	bool bind_ip_set, uint32 bind_ip, int keepalive_idle, int keepalive_interval, int keepalive_count) {
 	int fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 	if (fd < 0) {
 		printf("testtcp: socket failed\n\r");
@@ -116,6 +141,12 @@ static int OpenTcpClientSocket(bool nonblock, bool show_sockopt, int receive_tim
 	}
 	if (send_timeout >= 0 && !SetSocketTimeoutOption(fd, SO_SNDTIMEO, send_timeout, "sndtimeo")) {
 		printf("testtcp: sndtimeo failed\n\r");
+		close(fd);
+		return -1;
+	}
+	if (keepalive_idle >= 0 && !SetKeepAliveOptions(fd,
+		keepalive_idle, keepalive_interval, keepalive_count)) {
+		printf("testtcp: keepalive failed\n\r");
 		close(fd);
 		return -1;
 	}
@@ -266,6 +297,9 @@ int main(int argc, char** argv) {
 	int serve_rounds = 0;
 	int receive_timeout = -1;
 	int send_timeout = -1;
+	int keepalive_idle = -1;
+	int keepalive_interval = -1;
+	int keepalive_count = -1;
 	int hold_time = 0;
 	bool bind_ip_set = false;
 	uint32 bind_ip = 0;
@@ -437,6 +471,20 @@ int main(int argc, char** argv) {
 			}
 			send_timeout = atoi(argv[i]);
 			if (send_timeout < 0) {
+				PrintUsage();
+				return 1;
+			}
+			continue;
+		}
+		if (StrCompare(argv[i], "--keepalive") == 0) {
+			if (i + 3 >= argc) {
+				PrintUsage();
+				return 1;
+			}
+			keepalive_idle = atoi(argv[++i]);
+			keepalive_interval = atoi(argv[++i]);
+			keepalive_count = atoi(argv[++i]);
+			if (keepalive_idle <= 0 || keepalive_interval <= 0 || keepalive_count <= 0) {
 				PrintUsage();
 				return 1;
 			}
@@ -722,7 +770,7 @@ int main(int argc, char** argv) {
 			bool connect_error_valid[4] = {};
 			for0(address_index, target_address_count) {
 				fd = OpenTcpClientSocket(nonblock, show_sockopt, receive_timeout, send_timeout,
-					bind_ip_set, bind_ip);
+					bind_ip_set, bind_ip, keepalive_idle, keepalive_interval, keepalive_count);
 				if (fd < 0) {
 					if (fill_payload) free(fill_payload);
 					if (http_payload) free(http_payload);
@@ -821,7 +869,8 @@ int main(int argc, char** argv) {
 					const stduint chunk = remaining < stduint(write_size) ? remaining : stduint(write_size);
 					const stdsint sent = write(fd, payload + payload_sent, chunk);
 					if (sent < 0) {
-						printf("testtcp: send failed\n\r");
+						printf("testtcp: send failed errno=%d %s\n\r",
+							errno, mcca_net_socket_error_name(errno));
 						close(fd);
 						if (fill_payload) free(fill_payload);
 						if (http_payload) free(http_payload);
@@ -888,7 +937,8 @@ int main(int argc, char** argv) {
 				struct pollfd read_pfd{};
 				read_pfd.fd = fd;
 				read_pfd.events = POLLIN;
-				const int read_ready = poll(&read_pfd, 1, 2500);
+				const int read_ready = receive_timeout > 0 ? 1 : poll(&read_pfd, 1, 2500);
+				if (receive_timeout > 0) read_pfd.revents = POLLIN;
 				if (read_ready < 0) {
 					printf("testtcp: poll failed\n\r");
 					close(fd);
@@ -906,7 +956,8 @@ int main(int argc, char** argv) {
 				}
 				const stdsint received = read(fd, buffer, read_size);
 				if (received < 0) {
-					printf("testtcp: recv failed\n\r");
+					printf("testtcp: recv failed errno=%d %s\n\r",
+						errno, mcca_net_socket_error_name(errno));
 					PrintSocketError(fd, "recv-error");
 					close(fd);
 					if (fill_payload) free(fill_payload);
@@ -1075,6 +1126,12 @@ int main(int argc, char** argv) {
 	}
 	if (send_timeout >= 0 && !SetSocketTimeoutOption(fd, SO_SNDTIMEO, send_timeout, "sndtimeo")) {
 		printf("testtcp: sndtimeo failed\n\r");
+		close(fd);
+		return 1;
+	}
+	if (keepalive_idle >= 0 && !SetKeepAliveOptions(fd,
+		keepalive_idle, keepalive_interval, keepalive_count)) {
+		printf("testtcp: keepalive failed\n\r");
 		close(fd);
 		return 1;
 	}

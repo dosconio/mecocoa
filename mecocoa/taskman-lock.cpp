@@ -11,10 +11,12 @@ bool Spinlock::Acquire() {
 		#if (_MCCA & 0xFF00) == 0x8600
 		asm volatile("pause" ::: "memory");
 		#endif
+		#ifndef _MCCA_LITE
 		if (++count == 0x4000000) {
 			extern void dump_lock(uni::OstreamTrait&);
 			dump_lock(uni::Console);
 		}
+		#endif
 	}
 	this->cpu_id = (stdsint)Taskman::getID();
 	return (bool)state_rupt;

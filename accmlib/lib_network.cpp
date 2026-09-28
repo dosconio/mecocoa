@@ -8,6 +8,7 @@
 #include <sys/select.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <cpp/System/Network/Layer/Application/DNS.hpp>
@@ -24,8 +25,12 @@ static void MccaWriteNet16(uint8* data, uint16 value) {
 
 constexpr stduint MccaDnsCacheCapacity = 4;
 constexpr stduint MccaDnsAddressCapacity = 4;
+constexpr stduint MccaDnsServerCapacity = 8;
+constexpr stduint MccaDnsOverrideServerCapacity = syscall_net_dns_server_capacity;
 constexpr stduint MccaDnsResolveDepthLimit = 4;
-constexpr stduint MccaDnsPositiveCacheMinSeconds = 2;
+constexpr stduint MccaDnsServerFailureBaseSeconds = 3;
+constexpr stduint MccaDnsServerFailureMaximumSeconds = 60;
+constexpr stduint MccaDnsNegativeCacheSeconds = 3;
 
 struct MccaDnsCacheEntry {
 	char host[64];
@@ -41,16 +46,38 @@ struct MccaDnsCacheEntry {
 	bool negative;
 };
 
+struct MccaDnsCacheEntryIPv6 {
+	char host[64];
+	char status[24];
+	uni::Network::IPv6Address addresses[MccaDnsAddressCapacity];
+	stduint created_second;
+	stduint expire_second;
+	stduint ttl_seconds;
+	stduint answer_count;
+	stduint address_count;
+	char cname_target[64];
+	bool negative;
+};
+
+struct MccaDnsServerHealth {
+	struct in_addr address;
+	stduint failed_until;
+	stduint last_attempt;
+	stduint last_success;
+	uint8 consecutive_failures;
+};
+
 static MccaDnsCacheEntry mcca_dns_cache[MccaDnsCacheCapacity]{};
+static MccaDnsCacheEntryIPv6 mcca_dns_cache_ipv6[MccaDnsCacheCapacity]{};
 static stduint mcca_dns_cache_next = 0;
+static stduint mcca_dns_cache_ipv6_next = 0;
 static stduint mcca_dns_cache_last = stduint(-1);
 static char mcca_dns_kernel_host[64] = {};
 static char mcca_dns_kernel_status[24] = {};
 static char mcca_dns_kernel_cname_target[64] = {};
-static struct in_addr mcca_dns_override_server = {};
-static bool mcca_dns_override_server_valid = false;
-static struct in_addr mcca_dns_last_good_server = {};
-static bool mcca_dns_last_good_server_valid = false;
+static struct in_addr mcca_dns_override_servers[MccaDnsOverrideServerCapacity] = {};
+static stduint mcca_dns_override_server_count = 0;
+static MccaDnsServerHealth mcca_dns_server_health[MccaDnsServerCapacity]{};
 static const char* mcca_dns_last_status = "none";
 static stduint mcca_dns_last_ttl = 0;
 static stduint mcca_dns_last_answer_count = 0;
@@ -58,12 +85,39 @@ static stduint mcca_dns_last_address_count = 0;
 static stduint mcca_dns_last_cname_count = 0;
 static stduint mcca_dns_last_non_a_count = 0;
 static struct in_addr mcca_dns_last_addresses[MccaDnsAddressCapacity] = {};
+static uni::Network::IPv6Address mcca_dns_last_ipv6_addresses[MccaDnsAddressCapacity] = {};
+static stduint mcca_dns_last_ipv6_address_count = 0;
 static char mcca_dns_last_cname_target[64] = {};
 static stduint mcca_dns_rotation = 0;
+static stduint mcca_dns_probe_aaaa_depth = 0;
+
+struct MccaDnsProbeAAAADepthGuard {
+	~MccaDnsProbeAAAADepthGuard() {
+		if (mcca_dns_probe_aaaa_depth) mcca_dns_probe_aaaa_depth--;
+	}
+};
 
 static void MccaClearDnsLastAnswers() {
 	mcca_dns_last_address_count = 0;
 	for0(i, MccaDnsAddressCapacity) mcca_dns_last_addresses[i] = {};
+}
+
+static void MccaClearDnsLastIPv6Answers() {
+	mcca_dns_last_ipv6_address_count = 0;
+	for0(i, MccaDnsAddressCapacity) mcca_dns_last_ipv6_addresses[i] = {};
+}
+
+static void MccaRememberDnsIPv6Answer(const uint8* address) {
+	if (!address) return;
+	uni::Network::IPv6Address item{};
+	for0(i, uni::Network::IPv6AddressLength) item.octet[i] = address[i];
+	if (item.isZero()) return;
+	for0(i, mcca_dns_last_ipv6_address_count) {
+		if (mcca_dns_last_ipv6_addresses[i] == item) return;
+	}
+	if (mcca_dns_last_ipv6_address_count < MccaDnsAddressCapacity) {
+		mcca_dns_last_ipv6_addresses[mcca_dns_last_ipv6_address_count++] = item;
+	}
 }
 
 static void MccaClearDnsLastCnameTarget() {
@@ -99,6 +153,11 @@ static void MccaExpireDnsCache() {
 			if (mcca_dns_cache_last == i) mcca_dns_cache_last = stduint(-1);
 		}
 	}
+	for0(i, MccaDnsCacheCapacity) {
+		auto& entry = mcca_dns_cache_ipv6[i];
+		if (!entry.host[0]) continue;
+		if (!entry.expire_second || now >= entry.expire_second) entry = {};
+	}
 }
 
 static MccaDnsCacheEntry* MccaDnsCacheFind(const char* host) {
@@ -111,6 +170,16 @@ static MccaDnsCacheEntry* MccaDnsCacheFind(const char* host) {
 			mcca_dns_cache_last = i;
 			return &entry;
 		}
+	}
+	return nullptr;
+}
+
+static MccaDnsCacheEntryIPv6* MccaDnsCacheFindIPv6(const char* host) {
+	if (!host) return nullptr;
+	MccaExpireDnsCache();
+	for0(i, MccaDnsCacheCapacity) {
+		auto& entry = mcca_dns_cache_ipv6[i];
+		if (entry.host[0] && !strcmp(entry.host, host)) return &entry;
 	}
 	return nullptr;
 }
@@ -220,7 +289,7 @@ static void MccaLoadKernelDnsAnswers(const syscall_net_dns_cache_t& entry) {
 
 static void MccaRememberDnsCache(const char* host, const struct in_addr* address, stduint ttl, stduint answer_count) {
 	if (!host || !address || !ttl || strlen(host) >= sizeof(mcca_dns_cache[0].host)) return;
-	const stduint cache_ttl = ttl < MccaDnsPositiveCacheMinSeconds ? MccaDnsPositiveCacheMinSeconds : ttl;
+	const stduint cache_ttl = ttl;
 	MccaDnsCacheEntry* entry = MccaDnsCacheFind(host);
 	if (!entry) {
 		entry = &mcca_dns_cache[mcca_dns_cache_next];
@@ -265,13 +334,35 @@ static void MccaRememberDnsFailure(const char* host, const char* status) {
 	entry->address = empty;
 	entry->address_count = 0;
 	for0(i, MccaDnsAddressCapacity) entry->addresses[i] = {};
-	entry->expire_second = syssecond() + 3;
+	entry->expire_second = syssecond() + MccaDnsNegativeCacheSeconds;
 	entry->created_second = syssecond();
-	entry->ttl_seconds = 3;
+	entry->ttl_seconds = MccaDnsNegativeCacheSeconds;
 	entry->answer_count = 0;
 	MccaCopyText(entry->cname_target, sizeof(entry->cname_target), mcca_dns_last_cname_target);
 	entry->negative = true;
-	MccaStoreKernelDnsCache(host, nullptr, status, 3, 0, true);
+	MccaStoreKernelDnsCache(host, nullptr, status, MccaDnsNegativeCacheSeconds, 0, true);
+}
+
+static void MccaRememberDnsCacheIPv6(const char* host, const char* status, stduint ttl,
+	stduint answer_count, bool negative) {
+	if (!host || !host[0] || strlen(host) >= sizeof(mcca_dns_cache_ipv6[0].host)) return;
+	if (!negative && (!ttl || !mcca_dns_last_ipv6_address_count)) return;
+	auto* entry = MccaDnsCacheFindIPv6(host);
+	if (!entry) {
+		entry = &mcca_dns_cache_ipv6[mcca_dns_cache_ipv6_next];
+		mcca_dns_cache_ipv6_next = (mcca_dns_cache_ipv6_next + 1) % MccaDnsCacheCapacity;
+	}
+	*entry = {};
+	MccaCopyText(entry->host, sizeof(entry->host), host);
+	MccaCopyText(entry->status, sizeof(entry->status), status ? status : (negative ? "cached-fail" : "ok"));
+	MccaCopyText(entry->cname_target, sizeof(entry->cname_target), mcca_dns_last_cname_target);
+	entry->address_count = mcca_dns_last_ipv6_address_count;
+	for0(i, entry->address_count) entry->addresses[i] = mcca_dns_last_ipv6_addresses[i];
+	entry->created_second = syssecond();
+	entry->ttl_seconds = negative ? MccaDnsNegativeCacheSeconds : ttl;
+	entry->expire_second = entry->created_second + entry->ttl_seconds;
+	entry->answer_count = answer_count;
+	entry->negative = negative;
 }
 
 static int MccaResolveDnsFail(const char* host, const char* status) {
@@ -313,11 +404,16 @@ static uni::Network::DNSResolveStatus MccaDnsStatusFromText(const char* status) 
 	if (!strcmp(status, "no-a-record") || !strcmp(status, "no-aaaa") ||
 		!strcmp(status, "cached-no-a")) return uni::Network::DNSResolveStatus::NoAddress;
 	if (!strcmp(status, "bad-name")) return uni::Network::DNSResolveStatus::BadName;
+	if (!strcmp(status, "refused")) return uni::Network::DNSResolveStatus::Refused;
+	if (!strcmp(status, "cname-loop")) return uni::Network::DNSResolveStatus::CnameLoop;
 	if (!strcmp(status, "not-implemented")) return uni::Network::DNSResolveStatus::Unsupported;
 	if (!strcmp(status, "bad-argument")) return uni::Network::DNSResolveStatus::Unsupported;
+	if (!strcmp(status, "socket") || !strcmp(status, "send") ||
+		!strcmp(status, "receive")) return uni::Network::DNSResolveStatus::NetworkError;
 	if (!strcmp(status, "bad-xid") || !strcmp(status, "bad-answer") ||
 		!strcmp(status, "bad-question") || !strcmp(status, "bad-rdata") ||
 		!strcmp(status, "short-reply") || !strcmp(status, "not-response") ||
+		!strcmp(status, "bad-source") ||
 		!strcmp(status, "format-error")) return uni::Network::DNSResolveStatus::BadReply;
 	return uni::Network::DNSResolveStatus::None;
 }
@@ -335,60 +431,245 @@ static bool MccaIPv4IsZero(const struct in_addr& address) {
 	return address.s_addr == 0;
 }
 
-static bool MccaRememberDnsCandidate(struct in_addr previous[], stduint capacity,
+static MccaDnsServerHealth* MccaDnsServerHealthFor(const struct in_addr& address, bool create) {
+	if (MccaIPv4IsZero(address)) return nullptr;
+	MccaDnsServerHealth* replacement = nullptr;
+	for0(i, MccaDnsServerCapacity) {
+		auto& health = mcca_dns_server_health[i];
+		if (MccaSameIPv4(health.address, address)) return &health;
+		if (!create) continue;
+		if (MccaIPv4IsZero(health.address)) return &health;
+		if (!replacement || health.last_attempt < replacement->last_attempt) replacement = &health;
+	}
+	return replacement;
+}
+
+static bool MccaDnsServerRecentlyFailed(const struct in_addr& address) {
+	auto* health = MccaDnsServerHealthFor(address, false);
+	return health && health->failed_until && syssecond() < health->failed_until;
+}
+
+static void MccaRememberDnsServerFailure(const struct in_addr& address) {
+	auto* health = MccaDnsServerHealthFor(address, true);
+	if (!health) return;
+	if (!MccaSameIPv4(health->address, address)) *health = {};
+	health->address = address;
+	health->last_attempt = syssecond();
+	if (health->consecutive_failures < 8) health->consecutive_failures++;
+	stduint delay = MccaDnsServerFailureBaseSeconds;
+	for(uint8 i = 1; i < health->consecutive_failures && delay < MccaDnsServerFailureMaximumSeconds; i++) {
+		delay <<= 1;
+	}
+	if (delay > MccaDnsServerFailureMaximumSeconds) delay = MccaDnsServerFailureMaximumSeconds;
+	health->failed_until = health->last_attempt + delay;
+}
+
+static void MccaRememberDnsServerSuccess(const struct in_addr& address) {
+	auto* health = MccaDnsServerHealthFor(address, true);
+	if (!health) return;
+	if (!MccaSameIPv4(health->address, address)) *health = {};
+	health->address = address;
+	health->last_attempt = syssecond();
+	health->last_success = health->last_attempt;
+	health->failed_until = 0;
+	health->consecutive_failures = 0;
+}
+
+static void MccaForgetDnsServerFailure(const struct in_addr& address) {
+	auto* health = MccaDnsServerHealthFor(address, false);
+	if (!health) return;
+	health->failed_until = 0;
+	health->consecutive_failures = 0;
+}
+
+static void MccaClearDnsServerFailures() {
+	for0(i, MccaDnsServerCapacity) mcca_dns_server_health[i] = {};
+}
+
+static bool MccaAppendDnsCandidate(struct in_addr candidates[], stduint capacity,
 	stduint& count, const struct in_addr& candidate) {
 	if (MccaIPv4IsZero(candidate)) return false;
-	for0(i, count) if (MccaSameIPv4(previous[i], candidate)) return false;
-	if (count < capacity) previous[count++] = candidate;
+	for0(i, count) if (MccaSameIPv4(candidates[i], candidate)) return false;
+	if (count >= capacity) return false;
+	candidates[count++] = candidate;
 	return true;
 }
 
-static bool MccaSelectDnsCandidate(stduint index, stduint& ordinal,
-	struct in_addr previous[], stduint capacity, stduint& previous_count,
-	const struct in_addr& candidate, struct in_addr* output) {
-	if (!MccaRememberDnsCandidate(previous, capacity, previous_count, candidate)) return false;
-	if (ordinal++ != index) return false;
-	*output = candidate;
-	return true;
-}
-
-static bool MccaGetConfiguredDnsServerAt(stduint index, struct in_addr* output) {
-	if (!output) return false;
-	stduint ordinal = 0;
-	struct in_addr previous[4]{};
-	stduint previous_count = 0;
-	if (mcca_dns_override_server_valid &&
-		MccaSelectDnsCandidate(index, ordinal, previous, numsof(previous),
-			previous_count, mcca_dns_override_server, output)) return true;
-	if (mcca_dns_last_good_server_valid &&
-		MccaSelectDnsCandidate(index, ordinal, previous, numsof(previous),
-			previous_count, mcca_dns_last_good_server, output)) return true;
-	stduint count = 0;
+static stduint MccaCollectDnsCandidates(struct in_addr candidates[], stduint capacity,
+	stduint* preferred_count) {
+	if (!candidates || !capacity) return 0;
+	if (preferred_count) *preferred_count = 0;
+	stduint candidate_count = 0;
+	for0(i, mcca_dns_override_server_count) {
+		(void)MccaAppendDnsCandidate(candidates, capacity, candidate_count,
+			mcca_dns_override_servers[i]);
+	}
+	syscall_net_dns_server_t configured{};
+	if (syscall(syscall_t::ROUT, stduint(syscall_net_route_func_t::DNSGetServers),
+		_IMM(&configured), sizeof(configured)) >= 0) {
+		stduint count = configured.count;
+		if (count > syscall_net_dns_server_capacity) count = syscall_net_dns_server_capacity;
+		for0(a, count) {
+			struct in_addr candidate{};
+			auto* target = reinterpret_cast<uint8*>(&candidate.s_addr);
+			for0(i, 4) target[i] = configured.addresses[a][i];
+			(void)MccaAppendDnsCandidate(candidates, capacity, candidate_count, candidate);
+		}
+	}
+	stduint interface_count = 0;
 	if (syscall(syscall_t::ROUT, stduint(syscall_net_route_func_t::IPv4InterfaceCount),
-		_IMM(&count), sizeof(count)) < 0) return false;
-	for0(i, count) {
+		_IMM(&interface_count), sizeof(interface_count)) < 0) return candidate_count;
+	for0(i, interface_count) {
 		syscall_net_interface_ipv4_t iface{};
 		iface.link_index = uint16(i);
 		if (syscall(syscall_t::ROUT, stduint(syscall_net_route_func_t::IPv4Interface),
 			_IMM(&iface), sizeof(iface)) < 0) continue;
 		struct in_addr candidate{};
-		uint8* target = reinterpret_cast<uint8*>(&candidate.s_addr);
+		auto* target = reinterpret_cast<uint8*>(&candidate.s_addr);
 		for0(j, 4) target[j] = iface.dns[j];
-		if (MccaSelectDnsCandidate(index, ordinal, previous, numsof(previous),
-			previous_count, candidate, output)) return true;
+		(void)MccaAppendDnsCandidate(candidates, capacity, candidate_count, candidate);
 	}
-	for0(i, count) {
+	if (preferred_count) *preferred_count = candidate_count;
+	for0(i, interface_count) {
 		syscall_net_interface_ipv4_t iface{};
 		iface.link_index = uint16(i);
 		if (syscall(syscall_t::ROUT, stduint(syscall_net_route_func_t::IPv4Interface),
 			_IMM(&iface), sizeof(iface)) < 0) continue;
 		struct in_addr candidate{};
-		uint8* target = reinterpret_cast<uint8*>(&candidate.s_addr);
+		auto* target = reinterpret_cast<uint8*>(&candidate.s_addr);
 		for0(j, 4) target[j] = iface.gateway[j];
-		if (MccaSelectDnsCandidate(index, ordinal, previous, numsof(previous),
-			previous_count, candidate, output)) return true;
+		(void)MccaAppendDnsCandidate(candidates, capacity, candidate_count, candidate);
 	}
-	return false;
+	return candidate_count;
+}
+
+static stduint MccaBuildDnsAttemptOrder(const struct in_addr candidates[], stduint candidate_count,
+	stduint preferred_count, stduint order[], stduint capacity) {
+	if (!candidates || !order || !candidate_count || !capacity) return 0;
+	if (preferred_count > candidate_count) preferred_count = candidate_count;
+	stduint preferred[MccaDnsServerCapacity]{};
+	stduint fallback[MccaDnsServerCapacity]{};
+	stduint preferred_healthy = 0;
+	stduint fallback_healthy = 0;
+	for0(i, candidate_count) {
+		if (MccaDnsServerRecentlyFailed(candidates[i])) continue;
+		if (i < preferred_count) preferred[preferred_healthy++] = i;
+		else fallback[fallback_healthy++] = i;
+	}
+	if (preferred_healthy || fallback_healthy) {
+		stduint count = 0;
+		const stduint rotation = mcca_dns_rotation++;
+		if (preferred_healthy) {
+			const stduint start = rotation % preferred_healthy;
+			for0(i, preferred_healthy) {
+				if (count >= capacity) break;
+				order[count++] = preferred[(start + i) % preferred_healthy];
+			}
+		}
+		if (fallback_healthy) {
+			const stduint start = rotation % fallback_healthy;
+			for0(i, fallback_healthy) {
+				if (count >= capacity) break;
+				order[count++] = fallback[(start + i) % fallback_healthy];
+			}
+		}
+		return count;
+	}
+	stduint recovery = 0;
+	stduint earliest = stduint(-1);
+	for0(i, candidate_count) {
+		auto* health = MccaDnsServerHealthFor(candidates[i], false);
+		const stduint failed_until = health ? health->failed_until : 0;
+		if (failed_until < earliest) {
+			earliest = failed_until;
+			recovery = i;
+		}
+	}
+	order[0] = recovery;
+	return 1;
+}
+
+static stdsint MccaDnsExchange(const uint8* query, stduint query_length, uint16 query_id,
+	uint8* response, stduint response_capacity, const char** status) {
+	if (status) *status = "no-dns-server";
+	if (!query || !query_length || !response || response_capacity < 12) return -1;
+	struct in_addr candidates[MccaDnsServerCapacity]{};
+	stduint preferred_count = 0;
+	const stduint candidate_count = MccaCollectDnsCandidates(candidates, numsof(candidates),
+		&preferred_count);
+	if (!candidate_count) return -1;
+	stduint order[MccaDnsServerCapacity]{};
+	const stduint attempt_count = MccaBuildDnsAttemptOrder(candidates, candidate_count,
+		preferred_count, order, numsof(order));
+	for0(attempt, attempt_count) {
+		const auto dns = candidates[order[attempt]];
+		auto* health = MccaDnsServerHealthFor(dns, true);
+		if (health) health->last_attempt = syssecond();
+		int fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+		if (fd < 0) {
+			if (status) *status = "socket";
+			return -1;
+		}
+		struct sockaddr_in server{};
+		server.sin_family = AF_INET;
+		server.sin_port = htons(53);
+		server.sin_addr = dns;
+		const stdsint sent = sendto(fd, query, query_length, 0,
+			(const struct sockaddr*)&server, sizeof(server));
+		if (sent != stdsint(query_length)) {
+			close(fd);
+			if (status) *status = "send";
+			MccaRememberDnsServerFailure(dns);
+			continue;
+		}
+		struct pollfd pfd{};
+		pfd.fd = fd;
+		pfd.events = POLLIN;
+		const int ready = poll(&pfd, 1, 2500);
+		if (ready <= 0 || !(pfd.revents & POLLIN)) {
+			close(fd);
+			if (status) *status = ready == 0 ? "timeout" : "receive";
+			MccaRememberDnsServerFailure(dns);
+			continue;
+		}
+		struct sockaddr_in source{};
+		socklen_t source_length = sizeof(source);
+		const stdsint received = recvfrom(fd, response, response_capacity, 0,
+			(struct sockaddr*)&source, &source_length);
+		close(fd);
+		if (received < 12) {
+			if (status) *status = "short-reply";
+			MccaRememberDnsServerFailure(dns);
+			continue;
+		}
+		if (source_length < sizeof(source) || source.sin_family != AF_INET ||
+			source.sin_port != htons(53) || !MccaSameIPv4(source.sin_addr, dns)) {
+			if (status) *status = "bad-source";
+			MccaRememberDnsServerFailure(dns);
+			continue;
+		}
+		if (MccaReadNet16(response) != query_id) {
+			if (status) *status = "bad-xid";
+			MccaRememberDnsServerFailure(dns);
+			continue;
+		}
+		const uint16 flags = MccaReadNet16(response + 2);
+		if (!(flags & 0x8000u)) {
+			if (status) *status = "not-response";
+			MccaRememberDnsServerFailure(dns);
+			continue;
+		}
+		const uint16 rcode = flags & 0x000Fu;
+		if (rcode != 0 && rcode != 3) {
+			if (status) *status = MccaDnsRcodeStatus(rcode);
+			MccaRememberDnsServerFailure(dns);
+			continue;
+		}
+		MccaRememberDnsServerSuccess(dns);
+		if (status) *status = MccaDnsRcodeStatus(rcode);
+		return received;
+	}
+	return -1;
 }
 
 static bool MccaEncodeDnsName(uint8* output, stduint capacity, const char* host, stduint* length) {
@@ -503,6 +784,18 @@ extern "C" stduint mcca_net_dns_address_count() {
 extern "C" int mcca_net_dns_address(stduint index, struct in_addr* output) {
 	if (!output || index >= mcca_dns_last_address_count) return 0;
 	*output = mcca_dns_last_addresses[index];
+	return 1;
+}
+
+extern "C" stduint mcca_net_dns_ipv6_address_count() {
+	return mcca_dns_last_ipv6_address_count;
+}
+
+extern "C" int mcca_net_dns_ipv6_address(stduint index, uint8 output[16]) {
+	if (!output || index >= mcca_dns_last_ipv6_address_count) return 0;
+	for0(i, uni::Network::IPv6AddressLength) {
+		output[i] = mcca_dns_last_ipv6_addresses[index].octet[i];
+	}
 	return 1;
 }
 
@@ -697,9 +990,12 @@ extern "C" int mcca_net_dns_cache_entry_address(stduint index, stduint address_i
 
 extern "C" int mcca_net_dns_cache_clear() {
 	for0(i, MccaDnsCacheCapacity) mcca_dns_cache[i] = {};
+	for0(i, MccaDnsCacheCapacity) mcca_dns_cache_ipv6[i] = {};
 	mcca_dns_cache_next = 0;
+	mcca_dns_cache_ipv6_next = 0;
 	mcca_dns_cache_last = stduint(-1);
 	MccaClearDnsLastCnameTarget();
+	MccaClearDnsServerFailures();
 	return syscall(syscall_t::ROUT, stduint(syscall_net_route_func_t::DNSCacheClear), 1, 0) >= 0;
 }
 
@@ -713,6 +1009,12 @@ extern "C" int mcca_net_dns_cache_clear_host(const char* host) {
 			if (mcca_dns_cache_last == i) mcca_dns_cache_last = stduint(-1);
 		}
 	}
+	for0(i, MccaDnsCacheCapacity) {
+		if (mcca_dns_cache_ipv6[i].host[0] && !strcmp(mcca_dns_cache_ipv6[i].host, host)) {
+			mcca_dns_cache_ipv6[i] = {};
+		}
+	}
+	MccaClearDnsServerFailures();
 	syscall_net_dns_cache_t entry{};
 	MccaCopyText(entry.host, sizeof(entry.host), host);
 	const int cleared = syscall(syscall_t::ROUT, stduint(syscall_net_route_func_t::DNSCacheClear),
@@ -790,25 +1092,43 @@ extern "C" void mcca_net_print_addrinfo(const char* prefix, const struct addrinf
 	printf("%s: gai count=%u\n\r", prefix, (unsigned)count);
 }
 
-extern "C" int mcca_net_dns_set_server_ipv4(const struct in_addr* address) {
+extern "C" int mcca_net_dns_set_servers_ipv4(const struct in_addr* addresses, stduint count) {
+	if (!addresses) count = 0;
+	if (count > MccaDnsOverrideServerCapacity) count = MccaDnsOverrideServerCapacity;
 	syscall_net_dns_server_t server{};
-	if (!address) {
-		struct in_addr empty{};
-		mcca_dns_override_server = empty;
-		mcca_dns_override_server_valid = false;
-		const int ok = syscall(syscall_t::ROUT, stduint(syscall_net_route_func_t::DNSSetServer),
-			_IMM(&server), sizeof(server)) >= 0;
-		if (ok) (void)mcca_net_dns_cache_clear();
-		return ok;
+	mcca_dns_override_server_count = 0;
+	for0(i, MccaDnsOverrideServerCapacity) mcca_dns_override_servers[i] = {};
+	for0(i, count) {
+		if (MccaIPv4IsZero(addresses[i])) continue;
+		bool duplicate = false;
+		for0(j, mcca_dns_override_server_count) {
+			if (MccaSameIPv4(mcca_dns_override_servers[j], addresses[i])) {
+				duplicate = true;
+				break;
+			}
+		}
+		if (duplicate) continue;
+		mcca_dns_override_servers[mcca_dns_override_server_count++] = addresses[i];
 	}
-	mcca_dns_override_server = *address;
-	mcca_dns_override_server_valid = true;
-	const auto* octet = reinterpret_cast<const uint8*>(&address->s_addr);
-	for0(i, 4) server.address[i] = octet[i];
+	server.count = uint16(mcca_dns_override_server_count);
+	for0(a, mcca_dns_override_server_count) {
+		const auto* octet = reinterpret_cast<const uint8*>(&mcca_dns_override_servers[a].s_addr);
+		for0(i, 4) server.addresses[a][i] = octet[i];
+	}
+	if (mcca_dns_override_server_count) {
+		for0(i, 4) server.address[i] = server.addresses[0][i];
+	}
 	const int ok = syscall(syscall_t::ROUT, stduint(syscall_net_route_func_t::DNSSetServer),
 		_IMM(&server), sizeof(server)) >= 0;
-	if (ok) (void)mcca_net_dns_cache_clear();
+	if (ok) {
+		(void)mcca_net_dns_cache_clear();
+		for0(i, mcca_dns_override_server_count) MccaForgetDnsServerFailure(mcca_dns_override_servers[i]);
+	}
 	return ok;
+}
+
+extern "C" int mcca_net_dns_set_server_ipv4(const struct in_addr* address) {
+	return mcca_net_dns_set_servers_ipv4(address, address ? 1 : 0);
 }
 
 extern "C" int mcca_net_dhcp_renew() {
@@ -821,15 +1141,41 @@ extern "C" int mcca_net_dhcp_release() {
 
 extern "C" int mcca_net_dns_probe_aaaa(const char* host, stduint* ttl) {
 	if (ttl) *ttl = 0;
-	mcca_dns_last_ttl = 0;
-	mcca_dns_last_answer_count = 0;
-	MccaClearDnsLastAnswers();
-	mcca_dns_last_cname_count = 0;
-	mcca_dns_last_non_a_count = 0;
-	MccaClearDnsLastCnameTarget();
-	if (!host) {
+	if (!host || !host[0]) {
 		mcca_dns_last_status = "bad-argument";
 		return 0;
+	}
+	if (mcca_dns_probe_aaaa_depth > MccaDnsResolveDepthLimit) {
+		mcca_dns_last_status = "cname-loop";
+		return 0;
+	}
+	const bool root_query = mcca_dns_probe_aaaa_depth == 0;
+	mcca_dns_probe_aaaa_depth++;
+	MccaDnsProbeAAAADepthGuard depth_guard;
+	if (root_query) {
+		mcca_dns_last_ttl = 0;
+		mcca_dns_last_answer_count = 0;
+		MccaClearDnsLastAnswers();
+		MccaClearDnsLastIPv6Answers();
+		mcca_dns_last_cname_count = 0;
+		mcca_dns_last_non_a_count = 0;
+		MccaClearDnsLastCnameTarget();
+	}
+	if (auto* cached = MccaDnsCacheFindIPv6(host)) {
+		const stduint now = syssecond();
+		mcca_dns_last_ttl = now < cached->expire_second ? cached->expire_second - now : 0;
+		mcca_dns_last_answer_count = cached->answer_count;
+		mcca_dns_last_cname_count = cached->cname_target[0] ? 1 : 0;
+		mcca_dns_last_non_a_count = 0;
+		MccaClearDnsLastCnameTarget();
+		if (cached->cname_target[0]) MccaRememberDnsCnameTarget(cached->cname_target);
+		MccaClearDnsLastIPv6Answers();
+		for0(i, cached->address_count) {
+			mcca_dns_last_ipv6_addresses[mcca_dns_last_ipv6_address_count++] = cached->addresses[i];
+		}
+		mcca_dns_last_status = cached->negative ? cached->status : "cached";
+		if (ttl) *ttl = mcca_dns_last_ttl;
+		return !cached->negative && mcca_dns_last_ipv6_address_count != 0;
 	}
 	uint8 query[256] = {};
 	static uint16 next_id = 0x4141u;
@@ -848,88 +1194,21 @@ extern "C" int mcca_net_dns_probe_aaaa(const char* host, stduint* ttl) {
 	query_length += 4;
 
 	uint8 response[512] = {};
-	stdsint received = -1;
 	const char* io_status = "no-dns-server";
-	struct in_addr successful_dns{};
-	for0(candidate_index, 4) {
-		struct in_addr dns{};
-		if (!MccaGetConfiguredDnsServerAt(candidate_index, &dns)) break;
-		int fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-		if (fd < 0) {
-			io_status = "socket";
-			continue;
-		}
-		struct sockaddr_in server{};
-		server.sin_family = AF_INET;
-		server.sin_port = htons(53);
-		server.sin_addr = dns;
-		const stdsint sent = sendto(fd, query, query_length, 0,
-			(const struct sockaddr*)&server, sizeof(server));
-		if (sent != stdsint(query_length)) {
-			close(fd);
-			io_status = "send";
-			continue;
-		}
-		struct pollfd pfd{};
-		pfd.fd = fd;
-		pfd.events = POLLIN;
-		if (poll(&pfd, 1, 2500) <= 0 || !(pfd.revents & POLLIN)) {
-			close(fd);
-			io_status = "timeout";
-			continue;
-		}
-		received = recvfrom(fd, response, sizeof(response), 0, nullptr, nullptr);
-		close(fd);
-		if (received < 12) {
-			io_status = "short-reply";
-			received = -1;
-			continue;
-		}
-		if (MccaReadNet16(response) != query_id) {
-			io_status = "bad-xid";
-			received = -1;
-			continue;
-		}
-		const uint16 candidate_flags = MccaReadNet16(response + 2);
-		if (!(candidate_flags & 0x8000u)) {
-			io_status = "not-response";
-			received = -1;
-			continue;
-		}
-		if ((candidate_flags & 0x000Fu) == 2) {
-			io_status = "servfail";
-			received = -1;
-			continue;
-		}
-		successful_dns = dns;
-		break;
-	}
+	const stdsint received = MccaDnsExchange(query, query_length, query_id,
+		response, sizeof(response), &io_status);
 	if (received < 0) {
 		mcca_dns_last_status = io_status;
-		return 0;
-	}
-	if (received < 12) {
-		mcca_dns_last_status = "short-reply";
+		MccaRememberDnsCacheIPv6(host, io_status, 0, 0, true);
 		return 0;
 	}
 	const stduint response_length = stduint(received);
-	if (MccaReadNet16(response) != query_id) {
-		mcca_dns_last_status = "bad-xid";
-		return 0;
-	}
 	const uint16 dns_flags = MccaReadNet16(response + 2);
 	const uint16 dns_rcode = dns_flags & 0x000Fu;
-	if (!(dns_flags & 0x8000u)) {
-		mcca_dns_last_status = "not-response";
-		return 0;
-	}
 	if (dns_rcode != 0) {
 		mcca_dns_last_status = MccaDnsRcodeStatus(dns_rcode);
+		MccaRememberDnsCacheIPv6(host, mcca_dns_last_status, 0, 0, true);
 		return 0;
-	}
-	if (!MccaIPv4IsZero(successful_dns)) {
-		mcca_dns_last_good_server = successful_dns;
-		mcca_dns_last_good_server_valid = true;
 	}
 	const uint16 question_count = MccaReadNet16(response + 4);
 	const uint16 answer_count = MccaReadNet16(response + 6);
@@ -944,6 +1223,10 @@ extern "C" int mcca_net_dns_probe_aaaa(const char* host, stduint* ttl) {
 		}
 		offset += 4;
 	}
+	MccaClearDnsLastIPv6Answers();
+	stduint first_ttl = 0;
+	bool first_ttl_seen = false;
+	char first_cname[64] = {};
 	for0(i, answer_count) {
 		if (!MccaSkipDnsName(response, response_length, &offset) || offset + 10 > response_length) {
 			mcca_dns_last_status = "bad-answer";
@@ -960,26 +1243,52 @@ extern "C" int mcca_net_dns_probe_aaaa(const char* host, stduint* ttl) {
 		}
 		if (type == 28 && dns_class == 1 && rdlength == 16) {
 			if (answer_ttl > 86400) answer_ttl = 86400;
-			if (ttl) *ttl = stduint(answer_ttl);
-			mcca_dns_last_status = "ok";
-			mcca_dns_last_ttl = stduint(answer_ttl);
-			return 1;
+			if (!first_ttl_seen || answer_ttl < first_ttl) {
+				first_ttl = stduint(answer_ttl);
+				first_ttl_seen = true;
+			}
+			MccaRememberDnsIPv6Answer(response + offset);
 		}
-		if (type == 5 && dns_class == 1) {
+		else if (type == 5 && dns_class == 1) {
 			mcca_dns_last_cname_count++;
-			if (!mcca_dns_last_cname_target[0]) {
+			if (!first_cname[0]) {
 				stduint cname_offset = offset;
-				char cname[64] = {};
-				if (MccaReadDnsName(response, response_length, &cname_offset, cname, sizeof(cname))) {
-					MccaRememberDnsCnameTarget(cname);
-				}
+				(void)MccaReadDnsName(response, response_length, &cname_offset,
+					first_cname, sizeof(first_cname));
 			}
 		}
 		else mcca_dns_last_non_a_count++;
 		offset += rdlength;
 	}
+	if (mcca_dns_last_ipv6_address_count) {
+		mcca_dns_last_status = "ok";
+		mcca_dns_last_ttl = first_ttl;
+		if (first_cname[0]) MccaRememberDnsCnameTarget(first_cname);
+		if (ttl) *ttl = first_ttl;
+		MccaRememberDnsCacheIPv6(host, "ok", first_ttl, answer_count, false);
+		return 1;
+	}
+	if (first_cname[0]) {
+		const stduint cname_count = mcca_dns_last_cname_count;
+		const stduint non_address_count = mcca_dns_last_non_a_count;
+		const int resolved = mcca_net_dns_probe_aaaa(first_cname, ttl);
+		MccaRememberDnsCnameTarget(first_cname);
+		mcca_dns_last_cname_count += cname_count;
+		mcca_dns_last_non_a_count += non_address_count;
+		mcca_dns_last_answer_count += answer_count;
+		if (resolved) {
+			MccaRememberDnsCacheIPv6(host, "ok", mcca_dns_last_ttl,
+				mcca_dns_last_answer_count, false);
+		}
+		else {
+			MccaRememberDnsCacheIPv6(host, mcca_dns_last_status, 0,
+				mcca_dns_last_answer_count, true);
+		}
+		return resolved;
+	}
 	mcca_dns_last_status = "no-aaaa";
 	mcca_dns_last_ttl = 0;
+	MccaRememberDnsCacheIPv6(host, mcca_dns_last_status, 0, answer_count, true);
 	return 0;
 }
 
@@ -1030,21 +1339,35 @@ stdsint MccaDNSResolver::ResolveIPv6(const char* host, uni::Network::DNSIPv6Resu
 	result.cname_count = mcca_dns_last_cname_count;
 	result.non_address_count = mcca_dns_last_non_a_count;
 	MccaCopyText(result.cname_target, sizeof(result.cname_target), mcca_dns_last_cname_target);
+	for0(i, mcca_dns_last_ipv6_address_count) {
+		(void)uni::Network::DNSAppendIPv6Address(result, mcca_dns_last_ipv6_addresses[i]);
+	}
 	return ok && result.address_count ? 1 : 0;
 }
 
 stdsint MccaDNSResolver::ResolveAll(const char* host, uni::Network::DNSAddressList& result) {
 	uni::Network::DNSClearAddressList(result);
 	uni::Network::DNSIPv4Result ipv4{};
-	if (!ResolveIPv4(host, ipv4)) {
+	const bool have_ipv4 = ResolveIPv4(host, ipv4) > 0;
+	if (have_ipv4) {
 		result.status = ipv4.status;
 		result.ttl = ipv4.ttl;
-		return 0;
 	}
-	result.status = ipv4.status;
-	result.ttl = ipv4.ttl;
-	for0(i, ipv4.address_count) {
-		(void)uni::Network::DNSAppendAddress(result, ipv4.addresses[i]);
+	uni::Network::DNSIPv6Result ipv6{};
+	const bool have_ipv6 = ResolveIPv6(host, ipv6) > 0;
+	if (have_ipv6) {
+		if (!have_ipv4 || (ipv6.ttl && ipv6.ttl < result.ttl)) result.ttl = ipv6.ttl;
+		if (!have_ipv4) result.status = ipv6.status;
+	}
+	for0(i, uni::Network::DNSAddressCapacity) {
+		if (i < ipv4.address_count) (void)uni::Network::DNSAppendAddress(result, ipv4.addresses[i]);
+		if (i < ipv6.address_count) (void)uni::Network::DNSAppendAddress(result, ipv6.addresses[i]);
+		if (result.address_count >= uni::Network::DNSAddressCapacity) break;
+	}
+	if (!have_ipv4 && !have_ipv6) {
+		result.status = ipv4.status != uni::Network::DNSResolveStatus::NoAddress ?
+			ipv4.status : ipv6.status;
+		result.ttl = ipv4.ttl ? ipv4.ttl : ipv6.ttl;
 	}
 	return result.address_count ? 1 : 0;
 }
@@ -1075,6 +1398,21 @@ static uni::Network::NetworkConfigSource MccaConfigSource(uint16 source) {
 	}
 }
 
+static uint16 MccaConfigSourceCode(uni::Network::NetworkConfigSource source) {
+	switch (source) {
+	case uni::Network::NetworkConfigSource::Static:
+		return syscall_net_config_source_static;
+	case uni::Network::NetworkConfigSource::DHCP:
+		return syscall_net_config_source_dhcp_bound;
+	case uni::Network::NetworkConfigSource::Temporary:
+		return syscall_net_config_source_temporary;
+	case uni::Network::NetworkConfigSource::Failed:
+		return syscall_net_config_source_dhcp_failed;
+	default:
+		return syscall_net_config_source_temporary;
+	}
+}
+
 int mcca_net_read_config(uni::Network::NetworkConfigSnapshot& config, stduint interface_index) {
 	config = {};
 	syscall_net_interface_ipv4_t iface{};
@@ -1087,7 +1425,24 @@ int mcca_net_read_config(uni::Network::NetworkConfigSnapshot& config, stduint in
 	uni::Network::IPv4CopyAddress(config.ipv4.gateway, iface.gateway);
 	uni::Network::IPv4CopyAddress(config.ipv4.dns, iface.dns);
 	config.ipv4.source = MccaConfigSource(iface.config_source);
+	config.ipv4.dns_source = MccaConfigSource(iface.dns_source);
 	config.ipv4.lease_seconds = iface.dhcp_lease_time;
+	syscall_net_dns_server_t dns_servers{};
+	if (syscall(syscall_t::ROUT, stduint(syscall_net_route_func_t::DNSGetServers),
+		_IMM(&dns_servers), sizeof(dns_servers)) >= 0) {
+		stduint count = dns_servers.count;
+		if (count > uni::Network::NetworkConfigDNSServerCapacity) {
+			count = uni::Network::NetworkConfigDNSServerCapacity;
+		}
+		for0(a, count) {
+			uni::Network::IPv4CopyAddress(config.ipv4.dns_servers[a], dns_servers.addresses[a]);
+		}
+		config.ipv4.dns_count = count;
+	}
+	if (!config.ipv4.dns_count && !config.ipv4.dns.isZero()) {
+		config.ipv4.dns_servers[0] = config.ipv4.dns;
+		config.ipv4.dns_count = 1;
+	}
 	config.interface_index = uint16(interface_index);
 	config.link_up = (iface.flags & syscall_net_route_flag_up) != 0;
 
@@ -1097,6 +1452,7 @@ int mcca_net_read_config(uni::Network::NetworkConfigSnapshot& config, stduint in
 		uni::Network::IPv4CopyAddress(config.default_route.destination, route.destination);
 		uni::Network::IPv4CopyAddress(config.default_route.netmask, route.netmask);
 		uni::Network::IPv4CopyAddress(config.default_route.gateway, route.gateway);
+		config.default_route.source = MccaConfigSource(iface.route_source);
 		config.default_route.interface_index = route.link_index;
 		config.default_route.up = (route.flags & syscall_net_route_flag_up) != 0;
 	}
@@ -1108,10 +1464,35 @@ stdsint MccaNetworkConfig::ReadConfig(uni::Network::NetworkConfigSnapshot& confi
 }
 
 stdsint MccaNetworkConfig::ApplyConfig(const uni::Network::NetworkConfigSnapshot& config) {
-	struct in_addr dns{};
-	auto* octet = reinterpret_cast<uint8*>(&dns.s_addr);
-	for0(i, uni::Network::IPv4AddressLength) octet[i] = config.ipv4.dns.octet[i];
-	return mcca_net_dns_set_server_ipv4(config.ipv4.hasDNS() ? &dns : nullptr) ? 1 : -1;
+	if (!config.default_route.isDefault() ||
+		config.default_route.interface_index != config.interface_index) return -1;
+	if (!config.ipv4.gateway.isZero() && !config.default_route.gateway.isZero() &&
+		!(config.ipv4.gateway == config.default_route.gateway)) return -1;
+	syscall_net_config_ipv4_t input{};
+	uni::Network::IPv4WriteAddress(input.address, config.ipv4.address);
+	uni::Network::IPv4WriteAddress(input.netmask, config.ipv4.netmask);
+	const auto& gateway = config.default_route.gateway.isZero() ?
+		config.ipv4.gateway : config.default_route.gateway;
+	uni::Network::IPv4WriteAddress(input.gateway, gateway);
+	uni::Network::IPv4WriteAddress(input.dns, config.ipv4.dns);
+	stduint dns_count = config.ipv4.dns_count;
+	if (dns_count > syscall_net_dns_server_capacity) dns_count = syscall_net_dns_server_capacity;
+	for0(a, dns_count) {
+		uni::Network::IPv4WriteAddress(input.dns_servers[a], config.ipv4.dns_servers[a]);
+	}
+	if (!dns_count && !config.ipv4.dns.isZero()) {
+		uni::Network::IPv4WriteAddress(input.dns_servers[0], config.ipv4.dns);
+		dns_count = 1;
+	}
+	input.dns_count = uint16(dns_count);
+	input.interface_index = config.interface_index;
+	if (config.default_route.up) input.flags |= syscall_net_config_flag_route_up;
+	input.source = MccaConfigSourceCode(config.ipv4.source);
+	input.dns_source = MccaConfigSourceCode(config.ipv4.dns_source);
+	input.route_source = MccaConfigSourceCode(config.default_route.source);
+	input.lease_seconds = config.ipv4.lease_seconds;
+	return syscall(syscall_t::ROUT, stduint(syscall_net_route_func_t::IPv4ApplyConfig),
+		_IMM(&input), sizeof(input)) >= 0 ? 1 : -1;
 }
 
 uni::Network::NetworkConfigInterface* mcca_net_config() {
@@ -1122,6 +1503,8 @@ uni::Network::NetworkConfigInterface* mcca_net_config() {
 extern "C" const char* mcca_net_socket_error_name(int error) {
 	switch (error) {
 	case 0: return "none";
+	case 4: return "interrupted";
+	case 11: return "would-block";
 	case 32: return "broken-pipe";
 	case 104: return "reset";
 	case 105: return "no-buffer";
@@ -1130,7 +1513,11 @@ extern "C" const char* mcca_net_socket_error_name(int error) {
 	case 114: return "net-unreach";
 	case 116: return "timeout";
 	case 118: return "host-unreach";
+	case 119: return "in-progress";
+	case 120: return "already";
 	case 121: return "dest-required";
+	case 127: return "is-connected";
+	case 128: return "not-connected";
 	default: return "error";
 	}
 }
@@ -1165,6 +1552,25 @@ extern "C" void mcca_net_print_socket_options(const char* prefix, int fd) {
 	int value = 0;
 	if (mcca_net_get_socket_option_int(fd, SO_REUSEADDR, &value)) {
 		printf("%s: so_reuseaddr=%d\n\r", prefix, value);
+	}
+	if (mcca_net_get_socket_option_int(fd, SO_KEEPALIVE, &value)) {
+		printf("%s: so_keepalive=%d\n\r", prefix, value);
+		if (value) {
+			int idle = 0;
+			int interval = 0;
+			int count = 0;
+			socklen_t length = sizeof(int);
+			if (getsockopt(fd, IPPROTO_TCP, TCP_KEEPIDLE, &idle, &length) == 0) {
+				length = sizeof(int);
+				if (getsockopt(fd, IPPROTO_TCP, TCP_KEEPINTVL, &interval, &length) == 0) {
+					length = sizeof(int);
+					if (getsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT, &count, &length) == 0) {
+						printf("%s: tcp_keepalive idle=%d interval=%d count=%d\n\r",
+							prefix, idle, interval, count);
+					}
+				}
+			}
+		}
 	}
 	if (mcca_net_get_socket_option_int(fd, SO_TYPE, &value)) {
 		printf("%s: so_type=%d\n\r", prefix, value);
@@ -1460,74 +1866,14 @@ static int MccaResolveIPv4Query(const char* host, struct in_addr* output, stduin
 	query_length += 4;
 
 	uint8 response[512] = {};
-	stdsint received = -1;
 	const char* io_status = "no-dns-server";
-	struct in_addr successful_dns{};
-	for0(candidate_index, 4) {
-		struct in_addr dns{};
-		if (!MccaGetConfiguredDnsServerAt(candidate_index, &dns)) break;
-		int fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-		if (fd < 0) {
-			io_status = "socket";
-			continue;
-		}
-		struct sockaddr_in server{};
-		server.sin_family = AF_INET;
-		server.sin_port = htons(53);
-		server.sin_addr = dns;
-		const stdsint sent = sendto(fd, query, query_length, 0,
-			(const struct sockaddr*)&server, sizeof(server));
-		if (sent != stdsint(query_length)) {
-			close(fd);
-			io_status = "send";
-			continue;
-		}
-		struct pollfd pfd{};
-		pfd.fd = fd;
-		pfd.events = POLLIN;
-		if (poll(&pfd, 1, 2500) <= 0 || !(pfd.revents & POLLIN)) {
-			close(fd);
-			io_status = "timeout";
-			continue;
-		}
-		received = recvfrom(fd, response, sizeof(response), 0, nullptr, nullptr);
-		close(fd);
-		if (received < 12) {
-			io_status = "short-reply";
-			received = -1;
-			continue;
-		}
-		if (MccaReadNet16(response) != query_id) {
-			io_status = "bad-xid";
-			received = -1;
-			continue;
-		}
-		const uint16 candidate_flags = MccaReadNet16(response + 2);
-		if (!(candidate_flags & 0x8000u)) {
-			io_status = "not-response";
-			received = -1;
-			continue;
-		}
-		if ((candidate_flags & 0x000Fu) == 2) {
-			io_status = "servfail";
-			received = -1;
-			continue;
-		}
-		successful_dns = dns;
-		break;
-	}
+	const stdsint received = MccaDnsExchange(query, query_length, query_id,
+		response, sizeof(response), &io_status);
 	if (received < 0) return MccaResolveDnsFail(host, io_status);
-	if (received < 12) return MccaResolveDnsFail(host, "short-reply");
 	const stduint response_length = stduint(received);
-	if (MccaReadNet16(response) != query_id) return MccaResolveDnsFail(host, "bad-xid");
 	const uint16 dns_flags = MccaReadNet16(response + 2);
 	const uint16 dns_rcode = dns_flags & 0x000Fu;
-	if (!(dns_flags & 0x8000u)) return MccaResolveDnsFail(host, "not-response");
 	if (dns_rcode != 0) return MccaResolveDnsFail(host, MccaDnsRcodeStatus(dns_rcode));
-	if (!MccaIPv4IsZero(successful_dns)) {
-		mcca_dns_last_good_server = successful_dns;
-		mcca_dns_last_good_server_valid = true;
-	}
 	const uint16 question_count = MccaReadNet16(response + 4);
 	const uint16 answer_count = MccaReadNet16(response + 6);
 	mcca_dns_last_answer_count = answer_count;

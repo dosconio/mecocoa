@@ -101,7 +101,9 @@ bool Memory::deallocate(void* ptr, stduint size _Comment(zero_for_block)) {
 
 // ---- PAGING ----
 
+#if CONFIG_ENABLE_MMU
 Paging kernel_paging;
+#endif
 
 // ---- SEGMENT ----
 

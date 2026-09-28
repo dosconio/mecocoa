@@ -7,6 +7,14 @@
 #define INADDR_NONE ((in_addr_t)0xFFFFFFFFu)
 #endif
 
+static stdsint PosixSocketResult(stdsint result) {
+	if (result < -1) {
+		errno = int(-result);
+		return -1;
+	}
+	return result;
+}
+
 static bool ParseIPv4Text(const char* text, uint8 output[4]) {
 	if (!text || !output) return false;
 	const char* cursor = text;
@@ -127,21 +135,24 @@ extern "C" int bind(int sockfd, const struct sockaddr* address, socklen_t addres
 extern "C" int connect(int sockfd, const struct sockaddr* address, socklen_t address_length) {
 	MccaSocketAddressIPv4 kernel_address{};
 	if (!SocketAddressFromPosix(&kernel_address, address, address_length)) return -1;
-	return (int)syscall(syscall_t::CONN, (stduint)sockfd, _IMM(&kernel_address), sizeof(kernel_address));
+	return (int)PosixSocketResult((stdsint)syscall(syscall_t::CONN,
+		(stduint)sockfd, _IMM(&kernel_address), sizeof(kernel_address)));
 }
 
 extern "C" stdsint send(int sockfd, const void* buffer, size_t length, int flags) {
 	syscall_net_send_t request{};
 	request.payload = buffer;
 	request.length = length;
-	return (stdsint)syscall(syscall_t::SEND, (stduint)sockfd, _IMM(&request), (stduint)flags);
+	return PosixSocketResult((stdsint)syscall(syscall_t::SEND,
+		(stduint)sockfd, _IMM(&request), (stduint)flags));
 }
 
 extern "C" stdsint recv(int sockfd, void* buffer, size_t length, int flags) {
 	syscall_net_recv_t request{};
 	request.payload = buffer;
 	request.capacity = length;
-	return (stdsint)syscall(syscall_t::RECV, (stduint)sockfd, _IMM(&request), (stduint)flags);
+	return PosixSocketResult((stdsint)syscall(syscall_t::RECV,
+		(stduint)sockfd, _IMM(&request), (stduint)flags));
 }
 
 extern "C" stdsint sendto(int sockfd, const void* buffer, size_t length, int flags,
@@ -154,7 +165,8 @@ extern "C" stdsint sendto(int sockfd, const void* buffer, size_t length, int fla
 	request.length = length;
 	request.address = &kernel_address;
 	request.address_length = sizeof(kernel_address);
-	return (stdsint)syscall(syscall_t::SEND, (stduint)sockfd, _IMM(&request), (stduint)flags);
+	return PosixSocketResult((stdsint)syscall(syscall_t::SEND,
+		(stduint)sockfd, _IMM(&request), (stduint)flags));
 }
 
 extern "C" stdsint recvfrom(int sockfd, void* buffer, size_t length, int flags,
@@ -168,7 +180,8 @@ extern "C" stdsint recvfrom(int sockfd, void* buffer, size_t length, int flags,
 		request.address = &kernel_address;
 		request.address_length = &kernel_address_length;
 	}
-	const stdsint ret = (stdsint)syscall(syscall_t::RECV, (stduint)sockfd, _IMM(&request), (stduint)flags);
+	const stdsint ret = PosixSocketResult((stdsint)syscall(syscall_t::RECV,
+		(stduint)sockfd, _IMM(&request), (stduint)flags));
 	if (ret > 0 && address && address_length) {
 		if (!SocketAddressToPosix(address, address_length, kernel_address)) return -1;
 	}
@@ -186,6 +199,7 @@ extern "C" int accept(int sockfd, struct sockaddr* address, socklen_t* address_l
 	const int ret = (int)syscall(syscall_t::ACPT, (stduint)sockfd,
 		address ? _IMM(&kernel_address) : 0,
 		address_length ? _IMM(&kernel_address_length) : 0);
+	if (ret < -1) return (int)PosixSocketResult(ret);
 	if (ret < 0) return ret;
 	if (address && address_length) {
 		if (!SocketAddressToPosix(address, address_length, kernel_address)) return -1;

@@ -154,7 +154,9 @@ extern Memory mem;
 
 // ---- PAGING ----
 
+#if CONFIG_ENABLE_MMU
 extern Paging kernel_paging;
+#endif
 
 // ---- SEGMENT ----
 #if (_MCCA & 0xFF00) == 0x8600

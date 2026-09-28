@@ -116,6 +116,9 @@ struct SocketHandle {
 	int last_error = 0;
 	stduint receive_timeout_ms = 0;
 	stduint send_timeout_ms = 0;
+	stduint keepalive_idle_seconds = 30;
+	stduint keepalive_interval_seconds = 1;
+	stduint keepalive_probe_limit = 3;
 	stduint udp_inbox_id = stduint(-1);
 	bool is_bound = false;
 	bool is_connected = false;
@@ -193,6 +196,10 @@ public:
 	static DeviceNode* GetMountSourceNode(const char* pathname, vfs_dentry* base = nullptr);
 	static stduint CountMountsForSourceNode(DeviceNode* source_device_node);
 	static String GetFirstMountPathForSourceNode(DeviceNode* source_device_node);
+
+public:
+	static String system_virtual_root_path;// e.g. /mnt/ide2.0
+	static const String& GetSystemVirtualRootPath() { return system_virtual_root_path; }
 };
 
 

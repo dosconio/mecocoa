@@ -19,7 +19,6 @@ struct AuxVector {
 	stduint value;
 };
 
-#define DEFAULT_PATH "PATH=/md0:/mnt/ide2.0/apps:/mnt/ahci1.0/apps"
 static stduint _Taskman_Setup_Stack(ProcessBlock* pb, ProcessBlock* parent, char** usr_argv, char** usr_envp, stduint entry, stduint phdr, stduint phnum, stduint phent) {
 	KASSERT(pb != nullptr && pb->main_thread != nullptr);
 	stduint argc = 0, envc = 0;
@@ -56,9 +55,16 @@ static stduint _Taskman_Setup_Stack(ProcessBlock* pb, ProcessBlock* parent, char
 	}
 
 	count_and_size(usr_argv, argc);
+	String default_path_env;
 	if (use_default_env) {
+		const auto& vroot = Filesys::GetSystemVirtualRootPath();
+		if (vroot.getByteCount()) {
+			default_path_env = String::newFormat("PATH=/md0:%s/apps", vroot.reference());
+		} else {
+			default_path_env = "PATH=/md0";
+		}
 		envc = 3;
-		str_len += StrLength("?=0") + 1 + StrLength(DEFAULT_PATH) + 1 + StrLength("USER=root") + 1;
+		str_len += StrLength("?=0") + 1 + StrLength(default_path_env.reference()) + 1 + StrLength("USER=root") + 1;
 	} else {
 		count_and_size(usr_envp, envc);
 	}
@@ -93,7 +99,7 @@ static stduint _Taskman_Setup_Stack(ProcessBlock* pb, ProcessBlock* parent, char
 
 	copy_strings(usr_argv, argc);
 	if (use_default_env) {
-		const char* defaults[] = { "?=0", DEFAULT_PATH, "USER=root" };
+		const char* defaults[] = { "?=0", default_path_env.reference(), "USER=root" };
 		for (stduint i = 0; i < 3; i++) {
 			char* dest = str_area;
 			StrCopy(dest, defaults[i]);
