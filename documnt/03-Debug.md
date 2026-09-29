@@ -5,6 +5,7 @@ her-note: false
 
 ```
 +---.mcca.root
++---lib
 +---apps
 +---boot
 |   \---grub

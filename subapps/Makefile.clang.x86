@@ -26,6 +26,8 @@ UNIS_UTIL_APPS = $(sort $(addprefix $(BIN_DIR)/,$(basename $(notdir $(UNIS_UTIL_
 
 apps=\
 	$(BIN_DIR)/_rust \
+	$(BIN_DIR)/testso \
+	$(ubinpath)/mecocoa/lib/ld-mcca.so
 
 include subapps/Makefile.gui
 
@@ -33,3 +35,18 @@ $(BIN_DIR)/_rust: subapps/_hello/rust/src/main.rs subapps/_hello/rust/Cargo.toml
 	@echo "MK hello-rust"
 	@cd subapps/_hello/rust/ && cargo build --release --target ../../../configs/Rust/target/cargo-i686.json
 	cp subapps/_hello/rust/target/cargo-i686/release/rust $@
+
+MCCA_CFLAGS_DYN = $(MCCA_COMFLAGS) --sysroot=$(MCCA_SYSROOT) -m32 -fno-builtin -fno-stack-protector -nostdlib -fno-pic -fno-pie \
+	-Wno-incompatible-library-redeclaration -Wno-invalid-constexpr -Wno-empty-body -Wno-unknown-warning-option
+MCCA_CXXFLAGS_DYN = $(MCCA_CFLAGS_DYN) -fno-exceptions -fno-rtti -fno-use-cxa-atexit -std=c++2a
+MCCA_LIBC_SO = $(MCCA_SYSROOT)/usr/lib/$(MCCA_TRIPLE)/libc.so
+MCCA_LDLIBS_DYN = $(MCCA_CRT0) $(MCCA_LIBC_SO) -lgcc -Wl,-m,elf_i386 -Wl,-z,noexecstack -no-pie -fuse-ld=lld -Wl,-dynamic-linker=/lib/ld-mcca.so -Wl,--allow-shlib-undefined
+
+$(BIN_DIR)/testso: subapps/testso.cpp $(MCCA_CRT0) $(MCCA_LIBC_SO)
+	@echo "MK testso (Dynamic)"
+	$(MCCA_CXX) $(MCCA_CXXFLAGS_DYN) -o $@ $< $(MCCA_LDLIBS_DYN)
+
+$(ubinpath)/mecocoa/lib/ld-mcca.so: subapps/dynamic/dynamic.cpp $(MCCA_CRT0) $(MCCA_LIBC)
+	@echo "MK ld-mcca.so (Dummy Interpreter)"
+	@mkdir -p $(dir $@)
+	$(MCCA_CXX) $(MCCA_CXXFLAGS) -o $@ $< $(MCCA_LDLIBS) -Wl,--image-base=0x40000000

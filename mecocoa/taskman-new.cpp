@@ -642,6 +642,19 @@ ProcessBlock* Taskman::CreateELF(BlockTrait* source, byte ring) {
 		struct ELF_PHT_t ph;
 		stduint ph_offset = header.e_phoff + header.e_phentsize * i;
 		source->Read(ph_offset, &ph, sizeof(ph), block_buffer);
+		if (ph.p_type == PT_INTERP) {
+			char interp_path[256] = {0};
+			stduint read_sz = ph.p_filesz < 255 ? ph.p_filesz : 255;
+			source->Read(ph.p_offset, interp_path, read_sz, block_buffer);
+			ploginfo("%s: ELF requires interpreter: %s", __FUNCIDEN__, interp_path);
+			plogerro("%s: Dynamic ELF not supported yet!", __FUNCIDEN__);
+			free(block_buffer);
+			return nullptr;
+		} else if (ph.p_type == PT_DYNAMIC) {
+			plogerro("%s: Dynamic ELF (PT_DYNAMIC) not supported yet!", __FUNCIDEN__);
+			free(block_buffer);
+			return nullptr;
+		}
 		if (ph.p_type == PT_PHDR) phdr_addr = ph.p_vaddr;
 		if (ph.p_type == PT_LOAD && ph.p_offset == 0 && !phdr_addr) phdr_addr = ph.p_vaddr + header.e_phoff;
 		if (ph.p_type == PT_LOAD && ph.p_memsz) 
@@ -935,6 +948,19 @@ ProcessBlock* Taskman::Exec(stduint parent, rostr usr_fullpath, char** usr_argv,
 	for (stduint i = 0; i < header.e_phnum; i++) {
 		struct ELF_PHT_t ph;
 		loop_device.Read(header.e_phoff + i * header.e_phentsize, &ph, sizeof(ph), block_buffer);
+		if (ph.p_type == PT_INTERP) {
+			char interp_path[256] = {0};
+			stduint read_sz = ph.p_filesz < 255 ? ph.p_filesz : 255;
+			loop_device.Read(ph.p_offset, interp_path, read_sz, block_buffer);
+			ploginfo("%s: ELF requires interpreter: %s", __FUNCIDEN__, interp_path);
+			plogerro("%s: Dynamic ELF not supported yet!", __FUNCIDEN__);
+			delete[] block_buffer;
+			return nullptr;
+		} else if (ph.p_type == PT_DYNAMIC) {
+			plogerro("%s: Dynamic ELF (PT_DYNAMIC) not supported yet!", __FUNCIDEN__);
+			delete[] block_buffer;
+			return nullptr;
+		}
 		if (ph.p_type == PT_PHDR) phdr_addr = ph.p_vaddr;
 		if (ph.p_type == PT_LOAD && ph.p_offset == 0 && !phdr_addr) phdr_addr = ph.p_vaddr + header.e_phoff;
 	}
@@ -1006,10 +1032,36 @@ ProcessBlock* Taskman::Exet(stduint parent, rostr usr_fullpath, char** usr_argv,
 	ELF_Header_t header;
 	loop_device.Read(0, &header, sizeof(header), block_buffer);
 
+	vfs_dentry* interp_d = nullptr;
 	stduint phdr_addr = 0;
 	for (stduint i = 0; i < header.e_phnum; i++) {
 		struct ELF_PHT_t ph;
 		loop_device.Read(header.e_phoff + i * header.e_phentsize, &ph, sizeof(ph), block_buffer);
+		if (ph.p_type == PT_INTERP) {
+			String interp_buf(String::Charset::Memory, 256);
+			stduint read_sz = ph.p_filesz < 255 ? ph.p_filesz : 255;
+			loop_device.Read(ph.p_offset, interp_buf.reflect(), read_sz, block_buffer);
+			
+			String real_interp_path;
+			const auto& vroot = Filesys::GetSystemVirtualRootPath();
+			if (vroot.getByteCount() > 0) {
+				real_interp_path = String::newFormat("%s%s", vroot.reference(), interp_buf.reference());
+			} else {
+				real_interp_path = interp_buf;
+			}
+
+			ploginfo("%s: ELF interpreter mapped to: %s", __FUNCIDEN__, real_interp_path.reference());
+			
+			interp_d = Filesys::Index(real_interp_path.reference(), current_cwd);
+			if (!interp_d) {
+				plogerro("%s: Interpreter not found at %s", __FUNCIDEN__, real_interp_path.reference());
+				delete[] block_buffer;
+				return nullptr;
+			}
+			ploginfo("%s: Interpreter FOUND and ready to load.", __FUNCIDEN__);
+		} else if (ph.p_type == PT_DYNAMIC) {
+			// It's normal for dynamic executables to have PT_DYNAMIC. We don't need to abort.
+		}
 		if (ph.p_type == PT_PHDR) phdr_addr = ph.p_vaddr;
 		if (ph.p_type == PT_LOAD && ph.p_offset == 0 && !phdr_addr) phdr_addr = ph.p_vaddr + header.e_phoff;
 	}
@@ -1106,6 +1158,35 @@ ProcessBlock* Taskman::Exet(stduint parent, rostr usr_fullpath, char** usr_argv,
 			}
 		}
 	}
+
+	if (interp_d) {
+		FileBlockBridge interp_device(interp_d->d_inode->i_sb->fs, interp_d->d_inode->internal_handler, interp_d->d_inode->i_size, 512);
+		ELF_Header_t interp_header;
+		interp_device.Read(0, &interp_header, sizeof(interp_header), block_buffer);
+		current_pb->main_thread->context.IP = _IMM(interp_header.e_entry); // Override entry point
+
+		for0(i, interp_header.e_phnum) {
+			struct ELF_PHT_t ph;
+			interp_device.Read(interp_header.e_phoff + i * interp_header.e_phentsize, &ph, sizeof(ph), block_buffer);
+			if (ph.p_type == PT_LOAD && ph.p_memsz) {
+				bool executable = !!(ph.p_flags & PF_X);
+				bool writable = !!(ph.p_flags & PF_W);
+				bool user = (current_pb->ring != RING_M);
+				
+				if (!_CreateELF_Carry((char*)ph.p_vaddr, ph.p_memsz, &interp_device, ph.p_offset, ph.p_filesz, current_pb->paging, block_buffer, executable, writable, user)) {
+					plogerro("%s: interp segment load failed", __FUNCIDEN__);
+					delete[] block_buffer;
+					return nullptr;
+				}
+				if (load_slice_p < numsof(current_pb->load_slices)) {
+					current_pb->load_slices[load_slice_p].address = ph.p_vaddr;
+					current_pb->load_slices[load_slice_p].length = ph.p_memsz;
+					load_slice_p++;
+				}
+			}
+		}
+	}
+
 	delete[] block_buffer;
 
 	if (max_seg_end > 0) {

@@ -65,15 +65,10 @@ namespace {
 
 	constexpr stduint E1000_RX_DESC_COUNT = 32;
 	constexpr stduint E1000_TX_DESC_COUNT = 16;
+	constexpr stduint E1000_TX_QUEUE_COUNT = 16;
 	constexpr stduint E1000_FRAME_BUF_SIZE = 2048;
 	constexpr stduint E1000_ETHERNET_MIN_FRAME = 60;
 	constexpr stduint E1000_ETHERNET_MAX_FRAME = 1518;
-	constexpr stduint E1000_TX_WAIT_SPINS = 100000;
-	constexpr stduint E1000_IDLE_REST_MIN = 1;
-	constexpr stduint E1000_IDLE_REST_STEP1 = 2;
-	constexpr stduint E1000_IDLE_REST_STEP2 = 5;
-	constexpr stduint E1000_IDLE_REST_STEP3 = 10;
-	constexpr stduint E1000_IDLE_REST_MAX = 20;
 	constexpr uint32 E1000_IRQ_MASK =
 		E1000_ICR_TXDW | E1000_ICR_TXQE | E1000_ICR_LSC |
 		E1000_ICR_RXSEQ | E1000_ICR_RXDMT0 | E1000_ICR_RXO | E1000_ICR_RXT0;
@@ -95,6 +90,11 @@ namespace {
 		uint8 status;
 		uint8 css;
 		uint16 special;
+	};
+
+	struct E1000TxQueuedFrame {
+		uint16 length = 0;
+		uint8 data[E1000_ETHERNET_MAX_FRAME]{};
 	};
 
 	struct DmaRegion {
@@ -119,6 +119,10 @@ namespace {
 		uint8 mac[6]{};
 		uint32 rx_index = 0;
 		uint32 tx_index = 0;
+		E1000TxQueuedFrame tx_queue[E1000_TX_QUEUE_COUNT]{};
+		stduint tx_queue_head = 0;
+		stduint tx_queue_tail = 0;
+		stduint tx_queue_count = 0;
 		bool rings_ready = false;
 		bool link_up = false;
 
@@ -167,6 +171,7 @@ namespace {
 		uint32 service_interrupt() {
 			const uint32 icr = read_reg(E1000Reg::ICR);
 			if (icr & E1000_ICR_LSC) update_link_state();
+			if (icr & (E1000_ICR_TXDW | E1000_ICR_TXQE)) flush_tx_queue();
 			return icr;
 		}
 
@@ -202,6 +207,9 @@ namespace {
 			write_reg(E1000Reg::TDH, 0);
 			write_reg(E1000Reg::TDT, 0);
 			tx_index = 0;
+			tx_queue_head = 0;
+			tx_queue_tail = 0;
+			tx_queue_count = 0;
 			write_reg(E1000Reg::TIPG, 0x0060200Au);
 			write_reg(E1000Reg::TCTL, E1000_TCTL_EN | E1000_TCTL_PSP | (0x10u << 4) | (0x40u << 12));
 			return true;
@@ -214,10 +222,9 @@ namespace {
 			return true;
 		}
 
-		stdsint send_frame(const void* data, stduint count) {
-			if (!rings_ready || !data || !count || count > E1000_ETHERNET_MAX_FRAME) return -1;
+		bool submit_frame(const void* data, stduint count) {
 			auto& desc = tx_desc[tx_index];
-			if ((desc.status & E1000_TXD_STAT_DD) == 0) return 0;
+			if ((desc.status & E1000_TXD_STAT_DD) == 0) return false;
 			const stduint wire_len = maxof(count, E1000_ETHERNET_MIN_FRAME);
 			uint8* buffer = tx_buffers + tx_index * E1000_FRAME_BUF_SIZE;
 			MemSet(buffer, 0, wire_len);
@@ -229,16 +236,39 @@ namespace {
 			desc.css = 0;
 			desc.special = 0;
 			_ASM volatile ("mfence":::"memory");
-			const uint32 used_index = tx_index;
 			tx_index = (tx_index + 1) % E1000_TX_DESC_COUNT;
 			write_reg(E1000Reg::TDT, tx_index);
-			for0(i, E1000_TX_WAIT_SPINS) {
-				if (tx_desc[used_index].status & E1000_TXD_STAT_DD) {
-					update_link_state();
-					return stdsint(count);
-				}
+			return true;
+		}
+
+		bool enqueue_frame(const void* data, stduint count) {
+			if (tx_queue_count >= E1000_TX_QUEUE_COUNT) return false;
+			auto& queued = tx_queue[tx_queue_tail];
+			queued.length = uint16(count);
+			MemCopyN(queued.data, data, count);
+			tx_queue_tail = (tx_queue_tail + 1) % E1000_TX_QUEUE_COUNT;
+			tx_queue_count++;
+			return true;
+		}
+
+		stduint flush_tx_queue() {
+			stduint flushed = 0;
+			while (tx_queue_count) {
+				auto& queued = tx_queue[tx_queue_head];
+				if (!submit_frame(queued.data, queued.length)) break;
+				queued.length = 0;
+				tx_queue_head = (tx_queue_head + 1) % E1000_TX_QUEUE_COUNT;
+				tx_queue_count--;
+				flushed++;
 			}
-			return 0;
+			return flushed;
+		}
+
+		stdsint send_frame(const void* data, stduint count) {
+			if (!rings_ready || !data || !count || count > E1000_ETHERNET_MAX_FRAME) return -1;
+			(void)flush_tx_queue();
+			if (!tx_queue_count && submit_frame(data, count)) return stdsint(count);
+			return enqueue_frame(data, count) ? stdsint(count) : 0;
 		}
 
 		void release_rx_descriptor(uint32 index) {
@@ -395,16 +425,11 @@ namespace {
 		return true;
 	}
 
-	bool ProcessControlMessages() {
-		bool handled = false;
-		while (syscall(syscall_t::TMSG)) {
-			FMT_NetworkMsg_DRV_FRAME frame = {};
-			CommMsg recv_msg = {};
-			recv_msg.data.address = _IMM(&frame);
-			recv_msg.data.length = sizeof(frame);
-			if (Powercall::SysComm(COMM_RECV, ANYPROC, &recv_msg)) break;
+	bool ProcessReceivedEvent(CommMsg& recv_msg, FMT_NetworkMsg_DRV_FRAME& frame) {
+		// Hardware interrupts carry no payload and only wake the driver to drain ICR and RX.
+		if (!recv_msg.data.address && !recv_msg.data.length) return true;
 
-			switch (NetworkMsg(recv_msg.type)) {
+		switch (NetworkMsg(recv_msg.type)) {
 			case NetworkMsg::DRV_SEND:
 				frame.status = g_e1000.send_frame(frame.data, frame.length);
 				break;
@@ -415,13 +440,29 @@ namespace {
 			default:
 				frame.status = -1;
 				break;
-			}
+		}
 
-			CommMsg reply_msg = {};
-			reply_msg.data.address = _IMM(&frame);
-			reply_msg.data.length = sizeof(frame);
-			reply_msg.type = recv_msg.type;
-			Powercall::SysComm(COMM_SEND_ASYNC, recv_msg.src, &reply_msg);
+		CommMsg reply_msg = {};
+		reply_msg.data.address = _IMM(&frame);
+		reply_msg.data.length = sizeof(frame);
+		reply_msg.type = recv_msg.type;
+		Powercall::SysComm(COMM_SEND_ASYNC, recv_msg.src, &reply_msg);
+		return true;
+	}
+
+	bool ReceiveEvent() {
+		FMT_NetworkMsg_DRV_FRAME frame = {};
+		CommMsg recv_msg = {};
+		recv_msg.data.address = _IMM(&frame);
+		recv_msg.data.length = sizeof(frame);
+		if (Powercall::SysComm(COMM_RECV, ANYPROC, &recv_msg)) return false;
+		return ProcessReceivedEvent(recv_msg, frame);
+	}
+
+	bool ProcessControlMessages() {
+		bool handled = false;
+		while (syscall(syscall_t::TMSG)) {
+			if (!ReceiveEvent()) break;
 			handled = true;
 		}
 		return handled;
@@ -446,13 +487,6 @@ namespace {
 		}
 	}
 
-	stduint NextIdleRest(stduint current) {
-		if (current < E1000_IDLE_REST_STEP1) return E1000_IDLE_REST_STEP1;
-		if (current < E1000_IDLE_REST_STEP2) return E1000_IDLE_REST_STEP2;
-		if (current < E1000_IDLE_REST_STEP3) return E1000_IDLE_REST_STEP3;
-		return E1000_IDLE_REST_MAX;
-	}
-
 }
 
 int main(int argc, char** argv) {
@@ -465,24 +499,18 @@ int main(int argc, char** argv) {
 	if (Powercall::DevPublish(g_e1000.dev_handle, PwcallDevicePublishCommand::Started) != 0) return -1;
 	g_e1000.enable_interrupts();
 	(void)PushRxFrames();
-	stduint idle_rest = E1000_IDLE_REST_MIN;
 
 	for (;;) {
 		bool active = ProcessControlMessages();
 		if (g_e1000.service_interrupt()) active = true;
 		const stdsint pushed = PushRxFrames();
 		if (pushed < 0) {
-			idle_rest = E1000_IDLE_REST_MIN;
-			syscall(syscall_t::REST, 1, idle_rest);
+			syscall(syscall_t::REST, 1, 1);
 			continue;
 		}
 		if (pushed > 0) active = true;
-		if (active) {
-			idle_rest = E1000_IDLE_REST_MIN;
-			continue;
-		}
-		syscall(syscall_t::REST, 1, idle_rest);
-		idle_rest = NextIdleRest(idle_rest);
+		if (active) continue;
+		if (!ReceiveEvent()) return -1;
 	}
 }
 

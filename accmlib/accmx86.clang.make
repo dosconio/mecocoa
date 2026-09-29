@@ -16,6 +16,7 @@ SYSROOT_TRIPLE=i686-mcca
 SYSROOT_USR_LIB=accmlib/sysroot/usr/lib/$(SYSROOT_TRIPLE)
 SYSROOT_CRT0=$(SYSROOT_USR_LIB)/crt0.o
 SYSROOT_LIBC=$(SYSROOT_USR_LIB)/libc.a
+SYSROOT_LIBC_SO=$(SYSROOT_USR_LIB)/libc.so
 asmfile=$(filter-out $(CRT0_SRC),$(wildcard $(ulibpath)/asm/x86/*.asm) $(wildcard $(ulibpath)/asm/x86/**/*.asm) $(wildcard accmlib/arch/x86/*.asm))
 
 cplpref=_cc_
@@ -30,21 +31,31 @@ cppfile=$(wildcard $(ulibpath)/cpp/*.cpp) \
 
 dest_obj=$(uobjpath)/accm-$(arch)
 COMWAN = -Wno-incompatible-library-redeclaration -Wno-invalid-constexpr -Wno-empty-body -Wno-unknown-warning-option
-COMFLG = -m32 -static -fno-builtin -nostdlib -fno-stack-protector -O2 -fno-strict-aliasing $(COMWAN)
-CFLAGS=$(COMFLG) $(attr)
-XFLAGS=$(CFLAGS) -std=c++2a -fno-exceptions -fno-unwind-tables -fno-rtti -Wno-volatile
+COMFLG = -m32 -fno-builtin -nostdlib -fno-stack-protector -O2 -fno-strict-aliasing $(COMWAN)
+
+COMFLG_STA = $(COMFLG) -static
+CFLAGS_STA=$(COMFLG_STA) $(attr)
+XFLAGS_STA=$(CFLAGS_STA) -std=c++2a -fno-exceptions -fno-unwind-tables -fno-rtti -Wno-volatile
+
+COMFLG_PIC = $(COMFLG) -fPIC
+CFLAGS_PIC=$(COMFLG_PIC) $(attr)
+XFLAGS_PIC=$(CFLAGS_PIC) -std=c++2a -fno-exceptions -fno-unwind-tables -fno-rtti -Wno-volatile
 
 define asm_to_o
 $(dest_obj)/$(asmpref)$(notdir $(1:.asm=.o)): $(1)
+$(dest_obj)/$(asmpref)$(notdir $(1:.asm=.pic.o)): $(1)
 endef
 define gas_to_o
 $(dest_obj)/$(gaspref)$(notdir $(1:.S=.o)): $(1)
+$(dest_obj)/$(gaspref)$(notdir $(1:.S=.pic.o)): $(1)
 endef
 define c_to_o
 $(dest_obj)/$(cplpref)$(notdir $(1:.c=.o)): $(1)
+$(dest_obj)/$(cplpref)$(notdir $(1:.c=.pic.o)): $(1)
 endef
 define cpp_to_o
 $(dest_obj)/$(cpppref)$(notdir $(1:.cpp=.o)): $(1)
+$(dest_obj)/$(cpppref)$(notdir $(1:.cpp=.pic.o)): $(1)
 endef
 
 asmobjs=$(addprefix $(dest_obj)/$(asmpref),$(patsubst %asm,%o,$(notdir $(asmfile))))
@@ -52,13 +63,18 @@ gasobjs=$(addprefix $(dest_obj)/$(gaspref),$(patsubst %S,%o,$(notdir $(gasfile))
 cppobjs=$(addprefix $(dest_obj)/$(cpppref),$(patsubst %cpp,%o,$(notdir $(cppfile))))
 cplobjs=$(addprefix $(dest_obj)/$(cplpref),$(patsubst %c,%o,$(notdir $(cplfile))))
 
+asmobjs_pic=$(asmobjs:.o=.pic.o)
+gasobjs_pic=$(gasobjs:.o=.pic.o)
+cppobjs_pic=$(cppobjs:.o=.pic.o)
+cplobjs_pic=$(cplobjs:.o=.pic.o)
+
 .PHONY: all clean
-all: $(SYSROOT_CRT0) $(SYSROOT_LIBC)
+all: $(SYSROOT_CRT0) $(SYSROOT_LIBC) $(SYSROOT_LIBC_SO)
 
 $(dest_obj):
 	mkdir -p $@
 
-$(CRT0_OBJ) $(asmobjs) $(cplobjs) $(cppobjs): | $(dest_obj)
+$(CRT0_OBJ) $(asmobjs) $(cplobjs) $(cppobjs) $(asmobjs_pic) $(cplobjs_pic) $(cppobjs_pic): | $(dest_obj)
 
 $(SYSROOT_USR_LIB):
 	mkdir -p $@
@@ -80,6 +96,15 @@ $(SYSROOT_LIBC): ${dest_obj}/lib$(arch).a | $(SYSROOT_USR_LIB)
 	@echo "CP $(notdir $@)"
 	@cp $< $@
 
+${dest_obj}/lib$(arch).so: $(asmobjs_pic) $(cplobjs_pic) $(cppobjs_pic)
+	@-rm -f $@
+	@echo "LD $(notdir $@)"
+	@${CC} -shared -m32 -nostdlib -o $@ $^
+
+$(SYSROOT_LIBC_SO): ${dest_obj}/lib$(arch).so | $(SYSROOT_USR_LIB)
+	@echo "CP $(notdir $@)"
+	@cp $< $@
+
 
 $(foreach src,$(asmfile),$(eval $(call asm_to_o,$(src))))
 $(foreach src,$(gasfile),$(eval $(call gas_to_o,$(src))))
@@ -95,10 +120,22 @@ _ae_%.o:
 
 _cc_%.o:
 	@echo CC $(notdir $<)
-	@${CC} ${CFLAGS} -c -o $@ $< -MMD -MF $(patsubst %.o,%.d,$@) -MT $@
+	@${CC} ${CFLAGS_STA} -c -o $@ $< -MMD -MF $(patsubst %.o,%.d,$@) -MT $@
 
 _cx_%.o:
 	@echo CX $(notdir $<)
-	@${CX} ${XFLAGS} -c -o $@ $< -MMD -MF $(patsubst %.o,%.d,$@) -MT $@
+	@${CX} ${XFLAGS_STA} -c -o $@ $< -MMD -MF $(patsubst %.o,%.d,$@) -MT $@
+
+_ae_%.pic.o:
+	@echo AS-PIC $(notdir $<) DYN
+	@aasm -f elf -D_DYNLINK_ -o $@ $< -MD $(patsubst %.o,%.d,$@)
+
+_cc_%.pic.o:
+	@echo CC-PIC $(notdir $<) DYN
+	@${CC} ${CFLAGS_PIC} -c -o $@ $< -MMD -MF $(patsubst %.o,%.d,$@) -MT $@
+
+_cx_%.pic.o:
+	@echo CX-PIC $(notdir $<) DYN
+	@${CX} ${XFLAGS_PIC} -c -o $@ $< -MMD -MF $(patsubst %.o,%.d,$@) -MT $@
 
 -include $(dest_obj)/*.d
