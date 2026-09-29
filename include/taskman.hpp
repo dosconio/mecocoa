@@ -8,6 +8,7 @@
 #include <c/system/paging.h>
 #include <cpp/Device/_Timer.hpp>
 #include <cpp/trait/BlockTrait.hpp>
+#include <cpp/queue>
 #include <cpp/vector>
 #include <cpp/atomic>
 
@@ -329,6 +330,12 @@ public:
 	static ProcessBlock* AcquireActiveByPID(stduint pid);
 };
 
+struct DeviceEventQueue {
+	static constexpr stduint Capacity = 8;
+	DeviceEvent storage[Capacity] = {};
+	uni::Queue<DeviceEvent> pending = { storage, Capacity };
+};
+
 class ThreadBlock {
 public:
     alignas(16) NormalTaskContext context;// advanced TSS_t
@@ -407,6 +414,7 @@ public: // _Comment(Syscomm)
 	ThreadBlock* pipe_wait_prev = nullptr;
 	ThreadBlock* pipe_wait_next = nullptr;
 	Dchain async_messages;
+	DeviceEventQueue* device_events = nullptr;
 public:
 	inline stduint getID() const { return tid; }
 public: // _Comment(Signals)
@@ -596,6 +604,10 @@ int msg_recv(ThreadBlock* to, stduint fo, _Comment(vaddr) CommMsg* msg, bool msg
 void msg_cleanup_thread(ThreadBlock* th, bool dying);
 void UnlinkWaitEntry(ThreadBlock* th);
 void rupt_proc(stduint tid, stduint rupt_no);
+bool device_event_prepare(ThreadBlock* thread);
+void device_event_release(ThreadBlock* thread);
+void device_event_proc(stduint tid, const DeviceEvent& event);
+void device_event_cancel(stduint tid, stduint device_handle, uint32 generation);
 
 inline static stduint syssend(stduint to_whom, const void* msgaddr, stduint bytlen, stduint type = 0, bool from_kernel = true)
 {

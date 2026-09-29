@@ -127,15 +127,15 @@ _cx_%.o:
 	@${CX} ${XFLAGS_STA} -c -o $@ $< -MMD -MF $(patsubst %.o,%.d,$@) -MT $@
 
 _ae_%.pic.o:
-	@echo AS-PIC $(notdir $<) DYN
+	@echo AS $(notdir $<) DYN
 	@aasm -f elf -D_DYNLINK_ -o $@ $< -MD $(patsubst %.o,%.d,$@)
 
 _cc_%.pic.o:
-	@echo CC-PIC $(notdir $<) DYN
+	@echo CC $(notdir $<) DYN
 	@${CC} ${CFLAGS_PIC} -c -o $@ $< -MMD -MF $(patsubst %.o,%.d,$@) -MT $@
 
 _cx_%.pic.o:
-	@echo CX-PIC $(notdir $<) DYN
+	@echo CX $(notdir $<) DYN
 	@${CX} ${XFLAGS_PIC} -c -o $@ $< -MMD -MF $(patsubst %.o,%.d,$@) -MT $@
 
 -include $(dest_obj)/*.d

@@ -28,6 +28,8 @@ InterruptControl IC = { _IMM(__Vectors) };
 
 // Unified interrupt handler array
 Handler_t interrupt_handlers[256] = { nullptr };
+using InterruptVectorHandler = void (*)(stduint vector);
+InterruptVectorHandler interrupt_vector_handlers[256] = { nullptr };
 
 #include <c/ISO_IEC_STD/signal.h>
 extern "C" void check_and_deliver_signals(void* context);
@@ -48,7 +50,10 @@ extern "C" void interrupt_dispatcher(HardwareInterruptFrame* frame) {
 		exception_handler(active_frame);
 	}
 	else {
-		if (irq_id < 256 && interrupt_handlers[irq_id]) {
+		if (irq_id < 256 && interrupt_vector_handlers[irq_id]) {
+			interrupt_vector_handlers[irq_id](irq_id);
+		}
+		else if (irq_id < 256 && interrupt_handlers[irq_id]) {
 			interrupt_handlers[irq_id]();
 		}
 	}
@@ -70,7 +75,10 @@ extern "C" void interrupt_dispatcher(HardwareInterruptFrame* frame) {
 
 // Unified interrupt dispatcher called from assembly stubs
 extern "C" void interrupt_dispatcher(stduint irq_id, NormalTaskContext* cxt) {
-	if (irq_id < 256 && interrupt_handlers[irq_id]) {
+	if (irq_id < 256 && interrupt_vector_handlers[irq_id]) {
+		interrupt_vector_handlers[irq_id](irq_id);
+	}
+	else if (irq_id < 256 && interrupt_handlers[irq_id]) {
 		interrupt_handlers[irq_id]();
 	}
 	
@@ -87,6 +95,12 @@ extern "C" void interrupt_dispatcher(stduint irq_id, NormalTaskContext* cxt) {
 extern "C" void register_interrupt_handler(stduint irq_id, Handler_t handler) {
 	if (irq_id < 256) {
 		interrupt_handlers[irq_id] = handler;
+	}
+}
+
+extern "C" void register_interrupt_vector_handler(stduint irq_id, InterruptVectorHandler handler) {
+	if (irq_id < 256) {
+		interrupt_vector_handlers[irq_id] = handler;
 	}
 }
 

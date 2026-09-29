@@ -57,7 +57,127 @@ void _Comment(R0) serv_sysmsg() {
 
 #if 1
 
-#define HARDRUPT 1
+static bool WriteDeviceEventMessage(CommMsg* target, ProcessBlock* process,
+	bool target_in_kernel, const DeviceEvent& event) {
+	if (!target) return false;
+	CommMsg message = {};
+	MccaMemCopyP(
+		&message, nullptr, true,
+		target, process, target_in_kernel,
+		sizeof(message)
+	);
+	if (!message.data.address || message.data.length < sizeof(event)) return false;
+	MccaMemCopyP(
+		(void*)message.data.address, process, target_in_kernel,
+		&event, nullptr, true,
+		sizeof(event)
+	);
+	message.data.length = sizeof(event);
+	message.type = _IMM(KernelMsg::DeviceEvent);
+	message.src = event.device_handle;
+	MccaMemCopyP(
+		target, process, target_in_kernel,
+		&message, nullptr, true,
+		sizeof(message)
+	);
+	return true;
+}
+
+static bool QueueDeviceEvent(ThreadBlock* thread, const DeviceEvent& event) {
+	if (!thread || !thread->device_events) return false;
+	const stduint count = thread->device_events->pending.Count();
+	bool coalesced = false;
+	for0(i, count) {
+		DeviceEvent pending = {};
+		if (!thread->device_events->pending.Dequeue(pending)) return false;
+		if (pending.device_handle != event.device_handle || pending.source != event.source ||
+			pending.generation != event.generation || coalesced) {
+			if (!thread->device_events->pending.Enqueue(pending)) return false;
+			continue;
+		}
+		const uint64 total = uint64(pending.count) + uint64(event.count);
+		pending.count = total > 0xFFFFFFFFu ? 0xFFFFFFFFu : uint32(total);
+		pending.sequence = event.sequence;
+		pending.flags |= DeviceEventFlag_Coalesced;
+		coalesced = true;
+		if (!thread->device_events->pending.Enqueue(pending)) return false;
+	}
+	return coalesced || thread->device_events->pending.Enqueue(event);
+}
+
+bool device_event_prepare(ThreadBlock* thread) {
+	if (!thread) return false;
+	{
+		extern Spinlock comm_lock;
+		SpinlockLocal guard(&comm_lock);
+		if (thread->device_events) return true;
+	}
+	auto* prepared = new DeviceEventQueue;
+	if (!prepared) return false;
+	{
+		extern Spinlock comm_lock;
+		SpinlockLocal guard(&comm_lock);
+		if (!thread->device_events) {
+			thread->device_events = prepared;
+			prepared = nullptr;
+		}
+	}
+	if (prepared) delete prepared;
+	return true;
+}
+
+void device_event_release(ThreadBlock* thread) {
+	if (!thread) return;
+	DeviceEventQueue* events = nullptr;
+	{
+		extern Spinlock comm_lock;
+		SpinlockLocal guard(&comm_lock);
+		events = thread->device_events;
+		thread->device_events = nullptr;
+	}
+	if (events) delete events;
+}
+
+void device_event_proc(stduint tid, const DeviceEvent& event) {
+	auto* thread = Taskman::LocateThread(tid);
+	if (!thread) return;
+	bool do_unblock = false;
+	{
+		extern Spinlock comm_lock;
+		SpinlockLocal guard(&comm_lock);
+		if (!thread->device_events) return;
+		if ((_IMM(thread->block_reason) & _IMM(ThreadBlock::BlockReason::BR_RecvMsg)) &&
+			thread->unsolved_msg &&
+			((stduint)thread->recv_fo_whom == ANYPROC || (stduint)thread->recv_fo_whom == INTRUPT) &&
+			WriteDeviceEventMessage(thread->unsolved_msg, thread->parent_process,
+				thread->unsolved_msg_from_kernel, event)) {
+			thread->unsolved_msg = nullptr;
+			thread->recv_fo_whom = nullptr;
+			do_unblock = true;
+		}
+		else {
+			(void)QueueDeviceEvent(thread, event);
+		}
+	}
+	if (do_unblock) {
+		thread->Unblock(ThreadBlock::BlockReason::BR_RecvMsg);
+	}
+}
+
+void device_event_cancel(stduint tid, stduint device_handle, uint32 generation) {
+	auto* thread = Taskman::LocateThread(tid);
+	if (!thread) return;
+	extern Spinlock comm_lock;
+	SpinlockLocal guard(&comm_lock);
+	if (!thread->device_events) return;
+	const stduint count = thread->device_events->pending.Count();
+	for0(i, count) {
+		DeviceEvent event = {};
+		if (!thread->device_events->pending.Dequeue(event)) break;
+		if (event.device_handle == device_handle && event.generation == generation) continue;
+		(void)thread->device_events->pending.Enqueue(event);
+	}
+}
 
 void rupt_proc(stduint tid, stduint rupt_no)
 {
@@ -73,7 +193,8 @@ void rupt_proc(stduint tid, stduint rupt_no)
 			((stduint)th->recv_fo_whom == ANYPROC || (stduint)th->recv_fo_whom == INTRUPT)) {
 			// ploginfo("INT-MSG: RUPT-PROC");
 			CommMsg tmp_msg = { };
-			tmp_msg.type = HARDRUPT;
+			tmp_msg.type = _IMM(KernelMsg::Interrupt);
+			tmp_msg.src = rupt_no;
 			MccaMemCopyP(
 				th->unsolved_msg, th->parent_process, th->unsolved_msg_from_kernel,
 				&tmp_msg, 0, true,
@@ -425,8 +546,25 @@ int msg_recv(ThreadBlock* to_th, stduint foo, _Comment(vaddr) CommMsg* msg, bool
 
 	{
 		SpinlockLocal guard(&comm_lock);
+		if (to_th->device_events && !to_th->device_events->pending.isEmpty() &&
+			(foo == ANYPROC || foo == INTRUPT)) {
+			DeviceEvent event = {};
+			if (!to_th->device_events->pending.Dequeue(event)) return -1;
+			if (!WriteDeviceEventMessage(msg, to_th->parent_process, msg_in_kernel, event)) {
+				DeviceEvent remaining[DeviceEventQueue::Capacity] = {};
+				stduint remaining_count = 0;
+				while (remaining_count < DeviceEventQueue::Capacity &&
+					to_th->device_events->pending.Dequeue(remaining[remaining_count])) {
+					remaining_count++;
+				}
+				(void)to_th->device_events->pending.Enqueue(event);
+				for0(i, remaining_count) (void)to_th->device_events->pending.Enqueue(remaining[i]);
+				return -1;
+			}
+			return 0;
+		}
 		_Comment(Proc - Interrupt) if ((to_th->wait_rupt_no) && (foo == ANYPROC || foo == INTRUPT)) {
-			CommMsg tmp_msg = { {0, 0}, HARDRUPT, to_th->wait_rupt_no };
+			CommMsg tmp_msg = { {0, 0}, _IMM(KernelMsg::Interrupt), to_th->wait_rupt_no };
 			MccaMemCopyP(
 				msg, to_th->parent_process, msg_in_kernel,
 				&tmp_msg, 0, true,

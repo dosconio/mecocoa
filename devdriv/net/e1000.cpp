@@ -9,6 +9,7 @@
 #if defined(_ACCM) && ((_ACCM & 0xFF00) == 0x8600)
 
 namespace {
+	static_assert(sizeof(DeviceEvent) <= sizeof(FMT_NetworkMsg_DRV_FRAME));
 	constexpr uint16 E1000VendorId = 0x8086u;
 	constexpr uint16 E1000DeviceIds[] = {
 		0x100Eu,
@@ -359,7 +360,7 @@ namespace {
 	stduint OpenE1000() {
 		for0(i, numsof(E1000DeviceIds)) {
 			const stduint cls = (stduint(E1000VendorId) << 16) | E1000DeviceIds[i];
-			const stdsint opened = Powercall::DevOpen(0, cls, 0);
+			const stdsint opened = Powercall::DevOpen(0, cls, _IMM(PwcallDeviceOpenFlag::Interrupt));
 			if (opened > 0) return stduint(opened);
 		}
 		return 0;
@@ -426,8 +427,15 @@ namespace {
 	}
 
 	bool ProcessReceivedEvent(CommMsg& recv_msg, FMT_NetworkMsg_DRV_FRAME& frame) {
-		// Hardware interrupts carry no payload and only wake the driver to drain ICR and RX.
-		if (!recv_msg.data.address && !recv_msg.data.length) return true;
+		if (recv_msg.type == _IMM(KernelMsg::DeviceEvent)) {
+			if (recv_msg.data.length < sizeof(DeviceEvent)) return false;
+			const auto& event = *reinterpret_cast<const DeviceEvent*>(&frame);
+			if (event.version != DeviceEventProtocolVersion ||
+				DeviceEventKind(event.kind) != DeviceEventKind::Interrupt ||
+				event.device_handle != g_e1000.dev_handle) return false;
+			(void)g_e1000.service_interrupt();
+			return Powercall::DevAck(g_e1000.dev_handle, stduint(event.sequence), event.generation) == 0;
+		}
 
 		switch (NetworkMsg(recv_msg.type)) {
 			case NetworkMsg::DRV_SEND:
@@ -502,7 +510,6 @@ int main(int argc, char** argv) {
 
 	for (;;) {
 		bool active = ProcessControlMessages();
-		if (g_e1000.service_interrupt()) active = true;
 		const stdsint pushed = PushRxFrames();
 		if (pushed < 0) {
 			syscall(syscall_t::REST, 1, 1);

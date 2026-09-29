@@ -90,7 +90,7 @@ enum
 	POWERCALL_DEV_IO_READ,// (dev_handle, args, 0) -> status
 	POWERCALL_DEV_IO_WRITE,// (dev_handle, args, 0) -> 0
 	POWERCALL_DEV_WAIT,// (dev_handle, timeout, flags) -> event
-	POWERCALL_DEV_ACK,// (dev_handle, event, flags) -> 0
+	POWERCALL_DEV_ACK,// (dev_handle, event, generation) -> 0
 	POWERCALL_DEV_DMA_ALLOC,// (dev_handle, size, flags) -> dma_handle
 	POWERCALL_DEV_DMA_FREE,// (dma_handle, 0, 0) -> 0
 	POWERCALL_DEV_DMA_MAP,// (dma_handle, info, flags) -> 0

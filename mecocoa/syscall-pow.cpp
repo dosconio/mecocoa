@@ -18,7 +18,8 @@ bool IsPwcall(syscall_t callid) {
 static constexpr stduint PwcallDeviceHandleBase = 1;
 static constexpr stduint PwcallDmaHandleBase = 0x10000;
 #if (_MCCA & 0xFF00) == 0x8600
-static constexpr uint8 PwcallNetIrqVector = 0x78;
+static constexpr uint8 PwcallPciIrqVector = 0x78;
+extern "C" void register_interrupt_vector_handler(stduint irq_id, void (*handler)(stduint));
 #endif
 
 namespace {
@@ -46,15 +47,41 @@ namespace {
 		stduint mapped_addr = 0;
 	};
 
+	#if (_MCCA & 0xFF00) == 0x8600
+	struct PwcallDeviceIrqBinding {
+		DeviceNode* node = nullptr;
+		stduint owner_pid = 0;
+		stduint owner_tid = 0;
+		stduint device_handle = 0;
+		uint32 resource_index = 0;
+		uint32 generation = 0;
+		uint32 pending_count = 0;
+		uint64 sequence = 0;
+		uint8 vector = 0;
+		uint8 ioapic_line = 0xFF;
+		bool level_triggered = false;
+		bool active = false;
+		bool awaiting_ack = false;
+	};
+	#endif
+
 	dchain_t power_handle_table = {};
 	alignas(Spinlock) byte power_handle_lock_raw[sizeof(Spinlock)] = {};
 	#if (_MCCA & 0xFF00) == 0x8600
-	stduint pwcall_net_irq_tid = 0;
+	PwcallDeviceIrqBinding pwcall_irq_bindings[256] = {};
+	alignas(Spinlock) byte pwcall_irq_lock_raw[sizeof(Spinlock)] = {};
+	uint32 pwcall_irq_generation = 0;
 	#endif
 
 	static inline Spinlock* PwcallHandleLock() {
 		return reinterpret_cast<Spinlock*>(power_handle_lock_raw);
 	}
+
+	#if (_MCCA & 0xFF00) == 0x8600
+	static inline Spinlock* PwcallIrqLock() {
+		return reinterpret_cast<Spinlock*>(pwcall_irq_lock_raw);
+	}
+	#endif
 
 	static inline void EnsurePwcallHandleTableInitialized() {
 		if (!power_handle_table.func_free) {
@@ -112,18 +139,209 @@ namespace {
 }
 
 #if (_MCCA & 0xFF00) == 0x8600
-static bool PwcallIsE1000Node(const DeviceNode* node) {
-	if (!node || DeviceNodeType(node->fields.node_type) != DeviceNodeType::PciDevice) return false;
-	if (node->fields.vendor_id != 0x8086u) return false;
-	switch (node->fields.device_id) {
-	case 0x100Eu:
-	case 0x100Fu:
-	case 0x1010u:
-	case 0x10D3u:
-		return true;
-	default:
-		return false;
+static uint8 PwcallLegacyVectorToLine(uint8 vector) {
+	if (vector >= IRQ_PIT && vector < IRQ_PIT + 8) return vector - IRQ_PIT;
+	if (vector >= IRQ_RTC && vector < IRQ_RTC + 8) return uint8(8 + vector - IRQ_RTC);
+	return 0xFF;
+}
+
+static void PwcallSetIoApicMask(const PwcallDeviceIrqBinding& binding, bool masked) {
+	if (binding.ioapic_line >= 24 || IC.getType() == 0) return;
+	const byte index = byte(0x10 + binding.ioapic_line * 2);
+	uint64 route = IC.IO_Read64(index);
+	if (masked) route |= uint64(1) << 16;
+	else route &= ~(uint64(1) << 16);
+	IC.IO_Writ64(index, route);
+}
+
+static DeviceEvent PwcallMakeDeviceInterruptEvent(const PwcallDeviceIrqBinding& binding,
+	uint32 count, uint16 extra_flags = DeviceEventFlag_None) {
+	DeviceEvent event = {};
+	event.kind = _IMM(DeviceEventKind::Interrupt);
+	event.flags = DeviceEventFlag_NeedsAck | extra_flags;
+	event.device_handle = uint32(binding.device_handle);
+	event.source = binding.resource_index;
+	event.count = count;
+	event.generation = binding.generation;
+	event.sequence = binding.sequence;
+	return event;
+}
+
+static void PwcallHandleDeviceInterrupt(stduint vector) {
+	DeviceEvent event = {};
+	stduint owner_tid = 0;
+	bool deliver = false;
+	{
+		SpinlockLocal guard(PwcallIrqLock());
+		if (vector < numsof(pwcall_irq_bindings)) {
+			auto& binding = pwcall_irq_bindings[vector];
+			if (binding.active) {
+				if (binding.level_triggered) PwcallSetIoApicMask(binding, true);
+				if (binding.awaiting_ack) {
+					if (binding.pending_count != 0xFFFFFFFFu) binding.pending_count++;
+				}
+				else {
+					binding.awaiting_ack = true;
+					binding.sequence++;
+					event = PwcallMakeDeviceInterruptEvent(binding, 1);
+					owner_tid = binding.owner_tid;
+					deliver = true;
+				}
+			}
+		}
 	}
+	if (deliver) device_event_proc(owner_tid, event);
+	IC.SendEOI(vector);
+}
+
+static bool PwcallBindDeviceInterrupt(ProcessBlock* process, stduint device_handle,
+	DeviceNode* node, stduint owner_tid) {
+	if (!process || !device_handle || !node || !owner_tid) return false;
+	const auto* irq = Devsman::FindResource(node, DeviceResourceType::IrqLine, 0);
+	if (!irq) return false;
+	const bool pci = DeviceNodeType(node->fields.node_type) == DeviceNodeType::PciDevice;
+	const uint8 vector = pci ? PwcallPciIrqVector : uint8(irq->start);
+	const uint8 line = pci ? uint8(irq->start) : PwcallLegacyVectorToLine(vector);
+	if (vector < 0x20 || line >= 24 || IC.getType() == 0) return false;
+
+	if (pci) {
+		#if _MCCA == 0x8664
+		IC[vector].setModeRupt(mglb(Handint_E1000_Entry), SegCo64);
+		#else
+		IC[vector].setRange(mglb(Handint_E1000_Entry), SegCo32);
+		#endif
+	}
+
+	uint32 generation = 0;
+	{
+		SpinlockLocal guard(PwcallIrqLock());
+		stduint owner_binding_count = 0;
+		for0(i, numsof(pwcall_irq_bindings)) {
+			const auto& active = pwcall_irq_bindings[i];
+			if (active.active && active.owner_tid == owner_tid) owner_binding_count++;
+		}
+		auto& binding = pwcall_irq_bindings[vector];
+		if (binding.active &&
+			(binding.owner_pid != process->pid || binding.device_handle != device_handle)) return false;
+		if (!binding.active && owner_binding_count >= DeviceEventQueue::Capacity) return false;
+
+		binding = {};
+		binding.node = node;
+		binding.owner_pid = process->pid;
+		binding.owner_tid = owner_tid;
+		binding.device_handle = device_handle;
+		binding.resource_index = irq->index;
+		binding.generation = ++pwcall_irq_generation;
+		if (!binding.generation) binding.generation = ++pwcall_irq_generation;
+		generation = binding.generation;
+		binding.vector = vector;
+		binding.ioapic_line = line;
+		binding.level_triggered = (irq->flags & DeviceResourceFlag_IrqLevel) != 0;
+		binding.active = true;
+
+		const byte route_index = byte(0x10 + line * 2);
+		uint64 route = IC.IO_Read64(route_index);
+		route &= ~uint64(0xFFu | (1u << 13) | (1u << 15));
+		route |= vector;
+		route |= uint64(1) << 16;
+		if (irq->flags & DeviceResourceFlag_IrqActiveLow) route |= uint64(1) << 13;
+		if (irq->flags & DeviceResourceFlag_IrqLevel) route |= uint64(1) << 15;
+		IC.IO_Writ64(route_index, route);
+	}
+	register_interrupt_vector_handler(vector, PwcallHandleDeviceInterrupt);
+	{
+		SpinlockLocal guard(PwcallIrqLock());
+		auto& binding = pwcall_irq_bindings[vector];
+		if (!binding.active || binding.generation != generation) return false;
+		PwcallSetIoApicMask(binding, false);
+	}
+	return true;
+}
+
+static void PwcallUnbindDeviceInterrupt(stduint owner_pid, stduint device_handle) {
+	struct PendingCancel {
+		stduint owner_tid;
+		uint32 generation;
+	};
+	PendingCancel cancels[DeviceEventQueue::Capacity] = {};
+	stduint cancel_count = 0;
+	{
+		SpinlockLocal guard(PwcallIrqLock());
+		for0(i, numsof(pwcall_irq_bindings)) {
+			auto& binding = pwcall_irq_bindings[i];
+			if (!binding.active || binding.owner_pid != owner_pid ||
+				binding.device_handle != device_handle) continue;
+			PwcallSetIoApicMask(binding, true);
+			if (cancel_count < numsof(cancels)) {
+				cancels[cancel_count++] = { binding.owner_tid, binding.generation };
+			}
+			binding = {};
+		}
+	}
+	for0(i, cancel_count) device_event_cancel(cancels[i].owner_tid, device_handle, cancels[i].generation);
+}
+
+static void PwcallUnbindProcessInterrupts(stduint owner_pid) {
+	struct PendingCancel {
+		stduint owner_tid;
+		stduint device_handle;
+		uint32 generation;
+	};
+	PendingCancel cancels[DeviceEventQueue::Capacity] = {};
+	stduint cancel_count = 0;
+	{
+		SpinlockLocal guard(PwcallIrqLock());
+		for0(i, numsof(pwcall_irq_bindings)) {
+			auto& binding = pwcall_irq_bindings[i];
+			if (!binding.active || binding.owner_pid != owner_pid) continue;
+			PwcallSetIoApicMask(binding, true);
+			if (cancel_count < numsof(cancels)) {
+				cancels[cancel_count++] = {
+					binding.owner_tid, binding.device_handle, binding.generation
+				};
+			}
+			binding = {};
+		}
+	}
+	for0(i, cancel_count) {
+		device_event_cancel(cancels[i].owner_tid, cancels[i].device_handle, cancels[i].generation);
+	}
+}
+
+static stdsint PwcallAckDeviceInterrupt(ProcessBlock* process, stduint device_handle,
+	uint64 sequence, uint32 generation) {
+	if (!process || !device_handle) return -1;
+	DeviceEvent event = {};
+	stduint owner_tid = 0;
+	bool deliver = false;
+	{
+		SpinlockLocal guard(PwcallIrqLock());
+		PwcallDeviceIrqBinding* found = nullptr;
+		for0(i, numsof(pwcall_irq_bindings)) {
+			auto& binding = pwcall_irq_bindings[i];
+			if (binding.active && binding.owner_pid == process->pid &&
+				binding.device_handle == device_handle) {
+				found = &binding;
+				break;
+			}
+		}
+		if (!found || !found->awaiting_ack || found->generation != generation ||
+			found->sequence != sequence) return -1;
+		if (found->pending_count) {
+			const uint32 count = found->pending_count;
+			found->pending_count = 0;
+			found->sequence++;
+			event = PwcallMakeDeviceInterruptEvent(*found, count, DeviceEventFlag_Coalesced);
+			owner_tid = found->owner_tid;
+			deliver = true;
+		}
+		else {
+			found->awaiting_ack = false;
+			if (found->level_triggered) PwcallSetIoApicMask(*found, false);
+		}
+	}
+	if (deliver) device_event_proc(owner_tid, event);
+	return 0;
 }
 
 static void PwcallEnablePciDeviceAccess(DeviceNode* node) {
@@ -146,33 +364,21 @@ static void PwcallEnablePciDeviceAccess(DeviceNode* node) {
 	}
 	uni::PCI::write_config_register(dev, 0x04, cmd);
 }
+#endif
 
-extern "C" void Handint_E1000();
-
-static bool PwcallRouteNetInterrupt(DeviceNode* node, stduint tid) {
-	if (!PwcallIsE1000Node(node) || !tid) return false;
-	const auto* irq = Devsman::FindResource(node, DeviceResourceType::IrqLine, 0);
-	if (!irq) return false;
-	const uint8 line = uint8(irq->start);
-	if (line >= 24 || IC.getType() == 0) return false;
-	#if _MCCA == 0x8664
-	IC[PwcallNetIrqVector].setModeRupt(mglb(Handint_E1000_Entry), SegCo64);
+void CleanupPwcallThreadInterrupts(stduint tid) {
+	#if (_MCCA & 0xFF00) == 0x8600
+	SpinlockLocal guard(PwcallIrqLock());
+	for0(i, numsof(pwcall_irq_bindings)) {
+		auto& binding = pwcall_irq_bindings[i];
+		if (!binding.active || binding.owner_tid != tid) continue;
+		PwcallSetIoApicMask(binding, true);
+		binding = {};
+	}
 	#else
-	IC[PwcallNetIrqVector].setRange(mglb(Handint_E1000_Entry), SegCo32);
+	(void)tid;
 	#endif
-	register_interrupt_handler(PwcallNetIrqVector, Handint_E1000);
-	IC.IO_Writ64(0x10 + line * 2, PwcallNetIrqVector);
-	pwcall_net_irq_tid = tid;
-	return true;
 }
-#endif
-
-#if (_MCCA & 0xFF00) == 0x8600
-extern "C" void Handint_E1000() {
-	if (pwcall_net_irq_tid) rupt_proc(pwcall_net_irq_tid, PwcallNetIrqVector);
-	IC.SendEOI(PwcallNetIrqVector);
-}
-#endif
 
 static bool IsDeviceNodeReachable(DeviceNode* node, DeviceNode* target) {
 	for (auto* crt = node; crt; crt = reinterpret_cast<DeviceNode*>(crt->link.next)) {
@@ -292,8 +498,21 @@ static DeviceNode* ResolvePwcallDeviceHandle(ProcessBlock* pb, stduint dev_handl
 	return slot ? slot->entry.node : nullptr;
 }
 
+static uint32 ResolvePwcallDeviceHandleFlags(ProcessBlock* pb, stduint dev_handle) {
+	if (!pb || dev_handle < PwcallDeviceHandleBase) return 0;
+	SpinlockLocal guard(PwcallHandleLock());
+	auto* owner = FindPwcallProcessHandles(pb->pid);
+	auto* node = FindPwcallHandleSlotNodeByHandle(owner, dev_handle);
+	if (!node) return 0;
+	auto* slot = reinterpret_cast<PwcallHandleSlot*>(node->offs);
+	return slot ? slot->entry.flags : 0;
+}
+
 static bool ClosePwcallDeviceHandle(ProcessBlock* pb, stduint dev_handle) {
 	if (!pb || dev_handle < PwcallDeviceHandleBase) return false;
+	#if (_MCCA & 0xFF00) == 0x8600
+	PwcallUnbindDeviceInterrupt(pb->pid, dev_handle);
+	#endif
 	SpinlockLocal guard(PwcallHandleLock());
 	auto* owner = FindPwcallProcessHandles(pb->pid);
 	if (!owner) return false;
@@ -696,6 +915,9 @@ static stdsint HandlePwcallDeviceIo(ProcessBlock* pb, DeviceNode* node, stduint 
 }
 
 void CleanupPwcallProcessHandles(stduint pid) {
+	#if (_MCCA & 0xFF00) == 0x8600
+	PwcallUnbindProcessInterrupts(pid);
+	#endif
 	SpinlockLocal guard(PwcallHandleLock());
 	EnsurePwcallHandleTableInitialized();
 	for (auto* crt = power_handle_table.root_node; crt; ) {
@@ -726,7 +948,15 @@ stdsint HandlePwcall(syscall_t callid, stduint p1, stduint p2, stduint p3) {
 		PwcallEnablePciDeviceAccess(node);
 		#endif
 		const stduint handle = AllocPwcallDeviceHandle(pb, node, uint32(p3));
-		return handle ? (stdsint)handle : -1;
+		if (!handle) return -1;
+		#if (_MCCA & 0xFF00) == 0x8600
+		if ((uint32(p3) & _IMM(PwcallDeviceOpenFlag::Interrupt)) &&
+			!device_event_prepare(Taskman::CurrentTB())) {
+			(void)ClosePwcallDeviceHandle(pb, handle);
+			return -1;
+		}
+		#endif
+		return (stdsint)handle;
 	}
 	case syscall_t::POWERCALL_DEV_CLOSE:
 		return ClosePwcallDeviceHandle(pb, p1) ? 0 : -1;
@@ -785,8 +1015,13 @@ stdsint HandlePwcall(syscall_t callid, stduint p1, stduint p2, stduint p3) {
 	case syscall_t::POWERCALL_DEV_READ:
 	case syscall_t::POWERCALL_DEV_WRITE:
 	case syscall_t::POWERCALL_DEV_WAIT:
-	case syscall_t::POWERCALL_DEV_ACK:
 		return -1;
+	case syscall_t::POWERCALL_DEV_ACK:
+		#if (_MCCA & 0xFF00) == 0x8600
+		return PwcallAckDeviceInterrupt(pb, p1, p2, uint32(p3));
+		#else
+		return -1;
+		#endif
 	case syscall_t::POWERCALL_DEV_DMA_ALLOC:
 		return HandlePwcallDeviceDmaAlloc(pb, p1, p2, p3);
 	case syscall_t::POWERCALL_DEV_DMA_FREE:
@@ -801,7 +1036,9 @@ stdsint HandlePwcall(syscall_t callid, stduint p1, stduint p2, stduint p3) {
 		case PwcallDevicePublishCommand::Started:
 			if (!node->fields.binding.driver_name) return -1;
 			#if (_MCCA & 0xFF00) == 0x8600
-			(void)PwcallRouteNetInterrupt(node, Taskman::CurrentTID());
+			if (ResolvePwcallDeviceHandleFlags(pb, p1) & _IMM(PwcallDeviceOpenFlag::Interrupt)) {
+				if (!PwcallBindDeviceInterrupt(pb, p1, node, Taskman::CurrentTID())) return -1;
+			}
 			#endif
 			node->fields.binding.state = static_cast<uint32>(DriverBindingState::Started);
 			node->fields.binding.probe_result = 0;

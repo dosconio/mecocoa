@@ -1000,7 +1000,8 @@ namespace {
 		const uint8 irq_line = read_pci_interrupt_line(dev);
 		const uint8 irq_pin = read_pci_interrupt_pin(dev);
 		if (irq_line == 0xFF || irq_pin == 0) return;
-		append_resource(node, DeviceResourceType::IrqLine, DeviceResourceFlag_None,
+		append_resource(node, DeviceResourceType::IrqLine,
+			DeviceResourceFlag_IrqLevel | DeviceResourceFlag_IrqActiveLow | DeviceResourceFlag_IrqShareable,
 			0, irq_line, 1, irq_pin);
 	}
 

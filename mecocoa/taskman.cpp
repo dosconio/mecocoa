@@ -213,6 +213,7 @@ auto Taskman::AllocateThread() -> ThreadBlock* {
 
 void Taskman::DestroyThread(ThreadBlock* th) {
 	if (!th) return;
+	extern void CleanupPwcallThreadInterrupts(stduint tid);
 	// [HYP-C] Verify thread is not still running on any CPU before freeing its stack
 	while (true) {
 		bool active = (th->state == ThreadBlock::State::Running);
@@ -230,6 +231,8 @@ void Taskman::DestroyThread(ThreadBlock* th) {
 			break;
 		}
 	}
+	CleanupPwcallThreadInterrupts(th->tid);
+	device_event_release(th);
 	ProcessBlock* ppb = th->parent_process;
 	if (ppb) {
 		SpinlockLocal guard(&scheduler_lock);

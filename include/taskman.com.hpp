@@ -71,6 +71,39 @@ enum class NetworkMsg {
 	DRV_RX,// driver pushes one received raw link frame
 };
 
+enum class KernelMsg : stduint {
+	Interrupt = 0x10000,
+	DeviceEvent,
+};
+
+enum class DeviceEventKind : uint16 {
+	None = 0,
+	Interrupt,
+	Removed,
+	Fault,
+	Shutdown,
+};
+
+enum DeviceEventFlag : uint16 {
+	DeviceEventFlag_None = 0,
+	DeviceEventFlag_NeedsAck = 1 << 0,
+	DeviceEventFlag_Coalesced = 1 << 1,
+	DeviceEventFlag_Overflow = 1 << 2,
+};
+
+static constexpr uint32 DeviceEventProtocolVersion = 1;
+
+_PACKED(struct) DeviceEvent {
+	uint32 version = DeviceEventProtocolVersion;
+	uint16 kind = _IMM(DeviceEventKind::None);
+	uint16 flags = DeviceEventFlag_None;
+	uint32 device_handle = 0;
+	uint32 source = 0;
+	uint32 count = 0;
+	uint32 generation = 0;
+	uint64 sequence = 0;
+};
+
 enum NetworkDriverCaps : uint32 {
 	NetworkDriverCap_Poll = 1 << 0,
 	NetworkDriverCap_RxEvent = 1 << 1,
@@ -111,7 +144,7 @@ static constexpr const stduint LIMIT_THREAD_AMSG = 64;
 struct CommMsg {
 	uni::Slice data = {};
 	stduint type = 0;
-	stduint src = 0;// use if type is HARDRUPT
+	stduint src = 0;
 };
 
 #endif

@@ -12,6 +12,11 @@ enum class PwcallDeviceProper : uint32 {
 	GetResource,
 };
 
+enum class PwcallDeviceOpenFlag : uint32 {
+	None = 0,
+	Interrupt = 1 << 0,
+};
+
 enum class PwcallDeviceResourceType : uint16 {
 	None = 0,
 	PciBarMmio,
@@ -22,6 +27,16 @@ enum class PwcallDeviceResourceType : uint16 {
 	UsbLocation,
 	UsbEndpoint,
 	DmaChannel,
+};
+
+enum PwcallDeviceResourceFlag : uint16 {
+	PwcallDeviceResourceFlag_None = 0,
+	PwcallDeviceResourceFlag_Prefetchable = 1 << 0,
+	PwcallDeviceResourceFlag_Bar64 = 1 << 1,
+	PwcallDeviceResourceFlag_SizeEstimated = 1 << 2,
+	PwcallDeviceResourceFlag_IrqLevel = 1 << 3,
+	PwcallDeviceResourceFlag_IrqActiveLow = 1 << 4,
+	PwcallDeviceResourceFlag_IrqShareable = 1 << 5,
 };
 
 struct PwcallDeviceIdentity {
@@ -163,8 +178,8 @@ namespace Powercall {
 		return (stdsint)syscall(syscall_t::POWERCALL_DEV_WAIT, dev_handle, timeout, flags);
 	}
 
-	static inline stdsint DevAck(stduint dev_handle, stduint event, stduint flags = 0) {
-		return (stdsint)syscall(syscall_t::POWERCALL_DEV_ACK, dev_handle, event, flags);
+	static inline stdsint DevAck(stduint dev_handle, stduint event, uint32 generation) {
+		return (stdsint)syscall(syscall_t::POWERCALL_DEV_ACK, dev_handle, event, generation);
 	}
 
 	static inline stdsint DevDmaAlloc(stduint dev_handle, stduint size, stduint flags = 0) {

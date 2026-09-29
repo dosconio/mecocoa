@@ -86,6 +86,9 @@ enum DeviceResourceFlags : uint16 {
 	DeviceResourceFlag_Prefetchable = 1 << 0,
 	DeviceResourceFlag_Bar64 = 1 << 1,
 	DeviceResourceFlag_SizeEstimated = 1 << 2,
+	DeviceResourceFlag_IrqLevel = 1 << 3,
+	DeviceResourceFlag_IrqActiveLow = 1 << 4,
+	DeviceResourceFlag_IrqShareable = 1 << 5,
 };
 
 constexpr uint16 DeviceNodeInlineResourceCapacity = 8;
