@@ -16,6 +16,7 @@ SYSROOT_TRIPLE=i686-mcca
 SYSROOT_USR_LIB=accmlib/sysroot/usr/lib/$(SYSROOT_TRIPLE)
 SYSROOT_CRT0=$(SYSROOT_USR_LIB)/crt0.o
 SYSROOT_LIBC=$(SYSROOT_USR_LIB)/libc.a
+SYSROOT_LIBC_PIC=$(SYSROOT_USR_LIB)/libc-pic.a
 SYSROOT_LIBC_SO=$(SYSROOT_USR_LIB)/libc.so
 asmfile=$(filter-out $(CRT0_SRC),$(wildcard $(ulibpath)/asm/x86/*.asm) $(wildcard $(ulibpath)/asm/x86/**/*.asm) $(wildcard accmlib/arch/x86/*.asm))
 
@@ -69,7 +70,7 @@ cppobjs_pic=$(cppobjs:.o=.pic.o)
 cplobjs_pic=$(cplobjs:.o=.pic.o)
 
 .PHONY: all clean
-all: $(SYSROOT_CRT0) $(SYSROOT_LIBC) $(SYSROOT_LIBC_SO)
+all: $(SYSROOT_CRT0) $(SYSROOT_LIBC) $(SYSROOT_LIBC_PIC) $(SYSROOT_LIBC_SO)
 
 $(dest_obj):
 	mkdir -p $@
@@ -93,6 +94,15 @@ ${dest_obj}/lib$(arch).a: $(asmobjs) $(cplobjs) $(cppobjs)
 	@${AR} -rcs $@ $^
 
 $(SYSROOT_LIBC): ${dest_obj}/lib$(arch).a | $(SYSROOT_USR_LIB)
+	@echo "CP $(notdir $@)"
+	@cp $< $@
+
+${dest_obj}/lib$(arch)-pic.a: $(asmobjs_pic) $(cplobjs_pic) $(cppobjs_pic)
+	@-rm -f $@
+	@echo "AR $(notdir $@)"
+	@${AR} -rcs $@ $^
+
+$(SYSROOT_LIBC_PIC): ${dest_obj}/lib$(arch)-pic.a | $(SYSROOT_USR_LIB)
 	@echo "CP $(notdir $@)"
 	@cp $< $@
 

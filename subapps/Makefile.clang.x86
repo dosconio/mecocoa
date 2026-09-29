@@ -10,6 +10,7 @@ MCCA_CC ?= clang -target i686-unknown-none-elf
 MCCA_CXX ?= clang++ -target i686-unknown-none-elf
 MCCA_CRT0 = $(MCCA_SYSROOT)/usr/lib/$(MCCA_TRIPLE)/crt0.o
 MCCA_LIBC = $(MCCA_SYSROOT)/usr/lib/$(MCCA_TRIPLE)/libc.a
+MCCA_LIBC_PIC = $(MCCA_SYSROOT)/usr/lib/$(MCCA_TRIPLE)/libc-pic.a
 MCCA_COMFLAGS = -D_ACCM=0x8632 -D_ARC_x86=5 -D_DEBUG  -I$(uincpath) -I$(uincpath)/c/ISO_IEC_STD -I$(uincpath)/c/API-POSIX -I$(MCCA_SYSROOT)/usr/include
 
 MCCA_CFLAGS = $(MCCA_COMFLAGS) --sysroot=$(MCCA_SYSROOT) -m32 -fno-builtin -fno-stack-protector -fno-pic -fno-pie -static -nostdlib \
@@ -27,6 +28,7 @@ UNIS_UTIL_APPS = $(sort $(addprefix $(BIN_DIR)/,$(basename $(notdir $(UNIS_UTIL_
 apps=\
 	$(BIN_DIR)/_rust \
 	$(BIN_DIR)/testso \
+	$(BIN_DIR)/testpie \
 	$(ubinpath)/mecocoa/lib/ld-mcca.so
 
 include subapps/Makefile.gui
@@ -50,3 +52,11 @@ $(ubinpath)/mecocoa/lib/ld-mcca.so: subapps/dynamic/dynamic.cpp $(MCCA_CRT0) $(M
 	@echo "MK ld-mcca.so (Dummy Interpreter)"
 	@mkdir -p $(dir $@)
 	$(MCCA_CXX) $(MCCA_CXXFLAGS) -o $@ $< $(MCCA_LDLIBS) -Wl,--image-base=0x40000000
+
+MCCA_CXXFLAGS_PIE = $(MCCA_COMFLAGS) --sysroot=$(MCCA_SYSROOT) -m32 -fno-builtin -fno-stack-protector -nostdlib -fPIE -fno-exceptions -fno-rtti -fno-use-cxa-atexit -std=c++2a \
+	-Wno-incompatible-library-redeclaration -Wno-invalid-constexpr -Wno-empty-body -Wno-unknown-warning-option
+MCCA_LDLIBS_PIE = $(MCCA_CRT0) $(MCCA_LIBC_PIC) -lgcc -Wl,-m,elf_i386 -Wl,-z,noexecstack -pie -Wl,-Bstatic -fuse-ld=lld -Wl,--no-dynamic-linker
+
+$(BIN_DIR)/testpie: subapps/testpie.cpp $(MCCA_CRT0) $(MCCA_LIBC_PIC)
+	@echo "MK testpie (PIE Static)"
+	$(MCCA_CXX) $(MCCA_CXXFLAGS_PIE) -o $@ $< $(MCCA_LDLIBS_PIE)

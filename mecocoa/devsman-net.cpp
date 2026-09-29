@@ -24,7 +24,11 @@ namespace {
 	constexpr stduint NetUdpInboxPayloadSize = 512;
 	constexpr stduint NetUdpErrorCapacity = 8;
 	constexpr stduint NetArpCacheCapacity = 8;
-	constexpr stduint NetArpCacheTtlTicks = 120 * CONFIG_SysTickFreq;
+	constexpr stduint NetArpReachableTicks = 30 * CONFIG_SysTickFreq;
+	constexpr stduint NetArpStaleTicks = 120 * CONFIG_SysTickFreq;
+	constexpr stduint NetArpProbeRetryTicks = CONFIG_SysTickFreq;
+	constexpr stduint NetArpProbeRetryLimit = 3;
+	constexpr stduint NetArpFailedHoldTicks = 5 * CONFIG_SysTickFreq;
 	constexpr stduint NetPendingUdpCapacity = 4;
 	constexpr stduint NetPendingUdpPayloadSize = 1472;
 	constexpr stduint NetPendingUdpTimeoutTicks = 5 * CONFIG_SysTickFreq;
@@ -37,10 +41,7 @@ namespace {
 	constexpr stduint NetTcpConnectionCapacity = 8;
 	constexpr stduint NetTcpAcceptQueueDepth = 4;
 	constexpr stduint NetTcpAcceptWaiterCapacity = 4;
-	constexpr stduint NetTcpConnectTimeoutTicks = 3 * CONFIG_SysTickFreq;
-	constexpr stduint NetTcpConnectRetryTicks = CONFIG_SysTickFreq;
 	constexpr stduint NetTcpConnectRetryLimit = 3;
-	constexpr stduint NetTcpControlRetryTicks = CONFIG_SysTickFreq;
 	constexpr stduint NetTcpControlRetryLimit = 3;
 	constexpr stduint NetTcpRxStreamSize = 2048;
 	constexpr stduint NetTcpRxOooCapacity = 4;
@@ -48,8 +49,10 @@ namespace {
 	constexpr stduint NetTcpRxWaiterCapacity = 2;
 	constexpr stduint NetTcpTxPendingCapacity = 8;
 	constexpr stduint NetTcpTxPayloadSize = 1460;
-	constexpr stduint NetTcpTxRetryTicks = CONFIG_SysTickFreq;
 	constexpr stduint NetTcpTxRetryLimit = 3;
+	constexpr stduint NetTcpInitialRtoTicks = CONFIG_SysTickFreq;
+	constexpr stduint NetTcpMinimumRtoTicks = CONFIG_SysTickFreq;
+	constexpr stduint NetTcpMaximumRtoTicks = 60 * CONFIG_SysTickFreq;
 	constexpr stduint NetTcpTimeWaitTicks = 2 * CONFIG_SysTickFreq;
 	constexpr stduint NetTcpResetHoldTicks = 2 * CONFIG_SysTickFreq;
 	constexpr stduint NetTcpFinWait2Ticks = 30 * CONFIG_SysTickFreq;
@@ -153,10 +156,22 @@ enum class NetIPv4ConfigSource : uint8 {
 		uni::Network::UDPDatagramContext context;
 	};
 
+	enum class NetArpNeighborState : uint8 {
+		Empty,
+		Incomplete,
+		Reachable,
+		Stale,
+		Probe,
+		Failed,
+	};
+
 	struct NetArpCacheEntry {
 		uni::Network::IPv4Address protocol;
 		uni::Network::MacAddress hardware;
 		stduint updated_tick;
+		stduint last_probe_tick;
+		stduint probe_count;
+		NetArpNeighborState state;
 		bool valid;
 	};
 
@@ -225,8 +240,12 @@ enum class NetIPv4ConfigSource : uint8 {
 	struct NetTcpTxPending {
 		uint32 sequence;
 		stduint length;
+		stduint first_tick;
 		stduint last_tick;
 		stduint retry_count;
+		bool transmitted;
+		bool retransmitted;
+		bool rtt_sampled;
 		bool valid;
 	};
 
@@ -263,6 +282,9 @@ enum class NetIPv4ConfigSource : uint8 {
 		stduint synack_retry_count;
 		stduint last_fin_tick;
 		stduint fin_retry_count;
+		stduint rto_ticks;
+		stduint srtt_ticks_x8;
+		stduint rttvar_ticks_x4;
 		stduint last_rx_tick;
 		stduint last_tx_tick;
 		stduint last_keepalive_tick;
@@ -295,6 +317,7 @@ enum class NetIPv4ConfigSource : uint8 {
 		bool orphaned;
 		bool keepalive_enabled;
 		bool keepalive_timeout;
+		bool rtt_initialized;
 		bool rx_ooo_valid[NetTcpRxOooCapacity];
 		bool valid;
 	};
@@ -357,6 +380,7 @@ enum class NetIPv4ConfigSource : uint8 {
 
 	uint16 NetTcpLocalMss();
 	stduint NetTcpSendMss(const NetTcpConnection& connection);
+	stduint TcpBackoffRto(const NetTcpConnection& connection, stduint retry_count);
 	uint16 TcpReceiveWindow(const NetTcpConnection& connection);
 	bool PrepareTcpTransmit(NetTcpConnection& connection);
 	bool SendTcpControl(NetTcpConnection& connection, uint8 flags, uint32 sequence, uint32 acknowledgment);
@@ -826,64 +850,101 @@ enum class NetIPv4ConfigSource : uint8 {
 		return true;
 	}
 
-	bool IsArpCacheEntryExpired(const NetArpCacheEntry& entry) {
-		return entry.valid && tick - entry.updated_tick >= NetArpCacheTtlTicks;
+	bool IsArpNeighborUsable(const NetArpCacheEntry& entry) {
+		return entry.valid && !entry.hardware.isZero() &&
+			(entry.state == NetArpNeighborState::Reachable ||
+				entry.state == NetArpNeighborState::Stale ||
+				entry.state == NetArpNeighborState::Probe);
+	}
+
+	NetArpCacheEntry* FindArpNeighbor(const uni::Network::IPv4Address& protocol) {
+		for0(i, NetArpCacheCapacity) {
+			auto& entry = net_arp_cache[i];
+			if (entry.valid && entry.protocol == protocol) return &entry;
+		}
+		return nullptr;
 	}
 
 	void ExpireArpCache() {
 		for0(i, NetArpCacheCapacity) {
 			auto& entry = net_arp_cache[i];
-			if (IsArpCacheEntryExpired(entry)) entry.valid = false;
+			if (!entry.valid) continue;
+			const stduint age = tick - entry.updated_tick;
+			if (entry.state == NetArpNeighborState::Reachable && age >= NetArpReachableTicks) {
+				entry.state = NetArpNeighborState::Stale;
+			}
+			else if (entry.state == NetArpNeighborState::Stale && age >= NetArpStaleTicks) {
+				entry = {};
+			}
+			else if (entry.state == NetArpNeighborState::Failed && age >= NetArpFailedHoldTicks) {
+				entry = {};
+			}
 		}
+	}
+
+	NetArpCacheEntry* AllocateArpNeighbor(const uni::Network::IPv4Address& protocol) {
+		if (protocol.isZero()) return nullptr;
+		if (auto* existing = FindArpNeighbor(protocol)) return existing;
+		ExpireArpCache();
+		for0(i, NetArpCacheCapacity) {
+			auto& entry = net_arp_cache[i];
+			if (entry.valid) continue;
+			entry = {};
+			entry.protocol = protocol;
+			entry.updated_tick = tick;
+			entry.state = NetArpNeighborState::Incomplete;
+			entry.valid = true;
+			return &entry;
+		}
+		auto& entry = net_arp_cache[net_arp_cache_next];
+		entry = {};
+		entry.protocol = protocol;
+		entry.updated_tick = tick;
+		entry.state = NetArpNeighborState::Incomplete;
+		entry.valid = true;
+		net_arp_cache_next = (net_arp_cache_next + 1) % NetArpCacheCapacity;
+		return &entry;
+	}
+
+	void MarkArpProbeSent(const uni::Network::IPv4Address& protocol) {
+		auto* entry = AllocateArpNeighbor(protocol);
+		if (!entry) return;
+		if (entry->state != NetArpNeighborState::Probe) {
+			entry->state = NetArpNeighborState::Incomplete;
+		}
+		entry->last_probe_tick = tick;
+		if (entry->probe_count < NetArpProbeRetryLimit) entry->probe_count++;
 	}
 
 	bool LookupArpCache(const uni::Network::IPv4Address& protocol, uni::Network::MacAddress& hardware) {
 		ExpireArpCache();
-		for0(i, NetArpCacheCapacity) {
-			const auto& entry = net_arp_cache[i];
-			if (entry.valid && entry.protocol == protocol) {
-				hardware = entry.hardware;
-				return true;
-			}
+		auto* entry = FindArpNeighbor(protocol);
+		if (!entry || !IsArpNeighborUsable(*entry)) return false;
+		if (entry->state == NetArpNeighborState::Stale) {
+			entry->state = NetArpNeighborState::Probe;
+			entry->last_probe_tick = 0;
+			entry->probe_count = 0;
 		}
-		return false;
+		hardware = entry->hardware;
+		return true;
 	}
 
 	void LearnArpCache(const uni::Network::IPv4Address& protocol, const uni::Network::MacAddress& hardware) {
 		if (protocol.isZero() || hardware.isZero() || hardware.isBroadcast()) return;
-		for0(i, NetArpCacheCapacity) {
-			auto& entry = net_arp_cache[i];
-			if (entry.valid && entry.protocol == protocol) {
-				entry.hardware = hardware;
-				entry.updated_tick = tick;
-				return;
-			}
-		}
-		ExpireArpCache();
-		for0(i, NetArpCacheCapacity) {
-			auto& entry = net_arp_cache[i];
-			if (!entry.valid) {
-				entry.protocol = protocol;
-				entry.hardware = hardware;
-				entry.updated_tick = tick;
-				entry.valid = true;
-				return;
-			}
-		}
-		auto& entry = net_arp_cache[net_arp_cache_next];
-		entry.protocol = protocol;
-		entry.hardware = hardware;
-		entry.updated_tick = tick;
-		entry.valid = true;
-		net_arp_cache_next = (net_arp_cache_next + 1) % NetArpCacheCapacity;
+		if (protocol == net_config.ipv4_address ||
+			!IsSameIPv4Subnet(net_config.ipv4_address, protocol, net_config.ipv4_netmask)) return;
+		auto* entry = AllocateArpNeighbor(protocol);
+		if (!entry) return;
+		entry->hardware = hardware;
+		entry->updated_tick = tick;
+		entry->last_probe_tick = 0;
+		entry->probe_count = 0;
+		entry->state = NetArpNeighborState::Reachable;
 	}
 
 	void InvalidateArpCache(const uni::Network::IPv4Address& protocol) {
 		if (protocol.isZero()) return;
-		for0(i, NetArpCacheCapacity) {
-			auto& entry = net_arp_cache[i];
-			if (entry.valid && entry.protocol == protocol) entry.valid = false;
-		}
+		if (auto* entry = FindArpNeighbor(protocol)) *entry = {};
 	}
 
 	uint8* GetPendingUdpPayloadSlot(stduint index) {
@@ -985,6 +1046,13 @@ enum class NetIPv4ConfigSource : uint8 {
 
 	bool SendArpRequest(uni::Network::LinkDevice& dev, uint8* buffer, const uni::Network::IPv4Address& target_ip) {
 		if (!buffer) return false;
+		ExpireArpCache();
+		if (const auto* entry = FindArpNeighbor(target_ip)) {
+			if (entry->state == NetArpNeighborState::Failed) return false;
+			if ((entry->state == NetArpNeighborState::Incomplete ||
+				entry->state == NetArpNeighborState::Probe) &&
+				entry->probe_count >= NetArpProbeRetryLimit) return false;
+		}
 		const stduint request_len = uni::Network::BuildArpEthernetIPv4Request(buffer, NetFrameBufferSize,
 			dev.getAddress(), net_config.ipv4_address, target_ip);
 		if (!request_len) return false;
@@ -993,7 +1061,10 @@ enum class NetIPv4ConfigSource : uint8 {
 			request_len,
 		};
 		const bool sent = dev.Send(request) > 0;
-		if (sent) net_stats.tx_arp++;
+		if (sent) {
+			net_stats.tx_arp++;
+			MarkArpProbeSent(target_ip);
+		}
 		return sent;
 	}
 
@@ -1130,6 +1201,9 @@ enum class NetIPv4ConfigSource : uint8 {
 			connection.synack_retry_count = 0;
 			connection.last_fin_tick = 0;
 			connection.fin_retry_count = 0;
+			connection.rto_ticks = NetTcpInitialRtoTicks;
+			connection.srtt_ticks_x8 = 0;
+			connection.rttvar_ticks_x4 = 0;
 			connection.last_rx_tick = tick;
 			connection.last_tx_tick = tick;
 			connection.last_keepalive_tick = 0;
@@ -1153,6 +1227,7 @@ enum class NetIPv4ConfigSource : uint8 {
 			connection.orphaned = false;
 			connection.keepalive_enabled = false;
 			connection.keepalive_timeout = false;
+			connection.rtt_initialized = false;
 			connection.valid = true;
 			return &connection;
 		}
@@ -1386,10 +1461,14 @@ enum class NetIPv4ConfigSource : uint8 {
 			state != uni::Network::TCPConnectionState::LastAck) return 0;
 		if (connection.fin_retry_count > NetTcpControlRetryLimit) return 0;
 		const stduint elapsed = connection.last_fin_tick ? tick - connection.last_fin_tick : 0;
-		const stduint interval_left = elapsed >= NetTcpControlRetryTicks ?
-			0 : NetTcpControlRetryTicks - elapsed;
-		const stduint intervals = NetTcpControlRetryLimit - connection.fin_retry_count;
-		return intervals * NetTcpControlRetryTicks + interval_left;
+		const stduint retry_index = connection.fin_retry_count ? connection.fin_retry_count - 1 : 0;
+		const stduint interval = TcpBackoffRto(connection, retry_index);
+		stduint remaining = elapsed >= interval ? 0 : interval - elapsed;
+		for (stduint retry = connection.fin_retry_count;
+			retry < NetTcpControlRetryLimit; retry++) {
+			remaining += TcpBackoffRto(connection, retry);
+		}
+		return remaining;
 	}
 
 	bool TcpSequenceBefore(uint32 lhs, uint32 rhs) {
@@ -2050,6 +2129,41 @@ enum class NetIPv4ConfigSource : uint8 {
 		return mss;
 	}
 
+	stduint ClampTcpRto(stduint value) {
+		if (value < NetTcpMinimumRtoTicks) return NetTcpMinimumRtoTicks;
+		if (value > NetTcpMaximumRtoTicks) return NetTcpMaximumRtoTicks;
+		return value;
+	}
+
+	stduint TcpBackoffRto(const NetTcpConnection& connection, stduint retry_count) {
+		stduint value = connection.rto_ticks ? connection.rto_ticks : NetTcpInitialRtoTicks;
+		while (retry_count--) {
+			if (value >= NetTcpMaximumRtoTicks / 2) return NetTcpMaximumRtoTicks;
+			value *= 2;
+		}
+		return ClampTcpRto(value);
+	}
+
+	void UpdateTcpRtt(NetTcpConnection& connection, stduint sample_ticks) {
+		if (!sample_ticks) sample_ticks = 1;
+		if (!connection.rtt_initialized) {
+			connection.srtt_ticks_x8 = sample_ticks * 8;
+			connection.rttvar_ticks_x4 = sample_ticks * 2;
+			connection.rtt_initialized = true;
+		}
+		else {
+			const stduint srtt = connection.srtt_ticks_x8 / 8;
+			const stduint difference = srtt > sample_ticks ?
+				srtt - sample_ticks : sample_ticks - srtt;
+			connection.rttvar_ticks_x4 =
+				(3 * connection.rttvar_ticks_x4 + 4 * difference) / 4;
+			connection.srtt_ticks_x8 =
+				(7 * connection.srtt_ticks_x8 + 8 * sample_ticks) / 8;
+		}
+		const stduint variation = connection.rttvar_ticks_x4 ? connection.rttvar_ticks_x4 : 1;
+		connection.rto_ticks = ClampTcpRto(connection.srtt_ticks_x8 / 8 + variation);
+	}
+
 	stduint TcpOutstandingBytes(const NetTcpConnection& connection) {
 		stduint outstanding = 0;
 		for0(i, connection.tx_count) {
@@ -2138,8 +2252,6 @@ enum class NetIPv4ConfigSource : uint8 {
 
 	bool SendTcpSyn(NetTcpConnection& connection) {
 		if (!connection.tcp || !EnsureTcpTxBuffer()) return false;
-		connection.last_syn_tick = tick;
-		connection.syn_retry_count++;
 		auto& control = connection.tcp->getControl();
 		const auto& local = control.context.local;
 		const auto& remote = control.context.remote;
@@ -2157,6 +2269,7 @@ enum class NetIPv4ConfigSource : uint8 {
 				connection.connect_error = NetErrHostUnreachable;
 				return false;
 			}
+			connection.last_syn_tick = tick;
 			return true;
 		}
 		connection.arp_resolved = true;
@@ -2176,6 +2289,8 @@ enum class NetIPv4ConfigSource : uint8 {
 		};
 		const stdsint sent = SendIPv4PacketFrame(*route.dev, target_mac, packet);
 		if (sent > 0) {
+			connection.last_syn_tick = tick;
+			connection.syn_retry_count++;
 			connection.syn_sent = true;
 			connection.last_tx_tick = tick;
 			net_stats.tx_tcp++;
@@ -2392,6 +2507,70 @@ enum class NetIPv4ConfigSource : uint8 {
 		WakeTcpRxReaders(connection);
 	}
 
+	void FailArpNeighbor(NetArpCacheEntry& entry) {
+		if (!entry.valid || entry.state == NetArpNeighborState::Failed) return;
+		entry.state = NetArpNeighborState::Failed;
+		entry.updated_tick = tick;
+		for0(i, NetPendingUdpCapacity) {
+			auto& packet = net_pending_udp[i];
+			if (!packet.valid || !(packet.next_hop == entry.protocol)) continue;
+			if (RecordUdpError(packet.target_ip, packet.source_port,
+				packet.destination_port, NetErrHostUnreachable)) {
+				for0(j, net_udp_inbox_count) {
+					if (net_udp_inboxes[j].port == packet.source_port) {
+						WakeUdpInboxReaders(net_udp_inboxes[j]);
+					}
+				}
+			}
+			ClearPendingUdp(i);
+		}
+		for0(i, NetTcpConnectionCapacity) {
+			auto& connection = net_tcp_connections[i];
+			if (!connection.valid || !connection.tcp || connection.connect_error) continue;
+			NetIPv4Route route{};
+			if (!ResolveIPv4Route(connection.tcp->getControl().context.remote.address, route)) continue;
+			if (!(route.next_hop == entry.protocol)) continue;
+			const bool connecting = connection.active_open && !IsTcpConnectReady(connection);
+			const auto context = connection.tcp->getControl().context;
+			MarkTcpRemoteError(connection, NetErrHostUnreachable);
+			if (connecting) ReleaseTcpConnection(context);
+		}
+	}
+
+	void ProcessArpTimers() {
+		ExpireArpCache();
+		auto* dev = FindDefaultLinkDevice();
+		if (!dev || !net_buffers.tx) return;
+		for0(i, NetArpCacheCapacity) {
+			auto& entry = net_arp_cache[i];
+			if (!entry.valid ||
+				(entry.state != NetArpNeighborState::Incomplete &&
+					entry.state != NetArpNeighborState::Probe)) continue;
+			if (entry.probe_count >= NetArpProbeRetryLimit) {
+				if (entry.last_probe_tick &&
+					tick - entry.last_probe_tick >= NetArpProbeRetryTicks) {
+					FailArpNeighbor(entry);
+				}
+				continue;
+			}
+			if (!entry.probe_count || !entry.last_probe_tick ||
+				tick - entry.last_probe_tick >= NetArpProbeRetryTicks) {
+				(void)SendArpRequest(*dev, net_buffers.tx, entry.protocol);
+			}
+		}
+	}
+
+	bool HasArpTimersPending() {
+		ExpireArpCache();
+		for0(i, NetArpCacheCapacity) {
+			const auto& entry = net_arp_cache[i];
+			if (entry.valid &&
+				(entry.state == NetArpNeighborState::Incomplete ||
+					entry.state == NetArpNeighborState::Probe)) return true;
+		}
+		return false;
+	}
+
 	bool IsTcpTxRetryExhausted(const NetTcpConnection& connection) {
 		if (!connection.tx_count) return false;
 		const auto& pending = connection.tx_pending[connection.tx_head];
@@ -2453,8 +2632,12 @@ enum class NetIPv4ConfigSource : uint8 {
 		for0(i, length) slot[i] = input[i];
 		pending.sequence = sequence;
 		pending.length = length;
+		pending.first_tick = 0;
 		pending.last_tick = tick;
 		pending.retry_count = 0;
+		pending.transmitted = false;
+		pending.retransmitted = false;
+		pending.rtt_sampled = false;
 		pending.valid = true;
 		connection.tx_tail = (connection.tx_tail + 1) % NetTcpTxPendingCapacity;
 		connection.tx_count++;
@@ -2480,6 +2663,10 @@ enum class NetIPv4ConfigSource : uint8 {
 			}
 			const uint32 end_sequence = pending.sequence + uint32(pending.length);
 			if (!TcpSequenceAfter(acknowledgment, pending.sequence)) return;
+			if (pending.transmitted && !pending.retransmitted && !pending.rtt_sampled && pending.first_tick) {
+				UpdateTcpRtt(connection, tick - pending.first_tick);
+				pending.rtt_sampled = true;
+			}
 			if (!TcpSequenceBefore(acknowledgment, end_sequence)) {
 				pending = {};
 				connection.tx_head = (connection.tx_head + 1) % NetTcpTxPendingCapacity;
@@ -2537,12 +2724,18 @@ enum class NetIPv4ConfigSource : uint8 {
 		};
 		const stdsint sent = SendIPv4PacketFrame(*route.dev, target_mac, packet);
 		if (sent <= 0) return false;
+		const bool retransmission = pending.transmitted;
+		if (!retransmission) pending.first_tick = tick;
+		else pending.retransmitted = true;
+		pending.transmitted = true;
 		pending.last_tick = tick;
-		pending.retry_count++;
 		connection.last_tx_tick = tick;
-		connection.tx_retransmit++;
 		net_stats.tx_tcp++;
-		net_stats.tcp_retransmit++;
+		if (retransmission) {
+			pending.retry_count++;
+			connection.tx_retransmit++;
+			net_stats.tcp_retransmit++;
+		}
 		return true;
 	}
 
@@ -2585,24 +2778,32 @@ enum class NetIPv4ConfigSource : uint8 {
 		};
 		const stdsint sent = SendIPv4PacketFrame(*route.dev, target_mac, packet);
 		if (sent <= 0) return false;
+		const bool retransmission = pending.transmitted;
+		if (!retransmission) pending.first_tick = tick;
+		else pending.retransmitted = true;
+		pending.transmitted = true;
 		pending.last_tick = tick;
-		pending.retry_count++;
 		connection.last_tx_tick = tick;
-		connection.tx_retransmit++;
 		net_stats.tx_tcp++;
-		net_stats.tcp_retransmit++;
+		if (retransmission) {
+			pending.retry_count++;
+			connection.tx_retransmit++;
+			net_stats.tcp_retransmit++;
+		}
 		return true;
 	}
 
 	bool IsTcpConnectExpired(const NetTcpConnection& connection) {
-		return connection.connect_started_tick &&
-			tick - connection.connect_started_tick >= NetTcpConnectTimeoutTicks;
+		if (connection.syn_retry_count < NetTcpConnectRetryLimit || !connection.last_syn_tick) return false;
+		return tick - connection.last_syn_tick >=
+			TcpBackoffRto(connection, connection.syn_retry_count - 1);
 	}
 
 	bool ShouldRetryTcpConnect(const NetTcpConnection& connection) {
 		if (connection.syn_retry_count >= NetTcpConnectRetryLimit) return false;
-		return !connection.last_syn_tick ||
-			tick - connection.last_syn_tick >= NetTcpConnectRetryTicks;
+		if (!connection.last_syn_tick) return true;
+		const stduint backoff = connection.syn_retry_count ? connection.syn_retry_count - 1 : 0;
+		return tick - connection.last_syn_tick >= TcpBackoffRto(connection, backoff);
 	}
 
 	void ProcessTcpConnectTimers() {
@@ -2631,7 +2832,14 @@ enum class NetIPv4ConfigSource : uint8 {
 				continue;
 			}
 			if (ShouldRetryTcpConnect(connection)) {
-				(void)SendTcpSyn(connection);
+				if (!SendTcpSyn(connection)) {
+					const auto context = connection.tcp->getControl().context;
+					const int error = connection.connect_error ?
+						connection.connect_error : NetErrHostUnreachable;
+					RecordTcpConnectError(context, error);
+					NoteTcpConnectFailure(error);
+					ReleaseTcpConnection(context);
+				}
 			}
 		}
 	}
@@ -2670,16 +2878,17 @@ enum class NetIPv4ConfigSource : uint8 {
 			}
 			if (connection.tx_count) {
 				auto& pending = connection.tx_pending[connection.tx_head];
+				const stduint retry_ticks = TcpBackoffRto(connection, pending.retry_count);
 				if (pending.valid && pending.length &&
 					pending.retry_count < NetTcpTxRetryLimit &&
-					tick - pending.last_tick >= NetTcpTxRetryTicks) {
+					tick - pending.last_tick >= retry_ticks) {
 					if (connection.peer_window) (void)SendTcpPendingData(connection, connection.tx_head);
 					else (void)SendTcpWindowProbe(connection);
 					continue;
 				}
 				if (pending.valid && pending.length &&
 					pending.retry_count >= NetTcpTxRetryLimit &&
-					tick - pending.last_tick >= NetTcpTxRetryTicks) {
+					tick - pending.last_tick >= retry_ticks) {
 					MarkTcpTxTimeout(connection);
 					continue;
 				}
@@ -2717,7 +2926,8 @@ enum class NetIPv4ConfigSource : uint8 {
 				control.state == uni::Network::TCPConnectionState::SynReceived &&
 				connection.synack_retry_count >= NetTcpControlRetryLimit &&
 				connection.last_synack_tick &&
-				tick - connection.last_synack_tick >= NetTcpControlRetryTicks) {
+				tick - connection.last_synack_tick >=
+					TcpBackoffRto(connection, connection.synack_retry_count - 1)) {
 				const auto context = control.context;
 				ReleaseTcpConnection(context);
 				continue;
@@ -2725,7 +2935,9 @@ enum class NetIPv4ConfigSource : uint8 {
 			if (!connection.active_open &&
 				control.state == uni::Network::TCPConnectionState::SynReceived &&
 				connection.synack_retry_count < NetTcpControlRetryLimit &&
-				(!connection.last_synack_tick || tick - connection.last_synack_tick >= NetTcpControlRetryTicks)) {
+				(!connection.last_synack_tick || tick - connection.last_synack_tick >=
+					TcpBackoffRto(connection, connection.synack_retry_count ?
+						connection.synack_retry_count - 1 : 0))) {
 				(void)SendTcpSynAck(connection);
 				continue;
 			}
@@ -2734,7 +2946,8 @@ enum class NetIPv4ConfigSource : uint8 {
 					connection.close_phase == NetTcpClosePhase::Closing) &&
 				connection.fin_retry_count >= NetTcpControlRetryLimit &&
 				connection.last_fin_tick &&
-				tick - connection.last_fin_tick >= NetTcpControlRetryTicks) {
+				tick - connection.last_fin_tick >=
+					TcpBackoffRto(connection, connection.fin_retry_count - 1)) {
 				if (connection.orphaned) {
 					const auto context = control.context;
 					ReleaseTcpConnection(context);
@@ -2746,14 +2959,17 @@ enum class NetIPv4ConfigSource : uint8 {
 				(connection.close_phase == NetTcpClosePhase::FinWait1 ||
 					connection.close_phase == NetTcpClosePhase::Closing) &&
 				connection.fin_retry_count < NetTcpControlRetryLimit &&
-				(!connection.last_fin_tick || tick - connection.last_fin_tick >= NetTcpControlRetryTicks)) {
+				(!connection.last_fin_tick || tick - connection.last_fin_tick >=
+					TcpBackoffRto(connection, connection.fin_retry_count ?
+						connection.fin_retry_count - 1 : 0))) {
 				(void)SendTcpFin(connection);
 				continue;
 			}
 			if (control.state == uni::Network::TCPConnectionState::LastAck &&
 				connection.fin_retry_count >= NetTcpControlRetryLimit &&
 				connection.last_fin_tick &&
-				tick - connection.last_fin_tick >= NetTcpControlRetryTicks) {
+				tick - connection.last_fin_tick >=
+					TcpBackoffRto(connection, connection.fin_retry_count - 1)) {
 				if (connection.orphaned) {
 					const auto context = control.context;
 					ReleaseTcpConnection(context);
@@ -2763,7 +2979,9 @@ enum class NetIPv4ConfigSource : uint8 {
 			}
 			if (control.state == uni::Network::TCPConnectionState::LastAck &&
 				connection.fin_retry_count < NetTcpControlRetryLimit &&
-				(!connection.last_fin_tick || tick - connection.last_fin_tick >= NetTcpControlRetryTicks)) {
+				(!connection.last_fin_tick || tick - connection.last_fin_tick >=
+					TcpBackoffRto(connection, connection.fin_retry_count ?
+						connection.fin_retry_count - 1 : 0))) {
 				(void)SendTcpFin(connection);
 			}
 		}
@@ -3507,6 +3725,9 @@ enum class NetIPv4ConfigSource : uint8 {
 			}
 			const uint16 peer_mss = ParseTcpMssOption(tcp);
 			if (peer_mss) connection->peer_mss = peer_mss;
+			if (connection->syn_retry_count == 1 && connection->last_syn_tick) {
+				UpdateTcpRtt(*connection, tick - connection->last_syn_tick);
+			}
 			UpdateTcpPeerWindow(*connection, tcp);
 			control.remote_next_sequence = tcp.sequence + 1;
 			control.state = uni::Network::TCPConnectionState::Established;
@@ -3635,6 +3856,9 @@ enum class NetIPv4ConfigSource : uint8 {
 			}
 			if (connection && (tcp.flags & uni::Network::TCPFlagACK)) {
 				if (connection->tcp->AcceptHandshakeAck(tcp)) {
+					if (connection->synack_retry_count == 1 && connection->last_synack_tick) {
+						UpdateTcpRtt(*connection, tick - connection->last_synack_tick);
+					}
 					const auto& local = connection->tcp->getControl().context.local;
 					auto* listener = FindTcpListener(local.address, local.port);
 					if (listener && !EnqueueTcpAccept(*listener, *connection)) {
@@ -3774,6 +3998,7 @@ enum class NetIPv4ConfigSource : uint8 {
 		}
 		ProcessTcpConnectTimers();
 		ProcessTcpControlTimers();
+		ProcessArpTimers();
 		ProcessDhcpRetryTimer();
 		ProcessDhcpLeaseTimer();
 		for0(i, net_link_device_count) {
@@ -3858,9 +4083,11 @@ enum class NetIPv4ConfigSource : uint8 {
 		stduint sig_src = 0;
 		auto* msgbuf = net_buffers.driver_frame;
 		if (!syscall(syscall_t::TMSG) &&
-			(HasTcpTimersPending() || HasDhcpRetryPending() || HasDhcpLeaseTimerPending())) {
+			(HasTcpTimersPending() || HasArpTimersPending() ||
+				HasDhcpRetryPending() || HasDhcpLeaseTimerPending())) {
 			ProcessTcpConnectTimers();
 			ProcessTcpControlTimers();
+			ProcessArpTimers();
 			ProcessDhcpRetryTimer();
 			ProcessDhcpLeaseTimer();
 			syscall(syscall_t::REST, 1, 10);
@@ -4478,6 +4705,13 @@ stdsint Devsman::SendTcp(const uni::Network::TCPConnectionContext& context, cons
 			return total ? stdsint(total) : sent;
 		}
 		const stduint sent_length = sent > 0 ? stduint(sent) : 0;
+		auto& pending = connection->tx_pending[
+			(connection->tx_tail + NetTcpTxPendingCapacity - 1) % NetTcpTxPendingCapacity];
+		if (sent_length) {
+			pending.first_tick = tick;
+			pending.last_tick = tick;
+			pending.transmitted = true;
+		}
 		if (sent_length < chunk) {
 			connection->tcp->getControl().local_next_sequence += uint32(chunk - sent_length);
 		}
@@ -4806,7 +5040,7 @@ bool Devsman::ApplyIPv4Config(const void* config, stduint length) {
 stduint Devsman::IPv4ArpCacheCount() {
 	ExpireArpCache();
 	stduint count = 0;
-	for0(i, NetArpCacheCapacity) if (net_arp_cache[i].valid) count++;
+	for0(i, NetArpCacheCapacity) if (IsArpNeighborUsable(net_arp_cache[i])) count++;
 	return count;
 }
 
@@ -4817,7 +5051,7 @@ bool Devsman::GetIPv4ArpCacheEntry(stduint index, void* entry, stduint length) {
 	stduint ordinal = 0;
 	for0(i, NetArpCacheCapacity) {
 		const auto& cached = net_arp_cache[i];
-		if (!cached.valid) continue;
+		if (!IsArpNeighborUsable(cached)) continue;
 		if (ordinal++ != index) continue;
 		*output = {};
 		for0(j, uni::Network::IPv4AddressLength) output->address[j] = cached.protocol.octet[j];

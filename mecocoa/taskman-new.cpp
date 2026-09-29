@@ -596,6 +596,107 @@ static bool _CreateELF_Carry(char* vaddr, stduint mem_length, BlockTrait* source
 	}
 	return true;
 }
+
+static bool _Taskman_Relocate_PIE(BlockTrait* source, const ELF_Header_t& header, stduint load_bias, Paging& pg, byte* block_buffer) {
+	if (!load_bias) return true;
+	#if _MCCA != 0x8632 && _MCCA != 0x8664
+	plogerro("%s: ET_DYN (PIE) is not relocatable on this architecture (_MCCA=%[x])", __FUNCIDEN__, (stduint)_MCCA);
+	return false;
+	#else
+	for0(i, header.e_phnum) {
+		struct ELF_PHT_t ph;
+		source->Read(header.e_phoff + i * header.e_phentsize, &ph, sizeof(ph), block_buffer);
+		if (ph.p_type == PT_DYNAMIC && ph.p_filesz) {
+			#if _MCCA == 0x8632
+			stduint rel_vaddr = 0, rel_sz = 0, rel_ent = sizeof(Elf32_Rel);
+			stduint num_dyn = ph.p_filesz / sizeof(Elf32_Dyn);
+			for0(j, num_dyn) {
+				Elf32_Dyn dyn;
+				source->Read(ph.p_offset + j * sizeof(Elf32_Dyn), &dyn, sizeof(dyn), block_buffer);
+				if (dyn.d_tag == DT_NULL) break;
+				if (dyn.d_tag == DT_REL) rel_vaddr = dyn.d_un.d_ptr;
+				else if (dyn.d_tag == DT_RELSZ) rel_sz = dyn.d_un.d_val;
+				else if (dyn.d_tag == DT_RELENT) rel_ent = dyn.d_un.d_val;
+			}
+			if (rel_vaddr && rel_sz && rel_ent) {
+				stduint rel_file_off = 0;
+				bool rel_found = false;
+				for0(k, header.e_phnum) {
+					struct ELF_PHT_t lph;
+					source->Read(header.e_phoff + k * header.e_phentsize, &lph, sizeof(lph), block_buffer);
+					if (lph.p_type == PT_LOAD && rel_vaddr >= lph.p_vaddr && rel_vaddr < lph.p_vaddr + lph.p_filesz) {
+						rel_file_off = lph.p_offset + (rel_vaddr - lph.p_vaddr);
+						rel_found = true;
+						break;
+					}
+				}
+				if (!rel_found) {
+					plogerro("%s: DT_REL (vaddr=%[x]) is not covered by any PT_LOAD", __FUNCIDEN__, rel_vaddr);
+					return false;
+				}
+				stduint rel_count = rel_sz / rel_ent;
+				for0(r, rel_count) {
+					Elf32_Rel rel;
+					source->Read(rel_file_off + r * sizeof(Elf32_Rel), &rel, sizeof(rel), block_buffer);
+					if (ELF32_R_TYPE(rel.r_info) == R_386_RELATIVE) {
+						stduint target_vaddr = rel.r_offset + load_bias;
+						void* phy_page = pg[target_vaddr & ~_IMM(0xFFF)];
+						if (phy_page != (void*)~_IMM0) {
+							uint32* val_ptr = (uint32*)((byte*)phy_page + (target_vaddr & _IMM(0xFFF)));
+							*val_ptr += (uint32)load_bias;
+						}
+					}
+				}
+			}
+			#elif _MCCA == 0x8664
+			stduint rela_vaddr = 0, rela_sz = 0, rela_ent = sizeof(Elf64_Rela);
+			stduint num_dyn = ph.p_filesz / sizeof(Elf64_Dyn);
+			for0(j, num_dyn) {
+				Elf64_Dyn dyn;
+				source->Read(ph.p_offset + j * sizeof(Elf64_Dyn), &dyn, sizeof(dyn), block_buffer);
+				if (dyn.d_tag == DT_NULL) break;
+				if (dyn.d_tag == DT_RELA) rela_vaddr = dyn.d_un.d_ptr;
+				else if (dyn.d_tag == DT_RELASZ) rela_sz = dyn.d_un.d_val;
+				else if (dyn.d_tag == DT_RELAENT) rela_ent = dyn.d_un.d_val;
+			}
+			if (rela_vaddr && rela_sz && rela_ent) {
+				stduint rela_file_off = 0;
+				bool rela_found = false;
+				for0(k, header.e_phnum) {
+					struct ELF_PHT_t lph;
+					source->Read(header.e_phoff + k * header.e_phentsize, &lph, sizeof(lph), block_buffer);
+					if (lph.p_type == PT_LOAD && rela_vaddr >= lph.p_vaddr && rela_vaddr < lph.p_vaddr + lph.p_filesz) {
+						rela_file_off = lph.p_offset + (rela_vaddr - lph.p_vaddr);
+						rela_found = true;
+						break;
+					}
+				}
+				if (!rela_found) {
+					plogerro("%s: DT_RELA (vaddr=%[x]) is not covered by any PT_LOAD", __FUNCIDEN__, rela_vaddr);
+					return false;
+				}
+				stduint rela_count = rela_sz / rela_ent;
+				for0(r, rela_count) {
+					Elf64_Rela rela;
+					source->Read(rela_file_off + r * sizeof(Elf64_Rela), &rela, sizeof(rela), block_buffer);
+					if (ELF64_R_TYPE(rela.r_info) == R_X86_64_RELATIVE) {
+						stduint target_vaddr = rela.r_offset + load_bias;
+						void* phy_page = pg[target_vaddr & ~_IMM(0xFFF)];
+						if (phy_page != (void*)~_IMM0) {
+							uint64* val_ptr = (uint64*)((byte*)phy_page + (target_vaddr & _IMM(0xFFF)));
+							*val_ptr = (uint64)(rela.r_addend + load_bias);
+						}
+					}
+				}
+			}
+			#endif
+			break;
+		}
+	}
+	return true;
+	#endif
+}
+
 ProcessBlock* Taskman::CreateELF(BlockTrait* source, byte ring) {
 	#if (_MCCA & 0xFF00) == 0x8600 || (_MCCA & 0xFF00) == 0x1000
 	auto block_buffer = new byte[512];
@@ -633,7 +734,8 @@ ProcessBlock* Taskman::CreateELF(BlockTrait* source, byte ring) {
 	tb->context.satp = _Taskman_Create_Paging(pb, ring, _IMM(stack_norm));
 	#endif
 
-	tb->context.IP = _IMM(header.e_entry);
+	stduint load_bias = (header.e_type == ET_DYN) ? 0x400000 : 0;
+	tb->context.IP = _IMM(header.e_entry) + load_bias;
 
 	stduint load_slice_p = 0;
 	stduint max_seg_end = 0;
@@ -651,35 +753,38 @@ ProcessBlock* Taskman::CreateELF(BlockTrait* source, byte ring) {
 			free(block_buffer);
 			return nullptr;
 		} else if (ph.p_type == PT_DYNAMIC) {
-			plogerro("%s: Dynamic ELF (PT_DYNAMIC) not supported yet!", __FUNCIDEN__);
-			free(block_buffer);
-			return nullptr;
+			// PIE STATIC will have PT_DYNAMIC, do not abort
 		}
-		if (ph.p_type == PT_PHDR) phdr_addr = ph.p_vaddr;
-		if (ph.p_type == PT_LOAD && ph.p_offset == 0 && !phdr_addr) phdr_addr = ph.p_vaddr + header.e_phoff;
+		if (ph.p_type == PT_PHDR) phdr_addr = ph.p_vaddr + load_bias;
+		if (ph.p_type == PT_LOAD && ph.p_offset == 0 && !phdr_addr) phdr_addr = ph.p_vaddr + load_bias + header.e_phoff;
 		if (ph.p_type == PT_LOAD && ph.p_memsz) 
 		{
 			bool executable = !!(ph.p_flags & PF_X);
 			bool writable = !!(ph.p_flags & PF_W);
 			bool user = (ring != RING_M);
-			if (!_CreateELF_Carry((char*)ph.p_vaddr, ph.p_memsz, source, ph.p_offset, ph.p_filesz, pb->paging, block_buffer, executable, writable, user)) {
-				plogerro("%s: segment load failed (vaddr=%[x] memsz=%u)", __FUNCIDEN__, ph.p_vaddr, ph.p_memsz);
+			if (!_CreateELF_Carry((char*)(ph.p_vaddr + load_bias), ph.p_memsz, source, ph.p_offset, ph.p_filesz, pb->paging, block_buffer, executable, writable, user)) {
+				plogerro("%s: segment load failed (vaddr=%[x] memsz=%u)", __FUNCIDEN__, ph.p_vaddr + load_bias, ph.p_memsz);
 				free(block_buffer);
 				return nullptr;
 			}
 			if (load_slice_p < numsof(pb->load_slices)) {
-				pb->load_slices[load_slice_p].address = ph.p_vaddr;
+				pb->load_slices[load_slice_p].address = ph.p_vaddr + load_bias;
 				pb->load_slices[load_slice_p].length = ph.p_memsz;
 				load_slice_p++;
 			}
 			else {
 				plogwarn("[Taskman] CreateELF LoadSlice Overflow");
 			}
-			stduint seg_end = ph.p_vaddr + ph.p_memsz;
+			stduint seg_end = ph.p_vaddr + load_bias + ph.p_memsz;
 			if (seg_end > max_seg_end) {
 				max_seg_end = seg_end;
 			}
 		}
+	}
+	if (!_Taskman_Relocate_PIE(source, header, load_bias, pb->paging, block_buffer)) {
+		plogerro("%s: PIE relocation failed", __FUNCIDEN__);
+		free(block_buffer);
+		return nullptr;
 	}
 	free(block_buffer);
 
@@ -695,7 +800,7 @@ ProcessBlock* Taskman::CreateELF(BlockTrait* source, byte ring) {
 	// ---- Stack and Gen.Regis ---- //
 	const stduint stack_loc_top = _IMM(tb->stack_lineaddr) + tb->stack_size;
 	const stduint initial_sp = _Taskman_Setup_Stack(pb, pb, nullptr, nullptr,
-		(stduint)header.e_entry, phdr_addr, header.e_phnum, header.e_phentsize);
+		(stduint)header.e_entry + load_bias, phdr_addr, header.e_phnum, header.e_phentsize);
 
 	#if (_MCCA & 0xFF00) == 0x8600
 	tb->context.RING = ring;
@@ -714,7 +819,7 @@ ProcessBlock* Taskman::CreateELF(BlockTrait* source, byte ring) {
 	#elif _MCCA == 0x1032 || _MCCA == 0x1064
 	constexpr stduint floating_support = (1 << 13);
 	tb->context.sp = initial_sp;
-	tb->context.IP = _IMM(header.e_entry);
+	tb->context.IP = _IMM(header.e_entry) + load_bias;
 	tb->context.mstatus = (ring << 11) | floating_support | _MSTATUS_MPIE;
 	tb->context.kernel_sp = _IMM(tb->stack_levladdr) + tb->stack_size - 0x10;
 
@@ -944,6 +1049,7 @@ ProcessBlock* Taskman::Exec(stduint parent, rostr usr_fullpath, char** usr_argv,
 	auto block_buffer = new byte[512];
 	loop_device.Read(0, &header, sizeof(header), block_buffer);
 
+	stduint load_bias = (header.e_type == ET_DYN) ? 0x400000 : 0;
 	stduint phdr_addr = 0;
 	for (stduint i = 0; i < header.e_phnum; i++) {
 		struct ELF_PHT_t ph;
@@ -957,16 +1063,14 @@ ProcessBlock* Taskman::Exec(stduint parent, rostr usr_fullpath, char** usr_argv,
 			delete[] block_buffer;
 			return nullptr;
 		} else if (ph.p_type == PT_DYNAMIC) {
-			plogerro("%s: Dynamic ELF (PT_DYNAMIC) not supported yet!", __FUNCIDEN__);
-			delete[] block_buffer;
-			return nullptr;
+			// PIE STATIC will have PT_DYNAMIC, do not abort
 		}
-		if (ph.p_type == PT_PHDR) phdr_addr = ph.p_vaddr;
-		if (ph.p_type == PT_LOAD && ph.p_offset == 0 && !phdr_addr) phdr_addr = ph.p_vaddr + header.e_phoff;
+		if (ph.p_type == PT_PHDR) phdr_addr = ph.p_vaddr + load_bias;
+		if (ph.p_type == PT_LOAD && ph.p_offset == 0 && !phdr_addr) phdr_addr = ph.p_vaddr + load_bias + header.e_phoff;
 	}
 	delete[] block_buffer;
 
-	stduint new_sp = _Taskman_Setup_Stack(new_pb, parent_pb, usr_argv, usr_envp, (stduint)header.e_entry, phdr_addr, header.e_phnum, header.e_phentsize);
+	stduint new_sp = _Taskman_Setup_Stack(new_pb, parent_pb, usr_argv, usr_envp, (stduint)header.e_entry + load_bias, phdr_addr, header.e_phnum, header.e_phentsize);
 
 	#if (_MCCA & 0xFF00) == 0x8600
 	new_pb->main_thread->context.SP = new_sp;
@@ -1032,6 +1136,7 @@ ProcessBlock* Taskman::Exet(stduint parent, rostr usr_fullpath, char** usr_argv,
 	ELF_Header_t header;
 	loop_device.Read(0, &header, sizeof(header), block_buffer);
 
+	stduint load_bias = (header.e_type == ET_DYN) ? 0x400000 : 0;
 	vfs_dentry* interp_d = nullptr;
 	stduint phdr_addr = 0;
 	for (stduint i = 0; i < header.e_phnum; i++) {
@@ -1062,12 +1167,12 @@ ProcessBlock* Taskman::Exet(stduint parent, rostr usr_fullpath, char** usr_argv,
 		} else if (ph.p_type == PT_DYNAMIC) {
 			// It's normal for dynamic executables to have PT_DYNAMIC. We don't need to abort.
 		}
-		if (ph.p_type == PT_PHDR) phdr_addr = ph.p_vaddr;
-		if (ph.p_type == PT_LOAD && ph.p_offset == 0 && !phdr_addr) phdr_addr = ph.p_vaddr + header.e_phoff;
+		if (ph.p_type == PT_PHDR) phdr_addr = ph.p_vaddr + load_bias;
+		if (ph.p_type == PT_LOAD && ph.p_offset == 0 && !phdr_addr) phdr_addr = ph.p_vaddr + load_bias + header.e_phoff;
 	}
 
 	// 1. Prepare stack frame in temporary kernel buffer while old paging is still active
-	stduint new_sp = _Taskman_Setup_Stack(current_pb, current_pb, usr_argv, usr_envp, (stduint)header.e_entry, phdr_addr, header.e_phnum, header.e_phentsize);
+	stduint new_sp = _Taskman_Setup_Stack(current_pb, current_pb, usr_argv, usr_envp, (stduint)header.e_entry + load_bias, phdr_addr, header.e_phnum, header.e_phentsize);
 
 	// 2. Destroy Old Image
 	for (stduint i = 0; i < current_pb->vmas.Count(); i++) {
@@ -1132,7 +1237,7 @@ ProcessBlock* Taskman::Exet(stduint parent, rostr usr_fullpath, char** usr_argv,
 	current_pb->main_thread->context.satp = _Taskman_Create_Paging(current_pb, current_pb->ring, stack_norm_phy);
 	#endif
 
-	current_pb->main_thread->context.IP = _IMM(header.e_entry);
+	current_pb->main_thread->context.IP = _IMM(header.e_entry) + load_bias;
 	stduint load_slice_p = 0;
 	stduint max_seg_end = 0;
 	for0(i, header.e_phnum) {
@@ -1142,21 +1247,26 @@ ProcessBlock* Taskman::Exet(stduint parent, rostr usr_fullpath, char** usr_argv,
 			bool executable = !!(ph.p_flags & PF_X);
 			bool writable = !!(ph.p_flags & PF_W);
 			bool user = (current_pb->ring != RING_M);
-			if (!_CreateELF_Carry((char*)ph.p_vaddr, ph.p_memsz, &loop_device, ph.p_offset, ph.p_filesz, current_pb->paging, block_buffer, executable, writable, user)) {
-				plogerro("%s: segment load failed (vaddr=%[x] memsz=%u)", __FUNCIDEN__, ph.p_vaddr, ph.p_memsz);
+			if (!_CreateELF_Carry((char*)(ph.p_vaddr + load_bias), ph.p_memsz, &loop_device, ph.p_offset, ph.p_filesz, current_pb->paging, block_buffer, executable, writable, user)) {
+				plogerro("%s: segment load failed (vaddr=%[x] memsz=%u)", __FUNCIDEN__, ph.p_vaddr + load_bias, ph.p_memsz);
 				delete[] block_buffer;
 				return nullptr;
 			}
 			if (load_slice_p < numsof(current_pb->load_slices)) {
-				current_pb->load_slices[load_slice_p].address = ph.p_vaddr;
+				current_pb->load_slices[load_slice_p].address = ph.p_vaddr + load_bias;
 				current_pb->load_slices[load_slice_p].length = ph.p_memsz;
 				load_slice_p++;
 			}
-			stduint seg_end = ph.p_vaddr + ph.p_memsz;
+			stduint seg_end = ph.p_vaddr + load_bias + ph.p_memsz;
 			if (seg_end > max_seg_end) {
 				max_seg_end = seg_end;
 			}
 		}
+	}
+	if (!_Taskman_Relocate_PIE(&loop_device, header, load_bias, current_pb->paging, block_buffer)) {
+		plogerro("%s: PIE relocation failed", __FUNCIDEN__);
+		delete[] block_buffer;
+		return nullptr;
 	}
 
 	if (interp_d) {
