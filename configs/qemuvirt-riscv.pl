@@ -17,6 +17,7 @@ MEMORY {
 # Sections
 print "SECTIONS {\n";
 
+print "	FILE_ENTO = .; \n";
 print "	.text : {\n";
 print "		PROVIDE(_text_start = .); /* as if exists `void* _text_start;` */ \n";
 print '
@@ -61,6 +62,7 @@ print '
 	PROVIDE(_heap_ento = _bss_end);
 	PROVIDE(_heap_endo = _memory_end);
 
+	FILE_ENDO = .;
 ';
 
 print "}\n";

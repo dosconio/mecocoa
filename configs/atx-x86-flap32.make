@@ -29,7 +29,7 @@ CX=g++ -I$(uincpath) -Idepends/freetype/x86/include -c $(flag) $(CXF) $(CXW) -st
 ker_mod=$(uobjpath)/mcca-$(arch)/*.o
 
 kernel_excluded_cpp=devdriv/video/video-bochs.cpp devdriv/net/e1000.cpp
-cppfile=$(filter-out $(kernel_excluded_cpp),$(wildcard mecocoa/*.cpp) $(wildcard devdriv/*.cpp) $(wildcard devdriv/**/*.cpp) $(wildcard depends/*.cpp))
+cppfile=$(filter-out $(kernel_excluded_cpp),$(wildcard mecocoa/*.cpp) $(wildcard devdriv/*.cpp) $(wildcard devdriv/**/*.cpp) $(wildcard depends/*.cpp) $(wildcard depends/loaders/*.cpp) )
 cppobjs=$(patsubst %.cpp, $(uobjpath)/mcca-$(arch)/%.o, $(notdir $(cppfile)))
 VPATH = $(sort $(dir $(cppfile)))
 

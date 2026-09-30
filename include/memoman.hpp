@@ -148,6 +148,9 @@ public:
 public:// trait
 	virtual void* allocate(stduint size, stduint alignment = 0, stduint boundary = 0) override;
 	virtual bool deallocate(void* ptr, stduint size = 0 _Comment(zero_for_block)) override;
+public:// for loaders
+	static void AppendAvailableRange(stduint beg, stduint end);
+	
 };
 extern Memory mem;
 #endif

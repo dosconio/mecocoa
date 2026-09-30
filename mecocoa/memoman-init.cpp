@@ -32,13 +32,13 @@ uint16 acpi_pcie_segment_group = 0;
 uint8 acpi_pcie_start_bus = 0;
 uint8 acpi_pcie_end_bus = 0;
 bool acpi_pcie_ecam_available = false;
-static uint8 acpi_rsdp_storage[sizeof(uni::ACPI::RSDP)] = {};
 #endif
+
+stduint parse_grub(stduint addr);
 
 
 #if _MCCA == 0x8632
 
-static stduint parse_grub(stduint addr);
 static constexpr stduint kAcpiPhysMapTop = 0x10000000;
 static constexpr stduint kAcpiHighWindowBase = 0x3FC00000;
 static constexpr stduint kAcpiHighWindowSize = 0x00400000;
@@ -408,7 +408,7 @@ static void parse_uefi(const MemoryMap& memory_map);
 #endif
 
 
-static void mempool_append_available_range(stduint beg, stduint end) {
+void Memory::AppendAvailableRange(stduint beg, stduint end) {
 	beg = ceilAlign(0x1000, beg);
 	end = floorAlign(0x1000, end);
 	if (beg >= end) return;
@@ -582,7 +582,7 @@ static stduint parse_norm(stduint addr) {
 		if (!entry->addr && !entry->len) break;
 		count++;
 		if (entry->type == 1 && entry->len > 0) {
-			mempool_append_available_range(entry->addr, entry->addr + entry->len);
+			Memory::AppendAvailableRange(entry->addr, entry->addr + entry->len);
 		}
 		entry++;
 	}
@@ -592,41 +592,7 @@ static stduint parse_norm(stduint addr) {
 
 #if _MCCA == 0x8632
 
-static stduint parse_grub(stduint addr)
-{
-	stduint count = 0;
-	stduint size = *(uint32*)addr;
-	multiboot_tag* tag = (multiboot_tag*)(addr + 8);
-	multiboot_tag_mmap* mtag = nullptr;
-	while (tag->type != MULTIBOOT_TAG_TYPE_END)
-	{
-		if (tag->type == MULTIBOOT_TAG_TYPE_MMAP) {
-			mtag = (multiboot_tag_mmap*)tag;
-		}
-		else if (tag->type == MULTIBOOT_TAG_TYPE_ACPI_OLD || tag->type == MULTIBOOT_TAG_TYPE_ACPI_NEW) {
-			MemSet(acpi_rsdp_storage, 0, sizeof(acpi_rsdp_storage));
-			stduint rsdp_size = tag->size > 8 ? tag->size - 8 : 0;
-			if (rsdp_size > sizeof(acpi_rsdp_storage)) rsdp_size = sizeof(acpi_rsdp_storage);
-			MemCopyN(acpi_rsdp_storage, (const void*)((stduint)tag + 8), rsdp_size);
-			acpi_rsdp_addr = (stduint)acpi_rsdp_storage;
-		}
-		tag = (multiboot_tag*)(_IMM(tag) + ((tag->size + 7) & ~7));
-	}
-	
-	if (mtag) {
-		multiboot_mmap_entry* entry = mtag->entries;
-		while ((u32)entry < (u32)mtag + mtag->size)
-		{
-			count++;
-			if (entry->type == MULTIBOOT_MEMORY_AVAILABLE && entry->len > 0)
-			{
-				mempool_append_available_range(entry->addr, entry->addr + entry->len);
-			}
-			cast<stduint>(entry) += mtag->entry_size;
-		}
-	}
-	return count;
-}
+
 
 #elif _MCCA == 0x8664
 
@@ -638,7 +604,7 @@ static void parse_uefi(const MemoryMap& memory_map) {
 		if (MemIsAvailable((MemoryType)desc->type)) {
 			stduint beg = desc->physical_start;
 			stduint len = desc->number_of_pages * 4096;
-			mempool_append_available_range(beg, beg + len);
+			Memory::AppendAvailableRange(beg, beg + len);
 		}
 	}
 }

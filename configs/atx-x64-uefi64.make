@@ -59,7 +59,7 @@ cppfile=\
 	$(ulibpath)/cpp/Device/Keyboard.cpp \
 	$(ulibpath)/cpp/Device/Timer.cpp \
 	$(ulibpath)/cpp/Device/Mouse.cpp \
-	$(ulibpath)/cpp/charset/Unicode.cpp \
+	$(ulibpath)/cpp/Datype/Charset/Unicode.cpp \
 	$(ulibpath)/cpp/Device/Video/Bochs-GrafAda.cpp \
 	$(ulibpath)/cpp/Device/Video/VMware-SVGA.cpp \
 	$(ulibpath)/cpp/Device/Video-VCI.cpp \

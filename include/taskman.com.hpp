@@ -72,8 +72,8 @@ enum class NetworkMsg {
 };
 
 enum class KernelMsg : stduint {
-	Interrupt = 0x10000,
-	DeviceEvent,
+	Interrupt = 0x10000, // rupt_proc -> sysrecv(INTRUPT) or sysrecv(ANYPROC)
+	DeviceEvent,// IRQ device_event_proc -> Driver
 };
 
 enum class DeviceEventKind : uint16 {

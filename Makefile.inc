@@ -30,16 +30,16 @@ cppfile+=$(wildcard mecocoa/*.cpp) prehost/_auxiliary.cpp $(wildcard devdriv/*.c
 	$(ulibpath)/cpp/Device/UART.cpp \
 	$(ulibpath)/cpp/Device/Timer.cpp \
 	$(ulibpath)/cpp/system/paging.cpp \
-	$(ulibpath)/cpp/Device/Storage.cpp \
-	$(ulibpath)/cpp/Device/Storage/Storage-GPT.cpp \
-	$(ulibpath)/cpp/lango/lango-cpp.cpp \
-	$(ulibpath)/cpp/grp-base/bstring.cpp \
-	$(ulibpath)/cpp/dat-block/mempool.cpp \
-	$(ulibpath)/cpp/dat-block/bmmemoman.cpp \
-	$(ulibpath)/cpp/nodes/dnode.cpp $(wildcard $(ulibpath)/cpp/nodes/dnode/*.cpp) \
-	$(ulibpath)/cpp/nodes/nnode.cpp $(wildcard $(ulibpath)/cpp/nodes/nnode/*.cpp) \
-	$(ulibpath)/cpp/filesystem/CD.cpp \
-	$(ulibpath)/cpp/filesystem/FAT.cpp $(wildcard $(ulibpath)/cpp/filesystem/FAT/*.cpp) \
+	$(ulibpath)/cpp/Format/Filesys/CD.cpp \
+	$(ulibpath)/cpp/Lango/lango-cpp.cpp \
+	$(ulibpath)/cpp/Datype/bstring.cpp \
+	$(ulibpath)/cpp/Datype/mempool.cpp \
+	$(ulibpath)/cpp/Datype/bmmemoman.cpp \
+	$(wildcard $(ulibpath)/cpp/Auxiliary/*.cpp) \
+	$(ulibpath)/cpp/Datype/dnode.cpp $(wildcard $(ulibpath)/cpp/Datype/dnode/*.cpp) \
+	$(ulibpath)/cpp/Datype/nnode.cpp $(wildcard $(ulibpath)/cpp/Datype/nnode/*.cpp) \
+	$(ulibpath)/cpp/Device/Storage.cpp $(ulibpath)/cpp/Device/Storage/Storage-GPT.cpp \
+	$(ulibpath)/cpp/Format/Filesys/FAT.cpp $(wildcard $(ulibpath)/cpp/Format/Filesys/FAT/*.cpp) \
 
 kernel_excluded_cpp+=devdriv/video/video-bochs.cpp
 kernel_excluded_cpp+=devdriv/net/e1000.cpp
@@ -48,7 +48,6 @@ cppfile:=$(filter-out $(kernel_excluded_cpp),$(cppfile))
 cplfile+= \
 	$(ulibpath)/c/mcore.c \
 	$(ulibpath)/c/debug.c \
-	$(ulibpath)/c/auxiliary/toxxxer.c \
 	$(wildcard $(ulibpath)/c/dnode/*.c) \
 	$(wildcard $(ulibpath)/c/nnode/*.c) \
 	$(ulibpath)/c/ustring/astring/salc.c \
