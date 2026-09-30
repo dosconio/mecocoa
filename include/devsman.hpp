@@ -115,6 +115,7 @@ struct DriverBinding {
 	uint32 state;
 	int32 probe_result;
 	void* driver_data;
+	uint32 owner_pid;
 };
 
 struct DevExt {

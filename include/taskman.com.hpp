@@ -74,6 +74,24 @@ enum class NetworkMsg {
 enum class KernelMsg : stduint {
 	Interrupt = 0x10000, // rupt_proc -> sysrecv(INTRUPT) or sysrecv(ANYPROC)
 	DeviceEvent,// IRQ device_event_proc -> Driver
+	TaskLifecycle,// Taskman -> parent service
+};
+
+enum class TaskLifecycleEventKind : uint16 {
+	None = 0,
+	Exited,
+};
+
+static constexpr uint32 TaskLifecycleProtocolVersion = 1;
+
+_PACKED(struct) TaskLifecycleEvent {
+	uint32 version = TaskLifecycleProtocolVersion;
+	uint16 kind = _IMM(TaskLifecycleEventKind::None);
+	uint16 flags = 0;
+	uint32 pid = 0;
+	uint32 parent_pid = 0;
+	int32 exit_status = 0;
+	uint32 reserved = 0;
 };
 
 enum class DeviceEventKind : uint16 {
@@ -87,8 +105,8 @@ enum class DeviceEventKind : uint16 {
 enum DeviceEventFlag : uint16 {
 	DeviceEventFlag_None = 0,
 	DeviceEventFlag_NeedsAck = 1 << 0,
-	DeviceEventFlag_Coalesced = 1 << 1,
-	DeviceEventFlag_Overflow = 1 << 2,
+	DeviceEventFlag_Coalesced = 1 << 1, // count represents multiple source events
+	DeviceEventFlag_Overflow = 1 << 2, // consumer must rescan the complete device state
 };
 
 static constexpr uint32 DeviceEventProtocolVersion = 1;

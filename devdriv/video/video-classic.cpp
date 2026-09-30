@@ -4,7 +4,7 @@
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 #include "../../include/mecocoa.hpp"
 
-#if (_MCCA & 0xFF00) == 0x8600
+#if ((_MCCA & 0xFF00) == 0x8600) || defined(_MCU_STM32)
 
 _ESYM_C void R_CLASSIC_VIDEO_INIT();
 

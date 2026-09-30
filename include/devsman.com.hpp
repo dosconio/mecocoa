@@ -5,6 +5,13 @@
 #include <cpp/System/Audiosys.hpp>
 #include <cpp/Device/Audio/SoundBlaster.hpp>
 
+enum class DevsmanMsg : stduint {
+	TEST,
+	BIND_DRIVERS,
+	PROBE_DRIVERS,
+	START_DRIVERS,
+};
+
 // ---- AUDIO IPC PROTOCOL ----
 
 enum class AudioMsg : stduint {

@@ -1078,7 +1078,7 @@ DEFSYSC sysx_FORK(CallgateFrame* phyzik_frame) {
 DEFSYSC sysc_TMSG() {
 	auto th = Taskman::CurrentTB();
 	return _IMM(th->queue_send_queuehead) || th->async_messages.Count() ||
-		(th->device_events && !th->device_events->pending.isEmpty()) || th->wait_rupt_no;
+		(th->device_events && th->device_events->HasPending()) || th->wait_rupt_no;
 }
 
 DEFSYSC sysc_EXEC(stduint path, stduint argv, stduint envp) {

@@ -32,7 +32,14 @@ extern "C" void Handint_SB16_Entry();
 extern "C" void Handint_SB16();
 extern "C" void Handint_HDD_Entry();
 extern "C" void Handint_HDD();
-extern "C" void Handint_E1000_Entry();
+extern "C" void Handint_PWDEV0_Entry();
+extern "C" void Handint_PWDEV1_Entry();
+extern "C" void Handint_PWDEV2_Entry();
+extern "C" void Handint_PWDEV3_Entry();
+extern "C" void Handint_PWDEV4_Entry();
+extern "C" void Handint_PWDEV5_Entry();
+extern "C" void Handint_PWDEV6_Entry();
+extern "C" void Handint_PWDEV7_Entry();
 extern "C" void Handint_RESCHED_Entry();
 extern "C" void Handint_WAKE_Entry();
 

@@ -315,7 +315,7 @@
           </ArmAdsMisc>
           <Cads>
             <interw>1</interw>
-            <Optim>1</Optim>
+            <Optim>2</Optim>
             <oTime>0</oTime>
             <SplitLS>0</SplitLS>
             <OneElfS>1</OneElfS>
@@ -338,7 +338,7 @@
             <v6WtE>0</v6WtE>
             <v6Rtti>0</v6Rtti>
             <VariousControls>
-              <MiscControls>-fno-strict-aliasing -Wno-c++98-compat -Wno-old-style-cast -Wno-c++98-c++11-compat-binary-literal -Wno-extra-semi-stmt -Wno-deprecated-copy-with-user-provided-copy -Wno-c++98-compat-pedantic -Wno-keyword-macro -Wno-invalid-constexpr -Wno-empty-body</MiscControls>
+              <MiscControls>-fno-strict-aliasing -Wno-c++98-compat -Wno-old-style-cast -Wno-c++98-c++11-compat-binary-literal -Wno-extra-semi-stmt -Wno-deprecated-copy-with-user-provided-copy -Wno-c++98-compat-pedantic -Wno-keyword-macro -Wno-invalid-constexpr -Wno-empty-body -Wno-undefined-bool-conversion</MiscControls>
               <Define>_MCU_STM32H7x, _HIS_IMPLEMENT, _MCCA=0x1A072032</Define>
               <Undefine></Undefine>
               <IncludePath>D:\her\unisym\inc</IncludePath>
@@ -410,6 +410,16 @@
               <FileType>8</FileType>
               <FilePath>..\..\mecocoa\handler.cpp</FilePath>
             </File>
+            <File>
+              <FileName>console-init.cpp</FileName>
+              <FileType>8</FileType>
+              <FilePath>..\..\mecocoa\console-init.cpp</FilePath>
+            </File>
+            <File>
+              <FileName>graphic.cpp</FileName>
+              <FileType>8</FileType>
+              <FilePath>..\..\mecocoa\graphic.cpp</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>
@@ -434,6 +444,46 @@
               <FileName>main.cpp</FileName>
               <FileType>8</FileType>
               <FilePath>.\main.cpp</FilePath>
+            </File>
+            <File>
+              <FileName>mem.cpp</FileName>
+              <FileType>8</FileType>
+              <FilePath>.\mem.cpp</FilePath>
+            </File>
+          </Files>
+        </Group>
+        <Group>
+          <GroupName>Group Board</GroupName>
+          <Files>
+            <File>
+              <FileName>RGB-LCD.cpp</FileName>
+              <FileType>8</FileType>
+              <FilePath>.\_openedv\RGB-LCD.cpp</FilePath>
+            </File>
+            <File>
+              <FileName>SDRAM.cpp</FileName>
+              <FileType>8</FileType>
+              <FilePath>.\_openedv\SDRAM.cpp</FilePath>
+            </File>
+          </Files>
+        </Group>
+        <Group>
+          <GroupName>Others</GroupName>
+          <Files>
+            <File>
+              <FileName>Video-VideoConsole2.cpp</FileName>
+              <FileType>8</FileType>
+              <FilePath>..\..\..\unisym\lib\cpp\Device\Video-VideoConsole2.cpp</FilePath>
+            </File>
+            <File>
+              <FileName>desktop.cpp</FileName>
+              <FileType>8</FileType>
+              <FilePath>..\..\depends\desktop.cpp</FilePath>
+            </File>
+            <File>
+              <FileName>video-classic.cpp</FileName>
+              <FileType>8</FileType>
+              <FilePath>..\..\devdriv\video\video-classic.cpp</FilePath>
             </File>
           </Files>
         </Group>

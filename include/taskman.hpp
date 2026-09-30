@@ -109,6 +109,12 @@ enum {
 	RING_S = 1,
 	RING_U = 0,
 };
+#elif (_MCCA & 0xFF00) == 0x2000// ARM
+enum {
+	RING_M = 0b11111,
+	RING_S = 0b10011,
+	RING_U = 0b10000,
+};
 #endif
 
 
@@ -332,8 +338,17 @@ public:
 
 struct DeviceEventQueue {
 	static constexpr stduint Capacity = 8;
+	static constexpr stduint OverflowCapacity = Capacity * 4;
 	DeviceEvent storage[Capacity] = {};
 	uni::Queue<DeviceEvent> pending = { storage, Capacity };
+	DeviceEvent overflow[OverflowCapacity] = {};
+	bool overflow_used[OverflowCapacity] = {};
+
+	bool HasPending() {
+		if (!pending.isEmpty()) return true;
+		for0(i, OverflowCapacity) if (overflow_used[i]) return true;
+		return false;
+	}
 };
 
 class ThreadBlock {

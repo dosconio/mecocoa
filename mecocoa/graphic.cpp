@@ -21,7 +21,11 @@ static void SafeLaymanUpdate(SheetTrait* sheet, const Rectangle& rect) {
 
 extern uni::VideoConsole2* global_vcon0;
 
-#if (_MCCA & 0xFF00) == 0x8600 // _GUI_ENABLE
+#if !CONFIG_ENABLE_MMU
+#define StrCopyP(a,b,c,d,e) StrCopyN(a,c,e)
+#endif
+
+#if _GUI_ENABLE
 
 const int kMouseCursorWidth = 15;
 const int kMouseCursorHeight = 24;
@@ -53,11 +57,11 @@ char mouse_cursor_shape[kMouseCursorHeight][kMouseCursorWidth + 1] = {
 };
 
 char mouse_cursor_resize_v[kMouseCursorHeight][kMouseCursorWidth + 1] = {
-	"@              ",
-	"       @       ",
-	"      @@@      ",
-	"     @.@.@     ",
-	"    @..@..@    ",
+	"@@@@@          ",
+	"@      @       ",
+	"@     @@@      ",
+	"@    @.@.@     ",
+	"@   @..@..@    ",
 	"   @...@...@   ",
 	"  @@@@@@@@@@@  ",
 	"     @.@.@     ",
@@ -80,11 +84,11 @@ char mouse_cursor_resize_v[kMouseCursorHeight][kMouseCursorWidth + 1] = {
 };
 
 char mouse_cursor_resize_h[kMouseCursorHeight][kMouseCursorWidth + 1] = {
+	"@@@@@          ",
 	"@              ",
-	"               ",
-	"               ",
-	"               ",
-	"               ",
+	"@              ",
+	"@              ",
+	"@              ",
 	"               ",
 	"     @   @     ",
 	"    @@   @@    ",
@@ -134,11 +138,11 @@ char mouse_cursor_resize_nwse[kMouseCursorHeight][kMouseCursorWidth + 1] = {
 };
 
 char mouse_cursor_resize_nesw[kMouseCursorHeight][kMouseCursorWidth + 1] = {
-	"@              ",
-	"        @@@@@@ ",
-	"        @....@ ",
-	"         @@@.@ ",
-	"       @.@ @.@ ",
+	"@@@@@          ",
+	"@       @@@@@@ ",
+	"@       @....@ ",
+	"@        @@@.@ ",
+	"@      @.@ @.@ ",
 	"      @.@  @@@ ",
 	"     @.@       ",
 	"     @.@       ",
@@ -243,10 +247,11 @@ bool Consman::AdoptVideoDevice(VideoDevice* dev) {
 	if (!has_runtime_gui) {
 		return true;
 	}
-
+	#if _GUI_DOUBLE_BUFFER
 	if (Consman::enable_dubuffer) {
 		Consman::enable_2buffer();
 	}
+	#endif
 
 	{
 		auto layman = global_layman.Lock();
@@ -326,6 +331,7 @@ static stduint PublishedVideoBpp(uni::PixelFormat format, uint32 width, uint32 p
 	}
 }
 
+#if CONFIG_ENABLE_MMU
 static bool MapPublishedFramebufferToKernel(stduint physical, stduint length) {
 	if (!physical || !length) return false;
 	const stduint page_base = physical & ~_IMM(0xFFF);
@@ -347,6 +353,7 @@ static bool MapPublishedFramebufferToKernel(stduint physical, stduint length) {
 	}
 	return true;
 }
+#endif
 
 bool PwcallValidateDeviceResourceRange(ProcessBlock* pb, stduint dev_handle, uint32 resource_type, uint32 resource_index, uint64 start, uint64 length);
 
@@ -372,7 +379,9 @@ static stdsint GraphicMsg_DRV_ATTACH(FMT_GraphicMsg_DRV_ATTACH* usr_info, Proces
 		return -1;
 	}
 	const stduint physical = (stduint)physical64;
+	#if CONFIG_ENABLE_MMU
 	if (!MapPublishedFramebufferToKernel(physical, (stduint)info.fb_length)) return -1;
+	#endif
 
 	if (!published_video_proxy) {
 		published_video_proxy = new PublishedVideoProxy();

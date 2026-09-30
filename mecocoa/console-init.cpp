@@ -8,26 +8,29 @@
 #include "c/driver/UART.h"
 
 
-#if (_MCCA & 0xFF00) == 0x8600
+#if _GUI_ENABLE
 Cursor* Cursor::global_cursor = nullptr;
 SheetTrait* Cursor::moving_sheet = nullptr;
-
 // Resize
 SheetTrait* Cursor::resizing_sheet = nullptr;
 uni::Witch::FormHitTest Cursor::resize_hit_mode = uni::Witch::FormHitTest::None;
 Point Cursor::resize_start_cursor = {};
 Rectangle Cursor::resize_start_rect = {};
 Rectangle Cursor::ghost_rect = {};
-
+//
 bool Cursor::mouse_btnl_dn = false;
 bool Cursor::mouse_btnm_dn = false;
 bool Cursor::mouse_btnr_dn = false;
 #endif
+
 // consider CLI: No Remove
 unsigned Consman::current_screen_TTY = 0;
 #if (_MCCA & 0xFF00) == 0x8600
 BareConsole Bcons[TTY_NUMBER];// TTY 0~3 and their buffer
 ProcessBlock* Bcons_pcot[TTY_NUMBER] = {};
+#endif
+
+#if _GUI_ENABLE
 // consider GUI
 byte _BUF_cursor[byteof(Cursor)];
 bool Consman::ento_gui = false;
@@ -47,8 +50,10 @@ uni::VideoConsole2* global_vcon0 = nullptr;
 
 
 //// ---- ---- STATIC CORE ---- ---- ////
-#if ((_MCCA & 0xFF00) == 0x8600)
+#if _GUI_ENABLE
 SpinlockBlock<LayerManager2> global_layman;
+#endif
+#if ((_MCCA & 0xFF00) == 0x8600)
 #if defined(_UEFI) && _MCCA == 0x8664
 extern UefiData uefi_data;
 #endif
@@ -77,8 +82,14 @@ static uni::BitmapFontEngine loader_font_engine(1);
 extern UART_t com1;
 extern bool SerialCom1Available();
 extern void SerialInitializeLazyCotVttys();
-bool Consman::Initialize() {
+#endif
+
+
+_WEAK bool Consman::Initialize() {
 	new (&message_queue_conv) SpinlockBlock<uni::Queue<SysMessage>>(64);
+
+
+	#if (_MCCA & 0xFF00) == 0x8600
 	// con0_out = 0;
 	Bcons[0].Reset(bda->screen_columns, 24, _VIDEO_ADDR_BUFFER, 0 * 50); Bcons[0].setShowY(0, 24);
 	for1(i, TTY_NUMBER - 1) {
@@ -196,6 +207,9 @@ bool Consman::Initialize() {
 
 	// default tty are all bcon
 	return true;
+
+	#endif
+	return false;
 }
 
 void Consman_InitializeFreeType() {
@@ -217,4 +231,3 @@ void Consman_InitializeFreeType() {
 	}
 #endif
 }
-#endif

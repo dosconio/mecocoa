@@ -422,21 +422,22 @@ void Memory::AppendAvailableRange(stduint beg, stduint end) {
 	#endif
 
 	// Exclude Kernel Image: FILE_ENTO .. FILE_ENDO
-	stduint k_beg = floorAlign(0x1000, _IMM(&FILE_ENTO));
-	stduint k_end = ceilAlign(0x1000, _IMM(&FILE_ENDO));
-
-	if (end <= k_beg || beg >= k_end) {
-		mempool.Append(Slice{ beg, end - beg });
-		Memory::total_memsize += end - beg;
-	}
-	else {
-		if (beg < k_beg) {
-			mempool.Append(Slice{ beg, k_beg - beg });
-			Memory::total_memsize += k_beg - beg;
+	if (_IMM(&FILE_ENTO) < _IMM(&FILE_ENDO)) {
+		stduint k_beg = floorAlign(0x1000, _IMM(&FILE_ENTO));
+		stduint k_end = ceilAlign(0x1000, _IMM(&FILE_ENDO));
+		if (end <= k_beg || beg >= k_end) {
+			mempool.Append(Slice{ beg, end - beg });
+			Memory::total_memsize += end - beg;
 		}
-		if (end > k_end) {
-			mempool.Append(Slice{ k_end, end - k_end });
-			Memory::total_memsize += end - k_end;
+		else {
+			if (beg < k_beg) {
+				mempool.Append(Slice{ beg, k_beg - beg });
+				Memory::total_memsize += k_beg - beg;
+			}
+			if (end > k_end) {
+				mempool.Append(Slice{ k_end, end - k_end });
+				Memory::total_memsize += end - k_end;
+			}
 		}
 	}
 }

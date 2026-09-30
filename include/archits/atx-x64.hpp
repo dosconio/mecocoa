@@ -27,7 +27,14 @@ _ESYM_C{
 	void Handint_MOU_Entry(), Handint_MOU();
 	void Handint_XHCI_Entry(), Handint_XHCI();
 	void Handint_LAPICT_Entry(), Handint_LAPICT();
-	void Handint_E1000_Entry();
+	void Handint_PWDEV0_Entry();
+	void Handint_PWDEV1_Entry();
+	void Handint_PWDEV2_Entry();
+	void Handint_PWDEV3_Entry();
+	void Handint_PWDEV4_Entry();
+	void Handint_PWDEV5_Entry();
+	void Handint_PWDEV6_Entry();
+	void Handint_PWDEV7_Entry();
 	// void Handint_AHCI_Entry(), Handint_AHCI();
 }
 

@@ -30,6 +30,10 @@
 #define _MCCA_LITE // another addition for debug but _DEBUG
 #undef  CONFIG_ENABLE_MMU
 #define CONFIG_ENABLE_MMU 0
+#undef  _GUI_DOUBLE_BUFFER
+#define _GUI_DOUBLE_BUFFER 0 //{}
+#undef  _GUI_FREETYPE
+#define _GUI_FREETYPE 0 //{}
 #endif
 
 #if (_MCCA & 0xFF00) == 0x1000

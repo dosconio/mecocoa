@@ -102,7 +102,7 @@ _PACKED(struct) FMT_ConsoleMsg_FSET {
 	void* value;
 };
 
-#if (_MCCA & 0xFF00) == 0x8600
+#if _GUI_ENABLE
 class LayerManager2 : public uni::LayerManager {
 public:
 	using LayerManager::LayerManager;
@@ -124,7 +124,7 @@ struct KeyboardBridge : public OstreamTrait // // scan code set 1
 #endif
 
 // Cursor
-#if (_MCCA & 0xFF00) == 0x8600
+#if _GUI_ENABLE
 class Cursor: public uni::SheetTrait
 {
 public:
@@ -164,7 +164,7 @@ struct Consman {
 	static unsigned current_screen_TTY;// focus
 	static void WakeBlockedWaiters();
 	static void WakeBlockedWaitersDeferred();
-	#if (_MCCA & 0xFF00) == 0x8600
+
 	// GUI
 	static bool ento_gui;
 	static bool enable_dubuffer;
@@ -184,7 +184,6 @@ struct Consman {
 	static void MaximizeForm(::uni::Witch::Form* pfrm);
 	static void RestoreForm(::uni::Witch::Form* pfrm);
 	static Rectangle GetWorkArea();
-	#endif
 };
 
 #if (_MCCA & 0xFF00) == 0x8600

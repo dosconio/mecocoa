@@ -646,6 +646,17 @@ static bool DeliverWaitResultAtomically(ProcessBlock* pparent, stduint child_pid
 	return true;
 }
 
+static void NotifyTaskLifecycle(stduint parent_pid, stduint pid, stdsint exit_status) {
+	TaskLifecycleEvent event = {};
+	event.kind = _IMM(TaskLifecycleEventKind::Exited);
+	event.pid = uint32(pid);
+	event.parent_pid = uint32(parent_pid);
+	event.exit_status = int32(exit_status);
+	if (syssend_async(parent_pid, &event, sizeof(event), _IMM(KernelMsg::TaskLifecycle))) {
+		plogwarn("Task lifecycle event dropped: parent=%u pid=%u", parent_pid, pid);
+	}
+}
+
 bool Taskman::Exit(ProcessBlock* p, stdsint exit_code)
 {
 	extern Spinlock scheduler_lock;
@@ -789,7 +800,11 @@ bool Taskman::Exit(ProcessBlock* p, stdsint exit_code)
 	bool parent_is_nonwait_kernel_owner = (parent_pid == Task_Kernel && pid != Task_Init)
 										|| parent_pid == Task_Init;
 
-	if (parent_active && pparent->isWaiting() && (pparent->wait_for_pid == 0 || pparent->wait_for_pid == pid)) {
+	if (parent_active && parent_pid == Task_Devsman) {
+		_Exit_Cleanup(pid);
+		NotifyTaskLifecycle(parent_pid, pid, exit_code);
+	}
+	else if (parent_active && pparent->isWaiting() && (pparent->wait_for_pid == 0 || pparent->wait_for_pid == pid)) {
 		if (DeliverWaitResultAtomically(pparent, pid, _IMM(exit_code))) {
 			_Exit_Cleanup(pid); // Die completely
 		}

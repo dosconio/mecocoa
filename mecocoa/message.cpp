@@ -83,6 +83,19 @@ static bool WriteDeviceEventMessage(CommMsg* target, ProcessBlock* process,
 	return true;
 }
 
+static bool SameDeviceEventSource(const DeviceEvent& left, const DeviceEvent& right) {
+	return left.kind == right.kind && left.device_handle == right.device_handle &&
+		left.source == right.source && left.generation == right.generation;
+}
+
+static void MergeDeviceEvent(DeviceEvent& target, const DeviceEvent& event, uint16 extra_flags) {
+	const uint64 total = uint64(target.count) + uint64(event.count);
+	target.count = total > 0xFFFFFFFFu ? 0xFFFFFFFFu : uint32(total);
+	target.sequence = event.sequence;
+	target.flags |= event.flags | DeviceEventFlag_Coalesced | extra_flags;
+	if (total > 0xFFFFFFFFu) target.flags |= DeviceEventFlag_Overflow;
+}
+
 static bool QueueDeviceEvent(ThreadBlock* thread, const DeviceEvent& event) {
 	if (!thread || !thread->device_events) return false;
 	const stduint count = thread->device_events->pending.Count();
@@ -90,19 +103,55 @@ static bool QueueDeviceEvent(ThreadBlock* thread, const DeviceEvent& event) {
 	for0(i, count) {
 		DeviceEvent pending = {};
 		if (!thread->device_events->pending.Dequeue(pending)) return false;
-		if (pending.device_handle != event.device_handle || pending.source != event.source ||
-			pending.generation != event.generation || coalesced) {
+		if (!SameDeviceEventSource(pending, event) || coalesced) {
 			if (!thread->device_events->pending.Enqueue(pending)) return false;
 			continue;
 		}
-		const uint64 total = uint64(pending.count) + uint64(event.count);
-		pending.count = total > 0xFFFFFFFFu ? 0xFFFFFFFFu : uint32(total);
-		pending.sequence = event.sequence;
-		pending.flags |= DeviceEventFlag_Coalesced;
+		MergeDeviceEvent(pending, event, DeviceEventFlag_None);
 		coalesced = true;
 		if (!thread->device_events->pending.Enqueue(pending)) return false;
 	}
-	return coalesced || thread->device_events->pending.Enqueue(event);
+	if (coalesced || thread->device_events->pending.Enqueue(event)) return true;
+
+	for0(i, DeviceEventQueue::OverflowCapacity) {
+		if (!thread->device_events->overflow_used[i] ||
+			!SameDeviceEventSource(thread->device_events->overflow[i], event)) continue;
+		MergeDeviceEvent(thread->device_events->overflow[i], event, DeviceEventFlag_Overflow);
+		return true;
+	}
+	for0(i, DeviceEventQueue::OverflowCapacity) {
+		if (thread->device_events->overflow_used[i]) continue;
+		thread->device_events->overflow[i] = event;
+		thread->device_events->overflow[i].flags |= DeviceEventFlag_Overflow;
+		thread->device_events->overflow_used[i] = true;
+		return true;
+	}
+	const stduint pending_count = thread->device_events->pending.Count();
+	for0(i, pending_count) {
+		DeviceEvent pending = {};
+		if (!thread->device_events->pending.Dequeue(pending)) break;
+		pending.flags |= DeviceEventFlag_Overflow;
+		(void)thread->device_events->pending.Enqueue(pending);
+	}
+	for0(i, DeviceEventQueue::OverflowCapacity) {
+		if (thread->device_events->overflow_used[i]) {
+			thread->device_events->overflow[i].flags |= DeviceEventFlag_Overflow;
+		}
+	}
+	return true;
+}
+
+static bool DequeueDeviceEvent(DeviceEventQueue* events, DeviceEvent& event) {
+	if (!events) return false;
+	if (events->pending.Dequeue(event)) return true;
+	for0(i, DeviceEventQueue::OverflowCapacity) {
+		if (!events->overflow_used[i]) continue;
+		event = events->overflow[i];
+		events->overflow[i] = {};
+		events->overflow_used[i] = false;
+		return true;
+	}
+	return false;
 }
 
 bool device_event_prepare(ThreadBlock* thread) {
@@ -176,6 +225,13 @@ void device_event_cancel(stduint tid, stduint device_handle, uint32 generation) 
 		if (!thread->device_events->pending.Dequeue(event)) break;
 		if (event.device_handle == device_handle && event.generation == generation) continue;
 		(void)thread->device_events->pending.Enqueue(event);
+	}
+	for0(i, DeviceEventQueue::OverflowCapacity) {
+		if (!thread->device_events->overflow_used[i]) continue;
+		const auto& event = thread->device_events->overflow[i];
+		if (event.device_handle != device_handle || event.generation != generation) continue;
+		thread->device_events->overflow[i] = {};
+		thread->device_events->overflow_used[i] = false;
 	}
 }
 
@@ -546,19 +602,12 @@ int msg_recv(ThreadBlock* to_th, stduint foo, _Comment(vaddr) CommMsg* msg, bool
 
 	{
 		SpinlockLocal guard(&comm_lock);
-		if (to_th->device_events && !to_th->device_events->pending.isEmpty() &&
+		if (to_th->device_events && to_th->device_events->HasPending() &&
 			(foo == ANYPROC || foo == INTRUPT)) {
 			DeviceEvent event = {};
-			if (!to_th->device_events->pending.Dequeue(event)) return -1;
+			if (!DequeueDeviceEvent(to_th->device_events, event)) return -1;
 			if (!WriteDeviceEventMessage(msg, to_th->parent_process, msg_in_kernel, event)) {
-				DeviceEvent remaining[DeviceEventQueue::Capacity] = {};
-				stduint remaining_count = 0;
-				while (remaining_count < DeviceEventQueue::Capacity &&
-					to_th->device_events->pending.Dequeue(remaining[remaining_count])) {
-					remaining_count++;
-				}
-				(void)to_th->device_events->pending.Enqueue(event);
-				for0(i, remaining_count) (void)to_th->device_events->pending.Enqueue(remaining[i]);
+				(void)QueueDeviceEvent(to_th, event);
 				return -1;
 			}
 			return 0;
