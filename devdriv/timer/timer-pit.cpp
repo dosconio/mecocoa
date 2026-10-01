@@ -60,21 +60,7 @@ void Handint_PIT()
 	time++;
 	if (time % (1000 / CONFIG_SysTickFreq) == 0) {
 		tick++;
-		extern Dchain TimerManager;
-		extern Spinlock timer_lock;
-		SpinlockLocal guard(&timer_lock);
-		while (TimerManager.Root()) {
-			auto crt = treat<MsgTimer>(TimerManager.Root()->offs);
-			if (tick >= crt.timeout) {
-				TimerManager.Remove(TimerManager.Root());
-				if (crt.hand)
-					crt.hand((pureptr_t)crt.timeout, crt.iden); // realtime process
-				else {
-					message_queue.Enqueue(SysMessage{ SysMessage::RUPT_TIMER, crt });
-				}
-			}
-			else break;
-		}
+		Systimex::CollectExpired();
 	}
 	static_assert(1000 / CONFIG_SysTickFreq > 0, "SysTickFreq must be greater than 0");
 	if (time >= 1000) {

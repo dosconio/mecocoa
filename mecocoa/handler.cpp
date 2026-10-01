@@ -117,36 +117,6 @@ void Handint_XHCI() {
 #endif
 
 
-// ---- ---- ---- ---- SOFT-TIM ---- ---- ---- ---- //
-
-volatile timeval_t system_time = {};
-volatile stduint tick = 0;
-
-#if !defined (_MPU_STM32MP13) //{TEMP}
-
-static int TimerCmp(pureptr_t a, pureptr_t b) {
-	return treat<MsgTimer>(((Dnode*)a)->offs).timeout -
-		treat<MsgTimer>(((Dnode*)b)->offs).timeout;
-}
-// Timer management
-Dchain TimerManager = { DnodeHeapFreeSimple };
-Spinlock timer_lock;
-
-void SysTimer::Initialize() {
-	TimerManager.Compare_f = TimerCmp;
-}
-
-
-
-// [Spinlocked]
-void SysTimer::Append(stduint timeout, stduint iden, _tocall_ft hand) {
-	SpinlockLocal guard(&timer_lock);
-	auto n = TimerManager.Append(new MsgTimer{ tick + timeout, iden, hand });
-	if (!n) plogerro("SysTimer::Append failed");
-	// ploginfo("SysTimer::Append %u, now %u timers", timeout, TimerManager.Count());
-}
-
-#endif
 
 #if _MCCA == 0x8664 && defined(_UEFI)
 

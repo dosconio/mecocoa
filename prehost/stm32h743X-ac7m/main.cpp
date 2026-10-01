@@ -13,18 +13,36 @@ void _idle() {
 	LEDB.setMode(GPIOMode::OUT);
 	while (true) {
 		LEDB.Toggle();
-		for(volatile unsigned i{0}; i < 1000000; i++){}
+		SysDelay_ms(500);
 	}
 }
 
+void _test() {
+	GPIN& LEDR = GPIOB[ 1];
+	LEDR.setMode(GPIOMode::OUT);
+	while (true) {
+		LEDR.Toggle();
+		for(volatile unsigned i{0}; i < 10000000; i++){}
+	}
+}
+
+alignas(8) static byte _boot_stack[0x8000];
+bool inited = false;
 int main()
 {
 	con0_out = &XART1;
 	if (!RCC.setClock(SysclkSource::HSE)) erro();
 	XART1.setMode(115200);
+	SysTick::enClock(CONFIG_SysTickFreq);
 	mecocoa();
+	inited = true;
 	
-	mempool0.dump_available();
+	Taskman::Create((void*)&_test, RING_M);
+	// mempool0.dump_available();
+	
+	_ASM volatile("msr psp, %0" :: "r"((stduint)(_boot_stack + sizeof(_boot_stack))));
+	_ASM volatile("mrs r0, control \n orr r0, r0, #2 \n msr control, r0 \n isb" ::: "r0");
+	Taskman::Schedule(true);
 	
 	_idle();
 	erro();
@@ -36,6 +54,17 @@ void erro(const char* str) {
 	while (true) {
 		LEDR.Toggle();
 		for(volatile unsigned i{0}; i < 1000000; i++){}
+	}
+}
+
+// Handler
+
+_ESYM_C void SysTick_Handler();
+_ESYM_C void SysTick_Handler_Mcca() {
+	SysTick_Handler();
+	if (inited) {
+		tick++;
+		Taskman::Schedule();
 	}
 }
 
@@ -122,29 +151,29 @@ bool Consman::Initialize() {
 }
 
 //
+// stduint Taskman::getID() { return _TEMP 0; } // H743 only
 
-ThreadBlock* PCU_CORES_current_thread[PCU_CORES_MAX];
-
-stduint Taskman::getID() { return _TEMP 0; } // H743 only
-
-void ThreadBlock::Block(BlockReason reason) {}
-void ThreadBlock::Unblock(BlockReason reason) {}
-
-void Taskman::SleepAndRelease(Spinlock* lk) {}
-	
 SpinlockBlock<uni::Queue<SysMessage>> message_queue_conv;
 	
 Dnode* VTTY_Append(Console_t* con) {return 0;}
-ProcessBlock* ProcessBlock::AcquireActiveByPID(stduint pid) {return 0;}
 bool Devsman::RegisterDriverStarter(const char* driver_name, DriverStartRoutine starter){return false;}
-void ProcessBlock::Release(ProcessBlock* pb) {}
 Mutex console_waiters_mutex;
 Dchain vttys = { 0 };
-Spinlock scheduler_lock;
-Dchain Taskman::chain = {nullptr};
-auto Taskman::Schedule(bool omit_slice)->decltype(Schedule()) { }
+
 extern "C" stduint sys_kill(stduint pid, int sig, stduint tid){return 0;}
 DeviceNode* Devsman::Root(){return 0;}
+
+void free_async_msg(pureptr_t ptr){}
+void CleanupPwcallThreadInterrupts(stduint tid){}
+void device_event_release(ThreadBlock* thread){}
+bool device_event_proc(stduint tid, const DeviceEvent& event){return 0;}
+int msg_send(ThreadBlock* fo_th, stduint too, _Comment(vaddr) CommMsg* msg, bool msg_in_kernel, bool is_async)
+{return 0;}
+Spinlock comm_lock;
+void UnlinkWaitEntry(ThreadBlock* th) {}
+void CleanupPwcallProcessHandles(stduint pid) {}
+void msg_cleanup_thread(ThreadBlock* th, bool dying) {}
+bool ProcessBlock::Close(int fid) {return false;}
 
 byte FILE_ENDO, FILE_ENTO;
 	

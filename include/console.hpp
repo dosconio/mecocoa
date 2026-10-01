@@ -164,6 +164,7 @@ struct Consman {
 	static unsigned current_screen_TTY;// focus
 	static void WakeBlockedWaiters();
 	static void WakeBlockedWaitersDeferred();
+	static void DispatchDeferredWake();
 
 	// GUI
 	static bool ento_gui;
@@ -186,7 +187,7 @@ struct Consman {
 	static Rectangle GetWorkArea();
 };
 
-#if (_MCCA & 0xFF00) == 0x8600
+#if _GUI_ENABLE
 #define TTY_NUMBER 4
 
 
@@ -201,10 +202,8 @@ extern ProcessBlock* Bcons_pcot[TTY_NUMBER];
 ProcessBlock* EnsureCotForVtty(Dnode* tty_node, ProcessBlock** cache_slot);
 ProcessBlock* Bcons_EnsureCot(unsigned tty_no);
 
-#if _GUI_ENABLE
 void Global_CleanProcessForms(ProcessBlock* pb);
 void QueueGuiCleanupForProcess(ProcessBlock* pb);
-#endif
 
 #endif
 

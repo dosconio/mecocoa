@@ -77,23 +77,24 @@ void RefreshConsoleBlockedStateUnlocked() {
 
 void Consman::WakeBlockedWaiters() {
 	if (!console_has_blocked_waiters.load(MemoryOrder_Acquire)) return;
-	if (console_wake_pending.exchange(1, MemoryOrder_Acq_Rel)) return;
 	syssend_async(Task_Console, nullptr, 0, (stduint)ConsoleMsg::TEST);
 }
 
 void Consman::WakeBlockedWaitersDeferred() {
 	if (!console_has_blocked_waiters.load(MemoryOrder_Acquire)) return;
 	if (console_wake_pending.exchange(1, MemoryOrder_Acq_Rel)) return;
-	#if _MCCA == 0x8664 && defined(_UEFI)
-	SysMessage msg = {};
-	msg.type = SysMessage::RUPT_CONSOLE_WAKE;
-	message_queue.Enqueue(msg);
-	#else
-	// Fallback for targets that do not run serv_sysmsg(): wake Task_Console directly.
-	CommMsg notification_msg = {};
-	notification_msg.type = (stduint)ConsoleMsg::TEST;
-	msg_send(Taskman::CurrentTB(), Task_Console, &notification_msg, true, true);
-	#endif
+	DeviceEvent event = {};
+	event.kind = _IMM(DeviceEventKind::ConsoleWake);
+	event.count = 1;
+	if (!device_event_proc(Task_Devsman, event)) {
+		console_wake_pending.store(0, MemoryOrder_Release);
+	}
+}
+
+void Consman::DispatchDeferredWake() {
+	console_wake_pending.store(0, MemoryOrder_Release);
+	if (!console_has_blocked_waiters.load(MemoryOrder_Acquire)) return;
+	(void)syssend_async(Task_Console, nullptr, 0, (stduint)ConsoleMsg::TEST);
 }
 
 
@@ -216,7 +217,6 @@ void _Comment(R1) serv_cons_loop()
 		bool skip_waiter_maintenance = false;
 		// Block here to wait for messages or wake notifications
 		sysrecv(ANYPROC, (void*)to_args, byteof(to_args), (usize*)&sig_type, (usize*)&sig_src);
-		console_wake_pending.store(0, MemoryOrder_Release);
 		ProcessBlock* safe_pb = ProcessBlock::Acquire(sig_src);
 		if (safe_pb) {
 			switch (ConsoleMsg(sig_type)) {

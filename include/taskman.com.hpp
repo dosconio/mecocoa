@@ -100,6 +100,8 @@ enum class DeviceEventKind : uint16 {
 	Removed,
 	Fault,
 	Shutdown,
+	ConsoleWake,
+	TimerExpired,
 };
 
 enum DeviceEventFlag : uint16 {

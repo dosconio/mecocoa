@@ -33,7 +33,7 @@ __heap_limit
 
 ; UNISYM offer:
 	IMPORT  HardFault_Handler
-
+	IMPORT  SysTick_Handler_Mcca
 __Vectors       DCD     __initial_sp                      ; Top of Stack
                 DCD     Reset_Handler                     ; Reset Handler
                 DCD     NMI_Handler                       ; NMI Handler
@@ -49,7 +49,7 @@ __Vectors       DCD     __initial_sp                      ; Top of Stack
                 DCD     DebugMon_Handler                  ; Debug Monitor Handler
                 DCD     0                                 ; Reserved
                 DCD     PendSV_Handler                    ; PendSV Handler
-                DCD     SysTick_Handler                   ; SysTick Handler
+                DCD     SysTick_Handler_Mcca              ; SysTick Handler
 
                 ; External Interrupts
                 DCD     WWDG_IRQHandler                   ; Window WatchDog interrupt ( wwdg1_it)                                         
@@ -256,11 +256,7 @@ DebugMon_Handler\
 PendSV_Handler  PROC
                 EXPORT  PendSV_Handler                    [WEAK]
                 B       .
-                ENDP
-SysTick_Handler PROC
-                EXPORT  SysTick_Handler                   [WEAK]
-                B       .
-                ENDP                                     
+                ENDP                             
                                                           
 Default_Handler PROC                                      
 

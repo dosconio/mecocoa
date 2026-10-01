@@ -427,18 +427,7 @@ static void wakeup_thread_for_signal(ThreadBlock* th, int sig) {
 		if (_IMM(th->block_reason) & ThreadBlock::BR_Interruptible) {
 			// 1. Sleep Timer Cleanup
 			if (th->block_reason & ThreadBlock::BlockReason::BR_Resting) {
-				extern Spinlock timer_lock;
-				extern Dchain TimerManager;
-				SpinlockLocal guard(&timer_lock);
-				for (auto nod = TimerManager.Root(); nod; ) {
-					auto next_nod = nod->next;
-					auto msg_timer = (MsgTimer*)nod->offs;
-					if (msg_timer->iden == (stduint)th) {
-						TimerManager.Remove(nod);
-						break;
-					}
-					nod = next_nod;
-				}
+				Systimex::CancelThreadWake(th->tid);
 			}
 
 			// 2. IPC Message Cleanup

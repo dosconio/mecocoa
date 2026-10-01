@@ -187,12 +187,6 @@ DEFSYSC sysc_TIME(stduint unit) {
 	}
 }
 
-static void _TimerWakeUp(pureptr_t, stduint th_ptr) {
-	if (auto th = (ThreadBlock*)th_ptr) {
-		th->Unblock(ThreadBlock::BlockReason::BR_Resting);
-	}
-}
-
 DEFSYSC sysc_REST(stduint unit, stduint time) {
 	if (time == 0) {
 		Taskman::Schedule(true);
@@ -217,7 +211,12 @@ DEFSYSC sysc_REST(stduint unit, stduint time) {
 	bool state_rupt = IC.TryMaskInterrupt();
 
 	th->Block(ThreadBlock::BlockReason::BR_Resting); // Block the thread to wait for timer
-	SysTimer::Append(timeout, (stduint)th, (_tocall_ft)_TimerWakeUp);
+	if (!Systimex::AppendThreadWake(timeout, th->tid)) {
+		th->Unblock(ThreadBlock::BlockReason::BR_Resting);
+		if (state_rupt) IC.enInterrupt(true);
+		Taskman::Schedule(true);
+		return -1;
+	}
 	if (state_rupt) IC.enInterrupt(true);
 	
 	Taskman::Schedule(true);

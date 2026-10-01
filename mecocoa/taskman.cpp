@@ -106,9 +106,6 @@ namespace uni {
 		return true;
 	}
 }
-static SysMessage _BUF_Message[64];
-Queue<SysMessage> message_queue(_BUF_Message, numsof(_BUF_Message));
-
 // ---- . ----
 
 auto Taskman::AllocateTask() -> ProcessBlock* {
@@ -231,6 +228,7 @@ void Taskman::DestroyThread(ThreadBlock* th) {
 			break;
 		}
 	}
+	Systimex::CancelThreadWake(th->tid);
 	CleanupPwcallThreadInterrupts(th->tid);
 	device_event_release(th);
 	ProcessBlock* ppb = th->parent_process;
@@ -262,9 +260,11 @@ void Taskman::DestroyThread(ThreadBlock* th) {
 		free((byte*)th->stack_levladdr);
 	}
 	else if (ppb) {
+		#if CONFIG_ENABLE_MMU // assume only one stack in NoMMU
 		if (th->stack_lineaddr) {
 			free((byte*)ppb->paging[_IMM(th->stack_lineaddr) & ~0xFFF]);
 		}
+		#endif
 		free((byte*)th->stack_levladdr);
 	}
 	free((byte*)th);
@@ -500,13 +500,22 @@ static void _Exit_Cleanup(stduint pid)
 	}
 	ppb->main_thread = nullptr;
 
+	auto getphy = [ppb](stduint vaddr) -> void* {
+	    #if CONFIG_ENABLE_MMU
+		return ppb->paging[vaddr];
+	    #else
+		return (void*)vaddr;
+	    #endif
+	};
+
 	// Release Segments
+	#if CONFIG_ENABLE_MMU
 	for0a(i, ppb->load_slices) {
 		if (!ppb->load_slices[i].length) continue;
 		stduint vstart = ppb->load_slices[i].address & ~_IMM(PAGE_SIZE - 1);
 		stduint vend = (ppb->load_slices[i].address + ppb->load_slices[i].length + PAGE_SIZE - 1) & ~_IMM(PAGE_SIZE - 1);
 		for (stduint vaddr = vstart; vaddr < vend; vaddr += PAGE_SIZE) {
-			void* phy = ppb->paging[vaddr];
+			void* phy = getphy(vaddr);
 			if (phy != (void*)~_IMM0) {
 				free(phy);
 				ppb->paging.Unmap(vaddr, PAGE_SIZE);
@@ -515,13 +524,16 @@ static void _Exit_Cleanup(stduint pid)
 		ppb->load_slices[i].address = 0;
 		ppb->load_slices[i].length = 0;
 	}
+	#else
+	#warning TODO nommu
+	#endif
 	// Heap
 	if (1) {
 		for (stduint i = 0; i < ppb->vmas.Count(); i++) {
 			const auto& vma = ppb->vmas[i];
 			if (vma.vm_type == VMA_FILE && vma.vfile && (vma.vm_flags & PGPROP_writable)) {
 				for (stduint addr = vma.vm_start; addr < vma.vm_end; addr += 0x1000) {
-					void* phys_addr = ppb->paging[addr];
+					void* phys_addr = getphy(addr);
 					if (phys_addr != (void*)~_IMM0) {
 						stduint file_offset = addr - vma.vm_start + vma.file_offset;
 						if (file_offset < vma.vfile->f_inode->i_size) {
@@ -533,7 +545,7 @@ static void _Exit_Cleanup(stduint pid)
 				}
 			}
 			for (stduint addr = vma.vm_start; addr < vma.vm_end; addr += 0x1000) {
-				void* phys_addr = ppb->paging[addr];
+				void* phys_addr = getphy(addr);
 				if (phys_addr != (void*)~_IMM0) {
 					if (vma.vm_type != VMA_DEVICE) {
 						free(phys_addr);
@@ -550,9 +562,11 @@ static void _Exit_Cleanup(stduint pid)
 		ppb->vmas.Clear();
 	}
 	// Release Heap/Paging
+	#if CONFIG_ENABLE_MMU
 	if (!ppb->ring) {
 		ppb->paging.root_level_page = nullptr;
 	}
+	#endif
 
 	{
 		SpinlockLocal guard(&scheduler_lock);

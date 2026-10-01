@@ -17,13 +17,20 @@
 #include "taskman.com.hpp"
 #include <c/ISO_IEC_STD/signal.h>
 
-void serv_sysmsg();
 namespace uni { struct PipeChannel; }
 
-struct MsgTimer {
-	stduint timeout = 0;
-	stduint iden = 0;
-	_tocall_ft hand = nullptr;// Realtime Hook
+struct Systimex {
+	static void
+		CollectExpired();
+	static void
+		DispatchExpired();
+	static bool
+		AppendThreadWake(stduint timeout, stduint tid);
+	static bool
+		AppendDriverMessage(stduint timeout, stduint target_tid,
+			stduint message_type, stduint value = 0);
+	static void
+		CancelThreadWake(stduint tid);
 };
 struct MccaRectangle {
 	stduint x = 0, y = 0, w = 0, h = 0;
@@ -35,13 +42,11 @@ struct SysMessage {
 		RUPT_MOUSE,
 		RUPT_KBD,
 		RUPT_FLUSH,
-		RUPT_CONSOLE_WAKE,
 		RUPT_NEW_TERM,
 		RUPT_SET_RES,
 		RUPT_TTY_OUT,// async TTY text ready to render (sent by DevFs::writfl)
 	} type = Type::RUPT_TIMER;
 	union {
-		struct MsgTimer timer;
 		MouseMessage mou_event;
 		keyboard_event_t kbd_event;
 		MccaRectangle rect;// RUPT_FLUSH
@@ -49,7 +54,6 @@ struct SysMessage {
 		struct { uint32 width, height; } res; // RUPT_SET_RES
 	} args = {};
 };
-extern uni::Queue<SysMessage> message_queue;
 extern SpinlockBlock<uni::Queue<SysMessage>> message_queue_conv;// for serv_graf_loop
 
 enum GraphicFormStyle {
@@ -288,7 +292,9 @@ public: // Threads
 	ThreadBlock* thread_list_head = nullptr;
 
 public: // VirtualMemory
+	#if CONFIG_ENABLE_MMU
 	uni::Paging paging;
+	#endif
 	stduint heaptop = 0;
 	stduint heapbtm = 0;// norm: max seg + 0x10000
 	uni::Vector<VirtualMemoryArea> vmas; // List of virtual memory areas
@@ -446,7 +452,11 @@ inline bool ProcessBlock::isWaiting() {
 }
 
 class Taskman {
+	#ifdef _MCU_STM32
+	static const stduint DEFAULT_STACK_SIZE = 0x2000;
+	#else
 	static const stduint DEFAULT_STACK_SIZE = 0x10000;// 0xE000
+	#endif
 
 public:
 	static stduint PCU_CORES;
@@ -526,6 +536,7 @@ public:
 		Locate(stduint taskid) -> ProcessBlock*;
 	static auto
 		LocateThread(stduint tid) -> ThreadBlock*;
+	static bool UnblockThread(stduint tid, ThreadBlock::BlockReason reason);
 public:
 	// ring:
 	// - Intel: 0 1 2 3
@@ -620,7 +631,7 @@ void UnlinkWaitEntry(ThreadBlock* th);
 void rupt_proc(stduint tid, stduint rupt_no);
 bool device_event_prepare(ThreadBlock* thread);
 void device_event_release(ThreadBlock* thread);
-void device_event_proc(stduint tid, const DeviceEvent& event);
+bool device_event_proc(stduint tid, const DeviceEvent& event);
 void device_event_cancel(stduint tid, stduint device_handle, uint32 generation);
 #if (_MCCA & 0xFF00) == 0x8600
 bool device_interrupt_bind(stduint owner_pid, stduint owner_tid,
@@ -710,6 +721,7 @@ static inline stduint MccaMemCopyP(
 	void* dest, ProcessBlock* pd, bool dker,
 	const void* sors, ProcessBlock* ps, bool sker,
 	size_t n) {
+	#if CONFIG_ENABLE_MMU
 	extern Paging kernel_paging;
 	if (ps && !sker) {
 		stduint start_page = (stduint)sors & ~_IMM(0xFFF);
@@ -736,6 +748,9 @@ static inline stduint MccaMemCopyP(
 	return MemCopyP(
 		dest, pd && !dker ? pd->paging : kernel_paging,
 		sors, ps && !sker ? ps->paging : kernel_paging, n);
+	#else
+	return _IMM((byte*)MemCopyN(dest, sors, n) - (byte*)dest);
+	#endif
 }
 
 #endif

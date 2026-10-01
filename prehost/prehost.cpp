@@ -12,6 +12,10 @@ _ESYM_C void mecocoa()
 	Filesys::Initialize();
 	Systime::Initialize();
 	Taskman::Initialize();
+	//Devsman::Initialize();
+	//Syscall::Initialize();
+	//Coreman::Initialize();// Multicore:
+	//Virtman::Initialize();
 	
 	// loop { }
 }

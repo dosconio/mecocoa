@@ -1994,6 +1994,12 @@ namespace {
 			ploginfo("[Devsman] device event kind=%u handle=%u source=%u count=%u",
 				event.kind, event.device_handle, event.source, event.count);
 			break;
+		case DeviceEventKind::ConsoleWake:
+			Consman::DispatchDeferredWake();
+			break;
+		case DeviceEventKind::TimerExpired:
+			Systimex::DispatchExpired();
+			break;
 		case DeviceEventKind::Interrupt:
 			#if _MCCA == 0x8664 && defined(_UEFI)
 			if (Devsman::ProcessXHCIEvent(event)) break;

@@ -222,125 +222,9 @@ extern stduint kernel_stack_top_cpu0[];
 #if _MCCA == 0x8632
 extern "C" byte kernel_stack[];
 #endif
-extern "C" PERCORE* C_PCU_CORES_PERCORE[]; // exported for assembly use
 void Taskman::Initialize(stduint cpuid) {
 	#if (_MCCA & 0xFF00) == 0x8600
-	if (cpuid || PCU_CORES_PERCORE[0]) return; // already initialized
-	#if _MCCA == 0x8632
-	PCU_CORES = acpi_cpu_count ? minof(acpi_cpu_count, _IMM(PCU_CORES_MAX)) : 1;
-	#elif _MCCA == 0x8664
-	PCU_CORES = acpi_cpu_count ? minof(acpi_cpu_count, _IMM(PCU_CORES_MAX)) : PCU_CORES_MAX;
-	#else
-	PCU_CORES = PCU_CORES_MAX;
-	#endif
-	for0(i, LAPIC_ID_MAP_SIZE) {
-		g_lapicid_to_coreid[i] = CORE_ID_INVALID;
-		#if _MCCA == 0x8632
-		ap_lapicid_to_coreid[i] = CORE_ID_INVALID;
-		#endif
-	}
-
-	for0(i, PCU_CORES) {
-		auto percore = (PERCORE*)mem.allocate(sizeof(PERCORE), PAGESIZE_4KB);
-		MemSet(percore, 0, sizeof(PERCORE));
-		PCU_CORES_PERCORE[i] = percore;
-		C_PCU_CORES_PERCORE[i] = percore;
-		higher_stacks[i] = (mem.allocate(0x1000, PAGESIZE_4KB));
-		#if _MCCA == 0x8664
-		kernel_paging.Map(
-			PERCORE_VBASE + i * PERCORE_STRIDE,
-			_IMM(percore),
-			PERCORE_STRIDE,
-			PAGESIZE_4KB,
-			PGPROP_present | PGPROP_writable
-		);
-		#endif
-		#if _MCCA == 0x8632
-		ring3_iret_stacks[i] = (mem.allocate(0x1000, PAGESIZE_4KB));
-		// ploginfo("ring3_iret_stacks %u: %p", i, ring3_iret_stacks[i]);
-		treat<uint32>(ring3_iret_stacks[i]) = 0xdeadbeef;
-		ap_ring3_iret_stack_tops[i] = (0xFFFFF000u - i * 0x1000u) + 0x1000u - 0x10u;
-		ap_higher_stack_tops[i] = _IMM(higher_stacks[i]) + 0x1000 - 0x10;
-		#endif
-		#if _MCCA == 0x8632 || _MCCA == 0x8664
-		percore->lapic_id = acpi_cpu_count ? acpi_cpu_lapic_ids[i] :
-			(i == 0 ? current_bootstrap_lapic_id() : CORE_ID_INVALID);
-		if (percore->lapic_id < LAPIC_ID_MAP_SIZE) {
-			g_lapicid_to_coreid[percore->lapic_id] = i;
-			#if _MCCA == 0x8632
-			ap_lapicid_to_coreid[percore->lapic_id] = i;
-			#endif
-		}
-		else {
-			plogwarn("[COREMAN] LAPIC ID %[x] exceeds direct map size %u",
-				percore->lapic_id, LAPIC_ID_MAP_SIZE);
-		}
-		#else
-		percore->lapic_id = CORE_ID_INVALID;
-		#endif
-		percore->state = CoreState::Prepared;
-		percore->kernel_stack = 0;
-		#if _MCCA == 0x8664
-		percore->tss.RSP0 = GetCoreRingStackBase(i) + HIGHER_STACK_SIZE - 8;// for user-app in cpu0
-		#else
-		#endif
-		//{} TEMP GDT_Alloc and tss.setRange
-		if (i == 0) {
-			mecocoa_global->gdt_ptr->tss.setRange(mglb(&PCU_CORES_PERCORE[i]->tss), sizeof(TSS_t) - 1);
-		}
-
-		// Set TSS
-		#if _MCCA == 0x8632
-		if (i == 0) {
-			PCU_CORES_PERCORE[i]->tss_selector = SegTSS0;
-		}
-		else {
-			descriptor_t* const GDT = (descriptor_t*)mecocoa_global->gdt_ptr;
-			word selector = GDT_Alloc();
-			Descriptor32Set(&GDT[selector / 8], mglb(&PCU_CORES_PERCORE[i]->tss), sizeof(TSS_t) - 1, _Dptr_TSS386_Available, 0, 0, 1, 0);
-			PCU_CORES_PERCORE[i]->tss_selector = selector;
-		}
-
-		#elif _MCCA == 0x8664
-		//{} TODO
-
-		#endif
-
-		#if _MCCA == 0x8632
-		PCU_CORES_PERCORE[i]->tss.ESP0 = GetCoreTransitionStackTop(i);
-		PCU_CORES_PERCORE[i]->tss.SS0 = SegData;
-		PCU_CORES_PERCORE[i]->tss.ESP1 = GetCoreTransitionStackTop(i);
-		PCU_CORES_PERCORE[i]->tss.SS1 = 8 * 5 + 4 + 1;// 4:LDT 8*5:SS1 1:Ring1
-		PCU_CORES_PERCORE[i]->tss.ESP2 = GetCoreTransitionStackTop(i);
-		PCU_CORES_PERCORE[i]->tss.SS2 = 8 * 6 + 4 + 2;// 4:LDT 8*6:SS2 2:Ring2
-		PCU_CORES_PERCORE[i]->tss.LDTDptr = SegGLDT + 3; // LDT yo GDT
-		PCU_CORES_PERCORE[i]->tss.LDTLength = 8 * 8 - 1;
-		PCU_CORES_PERCORE[i]->tss.STRC_15_T = 0;
-		PCU_CORES_PERCORE[i]->tss.IO_MAP = sizeof(TSS_t) - 1;
-		#endif
-
-	}
-	_Mapping_Core_Stack(kernel_paging);
-	PCU_CORES_PERCORE[0]->state = CoreState::Online;//
-
-	#if _MCCA == 0x8632// TEMP x64 do not use LDT (no R1 and R2)
-	for0(i, PCU_CORES_MAX) {
-		if (PCU_CORES_PERCORE[i]) {
-			kernel_paging.Map(GetCoreRingStackBase(i), (stduint)mem.allocate(HIGHER_STACK_SIZE), HIGHER_STACK_SIZE, PAGESIZE_4KB, PGPROP_present | PGPROP_writable);
-		}
-	}
-	make_LDT(_LDT, 3);
-	const auto LDTLength = sizeof(_LDT) - 1;
-	descriptor_t* const GDT = (descriptor_t*)mecocoa_global->gdt_ptr;
-	Descriptor32Set(&GDT[SegGLDT / 8], mglb(&_LDT), LDTLength, _Dptr_LDT, 0, 0 /* is_sys */, 1 /* 32-b */, 0 /* not-4k */);
-	#endif
-
-	loadTask(SegTSS0);
-
-	#if _MCCA == 0x8632
-	_ASM("LLDT %w0" : : "r"(SegGLDT) : "memory");
-	#endif
-
+	SetPercoreFore(cpuid);
 	#endif// (_MCCA & 0xFF00) == 0x8600
 
 	// register kernel as pid 0
@@ -473,6 +357,20 @@ ProcessBlock* Taskman::Create(void* entry, byte ring, bool append)
 		_TODO// Paging
 	}
 
+	#elif (_MCCA & 0xFFFF) == 0x2032
+	tb->stack_size = DEFAULT_STACK_SIZE;
+	tb->stack_lineaddr = (byte*)mempool.allocate(tb->stack_size, 12);
+	tb->stack_levladdr = tb->stack_lineaddr;
+	*(stduint*)tb->stack_lineaddr = 0xDEADBEEF;// stack canary
+	auto& ctx = tb->context;
+	// The first exception return pops this frame from PSP, see stm32h743.S
+	stduint* frame = (stduint*)((_IMM(tb->stack_levladdr) + tb->stack_size - 0x20) & ~_IMM(7));
+	frame[0] = frame[1] = frame[2] = frame[3] = frame[4] = frame[5] = 0;// R0-R3, R12, LR
+	frame[6] = _IMM(entry);// PC
+	frame[7] = 0x01000000;// xPSR: T bit set
+	ctx.sp = _IMM(frame);
+	ctx.exc_return = 0xFFFFFFFD;// thread mode using PSP
+
 	#endif
 
 	tb->priority = (ring == RING_U) ? 3 : 0;
@@ -504,6 +402,8 @@ static bool _CreateELF_Carry(char* vaddr, stduint mem_length, BlockTrait* source
         plogerro("_CreateELF_Carry: vaddr out of RV64 Sv39 user space");
     }
 	#endif
+
+	#if CONFIG_ENABLE_MMU
 	// ploginfo("_CreateELF_Carry(%[x], %[x], %[x])  pg(%[x])", vaddr, length, phy_src, pg);
 	stduint bytes_read = 0; 
 	for0(i, (mem_length + compensation + 0xFFF) / 0x1000) {
@@ -555,6 +455,8 @@ static bool _CreateELF_Carry(char* vaddr, stduint mem_length, BlockTrait* source
 		compensation = 0; 
 	}
 	return true;
+	#endif
+	return false;
 }
 
 static bool _Taskman_Relocate_PIE(BlockTrait* source, const ELF_Header_t& header, stduint load_bias, Paging& pg, byte* block_buffer) {
@@ -693,6 +595,7 @@ static bool _Taskman_Resolve_Interp(BlockTrait* source, const ELF_Header_t& head
 
 // Load the interpreter into pb->paging, register its load slices, report its entry point
 static bool _Taskman_Load_Interp(vfs_dentry* interp_d, ProcessBlock* pb, byte* block_buffer, stduint& load_slice_p, stduint* out_entry) {
+	#if CONFIG_ENABLE_MMU
 	FileBlockBridge interp_device(interp_d->d_inode->i_sb->fs, interp_d->d_inode->internal_handler, interp_d->d_inode->i_size, 512);
 	ELF_Header_t interp_header;
 	interp_device.Read(0, &interp_header, sizeof(interp_header), block_buffer);
@@ -718,6 +621,9 @@ static bool _Taskman_Load_Interp(vfs_dentry* interp_d, ProcessBlock* pb, byte* b
 		}
 	}
 	return true;
+	#else
+	return false;
+	#endif
 }
 
 ProcessBlock* Taskman::CreateELF(BlockTrait* source, byte ring) {
@@ -854,8 +760,12 @@ ProcessBlock* Taskman::CreateELF(BlockTrait* source, byte ring) {
 
 	return pb;
 	#endif
+	return nullptr;
 }
 
+
+#if CONFIG_ENABLE_MMU
+//
 ProcessBlock* Taskman::CreateFork(ProcessBlock* fo, const CallgateFrame* frame) {
 	ProcessBlock* pb = Taskman::AllocateTask();
 	if (!pb) return 0;
@@ -1024,7 +934,6 @@ ProcessBlock* Taskman::CreateFork(ProcessBlock* fo, const CallgateFrame* frame) 
 }
 
 //
-
 ProcessBlock* Taskman::CreateFile(const char* path, byte ring, stduint parent, vfs_dentry* base) {
 	//{} ELF
 	auto label = StrIndexCharRight(path, '/');
@@ -1051,7 +960,6 @@ ProcessBlock* Taskman::CreateFile(const char* path, byte ring, stduint parent, v
 };
 
 //
-
 ProcessBlock* Taskman::Exec(stduint parent, rostr usr_fullpath, char** usr_argv, char** usr_envp)
 {
 	static char buf_fullpath[_TEMP 512];
@@ -1131,7 +1039,7 @@ ProcessBlock* Taskman::Exec(stduint parent, rostr usr_fullpath, char** usr_argv,
 	return new_pb;
 }
 
-
+//
 ProcessBlock* Taskman::Exet(stduint parent, rostr usr_fullpath, char** usr_argv, char** usr_envp)
 {
 	static char buf_fullpath[512];
@@ -1307,3 +1215,4 @@ ProcessBlock* Taskman::Exet(stduint parent, rostr usr_fullpath, char** usr_argv,
 	Taskman::EnqueueReady(current_pb->main_thread);
 	return current_pb;
 }
+#endif

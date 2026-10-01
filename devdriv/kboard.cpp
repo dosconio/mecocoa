@@ -193,7 +193,7 @@ int KeyboardBridge::out(const char* str, stduint len) {
 						}
 					}
 					VTTY_INNQ(p_vtty)->OutChar(ascii_ch);
-					Consman::WakeBlockedWaiters();
+					Consman::WakeBlockedWaitersDeferred();
 					#endif
 				}
 			}
@@ -211,7 +211,7 @@ int KeyboardBridge::out(const char* str, stduint len) {
 		#else
 		if (asrtand(Consman::last_click_sheet)->refSheetNode().next) {
 			Consman::last_click_sheet->onrupt(SheetEvent::onKeybd, Point(0, 0), &event);
-			Consman::WakeBlockedWaiters();
+			Consman::WakeBlockedWaitersDeferred();
 		}
 		#endif
 	}

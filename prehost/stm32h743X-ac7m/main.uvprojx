@@ -421,6 +421,11 @@
               <FilePath>..\..\mecocoa\handler.cpp</FilePath>
             </File>
             <File>
+              <FileName>handler-tim.cpp</FileName>
+              <FileType>8</FileType>
+              <FilePath>..\..\mecocoa\handler-tim.cpp</FilePath>
+            </File>
+            <File>
               <FileName>console-init.cpp</FileName>
               <FileType>8</FileType>
               <FilePath>..\..\mecocoa\console-init.cpp</FilePath>
@@ -434,6 +439,11 @@
               <FileName>filesys.cpp</FileName>
               <FileType>8</FileType>
               <FilePath>..\..\mecocoa\filesys.cpp</FilePath>
+            </File>
+            <File>
+              <FileName>schedul.cpp</FileName>
+              <FileType>8</FileType>
+              <FilePath>..\..\mecocoa\schedul.cpp</FilePath>
             </File>
           </Files>
         </Group>
@@ -449,6 +459,11 @@
               <FileName>prehost.cpp</FileName>
               <FileType>8</FileType>
               <FilePath>..\prehost.cpp</FilePath>
+            </File>
+            <File>
+              <FileName>stm32h743.S</FileName>
+              <FileType>2</FileType>
+              <FilePath>.\stm32h743.S</FilePath>
             </File>
             <File>
               <FileName>stm32h743.startup.S</FileName>

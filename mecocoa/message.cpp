@@ -6,45 +6,7 @@
 
 #include <c/task.h>
 
-#if (_MCCA & 0xFF00) == 0x1000
-#include <c/driver/timer.h>
-#endif
-
 SpinlockBlock<uni::Queue<SysMessage>> message_queue_conv;
-
-extern uni::Dchain TimerManager;
-void _Comment(R0) serv_sysmsg() {
-	#if _MCCA == 0x8664 && defined(_UEFI)
-	global_layman.Lock()->lazy_update = _GUI_DOUBLE_BUFFER;// Only enable lazy mode if double buffering is enabled
-	while (true) {
-		IC.enInterrupt(false);
-		// auto crt_tick = tick;
-		if (!message_queue.Count()) {
-			IC.enInterrupt(true);
-			HALT();
-			continue;
-		}
-		SysMessage msg;
-		message_queue.Dequeue(msg);
-		IC.enInterrupt(true);
-		switch (msg.type) {
-		case SysMessage::RUPT_TIMER:
-			ploginfo("Timer %llu Rupt! tick = %llu, tim = %u", msg.args.timer.iden, msg.args.timer.timeout, TimerManager.Count());
-			if (0 && msg.args.timer.iden == 0)
-			{
-				SysTimer::Append(100, 0);// spinLocked
-			}
-			break;
-		case SysMessage::RUPT_CONSOLE_WAKE:
-			Consman::WakeBlockedWaiters();
-			break;
-		default:
-			plogerro("Unknown message type: %d", msg.type);
-			break;
-		}
-	}
-	#endif
-}
 
 #if 1
 
@@ -129,7 +91,7 @@ static bool QueueDeviceEvent(ThreadBlock* thread, const DeviceEvent& event) {
 			thread->device_events->overflow[i].flags |= DeviceEventFlag_Overflow;
 		}
 	}
-	return true;
+	return false;
 }
 
 static bool DequeueDeviceEvent(DeviceEventQueue* events, DeviceEvent& event) {
@@ -178,14 +140,15 @@ void device_event_release(ThreadBlock* thread) {
 	if (events) delete events;
 }
 
-void device_event_proc(stduint tid, const DeviceEvent& event) {
+bool device_event_proc(stduint tid, const DeviceEvent& event) {
 	auto* thread = Taskman::LocateThread(tid);
-	if (!thread) return;
+	if (!thread) return false;
 	bool do_unblock = false;
+	bool delivered = false;
 	{
 		extern Spinlock comm_lock;
 		SpinlockLocal guard(&comm_lock);
-		if (!thread->device_events) return;
+		if (!thread->device_events) return false;
 		if ((_IMM(thread->block_reason) & _IMM(ThreadBlock::BlockReason::BR_RecvMsg)) &&
 			thread->unsolved_msg &&
 			((stduint)thread->recv_fo_whom == ANYPROC || (stduint)thread->recv_fo_whom == INTRUPT) &&
@@ -194,14 +157,16 @@ void device_event_proc(stduint tid, const DeviceEvent& event) {
 			thread->unsolved_msg = nullptr;
 			thread->recv_fo_whom = nullptr;
 			do_unblock = true;
+			delivered = true;
 		}
 		else {
-			(void)QueueDeviceEvent(thread, event);
+			delivered = QueueDeviceEvent(thread, event);
 		}
 	}
 	if (do_unblock) {
 		thread->Unblock(ThreadBlock::BlockReason::BR_RecvMsg);
 	}
+	return delivered;
 }
 
 void device_event_cancel(stduint tid, stduint device_handle, uint32 generation) {

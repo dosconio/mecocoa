@@ -476,25 +476,44 @@ void ThreadBlock::Block(BlockReason reason) {
 	block_reason = BlockReason(block_reason | reason);
 }
 
-void ThreadBlock::Unblock(BlockReason reason) {
-	SpinlockLocal guard(&scheduler_lock);
-	block_reason = BlockReason(block_reason & ~reason);
-	if (block_reason == BlockReason::BR_None) {
-		if (state == State::Running) {
-			pending_wake = BlockReason(pending_wake | reason);
+static void UnblockThreadLocked(ThreadBlock* thread, ThreadBlock::BlockReason reason) {
+	thread->block_reason = ThreadBlock::BlockReason(thread->block_reason & ~reason);
+	if (thread->block_reason == ThreadBlock::BlockReason::BR_None) {
+		if (thread->state == ThreadBlock::State::Running) {
+			thread->pending_wake = ThreadBlock::BlockReason(thread->pending_wake | reason);
 			return;
 		}
-		if (state == State::Ready) return;
-		state = State::Ready;//{} else panic...
-		if (this->is_expired) {
-			Taskman::EnqueueExpired(this, false);
+		if (thread->state == ThreadBlock::State::Ready) return;
+		thread->state = ThreadBlock::State::Ready;//{} else panic...
+		if (thread->is_expired) {
+			Taskman::EnqueueExpired(thread, false);
 		} else {
-			Taskman::EnqueueReady(this, false);
+			Taskman::EnqueueReady(thread, false);
 		}
 		#if _MCCA == 0x8632
-		WakeThreadOnRecordedCpu(this);
+		WakeThreadOnRecordedCpu(thread);
 		#endif
 	}
+}
+
+void ThreadBlock::Unblock(BlockReason reason) {
+	SpinlockLocal guard(&scheduler_lock);
+	UnblockThreadLocked(this, reason);
+}
+
+bool Taskman::UnblockThread(stduint tid, ThreadBlock::BlockReason reason) {
+	SpinlockLocal guard(&scheduler_lock);
+	// Resolve the TID while holding the scheduler lock so deferred wakeups cannot use a freed thread.
+	for (auto* node = thchain.Root(); node; node = node->next) {
+		auto* thread = cast<ThreadBlock*>(node->offs);
+		if (thread->tid != tid) continue;
+		if (thread->state == ThreadBlock::State::Exited ||
+			thread->state == ThreadBlock::State::Invalid) return false;
+		if (!(_IMM(thread->block_reason) & _IMM(reason))) return false;
+		UnblockThreadLocked(thread, reason);
+		return true;
+	}
+	return false;
 }
 
 static uni::Atomic<stduint> next_global_id = 1;

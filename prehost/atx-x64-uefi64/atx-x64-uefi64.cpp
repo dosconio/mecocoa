@@ -65,5 +65,10 @@ void mecocoa(const UefiData& uefi_data_ref)
 	SysTimer::Append(250, 1);
 	SysTimer::Append(100, 0);
 
-	serv_sysmsg();
+	global_layman.Lock()->lazy_update = _GUI_DOUBLE_BUFFER;// Only enable lazy mode if double buffering is enabled
+	IC.enInterrupt(true);
+	loop {
+		Taskman::Schedule(true);
+		HALT();
+	}
 }
