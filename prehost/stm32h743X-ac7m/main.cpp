@@ -1,6 +1,6 @@
 #include "../../include/mecocoa.hpp"
-#include <cpp/MCU/ST/STM32H7>\
-
+#include <cpp/MCU/ST/STM32H7>
+#include "../../depends/desktop.hpp"
 #include "_openedv/RGB-LCD.hpp"
 
 extern "C" char _IDN_BOARD[16] {"STM32H743IIT6"};
@@ -60,6 +60,7 @@ public:
 void ltdc_gpio_config();
 void ltdc_clock_config();
 VideoDevice* InitClassicVideo(const uni::FramebufferInfo& info);
+extern byte _BUF_cursor[byteof(Cursor)];
 #define LCD_FRAME_BUF_ADDR FMC_SDRAM_BANK1_BASE
 bool Consman::Initialize() {
 	new (&message_queue_conv) SpinlockBlock<uni::Queue<SysMessage>>(64);
@@ -99,6 +100,14 @@ bool Consman::Initialize() {
 	}
 	Consman::AdoptVideoDevice(screen);
 	
+	Cursor::global_cursor = new (_BUF_cursor)Cursor{ &global_layman.Lock()->getVCI() };
+	Cursor::global_cursor->setSheet(*global_layman.Lock(), Point{ 300, 200 });
+	
+	auto desktop = new Desktop(Desktop::kDefaultBgColor);
+	global_desktop = desktop;
+	desktop->Initialize(*global_layman.Lock(), screen0_win, Desktop::kDefaultBgColor);
+	global_layman.Lock()->Append(desktop);
+	
 	// TEMP single layout
 	{
 		auto layman = global_layman.Lock();
@@ -108,8 +117,7 @@ bool Consman::Initialize() {
 		if (Consman::real_pvci && layman->sheet_buffer) {
 			Consman::real_pvci->DrawPoints(screen0_win, layman->sheet_buffer);
 		}
-	}	
-	
+	}
 	return true;
 }
 
@@ -134,6 +142,9 @@ Mutex console_waiters_mutex;
 Dchain vttys = { 0 };
 Spinlock scheduler_lock;
 Dchain Taskman::chain = {nullptr};
+auto Taskman::Schedule(bool omit_slice)->decltype(Schedule()) { }
+extern "C" stduint sys_kill(stduint pid, int sig, stduint tid){return 0;}
+DeviceNode* Devsman::Root(){return 0;}
 
 byte FILE_ENDO, FILE_ENTO;
 	

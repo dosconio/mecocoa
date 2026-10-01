@@ -1811,6 +1811,7 @@ namespace {
 
 	constexpr uint32 DriverRestartLimit = 3;
 	uni::Vector<DriverProcessRecord> driver_processes;
+	bool driver_directory_ready = false;
 
 	void CopyDriverText(char* output, stduint capacity, const char* input) {
 		if (!output || !capacity) return;
@@ -1878,6 +1879,63 @@ namespace {
 		return false;
 	}
 
+	bool TryLoadDriverDirectory() {
+		if (driver_directory_ready) return true;
+		constexpr stduint drv_batch_count = 8;
+		dirent_t entries[drv_batch_count];
+		auto* current = Taskman::CurrentTB();
+		if (!current || !current->parent_process) return false;
+		const auto& vroot = Filesys::GetSystemVirtualRootPath();
+		if (!vroot.getByteCount()) return false;
+
+		String drv_dir_str = String::newFormat("%s/drvs", vroot.reference());
+		const char* drv_dir = drv_dir_str.reference();
+		stdsint fd = -1;
+		struct {
+			stduint flag;
+			stduint tid;
+			rostr usr_filepath;
+		} open_msg = { O_RDONLY | O_DIRECTORY, current->getID(), drv_dir };
+		syssend(Task_FileSys, &open_msg, sizeof(open_msg), _IMM(FilemanMsg::OPEN));
+		sysrecv(Task_FileSys, &fd, sizeof(fd));
+		if (fd < 0) return false;
+
+		const stduint drv_dir_len = StrLength(drv_dir);
+		struct {
+			stduint fd;
+			stduint pid;
+		} close_msg = { (stduint)fd, current->parent_process->pid };
+		for (;;) {
+			MemSet(entries, 0, sizeof(entries));
+			stduint enum_msg[4] = {
+				(stduint)fd,
+				_IMM(entries),
+				drv_batch_count,
+				current->getID()
+			};
+			syssend(Task_FileSys, enum_msg, byteof(enum_msg), _IMM(FilemanMsg::ENUMER));
+			sysrecv(Task_FileSys, enum_msg, byteof(enum_msg[0]));
+			const stdsint count = (stdsint)enum_msg[0];
+			if (count <= 0) break;
+
+			for (stdsint i = 0; i < count; ++i) {
+				if (entries[i].is_dir || !entries[i].name[0] || entries[i].name[0] == '.') continue;
+
+				char path[96] = {};
+				StrCopy(path, drv_dir);
+				path[drv_dir_len] = '/';
+				StrCopy(path + drv_dir_len + 1, entries[i].name);
+				(void)RegisterDriverProcess(path, entries[i].name);
+			}
+		}
+
+		stdsint close_ret = -1;
+		syssend(Task_FileSys, &close_msg, sizeof(close_msg), _IMM(FilemanMsg::CLOSE));
+		sysrecv(Task_FileSys, &close_ret, sizeof(close_ret));
+		driver_directory_ready = true;
+		return true;
+	}
+
 	stduint ReleaseDriverBindings(DeviceNode* node, stduint pid, stdsint exit_status) {
 		stduint released = 0;
 		for (auto* crt = node; crt; crt = reinterpret_cast<DeviceNode*>(crt->link.next)) {
@@ -1937,6 +1995,9 @@ namespace {
 				event.kind, event.device_handle, event.source, event.count);
 			break;
 		case DeviceEventKind::Interrupt:
+			#if _MCCA == 0x8664 && defined(_UEFI)
+			if (Devsman::ProcessXHCIEvent(event)) break;
+			#endif
 			plogwarn("[Devsman] unclaimed interrupt event handle=%u source=%u", event.device_handle, event.source);
 			break;
 		default:
@@ -1957,6 +2018,9 @@ namespace {
 			break;
 		case DevsmanMsg::START_DRIVERS:
 			Devsman::StartKnownDrivers();
+			break;
+		case DevsmanMsg::LOAD_DRIVER_DIRECTORY:
+			(void)TryLoadDriverDirectory();
 			break;
 		default:
 			plogwarn("[Devsman] unknown request type=%u source=%u", type, source);
@@ -1989,73 +2053,16 @@ namespace {
 }
 
 void serv_devs_loop() {
-	constexpr stduint retry_limit = 20;
-	constexpr stduint drv_batch_count = 8;
-	dirent_t entries[drv_batch_count];
-	bool driver_directory_ready = false;
-
 	auto current = Taskman::CurrentTB();
 	if (!current || !current->parent_process) return;
-
-	for0(retry, retry_limit) {
-		const auto& vroot = Filesys::GetSystemVirtualRootPath();
-		if (!vroot.getByteCount()) {
-			syscall(syscall_t::REST, 1, 1000);
-			continue;
-		}
-
-		String drv_dir_str = String::newFormat("%s/drvs", vroot.reference());
-		const char* drv_dir = drv_dir_str.reference();
-		stdsint fd = -1;
-		struct {
-			stduint flag;
-			stduint tid;
-			rostr usr_filepath;
-		} open_msg = { O_RDONLY | O_DIRECTORY, current->getID(), drv_dir };
-		syssend(Task_FileSys, &open_msg, sizeof(open_msg), _IMM(FilemanMsg::OPEN));
-		sysrecv(Task_FileSys, &fd, sizeof(fd));
-
-		if (fd < 0) {
-			syscall(syscall_t::REST, 1, 1000);
-			continue;
-		}
-
-		const stduint drv_dir_len = StrLength(drv_dir);
-		struct {
-			stduint fd;
-			stduint pid;
-		} close_msg = { (stduint)fd, current->parent_process->pid };
-		for (;;) {
-			MemSet(entries, 0, sizeof(entries));
-			stduint enum_msg[4] = {
-				(stduint)fd,
-				_IMM(entries),
-				drv_batch_count,
-				current->getID()
-			};
-			syssend(Task_FileSys, enum_msg, byteof(enum_msg), _IMM(FilemanMsg::ENUMER));
-			sysrecv(Task_FileSys, enum_msg, byteof(enum_msg[0]));
-			const stdsint count = (stdsint)enum_msg[0];
-			if (count <= 0) break;
-
-			for (stdsint i = 0; i < count; ++i) {
-				if (entries[i].is_dir || !entries[i].name[0] || entries[i].name[0] == '.') continue;
-
-				char path[96] = {};
-				StrCopy(path, drv_dir);
-				path[drv_dir_len] = '/';
-				StrCopy(path + drv_dir_len + 1, entries[i].name);
-				(void)RegisterDriverProcess(path, entries[i].name);
-			}
-		}
-
-		stdsint close_ret = -1;
-		syssend(Task_FileSys, &close_msg, sizeof(close_msg), _IMM(FilemanMsg::CLOSE));
-		sysrecv(Task_FileSys, &close_ret, sizeof(close_ret));
-		driver_directory_ready = true;
-		break;
+	if (!device_event_prepare(current)) {
+		plogerro("[Devsman] failed to initialize device event queue");
 	}
-	if (!driver_directory_ready) plogwarn("[Devsman] driver directories not ready");
+	#if _MCCA == 0x8664 && defined(_UEFI)
+	else if (!Devsman::BindXHCIEventOwner(current->parent_process->pid, current->tid)) {
+		plogerro("[Devsman] failed to bind xHCI interrupt events");
+	}
+	#endif
 	RunDevsmanMessageLoop();
 }
 

@@ -315,7 +315,7 @@
           </ArmAdsMisc>
           <Cads>
             <interw>1</interw>
-            <Optim>2</Optim>
+            <Optim>6</Optim>
             <oTime>0</oTime>
             <SplitLS>0</SplitLS>
             <OneElfS>1</OneElfS>
@@ -386,19 +386,29 @@
           <GroupName>Group Mcca</GroupName>
           <Files>
             <File>
-              <FileName>memoman-init.cpp</FileName>
-              <FileType>8</FileType>
-              <FilePath>..\..\mecocoa\memoman-init.cpp</FilePath>
-            </File>
-            <File>
               <FileName>memoman.cpp</FileName>
               <FileType>8</FileType>
               <FilePath>..\..\mecocoa\memoman.cpp</FilePath>
             </File>
             <File>
+              <FileName>memoman-init.cpp</FileName>
+              <FileType>8</FileType>
+              <FilePath>..\..\mecocoa\memoman-init.cpp</FilePath>
+            </File>
+            <File>
               <FileName>memoman-swap.cpp</FileName>
               <FileType>8</FileType>
               <FilePath>..\..\mecocoa\memoman-swap.cpp</FilePath>
+            </File>
+            <File>
+              <FileName>taskman.cpp</FileName>
+              <FileType>8</FileType>
+              <FilePath>..\..\mecocoa\taskman.cpp</FilePath>
+            </File>
+            <File>
+              <FileName>taskman-new.cpp</FileName>
+              <FileType>8</FileType>
+              <FilePath>..\..\mecocoa\taskman-new.cpp</FilePath>
             </File>
             <File>
               <FileName>taskman-lock.cpp</FileName>
@@ -419,6 +429,11 @@
               <FileName>graphic.cpp</FileName>
               <FileType>8</FileType>
               <FilePath>..\..\mecocoa\graphic.cpp</FilePath>
+            </File>
+            <File>
+              <FileName>filesys.cpp</FileName>
+              <FileType>8</FileType>
+              <FilePath>..\..\mecocoa\filesys.cpp</FilePath>
             </File>
           </Files>
         </Group>

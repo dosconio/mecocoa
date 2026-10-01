@@ -16,7 +16,7 @@ struct MemRegion {
 	stduint size;
 };
 static const MemRegion memreg[] = {
-	{ "SDRAM", SDRAM_BANK1_BASE + SDRAM_POOL_OFF, 1024U * 1024U },
+	{ "SDRAM", SDRAM_BANK1_BASE + SDRAM_POOL_OFF, 1024U * 1024U * 31 },
 	{ "SRAM12",SRAM12_ADDR,                       64U * 1024U },
 	{ "SRAM4", SRAM4_ADDR,                        32U * 1024U },
 };
@@ -30,6 +30,8 @@ bool Memory::initialize(stduint eax, byte* ebx) {
 	mempool0.Append(Slice{ memreg[1].base, memreg[1].size });
 	mempool_bdma.enable_auto_expand = false;
 	mempool_bdma.Append(Slice{ memreg[2].base, memreg[2].size });
+	map_ready = true;
+	uni_default_allocator = &mempool;
 	return true;
 }
 

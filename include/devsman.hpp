@@ -9,6 +9,7 @@
 extern uni::AudioManager audio_manager;
 
 struct DeviceNode;
+struct DeviceEvent;
 
 struct DeviceNodeOps {
 	stdsint (*read)(DeviceNode* node, void* buf, stduint count, stduint idx, stduint flags);
@@ -221,6 +222,11 @@ public:
 	static stdsint Read(DeviceNode* node, void* buf, stduint count, stduint idx = 0, stduint flags = 0);
 	static stdsint Send(DeviceNode* node, const void* buf, stduint count, stduint idx = 0, stduint flags = 0);
 	static stdsint Ctrl(DeviceNode* node, stduint cmd, void* args, stduint flags = 0);
+	#if _MCCA == 0x8664 && defined(_UEFI)
+	static bool BindXHCIEventOwner(stduint owner_pid, stduint owner_tid);
+	static bool AcknowledgeXHCIInterrupt();
+	static bool ProcessXHCIEvent(const DeviceEvent& event);
+	#endif
 	static bool AttachStorageOps(DeviceNode* node, uni::StorageTrait* storage);
 	static DeviceNode* RegisterStoragePartition(DeviceNode* parent, const char* name,
 		uni::StorageTrait& storage, stdsint part_dev, const char* driver_name = "storage-partition");

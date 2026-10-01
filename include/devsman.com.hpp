@@ -10,6 +10,7 @@ enum class DevsmanMsg : stduint {
 	BIND_DRIVERS,
 	PROBE_DRIVERS,
 	START_DRIVERS,
+	LOAD_DRIVER_DIRECTORY,
 };
 
 // ---- AUDIO IPC PROTOCOL ----

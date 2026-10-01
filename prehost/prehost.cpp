@@ -8,7 +8,10 @@ _ESYM_C void mecocoa()
 {
 	if (!Memory::initialize(0, 0)) erro();
 	Consman::Initialize();// located here, for  INT-10H may influence PIC
-	
+	//{} Cache_t::enAble();
+	Filesys::Initialize();
+	Systime::Initialize();
+	Taskman::Initialize();
 	
 	// loop { }
 }

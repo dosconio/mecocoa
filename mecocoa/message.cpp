@@ -6,9 +6,6 @@
 
 #include <c/task.h>
 
-#if _MCCA == 0x8664 && defined(_UEFI)
-extern byte _BUF_xhc[];
-#endif
 #if (_MCCA & 0xFF00) == 0x1000
 #include <c/driver/timer.h>
 #endif
@@ -30,13 +27,7 @@ void _Comment(R0) serv_sysmsg() {
 		SysMessage msg;
 		message_queue.Dequeue(msg);
 		IC.enInterrupt(true);
-		auto& xhc = *reinterpret_cast<uni::device::SpaceUSB3::HostController*>(_BUF_xhc);
 		switch (msg.type) {
-		case SysMessage::RUPT_xHCI:
-			if (auto err = xhc.ProcessEvents()) {
-				plogerro("Error while ProcessEvent: %s at %s:%d", err.Name(), err.File(), err.Line());
-			}
-			break;
 		case SysMessage::RUPT_TIMER:
 			ploginfo("Timer %llu Rupt! tick = %llu, tim = %u", msg.args.timer.iden, msg.args.timer.timeout, TimerManager.Count());
 			if (0 && msg.args.timer.iden == 0)

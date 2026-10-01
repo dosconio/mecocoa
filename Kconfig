@@ -38,7 +38,7 @@ endmenu
 
 menu "Function"
 	config ENABLE_MMU
-		bool "(TODO) Enable Paging Support"
+		bool "Enable Paging Support"
 		default y
 		
 	config ENABLE_GRAPHIC
@@ -57,3 +57,11 @@ menu "Function"
 
 endmenu
 
+menu "Filesys"
+	config FILESYS_ISO9660
+		bool "ISO9660"
+		default y
+	config FILESYS_UDF
+		bool "UDF"
+		default y
+endmenu

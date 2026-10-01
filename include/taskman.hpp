@@ -31,7 +31,6 @@ struct MccaRectangle {
 };
 struct SysMessage {
 	enum Type {
-		RUPT_xHCI,
 		RUPT_TIMER,
 		RUPT_MOUSE,
 		RUPT_KBD,
@@ -623,6 +622,12 @@ bool device_event_prepare(ThreadBlock* thread);
 void device_event_release(ThreadBlock* thread);
 void device_event_proc(stduint tid, const DeviceEvent& event);
 void device_event_cancel(stduint tid, stduint device_handle, uint32 generation);
+#if (_MCCA & 0xFF00) == 0x8600
+bool device_interrupt_bind(stduint owner_pid, stduint owner_tid,
+	uint32 device_handle, uint32 source, uint8 vector, uint32* generation = nullptr);
+void device_interrupt_proc(stduint vector);
+bool device_interrupt_ack(stduint owner_pid, stduint owner_tid, const DeviceEvent& event);
+#endif
 
 inline static stduint syssend(stduint to_whom, const void* msgaddr, stduint bytlen, stduint type = 0, bool from_kernel = true)
 {

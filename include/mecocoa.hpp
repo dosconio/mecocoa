@@ -34,7 +34,12 @@
 #define _GUI_DOUBLE_BUFFER 0 //{}
 #undef  _GUI_FREETYPE
 #define _GUI_FREETYPE 0 //{}
+#undef  CONFIG_FILESYS_ISO9660
+#define CONFIG_FILESYS_ISO9660 0
+#undef  CONFIG_FILESYS_UDF
+#define CONFIG_FILESYS_UDF 0
 #endif
+#define Systime SysTimer
 
 #if (_MCCA & 0xFF00) == 0x1000
 #undef _GUI_ENABLE
@@ -79,6 +84,10 @@ use crate uni;
 
 #elif (_MCCA & 0xFF00) == 0x2000// ARM
 #include <c/proctrl/ARM.h>
+#endif
+
+#if !CONFIG_ENABLE_MMU
+#define mglb(x) (x)
 #endif
 //
 

@@ -106,11 +106,11 @@ extern "C" void register_interrupt_vector_handler(stduint irq_id, InterruptVecto
 
 
 
-#if defined(_UEFI)// x64 only
+#if _MCCA == 0x8664 && defined(_UEFI)
 
 __attribute__((target("general-regs-only"), optimize("O0")))
 void Handint_XHCI() {
-	message_queue.Enqueue(SysMessage{ SysMessage::RUPT_xHCI, {} });
+	if (Devsman::AcknowledgeXHCIInterrupt()) device_interrupt_proc(IRQ_xHCI);
 	IC.SendEOI(IRQ_xHCI);
 }
 

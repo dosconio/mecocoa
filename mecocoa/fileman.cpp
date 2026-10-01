@@ -788,6 +788,10 @@ void serv_file_loop()// for IDE 0:0, 0:1
 			Taskman::Append(p);
 			Taskman::AppendThread(p->main_thread);
 			#endif
+			if (Taskman::Locate(Task_Init)) {
+				(void)syssend_async(Task_Devsman, nullptr, 0,
+					_IMM(DevsmanMsg::LOAD_DRIVER_DIRECTORY));
+			}
 			break;
 		}
 		case FilemanMsg::RUPT:// (usercall-forbidden&meaningless)

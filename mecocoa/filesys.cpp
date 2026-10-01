@@ -5,59 +5,15 @@
 
 #include <cpp/string>
 #include <c/bitmap.h>
+#include <c/msgface.h>
 using namespace uni;
 #include "../include/filesys.hpp"
 #include "../include/fileman.hpp" // for DEV_TTY etc
 #include "../include/console.hpp" // for VTTY_OUTQ, SysMessage, vtty_type_t
 // VFS and DevFs Implementation
 
-#ifndef ECONNRESET
-#define ECONNRESET 104
-#endif
-#ifndef ECONNREFUSED
-#define ECONNREFUSED 111
-#endif
-#ifndef EADDRINUSE
-#define EADDRINUSE 112
-#endif
-#ifndef ENETUNREACH
-#define ENETUNREACH 114
-#endif
-#ifndef ETIMEDOUT
-#define ETIMEDOUT 116
-#endif
-#ifndef EHOSTUNREACH
-#define EHOSTUNREACH 118
-#endif
-#ifndef EDESTADDRREQ
-#define EDESTADDRREQ 121
-#endif
-#ifndef ENOBUFS
-#define ENOBUFS 105
-#endif
-#ifndef EPIPE
-#define EPIPE 32
-#endif
-#ifndef EAGAIN
-#define EAGAIN 11
-#endif
-#ifndef EINTR
-#define EINTR 4
-#endif
-#ifndef EINPROGRESS
-#define EINPROGRESS 119
-#endif
-#ifndef EALREADY
-#define EALREADY 120
-#endif
-#ifndef EISCONN
-#define EISCONN 127
-#endif
-#ifndef ENOTCONN
-#define ENOTCONN 128
-#endif
-#ifndef EOPNOTSUPP
-#define EOPNOTSUPP 95
+#if !CONFIG_ENABLE_MMU
+#define MemCopyP(a,b,c,d,e) MemCopyN(a,c,e)
 #endif
 
 static uni::vfs_dentry* _Index_unlocked(const char* pathname, uni::vfs_dentry* base);
@@ -638,8 +594,12 @@ extern file_system_type fs_udf;
 void Filesys::Initialize() {
 
 	Filesys::Register(&fs_fat);
+	#if CONFIG_FILESYS_ISO9660
 	Filesys::Register(&fs_iso9660);
+	#endif
+	#if CONFIG_FILESYS_UDF
 	Filesys::Register(&fs_udf);
+	#endif
 
 	vfs_root = alloc_dentry(nullptr, "/");
 	vfs_super_block* root_sb = new (buf_root_sb) vfs_super_block();
@@ -1040,7 +1000,13 @@ file_system_type* Filesys::Mount(StorageTrait& storage, stduint dev, const char*
 		// probe() checks sys_id and calls loadfs() internally; non-null means ready to mount
 		FilesysTrait* fs = fs_type->probe(storage, dev);
 		if (fs) {
-			return Filesys::MountFilesys(fs, fs_type, target_path, source_device_node, dev) ? fs_type : nullptr;
+			if (!Filesys::MountFilesys(fs, fs_type, target_path, source_device_node, dev)) return nullptr;
+			if (Filesys::GetSystemVirtualRootPath().getByteCount() &&
+				Taskman::Locate(Task_Init) && Taskman::Locate(Task_Devsman)) {
+				(void)syssend_async(Task_Devsman, nullptr, 0,
+					_IMM(DevsmanMsg::LOAD_DRIVER_DIRECTORY));
+			}
+			return fs_type;
 		}
 	}
 	return nullptr;
@@ -1647,6 +1613,7 @@ stduint DevFs::writfl(void* fil_handler, Slice file_slice, const byte* src) {
 #include <c/format/filesys/FAT.h>
 #include <c/format/filesys/CD.h>
 
+#if CONFIG_FILESYS_UDF
 file_system_type fs_udf = { "udf", [](StorageTrait& storage, stduint dev) -> FilesysTrait* {
 		DiscPartition part(storage, dev);
 		if (part.Block_Size != 2048) {
@@ -1675,7 +1642,9 @@ file_system_type fs_udf = { "udf", [](StorageTrait& storage, stduint dev) -> Fil
 	},
 	nullptr
 };
+#endif
 
+#if CONFIG_FILESYS_ISO9660
 file_system_type fs_iso9660 = { "iso9660", [](StorageTrait& storage, stduint dev) -> FilesysTrait* {
 		DiscPartition part(storage, dev);
 		if (part.Block_Size != 2048) {
@@ -1704,6 +1673,7 @@ file_system_type fs_iso9660 = { "iso9660", [](StorageTrait& storage, stduint dev
 	},
 	nullptr
 };
+#endif
 
 file_system_type fs_fat = { "fat", [](StorageTrait& storage, stduint dev) -> FilesysTrait* {
 		DiscPartition part(storage, dev);
