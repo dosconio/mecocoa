@@ -57,11 +57,14 @@ PendSV_LRReady
 	STR	R0, [R1, #0x34]	; ctx->sp
 	STR	LR, [R1, #0x38]	; ctx->exc_return (bit4 tells whether the frame carries FP)
 	MRS	R2, CONTROL
-	STR	R2, [R1, #0x48]	; ctx->CONTROL
+	AND	R2, R2, #0x1	; ctx->CONTROL: nPRIV only, SPSEL and FPCA belong to the exception entry/return
+	STR	R2, [R1, #0x48]
 	ADD	R2, R1, #0xA0
 	VSTMIA	R2, {S16-S31}	; S0-S15 are stacked by hardware, S16-S31 never are
 	VMRS	R3, FPSCR
 	STR	R3, [R1, #0x1A0]
+	MOVS	R2, #0
+	STR	R2, [R1, #0x1BC]	; ThreadBlock::just_schedule: context saved, may be picked again
 	;
 	LDR	R0, =C_SwitchNext
 	LDR	R0, [R0]
@@ -74,6 +77,13 @@ PendSV_LRReady
 	LDR	R3, [R0, #0x1A0]
 	VMSR	FPSCR, R3
 	MSR	PSP, R1
+	LDR	R3, [R0, #0x48]	; ctx->CONTROL: apply nPRIV, the stack and FPCA follow EXC_RETURN
+	AND	R3, R3, #0x1
+	MRS	R2, CONTROL
+	BIC	R2, R2, #0x1
+	ORR	R3, R3, R2
+	MSR	CONTROL, R3
+	ISB
 	BX	LR	; exception return pops the frame of the incoming task
 	ENDP
 
@@ -88,6 +98,13 @@ DirectTaskContext	PROC
 	LDR	R3, [R0, #0x1A0]
 	VMSR	FPSCR, R3
 	MSR	PSP, R1
+	LDR	R3, [R0, #0x48]	; ctx->CONTROL: apply nPRIV only
+	AND	R3, R3, #0x1
+	MRS	R2, CONTROL
+	BIC	R2, R2, #0x1
+	ORR	R3, R3, R2
+	MSR	CONTROL, R3
+	ISB
 	BX	LR
 	ENDP
 

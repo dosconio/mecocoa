@@ -6,6 +6,7 @@
 #include "../include/syscall-pow.hpp"
 #if (_MCCA & 0xFF00) == 0x8600
 #include <cpp/Device/Bus/PCI.hpp>
+#include "../include/devsman-storage.hpp"
 #endif
 
 extern "C" stdsint sysc_UMAP(stduint addr, stduint len);
@@ -742,6 +743,20 @@ static DeviceNode* ResolvePwcallDeviceHandle(ProcessBlock* pb, stduint dev_handl
 	auto* slot = reinterpret_cast<PwcallHandleSlot*>(node->offs);
 	return slot ? slot->entry.node : nullptr;
 }
+
+#if (_MCCA & 0xFF00) == 0x8600
+DeviceNode* Powercall::ResolveOwnedDeviceHandle(stduint sender_tid, stduint handle, stduint* owner_pid) {
+	auto* process = ProcessBlock::Acquire(sender_tid);
+	if (!process) return nullptr;
+	DeviceNode* node = nullptr;
+	if (process->ring == RING_S) {
+		node = ResolvePwcallDeviceHandle(process, handle);
+		if (node && owner_pid) *owner_pid = process->pid;
+	}
+	ProcessBlock::Release(process);
+	return node;
+}
+#endif
 
 static uint32 ResolvePwcallDeviceHandleFlags(ProcessBlock* pb, stduint dev_handle) {
 	if (!pb || dev_handle < PwcallDeviceHandleBase) return 0;

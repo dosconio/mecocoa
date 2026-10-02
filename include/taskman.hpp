@@ -599,6 +599,20 @@ public:
 		DestroyThread(ThreadBlock* th);
 	static void
 		DumpTask(ProcessBlock*);
+
+public:// x86_64
+	static void
+		SetSegment(NormalTaskContext* ntc);
+public:// ELF
+	static bool
+		CreateELF_Carry(char* vaddr, stduint mem_length, BlockTrait* source, stduint file_offset, stduint file_size, Paging& pg, byte* buffer, bool executable, bool writable, bool user);
+	// static bool
+	// 	RelocatePIE(BlockTrait* source, const ELF_Header_t& header, stduint load_bias, Paging& pg, byte* block_buffer);
+public:
+	static auto
+		SetupStack(ProcessBlock* pb, ProcessBlock* parent, char** usr_argv, char** usr_envp, stduint entry, stduint phdr, stduint phnum, stduint phent) -> stduint;
+	static auto
+		CreatePaging(ProcessBlock* ppb, byte ring, stduint stack_norm) -> stduint;
 };
 class Coreman {
 public:

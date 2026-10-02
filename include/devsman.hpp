@@ -170,6 +170,29 @@ namespace uni {
 	}
 }
 
+namespace Devs {
+	class DeviceTree final : public uni::Nchain {
+	public:
+		DeviceTree() : uni::Nchain(true) {
+			extn_field = sizeof(DeviceNode) - sizeof(Nnode);
+		}
+
+		DeviceNode* NewNode() {
+			return reinterpret_cast<DeviceNode*>(New());
+		}
+
+		void SetRoot(DeviceNode* node) {
+			root_node = node ? &node->link : nullptr;
+		}
+	};
+
+	struct DriverOpsEntry {
+		const char* driver_name;
+		bool (*probe)(DeviceNode*);
+	};
+}
+
+
 class Devsman {
 public:
 	using DriverStartRoutine = bool (*)(DeviceNode* node);

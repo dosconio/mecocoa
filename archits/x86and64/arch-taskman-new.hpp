@@ -30,7 +30,7 @@ static stduint getSS(stduint ring) {
 	if (ring == 3) return SegDaR3 | ring;
 	else return 8 * (4 + ring) + 0b100 + ring;
 }
-static void SetSegment(NormalTaskContext* ntc) {
+void Taskman::SetSegment(NormalTaskContext* ntc) {
 	REG_FLAG_t flag = {};
 	flag._r1 = 1, flag.IF = 1, flag.IOPL = (ntc->RING == 1 ? 0x1u : 0u);
 	ntc->FLAG = cast<stduint>(flag);

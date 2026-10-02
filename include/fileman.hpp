@@ -85,6 +85,7 @@ enum class FilemanMsg {
 	GETD,
 
 	TEMP,
+	STORAGE_READY,
 };
 
 #include <c/API-POSIX/fcntl.h>

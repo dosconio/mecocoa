@@ -4,6 +4,9 @@
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 #include "../include/mecocoa.hpp"
 #include <c/format/filesys/FAT.h>
+#if (_MCCA & 0xFF00) == 0x8600
+#include "../include/devsman-storage.hpp"
+#endif
 
 extern void Consman_InitializeFreeType();
 
@@ -718,6 +721,32 @@ void serv_file_loop()// for IDE 0:0, 0:1
 	while (true) {
 		switch ((FilemanMsg)sig_type)
 		{
+		#if (_MCCA & 0xFF00) == 0x8600
+		case FilemanMsg::STORAGE_READY:
+		{
+			if (sig_src != Task_Devsman) break;
+			DeviceNode* node = reinterpret_cast<DeviceNode*>(to_args[0]);
+			if (!node || DeviceNodeType(node->fields.node_type) != DeviceNodeType::StorageDevice ||
+				!node->link.addr) break;
+			auto* controller = node->link.getParent();
+			if (!controller || !controller->addr ||
+				StrCompare(controller->addr, "floppy@flc0") != 0) break;
+			auto* adapter = static_cast<Powercall::StorageAdapter*>(node->fields.binding.driver_data);
+			if (!adapter || adapter->GetNode() != node || !adapter->HasMedia()) break;
+			const char* path = nullptr;
+			if (StrCompare(node->link.addr, "floppy@0") == 0) path = "/mnt/fl0";
+			else if (StrCompare(node->link.addr, "floppy@1") == 0) path = "/mnt/fl1";
+			if (!path) {
+				plogwarn("[Fileman] storage mount path missing node=%s", node->link.addr);
+				break;
+			}
+			if (Filesys::Mount(*adapter, 0, path, node))
+				ploginfo("[Floppy] Mounted on %s successfully", path);
+			else
+				plogwarn("[Fileman] storage mount failed node=%s path=%s", node->link.addr, path);
+			break;
+		}
+		#endif
 		case FilemanMsg::TEST:// (no-feedback)
 		{
 			if (bootstrapped) {
@@ -736,9 +765,6 @@ void serv_file_loop()// for IDE 0:0, 0:1
 			bootstrapped = true;
 			// Init
 			#if (_MCCA & 0xFF00) == 0x8600
-			#if _MCCA == 0x8632
-			// syssend(Task_Flp_Serv, &retval, sizeof(retval[0]), _IMM(FiledevMsg::RUPT));
-			#endif
 			// Filesys::Tree(Console, true);
 			Consman_InitializeFreeType();
 			ProcessBlock* init_p = Taskman::CreateFile(("/md0/init"), RING_U, Task_Kernel);

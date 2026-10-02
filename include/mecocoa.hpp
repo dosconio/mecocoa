@@ -104,7 +104,6 @@ void serv_graf_loop();
 #include "filesys.hpp"
 #include "fileman.hpp"
 void serv_netw_loop();
-void serv_dev_fl_loop();
 void serv_dev_audio_loop();
 void serv_file_loop();
 void serv_devs_loop();

@@ -11,11 +11,12 @@
 #include <stdio.h>
 #include <c/stdinc.h>
 #include <c/storage/floppy.h>
+#include <c/format/filesys.h>
 #include <cpp/Device/DMA>
 #include "../../include/taskman.com.hpp"
 #include "../../include/syscall-pow.hpp"
 #endif
-#include "../../include/flopdisk.com.hpp"
+#include "../../include/devsman-storage.hpp"
 
 #if _MCCA == 0x8632
 _ESYM_C void R_FLP_INIT();
@@ -26,173 +27,8 @@ RMOD_LIST RMOD_LIST_FLP{
 	.name = "DISK-FLOPPY",
 };
 
-using namespace uni;
-
-static DeviceNode* floppy_nodes[2] = { nullptr, nullptr };
-
-PartitionSlice uni::FloppyDisk::getSlice(stduint dev) {
-	PartitionSlice slice;
-	slice.address = 0;
-	slice.length = getUnits();
-	slice.sys_id = FILESYS_FAT12;
-	return slice;
-}
-
-struct FloppyDisk_Paged : public uni::FloppyDisk {
-	FloppyDisk_Paged(byte _id = 0, FloppyDriveType type = FloppyDriveType::Drive_1_44MB_3_5) : FloppyDisk(_id, type) {}
-	virtual bool Read(stduint BlockIden, void* Dest, stduint Times = 1) override;
-	virtual bool Write(stduint BlockIden, const void* Sors, stduint Times = 1) override;
-};
-
-static stduint floppy_driver_tid = 0;
-
-bool FloppyDisk_Paged::Read(stduint BlockIden, void* Dest, stduint Times) {
-	if (Taskman::CurrentPID() == Task_Flp_Serv) {
-		for0(t, Times) {
-			FloppyDriverRequest request = { getID(), uint32(BlockIden + t) };
-			syssend(floppy_driver_tid, &request, sizeof(request), _IMM(FloppyDriverMsg::Read));
-			stduint status = 0;
-			sysrecv(floppy_driver_tid, &status, sizeof(status));
-			if (!status) return false;
-			sysrecv(floppy_driver_tid, (byte*)Dest + t * Block_Size, Block_Size);
-		}
-		return true;
-	}
-	for0(t, Times) {
-		stduint blk = BlockIden + t;
-		byte* dst = (byte*)Dest + t * Block_Size;
-		stduint to_args[2];
-		to_args[0] = getID();
-		to_args[1] = blk;
-		syssend(Task_Flp_Serv, sliceof(to_args), _IMM(FiledevMsg::READ));
-		// Receive ACK before data transfer
-		stduint ack;
-		sysrecv(Task_Flp_Serv, &ack, sizeof(ack));
-		if (!ack) return false;
-		sysrecv(Task_Flp_Serv, dst, Block_Size);
-	}
-	return true;
-}
-
-bool FloppyDisk_Paged::Write(stduint BlockIden, const void* Sors, stduint Times) {
-	if (Taskman::CurrentPID() == Task_Flp_Serv) {
-		for0(t, Times) {
-			FloppyDriverRequest request = { getID(), uint32(BlockIden + t) };
-			syssend(floppy_driver_tid, &request, sizeof(request), _IMM(FloppyDriverMsg::Write));
-			syssend(floppy_driver_tid, (const byte*)Sors + t * Block_Size, Block_Size);
-			stduint status = 0;
-			sysrecv(floppy_driver_tid, &status, sizeof(status));
-			if (!status) return false;
-		}
-		return true;
-	}
-	for0(t, Times) {
-		stduint blk = BlockIden + t;
-		const byte* src = (const byte*)Sors + t * Block_Size;
-		stduint to_args[2];
-		to_args[0] = getID();
-		to_args[1] = blk;
-		syssend(Task_Flp_Serv, sliceof(to_args), _IMM(FiledevMsg::WRITE));
-		// Receive ACK before data transfer
-		stduint ack;
-		sysrecv(Task_Flp_Serv, &ack, sizeof(ack));
-		if (!ack) return false;
-		syssend(Task_Flp_Serv, src, Block_Size);
-		sysrecv(Task_Flp_Serv, &ack, sizeof(ack));
-		if (!ack) return false;
-	}
-	return true;
-}
-
 void R_FLP_INIT() {
 	IC[IRQ_Floppy].setRange(mglb(Handint_FLP_Entry), SegCo32);
-}
-
-static stduint args[4];
-FloppyDisk_Paged* paged_floppies[2] = { nullptr, nullptr };
-static char paged_flp_buf[sizeof(FloppyDisk_Paged) * 2];
-
-const char* drive_type_names[] = {
-	"None",
-	"360KB 5.25\"",
-	"1.2MB 5.25\"",
-	"720KB 3.5\"",
-	"1.44MB 3.5\"",
-	"2.88MB 3.5\""
-};
-
-void serv_dev_fl_loop()
-{
-	stduint sig_type = 0, sig_src;
-	String lab;
-	while (true) {
-		sysrecv(ANYPROC, sliceof(args), &sig_type, &sig_src);
-		if (sig_type == _IMM(FloppyDriverMsg::Attach)) {
-			FloppyDriverAttach attach = {};
-			MemCopyN(&attach, args, sizeof(attach));
-			floppy_driver_tid = sig_src;
-			stduint ready = 1;
-			for0(i, 2) {
-				if (!attach.drive_type[i] || attach.drive_type[i] > 5) continue;
-				paged_floppies[i] = new (paged_flp_buf + i * sizeof(FloppyDisk_Paged))
-					FloppyDisk_Paged(i, static_cast<FloppyDriveType>(attach.drive_type[i]));
-				floppy_nodes[i] = Devsman::FindNamedNode(DeviceNodeType::StorageDevice,
-					i ? "floppy@1" : "floppy@0");
-				if (floppy_nodes[i]) Devsman::AttachStorageOps(floppy_nodes[i], paged_floppies[i]);
-			}
-			syssend(sig_src, &ready, sizeof(ready));
-			for0(i, 2) {
-				if (!paged_floppies[i] || !attach.media_present[i]) continue;
-				ploginfo("[Floppy] Detect Floppy on Drive %c: %u KB (%s)",
-					'A' + i, stduint(paged_floppies[i]->getUnits() * 512 / 1024),
-					drive_type_names[attach.drive_type[i]]);
-				lab = String::newFormat("/mnt/fl%d", i);
-				if (Filesys::Mount(*paged_floppies[i], 0, lab.reference(), floppy_nodes[i]))
-					ploginfo("[Floppy] Mounted on %s successfully", lab.reference());
-			}
-			continue;
-		}
-		switch ((FiledevMsg)sig_type)
-		{
-		case FiledevMsg::TEST:// (no-feedback)
-			break;
-		case FiledevMsg::RUPT:// (usercall-forbidden, no feedback)
-			break;
-		case FiledevMsg::CLOSE:// [diskno]
-			break;
-		case FiledevMsg::READ:// [diskno, lba]
-		{
-			stduint ack = 0;
-			char sector[512] = {};
-			if (args[0] < 2 && paged_floppies[args[0]] && floppy_driver_tid)
-				ack = paged_floppies[args[0]]->Read(args[1], sector) ? 1 : 0;
-			if (sig_src) syssend(sig_src, &ack, sizeof(ack));
-			if (ack && sig_src) syssend(sig_src, sector, sizeof(sector));
-			break;
-		}
-		case FiledevMsg::WRITE:// [diskno, lba]
-		{
-			stduint ack = (args[0] < 2 && paged_floppies[args[0]] && floppy_driver_tid) ? 1 : 0;
-			if (sig_src) syssend(sig_src, &ack, sizeof(ack));
-			if (ack && sig_src) {
-				char sector[512] = {};
-				sysrecv(sig_src, sector, sizeof(sector));
-				ack = paged_floppies[args[0]]->Write(args[1], sector) ? 1 : 0;
-				syssend(sig_src, &ack, sizeof(ack));
-			}
-			break;
-		}
-		case FiledevMsg::GETPS:
-			if (args[0] < 2 && paged_floppies[args[0]] && sig_src) {
-				PartitionSlice slice = paged_floppies[args[0]]->getSlice(0);
-				syssend(sig_src, &slice, sizeof(slice));
-			}
-			break;
-		default:
-			plogerro("Bad TYPE in %s %s", __FILE__, __FUNCIDEN__);
-			break;
-		}
-	}
 }
 #elif defined(_ACCM) && ((_ACCM & 0xFF00) == 0x8600)
 struct FloppyInfo {
@@ -283,19 +119,19 @@ namespace {
 			message.data.length = sizeof(event);
 			if (Powercall::SysComm(COMM_RECV, ANYPROC, &message) != 0) return false;
 			if (message.type == _IMM(KernelMsg::DeviceEvent)) {
-				if (message.data.length == sizeof(event) && FloppyAckInterrupt(event)) return true;
+				if (FloppyAckInterrupt(event)) return true;
 			}
 			else if (message.type == _IMM(KernelMsg::DeviceTimeout) &&
 				stduint(event.version) == token) return false;
 		}
 	}
 
-	bool FloppySend(stduint type, const void* data, stduint length) {
+	bool FloppySend(stduint target, stduint type, const void* data, stduint length) {
 		CommMsg message = {};
 		message.type = type;
 		message.data.address = _IMM(data);
 		message.data.length = length;
-		return Powercall::SysComm(COMM_SEND, Task_Flp_Serv, &message) == 0;
+		return Powercall::SysComm(COMM_SEND, target, &message) == 0;
 	}
 
 	bool FloppyReceive(stduint source, void* data, stduint length, CommMsg& message) {
@@ -338,26 +174,36 @@ int main(int argc, char** argv) {
 		return -5;
 	}
 
-	FloppyDriverAttach attach = {};
-	attach.drive_type[0] = info.type_a;
-	attach.drive_type[1] = info.type_b;
 	uni::FloppyDisk* drives[2] = { &drive_a, &drive_b };
+	byte drive_types[2] = { info.type_a, info.type_b };
+	bool media_present[2] = {};
 	for (stduint i = 0; i < 2; ++i) {
-		if (!attach.drive_type[i]) continue;
+		if (!drive_types[i]) continue;
 		drives[i]->Reset();
-		attach.media_present[i] = drives[i]->IsMediaPresent() ? 1 : 0;
-	}
-	if (!FloppySend(_IMM(FloppyDriverMsg::Attach), &attach, sizeof(attach))) {
-		printf("flopdisk: attach send failed\n\r");
-		return -6;
-	}
-	stduint ready = 0;
-	CommMsg reply = {};
-	if (!FloppyReceive(Task_Flp_Serv, &ready, sizeof(ready), reply) ||
-		reply.data.length != sizeof(ready) || !ready) {
-		printf("flopdisk: attach reply failed ready=%u len=%u type=%u\n\r",
-			unsigned(ready), unsigned(reply.data.length), unsigned(reply.type));
-		return -7;
+		media_present[i] = drives[i]->IsMediaPresent();
+		StorageDriverInfo registration = {};
+		registration.dev_handle = floppy_dev_handle;
+		registration.unit = i;
+		registration.block_size = drives[i]->Block_Size;
+		registration.block_count = drives[i]->getUnits();
+		registration.flags = StorageDriverFlag_Readable | StorageDriverFlag_Writable |
+			(media_present[i] ? StorageDriverFlag_MediaPresent : 0);
+		registration.slice_type = FILESYS_FAT12;
+		if (i == 0) MemCopyN(registration.name, "floppy@0", sizeof("floppy@0"));
+		else MemCopyN(registration.name, "floppy@1", sizeof("floppy@1"));
+		if (!FloppySend(Task_Devsman, _IMM(StorageDriverMsg::Attach), &registration, sizeof(registration))) {
+			printf("flopdisk: attach send failed unit=%u\n\r", unsigned(i));
+			return -6;
+		}
+		StorageDriverReply result = {};
+		CommMsg reply = {};
+		if (!FloppyReceive(Task_Devsman, &result, sizeof(result), reply) ||
+			reply.type != _IMM(StorageDriverMsg::Attach) ||
+			result.version != StorageDriverProtocolVersion || result.status != 0) {
+			printf("flopdisk: attach reply failed unit=%u status=%d type=%u\n\r",
+				unsigned(i), int(result.status), unsigned(reply.type));
+			return -7;
+		}
 	}
 
 	for (;;) {
@@ -367,35 +213,44 @@ int main(int argc, char** argv) {
 			printf("flopdisk: receive failed\n\r");
 			return -8;
 		}
-		if (message.type == _IMM(KernelMsg::DeviceEvent) && message.data.length == sizeof(DeviceEvent)) {
+		if (message.type == _IMM(KernelMsg::DeviceEvent)) {
 			DeviceEvent event = {};
 			MemCopyN(&event, payload, sizeof(event));
 			(void)FloppyAckInterrupt(event);
 			continue;
 		}
-		if (message.src != Task_Flp_Serv ||
-			(message.type != _IMM(FloppyDriverMsg::Read) &&
-			message.type != _IMM(FloppyDriverMsg::Write))) continue;
-		FloppyDriverRequest request = {};
+		if (message.src >= Task_Init ||
+			(message.type != _IMM(StorageDriverMsg::Read) &&
+			message.type != _IMM(StorageDriverMsg::Write))) continue;
+		StorageDriverRequest request = {};
 		MemCopyN(&request, payload, sizeof(request));
-		stduint status = 0;
-		const bool valid = request.drive < 2 && attach.media_present[request.drive] &&
-			request.lba < drives[request.drive]->getUnits();
-		if (valid) {
-			if (message.type == _IMM(FloppyDriverMsg::Read)) {
-				status = drives[request.drive]->Read(request.lba, payload) ? 1 : 0;
-				if (!FloppySend(message.type, &status, sizeof(status))) return -9;
-				if (status && !FloppySend(message.type, payload, 512)) return -10;
-				continue;
+		StorageDriverReply result = {};
+		const bool valid = request.version == StorageDriverProtocolVersion &&
+			request.unit < 2 && drive_types[request.unit] && media_present[request.unit] &&
+			request.block < drives[request.unit]->getUnits();
+		if (message.type == _IMM(StorageDriverMsg::Read)) {
+			if (valid && drives[request.unit]->Read(request.block, payload)) {
+				result.status = 0;
+				result.bytes = 512;
 			}
+			if (!FloppySend(message.src, _IMM(StorageDriverMsg::Complete), &result, sizeof(result))) return -9;
+			if (!result.status && !FloppySend(message.src, _IMM(StorageDriverMsg::Data), payload, 512)) return -10;
+			continue;
 		}
-		if (message.type == _IMM(FloppyDriverMsg::Write)) {
-			CommMsg data_message = {};
-			if (!FloppyReceive(Task_Flp_Serv, payload, 512, data_message)) return -11;
-			if (valid)
-				status = drives[request.drive]->Write(request.lba, payload) ? 1 : 0;
+		if (!valid) {
+			if (!FloppySend(message.src, _IMM(StorageDriverMsg::Ready), &result, sizeof(result))) return -11;
+			continue;
 		}
-		if (!FloppySend(message.type, &status, sizeof(status))) return -12;
+		result.status = 0;
+		result.bytes = 512;
+		if (!FloppySend(message.src, _IMM(StorageDriverMsg::Ready), &result, sizeof(result))) return -11;
+		CommMsg data_message = {};
+		MemSet(payload, 0, sizeof(payload));
+		if (!FloppyReceive(message.src, payload, 512, data_message) ||
+			data_message.type != _IMM(StorageDriverMsg::Data)) return -12;
+		result.status = drives[request.unit]->Write(request.block, payload) ? 0 : -1;
+		result.bytes = result.status ? 0 : 512;
+		if (!FloppySend(message.src, _IMM(StorageDriverMsg::Complete), &result, sizeof(result))) return -13;
 	}
 }
 #endif

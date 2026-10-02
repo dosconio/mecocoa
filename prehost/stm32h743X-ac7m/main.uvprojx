@@ -411,6 +411,11 @@
               <FilePath>..\..\mecocoa\taskman-new.cpp</FilePath>
             </File>
             <File>
+              <FileName>taskman-elf.cpp</FileName>
+              <FileType>8</FileType>
+              <FilePath>..\..\mecocoa\taskman-elf.cpp</FilePath>
+            </File>
+            <File>
               <FileName>taskman-lock.cpp</FileName>
               <FileType>8</FileType>
               <FilePath>..\..\mecocoa\taskman-lock.cpp</FilePath>

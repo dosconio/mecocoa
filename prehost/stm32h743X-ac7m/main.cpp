@@ -3,6 +3,7 @@
 #include <cpp/MCU/ST/STM32H7>
 #include "../../depends/desktop.hpp"
 #include "_openedv/RGB-LCD.hpp"
+#include "_userimg.hpp"
 
 extern "C" char _IDN_BOARD[16] {"STM32H743IIT6"};
 
@@ -13,7 +14,7 @@ void _idle() {
 	GPIN& LEDB = GPIOB[ 0];
 	LEDB.setMode(GPIOMode::OUT);
 	while (true) {
-		LEDB.Toggle();
+		// LEDB.Toggle();
 		SysDelay_ms(2000, true);
 	}
 }
@@ -66,6 +67,25 @@ _ESYM_C void _default_report(stduint lr, stduint ipsr) {
 	_fault_report("Default", lr, psp, msp);
 }
 
+// M2: a BlockTrait over the embedded static PIE image
+class _ImageBlock final : public uni::BlockTrait {
+public:
+	_ImageBlock(const unsigned char* img, stduint len) : base(img), length(len) {
+		readable = true; writable = false; Block_Size = 1;
+	}
+	bool Read(stduint BlockIden, void* Dest, stduint Times = 1) override {
+		const stduint off = BlockIden * Block_Size, sz = Times * Block_Size;
+		if (off + sz > length) return false;
+		MemCopyN(Dest, base + off, sz);
+		return true;
+	}
+	bool Write(stduint, const void*, stduint = 1) override { return false; }
+	stduint getUnits() override { return length; }
+private:
+	const unsigned char* base;
+	stduint length;
+};
+
 alignas(8) static byte _boot_stack[0x8000];
 bool inited = false;
 int main()
@@ -87,6 +107,14 @@ int main()
 	inited = true;
 	
 	Taskman::Create((void*)&_test, RING_M);
+	// M2: load the embedded static PIE image as a process
+	{
+		static _ImageBlock _user_img(_user_pie_img, _user_pie_img_size);
+		ProcessBlock* upb = Taskman::CreateELF(&_user_img, RING_M);
+		XART1.OutFormat("USER img=%u pb=%08X ccr=%08X\r\n", _user_pie_img_size, (unsigned)_IMM(upb), (unsigned)_IMM(Reference(0xE000ED14)));// CCR bit16: D-Cache, bit17: I-Cache
+		if (!upb) erro("USER load fail");
+
+	}
 	// mempool0.dump_available();
 	
 
@@ -216,7 +244,6 @@ bool ProcessBlock::Close(int fid) {return false;}
 void Consman::DispatchDeferredWake() {}
 ProcessBlock* Taskman::CreateFile(const char* path, byte ring, stduint parent, uni::vfs_dentry* base){return nullptr;}
 stdsint ProcessBlock::Open(rostr pathname, int flags){return -1;}
-DeviceNode* Devsman::FindBoundNode(const char* driver_name) {return 0;}
 
 void _Comment(R1) serv_cons_loop()
 {
