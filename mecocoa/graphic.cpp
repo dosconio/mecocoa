@@ -2278,7 +2278,10 @@ void serv_graf_loop() {
 		#endif
 	}
 	#else
-	loop;
+	loop {
+		Taskman::Schedule(true);
+		HALT();
+	}
 	#endif
 
 	#endif

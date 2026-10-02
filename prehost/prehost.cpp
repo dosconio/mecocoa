@@ -12,10 +12,23 @@ _ESYM_C void mecocoa()
 	Filesys::Initialize();
 	Systime::Initialize();
 	Taskman::Initialize();
-	//Devsman::Initialize();
+	Devsman::Initialize();
 	//Syscall::Initialize();
 	//Coreman::Initialize();// Multicore:
 	//Virtman::Initialize();
+	
+	// Service
+	Taskman::Create((void*)&serv_task_loop, RING_M)->main_thread->name = "serv_task_loop";
+	Taskman::Create((void*)&serv_cons_loop, RING_M)->main_thread->name = "serv_cons_loop";
+	Taskman::Create((void*)&serv_graf_loop, RING_M)->main_thread->name = "serv_graf_loop";
+	Taskman::Create((void*)&serv_file_loop, RING_M)->main_thread->name = "serv_file_loop";
+	Taskman::Create((void*)&serv_devs_loop, RING_M)->main_thread->name = "serv_devs_loop";
+	//
+	//Taskman::Create((void*)&serv_netw_loop, RING_M)->main_thread->name = "serv_netw_loop";
+	//Taskman::Create((void*)&serv_dev_fl_loop, RING_M)->main_thread->name = "serv_dev_fl_loop";
+	//Taskman::Create((void*)&serv_dev_audio_loop, RING_M)->main_thread->name = "serv_dev_audio_loop";
+	
+	IC.enInterrupt();
 	
 	// loop { }
 }

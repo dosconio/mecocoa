@@ -12,7 +12,7 @@ extern "C" stdsint sysc_UMAP(stduint addr, stduint len);
 
 bool IsPwcall(syscall_t callid) {
 	return _IMM(callid) >= _IMM(syscall_t::POWERCALL_HELLO) &&
-		_IMM(callid) <= _IMM(syscall_t::POWERCALL_DEV_PUBLISH);
+		_IMM(callid) < _IMM(syscall_t::POWERCALL__END__);
 }
 
 static constexpr stduint PwcallDeviceHandleBase = 1;
@@ -634,7 +634,7 @@ static bool IsDeviceNodeReachable(DeviceNode* node, DeviceNode* target) {
 	return false;
 }
 
-static DeviceNode* ResolvePwcallDevice(stduint node_id, stduint cls, stduint flags) {
+static DeviceNode* ResolvePwcallDevice(ProcessBlock* pb, stduint node_id, stduint cls, stduint flags) {
 	(void)flags;
 	auto* root = Devsman::Root();
 	if (!root) return nullptr;
@@ -642,6 +642,7 @@ static DeviceNode* ResolvePwcallDevice(stduint node_id, stduint cls, stduint fla
 		auto* node = reinterpret_cast<DeviceNode*>(node_id);
 		return IsDeviceNodeReachable(root, node) ? node : nullptr;
 	}
+	if (!cls && pb) return Devsman::FindOwnedNode(pb->pid);
 	#if (_MCCA & 0xFF00) == 0x8600
 	if (cls > 0xFFFFu) {
 		return Devsman::FindPCIDeviceByVendorDevice(uint16(cls >> 16), uint16(cls & 0xFFFFu));
@@ -1220,16 +1221,23 @@ stdsint HandlePwcall(syscall_t callid, stduint p1, stduint p2, stduint p3) {
 		return 0;
 	case syscall_t::POWERCALL_DEV_OPEN:
 	{
-		auto* node = ResolvePwcallDevice(p1, p2, p3);
-		if (!node) return -1;
+		auto* node = ResolvePwcallDevice(pb, p1, p2, p3);
+		if (!node) {
+			if (!p1 && !p2) plogwarn("[Devsman] DevOpen: no owned node pid=%u", pb->pid);
+			return -1;
+		}
 		#if (_MCCA & 0xFF00) == 0x8600
 		PwcallEnablePciDeviceAccess(node);
 		#endif
 		const stduint handle = AllocPwcallDeviceHandle(pb, node, uint32(p3));
-		if (!handle) return -1;
+		if (!handle) {
+			if (!p1 && !p2) plogwarn("[Devsman] DevOpen: handle allocation failed pid=%u", pb->pid);
+			return -1;
+		}
 		#if (_MCCA & 0xFF00) == 0x8600
 		if ((uint32(p3) & _IMM(PwcallDeviceOpenFlag::Interrupt)) &&
 			!device_event_prepare(Taskman::CurrentTB())) {
+			if (!p1 && !p2) plogwarn("[Devsman] DevOpen: event queue failed pid=%u", pb->pid);
 			(void)ClosePwcallDeviceHandle(pb, handle);
 			return -1;
 		}
@@ -1297,6 +1305,14 @@ stdsint HandlePwcall(syscall_t callid, stduint p1, stduint p2, stduint p3) {
 	case syscall_t::POWERCALL_DEV_ACK:
 		#if (_MCCA & 0xFF00) == 0x8600
 		return PwcallAckDeviceInterrupt(pb, p1, p2, uint32(p3));
+		#else
+		return -1;
+		#endif
+	case syscall_t::POWERCALL_DEV_TIMER:
+		#if _MCCA == 0x8632
+		if (!ResolvePwcallDeviceHandle(pb, p1) || !p2) return -1;
+		return Systimex::AppendDriverMessage(p2, Taskman::CurrentTID(),
+			_IMM(KernelMsg::DeviceTimeout), p3) ? 0 : -1;
 		#else
 		return -1;
 		#endif

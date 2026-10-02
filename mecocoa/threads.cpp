@@ -61,6 +61,7 @@ stdsint Taskman::CreateThread(ProcessBlock* pb, stduint entry, stduint arg, stdu
 	ploginfo("[TNEW] pid=%u entry=%[x] arg=%[x] stack_top=%[x] heap=[%[x], %[x])",
 		pb->pid, entry, arg, stack_top, pb->heapbtm, pb->heaptop);
 
+	#if CONFIG_ENABLE_MMU
 	auto ensure_user_stack_page = [&](stduint addr) -> bool {
 		if (_IMM(pb->paging[addr]) != ~_IMM0) return true;
 		return kernel_prefault_page(pb, addr) != nullptr;
@@ -73,6 +74,8 @@ stdsint Taskman::CreateThread(ProcessBlock* pb, stduint entry, stduint arg, stdu
 		plogerro("[TNEW] prefault failed at %[x]", stack_top - 1);
 		return -1;
 	}
+	#endif
+
 	#if _MCCA == 0x8632
 	if (!ensure_user_stack_page(stack_top - 2 * sizeof(stduint))) {
 		plogerro("[TNEW] prefault failed at %[x]", stack_top - 2 * sizeof(stduint));

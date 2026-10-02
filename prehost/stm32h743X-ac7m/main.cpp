@@ -1,4 +1,5 @@
 #include "../../include/mecocoa.hpp"
+#include <c/prochip/CortexM7.h>
 #include <cpp/MCU/ST/STM32H7>
 #include "../../depends/desktop.hpp"
 #include "_openedv/RGB-LCD.hpp"
@@ -13,7 +14,7 @@ void _idle() {
 	LEDB.setMode(GPIOMode::OUT);
 	while (true) {
 		LEDB.Toggle();
-		SysDelay_ms(500);
+		SysDelay_ms(2000, true);
 	}
 }
 
@@ -22,8 +23,47 @@ void _test() {
 	LEDR.setMode(GPIOMode::OUT);
 	while (true) {
 		LEDR.Toggle();
-		for(volatile unsigned i{0}; i < 10000000; i++){}
+		auto th = Taskman::CurrentTB();
+		bool state_rupt = IC.TryMaskInterrupt();
+		th->Block(ThreadBlock::BlockReason::BR_Resting);
+		Systimex::AppendThreadWake(100, th->tid);// 100 ticks = 1s @ CONFIG_SysTickFreq
+		if (state_rupt) IC.enInterrupt(true);
+		Taskman::Schedule(true);
 	}
+}
+
+
+void key_isr_up() { erro(); }
+
+// A fault must report itself: no debugger available.
+static void _fault_report(rostr tag, stduint lr, stduint psp, stduint msp) {
+	stduint* frame = (lr & 0x8) ? (stduint*)psp : (stduint*)msp;// EXC_RETURN bit3: 1 = the frame is on PSP
+	XART1.OutFormat("FAULT %s cfsr=%08X hfsr=%08X bfar=%08X mmfar=%08X\r\n",
+		tag, SCB->CFSR, SCB->HFSR, SCB->BFAR, SCB->MMFAR);
+	XART1.OutFormat("  pc=%08X lr=%08X xpsr=%08X psp=%08X msp=%08X exc=%08X\r\n",
+		frame[6], frame[5], frame[7], psp, msp, lr);
+	XART1.OutFormat("  r0=%08X r1=%08X r2=%08X r3=%08X r12=%08X\r\n",
+		frame[0], frame[1], frame[2], frame[3], frame[4]);
+	erro();
+}
+#define _FAULT_HANDLER(name, tag) \
+	_ESYM_C void name() { \
+		stduint lr, psp, msp; \
+		_ASM volatile("mov %0, lr \n mrs %1, psp \n mrs %2, msp" : "=r"(lr), "=r"(psp), "=r"(msp)); \
+		_fault_report(tag, lr, psp, msp); \
+	}
+_FAULT_HANDLER(HardFault_Handler, "HardFault")
+_FAULT_HANDLER(MemManage_Handler, "MemManage")
+_FAULT_HANDLER(BusFault_Handler, "BusFault")
+_FAULT_HANDLER(UsageFault_Handler, "UsageFault")
+
+// The weak handlers of startup.S land here: name the exception instead of spinning silently.
+_ESYM_C void _default_report(stduint lr, stduint ipsr) {
+	stduint psp, msp;
+	_ASM volatile("mrs %0, psp \n mrs %1, msp" : "=r"(psp), "=r"(msp));
+	stduint exc = ipsr & 0x1FF;
+	XART1.OutFormat("DEFAULT exc=%u irq=%d\r\n", exc, (int)exc - 16);
+	_fault_report("Default", lr, psp, msp);
 }
 
 alignas(8) static byte _boot_stack[0x8000];
@@ -34,14 +74,22 @@ int main()
 	if (!RCC.setClock(SysclkSource::HSE)) erro();
 	XART1.setMode(115200);
 	SysTick::enClock(CONFIG_SysTickFreq);
+	Reference(0xE000EF34) = _IMM(Reference(0xE000EF34)) & ~(3u << 30);// FPCCR: ASPEN/LSPEN off, the FP state is stacked on every exception
+	GPIN& KEYU = GPIOA[ 0];// Up
+	KEYU.setMode(GPIOMode::IN_Pull).setPull(false);
+	KEYU.setMode(GPIORupt::Posedge);
+	KEYU.setInterrupt(key_isr_up);
+	KEYU.enInterrupt();
+	IC.enInterrupt(false);
+	_ASM volatile("msr psp, %0" :: "r"((stduint)(_boot_stack + sizeof(_boot_stack))));
+	_ASM volatile("mrs r0, control \n orr r0, r0, #2 \n msr control, r0 \n isb" ::: "r0");
 	mecocoa();
 	inited = true;
 	
 	Taskman::Create((void*)&_test, RING_M);
 	// mempool0.dump_available();
 	
-	_ASM volatile("msr psp, %0" :: "r"((stduint)(_boot_stack + sizeof(_boot_stack))));
-	_ASM volatile("mrs r0, control \n orr r0, r0, #2 \n msr control, r0 \n isb" ::: "r0");
+
 	Taskman::Schedule(true);
 	
 	_idle();
@@ -53,7 +101,7 @@ void erro(const char* str) {
 	LEDR.setMode(GPIOMode::OUT);
 	while (true) {
 		LEDR.Toggle();
-		for(volatile unsigned i{0}; i < 1000000; i++){}
+		for(volatile unsigned i{0}; i < 4000000; i++){}
 	}
 }
 
@@ -64,6 +112,7 @@ _ESYM_C void SysTick_Handler_Mcca() {
 	SysTick_Handler();
 	if (inited) {
 		tick++;
+		Systimex::CollectExpired();
 		Taskman::Schedule();
 	}
 }
@@ -153,27 +202,31 @@ bool Consman::Initialize() {
 //
 // stduint Taskman::getID() { return _TEMP 0; } // H743 only
 
-SpinlockBlock<uni::Queue<SysMessage>> message_queue_conv;
-	
+
 Dnode* VTTY_Append(Console_t* con) {return 0;}
-bool Devsman::RegisterDriverStarter(const char* driver_name, DriverStartRoutine starter){return false;}
 Mutex console_waiters_mutex;
 Dchain vttys = { 0 };
 
 extern "C" stduint sys_kill(stduint pid, int sig, stduint tid){return 0;}
-DeviceNode* Devsman::Root(){return 0;}
+//DeviceNode* Devsman::Root(){return 0;}
 
-void free_async_msg(pureptr_t ptr){}
 void CleanupPwcallThreadInterrupts(stduint tid){}
-void device_event_release(ThreadBlock* thread){}
-bool device_event_proc(stduint tid, const DeviceEvent& event){return 0;}
-int msg_send(ThreadBlock* fo_th, stduint too, _Comment(vaddr) CommMsg* msg, bool msg_in_kernel, bool is_async)
-{return 0;}
-Spinlock comm_lock;
-void UnlinkWaitEntry(ThreadBlock* th) {}
 void CleanupPwcallProcessHandles(stduint pid) {}
-void msg_cleanup_thread(ThreadBlock* th, bool dying) {}
 bool ProcessBlock::Close(int fid) {return false;}
+void Consman::DispatchDeferredWake() {}
+ProcessBlock* Taskman::CreateFile(const char* path, byte ring, stduint parent, uni::vfs_dentry* base){return nullptr;}
+stdsint ProcessBlock::Open(rostr pathname, int flags){return -1;}
+DeviceNode* Devsman::FindBoundNode(const char* driver_name) {return 0;}
+
+void _Comment(R1) serv_cons_loop()
+{
+	loop {Taskman::Schedule(); HALT(); }
+}
+void _Comment(R1) serv_file_loop()
+{
+	loop {Taskman::Schedule(); HALT(); }
+}
+
 
 byte FILE_ENDO, FILE_ENTO;
 	

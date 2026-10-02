@@ -3,212 +3,32 @@
 // ModuTitle: Disk - Floppy
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 
+#if defined(_MCCA) && (_MCCA == 0x8632)
 #include "../../include/mecocoa.hpp"
-#include "../dma/dma-isa.hpp"
 #include <c/storage/floppy.h>
 #include <c/format/filesys.h>
-
-_ESYM_C void R_FLP_INIT();
+#elif defined(_ACCM) && ((_ACCM & 0xFF00) == 0x8600)
+#include <stdio.h>
+#include <c/stdinc.h>
+#include <c/storage/floppy.h>
+#include <cpp/Device/DMA>
+#include "../../include/taskman.com.hpp"
+#include "../../include/syscall-pow.hpp"
+#endif
+#include "../../include/flopdisk.com.hpp"
 
 #if _MCCA == 0x8632
-#if 1
+_ESYM_C void R_FLP_INIT();
+
 __attribute__((section(".init.rmod")))
 RMOD_LIST RMOD_LIST_FLP{
 	.init = R_FLP_INIT,
 	.name = "DISK-FLOPPY",
 };
-#endif
-
-
-struct FloppyInfo {
-	bool has_drive_a;
-	bool has_drive_b;
-	byte type_a;
-	byte type_b;
-	int count;
-};
-
-FloppyInfo DetectFloppyDrives() {
-	FloppyInfo info = {false, false, 0, 0, 0};
-	outpb(0x70, 0x10); 
-	byte cmos_val = innpb(0x71);
-	info.type_a = cmos_val >> 4;
-	info.type_b = cmos_val & 0x0F;
-	if (info.type_a != 0) {
-		info.has_drive_a = true;
-		info.count++;
-	}
-	if (info.type_b != 0) {
-		info.has_drive_b = true;
-		info.count++;
-	}
-	return info;
-}
 
 using namespace uni;
 
-FloppyDisk* floppies[2] = { nullptr, nullptr };
 static DeviceNode* floppy_nodes[2] = { nullptr, nullptr };
-static char flp_buf[sizeof(FloppyDisk) * 2];
-static char* floppy_sector = nullptr;
-static constexpr uint8 FloppyDmaChannel = 2;
-
-static byte flp_lock = 1;
-
-void Handint_FLP()
-{
-	if (flp_lock) {
-		IC.SendEOI(IRQ_Floppy);
-		return;
-	}
-	flp_lock = 1;
-	rupt_proc(Task_Flp_Serv, IRQ_Floppy);
-	IC.SendEOI(IRQ_Floppy);
-}
-
-static bool flp_int_wait() {
-	CommMsg msg = {};
-	sysrecv(INTRUPT, (&msg), 0);
-	return true;
-}
-
-static void flp_rw_foreback() { flp_lock = 0; }
-
-void uni::FloppyDisk::Reset() {
-	// Reset controller via DOR (Digital Output Register)
-	outpb(PORT_FDC_DOR, 0x00);
-	for (volatile int i = 0; i < 10000; i++) _TEMP;
-	flp_lock = 0;
-	outpb(PORT_FDC_DOR, 0x0C); // Enable DMA/INT, clear Reset
-	motor_state = false;
-
-	if (fn_int_wait) fn_int_wait(); // ignore timeout on reset
-
-	// Sense interrupt status for all 4 drives to clear controller status
-	for (int i = 0; i < 4; i++) {
-		byte st0, cyl;
-		SenseInt(st0, cyl);
-	}
-
-	// Configure data rate
-	outpb(PORT_FDC_CCR, DATA_RATE);
-
-	// Specify drive timing
-	WriteCmd(FDC_CMD_SPECIFY);
-	WriteCmd(0xDF); // SRT = 3ms, HUT = 240ms
-	WriteCmd(0x02); // HLT = 16ms, ND = 0 (DMA mode)
-
-	flp_lock = 0;
-	// Recalibrate drive
-	Recalibrate();
-}
-
-bool uni::FloppyDisk::Read(stduint BlockIden, void* Dest, stduint Times) {
-	if (BlockIden + Times > getUnits() || !floppy_sector) return false;
-
-	for0(t, Times) {
-		stduint blk = BlockIden + t;
-		byte* dst = (byte*)Dest + t * Block_Size;
-
-		byte cyl, head, sec;
-		LBA2CHS(blk, cyl, head, sec);
-
-		Motor(true);
-		asserv(fn_feedback)();
-
-		// Configure data transfer rate dynamically based on drive type
-		outpb(PORT_FDC_CCR, DATA_RATE);
-
-		// Setup ISA DMA Channel 2
-		if (!IsaDma8Prepare(FloppyDmaChannel, (stduint)floppy_sector, 512,
-			IsaDmaDirection::DeviceToMemory)) {
-			Motor(false);
-			return false;
-		}
-
-		WriteCmd(FDC_CMD_READ_DATA);
-		WriteCmd((head << 2) | id); 
-		WriteCmd(cyl);
-		WriteCmd(head);
-		WriteCmd(sec);
-		WriteCmd(0x02); // 512 Bytes/Sector
-		WriteCmd(SECTORS_PER_TRACK);
-		WriteCmd(GAP3_LENGTH);
-		WriteCmd(0xFF); // DTL
-
-		if (react_type == ReactType::Rupt && fn_int_wait) {
-			fn_int_wait();
-		} else {
-			for (volatile int i = 0; i < 100000; i++) _TEMP;
-		}
-
-		// Read 7 Status Bytes after operation completion
-		byte st0 = ReadData();
-		for (int i = 0; i < 6; i++) ReadData(); 
-
-		Motor(false);
-
-		// Check for errors in ST0
-		if ((st0 & 0xC0) != 0x00) return false;
-
-		// Copy data to Dest
-		MemCopyN(dst, floppy_sector, 512);
-	}
-	return true;
-}
-
-bool uni::FloppyDisk::Write(stduint BlockIden, const void* Sors, stduint Times) {
-	if (BlockIden + Times > getUnits() || !floppy_sector) return false;
-
-	for0(t, Times) {
-		stduint blk = BlockIden + t;
-		const byte* src = (const byte*)Sors + t * Block_Size;
-
-		// Copy data from Sors to DMA buffer
-		MemCopyN(floppy_sector, src, 512);
-
-		byte cyl, head, sec;
-		LBA2CHS(blk, cyl, head, sec);
-
-		Motor(true);
-		asserv(fn_feedback)();
-
-		// Configure data transfer rate dynamically
-		outpb(PORT_FDC_CCR, DATA_RATE);
-
-		// Setup ISA DMA Channel 2
-		if (!IsaDma8Prepare(FloppyDmaChannel, (stduint)floppy_sector, 512,
-			IsaDmaDirection::MemoryToDevice)) {
-			Motor(false);
-			return false;
-		}
-
-		WriteCmd(FDC_CMD_WRITE_DATA);
-		WriteCmd((head << 2) | id);
-		WriteCmd(cyl);
-		WriteCmd(head);
-		WriteCmd(sec);
-		WriteCmd(0x02); 
-		WriteCmd(SECTORS_PER_TRACK);
-		WriteCmd(GAP3_LENGTH);
-		WriteCmd(0xFF); 
-
-		if (react_type == ReactType::Rupt && fn_int_wait) {
-			fn_int_wait();
-		} else {
-			for (volatile int i = 0; i < 100000; i++) _TEMP;
-		}
-
-		// Read 7 Status Bytes
-		byte st0 = ReadData();
-		for (int i = 0; i < 6; i++) ReadData(); 
-
-		Motor(false);
-		
-		if ((st0 & 0xC0) != 0x00) return false;
-	}
-	return true;
-}
 
 PartitionSlice uni::FloppyDisk::getSlice(stduint dev) {
 	PartitionSlice slice;
@@ -224,10 +44,19 @@ struct FloppyDisk_Paged : public uni::FloppyDisk {
 	virtual bool Write(stduint BlockIden, const void* Sors, stduint Times = 1) override;
 };
 
+static stduint floppy_driver_tid = 0;
+
 bool FloppyDisk_Paged::Read(stduint BlockIden, void* Dest, stduint Times) {
 	if (Taskman::CurrentPID() == Task_Flp_Serv) {
-		// Delegate to the actual physical floppy disk instance to keep motor state in sync
-		return floppies[getID()]->Read(BlockIden, Dest, Times);
+		for0(t, Times) {
+			FloppyDriverRequest request = { getID(), uint32(BlockIden + t) };
+			syssend(floppy_driver_tid, &request, sizeof(request), _IMM(FloppyDriverMsg::Read));
+			stduint status = 0;
+			sysrecv(floppy_driver_tid, &status, sizeof(status));
+			if (!status) return false;
+			sysrecv(floppy_driver_tid, (byte*)Dest + t * Block_Size, Block_Size);
+		}
+		return true;
 	}
 	for0(t, Times) {
 		stduint blk = BlockIden + t;
@@ -247,8 +76,15 @@ bool FloppyDisk_Paged::Read(stduint BlockIden, void* Dest, stduint Times) {
 
 bool FloppyDisk_Paged::Write(stduint BlockIden, const void* Sors, stduint Times) {
 	if (Taskman::CurrentPID() == Task_Flp_Serv) {
-		// Delegate to the actual physical floppy disk instance to keep motor state in sync
-		return floppies[getID()]->Write(BlockIden, Sors, Times);
+		for0(t, Times) {
+			FloppyDriverRequest request = { getID(), uint32(BlockIden + t) };
+			syssend(floppy_driver_tid, &request, sizeof(request), _IMM(FloppyDriverMsg::Write));
+			syssend(floppy_driver_tid, (const byte*)Sors + t * Block_Size, Block_Size);
+			stduint status = 0;
+			sysrecv(floppy_driver_tid, &status, sizeof(status));
+			if (!status) return false;
+		}
+		return true;
 	}
 	for0(t, Times) {
 		stduint blk = BlockIden + t;
@@ -262,38 +98,14 @@ bool FloppyDisk_Paged::Write(stduint BlockIden, const void* Sors, stduint Times)
 		sysrecv(Task_Flp_Serv, &ack, sizeof(ack));
 		if (!ack) return false;
 		syssend(Task_Flp_Serv, src, Block_Size);
+		sysrecv(Task_Flp_Serv, &ack, sizeof(ack));
+		if (!ack) return false;
 	}
 	return true;
 }
 
 void R_FLP_INIT() {
-	FloppyInfo info = DetectFloppyDrives();
-	if (info.count == 0) return;
-
 	IC[IRQ_Floppy].setRange(mglb(Handint_FLP_Entry), SegCo32);
-	register_interrupt_handler(IRQ_Floppy, Handint_FLP);
-
-	if (info.has_drive_a) {
-		floppies[0] = new (flp_buf) FloppyDisk(0, static_cast<FloppyDriveType>(info.type_a));
-		floppies[0]->setInterrupt(NULL);
-	}
-	if (info.has_drive_b) {
-		floppies[1] = new (flp_buf + sizeof(FloppyDisk)) FloppyDisk(1, static_cast<FloppyDriveType>(info.type_b));
-		floppies[1]->setInterrupt(NULL);
-	}
-	floppy_nodes[0] = Devsman::FindNamedNode(DeviceNodeType::StorageDevice, "floppy@0");
-	floppy_nodes[1] = Devsman::FindNamedNode(DeviceNodeType::StorageDevice, "floppy@1");
-	if (floppies[0] && floppy_nodes[0]) Devsman::AttachStorageOps(floppy_nodes[0], floppies[0]);
-	if (floppies[1] && floppy_nodes[1]) Devsman::AttachStorageOps(floppy_nodes[1], floppies[1]);
-
-	// Allocate a 4KB aligned physical page for floppy DMA buffer
-	if (!floppy_sector) {
-		floppy_sector = (char*)DmaLowAlloc(4096);
-		if (!floppy_sector) {
-			floppy_sector = (char*)mempool.allocate(4096, PAGESIZE_4KB, 16);
-		}
-		if (!floppy_sector) plogwarn("[FLOPPY] ISA DMA buffer allocation failed");
-	}
 }
 
 static stduint args[4];
@@ -311,63 +123,38 @@ const char* drive_type_names[] = {
 
 void serv_dev_fl_loop()
 {
-	FloppyInfo info = DetectFloppyDrives();
-	if (info.count == 0) {
-		stduint sig_type = 0, sig_src;
-		while (true) {
-			sysrecv(ANYPROC, sliceof(args), &sig_type, &sig_src);
-		}
-	}
-
-	for0a(i, floppies) {
-		if (floppies[i]) {
-			floppies[i]->fn_int_wait = flp_int_wait;
-			floppies[i]->fn_feedback = flp_rw_foreback;
-			floppies[i]->react_type = FloppyDisk::ReactType::Rupt;
-		}
-	}
-	// Initialize the paged proxy floppies
-	if (info.has_drive_a) {
-		paged_floppies[0] = new (paged_flp_buf) FloppyDisk_Paged(0, static_cast<FloppyDriveType>(info.type_a));
-	}
-	if (info.has_drive_b) {
-		paged_floppies[1] = new (paged_flp_buf + sizeof(FloppyDisk_Paged)) FloppyDisk_Paged(1, static_cast<FloppyDriveType>(info.type_b));
-	}
-	
 	stduint sig_type = 0, sig_src;
 	String lab;
 	while (true) {
+		sysrecv(ANYPROC, sliceof(args), &sig_type, &sig_src);
+		if (sig_type == _IMM(FloppyDriverMsg::Attach)) {
+			FloppyDriverAttach attach = {};
+			MemCopyN(&attach, args, sizeof(attach));
+			floppy_driver_tid = sig_src;
+			stduint ready = 1;
+			for0(i, 2) {
+				if (!attach.drive_type[i] || attach.drive_type[i] > 5) continue;
+				paged_floppies[i] = new (paged_flp_buf + i * sizeof(FloppyDisk_Paged))
+					FloppyDisk_Paged(i, static_cast<FloppyDriveType>(attach.drive_type[i]));
+				floppy_nodes[i] = Devsman::FindNamedNode(DeviceNodeType::StorageDevice,
+					i ? "floppy@1" : "floppy@0");
+				if (floppy_nodes[i]) Devsman::AttachStorageOps(floppy_nodes[i], paged_floppies[i]);
+			}
+			syssend(sig_src, &ready, sizeof(ready));
+			for0(i, 2) {
+				if (!paged_floppies[i] || !attach.media_present[i]) continue;
+				ploginfo("[Floppy] Detect Floppy on Drive %c: %u KB (%s)",
+					'A' + i, stduint(paged_floppies[i]->getUnits() * 512 / 1024),
+					drive_type_names[attach.drive_type[i]]);
+				lab = String::newFormat("/mnt/fl%d", i);
+				if (Filesys::Mount(*paged_floppies[i], 0, lab.reference(), floppy_nodes[i]))
+					ploginfo("[Floppy] Mounted on %s successfully", lab.reference());
+			}
+			continue;
+		}
 		switch ((FiledevMsg)sig_type)
 		{
 		case FiledevMsg::TEST:// (no-feedback)
-			for0(i, 2) {
-				if (floppies[i]) {
-					floppies[i]->Reset();
-					if (floppies[i]->IsMediaPresent()) {
-						stduint block_size = floppies[i]->Block_Size;
-						stduint total_units = floppies[i]->getUnits();
-						uint64 total_bytes = uint64(total_units) * uint64(block_size);
-						if (floppy_nodes[i]) {
-							(void)Devsman::Ctrl(floppy_nodes[i],
-								(stduint)DeviceCtrlCommand::GetBlockSize, &block_size);
-							(void)Devsman::Ctrl(floppy_nodes[i],
-								(stduint)DeviceCtrlCommand::GetUnitCount, &total_units);
-							(void)Devsman::Ctrl(floppy_nodes[i],
-								(stduint)DeviceCtrlCommand::GetByteSize, &total_bytes);
-						}
-						ploginfo("[Floppy] Detect Floppy on Drive %c: : %u KB (%s)", 
-							'A' + i, 
-							stduint(total_bytes / 1024),
-							drive_type_names[static_cast<byte>(floppies[i]->getType())]);
-						lab = String::newFormat("/mnt/fl%d", i);
-						if (auto fs = Filesys::Mount(*paged_floppies[i], 0, lab.reference(), floppy_nodes[i])) {
-							ploginfo("[Floppy] Mounted on %s successfully", lab.reference());
-						}
-					} else {
-						ploginfo("[Floppy] Drive %c: No Media Present", 'A' + i);
-					}
-				}
-			}
 			break;
 		case FiledevMsg::RUPT:// (usercall-forbidden, no feedback)
 			break;
@@ -376,46 +163,28 @@ void serv_dev_fl_loop()
 		case FiledevMsg::READ:// [diskno, lba]
 		{
 			stduint ack = 0;
-			if (args[0] < 2 && floppies[args[0]]) {
-				stduint block_size = floppies[args[0]]->Block_Size;
-				if (floppy_nodes[args[0]]) {
-					(void)Devsman::Ctrl(floppy_nodes[args[0]],
-						(stduint)DeviceCtrlCommand::GetBlockSize, &block_size);
-					ack = Devsman::Read(floppy_nodes[args[0]], floppy_sector, block_size,
-						args[1] * block_size, 0) == (stdsint)block_size;
-				}
-				if (!ack) {
-					ack = floppies[args[0]]->Read(args[1], floppy_sector) ? 1 : 0;
-				}
-			}
+			char sector[512] = {};
+			if (args[0] < 2 && paged_floppies[args[0]] && floppy_driver_tid)
+				ack = paged_floppies[args[0]]->Read(args[1], sector) ? 1 : 0;
 			if (sig_src) syssend(sig_src, &ack, sizeof(ack));
-			if (ack && sig_src) syssend(sig_src, floppy_sector, floppies[args[0]]->Block_Size);
+			if (ack && sig_src) syssend(sig_src, sector, sizeof(sector));
 			break;
 		}
 		case FiledevMsg::WRITE:// [diskno, lba]
 		{
-			stduint ack = (args[0] < 2 && floppies[args[0]]) ? 1 : 0;
+			stduint ack = (args[0] < 2 && paged_floppies[args[0]] && floppy_driver_tid) ? 1 : 0;
 			if (sig_src) syssend(sig_src, &ack, sizeof(ack));
 			if (ack && sig_src) {
-				stduint block_size = floppies[args[0]]->Block_Size;
-				if (floppy_nodes[args[0]]) {
-					(void)Devsman::Ctrl(floppy_nodes[args[0]],
-						(stduint)DeviceCtrlCommand::GetBlockSize, &block_size);
-				}
-				sysrecv(sig_src, floppy_sector, block_size);
-				if (floppy_nodes[args[0]]) {
-					ack = Devsman::Send(floppy_nodes[args[0]], floppy_sector, block_size,
-						args[1] * block_size, 0) == (stdsint)block_size;
-				}
-				else {
-					ack = floppies[args[0]]->Write(args[1], floppy_sector) ? 1 : 0;
-				}
+				char sector[512] = {};
+				sysrecv(sig_src, sector, sizeof(sector));
+				ack = paged_floppies[args[0]]->Write(args[1], sector) ? 1 : 0;
+				syssend(sig_src, &ack, sizeof(ack));
 			}
 			break;
 		}
 		case FiledevMsg::GETPS:
-			if (args[0] < 2 && floppies[args[0]] && sig_src) {
-				PartitionSlice slice = floppies[args[0]]->getSlice(0);
+			if (args[0] < 2 && paged_floppies[args[0]] && sig_src) {
+				PartitionSlice slice = paged_floppies[args[0]]->getSlice(0);
 				syssend(sig_src, &slice, sizeof(slice));
 			}
 			break;
@@ -423,7 +192,210 @@ void serv_dev_fl_loop()
 			plogerro("Bad TYPE in %s %s", __FILE__, __FUNCIDEN__);
 			break;
 		}
-		sysrecv(ANYPROC, sliceof(args), &sig_type, &sig_src);
+	}
+}
+#elif defined(_ACCM) && ((_ACCM & 0xFF00) == 0x8600)
+struct FloppyInfo {
+	bool has_drive_a;
+	bool has_drive_b;
+	byte type_a;
+	byte type_b;
+	int count;
+};
+
+FloppyInfo DetectFloppyDrives() {
+	FloppyInfo info = {false, false, 0, 0, 0};
+	outpb(0x70, 0x10);
+	byte cmos_val = innpb(0x71);
+	info.type_a = cmos_val >> 4;
+	info.type_b = cmos_val & 0x0F;
+	if (info.type_a != 0) {
+		info.has_drive_a = true;
+		info.count++;
+	}
+	if (info.type_b != 0) {
+		info.has_drive_b = true;
+		info.count++;
+	}
+	return info;
+}
+
+namespace {
+	stduint floppy_dev_handle = 0;
+	stduint floppy_wait_token = 0;
+	stduint floppy_dma_handle = 0;
+	stduint floppy_dma_physical = 0;
+	byte* floppy_dma_buffer = nullptr;
+
+	void FloppyDmaWrite8(void*, uint16 port, byte value) {
+		outpb(port, value);
+	}
+
+	const uni::DMA8237_IO floppy_dma_io{nullptr, FloppyDmaWrite8};
+	const uni::DMA8237_t floppy_dma{floppy_dma_io};
+
+	bool FloppyPrepareDma(bool write) {
+		if (!floppy_dma_buffer) return false;
+		return floppy_dma.Transfer(2, floppy_dma_physical, 512,
+			write ? uni::DMA8237Direction::MemoryToDevice : uni::DMA8237Direction::DeviceToMemory);
+	}
+
+	bool FloppyInitDma(stduint device_handle, uni::FloppyDisk& disk) {
+		const stdsint handle = Powercall::DevDmaAlloc(device_handle, 4096);
+		if (handle <= 0) {
+			printf("flopdisk: DMA allocation failed handle=%d\n\r", int(handle));
+			return false;
+		}
+		PwcallDeviceDmaMapRequest mapping = {};
+		mapping.map_flags = _IMM(PwcallDeviceDmaMapFlag::Writable);
+		const stdsint mapped = Powercall::DevDmaMap(stduint(handle), &mapping);
+		if (mapped != 0 ||
+			!mapping.address || !mapping.physical || mapping.length < 512 ||
+			mapping.physical > 0x00FFFE00u) {
+			printf("flopdisk: DMA map failed rc=%d phys=%x addr=%x len=%u\n\r",
+				int(mapped), unsigned(mapping.physical), unsigned(mapping.address), unsigned(mapping.length));
+			Powercall::DevDmaFree(stduint(handle));
+			return false;
+		}
+		floppy_dma_handle = stduint(handle);
+		floppy_dma_physical = stduint(mapping.physical);
+		floppy_dma_buffer = reinterpret_cast<byte*>(stduint(mapping.address));
+		disk.Block_buffer = floppy_dma_buffer;
+		disk.fn_dma_prepare = FloppyPrepareDma;
+		disk.io_method = uni::IOMethod::DMA;
+		return true;
+	}
+
+	bool FloppyAckInterrupt(const DeviceEvent& event) {
+		if (event.version != DeviceEventProtocolVersion ||
+			DeviceEventKind(event.kind) != DeviceEventKind::Interrupt ||
+			event.device_handle != floppy_dev_handle) return false;
+		return Powercall::DevAck(floppy_dev_handle, stduint(event.sequence), event.generation) == 0;
+	}
+
+	bool FloppyWaitInterrupt() {
+		const stduint token = ++floppy_wait_token;
+		if (Powercall::DevTimer(floppy_dev_handle, 100, token) != 0) return false;
+		for (;;) {
+			DeviceEvent event = {};
+			CommMsg message = {};
+			message.data.address = _IMM(&event);
+			message.data.length = sizeof(event);
+			if (Powercall::SysComm(COMM_RECV, ANYPROC, &message) != 0) return false;
+			if (message.type == _IMM(KernelMsg::DeviceEvent)) {
+				if (message.data.length == sizeof(event) && FloppyAckInterrupt(event)) return true;
+			}
+			else if (message.type == _IMM(KernelMsg::DeviceTimeout) &&
+				stduint(event.version) == token) return false;
+		}
+	}
+
+	bool FloppySend(stduint type, const void* data, stduint length) {
+		CommMsg message = {};
+		message.type = type;
+		message.data.address = _IMM(data);
+		message.data.length = length;
+		return Powercall::SysComm(COMM_SEND, Task_Flp_Serv, &message) == 0;
+	}
+
+	bool FloppyReceive(stduint source, void* data, stduint length, CommMsg& message) {
+		message = {};
+		message.data.address = _IMM(data);
+		message.data.length = length;
+		return Powercall::SysComm(COMM_RECV, source, &message) == 0;
+	}
+}
+
+int main(int argc, char** argv) {
+	(void)argc;
+	(void)argv;
+	if (Powercall::Hello() != 0) {
+		printf("flopdisk: hello failed\n\r");
+		return -2;
+	}
+	const FloppyInfo info = DetectFloppyDrives();
+	if (!info.count) return 0;
+	const stdsint opened = Powercall::DevOpen(0, 0, _IMM(PwcallDeviceOpenFlag::Interrupt));
+	if (opened <= 0) {
+		printf("flopdisk: DevOpen failed rc=%d drives=%u/%u\n\r",
+			int(opened), unsigned(info.type_a), unsigned(info.type_b));
+		return -3;
+	}
+	floppy_dev_handle = stduint(opened);
+
+	uni::FloppyDisk drive_a(0, static_cast<uni::FloppyDriveType>(info.type_a));
+	uni::FloppyDisk drive_b(1, static_cast<uni::FloppyDriveType>(info.type_b));
+	if (!FloppyInitDma(floppy_dev_handle, drive_a)) return -4;
+	drive_b.Block_buffer = floppy_dma_buffer;
+	drive_b.fn_dma_prepare = FloppyPrepareDma;
+	drive_b.io_method = uni::IOMethod::DMA;
+	drive_a.fn_int_wait = FloppyWaitInterrupt;
+	drive_b.fn_int_wait = FloppyWaitInterrupt;
+	drive_a.react_type = uni::FloppyDisk::ReactType::Rupt;
+	drive_b.react_type = uni::FloppyDisk::ReactType::Rupt;
+	if (Powercall::DevPublish(floppy_dev_handle, PwcallDevicePublishCommand::Started) != 0) {
+		printf("flopdisk: DevPublish failed handle=%u\n\r", unsigned(floppy_dev_handle));
+		return -5;
+	}
+
+	FloppyDriverAttach attach = {};
+	attach.drive_type[0] = info.type_a;
+	attach.drive_type[1] = info.type_b;
+	uni::FloppyDisk* drives[2] = { &drive_a, &drive_b };
+	for (stduint i = 0; i < 2; ++i) {
+		if (!attach.drive_type[i]) continue;
+		drives[i]->Reset();
+		attach.media_present[i] = drives[i]->IsMediaPresent() ? 1 : 0;
+	}
+	if (!FloppySend(_IMM(FloppyDriverMsg::Attach), &attach, sizeof(attach))) {
+		printf("flopdisk: attach send failed\n\r");
+		return -6;
+	}
+	stduint ready = 0;
+	CommMsg reply = {};
+	if (!FloppyReceive(Task_Flp_Serv, &ready, sizeof(ready), reply) ||
+		reply.data.length != sizeof(ready) || !ready) {
+		printf("flopdisk: attach reply failed ready=%u len=%u type=%u\n\r",
+			unsigned(ready), unsigned(reply.data.length), unsigned(reply.type));
+		return -7;
+	}
+
+	for (;;) {
+		byte payload[512] = {};
+		CommMsg message = {};
+		if (!FloppyReceive(ANYPROC, payload, sizeof(payload), message)) {
+			printf("flopdisk: receive failed\n\r");
+			return -8;
+		}
+		if (message.type == _IMM(KernelMsg::DeviceEvent) && message.data.length == sizeof(DeviceEvent)) {
+			DeviceEvent event = {};
+			MemCopyN(&event, payload, sizeof(event));
+			(void)FloppyAckInterrupt(event);
+			continue;
+		}
+		if (message.src != Task_Flp_Serv ||
+			(message.type != _IMM(FloppyDriverMsg::Read) &&
+			message.type != _IMM(FloppyDriverMsg::Write))) continue;
+		FloppyDriverRequest request = {};
+		MemCopyN(&request, payload, sizeof(request));
+		stduint status = 0;
+		const bool valid = request.drive < 2 && attach.media_present[request.drive] &&
+			request.lba < drives[request.drive]->getUnits();
+		if (valid) {
+			if (message.type == _IMM(FloppyDriverMsg::Read)) {
+				status = drives[request.drive]->Read(request.lba, payload) ? 1 : 0;
+				if (!FloppySend(message.type, &status, sizeof(status))) return -9;
+				if (status && !FloppySend(message.type, payload, 512)) return -10;
+				continue;
+			}
+		}
+		if (message.type == _IMM(FloppyDriverMsg::Write)) {
+			CommMsg data_message = {};
+			if (!FloppyReceive(Task_Flp_Serv, payload, 512, data_message)) return -11;
+			if (valid)
+				status = drives[request.drive]->Write(request.lba, payload) ? 1 : 0;
+		}
+		if (!FloppySend(message.type, &status, sizeof(status))) return -12;
 	}
 }
 #endif

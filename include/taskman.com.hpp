@@ -75,7 +75,10 @@ enum class KernelMsg : stduint {
 	Interrupt = 0x10000, // rupt_proc -> sysrecv(INTRUPT) or sysrecv(ANYPROC)
 	DeviceEvent,// IRQ device_event_proc -> Driver
 	TaskLifecycle,// Taskman -> parent service
+	DeviceTimeout,// timer -> Ring1 driver
 };
+
+
 
 enum class TaskLifecycleEventKind : uint16 {
 	None = 0,

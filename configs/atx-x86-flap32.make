@@ -132,6 +132,13 @@ build_drvs:
 		DRV=e1000 \
 		SRCS="devdriv/net/e1000.cpp" \
 		build
+	@make -f devdriv/Makefile.$(TOOLSYS).x86 \
+		arch=$(arch) \
+		uincpath=$(uincpath) \
+		ubinpath=$(ubinpath) \
+		DRV=flopdisk \
+		SRCS="devdriv/storage/flopdisk.cpp $(uincpath)/../lib/cpp/Device/Storage/Floppy.cpp $(uincpath)/../lib/cpp/Device/DMA.cpp" \
+		build
 
 
 install:

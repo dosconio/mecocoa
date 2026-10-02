@@ -214,6 +214,8 @@ public:
 	static DeviceNode* PCI_Root();
 	static DeviceNode* PrimaryPciBus();
 	static DeviceNode* FindNamedNode(DeviceNodeType node_type, const char* name);
+	static DeviceNode* FindBoundNode(const char* driver_name);
+	static DeviceNode* FindOwnedNode(stduint pid);
 	static DeviceNode* FindPCIDeviceByClass(uint8 class_base, uint8 class_sub, uint8 class_if);
 	static DeviceNode* FindPCIDeviceByVendorDevice(uint16 vendor_id, uint16 device_id);
 	static const DeviceResource* FindResource(const DeviceNode* node, DeviceResourceType type, uint32 index = 0);

@@ -11,7 +11,7 @@ qemu-system
 ```
 ✅ qemu-system-aarch64       virt, raspi3b
 🈚️ qemu-system-alpha
-🈚️ qemu-system-arm
+✅ qemu-system-arm           real(STM32H7)
 🈚️ qemu-system-avr
 🈚️ qemu-system-cris
 🈚️ qemu-system-hppa

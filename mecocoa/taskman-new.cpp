@@ -226,6 +226,9 @@ void Taskman::Initialize(stduint cpuid) {
 	#if (_MCCA & 0xFF00) == 0x8600
 	SetPercoreFore(cpuid);
 	#endif// (_MCCA & 0xFF00) == 0x8600
+	#if (_MCCA & 0xFFFF) == 0x2032
+	PCU_CORES = 1;// single core
+	#endif// (_MCCA & 0xFFFF) == 0x2032
 
 	// register kernel as pid 0
 	auto kernel_task = AllocateTask();

@@ -939,6 +939,7 @@ void _Comment(R0) serv_task_loop()
 	}
 }
 
+#if CONFIG_ENABLE_MMU
 extern "C" void* kernel_prefault_page(ProcessBlock* pb, stduint addr) {
 	if (!pb) return nullptr;
 	addr &= ~_IMM(0xFFF);
@@ -966,6 +967,33 @@ extern "C" void* kernel_prefault_page(ProcessBlock* pb, stduint addr) {
 		}
 	}
 	return nullptr;
+}
+#endif
+
+#elif (_MCCA & 0xFF00) == 0x2000// TEMP TEMP TEMP
+
+void _Comment(R0) serv_task_loop()
+{
+	volatile stduint to_args[8] = {};// 8*4=32 bytes
+	volatile stduint sig_type = 0, sig_src = 0, ret = 0;
+	ProcessBlock* pb;
+	ploginfo("Taskman Service Start");
+	while (true) {
+		switch (static_cast<TaskmanMsg>(sig_type))
+		{
+		case TaskmanMsg::TEST:
+			// Nothing
+			break;
+
+
+		default:
+			plogerro("Bad TYPE %u in %s %s", sig_type, __FILE__, __FUNCIDEN__);
+			break;
+		}
+		// plogwarn("TRY TO");
+		sysrecv(ANYPROC, (void*)to_args, byteof(to_args), (stduint*)&sig_type, (stduint*)&sig_src);
+		// ploginfo("Taskman recv: %u %u", sig_type, sig_src);
+	}
 }
 
 #endif

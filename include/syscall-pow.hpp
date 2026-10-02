@@ -182,6 +182,10 @@ namespace Powercall {
 		return (stdsint)syscall(syscall_t::POWERCALL_DEV_ACK, dev_handle, event, generation);
 	}
 
+	static inline stdsint DevTimer(stduint dev_handle, stduint ticks, stduint token) {
+		return (stdsint)syscall(syscall_t::POWERCALL_DEV_TIMER, dev_handle, ticks, token);
+	}
+
 	static inline stdsint DevDmaAlloc(stduint dev_handle, stduint size, stduint flags = 0) {
 		return (stdsint)syscall(syscall_t::POWERCALL_DEV_DMA_ALLOC, dev_handle, size, flags);
 	}

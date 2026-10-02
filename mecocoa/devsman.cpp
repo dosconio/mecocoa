@@ -93,6 +93,7 @@ namespace Devs {
 		{"uart@com3", "uart-8250"},
 		{"uart@com4", "uart-8250"},
 		{"rtc@cmos", "rtc-cmos"},
+		{"floppy@flc0", "flopdisk"},
 	};
 
 	constexpr NamedDriverMatchEntry serio_controller_match_table[] = {
@@ -150,7 +151,7 @@ namespace Devs {
 			StrCompare(name, "uart@com3") == 0 ||
 			StrCompare(name, "uart@com4") == 0 ||
 			StrCompare(name, "sound-blaster") == 0 ||
-			StrCompare(name, "fdc@0") == 0;
+			StrCompare(name, "floppy@flc0") == 0;
 	}
 
 	bool is_x86_legacy_isa_serio_name(const char* name) {
@@ -1285,7 +1286,7 @@ namespace Devs {
 			Devsman::RegisterPlatformDevice("lapic@0", "lapic");
 			Devsman::RegisterPlatformDevice("ioapic@0", "ioapic");
 		}
-		if (auto* fdc = Devsman::RegisterPlatformDevice(legacy_bus, "fdc@0")) {
+		if (auto* fdc = Devsman::RegisterPlatformDevice(legacy_bus, "floppy@flc0", "flopdisk")) {
 			Devsman::AddIoPortResource(fdc, 0, 0x3F0, 8);
 			Devsman::AddIrqResource(fdc, IRQ_PIT + 6);
 			Devsman::AddDmaResource(fdc, 0, 2, 8);
@@ -1691,6 +1692,41 @@ DeviceNode* Devsman::FindNamedNode(DeviceNodeType node_type, const char* name) {
 	return find_named_node_in_subtree(device_root, node_type, name);
 }
 
+namespace {
+	DeviceNode* FindBoundNodeInSubtree(DeviceNode* node, const char* driver_name) {
+		for (auto* crt = node; crt; crt = reinterpret_cast<DeviceNode*>(crt->link.next)) {
+			if (crt->fields.binding.driver_name &&
+				StrCompare(crt->fields.binding.driver_name, driver_name) == 0) return crt;
+			if (crt->link.subf) {
+				if (auto* match = FindBoundNodeInSubtree(
+					reinterpret_cast<DeviceNode*>(crt->link.subf), driver_name)) return match;
+			}
+		}
+		return nullptr;
+	}
+}
+
+DeviceNode* Devsman::FindBoundNode(const char* driver_name) {
+	return device_root && driver_name ? FindBoundNodeInSubtree(device_root, driver_name) : nullptr;
+}
+
+namespace {
+	DeviceNode* FindOwnedNodeInSubtree(DeviceNode* node, stduint pid) {
+		for (auto* crt = node; crt; crt = reinterpret_cast<DeviceNode*>(crt->link.next)) {
+			if (crt->fields.binding.owner_pid == pid) return crt;
+			if (crt->link.subf) {
+				if (auto* match = FindOwnedNodeInSubtree(
+					reinterpret_cast<DeviceNode*>(crt->link.subf), pid)) return match;
+			}
+		}
+		return nullptr;
+	}
+}
+
+DeviceNode* Devsman::FindOwnedNode(stduint pid) {
+	return device_root && pid ? FindOwnedNodeInSubtree(device_root, pid) : nullptr;
+}
+
 DeviceNode* Devsman::FindPCIDeviceByClass(uint8 class_base, uint8 class_sub, uint8 class_if) {
 	return find_pci_device_by_class(class_base, class_sub, class_if);
 }
@@ -1809,7 +1845,7 @@ namespace {
 		}
 	};
 
-	constexpr uint32 DriverRestartLimit = 3;
+	constexpr uint32 DriverRestartLimit = 0;
 	uni::Vector<DriverProcessRecord> driver_processes;
 	bool driver_directory_ready = false;
 
@@ -1862,6 +1898,10 @@ namespace {
 			}
 		}
 		Taskman::Append(task);
+		if (auto* node = Devsman::FindBoundNode(driver_task_name))
+			node->fields.binding.owner_pid = uint32(task->pid);
+		else if (StrCompare(driver_task_name, "flopdisk") == 0)
+			plogwarn("[Devsman] no device bound for flopdisk pid=%u", task->pid);
 		Taskman::AppendThread(task->main_thread);
 		record.pid = task->pid;
 		ploginfo("[Devsman] load driver: %s pid=%u", record.path, task->pid);

@@ -7,11 +7,27 @@
 	PRESERVE8
 	THUMB
 
+	IMPORT	SysTick_Handler_Mcca
+
+; Keep the interrupted task's EXC_RETURN: PendSV tail-chained from this handler sees 0xFFFFFFF1
+SysTick_Entry	PROC
+	EXPORT	SysTick_Entry
+	PUSH	{R0, LR}
+	TST	LR, #0x8	; bit3 clear: nested in another handler, keep the last task EXC_RETURN
+	BEQ	SysTick_Stashed
+	LDR	R0, =C_SysTickLR
+	STR	LR, [R0]
+SysTick_Stashed
+	BL	SysTick_Handler_Mcca
+	POP	{R0, LR}
+	BX	LR
+	ENDP
+
 SwitchTaskContext	PROC
 	EXPORT	SwitchTaskContext
-	MOV32	R2, #0xE000ED22	; SHPR3 byte 2: PendSV priority
-	MOVS	R3, #0xFF	; 15, the lowest, so the swap waits for the other handlers
-	STRB	R3, [R2]
+	MOV32	R2, #0xE000ED22	; SHPR3 bytes 2 and 3: PendSV and SysTick priority
+	MOV32	R3, #0x0000FFFF
+	STRH	R3, [R2]	; 15 for both, so SysTick never preempts the switch
 	LDR	R2, =C_SwitchNext
 	STR	R0, [R2]
 	LDR	R2, =C_SwitchCrt
@@ -26,41 +42,39 @@ SwitchTaskContext	PROC
 
 PendSV_Handler	PROC
 	EXPORT	PendSV_Handler
+	TST	LR, #0x8	; bit3 clear: entered from a handler, so LR is not the task's
+	BEQ	PendSV_FromHandler
+	B	PendSV_LRReady
+PendSV_FromHandler
+	LDR	R3, =C_SysTickLR
+	LDR	LR, [R3]	; EXC_RETURN of the task being switched out
+PendSV_LRReady
 	MRS	R0, PSP	; the hardware frame of the outgoing task is on its own PSP
 	LDR	R1, =C_SwitchCrt
 	LDR	R1, [R1]
 	ADD	R2, R1, #0x10
 	STMIA	R2, {R4-R11}	; ctx->R4-R11, R0-R3 and R12 stay in the hardware frame
 	STR	R0, [R1, #0x34]	; ctx->sp
-	STR	LR, [R1, #0x38]	; ctx->exc_return
+	STR	LR, [R1, #0x38]	; ctx->exc_return (bit4 tells whether the frame carries FP)
 	MRS	R2, CONTROL
 	STR	R2, [R1, #0x48]	; ctx->CONTROL
-	TST	LR, #0x10	; bit 4 clear: the hardware frame carries the FP state too
-	BEQ	PendSV_SaveFP
-PendSV_Saved
+	ADD	R2, R1, #0xA0
+	VSTMIA	R2, {S16-S31}	; S0-S15 are stacked by hardware, S16-S31 never are
+	VMRS	R3, FPSCR
+	STR	R3, [R1, #0x1A0]
+	;
 	LDR	R0, =C_SwitchNext
 	LDR	R0, [R0]
 	LDR	LR, [R0, #0x38]	; exc_return of the incoming task
 	LDR	R1, [R0, #0x34]	; its stack
 	ADD	R2, R0, #0x10
 	LDMIA	R2, {R4-R11}
-	TST	LR, #0x10
-	BEQ	PendSV_RestoreFP
-PendSV_Restored
-	MSR	PSP, R1
-	BX	LR	; exception return pops the frame of the incoming task
-PendSV_SaveFP
-	ADD	R2, R1, #0xA0
-	VSTMIA	R2, {S16-S31}	; S0-S15 are stacked by hardware
-	VMRS	R3, FPSCR
-	STR	R3, [R1, #0x1A0]
-	B	PendSV_Saved
-PendSV_RestoreFP
 	ADD	R2, R0, #0xA0
 	VLDMIA	R2, {S16-S31}
 	LDR	R3, [R0, #0x1A0]
 	VMSR	FPSCR, R3
-	B	PendSV_Restored
+	MSR	PSP, R1
+	BX	LR	; exception return pops the frame of the incoming task
 	ENDP
 
 DirectTaskContext	PROC
@@ -69,22 +83,18 @@ DirectTaskContext	PROC
 	LDR	R1, [R0, #0x34]
 	ADD	R2, R0, #0x10
 	LDMIA	R2, {R4-R11}
-	TST	LR, #0x10
-	BEQ	Direct_RestoreFP
-Direct_Restored
-	MSR	PSP, R1
-	BX	LR
-Direct_RestoreFP
 	ADD	R2, R0, #0xA0
 	VLDMIA	R2, {S16-S31}
 	LDR	R3, [R0, #0x1A0]
 	VMSR	FPSCR, R3
-	B	Direct_Restored
+	MSR	PSP, R1
+	BX	LR
 	ENDP
 
 	AREA	|.bss|, DATA, READWRITE, NOINIT, ALIGN=2
 C_SwitchNext	SPACE	4
 C_SwitchCrt	SPACE	4
+C_SysTickLR	SPACE	4
 
 	ALIGN
 	END
