@@ -6,6 +6,7 @@
 #include "../include/syscall-pow.hpp"
 #if (_MCCA & 0xFF00) == 0x8600
 #include <cpp/Device/Bus/PCI.hpp>
+#include <cpp/Device/DMA>
 #include "../include/devsman-storage.hpp"
 #endif
 
@@ -49,6 +50,7 @@ namespace {
 		stduint physical = 0;
 		stduint size = 0;
 		stduint mapped_addr = 0;
+		uint8 dma_channel = 0xFF;
 	};
 
 	#if (_MCCA & 0xFF00) == 0x8600
@@ -105,10 +107,28 @@ namespace {
 		}
 	}
 
+	#if (_MCCA & 0xFF00) == 0x8600
+	static void PwcallDmaWrite8(void*, uint16 port, byte value) {
+		OUT_b(port, value);
+	}
+
+	const uni::DMA8237_IO pwcall_dma_io = { nullptr, PwcallDmaWrite8 };
+	const uni::DMA8237_t pwcall_dma(pwcall_dma_io);
+
+	static void StopPwcallDmaSlot(PwcallDmaSlot* slot) {
+		if (!slot || slot->dma_channel > 7 || slot->dma_channel == 4) return;
+		(void)pwcall_dma.Abort(slot->dma_channel);
+		slot->dma_channel = 0xFF;
+	}
+	#else
+	static void StopPwcallDmaSlot(PwcallDmaSlot*) {}
+	#endif
+
 	static void FreePwcallDmaSlotNode(pureptr_t inp) {
 		auto* node = reinterpret_cast<Dnode*>(inp);
 		auto* slot = node ? reinterpret_cast<PwcallDmaSlot*>(node->offs) : nullptr;
 		if (!slot) return;
+		StopPwcallDmaSlot(slot);
 		if (slot->physical && slot->size) {
 			#if (_MCCA & 0xFF00) == 0x8600
 			if (DmaLowIsInRange((void*)slot->physical)) {
@@ -536,6 +556,7 @@ static void PwcallUnbindProcessInterrupts(stduint owner_pid) {
 static stdsint PwcallAckDeviceInterrupt(ProcessBlock* process, stduint device_handle,
 	uint64 sequence, uint32 generation) {
 	if (!process || !device_handle) return -1;
+	const bool recover = !sequence && !generation;
 	DeviceEvent event = {};
 	stduint owner_tid = 0;
 	bool deliver = false;
@@ -550,7 +571,16 @@ static stdsint PwcallAckDeviceInterrupt(ProcessBlock* process, stduint device_ha
 				break;
 			}
 		}
-		if (!found || !found->awaiting_ack || found->generation != generation ||
+		if (!found) return -1;
+		if (recover) {
+			found->pending_count = 0;
+			found->overflowed = false;
+			found->delivery_pending = false;
+			found->awaiting_ack = false;
+			if (found->level_triggered) PwcallRefreshInterruptLine(found->irq_line);
+			return 0;
+		}
+		if (!found->awaiting_ack || found->generation != generation ||
 			found->sequence != sequence) return -1;
 		if (found->pending_count) {
 			const uint32 count = found->pending_count;
@@ -817,6 +847,16 @@ static stdsint HandlePwcallDeviceDmaAlloc(ProcessBlock* pb, stduint dev_handle, 
 	if (!pb || !dev_handle || !size) return -1;
 	auto* device = ResolvePwcallDeviceHandle(pb, dev_handle);
 	if (!device) return -1;
+	uint8 dma_channel = 0xFF;
+	#if (_MCCA & 0xFF00) == 0x8600
+	if (DeviceNodeType(device->fields.node_type) != DeviceNodeType::PciDevice) {
+		const auto* resource = Devsman::FindResource(device, DeviceResourceType::DmaChannel, 0);
+		if (!resource || resource->length != 1 || resource->start > 7 || resource->start == 4 ||
+			(resource->start <= 3 && resource->extra != 8) ||
+			(resource->start >= 5 && resource->extra != 16)) return -1;
+		dma_channel = uint8(resource->start);
+	}
+	#endif
 	const stduint alloc_size = (size + 0xFFFu) & ~0xFFFu;
 	void* phys = nullptr;
 	#if (_MCCA & 0xFF00) == 0x8600
@@ -853,6 +893,7 @@ static stdsint HandlePwcallDeviceDmaAlloc(ProcessBlock* pb, stduint dev_handle, 
 	slot->physical = stduint(phys);
 	slot->size = alloc_size;
 	slot->mapped_addr = 0;
+	slot->dma_channel = dma_channel;
 	DchainAppend(&owner->dmas, slot, false, nullptr);
 	return stdsint(slot->handle_id);
 }
@@ -865,6 +906,7 @@ static stdsint HandlePwcallDeviceDmaFree(ProcessBlock* pb, stduint dma_handle) {
 	auto* slot_node = FindPwcallDmaSlotNodeByHandle(owner, dma_handle);
 	if (!slot_node) return -1;
 	auto* slot = reinterpret_cast<PwcallDmaSlot*>(slot_node->offs);
+	StopPwcallDmaSlot(slot);
 	if (slot && slot->mapped_addr && slot->size) {
 		sysc_UMAP(slot->mapped_addr, slot->size);
 		slot->mapped_addr = 0;

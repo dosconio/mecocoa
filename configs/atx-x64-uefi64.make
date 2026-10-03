@@ -57,6 +57,7 @@ cppfile=\
 	$(ulibpath)/cpp/Device/Bus/PCI.cpp \
 	$(ulibpath)/cpp/Device/Bus/ISA.cpp \
 	$(ulibpath)/cpp/Device/Keyboard.cpp \
+	$(ulibpath)/cpp/Device/DMA.cpp \
 	$(ulibpath)/cpp/Device/Timer.cpp \
 	$(ulibpath)/cpp/Device/Mouse.cpp \
 	$(ulibpath)/cpp/Datype/Charset/Unicode.cpp \

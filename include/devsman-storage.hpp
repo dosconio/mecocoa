@@ -10,6 +10,7 @@ enum class StorageDriverMsg : stduint {
 	Ready,
 	Data,
 	Complete,
+	Cancel,
 };
 
 enum StorageDriverFlag : uint32 {

@@ -179,6 +179,7 @@ namespace Powercall {
 	}
 
 	static inline stdsint DevAck(stduint dev_handle, stduint event, uint32 generation) {
+		// A zero event and generation release a lost device-event delivery before recovery.
 		return (stdsint)syscall(syscall_t::POWERCALL_DEV_ACK, dev_handle, event, generation);
 	}
 
