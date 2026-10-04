@@ -43,6 +43,7 @@ cppfile+=$(wildcard mecocoa/*.cpp) prehost/_auxiliary.cpp $(wildcard devdriv/*.c
 
 kernel_excluded_cpp+=devdriv/video/video-bochs.cpp
 kernel_excluded_cpp+=devdriv/net/e1000.cpp
+kernel_excluded_cpp+=devdriv/net/lance.cpp
 cppfile:=$(filter-out $(kernel_excluded_cpp),$(cppfile))
 
 cplfile+= \

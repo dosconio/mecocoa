@@ -115,6 +115,12 @@ namespace Devs {
 		}
 	}
 
+	bool is_lance_pci_device(const DeviceNode* node) {
+		if (!node) return false;
+		if (DeviceNodeType(node->fields.node_type) != DeviceNodeType::PciDevice) return false;
+		return node->fields.vendor_id == 0x1022u && node->fields.device_id == 0x2000u;
+	}
+
 	const DeviceResource* find_pci_io_bar(const DeviceNode* node) {
 		if (!node) return nullptr;
 		for (uint32 bar_index = 0; bar_index < 6; ++bar_index) {
@@ -148,6 +154,27 @@ namespace Devs {
 				io->start,
 				irq ? "" : " irq=none");
 		}
+		return true;
+	}
+
+	bool probe_lance_device(DeviceNode* node) {
+		if (!node || !is_lance_pci_device(node)) return false;
+		const auto* io = find_pci_io_bar(node);
+		if (!io) {
+			plogwarn("[DEVSMAN] LANCE %s missing I/O BAR resource",
+				node->link.addr ? node->link.addr : "(unnamed)");
+			return false;
+		}
+		const auto* irq = Devsman::FindResource(node, DeviceResourceType::IrqLine, 0);
+		if (!irq) {
+			plogwarn("[DEVSMAN] LANCE %s missing IRQ resource",
+				node->link.addr ? node->link.addr : "(unnamed)");
+			return false;
+		}
+		node->fields.binding.probe_result = 0;
+		ploginfo("[DEVSMAN] LANCE %s I/O BAR%u=%[64H] len=%[64H] irq=%[64H]",
+			node->link.addr ? node->link.addr : "(unnamed)",
+			io->index, io->start, io->length, irq->start);
 		return true;
 	}
 
@@ -1199,6 +1226,25 @@ namespace {
 		}
 	};
 
+	struct PciRingDriverMatchEntry {
+		uint16 vendor_id;
+		uint16 device_id;
+		const char* filename;
+	};
+
+	constexpr PciRingDriverMatchEntry pci_ring_driver_match_table[] = {
+		{0x1234u, 0x1111u, "video-bochs.elf"},
+		{0x8086u, 0x100Eu, "e1000.elf"},
+		{0x8086u, 0x100Fu, "e1000.elf"},
+		{0x8086u, 0x1010u, "e1000.elf"},
+		{0x8086u, 0x10D3u, "e1000.elf"},
+		{0x1022u, 0x2000u, "lance.elf"},
+	};
+
+	constexpr const char* always_load_ring_drivers[] = {
+		"flopdisk.elf",
+	};
+
 	constexpr uint32 DriverRestartLimit = 0;
 	uni::Vector<DriverProcessRecord> driver_processes;
 	bool driver_directory_ready = false;
@@ -1220,6 +1266,36 @@ namespace {
 			if (driver_processes[i].pid == pid) return &driver_processes[i];
 		}
 		return nullptr;
+	}
+
+	bool HasMatchingPciDevice(DeviceNode* node, const PciRingDriverMatchEntry& entry) {
+		for (auto* crt = node; crt; crt = reinterpret_cast<DeviceNode*>(crt->link.next)) {
+			if (DeviceNodeType(crt->fields.node_type) == DeviceNodeType::PciDevice &&
+				crt->fields.vendor_id == entry.vendor_id &&
+				crt->fields.device_id == entry.device_id) {
+				return true;
+			}
+			if (crt->link.subf && HasMatchingPciDevice(
+				reinterpret_cast<DeviceNode*>(crt->link.subf), entry)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	bool ShouldLoadRingDriver(const char* filename) {
+		if (!filename) return false;
+		for0(i, numsof(always_load_ring_drivers)) {
+			if (StrCompare(filename, always_load_ring_drivers[i]) == 0) return true;
+		}
+		for0(i, numsof(pci_ring_driver_match_table)) {
+			const auto& entry = pci_ring_driver_match_table[i];
+			if (StrCompare(filename, entry.filename) == 0 &&
+				HasMatchingPciDevice(Devsman::Root(), entry)) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	bool LaunchDriverProcess(DriverProcessRecord& record) {
@@ -1263,6 +1339,9 @@ namespace {
 	}
 
 	bool RegisterDriverProcess(const char* path, const char* name) {
+		for0(i, driver_processes.Count()) {
+			if (StrCompare(driver_processes[i].path, path) == 0) return true;
+		}
 		DriverProcessRecord record = {};
 		CopyDriverText(record.path, sizeof(record.path), path);
 		CopyDriverText(record.name, sizeof(record.name), name);
@@ -1314,6 +1393,7 @@ namespace {
 
 			for (stdsint i = 0; i < count; ++i) {
 				if (entries[i].is_dir || !entries[i].name[0] || entries[i].name[0] == '.') continue;
+				if (!ShouldLoadRingDriver(entries[i].name)) continue;
 
 				char path[96] = {};
 				StrCopy(path, drv_dir);

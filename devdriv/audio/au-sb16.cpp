@@ -35,23 +35,23 @@ public:
 
 	virtual void setVolume(uint32 percent) override {
 		if (percent > 100) percent = 100;
-		uint8 raw = uint8((percent * 255) / 100);
+		// dB-aware: 100% is unity, 50% is about -6 dB (see SoundBlaster.hpp).
+		const uint8 raw = uni::SoundBlasterPercentToRaw(percent);
 		SoundBlasterSetVolume(uni::SoundBlasterMixerChannel::MasterVolume, raw, raw);
 	}
 
 	virtual void setVolume(uint32 left, uint32 right) override {
 		if (left > 100) left = 100;
 		if (right > 100) right = 100;
-		uint8 raw_l = uint8((left * 255) / 100);
-		uint8 raw_r = uint8((right * 255) / 100);
+		const uint8 raw_l = uni::SoundBlasterPercentToRaw(left);
+		const uint8 raw_r = uni::SoundBlasterPercentToRaw(right);
 		SoundBlasterSetVolume(uni::SoundBlasterMixerChannel::MasterVolume, raw_l, raw_r);
 	}
 
 	virtual uint32 getVolume() const override {
 		uint8 raw_l = 0, raw_r = 0;
 		if (!SoundBlasterGetVolume(uni::SoundBlasterMixerChannel::MasterVolume, raw_l, raw_r)) return 0;
-		uint32 avg_raw = (uint32(raw_l) + uint32(raw_r)) / 2;
-		return (avg_raw * 100) / 255;
+		return (uint32(uni::SoundBlasterRawToPercent(raw_l)) + uint32(uni::SoundBlasterRawToPercent(raw_r))) / 2;
 	}
 
 	virtual void setMute(bool mute = true) override {
@@ -970,8 +970,11 @@ namespace {
 		sound_blaster_pcm_path = SoundBlasterPcmPath::Unknown;
 		(void)PrepareSoundBlasterDma(node);
 		(void)sound_blaster.ResetMixer();
-		(void)sound_blaster.SetVolume(uni::SoundBlasterMixerChannel::MasterVolume, 204, 204);
-		(void)sound_blaster.SetVolume(uni::SoundBlasterMixerChannel::VoiceVolume, 204, 204);
+		// Unity on both stages; the system volume rides the Master stage alone (was 204 = -14 dB per stage).
+		(void)SoundBlasterSetVolume(uni::SoundBlasterMixerChannel::MasterVolume,
+			uni::SoundBlasterUnityRaw, uni::SoundBlasterUnityRaw);
+		(void)SoundBlasterSetVolume(uni::SoundBlasterMixerChannel::VoiceVolume,
+			uni::SoundBlasterUnityRaw, uni::SoundBlasterUnityRaw);
 		// Register as unified audio backend in Devsman
 		(void)audio_manager.AppendCard("sb16", &::g_sb16_audio_device);
 		// Keep boot quiet. Explicit AudioMsg::TEST / playback paths can still
@@ -1104,8 +1107,8 @@ void SoundBlasterAbortPcmStream() {
 	(void)sound_blaster.Reset();
 }
 
-	uint8 sound_blaster_master_vol_l = 204;
-	uint8 sound_blaster_master_vol_r = 204;
+	uint8 sound_blaster_master_vol_l = uni::SoundBlasterUnityRaw;
+	uint8 sound_blaster_master_vol_r = uni::SoundBlasterUnityRaw;
 	bool sound_blaster_master_mute = false;
 
 	bool SoundBlasterPausePcmStream() {
@@ -1257,7 +1260,9 @@ bool SoundBlasterRecoverDevice() {
 	if (sound_blaster_master_mute) {
 		sound_blaster.SetMute(uni::SoundBlasterMixerChannel::MasterVolume, true);
 	}
-	sound_blaster.SetVolume(uni::SoundBlasterMixerChannel::VoiceVolume, 204, 204);
+	// Voice stays at unity: the system volume lives on the Master stage only.
+	sound_blaster.SetVolume(uni::SoundBlasterMixerChannel::VoiceVolume,
+		uni::SoundBlasterUnityRaw, uni::SoundBlasterUnityRaw);
 
 	// 4. If we were streaming, re-arm the auto-init DMA
 	if (was_streaming && sound_blaster_auto_buffer.refill) {

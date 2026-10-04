@@ -695,8 +695,10 @@ void serv_dev_audio_loop() {
 				if (vol_req->mute) {
 					backend->setMute(true);
 				} else {
-					uint32 vl = (uint32(vol_req->left) * 100) / 255;
-					uint32 vr = (uint32(vol_req->right) * 100) / 255;
+					// Requests carry the mixer's raw 0..255 scale, so decode via the shared dB-aware table.
+					SoundBlasterSetMute(uni::SoundBlasterMixerChannel::MasterVolume, false);
+					const uint32 vl = uni::SoundBlasterRawToPercent(vol_req->left);
+					const uint32 vr = uni::SoundBlasterRawToPercent(vol_req->right);
 					backend->setVolume(vl, vr);
 				}
 				result = 0;
@@ -710,8 +712,8 @@ void serv_dev_audio_loop() {
 			auto* backend = audio_manager.getSelectedCard();
 			AudioVolumeRequest resp = *in_req;
 			if (backend) {
-				uint32 vol = backend->getVolume();
-				resp.left = resp.right = uint8((vol * 255) / 100);
+				const uint8 raw = uni::SoundBlasterPercentToRaw(backend->getVolume());
+				resp.left = resp.right = raw;
 			} else {
 				resp.left = resp.right = 0;
 			}

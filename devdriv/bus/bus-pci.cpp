@@ -21,6 +21,8 @@ namespace Devs {
 		PciBridge,
 		Xhci,
 		E1000,
+		Piix4Acpi,
+		Lance,
 	};
 
 	struct PciClassNameEntry {
@@ -60,12 +62,14 @@ namespace Devs {
 		{0x8086u, 0x7000u, "82371SB PIIX3 ISA bridge"},
 		{0x8086u, 0x7110u, "82371AB PIIX4 ISA bridge"},
 		{0x8086u, 0x7111u, "82371AB PIIX4 IDE"},
+		{0x8086u, 0x7113u, "82371AB/EB/MB PIIX4 ACPI"},
 
 		// ETH
 		{0x8086u, 0x100Eu, "82540EM Gigabit Ethernet Controller"},
 		{0x8086u, 0x100Fu, "82545EM Gigabit Ethernet Controller"},
 		{0x8086u, 0x1010u, "82546EB Gigabit Ethernet Controller"},
 		{0x8086u, 0x10D3u, "82574L Gigabit Network Connection"},
+		{0x1022u, 0x2000u, "PCnet-PCI II Ethernet Controller"},
 
 		{0x104Bu, 0x1040u, "MultiMaster SCSI host adapter"},
 		{0x15ADu, 0x0405u, "SVGA II Adapter"},
@@ -94,6 +98,7 @@ namespace Devs {
 	const DriverOpsEntry* find_driver_ops(const char* driver_name, const DriverOpsEntry* table, stduint count);
 	bool append_resource(DeviceNode* node, DeviceResourceType type, uint16 flags, uint32 index, uint64 start, uint64 length, uint64 extra);
 	bool is_e1000_device(const DeviceNode* node);
+	bool is_lance_pci_device(const DeviceNode* node);
 	bool set_driver_binding(DeviceNode* node, const char* driver_name);
 
 	extern DeviceTree device_tree;
@@ -207,6 +212,8 @@ namespace Devs {
 	bool probe_video_vmware_device(DeviceNode* node);
 	bool probe_video_bochs_device(DeviceNode* node);
 	bool probe_e1000_device(DeviceNode* node);
+	bool probe_piix4_acpi_device(DeviceNode* node);
+	bool probe_lance_device(DeviceNode* node);
 	constexpr DriverOpsEntry pci_driver_ops_table[] = {
 		{"xhci", probe_xhci_device},
 		{"pata", probe_pata_device},
@@ -216,6 +223,8 @@ namespace Devs {
 		{"video-vmware", probe_video_vmware_device},
 		{"video-bochs", probe_video_bochs_device},
 		{"e1000", probe_e1000_device},
+		{"piix4-acpi", probe_piix4_acpi_device},
+		{"lance", probe_lance_device},
 	};
 
 	void probe_pci_device(DeviceNode* node) {
@@ -318,6 +327,13 @@ namespace Devs {
 		if (is_e1000_device(node)) {
 			return PciDriverKind::E1000;
 		}
+		if (node->fields.vendor_id == 0x8086u &&
+			node->fields.device_id == 0x7113u) {
+			return PciDriverKind::Piix4Acpi;
+		}
+		if (is_lance_pci_device(node)) {
+			return PciDriverKind::Lance;
+		}
 		return PciDriverKind::Unknown;
 	}
 
@@ -363,6 +379,12 @@ namespace Devs {
 			return;
 		case PciDriverKind::E1000:
 			set_driver_binding(node, "e1000");
+			return;
+		case PciDriverKind::Piix4Acpi:
+			set_driver_binding(node, "piix4-acpi");
+			return;
+		case PciDriverKind::Lance:
+			set_driver_binding(node, "lance");
 			return;
 		default:
 			return;
@@ -461,6 +483,19 @@ namespace Devs {
 			0, primary_bus, secondary_bus, subordinate_bus);
 	}
 
+	uint64 read_pci_io_bar_length(const uni::PCI::Device& dev, uint8 bar_index, uint32 bar_low) {
+		const uint8 addr = 0x10 + bar_index * 4;
+		const uint16 command = uint16(uni::PCI::read_config_register(dev, 0x04) & 0xFFFFu);
+		uni::PCI::write_config_register(dev, 0x04, command & uint16(~0x0001u));
+		uni::PCI::write_config_register(dev, addr, 0xFFFFFFFFu);
+		const uint32 size_low = uni::PCI::read_config_register(dev, addr);
+		uni::PCI::write_config_register(dev, addr, bar_low);
+		uni::PCI::write_config_register(dev, 0x04, command);
+		const uint32 size_mask = size_low & ~0x3u;
+		if (!size_mask) return 0;
+		return uint64(~size_mask) + 1;
+	}
+
 	uint64 read_pci_mmio_bar_length(const uni::PCI::Device& dev, uint8 bar_index, uint32 bar_low, uint8 bar_count) {
 		const uint8 addr = 0x10 + bar_index * 4;
 		const uint8 mem_type = uint8((bar_low >> 1) & 0x3u);
@@ -531,8 +566,9 @@ namespace Devs {
 			if (bar_low & 0x1u) {
 				const uint64 base = uint64(bar_low & ~0x3u);
 				if (!base) continue;
+				const uint64 length = read_pci_io_bar_length(dev, resource_index, bar_low);
 				append_resource(node, DeviceResourceType::PciBarIo, DeviceResourceFlag_None,
-					resource_index, base, 0, 0);
+					resource_index, base, length, 0);
 				continue;
 			}
 

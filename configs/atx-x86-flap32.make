@@ -28,7 +28,7 @@ CX=g++ -I$(uincpath) -Idepends/freetype/x86/include -c $(flag) $(CXF) $(CXW) -st
 
 ker_mod=$(uobjpath)/mcca-$(arch)/*.o
 
-kernel_excluded_cpp=devdriv/video/video-bochs.cpp devdriv/net/e1000.cpp
+kernel_excluded_cpp=devdriv/video/video-bochs.cpp devdriv/net/e1000.cpp devdriv/net/lance.cpp
 cppfile=$(filter-out $(kernel_excluded_cpp),$(wildcard mecocoa/*.cpp) $(wildcard devdriv/*.cpp) $(wildcard devdriv/**/*.cpp) $(wildcard depends/*.cpp) $(wildcard depends/loaders/*.cpp) )
 cppobjs=$(patsubst %.cpp, $(uobjpath)/mcca-$(arch)/%.o, $(notdir $(cppfile)))
 VPATH = $(sort $(dir $(cppfile)))
@@ -131,6 +131,13 @@ build_drvs:
 		ubinpath=$(ubinpath) \
 		DRV=e1000 \
 		SRCS="devdriv/net/e1000.cpp" \
+		build
+	@make -f devdriv/Makefile.$(TOOLSYS).x86 \
+		arch=$(arch) \
+		uincpath=$(uincpath) \
+		ubinpath=$(ubinpath) \
+		DRV=lance \
+		SRCS="devdriv/net/lance.cpp" \
 		build
 	@make -f devdriv/Makefile.$(TOOLSYS).x86 \
 		arch=$(arch) \
