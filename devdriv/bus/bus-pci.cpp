@@ -19,6 +19,8 @@ namespace Devs {
 		Ahci,
 		Nvme,
 		PciBridge,
+		Uhci,
+		Ehci,
 		Xhci,
 		E1000,
 		Piix4Acpi,
@@ -54,6 +56,9 @@ namespace Devs {
 		{0x06u, 0x04u, MatchAnyClassIf, "PCI bridge"},
 		{0x06u, 0x80u, MatchAnyClassIf, "Bridge device"},
 		{0x08u, 0x80u, MatchAnyClassIf, "System peripheral"},
+		{ClassBase_SerialBusController, ClassSub_UniversalSerialBusController, ClassInterface_UHCI, "UHCI USB controller"},
+		{ClassBase_SerialBusController, ClassSub_UniversalSerialBusController, ClassInterface_EHCI, "EHCI USB controller"},
+		{ClassBase_SerialBusController, ClassSub_UniversalSerialBusController, ClassInterface_XHCI, "xHCI USB controller"},
 	};
 
 	constexpr PciDeviceNameEntry pci_device_name_table[] = {
@@ -136,6 +141,42 @@ namespace Devs {
 		Devsman::AttachPCIDevices(pci);
 	}
 
+	bool probe_uhci_device(DeviceNode* node) {
+		if (!node) return false;
+		const auto* io = Devsman::FindResource(node, DeviceResourceType::PciBarIo, 4);
+		if (!io) {
+			plogwarn("[DEVSMAN] UHCI %s missing BAR4 I/O resource",
+				node->link.addr ? node->link.addr : "(unnamed)");
+			return false;
+		}
+		const auto* irq = Devsman::FindResource(node, DeviceResourceType::IrqLine, 0);
+		node->fields.binding.probe_result = irq ? 0 : 1;
+		ploginfo("[DEVSMAN] UHCI %s IO=%[64H] len=%[64H]%s",
+			node->link.addr ? node->link.addr : "(unnamed)",
+			io->start,
+			io->length,
+			irq ? "" : " irq=none");
+		return true;
+	}
+
+	bool probe_ehci_device(DeviceNode* node) {
+		if (!node) return false;
+		const auto* mmio = Devsman::FindResource(node, DeviceResourceType::PciBarMmio, 0);
+		if (!mmio) {
+			plogwarn("[DEVSMAN] EHCI %s missing BAR0 MMIO resource",
+				node->link.addr ? node->link.addr : "(unnamed)");
+			return false;
+		}
+		const auto* irq = Devsman::FindResource(node, DeviceResourceType::IrqLine, 0);
+		node->fields.binding.probe_result = irq ? 0 : 1;
+		ploginfo("[DEVSMAN] EHCI %s MMIO=%[64H] len=%[64H]%s",
+			node->link.addr ? node->link.addr : "(unnamed)",
+			mmio->start,
+			mmio->length,
+			irq ? "" : " irq=none");
+		return true;
+	}
+
 	bool probe_xhci_device(DeviceNode* node) {
 		if (!node) return false;
 		const auto* mmio = Devsman::FindResource(node, DeviceResourceType::PciBarMmio, 0);
@@ -215,6 +256,8 @@ namespace Devs {
 	bool probe_piix4_acpi_device(DeviceNode* node);
 	bool probe_lance_device(DeviceNode* node);
 	constexpr DriverOpsEntry pci_driver_ops_table[] = {
+		{"uhci", probe_uhci_device},
+		{"ehci", probe_ehci_device},
 		{"xhci", probe_xhci_device},
 		{"pata", probe_pata_device},
 		{"ahci", probe_ahci_device},
@@ -319,9 +362,19 @@ namespace Devs {
 		if (node->fields.class_base == 0x06u && node->fields.class_sub == 0x04u) {
 			return PciDriverKind::PciBridge;
 		}
-		if (node->fields.class_base == 0x0Cu &&
-			node->fields.class_sub == 0x03u &&
-			node->fields.class_if == 0x30u) {
+		if (node->fields.class_base == ClassBase_SerialBusController &&
+			node->fields.class_sub == ClassSub_UniversalSerialBusController &&
+			node->fields.class_if == ClassInterface_UHCI) {
+			return PciDriverKind::Uhci;
+		}
+		if (node->fields.class_base == ClassBase_SerialBusController &&
+			node->fields.class_sub == ClassSub_UniversalSerialBusController &&
+			node->fields.class_if == ClassInterface_EHCI) {
+			return PciDriverKind::Ehci;
+		}
+		if (node->fields.class_base == ClassBase_SerialBusController &&
+			node->fields.class_sub == ClassSub_UniversalSerialBusController &&
+			node->fields.class_if == ClassInterface_XHCI) {
 			return PciDriverKind::Xhci;
 		}
 		if (is_e1000_device(node)) {
@@ -373,6 +426,12 @@ namespace Devs {
 			return;
 		case PciDriverKind::PciBridge:
 			set_driver_binding(node, "pci-bridge");
+			return;
+		case PciDriverKind::Uhci:
+			set_driver_binding(node, "uhci");
+			return;
+		case PciDriverKind::Ehci:
+			set_driver_binding(node, "ehci");
 			return;
 		case PciDriverKind::Xhci:
 			set_driver_binding(node, "xhci");

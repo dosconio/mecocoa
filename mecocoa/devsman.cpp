@@ -400,9 +400,14 @@ namespace Devs {
 			auto* text = const_cast<char*>(node->fields.text_serial);
 			mfree(text);
 		}
+		if (node->fields.dev_alias) {
+			auto* text = const_cast<char*>(node->fields.dev_alias);
+			mfree(text);
+		}
 		node->fields.text_manufacturer = nullptr;
 		node->fields.text_product = nullptr;
 		node->fields.text_serial = nullptr;
+		node->fields.dev_alias = nullptr;
 		NnodeHeapFreeSimple(inp);
 	}
 
@@ -756,8 +761,10 @@ namespace Devs {
 			Devsman::AddIoPortResource(fdc, 0, 0x3F0, 8);
 			Devsman::AddIrqResource(fdc, IRQ_PIT + 6);
 			Devsman::AddDmaResource(fdc, 0, 2, 8);
-			Devsman::RegisterStorageDevice(fdc, "floppy@0", DeviceBusType::ISA);
-			Devsman::RegisterStorageDevice(fdc, "floppy@1", DeviceBusType::ISA);
+			auto* floppy0 = Devsman::RegisterStorageDevice(fdc, "floppy@0", DeviceBusType::ISA);
+			auto* floppy1 = Devsman::RegisterStorageDevice(fdc, "floppy@1", DeviceBusType::ISA);
+			Devsman::RegisterDevAlias(floppy0, "fd0");
+			Devsman::RegisterDevAlias(floppy1, "fd1");
 		}
 	}
 
@@ -1103,6 +1110,37 @@ DeviceNode* Devsman::FindNamedNode(DeviceNodeType node_type, const char* name) {
 #endif
 
 namespace {
+	bool IsValidDevAlias(const char* alias) {
+		if (!alias || !alias[0] ||
+			(alias[0] == '.' && (!alias[1] || (alias[1] == '.' && !alias[2])))) return false;
+		stduint length = 0;
+		for (const char* crt = alias; *crt; ++crt, ++length) {
+			if (length + 1 >= DeviceAliasNameCapacity) return false;
+			if (*crt == '/' || *crt == '\\') return false;
+		}
+		return StrCompare(alias, "tty") != 0 && StrCompare(alias, "pts") != 0;
+	}
+
+	DeviceNode* FindDevAliasInSubtree(DeviceNode* node, const char* alias) {
+		for (auto* crt = node; crt; crt = reinterpret_cast<DeviceNode*>(crt->link.next)) {
+			if (crt->fields.dev_alias && StrCompare(crt->fields.dev_alias, alias) == 0) return crt;
+			if (crt->link.subf) {
+				if (auto* match = FindDevAliasInSubtree(
+					reinterpret_cast<DeviceNode*>(crt->link.subf), alias)) return match;
+			}
+		}
+		return nullptr;
+	}
+
+	bool DeviceSubtreeContains(DeviceNode* node, const DeviceNode* target) {
+		for (auto* crt = node; crt; crt = reinterpret_cast<DeviceNode*>(crt->link.next)) {
+			if (crt == target) return true;
+			if (crt->link.subf && DeviceSubtreeContains(
+				reinterpret_cast<DeviceNode*>(crt->link.subf), target)) return true;
+		}
+		return false;
+	}
+
 	DeviceNode* FindBoundNodeInSubtree(DeviceNode* node, const char* driver_name) {
 		for (auto* crt = node; crt; crt = reinterpret_cast<DeviceNode*>(crt->link.next)) {
 			if (crt->fields.binding.driver_name &&
@@ -1114,6 +1152,22 @@ namespace {
 		}
 		return nullptr;
 	}
+}
+
+bool Devsman::RegisterDevAlias(DeviceNode* node, const char* alias) {
+	if (!node || !device_root || !DeviceSubtreeContains(device_root, node) || !IsValidDevAlias(alias)) return false;
+	if (node->fields.dev_alias) return StrCompare(node->fields.dev_alias, alias) == 0;
+	if (FindByDevAlias(alias)) return false;
+	node->fields.dev_alias = StrHeap(alias);
+	return node->fields.dev_alias != nullptr;
+}
+
+const char* Devsman::GetDevAlias(const DeviceNode* node) {
+	return node ? node->fields.dev_alias : nullptr;
+}
+
+DeviceNode* Devsman::FindByDevAlias(const char* alias) {
+	return device_root && IsValidDevAlias(alias) ? FindDevAliasInSubtree(device_root, alias) : nullptr;
 }
 
 DeviceNode* Devsman::FindBoundNode(const char* driver_name) {
@@ -1145,6 +1199,8 @@ const DeviceResource* Devsman::FindResource(const DeviceNode* node, DeviceResour
 	return find_resource(node, type, index);
 }
 
+#endif
+
 bool Devsman::SetOps(DeviceNode* node, const DeviceNodeOps* ops) {
 	if (!node) return false;
 	node->fields.ops = ops;
@@ -1170,6 +1226,20 @@ stdsint Devsman::Ctrl(DeviceNode* node, stduint cmd, void* args, stduint flags) 
 	return node->fields.ops->ctrl(node, cmd, args, flags);
 }
 
+#if (_MCCA & 0xFF00) == 0x8600
+
+namespace {
+	void RegisterStoragePartitionAlias(DeviceNode* parent, DeviceNode* partition, stduint part_dev) {
+		const char* parent_alias = Devsman::GetDevAlias(parent);
+		if (!parent_alias || !partition) return;
+		const stduint length = StrLength(parent_alias);
+		const bool needs_p = length && parent_alias[length - 1] >= '0' && parent_alias[length - 1] <= '9';
+		String alias;
+		alias.Format(needs_p ? "%sp%u" : "%s%u", parent_alias, part_dev);
+		Devsman::RegisterDevAlias(partition, alias.reference());
+	}
+}
+
 bool Devsman::AttachStorageOps(DeviceNode* node, uni::StorageTrait* storage) {
 	if (!node || !storage) return false;
 	if (DeviceNodeType(node->fields.node_type) != DeviceNodeType::StorageDevice) return false;
@@ -1190,6 +1260,7 @@ DeviceNode* Devsman::RegisterStoragePartition(DeviceNode* parent, const char* na
 		else {
 			attach_builtin_node_ops(node, node->fields.binding.driver_data);
 		}
+		RegisterStoragePartitionAlias(parent, node, stduint(part_dev));
 		return node;
 	}
 	auto bus_type = DeviceBusType(parent->fields.bus_type);
@@ -1197,6 +1268,7 @@ DeviceNode* Devsman::RegisterStoragePartition(DeviceNode* parent, const char* na
 	auto* part = new uni::DiscPartition(storage, part_dev);
 	auto* node = append_plain_device(parent, DeviceNodeType::StorageDevice, bus_type, StrHeap(name));
 	set_driver_started(node, driver_name, part);
+	RegisterStoragePartitionAlias(parent, node, stduint(part_dev));
 	return node;
 }
 

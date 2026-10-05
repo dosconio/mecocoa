@@ -186,6 +186,7 @@ public:
 	static int Open(const char* pathname, int flags, vfs_file** out_file, vfs_dentry* base = nullptr);
 	static int Read(vfs_file* file, void* buf, stduint count);
 	static int Write(vfs_file* file, const void* buf, stduint count);
+	static stdsint Ctrl(vfs_file* file, stduint cmd, void* args);
 	static int Close(vfs_file* file);
 	static int Enumer(vfs_file* file, void* buf, stduint count, ProcessBlock* pb);
 	static bool Remove(const char* pathname, vfs_dentry* base = nullptr);
@@ -219,6 +220,7 @@ public:
 	virtual stduint readfl(void* fil_handler, Slice file_slice, byte* dst) override;
 	virtual stduint writfl(void* fil_handler, Slice file_slice, const byte* src) override;
 public:
+	static DeviceNode* GetDeviceNode(void* handler);
 	static int allocate_tty_id();
 	static void free_tty_id(int id);
 };

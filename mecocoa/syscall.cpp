@@ -35,10 +35,11 @@ extern "C" stdsint sysc_POLL(stduint, stduint, stduint);
 extern "C" stdsint sysc_LIST(stduint, stduint, stduint);
 extern "C" stdsint sysc_ACPT(stduint, stduint, stduint);
 extern "C" stdsint sysc_SCLS(stduint, stduint, stduint);
+extern "C" stdsint sysc_IOCT(stduint, stduint, stduint);
 extern "C" void check_and_deliver_signals(void* context);
 
 // Syscall Wrappers
-extern stduint SYSCALL_TABLE[51];
+extern stduint SYSCALL_TABLE[52];
 
 void Syscall::Initialize() {
 	#if _MCCA == 0x8632
@@ -1015,6 +1016,40 @@ DEFSYSC sysc_PORP(stduint fd, stduint usr_proper) {
 	return 0; // Success
 }
 
+DEFSYSC sysc_IOCT(stduint fd, stduint cmd, stduint usr_arg) {
+	ThreadBlock* th = Taskman::CurrentTB();
+	ProcessBlock* pb = th ? th->parent_process : nullptr;
+	if (!pb || !usr_arg) return -1;
+
+	union {
+		stduint scalar;
+		uint64 wide;
+	} result{};
+	stduint result_size = 0;
+	stdsint status = -1;
+	{
+		auto files = pb->fileman.Lock();
+		if (fd >= files->pfiles.Count() || !files->pfiles[fd] || !files->pfiles[fd]->vfile) return -1;
+		auto* file = files->pfiles[fd]->vfile;
+		switch (DeviceCtrlCommand(cmd)) {
+		case DeviceCtrlCommand::GetBlockSize:
+		case DeviceCtrlCommand::GetUnitCount:
+			status = uni::Filesys::Ctrl(file, cmd, &result.scalar);
+			result_size = sizeof(result.scalar);
+			break;
+		case DeviceCtrlCommand::GetByteSize:
+			status = uni::Filesys::Ctrl(file, cmd, &result.wide);
+			result_size = sizeof(result.wide);
+			break;
+		default:
+			return -1;
+		}
+	}
+	if (status != 0) return status;
+	MccaMemCopyP((void*)usr_arg, pb, false, &result, nullptr, true, result_size);
+	return 0;
+}
+
 DEFSYSC sysc_ENUM(stduint fd, stduint addr, stduint count) {
 	ThreadBlock* th = Taskman::CurrentTB();
 	ProcessBlock* pb = th->parent_process;
@@ -1364,6 +1399,7 @@ stduint SYSCALL_TABLE[] = {
 	mglb(sysc_LIST),
 	mglb(sysc_ACPT),
 	mglb(sysc_SCLS),
+	mglb(sysc_IOCT),
 };
 #endif
 
@@ -1458,6 +1494,9 @@ void syscall_body(NormalTaskContext* cxt)
 		break;
 	case syscall_t::SCLS:
 		cxt->a0 = sysc_SCLS(cxt->a0, cxt->a1, cxt->a2);
+		break;
+	case syscall_t::IOCT:
+		cxt->a0 = sysc_IOCT(cxt->a0, cxt->a1, cxt->a2);
 		break;
 	case syscall_t::SEEK:
 		cxt->a0 = sysc_SEEK(cxt->a0, cxt->a1, cxt->a2);

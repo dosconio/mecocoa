@@ -140,6 +140,8 @@ namespace {
 			String name = String::newFormat("ahci-disk@%u", (stduint)active_port);
 			storage_node = Devsman::RegisterStorageDevice(node, name.reference(),
 				DeviceBusType::PCI, "ahci-disk", &disk);
+			String alias = String::newFormat("sata%u", (stduint)active_port);
+			Devsman::RegisterDevAlias(storage_node, alias.reference());
 		}
 
 		void RegisterCdromNode() {
@@ -147,6 +149,8 @@ namespace {
 			String name = String::newFormat("ahci-cdrom@%u", (stduint)active_atapi_port);
 			cdrom_node = Devsman::RegisterStorageDevice(node, name.reference(),
 				DeviceBusType::PCI, "ahci-cdrom", &cdrom);
+			String alias = String::newFormat("sr-ahci%u", (stduint)active_atapi_port);
+			Devsman::RegisterDevAlias(cdrom_node, alias.reference());
 		}
 
 		bool PrepareProbeBuffers() {

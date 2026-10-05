@@ -182,6 +182,14 @@ static void register_pata_storage_nodes(DeviceNode* pata_node) {
 			DeviceBusType::PCI,
 			is_cdrom ? "pata-cdrom" : "pata-disk",
 			disks[i]);
+		if (is_cdrom) {
+			String alias = String::newFormat("sr-pata%u", (stduint)i);
+			Devsman::RegisterDevAlias(pata_storage_nodes[i], alias.reference());
+		}
+		else {
+			char alias[] = { 'h', 'd', char('a' + i), '\0' };
+			Devsman::RegisterDevAlias(pata_storage_nodes[i], alias);
+		}
 	}
 }
 

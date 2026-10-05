@@ -3,6 +3,7 @@
 #include <fcntl.h>
 #include <poll.h>
 #include <sys/select.h>
+#include <sys/ioctl.h>
 #include <stdarg.h>
 
 static stdsint PosixIoResult(stdsint result) {
@@ -26,6 +27,19 @@ int fcntl(int fd, int cmd, ...) {
 	if (cmd == F_SETFL) arg = (stduint)va_arg(ap, int);
 	va_end(ap);
 	return syscall(syscall_t::FCTL, fd, cmd, arg);
+}
+
+int ioctl(int fd, unsigned long request, ...) {
+	if (request != MCCA_DEVCTL_GET_BLOCK_SIZE &&
+		request != MCCA_DEVCTL_GET_UNIT_COUNT &&
+		request != MCCA_DEVCTL_GET_BYTE_SIZE) return -1;
+
+	va_list ap;
+	va_start(ap, request);
+	void* argument = va_arg(ap, void*);
+	va_end(ap);
+	if (!argument) return -1;
+	return syscall(syscall_t::IOCT, fd, (stduint)request, _IMM(argument));
 }
 
 int poll(struct pollfd* fds, nfds_t nfds, int timeout) {

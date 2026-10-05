@@ -68,7 +68,7 @@ cppfile=\
 	$(ulibpath)/cpp/Device/Storage/Harddisk-SATA.cpp\
 	$(ulibpath)/cpp/Device/Storage/Harddisk-NVMe.cpp\
 	$(ulibpath)/cpp/System/Audiosys/AudioManager.cpp \
-	$(wildcard $(ulibpath)/cpp/Device/USB/*.cpp) $(wildcard $(ulibpath)/cpp/Device/USB/xHCI/*.cpp) \
+	$(wildcard $(ulibpath)/cpp/Device/USB/*.cpp) $(wildcard $(ulibpath)/cpp/Device/USB/xHCI/*.cpp) $(wildcard $(ulibpath)/cpp/Device/USB/uHCI/*.cpp) $(wildcard $(ulibpath)/cpp/Device/USB/eHCI/*.cpp) \
 	$(wildcard $(ulibpath)/cpp/System/Network/Layer/*/*.cpp) \
 	\
 	$(ulibpath)/cpp/System/Picture.cpp \
@@ -192,7 +192,10 @@ qemu_args=\
 	-device usb-mouse,id=mouse0,bus=xhci.0,port=1.1 \
 	-device usb-kbd,id=kbd0,bus=xhci.0,port=1.2 \
 	-serial mon:stdio \
-	
+	-drive if=none,id=usbdisk,file=/mnt/hgfs/tmp/ehci-stage7.img,format=raw \
+	-device usb-ehci,id=ehci \
+	-device usb-storage,id=storage0,bus=ehci.0,port=1,drive=usbdisk \
+
 # 	-no-reboot -no-shutdown  \
 
 # -device usb-mouse,id=mouse0 \
@@ -207,6 +210,13 @@ qemu_args=\
 # device_add usb-mouse,id=mouse0,bus=xhci.0
 #   device_add usb-mouse,id=mouse0,bus=xhci.0,port=1.1
 # device_add usb-kbd,id=kbd0,bus=xhci.0
+# ----
+# -device piix3-usb-uhci,id=uhci
+# -device usb-kbd,id=kbd0,bus=uhci.0,port=1
+# ----
+# -drive if=none,id=usbdisk,file=/mnt/hgfs/tmp/ehci-stage7.img,format=raw
+# -device usb-ehci,id=ehci
+# -device usb-storage,id=storage0,bus=ehci.0,port=1,drive=usbdisk
 
 run: build
 	@echo [ running] MCCA for $(arch)

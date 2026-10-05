@@ -71,7 +71,7 @@ enum
 	LIST, // listen (fd, backlog)->status              | x86 x64
 	ACPT, // accept (fd, address, address_length)->fd   | x86 x64
 	SCLS, // socket close direction (fd, how)->status   | x86 x64
-
+	IOCT, // ioctl  (fd, request, argument)->status     | x86 x64 rv
 
 
 	DBUG = 0xFE, // sysinfo_classic to stdout(func)

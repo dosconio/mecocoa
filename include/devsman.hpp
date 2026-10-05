@@ -93,6 +93,7 @@ enum DeviceResourceFlags : uint16 {
 };
 
 constexpr uint16 DeviceNodeInlineResourceCapacity = 8;
+constexpr stduint DeviceAliasNameCapacity = 64;
 
 struct DeviceResource {
 	uint16 type;
@@ -146,6 +147,7 @@ struct DevExt {
 	uint16 resource_capacity;
 	DeviceResource* resources;
 	const DeviceNodeOps* ops;
+	const char* dev_alias;
 
 	void* acpi_handle;
 	DriverBinding binding;
@@ -201,7 +203,7 @@ public:
 	static void BindKnownDrivers();
 	static void ProbeKnownDrivers();
 	static void StartKnownDrivers();
-	static void RegisterXHCIDeviceTreeHook();
+	static void RegisterUSBDeviceTreeHooks();
 	static bool RegisterDriverStarter(const char* driver_name, DriverStartRoutine starter);
 	static DeviceNode* RegisterUSBBus(const char* name, const char* driver_name = nullptr, void* driver_data = nullptr);
 	static DeviceNode* RegisterUSBRootHub(DeviceNode* parent, const char* name,
@@ -239,6 +241,9 @@ public:
 	static DeviceNode* FindNamedNode(DeviceNodeType node_type, const char* name);
 	static DeviceNode* FindBoundNode(const char* driver_name);
 	static DeviceNode* FindOwnedNode(stduint pid);
+	static bool RegisterDevAlias(DeviceNode* node, const char* alias);
+	static const char* GetDevAlias(const DeviceNode* node);
+	static DeviceNode* FindByDevAlias(const char* alias);
 	static DeviceNode* FindPCIDeviceByClass(uint8 class_base, uint8 class_sub, uint8 class_if);
 	static DeviceNode* FindPCIDeviceByVendorDevice(uint16 vendor_id, uint16 device_id);
 	static const DeviceResource* FindResource(const DeviceNode* node, DeviceResourceType type, uint32 index = 0);

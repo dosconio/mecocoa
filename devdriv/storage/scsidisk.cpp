@@ -595,6 +595,10 @@ namespace {
 			else name.Format("scsi-disk@%u:%u:%u", (stduint)kControllerSlot, (stduint)slot.target, (stduint)slot.lun);
 			slot.node = Devsman::RegisterStorageDevice(
 				node, name.reference(), DeviceBusType::PCI, "scsi-disk", &slot.disk);
+			String alias;
+			if (slot.lun == 0) alias.Format("scsi%u-%u", (stduint)kControllerSlot, (stduint)slot.target);
+			else alias.Format("scsi%u-%u-%u", (stduint)kControllerSlot, (stduint)slot.target, (stduint)slot.lun);
+			Devsman::RegisterDevAlias(slot.node, alias.reference());
 		}
 
 		void RegisterCdromNode(CdromSlot& slot) {
@@ -604,6 +608,10 @@ namespace {
 			else name.Format("scsi-cdrom@%u:%u:%u", (stduint)kControllerSlot, (stduint)slot.target, (stduint)slot.lun);
 			slot.node = Devsman::RegisterStorageDevice(
 				node, name.reference(), DeviceBusType::PCI, "scsi-cdrom", &slot.cdrom);
+			String alias;
+			if (slot.lun == 0) alias.Format("sr-scsi%u-%u", (stduint)kControllerSlot, (stduint)slot.target);
+			else alias.Format("sr-scsi%u-%u-%u", (stduint)kControllerSlot, (stduint)slot.target, (stduint)slot.lun);
+			Devsman::RegisterDevAlias(slot.node, alias.reference());
 		}
 
 		bool ReadSector0(DiskSlot& slot) {

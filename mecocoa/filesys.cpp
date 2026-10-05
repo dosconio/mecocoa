@@ -334,14 +334,12 @@ namespace uni {
 
 	static bool device_tree_try_storage_numbers(DeviceNode* node, stduint* block_size, stduint* unit_count, uint64* byte_size) {
 		if (!device_tree_node_is_storage(node)) return false;
-		auto* storage = static_cast<uni::StorageTrait*>(node->fields.binding.driver_data);
-		if (!storage) return false;
-		stduint local_block_size = storage->Block_Size;
-		stduint local_unit_count = storage->getUnits();
-		uint64 local_byte_size = uint64(local_block_size) * uint64(local_unit_count);
-		if (block_size) *block_size = local_block_size;
-		if (unit_count) *unit_count = local_unit_count;
-		if (byte_size) *byte_size = local_byte_size;
+		if (block_size && Devsman::Ctrl(node,
+			(stduint)DeviceCtrlCommand::GetBlockSize, block_size) != 0) return false;
+		if (unit_count && Devsman::Ctrl(node,
+			(stduint)DeviceCtrlCommand::GetUnitCount, unit_count) != 0) return false;
+		if (byte_size && Devsman::Ctrl(node,
+			(stduint)DeviceCtrlCommand::GetByteSize, byte_size) != 0) return false;
 		return true;
 	}
 
@@ -382,9 +380,20 @@ namespace uni {
 		case kDeviceTreeMountCountMarker:
 			return count_mounts_for_source_node_unlocked(node) != 0;
 		case kDeviceTreeBlockSizeMarker:
+		{
+			stduint block_size = 0;
+			return device_tree_try_storage_numbers(node, &block_size, nullptr, nullptr);
+		}
 		case kDeviceTreeUnitCountMarker:
+		{
+			stduint unit_count = 0;
+			return device_tree_try_storage_numbers(node, nullptr, &unit_count, nullptr);
+		}
 		case kDeviceTreeByteSizeMarker:
-			return device_tree_node_is_storage(node) && node->fields.binding.driver_data != nullptr;
+		{
+			uint64 byte_size = 0;
+			return device_tree_try_storage_numbers(node, nullptr, nullptr, &byte_size);
+		}
 		default:
 			return false;
 		}
@@ -671,7 +680,8 @@ static stduint vfs_on_search_segment(void* handle, const char* name, stduint is_
 
 		new_inod->i_size = (stduint)size;
 		if (is_dir == 1) new_inod->i_mode = I_DIRECTORY;
-		else if (is_dir == 2) new_inod->i_mode = I_CHAR_SPECIAL;
+		else if (is_dir == 2 || is_dir == 4) new_inod->i_mode = I_CHAR_SPECIAL;
+		else if (is_dir == 3) new_inod->i_mode = I_BLOCK_SPECIAL;
 		else new_inod->i_mode = I_REGULAR;
 		
 		if (is_dir == 2) {
@@ -1257,8 +1267,9 @@ int Filesys::Open(const char* pathname, int flags, vfs_file** out_file, vfs_dent
 			return -1;
 		}
 
-		if (flags & O_TRUNC) {
-			// POSIX: O_TRUNC has no effect on FIFO or terminal device files.
+		if ((flags & O_TRUNC) &&
+			(dentry->d_inode->i_mode & I_TYPE_MASK) == I_REGULAR) {
+			// O_TRUNC only applies to regular files, never device nodes or FIFOs.
 			// And requires writability.
 			int mode = flags & O_ACCMODE;
 			if (mode == O_WRONLY || mode == O_RDWR) {
@@ -1297,6 +1308,13 @@ int Filesys::Read(vfs_file* file, void* buf, stduint count) {
 	if (!file->f_inode->i_sb) return -1;
 	MutexLocal guard(&vfs_lock);
 	FilesysTrait* fs = file->f_inode->i_sb->fs;
+	if (fs == &global_devfs) {
+		if (auto* node = DevFs::GetDeviceNode(file->f_inode->internal_handler)) {
+			const stdsint bytes = Devsman::Read(node, buf, count, file->f_pos);
+			if (bytes > 0) file->f_pos += stduint(bytes);
+			return bytes;
+		}
+	}
 	
 	stduint bytes = fs->readfl(file->f_inode->internal_handler, Slice{ file->f_pos, count }, (byte*)buf);
 	file->f_pos += bytes;
@@ -1316,6 +1334,13 @@ int Filesys::Write(vfs_file* file, const void* buf, stduint count) {
 	if (!file->f_inode->i_sb) return -1;
 	MutexLocal guard(&vfs_lock);
 	FilesysTrait* fs = file->f_inode->i_sb->fs;
+	if (fs == &global_devfs) {
+		if (auto* node = DevFs::GetDeviceNode(file->f_inode->internal_handler)) {
+			const stdsint bytes = Devsman::Send(node, buf, count, file->f_pos);
+			if (bytes > 0) file->f_pos += stduint(bytes);
+			return bytes;
+		}
+	}
 
 	stduint bytes = fs->writfl(file->f_inode->internal_handler, Slice{ file->f_pos, count }, (const byte*)buf);
 	file->f_pos += bytes;
@@ -1323,6 +1348,14 @@ int Filesys::Write(vfs_file* file, const void* buf, stduint count) {
 		file->f_inode->i_size = file->f_pos;
 	}
 	return bytes;
+}
+
+stdsint Filesys::Ctrl(vfs_file* file, stduint cmd, void* args) {
+	if (!file || !file->f_inode || !file->f_inode->i_sb) return -1;
+	MutexLocal guard(&vfs_lock);
+	if (file->f_inode->i_sb->fs != &global_devfs) return -1;
+	auto* node = DevFs::GetDeviceNode(file->f_inode->internal_handler);
+	return node ? Devsman::Ctrl(node, cmd, args, file->f_mode) : -1;
 }
 
 int Filesys::Close(vfs_file* file) {
@@ -1456,6 +1489,51 @@ uni::DevFs uni::global_devfs;
 static uint32 _tty_id_bits[8] = {};
 static Bitmap tty_id_allocator(&_tty_id_bits, 4 * 8);
 
+namespace {
+	constexpr uint32 DevFsDeviceHandleMarker = 0x44455648u;
+	constexpr uint32 DevFsDeviceHandleMarkerInverse = ~DevFsDeviceHandleMarker;
+
+	struct DevFsDeviceHandle {
+		uint32 marker = 0;
+		uint32 marker_inverse = 0;
+		DeviceNode* node = nullptr;
+	};
+
+	DevFsDeviceHandle* devfs_set_device_handle(void* buffer, DeviceNode* node) {
+		if (!buffer || !node) return nullptr;
+		auto* handle = reinterpret_cast<DevFsDeviceHandle*>(buffer);
+		handle->marker = DevFsDeviceHandleMarker;
+		handle->marker_inverse = DevFsDeviceHandleMarkerInverse;
+		handle->node = node;
+		return handle;
+	}
+
+	DeviceNode* devfs_device_node(void* handler) {
+		if (!handler || stduint(handler) < 0x10000u || handler == (void*)~0) return nullptr;
+		auto* handle = reinterpret_cast<DevFsDeviceHandle*>(handler);
+		return handle->marker == DevFsDeviceHandleMarker &&
+			handle->marker_inverse == DevFsDeviceHandleMarkerInverse ? handle->node : nullptr;
+	}
+
+	stduint devfs_device_size(DeviceNode* node) {
+		uint64 byte_size = 0;
+		if (!node || Devsman::Ctrl(node,
+			(stduint)DeviceCtrlCommand::GetByteSize, &byte_size) != 0) return 0;
+		return byte_size > uint64(stduint(-1)) ? stduint(-1) : stduint(byte_size);
+	}
+
+	bool devfs_enumerate_aliases(DeviceNode* node, _tocall_ft callback, FilesysEnumState* state) {
+		for (auto* crt = node; crt; crt = reinterpret_cast<DeviceNode*>(crt->link.next)) {
+			if (const char* alias = Devsman::GetDevAlias(crt)) {
+				if (!vfs_enum_emit(state, callback, (void*)0, (void*)alias)) return false;
+			}
+			if (crt->link.subf && !devfs_enumerate_aliases(
+				reinterpret_cast<DeviceNode*>(crt->link.subf), callback, state)) return false;
+		}
+		return true;
+	}
+}
+
 int DevFs::allocate_tty_id() {
 	for (int i = 0; i < 32; i++) {
 		if (!tty_id_allocator.bitof(i)) {
@@ -1510,7 +1588,25 @@ void* DevFs::search(rostr fullpath, FilesysSearchArgs* args) {
 			}
 		}
 	}
+	const char* alias_end = fullpath[0] == '/' ? fullpath + 1 : fullpath;
+	while (*alias_end && *alias_end != '/') ++alias_end;
+	if (fullpath[0] == '/' && fullpath[1] && *alias_end == '\0') {
+		if (auto* node = Devsman::FindByDevAlias(fullpath + 1)) {
+			auto* handle = devfs_set_device_handle(args ? args->handle_buffer : nullptr, node);
+			if (!handle) return nullptr;
+			const bool is_block = DeviceNodeType(node->fields.node_type) == DeviceNodeType::StorageDevice;
+			const stduint size = is_block ? devfs_device_size(node) : 0;
+			if (args && args->on_segment &&
+				!args->on_segment(handle, fullpath + 1, is_block ? 3 : 4, size, args->user_data))
+				return handle;
+			return handle;
+		}
+	}
 	return nullptr;
+}
+
+DeviceNode* DevFs::GetDeviceNode(void* handler) {
+	return devfs_device_node(handler);
 }
 
 bool DevFs::proper(void* handler, stduint cmd, const void* moreinfo) {
@@ -1518,6 +1614,12 @@ bool DevFs::proper(void* handler, stduint cmd, const void* moreinfo) {
 		bool* p_isdir = (bool*)moreinfo;
 		if (handler == (void*)0x1000) *p_isdir = true;
 		else *p_isdir = false;
+		return true;
+	}
+	if (cmd == (stduint)FilesysCmd::FS_CMD_GET_SIZE) {
+		if (auto* p_size = (stduint*)moreinfo) {
+			*p_size = devfs_device_size(devfs_device_node(handler));
+		}
 		return true;
 	}
 	return false;
@@ -1529,6 +1631,7 @@ bool DevFs::enumer(void* dir_handler, _tocall_ft _fn, FilesysEnumState* state) {
 	if (dir_handler == (void*)~0 || dir_handler == nullptr) { // Root of /dev
 		if (!uni::vfs_enum_emit(state, _fn, (void*)0, (void*)"tty")) return true;
 		if (!uni::vfs_enum_emit(state, _fn, (void*)1, (void*)"pts")) return true;
+		if (!devfs_enumerate_aliases(Devsman::Root(), _fn, state)) return true;
 		if (state) state->mark_finished();
 		return true;
 	}
@@ -1545,6 +1648,10 @@ bool DevFs::enumer(void* dir_handler, _tocall_ft _fn, FilesysEnumState* state) {
 }
 
 stduint DevFs::readfl(void* fil_handler, Slice file_slice, byte* dst) {
+	if (auto* node = devfs_device_node(fil_handler)) {
+		const stdsint bytes = Devsman::Read(node, dst, file_slice.length, file_slice.address);
+		return bytes > 0 ? stduint(bytes) : 0;
+	}
 	stduint tty_id = (stduint)fil_handler;
 	Dnode* tty_node = nullptr;
 
@@ -1591,6 +1698,10 @@ stduint DevFs::readfl(void* fil_handler, Slice file_slice, byte* dst) {
 }
 
 stduint DevFs::writfl(void* fil_handler, Slice file_slice, const byte* src) {
+	if (auto* node = devfs_device_node(fil_handler)) {
+		const stdsint bytes = Devsman::Send(node, src, file_slice.length, file_slice.address);
+		return bytes > 0 ? stduint(bytes) : 0;
+	}
 	stduint tty_id = (stduint)fil_handler;
 	Dnode* tty_node = nullptr;
 

@@ -786,6 +786,9 @@ namespace {
 				(stduint)NVME_CONTROLLER_INDEX, (stduint)ns.nsid);
 			ns.device_node = Devsman::RegisterStorageDevice(
 				node, name.reference(), DeviceBusType::PCI, "nvme-disk", &ns.disk);
+			String alias = String::newFormat("nvme%un%u",
+				(stduint)NVME_CONTROLLER_INDEX, (stduint)ns.nsid);
+			Devsman::RegisterDevAlias(ns.device_node, alias.reference());
 		}
 
 		void ParsePartitions(NamespaceInfo& ns) {
