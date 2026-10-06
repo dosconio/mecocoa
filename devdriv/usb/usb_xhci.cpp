@@ -19,6 +19,7 @@ namespace {
 	uint32 xhci_event_generation = 0;
 }
 
+alignas(32)
 byte _BUF_xhc[sizeof(uni::device::SpaceUSB3::HostController)];
 
 //{TEMP} version

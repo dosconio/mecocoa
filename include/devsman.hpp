@@ -199,6 +199,13 @@ class Devsman {
 public:
 	using DriverStartRoutine = bool (*)(DeviceNode* node);
 	static bool Initialize();
+public:// debug
+	// Read-only views of the driver registries, for the Ring0 debug dump
+	static stduint GetDriverStartHookCount();
+	static const char* GetDriverStartHookName(stduint index);
+	static stduint GetDriverProcessCount();
+	static const char* GetDriverProcessName(stduint index);
+public:	
 	static bool AttachPCIDevices(uni::PCI& pci);
 	static void BindKnownDrivers();
 	static void ProbeKnownDrivers();

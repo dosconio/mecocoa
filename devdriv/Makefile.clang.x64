@@ -29,12 +29,21 @@ OUT ?= $(DRV_DIR)/$(DRV).elf
 
 .PHONY: build clean
 
-build:
+# Every driver includes headers from include/, a change among them must relink the driver
+HEADERS = $(wildcard include/*.h) $(wildcard include/*.hpp) \
+	$(wildcard include/*/*.h) $(wildcard include/*/*.hpp) \
+	$(wildcard include/*/*/*.h) $(wildcard include/*/*/*.hpp)
+
+.PHONY: build clean
+
+build: $(OUT)
+
+$(OUT): $(SRCS) $(HEADERS) $(MCCA_CRT0) $(MCCA_LIBC)
 	@test -n "$(DRV)" || (echo "DRV is empty"; exit 1)
 	@test -n "$(SRCS)" || (echo "SRCS is empty"; exit 1)
 	@mkdir -p $(DRV_DIR)
 	@echo "MK drv $(DRV)"
-	$(MCCA_CXX) $(MCCA_CXXFLAGS) -o $(OUT) $(SRCS) $(MCCA_LDLIBS)
+	$(MCCA_CXX) $(MCCA_CXXFLAGS) -o $@ $(SRCS) $(MCCA_LDLIBS)
 
 clean:
 	@if [ -n "$(DRV)" ]; then rm -f $(DRV_DIR)/$(DRV).elf; fi

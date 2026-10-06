@@ -48,6 +48,10 @@ bool Memory::initialize(stduint eax, byte* ebx) {
 	map_ready = true;
 	uni_default_allocator = &mempool;
 	_mpu_sdram_normal();
+
+	L1C.enAbleDCacheAll();
+	XART1.OutFormat("CCR=%08X line=%u\r\n",
+		(unsigned)_IMM(Reference(0xE000ED14)), (unsigned)L1C.getDCacheLineSize());
 	return true;
 }
 

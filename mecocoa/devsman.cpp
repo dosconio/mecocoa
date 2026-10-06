@@ -19,6 +19,12 @@
 
 extern RMOD_LIST __init_rmod_ento[], __init_rmod_endo[];
 
+#if (_MCCA & 0xFFFF) == 0x2032
+// ER_RMOD bounds of mcca.sct, exported by stm32h743.S
+extern "C" char* RMOD_BoundBase();
+extern "C" char* RMOD_BoundLimit();
+#endif
+
 #define mfence() _ASM volatile ("mfence":::"memory")
 
 namespace Devs {
@@ -930,8 +936,16 @@ bool Devsman::Initialize() {
 
 	#endif
 	
-	#if (_MCCA & 0xFF00) == 0x8600
-	for (auto func = __init_rmod_ento; func < __init_rmod_endo; func++) {
+	#if (_MCCA & 0xFF00) == 0x8600 || (_MCCA & 0xFFFF) == 0x2032
+	#if (_MCCA & 0xFFFF) == 0x2032
+	// ARM: ER_RMOD of mcca.sct holds .init.rmod, its bounds come from the linker
+	auto func = (RMOD_LIST*)RMOD_BoundBase();
+	auto rmod_endo = (RMOD_LIST*)RMOD_BoundLimit();
+	#else
+	auto func = __init_rmod_ento;
+	auto rmod_endo = __init_rmod_endo;
+	#endif
+	for (; func < rmod_endo; func++) {
 		ploginfo("Loading %s", func->name);
 		(func->init)();
 	}
@@ -1630,6 +1644,33 @@ namespace {
 			}
 		}
 	}
+}
+
+stduint Devsman::GetDriverStartHookCount() {
+	#if (_MCCA & 0xFF00) == 0x8600
+	return driver_start_hook_count;
+	#else
+	return 0;
+	#endif
+}
+
+const char* Devsman::GetDriverStartHookName(stduint index) {
+	#if (_MCCA & 0xFF00) == 0x8600
+	if (index >= driver_start_hook_count) return nullptr;
+	return driver_start_hooks[index].driver_name;
+	#else
+	(void)index;
+	return nullptr;
+	#endif
+}
+
+stduint Devsman::GetDriverProcessCount() {
+	return driver_processes.Count();
+}
+
+const char* Devsman::GetDriverProcessName(stduint index) {
+	if (index >= driver_processes.Count()) return nullptr;
+	return driver_processes[index].name;
 }
 
 void serv_devs_loop() {

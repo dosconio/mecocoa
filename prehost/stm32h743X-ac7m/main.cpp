@@ -245,6 +245,10 @@ void Consman::DispatchDeferredWake() {}
 ProcessBlock* Taskman::CreateFile(const char* path, byte ring, stduint parent, uni::vfs_dentry* base){return nullptr;}
 stdsint ProcessBlock::Open(rostr pathname, int flags){return -1;}
 
+void Syscall::Initialize() {}
+void Coreman::Initialize() {}
+bool Virtman::Initialize() { return false; }
+
 void _Comment(R1) serv_cons_loop()
 {
 	loop {Taskman::Schedule(); HALT(); }

@@ -412,7 +412,7 @@ namespace {
 		}
 		USB::SetupData setup{};
 		setup.request_type.data = 0x80u;
-		setup.request = USB::request::kGetDescriptor;
+		setup.request = static_cast<uint8>(USB::StandardRequest::GetDescriptor);
 		setup.value = uint16(USB::DeviceDescriptor::kType << 8);
 		setup.index = 0;
 		setup.length = 8;
@@ -485,7 +485,7 @@ namespace {
 		UhciEnumeratedDevice& device) {
 		USB::SetupData setup{};
 		setup.request_type.data = 0x00u;
-		setup.request = USB::request::kSetAddress;
+		setup.request = static_cast<uint8>(USB::StandardRequest::SetAddress);
 		setup.value = USB::kDefaultDeviceAddress;
 		setup.index = 0;
 		setup.length = 0;
@@ -536,7 +536,7 @@ namespace {
 		UhciEnumeratedDevice& device) {
 		USB::SetupData setup{};
 		setup.request_type.data = 0x80u;
-		setup.request = USB::request::kGetDescriptor;
+		setup.request = static_cast<uint8>(USB::StandardRequest::GetDescriptor);
 		setup.value = uint16(USB::ConfigurationDescriptor::kType << 8);
 		setup.index = 0;
 		setup.length = sizeof(USB::ConfigurationDescriptor);
@@ -607,7 +607,7 @@ namespace {
 				device.configuration);
 		USB::SetupData setup{};
 		setup.request_type.data = 0x00u;
-		setup.request = USB::request::kSetConfiguration;
+		setup.request = static_cast<uint8>(USB::StandardRequest::SetConfiguration);
 		setup.value = configuration->configuration_value;
 		setup.index = 0;
 		setup.length = 0;
@@ -685,7 +685,7 @@ namespace {
 		setup.request_type.bits.direction = USB::request_type::kOut;
 		setup.request_type.bits.type = USB::request_type::kClass;
 		setup.request_type.bits.recipient = USB::request_type::kInterface;
-		setup.request = USB::request::kSetProtocol;
+		setup.request = static_cast<uint8>(USB::HIDRequest::SetProtocol);
 		setup.value = 0;
 		setup.index = device.keyboard_interface;
 		setup.length = 0;

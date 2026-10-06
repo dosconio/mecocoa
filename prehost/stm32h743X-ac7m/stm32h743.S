@@ -8,6 +8,8 @@
 	THUMB
 
 	IMPORT	SysTick_Handler_Mcca
+	IMPORT	|Image$$ER_RMOD$$Base|
+	IMPORT	|Image$$ER_RMOD$$Limit|
 
 ; Keep the interrupted task's EXC_RETURN: PendSV tail-chained from this handler sees 0xFFFFFFF1
 SysTick_Entry	PROC
@@ -20,6 +22,19 @@ SysTick_Entry	PROC
 SysTick_Stashed
 	BL	SysTick_Handler_Mcca
 	POP	{R0, LR}
+	BX	LR
+	ENDP
+
+; Bounds of the ER_RMOD region of mcca.sct, for the driver self-registration walk
+RMOD_BoundBase	PROC
+	EXPORT	RMOD_BoundBase
+	LDR	R0, =|Image$$ER_RMOD$$Base|
+	BX	LR
+	ENDP
+
+RMOD_BoundLimit	PROC
+	EXPORT	RMOD_BoundLimit
+	LDR	R0, =|Image$$ER_RMOD$$Limit|
 	BX	LR
 	ENDP
 
@@ -108,6 +123,7 @@ DirectTaskContext	PROC
 	BX	LR
 	ENDP
 
+	ALIGN
 	AREA	|.bss|, DATA, READWRITE, NOINIT, ALIGN=2
 C_SwitchNext	SPACE	4
 C_SwitchCrt	SPACE	4

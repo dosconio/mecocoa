@@ -35,6 +35,7 @@ __heap_limit
 	IMPORT  HardFault_Handler
 	IMPORT  SysTick_Entry
 	IMPORT  interrupt_dispatcher
+	IMPORT  SDMMC1_IRQHandler
 __Vectors       DCD     __initial_sp                      ; Top of Stack
                 DCD     Reset_Handler                     ; Reset Handler
                 DCD     NMI_Handler                       ; NMI Handler
@@ -324,7 +325,6 @@ Default_Handler PROC
                 EXPORT  TIM8_CC_IRQHandler                [WEAK]                                   
                 EXPORT  DMA1_Stream7_IRQHandler           [WEAK]                                          
                 EXPORT  FMC_IRQHandler                    [WEAK]                                             
-                EXPORT  SDMMC1_IRQHandler                 [WEAK]                                             
                 EXPORT  TIM5_IRQHandler                   [WEAK]                                             
                 EXPORT  SPI3_IRQHandler                   [WEAK]                                             
                 EXPORT  UART4_IRQHandler                  [WEAK]                                            
@@ -464,7 +464,6 @@ TIM8_TRG_COM_TIM14_IRQHandler
 TIM8_CC_IRQHandler                                               
 DMA1_Stream7_IRQHandler                                                 
 FMC_IRQHandler                                                            
-SDMMC1_IRQHandler                                                            
 TIM5_IRQHandler                                                            
 SPI3_IRQHandler                                                            
 UART4_IRQHandler                                                          

@@ -13,9 +13,9 @@ _ESYM_C void mecocoa()
 	Systime::Initialize();
 	Taskman::Initialize();
 	Devsman::Initialize();
-	//Syscall::Initialize();
-	//Coreman::Initialize();// Multicore:
-	//Virtman::Initialize();
+	Syscall::Initialize();
+	Coreman::Initialize();// Multicore:
+	Virtman::Initialize();
 	
 	// Service
 	Taskman::Create((void*)&serv_task_loop, RING_M)->main_thread->name = "serv_task_loop";

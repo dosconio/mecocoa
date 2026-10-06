@@ -56,6 +56,13 @@ void* Memory::physical_allocate(usize siz) {
 
 Spinlock mempool_lock;
 
+#if (_MCCA & 0xFFFF) == 0x2032
+// Cortex-M: the slice left after a block starts at header+size, keep it 4-aligned
+#define MEMPOOL_BLOCK_ALIGN 4
+#else
+#define MEMPOOL_BLOCK_ALIGN 1
+#endif
+
 
 // ---------------------------------------------------------
 // LockedAllocator Implementation
@@ -63,6 +70,9 @@ Spinlock mempool_lock;
 
 
 void* LockedAllocator::allocate(stduint size, stduint alignment, stduint boundary) {
+	#if MEMPOOL_BLOCK_ALIGN > 1
+	if (size & (MEMPOOL_BLOCK_ALIGN - 1)) size = (size + MEMPOOL_BLOCK_ALIGN) & ~(stduint)(MEMPOOL_BLOCK_ALIGN - 1);
+	#endif
 	bool old_if = mempool_lock.Acquire();
 	void* ret = base_allocator->allocate(size, alignment, boundary);
 	mempool_lock.Release(old_if);
@@ -70,6 +80,9 @@ void* LockedAllocator::allocate(stduint size, stduint alignment, stduint boundar
 }
 bool LockedAllocator::deallocate(void* ptr, stduint size) {
 	if (!ptr) return false; 
+	#if MEMPOOL_BLOCK_ALIGN > 1
+	if (size & (MEMPOOL_BLOCK_ALIGN - 1)) size = (size + MEMPOOL_BLOCK_ALIGN) & ~(stduint)(MEMPOOL_BLOCK_ALIGN - 1);
+	#endif
 	bool old_if = mempool_lock.Acquire();
 	bool ret = base_allocator->deallocate(ptr, size);
 	mempool_lock.Release(old_if);

@@ -309,7 +309,11 @@ static void dump_device_tree_node(OstreamTrait& com1, const DeviceNode* node, st
 		}
 		dump_device_tree_indent(com1, depth);
 		const rostr name = crt->link.addr ? crt->link.addr : "(unnamed)";
-		const rostr driver_name = crt->fields.binding.driver_name ? crt->fields.binding.driver_name : nullptr;
+		const rostr driver_name0 = crt->fields.binding.driver_name ? crt->fields.binding.driver_name : nullptr;
+		String driver_name_str = "\033[7m";
+		driver_name_str += driver_name0;
+		driver_name_str += "\033[27m";
+		const rostr driver_name = driver_name0 ? driver_name_str.reference() : nullptr;
 		const bool has_binding = driver_name && crt->fields.binding.state != static_cast<uint32>(DriverBindingState::None);
 		switch (DeviceNodeType(crt->fields.node_type)) {
 		case DeviceNodeType::BusRoot:
@@ -435,6 +439,75 @@ void dump_device_tree(OstreamTrait& com1, bool verbose) {
 
 void dump_device_tree(OstreamTrait& com1) {
 	dump_device_tree(com1, true);
+}
+
+// The driver registries are read without locking: this runs on the COM1 debug path, so a
+// concurrent Devsman append/remove may be observed mid-flight, which is acceptable here.
+struct DriverNameSet {
+	static constexpr stduint Capacity = 64;
+	const char* names[Capacity];
+	stduint count = 0;
+	bool truncated = false;
+
+	void Add(const char* name) {
+		if (!name || !name[0]) return;
+		for (stduint i = 0; i < count; i++) {
+			if (StrCompare(names[i], name) == 0) return;
+		}
+		if (count >= Capacity) {
+			truncated = true;
+			return;
+		}
+		names[count++] = name;
+	}
+};
+
+static void collect_bound_driver_names(DeviceNode* node, DriverNameSet& set) {
+	for (auto crt = node; crt; crt = cast<DeviceNode*>(crt->link.next)) {
+		set.Add(crt->fields.binding.driver_name);
+		if (crt->link.subf) collect_bound_driver_names(cast<DeviceNode*>(crt->link.subf), set);
+	}
+}
+
+static void dump_audio_backends(OstreamTrait& com1) {
+	com1.OutFormat("=== Audio Backends ===\n\r");
+	#if (_MCCA & 0xFF00) == 0x8600
+	const stduint count = audio_manager.getCardCount();
+	const stduint selected = audio_manager.getSelected();
+	if (!count) {
+		com1.OutFormat("(none)\n\r");
+		return;
+	}
+	for (stduint i = 0; i < count; i++) {
+		const char* name = audio_manager.getCardName(i);
+		com1.OutFormat("[%[u]] %s%s\n\r", i, name ? name : "(unnamed)", i == selected ? " (selected)" : "");
+	}
+	if (selected >= count) com1.OutFormat("(no card selected)\n\r");
+	#else
+	com1.OutFormat("(none)\n\r");
+	#endif
+}
+
+static void dump_driver_backends(OstreamTrait& com1) {
+	DriverNameSet set;
+	#if (_MCCA & 0xFF00) == 0x8600
+	for (stduint i = 0; i < audio_manager.getCardCount(); i++) set.Add(audio_manager.getCardName(i));
+	#endif
+	for (stduint i = 0; i < Devsman::GetDriverStartHookCount(); i++) set.Add(Devsman::GetDriverStartHookName(i));
+	for (stduint i = 0; i < Devsman::GetDriverProcessCount(); i++) set.Add(Devsman::GetDriverProcessName(i));
+	if (auto* root = Devsman::Root()) collect_bound_driver_names(root, set);
+
+	com1.OutFormat("=== Builtin / Ring1 Drivers (%[u]) ===\n\r", set.count);
+	if (!set.count) {
+		com1.OutFormat("(none)\n\r");
+		return;
+	}
+	for (stduint i = 0; i < set.count; i++) {
+		if (i) com1.OutFormat(", ");
+		com1.OutFormat("%s", set.names[i]);
+	}
+	if (set.truncated) com1.OutFormat(", ...");
+	com1.OutFormat("\n\r");
 }
 
 void dump_threads(OstreamTrait& com1) {
@@ -936,6 +1009,12 @@ void sysinfo_classic(OstreamTrait& com1, byte func)
 
 	case 'h': case 'H':// hardware
 		com1.OutFormat("\n\r");
+		if (func == 'H') {
+			dump_audio_backends(com1);
+			com1.OutFormat("\n\r");
+			dump_driver_backends(com1);
+			com1.OutFormat("\n\r");
+		}
 		dump_device_tree(com1, func != 'h');
 		break;
 

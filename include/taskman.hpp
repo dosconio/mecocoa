@@ -456,7 +456,7 @@ inline bool ProcessBlock::isWaiting() {
 
 class Taskman {
 	#ifdef _MCU_STM32
-	static const stduint DEFAULT_STACK_SIZE = 0x2000;
+	static const stduint DEFAULT_STACK_SIZE = 0x4000;
 	#else
 	static const stduint DEFAULT_STACK_SIZE = 0x10000;// 0xE000
 	#endif

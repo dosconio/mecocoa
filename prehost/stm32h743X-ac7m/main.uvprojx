@@ -363,7 +363,7 @@
             </VariousControls>
           </Aads>
           <LDads>
-            <umfTarg>1</umfTarg>
+            <umfTarg>0</umfTarg>
             <Ropi>0</Ropi>
             <Rwpi>0</Rwpi>
             <noStLib>0</noStLib>
@@ -372,10 +372,10 @@
             <TextAddressRange>0x08000000</TextAddressRange>
             <DataAddressRange>0x20000000</DataAddressRange>
             <pXoBase></pXoBase>
-            <ScatterFile></ScatterFile>
+            <ScatterFile>.\mcca.sct</ScatterFile>
             <IncludeLibs></IncludeLibs>
             <IncludeLibsPath></IncludeLibsPath>
-            <Misc></Misc>
+            <Misc>--keep="*(.init.rmod)"</Misc>
             <LinkerInputFile></LinkerInputFile>
             <DisabledWarnings></DisabledWarnings>
           </LDads>
@@ -514,6 +514,16 @@
               <FileName>SDRAM.cpp</FileName>
               <FileType>8</FileType>
               <FilePath>.\_openedv\SDRAM.cpp</FilePath>
+            </File>
+          </Files>
+        </Group>
+        <Group>
+          <GroupName>Group Driv</GroupName>
+          <Files>
+            <File>
+              <FileName>sdcard.cpp</FileName>
+              <FileType>8</FileType>
+              <FilePath>..\..\devdriv\storage\sdcard.cpp</FilePath>
             </File>
           </Files>
         </Group>

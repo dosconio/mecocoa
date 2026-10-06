@@ -696,7 +696,7 @@ namespace {
 		uint8 port_index, EhciEnumeratedDevice& device) {
 		USB::SetupData setup{};
 		setup.request_type.data = 0x80u;
-		setup.request = USB::request::kGetDescriptor;
+		setup.request = static_cast<uint8>(USB::StandardRequest::GetDescriptor);
 		setup.value = uint16(USB::DeviceDescriptor::kType << 8);
 		setup.length = 8;
 		uint8 prefix[8]{};
@@ -756,7 +756,7 @@ namespace {
 		EhciEnumeratedDevice& device) {
 		USB::SetupData setup{};
 		setup.request_type.data = 0x00u;
-		setup.request = USB::request::kSetAddress;
+		setup.request = static_cast<uint8>(USB::StandardRequest::SetAddress);
 		setup.value = USB::kDefaultDeviceAddress;
 		const auto error = controller.host.ControlNoData(0, 0, 64,
 			setup, 500);
@@ -778,7 +778,7 @@ namespace {
 		EhciEnumeratedDevice& device) {
 		USB::SetupData setup{};
 		setup.request_type.data = 0x80u;
-		setup.request = USB::request::kGetDescriptor;
+		setup.request = static_cast<uint8>(USB::StandardRequest::GetDescriptor);
 		setup.value = uint16(USB::ConfigurationDescriptor::kType << 8);
 		setup.length = sizeof(USB::ConfigurationDescriptor);
 		USB::ConfigurationDescriptor header{};
@@ -853,7 +853,7 @@ namespace {
 		if (!index) return true;
 		USB::SetupData setup{};
 		setup.request_type.data = 0x80u;
-		setup.request = USB::request::kGetDescriptor;
+		setup.request = static_cast<uint8>(USB::StandardRequest::GetDescriptor);
 		setup.value = uint16((USB::descriptor_type::kString << 8) | index);
 		setup.index = device.language_id;
 		setup.length = 2;
@@ -883,7 +883,7 @@ namespace {
 			!device.descriptor.serial_number) return;
 		USB::SetupData setup{};
 		setup.request_type.data = 0x80u;
-		setup.request = USB::request::kGetDescriptor;
+		setup.request = static_cast<uint8>(USB::StandardRequest::GetDescriptor);
 		setup.value = uint16(USB::descriptor_type::kString << 8);
 		setup.length = 4;
 		uint8 language[4]{};
@@ -919,7 +919,7 @@ namespace {
 				device.configuration);
 		USB::SetupData setup{};
 		setup.request_type.data = 0x00u;
-		setup.request = USB::request::kSetConfiguration;
+		setup.request = static_cast<uint8>(USB::StandardRequest::SetConfiguration);
 		setup.value = configuration->configuration_value;
 		const auto error = controller.host.ControlNoData(device.address, 0, 64,
 			setup, 500);

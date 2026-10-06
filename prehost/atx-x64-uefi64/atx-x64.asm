@@ -16,8 +16,9 @@ SegCo16 EQU 8*1
 SegData EQU 8*3
 SegCo32 EQU 8*4
 
-%ifdef _UEFI
 _entry:
+	CLI
+%ifdef _UEFI
     MOV  RSP, kernel_stack + 1024*1024 ; RSP = 16N
     PUSH RDI                            ; 1st push: Save argument
     PUSH RDI                            ; 2nd push: Alignment dummy (keep RSP = 16N)
@@ -30,7 +31,6 @@ _entry:
     LUP: HLT
     JMP  LUP
 %else
-_entry:
 	MOV  RSP, 0x7FF0
 	CALL EnableSSE
 	CALL _ZN6Memory9clear_bssEv; Memory::clear_bss
