@@ -7,14 +7,17 @@
 
 #if _MCCA == 0x8664 && defined(_UEFI)
 #include <cpp/Device/Bus/PCI.hpp>
+#include <cpp/Device/USB/USBHost-MSC.hpp>
 #include <cpp/Device/USB/eHCI/eHCI.hpp>
 
 void TSC_Wait_MS(uint64_t ms);
 
 namespace {
 	using EhciHostController = uni::device::SpaceUSB2::HostController;
+	using EhciHostDevice = uni::device::SpaceUSB2::USBHostDevice_v2;
 	using EhciControllerError = uni::device::SpaceUSB2::ControllerError;
 	using EhciRootPortStatus = uni::device::SpaceUSB2::RootPortStatus;
+	using USBMassStorage = uni::device::SpaceUSB::USBHost_MSC;
 	namespace USB = uni::device::SpaceUSB;
 
 	constexpr uint8 EhciPciCommandOffset = 0x04u;
@@ -23,6 +26,10 @@ namespace {
 	constexpr uint8 EhciControllerCapacity = 8;
 	constexpr stduint EhciConfigurationCapacity = 512;
 	constexpr stduint EhciStringCapacity = 64;
+	constexpr uint16 EhciHotplugDebouncePolls = 10;
+	constexpr uint16 EhciHotplugRetryPolls = 100;
+	constexpr stduint EhciPollIntervalTicks = CONFIG_SysTickFreq >= 100 ?
+		CONFIG_SysTickFreq / 100 : 1;
 
 	struct EhciEnumeratedDevice {
 		USB::DeviceDescriptor descriptor{};
@@ -35,7 +42,49 @@ namespace {
 		uint8 port_index = 0;
 		uint8 address = 0;
 		uint8 max_packet_size = 0;
+		uint8 mass_storage_interface = 0;
+		uint8 bulk_in_endpoint = 0;
+		uint8 bulk_out_endpoint = 0;
+		uint16 bulk_in_max_packet_size = 0;
+		uint16 bulk_out_max_packet_size = 0;
+		bool mass_storage_ready = false;
 		bool configured = false;
+	};
+
+	struct EhciDriverInstance;
+
+	class EhciMassStorage final : public uni::StorageTrait {
+	public:
+		EhciMassStorage();
+		~EhciMassStorage() override;
+		bool Configure(EhciDriverInstance& controller,
+			USBMassStorage& class_driver);
+		void Disconnect();
+		bool ScanPartitions();
+		bool Read(stduint block, void* destination,
+			stduint count = 1) override;
+		bool Write(stduint block, const void* source,
+			stduint count = 1) override;
+		stduint getUnits() override;
+		int operator[](uint64 offset) override;
+		uni::PartitionSlice getSlice(stduint device) override;
+
+		bool IsOnline() const {
+			return online_.load(uni::MemoryOrder_Acquire) != 0;
+		}
+		const HD_Info& Partitions() const { return partitions_; }
+		const USBMassStorage& ClassDriver() const { return *class_driver_; }
+		uint16 MaximumBlocksPerTransfer() const;
+
+	private:
+		EhciDriverInstance* controller_ = nullptr;
+		USBMassStorage* class_driver_ = nullptr;
+		Mutex transaction_{};
+		HD_Info partitions_{};
+		stduint block_buffer_capacity_ = 0;
+		stduint cached_block_ = stduint(-1);
+		uni::Atomic<byte> partitions_valid_ = 0;
+		uni::Atomic<byte> online_ = 0;
 	};
 
 	struct EhciDriverInstance {
@@ -47,13 +96,189 @@ namespace {
 		EhciHostController host{};
 		EhciRootPortStatus port_status[EhciHostController::kMaximumRootPorts]{};
 		DeviceNode* port_nodes[EhciHostController::kMaximumRootPorts]{};
+		uint16 port_wait_polls[EhciHostController::kMaximumRootPorts]{};
+		uint32 controller_status = 0;
 		uint8 irq_line = 0xFFu;
 		uint8 irq_pin = 0;
 		EhciEnumeratedDevice device{};
+		EhciHostDevice* host_device = nullptr;
+		EhciMassStorage* mass_storage = nullptr;
+		DeviceNode* mass_storage_node = nullptr;
 		bool running = false;
 	};
 
 	EhciDriverInstance ehci_controllers[EhciControllerCapacity]{};
+	volatile bool ehci_poll_armed = false;
+
+	bool EnumerateEhciDevice(EhciDriverInstance& controller,
+		uint8 port_index);
+	bool RegisterEhciEnumeratedDevice(EhciDriverInstance& controller,
+		DeviceNode* port_node);
+	bool ProbeEhciMassStorage(EhciDriverInstance& controller,
+		EhciEnumeratedDevice& device);
+	void RemoveEhciDeviceNode(EhciDriverInstance& controller,
+		uint8 port_index, uint8 address);
+	bool DeactivateEhciMassStorage(EhciDriverInstance& controller);
+
+	EhciMassStorage::EhciMassStorage() {
+		Block_buffer = nullptr;
+		Block_Size = 0;
+		readable = true;
+		writable = true;
+	}
+
+	EhciMassStorage::~EhciMassStorage() {
+		delete[] static_cast<byte*>(Block_buffer);
+		Block_buffer = nullptr;
+	}
+
+	bool EhciMassStorage::Configure(EhciDriverInstance& controller,
+		USBMassStorage& class_driver) {
+		MutexLocal guard(&transaction_);
+		online_.store(0, uni::MemoryOrder_Release);
+		partitions_valid_.store(0, uni::MemoryOrder_Release);
+		cached_block_ = stduint(-1);
+		controller_ = &controller;
+		class_driver_ = &class_driver;
+		if (!class_driver_->IsReady()) {
+			class_driver_ = nullptr;
+			controller_ = nullptr;
+			return false;
+		}
+		const stduint block_size = class_driver_->BlockSize();
+		if (!Block_buffer || block_buffer_capacity_ < block_size) {
+			auto* buffer = new byte[block_size];
+			if (!buffer) {
+				class_driver_ = nullptr;
+				controller_ = nullptr;
+				return false;
+			}
+			delete[] static_cast<byte*>(Block_buffer);
+			Block_buffer = buffer;
+			block_buffer_capacity_ = block_size;
+		}
+		Block_Size = block_size;
+		partitions_ = {};
+		partitions_.whole_disk.length = class_driver_->BlockCount();
+		online_.store(1, uni::MemoryOrder_Release);
+		return true;
+	}
+
+	void EhciMassStorage::Disconnect() {
+		MutexLocal guard(&transaction_);
+		online_.store(0, uni::MemoryOrder_Release);
+		partitions_valid_.store(0, uni::MemoryOrder_Release);
+		cached_block_ = stduint(-1);
+		class_driver_ = nullptr;
+		controller_ = nullptr;
+	}
+
+	uint16 EhciMassStorage::MaximumBlocksPerTransfer() const {
+		if (!controller_ || !class_driver_ || !Block_Size) return 0;
+		const stduint count = controller_->host.MaximumBulkTransferBytes() /
+			Block_Size;
+		return count > 0xFFFFu ? 0xFFFFu : uint16(count);
+	}
+
+	bool EhciMassStorage::Read(stduint block, void* destination,
+		stduint count) {
+		if (!destination || !count) return false;
+		MutexLocal guard(&transaction_);
+		if (!online_.load(uni::MemoryOrder_Acquire) || !controller_ ||
+			!class_driver_ || !Block_Size ||
+			block >= class_driver_->BlockCount() ||
+			count > class_driver_->BlockCount() - block ||
+			count > stduint(-1) / Block_Size) return false;
+		const uint16 maximum = MaximumBlocksPerTransfer();
+		if (!maximum) return false;
+		auto* output = static_cast<byte*>(destination);
+		stduint completed = 0;
+		while (completed < count) {
+			const stduint remaining = count - completed;
+			const uint16 chunk = uint16(remaining > maximum ? maximum : remaining);
+			const auto error = class_driver_->ReadBlocks(
+				uint32(block + completed), chunk,
+				output + completed * Block_Size);
+			if (error || class_driver_->LastResult() !=
+				USBMassStorage::Result::kOk) return false;
+			completed += chunk;
+		}
+		MemCopyN(Block_buffer, output + (count - 1u) * Block_Size, Block_Size);
+		cached_block_ = block + count - 1u;
+		return true;
+	}
+
+	bool EhciMassStorage::Write(stduint block, const void* source,
+		stduint count) {
+		if (!source || !count) return false;
+		MutexLocal guard(&transaction_);
+		if (!online_.load(uni::MemoryOrder_Acquire) || !controller_ ||
+			!class_driver_ || !Block_Size ||
+			block >= class_driver_->BlockCount() ||
+			count > class_driver_->BlockCount() - block ||
+			count > stduint(-1) / Block_Size) return false;
+		const uint16 maximum = MaximumBlocksPerTransfer();
+		if (!maximum) return false;
+		const auto* input = static_cast<const byte*>(source);
+		cached_block_ = stduint(-1);
+		stduint completed = 0;
+		while (completed < count) {
+			const stduint remaining = count - completed;
+			const uint16 chunk = uint16(remaining > maximum ? maximum : remaining);
+			const auto error = class_driver_->WriteBlocks(
+				uint32(block + completed), chunk,
+				input + completed * Block_Size);
+			if (error || class_driver_->LastResult() !=
+				USBMassStorage::Result::kOk) return false;
+			completed += chunk;
+		}
+		return true;
+	}
+
+	stduint EhciMassStorage::getUnits() {
+		return online_.load(uni::MemoryOrder_Acquire) && class_driver_ ?
+			class_driver_->BlockCount() : 0;
+	}
+
+	int EhciMassStorage::operator[](uint64 offset) {
+		MutexLocal guard(&transaction_);
+		if (!online_.load(uni::MemoryOrder_Acquire) || !controller_ ||
+			!class_driver_ ||
+			!Block_Size || !Block_buffer ||
+			offset >= uint64(class_driver_->BlockCount()) * Block_Size) return -1;
+		const stduint block = stduint(offset / Block_Size);
+		if (cached_block_ != block) {
+			const auto error = class_driver_->ReadBlocks(uint32(block), 1,
+				Block_buffer);
+			if (error || class_driver_->LastResult() !=
+				USBMassStorage::Result::kOk) return -1;
+			cached_block_ = block;
+		}
+		return static_cast<byte*>(Block_buffer)[stduint(offset % Block_Size)];
+	}
+
+	bool EhciMassStorage::ScanPartitions() {
+		if (!online_.load(uni::MemoryOrder_Acquire) ||
+			!Block_buffer || !Block_Size) return false;
+		if (!Read(0, Block_buffer)) return false;
+		partitions_ = {};
+		partitions_.whole_disk.length = class_driver_->BlockCount();
+		uni::DiscPartition::Partition(*this, partitions_,
+			static_cast<byte*>(Block_buffer), 0);
+		partitions_valid_.store(1, uni::MemoryOrder_Release);
+		return true;
+	}
+
+	uni::PartitionSlice EhciMassStorage::getSlice(stduint device) {
+		if (!online_.load(uni::MemoryOrder_Acquire)) return {};
+		if (!device) {
+			uni::PartitionSlice slice{};
+			slice.length = class_driver_ ? class_driver_->BlockCount() : 0;
+			return slice;
+		}
+		return partitions_valid_.load(uni::MemoryOrder_Acquire) ?
+			GetPartitionSlice(partitions_, device) : uni::PartitionSlice{};
+	}
 
 	const char* EhciNodeName(const EhciDriverInstance& controller) {
 		return controller.node && controller.node->link.addr ?
@@ -195,6 +420,16 @@ namespace {
 
 	void StopEhciController(EhciDriverInstance& controller) {
 		controller.running = false;
+		const uint8 port_index = controller.device.port_index;
+		const uint8 address = controller.device.address;
+		if (DeactivateEhciMassStorage(controller) && address &&
+			port_index < controller.host.RootPortCount() &&
+			controller.port_nodes[port_index]) {
+			RemoveEhciDeviceNode(controller, port_index, address);
+		}
+		delete controller.host_device;
+		controller.host_device = nullptr;
+		controller.device = {};
 		if (!controller.host.Stop()) {
 			plogwarn("[EHCI] %s did not halt; retaining low-DMA pages",
 				EhciNodeName(controller));
@@ -202,6 +437,235 @@ namespace {
 		}
 		ReleaseEhciTransferWorkspace(controller);
 		ReleaseEhciPeriodicList(controller);
+	}
+
+	void RemoveEhciDeviceNode(EhciDriverInstance& controller,
+		uint8 port_index, uint8 address) {
+		if (port_index >= controller.host.RootPortCount() ||
+			!controller.port_nodes[port_index] || !address) return;
+		auto device_name = String::newFormat("usb-dev@port%u.slot%u",
+			(stduint)(port_index + 1), (stduint)address);
+		Devsman::RemoveUSBDevice(controller.port_nodes[port_index],
+			device_name.reference());
+	}
+
+	bool UnmountEhciStorageSubtree(DeviceNode* node) {
+		if (!node) return true;
+		for (auto* child = reinterpret_cast<DeviceNode*>(node->link.subf); child;
+			child = reinterpret_cast<DeviceNode*>(child->link.next)) {
+			if (!UnmountEhciStorageSubtree(child)) return false;
+		}
+		while (Filesys::CountMountsForSourceNode(node)) {
+			auto path = Filesys::GetFirstMountPathForSourceNode(node);
+			if (!path.getByteCount() || !Filesys::Unmount(path.reference())) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	void ReleaseEhciPartitionBindings(DeviceNode* storage_node) {
+		if (!storage_node) return;
+		for (auto* child = reinterpret_cast<DeviceNode*>(storage_node->link.subf);
+			child; child = reinterpret_cast<DeviceNode*>(child->link.next)) {
+			if (DeviceNodeType(child->fields.node_type) !=
+				DeviceNodeType::StorageDevice ||
+				!child->fields.binding.driver_name ||
+				StrCompare(child->fields.binding.driver_name,
+					"storage-partition") ||
+				!child->fields.binding.driver_data) continue;
+			delete static_cast<uni::DiscPartition*>(
+				child->fields.binding.driver_data);
+			child->fields.binding.driver_data = nullptr;
+			child->fields.ops = nullptr;
+		}
+	}
+
+	bool DeactivateEhciMassStorage(EhciDriverInstance& controller) {
+		if (controller.mass_storage) controller.mass_storage->Disconnect();
+		if (!controller.mass_storage_node) return true;
+		if (!UnmountEhciStorageSubtree(controller.mass_storage_node)) {
+			plogwarn("[EHCI] %s cannot unmount disconnected mass-storage device; retaining nodes",
+				EhciNodeName(controller));
+			return false;
+		}
+		ReleaseEhciPartitionBindings(controller.mass_storage_node);
+		controller.mass_storage_node = nullptr;
+		return true;
+	}
+
+	void DisconnectEhciDevice(EhciDriverInstance& controller) {
+		auto& device = controller.device;
+		if (!device.configured) return;
+		const uint8 port_index = device.port_index;
+		const uint8 address = device.address;
+		if (DeactivateEhciMassStorage(controller)) {
+			RemoveEhciDeviceNode(controller, port_index, address);
+		}
+		delete controller.host_device;
+		controller.host_device = nullptr;
+		device = {};
+		ploginfo("[EHCI] %s port=%u device address=%u disconnected",
+			EhciNodeName(controller), (stduint)(port_index + 1),
+			(stduint)address);
+	}
+
+	void RetryEhciPortLater(EhciDriverInstance& controller,
+		uint8 port_index) {
+		if (port_index < controller.host.RootPortCount()) {
+			controller.port_wait_polls[port_index] = EhciHotplugRetryPolls;
+		}
+		if (controller.device.configured &&
+			controller.device.port_index != port_index) return;
+		DeactivateEhciMassStorage(controller);
+		delete controller.host_device;
+		controller.host_device = nullptr;
+		controller.device = {};
+	}
+
+	void RecoverEhciDeviceLater(EhciDriverInstance& controller) {
+		auto& device = controller.device;
+		const uint8 port_index = device.port_index;
+		const uint8 address = device.address;
+		if (DeactivateEhciMassStorage(controller)) {
+			RemoveEhciDeviceNode(controller, port_index, address);
+		}
+		RetryEhciPortLater(controller, port_index);
+	}
+
+	void TryAttachEhciDevice(EhciDriverInstance& controller,
+		uint8 port_index) {
+		if (port_index >= controller.host.RootPortCount()) return;
+		if (!controller.host.ResetRootPort(port_index)) {
+			const auto status = controller.host.RootPortAt(port_index);
+			if (status.valid && status.connected &&
+				controller.host.RouteRootPortToCompanion(port_index)) {
+				controller.host.AcknowledgeRootPortChanges(port_index);
+				controller.port_status[port_index] =
+					controller.host.RootPortAt(port_index);
+				controller.port_wait_polls[port_index] = 0;
+				ploginfo("[EHCI] %s port=%u handed to companion owner=1",
+					EhciNodeName(controller), (stduint)(port_index + 1));
+				return;
+			}
+			plogwarn("[EHCI] %s port=%u hotplug reset failed",
+				EhciNodeName(controller), (stduint)(port_index + 1));
+			RetryEhciPortLater(controller, port_index);
+			return;
+		}
+		const auto status = controller.host.RootPortAt(port_index);
+		controller.port_status[port_index] = status;
+		if (!status.valid || !status.connected || !status.high_speed) {
+			RetryEhciPortLater(controller, port_index);
+			return;
+		}
+		if (controller.device.configured) {
+			controller.port_wait_polls[port_index] = 0;
+			plogwarn("[EHCI] %s port=%u additional high-speed device deferred",
+				EhciNodeName(controller), (stduint)(port_index + 1));
+			return;
+		}
+		if (!EnumerateEhciDevice(controller, port_index)) {
+			plogwarn("[EHCI] %s port=%u hotplug enumeration failed; retrying",
+				EhciNodeName(controller), (stduint)(port_index + 1));
+			RetryEhciPortLater(controller, port_index);
+			return;
+		}
+		if (!RegisterEhciEnumeratedDevice(controller,
+			controller.port_nodes[port_index])) {
+			plogwarn("[EHCI] %s port=%u hotplug device-node registration failed; retrying",
+				EhciNodeName(controller), (stduint)(port_index + 1));
+			RecoverEhciDeviceLater(controller);
+			return;
+		}
+		controller.port_wait_polls[port_index] = 0;
+		ploginfo("[EHCI] %s port=%u hotplug device attached address=%u",
+			EhciNodeName(controller), (stduint)(port_index + 1),
+			(stduint)controller.device.address);
+	}
+
+	void PollEhciControllers(pureptr_t, stduint) {
+		ehci_poll_armed = false;
+		bool have_running_controller = false;
+		for (auto& controller : ehci_controllers) {
+			if (!controller.running) continue;
+			have_running_controller = true;
+			const uint32 controller_status = controller.host.Status();
+			if (!controller.host.IsRunning() &&
+				controller_status != controller.controller_status) {
+				plogwarn("[EHCI] %s stopped unexpectedly sts=%[32H] frame=%u",
+					EhciNodeName(controller), controller_status,
+					(stduint)controller.host.FrameIndex());
+			}
+			controller.controller_status = controller_status;
+			for (uint8 index = 0; index < controller.host.RootPortCount(); ++index) {
+				auto status = controller.host.RootPortAt(index);
+				const auto previous = controller.port_status[index];
+				if (status.connect_changed || status.enable_changed ||
+					status.overcurrent_changed ||
+					status.connected != previous.connected ||
+					status.enabled != previous.enabled ||
+					status.owned_by_companion != previous.owned_by_companion) {
+					ploginfo("[EHCI] %s port=%u change connected=%u enabled=%u high-speed=%u owner=%u sts=%[32H]",
+						EhciNodeName(controller), (stduint)(index + 1),
+						(stduint)status.connected, (stduint)status.enabled,
+						(stduint)status.high_speed,
+						(stduint)status.owned_by_companion, status.raw);
+					controller.host.AcknowledgeRootPortChanges(index);
+				}
+				if (status.connected && !previous.connected) {
+					controller.port_wait_polls[index] = EhciHotplugDebouncePolls;
+				}
+				if (status.connect_changed && !status.connected &&
+					status.owned_by_companion &&
+					controller.host.ReclaimRootPortFromCompanion(index)) {
+					status = controller.host.RootPortAt(index);
+					ploginfo("[EHCI] %s port=%u reclaimed from companion owner=0",
+						EhciNodeName(controller), (stduint)(index + 1));
+				}
+				if (controller.device.configured &&
+					controller.device.port_index == index) {
+					if (!status.connected) {
+						DisconnectEhciDevice(controller);
+					} else if (!status.high_speed) {
+						plogwarn("[EHCI] %s port=%u unavailable; re-enumerating",
+							EhciNodeName(controller), (stduint)(index + 1));
+						RecoverEhciDeviceLater(controller);
+					}
+				}
+				if (!status.connected || status.owned_by_companion) {
+					controller.port_wait_polls[index] = 0;
+				}
+				controller.port_status[index] = status;
+				if (status.valid && status.connected &&
+					!status.owned_by_companion &&
+					(!status.enabled || controller.port_wait_polls[index])) {
+					if (controller.port_wait_polls[index]) {
+						--controller.port_wait_polls[index];
+					}
+					if (!controller.port_wait_polls[index]) {
+						TryAttachEhciDevice(controller, index);
+					}
+				}
+			}
+		}
+		if (have_running_controller) {
+			ehci_poll_armed = Systimex::AppendDeferredCallback(
+				EhciPollIntervalTicks, 0, (_tocall_ft)PollEhciControllers);
+			if (!ehci_poll_armed) {
+				plogerro("[EHCI] cannot re-arm deferred polling");
+			}
+		}
+	}
+
+	bool ArmEhciPolling() {
+		if (ehci_poll_armed) return true;
+		ehci_poll_armed = Systimex::AppendDeferredCallback(
+			EhciPollIntervalTicks, 0, (_tocall_ft)PollEhciControllers);
+		if (!ehci_poll_armed) {
+			plogerro("[EHCI] cannot arm deferred polling");
+		}
+		return ehci_poll_armed;
 	}
 
 	bool ValidateEhciConfiguration(const uint8* data, uint16 length) {
@@ -478,16 +942,155 @@ namespace {
 		return true;
 	}
 
+	bool ProbeEhciMassStorage(EhciDriverInstance& controller,
+		EhciEnumeratedDevice& device) {
+		const uint8* position = device.configuration;
+		const uint8* const end = position + device.configuration_length;
+		position += position[0];
+		bool mass_storage_interface = false;
+		bool mass_storage_found = false;
+		while (position < end) {
+			const uint8 descriptor_length = position[0];
+			const uint8 descriptor_type = position[1];
+			if (descriptor_type == USB::InterfaceDescriptor::kType) {
+				const auto* descriptor =
+					reinterpret_cast<const USB::InterfaceDescriptor*>(position);
+				mass_storage_interface = !descriptor->alternate_setting &&
+					descriptor->interface_class == 8u &&
+					descriptor->interface_sub_class == 6u &&
+					descriptor->interface_protocol == 0x50u;
+				if (mass_storage_interface) {
+					mass_storage_found = true;
+					device.mass_storage_interface = descriptor->interface_number;
+				}
+			} else if (mass_storage_interface &&
+				descriptor_type == USB::EndpointDescriptor::kType) {
+				const auto* descriptor =
+					reinterpret_cast<const USB::EndpointDescriptor*>(position);
+				const uint16 max_packet_size =
+					descriptor->max_packet_size & 0x07FFu;
+				if (descriptor->attributes.bits.transfer_type ==
+					uint8(USB::EndpointType::kBulk) &&
+					descriptor->endpoint_address.bits.number &&
+					max_packet_size && max_packet_size <= 512u) {
+					if (descriptor->endpoint_address.bits.dir_in) {
+						device.bulk_in_endpoint =
+							descriptor->endpoint_address.bits.number;
+						device.bulk_in_max_packet_size = max_packet_size;
+					} else {
+						device.bulk_out_endpoint =
+							descriptor->endpoint_address.bits.number;
+						device.bulk_out_max_packet_size = max_packet_size;
+					}
+				}
+			}
+			position += descriptor_length;
+		}
+		if (!mass_storage_found) return true;
+		if (!device.bulk_in_endpoint || !device.bulk_out_endpoint) {
+			plogwarn("[EHCI] %s port=%u mass-storage bulk endpoint pair incomplete",
+				EhciNodeName(controller), (stduint)(device.port_index + 1));
+			return false;
+		}
+		if (!controller.mass_storage) {
+			controller.mass_storage = new EhciMassStorage;
+			if (!controller.mass_storage) {
+				plogwarn("[EHCI] %s port=%u cannot allocate mass-storage state",
+					EhciNodeName(controller), (stduint)(device.port_index + 1));
+				return false;
+			}
+		}
+		if (!controller.host_device) return false;
+		auto* class_driver = static_cast<USBMassStorage*>(
+			controller.host_device->ClassDriverOf(device.bulk_in_endpoint));
+		if (!class_driver || class_driver->OnEndpointsConfigured() ||
+			!controller.mass_storage->Configure(controller,
+			*class_driver)) {
+			plogwarn("[EHCI] %s port=%u mass-storage class driver is not ready result=%s status=%[32H]",
+				EhciNodeName(controller), (stduint)(device.port_index + 1),
+				class_driver ? class_driver->ResultName() : "missing",
+				controller.host.LastTransferStatus());
+			return false;
+		}
+
+		const auto& storage = controller.mass_storage->ClassDriver();
+		device.mass_storage_ready = true;
+		ploginfo("[EHCI] %s port=%u mass-storage ready vendor=%s product=%s revision=%s blocks=%u block-size=%u bulk-in=%u bulk-out=%u mps=%u/%u",
+			EhciNodeName(controller), (stduint)(device.port_index + 1),
+			storage.Vendor(), storage.Product(), storage.Revision(),
+			(stduint)storage.BlockCount(), (stduint)storage.BlockSize(),
+			(stduint)device.bulk_in_endpoint,
+			(stduint)device.bulk_out_endpoint,
+			(stduint)device.bulk_in_max_packet_size,
+			(stduint)device.bulk_out_max_packet_size);
+		return true;
+	}
+
 	bool EnumerateEhciDevice(EhciDriverInstance& controller,
 		uint8 port_index) {
+		delete controller.host_device;
+		controller.host_device = nullptr;
 		controller.device = {};
-		if (!ReadEhciDeviceDescriptor(controller, port_index,
-			controller.device)) return false;
-		if (!controller.device.descriptor.num_configurations) return false;
-		if (!SetEhciDeviceAddress(controller, controller.device)) return false;
-		if (!ReadEhciConfiguration(controller, controller.device)) return false;
-		ReadEhciStrings(controller, controller.device);
-		return SetEhciConfiguration(controller, controller.device);
+		auto* host_device = new EhciHostDevice(controller.host);
+		if (!host_device) return false;
+		controller.host_device = host_device;
+		const auto initialize_error = host_device->StartInitialize();
+		if (initialize_error || !host_device->IsEnumerated()) {
+			delete controller.host_device;
+			controller.host_device = nullptr;
+			return false;
+		}
+
+		auto& device = controller.device;
+		device.port_index = port_index;
+		device.address = host_device->DeviceAddress();
+		device.max_packet_size = 64;
+		device.descriptor.length = sizeof(USB::DeviceDescriptor);
+		device.descriptor.descriptor_type = USB::DeviceDescriptor::kType;
+		device.descriptor.vendor_id = host_device->VendorID();
+		device.descriptor.product_id = host_device->ProductID();
+		device.descriptor.device_class = host_device->DeviceClass();
+		device.descriptor.device_sub_class = host_device->DeviceSubClass();
+		device.descriptor.device_protocol = host_device->DeviceProtocol();
+		device.descriptor.max_packet_size = 64;
+		device.descriptor.num_configurations = 1;
+		const auto* configuration = reinterpret_cast<
+			const USB::ConfigurationDescriptor*>(host_device->Buffer());
+		if (configuration->descriptor_type != USB::ConfigurationDescriptor::kType ||
+			configuration->total_length > sizeof(device.configuration) ||
+			!ValidateEhciConfiguration(host_device->Buffer(),
+				configuration->total_length)) {
+			delete controller.host_device;
+			controller.host_device = nullptr;
+			device = {};
+			return false;
+		}
+		device.configuration_length = configuration->total_length;
+		MemCopyN(device.configuration, host_device->Buffer(),
+			device.configuration_length);
+		auto copy_string = [](char* destination, stduint capacity,
+			const char* source) {
+			if (!capacity) return;
+			stduint index = 0;
+			if (source) {
+				while (source[index] && index + 1 < capacity) {
+					destination[index] = source[index];
+					++index;
+				}
+			}
+			destination[index] = 0;
+		};
+		copy_string(device.manufacturer, sizeof(device.manufacturer),
+			host_device->ManufacturerString());
+		copy_string(device.product, sizeof(device.product),
+			host_device->ProductString());
+		copy_string(device.serial, sizeof(device.serial),
+			host_device->SerialString());
+		device.configured = true;
+		if (host_device->IsInitialized()) {
+			if (auto error = host_device->ConfigureTransportEndpoints()) return false;
+		}
+		return ProbeEhciMassStorage(controller, controller.device);
 	}
 
 	const char* EhciDeviceDriverName(const USB::DeviceDescriptor& descriptor) {
@@ -497,8 +1100,61 @@ namespace {
 	const char* EhciInterfaceDriverName(
 		const USB::InterfaceDescriptor& descriptor) {
 		if (descriptor.interface_class == 8u &&
+			descriptor.interface_sub_class == 6u &&
 			descriptor.interface_protocol == 0x50u) return "usb-mass-storage";
 		return "usb-interface";
+	}
+
+	bool RegisterEhciMassStorageNode(EhciDriverInstance& controller,
+		DeviceNode* interface_node) {
+		if (!controller.device.mass_storage_ready) return true;
+		if (!controller.mass_storage || !controller.mass_storage->IsOnline() ||
+			!interface_node) return false;
+		auto* storage_node = Devsman::RegisterStorageDevice(interface_node,
+			"usb-storage@0", DeviceBusType::USB, "ehci-mass-storage",
+			controller.mass_storage);
+		if (!storage_node) return false;
+		controller.mass_storage_node = storage_node;
+		auto alias = String::newFormat("usb-storage%u",
+			(stduint)(&controller - ehci_controllers));
+		if (!Devsman::RegisterDevAlias(storage_node, alias.reference())) {
+			plogwarn("[EHCI] %s cannot register storage alias %s",
+				EhciNodeName(controller), alias.reference());
+		}
+		if (!controller.mass_storage->ScanPartitions()) return false;
+		const auto& partitions = controller.mass_storage->Partitions();
+		for (stduint partition = 1; partition <= partitions.part_count;
+			++partition) {
+			const auto slice = GetPartitionSlice(partitions, partition);
+			if (!slice.length || !slice.sys_id || slice.sys_id == Part_EX_PART) {
+				continue;
+			}
+			auto name = String::newFormat("partition@%u", partition);
+			auto* partition_node = Devsman::RegisterStoragePartition(
+				storage_node, name.reference(), *controller.mass_storage,
+				partition);
+			if (!partition_node) return false;
+			auto mount_path = String::newFormat("/mnt/ehci%u.%u",
+				(stduint)(&controller - ehci_controllers), partition);
+			if (auto* filesystem = Filesys::Mount(*controller.mass_storage,
+				partition, mount_path.reference(), partition_node)) {
+				ploginfo("[EHCI] mount %s on %s", filesystem->name,
+					mount_path.reference());
+			} else {
+				plogwarn("[EHCI] cannot mount partition=%u type=%[8H] on %s",
+					partition, (stduint)slice.sys_id,
+					mount_path.reference());
+			}
+		}
+		const auto& class_driver = controller.mass_storage->ClassDriver();
+		ploginfo("[EHCI] %s port=%u storage registered blocks=%u block-size=%u partitions=%u max-transfer-blocks=%u",
+			EhciNodeName(controller),
+			(stduint)(controller.device.port_index + 1),
+			(stduint)class_driver.BlockCount(),
+			(stduint)class_driver.BlockSize(),
+			(stduint)partitions.part_count,
+			(stduint)controller.mass_storage->MaximumBlocksPerTransfer());
+		return true;
 	}
 
 	bool RegisterEhciEnumeratedDevice(EhciDriverInstance& controller,
@@ -518,13 +1174,14 @@ namespace {
 			device.descriptor.device_sub_class,
 			device.descriptor.device_protocol,
 			uint8(device.port_index + 1), device.address,
-			EhciDeviceDriverName(device.descriptor), &device);
+			EhciDeviceDriverName(device.descriptor), controller.host_device);
 		if (!device_node) return false;
 
 		const uint8* position = device.configuration;
 		const uint8* const end = position + device.configuration_length;
 		position += position[0];
 		DeviceNode* interface_node = nullptr;
+		DeviceNode* mass_storage_interface_node = nullptr;
 		uint32 endpoint_index = 0;
 		while (position < end) {
 			const uint8 descriptor_length = position[0];
@@ -541,8 +1198,16 @@ namespace {
 						interface_name.reference(), descriptor->interface_class,
 						descriptor->interface_sub_class,
 						descriptor->interface_protocol,
-						EhciInterfaceDriverName(*descriptor), &device);
+						EhciInterfaceDriverName(*descriptor),
+						controller.host_device);
 					if (!interface_node) return false;
+					if (descriptor->interface_number ==
+						device.mass_storage_interface &&
+						descriptor->interface_class == 8u &&
+						descriptor->interface_sub_class == 6u &&
+						descriptor->interface_protocol == 0x50u) {
+						mass_storage_interface_node = interface_node;
+					}
 				}
 			} else if (descriptor_type == USB::EndpointDescriptor::kType &&
 				interface_node) {
@@ -557,7 +1222,8 @@ namespace {
 			}
 			position += descriptor_length;
 		}
-		return true;
+		return RegisterEhciMassStorageNode(controller,
+			mass_storage_interface_node);
 	}
 
 	bool RegisterEhciDeviceNodes(EhciDriverInstance& controller) {
@@ -653,8 +1319,16 @@ namespace {
 			const auto before = controller->host.RootPortAt(index);
 			const bool reset_ok = before.connected &&
 				controller->host.ResetRootPort(index);
-			const auto status = controller->host.RootPortAt(index);
+			auto status = controller->host.RootPortAt(index);
+			if (before.connected && !reset_ok && status.valid &&
+				status.connected &&
+				controller->host.RouteRootPortToCompanion(index)) {
+				controller->host.AcknowledgeRootPortChanges(index);
+				status = controller->host.RootPortAt(index);
+			}
 			controller->port_status[index] = status;
+			
+			#if 0
 			ploginfo("[EHCI] %s port=%u connected=%u enabled=%u high-speed=%u owner=%u line=%u reset=%s sts=%[32H]",
 				EhciNodeName(*controller), (stduint)(index + 1),
 				(stduint)status.connected, (stduint)status.enabled,
@@ -662,8 +1336,11 @@ namespace {
 				(stduint)status.owned_by_companion,
 				(stduint)status.line_status,
 				!before.connected ? "idle" :
-					(reset_ok ? "high-speed" : "not-high-speed"),
+					(status.owned_by_companion ? "companion" :
+						(reset_ok ? "high-speed" : "failed")),
 				status.raw);
+			#endif
+
 			if (!status.high_speed) continue;
 			if (!device_enumerated) {
 				if (!EnumerateEhciDevice(*controller, index)) {
@@ -678,17 +1355,21 @@ namespace {
 		}
 
 		controller->running = true;
+		controller->controller_status = controller->host.Status();
 		node->fields.binding.driver_data = &controller->host;
 		if (!RegisterEhciDeviceNodes(*controller)) {
 			StopEhciController(*controller);
 			node->fields.binding.driver_data = nullptr;
 			return false;
 		}
-		ploginfo("[EHCI] %s started MMIO=%[64H] periodic=%[64H] async=%[64H] ports=%u IRQ line=%u pin=%u frame=%u",
+		ArmEhciPolling();
+		ploginfo("[EHCI] %s started MMIO=%[64H] periodic=%[64H] async=%[64H] ports=%u companions=%u ports-per-companion=%u IRQ line=%u pin=%u frame=%u",
 			EhciNodeName(*controller), uint64(controller->mmio_base),
 			uint64(stduint(controller->periodic_list)),
 			uint64(stduint(controller->transfer_workspace)),
 			(stduint)controller->host.RootPortCount(),
+			(stduint)controller->host.CompanionControllerCount(),
+			(stduint)controller->host.CompanionPortsPerController(),
 			(stduint)controller->irq_line, (stduint)controller->irq_pin,
 			(stduint)controller->host.FrameIndex());
 		return true;

@@ -59,15 +59,18 @@ stduint Taskman::SetupStack(ProcessBlock* pb, ProcessBlock* parent, char** usr_a
 
 	count_and_size(usr_argv, argc);
 	String default_path_env;
+	String default_vrpath_env;
 	if (use_default_env) {
 		const auto& vroot = Filesys::GetSystemVirtualRootPath();
 		if (vroot.getByteCount()) {
 			default_path_env = String::newFormat("PATH=/md0:%s/apps", vroot.reference());
+			default_vrpath_env = String::newFormat("VRPATH=%s", vroot.reference());
 		} else {
 			default_path_env = "PATH=/md0";
 		}
-		envc = 3;
+		envc = default_vrpath_env.getByteCount() ? 4 : 3;
 		str_len += StrLength("?=0") + 1 + StrLength(default_path_env.reference()) + 1 + StrLength("USER=root") + 1;
+		if (default_vrpath_env.getByteCount()) str_len += default_vrpath_env.getByteCount() + 1;
 	} else {
 		count_and_size(usr_envp, envc);
 	}
@@ -102,8 +105,9 @@ stduint Taskman::SetupStack(ProcessBlock* pb, ProcessBlock* parent, char** usr_a
 
 	copy_strings(usr_argv, argc);
 	if (use_default_env) {
-		const char* defaults[] = { "?=0", default_path_env.reference(), "USER=root" };
-		for (stduint i = 0; i < 3; i++) {
+		const char* defaults[4] = { "?=0", default_path_env.reference(), "USER=root", default_vrpath_env.reference() };
+		stduint default_count = default_vrpath_env.getByteCount() ? 4 : 3;
+		for (stduint i = 0; i < default_count; i++) {
 			char* dest = str_area;
 			StrCopy(dest, defaults[i]);
 			stduint len = StrLength(defaults[i]);

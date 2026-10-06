@@ -192,7 +192,7 @@ qemu_args=\
 	-device usb-mouse,id=mouse0,bus=xhci.0,port=1.1 \
 	-device usb-kbd,id=kbd0,bus=xhci.0,port=1.2 \
 	-serial mon:stdio \
-	-drive if=none,id=usbdisk,file=/mnt/hgfs/tmp/ehci-stage7.img,format=raw \
+	-drive if=none,id=usbdisk,file=$(uobjpath)/../ehci-stage7.img,format=raw \
 	-device usb-ehci,id=ehci \
 	-device usb-storage,id=storage0,bus=ehci.0,port=1,drive=usbdisk \
 

@@ -2,6 +2,7 @@
 #include <c/format/ELF.h>
 
 #include <string.h>
+#include <stdlib.h>
 
 #define printf(...)
 
@@ -87,7 +88,10 @@ int main(int argc, char* argv[], char* envp[]) {
 				
 				// Try to open it from the system library path
 				char target_path[256];
-				sprintf(target_path, "/mnt/ide2.0/lib/%s", base_name);
+				// Prefer the virtual root injected by the kernel, the probes below stay as fallback
+				const char* vroot = getenv("VRPATH");
+				if (vroot && *vroot) sprintf(target_path, "%s/lib/%s", vroot, base_name);
+				else sprintf(target_path, "/mnt/ide2.0/lib/%s", base_name);
 				
 				FILE* fp = fopen(target_path, "rb");
 				if (!fp) {

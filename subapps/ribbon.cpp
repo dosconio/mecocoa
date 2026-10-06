@@ -4,6 +4,7 @@
 #include "cpp/Witch/Control/Control-Label.hpp"
 #include <time.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <c/format/picture/PNG.h>
 #include <cpp/trait/StorageTrait.hpp>
 
@@ -23,13 +24,20 @@ static void ScaleImage(const Color* src, stduint src_w, stduint src_h,
 }
 
 static void TryLoadWallpaper(Size2 target_screen) {
-	static const char* kWallpaperPaths[] = {
-		"/mnt/ide2.0/demo/wallpp.png",
-		"/mnt/ahci1.0/demo/wallpp.png"
-	};//{TODO} wait for environment var of VrootPath
+	// VRPATH is absent when the virtual root was not mounted yet at exec time, hence the literal probes below
+	const char* vroot = getenv("VRPATH");
+	char vroot_wallpaper[256];
+	rostr kWallpaperPaths[3];
+	stduint path_count = 0;
+	if (vroot && *vroot) {
+		sprintf(vroot_wallpaper, "%s/demo/wallpp.png", vroot);
+		kWallpaperPaths[path_count++] = vroot_wallpaper;
+	}
+	kWallpaperPaths[path_count++] = "/mnt/ide2.0/demo/wallpp.png";
+	kWallpaperPaths[path_count++] = "/mnt/ahci1.0/demo/wallpp.png";//{TODO} drop these literals when VRPATH is always present
 	FILE* fp = nullptr;
 	for (int retry = 0; retry < 3; ++retry) {
-		for0a(i, kWallpaperPaths) {
+		for (stduint i = 0; i < path_count; i++) {
 			fp = fopen(kWallpaperPaths[i], "rb");
 			if (fp) break;
 		}

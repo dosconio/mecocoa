@@ -29,6 +29,9 @@ struct Systimex {
 	static bool
 		AppendDriverMessage(stduint timeout, stduint target_tid,
 			stduint message_type, stduint value = 0);
+	static bool
+		AppendDeferredCallback(stduint timeout, stduint iden,
+			_tocall_ft hand);
 	static void
 		CancelThreadWake(stduint tid);
 };

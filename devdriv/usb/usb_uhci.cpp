@@ -16,6 +16,7 @@ void hand_kboard(keyboard_event_t event);
 
 namespace {
 	using UhciHostController = uni::device::SpaceUSB1::HostController;
+	using UhciHostDevice = uni::device::SpaceUSB1::USBHostDevice_v1;
 	using UhciControllerError = uni::device::SpaceUSB1::ControllerError;
 	using UhciRootPortStatus = uni::device::SpaceUSB1::RootPortStatus;
 	namespace USB = uni::device::SpaceUSB;
@@ -64,6 +65,7 @@ namespace {
 		uint8 irq_line = 0xFFu;
 		uint8 irq_pin = 0;
 		UhciEnumeratedDevice device{};
+		UhciHostDevice* host_device = nullptr;
 		bool running = false;
 	};
 
@@ -74,6 +76,8 @@ namespace {
 		uint8 port_index, bool low_speed);
 	bool RegisterUhciEnumeratedDevice(UhciDriverInstance& controller,
 		DeviceNode* port_node);
+	void RemoveUhciDeviceNode(UhciDriverInstance& controller,
+		uint8 port_index, uint8 address);
 
 	const char* UhciNodeName(const UhciDriverInstance& controller) {
 		return controller.node && controller.node->link.addr ?
@@ -206,6 +210,15 @@ namespace {
 
 	void StopUhciController(UhciDriverInstance& controller) {
 		controller.running = false;
+		const uint8 port_index = controller.device.port_index;
+		const uint8 address = controller.device.address;
+		if (address && port_index < controller.host.RootPortCount() &&
+			controller.port_nodes[port_index]) {
+			RemoveUhciDeviceNode(controller, port_index, address);
+		}
+		delete controller.host_device;
+		controller.host_device = nullptr;
+		controller.device = {};
 		if (!controller.host.Stop()) {
 			plogwarn("[UHCI] %s did not halt; retaining low-DMA pages",
 				UhciNodeName(controller));
@@ -240,14 +253,9 @@ namespace {
 		if (!device.configured) return;
 		const uint8 port_index = device.port_index;
 		const uint8 address = device.address;
-		if (device.keyboard_endpoint) {
-			device.keyboard_decoder.Reset(DispatchUhciKeyboardEvent);
-		}
-		if (device.keyboard_active) {
-			controller.host.StopInterruptIn();
-			device.keyboard_active = false;
-		}
 		RemoveUhciDeviceNode(controller, port_index, address);
+		delete controller.host_device;
+		controller.host_device = nullptr;
 		device = {};
 		ploginfo("[UHCI] %s port=%u device address=%u disconnected",
 			UhciNodeName(controller), (stduint)(port_index + 1),
@@ -257,6 +265,8 @@ namespace {
 	void RetryUhciPortLater(UhciDriverInstance& controller,
 		uint8 port_index) {
 		controller.port_wait_polls[port_index] = UhciHotplugRetryPolls;
+		delete controller.host_device;
+		controller.host_device = nullptr;
 		controller.device = {};
 	}
 
@@ -264,10 +274,6 @@ namespace {
 		auto& device = controller.device;
 		const uint8 port_index = device.port_index;
 		const uint8 address = device.address;
-		if (device.keyboard_endpoint) {
-			device.keyboard_decoder.Reset(DispatchUhciKeyboardEvent);
-		}
-		if (device.keyboard_active) controller.host.StopInterruptIn();
 		RemoveUhciDeviceNode(controller, port_index, address);
 		RetryUhciPortLater(controller, port_index);
 	}
@@ -298,9 +304,6 @@ namespace {
 			controller.port_nodes[port_index])) {
 			plogwarn("[UHCI] %s port=%u hotplug device-node registration failed; retrying",
 				UhciNodeName(controller), (stduint)(port_index + 1));
-			if (controller.device.keyboard_active) {
-				controller.host.StopInterruptIn();
-			}
 			RemoveUhciDeviceNode(controller, controller.device.port_index,
 				controller.device.address);
 			RetryUhciPortLater(controller, port_index);
@@ -313,23 +316,15 @@ namespace {
 	}
 
 	void PollUhciKeyboard(UhciDriverInstance& controller) {
-		auto& device = controller.device;
-		if (!device.keyboard_active) return;
-		uint16 actual_length = 0;
-		bool completed = false;
-		const auto error = controller.host.PollInterruptIn(
-			device.keyboard_report, sizeof(device.keyboard_report),
-			actual_length, completed);
-		if (error != UhciControllerError::Success) {
-			plogwarn("[UHCI] %s keyboard interrupt-in stopped: %s status=%[32H]; re-enumerating",
-				UhciNodeName(controller), UhciHostController::ErrorName(error),
+		if (!controller.host_device) return;
+		const auto interrupt_error = controller.host_device->PollInterrupt();
+		const auto delayed_error = controller.host_device->ProcessDelayed();
+		if (interrupt_error || delayed_error) {
+			plogwarn("[UHCI] %s class-driver polling stopped: %s status=%[32H]; re-enumerating",
+				UhciNodeName(controller),
+				interrupt_error ? interrupt_error.Name() : delayed_error.Name(),
 				controller.host.LastTransferStatus());
 			RecoverUhciDeviceLater(controller);
-			return;
-		}
-		if (completed && actual_length == UhciKeyboardReportBytes) {
-			device.keyboard_decoder.Process(device.keyboard_report,
-				actual_length, DispatchUhciKeyboardEvent);
 		}
 	}
 
@@ -390,15 +385,22 @@ namespace {
 			PollUhciKeyboard(controller);
 		}
 		if (have_running_controller) {
-			uhci_poll_armed = true;
-			SysTimer::Append(UhciPollIntervalTicks, 0, (_tocall_ft)PollUhciControllers);
+			uhci_poll_armed = Systimex::AppendDeferredCallback(
+				UhciPollIntervalTicks, 0, (_tocall_ft)PollUhciControllers);
+			if (!uhci_poll_armed) {
+				plogerro("[UHCI] cannot re-arm deferred polling");
+			}
 		}
 	}
 
-	void ArmUhciPolling() {
-		if (uhci_poll_armed) return;
-		uhci_poll_armed = true;
-		SysTimer::Append(UhciPollIntervalTicks, 0, (_tocall_ft)PollUhciControllers);
+	bool ArmUhciPolling() {
+		if (uhci_poll_armed) return true;
+		uhci_poll_armed = Systimex::AppendDeferredCallback(
+			UhciPollIntervalTicks, 0, (_tocall_ft)PollUhciControllers);
+		if (!uhci_poll_armed) {
+			plogerro("[UHCI] cannot arm deferred polling");
+		}
+		return uhci_poll_armed;
 	}
 
 	bool ReadUhciDeviceDescriptor(UhciDriverInstance& controller,
@@ -718,14 +720,54 @@ namespace {
 
 	bool EnumerateUhciDevice(UhciDriverInstance& controller,
 		uint8 port_index, bool low_speed) {
+		if (!AllocateUhciTransferWorkspace(controller)) return false;
+		delete controller.host_device;
+		controller.host_device = nullptr;
 		controller.device = {};
-		if (!ReadUhciDeviceDescriptor(controller, port_index, low_speed,
-			controller.device)) return false;
-		if (!controller.device.descriptor.num_configurations) return false;
-		if (!SetUhciDeviceAddress(controller, controller.device)) return false;
-		if (!ReadUhciConfiguration(controller, controller.device)) return false;
-		if (!SetUhciConfiguration(controller, controller.device)) return false;
-		return ConfigureUhciKeyboard(controller, controller.device);
+		auto* host_device = new UhciHostDevice(controller.host, low_speed);
+		if (!host_device) return false;
+		controller.host_device = host_device;
+		const auto initialize_error = host_device->StartInitialize();
+		if (initialize_error || !host_device->IsEnumerated()) {
+			delete controller.host_device;
+			controller.host_device = nullptr;
+			return false;
+		}
+
+		auto& device = controller.device;
+		device.port_index = port_index;
+		device.address = host_device->DeviceAddress();
+		device.low_speed = low_speed;
+		device.max_packet_size = low_speed ? 8 : 64;
+		device.descriptor.length = sizeof(USB::DeviceDescriptor);
+		device.descriptor.descriptor_type = USB::DeviceDescriptor::kType;
+		device.descriptor.vendor_id = host_device->VendorID();
+		device.descriptor.product_id = host_device->ProductID();
+		device.descriptor.device_class = host_device->DeviceClass();
+		device.descriptor.device_sub_class = host_device->DeviceSubClass();
+		device.descriptor.device_protocol = host_device->DeviceProtocol();
+		device.descriptor.max_packet_size = device.max_packet_size;
+		device.descriptor.num_configurations = 1;
+		const auto* configuration = reinterpret_cast<
+			const USB::ConfigurationDescriptor*>(host_device->Buffer());
+		if (configuration->descriptor_type != USB::ConfigurationDescriptor::kType ||
+			configuration->total_length > sizeof(device.configuration) ||
+			!ValidateUhciConfiguration(host_device->Buffer(),
+				configuration->total_length)) {
+			delete controller.host_device;
+			controller.host_device = nullptr;
+			device = {};
+			return false;
+		}
+		device.configuration_length = configuration->total_length;
+		MemCopyN(device.configuration, host_device->Buffer(),
+			device.configuration_length);
+		device.configured = true;
+		if (host_device->IsInitialized()) {
+			if (auto error = host_device->ConfigureTransportEndpoints()) return false;
+			if (auto error = host_device->OnEndpointsConfigured()) return false;
+		}
+		return true;
 	}
 
 	const char* UhciDeviceDriverName(const USB::DeviceDescriptor& descriptor) {
@@ -756,7 +798,7 @@ namespace {
 			device.descriptor.device_sub_class,
 			device.descriptor.device_protocol,
 			uint8(device.port_index + 1), device.address,
-			UhciDeviceDriverName(device.descriptor), &device);
+			UhciDeviceDriverName(device.descriptor), controller.host_device);
 		if (!device_node) return false;
 
 		const uint8* position = device.configuration;
@@ -779,7 +821,8 @@ namespace {
 						interface_name.reference(), descriptor->interface_class,
 						descriptor->interface_sub_class,
 						descriptor->interface_protocol,
-						UhciInterfaceDriverName(*descriptor), &device);
+						UhciInterfaceDriverName(*descriptor),
+						controller.host_device);
 					if (!interface_node) return false;
 				}
 			} else if (descriptor_type == USB::EndpointDescriptor::kType &&
@@ -929,6 +972,7 @@ RMOD_LIST RMOD_LIST_UHCI{
 };
 
 void R_UHCI_INIT() {
+	uni::device::SpaceUSB::HIDKeyboardDriver::default_observer = hand_kboard;
 	if (!Devsman::RegisterDriverStarter("uhci", StartUhciDriver)) {
 		plogwarn("[UHCI] failed to register driver starter");
 		return;

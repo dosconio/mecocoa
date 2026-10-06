@@ -15,6 +15,7 @@ volatile stduint tick = 0;
 namespace {
 	enum class TimerAction : byte {
 		Callback,
+		DeferredCallback,
 		ThreadWake,
 		DriverMessage,
 	};
@@ -119,6 +120,16 @@ bool Systimex::AppendDriverMessage(stduint timeout, stduint target_tid,
 	timer.action = TimerAction::DriverMessage;
 	timer.target = target_tid;
 	timer.message_type = message_type;
+	return AppendTimer(timeout, timer);
+}
+
+bool Systimex::AppendDeferredCallback(stduint timeout, stduint iden,
+	_tocall_ft hand) {
+	if (!hand) return false;
+	MsgTimer timer = {};
+	timer.iden = iden;
+	timer.hand = hand;
+	timer.action = TimerAction::DeferredCallback;
 	return AppendTimer(timeout, timer);
 }
 
@@ -242,6 +253,10 @@ void Systimex::DispatchExpired() {
 		switch (expired.action) {
 		// Realtime
 		case TimerAction::Callback:
+			if (expired.hand) expired.hand((pureptr_t)expired.timeout, expired.iden);
+			break;
+		// Deferred to the Devsman thread.
+		case TimerAction::DeferredCallback:
 			if (expired.hand) expired.hand((pureptr_t)expired.timeout, expired.iden);
 			break;
 		//
