@@ -566,6 +566,8 @@ ProcessBlock* Taskman::CreateFork(ProcessBlock* fo, const CallgateFrame* frame) 
 	#endif
 }
 
+#endif
+
 //
 ProcessBlock* Taskman::CreateFile(const char* path, byte ring, stduint parent, vfs_dentry* base) {
 	//{} ELF
@@ -591,6 +593,8 @@ ProcessBlock* Taskman::CreateFile(const char* path, byte ring, stduint parent, v
 	else plogwarn("%s: Not found at %s", label, path);
 	return nullptr;
 };
+
+#if CONFIG_ENABLE_MMU
 
 //
 ProcessBlock* Taskman::Exec(stduint parent, rostr usr_fullpath, char** usr_argv, char** usr_envp)

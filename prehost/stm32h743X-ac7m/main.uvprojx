@@ -401,6 +401,11 @@
               <FilePath>..\..\mecocoa\memoman-swap.cpp</FilePath>
             </File>
             <File>
+              <FileName>message.cpp</FileName>
+              <FileType>8</FileType>
+              <FilePath>..\..\mecocoa\message.cpp</FilePath>
+            </File>
+            <File>
               <FileName>taskman.cpp</FileName>
               <FileType>8</FileType>
               <FilePath>..\..\mecocoa\taskman.cpp</FilePath>
@@ -436,9 +441,9 @@
               <FilePath>..\..\mecocoa\console-init.cpp</FilePath>
             </File>
             <File>
-              <FileName>graphic.cpp</FileName>
+              <FileName>fileman.cpp</FileName>
               <FileType>8</FileType>
-              <FilePath>..\..\mecocoa\graphic.cpp</FilePath>
+              <FilePath>..\..\mecocoa\fileman.cpp</FilePath>
             </File>
             <File>
               <FileName>filesys.cpp</FileName>
@@ -446,14 +451,19 @@
               <FilePath>..\..\mecocoa\filesys.cpp</FilePath>
             </File>
             <File>
+              <FileName>graphic.cpp</FileName>
+              <FileType>8</FileType>
+              <FilePath>..\..\mecocoa\graphic.cpp</FilePath>
+            </File>
+            <File>
               <FileName>schedul.cpp</FileName>
               <FileType>8</FileType>
               <FilePath>..\..\mecocoa\schedul.cpp</FilePath>
             </File>
             <File>
-              <FileName>message.cpp</FileName>
+              <FileName>syscall.cpp</FileName>
               <FileType>8</FileType>
-              <FilePath>..\..\mecocoa\message.cpp</FilePath>
+              <FilePath>..\..\mecocoa\syscall.cpp</FilePath>
             </File>
             <File>
               <FileName>devsman.cpp</FileName>

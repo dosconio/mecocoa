@@ -441,8 +441,7 @@ void dump_device_tree(OstreamTrait& com1) {
 	dump_device_tree(com1, true);
 }
 
-// The driver registries are read without locking: this runs on the COM1 debug path, so a
-// concurrent Devsman append/remove may be observed mid-flight, which is acceptable here.
+// The driver registries are read without locking
 struct DriverNameSet {
 	static constexpr stduint Capacity = 64;
 	const char* names[Capacity];

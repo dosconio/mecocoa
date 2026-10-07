@@ -11,6 +11,11 @@ _ESYM_C stduint syscall_bridge(stduint a0, stduint a1, stduint a2, stduint a3, s
 stduint syscall(syscall_t callid, stduint p1, stduint p2, stduint p3) {
 	return syscall_bridge(p1, p2, p3, 0, 0, 0, 0, _IMM(callid));
 }
+#elif (_ACCM & 0xFFFF) == 0x2032
+_ESYM_C stduint syscall_bridge(stduint callid, stduint p1, stduint p2, stduint p3);
+stduint syscall(syscall_t callid, stduint p1, stduint p2, stduint p3) {
+	return syscall_bridge(_IMM(callid), p1, p2, p3);
+}
 #endif
 
 void outtxt(const char* str, stduint len) {

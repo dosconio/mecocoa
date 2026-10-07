@@ -29,7 +29,7 @@ cppfile+=$(wildcard mecocoa/*.cpp) prehost/_auxiliary.cpp $(wildcard devdriv/*.c
 	$(ulibpath)/cpp/Device/PLIC.cpp \
 	$(ulibpath)/cpp/Device/UART.cpp \
 	$(ulibpath)/cpp/Device/Timer.cpp \
-	$(ulibpath)/cpp/system/paging.cpp \
+	$(ulibpath)/cpp/Datype/Map/Paging.cpp \
 	$(ulibpath)/cpp/Format/Filesys/CD.cpp \
 	$(ulibpath)/cpp/Lango/lango-cpp.cpp \
 	$(ulibpath)/cpp/Datype/bstring.cpp \

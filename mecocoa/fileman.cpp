@@ -10,6 +10,17 @@
 
 extern void Consman_InitializeFreeType();
 
+#if !CONFIG_ENABLE_MMU
+static inline stduint _fileman_strcopy(char* dest, const char* sors, stduint length) {
+	if (!length) return 0;
+	StrCopyN(dest, sors, length - 1);
+	dest[length - 1] = 0;
+	return StrLength(dest);
+}
+#define StrCopyP(a,b,c,d,e) _fileman_strcopy(a,c,e)
+#define MemCopyP(a,b,c,d,e) (MemCopyN(a,c,e), _IMM(e))
+#endif
+
 #define FSBUF_SIZE 0x4000
 struct FDescData {
 	FileDescriptor* table = nullptr;
@@ -758,7 +769,9 @@ void serv_file_loop()// for IDE 0:0, 0:1
 					to_args[1],
 					to_args[2],
 					to_args[3]);
+				#if CONFIG_ENABLE_MMU
 				plogerro(">>> %x", Taskman::LocateThread(sig_src)->parent_process->paging.root_level_page);
+				#endif
 				plogerro("Fileman: TEST message received after bootstrapped");
 				break;
 			}

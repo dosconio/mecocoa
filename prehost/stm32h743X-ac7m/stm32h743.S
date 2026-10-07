@@ -8,6 +8,7 @@
 	THUMB
 
 	IMPORT	SysTick_Handler_Mcca
+	IMPORT	syscall
 	IMPORT	|Image$$ER_RMOD$$Base|
 	IMPORT	|Image$$ER_RMOD$$Limit|
 
@@ -36,6 +37,18 @@ RMOD_BoundLimit	PROC
 	EXPORT	RMOD_BoundLimit
 	LDR	R0, =|Image$$ER_RMOD$$Limit|
 	BX	LR
+	ENDP
+
+; Run the syscall body in thread mode on the caller's stack, so it may block.
+; On entry R0-R3 already hold (callid, p1, p2, p3), R12 the caller's LR and LR the interrupted PC.
+SvcSyscallTrampoline	PROC
+	EXPORT	SvcSyscallTrampoline
+	PUSH	{R12, LR}
+	BL	syscall
+	POP	{R12, R1}
+	ORR	R1, R1, #1	; the stacked PC carries no Thumb bit, BX needs it
+	MOV	LR, R12
+	BX	R1
 	ENDP
 
 SwitchTaskContext	PROC

@@ -3,24 +3,16 @@
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 
 #include "../../include/mecocoa.hpp"
-#include <cpp/MCU/ST/STM32H7>
+
+#if (_MCCA & 0xFFFF) == 0x2032
 #include <cpp/Device/SD.hpp>
 #include <c/format/filesys.h>
 #include <c/format/filesys/FAT.h>
 
 _ESYM_C void R_SDCARD_INIT();
 
-#if (_MCCA & 0xFFFF) == 0x2032
+extern file_system_type fs_fat;
 
-extern file_system_type fs_fat;// defined in meccoa/filesys.cpp, the FAT probe type
-
-// The x86 storage drivers keep their bring-up in a driver starter that the
-// Devsman service thread calls, and never create a thread of their own. On ARM
-// that same thread is reached through the timer service: SysTick collects the
-// expired action (Systimex::CollectExpired) and the Devsman service thread runs
-// it (Systimex::DispatchExpired). The RMOD walk itself must not do the work: it
-// runs with interrupts masked, where SysTick::getTick() is frozen and every wait
-// inside SDCard1 would spin forever.
 __attribute__((section(".init.rmod")))
 extern const RMOD_LIST RMOD_LIST_SDCARD{
 	R_SDCARD_INIT,
@@ -28,97 +20,164 @@ extern const RMOD_LIST RMOD_LIST_SDCARD{
 	{}
 };
 
-// The card object is a StorageTrait itself, as in the 91-ImageShow demo, so the
-// trait overload SDCard1.Read(lba, buf, n) is the call to use: with
-// storage_method == IOMethod::DMA it waits through ReadDMA_Blocking
-// (SDCard.cpp:172), while the explicit-method overload Read(buf, lba, n, DMA)
-// only starts the transfer and returns at once. Polling is not usable here:
-// services and user programs share RING_M, so one tick hands the CPU to a
-// spinning program and the receive FIFO overruns (fb=32 SDMMC_ERROR_RX_OVERRUN).
-static byte* sd_stack_base = nullptr;
-static byte* sd_stack_top = nullptr;
+#define SD_POLL_INTERVAL CONFIG_SysTickFreq
+#define SD_OFFLINE_WAIT 4
+#define SD_MAX_STRIKES 3
 
-static void SdCardMount();
+static Mutex sd_lock;
+static bool sd_online = false;
+static stduint sd_strikes = 0;
 
-static void SdCardBringUp(void*, ...) {
-	// paint the unused part of the service stack, the peak is read back below: this
-	// bring-up is the deepest thing that runs on the Devsman thread
-	auto* th = Taskman::CurrentTB();
-	if (th && th->stack_lineaddr) {
-		sd_stack_base = th->stack_lineaddr;
-		sd_stack_top = th->stack_lineaddr + th->stack_size;
-		stduint sp_now = 0;
-		_ASM volatile("mrs %0, psp" : "=r"(sp_now));
-		byte* free_end = (byte*)sp_now - 0x40;
-		for (byte* q = sd_stack_base; q < free_end; q++) *q = 0xA5;
+class SdCardStorage : public uni::StorageTrait {
+public:
+	uni::StorageTrait& base;
+	bool online = false;
+	SdCardStorage(uni::StorageTrait& stor) : base(stor) { Block_Size = stor.Block_Size; }
+	void ioFailed() {
+		if (++sd_strikes < SD_MAX_STRIKES) return;
+		online = false;
+		sd_online = false;
+		sd_strikes = 0;
+		SDCard1.canMode();
+		plogwarn("[SD] the card stopped answering, /mnt/sd0.0 is off until it comes back");
 	}
-	SdCardMount();
-	if (sd_stack_base) {
-		byte* deepest = sd_stack_base;
-		while (deepest < sd_stack_top && *deepest == 0xA5) deepest++;
-		ploginfo("[SD] stack base=%p top=%p peak=%u canary=%08X",
-			sd_stack_base, sd_stack_top,
-			(stduint)(sd_stack_top - deepest), *(stduint*)sd_stack_base);
+	virtual bool Read(stduint BlockIden, void* Dest, stduint Times = 1) override {
+		MutexLocal guard(&sd_lock);
+		if (!online) return false;
+		if (base.Read(BlockIden, Dest, Times)) {
+			sd_strikes = 0;
+			return true;
+		}
+		ioFailed();
+		return false;
 	}
+	virtual bool Write(stduint BlockIden, const void* Sors, stduint Times = 1) override {
+		MutexLocal guard(&sd_lock);
+		if (!online) return false;
+		if (base.Write(BlockIden, Sors, Times)) {
+			sd_strikes = 0;
+			return true;
+		}
+		ioFailed();
+		return false;
+	}
+	virtual stduint getUnits() override { return base.getUnits(); }
+	virtual int operator[](uint64 bytid) override { return -1; }
+};
+
+static uni::FilesysFAT* sd_fs = nullptr;
+static SdCardStorage* sd_storage = nullptr;
+static byte* sd_sec_buf = nullptr;
+static byte* sd_fat_buf = nullptr;
+static stduint sd_cid[4] = {};
+static bool sd_mounted = false;
+static bool sd_poll_armed = false;
+static bool sd_foreign = false;
+static stduint sd_offline_wait = 0;
+
+static void SdCardPoll(void*, ...);
+
+static bool SdCardSameCard() {
+	for0(i, 4) if (sd_cid[i] != SDCard1.CID[i]) return false;
+	return true;
 }
 
-static void SdCardMount() {
-	ploginfo("[SD] setMode ...");
-	// defaults of SD.hpp: SDMMC1, PLL1Q, 4-bit bus, no flow control
-	if (!SDCard1.setMode()) {
-		plogerro("[SD] SDMMC1 init failed, no card?");
-		return;
-	}
-	// setMode() enables IRQ_SDMMC1 at priority 0: bring it down to the scheduler
-	// level so no SD interrupt can preempt the PendSV context switch
-	ploginfo("[SD] setMode ok");
+static void SdCardOnline(bool up) {
+	MutexLocal guard(&sd_lock);
+	if (sd_storage) sd_storage->online = up;
+	sd_online = up;
+}
+
+static int SdCardInit() {
+	MutexLocal guard(&sd_lock);
+	if (!SDCard1.setMode()) return 0;
 	NVIC.setPriority(IRQ_SDMMC1, 15);
 	SDCard1.Block_Size = 512;
 	SDCard1.storage_method = IOMethod::DMA;
-	ploginfo("[SD] buffers ...");
-	stduint* probe = (stduint*)mempool.allocate(512, 9);
-	byte* fat_buf = (byte*)mempool.allocate(512, 9);
-	if (!probe || !fat_buf) {
+	if (sd_mounted) {
+		if (!SdCardSameCard()) return -1;
+		if (sd_fs) sd_fs->current_sector = 0xFFFFFFFF;
+		if (sd_storage) sd_storage->online = true;
+		sd_online = true;
+		sd_strikes = 0;
+		ploginfo("[SD] card back online, units=%u block=%u", SDCard1.getUnits(), SDCard1.Block_Size);
+		return 1;
+	}
+	for0(i, 4) sd_cid[i] = SDCard1.CID[i];
+	return 2;
+}
+
+static bool SdCardMount() {
+	int state = SdCardInit();
+	if (state == 1) return true;
+	if (state < 0) {
+		if (!sd_foreign) {
+			sd_foreign = true;
+			plogwarn("[SD] another card is in the slot, only the mounted one is accepted");
+		}
+		return false;
+	}
+	if (!state) {
+		sd_foreign = false;
+		return false;
+	}
+	if (!sd_sec_buf) sd_sec_buf = (byte*)mempool.allocate(512, 9);
+	if (!sd_fat_buf) sd_fat_buf = (byte*)mempool.allocate(512, 9);
+	if (!sd_sec_buf || !sd_fat_buf) {
 		plogerro("[SD] no memory for the FAT buffers");
-		return;
+		return false;
 	}
-	byte* sec_buf = (byte*)probe;
-	// the boot sector of a FAT volume starts with the jump EB 58 90
-	for (stduint i = 0; i < 2; i++) {
-		MemSet(sec_buf, 0x22, 512);
-		bool ok = SDCard1.Read(0, sec_buf, 1);
-		ploginfo("[SD] read%u ok=%u data=%08X %08X %08X",
-			(unsigned)i, (unsigned)ok, probe[0], probe[1], probe[2]);
+	if (!sd_storage) sd_storage = new SdCardStorage(SDCard1);
+	uni::FilesysFAT* fs = new uni::FilesysFAT(0, *sd_storage, sd_sec_buf, sd_fat_buf);
+	{
+		MutexLocal guard(&sd_lock);
+		sd_fs = fs;
 	}
-	// fat_type 0 = auto detect. loadfs() reads LBA 0 as the boot sector, so this
-	// covers cards that carry the FAT boot sector directly, without a partition table
-	uni::FilesysFAT* fs = new uni::FilesysFAT(0, SDCard1, sec_buf, fat_buf);
-	ploginfo("[SD] loadfs ...");
+	SdCardOnline(true);
 	if (fs->loadfs()) {
 		fs->allow_allocate = true;
 		if (Filesys::MountFilesys(fs, &fs_fat, "/mnt/sd0.0")) {
+			sd_mounted = true;
 			ploginfo("[SD] mounted FAT%u at /mnt/sd0.0, units=%u block=%u",
 				(unsigned)fs->fat_type, SDCard1.getUnits(), SDCard1.Block_Size);
-			return;
+			return true;
 		}
 		plogerro("[SD] MountFilesys failed");
-		return;
 	}
-	plogerro("[SD] loadfs err=%u units=%u lba0=%08X %08X %08X %08X %08X",
-		(unsigned)fs->error_number, SDCard1.getUnits(), probe[0], probe[1], probe[2], probe[3], probe[4]);
+	else {
+		plogerro("[SD] loadfs err=%u units=%u", (unsigned)fs->error_number, SDCard1.getUnits());
+	}
+	SdCardOnline(false);
 	delete fs;
-	// partitioned cards: the generic probe walks the MBR partition table through
-	// the same card object
-	if (Filesys::Mount(SDCard1, 0, "/mnt/sd0.0")) {
-		ploginfo("[SD] mounted FAT at /mnt/sd0.0, units=%u", SDCard1.getUnits());
-		return;
+	{
+		MutexLocal guard(&sd_lock);
+		sd_fs = nullptr;
 	}
-	plogerro("[SD] no FAT filesystem to mount");
+	return false;
+}
+
+static stduint sd_last_work = 0;
+
+static void SdCardPoll(void*, ...) {
+	stduint now = tick;
+	if (!sd_last_work || (now - sd_last_work) >= CONFIG_SysTickFreq) {
+		sd_last_work = now;
+		if (sd_online) {
+			sd_offline_wait = 0;
+		}
+		else if (sd_offline_wait) {
+			--sd_offline_wait;
+		}
+		else if (!SdCardMount()) {
+			sd_offline_wait = SD_OFFLINE_WAIT;
+		}
+	}
+	sd_poll_armed = Systimex::AppendDeferredCallback(SD_POLL_INTERVAL, 0, (_tocall_ft)SdCardPoll);
+	if (!sd_poll_armed) plogerro("[SD] cannot re-arm the card polling");
 }
 
 void R_SDCARD_INIT() {
-	// register only: the bring-up itself runs in the Devsman service thread
-	if (!Systimex::AppendDeferredCallback(10, 0, &SdCardBringUp)) {
+	if (!Systimex::AppendDeferredCallback(10, 0, (_tocall_ft)SdCardPoll)) {
 		plogerro("[SD] cannot append the bring-up action");
 	}
 }

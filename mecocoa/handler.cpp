@@ -93,9 +93,23 @@ extern "C" void interrupt_dispatcher(stduint irq_id, NormalTaskContext* cxt) {
 
 // ARM: every IRQ shares one weak vector entry (startup.S), so dispatch by the exception number
 _ESYM_C void _default_report(stduint lr, stduint ipsr);
+_ESYM_C void SvcSyscallTrampoline();
 
 extern "C" void interrupt_dispatcher(stduint lr, stduint ipsr) {
 	const stduint exc_no = ipsr & 0x1FF;
+	if (exc_no == 11) {// SVCall: the caller r0..r3 hold the call id and its arguments
+		if (!(lr & 0x4)) {// a handler-mode SVC keeps its frame on the MSP, which is not supported
+			_default_report(lr, ipsr);
+			return;
+		}
+		stduint psp = 0;
+		_ASM volatile("mrs %0, psp" : "=r"(psp));
+		stduint* frame = (stduint*)psp;
+		frame[4] = frame[5];// r12 carries the caller LR into the trampoline
+		frame[5] = frame[6];// the trampoline returns through the interrupted PC
+		frame[6] = _IMM(SvcSyscallTrampoline) | 1;
+		return;
+	}
 	if (exc_no >= 16) {// 16 and above are the NVIC lines, the IRQ id is the line number
 		const stduint irq_id = exc_no - 16;
 		if (irq_id < 256 && interrupt_vector_handlers[irq_id]) {

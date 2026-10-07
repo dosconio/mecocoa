@@ -517,9 +517,19 @@ bool Memory::initialize(stduint eax, byte* ebx) {
 	// paging
 	#if _MCCA == 0x8664
 	kernel_paging.Reset();
-	kernel_paging.Map(0x00000000, 0x00000000, 0x100000000ULL * 16,
+	auto mapping_range0_top = 0x100000000ULL * 16;
+	kernel_paging.Map(0x00000000, 0x00000000, mapping_range0_top,
 		PAGESIZE_2MB, PGPROP_present | PGPROP_writable
 	);// pgsize 30 may be bad for Bochs; QEMU need map many times of 4G
+	const auto mapping_video = _IMM(uefi_data.frame_buffer_config.frame_buffer);
+	if (mapping_video +
+		uefi_data.frame_buffer_config.pixels_per_scan_line *
+		uefi_data.frame_buffer_config.vertical_resolution >= mapping_range0_top) {
+		kernel_paging.Map(mapping_video, mapping_video,
+			ceilAlign(_IMM1S(PAGESIZE_2MB), uefi_data.frame_buffer_config.pixels_per_scan_line *
+				uefi_data.frame_buffer_config.vertical_resolution), PAGESIZE_2MB, PGPROP_present | PGPROP_writable
+		);
+	}
 	kernel_paging.Map(0x0000FFFFC0000000ull, // 0xFFFFFFFFC0000000ull,
 		0x0000000000000000ull,
 		0x40000000ull - _IMM1S(PAGESIZE_2MB),

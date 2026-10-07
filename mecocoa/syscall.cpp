@@ -9,6 +9,11 @@
 #include <c/driver/keyboard.h>
 #include <c/proctrl/IAx86_64.msr.h>
 
+#if !CONFIG_ENABLE_MMU
+#undef mglb
+#define mglb(x) _IMM(x)// the syscall table holds handler addresses as plain numbers
+#endif
+
 #define DEFSYSC extern "C" stdsint
 
 // Kernel Signal Functions
@@ -54,6 +59,9 @@ void Syscall::Initialize() {
 	setMSR(x86MSR::GS_BASE, percore_addr);
 	setMSR(x86MSR::KERNEL_GS_BASE, 0);
 
+	#elif (_MCCA & 0xFFFF) == 0x2032
+	NVIC.setPriority(IRQ_SVCall, 15);// the SVCall vector is fixed, only its priority is set here
+
 	#endif
 }
 
@@ -61,9 +69,11 @@ void Syscall::Initialize() {
 bool IsPwcall(syscall_t callid);
 stdsint HandlePwcall(syscall_t callid, stduint p1, stduint p2, stduint p3);
 
-#if (_MCCA & 0xFF00) == 0x8600 || (_MCCA & 0xFF00) == 0x1000
+#if (_MCCA & 0xFF00) == 0x8600 || (_MCCA & 0xFF00) == 0x1000 || (_MCCA & 0xFFFF) == 0x2032
 
+#if (_MCCA & 0xFF00) == 0x8600 || (_MCCA & 0xFF00) == 0x1000
 __attribute__((optimize("O0")))
+#endif
 stduint syscall(syscall_t callid, stduint para1, stduint para2, stduint para3) {
 	stduint ret;
 	#if   (_MCCA & 0xFF00) == 0x8600
@@ -89,6 +99,13 @@ stduint syscall(syscall_t callid, stduint para1, stduint para2, stduint para3) {
 	th->context.a2 = para3;
 	syscall_body(&th->context);
 	ret = th->context.a0;
+
+	#elif (_MCCA & 0xFFFF) == 0x2032
+	if (_IMM(callid) >= numsof(SYSCALL_TABLE) || !SYSCALL_TABLE[_IMM(callid)]) {
+		plogerro("syscall: callid %u is not built for ARM", _IMM(callid));
+		return ~_IMM0;
+	}
+	ret = reinterpret_cast<stdsint(*)(stduint, stduint, stduint)>(SYSCALL_TABLE[_IMM(callid)])(para1, para2, para3);
 	#endif
 	return ret;
 }
@@ -108,11 +125,15 @@ DEFSYSC sysc_OUTC(stduint ch, stduint len) {
 			else while (len) {
 				stduint crt_len = 0x1000 - (ch & 0xFFF);
 				if (len < crt_len) crt_len = len;
+				#if CONFIG_ENABLE_MMU
 				auto pa = mglb(pid->paging[ch]);
 				if (_IMM(pa) == ~_IMM0) {
 					plogerro("OUTC");
 					return -1;
 				}
+				#else
+				auto pa = (void*)(stduint)ch;// without an MMU the user address is the physical one
+				#endif
 				con->out((rostr)pa, crt_len);
 				ch += crt_len;
 				len -= crt_len;
@@ -148,6 +169,8 @@ DEFSYSC sysc_INNC(stduint blocked) {
 	}
 	return ret;
 }
+
+#endif
 
 DEFSYSC sysc_EXIT(stduint code) {
 	// IC.enInterrupt(false);
@@ -187,6 +210,8 @@ DEFSYSC sysc_TIME(stduint unit) {
 		return -1;
 	}
 }
+
+#if (_MCCA & 0xFF00) == 0x8600 || (_MCCA & 0xFF00) == 0x1000 || (_MCCA & 0xFFFF) == 0x2032
 
 DEFSYSC sysc_REST(stduint unit, stduint time) {
 	if (time == 0) {
@@ -234,7 +259,7 @@ DEFSYSC sysc_COMM(stduint op, stduint to, stduint msg) {
 	// ploginfo("sysc_COMM:[th%u] op = %x, to = %x, msg = %x", th->getID(), op, to, msg);
 	if (op & (COMM_SEND | COMM_SEND_ASYNC)) { // SEND or ASYNC_SEND
 		// ploginfo("%d --> %d: 0x%[x]", pb->getID(), to, msg);
-		if (ret = msg_send(th, to, (CommMsg*)msg, msg_in_kernel, (op & COMM_SEND_ASYNC) != 0)) return ret;
+		if ((ret = msg_send(th, to, (CommMsg*)msg, msg_in_kernel, (op & COMM_SEND_ASYNC) != 0))) return ret;
 	}
 	if (op & COMM_RECV) { // RECV
 		// if (to && to != ~_IMM0) ploginfo("%d <-- %d", pb->getID(), to);
@@ -280,10 +305,14 @@ DEFSYSC sysc_MANA(stduint func, stduint arg1, stduint arg2) {
 	switch (func)
 	{
 	case 0:// shutdown
+		#if (_MCCA & 0xFF00) == 0x8600 || (_MCCA & 0xFF00) == 0x1000
 		Coreman::Shutdown();
+		#endif
 		break;
 	case 1:// reboot
+		#if (_MCCA & 0xFF00) == 0x8600 || (_MCCA & 0xFF00) == 0x1000
 		Coreman::Reboot();
+		#endif
 		break;
 
 	default:
@@ -1196,9 +1225,15 @@ DEFSYSC sysc_DBUG(stduint func) {
 
 DEFSYSC sysc_SIGA(stduint sig, stduint act, stduint oact) {
 	auto pb = Taskman::CurrentPB();
-	
+	(void)pb;
+
+	#if CONFIG_ENABLE_MMU
 	stduint phys_act = act ? (stduint)pb->paging[act] : 0;
 	stduint phys_oact = oact ? (stduint)pb->paging[oact] : 0;
+	#else
+	stduint phys_act = act;// without an MMU the user address is the physical one
+	stduint phys_oact = oact;
+	#endif
 	
 	const struct _POSIX_sigaction* p_act = act ? (const struct _POSIX_sigaction*)(phys_act) : nullptr;
 	struct _POSIX_sigaction* p_oact = oact ? (struct _POSIX_sigaction*)(phys_oact) : nullptr;
@@ -1215,6 +1250,7 @@ DEFSYSC sysc_KILL(stduint pid, stduint sig, stduint tid) {
 	return (stdsint)sys_kill(pid, (int)sig, tid);
 }
 
+#if CONFIG_ENABLE_MMU
 DEFSYSC sysc_MMAP(stduint len, stduint flag, stduint fd) {
 	ThreadBlock* th = Taskman::CurrentTB();
 	ProcessBlock* pb = th->parent_process;
@@ -1246,7 +1282,14 @@ DEFSYSC sysc_MMAP(stduint len, stduint flag, stduint fd) {
 	pb->vmas.Append(vma);
 	return addr;
 }
+#else
+DEFSYSC sysc_MMAP(stduint len, stduint flag, stduint fd) {
+	(void)len; (void)flag; (void)fd;
+	return ~_IMM0;// no MMU: nothing to map
+}
+#endif
 
+#if CONFIG_ENABLE_MMU
 DEFSYSC sysc_UMAP(stduint addr, stduint len) {
 	if ((addr & 0xFFF) || (len & 0xFFF)) {
 		return ~_IMM0; // Address and length must be 4KB aligned
@@ -1344,9 +1387,15 @@ DEFSYSC sysc_UMAP(stduint addr, stduint len) {
 	}
 	return len;
 }
+#else
+DEFSYSC sysc_UMAP(stduint addr, stduint len) {
+	(void)addr; (void)len;
+	return ~_IMM0;// no MMU: nothing to unmap
+}
+#endif
 
 
-#if (_MCCA & 0xFF00) == 0x8600 || (_MCCA & 0xFF00) == 0x1000
+#if (_MCCA & 0xFF00) == 0x8600 || (_MCCA & 0xFF00) == 0x1000 || (_MCCA & 0xFFFF) == 0x2032
 stduint SYSCALL_TABLE[] = {
 	mglb(sysc_OUTC),
 	mglb(sysc_INNC),
