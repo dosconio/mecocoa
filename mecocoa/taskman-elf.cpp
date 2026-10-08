@@ -451,8 +451,7 @@ ProcessBlock* Taskman::CreateELF(BlockTrait* source, byte ring) {
 	tb->priority = (ring != RING_M) ? 4 : 0;
 	tb->time_slice = (ring != RING_M) ? 3 : 4;
 	return pb;
-	#elif (_MCCA & 0xFFFF) == 0x2032
-	#if !CONFIG_ENABLE_MMU
+	#elif !CONFIG_ENABLE_MMU
 	// NoMMU: one contiguous flat region holds the whole image, relocations are applied in place
 	String block_buffer(String::Charset::Memory, 512);
 	struct ELF_Header_t header;
@@ -516,7 +515,6 @@ ProcessBlock* Taskman::CreateELF(BlockTrait* source, byte ring) {
 	pb->load_slices[0].length = image_span;
 	ploginfo("[ELF] flat base=%[x] span=%u entry=%[x]", load_bias, image_span, load_bias + header.e_entry);
 	return pb;
-	#endif
 	return pb;
 	#endif
 	return nullptr;

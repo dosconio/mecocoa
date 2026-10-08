@@ -782,7 +782,7 @@ void serv_file_loop()// for IDE 0:0, 0:1
 			Consman_InitializeFreeType();
 			ProcessBlock* init_p = Taskman::CreateFile(("/md0/init"), RING_U, Task_Kernel);
 			if (init_p) {
-				init_p->main_thread->name = "init";
+				init_p->main_thread->name.reset(StrHeap("init"));
 				{
 					auto focus_tty = init_p->focus_tty.Lock();
 					*focus_tty = vttys[0];
@@ -807,14 +807,14 @@ void serv_file_loop()// for IDE 0:0, 0:1
 			if (!ribbon) {
 				plogwarn("[Fileman] Failed to start ribbon.");
 			}
-			else ribbon->main_thread->name = "ribbon";
+			else ribbon->main_thread->name.reset(StrHeap("ribbon"));
 			Taskman::Append(ribbon);
 			Taskman::AppendThread(ribbon->main_thread);
 
 			//{TORM}
 			ploginfo("Loading first Shell...");
 			ProcessBlock* shell_p = Taskman::Create((void*)&serv_shell_process, RING_M);
-			if (shell_p) shell_p->main_thread->name = "shell";
+			if (shell_p) shell_p->main_thread->name.reset(StrHeap("shell"));
 			ploginfo("Create new shell-form: pid%u", shell_p ? shell_p->pid : 0);
 			#else
 			Bcons_EnsureCot(0);

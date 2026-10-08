@@ -21,7 +21,7 @@ InterruptControl IC = { mglb(0x800) };
 #elif (_MCCA & 0xFF00) == 0x1000
 _ESYM_C Handler_t trap_vector[];
 InterruptControl IC = { _IMM(trap_vector) };
-#elif _MCCA == 0x1A072032
+#elif defined(_ARCH_ARM_ProfileM)
 _ESYM_C Handler_t __Vectors[];
 InterruptControl IC = { _IMM(__Vectors) };
 #endif
@@ -89,7 +89,7 @@ extern "C" void interrupt_dispatcher(stduint irq_id, NormalTaskContext* cxt) {
 		}
 	}
 }
-#elif (_MCCA & 0xFFFF) == 0x2032
+#elif defined(_ARCH_ARM_ProfileM)
 
 // ARM: every IRQ shares one weak vector entry (startup.S), so dispatch by the exception number
 _ESYM_C void _default_report(stduint lr, stduint ipsr);

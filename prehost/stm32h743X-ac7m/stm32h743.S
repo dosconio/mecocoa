@@ -84,6 +84,8 @@ PendSV_LRReady
 	STMIA	R2, {R4-R11}	; ctx->R4-R11, R0-R3 and R12 stay in the hardware frame
 	STR	R0, [R1, #0x34]	; ctx->sp
 	STR	LR, [R1, #0x38]	; ctx->exc_return (bit4 tells whether the frame carries FP)
+	MRS	R0, MSP
+	STR	R0, [R1, #0x4C]	; ctx->SP_svc: this task's handler stack
 	MRS	R2, CONTROL
 	AND	R2, R2, #0x1	; ctx->CONTROL: nPRIV only, SPSEL and FPCA belong to the exception entry/return
 	STR	R2, [R1, #0x48]
@@ -105,6 +107,8 @@ PendSV_LRReady
 	LDR	R3, [R0, #0x1A0]
 	VMSR	FPSCR, R3
 	MSR	PSP, R1
+	LDR	R1, [R0, #0x4C]	; this task's handler stack
+	MSR	MSP, R1
 	LDR	R3, [R0, #0x48]	; ctx->CONTROL: apply nPRIV, the stack and FPCA follow EXC_RETURN
 	AND	R3, R3, #0x1
 	MRS	R2, CONTROL

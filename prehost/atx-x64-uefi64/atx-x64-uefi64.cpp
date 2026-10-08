@@ -15,6 +15,18 @@ UefiData uefi_data;
 
 extern OstreamTrait* con0_out;
 
+// TEMP BEG
+#ifdef _UEFI
+#ifndef _UEFI_AUFDBG
+inline static void ScreenLogAttach() {}
+inline static void ScreenLogToLayer() {}
+#else
+extern "C" void ScreenLogAttach();
+extern "C" void ScreenLogToLayer();
+#endif
+#endif
+// TEMP END
+
 
 // ---- Kernel
 
@@ -32,7 +44,9 @@ void mecocoa(const UefiData& uefi_data_ref)
 	UART_t com1;
 	con0_out = &com1;
 	if (!Memory::initialize('UEFI', (byte*)(&uefi_data.memory_map))) HALT();
+	ScreenLogAttach();	// TEMP
 	Consman::Initialize();
+	ScreenLogToLayer();// TEMP
 	//{} Cache_t::enAble();
 	Filesys::Initialize();
 	Systime::Initialize();

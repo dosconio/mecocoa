@@ -229,9 +229,9 @@ void Taskman::Initialize(stduint cpuid) {
 	#if (_MCCA & 0xFF00) == 0x8600
 	SetPercoreFore(cpuid);
 	#endif// (_MCCA & 0xFF00) == 0x8600
-	#if (_MCCA & 0xFFFF) == 0x2032
+	#if defined(_ARCH_ARM_ProfileM)
 	PCU_CORES = 1;// single core
-	#endif// (_MCCA & 0xFFFF) == 0x2032
+	#endif// defined(_ARCH_ARM_ProfileM)
 
 	// register kernel as pid 0
 	auto kernel_task = AllocateTask();
@@ -286,7 +286,7 @@ void Taskman::Initialize(stduint cpuid) {
 	#endif
 	kernel_thread->priority = 12;
 	kernel_thread->time_slice = 4;
-	kernel_thread->name = "kernel";
+	kernel_thread->name.reset(StrHeap("kernel"));
 	*kernel_task->focus_tty.Lock() = vttys[0];
 	Taskman::AppendThread(kernel_thread);
 
@@ -370,19 +370,20 @@ ProcessBlock* Taskman::Create(void* entry, byte ring, bool append)
 		_TODO// Paging
 	}
 
-	#elif (_MCCA & 0xFFFF) == 0x2032
+	#elif defined(_ARCH_ARM_ProfileM)
 	tb->stack_size = DEFAULT_STACK_SIZE;
 	tb->stack_lineaddr = (byte*)mempool.allocate(tb->stack_size, 12);
-	tb->stack_levladdr = tb->stack_lineaddr;
+	tb->stack_levladdr = (byte*)mempool.allocate(tb->stack_size, 12);// handler stack, kept off the user stack
 	*(stduint*)tb->stack_lineaddr = 0xDEADBEEF;// stack canary
 	auto& ctx = tb->context;
 	// The first exception return pops this frame from PSP, see stm32h743.S
-	stduint* frame = (stduint*)((_IMM(tb->stack_levladdr) + tb->stack_size - 0x20) & ~_IMM(7));
+	stduint* frame = (stduint*)((_IMM(tb->stack_lineaddr) + tb->stack_size - 0x20) & ~_IMM(7));
 	frame[0] = frame[1] = frame[2] = frame[3] = frame[4] = frame[5] = 0;// R0-R3, R12, LR
 	frame[6] = _IMM(entry);// PC
 	frame[7] = 0x01000000;// xPSR: T bit set
 	ctx.sp = _IMM(frame);
 	ctx.exc_return = 0xFFFFFFFD;// thread mode using PSP
+	ctx.SP_svc = _IMM(tb->stack_levladdr) + tb->stack_size;// this task's MSP, see stm32h743.S
 
 	#endif
 

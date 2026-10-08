@@ -77,6 +77,7 @@ Format $board-architecture(-mode)$
 
 * (MAGIC) ARM
 	* Cortex-A occupy 0x100020nn~0x199920nn
+	* Cortex-M is 0x1Ann20nn
 	* Cortex-R is 0x1Bnn20nn
 * (ISA) x86&64 modes: real16 <=> flap32 <=> long64, uefi64. No IA-64
 * (board) aTX for IBM, ATX, ITX ...

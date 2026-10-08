@@ -616,7 +616,7 @@ void dump_threads(OstreamTrait& com1) {
 		str[5].Format("%u", _IMM(th->block_reason));
 
 		com1.OutFormat("           %s %s %s %s %s %s %s\n\r",
-			th->name, str[0].reference(), str[1].reference(), str[2].reference(), str[3].reference(),
+			th->name.get(), str[0].reference(), str[1].reference(), str[2].reference(), str[3].reference(),
 			str[4].reference(), str[5].reference());
 	}
 }
@@ -820,8 +820,8 @@ void dump_lock(OstreamTrait& com1) {
 		// Align name
 		stduint name_len = 0;
 		if (pb->main_thread && pb->main_thread->name) {
-			com1.OutFormat("%s", pb->main_thread->name);
-			while (pb->main_thread->name[name_len]) name_len++;
+			com1.OutFormat("%s", pb->main_thread->name.get());
+			while (pb->main_thread->name.get()[name_len]) name_len++;
 		} else {
 			com1.OutFormat("(unknown)");
 			name_len = 9;

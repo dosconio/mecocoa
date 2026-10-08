@@ -267,6 +267,7 @@ void Taskman::DestroyThread(ThreadBlock* th) {
 		#endif
 		free((byte*)th->stack_levladdr);
 	}
+	th->~ThreadBlock();
 	free((byte*)th);
 }
 

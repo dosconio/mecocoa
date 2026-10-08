@@ -46,5 +46,5 @@ physical
 
 ```
 b64-x64 uefi-天选2
-b32-arm STM32H743
+b32-arm STM32H743 (no-mmu)
 ```

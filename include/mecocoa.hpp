@@ -46,11 +46,19 @@
 #define _GUI_ENABLE 0
 #endif
 
+// _MCCA MAGIC byte3: 0x10..0x19 Cortex-A, 0x1A Cortex-M, 0x1B Cortex-R, 0x00 means no MAGIC
+#if defined(_MCCA) && ((_MCCA >> 24) == 0x1A)
+	#define _ARCH_ARM_ProfileM
+#elif defined(_MCCA) && ((_MCCA >> 24) >= 0x10) && ((_MCCA >> 24) <= 0x1B)
+	#define _ARCH_ARM_ProfileA
+#endif
+
 #if 1
 #define KASSERT(x) do { if (!(x)) plogerro("assert: %s", #x); } while (0)
 #else
 #define KASSERT(x) ((void)0)
 #endif
+#define _UEFI_AUFDBG
 
 //
 

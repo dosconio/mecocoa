@@ -97,6 +97,7 @@ stdsint Taskman::CreateThread(ProcessBlock* pb, stduint entry, stduint arg, stdu
 	stduint call_sp = (stack_top & ~_IMM(0xFul)) - sizeof(stduint);
 	if (!ensure_user_stack_page(call_sp)) {
 		plogerro("[TNEW] prefault failed at synthetic call_sp %[x]", call_sp);
+		tb->~ThreadBlock();
 		free((byte*)tb);
 		return -1;
 	}
@@ -142,6 +143,7 @@ stdsint Taskman::CreateThread(ProcessBlock* pb, stduint entry, stduint arg, stdu
 	tb->stack_lineaddr = nullptr; // user-space stack is owned by user library
 	tb->stack_levladdr = (byte*)mempool.allocate(tb->stack_size, 12);
 	if (!tb->stack_levladdr) {
+		tb->~ThreadBlock();
 		free((byte*)tb);
 		return -1;
 	}

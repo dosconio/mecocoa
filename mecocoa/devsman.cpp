@@ -1403,7 +1403,7 @@ namespace {
 				break;
 			}
 		}
-		task->main_thread->name = StrHeap(driver_task_name[0] ? driver_task_name : record.name);
+		task->main_thread->name.reset(StrHeap(driver_task_name[0] ? driver_task_name : record.name));
 		{
 			auto focus_tty = task->focus_tty.Lock();
 			*focus_tty = vttys[0];

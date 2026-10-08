@@ -16,6 +16,8 @@
 #include "syscall.hpp"
 #include "taskman.com.hpp"
 #include <c/ISO_IEC_STD/signal.h>
+#include <c/system/memory.h>
+#include <cpp/ISO_IEC_STD/memory>
 
 namespace uni { struct PipeChannel; }
 
@@ -359,6 +361,11 @@ struct DeviceEventQueue {
 	}
 };
 
+// Releases text built with StrHeap; the thread name below is its only owner
+struct MemFreeDeleter {
+	void operator()(char* ptr) const { memf(ptr); }
+};
+
 class ThreadBlock {
 public:
     alignas(16) NormalTaskContext context;// advanced TSS_t
@@ -375,7 +382,7 @@ public:
 	sint8 priority = 0; // -16..-1 (Realtime RT) and 0..15 (Timeslice)
 	uint8 time_slice = 0; // execution time left for timeslice mode
 	bool is_expired = false; // true if task has expended its timeslice in the current epoch
-	rostr name = 0;// kernel area {TODO} un-released
+	uni::UniquePtr<char, MemFreeDeleter> name;
 public _Comment(State):
 	enum class State : byte {
 		Running = 0,

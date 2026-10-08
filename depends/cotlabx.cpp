@@ -11,6 +11,7 @@ extern "C" stduint sys_kill(stduint pid, int sig, stduint tid);
 void _Comment(R1) serv_shell_process() {
 	uni::Dnode* tty_target = 0;
 	::uni::Witch::Form* pf_ptr = nullptr;
+	uni::VideoConsole2* pcon = nullptr;
 	ProcessBlock* p = nullptr;
 
 	if (Consman::ento_gui) {
@@ -21,6 +22,10 @@ void _Comment(R1) serv_shell_process() {
 		syssend(Task_ConsoleVideo, vcon_args, sizeof(vcon_args), _IMM(GraphicMsg::VCON_CREATE));
 		sysrecv(Task_ConsoleVideo, &vcon_ret, sizeof(vcon_ret));
 		pf_ptr = vcon_ret.pform;
+		pcon = vcon_ret.pcon;
+		if (pf_ptr) {
+			pf_ptr->EnableMaximizeBox();
+		}
 		tty_target = vcon_ret.tty_node;
 		p = Taskman::CreateFile(("/md0/cot"), RING_U, Taskman::CurrentPID());
 	}
@@ -151,6 +156,15 @@ void _Comment(R1) serv_shell_process() {
 						syssend(Task_ConsoleVideo, args, sizeof(args), _IMM(GraphicMsg::FMIN));
 						stduint ret = 0;
 						sysrecv(Task_ConsoleVideo, &ret, sizeof(ret));
+					}
+				}
+				else if (smsg.event == SheetEvent::onResize) {
+					if (pcon && pf_ptr) {
+						int cw = pf_ptr->sheet_area.width > 6 ? pf_ptr->sheet_area.width - 6 : 0;
+						int ch = pf_ptr->sheet_area.height > 24 ? pf_ptr->sheet_area.height - 24 : 0;
+						Rectangle new_win(Point(2, 2), Size2(cw, ch));
+						pcon->Reconfigure(nullptr, pf_ptr->getClientSheet(), new_win);
+						pf_ptr->getClientSheet().Update(pcon, new_win);
 					}
 				}
 			}

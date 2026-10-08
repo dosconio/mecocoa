@@ -59,7 +59,7 @@ void Syscall::Initialize() {
 	setMSR(x86MSR::GS_BASE, percore_addr);
 	setMSR(x86MSR::KERNEL_GS_BASE, 0);
 
-	#elif (_MCCA & 0xFFFF) == 0x2032
+	#elif defined(_ARCH_ARM_ProfileM)
 	NVIC.setPriority(IRQ_SVCall, 15);// the SVCall vector is fixed, only its priority is set here
 
 	#endif
@@ -69,7 +69,7 @@ void Syscall::Initialize() {
 bool IsPwcall(syscall_t callid);
 stdsint HandlePwcall(syscall_t callid, stduint p1, stduint p2, stduint p3);
 
-#if (_MCCA & 0xFF00) == 0x8600 || (_MCCA & 0xFF00) == 0x1000 || (_MCCA & 0xFFFF) == 0x2032
+#if (_MCCA & 0xFF00) == 0x8600 || (_MCCA & 0xFF00) == 0x1000 || defined(_ARCH_ARM_ProfileM)
 
 #if (_MCCA & 0xFF00) == 0x8600 || (_MCCA & 0xFF00) == 0x1000
 __attribute__((optimize("O0")))
@@ -100,7 +100,7 @@ stduint syscall(syscall_t callid, stduint para1, stduint para2, stduint para3) {
 	syscall_body(&th->context);
 	ret = th->context.a0;
 
-	#elif (_MCCA & 0xFFFF) == 0x2032
+	#elif defined(_ARCH_ARM_ProfileM)
 	if (_IMM(callid) >= numsof(SYSCALL_TABLE) || !SYSCALL_TABLE[_IMM(callid)]) {
 		plogerro("syscall: callid %u is not built for ARM", _IMM(callid));
 		return ~_IMM0;
@@ -211,7 +211,7 @@ DEFSYSC sysc_TIME(stduint unit) {
 	}
 }
 
-#if (_MCCA & 0xFF00) == 0x8600 || (_MCCA & 0xFF00) == 0x1000 || (_MCCA & 0xFFFF) == 0x2032
+#if (_MCCA & 0xFF00) == 0x8600 || (_MCCA & 0xFF00) == 0x1000 || defined(_ARCH_ARM_ProfileM)
 
 DEFSYSC sysc_REST(stduint unit, stduint time) {
 	if (time == 0) {
@@ -1423,7 +1423,7 @@ DEFSYSC sysc_UMAP(stduint addr, stduint len) {
 #endif
 
 
-#if (_MCCA & 0xFF00) == 0x8600 || (_MCCA & 0xFF00) == 0x1000 || (_MCCA & 0xFFFF) == 0x2032
+#if (_MCCA & 0xFF00) == 0x8600 || (_MCCA & 0xFF00) == 0x1000 || defined(_ARCH_ARM_ProfileM)
 stduint SYSCALL_TABLE[] = {
 	mglb(sysc_OUTC),
 	mglb(sysc_INNC),
