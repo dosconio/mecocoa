@@ -525,7 +525,13 @@ static void _Exit_Cleanup(stduint pid)
 		ppb->load_slices[i].length = 0;
 	}
 	#else
-	#warning TODO nommu
+	// NoMMU: the whole image came from one mempool block, release it as a whole
+	for0a(i, ppb->load_slices) {
+		if (!ppb->load_slices[i].length) continue;
+		mempool.deallocate((void*)ppb->load_slices[i].address, ppb->load_slices[i].length);
+		ppb->load_slices[i].address = 0;
+		ppb->load_slices[i].length = 0;
+	}
 	#endif
 	// Heap
 	if (1) {
@@ -880,7 +886,7 @@ stdsint Taskman::Wait(ProcessBlock* pb, stduint target_pid)
 
 
 //// ---- ---- SERVICE ---- ---- ////
-#if (_MCCA & 0xFF00) == 0x8600 || (_MCCA & 0xFF00) == 0x1000
+#if (_MCCA & 0xFF00) == 0x8600 || (_MCCA & 0xFF00) == 0x1000 || (_MCCA & 0xFFFF) == 0x2032
 #if _MCCA == 0x8600
 __attribute__((optimize("O0")))
 #endif
@@ -904,6 +910,7 @@ void _Comment(R0) serv_task_loop()
 			}
 			Taskman::Exit(Taskman::Locate(to_args[0]), to_args[1]);
 			break;
+			#if CONFIG_ENABLE_MMU // NoMMU keeps the exit-only behaviour
 		case TaskmanMsg::FORK: // (pid, cframe)
 			// ploginfo("Taskman fork: %u", to_args[0]);
 			if (1) {
@@ -928,6 +935,7 @@ void _Comment(R0) serv_task_loop()
 				syssend_async(sig_src, (void*)&ret, sizeof(ret));
 			}
 			break;
+			#endif
 
 		default:
 			plogerro("Bad TYPE %u in %s %s", sig_type, __FILE__, __FUNCIDEN__);
@@ -969,31 +977,4 @@ extern "C" void* kernel_prefault_page(ProcessBlock* pb, stduint addr) {
 	return nullptr;
 }
 #endif
-
-#elif (_MCCA & 0xFF00) == 0x2000// TEMP TEMP TEMP
-
-void _Comment(R0) serv_task_loop()
-{
-	volatile stduint to_args[8] = {};// 8*4=32 bytes
-	volatile stduint sig_type = 0, sig_src = 0, ret = 0;
-	ProcessBlock* pb;
-	ploginfo("Taskman Service Start");
-	while (true) {
-		switch (static_cast<TaskmanMsg>(sig_type))
-		{
-		case TaskmanMsg::TEST:
-			// Nothing
-			break;
-
-
-		default:
-			plogerro("Bad TYPE %u in %s %s", sig_type, __FILE__, __FUNCIDEN__);
-			break;
-		}
-		// plogwarn("TRY TO");
-		sysrecv(ANYPROC, (void*)to_args, byteof(to_args), (stduint*)&sig_type, (stduint*)&sig_src);
-		// ploginfo("Taskman recv: %u %u", sig_type, sig_src);
-	}
-}
-
 #endif

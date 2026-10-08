@@ -4,7 +4,12 @@
 #include "../../depends/desktop.hpp"
 #include "_openedv/RGB-LCD.hpp"
 
-extern "C" char _IDN_BOARD[16] {"STM32H743IIT6"};
+/*
+make -f accmlib/accma32.clang.make all
+make -f subapps/Makefile.clang.a32 all
+*/
+
+extern "C" char _IDN_BOARD[16]{ "STM32H743IIT6" };
 
 _ESYM_C void mecocoa();
 extern OstreamTrait* con0_out;
@@ -69,19 +74,29 @@ _ESYM_C void _default_report(stduint lr, stduint ipsr) {
 static stduint _user_sd_tries = 0;
 
 static void _user_load_from_sd(void*, ...) {
-	vfs_dentry* d = Filesys::Index("/mnt/sd0.0/userled.elf");
+	vfs_dentry* d = Filesys::Index("/mnt/sd0.0/testpie");
 	if (!d || !d->d_inode) {
 		if (_user_sd_tries++ == 10) {
-			XART1.OutFormat("USER no userled.elf on /mnt/sd0.0, still waiting\r\n");
+			XART1.OutFormat("USER no elf on /mnt/sd0.0, still waiting\r\n");
 		}
 		Systimex::AppendDeferredCallback(CONFIG_SysTickFreq, 0, (_tocall_ft)_user_load_from_sd);
 		return;
 	}
 	stduint size = d->d_inode->i_size;
-	ProcessBlock* upb = Taskman::CreateFile("/mnt/sd0.0/userled.elf", RING_M, Task_Init);
+	ProcessBlock* upb = Taskman::CreateFile("/mnt/sd0.0/testpie", RING_M, Task_Init);
 	XART1.OutFormat("USER sd size=%u pb=%08X ccr=%08X\r\n",
 		(unsigned)size, (unsigned)_IMM(upb), (unsigned)_IMM(Reference(0xE000ED14)));// CCR bit16: D-Cache, bit17: I-Cache
 	if (!upb) erro("USER load fail");
+	{// give the user process its console and the three standard fds
+		auto focus_tty = upb->focus_tty.Lock();
+		*focus_tty = vttys.Root();
+		if (*focus_tty) {
+			upb->Open("/dev/tty", O_RDWR);
+			upb->Open("/dev/tty", O_RDWR);
+			upb->Open("/dev/tty", O_RDWR);
+		}
+		else plogerro("[USER] no virtual console to attach");
+	}
 }
 
 static stduint _svc_test(stduint callid, stduint arg) {
@@ -170,6 +185,8 @@ extern byte _BUF_cursor[byteof(Cursor)];
 #define LCD_FRAME_BUF_ADDR FMC_SDRAM_BANK1_BASE
 bool Consman::Initialize() {
 	new (&message_queue_conv) SpinlockBlock<uni::Queue<SysMessage>>(64);
+	// register the serial port as the first virtual TTY for /dev/tty
+	VTTY_Append(&XART1);
 	//
 	bool state = false;
 	// ltdc_init();
@@ -231,26 +248,16 @@ bool Consman::Initialize() {
 // stduint Taskman::getID() { return _TEMP 0; } // H743 only
 
 
-Dnode* VTTY_Append(Console_t* con) {return 0;}
-Mutex console_waiters_mutex;
-Dchain vttys = { 0 };
-
 extern "C" stduint sys_kill(stduint pid, int sig, stduint tid){return 0;}
 //DeviceNode* Devsman::Root(){return 0;}
 
 void CleanupPwcallThreadInterrupts(stduint tid){}
 void CleanupPwcallProcessHandles(stduint pid) {}
-void Consman::DispatchDeferredWake() {}
 extern "C" stduint sys_sigaction(int, const struct _POSIX_sigaction*, struct _POSIX_sigaction*){return ~_IMM0;}
 void sysinfo_classic(OstreamTrait& com1, byte func) {}
 
 void Coreman::Initialize() {}
 bool Virtman::Initialize() { return false; }
-
-void _Comment(R1) serv_cons_loop()
-{
-	loop {Taskman::Schedule(); HALT(); }
-}
 
 
 byte FILE_ENDO, FILE_ENTO;

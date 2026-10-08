@@ -517,7 +517,7 @@ bool Memory::initialize(stduint eax, byte* ebx) {
 	// paging
 	#if _MCCA == 0x8664
 	kernel_paging.Reset();
-	auto mapping_range0_top = 0x100000000ULL * 16;
+	auto mapping_range0_top = 0x100000000ULL * 0x800;// * 16;
 	kernel_paging.Map(0x00000000, 0x00000000, mapping_range0_top,
 		PAGESIZE_2MB, PGPROP_present | PGPROP_writable
 	);// pgsize 30 may be bad for Bochs; QEMU need map many times of 4G
@@ -560,7 +560,7 @@ bool Memory::initialize(stduint eax, byte* ebx) {
 		plogwarn("[MEM] Failed to reserve ISA DMA low pool (<16MB)");
 	}
 	#endif
-	mempool0.dump_available();
+	// mempool0.dump_available();
 
 	return true;
 }

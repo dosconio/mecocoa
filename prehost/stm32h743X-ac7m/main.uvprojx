@@ -436,6 +436,11 @@
               <FilePath>..\..\mecocoa\handler-tim.cpp</FilePath>
             </File>
             <File>
+              <FileName>console.cpp</FileName>
+              <FileType>8</FileType>
+              <FilePath>..\..\mecocoa\console.cpp</FilePath>
+            </File>
+            <File>
               <FileName>console-init.cpp</FileName>
               <FileType>8</FileType>
               <FilePath>..\..\mecocoa\console-init.cpp</FilePath>

@@ -868,6 +868,34 @@ DEFSYSC sysc_ROUT(stduint func, stduint p1, stduint p2) {
 		return -1;
 		#endif
 	}
+	case syscall_net_route_func_t::FaultGet: {
+		#if (_MCCA & 0xFF00) == 0x8600
+		syscall_net_fault_t state{};
+		if (p2 < sizeof(state)) return -1;
+		if (!Devsman::GetNetFault(&state, sizeof(state))) return -1;
+		MccaMemCopyP((void*)p1, pb, false, &state, nullptr, true, sizeof(state));
+		return 0;
+		#else
+		return -1;
+		#endif
+	}
+	case syscall_net_route_func_t::FaultSet: {
+		#if (_MCCA & 0xFF00) == 0x8600
+		syscall_net_fault_t config{};
+		if (p2 < sizeof(config)) return -1;
+		MccaMemCopyP(&config, nullptr, true, (void*)p1, pb, false, sizeof(config));
+		return Devsman::SetNetFault(&config, sizeof(config)) ? 0 : -1;
+		#else
+		return -1;
+		#endif
+	}
+	case syscall_net_route_func_t::FaultReset: {
+		#if (_MCCA & 0xFF00) == 0x8600
+		return Devsman::ResetNetFault() ? 0 : -1;
+		#else
+		return -1;
+		#endif
+	}
 	default:
 		return -1;
 	}

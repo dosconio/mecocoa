@@ -363,6 +363,9 @@ public:
 	static stduint TcpConnectionCount();
 	static bool GetTcpConnectionEntry(stduint index, void* entry, stduint length);
 	static bool GetNetStats(void* stats, stduint length);
+	static bool GetNetFault(void* state, stduint length);
+	static bool SetNetFault(const void* config, stduint length);
+	static bool ResetNetFault();
 	enum class NetSocketErrorSource : uint8 {
 		Icmp,
 		Reset,

@@ -10,6 +10,10 @@
 extern Spinlock scheduler_lock;
 #include "../include/filesys.hpp"
 
+#if !CONFIG_ENABLE_MMU
+#define MemCopyP(a,b,c,d,e) MemCopyN(a,c,e)
+#endif
+
 #if 1 // ---- ---- TTY ---- ----
 
 // vtty0: global_ground

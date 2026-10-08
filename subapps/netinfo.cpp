@@ -23,6 +23,8 @@ static void PrintUsage() {
 	printf("  dns clear: netinfo --dns-cache-clear [example.com]\n\r");
 	printf("  dns srv: netinfo --dns-server 10.0.2.1 [1.1.1.1 ...]|none\n\r");
 	printf("  dhcp: netinfo --dhcp-renew | --dhcp-release\n\r");
+	printf("  fault: netinfo --fault | --fault-off | --fault-reset\n\r");
+	printf("  fault set: netinfo --fault-set rx|tx|both any|arp|ipv4|icmp|udp|tcp dport drop duplicate reorder corrupt truncate [length] [delay] [start]\n\r");
 }
 
 static void PrintIPv4(const uint8 address[4]) {
@@ -34,6 +36,114 @@ static void PrintMac(const uint8 address[6]) {
 	printf("%[8H]:%[8H]:%[8H]:%[8H]:%[8H]:%[8H]",
 		(stduint)address[0], (stduint)address[1], (stduint)address[2],
 		(stduint)address[3], (stduint)address[4], (stduint)address[5]);
+}
+
+static bool ParseUInt32(const char* text, uint32& value) {
+	if (!text || !text[0]) return false;
+	value = 0;
+	for (stduint i = 0; text[i]; i++) {
+		if (text[i] < '0' || text[i] > '9') return false;
+		const uint32 digit = uint32(text[i] - '0');
+		if (value > (0xFFFFFFFFu - digit) / 10u) return false;
+		value = value * 10u + digit;
+	}
+	return true;
+}
+
+static const char* FaultDirectionName(uint32 flags) {
+	if (flags == (syscall_net_fault_rx | syscall_net_fault_tx)) return "both";
+	if (flags == syscall_net_fault_rx) return "rx";
+	if (flags == syscall_net_fault_tx) return "tx";
+	return "off";
+}
+
+static const char* FaultProtocolName(const syscall_net_fault_t& fault) {
+	if (fault.ether_type == 0x0806u) return "arp";
+	if (fault.ether_type == 0x0800u && fault.ipv4_protocol == 1u) return "icmp";
+	if (fault.ether_type == 0x0800u && fault.ipv4_protocol == 6u) return "tcp";
+	if (fault.ether_type == 0x0800u && fault.ipv4_protocol == 17u) return "udp";
+	if (fault.ether_type == 0x0800u) return "ipv4";
+	return "any";
+}
+
+static int PrintFaultState() {
+	syscall_net_fault_t fault{};
+	if (syscall(syscall_t::ROUT, stduint(syscall_net_route_func_t::FaultGet),
+		_IMM(&fault), sizeof(fault)) < 0) {
+		printf("netinfo: fault query failed\n\r");
+		return 1;
+	}
+	printf("netinfo: fault direction=%s protocol=%s ethertype=%u ipproto=%u sport=%u dport=%u\n\r",
+		FaultDirectionName(fault.flags), FaultProtocolName(fault),
+		(unsigned)fault.ether_type, (unsigned)fault.ipv4_protocol,
+		(unsigned)fault.source_port, (unsigned)fault.destination_port);
+	printf("netinfo: fault rules start=%u drop=%u duplicate=%u reorder=%u corrupt=%u truncate=%u length=%u delay=%u\n\r",
+		(unsigned)fault.start_after, (unsigned)fault.drop_every,
+		(unsigned)fault.duplicate_every, (unsigned)fault.reorder_every,
+		(unsigned)fault.corrupt_every, (unsigned)fault.truncate_every,
+		(unsigned)fault.truncate_length, (unsigned)fault.reorder_delay_ticks);
+	printf("netinfo: fault rx seen=%u dropped=%u duplicated=%u reordered=%u corrupted=%u truncated=%u held=%u\n\r",
+		(unsigned)fault.rx_seen, (unsigned)fault.rx_dropped,
+		(unsigned)fault.rx_duplicated, (unsigned)fault.rx_reordered,
+		(unsigned)fault.rx_corrupted, (unsigned)fault.rx_truncated,
+		(unsigned)fault.rx_held);
+	printf("netinfo: fault tx seen=%u dropped=%u duplicated=%u reordered=%u corrupted=%u truncated=%u held=%u\n\r",
+		(unsigned)fault.tx_seen, (unsigned)fault.tx_dropped,
+		(unsigned)fault.tx_duplicated, (unsigned)fault.tx_reordered,
+		(unsigned)fault.tx_corrupted, (unsigned)fault.tx_truncated,
+		(unsigned)fault.tx_held);
+	return 0;
+}
+
+static bool ParseFaultDirection(const char* text, uint32& flags) {
+	if (!StrCompare(text, "rx")) flags = syscall_net_fault_rx;
+	else if (!StrCompare(text, "tx")) flags = syscall_net_fault_tx;
+	else if (!StrCompare(text, "both")) flags = syscall_net_fault_rx | syscall_net_fault_tx;
+	else return false;
+	return true;
+}
+
+static bool ParseFaultProtocol(const char* text, syscall_net_fault_t& fault) {
+	if (!StrCompare(text, "any")) return true;
+	fault.ether_type = 0x0800u;
+	if (!StrCompare(text, "ipv4")) return true;
+	if (!StrCompare(text, "icmp")) fault.ipv4_protocol = 1;
+	else if (!StrCompare(text, "tcp")) fault.ipv4_protocol = 6;
+	else if (!StrCompare(text, "udp")) fault.ipv4_protocol = 17;
+	else if (!StrCompare(text, "arp")) {
+		fault.ether_type = 0x0806u;
+		fault.ipv4_protocol = 0;
+	}
+	else return false;
+	return true;
+}
+
+static int SetFaultState(int argc, char** argv) {
+	if (argc < 10 || argc > 13) return -1;
+	syscall_net_fault_t fault{};
+	if (!ParseFaultDirection(argv[2], fault.flags) || !ParseFaultProtocol(argv[3], fault)) return -1;
+	uint32 values[9]{};
+	for (int i = 4; i < argc; i++) {
+		if (!ParseUInt32(argv[i], values[i - 4])) return -1;
+	}
+	fault.destination_port = values[0];
+	fault.drop_every = values[1];
+	fault.duplicate_every = values[2];
+	fault.reorder_every = values[3];
+	fault.corrupt_every = values[4];
+	fault.truncate_every = values[5];
+	fault.truncate_length = argc > 10 ? values[6] : 0;
+	fault.reorder_delay_ticks = argc > 11 ? values[7] : (fault.reorder_every ? 1u : 0u);
+	fault.start_after = argc > 12 ? values[8] : 0;
+	if (fault.destination_port > 0xFFFFu) return -1;
+	if (fault.destination_port && fault.ipv4_protocol != 6u && fault.ipv4_protocol != 17u) return -1;
+	if (fault.truncate_every && !fault.truncate_length) return -1;
+	if (syscall(syscall_t::ROUT, stduint(syscall_net_route_func_t::FaultSet),
+		_IMM(&fault), sizeof(fault)) < 0) {
+		printf("netinfo: fault set failed\n\r");
+		return 1;
+	}
+	return PrintFaultState();
 }
 
 static const char* ConfigSourceName(uint16 source) {
@@ -680,6 +790,36 @@ int main(int argc, char** argv) {
 		!StrCompare(argv[1], "help"))) {
 		PrintUsage();
 		return 0;
+	}
+	if (argc == 2 && !StrCompare(argv[1], "--fault")) {
+		return PrintFaultState();
+	}
+	if (argc == 2 && !StrCompare(argv[1], "--fault-off")) {
+		syscall_net_fault_t fault{};
+		if (syscall(syscall_t::ROUT, stduint(syscall_net_route_func_t::FaultSet),
+			_IMM(&fault), sizeof(fault)) < 0) {
+			printf("netinfo: fault disable failed\n\r");
+			return 1;
+		}
+		printf("netinfo: fault disabled\n\r");
+		return 0;
+	}
+	if (argc == 2 && !StrCompare(argv[1], "--fault-reset")) {
+		if (stdsint(syscall(syscall_t::ROUT,
+			stduint(syscall_net_route_func_t::FaultReset), 1, 0)) < 0) {
+			printf("netinfo: fault reset failed\n\r");
+			return 1;
+		}
+		printf("netinfo: fault counters reset\n\r");
+		return PrintFaultState();
+	}
+	if (argc >= 2 && !StrCompare(argv[1], "--fault-set")) {
+		const int result = SetFaultState(argc, argv);
+		if (result < 0) {
+			PrintUsage();
+			return 1;
+		}
+		return result;
 	}
 	if (argc == 3 && !StrCompare(argv[1], "--dns")) {
 		return PrintDnsLookup(argv[2]);

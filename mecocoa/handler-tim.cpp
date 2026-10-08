@@ -264,10 +264,18 @@ void Systimex::DispatchExpired() {
 			(void)Taskman::UnblockThread(expired.target,
 				ThreadBlock::BlockReason::BR_Resting);
 			break;
-		case TimerAction::DriverMessage:
-			(void)syssend_async(expired.target, &expired.iden, sizeof(expired.iden),
-				expired.message_type);
+		case TimerAction::DriverMessage: {
+			if (!syssend_async(expired.target, &expired.iden, sizeof(expired.iden),
+				expired.message_type)) break;
+			expired.dispatch_attempts++;
+			if (expired.dispatch_attempts >= TimerDispatchAttemptLimit) {
+				plogerro("SysTimer: drop undeliverable driver message target=%u type=%u attempts=%u",
+					expired.target, expired.message_type, expired.dispatch_attempts);
+				break;
+			}
+			(void)AppendTimer(TimerDispatchRetryDelay, expired);
 			break;
+		}
 		default:
 			break;
 		}

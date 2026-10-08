@@ -68,6 +68,8 @@ enum class NetworkMsg {
 	DRV_SEND,// send one raw link frame
 	DRV_RECV,// receive one raw link frame
 	DRV_RX,// driver pushes one received raw link frame
+	TIMER_REFRESH,// network state changed; recompute the nearest deadline
+	TIMER_EXPIRED,// one-shot network timer expired
 };
 
 enum class KernelMsg : stduint {

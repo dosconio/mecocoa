@@ -234,6 +234,9 @@ enum class syscall_net_route_func_t : stduint {
 	DNSSetServer,
 	DNSGetServers,
 	IPv4ApplyConfig,
+	FaultGet,
+	FaultSet,
+	FaultReset,
 };
 
 constexpr uint16 syscall_net_route_flag_up = 0x0001u;
@@ -256,6 +259,39 @@ constexpr uint16 syscall_net_dhcp_state_offered = 3u;
 constexpr uint16 syscall_net_dhcp_state_requesting = 4u;
 constexpr uint16 syscall_net_dhcp_state_bound = 5u;
 constexpr uint16 syscall_net_dhcp_state_nak = 6u;
+
+constexpr uint32 syscall_net_fault_rx = 0x0001u;
+constexpr uint32 syscall_net_fault_tx = 0x0002u;
+
+struct syscall_net_fault_t {
+	uint32 flags = 0;
+	uint32 ether_type = 0;
+	uint32 ipv4_protocol = 0;
+	uint32 source_port = 0;
+	uint32 destination_port = 0;
+	uint32 start_after = 0;
+	uint32 drop_every = 0;
+	uint32 duplicate_every = 0;
+	uint32 reorder_every = 0;
+	uint32 corrupt_every = 0;
+	uint32 truncate_every = 0;
+	uint32 truncate_length = 0;
+	uint32 reorder_delay_ticks = 0;
+	uint32 rx_seen = 0;
+	uint32 tx_seen = 0;
+	uint32 rx_dropped = 0;
+	uint32 tx_dropped = 0;
+	uint32 rx_duplicated = 0;
+	uint32 tx_duplicated = 0;
+	uint32 rx_reordered = 0;
+	uint32 tx_reordered = 0;
+	uint32 rx_corrupted = 0;
+	uint32 tx_corrupted = 0;
+	uint32 rx_truncated = 0;
+	uint32 tx_truncated = 0;
+	uint32 rx_held = 0;
+	uint32 tx_held = 0;
+};
 
 struct syscall_net_route_ipv4_t {
 	uint8 destination[4] = {};

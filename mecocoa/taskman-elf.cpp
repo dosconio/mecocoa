@@ -239,7 +239,7 @@ bool _Taskman_Relocate_PIE_Flat(BlockTrait* source, const ELF_Header_t& header, 
 			#ifdef ELF_RELOC_RELATIVE
 			if (rel_type == ELF_RELOC_RELATIVE || rel_type == ELF_RELOC_ABS32) {
 				*(uint32*)(load_bias + rel.r_offset) += (uint32)load_bias;
-				ploginfo("[ELF] reloc %[x] += %[x]", rel.r_offset, load_bias);
+				// ploginfo("[ELF] reloc %[x] += %[x]", rel.r_offset, load_bias);
 				continue;
 			}
 			#endif

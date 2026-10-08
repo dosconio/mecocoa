@@ -378,6 +378,27 @@ enum class NetIPv4ConfigSource : uint8 {
 
 	NetDhcpRuntime net_dhcp{};
 
+	struct NetFaultHeldFrame {
+		uni::Network::LinkDevice* dev;
+		uint8* data;
+		stduint length;
+		stduint release_tick;
+		bool valid;
+	};
+
+	struct NetFaultRuntime {
+		syscall_net_fault_t state;
+		uint8* rx_work;
+		uint8* tx_work;
+		NetFaultHeldFrame rx_held;
+		NetFaultHeldFrame tx_held;
+	};
+
+	NetFaultRuntime net_fault{};
+	stduint net_timer_generation = 0;
+	stduint net_timer_deadline = 0;
+	bool net_timer_armed = false;
+
 	uint16 NetTcpLocalMss();
 	stduint NetTcpSendMss(const NetTcpConnection& connection);
 	stduint TcpBackoffRto(const NetTcpConnection& connection, stduint retry_count);
@@ -390,6 +411,10 @@ enum class NetIPv4ConfigSource : uint8 {
 	bool SendDhcpDiscover();
 	bool SendDhcpRequest();
 	void DispatchEthernetFrame(uni::Network::LinkDevice& dev, const uni::Network::EthernetFrameView& frame);
+	void DispatchLinkFrameRaw(uni::Network::LinkDevice& dev, const void* data, stduint length);
+	stdsint SendLinkFrameWithFault(uni::Network::LinkDevice& dev,
+		const uni::Network::LinkFrameView& frame);
+	void RequestNetTimerRefresh();
 
 	struct NetRemoteLinkState {
 		stduint owner_tid = 0;
@@ -491,6 +516,137 @@ enum class NetIPv4ConfigSource : uint8 {
 	bool EnsureTcpTxBuffer() {
 		if (!net_buffers.tcp_tx) net_buffers.tcp_tx = (uint8*)mempool.allocate(NetFrameBufferSize, 12);
 		return net_buffers.IsTcpTxReady();
+	}
+
+	bool FaultRuleMatches(uint32 every, uint32 sequence) {
+		if (!every || sequence <= net_fault.state.start_after) return false;
+		return ((sequence - net_fault.state.start_after) % every) == 0;
+	}
+
+	bool FaultFrameMatches(const void* data, stduint length) {
+		if (!net_fault.state.ether_type && !net_fault.state.ipv4_protocol &&
+			!net_fault.state.source_port && !net_fault.state.destination_port) return true;
+		uni::Network::LinkFrameView raw{ data, length };
+		uni::Network::EthernetFrameView ethernet{};
+		if (!uni::Network::ParseEthernetFrame(raw, ethernet)) return false;
+		if (net_fault.state.ether_type && ethernet.type != net_fault.state.ether_type) return false;
+		if (!net_fault.state.ipv4_protocol && !net_fault.state.source_port &&
+			!net_fault.state.destination_port) return true;
+		if (ethernet.type != uint16(uni::Network::EthernetType::IPv4)) return false;
+		uni::Network::IPv4PacketView ipv4{};
+		if (!uni::Network::ParseIPv4Packet(ethernet, ipv4)) return false;
+		if (net_fault.state.ipv4_protocol && ipv4.protocol != net_fault.state.ipv4_protocol) return false;
+		if (!net_fault.state.source_port && !net_fault.state.destination_port) return true;
+		if (ipv4.protocol != uint8(uni::Network::IPv4Protocol::TCP) &&
+			ipv4.protocol != uint8(uni::Network::IPv4Protocol::UDP)) return false;
+		if (!ipv4.payload || ipv4.payload_length < 4) return false;
+		const uint16 source_port = uni::Network::EthernetRead16(ipv4.payload);
+		const uint16 destination_port = uni::Network::EthernetRead16(ipv4.payload + 2);
+		if (net_fault.state.source_port && source_port != net_fault.state.source_port) return false;
+		if (net_fault.state.destination_port && destination_port != net_fault.state.destination_port) return false;
+		return true;
+	}
+
+	bool EnsureFaultBuffer(uint8*& buffer) {
+		if (!buffer) buffer = (uint8*)mempool.allocate(NetworkDriverFrameCapacity, 12);
+		return buffer != nullptr;
+	}
+
+	bool PrepareFaultFrame(bool receive, const void* data, stduint length,
+		const uint8*& output, stduint& output_length) {
+		const uint32 sequence = receive ? net_fault.state.rx_seen : net_fault.state.tx_seen;
+		const bool corrupt = FaultRuleMatches(net_fault.state.corrupt_every, sequence);
+		const bool truncate = FaultRuleMatches(net_fault.state.truncate_every, sequence) &&
+			net_fault.state.truncate_length < length;
+		output = reinterpret_cast<const uint8*>(data);
+		output_length = length;
+		if (!corrupt && !truncate) return true;
+		uint8*& work = receive ? net_fault.rx_work : net_fault.tx_work;
+		if (!EnsureFaultBuffer(work)) return false;
+		MemCopyN(work, data, length);
+		output = work;
+		if (truncate) {
+			output_length = net_fault.state.truncate_length;
+			if (receive) net_fault.state.rx_truncated++;
+			else net_fault.state.tx_truncated++;
+		}
+		if (corrupt && output_length) {
+			work[output_length - 1] ^= 0x01u;
+			if (receive) net_fault.state.rx_corrupted++;
+			else net_fault.state.tx_corrupted++;
+		}
+		return true;
+	}
+
+	bool HoldFaultFrame(NetFaultHeldFrame& held, uni::Network::LinkDevice& dev,
+		const uint8* data, stduint length) {
+		if (!EnsureFaultBuffer(held.data)) return false;
+		MemCopyN(held.data, data, length);
+		held.dev = &dev;
+		held.length = length;
+		held.release_tick = net_fault.state.reorder_delay_ticks ?
+			tick + net_fault.state.reorder_delay_ticks : 0;
+		held.valid = true;
+		RequestNetTimerRefresh();
+		return true;
+	}
+
+	void ReleaseFaultRxFrame() {
+		if (!net_fault.rx_held.valid || !net_fault.rx_held.dev) return;
+		auto held = net_fault.rx_held;
+		net_fault.rx_held.valid = false;
+		DispatchLinkFrameRaw(*held.dev, held.data, held.length);
+	}
+
+	void ReleaseFaultTxFrame() {
+		if (!net_fault.tx_held.valid || !net_fault.tx_held.dev) return;
+		auto held = net_fault.tx_held;
+		net_fault.tx_held.valid = false;
+		uni::Network::LinkFrameView frame{ held.data, held.length };
+		(void)held.dev->Send(frame);
+	}
+
+	void ProcessFaultTimers() {
+		if (net_fault.rx_held.valid && net_fault.rx_held.release_tick &&
+			tick >= net_fault.rx_held.release_tick) ReleaseFaultRxFrame();
+		if (net_fault.tx_held.valid && net_fault.tx_held.release_tick &&
+			tick >= net_fault.tx_held.release_tick) ReleaseFaultTxFrame();
+	}
+
+	stdsint SendLinkFrameWithFault(uni::Network::LinkDevice& dev,
+		const uni::Network::LinkFrameView& frame) {
+		if (!frame.data || !frame.length || frame.length > NetworkDriverFrameCapacity) return -1;
+		if (!(net_fault.state.flags & syscall_net_fault_tx) ||
+			!FaultFrameMatches(frame.data, frame.length)) return dev.Send(frame);
+		const uint32 sequence = ++net_fault.state.tx_seen;
+		if (FaultRuleMatches(net_fault.state.drop_every, sequence)) {
+			net_fault.state.tx_dropped++;
+			return stdsint(frame.length);
+		}
+		const uint8* data = nullptr;
+		stduint length = 0;
+		if (!PrepareFaultFrame(false, frame.data, frame.length, data, length)) return -1;
+		uni::Network::LinkFrameView current{ data, length };
+		if (net_fault.tx_held.valid) {
+			const stdsint sent = dev.Send(current);
+			ReleaseFaultTxFrame();
+			if (FaultRuleMatches(net_fault.state.duplicate_every, sequence)) {
+				net_fault.state.tx_duplicated++;
+				(void)dev.Send(current);
+			}
+			return sent;
+		}
+		if (FaultRuleMatches(net_fault.state.reorder_every, sequence) &&
+			HoldFaultFrame(net_fault.tx_held, dev, data, length)) {
+			net_fault.state.tx_reordered++;
+			return stdsint(frame.length);
+		}
+		const stdsint sent = dev.Send(current);
+		if (sent > 0 && FaultRuleMatches(net_fault.state.duplicate_every, sequence)) {
+			net_fault.state.tx_duplicated++;
+			(void)dev.Send(current);
+		}
+		return sent;
 	}
 
 	bool EnsureDhcpClientObject() {
@@ -1060,7 +1216,7 @@ enum class NetIPv4ConfigSource : uint8 {
 			buffer,
 			request_len,
 		};
-		const bool sent = dev.Send(request) > 0;
+		const bool sent = SendLinkFrameWithFault(dev, request) > 0;
 		if (sent) {
 			net_stats.tx_arp++;
 			MarkArpProbeSent(target_ip);
@@ -2066,7 +2222,7 @@ enum class NetIPv4ConfigSource : uint8 {
 			DispatchEthernetFrame(dev, local_frame);
 			return stdsint(packet.payload_length);
 		}
-		return dev.Send(frame);
+		return SendLinkFrameWithFault(dev, frame);
 	}
 
 	stdsint SendLinkFrameOrLoopback(uni::Network::LinkDevice& dev,
@@ -2078,7 +2234,7 @@ enum class NetIPv4ConfigSource : uint8 {
 			DispatchEthernetFrame(dev, local_frame);
 			return stdsint(frame.length);
 		}
-		return dev.Send(frame);
+		return SendLinkFrameWithFault(dev, frame);
 	}
 
 	class NetIPv4Interface : public uni::Network::NetworkInterface {
@@ -2560,17 +2716,6 @@ enum class NetIPv4ConfigSource : uint8 {
 		}
 	}
 
-	bool HasArpTimersPending() {
-		ExpireArpCache();
-		for0(i, NetArpCacheCapacity) {
-			const auto& entry = net_arp_cache[i];
-			if (entry.valid &&
-				(entry.state == NetArpNeighborState::Incomplete ||
-					entry.state == NetArpNeighborState::Probe)) return true;
-		}
-		return false;
-	}
-
 	bool IsTcpTxRetryExhausted(const NetTcpConnection& connection) {
 		if (!connection.tx_count) return false;
 		const auto& pending = connection.tx_pending[connection.tx_head];
@@ -2987,45 +3132,6 @@ enum class NetIPv4ConfigSource : uint8 {
 		}
 	}
 
-	bool HasTcpTimersPending() {
-		for0(i, NetTcpConnectionCapacity) {
-			auto& connection = net_tcp_connections[i];
-			if (!connection.valid || !connection.tcp) continue;
-			const auto& control = connection.tcp->getControl();
-			if (connection.close_phase == NetTcpClosePhase::Reset) {
-				if (connection.orphaned) return true;
-				continue;
-			}
-			if (connection.close_phase == NetTcpClosePhase::Closed) continue;
-			if (connection.active_open && connection.close_phase == NetTcpClosePhase::None &&
-				!IsTcpConnectReady(connection)) return true;
-			if (!connection.active_open &&
-				control.state == uni::Network::TCPConnectionState::SynReceived &&
-				connection.synack_retry_count < NetTcpControlRetryLimit) return true;
-			if (control.state == uni::Network::TCPConnectionState::LastAck) return true;
-			if (connection.active_open &&
-				(connection.close_phase == NetTcpClosePhase::FinWait1 ||
-					connection.close_phase == NetTcpClosePhase::Closing)) return true;
-			if ((connection.orphaned && connection.close_phase == NetTcpClosePhase::FinWait2) ||
-				connection.close_phase == NetTcpClosePhase::TimeWait) return true;
-			if (connection.tx_fin_pending) return true;
-			if (connection.keepalive_enabled &&
-				!connection.tx_count &&
-				!connection.tx_shutdown &&
-				connection.close_phase == NetTcpClosePhase::None &&
-				(control.state == uni::Network::TCPConnectionState::Established ||
-					control.state == uni::Network::TCPConnectionState::CloseWait) &&
-				connection.last_rx_tick &&
-				tick - connection.last_rx_tick >= connection.keepalive_idle_ticks &&
-				(!connection.last_tx_tick || tick - connection.last_tx_tick >= connection.keepalive_idle_ticks)) return true;
-			if (connection.tx_count &&
-				connection.tx_pending[connection.tx_head].retry_count < NetTcpTxRetryLimit) return true;
-			if (connection.tx_count && !connection.connect_error &&
-				!connection.reset_received && !connection.keepalive_timeout) return true;
-		}
-		return false;
-	}
-
 	bool HasDhcpRetryPending() {
 		if (!net_dhcp.client) return false;
 		if (net_dhcp.retry_count >= NetDhcpRetryLimit) return false;
@@ -3076,16 +3182,6 @@ enum class NetIPv4ConfigSource : uint8 {
 		return (DhcpLeaseTicks() * 7) / 8;
 	}
 
-	bool HasDhcpLeaseTimerPending() {
-		if (!net_dhcp.client || !net_dhcp.bound_tick || !net_config.dhcp_lease_time) return false;
-		const stduint age_ticks = DhcpLeaseAgeTicks();
-		const stduint lease_ticks = DhcpLeaseTicks();
-		if (lease_ticks && age_ticks >= lease_ticks) return true;
-		if (!net_dhcp.rebind_started && DhcpT2Ticks() && age_ticks >= DhcpT2Ticks()) return true;
-		if (!net_dhcp.renew_started && DhcpT1Ticks() && age_ticks >= DhcpT1Ticks()) return true;
-		return false;
-	}
-
 	void ProcessDhcpLeaseTimer() {
 		if (!net_dhcp.client || !net_dhcp.bound_tick || !net_config.dhcp_lease_time) return;
 		const stduint lease_ticks = DhcpLeaseTicks();
@@ -3113,6 +3209,171 @@ enum class NetIPv4ConfigSource : uint8 {
 				(void)SendDhcpDiscover();
 			}
 		}
+	}
+
+	void ConsiderNetDeadline(bool& valid, stduint& deadline, stduint candidate) {
+		if (!valid || candidate < deadline) {
+			valid = true;
+			deadline = candidate;
+		}
+	}
+
+	void ConsiderTcpDeadline(const NetTcpConnection& connection, bool& valid, stduint& deadline) {
+		if (!connection.valid || !connection.tcp) return;
+		const auto& control = connection.tcp->getControl();
+		if (connection.close_phase == NetTcpClosePhase::Reset) {
+			if (connection.orphaned) {
+				ConsiderNetDeadline(valid, deadline, connection.close_phase_tick + NetTcpResetHoldTicks);
+			}
+			return;
+		}
+		if (connection.close_phase == NetTcpClosePhase::Closed) return;
+		if (connection.active_open && connection.close_phase == NetTcpClosePhase::None &&
+			!IsTcpConnectReady(connection)) {
+			const stduint backoff = connection.syn_retry_count ? connection.syn_retry_count - 1 : 0;
+			ConsiderNetDeadline(valid, deadline, connection.last_syn_tick ?
+				connection.last_syn_tick + TcpBackoffRto(connection, backoff) : tick);
+		}
+		if (!connection.active_open && control.state == uni::Network::TCPConnectionState::SynReceived) {
+			const stduint backoff = connection.synack_retry_count ? connection.synack_retry_count - 1 : 0;
+			ConsiderNetDeadline(valid, deadline, connection.last_synack_tick ?
+				connection.last_synack_tick + TcpBackoffRto(connection, backoff) : tick);
+		}
+		if (connection.tx_count) {
+			const auto& pending = connection.tx_pending[connection.tx_head];
+			if (pending.valid && pending.length) {
+				ConsiderNetDeadline(valid, deadline,
+					pending.last_tick + TcpBackoffRto(connection, pending.retry_count));
+			}
+		}
+		if (connection.tx_fin_pending && !connection.tx_count) {
+			ConsiderNetDeadline(valid, deadline, tick);
+		}
+		if (connection.active_open &&
+			(connection.close_phase == NetTcpClosePhase::FinWait1 ||
+				connection.close_phase == NetTcpClosePhase::Closing)) {
+			const stduint backoff = connection.fin_retry_count ? connection.fin_retry_count - 1 : 0;
+			ConsiderNetDeadline(valid, deadline, connection.last_fin_tick ?
+				connection.last_fin_tick + TcpBackoffRto(connection, backoff) : tick);
+		}
+		if (control.state == uni::Network::TCPConnectionState::LastAck) {
+			const stduint backoff = connection.fin_retry_count ? connection.fin_retry_count - 1 : 0;
+			ConsiderNetDeadline(valid, deadline, connection.last_fin_tick ?
+				connection.last_fin_tick + TcpBackoffRto(connection, backoff) : tick);
+		}
+		if (connection.orphaned && connection.close_phase == NetTcpClosePhase::FinWait2) {
+			ConsiderNetDeadline(valid, deadline, connection.close_phase_tick + NetTcpFinWait2Ticks);
+		}
+		if (connection.close_phase == NetTcpClosePhase::TimeWait) {
+			ConsiderNetDeadline(valid, deadline, connection.time_wait_tick + NetTcpTimeWaitTicks);
+		}
+		if (connection.keepalive_enabled && !connection.tx_count && !connection.tx_shutdown &&
+			connection.close_phase == NetTcpClosePhase::None && connection.last_rx_tick &&
+			(control.state == uni::Network::TCPConnectionState::Established ||
+				control.state == uni::Network::TCPConnectionState::CloseWait)) {
+			stduint idle_deadline = connection.last_rx_tick + connection.keepalive_idle_ticks;
+			if (connection.last_tx_tick + connection.keepalive_idle_ticks > idle_deadline) {
+				idle_deadline = connection.last_tx_tick + connection.keepalive_idle_ticks;
+			}
+			if (idle_deadline <= tick && connection.last_keepalive_tick) {
+				idle_deadline = connection.last_keepalive_tick + connection.keepalive_interval_ticks;
+			}
+			ConsiderNetDeadline(valid, deadline, idle_deadline);
+		}
+	}
+
+	bool NextNetTimerDeadline(stduint& deadline) {
+		bool valid = false;
+		deadline = 0;
+		for0(i, NetTcpConnectionCapacity) ConsiderTcpDeadline(net_tcp_connections[i], valid, deadline);
+		for0(i, NetArpCacheCapacity) {
+			const auto& entry = net_arp_cache[i];
+			if (!entry.valid) continue;
+			switch (entry.state) {
+			case NetArpNeighborState::Incomplete:
+			case NetArpNeighborState::Probe:
+				ConsiderNetDeadline(valid, deadline, entry.last_probe_tick ?
+					entry.last_probe_tick + NetArpProbeRetryTicks : tick);
+				break;
+			case NetArpNeighborState::Reachable:
+				ConsiderNetDeadline(valid, deadline, entry.updated_tick + NetArpReachableTicks);
+				break;
+			case NetArpNeighborState::Stale:
+				ConsiderNetDeadline(valid, deadline, entry.updated_tick + NetArpStaleTicks);
+				break;
+			case NetArpNeighborState::Failed:
+				ConsiderNetDeadline(valid, deadline, entry.updated_tick + NetArpFailedHoldTicks);
+				break;
+			default:
+				break;
+			}
+		}
+		for0(i, NetPendingUdpCapacity) {
+			const auto& packet = net_pending_udp[i];
+			if (packet.valid) {
+				ConsiderNetDeadline(valid, deadline, packet.queued_tick + NetPendingUdpTimeoutTicks);
+			}
+		}
+		if (HasDhcpRetryPending()) {
+			ConsiderNetDeadline(valid, deadline,
+				net_dhcp.last_tick ? net_dhcp.last_tick + NetDhcpRetryTicks : tick);
+		}
+		if (net_dhcp.client && net_dhcp.bound_tick && net_config.dhcp_lease_time) {
+			if (!net_dhcp.renew_started && DhcpT1Ticks()) {
+				ConsiderNetDeadline(valid, deadline, net_dhcp.bound_tick + DhcpT1Ticks());
+			}
+			if (!net_dhcp.rebind_started && DhcpT2Ticks()) {
+				ConsiderNetDeadline(valid, deadline, net_dhcp.bound_tick + DhcpT2Ticks());
+			}
+			ConsiderNetDeadline(valid, deadline, net_dhcp.bound_tick + DhcpLeaseTicks());
+		}
+		if (net_fault.rx_held.valid && net_fault.rx_held.release_tick) {
+			ConsiderNetDeadline(valid, deadline, net_fault.rx_held.release_tick);
+		}
+		if (net_fault.tx_held.valid && net_fault.tx_held.release_tick) {
+			ConsiderNetDeadline(valid, deadline, net_fault.tx_held.release_tick);
+		}
+		return valid;
+	}
+
+	void ProcessNetTimers() {
+		ProcessTcpConnectTimers();
+		ProcessTcpControlTimers();
+		ProcessArpTimers();
+		ExpirePendingUdp();
+		ProcessDhcpRetryTimer();
+		ProcessDhcpLeaseTimer();
+		ProcessFaultTimers();
+	}
+
+	void ArmNetServiceTimer() {
+		stduint deadline = 0;
+		if (!NextNetTimerDeadline(deadline)) {
+			if (net_timer_armed) net_timer_generation++;
+			net_timer_armed = false;
+			net_timer_deadline = 0;
+			return;
+		}
+		if (net_timer_armed && net_timer_deadline <= deadline) return;
+		const stduint delay = deadline > tick ? deadline - tick : 1;
+		const stduint generation = ++net_timer_generation;
+		if (!Systimex::AppendDriverMessage(delay, Task_Net_Serv,
+			_IMM(NetworkMsg::TIMER_EXPIRED), generation)) {
+			net_timer_armed = false;
+			net_timer_deadline = 0;
+			plogwarn("[Net] timer arm failed deadline=%u", (unsigned)deadline);
+			return;
+		}
+		net_timer_armed = true;
+		net_timer_deadline = deadline;
+	}
+
+	void RequestNetTimerRefresh() {
+		const stduint value = 0;
+		if (!syssend_async(Task_Net_Serv, &value, sizeof(value),
+			_IMM(NetworkMsg::TIMER_REFRESH))) return;
+		(void)Systimex::AppendDriverMessage(1, Task_Net_Serv,
+			_IMM(NetworkMsg::TIMER_REFRESH), 0);
 	}
 
 	void FlushPendingTcpConnectsFor(const uni::Network::IPv4Address& target_ip) {
@@ -3368,7 +3629,7 @@ enum class NetIPv4ConfigSource : uint8 {
 			net_buffers.tx,
 			reply_len,
 		};
-		const stdsint sent = dev.Send(reply);
+		const stdsint sent = SendLinkFrameWithFault(dev, reply);
 		if (sent <= 0) {
 			plogwarn("[Net] arp reply send failed");
 		}
@@ -3973,7 +4234,7 @@ enum class NetIPv4ConfigSource : uint8 {
 		}
 	}
 
-	void DispatchLinkFrame(uni::Network::LinkDevice& dev, const void* data, stduint length) {
+	void DispatchLinkFrameRaw(uni::Network::LinkDevice& dev, const void* data, stduint length) {
 		if (!data || !length) return;
 		net_stats.rx_frames++;
 		uni::Network::LinkFrameView raw_frame{
@@ -3991,33 +4252,39 @@ enum class NetIPv4ConfigSource : uint8 {
 		DispatchEthernetFrame(dev, eth_frame);
 	}
 
-	void NetServicePoll() {
-		if (!EnsureNetServiceBuffers()) {
-			plogwarn("[Net] frame buffer allocation failed");
+	void DispatchLinkFrame(uni::Network::LinkDevice& dev, const void* data, stduint length) {
+		if (!data || !length || length > NetworkDriverFrameCapacity) return;
+		if (!(net_fault.state.flags & syscall_net_fault_rx) || !FaultFrameMatches(data, length)) {
+			DispatchLinkFrameRaw(dev, data, length);
 			return;
 		}
-		ProcessTcpConnectTimers();
-		ProcessTcpControlTimers();
-		ProcessArpTimers();
-		ProcessDhcpRetryTimer();
-		ProcessDhcpLeaseTimer();
-		for0(i, net_link_device_count) {
-			auto* dev = net_link_devices[i];
-			if (!dev || dev->getState() != uni::Network::LinkState::Up) continue;
-			uni::Network::LinkMutableFrameView frame{
-				net_buffers.rx,
-				NetFrameBufferSize,
-				0,
-			};
-			const stdsint len = dev->Receive(frame);
-			if (len <= 0) continue;
-			frame.length = stduint(len);
-			DispatchLinkFrame(*dev, frame.data, frame.length);
+		const uint32 sequence = ++net_fault.state.rx_seen;
+		if (FaultRuleMatches(net_fault.state.drop_every, sequence)) {
+			net_fault.state.rx_dropped++;
+			return;
 		}
-	}
-
-	void NetServiceIdleWait() {
-		syscall(syscall_t::REST, 1, 10);
+		const uint8* frame_data = nullptr;
+		stduint frame_length = 0;
+		if (!PrepareFaultFrame(true, data, length, frame_data, frame_length)) return;
+		if (net_fault.rx_held.valid) {
+			DispatchLinkFrameRaw(dev, frame_data, frame_length);
+			ReleaseFaultRxFrame();
+			if (FaultRuleMatches(net_fault.state.duplicate_every, sequence)) {
+				net_fault.state.rx_duplicated++;
+				DispatchLinkFrameRaw(dev, frame_data, frame_length);
+			}
+			return;
+		}
+		if (FaultRuleMatches(net_fault.state.reorder_every, sequence) &&
+			HoldFaultFrame(net_fault.rx_held, dev, frame_data, frame_length)) {
+			net_fault.state.rx_reordered++;
+			return;
+		}
+		DispatchLinkFrameRaw(dev, frame_data, frame_length);
+		if (FaultRuleMatches(net_fault.state.duplicate_every, sequence)) {
+			net_fault.state.rx_duplicated++;
+			DispatchLinkFrameRaw(dev, frame_data, frame_length);
+		}
 	}
 
 	void RegisterBuiltinUdpPorts() {
@@ -4082,28 +4349,21 @@ enum class NetIPv4ConfigSource : uint8 {
 		stduint sig_type = 0;
 		stduint sig_src = 0;
 		auto* msgbuf = net_buffers.driver_frame;
-		if (!syscall(syscall_t::TMSG) &&
-			(HasTcpTimersPending() || HasArpTimersPending() ||
-				HasDhcpRetryPending() || HasDhcpLeaseTimerPending())) {
-			ProcessTcpConnectTimers();
-			ProcessTcpControlTimers();
-			ProcessArpTimers();
-			ProcessDhcpRetryTimer();
-			ProcessDhcpLeaseTimer();
-			syscall(syscall_t::REST, 1, 10);
-			return;
-		}
 		if (sysrecv(ANYPROC, msgbuf, sizeof(*msgbuf), &sig_type, &sig_src)) return;
 		stdsint ret = -1;
 		switch (NetworkMsg(sig_type)) {
 		case NetworkMsg::DRV_ATTACH:
 			ret = NetServiceHandleAttach(sig_src, *reinterpret_cast<FMT_NetworkMsg_DRV_ATTACH*>(msgbuf)) ? 0 : -1;
 			syssend_async(sig_src, &ret, sizeof(ret));
+			ProcessNetTimers();
+			ArmNetServiceTimer();
 			return;
 		case NetworkMsg::DRV_DETACH:
 			NetServiceHandleDetach(sig_src);
 			ret = 0;
 			syssend_async(sig_src, &ret, sizeof(ret));
+			ProcessNetTimers();
+			ArmNetServiceTimer();
 			return;
 		case NetworkMsg::DRV_RX:
 			if (sig_src == net_remote_link.owner_tid && msgbuf->length <= NetworkDriverFrameCapacity) {
@@ -4113,7 +4373,24 @@ enum class NetIPv4ConfigSource : uint8 {
 				plogwarn("[Net] driver rx rejected src=%u owner=%u len=%u",
 					(unsigned)sig_src, (unsigned)net_remote_link.owner_tid, (unsigned)msgbuf->length);
 			}
+			ProcessNetTimers();
+			ArmNetServiceTimer();
 			return;
+		case NetworkMsg::TIMER_REFRESH:
+			ProcessNetTimers();
+			ArmNetServiceTimer();
+			return;
+		case NetworkMsg::TIMER_EXPIRED: {
+			stduint generation = 0;
+			MemCopyN(&generation, msgbuf, sizeof(generation));
+			if (net_timer_armed && generation == net_timer_generation) {
+				net_timer_armed = false;
+				net_timer_deadline = 0;
+				ProcessNetTimers();
+			}
+			ArmNetServiceTimer();
+			return;
+		}
 		default:
 			syssend_async(sig_src, &ret, sizeof(ret));
 			return;
@@ -4414,6 +4691,7 @@ stdsint Devsman::StartTcpConnect(const uni::Network::IPv4Address& local_ip,
 		NoteTcpConnectFailure(error);
 		return -error;
 	}
+	RequestNetTimerRefresh();
 	return 1;
 }
 
@@ -4466,7 +4744,9 @@ bool Devsman::CancelTcpConnect(const uni::Network::TCPConnectionContext& context
 		if (error == NetErrTimedOut) net_stats.tcp_connect_timeout++;
 		NoteTcpConnectFailure(error);
 	}
-	return ReleaseTcpConnection(context);
+	const bool released = ReleaseTcpConnection(context);
+	if (released) RequestNetTimerRefresh();
+	return released;
 }
 
 stdsint Devsman::ConnectTcp(const uni::Network::IPv4Address& target_ip,
@@ -4491,12 +4771,19 @@ bool Devsman::ShutdownTcpWrite(const uni::Network::TCPConnectionContext& context
 		context.remote.address, context.remote.port);
 	if (!connection || !connection->tcp) return false;
 	if (connection->tx_shutdown) return true;
-	if (connection->reset_received) return ReleaseTcpConnection(context);
+	if (connection->reset_received) {
+		const bool released = ReleaseTcpConnection(context);
+		if (released) RequestNetTimerRefresh();
+		return released;
+	}
 	if (connection->connect_error || connection->keepalive_timeout || IsTcpTxRetryExhausted(*connection)) {
-		return ReleaseTcpConnection(context);
+		const bool released = ReleaseTcpConnection(context);
+		if (released) RequestNetTimerRefresh();
+		return released;
 	}
 	if (!StartTcpWriteFin(*connection)) return false;
 	connection->tx_shutdown = true;
+	RequestNetTimerRefresh();
 	return true;
 }
 
@@ -4506,10 +4793,16 @@ bool Devsman::CloseTcpConnection(const uni::Network::TCPConnectionContext& conte
 	if (!connection || !connection->tcp) return false;
 	connection->orphaned = true;
 	if (connection->close_phase == NetTcpClosePhase::Closed) {
-		return ReleaseTcpConnection(context);
+		const bool released = ReleaseTcpConnection(context);
+		if (released) RequestNetTimerRefresh();
+		return released;
 	}
 	if (connection->reset_received || connection->keepalive_timeout || connection->connect_error ||
-		IsTcpTxRetryExhausted(*connection)) return ReleaseTcpConnection(context);
+		IsTcpTxRetryExhausted(*connection)) {
+		const bool released = ReleaseTcpConnection(context);
+		if (released) RequestNetTimerRefresh();
+		return released;
+	}
 	return ShutdownTcpWrite(context);
 }
 
@@ -4612,6 +4905,7 @@ bool Devsman::ConfigureTcpKeepAlive(const uni::Network::TCPConnectionContext& co
 	connection->keepalive_probe_limit = probe_limit;
 	connection->last_keepalive_tick = 0;
 	connection->keepalive_probe_count = 0;
+	RequestNetTimerRefresh();
 	return true;
 }
 
@@ -4659,6 +4953,7 @@ stdsint Devsman::SendTcp(const uni::Network::TCPConnectionContext& context, cons
 	if (chunk_capacity > buffer_capacity) chunk_capacity = buffer_capacity;
 	const auto* bytes = reinterpret_cast<const uint8*>(payload);
 	stduint total = 0;
+	bool timer_refresh_sent = false;
 	while (total < length) {
 		while (connection->tx_count >= NetTcpTxPendingCapacity) {
 			if (IsTcpTxRetryExhausted(*connection)) return total ? stdsint(total) : -1;
@@ -4683,6 +4978,10 @@ stdsint Devsman::SendTcp(const uni::Network::TCPConnectionContext& context, cons
 		const uint32 sequence = connection->tcp->getControl().local_next_sequence;
 		if (!EnqueueTcpTxPending(*connection, sequence, bytes + total, chunk)) {
 			return total ? stdsint(total) : -1;
+		}
+		if (!timer_refresh_sent) {
+			RequestNetTimerRefresh();
+			timer_refresh_sent = true;
 		}
 		stduint send_length = chunk;
 		if (send_length > send_window) send_length = send_window;
@@ -4904,6 +5203,7 @@ stdsint Devsman::SendUdp(const uni::Network::IPv4Address& source_ip,
 			plogwarn("[Net] send udp pending queue full/invalid len=%u", (unsigned)length);
 			return -1;
 		}
+		RequestNetTimerRefresh();
 		if (!ShouldSendPendingArpRequest(route.next_hop)) return stdsint(length);
 		if (SendArpRequest(*route.dev, net_buffers.udp_tx, route.next_hop)) {
 			MarkPendingArpRequest(route.next_hop);
@@ -5401,6 +5701,67 @@ bool Devsman::GetNetStats(void* stats, stduint length) {
 	return true;
 }
 
+bool Devsman::GetNetFault(void* state, stduint length) {
+	if (!state || length < sizeof(syscall_net_fault_t)) return false;
+	auto* output = reinterpret_cast<syscall_net_fault_t*>(state);
+	*output = net_fault.state;
+	output->rx_held = net_fault.rx_held.valid ? 1 : 0;
+	output->tx_held = net_fault.tx_held.valid ? 1 : 0;
+	return true;
+}
+
+bool Devsman::SetNetFault(const void* config, stduint length) {
+	if (!config || length < sizeof(syscall_net_fault_t)) return false;
+	const auto& input = *reinterpret_cast<const syscall_net_fault_t*>(config);
+	if (input.flags & ~(syscall_net_fault_rx | syscall_net_fault_tx)) return false;
+	if (input.ether_type > 0xFFFFu || input.ipv4_protocol > 0xFFu ||
+		input.source_port > 0xFFFFu || input.destination_port > 0xFFFFu) return false;
+	if (input.truncate_length > NetworkDriverFrameCapacity) return false;
+
+	net_fault.rx_held.dev = nullptr;
+	net_fault.rx_held.length = 0;
+	net_fault.rx_held.release_tick = 0;
+	net_fault.rx_held.valid = false;
+	net_fault.tx_held.dev = nullptr;
+	net_fault.tx_held.length = 0;
+	net_fault.tx_held.release_tick = 0;
+	net_fault.tx_held.valid = false;
+	net_fault.state = {};
+	net_fault.state.flags = input.flags;
+	net_fault.state.ether_type = input.ether_type;
+	net_fault.state.ipv4_protocol = input.ipv4_protocol;
+	net_fault.state.source_port = input.source_port;
+	net_fault.state.destination_port = input.destination_port;
+	net_fault.state.start_after = input.start_after;
+	net_fault.state.drop_every = input.drop_every;
+	net_fault.state.duplicate_every = input.duplicate_every;
+	net_fault.state.reorder_every = input.reorder_every;
+	net_fault.state.corrupt_every = input.corrupt_every;
+	net_fault.state.truncate_every = input.truncate_every;
+	net_fault.state.truncate_length = input.truncate_length;
+	net_fault.state.reorder_delay_ticks = input.reorder_delay_ticks;
+	RequestNetTimerRefresh();
+	return true;
+}
+
+bool Devsman::ResetNetFault() {
+	net_fault.state.rx_seen = 0;
+	net_fault.state.tx_seen = 0;
+	net_fault.state.rx_dropped = 0;
+	net_fault.state.tx_dropped = 0;
+	net_fault.state.rx_duplicated = 0;
+	net_fault.state.tx_duplicated = 0;
+	net_fault.state.rx_reordered = 0;
+	net_fault.state.tx_reordered = 0;
+	net_fault.state.rx_corrupted = 0;
+	net_fault.state.tx_corrupted = 0;
+	net_fault.state.rx_truncated = 0;
+	net_fault.state.tx_truncated = 0;
+	net_fault.state.rx_held = 0;
+	net_fault.state.tx_held = 0;
+	return true;
+}
+
 void Devsman::RecordSocketError(NetSocketErrorSource source) {
 	switch (source) {
 	case NetSocketErrorSource::Icmp:
@@ -5420,18 +5781,23 @@ void Devsman::RecordSocketError(NetSocketErrorSource source) {
 
 bool Devsman::RenewDhcp() {
 	if (!StartDhcpDiscovery()) return false;
-	return SendDhcpDiscover();
+	const bool sent = SendDhcpDiscover();
+	RequestNetTimerRefresh();
+	return sent;
 }
 
 bool Devsman::ReleaseDhcp() {
 	(void)SendDhcpRelease();
 	ApplyStaticIPv4Config();
+	RequestNetTimerRefresh();
 	return true;
 }
 
 void serv_netw_loop() {
 	RegisterBuiltinUdpPorts();
 	ploginfo("[Net] Service thread start pid=%u", Taskman::CurrentPID());
+	ProcessNetTimers();
+	ArmNetServiceTimer();
 	while (true) {
 		NetServiceHandleMessage();
 	}
