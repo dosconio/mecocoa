@@ -6,7 +6,11 @@ int main(int argc, char** argv) {
 		cmd = argv[1];
 	}
 	if (StrCompare(cmd, "hlt") == 0) {
+	#if defined(_OPT_ARM32)
+		asm("udf #0");
+	#else
 		asm("hlt");
+	#endif
 	}
 	else if (StrCompare(cmd, "page") == 0) {
 		int* p = reinterpret_cast<int*>(0x100);

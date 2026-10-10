@@ -1639,6 +1639,26 @@ namespace {
 				}
 			}
 			#endif
+			#if _MCCA == 0x8664
+			else if (type == _IMM(DevsmanMsg::USB_MSC_READY)) {
+				if (source != Task_FileSys) {
+					plogwarn("[Devsman] USB MSC ready from invalid source=%u", source);
+					continue;
+				}
+				void* context = nullptr;
+				MemCopyN(&context, payload.data, sizeof(context));
+				Devsman::RegisterUSBMSCStorage(context);
+			}
+			else if (type == _IMM(DevsmanMsg::USB_MSC_REMOVE)) {
+				if (source != Task_FileSys) {
+					plogwarn("[Devsman] USB MSC removal from invalid source=%u", source);
+					continue;
+				}
+				void* context = nullptr;
+				MemCopyN(&context, payload.data, sizeof(context));
+				Devsman::RemoveUSBMSCStorage(context);
+			}
+			#endif
 			else {
 				DispatchDevsmanRequest(type, source);
 			}

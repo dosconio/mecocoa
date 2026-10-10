@@ -11,6 +11,8 @@ enum class DevsmanMsg : stduint {
 	PROBE_DRIVERS,
 	START_DRIVERS,
 	LOAD_DRIVER_DIRECTORY,
+	USB_MSC_READY,
+	USB_MSC_REMOVE,
 };
 
 // ---- AUDIO IPC PROTOCOL ----

@@ -86,6 +86,9 @@ enum class FilemanMsg {
 
 	TEMP,
 	STORAGE_READY,
+	USB_MSC_PROBE,
+	USB_MSC_MOUNT,
+	USB_MSC_UNMOUNT,
 };
 
 #include <c/API-POSIX/fcntl.h>

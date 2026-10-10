@@ -60,7 +60,7 @@ void Syscall::Initialize() {
 	setMSR(x86MSR::KERNEL_GS_BASE, 0);
 
 	#elif defined(_ARCH_ARM_ProfileM)
-	NVIC.setPriority(IRQ_SVCall, 15);// the SVCall vector is fixed, only its priority is set here
+	NVIC.setPriority(IRQ_SVCall, 15);// SVCall stays the lowest: the handler makes itself atomic with PRIMASK, see handler.cpp
 
 	#endif
 }

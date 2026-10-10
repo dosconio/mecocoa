@@ -7,6 +7,8 @@
 #include <cpp/Witch/Form.hpp>
 #include <cpp/Witch/TextChrome.hpp>
 
+extern OstreamTrait* con0_out;
+
 extern FramebufferInfo sys_framebuffer;
 
 extern Dchain ttys, vttys;

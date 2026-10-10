@@ -33,7 +33,7 @@ RMOD_LIST RMOD_LIST_COM1{
 
 UART_t com1(PORT_COM1_DATA);
 UART_t com2(0x02F8);
-extern OstreamTrait* con0_out;
+
 namespace {
 	bool g_com1_available = false;
 	bool g_com2_vtty_initialized = false;
@@ -199,6 +199,7 @@ namespace {
 	}
 }
 
+auto ProbeLegacyUart(stduint base) -> bool { return probe_legacy_uart_scratch(base); }
 bool SerialCom1Available() {
 	return g_com1_available;
 }
@@ -210,85 +211,7 @@ void SerialInitializeLazyCotVttys() {
 }
 //
 
-#ifdef _UEFI
-extern UefiData uefi_data;
-
-#include <cpp/Witch/TextChrome.hpp>
-#include "../../depends/desktop.hpp"
-
-// ScreenLog: console fallback shown when no COM1 answers, driven by the kernel's own VideoConsole2
-#ifdef _UEFI_AUFDBG
-enum { ScreenLogRows = 40 };
-static FramebufferInfo screen_log_fb;
-static uni::ScreenBridge screen_log_bridge(screen_log_fb);
-static uni::BitmapFontEngine screen_log_font(1);
-static Rectangle screen_log_win{ Point(0, 0), Size2(0, 0), Color::Black };
-static uni::VideoConsole2 screen_log_console(&screen_log_bridge, screen_log_win, Color::Green, Color::Black);
-static uni::BufferChar* screen_log_text = nullptr;
-static Color* screen_log_line = nullptr;
-static Color* screen_log_pixels = nullptr;
-static bool screen_log_on_layer = false;
-
-// the console rasterizes into RAM; push the used rows to the framebuffer in one sequential pass
-static void ScreenLogPush() {
-	if (screen_log_on_layer || !screen_log_pixels) return;
-	stduint used = (stduint)screen_log_console.getCursor().y + 1;
-	if (used > screen_log_console.getRows()) used = screen_log_console.getRows();
-	if (!used) return;
-	Rectangle rect{ Point(0, 0), Size2(screen_log_win.width, used * 16), Color::Black };
-	screen_log_bridge.DrawPoints(rect, screen_log_pixels);
-}
-
-class ScreenLogSink : public OstreamTrait {
-public:
-	virtual int out(const char* str, stduint len) override {
-		const int res = screen_log_console.out(str, len);
-		ScreenLogPush();
-		return res;
-	}
-};
-static ScreenLogSink screen_log_sink;
-
-_ESYM_C void ScreenLogAttach() {
-	if (probe_legacy_uart_scratch(PORT_COM1_DATA)) return;	// a real COM1 keeps the UART console
-	if (con0_out == &screen_log_sink) return;
-	auto& cfg = uefi_data.frame_buffer_config;
-	screen_log_fb.physical_range = Slice{ (stduint)cfg.frame_buffer, cfg.vertical_resolution * cfg.pixels_per_scan_line * 4 };
-	screen_log_fb.screen_size = Size2(cfg.horizontal_resolution, cfg.vertical_resolution);
-	screen_log_fb.pitch = cfg.pixels_per_scan_line * 4;
-	screen_log_fb.bpp = 32;
-	screen_log_fb.format = cfg.pixel_format;
-	stduint rows = screen_log_fb.screen_size.y / 16;
-	if (rows > ScreenLogRows) rows = ScreenLogRows;
-	screen_log_win.width = screen_log_fb.screen_size.x;	// full width: DrawPoints steps the source by the screen width
-	screen_log_win.height = rows * 16;
-	screen_log_console.window = screen_log_win;
-	screen_log_console.setFontEngine(&screen_log_font);
-	if (!screen_log_text) screen_log_text = new uni::BufferChar[screen_log_console.getCols() * screen_log_console.getRows()];
-	if (!screen_log_line) screen_log_line = new Color[screen_log_console.getLineBufferSize()];
-	if (!screen_log_pixels) screen_log_pixels = new Color[screen_log_win.getArea()];
-	if (!screen_log_text || !screen_log_line || !screen_log_pixels) return;
-	screen_log_console.setBuffers(screen_log_pixels, screen_log_text, screen_log_line);
-	screen_log_console.Clear();
-	screen_log_bridge.DrawRectangle(Rectangle{ Point(0, 0), screen_log_win.getSize(), Color::Black });
-	con0_out = &screen_log_sink;
-}
-
-_ESYM_C void ScreenLogToLayer() {
-	if (con0_out != &screen_log_sink) return;
-	auto* desk = uni::global_desktop;
-	if (!desk || !desk->sheet_buffer) return;
-	if (desk->sheet_area.width != screen_log_win.width) return;	// the desktop canvas must share the log row stride
-	screen_log_console.setModeBuffer(desk->sheet_buffer);
-	screen_log_console.window = screen_log_win;
-	screen_log_console.doshow(nullptr);
-	screen_log_on_layer = true;
-	auto layman = global_layman.Lock();
-	layman->AddDirty(screen_log_win);
-	layman->is_dirty = true;
-}
-#endif
-#endif
+_ESYM_C void ScreenLogAttach();
 
 //
 
@@ -308,7 +231,9 @@ void R_COM1_INIT() {
 		// Do not register or enable IRQ for a COM port that did not answer the
 		// SCR probe; later console code also checks SerialCom1Available().
 		if (Devsman::Root()) plogwarn("[UART] COM1 probe failed at %[16H], skip init", PORT_COM1_DATA);
+		#if _UEFI_AUFDBG
 		ScreenLogAttach();
+		#endif
 	}
 	// Ensure IRQ_COM13_RS232_P1 maps to IRQ 4 (IDT index 0x24 if base is 0x20) [cite: 282]
 	#if _MCCA == 0x8664

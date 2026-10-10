@@ -229,6 +229,14 @@ public:
 	static bool AddUSBEndpointResource(DeviceNode* node, uint32 index,
 		uint8 endpoint_addr, uint8 transfer_type, uint16 max_packet_size, uint8 interval);
 	static bool RemoveUSBDevice(DeviceNode* parent, const char* name);
+	static bool RemoveUSBDevice(DeviceNode* node);
+	#if defined(_MCCA) && _MCCA == 0x8664
+	static void ProcessUSBMSCProbe(void* context);
+	static void RegisterUSBMSCStorage(void* context);
+	static void MountUSBMSCStorage(void* context);
+	static void UnmountUSBMSCStorage(void* context);
+	static void RemoveUSBMSCStorage(void* context);
+	#endif
 	static DeviceNode* RegisterPlatformDevice(const char* name,
 		const char* driver_name = nullptr, void* driver_data = nullptr);
 	static DeviceNode* RegisterPlatformDevice(DeviceNode* parent, const char* name,

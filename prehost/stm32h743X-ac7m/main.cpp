@@ -12,7 +12,6 @@ make -f subapps/Makefile.clang.a32 all
 extern "C" char _IDN_BOARD[16]{ "STM32H743IIT6" };
 
 _ESYM_C void mecocoa();
-extern OstreamTrait* con0_out;
 
 void _idle() {
 	GPIN& LEDB = GPIOB[ 0];
@@ -40,15 +39,40 @@ void _test() {
 
 void key_isr_up() { erro(); }
 
+// The FP state (S0-S15) sits below the basic frame when the exception entry stacked it, and bit4 of the EXC_RETURN does not report that here. Take the base whose xPSR is a real one.
+_ESYM_C stduint* _arm_frame(stduint lr, stduint sp) {
+	stduint* base = (stduint*)sp;
+	stduint* alt = (stduint*)(sp + 0x48);
+	auto ok = [](stduint* f) {
+		const stduint xpsr = f[7];
+		if (!(xpsr & 0x01000000)) return false;// the Thumb bit must be set
+		return (xpsr & 0x1FF) <= 0xF0;// a thread-mode or regular exception frame
+	};
+	if (ok(base)) return base;
+	if (ok(alt)) return alt;
+	return (lr & 0x10) ? alt : base;
+}
+
 // A fault must report itself: no debugger available.
 static void _fault_report(rostr tag, stduint lr, stduint psp, stduint msp) {
-	stduint* frame = (lr & 0x8) ? (stduint*)psp : (stduint*)msp;// EXC_RETURN bit3: 1 = the frame is on PSP
+	stduint* frame = _arm_frame(lr, (lr & 0x8) ? psp : msp);// bit3: the frame is on the PSP
 	XART1.OutFormat("FAULT %s cfsr=%08X hfsr=%08X bfar=%08X mmfar=%08X\r\n",
 		tag, SCB->CFSR, SCB->HFSR, SCB->BFAR, SCB->MMFAR);
 	XART1.OutFormat("  pc=%08X lr=%08X xpsr=%08X psp=%08X msp=%08X exc=%08X\r\n",
 		frame[6], frame[5], frame[7], psp, msp, lr);
 	XART1.OutFormat("  r0=%08X r1=%08X r2=%08X r3=%08X r12=%08X\r\n",
 		frame[0], frame[1], frame[2], frame[3], frame[4]);
+	// a fault inside a loaded image is turned into an exit syscall, so only that task dies
+	if (lr & 0x8) {
+		auto pb = Taskman::CurrentPB();
+		if (pb && pb->load_slices[0].length) {
+			frame[0] = _IMM(syscall_t::EXIT);// r0: call id
+			frame[1] = 128 + SIGSEGV;// r1: exit code
+			frame[2] = frame[3] = 0;
+			frame[6] = (pb->load_slices[0].address + pb->load_slices[0].length - 8) | 1;// PC: the stub at the end of the image block
+			return;
+		}
+	}
 	erro();
 }
 #define _FAULT_HANDLER(name, tag) \
@@ -71,6 +95,33 @@ _ESYM_C void _default_report(stduint lr, stduint ipsr) {
 	_fault_report("Default", lr, psp, msp);
 }
 
+// Nonzero on a syscall return: the kernel stack pointer the SVC vector shim rewinds to.
+_ESYM_C stduint C_SvcReturn = 0;
+
+// Finish a syscall. The caller frame was saved on the thread while the body ran, so it is
+// rebuilt here and the hardware pops it: the result cannot be lost between registers.
+// Returns the EXC_RETURN to use.
+_ESYM_C stduint _svc_return_to_user(stduint result) {
+	auto* tb = Taskman::CurrentTB();
+	if (!tb) return 0xFFFFFFFD;
+	auto& c = tb->context;
+	stduint* saved = (stduint*)((byte*)&c + offsetof(NormalTaskContext, SP_fiq));// free on M-profile
+	const stduint frame_size = (_IMM(c.LR_irq) & 1) ? 0x68 : 0x20;// S0-S15 sit below the basic frame
+	stduint* frame = (stduint*)(_IMM(c.SP_irq) + frame_size - 0x20);// the caller SP, less the basic frame
+	frame[0] = result;
+	for0(i, 8) if (i) frame[i] = saved[i];
+	_ASM volatile("msr psp, %0" :: "r"((stduint)frame));// the hardware unstacks this frame
+	C_SvcReturn = _IMM(tb->stack_levladdr) + tb->stack_size;// the shim rewinds the kernel stack after its epilogue
+	stduint ctl = 0;
+	_ASM volatile("mrs %0, control" : "=r"(ctl));
+	const stduint priv = (tb->parent_process && tb->parent_process->ring == RING_U) ? 1u : 0u;
+	_ASM volatile("msr control, %0" :: "r"((ctl & ~1u) | priv));// the caller level is applied in handler mode
+	_ASM volatile("isb");
+	return 0xFFFFFFFD;// a basic frame on the PSP: S0-S15 are scratch under the C ABI
+}
+
+// The caller PC to resume at is kept with the saved frame, so no accessor is needed here.
+
 static stduint _user_sd_tries = 0;
 
 static void _user_load_from_sd(void*, ...) {
@@ -83,9 +134,9 @@ static void _user_load_from_sd(void*, ...) {
 		return;
 	}
 	stduint size = d->d_inode->i_size;
-	ProcessBlock* upb = Taskman::CreateFile("/mnt/sd0.0/testpie", RING_M, Task_Init);
+	ProcessBlock* upb = Taskman::CreateFile("/mnt/sd0.0/testpie", RING_U, Task_Init);
 	XART1.OutFormat("USER sd size=%u pb=%08X ccr=%08X\r\n",
-		(unsigned)size, (unsigned)_IMM(upb), (unsigned)_IMM(Reference(0xE000ED14)));// CCR bit16: D-Cache, bit17: I-Cache
+		(unsigned)size, (unsigned)_IMM(upb), (unsigned)SCB->CCR);// CCR bit16: D-Cache, bit17: I-Cache
 	if (!upb) erro("USER load fail");
 	{// give the user process its console and the three standard fds
 		auto focus_tty = upb->focus_tty.Lock();
@@ -99,13 +150,6 @@ static void _user_load_from_sd(void*, ...) {
 	}
 }
 
-static stduint _svc_test(stduint callid, stduint arg) {
-	register stduint r0 _ASM("r0") = callid;
-	register stduint r1 _ASM("r1") = arg;
-	_ASM volatile("svc #0" : "+r"(r0) : "r"(r1) : "memory");
-	return r0;
-}
-
 alignas(8) static byte _boot_stack[0x8000];
 bool inited = false;
 int main()
@@ -114,7 +158,7 @@ int main()
 	if (!RCC.setClock(SysclkSource::HSE)) erro();
 	XART1.setMode(115200);
 	SysTick::enClock(CONFIG_SysTickFreq);
-	Reference(0xE000EF34) = _IMM(Reference(0xE000EF34)) & ~(3u << 30);// FPCCR: ASPEN/LSPEN off, the FP state is stacked on every exception
+	SCB->FPCCR = SCB->FPCCR & ~(3u << 30);// FPCCR: ASPEN/LSPEN off, the FP state is stacked on every exception
 	GPIN& KEYU = GPIOA[ 0];// Up
 	KEYU.setMode(GPIOMode::IN_Pull).setPull(false);
 	KEYU.setMode(GPIORupt::Posedge);
@@ -125,7 +169,6 @@ int main()
 	_ASM volatile("mrs r0, control \n orr r0, r0, #2 \n msr control, r0 \n isb" ::: "r0");
 	mecocoa();
 	inited = true;
-	XART1.OutFormat("SYSC test: TIME -> %u\r\n", (unsigned)_svc_test(_IMM(syscall_t::TIME), 0));// temporary probe, removed once the user program drives syscalls
 	
 	Taskman::Create((void*)&_test, RING_M);
 	// M2: the user program is read from the card, the embedded image stays as a fallback

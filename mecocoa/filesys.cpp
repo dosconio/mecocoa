@@ -863,7 +863,20 @@ static void _Prune_unlocked(vfs_dentry* dentry) {
 		_Prune_unlocked(child);
 		child = next;
 	}
-	if (dentry->d_inode) delete dentry->d_inode;
+	if (dentry->d_inode) {
+		if (dentry->d_inode->ref_count) {
+			dentry->d_inode->i_sb = nullptr;
+			dentry->d_inode->detached = true;
+			dentry->d_inode->detached_dentry = dentry;
+			dentry->d_parent = nullptr;
+			dentry->d_first_child = nullptr;
+			dentry->d_next_sibling = nullptr;
+			dentry->d_mounts = nullptr;
+			dentry->d_mounted_on = nullptr;
+			return;
+		}
+		else delete dentry->d_inode;
+	}
 	delete dentry;
 }
 
@@ -969,6 +982,9 @@ bool Filesys::MountFilesys(FilesysTrait* fs, file_system_type* type, const char*
 bool Filesys::Unmount(const char* target_path) {
 	MutexLocal guard(&vfs_lock);
 	vfs_dentry* target = _Index_unlocked(target_path, nullptr);
+	if (target && !target->d_mounts && target->d_mounted_on) {
+		target = target->d_mounted_on;
+	}
 	if (!target || !target->d_mounts) {
 		return false;
 	}
@@ -1307,6 +1323,7 @@ int Filesys::Read(vfs_file* file, void* buf, stduint count) {
 	}
 	if (!file->f_inode->i_sb) return -1;
 	MutexLocal guard(&vfs_lock);
+	if (!file->f_inode->i_sb) return -1;
 	FilesysTrait* fs = file->f_inode->i_sb->fs;
 	if (fs == &global_devfs) {
 		if (auto* node = DevFs::GetDeviceNode(file->f_inode->internal_handler)) {
@@ -1333,6 +1350,7 @@ int Filesys::Write(vfs_file* file, const void* buf, stduint count) {
 	}
 	if (!file->f_inode->i_sb) return -1;
 	MutexLocal guard(&vfs_lock);
+	if (!file->f_inode->i_sb) return -1;
 	FilesysTrait* fs = file->f_inode->i_sb->fs;
 	if (fs == &global_devfs) {
 		if (auto* node = DevFs::GetDeviceNode(file->f_inode->internal_handler)) {
@@ -1353,6 +1371,7 @@ int Filesys::Write(vfs_file* file, const void* buf, stduint count) {
 stdsint Filesys::Ctrl(vfs_file* file, stduint cmd, void* args) {
 	if (!file || !file->f_inode || !file->f_inode->i_sb) return -1;
 	MutexLocal guard(&vfs_lock);
+	if (!file->f_inode->i_sb) return -1;
 	if (file->f_inode->i_sb->fs != &global_devfs) return -1;
 	auto* node = DevFs::GetDeviceNode(file->f_inode->internal_handler);
 	return node ? Devsman::Ctrl(node, cmd, args, file->f_mode) : -1;
@@ -1368,11 +1387,18 @@ int Filesys::Close(vfs_file* file) {
 	}
 	MutexLocal guard(&vfs_lock);
 	if (file) {
-		if (file->f_inode && file->f_pos > file->f_inode->i_size) {
-			file->f_inode->i_size = file->f_pos;
+		auto* inode = file->f_inode;
+		auto* detached_dentry = inode ? inode->detached_dentry : nullptr;
+		if (inode && file->f_pos > inode->i_size) {
+			inode->i_size = file->f_pos;
 		}
 		file->f_inode = nullptr;
+		file->f_dentry = nullptr;
 		free(file);
+		if (inode && inode->detached && !inode->ref_count) {
+			delete detached_dentry;
+			delete inode;
+		}
 	}
 	return 0;
 }
@@ -1381,6 +1407,7 @@ int Filesys::Enumer(vfs_file* file, void* buf, stduint count, ProcessBlock* pb) 
 	if (!file || !file->f_inode || !file->f_inode->i_sb) return -1;
 	if (count == 0) return 0;
 	MutexLocal guard(&vfs_lock);
+	if (!file->f_inode->i_sb) return -1;
 	FilesysTrait* fs = file->f_inode->i_sb->fs;
 	file->f_enum_state.begin(count);
 

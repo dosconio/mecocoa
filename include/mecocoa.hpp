@@ -58,7 +58,9 @@
 #else
 #define KASSERT(x) ((void)0)
 #endif
-#define _UEFI_AUFDBG
+#ifdef _UEFI
+#define _UEFI_AUFDBG 1
+#endif
 
 //
 
@@ -131,6 +133,10 @@ struct RMOD_LIST {
 void mecfetch();
 
 // ---- . ----
+
+#if defined(_ARCH_ARM_ProfileM)
+void mpumap_task(ThreadBlock* tb);// MPU regions 1 and 2 follow the running task
+#endif
 
 extern "C" void register_interrupt_handler(stduint irq_id, Handler_t handler);
 

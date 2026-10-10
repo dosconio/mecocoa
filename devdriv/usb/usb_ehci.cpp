@@ -200,7 +200,7 @@ namespace {
 				uint32(block + completed), chunk,
 				output + completed * Block_Size);
 			if (error || class_driver_->LastResult() !=
-				USBMassStorage::Result::kOk) return false;
+				USBMassStorage::Result::Ok) return false;
 			completed += chunk;
 		}
 		MemCopyN(Block_buffer, output + (count - 1u) * Block_Size, Block_Size);
@@ -229,7 +229,7 @@ namespace {
 				uint32(block + completed), chunk,
 				input + completed * Block_Size);
 			if (error || class_driver_->LastResult() !=
-				USBMassStorage::Result::kOk) return false;
+				USBMassStorage::Result::Ok) return false;
 			completed += chunk;
 		}
 		return true;
@@ -251,7 +251,7 @@ namespace {
 			const auto error = class_driver_->ReadBlocks(uint32(block), 1,
 				Block_buffer);
 			if (error || class_driver_->LastResult() !=
-				USBMassStorage::Result::kOk) return -1;
+				USBMassStorage::Result::Ok) return -1;
 			cached_block_ = block;
 		}
 		return static_cast<byte*>(Block_buffer)[stduint(offset % Block_Size)];

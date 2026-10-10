@@ -62,10 +62,16 @@ char _buf[64];
 String ker_buf(_buf, byteof(_buf));
 extern uint32 _start_eax, _start_ebx;
 
+void ScreenLogPanic();
+
 void kernel_fail(void* _serious, ...) {
 	Letvar(serious, loglevel_t, _IMM(_serious));
 	if (serious == _LOG_FATAL) {
+		#ifndef _UEFI_AUFDBG
 		outsfmt("\n\rKernel panic!\n\r");
+		#else
+		ScreenLogPanic();
+		#endif
 		__asm("cli; hlt");
 	}
 }

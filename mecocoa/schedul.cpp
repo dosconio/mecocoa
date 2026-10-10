@@ -791,6 +791,9 @@ auto Taskman::Schedule(bool omit_slice)->decltype(Schedule())
 	if (0 && cpuid) {
 		ploginfo("[CPU%u]SCH: Th%u -> Th%u", cpuid, old_tb->tid, new_tb->tid);
 	}
+	#if defined(_ARCH_ARM_ProfileM)
+	mpumap_task(new_tb);
+	#endif
 	#if _MCCA == 0x8664 || _MCCA == 0x8632
 	if (_IMM(&new_tb->context) & 0xF) plogerro("Sch1(%p)", &new_tb->context);
 	((void(*)(NormalTaskContext*, NormalTaskContext*))mglb(SwitchTaskContext))(&new_tb->context, &old_tb->context);

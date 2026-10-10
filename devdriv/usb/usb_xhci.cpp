@@ -16,6 +16,7 @@ namespace {
 	constexpr uint32 XHCIEventSource = IRQ_xHCI;
 	constexpr stduint XHCIEventWatchdogTicks = CONFIG_SysTickFreq >= 10 ?
 		CONFIG_SysTickFreq / 10 : 1;
+	constexpr stduint XHCIPolicyTicks = 1;
 	struct XHCIControllerInstance {
 		XHCIControllerInstance(stduint mmio_base, uint8 bus, uint8 device, uint8 function)
 			: controller{ mmio_base }, mmio_base{ mmio_base }, bus{ bus },
@@ -29,10 +30,12 @@ namespace {
 		volatile stduint acknowledgement_count = 0;
 		bool running = false;
 		bool watchdog_reported = false;
+		bool policy_error_reported = false;
 		XHCIControllerInstance* next = nullptr;
 	};
 	XHCIControllerInstance* xhci_controllers = nullptr;
 	bool xhci_event_watchdog_armed = false;
+	bool xhci_policy_tick_armed = false;
 	uint32 xhci_event_generation = 0;
 }
 
@@ -125,6 +128,39 @@ static void signal_pending_xhci_events() {
 	device_interrupt_proc(IRQ_xHCI);
 }
 
+static void poll_xhci_policy(pureptr_t, stduint) {
+	xhci_policy_tick_armed = false;
+	for (auto* instance = xhci_controllers; instance; instance = instance->next) {
+		if (!instance->running) continue;
+		if (auto err = instance->controller.ProcessDelayed()) {
+			if (!instance->policy_error_reported) {
+				plogwarn("xHCI PCI %[8H].%[8H].%[8H] delayed policy failed: %s at %s:%d",
+					instance->bus, instance->device, instance->function,
+					err.Name(), err.File(), err.Line());
+				instance->policy_error_reported = true;
+			}
+		}
+		else {
+			instance->policy_error_reported = false;
+		}
+	}
+	xhci_policy_tick_armed = Systimex::AppendDeferredCallback(
+		XHCIPolicyTicks, 0, (_tocall_ft)poll_xhci_policy);
+	if (!xhci_policy_tick_armed) {
+		plogerro("xHCI cannot re-arm delayed policy tick");
+	}
+}
+
+static bool arm_xhci_policy_tick() {
+	if (xhci_policy_tick_armed) return true;
+	xhci_policy_tick_armed = Systimex::AppendDeferredCallback(
+		XHCIPolicyTicks, 0, (_tocall_ft)poll_xhci_policy);
+	if (!xhci_policy_tick_armed) {
+		plogerro("xHCI cannot arm delayed policy tick");
+	}
+	return xhci_policy_tick_armed;
+}
+
 static void poll_xhci_events(pureptr_t, stduint) {
 	xhci_event_watchdog_armed = false;
 	for (auto* instance = xhci_controllers; instance; instance = instance->next) {
@@ -150,6 +186,7 @@ static void poll_xhci_events(pureptr_t, stduint) {
 				err.Name(), err.File(), err.Line());
 		}
 	}
+	(void)arm_xhci_policy_tick();
 	xhci_event_watchdog_armed = Systimex::AppendDeferredCallback(
 		XHCIEventWatchdogTicks, 0, (_tocall_ft)poll_xhci_events);
 	if (!xhci_event_watchdog_armed) {
@@ -205,6 +242,7 @@ static bool start_xhci_driver(DeviceNode* xhc_node) {
 	}
 	signal_pending_xhci_events();
 	(void)arm_xhci_event_watchdog();
+	(void)arm_xhci_policy_tick();
 	xhc_node->fields.binding.driver_data = xhc;
 	auto usb_bus_name = String::newFormat("usb-bus@%04x:%02x:%02x.%x", 0,
 		(stduint)xhc_node->fields.pci_bus,

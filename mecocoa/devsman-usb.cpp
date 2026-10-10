@@ -10,6 +10,7 @@
 #include <cpp/System/Audiosys/AudioManager.hpp>
 #if _MCCA == 0x8664
 #include <cpp/Device/USB/USB.hpp>
+#include <cpp/Device/USB/USBHost-MSC.hpp>
 #endif
 #if (_MCCA & 0xFF00) == 0x8600
 #include "c/proctrl/IAx86_64.ext.h"
@@ -53,6 +54,11 @@ namespace Devs {
 	}
 
 	USBNodeClassInfo classify_usb_interface(const uni::device::SpaceUSB::InterfaceDescriptor& if_desc) {
+		if (if_desc.interface_class == 0x08u && if_desc.interface_sub_class == 0x06u &&
+			if_desc.interface_protocol == 0x50u) {
+			return {if_desc.interface_class, if_desc.interface_sub_class, if_desc.interface_protocol,
+				"usb-mass-storage", "mass-storage"};
+		}
 		if (if_desc.interface_class == 3 && if_desc.interface_sub_class == 1) {
 			if (if_desc.interface_protocol == 1) {
 				return {if_desc.interface_class, if_desc.interface_sub_class, if_desc.interface_protocol,
@@ -88,6 +94,126 @@ namespace Devs {
 
 	DeviceNode* find_pci_device_node_by_driver_data(DeviceNode* parent, void* driver_data) {
 		return find_device_node_by_driver_data(parent, uint16(DeviceNodeType::PciDevice), driver_data);
+	}
+
+	constexpr int32 USBDisconnectedProbeResult = -0x5848;
+
+	bool has_usb_device_descendant(DeviceNode* node) {
+		if (!node) return false;
+		for (auto* child = reinterpret_cast<DeviceNode*>(node->link.subf); child;
+			child = reinterpret_cast<DeviceNode*>(child->link.next)) {
+			if (DeviceNodeType(child->fields.node_type) == DeviceNodeType::UsbDevice ||
+				has_usb_device_descendant(child)) return true;
+		}
+		return false;
+	}
+
+	void clear_disconnected_usb_binding(DeviceNode* node, void* driver_data) {
+		if (!node) return;
+		if (!driver_data) {
+			node->fields.binding.state = static_cast<uint32>(DriverBindingState::Failed);
+			node->fields.binding.probe_result = USBDisconnectedProbeResult;
+			return;
+		}
+		if (node->fields.binding.driver_data == driver_data) {
+			node->fields.binding.driver_data = nullptr;
+			node->fields.binding.state = static_cast<uint32>(DriverBindingState::Failed);
+			node->fields.binding.probe_result = USBDisconnectedProbeResult;
+		}
+		for (auto* child = reinterpret_cast<DeviceNode*>(node->link.subf); child;
+			child = reinterpret_cast<DeviceNode*>(child->link.next)) {
+			if (DeviceNodeType(child->fields.node_type) == DeviceNodeType::UsbDevice) continue;
+			clear_disconnected_usb_binding(child, driver_data);
+		}
+	}
+
+	bool is_deferred_disconnected_usb_device(DeviceNode* node) {
+		return node && DeviceNodeType(node->fields.node_type) == DeviceNodeType::UsbDevice &&
+			node->fields.binding.driver_data == nullptr &&
+			node->fields.binding.probe_result == USBDisconnectedProbeResult;
+	}
+
+	DeviceNode* find_reusable_usb_device(DeviceNode* parent, const char* name) {
+		if (!parent || !name) return nullptr;
+		for (auto* child = reinterpret_cast<DeviceNode*>(parent->link.subf); child;
+			child = reinterpret_cast<DeviceNode*>(child->link.next)) {
+			if (DeviceNodeType(child->fields.node_type) != DeviceNodeType::UsbDevice ||
+				!child->link.addr || StrCompare(child->link.addr, name) ||
+				is_deferred_disconnected_usb_device(child)) continue;
+			return child;
+		}
+		return nullptr;
+	}
+
+	void prune_disconnected_usb_ancestors(DeviceNode* node) {
+		auto* current = node;
+		while (current) {
+			if (DeviceNodeType(current->fields.node_type) != DeviceNodeType::UsbDevice ||
+				!is_deferred_disconnected_usb_device(current) ||
+				has_usb_device_descendant(current)) {
+				current = reinterpret_cast<DeviceNode*>(current->link.getParent());
+				continue;
+			}
+			auto* parent = reinterpret_cast<DeviceNode*>(current->link.getParent());
+			if (!parent || !detach_child(parent, current)) return;
+			release_device_subtree(current);
+			current = parent;
+		}
+	}
+
+	void handle_usb_msc_event(uni::device::SpaceUSB::USBHost_MSC& driver,
+		uni::device::SpaceUSB::USBHost_MSC::Event event, uint32 command_id,
+		DeviceNode* interface_node);
+	bool disconnect_usb_msc_storage(uni::device::SpaceUSB::USBHostDevice& device);
+	void on_usb_msc_event(uni::device::SpaceUSB::USBHost_MSC& driver,
+		uni::device::SpaceUSB::USBHost_MSC::Event event, uint32 command_id,
+		void* context) {
+		auto* dev = driver.ParentDevice();
+		auto* node = find_usb_device_node_by_driver_data(Devsman::Root(), dev);
+		const auto* location = find_resource(node, DeviceResourceType::UsbLocation, 0);
+		const stduint port = location ? stduint(location->start) : 0;
+		const stduint slot = location ? stduint(location->extra) : 0;
+		handle_usb_msc_event(driver, event, command_id,
+			static_cast<DeviceNode*>(context));
+		if (event == uni::device::SpaceUSB::USBHost_MSC::Event::BringUpComplete) {
+			if (driver.IsReady()) {
+				ploginfo("USB MSC observer ready port=%u slot=%u interface=%u max-lun=%u blocks=%u block-size=%u commands=%u completions=%u",
+					port, slot, (stduint)driver.InterfaceNumber(),
+					(stduint)driver.MaxLun(), (stduint)driver.BlockCount(),
+					(stduint)driver.BlockSize(), (stduint)driver.CommandCount(),
+					(stduint)driver.CompletionCount());
+			} else {
+				plogwarn("USB MSC observer bring-up failed port=%u slot=%u interface=%u result=%s phase=%s stage=%s commands=%u completions=%u",
+					port, slot, (stduint)driver.InterfaceNumber(), driver.ResultName(),
+					driver.PhaseName(), driver.StageName(),
+					(stduint)driver.CommandCount(),
+					(stduint)driver.CompletionCount());
+			}
+			return;
+		}
+		// ploginfo("USB MSC observer command complete port=%u slot=%u interface=%u command=%u tag=%[32H] result=%s ready=%u",
+		// 	port, slot, (stduint)driver.InterfaceNumber(), (stduint)command_id,
+		// 	(stduint)driver.CommandTag(), driver.ResultName(),
+		// 	driver.IsReady() ? 1u : 0u);
+	}
+
+	void register_usb_msc_observer(
+		uni::device::SpaceUSB::USBHostDevice& dev,
+		const uni::device::SpaceUSB::InterfaceDescriptor& descriptor,
+		DeviceNode* interface_node) {
+		if (descriptor.alternate_setting || descriptor.interface_class != 0x08u ||
+			descriptor.interface_sub_class != 0x06u ||
+			descriptor.interface_protocol != 0x50u) return;
+		auto* class_driver = dev.FindClassDriver(
+			uni::device::SpaceUSB::ClassDriverType::MassStorage,
+			descriptor.interface_number);
+		if (!class_driver) {
+			plogwarn("USB MSC class driver missing interface=%u",
+				(stduint)descriptor.interface_number);
+			return;
+		}
+		static_cast<uni::device::SpaceUSB::USBHost_MSC*>(class_driver)->SetObserver(
+			on_usb_msc_event, interface_node);
 	}
 
 	void ensure_usb_hub_downstream_ports(DeviceNode* usb_dev_node, uint8 num_ports) {
@@ -138,6 +264,7 @@ namespace Devs {
 				auto* usb_if_node = Devsman::RegisterUSBInterface(usb_dev_node, usb_if_name.reference(),
 					info.class_base, info.class_sub, info.class_if,
 					info.driver_name, &dev);
+				register_usb_msc_observer(dev, *if_desc, usb_if_node);
 				const auto* q = p + len;
 				uint32 ep_index = 0;
 				while (q + 2 <= end) {
@@ -203,6 +330,7 @@ namespace Devs {
 	void on_usb_host_device_disconnected(const uni::device::SpaceUSB::USBHostControllerIdentity& controller,
 		const uni::device::SpaceUSB::USBHostDeviceLocation& location,
 		uni::device::SpaceUSB::USBHostDevice& dev) {
+		if (disconnect_usb_msc_storage(dev)) return;
 		auto* usb_root_node = ensure_usb_root_hub_node(controller);
 		if (!usb_root_node) return;
 		DeviceNode* usb_parent_node = usb_root_node;
@@ -210,17 +338,14 @@ namespace Devs {
 			usb_parent_node = find_usb_device_node_by_driver_data(usb_root_node, location.parent_hub);
 		}
 		const uint8 upstream_port_num = location.upstream_port;
-		auto usb_port_name = String::newFormat("usb-port@%u", (stduint)upstream_port_num);
-		auto* usb_port_node = Devsman::RegisterUSBPort(usb_parent_node, usb_port_name.reference(), upstream_port_num);
-		auto usb_dev_name = String::newFormat("usb-dev@port%u.slot%u", (stduint)upstream_port_num, (stduint)location.device_id);
-		if (Devsman::RemoveUSBDevice(usb_port_node, usb_dev_name.reference())) {
-			ploginfo("USB device detached from %s root-port=%u downstream-port=%u device=%u",
+		auto* usb_dev_node = find_usb_device_node_by_driver_data(usb_parent_node, &dev);
+		if (Devsman::RemoveUSBDevice(usb_dev_node)) {
+			ploginfo("USB device disconnect handled on %s root-port=%u downstream-port=%u device=%u",
 				controller.driver_name,
 				(stduint)location.root_hub_port,
 				(stduint)upstream_port_num,
 				(stduint)location.device_id);
 		}
-		(void)dev;
 	}
 	#endif
 
@@ -302,7 +427,7 @@ DeviceNode* Devsman::RegisterUSBDevice(DeviceNode* parent, const char* name,
 	const char* driver_name, void* driver_data) {
 	initialize_device_tree();
 	if (!parent || !name) return nullptr;
-	if (auto* node = find_named_child(parent, DeviceNodeType::UsbDevice, name)) {
+	if (auto* node = find_reusable_usb_device(parent, name)) {
 		node->fields.vendor_id = vendor_id;
 		node->fields.device_id = product_id;
 		node->fields.text_manufacturer = text_manufacturer ? StrHeap(text_manufacturer) : nullptr;
@@ -382,10 +507,24 @@ bool Devsman::AddUSBEndpointResource(DeviceNode* node, uint32 index,
 bool Devsman::RemoveUSBDevice(DeviceNode* parent, const char* name) {
 	initialize_device_tree();
 	if (!parent || !name) return false;
-	auto* node = find_named_child(parent, DeviceNodeType::UsbDevice, name);
-	if (!node) return false;
+	auto* node = find_reusable_usb_device(parent, name);
+	if (!node) node = find_named_child(parent, DeviceNodeType::UsbDevice, name);
+	return node ? RemoveUSBDevice(node) : false;
+}
+
+bool Devsman::RemoveUSBDevice(DeviceNode* node) {
+	initialize_device_tree();
+	if (!node || DeviceNodeType(node->fields.node_type) != DeviceNodeType::UsbDevice)
+		return false;
+	auto* parent = reinterpret_cast<DeviceNode*>(node->link.getParent());
+	if (!parent) return false;
+	if (has_usb_device_descendant(node)) {
+		clear_disconnected_usb_binding(node, node->fields.binding.driver_data);
+		return true;
+	}
 	if (!detach_child(parent, node)) return false;
 	release_device_subtree(node);
+	prune_disconnected_usb_ancestors(parent);
 	return true;
 }
 

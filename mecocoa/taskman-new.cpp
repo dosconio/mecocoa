@@ -372,7 +372,7 @@ ProcessBlock* Taskman::Create(void* entry, byte ring, bool append)
 
 	#elif defined(_ARCH_ARM_ProfileM)
 	tb->stack_size = DEFAULT_STACK_SIZE;
-	tb->stack_lineaddr = (byte*)mempool.allocate(tb->stack_size, 12);
+	tb->stack_lineaddr = (byte*)mempool.allocate(tb->stack_size, ring != RING_M ? 14 : 12);// a user stack is its own MPU region, 16KB aligned
 	tb->stack_levladdr = (byte*)mempool.allocate(tb->stack_size, 12);// handler stack, kept off the user stack
 	*(stduint*)tb->stack_lineaddr = 0xDEADBEEF;// stack canary
 	auto& ctx = tb->context;
@@ -384,6 +384,7 @@ ProcessBlock* Taskman::Create(void* entry, byte ring, bool append)
 	ctx.sp = _IMM(frame);
 	ctx.exc_return = 0xFFFFFFFD;// thread mode using PSP
 	ctx.SP_svc = _IMM(tb->stack_levladdr) + tb->stack_size;// this task's MSP, see stm32h743.S
+	ctx.CONTROL = (ring == RING_U) ? 1 : 0;// nPRIV
 
 	#endif
 

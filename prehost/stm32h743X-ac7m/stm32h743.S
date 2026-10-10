@@ -9,6 +9,8 @@
 
 	IMPORT	SysTick_Handler_Mcca
 	IMPORT	syscall
+	IMPORT	interrupt_dispatcher
+	IMPORT	C_SvcReturn
 	IMPORT	|Image$$ER_RMOD$$Base|
 	IMPORT	|Image$$ER_RMOD$$Limit|
 
@@ -40,22 +42,42 @@ RMOD_BoundLimit	PROC
 	ENDP
 
 ; Run the syscall body in thread mode on the caller's stack, so it may block.
-; On entry R0-R3 already hold (callid, p1, p2, p3), R12 the caller's LR and LR the interrupted PC.
+; On entry R0-R3 hold (callid, p1, p2, p3). The handler kept the caller frame on the thread,
+; so the body may use this memory as its stack and the return goes through that saved frame.
 SvcSyscallTrampoline	PROC
 	EXPORT	SvcSyscallTrampoline
-	PUSH	{R12, LR}
 	BL	syscall
-	POP	{R12, R1}
-	ORR	R1, R1, #1	; the stacked PC carries no Thumb bit, BX needs it
-	MOV	LR, R12
-	BX	R1
+	MOV	R1, R0	; the result rides back in the marker call
+	MVN	R0, #0	; ask the handler to resume the caller from its frame
+	SVC	#0
+	ENDP
+
+; The SVC vector: the dispatcher picks the EXC_RETURN to use, because a syscall returns
+; through the caller frame rather than through this handler's own frame.
+SVC_Handler	PROC
+	EXPORT	SVC_Handler
+	PUSH	{R4, LR}
+	MOV	R0, LR
+	MRS	R1, IPSR
+	BL	interrupt_dispatcher
+	POP	{R4, LR}
+	LDR	R1, =C_SvcReturn	; nonzero on a syscall return: rewind the kernel stack
+	LDR	R2, [R1]
+	MOV	R3, #0
+	STR	R3, [R1]	; one shot
+	CMP	R2, #0
+	BEQ	SVC_NoRewind
+	MSR	MSP, R2
+SVC_NoRewind
+	MOV	LR, R0
+	BX	LR
 	ENDP
 
 SwitchTaskContext	PROC
 	EXPORT	SwitchTaskContext
 	MOV32	R2, #0xE000ED22	; SHPR3 bytes 2 and 3: PendSV and SysTick priority
-	MOV32	R3, #0x0000FFFF
-	STRH	R3, [R2]	; 15 for both, so SysTick never preempts the switch
+	MOV32	R3, #0x00004080	; SysTick 4, PendSV 8: PendSV outranks the SVC handler, SysTick outranks PendSV
+	STRH	R3, [R2]	; SVCall stays at 15, see syscall.cpp
 	LDR	R2, =C_SwitchNext
 	STR	R0, [R2]
 	LDR	R2, =C_SwitchCrt
@@ -106,8 +128,9 @@ PendSV_LRReady
 	VLDMIA	R2, {S16-S31}
 	LDR	R3, [R0, #0x1A0]
 	VMSR	FPSCR, R3
-	MSR	PSP, R1
+	LDR	R2, [R0, #0x34]	; PSP of the incoming task
 	LDR	R1, [R0, #0x4C]	; this task's handler stack
+	MSR	PSP, R2
 	MSR	MSP, R1
 	LDR	R3, [R0, #0x48]	; ctx->CONTROL: apply nPRIV, the stack and FPCA follow EXC_RETURN
 	AND	R3, R3, #0x1

@@ -12,7 +12,7 @@
 // x86: GDT, PG, MEM (for ladder auto-enable PG)
 // x64: GDT, MEM, PG
 
-extern OstreamTrait* con0_out;
+
 
 _ESYM_C void mecocoa() {
 	UART_t com1; con0_out = &com1;

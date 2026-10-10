@@ -64,6 +64,8 @@ struct vfs_inode {
 	void* internal_handler = nullptr;       // e.g. FAT_FileHandle* or internal inode* from specific FS
 	
 	stduint ref_count = 0;
+	bool detached = false;             // Mount removed while an open file still owns this inode
+	vfs_dentry* detached_dentry = nullptr;
 };
 
 #define VFS_MAX_FILENAME 64

@@ -24,19 +24,57 @@ static const MemRegion memreg[] = {
 
 uni::Mempool mempool_bdma;// SRAM4
 
-// SDRAM as Normal (32MB @0xC0000000, region 7): default map makes it Device, where an unaligned word store faults
+_ESYM_C void SvcUserReturn();
+
+// SDRAM as Normal (32MB @0xC0000000, region 0): default map makes it Device, where an unaligned word store faults
 static void _mpu_sdram_normal() {
-	Reference(0xE000ED24) |= (1u << 16) | (1u << 17) | (1u << 18);// SHCSR: Mem/Bus/Usage fault enable
-	Reference(0xE000ED94).rstof(0);// MPU_CTRL: disable while writing regions
-	Reference(0xE000ED98) = 7;// RNR
-	Reference(0xE000ED9C) = 0xC0000000;// RBAR
-	Reference(0xE000EDA0) = (1u << 0) | (24u << 1) | (1u << 19) | (3u << 24);// RASR=0x03080031
-	Reference(0xE000ED94) = (1u << 0) | (1u << 2);// ENABLE | PRIVDEFENA
+	SCB->SHCSR |= (1u << 16) | (1u << 17) | (1u << 18);// Mem/Bus/Usage fault enable
+	MPU->CTRL = MPU->CTRL & ~1u;// disable while writing regions
+	MPU->RNR = 0;// region 0 is the kernel one, regions 1 and 2 follow the running task
+	MPU->RBAR = 0xC0000000;
+	MPU->RASR = (1u << 0) | (24u << 1) | (1u << 19) | (1u << 24);// 0x01080031, AP=001: privileged only
+	MPU->CTRL = (1u << 0) | (1u << 2);// ENABLE | PRIVDEFENA
 	__DSB();
 	__ISB();
 	XART1.OutFormat("MPU type=%08X ctrl=%08X rbar=%08X rasr=%08X\r\n",
-		(unsigned)_IMM(Reference(0xE000ED90)), (unsigned)_IMM(Reference(0xE000ED94)),
-		(unsigned)_IMM(Reference(0xE000ED9C)), (unsigned)_IMM(Reference(0xE000EDA0)));
+		(unsigned)MPU->TYPE, (unsigned)MPU->CTRL, (unsigned)MPU->RBAR, (unsigned)MPU->RASR);
+}
+
+// ARMv7-M MPU: a region of 2^n bytes starts on a 2^n boundary, its size field holds n-1
+static void _mpu_write_region(stduint idx, stduint base, stduint bytes, stduint ap, bool exec) {
+	stduint expo = 5;// 32 bytes is the smallest region
+	while ((1u << expo) < bytes) expo++;
+	MPU->RNR = idx;
+	MPU->RBAR = base;
+	MPU->RASR = (1u << 0) | ((expo - 1) << 1) | (1u << 19) | (ap << 24) | (exec ? 0u : (1u << 28));
+}
+
+static void _mpu_disable_region(stduint idx) {
+	MPU->RNR = idx;
+	MPU->RASR = MPU->RASR & ~1u;
+}
+
+// regions 1 and 2 follow the running task, region 0 is the kernel one
+void mpumap_task(ThreadBlock* tb) {
+	static stduint mapped_image = 0, mapped_stack = 0;// one core only
+	const ProcessBlock* pb = tb ? tb->parent_process : nullptr;
+	const stduint image = (pb && pb->load_slices[0].length) ? pb->load_slices[0].address : 0;
+	const stduint stack = image ? _IMM(tb->stack_lineaddr) : 0;
+	if (image == mapped_image && stack == mapped_stack) return;
+	MPU->CTRL = MPU->CTRL & ~1u;// disable while writing regions
+	if (image) {
+		_mpu_write_region(1, image, pb->load_slices[0].length, 3, true);// image: read, write and execute for the task
+		_mpu_write_region(2, stack, tb->stack_size, 3, false);// stack: read and write, never execute
+	}
+	else {
+		_mpu_disable_region(1);
+		_mpu_disable_region(2);
+	}
+	MPU->CTRL = (1u << 0) | (1u << 2);// ENABLE | PRIVDEFENA
+	__DSB();
+	__ISB();
+	mapped_image = image;
+	mapped_stack = stack;
 }
 
 bool Memory::initialize(stduint eax, byte* ebx) {
@@ -51,7 +89,7 @@ bool Memory::initialize(stduint eax, byte* ebx) {
 
 	L1C.enAbleDCacheAll();
 	XART1.OutFormat("CCR=%08X line=%u\r\n",
-		(unsigned)_IMM(Reference(0xE000ED14)), (unsigned)L1C.getDCacheLineSize());
+		(unsigned)SCB->CCR, (unsigned)L1C.getDCacheLineSize());
 	return true;
 }
 

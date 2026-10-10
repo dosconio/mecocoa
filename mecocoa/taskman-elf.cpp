@@ -478,12 +478,14 @@ ProcessBlock* Taskman::CreateELF(BlockTrait* source, byte ring) {
 	}
 	stduint align_expo = 12;// 4KB meets the usual p_align, mempool alignment is a power-of-two exponent
 	while ((1u << align_expo) < image_align && align_expo < 20) align_expo++;
-	byte* image = (byte*)mempool.allocate(image_span, align_expo);
+	while ((1u << align_expo) < image_span && align_expo < 20) align_expo++;// the block is its own MPU region, so it owns a whole power of two
+	const stduint image_block = 1u << align_expo;
+	byte* image = (byte*)mempool.allocate(image_block, align_expo);
 	if (!image) {
-		plogerro("%s: no memory for the image (%u bytes)", __FUNCIDEN__, image_span);
+		plogerro("%s: no memory for the image (%u bytes)", __FUNCIDEN__, image_block);
 		return nullptr;
 	}
-	MemSet(image, 0, image_span);// zeroing keeps the BSS tail of every segment
+	MemSet(image, 0, image_block);// zeroing keeps the BSS tail of every segment
 	const stduint load_bias = _IMM(image);// a PIE links from vaddr 0, so the image base is vaddr 0
 	for0(i, header.e_phnum) {
 		struct ELF_PHT_t ph;
@@ -502,6 +504,9 @@ ProcessBlock* Taskman::CreateELF(BlockTrait* source, byte ring) {
 			done += chunk;
 		}
 	}
+	// a faulted task resumes here to raise a clean exit syscall
+	*(uint16*)(image + image_block - 8) = 0xDF00;// svc #0
+	*(uint16*)(image + image_block - 6) = 0xE7FE;// b .
 	if (!_Taskman_Relocate_PIE_Flat(source, header, load_bias, (byte*)block_buffer.reflect())) {
 		plogerro("%s: PIE relocation failed", __FUNCIDEN__);
 		return nullptr;
@@ -512,7 +517,7 @@ ProcessBlock* Taskman::CreateELF(BlockTrait* source, byte ring) {
 	ProcessBlock* pb = Taskman::Create((void*)((load_bias + header.e_entry) | 1), ring);
 	if (!pb) return nullptr;
 	pb->load_slices[0].address = load_bias;
-	pb->load_slices[0].length = image_span;
+	pb->load_slices[0].length = image_block;// the release and the MPU region cover the same range
 	ploginfo("[ELF] flat base=%[x] span=%u entry=%[x]", load_bias, image_span, load_bias + header.e_entry);
 	return pb;
 	return pb;

@@ -94,34 +94,59 @@ extern "C" void interrupt_dispatcher(stduint irq_id, NormalTaskContext* cxt) {
 // ARM: every IRQ shares one weak vector entry (startup.S), so dispatch by the exception number
 _ESYM_C void _default_report(stduint lr, stduint ipsr);
 _ESYM_C void SvcSyscallTrampoline();
+_ESYM_C stduint* _arm_frame(stduint lr, stduint sp);
+_ESYM_C stduint _svc_return_to_user(stduint result);
 
-extern "C" void interrupt_dispatcher(stduint lr, stduint ipsr) {
+// The return value is the EXC_RETURN the vector shim must use.
+extern "C" stduint interrupt_dispatcher(stduint lr, stduint ipsr) {
 	const stduint exc_no = ipsr & 0x1FF;
 	if (exc_no == 11) {// SVCall: the caller r0..r3 hold the call id and its arguments
+		stduint primask = 0;
+		_ASM volatile("mrs %0, primask" : "=r"(primask));
+		_ASM volatile("cpsid i");// the frame must be rewritten in one go: a suspended handler cannot return to a thread
 		if (!(lr & 0x4)) {// a handler-mode SVC keeps its frame on the MSP, which is not supported
+			_ASM volatile("msr primask, %0" :: "r"(primask));
 			_default_report(lr, ipsr);
-			return;
+			return lr;
 		}
 		stduint psp = 0;
 		_ASM volatile("mrs %0, psp" : "=r"(psp));
-		stduint* frame = (stduint*)psp;
-		frame[4] = frame[5];// r12 carries the caller LR into the trampoline
-		frame[5] = frame[6];// the trampoline returns through the interrupted PC
+		stduint* frame = _arm_frame(lr, psp);
+		if (frame[0] == ~_IMM0) {// the trampoline asks for the return to its caller, frame[1] holds the result
+			_ASM volatile("msr primask, %0" :: "r"(primask));
+			return _svc_return_to_user(frame[1]);
+		}
+		stduint ctl = 0;
+		_ASM volatile("mrs %0, control" : "=r"(ctl));
+		ctl &= ~_IMM(1);// the syscall body runs privileged, _svc_return_to_user restores the caller level
+		_ASM volatile("msr control, %0" :: "r"(ctl));
+		_ASM volatile("isb");
+		if (auto* tb = Taskman::CurrentTB()) {
+			auto& c = tb->context;
+			// the body reuses this memory as its stack, so keep the whole caller frame on the
+			// thread: the A-profile FIQ bank of NormalTaskContext is free storage on M-profile
+			stduint* saved = (stduint*)((byte*)&c + offsetof(NormalTaskContext, SP_fiq));
+			for0(i, 8) saved[i] = frame[i];
+			c.SP_irq = (stduint)frame;// where it was, to rebuild the caller SP
+			c.LR_irq = (frame != (stduint*)psp) ? 1 : 0;// the layout _arm_frame picked, not the EXC_RETURN bit
+		}
 		frame[6] = _IMM(SvcSyscallTrampoline) | 1;
-		return;
+		_ASM volatile("msr primask, %0" :: "r"(primask));
+		return lr;
 	}
 	if (exc_no >= 16) {// 16 and above are the NVIC lines, the IRQ id is the line number
 		const stduint irq_id = exc_no - 16;
 		if (irq_id < 256 && interrupt_vector_handlers[irq_id]) {
 			interrupt_vector_handlers[irq_id](irq_id);
-			return;
+			return lr;
 		}
 		if (irq_id < 256 && interrupt_handlers[irq_id]) {
 			interrupt_handlers[irq_id]();
-			return;
+			return lr;
 		}
 	}
 	_default_report(lr, ipsr);// nothing registered: report it instead of spinning silently
+	return lr;
 }
 #endif
 

@@ -758,6 +758,23 @@ void serv_file_loop()// for IDE 0:0, 0:1
 			break;
 		}
 		#endif
+		#if _MCCA == 0x8664
+		case FilemanMsg::USB_MSC_PROBE:
+			if (sig_src == Task_Devsman) {
+				Devsman::ProcessUSBMSCProbe(reinterpret_cast<void*>(to_args[0]));
+			}
+			break;
+		case FilemanMsg::USB_MSC_MOUNT:
+			if (sig_src == Task_Devsman) {
+				Devsman::MountUSBMSCStorage(reinterpret_cast<void*>(to_args[0]));
+			}
+			break;
+		case FilemanMsg::USB_MSC_UNMOUNT:
+			if (sig_src == Task_Devsman) {
+				Devsman::UnmountUSBMSCStorage(reinterpret_cast<void*>(to_args[0]));
+			}
+			break;
+		#endif
 		case FilemanMsg::TEST:// (no-feedback)
 		{
 			if (bootstrapped) {

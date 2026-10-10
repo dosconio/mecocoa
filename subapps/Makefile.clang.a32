@@ -18,13 +18,19 @@ MCCA_CXXFLAGS_PIE = $(MCCA_COMFLAGS) -O2 -mcpu=cortex-m7 -mthumb -mfloat-abi=har
 MCCA_LDLIBS_PIE = -pie $(MCCA_CRT0) $(MCCA_LIBC_PIC) -lgcc -Wl,--gc-sections -Wl,--no-dynamic-linker -Wl,-e,_start -Wl,--build-id=none -Wl,-s
 
 apps=\
-	$(BIN_DIR)/testpie
+	$(BIN_DIR)/testpie \
+	$(BIN_DIR)/fault
 
 .PHONY: all clean
 all: $(apps)
 
 $(BIN_DIR)/testpie: subapps/testpie.cpp $(MCCA_CRT0) $(MCCA_LIBC_PIC)
 	@echo "MK testpie (NoMMU PIE)"
+	@mkdir -p $(BIN_DIR)
+	$(MCCA_CXX) $(MCCA_CXXFLAGS_PIE) -o $@ $< $(MCCA_LDLIBS_PIE)
+
+$(BIN_DIR)/fault: subapps/fault.cpp $(MCCA_CRT0) $(MCCA_LIBC_PIC)
+	@echo "MK fault (NoMMU PIE)"
 	@mkdir -p $(BIN_DIR)
 	$(MCCA_CXX) $(MCCA_CXXFLAGS_PIE) -o $@ $< $(MCCA_LDLIBS_PIE)
 
