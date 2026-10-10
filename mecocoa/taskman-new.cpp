@@ -256,6 +256,17 @@ void Taskman::Initialize(stduint cpuid) {
 	#elif _MCCA == 0x8664
 	// x64 bootstrap stack is managed separately.
 	#endif
+	#if defined(_ARCH_ARM_ProfileM)
+	extern byte _boot_stack[];
+	kernel_thread->stack_size = 0x8000;
+	kernel_thread->stack_lineaddr = _boot_stack;
+	kernel_thread->stack_levladdr = (byte*)mempool.allocate(kernel_thread->stack_size, 15);
+	*(stduint*)kernel_thread->stack_lineaddr = 0xDEADBEEF;
+	*(stduint*)kernel_thread->stack_levladdr = 0xDEADBEEF;
+	// The boot thread already runs on this PSP, only the handler MSP and the thread-mode EXC_RETURN are needed.
+	kernel_thread->context.SP_svc = _IMM(kernel_thread->stack_levladdr) + kernel_thread->stack_size;
+	kernel_thread->context.exc_return = 0xFFFFFFFD;
+	#endif
 	kernel_thread->processor_id = cpuid;
 	kernel_thread->ring_coreid = cpuid; // Pin kernel thread to CPU 0
 	current_thread(cpuid) = kernel_thread;
@@ -371,10 +382,11 @@ ProcessBlock* Taskman::Create(void* entry, byte ring, bool append)
 	}
 
 	#elif defined(_ARCH_ARM_ProfileM)
-	tb->stack_size = DEFAULT_STACK_SIZE;
-	tb->stack_lineaddr = (byte*)mempool.allocate(tb->stack_size, ring != RING_M ? 14 : 12);// a user stack is its own MPU region, 16KB aligned
-	tb->stack_levladdr = (byte*)mempool.allocate(tb->stack_size, 12);// handler stack, kept off the user stack
+	tb->stack_size = DEFAULT_STACK_SIZE * 2;// the FAT/FileSys chain bottoms out 16KB, see the canary check
+	tb->stack_lineaddr = (byte*)mempool.allocate(tb->stack_size, ring != RING_M ? 15 : 12);// a user stack is its own MPU region, 32KB aligned
+	tb->stack_levladdr = (byte*)mempool.allocate(tb->stack_size, 15);// handler stack, kept off the user stack
 	*(stduint*)tb->stack_lineaddr = 0xDEADBEEF;// stack canary
+	*(stduint*)tb->stack_levladdr = 0xDEADBEEF;// handler stack canary
 	auto& ctx = tb->context;
 	// The first exception return pops this frame from PSP, see stm32h743.S
 	stduint* frame = (stduint*)((_IMM(tb->stack_lineaddr) + tb->stack_size - 0x20) & ~_IMM(7));
@@ -571,14 +583,14 @@ ProcessBlock* Taskman::CreateFork(ProcessBlock* fo, const CallgateFrame* frame) 
 #endif
 
 //
-ProcessBlock* Taskman::CreateFile(const char* path, byte ring, stduint parent, vfs_dentry* base) {
+ProcessBlock* Taskman::CreateFile(const char* path, byte ring, stduint parent, vfs_dentry* base, bool append) {
 	//{} ELF
 	auto label = StrIndexCharRight(path, '/');
 	if (!label) label = path; else label++;
 	vfs_dentry* d = Filesys::Index(path, base);
 	if (d && d->d_inode && d->d_inode->i_sb && d->d_inode->i_sb->fs) {
 		FileBlockBridge loop_device(d->d_inode->i_sb->fs, d->d_inode->internal_handler, d->d_inode->i_size, 512);
-		if (auto task = Taskman::CreateELF(&loop_device, ring)) {
+		if (auto task = Taskman::CreateELF(&loop_device, ring, append)) {
 			task->parent_id = parent;
 			ProcessBlock* pparent = Taskman::Locate(parent);
 			if (pparent) {

@@ -95,7 +95,7 @@ extern "C" void interrupt_dispatcher(stduint irq_id, NormalTaskContext* cxt) {
 _ESYM_C void _default_report(stduint lr, stduint ipsr);
 _ESYM_C void SvcSyscallTrampoline();
 _ESYM_C stduint* _arm_frame(stduint lr, stduint sp);
-_ESYM_C stduint _svc_return_to_user(stduint result);
+_ESYM_C stduint _svc_return_to_user(stduint result, stduint psp);
 
 // The return value is the EXC_RETURN the vector shim must use.
 extern "C" stduint interrupt_dispatcher(stduint lr, stduint ipsr) {
@@ -111,10 +111,10 @@ extern "C" stduint interrupt_dispatcher(stduint lr, stduint ipsr) {
 		}
 		stduint psp = 0;
 		_ASM volatile("mrs %0, psp" : "=r"(psp));
-		stduint* frame = _arm_frame(lr, psp);
+		stduint* frame = (stduint*)psp;// with ASPEN off the hardware stacks the plain 8-word frame
 		if (frame[0] == ~_IMM0) {// the trampoline asks for the return to its caller, frame[1] holds the result
 			_ASM volatile("msr primask, %0" :: "r"(primask));
-			return _svc_return_to_user(frame[1]);
+			return _svc_return_to_user(frame[1], psp);
 		}
 		stduint ctl = 0;
 		_ASM volatile("mrs %0, control" : "=r"(ctl));
@@ -123,12 +123,11 @@ extern "C" stduint interrupt_dispatcher(stduint lr, stduint ipsr) {
 		_ASM volatile("isb");
 		if (auto* tb = Taskman::CurrentTB()) {
 			auto& c = tb->context;
-			// the body reuses this memory as its stack, so keep the whole caller frame on the
-			// thread: the A-profile FIQ bank of NormalTaskContext is free storage on M-profile
+			// the body reuses this memory as its stack, so keep the caller frame on the thread
 			stduint* saved = (stduint*)((byte*)&c + offsetof(NormalTaskContext, SP_fiq));
 			for0(i, 8) saved[i] = frame[i];
 			c.SP_irq = (stduint)frame;// where it was, to rebuild the caller SP
-			c.LR_irq = (frame != (stduint*)psp) ? 1 : 0;// the layout _arm_frame picked, not the EXC_RETURN bit
+			c.LR_irq = 0;// the frame is always the plain one here
 		}
 		frame[6] = _IMM(SvcSyscallTrampoline) | 1;
 		_ASM volatile("msr primask, %0" :: "r"(primask));

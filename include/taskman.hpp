@@ -556,11 +556,13 @@ public:
 	static auto _TODO// newProcess (auto check)
 		CreateFormat(BlockTrait* source, byte ring) -> ProcessBlock*;
 	static auto// newProcess (ELF)
-		CreateELF(BlockTrait* source, byte ring) -> ProcessBlock*;
+		CreateELF(BlockTrait* source, byte ring, bool append = true) -> ProcessBlock*;
 	static auto// newProcess
 		CreateFork(ProcessBlock* parent, const CallgateFrame* frame) -> ProcessBlock*;
 	static auto// newProcess from file
-		CreateFile(const char* path, byte ring, stduint parent, uni::vfs_dentry* base = nullptr) -> ProcessBlock*;
+		CreateFile(const char* path,
+			byte ring, stduint parent, uni::vfs_dentry* base = nullptr, bool append = true
+		) -> ProcessBlock*;
 
 	static auto
 		ExitCurrent(stduint code) -> bool;// call by syscall but taskman

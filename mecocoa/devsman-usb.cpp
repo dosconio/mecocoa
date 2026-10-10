@@ -427,7 +427,11 @@ DeviceNode* Devsman::RegisterUSBDevice(DeviceNode* parent, const char* name,
 	const char* driver_name, void* driver_data) {
 	initialize_device_tree();
 	if (!parent || !name) return nullptr;
+	#if _MCCA == 0x8664
 	if (auto* node = find_reusable_usb_device(parent, name)) {
+	#else
+	if (auto* node = find_named_child(parent, DeviceNodeType::UsbDevice, name)) {
+	#endif
 		node->fields.vendor_id = vendor_id;
 		node->fields.device_id = product_id;
 		node->fields.text_manufacturer = text_manufacturer ? StrHeap(text_manufacturer) : nullptr;
@@ -507,8 +511,12 @@ bool Devsman::AddUSBEndpointResource(DeviceNode* node, uint32 index,
 bool Devsman::RemoveUSBDevice(DeviceNode* parent, const char* name) {
 	initialize_device_tree();
 	if (!parent || !name) return false;
+	#if _MCCA == 0x8664
 	auto* node = find_reusable_usb_device(parent, name);
 	if (!node) node = find_named_child(parent, DeviceNodeType::UsbDevice, name);
+	#else
+	auto* node = find_named_child(parent, DeviceNodeType::UsbDevice, name);
+	#endif
 	return node ? RemoveUSBDevice(node) : false;
 }
 
@@ -518,13 +526,17 @@ bool Devsman::RemoveUSBDevice(DeviceNode* node) {
 		return false;
 	auto* parent = reinterpret_cast<DeviceNode*>(node->link.getParent());
 	if (!parent) return false;
+	#if _MCCA == 0x8664
 	if (has_usb_device_descendant(node)) {
 		clear_disconnected_usb_binding(node, node->fields.binding.driver_data);
 		return true;
 	}
+	#endif
 	if (!detach_child(parent, node)) return false;
 	release_device_subtree(node);
+	#if _MCCA == 0x8664
 	prune_disconnected_usb_ancestors(parent);
+	#endif
 	return true;
 }
 

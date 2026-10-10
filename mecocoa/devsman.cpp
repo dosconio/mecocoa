@@ -1390,7 +1390,7 @@ namespace {
 		#else
 		constexpr byte drv_ring = RING_M;
 		#endif
-		ProcessBlock* task = Taskman::CreateFile(record.path, drv_ring, Task_Devsman);
+		ProcessBlock* task = Taskman::CreateFile(record.path, drv_ring, Task_Devsman, nullptr, false);
 		if (!task) {
 			plogwarn("[Devsman] load driver failed: %s", record.path);
 			return false;

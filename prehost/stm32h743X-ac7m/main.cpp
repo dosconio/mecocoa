@@ -39,31 +39,42 @@ void _test() {
 
 void key_isr_up() { erro(); }
 
-// The FP state (S0-S15) sits below the basic frame when the exception entry stacked it, and bit4 of the EXC_RETURN does not report that here. Take the base whose xPSR is a real one.
+// FPCCR.ASPEN=0: the hardware never stacks S0-S15, the frame is the plain 8 words.
 _ESYM_C stduint* _arm_frame(stduint lr, stduint sp) {
-	stduint* base = (stduint*)sp;
-	stduint* alt = (stduint*)(sp + 0x48);
-	auto ok = [](stduint* f) {
-		const stduint xpsr = f[7];
-		if (!(xpsr & 0x01000000)) return false;// the Thumb bit must be set
-		return (xpsr & 0x1FF) <= 0xF0;// a thread-mode or regular exception frame
-	};
-	if (ok(base)) return base;
-	if (ok(alt)) return alt;
-	return (lr & 0x10) ? alt : base;
+	return (stduint*)sp;
+}
+
+_ESYM_C void MemSetTrapReport(void* d, int c, size_t n, int which) {
+	stduint ra = 0;
+	_ASM volatile("mov %0, lr" : "=r"(ra));
+	XART1.OutFormat("MTRAP[%d] d=%08X c=%02X n=%u lr=%08X\r\n", which, (unsigned)d, (unsigned)(c & 0xFF), (unsigned)n, (unsigned)ra);
 }
 
 // A fault must report itself: no debugger available.
 static void _fault_report(rostr tag, stduint lr, stduint psp, stduint msp) {
-	stduint* frame = _arm_frame(lr, (lr & 0x8) ? psp : msp);// bit3: the frame is on the PSP
+	stduint* frame = _arm_frame(lr, (lr & 0x4) ? psp : msp);// bit2: the frame is on the PSP
 	XART1.OutFormat("FAULT %s cfsr=%08X hfsr=%08X bfar=%08X mmfar=%08X\r\n",
 		tag, SCB->CFSR, SCB->HFSR, SCB->BFAR, SCB->MMFAR);
 	XART1.OutFormat("  pc=%08X lr=%08X xpsr=%08X psp=%08X msp=%08X exc=%08X\r\n",
 		frame[6], frame[5], frame[7], psp, msp, lr);
 	XART1.OutFormat("  r0=%08X r1=%08X r2=%08X r3=%08X r12=%08X\r\n",
 		frame[0], frame[1], frame[2], frame[3], frame[4]);
+	XART1.OutFormat("  shcsr=%08X icsr=%08X\r\n", (unsigned)SCB->SHCSR, (unsigned)SCB->ICSR);
+	{// the thread the fault belongs to: its switch state and its stack canaries
+		auto* tb = Taskman::CurrentTB();
+		if (tb) {
+			const stduint can_line = tb->stack_lineaddr ? _IMM(*(volatile stduint*)tb->stack_lineaddr) : 0;
+			const stduint can_levl = tb->stack_levladdr ? _IMM(*(volatile stduint*)tb->stack_levladdr) : 0;
+			XART1.OutFormat("  ctx sp=%08X svc=%08X exc=%08X tid=%u tb=%08X\r\n",
+				(unsigned)_IMM(tb->context.sp), (unsigned)_IMM(tb->context.SP_svc),
+				(unsigned)_IMM(tb->context.exc_return), (unsigned)tb->tid, (unsigned)_IMM(tb));
+			XART1.OutFormat("  stk line=%08X levl=%08X size=%u canL=%08X canV=%08X\r\n",
+				(unsigned)_IMM(tb->stack_lineaddr), (unsigned)_IMM(tb->stack_levladdr),
+				(unsigned)tb->stack_size, (unsigned)can_line, (unsigned)can_levl);
+		}
+	}
 	// a fault inside a loaded image is turned into an exit syscall, so only that task dies
-	if (lr & 0x8) {
+	if (lr & 0x4) {
 		auto pb = Taskman::CurrentPB();
 		if (pb && pb->load_slices[0].length) {
 			frame[0] = _IMM(syscall_t::EXIT);// r0: call id
@@ -101,13 +112,12 @@ _ESYM_C stduint C_SvcReturn = 0;
 // Finish a syscall. The caller frame was saved on the thread while the body ran, so it is
 // rebuilt here and the hardware pops it: the result cannot be lost between registers.
 // Returns the EXC_RETURN to use.
-_ESYM_C stduint _svc_return_to_user(stduint result) {
+_ESYM_C stduint _svc_return_to_user(stduint result, stduint psp) {
 	auto* tb = Taskman::CurrentTB();
 	if (!tb) return 0xFFFFFFFD;
 	auto& c = tb->context;
 	stduint* saved = (stduint*)((byte*)&c + offsetof(NormalTaskContext, SP_fiq));// free on M-profile
-	const stduint frame_size = (_IMM(c.LR_irq) & 1) ? 0x68 : 0x20;// S0-S15 sit below the basic frame
-	stduint* frame = (stduint*)(_IMM(c.SP_irq) + frame_size - 0x20);// the caller SP, less the basic frame
+	stduint* frame = (stduint*)psp;// the live PSP: the hardware just stacked the trampoline's frame here, so rebuild the caller frame in its place
 	frame[0] = result;
 	for0(i, 8) if (i) frame[i] = saved[i];
 	_ASM volatile("msr psp, %0" :: "r"((stduint)frame));// the hardware unstacks this frame
@@ -150,7 +160,7 @@ static void _user_load_from_sd(void*, ...) {
 	}
 }
 
-alignas(8) static byte _boot_stack[0x8000];
+alignas(8) byte _boot_stack[0x8000];
 bool inited = false;
 int main()
 {
@@ -158,7 +168,7 @@ int main()
 	if (!RCC.setClock(SysclkSource::HSE)) erro();
 	XART1.setMode(115200);
 	SysTick::enClock(CONFIG_SysTickFreq);
-	SCB->FPCCR = SCB->FPCCR & ~(3u << 30);// FPCCR: ASPEN/LSPEN off, the FP state is stacked on every exception
+	SCB->FPCCR = SCB->FPCCR & ~(1u << 31);// ASPEN=0: the asm, handler.cpp and _arm_frame assume the plain 8-word frame, S0-S15 are caller-saved scratch
 	GPIN& KEYU = GPIOA[ 0];// Up
 	KEYU.setMode(GPIOMode::IN_Pull).setPull(false);
 	KEYU.setMode(GPIORupt::Posedge);
@@ -292,6 +302,11 @@ bool Consman::Initialize() {
 
 
 extern "C" stduint sys_kill(stduint pid, int sig, stduint tid){return 0;}
+
+// Nonzero while an SVCall is handled: such a tick must not switch tasks or re-map the MPU.
+_ESYM_C int _in_svc_handler() {
+	return (SCB->SHCSR & (1u << 7)) ? 1 : 0;// SVCALLACT
+}
 //DeviceNode* Devsman::Root(){return 0;}
 
 void CleanupPwcallThreadInterrupts(stduint tid){}

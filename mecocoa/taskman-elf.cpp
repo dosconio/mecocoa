@@ -50,7 +50,7 @@ bool Taskman::CreateELF_Carry(char* vaddr, stduint mem_length, BlockTrait* sourc
 				plogerro("Mapping failed %[x] -> %[x]", v_start1, phy);
 			}
 		}
-		else phy = page_entry->getAddress();
+		else phy = page_entry->getAddress(0);
 
 		stduint chunk_size = 0x1000 - compensation;
 		if (chunk_size > mem_length - bytes_read) {
@@ -319,7 +319,7 @@ bool _Taskman_Load_Interp(vfs_dentry* interp_d, ProcessBlock* pb, byte* block_bu
 	#endif
 }
 
-ProcessBlock* Taskman::CreateELF(BlockTrait* source, byte ring) {
+ProcessBlock* Taskman::CreateELF(BlockTrait* source, byte ring, bool append) {
 	#if (_MCCA & 0xFF00) == 0x8600 || (_MCCA & 0xFF00) == 0x1000
 	String block_buffer(String::Charset::Memory, 512);
 	struct ELF_Header_t header;
@@ -511,15 +511,11 @@ ProcessBlock* Taskman::CreateELF(BlockTrait* source, byte ring) {
 		plogerro("%s: PIE relocation failed", __FUNCIDEN__);
 		return nullptr;
 	}
-	if (ring != RING_M) {
-		plogwarn("%s: no MPU region for a non-M ring process", __FUNCIDEN__);
-	}
-	ProcessBlock* pb = Taskman::Create((void*)((load_bias + header.e_entry) | 1), ring);
+	ProcessBlock* pb = Taskman::Create((void*)((load_bias + header.e_entry) | 1), ring, append);
 	if (!pb) return nullptr;
 	pb->load_slices[0].address = load_bias;
 	pb->load_slices[0].length = image_block;// the release and the MPU region cover the same range
 	ploginfo("[ELF] flat base=%[x] span=%u entry=%[x]", load_bias, image_span, load_bias + header.e_entry);
-	return pb;
 	return pb;
 	#endif
 	return nullptr;

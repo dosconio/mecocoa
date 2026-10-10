@@ -70,6 +70,13 @@ void mpumap_task(ThreadBlock* tb) {
 		_mpu_disable_region(1);
 		_mpu_disable_region(2);
 	}
+	// region 3: a no-access guard at the bottom of this kernel stack.
+	if (tb && tb->stack_levladdr) {
+		_mpu_write_region(3, _IMM(tb->stack_levladdr), 32, 0, false);
+	}
+	else {
+		_mpu_disable_region(3);
+	}
 	MPU->CTRL = (1u << 0) | (1u << 2);// ENABLE | PRIVDEFENA
 	__DSB();
 	__ISB();
@@ -86,10 +93,14 @@ bool Memory::initialize(stduint eax, byte* ebx) {
 	map_ready = true;
 	uni_default_allocator = &mempool;
 	_mpu_sdram_normal();
+	L1C.enAbleICacheAll();// I-Cache only: it caches flash fetches, and DMA never touches instruction traffic
 
-	L1C.enAbleDCacheAll();
-	XART1.OutFormat("CCR=%08X line=%u\r\n",
-		(unsigned)SCB->CCR, (unsigned)L1C.getDCacheLineSize());
+	SCB->CCR = SCB->CCR & ~(1u << 16);// TEMP: D-Cache off, the cacheable SRAM regions and the DMA buffers are not reconciled yet
+	__DSB();
+	__ISB();
+	XART1.OutFormat("CCR=%08X line=%u ic=%u dc=%u\r\n",
+		(unsigned)SCB->CCR, (unsigned)L1C.getDCacheLineSize(),
+		(unsigned)((SCB->CCR >> 17) & 1), (unsigned)((SCB->CCR >> 16) & 1));
 	return true;
 }
 

@@ -26,8 +26,23 @@ int main(int argc, char* argv[]) {
     sysouts("[BLK] t0="); outnum(t0);
     sysouts(" t1="); outnum(t1);
     sysouts((t1 > t0) ? " slept\n" : " odd\n");
+    printf("[BLK] B sleep %u -> %u\n", (unsigned)t0, (unsigned)t1);
+    printf("[BLK] D fmt %s %u %d\n", "str", (unsigned)t1, (int)t0);
     int fd = sysopen("/dev/tty");// FileSys round trip inside one call
     sysouts((fd >= 0) ? "[BLK] C ok\n" : "[BLK] C fail\n");
+    // FP context: a clobbered S0-S15 would drift the printed value.
+    float acc = 1.0f;
+    for (int i = 0; i < 1000000; i++) {
+        acc = acc * 1.0009765625f + 0.125f;
+        if (acc > 1024.0f) acc = acc * 0.5f;
+    }
+    union { float f; stduint u; } fp;
+    fp.f = acc;
+    sysouts("[FP] a="); outnum(fp.u);
+    sysrest(1, 200);
+    fp.f = acc;
+    sysouts(" b="); outnum(fp.u);
+    sysouts("\n");
 #endif
     printf("[STATIC-PIE] Hello from Mecocoa Static PIE!\n");
     for (int i = 1; i < argc; i++) {

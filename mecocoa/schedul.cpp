@@ -4,6 +4,9 @@
 #include "../include/mecocoa.hpp"
 #include <c/format/ELF.h>
 #include <c/driver/keyboard.h>
+#if defined(_ARCH_ARM_ProfileM)
+extern "C" int _in_svc_handler();// defined in the prehost main.cpp: nonzero while an SVCall is being handled
+#endif
 #if _MCCA == 0x8632
 #include <c/proctrl/IAx86_64.msr.h>
 #endif
@@ -687,6 +690,9 @@ auto Taskman::Schedule(bool omit_slice)->decltype(Schedule())
 		HALT();
 		return;
 	}
+	#if defined(_ARCH_ARM_ProfileM)
+	if (_in_svc_handler()) { scheduler_lock.Release(old_if); return; }// a tick inside a syscall must not re-map or switch; abort before touching any state
+	#endif
 	bool is_idle = (old_tb == idle_thread(cpuid));
 	if (!omit_slice) {
 		if (!is_idle && ifContinueProcess(old_tb)) {
