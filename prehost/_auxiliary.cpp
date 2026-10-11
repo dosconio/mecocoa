@@ -18,6 +18,23 @@ _ESYM_C void abort(void) {
 	plogerro("%s", __FUNCIDEN__); loop;
 }
 
+#ifdef _OPT_ARM32
+// ARM EABI variants of the block helpers the compiler emits; note the AEABI
+// argument order of the memset family is (dest, size, value), not ISO (dest, value, size).
+_ESYM_C void __aeabi_memclr4(void* d, size_t n) { MemSet(d, 0, n); }
+_ESYM_C void __aeabi_memclr8(void* d, size_t n) { MemSet(d, 0, n); }
+_ESYM_C void __aeabi_memclr(void* d, size_t n) { MemSet(d, 0, n); }
+_ESYM_C void __aeabi_memset4(void* d, size_t n, int c) { MemSet(d, c, n); }
+_ESYM_C void __aeabi_memset8(void* d, size_t n, int c) { MemSet(d, c, n); }
+_ESYM_C void __aeabi_memset(void* d, size_t n, int c) { MemSet(d, c, n); }
+_ESYM_C void __aeabi_memcpy4(void* d, const void* s, size_t n) { MemCopyN(d, s, n); }
+_ESYM_C void __aeabi_memcpy8(void* d, const void* s, size_t n) { MemCopyN(d, s, n); }
+_ESYM_C void __aeabi_memcpy(void* d, const void* s, size_t n) { MemCopyN(d, s, n); }
+_ESYM_C void __aeabi_memmove4(void* d, const void* s, size_t n) { MemAbsolute((char*)d, (const char*)s, n); }
+_ESYM_C void __aeabi_memmove8(void* d, const void* s, size_t n) { MemAbsolute((char*)d, (const char*)s, n); }
+_ESYM_C void __aeabi_memmove(void* d, const void* s, size_t n) { MemAbsolute((char*)d, (const char*)s, n); }
+#endif
+
 // may no use
 extern "C"
 uint64_t __udivmoddi4(uint64_t num, uint64_t den, uint64_t * rem_p) {

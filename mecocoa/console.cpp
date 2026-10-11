@@ -216,7 +216,7 @@ void _Comment(R1) serv_cons_loop()
 	int ch;
 
 	Filesys::MountFilesys(&global_devfs, nullptr, "/dev");
-	ploginfo("[DevFs] Mounted to /dev");
+	// ploginfo("[DevFs] Mounted to /dev");
 	while (true) {
 		bool skip_waiter_maintenance = false;
 		// Block here to wait for messages or wake notifications

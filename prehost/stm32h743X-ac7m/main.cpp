@@ -132,34 +132,6 @@ _ESYM_C stduint _svc_return_to_user(stduint result, stduint psp) {
 
 // The caller PC to resume at is kept with the saved frame, so no accessor is needed here.
 
-static stduint _user_sd_tries = 0;
-
-static void _user_load_from_sd(void*, ...) {
-	vfs_dentry* d = Filesys::Index("/mnt/sd0.0/testpie");
-	if (!d || !d->d_inode) {
-		if (_user_sd_tries++ == 10) {
-			XART1.OutFormat("USER no elf on /mnt/sd0.0, still waiting\r\n");
-		}
-		Systimex::AppendDeferredCallback(CONFIG_SysTickFreq, 0, (_tocall_ft)_user_load_from_sd);
-		return;
-	}
-	stduint size = d->d_inode->i_size;
-	ProcessBlock* upb = Taskman::CreateFile("/mnt/sd0.0/testpie", RING_U, Task_Init);
-	XART1.OutFormat("USER sd size=%u pb=%08X ccr=%08X\r\n",
-		(unsigned)size, (unsigned)_IMM(upb), (unsigned)SCB->CCR);// CCR bit16: D-Cache, bit17: I-Cache
-	if (!upb) erro("USER load fail");
-	{// give the user process its console and the three standard fds
-		auto focus_tty = upb->focus_tty.Lock();
-		*focus_tty = vttys.Root();
-		if (*focus_tty) {
-			upb->Open("/dev/tty", O_RDWR);
-			upb->Open("/dev/tty", O_RDWR);
-			upb->Open("/dev/tty", O_RDWR);
-		}
-		else plogerro("[USER] no virtual console to attach");
-	}
-}
-
 alignas(8) byte _boot_stack[0x8000];
 bool inited = false;
 int main()
@@ -181,8 +153,6 @@ int main()
 	inited = true;
 	
 	Taskman::Create((void*)&_test, RING_M);
-	// M2: the user program is read from the card, the embedded image stays as a fallback
-	Systimex::AppendDeferredCallback(CONFIG_SysTickFreq, 0, (_tocall_ft)_user_load_from_sd);
 	// mempool0.dump_available();
 	
 
@@ -239,7 +209,6 @@ extern byte _BUF_cursor[byteof(Cursor)];
 bool Consman::Initialize() {
 	new (&message_queue_conv) SpinlockBlock<uni::Queue<SysMessage>>(64);
 	// register the serial port as the first virtual TTY for /dev/tty
-	VTTY_Append(&XART1);
 	//
 	bool state = false;
 	// ltdc_init();

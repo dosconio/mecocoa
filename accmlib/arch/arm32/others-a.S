@@ -14,6 +14,10 @@ syscall_bridge:
 	.global _start
 	.thumb_func
 _start:
+	push {r0, r1, r2, r3}
+	bl _init_environ
+	bl _preprocess
+	pop {r0, r1, r2, r3}
 	bl main
 	mov r1, r0
 	movs r0, #2// syscall_t::EXIT

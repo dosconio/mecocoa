@@ -1315,8 +1315,20 @@ DEFSYSC sysc_MMAP(stduint len, stduint flag, stduint fd) {
 }
 #else
 DEFSYSC sysc_MMAP(stduint len, stduint flag, stduint fd) {
-	(void)len; (void)flag; (void)fd;
-	return ~_IMM0;// no MMU: nothing to map
+	(void)flag; (void)fd;
+	auto* th = Taskman::CurrentTB();
+	ProcessBlock* pb = th ? th->parent_process : nullptr;
+	if (!pb || !len) return ~_IMM0;
+	len = (len + 0xFFF) & ~_IMM(0xFFF);
+	const stduint block_btm = pb->load_slices[0].address;
+	const stduint block_end = block_btm + pb->load_slices[0].length;
+	if (!block_btm || pb->heaptop < block_btm || pb->heaptop + len > block_end) {
+		plogerro("%s: bad user heap at %[x] in [%[x], %[x])", __FUNCIDEN__, pb->heaptop, block_btm, block_end);
+		return ~_IMM0;
+	}
+	const stduint addr = pb->heaptop;
+	pb->heaptop += len;
+	return addr;
 }
 #endif
 

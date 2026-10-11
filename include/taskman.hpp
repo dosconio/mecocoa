@@ -775,7 +775,7 @@ static inline stduint MccaMemCopyP(
 		dest, pd && !dker ? pd->paging : kernel_paging,
 		sors, ps && !sker ? ps->paging : kernel_paging, n);
 	#else
-	return _IMM((byte*)MemCopyN(dest, sors, n) - (byte*)dest);
+	return (MemCopyN(dest, sors, n), n);
 	#endif
 }
 

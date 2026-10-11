@@ -441,6 +441,11 @@
               <FilePath>..\..\mecocoa\console.cpp</FilePath>
             </File>
             <File>
+              <FileName>console-bcon.cpp</FileName>
+              <FileType>8</FileType>
+              <FilePath>..\..\mecocoa\console-bcon.cpp</FilePath>
+            </File>
+            <File>
               <FileName>console-init.cpp</FileName>
               <FileType>8</FileType>
               <FilePath>..\..\mecocoa\console-init.cpp</FilePath>
@@ -539,6 +544,11 @@
               <FileName>sdcard.cpp</FileName>
               <FileType>8</FileType>
               <FilePath>..\..\devdriv\storage\sdcard.cpp</FilePath>
+            </File>
+            <File>
+              <FileName>serial.cpp</FileName>
+              <FileType>8</FileType>
+              <FilePath>..\..\devdriv\tty\serial.cpp</FilePath>
             </File>
           </Files>
         </Group>

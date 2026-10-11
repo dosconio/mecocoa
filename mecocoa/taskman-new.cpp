@@ -6,8 +6,14 @@
 #include <c/format/ELF.h>
 #include "../include/filesys.hpp"
 #if !CONFIG_ENABLE_MMU
-#define MemCopyP(a,b,c,d,e) _IMM((byte*)MemCopyN(a,c,e)-(byte*)a)
-#define StrCopyP(a,b,c,d,e) _IMM((byte*)StrCopyN(a,c,e)-(byte*)a)
+static inline stduint _taskman_strcopy(char* dest, const char* sors, stduint length) {
+	if (!length) return 0;
+	StrCopyN(dest, sors, length - 1);
+	dest[length - 1] = 0;
+	return StrLength(dest);
+}
+#define MemCopyP(a,b,c,d,e) (MemCopyN(a,c,e), _IMM(e))
+#define StrCopyP(a,b,c,d,e) _taskman_strcopy(a,c,e)
 #endif
 
 #if (_MCCA & 0xFF00) == 0x8600
@@ -622,7 +628,7 @@ ProcessBlock* Taskman::Exec(stduint parent, rostr usr_fullpath, char** usr_argv,
 		parent_cwd = parent_files->cwd;
 	}
 
-	auto new_pb = Taskman::CreateFile(buf_fullpath, RING_U, parent, parent_cwd);
+	auto new_pb = Taskman::CreateFile(buf_fullpath, RING_U, parent, parent_cwd, false);
 	if (!new_pb) return nullptr;
 
 	vfs_dentry* d = Filesys::Index(buf_fullpath, parent_cwd);

@@ -27,7 +27,7 @@ void _Comment(R1) serv_shell_process() {
 			pf_ptr->EnableMaximizeBox();
 		}
 		tty_target = vcon_ret.tty_node;
-		p = Taskman::CreateFile(("/md0/cot"), RING_U, Taskman::CurrentPID());
+		p = Taskman::CreateFile(("/md0/cot"), RING_U, Taskman::CurrentPID(), nullptr, false);
 	}
 
 	if (p) {

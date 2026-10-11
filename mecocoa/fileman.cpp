@@ -710,6 +710,34 @@ FileDescriptor* FileDescriptor_Clone(FileDescriptor* src) {
 			return pfd;
 }
 
+#if defined(_MCU_STM32H7x)
+// The SD card is the only storage here and its mount is what publishes the virtual root
+// Fileman bootstraps before that mount, so the user app start is retried by a deferred TEST message
+static constexpr stduint _usr_app_retry_delay = CONFIG_SysTickFreq / 5;
+static constexpr stduint _usr_app_retry_limit = 25;
+static stduint _usr_app_retry_count = 0;
+
+static void _TryStartUserApp() {
+	const auto& vroot = Filesys::GetSystemVirtualRootPath();
+	if (!vroot.getByteCount()) {
+		if (++_usr_app_retry_count <= _usr_app_retry_limit) {
+			(void)Systimex::AppendDriverMessage(_usr_app_retry_delay, Task_FileSys, _IMM(FilemanMsg::TEST));
+		}
+		else plogerro("[Fileman] no virtual root, the user app is not started");
+		return;
+	}
+	String path = String::newFormat("%s/apps-ac7m/ribbon", vroot.reference());
+	ProcessBlock* pb = Taskman::CreateFile(path.reference(), RING_U, Task_Init, nullptr, false);
+	if (!pb) {
+		plogwarn("[Fileman] Failed to start ribbon.");
+		return;
+	}
+	pb->main_thread->name.reset(StrHeap("ribbon"));
+	Taskman::Append(pb);
+	Taskman::AppendThread(pb->main_thread);
+}
+#endif
+
 //// ---- ---- SERVICE ---- ---- ////
 
 #if 1
@@ -777,6 +805,13 @@ void serv_file_loop()// for IDE 0:0, 0:1
 		#endif
 		case FilemanMsg::TEST:// (no-feedback)
 		{
+			#if defined(_MCU_STM32H7x)
+			// The bootstrap below runs before the SD mount, so a repeated TEST retries the user app start
+			if (bootstrapped) {
+				_TryStartUserApp();
+				break;
+			}
+			#endif
 			if (bootstrapped) {
 				plogerro("Fileman TEST after bootstrapped: recv_ret=%d src=%u type=%u args=%[x] %[x] %[x] %[x]",
 					retval[0],
@@ -797,7 +832,7 @@ void serv_file_loop()// for IDE 0:0, 0:1
 			#if (_MCCA & 0xFF00) == 0x8600
 			// Filesys::Tree(Console, true);
 			Consman_InitializeFreeType();
-			ProcessBlock* init_p = Taskman::CreateFile(("/md0/init"), RING_U, Task_Kernel);
+			ProcessBlock* init_p = Taskman::CreateFile(("/md0/init"), RING_U, Task_Kernel, nullptr, false);
 			if (init_p) {
 				init_p->main_thread->name.reset(StrHeap("init"));
 				{
@@ -820,7 +855,7 @@ void serv_file_loop()// for IDE 0:0, 0:1
 			// Shell
 			#if (_MCCA & 0xFF00) == 0x8600
 			#if _GUI_ENABLE
-			ProcessBlock* ribbon = Taskman::CreateFile(("/md0/ribbon"), RING_U, Task_Init);
+			ProcessBlock* ribbon = Taskman::CreateFile(("/md0/ribbon"), RING_U, Task_Init, nullptr, false);
 			if (!ribbon) {
 				plogwarn("[Fileman] Failed to start ribbon.");
 			}
@@ -839,10 +874,14 @@ void serv_file_loop()// for IDE 0:0, 0:1
 
 			#elif (_MCCA & 0xFF00) == 0x1000
 			ProcessBlock* p;
-			p = Taskman::CreateFile(("/md0/lpa.elf"), RING_U, Task_Kernel);
+			p = Taskman::CreateFile(("/md0/lpa.elf"), RING_U, Task_Kernel, nullptr, false);
 			*p->focus_tty.Lock() = vttys[0];
 			Taskman::Append(p);
 			Taskman::AppendThread(p->main_thread);
+
+			#elif defined(_MCU_STM32H7x)
+			// The virtual root is absent on this first bootstrap, the helper re-arms TEST in that case
+			_TryStartUserApp();
 			#endif
 			if (Taskman::Locate(Task_Init)) {
 				(void)syssend_async(Task_Devsman, nullptr, 0,

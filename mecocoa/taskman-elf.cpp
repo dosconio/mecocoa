@@ -450,6 +450,10 @@ ProcessBlock* Taskman::CreateELF(BlockTrait* source, byte ring, bool append) {
 
 	tb->priority = (ring != RING_M) ? 4 : 0;
 	tb->time_slice = (ring != RING_M) ? 3 : 4;
+	if (append) {
+		Taskman::Append(pb);
+		Taskman::AppendThread(tb);
+	}
 	return pb;
 	#elif !CONFIG_ENABLE_MMU
 	// NoMMU: one contiguous flat region holds the whole image, relocations are applied in place
@@ -478,7 +482,8 @@ ProcessBlock* Taskman::CreateELF(BlockTrait* source, byte ring, bool append) {
 	}
 	stduint align_expo = 12;// 4KB meets the usual p_align, mempool alignment is a power-of-two exponent
 	while ((1u << align_expo) < image_align && align_expo < 20) align_expo++;
-	while ((1u << align_expo) < image_span && align_expo < 20) align_expo++;// the block is its own MPU region, so it owns a whole power of two
+	constexpr stduint flat_heap_reserve = 7u << 20;// the block owns the process heap too, so its MPU region covers malloc
+	while ((1u << align_expo) < image_span + flat_heap_reserve && align_expo < 24) align_expo++;// the block is its own MPU region, so it owns a whole power of two
 	const stduint image_block = 1u << align_expo;
 	byte* image = (byte*)mempool.allocate(image_block, align_expo);
 	if (!image) {
@@ -513,8 +518,29 @@ ProcessBlock* Taskman::CreateELF(BlockTrait* source, byte ring, bool append) {
 	}
 	ProcessBlock* pb = Taskman::Create((void*)((load_bias + header.e_entry) | 1), ring, append);
 	if (!pb) return nullptr;
+	const stduint arg_sp = Taskman::SetupStack(pb, pb, nullptr, nullptr,
+		load_bias + header.e_entry, 0, header.e_phnum, header.e_phentsize);
+	if (arg_sp) {
+		auto& ctx = pb->main_thread->context;
+		#if defined(_ARCH_ARM_ProfileM)
+		stduint* frame = (stduint*)(arg_sp - 0x20);
+		frame[0] = *(const stduint*)arg_sp;
+		frame[1] = arg_sp + sizeof(stduint);
+		frame[2] = arg_sp + (frame[0] + 2) * sizeof(stduint);
+		frame[3] = 0;
+		frame[4] = 0;
+		frame[5] = 0;
+		frame[6] = (load_bias + header.e_entry) | 1;
+		frame[7] = 0x01000000;
+		ctx.sp = arg_sp - 0x20;
+		#else
+		ctx.sp = arg_sp;
+		#endif
+	}
 	pb->load_slices[0].address = load_bias;
 	pb->load_slices[0].length = image_block;// the release and the MPU region cover the same range
+	pb->heapbtm = (load_bias + image_span + 0xFFF) & ~_IMM(0xFFF);// the heap shares the image block, so its MPU region covers it
+	pb->heaptop = pb->heapbtm;
 	ploginfo("[ELF] flat base=%[x] span=%u entry=%[x]", load_bias, image_span, load_bias + header.e_entry);
 	return pb;
 	#endif

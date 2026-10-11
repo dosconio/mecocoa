@@ -24,7 +24,7 @@ ProcessBlock* EnsureCotForVtty(Dnode* tty_node, ProcessBlock** cache_slot) {
 	if (Bcons_CotAlive(*cache_slot)) return *cache_slot;
 	*cache_slot = nullptr;
 
-	ProcessBlock* p = Taskman::CreateFile("/md0/cot", RING_U, Task_Kernel);
+	ProcessBlock* p = Taskman::CreateFile("/md0/cot", RING_U, Task_Kernel, nullptr, false);
 	if (!p) return nullptr;
 
 	{

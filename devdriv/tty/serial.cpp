@@ -14,6 +14,7 @@ Send 0x3FA (FCR) 0xC7（Enable and Clear FIFO）,  Read 0x3FA MS2B (IIR)。
 
 */
 
+#define _MCU_XART_TEMP
 #include "../../include/mecocoa.hpp"
 #include "c/driver/UART.h"
 
@@ -270,6 +271,52 @@ void Handint_COM2()
 {
 	IC.SendEOI(IRQ_COM24_Serial); // Acknowledge interrupt
 	drain_serial_interrupts(IRQ_COM24_Serial);
+}
+
+#elif (_MCCA & 0xFFFF) == 0x2032
+
+// ARM M-profile console UART: its receive interrupt feeds the virtual TTY that /dev/tty reads from.
+
+_ESYM_C void R_XART1_INIT();
+
+__attribute__((section(".init.rmod")))
+extern const RMOD_LIST RMOD_LIST_XART1{
+	R_XART1_INIT,
+	"XART1",
+	{}
+};
+
+namespace {
+	bool g_xart1_vtty_initialized = false;
+	Dnode* g_xart1_vtty = nullptr;
+
+	void ensure_serial_lazy_vtty() {
+		if (g_xart1_vtty_initialized) return;
+		g_xart1_vtty = VTTY_Append(&XART1);
+		g_xart1_vtty_initialized = g_xart1_vtty != nullptr;
+	}
+}
+
+// Runs from the USART1 vector, which calls the handler installed by XART1.setInterrupt.
+void Handint_XART1() {
+	// USART_ISR_RXNE; reading RDR is what clears it, so drain until it is empty
+	while (XART1[XARTReg::ISR].bitof(5)) {
+		byte data = (byte)((uint16)XART1[XARTReg::RDR] & 0xFF);
+		if (!g_xart1_vtty) continue;// no TTY yet: drop it, but keep RXNE cleared
+		byte queued = (data == '\r') ? '\n' : data;// CR is the terminal's newline
+		if (auto* q = VTTY_INNQ(g_xart1_vtty)) q->OutChar(queued);
+	}
+	if (!g_xart1_vtty) return;
+	// No cot on ARM: the reader drains the queue through /dev/tty
+	Consman::WakeBlockedWaitersDeferred();
+}
+
+void R_XART1_INIT() {
+	// Registered here, not lazily: a process takes its console from vttys when loaded.
+	ensure_serial_lazy_vtty();
+	XART1.setInterrupt(Handint_XART1);
+	USART_CR1_RXNEIE(XART1) = 1;
+	XART1.enInterrupt(true);
 }
 
 #endif

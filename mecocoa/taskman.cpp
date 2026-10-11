@@ -294,6 +294,18 @@ void Taskman::DumpTask(ProcessBlock* pb) {
 
 	// Privilege Level
 	ploginfo("  RING: %u", ctx->RING);
+
+	#elif (_MCCA & 0xFFFF) == 0x2032
+
+	// ARM M-profile Context Dump (General Purpose Registers)
+	ploginfo("  R0 : %[x]  R1 : %[x]  R2 : %[x]  R3 : %[x]", ctx->R0, ctx->R1, ctx->R2, ctx->R3);
+	ploginfo("  R4 : %[x]  R5 : %[x]  R6 : %[x]  R7 : %[x]", ctx->R4, ctx->R5, ctx->R6, ctx->R7);
+	ploginfo("  R8 : %[x]  R9 : %[x]  R10: %[x]  R11: %[x]", ctx->R8, ctx->R9, ctx->R10, ctx->R11);
+	ploginfo("  R12: %[x]  SP : %[x]  PC : %[x]  PSR: %[x]", ctx->R12, ctx->SP, ctx->pc, ctx->SPSR);
+
+	// Stack pointers and mode
+	ploginfo("  EXC_RETURN: %[x]  CONTROL: %[x]", ctx->exc_return, ctx->CONTROL);
+	ploginfo("  SP_svc: %[x]  SP_irq: %[x]", ctx->SP_svc, ctx->SP_irq);
 	#endif
 	ploginfo("========================================");
 }

@@ -310,6 +310,8 @@ public:
 	virtual void DrawPoints(const Rectangle& rect, const Color* base) const override { renderer.DrawPoints(rect, base); }
 };
 
+#if (_MCCA & 0xFF00) == 0x8600
+// The published framebuffer protocol and its PCI aperture are x86-only
 static PublishedVideoProxy* published_video_proxy = nullptr;
 
 static stduint PublishedVideoBpp(uni::PixelFormat format, uint32 width, uint32 pitch) {
@@ -400,6 +402,7 @@ static stdsint GraphicMsg_DRV_ATTACH(FMT_GraphicMsg_DRV_ATTACH* usr_info, Proces
 
 	return Consman::AdoptVideoDevice(proxy) ? 0 : -1;
 }
+#endif
 
 // hand_mouse - runs only in Graphic thread, no lock needed
 void hand_mouse(MouseMessage mmsg) {
@@ -1758,7 +1761,7 @@ void serv_graf_loop() {
 	global_layman.Lock()->lazy_update = _GUI_DOUBLE_BUFFER;// Only enable lazy mode if double buffering is enabled
 	if (!_GUI_DOUBLE_BUFFER) plogwarn("[GRAPHIC] _GUI_DOUBLE_BUFFER OFF");
 
-	#if (_MCCA == 0x8632) || (_MCCA == 0x8664)
+	#if (_MCCA == 0x8632) || (_MCCA == 0x8664) || (_MCCA & 0xFFFF) == 0x2032
 	while (true) {
 		GuiCleanupJob* cleanup_job = nullptr;
 		if (PopGuiCleanupJob(cleanup_job)) {
@@ -1830,6 +1833,8 @@ void serv_graf_loop() {
 					}
 				}
 				break;
+			#if (_MCCA & 0xFF00) == 0x8600
+			// Only the x86 keyboard driver and the PCI bus post these two events
 			case SysMessage::RUPT_NEW_TERM:
 			{
 				ProcessBlock* shell_p = Taskman::Create((void*)&serv_shell_process, RING_M);
@@ -1859,6 +1864,7 @@ void serv_graf_loop() {
 				}
 				break;
 			}
+			#endif
 			default:
 				plogerro("%s Unknown int message type: %d", __FUNCIDEN__, msg.type);
 				break;
@@ -1908,6 +1914,16 @@ void serv_graf_loop() {
 		volatile stduint sig_type = 0, sig_src;
 		volatile stduint to_args[4];
 		if (!syscall(syscall_t::TMSG)) {
+			#if (_MCCA & 0xFFFF) == 0x2032
+			// No RenderFrameFlush interrupt source here, so this thread posts its own timer tick
+			static stduint graf_timer_tick = 0;
+			if (Consman::ento_gui && tick - graf_timer_tick >= 10) {
+				graf_timer_tick = tick;
+				SysMessage timer_msg;
+				timer_msg.type = SysMessage::RUPT_TIMER;
+				message_queue_conv.Lock()->Enqueue(timer_msg);
+			}
+			#endif
 			// No IPC message pending, sleep briefly then re-check interrupts
 			syscall(syscall_t::REST, 1, 2);
 			continue;
@@ -2187,7 +2203,12 @@ void serv_graf_loop() {
 			break;
 		}
 		case GraphicMsg::DRV_ATTACH:
+			#if (_MCCA & 0xFF00) == 0x8600
 			ret = GraphicMsg_DRV_ATTACH((FMT_GraphicMsg_DRV_ATTACH*)to_args[0], safe_pb, sig_src);
+			#else
+			// The driver protocol publishes PCI framebuffer apertures, which only the x86 boards have
+			ret = (stduint)-1;
+			#endif
 			syssend_async(sig_src, (void*)&ret, sizeof(ret));
 			break;
 		case GraphicMsg::DRV_DETACH:

@@ -5,21 +5,26 @@
 # NoMMU: a user program is a position-independent flat image, the kernel loads
 # the segments itself and applies the relocations, so no dynamic linker is used.
 BIN_DIR = $(uobjpath)/sapp-a32-pi
-ACCM_DIR = $(uobjpath)/accm-a32
+# the user libraries come from the sysroot, published by accma32.clang.make's install target
+MCCA_SYSROOT ?= accmlib/sysroot
+MCCA_TRIPLE ?= armv7em-mcca-eabihf
 
-MCCA_CXX ?= arm-none-eabi-g++
-MCCA_CRT0 = $(ACCM_DIR)/_ag_others-a.pic.o
-MCCA_LIBC_PIC = $(ACCM_DIR)/liba32-pi.a
+MCCA_CXX ?= clang++ --target=armv7em-none-eabihf
+MCCA_CRT0 = $(MCCA_SYSROOT)/usr/lib/$(MCCA_TRIPLE)/crt0.o
+MCCA_LIBC_PIC = $(MCCA_SYSROOT)/usr/lib/$(MCCA_TRIPLE)/libc-pic.a
 # the POSIX API layer names id_t/pid_t/uid_t as macros, so the C library must not typedef them
 MCCA_COMFLAGS = -D_ACCM=0x2032 -D_OPT_ARM32 -D_DEBUG -D_ID_T_DECLARED -D_PID_T_DECLARED -D_UID_T_DECLARED -I$(uincpath) -I$(uincpath)/c/ISO_IEC_STD -I$(uincpath)/c/API-POSIX -Iaccmlib/sysroot/usr/include
 MCCA_CXXFLAGS_PIE = $(MCCA_COMFLAGS) -O2 -mcpu=cortex-m7 -mthumb -mfloat-abi=hard -mfpu=fpv5-d16 \
-	-fno-builtin -nostdlib -fno-stack-protector -fno-strict-aliasing -ffunction-sections -fdata-sections \
-	-fPIC -fno-exceptions -fno-rtti -fno-use-cxa-atexit
-MCCA_LDLIBS_PIE = -pie $(MCCA_CRT0) $(MCCA_LIBC_PIC) -lgcc -Wl,--gc-sections -Wl,--no-dynamic-linker -Wl,-e,_start -Wl,--build-id=none -Wl,-s
+	-fno-builtin -nostdlib -nostdinc++ -fno-stack-protector -fno-strict-aliasing -ffunction-sections -fdata-sections \
+	-fPIC -fno-exceptions -fno-rtti -fno-use-cxa-atexit \
+	-Wno-incompatible-library-redeclaration -Wno-invalid-constexpr -Wno-empty-body -Wno-unknown-warning-option
+MCCA_LDLIBS_PIE = -Wl,-pie $(MCCA_CRT0) $(MCCA_LIBC_PIC) -fuse-ld=lld -Wl,--gc-sections -Wl,--no-dynamic-linker -Wl,-e,_start -Wl,--build-id=none -Wl,-s
 
 apps=\
 	$(BIN_DIR)/testpie \
-	$(BIN_DIR)/fault
+	$(BIN_DIR)/fault \
+	$(BIN_DIR)/loop_echo \
+	$(BIN_DIR)/ribbon
 
 .PHONY: all clean
 all: $(apps)
@@ -27,12 +32,22 @@ all: $(apps)
 $(BIN_DIR)/testpie: subapps/testpie.cpp $(MCCA_CRT0) $(MCCA_LIBC_PIC)
 	@echo "MK testpie (NoMMU PIE)"
 	@mkdir -p $(BIN_DIR)
-	$(MCCA_CXX) $(MCCA_CXXFLAGS_PIE) -o $@ $< $(MCCA_LDLIBS_PIE)
+	@$(MCCA_CXX) $(MCCA_CXXFLAGS_PIE) -o $@ $< $(MCCA_LDLIBS_PIE)
 
 $(BIN_DIR)/fault: subapps/fault.cpp $(MCCA_CRT0) $(MCCA_LIBC_PIC)
 	@echo "MK fault (NoMMU PIE)"
 	@mkdir -p $(BIN_DIR)
-	$(MCCA_CXX) $(MCCA_CXXFLAGS_PIE) -o $@ $< $(MCCA_LDLIBS_PIE)
+	@$(MCCA_CXX) $(MCCA_CXXFLAGS_PIE) -o $@ $< $(MCCA_LDLIBS_PIE)
+
+$(BIN_DIR)/loop_echo: subapps/_basic/loop_echo.cpp $(MCCA_CRT0) $(MCCA_LIBC_PIC)
+	@echo "MK loop_echo (NoMMU PIE)"
+	@mkdir -p $(BIN_DIR)
+	@$(MCCA_CXX) $(MCCA_CXXFLAGS_PIE) -o $@ $< $(MCCA_LDLIBS_PIE)
+
+$(BIN_DIR)/ribbon: subapps/ribbon.cpp $(MCCA_CRT0) $(MCCA_LIBC_PIC)
+	@echo "MK ribbon (NoMMU PIE)"
+	@mkdir -p $(BIN_DIR)
+	@$(MCCA_CXX) $(MCCA_CXXFLAGS_PIE) -o $@ $< $(MCCA_LDLIBS_PIE)
 
 clean:
 	@rm -rf $(BIN_DIR)
