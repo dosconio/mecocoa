@@ -100,7 +100,7 @@ bool WakeOneIdleApForReadyWork();
 #endif
 
 #if _GUI_ENABLE
-#define HIGHER_STACK_SIZE 0xC000
+#define HIGHER_STACK_SIZE 0x10000 // 0xC000
 #else
 #define HIGHER_STACK_SIZE 0x8000
 #endif
@@ -318,6 +318,7 @@ public: // Signals
 public:
 	ProcessBlock() = default;
 	auto Open(rostr pathname, int flags) -> stdsint;
+	auto OpenStandards(uni::Dnode* vtty = nullptr) -> bool;	
 	auto Socket(stduint domain, stduint type, stduint protocol) -> stdsint;
 	auto BindSocket(int fd, const uni::Network::SocketAddress* address, stduint length) -> stdsint;
 	auto ConnectSocket(int fd, const uni::Network::SocketAddress* address, stduint length) -> stdsint;

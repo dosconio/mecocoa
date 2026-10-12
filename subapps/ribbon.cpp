@@ -45,13 +45,17 @@ static void TryLoadWallpaper(Size2 target_screen) {
 		sysrest(1, 0); // Wait 1 second before retry
 	}
 
-	if (!fp) return;
+	if (!fp) {
+		plogwarn("ribbon: no wallpaper at %s", kWallpaperPaths[0]);
+		return;
+	}
 
 	fseek(fp, 0, SEEK_END);
 	long fileSize = ftell(fp);
 	fseek(fp, 0, SEEK_SET);
 
 	if (fileSize <= 0) {
+		plogwarn("ribbon: wallpaper size %d", (int)fileSize);
 		fclose(fp);
 		return;
 	}
@@ -59,7 +63,13 @@ static void TryLoadWallpaper(Size2 target_screen) {
 	FileBlockDevice storage(fp, (stduint)fileSize);
 	PNGCodec pngCodec;
 	bool matched = false;
-	if (pngCodec.Probe(storage, matched) == ImageResult::OK && matched) {
+	ImageResult probe_res = pngCodec.Probe(storage, matched);
+	if (probe_res != ImageResult::OK || !matched) {
+		plogwarn("ribbon: PNG probe res=%d matched=%d", (int)probe_res, (int)matched);
+		fclose(fp);
+		return;
+	}
+	{
 		ImageBuffer imgBuf;
 		ImageBufferClear(imgBuf);
 		StdMalloc myMalloc;
@@ -67,22 +77,31 @@ static void TryLoadWallpaper(Size2 target_screen) {
 		ImageDecodeOptionsInit(options);
 
 		ImageResult res = pngCodec.Decode(storage, imgBuf, myMalloc, options);
-		if (res == ImageResult::OK && imgBuf.pixels && imgBuf.width > 0 && imgBuf.height > 0) {
-			if (target_screen.x > 0 && target_screen.y > 0 &&
-				(imgBuf.width != target_screen.x || imgBuf.height != target_screen.y)) {
-				Color* scaled = (Color*)malloc(target_screen.x * target_screen.y * sizeof(Color));
-				if (scaled) {
-					ScaleImage((Color*)imgBuf.pixels, imgBuf.width, imgBuf.height, scaled, target_screen.x, target_screen.y);
-					sys_set_wallpaper(scaled, target_screen.x, target_screen.y);
-					free(scaled);
-				} else {
-					sys_set_wallpaper(imgBuf.pixels, imgBuf.width, imgBuf.height);
-				}
-			} else {
-				sys_set_wallpaper(imgBuf.pixels, imgBuf.width, imgBuf.height);
-			}
-			ImageBufferFree(imgBuf);
+		if (res != ImageResult::OK || !imgBuf.pixels || !imgBuf.width || !imgBuf.height) {
+			plogwarn("ribbon: PNG decode res=%d %ux%u pix=%d", (int)res, (unsigned)imgBuf.width, (unsigned)imgBuf.height, imgBuf.pixels ? 1 : 0);
+			if (imgBuf.pixels) ImageBufferFree(imgBuf);
+			fclose(fp);
+			return;
 		}
+		stdsint set_ret = -1;
+		if (target_screen.x > 0 && target_screen.y > 0 &&
+			(imgBuf.width != target_screen.x || imgBuf.height != target_screen.y)) {
+			Color* scaled = (Color*)malloc(target_screen.x * target_screen.y * sizeof(Color));
+			if (!scaled) {
+				plogwarn("ribbon: scale buffer failed for %ux%u", (unsigned)target_screen.x, (unsigned)target_screen.y);
+				ImageBufferFree(imgBuf);
+				fclose(fp);
+				return;
+			}
+			ScaleImage((Color*)imgBuf.pixels, imgBuf.width, imgBuf.height, scaled, target_screen.x, target_screen.y);
+			set_ret = sys_set_wallpaper(scaled, target_screen.x, target_screen.y);
+			free(scaled);
+		}
+		else {
+			set_ret = sys_set_wallpaper(imgBuf.pixels, imgBuf.width, imgBuf.height);
+		}
+		if (set_ret < 0) plogwarn("ribbon: set wallpaper failed ret=%d", (int)set_ret);
+		ImageBufferFree(imgBuf);
 	}
 	fclose(fp);
 }

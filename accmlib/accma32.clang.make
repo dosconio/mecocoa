@@ -131,6 +131,19 @@ _cx_%.o:
 	@echo CX $(notdir $<)
 	@${CX} -c ${XFLAGS_STA} -o $@ $< -MMD -MF $(patsubst %.o,%.d,$@) -MT $@
 
+$(dest_obj)/_cx_Cache.o: XFLAGS_STA += -O0
+$(dest_obj)/_cx_Cache.pic.o: XFLAGS_PIC += -O0
+$(dest_obj)/_cx_stream.o: XFLAGS_STA += -O0
+$(dest_obj)/_cx_stream.pic.o: XFLAGS_PIC += -O0
+$(dest_obj)/_cx_mempool.o: XFLAGS_STA += -O0
+$(dest_obj)/_cx_mempool.pic.o: XFLAGS_PIC += -O0
+$(dest_obj)/_cx_FAT.o: XFLAGS_STA += -O0
+$(dest_obj)/_cx_FAT.pic.o: XFLAGS_PIC += -O0
+$(dest_obj)/_cx_Storage.o: XFLAGS_STA += -O0
+$(dest_obj)/_cx_Storage.pic.o: XFLAGS_PIC += -O0
+$(dest_obj)/_cx_PNG.o: XFLAGS_STA += -O2
+$(dest_obj)/_cx_PNG.pic.o: XFLAGS_PIC += -O2
+
 _cx_%.pic.o:
 	@echo CX $(notdir $<) DYN
 	@${CX} -c ${XFLAGS_PIC} -o $@ $< -MMD -MF $(patsubst %.o,%.d,$@) -MT $@

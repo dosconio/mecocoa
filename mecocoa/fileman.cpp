@@ -119,6 +119,16 @@ stdsint ProcessBlock::Open(rostr pathname, int flags) {
 	AttachProcessFileDescriptor(*files, fd, pfd, file, flags, true);
 	return fd;
 }
+auto ProcessBlock::OpenStandards(uni::Dnode* vtty) -> bool {
+	auto focus_tty = self.focus_tty.Lock();
+	if (vtty) *focus_tty = vtty;
+	if (*focus_tty) {
+		self.Open("/dev/tty", O_RDONLY); // stdin
+		self.Open("/dev/tty", O_WRONLY); // stdout
+		self.Open("/dev/tty", O_WRONLY); // stderr
+	}
+	return true;
+}
 
 stdsint ProcessBlock::Socket(stduint domain, stduint type, stduint protocol) {
 	auto files = this->fileman.Lock();
@@ -711,8 +721,7 @@ FileDescriptor* FileDescriptor_Clone(FileDescriptor* src) {
 }
 
 #if defined(_MCU_STM32H7x)
-// The SD card is the only storage here and its mount is what publishes the virtual root
-// Fileman bootstraps before that mount, so the user app start is retried by a deferred TEST message
+// Fileman bootstraps before the SD mount publishes the virtual root, so the user app start is retried
 static constexpr stduint _usr_app_retry_delay = CONFIG_SysTickFreq / 5;
 static constexpr stduint _usr_app_retry_limit = 25;
 static stduint _usr_app_retry_count = 0;
@@ -733,6 +742,7 @@ static void _TryStartUserApp() {
 		return;
 	}
 	pb->main_thread->name.reset(StrHeap("ribbon"));
+	pb->OpenStandards(vttys[0]);
 	Taskman::Append(pb);
 	Taskman::AppendThread(pb->main_thread);
 }
@@ -859,7 +869,10 @@ void serv_file_loop()// for IDE 0:0, 0:1
 			if (!ribbon) {
 				plogwarn("[Fileman] Failed to start ribbon.");
 			}
-			else ribbon->main_thread->name.reset(StrHeap("ribbon"));
+			else {
+				ribbon->main_thread->name.reset(StrHeap("ribbon"));
+				ribbon->OpenStandards(vttys[0]);
+			}
 			Taskman::Append(ribbon);
 			Taskman::AppendThread(ribbon->main_thread);
 

@@ -231,11 +231,21 @@ bool _Taskman_Relocate_PIE_Flat(BlockTrait* source, const ELF_Header_t& header, 
 			return false;
 		}
 		const stduint rel_count = rel_sz / rel_ent;
+		stduint image_span = 0;
+		for0(k, header.e_phnum) {
+			struct ELF_PHT_t lph;
+			source->Read(header.e_phoff + k * header.e_phentsize, &lph, sizeof(lph), block_buffer);
+			if (lph.p_type == PT_LOAD && lph.p_vaddr + lph.p_memsz > image_span) image_span = lph.p_vaddr + lph.p_memsz;
+		}
 		for0(r, rel_count) {
 			Elf32_Rel rel;
 			source->Read(rel_file_off + r * sizeof(Elf32_Rel), &rel, sizeof(rel), block_buffer);
 			const stduint rel_type = ELF32_R_TYPE(rel.r_info);
 			if (!rel_type) continue;
+			if (rel.r_offset + 4 > image_span) {
+				plogerro("%s: reloc %u at %[x] is outside the %u byte image", __FUNCIDEN__, rel_type, rel.r_offset, image_span);
+				return false;
+			}
 			#ifdef ELF_RELOC_RELATIVE
 			if (rel_type == ELF_RELOC_RELATIVE || rel_type == ELF_RELOC_ABS32) {
 				*(uint32*)(load_bias + rel.r_offset) += (uint32)load_bias;

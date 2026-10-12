@@ -520,7 +520,7 @@ bool Memory::initialize(stduint eax, byte* ebx) {
 	bool use_1g_page = Paging::isSupportedSize(PAGESIZE_1GB);
 	auto mapping_range0_top = 0x100000'000ULL * (use_1g_page ? 0x800 : 16);
 	kernel_paging.Map(0x00000000, 0x00000000, mapping_range0_top,
-		mapping_range0_top ? PAGESIZE_1GB : PAGESIZE_2MB,
+		use_1g_page ? PAGESIZE_1GB : PAGESIZE_2MB,
 		PGPROP_present | PGPROP_writable
 	);// pgsize 30 may be bad for Bochs; QEMU need map many times of 4G
 	const auto mapping_video = _IMM(uefi_data.frame_buffer_config.frame_buffer);

@@ -80,8 +80,10 @@ SVC_NoRewind
 
 SwitchTaskContext	PROC
 	EXPORT	SwitchTaskContext
+	MRS	R12, PRIMASK	; the pair below and the PendSV trigger must be seen as one update
+	CPSID	i
 	MOV32	R2, #0xE000ED22	; SHPR3 bytes 2 and 3: PendSV and SysTick priority
-	MOV32	R3, #0x00000408	; SysTick 4, PendSV 8
+	MOV32	R3, #0x000040F0	; SysTick 4, PendSV 15: the swap waits for a thread boundary
 	STRH	R3, [R2]	; SVCall stays at 15, see syscall.cpp
 	LDR	R2, =C_SwitchNext
 	STR	R0, [R2]
@@ -92,6 +94,7 @@ SwitchTaskContext	PROC
 	MOV32	R2, #0xE000ED04	; ICSR
 	MOV32	R3, #0x10000000	; PENDSVSET
 	STR	R3, [R2]
+	MSR	PRIMASK, R12	; PendSV is taken here, on a complete pair
 	DSB
 	ISB
 	BX	LR

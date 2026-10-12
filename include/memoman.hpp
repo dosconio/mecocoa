@@ -150,6 +150,14 @@ public:// trait
 	virtual bool deallocate(void* ptr, stduint size = 0 _Comment(zero_for_block)) override;
 public:// for loaders
 	static void AppendAvailableRange(stduint beg, stduint end);
+	#if CONFIG_ENABLE_MMU
+	// The caller serializes access to the Paging instance.
+	static bool MapPages(Paging& paging, stduint linear_address,
+		stduint physical_address, stduint length,
+		PageSizeShift page_size, stduint properties);
+	static bool UnmapPages(Paging& paging, stduint linear_address,
+		stduint length);
+	#endif
 	
 };
 extern Memory mem;
