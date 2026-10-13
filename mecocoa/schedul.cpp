@@ -851,6 +851,9 @@ void Taskman::SleepAndRelease(Spinlock* lk) {
 	scheduler_lock.Release(old_if);
 	#endif
 	// No explicit unlock of scheduler_lock here, because earlier we unlock lk, but wait!
+	#if defined(_ARCH_ARM_ProfileM)
+	mpumap_task(new_tb);
+	#endif
 	#if _MCCA == 0x8664 || _MCCA == 0x8632
 	if (_IMM(&new_tb->context) & 0xF) plogerro("Sch2(%p)", &new_tb->context);
 	((void(*)(NormalTaskContext*, NormalTaskContext*))mglb(SwitchTaskContext))(&new_tb->context, &old_tb->context);

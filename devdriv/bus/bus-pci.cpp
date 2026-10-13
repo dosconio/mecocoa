@@ -572,8 +572,11 @@ namespace Devs {
 				sys_framebuffer.physical_range.address < base + 0x100000000ull) {
 				return sys_framebuffer.physical_range.length;
 			}
-			// Skip size probing for other BARs on active GPU to prevent hardware lockup,
-			// but return a safe default size (2MB) to ensure virtual page mapping is created.
+			// The Bochs driver uses BAR0 only; its other BAR lengths are unverified.
+			if (uni::PCI::read_vendor_id(dev) == 0x1234u &&
+				uni::PCI::read_device_id(dev.bus, dev.device, dev.function) == 0x1111u)
+				return 0;
+			// Preserve the provisional size for other active GPUs until their drivers provide actual sizes.
 			return 2 * 1024 * 1024;
 		}
 

@@ -342,18 +342,21 @@ static bool MapPublishedFramebufferToKernel(stduint physical, stduint length) {
 	if ((uint64)(stduint)page_end64 != page_end64) return false;
 	const stduint page_end = (stduint)page_end64;
 	if (page_end <= page_base) return false;
-	kernel_paging.Map(
-		page_base,
-		page_base,
-		page_end - page_base,
-		PAGESIZE_4KB,
-		PGPROP_present | PGPROP_writable |
-		PGPROP_cache_disable | PGPROP_write_through
-	);
-	for (stduint page = page_base; page < page_end; page += 0x1000) {
-		RefreshVirtualAddress(page);
+	const stduint properties = PGPROP_present | PGPROP_writable |
+		PGTYPE_uncacheable;
+	stduint run_begin = page_base;
+	bool run_present = _IMM(kernel_paging.getEntry(page_base)) != ~_IMM0;
+	for (stduint page = page_base + PAGE_SIZE; page < page_end;
+		page += PAGE_SIZE) {
+		const bool present = _IMM(kernel_paging.getEntry(page)) != ~_IMM0;
+		if (present == run_present) continue;
+		if (!kernel_paging.Map(run_begin, run_begin, page - run_begin,
+			PAGESIZE_ANY, properties)) return false;
+		run_begin = page;
+		run_present = present;
 	}
-	return true;
+	return kernel_paging.Map(run_begin, run_begin, page_end - run_begin,
+		PAGESIZE_ANY, properties);
 }
 #endif
 

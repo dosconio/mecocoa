@@ -216,7 +216,7 @@ _ESYM_C void ScreenLogAttach();
 
 //
 
-void R_COM1_INIT() {
+bool R_COM1_ENTO() {
 	for0a(i, legacy_com_ports) {
 		auto& port = legacy_com_ports[i];
 		port.available = probe_legacy_uart_scratch(port.base);
@@ -228,7 +228,12 @@ void R_COM1_INIT() {
 	if (g_com1_available) {
 		con0_out = &com1;
 	}
-	else {
+	return true;
+}
+
+void R_COM1_INIT() {
+	// R_COM1_ENTO();
+	if (g_com1_available); else {
 		// Do not register or enable IRQ for a COM port that did not answer the
 		// SCR probe; later console code also checks SerialCom1Available().
 		if (Devsman::Root()) plogwarn("[UART] COM1 probe failed at %[16H], skip init", PORT_COM1_DATA);

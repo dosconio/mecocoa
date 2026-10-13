@@ -179,7 +179,7 @@ stduint Taskman::CreatePaging(ProcessBlock *ppb, byte ring, stduint stack_norm) 
 		ppb->paging.Map(_IMM(ppb->main_thread->stack_lineaddr), (stack_norm), ppb->main_thread->stack_size, PAGESIZE_4KB, PGPROP_present | PGPROP_writable | PGPROP_user_access);
 		//
 		#if   _MCCA == 0x8632
-		ppb->paging.Map(0x80000000, 0x00000000, 0x04000000, PAGESIZE_4KB, PGPROP_present | PGPROP_writable);
+		ppb->paging.Map(0x80000000, 0x00000000, 0x04000000, PAGESIZE_ANY, PGPROP_present | PGPROP_writable);
 		// pb->paging.Map(0x80000000, 0x00000000, kernel_size, true, _Comment(R0) false);// should include LDT
 		#elif _MCCA == 0x8664
 		ppb->paging.Map(0x0000FFFFC0000000ull,

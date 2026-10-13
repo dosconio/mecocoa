@@ -4,6 +4,9 @@
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 #include "../include/mecocoa.hpp"
 #include <c/format/ELF.h>
+#if defined(_ARCH_ARM_ProfileM)
+#include <cpp/Device/Cache>
+#endif
 #if !CONFIG_ENABLE_MMU
 #define MemCopyP(a,b,c,d,e) _IMM((byte*)MemCopyN(a,c,e)-(byte*)a)
 #define StrCopyP(a,b,c,d,e) _IMM((byte*)StrCopyN(a,c,e)-(byte*)a)
@@ -43,7 +46,9 @@ bool Taskman::CreateELF_Carry(char* vaddr, stduint mem_length, BlockTrait* sourc
 			stduint pgprop = PGPROP_present;
 			if (writable) pgprop |= PGPROP_writable;
 			if (user) pgprop |= PGPROP_user_access;
+			#if _MCCA != 0x8632
 			if (!executable) pgprop |= PGPROP_nonexecutable;
+			#endif
 			pg.Map(v_start1, phy, 0x1000, PAGESIZE_4KB, pgprop);
 			page_entry = pg.getEntry(_IMM(v_start1));
 			if (_IMM(page_entry) == ~_IMM0 || !page_entry->isPresent()) {
@@ -526,6 +531,10 @@ ProcessBlock* Taskman::CreateELF(BlockTrait* source, byte ring, bool append) {
 		plogerro("%s: PIE relocation failed", __FUNCIDEN__);
 		return nullptr;
 	}
+	#if defined(_ARCH_ARM_ProfileM)
+	L1C.CleanDCacheRange(image, image_block);// the image was written through the D-cache
+	L1C.InvalidateICacheAll();
+	#endif
 	ProcessBlock* pb = Taskman::Create((void*)((load_bias + header.e_entry) | 1), ring, append);
 	if (!pb) return nullptr;
 	const stduint arg_sp = Taskman::SetupStack(pb, pb, nullptr, nullptr,

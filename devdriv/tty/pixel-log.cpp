@@ -53,8 +53,9 @@ static void ScreenLogPush() {
 	screen_log_bridge.DrawPoints(rect, screen_log_pixels);
 }
 
-class ScreenLogSink : public OstreamTrait {
+class ScreenLogSink : public Console_t {
 public:
+	virtual int inn() { return -1; }
 	virtual int out(const char* str, stduint len) override {
 		const int res = screen_log_console.out(str, len);
 		ScreenLogPush();
@@ -91,6 +92,7 @@ _ESYM_C void ScreenLogAttach() {
 	screen_log_console.Clear();
 	screen_log_bridge.DrawRectangle(Rectangle{ Point(0, 0), screen_log_win.getSize(), Color::Black });
 	con0_out = &screen_log_sink;
+	VTTY_Append(&screen_log_sink);
 }
 
 _ESYM_C void ScreenLogToLayer() {

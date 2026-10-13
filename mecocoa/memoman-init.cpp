@@ -472,6 +472,17 @@ bool Memory::initialize(stduint eax, byte* ebx) {
 	else {
 		plogwarn("[ACPI] RSDP not found via BIOS scan");
 	}
+	#if CONFIG_ENABLE_MMU
+	InitialPageRegion* x86_initial_page_plan = nullptr;
+	stduint x86_initial_page_count = 0;
+	stduint x86_initial_page_storage_bytes = 0;
+	if (eax == MULTIBOOT2_BOOTLOADER_MAGIC &&
+		!Memory::BuildInitialPagePlan(eax, ebx,
+		x86_initial_page_plan, x86_initial_page_count,
+		x86_initial_page_storage_bytes)) {
+		plogwarn("[PAGING] Failed to prepare the x86 initial page plan");
+	}
+	#endif
 	_physical_allocate = Memory::physical_allocate;
 	mecocoa_global->kernel_cr3 = 0x100000;
 	MemSet(kernel_paging.root_level_page = (PageEntry*)0x100000, 0, 0x1000);// kernel_paging.Reset();
@@ -492,6 +503,13 @@ bool Memory::initialize(stduint eax, byte* ebx) {
 		ebx = (byte*)(stduint)call_ladder(R16FN_SMAP);
 		#endif
 		parse_norm(_IMM(ebx));
+		#if CONFIG_ENABLE_MMU && _MCCA == 0x8632
+		if (!Memory::BuildInitialPagePlan(eax, ebx,
+			x86_initial_page_plan, x86_initial_page_count,
+			x86_initial_page_storage_bytes)) {
+			plogwarn("[PAGING] Failed to prepare the x86 initial page plan");
+		}
+		#endif
 		break;
 		#if _MCCA == 0x8632
 	case MULTIBOOT2_BOOTLOADER_MAGIC:
@@ -513,6 +531,23 @@ bool Memory::initialize(stduint eax, byte* ebx) {
 
 	uni_default_allocator = &mempool;
 	uni_hostenv_allocator = &mempool;
+
+	#if CONFIG_ENABLE_MMU && (defined(_ARC_x86) || defined(_ARC_x64))
+	if (!uni::EnablePagingPAT()) {
+		plogwarn("[PAGING] PAT is unavailable");
+	}
+	#endif
+
+	#if CONFIG_ENABLE_MMU && _MCCA == 0x8632
+	if (x86_initial_page_plan) {
+		if (!Memory::MapInitialPagePlan(kernel_paging,
+			x86_initial_page_plan, x86_initial_page_count)) {
+			plogwarn("[PAGING] Failed to apply the x86 initial page plan");
+		}
+		mempool.deallocate(x86_initial_page_plan,
+			x86_initial_page_storage_bytes);
+	}
+	#endif
 
 	// paging
 	#if _MCCA == 0x8664
@@ -537,6 +572,21 @@ bool Memory::initialize(stduint eax, byte* ebx) {
 		0x40000000ull - _IMM1S(PAGESIZE_2MB),
 		PAGESIZE_2MB, PGPROP_present | PGPROP_writable
 	);// High Part
+	#if CONFIG_ENABLE_MMU && defined(_UEFI)
+	InitialPageRegion* uefi_initial_page_plan = nullptr;
+	stduint uefi_initial_page_count = 0;
+	stduint uefi_initial_page_storage_bytes = 0;
+	if (!Memory::BuildInitialPagePlan(eax, ebx,
+		uefi_initial_page_plan, uefi_initial_page_count,
+		uefi_initial_page_storage_bytes) ||
+		!Memory::MapInitialPagePlan(kernel_paging,
+			uefi_initial_page_plan, uefi_initial_page_count)) {
+		plogwarn("[PAGING] Failed to apply the UEFI initial page plan");
+	}
+	if (uefi_initial_page_plan)
+		mempool.deallocate(uefi_initial_page_plan,
+			uefi_initial_page_storage_bytes);
+	#endif
 	setCR3 _IMM(kernel_paging.root_level_page);
 	mecocoa_global->kernel_cr3 = _IMM(kernel_paging.root_level_page);
 	if (acpi_rsdp_addr) {

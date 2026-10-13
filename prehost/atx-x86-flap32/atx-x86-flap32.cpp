@@ -13,11 +13,11 @@
 
 
 extern uint32 _start_eax, _start_ebx;
-extern "C" void R_COM1_INIT();
+bool R_COM1_ENTO();
 #define Systime SysTimer
 _sign_entry() {
 	_call_serious = kernel_fail;
-	R_COM1_INIT();// early UART
+	R_COM1_ENTO();// early UART
 	if (!Memory::initialize(_start_eax, (byte*)_start_ebx)) HALT();
 	Consman::Initialize();// located here, for  INT-10H may influence PIC
 	Cache_t::enAble();

@@ -164,10 +164,9 @@ _WEAK bool Consman::Initialize() {
 	
 
 
-	stduint vcon0_size = 0, video_memory = 0;
+	stduint video_memory = 0;
 	{
 		auto layman = global_layman.Lock();
-		vcon0_size = layman->window.getArea() * sizeof(Color);
 		video_memory = layman->video_memory;
 	}
 	//
@@ -175,8 +174,8 @@ _WEAK bool Consman::Initialize() {
 	kernel_paging.Map(
 		video_memory,
 		video_memory,
-		vcon0_size,
-		PAGESIZE_4KB, PGPROP_present | PGPROP_writable
+		sys_framebuffer.physical_range.length,
+		PAGESIZE_4KB, PGPROP_present | PGPROP_writable | PGTYPE_uncacheable
 	);// VGA
 	#endif
 

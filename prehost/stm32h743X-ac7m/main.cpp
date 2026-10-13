@@ -50,8 +50,12 @@ _ESYM_C void MemSetTrapReport(void* d, int c, size_t n, int which) {
 	XART1.OutFormat("MTRAP[%d] d=%08X c=%02X n=%u lr=%08X\r\n", which, (unsigned)d, (unsigned)(c & 0xFF), (unsigned)n, (unsigned)ra);
 }
 
+static bool _fault_reported = false;// a fault inside the reporting path itself cannot be resumed
+
 // A fault must report itself: no debugger available.
 static void _fault_report(rostr tag, stduint lr, stduint psp, stduint msp) {
+	if (_fault_reported) erro();// a second fault means the first one could not be resumed
+	_fault_reported = true;
 	stduint* frame = _arm_frame(lr, (lr & 0x4) ? psp : msp);// bit2: the frame is on the PSP
 	XART1.OutFormat("FAULT %s cfsr=%08X hfsr=%08X bfar=%08X mmfar=%08X\r\n",
 		tag, SCB->CFSR, SCB->HFSR, SCB->BFAR, SCB->MMFAR);
@@ -72,6 +76,14 @@ static void _fault_report(rostr tag, stduint lr, stduint psp, stduint msp) {
 				(unsigned)_IMM(tb->stack_lineaddr), (unsigned)_IMM(tb->stack_levladdr),
 				(unsigned)tb->stack_size, (unsigned)can_line, (unsigned)can_levl);
 		}
+	}
+	if (SCB->CFSR & ((1u << 3) | (1u << 4) | (1u << 12))) {
+		for (stduint i = 0; i < 8; i++) {// which region denied the access: dump the whole table
+			MPU->RNR = i;
+			__DSB();// RBAR/RASR read back the region selected by RNR: let the RNR write land first
+			XART1.OutFormat("  mpu%u base=%08X attr=%08X\r\n", (unsigned)i, (unsigned)(MPU->RBAR & ~0x1Fu), (unsigned)MPU->RASR);
+		}
+		erro();// MSTKERR/MUNSTKERR/BFSTKERR: nothing was stacked, nothing to resume
 	}
 	// a fault inside a loaded image is turned into an exit syscall, so only that task dies
 	if (lr & 0x4) {

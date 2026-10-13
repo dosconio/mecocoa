@@ -127,6 +127,15 @@ public:
 };
 extern LockedAllocator mempool;
 
+#if CONFIG_ENABLE_MMU
+struct InitialPageRegion {
+	stduint begin;
+	stduint end;
+	stduint type;
+	stduint permissions;
+};
+#endif
+
 // class Memory
 #if 1
 // {TEMP} 0x00000000_00000000..0x00000001_00000000
@@ -151,12 +160,18 @@ public:// trait
 public:// for loaders
 	static void AppendAvailableRange(stduint beg, stduint end);
 	#if CONFIG_ENABLE_MMU
-	// The caller serializes access to the Paging instance.
+	// The caller serializes the Paging instance and must not hold a spinlock.
 	static bool MapPages(Paging& paging, stduint linear_address,
 		stduint physical_address, stduint length,
 		PageSizeShift page_size, stduint properties);
 	static bool UnmapPages(Paging& paging, stduint linear_address,
 		stduint length);
+	static void ReleasePagingMappings(Paging& paging);
+	static bool BuildInitialPagePlan(stduint boot_magic,
+		const void* boot_info, InitialPageRegion*& plan,
+		stduint& plan_count, stduint& plan_storage_bytes);
+	static bool MapInitialPagePlan(Paging& paging,
+		const InitialPageRegion* plan, stduint plan_count);
 	#endif
 	
 };

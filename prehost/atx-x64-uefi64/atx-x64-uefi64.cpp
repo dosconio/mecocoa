@@ -26,7 +26,7 @@ extern "C" void ScreenLogToLayer();
 #endif
 // TEMP END
 
-
+bool R_COM1_ENTO();
 // ---- Kernel
 
 #define Systime SysTimer
@@ -40,8 +40,7 @@ void mecocoa(const UefiData& uefi_data_ref)
 	#endif
 
 	_call_serious = kernel_fail;
-	UART_t com1;
-	con0_out = &com1;
+	R_COM1_ENTO();
 	if (!Memory::initialize('UEFI', (byte*)(&uefi_data.memory_map))) HALT();
 	ScreenLogAttach();	// TEMP
 	Consman::Initialize();

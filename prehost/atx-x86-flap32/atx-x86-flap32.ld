@@ -96,6 +96,20 @@ SECTIONS
 		*/mcca-atx-x86-flap32/syscall-pow.o(.data .data.*)
 		*/mcca-atx-x86-flap32/syscall-pow.o(.got)
 	} > RAM2
+	.page.text : {
+		*/libm32d.a:_cx_Paging.o(.text .text.*)
+		*/mcca-atx-x86-flap32/memoman-page.o(.text .text.*)
+	} > RAM2
+	.page.rodata : {
+		*/libm32d.a:_cx_Paging.o(.rodata .rodata.*)
+		*/mcca-atx-x86-flap32/memoman-page.o(.rodata .rodata.*)
+	} > RAM2
+	.page.data : {
+		*/libm32d.a:_cx_Paging.o(.data .data.*)
+		*/libm32d.a:_cx_Paging.o(.got)
+		*/mcca-atx-x86-flap32/memoman-page.o(.data .data.*)
+		*/mcca-atx-x86-flap32/memoman-page.o(.got)
+	} > RAM2
 
 	/* MultiCore */
 	.text : {

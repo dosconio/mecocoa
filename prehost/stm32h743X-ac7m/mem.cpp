@@ -32,7 +32,10 @@ static void _mpu_sdram_normal() {
 	MPU->CTRL = MPU->CTRL & ~1u;// disable while writing regions
 	MPU->RNR = 0;// region 0 is the kernel one, regions 1 and 2 follow the running task
 	MPU->RBAR = 0xC0000000;
-	MPU->RASR = (1u << 0) | (24u << 1) | (1u << 19) | (1u << 24);// 0x01080031, AP=001: privileged only
+	MPU->RASR = (1u << 0) | (24u << 1) | (1u << 19) | (1u << 17) | (1u << 16) | (1u << 24);// 0x010A0031, AP=001: privileged only, Normal WBWA
+	MPU->RNR = 4;// the frame buffer stays non-cacheable: LTDC reads it continuously
+	MPU->RBAR = 0xC0000000;
+	MPU->RASR = (1u << 0) | (19u << 1) | (1u << 19) | (1u << 24);// 1MB, TEX=001,C=0,B=0: Normal non-cacheable
 	MPU->CTRL = (1u << 0) | (1u << 2);// ENABLE | PRIVDEFENA
 	__DSB();
 	__ISB();
@@ -44,9 +47,10 @@ static void _mpu_sdram_normal() {
 static void _mpu_write_region(stduint idx, stduint base, stduint bytes, stduint ap, bool exec) {
 	stduint expo = 5;// 32 bytes is the smallest region
 	while ((1u << expo) < bytes) expo++;
+	base &= ~((1u << expo) - 1u);// the base must be aligned to the region size: round it down, the size still covers the range
 	MPU->RNR = idx;
 	MPU->RBAR = base;
-	MPU->RASR = (1u << 0) | ((expo - 1) << 1) | (1u << 19) | (ap << 24) | (exec ? 0u : (1u << 28));
+	MPU->RASR = (1u << 0) | ((expo - 1) << 1) | (1u << 19) | (1u << 17) | (1u << 16) | (ap << 24) | (exec ? 0u : (1u << 28));// TEX=001,C=1,B=1: the same Normal WBWA as region 0, a different type for the same RAM lets stale dirty lines write back over the task data
 }
 
 static void _mpu_disable_region(stduint idx) {
@@ -56,23 +60,27 @@ static void _mpu_disable_region(stduint idx) {
 
 // regions 1 and 2 follow the running task, region 0 is the kernel one
 void mpumap_task(ThreadBlock* tb) {
-	static stduint mapped_image = 0, mapped_stack = 0;// one core only
+	static stduint mapped_image = 0, mapped_stack = 0, mapped_size = 0, mapped_levl = 0;// one core only
 	const ProcessBlock* pb = tb ? tb->parent_process : nullptr;
 	const stduint image = (pb && pb->load_slices[0].length) ? pb->load_slices[0].address : 0;
 	const stduint stack = image ? _IMM(tb->stack_lineaddr) : 0;
-	if (image == mapped_image && stack == mapped_stack) return;
+	const stduint size = tb ? tb->stack_size : 0;
+	const stduint levl = tb ? _IMM(tb->stack_levladdr) : 0;
+	if (image == mapped_image && stack == mapped_stack && size == mapped_size && levl == mapped_levl) return;
+	// the regions must describe the task that is about to run, so no exception may reprogram them in between
+	const bool old_if = IC.TryMaskInterrupt();
 	MPU->CTRL = MPU->CTRL & ~1u;// disable while writing regions
 	if (image) {
 		_mpu_write_region(1, image, pb->load_slices[0].length, 3, true);// image: read, write and execute for the task
-		_mpu_write_region(2, stack, tb->stack_size, 3, false);// stack: read and write, never execute
+		_mpu_write_region(2, stack, size, 3, false);// stack: read and write, never execute
 	}
 	else {
 		_mpu_disable_region(1);
 		_mpu_disable_region(2);
 	}
 	// region 3: a no-access guard at the bottom of this kernel stack.
-	if (tb && tb->stack_levladdr) {
-		_mpu_write_region(3, _IMM(tb->stack_levladdr), 32, 0, false);
+	if (levl) {
+		_mpu_write_region(3, levl, 32, 0, false);
 	}
 	else {
 		_mpu_disable_region(3);
@@ -82,6 +90,9 @@ void mpumap_task(ThreadBlock* tb) {
 	__ISB();
 	mapped_image = image;
 	mapped_stack = stack;
+	mapped_size = size;
+	mapped_levl = levl;
+	if (old_if) IC.enInterrupt(true);
 }
 
 bool Memory::initialize(stduint eax, byte* ebx) {
@@ -95,7 +106,7 @@ bool Memory::initialize(stduint eax, byte* ebx) {
 	_mpu_sdram_normal();
 	L1C.enAbleICacheAll();// I-Cache only: it caches flash fetches, and DMA never touches instruction traffic
 
-	SCB->CCR = SCB->CCR & ~(1u << 16);// TEMP: D-Cache off, the cacheable SRAM regions and the DMA buffers are not reconciled yet
+	L1C.enAbleDCacheAll();// SDRAM is write-back; the frame buffer stays non-cacheable
 	__DSB();
 	__ISB();
 	XART1.OutFormat("CCR=%08X line=%u ic=%u dc=%u\r\n",

@@ -125,6 +125,9 @@ void ProcessBlock::Release(ProcessBlock* pb) {
 	KASSERT(pb->ref_count > 0);
 	if (--pb->ref_count == 0) {
 		ploginfo("ProcessBlock::Release() [%d] [%p]", pb->getID(), pb);
+		#if CONFIG_ENABLE_MMU
+		Memory::ReleasePagingMappings(pb->paging);
+		#endif
 		pb->~ProcessBlock();
 		mempool.deallocate(pb);
 	}

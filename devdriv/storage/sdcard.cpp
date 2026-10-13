@@ -91,7 +91,7 @@ static void SdCardOnline(bool up) {
 static int SdCardInit() {
 	MutexLocal guard(&sd_lock);
 	if (!SDCard1.setMode()) return 0;
-	NVIC.setPriority(IRQ_SDMMC1, 15);
+	NVIC.setPriority(IRQ_SDMMC1, 6);// above SVCall(15): the blocking SD read spins inside that handler, an equal priority irq would never run there
 	SDCard1.Block_Size = 512;
 	SDCard1.storage_method = IOMethod::DMA;
 	if (sd_mounted) {
