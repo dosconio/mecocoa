@@ -55,7 +55,7 @@ $(BIN_DIR)/init: subapps/init.cpp $(MCCA_CRT0) $(MCCA_LIBC)
 $(BIN_DIR)/cot: $(wildcard $(uherpath)/COTLAB/src/*.cpp) $(LIBNATIVE) $(MCCA_CRT0)
 	@echo "MK appshell"
 	$(MCCA_CXX) $(MCCA_CXXFLAGS) -o $@ $(uherpath)/COTLAB/src/*.cpp \
-		$(MCCA_LDLIBS) -lm
+		$(MCCA_LDLIBS) $(MCCA_LIBM)
 
 $(BIN_DIR)/ribbon: subapps/ribbon.cpp $(MCCA_CRT0) $(MCCA_LIBC)
 	@echo "MK ribbon"

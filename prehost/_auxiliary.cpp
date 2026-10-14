@@ -101,6 +101,18 @@ int64_t __divdi3(int64_t a, int64_t b) {
 	return q;
 }
 
+// Return remainder (a % b), signed like libgcc: the sign follows the numerator.
+extern "C"
+int64_t __moddi3(int64_t a, int64_t b) {
+	bool neg = (a < 0);
+	uint64_t ua = neg ? ~(uint64_t)a + 1 : (uint64_t)a;
+	uint64_t ub = (b < 0) ? ~(uint64_t)b + 1 : (uint64_t)b;
+	uint64_t ur = 0;
+	__udivmoddi4(ua, ub, &ur);
+	int64_t r = (int64_t)ur;
+	return neg ? -r : r;
+}
+
 _ESYM_C unsigned int __ctzsi2(unsigned int x)
 {
 	if (x == 0) return 32;

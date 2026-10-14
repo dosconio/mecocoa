@@ -8,18 +8,14 @@
 
 #if (_MCCA & 0xFF00) == 0x8600
 
-static void EnsureFramebufferMapped(const uni::Slice& physical_range) {
-	if (!physical_range.address || !physical_range.length) return;
-	const stduint page_base = stduint(physical_range.address) & ~0xFFFu;
-	const stduint page_end = stduint((physical_range.address + physical_range.length + 0xFFFu) & ~0xFFFu);
-	if (page_end <= page_base) return;
-	kernel_paging.Map(
-		page_base,
-		page_base,
-		page_end - page_base,
-		PAGESIZE_4KB,
-		PGPROP_present | PGPROP_writable
-	);
+static bool EnsureFramebufferMapped(const uni::Slice& physical_range) {
+	if (!physical_range.address || !physical_range.length) return false;
+	#if CONFIG_ENABLE_MMU
+	return Memory::MapFramebufferPages(physical_range.address,
+		physical_range.length);
+	#else
+	return true;
+	#endif
 }
 
 class VmwareVideoDevice : public VideoDevice {
@@ -36,13 +32,14 @@ public:
 			uint32_t pitch = 0, bpp = 0;
 			Size2 resolution;
 			if (!hw.ReadMode(resolution, bpp, pitch)) return false;
+			const stduint fb_size = hw.GetFramebufferSize() ? hw.GetFramebufferSize() : (stduint)(pitch * resolution.y);
+			const uni::Slice new_range{ fb_info.physical_range.address, fb_size };
+			if (!EnsureFramebufferMapped(new_range)) return false;
 			fb_info.screen_size = resolution;
 			fb_info.bpp = bpp;
 			fb_info.pitch = pitch;
 			fb_info.format = uni::PixelFormat::ARGB8888;
-			const stduint fb_size = hw.GetFramebufferSize() ? hw.GetFramebufferSize() : (stduint)(pitch * resolution.y);
-			fb_info.physical_range = uni::Slice{ fb_info.physical_range.address, fb_size };
-			EnsureFramebufferMapped(fb_info.physical_range);
+			fb_info.physical_range = new_range;
 			hw.Flush(Rectangle(Point(0, 0), resolution, Color::Black));
 			return true;
 		}
@@ -112,7 +109,11 @@ bool VmwareVideo_Start(DeviceNode* node) {
 	dev->fb_info.pitch = pitch;
 	dev->fb_info.format = uni::PixelFormat::ARGB8888;
 	dev->fb_info.physical_range = uni::Slice{ bar_fb->start + fb_offset, fb_size };
-	EnsureFramebufferMapped(dev->fb_info.physical_range);
+	if (!EnsureFramebufferMapped(dev->fb_info.physical_range)) {
+		plogwarn("[VMwareSVGA] Failed to map framebuffer");
+		delete dev;
+		return false;
+	}
 
 	node->fields.binding.driver_data = dev;
 	Consman::AdoptVideoDevice(dev);

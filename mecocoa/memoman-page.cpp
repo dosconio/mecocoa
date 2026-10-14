@@ -462,9 +462,26 @@ namespace {
 	}
 }
 
+#if defined(_ARC_x86) || defined(_ARC_x64)
+// Verify that PAT WC can remain WC after combining with the current MTRR type.
+static bool framebuffer_range_supports_wc(stduint begin, stduint end) {
+	if (begin >= end || !uni::PagingPATEnabled()) return false;
+	for (stduint address = begin; address < end;) {
+		stduint mtrr_type;
+		if (!uni::ReadX86MTRRType(address, mtrr_type) ||
+			(mtrr_type != PGTYPE_writeback &&
+				mtrr_type != PGTYPE_writecombine)) return false;
+		if (end - address <= PAGE_SIZE) break;
+		address += PAGE_SIZE;
+	}
+	return true;
+}
+#endif
+
 bool Memory::MapPages(Paging& paging, stduint linear_address,
 	stduint physical_address, stduint length,
-	PageSizeShift page_size, stduint properties) {
+	PageSizeShift page_size, stduint properties,
+	Spinlock* page_table_lock) {
 	if (!length) return true;
 	PhysicalMappingRecord requested = {};
 	requested.paging = &paging;
@@ -474,8 +491,17 @@ bool Memory::MapPages(Paging& paging, stduint linear_address,
 	MutexLocal guard(&physical_mapping_records_mutex);
 	PhysicalMappingRecord* reserved_records;
 	if (!PrepareMapRecords(requested, reserved_records)) return false;
-	if (!paging.Map(linear_address, physical_address, length,
-		page_size, properties)) {
+	bool mapped;
+	if (page_table_lock) {
+		SpinlockLocal page_guard(page_table_lock);
+		mapped = paging.Map(linear_address, physical_address, length,
+			page_size, properties);
+	}
+	else {
+		mapped = paging.Map(linear_address, physical_address, length,
+			page_size, properties);
+	}
+	if (!mapped) {
 		ReleasePhysicalMappingRecords(reserved_records);
 		return false;
 	}
@@ -483,8 +509,102 @@ bool Memory::MapPages(Paging& paging, stduint linear_address,
 	return true;
 }
 
+#if defined(_ARC_x86) || defined(_ARC_x64)
+bool Memory::MapFramebufferPages(stduint physical_address, stduint length) {
+	if (!physical_address || !length ||
+		length > ~_IMM0 - physical_address ||
+		physical_address + length > ~_IMM0 - (PAGE_SIZE - 1)) return false;
+	const stduint page_mask = PAGE_SIZE - 1;
+	const stduint begin = physical_address & ~page_mask;
+	const stduint end = (physical_address + length + PAGE_SIZE - 1) &
+		~page_mask;
+	if (end <= begin) return false;
+	const bool wc_supported = framebuffer_range_supports_wc(begin, end);
+	#if defined(_ARC_x86)
+	const stduint high_mapping_base = 0x80000000;
+	const stduint high_mapping_limit = 0x10000000;
+	#else
+	const stduint high_mapping_base = 0x0000FFFFC0000000ull;
+	const stduint high_mapping_limit = 0x40000000ull -
+		_IMM1S(PAGESIZE_2MB);
+	#endif
+
+	auto read_type = [&](stduint virtual_address, stduint physical,
+		stduint& type) -> bool {
+		type = PGTYPE_default;
+		pageint page = virtual_address;
+		PageEntry* entry = kernel_paging.getEntry(page);
+		if (_IMM(entry) == ~_IMM0) return true;
+		if (_IMM(kernel_paging[virtual_address]) != physical) return false;
+		stduint properties;
+		if (!entry->DecodeLeafProperties(page.crt_level, properties))
+			return false;
+		type = properties & PGPROP_MASK_TYPE;
+		return true;
+	};
+
+	auto select_type = [&](stduint address, stduint& type) -> bool {
+		stduint existing_type;
+		if (!read_type(address, address, existing_type)) return false;
+		const bool full_resource_page = address >= physical_address &&
+			physical_address + length - address >= PAGE_SIZE;
+		const bool may_use_wc = wc_supported &&
+			((existing_type == PGTYPE_default && full_resource_page) ||
+				existing_type == PGTYPE_writecombine);
+		type = may_use_wc ? PGTYPE_writecombine : PGTYPE_device;
+
+		if (address < high_mapping_limit) {
+			stduint alias_type;
+			if (!read_type(high_mapping_base + address, address,
+				alias_type) ||
+				(alias_type != PGTYPE_default &&
+					alias_type != type &&
+					!(type == PGTYPE_device &&
+						alias_type == PGTYPE_uncacheable))) return false;
+		}
+		return true;
+	};
+	for (stduint address = begin; address < end; address += PAGE_SIZE) {
+		stduint type;
+		if (!select_type(address, type)) {
+			plogerro("[PAGING] Framebuffer alias or page type conflict at PA=%[x]",
+				address);
+			return false;
+		}
+	}
+
+	stduint run_begin = begin;
+	stduint run_type = PGTYPE_default;
+	for (stduint address = begin; address < end; address += PAGE_SIZE) {
+		stduint type;
+		if (!select_type(address, type)) return false;
+		if (run_type == PGTYPE_default) run_type = type;
+		if (type == run_type) continue;
+		if (!MapPages(kernel_paging, run_begin, run_begin,
+			address - run_begin, PAGESIZE_ANY,
+			PGPROP_present | PGPROP_writable | run_type |
+			PGOPTS_omit_warnings)) {
+			plogerro("[PAGING] Failed framebuffer mapping: %[x]..%[x] type=%[x]",
+				run_begin, address, run_type);
+			return false;
+		}
+		run_begin = address;
+		run_type = type;
+	}
+	if (!MapPages(kernel_paging, run_begin, run_begin,
+		end - run_begin, PAGESIZE_ANY,
+		PGPROP_present | PGPROP_writable | run_type |
+		PGOPTS_omit_warnings)) {
+		plogerro("[PAGING] Failed framebuffer mapping: %[x]..%[x] type=%[x]",
+			run_begin, end, run_type);
+		return false;
+	}
+	return true;
+}
+#endif
+
 bool Memory::UnmapPages(Paging& paging, stduint linear_address,
-	stduint length) {
+	stduint length, Spinlock* page_table_lock) {
 	if (!length) return true;
 	PhysicalRange removed;
 	if (!NormalizeUnmapRequest(linear_address, length, removed)) return false;
@@ -492,7 +612,15 @@ bool Memory::UnmapPages(Paging& paging, stduint linear_address,
 	MutexLocal guard(&physical_mapping_records_mutex);
 	PhysicalMappingRecord* reserved_records;
 	if (!PrepareUnmapRecords(paging, removed, reserved_records)) return false;
-	if (!paging.Unmap(removed.begin, removed.end - removed.begin)) {
+	bool unmapped;
+	if (page_table_lock) {
+		SpinlockLocal page_guard(page_table_lock);
+		unmapped = paging.Unmap(removed.begin, removed.end - removed.begin);
+	}
+	else {
+		unmapped = paging.Unmap(removed.begin, removed.end - removed.begin);
+	}
+	if (!unmapped) {
 		ReleasePhysicalMappingRecords(reserved_records);
 		return false;
 	}
@@ -750,20 +878,6 @@ extern UefiData uefi_data;
 static bool append_initial_page_source(InitialPageRegion* source, stduint capacity, stduint& count, stduint begin, stduint end, stduint type, stduint permissions) {
 	if (count >= capacity || begin >= end) return false;
 	source[count++] = {begin, end, type, permissions};
-	return true;
-}
-
-// Verify that PAT WC can remain WC after combining with the current MTRR type.
-static bool framebuffer_range_supports_wc(stduint begin, stduint end) {
-	if (begin >= end || !uni::PagingPATEnabled()) return false;
-	for (stduint address = begin; address < end;) {
-		stduint mtrr_type;
-		if (!uni::ReadX86MTRRType(address, mtrr_type) ||
-			(mtrr_type != PGTYPE_writeback &&
-				mtrr_type != PGTYPE_writecombine)) return false;
-		if (end - address <= PAGE_SIZE) break;
-		address += PAGE_SIZE;
-	}
 	return true;
 }
 

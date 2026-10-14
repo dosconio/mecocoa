@@ -299,6 +299,7 @@ public: // Threads
 public: // VirtualMemory
 	#if CONFIG_ENABLE_MMU
 	uni::Paging paging;
+	Mutex mutex_mapping; // _TEMP: sysc_MMAP, sysc_UMAP, MapPwcallPhysicalRange, CreateFork, Exet.
 	#endif
 	stduint heaptop = 0;
 	stduint heapbtm = 0;// norm: max seg + 0x10000

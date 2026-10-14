@@ -213,6 +213,15 @@ extern "C" void AP_Main(stduint core_id) {
 	Taskman::current_thread(core_id) = idle;
 	BindCurrentKernelEntryStack(idle, core_id);
 	InitializeLocalApicOnAp();
+	#if CONFIG_ENABLE_MMU
+	unsigned pat_a, pat_b, pat_c, pat_d;
+	_IO_CPUID(1, 0, &pat_a, &pat_b, &pat_c, &pat_d);
+	if ((pat_d & (1u << 16)) && !uni::EnablePagingPAT()) {
+		plogerro("[PAGING] AP core%u failed to configure PAT", core_id);
+		loop HALT();
+	}
+	if (pat_d & (1u << 16)) setCR3(getCR3());
+	#endif
 	loadIDT(mglb(0x800), 256 * sizeof(gate_t) - 1);
 	IC[IRQ_RESCHED_IPI].setRange(mglb(Handint_RESCHED_Entry), SegCo32);
 	IC[IRQ_WAKE_IPI].setRange(mglb(Handint_WAKE_Entry), SegCo32);

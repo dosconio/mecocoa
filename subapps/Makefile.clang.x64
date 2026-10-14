@@ -15,8 +15,8 @@ MCCA_COMFLAGS = -D_ACCM=0x8664 -D_DEBUG -I$(uincpath) -I$(uincpath)/c/ISO_IEC_ST
 
 MCCA_CFLAGS = $(MCCA_COMFLAGS) --sysroot=$(MCCA_SYSROOT) -m64 -mno-red-zone -fno-builtin -fno-stack-protector -fno-pic -fno-pie -static -nostdlib \
 	-Wno-builtin-declaration-mismatch -Wno-invalid-constexpr -Wno-empty-body -Wno-unknown-warning-option
-MCCA_CXXFLAGS = $(MCCA_CFLAGS) -fno-exceptions -fno-rtti -fno-use-cxa-atexit -std=c++2a
-MCCA_LDLIBS = $(MCCA_CRT0) $(MCCA_LIBC) -L$(MCCA_LIBDIR) -lm -lgcc -Wl,-m,elf_x86_64 -Wl,-z,noexecstack -no-pie -fuse-ld=lld
+MCCA_CXXFLAGS = $(MCCA_CFLAGS) -fno-exceptions -fno-rtti -fno-use-cxa-atexit -std=c++2a -nostdinc++
+MCCA_LDLIBS = $(MCCA_CRT0) $(MCCA_LIBC) -L$(MCCA_LIBDIR) -lm -Wl,-m,elf_x86_64 -Wl,-z,noexecstack -Wl,--no-pie -fuse-ld=lld
 STDCPP_APP_CXXFLAGS = -m64 -mno-red-zone -static -nodefaultlibs -nostartfiles -fno-omit-frame-pointer -fno-stack-protector -fno-pic -fno-builtin -fno-strict-aliasing -ffunction-sections -fdata-sections $(CXW) -std=c++2a
 STDCPP_APP_LIBS = -L$(uobjpath)/$(ACCM_LIBS) -lx64 -lstdc++ -lsupc++ -lgcc -lm
 
@@ -24,5 +24,8 @@ UNIS_UTIL_DIR = $(ulibpath)/../demo/utilities
 UNIS_UTIL_C_SRCS = $(wildcard $(UNIS_UTIL_DIR)/*.c)
 UNIS_UTIL_CPP_SRCS = $(wildcard $(UNIS_UTIL_DIR)/*.cpp)
 UNIS_UTIL_APPS = $(sort $(addprefix $(BIN_DIR)/,$(basename $(notdir $(UNIS_UTIL_C_SRCS) $(UNIS_UTIL_CPP_SRCS)))))
+
+# x64 keeps the math bridge in its own libm.a
+MCCA_LIBM = -lm
 
 include subapps/Makefile.gui

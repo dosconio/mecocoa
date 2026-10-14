@@ -601,18 +601,45 @@ namespace Devs {
 		return uint64(~size_mask) + 1;
 	}
 
-	void map_pci_mmio_resource(uint64 base, uint64 length) {
-		if (!base || !length) return;
-		const stduint page_base = stduint(base) & ~0xFFFu;
-		const stduint page_end = stduint((base + length + 0xFFFu) & ~0xFFFu);
-		if (page_end <= page_base) return;
-		kernel_paging.Map(
-			page_base,
-			page_base,
-			page_end - page_base,
-			PAGESIZE_4KB,
-			PGPROP_present | PGPROP_writable
-		);
+	bool map_pci_mmio_resource(uint64 base, uint64 length, uint16 flags) {
+		if (!base || !length) return true;
+		const uint64 address_max = uint64(~_IMM0);
+		if (base > address_max || length > address_max - base ||
+			base + length > address_max - (PAGE_SIZE - 1)) return false;
+		const uint64 page_base = base & ~uint64(PAGE_SIZE - 1);
+		const uint64 page_end = (base + length + PAGE_SIZE - 1) &
+			~uint64(PAGE_SIZE - 1);
+		if (page_end <= page_base || page_end - page_base > address_max)
+			return false;
+
+		#if CONFIG_ENABLE_MMU
+		if (!(flags & DeviceResourceFlag_SizeEstimated)) {
+			const uint64 framebuffer_base = uint64(
+				sys_framebuffer.physical_range.address);
+			const uint64 framebuffer_length = uint64(
+				sys_framebuffer.physical_range.length);
+			if (framebuffer_length) {
+				if (framebuffer_base > address_max ||
+					framebuffer_length > address_max - framebuffer_base ||
+					framebuffer_base + framebuffer_length >
+						address_max - (PAGE_SIZE - 1)) return false;
+				const uint64 framebuffer_page_base = framebuffer_base &
+					~uint64(PAGE_SIZE - 1);
+				const uint64 framebuffer_page_end =
+					(framebuffer_base + framebuffer_length + PAGE_SIZE - 1) &
+					~uint64(PAGE_SIZE - 1);
+				if (page_base < framebuffer_page_end &&
+					framebuffer_page_base < page_end) return true;
+			}
+			return Memory::MapPages(kernel_paging, stduint(page_base),
+				stduint(page_base), stduint(page_end - page_base),
+				PAGESIZE_ANY, PGPROP_present | PGPROP_writable |
+				PGTYPE_device | PGOPTS_omit_warnings);
+		}
+		#endif
+		return kernel_paging.Map(stduint(page_base), stduint(page_base),
+			stduint(page_end - page_base), PAGESIZE_4KB,
+			PGPROP_present | PGPROP_writable);
 	}
 
 
@@ -650,9 +677,22 @@ namespace Devs {
 			if (is_active_boot_gpu(dev)) {
 				flags |= DeviceResourceFlag_SizeEstimated;
 			}
-			append_resource(node, DeviceResourceType::PciBarMmio, flags,
+			const bool defer_framebuffer_mapping =
+				(flags & DeviceResourceFlag_SizeEstimated) &&
+				((resource_index == 0 &&
+					uni::PCI::read_vendor_id(dev) == 0x1234u &&
+					uni::PCI::read_device_id(dev.bus, dev.device, dev.function) == 0x1111u) ||
+					(resource_index == 1 &&
+					uni::PCI::read_vendor_id(dev) == 0x15ADu &&
+					uni::PCI::read_device_id(dev.bus, dev.device, dev.function) == 0x0405u));
+			if (length && !defer_framebuffer_mapping &&
+				!map_pci_mmio_resource(base, length, flags)) {
+				plogerro("[PAGING] Failed PCI MMIO BAR %02x:%02x.%u index=%u base=%[64H] length=%[64H] flags=%[16H]",
+					dev.bus, dev.device, dev.function, resource_index,
+					base, length, flags);
+			}
+			else append_resource(node, DeviceResourceType::PciBarMmio, flags,
 				resource_index, base, length, 0);
-			map_pci_mmio_resource(base, length);
 			if (mem_type == 0x2u && bar_index + 1 < bar_count) {
 				++bar_index;
 			}

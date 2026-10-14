@@ -1288,12 +1288,10 @@ DEFSYSC sysc_MMAP(stduint len, stduint flag, stduint fd) {
 	if (&pb->paging == &kernel_paging) {
 		return ~_IMM0; // Reject kernel page table
 	}
+	if (!len || len > ~_IMM0 - 0xFFF) return ~_IMM0;
 	len = (len + 0xFFF) & ~_IMM(0xFFF); // Align to 4KB page size
-	SpinlockLocal guard(&pb->vma_lock);
-	stduint addr = pb->heaptop;
-	pb->heaptop += len;
-
-	VirtualMemoryArea vma(addr, pb->heaptop, flag);
+	MutexLocal mapping_guard(&pb->mutex_mapping);
+	VirtualMemoryArea vma(0, 0, flag);
 	if (fd != ~_IMM0) {
 		auto files = pb->fileman.Lock();
 		if (fd < files->pfiles.Count() && files->pfiles[fd] && files->pfiles[fd]->vfile) {
@@ -1310,7 +1308,25 @@ DEFSYSC sysc_MMAP(stduint len, stduint flag, stduint fd) {
 			}
 		}
 	}
-	pb->vmas.Append(vma);
+	stduint addr;
+	bool appended = false;
+	{
+		SpinlockLocal guard(&pb->vma_lock);
+		addr = pb->heaptop;
+		if (len <= ~_IMM0 - addr) {
+			vma.vm_start = addr;
+			vma.vm_end = addr + len;
+			appended = pb->vmas.Append(vma);
+			if (appended) pb->heaptop = addr + len;
+		}
+	}
+	if (!appended) {
+		if (vma.vm_type == VMA_FILE && vma.vfile) {
+			if (vma.vfile->f_inode) vma.vfile->f_inode->ref_count--;
+			Filesys::Close(vma.vfile);
+		}
+		return ~_IMM0;
+	}
 	return addr;
 }
 #else
@@ -1334,13 +1350,31 @@ DEFSYSC sysc_MMAP(stduint len, stduint flag, stduint fd) {
 
 #if CONFIG_ENABLE_MMU
 DEFSYSC sysc_UMAP(stduint addr, stduint len) {
-	if ((addr & 0xFFF) || (len & 0xFFF)) {
+	if (!len || (addr & 0xFFF) || (len & 0xFFF) || len > ~_IMM0 - addr) {
 		return ~_IMM0; // Address and length must be 4KB aligned
 	}
 	ThreadBlock* th = Taskman::CurrentTB();
 	ProcessBlock* pb = th->parent_process;
 	if (&pb->paging == &kernel_paging) {
 		return ~_IMM0; // Reject kernel page table
+	}
+	MutexLocal mapping_guard(&pb->mutex_mapping);
+	for (stduint i = 0;; ++i) {
+		stduint device_begin;
+		stduint device_end;
+		{
+			SpinlockLocal guard(&pb->vma_lock);
+			if (i >= pb->vmas.Count()) break;
+			const auto& vma = pb->vmas[i];
+			if (vma.vm_type != VMA_DEVICE) continue;
+			device_begin = maxof(addr, vma.vm_start);
+			device_end = minof(addr + len, vma.vm_end);
+		}
+		if (device_begin < device_end &&
+			!Memory::UnmapPages(pb->paging, device_begin,
+				device_end - device_begin, &pb->vma_lock)) {
+			return ~_IMM0;
+		}
 	}
 	SpinlockLocal guard(&pb->vma_lock);
 	
@@ -1399,6 +1433,7 @@ DEFSYSC sysc_UMAP(stduint addr, stduint len) {
 			stduint old_end = vma.vm_end;
 			vma.vm_end = addr;
 			VirtualMemoryArea new_vma(addr + len, old_end, vma.vm_flags);
+			new_vma.vm_type = vma.vm_type;
 			if (vma.vm_type == VMA_FILE && vma.vfile) {
 				uni::vfs_file* nvfile = (uni::vfs_file*)malc(sizeof(uni::vfs_file));
 				if (nvfile) {

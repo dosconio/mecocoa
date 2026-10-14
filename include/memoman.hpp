@@ -13,6 +13,8 @@
 #ifndef __MEMOMAN_HPP__
 #define __MEMOMAN_HPP__
 
+struct Spinlock;
+
 #define PAGE_SIZE 0x1000 // lev-0-page
 
 extern bool map_ready;
@@ -160,18 +162,22 @@ public:// trait
 public:// for loaders
 	static void AppendAvailableRange(stduint beg, stduint end);
 	#if CONFIG_ENABLE_MMU
-	// The caller serializes the Paging instance and must not hold a spinlock.
+	// The caller serializes the Paging instance; page_table_lock protects its write when provided.
 	static bool MapPages(Paging& paging, stduint linear_address,
 		stduint physical_address, stduint length,
-		PageSizeShift page_size, stduint properties);
+		PageSizeShift page_size, stduint properties,
+		Spinlock* page_table_lock = nullptr);
 	static bool UnmapPages(Paging& paging, stduint linear_address,
-		stduint length);
+		stduint length, Spinlock* page_table_lock = nullptr);
 	static void ReleasePagingMappings(Paging& paging);
 	static bool BuildInitialPagePlan(stduint boot_magic,
 		const void* boot_info, InitialPageRegion*& plan,
 		stduint& plan_count, stduint& plan_storage_bytes);
 	static bool MapInitialPagePlan(Paging& paging,
 		const InitialPageRegion* plan, stduint plan_count);
+	#if defined(_ARC_x86) || defined(_ARC_x64)
+	static bool MapFramebufferPages(stduint physical_address, stduint length);
+	#endif
 	#endif
 	
 };

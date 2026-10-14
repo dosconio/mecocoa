@@ -333,33 +333,6 @@ static stduint PublishedVideoBpp(uni::PixelFormat format, uint32 width, uint32 p
 	}
 }
 
-#if CONFIG_ENABLE_MMU
-static bool MapPublishedFramebufferToKernel(stduint physical, stduint length) {
-	if (!physical || !length) return false;
-	const stduint page_base = physical & ~_IMM(0xFFF);
-	const uint64 end64 = uint64(physical) + uint64(length);
-	const uint64 page_end64 = (end64 + 0xFFFu) & ~0xFFFu;
-	if ((uint64)(stduint)page_end64 != page_end64) return false;
-	const stduint page_end = (stduint)page_end64;
-	if (page_end <= page_base) return false;
-	const stduint properties = PGPROP_present | PGPROP_writable |
-		PGTYPE_uncacheable;
-	stduint run_begin = page_base;
-	bool run_present = _IMM(kernel_paging.getEntry(page_base)) != ~_IMM0;
-	for (stduint page = page_base + PAGE_SIZE; page < page_end;
-		page += PAGE_SIZE) {
-		const bool present = _IMM(kernel_paging.getEntry(page)) != ~_IMM0;
-		if (present == run_present) continue;
-		if (!kernel_paging.Map(run_begin, run_begin, page - run_begin,
-			PAGESIZE_ANY, properties)) return false;
-		run_begin = page;
-		run_present = present;
-	}
-	return kernel_paging.Map(run_begin, run_begin, page_end - run_begin,
-		PAGESIZE_ANY, properties);
-}
-#endif
-
 bool PwcallValidateDeviceResourceRange(ProcessBlock* pb, stduint dev_handle, uint32 resource_type, uint32 resource_index, uint64 start, uint64 length);
 
 static stdsint GraphicMsg_DRV_ATTACH(FMT_GraphicMsg_DRV_ATTACH* usr_info, ProcessBlock* pb, stduint sig_src) {
@@ -385,7 +358,7 @@ static stdsint GraphicMsg_DRV_ATTACH(FMT_GraphicMsg_DRV_ATTACH* usr_info, Proces
 	}
 	const stduint physical = (stduint)physical64;
 	#if CONFIG_ENABLE_MMU
-	if (!MapPublishedFramebufferToKernel(physical, (stduint)info.fb_length)) return -1;
+	if (!Memory::MapFramebufferPages(physical, (stduint)info.fb_length)) return -1;
 	#endif
 
 	if (!published_video_proxy) {

@@ -36,11 +36,11 @@ COMFLG = -m32 -fno-builtin -nostdlib -fno-stack-protector -O2 -fno-strict-aliasi
 
 COMFLG_STA = $(COMFLG) -static
 CFLAGS_STA=$(COMFLG_STA) $(attr)
-XFLAGS_STA=$(CFLAGS_STA) -std=c++2a -fno-exceptions -fno-unwind-tables -fno-rtti -Wno-volatile
+XFLAGS_STA=$(CFLAGS_STA) -std=c++2a -fno-exceptions -fno-unwind-tables -fno-rtti -Wno-volatile -nostdinc++
 
 COMFLG_PIC = $(COMFLG) -fPIC
 CFLAGS_PIC=$(COMFLG_PIC) $(attr)
-XFLAGS_PIC=$(CFLAGS_PIC) -std=c++2a -fno-exceptions -fno-unwind-tables -fno-rtti -Wno-volatile
+XFLAGS_PIC=$(CFLAGS_PIC) -std=c++2a -fno-exceptions -fno-unwind-tables -fno-rtti -Wno-volatile -nostdinc++
 
 define asm_to_o
 $(dest_obj)/$(asmpref)$(notdir $(1:.asm=.o)): $(1)
@@ -106,10 +106,11 @@ $(SYSROOT_LIBC_PIC): ${dest_obj}/lib$(arch)-pic.a | $(SYSROOT_USR_LIB)
 	@echo "CP $(notdir $@)"
 	@cp $< $@
 
+# clang drops -shared for this bare-metal target, and lld rejects the absolute relocations of the kernel asm objects, so link with binutils ld like the kernel.
 ${dest_obj}/lib$(arch).so: $(asmobjs_pic) $(cplobjs_pic) $(cppobjs_pic)
 	@-rm -f $@
 	@echo "LD $(notdir $@)"
-	@${CC} -shared -m32 -nostdlib -o $@ $^
+	@ld -m elf_i386 -shared -o $@ $^
 
 $(SYSROOT_LIBC_SO): ${dest_obj}/lib$(arch).so | $(SYSROOT_USR_LIB)
 	@echo "CP $(notdir $@)"

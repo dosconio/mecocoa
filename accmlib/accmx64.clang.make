@@ -35,7 +35,7 @@ dest_obj=$(uobjpath)/accm-$(arch)
 COMWAN = -Wno-builtin-declaration-mismatch -Wno-invalid-constexpr -Wno-empty-body -Wno-unknown-warning-option
 COMFLG = -m64 -mno-red-zone -static -fno-builtin -nostdlib -fno-stack-protector -O2 -fno-strict-aliasing $(COMWAN)
 CFLAGS=$(COMFLG) $(attr)
-XFLAGS=$(CFLAGS) -std=c++2a -fno-exceptions -fno-unwind-tables -fno-rtti -Wno-volatile
+XFLAGS=$(CFLAGS) -std=c++2a -fno-exceptions -fno-unwind-tables -fno-rtti -Wno-volatile -nostdinc++
 
 define asm_to_o
 $(dest_obj)/$(asmpref)$(notdir $(1:.asm=.o)): $(1)

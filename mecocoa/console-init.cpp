@@ -170,13 +170,12 @@ _WEAK bool Consman::Initialize() {
 		video_memory = layman->video_memory;
 	}
 	//
-	#if _MCCA == 0x8632
-	kernel_paging.Map(
-		video_memory,
-		video_memory,
-		sys_framebuffer.physical_range.length,
-		PAGESIZE_4KB, PGPROP_present | PGPROP_writable | PGTYPE_uncacheable
-	);// VGA
+	#if CONFIG_ENABLE_MMU && _MCCA == 0x8632
+	if (!Memory::MapFramebufferPages(video_memory,
+		sys_framebuffer.physical_range.length)) {
+		plogerro("[PAGING] Failed to map the x86 console framebuffer");
+		return false;
+	}
 	#endif
 
 	// cursor (Cursor is appended first, becoming subf, the top-most layer)

@@ -439,11 +439,16 @@ ProcessBlock* Taskman::CreateFork(ProcessBlock* fo, const CallgateFrame* frame) 
 		dst_files->root = src_files->root;
 	}
 	auto tb = AllocateThread();
+	if (!tb) {
+		ProcessBlock::Release(pb);
+		return nullptr;
+	}
 	pb->main_thread = tb;
 	pb->thread_list_head = tb;
 	tb->parent_process = pb;
 
 	#if _MCCA == 0x8632 || _MCCA == 0x8664
+	MutexLocal mapping_guard(&fo->mutex_mapping);
 	// check undone and duplicate operations
 	// 1. Context
 	// 2. Copy segmants and stack
@@ -453,6 +458,20 @@ ProcessBlock* Taskman::CreateFork(ProcessBlock* fo, const CallgateFrame* frame) 
 	tb->stack_size = target_fo_thread->stack_size;
 	auto stack_norm = (byte*)mempool.allocate(tb->stack_size, 12);
 	auto stack_ring = ring ? (byte*)mempool.allocate(tb->stack_size, 12) : stack_norm;
+	auto discard_child = [&]() -> ProcessBlock* {
+		if (stack_ring && stack_ring != stack_norm && stack_ring != (byte*)~_IMM0)
+			mempool.deallocate(stack_ring, tb->stack_size);
+		if (stack_norm && stack_norm != (byte*)~_IMM0)
+			mempool.deallocate(stack_norm, tb->stack_size);
+		tb->~ThreadBlock();
+		mempool.deallocate(tb, sizeof(ThreadBlock));
+		pb->main_thread = nullptr;
+		pb->thread_list_head = nullptr;
+		ProcessBlock::Release(pb);
+		return nullptr;
+	};
+	if (!stack_norm || stack_norm == (byte*)~_IMM0 ||
+		!stack_ring || stack_ring == (byte*)~_IMM0) return discard_child();
 	tb->stack_lineaddr = target_fo_thread->stack_lineaddr;
 	tb->stack_levladdr = stack_ring;
 	// [DIAG] Write stack canary at the bottom of the kernel stack
@@ -470,6 +489,42 @@ ProcessBlock* Taskman::CreateFork(ProcessBlock* fo, const CallgateFrame* frame) 
 	pb->heapbtm = fo->heapbtm;
 	pb->heaptop = fo->heaptop;
 	pb->vmas = fo->vmas;
+	// Inherit device mappings with their decoded memory type and register each contiguous run.
+	for (stduint i = 0; i < pb->vmas.Count(); i++) {
+		const auto& vma = pb->vmas[i];
+		if (vma.vm_type != VMA_DEVICE) continue;
+		for (stduint addr = vma.vm_start; addr < vma.vm_end;) {
+			void* parent_phy = fo->paging[addr];
+			if (parent_phy == (void*)~_IMM0) {
+				addr += PAGE_SIZE;
+				continue;
+			}
+			pageint page = addr;
+			PageEntry* entry = fo->paging.getEntry(page);
+			stduint properties;
+			bool valid = _IMM(entry) != ~_IMM0 &&
+				entry->DecodeLeafProperties(page.crt_level, properties) &&
+				(properties & PGPROP_MASK_TYPE) != PGTYPE_default;
+			stduint end = addr + PAGE_SIZE;
+			while (valid && end < vma.vm_end) {
+				void* next_phy = fo->paging[end];
+				if (_IMM(next_phy) != _IMM(parent_phy) + end - addr) break;
+				pageint next_page = end;
+				PageEntry* next_entry = fo->paging.getEntry(next_page);
+				stduint next_properties;
+				if (_IMM(next_entry) == ~_IMM0 ||
+					!next_entry->DecodeLeafProperties(next_page.crt_level,
+						next_properties) || next_properties != properties) break;
+				end += PAGE_SIZE;
+			}
+			if (!valid || !Memory::MapPages(pb->paging, addr,
+				_IMM(parent_phy), end - addr, PAGESIZE_ANY, properties)) {
+				plogerro("[PAGING] Failed to inherit device mapping during fork at VA=%[x]", addr);
+				return discard_child();
+			}
+			addr = end;
+		}
+	}
 	for (stduint i = 0; i < pb->vmas.Count(); i++) {
 		auto& vma = pb->vmas[i];
 		if (vma.vm_type == VMA_FILE && vma.vfile) {
@@ -488,10 +543,7 @@ ProcessBlock* Taskman::CreateFork(ProcessBlock* fo, const CallgateFrame* frame) 
 		for (stduint addr = vma.vm_start; addr < vma.vm_end; addr += 0x1000) {
 			void* parent_phy = fo->paging[addr];
 			if (parent_phy != (void*)~_IMM0) {
-				if (vma.vm_type == VMA_DEVICE) {
-					pb->paging.Map(addr, (stduint)parent_phy, 0x1000, PAGESIZE_4KB, PGPROP_present | vma.vm_flags);
-					continue;
-				}
+				if (vma.vm_type == VMA_DEVICE) continue;
 				void* child_phy = mempool.allocate(0x1000, 12);
 				MemSet((void*)(child_phy), 0, 0x1000); // Zero-fill child page
 				MemCopyP((void*)(child_phy), kernel_paging, (const void*)(parent_phy), kernel_paging, 0x1000);
@@ -733,6 +785,7 @@ ProcessBlock* Taskman::Exet(stduint parent, rostr usr_fullpath, char** usr_argv,
 	}
 
 	// 1. Prepare stack frame in temporary kernel buffer while old paging is still active
+	MutexLocal mapping_guard(&current_pb->mutex_mapping);
 	stduint new_sp = Taskman::SetupStack(current_pb, current_pb, usr_argv, usr_envp, (stduint)header.e_entry + load_bias, phdr_addr, header.e_phnum, header.e_phentsize);
 
 	// 2. Destroy Old Image
@@ -789,6 +842,7 @@ ProcessBlock* Taskman::Exet(stduint parent, rostr usr_fullpath, char** usr_argv,
 	else
 		stack_norm_phy = _IMM(current_pb->paging[_IMM(current_pb->main_thread->stack_lineaddr) & ~0xFFF]);
 
+	Memory::ReleasePagingMappings(current_pb->paging);
 	current_pb->paging.~Paging();
 
 	// 3. Setup New Paging and Load ELF

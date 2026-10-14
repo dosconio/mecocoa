@@ -812,12 +812,17 @@ static bool ClosePwcallDeviceHandle(ProcessBlock* pb, stduint dev_handle) {
 	return true;
 }
 
-static stduint MapPwcallPhysicalRange(ProcessBlock* pb, stduint phys_begin, stduint want_length, uint32 map_flags) {
+#if CONFIG_ENABLE_MMU
+static stduint MapPwcallPhysicalRange(ProcessBlock* pb, stduint phys_begin,
+	stduint want_length, uint32 map_flags, stduint requested_type) {
 	if (!pb || !phys_begin || !want_length) return 0;
 	const uint64 aligned_phys = uint64(phys_begin) & ~0xFFFull;
 	const uint64 page_bias = uint64(phys_begin) - aligned_phys;
+	if (uint64(want_length) > ~uint64(0) - page_bias - 0xFFFu) return 0;
 	const uint64 map_size64 = (page_bias + uint64(want_length) + 0xFFFu) & ~0xFFFu;
-	if (!map_size64 || (uint64)(stduint)aligned_phys != aligned_phys || (uint64)(stduint)map_size64 != map_size64) {
+	if (!map_size64 || (uint64)(stduint)aligned_phys != aligned_phys ||
+		(uint64)(stduint)map_size64 != map_size64 ||
+		map_size64 > uint64(~_IMM0) - aligned_phys) {
 		return 0;
 	}
 	const stduint map_size = stduint(map_size64);
@@ -825,22 +830,70 @@ static stduint MapPwcallPhysicalRange(ProcessBlock* pb, stduint phys_begin, stdu
 		PGPROP_user_access |
 		((map_flags & _IMM(PwcallDeviceMapFlag::Writable)) ? PGPROP_writable : 0);
 
-	SpinlockLocal guard(&pb->vma_lock);
+	MutexLocal mapping_guard(&pb->mutex_mapping);
 	if (&pb->paging == &kernel_paging) return 0;
-	const stduint vaddr = pb->heaptop;
-	pb->heaptop += map_size;
+	stduint vaddr;
+	{
+		SpinlockLocal guard(&pb->vma_lock);
+		vaddr = pb->heaptop;
+		if ((vaddr & 0xFFF) || map_size > ~_IMM0 - vaddr) return 0;
+		for (stduint i = 0; i < pb->vmas.Count(); ++i) {
+			const auto& existing = pb->vmas[i];
+			if (vaddr < existing.vm_end && existing.vm_start < vaddr + map_size)
+				return 0;
+		}
+		for (stduint off = 0; off < map_size; off += 0x1000) {
+			if (_IMM(pb->paging[vaddr + off]) != ~_IMM0) return 0;
+		}
+	}
 
-	VirtualMemoryArea vma(vaddr, pb->heaptop, page_flags);
-	vma.vm_type = VMA_DEVICE;
-	pb->vmas.Append(vma);
+	auto select_type = [&](stduint physical, stduint& type) -> bool {
+		type = requested_type;
+		if (type != PGTYPE_default) return true;
+		pageint page = physical;
+		PageEntry* entry = kernel_paging.getEntry(page);
+		if (_IMM(entry) == ~_IMM0) {
+			type = PGTYPE_device;
+			return true;
+		}
+		if (_IMM(kernel_paging[physical]) != physical) return false;
+		stduint properties;
+		if (!entry->DecodeLeafProperties(page.crt_level, properties)) return false;
+		switch (properties & PGPROP_MASK_TYPE) {
+		case PGTYPE_writecombine: type = PGTYPE_writecombine; return true;
+		case PGTYPE_device:
+		case PGTYPE_uncacheable: type = PGTYPE_device; return true;
+		default: return false;
+		}
+	};
 
+	stduint type = PGTYPE_default;
 	for (stduint off = 0; off < map_size; off += 0x1000) {
-		const stduint virt = vaddr + off;
-		const stduint phys = stduint(aligned_phys) + off;
-		pb->paging.Map(virt, phys, 0x1000, PAGESIZE_4KB, PGPROP_present | page_flags);
+		stduint page_type;
+		if (!select_type(stduint(aligned_phys) + off, page_type) ||
+			(type != PGTYPE_default && type != page_type)) return 0;
+		type = page_type;
+	}
+	VirtualMemoryArea vma(vaddr, vaddr + map_size, page_flags);
+	vma.vm_type = VMA_DEVICE;
+	{
+		SpinlockLocal guard(&pb->vma_lock);
+		if (!pb->vmas.Append(vma)) return 0;
+	}
+	if (!Memory::MapPages(pb->paging, vaddr, stduint(aligned_phys),
+		map_size, PAGESIZE_ANY, PGPROP_present | page_flags | type,
+		&pb->vma_lock)) {
+		SpinlockLocal guard(&pb->vma_lock);
+		pb->vmas.Remove(pb->vmas.Count() - 1, 1);
+		return 0;
+	}
+	{
+		SpinlockLocal guard(&pb->vma_lock);
+		pb->heaptop = vaddr + map_size;
 	}
 	return vaddr + stduint(page_bias);
 }
+#endif
 
 static stdsint HandlePwcallDeviceDmaAlloc(ProcessBlock* pb, stduint dev_handle, stduint size, stduint flags) {
 	(void)flags;
@@ -900,32 +953,55 @@ static stdsint HandlePwcallDeviceDmaAlloc(ProcessBlock* pb, stduint dev_handle, 
 
 static stdsint HandlePwcallDeviceDmaFree(ProcessBlock* pb, stduint dma_handle) {
 	if (!pb || dma_handle < PwcallDmaHandleBase) return -1;
-	SpinlockLocal guard(PwcallHandleLock());
-	auto* owner = FindPwcallProcessHandles(pb->pid);
-	if (!owner) return -1;
-	auto* slot_node = FindPwcallDmaSlotNodeByHandle(owner, dma_handle);
-	if (!slot_node) return -1;
-	auto* slot = reinterpret_cast<PwcallDmaSlot*>(slot_node->offs);
-	StopPwcallDmaSlot(slot);
-	if (slot && slot->mapped_addr && slot->size) {
-		sysc_UMAP(slot->mapped_addr, slot->size);
-		slot->mapped_addr = 0;
-	}
-	if (slot && slot->physical && slot->size) {
-		#if (_MCCA & 0xFF00) == 0x8600
-		if (DmaLowIsInRange((void*)slot->physical)) {
-			DmaLowFree((void*)slot->physical, slot->size);
-		}
-		else {
-			mempool.deallocate((void*)slot->physical, slot->size);
-		}
-		#else
-		mempool.deallocate((void*)slot->physical, slot->size);
-		#endif
+	stduint physical;
+	stduint size;
+	stduint mapped_addr;
+	{
+		SpinlockLocal guard(PwcallHandleLock());
+		auto* owner = FindPwcallProcessHandles(pb->pid);
+		if (!owner) return -1;
+		auto* slot_node = FindPwcallDmaSlotNodeByHandle(owner, dma_handle);
+		if (!slot_node) return -1;
+		auto* slot = reinterpret_cast<PwcallDmaSlot*>(slot_node->offs);
+		if (!slot || !slot->physical || !slot->size) return -1;
+		StopPwcallDmaSlot(slot);
+		physical = slot->physical;
+		size = slot->size;
+		mapped_addr = slot->mapped_addr;
 		slot->physical = 0;
 		slot->size = 0;
+		slot->mapped_addr = 0;
 	}
-	RemovePwcallHandleChainNode(&owner->dmas, slot_node);
+	if (mapped_addr && sysc_UMAP(mapped_addr, size) == -1) {
+		SpinlockLocal guard(PwcallHandleLock());
+		auto* owner = FindPwcallProcessHandles(pb->pid);
+		auto* slot_node = owner ? FindPwcallDmaSlotNodeByHandle(owner, dma_handle) : nullptr;
+		auto* slot = slot_node ? reinterpret_cast<PwcallDmaSlot*>(slot_node->offs) : nullptr;
+		if (slot && !slot->physical) {
+			slot->physical = physical;
+			slot->size = size;
+			slot->mapped_addr = mapped_addr;
+		}
+		return -1;
+	}
+	{
+		SpinlockLocal guard(PwcallHandleLock());
+		auto* owner = FindPwcallProcessHandles(pb->pid);
+		auto* slot_node = owner ? FindPwcallDmaSlotNodeByHandle(owner, dma_handle) : nullptr;
+		if (slot_node) RemovePwcallHandleChainNode(&owner->dmas, slot_node);
+	}
+	if (physical && size) {
+		#if (_MCCA & 0xFF00) == 0x8600
+		if (DmaLowIsInRange((void*)physical)) {
+			DmaLowFree((void*)physical, size);
+		}
+		else {
+			mempool.deallocate((void*)physical, size);
+		}
+		#else
+		mempool.deallocate((void*)physical, size);
+		#endif
+	}
 	return 0;
 }
 
@@ -954,8 +1030,13 @@ static stdsint HandlePwcallDeviceDmaMap(ProcessBlock* pb, stduint dma_handle, st
 	stduint duplicate_map = 0;
 	bool map_valid = true;
 	if (!mapped_addr) {
+		#if CONFIG_ENABLE_MMU
 		mapped_addr = MapPwcallPhysicalRange(pb, physical, size,
-			request.map_flags ? request.map_flags : _IMM(PwcallDeviceMapFlag::Writable));
+			request.map_flags ? request.map_flags : _IMM(PwcallDeviceMapFlag::Writable),
+			PGTYPE_writeback);
+		#else
+		return -1;
+		#endif
 		if (!mapped_addr) return -1;
 		{
 			SpinlockLocal guard(PwcallHandleLock());
@@ -1119,51 +1200,29 @@ static stdsint HandlePwcallDeviceMap(ProcessBlock* pb, DeviceNode* node, stduint
 	const uint32 resource_type = request.resource_type ? request.resource_type : _IMM(DeviceResourceType::PciBarMmio);
 	const auto* res = FindPwcallDeviceResource(node, resource_type, request.resource_index);
 	if (!res || DeviceResourceType(res->type) != DeviceResourceType::PciBarMmio) return -1;
+	if (res->length > ~uint64(0) - res->start) return -1;
 	if (request.offset > res->length) return -1;
 
 	const uint64 map_begin = res->start + request.offset;
 	const uint64 max_length = res->length - request.offset;
 	const uint64 want_length = request.length ? request.length : max_length;
 	if (!want_length || want_length > max_length) return -1;
-
-	const uint64 phys_begin = map_begin & ~0xFFFull;
-	const uint64 page_bias = map_begin - phys_begin;
-	const uint64 map_size64 = (page_bias + want_length + 0xFFFu) & ~0xFFFu;
-	if (!map_size64) return -1;
-	if ((uint64)(stduint)phys_begin != phys_begin) return -1;
-	if ((uint64)(stduint)map_size64 != map_size64) return -1;
-
-	const stduint map_size = (stduint)map_size64;
-	const stduint page_flags =
-		PGPROP_user_access |
-		((request.map_flags & _IMM(PwcallDeviceMapFlag::Writable)) ? PGPROP_writable : 0);
-
-	SpinlockLocal guard(&pb->vma_lock);
-	if (&pb->paging == &kernel_paging) return -1;
-	const stduint vaddr = pb->heaptop;
-	pb->heaptop += map_size;
-
-	VirtualMemoryArea vma(vaddr, pb->heaptop, page_flags);
-	vma.vm_type = VMA_DEVICE;
-	pb->vmas.Append(vma);
-
-	for (stduint page_off = 0; page_off < map_size; page_off += 0x1000) {
-		pb->paging.Map(
-			vaddr + page_off,
-			(stduint)(phys_begin + page_off),
-			0x1000,
-			PAGESIZE_4KB,
-			PGPROP_present | page_flags);
-		RefreshVirtualAddress(vaddr + page_off);
-	}
-	return vaddr + (stduint)page_bias;
+	if ((uint64)(stduint)map_begin != map_begin ||
+		(uint64)(stduint)want_length != want_length) return -1;
+	#if CONFIG_ENABLE_MMU
+	const stduint mapped = MapPwcallPhysicalRange(pb, stduint(map_begin),
+		stduint(want_length), request.map_flags, PGTYPE_default);
+	return mapped ? stdsint(mapped) : -1;
+	#else
+	return -1;
+	#endif
 }
 
 static stdsint HandlePwcallDeviceUnmap(ProcessBlock* pb, stduint addr, stduint len, stduint flags) {
-	(void)pb;
 	(void)flags;
-	if (!addr || !len) return -1;
+	if (!pb || pb->ring != RING_S || !addr || !len) return -1;
 	const uint64 end_addr = uint64(addr) + uint64(len);
+	if (end_addr < addr || end_addr > ~uint64(0) - 0xFFFu) return -1;
 	const stduint aligned_addr = addr & ~_IMM(0xFFF);
 	const uint64 aligned_end64 = (end_addr + 0xFFFu) & ~0xFFFu;
 	if ((uint64)(stduint)aligned_end64 != aligned_end64) return -1;

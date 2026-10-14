@@ -22,8 +22,8 @@ MCCA_COMFLAGS = -D_ACCM=0x8632 -D_ARC_x86=5 -D_DEBUG -I$(uincpath) -I$(uincpath)
 
 MCCA_CFLAGS = $(MCCA_COMFLAGS) --sysroot=$(MCCA_SYSROOT) -m32 -fno-builtin -fno-stack-protector -fno-pic -fno-pie -static -nostdlib \
 	-Wno-incompatible-library-redeclaration -Wno-invalid-constexpr -Wno-empty-body -Wno-unknown-warning-option
-MCCA_CXXFLAGS = $(MCCA_CFLAGS) -fno-exceptions -fno-rtti -fno-use-cxa-atexit -std=c++2a
-MCCA_LDLIBS = $(MCCA_CRT0) $(MCCA_LIBC) -lgcc -Wl,-m,elf_i386 -Wl,-z,noexecstack -no-pie -fuse-ld=lld
+MCCA_CXXFLAGS = $(MCCA_CFLAGS) -fno-exceptions -fno-rtti -fno-use-cxa-atexit -std=c++2a -nostdinc++
+MCCA_LDLIBS = $(MCCA_CRT0) $(MCCA_LIBC) -Wl,-m,elf_i386 -Wl,-z,noexecstack -Wl,--no-pie -fuse-ld=lld
 OUT ?= $(DRV_DIR)/$(DRV).elf
 
 # Every driver includes headers from include/, a change among them must relink the driver
