@@ -807,6 +807,7 @@ auto Taskman::Schedule(bool omit_slice)->decltype(Schedule())
 		ploginfo("[CPU%u]SCH: Th%u -> Th%u", cpuid, old_tb->tid, new_tb->tid);
 	}
 	#if defined(_ARCH_ARM_ProfileM)
+	const bool mpu_if = IC.TryMaskInterrupt();// the region write and the pending switch must stay one unit
 	mpumap_task(new_tb);
 	#endif
 	#if _MCCA == 0x8664 || _MCCA == 0x8632
@@ -814,6 +815,9 @@ auto Taskman::Schedule(bool omit_slice)->decltype(Schedule())
 	((void(*)(NormalTaskContext*, NormalTaskContext*))mglb(SwitchTaskContext))(&new_tb->context, &old_tb->context);
 	#else
 	SwitchTaskContext(&new_tb->context, &old_tb->context);
+	#endif
+	#if defined(_ARCH_ARM_ProfileM)
+	if (mpu_if) IC.enInterrupt(true);// PendSV is taken here, with the regions of the task it restores
 	#endif
 }
 #else
@@ -861,6 +865,7 @@ void Taskman::SleepAndRelease(Spinlock* lk) {
 	#endif
 	// No explicit unlock of scheduler_lock here, because earlier we unlock lk, but wait!
 	#if defined(_ARCH_ARM_ProfileM)
+	const bool mpu_if = IC.TryMaskInterrupt();// the region write and the pending switch must stay one unit
 	mpumap_task(new_tb);
 	#endif
 	#if _MCCA == 0x8664 || _MCCA == 0x8632
@@ -868,5 +873,8 @@ void Taskman::SleepAndRelease(Spinlock* lk) {
 	((void(*)(NormalTaskContext*, NormalTaskContext*))mglb(SwitchTaskContext))(&new_tb->context, &old_tb->context);
 	#else
 	SwitchTaskContext(&new_tb->context, &old_tb->context);
+	#endif
+	#if defined(_ARCH_ARM_ProfileM)
+	if (mpu_if) IC.enInterrupt(true);// PendSV is taken here, with the regions of the task it restores
 	#endif
 }

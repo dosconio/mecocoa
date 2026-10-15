@@ -80,7 +80,7 @@ namespace {
 		return true;
 	}
 
-	// Decide whether two explicit page memory types may alias the same PA range.
+	// Allow ordinary mappings to take an explicit type; reject other type conflicts.
 	[[maybe_unused]] static bool PhysicalPageTypesCompatible(stduint existing_type,
 		stduint requested_type) {
 		switch (existing_type) {
@@ -107,8 +107,9 @@ namespace {
 		default:
 			return false;
 		}
-		if (existing_type == PGTYPE_default || requested_type == PGTYPE_default)
-			return false;
+		if (requested_type == PGTYPE_default) return false;
+		if (existing_type == PGTYPE_default ||
+			existing_type == PGTYPE_writeback) return true;
 		#if defined(_ARC_x86) || defined(_ARC_x64)
 		if (existing_type == PGTYPE_device) existing_type = PGTYPE_uncacheable;
 		if (requested_type == PGTYPE_device) requested_type = PGTYPE_uncacheable;
@@ -463,18 +464,9 @@ namespace {
 }
 
 #if defined(_ARC_x86) || defined(_ARC_x64)
-// Verify that PAT WC can remain WC after combining with the current MTRR type.
+// Check whether the configured PAT can select WC for this framebuffer range.
 static bool framebuffer_range_supports_wc(stduint begin, stduint end) {
-	if (begin >= end || !uni::PagingPATEnabled()) return false;
-	for (stduint address = begin; address < end;) {
-		stduint mtrr_type;
-		if (!uni::ReadX86MTRRType(address, mtrr_type) ||
-			(mtrr_type != PGTYPE_writeback &&
-				mtrr_type != PGTYPE_writecombine)) return false;
-		if (end - address <= PAGE_SIZE) break;
-		address += PAGE_SIZE;
-	}
-	return true;
+	return begin < end && uni::PagingPATEnabled();
 }
 #endif
 
@@ -548,16 +540,15 @@ bool Memory::MapFramebufferPages(stduint physical_address, stduint length) {
 		if (!read_type(address, address, existing_type)) return false;
 		const bool full_resource_page = address >= physical_address &&
 			physical_address + length - address >= PAGE_SIZE;
-		const bool may_use_wc = wc_supported &&
-			((existing_type == PGTYPE_default && full_resource_page) ||
-				existing_type == PGTYPE_writecombine);
-		type = may_use_wc ? PGTYPE_writecombine : PGTYPE_device;
+		type = wc_supported && full_resource_page ?
+			PGTYPE_writecombine : PGTYPE_device;
 
 		if (address < high_mapping_limit) {
 			stduint alias_type;
 			if (!read_type(high_mapping_base + address, address,
 				alias_type) ||
 				(alias_type != PGTYPE_default &&
+					alias_type != PGTYPE_writeback &&
 					alias_type != type &&
 					!(type == PGTYPE_device &&
 						alias_type == PGTYPE_uncacheable))) return false;

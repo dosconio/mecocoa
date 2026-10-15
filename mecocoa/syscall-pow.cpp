@@ -62,7 +62,9 @@ namespace {
 		uint32 resource_index = 0;
 		uint32 generation = 0;
 		uint32 pending_count = 0;
+		uint32 delivery_count = 0;
 		uint64 sequence = 0;
+		uint16 delivery_flags = DeviceEventFlag_None;
 		uint8 vector = 0;
 		uint8 irq_line = 0xFF;
 		bool level_triggered = false;
@@ -262,6 +264,57 @@ static DeviceEvent PwcallMakeDeviceInterruptEvent(const PwcallDeviceIrqBinding& 
 	return event;
 }
 
+static bool PwcallDeliverPendingInterrupts(stduint vector) {
+	while (true) {
+		DeviceEvent event = {};
+		stduint owner_tid = 0;
+		{
+			SpinlockLocal guard(PwcallIrqLock());
+			for0(i, numsof(pwcall_irq_bindings)) {
+				auto& binding = pwcall_irq_bindings[i];
+				if (!binding.active || binding.vector != vector ||
+					!binding.delivery_pending) continue;
+				binding.delivery_pending = false;
+				owner_tid = binding.owner_tid;
+				event = PwcallMakeDeviceInterruptEvent(binding,
+					binding.delivery_count, binding.delivery_flags);
+				break;
+			}
+		}
+		if (!owner_tid) return true;
+		if (device_event_proc(owner_tid, event)) {
+			SpinlockLocal guard(PwcallIrqLock());
+			for0(i, numsof(pwcall_irq_bindings)) {
+				auto& binding = pwcall_irq_bindings[i];
+				if (!binding.active || binding.owner_tid != owner_tid ||
+					binding.device_handle != event.device_handle ||
+					binding.resource_index != event.source ||
+					binding.generation != event.generation ||
+					binding.sequence != event.sequence) continue;
+				binding.delivery_count = 0;
+				binding.delivery_flags = DeviceEventFlag_None;
+				break;
+			}
+			continue;
+		}
+		{
+			SpinlockLocal guard(PwcallIrqLock());
+			for0(i, numsof(pwcall_irq_bindings)) {
+				auto& binding = pwcall_irq_bindings[i];
+				if (!binding.active || !binding.awaiting_ack ||
+					binding.owner_tid != owner_tid ||
+					binding.device_handle != event.device_handle ||
+					binding.resource_index != event.source ||
+					binding.generation != event.generation ||
+					binding.sequence != event.sequence) continue;
+				binding.delivery_pending = true;
+				break;
+			}
+		}
+		return false;
+	}
+}
+
 void device_interrupt_proc(stduint vector) {
 	bool masked_lines[24] = {};
 	{
@@ -282,26 +335,28 @@ void device_interrupt_proc(stduint vector) {
 			}
 			binding.awaiting_ack = true;
 			binding.sequence++;
+			binding.delivery_count = 1;
+			binding.delivery_flags = DeviceEventFlag_None;
 			binding.delivery_pending = true;
 		}
 	}
-	while (true) {
-		DeviceEvent event = {};
-		stduint owner_tid = 0;
-		{
-			SpinlockLocal guard(PwcallIrqLock());
-			for0(i, numsof(pwcall_irq_bindings)) {
-				auto& binding = pwcall_irq_bindings[i];
-				if (!binding.active || binding.vector != vector || !binding.delivery_pending) continue;
-				binding.delivery_pending = false;
-				owner_tid = binding.owner_tid;
-				event = PwcallMakeDeviceInterruptEvent(binding, 1);
-				break;
-			}
+	(void)PwcallDeliverPendingInterrupts(vector);
+}
+
+bool device_interrupt_retry(stduint vector) {
+	{
+		SpinlockLocal guard(PwcallIrqLock());
+		for0(i, numsof(pwcall_irq_bindings)) {
+			auto& binding = pwcall_irq_bindings[i];
+			if (!binding.active || binding.vector != vector || binding.awaiting_ack) continue;
+			binding.awaiting_ack = true;
+			binding.sequence++;
+			binding.delivery_count = 1;
+			binding.delivery_flags = DeviceEventFlag_None;
+			binding.delivery_pending = true;
 		}
-		if (!owner_tid) break;
-		device_event_proc(owner_tid, event);
 	}
+	return PwcallDeliverPendingInterrupts(vector);
 }
 
 static void PwcallHandleDeviceInterrupt(stduint vector) {
@@ -362,8 +417,7 @@ bool device_interrupt_ack(stduint owner_pid, stduint owner_tid, const DeviceEven
 	if (!owner_pid || !owner_tid || acknowledged.version != DeviceEventProtocolVersion ||
 		DeviceEventKind(acknowledged.kind) != DeviceEventKind::Interrupt ||
 		!(acknowledged.flags & DeviceEventFlag_NeedsAck) || !acknowledged.device_handle) return false;
-	DeviceEvent event = {};
-	stduint deliver_tid = 0;
+	stduint deliver_vector = 0;
 	{
 		SpinlockLocal guard(PwcallIrqLock());
 		PwcallDeviceIrqBinding* found = nullptr;
@@ -386,15 +440,17 @@ bool device_interrupt_ack(stduint owner_pid, stduint owner_tid, const DeviceEven
 			uint16 flags = DeviceEventFlag_Coalesced;
 			if (found->overflowed) flags |= DeviceEventFlag_Overflow;
 			found->overflowed = false;
-			event = PwcallMakeDeviceInterruptEvent(*found, count, flags);
-			deliver_tid = found->owner_tid;
+			found->delivery_count = count;
+			found->delivery_flags = flags;
+			found->delivery_pending = true;
+			deliver_vector = found->vector;
 		}
 		else {
 			found->awaiting_ack = false;
 			if (found->level_triggered) PwcallRefreshInterruptLine(found->irq_line);
 		}
 	}
-	if (deliver_tid) device_event_proc(deliver_tid, event);
+	if (deliver_vector) (void)PwcallDeliverPendingInterrupts(deliver_vector);
 	return true;
 }
 
@@ -557,9 +613,7 @@ static stdsint PwcallAckDeviceInterrupt(ProcessBlock* process, stduint device_ha
 	uint64 sequence, uint32 generation) {
 	if (!process || !device_handle) return -1;
 	const bool recover = !sequence && !generation;
-	DeviceEvent event = {};
-	stduint owner_tid = 0;
-	bool deliver = false;
+	stduint deliver_vector = 0;
 	{
 		SpinlockLocal guard(PwcallIrqLock());
 		PwcallDeviceIrqBinding* found = nullptr;
@@ -575,6 +629,8 @@ static stdsint PwcallAckDeviceInterrupt(ProcessBlock* process, stduint device_ha
 		if (recover) {
 			found->pending_count = 0;
 			found->overflowed = false;
+			found->delivery_count = 0;
+			found->delivery_flags = DeviceEventFlag_None;
 			found->delivery_pending = false;
 			found->awaiting_ack = false;
 			if (found->level_triggered) PwcallRefreshInterruptLine(found->irq_line);
@@ -589,16 +645,17 @@ static stdsint PwcallAckDeviceInterrupt(ProcessBlock* process, stduint device_ha
 			uint16 flags = DeviceEventFlag_Coalesced;
 			if (found->overflowed) flags |= DeviceEventFlag_Overflow;
 			found->overflowed = false;
-			event = PwcallMakeDeviceInterruptEvent(*found, count, flags);
-			owner_tid = found->owner_tid;
-			deliver = true;
+			found->delivery_count = count;
+			found->delivery_flags = flags;
+			found->delivery_pending = true;
+			deliver_vector = found->vector;
 		}
 		else {
 			found->awaiting_ack = false;
 			if (found->level_triggered) PwcallRefreshInterruptLine(found->irq_line);
 		}
 	}
-	if (deliver) device_event_proc(owner_tid, event);
+	if (deliver_vector) (void)PwcallDeliverPendingInterrupts(deliver_vector);
 	return 0;
 }
 

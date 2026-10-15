@@ -665,6 +665,7 @@ void device_event_cancel(stduint tid, stduint device_handle, uint32 generation);
 bool device_interrupt_bind(stduint owner_pid, stduint owner_tid,
 	uint32 device_handle, uint32 source, uint8 vector, uint32* generation = nullptr);
 void device_interrupt_proc(stduint vector);
+bool device_interrupt_retry(stduint vector);
 bool device_interrupt_ack(stduint owner_pid, stduint owner_tid, const DeviceEvent& event);
 #endif
 

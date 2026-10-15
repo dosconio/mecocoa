@@ -640,6 +640,8 @@ ProcessBlock* Taskman::CreateFork(ProcessBlock* fo, const CallgateFrame* frame) 
 
 #endif
 
+namespace uni { extern Mutex vfs_lock; }// the VFS serializes file I/O on this lock; the loader shares it to keep the FAT buffers private per reader
+
 //
 ProcessBlock* Taskman::CreateFile(const char* path, byte ring, stduint parent, vfs_dentry* base, bool append) {
 	//{} ELF
@@ -648,7 +650,12 @@ ProcessBlock* Taskman::CreateFile(const char* path, byte ring, stduint parent, v
 	vfs_dentry* d = Filesys::Index(path, base);
 	if (d && d->d_inode && d->d_inode->i_sb && d->d_inode->i_sb->fs) {
 		FileBlockBridge loop_device(d->d_inode->i_sb->fs, d->d_inode->internal_handler, d->d_inode->i_size, 512);
-		if (auto task = Taskman::CreateELF(&loop_device, ring, append)) {
+		ProcessBlock* task = nullptr;
+		{
+			MutexLocal guard(&vfs_lock);// the loader reads through the same FAT buffers as the VFS: one reader at a time
+			task = Taskman::CreateELF(&loop_device, ring, append);
+		}
+		if (task) {
 			task->parent_id = parent;
 			ProcessBlock* pparent = Taskman::Locate(parent);
 			if (pparent) {

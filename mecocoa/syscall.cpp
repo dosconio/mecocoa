@@ -53,7 +53,8 @@ void Syscall::Initialize() {
 	#elif _MCCA == 0x8664
 	constexpr uint64 EFER_SCE = uint64(1) << 0;
 	setMSR(x86MSR::EFER, getMSR(x86MSR::EFER) | EFER_SCE);
-	if (uni::EnablePagingNX()) ploginfo("x64 NX enabled");
+	if (uni::EnablePagingNX())
+		;// ploginfo("x64 NX enabled");
 	else plogwarn("x64 NX is not supported or EFER.NXE could not be enabled");
 	setMSR(x86MSR::LSTAR, mglb(Handint_SYSCALL_Entry));
 	setMSR(x86MSR::STAR, (_IMM(SegCo64) << 32) | (_IMM(SegCo32 | _IMM(RING_U)) << 48));

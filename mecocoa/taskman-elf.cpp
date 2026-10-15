@@ -535,7 +535,7 @@ ProcessBlock* Taskman::CreateELF(BlockTrait* source, byte ring, bool append) {
 	L1C.CleanDCacheRange(image, image_block);// the image was written through the D-cache
 	L1C.InvalidateICacheAll();
 	#endif
-	ProcessBlock* pb = Taskman::Create((void*)((load_bias + header.e_entry) | 1), ring, append);
+	ProcessBlock* pb = Taskman::Create((void*)((load_bias + header.e_entry) | 1), ring, false);
 	if (!pb) return nullptr;
 	const stduint arg_sp = Taskman::SetupStack(pb, pb, nullptr, nullptr,
 		load_bias + header.e_entry, 0, header.e_phnum, header.e_phentsize);
@@ -561,6 +561,10 @@ ProcessBlock* Taskman::CreateELF(BlockTrait* source, byte ring, bool append) {
 	pb->heapbtm = (load_bias + image_span + 0xFFF) & ~_IMM(0xFFF);// the heap shares the image block, so its MPU region covers it
 	pb->heaptop = pb->heapbtm;
 	ploginfo("[ELF] flat base=%[x] span=%u entry=%[x]", load_bias, image_span, load_bias + header.e_entry);
+	if (append) {
+		Taskman::Append(pb);
+		Taskman::AppendThread(pb->main_thread);
+	}
 	return pb;
 	#endif
 	return nullptr;

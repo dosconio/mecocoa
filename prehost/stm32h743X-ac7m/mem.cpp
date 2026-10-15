@@ -45,8 +45,9 @@ static void _mpu_sdram_normal() {
 
 // ARMv7-M MPU: a region of 2^n bytes starts on a 2^n boundary, its size field holds n-1
 static void _mpu_write_region(stduint idx, stduint base, stduint bytes, stduint ap, bool exec) {
+	if (!bytes || bytes > (1u << 31)) return;// an untrustworthy length would spin the size search below forever
 	stduint expo = 5;// 32 bytes is the smallest region
-	while ((1u << expo) < bytes) expo++;
+	while (expo < 31 && (1u << expo) < bytes) expo++;
 	base &= ~((1u << expo) - 1u);// the base must be aligned to the region size: round it down, the size still covers the range
 	MPU->RNR = idx;
 	MPU->RBAR = base;

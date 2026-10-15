@@ -550,6 +550,11 @@
               <FileType>8</FileType>
               <FilePath>..\..\devdriv\tty\serial.cpp</FilePath>
             </File>
+            <File>
+              <FileName>video-ltdc.cpp</FileName>
+              <FileType>8</FileType>
+              <FilePath>..\..\devdriv\video\video-ltdc.cpp</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>
