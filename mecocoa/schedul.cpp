@@ -699,6 +699,13 @@ auto Taskman::Schedule(bool omit_slice)->decltype(Schedule())
 		HALT();
 		return;
 	}
+	#if CONFIG_DEBUG_STACKSIZE
+	old_tb->ObserveStackPointer(_IMM(&cpuid), false);
+	if (old_tb->stack_lineaddr != old_tb->stack_levladdr) {
+		old_tb->ObserveStackPointer(_IMM(&cpuid), true);
+		old_tb->ObserveStackPointer(old_tb->context.SP, true);
+	}
+	#endif
 	#if defined(_ARCH_ARM_ProfileM)
 	if (_in_svc_handler()) { scheduler_lock.Release(old_if); return; }// a tick inside a syscall must not re-map or switch; abort before touching any state
 	#endif
@@ -827,6 +834,15 @@ void Taskman::SleepAndRelease(Spinlock* lk) {
 	stduint cpuid = getID();
 	auto old_tb = current_thread(cpuid);
 	bool old_if = scheduler_lock.Acquire();
+	#if CONFIG_DEBUG_STACKSIZE
+	if (old_tb) {
+		old_tb->ObserveStackPointer(_IMM(&cpuid), false);
+		if (old_tb->stack_lineaddr != old_tb->stack_levladdr) {
+			old_tb->ObserveStackPointer(_IMM(&cpuid), true);
+			old_tb->ObserveStackPointer(old_tb->context.SP, true);
+		}
+	}
+	#endif
 	SettleSwitchingOutThread(cpuid);
 	DequeueReady(old_tb, false);
 	lk->Release(false);

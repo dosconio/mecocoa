@@ -519,23 +519,34 @@ void dump_threads(OstreamTrait& com1) {
 	// print all threads
 	extern Spinlock scheduler_lock;
 	SpinlockLocal guard(&scheduler_lock);
-	com1.OutFormat("TID  PID   STATE     REASON   CPU PRI  IP          SP\n\r");
-	com1.OutFormat("           NAME      SEND    RECV    QHEAD    QNEXT    UMSG     BR\n\r");
+	auto pad_column = [&com1](int used, int width) {
+		for (; used < width; used++) com1.OutChar(' ');
+	};
+	const int pointer_column = sizeof(stduint) * 2 + 4; // 0x + hex digits + two spaces
+	com1.OutFormat("\033[1mTID  PID   STATE     REASON   CPU \033[35mPRI  \033[32mNAME\033[0m\n\r");
+	int header_used = 0;
+	com1.OutFormat("\033[1;36m");
+	com1.OutFormat("IP%n", &header_used);
+	pad_column(header_used, pointer_column);
+	com1.OutFormat("SP%n", &header_used);
+	pad_column(header_used, pointer_column);
+	com1.OutFormat("\033[33m");
+	com1.OutFormat("LINE_PEAK%n", &header_used);
+	pad_column(header_used, 10);
+	com1.OutFormat("KERN_PEAK\033[0m\n\r");
+	com1.OutFormat("\033[1;34mSEND     RECV     QHEAD    QNEXT    BR       UMSG\033[0m\n\r");
 	for (auto nod = Taskman::thchain.Root(); nod; nod = nod->next) {
 		auto th = cast<ThreadBlock*>(nod->offs);
+		int used = 0;
 
 		// TID
-		com1.OutFormat("%[u]", th->tid);
-		if (th->tid < 10) com1.OutFormat("    ");
-		else if (th->tid < 100) com1.OutFormat("   ");
-		else com1.OutFormat("  ");
+		com1.OutFormat("%[u]%n", th->tid, &used);
+		pad_column(used, 5);
 
 		// PID
 		stduint pid = th->parent_process ? th->parent_process->pid : 0;
-		com1.OutFormat("%[u]", pid);
-		if (pid < 10) com1.OutFormat("     ");
-		else if (pid < 100) com1.OutFormat("    ");
-		else com1.OutFormat("   ");
+		com1.OutFormat("%[u]%n", pid, &used);
+		pad_column(used, 6);
 
 		// STATE
 		const char* state_name = "Unknown";
@@ -548,12 +559,8 @@ void dump_threads(OstreamTrait& com1) {
 		case ThreadBlock::State::Hanging: state_name = "Hanging"; break;
 		case ThreadBlock::State::Invalid: state_name = "Invalid"; break;
 		}
-		com1.OutFormat("%s", state_name);
-		stduint state_len = 0;
-		while (state_name[state_len]) state_len++;
-		for (stduint s = state_len; s < 10; s++) {
-			com1.OutFormat(" ");
-		}
+		com1.OutFormat("%s%n", state_name, &used);
+		pad_column(used, 10);
 
 		// REASON
 		const char* reason_name = "None";
@@ -569,37 +576,46 @@ void dump_threads(OstreamTrait& com1) {
 			else if (_IMM(th->block_reason) & _IMM(ThreadBlock::BlockReason::BR_RecvSock)) reason_name = "SockR";
 			else if (_IMM(th->block_reason) & _IMM(ThreadBlock::BlockReason::BR_Exiting)) reason_name = "Exit";
 		}
-		com1.OutFormat("%s", reason_name);
-		stduint reason_len = 0;
-		while (reason_name[reason_len]) reason_len++;
-		for (stduint s = reason_len; s < 9; s++) {
-			com1.OutFormat(" ");
-		}
+		com1.OutFormat("%s%n", reason_name, &used);
+		pad_column(used, 9);
 
 		// CPU
 		if (th->processor_id == CORE_ID_INVALID) {
-			com1.OutFormat("-   ");
+			com1.OutFormat("-%n", &used);
 		}
 		else {
-			com1.OutFormat("%[u]", th->processor_id);
-			if (th->processor_id < 10) com1.OutFormat("   ");
-			else com1.OutFormat("  ");
+			com1.OutFormat("%[u]%n", th->processor_id, &used);
 		}
+		pad_column(used, 4);
 
 		// PRI
-		com1.OutFormat("%[i]", (stdsint)th->priority);
-		stdsint pri = th->priority;
-		if (pri >= 0) {
-			if (pri < 10) com1.OutFormat("    ");
-			else com1.OutFormat("   ");
-		}
-		else {
-			if (pri > -10) com1.OutFormat("   ");
-			else com1.OutFormat("  ");
-		}
+		com1.OutFormat("\033[35m");
+		com1.OutFormat("%[i]%n", (stdsint)th->priority, &used);
+		pad_column(used, 5);
+		com1.OutFormat("\033[32m%s\033[0m\n\r", th->name.get());
 
-		// IP and SP
-		com1.OutFormat("%p  %p\n\r", th->context.IP, th->context.SP);
+		// IP, SP and sampled stack peaks
+		com1.OutFormat("\033[36m");
+		com1.OutFormat("%p%n", th->context.IP, &used);
+		pad_column(used, pointer_column);
+		com1.OutFormat("%p%n", th->context.SP, &used);
+		pad_column(used, pointer_column);
+		com1.OutFormat("\033[33m");
+		#if CONFIG_DEBUG_STACKSIZE
+		if (th->stack_lineaddr && th->stack_lineaddr != th->stack_levladdr)
+			com1.OutFormat("%[u]%n", th->max_linestack_usage, &used);
+		else
+			com1.OutFormat("-%n", &used);
+		pad_column(used, 10);
+		if (th->stack_levladdr)
+			com1.OutFormat("%[u]\033[0m\n\r", th->max_phyzstack_usage);
+		else
+			com1.OutFormat("-\033[0m\n\r");
+		#else
+		com1.OutFormat("-         -\033[0m\n\r");
+		#endif
+
+		// IPC state
 		String str[6]{ "(null)", "(null)", "(null)", "(null)", "(null)", "0" };
 		if (th->send_to_whom) {
 			str[0].Format("%u", th->send_to_whom->getID());
@@ -621,9 +637,18 @@ void dump_threads(OstreamTrait& com1) {
 		}
 		str[5].Format("%u", _IMM(th->block_reason));
 
-		com1.OutFormat("           %s %s %s %s %s %s %s\n\r",
-			th->name.get(), str[0].reference(), str[1].reference(), str[2].reference(), str[3].reference(),
-			str[4].reference(), str[5].reference());
+		com1.OutFormat("\033[34m");
+		com1.OutFormat("%s%n", str[0].reference(), &used);
+		pad_column(used, 9);
+		com1.OutFormat("%s%n", str[1].reference(), &used);
+		pad_column(used, 9);
+		com1.OutFormat("%s%n", str[2].reference(), &used);
+		pad_column(used, 9);
+		com1.OutFormat("%s%n", str[3].reference(), &used);
+		pad_column(used, 9);
+		com1.OutFormat("%s%n", str[5].reference(), &used);
+		pad_column(used, 9);
+		com1.OutFormat("%s\033[0m\n\r", str[4].reference());
 	}
 }
 

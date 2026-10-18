@@ -447,6 +447,20 @@ public: // _Comment(Syscomm)
 	ThreadBlock* pipe_wait_next = nullptr;
 	Dchain async_messages;
 	DeviceEventQueue* device_events = nullptr;
+public: // _Comment(Statistics)
+	stduint max_linestack_usage = 0;
+	stduint max_phyzstack_usage = 0;
+#if CONFIG_DEBUG_STACKSIZE
+	inline void ObserveStackPointer(stduint sp, bool linear) {
+		byte* stack = linear ? stack_lineaddr : stack_levladdr;
+		if (!stack || !stack_size) return;
+		const stduint base = _IMM(stack);
+		if (sp < base || sp - base > stack_size) return;
+		stduint& maximum = linear ? max_linestack_usage : max_phyzstack_usage;
+		const stduint usage = stack_size - (sp - base);
+		if (usage > maximum) maximum = usage;
+	}
+#endif
 public:
 	inline stduint getID() const { return tid; }
 public: // _Comment(Signals)

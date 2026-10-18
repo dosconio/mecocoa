@@ -21,110 +21,69 @@ SECTIONS
 		*mcca-atx-x86-flap32.grub.o(.text .text.*)
 	} > RAM0
 
-	.net.text : {
-		*/mcca-atx-x86-flap32/devsman-net.o(.text .text.*)
+	/* Network driver */
+	.net : {
+		*/mcca-atx-x86-flap32/devsman-net.o(.text .text.* .rodata .rodata.* .data .data.* .got)
 	} > RAM2
-	.net.rodata : {
-		*/mcca-atx-x86-flap32/devsman-net.o(.rodata .rodata.*)
+	/* Graphics service */
+	.graf : {
+		*/mcca-atx-x86-flap32/graphic.o(.text .text.* .rodata .rodata.* .data .data.* .got)
 	} > RAM2
-	.net.data : {
-		*/mcca-atx-x86-flap32/devsman-net.o(.data .data.*)
-		*/mcca-atx-x86-flap32/devsman-net.o(.got)
+	/* FreeType */
+	.ft : {
+		*/mcca-atx-x86-flap32/freetype.o(.text .text.* .rodata .rodata.* .data .data.* .got)
+		depends/freetype/x86/libfreetype.a:(.data .data.* .data.rel.ro .data.rel.ro.* .got)
 	} > RAM2
-	.graf.text : {
-		*/mcca-atx-x86-flap32/graphic.o(.text .text.*)
-	} > RAM2
-	.graf.rodata : {
-		*/mcca-atx-x86-flap32/graphic.o(.rodata .rodata.*)
-	} > RAM2
-	.graf.data : {
-		*/mcca-atx-x86-flap32/graphic.o(.data .data.*)
-		*/mcca-atx-x86-flap32/graphic.o(.got)
-	} > RAM2
-	.ft.text : {
-		*/mcca-atx-x86-flap32/freetype.o(.text .text.*)
-	} > RAM2
-	.ft.rodata : {
-		*/mcca-atx-x86-flap32/freetype.o(.rodata .rodata.*)
-	} > RAM2
-	.ft.data : {
-		*/mcca-atx-x86-flap32/freetype.o(.data .data.*)
-		depends/freetype/x86/libfreetype.a:(.data .data.*)
-		depends/freetype/x86/libfreetype.a:(.data.rel.ro .data.rel.ro.*)
-		*/mcca-atx-x86-flap32/freetype.o(.got)
-		depends/freetype/x86/libfreetype.a:(.got)
-	} > RAM2
-	.font.data : {
+	/* Bitmap fonts */
+	.font : {
 		*/libm32d.a:_cc_font-8x5.o(.data .data.* .rodata .rodata.*)
 		*/libm32d.a:_cc_font-16x8.o(.data .data.* .rodata .rodata.*)
 	} > RAM2
-	.drv.text : {
-		*/mcca-atx-x86-flap32/e1000.o(.text .text.*)
-		*/mcca-atx-x86-flap32/au-sb16.o(.text .text.*)
-		*/mcca-atx-x86-flap32/au-buzzer.o(.text .text.*)
-		*/mcca-atx-x86-flap32/devsman-au.o(.text .text.*)
-		*/mcca-atx-x86-flap32/nvmedisk.o(.text .text.*)
-		*/mcca-atx-x86-flap32/scsidisk.o(.text .text.*)
-		*/mcca-atx-x86-flap32/video-vmware.o(.text .text.*)
-		*/mcca-atx-x86-flap32/syscall-pow.o(.text .text.*)
+	/* Ring1 drivers */
+	.drv : {
+		*/mcca-atx-x86-flap32/e1000.o(.text .text.* .rodata .rodata.* .data .data.* .got)
+		*/mcca-atx-x86-flap32/au-sb16.o(.text .text.* .rodata .rodata.* .data .data.* .got)
+		*/mcca-atx-x86-flap32/au-buzzer.o(.text .text.* .rodata .rodata.* .data .data.* .got)
+		*/mcca-atx-x86-flap32/devsman-au.o(.text .text.* .rodata .rodata.* .data .data.* .got)
+		*/mcca-atx-x86-flap32/nvmedisk.o(.text .text.* .rodata .rodata.* .data .data.* .got)
+		*/mcca-atx-x86-flap32/scsidisk.o(.text .text.* .rodata .rodata.* .data .data.* .got)
+		*/mcca-atx-x86-flap32/video-vmware.o(.text .text.* .rodata .rodata.* .data .data.* .got)
+		*/mcca-atx-x86-flap32/syscall-pow.o(.text .text.* .rodata .rodata.* .data .data.* .got)
 	} > RAM2
-	.drv.rodata : {
-		*/mcca-atx-x86-flap32/e1000.o(.rodata .rodata.*)
-		*/mcca-atx-x86-flap32/au-sb16.o(.rodata .rodata.*)
-		*/mcca-atx-x86-flap32/au-buzzer.o(.rodata .rodata.*)
-		*/mcca-atx-x86-flap32/devsman-au.o(.rodata .rodata.*)
-		*/mcca-atx-x86-flap32/nvmedisk.o(.rodata .rodata.*)
-		*/mcca-atx-x86-flap32/scsidisk.o(.rodata .rodata.*)
-		*/mcca-atx-x86-flap32/video-vmware.o(.rodata .rodata.*)
-		*/mcca-atx-x86-flap32/syscall-pow.o(.rodata .rodata.*)
-	} > RAM2
-	.drv.data : {
-		*/mcca-atx-x86-flap32/e1000.o(.data .data.*)
-		*/mcca-atx-x86-flap32/e1000.o(.got)
-		*/mcca-atx-x86-flap32/au-sb16.o(.data .data.*)
-		*/mcca-atx-x86-flap32/au-sb16.o(.got)
-		*/mcca-atx-x86-flap32/au-buzzer.o(.data .data.*)
-		*/mcca-atx-x86-flap32/au-buzzer.o(.got)
-		*/mcca-atx-x86-flap32/devsman-au.o(.data .data.*)
-		*/mcca-atx-x86-flap32/devsman-au.o(.got)
-		*/mcca-atx-x86-flap32/nvmedisk.o(.data .data.*)
-		*/mcca-atx-x86-flap32/nvmedisk.o(.got)
-		*/mcca-atx-x86-flap32/scsidisk.o(.data .data.*)
-		*/mcca-atx-x86-flap32/scsidisk.o(.got)
-		*/mcca-atx-x86-flap32/video-vmware.o(.data .data.*)
-		*/mcca-atx-x86-flap32/video-vmware.o(.got)
-		*/mcca-atx-x86-flap32/syscall-pow.o(.data .data.*)
-		*/mcca-atx-x86-flap32/syscall-pow.o(.got)
-	} > RAM2
-	.page.text : {
-		*/libm32d.a:_cx_Paging.o(.text .text.*)
-		*/mcca-atx-x86-flap32/memoman-page.o(.text .text.*)
-	} > RAM2
-	.page.rodata : {
-		*/libm32d.a:_cx_Paging.o(.rodata .rodata.*)
-		*/mcca-atx-x86-flap32/memoman-page.o(.rodata .rodata.*)
-	} > RAM2
-	.page.data : {
-		*/libm32d.a:_cx_Paging.o(.data .data.*)
-		*/libm32d.a:_cx_Paging.o(.got)
-		*/mcca-atx-x86-flap32/memoman-page.o(.data .data.*)
-		*/mcca-atx-x86-flap32/memoman-page.o(.got)
+	/* Paging */
+	.page : {
+		*/libm32d.a:_cx_Paging.o(.text .text.* .rodata .rodata.* .data .data.* .got)
+		*/mcca-atx-x86-flap32/memoman-page.o(.text .text.* .rodata .rodata.* .data .data.* .got)
 	} > RAM2
 
 	/* MultiCore */
 	.text : {
 		*mcca-atx-x86-flap32-ladder.o(.text .text.*)
-		*(.text .text.*)
+		*/mcca-atx-x86-flap32/schedul.o(.text .text.*)
 	} > RAM1
 	.rodata : {
-		*(.rodata) 
-		*(.rodata.*)
+		*/mcca-atx-x86-flap32/schedul.o(.rodata .rodata.*)
 	} > RAM1
+	.data : {
+		*/mcca-atx-x86-flap32/schedul.o(.data .data.*)
+		*/mcca-atx-x86-flap32/schedul.o(.got)
+	} > RAM1
+
+	/* Everything else lives above 1 MiB, where 32-bit addressing is unrestricted.
+	   RAM1 only keeps the AP trampoline (it starts in real mode) and schedul.o,
+	   which holds AP_Main and the core-id tables the trampoline reads. */
+	.text : {
+		*(.text .text.*)
+	} > RAM2
+	.rodata : {
+		*(.rodata)
+		*(.rodata.*)
+	} > RAM2
 	.data : {
 		*(.data)
 		*(.data.*)
 		*(.got)
-	} > RAM1
+	} > RAM2
 
 	
 	/* MACRO-CORE */

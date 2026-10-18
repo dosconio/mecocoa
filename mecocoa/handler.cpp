@@ -45,6 +45,17 @@ extern "C" void interrupt_dispatcher(HardwareInterruptFrame* frame) {
 	#else
 	HardwareInterruptFrame* active_frame = frame;
 	#endif
+	#if CONFIG_DEBUG_STACKSIZE
+	if ((active_frame->hw_cs & 3) != 0) {
+		if (auto th = Taskman::CurrentTB()) {
+			#if _MCCA == 0x8632
+			th->ObserveStackPointer(active_frame->hw_esp, true);
+			#else
+			th->ObserveStackPointer(active_frame->hw_rsp, true);
+			#endif
+		}
+	}
+	#endif
 	stduint irq_id = active_frame->interrupt_id;
 	if (irq_id < 0x20) {
 		exception_handler(active_frame);

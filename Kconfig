@@ -64,4 +64,11 @@ menu "Filesys"
 	config FILESYS_UDF
 		bool "UDF"
 		default y
+	endmenu
+	
+menu "Debugging"
+	config DEBUG_STACKSIZE
+		bool "Trace Stack Size"
+		default y
 endmenu
+

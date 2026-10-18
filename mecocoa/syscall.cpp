@@ -1671,6 +1671,15 @@ stduint Handint_SYSCALL(CallgateFrame* frame) {
 	auto callid = (syscall_t)(frame->ax & 0x7FFFFFFFu);
 	stduint para[4] = { frame->di, frame->si, frame->dx };
 	#endif
+	#if CONFIG_DEBUG_STACKSIZE
+	if (crt_th) {
+		#if _MCCA == 0x8632
+		crt_th->ObserveStackPointer(active_frame->sp0, true);
+		#elif _MCCA == 0x8664
+		crt_th->ObserveStackPointer(frame->sp0, true);
+		#endif
+	}
+	#endif
 
 	stduint ret_val = -1;
 	if (IsPwcall(callid)) {
