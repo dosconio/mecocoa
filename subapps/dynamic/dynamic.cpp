@@ -54,6 +54,8 @@ int main(int argc, char* argv[], char* envp[]) {
 	unsigned int dt_symtab = 0;
 	unsigned int dt_jmprel = 0;
 	unsigned int dt_pltrelsz = 0;
+	unsigned int dt_rel = 0;
+	unsigned int dt_relsz = 0;
 	
 	if (dynamic_addr) {
 		Elf32_Dyn* dyn = (Elf32_Dyn*)dynamic_addr;
@@ -62,12 +64,29 @@ int main(int argc, char* argv[], char* envp[]) {
 			else if (dyn->d_tag == DT_SYMTAB) dt_symtab = dyn->d_un.d_ptr;
 			else if (dyn->d_tag == DT_JMPREL) dt_jmprel = dyn->d_un.d_ptr;
 			else if (dyn->d_tag == DT_PLTRELSZ) dt_pltrelsz = dyn->d_un.d_val;
+			else if (dyn->d_tag == DT_REL) dt_rel = dyn->d_un.d_ptr;
+			else if (dyn->d_tag == DT_RELSZ) dt_relsz = dyn->d_un.d_val;
 			dyn++;
 		}
 		
 		printf("[LD-MCCA] DT_STRTAB: 0x%08x\n", dt_strtab);
 		printf("[LD-MCCA] DT_SYMTAB: 0x%08x\n", dt_symtab);
 		printf("[LD-MCCA] DT_JMPREL: 0x%08x (Size: %d bytes)\n", dt_jmprel, dt_pltrelsz);
+		printf("[LD-MCCA] DT_REL: 0x%08x (Size: %d bytes)\n", dt_rel, dt_relsz);
+		
+		// The image is normally mapped at its link addresses, so the bias is zero unless the auxv says otherwise
+		unsigned int main_bias = 0;
+		bool phdr_mapped = false;
+		for (unsigned int i = 0; at_phdr && i < at_phnum; i++) {
+			ELF_PHT_t* ph = (ELF_PHT_t*)(at_phdr + i * at_phent);
+			if (ph->p_type == PT_LOAD && at_phdr >= ph->p_vaddr && at_phdr < ph->p_vaddr + ph->p_memsz) {
+				phdr_mapped = true;
+				break;
+			}
+		}
+		if (at_phdr && !phdr_mapped) {
+			printf("[LD-MCCA] Warning: AT_PHDR is outside every PT_LOAD, relocation addresses may be wrong\n");
+		}
 		
 		dyn = (Elf32_Dyn*)dynamic_addr;
 		while (dyn->d_tag != DT_NULL) {
@@ -113,35 +132,69 @@ int main(int argc, char* argv[], char* envp[]) {
 					if (lib_header.MagicNumber[1] == 'E' && lib_header.MagicNumber[2] == 'L' && lib_header.MagicNumber[3] == 'F') {
 						printf("[LD-MCCA] Verified ELF signature for %s!\n", base_name);
 						
-						// Find the total memory footprint required by the library
-						unsigned int min_vaddr = 0xFFFFFFFF;
-						unsigned int max_vaddr = 0;
+						// The library exports far more symbols than any fixed bound can guess, so read the real count from .dynsym
+						unsigned int libc_sym_count = 1;
+						ELF_SHT_t* sh_table = nullptr;
+						if (lib_header.e_shnum && lib_header.e_shentsize >= sizeof(ELF_SHT_t)) {
+							sh_table = new ELF_SHT_t[lib_header.e_shnum];
+							fseek(fp, lib_header.e_shoff, SEEK_SET);
+							fread(sh_table, lib_header.e_shentsize, lib_header.e_shnum, fp);
+							for (int k = 0; k < lib_header.e_shnum; k++) {
+								if (sh_table[k].sh_type == SHT_DYNSYM && sh_table[k].sh_entsize) {
+									libc_sym_count = sh_table[k].sh_size / sh_table[k].sh_entsize;
+									break;
+								}
+							}
+						}
+						printf("[LD-MCCA] Library exports %u dynamic symbols\n", libc_sym_count);
+						
+						// Page-align the image start per segment p_align, then keep a bias so p_vaddr maps to bias + p_vaddr
+						unsigned int max_align = 0x1000;
+						unsigned int min_page = 0xFFFFFFFF;
+						unsigned int max_page = 0;
 						
 						ELF_PHT_t* ph_table = new ELF_PHT_t[lib_header.e_phnum];
+						if (!ph_table) {
+							plogerro("[LD-MCCA] no memory for the program headers");
+							delete[] sh_table;
+							break;
+						}
 						fseek(fp, lib_header.e_phoff, SEEK_SET);
 						fread(ph_table, lib_header.e_phentsize, lib_header.e_phnum, fp);
 						
 						for (int k = 0; k < lib_header.e_phnum; k++) {
 							if (ph_table[k].p_type == PT_LOAD) {
-								if (ph_table[k].p_vaddr < min_vaddr) min_vaddr = ph_table[k].p_vaddr;
-								unsigned int end_vaddr = ph_table[k].p_vaddr + ph_table[k].p_memsz;
-								if (end_vaddr > max_vaddr) max_vaddr = end_vaddr;
+								unsigned int al = ph_table[k].p_align ? ph_table[k].p_align : 0x1000;
+								if (al > max_align) max_align = al;
+								unsigned int seg_start = ph_table[k].p_vaddr & ~(al - 1);
+								if (seg_start < min_page) min_page = seg_start;
+								unsigned int seg_end = (ph_table[k].p_vaddr + ph_table[k].p_memsz + al - 1) & ~(al - 1);
+								if (seg_end > max_page) max_page = seg_end;
 							}
 						}
+						if (min_page == 0xFFFFFFFF) min_page = 0;
 						
-						unsigned int total_size = max_vaddr - min_vaddr;
+						unsigned int total_size = max_page - min_page;
 						printf("[LD-MCCA] Library requires %u bytes of memory space.\n", total_size);
 						
 						// Allocate memory for the library
-						char* lib_base = new char[total_size];
-						memset(lib_base, 0, total_size);
-						printf("[LD-MCCA] Allocated memory for %s at 0x%08x\n", base_name, (unsigned int)lib_base);
+						char* lib_raw = new char[total_size + max_align];
+						if (!lib_raw) {
+							plogerro("[LD-MCCA] no memory for %s (%u bytes)", base_name, total_size);
+							delete[] ph_table;
+							delete[] sh_table;
+							break;
+						}
+						char* lib_mem = (char*)(((unsigned int)lib_raw + (max_align - 1)) & ~(max_align - 1));
+						memset(lib_mem, 0, total_size);
+						char* lib_base = lib_mem - min_page;
+						printf("[LD-MCCA] Allocated memory for %s at 0x%08x (span %u, bias 0x%08x, align %u)\n", base_name, (unsigned int)lib_mem, total_size, (unsigned int)lib_base, max_align);
 						
-						// Load the segments
+						// Load the segments: the page head and the bss tail stay zero from the memset
 						for (int k = 0; k < lib_header.e_phnum; k++) {
 							if (ph_table[k].p_type == PT_LOAD) {
 								fseek(fp, ph_table[k].p_offset, SEEK_SET);
-								char* dest = lib_base + (ph_table[k].p_vaddr - min_vaddr);
+								char* dest = lib_base + ph_table[k].p_vaddr;
 								fread(dest, 1, ph_table[k].p_filesz, fp);
 								printf("[LD-MCCA] Loaded segment to 0x%08x (size: %d)\n", (unsigned int)dest, ph_table[k].p_filesz);
 							}
@@ -157,13 +210,13 @@ int main(int argc, char* argv[], char* envp[]) {
 						
 						for (int k = 0; k < lib_header.e_phnum; k++) {
 							if (ph_table[k].p_type == PT_DYNAMIC) {
-								Elf32_Dyn* libc_dyn = (Elf32_Dyn*)(lib_base + (ph_table[k].p_vaddr - min_vaddr));
+								Elf32_Dyn* libc_dyn = (Elf32_Dyn*)(lib_base + ph_table[k].p_vaddr);
 								while (libc_dyn->d_tag != DT_NULL) {
-									if (libc_dyn->d_tag == DT_STRTAB) libc_strtab = (unsigned int)lib_base + (libc_dyn->d_un.d_ptr - min_vaddr);
-									if (libc_dyn->d_tag == DT_SYMTAB) libc_symtab = (unsigned int)lib_base + (libc_dyn->d_un.d_ptr - min_vaddr);
-									if (libc_dyn->d_tag == DT_REL) libc_rel = (unsigned int)lib_base + (libc_dyn->d_un.d_ptr - min_vaddr);
+									if (libc_dyn->d_tag == DT_STRTAB) libc_strtab = (unsigned int)lib_base + libc_dyn->d_un.d_ptr;
+									if (libc_dyn->d_tag == DT_SYMTAB) libc_symtab = (unsigned int)lib_base + libc_dyn->d_un.d_ptr;
+									if (libc_dyn->d_tag == DT_REL) libc_rel = (unsigned int)lib_base + libc_dyn->d_un.d_ptr;
 									if (libc_dyn->d_tag == DT_RELSZ) libc_relsz = libc_dyn->d_un.d_val;
-									if (libc_dyn->d_tag == DT_JMPREL) libc_jmprel = (unsigned int)lib_base + (libc_dyn->d_un.d_ptr - min_vaddr);
+									if (libc_dyn->d_tag == DT_JMPREL) libc_jmprel = (unsigned int)lib_base + libc_dyn->d_un.d_ptr;
 									if (libc_dyn->d_tag == DT_PLTRELSZ) libc_pltrelsz = libc_dyn->d_un.d_val;
 									libc_dyn++;
 								}
@@ -183,10 +236,10 @@ int main(int argc, char* argv[], char* envp[]) {
 							
 							for (int i = 0; i < rel_count; i++) {
 								int rtype = ELF32_R_TYPE(rel_table[i].r_info);
-								unsigned int* ptr = (unsigned int*)((unsigned int)lib_base + (rel_table[i].r_offset - min_vaddr));
+								unsigned int* ptr = (unsigned int*)((unsigned int)lib_base + rel_table[i].r_offset);
 								
 								if (rtype == R_386_RELATIVE) { // 8
-									*ptr += ((unsigned int)lib_base - min_vaddr);
+									*ptr += (unsigned int)lib_base;
 									processed++;
 								} 
 								else if (rtype == R_386_GLOB_DAT || rtype == R_386_JUMP_SLOT || rtype == R_386_32) {
@@ -194,7 +247,7 @@ int main(int argc, char* argv[], char* envp[]) {
 									unsigned int resolved_addr = 0;
 									
 									if (libc_syms[sym_idx].st_shndx != SHN_UNDEF) {
-										resolved_addr = (unsigned int)lib_base + (libc_syms[sym_idx].st_value - min_vaddr);
+										resolved_addr = (unsigned int)lib_base + libc_syms[sym_idx].st_value;
 									}
 									
 									if (resolved_addr) {
@@ -214,49 +267,75 @@ int main(int argc, char* argv[], char* envp[]) {
 						process_relocs(libc_rel, libc_relsz);
 						process_relocs(libc_jmprel, libc_pltrelsz);
 						
-						// Perform GOT/PLT Relocations for the main executable
-						if (dt_jmprel && dt_pltrelsz && libc_symtab && libc_strtab) {
-							int rel_count = dt_pltrelsz / sizeof(Elf32_Rel);
-							Elf32_Rel* rel_table = (Elf32_Rel*)dt_jmprel;
-							Elf32_Sym* main_symtab = (Elf32_Sym*)dt_symtab;
-							const char* main_strtab = (const char*)dt_strtab;
-							
-							printf("[LD-MCCA] Processing %d PLT relocations...\n", rel_count);
-							for (int i = 0; i < rel_count; i++) {
-								int sym_idx = ELF32_R_SYM(rel_table[i].r_info);
-								int rel_type = ELF32_R_TYPE(rel_table[i].r_info);
-								
-								const char* sym_name = main_strtab + main_symtab[sym_idx].st_name;
-								
-								// Simple linear search in libc's symtab
-								Elf32_Sym* libc_syms = (Elf32_Sym*)libc_symtab;
-								unsigned int resolved_addr = 0;
-								for (int s = 1; s < 2000; s++) {
-									if (libc_syms[s].st_name == 0) continue; // Skip unnamed
-									const char* l_name = (const char*)(libc_strtab + libc_syms[s].st_name);
-									if (strcmp(sym_name, l_name) == 0) {
-										resolved_addr = (unsigned int)lib_base + (libc_syms[s].st_value - min_vaddr);
-										break;
-									}
-								}
-								
-								if (resolved_addr) {
-									printf("[LD-MCCA] Relocating %s to 0x%08x\n", sym_name, resolved_addr);
-									unsigned int* got_entry = (unsigned int*)rel_table[i].r_offset;
-									*got_entry = resolved_addr;
-								} else {
-									printf("[LD-MCCA] Error: Symbol %s not found in libc!\n", sym_name);
+						// Resolve one imported name against libc's dynamic symbol table
+						Elf32_Sym* libc_syms = (Elf32_Sym*)libc_symtab;
+						auto resolve_name = [&](const char* sym_name) -> unsigned int {
+							if (!sym_name || !libc_syms || !libc_strtab) return 0;
+							for (unsigned int s = 1; s < libc_sym_count; s++) {
+								if (libc_syms[s].st_name == 0) continue; // Skip unnamed
+								const char* l_name = (const char*)(libc_strtab + libc_syms[s].st_name);
+								if (strcmp(sym_name, l_name) == 0) {
+									return (unsigned int)lib_base + libc_syms[s].st_value;
 								}
 							}
-						}
+							return 0;
+						};
+						
+						// .rel.dyn and .rel.plt of the main executable both land here
+						auto apply_main_relocs = [&](unsigned int rel_addr, unsigned int rel_sz, const char* what) {
+							if (!rel_addr || !rel_sz) return;
+							Elf32_Rel* rel_table = (Elf32_Rel*)rel_addr;
+							Elf32_Sym* main_symtab = (Elf32_Sym*)dt_symtab;
+							const char* main_strtab = (const char*)dt_strtab;
+							int rel_count = rel_sz / sizeof(Elf32_Rel);
+							int applied = 0, failed = 0;
+							printf("[LD-MCCA] Processing %d %s relocations...\n", rel_count, what);
+							for (int i = 0; i < rel_count; i++) {
+								int rtype = ELF32_R_TYPE(rel_table[i].r_info);
+								int sym_idx = ELF32_R_SYM(rel_table[i].r_info);
+								unsigned int* field = (unsigned int*)(rel_table[i].r_offset + main_bias);
+								if (rtype == R_386_RELATIVE) {
+									*field += main_bias;
+									applied++;
+									continue;
+								}
+								const char* sym_name = (main_strtab && main_symtab) ? (main_strtab + main_symtab[sym_idx].st_name) : "";
+								unsigned int target = resolve_name(sym_name);
+								if (!target) {
+									failed++;
+									plogerro("[LD-MCCA] symbol %s not found in libc", sym_name);
+									continue;
+								}
+								if (rtype == R_386_COPY) {
+									memcpy(field, (const void*)target, main_symtab[sym_idx].st_size);
+								} else if (rtype == R_386_PC32) {
+									*field = target + *field - (unsigned int)field;
+								} else if (rtype == R_386_32) {
+									*field += target;
+								} else if (rtype == R_386_GLOB_DAT || rtype == R_386_JUMP_SLOT) {
+									*field = target;
+								} else {
+									failed++;
+									plogerro("[LD-MCCA] %s has unsupported relocation type %d", sym_name, rtype);
+									continue;
+								}
+								printf("[LD-MCCA] Relocating %s to 0x%08x\n", sym_name, target);
+								applied++;
+							}
+							printf("[LD-MCCA] Applied %d %s relocations, %d failed\n", applied, what, failed);
+						};
+						
+						apply_main_relocs(dt_rel, dt_relsz, "REL");
+						apply_main_relocs(dt_jmprel, dt_pltrelsz, "PLT");
 						
 						delete[] ph_table;
+						delete[] sh_table;
 					} else {
 						printf("[LD-MCCA] Warning: Invalid ELF signature in %s\n", target_path);
 					}
 					fclose(fp);
 				} else {
-					printf("[LD-MCCA] Failed to open library %s anywhere!\n", base_name);
+					plogerro("[LD-MCCA] failed to open library %s", base_name);
 				}
 			}
 			dyn++;

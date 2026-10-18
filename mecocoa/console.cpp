@@ -24,8 +24,8 @@ static void VTTY_Free(pureptr_t inp) {
 	// skip offs
 	auto pblock = (vtty_type_t*)nod->type;
 	DevFs::free_tty_id(pblock->id);
-	if (pblock->innput_queue.slice.address) {
-		free((byte*)pblock->innput_queue.slice.address);
+	if (pblock->innput_queue.offss) {
+		delete[] pblock->innput_queue.offss;
 	}
 	if (pblock->output_queue.slice.address) {
 		free((byte*)pblock->output_queue.slice.address);
@@ -43,11 +43,12 @@ Dnode* VTTY_Append(Console_t* con) {
 	auto p = vttys.Append(con);
 	if (!p) return nullptr;
 	const stduint SIZE_INN_BUF = 4096;
-	auto p_innbuf = new byte[SIZE_INN_BUF];
+	const stduint SIZE_INN_CNT = SIZE_INN_BUF / sizeof(uni::Pair<byte, byte>);
+	auto p_innbuf = new uni::Pair<byte, byte>[SIZE_INN_CNT];
 	const stduint SIZE_OUT_BUF = 4096;// ring buffer for async TTY text output
 	auto p_outbuf = new byte[SIZE_OUT_BUF];
 	auto pblock = new vtty_type_t();
-	pblock->innput_queue = QueueLimited({_IMM(p_innbuf), SIZE_INN_BUF});
+	pblock->innput_queue = uni::Queue<uni::Pair<byte, byte>>(p_innbuf, SIZE_INN_CNT);
 	pblock->output_queue = QueueLimited({_IMM(p_outbuf), SIZE_OUT_BUF});
 	pblock->id = DevFs::allocate_tty_id();
 	p->type = _IMM(pblock);
@@ -279,17 +280,21 @@ void _Comment(R1) serv_cons_loop()
 				// Verify the TTY node is still alive before accessing its innput_queue.
 				// Graphic thread may destroy it concurrently via FCLEANPROC.
 				// (console_waiters_mutex already held by outer scope)
-				QueueLimited* q = nullptr;
+				uni::Queue<uni::Pair<byte, byte>>* q = nullptr;
+				uni::Pair<byte, byte> pair;
 				if (tty_nod) {
 					extern Dchain vttys;
 					for (auto nod = vttys.Root(); nod; nod = nod->next) {
 						if (nod == tty_nod) { q = VTTY_INNQ(tty_nod); break; }
 					}
 				}
-				if (q && -1 != (ch = q->inn())) {
-					stdsint val = ch;
-					blocked_vtty_pid.Remove(i--);
-					syssend_async(pid, &val, byteof(val));
+				if (q && q->Dequeue(pair) && !(pair.first & _VTTY_MASK_INN_UP)) {
+					ch = pair.first & _VTTY_MASK_INN_CH;
+					if (ch) {
+						stdsint val = ch;
+						blocked_vtty_pid.Remove(i--);
+						syssend_async(pid, &val, byteof(val));
+					}
 				}
 				ProcessBlock::Release(ppb);
 			}

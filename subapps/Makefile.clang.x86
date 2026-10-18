@@ -61,7 +61,7 @@ $(ubinpath)/mecocoa/lib/ld-mcca.so: subapps/dynamic/dynamic.cpp $(MCCA_CRT0) $(M
 
 MCCA_CXXFLAGS_PIE = $(MCCA_COMFLAGS) --sysroot=$(MCCA_SYSROOT) -m32 -fno-builtin -fno-stack-protector -nostdlib -fPIE -fno-exceptions -fno-rtti -fno-use-cxa-atexit -std=c++2a -nostdinc++ \
 	-Wno-incompatible-library-redeclaration -Wno-invalid-constexpr -Wno-empty-body -Wno-unknown-warning-option
-MCCA_LDLIBS_PIE = $(MCCA_CRT0) $(MCCA_LIBC_PIC) -Wl,-m,elf_i386 -Wl,-z,noexecstack -pie -Wl,-Bstatic -fuse-ld=lld -Wl,--no-dynamic-linker
+MCCA_LDLIBS_PIE = -Wl,-pie $(MCCA_CRT0) $(MCCA_LIBC_PIC) -Wl,-m,elf_i386 -Wl,-z,noexecstack -Wl,-Bstatic -fuse-ld=lld -Wl,--no-dynamic-linker
 
 $(BIN_DIR)/testpie: subapps/testpie.cpp $(MCCA_CRT0) $(MCCA_LIBC_PIC)
 	@echo "MK testpie (PIE Static)"

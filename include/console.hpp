@@ -2,6 +2,7 @@
 #define CONSOLE_HPP_
 
 #include "console.com.hpp"
+#include <cpp/ISO_IEC_STD/pair>
 #include <cpp/Device/_Video.hpp>
 #include <c/driver/mouse.h>
 #include <cpp/Witch/Form.hpp>
@@ -12,16 +13,21 @@ extern OstreamTrait* con0_out;
 extern FramebufferInfo sys_framebuffer;
 
 extern Dchain ttys, vttys;
+// tty input element: first is char (0 means none), second is keycode, first bit of char marks release
+enum {
+	_VTTY_MASK_INN_UP = 0x80,
+	_VTTY_MASK_INN_CH = 0x7F,
+};
 struct vtty_type_t {
 	stduint blocked_pid = 0;
-	QueueLimited innput_queue;
+	uni::Queue<uni::Pair<byte, byte>> innput_queue;
 	QueueLimited output_queue;
 	uni::Vector<stduint> proc_group;
 	stduint master_pid = 0;
 	stduint id = 0; // Fixed TTY ID from Bitmap
 };
 Dnode* VTTY_Append(Console_t* con);
-inline static QueueLimited* VTTY_INNQ(Dnode* nod) {
+inline static uni::Queue<uni::Pair<byte, byte>>* VTTY_INNQ(Dnode* nod) {
 	if (!nod || !nod->type) return nullptr;
 	auto& block = *(vtty_type_t*)nod->type;
 	return &block.innput_queue;

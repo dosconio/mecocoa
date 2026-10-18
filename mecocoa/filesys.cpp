@@ -1692,7 +1692,7 @@ stduint DevFs::readfl(void* fil_handler, Slice file_slice, byte* dst) {
 		return 0;
 	}
 
-	QueueLimited* input_queue = VTTY_INNQ(tty_node);
+	uni::Queue<uni::Pair<byte, byte>>* input_queue = VTTY_INNQ(tty_node);
 	if (!input_queue) {
 		plogwarn("tty %u input queue not found", tty_id);
 		return 0;
@@ -1702,8 +1702,11 @@ stduint DevFs::readfl(void* fil_handler, Slice file_slice, byte* dst) {
 
 	stduint bytes_read = 0;
 	while (bytes_read < file_slice.length) {
-		int ch = input_queue->inn();
-		if (ch == -1) break;
+		uni::Pair<byte, byte> pair;
+		if (!input_queue->Dequeue(pair)) break;
+		if (pair.first & _VTTY_MASK_INN_UP) continue;
+		int ch = pair.first & _VTTY_MASK_INN_CH;
+		if (!ch) continue;
 		if (ch == '\b' || ch == 0x7F) {
 			if (bytes_read > 0) {
 				bytes_read--;

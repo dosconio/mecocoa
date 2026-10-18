@@ -166,9 +166,11 @@ DEFSYSC sysc_INNC(stduint blocked) {
 	}
 	else {
 		auto focus_tty = ppb->focus_tty.Lock();
-		QueueLimited* q = *focus_tty ? VTTY_INNQ(*focus_tty) : nullptr;
-		if (q && -1 != (ch = q->inn())) {
-			ret = ch;
+		uni::Queue<uni::Pair<byte, byte>>* q = *focus_tty ? VTTY_INNQ(*focus_tty) : nullptr;
+		uni::Pair<byte, byte> pair;
+		if (q && q->Dequeue(pair) && !(pair.first & _VTTY_MASK_INN_UP)) {
+			ch = pair.first & _VTTY_MASK_INN_CH;
+			if (ch) ret = ch;
 		}
 	}
 	return ret;

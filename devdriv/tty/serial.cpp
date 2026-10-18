@@ -161,7 +161,7 @@ namespace {
 				serial_out_byte(port, data);
 			}
 			if (auto* q = VTTY_INNQ(g_com2_vtty)) {
-				q->OutChar(queued);
+				q->Enqueue({queued, 0});
 			}
 			EnsureCotForVtty(g_com2_vtty, &g_com2_cot);
 			Consman::WakeBlockedWaitersDeferred();
@@ -309,7 +309,7 @@ void Handint_XART1() {
 		byte data = (byte)((uint16)XART1[XARTReg::RDR] & 0xFF);
 		if (!g_xart1_vtty) continue;// no TTY yet: drop it, but keep RXNE cleared
 		byte queued = (data == '\r') ? '\n' : data;// CR is the terminal's newline
-		if (auto* q = VTTY_INNQ(g_xart1_vtty)) q->OutChar(queued);
+		if (auto* q = VTTY_INNQ(g_xart1_vtty)) q->Enqueue({queued, 0});
 	}
 	if (!g_xart1_vtty) return;
 	// No cot on ARM: the reader drains the queue through /dev/tty

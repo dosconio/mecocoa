@@ -255,19 +255,22 @@ static void LogUserExceptionContext(HardwareInterruptFrame* frame, stduint iden,
 	stduint stack_words[4] = {};
 	const stduint code_count = CopyUserBytesMapped(code_bytes, frame->hw_eip, sizeof(code_bytes), pb);
 	const stduint stack_count = CopyUserBytesMapped((byte*)stack_words, FrameSavedEsp(frame), sizeof(stack_words), pb);
-	plogwarn("User exception %d (para %[x]) on CPU%u, PID%u, TID%u ring=%u at EIP %[x], ESP %[x], "
+	String num_str((const char*)0);
+	if (iden >= numsof(ExceptionDescription)) num_str.Format("%u", iden);
+	plogwarn("User %s (para %[x]) on CPU%u, PID%u, TID%u ring=%u at EIP %[x], ESP %[x], "
 		"CS %[x], SS %[x], EFLAGS %[x], CR3 %[x]",
-		(int)iden, para, Taskman::getID(),
+		iden < numsof(ExceptionDescription) ? ExceptionDescription[iden] : num_str.reference(),
+		para, Taskman::getID(),
 		pb ? pb->pid : ~_IMM0, Taskman::CurrentTID(),
 		pb ? pb->ring : ~_IMM0,
 		frame->hw_eip, FrameSavedEsp(frame),
 		frame->hw_cs, FrameSavedSs(frame), frame->hw_eflags, frame->cr3);
-	plogwarn("User exception regs: EAX %[x], EBX %[x], ECX %[x], EDX %[x], ESI %[x], EDI %[x], EBP %[x], "
+	plogwarn("\tregs: EAX %[x], EBX %[x], ECX %[x], EDX %[x], ESI %[x], EDI %[x], EBP %[x], "
 		"DS %[x], ES %[x], FS %[x], GS %[x]",
 		frame->pusha_eax, frame->pusha_ebx, frame->pusha_ecx, frame->pusha_edx,
 		frame->pusha_esi, frame->pusha_edi, frame->pusha_ebp,
 		frame->ds, frame->es, frame->fs, frame->gs);
-	plogwarn("User exception bytes(%u): %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x",
+	plogwarn("\tbytes(%u): %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x",
 		code_count,
 		code_bytes[0], code_bytes[1], code_bytes[2], code_bytes[3],
 		code_bytes[4], code_bytes[5], code_bytes[6], code_bytes[7],
@@ -650,11 +653,11 @@ void external_interrupt_handler()
 		}
 		if (ch == '\r') ch = '\n';
 		else if (ch == 127) {
-			VTTY_INNQ(p_vtty)->OutChar('\b');
-			VTTY_INNQ(p_vtty)->OutChar(' ');
+			// VTTY_INNQ(p_vtty)->OutChar('\b');
+			// VTTY_INNQ(p_vtty)->OutChar(' ');
 			ch = '\b';
 		}
-		VTTY_INNQ(p_vtty)->OutChar(ch);
+		VTTY_INNQ(p_vtty)->Enqueue({(byte)ch, 0});
 		Consman::WakeBlockedWaitersDeferred();
 	}
 	else if (irq) {

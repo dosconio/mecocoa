@@ -192,7 +192,7 @@ int KeyboardBridge::out(const char* str, stduint len) {
 							ascii_ch = ascii_ch - 'a' + 1;
 						}
 					}
-					VTTY_INNQ(p_vtty)->OutChar(ascii_ch);
+					VTTY_INNQ(p_vtty)->Enqueue({(byte)ascii_ch, event.keycode});
 					Consman::WakeBlockedWaitersDeferred();
 					#endif
 				}
@@ -293,7 +293,7 @@ void sysmsg_kbd(keyboard_event_t kbd_event) {
 				}
 				auto p_vtty = vttys[Consman::current_screen_TTY];
 				if (auto* q = VTTY_INNQ(p_vtty)) {
-					q->OutChar(ch);
+					q->Enqueue({(byte)ch, kbd_event.keycode});
 				}
 				return;
 			}

@@ -107,7 +107,7 @@ void _Comment(R1) serv_shell_process() {
 								}
 							}
 							if (auto* q = VTTY_INNQ(tty_target)) {
-								q->OutChar(ascii_ch);
+								q->Enqueue({(byte)ascii_ch, key_event->keycode});
 								Consman::WakeBlockedWaiters();
 							}
 						}

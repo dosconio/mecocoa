@@ -37,7 +37,7 @@ void R_MOU_INIT() {
 
 static bool fa_mouse = false;
 static byte mouse_buf[4] = { 0 };
-QueueLimited* queue_mouse;
+
 
 static void process_mouse(byte ch) {
 	mouse_buf[mouse_buf[3]++] = ch;

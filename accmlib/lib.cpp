@@ -22,6 +22,9 @@ void outtxt(const char* str, stduint len) {
 	syscall(syscall_t::WRIT, 1, (stduint)str, len);// stdout
 	// syscall(syscall_t::OUTC, (stduint)str, len, nil);// bindout
 }
+void outerr(const char* str, stduint len) {
+	syscall(syscall_t::WRIT, 2, (stduint)str, len);// stdout
+}
 void sysouts(const char* str)// 0
 {
 	auto len = StrLength(str);
