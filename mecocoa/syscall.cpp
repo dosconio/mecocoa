@@ -8,6 +8,7 @@
 #include <c/driver/timer.h>
 #include <c/driver/keyboard.h>
 #include <c/proctrl/IAx86_64.msr.h>
+#include <c/API-POSIX/sys/mman.h>
 
 #if !CONFIG_ENABLE_MMU
 #undef mglb
@@ -151,10 +152,11 @@ DEFSYSC sysc_OUTC(stduint ch, stduint len) {
 	return -1;
 }
 
-DEFSYSC sysc_INNC(stduint blocked) {
+DEFSYSC sysc_INNC(stduint blocked, stduint usr_keycode, stduint usr_props) {
 	usize ret = ~_IMM0;
 	usize msgbuf[4];
-	int ch = -1;
+	byte kc = 0;
+	byte props = 0;
 	// Read from its TTY, return -1 if the TTY is occupied
 	auto th = Taskman::CurrentTB();
 	KASSERT(th != nullptr);
@@ -163,15 +165,25 @@ DEFSYSC sysc_INNC(stduint blocked) {
 		msgbuf[3] = ppb->getID();
 		syssend(Task_Console, sliceof(msgbuf), _IMM(ConsoleMsg::INNC));//
 		sysrecv(Task_Console, &ret, byteof(ret));// need Context
+		if (ret != ~_IMM0) {
+			kc = (byte)(ret >> 8);
+			props = (ret & _VTTY_MASK_INN_UP) ? 1 : 0;
+			ret &= _VTTY_MASK_INN_CH;
+		}
 	}
 	else {
 		auto focus_tty = ppb->focus_tty.Lock();
 		uni::Queue<uni::Pair<byte, byte>>* q = *focus_tty ? VTTY_INNQ(*focus_tty) : nullptr;
 		uni::Pair<byte, byte> pair;
-		if (q && q->Dequeue(pair) && !(pair.first & _VTTY_MASK_INN_UP)) {
-			ch = pair.first & _VTTY_MASK_INN_CH;
-			if (ch) ret = ch;
+		if (q && q->Dequeue(pair)) {
+			kc = pair.second;
+			props = (pair.first & _VTTY_MASK_INN_UP) ? 1 : 0;
+			ret = pair.first & _VTTY_MASK_INN_CH;
 		}
+	}
+	if (ret != ~_IMM0) {
+		if (usr_keycode) MccaMemCopyP((void*)usr_keycode, ppb, false, &kc, nullptr, true, sizeof(kc));
+		if (usr_props) MccaMemCopyP((void*)usr_props, ppb, false, &props, nullptr, true, sizeof(props));
 	}
 	return ret;
 }
@@ -972,6 +984,7 @@ DEFSYSC sysc_READ(stduint fd, stduint addr, stduint len) {
 
 				// Handle the character "consumed" by Task_Console service
 				byte ch = (byte)ret;
+				if (ch == 0 || (ch & _VTTY_MASK_INN_UP)) continue; // key-only or release event
 				if (ch == 0x04) { // Ctrl+D (EOF)
 					break;
 				}
@@ -1291,25 +1304,49 @@ DEFSYSC sysc_MMAP(stduint len, stduint flag, stduint fd) {
 	if (&pb->paging == &kernel_paging) {
 		return ~_IMM0; // Reject kernel page table
 	}
+	stduint offset = 0;
+	if (flag == ~_IMM0) {
+		const stduint usr_req = fd;
+		if (usr_req < 0x1000 || usr_req > ~_IMM0 - (sizeof(syscall_mmap_request_t) - 1)) return ~_IMM0;
+		const stduint last_page = (usr_req + sizeof(syscall_mmap_request_t) - 1) & ~_IMM(0xFFF);
+		for (stduint page = usr_req & ~_IMM(0xFFF);; page += 0x1000) {
+			if (!SeekAddress(pb, page, false) && !kernel_prefault_page(pb, page)) return ~_IMM0;
+			pageint page_index = page;
+			PageEntry* entry = pb->paging.getEntry(page_index);
+			stduint properties;
+			if (!entry || _IMM(entry) == ~_IMM0 ||
+				!entry->DecodeLeafProperties(page_index.crt_level, properties) ||
+				!(properties & PGPROP_user_access)) return ~_IMM0;
+			if (page == last_page) break;
+		}
+		syscall_mmap_request_t req;
+		if (MccaMemCopyP(&req, nullptr, true, (const void*)usr_req, pb, false,
+			sizeof(req)) != sizeof(req)) return ~_IMM0;
+		if (req.address || req.prot != (PROT_READ | PROT_WRITE | PROT_EXEC) ||
+			req.flags != MAP_SHARED || req.fd < 0 || req.offset < 0 ||
+			(req.offset & 0xFFF)) return ~_IMM0;
+		flag = req.prot;
+		fd = (stduint)req.fd;
+		offset = (stduint)req.offset;
+	}
 	if (!len || len > ~_IMM0 - 0xFFF) return ~_IMM0;
 	len = (len + 0xFFF) & ~_IMM(0xFFF); // Align to 4KB page size
+	if (offset > ~_IMM0 - len) return ~_IMM0;
 	MutexLocal mapping_guard(&pb->mutex_mapping);
 	VirtualMemoryArea vma(0, 0, flag);
 	if (fd != ~_IMM0) {
 		auto files = pb->fileman.Lock();
-		if (fd < files->pfiles.Count() && files->pfiles[fd] && files->pfiles[fd]->vfile) {
-			uni::vfs_file* parent_vfile = files->pfiles[fd]->vfile;
-			uni::vfs_file* nvfile = (uni::vfs_file*)malc(sizeof(uni::vfs_file));
-			if (nvfile) {
-				*nvfile = *parent_vfile;
-				if (nvfile->f_inode) {
-					nvfile->f_inode->ref_count++;
-				}
-				vma.vm_type = VMA_FILE;
-				vma.vfile = nvfile;
-				vma.file_offset = 0;
-			}
-		}
+		if (fd >= files->pfiles.Count() || !files->pfiles[fd] ||
+			!files->pfiles[fd]->vfile) return ~_IMM0;
+		uni::vfs_file* parent_vfile = files->pfiles[fd]->vfile;
+		uni::vfs_file* nvfile = (uni::vfs_file*)malc(sizeof(uni::vfs_file));
+		if (!nvfile) return ~_IMM0;
+		*nvfile = *parent_vfile;
+		if (nvfile->f_inode) nvfile->f_inode->ref_count++;
+		vma.vm_type = VirtualMemoryAreaType::File;
+		vma.vm_mode = VirtualMemoryAreaMode::Shared;
+		vma.vfile = nvfile;
+		vma.file_offset = offset;
 	}
 	stduint addr;
 	bool appended = false;
@@ -1324,7 +1361,7 @@ DEFSYSC sysc_MMAP(stduint len, stduint flag, stduint fd) {
 		}
 	}
 	if (!appended) {
-		if (vma.vm_type == VMA_FILE && vma.vfile) {
+		if (vma.vm_type == VirtualMemoryAreaType::File && vma.vfile) {
 			if (vma.vfile->f_inode) vma.vfile->f_inode->ref_count--;
 			Filesys::Close(vma.vfile);
 		}
@@ -1369,7 +1406,7 @@ DEFSYSC sysc_UMAP(stduint addr, stduint len) {
 			SpinlockLocal guard(&pb->vma_lock);
 			if (i >= pb->vmas.Count()) break;
 			const auto& vma = pb->vmas[i];
-			if (vma.vm_type != VMA_DEVICE) continue;
+			if (vma.vm_type != VirtualMemoryAreaType::Device) continue;
 			device_begin = maxof(addr, vma.vm_start);
 			device_end = minof(addr + len, vma.vm_end);
 		}
@@ -1384,7 +1421,7 @@ DEFSYSC sysc_UMAP(stduint addr, stduint len) {
 	// Write back dirty pages for file-backed mappings in the unmapped range
 	for (stduint i = 0; i < pb->vmas.Count(); i++) {
 		auto& vma = pb->vmas[i];
-		if (vma.vm_type == VMA_FILE && vma.vfile && (vma.vm_flags & PGPROP_writable)) {
+		if (vma.vm_type == VirtualMemoryAreaType::File && vma.vfile && (vma.vm_flags & PGPROP_writable)) {
 			stduint overlap_start = maxof(vma.vm_start, addr);
 			stduint overlap_end = minof(vma.vm_end, addr + len);
 			if (overlap_start < overlap_end) {
@@ -1411,7 +1448,7 @@ DEFSYSC sysc_UMAP(stduint addr, stduint len) {
 			for (stduint i = 0; i < pb->vmas.Count(); i++) {
 				const auto& vma = pb->vmas[i];
 				if (curr >= vma.vm_start && curr < vma.vm_end) {
-					release_phys = vma.vm_type != VMA_DEVICE;
+					release_phys = vma.vm_type != VirtualMemoryAreaType::Device;
 					break;
 				}
 			}
@@ -1427,7 +1464,7 @@ DEFSYSC sysc_UMAP(stduint addr, stduint len) {
 	for (stduint i = 0; i < pb->vmas.Count(); ) {
 		auto& vma = pb->vmas[i];
 		if (vma.vm_start >= addr && vma.vm_end <= addr + len) {
-			if (vma.vm_type == VMA_FILE && vma.vfile) {
+			if (vma.vm_type == VirtualMemoryAreaType::File && vma.vfile) {
 				if (vma.vfile->f_inode) vma.vfile->f_inode->ref_count--;
 				Filesys::Close(vma.vfile);
 			}
@@ -1437,12 +1474,13 @@ DEFSYSC sysc_UMAP(stduint addr, stduint len) {
 			vma.vm_end = addr;
 			VirtualMemoryArea new_vma(addr + len, old_end, vma.vm_flags);
 			new_vma.vm_type = vma.vm_type;
-			if (vma.vm_type == VMA_FILE && vma.vfile) {
+			new_vma.vm_mode = vma.vm_mode;
+			if (vma.vm_type == VirtualMemoryAreaType::File && vma.vfile) {
 				uni::vfs_file* nvfile = (uni::vfs_file*)malc(sizeof(uni::vfs_file));
 				if (nvfile) {
 					*nvfile = *(vma.vfile);
 					if (nvfile->f_inode) nvfile->f_inode->ref_count++;
-					new_vma.vm_type = VMA_FILE;
+					new_vma.vm_type = VirtualMemoryAreaType::File;
 					new_vma.vfile = nvfile;
 					new_vma.file_offset = vma.file_offset + (addr + len - vma.vm_start);
 				}
@@ -1453,7 +1491,7 @@ DEFSYSC sysc_UMAP(stduint addr, stduint len) {
 			vma.vm_end = addr;
 			i++;
 		} else if (vma.vm_start < addr + len && vma.vm_end > addr + len) {
-			if (vma.vm_type == VMA_FILE && vma.vfile) {
+			if (vma.vm_type == VirtualMemoryAreaType::File && vma.vfile) {
 				vma.file_offset = vma.file_offset + (addr + len - vma.vm_start);
 			}
 			vma.vm_start = addr + len;
@@ -1560,7 +1598,7 @@ void syscall_body(NormalTaskContext* cxt)
 		cxt->a0 = sysc_OUTC(cxt->a0, cxt->a1);
 		break;
 	case syscall_t::INNC:
-		cxt->a0 = sysc_INNC(cxt->a0);
+		cxt->a0 = sysc_INNC(cxt->a0, cxt->a1, cxt->a2);
 		break;
 	case syscall_t::EXIT:
 		sysc_EXIT(cxt->a0); loop;
@@ -1630,6 +1668,20 @@ void syscall_body(NormalTaskContext* cxt)
 		break;
 	case syscall_t::SEEK:
 		cxt->a0 = sysc_SEEK(cxt->a0, cxt->a1, cxt->a2);
+		break;
+	case syscall_t::MMAP:
+		#if CONFIG_ENABLE_MMU
+		cxt->a0 = sysc_MMAP(cxt->a0, cxt->a1, cxt->a2);
+		#else
+		cxt->a0 = ~_IMM0;
+		#endif
+		break;
+	case syscall_t::UMAP:
+		#if CONFIG_ENABLE_MMU
+		cxt->a0 = sysc_UMAP(cxt->a0, cxt->a1);
+		#else
+		cxt->a0 = ~_IMM0;
+		#endif
 		break;
 
 	default:

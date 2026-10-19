@@ -11,7 +11,7 @@ enum
 	#endif
 {
 	OUTC = 0x00, // outstr (chr/str, len)->0  |.x86 x64 rv
-	INNC = 0x01, // innstr (blk, mode)-> kc/ch| x86 x64 rv
+	INNC = 0x01, // innstr (blk,&kc,&prop)->ch| x86 x64 rv
 	EXIT = 0x02, // exit   (code)             | x86 x64 rv
 	TIME = 0x03, // getsec (0sec/1ms)->second | x86 x64
 	REST = 0x04, // halt   (unit, time)       | x86 x64
@@ -114,22 +114,6 @@ enum
 
 #define IRQ_SYSCALL 0x81// leave 0x80 for unix-like syscall
 
-// INNC(blk, mode): CHAR/KEY return one byte or one key record, STAT_* return pending counts
-enum
-	#ifdef _INC_CPP
-	class
-	#endif
-	_INNC_MODE_t
-	#ifdef _INC_CPP
-	: stduint
-	#endif
-{
-	CHAR = 0,//  today's behaviour: char-map byte from the tty input queue
-	KEY = 1,//   packed key-code record from the tty key queue
-	STAT_CHAR = 2,// pending bytes in the input queue
-	STAT_KEY = 3,//  pending records in the key queue
-};
-
 #ifndef _ACCM
 #if (_MCCA & 0xFF00) == 0x8600
 
@@ -149,6 +133,14 @@ void syscall(NormalTaskContext* cxt);
 struct file_proper_t {
 	stduint size = 0;					// File size in bytes
 	stduint mode = 0;					// File mode (type and permissions)
+};
+
+struct syscall_mmap_request_t {
+	stduint address = 0;
+	stduint prot = 0;
+	stduint flags = 0;
+	stdsint fd = -1;
+	stdsint offset = 0;
 };
 
 struct dirent_t {

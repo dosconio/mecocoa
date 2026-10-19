@@ -196,6 +196,24 @@ int KeyboardBridge::out(const char* str, stduint len) {
 					Consman::WakeBlockedWaitersDeferred();
 					#endif
 				}
+				#if !_GUI_ENABLE
+				else if (event.keycode) {
+					// No character for this key yet it is meaningful: enqueue the keycode alone.
+					VTTY_INNQ(p_vtty)->Enqueue({0, event.keycode});
+					Consman::WakeBlockedWaitersDeferred();
+				}
+				#endif
+			}
+			else if (event.method == keyboard_event_t::method_t::keyup) {
+				#if !_GUI_ENABLE
+				if (event.keycode) {
+					auto p_vtty_up = vttys[Consman::current_screen_TTY];
+					if (p_vtty_up) {
+						VTTY_INNQ(p_vtty_up)->Enqueue({_VTTY_MASK_INN_UP, event.keycode});
+						Consman::WakeBlockedWaitersDeferred();
+					}
+				}
+				#endif
 			}
 		}
 		// Forward ALL keyboard events (down/up/repeat) to focused window

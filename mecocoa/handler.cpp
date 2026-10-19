@@ -410,7 +410,7 @@ bool exception_handler_user(HardwareInterruptFrame* frame, stduint iden, stduint
 			for (stduint i = 0; i < pb->vmas.Count(); i++) {
 				const auto& vma = pb->vmas[i];
 				if (fault_addr >= vma.vm_start && fault_addr < vma.vm_end) {
-					if (vma.vm_type == VMA_DEVICE) {
+					if (vma.vm_type == VirtualMemoryAreaType::Device) {
 						break;
 					}
 					void* phy_page = mempool.allocate(0x1000, 12);
@@ -418,7 +418,7 @@ bool exception_handler_user(HardwareInterruptFrame* frame, stduint iden, stduint
 						MemSet((void*)(phy_page), 0, 0x1000); // Zero-fill physical page
 						stduint aligned_vaddr = fault_addr & ~_IMM(0xFFF);
 						
-						if (vma.vm_type == VMA_FILE && vma.vfile) {
+						if (vma.vm_type == VirtualMemoryAreaType::File && vma.vfile) {
 							stduint offset = aligned_vaddr - vma.vm_start + vma.file_offset;
 							if (vma.vfile->f_inode && offset < vma.vfile->f_inode->i_size) {
 								stduint read_len = minof(_IMM(0x1000), vma.vfile->f_inode->i_size - offset);
@@ -449,7 +449,7 @@ bool exception_handler_user(HardwareInterruptFrame* frame, stduint iden, stduint
 			for (stduint i = 0; i < pb->vmas.Count() && i < 6; i++) {
 				const auto& vma = pb->vmas[i];
 				plogwarn("  vma[%u] [0x%[x],0x%[x]) flags=0x%[x] type=%u",
-					i, vma.vm_start, vma.vm_end, vma.vm_flags, vma.vm_type);
+					i, vma.vm_start, vma.vm_end, vma.vm_flags, (stduint)vma.vm_type);
 			}
 		}
 		plogwarn("Segmentation fault: process %u accessed unmapped address 0x%[x]", pb ? pb->pid : 0, fault_addr);

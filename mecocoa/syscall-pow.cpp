@@ -932,7 +932,7 @@ static stduint MapPwcallPhysicalRange(ProcessBlock* pb, stduint phys_begin,
 		type = page_type;
 	}
 	VirtualMemoryArea vma(vaddr, vaddr + map_size, page_flags);
-	vma.vm_type = VMA_DEVICE;
+	vma.vm_type = VirtualMemoryAreaType::Device;
 	{
 		SpinlockLocal guard(&pb->vma_lock);
 		if (!pb->vmas.Append(vma)) return 0;

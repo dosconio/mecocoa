@@ -34,9 +34,9 @@ void sysouts(const char* str)// 0
 	//    syswrite(STDOUT, (void*)"Hello CCCCC!\n\r", 15);
 }
 
-int sysinnc()// 1
+int sysinnc(int blocked, byte* keycode, byte* props)// 1
 {
-	return syscall(syscall_t::INNC, 1, nil, nil);
+	return syscall(syscall_t::INNC, blocked, (stduint)keycode, (stduint)props);
 }
 
 _ESYM_C

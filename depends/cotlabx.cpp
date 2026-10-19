@@ -111,6 +111,21 @@ void _Comment(R1) serv_shell_process() {
 								Consman::WakeBlockedWaiters();
 							}
 						}
+						else if (key_event->keycode) {
+							// No character for this key yet it is meaningful: enqueue the keycode alone.
+							if (auto* q = VTTY_INNQ(tty_target)) {
+								q->Enqueue({0, key_event->keycode});
+								Consman::WakeBlockedWaiters();
+							}
+						}
+					}
+					else if (key_event->method == keyboard_event_t::method_t::keyup) {
+						if (key_event->keycode) {
+							if (auto* q = VTTY_INNQ(tty_target)) {
+								q->Enqueue({_VTTY_MASK_INN_UP, key_event->keycode});
+								Consman::WakeBlockedWaiters();
+							}
+						}
 					}
 				}
 				else if (smsg.event == SheetEvent::onClick) {

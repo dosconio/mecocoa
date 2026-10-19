@@ -288,13 +288,10 @@ void _Comment(R1) serv_cons_loop()
 						if (nod == tty_nod) { q = VTTY_INNQ(tty_nod); break; }
 					}
 				}
-				if (q && q->Dequeue(pair) && !(pair.first & _VTTY_MASK_INN_UP)) {
-					ch = pair.first & _VTTY_MASK_INN_CH;
-					if (ch) {
-						stdsint val = ch;
-						blocked_vtty_pid.Remove(i--);
-						syssend_async(pid, &val, byteof(val));
-					}
+				if (q && q->Dequeue(pair)) {
+					stdsint val = (stdsint)((stduint)pair.first | ((stduint)pair.second << 8));
+					blocked_vtty_pid.Remove(i--);
+					syssend_async(pid, &val, byteof(val));
 				}
 				ProcessBlock::Release(ppb);
 			}

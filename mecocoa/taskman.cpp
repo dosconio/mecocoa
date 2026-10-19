@@ -553,7 +553,7 @@ static void _Exit_Cleanup(stduint pid)
 	if (1) {
 		for (stduint i = 0; i < ppb->vmas.Count(); i++) {
 			const auto& vma = ppb->vmas[i];
-			if (vma.vm_type == VMA_FILE && vma.vfile && (vma.vm_flags & PGPROP_writable)) {
+			if (vma.vm_type == VirtualMemoryAreaType::File && vma.vfile && (vma.vm_flags & PGPROP_writable)) {
 				for (stduint addr = vma.vm_start; addr < vma.vm_end; addr += 0x1000) {
 					void* phys_addr = getphy(addr);
 					if (phys_addr != (void*)~_IMM0) {
@@ -569,12 +569,12 @@ static void _Exit_Cleanup(stduint pid)
 			for (stduint addr = vma.vm_start; addr < vma.vm_end; addr += 0x1000) {
 				void* phys_addr = getphy(addr);
 				if (phys_addr != (void*)~_IMM0) {
-					if (vma.vm_type != VMA_DEVICE) {
+					if (vma.vm_type != VirtualMemoryAreaType::Device) {
 						free(phys_addr);
 					}
 				}
 			}
-			if (vma.vm_type == VMA_FILE && vma.vfile) {
+			if (vma.vm_type == VirtualMemoryAreaType::File && vma.vfile) {
 				if (vma.vfile->f_inode) {
 					vma.vfile->f_inode->ref_count--;
 				}
@@ -971,13 +971,13 @@ extern "C" void* kernel_prefault_page(ProcessBlock* pb, stduint addr) {
 	for (stduint i = 0; i < pb->vmas.Count(); i++) {
 		const auto& vma = pb->vmas[i];
 		if (addr >= vma.vm_start && addr < vma.vm_end) {
-			if (vma.vm_type == VMA_DEVICE) {
+			if (vma.vm_type == VirtualMemoryAreaType::Device) {
 				return nullptr;
 			}
 			void* phy_page = mempool.allocate(0x1000, 12);
 			if (phy_page == (void*)~_IMM0) return nullptr;
 			MemSet((void*)mglb(phy_page), 0, 0x1000);
-			if (vma.vm_type == VMA_FILE && vma.vfile) {
+			if (vma.vm_type == VirtualMemoryAreaType::File && vma.vfile) {
 				stduint offset = addr - vma.vm_start + vma.file_offset;
 				if (vma.vfile->f_inode && offset < vma.vfile->f_inode->i_size) {
 					stduint read_len = minof(_IMM(0x1000), vma.vfile->f_inode->i_size - offset);

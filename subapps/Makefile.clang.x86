@@ -29,6 +29,7 @@ apps=\
 	$(BIN_DIR)/_rust \
 	$(BIN_DIR)/testso \
 	$(BIN_DIR)/testpie \
+	$(BIN_DIR)/test_mmapfile \
 	$(ubinpath)/mecocoa/lib/ld-mcca.so
 
 # x86 has no separate libm: the math bridge is part of libc.a
@@ -66,3 +67,7 @@ MCCA_LDLIBS_PIE = -Wl,-pie $(MCCA_CRT0) $(MCCA_LIBC_PIC) -Wl,-m,elf_i386 -Wl,-z,
 $(BIN_DIR)/testpie: subapps/testpie.cpp $(MCCA_CRT0) $(MCCA_LIBC_PIC)
 	@echo "MK testpie (PIE Static)"
 	$(MCCA_CXX) $(MCCA_CXXFLAGS_PIE) -o $@ $< $(MCCA_LDLIBS_PIE)
+
+$(BIN_DIR)/test_mmapfile: subapps/_test/mmapfile.cpp $(MCCA_CRT0) $(MCCA_LIBC)
+	@echo "MK test_mmapfile"
+	$(MCCA_CXX) $(MCCA_CXXFLAGS) -o $@ $< $(MCCA_LDLIBS)

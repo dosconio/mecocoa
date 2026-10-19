@@ -4,6 +4,7 @@
 #include "unistd.h"
 #include <c/ISO_IEC_STD/signal.h>
 #include <sys/mman.h>
+#include <stdio.h>
 
 using namespace uni;
 
@@ -31,7 +32,17 @@ int main(int argc, char** argv)
 
 		const char* init_content = "Hello Mecocoa File MMAP!";
 		int written = write(fd, (void*)init_content, 24);
+		static const char padding[4096 - 24] = {};
+		static const char second_page[] = "Second page mmap";
+		int padded = write(fd, padding, sizeof(padding));
+		int second_written = write(fd, second_page, sizeof(second_page) - 1);
 		outsfmt("Step 1: Write init pattern, fd=%d, bytes=%d\n\r", fd, written);
+		if (written != 24 || padded != sizeof(padding) ||
+			second_written != sizeof(second_page) - 1) {
+			outsfmt("Error: Failed to prepare second file page!\n\r");
+			close(fd);
+			return -1;
+		}
 		close(fd);
 
 		// 2. Re-open and establish mmap mapping
@@ -114,14 +125,59 @@ int main(int argc, char** argv)
 		}
 		if (match) {
 			outsfmt("Success: File contents correctly written back!\n\r");
-			outsfmt("=== File MMAP Test ALL PASSED! ===\n\r");
 		} else {
 			outsfmt("Error: File contents NOT written back properly!\n\r");
+			return -1;
 		}
 
-		// 8. Clean up the temporary test file
+		// 8. Map the second file page and verify its contents and writeback.
+		fd = sysopen(test_file);
+		if (fd < 0) return -1;
+		void* second_map = mmap(nullptr, 4096, PROT_READ | PROT_WRITE | PROT_EXEC,
+			MAP_SHARED, fd, 4096);
+		close(fd);
+		if (second_map == MAP_FAILED) {
+			outsfmt("Error: MMAP at file offset 4096 failed!\n\r");
+			return -1;
+		}
+		char* second_ptr = (char*)second_map;
+		for (stduint i = 0; i < sizeof(second_page) - 1; i++) {
+			if (second_ptr[i] != second_page[i]) {
+				outsfmt("Error: Second file page contents mismatch!\n\r");
+				munmap(second_map, 4096);
+				return -1;
+			}
+		}
+		second_ptr[0] = 's';
+		if (munmap(second_map, 4096) != 0) {
+			outsfmt("Error: Second file page UMAP failed!\n\r");
+			return -1;
+		}
+		fd = sysopen(test_file);
+		if (fd < 0 || lseek(fd, 4096, SEEK_SET) != 4096) {
+			outsfmt("Error: Failed to seek to second file page!\n\r");
+			if (fd >= 0) close(fd);
+			return -1;
+		}
+		char second_verify[sizeof(second_page)] = {};
+		int second_read = read(fd, second_verify, sizeof(second_page) - 1);
+		close(fd);
+		if (second_read != sizeof(second_page) - 1 || second_verify[0] != 's') {
+			outsfmt("Error: Second file page writeback failed!\n\r");
+			return -1;
+		}
+		for (stduint i = 1; i < sizeof(second_page) - 1; i++) {
+			if (second_verify[i] != second_page[i]) {
+				outsfmt("Error: Second file page writeback contents mismatch!\n\r");
+				return -1;
+			}
+		}
+		outsfmt("Success: File offset 4096 mapped and written back!\n\r");
+		outsfmt("=== File MMAP Test ALL PASSED! ===\n\r");
+
+		// 9. Clean up the temporary test file
 		sys_removefil(test_file);
-		outsfmt("Step 8: Cleaned up test file.\n\r");
+		outsfmt("Step 9: Cleaned up test file.\n\r");
 	}
 	#endif
 

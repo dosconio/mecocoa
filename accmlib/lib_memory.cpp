@@ -82,7 +82,25 @@ _ESYM_C void* realloc(void* ptr, size_t size) {
 }
 
 _ESYM_C void* mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset) {
-	stduint ret = syscall(syscall_t::MMAP, length, prot, fd);
+	// Only heap-chosen shared file mappings with the existing RWX page properties are accepted.
+	if (addr || !length || offset < 0 || (offset & 0xFFF) || flags != MAP_SHARED || fd < 0 ||
+		prot != (PROT_READ | PROT_WRITE | PROT_EXEC)) return MAP_FAILED;
+	stduint ret;
+	if (!offset) {
+		ret = syscall(syscall_t::MMAP, length, prot, fd);
+	} else {
+		#if (_ACCM & 0xFF00) == 0x8600 || (_ACCM & 0xFF00) == 0x1000
+		syscall_mmap_request_t req;
+		req.address = (stduint)addr;
+		req.prot = (stduint)prot;
+		req.flags = (stduint)flags;
+		req.fd = fd;
+		req.offset = offset;
+		ret = syscall(syscall_t::MMAP, length, ~_IMM0, (stduint)&req);
+		#else
+		return MAP_FAILED;
+		#endif
+	}
 	return (void*)ret;
 }
 

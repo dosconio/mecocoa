@@ -222,10 +222,14 @@ using Semaphore = Semaphore_T<ThreadBlock>;
 using SemaphoreLocal = SemaphoreLocal_T<ThreadBlock>;
 
 
-enum VirtualMemoryAreaType {
-	VMA_ANONYMOUS = 0,
-	VMA_FILE = 1,
-	VMA_DEVICE = 2,
+enum class VirtualMemoryAreaType {
+	Anonymous = 0,
+	File = 1,
+	Device = 2,
+};
+enum class VirtualMemoryAreaMode {
+	Private = 0,
+	Shared = 1,
 };
 #ifndef _ACCM
 struct ProcSignals {
@@ -249,16 +253,18 @@ struct VirtualMemoryArea {
 	stduint vm_flags;	// Attributes (e.g. PGPROP_writable, PGPROP_user_access)
 	
 	// File backing extensions
-	VirtualMemoryAreaType vm_type = VMA_ANONYMOUS;
+	VirtualMemoryAreaType vm_type = VirtualMemoryAreaType::Anonymous;
+	VirtualMemoryAreaMode vm_mode = VirtualMemoryAreaMode::Private;
 	uni::vfs_file* vfile = nullptr;
 	stduint file_offset = 0;
 
-	VirtualMemoryArea() : vm_start(0), vm_end(0), vm_flags(0), vm_type(VMA_ANONYMOUS), vfile(nullptr), file_offset(0) {}
+	VirtualMemoryArea() : vm_start(0), vm_end(0), vm_flags(0), vm_type(VirtualMemoryAreaType::Anonymous), vm_mode(VirtualMemoryAreaMode::Private), vfile(nullptr), file_offset(0) {}
 	VirtualMemoryArea(stduint start, stduint end, stduint flags)
-		: vm_start(start), vm_end(end), vm_flags(flags), vm_type(VMA_ANONYMOUS), vfile(nullptr), file_offset(0) {}
+		: vm_start(start), vm_end(end), vm_flags(flags), vm_type(VirtualMemoryAreaType::Anonymous), vm_mode(VirtualMemoryAreaMode::Private), vfile(nullptr), file_offset(0) {}
 	bool operator==(const VirtualMemoryArea& other) const {
 		return vm_start == other.vm_start && vm_end == other.vm_end && vm_flags == other.vm_flags &&
-			vm_type == other.vm_type && vfile == other.vfile && file_offset == other.file_offset;
+			vm_type == other.vm_type && vm_mode == other.vm_mode &&
+			vfile == other.vfile && file_offset == other.file_offset;
 	}
 };
 

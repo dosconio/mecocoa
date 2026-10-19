@@ -492,7 +492,7 @@ ProcessBlock* Taskman::CreateFork(ProcessBlock* fo, const CallgateFrame* frame) 
 	// Inherit device mappings with their decoded memory type and register each contiguous run.
 	for (stduint i = 0; i < pb->vmas.Count(); i++) {
 		const auto& vma = pb->vmas[i];
-		if (vma.vm_type != VMA_DEVICE) continue;
+		if (vma.vm_type != VirtualMemoryAreaType::Device) continue;
 		for (stduint addr = vma.vm_start; addr < vma.vm_end;) {
 			void* parent_phy = fo->paging[addr];
 			if (parent_phy == (void*)~_IMM0) {
@@ -527,7 +527,7 @@ ProcessBlock* Taskman::CreateFork(ProcessBlock* fo, const CallgateFrame* frame) 
 	}
 	for (stduint i = 0; i < pb->vmas.Count(); i++) {
 		auto& vma = pb->vmas[i];
-		if (vma.vm_type == VMA_FILE && vma.vfile) {
+		if (vma.vm_type == VirtualMemoryAreaType::File && vma.vfile) {
 			uni::vfs_file* nvfile = (uni::vfs_file*)malc(sizeof(uni::vfs_file));
 			if (nvfile) {
 				*nvfile = *(vma.vfile);
@@ -543,7 +543,7 @@ ProcessBlock* Taskman::CreateFork(ProcessBlock* fo, const CallgateFrame* frame) 
 		for (stduint addr = vma.vm_start; addr < vma.vm_end; addr += 0x1000) {
 			void* parent_phy = fo->paging[addr];
 			if (parent_phy != (void*)~_IMM0) {
-				if (vma.vm_type == VMA_DEVICE) continue;
+				if (vma.vm_type == VirtualMemoryAreaType::Device) continue;
 				void* child_phy = mempool.allocate(0x1000, 12);
 				MemSet((void*)(child_phy), 0, 0x1000); // Zero-fill child page
 				MemCopyP((void*)(child_phy), kernel_paging, (const void*)(parent_phy), kernel_paging, 0x1000);
@@ -798,7 +798,7 @@ ProcessBlock* Taskman::Exet(stduint parent, rostr usr_fullpath, char** usr_argv,
 	// 2. Destroy Old Image
 	for (stduint i = 0; i < current_pb->vmas.Count(); i++) {
 		const auto& vma = current_pb->vmas[i];
-		if (vma.vm_type == VMA_FILE && vma.vfile && (vma.vm_flags & PGPROP_writable)) {
+		if (vma.vm_type == VirtualMemoryAreaType::File && vma.vfile && (vma.vm_flags & PGPROP_writable)) {
 			for (stduint addr = vma.vm_start; addr < vma.vm_end; addr += 0x1000) {
 				void* phys_addr = current_pb->paging[addr];
 				if (phys_addr != (void*)~_IMM0) {
@@ -814,12 +814,12 @@ ProcessBlock* Taskman::Exet(stduint parent, rostr usr_fullpath, char** usr_argv,
 		for (stduint addr = vma.vm_start; addr < vma.vm_end; addr += 0x1000) {
 			void* phys_addr = current_pb->paging[addr];
 			if (phys_addr != (void*)~_IMM0) {
-				if (vma.vm_type != VMA_DEVICE) {
+				if (vma.vm_type != VirtualMemoryAreaType::Device) {
 					free(phys_addr);
 				}
 			}
 		}
-		if (vma.vm_type == VMA_FILE && vma.vfile) {
+		if (vma.vm_type == VirtualMemoryAreaType::File && vma.vfile) {
 			if (vma.vfile->f_inode) {
 				vma.vfile->f_inode->ref_count--;
 			}

@@ -26,7 +26,7 @@ extern "C" {
 	// int main(int argc, char** argv);//{} envp, vector...
 	//
 	void sysouts(const char* str);// 00
-	int sysinnc();// 01
+	int sysinnc(int blocked = 1, byte* keycode = 0, byte* props = 0);// 01
 	stduint syssecond();// 03
 	uint32 sysdate();// 03 (0x10) BCD: 0xYYYYMMDD
 	uint32 systime();// 03 (0x11) BCD: 0x00HHMMSS
