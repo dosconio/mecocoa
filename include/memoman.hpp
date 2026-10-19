@@ -14,6 +14,7 @@
 #define __MEMOMAN_HPP__
 
 struct Spinlock;
+class ProcessBlock;
 
 #define PAGE_SIZE 0x1000 // lev-0-page
 
@@ -189,6 +190,8 @@ extern Memory mem;
 #if CONFIG_ENABLE_MMU
 extern Paging kernel_paging;
 #endif
+bool PrepareUserBuffer(ProcessBlock* pb, stduint address,
+	size_t length, bool write);
 
 // ---- SEGMENT ----
 #if (_MCCA & 0xFF00) == 0x8600

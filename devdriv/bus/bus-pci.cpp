@@ -25,6 +25,7 @@ namespace Devs {
 		E1000,
 		Piix4Acpi,
 		Lance,
+		Vmci,
 	};
 
 	struct PciClassNameEntry {
@@ -104,6 +105,7 @@ namespace Devs {
 	bool append_resource(DeviceNode* node, DeviceResourceType type, uint16 flags, uint32 index, uint64 start, uint64 length, uint64 extra);
 	bool is_e1000_device(const DeviceNode* node);
 	bool is_lance_pci_device(const DeviceNode* node);
+	bool is_vmci_pci_device(const DeviceNode* node);
 	bool set_driver_binding(DeviceNode* node, const char* driver_name);
 
 	extern DeviceTree device_tree;
@@ -255,6 +257,7 @@ namespace Devs {
 	bool probe_e1000_device(DeviceNode* node);
 	bool probe_piix4_acpi_device(DeviceNode* node);
 	bool probe_lance_device(DeviceNode* node);
+	bool probe_vmci_device(DeviceNode* node);
 	constexpr DriverOpsEntry pci_driver_ops_table[] = {
 		{"uhci", probe_uhci_device},
 		{"ehci", probe_ehci_device},
@@ -268,6 +271,7 @@ namespace Devs {
 		{"e1000", probe_e1000_device},
 		{"piix4-acpi", probe_piix4_acpi_device},
 		{"lance", probe_lance_device},
+		{"vmci", probe_vmci_device},
 	};
 
 	void probe_pci_device(DeviceNode* node) {
@@ -387,6 +391,9 @@ namespace Devs {
 		if (is_lance_pci_device(node)) {
 			return PciDriverKind::Lance;
 		}
+		if (is_vmci_pci_device(node)) {
+			return PciDriverKind::Vmci;
+		}
 		return PciDriverKind::Unknown;
 	}
 
@@ -444,6 +451,9 @@ namespace Devs {
 			return;
 		case PciDriverKind::Lance:
 			set_driver_binding(node, "lance");
+			return;
+		case PciDriverKind::Vmci:
+			set_driver_binding(node, "vmci");
 			return;
 		default:
 			return;
@@ -550,9 +560,10 @@ namespace Devs {
 		const uint32 size_low = uni::PCI::read_config_register(dev, addr);
 		uni::PCI::write_config_register(dev, addr, bar_low);
 		uni::PCI::write_config_register(dev, 0x04, command);
-		const uint32 size_mask = size_low & ~0x3u;
+		// x86 port I/O is 16-bit; use the lowest implemented address bit as the BAR size.
+		const uint32 size_mask = size_low & 0xFFFCu;
 		if (!size_mask) return 0;
-		return uint64(~size_mask) + 1;
+		return uint64(size_mask & (~size_mask + 1u));
 	}
 
 	uint64 read_pci_mmio_bar_length(const uni::PCI::Device& dev, uint8 bar_index, uint32 bar_low, uint8 bar_count) {

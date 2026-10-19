@@ -963,34 +963,4 @@ void _Comment(R0) serv_task_loop()
 	}
 }
 
-#if CONFIG_ENABLE_MMU
-extern "C" void* kernel_prefault_page(ProcessBlock* pb, stduint addr) {
-	if (!pb) return nullptr;
-	addr &= ~_IMM(0xFFF);
-	SpinlockLocal guard(&pb->vma_lock);
-	for (stduint i = 0; i < pb->vmas.Count(); i++) {
-		const auto& vma = pb->vmas[i];
-		if (addr >= vma.vm_start && addr < vma.vm_end) {
-			if (vma.vm_type == VirtualMemoryAreaType::Device) {
-				return nullptr;
-			}
-			void* phy_page = mempool.allocate(0x1000, 12);
-			if (phy_page == (void*)~_IMM0) return nullptr;
-			MemSet((void*)mglb(phy_page), 0, 0x1000);
-			if (vma.vm_type == VirtualMemoryAreaType::File && vma.vfile) {
-				stduint offset = addr - vma.vm_start + vma.file_offset;
-				if (vma.vfile->f_inode && offset < vma.vfile->f_inode->i_size) {
-					stduint read_len = minof(_IMM(0x1000), vma.vfile->f_inode->i_size - offset);
-					vma.vfile->f_pos = offset;
-					Filesys::Read(vma.vfile, (void*)mglb(phy_page), read_len);
-				}
-			}
-			pb->paging.Map(addr, (stduint)phy_page, 0x1000, PAGESIZE_4KB, PGPROP_present | PGPROP_writable | PGPROP_user_access);
-			RefreshVirtualAddress(addr);
-			return phy_page;
-		}
-	}
-	return nullptr;
-}
-#endif
 #endif

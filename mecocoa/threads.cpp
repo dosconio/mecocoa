@@ -63,8 +63,7 @@ stdsint Taskman::CreateThread(ProcessBlock* pb, stduint entry, stduint arg, stdu
 
 	#if CONFIG_ENABLE_MMU
 	auto ensure_user_stack_page = [&](stduint addr) -> bool {
-		if (_IMM(pb->paging[addr]) != ~_IMM0) return true;
-		return kernel_prefault_page(pb, addr) != nullptr;
+		return PrepareUserBuffer(pb, addr, 1, true);
 		};
 
 	// User-space thread stacks are allocated lazily by mmap-backed malloc().

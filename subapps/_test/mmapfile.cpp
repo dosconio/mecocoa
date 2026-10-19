@@ -34,12 +34,20 @@ int main(int argc, char** argv)
 		int written = write(fd, (void*)init_content, 24);
 		static const char padding[4096 - 24] = {};
 		static const char second_page[] = "Second page mmap";
+		static const char third_page[] = "Third page mmap";
 		int padded = write(fd, padding, sizeof(padding));
 		int second_written = write(fd, second_page, sizeof(second_page) - 1);
+		int second_padded = write(fd, padding, sizeof(padding));
+		int second_tail = write(fd, padding,
+			4096 - (sizeof(second_page) - 1) - sizeof(padding));
+		int third_written = write(fd, third_page, sizeof(third_page) - 1);
 		outsfmt("Step 1: Write init pattern, fd=%d, bytes=%d\n\r", fd, written);
 		if (written != 24 || padded != sizeof(padding) ||
-			second_written != sizeof(second_page) - 1) {
-			outsfmt("Error: Failed to prepare second file page!\n\r");
+			second_written != sizeof(second_page) - 1 ||
+			second_padded != sizeof(padding) ||
+			second_tail != 4096 - (sizeof(second_page) - 1) - sizeof(padding) ||
+			third_written != sizeof(third_page) - 1) {
+			outsfmt("Error: Failed to prepare three file pages!\n\r");
 			close(fd);
 			return -1;
 		}
@@ -84,6 +92,7 @@ int main(int argc, char** argv)
 			outsfmt("Success: Initial memory contents match!\n\r");
 		} else {
 			outsfmt("Error: Memory contents mismatch!\n\r");
+			return -1;
 		}
 
 		// 5. Modify mapped memory ("Hello" -> "World")
@@ -99,6 +108,7 @@ int main(int argc, char** argv)
 		int umap_res = munmap(map_addr, 4096);
 		if (umap_res != 0) {
 			outsfmt("Error: UMAP failed with code %d!\n\r", umap_res);
+			return -1;
 		} else {
 			outsfmt("Success: UMAP success!\n\r");
 		}
@@ -173,11 +183,145 @@ int main(int argc, char** argv)
 			}
 		}
 		outsfmt("Success: File offset 4096 mapped and written back!\n\r");
+
+		// 9. Keep simultaneous mappings, reuse a freed address, then split a VMA.
+		fd = sysopen(test_file);
+		if (fd < 0) return -1;
+		void* first_map = mmap(nullptr, 4096, PROT_READ | PROT_WRITE | PROT_EXEC,
+			MAP_SHARED, fd, 0);
+		void* independent_map = mmap(nullptr, 4096, PROT_READ | PROT_WRITE | PROT_EXEC,
+			MAP_SHARED, fd, 4096);
+		close(fd);
+		if (first_map == MAP_FAILED || independent_map == MAP_FAILED ||
+			((stduint)first_map < (stduint)independent_map + 4096 &&
+				(stduint)independent_map < (stduint)first_map + 4096)) {
+			outsfmt("Error: Simultaneous MMAP ranges overlap or failed!\n\r");
+			return -1;
+		}
+		if (((char*)first_map)[0] != 'W' || ((char*)independent_map)[0] != 's' ||
+			munmap(first_map, 4096) != 0) {
+			outsfmt("Error: First mapping read or UMAP failed!\n\r");
+			return -1;
+		}
+		fd = sysopen(test_file);
+		if (fd < 0) return -1;
+		void* reused_map = mmap(nullptr, 4096, PROT_READ | PROT_WRITE | PROT_EXEC,
+			MAP_SHARED, fd, 0);
+		close(fd);
+		if (reused_map == MAP_FAILED || reused_map != first_map ||
+			((char*)reused_map)[0] != 'W' || ((char*)independent_map)[0] != 's') {
+			outsfmt("Error: MMAP did not reuse the freed address!\n\r");
+			return -1;
+		}
+		fd = sysopen(test_file);
+		if (fd < 0) return -1;
+		void* range_map = mmap(nullptr, 3 * 4096, PROT_READ | PROT_WRITE | PROT_EXEC,
+			MAP_SHARED, fd, 0);
+		close(fd);
+		if (range_map == MAP_FAILED ||
+			((stduint)range_map < (stduint)reused_map + 4096 &&
+				(stduint)reused_map < (stduint)range_map + 3 * 4096) ||
+			((stduint)range_map < (stduint)independent_map + 4096 &&
+				(stduint)independent_map < (stduint)range_map + 3 * 4096)) {
+			outsfmt("Error: Three-page MMAP overlaps another mapping or failed!\n\r");
+			return -1;
+		}
+		char* range_ptr = (char*)range_map;
+		if (range_ptr[0] != 'W' || range_ptr[4096] != 's' ||
+			((char*)independent_map)[0] != 's') {
+			outsfmt("Error: Three-page MMAP initial contents mismatch!\n\r");
+			return -1;
+		}
+		if (munmap(range_ptr + 4096, 4096) != 0) {
+			outsfmt("Error: Middle-page UMAP failed!\n\r");
+			return -1;
+		}
+		for (stduint i = 0; i < sizeof(third_page) - 1; i++) {
+			if (range_ptr[8192 + i] != third_page[i]) {
+				outsfmt("Error: Right VMA file offset mismatch after split!\n\r");
+				return -1;
+			}
+		}
+		if (range_ptr[0] != 'W') {
+			outsfmt("Error: Left VMA changed after split!\n\r");
+			return -1;
+		}
+		range_ptr[8192] = 't';
+		if (munmap(range_map, 3 * 4096) != 0) {
+			outsfmt("Error: Three-page UMAP failed!\n\r");
+			return -1;
+		}
+		if (((char*)reused_map)[0] != 'W' ||
+			((char*)independent_map)[0] != 's' ||
+			munmap(reused_map, 4096) != 0 ||
+			munmap(independent_map, 4096) != 0) {
+			outsfmt("Error: Independent mapping changed after UMAP!\n\r");
+			return -1;
+		}
+		fd = sysopen(test_file);
+		if (fd < 0 || lseek(fd, 8192, SEEK_SET) != 8192) {
+			outsfmt("Error: Failed to seek to third file page!\n\r");
+			if (fd >= 0) close(fd);
+			return -1;
+		}
+		char third_verify[sizeof(third_page)] = {};
+		int third_read = read(fd, third_verify, sizeof(third_page) - 1);
+		close(fd);
+		if (third_read != sizeof(third_page) - 1 || third_verify[0] != 't') {
+			outsfmt("Error: Right VMA writeback failed!\n\r");
+			return -1;
+		}
+		for (stduint i = 1; i < sizeof(third_page) - 1; i++) {
+			if (third_verify[i] != third_page[i]) {
+				outsfmt("Error: Right VMA writeback contents mismatch!\n\r");
+				return -1;
+			}
+		}
+		outsfmt("Success: Partial UMAP preserved both sides and a freed address was reused!\n\r");
+
+		// 10. A read-only file mapping must remain readable and reject kernel/user writes.
+		fd = sysopen(test_file);
+		if (fd < 0) return -1;
+		void* readonly_map = mmap(nullptr, 4096, PROT_READ, MAP_SHARED, fd, 0);
+		close(fd);
+		if (readonly_map == MAP_FAILED) {
+			outsfmt("Error: Read-only MMAP failed!\n\r");
+			return -1;
+		}
+		volatile char* readonly_ptr = (volatile char*)readonly_map;
+		for (stduint i = 0; i < 24; i++) {
+			if (readonly_ptr[i] != expected_content[i]) {
+				outsfmt("Error: Read-only MMAP contents mismatch!\n\r");
+				return -1;
+			}
+		}
+		fd = sysopen(test_file);
+		if (fd < 0 || lseek(fd, 4096, SEEK_SET) != 4096) {
+			outsfmt("Error: Failed to prepare read-only buffer test!\n\r");
+			return -1;
+		}
+		int readonly_write = read(fd, (void*)readonly_map, 1);
+		close(fd);
+		if (readonly_write != 0 || readonly_ptr[0] != 'W') {
+			outsfmt("Error: File read wrote through a read-only mapping!\n\r");
+			return -1;
+		}
+		outsfmt("Success: Read-only MMAP is readable and rejected a kernel write!\n\r");
+		if (argc > 1) {
+			outsfmt("Step 10 fault check: writing to read-only MMAP; SIGSEGV is expected.\n\r");
+			readonly_ptr[0] = 'X';
+			outsfmt("Error: Direct write to read-only MMAP unexpectedly succeeded!\n\r");
+			return -1;
+		}
+		if (munmap(readonly_map, 4096) != 0) {
+			outsfmt("Error: Read-only UMAP failed!\n\r");
+			return -1;
+		}
 		outsfmt("=== File MMAP Test ALL PASSED! ===\n\r");
 
-		// 9. Clean up the temporary test file
+		// 11. Clean up the temporary test file
 		sys_removefil(test_file);
-		outsfmt("Step 9: Cleaned up test file.\n\r");
+		outsfmt("Step 11: Cleaned up test file.\n\r");
 	}
 	#endif
 

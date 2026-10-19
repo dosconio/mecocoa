@@ -892,16 +892,7 @@ static stduint MapPwcallPhysicalRange(ProcessBlock* pb, stduint phys_begin,
 	stduint vaddr;
 	{
 		SpinlockLocal guard(&pb->vma_lock);
-		vaddr = pb->heaptop;
-		if ((vaddr & 0xFFF) || map_size > ~_IMM0 - vaddr) return 0;
-		for (stduint i = 0; i < pb->vmas.Count(); ++i) {
-			const auto& existing = pb->vmas[i];
-			if (vaddr < existing.vm_end && existing.vm_start < vaddr + map_size)
-				return 0;
-		}
-		for (stduint off = 0; off < map_size; off += 0x1000) {
-			if (_IMM(pb->paging[vaddr + off]) != ~_IMM0) return 0;
-		}
+		if (!pb->FindFreeVmaRange(map_size, vaddr)) return 0;
 	}
 
 	auto select_type = [&](stduint physical, stduint& type) -> bool {
@@ -935,18 +926,24 @@ static stduint MapPwcallPhysicalRange(ProcessBlock* pb, stduint phys_begin,
 	vma.vm_type = VirtualMemoryAreaType::Device;
 	{
 		SpinlockLocal guard(&pb->vma_lock);
-		if (!pb->vmas.Append(vma)) return 0;
+		if (!pb->InsertVmaSorted(vma)) return 0;
 	}
 	if (!Memory::MapPages(pb->paging, vaddr, stduint(aligned_phys),
 		map_size, PAGESIZE_ANY, PGPROP_present | page_flags | type,
 		&pb->vma_lock)) {
 		SpinlockLocal guard(&pb->vma_lock);
-		pb->vmas.Remove(pb->vmas.Count() - 1, 1);
+		for (stduint i = 0; i < pb->vmas.Count(); i++) {
+			if (pb->vmas[i].vm_start == vaddr &&
+				pb->vmas[i].vm_type == VirtualMemoryAreaType::Device) {
+				pb->vmas.Remove(i, 1);
+				break;
+			}
+		}
 		return 0;
 	}
 	{
 		SpinlockLocal guard(&pb->vma_lock);
-		pb->heaptop = vaddr + map_size;
+		pb->heaptop = maxof(pb->heaptop, vaddr + map_size);
 	}
 	return vaddr + stduint(page_bias);
 }

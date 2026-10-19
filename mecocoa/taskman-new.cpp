@@ -547,7 +547,10 @@ ProcessBlock* Taskman::CreateFork(ProcessBlock* fo, const CallgateFrame* frame) 
 				void* child_phy = mempool.allocate(0x1000, 12);
 				MemSet((void*)(child_phy), 0, 0x1000); // Zero-fill child page
 				MemCopyP((void*)(child_phy), kernel_paging, (const void*)(parent_phy), kernel_paging, 0x1000);
-				pb->paging.Map(addr, (stduint)child_phy, 0x1000, PAGESIZE_4KB, PGPROP_present | PGPROP_writable | PGPROP_user_access);
+				stduint properties = vma.vm_flags & (PGPROP_present |
+					PGPROP_writable | PGPROP_user_access | PGPROP_nonexecutable);
+				pb->paging.Map(addr, (stduint)child_phy, 0x1000,
+					PAGESIZE_4KB, properties);
 			}
 		}
 	}

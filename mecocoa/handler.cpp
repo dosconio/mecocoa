@@ -404,37 +404,11 @@ bool exception_handler_user(HardwareInterruptFrame* frame, stduint iden, stduint
 		stduint fault_addr = getCR2();
 		ThreadBlock* crt = Taskman::CurrentTB();
 		ProcessBlock* pb = crt ? crt->parent_process : nullptr;
-		bool handled = false;
-		if (pb) {
-			SpinlockLocal guard(&pb->vma_lock);
-			for (stduint i = 0; i < pb->vmas.Count(); i++) {
-				const auto& vma = pb->vmas[i];
-				if (fault_addr >= vma.vm_start && fault_addr < vma.vm_end) {
-					if (vma.vm_type == VirtualMemoryAreaType::Device) {
-						break;
-					}
-					void* phy_page = mempool.allocate(0x1000, 12);
-					if (phy_page != (void*)~_IMM0) {
-						MemSet((void*)(phy_page), 0, 0x1000); // Zero-fill physical page
-						stduint aligned_vaddr = fault_addr & ~_IMM(0xFFF);
-						
-						if (vma.vm_type == VirtualMemoryAreaType::File && vma.vfile) {
-							stduint offset = aligned_vaddr - vma.vm_start + vma.file_offset;
-							if (vma.vfile->f_inode && offset < vma.vfile->f_inode->i_size) {
-								stduint read_len = minof(_IMM(0x1000), vma.vfile->f_inode->i_size - offset);
-								vma.vfile->f_pos = offset;
-								Filesys::Read(vma.vfile, (void*)mglb(phy_page), read_len);
-							}
-						}
-						
-						pb->paging.Map(aligned_vaddr, (stduint)phy_page, 0x1000, PAGESIZE_4KB, PGPROP_present | PGPROP_writable | PGPROP_user_access);
-						RefreshVirtualAddress(aligned_vaddr);
-						handled = true;
-					}
-					break;
-				}
-			}
-		}
+		VirtualMemoryAccess access = (para & 0x10) ?
+			VirtualMemoryAccess::Execute : ((para & 0x02) ?
+				VirtualMemoryAccess::Write : VirtualMemoryAccess::Read);
+		// Present-page faults are permission violations. Only missing pages may be populated.
+		bool handled = !(para & 0x01) && pb && pb->EnsureVmaPage(fault_addr, access);
 		if (handled) {
 			return true; // Retry faulting instruction
 		}
@@ -622,6 +596,22 @@ stduint trap_handler(stduint epc, stduint cause, NormalTaskContext* cxt)
 	}
 	else { // Synchronous trap - exception
 		switch (cause_code) {
+		case 12:
+		case 13:
+		case 15:
+		{
+			stduint fault_address;
+			_ASM volatile("csrr %0, mtval" : "=r"(fault_address));
+			ThreadBlock* thread = Taskman::CurrentTB();
+			ProcessBlock* process = thread ? thread->parent_process : nullptr;
+			VirtualMemoryAccess access = cause_code == 12 ?
+				VirtualMemoryAccess::Execute : (cause_code == 15 ?
+					VirtualMemoryAccess::Write : VirtualMemoryAccess::Read);
+			if (process && process->EnsureVmaPage(fault_address, access)) break;
+			plogerro("Page fault! Code = 0x%[x], address = 0x%[x]",
+				cause_code, fault_address);
+			while (1);
+		}
 		case 8:
 			// ploginfo("System call from U-mode!");
 			syscall_body(cxt);

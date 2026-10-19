@@ -339,11 +339,12 @@ stdsint ProcessBlock::ShutdownSocket(int fd, stduint how) {
 
 stduint ProcessBlock::Rdwt(bool wr_type, stduint fid, Slice slice)
 {
-	auto files = this->fileman.Lock();
 	_Comment(const) ProcessBlock* pb = this;
 	if (!pb || this->state == ProcessBlock::State::Expiring || this->state == ProcessBlock::State::Invalid) {
 		return 0;
 	}
+	if (!PrepareUserBuffer(this, slice.address, slice.length, !wr_type)) return 0;
+	auto files = this->fileman.Lock();
 	if (fid >= files->pfiles.Count()) {
 		plogwarn("ProcessBlock::Rdwt BOOM pid=%u state=%u fd=%u count=%u",
 			this->getID(), this->state, fid, files->pfiles.Count());

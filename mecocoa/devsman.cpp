@@ -127,6 +127,12 @@ namespace Devs {
 		return node->fields.vendor_id == 0x1022u && node->fields.device_id == 0x2000u;
 	}
 
+	bool is_vmci_pci_device(const DeviceNode* node) {
+		if (!node) return false;
+		if (DeviceNodeType(node->fields.node_type) != DeviceNodeType::PciDevice) return false;
+		return node->fields.vendor_id == 0x15ADu && node->fields.device_id == 0x0740u;
+	}
+
 	const DeviceResource* find_pci_io_bar(const DeviceNode* node) {
 		if (!node) return nullptr;
 		for (uint32 bar_index = 0; bar_index < 6; ++bar_index) {
@@ -181,6 +187,39 @@ namespace Devs {
 		ploginfo("[DEVSMAN] LANCE %s I/O BAR%u=%[64H] len=%[64H] irq=%[64H]",
 			node->link.addr ? node->link.addr : "(unnamed)",
 			io->index, io->start, io->length, irq->start);
+		return true;
+	}
+
+	bool probe_vmci_device(DeviceNode* node) {
+		if (!node || !is_vmci_pci_device(node)) return false;
+		constexpr uint64 VmciRegisterWindowMinimum = 0x1Cu;
+		constexpr uint64 VmciMmioRegisterBarSize = 256u * 1024u;
+		const auto* io = Devsman::FindResource(node, DeviceResourceType::PciBarIo, 0);
+		const auto* mmio = Devsman::FindResource(node, DeviceResourceType::PciBarMmio, 1);
+		const bool usable_io = io && io->length >= VmciRegisterWindowMinimum;
+		const bool usable_mmio = mmio && mmio->length == VmciMmioRegisterBarSize;
+		if (!usable_io && !usable_mmio) {
+			plogwarn("[DEVSMAN] VMCI %s has no usable register BAR",
+				node->link.addr ? node->link.addr : "(unnamed)");
+			return false;
+		}
+		const auto* irq = Devsman::FindResource(node, DeviceResourceType::IrqLine, 0);
+		if (!irq) {
+			plogwarn("[DEVSMAN] VMCI %s missing IRQ resource",
+				node->link.addr ? node->link.addr : "(unnamed)");
+			return false;
+		}
+		if (io) {
+			ploginfo("[DEVSMAN] VMCI %s I/O BAR%u=%[64H] len=%[64H] irq=%[64H]",
+				node->link.addr ? node->link.addr : "(unnamed)",
+				io->index, io->start, io->length, irq->start);
+		}
+		if (mmio) {
+			ploginfo("[DEVSMAN] VMCI %s MMIO BAR%u=%[64H] len=%[64H] irq=%[64H]",
+				node->link.addr ? node->link.addr : "(unnamed)",
+				mmio->index, mmio->start, mmio->length, irq->start);
+		}
+		node->fields.binding.probe_result = 0;
 		return true;
 	}
 
@@ -1325,6 +1364,7 @@ namespace {
 		{0x8086u, 0x1010u, "e1000.elf"},
 		{0x8086u, 0x10D3u, "e1000.elf"},
 		{0x1022u, 0x2000u, "lance.elf"},
+		{0x15ADu, 0x0740u, "vmci.elf"},
 	};
 
 	constexpr const char* always_load_ring_drivers[] = {

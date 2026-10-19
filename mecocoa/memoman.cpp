@@ -65,6 +65,253 @@ Spinlock mempool_lock;
 
 
 // ---------------------------------------------------------
+// VirtualMemory Implementation
+// ---------------------------------------------------------
+
+bool PrepareUserBuffer(ProcessBlock* pb, stduint address,
+	size_t length, bool write) {
+	if (!pb || (!address && length) || length > ~_IMM0 - address) return false;
+	if (!length) return true;
+	#if CONFIG_ENABLE_MMU
+	const stduint first_page = address & ~_IMM(0xFFF);
+	const stduint last_page = (address + length - 1) & ~_IMM(0xFFF);
+	for (stduint page = first_page;; page += 0x1000) {
+		if (_IMM(pb->paging[page]) == ~_IMM0 &&
+			!pb->EnsureVmaPage(page, write ? VirtualMemoryAccess::Write :
+				VirtualMemoryAccess::Read)) return false;
+		pageint page_index = page;
+		PageEntry* entry = pb->paging.getEntry(page_index);
+		stduint properties;
+		if (!entry || _IMM(entry) == ~_IMM0 ||
+			!entry->DecodeLeafProperties(page_index.crt_level, properties) ||
+			!(properties & PGPROP_present) ||
+			!(properties & PGPROP_user_access) ||
+			(write && !(properties & PGPROP_writable))) return false;
+		if (page == last_page) break;
+	}
+	#else
+	(void)write;
+	#endif
+	return true;
+}
+
+#if CONFIG_ENABLE_MMU
+bool ProcessBlock::FindFreeVmaRange(stduint length, stduint& address) {
+	#if _MCCA == 0x8664
+	const stduint user_end = 0x0000800000000000ull;
+	#else
+	const stduint user_end = 0x80000000;
+	#endif
+	if (!length || (length & 0xFFF) ||
+		heapbtm < 0x1000 || heapbtm > user_end - 0xFFF) return false;
+	stduint candidate = (heapbtm + 0xFFF) & ~_IMM(0xFFF);
+	while (candidate < user_end && length <= user_end - candidate) {
+		bool occupied = false;
+		for (stduint i = 0; i < vmas.Count(); i++) {
+			const auto& existing = vmas[i];
+			if (candidate < existing.vm_end && existing.vm_start < candidate + length) {
+				candidate = existing.vm_end;
+				occupied = true;
+				break;
+			}
+		}
+		if (occupied) continue;
+		for (stduint page = candidate; page < candidate + length; page += 0x1000) {
+			if (_IMM(paging[page]) != ~_IMM0) {
+				candidate = page + 0x1000;
+				occupied = true;
+				break;
+			}
+		}
+		if (!occupied) {
+			address = candidate;
+			return true;
+		}
+	}
+	return false;
+}
+
+bool ProcessBlock::InsertVmaSorted(const VirtualMemoryArea& vma) {
+	if (vma.vm_start >= vma.vm_end || ((vma.vm_start | vma.vm_end) & 0xFFF)) return false;
+	for (stduint i = 0; i < vmas.Count(); i++) {
+		const auto& existing = vmas[i];
+		if (vma.vm_start < existing.vm_end && existing.vm_start < vma.vm_end) return false;
+	}
+	if (!vmas.Append(vma)) return false;
+	for (stduint i = vmas.Count() - 1; i &&
+		vmas[i].vm_start < vmas[i - 1].vm_start; --i) {
+		vmas.Exchange(i, i - 1);
+	}
+	return true;
+}
+
+static bool VmaAllowsAccess(const VirtualMemoryArea& vma,
+	VirtualMemoryAccess access) {
+	if (!(vma.vm_flags & PGPROP_present) ||
+		!(vma.vm_flags & PGPROP_user_access)) return false;
+	if (access == VirtualMemoryAccess::Write)
+		return !!(vma.vm_flags & PGPROP_writable);
+	if (access == VirtualMemoryAccess::Execute)
+		return !(vma.vm_flags & PGPROP_nonexecutable);
+	return true;
+}
+
+static bool PageAllowsAccess(ProcessBlock* pb, stduint address,
+	VirtualMemoryAccess access, void*& physical) {
+	pageint page = address;
+	PageEntry* entry = pb->paging.getEntry(page);
+	stduint properties;
+	if (!entry || _IMM(entry) == ~_IMM0 ||
+		!entry->DecodeLeafProperties(page.crt_level, properties) ||
+		!(properties & PGPROP_present) ||
+		!(properties & PGPROP_user_access) ||
+		(access == VirtualMemoryAccess::Write && !(properties & PGPROP_writable)) ||
+		(access == VirtualMemoryAccess::Execute &&
+			(properties & PGPROP_nonexecutable))) return false;
+	physical = pb->paging[address];
+	return physical != (void*)~_IMM0;
+}
+
+static void ReleaseVmaReadFile(uni::vfs_file* file) {
+	if (!file) return;
+	if (file->f_inode) file->f_inode->ref_count--;
+	Filesys::Close(file);
+}
+
+void* ProcessBlock::EnsureVmaPage(stduint address, VirtualMemoryAccess access) {
+	address &= ~_IMM(0xFFF);
+	VirtualMemoryAreaType expected_type = VirtualMemoryAreaType::Anonymous;
+	VirtualMemoryAreaMode expected_mode = VirtualMemoryAreaMode::Private;
+	stduint expected_flags = 0;
+	stduint expected_file_offset = 0;
+	bool file_backed = false;
+	bool found = false;
+	{
+		SpinlockLocal guard(&vma_lock);
+		for (stduint i = 0; i < vmas.Count(); i++) {
+			const auto& vma = vmas[i];
+			if (address < vma.vm_start || address >= vma.vm_end) continue;
+			if (vma.vm_type == VirtualMemoryAreaType::Device ||
+				!VmaAllowsAccess(vma, access)) return nullptr;
+			void* physical;
+			if (_IMM(paging[address]) != ~_IMM0)
+				return PageAllowsAccess(this, address, access, physical) ? physical : nullptr;
+			expected_type = vma.vm_type;
+			expected_mode = vma.vm_mode;
+			expected_flags = vma.vm_flags;
+			found = true;
+			file_backed = vma.vm_type == VirtualMemoryAreaType::File;
+			if (file_backed) {
+				if (!vma.vfile) return nullptr;
+				expected_file_offset = address - vma.vm_start + vma.file_offset;
+			}
+			break;
+		}
+	}
+	if (!found) return nullptr;
+
+	uni::vfs_file* read_file = nullptr;
+	if (file_backed) {
+		read_file = (uni::vfs_file*)malc(sizeof(uni::vfs_file));
+		if (!read_file) return nullptr;
+		bool retained = false;
+		bool raced = false;
+		bool raced_allowed = false;
+		void* raced_physical = nullptr;
+		{
+			SpinlockLocal guard(&vma_lock);
+			for (stduint i = 0; i < vmas.Count(); i++) {
+				const auto& vma = vmas[i];
+				if (address < vma.vm_start || address >= vma.vm_end) continue;
+				void* physical = nullptr;
+				if (_IMM(paging[address]) != ~_IMM0) {
+					raced = true;
+					raced_allowed = PageAllowsAccess(this, address, access, physical);
+					raced_physical = physical;
+					break;
+				}
+				if (vma.vm_type != expected_type || vma.vm_mode != expected_mode ||
+					vma.vm_flags != expected_flags || !VmaAllowsAccess(vma, access) ||
+					!vma.vfile || address - vma.vm_start + vma.file_offset !=
+						expected_file_offset) break;
+				*read_file = *vma.vfile;
+				if (read_file->f_inode) read_file->f_inode->ref_count++;
+				retained = true;
+				break;
+			}
+		}
+		if (raced) {
+			free(read_file);
+			return raced_allowed ? raced_physical : nullptr;
+		}
+		if (!retained) {
+			free(read_file);
+			return nullptr;
+		}
+	}
+
+	void* physical = mempool.allocate(0x1000, 12);
+	if (!physical || physical == (void*)~_IMM0) {
+		ReleaseVmaReadFile(read_file);
+		return nullptr;
+	}
+	MemSet((void*)mglb(physical), 0, 0x1000);
+	if (read_file && read_file->f_inode &&
+		expected_file_offset < read_file->f_inode->i_size) {
+		stduint read_length = minof(_IMM(0x1000),
+			read_file->f_inode->i_size - expected_file_offset);
+		read_file->f_pos = expected_file_offset;
+		if (Filesys::Read(read_file, (void*)mglb(physical), read_length) !=
+			(stdsint)read_length) {
+			mempool.deallocate(physical, 0x1000);
+			ReleaseVmaReadFile(read_file);
+			return nullptr;
+		}
+	}
+
+	void* result = nullptr;
+	{
+		SpinlockLocal guard(&vma_lock);
+		for (stduint i = 0; i < vmas.Count(); i++) {
+			const auto& vma = vmas[i];
+			if (address < vma.vm_start || address >= vma.vm_end) continue;
+			if (!VmaAllowsAccess(vma, access)) break;
+			if (_IMM(paging[address]) != ~_IMM0) {
+				PageAllowsAccess(this, address, access, result);
+				break;
+			}
+			if (vma.vm_type != expected_type || vma.vm_mode != expected_mode ||
+				vma.vm_flags != expected_flags) break;
+			if (file_backed && (!vma.vfile || !read_file ||
+				vma.vfile->f_inode != read_file->f_inode ||
+				address - vma.vm_start + vma.file_offset != expected_file_offset)) break;
+			stduint properties = vma.vm_flags & (PGPROP_present |
+				PGPROP_writable | PGPROP_user_access | PGPROP_nonexecutable);
+			if (paging.Map(address, (stduint)physical, 0x1000,
+				PAGESIZE_4KB, properties)) {
+				RefreshVirtualAddress(address);
+				result = physical;
+				physical = nullptr;
+			}
+			break;
+		}
+	}
+	if (physical) mempool.deallocate(physical, 0x1000);
+	ReleaseVmaReadFile(read_file);
+	return result;
+}
+
+extern "C" void* kernel_prefault_page(ProcessBlock* pb, stduint address,
+	bool write) {
+	return pb ? pb->EnsureVmaPage(address, write ?
+		VirtualMemoryAccess::Write : VirtualMemoryAccess::Read) : nullptr;
+}
+#endif
+
+
+
+
+// ---------------------------------------------------------
 // LockedAllocator Implementation
 // ---------------------------------------------------------
 

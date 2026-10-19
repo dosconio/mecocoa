@@ -231,6 +231,11 @@ enum class VirtualMemoryAreaMode {
 	Private = 0,
 	Shared = 1,
 };
+enum class VirtualMemoryAccess {
+	Read = 0,
+	Write,
+	Execute,
+};
 #ifndef _ACCM
 struct ProcSignals {
 	struct _POSIX_sigaction sig_actions[_NSIG];
@@ -312,6 +317,15 @@ public: // VirtualMemory
 	uni::Vector<VirtualMemoryArea> vmas; // List of virtual memory areas
 	Spinlock vma_lock; // Spinlock protecting VMAs and page tables
 	uni::Slice load_slices[8];// at most 8 slices, app-relative logical address
+
+public: // VirtualMemory Operations
+	#if CONFIG_ENABLE_MMU
+	// Caller holds mutex_mapping and vma_lock.
+	bool FindFreeVmaRange(stduint length, stduint& address);
+	bool InsertVmaSorted(const VirtualMemoryArea& vma);
+	// Acquires vma_lock internally; file I/O is performed without the spinlock.
+	void* EnsureVmaPage(stduint address, VirtualMemoryAccess access);
+	#endif
 
 public: // Fileman
 	MutexBlock<ProcFiles> fileman;
@@ -764,7 +778,7 @@ static inline void* SeekAddress(ProcessBlock* pb, stduint addr, bool from_kernel
 #define SeekAddress(pb, addr, from_kernel) ((void*)addr)
 #endif
 
-extern "C" void* kernel_prefault_page(ProcessBlock* pb, stduint addr);
+extern "C" void* kernel_prefault_page(ProcessBlock* pb, stduint addr, bool write = false);
 
 static inline stduint MccaMemCopyP(
 	void* dest, ProcessBlock* pd, bool dker,
@@ -772,28 +786,8 @@ static inline stduint MccaMemCopyP(
 	size_t n) {
 	#if CONFIG_ENABLE_MMU
 	extern Paging kernel_paging;
-	if (ps && !sker) {
-		stduint start_page = (stduint)sors & ~_IMM(0xFFF);
-		stduint end_page = ((stduint)sors + n + 0xFFF) & ~_IMM(0xFFF);
-		if (end_page >= start_page) {
-			for (stduint curr = start_page; curr < end_page; curr += 0x1000) {
-				if (!SeekAddress(ps, curr, false)) {
-					kernel_prefault_page(ps, curr);
-				}
-			}
-		}
-	}
-	if (pd && !dker) {
-		stduint start_page = (stduint)dest & ~_IMM(0xFFF);
-		stduint end_page = ((stduint)dest + n + 0xFFF) & ~_IMM(0xFFF);
-		if (end_page >= start_page) {
-			for (stduint curr = start_page; curr < end_page; curr += 0x1000) {
-				if (!SeekAddress(pd, curr, false)) {
-					kernel_prefault_page(pd, curr);
-				}
-			}
-		}
-	}
+	if (ps && !sker && !PrepareUserBuffer(ps, (stduint)sors, n, false)) return 0;
+	if (pd && !dker && !PrepareUserBuffer(pd, (stduint)dest, n, true)) return 0;
 	return MemCopyP(
 		dest, pd && !dker ? pd->paging : kernel_paging,
 		sors, ps && !sker ? ps->paging : kernel_paging, n);
