@@ -1043,8 +1043,9 @@ static stduint MapPwcallPhysicalRange(ProcessBlock* pb, stduint phys_begin,
 #endif
 
 static stdsint HandlePwcallDeviceDmaAlloc(ProcessBlock* pb, stduint dev_handle, stduint size, stduint flags) {
-	(void)flags;
 	if (!pb || !dev_handle || !size) return -1;
+	const stduint known_flags = _IMM(PwcallDeviceDmaAllocFlag::NoLowMemory);
+	if (flags & ~known_flags) return -1;
 	auto* device = ResolvePwcallDeviceHandle(pb, dev_handle);
 	if (!device) return -1;
 	uint8 dma_channel = 0xFF;
@@ -1060,7 +1061,9 @@ static stdsint HandlePwcallDeviceDmaAlloc(ProcessBlock* pb, stduint dev_handle, 
 	const stduint alloc_size = (size + 0xFFFu) & ~0xFFFu;
 	void* phys = nullptr;
 	#if (_MCCA & 0xFF00) == 0x8600
-	phys = DmaLowAlloc(alloc_size);
+	if ((flags & _IMM(PwcallDeviceDmaAllocFlag::NoLowMemory)) == 0) {
+		phys = DmaLowAlloc(alloc_size);
+	}
 	#endif
 	if (!phys) {
 		phys = mempool.allocate(alloc_size, 12);

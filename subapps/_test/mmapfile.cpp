@@ -375,7 +375,64 @@ int main(int argc, char** argv)
 		}
 		outsfmt("Success: Process exit released and wrote back its mapping.\n\r");
 
-		// 13. Exec must release the old image mappings before installing the new image.
+		// 13. A forked read-only VMA must survive after the parent unmaps its reference.
+		fd = sysopen(test_file);
+		if (fd < 0) return -1;
+		void* shared_readonly_map = mmap(nullptr, 4096, PROT_READ,
+			MAP_SHARED, fd, 0);
+		close(fd);
+		if (shared_readonly_map == MAP_FAILED ||
+			((volatile char*)shared_readonly_map)[0] != 'W') {
+			outsfmt("Error: Shared read-only MMAP setup failed!\n\r");
+			return -1;
+		}
+		int share_pipe[2];
+		if (pipe(share_pipe) != 0) {
+			outsfmt("Error: Pipe for managed-page test failed!\n\r");
+			munmap(shared_readonly_map, 4096);
+			return -1;
+		}
+		child = fork();
+		if (child < 0) {
+			outsfmt("Error: Fork for managed-page test failed!\n\r");
+			close(share_pipe[0]);
+			close(share_pipe[1]);
+			munmap(shared_readonly_map, 4096);
+			return -1;
+		}
+		if (!child) {
+			close(share_pipe[1]);
+			char token = 0;
+			if (read(share_pipe[0], &token, 1) != 1 || token != 'R') _exit(5);
+			close(share_pipe[0]);
+			if (((volatile char*)shared_readonly_map)[0] != 'W') _exit(6);
+			if (munmap(shared_readonly_map, 4096) != 0) _exit(7);
+			_exit(0);
+		}
+		close(share_pipe[0]);
+		if (munmap(shared_readonly_map, 4096) != 0) {
+			outsfmt("Error: Parent UMAP for managed-page test failed!\n\r");
+			close(share_pipe[1]);
+			wait(&child_status);
+			return -1;
+		}
+		char share_token = 'R';
+		if (write(share_pipe[1], &share_token, 1) != 1) {
+			outsfmt("Error: Failed to wake managed-page test child!\n\r");
+			close(share_pipe[1]);
+			wait(&child_status);
+			return -1;
+		}
+		close(share_pipe[1]);
+		child_status = -1;
+		if (wait(&child_status) != child || child_status != 0) {
+			outsfmt("Error: Managed-page child failed with status %d!\n\r",
+				child_status);
+			return -1;
+		}
+		outsfmt("Success: Fork shared a read-only managed page and preserved the child mapping.\n\r");
+
+		// 14. Exec must release the old image mappings before installing the new image.
 		child = fork();
 		if (child < 0) {
 			outsfmt("Error: Fork for exec cleanup test failed!\n\r");
@@ -422,9 +479,9 @@ int main(int argc, char** argv)
 		outsfmt("Success: Exec released and wrote back its old mapping.\n\r");
 		outsfmt("=== File MMAP Test ALL PASSED! ===\n\r");
 
-		// 14. Clean up the temporary test file
+		// 15. Clean up the temporary test file
 		sys_removefil(test_file);
-		outsfmt("Step 14: Cleaned up test file.\n\r");
+		outsfmt("Step 15: Cleaned up test file.\n\r");
 	}
 	#endif
 

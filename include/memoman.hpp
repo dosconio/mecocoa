@@ -102,11 +102,16 @@ _PACKED(struct) VideoInfoEntry {
 
 extern stduint acpi_rsdp_addr;
 extern stduint acpi_mcfg_addr;
+extern stduint acpi_dmar_addr;
 extern uint64 acpi_pcie_ecam_base;
 extern uint16 acpi_pcie_segment_group;
 extern uint8 acpi_pcie_start_bus;
 extern uint8 acpi_pcie_end_bus;
 extern bool acpi_pcie_ecam_available;
+
+namespace Iova {
+	bool ProbeVtd(stduint dmar_address);
+}
 #if _MCCA == 0x8632
 #define mem_area_exten_beg 0x00101000
 // area-basic: 0x7E00 .. 0x80000
@@ -136,6 +141,19 @@ struct InitialPageRegion {
 	stduint end;
 	stduint type;
 	stduint permissions;
+};
+
+enum class ManagedPageSource {
+	Anonymous,
+	File,
+	ELF
+};
+
+struct ManagedPageInfo {
+	stduint physical_address;
+	ManagedPageSource source;
+	stduint mapping_refs;
+	stduint cache_refs;
 };
 #endif
 
@@ -171,6 +189,15 @@ public:// for loaders
 	static bool UnmapPages(Paging& paging, stduint linear_address,
 		stduint length, Spinlock* page_table_lock = nullptr);
 	static void ReleasePagingMappings(Paging& paging);
+	// AdoptManagedPage takes ownership of physical_address, including on failure.
+	static bool AdoptManagedPage(stduint physical_address,
+		ManagedPageSource source);
+	static bool RetainManagedPageMapping(stduint physical_address);
+	static bool ReleaseManagedPageMapping(stduint physical_address);
+	static bool RetainManagedPageCache(stduint physical_address);
+	static bool ReleaseManagedPageCache(stduint physical_address);
+	static bool QueryManagedPage(stduint physical_address,
+		ManagedPageInfo& info);
 	static bool BuildInitialPagePlan(stduint boot_magic,
 		const void* boot_info, InitialPageRegion*& plan,
 		stduint& plan_count, stduint& plan_storage_bytes);

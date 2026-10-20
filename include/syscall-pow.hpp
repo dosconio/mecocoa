@@ -97,6 +97,11 @@ enum class PwcallDeviceDmaMapFlag : uint32 {
 	Writable = 1 << 0,
 };
 
+enum class PwcallDeviceDmaAllocFlag : uint32 {
+	None = 0,
+	NoLowMemory = 1 << 0,
+};
+
 struct PwcallDeviceDmaMapRequest {
 	uint64 physical = 0;
 	uint64 length = 0;

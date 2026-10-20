@@ -12,6 +12,24 @@
 #define StrCopyP(a,b,c,d,e) _IMM((byte*)StrCopyN(a,c,e)-(byte*)a)
 #endif
 
+#if CONFIG_ENABLE_MMU
+static void RollbackELFPages(Paging& paging, const stduint* addresses,
+	stduint count) {
+	while (count) {
+		const stduint address = addresses[--count];
+		void* physical = paging[address];
+		if (physical == (void*)~_IMM0) continue;
+		if (!paging.Unmap(address, PAGE_SIZE)) {
+			plogerro("Failed to roll back ELF page at VA=%[x]", address);
+			continue;
+		}
+		if (!Memory::ReleaseManagedPageMapping(_IMM(physical)))
+			plogerro("Missing managed ELF page at physical address %[x]",
+				physical);
+	}
+}
+#endif
+
 bool Taskman::CreateELF_Carry(char* vaddr, stduint mem_length, BlockTrait* source, stduint file_offset, stduint file_size, Paging& pg, byte* buffer, bool executable, bool writable, bool user) {
 	// if page !exist, map it; write it.
 	stduint compensation = _IMM(vaddr) & 0xFFF;
@@ -35,24 +53,43 @@ bool Taskman::CreateELF_Carry(char* vaddr, stduint mem_length, BlockTrait* sourc
 
 	#if CONFIG_ENABLE_MMU
 	// ploginfo("Taskman::CreateELF_Carry(%[x], %[x], %[x])  pg(%[x])", vaddr, length, phy_src, pg);
+	const stduint page_count = (mem_length + compensation + 0xFFF) / 0x1000;
+	auto allocated_pages = uni::make_unique<stduint[]>(page_count);
+	if (page_count && !allocated_pages) return false;
+	stduint allocated_page_count = 0;
 	stduint bytes_read = 0; 
-	for0(i, (mem_length + compensation + 0xFFF) / 0x1000) {
+	for0(i, page_count) {
 		auto page_entry = pg.getEntry(_IMM(v_start1));
 		stduint phy;
 		
 		if (_IMM(page_entry) == ~_IMM0 || !page_entry->isPresent()) {
 			phy = _IMM(mempool.allocate(0x1000, 12));
+			if (!phy || phy == ~_IMM0) {
+				RollbackELFPages(pg, allocated_pages.get(), allocated_page_count);
+				return false;
+			}
 			MemSet((void*)phy, 0, 0x1000);
+			if (!Memory::AdoptManagedPage(phy, ManagedPageSource::ELF)) {
+				RollbackELFPages(pg, allocated_pages.get(), allocated_page_count);
+				return false;
+			}
 			stduint pgprop = PGPROP_present;
 			if (writable) pgprop |= PGPROP_writable;
 			if (user) pgprop |= PGPROP_user_access;
 			#if _MCCA != 0x8632
 			if (!executable) pgprop |= PGPROP_nonexecutable;
 			#endif
-			pg.Map(v_start1, phy, 0x1000, PAGESIZE_4KB, pgprop);
+			if (!pg.Map(v_start1, phy, 0x1000, PAGESIZE_4KB, pgprop)) {
+				Memory::ReleaseManagedPageMapping(phy);
+				RollbackELFPages(pg, allocated_pages.get(), allocated_page_count);
+				return false;
+			}
+			allocated_pages[allocated_page_count++] = v_start1;
 			page_entry = pg.getEntry(_IMM(v_start1));
 			if (_IMM(page_entry) == ~_IMM0 || !page_entry->isPresent()) {
 				plogerro("Mapping failed %[x] -> %[x]", v_start1, phy);
+				RollbackELFPages(pg, allocated_pages.get(), allocated_page_count);
+				return false;
 			}
 		}
 		else phy = page_entry->getAddress(0);
@@ -78,6 +115,7 @@ bool Taskman::CreateELF_Carry(char* vaddr, stduint mem_length, BlockTrait* sourc
 			auto ret = source->Read(file_offset + bytes_read, kdest, copy_size, buffer);
 			if (ret != copy_size) {
 				plogwarn("%s %u: Read failed, %u != %u", __FUNCIDEN__, __LINE__, ret, copy_size);
+				RollbackELFPages(pg, allocated_pages.get(), allocated_page_count);
 				return false;
 			}
 		}

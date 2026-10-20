@@ -467,7 +467,13 @@ ProcessBlock* Taskman::CreateFork(ProcessBlock* fo, const CallgateFrame* frame) 
 	tb->stack_size = target_fo_thread->stack_size;
 	auto stack_norm = (byte*)mempool.allocate(tb->stack_size, 12);
 	auto stack_ring = ring ? (byte*)mempool.allocate(tb->stack_size, 12) : stack_norm;
+	bool child_vmas_owned = false;
 	auto discard_child = [&]() -> ProcessBlock* {
+		if (child_vmas_owned) {
+			if (!pb->ReleaseAllVmas())
+				plogerro("Failed to release fork child VMAs");
+			pb->ReleaseLoadslices();
+		}
 		if (stack_ring && stack_ring != stack_norm && stack_ring != (byte*)~_IMM0)
 			mempool.deallocate(stack_ring, tb->stack_size);
 		if (stack_norm && stack_norm != (byte*)~_IMM0)
@@ -498,6 +504,10 @@ ProcessBlock* Taskman::CreateFork(ProcessBlock* fo, const CallgateFrame* frame) 
 	pb->heapbtm = fo->heapbtm;
 	pb->heaptop = fo->heaptop;
 	pb->vmas = fo->vmas;
+	for (stduint i = 0; i < pb->vmas.Count(); i++) {
+		if (pb->vmas[i].vm_type == VirtualMemoryAreaType::File)
+			pb->vmas[i].vfile = nullptr;
+	}
 	// Inherit device mappings with their decoded memory type and register each contiguous run.
 	for (stduint i = 0; i < pb->vmas.Count(); i++) {
 		const auto& vma = pb->vmas[i];
@@ -536,30 +546,61 @@ ProcessBlock* Taskman::CreateFork(ProcessBlock* fo, const CallgateFrame* frame) 
 	}
 	for (stduint i = 0; i < pb->vmas.Count(); i++) {
 		auto& vma = pb->vmas[i];
-		if (vma.vm_type == VirtualMemoryAreaType::File && vma.vfile) {
+		const auto& source_vma = fo->vmas[i];
+		if (source_vma.vm_type == VirtualMemoryAreaType::File &&
+			source_vma.vfile) {
 			uni::vfs_file* nvfile = (uni::vfs_file*)malc(sizeof(uni::vfs_file));
-			if (nvfile) {
-				*nvfile = *(vma.vfile);
-				if (nvfile->f_inode) {
-					nvfile->f_inode->ref_count++;
-				}
-				vma.vfile = nvfile;
+			if (!nvfile) {
+				child_vmas_owned = true;
+				return discard_child();
 			}
+			*nvfile = *(source_vma.vfile);
+			if (nvfile->f_inode) {
+				nvfile->f_inode->ref_count++;
+			}
+			vma.vfile = nvfile;
 		}
 	}
+	child_vmas_owned = true;
 	for (stduint i = 0; i < fo->vmas.Count(); i++) {
 		const auto& vma = fo->vmas[i];
 		for (stduint addr = vma.vm_start; addr < vma.vm_end; addr += 0x1000) {
 			void* parent_phy = fo->paging[addr];
 			if (parent_phy != (void*)~_IMM0) {
 				if (vma.vm_type == VirtualMemoryAreaType::Device) continue;
-				void* child_phy = mempool.allocate(0x1000, 12);
-				MemSet((void*)(child_phy), 0, 0x1000); // Zero-fill child page
-				MemCopyP((void*)(child_phy), kernel_paging, (const void*)(parent_phy), kernel_paging, 0x1000);
 				stduint properties = vma.vm_flags & (PGPROP_present |
 					PGPROP_writable | PGPROP_user_access | PGPROP_nonexecutable);
-				pb->paging.Map(addr, (stduint)child_phy, 0x1000,
-					PAGESIZE_4KB, properties);
+				ManagedPageSource source = vma.vm_type == VirtualMemoryAreaType::File ?
+					ManagedPageSource::File : ManagedPageSource::Anonymous;
+				if (!(vma.vm_flags & PGPROP_writable)) {
+					if (!Memory::RetainManagedPageMapping(_IMM(parent_phy)) ||
+						!pb->paging.Map(addr, _IMM(parent_phy), PAGE_SIZE,
+							PAGESIZE_4KB, properties)) {
+						Memory::ReleaseManagedPageMapping(_IMM(parent_phy));
+						plogerro("Failed to share read-only VMA page during fork at VA=%[x]",
+							addr);
+						return discard_child();
+					}
+					ManagedPageInfo page_info;
+					KASSERT(Memory::QueryManagedPage(_IMM(parent_phy), page_info) &&
+						page_info.source == source && page_info.mapping_refs >= 2);
+					continue;
+				}
+				void* child_phy = mempool.allocate(0x1000, 12);
+				if (!child_phy || child_phy == (void*)~_IMM0) {
+					plogerro("Failed to allocate VMA page during fork at VA=%[x]", addr);
+					return discard_child();
+				}
+				MemSet((void*)(child_phy), 0, 0x1000); // Zero-fill child page
+				MemCopyP((void*)(child_phy), kernel_paging, (const void*)(parent_phy), kernel_paging, 0x1000);
+				if (!Memory::AdoptManagedPage(_IMM(child_phy), source))
+					return discard_child();
+				if (!pb->paging.Map(addr, _IMM(child_phy), PAGE_SIZE,
+					PAGESIZE_4KB, properties)) {
+					Memory::ReleaseManagedPageMapping(_IMM(child_phy));
+					plogerro("Failed to map copied VMA page during fork at VA=%[x]", addr);
+					return discard_child();
+				}
 			}
 		}
 	}
@@ -573,7 +614,16 @@ ProcessBlock* Taskman::CreateFork(ProcessBlock* fo, const CallgateFrame* frame) 
 			void* parent_phy = fo->paging[vaddr];
 			if (parent_phy != (void*)~_IMM0 && pb->paging[vaddr] == (void*)~_IMM0) {
 				void* child_phy = mempool.allocate(PAGE_SIZE, 12);
-				pb->paging.Map(vaddr, (stduint)child_phy, PAGE_SIZE, PAGESIZE_4KB, _TEMP PGPROP_present | PGPROP_writable | PGPROP_user_access);
+				if (!child_phy || child_phy == (void*)~_IMM0)
+					return discard_child();
+				if (!Memory::AdoptManagedPage(_IMM(child_phy),
+					ManagedPageSource::ELF)) return discard_child();
+				if (!pb->paging.Map(vaddr, (stduint)child_phy, PAGE_SIZE,
+					PAGESIZE_4KB, _TEMP PGPROP_present | PGPROP_writable |
+					PGPROP_user_access)) {
+					Memory::ReleaseManagedPageMapping(_IMM(child_phy));
+					return discard_child();
+				}
 				// ploginfo("memcpyp: %x+%x, ., %x, ., %x", mapsrc, appendix, fo->load_slices[i].address, fo->load_slices[i].length);
 				MemCopyP((void*)vaddr, pb->paging, (void*)vaddr, fo->paging, PAGE_SIZE);
 			}

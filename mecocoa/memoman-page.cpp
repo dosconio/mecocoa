@@ -129,6 +129,78 @@ namespace {
 	static PhysicalMappingRecord* physical_mapping_records;
 	static Mutex physical_mapping_records_mutex;
 
+	struct ManagedPage {
+		stduint physical_address;
+		ManagedPageSource source;
+		stduint mapping_refs;
+		stduint cache_refs;
+	};
+
+	struct ManagedPageDeleter {
+		void operator()(ManagedPage* page) const {
+			if (!page) return;
+			if (page->physical_address)
+				mempool.deallocate((void*)page->physical_address, PAGE_SIZE);
+			delete page;
+		}
+	};
+
+	using ManagedPageOwner = uni::SharedPtr<ManagedPage>;
+
+	struct ManagedPageRecord {
+		ManagedPageOwner page;
+		ManagedPageRecord* next;
+	};
+
+	static constexpr stduint managed_page_bucket_count = 256;
+	static ManagedPageRecord* managed_page_records[managed_page_bucket_count];
+	static Mutex managed_page_records_mutex;
+
+	static ManagedPageRecord** FindManagedPageRecord(stduint physical_address) {
+		const stduint bucket = physical_address / PAGE_SIZE %
+			managed_page_bucket_count;
+		ManagedPageRecord** link = &managed_page_records[bucket];
+		while (*link && (*link)->page->physical_address != physical_address)
+			link = &(*link)->next;
+		return link;
+	}
+
+	static bool RetainManagedPageReference(stduint physical_address,
+		bool cache_reference) {
+		MutexLocal guard(&managed_page_records_mutex);
+		ManagedPageRecord* record = *FindManagedPageRecord(physical_address);
+		if (!record) return false;
+		stduint& count = cache_reference ? record->page->cache_refs :
+			record->page->mapping_refs;
+		if (count == ~_IMM0) return false;
+		count++;
+		return true;
+	}
+
+	static bool ReleaseManagedPageReference(stduint physical_address,
+		bool cache_reference) {
+		ManagedPageRecord* released_record = nullptr;
+		ManagedPageOwner released_page;
+		{
+			MutexLocal guard(&managed_page_records_mutex);
+			ManagedPageRecord** link = FindManagedPageRecord(physical_address);
+			ManagedPageRecord* record = *link;
+			if (!record) return false;
+			stduint& count = cache_reference ? record->page->cache_refs :
+				record->page->mapping_refs;
+			if (!count) return false;
+			count--;
+			if (!record->page->mapping_refs && !record->page->cache_refs) {
+				*link = record->next;
+				released_page = record->page;
+				released_record = record;
+			}
+		}
+		delete released_record;
+		released_page.reset();
+		return true;
+	}
+
 	// Allocate one internal physical mapping record.
 	static PhysicalMappingRecord* AllocatePhysicalMappingRecord() {
 		void* memory = mempool.allocate(sizeof(PhysicalMappingRecord), 4);
@@ -469,6 +541,71 @@ static bool framebuffer_range_supports_wc(stduint begin, stduint end) {
 	return begin < end && uni::PagingPATEnabled();
 }
 #endif
+
+bool Memory::AdoptManagedPage(stduint physical_address,
+	ManagedPageSource source) {
+	if (!physical_address || physical_address == ~_IMM0 ||
+		(physical_address & (PAGE_SIZE - 1))) {
+		if (physical_address && physical_address != ~_IMM0)
+			mempool.deallocate((void*)physical_address, PAGE_SIZE);
+		return false;
+	}
+	ManagedPage* page = new ManagedPage {
+		physical_address, source, 1, 0
+	};
+	if (!page) {
+		mempool.deallocate((void*)physical_address, PAGE_SIZE);
+		return false;
+	}
+	ManagedPageOwner owner(page, ManagedPageDeleter());
+	if (!owner) return false;
+	ManagedPageRecord* record = new ManagedPageRecord;
+	if (!record) return false;
+	record->page = owner;
+	record->next = nullptr;
+	bool inserted = false;
+	{
+		MutexLocal guard(&managed_page_records_mutex);
+		ManagedPageRecord** link = FindManagedPageRecord(physical_address);
+		if (!*link) {
+			*link = record;
+			inserted = true;
+		}
+	}
+	if (!inserted) {
+		page->physical_address = 0;
+		delete record;
+	}
+	return inserted;
+}
+
+bool Memory::RetainManagedPageMapping(stduint physical_address) {
+	return RetainManagedPageReference(physical_address, false);
+}
+
+bool Memory::ReleaseManagedPageMapping(stduint physical_address) {
+	return ReleaseManagedPageReference(physical_address, false);
+}
+
+bool Memory::RetainManagedPageCache(stduint physical_address) {
+	return RetainManagedPageReference(physical_address, true);
+}
+
+bool Memory::ReleaseManagedPageCache(stduint physical_address) {
+	return ReleaseManagedPageReference(physical_address, true);
+}
+
+bool Memory::QueryManagedPage(stduint physical_address,
+	ManagedPageInfo& info) {
+	MutexLocal guard(&managed_page_records_mutex);
+	ManagedPageRecord* record = *FindManagedPageRecord(physical_address);
+	if (!record) return false;
+	info.physical_address = record->page->physical_address;
+	info.source = record->page->source;
+	info.mapping_refs = record->page->mapping_refs;
+	info.cache_refs = record->page->cache_refs;
+	return true;
+}
 
 bool Memory::MapPages(Paging& paging, stduint linear_address,
 	stduint physical_address, stduint length,

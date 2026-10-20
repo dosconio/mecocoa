@@ -390,7 +390,10 @@ bool ProcessBlock::UnmapVmaRange(stduint address, stduint length) {
 				Filesys::Write(file, (const void*)mglb(item.physical), write_length);
 			}
 		}
-		if (item.release_physical) free(item.physical);
+		if (item.release_physical &&
+			!Memory::ReleaseManagedPageMapping(_IMM(item.physical)))
+			plogerro("Missing managed VMA page at physical address %[x]",
+				item.physical);
 	}
 	KASSERT(released_file_count == released_file_capacity);
 	return true;
@@ -535,6 +538,11 @@ void* ProcessBlock::EnsureVmaPage(stduint address, VirtualMemoryAccess access) {
 			return nullptr;
 		}
 	}
+	if (!Memory::AdoptManagedPage(_IMM(physical), file_backed ?
+		ManagedPageSource::File : ManagedPageSource::Anonymous)) {
+		ReleaseVmaReadFile(read_file);
+		return nullptr;
+	}
 
 	void* result = nullptr;
 	{
@@ -563,7 +571,7 @@ void* ProcessBlock::EnsureVmaPage(stduint address, VirtualMemoryAccess access) {
 			break;
 		}
 	}
-	if (physical) mempool.deallocate(physical, 0x1000);
+	if (physical) Memory::ReleaseManagedPageMapping(_IMM(physical));
 	ReleaseVmaReadFile(read_file);
 	return result;
 }
@@ -582,21 +590,32 @@ void ProcessBlock::ReleaseLoadslices() {
 		const stduint begin = load_slices[i].address & ~_IMM(PAGE_SIZE - 1);
 		const stduint end = (load_slices[i].address + load_slices[i].length +
 			PAGE_SIZE - 1) & ~_IMM(PAGE_SIZE - 1);
+		bool slice_released = true;
 		for (stduint address = begin; address < end; address += PAGE_SIZE) {
 			void* physical;
+			bool unmapped = false;
 			{
 				SpinlockLocal guard(&vma_lock);
 				physical = paging[address];
 				if (physical != (void*)~_IMM0)
-					paging.Unmap(address, PAGE_SIZE);
+					unmapped = paging.Unmap(address, PAGE_SIZE);
 			}
 			if (physical != (void*)~_IMM0) {
+				if (!unmapped) {
+					slice_released = false;
+					plogerro("Failed to release ELF page at VA=%[x]", address);
+					continue;
+				}
 				RefreshVirtualAddress(address);
-				free(physical);
+				if (!Memory::ReleaseManagedPageMapping(_IMM(physical)))
+					plogerro("Missing managed ELF page at physical address %[x]",
+						physical);
 			}
 		}
-		load_slices[i].address = 0;
-		load_slices[i].length = 0;
+		if (slice_released) {
+			load_slices[i].address = 0;
+			load_slices[i].length = 0;
+		}
 	}
 	#else
 	for0a(i, load_slices) {
@@ -768,6 +787,9 @@ void operator delete(void* p) {
 	free(p);
 }
 void operator delete[](void* p) {
+	free(p);
+}
+void operator delete[](void* p, std::align_val_t) noexcept {
 	free(p);
 }
 void operator delete(void* ptr, stduint size) noexcept {

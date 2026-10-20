@@ -1385,6 +1385,11 @@ namespace {
 		VmciInvalidId,
 		VmciIpcPayloadCapacity,
 		VmciEndpointCapacity,
+		0,
+		VmciDoorbellCapacity,
+		VmciEventSubscriptionCapacity,
+		VmciQueuePairCapacity,
+		VmciQueuePairMaxQueueSize,
 	};
 	#endif
 
@@ -1437,7 +1442,17 @@ namespace {
 				request.context_id > VmciHostContextId &&
 				request.context_id != VmciInvalidId &&
 				request.max_payload == VmciIpcPayloadCapacity &&
-				request.endpoint_capacity == VmciEndpointCapacity) {
+				request.endpoint_capacity == VmciEndpointCapacity &&
+				(request.features & ~(VmciFeatureNotifications |
+					VmciFeatureEvents | VmciFeatureQueuePairs)) == 0 &&
+				(request.features & VmciFeatureEvents) != 0 &&
+				(request.features & VmciFeatureQueuePairs) != 0 &&
+				request.doorbell_capacity == VmciDoorbellCapacity &&
+				request.event_subscription_capacity ==
+					VmciEventSubscriptionCapacity &&
+				request.queue_pair_capacity == VmciQueuePairCapacity &&
+				request.queue_pair_max_queue_size ==
+					VmciQueuePairMaxQueueSize) {
 				vmci_driver_info = request;
 				vmci_driver_info.driver_tid = uint32(source);
 				response = vmci_driver_info;

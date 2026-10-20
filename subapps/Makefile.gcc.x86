@@ -40,6 +40,7 @@ all: $(BIN_DIR) \
 	$(BIN_DIR)/test \
 	$(BIN_DIR)/testudp \
 	$(BIN_DIR)/testtcp \
+	$(BIN_DIR)/testvmci \
 	$(BIN_DIR)/netinfo \
 	$(BIN_DIR)/paint \
 	$(BIN_DIR)/cube \
@@ -82,6 +83,10 @@ $(BIN_DIR)/testudp: subapps/testudp.cpp $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
 $(BIN_DIR)/testtcp: subapps/testtcp.cpp $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
 	@echo "MK testtcp"
 	$(MCCA_X86_CXX) $(MCCA_X86_CXXFLAGS) -o $@ subapps/testtcp.cpp $(MCCA_X86_LDLIBS)
+
+$(BIN_DIR)/testvmci: subapps/testvmci.cpp devdriv/vmhost/vmci.hpp $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
+	@echo "MK testvmci"
+	$(MCCA_X86_CXX) $(MCCA_X86_CXXFLAGS) -o $@ subapps/testvmci.cpp $(MCCA_X86_LDLIBS)
 
 $(BIN_DIR)/netinfo: subapps/netinfo.cpp $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
 	@echo "MK netinfo"
