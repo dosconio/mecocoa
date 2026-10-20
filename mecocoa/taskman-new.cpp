@@ -66,17 +66,24 @@ stduint Taskman::SetupStack(ProcessBlock* pb, ProcessBlock* parent, char** usr_a
 	count_and_size(usr_argv, argc);
 	String default_path_env;
 	String default_vrpath_env;
+	String default_volumepath_env;
 	if (use_default_env) {
-		const auto& vroot = Filesys::GetSystemVirtualRootPath();
-		if (vroot.getByteCount()) {
-			default_path_env = String::newFormat("PATH=/md0:%s/apps", vroot.reference());
-			default_vrpath_env = String::newFormat("VRPATH=%s", vroot.reference());
+		const auto& runtime_root = Filesys::GetSystemRuntimeRootPath();
+		if (runtime_root.getByteCount()) {
+			default_path_env = String::newFormat("PATH=/md0:%s/apps", runtime_root.reference());
+			default_vrpath_env = String::newFormat("VRPATH=%s", runtime_root.reference());
 		} else {
 			default_path_env = "PATH=/md0";
 		}
-		envc = default_vrpath_env.getByteCount() ? 4 : 3;
+		const auto& volume_root = Filesys::GetSystemVirtualRootPath();
+		if (volume_root.getByteCount())
+			default_volumepath_env = String::newFormat("VOLUMEPATH=%s", volume_root.reference());
+		envc = 3;
+		if (default_vrpath_env.getByteCount()) envc++;
+		if (default_volumepath_env.getByteCount()) envc++;
 		str_len += StrLength("?=0") + 1 + StrLength(default_path_env.reference()) + 1 + StrLength("USER=root") + 1;
 		if (default_vrpath_env.getByteCount()) str_len += default_vrpath_env.getByteCount() + 1;
+		if (default_volumepath_env.getByteCount()) str_len += default_volumepath_env.getByteCount() + 1;
 	} else {
 		count_and_size(usr_envp, envc);
 	}
@@ -111,8 +118,10 @@ stduint Taskman::SetupStack(ProcessBlock* pb, ProcessBlock* parent, char** usr_a
 
 	copy_strings(usr_argv, argc);
 	if (use_default_env) {
-		const char* defaults[4] = { "?=0", default_path_env.reference(), "USER=root", default_vrpath_env.reference() };
-		stduint default_count = default_vrpath_env.getByteCount() ? 4 : 3;
+		const char* defaults[5] = { "?=0", default_path_env.reference(), "USER=root", nullptr, nullptr };
+		stduint default_count = 3;
+		if (default_vrpath_env.getByteCount()) defaults[default_count++] = default_vrpath_env.reference();
+		if (default_volumepath_env.getByteCount()) defaults[default_count++] = default_volumepath_env.reference();
 		for (stduint i = 0; i < default_count; i++) {
 			char* dest = str_area;
 			StrCopy(dest, defaults[i]);
@@ -763,6 +772,12 @@ ProcessBlock* Taskman::Exet(stduint parent, rostr usr_fullpath, char** usr_argv,
 {
 	static char buf_fullpath[512];
 	auto current_pb = Locate(parent);
+	if (!current_pb || !current_pb->main_thread) return nullptr;
+	if (current_pb->thread_list_head != current_pb->main_thread ||
+		current_pb->main_thread->process_thread_next) {
+		plogerro("%s: multi-threaded exec is not supported", __FUNCIDEN__);
+		return nullptr;
+	}
 	StrCopyP(buf_fullpath, kernel_paging, usr_fullpath, current_pb->paging, 512);
 	vfs_dentry* current_cwd = nullptr;
 	{
@@ -799,52 +814,11 @@ ProcessBlock* Taskman::Exet(stduint parent, rostr usr_fullpath, char** usr_argv,
 	stduint new_sp = Taskman::SetupStack(current_pb, current_pb, usr_argv, usr_envp, (stduint)header.e_entry + load_bias, phdr_addr, header.e_phnum, header.e_phentsize);
 
 	// 2. Destroy Old Image
-	for (stduint i = 0; i < current_pb->vmas.Count(); i++) {
-		const auto& vma = current_pb->vmas[i];
-		if (vma.vm_type == VirtualMemoryAreaType::File && vma.vfile && (vma.vm_flags & PGPROP_writable)) {
-			for (stduint addr = vma.vm_start; addr < vma.vm_end; addr += 0x1000) {
-				void* phys_addr = current_pb->paging[addr];
-				if (phys_addr != (void*)~_IMM0) {
-					stduint file_offset = addr - vma.vm_start + vma.file_offset;
-					if (file_offset < vma.vfile->f_inode->i_size) {
-						stduint write_len = minof(_IMM(0x1000), vma.vfile->f_inode->i_size - file_offset);
-						vma.vfile->f_pos = file_offset;
-						Filesys::Write(vma.vfile, (const void*)mglb(phys_addr), write_len);
-					}
-				}
-			}
-		}
-		for (stduint addr = vma.vm_start; addr < vma.vm_end; addr += 0x1000) {
-			void* phys_addr = current_pb->paging[addr];
-			if (phys_addr != (void*)~_IMM0) {
-				if (vma.vm_type != VirtualMemoryAreaType::Device) {
-					free(phys_addr);
-				}
-			}
-		}
-		if (vma.vm_type == VirtualMemoryAreaType::File && vma.vfile) {
-			if (vma.vfile->f_inode) {
-				vma.vfile->f_inode->ref_count--;
-			}
-			Filesys::Close(vma.vfile);
-		}
+	if (!current_pb->ReleaseAllVmas()) {
+		plogerro("%s: failed to release old VMAs", __FUNCIDEN__);
+		return nullptr;
 	}
-	current_pb->vmas.Clear();
-
-	for0a(i, current_pb->load_slices) {
-		if (!current_pb->load_slices[i].length) continue;
-		stduint vstart = current_pb->load_slices[i].address & ~_IMM(PAGE_SIZE - 1);
-		stduint vend = (current_pb->load_slices[i].address + current_pb->load_slices[i].length + PAGE_SIZE - 1) & ~_IMM(PAGE_SIZE - 1);
-		for (stduint vaddr = vstart; vaddr < vend; vaddr += PAGE_SIZE) {
-			void* phy = current_pb->paging[vaddr];
-			if (phy != (void*)~_IMM0) {
-				free(phy);
-				current_pb->paging.Unmap(vaddr, PAGE_SIZE);
-			}
-		}
-		current_pb->load_slices[i].address = 0;
-		current_pb->load_slices[i].length = 0;
-	}
+	current_pb->ReleaseLoadslices();
 
 	stduint stack_norm_phy;
 	if (current_pb->main_thread->stack_lineaddr == current_pb->main_thread->stack_levladdr)
@@ -921,8 +895,10 @@ ProcessBlock* Taskman::Exet(stduint parent, rostr usr_fullpath, char** usr_argv,
 	{
 		extern Spinlock comm_lock;
 		SpinlockLocal guard(&comm_lock);
+		UnlinkWaitEntry(current_pb->main_thread);
 		current_pb->main_thread->unsolved_msg = nullptr;
 		current_pb->main_thread->recv_fo_whom = nullptr;
+		current_pb->main_thread->queue_wait_queuenext = nullptr;
 		current_pb->main_thread->send_to_whom = nullptr;
 		current_pb->main_thread->queue_send_queuehead = nullptr;
 		current_pb->main_thread->queue_send_queuenext = nullptr;

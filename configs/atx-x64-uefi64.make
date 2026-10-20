@@ -101,6 +101,10 @@ build: clean accm $(archdir)/kerdisk.fat $(ubinpath)/$(arch).img $(asmobjs) $(cp
 		prehost/$(arch)/$(arch).cpp \
 		$(uobjpath)/mcca-$(arch)/*.o \
 	# OUTDATED # prehost/$(arch)/script-adapt.sh ~/_obj/$(elf_kernel) $(ubinpath)/$(elf_kernel)
+# 	${MKDIR} $(ubinpath)/mecocoa/x64/apps
+# 	${MKDIR} $(ubinpath)/mecocoa/x64/drvs
+# 	${MKDIR} $(ubinpath)/mecocoa/x64/lib
+	cp $(uobjpath)/sapp-$(arch)/* $(ubinpath)/mecocoa/x64/apps/
 	@echo $(sudokey) | sudo -S mkdir -p $(mntdir)
 	@echo $(sudokey) | sudo -S mount -o loop $(archdir)/kerdisk.fat $(mntdir)
 	#

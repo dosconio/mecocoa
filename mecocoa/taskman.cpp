@@ -516,75 +516,19 @@ static void _Exit_Cleanup(stduint pid)
 	}
 	ppb->main_thread = nullptr;
 
-	auto getphy = [ppb](stduint vaddr) -> void* {
-	    #if CONFIG_ENABLE_MMU
-		return ppb->paging[vaddr];
-	    #else
-		return (void*)vaddr;
-	    #endif
-	};
-
-	// Release Segments
 	#if CONFIG_ENABLE_MMU
-	for0a(i, ppb->load_slices) {
-		if (!ppb->load_slices[i].length) continue;
-		stduint vstart = ppb->load_slices[i].address & ~_IMM(PAGE_SIZE - 1);
-		stduint vend = (ppb->load_slices[i].address + ppb->load_slices[i].length + PAGE_SIZE - 1) & ~_IMM(PAGE_SIZE - 1);
-		for (stduint vaddr = vstart; vaddr < vend; vaddr += PAGE_SIZE) {
-			void* phy = getphy(vaddr);
-			if (phy != (void*)~_IMM0) {
-				free(phy);
-				ppb->paging.Unmap(vaddr, PAGE_SIZE);
-			}
-		}
-		ppb->load_slices[i].address = 0;
-		ppb->load_slices[i].length = 0;
+	{
+		MutexLocal mapping_guard(&ppb->mutex_mapping);
+		if (!ppb->ReleaseAllVmas())
+			plogerro("Failed to release all VMAs for process %u", pid);
+		ppb->ReleaseLoadslices();
 	}
 	#else
-	// NoMMU: the whole image came from one mempool block, release it as a whole
-	for0a(i, ppb->load_slices) {
-		if (!ppb->load_slices[i].length) continue;
-		mempool.deallocate((void*)ppb->load_slices[i].address, ppb->load_slices[i].length);
-		ppb->load_slices[i].address = 0;
-		ppb->load_slices[i].length = 0;
-	}
+	ppb->ReleaseLoadslices();
 	#endif
-	// Heap
-	if (1) {
-		for (stduint i = 0; i < ppb->vmas.Count(); i++) {
-			const auto& vma = ppb->vmas[i];
-			if (vma.vm_type == VirtualMemoryAreaType::File && vma.vfile && (vma.vm_flags & PGPROP_writable)) {
-				for (stduint addr = vma.vm_start; addr < vma.vm_end; addr += 0x1000) {
-					void* phys_addr = getphy(addr);
-					if (phys_addr != (void*)~_IMM0) {
-						stduint file_offset = addr - vma.vm_start + vma.file_offset;
-						if (file_offset < vma.vfile->f_inode->i_size) {
-							stduint write_len = minof(_IMM(0x1000), vma.vfile->f_inode->i_size - file_offset);
-							vma.vfile->f_pos = file_offset;
-							Filesys::Write(vma.vfile, (const void*)mglb(phys_addr), write_len);
-						}
-					}
-				}
-			}
-			for (stduint addr = vma.vm_start; addr < vma.vm_end; addr += 0x1000) {
-				void* phys_addr = getphy(addr);
-				if (phys_addr != (void*)~_IMM0) {
-					if (vma.vm_type != VirtualMemoryAreaType::Device) {
-						free(phys_addr);
-					}
-				}
-			}
-			if (vma.vm_type == VirtualMemoryAreaType::File && vma.vfile) {
-				if (vma.vfile->f_inode) {
-					vma.vfile->f_inode->ref_count--;
-				}
-				Filesys::Close(vma.vfile);
-			}
-		}
-		ppb->vmas.Clear();
-	}
 	// Release Heap/Paging
 	#if CONFIG_ENABLE_MMU
+	Memory::ReleasePagingMappings(ppb->paging);
 	if (!ppb->ring) {
 		ppb->paging.root_level_page = nullptr;
 	}
@@ -606,79 +550,122 @@ void Taskman::Idle() {
 	loop HALT();
 }
 
-static bool DeliverWaitResultAtomically(ProcessBlock* pparent, stduint child_pid, stduint exit_status) {
+static bool DeliverWaitResultAtomically(ProcessBlock* pparent, stduint child_pid,
+	stduint exit_status, bool& unblock_recv) {
+	unblock_recv = false;
 	if (!pparent || !pparent->main_thread) return false;
 	ProcessBlock* taskman_pb = Taskman::Locate(Task_TaskMan);
 	if (!taskman_pb || !taskman_pb->main_thread) return false;
 
 	ThreadBlock* parent_th = pparent->main_thread;
 	ThreadBlock* taskman_th = taskman_pb->main_thread;
-
-	bool unblock_wait = false;
-	bool unblock_recv = false;
+	stduint args[2] = { child_pid, exit_status };
+	bool direct_receive = false;
+	bool message_in_kernel = false;
+	CommMsg* pending_message = nullptr;
 
 	{
 		extern Spinlock comm_lock;
 		SpinlockLocal guard(&comm_lock);
-
-		if (!(parent_th->block_reason & ThreadBlock::BlockReason::BR_Waiting)) {
-			return false;
-		}
-		stduint args[2] = { child_pid, exit_status };
-
-		if (parent_th->block_reason & ThreadBlock::BlockReason::BR_RecvMsg) {
+		if (!(parent_th->block_reason & ThreadBlock::BlockReason::BR_Waiting)) return false;
+		direct_receive = parent_th->block_reason & ThreadBlock::BlockReason::BR_RecvMsg;
+		if (direct_receive) {
 			if (!(parent_th->recv_fo_whom == taskman_th ||
-				(stduint)parent_th->recv_fo_whom == ANYPROC)) {
-				return false;
+				(stduint)parent_th->recv_fo_whom == ANYPROC)) return false;
+			pending_message = parent_th->unsolved_msg;
+			message_in_kernel = parent_th->unsolved_msg_from_kernel;
+			if (!pending_message) return false;
+		}
+	}
+
+	if (direct_receive) {
+		CommMsg prepared_message = {};
+		#if CONFIG_ENABLE_MMU
+		MutexLocal mapping_guard(&pparent->mutex_mapping);
+		if (!message_in_kernel &&
+			!PrepareUserBuffer(pparent, _IMM(pending_message),
+				sizeof(prepared_message), true)) return false;
+		Paging& message_paging = message_in_kernel ? kernel_paging : pparent->paging;
+		if (MemCopyP(&prepared_message, kernel_paging, pending_message,
+			message_paging, sizeof(prepared_message)) != sizeof(prepared_message)) return false;
+		const stduint prepared_length = minof((stduint)sizeof(args),
+			prepared_message.data.length);
+		if (prepared_length && !message_in_kernel &&
+			!PrepareUserBuffer(pparent, prepared_message.data.address,
+				prepared_length, true)) return false;
+		#else
+		prepared_message = *pending_message;
+		const stduint prepared_length = minof((stduint)sizeof(args),
+			prepared_message.data.length);
+		#endif
+
+		// User buffers are resident before comm_lock; raw copies below cannot acquire vma_lock.
+		{
+			extern Spinlock comm_lock;
+			SpinlockLocal guard(&comm_lock);
+			if (!(parent_th->block_reason & ThreadBlock::BlockReason::BR_Waiting) ||
+				!(parent_th->block_reason & ThreadBlock::BlockReason::BR_RecvMsg) ||
+				!(parent_th->recv_fo_whom == taskman_th ||
+					(stduint)parent_th->recv_fo_whom == ANYPROC) ||
+				parent_th->unsolved_msg != pending_message ||
+				parent_th->unsolved_msg_from_kernel != message_in_kernel) return false;
+
+			CommMsg current_message = {};
+			#if CONFIG_ENABLE_MMU
+			if (MemCopyP(&current_message, kernel_paging, pending_message,
+				message_paging, sizeof(current_message)) != sizeof(current_message)) return false;
+			#else
+			current_message = *pending_message;
+			#endif
+			if (current_message.data.address != prepared_message.data.address ||
+				current_message.data.length != prepared_message.data.length) return false;
+			if (prepared_length) {
+				#if CONFIG_ENABLE_MMU
+				if (MemCopyP((void*)current_message.data.address, message_paging,
+					args, kernel_paging, prepared_length) != prepared_length) return false;
+				#else
+				MemCopyN((void*)current_message.data.address, args, prepared_length);
+				#endif
 			}
-
-			auto msg_to = parent_th->unsolved_msg_from_kernel
-				? parent_th->unsolved_msg
-				: (CommMsg*)SeekAddress(parent_th->parent_process, _IMM(parent_th->unsolved_msg), false);
-			if (!msg_to) return false;
-
-			stduint leng = minof((stduint)sizeof(args), msg_to->data.length);
-			if (leng) {
-				MccaMemCopyP(
-					(void*)msg_to->data.address, parent_th->parent_process, parent_th->unsolved_msg_from_kernel,
-					args, nullptr, true,
-					leng);
-			}
-			msg_to->type = 0;
-			msg_to->src = taskman_th->tid;
-
+			current_message.type = 0;
+			current_message.src = taskman_th->tid;
+			#if CONFIG_ENABLE_MMU
+			if (MemCopyP(pending_message, message_paging, &current_message,
+				kernel_paging, sizeof(current_message)) != sizeof(current_message)) return false;
+			#else
+			*pending_message = current_message;
+			#endif
 			UnlinkWaitEntry(parent_th);
 			parent_th->unsolved_msg = nullptr;
 			parent_th->recv_fo_whom = nullptr;
 			pparent->wait_for_pid = 0;
-			unblock_wait = true;
 			unblock_recv = true;
 		}
-		else {
-			if (parent_th->async_messages.Count() >= LIMIT_THREAD_AMSG) {
-				plogerro("Too many async messages");
-				return false;
-			}
-			AsyncCommMsg* amsg = new AsyncCommMsg();
-			if (!amsg) return false;
-			byte* payload = new byte[sizeof(args)];
-			if (!payload) {
-				delete amsg;
-				return false;
-			}
-			MemCopyN(payload, args, sizeof(args));
-			amsg->msg.data.address = (stduint)payload;
-			amsg->msg.data.length = sizeof(args);
-			amsg->msg.type = 0;
-			amsg->msg.src = taskman_th->tid;
-			parent_th->async_messages.Append(amsg);
-			pparent->wait_for_pid = 0;
-			unblock_wait = true;
-		}
 	}
-
-	if (unblock_wait) parent_th->Unblock(ThreadBlock::BlockReason::BR_Waiting);
-	if (unblock_recv) parent_th->Unblock(ThreadBlock::BlockReason::BR_RecvMsg);
+	else {
+		extern Spinlock comm_lock;
+		SpinlockLocal guard(&comm_lock);
+		if (!(parent_th->block_reason & ThreadBlock::BlockReason::BR_Waiting) ||
+			(parent_th->block_reason & ThreadBlock::BlockReason::BR_RecvMsg)) return false;
+		if (parent_th->async_messages.Count() >= LIMIT_THREAD_AMSG) {
+			plogerro("Too many async messages");
+			return false;
+		}
+		AsyncCommMsg* amsg = new AsyncCommMsg();
+		if (!amsg) return false;
+		byte* payload = new byte[sizeof(args)];
+		if (!payload) {
+			delete amsg;
+			return false;
+		}
+		MemCopyN(payload, args, sizeof(args));
+		amsg->msg.data.address = (stduint)payload;
+		amsg->msg.data.length = sizeof(args);
+		amsg->msg.type = 0;
+		amsg->msg.src = taskman_th->tid;
+		parent_th->async_messages.Append(amsg);
+		pparent->wait_for_pid = 0;
+	}
 	return true;
 }
 
@@ -841,8 +828,13 @@ bool Taskman::Exit(ProcessBlock* p, stdsint exit_code)
 		NotifyTaskLifecycle(parent_pid, pid, exit_code);
 	}
 	else if (parent_active && pparent->isWaiting() && (pparent->wait_for_pid == 0 || pparent->wait_for_pid == pid)) {
-		if (DeliverWaitResultAtomically(pparent, pid, _IMM(exit_code))) {
+		bool unblock_recv = false;
+		if (DeliverWaitResultAtomically(pparent, pid, _IMM(exit_code), unblock_recv)) {
+			ThreadBlock* parent_th = pparent->main_thread;
 			_Exit_Cleanup(pid); // Die completely
+			parent_th->Unblock(ThreadBlock::BlockReason::BR_Waiting);
+			if (unblock_recv)
+				parent_th->Unblock(ThreadBlock::BlockReason::BR_RecvMsg);
 		}
 		else {
 			p->state = PBS::Hanging; // Keep zombie if the WAIT reply cannot be delivered atomically

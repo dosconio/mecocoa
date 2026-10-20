@@ -67,20 +67,20 @@ build: lib accm prehost/$(arch)/fatvhd.ignore $(cppobjs) build_util build_drvs
 
 	# --- CD ---
 	mkdir -p $(ubinpath)/mecocoa/boot/grub
-	mkdir -p $(ubinpath)/mecocoa/apps
-	mkdir -p $(ubinpath)/mecocoa/drvs
+	mkdir -p $(ubinpath)/mecocoa/x86/apps
+	mkdir -p $(ubinpath)/mecocoa/x86/drvs
 	mkdir -p $(ubinpath)/mecocoa/demo
 	mkdir -p $(ubinpath)/mecocoa/font
-	mkdir -p $(ubinpath)/mecocoa/lib
-	-rm -rf  $(ubinpath)/mecocoa/apps/*
+	mkdir -p $(ubinpath)/mecocoa/x86/lib
+	-rm -f  $(ubinpath)/mecocoa/x86/apps/*
 	-rm -rf $(iso_kernel)
 	cp configs/grub-x86.txt $(ubinpath)/mecocoa/boot/grub/grub.cfg
 	cp $(elf_kernel) $(ubinpath)/mecocoa/boot/
-	cp $(uobjpath)/sapp-$(arch)/*    $(ubinpath)/mecocoa/apps/
+	cp $(uobjpath)/sapp-$(arch)/*    $(ubinpath)/mecocoa/x86/apps/
 	# echo "ようこそ，メココAの世界へ！" | sudo tee "$(ubinpath)/mecocoa/ciallo.txt" > /dev/null
 	cp $(ulibpath)/../.picture/phina.head.bmp    $(ubinpath)/mecocoa/demo/
 	cp depends/fonts/simsun.ttf                  $(ubinpath)/mecocoa/font/
-	cp accmlib/sysroot/usr/lib/i686-mcca/*.so    $(ubinpath)/mecocoa/lib/
+	cp accmlib/sysroot/usr/lib/i686-mcca/*.so    $(ubinpath)/mecocoa/x86/lib/
 	cd $(ubinpath) && grub-mkrescue -o mcca.iso mecocoa
 
 	# --- write out ---

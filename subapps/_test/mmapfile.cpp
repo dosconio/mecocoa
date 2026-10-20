@@ -4,12 +4,19 @@
 #include "unistd.h"
 #include <c/ISO_IEC_STD/signal.h>
 #include <sys/mman.h>
+#include <sys/wait.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 using namespace uni;
 
 int main(int argc, char** argv)
 {
+	if (argc > 1 && argv[1][0] == 'e') {
+		outsfmt("Success: exec replacement image started.\n\r");
+		return 0;
+	}
+	const bool fault_mode = argc > 1 && argv[1][0] == 'f';
 
 	#if 1 // MMAP FILE
 	{
@@ -307,7 +314,7 @@ int main(int argc, char** argv)
 			return -1;
 		}
 		outsfmt("Success: Read-only MMAP is readable and rejected a kernel write!\n\r");
-		if (argc > 1) {
+		if (fault_mode) {
 			outsfmt("Step 10 fault check: writing to read-only MMAP; SIGSEGV is expected.\n\r");
 			readonly_ptr[0] = 'X';
 			outsfmt("Error: Direct write to read-only MMAP unexpectedly succeeded!\n\r");
@@ -317,11 +324,107 @@ int main(int argc, char** argv)
 			outsfmt("Error: Read-only UMAP failed!\n\r");
 			return -1;
 		}
+
+		// 11. Repeated mapping and unmapping must not leak VMA state or file references.
+		for (int iteration = 0; iteration < 32; iteration++) {
+			fd = sysopen(test_file);
+			if (fd < 0) return -1;
+			void* repeated_map = mmap(nullptr, 4096, PROT_READ | PROT_WRITE,
+				MAP_SHARED, fd, 0);
+			close(fd);
+			if (repeated_map == MAP_FAILED || ((char*)repeated_map)[0] != 'W' ||
+				munmap(repeated_map, 4096) != 0) {
+				outsfmt("Error: Repeated MMAP/UMAP failed at iteration %d!\n\r",
+					iteration);
+				return -1;
+			}
+		}
+		outsfmt("Success: Repeated MMAP/UMAP completed 32 times.\n\r");
+
+		// 12. A child exit must release an outstanding mapping and write it back.
+		pid_t child = fork();
+		if (child < 0) {
+			outsfmt("Error: Fork for exit cleanup test failed!\n\r");
+			return -1;
+		}
+		if (!child) {
+			int child_fd = sysopen(test_file);
+			void* child_map = child_fd < 0 ? MAP_FAILED :
+				mmap(nullptr, 4096, PROT_READ | PROT_WRITE,
+					MAP_SHARED, child_fd, 8192);
+			if (child_fd >= 0) close(child_fd);
+			if (child_map == MAP_FAILED) _exit(2);
+			((char*)child_map)[1] = 'X';
+			_exit(0);
+		}
+		int child_status = -1;
+		if (wait(&child_status) != child || child_status != 0) {
+			outsfmt("Error: Exit cleanup child failed with status %d!\n\r",
+				child_status);
+			return -1;
+		}
+		fd = sysopen(test_file);
+		if (fd < 0 || lseek(fd, 8192, SEEK_SET) != 8192) return -1;
+		char lifecycle_verify[3] = {};
+		int lifecycle_read = read(fd, lifecycle_verify, sizeof(lifecycle_verify));
+		close(fd);
+		if (lifecycle_read != sizeof(lifecycle_verify) ||
+			lifecycle_verify[0] != 't' || lifecycle_verify[1] != 'X') {
+			outsfmt("Error: Process exit did not write back its mapping!\n\r");
+			return -1;
+		}
+		outsfmt("Success: Process exit released and wrote back its mapping.\n\r");
+
+		// 13. Exec must release the old image mappings before installing the new image.
+		child = fork();
+		if (child < 0) {
+			outsfmt("Error: Fork for exec cleanup test failed!\n\r");
+			return -1;
+		}
+		if (!child) {
+			int child_fd = sysopen(test_file);
+			void* child_map = child_fd < 0 ? MAP_FAILED :
+				mmap(nullptr, 4096, PROT_READ | PROT_WRITE,
+					MAP_SHARED, child_fd, 8192);
+			if (child_fd >= 0) close(child_fd);
+			if (child_map == MAP_FAILED) _exit(3);
+			((char*)child_map)[2] = 'Y';
+			const char* vroot = getenv("VRPATH");
+			char exec_path[256];
+			int exec_path_length = vroot && *vroot ?
+				snprintf(exec_path, sizeof(exec_path), "%s/apps/test_mmapfile", vroot) : -1;
+			if (exec_path_length < 0 || (stduint)exec_path_length >= sizeof(exec_path)) {
+				outsfmt("Error: Cannot resolve test_mmapfile through VRPATH!\n\r");
+				_exit(4);
+			}
+			char* exec_argv[] = { (char*)"test_mmapfile",
+				(char*)"exec-child", nullptr };
+			int exec_result = execv(exec_path, exec_argv);
+			outsfmt("Error: execv(%s) returned %d!\n\r", exec_path, exec_result);
+			_exit(4);
+		}
+		child_status = -1;
+		if (wait(&child_status) != child || child_status != 0) {
+			outsfmt("Error: Exec cleanup child failed with status %d!\n\r",
+				child_status);
+			return -1;
+		}
+		fd = sysopen(test_file);
+		if (fd < 0 || lseek(fd, 8192, SEEK_SET) != 8192) return -1;
+		lifecycle_read = read(fd, lifecycle_verify, sizeof(lifecycle_verify));
+		close(fd);
+		if (lifecycle_read != sizeof(lifecycle_verify) ||
+			lifecycle_verify[0] != 't' || lifecycle_verify[1] != 'X' ||
+			lifecycle_verify[2] != 'Y') {
+			outsfmt("Error: Exec did not write back its old mapping!\n\r");
+			return -1;
+		}
+		outsfmt("Success: Exec released and wrote back its old mapping.\n\r");
 		outsfmt("=== File MMAP Test ALL PASSED! ===\n\r");
 
-		// 11. Clean up the temporary test file
+		// 14. Clean up the temporary test file
 		sys_removefil(test_file);
-		outsfmt("Step 11: Cleaned up test file.\n\r");
+		outsfmt("Step 14: Cleaned up test file.\n\r");
 	}
 	#endif
 

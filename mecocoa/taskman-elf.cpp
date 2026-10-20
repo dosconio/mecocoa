@@ -280,9 +280,9 @@ bool _Taskman_Resolve_Interp(BlockTrait* source, const ELF_Header_t& header, byt
 		source->Read(ph.p_offset, interp_buf.reflect(), read_sz, block_buffer);
 
 		String real_interp_path;
-		const auto& vroot = Filesys::GetSystemVirtualRootPath();
-		if (vroot.getByteCount() > 0) {
-			real_interp_path = String::newFormat("%s%s", vroot.reference(), interp_buf.reference());
+		const auto& runtime_root = Filesys::GetSystemRuntimeRootPath();
+		if (runtime_root.getByteCount() > 0) {
+			real_interp_path = String::newFormat("%s%s", runtime_root.reference(), interp_buf.reference());
 		} else {
 			real_interp_path = interp_buf;
 		}

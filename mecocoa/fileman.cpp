@@ -728,15 +728,15 @@ static constexpr stduint _usr_app_retry_limit = 25;
 static stduint _usr_app_retry_count = 0;
 
 static void _TryStartUserApp() {
-	const auto& vroot = Filesys::GetSystemVirtualRootPath();
-	if (!vroot.getByteCount()) {
+	const auto& runtime_root = Filesys::GetSystemRuntimeRootPath();
+	if (!runtime_root.getByteCount()) {
 		if (++_usr_app_retry_count <= _usr_app_retry_limit) {
 			(void)Systimex::AppendDriverMessage(_usr_app_retry_delay, Task_FileSys, _IMM(FilemanMsg::TEST));
 		}
-		else plogerro("[Fileman] no virtual root, the user app is not started");
+		else plogerro("[Fileman] no runtime root, the user app is not started");
 		return;
 	}
-	String path = String::newFormat("%s/apps-ac7m/ribbon", vroot.reference());
+	String path = String::newFormat("%s/ac7m/apps/ribbon", runtime_root.reference());
 	ProcessBlock* pb = Taskman::CreateFile(path.reference(), RING_U, Task_Init, nullptr, false);
 	if (!pb) {
 		plogwarn("[Fileman] Failed to start ribbon.");

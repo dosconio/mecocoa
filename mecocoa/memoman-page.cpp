@@ -1014,8 +1014,7 @@ bool Memory::BuildInitialPagePlan(stduint boot_magic, const void* boot_info,
 	#endif
 }
 
-bool Memory::MapInitialPagePlan(Paging& paging,
-	const InitialPageRegion* plan, stduint plan_count) {
+bool Memory::MapInitialPagePlan(Paging& paging, const InitialPageRegion* plan, stduint plan_count) {
 	if (!paging.root_level_page ||
 		!map_initial_page_regions(paging, plan, plan_count)) return false;
 	#if _MCCA == 0x8632

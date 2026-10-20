@@ -23,6 +23,7 @@ file_system_type* registered_filesystems = nullptr;
 
 namespace uni {
 	String Filesys::system_virtual_root_path = (const char *)NULL;
+	String Filesys::system_runtime_root_path = (const char *)NULL;
 
 	static vfs_super_block* super_blocks = nullptr;
 	static vfs_dentry* vfs_root = nullptr; // Global root directory
@@ -972,7 +973,12 @@ bool Filesys::MountFilesys(FilesysTrait* fs, file_system_type* type, const char*
 		String check_path = String::newFormat("%s/.mcca.root", target_path);
 		if (_Index_unlocked(check_path.reference(), nullptr) != nullptr) {
 			system_virtual_root_path = target_path;
-			ploginfo("[VFS] Detected .mcca.root, set virtual root: %s", target_path);
+			#ifdef ARCH_NAME
+			system_runtime_root_path = String::newFormat("%s/" ARCH_NAME, target_path);
+			#else
+			system_runtime_root_path = target_path;
+			#endif
+			ploginfo("[VFS] Detected .mcca.root, set virtual root: %s, runtime root: %s", target_path, system_runtime_root_path.reference());
 		}
 	}
 	
@@ -1704,8 +1710,8 @@ stduint DevFs::readfl(void* fil_handler, Slice file_slice, byte* dst) {
 	while (bytes_read < file_slice.length) {
 		uni::Pair<byte, byte> pair;
 		if (!input_queue->Dequeue(pair)) break;
-		if (pair.first & _VTTY_MASK_INN_UP) continue;
-		int ch = pair.first & _VTTY_MASK_INN_CH;
+		if (pair.second && (pair.first & _VTTY_MASK_INN_UP)) continue;
+		int ch = pair.second ? (pair.first & _VTTY_MASK_INN_CH) : pair.first;
 		if (!ch) continue;
 		if (ch == '\b' || ch == 0x7F) {
 			if (bytes_read > 0) {

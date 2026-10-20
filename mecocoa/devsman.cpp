@@ -13,6 +13,7 @@
 #endif
 #if (_MCCA & 0xFF00) == 0x8600
 #include "../include/devsman-storage.hpp"
+#include "../devdriv/vmhost/vmci.hpp"
 #include "c/proctrl/IAx86_64.ext.h"
 #include "c/proctrl/IAx86_64.msr.h"
 #endif
@@ -1337,6 +1338,8 @@ namespace {
 	#if (_MCCA & 0xFF00) == 0x8600
 	static_assert(sizeof(StorageDriverInfo) <= sizeof(DevsmanServicePayload),
 		"StorageDriverInfo exceeds Devsman receive buffer");
+	static_assert(sizeof(VmciDriverInfo) <= sizeof(DevsmanServicePayload),
+		"VmciDriverInfo exceeds Devsman receive buffer");
 	#endif
 
 	struct DriverProcessRecord {
@@ -1374,6 +1377,16 @@ namespace {
 	constexpr uint32 DriverRestartLimit = 0;
 	uni::Vector<DriverProcessRecord> driver_processes;
 	bool driver_directory_ready = false;
+	#if (_MCCA & 0xFF00) == 0x8600
+	VmciDriverInfo vmci_driver_info = {
+		VmciProtocolVersion,
+		int32(VmciStatus::Unavailable),
+		0,
+		VmciInvalidId,
+		VmciIpcPayloadCapacity,
+		VmciEndpointCapacity,
+	};
+	#endif
 
 	void CopyDriverText(char* output, stduint capacity, const char* input) {
 		if (!output || !capacity) return;
@@ -1393,6 +1406,54 @@ namespace {
 		}
 		return nullptr;
 	}
+
+	#if (_MCCA & 0xFF00) == 0x8600
+	void ClearVmciDriver(stduint driver_tid) {
+		if (vmci_driver_info.driver_tid != driver_tid) return;
+		vmci_driver_info.status = int32(VmciStatus::Unavailable);
+		vmci_driver_info.driver_tid = 0;
+		vmci_driver_info.context_id = VmciInvalidId;
+	}
+
+	bool IsVmciDriver(stduint source) {
+		auto* node = Devsman::FindOwnedNode(source);
+		return node && node->fields.vendor_id == 0x15ADu &&
+			node->fields.device_id == 0x0740u;
+	}
+
+	void DispatchVmciDiscovery(stduint type, stduint source,
+		const DevsmanServicePayload& payload) {
+		if (type == _IMM(VmciMsg::DriverAttach)) {
+			VmciDriverInfo request = {};
+			MemCopyN(&request, payload.data, sizeof(request));
+			VmciDriverInfo response = vmci_driver_info;
+			response.status = int32(VmciStatus::InvalidArgument);
+			response.driver_tid = 0;
+			if (!IsVmciDriver(source)) {
+				response.status = int32(VmciStatus::AccessDenied);
+			}
+			else if (request.version == VmciProtocolVersion &&
+				request.status == int32(VmciStatus::Success) &&
+				request.context_id > VmciHostContextId &&
+				request.context_id != VmciInvalidId &&
+				request.max_payload == VmciIpcPayloadCapacity &&
+				request.endpoint_capacity == VmciEndpointCapacity) {
+				vmci_driver_info = request;
+				vmci_driver_info.driver_tid = uint32(source);
+				response = vmci_driver_info;
+			}
+			if (syssend_async(source, &response, sizeof(response), type)) {
+				plogwarn("[Devsman] VMCI attach reply failed tid=%u", source);
+			}
+			return;
+		}
+
+		if (syssend_async(source, &vmci_driver_info,
+			sizeof(vmci_driver_info), type)) {
+			plogwarn("[Devsman] VMCI lookup reply failed tid=%u", source);
+		}
+	}
+	#endif
 
 	bool HasMatchingPciDevice(DeviceNode* node, const PciRingDriverMatchEntry& entry) {
 		for (auto* crt = node; crt; crt = reinterpret_cast<DeviceNode*>(crt->link.next)) {
@@ -1484,10 +1545,10 @@ namespace {
 		dirent_t entries[drv_batch_count];
 		auto* current = Taskman::CurrentTB();
 		if (!current || !current->parent_process) return false;
-		const auto& vroot = Filesys::GetSystemVirtualRootPath();
-		if (!vroot.getByteCount()) return false;
+		const auto& runtime_root = Filesys::GetSystemRuntimeRootPath();
+		if (!runtime_root.getByteCount()) return false;
 
-		String drv_dir_str = String::newFormat("%s/drvs", vroot.reference());
+		String drv_dir_str = String::newFormat("%s/drvs", runtime_root.reference());
 		const char* drv_dir = drv_dir_str.reference();
 		stdsint fd = -1;
 		struct {
@@ -1565,6 +1626,7 @@ namespace {
 		auto* record = FindDriverProcess(event.pid);
 		#if (_MCCA & 0xFF00) == 0x8600
 		Powercall::StorageAdapter::DriverExited(event.pid);
+		ClearVmciDriver(event.pid);
 		#endif
 		const stduint released = ReleaseDriverBindings(Devsman::Root(), event.pid, event.exit_status);
 		ploginfo("[Devsman] driver exited pid=%u status=%d devices=%u",
@@ -1677,6 +1739,10 @@ namespace {
 					if (syssend_async(Task_FileSys, &node, sizeof(node), _IMM(FilemanMsg::STORAGE_READY)))
 						plogwarn("[Devsman] storage mount notice failed tid=%u", source);
 				}
+			}
+			else if (type == _IMM(VmciMsg::DriverAttach) ||
+				type == _IMM(VmciMsg::DriverLookup)) {
+				DispatchVmciDiscovery(type, source, payload);
 			}
 			#endif
 			#if _MCCA == 0x8664

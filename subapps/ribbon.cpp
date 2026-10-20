@@ -24,8 +24,9 @@ static void ScaleImage(const Color* src, stduint src_w, stduint src_h,
 }
 
 static void TryLoadWallpaper(Size2 target_screen) {
-	// VRPATH is absent when the virtual root was not mounted yet at exec time, hence the literal probes below
-	const char* vroot = getenv("VRPATH");
+	// VOLUMEPATH is absent when the virtual root was not mounted yet at exec time, hence the literal probes below
+	const char* vroot = getenv("VOLUMEPATH");
+	if (!vroot || !*vroot) vroot = getenv("VRPATH");
 	char vroot_wallpaper[256];
 	rostr kWallpaperPaths[3];
 	stduint path_count = 0;

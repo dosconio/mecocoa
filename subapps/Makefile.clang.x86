@@ -30,7 +30,7 @@ apps=\
 	$(BIN_DIR)/testso \
 	$(BIN_DIR)/testpie \
 	$(BIN_DIR)/test_mmapfile \
-	$(ubinpath)/mecocoa/lib/ld-mcca.so
+	$(ubinpath)/mecocoa/x86/lib/ld-mcca.so
 
 # x86 has no separate libm: the math bridge is part of libc.a
 MCCA_LIBM =
@@ -55,7 +55,7 @@ $(BIN_DIR)/testso: subapps/testso.cpp $(MCCA_CRT0) $(MCCA_LIBC_SO)
 	ld -m elf_i386 -o $@ $(MCCA_CRT0) $(uobjpath)/testso-dyn.o $(MCCA_LIBC_SO) \
 		--allow-shlib-undefined --dynamic-linker=/lib/ld-mcca.so -z noexecstack
 
-$(ubinpath)/mecocoa/lib/ld-mcca.so: subapps/dynamic/dynamic.cpp $(MCCA_CRT0) $(MCCA_LIBC)
+$(ubinpath)/mecocoa/x86/lib/ld-mcca.so: subapps/dynamic/dynamic.cpp $(MCCA_CRT0) $(MCCA_LIBC)
 	@echo "MK ld-mcca.so (Dummy Interpreter)"
 	@mkdir -p $(dir $@)
 	$(MCCA_CXX) $(MCCA_CXXFLAGS) -o $@ $< $(MCCA_LDLIBS) -Wl,--image-base=0x40000000

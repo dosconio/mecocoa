@@ -140,6 +140,12 @@ void mpumap_task(ThreadBlock* tb);// MPU regions 1 and 2 follow the running task
 
 extern "C" void register_interrupt_handler(stduint irq_id, Handler_t handler);
 
+#if _MCCA == 0x8632
+#define ARCH_NAME "x86"
+#elif _MCCA == 0x8664
+#define ARCH_NAME "x64"
+#endif
+
 //
 #endif // MECOCOA_HPP_
 

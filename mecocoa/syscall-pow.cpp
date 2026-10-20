@@ -67,6 +67,7 @@ namespace {
 		uint16 delivery_flags = DeviceEventFlag_None;
 		uint8 vector = 0;
 		uint8 irq_line = 0xFF;
+		uint8 msi_capability = 0;
 		bool level_triggered = false;
 		bool active_low = false;
 		bool shareable = false;
@@ -249,6 +250,31 @@ static PwcallDeviceIrqBinding* PwcallFindFreeIrqBinding() {
 		if (!pwcall_irq_bindings[i].active) return &pwcall_irq_bindings[i];
 	}
 	return nullptr;
+}
+
+static uint8 PwcallFindPciMsiCapability(const uni::PCI::Device& dev) {
+	uni::PCI pci;
+	uint8 capability_address = uint8(uni::PCI::read_config_register(dev, 0x34));
+	for0(i, 48) {
+		if (capability_address < 0x40 || (capability_address & 3u)) break;
+		const auto capability = pci.read_capability_header(dev, capability_address);
+		if (capability.bits.cap_id == pci.kCapabilityMSI) return capability_address;
+		if (!capability.bits.next_ptr || capability.bits.next_ptr == capability_address) break;
+		capability_address = capability.bits.next_ptr;
+	}
+	return 0;
+}
+
+static void PwcallDisablePciMsi(DeviceNode* node, uint8 capability_address) {
+	if (!node || !capability_address ||
+		DeviceNodeType(node->fields.node_type) != DeviceNodeType::PciDevice) return;
+	uni::PCI::Device dev{};
+	dev.bus = node->fields.pci_bus;
+	dev.device = node->fields.pci_device;
+	dev.function = node->fields.pci_function;
+	uint32 control = uni::PCI::read_config_register(dev, capability_address);
+	control &= ~(1u << 16);
+	uni::PCI::write_config_register(dev, capability_address, control);
 }
 
 static DeviceEvent PwcallMakeDeviceInterruptEvent(const PwcallDeviceIrqBinding& binding,
@@ -462,6 +488,21 @@ static bool PwcallBindDeviceInterrupt(ProcessBlock* process, stduint device_hand
 	const bool pci = DeviceNodeType(node->fields.node_type) == DeviceNodeType::PciDevice;
 	const bool using_ioapic = IC.getType() != 0;
 	if (pci && !using_ioapic) return false;
+	uni::PCI::Device pci_device{};
+	uint8 msi_capability = 0;
+	uint8 target_lapic_id = 0;
+	if (pci) {
+		pci_device.bus = node->fields.pci_bus;
+		pci_device.device = node->fields.pci_device;
+		pci_device.function = node->fields.pci_function;
+		const stduint cpu_id = Taskman::getID();
+		auto* percore = cpu_id < PCU_CORES_MAX ? Taskman::PCU_CORES_PERCORE[cpu_id] : nullptr;
+		if (percore && percore->lapic_id < LAPIC_ID_MAP_SIZE) {
+			target_lapic_id = uint8(percore->lapic_id);
+			msi_capability = PwcallFindPciMsiCapability(pci_device);
+		}
+	}
+	const bool use_msi = msi_capability != 0;
 	const uint8 requested_vector = pci ? 0 : uint8(irq->start);
 	const uint8 line = pci ? uint8(irq->start) : PwcallLegacyVectorToLine(requested_vector);
 	if ((!using_ioapic && line >= 16) || (using_ioapic && line >= 24)) return false;
@@ -483,7 +524,7 @@ static bool PwcallBindDeviceInterrupt(ProcessBlock* process, stduint device_hand
 		}
 		if (owner_binding_count >= DeviceEventQueue::Capacity) return false;
 
-		auto* line_binding = PwcallFindLineBinding(line);
+		auto* line_binding = use_msi ? nullptr : PwcallFindLineBinding(line);
 		if (line_binding) {
 			if (!line_binding->shareable || !shareable ||
 				line_binding->level_triggered != level_triggered ||
@@ -504,7 +545,7 @@ static bool PwcallBindDeviceInterrupt(ProcessBlock* process, stduint device_hand
 
 		auto* slot = PwcallFindFreeIrqBinding();
 		if (!slot) return false;
-		PwcallSetInterruptLineMask(line, true);
+		if (!use_msi) PwcallSetInterruptLineMask(line, true);
 
 		auto& binding = *slot;
 		binding = {};
@@ -517,13 +558,14 @@ static bool PwcallBindDeviceInterrupt(ProcessBlock* process, stduint device_hand
 		if (!binding.generation) binding.generation = ++pwcall_irq_generation;
 		generation = binding.generation;
 		binding.vector = vector;
-		binding.irq_line = line;
-		binding.level_triggered = level_triggered;
-		binding.active_low = active_low;
-		binding.shareable = shareable;
+		binding.irq_line = use_msi ? 0xFF : line;
+		binding.msi_capability = msi_capability;
+		binding.level_triggered = use_msi ? false : level_triggered;
+		binding.active_low = use_msi ? false : active_low;
+		binding.shareable = use_msi ? false : shareable;
 		binding.active = true;
 
-		if (using_ioapic) {
+		if (using_ioapic && !use_msi) {
 			const byte route_index = byte(0x10 + line * 2);
 			uint64 route = IC.IO_Read64(route_index);
 			route &= ~uint64(0xFFu | (1u << 13) | (1u << 15));
@@ -544,6 +586,33 @@ static bool PwcallBindDeviceInterrupt(ProcessBlock* process, stduint device_hand
 		#endif
 	}
 	register_interrupt_vector_handler(vector, PwcallHandleDeviceInterrupt);
+	if (use_msi) {
+		uni::PCI pci_bus;
+		const auto result = pci_bus.configure_MSI_fixed_destination(
+			pci_device, target_lapic_id,
+			uni::PCI::MSITriggerMode::Edge,
+			uni::PCI::MSIDeliveryMode::Fixed,
+			vector, 0);
+		if (result) {
+			{
+				SpinlockLocal guard(PwcallIrqLock());
+				for0(i, numsof(pwcall_irq_bindings)) {
+					auto& binding = pwcall_irq_bindings[i];
+					if (!binding.active || binding.generation != generation) continue;
+					binding = {};
+					break;
+				}
+			}
+			plogerro("[DEVIRQ] MSI setup failed pci=%02x:%02x.%u: %s",
+				(unsigned)pci_device.bus, (unsigned)pci_device.device,
+				(unsigned)pci_device.function, result.Name());
+			return false;
+		}
+		ploginfo("[DEVIRQ] MSI enabled pci=%02x:%02x.%u vector=%u lapic=%u",
+			(unsigned)pci_device.bus, (unsigned)pci_device.device,
+			(unsigned)pci_device.function, (unsigned)vector,
+			(unsigned)target_lapic_id);
+	}
 	{
 		SpinlockLocal guard(PwcallIrqLock());
 		bool found = false;
@@ -552,7 +621,7 @@ static bool PwcallBindDeviceInterrupt(ProcessBlock* process, stduint device_hand
 			if (binding.active && binding.generation == generation) found = true;
 		}
 		if (!found) return false;
-		PwcallRefreshInterruptLine(line);
+		if (!use_msi) PwcallRefreshInterruptLine(line);
 	}
 	return true;
 }
@@ -561,6 +630,8 @@ static void PwcallUnbindDeviceInterrupt(stduint owner_pid, stduint device_handle
 	struct PendingCancel {
 		stduint owner_tid;
 		uint32 generation;
+		DeviceNode* node;
+		uint8 msi_capability;
 	};
 	PendingCancel cancels[PwcallIrqBindingCapacity] = {};
 	stduint cancel_count = 0;
@@ -572,13 +643,17 @@ static void PwcallUnbindDeviceInterrupt(stduint owner_pid, stduint device_handle
 				binding.device_handle != device_handle) continue;
 			const uint8 line = binding.irq_line;
 			if (cancel_count < numsof(cancels)) {
-				cancels[cancel_count++] = { binding.owner_tid, binding.generation };
+				cancels[cancel_count++] = { binding.owner_tid, binding.generation,
+					binding.node, binding.msi_capability };
 			}
 			binding = {};
 			PwcallRefreshInterruptLine(line);
 		}
 	}
-	for0(i, cancel_count) device_event_cancel(cancels[i].owner_tid, device_handle, cancels[i].generation);
+	for0(i, cancel_count) {
+		PwcallDisablePciMsi(cancels[i].node, cancels[i].msi_capability);
+		device_event_cancel(cancels[i].owner_tid, device_handle, cancels[i].generation);
+	}
 }
 
 static void PwcallUnbindProcessInterrupts(stduint owner_pid) {
@@ -586,6 +661,8 @@ static void PwcallUnbindProcessInterrupts(stduint owner_pid) {
 		stduint owner_tid;
 		stduint device_handle;
 		uint32 generation;
+		DeviceNode* node;
+		uint8 msi_capability;
 	};
 	PendingCancel cancels[PwcallIrqBindingCapacity] = {};
 	stduint cancel_count = 0;
@@ -597,7 +674,8 @@ static void PwcallUnbindProcessInterrupts(stduint owner_pid) {
 			const uint8 line = binding.irq_line;
 			if (cancel_count < numsof(cancels)) {
 				cancels[cancel_count++] = {
-					binding.owner_tid, binding.device_handle, binding.generation
+					binding.owner_tid, binding.device_handle, binding.generation,
+					binding.node, binding.msi_capability
 				};
 			}
 			binding = {};
@@ -605,6 +683,7 @@ static void PwcallUnbindProcessInterrupts(stduint owner_pid) {
 		}
 	}
 	for0(i, cancel_count) {
+		PwcallDisablePciMsi(cancels[i].node, cancels[i].msi_capability);
 		device_event_cancel(cancels[i].owner_tid, cancels[i].device_handle, cancels[i].generation);
 	}
 }
@@ -699,13 +778,27 @@ static void PwcallDisablePciDeviceDma(DeviceNode* node, stduint owner_pid) {
 
 void CleanupPwcallThreadInterrupts(stduint tid) {
 	#if (_MCCA & 0xFF00) == 0x8600
-	SpinlockLocal guard(PwcallIrqLock());
-	for0(i, numsof(pwcall_irq_bindings)) {
-		auto& binding = pwcall_irq_bindings[i];
-		if (!binding.active || binding.owner_tid != tid) continue;
-		const uint8 line = binding.irq_line;
-		binding = {};
-		PwcallRefreshInterruptLine(line);
+	struct PendingDisable {
+		DeviceNode* node;
+		uint8 msi_capability;
+	};
+	PendingDisable disables[PwcallIrqBindingCapacity] = {};
+	stduint disable_count = 0;
+	{
+		SpinlockLocal guard(PwcallIrqLock());
+		for0(i, numsof(pwcall_irq_bindings)) {
+			auto& binding = pwcall_irq_bindings[i];
+			if (!binding.active || binding.owner_tid != tid) continue;
+			const uint8 line = binding.irq_line;
+			if (disable_count < numsof(disables)) {
+				disables[disable_count++] = { binding.node, binding.msi_capability };
+			}
+			binding = {};
+			PwcallRefreshInterruptLine(line);
+		}
+	}
+	for0(i, disable_count) {
+		PwcallDisablePciMsi(disables[i].node, disables[i].msi_capability);
 	}
 	#else
 	(void)tid;

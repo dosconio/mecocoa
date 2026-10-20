@@ -202,7 +202,9 @@ public:
 
 public:
 	static String system_virtual_root_path;// e.g. /mnt/ide2.0
+	static String system_runtime_root_path;// e.g. /mnt/ide2.0/x86
 	static const String& GetSystemVirtualRootPath() { return system_virtual_root_path; }
+	static const String& GetSystemRuntimeRootPath() { return system_runtime_root_path; }
 };
 
 

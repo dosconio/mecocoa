@@ -9,7 +9,7 @@
 #       SRCS="devdriv/video/video-bochs.cpp" \
 #       build
 
-DRV_DIR ?= $(ubinpath)/mecocoa/drvs
+DRV_DIR ?= $(ubinpath)/mecocoa/x64/drvs
 DRV ?=
 SRCS ?=
 

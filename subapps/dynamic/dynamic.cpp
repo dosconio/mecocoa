@@ -7,6 +7,11 @@
 #define printf(...)
 
 int main(int argc, char* argv[], char* envp[]) {
+	#if _ACCM == 0x8632
+	constexpr const char* runtime_arch_dir = "x86";
+	#elif _ACCM == 0x8664
+	constexpr const char* runtime_arch_dir = "x64";
+	#endif
 	printf("\n========================================\n");
 	printf("[LD-MCCA] Hello from the Dummy Interpreter!\n");
 	printf("[LD-MCCA] Argc: %d\n", argc);
@@ -110,12 +115,12 @@ int main(int argc, char* argv[], char* envp[]) {
 				// Prefer the virtual root injected by the kernel, the probes below stay as fallback
 				const char* vroot = getenv("VRPATH");
 				if (vroot && *vroot) sprintf(target_path, "%s/lib/%s", vroot, base_name);
-				else sprintf(target_path, "/mnt/ide2.0/lib/%s", base_name);
+				else sprintf(target_path, "/mnt/ide2.0/%s/lib/%s", runtime_arch_dir, base_name);
 				
 				FILE* fp = fopen(target_path, "rb");
 				if (!fp) {
 					// Fallback to /lib/
-					sprintf(target_path, "/mnt/ahci1.0/lib/%s", base_name);
+					sprintf(target_path, "/mnt/ahci1.0/%s/lib/%s", runtime_arch_dir, base_name);
 					fp = fopen(target_path, "rb");
 				}
 				if (!fp) {

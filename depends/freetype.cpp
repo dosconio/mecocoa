@@ -518,7 +518,7 @@ bool InitializeFont() {
 	int face_err = FT_Open_Face(ft_library, &args, 0, &face);
 	// ploginfo("InitializeFont: FT_Open_Face returned %d, face = %p", face_err, face);
 	if (face_err == 0) {
-		plogtrac("InitializeFont: Setting pixel sizes...");
+		// plogtrac("InitializeFont: Setting pixel sizes...");
 		FT_Set_Pixel_Sizes(face, 16, 16);
 
 		// Pre-populate ASCII glyph cache (32 to 127) while in safe Task_FileSys context

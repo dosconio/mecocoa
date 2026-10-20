@@ -145,6 +145,273 @@ bool ProcessBlock::InsertVmaSorted(const VirtualMemoryArea& vma) {
 	return true;
 }
 
+struct VmaFileDeleter {
+	void operator()(uni::vfs_file* file) const {
+		if (!file) return;
+		if (file->f_inode) {
+			file->f_inode->ref_count--;
+			Filesys::Close(file);
+		}
+		else free(file);
+	}
+};
+
+using VmaFileOwner = uni::UniquePtr<uni::vfs_file, VmaFileDeleter>;
+
+struct VmaPageReleasePlan {
+	stduint address = 0;
+	void* physical = nullptr;
+	stduint properties = 0;
+	stduint writeback_index = ~_IMM0;
+	stduint file_offset = 0;
+	bool release_physical = false;
+};
+
+struct VmaWritebackPlan {
+	VmaFileOwner file;
+};
+
+struct VmaDeviceUnmapPlan {
+	stduint address = 0;
+	stduint length = 0;
+};
+
+static uni::vfs_file* CloneVmaFile(uni::vfs_file* source) {
+	if (!source) return nullptr;
+	auto* result = (uni::vfs_file*)malc(sizeof(uni::vfs_file));
+	if (!result) return nullptr;
+	*result = *source;
+	if (result->f_inode) result->f_inode->ref_count++;
+	return result;
+}
+
+// Caller holds vma_lock.
+static void MergeAdjacentAnonymousVmas(ProcessBlock* pb) {
+	for (stduint i = 0; i + 1 < pb->vmas.Count();) {
+		auto& left = pb->vmas[i];
+		const auto& right = pb->vmas[i + 1];
+		if (left.vm_type == VirtualMemoryAreaType::Anonymous &&
+			right.vm_type == VirtualMemoryAreaType::Anonymous &&
+			left.vm_end == right.vm_start && left.vm_flags == right.vm_flags &&
+			left.vm_mode == right.vm_mode) {
+			left.vm_end = right.vm_end;
+			pb->vmas.Remove(i + 1, 1);
+		}
+		else i++;
+	}
+}
+
+bool ProcessBlock::UnmapVmaRange(stduint address, stduint length) {
+	if (!length || (address & (PAGE_SIZE - 1)) ||
+		(length & (PAGE_SIZE - 1)) || length > ~_IMM0 - address) return false;
+	const stduint end = address + length;
+	stduint page_capacity = 0;
+	stduint writeback_capacity = 0;
+	stduint released_file_capacity = 0;
+	stduint device_capacity = 0;
+	bool split_file_required = false;
+	{
+		SpinlockLocal guard(&vma_lock);
+		for (stduint i = 0; i < vmas.Count(); i++) {
+			const auto& vma = vmas[i];
+			const stduint overlap_begin = maxof(address, vma.vm_start);
+			const stduint overlap_end = minof(end, vma.vm_end);
+			if (overlap_begin >= overlap_end) continue;
+			const stduint pages = (overlap_end - overlap_begin) / PAGE_SIZE;
+			if (pages > ~_IMM0 - page_capacity) return false;
+			page_capacity += pages;
+			if (vma.vm_type == VirtualMemoryAreaType::Device) device_capacity++;
+			if (vma.vm_type == VirtualMemoryAreaType::File && vma.vfile &&
+				vma.vm_mode == VirtualMemoryAreaMode::Shared &&
+				(vma.vm_flags & PGPROP_writable)) writeback_capacity++;
+			if (vma.vm_start >= address && vma.vm_end <= end &&
+				vma.vm_type == VirtualMemoryAreaType::File && vma.vfile)
+				released_file_capacity++;
+			if (vma.vm_start < address && vma.vm_end > end &&
+				vma.vm_type == VirtualMemoryAreaType::File && vma.vfile)
+				split_file_required = true;
+		}
+	}
+	if (page_capacity > ~_IMM0 / sizeof(VmaPageReleasePlan) ||
+		writeback_capacity > ~_IMM0 / sizeof(VmaWritebackPlan) ||
+		released_file_capacity > ~_IMM0 / sizeof(VmaFileOwner) ||
+		device_capacity > ~_IMM0 / sizeof(VmaDeviceUnmapPlan)) return false;
+
+	auto pages = page_capacity ?
+		uni::make_unique<VmaPageReleasePlan[]>(page_capacity) :
+		uni::UniquePtr<VmaPageReleasePlan[]>();
+	auto writebacks = writeback_capacity ?
+		uni::make_unique<VmaWritebackPlan[]>(writeback_capacity) :
+		uni::UniquePtr<VmaWritebackPlan[]>();
+	auto released_files = released_file_capacity ?
+		uni::make_unique<VmaFileOwner[]>(released_file_capacity) :
+		uni::UniquePtr<VmaFileOwner[]>();
+	auto devices = device_capacity ?
+		uni::make_unique<VmaDeviceUnmapPlan[]>(device_capacity) :
+		uni::UniquePtr<VmaDeviceUnmapPlan[]>();
+	if ((page_capacity && !pages) || (writeback_capacity && !writebacks) ||
+		(released_file_capacity && !released_files) ||
+		(device_capacity && !devices)) return false;
+
+	VmaFileOwner split_file;
+	stduint page_count = 0;
+	stduint writeback_count = 0;
+	stduint device_count = 0;
+	bool prepared = true;
+	{
+		SpinlockLocal guard(&vma_lock);
+		for (stduint i = 0; i < vmas.Count() && prepared; i++) {
+			const auto& vma = vmas[i];
+			const stduint overlap_begin = maxof(address, vma.vm_start);
+			const stduint overlap_end = minof(end, vma.vm_end);
+			if (overlap_begin >= overlap_end) continue;
+			stduint writeback_index = ~_IMM0;
+			if (vma.vm_type == VirtualMemoryAreaType::File && vma.vfile &&
+				vma.vm_mode == VirtualMemoryAreaMode::Shared &&
+				(vma.vm_flags & PGPROP_writable)) {
+				writebacks[writeback_count].file.reset(CloneVmaFile(vma.vfile));
+				if (!writebacks[writeback_count].file) {
+					prepared = false;
+					break;
+				}
+				writeback_index = writeback_count++;
+			}
+			if (vma.vm_type == VirtualMemoryAreaType::Device) {
+				devices[device_count].address = overlap_begin;
+				devices[device_count].length = overlap_end - overlap_begin;
+				device_count++;
+			}
+			for (stduint page = overlap_begin; page < overlap_end; page += PAGE_SIZE) {
+				auto& item = pages[page_count++];
+				item.address = page;
+				item.properties = vma.vm_flags & (PGPROP_present |
+					PGPROP_writable | PGPROP_user_access | PGPROP_nonexecutable);
+				item.writeback_index = writeback_index;
+				item.file_offset = vma.file_offset + page - vma.vm_start;
+				item.release_physical = vma.vm_type != VirtualMemoryAreaType::Device;
+			}
+			if (split_file_required && !split_file &&
+				vma.vm_start < address && vma.vm_end > end &&
+				vma.vm_type == VirtualMemoryAreaType::File && vma.vfile) {
+				split_file.reset(CloneVmaFile(vma.vfile));
+				if (!split_file) prepared = false;
+			}
+		}
+	}
+	if (!prepared || page_count != page_capacity ||
+		writeback_count != writeback_capacity || device_count != device_capacity ||
+		(split_file_required && !split_file)) return false;
+
+	for (stduint i = 0; i < device_count; i++) {
+		if (!Memory::UnmapPages(paging, devices[i].address,
+			devices[i].length, &vma_lock)) return false;
+	}
+
+	stduint released_file_count = 0;
+	bool committed = true;
+	{
+		SpinlockLocal guard(&vma_lock);
+		for (stduint i = 0; i < page_count; i++) {
+			auto& item = pages[i];
+			if (!item.release_physical) continue;
+			item.physical = paging[item.address];
+		}
+		for (stduint i = 0; i < page_count; i++) {
+			const auto& item = pages[i];
+			if (!item.release_physical || item.physical == (void*)~_IMM0) continue;
+			if (!paging.Unmap(item.address, PAGE_SIZE)) {
+				committed = false;
+				break;
+			}
+		}
+		if (committed) {
+			for (stduint i = 0; i < vmas.Count();) {
+				auto& vma = vmas[i];
+				if (vma.vm_start >= address && vma.vm_end <= end) {
+					if (vma.vm_type == VirtualMemoryAreaType::File && vma.vfile) {
+						released_files[released_file_count++].reset(vma.vfile);
+						vma.vfile = nullptr;
+					}
+					vmas.Remove(i, 1);
+				}
+				else if (vma.vm_start < address && vma.vm_end > end) {
+					VirtualMemoryArea right = vma;
+					const stduint original_end = vma.vm_end;
+					right.vm_start = end;
+					if (vma.vm_type == VirtualMemoryAreaType::File && vma.vfile) {
+						right.vfile = split_file.get();
+						right.file_offset = vma.file_offset + end - vma.vm_start;
+					}
+					vma.vm_end = address;
+					if (!InsertVmaSorted(right)) {
+						vma.vm_end = original_end;
+						committed = false;
+						break;
+					}
+					if (right.vfile) split_file.release();
+					i += 2;
+				}
+				else if (vma.vm_start < address && vma.vm_end > address) {
+					vma.vm_end = address;
+					i++;
+				}
+				else if (vma.vm_start < end && vma.vm_end > end) {
+					if (vma.vm_type == VirtualMemoryAreaType::File && vma.vfile)
+						vma.file_offset += end - vma.vm_start;
+					vma.vm_start = end;
+					i++;
+				}
+				else i++;
+			}
+		}
+		if (committed) MergeAdjacentAnonymousVmas(this);
+		else {
+			for (stduint i = 0; i < page_count; i++) {
+				const auto& item = pages[i];
+				if (!item.release_physical || !item.physical ||
+					item.physical == (void*)~_IMM0) continue;
+				paging.Map(item.address, (stduint)item.physical, PAGE_SIZE,
+					PAGESIZE_4KB, item.properties | PGOPTS_omit_warnings);
+			}
+		}
+	}
+	for (stduint i = 0; i < page_count; i++) RefreshVirtualAddress(pages[i].address);
+	if (!committed) return false;
+
+	for (stduint i = 0; i < page_count; i++) {
+		const auto& item = pages[i];
+		if (!item.physical || item.physical == (void*)~_IMM0) continue;
+		if (item.writeback_index != ~_IMM0) {
+			auto* file = writebacks[item.writeback_index].file.get();
+			if (file && file->f_inode && item.file_offset < file->f_inode->i_size) {
+				const stduint write_length = minof(_IMM(PAGE_SIZE),
+					file->f_inode->i_size - item.file_offset);
+				file->f_pos = item.file_offset;
+				Filesys::Write(file, (const void*)mglb(item.physical), write_length);
+			}
+		}
+		if (item.release_physical) free(item.physical);
+	}
+	KASSERT(released_file_count == released_file_capacity);
+	return true;
+}
+
+bool ProcessBlock::ReleaseAllVmas() {
+	stduint begin = 0;
+	stduint end = 0;
+	{
+		SpinlockLocal guard(&vma_lock);
+		if (!vmas.Count()) return true;
+		begin = vmas[0].vm_start;
+		end = vmas[0].vm_end;
+		for (stduint i = 1; i < vmas.Count(); i++) {
+			begin = minof(begin, vmas[i].vm_start);
+			end = maxof(end, vmas[i].vm_end);
+		}
+	}
+	return end > begin && UnmapVmaRange(begin, end - begin);
+}
+
 static bool VmaAllowsAccess(const VirtualMemoryArea& vma,
 	VirtualMemoryAccess access) {
 	if (!(vma.vm_flags & PGPROP_present) ||
@@ -307,6 +574,40 @@ extern "C" void* kernel_prefault_page(ProcessBlock* pb, stduint address,
 		VirtualMemoryAccess::Write : VirtualMemoryAccess::Read) : nullptr;
 }
 #endif
+
+void ProcessBlock::ReleaseLoadslices() {
+	#if CONFIG_ENABLE_MMU
+	for0a(i, load_slices) {
+		if (!load_slices[i].length) continue;
+		const stduint begin = load_slices[i].address & ~_IMM(PAGE_SIZE - 1);
+		const stduint end = (load_slices[i].address + load_slices[i].length +
+			PAGE_SIZE - 1) & ~_IMM(PAGE_SIZE - 1);
+		for (stduint address = begin; address < end; address += PAGE_SIZE) {
+			void* physical;
+			{
+				SpinlockLocal guard(&vma_lock);
+				physical = paging[address];
+				if (physical != (void*)~_IMM0)
+					paging.Unmap(address, PAGE_SIZE);
+			}
+			if (physical != (void*)~_IMM0) {
+				RefreshVirtualAddress(address);
+				free(physical);
+			}
+		}
+		load_slices[i].address = 0;
+		load_slices[i].length = 0;
+	}
+	#else
+	for0a(i, load_slices) {
+		if (!load_slices[i].length) continue;
+		mempool.deallocate((void*)load_slices[i].address,
+			load_slices[i].length);
+		load_slices[i].address = 0;
+		load_slices[i].length = 0;
+	}
+	#endif
+}
 
 
 

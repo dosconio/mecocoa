@@ -167,8 +167,8 @@ DEFSYSC sysc_INNC(stduint blocked, stduint usr_keycode, stduint usr_props) {
 		sysrecv(Task_Console, &ret, byteof(ret));// need Context
 		if (ret != ~_IMM0) {
 			kc = (byte)(ret >> 8);
-			props = (ret & _VTTY_MASK_INN_UP) ? 1 : 0;
-			ret &= _VTTY_MASK_INN_CH;
+			props = (kc && (ret & _VTTY_MASK_INN_UP)) ? 1 : 0;
+			ret = kc ? (ret & _VTTY_MASK_INN_CH) : (ret & 0xFFU);
 		}
 	}
 	else {
@@ -177,8 +177,8 @@ DEFSYSC sysc_INNC(stduint blocked, stduint usr_keycode, stduint usr_props) {
 		uni::Pair<byte, byte> pair;
 		if (q && q->Dequeue(pair)) {
 			kc = pair.second;
-			props = (pair.first & _VTTY_MASK_INN_UP) ? 1 : 0;
-			ret = pair.first & _VTTY_MASK_INN_CH;
+			props = (kc && (pair.first & _VTTY_MASK_INN_UP)) ? 1 : 0;
+			ret = kc ? (pair.first & _VTTY_MASK_INN_CH) : pair.first;
 		}
 	}
 	if (ret != ~_IMM0) {
@@ -984,7 +984,10 @@ DEFSYSC sysc_READ(stduint fd, stduint addr, stduint len) {
 
 				// Handle the character "consumed" by Task_Console service
 				byte ch = (byte)ret;
-				if (ch == 0 || (ch & _VTTY_MASK_INN_UP)) continue; // key-only or release event
+				byte ch_keycode = (byte)(ret >> 8);
+				if (ch == 0) continue;
+				if (ch_keycode && (ch & _VTTY_MASK_INN_UP)) continue; // release event of a keyed input
+				if (ch_keycode) ch &= _VTTY_MASK_INN_CH;
 				if (ch == 0x04) { // Ctrl+D (EOF)
 					break;
 				}
@@ -1298,23 +1301,6 @@ DEFSYSC sysc_KILL(stduint pid, stduint sig, stduint tid) {
 }
 
 #if CONFIG_ENABLE_MMU
-// Caller holds mutex_mapping and vma_lock.
-static void MergeAdjacentAnonymousVmas(ProcessBlock* pb) {
-	for (stduint i = 0; i + 1 < pb->vmas.Count();) {
-		auto& left = pb->vmas[i];
-		const auto& right = pb->vmas[i + 1];
-		if (left.vm_type == VirtualMemoryAreaType::Anonymous &&
-			right.vm_type == VirtualMemoryAreaType::Anonymous &&
-			left.vm_end == right.vm_start && left.vm_flags == right.vm_flags &&
-			left.vm_mode == right.vm_mode) {
-			left.vm_end = right.vm_end;
-			pb->vmas.Remove(i + 1, 1);
-		} else {
-			i++;
-		}
-	}
-}
-
 DEFSYSC sysc_MMAP(stduint len, stduint flag, stduint fd) {
 	ThreadBlock* th = Taskman::CurrentTB();
 	ProcessBlock* pb = th->parent_process;
@@ -1422,136 +1408,7 @@ DEFSYSC sysc_UMAP(stduint addr, stduint len) {
 		return ~_IMM0; // Reject kernel page table
 	}
 	MutexLocal mapping_guard(&pb->mutex_mapping);
-	uni::vfs_file* split_vfile = nullptr;
-	uni::vfs_file* source_vfile = nullptr;
-	{
-		SpinlockLocal guard(&pb->vma_lock);
-		for (stduint i = 0; i < pb->vmas.Count(); i++) {
-			const auto& vma = pb->vmas[i];
-			if (vma.vm_start < addr && vma.vm_end > addr + len &&
-				vma.vm_type == VirtualMemoryAreaType::File && vma.vfile) {
-				source_vfile = vma.vfile;
-				break;
-			}
-		}
-	}
-	if (source_vfile) {
-		split_vfile = (uni::vfs_file*)malc(sizeof(uni::vfs_file));
-		if (!split_vfile) return ~_IMM0;
-		{
-			SpinlockLocal guard(&pb->vma_lock);
-			*split_vfile = *source_vfile;
-			if (split_vfile->f_inode) split_vfile->f_inode->ref_count++;
-		}
-	}
-	for (stduint i = 0;; ++i) {
-		stduint device_begin;
-		stduint device_end;
-		{
-			SpinlockLocal guard(&pb->vma_lock);
-			if (i >= pb->vmas.Count()) break;
-			const auto& vma = pb->vmas[i];
-			if (vma.vm_type != VirtualMemoryAreaType::Device) continue;
-			device_begin = maxof(addr, vma.vm_start);
-			device_end = minof(addr + len, vma.vm_end);
-		}
-		if (device_begin < device_end &&
-			!Memory::UnmapPages(pb->paging, device_begin,
-				device_end - device_begin, &pb->vma_lock)) {
-			if (split_vfile) {
-				if (split_vfile->f_inode) split_vfile->f_inode->ref_count--;
-				Filesys::Close(split_vfile);
-			}
-			return ~_IMM0;
-		}
-	}
-	SpinlockLocal guard(&pb->vma_lock);
-	
-	// Write back dirty pages for file-backed mappings in the unmapped range
-	for (stduint i = 0; i < pb->vmas.Count(); i++) {
-		auto& vma = pb->vmas[i];
-		if (vma.vm_type == VirtualMemoryAreaType::File && vma.vfile && (vma.vm_flags & PGPROP_writable)) {
-			stduint overlap_start = maxof(vma.vm_start, addr);
-			stduint overlap_end = minof(vma.vm_end, addr + len);
-			if (overlap_start < overlap_end) {
-				for (stduint page_addr = overlap_start; page_addr < overlap_end; page_addr += 0x1000) {
-					void* phys = pb->paging[page_addr];
-					if (phys != (void*)~_IMM0) {
-						stduint file_offset = page_addr - vma.vm_start + vma.file_offset;
-						if (file_offset < vma.vfile->f_inode->i_size) {
-							stduint write_len = minof(_IMM(0x1000), vma.vfile->f_inode->i_size - file_offset);
-							vma.vfile->f_pos = file_offset;
-							Filesys::Write(vma.vfile, (const void*)mglb(phys), write_len);
-						}
-					}
-				}
-			}
-		}
-	}
-
-	// Unmap and free physical memory
-	for (stduint curr = addr; curr < addr + len; curr += 0x1000) {
-		bool managed = false;
-		bool release_phys = false;
-		for (stduint i = 0; i < pb->vmas.Count(); i++) {
-			const auto& vma = pb->vmas[i];
-			if (curr >= vma.vm_start && curr < vma.vm_end) {
-				managed = true;
-				release_phys = vma.vm_type != VirtualMemoryAreaType::Device;
-				break;
-			}
-		}
-		if (!managed) continue;
-		void* phys_addr = pb->paging[curr];
-		if (phys_addr != (void*)~_IMM0) {
-			if (release_phys) {
-				free(phys_addr);
-			}
-			pb->paging.Unmap(curr, 0x1000);
-			RefreshVirtualAddress(curr);
-		}
-	}
-	
-	// Remove or split VMAs in [addr, addr + len)
-	for (stduint i = 0; i < pb->vmas.Count(); ) {
-		auto& vma = pb->vmas[i];
-		if (vma.vm_start >= addr && vma.vm_end <= addr + len) {
-			if (vma.vm_type == VirtualMemoryAreaType::File && vma.vfile) {
-				if (vma.vfile->f_inode) vma.vfile->f_inode->ref_count--;
-				Filesys::Close(vma.vfile);
-			}
-			pb->vmas.Remove(i, 1);
-		} else if (vma.vm_start < addr && vma.vm_end > addr + len) {
-			VirtualMemoryArea new_vma = vma;
-			new_vma.vm_start = addr + len;
-			if (vma.vm_type == VirtualMemoryAreaType::File && vma.vfile) {
-				new_vma.vfile = split_vfile;
-				new_vma.file_offset = vma.file_offset + (addr + len - vma.vm_start);
-			}
-			vma.vm_end = addr;
-			if (!pb->InsertVmaSorted(new_vma)) return ~_IMM0;
-			split_vfile = nullptr;
-			i += 2;
-		} else if (vma.vm_start < addr && vma.vm_end > addr) {
-			vma.vm_end = addr;
-			i++;
-		} else if (vma.vm_start < addr + len && vma.vm_end > addr + len) {
-			if (vma.vm_type == VirtualMemoryAreaType::File && vma.vfile) {
-				vma.file_offset = vma.file_offset + (addr + len - vma.vm_start);
-			}
-			vma.vm_start = addr + len;
-			i++;
-		} else {
-			i++;
-		}
-	}
-	
-	MergeAdjacentAnonymousVmas(pb);
-	if (split_vfile) {
-		if (split_vfile->f_inode) split_vfile->f_inode->ref_count--;
-		Filesys::Close(split_vfile);
-	}
-	return len;
+	return pb->UnmapVmaRange(addr, len) ? len : ~_IMM0;
 }
 #else
 DEFSYSC sysc_UMAP(stduint addr, stduint len) {

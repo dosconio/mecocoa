@@ -323,9 +323,14 @@ public: // VirtualMemory Operations
 	// Caller holds mutex_mapping and vma_lock.
 	bool FindFreeVmaRange(stduint length, stduint& address);
 	bool InsertVmaSorted(const VirtualMemoryArea& vma);
+	// Caller holds mutex_mapping; these methods acquire vma_lock internally.
+	bool UnmapVmaRange(stduint address, stduint length);
+	bool ReleaseAllVmas();
 	// Acquires vma_lock internally; file I/O is performed without the spinlock.
 	void* EnsureVmaPage(stduint address, VirtualMemoryAccess access);
 	#endif
+	// Caller holds mutex_mapping when MMU is enabled.
+	void ReleaseLoadslices();
 
 public: // Fileman
 	MutexBlock<ProcFiles> fileman;

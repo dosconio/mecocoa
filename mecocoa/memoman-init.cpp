@@ -66,35 +66,13 @@ static bool rsdp_checksum_ok(const uni::ACPI::RSDP* rsdp) {
 	return true;
 }
 
-static bool early_phys_range_mapped(stduint addr, stduint size) {
-	if (!size) return false;
-	if (addr + size < addr) return false;
-	#if _MCCA == 0x8632
-	if (addr < kAcpiPhysMapTop && addr + size <= kAcpiPhysMapTop) return true;
-	if (addr >= kAcpiHighWindowBase &&
-		addr + size <= kAcpiHighWindowBase + kAcpiHighWindowSize) return true;
-	return false;
-	#else
-	return true;
-	#endif
-}
-
 static bool rsdt_candidate_valid(stduint rsdt_addr) {
 	if ((rsdt_addr & 0x3) != 0) {
 		plogwarn("[ACPI] RSDT candidate %[x] is not 4-byte aligned", rsdt_addr);
 	}
-	if (!early_phys_range_mapped(rsdt_addr, sizeof(uni::ACPI::RSDT))) {
-		plogwarn("[ACPI] Reject RSDT candidate %[x]: outside early mapped range", rsdt_addr);
-		return false;
-	}
 	auto rsdt = reinterpret_cast<const uni::ACPI::RSDT*>(rsdt_addr);
 	if (rsdt->header.length < sizeof(uni::ACPI::DescriptionHeader)) {
 		plogwarn("[ACPI] Reject RSDT candidate %[x]: bad length %[x]",
-			rsdt_addr, rsdt->header.length);
-		return false;
-	}
-	if (!early_phys_range_mapped(rsdt_addr, rsdt->header.length)) {
-		plogwarn("[ACPI] Reject RSDT candidate %[x]: table length %[x] outside early map",
 			rsdt_addr, rsdt->header.length);
 		return false;
 	}
@@ -179,13 +157,8 @@ static void register_acpi_cpu_lapic_id(uint32 lapic_id, uint32 bsp_lapic_id) {
 
 static stduint find_table_from_rsdt(stduint rsdt_addr, const char* signature) {
 	if (!rsdt_addr) return 0;
-	if (!early_phys_range_mapped(rsdt_addr, sizeof(uni::ACPI::RSDT))) {
-		plogwarn("[ACPI] RSDT at %[x] is outside early mapped range", rsdt_addr);
-		return 0;
-	}
 	auto rsdt = reinterpret_cast<const uni::ACPI::RSDT*>(rsdt_addr);
-	if (!early_phys_range_mapped(rsdt_addr, rsdt->header.length) ||
-		rsdt->header.length < sizeof(uni::ACPI::DescriptionHeader)) {
+	if (rsdt->header.length < sizeof(uni::ACPI::DescriptionHeader)) {
 		plogwarn("[ACPI] RSDT length %[x] at %[x] is invalid for early mapping",
 			rsdt->header.length, rsdt_addr);
 		return 0;
@@ -195,11 +168,7 @@ static stduint find_table_from_rsdt(stduint rsdt_addr, const char* signature) {
 	for0(i, count) {
 		const auto& header = (*rsdt)[i];
 		const stduint entry_addr = _IMM(&header);
-		if (!early_phys_range_mapped(entry_addr, sizeof(uni::ACPI::DescriptionHeader))) {
-			continue;
-		}
-		if (!early_phys_range_mapped(entry_addr, header.length) ||
-			header.length < sizeof(uni::ACPI::DescriptionHeader)) {
+		if (header.length < sizeof(uni::ACPI::DescriptionHeader)) {
 			continue;
 		}
 		if (header.isValid(signature)) return entry_addr;
@@ -214,13 +183,8 @@ static stduint find_table_from_xsdt(uint64 xsdt_addr, const char* signature) {
 		return 0;
 	}
 	const stduint xsdt_addr_native = (stduint)xsdt_addr;
-	if (!early_phys_range_mapped(xsdt_addr_native, sizeof(uni::ACPI::XSDT))) {
-		plogwarn("[ACPI] XSDT at %[x] is outside mapped range", xsdt_addr);
-		return 0;
-	}
 	auto xsdt = reinterpret_cast<const uni::ACPI::XSDT*>(xsdt_addr_native);
-	if (!early_phys_range_mapped(xsdt_addr_native, xsdt->header.length) ||
-		xsdt->header.length < sizeof(uni::ACPI::DescriptionHeader)) {
+	if (xsdt->header.length < sizeof(uni::ACPI::DescriptionHeader)) {
 		plogwarn("[ACPI] XSDT length %[x] at %[x] is invalid for mapped range",
 			xsdt->header.length, xsdt_addr);
 		return 0;
@@ -230,11 +194,7 @@ static stduint find_table_from_xsdt(uint64 xsdt_addr, const char* signature) {
 	for0(i, count) {
 		const auto& header = (*xsdt)[i];
 		const stduint entry_addr = _IMM(&header);
-		if (!early_phys_range_mapped(entry_addr, sizeof(uni::ACPI::DescriptionHeader))) {
-			continue;
-		}
-		if (!early_phys_range_mapped(entry_addr, header.length) ||
-			header.length < sizeof(uni::ACPI::DescriptionHeader)) {
+		if (header.length < sizeof(uni::ACPI::DescriptionHeader)) {
 			continue;
 		}
 		if (header.isValid(signature)) return entry_addr;
@@ -263,10 +223,8 @@ static void enumerate_madt_cpus(stduint madt_addr) {
 	acpi_cpu_count = 0;
 	MemSet(acpi_cpu_lapic_ids, 0, sizeof(acpi_cpu_lapic_ids));
 	if (!madt_addr) return;
-	if (!early_phys_range_mapped(madt_addr, sizeof(uni::ACPI::MADT))) return;
 	auto madt = reinterpret_cast<const uni::ACPI::MADT*>(madt_addr);
-	if (!early_phys_range_mapped(madt_addr, madt->header.length) ||
-		madt->header.length < sizeof(uni::ACPI::MADT)) {
+	if (madt->header.length < sizeof(uni::ACPI::MADT)) {
 		plogwarn("[ACPI] MADT length %[x] at %[x] is invalid for early mapping",
 			madt->header.length, madt_addr);
 		return;
@@ -306,10 +264,8 @@ static void parse_mcfg(stduint mcfg_addr) {
 	acpi_pcie_end_bus = 0;
 	uni::PCI::DisableConfigSpaceAccess();
 	if (!mcfg_addr) return;
-	if (!early_phys_range_mapped(mcfg_addr, sizeof(uni::ACPI::MCFG))) return;
 	auto mcfg = reinterpret_cast<const uni::ACPI::MCFG*>(mcfg_addr);
-	if (!early_phys_range_mapped(mcfg_addr, mcfg->header.length) ||
-		mcfg->header.length < sizeof(uni::ACPI::MCFG)) {
+	if (mcfg->header.length < sizeof(uni::ACPI::MCFG)) {
 		plogwarn("[ACPI] MCFG length %[x] at %[x] is invalid for mapped range",
 			mcfg->header.length, mcfg_addr);
 		return;
@@ -486,7 +442,7 @@ bool Memory::initialize(stduint eax, byte* ebx) {
 	_physical_allocate = Memory::physical_allocate;
 	mecocoa_global->kernel_cr3 = 0x100000;
 	MemSet(kernel_paging.root_level_page = (PageEntry*)0x100000, 0, 0x1000);// kernel_paging.Reset();
-	kernel_paging.Map(0x00000000, 0x00000000, 0x10000000, PAGESIZE_4MB, PGPROP_present | PGPROP_writable | PGPROP_user_access);// 4MB
+	kernel_paging.Map(0x00000000, 0x00000000, 0x20000000 _TEMP, PAGESIZE_4MB, PGPROP_present | PGPROP_writable | PGPROP_user_access);// 4MB
 	kernel_paging.Map(0x80000000, 0x00000000, 0x10000000, PAGESIZE_4MB, PGPROP_present | PGPROP_writable);
 	kernel_paging.Map(kAcpiHighWindowBase, kAcpiHighWindowBase, kAcpiHighWindowSize, PAGESIZE_4MB, PGPROP_present | PGPROP_writable);
 	kernel_paging.Map(0xFEC00000, 0xFEC00000, 0x00200000, PAGESIZE_4MB, PGPROP_present | PGPROP_writable);
