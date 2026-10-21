@@ -80,6 +80,7 @@ extern stduint acpi_cpu_count;
 extern uint32 acpi_cpu_lapic_ids[PCU_CORES_MAX];
 #endif
 #if _MCCA == 0x8632
+static constexpr uint8 IRQ_TLB_SHOOTDOWN_IPI = 0xF0;
 static constexpr uint8 IRQ_RESCHED_IPI = 0xF1;
 static constexpr uint8 IRQ_WAKE_IPI = 0xF2;
 #ifdef __cplusplus
@@ -326,7 +327,8 @@ public: // VirtualMemory Operations
 	// Caller holds mutex_mapping; these methods acquire vma_lock internally.
 	bool UnmapVmaRange(stduint address, stduint length);
 	bool ReleaseAllVmas();
-	// Acquires vma_lock internally; file I/O is performed without the spinlock.
+	// ResolveVmaFault may acquire mutex_mapping; both methods acquire vma_lock internally. File I/O and page copying are performed without the spinlock.
+	void* ResolveVmaFault(stduint address, VirtualMemoryAccess access, bool protection_fault);
 	void* EnsureVmaPage(stduint address, VirtualMemoryAccess access);
 	#endif
 	// Caller holds mutex_mapping when MMU is enabled.
@@ -640,6 +642,7 @@ public:// schedule
 	static ThreadBlock* PickNext();
 	static void SleepAndRelease(Spinlock* lk);
 	#if _MCCA == 0x8632
+	static void SendTLBShootdownIPI(stduint core_id);
 	static void SendRescheduleIPI(stduint core_id);
 	static void SendWakeIPI(stduint core_id);
 	#endif

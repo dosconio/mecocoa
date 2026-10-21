@@ -1002,6 +1002,7 @@ DeviceNode* Devsman::Root() {
 void Devsman::BindKnownDrivers() {
 	#if (_MCCA & 0xFF00) == 0x8600
 	if (!device_root) return;
+	Iova::EnableVtdPassthrough(PCI_Root());
 	bind_known_drivers_subtree(device_root);
 	#endif
 }
@@ -1446,7 +1447,6 @@ namespace {
 				(request.features & ~(VmciFeatureNotifications |
 					VmciFeatureEvents | VmciFeatureQueuePairs)) == 0 &&
 				(request.features & VmciFeatureEvents) != 0 &&
-				(request.features & VmciFeatureQueuePairs) != 0 &&
 				request.doorbell_capacity == VmciDoorbellCapacity &&
 				request.event_subscription_capacity ==
 					VmciEventSubscriptionCapacity &&

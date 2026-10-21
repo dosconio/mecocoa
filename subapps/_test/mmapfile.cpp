@@ -432,7 +432,77 @@ int main(int argc, char** argv)
 		}
 		outsfmt("Success: Fork shared a read-only managed page and preserved the child mapping.\n\r");
 
-		// 14. Exec must release the old image mappings before installing the new image.
+		// 14. A writable anonymous page must separate on write after fork.
+		volatile char* cow_data = (volatile char*)malloc(16);
+		if (!cow_data) {
+			outsfmt("Error: Failed to allocate anonymous COW test data!\n\r");
+			return -1;
+		}
+		cow_data[0] = 'P';
+		int child_ready_pipe[2];
+		int parent_ready_pipe[2];
+		if (pipe(child_ready_pipe) != 0) {
+			outsfmt("Error: Pipe for anonymous COW test failed!\n\r");
+			free((void*)cow_data);
+			return -1;
+		}
+		if (pipe(parent_ready_pipe) != 0) {
+			outsfmt("Error: Pipe for anonymous COW test failed!\n\r");
+			close(child_ready_pipe[0]);
+			close(child_ready_pipe[1]);
+			free((void*)cow_data);
+			return -1;
+		}
+		child = fork();
+		if (child < 0) {
+			outsfmt("Error: Fork for anonymous COW test failed!\n\r");
+			close(child_ready_pipe[0]);
+			close(child_ready_pipe[1]);
+			close(parent_ready_pipe[0]);
+			close(parent_ready_pipe[1]);
+			free((void*)cow_data);
+			return -1;
+		}
+		if (!child) {
+			close(child_ready_pipe[0]);
+			close(parent_ready_pipe[1]);
+			if (cow_data[0] != 'P') _exit(8);
+			char token = 'K';
+			if (write(child_ready_pipe[1], &token, 1) != 1) _exit(9);
+			token = 0;
+			if (read(parent_ready_pipe[0], &token, 1) != 1 || token != 'P') _exit(10);
+			if (cow_data[0] != 'P') _exit(11);
+			cow_data[0] = 'C';
+			if (cow_data[0] != 'C') _exit(12);
+			close(child_ready_pipe[1]);
+			close(parent_ready_pipe[0]);
+			_exit(0);
+		}
+		close(child_ready_pipe[1]);
+		close(parent_ready_pipe[0]);
+		bool cow_parent_valid = cow_data[0] == 'P' &&
+			read(child_ready_pipe[0], (void*)cow_data, 1) == 1 &&
+			cow_data[0] == 'K';
+		if (cow_parent_valid) {
+			cow_data[0] = 'M';
+			char cow_token = 'P';
+			cow_parent_valid = write(parent_ready_pipe[1], &cow_token, 1) == 1;
+		}
+		close(child_ready_pipe[0]);
+		close(parent_ready_pipe[1]);
+		child_status = -1;
+		if (wait(&child_status) != child || child_status != 0 ||
+			!cow_parent_valid || cow_data[0] != 'M') {
+			outsfmt("Error: Anonymous COW test failed with child status %d!\n\r",
+				child_status);
+			free((void*)cow_data);
+			return -1;
+		}
+		free((void*)cow_data);
+		outsfmt("Success: Kernel writes resolved anonymous COW before copying.\n\r");
+		outsfmt("Success: Anonymous fork COW separated parent and child writes.\n\r");
+
+		// 15. Exec must release the old image mappings before installing the new image.
 		child = fork();
 		if (child < 0) {
 			outsfmt("Error: Fork for exec cleanup test failed!\n\r");
@@ -479,9 +549,9 @@ int main(int argc, char** argv)
 		outsfmt("Success: Exec released and wrote back its old mapping.\n\r");
 		outsfmt("=== File MMAP Test ALL PASSED! ===\n\r");
 
-		// 15. Clean up the temporary test file
+		// 16. Clean up the temporary test file
 		sys_removefil(test_file);
-		outsfmt("Step 15: Cleaned up test file.\n\r");
+		outsfmt("Step 16: Cleaned up test file.\n\r");
 	}
 	#endif
 

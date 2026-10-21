@@ -109,6 +109,11 @@ static void InitializeLocalApicOnAp() {
 	IC.SendEOI();
 }
 
+static void HandleTLBShootdownIPI() {
+	Memory::HandleTLBShootdownIPI();
+	IC.SendEOI();
+}
+
 static void HandleRescheduleIPI() {
 	stduint cpuid = Taskman::getID();
 	if (cpuid < PCU_CORES_MAX) ap_resched_ipi_hits[cpuid]++;
@@ -223,6 +228,7 @@ extern "C" void AP_Main(stduint core_id) {
 	if (pat_d & (1u << 16)) setCR3(getCR3());
 	#endif
 	loadIDT(mglb(0x800), 256 * sizeof(gate_t) - 1);
+	IC[IRQ_TLB_SHOOTDOWN_IPI].setRange(mglb(Handint_TLB_SHOOTDOWN_Entry), SegCo32);
 	IC[IRQ_RESCHED_IPI].setRange(mglb(Handint_RESCHED_Entry), SegCo32);
 	IC[IRQ_WAKE_IPI].setRange(mglb(Handint_WAKE_Entry), SegCo32);
 	if (percore->tss_selector) {
@@ -230,6 +236,7 @@ extern "C" void AP_Main(stduint core_id) {
 	}
 	_ASM("LLDT %w0" : : "r"(SegGLDT) : "memory");
 	percore->state = CoreState::Online;
+	register_interrupt_handler(IRQ_TLB_SHOOTDOWN_IPI, HandleTLBShootdownIPI);
 	register_interrupt_handler(IRQ_RESCHED_IPI, HandleRescheduleIPI);
 	register_interrupt_handler(IRQ_WAKE_IPI, HandleWakeIPI);
 	EnableSSE();

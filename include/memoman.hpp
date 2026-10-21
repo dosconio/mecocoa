@@ -14,6 +14,7 @@
 #define __MEMOMAN_HPP__
 
 struct Spinlock;
+struct DeviceNode;
 class ProcessBlock;
 
 #define PAGE_SIZE 0x1000 // lev-0-page
@@ -110,7 +111,22 @@ extern uint8 acpi_pcie_end_bus;
 extern bool acpi_pcie_ecam_available;
 
 namespace Iova {
+	enum class DmaMappingFlag : uint32 {
+		None = 0,
+		Identity = 1 << 0,
+	};
+
+	struct DmaMapping {
+		uint64 device_address;
+		bool translated;
+	};
+
 	bool ProbeVtd(stduint dmar_address);
+	bool EnableVtdPassthrough(DeviceNode* pci_root);
+	bool MapDeviceDma(DeviceNode* device, stduint physical,
+		stduint length, DmaMappingFlag flags, DmaMapping& mapping);
+	bool UnmapDeviceDma(DeviceNode* device, uint64 device_address,
+		stduint length);
 }
 #if _MCCA == 0x8632
 #define mem_area_exten_beg 0x00101000
@@ -198,6 +214,10 @@ public:// for loaders
 	static bool ReleaseManagedPageCache(stduint physical_address);
 	static bool QueryManagedPage(stduint physical_address,
 		ManagedPageInfo& info);
+	static void InvalidateProcessPage(ProcessBlock* pb, stduint address);
+	#if _MCCA == 0x8632
+	static void HandleTLBShootdownIPI();
+	#endif
 	static bool BuildInitialPagePlan(stduint boot_magic,
 		const void* boot_info, InitialPageRegion*& plan,
 		stduint& plan_count, stduint& plan_storage_bytes);
@@ -218,7 +238,8 @@ extern Memory mem;
 extern Paging kernel_paging;
 #endif
 bool PrepareUserBuffer(ProcessBlock* pb, stduint address,
-	size_t length, bool write);
+	size_t length, bool write,
+	bool mapping_lock_held = false _Comment(caller_holds_pb_mutex_mapping));
 
 // ---- SEGMENT ----
 #if (_MCCA & 0xFF00) == 0x8600

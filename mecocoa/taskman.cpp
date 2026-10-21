@@ -49,6 +49,10 @@ static void SendFixedIPIByCore(stduint core_id, uint8 vector) {
 	}
 }
 
+void Taskman::SendTLBShootdownIPI(stduint core_id) {
+	SendFixedIPIByCore(core_id, IRQ_TLB_SHOOTDOWN_IPI);
+}
+
 void Taskman::SendRescheduleIPI(stduint core_id) {
 	SendFixedIPIByCore(core_id, IRQ_RESCHED_IPI);
 }
@@ -584,7 +588,8 @@ static bool DeliverWaitResultAtomically(ProcessBlock* pparent, stduint child_pid
 		MutexLocal mapping_guard(&pparent->mutex_mapping);
 		if (!message_in_kernel &&
 			!PrepareUserBuffer(pparent, _IMM(pending_message),
-				sizeof(prepared_message), true)) return false;
+				sizeof(prepared_message), true,
+				true _Comment(caller_holds_pb_mutex_mapping))) return false;
 		Paging& message_paging = message_in_kernel ? kernel_paging : pparent->paging;
 		if (MemCopyP(&prepared_message, kernel_paging, pending_message,
 			message_paging, sizeof(prepared_message)) != sizeof(prepared_message)) return false;
@@ -592,7 +597,8 @@ static bool DeliverWaitResultAtomically(ProcessBlock* pparent, stduint child_pid
 			prepared_message.data.length);
 		if (prepared_length && !message_in_kernel &&
 			!PrepareUserBuffer(pparent, prepared_message.data.address,
-				prepared_length, true)) return false;
+				prepared_length, true,
+				true _Comment(caller_holds_pb_mutex_mapping))) return false;
 		#else
 		prepared_message = *pending_message;
 		const stduint prepared_length = minof((stduint)sizeof(args),

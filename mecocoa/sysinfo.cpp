@@ -525,7 +525,7 @@ void dump_threads(OstreamTrait& com1) {
 	const int pointer_column = sizeof(stduint) * 2 + 4; // 0x + hex digits + two spaces
 	com1.OutFormat("\033[1mTID  PID   STATE     REASON   CPU \033[35mPRI  \033[32mNAME\033[0m\n\r");
 	int header_used = 0;
-	com1.OutFormat("\033[1;36m");
+	com1.OutFormat("\033[1;36m    ");
 	com1.OutFormat("IP%n", &header_used);
 	pad_column(header_used, pointer_column);
 	com1.OutFormat("SP%n", &header_used);
@@ -534,7 +534,7 @@ void dump_threads(OstreamTrait& com1) {
 	com1.OutFormat("LINE_PEAK%n", &header_used);
 	pad_column(header_used, 10);
 	com1.OutFormat("KERN_PEAK\033[0m\n\r");
-	com1.OutFormat("\033[1;34mSEND     RECV     QHEAD    QNEXT    BR       UMSG\033[0m\n\r");
+	com1.OutFormat("\033[1;34m    SEND     RECV     QHEAD    QNEXT    BR       UMSG\033[0m\n\r");
 	for (auto nod = Taskman::thchain.Root(); nod; nod = nod->next) {
 		auto th = cast<ThreadBlock*>(nod->offs);
 		int used = 0;
@@ -595,7 +595,7 @@ void dump_threads(OstreamTrait& com1) {
 		com1.OutFormat("\033[32m%s\033[0m\n\r", th->name.get());
 
 		// IP, SP and sampled stack peaks
-		com1.OutFormat("\033[36m");
+		com1.OutFormat("\033[36m    ");
 		com1.OutFormat("%p%n", th->context.IP, &used);
 		pad_column(used, pointer_column);
 		com1.OutFormat("%p%n", th->context.SP, &used);
@@ -637,7 +637,7 @@ void dump_threads(OstreamTrait& com1) {
 		}
 		str[5].Format("%u", _IMM(th->block_reason));
 
-		com1.OutFormat("\033[34m");
+		com1.OutFormat("\033[34m    ");
 		com1.OutFormat("%s%n", str[0].reference(), &used);
 		pad_column(used, 9);
 		com1.OutFormat("%s%n", str[1].reference(), &used);

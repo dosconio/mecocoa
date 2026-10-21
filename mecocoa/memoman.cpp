@@ -68,8 +68,87 @@ Spinlock mempool_lock;
 // VirtualMemory Implementation
 // ---------------------------------------------------------
 
+#if CONFIG_ENABLE_MMU
+#if _MCCA == 0x8632
+struct TLBShootdownMailbox {
+	stduint address = 0;
+	uni::Atomic<stduint> requested = 0;
+	uni::Atomic<stduint> acknowledged = 0;
+};
+
+static TLBShootdownMailbox tlb_shootdown_mailboxes[PCU_CORES_MAX];
+// One owner publishes requests; waiters service their local mailbox before retrying.
+static uni::Atomic<byte> tlb_shootdown_active = 0;
+static stduint tlb_shootdown_sequence = 0;
+
+static void ServiceLocalTLBShootdown() {
+	const stduint core_id = Taskman::getID();
+	if (core_id >= PCU_CORES_MAX) return;
+	auto& mailbox = tlb_shootdown_mailboxes[core_id];
+	const stduint requested = mailbox.requested.load(uni::MemoryOrder_Acquire);
+	if (!requested ||
+		mailbox.acknowledged.load(uni::MemoryOrder_Relaxed) == requested) return;
+	RefreshVirtualAddress(mailbox.address);
+	// User execution resumes only after the interrupt return or context switch reloads CR3.
+	mailbox.acknowledged.store(requested, uni::MemoryOrder_Release);
+}
+#endif
+
+void Memory::InvalidateProcessPage(ProcessBlock* pb, stduint address) {
+	address &= ~_IMM(PAGE_SIZE - 1);
+	RefreshVirtualAddress(address);
+	#if _MCCA == 0x8632 && _SYS_MULTICORE
+	if (!pb || !pb->paging.root_level_page || Taskman::PCU_CORES <= 1 ||
+		!IC.getType()) return;
+
+	byte expected = 0;
+	while (!tlb_shootdown_active.compare_exchange(expected, 1,
+		uni::MemoryOrder_Acquire, uni::MemoryOrder_Relaxed)) {
+		ServiceLocalTLBShootdown();
+		expected = 0;
+		_ASM volatile("pause" ::: "memory");
+	}
+
+	if (!(++tlb_shootdown_sequence)) ++tlb_shootdown_sequence;
+	const stduint sequence = tlb_shootdown_sequence;
+	const stduint current_core = Taskman::getID();
+	bool targets[PCU_CORES_MAX] = {};
+	for (stduint core_id = 0; core_id < PCU_CORES_MAX; core_id++) {
+		if (core_id == current_core) continue;
+		auto percore = Taskman::PCU_CORES_PERCORE[core_id];
+		if (!percore || percore->state != CoreState::Online ||
+			percore->lapic_id == CORE_ID_INVALID) continue;
+		auto& mailbox = tlb_shootdown_mailboxes[core_id];
+		mailbox.address = address;
+		mailbox.requested.store(sequence, uni::MemoryOrder_Release);
+		targets[core_id] = true;
+		Taskman::SendTLBShootdownIPI(core_id);
+	}
+	for (stduint core_id = 0; core_id < PCU_CORES_MAX; core_id++) {
+		if (!targets[core_id]) continue;
+		while (tlb_shootdown_mailboxes[core_id].acknowledged.load(
+			uni::MemoryOrder_Acquire) != sequence) {
+			ServiceLocalTLBShootdown();
+			_ASM volatile("pause" ::: "memory");
+		}
+	}
+	tlb_shootdown_active.store(0, uni::MemoryOrder_Release);
+	#else
+	(void)pb;
+	#endif
+}
+
+#if _MCCA == 0x8632
+void Memory::HandleTLBShootdownIPI() {
+	ServiceLocalTLBShootdown();
+}
+#endif
+
+static void* ResolveAnonymousCowPage(ProcessBlock* pb, stduint address);
+#endif
+
 bool PrepareUserBuffer(ProcessBlock* pb, stduint address,
-	size_t length, bool write) {
+	size_t length, bool write, bool mapping_lock_held) {
 	if (!pb || (!address && length) || length > ~_IMM0 - address) return false;
 	if (!length) return true;
 	#if CONFIG_ENABLE_MMU
@@ -85,12 +164,30 @@ bool PrepareUserBuffer(ProcessBlock* pb, stduint address,
 		if (!entry || _IMM(entry) == ~_IMM0 ||
 			!entry->DecodeLeafProperties(page_index.crt_level, properties) ||
 			!(properties & PGPROP_present) ||
-			!(properties & PGPROP_user_access) ||
-			(write && !(properties & PGPROP_writable))) return false;
+			!(properties & PGPROP_user_access)) return false;
+		if (write && !(properties & PGPROP_writable)) {
+			void* physical = nullptr;
+			if (mapping_lock_held) {
+				physical = ResolveAnonymousCowPage(pb, page);
+			}
+			else {
+				MutexLocal mapping_guard(&pb->mutex_mapping);
+				physical = ResolveAnonymousCowPage(pb, page);
+			}
+			if (!physical) return false;
+			page_index = page;
+			entry = pb->paging.getEntry(page_index);
+			if (!entry || _IMM(entry) == ~_IMM0 ||
+				!entry->DecodeLeafProperties(page_index.crt_level, properties) ||
+				!(properties & PGPROP_present) ||
+				!(properties & PGPROP_user_access) ||
+				!(properties & PGPROP_writable)) return false;
+		}
 		if (page == last_page) break;
 	}
 	#else
 	(void)write;
+	(void)mapping_lock_held;
 	#endif
 	return true;
 }
@@ -574,6 +671,104 @@ void* ProcessBlock::EnsureVmaPage(stduint address, VirtualMemoryAccess access) {
 	if (physical) Memory::ReleaseManagedPageMapping(_IMM(physical));
 	ReleaseVmaReadFile(read_file);
 	return result;
+}
+
+static bool ReadAnonymousCowPage(ProcessBlock* pb, stduint address,
+	stduint& physical_address, stduint& properties) {
+	SpinlockLocal guard(&pb->vma_lock);
+	for (stduint i = 0; i < pb->vmas.Count(); i++) {
+		const auto& vma = pb->vmas[i];
+		if (address < vma.vm_start || address >= vma.vm_end) continue;
+		if (vma.vm_type != VirtualMemoryAreaType::Anonymous ||
+			vma.vm_mode != VirtualMemoryAreaMode::Private ||
+			!VmaAllowsAccess(vma, VirtualMemoryAccess::Write)) return false;
+		pageint page = address;
+		PageEntry* entry = pb->paging.getEntry(page);
+		if (_IMM(entry) == ~_IMM0 || page.crt_level != 0 ||
+			!entry->DecodeLeafProperties(page.crt_level, properties) ||
+			!(properties & PGPROP_present) ||
+			!(properties & PGPROP_user_access) ||
+			(properties & PGPROP_writable)) return false;
+		physical_address = _IMM(pb->paging[address]);
+		return physical_address != ~_IMM0;
+	}
+	return false;
+}
+
+static bool ReplaceAnonymousCowPage(ProcessBlock* pb, stduint address,
+	stduint expected_physical, stduint expected_properties,
+	stduint replacement_physical) {
+	SpinlockLocal guard(&pb->vma_lock);
+	for (stduint i = 0; i < pb->vmas.Count(); i++) {
+		const auto& vma = pb->vmas[i];
+		if (address < vma.vm_start || address >= vma.vm_end) continue;
+		if (vma.vm_type != VirtualMemoryAreaType::Anonymous ||
+			vma.vm_mode != VirtualMemoryAreaMode::Private ||
+			!VmaAllowsAccess(vma, VirtualMemoryAccess::Write)) return false;
+		pageint page = address;
+		PageEntry* entry = pb->paging.getEntry(page);
+		stduint current_properties;
+		if (_IMM(entry) == ~_IMM0 || page.crt_level != 0 ||
+			!entry->DecodeLeafProperties(page.crt_level, current_properties) ||
+			current_properties != expected_properties ||
+			_IMM(pb->paging[address]) != expected_physical) return false;
+		PageEntry replacement;
+		if (!replacement.SetupAsLeaf(replacement_physical, page.crt_level,
+			expected_properties | PGPROP_writable)) return false;
+		entry->raw = replacement.raw;
+		return true;
+	}
+	return false;
+}
+
+// The caller holds pb->mutex_mapping.
+static void* ResolveAnonymousCowPage(ProcessBlock* pb, stduint address) {
+	stduint old_physical;
+	stduint old_properties;
+	if (!ReadAnonymousCowPage(pb, address, old_physical, old_properties))
+		return nullptr;
+
+	ManagedPageInfo old_page;
+	if (!Memory::QueryManagedPage(old_physical, old_page) ||
+		old_page.source != ManagedPageSource::Anonymous ||
+		!old_page.mapping_refs) return nullptr;
+
+	if (old_page.mapping_refs == 1 && !old_page.cache_refs) {
+		if (!ReplaceAnonymousCowPage(pb, address, old_physical,
+			old_properties, old_physical)) return nullptr;
+		Memory::InvalidateProcessPage(pb, address);
+		return (void*)old_physical;
+	}
+
+	void* new_physical = mempool.allocate(PAGE_SIZE, 12);
+	if (!new_physical || new_physical == (void*)~_IMM0) return nullptr;
+	if (MemCopyP(new_physical, kernel_paging, (void*)old_physical,
+		kernel_paging, PAGE_SIZE) != PAGE_SIZE) {
+		mempool.deallocate(new_physical, PAGE_SIZE);
+		return nullptr;
+	}
+	if (!Memory::AdoptManagedPage(_IMM(new_physical),
+		ManagedPageSource::Anonymous)) return nullptr;
+	if (!ReplaceAnonymousCowPage(pb, address, old_physical,
+		old_properties, _IMM(new_physical))) {
+		Memory::ReleaseManagedPageMapping(_IMM(new_physical));
+		return nullptr;
+	}
+	Memory::InvalidateProcessPage(pb, address);
+	if (!Memory::ReleaseManagedPageMapping(old_physical)) KASSERT(false);
+	return new_physical;
+}
+
+void* ProcessBlock::ResolveVmaFault(stduint address,
+	VirtualMemoryAccess access, bool protection_fault) {
+	address &= ~_IMM(0xFFF);
+	if (!protection_fault) {
+		void* physical = EnsureVmaPage(address, access);
+		if (physical || access != VirtualMemoryAccess::Write) return physical;
+	}
+	if (access != VirtualMemoryAccess::Write) return nullptr;
+	MutexLocal mapping_guard(&mutex_mapping);
+	return ResolveAnonymousCowPage(this, address);
 }
 
 extern "C" void* kernel_prefault_page(ProcessBlock* pb, stduint address,

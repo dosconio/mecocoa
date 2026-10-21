@@ -48,9 +48,11 @@ namespace {
 		stduint handle_id = 0;
 		DeviceNode* device = nullptr;
 		stduint physical = 0;
+		uint64 device_address = 0;
 		stduint size = 0;
 		stduint mapped_addr = 0;
 		uint8 dma_channel = 0xFF;
+		bool iova_mapped = false;
 	};
 
 	#if (_MCCA & 0xFF00) == 0x8600
@@ -132,6 +134,14 @@ namespace {
 		auto* slot = node ? reinterpret_cast<PwcallDmaSlot*>(node->offs) : nullptr;
 		if (!slot) return;
 		StopPwcallDmaSlot(slot);
+		#if (_MCCA & 0xFF00) == 0x8600
+		if (slot->iova_mapped && !Iova::UnmapDeviceDma(slot->device,
+			slot->device_address, slot->size)) {
+			plogerro("[IOMMU] Failed to release DMA mapping iova=%[64H] bytes=%u",
+				slot->device_address, slot->size);
+			slot->physical = 0;
+		}
+		#endif
 		if (slot->physical && slot->size) {
 			#if (_MCCA & 0xFF00) == 0x8600
 			if (DmaLowIsInRange((void*)slot->physical)) {
@@ -166,6 +176,19 @@ namespace {
 		else chain->last_node = left;
 		if (chain->node_count) chain->node_count--;
 		DnodeRemove(node, chain->func_free);
+	}
+
+	static void DetachPwcallHandleChainNode(dchain_t* chain, Dnode* node) {
+		if (!chain || !node) return;
+		auto* left = node->left;
+		auto* next = node->next;
+		if (left) left->next = next;
+		else chain->root_node = next;
+		if (next) next->left = left;
+		else chain->last_node = left;
+		if (chain->node_count) chain->node_count--;
+		node->left = nullptr;
+		node->next = nullptr;
 	}
 }
 
@@ -1044,8 +1067,12 @@ static stduint MapPwcallPhysicalRange(ProcessBlock* pb, stduint phys_begin,
 
 static stdsint HandlePwcallDeviceDmaAlloc(ProcessBlock* pb, stduint dev_handle, stduint size, stduint flags) {
 	if (!pb || !dev_handle || !size) return -1;
-	const stduint known_flags = _IMM(PwcallDeviceDmaAllocFlag::NoLowMemory);
+	const stduint known_flags = _IMM(PwcallDeviceDmaAllocFlag::NoLowMemory) |
+		_IMM(PwcallDeviceDmaAllocFlag::Iova) |
+		_IMM(PwcallDeviceDmaAllocFlag::IdentityIova);
 	if (flags & ~known_flags) return -1;
+	if ((flags & _IMM(PwcallDeviceDmaAllocFlag::IdentityIova)) &&
+		!(flags & _IMM(PwcallDeviceDmaAllocFlag::Iova))) return -1;
 	auto* device = ResolvePwcallDeviceHandle(pb, dev_handle);
 	if (!device) return -1;
 	uint8 dma_channel = 0xFF;
@@ -1070,42 +1097,66 @@ static stdsint HandlePwcallDeviceDmaAlloc(ProcessBlock* pb, stduint dev_handle, 
 	}
 	if (!phys) return -1;
 
-	SpinlockLocal guard(PwcallHandleLock());
-	auto* owner = GetOrCreatePwcallProcessHandles(pb->pid);
-	if (!owner) {
-		#if (_MCCA & 0xFF00) == 0x8600
+	Iova::DmaMapping dma_mapping = { uint64(stduint(phys)), false };
+	#if (_MCCA & 0xFF00) == 0x8600
+	const Iova::DmaMappingFlag iova_flags =
+		(flags & _IMM(PwcallDeviceDmaAllocFlag::IdentityIova)) ?
+		Iova::DmaMappingFlag::Identity : Iova::DmaMappingFlag::None;
+	if ((flags & _IMM(PwcallDeviceDmaAllocFlag::Iova)) &&
+		!Iova::MapDeviceDma(device, stduint(phys), alloc_size, iova_flags,
+			dma_mapping)) {
 		if (DmaLowIsInRange(phys)) DmaLowFree(phys, alloc_size);
 		else mempool.deallocate(phys, alloc_size);
-		#else
-		mempool.deallocate(phys, alloc_size);
-		#endif
 		return -1;
 	}
-	auto* slot = zalcof(PwcallDmaSlot);
-	if (!slot) {
-		#if (_MCCA & 0xFF00) == 0x8600
-		if (DmaLowIsInRange(phys)) DmaLowFree(phys, alloc_size);
-		else mempool.deallocate(phys, alloc_size);
-		#else
-		mempool.deallocate(phys, alloc_size);
-		#endif
-		return -1;
+	#endif
+
+	stduint handle_id = 0;
+	{
+		SpinlockLocal guard(PwcallHandleLock());
+		auto* owner = GetOrCreatePwcallProcessHandles(pb->pid);
+		auto* slot = owner ? zalcof(PwcallDmaSlot) : nullptr;
+		if (slot) {
+			slot->handle_id = owner->next_dma_handle++;
+			slot->device = device;
+			slot->physical = stduint(phys);
+			slot->device_address = dma_mapping.device_address;
+			slot->size = alloc_size;
+			slot->mapped_addr = 0;
+			slot->dma_channel = dma_channel;
+			slot->iova_mapped = dma_mapping.translated;
+			DchainAppend(&owner->dmas, slot, false, nullptr);
+			handle_id = slot->handle_id;
+		}
 	}
-	slot->handle_id = owner->next_dma_handle++;
-	slot->device = device;
-	slot->physical = stduint(phys);
-	slot->size = alloc_size;
-	slot->mapped_addr = 0;
-	slot->dma_channel = dma_channel;
-	DchainAppend(&owner->dmas, slot, false, nullptr);
-	return stdsint(slot->handle_id);
+	if (handle_id) return stdsint(handle_id);
+	bool release_physical = true;
+	#if (_MCCA & 0xFF00) == 0x8600
+	if (dma_mapping.translated &&
+		!Iova::UnmapDeviceDma(device, dma_mapping.device_address,
+			alloc_size)) {
+		plogerro("[IOMMU] DMA handle allocation failed; retaining mapped physical memory");
+		release_physical = false;
+	}
+	#endif
+	if (!release_physical) return -1;
+	#if (_MCCA & 0xFF00) == 0x8600
+	if (DmaLowIsInRange(phys)) DmaLowFree(phys, alloc_size);
+	else mempool.deallocate(phys, alloc_size);
+	#else
+	mempool.deallocate(phys, alloc_size);
+	#endif
+	return -1;
 }
 
 static stdsint HandlePwcallDeviceDmaFree(ProcessBlock* pb, stduint dma_handle) {
 	if (!pb || dma_handle < PwcallDmaHandleBase) return -1;
 	stduint physical;
+	uint64 device_address;
 	stduint size;
 	stduint mapped_addr;
+	DeviceNode* device;
+	bool iova_mapped;
 	{
 		SpinlockLocal guard(PwcallHandleLock());
 		auto* owner = FindPwcallProcessHandles(pb->pid);
@@ -1116,11 +1167,16 @@ static stdsint HandlePwcallDeviceDmaFree(ProcessBlock* pb, stduint dma_handle) {
 		if (!slot || !slot->physical || !slot->size) return -1;
 		StopPwcallDmaSlot(slot);
 		physical = slot->physical;
+		device_address = slot->device_address;
 		size = slot->size;
 		mapped_addr = slot->mapped_addr;
+		device = slot->device;
+		iova_mapped = slot->iova_mapped;
 		slot->physical = 0;
+		slot->device_address = 0;
 		slot->size = 0;
 		slot->mapped_addr = 0;
+		slot->iova_mapped = false;
 	}
 	if (mapped_addr && sysc_UMAP(mapped_addr, size) == -1) {
 		SpinlockLocal guard(PwcallHandleLock());
@@ -1129,11 +1185,28 @@ static stdsint HandlePwcallDeviceDmaFree(ProcessBlock* pb, stduint dma_handle) {
 		auto* slot = slot_node ? reinterpret_cast<PwcallDmaSlot*>(slot_node->offs) : nullptr;
 		if (slot && !slot->physical) {
 			slot->physical = physical;
+			slot->device_address = device_address;
 			slot->size = size;
 			slot->mapped_addr = mapped_addr;
+			slot->iova_mapped = iova_mapped;
 		}
 		return -1;
 	}
+	#if (_MCCA & 0xFF00) == 0x8600
+	if (iova_mapped && !Iova::UnmapDeviceDma(device, device_address, size)) {
+		SpinlockLocal guard(PwcallHandleLock());
+		auto* owner = FindPwcallProcessHandles(pb->pid);
+		auto* slot_node = owner ? FindPwcallDmaSlotNodeByHandle(owner, dma_handle) : nullptr;
+		auto* slot = slot_node ? reinterpret_cast<PwcallDmaSlot*>(slot_node->offs) : nullptr;
+		if (slot && !slot->physical) {
+			slot->physical = physical;
+			slot->device_address = device_address;
+			slot->size = size;
+			slot->iova_mapped = true;
+		}
+		return -1;
+	}
+	#endif
 	{
 		SpinlockLocal guard(PwcallHandleLock());
 		auto* owner = FindPwcallProcessHandles(pb->pid);
@@ -1162,6 +1235,7 @@ static stdsint HandlePwcallDeviceDmaMap(ProcessBlock* pb, stduint dma_handle, st
 	MccaMemCopyP(&request, nullptr, true, (void*)args, pb, false, sizeof(request));
 
 	stduint physical = 0;
+	uint64 device_address = 0;
 	stduint size = 0;
 	stduint mapped_addr = 0;
 	{
@@ -1173,6 +1247,7 @@ static stdsint HandlePwcallDeviceDmaMap(ProcessBlock* pb, stduint dma_handle, st
 		auto* slot = reinterpret_cast<PwcallDmaSlot*>(slot_node->offs);
 		if (!slot || !slot->physical || !slot->size) return -1;
 		physical = slot->physical;
+		device_address = slot->device_address;
 		size = slot->size;
 		mapped_addr = slot->mapped_addr;
 	}
@@ -1218,6 +1293,7 @@ static stdsint HandlePwcallDeviceDmaMap(ProcessBlock* pb, stduint dma_handle, st
 	}
 	if (!map_valid) return -1;
 	request.physical = physical;
+	request.device_address = device_address;
 	request.length = size;
 	request.address = mapped_addr;
 	MccaMemCopyP((void*)args, pb, false, &request, nullptr, true, sizeof(request));
@@ -1384,7 +1460,8 @@ static stdsint HandlePwcallDeviceUnmap(ProcessBlock* pb, stduint addr, stduint l
 static stdsint HandlePwcallDeviceIo(ProcessBlock* pb, DeviceNode* node, stduint args, bool is_write) {
 	if (!pb || !node || !args) return -1;
 	PwcallDeviceIoRequest request{};
-	MccaMemCopyP(&request, nullptr, true, (void*)args, pb, false, sizeof(request));
+	if (MccaMemCopyP(&request, nullptr, true, (void*)args, pb, false,
+		sizeof(request)) != sizeof(request)) return -1;
 
 	#if (_MCCA & 0xFF00) == 0x8600
 	const uint32 resource_type = request.resource_type ? request.resource_type : _IMM(DeviceResourceType::PciBarIo);
@@ -1402,7 +1479,6 @@ static stdsint HandlePwcallDeviceIo(ProcessBlock* pb, DeviceNode* node, stduint 
 	const uint64 port64 = res->start + request.offset;
 	if (port64 + request.width > 0x10000ull) return -1;
 	const uint16 port = uint16(port64);
-
 	if (is_write) {
 		switch (request.width) {
 		case 1: OUT_b(port, uint8(request.value)); break;
@@ -1420,6 +1496,79 @@ static stdsint HandlePwcallDeviceIo(ProcessBlock* pb, DeviceNode* node, stduint 
 	default: return -1;
 	}
 	MccaMemCopyP((void*)args, pb, false, &request, nullptr, true, sizeof(request));
+	return 0;
+	#else
+	(void)is_write;
+	return -1;
+	#endif
+}
+
+static stdsint HandlePwcallDeviceIoStream(ProcessBlock* pb, DeviceNode* node,
+	stduint args, bool is_write) {
+	if (!pb || !node || !args) return -1;
+	PwcallDeviceIoStreamRequest request{};
+	if (MccaMemCopyP(&request, nullptr, true, (void*)args, pb, false,
+		sizeof(request)) != sizeof(request)) return -1;
+
+	#if (_MCCA & 0xFF00) == 0x8600
+	const uint32 resource_type = request.resource_type ? request.resource_type :
+		_IMM(DeviceResourceType::PciBarIo);
+	const auto* res = FindPwcallDeviceResource(node, resource_type,
+		request.resource_index);
+	if (!res) {
+		res = FindPwcallDeviceResource(node,
+			_IMM(DeviceResourceType::IoPortRange), request.resource_index);
+	}
+	if (!res) return -1;
+	const auto res_type = DeviceResourceType(res->type);
+	if (res_type != DeviceResourceType::PciBarIo &&
+		res_type != DeviceResourceType::IoPortRange) return -1;
+	if (request.width != 1 && request.width != 2 && request.width != 4) return -1;
+	if (request.offset + request.width > res->length || !request.buffer ||
+		!request.count || request.count > 0x100000u ||
+		uint64(stduint(request.buffer)) != request.buffer ||
+		request.count > (~uint64(0) / request.width)) return -1;
+	const uint64 port64 = res->start + request.offset;
+	if (port64 + request.width > 0x10000ull) return -1;
+	const uint16 port = uint16(port64);
+	const uint64 byte_count64 = request.count * request.width;
+	if (uint64(stduint(byte_count64)) != byte_count64) return -1;
+	const stduint byte_count = stduint(byte_count64);
+	uint8 transfer[256];
+	stduint transferred = 0;
+	while (transferred < byte_count) {
+		const stduint chunk = minof(byte_count - transferred,
+			stduint(sizeof(transfer)));
+		if (is_write && MccaMemCopyP(transfer, nullptr, true,
+			reinterpret_cast<const void*>(stduint(request.buffer) + transferred),
+			pb, false, chunk) != chunk) return -1;
+		for (stduint offset = 0; offset < chunk; offset += request.width) {
+			if (is_write) {
+				switch (request.width) {
+				case 1: OUT_b(port, transfer[offset]); break;
+				case 2: OUT_w(port,
+					*reinterpret_cast<uint16*>(transfer + offset)); break;
+				case 4: OUT_d(port,
+					*reinterpret_cast<uint32*>(transfer + offset)); break;
+				default: return -1;
+				}
+			}
+			else {
+				switch (request.width) {
+				case 1: transfer[offset] = IN_b(port); break;
+				case 2: *reinterpret_cast<uint16*>(transfer + offset) =
+					IN_w(port); break;
+				case 4: *reinterpret_cast<uint32*>(transfer + offset) =
+					IN_d(port); break;
+				default: return -1;
+				}
+			}
+		}
+		if (!is_write && MccaMemCopyP(
+			reinterpret_cast<void*>(stduint(request.buffer) + transferred),
+			pb, false, transfer, nullptr, true, chunk) != chunk) return -1;
+		transferred += chunk;
+	}
 	return 0;
 	#else
 	(void)is_write;
@@ -1463,17 +1612,20 @@ void CleanupPwcallProcessHandles(stduint pid) {
 		PwcallDisablePciDeviceDma(device, pid);
 	}
 	#endif
-	SpinlockLocal guard(PwcallHandleLock());
-	EnsurePwcallHandleTableInitialized();
-	for (auto* crt = power_handle_table.root_node; crt; ) {
-		auto* next = crt->next;
-		auto* owner = reinterpret_cast<PwcallProcessHandles*>(crt->offs);
-		if (owner && owner->pid == pid) {
-			RemovePwcallHandleChainNode(&power_handle_table, crt);
-			return;
+	Dnode* owner_node = nullptr;
+	{
+		SpinlockLocal guard(PwcallHandleLock());
+		EnsurePwcallHandleTableInitialized();
+		for (auto* crt = power_handle_table.root_node; crt; crt = crt->next) {
+			auto* owner = reinterpret_cast<PwcallProcessHandles*>(crt->offs);
+			if (owner && owner->pid == pid) {
+				DetachPwcallHandleChainNode(&power_handle_table, crt);
+				owner_node = crt;
+				break;
+			}
 		}
-		crt = next;
 	}
+	if (owner_node) DnodeRemove(owner_node, power_handle_table.func_free);
 }
 
 stdsint HandlePwcall(syscall_t callid, stduint p1, stduint p2, stduint p3) {
@@ -1563,6 +1715,16 @@ stdsint HandlePwcall(syscall_t callid, stduint p1, stduint p2, stduint p3) {
 	{
 		auto* node = ResolvePwcallDeviceHandle(pb, p1);
 		return HandlePwcallDeviceIo(pb, node, p2, true);
+	}
+	case syscall_t::POWERCALL_DEV_IO_READ_STREAM:
+	{
+		auto* node = ResolvePwcallDeviceHandle(pb, p1);
+		return HandlePwcallDeviceIoStream(pb, node, p2, false);
+	}
+	case syscall_t::POWERCALL_DEV_IO_WRITE_STREAM:
+	{
+		auto* node = ResolvePwcallDeviceHandle(pb, p1);
+		return HandlePwcallDeviceIoStream(pb, node, p2, true);
 	}
 	case syscall_t::POWERCALL_DEV_READ:
 	case syscall_t::POWERCALL_DEV_WRITE:

@@ -44,6 +44,8 @@ namespace {
 		VmciQueuePairMaxQueueSize / VmciPageSize;
 	constexpr stduint VmciQueuePairMaxPages =
 		2u * (VmciQueuePairMaxDataPages + 1u);
+	// Diagnostic: publish the mapped page as the legacy data-in landing page.
+	constexpr bool VmciLegacyLandingPage = false;
 
 	enum class VmciRegister : uint32 {
 		Status = 0x00u,
@@ -80,6 +82,7 @@ namespace {
 	struct VmciDmaRegion {
 		stduint handle = 0;
 		uint64 physical = 0;
+		uint64 device_address = 0;
 		uint64 length = 0;
 		uint8* address = nullptr;
 	};
@@ -217,9 +220,9 @@ namespace {
 		uint8* receive_buffer = nullptr;
 		uint8* transmit_buffer = nullptr;
 		volatile uint8* notification_bitmap = nullptr;
-		uint64 receive_physical = 0;
-		uint64 transmit_physical = 0;
-		uint64 notification_physical = 0;
+		uint64 receive_device_address = 0;
+		uint64 transmit_device_address = 0;
+		uint64 notification_device_address = 0;
 		uint32 capabilities = 0;
 		uint32 capabilities_in_use = 0;
 		uint32 context_id = VmciInvalidId;
@@ -284,7 +287,7 @@ namespace {
 		stduint pending_receive_tid = 0;
 		uint32 pending_receive_size = 0;
 		int32 hypervisor_result = 0;
-		VmciDmaRegion dma = {};
+		VmciDmaRegion dma_pages[VmciQueuePairMaxPages] = {};
 		bool awaiting_negotiate = false;
 		bool awaiting_attach = false;
 		bool old_transport_protocol = false;
@@ -299,6 +302,7 @@ namespace {
 	uint32 g_next_resource_id = VmciFirstDynamicResourceId;
 	uint32 g_next_subscription_id = 1;
 	alignas(stduint) uint8 g_message_buffer[sizeof(VmciDatagramPacket)]{};
+	alignas(VmciPageSize) uint8 g_legacy_datagram_buffer[VmciMaxDatagramSize]{};
 	alignas(uint64) uint8 g_queue_pair_payload[
 		sizeof(VmciQueuePairAllocPayload) +
 		VmciQueuePairMaxPages * sizeof(uint64)]{};
@@ -341,6 +345,21 @@ namespace {
 		return Powercall::DevIoWrite(g_vmci.dev_handle, &request) == 0;
 	}
 
+	bool TransferIoStream(VmciRegister reg, void* buffer, stduint size,
+		bool is_write) {
+		if (!buffer || !size) return false;
+		PwcallDeviceIoStreamRequest request = {};
+		request.resource_type = _IMM(PwcallDeviceResourceType::PciBarIo);
+		request.resource_index = g_vmci.io.index;
+		request.width = 1;
+		request.offset = _IMM(reg);
+		request.buffer = uint64(stduint(buffer));
+		request.count = size;
+		return (is_write ?
+			Powercall::DevIoWriteStream(g_vmci.dev_handle, &request) :
+			Powercall::DevIoReadStream(g_vmci.dev_handle, &request)) == 0;
+	}
+
 	bool ReadRegister(VmciRegister reg, uint32& value) {
 		if (!g_vmci.use_mmio) return ReadIoRegister(reg, value);
 		value = g_vmci.registers[_IMM(reg) / sizeof(uint32)];
@@ -374,21 +393,24 @@ namespace {
 
 	bool AllocateDmaRegion(stduint dev_handle, stduint size,
 		VmciDmaRegion& region, stduint flags = 0) {
-		const stdsint dma_handle = Powercall::DevDmaAlloc(dev_handle, size, flags);
+		const stdsint dma_handle = Powercall::DevDmaAlloc(dev_handle, size,
+			flags | _IMM(PwcallDeviceDmaAllocFlag::Iova));
 		if (dma_handle <= 0) return false;
 		region.handle = stduint(dma_handle);
 
 		PwcallDeviceDmaMapRequest request = {};
 		request.map_flags = _IMM(PwcallDeviceDmaMapFlag::Writable);
 		if (Powercall::DevDmaMap(region.handle, &request) != 0 ||
-			!request.address || !request.physical || request.length < size ||
-			uint64(size - 1) > ~request.physical) {
+			!request.address || !request.physical || !request.device_address ||
+			request.length < size || uint64(size - 1) > ~request.physical ||
+			uint64(size - 1) > ~request.device_address) {
 			(void)Powercall::DevDmaFree(region.handle);
 			region = {};
 			return false;
 		}
 
 		region.physical = request.physical;
+		region.device_address = request.device_address;
 		region.length = request.length;
 		region.address = reinterpret_cast<uint8*>(stduint(request.address));
 		MemSet(region.address, 0, stduint(region.length));
@@ -416,15 +438,20 @@ namespace {
 		return true;
 	}
 
-	bool SelectRegisterAccess() {
-		if (FindResource(g_vmci.dev_handle, PwcallDeviceResourceType::PciBarMmio,
-			VmciMmioBarIndex, g_vmci.mmio) && MapMmioRegisters()) return true;
+	bool SelectLegacyRegisterAccess() {
 		if (!FindResource(g_vmci.dev_handle, PwcallDeviceResourceType::PciBarIo,
-			0, g_vmci.io)) return false;
-		if (g_vmci.io.length < VmciRequiredRegisterSize ||
+			0, g_vmci.io) || g_vmci.io.length < VmciRequiredRegisterSize ||
 			g_vmci.io.start + VmciRequiredRegisterSize > 0x10000u) return false;
 		g_vmci.use_mmio = false;
 		return true;
+	}
+
+	// MMIO datagram path is the verified inbound path; BAR0 is only a fallback.
+	bool SelectRegisterAccess() {
+		if (FindResource(g_vmci.dev_handle,
+			PwcallDeviceResourceType::PciBarMmio, VmciMmioBarIndex,
+			g_vmci.mmio) && MapMmioRegisters()) return true;
+		return SelectLegacyRegisterAccess();
 	}
 
 	bool InitializeRegisters() {
@@ -454,13 +481,30 @@ namespace {
 		const VmciHandle& source, const void* payload, stduint payload_size,
 		uint64& result) {
 		if ((!payload && payload_size) ||
-			payload_size > VmciMaxDatagramSize - sizeof(VmciDatagram) ||
-			!g_vmci.transmit_buffer) return false;
+			payload_size > VmciMaxDatagramSize - sizeof(VmciDatagram)) return false;
+		const stduint datagram_size = sizeof(VmciDatagram) + payload_size;
+		if (!g_vmci.use_mmio) {
+			auto* datagram = reinterpret_cast<VmciDatagram*>(
+				g_legacy_datagram_buffer);
+			datagram->destination = destination;
+			datagram->source = source;
+			datagram->payload_size = payload_size;
+			if (payload_size) {
+				MemCopyN(g_legacy_datagram_buffer + sizeof(VmciDatagram),
+					payload, payload_size);
+			}
+			if (!TransferIoStream(VmciRegister::DataOut,
+				g_legacy_datagram_buffer, datagram_size, true)) return false;
+			uint32 register_result = 0;
+			if (!ReadRegister(VmciRegister::ResultLow, register_result)) return false;
+			result = register_result;
+			return true;
+		}
+		if (!g_vmci.transmit_buffer) return false;
 
 		auto* header = reinterpret_cast<VmciDmaHeader*>(g_vmci.transmit_buffer);
 		uint8* output = g_vmci.transmit_buffer + sizeof(VmciDmaHeader);
 		auto* datagram = reinterpret_cast<VmciDatagram*>(output);
-		const stduint datagram_size = sizeof(VmciDatagram) + payload_size;
 		MemSet(header, 0, sizeof(VmciDmaHeader));
 		datagram->destination = destination;
 		datagram->source = source;
@@ -473,7 +517,7 @@ namespace {
 		header->busy = 1;
 		DmaWriteBarrier();
 		if (!WriteRegister(VmciRegister::DataOutLow,
-			uint32(g_vmci.transmit_physical)) ||
+			uint32(g_vmci.transmit_device_address)) ||
 			!WaitForDmaBusy(header->busy, 0)) return false;
 
 		uint32 register_result = 0;
@@ -500,7 +544,7 @@ namespace {
 			(g_vmci.capabilities_in_use & VmciCapabilityNotifications) == 0) {
 			return false;
 		}
-		const uint64 bitmap_ppn = g_vmci.notification_physical >> VmciPageShift;
+		const uint64 bitmap_ppn = g_vmci.notification_device_address >> VmciPageShift;
 		if ((g_vmci.capabilities_in_use & VmciCapabilityPpn64) == 0 &&
 			(bitmap_ppn >> 32) != 0) {
 			plogerro("[VMCI] Notification bitmap PPN exceeds 32 bits");
@@ -563,9 +607,54 @@ namespace {
 		return true;
 	}
 
-	bool ConfigureDmaDatagrams() {
-		if (!g_vmci.use_mmio ||
-			(g_vmci.capabilities & VmciCapabilityDmaDatagram) == 0) return false;
+	bool ConfigureDatagrams() {
+		if (!g_vmci.use_mmio) {
+			g_vmci.receive_buffer = g_legacy_datagram_buffer;
+			g_vmci.capabilities_in_use = VmciCapabilityDatagram;
+			if (g_vmci.capabilities & VmciCapabilityPpn64) {
+				g_vmci.capabilities_in_use |= VmciCapabilityPpn64;
+			}
+			if (g_vmci.capabilities & VmciCapabilityNotifications) {
+				if (!AllocateDmaRegion(g_vmci.dev_handle, VmciPageSize,
+					g_vmci.dma)) {
+					plogerro("[VMCI] Failed to allocate notification bitmap");
+					return false;
+				}
+				g_vmci.notification_bitmap = g_vmci.dma.address;
+				g_vmci.notification_device_address =
+					g_vmci.dma.device_address;
+				g_vmci.capabilities_in_use |= VmciCapabilityNotifications;
+			}
+			if (!WriteRegister(VmciRegister::Capabilities,
+				g_vmci.capabilities_in_use)) return false;
+			ploginfo("[VMCI] Legacy datagram available=%08x active=%08x dma-datagram=%u",
+				unsigned(g_vmci.capabilities),
+				unsigned(g_vmci.capabilities_in_use),
+				unsigned((g_vmci.capabilities & VmciCapabilityDmaDatagram) ? 1u : 0u));
+			// Page shift scales every submitted PPN, so both paths must set it.
+			if (!WriteRegister(VmciRegister::GuestPageShift, VmciPageShift)) {
+				plogerro("[VMCI] Guest page shift write failed");
+				return false;
+			}
+			if (VmciLegacyLandingPage &&
+				(g_vmci.capabilities_in_use & VmciCapabilityNotifications) &&
+				g_vmci.notification_device_address) {
+				if (!WriteRegister(VmciRegister::DataInHigh,
+					uint32(g_vmci.notification_device_address >> 32)) ||
+					!WriteRegister(VmciRegister::DataInLow,
+						uint32(g_vmci.notification_device_address))) {
+					plogerro("[VMCI] Legacy data-in landing page write failed");
+					return false;
+				}
+				ploginfo("[VMCI] Legacy data-in landing page iova=%[64H]",
+					g_vmci.notification_device_address);
+			}
+			if ((g_vmci.capabilities_in_use & VmciCapabilityNotifications) &&
+				!RegisterNotificationBitmap()) return false;
+			uint32 stale_cause = 0;
+			return ReadRegister(VmciRegister::InterruptCause, stale_cause);
+		}
+		if ((g_vmci.capabilities & VmciCapabilityDmaDatagram) == 0) return false;
 		if (!AllocateDmaRegion(g_vmci.dev_handle, VmciDmaRegionSize,
 			g_vmci.dma)) {
 			plogerro("[VMCI] Failed to allocate %u-byte DMA region",
@@ -575,12 +664,13 @@ namespace {
 
 		g_vmci.receive_buffer = g_vmci.dma.address;
 		g_vmci.transmit_buffer = g_vmci.dma.address + VmciDmaBufferSize;
-		g_vmci.receive_physical = g_vmci.dma.physical;
-		g_vmci.transmit_physical = g_vmci.dma.physical + VmciDmaBufferSize;
+		g_vmci.receive_device_address = g_vmci.dma.device_address;
+		g_vmci.transmit_device_address = g_vmci.dma.device_address +
+			VmciDmaBufferSize;
 		g_vmci.notification_bitmap = g_vmci.dma.address + VmciDatagramDmaSize;
-		g_vmci.notification_physical =
-			g_vmci.dma.physical + VmciDatagramDmaSize;
-		if (g_vmci.notification_physical & (VmciPageSize - 1u)) {
+		g_vmci.notification_device_address =
+			g_vmci.dma.device_address + VmciDatagramDmaSize;
+		if (g_vmci.notification_device_address & (VmciPageSize - 1u)) {
 			plogerro("[VMCI] Notification bitmap is not page aligned");
 			return false;
 		}
@@ -597,9 +687,9 @@ namespace {
 			g_vmci.capabilities_in_use) ||
 			!WriteRegister(VmciRegister::GuestPageShift, VmciPageShift) ||
 			!WriteRegister(VmciRegister::DataInHigh,
-				uint32(g_vmci.receive_physical >> 32)) ||
+				uint32(g_vmci.receive_device_address >> 32)) ||
 			!WriteRegister(VmciRegister::DataOutHigh,
-				uint32(g_vmci.transmit_physical >> 32))) return false;
+				uint32(g_vmci.transmit_device_address >> 32))) return false;
 
 		if ((g_vmci.capabilities_in_use & VmciCapabilityNotifications) &&
 			!RegisterNotificationBitmap()) return false;
@@ -1131,11 +1221,17 @@ namespace {
 
 	void ReleaseQueuePair(VmciQueuePair& queue_pair) {
 		CancelQueuePairReceive(queue_pair, VmciStatus::Unavailable);
-		if (queue_pair.dma.length <= g_vmci.queue_pair_dma_bytes) {
-			g_vmci.queue_pair_dma_bytes -= queue_pair.dma.length;
+		uint64 dma_bytes = 0;
+		for0(i, queue_pair.page_count) {
+			dma_bytes += queue_pair.dma_pages[i].length;
+		}
+		if (dma_bytes <= g_vmci.queue_pair_dma_bytes) {
+			g_vmci.queue_pair_dma_bytes -= dma_bytes;
 		}
 		else g_vmci.queue_pair_dma_bytes = 0;
-		FreeDmaRegion(queue_pair.dma);
+		for0(i, queue_pair.page_count) {
+			FreeDmaRegion(queue_pair.dma_pages[i]);
+		}
 		queue_pair = {};
 	}
 
@@ -1143,7 +1239,7 @@ namespace {
 		const stduint owner_tid = queue_pair.owner_tid;
 		const VmciQueuePairResult response =
 			MakeQueuePairResult(queue_pair, status);
-		if (queue_pair.dma.handle) {
+		if (queue_pair.page_count && queue_pair.dma_pages[0].handle) {
 			int32 detach_result = 0;
 			(void)SendHypervisorRequest(VmciQueuePairDetach,
 				&queue_pair.handle, sizeof(queue_pair.handle), detach_result);
@@ -1197,6 +1293,13 @@ namespace {
 			}
 			return false;
 		}
+		if (type == VmciTransportPacketType::Request2 ||
+			type == VmciTransportPacketType::Request) {
+			ploginfo("[VMCI] Stream request sent type=%u result=%d local=%u peer=%08x:%u",
+				unsigned(packet.type), vmci_result,
+				unsigned(packet.source_port), unsigned(queue_pair.peer),
+				unsigned(packet.destination_port));
+		}
 		return true;
 	}
 
@@ -1214,18 +1317,36 @@ namespace {
 		*reinterpret_cast<volatile uint32*>(&pointer) = value;
 	}
 
-	void CopyToQueue(uint8* queue, uint32 queue_size, uint32 offset,
-		const uint8* source, uint32 length) {
-		const uint32 first = minof(length, queue_size - offset);
-		MemCopyN(queue + offset, source, first);
-		if (first < length) MemCopyN(queue, source + first, length - first);
+	void CopyToQueue(VmciQueuePair& queue_pair, stduint first_page,
+		uint32 queue_size, uint32 offset, const uint8* source, uint32 length) {
+		while (length) {
+			const stduint page_index = first_page + offset / VmciPageSize;
+			const stduint page_offset = offset & (VmciPageSize - 1u);
+			const uint32 chunk = minof(length, minof(queue_size - offset,
+				uint32(VmciPageSize - page_offset)));
+			MemCopyN(queue_pair.dma_pages[page_index].address + page_offset,
+				source, chunk);
+			source += chunk;
+			length -= chunk;
+			offset += chunk;
+			if (offset == queue_size) offset = 0;
+		}
 	}
 
-	void CopyFromQueue(uint8* destination, const uint8* queue,
-		uint32 queue_size, uint32 offset, uint32 length) {
-		const uint32 first = minof(length, queue_size - offset);
-		MemCopyN(destination, queue + offset, first);
-		if (first < length) MemCopyN(destination + first, queue, length - first);
+	void CopyFromQueue(uint8* destination, const VmciQueuePair& queue_pair,
+		stduint first_page, uint32 queue_size, uint32 offset, uint32 length) {
+		while (length) {
+			const stduint page_index = first_page + offset / VmciPageSize;
+			const stduint page_offset = offset & (VmciPageSize - 1u);
+			const uint32 chunk = minof(length, minof(queue_size - offset,
+				uint32(VmciPageSize - page_offset)));
+			MemCopyN(destination,
+				queue_pair.dma_pages[page_index].address + page_offset, chunk);
+			destination += chunk;
+			length -= chunk;
+			offset += chunk;
+			if (offset == queue_size) offset = 0;
+		}
 	}
 
 	stdsint WriteQueuePair(VmciQueuePair& queue_pair, const uint8* payload,
@@ -1234,9 +1355,9 @@ namespace {
 		const stduint produce_pages = stduint((queue_pair.produce_size +
 			VmciPageSize - 1u) / VmciPageSize) + 1u;
 		auto* produce_header = reinterpret_cast<VmciQueueHeader*>(
-			queue_pair.dma.address);
+			queue_pair.dma_pages[0].address);
 		auto* consume_header = reinterpret_cast<VmciQueueHeader*>(
-			queue_pair.dma.address + produce_pages * VmciPageSize);
+			queue_pair.dma_pages[produce_pages].address);
 		DmaReadBarrier();
 		const uint32 tail = ReadQueuePointer(produce_header->producer_tail);
 		const uint32 head = ReadQueuePointer(consume_header->consumer_head);
@@ -1244,8 +1365,7 @@ namespace {
 		const uint32 free_size = tail >= head ?
 			queue_size - (tail - head) - 1u : head - tail - 1u;
 		if (payload_size > free_size) return 0;
-		CopyToQueue(queue_pair.dma.address + VmciPageSize, queue_size, tail,
-			payload, payload_size);
+		CopyToQueue(queue_pair, 1, queue_size, tail, payload, payload_size);
 		DmaWriteBarrier();
 		WriteQueuePointer(produce_header->producer_tail,
 			(tail + payload_size) % queue_size);
@@ -1259,9 +1379,9 @@ namespace {
 		const stduint produce_pages = stduint((queue_pair.produce_size +
 			VmciPageSize - 1u) / VmciPageSize) + 1u;
 		auto* produce_header = reinterpret_cast<VmciQueueHeader*>(
-			queue_pair.dma.address);
+			queue_pair.dma_pages[0].address);
 		auto* consume_header = reinterpret_cast<VmciQueueHeader*>(
-			queue_pair.dma.address + produce_pages * VmciPageSize);
+			queue_pair.dma_pages[produce_pages].address);
 		DmaReadBarrier();
 		const uint32 tail = ReadQueuePointer(consume_header->producer_tail);
 		const uint32 head = ReadQueuePointer(produce_header->consumer_head);
@@ -1270,9 +1390,8 @@ namespace {
 			tail - head : queue_size - head + tail;
 		if (!ready) return 0;
 		const uint32 length = minof(ready, capacity);
-		const uint8* data = queue_pair.dma.address +
-			(produce_pages + 1u) * VmciPageSize;
-		CopyFromQueue(payload, data, queue_size, head, length);
+		CopyFromQueue(payload, queue_pair, produce_pages + 1u,
+			queue_size, head, length);
 		DmaWriteBarrier();
 		WriteQueuePointer(produce_header->consumer_head,
 			(head + length) % queue_size);
@@ -1379,15 +1498,21 @@ namespace {
 		const stduint consume_pages = stduint((queue_pair.consume_size +
 			VmciPageSize - 1u) / VmciPageSize) + 1u;
 		const stduint total_pages = produce_pages + consume_pages;
-		const stduint dma_size = total_pages * VmciPageSize;
+		if (total_pages > VmciQueuePairMaxPages) return false;
 		queue_pair.page_count = uint32(total_pages);
-		if (total_pages > VmciQueuePairMaxPages ||
-			!AllocateDmaRegion(g_vmci.dev_handle, dma_size, queue_pair.dma,
+		for0(i, total_pages) {
+			if (!AllocateDmaRegion(g_vmci.dev_handle, VmciPageSize,
+				queue_pair.dma_pages[i],
 				_IMM(PwcallDeviceDmaAllocFlag::NoLowMemory)) ||
-			(queue_pair.dma.physical & (VmciPageSize - 1u)) ||
-			(stduint(queue_pair.dma.address) & (VmciPageSize - 1u))) {
-			FreeDmaRegion(queue_pair.dma);
-			return false;
+				(queue_pair.dma_pages[i].device_address &
+					(VmciPageSize - 1u)) ||
+				(stduint(queue_pair.dma_pages[i].address) &
+					(VmciPageSize - 1u))) {
+				for0(release, total_pages) {
+					FreeDmaRegion(queue_pair.dma_pages[release]);
+				}
+				return false;
+			}
 		}
 		MemSet(g_queue_pair_payload, 0, sizeof(g_queue_pair_payload));
 		auto* payload = reinterpret_cast<VmciQueuePairAllocPayload*>(
@@ -1402,10 +1527,12 @@ namespace {
 			VmciCapabilityPpn64) != 0;
 		uint8* ppn_output = g_queue_pair_payload + sizeof(*payload);
 		for0(i, total_pages) {
-			const uint64 ppn = (queue_pair.dma.physical +
-				uint64(i) * VmciPageSize) >> VmciPageShift;
+			const uint64 ppn = queue_pair.dma_pages[i].device_address >>
+				VmciPageShift;
 			if (!use_ppn64 && (ppn >> 32) != 0) {
-				FreeDmaRegion(queue_pair.dma);
+				for0(release, total_pages) {
+					FreeDmaRegion(queue_pair.dma_pages[release]);
+				}
 				return false;
 			}
 			if (use_ppn64) reinterpret_cast<uint64*>(ppn_output)[i] = ppn;
@@ -1416,24 +1543,30 @@ namespace {
 			(use_ppn64 ? sizeof(uint64) : sizeof(uint32));
 		if (!SendHypervisorRequest(VmciQueuePairAllocate, payload,
 			payload_size, queue_pair.hypervisor_result)) {
-			FreeDmaRegion(queue_pair.dma);
+			for0(i, total_pages) FreeDmaRegion(queue_pair.dma_pages[i]);
 			return false;
 		}
 		if (queue_pair.hypervisor_result < 0) {
-			plogerro("[VMCI] Queue pair allocate failed result=%d handle=%08x:%u peer=%08x flags=%08x pages=%u",
+			const uint64 first_ppn = queue_pair.dma_pages[0].device_address >>
+				VmciPageShift;
+			const uint64 last_ppn =
+				queue_pair.dma_pages[total_pages - 1].device_address >>
+				VmciPageShift;
+			plogerro("[VMCI] Queue pair allocate failed result=%d handle=%08x:%u peer=%08x flags=%08x pages=%u ppn-first=%[64H] ppn-last=%[64H]",
 				queue_pair.hypervisor_result,
 				unsigned(payload->handle.context),
 				unsigned(payload->handle.resource), unsigned(payload->peer),
-				unsigned(payload->flags), unsigned(payload->num_ppns));
-			FreeDmaRegion(queue_pair.dma);
+				unsigned(payload->flags), unsigned(payload->num_ppns),
+				first_ppn, last_ppn);
+			for0(i, total_pages) FreeDmaRegion(queue_pair.dma_pages[i]);
 			return false;
 		}
 
 		DmaReadBarrier();
 		const auto* produce_header = reinterpret_cast<const VmciQueueHeader*>(
-			queue_pair.dma.address);
+			queue_pair.dma_pages[0].address);
 		const auto* consume_header = reinterpret_cast<const VmciQueueHeader*>(
-			queue_pair.dma.address + produce_pages * VmciPageSize);
+			queue_pair.dma_pages[produce_pages].address);
 		if (produce_header->handle.context != queue_pair.handle.context ||
 			produce_header->handle.resource != queue_pair.handle.resource ||
 			consume_header->handle.context != queue_pair.handle.context ||
@@ -1449,10 +1582,10 @@ namespace {
 			(void)SendHypervisorRequest(VmciQueuePairDetach,
 				&queue_pair.handle, sizeof(queue_pair.handle), detach_result);
 			queue_pair.hypervisor_result = detach_result < 0 ? detach_result : -1;
-			FreeDmaRegion(queue_pair.dma);
+			for0(i, total_pages) FreeDmaRegion(queue_pair.dma_pages[i]);
 			return false;
 		}
-		g_vmci.queue_pair_dma_bytes += queue_pair.dma.length;
+		g_vmci.queue_pair_dma_bytes += total_pages * VmciPageSize;
 		return true;
 	}
 
@@ -1855,6 +1988,58 @@ namespace {
 		return true;
 	}
 
+	bool ReceiveLegacyDatagrams() {
+		uint8* const buffer = g_legacy_datagram_buffer;
+		stduint current_size = VmciPageSize;
+		stduint remaining = current_size;
+		if (!TransferIoStream(VmciRegister::DataIn, buffer, current_size,
+			false)) return false;
+		uint8* input = buffer;
+		while (remaining >= sizeof(VmciDatagram)) {
+			auto* datagram = reinterpret_cast<VmciDatagram*>(input);
+			if (datagram->destination.resource == VmciInvalidId) {
+				if (remaining <= VmciPageSize) break;
+				const stduint next_address =
+					(stduint(input) + VmciPageSize) & ~(VmciPageSize - 1u);
+				if (next_address <= stduint(input) ||
+					next_address > stduint(buffer) + current_size) return false;
+				input = reinterpret_cast<uint8*>(next_address);
+				remaining = stduint(buffer) + current_size - next_address;
+				continue;
+			}
+			if (datagram->payload_size >
+				uint64(VmciMaxDatagramSize - sizeof(VmciDatagram))) {
+				g_vmci.malformed_datagrams++;
+				plogwarn("[VMCI] Drop malformed legacy datagram payload=%u",
+					unsigned(uint32(datagram->payload_size)));
+				return true;
+			}
+			const stduint datagram_size = sizeof(VmciDatagram) +
+				stduint(datagram->payload_size);
+			const stduint aligned_size = (datagram_size + 7u) & ~stduint(7u);
+			if (aligned_size > remaining) {
+				if (remaining != current_size) {
+					MemCopyN(buffer, input, remaining);
+					input = buffer;
+				}
+				current_size = VmciMaxDatagramSize;
+				if (!TransferIoStream(VmciRegister::DataIn, buffer + remaining,
+					current_size - remaining, false)) return false;
+				datagram = reinterpret_cast<VmciDatagram*>(input);
+			}
+			DeliverDatagram(*datagram, input + sizeof(VmciDatagram));
+			input += aligned_size;
+			remaining = stduint(buffer) + current_size - stduint(input);
+			if (remaining < sizeof(VmciDatagram)) {
+				if (!TransferIoStream(VmciRegister::DataIn, buffer,
+					current_size, false)) return false;
+				input = buffer;
+				remaining = current_size;
+			}
+		}
+		return true;
+	}
+
 	bool ReceiveDmaDatagrams() {
 		if (!g_vmci.receive_buffer) return false;
 		auto* header = reinterpret_cast<VmciDmaHeader*>(g_vmci.receive_buffer);
@@ -1863,19 +2048,21 @@ namespace {
 		MemSet(header, 0, sizeof(VmciDmaHeader));
 		header->opcode = 1;
 		header->size = 1;
-		scatter_gather[0].address = g_vmci.receive_physical + VmciPageSize;
+		scatter_gather[0].address = g_vmci.receive_device_address + VmciPageSize;
 		scatter_gather[0].size = VmciMaxDatagramSize;
 		header->busy = 0;
 		DmaWriteBarrier();
 		if (!WriteRegister(VmciRegister::DataInLow,
-			uint32(g_vmci.receive_physical)) ||
+			uint32(g_vmci.receive_device_address)) ||
 			!WaitForDmaBusy(header->busy, 1)) return false;
 		return ParseReceivedDatagrams();
 	}
 
 	bool EnableInterrupts() {
-		uint32 interrupt_mask = VmciInterruptDatagram |
-			VmciInterruptDmaDatagram;
+		uint32 interrupt_mask = VmciInterruptDatagram;
+		if (g_vmci.capabilities_in_use & VmciCapabilityDmaDatagram) {
+			interrupt_mask |= VmciInterruptDmaDatagram;
+		}
 		if (g_vmci.capabilities_in_use & VmciCapabilityNotifications) {
 			interrupt_mask |= VmciInterruptNotification;
 		}
@@ -1901,8 +2088,10 @@ namespace {
 				plogwarn("[VMCI] Unknown interrupt cause=%08x", unsigned(unknown));
 			}
 			if (cause & VmciInterruptDatagram) {
-				if (!ReceiveDmaDatagrams()) {
-					plogerro("[VMCI] Receive DMA failed malformed=%u",
+				const bool received = g_vmci.use_mmio ?
+					ReceiveDmaDatagrams() : ReceiveLegacyDatagrams();
+				if (!received) {
+					plogerro("[VMCI] Receive datagram failed malformed=%u",
 						unsigned(g_vmci.malformed_datagrams));
 					return false;
 				}
@@ -1924,13 +2113,14 @@ namespace {
 		g_vmci.receive_buffer = nullptr;
 		g_vmci.transmit_buffer = nullptr;
 		g_vmci.notification_bitmap = nullptr;
-		g_vmci.receive_physical = 0;
-		g_vmci.transmit_physical = 0;
-		g_vmci.notification_physical = 0;
+		g_vmci.receive_device_address = 0;
+		g_vmci.transmit_device_address = 0;
+		g_vmci.notification_device_address = 0;
 		for0(i, VmciDoorbellCapacity) g_doorbells[i] = {};
 		for0(i, VmciEventSubscriptionCapacity) g_event_subscriptions[i] = {};
 		for0(i, VmciQueuePairCapacity) {
-			if (g_queue_pairs[i].active || g_queue_pairs[i].dma.handle) {
+			if (g_queue_pairs[i].active ||
+				g_queue_pairs[i].dma_pages[0].handle) {
 				ReleaseQueuePair(g_queue_pairs[i]);
 			}
 		}
@@ -1956,13 +2146,29 @@ namespace {
 			g_vmci.identity.device_id != VmciDeviceId) return false;
 		if (!FindResource(g_vmci.dev_handle, PwcallDeviceResourceType::IrqLine,
 			0, g_vmci.irq) || !SelectRegisterAccess() || !InitializeRegisters()) return false;
+		if (g_vmci.use_mmio &&
+			(g_vmci.capabilities & VmciCapabilityDmaDatagram) == 0) {
+			plogwarn("[VMCI] DMA datagram capability is missing; using the legacy BAR0 control plane");
+			if (!SelectLegacyRegisterAccess() || !InitializeRegisters()) return false;
+		}
 
-		return ValidateCapabilities() && ConfigureDmaDatagrams();
+		return ValidateCapabilities() && ConfigureDatagrams();
+	}
+
+	// QP page sharing needs untranslated DMA addresses, so compare both values.
+	bool QueuePairAddressingIsDirect() {
+		if (!g_vmci.dma.handle) return true;
+		return g_vmci.dma.device_address == g_vmci.dma.physical;
 	}
 
 	bool StartVmci() {
 		if (!EnableInterrupts() || !QueryContextId()) return false;
 		g_vmci.queue_pair_available = QueryQueuePairResources();
+		// VMware KB 318491: VMCI DMA datagrams and page sharing do not work with an IOMMU.
+		if (g_vmci.queue_pair_available && !QueuePairAddressingIsDirect()) {
+			plogwarn("[VMCI] Queue pairs withdrawn: device DMA is I/O mapped (vIOMMU active)");
+			g_vmci.queue_pair_available = false;
+		}
 		return true;
 	}
 
@@ -2255,11 +2461,12 @@ int main(int argc, char** argv) {
 		ShutdownVmci();
 		return -1;
 	}
-	ploginfo("[VMCI] Started pci=%02x:%02x.%u cid=%08x caps=%08x irq=%u qp=%u",
+	ploginfo("[VMCI] Started pci=%02x:%02x.%u cid=%08x caps=%08x/%08x irq=%u qp=%u datagram=%s",
 		unsigned(g_vmci.identity.pci_bus), unsigned(g_vmci.identity.pci_device),
 		unsigned(g_vmci.identity.pci_function), unsigned(g_vmci.context_id),
-		unsigned(g_vmci.capabilities_in_use), unsigned(g_vmci.irq.start),
-		unsigned(g_vmci.queue_pair_available));
+		unsigned(g_vmci.capabilities), unsigned(g_vmci.capabilities_in_use),
+		unsigned(g_vmci.irq.start),
+		unsigned(g_vmci.queue_pair_available), g_vmci.use_mmio ? "dma" : "io");
 	while (ReceiveMessage()) {
 		if (!g_vmci.service_refresh_pending) continue;
 		if (RegisterVmciService()) g_vmci.service_refresh_pending = false;

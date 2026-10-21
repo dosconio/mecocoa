@@ -92,6 +92,16 @@ struct PwcallDeviceIoRequest {
 	uint32 value = 0;
 };
 
+struct PwcallDeviceIoStreamRequest {
+	uint32 resource_type = 0;
+	uint32 resource_index = 0;
+	uint32 width = 1;
+	uint32 reserved = 0;
+	uint64 offset = 0;
+	uint64 buffer = 0;
+	uint64 count = 0;
+};
+
 enum class PwcallDeviceDmaMapFlag : uint32 {
 	None = 0,
 	Writable = 1 << 0,
@@ -100,10 +110,13 @@ enum class PwcallDeviceDmaMapFlag : uint32 {
 enum class PwcallDeviceDmaAllocFlag : uint32 {
 	None = 0,
 	NoLowMemory = 1 << 0,
+	Iova = 1 << 1,
+	IdentityIova = 1 << 2,
 };
 
 struct PwcallDeviceDmaMapRequest {
 	uint64 physical = 0;
+	uint64 device_address = 0;
 	uint64 length = 0;
 	uint64 address = 0;
 	uint32 map_flags = 0;
@@ -173,6 +186,18 @@ namespace Powercall {
 
 	static inline stdsint DevIoWrite(stduint dev_handle, PwcallDeviceIoRequest* args) {
 		return (stdsint)syscall(syscall_t::POWERCALL_DEV_IO_WRITE, dev_handle, _IMM(args), 0);
+	}
+
+	static inline stdsint DevIoReadStream(stduint dev_handle,
+		PwcallDeviceIoStreamRequest* args) {
+		return (stdsint)syscall(syscall_t::POWERCALL_DEV_IO_READ_STREAM,
+			dev_handle, _IMM(args), 0);
+	}
+
+	static inline stdsint DevIoWriteStream(stduint dev_handle,
+		PwcallDeviceIoStreamRequest* args) {
+		return (stdsint)syscall(syscall_t::POWERCALL_DEV_IO_WRITE_STREAM,
+			dev_handle, _IMM(args), 0);
 	}
 
 	static inline stdsint DevPublish(stduint dev_handle, PwcallDevicePublishCommand cmd, void* args = nullptr) {

@@ -11,6 +11,13 @@
 
 SpinlockBlock<unsigned> cores_count = 0;
 
+#if _MCCA == 0x8632
+static void HandleTLBShootdownIPI() {
+	Memory::HandleTLBShootdownIPI();
+	IC.SendEOI();
+}
+#endif
+
 static void HandleRescheduleIPI() {
 	IC.SendEOI();
 }
@@ -78,8 +85,10 @@ void Coreman::Initialize() {
 		plogwarn("[COREMAN] Coreman is not supported, because APIC is not supported");
 		return;
 	}
+	IC[IRQ_TLB_SHOOTDOWN_IPI].setRange(mglb(Handint_TLB_SHOOTDOWN_Entry), SegCo32);
 	IC[IRQ_RESCHED_IPI].setRange(mglb(Handint_RESCHED_Entry), SegCo32);
 	IC[IRQ_WAKE_IPI].setRange(mglb(Handint_WAKE_Entry), SegCo32);
+	register_interrupt_handler(IRQ_TLB_SHOOTDOWN_IPI, HandleTLBShootdownIPI);
 	register_interrupt_handler(IRQ_RESCHED_IPI, HandleRescheduleIPI);
 	register_interrupt_handler(IRQ_WAKE_IPI, HandleWakeIPI);
 	const stduint ap_entry = _IMM(SMP_AP_ENTRY);

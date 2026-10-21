@@ -40,6 +40,7 @@ extern "C" void Handint_PWDEV4_Entry();
 extern "C" void Handint_PWDEV5_Entry();
 extern "C" void Handint_PWDEV6_Entry();
 extern "C" void Handint_PWDEV7_Entry();
+extern "C" void Handint_TLB_SHOOTDOWN_Entry();
 extern "C" void Handint_RESCHED_Entry();
 extern "C" void Handint_WAKE_Entry();
 

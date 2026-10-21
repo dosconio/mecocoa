@@ -467,8 +467,41 @@ ProcessBlock* Taskman::CreateFork(ProcessBlock* fo, const CallgateFrame* frame) 
 	tb->stack_size = target_fo_thread->stack_size;
 	auto stack_norm = (byte*)mempool.allocate(tb->stack_size, 12);
 	auto stack_ring = ring ? (byte*)mempool.allocate(tb->stack_size, 12) : stack_norm;
+	struct ForkCowParentPage {
+		stduint address;
+		stduint physical_address;
+		stduint writable_properties;
+		bool operator==(const ForkCowParentPage& other) const {
+			return address == other.address &&
+				physical_address == other.physical_address &&
+				writable_properties == other.writable_properties;
+		}
+	};
+	uni::Vector<ForkCowParentPage> cow_parent_pages;
 	bool child_vmas_owned = false;
 	auto discard_child = [&]() -> ProcessBlock* {
+		for (stduint i = 0; i < cow_parent_pages.Count(); i++) {
+			const auto& cow_page = cow_parent_pages[i];
+			bool restored = false;
+			{
+				SpinlockLocal guard(&fo->vma_lock);
+				pageint page = cow_page.address;
+				PageEntry* entry = fo->paging.getEntry(page);
+				stduint properties;
+				if (_IMM(entry) != ~_IMM0 &&
+					entry->DecodeLeafProperties(page.crt_level, properties) &&
+					_IMM(fo->paging[cow_page.address]) == cow_page.physical_address &&
+					properties == (cow_page.writable_properties & ~PGPROP_writable)) {
+					PageEntry replacement;
+					if (replacement.SetupAsLeaf(cow_page.physical_address,
+						page.crt_level, cow_page.writable_properties)) {
+						entry->raw = replacement.raw;
+						restored = true;
+					}
+				}
+			}
+			if (restored) Memory::InvalidateProcessPage(fo, cow_page.address);
+		}
 		if (child_vmas_owned) {
 			if (!pb->ReleaseAllVmas())
 				plogerro("Failed to release fork child VMAs");
@@ -565,27 +598,101 @@ ProcessBlock* Taskman::CreateFork(ProcessBlock* fo, const CallgateFrame* frame) 
 	for (stduint i = 0; i < fo->vmas.Count(); i++) {
 		const auto& vma = fo->vmas[i];
 		for (stduint addr = vma.vm_start; addr < vma.vm_end; addr += 0x1000) {
-			void* parent_phy = fo->paging[addr];
+			void* parent_phy = (void*)~_IMM0;
+			stduint parent_properties = 0;
+			{
+				SpinlockLocal guard(&fo->vma_lock);
+				parent_phy = fo->paging[addr];
+				if (parent_phy != (void*)~_IMM0) {
+					pageint page = addr;
+					PageEntry* entry = fo->paging.getEntry(page);
+					if (_IMM(entry) == ~_IMM0 ||
+						!entry->DecodeLeafProperties(page.crt_level,
+							parent_properties)) parent_phy = (void*)~_IMM0;
+				}
+			}
 			if (parent_phy != (void*)~_IMM0) {
 				if (vma.vm_type == VirtualMemoryAreaType::Device) continue;
-				stduint properties = vma.vm_flags & (PGPROP_present |
-					PGPROP_writable | PGPROP_user_access | PGPROP_nonexecutable);
 				ManagedPageSource source = vma.vm_type == VirtualMemoryAreaType::File ?
 					ManagedPageSource::File : ManagedPageSource::Anonymous;
-				if (!(vma.vm_flags & PGPROP_writable)) {
-					if (!Memory::RetainManagedPageMapping(_IMM(parent_phy)) ||
-						!pb->paging.Map(addr, _IMM(parent_phy), PAGE_SIZE,
-							PAGESIZE_4KB, properties)) {
+				const bool cow_page = vma.vm_type == VirtualMemoryAreaType::Anonymous &&
+					vma.vm_mode == VirtualMemoryAreaMode::Private &&
+					(vma.vm_flags & PGPROP_writable);
+				if (!(vma.vm_flags & PGPROP_writable) || cow_page) {
+					if (!Memory::RetainManagedPageMapping(_IMM(parent_phy))) {
+						plogerro("Failed to retain shared VMA page during fork at VA=%[x]",
+							addr);
+						return discard_child();
+					}
+					stduint child_properties = parent_properties;
+					if (cow_page) child_properties &= ~PGPROP_writable;
+					if (cow_page && (parent_properties & PGPROP_writable)) {
+						cow_parent_pages.Append({ addr, _IMM(parent_phy), parent_properties });
+						bool downgraded = false;
+						{
+							SpinlockLocal guard(&fo->vma_lock);
+							pageint page = addr;
+							PageEntry* entry = fo->paging.getEntry(page);
+							stduint current_properties;
+							if (_IMM(entry) != ~_IMM0 &&
+								entry->DecodeLeafProperties(page.crt_level,
+									current_properties) &&
+								_IMM(fo->paging[addr]) == _IMM(parent_phy) &&
+								current_properties == parent_properties) {
+								PageEntry replacement;
+								if (replacement.SetupAsLeaf(_IMM(parent_phy),
+									page.crt_level, child_properties)) {
+									entry->raw = replacement.raw;
+									downgraded = true;
+								}
+							}
+						}
+						if (!downgraded) {
+							cow_parent_pages.Remove(cow_parent_pages.Count() - 1);
+							Memory::ReleaseManagedPageMapping(_IMM(parent_phy));
+							plogerro("Failed to protect COW parent page during fork at VA=%[x]",
+								addr);
+							return discard_child();
+						}
+						Memory::InvalidateProcessPage(fo, addr);
+					}
+					if (!pb->paging.Map(addr, _IMM(parent_phy), PAGE_SIZE,
+						PAGESIZE_4KB, child_properties)) {
 						Memory::ReleaseManagedPageMapping(_IMM(parent_phy));
-						plogerro("Failed to share read-only VMA page during fork at VA=%[x]",
+						plogerro("Failed to share VMA page during fork at VA=%[x]",
 							addr);
 						return discard_child();
 					}
 					ManagedPageInfo page_info;
 					KASSERT(Memory::QueryManagedPage(_IMM(parent_phy), page_info) &&
 						page_info.source == source && page_info.mapping_refs >= 2);
+					if (cow_page) {
+						bool cow_mapping_valid;
+						{
+							SpinlockLocal guard(&fo->vma_lock);
+							pageint parent_page = addr;
+							pageint child_page = addr;
+							PageEntry* parent_entry = fo->paging.getEntry(parent_page);
+							PageEntry* child_entry = pb->paging.getEntry(child_page);
+							stduint current_parent_properties;
+							stduint current_child_properties;
+							cow_mapping_valid = _IMM(fo->paging[addr]) == _IMM(parent_phy) &&
+								_IMM(pb->paging[addr]) == _IMM(parent_phy) &&
+								_IMM(parent_entry) != ~_IMM0 &&
+								_IMM(child_entry) != ~_IMM0 &&
+								parent_entry->DecodeLeafProperties(parent_page.crt_level,
+									current_parent_properties) &&
+								child_entry->DecodeLeafProperties(child_page.crt_level,
+									current_child_properties) &&
+								!(current_parent_properties & PGPROP_writable) &&
+								!(current_child_properties & PGPROP_writable);
+						}
+						KASSERT(cow_mapping_valid);
+					}
 					continue;
 				}
+				stduint properties = vma.vm_flags & (PGPROP_present |
+					PGPROP_writable | PGPROP_user_access | PGPROP_nonexecutable);
 				void* child_phy = mempool.allocate(0x1000, 12);
 				if (!child_phy || child_phy == (void*)~_IMM0) {
 					plogerro("Failed to allocate VMA page during fork at VA=%[x]", addr);

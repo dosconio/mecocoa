@@ -407,8 +407,8 @@ bool exception_handler_user(HardwareInterruptFrame* frame, stduint iden, stduint
 		VirtualMemoryAccess access = (para & 0x10) ?
 			VirtualMemoryAccess::Execute : ((para & 0x02) ?
 				VirtualMemoryAccess::Write : VirtualMemoryAccess::Read);
-		// Present-page faults are permission violations. Only missing pages may be populated.
-		bool handled = !(para & 0x01) && pb && pb->EnsureVmaPage(fault_addr, access);
+		bool handled = pb && pb->ResolveVmaFault(fault_addr, access,
+			para & 0x01);
 		if (handled) {
 			return true; // Retry faulting instruction
 		}
@@ -607,7 +607,8 @@ stduint trap_handler(stduint epc, stduint cause, NormalTaskContext* cxt)
 			VirtualMemoryAccess access = cause_code == 12 ?
 				VirtualMemoryAccess::Execute : (cause_code == 15 ?
 					VirtualMemoryAccess::Write : VirtualMemoryAccess::Read);
-			if (process && process->EnsureVmaPage(fault_address, access)) break;
+			if (process && process->ResolveVmaFault(fault_address, access,
+				false)) break;
 			plogerro("Page fault! Code = 0x%[x], address = 0x%[x]",
 				cause_code, fault_address);
 			while (1);

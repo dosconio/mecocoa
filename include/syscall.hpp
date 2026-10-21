@@ -96,6 +96,8 @@ enum
 	POWERCALL_DEV_DMA_MAP,// (dma_handle, info, flags) -> 0
 	POWERCALL_DEV_PUBLISH,// (dev_handle, cmd, args) -> status
 	POWERCALL_DEV_TIMER,// (dev_handle, ticks, token) -> status
+	POWERCALL_DEV_IO_READ_STREAM,// (dev_handle, args, 0) -> status
+	POWERCALL_DEV_IO_WRITE_STREAM,// (dev_handle, args, 0) -> status
 	POWERCALL__END__
 };// . stand for well for multi-thread
 // Locks usually end with `_lock;`
