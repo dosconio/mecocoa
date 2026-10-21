@@ -153,7 +153,7 @@ namespace Devs {
 		}
 		const auto* irq = Devsman::FindResource(node, DeviceResourceType::IrqLine, 0);
 		node->fields.binding.probe_result = irq ? 0 : 1;
-		ploginfo("[DEVSMAN] UHCI %s IO=%[64H] len=%[64H]%s",
+		plogtrac("[DEVSMAN] UHCI %s IO=%[64H] len=%[64H]%s",
 			node->link.addr ? node->link.addr : "(unnamed)",
 			io->start,
 			io->length,
@@ -171,7 +171,7 @@ namespace Devs {
 		}
 		const auto* irq = Devsman::FindResource(node, DeviceResourceType::IrqLine, 0);
 		node->fields.binding.probe_result = irq ? 0 : 1;
-		ploginfo("[DEVSMAN] EHCI %s MMIO=%[64H] len=%[64H]%s",
+		plogtrac("[DEVSMAN] EHCI %s MMIO=%[64H] len=%[64H]%s",
 			node->link.addr ? node->link.addr : "(unnamed)",
 			mmio->start,
 			mmio->length,
@@ -198,7 +198,7 @@ namespace Devs {
 		}
 		const auto* irq = Devsman::FindResource(node, DeviceResourceType::IrqLine, 0);
 		node->fields.binding.probe_result = irq ? 0 : 1;
-		ploginfo("[DEVSMAN] AHCI %s ABAR=%[64H]%s",
+		plogtrac("[DEVSMAN] AHCI %s ABAR=%[64H]%s",
 			node->link.addr ? node->link.addr : "(unnamed)",
 			abar->start,
 			irq ? "" : " irq=none");
@@ -215,7 +215,7 @@ namespace Devs {
 		}
 		const auto* irq = Devsman::FindResource(node, DeviceResourceType::IrqLine, 0);
 		node->fields.binding.probe_result = irq ? 0 : 1;
-		ploginfo("[DEVSMAN] NVMe %s BAR0=%[64H]%s",
+		plogtrac("[DEVSMAN] NVMe %s BAR0=%[64H]%s",
 			node->link.addr ? node->link.addr : "(unnamed)",
 			bar0->start,
 			irq ? "" : " irq=none");
@@ -234,13 +234,13 @@ namespace Devs {
 		const auto* irq = Devsman::FindResource(node, DeviceResourceType::IrqLine, 0);
 		node->fields.binding.probe_result = irq ? 0 : 1;
 		if (io_bar) {
-			ploginfo("[DEVSMAN] SCSI %s IO=%[64H]%s",
+			plogtrac("[DEVSMAN] SCSI %s IO=%[64H]%s",
 				node->link.addr ? node->link.addr : "(unnamed)",
 				io_bar->start,
 				irq ? "" : " irq=none");
 		}
 		else {
-			ploginfo("[DEVSMAN] SCSI %s MMIO=%[64H]%s",
+			plogtrac("[DEVSMAN] SCSI %s MMIO=%[64H]%s",
 				node->link.addr ? node->link.addr : "(unnamed)",
 				mmio_bar->start,
 				irq ? "" : " irq=none");
@@ -282,7 +282,7 @@ namespace Devs {
 		if (!ops || !ops->probe) return;
 		const bool ok = ops->probe(node);
 		set_driver_probe_state(node, ok ? DriverBindingState::Probed : DriverBindingState::Failed, ok ? 0 : -1);
-		ploginfo("[DEVSMAN] Probe %s -> %s", node->link.addr ? node->link.addr : "(unnamed)", ok ? "ok" : "failed");
+		plogtrac("[DEVSMAN] Probe %s -> %s", node->link.addr ? node->link.addr : "(unnamed)", ok ? "ok" : "failed");
 	}
 }
 
@@ -757,7 +757,7 @@ namespace Devs {
 		if (!starter) return;
 		const bool ok = starter(node);
 		set_driver_probe_state(node, ok ? DriverBindingState::Started : DriverBindingState::Failed, ok ? 0 : -1);
-		ploginfo("[DEVSMAN] Start %s -> %s", node->link.addr ? node->link.addr : "(unnamed)", ok ? "ok" : "failed");
+		plogtrac("[DEVSMAN] Start %s -> %s", node->link.addr ? node->link.addr : "(unnamed)", ok ? "ok" : "failed");
 	}
 
 }
@@ -848,7 +848,7 @@ bool Devsman::AttachPCIDevices(uni::PCI& pci) {
 	pci_devices_attached = true;
 	BindKnownDrivers();
 	ProbeKnownDrivers();
-	ploginfo("[DEVSMAN] Attached %d PCI device nodes", pci.num_device);
+	plogtrac("[DEVSMAN] Attached %d PCI device nodes", pci.num_device);
 	return true;
 }
 

@@ -1349,9 +1349,8 @@ DEFSYSC sysc_MMAP(stduint len, stduint flag, stduint fd) {
 		if (fd >= files->pfiles.Count() || !files->pfiles[fd] ||
 			!files->pfiles[fd]->vfile) return ~_IMM0;
 		uni::vfs_file* parent_vfile = files->pfiles[fd]->vfile;
-		uni::vfs_file* nvfile = (uni::vfs_file*)malc(sizeof(uni::vfs_file));
+		uni::vfs_file* nvfile = new uni::vfs_file(*parent_vfile);
 		if (!nvfile) return ~_IMM0;
-		*nvfile = *parent_vfile;
 		if (nvfile->f_inode) nvfile->f_inode->ref_count++;
 		vma.vm_type = VirtualMemoryAreaType::File;
 		vma.vm_mode = VirtualMemoryAreaMode::Shared;
@@ -1371,7 +1370,6 @@ DEFSYSC sysc_MMAP(stduint len, stduint flag, stduint fd) {
 	}
 	if (!appended) {
 		if (vma.vm_type == VirtualMemoryAreaType::File && vma.vfile) {
-			if (vma.vfile->f_inode) vma.vfile->f_inode->ref_count--;
 			Filesys::Close(vma.vfile);
 		}
 		return ~_IMM0;

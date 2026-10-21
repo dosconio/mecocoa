@@ -185,7 +185,7 @@ namespace Devs {
 			return false;
 		}
 		node->fields.binding.probe_result = 0;
-		ploginfo("[DEVSMAN] LANCE %s I/O BAR%u=%[64H] len=%[64H] irq=%[64H]",
+		plogtrac("[DEVSMAN] LANCE %s I/O BAR%u=%[64H] len=%[64H] irq=%[64H]",
 			node->link.addr ? node->link.addr : "(unnamed)",
 			io->index, io->start, io->length, irq->start);
 		return true;
@@ -211,12 +211,12 @@ namespace Devs {
 			return false;
 		}
 		if (io) {
-			ploginfo("[DEVSMAN] VMCI %s I/O BAR%u=%[64H] len=%[64H] irq=%[64H]",
+			plogtrac("[DEVSMAN] VMCI %s I/O BAR%u=%[64H] len=%[64H] irq=%[64H]",
 				node->link.addr ? node->link.addr : "(unnamed)",
 				io->index, io->start, io->length, irq->start);
 		}
 		if (mmio) {
-			ploginfo("[DEVSMAN] VMCI %s MMIO BAR%u=%[64H] len=%[64H] irq=%[64H]",
+			plogtrac("[DEVSMAN] VMCI %s MMIO BAR%u=%[64H] len=%[64H] irq=%[64H]",
 				node->link.addr ? node->link.addr : "(unnamed)",
 				mmio->index, mmio->start, mmio->length, irq->start);
 		}
@@ -230,13 +230,13 @@ namespace Devs {
 		const auto* irq = Devsman::FindResource(node, DeviceResourceType::IrqLine, 0);
 		node->fields.binding.probe_result = 0;
 		if (bmide) {
-			ploginfo("[DEVSMAN] PATA %s BMIDE=%[64H]%s",
+			plogtrac("[DEVSMAN] PATA %s BMIDE=%[64H]%s",
 				node->link.addr ? node->link.addr : "(unnamed)",
 				bmide->start,
 				irq ? "" : " irq=none");
 		}
 		else {
-			ploginfo("[DEVSMAN] PATA %s (legacy IO ports)%s",
+			plogtrac("[DEVSMAN] PATA %s (legacy IO ports)%s",
 				node->link.addr ? node->link.addr : "(unnamed)",
 				irq ? "" : " irq=none");
 		}
@@ -757,7 +757,7 @@ namespace Devs {
 		}
 		auto* isa_node = ensure_isa_bus_node(pci_node);
 		if (!legacy_isa_bus) legacy_isa_bus = isa_node;
-		ploginfo("[DEVSMAN] ISA bridge %s on %s -> %s",
+		plogtrac("[DEVSMAN] ISA bridge %s on %s -> %s",
 			uni::ISA::BridgeKindName(kind),
 			pci_node->link.addr ? pci_node->link.addr : "(unnamed)",
 			isa_node->link.addr ? isa_node->link.addr : "(unnamed)");
@@ -845,7 +845,7 @@ namespace Devs {
 				if (secondary_bus_node->link.pare == &dev_node->link) continue;
 				if (!detach_child(pci_root, secondary_bus_node)) continue;
 				append_child(dev_node, secondary_bus_node);
-				ploginfo("[DEVSMAN] Reparented %s under %s",
+				plogtrac("[DEVSMAN] Reparented %s under %s",
 					secondary_bus_node->link.addr, dev_node->link.addr);
 			}
 		}
@@ -1445,7 +1445,8 @@ namespace {
 				request.max_payload == VmciIpcPayloadCapacity &&
 				request.endpoint_capacity == VmciEndpointCapacity &&
 				(request.features & ~(VmciFeatureNotifications |
-					VmciFeatureEvents | VmciFeatureQueuePairs)) == 0 &&
+					VmciFeatureEvents | VmciFeatureQueuePairs |
+					VmciFeatureGuestRpcBackdoor)) == 0 &&
 				(request.features & VmciFeatureEvents) != 0 &&
 				request.doorbell_capacity == VmciDoorbellCapacity &&
 				request.event_subscription_capacity ==

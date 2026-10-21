@@ -16,6 +16,8 @@ rostr text_cpu_factory();
 
 Procontroller_t cpu_type = PCU_Unknown;
 
+loglevel_t _log_limit = _LOG_INFO;
+
 void mecfetch() {
 	#if ((_MCCA & 0xFF00) == 0x8600)
 	const rostr blue = "\033[48;2;88;200;248m"; 	//  ento_gui ? "\xFE\xF8\xC8\x58" : "\xFF\x30";

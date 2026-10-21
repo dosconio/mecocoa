@@ -99,6 +99,9 @@ use crate uni;
 #if !CONFIG_ENABLE_MMU
 #define mglb(x) (x)
 #endif
+
+#undef  plogtrac
+#define plogtrac(...)
 //
 
 extern volatile stduint tick;

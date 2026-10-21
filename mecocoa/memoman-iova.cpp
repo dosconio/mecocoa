@@ -669,7 +669,7 @@ namespace {
 			return false;
 		}
 		domain.attached = true;
-		ploginfo("[IOMMU] Translated domain attached pci=%02X:%02X.%u did=%u root=%[64H]",
+		plogtrac("[IOMMU] Translated domain attached pci=%02X:%02X.%u did=%u root=%[64H]",
 			device->fields.pci_bus, device->fields.pci_device,
 			device->fields.pci_function, domain.domain_id,
 			uint64(stduint(domain.root)));
@@ -753,13 +753,13 @@ bool Iova::ProbeVtd(stduint dmar_address) {
 	}
 	vtd_state.hardware_unit_count = hardware_unit_count;
 	vtd_state.probe_complete = true;
-	ploginfo("[IOMMU] Read-only VT-d probe complete: drhd=%u rmrr=%u",
+	plogtrac("[IOMMU] Read-only VT-d probe complete: drhd=%u rmrr=%u",
 		hardware_unit_count, reserved_memory_count);
 	return true;
 }
 
 bool Iova::EnableVtdPassthrough(DeviceNode* pci_root) {
-	ploginfo("[IOMMU] Pass-through request probed=%u enabled=%u drhd=%u root=%[x]",
+	plogtrac("[IOMMU] Pass-through request probed=%u enabled=%u drhd=%u root=%[x]",
 		unsigned(vtd_state.probe_complete),
 		unsigned(vtd_state.passthrough_enabled),
 		vtd_state.hardware_unit_count, stduint(pci_root));
@@ -975,7 +975,7 @@ bool Iova::MapDeviceDma(DeviceNode* device, stduint physical,
 	range->length = length;
 	mapping.device_address = device_address;
 	mapping.translated = true;
-	ploginfo("[IOMMU] DMA mapped pci=%02X:%02X.%u iova=%[64H] phys=%[64H] bytes=%u",
+	plogtrac("[IOMMU] DMA mapped pci=%02X:%02X.%u iova=%[64H] phys=%[64H] bytes=%u",
 		device->fields.pci_bus, device->fields.pci_device,
 		device->fields.pci_function, device_address, uint64(physical), length);
 	return true;

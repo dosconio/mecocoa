@@ -47,6 +47,7 @@ enum class GraphicMsg {
 	DRV_SETMODE,// request driver mode switch
 	DRV_FLUSH,// request driver dirty-rect flush
 	SET_WALLPAPER,// set desktop wallpaper (usrp_buffer, width, height)
+	HOST_SET_RESOLUTION,// trusted host integration requests a display mode
 };
 
 _PACKED(struct) WindowInfo {

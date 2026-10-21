@@ -1713,6 +1713,7 @@ static bool GraphicMsgIsDriverControl(GraphicMsg msg) {
 	case GraphicMsg::DRV_DETACH:
 	case GraphicMsg::DRV_SETMODE:
 	case GraphicMsg::DRV_FLUSH:
+	case GraphicMsg::HOST_SET_RESOLUTION:
 		return true;
 	default:
 		return false;
@@ -1721,6 +1722,26 @@ static bool GraphicMsgIsDriverControl(GraphicMsg msg) {
 
 static bool GraphicMsgSourceCanControlDriver(const ProcessBlock* pb) {
 	return pb && pb->ring == RING_S;
+}
+
+static stdsint GraphicMsg_HOST_SET_RESOLUTION(stduint source,
+	uint32 width, uint32 height) {
+	DeviceNode* source_node = Devsman::FindOwnedNode(source);
+	if (!source_node || source_node->fields.vendor_id != 0x15ADu ||
+		source_node->fields.device_id != 0x0740u || !width || !height) return -1;
+
+	DeviceNode* video_node = Devsman::FindPCIDeviceByVendorDevice(
+		0x15ADu, 0x0405u);
+	if (!video_node || !video_node->fields.binding.driver_data) return -1;
+	auto* dev = static_cast<VideoDevice*>(
+		video_node->fields.binding.driver_data);
+	const Size2 current = dev->GetFramebuffer().screen_size;
+	if (current.x == width && current.y == height) return 0;
+	if (!dev->setMode(uni::VideoMode{
+		uni::Point2(width, height), uni::PixelFormat::ARGB8888})) return -1;
+	if (!Consman::AdoptVideoDevice(dev)) return -1;
+	ploginfo("[Graphic] VMware resolution changed to %ux%u", width, height);
+	return 0;
 }
 
 void serv_graf_loop() {
@@ -2191,6 +2212,11 @@ void serv_graf_loop() {
 		case GraphicMsg::DRV_SETMODE:
 		case GraphicMsg::DRV_FLUSH:
 			ret = (stduint)-1;
+			syssend_async(sig_src, (void*)&ret, sizeof(ret));
+			break;
+		case GraphicMsg::HOST_SET_RESOLUTION:
+			ret = GraphicMsg_HOST_SET_RESOLUTION(sig_src,
+				uint32(to_args[0]), uint32(to_args[1]));
 			syssend_async(sig_src, (void*)&ret, sizeof(ret));
 			break;
 		case GraphicMsg::SET_WALLPAPER:

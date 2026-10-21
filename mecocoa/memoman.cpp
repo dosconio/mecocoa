@@ -246,10 +246,9 @@ struct VmaFileDeleter {
 	void operator()(uni::vfs_file* file) const {
 		if (!file) return;
 		if (file->f_inode) {
-			file->f_inode->ref_count--;
 			Filesys::Close(file);
 		}
-		else free(file);
+		else delete file;
 	}
 };
 
@@ -275,9 +274,8 @@ struct VmaDeviceUnmapPlan {
 
 static uni::vfs_file* CloneVmaFile(uni::vfs_file* source) {
 	if (!source) return nullptr;
-	auto* result = (uni::vfs_file*)malc(sizeof(uni::vfs_file));
+	auto* result = new uni::vfs_file(*source);
 	if (!result) return nullptr;
-	*result = *source;
 	if (result->f_inode) result->f_inode->ref_count++;
 	return result;
 }
@@ -541,7 +539,6 @@ static bool PageAllowsAccess(ProcessBlock* pb, stduint address,
 
 static void ReleaseVmaReadFile(uni::vfs_file* file) {
 	if (!file) return;
-	if (file->f_inode) file->f_inode->ref_count--;
 	Filesys::Close(file);
 }
 
@@ -579,7 +576,7 @@ void* ProcessBlock::EnsureVmaPage(stduint address, VirtualMemoryAccess access) {
 
 	uni::vfs_file* read_file = nullptr;
 	if (file_backed) {
-		read_file = (uni::vfs_file*)malc(sizeof(uni::vfs_file));
+		read_file = new uni::vfs_file();
 		if (!read_file) return nullptr;
 		bool retained = false;
 		bool raced = false;
@@ -608,11 +605,11 @@ void* ProcessBlock::EnsureVmaPage(stduint address, VirtualMemoryAccess access) {
 			}
 		}
 		if (raced) {
-			free(read_file);
+			delete read_file;
 			return raced_allowed ? raced_physical : nullptr;
 		}
 		if (!retained) {
-			free(read_file);
+			delete read_file;
 			return nullptr;
 		}
 	}

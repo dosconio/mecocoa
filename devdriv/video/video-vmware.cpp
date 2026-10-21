@@ -28,22 +28,52 @@ public:
 	virtual const FramebufferInfo& GetFramebuffer() const override { return fb_info; }
 	virtual bool setMode(const VideoMode& mode) override {
 		if (mode.format != uni::PixelFormat::ARGB8888) return false;
-		if (hw.setMode(mode.resolution.x, mode.resolution.y, 32)) {
-			uint32_t pitch = 0, bpp = 0;
-			Size2 resolution;
-			if (!hw.ReadMode(resolution, bpp, pitch)) return false;
-			const stduint fb_size = hw.GetFramebufferSize() ? hw.GetFramebufferSize() : (stduint)(pitch * resolution.y);
-			const uni::Slice new_range{ fb_info.physical_range.address, fb_size };
-			if (!EnsureFramebufferMapped(new_range)) return false;
-			fb_info.screen_size = resolution;
-			fb_info.bpp = bpp;
-			fb_info.pitch = pitch;
-			fb_info.format = uni::PixelFormat::ARGB8888;
-			fb_info.physical_range = new_range;
-			hw.Flush(Rectangle(Point(0, 0), resolution, Color::Black));
-			return true;
+		const uint32 width = mode.resolution.x;
+		const uint32 height = mode.resolution.y;
+		const uint32 max_width = hw.ReadRegister(uni::VmwareSvgaDevice::REG_MAX_WIDTH);
+		const uint32 max_height = hw.ReadRegister(uni::VmwareSvgaDevice::REG_MAX_HEIGHT);
+		const uint64 required = uint64(width) * height * sizeof(uint32);
+		const uint64 vram_size = hw.GetVramSize();
+		if (!width || !height || (max_width && width > max_width) ||
+			(max_height && height > max_height) || !required ||
+			(vram_size && required > vram_size)) {
+			plogwarn("[VMwareSVGA] Reject mode %ux%u max=%ux%u vram=%u",
+				width, height, max_width, max_height, uint32(vram_size));
+			return false;
 		}
-		return false;
+
+		Size2 previous_resolution;
+		uint32_t previous_bpp = 0, previous_pitch = 0;
+		if (!hw.ReadMode(previous_resolution, previous_bpp, previous_pitch) ||
+			!hw.setMode(width, height, 32)) return false;
+
+		uint32_t pitch = 0, bpp = 0;
+		Size2 resolution;
+		const bool valid_mode = hw.ReadMode(resolution, bpp, pitch) &&
+			resolution.x == width && resolution.y == height && bpp == 32 &&
+			uint64(pitch) >= uint64(width) * sizeof(uint32) &&
+			(!vram_size || uint64(pitch) * height <= vram_size);
+		if (!valid_mode) {
+			(void)hw.setMode(previous_resolution.x, previous_resolution.y,
+				previous_bpp);
+			return false;
+		}
+
+		const stduint fb_size = hw.GetFramebufferSize() ?
+			hw.GetFramebufferSize() : stduint(uint64(pitch) * height);
+		const uni::Slice new_range{ fb_info.physical_range.address, fb_size };
+		if (!EnsureFramebufferMapped(new_range)) {
+			(void)hw.setMode(previous_resolution.x, previous_resolution.y,
+				previous_bpp);
+			return false;
+		}
+		fb_info.screen_size = resolution;
+		fb_info.bpp = bpp;
+		fb_info.pitch = pitch;
+		fb_info.format = uni::PixelFormat::ARGB8888;
+		fb_info.physical_range = new_range;
+		hw.Flush(Rectangle(Point(0, 0), resolution, Color::Black));
+		return true;
 	}
 	virtual void Flush(const Rectangle& rect) override { hw.Flush(rect); }
 

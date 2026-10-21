@@ -60,13 +60,12 @@ static void ReleaseGlobalFileDescriptor(FileDescriptor* pfd) {
 	pfd->vfile = nullptr;
 }
 
-static bool AttachProcessFileDescriptor(ProcFiles& files, int fd, FileDescriptor* pfd, vfs_file* file, int mode, bool add_inode_ref) {
+static bool AttachProcessFileDescriptor(ProcFiles& files, int fd, FileDescriptor* pfd, vfs_file* file, int mode) {
 	if (fd < 0 || !pfd || !file) return false;
 	files.pfiles[fd] = pfd;
 	pfd->fd_mode = mode;
 	pfd->fd_pos = 0;
 	pfd->vfile = file;
-	if (add_inode_ref && file->f_inode) file->f_inode->ref_count++;
 	return true;
 }
 
@@ -77,8 +76,6 @@ static bool CloseFileSlotUnlocked(ProcFiles& files, int fd) {
 	FileDescriptor* pfd = files.pfiles[fd];
 	vfs_file* file = pfd->vfile;
 	if (file) {
-		if (file->f_inode)
-			file->f_inode->ref_count--;
 		Filesys::Close(file);
 		{
 			auto f_desc = f_desc_info.Lock();
@@ -116,7 +113,7 @@ stdsint ProcessBlock::Open(rostr pathname, int flags) {
 		return -1;
 	}
 	
-	AttachProcessFileDescriptor(*files, fd, pfd, file, flags, true);
+	AttachProcessFileDescriptor(*files, fd, pfd, file, flags);
 	return fd;
 }
 auto ProcessBlock::OpenStandards(uni::Dnode* vtty) -> bool {
@@ -144,7 +141,7 @@ stdsint ProcessBlock::Socket(stduint domain, stduint type, stduint protocol) {
 		return -1;
 	}
 
-	if (!AttachProcessFileDescriptor(*files, fd, pfd, file, O_RDWR, false)) {
+	if (!AttachProcessFileDescriptor(*files, fd, pfd, file, O_RDWR)) {
 		ReleaseGlobalFileDescriptor(pfd);
 		Filesys::Close(file);
 		return -1;
@@ -210,7 +207,7 @@ stdsint ProcessBlock::AcceptSocket(int fd, uni::Network::SocketAddress* address,
 		Filesys::Close(accepted_file);
 		return -1;
 	}
-	if (!AttachProcessFileDescriptor(*files, new_fd, pfd, accepted_file, O_RDWR, false)) {
+	if (!AttachProcessFileDescriptor(*files, new_fd, pfd, accepted_file, O_RDWR)) {
 		ReleaseGlobalFileDescriptor(pfd);
 		Filesys::Close(accepted_file);
 		return -1;
@@ -521,7 +518,6 @@ bool ProcessBlock::Close(int fid)
 		}
 		FileDescriptor* pfd = files->pfiles[fd];
 		file = pfd->vfile;
-		if (file && file->f_inode) file->f_inode->ref_count--;
 		{
 			auto f_desc = f_desc_info.Lock();
 			pfd->fd_mode = 0;
@@ -649,7 +645,7 @@ stdsint ProcessBlock::Pipe(int pipefd[2]) {
 		FileDescriptor* pfd = AllocateGlobalFileDescriptor();
 		if (!pfd) return -1;
 
-		if (!AttachProcessFileDescriptor(*files, fd, pfd, file, mode, false)) {
+		if (!AttachProcessFileDescriptor(*files, fd, pfd, file, mode)) {
 			ReleaseGlobalFileDescriptor(pfd);
 			return -1;
 		}
@@ -695,12 +691,11 @@ FileDescriptor* FileDescriptor_Clone(FileDescriptor* src) {
 
 	*pfd = *src;
 	// Clone the vfs_file object to avoid shared destruction
-	vfs_file* nvfile = (vfs_file*)malc(sizeof(vfs_file));
+	vfs_file* nvfile = new vfs_file(*(src->vfile));
 	if (!nvfile) {
 		ReleaseGlobalFileDescriptor(pfd);
 		return nullptr;
 	}
-	*nvfile = *(src->vfile);
 	pfd->vfile = nvfile;
 			// Increment ref count of the inode
 			if (pfd->vfile->f_inode) {

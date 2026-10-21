@@ -69,7 +69,7 @@ static bool rsdp_checksum_ok(const uni::ACPI::RSDP* rsdp) {
 
 static bool rsdt_candidate_valid(stduint rsdt_addr) {
 	if ((rsdt_addr & 0x3) != 0) {
-		plogwarn("[ACPI] RSDT candidate %[x] is not 4-byte aligned", rsdt_addr);
+		plogtrac("[ACPI] RSDT candidate %[x] is not 4-byte aligned", rsdt_addr);
 	}
 	auto rsdt = reinterpret_cast<const uni::ACPI::RSDT*>(rsdt_addr);
 	if (rsdt->header.length < sizeof(uni::ACPI::DescriptionHeader)) {
@@ -110,9 +110,11 @@ static stduint scan_rsdp_range(stduint begin, stduint length, const char* source
 	for (stduint addr = begin; addr + sizeof(uni::ACPI::RSDP) <= end; addr += 16) {
 		auto rsdp = reinterpret_cast<const uni::ACPI::RSDP*>(addr);
 		if (MemCompare(rsdp->signature, "RSD PTR ", 8)) continue;
-		ploginfo("[ACPI] Signature hit (%s) at %[x]", source, addr);
+		plogtrac("[ACPI] Signature hit (%s) at %[x]", source, addr);
 		if (!rsdp_checksum_ok(rsdp)) continue;
-		log_rsdp_candidate(addr, source);
+
+		if constexpr (0) log_rsdp_candidate(addr, source);
+		
 		if (!first && rsdt_candidate_valid(rsdp->rsdt_address)) first = addr;
 	}
 	return first;
@@ -122,13 +124,13 @@ static stduint find_rsdp_bios() {
 	const stduint ebda_seg = *(volatile uint16*)(0x40E);
 	if (ebda_seg) {
 		const stduint ebda_addr = ebda_seg << 4;
-		ploginfo("[ACPI] BDA[0x40E]=%[x], EBDA base=%[x]", ebda_seg, ebda_addr);
+		plogtrac("[ACPI] BDA[0x40E]=%[x], EBDA base=%[x]", ebda_seg, ebda_addr);
 		if (auto found = scan_rsdp_range(ebda_addr, 1024, "EBDA")) return found;
 	}
 	else {
 		plogwarn("[ACPI] EBDA segment from BDA[0x40E] is zero");
 	}
-	ploginfo("[ACPI] Scanning BIOS high area for RSDP: %[x]..%[x]", 0xE0000u, 0xFFFFFu);
+	plogtrac("[ACPI] Scanning BIOS high area for RSDP: %[x]..%[x]", 0xE0000u, 0xFFFFFu);
 	return scan_rsdp_range(0xE0000, 0x20000, "BIOS-HIGH");
 }
 
@@ -280,7 +282,7 @@ static void parse_mcfg(stduint mcfg_addr) {
 	uint8 fallback_end_bus = 0;
 	for0(i, count) {
 		const auto& allocation = (*mcfg)[i];
-		ploginfo("[ACPI] MCFG[%u] ECAM=%[x] segment=%u bus=%u..%u",
+		plogtrac("[ACPI] MCFG[%u] ECAM=%[x] segment=%u bus=%u..%u",
 			i, allocation.base_address, allocation.segment_group_number,
 			allocation.start_bus_number, allocation.end_bus_number);
 		if (allocation.end_bus_number < allocation.start_bus_number) continue;
@@ -342,7 +344,7 @@ static void log_acpi_topology(stduint rsdp_addr) {
 		plogwarn("[ACPI] MADT not found from RSDP");
 	}
 	if (acpi_mcfg_addr) {
-		ploginfo("[ACPI] MCFG found at %[x]", acpi_mcfg_addr);
+		plogtrac("[ACPI] MCFG found at %[x]", acpi_mcfg_addr);
 		if (acpi_pcie_ecam_available) {
 			ploginfo("[ACPI] PCIe ECAM=%[x], segment=%u, bus=%u..%u",
 				acpi_pcie_ecam_base, acpi_pcie_segment_group,

@@ -25,6 +25,37 @@ namespace uni {
 	String Filesys::system_virtual_root_path = (const char *)NULL;
 	String Filesys::system_runtime_root_path = (const char *)NULL;
 
+	static void ReleaseMountResources(FilesysTrait* filesystem,
+		VFSMountOwnership ownership) {
+		if (ownership == VFSMountOwnership::Borrowed) return;
+		StorageTrait* storage = filesystem ? filesystem->storage : nullptr;
+		if (ownership == VFSMountOwnership::Filesystem ||
+			ownership == VFSMountOwnership::FilesystemAndStorage) delete filesystem;
+		if (ownership == VFSMountOwnership::FilesystemAndStorage) delete storage;
+	}
+
+	VFSMountState::VFSMountState(FilesysTrait* filesystem,
+		VFSMountOwnership ownership)
+		: filesystem(filesystem), storage(ownership != VFSMountOwnership::Borrowed &&
+			filesystem ? filesystem->storage : nullptr),
+		ownership(ownership) {}
+
+	VFSMountState::~VFSMountState() {
+		ReleaseMountResources(filesystem, ownership);
+		filesystem = nullptr;
+		storage = nullptr;
+	}
+
+	static SharedPtr<VFSMountState> MakeMountState(FilesysTrait* filesystem,
+		VFSMountOwnership ownership) {
+		auto* state = new VFSMountState(filesystem, ownership);
+		if (!state) {
+			ReleaseMountResources(filesystem, ownership);
+			return {};
+		}
+		return SharedPtr<VFSMountState>(state);
+	}
+
 	static vfs_super_block* super_blocks = nullptr;
 	static vfs_dentry* vfs_root = nullptr; // Global root directory
 	Mutex vfs_lock;
@@ -158,7 +189,6 @@ namespace uni {
 	// Allocators
 	static vfs_dentry* alloc_dentry(vfs_dentry* parent, const char* name) {
 		vfs_dentry* dentry = new vfs_dentry();
-		MemSet(dentry, 0, sizeof(vfs_dentry));
 		if (name) {
 			StrCopy(dentry->d_name, name);
 		}
@@ -182,8 +212,8 @@ namespace uni {
 	static vfs_inode* alloc_inode(vfs_super_block* sb) {
 		vfs_inode* inode = new vfs_inode();
 		KASSERT(inode != nullptr);
-		MemSet(inode, 0, sizeof(vfs_inode));
 		inode->i_sb = sb;
+		if (sb) inode->mount_state = sb->mount_state;
 		inode->ref_count = 1;
 		return inode;
 	}
@@ -613,6 +643,9 @@ void Filesys::Initialize() {
 
 	vfs_root = alloc_dentry(nullptr, "/");
 	vfs_super_block* root_sb = new (buf_root_sb) vfs_super_block();
+	root_sb->mount_state = MakeMountState(&global_rootfs_driver,
+		VFSMountOwnership::Borrowed);
+	KASSERT(root_sb->mount_state);
 	root_sb->fs = &global_rootfs_driver;
 	root_sb->s_root = vfs_root;
 	root_sb->type = nullptr;
@@ -865,7 +898,9 @@ static void _Prune_unlocked(vfs_dentry* dentry) {
 		child = next;
 	}
 	if (dentry->d_inode) {
-		if (dentry->d_inode->ref_count) {
+		if (dentry->d_inode->ref_count > 1) {
+			// Drop the namespace reference; open files and VMAs retain the detached inode.
+			dentry->d_inode->ref_count--;
 			dentry->d_inode->i_sb = nullptr;
 			dentry->d_inode->detached = true;
 			dentry->d_inode->detached_dentry = dentry;
@@ -928,7 +963,10 @@ vfs_dentry* Filesys::Create(const char* pathname, stduint mode, vfs_dentry* base
 
 
 bool Filesys::MountFilesys(FilesysTrait* fs, file_system_type* type, const char* target_path,
-	DeviceNode* source_device_node, stduint device_id) {
+	DeviceNode* source_device_node, stduint device_id, VFSMountOwnership ownership) {
+	if (!fs) return false;
+	auto mount_state = MakeMountState(fs, ownership);
+	if (!mount_state) return false;
 	MutexLocal guard(&vfs_lock);
 	vfs_dentry* target = _Index_unlocked(target_path, nullptr);
 	if (!target) {
@@ -941,7 +979,9 @@ bool Filesys::MountFilesys(FilesysTrait* fs, file_system_type* type, const char*
 	
 	// Create new Superblock for the mount
 	vfs_super_block* sb = new vfs_super_block();
+	if (!sb) return false;
 	sb->fs = fs;
+	sb->mount_state = mount_state;
 	sb->type = type;
 	sb->device_id = device_id;
 	sb->source_device_node = source_device_node;
@@ -986,42 +1026,37 @@ bool Filesys::MountFilesys(FilesysTrait* fs, file_system_type* type, const char*
 }
 
 bool Filesys::Unmount(const char* target_path) {
-	MutexLocal guard(&vfs_lock);
-	vfs_dentry* target = _Index_unlocked(target_path, nullptr);
-	if (target && !target->d_mounts && target->d_mounted_on) {
-		target = target->d_mounted_on;
+	SharedPtr<VFSMountState> mount_state;
+	{
+		MutexLocal guard(&vfs_lock);
+		vfs_dentry* target = _Index_unlocked(target_path, nullptr);
+		if (target && !target->d_mounts && target->d_mounted_on) {
+			target = target->d_mounted_on;
+		}
+		if (!target || !target->d_mounts) return false;
+
+		vfs_dentry* s_root = target->d_mounts;
+		vfs_super_block* sb = s_root->d_inode->i_sb;
+		mount_state = sb->mount_state;
+		if (mount_state) mount_state->detached = true;
+
+		// Remove from global superblock list.
+		if (super_blocks == sb) {
+			super_blocks = sb->next;
+		}
+		else {
+			vfs_super_block* p = super_blocks;
+			while (p && p->next != sb) p = p->next;
+			if (p) p->next = sb->next;
+		}
+
+		// Detach the namespace before releasing its inode references.
+		target->d_mounts = nullptr;
+		_Prune_unlocked(s_root);
+		delete sb;
 	}
-	if (!target || !target->d_mounts) {
-		return false;
-	}
-
-	vfs_dentry* s_root = target->d_mounts;
-	vfs_super_block* sb = s_root->d_inode->i_sb;
-
-	// 1. Remove from global superblock list
-	if (super_blocks == sb) {
-		super_blocks = sb->next;
-	}
-	else {
-		vfs_super_block* p = super_blocks;
-		while (p && p->next != sb) p = p->next;
-		if (p) p->next = sb->next;
-	}
-
-	// 2. Detach from VFS tree
-	target->d_mounts = nullptr;
-
-	// 3. Cleanup backend driver and storage
-	if (sb->fs) {
-		StorageTrait* st = sb->fs->storage;
-		delete sb->fs;
-		if (st) delete st; // This is the DiscPartition allocated in Mount()
-	}
-
-	// 4. Prune all cached dentries for this mount
-	_Prune_unlocked(s_root);
-
-	delete sb;
+	// The backend is released here only when no detached inode still owns the mount state.
+	mount_state.reset();
 	return true;
 }
 
@@ -1032,7 +1067,8 @@ file_system_type* Filesys::Mount(StorageTrait& storage, stduint dev, const char*
 		// probe() checks sys_id and calls loadfs() internally; non-null means ready to mount
 		FilesysTrait* fs = fs_type->probe(storage, dev);
 		if (fs) {
-			if (!Filesys::MountFilesys(fs, fs_type, target_path, source_device_node, dev)) return nullptr;
+			if (!Filesys::MountFilesys(fs, fs_type, target_path, source_device_node,
+				dev, VFSMountOwnership::FilesystemAndStorage)) return nullptr;
 			if (Filesys::GetSystemVirtualRootPath().getByteCount() &&
 				Taskman::Locate(Task_Init) && Taskman::Locate(Task_Devsman)) {
 				(void)syssend_async(Task_Devsman, nullptr, 0,
@@ -1200,6 +1236,7 @@ void Filesys::Tree(uni::OstreamTrait& os, bool mount_expand) {
 }
 
 int Filesys::Open(const char* pathname, int flags, vfs_file** out_file, vfs_dentry* base) {
+	if (!out_file) return -1;
 	MutexLocal guard(&vfs_lock);
 	vfs_dentry* dentry = _Index_unlocked(pathname, base);
 	if (dentry && dentry->d_inode) {
@@ -1301,6 +1338,7 @@ int Filesys::Open(const char* pathname, int flags, vfs_file** out_file, vfs_dent
 	}
 
 	vfs_file* file = new vfs_file();
+	if (!file) return -1;
 	file->f_dentry = dentry;
 	file->f_inode = dentry->d_inode;
 	file->f_mode = flags;
@@ -1311,8 +1349,9 @@ int Filesys::Open(const char* pathname, int flags, vfs_file** out_file, vfs_dent
 	} else {
 		file->f_pos = 0;
 	}
+	dentry->d_inode->ref_count++;
 
-	if (out_file) *out_file = file;
+	*out_file = file;
 	return 0;
 }
 
@@ -1391,21 +1430,25 @@ int Filesys::Close(vfs_file* file) {
 	if ((file->f_inode->i_mode & I_TYPE_MASK) == I_SOCK) {
 		return Filesys::CloseSocket(file);
 	}
-	MutexLocal guard(&vfs_lock);
-	if (file) {
+	vfs_inode* detached_inode = nullptr;
+	vfs_dentry* detached_dentry = nullptr;
+	{
+		MutexLocal guard(&vfs_lock);
 		auto* inode = file->f_inode;
-		auto* detached_dentry = inode ? inode->detached_dentry : nullptr;
+		if (inode && inode->ref_count) inode->ref_count--;
 		if (inode && file->f_pos > inode->i_size) {
 			inode->i_size = file->f_pos;
 		}
 		file->f_inode = nullptr;
 		file->f_dentry = nullptr;
-		free(file);
+		delete file;
 		if (inode && inode->detached && !inode->ref_count) {
-			delete detached_dentry;
-			delete inode;
+			detached_inode = inode;
+			detached_dentry = inode->detached_dentry;
 		}
 	}
+	delete detached_dentry;
+	delete detached_inode;
 	return 0;
 }
 
@@ -1766,7 +1809,7 @@ file_system_type fs_udf = { "udf", [](StorageTrait& storage, stduint dev) -> Fil
 		if (part.Block_Size != 2048) {
 			return nullptr;
 		}
-		ploginfo("[UDF] probe dev=%u block=%u", dev, part.Block_Size);
+		plogtrac("[UDF] probe dev=%u block=%u", dev, part.Block_Size);
 		PartitionSlice slice = part.getSlice();
 		ploginfo("[UDF] slice addr=%u len=%u type=%x", slice.address, slice.length, slice.sys_id);
 		if (slice.length == 0) {
@@ -3245,13 +3288,12 @@ int Filesys::ClosePipe(vfs_file* file) {
 	// Normal inode clean up
 	MutexLocal guard(&vfs_lock);
 	if (file->f_inode) {
-		// Inode ref_count is already decremented by ProcessBlock::Close,
-		// so we only delete it here when its ref_count reaches 0.
+		if (file->f_inode->ref_count) file->f_inode->ref_count--;
 		if (file->f_inode->ref_count == 0) {
 			delete file->f_inode;
 		}
 	}
-	free(file);
+	delete file;
 	return 0;
 }
 
@@ -3270,6 +3312,7 @@ int Filesys::CloseSocket(vfs_file* file) {
 	Network::SocketEndpointIPv4 remote_ipv4 = {};
 	{
 		MutexLocal guard(&vfs_lock);
+		if (file->f_inode && file->f_inode->ref_count) file->f_inode->ref_count--;
 		destroy = file->f_inode && file->f_inode->ref_count == 0;
 		if (destroy) {
 			domain = socket->domain;
@@ -3308,6 +3351,6 @@ int Filesys::CloseSocket(vfs_file* file) {
 		file->f_inode->internal_handler = nullptr;
 		delete file->f_inode;
 	}
-	free(file);
+	delete file;
 	return 0;
 }

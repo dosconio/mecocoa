@@ -73,7 +73,7 @@ namespace Devs {
 			return false;
 		}
 		node->fields.binding.probe_result = 0;
-		ploginfo("[PIIX4-ACPI] Probed %s revision=%[8H] PMIO=%[16H] active=%u SMBIO=%[16H] pci-io=%u host=%u active=%u",
+		plogtrac("[PIIX4-ACPI] Probed %s revision=%[8H] PMIO=%[16H] active=%u SMBIO=%[16H] pci-io=%u host=%u active=%u",
 			node->link.addr ? node->link.addr : "(unnamed)",
 			node->fields.revision,
 			pm_base,

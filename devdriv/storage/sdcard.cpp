@@ -134,9 +134,12 @@ static bool SdCardMount() {
 		sd_fs = fs;
 	}
 	SdCardOnline(true);
+	bool mount_owns_fs = false;
 	if (fs->loadfs()) {
 		fs->allow_allocate = true;
-		if (Filesys::MountFilesys(fs, &fs_fat, "/mnt/sd0.0")) {
+		mount_owns_fs = true;
+		if (Filesys::MountFilesys(fs, &fs_fat, "/mnt/sd0.0", nullptr, 0,
+			VFSMountOwnership::Filesystem)) {
 			sd_mounted = true;
 			ploginfo("[SD] mounted FAT%u at /mnt/sd0.0, units=%u block=%u",
 				(unsigned)fs->fat_type, SDCard1.getUnits(), SDCard1.Block_Size);
@@ -148,7 +151,7 @@ static bool SdCardMount() {
 		plogerro("[SD] loadfs err=%u units=%u", (unsigned)fs->error_number, SDCard1.getUnits());
 	}
 	SdCardOnline(false);
-	delete fs;
+	if (!mount_owns_fs) delete fs;
 	{
 		MutexLocal guard(&sd_lock);
 		sd_fs = nullptr;

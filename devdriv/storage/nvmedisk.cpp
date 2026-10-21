@@ -3,6 +3,7 @@
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 
 #include "../../include/mecocoa.hpp"
+
 #if (_MCCA & 0xFF00) == 0x8600
 #include <cpp/Device/Bus/PCI.hpp>
 #include <c/storage/harddisk.h>
@@ -146,7 +147,7 @@ namespace {
 			irq_count = 0;
 			Devsman::AddIrqResource(node, IRQ_NVME);
 			irq = Devsman::FindResource(node, DeviceResourceType::IrqLine, 0);
-			ploginfo("[NVMe] MSI enabled vector=%u lapic=%u",
+			plogtrac("[NVMe] MSI enabled vector=%u lapic=%u",
 				(unsigned)irq_vector, (unsigned)percore->lapic_id);
 			return true;
 		}
@@ -160,17 +161,17 @@ namespace {
 			const uint8 major = uint8((vs >> 16) & 0xFFu);
 			const uint8 minor = uint8((vs >> 8) & 0xFFu);
 			const uint8 tertiary = uint8(vs & 0xFFu);
-			ploginfo("[NVMe] ctlr %02x:%02x.%u BAR0=%[64H] len=%[64H]%s",
+			plogtrac("[NVMe] ctlr %02x:%02x.%u BAR0=%[64H] len=%[64H]%s",
 				(unsigned)node->fields.pci_bus,
 				(unsigned)node->fields.pci_device,
 				(unsigned)node->fields.pci_function,
 				bar0->start,
 				bar0->length,
 				irq ? "" : " irq=none");
-			ploginfo("[NVMe] cap=%[64H] vs=%u.%u.%u cc=%[32H] csts=%[32H]",
+			plogtrac("[NVMe] cap=%[64H] vs=%u.%u.%u cc=%[32H] csts=%[32H]",
 				cap, (unsigned)major, (unsigned)minor, (unsigned)tertiary,
 				regs->cc, regs->csts);
-			ploginfo("[NVMe] mqes=%u dstrd=%u aqa=%[32H] asq=%[64H] acq=%[64H]",
+			plogtrac("[NVMe] mqes=%u dstrd=%u aqa=%[32H] asq=%[64H] acq=%[64H]",
 				(unsigned)mqes, (unsigned)dstrd, regs->aqa, regs->asq, regs->acq);
 		}
 
@@ -320,7 +321,7 @@ namespace {
 			nvme_fence();
 			if (!EnableController()) return false;
 
-			ploginfo("[NVMe] adminq depth=%u sq=%p cq=%p", (unsigned)admin_depth, admin_sq, admin_cq);
+			plogtrac("[NVMe] adminq depth=%u sq=%p cq=%p", (unsigned)admin_depth, admin_sq, admin_cq);
 			return true;
 		}
 
@@ -538,7 +539,7 @@ namespace {
 			for (uint32 nsid = 1; nsid <= controller_nn && kept < NVME_MAX_NAMESPACES; ++nsid) {
 				if (AddNamespaceId(nsid)) ++kept;
 			}
-			ploginfo("[NVMe] namespaces via nn=%u kept=%u first=%[32H]",
+			plogtrac("[NVMe] namespaces via nn=%u kept=%u first=%[32H]",
 				(unsigned)controller_nn, (unsigned)namespace_count,
 				namespace_count ? namespaces[0].nsid : 0u);
 			if (controller_nn > namespace_count) {
@@ -583,7 +584,7 @@ namespace {
 				plogwarn("[NVMe] disable interrupt coalescing failed");
 				return false;
 			}
-			ploginfo("[NVMe] interrupt coalescing disabled");
+			plogtrac("[NVMe] interrupt coalescing disabled");
 			return true;
 		}
 
@@ -616,7 +617,7 @@ namespace {
 				(void)AddNamespaceId(nsids[i]);
 				++count;
 			}
-			ploginfo("[NVMe] active namespaces=%u first=%[32H]", (unsigned)count, first);
+			plogtrac("[NVMe] active namespaces=%u first=%[32H]", (unsigned)count, first);
 			if (count > namespace_count) {
 				plogwarn("[NVMe] only %u namespaces kept (limit=%u)",
 					(unsigned)namespace_count, (unsigned)NVME_MAX_NAMESPACES);
@@ -658,7 +659,7 @@ namespace {
 			cmd.cdw11 = 0x00000001u | (uint32(NVME_IO_QID) << 16);
 			if (!SubmitAdminCommand(cmd, cpl)) return false;
 
-			ploginfo("[NVMe] ioq qid=%u depth=%u sq=%p cq=%p",
+			plogtrac("[NVMe] ioq qid=%u depth=%u sq=%p cq=%p",
 				(unsigned)NVME_IO_QID, (unsigned)io_depth, io_sq, io_cq);
 			return true;
 		}
@@ -685,7 +686,7 @@ namespace {
 			const byte lbads = identify_ns[lbaf_offset + 2];
 			ns.block_size = 1u << lbads;
 			ns.disk.Bind(this, ns.nsid, ns.block_size, ns.total_blocks, ExecBlocksThunk);
-			ploginfo("[NVMe] nsid=%[32H] nsze=%[64H] flbas=%u lbads=%u block=%u",
+			plogtrac("[NVMe] nsid=%[32H] nsze=%[64H] flbas=%u lbads=%u block=%u",
 				ns.nsid, ns.total_blocks, (unsigned)format_index, (unsigned)lbads, (unsigned)ns.block_size);
 			return ns.block_size != 0 && ns.total_blocks != 0;
 		}

@@ -37,9 +37,27 @@ namespace {
 	constexpr uint32 VmciQueuePairAllocate = 10;
 	constexpr uint32 VmciQueuePairDetach = 11;
 	constexpr uint32 VmciTransportResourceId = 1;
+	constexpr uint32 VmciTransportHypervisorResourceId = 15;
 	constexpr uint8 VmciTransportPacketVersion = 1;
 	constexpr uint16 VmciTransportProtocolPacketOnNotify = 1u << 0;
 	constexpr uint32 VmciErrorResultFloor = uint32(0u - 1000u);
+	constexpr uint32 VmwareBackdoorMagic = 0x564D5868u;
+	constexpr uint16 VmwareBackdoorPort = 0x5658u;
+	constexpr uint16 VmwareBackdoorHighBandwidthPort = 0x5659u;
+	constexpr uint16 VmwareBackdoorMessageCommand = 30;
+	constexpr uint16 VmwareBackdoorHighBandwidthMessageCommand = 0;
+	constexpr uint32 VmwareBackdoorTcloProtocol = 0x4F4C4354u;
+	constexpr uint32 VmwareBackdoorRpciProtocol = 0x49435052u;
+	constexpr uint32 VmwareBackdoorCookieFlag = 0x80000000u;
+	constexpr uint16 VmwareBackdoorStatusSuccess = 1u << 0;
+	constexpr uint16 VmwareBackdoorStatusReceive = 1u << 1;
+	constexpr uint16 VmwareBackdoorStatusCheckpoint = 1u << 4;
+	constexpr uint16 VmwareBackdoorStatusHighBandwidth = 1u << 7;
+	constexpr stduint VmciGuestRpcBufferSize = 4096;
+	constexpr stduint VmciGuestRpcReplyBufferSize = 256;
+	constexpr stduint VmciGuestRpcPollTicks = 10;
+	constexpr stduint VmciGuestRpcFastPollTicks = 1;
+	constexpr stduint VmciGuestRpcTimerToken = 0x564D4352u;
 	constexpr stduint VmciQueuePairMaxDataPages =
 		VmciQueuePairMaxQueueSize / VmciPageSize;
 	constexpr stduint VmciQueuePairMaxPages =
@@ -133,6 +151,50 @@ namespace {
 		Reset = 7,
 		Request2 = 11,
 		Negotiate2 = 12,
+	};
+
+	enum class VmwareBackdoorMessageType : uint16 {
+		Open = 0,
+		SendSize = 1,
+		SendPayload = 2,
+		ReceiveSize = 3,
+		ReceivePayload = 4,
+		ReceiveStatus = 5,
+		Close = 6,
+	};
+
+	struct VmwareBackdoorRegisters {
+		stduint ax = 0;
+		stduint bx = 0;
+		stduint cx = 0;
+		stduint dx = 0;
+		stduint si = 0;
+		stduint di = 0;
+	};
+
+	struct VmwareBackdoorChannel {
+		stduint cookie_high = 0;
+		stduint cookie_low = 0;
+		uint32 channel_id = 0;
+		bool active = false;
+	};
+
+	struct VmciGuestRpcChannel {
+		VmwareBackdoorChannel channel{};
+		uint32 polls = 0;
+		uint32 received = 0;
+		uint32 replied = 0;
+		uint32 failures = 0;
+		uint32 consecutive_failures = 0;
+		uint32 capability_registrations = 0;
+		uint32 resolution_requests = 0;
+		uint32 resolution_width = 0;
+		uint32 resolution_height = 0;
+		uint32 last_request_size = 0;
+		uint32 response_size = 0;
+		uint8 receive_buffer[VmciGuestRpcBufferSize + 1] = {};
+		uint8 response_buffer[64] = {};
+		char last_request[64] = {};
 	};
 
 	struct VmciTransportWaitingInfo {
@@ -284,6 +346,7 @@ namespace {
 		uint32 page_count = 0;
 		uint32 local_port = VmciInvalidId;
 		uint32 peer_port = VmciInvalidId;
+		VmciQueuePairMode mode = VmciQueuePairMode::Host;
 		stduint pending_receive_tid = 0;
 		uint32 pending_receive_size = 0;
 		int32 hypervisor_result = 0;
@@ -299,6 +362,7 @@ namespace {
 	VmciDoorbell g_doorbells[VmciDoorbellCapacity]{};
 	VmciEventSubscription g_event_subscriptions[VmciEventSubscriptionCapacity]{};
 	VmciQueuePair g_queue_pairs[VmciQueuePairCapacity]{};
+	VmciGuestRpcChannel g_guest_rpc{};
 	uint32 g_next_resource_id = VmciFirstDynamicResourceId;
 	uint32 g_next_subscription_id = 1;
 	alignas(stduint) uint8 g_message_buffer[sizeof(VmciDatagramPacket)]{};
@@ -307,6 +371,496 @@ namespace {
 		sizeof(VmciQueuePairAllocPayload) +
 		VmciQueuePairMaxPages * sizeof(uint64)]{};
 	alignas(stduint) VmciQueuePairIoPacket g_queue_pair_io_packet{};
+
+	uint16 VmwareBackdoorHighWord(stduint value) {
+		return uint16(value >> 16);
+	}
+
+	stduint VmwareBackdoorMessageControl(VmwareBackdoorMessageType type) {
+		return (stduint(_IMM(type)) << 16) | VmwareBackdoorMessageCommand;
+	}
+
+	void VmwareBackdoorCall(VmwareBackdoorRegisters& registers) {
+		registers.ax = VmwareBackdoorMagic;
+		registers.dx = (registers.dx & ~stduint(0xFFFFu)) |
+			VmwareBackdoorPort;
+		_ASM volatile (
+			"inl %%dx, %%eax"
+			: "+a"(registers.ax), "+b"(registers.bx),
+			  "+c"(registers.cx), "+d"(registers.dx),
+			  "+S"(registers.si), "+D"(registers.di)
+			:
+			: "memory");
+	}
+
+	void VmwareBackdoorHighBandwidthCall(VmwareBackdoorRegisters& registers,
+		stduint bp_value, bool is_write) {
+		registers.ax = VmwareBackdoorMagic;
+		registers.dx = (registers.dx & ~stduint(0xFFFFu)) |
+			VmwareBackdoorHighBandwidthPort;
+		#if _ACCM == 0x8632
+		if (is_write) {
+			_ASM volatile (
+				"pushl %[bp_value]\n\t"
+				"pushl %%ebp\n\t"
+				"movl 4(%%esp), %%ebp\n\t"
+				"cld\n\t"
+				"rep outsb\n\t"
+				"popl %%ebp\n\t"
+				"addl $4, %%esp"
+				: "+a"(registers.ax), "+b"(registers.bx),
+				  "+c"(registers.cx), "+d"(registers.dx),
+				  "+S"(registers.si), "+D"(registers.di)
+				: [bp_value] "m"(bp_value)
+				: "memory", "cc");
+		}
+		else {
+			_ASM volatile (
+				"pushl %[bp_value]\n\t"
+				"pushl %%ebp\n\t"
+				"movl 4(%%esp), %%ebp\n\t"
+				"cld\n\t"
+				"rep insb\n\t"
+				"popl %%ebp\n\t"
+				"addl $4, %%esp"
+				: "+a"(registers.ax), "+b"(registers.bx),
+				  "+c"(registers.cx), "+d"(registers.dx),
+				  "+S"(registers.si), "+D"(registers.di)
+				: [bp_value] "m"(bp_value)
+				: "memory", "cc");
+		}
+		#elif _ACCM == 0x8664
+		if (is_write) {
+			_ASM volatile (
+				"pushq %[bp_value]\n\t"
+				"pushq %%rbp\n\t"
+				"movq 8(%%rsp), %%rbp\n\t"
+				"cld\n\t"
+				"rep outsb\n\t"
+				"popq %%rbp\n\t"
+				"addq $8, %%rsp"
+				: "+a"(registers.ax), "+b"(registers.bx),
+				  "+c"(registers.cx), "+d"(registers.dx),
+				  "+S"(registers.si), "+D"(registers.di)
+				: [bp_value] "m"(bp_value)
+				: "memory", "cc");
+		}
+		else {
+			_ASM volatile (
+				"pushq %[bp_value]\n\t"
+				"pushq %%rbp\n\t"
+				"movq 8(%%rsp), %%rbp\n\t"
+				"cld\n\t"
+				"rep insb\n\t"
+				"popq %%rbp\n\t"
+				"addq $8, %%rsp"
+				: "+a"(registers.ax), "+b"(registers.bx),
+				  "+c"(registers.cx), "+d"(registers.dx),
+				  "+S"(registers.si), "+D"(registers.di)
+				: [bp_value] "m"(bp_value)
+				: "memory", "cc");
+		}
+		#endif
+	}
+
+	bool OpenVmwareBackdoorChannel(VmwareBackdoorChannel& channel,
+		uint32 protocol) {
+		for0(attempt, 2) {
+			VmwareBackdoorRegisters registers = {};
+			registers.bx = protocol |
+				(attempt ? 0u : VmwareBackdoorCookieFlag);
+			registers.cx = VmwareBackdoorMessageControl(
+				VmwareBackdoorMessageType::Open);
+			VmwareBackdoorCall(registers);
+			if ((VmwareBackdoorHighWord(registers.cx) &
+				VmwareBackdoorStatusSuccess) == 0) continue;
+			channel.channel_id = VmwareBackdoorHighWord(registers.dx);
+			channel.cookie_high = registers.si;
+			channel.cookie_low = registers.di;
+			channel.active = true;
+			return true;
+		}
+		return false;
+	}
+
+	void CloseVmwareBackdoorChannel(VmwareBackdoorChannel& channel) {
+		if (!channel.active) return;
+		VmwareBackdoorRegisters registers = {};
+		registers.cx = VmwareBackdoorMessageControl(
+			VmwareBackdoorMessageType::Close);
+		registers.dx = stduint(channel.channel_id) << 16;
+		registers.si = channel.cookie_high;
+		registers.di = channel.cookie_low;
+		VmwareBackdoorCall(registers);
+		channel.active = false;
+	}
+
+	bool SendVmwareBackdoorMessage(VmwareBackdoorChannel& channel,
+		const uint8* buffer, stduint size) {
+		if (!channel.active || (size && !buffer)) return false;
+		VmwareBackdoorRegisters registers = {};
+		registers.bx = size;
+		registers.cx = VmwareBackdoorMessageControl(
+			VmwareBackdoorMessageType::SendSize);
+		registers.dx = stduint(channel.channel_id) << 16;
+		registers.si = channel.cookie_high;
+		registers.di = channel.cookie_low;
+		VmwareBackdoorCall(registers);
+		const uint16 status = VmwareBackdoorHighWord(registers.cx);
+		if ((status & VmwareBackdoorStatusSuccess) == 0) return false;
+		if (!size) return true;
+
+		if (status & VmwareBackdoorStatusHighBandwidth) {
+			registers = {};
+			registers.bx = (stduint(VmwareBackdoorStatusSuccess) << 16) |
+				VmwareBackdoorHighBandwidthMessageCommand;
+			registers.cx = size;
+			registers.dx = stduint(channel.channel_id) << 16;
+			registers.si = stduint(buffer);
+			registers.di = channel.cookie_low;
+			VmwareBackdoorHighBandwidthCall(registers,
+				channel.cookie_high, true);
+			return (VmwareBackdoorHighWord(registers.bx) &
+				VmwareBackdoorStatusSuccess) != 0;
+		}
+
+		for (stduint offset = 0; offset < size; offset += sizeof(uint32)) {
+			uint32 value = 0;
+			const stduint chunk = minof(size - offset, sizeof(value));
+			for0(i, chunk) value |= uint32(buffer[offset + i]) << (i * 8);
+			registers = {};
+			registers.bx = value;
+			registers.cx = VmwareBackdoorMessageControl(
+				VmwareBackdoorMessageType::SendPayload);
+			registers.dx = stduint(channel.channel_id) << 16;
+			registers.si = channel.cookie_high;
+			registers.di = channel.cookie_low;
+			VmwareBackdoorCall(registers);
+			if ((VmwareBackdoorHighWord(registers.cx) &
+				VmwareBackdoorStatusSuccess) == 0) return false;
+		}
+		return true;
+	}
+
+	void FinishVmwareBackdoorReceive(VmwareBackdoorChannel& channel,
+		bool success, bool payload_pending) {
+		VmwareBackdoorRegisters registers = {};
+		registers.bx = success ? VmwareBackdoorStatusSuccess : 0;
+		registers.cx = VmwareBackdoorMessageControl(payload_pending ?
+			VmwareBackdoorMessageType::ReceivePayload :
+			VmwareBackdoorMessageType::ReceiveStatus);
+		registers.dx = stduint(channel.channel_id) << 16;
+		registers.si = channel.cookie_high;
+		registers.di = channel.cookie_low;
+		VmwareBackdoorCall(registers);
+	}
+
+	bool ReceiveVmwareBackdoorMessage(VmwareBackdoorChannel& channel,
+		uint8* buffer, stduint capacity, stduint& size) {
+		size = 0;
+		if (!channel.active || !buffer || !capacity) return false;
+		VmwareBackdoorRegisters registers = {};
+		registers.cx = VmwareBackdoorMessageControl(
+			VmwareBackdoorMessageType::ReceiveSize);
+		registers.dx = stduint(channel.channel_id) << 16;
+		registers.si = channel.cookie_high;
+		registers.di = channel.cookie_low;
+		VmwareBackdoorCall(registers);
+		const uint16 status = VmwareBackdoorHighWord(registers.cx);
+		if ((status & VmwareBackdoorStatusSuccess) == 0) return false;
+		if ((status & VmwareBackdoorStatusReceive) == 0) return true;
+		if (VmwareBackdoorHighWord(registers.dx) !=
+			_IMM(VmwareBackdoorMessageType::SendSize)) return false;
+		size = uint32(registers.bx);
+		if (size >= capacity) {
+			FinishVmwareBackdoorReceive(channel, false, size != 0);
+			return false;
+		}
+
+		if (size && (status & VmwareBackdoorStatusHighBandwidth)) {
+			registers = {};
+			registers.bx = (stduint(VmwareBackdoorStatusSuccess) << 16) |
+				VmwareBackdoorHighBandwidthMessageCommand;
+			registers.cx = size;
+			registers.dx = stduint(channel.channel_id) << 16;
+			registers.si = channel.cookie_high;
+			registers.di = stduint(buffer);
+			VmwareBackdoorHighBandwidthCall(registers,
+				channel.cookie_low, false);
+			if ((VmwareBackdoorHighWord(registers.bx) &
+				VmwareBackdoorStatusSuccess) == 0) return false;
+		}
+		else for (stduint offset = 0; offset < size;
+			offset += sizeof(uint32)) {
+			registers = {};
+			registers.bx = VmwareBackdoorStatusSuccess;
+			registers.cx = VmwareBackdoorMessageControl(
+				VmwareBackdoorMessageType::ReceivePayload);
+			registers.dx = stduint(channel.channel_id) << 16;
+			registers.si = channel.cookie_high;
+			registers.di = channel.cookie_low;
+			VmwareBackdoorCall(registers);
+			if ((VmwareBackdoorHighWord(registers.cx) &
+				VmwareBackdoorStatusSuccess) == 0 ||
+				VmwareBackdoorHighWord(registers.dx) !=
+				_IMM(VmwareBackdoorMessageType::SendPayload)) return false;
+			const uint32 value = uint32(registers.bx);
+			const stduint chunk = minof(size - offset, sizeof(value));
+			for0(i, chunk) {
+				buffer[offset + i] =
+					uint8(value >> (i * 8));
+			}
+		}
+		buffer[size] = 0;
+		FinishVmwareBackdoorReceive(channel, true, false);
+		return true;
+	}
+
+	bool SendGuestRpcCommand(const char* command, stduint size) {
+		if (!command || !size) return false;
+		VmwareBackdoorChannel channel = {};
+		uint8 reply[VmciGuestRpcReplyBufferSize] = {};
+		stduint reply_size = 0;
+		bool success = OpenVmwareBackdoorChannel(channel,
+			VmwareBackdoorRpciProtocol);
+		if (success) {
+			success = SendVmwareBackdoorMessage(channel,
+				reinterpret_cast<const uint8*>(command), size) &&
+				ReceiveVmwareBackdoorMessage(channel, reply, sizeof(reply),
+					reply_size);
+		}
+		CloseVmwareBackdoorChannel(channel);
+		return success && reply_size >= 2 && reply[0] == '1' && reply[1] == ' ';
+	}
+
+	bool MatchGuestRpcCommand(stduint size, const char* command,
+		stduint& argument_offset) {
+		const stduint command_size = StrLength(command);
+		if (size < command_size || MemCompare(reinterpret_cast<const char*>(
+			g_guest_rpc.receive_buffer), command, command_size) != 0) return false;
+		if (size == command_size) {
+			argument_offset = size;
+			return true;
+		}
+		const uint8 separator = g_guest_rpc.receive_buffer[command_size];
+		if (separator != 0 && separator != ' ') return false;
+		argument_offset = command_size;
+		while (argument_offset < size &&
+			g_guest_rpc.receive_buffer[argument_offset] == ' ') argument_offset++;
+		return true;
+	}
+
+	bool ParseGuestRpcUnsigned(stduint size, stduint& offset, uint32& value) {
+		while (offset < size && g_guest_rpc.receive_buffer[offset] == ' ') offset++;
+		if (offset >= size || g_guest_rpc.receive_buffer[offset] < '0' ||
+			g_guest_rpc.receive_buffer[offset] > '9') return false;
+		uint64 parsed = 0;
+		while (offset < size && g_guest_rpc.receive_buffer[offset] >= '0' &&
+			g_guest_rpc.receive_buffer[offset] <= '9') {
+			parsed = parsed * 10 + g_guest_rpc.receive_buffer[offset] - '0';
+			if (parsed > 0xFFFFFFFFu) return false;
+			offset++;
+		}
+		value = uint32(parsed);
+		return true;
+	}
+
+	bool GuestRpcArgumentsEnded(stduint size, stduint offset) {
+		while (offset < size && (g_guest_rpc.receive_buffer[offset] == ' ' ||
+			g_guest_rpc.receive_buffer[offset] == 0)) offset++;
+		return offset == size;
+	}
+
+	bool RegisterResolutionCapabilities() {
+		static const char resolution_server[] =
+			"tools.capability.resolution_server toolbox 1";
+		static const char resolution_set[] =
+			"tools.capability.resolution_set 1";
+		const bool server_ok = SendGuestRpcCommand(resolution_server,
+			sizeof(resolution_server) - 1);
+		const bool set_ok = SendGuestRpcCommand(resolution_set,
+			sizeof(resolution_set));
+		if (!server_ok || !set_ok) {
+			plogwarn("[VMCI] GuestRPC capability RPCI failed server=%u set=%u",
+				unsigned(server_ok), unsigned(set_ok));
+			return false;
+		}
+		g_guest_rpc.capability_registrations++;
+		ploginfo("[VMCI] GuestRPC resolution capability registered");
+		return true;
+	}
+
+	void SetGuestRpcResponse(bool success, const char* text) {
+		const char* prefix = success ? "OK " : "ERROR ";
+		stduint length = 0;
+		while (prefix[length] && length < sizeof(g_guest_rpc.response_buffer)) {
+			g_guest_rpc.response_buffer[length] = uint8(prefix[length]);
+			length++;
+		}
+		for (stduint i = 0; text && text[i] &&
+			length < sizeof(g_guest_rpc.response_buffer); ++i) {
+			g_guest_rpc.response_buffer[length++] = uint8(text[i]);
+		}
+		g_guest_rpc.response_size = uint32(length);
+	}
+
+	void CaptureGuestRpcRequest(stduint size) {
+		g_guest_rpc.last_request_size = uint32(size);
+		const stduint copy_size = minof(size,
+			stduint(sizeof(g_guest_rpc.last_request) - 1));
+		for0(i, copy_size) {
+			const uint8 ch = g_guest_rpc.receive_buffer[i];
+			g_guest_rpc.last_request[i] = ch >= 0x20 && ch <= 0x7E ?
+				char(ch) : '.';
+		}
+		g_guest_rpc.last_request[copy_size] = 0;
+	}
+
+	bool RequestVmwareDisplayResolution(uint32 width, uint32 height) {
+		stduint args[4] = { width, height, 0, 0 };
+		CommMsg message = {};
+		message.data.address = _IMM(args);
+		message.data.length = sizeof(args);
+		message.type = _IMM(GraphicMsg::HOST_SET_RESOLUTION);
+		if (Powercall::SysComm(COMM_SEND, Task_ConsoleVideo, &message) != 0) {
+			return false;
+		}
+
+		stdsint result = -1;
+		message = {};
+		message.data.address = _IMM(&result);
+		message.data.length = sizeof(result);
+		return Powercall::SysComm(COMM_RECV, Task_ConsoleVideo, &message) == 0 &&
+			message.data.length >= sizeof(result) && result == 0;
+	}
+
+	void HandleGuestRpcRequest(stduint size) {
+		stduint offset = 0;
+		if (MatchGuestRpcCommand(size, "reset", offset)) {
+			SetGuestRpcResponse(true, "ATR toolbox");
+			return;
+		}
+		if (MatchGuestRpcCommand(size, "ping", offset)) {
+			SetGuestRpcResponse(true, "");
+			return;
+		}
+		if (MatchGuestRpcCommand(size, "Capabilities_Register", offset)) {
+			if (!RegisterResolutionCapabilities()) {
+				g_guest_rpc.failures++;
+			}
+			SetGuestRpcResponse(true, "");
+			return;
+		}
+		if (MatchGuestRpcCommand(size, "Resolution_Set", offset)) {
+			uint32 width = 0;
+			uint32 height = 0;
+			if (!ParseGuestRpcUnsigned(size, offset, width) ||
+				!ParseGuestRpcUnsigned(size, offset, height) ||
+				!GuestRpcArgumentsEnded(size, offset) || !width || !height) {
+				plogwarn("[VMCI] GuestRPC Resolution_Set has invalid arguments");
+				SetGuestRpcResponse(false, "Invalid arguments");
+				return;
+			}
+			if (g_guest_rpc.resolution_requests &&
+				g_guest_rpc.resolution_width == width &&
+				g_guest_rpc.resolution_height == height) {
+				SetGuestRpcResponse(true, "");
+				return;
+			}
+			if (!RequestVmwareDisplayResolution(width, height)) {
+				plogwarn("[VMCI] GuestRPC resolution request rejected %ux%u",
+					unsigned(width), unsigned(height));
+				SetGuestRpcResponse(false, "Display mode rejected");
+				return;
+			}
+			g_guest_rpc.resolution_requests++;
+			g_guest_rpc.resolution_width = width;
+			g_guest_rpc.resolution_height = height;
+			SetGuestRpcResponse(true, "");
+			return;
+		}
+		if (MatchGuestRpcCommand(size, "Set_Option", offset)) {
+			SetGuestRpcResponse(true, "");
+			return;
+		}
+		SetGuestRpcResponse(false, "Unknown Command");
+	}
+
+	bool ScheduleGuestRpcPoll(stduint ticks) {
+		if (Powercall::DevTimer(g_vmci.dev_handle, ticks,
+			VmciGuestRpcTimerToken) == 0) return true;
+		g_guest_rpc.failures++;
+		plogwarn("[VMCI] GuestRPC poll timer failed");
+		return false;
+	}
+
+	void RecoverGuestRpcBackdoor(const char* phase) {
+		g_guest_rpc.failures++;
+		g_guest_rpc.consecutive_failures++;
+		CloseVmwareBackdoorChannel(g_guest_rpc.channel);
+		if (g_guest_rpc.consecutive_failures >= 3) {
+			plogerro("[VMCI] GuestRPC disabled after repeated %s failures",
+				phase);
+			g_vmci.service_refresh_pending = true;
+			return;
+		}
+		if (!OpenVmwareBackdoorChannel(g_guest_rpc.channel,
+			VmwareBackdoorTcloProtocol)) {
+			plogwarn("[VMCI] GuestRPC %s failed and reopen failed", phase);
+			g_vmci.service_refresh_pending = true;
+			return;
+		}
+		plogwarn("[VMCI] GuestRPC %s failed, reopened channel=%u attempt=%u/3",
+			phase, unsigned(g_guest_rpc.channel.channel_id),
+			unsigned(g_guest_rpc.consecutive_failures));
+		(void)ScheduleGuestRpcPoll(VmciGuestRpcPollTicks);
+	}
+
+	void ServiceGuestRpcBackdoor() {
+		if (!g_guest_rpc.channel.active) return;
+		g_guest_rpc.polls++;
+		const bool had_response = g_guest_rpc.response_size != 0;
+		if (!SendVmwareBackdoorMessage(g_guest_rpc.channel,
+			g_guest_rpc.response_buffer, g_guest_rpc.response_size)) {
+			RecoverGuestRpcBackdoor("send");
+			return;
+		}
+		if (had_response) g_guest_rpc.replied++;
+		g_guest_rpc.response_size = 0;
+
+		stduint size = 0;
+		if (!ReceiveVmwareBackdoorMessage(g_guest_rpc.channel,
+			g_guest_rpc.receive_buffer, sizeof(g_guest_rpc.receive_buffer), size)) {
+			RecoverGuestRpcBackdoor("receive");
+			return;
+		}
+		if (had_response) g_guest_rpc.consecutive_failures = 0;
+		if (!size) {
+			(void)ScheduleGuestRpcPoll(VmciGuestRpcPollTicks);
+			return;
+		}
+
+		g_guest_rpc.received++;
+		CaptureGuestRpcRequest(size);
+		HandleGuestRpcRequest(size);
+		(void)ScheduleGuestRpcPoll(VmciGuestRpcFastPollTicks);
+	}
+
+	bool StartGuestRpcBackdoor() {
+		if (!OpenVmwareBackdoorChannel(g_guest_rpc.channel,
+			VmwareBackdoorTcloProtocol)) return false;
+		g_guest_rpc.response_size = 0;
+		ploginfo("[VMCI] GuestRPC backdoor ready channel=%u",
+			unsigned(g_guest_rpc.channel.channel_id));
+		return true;
+	}
+
+	bool StartGuestRpcPolling() {
+		if (!g_guest_rpc.channel.active) return true;
+		if (ScheduleGuestRpcPoll(VmciGuestRpcFastPollTicks)) return true;
+		CloseVmwareBackdoorChannel(g_guest_rpc.channel);
+		return false;
+	}
 
 	bool FindResource(stduint dev_handle, PwcallDeviceResourceType type,
 		uint32 resource_index, PwcallDeviceResourceInfo& resource) {
@@ -627,10 +1181,6 @@ namespace {
 			}
 			if (!WriteRegister(VmciRegister::Capabilities,
 				g_vmci.capabilities_in_use)) return false;
-			ploginfo("[VMCI] Legacy datagram available=%08x active=%08x dma-datagram=%u",
-				unsigned(g_vmci.capabilities),
-				unsigned(g_vmci.capabilities_in_use),
-				unsigned((g_vmci.capabilities & VmciCapabilityDmaDatagram) ? 1u : 0u));
 			// Page shift scales every submitted PPN, so both paths must set it.
 			if (!WriteRegister(VmciRegister::GuestPageShift, VmciPageShift)) {
 				plogerro("[VMCI] Guest page shift write failed");
@@ -646,8 +1196,6 @@ namespace {
 					plogerro("[VMCI] Legacy data-in landing page write failed");
 					return false;
 				}
-				ploginfo("[VMCI] Legacy data-in landing page iova=%[64H]",
-					g_vmci.notification_device_address);
 			}
 			if ((g_vmci.capabilities_in_use & VmciCapabilityNotifications) &&
 				!RegisterNotificationBitmap()) return false;
@@ -866,6 +1414,9 @@ namespace {
 		info.features |= VmciFeatureEvents;
 		if (g_vmci.queue_pair_available) {
 			info.features |= VmciFeatureQueuePairs;
+		}
+		if (g_guest_rpc.channel.active) {
+			info.features |= VmciFeatureGuestRpcBackdoor;
 		}
 		info.doorbell_capacity = VmciDoorbellCapacity;
 		info.event_subscription_capacity = VmciEventSubscriptionCapacity;
@@ -1191,6 +1742,7 @@ namespace {
 		response.hypervisor_result = queue_pair.hypervisor_result;
 		response.local_port = queue_pair.local_port;
 		response.peer_port = queue_pair.peer_port;
+		response.mode = _IMM(queue_pair.mode);
 		return response;
 	}
 
@@ -1264,8 +1816,11 @@ namespace {
 			type == VmciTransportPacketType::Attach) {
 			packet.handle = queue_pair.handle;
 		}
+		const uint32 destination_resource =
+			queue_pair.peer == VmciHypervisorContextId ?
+			VmciTransportHypervisorResourceId : VmciTransportResourceId;
 		const VmciHandle destination = {
-			queue_pair.peer, VmciTransportResourceId
+			queue_pair.peer, destination_resource
 		};
 		// The common VMCI route layer resolves ANY_CID before hardware submission.
 		const VmciHandle source = {
@@ -1292,13 +1847,6 @@ namespace {
 					unsigned(packet.destination_port));
 			}
 			return false;
-		}
-		if (type == VmciTransportPacketType::Request2 ||
-			type == VmciTransportPacketType::Request) {
-			ploginfo("[VMCI] Stream request sent type=%u result=%d local=%u peer=%08x:%u",
-				unsigned(packet.type), vmci_result,
-				unsigned(packet.source_port), unsigned(queue_pair.peer),
-				unsigned(packet.destination_port));
 		}
 		return true;
 	}
@@ -1547,17 +2095,11 @@ namespace {
 			return false;
 		}
 		if (queue_pair.hypervisor_result < 0) {
-			const uint64 first_ppn = queue_pair.dma_pages[0].device_address >>
-				VmciPageShift;
-			const uint64 last_ppn =
-				queue_pair.dma_pages[total_pages - 1].device_address >>
-				VmciPageShift;
-			plogerro("[VMCI] Queue pair allocate failed result=%d handle=%08x:%u peer=%08x flags=%08x pages=%u ppn-first=%[64H] ppn-last=%[64H]",
+			plogerro("[VMCI] Queue pair allocate failed result=%d handle=%08x:%u peer=%08x flags=%08x pages=%u",
 				queue_pair.hypervisor_result,
 				unsigned(payload->handle.context),
 				unsigned(payload->handle.resource), unsigned(payload->peer),
-				unsigned(payload->flags), unsigned(payload->num_ppns),
-				first_ppn, last_ppn);
+				unsigned(payload->flags), unsigned(payload->num_ppns));
 			for0(i, total_pages) FreeDmaRegion(queue_pair.dma_pages[i]);
 			return false;
 		}
@@ -1603,6 +2145,7 @@ namespace {
 		response.consume_size = request.consume_size;
 		response.local_port = request.local_port;
 		response.peer_port = request.peer_port;
+		response.mode = request.mode;
 		if (!g_vmci.queue_pair_available) {
 			response.status = int32(VmciStatus::Unavailable);
 			g_vmci.queue_pair_create_failures++;
@@ -1610,17 +2153,28 @@ namespace {
 			return;
 		}
 
+		const auto mode = VmciQueuePairMode(request.mode);
+		const bool host_target = mode == VmciQueuePairMode::Host &&
+			request.peer == VmciHostContextId &&
+			request.peer_port >= VmciFirstDynamicResourceId &&
+			request.peer_port != VmciInvalidId &&
+			(request.local_port == VmciInvalidId ||
+				request.local_port >= VmciFirstDynamicResourceId);
+		const bool guest_rpc_target =
+			mode == VmciQueuePairMode::HypervisorGuestRpc &&
+			request.peer == VmciHypervisorContextId &&
+			(request.peer_port == VmciGuestRpcTcloPort ||
+				request.peer_port == VmciGuestRpcRpciPort) &&
+			(request.local_port == VmciInvalidId ||
+				request.local_port == VmciReservedResourceIdMax ||
+				request.local_port >= VmciFirstDynamicResourceId);
 		if (request.version != VmciProtocolVersion ||
-			request.peer != VmciHostContextId ||
 			request.flags != _IMM(VmciQueuePairFlag::None) ||
 			!request.produce_size || !request.consume_size ||
 			request.produce_size != request.consume_size ||
 			request.produce_size > VmciQueuePairMaxQueueSize ||
 			request.consume_size > VmciQueuePairMaxQueueSize ||
-			(request.local_port != VmciInvalidId &&
-				request.local_port < VmciFirstDynamicResourceId) ||
-			request.peer_port < VmciFirstDynamicResourceId ||
-			request.peer_port == VmciInvalidId ||
+			(!host_target && !guest_rpc_target) ||
 			(request.resource_id != VmciInvalidId &&
 				request.resource_id < VmciFirstDynamicResourceId)) {
 			g_vmci.queue_pair_create_failures++;
@@ -1661,6 +2215,7 @@ namespace {
 		queue_pair->local_port = request.local_port == VmciInvalidId ?
 			resource_id : request.local_port;
 		queue_pair->peer_port = request.peer_port;
+		queue_pair->mode = mode;
 		queue_pair->awaiting_negotiate = true;
 		queue_pair->active = true;
 		if (!SendTransportControl(*queue_pair,
@@ -1828,10 +2383,12 @@ namespace {
 
 	bool HandleTransportDatagram(const VmciDatagram& datagram,
 		const uint8* payload) {
+		const uint32 source_resource =
+			datagram.source.context == VmciHypervisorContextId ?
+			VmciTransportHypervisorResourceId : VmciTransportResourceId;
 		if (datagram.destination.resource != VmciTransportResourceId ||
-			datagram.source.resource != VmciTransportResourceId) return false;
+			datagram.source.resource != source_resource) return false;
 		if (datagram.destination.context != g_vmci.context_id ||
-			datagram.source.context != VmciHostContextId ||
 			datagram.payload_size != sizeof(VmciTransportPacket)) return true;
 
 		VmciTransportPacket packet = {};
@@ -2104,6 +2661,7 @@ namespace {
 	}
 
 	void ShutdownVmci() {
+		CloseVmwareBackdoorChannel(g_guest_rpc.channel);
 		if (g_vmci.dev_handle && (g_vmci.use_mmio || g_vmci.io.length)) {
 			(void)WriteRegister(VmciRegister::InterruptMask, 0);
 			(void)WriteRegister(VmciRegister::Control,
@@ -2347,6 +2905,30 @@ namespace {
 			SendClientDatagram(source, packet, length);
 			break;
 		}
+		case VmciMsg::GuestRpcQuery:
+		{
+			VmciGuestRpcInfo info = {};
+			info.version = VmciProtocolVersion;
+			info.status = g_guest_rpc.channel.active ?
+				int32(VmciStatus::Success) : int32(VmciStatus::Unavailable);
+			info.ready = g_guest_rpc.channel.active;
+			info.channel_id = g_guest_rpc.channel.channel_id;
+			info.polls = g_guest_rpc.polls;
+			info.received = g_guest_rpc.received;
+			info.replied = g_guest_rpc.replied;
+			info.failures = g_guest_rpc.failures;
+			info.capability_registrations =
+				g_guest_rpc.capability_registrations;
+			info.resolution_requests = g_guest_rpc.resolution_requests;
+			info.resolution_width = g_guest_rpc.resolution_width;
+			info.resolution_height = g_guest_rpc.resolution_height;
+			info.last_request_size = g_guest_rpc.last_request_size;
+			MemCopyN(info.last_request, g_guest_rpc.last_request,
+				sizeof(info.last_request));
+			(void)SendIpcMessage(source, VmciMsg::GuestRpcQuery,
+				&info, sizeof(info));
+			break;
+		}
 		case VmciMsg::StatsQuery:
 		{
 			VmciStats stats = {};
@@ -2404,6 +2986,13 @@ namespace {
 			plogerro("[VMCI] Message receive failed");
 			return false;
 		}
+		if (message.type == _IMM(KernelMsg::DeviceTimeout)) {
+			if (message.data.length < sizeof(stduint)) return true;
+			stduint token = 0;
+			MemCopyN(&token, g_message_buffer, sizeof(token));
+			if (token == VmciGuestRpcTimerToken) ServiceGuestRpcBackdoor();
+			return true;
+		}
 		if (message.type != _IMM(KernelMsg::DeviceEvent)) {
 			DispatchIpcMessage(message.type, message.src, message.data.length);
 			return true;
@@ -2456,10 +3045,21 @@ int main(int argc, char** argv) {
 		ShutdownVmci();
 		return -1;
 	}
+	if (!StartGuestRpcBackdoor()) {
+		plogwarn("[VMCI] GuestRPC backdoor unavailable");
+	}
 	if (!RegisterVmciService()) {
 		plogerro("[VMCI] Service registration failed");
 		ShutdownVmci();
 		return -1;
+	}
+	if (!StartGuestRpcPolling()) {
+		plogwarn("[VMCI] GuestRPC polling unavailable");
+		if (!RegisterVmciService()) {
+			plogerro("[VMCI] GuestRPC capability withdrawal failed");
+			ShutdownVmci();
+			return -1;
+		}
 	}
 	ploginfo("[VMCI] Started pci=%02x:%02x.%u cid=%08x caps=%08x/%08x irq=%u qp=%u datagram=%s",
 		unsigned(g_vmci.identity.pci_bus), unsigned(g_vmci.identity.pci_device),

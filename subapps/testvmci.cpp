@@ -48,6 +48,12 @@ namespace {
 			stats.status == int32(VmciStatus::Success);
 	}
 
+	bool QueryGuestRpc(stduint driver_tid, VmciGuestRpcInfo& info) {
+		info = {};
+		return Exchange(driver_tid, VmciMsg::GuestRpcQuery, nullptr, 0,
+			&info, sizeof(info)) && info.version == VmciProtocolVersion;
+	}
+
 	bool DestroyEndpoint(stduint driver_tid, uint32 resource_id,
 		VmciEndpointResult& result) {
 		VmciEndpointRequest request = {};
@@ -123,7 +129,7 @@ namespace {
 
 	bool CreateQueuePair(stduint driver_tid, uint32 peer,
 		uint32 local_port, uint32 peer_port, uint64 produce_size,
-		uint64 consume_size,
+		uint64 consume_size, VmciQueuePairMode mode,
 		VmciQueuePairResult& result) {
 		VmciQueuePairCreateRequest request = {};
 		request.version = VmciProtocolVersion;
@@ -134,6 +140,7 @@ namespace {
 		request.consume_size = consume_size;
 		request.local_port = local_port;
 		request.peer_port = peer_port;
+		request.mode = _IMM(mode);
 		result = {};
 		return Exchange(driver_tid, VmciMsg::QueuePairCreate,
 			&request, sizeof(request), &result, sizeof(result)) &&
@@ -513,10 +520,12 @@ namespace {
 			unsigned(VmciHostContextId), unsigned(host_port),
 			unsigned(queue_size));
 		if (!CreateQueuePair(info.driver_tid, VmciHostContextId,
-			VmciInvalidId, host_port, queue_size, queue_size, created) ||
+			VmciInvalidId, host_port, queue_size, queue_size,
+			VmciQueuePairMode::Host, created) ||
 			created.handle.context != info.context_id ||
 			created.handle.resource < VmciFirstDynamicResourceId ||
 			created.peer != VmciHostContextId ||
+			created.mode != _IMM(VmciQueuePairMode::Host) ||
 			created.local_port < VmciFirstDynamicResourceId ||
 			created.peer_port != host_port ||
 			created.produce_size != queue_size ||
@@ -636,6 +645,182 @@ namespace {
 				unsigned(active.queue_pair_count),
 				unsigned(after.queue_pair_count));
 		}
+		return 0;
+	}
+
+	bool IsGuestRpcQueuePair(const VmciDriverInfo& info,
+		const VmciQueuePairResult& result, uint32 peer_port,
+		uint64 queue_size) {
+		return result.status == int32(VmciStatus::Success) &&
+			result.handle.context == info.context_id &&
+			result.handle.resource >= VmciFirstDynamicResourceId &&
+			result.peer == VmciHypervisorContextId &&
+			result.mode == _IMM(VmciQueuePairMode::HypervisorGuestRpc) &&
+			result.local_port >= VmciFirstDynamicResourceId &&
+			result.peer_port == peer_port &&
+			result.produce_size == queue_size &&
+			result.consume_size == queue_size &&
+			result.page_count == 4 && result.dma_size == 4 * 4096u &&
+			result.hypervisor_result >= 0;
+	}
+
+	int TestHypervisorVsockTransport(const VmciDriverInfo& info) {
+		if ((info.features & VmciFeatureQueuePairs) == 0) {
+			printf("testvmci: hypervisor vsock unavailable because queue pairs are disabled\n\r");
+			return 1;
+		}
+		constexpr uint64 queue_size = 4096;
+		VmciStats before = {};
+		if (!QueryStats(info.driver_tid, before)) {
+			printf("testvmci: initial stats query failed\n\r");
+			return 1;
+		}
+
+		VmciQueuePairResult tclo = {};
+		printf("testvmci: connecting hypervisor TCLO=%u:%u queue=%u\n\r",
+			unsigned(VmciHypervisorContextId),
+			unsigned(VmciGuestRpcTcloPort), unsigned(queue_size));
+		if (!CreateQueuePair(info.driver_tid, VmciHypervisorContextId,
+			VmciInvalidId, VmciGuestRpcTcloPort, queue_size, queue_size,
+			VmciQueuePairMode::HypervisorGuestRpc, tclo) ||
+			!IsGuestRpcQueuePair(info, tclo, VmciGuestRpcTcloPort,
+				queue_size)) {
+			if (tclo.status == int32(VmciStatus::Success) &&
+				tclo.handle.resource >= VmciFirstDynamicResourceId) {
+				VmciQueuePairResult cleanup = {};
+				(void)DestroyQueuePair(info.driver_tid,
+					tclo.handle.resource, cleanup);
+			}
+			printf("testvmci: hypervisor TCLO connect failed status=%d hypervisor=%d local=%u pages=%u dma=%u\n\r",
+				tclo.status, tclo.hypervisor_result,
+				unsigned(tclo.local_port), unsigned(tclo.page_count),
+				unsigned(tclo.dma_size));
+
+			// Workstation may reject TCLO 975 while RPCI 976 still proves that the VMCI Hypervisor vsock transport is operational.
+			VmciQueuePairResult rpci_probe = {};
+			printf("testvmci: probing hypervisor RPCI=%u:%u local=%u queue=%u\n\r",
+				unsigned(VmciHypervisorContextId),
+				unsigned(VmciGuestRpcRpciPort),
+				unsigned(VmciReservedResourceIdMax),
+				unsigned(queue_size));
+			const bool rpci_connected = CreateQueuePair(info.driver_tid,
+				VmciHypervisorContextId, VmciReservedResourceIdMax,
+				VmciGuestRpcRpciPort, queue_size, queue_size,
+				VmciQueuePairMode::HypervisorGuestRpc, rpci_probe);
+			printf("testvmci: hypervisor RPCI probe %s status=%d hypervisor=%d local=%u pages=%u dma=%u\n\r",
+				rpci_connected ? "connected" : "failed",
+				rpci_probe.status, rpci_probe.hypervisor_result,
+				unsigned(rpci_probe.local_port),
+				unsigned(rpci_probe.page_count),
+				unsigned(rpci_probe.dma_size));
+			if (rpci_connected) {
+				VmciQueuePairResult cleanup = {};
+				(void)DestroyQueuePair(info.driver_tid,
+					rpci_probe.handle.resource, cleanup);
+			}
+			// Keep the test failed because inbound GuestRPC still needs TCLO or its backdoor fallback.
+			return 1;
+		}
+
+		VmciQueuePairResult rpci = {};
+		printf("testvmci: connecting hypervisor RPCI=%u:%u queue=%u\n\r",
+			unsigned(VmciHypervisorContextId),
+			unsigned(VmciGuestRpcRpciPort), unsigned(queue_size));
+		if (!CreateQueuePair(info.driver_tid, VmciHypervisorContextId,
+			VmciInvalidId, VmciGuestRpcRpciPort, queue_size, queue_size,
+			VmciQueuePairMode::HypervisorGuestRpc, rpci) ||
+			!IsGuestRpcQueuePair(info, rpci, VmciGuestRpcRpciPort,
+				queue_size)) {
+			if (rpci.status == int32(VmciStatus::Success) &&
+				rpci.handle.resource >= VmciFirstDynamicResourceId) {
+				VmciQueuePairResult cleanup = {};
+				(void)DestroyQueuePair(info.driver_tid,
+					rpci.handle.resource, cleanup);
+			}
+			VmciQueuePairResult cleanup = {};
+			(void)DestroyQueuePair(info.driver_tid,
+				tclo.handle.resource, cleanup);
+			printf("testvmci: hypervisor RPCI connect failed status=%d hypervisor=%d local=%u pages=%u dma=%u\n\r",
+				rpci.status, rpci.hypervisor_result,
+				unsigned(rpci.local_port), unsigned(rpci.page_count),
+				unsigned(rpci.dma_size));
+			return 1;
+		}
+
+		VmciStats active = {};
+		const uint64 expected_dma = uint64(tclo.dma_size) + rpci.dma_size;
+		if (!QueryStats(info.driver_tid, active) ||
+			active.queue_pair_count != before.queue_pair_count + 2 ||
+			active.queue_pair_dma_bytes != before.queue_pair_dma_bytes +
+				expected_dma) {
+			VmciQueuePairResult cleanup = {};
+			(void)DestroyQueuePair(info.driver_tid,
+				rpci.handle.resource, cleanup);
+			(void)DestroyQueuePair(info.driver_tid,
+				tclo.handle.resource, cleanup);
+			printf("testvmci: hypervisor vsock active stats mismatch count=%u/%u dma=%u/%u\n\r",
+				unsigned(before.queue_pair_count),
+				unsigned(active.queue_pair_count),
+				unsigned(before.queue_pair_dma_bytes),
+				unsigned(active.queue_pair_dma_bytes));
+			return 1;
+		}
+
+		VmciQueuePairResult rpci_destroyed = {};
+		VmciQueuePairResult tclo_destroyed = {};
+		const bool rpci_released = DestroyQueuePair(info.driver_tid,
+			rpci.handle.resource, rpci_destroyed);
+		const bool tclo_released = DestroyQueuePair(info.driver_tid,
+			tclo.handle.resource, tclo_destroyed);
+		VmciStats after = {};
+		if (!rpci_released || !tclo_released ||
+			!QueryStats(info.driver_tid, after) ||
+			after.queue_pair_count != before.queue_pair_count ||
+			after.queue_pair_dma_bytes != before.queue_pair_dma_bytes) {
+			printf("testvmci: hypervisor vsock cleanup failed status=%d/%d count=%u/%u dma=%u/%u\n\r",
+				rpci_destroyed.status, tclo_destroyed.status,
+				unsigned(before.queue_pair_count),
+				unsigned(after.queue_pair_count),
+				unsigned(before.queue_pair_dma_bytes),
+				unsigned(after.queue_pair_dma_bytes));
+			return 1;
+		}
+
+		printf("testvmci: hypervisor vsock transport ok tclo=%u:%u local=%u rpci=%u:%u local=%u dma=%u count=%u/%u/%u\n\r",
+			unsigned(tclo.peer), unsigned(tclo.peer_port),
+			unsigned(tclo.local_port), unsigned(rpci.peer),
+			unsigned(rpci.peer_port), unsigned(rpci.local_port),
+			unsigned(expected_dma), unsigned(before.queue_pair_count),
+			unsigned(active.queue_pair_count),
+			unsigned(after.queue_pair_count));
+		return 0;
+	}
+
+	int TestGuestRpcBackdoor(const VmciDriverInfo& driver) {
+		VmciGuestRpcInfo info = {};
+		if (!QueryGuestRpc(driver.driver_tid, info)) {
+			printf("testvmci: GuestRPC query failed\n\r");
+			return 1;
+		}
+		printf("testvmci: GuestRPC backdoor ready=%u channel=%u polls=%u rx=%u replied=%u failed=%u caps=%u resolution=%u %ux%u last-bytes=%u last=%s\n\r",
+			unsigned(info.ready), unsigned(info.channel_id),
+			unsigned(info.polls), unsigned(info.received),
+			unsigned(info.replied), unsigned(info.failures),
+			unsigned(info.capability_registrations),
+			unsigned(info.resolution_requests),
+			unsigned(info.resolution_width),
+			unsigned(info.resolution_height),
+			unsigned(info.last_request_size), info.last_request);
+		const bool advertised = (driver.features &
+			VmciFeatureGuestRpcBackdoor) != 0;
+		if (!advertised || info.status != int32(VmciStatus::Success) ||
+			!info.ready || !info.received || !info.replied ||
+			!info.capability_registrations) {
+			printf("testvmci: GuestRPC backdoor handshake is incomplete feature=%u status=%d\n\r",
+				unsigned(advertised), info.status);
+			return 1;
+		}
+		printf("testvmci: GuestRPC backdoor receive/reply verified\n\r");
 		return 0;
 	}
 
@@ -823,6 +1008,12 @@ int main(int argc, char** argv) {
 	if (StrCompare(argv[1], "--stats") == 0 && argc == 2) {
 		return PrintStats(info);
 	}
+	if (StrCompare(argv[1], "--hypervisor-vsock") == 0 && argc == 2) {
+		return TestHypervisorVsockTransport(info);
+	}
+	if (StrCompare(argv[1], "--guest-rpc") == 0 && argc == 2) {
+		return TestGuestRpcBackdoor(info);
+	}
 	const bool queue_pair_test = StrCompare(argv[1], "--queue-pair") == 0;
 	const bool queue_pair_stress =
 		StrCompare(argv[1], "--queue-pair-stress") == 0;
@@ -844,7 +1035,7 @@ int main(int argc, char** argv) {
 		return WaitForEvent(info, event);
 	}
 	if (StrCompare(argv[1], "--echo") != 0 || argc > 4) {
-		printf("usage: testvmci [--stats | --queue-pair [host-port] | --queue-pair-stress [host-port] | --doorbell | --event [0..4] | --echo [host-port [payload]]]\n\r");
+		printf("usage: testvmci [--stats | --hypervisor-vsock | --guest-rpc | --queue-pair [host-port] | --queue-pair-stress [host-port] | --doorbell | --event [0..4] | --echo [host-port [payload]]]\n\r");
 		return 1;
 	}
 

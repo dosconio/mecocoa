@@ -582,12 +582,11 @@ ProcessBlock* Taskman::CreateFork(ProcessBlock* fo, const CallgateFrame* frame) 
 		const auto& source_vma = fo->vmas[i];
 		if (source_vma.vm_type == VirtualMemoryAreaType::File &&
 			source_vma.vfile) {
-			uni::vfs_file* nvfile = (uni::vfs_file*)malc(sizeof(uni::vfs_file));
+			uni::vfs_file* nvfile = new uni::vfs_file(*(source_vma.vfile));
 			if (!nvfile) {
 				child_vmas_owned = true;
 				return discard_child();
 			}
-			*nvfile = *(source_vma.vfile);
 			if (nvfile->f_inode) {
 				nvfile->f_inode->ref_count++;
 			}

@@ -296,7 +296,7 @@ namespace {
 					if (status & BLOGIC_STAT_DATAIN_READY) {
 						(void)ReadDataIn();
 					}
-					ploginfo("[SCSI] reset %s ok status=%[8H]",
+					plogtrac("[SCSI] reset %s ok status=%[8H]",
 						hard_reset ? "hard" : "soft", (unsigned)status);
 					return true;
 				}
@@ -444,7 +444,7 @@ namespace {
 			}
 			mailbox_count = requested_count;
 			next_outbox_index = 0;
-			ploginfo("[SCSI] mailbox init count=%u base=%[32H]",
+			plogtrac("[SCSI] mailbox init count=%u base=%[32H]",
 				(unsigned)mailbox_count, req.base_mbox_addr);
 			return true;
 		}
@@ -893,7 +893,7 @@ namespace {
 
 			BusLogicBoardId board_id{};
 			if (QueryBoardId(board_id)) {
-				ploginfo("[SCSI] board id type=%[8H] fw=%c.%c custom=%[8H]",
+				plogtrac("[SCSI] board id type=%[8H] fw=%c.%c custom=%[8H]",
 					(unsigned)board_id.type,
 					board_id.fw_ver_digit1 ? board_id.fw_ver_digit1 : '?',
 					board_id.fw_ver_digit2 ? board_id.fw_ver_digit2 : '?',
@@ -968,7 +968,7 @@ namespace {
 				}
 				else {
 					if (SetCcbFormat(BLOGIC_EXT_LUN_CCB)) {
-						ploginfo("[SCSI] ccb format=extended");
+						plogtrac("[SCSI] ccb format=extended");
 					}
 					else {
 						plogwarn("[SCSI] SETCCB_FMT failed");
@@ -1023,7 +1023,7 @@ namespace {
 
 		void DumpSummary() const {
 			if (!node) return;
-			ploginfo("[SCSI] ctlr %02x:%02x.%u vend=%[16H] dev=%[16H] class=%[8H].%[8H].%[8H]",
+			plogtrac("[SCSI] ctlr %02x:%02x.%u vend=%[16H] dev=%[16H] class=%[8H].%[8H].%[8H]",
 				(unsigned)node->fields.pci_bus,
 				(unsigned)node->fields.pci_device,
 				(unsigned)node->fields.pci_function,
@@ -1033,14 +1033,14 @@ namespace {
 				(unsigned)node->fields.class_sub,
 				(unsigned)node->fields.class_if);
 			if (bar0_io) {
-				ploginfo("[SCSI] BAR0 IO=%[64H]", bar0_io->start);
+				plogtrac("[SCSI] BAR0 IO=%[64H]", bar0_io->start);
 			}
 			if (bar0_mmio) {
-				ploginfo("[SCSI] BAR0 MMIO=%[64H] len=%[64H]",
+				plogtrac("[SCSI] BAR0 MMIO=%[64H] len=%[64H]",
 					bar0_mmio->start, bar0_mmio->length);
 			}
 			if (irq) {
-				ploginfo("[SCSI] IRQ line=%u pin=%u",
+				plogtrac("[SCSI] IRQ line=%u pin=%u",
 					(unsigned)irq->start, (unsigned)irq->extra);
 			}
 			else {

@@ -293,6 +293,8 @@ IRQ64_SKIP_KERNEL_CR3:
 	
 	; Switch RSP to the real kernel stack
 	MOV RSP, [GS:392]
+	; Keep this interrupt's user CR3 on the thread stack across scheduling.
+	PUSH QWORD [GS:144]
 	
 	; Copy the 7 words from transition stack to real stack
 	PUSH QWORD [RAX + 48] ; SS
@@ -351,6 +353,10 @@ IRQ64_DO_PUSHA:
 	MOV [RAX + 40], R11
 	MOV R11, [RSP + 56] ; SS
 	MOV [RAX + 48], R11
+	; The saved CR3 sits above the 7-word frame (and the saved R11).
+	; Reuse the IntNo slot, which is discarded before IRETQ.
+	MOV R11, [RSP + 64]
+	MOV [RAX + 0], R11
 	POP R11
 	
 	; Switch RSP to transition stack
@@ -358,10 +364,10 @@ IRQ64_DO_PUSHA:
 	
 	; Restore user CR3 if needed.
 	MOV RAX, CR3
-	CMP RAX, [GS:144]
+	CMP RAX, [RSP + 0]; [GS:144]
 	JE IRQ64_SKIP_USER_CR3
 
-	MOV RAX, [GS:144]
+	MOV RAX, [RSP + 0]; [GS:144]
 	MOV CR3, RAX
 
 IRQ64_SKIP_USER_CR3:

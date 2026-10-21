@@ -8,19 +8,39 @@
 #include <cpp/System/Network/Layer/Application/Socket.hpp>
 #include <cpp/System/Network/Layer/Transport/TCP.hpp>
 #include <cpp/System/Network/Layer/Transport/UDP.hpp>
+#include <cpp/ISO_IEC_STD/memory>
 #include <cpp/trait/FilesysTrait.hpp>
 #include <cpp/trait/StorageTrait.hpp>
 
 struct DeviceNode;
 
 // VFS Layer for Mecocoa
-// Linux-like Virtual File System
+// Unix-like Virtual File System
+// Unlike Linux, Mecocoa VFS Root is fixed
 
 namespace uni {
 
 struct vfs_inode;
 struct vfs_super_block;
 struct vfs_dentry;
+
+enum class VFSMountOwnership : byte {
+	Borrowed,
+	Filesystem,
+	FilesystemAndStorage,
+};
+
+struct VFSMountState {
+	FilesysTrait* filesystem = nullptr;
+	StorageTrait* storage = nullptr;
+	VFSMountOwnership ownership = VFSMountOwnership::Borrowed;
+	bool detached = false;
+
+	VFSMountState(FilesysTrait* filesystem, VFSMountOwnership ownership);
+	VFSMountState(const VFSMountState&) = delete;
+	VFSMountState& operator=(const VFSMountState&) = delete;
+	~VFSMountState();
+};
 
 // Represents a registered file system type
 struct file_system_type {
@@ -34,6 +54,7 @@ struct file_system_type {
 // Represents an active mounted file system
 struct vfs_super_block {
 	FilesysTrait* fs = nullptr;             // The backend file system operations
+	SharedPtr<VFSMountState> mount_state;
 	vfs_dentry* s_root = nullptr;           // Root dentry of this mount
 	file_system_type* type = nullptr;       // Pointer to the FS type
 	stduint device_id = 0;            // Underlying device id
@@ -56,6 +77,7 @@ struct vfs_super_block {
 // In-memory node structure
 struct vfs_inode {
 	vfs_super_block* i_sb = nullptr;
+	SharedPtr<VFSMountState> mount_state;
 	
 	stduint i_no = 0;                 // Inode number
 	stduint i_mode = 0;               // File mode (type and permissions)
@@ -152,8 +174,10 @@ public:
 
 public:
 	// Explicitly mount an instantiated FS to a path (used by DevFs and RootFs)
+	// Non-borrowed ownership is transferred on entry, including failure paths.
 	static bool MountFilesys(FilesysTrait* fs, file_system_type* type, const char* target_path,
-		DeviceNode* source_device_node = nullptr, stduint device_id = 0);
+		DeviceNode* source_device_node = nullptr, stduint device_id = 0,
+		VFSMountOwnership ownership = VFSMountOwnership::Borrowed);
 
 public:
 	static int CreatePipe(vfs_file** out_reader, vfs_file** out_writer);

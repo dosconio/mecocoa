@@ -3,10 +3,12 @@
 
 #include <c/stdinc.h>
 
-static constexpr uint32 VmciProtocolVersion = 6;
+static constexpr uint32 VmciProtocolVersion = 9;
 static constexpr uint32 VmciInvalidId = 0xFFFFFFFFu;
 static constexpr uint32 VmciHypervisorContextId = 0;
 static constexpr uint32 VmciHostContextId = 2;
+static constexpr uint32 VmciGuestRpcTcloPort = 975;
+static constexpr uint32 VmciGuestRpcRpciPort = 976;
 static constexpr uint32 VmciReservedResourceIdMax = 1023;
 static constexpr uint32 VmciFirstDynamicResourceId =
 	VmciReservedResourceIdMax + 1;
@@ -20,6 +22,7 @@ static constexpr uint32 VmciEventPayloadCapacity = 16;
 static constexpr uint32 VmciFeatureNotifications = 1u << 0;
 static constexpr uint32 VmciFeatureEvents = 1u << 1;
 static constexpr uint32 VmciFeatureQueuePairs = 1u << 2;
+static constexpr uint32 VmciFeatureGuestRpcBackdoor = 1u << 3;
 
 enum class VmciQueuePairFlag : uint32 {
 	None = 0,
@@ -27,6 +30,11 @@ enum class VmciQueuePairFlag : uint32 {
 	Local = 1u << 1,
 	NonBlocking = 1u << 2,
 	Pinned = 1u << 3,
+};
+
+enum class VmciQueuePairMode : uint32 {
+	Host = 0,
+	HypervisorGuestRpc = 1,
 };
 
 enum class VmciEventType : uint32 {
@@ -60,6 +68,7 @@ enum class VmciMsg : stduint {
 	QueuePairDestroy,
 	QueuePairSend,
 	QueuePairReceive,
+	GuestRpcQuery,
 };
 
 enum class VmciStatus : int32 {
@@ -196,6 +205,7 @@ _PACKED(struct) VmciQueuePairCreateRequest {
 	uint64 consume_size;
 	uint32 local_port;
 	uint32 peer_port;
+	uint32 mode;
 };
 
 _PACKED(struct) VmciQueuePairDestroyRequest {
@@ -216,7 +226,7 @@ _PACKED(struct) VmciQueuePairResult {
 	int32 hypervisor_result;
 	uint32 local_port;
 	uint32 peer_port;
-	uint32 reserved;
+	uint32 mode;
 };
 
 _PACKED(struct) VmciQueuePairIoPacket {
@@ -225,6 +235,23 @@ _PACKED(struct) VmciQueuePairIoPacket {
 	uint32 resource_id;
 	uint32 payload_size;
 	uint8 payload[VmciIpcPayloadCapacity];
+};
+
+_PACKED(struct) VmciGuestRpcInfo {
+	uint32 version;
+	int32 status;
+	uint32 ready;
+	uint32 channel_id;
+	uint32 polls;
+	uint32 received;
+	uint32 replied;
+	uint32 failures;
+	uint32 capability_registrations;
+	uint32 resolution_requests;
+	uint32 resolution_width;
+	uint32 resolution_height;
+	uint32 last_request_size;
+	char last_request[64];
 };
 
 static constexpr stduint VmciQueuePairIoPacketHeaderSize =
@@ -289,7 +316,7 @@ static_assert(sizeof(VmciEventQueuePairPayload) == 16,
 	"VMCI queue pair event payload size mismatch");
 static_assert(sizeof(VmciEventPacket) == 40,
 	"VMCI event packet size mismatch");
-static_assert(sizeof(VmciQueuePairCreateRequest) == 40,
+static_assert(sizeof(VmciQueuePairCreateRequest) == 44,
 	"VMCI queue pair create request size mismatch");
 static_assert(sizeof(VmciQueuePairDestroyRequest) == 8,
 	"VMCI queue pair destroy request size mismatch");
@@ -297,6 +324,8 @@ static_assert(sizeof(VmciQueuePairResult) == 64,
 	"VMCI queue pair result size mismatch");
 static_assert(VmciQueuePairIoPacketHeaderSize == 16,
 	"VMCI queue pair I/O header size mismatch");
+static_assert(sizeof(VmciGuestRpcInfo) == 116,
+	"VMCI GuestRPC info size mismatch");
 static_assert(sizeof(VmciStats) == 132, "VMCI stats size mismatch");
 
 #endif /* VMCI_HPP_ */
