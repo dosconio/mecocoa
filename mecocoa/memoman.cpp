@@ -913,6 +913,11 @@ void GDT_Init() {
 	mecocoa_global->gdt_ptr->rout.setModeCall(mglb(Handint_SYSCALL_Entry), SegCo32);
 	mecocoa_global->gdt_ptr->cor3 = mecocoa_global->gdt_ptr->code;
 	mecocoa_global->gdt_ptr->cor3.DPL = 3;
+	#elif _MCCA == 0x8664
+	mecocoa_global->gdt_ptr->cor1 = mecocoa_global->gdt_ptr->cor3;
+	mecocoa_global->gdt_ptr->cor1.DPL = 1;
+	mecocoa_global->gdt_ptr->dar1 = mecocoa_global->gdt_ptr->dar3;
+	mecocoa_global->gdt_ptr->dar1.DPL = 1;
 	#endif
 	loadGDT(_IMM(mecocoa_global->gdt_ptr), mecocoa_global->gdt_len = sizeof(mec_gdt) - 1);
 	#if _MCCA == 0x8632

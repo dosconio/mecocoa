@@ -254,7 +254,7 @@ static void BindCurrentKernelEntryStack(ThreadBlock* th, stduint cpuid) {
 	if (!percore) return;
 	percore->current_thread = th;
 	// Transition stack (jump board) used for ring3 entry and SYSRET
-	percore->kernel_rsp = 0xFFFFFFFFFFFFF000ull - cpuid * 0x1000ull + 0x1000 - 0x10;
+	percore->kernel_rsp = X64_TRANSITION_STACK_TOP - cpuid * X64_TRANSITION_STACK_SIZE;
 	percore->tss.RSP0 = percore->kernel_rsp;
 	
 	// Real kernel stack for the thread
@@ -812,7 +812,7 @@ auto Taskman::Schedule(bool omit_slice)->decltype(Schedule())
 	old_tb->just_schedule = 1;
 	switching_out_threads(cpuid) = old_tb;
 
-	#if _MCCA == 0x8632
+	#if _MCCA == 0x8632 || _MCCA == 0x8664
 	ReleaseSchedulerLockForSwitch();
 	#else
 	scheduler_lock.Release(old_if);
@@ -824,7 +824,10 @@ auto Taskman::Schedule(bool omit_slice)->decltype(Schedule())
 	const bool mpu_if = IC.TryMaskInterrupt();// the region write and the pending switch must stay one unit
 	mpumap_task(new_tb);
 	#endif
-	#if _MCCA == 0x8664 || _MCCA == 0x8632
+	#if _MCCA == 0x8664
+	if (_IMM(&new_tb->context) & 0xF) plogerro("Sch1(%p)", &new_tb->context);
+	((void(*)(NormalTaskContext*, NormalTaskContext*, bool))mglb(SwitchTaskContext))(&new_tb->context, &old_tb->context, old_if);
+	#elif _MCCA == 0x8632
 	if (_IMM(&new_tb->context) & 0xF) plogerro("Sch1(%p)", &new_tb->context);
 	((void(*)(NormalTaskContext*, NormalTaskContext*))mglb(SwitchTaskContext))(&new_tb->context, &old_tb->context);
 	#else
@@ -881,7 +884,7 @@ void Taskman::SleepAndRelease(Spinlock* lk) {
 	old_tb->just_schedule = 1;
 	switching_out_threads(cpuid) = old_tb;
 
-	#if _MCCA == 0x8632
+	#if _MCCA == 0x8632 || _MCCA == 0x8664
 	ReleaseSchedulerLockForSwitch();
 	#else
 	scheduler_lock.Release(old_if);
@@ -891,7 +894,10 @@ void Taskman::SleepAndRelease(Spinlock* lk) {
 	const bool mpu_if = IC.TryMaskInterrupt();// the region write and the pending switch must stay one unit
 	mpumap_task(new_tb);
 	#endif
-	#if _MCCA == 0x8664 || _MCCA == 0x8632
+	#if _MCCA == 0x8664
+	if (_IMM(&new_tb->context) & 0xF) plogerro("Sch2(%p)", &new_tb->context);
+	((void(*)(NormalTaskContext*, NormalTaskContext*, bool))mglb(SwitchTaskContext))(&new_tb->context, &old_tb->context, old_if);
+	#elif _MCCA == 0x8632
 	if (_IMM(&new_tb->context) & 0xF) plogerro("Sch2(%p)", &new_tb->context);
 	((void(*)(NormalTaskContext*, NormalTaskContext*))mglb(SwitchTaskContext))(&new_tb->context, &old_tb->context);
 	#else

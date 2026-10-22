@@ -504,10 +504,9 @@ bool device_interrupt_ack(stduint owner_pid, stduint owner_tid, const DeviceEven
 }
 
 static bool PwcallBindDeviceInterrupt(ProcessBlock* process, stduint device_handle,
-	DeviceNode* node, stduint owner_tid) {
+	DeviceNode* node, stduint owner_tid, bool msi_only) {
 	if (!process || !device_handle || !node || !owner_tid) return false;
 	const auto* irq = Devsman::FindResource(node, DeviceResourceType::IrqLine, 0);
-	if (!irq) return false;
 	const bool pci = DeviceNodeType(node->fields.node_type) == DeviceNodeType::PciDevice;
 	const bool using_ioapic = IC.getType() != 0;
 	if (pci && !using_ioapic) return false;
@@ -526,13 +525,16 @@ static bool PwcallBindDeviceInterrupt(ProcessBlock* process, stduint device_hand
 		}
 	}
 	const bool use_msi = msi_capability != 0;
+	if (msi_only && !use_msi) return false;
+	if (!irq && !use_msi) return false;
 	const uint8 requested_vector = pci ? 0 : uint8(irq->start);
-	const uint8 line = pci ? uint8(irq->start) : PwcallLegacyVectorToLine(requested_vector);
-	if ((!using_ioapic && line >= 16) || (using_ioapic && line >= 24)) return false;
+	const uint8 line = use_msi ? 0xFF :
+		(pci ? uint8(irq->start) : PwcallLegacyVectorToLine(requested_vector));
+	if (!use_msi && ((!using_ioapic && line >= 16) || (using_ioapic && line >= 24))) return false;
 	if (!pci && requested_vector < 0x20) return false;
-	const bool level_triggered = (irq->flags & DeviceResourceFlag_IrqLevel) != 0;
-	const bool active_low = (irq->flags & DeviceResourceFlag_IrqActiveLow) != 0;
-	const bool shareable = (irq->flags & DeviceResourceFlag_IrqShareable) != 0;
+	const bool level_triggered = irq && (irq->flags & DeviceResourceFlag_IrqLevel) != 0;
+	const bool active_low = irq && (irq->flags & DeviceResourceFlag_IrqActiveLow) != 0;
+	const bool shareable = irq && (irq->flags & DeviceResourceFlag_IrqShareable) != 0;
 
 	uint32 generation = 0;
 	uint8 vector = requested_vector;
@@ -576,7 +578,7 @@ static bool PwcallBindDeviceInterrupt(ProcessBlock* process, stduint device_hand
 		binding.owner_pid = process->pid;
 		binding.owner_tid = owner_tid;
 		binding.device_handle = device_handle;
-		binding.resource_index = irq->index;
+		binding.resource_index = irq ? irq->index : 0;
 		binding.generation = ++pwcall_irq_generation;
 		if (!binding.generation) binding.generation = ++pwcall_irq_generation;
 		generation = binding.generation;
@@ -1737,7 +1739,7 @@ stdsint HandlePwcall(syscall_t callid, stduint p1, stduint p2, stduint p3) {
 		return -1;
 		#endif
 	case syscall_t::POWERCALL_DEV_TIMER:
-		#if _MCCA == 0x8632
+		#if (_MCCA & 0xFF00) == 0x8600
 		if (!ResolvePwcallDeviceHandle(pb, p1) || !p2) return -1;
 		return Systimex::AppendDriverMessage(p2, Taskman::CurrentTID(),
 			_IMM(KernelMsg::DeviceTimeout), p3) ? 0 : -1;
@@ -1755,18 +1757,21 @@ stdsint HandlePwcall(syscall_t callid, stduint p1, stduint p2, stduint p3) {
 		auto* node = ResolvePwcallDeviceHandle(pb, p1);
 		if (!node) return -1;
 		switch (PwcallDevicePublishCommand(p2)) {
-		case PwcallDevicePublishCommand::Started:
+		case PwcallDevicePublishCommand::Started: {
 			if (!node->fields.binding.driver_name) return -1;
 			if (node->fields.binding.owner_pid && node->fields.binding.owner_pid != uint32(pb->pid)) return -1;
 			#if (_MCCA & 0xFF00) == 0x8600
-			if (ResolvePwcallDeviceHandleFlags(pb, p1) & _IMM(PwcallDeviceOpenFlag::Interrupt)) {
-				if (!PwcallBindDeviceInterrupt(pb, p1, node, Taskman::CurrentTID())) return -1;
+			const uint32 open_flags = ResolvePwcallDeviceHandleFlags(pb, p1);
+			if (open_flags & _IMM(PwcallDeviceOpenFlag::Interrupt)) {
+				if (!PwcallBindDeviceInterrupt(pb, p1, node, Taskman::CurrentTID(),
+					(open_flags & _IMM(PwcallDeviceOpenFlag::MsiOnly)) != 0)) return -1;
 			}
 			#endif
 			node->fields.binding.state = static_cast<uint32>(DriverBindingState::Started);
 			node->fields.binding.probe_result = 0;
 			node->fields.binding.owner_pid = uint32(pb->pid);
 			return 0;
+		}
 		case PwcallDevicePublishCommand::FramebufferAperture:
 			return HandlePwcallDevicePublishFramebufferAperture(pb, node, p3);
 		default:

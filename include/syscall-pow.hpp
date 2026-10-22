@@ -15,6 +15,7 @@ enum class PwcallDeviceProper : uint32 {
 enum class PwcallDeviceOpenFlag : uint32 {
 	None = 0,
 	Interrupt = 1 << 0,
+	MsiOnly = 1 << 1,
 };
 
 enum class PwcallDeviceResourceType : uint16 {

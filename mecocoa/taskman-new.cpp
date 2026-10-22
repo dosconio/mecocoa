@@ -20,6 +20,9 @@ static inline stduint _taskman_strcopy(char* dest, const char* sors, stduint len
 extern "C" {
 	void* higher_stacks[PCU_CORES_MAX] = {};// when 1 core 1 stack
 	void* ring3_iret_stacks[PCU_CORES_MAX] = {};
+	#if _MCCA == 0x8664
+	alignas(16) byte x64_transition_recovery_stack[0x4000];
+	#endif
 }
 #endif
 
@@ -171,7 +174,8 @@ static void _Mapping_Core_Stack(Paging& paging) {
 
 	#elif _MCCA == 0x8664
 	//{TODO} Map more cores, cpu1 at 0x0000FFFFFFFF8000ull...
-	paging.Map(0xFFFFFFFFFFFFF000ull, _IMM(higher_stacks[0]), 0x1000, PAGESIZE_4KB, PGPROP_present | PGPROP_writable);// High Part
+	paging.Map(X64_TRANSITION_STACK_BASE, _IMM(higher_stacks[0]), X64_TRANSITION_STACK_SIZE,
+		PAGESIZE_4KB, PGPROP_present | PGPROP_writable);
 
 	#elif (_MCCA & 0xFF00) == 0x1000
 	// M-MCCA need not map kernel
@@ -287,7 +291,7 @@ void Taskman::Initialize(stduint cpuid) {
 	current_thread(cpuid) = kernel_thread;
 	#if _MCCA == 0x8664
 	PCU_CORES_PERCORE[cpuid]->current_thread = kernel_thread;
-	PCU_CORES_PERCORE[cpuid]->kernel_rsp = 0xFFFFFFFFFFFFF000ull - cpuid * 0x1000ull + 0x1000 - 0x10;
+	PCU_CORES_PERCORE[cpuid]->kernel_rsp = X64_TRANSITION_STACK_TOP - cpuid * X64_TRANSITION_STACK_SIZE;
 	PCU_CORES_PERCORE[cpuid]->tss.RSP0 = PCU_CORES_PERCORE[cpuid]->kernel_rsp;
 	#elif _MCCA == 0x8632
 	if (PCU_CORES_PERCORE[cpuid]) {

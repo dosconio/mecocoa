@@ -18,6 +18,10 @@
 #include "c/proctrl/IAx86_64.msr.h"
 #endif
 
+#if _MCCA == 0x8664
+extern "C" void Handint_Double_Fault_Emergency_Entry();
+#endif
+
 extern RMOD_LIST __init_rmod_ento[], __init_rmod_endo[];
 
 #if (_MCCA & 0xFFFF) == 0x2032
@@ -205,17 +209,19 @@ namespace Devs {
 			return false;
 		}
 		const auto* irq = Devsman::FindResource(node, DeviceResourceType::IrqLine, 0);
+		#if _MCCA == 0x8632
 		if (!irq) {
 			plogwarn("[DEVSMAN] VMCI %s missing IRQ resource",
 				node->link.addr ? node->link.addr : "(unnamed)");
 			return false;
 		}
-		if (io) {
+		#endif
+		if (irq && io) {
 			plogtrac("[DEVSMAN] VMCI %s I/O BAR%u=%[64H] len=%[64H] irq=%[64H]",
 				node->link.addr ? node->link.addr : "(unnamed)",
 				io->index, io->start, io->length, irq->start);
 		}
-		if (mmio) {
+		if (irq && mmio) {
 			plogtrac("[DEVSMAN] VMCI %s MMIO BAR%u=%[64H] len=%[64H] irq=%[64H]",
 				node->link.addr ? node->link.addr : "(unnamed)",
 				mmio->index, mmio->start, mmio->length, irq->start);
@@ -898,6 +904,8 @@ bool Devsman::Initialize() {
 	#if _MCCA == 0x8664
 	new (&IC) InterruptControl(mglb(mem.allocate(256 * sizeof(gate_t))));
 	IC.Reset(SegCo64, 0xFFFFFFFFC0000000ull);
+	IC[8].setModeRupt(mglb(Handint_Double_Fault_Emergency_Entry), SegCo64);
+	IC[8].interrupt_stack_table = 1; // TSS.IST1: independent of the interrupted stack
 	
 	unsigned a = 0, b = 0, c = 0, d = 0;
 	_IO_CPUID(1, 0, &a, &b, &c, &d);

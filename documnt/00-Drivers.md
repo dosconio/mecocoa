@@ -13,15 +13,20 @@ her-note: false
 - **KBD** Keyboard and **MOU** PS/2-Mouse
 - COMn UART
 - **KBD** USB-Keyboard and **MOU** USB-Mouse
+- Machine Advanced
+	- VMware VMCI
 - USB
-	- xHCI 1.1/2.0/3.0 (QEMU)
-
-TODO:
-- USB
-	- EHCI 1.0/2.0
-	- OHCI 1.0
 	- UHCI 1.0
-	- xHCI 3.1
+	- EHCI 1.0/2.0
+	- xHCI 1.1/2.0/3.0/3.1/3.2
+
+
+
+
+TODO
+- USB
+	- OHCI 1.0
+
 
 ### Audio
 
@@ -87,6 +92,7 @@ TODO:
 ### Network
 
 - E1000
+- AMD Lance
 
 
 ## RV qemuvirt

@@ -23,12 +23,18 @@ static void make_LDT(descriptor_t* ldt_alias, byte ring) {
 static stduint getCS(stduint ring) {
 	if (!ring) return (__BITS__ == 64 ? SegCo64 : SegCo32);
 	if (ring == 3) return SegCoR3 | ring;
-	else return 8 * (ring) + 0b100 | ring;
+	#if _MCCA == 0x8664
+	if (ring == 1) return SegCoR1 | ring;
+	#endif
+	return 8 * (ring) + 0b100 | ring;
 }
 static stduint getSS(stduint ring) {
 	if (!ring) return SegData;
 	if (ring == 3) return SegDaR3 | ring;
-	else return 8 * (4 + ring) + 0b100 + ring;
+	#if _MCCA == 0x8664
+	if (ring == 1) return SegDaR1 | ring;
+	#endif
+	return 8 * (4 + ring) + 0b100 + ring;
 }
 void Taskman::SetSegment(NormalTaskContext* ntc) {
 	REG_FLAG_t flag = {};
@@ -48,6 +54,9 @@ void Taskman::SetSegment(NormalTaskContext* ntc) {
 
 extern "C" PERCORE* C_PCU_CORES_PERCORE[]; // exported for assembly use
 static void _Mapping_Core_Stack(Paging& paging);
+#if _MCCA == 0x8664
+alignas(16) static byte x64_df_emergency_stacks[PCU_CORES_MAX][0x1000];
+#endif
 static void SetPercoreFore(stduint cpuid) {
 	if (cpuid || Taskman::PCU_CORES_PERCORE[0]) return; // already initialized
 	#if _MCCA == 0x8632
@@ -69,7 +78,11 @@ static void SetPercoreFore(stduint cpuid) {
 		MemSet(percore, 0, sizeof(PERCORE));
 		Taskman::PCU_CORES_PERCORE[i] = percore;
 		C_PCU_CORES_PERCORE[i] = percore;
-		higher_stacks[i] = (mem.allocate(0x1000, PAGESIZE_4KB));
+		#if _MCCA == 0x8664
+		higher_stacks[i] = mem.allocate(X64_TRANSITION_STACK_SIZE, PAGESIZE_4KB);
+		#else
+		higher_stacks[i] = mem.allocate(0x1000, PAGESIZE_4KB);
+		#endif
 		#if _MCCA == 0x8664
 		kernel_paging.Map(
 			PERCORE_VBASE + i * PERCORE_STRIDE,
@@ -106,6 +119,7 @@ static void SetPercoreFore(stduint cpuid) {
 		percore->kernel_stack = 0;
 		#if _MCCA == 0x8664
 		percore->tss.RSP0 = GetCoreRingStackBase(i) + HIGHER_STACK_SIZE - 8;// for user-app in cpu0
+		percore->tss.IST1 = mglb(x64_df_emergency_stacks[i] + sizeof(x64_df_emergency_stacks[i]));
 		#else
 		#endif
 		//{} TEMP GDT_Alloc and tss.setRange
@@ -147,7 +161,7 @@ static void SetPercoreFore(stduint cpuid) {
 	_Mapping_Core_Stack(kernel_paging);
 	Taskman::PCU_CORES_PERCORE[0]->state = CoreState::Online;//
 
-	#if _MCCA == 0x8632// TEMP x64 do not use LDT (no R1 and R2)
+	#if _MCCA == 0x8632// x64 Ring1 uses GDT selectors instead of this LDT.
 	for0(i, PCU_CORES_MAX) {
 		if (Taskman::PCU_CORES_PERCORE[i]) {
 			kernel_paging.Map(GetCoreRingStackBase(i), (stduint)mem.allocate(HIGHER_STACK_SIZE), HIGHER_STACK_SIZE, PAGESIZE_4KB, PGPROP_present | PGPROP_writable);

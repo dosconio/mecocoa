@@ -1599,6 +1599,16 @@ void syscall_body(NormalTaskContext* cxt)
 #if (_MCCA & 0xFF00) == 0x8600
 extern "C" void check_and_deliver_signals_syscall(CallgateFrame* frame);
 
+#if _MCCA == 0x8664
+static_assert(offsetof(CallgateFrame, ax) == 112, "x64 syscall return value offset changed");
+static_assert(offsetof(CallgateFrame, sp0) == 120, "x64 syscall stack pointer offset changed");
+static_assert(offsetof(CallgateFrame, return_to_ring1) == 128, "x64 syscall return flag offset changed");
+static_assert(offsetof(CallgateFrame, caller_cr3) == 136, "x64 syscall CR3 offset changed");
+static_assert(sizeof(CallgateFrame) == 144, "x64 syscall frame size changed");
+extern "C" const stduint x64_syscall_ring1_cs = SegCoR1 | RING_S;
+extern "C" const stduint x64_syscall_ring1_ss = SegDaR1 | RING_S;
+#endif
+
 
 __attribute__((optimize("O0")))
 stduint Handint_SYSCALL(CallgateFrame* frame) {
@@ -1624,6 +1634,7 @@ stduint Handint_SYSCALL(CallgateFrame* frame) {
 	stduint para[4] = { active_frame->cx, active_frame->dx, active_frame->bx };
 	#elif _MCCA == 0x8664
 	// frame is now always on the real kernel stack, no need to translate it via user page table
+	frame->return_to_ring1 = pb && pb->ring == RING_S;
 	auto callid = (syscall_t)(frame->ax & 0x7FFFFFFFu);
 	stduint para[4] = { frame->di, frame->si, frame->dx };
 	#endif

@@ -35,6 +35,10 @@ struct mec_gdt {
 	gate_t rout;
 	descriptor_t ldt;
 	_CPU_descriptor_tss tss;// cpu0
+	#if _MCCA == 0x8664
+	descriptor_t cor1;
+	descriptor_t dar1;
+	#endif
 };// on global linear area
 
 enum {
@@ -49,6 +53,10 @@ enum {
 	SegCall = offsetof(mec_gdt, rout),
 	SegGLDT = offsetof(mec_gdt, ldt),
 	SegTSS0 = offsetof(mec_gdt, tss),
+	#if _MCCA == 0x8664
+	SegCoR1 = offsetof(mec_gdt, cor1),
+	SegDaR1 = offsetof(mec_gdt, dar1),
+	#endif
 	// flap32: LDT_App1, TSS_App1, LDT_App2, TSS_App2, ...
 };
 

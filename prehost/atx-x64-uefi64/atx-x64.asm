@@ -146,7 +146,11 @@ tryUD:
 ; Mecocoa ABI:  RAX=syscall#, RDI=p1, RSI=p2, RDX=p3
 GLOBAL Handint_SYSCALL_Entry
 EXTERN Handint_SYSCALL
+EXTERN x64_syscall_ring1_cs
+EXTERN x64_syscall_ring1_ss
 ROOT_PAGING EQU 0xFFFFFFFFC0000508
+X64_TRANSITION_STACK_BASE EQU 0xFFFFFFFFFFFFF000
+PERCORE_VBASE_X64 EQU 0xFFFFFFFFB0000000
 Handint_SYSCALL_Entry:
 	SWAPGS
 
@@ -174,6 +178,7 @@ SYSCALL_SKIP_KERNEL_CR3:
 	
 	; [FIX] Save user CR3 on the real kernel stack to survive context switches
 	PUSH QWORD [GS:144]
+	PUSH QWORD 0 ; Ring1 return flag, filled by Handint_SYSCALL
 	
 	; Restore R12
 	MOV R12, [GS:128]
@@ -238,9 +243,16 @@ SYSCALL_SKIP_KERNEL_CR3:
 	; Now stack has: user RSP
 	POP R8 ; R8 = user RSP
 	
+	POP RAX ; RAX = saved Ring1 return flag
+
 	; [FIX] Pop user CR3 from the real kernel stack
 	POP R9 ; R9 = user CR3
 	
+	; Keep interrupts masked through the CR3 and stack switch.
+	CLI
+	TEST RAX, RAX
+	JNZ SYSCALL_RETURN_RING1
+
 	; Switch to transition stack for return
 	MOV RSP, [GS:128]
 	
@@ -261,8 +273,47 @@ SYSCALL_SKIP_USER_CR3:
 	SWAPGS
 O64 SYSRET
 
+SYSCALL_RETURN_RING1:
+	; Build the privilege-changing IRETQ frame on the shared transition stack.
+	MOV RSP, [GS:128]
+	MOV RAX, [REL x64_syscall_ring1_ss]
+	PUSH RAX
+	PUSH R8
+	PUSH R11
+	MOV RAX, [REL x64_syscall_ring1_cs]
+	PUSH RAX
+	PUSH RCX
+
+	; The frame remains mapped while restoring the caller's page table.
+	MOV RAX, CR3
+	CMP RAX, R9
+	JE SYSCALL_RING1_CR3_READY
+	MOV CR3, R9
+SYSCALL_RING1_CR3_READY:
+	MOV RAX, R10
+	SWAPGS
+	IRETQ
+
 
 EXTERN interrupt_dispatcher
+EXTERN x64_double_fault_emergency
+EXTERN x64_transition_recovery_stack
+
+GLOBAL Handint_Double_Fault_Emergency_Entry
+Handint_Double_Fault_Emergency_Entry:
+	CLI
+	CLD
+	MOV RDI, RSP ; IST1 frame: error code, RIP, CS, RFLAGS, RSP, SS
+	; This entry may have arrived with a user CR3. Use the kernel page table
+	; before touching the GOP framebuffer or any C++ globals.
+	MOV RAX, ROOT_PAGING
+	MOV RAX, [RAX]
+	MOV CR3, RAX
+	AND RSP, -16
+	CALL x64_double_fault_emergency
+.halt:
+	HLT
+	JMP .halt
 
 GLOBAL Handint_Common_Stub_64
 Handint_Common_Stub_64:
@@ -310,10 +361,85 @@ IRQ64_SKIP_KERNEL_CR3:
 	JMP IRQ64_DO_PUSHA
 
 IRQ64_FROM_RING0:
-	; From Ring 0: already on the correct real kernel stack and CR3.
+	PUSHA64
+	; A same-ring exception can arrive while CR3 still belongs to a user task.
+	MOV RAX, RSP
+	MOV RDX, X64_TRANSITION_STACK_BASE
+	CMP RAX, RDX
+	JB IRQ64_CALL_DISPATCHER
+	MOV RDX, 0xFFFFFFFFFFFFFFF0
+	CMP RAX, RDX
+	JAE IRQ64_CALL_DISPATCHER
+	CLI
+
+	; Move the complete saved frame to a separate recovery stack.
+	; The transition stack and root CR3 address exist in both page tables.
+	MOV RDX, CR3
+	MOV RBX, ROOT_PAGING
+	MOV RBX, [RBX]
+	CMP RDX, RBX
+	JE IRQ64_TRANSITION_ROOT_READY
+	MOV CR3, RBX
+IRQ64_TRANSITION_ROOT_READY:
+	LEA RBX, [REL x64_transition_recovery_stack]
+	ADD RBX, 0x4000
+	SUB RBX, 0x10
+	MOV [RBX - 8], RDX  ; Interrupted CR3
+	MOV [RBX - 16], RAX ; Original frame pointer
+	MOV QWORD [RBX - 24], 0 ; Whether GS needs restoring
+	LEA RDI, [RBX - 24 - 176]
+	MOV RSI, RAX
+	MOV RCX, 22
+	CLD
+	REP MOVSQ
+	LEA RSP, [RBX - 24 - 176]
+
+	; SWAPGS may already have run in the interrupted return sequence.
+	MOV ECX, 0xC0000101
+	RDMSR
+	SHL RDX, 32
+	OR RAX, RDX
+	MOV RDX, PERCORE_VBASE_X64
+	CMP RAX, RDX
+	JE IRQ64_TRANSITION_GS_READY
+	SWAPGS
+	MOV QWORD [RSP + 176], 1
+IRQ64_TRANSITION_GS_READY:
+	MOV RDI, RSP
+	MOV RAX, RSP
+	AND RSP, -16
+	SUB RSP, 8
+	PUSH RAX
+	CALL interrupt_dispatcher
+	POP RSP
+	CLI
+
+	; Copy C's modified frame back before restoring the interrupted CR3.
+	MOV R8, [RSP + 184]
+	MOV R9, [RSP + 192]
+	MOV R10, [RSP + 176]
+	MOV RSI, RSP
+	MOV RDI, R8
+	MOV RCX, 22
+	CLD
+	REP MOVSQ
+	MOV RSP, R8
+	TEST R10, R10
+	JZ IRQ64_TRANSITION_GS_RESTORED
+	SWAPGS
+IRQ64_TRANSITION_GS_RESTORED:
+	MOV RAX, CR3
+	CMP RAX, R9
+	JE IRQ64_TRANSITION_CR3_RESTORED
+	MOV CR3, R9
+IRQ64_TRANSITION_CR3_RESTORED:
+	POPA64
+	ADD RSP, 16
+	IRETQ
 
 IRQ64_DO_PUSHA:
 	PUSHA64
+IRQ64_CALL_DISPATCHER:
 	MOV RDI, RSP ; Pass HardwareInterruptFrame*
 	
 	; Align stack to 16 bytes (System V ABI)
@@ -331,6 +457,7 @@ IRQ64_DO_PUSHA:
 	JZ IRQ64_EXIT_RING0
 	
 	; Returning to Ring 3
+	CLI
 	MOV [GS:136], RAX ; Save RAX
 	
 	; Calculate transition stack address for the 7 words

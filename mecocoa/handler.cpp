@@ -8,6 +8,105 @@
 #include <cpp/Device/UART>
 #include <c/driver/mouse.h>
 #include <c/driver/timer.h>
+
+#if _MCCA == 0x8664 && defined(_UEFI)
+#include <cpp/Witch/TextChrome.hpp>
+extern UefiData uefi_data;
+
+extern "C" __attribute__((noreturn, no_stack_protector, target("general-regs-only")))
+void x64_double_fault_emergency(const uint64* frame) {
+	// No logging, allocation, locks, or calls into the normal exception path.
+	const uint64 rip = frame[1]; // #DF always pushes an error code before RIP.
+	const uint64 interrupted_rsp = frame[4];
+	uint64 cr2;
+	__asm__ volatile("mov %%cr2, %0" : "=r"(cr2));
+	const auto& gop = uefi_data.frame_buffer_config;
+	stduint address = stduint(gop.frame_buffer);
+	stduint length = stduint(gop.vertical_resolution) * gop.pixels_per_scan_line * 4;
+	uint32 pitch = gop.pixels_per_scan_line * 4;
+	uint32 width = gop.horizontal_resolution;
+	uint32 height = gop.vertical_resolution;
+	VideoDevice* const video = Consman::current_video_device;
+	bool active_video = false;
+	if (video) {
+		const FramebufferInfo& fb = video->GetFramebuffer();
+		if (fb.physical_range.address && fb.physical_range.length >= fb.pitch && fb.bpp == 32 &&
+			fb.pitch >= 4 && !(fb.pitch & 3) && fb.screen_size.x && fb.screen_size.y &&
+			fb.screen_size.x <= fb.pitch / 4) {
+			address = fb.physical_range.address;
+			length = fb.physical_range.length;
+			pitch = fb.pitch;
+			width = fb.screen_size.x;
+			height = fb.screen_size.y;
+			active_video = true;
+		}
+	}
+	if (address && pitch && !(pitch & 3) && width && height) {
+		const uint32 pixels_per_line = pitch / 4;
+		if (width > pixels_per_line) width = pixels_per_line;
+		if (height > length / pitch) height = uint32(length / pitch);
+		if (height > 112) height = 112;
+		volatile uint32* const pixels = reinterpret_cast<volatile uint32*>(address);
+		for (unsigned y = 0; y < height; ++y) {
+			for (unsigned x = 0; x < width; ++x)
+				pixels[static_cast<stduint>(y) * pixels_per_line + x] = 0x00FF00FFu;
+		}
+		uni::BitmapFontEngine font(1);
+		uni::Color* const screen = reinterpret_cast<uni::Color*>(address);
+		const uni::Color white(0x00FFFFFFu);
+		const uni::Color transparent;
+		if (width >= 32 && height >= 24) {
+			font.DrawChar(screen, pixels_per_line, 16, 8, 'D', white, transparent);
+			font.DrawChar(screen, pixels_per_line, 24, 8, 'F', white, transparent);
+		}
+		if (width >= 144 && height >= 56) {
+			static constexpr char hex_digits[] = "0123456789ABCDEF";
+			for (unsigned digit = 0; digit < 16; ++digit) {
+				const unsigned nibble = static_cast<unsigned>((rip >> ((15 - digit) * 4)) & 15);
+				font.DrawChar(screen, pixels_per_line, 16 + digit * 8, 40,
+					hex_digits[nibble], white, transparent);
+			}
+			if (height >= 104) {
+				const uint64 values[] = { interrupted_rsp, cr2 };
+				for (unsigned row = 0; row < 2; ++row) {
+					const unsigned y = 64 + row * 24;
+					font.DrawChar(screen, pixels_per_line, 0, y,
+						row ? 'C' : 'S', white, transparent);
+					for (unsigned digit = 0; digit < 16; ++digit) {
+						const unsigned nibble = static_cast<unsigned>((values[row] >> ((15 - digit) * 4)) & 15);
+						font.DrawChar(screen, pixels_per_line, 16 + digit * 8, y,
+							hex_digits[nibble], white, transparent);
+					}
+				}
+			}
+		}
+		__asm__ volatile("sfence" ::: "memory");
+		if (active_video) {
+			video->Flush(Rectangle(Point(0, 0), Size2(width, height), Color::Black));
+		}
+	}
+	for (;;) {
+		__asm__ volatile("cli");
+		__asm__ volatile("hlt");
+	}
+}
+
+/*
+static __attribute__((noreturn, noinline, no_stack_protector, target("general-regs-only")))
+void TriggerDoubleFaultForTest() {
+	__asm__ volatile(
+		"cli\n\t"
+		"movabs $0x0000800000001000, %%rax\n\t"
+		"mov %%rax, %%rsp\n\t"
+		"mov (%%rsp), %%rax\n\t"
+		"ud2"
+		::: "rax", "memory");
+	__builtin_unreachable();
+}
+*/
+
+#endif
+
 #if _MCCA == 0x8632
 extern "C" volatile uint32 ap_ring3_iret_guard_hits;
 extern "C" volatile uint32 ap_ring3_iret_last_lapicid;
@@ -520,8 +619,9 @@ void exception_handler(HardwareInterruptFrame* frame) {
 			ap_ring3_iret_guard_hits, ap_ring3_iret_last_lapicid, ap_ring3_iret_last_coreid); // printlog will call halt machine
 		#else
 		printlog(_LOG_FATAL,
-			"%s with 0x%[x], vaddr=0x%[x], TID%u, CR3=0x%[x]\n\r\t %s%s%s%s",
-			ExceptionDescription[iden], para, getCR2(), Taskman::CurrentTID(), r15,
+			"%s with 0x%[x], vaddr=0x%[x], TID%u, RIP=0x%[x], RSP=0x%[x], CS=0x%[x], CR3=0x%[x]\n\r\t %s%s%s%s",
+			ExceptionDescription[iden], para, getCR2(), Taskman::CurrentTID(),
+			frame->hw_rip, frame->hw_rsp, frame->hw_cs, r15,
 			para & 1 ? "Protected " : "Miss",
 			para & 0b10 ? "Write " : "Read ",
 			para & 0b100 ? "User " : "Kernel ",

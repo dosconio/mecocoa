@@ -153,29 +153,21 @@ build_util:
 build_drvs:
 	@make -f devdriv/Makefile.$(TOOLSYS).x64 \
 		arch=$(arch) \
-		uincpath=$(uincpath) \
-		ubinpath=$(ubinpath) \
 		DRV=video-bochs \
 		SRCS="devdriv/video/video-bochs.cpp" \
 		build
 	@make -f devdriv/Makefile.$(TOOLSYS).x64 \
 		arch=$(arch) \
-		uincpath=$(uincpath) \
-		ubinpath=$(ubinpath) \
 		DRV=e1000 \
 		SRCS="devdriv/net/e1000.cpp" \
 		build
 	@make -f devdriv/Makefile.$(TOOLSYS).x64 \
 		arch=$(arch) \
-		uincpath=$(uincpath) \
-		ubinpath=$(ubinpath) \
 		DRV=lance \
 		SRCS="devdriv/net/lance.cpp" \
 		build
 	@make -f devdriv/Makefile.$(TOOLSYS).x64 \
 		arch=$(arch) \
-		uincpath=$(uincpath) \
-		ubinpath=$(ubinpath) \
 		DRV=vmci \
 		SRCS="devdriv/vmhost/vmci.cpp" \
 		build
@@ -183,6 +175,13 @@ build_drvs:
 #	echo MK a
 #	aasm subapps/_hello/asm/helloa-x64.asm -felf64 -o subapps/_hello/asm/helloa-x64.o
 #	ld   -s -m elf_x86_64 -o $(uobjpath)/sapp-$(arch)/a subapps/_hello/asm/helloa-x64.o -Ttext-segment=0x10000 -e main
+
+iso_kernel=$(ubinpath)/mcca.iso
+
+# $(iso_kernel):
+build_iso:
+	-rm -rf $(iso_kernel)
+	cd $(ubinpath) && sudo -S grub-mkrescue -o mcca.iso mecocoa
 
 edkdir=/home/$(USER)/soft/edk2
 $(loader): prehost/$(arch)/$(arch).loader/loader.c
@@ -193,11 +192,13 @@ $(loader): prehost/$(arch)/$(arch).loader/loader.c
 	cd $(edkdir) && bash $(ulibpath)/../../mecocoa/prehost/$(arch)/$(arch).loader/build.sh
 	cp $(edkdir)/Build/MccaLoaderX64/DEBUG_CLANGDWARF/X64/Loader.efi $@
 
+
 .PHONY : run run-only
 qemu_args=\
 	-drive if=pflash,format=raw,readonly=on,file=$(ubinpath)/AMD64/OVMF/OVMF_CODE.fd \
 	-drive if=pflash,format=raw,file=$(ubinpath)/AMD64/OVMF/OVMF_VARS.fd \
-	-drive if=ide,index=0,media=disk,format=raw,file=$(ubinpath)/$(arch).img \
+	-drive if=none,id=bootdisk,media=disk,format=raw,file=$(ubinpath)/$(arch).img \
+	-device ide-hd,drive=bootdisk,bus=ide.0,unit=0,bootindex=0 \
 	-device nec-usb-xhci,id=xhci \
 	-device usb-hub,id=hub0,bus=xhci.0,port=1 \
 	-device usb-mouse,id=mouse0,bus=xhci.0,port=1.1 \
@@ -206,6 +207,9 @@ qemu_args=\
 	-drive if=none,id=usbdisk,file=$(uobjpath)/../ehci-stage7.img,format=raw \
 	-device usb-ehci,id=ehci \
 	-device usb-storage,id=storage0,bus=ehci.0,port=1,drive=usbdisk \
+	-drive if=none,id=cdrom0,media=cdrom,format=raw,readonly=on,file=$(iso_kernel) \
+	-device ich9-ahci,id=ahci0 \
+	-device ide-cd,drive=cdrom0,bus=ahci0.0,unit=0,bootindex=1 \
 
 # 	-no-reboot -no-shutdown  \
 
@@ -229,7 +233,7 @@ qemu_args=\
 # -device usb-ehci,id=ehci
 # -device usb-storage,id=storage0,bus=ehci.0,port=1,drive=usbdisk
 
-run: build
+run: build build_iso
 	@echo [ running] MCCA for $(arch)
 	@${QEMU} $(qemu_args) -m 512M -enable-kvm -cpu host || ${QEMU} $(qemu_args) -m 512M
 	@echo

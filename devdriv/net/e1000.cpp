@@ -107,6 +107,9 @@ namespace {
 
 	struct E1000Context {
 		stduint dev_handle = 0;
+		#if _ACCM == 0x8664
+		uint16 device_id = 0;
+		#endif
 		volatile uint32* regs = nullptr;
 		PwcallDeviceResourceInfo mmio = {};
 		DmaRegion rx_desc_dma = {};
@@ -126,6 +129,9 @@ namespace {
 		stduint tx_queue_count = 0;
 		bool rings_ready = false;
 		bool link_up = false;
+		#if _ACCM == 0x8664
+		bool polling = false;
+		#endif
 
 		uint32 read_reg(E1000Reg reg) const {
 			return regs ? regs[_IMM(reg)] : 0;
@@ -360,7 +366,11 @@ namespace {
 	stduint OpenE1000() {
 		for0(i, numsof(E1000DeviceIds)) {
 			const stduint cls = (stduint(E1000VendorId) << 16) | E1000DeviceIds[i];
-			const stdsint opened = Powercall::DevOpen(0, cls, _IMM(PwcallDeviceOpenFlag::Interrupt));
+			stduint flags = _IMM(PwcallDeviceOpenFlag::Interrupt);
+			#if _ACCM == 0x8664
+			flags |= _IMM(PwcallDeviceOpenFlag::MsiOnly);
+			#endif
+			const stdsint opened = Powercall::DevOpen(0, cls, flags);
 			if (opened > 0) return stduint(opened);
 		}
 		return 0;
@@ -399,6 +409,9 @@ namespace {
 		PwcallDeviceIdentity identity = {};
 		if (Powercall::DevGetIdentity(g_e1000.dev_handle, &identity) != 0) return false;
 		if (identity.vendor_id != E1000VendorId || !MatchDeviceId(identity.device_id)) return false;
+		#if _ACCM == 0x8664
+		g_e1000.device_id = identity.device_id;
+		#endif
 		if (!FindResource(g_e1000.dev_handle, PwcallDeviceResourceType::PciBarMmio, 0, &g_e1000.mmio)) return false;
 
 		PwcallDeviceMapRequest mmio_req = {};
@@ -504,11 +517,35 @@ int main(int argc, char** argv) {
 	if (Powercall::Hello() != 0) return -1;
 	if (!InitializeE1000()) return -1;
 	if (!PublishAttach()) return -1;
+	#if _ACCM == 0x8664
+	stdsint publish_result = Powercall::DevPublish(g_e1000.dev_handle, PwcallDevicePublishCommand::Started);
+	if (publish_result != 0) {
+		const stduint cls = (stduint(E1000VendorId) << 16) | g_e1000.device_id;
+		const stdsint reopened = Powercall::DevOpen(0, cls, _IMM(PwcallDeviceOpenFlag::None));
+		if (reopened == stdsint(g_e1000.dev_handle)) {
+			publish_result = Powercall::DevPublish(g_e1000.dev_handle,
+				PwcallDevicePublishCommand::Started);
+			if (publish_result == 0) {
+				g_e1000.polling = true;
+				plogwarn("[E1000] No usable interrupt; polling every 10 ms");
+			}
+		}
+	}
+	if (publish_result != 0) return -1;
+	if (!g_e1000.polling) g_e1000.enable_interrupts();
+	#else
 	if (Powercall::DevPublish(g_e1000.dev_handle, PwcallDevicePublishCommand::Started) != 0) return -1;
 	g_e1000.enable_interrupts();
+	#endif
 	(void)PushRxFrames();
 
 	for (;;) {
+		#if _ACCM == 0x8664
+		if (g_e1000.polling) {
+			g_e1000.update_link_state();
+			(void)g_e1000.flush_tx_queue();
+		}
+		#endif
 		bool active = ProcessControlMessages();
 		const stdsint pushed = PushRxFrames();
 		if (pushed < 0) {
@@ -517,6 +554,12 @@ int main(int argc, char** argv) {
 		}
 		if (pushed > 0) active = true;
 		if (active) continue;
+		#if _ACCM == 0x8664
+		if (g_e1000.polling) {
+			(void)syscall(syscall_t::REST, 1, 10);
+			continue;
+		}
+		#endif
 		if (!ReceiveEvent()) return -1;
 	}
 }

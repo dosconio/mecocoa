@@ -132,6 +132,9 @@ enum {
 #define PERCORE_STRIDE  0x1000  // 4KB per CPU
 #if _MCCA == 0x8664
 #define _NORMAL_RINGSTACK 0xFFFFFFFFC0001000ull
+static constexpr stduint X64_TRANSITION_STACK_SIZE = 0x1000;
+static constexpr stduint X64_TRANSITION_STACK_BASE = 0xFFFFFFFFFFFFF000ull;
+static constexpr stduint X64_TRANSITION_STACK_TOP = 0xFFFFFFFFFFFFFFF0ull;
 #elif _MCCA == 0x8632
 #define _NORMAL_RINGSTACK 0xFFC01000ull
 #endif

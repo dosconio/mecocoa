@@ -2702,8 +2702,14 @@ namespace {
 		if (Powercall::DevGetIdentity(g_vmci.dev_handle, &g_vmci.identity) != 0 ||
 			g_vmci.identity.vendor_id != VmciVendorId ||
 			g_vmci.identity.device_id != VmciDeviceId) return false;
-		if (!FindResource(g_vmci.dev_handle, PwcallDeviceResourceType::IrqLine,
-			0, g_vmci.irq) || !SelectRegisterAccess() || !InitializeRegisters()) return false;
+		const bool has_legacy_irq = FindResource(g_vmci.dev_handle,
+			PwcallDeviceResourceType::IrqLine, 0, g_vmci.irq);
+		#if _ACCM == 0x8632
+		if (!has_legacy_irq) return false;
+		#else
+		(void)has_legacy_irq;
+		#endif
+		if (!SelectRegisterAccess() || !InitializeRegisters()) return false;
 		if (g_vmci.use_mmio &&
 			(g_vmci.capabilities & VmciCapabilityDmaDatagram) == 0) {
 			plogwarn("[VMCI] DMA datagram capability is missing; using the legacy BAR0 control plane");

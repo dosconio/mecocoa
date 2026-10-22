@@ -10,12 +10,18 @@ extern Spinlock scheduler_lock;
 static stduint get_thread_cs(stduint ring) {
 	if (!ring) return __BITS__ == 64 ? SegCo64 : SegCo32;
 	if (ring == RING_U) return _IMM(SegCoR3) | _IMM(ring);
+	#if _MCCA == 0x8664
+	if (ring == RING_S) return _IMM(SegCoR1) | _IMM(ring);
+	#endif
 	return 8 * ring + 0b100 | ring;
 }
 
 static stduint get_thread_ss(stduint ring) {
 	if (!ring) return SegData;
 	if (ring == RING_U) return _IMM(SegDaR3) | _IMM(ring);
+	#if _MCCA == 0x8664
+	if (ring == RING_S) return _IMM(SegDaR1) | _IMM(ring);
+	#endif
 	return 8 * (4 + ring) + 0b100 + ring;
 }
 #endif
