@@ -222,10 +222,10 @@ static void ClampSheetToWindow(SheetTrait* sheet, const Rectangle& window) {
 	if (!sheet) return;
 	stdsint max_x = maxof(0, (stdsint)window.width - (stdsint)minof((stduint)sheet->sheet_area.width, (stduint)window.width));
 	stdsint max_y = maxof(0, (stdsint)window.height - (stdsint)minof((stduint)sheet->sheet_area.height, (stduint)window.height));
-	if (sheet->sheet_area.x < 0) sheet->sheet_area.x = 0;
-	if (sheet->sheet_area.y < 0) sheet->sheet_area.y = 0;
-	if (sheet->sheet_area.x > max_x) sheet->sheet_area.x = max_x;
-	if (sheet->sheet_area.y > max_y) sheet->sheet_area.y = max_y;
+	if ((stdsint)sheet->sheet_area.x < 0) sheet->sheet_area.x = 0;
+	if ((stdsint)sheet->sheet_area.y < 0) sheet->sheet_area.y = 0;
+	if ((stdsint)sheet->sheet_area.x > max_x) sheet->sheet_area.x = max_x;
+	if ((stdsint)sheet->sheet_area.y > max_y) sheet->sheet_area.y = max_y;
 }
 
 bool Consman::AdoptVideoDevice(VideoDevice* dev) {
@@ -699,8 +699,8 @@ void LayerManager2::UpdateForce(SheetTrait* who, const Rectangle& rect) {
 		auto draw_dashed_pixel = [&](Point p) {
 			if (p.x >= abs_rect.x && p.x < abs_rect.x + (stdsint)rect.width &&
 				p.y >= abs_rect.y && p.y < abs_rect.y + (stdsint)rect.height &&
-				p.x >= 0 && p.x < (stdsint)window.width &&
-				p.y >= 0 && p.y < (stdsint)window.height) {
+				(stdsint)p.x >= 0 && (stdsint)p.x < (stdsint)window.width &&
+				(stdsint)p.y >= 0 && (stdsint)p.y < (stdsint)window.height) {
 				Color c = (((p.x + p.y) / 4) % 2 == 0) ? Color::Black : Color::White;
 				if (sheet_buffer) vcim.DrawPoint(p, c);
 				else if (pvci) pvci->DrawPoint(p, c);
@@ -1738,7 +1738,7 @@ static stdsint GraphicMsg_HOST_SET_RESOLUTION(stduint source,
 	const Size2 current = dev->GetFramebuffer().screen_size;
 	if (current.x == width && current.y == height) return 0;
 	if (!dev->setMode(uni::VideoMode{
-		uni::Point2(width, height), uni::PixelFormat::ARGB8888})) return -1;
+		uni::Point2(width, height), uni::PixelFormat::ARGB8888, 0, 0})) return -1;
 	if (!Consman::AdoptVideoDevice(dev)) return -1;
 	ploginfo("[Graphic] VMware resolution changed to %ux%u", width, height);
 	return 0;
@@ -1853,7 +1853,7 @@ void serv_graf_loop() {
 					}
 					if (!dev) dev = Consman::current_video_device;
 				}
-				if (dev && dev->setMode(uni::VideoMode{uni::Point2(msg.args.res.width, msg.args.res.height), uni::PixelFormat::ARGB8888})) {
+				if (dev && dev->setMode(uni::VideoMode{uni::Point2(msg.args.res.width, msg.args.res.height), uni::PixelFormat::ARGB8888, 0, 0})) {
 					if (dev != published_video_proxy) {
 						Consman::AdoptVideoDevice(dev);
 						ploginfo("[Graphic] Resolution changed to %ux%u", msg.args.res.width, msg.args.res.height);

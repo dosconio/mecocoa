@@ -59,7 +59,7 @@ void Syscall::Initialize() {
 	else plogwarn("x64 NX is not supported or EFER.NXE could not be enabled");
 	setMSR(x86MSR::LSTAR, mglb(Handint_SYSCALL_Entry));
 	setMSR(x86MSR::STAR, (_IMM(SegCo64) << 32) | (_IMM(SegCo32 | _IMM(RING_U)) << 48));
-	setMSR(x86MSR::FMASK, 0x200);
+	setMSR(x86MSR::FMASK, 0x700);// TF IF DF
 	stduint percore_addr = PERCORE_VBASE + Taskman::getID() * PERCORE_STRIDE;
 	setMSR(x86MSR::GS_BASE, percore_addr);
 	setMSR(x86MSR::KERNEL_GS_BASE, 0);
@@ -1712,6 +1712,10 @@ stduint Handint_SYSCALL(CallgateFrame* frame) {
 	#else
 	frame->ax = ret_val;
 	check_and_deliver_signals_syscall(frame);
+	if (!frame->return_to_ring1 && frame->ip >= 0x0000800000000000ull) {
+		Taskman::ExitCurrent(128 + SIGSEGV);
+		__builtin_trap();
+	}
 	#endif
 	if (crt_th && !was_pinned) {
 		crt_th->ring_coreid = CORE_ID_INVALID;

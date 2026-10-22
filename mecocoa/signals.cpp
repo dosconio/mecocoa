@@ -572,6 +572,11 @@ extern "C" stdsint sysc_SIGR(void* context) {
 	stduint reg_ss = (stduint)SegDaR3 | (stduint)RING_U; // Force User Data Selector
 	#endif
 
+	#if _MCCA == 0x8664
+	if (!frame->return_to_ring1 && uframe.context.reg_eip >= 0x0000800000000000ull)
+		return -1;
+	#endif
+
 	//  Sanitize EFLAGS
 	// Allow user flags modifications (CF, PF, AF, ZF, SF, TF, IF, DF, OF)
 	// Clear all system privilege flags (IOPL, NT, VM, RF) to prevent Ring 0 privilege escalation

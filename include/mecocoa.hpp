@@ -77,6 +77,7 @@
 #include <c/datime.h>
 #include <cpp/interrupt>
 #include <cpp/vector>
+#include <cpp/atomic>
 
 #include <c/ISO_IEC_STD/signal.h>
 
@@ -104,7 +105,7 @@ use crate uni;
 #define plogtrac(...)
 //
 
-extern volatile stduint tick;
+extern uni::Atomic<stduint> tick;
 
 #include "memoman.hpp"
 #include "syscall.hpp"

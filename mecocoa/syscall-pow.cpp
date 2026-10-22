@@ -1099,8 +1099,8 @@ static stdsint HandlePwcallDeviceDmaAlloc(ProcessBlock* pb, stduint dev_handle, 
 	}
 	if (!phys) return -1;
 
-	Iova::DmaMapping dma_mapping = { uint64(stduint(phys)), false };
 	#if (_MCCA & 0xFF00) == 0x8600
+	Iova::DmaMapping dma_mapping = { uint64(stduint(phys)), false };
 	const Iova::DmaMappingFlag iova_flags =
 		(flags & _IMM(PwcallDeviceDmaAllocFlag::IdentityIova)) ?
 		Iova::DmaMappingFlag::Identity : Iova::DmaMappingFlag::None;
@@ -1122,11 +1122,15 @@ static stdsint HandlePwcallDeviceDmaAlloc(ProcessBlock* pb, stduint dev_handle, 
 			slot->handle_id = owner->next_dma_handle++;
 			slot->device = device;
 			slot->physical = stduint(phys);
-			slot->device_address = dma_mapping.device_address;
 			slot->size = alloc_size;
 			slot->mapped_addr = 0;
 			slot->dma_channel = dma_channel;
+			#if (_MCCA & 0xFF00) == 0x8600
+			slot->device_address = dma_mapping.device_address;
 			slot->iova_mapped = dma_mapping.translated;
+			#else
+			slot->device_address = _IMM(phys);
+			#endif
 			DchainAppend(&owner->dmas, slot, false, nullptr);
 			handle_id = slot->handle_id;
 		}

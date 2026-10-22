@@ -8,7 +8,7 @@
 // ---- ---- ---- ---- SOFT-TIM ---- ---- ---- ---- //
 
 volatile timeval_t system_time = {};
-volatile stduint tick = 0;
+uni::Atomic<stduint> tick = 0;
 
 #if !defined (_MPU_STM32MP13) //{TEMP}
 

@@ -3232,12 +3232,12 @@ enum class NetIPv4ConfigSource : uint8 {
 			!IsTcpConnectReady(connection)) {
 			const stduint backoff = connection.syn_retry_count ? connection.syn_retry_count - 1 : 0;
 			ConsiderNetDeadline(valid, deadline, connection.last_syn_tick ?
-				connection.last_syn_tick + TcpBackoffRto(connection, backoff) : tick);
+				connection.last_syn_tick + TcpBackoffRto(connection, backoff) : tick.load());
 		}
 		if (!connection.active_open && control.state == uni::Network::TCPConnectionState::SynReceived) {
 			const stduint backoff = connection.synack_retry_count ? connection.synack_retry_count - 1 : 0;
 			ConsiderNetDeadline(valid, deadline, connection.last_synack_tick ?
-				connection.last_synack_tick + TcpBackoffRto(connection, backoff) : tick);
+				connection.last_synack_tick + TcpBackoffRto(connection, backoff) : tick.load());
 		}
 		if (connection.tx_count) {
 			const auto& pending = connection.tx_pending[connection.tx_head];
@@ -3254,12 +3254,12 @@ enum class NetIPv4ConfigSource : uint8 {
 				connection.close_phase == NetTcpClosePhase::Closing)) {
 			const stduint backoff = connection.fin_retry_count ? connection.fin_retry_count - 1 : 0;
 			ConsiderNetDeadline(valid, deadline, connection.last_fin_tick ?
-				connection.last_fin_tick + TcpBackoffRto(connection, backoff) : tick);
+				connection.last_fin_tick + TcpBackoffRto(connection, backoff) : tick.load());
 		}
 		if (control.state == uni::Network::TCPConnectionState::LastAck) {
 			const stduint backoff = connection.fin_retry_count ? connection.fin_retry_count - 1 : 0;
 			ConsiderNetDeadline(valid, deadline, connection.last_fin_tick ?
-				connection.last_fin_tick + TcpBackoffRto(connection, backoff) : tick);
+				connection.last_fin_tick + TcpBackoffRto(connection, backoff) : tick.load());
 		}
 		if (connection.orphaned && connection.close_phase == NetTcpClosePhase::FinWait2) {
 			ConsiderNetDeadline(valid, deadline, connection.close_phase_tick + NetTcpFinWait2Ticks);
@@ -3293,7 +3293,7 @@ enum class NetIPv4ConfigSource : uint8 {
 			case NetArpNeighborState::Incomplete:
 			case NetArpNeighborState::Probe:
 				ConsiderNetDeadline(valid, deadline, entry.last_probe_tick ?
-					entry.last_probe_tick + NetArpProbeRetryTicks : tick);
+					entry.last_probe_tick + NetArpProbeRetryTicks : tick.load());
 				break;
 			case NetArpNeighborState::Reachable:
 				ConsiderNetDeadline(valid, deadline, entry.updated_tick + NetArpReachableTicks);
@@ -3316,7 +3316,7 @@ enum class NetIPv4ConfigSource : uint8 {
 		}
 		if (HasDhcpRetryPending()) {
 			ConsiderNetDeadline(valid, deadline,
-				net_dhcp.last_tick ? net_dhcp.last_tick + NetDhcpRetryTicks : tick);
+				net_dhcp.last_tick ? net_dhcp.last_tick + NetDhcpRetryTicks : tick.load());
 		}
 		if (net_dhcp.client && net_dhcp.bound_tick && net_config.dhcp_lease_time) {
 			if (!net_dhcp.renew_started && DhcpT1Ticks()) {
