@@ -2,6 +2,9 @@
 // AllAuthor: @dosconio, @ArinaMgk
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 #include "../include/mecocoa.hpp"
+#if (_MCCA & 0xFF00) == 0x8600
+#include <cpp/Device/Bus/PCI.hpp>
+#endif
 
 #if CONFIG_ENABLE_MMU
 #if _MCCA == 0x8632
@@ -846,11 +849,13 @@ static bool build_x86_initial_page_plan(stduint boot_magic, const byte* boot_inf
 	plan_count = 0;
 	plan_storage_bytes = 0;
 	constexpr stduint boot_entry_capacity = 20;
-	constexpr stduint source_capacity = boot_entry_capacity + 5;
-	constexpr stduint plan_capacity = source_capacity * 2;
-	constexpr stduint source_bytes =
+	const stduint ecam_count = uni::PCI::GetConfigSpaceAccessCount();
+	if (ecam_count > ~_IMM0 - boot_entry_capacity - 4) return false;
+	const stduint source_capacity = boot_entry_capacity + 4 + ecam_count;
+	const stduint plan_capacity = source_capacity * 2;
+	const stduint source_bytes =
 		source_capacity * sizeof(InitialPageRegion);
-	constexpr stduint plan_bytes =
+	const stduint plan_bytes =
 		plan_capacity * sizeof(InitialPageRegion);
 	auto source = (InitialPageRegion*)mempool.allocate(source_bytes, 4);
 	plan = (InitialPageRegion*)mempool.allocate(plan_bytes, 4);
@@ -973,16 +978,22 @@ static bool build_x86_initial_page_plan(stduint boot_magic, const byte* boot_inf
 			source_count, source_capacity);
 		return fail();
 	}
-	if (acpi_pcie_ecam_available) {
-		const uint64 bus_count = uint64(acpi_pcie_end_bus) -
-			acpi_pcie_start_bus + 1;
-		const uint64 ecam_end = acpi_pcie_ecam_base + (bus_count << 20);
-		if (ecam_end < acpi_pcie_ecam_base ||
-			ecam_end > uint64(~_IMM0) ||
-			!append(stduint(acpi_pcie_ecam_base), stduint(ecam_end),
-				PGTYPE_device)) {
+	for0(index, ecam_count) {
+		const auto* access = uni::PCI::GetConfigSpaceAccess(index);
+		if (!access) continue;
+		const uint64 ecam_begin = access->ecam_base +
+			(uint64(access->start_bus) << 20);
+		const uint64 ecam_end = access->ecam_base +
+			((uint64(access->end_bus) + 1) << 20);
+		if (ecam_begin < access->ecam_base || ecam_end <= ecam_begin) {
 			plogerro("[PAGING] Failed to append x86 ECAM region: begin=%llX end=%llX",
-				acpi_pcie_ecam_base, ecam_end);
+				ecam_begin, ecam_end);
+			return fail();
+		}
+		if (ecam_end > uint64(~_IMM0) || ecam_end > kAcpiPhysMapTop) continue;
+		if (!append(stduint(ecam_begin), stduint(ecam_end), PGTYPE_device)) {
+			plogerro("[PAGING] Failed to append x86 ECAM region: begin=%llX end=%llX",
+				ecam_begin, ecam_end);
 			return fail();
 		}
 	}
@@ -1019,9 +1030,11 @@ static bool build_uefi_initial_page_plan(const MemoryMap& memory_map, InitialPag
 		return false;
 	const stduint descriptor_count = memory_map.map_size /
 		memory_map.descriptor_size;
-	if (descriptor_count > (~_IMM0 - 4) ||
-		descriptor_count + 4 > ~_IMM0 / 2) return false;
-	const stduint source_capacity = descriptor_count + 4;
+	const stduint ecam_count = uni::PCI::GetConfigSpaceAccessCount();
+	if (ecam_count > ~_IMM0 - 3 ||
+		descriptor_count > ~_IMM0 - 3 - ecam_count ||
+		descriptor_count + 3 + ecam_count > ~_IMM0 / 2) return false;
+	const stduint source_capacity = descriptor_count + 3 + ecam_count;
 	const stduint plan_capacity = source_capacity * 2;
 	if (source_capacity > ~_IMM0 / sizeof(InitialPageRegion) ||
 		plan_capacity > ~_IMM0 / sizeof(InitialPageRegion)) return false;
@@ -1086,15 +1099,17 @@ static bool build_uefi_initial_page_plan(const MemoryMap& memory_map, InitialPag
 		0xFEC00000, 0xFEC01000, PGTYPE_device, permissions) ||
 		!append_initial_page_source(source, source_capacity, source_count,
 			0xFEE00000, 0xFEE01000, PGTYPE_device, permissions)) return fail();
-	if (acpi_pcie_ecam_available) {
-		const uint64 bus_count = uint64(acpi_pcie_end_bus) -
-			acpi_pcie_start_bus + 1;
-		const uint64 ecam_length = bus_count << 20;
-		const uint64 ecam_end = acpi_pcie_ecam_base + ecam_length;
-		if (ecam_end < acpi_pcie_ecam_base ||
+	for0(index, ecam_count) {
+		const auto* access = uni::PCI::GetConfigSpaceAccess(index);
+		if (!access) continue;
+		const uint64 ecam_begin = access->ecam_base +
+			(uint64(access->start_bus) << 20);
+		const uint64 ecam_end = access->ecam_base +
+			((uint64(access->end_bus) + 1) << 20);
+		if (ecam_begin < access->ecam_base || ecam_end <= ecam_begin ||
 			ecam_end > uint64(~_IMM0) ||
 			!append_initial_page_source(source, source_capacity, source_count,
-				stduint(acpi_pcie_ecam_base), stduint(ecam_end),
+				stduint(ecam_begin), stduint(ecam_end),
 				PGTYPE_device, permissions)) return fail();
 	}
 

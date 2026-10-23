@@ -42,7 +42,7 @@ namespace Devs {
 
 	extern DeviceNode* pci_root;
 	extern DeviceNode* primary_pci_bus;
-	extern DeviceNode* pci_bus_nodes[256];
+	DeviceNode* find_pci_bus_node(uint16 segment, uint8 bus);
 	extern bool pci_devices_attached;
 
 	DeviceNode* legacy_isa_bus = nullptr;
@@ -847,7 +847,8 @@ namespace Devs {
 				if (!range) continue;
 				const uint8 secondary_bus = uint8(range->length);
 				if (!secondary_bus) continue;
-				DeviceNode* secondary_bus_node = pci_bus_nodes[secondary_bus];
+				DeviceNode* secondary_bus_node = find_pci_bus_node(
+					dev_node->fields.pci_segment, secondary_bus);
 				if (!secondary_bus_node || secondary_bus_node == bus_node) continue;
 				if (secondary_bus_node->link.pare == &dev_node->link) continue;
 				if (!detach_child(pci_root, secondary_bus_node)) continue;
@@ -1700,7 +1701,8 @@ namespace Devs {
 				if (!bridge) return false;
 				const uint8 pirq_index = uint8(uint8(field_name >> 24) - uint8('0'));
 				const uint32 pirq_routes = uni::PCI::read_config_register(
-					bridge->fields.pci_bus, bridge->fields.pci_device,
+					bridge->fields.pci_segment, bridge->fields.pci_bus,
+					bridge->fields.pci_device,
 					bridge->fields.pci_function, 0x60);
 				const uint8 irq = uint8(pirq_routes >> (pirq_index * 8));
 				if ((irq & 0x80u) || irq >= 16) return false;
@@ -1993,53 +1995,61 @@ namespace Devs {
 		return true;
 	}
 
+	void apply_x64_pci_interrupt_route(DeviceNode* device) {
+		const uint32 interrupt = uni::PCI::read_config_register(
+			device->fields.pci_segment, device->fields.pci_bus,
+			device->fields.pci_device, device->fields.pci_function, 0x3C);
+		const uint8 interrupt_pin = uint8(interrupt >> 8);
+		uint8 routed_pin = 0;
+		uint8 root_device = 0;
+		uint8 root_function = 0;
+		uint32 gsi = 0;
+		uint16 irq_flags = DeviceResourceFlag_None;
+		if (!resolve_x64_pci_route(device, interrupt_pin, routed_pin,
+			root_device, root_function, gsi, irq_flags)) return;
+		DeviceResource* irq = nullptr;
+		for0(resource_index, device->fields.resource_count) {
+			auto& resource = device->fields.resources[resource_index];
+			if (DeviceResourceType(resource.type) == DeviceResourceType::IrqLine) {
+				irq = &resource;
+				break;
+			}
+		}
+		if (irq) {
+			irq->flags = irq_flags;
+			irq->index = 0;
+			irq->start = gsi;
+			irq->length = 1;
+			irq->extra = interrupt_pin;
+		}
+		else if (!append_resource(device, DeviceResourceType::IrqLine,
+			irq_flags, 0, gsi, 1, interrupt_pin)) return;
+		plogtrac("[ACPI] PCI INTx route pci=%02x:%02x.%u pin=%u root=%02x.%u/%u gsi=%u",
+			(unsigned)device->fields.pci_bus,
+			(unsigned)device->fields.pci_device,
+			(unsigned)device->fields.pci_function,
+			(unsigned)interrupt_pin, (unsigned)root_device,
+			(unsigned)root_function, (unsigned)routed_pin, (unsigned)gsi);
+	}
+
+	void apply_x64_pci_interrupt_routing_subtree(DeviceNode* node) {
+		for (auto* current = node; current;
+			current = reinterpret_cast<DeviceNode*>(current->link.next)) {
+			if (DeviceNodeType(current->fields.node_type) == DeviceNodeType::PciDevice)
+				apply_x64_pci_interrupt_route(current);
+			if (current->link.subf) {
+				apply_x64_pci_interrupt_routing_subtree(
+					reinterpret_cast<DeviceNode*>(current->link.subf));
+			}
+		}
+	}
+
 	void apply_x64_pci_interrupt_routing() {
 		acpi_pci_route_count = 0;
 		discover_x64_pci_routing_aml();
-		if (!acpi_pci_route_count || !pci_root) return;
-		for (stduint bus = 0; bus < numsof(pci_bus_nodes); ++bus) {
-			auto* bus_node = pci_bus_nodes[bus];
-			if (!bus_node) continue;
-			for (auto* device = reinterpret_cast<DeviceNode*>(bus_node->link.subf);
-				device; device = reinterpret_cast<DeviceNode*>(device->link.next)) {
-				if (DeviceNodeType(device->fields.node_type) !=
-					DeviceNodeType::PciDevice) continue;
-				const uint32 interrupt = uni::PCI::read_config_register(
-					device->fields.pci_bus, device->fields.pci_device,
-					device->fields.pci_function, 0x3C);
-				const uint8 interrupt_pin = uint8(interrupt >> 8);
-				uint8 routed_pin = 0;
-				uint8 root_device = 0;
-				uint8 root_function = 0;
-				uint32 gsi = 0;
-				uint16 irq_flags = DeviceResourceFlag_None;
-				if (!resolve_x64_pci_route(device, interrupt_pin, routed_pin,
-					root_device, root_function, gsi, irq_flags)) continue;
-				DeviceResource* irq = nullptr;
-				for0(resource_index, device->fields.resource_count) {
-					auto& resource = device->fields.resources[resource_index];
-					if (DeviceResourceType(resource.type) == DeviceResourceType::IrqLine) {
-						irq = &resource;
-						break;
-					}
-				}
-				if (irq) {
-					irq->flags = irq_flags;
-					irq->index = 0;
-					irq->start = gsi;
-					irq->length = 1;
-					irq->extra = interrupt_pin;
-				}
-				else if (!append_resource(device, DeviceResourceType::IrqLine,
-					irq_flags, 0, gsi, 1, interrupt_pin)) continue;
-				plogtrac("[ACPI] PCI INTx route pci=%02x:%02x.%u pin=%u root=%02x.%u/%u gsi=%u",
-					(unsigned)device->fields.pci_bus,
-					(unsigned)device->fields.pci_device,
-					(unsigned)device->fields.pci_function,
-					(unsigned)interrupt_pin, (unsigned)root_device,
-					(unsigned)root_function, (unsigned)routed_pin, (unsigned)gsi);
-			}
-		}
+		if (!acpi_pci_route_count || !pci_root || !pci_root->link.subf) return;
+		apply_x64_pci_interrupt_routing_subtree(
+			reinterpret_cast<DeviceNode*>(pci_root->link.subf));
 	}
 
 	void discover_x64_interrupt_topology() {
@@ -2098,8 +2108,12 @@ namespace Devs {
 		uint16_t enabled_irq_mask = 0xFFFF;
 		bool mirror_irq0_to_pin2 = true;
 		#if _MCCA == 0x8664
-		const uint8 bsp_lapic_id = acpi_cpu_lapic_ids[0] < 0x100u ?
-			uint8(acpi_cpu_lapic_ids[0]) : 0;
+		if (!acpi_cpu_count || acpi_cpu_lapic_ids[0] >= 0xFFu) {
+			plogerro("[APIC] BSP LAPIC ID=%u cannot be encoded without interrupt remapping",
+				acpi_cpu_count ? acpi_cpu_lapic_ids[0] : ~uint32(0));
+			return;
+		}
+		const uint8 bsp_lapic_id = uint8(acpi_cpu_lapic_ids[0]);
 		// x64 UEFI can open the ISA IRQ set, but mirroring IRQ0 onto pin2
 		// currently triggers the legacy cascade path bug.
 		mirror_irq0_to_pin2 = false;

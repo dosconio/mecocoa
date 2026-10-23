@@ -1,5 +1,7 @@
 #include "aaaaa.h"
 #include "c/consio.h"
+#include "c/loc.h"
+#include "cpp/Format/ConfigText/TOML.hpp"
 #include "cpp/Witch/Control/Button.hpp"
 #include "cpp/Witch/Control/Control-Label.hpp"
 #include <time.h>
@@ -115,6 +117,75 @@ static Button btn_shutdown("Shut down");
 static Button btn_reboot("Reboot");
 static Label time_label("");
 static char cached_time_str[32] = "";
+
+static void ApplyLango(Lango lang) {
+	switch (lang) {
+	case Lango_Japanese:
+		start_btn.text = "開始";
+		btn_shutdown.text = "電源切";
+		btn_reboot.text = "再起動";
+		break;
+	case Lango_Chinese:
+		start_btn.text = "开始";
+		btn_shutdown.text = "关机";
+		btn_reboot.text = "重启";
+		break;
+	default:
+		start_btn.text = "Start";
+		btn_shutdown.text = "Shut down";
+		btn_reboot.text = "Reboot";
+		break;
+	}
+}
+
+static void TryLoadConfigLango() {
+	const char* vroot = getenv("VOLUMEPATH");
+	if (!vroot || !*vroot) vroot = getenv("VRPATH");
+	char vroot_conf[256];
+	rostr kConfPaths[3];
+	stduint path_count = 0;
+	if (vroot && *vroot) {
+		sprintf(vroot_conf, "%s/.mcca.toml", vroot);
+		kConfPaths[path_count++] = vroot_conf;
+	}
+	kConfPaths[path_count++] = "/mnt/ide2.0/.mcca.toml";
+	kConfPaths[path_count++] = "/mnt/ahci1.0/.mcca.toml";
+
+	Lango lang = Lango_English;
+	for (int retry = 0; retry < 3; ++retry) {
+		for (stduint i = 0; i < path_count; i++) {
+			HostFile file(kConfPaths[i], FileOpenType::Read);
+			if (file) {
+				ConfigTOML toml(file);
+				if (toml.Probe()) {
+					String lang_val = toml.get("root/lango");
+					lang = ParseLango(lang_val.reference());
+				}
+				ApplyLango(lang);
+				return;
+			}
+		}
+		sysrest(1, 0);
+	}
+
+	ApplyLango(lang);
+}
+
+static bool HasNonAscii(rostr s) {
+	if (!s) return false;
+	while (*s) {
+		if ((byte)*s >= 0x80) return true;
+		s++;
+	}
+	return false;
+}
+
+static void DrawButtonTextIfNonAscii(stdsint form_id, const Button& btn) {
+	if (HasNonAscii(btn.text.reference())) {
+		Point pos = btn.sheet_area.getVertex() + btn.getTextVertex();
+		sys_draw_default_string(form_id, pos, btn.text.reference(), Color::Black);
+	}
+}
 
 static constexpr stduint kRibbonClientHeight = 30;
 static constexpr stduint kStartButtonWidth = 54;
@@ -259,6 +330,22 @@ static void DrawRibbon(Color* buffer, stduint width, stduint height)
 	}
 }
 
+static void FlushRibbon(stdsint form_id) {
+	sys_update_form(form_id, nullptr);
+	DrawButtonTextIfNonAscii(form_id, start_btn);
+	for (stduint i = 0; i < cached_win_count; i++) {
+		if (taskbar_buttons[i]) {
+			DrawButtonTextIfNonAscii(form_id, *taskbar_buttons[i]);
+		}
+	}
+}
+
+static void FlushStartMenu(stdsint sm_id) {
+	sys_update_form(sm_id, nullptr);
+	DrawButtonTextIfNonAscii(sm_id, btn_shutdown);
+	DrawButtonTextIfNonAscii(sm_id, btn_reboot);
+}
+
 static Size2 GetScreenSize()
 {
 	Size2 screen = {};
@@ -316,7 +403,7 @@ static stdsint CreateStartMenuForm(Size2 screen, Color** out_buffer, stduint men
 
 	sys_set_form_buffer(form_id, buffer);
 	DrawStartMenu(buffer, menu_w, menu_h);
-	sys_update_form(form_id, nullptr);
+	FlushStartMenu(form_id);
 
 	*out_buffer = buffer;
 	return form_id;
@@ -355,7 +442,7 @@ static stdsint CreateRibbonForm(Size2 screen, Color** out_buffer)
 	}
 
 	DrawRibbon(buffer, client_w, client_h);
-	sys_update_form(form_id, nullptr);
+	FlushRibbon(form_id);
 	sys_set_timer(form_id, 200);
 
 	*out_buffer = buffer;
@@ -367,6 +454,7 @@ int main(int argc, char** argv)
 
 	Size2 screen = GetScreenSize();
 	TryLoadWallpaper(screen);
+	TryLoadConfigLango();
 	Color* buffer = nullptr;
 	stdsint form_id = CreateRibbonForm(screen, &buffer);
 	if (form_id < 0) {
@@ -424,7 +512,7 @@ int main(int argc, char** argv)
 
 			if ((time_changed || win_changed) && buffer) {
 				DrawRibbon(buffer, screen.x, kRibbonClientHeight);
-				sys_update_form(form_id, nullptr);
+				FlushRibbon(form_id);
 			}
 		}
 		else if (smsg.event == SheetEvent::onClick || smsg.event == SheetEvent::onLeave || smsg.event == SheetEvent::onMoved) {
@@ -446,7 +534,7 @@ int main(int argc, char** argv)
 					start_btn.pressed = true; // Keep visually pressed while menu is open
 				}
 				DrawRibbon(buffer, screen.x, kRibbonClientHeight);
-				sys_update_form(form_id, nullptr);
+				FlushRibbon(form_id);
 
 				if (clicked) {
 					stduint menu_w = 200;
@@ -483,7 +571,7 @@ int main(int argc, char** argv)
 
 									if (sd_was_pressed != btn_shutdown.pressed || rb_was_pressed != btn_reboot.pressed) {
 										DrawStartMenu(sm_buf, menu_w, menu_h);
-										sys_update_form(sm_id, nullptr);
+										FlushStartMenu(sm_id);
 									}
 
 									if (sd_was_pressed && !btn_shutdown.pressed && mmsg.event == SheetEvent::onClick && btn_shutdown.sheet_area.ifContain(rel_p)) {
@@ -508,7 +596,7 @@ int main(int argc, char** argv)
 						btn_shutdown.pressed = false;
 						btn_reboot.pressed = false;
 						DrawRibbon(buffer, screen.x, kRibbonClientHeight);
-						sys_update_form(form_id, nullptr);
+						FlushRibbon(form_id);
 					}
 				}
 			}
@@ -544,7 +632,7 @@ int main(int argc, char** argv)
 					}
 					if (buffer) {
 						DrawRibbon(buffer, screen.x, kRibbonClientHeight);
-						sys_update_form(form_id, nullptr);
+						FlushRibbon(form_id);
 					}
 					break;
 				}

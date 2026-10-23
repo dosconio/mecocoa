@@ -87,7 +87,6 @@ namespace Devs {
 
 	DeviceNode* pci_root = nullptr;
 	DeviceNode* primary_pci_bus = nullptr;
-	DeviceNode* pci_bus_nodes[256]{};
 	bool pci_devices_attached = false;
 
 }
@@ -118,17 +117,39 @@ namespace Devs {
 namespace Devs {
 	DeviceNode* create_pci_bus_node(uint16 segment, uint8 bus) {
 		auto* bus_node = device_tree.NewNode();
+		if (!bus_node) return nullptr;
 		init_node(bus_node, DeviceNodeType::PciBus, DeviceBusType::PCI,
 			heap_name("pci-bus@%04x:%02x", segment, bus));
 		bus_node->fields.pci_segment = segment;
 		bus_node->fields.pci_bus = bus;
 		append_child(pci_root, bus_node);
-		pci_bus_nodes[bus] = bus_node;
 		return bus_node;
 	}
 
+	DeviceNode* find_pci_bus_node_in_subtree(DeviceNode* node,
+		uint16 segment, uint8 bus) {
+		for (auto* current = node; current;
+			current = reinterpret_cast<DeviceNode*>(current->link.next)) {
+			if (DeviceNodeType(current->fields.node_type) == DeviceNodeType::PciBus &&
+				current->fields.pci_segment == segment &&
+				current->fields.pci_bus == bus) return current;
+			if (current->link.subf) {
+				if (auto* found = find_pci_bus_node_in_subtree(
+					reinterpret_cast<DeviceNode*>(current->link.subf), segment, bus))
+					return found;
+			}
+		}
+		return nullptr;
+	}
+
+	DeviceNode* find_pci_bus_node(uint16 segment, uint8 bus) {
+		if (!pci_root || !pci_root->link.subf) return nullptr;
+		return find_pci_bus_node_in_subtree(
+			reinterpret_cast<DeviceNode*>(pci_root->link.subf), segment, bus);
+	}
+
 	DeviceNode* ensure_pci_bus_node(uint16 segment, uint8 bus) {
-		if (pci_bus_nodes[bus]) return pci_bus_nodes[bus];
+		if (auto* node = find_pci_bus_node(segment, bus)) return node;
 		return create_pci_bus_node(segment, bus);
 	}
 }
@@ -547,7 +568,7 @@ namespace Devs {
 
 	void append_pci_bridge_bus_range_resource(DeviceNode* node, const uni::PCI::Device& dev) {
 		if (!(dev.class_code.base == 0x06u && dev.class_code.sub == 0x04u)) return;
-		const uint32 bus_numbers = uni::PCI::read_bus_numbers(dev.bus, dev.device, dev.function);
+		const uint32 bus_numbers = uni::PCI::read_bus_numbers(dev);
 		const uint8 primary_bus = byte(bus_numbers);
 		const uint8 secondary_bus = byte(bus_numbers >> 8);
 		const uint8 subordinate_bus = byte(bus_numbers >> 16);
@@ -588,7 +609,7 @@ namespace Devs {
 			}
 			// The Bochs driver uses BAR0 only; its other BAR lengths are unverified.
 			if (uni::PCI::read_vendor_id(dev) == 0x1234u &&
-				uni::PCI::read_device_id(dev.bus, dev.device, dev.function) == 0x1111u)
+				uni::PCI::read_device_id(dev) == 0x1111u)
 				return 0;
 			// Preserve the provisional size for other active GPUs until their drivers provide actual sizes.
 			return 2 * 1024 * 1024;
@@ -695,10 +716,10 @@ namespace Devs {
 				(flags & DeviceResourceFlag_SizeEstimated) &&
 				((resource_index == 0 &&
 					uni::PCI::read_vendor_id(dev) == 0x1234u &&
-					uni::PCI::read_device_id(dev.bus, dev.device, dev.function) == 0x1111u) ||
+					uni::PCI::read_device_id(dev) == 0x1111u) ||
 					(resource_index == 1 &&
 					uni::PCI::read_vendor_id(dev) == 0x15ADu &&
-					uni::PCI::read_device_id(dev.bus, dev.device, dev.function) == 0x0405u));
+					uni::PCI::read_device_id(dev) == 0x0405u));
 			if (length && !defer_framebuffer_mapping &&
 				!map_pci_mmio_resource(base, length, flags)) {
 				plogerro("[PAGING] Failed PCI MMIO BAR %02x:%02x.%u index=%u base=%[64H] length=%[64H] flags=%[16H]",
@@ -715,18 +736,20 @@ namespace Devs {
 
 	const PciDeviceNameEntry* find_pci_device_name_entry(uint16 vendor_id, uint16 device_id);
 	void attach_pci_device_node(const uni::PCI::Device& dev) {
-		DeviceNode* bus_node = ensure_pci_bus_node(0, dev.bus);
+		DeviceNode* bus_node = ensure_pci_bus_node(dev.segment_group, dev.bus);
+		if (!bus_node) return;
 		auto* dev_node = device_tree.NewNode();
 		init_node(dev_node, DeviceNodeType::PciDevice, DeviceBusType::PCI,
-			heap_name("pci@%04x:%02x:%02x.%x", 0, dev.bus, dev.device, dev.function));
+			heap_name("pci@%04x:%02x:%02x.%x", dev.segment_group,
+				dev.bus, dev.device, dev.function));
 		dev_node->fields.vendor_id = uni::PCI::read_vendor_id(dev);
-		dev_node->fields.device_id = uni::PCI::read_device_id(dev.bus, dev.device, dev.function);
+		dev_node->fields.device_id = uni::PCI::read_device_id(dev);
 		dev_node->fields.revision = read_pci_revision_id(dev);
 		dev_node->fields.class_base = dev.class_code.base;
 		dev_node->fields.class_sub = dev.class_code.sub;
 		dev_node->fields.class_if = dev.class_code.interface;
 		dev_node->fields.dev_class = (uint16(dev.class_code.base) << 8) | dev.class_code.sub;
-		dev_node->fields.pci_segment = 0;
+		dev_node->fields.pci_segment = dev.segment_group;
 		dev_node->fields.pci_bus = dev.bus;
 		dev_node->fields.pci_device = dev.device;
 		dev_node->fields.pci_function = dev.function;

@@ -322,6 +322,7 @@ namespace {
 	uint32 EhciReadPciConfig32(void* context, uint8 offset) {
 		auto& controller = *static_cast<EhciDriverInstance*>(context);
 		return uni::PCI::read_config_register(
+			controller.node->fields.pci_segment,
 			controller.node->fields.pci_bus,
 			controller.node->fields.pci_device,
 			controller.node->fields.pci_function, offset);
@@ -330,6 +331,7 @@ namespace {
 	void EhciWritePciConfig32(void* context, uint8 offset, uint32 value) {
 		auto& controller = *static_cast<EhciDriverInstance*>(context);
 		uni::PCI::write_config_register(
+			controller.node->fields.pci_segment,
 			controller.node->fields.pci_bus,
 			controller.node->fields.pci_device,
 			controller.node->fields.pci_function, offset, value);
@@ -404,21 +406,36 @@ namespace {
 
 	bool EnableEhciPciCommand(const DeviceNode& node) {
 		const uint32 command_status = uni::PCI::read_config_register(
-			node.fields.pci_bus, node.fields.pci_device, node.fields.pci_function,
+			node.fields.pci_segment, node.fields.pci_bus,
+			node.fields.pci_device, node.fields.pci_function,
 			EhciPciCommandOffset);
+		if (command_status == 0xFFFFFFFFu) return false;
 		const uint16 command = uint16(command_status) |
 			EhciPciCommandMemorySpace | EhciPciCommandBusMaster |
 			EhciPciCommandInterruptDisable;
 		uni::PCI::write_config_register(
-			node.fields.pci_bus, node.fields.pci_device, node.fields.pci_function,
+			node.fields.pci_segment, node.fields.pci_bus,
+			node.fields.pci_device, node.fields.pci_function,
 			EhciPciCommandOffset, command);
-		const uint16 current = uint16(uni::PCI::read_config_register(
-			node.fields.pci_bus, node.fields.pci_device, node.fields.pci_function,
-			EhciPciCommandOffset));
-		return (current & (EhciPciCommandMemorySpace |
-			EhciPciCommandBusMaster | EhciPciCommandInterruptDisable)) ==
-			(EhciPciCommandMemorySpace | EhciPciCommandBusMaster |
-				EhciPciCommandInterruptDisable);
+		const uint32 current_status = uni::PCI::read_config_register(
+			node.fields.pci_segment, node.fields.pci_bus,
+			node.fields.pci_device, node.fields.pci_function,
+			EhciPciCommandOffset);
+		if (current_status == 0xFFFFFFFFu) return false;
+		const uint16 current = uint16(current_status);
+		const uint16 required = EhciPciCommandMemorySpace |
+			EhciPciCommandBusMaster;
+		if ((current & required) != required) {
+			plogwarn("[EHCI] %s PCI command update failed before=%[16H] after=%[16H]",
+				node.link.addr ? node.link.addr : "(unnamed)",
+				(stduint)uint16(command_status), (stduint)current);
+			return false;
+		}
+		if (!(current & EhciPciCommandInterruptDisable)) {
+			plogwarn("[EHCI] %s could not disable legacy INTx; USBINTR will remain masked",
+				node.link.addr ? node.link.addr : "(unnamed)");
+		}
+		return true;
 	}
 
 	void StopEhciController(EhciDriverInstance& controller) {
@@ -1230,7 +1247,8 @@ namespace {
 	}
 
 	bool RegisterEhciDeviceNodes(EhciDriverInstance& controller) {
-		auto usb_bus_name = String::newFormat("usb-bus@%04x:%02x:%02x.%x", 0,
+		auto usb_bus_name = String::newFormat("usb-bus@%04x:%02x:%02x.%x",
+			(stduint)controller.node->fields.pci_segment,
 			(stduint)controller.node->fields.pci_bus,
 			(stduint)controller.node->fields.pci_device,
 			(stduint)controller.node->fields.pci_function);

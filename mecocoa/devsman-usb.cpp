@@ -292,7 +292,8 @@ namespace Devs {
 		if (!root || !controller.driver_name || !controller.driver_data) return nullptr;
 		auto* host_node = find_pci_device_node_by_driver_data(root, controller.driver_data);
 		if (!host_node) return nullptr;
-		auto usb_bus_name = String::newFormat("usb-bus@%04x:%02x:%02x.%x", 0,
+		auto usb_bus_name = String::newFormat("usb-bus@%04x:%02x:%02x.%x",
+			(stduint)host_node->fields.pci_segment,
 			(stduint)host_node->fields.pci_bus,
 			(stduint)host_node->fields.pci_device,
 			(stduint)host_node->fields.pci_function);

@@ -24,6 +24,7 @@ namespace Devs {
 
 	uint32 read_piix4_config(const DeviceNode& node, uint8 offset) {
 		return uni::PCI::read_config_register(
+			node.fields.pci_segment,
 			node.fields.pci_bus,
 			node.fields.pci_device,
 			node.fields.pci_function,

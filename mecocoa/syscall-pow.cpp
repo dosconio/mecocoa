@@ -21,7 +21,12 @@ static constexpr stduint PwcallDeviceHandleBase = 1;
 static constexpr stduint PwcallDmaHandleBase = 0x10000;
 #if (_MCCA & 0xFF00) == 0x8600
 static constexpr uint8 PwcallPciIrqVectorBase = 0x78;
+#if _MCCA == 0x8664
+static constexpr uint8 PwcallPciIrqVectorExtensionBase = 0x82;
+static constexpr uint8 PwcallPciIrqVectorCount = 32;
+#else
 static constexpr uint8 PwcallPciIrqVectorCount = 8;
+#endif
 static constexpr stduint PwcallIrqBindingCapacity = 32;
 extern "C" void register_interrupt_vector_handler(stduint irq_id, void (*handler)(stduint));
 #endif
@@ -200,7 +205,20 @@ static uint8 PwcallLegacyVectorToLine(uint8 vector) {
 }
 
 static stduint PwcallPciInterruptEntry(uint8 vector) {
-	switch (vector - PwcallPciIrqVectorBase) {
+	uint8 index = 0;
+	#if _MCCA == 0x8664
+	if (vector >= PwcallPciIrqVectorBase && vector < PwcallPciIrqVectorBase + 8)
+		index = uint8(vector - PwcallPciIrqVectorBase);
+	else if (vector >= PwcallPciIrqVectorExtensionBase &&
+		vector < PwcallPciIrqVectorExtensionBase + PwcallPciIrqVectorCount - 8)
+		index = uint8(vector - PwcallPciIrqVectorExtensionBase + 8u);
+	else return 0;
+	#else
+	if (vector < PwcallPciIrqVectorBase ||
+		vector >= PwcallPciIrqVectorBase + PwcallPciIrqVectorCount) return 0;
+	index = uint8(vector - PwcallPciIrqVectorBase);
+	#endif
+	switch (index) {
 	case 0: return mglb(Handint_PWDEV0_Entry);
 	case 1: return mglb(Handint_PWDEV1_Entry);
 	case 2: return mglb(Handint_PWDEV2_Entry);
@@ -209,8 +227,41 @@ static stduint PwcallPciInterruptEntry(uint8 vector) {
 	case 5: return mglb(Handint_PWDEV5_Entry);
 	case 6: return mglb(Handint_PWDEV6_Entry);
 	case 7: return mglb(Handint_PWDEV7_Entry);
+	#if _MCCA == 0x8664
+	case 8: return mglb(Handint_PWDEV8_Entry);
+	case 9: return mglb(Handint_PWDEV9_Entry);
+	case 10: return mglb(Handint_PWDEV10_Entry);
+	case 11: return mglb(Handint_PWDEV11_Entry);
+	case 12: return mglb(Handint_PWDEV12_Entry);
+	case 13: return mglb(Handint_PWDEV13_Entry);
+	case 14: return mglb(Handint_PWDEV14_Entry);
+	case 15: return mglb(Handint_PWDEV15_Entry);
+	case 16: return mglb(Handint_PWDEV16_Entry);
+	case 17: return mglb(Handint_PWDEV17_Entry);
+	case 18: return mglb(Handint_PWDEV18_Entry);
+	case 19: return mglb(Handint_PWDEV19_Entry);
+	case 20: return mglb(Handint_PWDEV20_Entry);
+	case 21: return mglb(Handint_PWDEV21_Entry);
+	case 22: return mglb(Handint_PWDEV22_Entry);
+	case 23: return mglb(Handint_PWDEV23_Entry);
+	case 24: return mglb(Handint_PWDEV24_Entry);
+	case 25: return mglb(Handint_PWDEV25_Entry);
+	case 26: return mglb(Handint_PWDEV26_Entry);
+	case 27: return mglb(Handint_PWDEV27_Entry);
+	case 28: return mglb(Handint_PWDEV28_Entry);
+	case 29: return mglb(Handint_PWDEV29_Entry);
+	case 30: return mglb(Handint_PWDEV30_Entry);
+	case 31: return mglb(Handint_PWDEV31_Entry);
+	#endif
 	default: return 0;
 	}
+}
+
+static uint8 PwcallPciInterruptVector(stduint index) {
+	#if _MCCA == 0x8664
+	if (index >= 8) return uint8(PwcallPciIrqVectorExtensionBase + index - 8);
+	#endif
+	return uint8(PwcallPciIrqVectorBase + index);
 }
 
 static void PwcallSetInterruptLineMask(uint32 line, bool masked) {
@@ -300,6 +351,7 @@ static void PwcallDisablePciMsi(DeviceNode* node, uint8 capability_address) {
 	if (!node || !capability_address ||
 		DeviceNodeType(node->fields.node_type) != DeviceNodeType::PciDevice) return;
 	uni::PCI::Device dev{};
+	dev.segment_group = node->fields.pci_segment;
 	dev.bus = node->fields.pci_bus;
 	dev.device = node->fields.pci_device;
 	dev.function = node->fields.pci_function;
@@ -529,17 +581,21 @@ static bool PwcallBindDeviceInterrupt(ProcessBlock* process, stduint device_hand
 	uni::PCI::Device pci_device{};
 	uint8 msi_capability = 0;
 	uint8 target_lapic_id = 0;
+	bool target_lapic_routable = false;
 	if (pci) {
+		pci_device.segment_group = node->fields.pci_segment;
 		pci_device.bus = node->fields.pci_bus;
 		pci_device.device = node->fields.pci_device;
 		pci_device.function = node->fields.pci_function;
 		const stduint cpu_id = Taskman::getID();
 		auto* percore = cpu_id < PCU_CORES_MAX ? Taskman::PCU_CORES_PERCORE[cpu_id] : nullptr;
-		if (percore && percore->lapic_id < LAPIC_ID_MAP_SIZE) {
+		if (percore && percore->lapic_id < 0xFFu) {
 			target_lapic_id = uint8(percore->lapic_id);
+			target_lapic_routable = true;
 			msi_capability = PwcallFindPciMsiCapability(pci_device);
 		}
 	}
+	if (pci && !target_lapic_routable) return false;
 	const bool use_msi = msi_capability != 0;
 	if (msi_only && !use_msi) return false;
 	if (!irq && !use_msi) return false;
@@ -593,7 +649,7 @@ static bool PwcallBindDeviceInterrupt(ProcessBlock* process, stduint device_hand
 		}
 		else if (pci) {
 			for (uint8 offset = 0; offset < PwcallPciIrqVectorCount; ++offset) {
-				const uint8 candidate = uint8(PwcallPciIrqVectorBase + offset);
+				const uint8 candidate = PwcallPciInterruptVector(offset);
 				if (!PwcallVectorInUse(candidate)) {
 					vector = candidate;
 					break;
@@ -821,6 +877,7 @@ static stdsint PwcallAckDeviceInterrupt(ProcessBlock* process, stduint device_ha
 static void PwcallEnablePciDeviceAccess(DeviceNode* node) {
 	if (!node || DeviceNodeType(node->fields.node_type) != DeviceNodeType::PciDevice) return;
 	uni::PCI::Device dev{};
+	dev.segment_group = node->fields.pci_segment;
 	dev.bus = node->fields.pci_bus;
 	dev.device = node->fields.pci_device;
 	dev.function = node->fields.pci_function;
@@ -843,6 +900,7 @@ static void PwcallDisablePciDeviceDma(DeviceNode* node, stduint owner_pid) {
 	if (!node || (node->fields.binding.owner_pid && node->fields.binding.owner_pid != uint32(owner_pid)) ||
 		DeviceNodeType(node->fields.node_type) != DeviceNodeType::PciDevice) return;
 	uni::PCI::Device dev{};
+	dev.segment_group = node->fields.pci_segment;
 	dev.bus = node->fields.pci_bus;
 	dev.device = node->fields.pci_device;
 	dev.function = node->fields.pci_function;

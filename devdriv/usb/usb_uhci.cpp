@@ -194,15 +194,18 @@ namespace {
 
 	bool EnableUhciPciCommand(const DeviceNode& node) {
 		const uint32 command_status = uni::PCI::read_config_register(
-			node.fields.pci_bus, node.fields.pci_device, node.fields.pci_function,
+			node.fields.pci_segment, node.fields.pci_bus,
+			node.fields.pci_device, node.fields.pci_function,
 			UhciPciCommandOffset);
 		const uint16 command = uint16(command_status) |
 			UhciPciCommandIoSpace | UhciPciCommandBusMaster;
 		uni::PCI::write_config_register(
-			node.fields.pci_bus, node.fields.pci_device, node.fields.pci_function,
+			node.fields.pci_segment, node.fields.pci_bus,
+			node.fields.pci_device, node.fields.pci_function,
 			UhciPciCommandOffset, command);
 		const uint16 current = uint16(uni::PCI::read_config_register(
-			node.fields.pci_bus, node.fields.pci_device, node.fields.pci_function,
+			node.fields.pci_segment, node.fields.pci_bus,
+			node.fields.pci_device, node.fields.pci_function,
 			UhciPciCommandOffset));
 		return (current & (UhciPciCommandIoSpace | UhciPciCommandBusMaster)) ==
 			(UhciPciCommandIoSpace | UhciPciCommandBusMaster);
@@ -842,7 +845,8 @@ namespace {
 	}
 
 	bool RegisterUhciDeviceNodes(UhciDriverInstance& controller) {
-		auto usb_bus_name = String::newFormat("usb-bus@%04x:%02x:%02x.%x", 0,
+		auto usb_bus_name = String::newFormat("usb-bus@%04x:%02x:%02x.%x",
+			(stduint)controller.node->fields.pci_segment,
 			(stduint)controller.node->fields.pci_bus,
 			(stduint)controller.node->fields.pci_device,
 			(stduint)controller.node->fields.pci_function);

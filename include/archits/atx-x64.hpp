@@ -35,6 +35,30 @@ _ESYM_C{
 	void Handint_PWDEV5_Entry();
 	void Handint_PWDEV6_Entry();
 	void Handint_PWDEV7_Entry();
+	void Handint_PWDEV8_Entry();
+	void Handint_PWDEV9_Entry();
+	void Handint_PWDEV10_Entry();
+	void Handint_PWDEV11_Entry();
+	void Handint_PWDEV12_Entry();
+	void Handint_PWDEV13_Entry();
+	void Handint_PWDEV14_Entry();
+	void Handint_PWDEV15_Entry();
+	void Handint_PWDEV16_Entry();
+	void Handint_PWDEV17_Entry();
+	void Handint_PWDEV18_Entry();
+	void Handint_PWDEV19_Entry();
+	void Handint_PWDEV20_Entry();
+	void Handint_PWDEV21_Entry();
+	void Handint_PWDEV22_Entry();
+	void Handint_PWDEV23_Entry();
+	void Handint_PWDEV24_Entry();
+	void Handint_PWDEV25_Entry();
+	void Handint_PWDEV26_Entry();
+	void Handint_PWDEV27_Entry();
+	void Handint_PWDEV28_Entry();
+	void Handint_PWDEV29_Entry();
+	void Handint_PWDEV30_Entry();
+	void Handint_PWDEV31_Entry();
 	// void Handint_AHCI_Entry(), Handint_AHCI();
 }
 

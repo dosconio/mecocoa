@@ -129,7 +129,7 @@ namespace {
 			if (!node || !regs) return false;
 			const stduint cpu_id = Taskman::getID();
 			auto* percore = (cpu_id < PCU_CORES_MAX) ? Taskman::PCU_CORES_PERCORE[cpu_id] : nullptr;
-			if (!percore || percore->lapic_id >= LAPIC_ID_MAP_SIZE) {
+			if (!percore || percore->lapic_id >= 0xFFu) {
 				plogwarn("[NVMe] MSI setup skipped: no valid LAPIC on cpu%u", (unsigned)cpu_id);
 				return false;
 			}
@@ -893,10 +893,11 @@ namespace {
 
 	static uni::PCI::Device make_pci_device(const DeviceNode& node) {
 		uni::PCI::Device dev{};
+		dev.segment_group = node.fields.pci_segment;
 		dev.bus = node.fields.pci_bus;
 		dev.device = node.fields.pci_device;
 		dev.function = node.fields.pci_function;
-		dev.header_type = pci.read_header_type(dev.bus, dev.device, dev.function);
+		dev.header_type = pci.read_header_type(dev);
 		dev.class_code.base = node.fields.class_base;
 		dev.class_code.sub = node.fields.class_sub;
 		dev.class_code.interface = node.fields.class_if;

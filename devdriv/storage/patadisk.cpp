@@ -49,6 +49,7 @@ static bool pata_dma_disabled = false;
 static bool build_pata_pci_device(uni::PCI::Device& pci_dev, DeviceNode*& pata_node) {
 	pata_node = Devsman::FindPCIDeviceByClass(0x01u, 0x01u, 0xFFu);
 	if (!pata_node) return false;
+	pci_dev.segment_group = pata_node->fields.pci_segment;
 	pci_dev.bus = pata_node->fields.pci_bus;
 	pci_dev.device = pata_node->fields.pci_device;
 	pci_dev.function = pata_node->fields.pci_function;

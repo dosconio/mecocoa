@@ -126,12 +126,14 @@ namespace {
 			if (global_status) abar->is = global_status;
 
 			const uint32 command_status = uni::PCI::read_config_register(
-				node->fields.pci_bus, node->fields.pci_device,
+				node->fields.pci_segment, node->fields.pci_bus,
+				node->fields.pci_device,
 				node->fields.pci_function, 0x04);
 			const uint16 command = uint16(command_status) |
 				AhciPciCommandInterruptDisable;
-			uni::PCI::write_config_register(node->fields.pci_bus,
-				node->fields.pci_device, node->fields.pci_function, 0x04, command);
+			uni::PCI::write_config_register(node->fields.pci_segment,
+				node->fields.pci_bus, node->fields.pci_device,
+				node->fields.pci_function, 0x04, command);
 		}
 		#endif
 
@@ -414,10 +416,11 @@ namespace {
 
 	static uni::PCI::Device make_pci_device(const DeviceNode& node) {
 		uni::PCI::Device dev{};
+		dev.segment_group = node.fields.pci_segment;
 		dev.bus = node.fields.pci_bus;
 		dev.device = node.fields.pci_device;
 		dev.function = node.fields.pci_function;
-		dev.header_type = pci.read_header_type(dev.bus, dev.device, dev.function);
+		dev.header_type = pci.read_header_type(dev);
 		dev.class_code.base = node.fields.class_base;
 		dev.class_code.sub = node.fields.class_sub;
 		dev.class_code.interface = node.fields.class_if;

@@ -318,9 +318,9 @@ static void dump_device_tree_node(OstreamTrait& com1, const DeviceNode* node, st
 		dump_device_tree_indent(com1, depth);
 		const rostr name = crt->link.addr ? crt->link.addr : "(unnamed)";
 		const rostr driver_name0 = crt->fields.binding.driver_name ? crt->fields.binding.driver_name : nullptr;
-		String driver_name_str = "\033[7m";
-		driver_name_str += driver_name0;
-		driver_name_str += "\033[27m";
+		String driver_name_str = driver_name0 ? "\033[7m" : "\033[33m";
+		if (driver_name0) driver_name_str += driver_name0;
+		driver_name_str += driver_name0 ? "\033[27m" : "\033[39m";
 		const rostr driver_name = driver_name0 ? driver_name_str.reference() : nullptr;
 		const bool has_binding = driver_name && crt->fields.binding.state != static_cast<uint32>(DriverBindingState::None);
 		switch (DeviceNodeType(crt->fields.node_type)) {
@@ -350,7 +350,7 @@ static void dump_device_tree_node(OstreamTrait& com1, const DeviceNode* node, st
 				(unsigned)crt->fields.class_base, (unsigned)crt->fields.class_sub, (unsigned)crt->fields.class_if,
 				(unsigned)crt->fields.vendor_id, (unsigned)crt->fields.device_id,
 				driver_name ? " drv=" : "",
-				driver_name ? driver_name : "",
+				driver_name ? driver_name : " (unknown) ",
 				has_binding ? " state=" : "",
 				has_binding ? text_driver_binding_state(crt->fields.binding.state) : "");
 			break;

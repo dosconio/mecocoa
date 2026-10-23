@@ -1622,7 +1622,7 @@ int DevFs::allocate_tty_id() {
 }
 
 void DevFs::free_tty_id(int id) {
-	if (id < 0 || id >= bitsof(_tty_id_bits)) {
+	if (id < 0 || id >= (int)bitsof(_tty_id_bits)) {
 		plogerro("[TTYID] free invalid id=%d (0x%[x]) bits=%[x] offs=%[x]",
 			id, (stduint)id, _tty_id_bits, tty_id_allocator.offs);
 	}

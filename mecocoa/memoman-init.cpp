@@ -136,6 +136,23 @@ static stduint find_rsdp_bios() {
 
 static uint32 current_bootstrap_lapic_id() {
 	uint32 a = 0, b = 0, c = 0, d = 0;
+	#if _MCCA == 0x8664
+	_IO_CPUID(0, 0, &a, &b, &c, &d);
+	const uint32 maximum_leaf = a;
+	if (maximum_leaf >= 0x1Fu) {
+		_IO_CPUID(0x1F, 0, &a, &b, &c, &d);
+		if (b) return d;
+	}
+	if (maximum_leaf >= 0x0Bu) {
+		_IO_CPUID(0x0B, 0, &a, &b, &c, &d);
+		if (b) return d;
+	}
+	_IO_CPUID(0x80000000u, 0, &a, &b, &c, &d);
+	if (a >= 0x8000001Eu) {
+		_IO_CPUID(0x8000001Eu, 0, &a, &b, &c, &d);
+		return a;
+	}
+	#endif
 	_IO_CPUID(1, 0, &a, &b, &c, &d);
 	return (b >> 24) & 0xFF;
 }
@@ -275,53 +292,32 @@ static void parse_mcfg(stduint mcfg_addr) {
 	}
 	if (!mcfg->header.isValid("MCFG")) return;
 	const stduint count = mcfg->Count();
-	bool have_fallback = false;
-	uint64 fallback_base = 0;
-	uint16 fallback_segment = 0;
-	uint8 fallback_start_bus = 0;
-	uint8 fallback_end_bus = 0;
 	for0(i, count) {
 		const auto& allocation = (*mcfg)[i];
 		plogtrac("[ACPI] MCFG[%u] ECAM=%[x] segment=%u bus=%u..%u",
 			i, allocation.base_address, allocation.segment_group_number,
 			allocation.start_bus_number, allocation.end_bus_number);
-		if (allocation.end_bus_number < allocation.start_bus_number) continue;
-		if (!have_fallback) {
-			fallback_base = allocation.base_address;
-			fallback_segment = allocation.segment_group_number;
-			fallback_start_bus = allocation.start_bus_number;
-			fallback_end_bus = allocation.end_bus_number;
-			have_fallback = true;
+		if (!allocation.base_address ||
+			allocation.end_bus_number < allocation.start_bus_number) continue;
+		if (!uni::PCI::AddConfigSpaceAccess(uni::PCI::ConfigSpaceAccess{
+			true,
+			allocation.base_address,
+			allocation.segment_group_number,
+			allocation.start_bus_number,
+			allocation.end_bus_number
+		})) {
+			plogwarn("[ACPI] Ignoring duplicate or excess MCFG segment=%u bus=%u..%u",
+				allocation.segment_group_number, allocation.start_bus_number,
+				allocation.end_bus_number);
+			continue;
 		}
-		if (allocation.segment_group_number == 0) {
+		if (!acpi_pcie_ecam_available || allocation.segment_group_number == 0) {
 			acpi_pcie_ecam_base = allocation.base_address;
 			acpi_pcie_segment_group = allocation.segment_group_number;
 			acpi_pcie_start_bus = allocation.start_bus_number;
 			acpi_pcie_end_bus = allocation.end_bus_number;
 			acpi_pcie_ecam_available = true;
-			uni::PCI::SetConfigSpaceAccess(uni::PCI::ConfigSpaceAccess{
-				true,
-				acpi_pcie_ecam_base,
-				acpi_pcie_segment_group,
-				acpi_pcie_start_bus,
-				acpi_pcie_end_bus
-			});
-			return;
 		}
-	}
-	if (have_fallback) {
-		acpi_pcie_ecam_base = fallback_base;
-		acpi_pcie_segment_group = fallback_segment;
-		acpi_pcie_start_bus = fallback_start_bus;
-		acpi_pcie_end_bus = fallback_end_bus;
-		acpi_pcie_ecam_available = true;
-		uni::PCI::SetConfigSpaceAccess(uni::PCI::ConfigSpaceAccess{
-			true,
-			acpi_pcie_ecam_base,
-			acpi_pcie_segment_group,
-			acpi_pcie_start_bus,
-			acpi_pcie_end_bus
-		});
 	}
 }
 
