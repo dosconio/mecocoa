@@ -70,6 +70,11 @@ namespace {
 	constexpr stduint E1000_FRAME_BUF_SIZE = 2048;
 	constexpr stduint E1000_ETHERNET_MIN_FRAME = 60;
 	constexpr stduint E1000_ETHERNET_MAX_FRAME = 1518;
+	#if _ACCM == 0x8664
+	constexpr stduint E1000_POLL_ACTIVE_MS = 10;
+	constexpr stduint E1000_POLL_IDLE_MS = 1000;
+	constexpr uint32 E1000_POLL_IDLE_ROUNDS = 100;
+	#endif
 	constexpr uint32 E1000_IRQ_MASK =
 		E1000_ICR_TXDW | E1000_ICR_TXQE | E1000_ICR_LSC |
 		E1000_ICR_RXSEQ | E1000_ICR_RXDMT0 | E1000_ICR_RXO | E1000_ICR_RXT0;
@@ -131,6 +136,7 @@ namespace {
 		bool link_up = false;
 		#if _ACCM == 0x8664
 		bool polling = false;
+		uint32 polling_idle_rounds = 0;
 		#endif
 
 		uint32 read_reg(E1000Reg reg) const {
@@ -521,13 +527,21 @@ int main(int argc, char** argv) {
 	stdsint publish_result = Powercall::DevPublish(g_e1000.dev_handle, PwcallDevicePublishCommand::Started);
 	if (publish_result != 0) {
 		const stduint cls = (stduint(E1000VendorId) << 16) | g_e1000.device_id;
+		const stdsint reopened = Powercall::DevOpen(0, cls, _IMM(PwcallDeviceOpenFlag::Interrupt));
+		if (reopened == stdsint(g_e1000.dev_handle)) {
+			publish_result = Powercall::DevPublish(g_e1000.dev_handle,
+				PwcallDevicePublishCommand::Started);
+		}
+	}
+	if (publish_result != 0) {
+		const stduint cls = (stduint(E1000VendorId) << 16) | g_e1000.device_id;
 		const stdsint reopened = Powercall::DevOpen(0, cls, _IMM(PwcallDeviceOpenFlag::None));
 		if (reopened == stdsint(g_e1000.dev_handle)) {
 			publish_result = Powercall::DevPublish(g_e1000.dev_handle,
 				PwcallDevicePublishCommand::Started);
 			if (publish_result == 0) {
 				g_e1000.polling = true;
-				plogwarn("[E1000] No usable interrupt; polling every 10 ms");
+				plogwarn("[E1000] No usable interrupt; using adaptive polling");
 			}
 		}
 	}
@@ -540,23 +554,35 @@ int main(int argc, char** argv) {
 	(void)PushRxFrames();
 
 	for (;;) {
+		bool active = false;
 		#if _ACCM == 0x8664
 		if (g_e1000.polling) {
 			g_e1000.update_link_state();
-			(void)g_e1000.flush_tx_queue();
+			active = g_e1000.flush_tx_queue() != 0;
 		}
 		#endif
-		bool active = ProcessControlMessages();
+		if (ProcessControlMessages()) active = true;
 		const stdsint pushed = PushRxFrames();
 		if (pushed < 0) {
 			syscall(syscall_t::REST, 1, 1);
 			continue;
 		}
 		if (pushed > 0) active = true;
-		if (active) continue;
+		if (active) {
+			#if _ACCM == 0x8664
+			g_e1000.polling_idle_rounds = 0;
+			#endif
+			continue;
+		}
 		#if _ACCM == 0x8664
 		if (g_e1000.polling) {
-			(void)syscall(syscall_t::REST, 1, 10);
+			if (g_e1000.polling_idle_rounds < E1000_POLL_IDLE_ROUNDS) {
+				g_e1000.polling_idle_rounds++;
+			}
+			const stduint delay =
+				g_e1000.polling_idle_rounds >= E1000_POLL_IDLE_ROUNDS ?
+				E1000_POLL_IDLE_MS : E1000_POLL_ACTIVE_MS;
+			(void)syscall(syscall_t::REST, 1, delay);
 			continue;
 		}
 		#endif

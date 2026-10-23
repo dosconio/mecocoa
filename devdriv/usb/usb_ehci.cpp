@@ -23,6 +23,7 @@ namespace {
 	constexpr uint8 EhciPciCommandOffset = 0x04u;
 	constexpr uint16 EhciPciCommandMemorySpace = 1u << 1;
 	constexpr uint16 EhciPciCommandBusMaster = 1u << 2;
+	constexpr uint16 EhciPciCommandInterruptDisable = 1u << 10;
 	constexpr uint8 EhciControllerCapacity = 8;
 	constexpr stduint EhciConfigurationCapacity = 512;
 	constexpr stduint EhciStringCapacity = 64;
@@ -406,7 +407,8 @@ namespace {
 			node.fields.pci_bus, node.fields.pci_device, node.fields.pci_function,
 			EhciPciCommandOffset);
 		const uint16 command = uint16(command_status) |
-			EhciPciCommandMemorySpace | EhciPciCommandBusMaster;
+			EhciPciCommandMemorySpace | EhciPciCommandBusMaster |
+			EhciPciCommandInterruptDisable;
 		uni::PCI::write_config_register(
 			node.fields.pci_bus, node.fields.pci_device, node.fields.pci_function,
 			EhciPciCommandOffset, command);
@@ -414,8 +416,9 @@ namespace {
 			node.fields.pci_bus, node.fields.pci_device, node.fields.pci_function,
 			EhciPciCommandOffset));
 		return (current & (EhciPciCommandMemorySpace |
-			EhciPciCommandBusMaster)) ==
-			(EhciPciCommandMemorySpace | EhciPciCommandBusMaster);
+			EhciPciCommandBusMaster | EhciPciCommandInterruptDisable)) ==
+			(EhciPciCommandMemorySpace | EhciPciCommandBusMaster |
+				EhciPciCommandInterruptDisable);
 	}
 
 	void StopEhciController(EhciDriverInstance& controller) {

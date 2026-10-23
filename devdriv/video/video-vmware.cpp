@@ -138,7 +138,7 @@ bool VmwareVideo_Start(DeviceNode* node) {
 	dev->fb_info.bpp = bpp;
 	dev->fb_info.pitch = pitch;
 	dev->fb_info.format = uni::PixelFormat::ARGB8888;
-	dev->fb_info.physical_range = uni::Slice{ bar_fb->start + fb_offset, fb_size };
+	dev->fb_info.physical_range = uni::Slice{ (stduint)bar_fb->start + fb_offset, fb_size };
 	if (!EnsureFramebufferMapped(dev->fb_info.physical_range)) {
 		plogwarn("[VMwareSVGA] Failed to map framebuffer");
 		delete dev;

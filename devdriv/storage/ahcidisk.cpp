@@ -11,6 +11,9 @@
 namespace {
 	uni::PCI pci;
 	static constexpr uint8 IRQ_AHCI = IRQ_RTC + 2;
+	#if _MCCA == 0x8664
+	static constexpr uint16 AhciPciCommandInterruptDisable = 1u << 10;
+	#endif
 	bool ahci_irq_wait(uni::AHCI_Port_Base* port_base, uint32 slot_mask);
 
 	struct AHCI_Controller {
@@ -109,13 +112,44 @@ namespace {
 			}
 		}
 
+		#if _MCCA == 0x8664
+		void PrepareInterruptMode() {
+			if (!node || !abar) return;
+			abar->ghc &= ~AHCI_GHC_IE;
+			const uint32 implemented = abar->pi;
+			for0(port, 32) {
+				if (((implemented >> port) & 1u) == 0) continue;
+				abar->ports[port].ie = 0;
+				abar->ports[port].is = 0xFFFFFFFFu;
+			}
+			const uint32 global_status = abar->is;
+			if (global_status) abar->is = global_status;
+
+			const uint32 command_status = uni::PCI::read_config_register(
+				node->fields.pci_bus, node->fields.pci_device,
+				node->fields.pci_function, 0x04);
+			const uint16 command = uint16(command_status) |
+				AhciPciCommandInterruptDisable;
+			uni::PCI::write_config_register(node->fields.pci_bus,
+				node->fields.pci_device, node->fields.pci_function, 0x04, command);
+		}
+		#endif
+
+		bool UsesInterruptCompletion() const {
+			#if _MCCA == 0x8664
+			return false;
+			#else
+			return irq_line == 10;
+			#endif
+		}
+
 		void SetupDisk() {
 			disk.Bind(abar, active_port);
 			if (cmd_list && rx_fis && cmd_table) {
 				disk.SetWorkspace(cmd_list, rx_fis, cmd_table);
 			}
 			disk.fn_irq_wait = nullptr;
-			if (irq_line == 10) {
+			if (UsesInterruptCompletion()) {
 				disk.fn_irq_wait = ahci_irq_wait;
 				abar->ghc |= AHCI_GHC_IE | AHCI_GHC_AE;
 				abar->ports[active_port].ie = 0xFFFFFFFFu;
@@ -128,7 +162,7 @@ namespace {
 				cdrom.SetWorkspace(cd_cmd_list, cd_rx_fis, cd_cmd_table);
 			}
 			cdrom.fn_irq_wait = nullptr;
-			if (irq_line == 10) {
+			if (UsesInterruptCompletion()) {
 				cdrom.fn_irq_wait = ahci_irq_wait;
 				abar->ghc |= AHCI_GHC_IE | AHCI_GHC_AE;
 				abar->ports[active_atapi_port].ie = 0xFFFFFFFFu;
@@ -403,10 +437,13 @@ static bool start_ahci_driver(DeviceNode* ahci_node) {
 	g_ahci_controller.DumpSummary();
 	g_ahci_controller.DumpPorts();
 	g_ahci_controller.SelectPorts();
+	#if _MCCA == 0x8664
+	g_ahci_controller.PrepareInterruptMode();
+	#endif
 	if (g_ahci_controller.active_port >= 0) {
 		g_ahci_controller.SetupDisk();
 		g_ahci_controller.RegisterStorageNode();
-		if (g_ahci_controller.irq_line != 10) {
+		if (!g_ahci_controller.UsesInterruptCompletion()) {
 			plogwarn("[AHCI] IRQ line %u not wired for interrupt completion, keep polling",
 				(unsigned)g_ahci_controller.irq_line);
 		}

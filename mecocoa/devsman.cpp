@@ -9,6 +9,7 @@
 #include <c/storage/NVMe.h>
 #include <cpp/System/Audiosys/AudioManager.hpp>
 #if _MCCA == 0x8664
+#include <cpp/Device/ACPI.hpp>
 #include <cpp/Device/USB/xHCI/xHCI.hpp>
 #endif
 #if (_MCCA & 0xFF00) == 0x8600
@@ -857,34 +858,1315 @@ namespace Devs {
 		}
 	}
 
+	#if _MCCA == 0x8664
+	struct IoApicTopologyEntry {
+		uint32 address;
+		uint32 gsi_base;
+		uint32 gsi_count;
+		uint8 id;
+	};
+
+	struct InterruptSourceOverrideEntry {
+		uint32 gsi;
+		uint16 flags;
+		uint8 source;
+	};
+
+	struct AcpiPciRoutingEntry {
+		uint32 address;
+		uint32 gsi;
+		uint32 source_name;
+		uint32 source_index;
+		uint16 segment;
+		uint16 irq_flags;
+		uint8 root_bus;
+		uint8 pin;
+		bool resolved;
+	};
+
+	struct AcpiIrqResource {
+		uint32 gsi;
+		uint16 flags;
+	};
+
+	struct AmlTableView {
+		const uint8* aml;
+		stduint length;
+	};
+
+	static_assert(sizeof(uni::ACPI::MADTIOAPIC) == 12, "MADT I/O APIC entry size changed");
+	static_assert(sizeof(uni::ACPI::MADTInterruptSourceOverride) == 10,
+		"MADT interrupt source override entry size changed");
+
+	constexpr stduint IoApicTopologyCapacity = 8;
+	constexpr stduint InterruptSourceOverrideCapacity = 16;
+	constexpr stduint AcpiPciRoutingCapacity = 512;
+	constexpr stduint AmlTableCapacity = 64;
+	IoApicTopologyEntry ioapic_topology[IoApicTopologyCapacity] = {};
+	InterruptSourceOverrideEntry interrupt_source_overrides[InterruptSourceOverrideCapacity] = {};
+	AcpiPciRoutingEntry acpi_pci_routes[AcpiPciRoutingCapacity] = {};
+	AmlTableView aml_tables[AmlTableCapacity] = {};
+	stduint ioapic_topology_count = 0;
+	stduint interrupt_source_override_count = 0;
+	stduint acpi_pci_route_count = 0;
+	stduint aml_table_count = 0;
+	bool acpi_pic_apic_mode = false;
+	uint32 acpi_pic_target_name = 0;
+
+	uint32 read_x64_ioapic_register(uint32 address, uint8 index) {
+		auto* selector = reinterpret_cast<volatile uint32*>(stduint(address));
+		auto* data = reinterpret_cast<volatile uint32*>(stduint(address) + 0x10u);
+		*selector = index;
+		mfence();
+		const uint32 value = *data;
+		mfence();
+		return value;
+	}
+
+	void write_x64_ioapic_register(uint32 address, uint8 index, uint32 value) {
+		auto* selector = reinterpret_cast<volatile uint32*>(stduint(address));
+		auto* data = reinterpret_cast<volatile uint32*>(stduint(address) + 0x10u);
+		*selector = index;
+		mfence();
+		*data = value;
+		mfence();
+	}
+
+	bool append_x64_ioapic(uint32 address, uint32 gsi_base, uint8 id) {
+		if (!address || (address & 0xFFFu) ||
+			ioapic_topology_count >= IoApicTopologyCapacity) return false;
+		const uint32 version = read_x64_ioapic_register(address, 1);
+		const uint32 gsi_count = ((version >> 16) & 0xFFu) + 1u;
+		if (!gsi_count || gsi_count > 120u ||
+			gsi_base > ~uint32(0) - (gsi_count - 1u)) return false;
+		const uint32 gsi_end = gsi_base + gsi_count;
+		for0(index, ioapic_topology_count) {
+			const auto& existing = ioapic_topology[index];
+			const uint32 existing_end = existing.gsi_base + existing.gsi_count;
+			if (existing.address == address ||
+				(gsi_base < existing_end && existing.gsi_base < gsi_end)) return false;
+		}
+		ioapic_topology[ioapic_topology_count++] = {
+			address, gsi_base, gsi_count, id };
+		ploginfo("[ACPI] I/O APIC id=%u MMIO=%[32H] GSI=%u..%u",
+			id, address, gsi_base, gsi_end - 1u);
+		return true;
+	}
+
+	IoApicTopologyEntry* find_x64_ioapic(uint32 gsi) {
+		for0(index, ioapic_topology_count) {
+			auto& ioapic = ioapic_topology[index];
+			if (gsi >= ioapic.gsi_base &&
+				gsi - ioapic.gsi_base < ioapic.gsi_count) return &ioapic;
+		}
+		return nullptr;
+	}
+
+	bool x64_ioapic_has_gsi(uint32 gsi) {
+		return find_x64_ioapic(gsi) != nullptr;
+	}
+
+	bool x64_ioapic_read_route(uint32 gsi, uint64& route) {
+		auto* ioapic = find_x64_ioapic(gsi);
+		if (!ioapic) return false;
+		const uint32 pin = gsi - ioapic->gsi_base;
+		const uint8 index = uint8(0x10u + pin * 2u);
+		route = uint64(read_x64_ioapic_register(ioapic->address, uint8(index + 1u))) << 32;
+		route |= read_x64_ioapic_register(ioapic->address, index);
+		return true;
+	}
+
+	bool x64_ioapic_write_route(uint32 gsi, uint64 route) {
+		auto* ioapic = find_x64_ioapic(gsi);
+		if (!ioapic) return false;
+		const uint32 pin = gsi - ioapic->gsi_base;
+		const uint8 index = uint8(0x10u + pin * 2u);
+		write_x64_ioapic_register(ioapic->address, index,
+			uint32(route) | uint32(1u << 16));
+		write_x64_ioapic_register(ioapic->address, uint8(index + 1u), uint32(route >> 32));
+		write_x64_ioapic_register(ioapic->address, index, uint32(route));
+		return true;
+	}
+
+	const uni::ACPI::FADT* find_x64_fadt() {
+		constexpr uint32 MinimumFadtLength =
+			offsetof(uni::ACPI::FADT, dsdt) + sizeof(uint32);
+		if (!acpi_rsdp_addr) return nullptr;
+		const auto* rsdp = reinterpret_cast<const uni::ACPI::RSDP*>(acpi_rsdp_addr);
+		if (!rsdp->isValid()) return nullptr;
+		if (rsdp->revision >= 2 && rsdp->xsdt_address) {
+			const auto* xsdt = reinterpret_cast<const uni::ACPI::XSDT*>(
+				stduint(rsdp->xsdt_address));
+			if (xsdt->header.length >= sizeof(uni::ACPI::DescriptionHeader) &&
+				xsdt->header.isValid("XSDT")) {
+				for (size_t index = 0; index < xsdt->Count(); ++index) {
+					const auto& table = (*xsdt)[index];
+					if (table.length >= MinimumFadtLength &&
+						table.isValid("FACP")) {
+						return reinterpret_cast<const uni::ACPI::FADT*>(&table);
+					}
+				}
+			}
+		}
+		if (!rsdp->rsdt_address) return nullptr;
+		const auto* rsdt = reinterpret_cast<const uni::ACPI::RSDT*>(
+			stduint(rsdp->rsdt_address));
+		if (rsdt->header.length < sizeof(uni::ACPI::DescriptionHeader) ||
+			!rsdt->header.isValid("RSDT")) return nullptr;
+		for (size_t index = 0; index < rsdt->Count(); ++index) {
+			const auto& table = (*rsdt)[index];
+			if (table.length >= MinimumFadtLength &&
+				table.isValid("FACP")) {
+				return reinterpret_cast<const uni::ACPI::FADT*>(&table);
+			}
+		}
+		return nullptr;
+	}
+
+	bool append_x64_aml_table(const uni::ACPI::DescriptionHeader* table,
+		const char* signature) {
+		constexpr uint32 MaximumAmlTableLength = 2u * 1024u * 1024u;
+		if (!table || table->length < sizeof(*table) ||
+			table->length > MaximumAmlTableLength || !table->isValid(signature)) return false;
+		const auto* aml = reinterpret_cast<const uint8*>(table + 1);
+		for0(index, aml_table_count) {
+			if (aml_tables[index].aml == aml) return true;
+		}
+		if (aml_table_count >= AmlTableCapacity) return false;
+		aml_tables[aml_table_count++] = { aml, table->length - sizeof(*table) };
+		return true;
+	}
+
+	void collect_x64_aml_tables() {
+		aml_table_count = 0;
+		const auto* fadt = find_x64_fadt();
+		if (fadt) {
+			uint64 dsdt_address = fadt->dsdt;
+			if (fadt->header.length >= offsetof(uni::ACPI::FADT, x_dsdt) +
+				sizeof(fadt->x_dsdt) && fadt->x_dsdt) dsdt_address = fadt->x_dsdt;
+			if (dsdt_address && dsdt_address <= uint64(~stduint(0))) {
+				append_x64_aml_table(
+					reinterpret_cast<const uni::ACPI::DescriptionHeader*>(stduint(dsdt_address)),
+					"DSDT");
+			}
+		}
+		if (!acpi_rsdp_addr) return;
+		const auto* rsdp = reinterpret_cast<const uni::ACPI::RSDP*>(acpi_rsdp_addr);
+		if (!rsdp->isValid()) return;
+		if (rsdp->revision >= 2 && rsdp->xsdt_address) {
+			const auto* xsdt = reinterpret_cast<const uni::ACPI::XSDT*>(
+				stduint(rsdp->xsdt_address));
+			if (xsdt->header.length >= sizeof(uni::ACPI::DescriptionHeader) &&
+				xsdt->header.isValid("XSDT")) {
+				for (size_t index = 0; index < xsdt->Count(); ++index) {
+					append_x64_aml_table(&(*xsdt)[index], "SSDT");
+				}
+				return;
+			}
+		}
+		if (!rsdp->rsdt_address) return;
+		const auto* rsdt = reinterpret_cast<const uni::ACPI::RSDT*>(
+			stduint(rsdp->rsdt_address));
+		if (rsdt->header.length < sizeof(uni::ACPI::DescriptionHeader) ||
+			!rsdt->header.isValid("RSDT")) return;
+		for (size_t index = 0; index < rsdt->Count(); ++index) {
+			append_x64_aml_table(&(*rsdt)[index], "SSDT");
+		}
+	}
+
+	bool decode_aml_package_length(const uint8* aml, stduint available,
+		uint32& package_length, uint8& encoded_length) {
+		if (!aml || !available) return false;
+		const uint8 following = aml[0] >> 6;
+		encoded_length = following + 1;
+		if (encoded_length > available) return false;
+		package_length = following ? aml[0] & 0x0Fu : aml[0] & 0x3Fu;
+		for (uint8 index = 0; index < following; ++index) {
+			package_length |= uint32(aml[index + 1]) << (4 + index * 8);
+		}
+		return package_length >= encoded_length;
+	}
+
+	bool decode_aml_integer(const uint8*& cursor, const uint8* end,
+		uint64& value) {
+		if (!cursor || cursor >= end) return false;
+		switch (*cursor++) {
+		case 0x00:
+			value = 0;
+			return true;
+		case 0x01:
+			value = 1;
+			return true;
+		case 0xFF:
+			value = ~uint64(0);
+			return true;
+		case 0x0A:
+			if (end - cursor < 1) return false;
+			value = *cursor++;
+			return true;
+		case 0x0B:
+			if (end - cursor < 2) return false;
+			value = uint64(cursor[0]) | uint64(cursor[1]) << 8;
+			cursor += 2;
+			return true;
+		case 0x0C:
+			if (end - cursor < 4) return false;
+			value = uint64(cursor[0]) | uint64(cursor[1]) << 8 |
+				uint64(cursor[2]) << 16 | uint64(cursor[3]) << 24;
+			cursor += 4;
+			return true;
+		case 0x0E:
+			if (end - cursor < 8) return false;
+			value = 0;
+			for0(index, 8) value |= uint64(cursor[index]) << (index * 8);
+			cursor += 8;
+			return true;
+		default:
+			return false;
+		}
+	}
+
+	bool decode_aml_name_string(const uint8*& cursor, const uint8* end,
+		uint32& last_segment) {
+		if (!cursor || cursor >= end) return false;
+		last_segment = 0;
+		if (*cursor == '\\') cursor++;
+		while (cursor < end && *cursor == '^') cursor++;
+		if (cursor >= end) return false;
+		if (*cursor == 0x00) {
+			cursor++;
+			return true;
+		}
+		stduint segment_count = 1;
+		if (*cursor == 0x2E) {
+			cursor++;
+			segment_count = 2;
+		}
+		else if (*cursor == 0x2F) {
+			cursor++;
+			if (cursor >= end) return false;
+			segment_count = *cursor++;
+		}
+		if (segment_count > stduint(end - cursor) / 4) return false;
+		for0(segment, segment_count) {
+			last_segment = uint32(cursor[0]) | uint32(cursor[1]) << 8 |
+				uint32(cursor[2]) << 16 | uint32(cursor[3]) << 24;
+			cursor += 4;
+		}
+		return true;
+	}
+
+	bool find_enclosing_aml_device(const uint8* aml, stduint aml_length,
+		stduint object_offset, stduint& content_begin, stduint& content_end,
+		uint32& device_name) {
+		bool found = false;
+		stduint selected_length = ~stduint(0);
+		for (stduint offset = 0; offset + 3 < aml_length; ++offset) {
+			if (aml[offset] != 0x5B || aml[offset + 1] != 0x82) continue;
+			uint32 device_length = 0;
+			uint8 encoded_length = 0;
+			if (!decode_aml_package_length(aml + offset + 2,
+				aml_length - offset - 2, device_length, encoded_length) ||
+				device_length > aml_length - offset - 2) continue;
+			const stduint device_end = offset + 2 + device_length;
+			const uint8* cursor = aml + offset + 2 + encoded_length;
+			uint32 candidate_name = 0;
+			if (!decode_aml_name_string(cursor, aml + device_end, candidate_name)) continue;
+			const stduint candidate_begin = stduint(cursor - aml);
+			if (object_offset < candidate_begin || object_offset >= device_end ||
+				device_end - candidate_begin >= selected_length) continue;
+			content_begin = candidate_begin;
+			content_end = device_end;
+			device_name = candidate_name;
+			selected_length = device_end - candidate_begin;
+			found = true;
+		}
+		return found;
+	}
+
+	bool find_aml_device_integer(const uint8* aml, stduint aml_length,
+		stduint content_begin, stduint content_end, uint32 name, uint64& value) {
+		for (stduint offset = content_begin; offset + 5 < content_end; ++offset) {
+			if (aml[offset] != 0x08) continue;
+			const uint8* cursor = aml + offset + 1;
+			uint32 candidate_name = 0;
+			if (!decode_aml_name_string(cursor, aml + content_end, candidate_name) ||
+				candidate_name != name) continue;
+			stduint owner_begin = 0;
+			stduint owner_end = 0;
+			uint32 owner_name = 0;
+			if (!find_enclosing_aml_device(aml, aml_length, offset,
+				owner_begin, owner_end, owner_name) || owner_begin != content_begin ||
+				owner_end != content_end) continue;
+			(void)owner_name;
+			return decode_aml_integer(cursor, aml + content_end, value);
+		}
+		for (stduint name_offset = content_begin;
+			name_offset + 5 < content_end; ++name_offset) {
+			const uint32 candidate_name = uint32(aml[name_offset]) |
+				uint32(aml[name_offset + 1]) << 8 |
+				uint32(aml[name_offset + 2]) << 16 |
+				uint32(aml[name_offset + 3]) << 24;
+			if (candidate_name != name) continue;
+			for (uint8 distance = 1; distance <= 4 &&
+				name_offset >= content_begin + stduint(distance) + 1; ++distance) {
+				const stduint package_offset = name_offset - distance;
+				if (aml[package_offset - 1] != 0x14) continue;
+				uint32 method_length = 0;
+				uint8 encoded_length = 0;
+				if (!decode_aml_package_length(aml + package_offset,
+					content_end - package_offset, method_length, encoded_length) ||
+					encoded_length != distance || method_length > content_end - package_offset)
+					continue;
+				const stduint method_end = package_offset + method_length;
+				for (stduint offset = name_offset + 5; offset + 2 <= method_end; ++offset) {
+					if (aml[offset] != 0xA4) continue;
+					const uint8* result = aml + offset + 1;
+					if (decode_aml_integer(result, aml + method_end, value)) return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	bool find_enclosing_aml_scope(const uint8* aml, stduint aml_length,
+		stduint object_offset, uint32& scope_name) {
+		bool found = false;
+		stduint selected_length = ~stduint(0);
+		for (stduint offset = 0; offset + 2 < aml_length; ++offset) {
+			if (aml[offset] != 0x10) continue;
+			uint32 scope_length = 0;
+			uint8 encoded_length = 0;
+			if (!decode_aml_package_length(aml + offset + 1,
+				aml_length - offset - 1, scope_length, encoded_length) ||
+				scope_length > aml_length - offset - 1) continue;
+			const stduint scope_end = offset + 1 + scope_length;
+			const uint8* cursor = aml + offset + 1 + encoded_length;
+			uint32 candidate_name = 0;
+			if (!decode_aml_name_string(cursor, aml + scope_end, candidate_name)) continue;
+			const stduint scope_begin = stduint(cursor - aml);
+			if (object_offset < scope_begin || object_offset >= scope_end ||
+				scope_end - scope_begin >= selected_length) continue;
+			scope_name = candidate_name;
+			selected_length = scope_end - scope_begin;
+			found = true;
+		}
+		return found;
+	}
+
+	void find_named_aml_device_route_scope(uint32 name, uint16& segment,
+		uint8& root_bus, bool& segment_found, bool& bus_found) {
+		const uint32 seg_name = uint32('_') | uint32('S') << 8 |
+			uint32('E') << 16 | uint32('G') << 24;
+		const uint32 bbn_name = uint32('_') | uint32('B') << 8 |
+			uint32('B') << 16 | uint32('N') << 24;
+		for0(table_index, aml_table_count) {
+			const auto& table = aml_tables[table_index];
+			for (stduint offset = 0; offset + 3 < table.length; ++offset) {
+				if (table.aml[offset] != 0x5B || table.aml[offset + 1] != 0x82) continue;
+				uint32 device_length = 0;
+				uint8 encoded_length = 0;
+				if (!decode_aml_package_length(table.aml + offset + 2,
+					table.length - offset - 2, device_length, encoded_length) ||
+					device_length > table.length - offset - 2) continue;
+				const stduint content_end = offset + 2 + device_length;
+				const uint8* cursor = table.aml + offset + 2 + encoded_length;
+				uint32 device_name = 0;
+				if (!decode_aml_name_string(cursor, table.aml + content_end,
+					device_name) || device_name != name) continue;
+				const stduint content_begin = stduint(cursor - table.aml);
+				uint64 value = 0;
+				if (!segment_found && find_aml_device_integer(table.aml, table.length,
+					content_begin, content_end, seg_name, value) && value <= 0xFFFFu) {
+					segment = uint16(value);
+					segment_found = true;
+				}
+				if (!bus_found && find_aml_device_integer(table.aml, table.length,
+					content_begin, content_end, bbn_name, value) && value <= 0xFFu) {
+					root_bus = uint8(value);
+					bus_found = true;
+				}
+				if (segment_found && bus_found) return;
+			}
+		}
+	}
+
+	void find_aml_route_scope(const uint8* aml, stduint aml_length,
+		stduint name_offset, uint16& segment, uint8& root_bus) {
+		segment = 0;
+		root_bus = 0;
+		stduint content_begin = 0;
+		stduint content_end = 0;
+		uint32 device_name = 0;
+		const uint32 seg_name = uint32('_') | uint32('S') << 8 |
+			uint32('E') << 16 | uint32('G') << 24;
+		const uint32 bbn_name = uint32('_') | uint32('B') << 8 |
+			uint32('B') << 16 | uint32('N') << 24;
+		uint64 value = 0;
+		bool segment_found = false;
+		bool bus_found = false;
+		if (find_enclosing_aml_device(aml, aml_length, name_offset,
+			content_begin, content_end, device_name)) {
+			if (find_aml_device_integer(aml, aml_length, content_begin,
+				content_end, seg_name, value) && value <= 0xFFFFu) {
+				segment = uint16(value);
+				segment_found = true;
+			}
+			if (find_aml_device_integer(aml, aml_length, content_begin,
+				content_end, bbn_name, value) && value <= 0xFFu) {
+				root_bus = uint8(value);
+				bus_found = true;
+			}
+		}
+		uint32 scope_name = 0;
+		if ((!segment_found || !bus_found) &&
+			find_enclosing_aml_scope(aml, aml_length, name_offset, scope_name)) {
+			find_named_aml_device_route_scope(scope_name, segment, root_bus,
+				segment_found, bus_found);
+		}
+		(void)device_name;
+	}
+
+	bool evaluate_aml_pic_method(const uint8* aml, stduint aml_length,
+		stduint name_offset) {
+		if (!aml || name_offset < 2 || name_offset + 5 > aml_length) return false;
+		for (uint8 distance = 1; distance <= 4 &&
+			name_offset >= stduint(distance) + 1; ++distance) {
+			const stduint package_offset = name_offset - distance;
+			if (aml[package_offset - 1] != 0x14) continue;
+			uint32 method_length = 0;
+			uint8 encoded_length = 0;
+			if (!decode_aml_package_length(aml + package_offset,
+				aml_length - package_offset, method_length, encoded_length) ||
+				encoded_length != distance || method_length > aml_length - package_offset)
+				continue;
+			const stduint method_end = package_offset + method_length;
+			if ((aml[name_offset + 4] & 7u) != 1u) return false;
+			for (stduint offset = name_offset + 5; offset + 6 <= method_end; ++offset) {
+				if (aml[offset] != 0x70 || aml[offset + 1] != 0x68) continue;
+				const uint8* target = aml + offset + 2;
+				uint32 target_name = 0;
+				if (!decode_aml_name_string(target, aml + method_end, target_name) ||
+					!target_name) continue;
+				plogtrac("[ACPI] _PIC(1) evaluated target=%c%c%c%c",
+					char(target_name), char(target_name >> 8),
+					char(target_name >> 16), char(target_name >> 24));
+				acpi_pic_apic_mode = true;
+				acpi_pic_target_name = target_name;
+				return true;
+			}
+		}
+		return false;
+	}
+
+	bool append_acpi_pci_route(const AcpiPciRoutingEntry& route) {
+		for0(index, acpi_pci_route_count) {
+			auto& existing = acpi_pci_routes[index];
+			if (existing.segment != route.segment ||
+				existing.root_bus != route.root_bus ||
+				existing.address != route.address || existing.pin != route.pin) continue;
+			if (existing.source_name == route.source_name &&
+				existing.source_index == route.source_index) return true;
+			if (route.resolved && (!existing.resolved || acpi_pic_apic_mode)) {
+				existing = route;
+				return true;
+			}
+			if (existing.resolved) return true;
+		}
+		if (acpi_pci_route_count >= AcpiPciRoutingCapacity) return false;
+		acpi_pci_routes[acpi_pci_route_count++] = route;
+		return true;
+	}
+
+	void collect_aml_prt_package(const uint8* package_opcode,
+		const uint8* method_end, uint16 segment, uint8 root_bus) {
+		if (!package_opcode || package_opcode >= method_end ||
+			*package_opcode != 0x12) return;
+		uint32 package_length = 0;
+		uint8 encoded_length = 0;
+		if (!decode_aml_package_length(package_opcode + 1,
+			method_end - package_opcode - 1, package_length, encoded_length) ||
+			package_length > stduint(method_end - package_opcode - 1)) return;
+		const uint8* package_end = package_opcode + 1 + package_length;
+		const uint8* cursor = package_opcode + 1 + encoded_length;
+		if (cursor >= package_end) return;
+		const uint8 element_count = *cursor++;
+		for0(element, element_count) {
+			if (cursor >= package_end || *cursor++ != 0x12) {
+				break;
+			}
+			uint32 entry_length = 0;
+			uint8 entry_encoded_length = 0;
+			if (!decode_aml_package_length(cursor, package_end - cursor,
+				entry_length, entry_encoded_length) ||
+				entry_length > stduint(package_end - cursor)) {
+				break;
+			}
+			const uint8* entry_end = cursor + entry_length;
+			const uint8* entry = cursor + entry_encoded_length;
+			cursor = entry_end;
+			if (entry >= entry_end || *entry++ != 4) {
+				continue;
+			}
+			uint64 address = 0;
+			uint64 pin = 0;
+			uint64 source_index = 0;
+			uint32 source_name = 0;
+			if (!decode_aml_integer(entry, entry_end, address) ||
+				!decode_aml_integer(entry, entry_end, pin)) {
+				continue;
+			}
+			if (!decode_aml_name_string(entry, entry_end, source_name) ||
+				!decode_aml_integer(entry, entry_end, source_index)) {
+				continue;
+			}
+			const bool direct = source_name == 0;
+			if (address > 0xFFFFFFFFu || pin >= 4 || source_index > 0xFFFFFFFFu) {
+				continue;
+			}
+			const uint16 irq_flags = DeviceResourceFlag_IrqLevel |
+				DeviceResourceFlag_IrqActiveLow | DeviceResourceFlag_IrqShareable;
+			append_acpi_pci_route({ uint32(address),
+				direct ? uint32(source_index) : 0, source_name, uint32(source_index),
+				segment, irq_flags, root_bus, uint8(pin), direct });
+		}
+	}
+
+	void collect_aml_route_method(const uint8* aml, stduint aml_length,
+		stduint name_offset, uint16 segment, uint8 root_bus) {
+		if (!aml || name_offset < 2 || name_offset + 5 > aml_length) return;
+		stduint package_offset = 0;
+		uint32 method_length = 0;
+		uint8 encoded_length = 0;
+		for (uint8 distance = 1; distance <= 4 &&
+			name_offset >= stduint(distance) + 1;
+			++distance) {
+			const stduint candidate = name_offset - distance;
+			if (aml[candidate - 1] != 0x14) continue;
+			uint32 length = 0;
+			uint8 encoded = 0;
+			if (!decode_aml_package_length(aml + candidate,
+				aml_length - candidate, length, encoded) || encoded != distance) continue;
+			package_offset = candidate;
+			method_length = length;
+			encoded_length = encoded;
+			break;
+		}
+		if (!package_offset || method_length < uint32(encoded_length) + 5u ||
+			method_length > aml_length - package_offset) return;
+		const stduint method_end = package_offset + method_length;
+		const stduint body_offset = name_offset + 5;
+		for (stduint offset = body_offset; offset + 3 <= method_end; ++offset) {
+			if (aml[offset] != 0xA4 || aml[offset + 1] != 0x12) continue;
+			uint32 route_length = 0;
+			uint8 route_encoded_length = 0;
+			if (!decode_aml_package_length(aml + offset + 2,
+				method_end - offset - 2, route_length, route_encoded_length)) continue;
+			if (offset + 2 + route_encoded_length >= method_end ||
+				route_length > method_end - offset - 2) continue;
+			collect_aml_prt_package(aml + offset + 1, aml + method_end,
+				segment, root_bus);
+		}
+	}
+
+	bool decode_aml_buffer(const uint8* buffer_opcode, const uint8* end,
+		const uint8*& data, stduint& data_length) {
+		if (!buffer_opcode || buffer_opcode >= end || *buffer_opcode != 0x11)
+			return false;
+		uint32 package_length = 0;
+		uint8 encoded_length = 0;
+		if (!decode_aml_package_length(buffer_opcode + 1,
+			end - buffer_opcode - 1, package_length, encoded_length) ||
+			package_length > stduint(end - buffer_opcode - 1)) return false;
+		const uint8* buffer_end = buffer_opcode + 1 + package_length;
+		const uint8* cursor = buffer_opcode + 1 + encoded_length;
+		uint64 declared_length = 0;
+		if (!decode_aml_integer(cursor, buffer_end, declared_length) ||
+			declared_length > stduint(buffer_end - cursor)) return false;
+		data = cursor;
+		data_length = stduint(declared_length);
+		return true;
+	}
+
+	bool decode_acpi_irq_resource(const uint8* data, stduint length,
+		uint32 source_index, AcpiIrqResource& resource) {
+		const uint8* cursor = data;
+		const uint8* end = data + length;
+		uint32 descriptor_index = 0;
+		while (cursor < end) {
+			const uint8 header = *cursor++;
+			if (header & 0x80u) {
+				if (end - cursor < 2) return false;
+				const uint16 descriptor_length = uint16(cursor[0]) |
+					uint16(cursor[1]) << 8;
+				cursor += 2;
+				if (descriptor_length > stduint(end - cursor)) return false;
+				if ((header & 0x7Fu) == 0x09u && descriptor_index == source_index) {
+					if (descriptor_length < 6) return false;
+					const uint8 irq_flags = cursor[0];
+					const uint8 interrupt_count = cursor[1];
+					if (interrupt_count != 1 ||
+						descriptor_length < stduint(2u + interrupt_count * 4u)) return false;
+					resource.gsi = uint32(cursor[2]) | uint32(cursor[3]) << 8 |
+						uint32(cursor[4]) << 16 | uint32(cursor[5]) << 24;
+					resource.flags = DeviceResourceFlag_None;
+					if (!(irq_flags & (1u << 1)))
+						resource.flags |= DeviceResourceFlag_IrqLevel;
+					if (irq_flags & (1u << 2))
+						resource.flags |= DeviceResourceFlag_IrqActiveLow;
+					if (irq_flags & (1u << 3))
+						resource.flags |= DeviceResourceFlag_IrqShareable;
+					return true;
+				}
+				cursor += descriptor_length;
+				descriptor_index++;
+				continue;
+			}
+			const uint8 item_name = (header >> 3) & 0x0Fu;
+			const uint8 descriptor_length = header & 7u;
+			if (descriptor_length > stduint(end - cursor)) return false;
+			if (item_name == 0x0Fu) return false;
+			if (item_name == 0x04u && descriptor_index == source_index) {
+				if (descriptor_length < 2) return false;
+				const uint16 mask = uint16(cursor[0]) | uint16(cursor[1]) << 8;
+				if (!mask || (mask & uint16(mask - 1u))) return false;
+				const uint8 irq_flags = descriptor_length >= 3 ? cursor[2] : 1u;
+				for0(irq, 16) {
+					if (mask & uint16(1u << irq)) {
+						resource.gsi = uint32(irq);
+						resource.flags = DeviceResourceFlag_None;
+						if (!(irq_flags & 1u))
+							resource.flags |= DeviceResourceFlag_IrqLevel;
+						if (irq_flags & (1u << 3))
+							resource.flags |= DeviceResourceFlag_IrqActiveLow;
+						if (irq_flags & (1u << 4))
+							resource.flags |= DeviceResourceFlag_IrqShareable;
+						return true;
+					}
+				}
+				return false;
+			}
+			cursor += descriptor_length;
+			descriptor_index++;
+		}
+		return false;
+	}
+
+	void translate_isa_irq_to_gsi(AcpiIrqResource& resource) {
+		if (resource.gsi >= 16) return;
+		for0(index, interrupt_source_override_count) {
+			const auto& override_entry = interrupt_source_overrides[index];
+			if (override_entry.source != resource.gsi) continue;
+			resource.gsi = override_entry.gsi;
+			return;
+		}
+		const auto* madt = acpi_madt_addr ?
+			reinterpret_cast<const uni::ACPI::MADT*>(acpi_madt_addr) : nullptr;
+		if (!madt || madt->header.length < sizeof(*madt) ||
+			!madt->header.isValid("APIC")) return;
+		const stduint end = acpi_madt_addr + madt->header.length;
+		for (stduint address = acpi_madt_addr + sizeof(*madt);
+			address + sizeof(uni::ACPI::MADTEntry) <= end;) {
+			const auto* entry = reinterpret_cast<const uni::ACPI::MADTEntry*>(address);
+			if (entry->length < sizeof(*entry) || entry->length > end - address) return;
+			if (entry->type == uni::ACPI::MADTTypeInterruptSourceOverride &&
+				entry->length >= sizeof(uni::ACPI::MADTInterruptSourceOverride)) {
+				const auto* override_entry =
+					reinterpret_cast<const uni::ACPI::MADTInterruptSourceOverride*>(entry);
+				if (override_entry->bus == 0 && override_entry->source == resource.gsi) {
+					resource.gsi = override_entry->global_system_interrupt;
+					return;
+				}
+			}
+			address += entry->length;
+		}
+	}
+
+	bool find_named_aml_buffer(const uint8* aml, stduint scope_begin,
+		stduint scope_end, uint32 name, const uint8*& data,
+		stduint& data_length) {
+		for (stduint offset = scope_begin; offset + 5 < scope_end; ++offset) {
+			if (aml[offset] != 0x08) continue;
+			const uint8* cursor = aml + offset + 1;
+			uint32 candidate_name = 0;
+			if (!decode_aml_name_string(cursor, aml + scope_end, candidate_name) ||
+				candidate_name != name) continue;
+			if (decode_aml_buffer(cursor, aml + scope_end, data, data_length))
+				return true;
+		}
+		return false;
+	}
+
+	bool find_static_aml_crs_buffer(const uint8* aml, stduint scope_begin,
+		stduint scope_end, stduint name_offset, const uint8*& data,
+		stduint& data_length) {
+		const uint8* end = aml + scope_end;
+		if (name_offset < scope_begin || name_offset + 4 >= scope_end) return false;
+		if (name_offset && aml[name_offset - 1] == 0x08 &&
+			decode_aml_buffer(aml + name_offset + 4, end, data, data_length)) {
+			return true;
+		}
+		for (uint8 distance = 1; distance <= 4 &&
+			name_offset >= scope_begin + stduint(distance) + 1; ++distance) {
+			const stduint candidate = name_offset - distance;
+			if (aml[candidate - 1] != 0x14) continue;
+			uint32 method_length = 0;
+			uint8 encoded_length = 0;
+			if (!decode_aml_package_length(aml + candidate,
+				scope_end - candidate, method_length, encoded_length) ||
+				encoded_length != distance || method_length > scope_end - candidate)
+				continue;
+			const stduint method_end = candidate + method_length;
+			for (stduint offset = name_offset + 5; offset + 2 < method_end; ++offset) {
+				if (aml[offset] != 0xA4) continue;
+				if (aml[offset + 1] == 0x11 &&
+					decode_aml_buffer(aml + offset + 1, aml + method_end,
+						data, data_length)) return true;
+				const uint8* return_value = aml + offset + 1;
+				uint32 return_name = 0;
+				if (decode_aml_name_string(return_value, aml + method_end,
+					return_name) && return_name &&
+					find_named_aml_buffer(aml, scope_begin, scope_end,
+						return_name, data, data_length)) return true;
+			}
+		}
+		return false;
+	}
+
+	bool find_dynamic_aml_crs_field(const uint8* aml, stduint scope_begin,
+		stduint scope_end, stduint name_offset, uint32& field_name) {
+		if (!aml || name_offset < scope_begin || name_offset + 4 >= scope_end)
+			return false;
+		for (uint8 distance = 1; distance <= 4 &&
+			name_offset >= scope_begin + stduint(distance) + 1; ++distance) {
+			const stduint candidate = name_offset - distance;
+			if (aml[candidate - 1] != 0x14) continue;
+			uint32 method_length = 0;
+			uint8 encoded_length = 0;
+			if (!decode_aml_package_length(aml + candidate,
+				scope_end - candidate, method_length, encoded_length) ||
+				encoded_length != distance || method_length > scope_end - candidate)
+				continue;
+			const stduint method_end = candidate + method_length;
+			for (stduint offset = name_offset + 5; offset + 9 <= method_end; ++offset) {
+				if (aml[offset] != 0xA4) continue;
+				const uint8* expression = aml + offset + 1;
+				uint32 method_name = 0;
+				uint32 candidate_field = 0;
+				if (!decode_aml_name_string(expression, aml + method_end, method_name) ||
+					!method_name || !decode_aml_name_string(expression, aml + method_end,
+						candidate_field) || !candidate_field) continue;
+				field_name = candidate_field;
+				return true;
+			}
+		}
+		return false;
+	}
+
+	DeviceNode* find_piix_isa_bridge() {
+		auto* bridge = Devsman::FindPCIDeviceByVendorDevice(0x8086u, 0x7000u);
+		if (bridge) return bridge;
+		return Devsman::FindPCIDeviceByVendorDevice(0x8086u, 0x7110u);
+	}
+
+	bool resolve_dynamic_aml_link(const uint8* aml, stduint aml_length,
+		uint32 source_name, uint32 source_index, AcpiIrqResource& resource) {
+		if (source_index) return false;
+		for (stduint offset = 0; offset + 4 < aml_length; ++offset) {
+			if (aml[offset] != 0x5B || aml[offset + 1] != 0x82) continue;
+			uint32 device_length = 0;
+			uint8 encoded_length = 0;
+			if (!decode_aml_package_length(aml + offset + 2,
+				aml_length - offset - 2, device_length, encoded_length) ||
+				device_length > aml_length - offset - 2) continue;
+			const stduint device_end = offset + 2 + device_length;
+			const uint8* name_cursor = aml + offset + 2 + encoded_length;
+			uint32 device_name = 0;
+			if (!decode_aml_name_string(name_cursor, aml + device_end, device_name) ||
+				device_name != source_name) continue;
+			for (stduint name_offset = stduint(name_cursor - aml);
+				name_offset + 4 < device_end; ++name_offset) {
+				if (aml[name_offset] != '_' || aml[name_offset + 1] != 'C' ||
+					aml[name_offset + 2] != 'R' || aml[name_offset + 3] != 'S') continue;
+				uint32 field_name = 0;
+				if (!find_dynamic_aml_crs_field(aml,
+					stduint(name_cursor - aml), device_end, name_offset, field_name)) continue;
+				const uint32 field_prefix = uint32('P') | uint32('R') << 8 |
+					uint32('Q') << 16;
+				if ((field_name & 0x00FFFFFFu) != field_prefix ||
+					uint8(field_name >> 24) < '0' || uint8(field_name >> 24) > '3')
+					continue;
+				auto* bridge = find_piix_isa_bridge();
+				if (!bridge) return false;
+				const uint8 pirq_index = uint8(uint8(field_name >> 24) - uint8('0'));
+				const uint32 pirq_routes = uni::PCI::read_config_register(
+					bridge->fields.pci_bus, bridge->fields.pci_device,
+					bridge->fields.pci_function, 0x60);
+				const uint8 irq = uint8(pirq_routes >> (pirq_index * 8));
+				if ((irq & 0x80u) || irq >= 16) return false;
+				resource.gsi = irq;
+				resource.flags = DeviceResourceFlag_IrqLevel |
+					DeviceResourceFlag_IrqActiveLow | DeviceResourceFlag_IrqShareable;
+				const uint32 resource_name = uint32('P') | uint32('R') << 8 |
+					uint32('R') << 16 | uint32('0') << 24;
+				const uint8* resource_data = nullptr;
+				stduint resource_length = 0;
+				AcpiIrqResource template_resource = {};
+				if (find_named_aml_buffer(aml, 0, aml_length, resource_name,
+					resource_data, resource_length) &&
+					decode_acpi_irq_resource(resource_data, resource_length, 0,
+						template_resource)) resource.flags = template_resource.flags;
+				translate_isa_irq_to_gsi(resource);
+				return true;
+			}
+		}
+		return false;
+	}
+
+	bool resolve_static_aml_link(const uint8* aml, stduint aml_length,
+		uint32 source_name, uint32 source_index, AcpiIrqResource& resource) {
+		bool found = false;
+		for (stduint offset = 0; offset + 4 < aml_length; ++offset) {
+			if (aml[offset] != 0x5B || aml[offset + 1] != 0x82) continue;
+			uint32 device_length = 0;
+			uint8 encoded_length = 0;
+			if (!decode_aml_package_length(aml + offset + 2,
+				aml_length - offset - 2, device_length, encoded_length) ||
+				device_length > aml_length - offset - 2) continue;
+			const stduint device_end = offset + 2 + device_length;
+			const uint8* name_cursor = aml + offset + 2 + encoded_length;
+			uint32 device_name = 0;
+			if (!decode_aml_name_string(name_cursor, aml + device_end, device_name) ||
+				device_name != source_name) continue;
+			for (stduint name_offset = stduint(name_cursor - aml);
+				name_offset + 4 < device_end; ++name_offset) {
+				if (aml[name_offset] != '_' || aml[name_offset + 1] != 'C' ||
+					aml[name_offset + 2] != 'R' || aml[name_offset + 3] != 'S') continue;
+				const uint8* resource_data = nullptr;
+				stduint resource_length = 0;
+				if (!find_static_aml_crs_buffer(aml,
+					stduint(name_cursor - aml), device_end, name_offset,
+					resource_data, resource_length)) continue;
+				AcpiIrqResource candidate = {};
+				if (!decode_acpi_irq_resource(resource_data, resource_length,
+					source_index, candidate)) continue;
+				translate_isa_irq_to_gsi(candidate);
+				if (found && (resource.gsi != candidate.gsi ||
+					resource.flags != candidate.flags)) return false;
+				resource = candidate;
+				found = true;
+			}
+		}
+		return found;
+	}
+
+	void resolve_static_aml_links(const uint8* aml, stduint aml_length) {
+		for0(index, acpi_pci_route_count) {
+			auto& route = acpi_pci_routes[index];
+			if (route.resolved || !route.source_name) continue;
+			AcpiIrqResource resource = {};
+			if (!resolve_static_aml_link(aml, aml_length, route.source_name,
+				route.source_index, resource)) continue;
+			for (stduint update = index; update < acpi_pci_route_count; ++update) {
+				auto& candidate = acpi_pci_routes[update];
+				if (candidate.segment != route.segment ||
+					candidate.root_bus != route.root_bus ||
+					candidate.source_name != route.source_name ||
+					candidate.source_index != route.source_index) continue;
+				candidate.gsi = resource.gsi;
+				candidate.irq_flags = resource.flags;
+				candidate.resolved = true;
+			}
+			plogtrac("[ACPI] PCI link %c%c%c%c[%u] -> GSI%u",
+				char(route.source_name), char(route.source_name >> 8),
+				char(route.source_name >> 16), char(route.source_name >> 24),
+				(unsigned)route.source_index, (unsigned)resource.gsi);
+		}
+	}
+
+	void resolve_dynamic_aml_links(const uint8* aml, stduint aml_length) {
+		for0(index, acpi_pci_route_count) {
+			auto& route = acpi_pci_routes[index];
+			if (route.resolved || !route.source_name) continue;
+			AcpiIrqResource resource = {};
+			if (!resolve_dynamic_aml_link(aml, aml_length, route.source_name,
+				route.source_index, resource)) continue;
+			for (stduint update = index; update < acpi_pci_route_count; ++update) {
+				auto& candidate = acpi_pci_routes[update];
+				if (candidate.segment != route.segment ||
+					candidate.root_bus != route.root_bus ||
+					candidate.source_name != route.source_name ||
+					candidate.source_index != route.source_index) continue;
+				candidate.gsi = resource.gsi;
+				candidate.irq_flags = resource.flags;
+				candidate.resolved = true;
+			}
+			plogtrac("[ACPI] PCI dynamic link %c%c%c%c[%u] -> GSI%u",
+				char(route.source_name), char(route.source_name >> 8),
+				char(route.source_name >> 16), char(route.source_name >> 24),
+				(unsigned)route.source_index, (unsigned)resource.gsi);
+		}
+	}
+
+	void collect_named_aml_route_object(uint32 name, uint16 segment,
+		uint8 root_bus) {
+		for0(table_index, aml_table_count) {
+			const auto& table = aml_tables[table_index];
+			for (stduint offset = 0; offset + 4 <= table.length; ++offset) {
+				const uint32 candidate = uint32(table.aml[offset]) |
+					uint32(table.aml[offset + 1]) << 8 |
+					uint32(table.aml[offset + 2]) << 16 |
+					uint32(table.aml[offset + 3]) << 24;
+				if (candidate != name) continue;
+				collect_aml_route_method(table.aml, table.length, offset,
+					segment, root_bus);
+				if (!offset || table.aml[offset - 1] != 0x08) continue;
+				const uint8* value = table.aml + offset + 4;
+				if (value < table.aml + table.length && *value == 0x12) {
+					collect_aml_prt_package(value, table.aml + table.length,
+						segment, root_bus);
+				}
+			}
+		}
+	}
+
+	void collect_aml_return_names_in_range(const uint8* begin, const uint8* end,
+		uint16 segment, uint8 root_bus) {
+		for (const uint8* cursor = begin; cursor + 2 < end; ++cursor) {
+			if (*cursor != 0xA4 || cursor[1] == 0x12) continue;
+			const uint8* value = cursor + 1;
+			uint32 return_name = 0;
+			if (!decode_aml_name_string(value, end, return_name) || !return_name)
+				continue;
+			collect_named_aml_route_object(return_name, segment, root_bus);
+		}
+	}
+
+	void collect_aml_route_return_names(const uint8* aml, stduint aml_length,
+		stduint name_offset, uint16 segment, uint8 root_bus) {
+		if (!aml || name_offset < 2 || name_offset + 5 > aml_length) return;
+		for (uint8 distance = 1; distance <= 4 &&
+			name_offset >= stduint(distance) + 1; ++distance) {
+			const stduint package_offset = name_offset - distance;
+			if (aml[package_offset - 1] != 0x14) continue;
+			uint32 method_length = 0;
+			uint8 encoded_length = 0;
+			if (!decode_aml_package_length(aml + package_offset,
+				aml_length - package_offset, method_length, encoded_length) ||
+				encoded_length != distance || method_length > aml_length - package_offset)
+				continue;
+			const stduint method_end = package_offset + method_length;
+			const uint8* body = aml + name_offset + 5;
+			const uint8* end = aml + method_end;
+			if (acpi_pic_apic_mode && acpi_pic_target_name) {
+				for (const uint8* cursor = body; cursor + 3 < end; ++cursor) {
+					if (*cursor != 0xA0) continue;
+					uint32 if_length = 0;
+					uint8 if_encoded_length = 0;
+					if (!decode_aml_package_length(cursor + 1, end - cursor - 1,
+						if_length, if_encoded_length) || if_length > stduint(end - cursor - 1))
+						continue;
+					const uint8* if_end = cursor + 1 + if_length;
+					const uint8* predicate = cursor + 1 + if_encoded_length;
+					if (predicate >= if_end || *predicate++ != 0x93) continue;
+					uint32 predicate_name = 0;
+					uint64 predicate_value = 0;
+					if (!decode_aml_name_string(predicate, if_end, predicate_name) ||
+						predicate_name != acpi_pic_target_name ||
+						!decode_aml_integer(predicate, if_end, predicate_value) ||
+						predicate_value != 0) continue;
+					if (if_end >= end || *if_end != 0xA1) break;
+					uint32 else_length = 0;
+					uint8 else_encoded_length = 0;
+					if (!decode_aml_package_length(if_end + 1, end - if_end - 1,
+						else_length, else_encoded_length) ||
+						else_length > stduint(end - if_end - 1)) break;
+					const uint8* else_begin = if_end + 1 + else_encoded_length;
+					const uint8* else_end = if_end + 1 + else_length;
+					collect_aml_return_names_in_range(else_begin, else_end,
+						segment, root_bus);
+					return;
+				}
+			}
+			collect_aml_return_names_in_range(body, end, segment, root_bus);
+			return;
+		}
+	}
+
+	void discover_x64_pci_routing_aml() {
+		acpi_pic_apic_mode = false;
+		acpi_pic_target_name = 0;
+		collect_x64_aml_tables();
+		if (!aml_table_count) {
+			plogwarn("[ACPI] PCI routing: no DSDT or SSDT AML available");
+			return;
+		}
+		bool pic_evaluated = false;
+		for0(table_index, aml_table_count) {
+			const auto& table = aml_tables[table_index];
+			for (stduint offset = 0; offset + 4 <= table.length; ++offset) {
+				if (table.aml[offset] == '_' && table.aml[offset + 1] == 'P' &&
+					table.aml[offset + 2] == 'I' && table.aml[offset + 3] == 'C') {
+					if (!pic_evaluated && evaluate_aml_pic_method(table.aml,
+						table.length, offset)) pic_evaluated = true;
+				}
+			}
+		}
+		for0(table_index, aml_table_count) {
+			const auto& table = aml_tables[table_index];
+			for (stduint offset = 0; offset + 4 <= table.length; ++offset) {
+				if (table.aml[offset] != '_' || table.aml[offset + 1] != 'P' ||
+					table.aml[offset + 2] != 'R' || table.aml[offset + 3] != 'T') continue;
+				uint16 segment = 0;
+				uint8 root_bus = 0;
+				find_aml_route_scope(table.aml, table.length, offset, segment, root_bus);
+				if (offset && table.aml[offset - 1] == 0x08 &&
+					offset + 4 < table.length && table.aml[offset + 4] == 0x12) {
+					collect_aml_prt_package(table.aml + offset + 4,
+						table.aml + table.length, segment, root_bus);
+				}
+				collect_aml_route_method(table.aml, table.length, offset,
+					segment, root_bus);
+				collect_aml_route_return_names(table.aml, table.length, offset,
+					segment, root_bus);
+			}
+		}
+		for0(table_index, aml_table_count) {
+			const auto& table = aml_tables[table_index];
+			resolve_static_aml_links(table.aml, table.length);
+		}
+		for0(table_index, aml_table_count) {
+			const auto& table = aml_tables[table_index];
+			resolve_dynamic_aml_links(table.aml, table.length);
+		}
+	}
+
+	bool resolve_x64_pci_route(DeviceNode* node, uint8 interrupt_pin,
+		uint8& routed_pin, uint8& root_device, uint8& root_function,
+		uint32& gsi, uint16& irq_flags) {
+		if (!node || interrupt_pin < 1 || interrupt_pin > 4 ||
+			!acpi_pci_route_count) return false;
+		uint8 pin = interrupt_pin - 1;
+		DeviceNode* route_device = node;
+		uint16 segment = node->fields.pci_segment;
+		uint8 root_bus = node->fields.pci_bus;
+		while (route_device) {
+			auto* bus_node = reinterpret_cast<DeviceNode*>(
+				route_device->link.getParent());
+			if (!bus_node || DeviceNodeType(bus_node->fields.node_type) !=
+				DeviceNodeType::PciBus) return false;
+			auto* parent = reinterpret_cast<DeviceNode*>(bus_node->link.getParent());
+			if (!parent || DeviceNodeType(parent->fields.node_type) ==
+				DeviceNodeType::PCI_Root) {
+				segment = bus_node->fields.pci_segment;
+				root_bus = bus_node->fields.pci_bus;
+				break;
+			}
+			if (DeviceNodeType(parent->fields.node_type) !=
+				DeviceNodeType::PciDevice || parent->fields.class_base != 0x06u ||
+				parent->fields.class_sub != 0x04u) return false;
+			pin = uint8((pin + route_device->fields.pci_device) & 3u);
+			route_device = parent;
+		}
+		if (!route_device) return false;
+		root_device = route_device->fields.pci_device;
+		root_function = route_device->fields.pci_function;
+		routed_pin = pin;
+		const AcpiPciRoutingEntry* wildcard = nullptr;
+		for0(index, acpi_pci_route_count) {
+			const auto& route = acpi_pci_routes[index];
+			if (!route.resolved || route.segment != segment ||
+				route.root_bus != root_bus || uint8(route.address >> 16) != root_device ||
+				route.pin != pin)
+				continue;
+			const uint16 function = uint16(route.address);
+			if (function == root_function) {
+				gsi = route.gsi;
+				irq_flags = route.irq_flags;
+				return true;
+			}
+			if (function == 0xFFFFu) wildcard = &route;
+		}
+		if (!wildcard) return false;
+		gsi = wildcard->gsi;
+		irq_flags = wildcard->irq_flags;
+		return true;
+	}
+
+	void apply_x64_pci_interrupt_routing() {
+		acpi_pci_route_count = 0;
+		discover_x64_pci_routing_aml();
+		if (!acpi_pci_route_count || !pci_root) return;
+		for (stduint bus = 0; bus < numsof(pci_bus_nodes); ++bus) {
+			auto* bus_node = pci_bus_nodes[bus];
+			if (!bus_node) continue;
+			for (auto* device = reinterpret_cast<DeviceNode*>(bus_node->link.subf);
+				device; device = reinterpret_cast<DeviceNode*>(device->link.next)) {
+				if (DeviceNodeType(device->fields.node_type) !=
+					DeviceNodeType::PciDevice) continue;
+				const uint32 interrupt = uni::PCI::read_config_register(
+					device->fields.pci_bus, device->fields.pci_device,
+					device->fields.pci_function, 0x3C);
+				const uint8 interrupt_pin = uint8(interrupt >> 8);
+				uint8 routed_pin = 0;
+				uint8 root_device = 0;
+				uint8 root_function = 0;
+				uint32 gsi = 0;
+				uint16 irq_flags = DeviceResourceFlag_None;
+				if (!resolve_x64_pci_route(device, interrupt_pin, routed_pin,
+					root_device, root_function, gsi, irq_flags)) continue;
+				DeviceResource* irq = nullptr;
+				for0(resource_index, device->fields.resource_count) {
+					auto& resource = device->fields.resources[resource_index];
+					if (DeviceResourceType(resource.type) == DeviceResourceType::IrqLine) {
+						irq = &resource;
+						break;
+					}
+				}
+				if (irq) {
+					irq->flags = irq_flags;
+					irq->index = 0;
+					irq->start = gsi;
+					irq->length = 1;
+					irq->extra = interrupt_pin;
+				}
+				else if (!append_resource(device, DeviceResourceType::IrqLine,
+					irq_flags, 0, gsi, 1, interrupt_pin)) continue;
+				plogtrac("[ACPI] PCI INTx route pci=%02x:%02x.%u pin=%u root=%02x.%u/%u gsi=%u",
+					(unsigned)device->fields.pci_bus,
+					(unsigned)device->fields.pci_device,
+					(unsigned)device->fields.pci_function,
+					(unsigned)interrupt_pin, (unsigned)root_device,
+					(unsigned)root_function, (unsigned)routed_pin, (unsigned)gsi);
+			}
+		}
+	}
+
+	void discover_x64_interrupt_topology() {
+		ioapic_topology_count = 0;
+		interrupt_source_override_count = 0;
+		const auto* madt = acpi_madt_addr ?
+			reinterpret_cast<const uni::ACPI::MADT*>(acpi_madt_addr) : nullptr;
+		const bool valid_madt = madt && madt->header.length >= sizeof(*madt) &&
+			madt->header.isValid("APIC");
+		const stduint begin = valid_madt ? acpi_madt_addr + sizeof(*madt) : 0;
+		const stduint end = valid_madt ? acpi_madt_addr + madt->header.length : 0;
+		for (stduint address = begin; valid_madt && end >= begin &&
+			address + sizeof(uni::ACPI::MADTEntry) <= end;) {
+			const auto* entry = reinterpret_cast<const uni::ACPI::MADTEntry*>(address);
+			if (entry->length < sizeof(*entry) || entry->length > end - address) break;
+			if (entry->type == uni::ACPI::MADTTypeIOAPIC &&
+				entry->length >= sizeof(uni::ACPI::MADTIOAPIC)) {
+				const auto* ioapic = reinterpret_cast<const uni::ACPI::MADTIOAPIC*>(entry);
+				if (!append_x64_ioapic(ioapic->ioapic_address,
+					ioapic->global_system_interrupt_base, ioapic->ioapic_id)) {
+					plogwarn("[ACPI] Ignoring invalid or overlapping I/O APIC id=%u MMIO=%[32H] GSI-base=%u",
+						ioapic->ioapic_id, ioapic->ioapic_address,
+						ioapic->global_system_interrupt_base);
+				}
+			}
+			else if (entry->type == uni::ACPI::MADTTypeInterruptSourceOverride &&
+				entry->length >= sizeof(uni::ACPI::MADTInterruptSourceOverride)) {
+				const auto* override_entry = reinterpret_cast<const uni::ACPI::MADTInterruptSourceOverride*>(entry);
+				if (override_entry->bus == 0 &&
+					interrupt_source_override_count < InterruptSourceOverrideCapacity) {
+					interrupt_source_overrides[interrupt_source_override_count++] = {
+						override_entry->global_system_interrupt, override_entry->flags,
+						override_entry->source };
+					plogtrac("[ACPI] ISA IRQ%u -> GSI%u flags=%[16H]",
+						override_entry->source, override_entry->global_system_interrupt,
+						override_entry->flags);
+				}
+				else if (override_entry->bus == 0)
+					plogwarn("[ACPI] IRQ override capacity exceeded");
+			}
+			address += entry->length;
+		}
+		if (!ioapic_topology_count) {
+			const uint32 id_register = read_x64_ioapic_register(0xFEC00000u, 0);
+			const uint8 id = uint8(id_register >> 24);
+			if (!append_x64_ioapic(0xFEC00000u, 0, id)) {
+				ioapic_topology[ioapic_topology_count++] = {
+					0xFEC00000u, 0, 24, id };
+				plogwarn("[ACPI] Using legacy 24-pin I/O APIC fallback");
+			}
+		}
+	}
+	#endif
+
 	void program_isa_irq_routes() {
 		uint16_t enabled_irq_mask = 0xFFFF;
 		bool mirror_irq0_to_pin2 = true;
 		#if _MCCA == 0x8664
+		const uint8 bsp_lapic_id = acpi_cpu_lapic_ids[0] < 0x100u ?
+			uint8(acpi_cpu_lapic_ids[0]) : 0;
 		// x64 UEFI can open the ISA IRQ set, but mirroring IRQ0 onto pin2
 		// currently triggers the legacy cascade path bug.
 		mirror_irq0_to_pin2 = false;
 		#endif
+		#if _MCCA == 0x8664
+		for0(index, ioapic_topology_count) {
+			const auto& ioapic = ioapic_topology[index];
+			for0(pin, ioapic.gsi_count) {
+				x64_ioapic_write_route(ioapic.gsi_base + uint32(pin), 0x10000);
+			}
+		}
+		#else
 		// Reset all 24 IOAPIC pins to masked state first.
 		for (int i = 0; i < 24; i++) {
 			IC.IO_Writ64(0x10 + i * 2, 0x10000); // Bit 16: Masked
 		}
+		#endif
 		// Then remap ISA IRQs (0-15) to the kernel vectors and clear the mask bit.
 		for (int i = 0; i < 16; i++) {
 			if ((enabled_irq_mask & (1u << i)) == 0) continue;
 			const uint8_t vector = (i < 8) ? (IRQ_PIT + i) : (IRQ_RTC + (i - 8));
+			#if _MCCA == 0x8664
+			uint64_t rte = uint64_t(vector) | uint64_t(bsp_lapic_id) << 56;
+			// Fixed, Physical, Edge, Active-High, Unmasked
+			uint32 gsi = uint32(i);
+			if (i != 0) {
+				for (stduint j = 0; j < interrupt_source_override_count; ++j) {
+					const auto& override_entry = interrupt_source_overrides[j];
+					if (override_entry.source != i) continue;
+					const uint16 polarity = override_entry.flags & 3u;
+					const uint16 trigger = (override_entry.flags >> 2) & 3u;
+					if ((override_entry.flags & ~uint16(0xFu)) || polarity == 2 || trigger == 2) {
+						plogwarn("[ACPI] ISA IRQ%u has invalid override flags=%[16H]; keeping legacy route",
+							(unsigned)i, override_entry.flags);
+						break;
+					}
+					gsi = override_entry.gsi;
+					if (polarity == 3) rte |= uint64_t(1) << 13;
+					if (trigger == 3) rte |= (uint64_t(1) << 15) | (uint64_t(1) << 16);
+					break;
+				}
+			}
+			#else
 			const uint64_t rte = (uint64_t)vector; // Fixed, Physical, Edge, Active-High, Unmasked
+			#endif
 			if (i == 0) {
 				// Route PIT to pin 0. Some platforms also mirror it to pin 2 for legacy
 				// compatibility, but x64 UEFI currently keeps pin 2 masked while we
 				// localize the transition-stack/legacy-IRQ entry issue.
+				#if _MCCA == 0x8664
+				x64_ioapic_write_route(0, rte);
+				#else
 				IC.IO_Writ64(0x10 + 0 * 2, rte);
+				#endif
 				if (mirror_irq0_to_pin2) {
 					IC.IO_Writ64(0x10 + 2 * 2, rte);
 				}
 			}
 			else if (i != 2) {
+				#if _MCCA == 0x8664
+				if (!x64_ioapic_write_route(gsi, rte)) {
+					plogwarn("[ACPI] ISA IRQ%u GSI%u is outside discovered I/O APIC ranges",
+						(unsigned)i, (unsigned)gsi);
+				}
+				#else
 				IC.IO_Writ64(0x10 + i * 2, rte);
+				#endif
 			}
 		}
 	}
@@ -921,6 +2203,7 @@ bool Devsman::Initialize() {
 		"x2APIC" : "APIC" : "PIC", (int)cpuid_x2apic, (int)hw_x2apic);
 	IC.Initialize(support_apic + support_x2apic);
 	if (support_apic + support_x2apic) {
+		discover_x64_interrupt_topology();
 		program_isa_irq_routes();
 	}
 

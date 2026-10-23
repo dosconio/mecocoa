@@ -94,6 +94,9 @@ namespace Devs {
 
 namespace Devs {
 	void reparent_secondary_buses_under_bridges();
+#if _MCCA == 0x8664
+	void apply_x64_pci_interrupt_routing();
+#endif
 	DeviceNode* attach_isa_bus_if_bridge(DeviceNode* pci_node);
 	void initialize_device_tree();
 	bool set_driver_probe_state(DeviceNode* node, DriverBindingState state, int32 result);
@@ -845,6 +848,9 @@ bool Devsman::AttachPCIDevices(uni::PCI& pci) {
 		}
 	}
 	reparent_secondary_buses_under_bridges();
+#if _MCCA == 0x8664
+	apply_x64_pci_interrupt_routing();
+#endif
 	pci_devices_attached = true;
 	BindKnownDrivers();
 	ProbeKnownDrivers();

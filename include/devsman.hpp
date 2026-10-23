@@ -192,6 +192,12 @@ namespace Devs {
 		const char* driver_name;
 		bool (*probe)(DeviceNode*);
 	};
+
+	#if defined(_MCCA) && _MCCA == 0x8664
+	bool x64_ioapic_has_gsi(uint32 gsi);
+	bool x64_ioapic_read_route(uint32 gsi, uint64& route);
+	bool x64_ioapic_write_route(uint32 gsi, uint64 route);
+	#endif
 }
 
 

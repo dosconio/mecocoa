@@ -3067,7 +3067,7 @@ int main(int argc, char** argv) {
 			return -1;
 		}
 	}
-	ploginfo("[VMCI] Started pci=%02x:%02x.%u cid=%08x caps=%08x/%08x irq=%u qp=%u datagram=%s",
+	ploginfo("[VMCI] Started pci=%02x:%02x.%u cid=%08x caps=%08x/%08x legacy-line=%u qp=%u datagram=%s",
 		unsigned(g_vmci.identity.pci_bus), unsigned(g_vmci.identity.pci_device),
 		unsigned(g_vmci.identity.pci_function), unsigned(g_vmci.context_id),
 		unsigned(g_vmci.capabilities), unsigned(g_vmci.capabilities_in_use),
