@@ -46,6 +46,12 @@ namespace uni {
 		storage = nullptr;
 	}
 
+	vfs_inode::~vfs_inode() {
+		if (!is_unlinked || !internal_handler || !mount_state ||
+			!mount_state->filesystem) return;
+		mount_state->filesystem->reclaim(internal_handler);
+	}
+
 	static SharedPtr<VFSMountState> MakeMountState(FilesysTrait* filesystem,
 		VFSMountOwnership ownership) {
 		auto* state = new VFSMountState(filesystem, ownership);
@@ -59,6 +65,15 @@ namespace uni {
 	static vfs_super_block* super_blocks = nullptr;
 	static vfs_dentry* vfs_root = nullptr; // Global root directory
 	Mutex vfs_lock;
+	// The 256 weak-registry buckets use linked collision chains and do not limit the number of live namespace-backed inodes.
+	struct VFSInodeIdentityEntry {
+		uint64 identity = 0;
+		WeakPtr<vfs_inode> inode;
+		VFSInodeIdentityEntry* next = nullptr;
+	};
+	static constexpr stduint VFSInodeIdentityBucketCount = 256;
+	static uint64 next_inode_identity = 1;
+	static VFSInodeIdentityEntry* inode_identities[VFSInodeIdentityBucketCount] = {};
 	static constexpr uint16 SocketHandleFlagLocalAddressAuto = 0x0001u;
 	static constexpr uint16 SocketHandleFlagReuseAddress = 0x0002u;
 	static constexpr uint16 SocketHandleFlagReadShutdown = 0x0004u;
@@ -209,13 +224,62 @@ namespace uni {
 		return dentry;
 	}
 
-	static vfs_inode* alloc_inode(vfs_super_block* sb) {
-		vfs_inode* inode = new vfs_inode();
-		KASSERT(inode != nullptr);
+	// Initialization is single-threaded; later callers hold vfs_lock.
+	static SharedPtr<vfs_inode> alloc_inode(vfs_super_block* sb) {
+		auto inode = make_shared<vfs_inode>();
+		KASSERT(inode);
+		KASSERT(next_inode_identity != 0);
+		inode->identity = next_inode_identity++;
+		inode->content_version = 1;
 		inode->i_sb = sb;
 		if (sb) inode->mount_state = sb->mount_state;
-		inode->ref_count = 1;
+
+		// Namespace-backed inodes use WeakPtr lookup without extending their lifetime; pipes and sockets are not registered.
+		if (sb) {
+			const stduint bucket = stduint((inode->identity ^
+				(inode->identity >> 32)) & (VFSInodeIdentityBucketCount - 1));
+			VFSInodeIdentityEntry** link = &inode_identities[bucket];
+			while (*link) {
+				if (!(*link)->inode.expired()) {
+					link = &(*link)->next;
+					continue;
+				}
+				auto* stale = *link;
+				*link = stale->next;
+				delete stale;
+			}
+			auto* identity_entry = new VFSInodeIdentityEntry();
+			KASSERT(identity_entry);
+			identity_entry->identity = inode->identity;
+			identity_entry->inode = WeakPtr<vfs_inode>(inode);
+			identity_entry->next = inode_identities[bucket];
+			inode_identities[bucket] = identity_entry;
+		}
 		return inode;
+	}
+
+	// Caller holds vfs_lock.
+	static void AdvanceContentVersion(vfs_inode* inode) {
+		KASSERT(inode);
+		// Never wrap because future page-cache keys contain both identity and content_version.
+		KASSERT(inode->content_version != ~(uint64)0);
+		inode->content_version++;
+	}
+
+	static FilesysTrait* GetInodeFilesystem(vfs_inode* inode) {
+		if (!inode) return nullptr;
+		if (inode->mount_state) return inode->mount_state->filesystem;
+		return inode->i_sb ? inode->i_sb->fs : nullptr;
+	}
+
+	// Caller holds vfs_lock.
+	static bool TruncateInode(vfs_inode* inode, stduint size) {
+		if (!inode || (inode->i_mode & I_TYPE_MASK) != I_REGULAR) return false;
+		auto* fs = GetInodeFilesystem(inode);
+		if (!fs || !fs->truncate(inode->internal_handler, size)) return false;
+		inode->i_size = size;
+		AdvanceContentVersion(inode);
+		return true;
 	}
 
 	static bool vfs_enum_emit(FilesysEnumState* state, _tocall_ft callback, void* is_dir, void* name) {
@@ -654,7 +718,7 @@ void Filesys::Initialize() {
 	
 	super_blocks = root_sb;
 	
-	vfs_inode* root_inode = alloc_inode(root_sb);
+	auto root_inode = alloc_inode(root_sb);
 	root_inode->i_mode = I_DIRECTORY;
 	root_inode->internal_handler = vfs_root; // RootFs: dir_handler == its own dentry
 	vfs_root->d_inode = root_inode;
@@ -667,7 +731,7 @@ void Filesys::Initialize() {
 	
 	for (stduint i = 0; i < sizeof(standard_dirs) / sizeof(const char*); i++) {
 		vfs_dentry* dir_dentry = alloc_dentry(vfs_root, standard_dirs[i]);
-		vfs_inode* dir_inod = alloc_inode(root_sb);
+		auto dir_inod = alloc_inode(root_sb);
 		dir_inod->i_mode = I_DIRECTORY;
 		dir_inod->internal_handler = dir_dentry; // RootFs: dir_handler == its own dentry
 		dir_dentry->d_inode = dir_inod;
@@ -695,6 +759,67 @@ static vfs_dentry* lookup_dentry(vfs_dentry* dir, const char* name, int len) {
 	return nullptr;
 }
 
+// Caller holds vfs_lock.
+static bool BuildMountRelativePath(vfs_dentry* dentry, char* path, stduint capacity) {
+	if (!dentry || !path || capacity < 2) return false;
+	vfs_dentry* components[32];
+	stduint count = 0;
+	while (dentry && dentry->d_parent) {
+		if (count == sizeof(components) / sizeof(components[0])) return false;
+		components[count++] = dentry;
+		dentry = dentry->d_parent;
+	}
+
+	stduint used = 0;
+	path[used++] = '/';
+	for (stduint i = count; i > 0; --i) {
+		const char* name = components[i - 1]->d_name;
+		const stduint length = StrLength(name);
+		if (used + length + (i > 1 ? 1 : 0) >= capacity) return false;
+		MemCopyN(path + used, name, length);
+		used += length;
+		if (i > 1) path[used++] = '/';
+	}
+	path[used] = '\0';
+	return true;
+}
+
+// Caller holds vfs_lock.
+static bool BuildMountRelativeChildPath(vfs_dentry* parent, const char* name,
+	char* path, stduint capacity) {
+	if (!name || !BuildMountRelativePath(parent, path, capacity)) return false;
+	stduint used = StrLength(path);
+	const stduint length = StrLength(name);
+	const bool needs_separator = used != 1;
+	if (used + (needs_separator ? 1 : 0) + length >= capacity) return false;
+	if (needs_separator) path[used++] = '/';
+	MemCopyN(path + used, name, length);
+	path[used + length] = '\0';
+	return true;
+}
+
+// Caller holds vfs_lock.
+static bool DetachDentry(vfs_dentry* dentry) {
+	if (!dentry || !dentry->d_parent) return false;
+	vfs_dentry* parent = dentry->d_parent;
+	vfs_dentry** link = &parent->d_first_child;
+	while (*link && *link != dentry) link = &(*link)->d_next_sibling;
+	if (!*link) return false;
+	*link = dentry->d_next_sibling;
+	dentry->d_parent = nullptr;
+	dentry->d_next_sibling = nullptr;
+	return true;
+}
+
+// Caller holds vfs_lock.
+static void AppendDentry(vfs_dentry* parent, vfs_dentry* dentry) {
+	KASSERT(parent && dentry && !dentry->d_parent && !dentry->d_next_sibling);
+	dentry->d_parent = parent;
+	vfs_dentry** link = &parent->d_first_child;
+	while (*link) link = &(*link)->d_next_sibling;
+	*link = dentry;
+}
+
 struct vfs_lookup_ctx {
 	vfs_dentry* current;
 	vfs_super_block* sb;
@@ -709,7 +834,7 @@ static stduint vfs_on_search_segment(void* handle, const char* name, stduint is_
 	if (!next_d) {
 		next_d = alloc_dentry(ctx->current, name);
 		if (!next_d) return 0;
-		vfs_inode* new_inod = alloc_inode(ctx->sb);
+		auto new_inod = alloc_inode(ctx->sb);
 		if (!new_inod) return 0;
 
 		new_inod->i_size = (stduint)size;
@@ -884,9 +1009,63 @@ static vfs_dentry* _Index_unlocked(const char* pathname, vfs_dentry* base) {
 	return (current && current->d_mounts) ? current->d_mounts : current;
 }
 
+// Caller holds vfs_lock.
+static bool ResolveParentAndName(const char* pathname, vfs_dentry* base,
+	vfs_dentry** parent, const char** name) {
+	if (!pathname || !*pathname || !parent || !name) return false;
+	const char* separator = StrIndexCharRight(pathname, '/');
+	if (!separator) {
+		*parent = base ? base : vfs_root;
+		*name = pathname;
+	}
+	else {
+		*name = separator + 1;
+		if (!**name) return false;
+		char parent_path[256];
+		stduint length = stduint(separator - pathname);
+		if (!length) length = 1;
+		if (length >= sizeof(parent_path)) return false;
+		MemCopyN(parent_path, pathname, length);
+		parent_path[length] = '\0';
+		*parent = _Index_unlocked(parent_path, base);
+	}
+
+	const stduint length = StrLength(*name);
+	if (!*parent || !length || length >= VFS_MAX_FILENAME) return false;
+	if ((length == 1 && (*name)[0] == '.') ||
+		(length == 2 && (*name)[0] == '.' && (*name)[1] == '.')) return false;
+	return true;
+}
+
 vfs_dentry* Filesys::Index(const char* pathname, vfs_dentry* base) {
 	MutexLocal guard(&vfs_lock);
 	return _Index_unlocked(pathname, base);
+}
+
+SharedPtr<vfs_inode> Filesys::FindInode(uint64 identity) {
+	if (!identity) return {};
+	MutexLocal guard(&vfs_lock);
+	// Search only the selected bucket; lock() retains a live inode or returns empty after its last strong owner is gone.
+	const stduint bucket = stduint((identity ^ (identity >> 32)) &
+		(VFSInodeIdentityBucketCount - 1));
+	VFSInodeIdentityEntry** link = &inode_identities[bucket];
+	while (*link) {
+		auto* entry = *link;
+		if (entry->identity == identity) {
+			auto inode = entry->inode.lock();
+			if (inode) return inode;
+			*link = entry->next;
+			delete entry;
+			return {};
+		}
+		if (entry->inode.expired()) {
+			*link = entry->next;
+			delete entry;
+			continue;
+		}
+		link = &entry->next;
+	}
+	return {};
 }
 
 static void _Prune_unlocked(vfs_dentry* dentry) {
@@ -898,20 +1077,8 @@ static void _Prune_unlocked(vfs_dentry* dentry) {
 		child = next;
 	}
 	if (dentry->d_inode) {
-		if (dentry->d_inode->ref_count > 1) {
-			// Drop the namespace reference; open files and VMAs retain the detached inode.
-			dentry->d_inode->ref_count--;
-			dentry->d_inode->i_sb = nullptr;
-			dentry->d_inode->detached = true;
-			dentry->d_inode->detached_dentry = dentry;
-			dentry->d_parent = nullptr;
-			dentry->d_first_child = nullptr;
-			dentry->d_next_sibling = nullptr;
-			dentry->d_mounts = nullptr;
-			dentry->d_mounted_on = nullptr;
-			return;
-		}
-		else delete dentry->d_inode;
+		dentry->d_inode->i_sb = nullptr;
+		dentry->d_inode.reset();
 	}
 	delete dentry;
 }
@@ -941,7 +1108,7 @@ static vfs_dentry* _Create_unlocked(const char* pathname, stduint mode, vfs_dent
 		if (!next_d) {
 			// Create the missing directory entry in the current filesystem (usually rootfs)
 			next_d = alloc_dentry(current, part);
-			vfs_inode* inod = alloc_inode(current->d_inode->i_sb);
+			auto inod = alloc_inode(current->d_inode->i_sb);
 			inod->i_mode = I_DIRECTORY; // Mount points are always directories
 			inod->internal_handler = next_d; // RootFs: dir_handler == its own dentry
 			next_d->d_inode = inod;
@@ -1071,8 +1238,10 @@ file_system_type* Filesys::Mount(StorageTrait& storage, stduint dev, const char*
 				dev, VFSMountOwnership::FilesystemAndStorage)) return nullptr;
 			if (Filesys::GetSystemVirtualRootPath().getByteCount() &&
 				Taskman::Locate(Task_Init) && Taskman::Locate(Task_Devsman)) {
-				(void)syssend_async(Task_Devsman, nullptr, 0,
-					_IMM(DevsmanMsg::LOAD_DRIVER_DIRECTORY));
+				if (syssend_async(Task_Devsman, nullptr, 0,
+					_IMM(DevsmanMsg::LOAD_DRIVER_DIRECTORY))) {
+					plogwarn("[VFS] failed to queue driver directory scan");
+				}
 			}
 			return fs_type;
 		}
@@ -1304,7 +1473,7 @@ int Filesys::Open(const char* pathname, int flags, vfs_file** out_file, vfs_dent
 			dentry = alloc_dentry(parent_dentry, fname);
 
 			// Use alloc_inode to create a proper Virtual Inode with a valid Superblock (i_sb)
-			vfs_inode* new_vfs_inode = alloc_inode(parent_dentry->d_inode->i_sb);
+			auto new_vfs_inode = alloc_inode(parent_dentry->d_inode->i_sb);
 			new_vfs_inode->i_mode = (flags & O_DIRECTORY) ? I_DIRECTORY : I_REGULAR;
 			new_vfs_inode->i_size = 0;
 
@@ -1332,14 +1501,13 @@ int Filesys::Open(const char* pathname, int flags, vfs_file** out_file, vfs_dent
 			// And requires writability.
 			int mode = flags & O_ACCMODE;
 			if (mode == O_WRONLY || mode == O_RDWR) {
-				dentry->d_inode->i_size = 0;
+				if (!TruncateInode(dentry->d_inode.get(), 0)) return -1;
 			}
 		}
 	}
 
 	vfs_file* file = new vfs_file();
 	if (!file) return -1;
-	file->f_dentry = dentry;
 	file->f_inode = dentry->d_inode;
 	file->f_mode = flags;
 	
@@ -1349,8 +1517,6 @@ int Filesys::Open(const char* pathname, int flags, vfs_file** out_file, vfs_dent
 	} else {
 		file->f_pos = 0;
 	}
-	dentry->d_inode->ref_count++;
-
 	*out_file = file;
 	return 0;
 }
@@ -1366,10 +1532,9 @@ int Filesys::Read(vfs_file* file, void* buf, stduint count) {
 		const stduint io_flags = (file->f_mode & O_NONBLOCK) ? 0 : syscall_net_io_flag_wait;
 		return Filesys::RecvSocket(file, buf, count, nullptr, nullptr, io_flags);
 	}
-	if (!file->f_inode->i_sb) return -1;
 	MutexLocal guard(&vfs_lock);
-	if (!file->f_inode->i_sb) return -1;
-	FilesysTrait* fs = file->f_inode->i_sb->fs;
+	FilesysTrait* fs = GetInodeFilesystem(file->f_inode.get());
+	if (!fs) return -1;
 	if (fs == &global_devfs) {
 		if (auto* node = DevFs::GetDeviceNode(file->f_inode->internal_handler)) {
 			const stdsint bytes = Devsman::Read(node, buf, count, file->f_pos);
@@ -1393,10 +1558,9 @@ int Filesys::Write(vfs_file* file, const void* buf, stduint count) {
 		if (!socket) return -1;
 		return Filesys::SendSocket(file, buf, count, nullptr);
 	}
-	if (!file->f_inode->i_sb) return -1;
 	MutexLocal guard(&vfs_lock);
-	if (!file->f_inode->i_sb) return -1;
-	FilesysTrait* fs = file->f_inode->i_sb->fs;
+	FilesysTrait* fs = GetInodeFilesystem(file->f_inode.get());
+	if (!fs) return -1;
 	if (fs == &global_devfs) {
 		if (auto* node = DevFs::GetDeviceNode(file->f_inode->internal_handler)) {
 			const stdsint bytes = Devsman::Send(node, buf, count, file->f_pos);
@@ -1410,14 +1574,24 @@ int Filesys::Write(vfs_file* file, const void* buf, stduint count) {
 	if (file->f_pos > file->f_inode->i_size) {
 		file->f_inode->i_size = file->f_pos;
 	}
+	if (bytes && (file->f_inode->i_mode & I_TYPE_MASK) == I_REGULAR) {
+		AdvanceContentVersion(file->f_inode.get());
+	}
 	return bytes;
 }
 
-stdsint Filesys::Ctrl(vfs_file* file, stduint cmd, void* args) {
-	if (!file || !file->f_inode || !file->f_inode->i_sb) return -1;
+bool Filesys::Truncate(vfs_file* file, stduint size) {
+	if (!file || !file->f_inode) return false;
 	MutexLocal guard(&vfs_lock);
-	if (!file->f_inode->i_sb) return -1;
-	if (file->f_inode->i_sb->fs != &global_devfs) return -1;
+	int mode = file->f_mode & O_ACCMODE;
+	if (mode != O_WRONLY && mode != O_RDWR) return false;
+	return TruncateInode(file->f_inode.get(), size);
+}
+
+stdsint Filesys::Ctrl(vfs_file* file, stduint cmd, void* args) {
+	if (!file || !file->f_inode) return -1;
+	MutexLocal guard(&vfs_lock);
+	if (GetInodeFilesystem(file->f_inode.get()) != &global_devfs) return -1;
 	auto* node = DevFs::GetDeviceNode(file->f_inode->internal_handler);
 	return node ? Devsman::Ctrl(node, cmd, args, file->f_mode) : -1;
 }
@@ -1430,34 +1604,21 @@ int Filesys::Close(vfs_file* file) {
 	if ((file->f_inode->i_mode & I_TYPE_MASK) == I_SOCK) {
 		return Filesys::CloseSocket(file);
 	}
-	vfs_inode* detached_inode = nullptr;
-	vfs_dentry* detached_dentry = nullptr;
+	SharedPtr<vfs_inode> inode;
 	{
 		MutexLocal guard(&vfs_lock);
-		auto* inode = file->f_inode;
-		if (inode && inode->ref_count) inode->ref_count--;
-		if (inode && file->f_pos > inode->i_size) {
-			inode->i_size = file->f_pos;
-		}
-		file->f_inode = nullptr;
-		file->f_dentry = nullptr;
-		delete file;
-		if (inode && inode->detached && !inode->ref_count) {
-			detached_inode = inode;
-			detached_dentry = inode->detached_dentry;
-		}
+		inode = static_cast<SharedPtr<vfs_inode>&&>(file->f_inode);
 	}
-	delete detached_dentry;
-	delete detached_inode;
+	delete file;
 	return 0;
 }
 
 int Filesys::Enumer(vfs_file* file, void* buf, stduint count, ProcessBlock* pb) {
-	if (!file || !file->f_inode || !file->f_inode->i_sb) return -1;
+	if (!file || !file->f_inode) return -1;
 	if (count == 0) return 0;
 	MutexLocal guard(&vfs_lock);
-	if (!file->f_inode->i_sb) return -1;
-	FilesysTrait* fs = file->f_inode->i_sb->fs;
+	FilesysTrait* fs = GetInodeFilesystem(file->f_inode.get());
+	if (!fs) return -1;
 	file->f_enum_state.begin(count);
 
 	g_enum_cxt.pb = pb;
@@ -1476,54 +1637,76 @@ int Filesys::Enumer(vfs_file* file, void* buf, stduint count, ProcessBlock* pb) 
 bool Filesys::Remove(const char* pathname, vfs_dentry* base) {
 	MutexLocal guard(&vfs_lock);
 	vfs_dentry* dentry = _Index_unlocked(pathname, base);
-	if (!dentry || !dentry->d_inode || !dentry->d_inode->i_sb) return false;
+	if (!dentry || !dentry->d_inode || !dentry->d_parent || dentry->d_mounts) return false;
+	if ((dentry->d_inode->i_mode & I_TYPE_MASK) != I_REGULAR) return false;
 
-	FilesysTrait* fs = dentry->d_inode->i_sb->fs;
-	if (fs) {
-		// Reconstruct relative path for the physical filesystem
-		char rel_path[256];
-		rel_path[0] = '\0';
-		vfs_dentry* curr = dentry;
+	auto inode = dentry->d_inode;
+	FilesysTrait* fs = GetInodeFilesystem(inode.get());
+	char relative_path[256];
+	if (!fs || !BuildMountRelativePath(dentry, relative_path,
+		sizeof(relative_path))) return false;
+	if (!fs->unlink(relative_path, inode->internal_handler)) return false;
 
-		// Traverse upward until the mount point root (where d_parent is nullptr)
-		while (curr && curr->d_parent) {
-			char temp[256];
-			StrCopy(temp, rel_path);
+	KASSERT(DetachDentry(dentry));
+	inode->is_unlinked = true;
+	inode->i_sb = nullptr;
+	dentry->d_inode.reset();
+	delete dentry;
+	return true;
+}
 
-			// Prepend current directory/file name
-			String(rel_path, 256).Format("/%s%s", curr->d_name, temp);
-			curr = curr->d_parent;
-		}
+bool Filesys::Rename(const char* source, const char* destination, vfs_dentry* base) {
+	MutexLocal guard(&vfs_lock);
+	vfs_dentry* source_dentry = _Index_unlocked(source, base);
+	if (!source_dentry || !source_dentry->d_inode || !source_dentry->d_parent ||
+		source_dentry->d_mounts) return false;
 
-		// Handle root edge-case
-		if (rel_path[0] == '\0') {
-			StrCopy(rel_path, "/");
-		}
+	vfs_dentry* existing_destination = _Index_unlocked(destination, base);
+	if (existing_destination) return existing_destination == source_dentry;
 
-		// Pass the pure relative path to the underlying physical FS
-		bool ret = fs->remove(rel_path);
-		if (ret) {
-			vfs_dentry* parent = dentry->d_parent;
-			if (parent) {
-				if (parent->d_first_child == dentry) {
-					parent->d_first_child = dentry->d_next_sibling;
-				}
-				else {
-					vfs_dentry* prev = parent->d_first_child;
-					while (prev && prev->d_next_sibling != dentry) {
-						prev = prev->d_next_sibling;
-					}
-					if (prev) {
-						prev->d_next_sibling = dentry->d_next_sibling;
-					}
-				}
-			}
-			// Keep dentry and inode in memory to prevent Use-After-Free for active process file descriptors.
-			// They will remain as disconnected orphans and safely closed by closedir/close without crash.
-		}
-		return ret;
+	vfs_dentry* destination_parent = nullptr;
+	const char* destination_name = nullptr;
+	if (!ResolveParentAndName(destination, base, &destination_parent,
+		&destination_name)) return false;
+	if (!destination_parent->d_inode || !destination_parent->d_inode->i_sb ||
+		(destination_parent->d_inode->i_mode & I_TYPE_MASK) != I_DIRECTORY) return false;
+	if (source_dentry->d_inode->i_sb != destination_parent->d_inode->i_sb) return false;
+	if (lookup_dentry(destination_parent, destination_name,
+		StrLength(destination_name))) return false;
+
+	for (vfs_dentry* ancestor = destination_parent; ancestor;
+		ancestor = ancestor->d_parent) {
+		if (ancestor == source_dentry) return false;
 	}
-	return false;
+
+	char source_path[256];
+	char destination_path[256];
+	if (!BuildMountRelativePath(source_dentry, source_path, sizeof(source_path)) ||
+		!BuildMountRelativeChildPath(destination_parent, destination_name,
+			destination_path, sizeof(destination_path))) return false;
+
+	FilesysTrait* fs = GetInodeFilesystem(source_dentry->d_inode.get());
+	if (!fs || !source_dentry->d_inode->internal_handler ||
+		!fs->rename(source_path, destination_path)) return false;
+
+	byte refreshed_handler[128];
+	FilesysSearchArgs search_args = { refreshed_handler, nullptr, nullptr, nullptr };
+	if (!fs->search(destination_path, &search_args)) {
+		fs->rename(destination_path, source_path);
+		return false;
+	}
+	MemCopyN(source_dentry->d_inode->internal_handler, refreshed_handler,
+		sizeof(refreshed_handler));
+
+	vfs_dentry* source_parent = source_dentry->d_parent;
+	if (source_parent != destination_parent) {
+		KASSERT(DetachDentry(source_dentry));
+		AppendDentry(destination_parent, source_dentry);
+	}
+	const stduint name_length = StrLength(destination_name);
+	MemCopyN(source_dentry->d_name, destination_name, name_length);
+	source_dentry->d_name[name_length] = '\0';
+	return true;
 }
 
 //{} single mount level only
@@ -1934,7 +2117,7 @@ int Filesys::CreatePipe(vfs_file** out_reader, vfs_file** out_writer) {
 	chan->writer_count = 1;
 	
 	// Allocate VFS Inode for the pipe
-	vfs_inode* inode = alloc_inode(nullptr);
+	auto inode = alloc_inode(nullptr);
 	if (!inode) {
 		delete[] buf;
 		delete chan;
@@ -1942,18 +2125,15 @@ int Filesys::CreatePipe(vfs_file** out_reader, vfs_file** out_writer) {
 	}
 	inode->i_mode = I_NAMED_PIPE;
 	inode->internal_handler = chan;
-	inode->ref_count = 2; // For reader and writer
 	inode->i_size = 0;
 	
 	// Allocate vfs_file for reader
 	vfs_file* file_r = new vfs_file();
 	if (!file_r) {
-		delete inode;
 		delete[] buf;
 		delete chan;
 		return -1;
 	}
-	file_r->f_dentry = nullptr;
 	file_r->f_inode = inode;
 	file_r->f_pos = 0;
 	file_r->f_mode = O_RDONLY;
@@ -1962,12 +2142,10 @@ int Filesys::CreatePipe(vfs_file** out_reader, vfs_file** out_writer) {
 	vfs_file* file_w = new vfs_file();
 	if (!file_w) {
 		delete file_r;
-		delete inode;
 		delete[] buf;
 		delete chan;
 		return -1;
 	}
-	file_w->f_dentry = nullptr;
 	file_w->f_inode = inode;
 	file_w->f_pos = 0;
 	file_w->f_mode = O_WRONLY;
@@ -1994,23 +2172,20 @@ int Filesys::CreateSocket(vfs_file** out_file, Network::SocketDomain domain,
 	socket->type = type;
 	socket->protocol = protocol;
 
-	vfs_inode* inode = alloc_inode(nullptr);
+	auto inode = alloc_inode(nullptr);
 	if (!inode) {
 		delete socket;
 		return -1;
 	}
 	inode->i_mode = I_SOCK;
 	inode->internal_handler = socket;
-	inode->ref_count = 1;
 	inode->i_size = 0;
 
 	vfs_file* file = new vfs_file();
 	if (!file) {
-		delete inode;
 		delete socket;
 		return -1;
 	}
-	file->f_dentry = nullptr;
 	file->f_inode = inode;
 	file->f_pos = 0;
 	file->f_mode = 0;
@@ -3253,6 +3428,7 @@ void Filesys::CancelPipeWait(::ThreadBlock* th, bool release_io) {
 int Filesys::ClosePipe(vfs_file* file) {
 	PipeChannel* chan = (PipeChannel*)file->f_inode->internal_handler;
 	if (!chan) return -1;
+	SharedPtr<vfs_inode> inode = static_cast<SharedPtr<vfs_inode>&&>(file->f_inode);
 	
 	bool old_if = chan->lock.Acquire();
 	ThreadBlock* wake_list = nullptr;
@@ -3274,7 +3450,7 @@ int Filesys::ClosePipe(vfs_file* file) {
 	bool destroy = (chan->reader_count == 0 && chan->writer_count == 0);
 	if (destroy) {
 		chan->closing = true;
-		if (file->f_inode) file->f_inode->internal_handler = nullptr;
+		inode->internal_handler = nullptr;
 		destroy = chan->active_io == 0;
 	}
 	chan->lock.Release(old_if);
@@ -3284,15 +3460,6 @@ int Filesys::ClosePipe(vfs_file* file) {
 	PipeWakeList(wake_list, wake_reason);
 	
 	if (destroy) DestroyPipeChannel(chan);
-	
-	// Normal inode clean up
-	MutexLocal guard(&vfs_lock);
-	if (file->f_inode) {
-		if (file->f_inode->ref_count) file->f_inode->ref_count--;
-		if (file->f_inode->ref_count == 0) {
-			delete file->f_inode;
-		}
-	}
 	delete file;
 	return 0;
 }
@@ -3310,10 +3477,11 @@ int Filesys::CloseSocket(vfs_file* file) {
 	bool is_listening = false;
 	Network::SocketEndpointIPv4 local_ipv4 = {};
 	Network::SocketEndpointIPv4 remote_ipv4 = {};
+	SharedPtr<vfs_inode> inode;
 	{
 		MutexLocal guard(&vfs_lock);
-		if (file->f_inode && file->f_inode->ref_count) file->f_inode->ref_count--;
-		destroy = file->f_inode && file->f_inode->ref_count == 0;
+		inode = static_cast<SharedPtr<vfs_inode>&&>(file->f_inode);
+		destroy = inode.unique();
 		if (destroy) {
 			domain = socket->domain;
 			protocol = socket->protocol;
@@ -3324,7 +3492,9 @@ int Filesys::CloseSocket(vfs_file* file) {
 			local_ipv4 = socket->local_ipv4;
 			remote_ipv4 = socket->remote_ipv4;
 		}
+		else inode.reset();
 	}
+	delete file;
 
 	if (destroy) {
 		#if (_MCCA & 0xFF00) == 0x8600
@@ -3346,11 +3516,8 @@ int Filesys::CloseSocket(vfs_file* file) {
 			Devsman::CloseTcpPort(local_ipv4.address, local_ipv4.port);
 		}
 		#endif
-		MutexLocal guard(&vfs_lock);
 		delete socket;
-		file->f_inode->internal_handler = nullptr;
-		delete file->f_inode;
+		inode->internal_handler = nullptr;
 	}
-	delete file;
 	return 0;
 }

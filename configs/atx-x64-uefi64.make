@@ -54,6 +54,7 @@ cppfile=\
 	$(ulibpath)/cpp/Witch/_TextChrome.cpp \
 	\
 	$(ulibpath)/cpp/Device/ACPI.cpp \
+	$(ulibpath)/cpp/Device/Cache.cpp \
 	$(ulibpath)/cpp/Device/Bus/PCI.cpp \
 	$(ulibpath)/cpp/Device/Bus/ISA.cpp \
 	$(ulibpath)/cpp/Device/Keyboard.cpp \

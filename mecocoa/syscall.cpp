@@ -938,8 +938,8 @@ DEFSYSC sysc_READ(stduint fd, stduint addr, stduint len) {
 		if (fd < files->pfiles.Count() &&
 			files->pfiles[fd] &&
 			asrtand(files->pfiles[fd])->vfile &&
-			asrtand(files->pfiles[fd]->vfile->f_dentry)->d_inode &&
-			files->pfiles[fd]->vfile->f_dentry->d_inode->i_mode == I_CHAR_SPECIAL) {
+			files->pfiles[fd]->vfile->f_inode &&
+			files->pfiles[fd]->vfile->f_inode->i_mode == I_CHAR_SPECIAL) {
 			is_char_special = true;
 		}
 	}
@@ -1079,7 +1079,7 @@ DEFSYSC sysc_PORP(stduint fd, stduint usr_proper) {
 	}
 
 	auto* vfile = files->pfiles[fd]->vfile;
-	auto* inode = vfile->f_inode;
+	auto* inode = vfile->f_inode.get();
 	if (!inode) {
 		return -1;
 	}
@@ -1351,7 +1351,6 @@ DEFSYSC sysc_MMAP(stduint len, stduint flag, stduint fd) {
 		uni::vfs_file* parent_vfile = files->pfiles[fd]->vfile;
 		uni::vfs_file* nvfile = new uni::vfs_file(*parent_vfile);
 		if (!nvfile) return ~_IMM0;
-		if (nvfile->f_inode) nvfile->f_inode->ref_count++;
 		vma.vm_type = VirtualMemoryAreaType::File;
 		vma.vm_mode = VirtualMemoryAreaMode::Shared;
 		vma.vfile = nvfile;

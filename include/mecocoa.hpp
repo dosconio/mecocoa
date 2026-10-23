@@ -121,6 +121,9 @@ void serv_netw_loop();
 void serv_dev_audio_loop();
 void serv_file_loop();
 void serv_devs_loop();
+#if _MCCA == 0x8664
+void serv_usb_loop();
+#endif
 #include "devsman.hpp"
 #include "virtual.hpp"
 

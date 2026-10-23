@@ -591,9 +591,6 @@ ProcessBlock* Taskman::CreateFork(ProcessBlock* fo, const CallgateFrame* frame) 
 				child_vmas_owned = true;
 				return discard_child();
 			}
-			if (nvfile->f_inode) {
-				nvfile->f_inode->ref_count++;
-			}
 			vma.vfile = nvfile;
 		}
 	}

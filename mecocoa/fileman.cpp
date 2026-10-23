@@ -182,17 +182,15 @@ stdsint ProcessBlock::AcceptSocket(int fd, uni::Network::SocketAddress* address,
 	{
 		auto files = this->fileman.Lock();
 		if (fd < 0 || fd >= (stdsint)files->pfiles.Count() || !files->pfiles[fd] || !files->pfiles[fd]->vfile) return -1;
-		file = files->pfiles[fd]->vfile;
-		if (!file->f_inode || (file->f_inode->i_mode & I_TYPE_MASK) != I_SOCK) return -1;
-		file->f_inode->ref_count++;
+		auto* source = files->pfiles[fd]->vfile;
+		if (!source->f_inode || (source->f_inode->i_mode & I_TYPE_MASK) != I_SOCK) return -1;
+		file = new vfs_file(*source);
 	}
+	if (!file) return -1;
 
 	vfs_file* accepted_file = nullptr;
 	const stdsint accepted = Filesys::AcceptSocket(file, &accepted_file, address, address_length);
-	{
-		auto files = this->fileman.Lock();
-		if (file->f_inode && file->f_inode->ref_count) file->f_inode->ref_count--;
-	}
+	Filesys::Close(file);
 	if (accepted <= 0) return accepted;
 
 	auto files = this->fileman.Lock();
@@ -697,23 +695,21 @@ FileDescriptor* FileDescriptor_Clone(FileDescriptor* src) {
 		return nullptr;
 	}
 	pfd->vfile = nvfile;
-			// Increment ref count of the inode
-			if (pfd->vfile->f_inode) {
-				pfd->vfile->f_inode->ref_count++;
-				if ((pfd->vfile->f_inode->i_mode & I_TYPE_MASK) == I_NAMED_PIPE) {
-					PipeChannel* chan = (PipeChannel*)pfd->vfile->f_inode->internal_handler;
-					if (chan) {
-						bool old_if = chan->lock.Acquire();
-						if ((pfd->vfile->f_mode & O_ACCMODE) == O_RDONLY) {
-							chan->reader_count++;
-						} else if ((pfd->vfile->f_mode & O_ACCMODE) == O_WRONLY) {
-							chan->writer_count++;
-						}
-						chan->lock.Release(old_if);
-					}
+	if (pfd->vfile->f_inode) {
+		if ((pfd->vfile->f_inode->i_mode & I_TYPE_MASK) == I_NAMED_PIPE) {
+			PipeChannel* chan = (PipeChannel*)pfd->vfile->f_inode->internal_handler;
+			if (chan) {
+				bool old_if = chan->lock.Acquire();
+				if ((pfd->vfile->f_mode & O_ACCMODE) == O_RDONLY) {
+					chan->reader_count++;
+				} else if ((pfd->vfile->f_mode & O_ACCMODE) == O_WRONLY) {
+					chan->writer_count++;
 				}
+				chan->lock.Release(old_if);
 			}
-			return pfd;
+		}
+	}
+	return pfd;
 }
 
 #if defined(_MCU_STM32H7x)
@@ -745,6 +741,16 @@ static void _TryStartUserApp() {
 #endif
 
 //// ---- ---- SERVICE ---- ---- ////
+
+#if _MCCA == 0x8664
+static bool IsUSBStorageSource(stduint tid) {
+	if (tid == Task_Devsman) return true;
+	#if defined(_UEFI)
+	if (tid == Task_Usb_Serv) return true;
+	#endif
+	return false;
+}
+#endif
 
 #if 1
 void serv_file_loop()// for IDE 0:0, 0:1
@@ -794,18 +800,29 @@ void serv_file_loop()// for IDE 0:0, 0:1
 		#endif
 		#if _MCCA == 0x8664
 		case FilemanMsg::USB_MSC_PROBE:
-			if (sig_src == Task_Devsman) {
+			if (IsUSBStorageSource(sig_src)) {
 				Devsman::ProcessUSBMSCProbe(reinterpret_cast<void*>(to_args[0]));
 			}
+			else plogwarn("[Fileman] USB_MSC_PROBE rejected source=%u", sig_src);
 			break;
 		case FilemanMsg::USB_MSC_MOUNT:
-			if (sig_src == Task_Devsman) {
+			if (IsUSBStorageSource(sig_src)) {
 				Devsman::MountUSBMSCStorage(reinterpret_cast<void*>(to_args[0]));
 			}
+			else plogwarn("[Fileman] USB_MSC_MOUNT rejected source=%u", sig_src);
 			break;
 		case FilemanMsg::USB_MSC_UNMOUNT:
-			if (sig_src == Task_Devsman) {
+			if (IsUSBStorageSource(sig_src)) {
 				Devsman::UnmountUSBMSCStorage(reinterpret_cast<void*>(to_args[0]));
+			}
+			else plogwarn("[Fileman] USB_MSC_UNMOUNT rejected source=%u", sig_src);
+			break;
+		case FilemanMsg::LOAD_DRIVER_FILE:
+			if (sig_src == Task_Devsman) {
+				ProcessBlock* driver = Taskman::CreateFile(
+					reinterpret_cast<const char*>(to_args[0]), RING_S,
+					Task_Devsman, nullptr, false);
+				syssend(sig_src, &driver, sizeof(driver));
 			}
 			break;
 		#endif

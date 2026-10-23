@@ -276,7 +276,6 @@ static uni::vfs_file* CloneVmaFile(uni::vfs_file* source) {
 	if (!source) return nullptr;
 	auto* result = new uni::vfs_file(*source);
 	if (!result) return nullptr;
-	if (result->f_inode) result->f_inode->ref_count++;
 	return result;
 }
 
@@ -599,7 +598,6 @@ void* ProcessBlock::EnsureVmaPage(stduint address, VirtualMemoryAccess access) {
 					!vma.vfile || address - vma.vm_start + vma.file_offset !=
 						expected_file_offset) break;
 				*read_file = *vma.vfile;
-				if (read_file->f_inode) read_file->f_inode->ref_count++;
 				retained = true;
 				break;
 			}
@@ -652,7 +650,7 @@ void* ProcessBlock::EnsureVmaPage(stduint address, VirtualMemoryAccess access) {
 			if (vma.vm_type != expected_type || vma.vm_mode != expected_mode ||
 				vma.vm_flags != expected_flags) break;
 			if (file_backed && (!vma.vfile || !read_file ||
-				vma.vfile->f_inode != read_file->f_inode ||
+				vma.vfile->f_inode.get() != read_file->f_inode.get() ||
 				address - vma.vm_start + vma.file_offset != expected_file_offset)) break;
 			stduint properties = vma.vm_flags & (PGPROP_present |
 				PGPROP_writable | PGPROP_user_access | PGPROP_nonexecutable);

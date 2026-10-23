@@ -16,6 +16,7 @@ enum class PwcallDeviceOpenFlag : uint32 {
 	None = 0,
 	Interrupt = 1 << 0,
 	MsiOnly = 1 << 1,
+	MsixPreferred = 1 << 2,
 };
 
 enum class PwcallDeviceResourceType : uint16 {

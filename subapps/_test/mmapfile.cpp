@@ -2,11 +2,13 @@
 #include "aaaaa.h"
 #include "c/consio.h"
 #include "unistd.h"
+#include <fcntl.h>
 #include <c/ISO_IEC_STD/signal.h>
 #include <sys/mman.h>
 #include <sys/wait.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 using namespace uni;
 
@@ -547,11 +549,96 @@ int main(int argc, char** argv)
 			return -1;
 		}
 		outsfmt("Success: Exec released and wrote back its old mapping.\n\r");
+
+		// 16. O_TRUNC must update the backend file and the shared inode size.
+		fd = open(test_file, O_WRONLY | O_TRUNC);
+		if (fd < 0) {
+			outsfmt("Error: O_TRUNC open failed!\n\r");
+			return -1;
+		}
+		close(fd);
+		fd = sysopen(test_file);
+		char truncated_byte = 0;
+		int truncated_size = fd < 0 ? -1 : lseek(fd, 0, SEEK_END);
+		int truncated_read = fd < 0 ? -1 : read(fd, &truncated_byte, 1);
+		if (fd >= 0) close(fd);
+		if (truncated_size != 0 || truncated_read != 0) {
+			outsfmt("Error: O_TRUNC did not produce an empty file!\n\r");
+			return -1;
+		}
+		outsfmt("Success: O_TRUNC updated the backend file and inode size.\n\r");
+
+		// 17. Unlink must detach the name while open descriptors and mappings retain the old file.
+		rostr unlink_file = "/md0/mmap_u.txt";
+		sys_removefil(unlink_file);
+		int old_fd = sys_createfil(unlink_file);
+		static const char old_content[] = "old mapping";
+		static const char new_content[] = "new file";
+		if (old_fd < 0 || write(old_fd, old_content, sizeof(old_content)) !=
+			sizeof(old_content)) {
+			outsfmt("Error: Failed to prepare unlink lifecycle file!\n\r");
+			if (old_fd >= 0) close(old_fd);
+			return -1;
+		}
+		void* old_map = mmap(nullptr, 4096, PROT_READ | PROT_WRITE,
+			MAP_SHARED, old_fd, 0);
+		if (old_map == MAP_FAILED || ((char*)old_map)[0] != old_content[0]) {
+			outsfmt("Error: Failed to map unlink lifecycle file!\n\r");
+			if (old_map != MAP_FAILED) munmap(old_map, 4096);
+			close(old_fd);
+			return -1;
+		}
+		int unlink_result = unlink(unlink_file);
+		int missing_fd = unlink_result == 0 ? sysopen(unlink_file) : -1;
+		if (missing_fd >= 0) close(missing_fd);
+		if (unlink_result != 0 || missing_fd >= 0) {
+			outsfmt("Error: Unlink did not remove the old namespace entry!\n\r");
+			munmap(old_map, 4096);
+			close(old_fd);
+			return -1;
+		}
+		char old_verify[sizeof(old_content)] = {};
+		if (lseek(old_fd, 0, SEEK_SET) != 0 ||
+			read(old_fd, old_verify, sizeof(old_verify)) != sizeof(old_verify) ||
+			memcmp(old_verify, old_content, sizeof(old_content))) {
+			outsfmt("Error: Open descriptor did not retain the unlinked file!\n\r");
+			munmap(old_map, 4096);
+			close(old_fd);
+			return -1;
+		}
+		int new_fd = sys_createfil(unlink_file);
+		if (new_fd < 0 || write(new_fd, new_content, sizeof(new_content)) !=
+			sizeof(new_content)) {
+			outsfmt("Error: Failed to create a new file under the unlinked name!\n\r");
+			if (new_fd >= 0) close(new_fd);
+			munmap(old_map, 4096);
+			close(old_fd);
+			return -1;
+		}
+		close(new_fd);
+		((char*)old_map)[0] = 'O';
+		close(old_fd);
+		if (munmap(old_map, 4096) != 0) {
+			outsfmt("Error: Failed to release the unlinked mapping!\n\r");
+			return -1;
+		}
+		new_fd = sysopen(unlink_file);
+		char new_verify[sizeof(new_content)] = {};
+		if (new_fd < 0 || read(new_fd, new_verify, sizeof(new_verify)) !=
+			sizeof(new_verify) || memcmp(new_verify, new_content,
+				sizeof(new_content))) {
+			outsfmt("Error: Old mapping changed the replacement file!\n\r");
+			if (new_fd >= 0) close(new_fd);
+			return -1;
+		}
+		close(new_fd);
+		sys_removefil(unlink_file);
+		outsfmt("Success: Unlink retained the old file and isolated its replacement.\n\r");
 		outsfmt("=== File MMAP Test ALL PASSED! ===\n\r");
 
-		// 16. Clean up the temporary test file
+		// 18. Clean up the temporary test file
 		sys_removefil(test_file);
-		outsfmt("Step 16: Cleaned up test file.\n\r");
+		outsfmt("Step 18: Cleaned up test file.\n\r");
 	}
 	#endif
 

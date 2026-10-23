@@ -149,8 +149,7 @@ bool device_event_proc(stduint tid, const DeviceEvent& event) {
 		extern Spinlock comm_lock;
 		SpinlockLocal guard(&comm_lock);
 		if (!thread->device_events) return false;
-		if ((_IMM(thread->block_reason) & _IMM(ThreadBlock::BlockReason::BR_RecvMsg)) &&
-			thread->unsolved_msg &&
+		if (!thread->send_to_whom && thread->unsolved_msg &&
 			((stduint)thread->recv_fo_whom == ANYPROC || (stduint)thread->recv_fo_whom == INTRUPT) &&
 			WriteDeviceEventMessage(thread->unsolved_msg, thread->parent_process,
 				thread->unsolved_msg_from_kernel, event)) {
@@ -766,7 +765,8 @@ int msg_recv(ThreadBlock* to_th, stduint foo, _Comment(vaddr) CommMsg* msg, bool
 				}
 			}
 			else {
-				to_th->Unblock(ThreadBlock::BlockReason::BR_RecvMsg);
+				(void)Taskman::UnblockThread(to_th->tid,
+					ThreadBlock::BlockReason::BR_RecvMsg);
 			}
 
 			// If woke up or already delivered with unsolved_msg == nullptr, message (sync/interrupt) was already copied directly!

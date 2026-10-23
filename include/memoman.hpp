@@ -129,8 +129,18 @@ namespace Iova {
 		bool translated;
 	};
 
+	struct InterruptMessage {
+		uint64 address;
+		uint32 data;
+		uint16 handle;
+	};
+
 	bool ProbeVtd(stduint dmar_address);
 	bool EnableVtdPassthrough(DeviceNode* pci_root);
+	bool InterruptRemappingAvailable();
+	bool AllocatePciInterrupt(DeviceNode* device, uint32 target_lapic_id,
+		uint8 vector, InterruptMessage& message);
+	void ReleaseInterrupt(uint16 handle);
 	bool MapDeviceDma(DeviceNode* device, stduint physical,
 		stduint length, DmaMappingFlag flags, DmaMapping& mapping);
 	bool UnmapDeviceDma(DeviceNode* device, uint64 device_address,

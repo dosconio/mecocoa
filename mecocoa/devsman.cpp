@@ -2791,28 +2791,38 @@ namespace {
 		return false;
 	}
 
-	bool ShouldLoadRingDriver(const char* filename) {
-		if (!filename) return false;
+	const char* SelectRingDriver(const char* filename) {
+		if (!filename) return nullptr;
 		for0(i, numsof(always_load_ring_drivers)) {
-			if (StrCompare(filename, always_load_ring_drivers[i]) == 0) return true;
+			if (StrCompareInsensitive(filename, always_load_ring_drivers[i]) == 0)
+				return always_load_ring_drivers[i];
 		}
 		for0(i, numsof(pci_ring_driver_match_table)) {
 			const auto& entry = pci_ring_driver_match_table[i];
-			if (StrCompare(filename, entry.filename) == 0 &&
+			if (StrCompareInsensitive(filename, entry.filename) == 0 &&
 				HasMatchingPciDevice(Devsman::Root(), entry)) {
-				return true;
+				return entry.filename;
 			}
 		}
-		return false;
+		return nullptr;
 	}
 
 	bool LaunchDriverProcess(DriverProcessRecord& record) {
+		ProcessBlock* task = nullptr;
+		#if _MCCA == 0x8664
+		const stduint path = _IMM(record.path);
+		if (!syssend(Task_FileSys, &path, sizeof(path),
+			_IMM(FilemanMsg::LOAD_DRIVER_FILE))) {
+			(void)sysrecv(Task_FileSys, &task, sizeof(task));
+		}
+		#else
 		#if (_MCCA & 0xFF00) == 0x8600
-		constexpr byte drv_ring = 1;
+		constexpr byte drv_ring = RING_S;
 		#else
 		constexpr byte drv_ring = RING_M;
 		#endif
-		ProcessBlock* task = Taskman::CreateFile(record.path, drv_ring, Task_Devsman, nullptr, false);
+		task = Taskman::CreateFile(record.path, drv_ring, Task_Devsman, nullptr, false);
+		#endif
 		if (!task) {
 			plogwarn("[Devsman] load driver failed: %s", record.path);
 			return false;
@@ -2871,6 +2881,7 @@ namespace {
 
 		String drv_dir_str = String::newFormat("%s/drvs", runtime_root.reference());
 		const char* drv_dir = drv_dir_str.reference();
+		ploginfo("[Devsman] scanning driver directory: %s", drv_dir);
 		stdsint fd = -1;
 		struct {
 			stduint flag;
@@ -2879,9 +2890,16 @@ namespace {
 		} open_msg = { O_RDONLY | O_DIRECTORY, current->getID(), drv_dir };
 		syssend(Task_FileSys, &open_msg, sizeof(open_msg), _IMM(FilemanMsg::OPEN));
 		sysrecv(Task_FileSys, &fd, sizeof(fd));
-		if (fd < 0) return false;
+		if (fd < 0) {
+			plogwarn("[Devsman] driver directory open failed: %s", drv_dir);
+			return false;
+		}
 
 		const stduint drv_dir_len = StrLength(drv_dir);
+		stduint files_seen = 0;
+		stduint matched = 0;
+		stduint loaded = 0;
+		bool scan_failed = false;
 		struct {
 			stduint fd;
 			stduint pid;
@@ -2897,25 +2915,41 @@ namespace {
 			syssend(Task_FileSys, enum_msg, byteof(enum_msg), _IMM(FilemanMsg::ENUMER));
 			sysrecv(Task_FileSys, enum_msg, byteof(enum_msg[0]));
 			const stdsint count = (stdsint)enum_msg[0];
-			if (count <= 0) break;
+			if (count < 0) {
+				plogwarn("[Devsman] driver directory enumeration failed: %s", drv_dir);
+				scan_failed = true;
+				break;
+			}
+			if (count == 0) break;
 
 			for (stdsint i = 0; i < count; ++i) {
 				if (entries[i].is_dir || !entries[i].name[0] || entries[i].name[0] == '.') continue;
-				if (!ShouldLoadRingDriver(entries[i].name)) continue;
+				files_seen++;
+				const char* driver_name = SelectRingDriver(entries[i].name);
+				if (!driver_name) {
+					ploginfo("[Devsman] driver skipped (no matching device or policy): %s",
+						entries[i].name);
+					continue;
+				}
+				matched++;
 
 				char path[96] = {};
 				StrCopy(path, drv_dir);
 				path[drv_dir_len] = '/';
 				StrCopy(path + drv_dir_len + 1, entries[i].name);
-				(void)RegisterDriverProcess(path, entries[i].name);
+				if (RegisterDriverProcess(path, driver_name)) loaded++;
 			}
 		}
 
 		stdsint close_ret = -1;
 		syssend(Task_FileSys, &close_msg, sizeof(close_msg), _IMM(FilemanMsg::CLOSE));
 		sysrecv(Task_FileSys, &close_ret, sizeof(close_ret));
-		driver_directory_ready = true;
-		return true;
+		driver_directory_ready = !scan_failed;
+		if (!scan_failed) {
+			ploginfo("[Devsman] driver scan complete: files=%u matched=%u loaded=%u",
+				files_seen, matched, loaded);
+		}
+		return !scan_failed;
 	}
 
 	stduint ReleaseDriverBindings(DeviceNode* node, stduint pid, stdsint exit_status) {
@@ -2987,9 +3021,6 @@ namespace {
 			Systimex::DispatchExpired();
 			break;
 		case DeviceEventKind::Interrupt:
-			#if _MCCA == 0x8664 && defined(_UEFI)
-			if (Devsman::ProcessXHCIEvent(event)) break;
-			#endif
 			plogwarn("[Devsman] unclaimed interrupt event handle=%u source=%u", event.device_handle, event.source);
 			break;
 		default:
@@ -3021,6 +3052,9 @@ namespace {
 	}
 
 	void RunDevsmanMessageLoop() {
+		#if _MCCA == 0x8664 && defined(_UEFI)
+		bool usb_service_started = false;
+		#endif
 		for (;;) {
 			DevsmanServicePayload payload = {};
 			stduint type = 0;
@@ -3067,6 +3101,30 @@ namespace {
 			}
 			#endif
 			#if _MCCA == 0x8664
+			#if defined(_UEFI)
+			else if (type == _IMM(DevsmanMsg::USB_SERVICE_READY)) {
+				if (source != Task_Usb_Serv || usb_service_started) {
+					plogwarn("[Devsman] invalid USB service ready source=%u", source);
+					continue;
+				}
+				auto* usb_thread = Taskman::LocateThread(source);
+				if (!usb_thread || !usb_thread->parent_process ||
+					!Devsman::BindXHCIEventOwner(
+						usb_thread->parent_process->pid, usb_thread->tid)) {
+					plogerro("[Devsman] failed to bind xHCI interrupt events");
+					continue;
+				}
+				usb_service_started = true;
+				if (syssend_async(Task_Usb_Serv, nullptr, 0,
+					_IMM(DevsmanMsg::USB_SERVICE_START))) {
+					plogerro("[Devsman] failed to start USB service");
+				}
+				else {
+					ploginfo("[Devsman] xHCI events bound to USB service pid=%u tid=%u",
+						usb_thread->parent_process->pid, usb_thread->tid);
+				}
+			}
+			#endif
 			else if (type == _IMM(DevsmanMsg::USB_MSC_READY)) {
 				if (source != Task_FileSys) {
 					plogwarn("[Devsman] USB MSC ready from invalid source=%u", source);
@@ -3126,11 +3184,6 @@ void serv_devs_loop() {
 	if (!device_event_prepare(current)) {
 		plogerro("[Devsman] failed to initialize device event queue");
 	}
-	#if _MCCA == 0x8664 && defined(_UEFI)
-	else if (!Devsman::BindXHCIEventOwner(current->parent_process->pid, current->tid)) {
-		plogerro("[Devsman] failed to bind xHCI interrupt events");
-	}
-	#endif
 	RunDevsmanMessageLoop();
 }
 

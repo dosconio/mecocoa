@@ -78,16 +78,16 @@ struct vfs_super_block {
 struct vfs_inode {
 	vfs_super_block* i_sb = nullptr;
 	SharedPtr<VFSMountState> mount_state;
+	~vfs_inode();
 	
+	uint64 identity = 0;               // Stable for this inode object's lifetime; never path-derived
+	uint64 content_version = 0;        // Read and advanced while holding vfs_lock
 	stduint i_no = 0;                 // Inode number
 	stduint i_mode = 0;               // File mode (type and permissions)
 	stduint i_size = 0;               // File size in bytes
+	bool is_unlinked = false;          // Backend data remains until the last inode reference is released
 	
 	void* internal_handler = nullptr;       // e.g. FAT_FileHandle* or internal inode* from specific FS
-	
-	stduint ref_count = 0;
-	bool detached = false;             // Mount removed while an open file still owns this inode
-	vfs_dentry* detached_dentry = nullptr;
 };
 
 #define VFS_MAX_FILENAME 64
@@ -98,7 +98,7 @@ struct vfs_dentry {
 	vfs_dentry* d_first_child = nullptr;    // First child directory/file
 	vfs_dentry* d_next_sibling = nullptr;   // Next sibling in the same directory
 
-	vfs_inode* d_inode = nullptr;           // The associated inode (if loaded)
+	SharedPtr<vfs_inode> d_inode;            // Namespace ownership of the associated inode
 	char d_name[VFS_MAX_FILENAME] = {};     // The name of this entry
 
 	// Mount point: If a filesystem is mounted ON THIS dentry,
@@ -125,8 +125,7 @@ struct PipeChannel {
 
 // Opened file representation (File descriptor struct)
 struct vfs_file {
-	vfs_dentry* f_dentry = nullptr;
-	vfs_inode* f_inode = nullptr;
+	SharedPtr<vfs_inode> f_inode;
 	stduint f_pos = 0;                // Current read/write position
 	stduint f_mode = 0;               // Open mode (R/W/A etc)
 	FilesysEnumState f_enum_state = {};
@@ -212,10 +211,15 @@ public:
 	static int Open(const char* pathname, int flags, vfs_file** out_file, vfs_dentry* base = nullptr);
 	static int Read(vfs_file* file, void* buf, stduint count);
 	static int Write(vfs_file* file, const void* buf, stduint count);
+	static bool Truncate(vfs_file* file, stduint size);
 	static stdsint Ctrl(vfs_file* file, stduint cmd, void* args);
 	static int Close(vfs_file* file);
 	static int Enumer(vfs_file* file, void* buf, stduint count, ProcessBlock* pb);
 	static bool Remove(const char* pathname, vfs_dentry* base = nullptr);
+	// Rename within one mounted filesystem while retaining the inode identity.
+	static bool Rename(const char* source, const char* destination, vfs_dentry* base = nullptr);
+	// Retain an inode only when the weak identity entry still refers to a live object.
+	static SharedPtr<vfs_inode> FindInode(uint64 identity);
 	//
 	static String getAbsolutePath(vfs_dentry* dentry);
 	static vfs_dentry* getRoot();

@@ -6,7 +6,7 @@
 #include "../../include/mecocoa.hpp"
 #include "c/driver/UART.h"
 #include <c/format/filesys/FAT.h>
-#include <cpp/Witch/Control/Control-Label.hpp>
+#include <cpp/Device/Cache>
 
 alignas(16) byte kernel_stack[1024 * 1024];
 
@@ -45,7 +45,7 @@ void mecocoa(const UefiData& uefi_data_ref)
 	ScreenLogAttach();	// TEMP
 	Consman::Initialize();
 	ScreenLogToLayer();// TEMP
-	//{} Cache_t::enAble();
+	Cache_t::enAble();
 	Filesys::Initialize();
 	Systime::Initialize();
 	Taskman::Initialize();
@@ -72,6 +72,7 @@ void mecocoa(const UefiData& uefi_data_ref)
 	Taskman::Create((void*)&serv_devs_loop, RING_M);
 	//
 	Taskman::Create((void*)&serv_netw_loop, RING_M);
+	Taskman::Create((void*)&serv_usb_loop, RING_M);
 
 	// try priority_queue Dchain
 	SysTimer::Append(250, 1);

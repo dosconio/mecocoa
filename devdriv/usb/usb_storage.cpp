@@ -154,6 +154,10 @@ namespace Devs {
 				auto* thread = Taskman::CurrentTB();
 				if (!thread || Taskman::CurrentTID() == Task_Devsman || !driver_ ||
 					!IsOnline()) return false;
+				#if defined(_UEFI)
+				if (thread->parent_process &&
+					thread->parent_process->pid == Task_Usb_Serv) return false;
+				#endif
 
 				waiter_.store(thread, uni::MemoryOrder_Release);
 				pending_command_id_.store(0, uni::MemoryOrder_Release);

@@ -19,7 +19,11 @@ namespace {
 	static constexpr stduint kVtdRootTableAddressRegister = 0x20;
 	static constexpr stduint VtdContextCommandRegister = 0x28;
 	static constexpr stduint kVtdFaultStatusRegister = 0x34;
-	static constexpr stduint kVtdRegisterWindowLength = 0x38;
+	static constexpr stduint VtdInvalidationQueueHeadRegister = 0x80;
+	static constexpr stduint VtdInvalidationQueueTailRegister = 0x88;
+	static constexpr stduint VtdInvalidationQueueAddressRegister = 0x90;
+	static constexpr stduint VtdInterruptRemappingTableAddressRegister = 0xB8;
+	static constexpr stduint kVtdRegisterWindowLength = 0xC0;
 	static constexpr uint64 VtdPageAddressMask = ~uint64(PAGE_SIZE - 1);
 	static constexpr uint64 VtdContextCommandInvalidate = uint64(1) << 63;
 	static constexpr uint64 VtdContextCommandGlobal = uint64(1) << 61;
@@ -29,10 +33,25 @@ namespace {
 	static constexpr uint64 VtdIotlbWriteDrain = uint64(1) << 48;
 	static constexpr uint32 VtdGlobalCommandEnableTranslation = uint32(1) << 31;
 	static constexpr uint32 VtdGlobalCommandSetRoot = uint32(1) << 30;
+	static constexpr uint32 VtdGlobalCommandEnableQueuedInvalidation = uint32(1) << 26;
+	static constexpr uint32 VtdGlobalCommandEnableInterruptRemapping = uint32(1) << 25;
+	static constexpr uint32 VtdGlobalCommandSetInterruptRemappingTable = uint32(1) << 24;
+	static constexpr uint32 VtdGlobalCommandCompatibilityInterrupts = uint32(1) << 23;
 	static constexpr uint32 VtdGlobalStatusTranslationEnabled = uint32(1) << 31;
 	static constexpr uint32 VtdGlobalStatusRootSet = uint32(1) << 30;
 	static constexpr uint32 VtdGlobalStatusQueuedInvalidation = uint32(1) << 26;
 	static constexpr uint32 VtdGlobalStatusInterruptRemapping = uint32(1) << 25;
+	static constexpr uint32 VtdGlobalStatusInterruptRemappingTableSet = uint32(1) << 24;
+	static constexpr uint32 VtdGlobalStatusCompatibilityInterrupts = uint32(1) << 23;
+	static constexpr uint32 VtdInvalidationQueueFaults =
+		(uint32(1) << 4) | (uint32(1) << 5) | (uint32(1) << 6);
+	static constexpr uint64 VtdInterruptRemappingExtendedMode = uint64(1) << 11;
+	static constexpr uint64 VtdInterruptCacheInvalidationType = 4;
+	static constexpr uint64 VtdInterruptCacheInvalidationSelective = uint64(1) << 4;
+	static constexpr uint64 VtdInvalidationWaitType = 5;
+	static constexpr uint64 VtdInvalidationWaitStatusWrite = uint64(1) << 5;
+	static constexpr uint32 VtdInvalidationStatusPending = 1;
+	static constexpr uint32 VtdInvalidationStatusComplete = 2;
 	static constexpr uint64 VtdRootPresent = 1;
 	static constexpr uint64 VtdContextPresent = 1;
 	static constexpr uint64 VtdContextPassthrough = uint64(2) << 2;
@@ -46,6 +65,9 @@ namespace {
 	static constexpr stduint IovaDomainCapacity = 8;
 	static constexpr stduint IovaMappingCapacity = 48;
 	static constexpr stduint IovaTableCapacity = 64;
+	static constexpr stduint VtdInterruptRemappingTableCapacity = 256;
+	static constexpr uint8 VtdInterruptRemappingTableSize = 7;
+	static constexpr stduint VtdInvalidationQueueLength = 256;
 
 	_PACKED(struct) DmarTable {
 		uni::ACPI::DescriptionHeader header;
@@ -99,6 +121,11 @@ namespace {
 		uint64 high;
 	};
 
+	struct VtdInterruptRemappingEntry {
+		uint64 low;
+		uint64 high;
+	};
+
 	struct IovaRange {
 		bool active;
 		uint64 device_address;
@@ -120,7 +147,10 @@ namespace {
 	struct VtdState {
 		bool probe_complete;
 		bool passthrough_enabled;
+		bool interrupt_remapping_enabled;
+		bool extended_interrupt_mode;
 		bool include_all;
+		uint8 dmar_flags;
 		uint8 host_address_width;
 		uint16 segment;
 		stduint hardware_unit_count;
@@ -128,6 +158,12 @@ namespace {
 		uint64 capability;
 		uint64 extended_capability;
 		VtdRootEntry* root_table;
+		VtdInterruptRemappingEntry* interrupt_remapping_table;
+		void* invalidation_queue;
+		uint32* invalidation_completion;
+		stduint invalidation_queue_length;
+		uint8 invalidation_queue_shift;
+		bool interrupt_remapping_allocated[VtdInterruptRemappingTableCapacity];
 		stduint context_table_count;
 		stduint device_count;
 	};
@@ -139,6 +175,7 @@ namespace {
 	static_assert(sizeof(DmarPciPath) == 2);
 	static_assert(sizeof(VtdRootEntry) == 16);
 	static_assert(sizeof(VtdContextEntry) == 16);
+	static_assert(sizeof(VtdInterruptRemappingEntry) == 16);
 
 	VtdState vtd_state{};
 	IovaDomain iova_domains[IovaDomainCapacity] = {};
@@ -192,6 +229,30 @@ namespace {
 		return false;
 	}
 
+	uint32 VtdPersistentCommand(uint32 status) {
+		uint32 command = 0;
+		if (status & VtdGlobalStatusTranslationEnabled)
+			command |= VtdGlobalCommandEnableTranslation;
+		if (status & VtdGlobalStatusQueuedInvalidation)
+			command |= VtdGlobalCommandEnableQueuedInvalidation;
+		if (status & VtdGlobalStatusInterruptRemapping)
+			command |= VtdGlobalCommandEnableInterruptRemapping;
+		if (status & VtdGlobalStatusCompatibilityInterrupts)
+			command |= VtdGlobalCommandCompatibilityInterrupts;
+		return command;
+	}
+
+	bool SetVtdFeature(uint32 command_bit, uint32 status_bit, bool enabled) {
+		auto registers = vtd_state.registers;
+		uint32 command = VtdPersistentCommand(ReadRegister32(registers,
+			kVtdGlobalStatusRegister));
+		if (enabled) command |= command_bit;
+		else command &= ~command_bit;
+		WriteRegister32(registers, VtdGlobalCommandRegister, command);
+		return WaitRegister32(registers, kVtdGlobalStatusRegister,
+			status_bit, enabled ? status_bit : 0);
+	}
+
 	bool PhysicalRangeFits(uint64 address, stduint length,
 		uint8 address_width) {
 		if (!address_width || address_width > 64 || !length) return false;
@@ -199,6 +260,223 @@ namespace {
 		if (address_width == 64) return true;
 		const uint64 limit = uint64(1) << address_width;
 		return address < limit && uint64(length) <= limit - address;
+	}
+
+	bool SubmitQueuedInvalidation(uint64 descriptor_low,
+		uint64 descriptor_high = 0) {
+		if (!vtd_state.invalidation_queue ||
+			!vtd_state.invalidation_completion ||
+			!(ReadRegister32(vtd_state.registers, kVtdGlobalStatusRegister) &
+			VtdGlobalStatusQueuedInvalidation)) return false;
+		const stduint descriptor_length = stduint(1) <<
+			vtd_state.invalidation_queue_shift;
+		const uint32 queue_mask = uint32(vtd_state.invalidation_queue_length - 1);
+		const uint32 tail = ReadRegister32(vtd_state.registers,
+			VtdInvalidationQueueTailRegister) & queue_mask;
+		if ((tail & (descriptor_length - 1)) ||
+			tail + descriptor_length > vtd_state.invalidation_queue_length)
+			return false;
+		const uint32 wait_tail =
+			(tail + uint32(descriptor_length)) & queue_mask;
+		const uint32 next =
+			(wait_tail + uint32(descriptor_length)) & queue_mask;
+		const uint32 head = ReadRegister32(vtd_state.registers,
+			VtdInvalidationQueueHeadRegister) & queue_mask;
+		if (wait_tail == head || next == head) return false;
+		auto* descriptor = reinterpret_cast<uint64*>(
+			reinterpret_cast<uint8*>(vtd_state.invalidation_queue) + tail);
+		MemSet(descriptor, 0, descriptor_length);
+		descriptor[0] = descriptor_low;
+		descriptor[1] = descriptor_high;
+		auto* wait_descriptor = reinterpret_cast<uint64*>(
+			reinterpret_cast<uint8*>(vtd_state.invalidation_queue) + wait_tail);
+		MemSet(wait_descriptor, 0, descriptor_length);
+		*vtd_state.invalidation_completion = VtdInvalidationStatusPending;
+		wait_descriptor[0] = VtdInvalidationWaitType |
+			VtdInvalidationWaitStatusWrite |
+			(uint64(VtdInvalidationStatusComplete) << 32);
+		wait_descriptor[1] = uint64(stduint(vtd_state.invalidation_completion));
+		StoreFence();
+		WriteRegister32(vtd_state.registers,
+			VtdInvalidationQueueTailRegister, next);
+		for0(spin, VtdCommandTimeoutSpins) {
+			const uint32 faults = ReadRegister32(vtd_state.registers,
+				kVtdFaultStatusRegister);
+			if (faults & VtdInvalidationQueueFaults) return false;
+			if (*reinterpret_cast<volatile uint32*>(
+				vtd_state.invalidation_completion) ==
+				VtdInvalidationStatusComplete) return true;
+			_ASM volatile ("pause" ::: "memory");
+		}
+		return false;
+	}
+
+	bool SubmitInterruptCacheInvalidation(uint16 index = 0,
+		uint8 mask = 0, bool selective = false) {
+		uint64 descriptor = VtdInterruptCacheInvalidationType;
+		if (selective) {
+			descriptor |= VtdInterruptCacheInvalidationSelective;
+			descriptor |= uint64(mask & 0x1Fu) << 27;
+			descriptor |= uint64(index) << 32;
+		}
+		return SubmitQueuedInvalidation(descriptor);
+	}
+
+	void ReleaseInterruptRemappingStorage() {
+		if (vtd_state.invalidation_queue) {
+			mempool.deallocate(vtd_state.invalidation_queue,
+				vtd_state.invalidation_queue_length);
+			vtd_state.invalidation_queue = nullptr;
+			vtd_state.invalidation_queue_length = 0;
+		}
+		if (vtd_state.invalidation_completion) {
+			mempool.deallocate(vtd_state.invalidation_completion, PAGE_SIZE);
+			vtd_state.invalidation_completion = nullptr;
+		}
+		if (vtd_state.interrupt_remapping_table) {
+			mempool.deallocate(vtd_state.interrupt_remapping_table, PAGE_SIZE);
+			vtd_state.interrupt_remapping_table = nullptr;
+		}
+		MemSet(vtd_state.interrupt_remapping_allocated, 0,
+			sizeof(vtd_state.interrupt_remapping_allocated));
+		vtd_state.interrupt_remapping_enabled = false;
+		vtd_state.extended_interrupt_mode = false;
+	}
+
+	bool DisableInterruptRemappingForRollback(bool compatibility_enabled_before) {
+		const uint32 status = ReadRegister32(vtd_state.registers,
+			kVtdGlobalStatusRegister);
+		if (status & VtdGlobalStatusInterruptRemapping) {
+			if (!SetVtdFeature(VtdGlobalCommandEnableInterruptRemapping,
+				VtdGlobalStatusInterruptRemapping, false)) return false;
+		}
+		if (ReadRegister32(vtd_state.registers, kVtdGlobalStatusRegister) &
+			VtdGlobalStatusQueuedInvalidation) {
+			if (!SetVtdFeature(VtdGlobalCommandEnableQueuedInvalidation,
+				VtdGlobalStatusQueuedInvalidation, false)) return false;
+		}
+		const bool compatibility_enabled =
+			(ReadRegister32(vtd_state.registers, kVtdGlobalStatusRegister) &
+			VtdGlobalStatusCompatibilityInterrupts) != 0;
+		if (compatibility_enabled != compatibility_enabled_before &&
+			!SetVtdFeature(VtdGlobalCommandCompatibilityInterrupts,
+				VtdGlobalStatusCompatibilityInterrupts,
+				compatibility_enabled_before)) return false;
+		return true;
+	}
+
+	bool EnableVtdInterruptRemapping() {
+		if (!vtd_state.probe_complete || !vtd_state.passthrough_enabled)
+			return false;
+		if (vtd_state.interrupt_remapping_enabled) return true;
+		if (vtd_state.invalidation_queue ||
+			vtd_state.interrupt_remapping_table) return false;
+		if (!(vtd_state.dmar_flags & 1u) ||
+			!(vtd_state.extended_capability & (uint64(1) << 3)) ||
+			!(vtd_state.extended_capability & (uint64(1) << 1)) ||
+			!(vtd_state.extended_capability & 1u)) {
+			plogtrac("[IOMMU] Interrupt remapping unavailable flags=%02X ecap=%[64H]",
+				vtd_state.dmar_flags, vtd_state.extended_capability);
+			return false;
+		}
+		// EIME rejects every compatibility-format MSI and I/O APIC message.
+		// Keep xAPIC-format remapping until all kernel and I/O APIC sources use IRTEs.
+		const bool extended_mode = false;
+		if (extended_mode && (vtd_state.dmar_flags & (1u << 1))) {
+			plogwarn("[IOMMU] Firmware opted out of x2APIC interrupt remapping");
+			return false;
+		}
+		if (extended_mode &&
+			!(vtd_state.extended_capability & (uint64(1) << 4))) {
+			plogwarn("[IOMMU] Interrupt remapping lacks extended interrupt mode");
+			return false;
+		}
+		const bool scalable_queue =
+			(vtd_state.extended_capability & (uint64(1) << 43)) != 0;
+		const bool compatibility_enabled_before =
+			(ReadRegister32(vtd_state.registers, kVtdGlobalStatusRegister) &
+			VtdGlobalStatusCompatibilityInterrupts) != 0;
+		const uint8 queue_shift = scalable_queue ? 5 : 4;
+		const stduint queue_length = VtdInvalidationQueueLength << queue_shift;
+		auto* queue = mempool.allocate(queue_length, 12);
+		auto* completion = reinterpret_cast<uint32*>(
+			mempool.allocate(PAGE_SIZE, 12));
+		auto* table = reinterpret_cast<VtdInterruptRemappingEntry*>(
+			mempool.allocate(PAGE_SIZE, 12));
+		if (!queue || !completion || !table ||
+			!PhysicalRangeFits(uint64(stduint(queue)), queue_length,
+				vtd_state.host_address_width) ||
+			!PhysicalRangeFits(uint64(stduint(completion)), PAGE_SIZE,
+				vtd_state.host_address_width) ||
+			!PhysicalRangeFits(uint64(stduint(table)), PAGE_SIZE,
+				vtd_state.host_address_width)) {
+			if (queue) mempool.deallocate(queue, queue_length);
+			if (completion) mempool.deallocate(completion, PAGE_SIZE);
+			if (table) mempool.deallocate(table, PAGE_SIZE);
+			plogerro("[IOMMU] Failed to allocate interrupt-remapping storage");
+			return false;
+		}
+		MemSet(queue, 0, queue_length);
+		MemSet(completion, 0, PAGE_SIZE);
+		MemSet(table, 0, PAGE_SIZE);
+		StoreFence();
+
+		vtd_state.invalidation_queue = queue;
+		vtd_state.invalidation_completion = completion;
+		vtd_state.invalidation_queue_length = queue_length;
+		vtd_state.invalidation_queue_shift = queue_shift;
+		vtd_state.interrupt_remapping_table = table;
+		WriteRegister32(vtd_state.registers,
+			VtdInvalidationQueueTailRegister, 0);
+		uint64 queue_address = uint64(stduint(queue));
+		if (scalable_queue) queue_address |= uint64(1) << 11;
+		WriteRegister64(vtd_state.registers,
+			VtdInvalidationQueueAddressRegister, queue_address);
+		if (!SetVtdFeature(VtdGlobalCommandEnableQueuedInvalidation,
+			VtdGlobalStatusQueuedInvalidation, true)) {
+			plogerro("[IOMMU] Queued invalidation enable timed out");
+			if (DisableInterruptRemappingForRollback(
+				compatibility_enabled_before))
+				ReleaseInterruptRemappingStorage();
+			return false;
+		}
+
+		uint64 table_address = uint64(stduint(table)) |
+			VtdInterruptRemappingTableSize;
+		if (extended_mode) table_address |= VtdInterruptRemappingExtendedMode;
+		WriteRegister64(vtd_state.registers,
+			VtdInterruptRemappingTableAddressRegister, table_address);
+		uint32 command = VtdPersistentCommand(ReadRegister32(vtd_state.registers,
+			kVtdGlobalStatusRegister));
+		command |= VtdGlobalCommandSetInterruptRemappingTable |
+			VtdGlobalCommandCompatibilityInterrupts;
+		WriteRegister32(vtd_state.registers, VtdGlobalCommandRegister, command);
+		if (!WaitRegister32(vtd_state.registers, kVtdGlobalStatusRegister,
+			VtdGlobalStatusInterruptRemappingTableSet |
+			VtdGlobalStatusCompatibilityInterrupts,
+			VtdGlobalStatusInterruptRemappingTableSet |
+			VtdGlobalStatusCompatibilityInterrupts) ||
+			!SubmitInterruptCacheInvalidation()) {
+			plogerro("[IOMMU] Interrupt-remapping table activation failed");
+			if (DisableInterruptRemappingForRollback(
+				compatibility_enabled_before))
+				ReleaseInterruptRemappingStorage();
+			return false;
+		}
+		if (!SetVtdFeature(VtdGlobalCommandEnableInterruptRemapping,
+			VtdGlobalStatusInterruptRemapping, true)) {
+			plogerro("[IOMMU] Interrupt remapping enable timed out");
+			if (DisableInterruptRemappingForRollback(
+				compatibility_enabled_before))
+				ReleaseInterruptRemappingStorage();
+			return false;
+		}
+		vtd_state.extended_interrupt_mode = extended_mode;
+		vtd_state.interrupt_remapping_enabled = true;
+		ploginfo("[IOMMU] Interrupt remapping enabled entries=%u mode=%s",
+			VtdInterruptRemappingTableCapacity,
+			extended_mode ? "x2APIC" : "xAPIC");
+		return true;
 	}
 
 	bool MapRegisterWindow(uint64 register_base) {
@@ -411,6 +689,21 @@ namespace {
 
 	bool InvalidateVtdCaches() {
 		auto registers = vtd_state.registers;
+		if (ReadRegister32(registers, kVtdGlobalStatusRegister) &
+			VtdGlobalStatusQueuedInvalidation) {
+			const uint64 context_descriptor = 1u | (uint64(1) << 4);
+			uint64 iotlb_descriptor = 2u | (uint64(1) << 4);
+			if ((vtd_state.capability >> 55) & 1)
+				iotlb_descriptor |= uint64(1) << 7;
+			if ((vtd_state.capability >> 54) & 1)
+				iotlb_descriptor |= uint64(1) << 6;
+			if (!SubmitQueuedInvalidation(context_descriptor) ||
+				!SubmitQueuedInvalidation(iotlb_descriptor)) {
+				plogerro("[IOMMU] Queued context/IOTLB invalidation failed");
+				return false;
+			}
+			return true;
+		}
 		WriteRegister64(registers, VtdContextCommandRegister,
 			VtdContextCommandInvalidate | VtdContextCommandGlobal);
 		if (!WaitRegister64Clear(registers, VtdContextCommandRegister,
@@ -694,6 +987,7 @@ bool Iova::ProbeVtd(stduint dmar_address) {
 	ploginfo("[IOMMU] DMAR at %[x] length=%u revision=%u host-width=%u flags=%02X",
 		dmar_address, table->header.length, table->header.revision,
 		unsigned(table->host_address_width) + 1, table->flags);
+	vtd_state.dmar_flags = table->flags;
 	vtd_state.host_address_width = table->host_address_width + 1;
 
 	const uint8* cursor = reinterpret_cast<const uint8*>(table) +
@@ -906,7 +1200,74 @@ bool Iova::EnableVtdPassthrough(DeviceNode* pci_root) {
 		(context_table_count + 1) * PAGE_SIZE,
 		ReadRegister32(registers, kVtdGlobalStatusRegister),
 		ReadRegister32(registers, kVtdFaultStatusRegister));
+	(void)EnableVtdInterruptRemapping();
 	return true;
+}
+
+bool Iova::InterruptRemappingAvailable() {
+	return vtd_state.interrupt_remapping_enabled;
+}
+
+bool Iova::AllocatePciInterrupt(DeviceNode* device, uint32 target_lapic_id,
+	uint8 vector, InterruptMessage& message) {
+	message = {};
+	if (!vtd_state.interrupt_remapping_enabled || !device || !vector ||
+		DeviceNodeType(device->fields.node_type) != DeviceNodeType::PciDevice ||
+		device->fields.pci_segment != vtd_state.segment ||
+		(!vtd_state.extended_interrupt_mode && target_lapic_id > 0xFFu))
+		return false;
+	SpinlockLocal guard(IovaLock());
+	stduint index = VtdInterruptRemappingTableCapacity;
+	for0(candidate, VtdInterruptRemappingTableCapacity) {
+		if (!vtd_state.interrupt_remapping_allocated[candidate]) {
+			index = candidate;
+			break;
+		}
+	}
+	if (index == VtdInterruptRemappingTableCapacity) return false;
+	const uint16 source_id = uint16(uint16(device->fields.pci_bus) << 8) |
+		uint16(uint16(device->fields.pci_device) << 3) |
+		device->fields.pci_function;
+	auto& entry = vtd_state.interrupt_remapping_table[index];
+	entry.high = uint64(source_id) | (uint64(1) << 18);
+	uint64 destination = target_lapic_id;
+	if (!vtd_state.extended_interrupt_mode) destination <<= 8;
+	entry.low = 1u | (uint64(1) << 3) | (uint64(vector) << 16) |
+		(destination << 32);
+	StoreFence();
+	if (!SubmitInterruptCacheInvalidation(uint16(index), 0, true)) {
+		entry.low = 0;
+		entry.high = 0;
+		StoreFence();
+		(void)SubmitInterruptCacheInvalidation(uint16(index), 0, true);
+		plogerro("[IOMMU] Interrupt-entry invalidation failed index=%u",
+			index);
+		return false;
+	}
+	vtd_state.interrupt_remapping_allocated[index] = true;
+	message.address = 0xFEE00000u | (uint64(index & 0x7FFFu) << 5) |
+		(uint64(index & 0x8000u) >> 13) | 0x18u;
+	message.data = 0;
+	message.handle = uint16(index + 1);
+	return true;
+}
+
+void Iova::ReleaseInterrupt(uint16 handle) {
+	if (!handle || !vtd_state.interrupt_remapping_enabled) return;
+	const stduint index = handle - 1u;
+	if (index >= VtdInterruptRemappingTableCapacity) return;
+	SpinlockLocal guard(IovaLock());
+	if (!vtd_state.interrupt_remapping_allocated[index]) return;
+	auto& entry = vtd_state.interrupt_remapping_table[index];
+	entry.low = 0;
+	entry.high = 0;
+	StoreFence();
+	if (!SubmitInterruptCacheInvalidation(uint16(index), 0, true)) {
+		plogerro("[IOMMU] Interrupt-entry release invalidation failed index=%u",
+			index);
+		return;
+	}
+	vtd_state.interrupt_remapping_allocated[index] = false;
 }
 
 bool Iova::MapDeviceDma(DeviceNode* device, stduint physical,
@@ -962,6 +1323,7 @@ bool Iova::MapDeviceDma(DeviceNode* device, stduint physical,
 	const uint32 faults = ReadRegister32(vtd_state.registers,
 		kVtdFaultStatusRegister);
 	if (faults) {
+		LogVtdFaultState("DMA map", device, device_address);
 		ClearIovaPages(*domain, device_address, length);
 		InvalidateVtdCaches();
 		plogerro("[IOMMU] Fault after DMA map pci=%02X:%02X.%u fsts=%08X",

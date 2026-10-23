@@ -58,6 +58,7 @@ namespace {
 		XHCIControllerInstance* next = nullptr;
 	};
 	XHCIControllerInstance* xhci_controllers = nullptr;
+	Mutex xhci_dispatch_lock;
 	bool xhci_event_watchdog_armed = false;
 	bool xhci_policy_tick_armed = false;
 	uint32 xhci_event_generation = 0;
@@ -199,6 +200,7 @@ static void signal_pending_xhci_events() {
 }
 
 static void poll_xhci_policy(pureptr_t, stduint) {
+	MutexLocal guard(&xhci_dispatch_lock);
 	xhci_policy_tick_armed = false;
 	for (auto* instance = xhci_controllers; instance; instance = instance->next) {
 		if (!instance->running) continue;
@@ -232,6 +234,7 @@ static bool arm_xhci_policy_tick() {
 }
 
 static void poll_xhci_events(pureptr_t, stduint) {
+	MutexLocal guard(&xhci_dispatch_lock);
 	xhci_event_watchdog_armed = false;
 	bool pending = false;
 	for (auto* instance = xhci_controllers; instance; instance = instance->next) {
@@ -384,6 +387,7 @@ bool Devsman::ProcessXHCIEvent(const DeviceEvent& event) {
 	if (DeviceEventKind(event.kind) != DeviceEventKind::Interrupt ||
 		event.device_handle != XHCIEventHandle || event.source != XHCIEventSource ||
 		event.generation != xhci_event_generation) return false;
+	MutexLocal guard(&xhci_dispatch_lock);
 	for (auto* instance = xhci_controllers; instance; instance = instance->next) {
 		if (!instance->running) continue;
 		if (auto err = instance->controller.ProcessEvents()) {
@@ -395,7 +399,7 @@ bool Devsman::ProcessXHCIEvent(const DeviceEvent& event) {
 	auto* current = Taskman::CurrentTB();
 	if (!current || !current->parent_process ||
 		!device_interrupt_ack(current->parent_process->pid, current->tid, event)) {
-		plogwarn("[Devsman] xHCI interrupt ACK failed sequence=%llu", event.sequence);
+		plogwarn("[USB] xHCI interrupt ACK failed sequence=%llu", event.sequence);
 	}
 	return true;
 }

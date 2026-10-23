@@ -550,4 +550,40 @@ void Devsman::RegisterUSBDeviceTreeHooks() {
 	#endif
 }
 
+#if _MCCA == 0x8664 && defined(_UEFI)
+void serv_usb_loop() {
+	auto* current = Taskman::CurrentTB();
+	if (!current || !current->parent_process || !device_event_prepare(current)) {
+		plogerro("[USB] failed to initialize device event queue");
+		return;
+	}
+	if (syssend_async(Task_Devsman, nullptr, 0,
+		_IMM(DevsmanMsg::USB_SERVICE_READY))) {
+		plogerro("[USB] failed to announce service readiness");
+		return;
+	}
+	for (;;) {
+		stduint payload = 0;
+		stduint type = 0;
+		stduint source = 0;
+		if (sysrecv(Task_Devsman, &payload, sizeof(payload), &type, &source)) continue;
+		if (type == _IMM(DevsmanMsg::USB_SERVICE_START)) break;
+		plogwarn("[USB] unexpected startup request type=%u source=%u", type, source);
+	}
+	ploginfo("[USB] xHCI event service started pid=%u tid=%u",
+		current->parent_process->pid, current->tid);
+	for (;;) {
+		DeviceEvent event = {};
+		stduint type = 0;
+		stduint source = 0;
+		if (sysrecv(ANYPROC, &event, sizeof(event), &type, &source)) continue;
+		if (type != _IMM(KernelMsg::DeviceEvent) ||
+			event.version != DeviceEventProtocolVersion ||
+			!Devsman::ProcessXHCIEvent(event)) {
+			plogwarn("[USB] unexpected event type=%u source=%u", type, source);
+		}
+	}
+}
+#endif
+
 #endif
