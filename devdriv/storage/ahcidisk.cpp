@@ -5,18 +5,50 @@
 #include "../../include/mecocoa.hpp"
 #if (_MCCA & 0xFF00) == 0x8600
 #include <cpp/Device/Bus/PCI.hpp>
+#include <cpp/ISO_IEC_STD/memory>
 #include <c/storage/harddisk.h>
 #include <c/format/filesys.h>
 
 namespace {
 	uni::PCI pci;
 	static constexpr uint8 IRQ_AHCI = IRQ_RTC + 2;
+	static constexpr stduint InvalidAhciUnit = ~stduint(0);
 	#if _MCCA == 0x8664
 	static constexpr uint16 AhciPciCommandInterruptDisable = 1u << 10;
 	#endif
 	bool ahci_irq_wait(uni::AHCI_Port_Base* port_base, uint32 slot_mask);
 
+	class SerializedAhciDisk : public uni::Harddisk_SATA_AHCI {
+		Mutex* transaction = nullptr;
+	public:
+		void SetTransaction(Mutex* value) { transaction = value; }
+		bool Read(stduint block, void* destination, stduint times = 1) override {
+			if (!transaction) return uni::Harddisk_SATA_AHCI::Read(block, destination, times);
+			MutexLocal guard(transaction);
+			return uni::Harddisk_SATA_AHCI::Read(block, destination, times);
+		}
+		bool Write(stduint block, const void* source, stduint times = 1) override {
+			if (!transaction) return uni::Harddisk_SATA_AHCI::Write(block, source, times);
+			MutexLocal guard(transaction);
+			return uni::Harddisk_SATA_AHCI::Write(block, source, times);
+		}
+	};
+
+	class SerializedAhciCdrom : public uni::CDROM_ATAPI_AHCI {
+		Mutex* transaction = nullptr;
+	public:
+		void SetTransaction(Mutex* value) { transaction = value; }
+		bool Read(stduint block, void* destination, stduint times = 1) override {
+			if (!transaction) return uni::CDROM_ATAPI_AHCI::Read(block, destination, times);
+			MutexLocal guard(transaction);
+			return uni::CDROM_ATAPI_AHCI::Read(block, destination, times);
+		}
+	};
+
 	struct AHCI_Controller {
+		stduint index = 0;
+		stduint disk_unit = InvalidAhciUnit;
+		stduint cdrom_unit = InvalidAhciUnit;
 		DeviceNode* node = nullptr;
 		DeviceNode* storage_node = nullptr;
 		DeviceNode* cdrom_node = nullptr;
@@ -36,8 +68,9 @@ namespace {
 		byte* cd_identify_buf = nullptr;
 		byte* cd_capacity_buf = nullptr;
 		byte* cd_sector_buf = nullptr;
-		uni::Harddisk_SATA_AHCI disk = {};
-		uni::CDROM_ATAPI_AHCI cdrom = {};
+		Mutex transaction;
+		SerializedAhciDisk disk = {};
+		SerializedAhciCdrom cdrom = {};
 		volatile uint32 irq_global_is = 0;
 		volatile uint32 irq_port_is = 0;
 		volatile byte irq_waiting = 0;
@@ -112,9 +145,8 @@ namespace {
 			}
 		}
 
-		#if _MCCA == 0x8664
-		void PrepareInterruptMode() {
-			if (!node || !abar) return;
+		void DisableControllerInterrupts() {
+			if (!abar) return;
 			abar->ghc &= ~AHCI_GHC_IE;
 			const uint32 implemented = abar->pi;
 			for0(port, 32) {
@@ -124,6 +156,12 @@ namespace {
 			}
 			const uint32 global_status = abar->is;
 			if (global_status) abar->is = global_status;
+		}
+
+		#if _MCCA == 0x8664
+		void PrepareInterruptMode() {
+			if (!node || !abar) return;
+			DisableControllerInterrupts();
 
 			const uint32 command_status = uni::PCI::read_config_register(
 				node->fields.pci_segment, node->fields.pci_bus,
@@ -146,6 +184,7 @@ namespace {
 		}
 
 		void SetupDisk() {
+			disk.SetTransaction(&transaction);
 			disk.Bind(abar, active_port);
 			if (cmd_list && rx_fis && cmd_table) {
 				disk.SetWorkspace(cmd_list, rx_fis, cmd_table);
@@ -159,6 +198,7 @@ namespace {
 		}
 
 		void SetupCdrom() {
+			cdrom.SetTransaction(&transaction);
 			cdrom.Bind(abar, active_atapi_port);
 			if (cd_cmd_list && cd_rx_fis && cd_cmd_table) {
 				cdrom.SetWorkspace(cd_cmd_list, cd_rx_fis, cd_cmd_table);
@@ -176,7 +216,7 @@ namespace {
 			String name = String::newFormat("ahci-disk@%u", (stduint)active_port);
 			storage_node = Devsman::RegisterStorageDevice(node, name.reference(),
 				DeviceBusType::PCI, "ahci-disk", &disk);
-			String alias = String::newFormat("sata%u", (stduint)active_port);
+			String alias = String::newFormat("sata%u", disk_unit);
 			Devsman::RegisterDevAlias(storage_node, alias.reference());
 		}
 
@@ -185,7 +225,7 @@ namespace {
 			String name = String::newFormat("ahci-cdrom@%u", (stduint)active_atapi_port);
 			cdrom_node = Devsman::RegisterStorageDevice(node, name.reference(),
 				DeviceBusType::PCI, "ahci-cdrom", &cdrom);
-			String alias = String::newFormat("sr-ahci%u", (stduint)active_atapi_port);
+			String alias = String::newFormat("sr-ahci%u", cdrom_unit);
 			Devsman::RegisterDevAlias(cdrom_node, alias.reference());
 		}
 
@@ -239,7 +279,7 @@ namespace {
 
 		void MountCdromWholeDisk() {
 			if (active_atapi_port < 0) return;
-			String lab = String::newFormat("/mnt/ahci%u.0", (stduint)active_atapi_port);
+			String lab = String::newFormat("/mnt/ahci%u.0", cdrom_unit);
 			// ploginfo("[AHCI] probe atapi port%u whole-disk", (stduint)active_atapi_port);
 			if (auto fs = Filesys::Mount(cdrom, 0, lab.reference(), cdrom_node)) {
 				ploginfo("[AHCI] mount %s on %s", fs->name, lab.reference());
@@ -352,7 +392,7 @@ namespace {
 					storage_node, node_name.reference(), disk, part_dev);
 
 				// /mnt/sataA.B
-				String lab = String::newFormat("/mnt/ahci%u.%u", (stduint)active_port, part_dev);
+				String lab = String::newFormat("/mnt/ahci%u.%u", disk_unit, part_dev);
 				// ploginfo("[AHCI] probe port%u part%u: %x",
 				// 	(stduint)active_port, part_dev, (unsigned)sys_id);
 				if (auto fs = Filesys::Mount(disk, part_dev, lab.reference(), part_node)) {
@@ -362,52 +402,89 @@ namespace {
 		}
 	};
 
-	AHCI_Controller g_ahci_controller;
+	uni::Vector<uni::SharedPtr<AHCI_Controller>> ahci_controllers;
+	uni::Vector<stduint> ahci_units;
+
+	bool AhciUnitClaimed(stduint unit) {
+		for (stduint claimed : ahci_units) {
+			if (claimed == unit) return true;
+		}
+		return false;
+	}
+
+	stduint AllocateAhciUnit(stduint preferred) {
+		if (!AhciUnitClaimed(preferred)) {
+			ahci_units.Append(preferred);
+			return preferred;
+		}
+		for (stduint unit = 0; unit != InvalidAhciUnit; ++unit) {
+			if (AhciUnitClaimed(unit)) continue;
+			ahci_units.Append(unit);
+			return unit;
+		}
+		return InvalidAhciUnit;
+	}
+
+	AHCI_Controller* FindAhciController(DeviceNode* node) {
+		for (auto& owner : ahci_controllers) {
+			if (owner && owner->node == node) return owner.get();
+		}
+		return nullptr;
+	}
+
+	AHCI_Controller* FindAhciController(uni::AHCI_Port_Base* port_base) {
+		if (!port_base) return nullptr;
+		for (auto& owner : ahci_controllers) {
+			if (!owner) continue;
+			if (port_base == static_cast<uni::AHCI_Port_Base*>(&owner->disk) ||
+				port_base == static_cast<uni::AHCI_Port_Base*>(&owner->cdrom)) return owner.get();
+		}
+		return nullptr;
+	}
 
 	bool ahci_irq_wait(uni::AHCI_Port_Base* port_base, uint32 slot_mask) {
-		(void)slot_mask;
-		if (!port_base || !g_ahci_controller.abar ||
-			(port_base != static_cast<uni::AHCI_Port_Base*>(&g_ahci_controller.disk) &&
-			 port_base != static_cast<uni::AHCI_Port_Base*>(&g_ahci_controller.cdrom))) return false;
+		AHCI_Controller* controller = FindAhciController(port_base);
+		if (!controller || !controller->abar) return false;
 		if (port_base->port_index < 0 || port_base->port_index >= 32) return false;
-		auto& port = g_ahci_controller.abar->ports[port_base->port_index];
-		g_ahci_controller.irq_seen = 0;
-		g_ahci_controller.irq_waiting = 1;
+		auto& port = controller->abar->ports[port_base->port_index];
+		const bool interrupts_enabled = IC.TryMaskInterrupt();
+		controller->irq_seen = 0;
+		controller->irq_port_is = 0;
+		controller->irq_waiting = 1;
+		if (interrupts_enabled) IC.enInterrupt(true);
 		for (stduint spin = 0; spin < 5000000; ++spin) {
-			if (g_ahci_controller.irq_seen) {
-				g_ahci_controller.irq_waiting = 0;
-				if (port.is & AHCI_PxIS_TFES) return false;
+			if (controller->irq_seen) {
+				controller->irq_waiting = 0;
+				if (controller->irq_port_is & AHCI_PxIS_TFES) return false;
 				return true;
 			}
-			if ((port.ci & 1u) == 0) {
-				g_ahci_controller.irq_waiting = 0;
+			if ((port.ci & slot_mask) == 0) {
+				controller->irq_waiting = 0;
 				if (port.is & AHCI_PxIS_TFES) return false;
 				return true;
 			}
 			__asm__ __volatile__("pause" ::: "memory");
 		}
-		g_ahci_controller.irq_waiting = 0;
+		controller->irq_waiting = 0;
 		return true;
 	}
 
 	void Handint_AHCI() {
-		if (g_ahci_controller.abar) {
-			g_ahci_controller.irq_global_is = g_ahci_controller.abar->is;
-			g_ahci_controller.irq_port_is = 0;
-			if (g_ahci_controller.active_port >= 0) {
-				auto& port = g_ahci_controller.abar->ports[g_ahci_controller.active_port];
-				g_ahci_controller.irq_port_is |= port.is;
-				port.is = 0xFFFFFFFFu;
+		for (auto& owner : ahci_controllers) {
+			if (!owner || !owner->abar || !owner->UsesInterruptCompletion()) continue;
+			AHCI_Controller& controller = *owner;
+			controller.irq_global_is = controller.abar->is;
+			if (!controller.irq_global_is) continue;
+			controller.irq_port_is = 0;
+			for0(port_index, 32) {
+				if (((controller.irq_global_is >> port_index) & 1u) == 0) continue;
+				auto& port = controller.abar->ports[port_index];
+				const uint32 port_status = port.is;
+				controller.irq_port_is |= port_status;
+				if (port_status) port.is = port_status;
 			}
-			if (g_ahci_controller.active_atapi_port >= 0) {
-				auto& port = g_ahci_controller.abar->ports[g_ahci_controller.active_atapi_port];
-				g_ahci_controller.irq_port_is |= port.is;
-				port.is = 0xFFFFFFFFu;
-			}
-			g_ahci_controller.abar->is = g_ahci_controller.irq_global_is;
-			if (g_ahci_controller.irq_waiting) {
-				g_ahci_controller.irq_seen = 1;
-			}
+			controller.abar->is = controller.irq_global_is;
+			if (controller.irq_waiting) controller.irq_seen = 1;
 		}
 		IC.SendEOI(IRQ_AHCI);
 	}
@@ -430,52 +507,85 @@ namespace {
 
 static bool start_ahci_driver(DeviceNode* ahci_node) {
 	if (!ahci_node) return false;
+	if (AHCI_Controller* existing = FindAhciController(ahci_node)) {
+		ahci_node->fields.binding.driver_data = existing;
+		return true;
+	}
 	auto dev = make_pci_device(*ahci_node);
 	pci.enable_MMIO(dev);
-	if (!g_ahci_controller.Bind(ahci_node)) {
+	auto owner = uni::make_shared<AHCI_Controller>();
+	if (!owner) return false;
+	AHCI_Controller* controller = owner.get();
+	controller->index = ahci_controllers.Count();
+	if (!controller->Bind(ahci_node)) {
 		plogwarn("[AHCI] Failed to bind controller %s",
 			ahci_node->link.addr ? ahci_node->link.addr : "(unnamed)");
 		return false;
 	}
-	g_ahci_controller.DumpSummary();
-	g_ahci_controller.DumpPorts();
-	g_ahci_controller.SelectPorts();
+	ploginfo("[AHCI-DIAG] controller=%u start node=%s pci=%04x:%02x:%02x.%u abar=%p irq=%u pin=%u",
+		controller->index,
+		ahci_node->link.addr ? ahci_node->link.addr : "(unnamed)",
+		(unsigned)ahci_node->fields.pci_segment,
+		(unsigned)ahci_node->fields.pci_bus,
+		(unsigned)ahci_node->fields.pci_device,
+		(unsigned)ahci_node->fields.pci_function,
+		(void*)controller->abar,
+		(unsigned)controller->irq_line,
+		(unsigned)controller->irq_pin);
+	controller->DumpSummary();
+	controller->DumpPorts();
+	controller->SelectPorts();
+	if (controller->active_port >= 0) controller->disk_unit = AllocateAhciUnit(stduint(controller->active_port));
+	if (controller->active_atapi_port >= 0) controller->cdrom_unit = AllocateAhciUnit(stduint(controller->active_atapi_port));
+	ploginfo("[AHCI-DIAG] controller=%u select pci=%04x:%02x:%02x.%u pi=%[32H] ata=%d atapi=%d",
+		controller->index,
+		(unsigned)ahci_node->fields.pci_segment,
+		(unsigned)ahci_node->fields.pci_bus,
+		(unsigned)ahci_node->fields.pci_device,
+		(unsigned)ahci_node->fields.pci_function,
+		controller->abar->pi,
+		controller->active_port,
+		controller->active_atapi_port);
 	#if _MCCA == 0x8664
-	g_ahci_controller.PrepareInterruptMode();
+	controller->PrepareInterruptMode();
+	#else
+	controller->DisableControllerInterrupts();
 	#endif
-	if (g_ahci_controller.active_port >= 0) {
-		g_ahci_controller.SetupDisk();
-		g_ahci_controller.RegisterStorageNode();
-		if (!g_ahci_controller.UsesInterruptCompletion()) {
+	const bool interrupts_enabled = IC.TryMaskInterrupt();
+	ahci_controllers.Append(owner);
+	if (interrupts_enabled) IC.enInterrupt(true);
+	if (controller->active_port >= 0) {
+		controller->SetupDisk();
+		controller->RegisterStorageNode();
+		if (!controller->UsesInterruptCompletion()) {
 			plogwarn("[AHCI] IRQ line %u not wired for interrupt completion, keep polling",
-				(unsigned)g_ahci_controller.irq_line);
+				(unsigned)controller->irq_line);
 		}
-		// ploginfo("[AHCI] select port%d", g_ahci_controller.active_port);
-		if (g_ahci_controller.IdentifyActivePort()) {
-			g_ahci_controller.UpdatePortDiskIdentify();
-			g_ahci_controller.DumpIdentify();
-			if (g_ahci_controller.ReadSector0()) {
-				g_ahci_controller.DumpSector0();
-				g_ahci_controller.ParsePartitions();
-				g_ahci_controller.RegisterPartitionNodes();
-				g_ahci_controller.DumpPartitions();
-				g_ahci_controller.MountPartitions();
+		// ploginfo("[AHCI] select port%d", controller->active_port);
+		if (controller->IdentifyActivePort()) {
+			controller->UpdatePortDiskIdentify();
+			controller->DumpIdentify();
+			if (controller->ReadSector0()) {
+				controller->DumpSector0();
+				controller->ParsePartitions();
+				controller->RegisterPartitionNodes();
+				controller->DumpPartitions();
+				controller->MountPartitions();
 			}
 		}
 	}
 	else {
 		plogwarn("[AHCI] No active ATA port found.");
 	}
-	if (g_ahci_controller.active_atapi_port >= 0) {
-		g_ahci_controller.SetupCdrom();
-		g_ahci_controller.RegisterCdromNode();
-		// ploginfo("[AHCI] select atapi port%d", g_ahci_controller.active_atapi_port);
-		if (g_ahci_controller.IdentifyCdrom() &&
-			g_ahci_controller.ReadCdromCapacity()) {
-			g_ahci_controller.MountCdromWholeDisk();
+	if (controller->active_atapi_port >= 0) {
+		controller->SetupCdrom();
+		controller->RegisterCdromNode();
+		// ploginfo("[AHCI] select atapi port%d", controller->active_atapi_port);
+		if (controller->IdentifyCdrom() && controller->ReadCdromCapacity()) {
+			controller->MountCdromWholeDisk();
 		}
 	}
-	ahci_node->fields.binding.driver_data = &g_ahci_controller;
+	ahci_node->fields.binding.driver_data = controller;
 	return true;
 }
 

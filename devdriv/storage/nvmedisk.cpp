@@ -6,6 +6,7 @@
 
 #if (_MCCA & 0xFF00) == 0x8600
 #include <cpp/Device/Bus/PCI.hpp>
+#include <cpp/ISO_IEC_STD/memory>
 #include <c/storage/harddisk.h>
 #include <c/format/filesys.h>
 
@@ -24,8 +25,6 @@ namespace {
 	static constexpr uint16 NVME_IO_DEPTH_LIMIT = 64;
 	static constexpr uint8 IRQ_NVME = IRQ_RTC + 3;
 	static constexpr stduint NVME_IRQ_WAIT_SPINS = 100000u;
-	static constexpr uint32 NVME_CONTROLLER_INDEX = 0;
-	static constexpr stduint NVME_MAX_NAMESPACES = 8;
 
 	#define nvme_fence() _ASM volatile ("mfence":::"memory")
 
@@ -67,6 +66,7 @@ namespace {
 			uni::Harddisk_NVMe disk = {};
 		};
 
+		stduint index = 0;
 		DeviceNode* node = nullptr;
 		volatile uni::NVME_BAR* regs = nullptr;
 		const DeviceResource* bar0 = nullptr;
@@ -105,8 +105,8 @@ namespace {
 		bool msi_enabled = false;
 		bool irq_log_once = false;
 		bool io_submit_log_once = false;
-		stduint namespace_count = 0;
-		NamespaceInfo namespaces[NVME_MAX_NAMESPACES] = {};
+		Mutex transaction;
+		uni::Vector<uni::SharedPtr<NamespaceInfo>> namespaces;
 
 		static bool ExecBlocksThunk(void* context, uint32 nsid, uint64 lba,
 			void* data_buf, stduint block_count, bool is_write) {
@@ -494,21 +494,14 @@ namespace {
 
 		NamespaceInfo* FindNamespace(uint32 nsid) {
 			if (!nsid) return nullptr;
-			for0(i, namespace_count) {
-				if (namespaces[i].nsid == nsid) return &namespaces[i];
+			for (auto& owner : namespaces) {
+				if (owner && owner->nsid == nsid) return owner.get();
 			}
 			return nullptr;
 		}
 
 		void ResetNamespaces() {
-			for0(i, NVME_MAX_NAMESPACES) {
-				namespaces[i].nsid = 0;
-				namespaces[i].block_size = 0;
-				namespaces[i].total_blocks = 0;
-				namespaces[i].device_node = nullptr;
-				namespaces[i].disk.hd_info_valid = false;
-			}
-			namespace_count = 0;
+			namespaces.Clear();
 		}
 
 		bool SupportsActiveNamespaceList() const {
@@ -519,34 +512,33 @@ namespace {
 
 		bool AddNamespaceId(uint32 nsid) {
 			if (!nsid) return false;
-			for0(i, namespace_count) {
-				if (namespaces[i].nsid == nsid) return true;
+			for (auto& owner : namespaces) {
+				if (owner && owner->nsid == nsid) return true;
 			}
-			if (namespace_count >= NVME_MAX_NAMESPACES) return false;
-			auto& ns = namespaces[namespace_count++];
-			ns.nsid = nsid;
-			ns.block_size = 0;
-			ns.total_blocks = 0;
-			ns.device_node = nullptr;
-			ns.disk.hd_info_valid = false;
+			auto owner = uni::make_shared<NamespaceInfo>();
+			if (!owner) return false;
+			owner->nsid = nsid;
+			namespaces.Append(owner);
 			return true;
 		}
 
 		bool PopulateNamespacesFromController() {
 			ResetNamespaces();
 			if (controller_nn == 0) return false;
-			stduint kept = 0;
-			for (uint32 nsid = 1; nsid <= controller_nn && kept < NVME_MAX_NAMESPACES; ++nsid) {
-				if (AddNamespaceId(nsid)) ++kept;
+			for (uint32 nsid = 1; nsid && nsid <= controller_nn; ++nsid) {
+				if (!AddNamespaceId(nsid)) {
+					plogwarn("[NVMe] namespace allocation failed at nsid=%[32H]", nsid);
+					break;
+				}
 			}
 			plogtrac("[NVMe] namespaces via nn=%u kept=%u first=%[32H]",
-				(unsigned)controller_nn, (unsigned)namespace_count,
-				namespace_count ? namespaces[0].nsid : 0u);
-			if (controller_nn > namespace_count) {
-				plogwarn("[NVMe] only %u namespaces kept (limit=%u)",
-					(unsigned)namespace_count, (unsigned)NVME_MAX_NAMESPACES);
+				(unsigned)controller_nn, (unsigned)namespaces.Count(),
+				namespaces.Count() && namespaces[0] ? namespaces[0]->nsid : 0u);
+			if (controller_nn > namespaces.Count()) {
+				plogwarn("[NVMe] only %u of %u namespaces kept",
+					(unsigned)namespaces.Count(), (unsigned)controller_nn);
 			}
-			return namespace_count != 0;
+			return namespaces.Count() != 0;
 		}
 
 		bool IdentifyController() {
@@ -569,8 +561,8 @@ namespace {
 			FormatAsciiField(fw, sizeof(fw), identify_ctrl + 64, 8);
 			const uint16 vid = uint16(identify_ctrl[0]) | (uint16(identify_ctrl[1]) << 8);
 			const uint16 ssvid = uint16(identify_ctrl[2]) | (uint16(identify_ctrl[3]) << 8);
-			ploginfo("[NVMe] identify ctlr vid=%[16H] ssvid=%[16H] sn=\"%s\" mn=\"%s\" fr=\"%s\"",
-				(unsigned)vid, (unsigned)ssvid, serial, model, fw);
+			ploginfo("[NVMe] controller=%u identify vid=%[16H] ssvid=%[16H] sn=\"%s\" mn=\"%s\" fr=\"%s\"",
+				index, (unsigned)vid, (unsigned)ssvid, serial, model, fw);
 			return true;
 		}
 
@@ -593,36 +585,49 @@ namespace {
 			if (!SupportsActiveNamespaceList()) {
 				return PopulateNamespacesFromController();
 			}
-			NVMe_Command cmd{};
-			NVMe_Completion cpl{};
-			cmd.opc = NVME_ADMIN_OPC_IDENTIFY;
-			cmd.nsid = 0;
-			cmd.prp1 = _IMM64(_IMM(identify_nslist));
-			cmd.cdw10 = 2; // CNS = Active Namespace ID List
-			MemSet(identify_nslist, 0, NVME_ADMIN_PAGE_SIZE);
-			if (!SubmitAdminCommand(cmd, cpl)) {
-				if (controller_nn) {
-					plogwarn("[NVMe] namespace list unsupported, fallback to nn=%u", (unsigned)controller_nn);
-					return PopulateNamespacesFromController();
-				}
-				return false;
-			}
-			auto* nsids = reinterpret_cast<uint32*>(identify_nslist);
-			uint32 first = 0;
-			stduint count = 0;
 			ResetNamespaces();
-			for0(i, NVME_ADMIN_PAGE_SIZE / sizeof(uint32)) {
-				if (!nsids[i]) break;
-				if (!first) first = nsids[i];
-				(void)AddNamespaceId(nsids[i]);
-				++count;
+			uint32 cursor = 0;
+			for (;;) {
+				NVMe_Command cmd{};
+				NVMe_Completion cpl{};
+				cmd.opc = NVME_ADMIN_OPC_IDENTIFY;
+				cmd.nsid = cursor;
+				cmd.prp1 = _IMM64(_IMM(identify_nslist));
+				cmd.cdw10 = 2; // CNS = Active Namespace ID List
+				MemSet(identify_nslist, 0, NVME_ADMIN_PAGE_SIZE);
+				if (!SubmitAdminCommand(cmd, cpl)) {
+					if (!cursor && controller_nn) {
+						plogwarn("[NVMe] namespace list unsupported, fallback to nn=%u", (unsigned)controller_nn);
+						return PopulateNamespacesFromController();
+					}
+					return namespaces.Count() != 0;
+				}
+				auto* nsids = reinterpret_cast<uint32*>(identify_nslist);
+				stduint page_count = 0;
+				uint32 last = cursor;
+				bool page_valid = true;
+				for0(i, NVME_ADMIN_PAGE_SIZE / sizeof(uint32)) {
+					if (!nsids[i]) break;
+					if (nsids[i] <= last) {
+						plogwarn("[NVMe] invalid namespace list order after nsid=%[32H]", last);
+						page_valid = false;
+						break;
+					}
+					if (!AddNamespaceId(nsids[i])) {
+						plogwarn("[NVMe] namespace allocation failed at nsid=%[32H]", nsids[i]);
+						page_valid = false;
+						break;
+					}
+					last = nsids[i];
+					++page_count;
+				}
+				if (!page_valid || !page_count || page_count < NVME_ADMIN_PAGE_SIZE / sizeof(uint32)) break;
+				cursor = last;
 			}
-			plogtrac("[NVMe] active namespaces=%u first=%[32H]", (unsigned)count, first);
-			if (count > namespace_count) {
-				plogwarn("[NVMe] only %u namespaces kept (limit=%u)",
-					(unsigned)namespace_count, (unsigned)NVME_MAX_NAMESPACES);
-			}
-			return count != 0;
+			plogtrac("[NVMe] active namespaces=%u first=%[32H]",
+				(unsigned)namespaces.Count(),
+				namespaces.Count() && namespaces[0] ? namespaces[0]->nsid : 0u);
+			return namespaces.Count() != 0;
 		}
 
 		bool CreateIoQueues() {
@@ -760,6 +765,7 @@ namespace {
 			auto* ns = FindNamespace(nsid);
 			if (!data_buf || !block_count || !ns || !ns->block_size) return false;
 			if (lba >= ns->total_blocks || lba + block_count > ns->total_blocks) return false;
+			MutexLocal guard(&transaction);
 
 			byte* user_buf = reinterpret_cast<byte*>(data_buf);
 			uint64 current_lba = lba;
@@ -784,11 +790,11 @@ namespace {
 		void RegisterStorageNode(NamespaceInfo& ns) {
 			if (!node || !ns.nsid || ns.device_node) return;
 			String name = String::newFormat("nvme-disk@%un%u",
-				(stduint)NVME_CONTROLLER_INDEX, (stduint)ns.nsid);
+				index, (stduint)ns.nsid);
 			ns.device_node = Devsman::RegisterStorageDevice(
 				node, name.reference(), DeviceBusType::PCI, "nvme-disk", &ns.disk);
 			String alias = String::newFormat("nvme%un%u",
-				(stduint)NVME_CONTROLLER_INDEX, (stduint)ns.nsid);
+				index, (stduint)ns.nsid);
 			Devsman::RegisterDevAlias(ns.device_node, alias.reference());
 		}
 
@@ -819,7 +825,7 @@ namespace {
 				DeviceNode* part_node = Devsman::RegisterStoragePartition(
 					ns.device_node, node_name.reference(), ns.disk, part_dev);
 				String lab = String::newFormat("/mnt/nvme%un%u.%u",
-					(stduint)NVME_CONTROLLER_INDEX, (stduint)ns.nsid, part_dev);
+					index, (stduint)ns.nsid, part_dev);
 				if (auto fs = Filesys::Mount(ns.disk, part_dev, lab.reference(), part_node)) {
 					ploginfo("[NVMe] mount %s on %s", fs->name, lab.reference());
 				}
@@ -861,8 +867,9 @@ namespace {
 		}
 
 		void EnumerateNamespaces() {
-			for0(i, namespace_count) {
-				auto& ns = namespaces[i];
+			for (auto& owner : namespaces) {
+				if (!owner) continue;
+				auto& ns = *owner;
 				if (!IdentifyNamespace(ns)) continue;
 				RegisterStorageNode(ns);
 				if (!ReadLba0(ns)) continue;
@@ -873,18 +880,26 @@ namespace {
 		}
 	};
 
-	NVMe_Controller g_nvme_controller;
+	uni::Vector<uni::SharedPtr<NVMe_Controller>> nvme_controllers;
+
+	NVMe_Controller* FindNvmeController(DeviceNode* node) {
+		for (auto& owner : nvme_controllers) {
+			if (owner && owner->node == node) return owner.get();
+		}
+		return nullptr;
+	}
 
 	void Handint_NVME() {
 		// plogerro(">>>");
-		if (g_nvme_controller.regs) {
-			++g_nvme_controller.irq_count;
-			if (!g_nvme_controller.irq_log_once) {
-				g_nvme_controller.irq_log_once = true;
+		for (auto& owner : nvme_controllers) {
+			if (!owner || !owner->regs || !owner->msi_enabled) continue;
+			if (!owner->ConsumeIoCompletionFromIrq()) continue;
+			++owner->irq_count;
+			if (!owner->irq_log_once) {
+				owner->irq_log_once = true;
 				// plogwarn("[NVMe] irq received vector=%u",
 				// 	(unsigned)IRQ_NVME);
 			}
-			(void)g_nvme_controller.ConsumeIoCompletionFromIrq();
 		}
 		IC.SendEOI(IRQ_NVME);
 	}
@@ -907,31 +922,43 @@ namespace {
 
 static bool start_nvme_driver(DeviceNode* nvme_node) {
 	if (!nvme_node) return false;
+	if (NVMe_Controller* existing = FindNvmeController(nvme_node)) {
+		nvme_node->fields.binding.driver_data = existing;
+		return true;
+	}
 	auto dev = make_pci_device(*nvme_node);
 	pci.enable_MMIO(dev);
-	if (!g_nvme_controller.Bind(nvme_node)) {
+	auto owner = uni::make_shared<NVMe_Controller>();
+	if (!owner) return false;
+	NVMe_Controller* controller = owner.get();
+	controller->index = nvme_controllers.Count();
+	if (!controller->Bind(nvme_node)) {
 		plogwarn("[NVMe] Failed to bind controller %s",
 			nvme_node->link.addr ? nvme_node->link.addr : "(unnamed)");
 		return false;
 	}
-	g_nvme_controller.DumpSummary();
-	if (!g_nvme_controller.ConfigureInterrupts(dev)) {
+	controller->DumpSummary();
+	if (!controller->ConfigureAdminQueue()) {
+		return false;
+	}
+	if (!controller->IdentifyController()) {
+		return false;
+	}
+	(void)controller->DisableInterruptCoalescing();
+	const bool namespaces_ready = controller->IdentifyNamespaceList();
+	const bool interrupts_enabled = IC.TryMaskInterrupt();
+	nvme_controllers.Append(owner);
+	if (interrupts_enabled) IC.enInterrupt(true);
+	nvme_node->fields.binding.driver_data = controller;
+	if (!controller->ConfigureInterrupts(dev)) {
 		plogwarn("[NVMe] keep polling completion");
 	}
-	if (!g_nvme_controller.ConfigureAdminQueue()) {
-		return false;
-	}
-	if (!g_nvme_controller.IdentifyController()) {
-		return false;
-	}
-	(void)g_nvme_controller.DisableInterruptCoalescing();
-	if (!g_nvme_controller.IdentifyNamespaceList()) {
+	if (!namespaces_ready) {
 		plogwarn("[NVMe] no active namespace reported");
 	}
-	else if (g_nvme_controller.CreateIoQueues()) {
-		g_nvme_controller.EnumerateNamespaces();
+	else if (controller->CreateIoQueues()) {
+		controller->EnumerateNamespaces();
 	}
-	nvme_node->fields.binding.driver_data = &g_nvme_controller;
 	return true;
 }
 

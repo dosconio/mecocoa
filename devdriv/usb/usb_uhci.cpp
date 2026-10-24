@@ -10,6 +10,7 @@
 #include <cpp/Device/Bus/PCI.hpp>
 #include <cpp/Device/USB/USBHost-HID.hpp>
 #include <cpp/Device/USB/uHCI/uHCI.hpp>
+#include <cpp/ISO_IEC_STD/memory>
 
 void TSC_Wait_MS(uint64_t ms);
 void hand_kboard(keyboard_event_t event);
@@ -24,7 +25,6 @@ namespace {
 	constexpr uint8 UhciPciCommandOffset = 0x04u;
 	constexpr uint16 UhciPciCommandIoSpace = 1u << 0;
 	constexpr uint16 UhciPciCommandBusMaster = 1u << 2;
-	constexpr uint8 UhciControllerCapacity = 8;
 	constexpr stduint UhciConfigurationCapacity = 512;
 	constexpr uint16 UhciKeyboardReportBytes =
 		USB::HIDBootKeyboardReportDecoder::kReportBytes;
@@ -69,7 +69,7 @@ namespace {
 		bool running = false;
 	};
 
-	UhciDriverInstance uhci_controllers[UhciControllerCapacity]{};
+	uni::Vector<uni::SharedPtr<UhciDriverInstance>> uhci_controllers;
 	volatile bool uhci_poll_armed = false;
 
 	bool EnumerateUhciDevice(UhciDriverInstance& controller,
@@ -85,16 +85,16 @@ namespace {
 	}
 
 	UhciDriverInstance* AllocateUhciController(DeviceNode* node) {
-		for (auto& controller : uhci_controllers) {
-			if (controller.node == node) return &controller;
+		for (auto& owner : uhci_controllers) {
+			if (owner && owner->node == node) return owner.get();
 		}
-		for (auto& controller : uhci_controllers) {
-			if (controller.node) continue;
-			controller = {};
-			controller.node = node;
-			return &controller;
-		}
-		return nullptr;
+		auto owner = uni::make_shared<UhciDriverInstance>();
+		if (!owner) return nullptr;
+		owner->node = node;
+		const bool interrupts_enabled = IC.TryMaskInterrupt();
+		uhci_controllers.Append(owner);
+		if (interrupts_enabled) IC.enInterrupt(true);
+		return owner.get();
 	}
 
 	uint16 UhciRead16(void* context, uint16 offset) {
@@ -334,7 +334,9 @@ namespace {
 	void PollUhciControllers(pureptr_t, stduint) {
 		uhci_poll_armed = false;
 		bool have_running_controller = false;
-		for (auto& controller : uhci_controllers) {
+		for (auto& owner : uhci_controllers) {
+			if (!owner) continue;
+			auto& controller = *owner;
 			if (!controller.running) continue;
 			have_running_controller = true;
 			const uint16 controller_status = controller.host.Status();
@@ -882,7 +884,7 @@ namespace {
 		}
 		auto* controller = AllocateUhciController(node);
 		if (!controller) {
-			plogwarn("[UHCI] controller capacity exhausted");
+			plogwarn("[UHCI] controller allocation failed");
 			return false;
 		}
 		controller->io_base = uint16(io->start);

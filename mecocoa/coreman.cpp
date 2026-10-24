@@ -335,17 +335,29 @@ void Coreman::Reboot() {
 		if (auto fadt_addr = acpi_find_table(acpi_rsdp_addr, "FACP")) {
 			auto fadt = reinterpret_cast<const uni::ACPI::FADT*>(fadt_addr);
 			if (fadt->header.length >= offsetof(uni::ACPI::FADT, reset_value) + sizeof(fadt->reset_value) &&
-				fadt->header.isValid("FACP") &&
-				write_reset_reg(fadt->reset_reg, fadt->reset_value)) {
-				TSC_Wait_MS(500);
+				fadt->header.isValid("FACP")) {
+				ploginfo("[REBOOT-DIAG] ACPI reset space=%u width=%u offset=%u access=%u address=%[64H] value=%[8H]",
+					(unsigned)fadt->reset_reg.address_space,
+					(unsigned)fadt->reset_reg.bit_width,
+					(unsigned)fadt->reset_reg.bit_offset,
+					(unsigned)fadt->reset_reg.access_size,
+					fadt->reset_reg.address,
+					(unsigned)fadt->reset_value);
+				if (write_reset_reg(fadt->reset_reg, fadt->reset_value)) {
+					TSC_Wait_MS(500);
+					plogwarn("[REBOOT-DIAG] ACPI reset returned without resetting");
+				}
+				else plogwarn("[REBOOT-DIAG] ACPI reset register is unsupported");
 			}
 		}
 	}
+	ploginfo("[REBOOT-DIAG] trying 8042 reset");
 	for (int i = 0; i < 0x10000; ++i) {
 		if ((innpb(0x64) & 0x02) == 0) break;
 	}
 	outpb(0x64, 0xFE);
 	TSC_Wait_MS(500);
+	plogwarn("[REBOOT-DIAG] 8042 reset returned; forcing triple fault");
 	loadIDT(0, 0);
 	_ASM volatile("int3");
 	HALT();

@@ -26,6 +26,10 @@ RMOD_LIST RMOD_LIST_HDD{
 Harddisk_PATA* disks[MAX_DRIVES];// referenced
 static DeviceNode* pata_storage_nodes[MAX_DRIVES] = {};
 static char hdd_buf[byteof(**disks) * numsof(disks)];
+static constexpr byte PATA_PRIMARY_NATIVE_MODE = 0x01u;
+static constexpr byte PATA_SECONDARY_NATIVE_MODE = 0x04u;
+static constexpr byte PATA_NATIVE_MODE_MASK = PATA_PRIMARY_NATIVE_MODE | PATA_SECONDARY_NATIVE_MODE;
+static DeviceNode* pata_controller_node = nullptr;
 struct IdeChannelState {
 	Spinlock lock;
 	volatile byte irq_waiting = 0;
@@ -46,8 +50,7 @@ static PataDmaChannelState pata_dma_channels[2];
 // trusted (fails outright, or disagrees with a PIO read of the same sector).
 static bool pata_dma_disabled = false;
 
-static bool build_pata_pci_device(uni::PCI::Device& pci_dev, DeviceNode*& pata_node) {
-	pata_node = Devsman::FindPCIDeviceByClass(0x01u, 0x01u, 0xFFu);
+static bool build_pata_pci_device(DeviceNode* pata_node, uni::PCI::Device& pci_dev) {
 	if (!pata_node) return false;
 	pci_dev.segment_group = pata_node->fields.pci_segment;
 	pci_dev.bus = pata_node->fields.pci_bus;
@@ -60,14 +63,13 @@ static bool build_pata_pci_device(uni::PCI::Device& pci_dev, DeviceNode*& pata_n
 	return true;
 }
 
-static void initialize_pata_dma_channels_once() {
+static void initialize_pata_dma_channels_once(DeviceNode* pata_node) {
 	static bool done = false;
 	if (done) return;
 	done = true;
 
 	uni::PCI::Device pci_dev{};
-	DeviceNode* pata_node = nullptr;
-	if (!build_pata_pci_device(pci_dev, pata_node)) {
+	if (!build_pata_pci_device(pata_node, pci_dev)) {
 		// ploginfo("[PATA-DMA] skip channel init: no PCI IDE controller node");
 		return;
 	}
@@ -100,14 +102,13 @@ static void initialize_pata_dma_channels_once() {
 	}
 }
 
-static void ensure_pata_pci_bus_master_once() {
+static void ensure_pata_pci_bus_master_once(DeviceNode* pata_node) {
 	static bool done = false;
 	if (done) return;
 	done = true;
 
 	uni::PCI::Device pci_dev{};
-	DeviceNode* pata_node = nullptr;
-	if (!build_pata_pci_device(pci_dev, pata_node)) {
+	if (!build_pata_pci_device(pata_node, pci_dev)) {
 		// ploginfo("[PATA-DMA] no PCI IDE controller node for pci-cmd setup");
 		return;
 	}
@@ -125,14 +126,13 @@ static void ensure_pata_pci_bus_master_once() {
 	// 	(stduint)old_cmd, (stduint)verify_cmd);
 }
 
-static void probe_pata_bus_master_capability_once() {
+static void probe_pata_bus_master_capability_once(DeviceNode* pata_node) {
 	static bool probed = false;
 	if (probed) return;
 	probed = true;
 
 	uni::PCI::Device pci_dev{};
-	DeviceNode* pata_node = nullptr;
-	if (!build_pata_pci_device(pci_dev, pata_node)) {
+	if (!build_pata_pci_device(pata_node, pci_dev)) {
 		// ploginfo("[PATA-DMA] no PCI IDE controller node");
 		return;
 	}
@@ -167,7 +167,6 @@ static void probe_pata_bus_master_capability_once() {
 }
 
 static void register_pata_storage_nodes(DeviceNode* pata_node) {
-	if (!pata_node) pata_node = Devsman::FindPCIDeviceByClass(0x01u, 0x01u, 0xFFu);
 	if (!pata_node) return;
 	for0(i, MAX_DRIVES) {
 		pata_storage_nodes[i] = nullptr;
@@ -726,8 +725,25 @@ struct MecocoaCD_ATAPI : public xCD_ATAPI {
 
 static bool start_pata_driver(DeviceNode* pata_node) {
 	if (!pata_node) return false;
-	ensure_pata_pci_bus_master_once();
-	probe_pata_bus_master_capability_once();
+	if (pata_controller_node) {
+		if (pata_controller_node == pata_node) {
+			pata_node->fields.binding.driver_data = disks;
+			return true;
+		}
+		plogwarn("[PATA] additional controller unsupported: node=%s owner=%s",
+			pata_node->link.addr ? pata_node->link.addr : "(unnamed)",
+			pata_controller_node->link.addr ? pata_controller_node->link.addr : "(unnamed)");
+		return false;
+	}
+	if (pata_node->fields.class_if & PATA_NATIVE_MODE_MASK) {
+		plogwarn("[PATA] native mode controller unsupported: %s prog-if=%[8H]",
+			pata_node->link.addr ? pata_node->link.addr : "(unnamed)",
+			(stduint)pata_node->fields.class_if);
+		return false;
+	}
+	pata_controller_node = pata_node;
+	ensure_pata_pci_bus_master_once(pata_node);
+	probe_pata_bus_master_capability_once(pata_node);
 
 	for0(i, MAX_DRIVES) {
 		Harddisk_PATA probe(i);
@@ -750,7 +766,7 @@ static bool start_pata_driver(DeviceNode* pata_node) {
 	if (disks[0] || disks[1]) (disks[0] ? disks[0] : disks[1])->setInterrupt(NULL);
 	if (disks[2] || disks[3]) (disks[2] ? disks[2] : disks[3])->setInterrupt(NULL);
 
-	initialize_pata_dma_channels_once();
+	initialize_pata_dma_channels_once(pata_node);
 
 	if (!single_sector) single_sector = new char[0x1000];
 	if (!hd_info) hd_info = new HD_Info[1][4];

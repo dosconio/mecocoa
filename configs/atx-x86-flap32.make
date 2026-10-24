@@ -174,6 +174,7 @@ prehost/$(arch)/fatvhd.ignore: build_util
 	@echo $(sudokey) | sudo -S mount -o loop $@ $(mntdir)
 	@echo $(sudokey) | sudo -S mv $(uobjpath)/sapp-$(arch)/init $(mntdir)/init
 	@echo $(sudokey) | sudo -S cp $(uobjpath)/sapp-$(arch)/cot  $(mntdir)/cot
+	@if [ -f depends/cotlabx/init.cot ]; then echo $(sudokey) | sudo -S cp depends/cotlabx/init.cot $(mntdir)/init.cot; fi
 	# from uni-utils:
 	@echo $(sudokey) | sudo -S mv $(uobjpath)/sapp-$(arch)/ls     $(mntdir)/ls
 	@echo $(sudokey) | sudo -S mv $(uobjpath)/sapp-$(arch)/ribbon $(mntdir)/ribbon

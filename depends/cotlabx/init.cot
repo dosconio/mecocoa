@@ -1,0 +1,7 @@
+# Mecocoa Startup Script
+echo "[init.cot] Boot script started"
+cot+ls /md0 | sort >> /md0/motd.txt
++m
+"H" "e" "l" "l" "o"
++s
+echo "[init.cot] Boot script finished"

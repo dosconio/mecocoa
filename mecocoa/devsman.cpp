@@ -37,6 +37,9 @@ namespace Devs {
 
 	DeviceTree device_tree;
 	DeviceNode* device_root = nullptr;
+	#if (_MCCA & 0xFF00) == 0x8600
+	void discover_x86_acpi_devices();
+	#endif
 	
 	#if (_MCCA & 0xFF00) == 0x8600
 
@@ -2195,6 +2198,7 @@ bool Devsman::Initialize() {
 	#if (_MCCA & 0xFF00) == 0x8600
 	initialize_device_tree();
 	probe_and_attach_pci_devices();
+	discover_x86_acpi_devices();
 	#endif
 
 	#if _MCCA == 0x8664

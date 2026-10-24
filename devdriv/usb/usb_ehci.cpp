@@ -9,6 +9,7 @@
 #include <cpp/Device/Bus/PCI.hpp>
 #include <cpp/Device/USB/USBHost-MSC.hpp>
 #include <cpp/Device/USB/eHCI/eHCI.hpp>
+#include <cpp/ISO_IEC_STD/memory>
 
 void TSC_Wait_MS(uint64_t ms);
 
@@ -24,7 +25,6 @@ namespace {
 	constexpr uint16 EhciPciCommandMemorySpace = 1u << 1;
 	constexpr uint16 EhciPciCommandBusMaster = 1u << 2;
 	constexpr uint16 EhciPciCommandInterruptDisable = 1u << 10;
-	constexpr uint8 EhciControllerCapacity = 8;
 	constexpr stduint EhciConfigurationCapacity = 512;
 	constexpr stduint EhciStringCapacity = 64;
 	constexpr uint16 EhciHotplugDebouncePolls = 10;
@@ -89,6 +89,7 @@ namespace {
 	};
 
 	struct EhciDriverInstance {
+		stduint index = 0;
 		DeviceNode* node = nullptr;
 		stduint mmio_base = 0;
 		uint16 mmio_length = 0;
@@ -108,7 +109,7 @@ namespace {
 		bool running = false;
 	};
 
-	EhciDriverInstance ehci_controllers[EhciControllerCapacity]{};
+	uni::Vector<uni::SharedPtr<EhciDriverInstance>> ehci_controllers;
 	volatile bool ehci_poll_armed = false;
 
 	bool EnumerateEhciDevice(EhciDriverInstance& controller,
@@ -287,16 +288,17 @@ namespace {
 	}
 
 	EhciDriverInstance* AllocateEhciController(DeviceNode* node) {
-		for (auto& controller : ehci_controllers) {
-			if (controller.node == node) return &controller;
+		for (auto& owner : ehci_controllers) {
+			if (owner && owner->node == node) return owner.get();
 		}
-		for (auto& controller : ehci_controllers) {
-			if (controller.node) continue;
-			controller = {};
-			controller.node = node;
-			return &controller;
-		}
-		return nullptr;
+		auto owner = uni::make_shared<EhciDriverInstance>();
+		if (!owner) return nullptr;
+		owner->index = ehci_controllers.Count();
+		owner->node = node;
+		const bool interrupts_enabled = IC.TryMaskInterrupt();
+		ehci_controllers.Append(owner);
+		if (interrupts_enabled) IC.enInterrupt(true);
+		return owner.get();
 	}
 
 	uint8 EhciRead8(void* context, uint16 offset) {
@@ -607,7 +609,9 @@ namespace {
 	void PollEhciControllers(pureptr_t, stduint) {
 		ehci_poll_armed = false;
 		bool have_running_controller = false;
-		for (auto& controller : ehci_controllers) {
+		for (auto& owner : ehci_controllers) {
+			if (!owner) continue;
+			auto& controller = *owner;
 			if (!controller.running) continue;
 			have_running_controller = true;
 			const uint32 controller_status = controller.host.Status();
@@ -1136,7 +1140,7 @@ namespace {
 		if (!storage_node) return false;
 		controller.mass_storage_node = storage_node;
 		auto alias = String::newFormat("usb-storage%u",
-			(stduint)(&controller - ehci_controllers));
+			controller.index);
 		if (!Devsman::RegisterDevAlias(storage_node, alias.reference())) {
 			plogwarn("[EHCI] %s cannot register storage alias %s",
 				EhciNodeName(controller), alias.reference());
@@ -1155,7 +1159,7 @@ namespace {
 				partition);
 			if (!partition_node) return false;
 			auto mount_path = String::newFormat("/mnt/ehci%u.%u",
-				(stduint)(&controller - ehci_controllers), partition);
+				controller.index, partition);
 			if (auto* filesystem = Filesys::Mount(*controller.mass_storage,
 				partition, mount_path.reference(), partition_node)) {
 				ploginfo("[EHCI] mount %s on %s", filesystem->name,
@@ -1286,7 +1290,7 @@ namespace {
 		}
 		auto* controller = AllocateEhciController(node);
 		if (!controller) {
-			plogwarn("[EHCI] controller capacity exhausted");
+			plogwarn("[EHCI] controller allocation failed");
 			return false;
 		}
 		controller->mmio_base = stduint(mmio->start);

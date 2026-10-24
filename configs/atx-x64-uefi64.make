@@ -54,6 +54,8 @@ cppfile=\
 	$(ulibpath)/cpp/Witch/_TextChrome.cpp \
 	\
 	$(ulibpath)/cpp/Device/ACPI.cpp \
+	$(ulibpath)/cpp/Device/ACPI/AML.cpp \
+	$(ulibpath)/cpp/Device/ACPI/AML-Execute.cpp \
 	$(ulibpath)/cpp/Device/Cache.cpp \
 	$(ulibpath)/cpp/Device/Bus/PCI.cpp \
 	$(ulibpath)/cpp/Device/Bus/ISA.cpp \
@@ -108,6 +110,7 @@ build: clean accm $(archdir)/kerdisk.fat $(ubinpath)/$(arch).img $(asmobjs) $(cp
 	@echo $(sudokey) | sudo -S mount -o loop $(archdir)/kerdisk.fat $(mntdir)
 	#
 	@echo $(sudokey) | sudo -S cp $(uobjpath)/sapp-$(arch)/*    $(mntdir)/
+	@if [ -f depends/cotlabx/init.cot ]; then echo $(sudokey) | sudo -S cp depends/cotlabx/init.cot $(mntdir)/init.cot; fi
 # 	tree $(mntdir)
 	@echo $(sudokey) | sudo -S umount $(mntdir)
 	@echo $(sudokey) | sudo -S mount -o loop $(ubinpath)/$(arch).img $(mntdir)
