@@ -11,6 +11,12 @@ extern uni::AudioManager audio_manager;
 struct DeviceNode;
 struct DeviceEvent;
 
+namespace uni {
+	enum class IICTransferStatus : uint8;
+	struct IICMessage;
+	struct IICTransferResult;
+}
+
 struct DeviceNodeOps {
 	stdsint (*read)(DeviceNode* node, void* buf, stduint count, stduint idx, stduint flags);
 	stdsint (*send)(DeviceNode* node, const void* buf, stduint count, stduint idx, stduint flags);
@@ -32,6 +38,19 @@ enum class DeviceCtrlCommand : uint32 {
 	GetUnitCount,
 	GetByteSize,
 	GetBackingObject,
+};
+
+enum class I2cCtrlCommand : uint32 {
+	Base = uint32(DeviceCtrlCommand::GetBackingObject),
+	Transfer,
+};
+
+struct DeviceI2cTransferRequest {
+	uni::IICMessage* messages;
+	stduint message_count;
+	stduint timeout;
+	uni::IICTransferResult* result;
+	uni::IICTransferStatus status;
 };
 
 enum class VideoCtrlCommand : uint32 {
@@ -182,6 +201,45 @@ struct DeviceAcpiRangeResource {
 	uint8 width;
 };
 
+enum class DeviceAcpiPropertyType : uint8 {
+	Integer,
+	String,
+	Buffer,
+	Array,
+	DeviceReference,
+};
+
+enum DeviceAcpiPropertyFlags : uint8 {
+	DeviceAcpiPropertyFlag_None = 0,
+	DeviceAcpiPropertyFlag_NonStandard = 1 << 0,
+};
+
+enum class DeviceAcpiPropertyStatus : uint8 {
+	NotEvaluated,
+	Success,
+	NotFound,
+	DevicePropertiesNotFound,
+	Malformed,
+	ExecutionFailed,
+	AllocationFailed,
+};
+
+struct DeviceAcpiPropertyValue {
+	const uint8* data;
+	const DeviceAcpiPropertyValue* elements;
+	const char* reference_path;
+	uint64 integer;
+	uint32 length;
+	uint16 element_count;
+	DeviceAcpiPropertyType type;
+	uint8 flags;
+};
+
+struct DeviceAcpiProperty {
+	const char* name;
+	DeviceAcpiPropertyValue value;
+};
+
 struct DeviceAcpiInfo {
 	char path[DeviceAcpiPathCapacity];
 	char hardware_id[DeviceAcpiIdCapacity];
@@ -194,11 +252,175 @@ struct DeviceAcpiInfo {
 	uint16 gpio_resource_count;
 	uint16 irq_resource_count;
 	uint16 range_resource_count;
+	uint16 property_count;
+	uint16 property_value_count;
+	uint16 nonstandard_property_count;
+	uint32 property_data_length;
+	DeviceAcpiPropertyStatus property_status;
 	// These arrays are owned together with this heap-allocated record.
 	DeviceAcpiSerialResource* serial_resources;
 	DeviceAcpiGpioResource* gpio_resources;
 	DeviceAcpiIrqResource* irq_resources;
 	DeviceAcpiRangeResource* range_resources;
+	DeviceAcpiProperty* properties;
+	DeviceAcpiPropertyValue* property_values;
+	uint8* property_data;
+};
+
+enum class DeviceControllerResourceSource : uint8 {
+	None = 0,
+	AcpiResource,
+	AcpiDsd,
+	AcpiDsm,
+	PciConfiguration,
+	PlatformDescription,
+	HardwareCapability,
+	FirmwareConfigured,
+	DriverPolicy,
+};
+
+enum class DeviceControllerAccessType : uint8 {
+	None = 0,
+	MMIO,
+	PortIo,
+};
+
+enum class DeviceControllerInterruptMode : uint8 {
+	None = 0,
+	IRQ,
+	Polling,
+};
+
+enum class DeviceControllerResetType : uint8 {
+	None = 0,
+	Register,
+	FirmwareConfigured,
+};
+
+enum class DeviceControllerPowerState : uint8 {
+	Unknown = 0,
+	On,
+	FirmwareConfigured,
+};
+
+enum class DeviceControllerIdentityType : uint8 {
+	None = 0,
+	Pci,
+	Platform,
+};
+
+enum class DeviceControllerDmaMode : uint8 {
+	Unknown = 0,
+	NotRequired,
+	Supported,
+	Required,
+};
+
+enum class DeviceControllerContractStatus : uint8 {
+	NotEvaluated = 0,
+	Ready,
+	MissingAccess,
+	MissingInterrupt,
+	MissingClock,
+	MissingReset,
+	MissingPower,
+	MissingNamespace,
+	MissingIdentity,
+	MissingDma,
+};
+
+enum DeviceControllerRequirementFlags : uint32 {
+	DeviceControllerRequirement_None = 0,
+	DeviceControllerRequirement_Access = 1 << 0,
+	DeviceControllerRequirement_Interrupt = 1 << 1,
+	DeviceControllerRequirement_Clock = 1 << 2,
+	DeviceControllerRequirement_Reset = 1 << 3,
+	DeviceControllerRequirement_Power = 1 << 4,
+	DeviceControllerRequirement_Namespace = 1 << 5,
+	DeviceControllerRequirement_Identity = 1 << 6,
+	DeviceControllerRequirement_Dma = 1 << 7,
+};
+
+enum class DeviceControllerIpType : uint8 {
+	Unknown = 0,
+	DesignWareI2c,
+};
+
+enum class DeviceControllerClockModel : uint8 {
+	Unknown = 0,
+	Fixed,
+};
+
+enum DeviceControllerCompatibilityLimitationFlags : uint32 {
+	DeviceControllerCompatibilityLimitation_None = 0,
+	DeviceControllerCompatibilityLimitation_DriverInterruptUnsupported = 1 << 0,
+	DeviceControllerCompatibilityLimitation_DriverDmaUnsupported = 1 << 1,
+};
+
+enum DeviceControllerCompatibilityEvidenceFlags : uint32 {
+	DeviceControllerCompatibilityEvidence_None = 0,
+	DeviceControllerCompatibilityEvidence_PublicReference = 1 << 0,
+	DeviceControllerCompatibilityEvidence_RegisterModel = 1 << 1,
+	DeviceControllerCompatibilityEvidence_FirmwareReplay = 1 << 2,
+	DeviceControllerCompatibilityEvidence_PhysicalHardware = 1 << 3,
+};
+
+struct DeviceControllerCompatibilityDescription {
+	const char* family_name;
+	const char* product_name;
+	const char* driver_name;
+	DeviceControllerIpType ip_type;
+	DeviceControllerClockModel clock_model;
+	uint32 limitation_flags;
+	uint32 evidence_flags;
+	uint32 input_clock_hz;
+	uint32 minimum_access_length;
+	uint32 core_register_offset;
+	uint32 private_register_offset;
+	uint32 capabilities_register_offset;
+	uint32 capabilities_type_mask;
+	uint32 capabilities_type_value;
+	uint32 reset_register_offset;
+	uint32 reset_mask;
+	uint32 reset_deassert_value;
+	uint32 remap_address_low_offset;
+	uint32 remap_address_high_offset;
+	uint32 i2c_sda_hold_time_ns;
+	uint32 i2c_sda_falling_time_ns;
+	uint32 i2c_scl_falling_time_ns;
+	uint8 access_index;
+};
+
+struct DeviceControllerResourceContract {
+	uint32 requirements;
+	DeviceControllerContractStatus status;
+	DeviceControllerAccessType access_type;
+	DeviceControllerResourceSource access_source;
+	uint32 access_index;
+	uint64 access_base;
+	uint64 access_length;
+	DeviceControllerInterruptMode interrupt_mode;
+	DeviceControllerResourceSource interrupt_source;
+	uint32 interrupt;
+	DeviceControllerResourceSource clock_source;
+	uint32 input_clock_hz;
+	DeviceControllerResetType reset_type;
+	DeviceControllerResourceSource reset_source;
+	uint32 reset_register_offset;
+	uint32 reset_mask;
+	uint32 reset_deassert_value;
+	DeviceControllerPowerState power_state;
+	DeviceControllerResourceSource power_source;
+	DeviceControllerIdentityType identity_type;
+	DeviceControllerResourceSource identity_source;
+	uint16 pci_segment;
+	uint8 pci_bus;
+	uint8 pci_device;
+	uint8 pci_function;
+	const char* platform_identity;
+	const char* acpi_path;
+	DeviceControllerDmaMode dma_mode;
+	DeviceControllerResourceSource dma_source;
 };
 
 enum class DriverBindingState : uint32 {
@@ -209,12 +431,66 @@ enum class DriverBindingState : uint32 {
 	Failed,
 };
 
+enum class DriverMatchResult : uint16 {
+	NotEvaluated = 0,
+	Unsupported,
+	Matched,
+	MissingResource,
+	Ambiguous,
+	RejectedByCapability,
+};
+
+using DriverMatchCapabilityRoutine = bool (*)(const DeviceNode* node);
+
+struct DeviceDriverMatchEntry {
+	const char* driver_name;
+	const char* node_name;
+	const char* acpi_hardware_id;
+	const char* acpi_compatible_id;
+	const char* controller_driver_name;
+	uint64 required_resource_mask;
+	uint16 priority;
+	uint16 node_type;
+	uint16 bus_type;
+	uint16 controller_node_type;
+	uint16 controller_bus_type;
+	uint16 pci_vendor_id;
+	uint16 pci_vendor_mask;
+	uint16 pci_device_id;
+	uint16 pci_device_mask;
+	uint16 pci_subsystem_vendor_id;
+	uint16 pci_subsystem_vendor_mask;
+	uint16 pci_subsystem_device_id;
+	uint16 pci_subsystem_device_mask;
+	uint8 pci_revision;
+	uint8 pci_revision_mask;
+	uint8 pci_class_base;
+	uint8 pci_class_base_mask;
+	uint8 pci_class_sub;
+	uint8 pci_class_sub_mask;
+	uint8 pci_class_if;
+	uint8 pci_class_if_mask;
+	DriverMatchCapabilityRoutine capability;
+};
+
+struct DeviceDriverMatchDecision {
+	const char* driver_name;
+	DriverMatchResult result;
+	uint16 priority;
+	uint16 candidate_count;
+	uint16 missing_resource_type;
+};
+
 struct DriverBinding {
 	const char* driver_name;
 	uint32 state;
 	int32 probe_result;
 	void* driver_data;
 	uint32 owner_pid;
+	DriverMatchResult match_result;
+	uint16 match_priority;
+	uint16 match_candidate_count;
+	uint16 missing_resource_type;
 };
 
 struct DevExt {
@@ -226,6 +502,8 @@ struct DevExt {
 
 	uint16 vendor_id;
 	uint16 device_id;
+	uint16 subsystem_vendor_id;
+	uint16 subsystem_device_id;
 	const char* text_manufacturer;
 	const char* text_product;
 	const char* text_serial;
@@ -248,6 +526,7 @@ struct DevExt {
 
 	void* acpi_handle;
 	DeviceAcpiInfo* acpi_info;
+	DeviceControllerResourceContract* controller_resources;
 	// Bus nodes reference their physical controller without owning it.
 	DeviceNode* controller;
 	DriverBinding binding;
@@ -318,6 +597,8 @@ public:
 	static void StartKnownDrivers();
 	static void RegisterUSBDeviceTreeHooks();
 	static bool RegisterDriverStarter(const char* driver_name, DriverStartRoutine starter);
+	static DeviceDriverMatchDecision MatchDriver(const DeviceNode* node, const DeviceDriverMatchEntry* entries, stduint count);
+	static const char* DriverMatchResultName(DriverMatchResult result);
 	static DeviceNode* RegisterUSBBus(const char* name, const char* driver_name = nullptr, void* driver_data = nullptr);
 	static DeviceNode* RegisterUSBRootHub(DeviceNode* parent, const char* name,
 		uint8 class_base, uint8 class_sub, uint8 class_if,
@@ -368,6 +649,19 @@ public:
 	static DeviceNode* FindPCIDeviceByClass(uint8 class_base, uint8 class_sub, uint8 class_if);
 	static DeviceNode* FindPCIDeviceByVendorDevice(uint16 vendor_id, uint16 device_id);
 	static const DeviceResource* FindResource(const DeviceNode* node, DeviceResourceType type, uint32 index = 0);
+	static const DeviceAcpiProperty* FindAcpiProperty(const DeviceNode* node, const char* name);
+	static bool ReadAcpiPropertyInteger(const DeviceNode* node, const char* name, uint64& value);
+	static bool ReadAcpiPropertyString(const DeviceNode* node, const char* name, const char*& value, stduint& length);
+	static bool ReadAcpiPropertyBuffer(const DeviceNode* node, const char* name, const uint8*& value, stduint& length);
+	static bool ReadAcpiPropertyReference(const DeviceNode* node, const char* name, const char*& path);
+	static bool ReadAcpiPropertyArray(const DeviceNode* node, const char* name, const DeviceAcpiPropertyValue*& values, stduint& count);
+	static DeviceControllerResourceContract* EnsureControllerResourceContract(DeviceNode* node);
+	static DeviceControllerContractStatus ValidateControllerResourceContract(DeviceControllerResourceContract& contract);
+	#if defined(_MCCA) && (_MCCA & 0xFF00) == 0x8600
+	static const DeviceControllerCompatibilityDescription* FindPciControllerCompatibility(uint16 vendor_id, uint16 device_id);
+	static const DeviceControllerCompatibilityDescription* FindPciControllerCompatibility(uint16 vendor_id, uint16 device_id, uint16 subsystem_vendor_id, uint16 subsystem_device_id, uint8 revision);
+	static const DeviceControllerCompatibilityDescription* FindControllerCompatibility(const DeviceNode* node);
+	#endif
 	static bool SetOps(DeviceNode* node, const DeviceNodeOps* ops);
 	static const DeviceNodeOps* GetOps(const DeviceNode* node);
 	static stdsint Read(DeviceNode* node, void* buf, stduint count, stduint idx = 0, stduint flags = 0);

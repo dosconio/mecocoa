@@ -19,6 +19,11 @@ _PACKED(struct) memory_info_entry {
 
 
 #if (_MCCA & 0xFF00) == 0x8600
+	#if CONFIG_ACPI_BOOT_TEST
+	#define ACPI_BOOT_ERROR(...) plogwarn(__VA_ARGS__)
+	#else
+	#define ACPI_BOOT_ERROR(...) plogerro(__VA_ARGS__)
+	#endif
 extern memory_info_entry MemoryListData[20];
 //
 static stduint parse_norm(stduint addr);
@@ -73,17 +78,18 @@ static bool rsdt_candidate_valid(stduint rsdt_addr) {
 	}
 	auto rsdt = reinterpret_cast<const uni::ACPI::RSDT*>(rsdt_addr);
 	if (rsdt->header.length < sizeof(uni::ACPI::DescriptionHeader)) {
-		plogwarn("[ACPI] Reject RSDT candidate %[x]: bad length %[x]",
+		ACPI_BOOT_ERROR("[ACPI] Reject RSDT candidate %[x]: bad length %[x]",
 			rsdt_addr, rsdt->header.length);
 		return false;
 	}
 	if (!rsdt->header.isValid("RSDT")) {
-		plogwarn("[ACPI] Reject RSDT candidate %[x]: header validation failed", rsdt_addr);
+		ACPI_BOOT_ERROR("[ACPI] Reject RSDT candidate %[x]: header validation failed", rsdt_addr);
 		return false;
 	}
 	return true;
 }
 
+#if CONFIG_ACPI_BOOT_TEST
 static void dump_rsdp_bytes(stduint addr) {
 	auto bytes = reinterpret_cast<const uint8*>(addr);
 	ploginfo("[ACPI] RSDP raw @%[x]: %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x",
@@ -103,6 +109,7 @@ static void log_rsdp_candidate(stduint addr, const char* source) {
 		source, addr, rsdp->revision, rsdp->rsdt_address, rsdp->xsdt_address);
 	dump_rsdp_bytes(addr);
 }
+#endif
 
 static stduint scan_rsdp_range(stduint begin, stduint length, const char* source) {
 	const stduint end = begin + length;
@@ -113,7 +120,9 @@ static stduint scan_rsdp_range(stduint begin, stduint length, const char* source
 		plogtrac("[ACPI] Signature hit (%s) at %[x]", source, addr);
 		if (!rsdp_checksum_ok(rsdp)) continue;
 
+		#if CONFIG_ACPI_BOOT_TEST
 		if constexpr (0) log_rsdp_candidate(addr, source);
+		#endif
 		
 		if (!first && rsdt_candidate_valid(rsdp->rsdt_address)) first = addr;
 	}
@@ -128,7 +137,9 @@ static stduint find_rsdp_bios() {
 		if (auto found = scan_rsdp_range(ebda_addr, 1024, "EBDA")) return found;
 	}
 	else {
+		#if CONFIG_ACPI_BOOT_TEST
 		plogwarn("[ACPI] EBDA segment from BDA[0x40E] is zero");
+		#endif
 	}
 	plogtrac("[ACPI] Scanning BIOS high area for RSDP: %[x]..%[x]", 0xE0000u, 0xFFFFFu);
 	return scan_rsdp_range(0xE0000, 0x20000, "BIOS-HIGH");
@@ -162,7 +173,7 @@ static void register_acpi_cpu_lapic_id(uint32 lapic_id, uint32 bsp_lapic_id) {
 		if (acpi_cpu_lapic_ids[i] == lapic_id) return;
 	}
 	if (acpi_cpu_count >= PCU_CORES_MAX) {
-		plogwarn("[ACPI] CPU count exceeds PCU_CORES_MAX=%u, lapic=%[x] ignored",
+		ACPI_BOOT_ERROR("[ACPI] CPU count exceeds PCU_CORES_MAX=%u, lapic=%[x] ignored",
 			PCU_CORES_MAX, lapic_id);
 		return;
 	}
@@ -179,7 +190,7 @@ static stduint find_table_from_rsdt(stduint rsdt_addr, const char* signature) {
 	if (!rsdt_addr) return 0;
 	auto rsdt = reinterpret_cast<const uni::ACPI::RSDT*>(rsdt_addr);
 	if (rsdt->header.length < sizeof(uni::ACPI::DescriptionHeader)) {
-		plogwarn("[ACPI] RSDT length %[x] at %[x] is invalid for early mapping",
+		ACPI_BOOT_ERROR("[ACPI] RSDT length %[x] at %[x] is invalid for early mapping",
 			rsdt->header.length, rsdt_addr);
 		return 0;
 	}
@@ -199,13 +210,13 @@ static stduint find_table_from_rsdt(stduint rsdt_addr, const char* signature) {
 static stduint find_table_from_xsdt(uint64 xsdt_addr, const char* signature) {
 	if (!xsdt_addr) return 0;
 	if (xsdt_addr > (uint64)~(stduint)0) {
-		plogwarn("[ACPI] XSDT address %[x] exceeds stduint", xsdt_addr);
+		ACPI_BOOT_ERROR("[ACPI] XSDT address %[x] exceeds stduint", xsdt_addr);
 		return 0;
 	}
 	const stduint xsdt_addr_native = (stduint)xsdt_addr;
 	auto xsdt = reinterpret_cast<const uni::ACPI::XSDT*>(xsdt_addr_native);
 	if (xsdt->header.length < sizeof(uni::ACPI::DescriptionHeader)) {
-		plogwarn("[ACPI] XSDT length %[x] at %[x] is invalid for mapped range",
+		ACPI_BOOT_ERROR("[ACPI] XSDT length %[x] at %[x] is invalid for mapped range",
 			xsdt->header.length, xsdt_addr);
 		return 0;
 	}
@@ -226,7 +237,7 @@ static stduint find_table_from_rsdp(stduint rsdp_addr, const char* signature) {
 	if (!rsdp_addr) return 0;
 	auto rsdp = reinterpret_cast<const uni::ACPI::RSDP*>(rsdp_addr);
 	if (!rsdp_checksum_ok(rsdp)) {
-		plogwarn("[ACPI] RSDP at %[x] checksum failed", rsdp_addr);
+		ACPI_BOOT_ERROR("[ACPI] RSDP at %[x] checksum failed", rsdp_addr);
 		return 0;
 	}
 	if (rsdp->revision >= 2 && rsdp->xsdt_address) {
@@ -245,7 +256,7 @@ static void enumerate_madt_cpus(stduint madt_addr) {
 	if (!madt_addr) return;
 	auto madt = reinterpret_cast<const uni::ACPI::MADT*>(madt_addr);
 	if (madt->header.length < sizeof(uni::ACPI::MADT)) {
-		plogwarn("[ACPI] MADT length %[x] at %[x] is invalid for early mapping",
+		ACPI_BOOT_ERROR("[ACPI] MADT length %[x] at %[x] is invalid for early mapping",
 			madt->header.length, madt_addr);
 		return;
 	}
@@ -286,7 +297,7 @@ static void parse_mcfg(stduint mcfg_addr) {
 	if (!mcfg_addr) return;
 	auto mcfg = reinterpret_cast<const uni::ACPI::MCFG*>(mcfg_addr);
 	if (mcfg->header.length < sizeof(uni::ACPI::MCFG)) {
-		plogwarn("[ACPI] MCFG length %[x] at %[x] is invalid for mapped range",
+		ACPI_BOOT_ERROR("[ACPI] MCFG length %[x] at %[x] is invalid for mapped range",
 			mcfg->header.length, mcfg_addr);
 		return;
 	}
@@ -306,7 +317,7 @@ static void parse_mcfg(stduint mcfg_addr) {
 			allocation.start_bus_number,
 			allocation.end_bus_number
 		})) {
-			plogwarn("[ACPI] Ignoring duplicate or excess MCFG segment=%u bus=%u..%u",
+			ACPI_BOOT_ERROR("[ACPI] Ignoring duplicate or excess MCFG segment=%u bus=%u..%u",
 				allocation.segment_group_number, allocation.start_bus_number,
 				allocation.end_bus_number);
 			continue;
@@ -323,35 +334,43 @@ static void parse_mcfg(stduint mcfg_addr) {
 
 static void log_acpi_topology(stduint rsdp_addr) {
 	if (!rsdp_addr) {
-		plogwarn("[ACPI] RSDP not found");
+		ACPI_BOOT_ERROR("[ACPI] RSDP not found");
 		return;
 	}
 	auto rsdp = reinterpret_cast<const uni::ACPI::RSDP*>(rsdp_addr);
+	#if CONFIG_ACPI_BOOT_TEST
 	ploginfo("[ACPI] RSDP found at %[x], rev=%u, RSDT=%[x], XSDT=%[x]",
 		rsdp_addr, rsdp->revision, rsdp->rsdt_address, rsdp->xsdt_address);
+	#endif
 	if (acpi_madt_addr) {
+		#if CONFIG_ACPI_BOOT_TEST
 		ploginfo("[ACPI] MADT found at %[x], CPU count=%u", acpi_madt_addr, acpi_cpu_count);
+		#endif
 		// [s]
 		// for0(i, acpi_cpu_count) {
 		// 	ploginfo("[ACPI] CPU%u LAPIC ID=%[x]", i, acpi_cpu_lapic_ids[i]);
 		// }
 	}
 	else {
-		plogwarn("[ACPI] MADT not found from RSDP");
+		ACPI_BOOT_ERROR("[ACPI] MADT not found from RSDP");
 	}
 	if (acpi_mcfg_addr) {
 		plogtrac("[ACPI] MCFG found at %[x]", acpi_mcfg_addr);
 		if (acpi_pcie_ecam_available) {
+			#if CONFIG_ACPI_BOOT_TEST
 			ploginfo("[ACPI] PCIe ECAM=%[x], segment=%u, bus=%u..%u",
 				acpi_pcie_ecam_base, acpi_pcie_segment_group,
 				acpi_pcie_start_bus, acpi_pcie_end_bus);
+			#endif
 		}
 		else {
-			plogwarn("[ACPI] MCFG present but no usable ECAM allocation found");
+			ACPI_BOOT_ERROR("[ACPI] MCFG present but no usable ECAM allocation found");
 		}
 	}
 	else {
+		#if CONFIG_ACPI_BOOT_TEST
 		ploginfo("[ACPI]!MCFG not found from RSDP");
+		#endif
 	}
 }
 
@@ -426,7 +445,7 @@ bool Memory::initialize(stduint eax, byte* ebx) {
 		log_acpi_topology(acpi_rsdp_addr);
 	}
 	else {
-		plogwarn("[ACPI] RSDP not found via BIOS scan");
+		ACPI_BOOT_ERROR("[ACPI] RSDP not found via BIOS scan");
 	}
 	#if CONFIG_ENABLE_MMU
 	InitialPageRegion* x86_initial_page_plan = nullptr;
@@ -554,12 +573,13 @@ bool Memory::initialize(stduint eax, byte* ebx) {
 		log_acpi_topology(acpi_rsdp_addr);
 	}
 	else {
-		plogwarn("[ACPI] RSDP not provided by UEFI loader");
+		ACPI_BOOT_ERROR("[ACPI] RSDP not provided by UEFI loader");
 	}
 	#endif
 	GDT_Next();
 
 	#if (_MCCA & 0xFF00) == 0x8600
+	#undef ACPI_BOOT_ERROR
 	void* dma_phys = mempool.allocate(0x10000, 16, 16);
 	if (dma_phys && stduint(dma_phys) + 0x10000 <= 0x01000000) {
 		DmaLowPoolInit(stduint(dma_phys));

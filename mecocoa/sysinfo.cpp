@@ -182,6 +182,28 @@ static rostr text_driver_binding_state(uint32 state) {
 	}
 }
 
+struct DriverMatchSummary {
+	stduint matched = 0;
+	stduint unsupported = 0;
+	stduint missing_resource = 0;
+	stduint ambiguous = 0;
+	stduint rejected_by_capability = 0;
+};
+
+static void collect_driver_match_summary(const DeviceNode* node, DriverMatchSummary& summary) {
+	for (auto* current = node; current; current = reinterpret_cast<const DeviceNode*>(current->link.next)) {
+		switch (current->fields.binding.match_result) {
+		case DriverMatchResult::Matched: ++summary.matched; break;
+		case DriverMatchResult::Unsupported: ++summary.unsupported; break;
+		case DriverMatchResult::MissingResource: ++summary.missing_resource; break;
+		case DriverMatchResult::Ambiguous: ++summary.ambiguous; break;
+		case DriverMatchResult::RejectedByCapability: ++summary.rejected_by_capability; break;
+		default: break;
+		}
+		if (current->link.subf) collect_driver_match_summary(reinterpret_cast<const DeviceNode*>(current->link.subf), summary);
+	}
+}
+
 static rostr text_device_resource_type(uint16 type) {
 	switch (DeviceResourceType(type)) {
 	case DeviceResourceType::PciBarMmio:        return "BAR-MMIO";
@@ -207,6 +229,99 @@ static rostr text_usb_endpoint_transfer_type(stduint type) {
 }
 
 static void dump_device_tree_indent(OstreamTrait& com1, stduint depth);
+
+static void dump_device_tree_driver_match(OstreamTrait& com1, const DeviceNode& node, stduint depth) {
+	const auto result = node.fields.binding.match_result;
+	if (result != DriverMatchResult::MissingResource && result != DriverMatchResult::Ambiguous && result != DriverMatchResult::RejectedByCapability) return;
+	dump_device_tree_indent(com1, depth);
+	com1.OutFormat("- MATCH result=%s priority=%u candidates=%u", Devsman::DriverMatchResultName(result), (stduint)node.fields.binding.match_priority, (stduint)node.fields.binding.match_candidate_count);
+	if (result == DriverMatchResult::MissingResource) com1.OutFormat(" missing=%s", text_device_resource_type(node.fields.binding.missing_resource_type));
+	com1.OutFormat("\n\r");
+}
+
+static rostr text_controller_resource_source(DeviceControllerResourceSource source) {
+	switch (source) {
+	case DeviceControllerResourceSource::AcpiResource: return "acpi-resource";
+	case DeviceControllerResourceSource::AcpiDsd: return "acpi-dsd";
+	case DeviceControllerResourceSource::AcpiDsm: return "acpi-dsm";
+	case DeviceControllerResourceSource::PciConfiguration: return "pci-config";
+	case DeviceControllerResourceSource::PlatformDescription: return "platform-description";
+	case DeviceControllerResourceSource::HardwareCapability: return "hardware-capability";
+	case DeviceControllerResourceSource::FirmwareConfigured: return "firmware-configured";
+	case DeviceControllerResourceSource::DriverPolicy: return "driver-policy";
+	default: return "none";
+	}
+}
+
+static rostr text_controller_contract_status(DeviceControllerContractStatus status) {
+	switch (status) {
+	case DeviceControllerContractStatus::NotEvaluated: return "not-evaluated";
+	case DeviceControllerContractStatus::Ready: return "ready";
+	case DeviceControllerContractStatus::MissingAccess: return "missing-access";
+	case DeviceControllerContractStatus::MissingInterrupt: return "missing-interrupt";
+	case DeviceControllerContractStatus::MissingClock: return "missing-clock";
+	case DeviceControllerContractStatus::MissingReset: return "missing-reset";
+	case DeviceControllerContractStatus::MissingPower: return "missing-power";
+	case DeviceControllerContractStatus::MissingNamespace: return "missing-namespace";
+	case DeviceControllerContractStatus::MissingIdentity: return "missing-identity";
+	case DeviceControllerContractStatus::MissingDma: return "missing-dma";
+	default: return "unknown";
+	}
+}
+
+static rostr text_controller_access_type(DeviceControllerAccessType type) {
+	switch (type) {
+	case DeviceControllerAccessType::MMIO: return "mmio";
+	case DeviceControllerAccessType::PortIo: return "port-io";
+	default: return "none";
+	}
+}
+
+static rostr text_controller_interrupt_mode(DeviceControllerInterruptMode mode) {
+	switch (mode) {
+	case DeviceControllerInterruptMode::IRQ: return "irq";
+	case DeviceControllerInterruptMode::Polling: return "polling";
+	default: return "none";
+	}
+}
+
+static rostr text_controller_reset_type(DeviceControllerResetType type) {
+	switch (type) {
+	case DeviceControllerResetType::Register: return "register";
+	case DeviceControllerResetType::FirmwareConfigured: return "firmware-configured";
+	default: return "none";
+	}
+}
+
+static rostr text_controller_power_state(DeviceControllerPowerState state) {
+	switch (state) {
+	case DeviceControllerPowerState::On: return "on";
+	case DeviceControllerPowerState::FirmwareConfigured: return "firmware-configured";
+	default: return "unknown";
+	}
+}
+
+static rostr text_controller_dma_mode(DeviceControllerDmaMode mode) {
+	switch (mode) {
+	case DeviceControllerDmaMode::NotRequired: return "not-required";
+	case DeviceControllerDmaMode::Supported: return "supported";
+	case DeviceControllerDmaMode::Required: return "required";
+	default: return "unknown";
+	}
+}
+
+static void dump_device_tree_controller_resources(OstreamTrait& com1, const DeviceNode& node, stduint depth) {
+	const auto* contract = node.fields.controller_resources;
+	if (!contract) return;
+	dump_device_tree_indent(com1, depth);
+	com1.OutFormat("- CONTRACT status=%s access=%s:%[64H]+%[64H]/%s interrupt=%s:%u/%s clock=%u/%s\n\r", text_controller_contract_status(contract->status), text_controller_access_type(contract->access_type), contract->access_base, contract->access_length, text_controller_resource_source(contract->access_source), text_controller_interrupt_mode(contract->interrupt_mode), (stduint)contract->interrupt, text_controller_resource_source(contract->interrupt_source), contract->input_clock_hz, text_controller_resource_source(contract->clock_source));
+	dump_device_tree_indent(com1, depth);
+	com1.OutFormat("- CONTRACT reset=%s:%[32H]/%[32H]/%[32H]/%s power=%s/%s", text_controller_reset_type(contract->reset_type), contract->reset_register_offset, contract->reset_mask, contract->reset_deassert_value, text_controller_resource_source(contract->reset_source), text_controller_power_state(contract->power_state), text_controller_resource_source(contract->power_source));
+	if (contract->identity_type == DeviceControllerIdentityType::Pci) com1.OutFormat(" identity=pci:%04x:%02x:%02x.%x/%s", (stduint)contract->pci_segment, (stduint)contract->pci_bus, (stduint)contract->pci_device, (stduint)contract->pci_function, text_controller_resource_source(contract->identity_source));
+	else if (contract->identity_type == DeviceControllerIdentityType::Platform) com1.OutFormat(" identity=platform:%s/%s", contract->platform_identity ? contract->platform_identity : "none", text_controller_resource_source(contract->identity_source));
+	else com1.OutFormat(" identity=none");
+	com1.OutFormat(" acpi=%s dma=%s/%s\n\r", contract->acpi_path ? contract->acpi_path : "none", text_controller_dma_mode(contract->dma_mode), text_controller_resource_source(contract->dma_source));
+}
 
 static void dump_device_tree_pci_description(OstreamTrait& com1, const DeviceNode& node, stduint depth) {
 	if (DeviceNodeType(node.fields.node_type) != DeviceNodeType::PciDevice) return;
@@ -247,8 +362,10 @@ static rostr text_intel_lpss_i2c_failure(int32 result) {
 	case 4: return "wrong-controller-type";
 	case 5: return "allocation";
 	case 6: return "component-signature";
-	case 7: return "clock-unavailable";
+	case 7: return "missing-clock";
 	case 8: return "initialization";
+	case 9: return "resource-contract";
+	case 10: return "compatibility-unavailable";
 	default: return "unknown";
 	}
 }
@@ -268,14 +385,18 @@ static void dump_device_tree_intel_lpss_i2c(OstreamTrait& com1, const DeviceNode
 		com1.OutFormat("- LPSS-I2C probe=failed component=%[32H]\n\r", capabilities.component_type);
 		return;
 	}
-	const stduint mmio = controller->getAddress();
-	if (!mmio) {
+	const stduint controller_mmio = controller->getAddress();
+	if (!controller_mmio) {
 		dump_device_tree_indent(com1, depth);
 		com1.OutFormat("- LPSS-I2C backend=callback dw-version=%[32H] tx-fifo=%u rx-fifo=%u\n\r", capabilities.component_version, (stduint)capabilities.transmit_fifo_depth, (stduint)capabilities.receive_fifo_depth);
 		return;
 	}
-	const uint32 lpss_reset = *reinterpret_cast<volatile uint32*>(mmio + 0x204u);
-	const uint32 lpss_capabilities = *reinterpret_cast<volatile uint32*>(mmio + 0x2FCu);
+	const auto* compatibility = Devsman::FindControllerCompatibility(&node);
+	const auto* resources = node.fields.controller_resources;
+	if (!compatibility || !resources || !resources->access_base) return;
+	const stduint mmio = stduint(resources->access_base);
+	const uint32 lpss_reset = *reinterpret_cast<volatile uint32*>(mmio + compatibility->reset_register_offset);
+	const uint32 lpss_capabilities = *reinterpret_cast<volatile uint32*>(mmio + compatibility->capabilities_register_offset);
 	dump_device_tree_indent(com1, depth);
 	com1.OutFormat("- LPSS-I2C mmio=%p caps=%[32H] reset=%[32H] dw-version=%[32H] tx-fifo=%u rx-fifo=%u\n\r", (void*)mmio, lpss_capabilities, lpss_reset, capabilities.component_version, (stduint)capabilities.transmit_fifo_depth, (stduint)capabilities.receive_fifo_depth);
 }
@@ -483,7 +604,9 @@ static void dump_device_tree_node(OstreamTrait& com1, const DeviceNode* node, st
 		}
 		if (verbose) {
 			dump_device_tree_pci_description(com1, *crt, depth + 1);
+			dump_device_tree_controller_resources(com1, *crt, depth + 1);
 			dump_device_tree_intel_lpss_i2c(com1, *crt, depth + 1);
+			dump_device_tree_driver_match(com1, *crt, depth + 1);
 		}
 		if (verbose && crt->fields.resource_count) {
 			dump_device_tree_resources(com1, *crt, depth + 1);
@@ -499,6 +622,9 @@ static void dump_device_tree_node(OstreamTrait& com1, const DeviceNode* node, st
 
 void dump_device_tree(OstreamTrait& com1, bool verbose) {
 	com1.OutFormat("=== Device Tree ===\n\r");
+	DriverMatchSummary match_summary{};
+	collect_driver_match_summary(Devsman::Root(), match_summary);
+	com1.OutFormat("[DRIVER-MATCH-SUM] matched=%u unsupported=%u missing-resource=%u ambiguous=%u rejected-by-capability=%u\n\r", match_summary.matched, match_summary.unsupported, match_summary.missing_resource, match_summary.ambiguous, match_summary.rejected_by_capability);
 	auto root = Devsman::Root();
 	if (!root) {
 		com1.OutFormat("(empty)\n\r");

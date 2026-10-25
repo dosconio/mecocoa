@@ -49,6 +49,7 @@ asmfile=prehost/$(arch)/atx-x64.asm\
 	
 
 cppfile=\
+	$(wildcard archits/x86and64/*.cpp) \
 	$(ulibpath)/cpp/color.cpp \
 	$(ulibpath)/cpp/Witch/Form.cpp \
 	$(ulibpath)/cpp/Witch/_TextChrome.cpp \

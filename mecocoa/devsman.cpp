@@ -3,6 +3,12 @@
 // ModuTitle: [Service] Device Management
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 #include "../include/mecocoa.hpp"
+
+#if CONFIG_ACPI_BOOT_TEST
+#define ACPI_DEVMAN_ERROR(...) plogwarn(__VA_ARGS__)
+#else
+#define ACPI_DEVMAN_ERROR(...) plogerro(__VA_ARGS__)
+#endif
 #include <cpp/Device/Bus/ISA.hpp>
 #include <cpp/Device/Bus/PCI.hpp>
 #include <c/storage/AHCI.h>
@@ -52,36 +58,37 @@ namespace Devs {
 	DeviceNode* bus_roots[static_cast<stduint>(DeviceBusType::Count)]{};
 	
 
-	struct NamedDriverMatchEntry {
-		const char* node_name;
-		const char* driver_name;
-	};
-
-
-
 	struct DriverStartHookEntry {
 		const char* driver_name;
 		Devsman::DriverStartRoutine starter;
 	};
 
+	constexpr DeviceDriverMatchEntry named_driver_match(const char* node_name, const char* driver_name, DeviceNodeType node_type, DeviceBusType bus_type, uint16 priority = 100) {
+		DeviceDriverMatchEntry entry{};
+		entry.driver_name = driver_name;
+		entry.node_name = node_name;
+		entry.priority = priority;
+		entry.node_type = uint16(node_type);
+		entry.bus_type = uint16(bus_type);
+		return entry;
+	}
 
-
-	constexpr NamedDriverMatchEntry platform_driver_match_table[] = {
-		{"uart@com1", "uart-8250"},
-		{"uart@com2", "uart-8250"},
-		{"uart@com3", "uart-8250"},
-		{"uart@com4", "uart-8250"},
-		{"rtc@cmos", "rtc-cmos"},
-		{"floppy@flc0", "flopdisk"},
+	constexpr DeviceDriverMatchEntry platform_driver_match_table[] = {
+		named_driver_match("uart@com1", "uart-8250", DeviceNodeType::PlatformDevice, DeviceBusType::Platform),
+		named_driver_match("uart@com2", "uart-8250", DeviceNodeType::PlatformDevice, DeviceBusType::Platform),
+		named_driver_match("uart@com3", "uart-8250", DeviceNodeType::PlatformDevice, DeviceBusType::Platform),
+		named_driver_match("uart@com4", "uart-8250", DeviceNodeType::PlatformDevice, DeviceBusType::Platform),
+		named_driver_match("rtc@cmos", "rtc-cmos", DeviceNodeType::PlatformDevice, DeviceBusType::Platform),
+		named_driver_match("floppy@flc0", "flopdisk", DeviceNodeType::PlatformDevice, DeviceBusType::Platform),
 	};
 
-	constexpr NamedDriverMatchEntry serio_controller_match_table[] = {
-		{"i8042", "i8042"},
+	constexpr DeviceDriverMatchEntry serio_controller_match_table[] = {
+		named_driver_match("i8042", "i8042", DeviceNodeType::SerioController, DeviceBusType::Serio),
 	};
 
-	constexpr NamedDriverMatchEntry serio_device_match_table[] = {
-		{"ps2kbd", "ps2-keyboard"},
-		{"ps2mouse", "ps2-mouse"},
+	constexpr DeviceDriverMatchEntry serio_device_match_table[] = {
+		named_driver_match("ps2kbd", "ps2-keyboard", DeviceNodeType::SerioDevice, DeviceBusType::Serio),
+		named_driver_match("ps2mouse", "ps2-mouse", DeviceNodeType::SerioDevice, DeviceBusType::Serio),
 	};
 
 
@@ -466,13 +473,18 @@ namespace Devs {
 			delete[] node->fields.acpi_info->gpio_resources;
 			delete[] node->fields.acpi_info->irq_resources;
 			delete[] node->fields.acpi_info->range_resources;
+			delete[] node->fields.acpi_info->properties;
+			delete[] node->fields.acpi_info->property_values;
+			delete[] node->fields.acpi_info->property_data;
 			delete node->fields.acpi_info;
 		}
+		delete node->fields.controller_resources;
 		node->fields.text_manufacturer = nullptr;
 		node->fields.text_product = nullptr;
 		node->fields.text_serial = nullptr;
 		node->fields.dev_alias = nullptr;
 		node->fields.acpi_info = nullptr;
+		node->fields.controller_resources = nullptr;
 		NnodeHeapFreeSimple(inp);
 	}
 
@@ -583,6 +595,18 @@ namespace Devs {
 		return true;
 	}
 
+	bool apply_driver_match(DeviceNode* node, const DeviceDriverMatchDecision& decision) {
+		if (!node) return false;
+		if (decision.result == DriverMatchResult::Unsupported && node->fields.binding.driver_name) return false;
+		node->fields.binding.match_result = decision.result;
+		node->fields.binding.match_priority = decision.priority;
+		node->fields.binding.match_candidate_count = decision.candidate_count;
+		node->fields.binding.missing_resource_type = decision.missing_resource_type;
+		if (decision.result != DriverMatchResult::Matched || !decision.driver_name) return false;
+		if (node->fields.binding.driver_name && StrCompare(node->fields.binding.driver_name, decision.driver_name) == 0 && node->fields.binding.state != static_cast<uint32>(DriverBindingState::None)) return false;
+		return set_driver_binding(node, decision.driver_name);
+	}
+
 	void set_driver_started(DeviceNode* node, const char* driver_name, void* driver_data = nullptr) {
 		if (!node || !driver_name) return;
 		node->fields.binding.driver_name = driver_name;
@@ -612,15 +636,6 @@ namespace Devs {
 		return true;
 	}
 
-	const NamedDriverMatchEntry* match_named_driver(const DeviceNode* node,
-		const NamedDriverMatchEntry* table, stduint count) {
-		if (!node || !node->link.addr || !table) return nullptr;
-		for0(i, count) {
-			if (StrCompare(node->link.addr, table[i].node_name) == 0) return &table[i];
-		}
-		return nullptr;
-	}
-
 	const DriverOpsEntry* find_driver_ops(const char* driver_name, const DriverOpsEntry* table, stduint count) {
 		if (!driver_name || !table) return nullptr;
 		for0(i, count) {
@@ -646,24 +661,15 @@ namespace Devs {
 
 
 	void bind_platform_device(DeviceNode* node) {
-		if (const auto* entry = match_named_driver(node,
-			platform_driver_match_table, numsof(platform_driver_match_table))) {
-			set_driver_binding(node, entry->driver_name);
-		}
+		apply_driver_match(node, Devsman::MatchDriver(node, platform_driver_match_table, numsof(platform_driver_match_table)));
 	}
 
 	void bind_serio_controller(DeviceNode* node) {
-		if (const auto* entry = match_named_driver(node,
-			serio_controller_match_table, numsof(serio_controller_match_table))) {
-			set_driver_binding(node, entry->driver_name);
-		}
+		apply_driver_match(node, Devsman::MatchDriver(node, serio_controller_match_table, numsof(serio_controller_match_table)));
 	}
 
 	void bind_serio_device(DeviceNode* node) {
-		if (const auto* entry = match_named_driver(node,
-			serio_device_match_table, numsof(serio_device_match_table))) {
-			set_driver_binding(node, entry->driver_name);
-		}
+		apply_driver_match(node, Devsman::MatchDriver(node, serio_device_match_table, numsof(serio_device_match_table)));
 	}
 
 	void bind_device_node(DeviceNode* node) {
@@ -685,6 +691,92 @@ namespace Devs {
 			break;
 		}
 	}
+
+	#if CONFIG_ACPI_BOOT_TEST
+	bool reject_driver_match_capability(const DeviceNode*) {
+		return false;
+	}
+
+	bool has_acpi_hardware_id(const DeviceNode* node, const char* hardware_id) {
+		for (auto* current = node; current; current = reinterpret_cast<const DeviceNode*>(current->link.next)) {
+			const auto* info = current->fields.acpi_info;
+			if (info && (info->flags & DeviceAcpiInfoFlag_HasHardwareId) && StrCompare(info->hardware_id, hardware_id) == 0) return true;
+			if (current->link.subf && has_acpi_hardware_id(reinterpret_cast<const DeviceNode*>(current->link.subf), hardware_id)) return true;
+		}
+		return false;
+	}
+
+	void run_driver_match_positive_test() {
+		if (!has_acpi_hardware_id(device_root, "MCOA0001")) return;
+		auto* node = new DeviceNode{};
+		auto* info = new DeviceAcpiInfo{};
+		auto* entries = new DeviceDriverMatchEntry[3]{};
+		if (!node || !info || !entries) {
+			delete[] entries;
+			delete info;
+			delete node;
+			plogwarn("[DRIVER-MATCH-TEST] allocation=failed");
+			return;
+		}
+		node->fields.node_type = uint16(DeviceNodeType::PciDevice);
+		node->fields.bus_type = uint16(DeviceBusType::PCI);
+		node->fields.vendor_id = 0x1234u;
+		node->fields.device_id = 0x5678u;
+		node->fields.class_base = 0x11u;
+		node->fields.class_sub = 0x80u;
+		node->fields.acpi_info = info;
+		info->flags = DeviceAcpiInfoFlag_HasHardwareId;
+		MemCopyN(info->hardware_id, "MCOA0001", 9);
+
+		entries[0].driver_name = "test-acpi";
+		entries[0].acpi_hardware_id = "MCOA0001";
+		entries[0].priority = 300;
+		entries[0].node_type = uint16(DeviceNodeType::PciDevice);
+		entries[1].driver_name = "test-pci";
+		entries[1].priority = 200;
+		entries[1].node_type = uint16(DeviceNodeType::PciDevice);
+		entries[1].pci_vendor_id = 0x1234u;
+		entries[1].pci_vendor_mask = 0xFFFFu;
+		entries[1].pci_device_id = 0x5678u;
+		entries[1].pci_device_mask = 0xFFFFu;
+		entries[2].driver_name = "test-class";
+		entries[2].priority = 100;
+		entries[2].node_type = uint16(DeviceNodeType::PciDevice);
+		entries[2].pci_class_base = 0x11u;
+		entries[2].pci_class_base_mask = 0xFFu;
+		entries[2].pci_class_sub = 0x80u;
+		entries[2].pci_class_sub_mask = 0xFFu;
+
+		const auto acpi = Devsman::MatchDriver(node, entries, 3);
+		info->flags = 0;
+		const auto pci = Devsman::MatchDriver(node, entries, 3);
+		node->fields.vendor_id = 0;
+		node->fields.device_id = 0;
+		const auto pci_class = Devsman::MatchDriver(node, entries, 3);
+		entries[2].required_resource_mask = uint64(1) << uint16(DeviceResourceType::PciBarMmio);
+		const auto missing = Devsman::MatchDriver(node, entries + 2, 1);
+		entries[0] = entries[2];
+		entries[0].driver_name = "test-first";
+		entries[0].required_resource_mask = 0;
+		entries[0].priority = 100;
+		entries[1] = entries[0];
+		entries[1].driver_name = "test-second";
+		const auto ambiguous = Devsman::MatchDriver(node, entries, 2);
+		entries[0].driver_name = "test-rejected";
+		entries[0].capability = reject_driver_match_capability;
+		const auto rejected = Devsman::MatchDriver(node, entries, 1);
+		const bool acpi_passed = acpi.result == DriverMatchResult::Matched && acpi.driver_name && StrCompare(acpi.driver_name, "test-acpi") == 0;
+		const bool pci_passed = pci.result == DriverMatchResult::Matched && pci.candidate_count == 2 && pci.driver_name && StrCompare(pci.driver_name, "test-pci") == 0;
+		const bool class_passed = pci_class.result == DriverMatchResult::Matched && pci_class.driver_name && StrCompare(pci_class.driver_name, "test-class") == 0;
+		const bool missing_passed = missing.result == DriverMatchResult::MissingResource && missing.missing_resource_type == uint16(DeviceResourceType::PciBarMmio);
+		const bool ambiguous_passed = ambiguous.result == DriverMatchResult::Ambiguous;
+		const bool rejected_passed = rejected.result == DriverMatchResult::RejectedByCapability;
+		ploginfo("[DRIVER-MATCH-TEST] acpi=%s pci-priority=%s class=%s missing-resource=%s ambiguous=%s capability=%s", acpi_passed ? "success" : "failed", pci_passed ? "success" : "failed", class_passed ? "success" : "failed", missing_passed ? "success" : "failed", ambiguous_passed ? "success" : "failed", rejected_passed ? "success" : "failed");
+		delete[] entries;
+		delete info;
+		delete node;
+	}
+	#endif
 
 	void bind_known_drivers_subtree(DeviceNode* node) {
 		for (auto* crt = node; crt; crt = reinterpret_cast<DeviceNode*>(crt->link.next)) {
@@ -962,8 +1054,9 @@ namespace Devs {
 		}
 		ioapic_topology[ioapic_topology_count++] = {
 			address, gsi_base, gsi_count, id };
-		ploginfo("[ACPI] I/O APIC id=%u MMIO=%[32H] GSI=%u..%u",
-			id, address, gsi_base, gsi_end - 1u);
+		#if CONFIG_ACPI_BOOT_TEST
+		ploginfo("[ACPI] I/O APIC id=%u MMIO=%[32H] GSI=%u..%u", id, address, gsi_base, gsi_end - 1u);
+		#endif
 		return true;
 	}
 
@@ -1913,7 +2006,7 @@ namespace Devs {
 		acpi_pic_target_name = 0;
 		collect_x64_aml_tables();
 		if (!aml_table_count) {
-			plogwarn("[ACPI] PCI routing: no DSDT or SSDT AML available");
+			ACPI_DEVMAN_ERROR("[ACPI] PCI routing: no DSDT or SSDT AML available");
 			return;
 		}
 		bool pic_evaluated = false;
@@ -2083,7 +2176,7 @@ namespace Devs {
 				const auto* ioapic = reinterpret_cast<const uni::ACPI::MADTIOAPIC*>(entry);
 				if (!append_x64_ioapic(ioapic->ioapic_address,
 					ioapic->global_system_interrupt_base, ioapic->ioapic_id)) {
-					plogwarn("[ACPI] Ignoring invalid or overlapping I/O APIC id=%u MMIO=%[32H] GSI-base=%u",
+					ACPI_DEVMAN_ERROR("[ACPI] Ignoring invalid or overlapping I/O APIC id=%u MMIO=%[32H] GSI-base=%u",
 						ioapic->ioapic_id, ioapic->ioapic_address,
 						ioapic->global_system_interrupt_base);
 				}
@@ -2101,7 +2194,7 @@ namespace Devs {
 						override_entry->flags);
 				}
 				else if (override_entry->bus == 0)
-					plogwarn("[ACPI] IRQ override capacity exceeded");
+					ACPI_DEVMAN_ERROR("[ACPI] IRQ override capacity exceeded");
 			}
 			address += entry->length;
 		}
@@ -2111,7 +2204,9 @@ namespace Devs {
 			if (!append_x64_ioapic(0xFEC00000u, 0, id)) {
 				ioapic_topology[ioapic_topology_count++] = {
 					0xFEC00000u, 0, 24, id };
+				#if CONFIG_ACPI_BOOT_TEST
 				plogwarn("[ACPI] Using legacy 24-pin I/O APIC fallback");
+				#endif
 			}
 		}
 	}
@@ -2159,7 +2254,7 @@ namespace Devs {
 					const uint16 polarity = override_entry.flags & 3u;
 					const uint16 trigger = (override_entry.flags >> 2) & 3u;
 					if ((override_entry.flags & ~uint16(0xFu)) || polarity == 2 || trigger == 2) {
-						plogwarn("[ACPI] ISA IRQ%u has invalid override flags=%[16H]; keeping legacy route",
+						ACPI_DEVMAN_ERROR("[ACPI] ISA IRQ%u has invalid override flags=%[16H]; keeping legacy route",
 							(unsigned)i, override_entry.flags);
 						break;
 					}
@@ -2188,7 +2283,7 @@ namespace Devs {
 			else if (i != 2) {
 				#if _MCCA == 0x8664
 				if (!x64_ioapic_write_route(gsi, rte)) {
-					plogwarn("[ACPI] ISA IRQ%u GSI%u is outside discovered I/O APIC ranges",
+					ACPI_DEVMAN_ERROR("[ACPI] ISA IRQ%u GSI%u is outside discovered I/O APIC ranges",
 						(unsigned)i, (unsigned)gsi);
 				}
 				#else
@@ -2204,11 +2299,159 @@ namespace Devs {
 
 using namespace Devs;
 
+namespace {
+	bool driver_match_mask16(uint16 value, uint16 expected, uint16 mask) {
+		return !mask || (value & mask) == (expected & mask);
+	}
+
+	bool driver_match_mask8(uint8 value, uint8 expected, uint8 mask) {
+		return !mask || (value & mask) == (expected & mask);
+	}
+
+	bool driver_match_acpi_compatible_id(const char* ids, const char* expected) {
+		if (!expected) return true;
+		if (!ids) return false;
+		const stduint expected_length = StrLength(expected);
+		const char* cursor = ids;
+		while (*cursor) {
+			const char* end = cursor;
+			while (*end && *end != ',') ++end;
+			if (stduint(end - cursor) == expected_length && StrCompareN(cursor, expected, expected_length) == 0) return true;
+			cursor = *end ? end + 1 : end;
+		}
+		return false;
+	}
+
+	const DeviceNode* driver_match_controller(const DeviceNode* node) {
+		if (!node) return nullptr;
+		if (node->fields.controller) return node->fields.controller;
+		auto* parent = reinterpret_cast<const DeviceNode*>(const_cast<Nnode&>(node->link).getParent());
+		return parent ? parent->fields.controller : nullptr;
+	}
+
+	bool driver_match_identity(const DeviceNode* node, const DeviceDriverMatchEntry& entry) {
+		if (!node || !entry.driver_name) return false;
+		if (entry.node_name && (!node->link.addr || StrCompare(node->link.addr, entry.node_name) != 0)) return false;
+		if (entry.node_type && node->fields.node_type != entry.node_type) return false;
+		if (entry.bus_type && node->fields.bus_type != entry.bus_type) return false;
+		const auto* acpi = node->fields.acpi_info;
+		if (entry.acpi_hardware_id && (!acpi || !(acpi->flags & DeviceAcpiInfoFlag_HasHardwareId) || StrCompare(acpi->hardware_id, entry.acpi_hardware_id) != 0)) return false;
+		if (entry.acpi_compatible_id && (!acpi || !(acpi->flags & DeviceAcpiInfoFlag_HasCompatibleId) || !driver_match_acpi_compatible_id(acpi->compatible_ids, entry.acpi_compatible_id))) return false;
+		if (!driver_match_mask16(node->fields.vendor_id, entry.pci_vendor_id, entry.pci_vendor_mask) ||
+			!driver_match_mask16(node->fields.device_id, entry.pci_device_id, entry.pci_device_mask) ||
+			!driver_match_mask16(node->fields.subsystem_vendor_id, entry.pci_subsystem_vendor_id, entry.pci_subsystem_vendor_mask) ||
+			!driver_match_mask16(node->fields.subsystem_device_id, entry.pci_subsystem_device_id, entry.pci_subsystem_device_mask) ||
+			!driver_match_mask8(node->fields.revision, entry.pci_revision, entry.pci_revision_mask) ||
+			!driver_match_mask8(node->fields.class_base, entry.pci_class_base, entry.pci_class_base_mask) ||
+			!driver_match_mask8(node->fields.class_sub, entry.pci_class_sub, entry.pci_class_sub_mask) ||
+			!driver_match_mask8(node->fields.class_if, entry.pci_class_if, entry.pci_class_if_mask)) return false;
+		if (entry.controller_driver_name || entry.controller_node_type || entry.controller_bus_type) {
+			const auto* controller = driver_match_controller(node);
+			if (!controller) return false;
+			if (entry.controller_driver_name && (!controller->fields.binding.driver_name || StrCompare(controller->fields.binding.driver_name, entry.controller_driver_name) != 0)) return false;
+			if (entry.controller_node_type && controller->fields.node_type != entry.controller_node_type) return false;
+			if (entry.controller_bus_type && controller->fields.bus_type != entry.controller_bus_type) return false;
+		}
+		return true;
+	}
+
+	uint64 driver_match_resource_mask(const DeviceNode* node) {
+		uint64 mask = 0;
+		if (!node || !node->fields.resources) return mask;
+		for0(index, node->fields.resource_count) {
+			const uint16 type = node->fields.resources[index].type;
+			if (type < 64) mask |= uint64(1) << type;
+		}
+		return mask;
+	}
+
+	uint16 driver_match_first_missing_resource(uint64 required, uint64 available) {
+		const uint64 missing = required & ~available;
+		for (uint16 type = 1; type < 64; ++type) {
+			if (missing & (uint64(1) << type)) return type;
+		}
+		return 0;
+	}
+}
+
+DeviceDriverMatchDecision Devsman::MatchDriver(const DeviceNode* node, const DeviceDriverMatchEntry* entries, stduint count) {
+	DeviceDriverMatchDecision decision{};
+	decision.result = DriverMatchResult::Unsupported;
+	if (!node || !entries || !count) return decision;
+	const uint64 available_resources = driver_match_resource_mask(node);
+	bool found_identity = false;
+	bool found_missing_resource = false;
+	bool found_capability_rejection = false;
+	bool found_driver = false;
+	bool ambiguous = false;
+	uint16 identity_count = 0;
+	for0(index, count) {
+		const auto& entry = entries[index];
+		if (!driver_match_identity(node, entry)) continue;
+		if (identity_count != 0xFFFFu) ++identity_count;
+		if (!found_identity || entry.priority > decision.priority) {
+			found_identity = true;
+			found_missing_resource = false;
+			found_capability_rejection = false;
+			found_driver = false;
+			ambiguous = false;
+			decision.driver_name = nullptr;
+			decision.priority = entry.priority;
+			decision.missing_resource_type = 0;
+		}
+		if (entry.priority != decision.priority) continue;
+		const uint16 missing_resource = driver_match_first_missing_resource(entry.required_resource_mask, available_resources);
+		if (missing_resource) {
+			found_missing_resource = true;
+			if (!decision.missing_resource_type) decision.missing_resource_type = missing_resource;
+			continue;
+		}
+		if (entry.capability && !entry.capability(node)) {
+			found_capability_rejection = true;
+			continue;
+		}
+		if (!found_driver) {
+			found_driver = true;
+			decision.driver_name = entry.driver_name;
+			continue;
+		}
+		if (StrCompare(decision.driver_name, entry.driver_name) != 0) ambiguous = true;
+	}
+	decision.candidate_count = identity_count;
+	if (!found_identity) return decision;
+	if (found_driver && !ambiguous) {
+		decision.result = DriverMatchResult::Matched;
+		return decision;
+	}
+	decision.driver_name = nullptr;
+	if (ambiguous) decision.result = DriverMatchResult::Ambiguous;
+	else if (found_missing_resource) decision.result = DriverMatchResult::MissingResource;
+	else if (found_capability_rejection) decision.result = DriverMatchResult::RejectedByCapability;
+	return decision;
+}
+
+const char* Devsman::DriverMatchResultName(DriverMatchResult result) {
+	switch (result) {
+	case DriverMatchResult::NotEvaluated: return "not-evaluated";
+	case DriverMatchResult::Unsupported: return "unsupported";
+	case DriverMatchResult::Matched: return "matched";
+	case DriverMatchResult::MissingResource: return "missing-resource";
+	case DriverMatchResult::Ambiguous: return "ambiguous";
+	case DriverMatchResult::RejectedByCapability: return "rejected-by-capability";
+	default: return "unknown";
+	}
+}
+
 bool Devsman::Initialize() {
 	#if (_MCCA & 0xFF00) == 0x8600
 	initialize_device_tree();
 	probe_and_attach_pci_devices();
 	discover_x86_acpi_devices();
+	bind_known_drivers_subtree(device_root);
+	probe_known_drivers_subtree(device_root);
+	#if CONFIG_ACPI_BOOT_TEST
+	run_driver_match_positive_test();
+	#endif
 	#endif
 
 	#if _MCCA == 0x8664
@@ -2571,6 +2814,137 @@ DeviceNode* Devsman::FindOwnedNode(stduint pid) {
 
 const DeviceResource* Devsman::FindResource(const DeviceNode* node, DeviceResourceType type, uint32 index) {
 	return find_resource(node, type, index);
+}
+
+const DeviceAcpiProperty* Devsman::FindAcpiProperty(const DeviceNode* node, const char* name) {
+	if (!node || !node->fields.acpi_info || !name) return nullptr;
+	const auto* info = node->fields.acpi_info;
+	if (info->property_count && !info->properties) return nullptr;
+	for0(index, info->property_count) {
+		if (info->properties[index].name && StrCompare(info->properties[index].name, name) == 0) return &info->properties[index];
+	}
+	return nullptr;
+}
+
+bool Devsman::ReadAcpiPropertyInteger(const DeviceNode* node, const char* name, uint64& value) {
+	value = 0;
+	const auto* property = FindAcpiProperty(node, name);
+	if (!property || property->value.type != DeviceAcpiPropertyType::Integer) return false;
+	value = property->value.integer;
+	return true;
+}
+
+bool Devsman::ReadAcpiPropertyString(const DeviceNode* node, const char* name, const char*& value, stduint& length) {
+	value = nullptr;
+	length = 0;
+	const auto* property = FindAcpiProperty(node, name);
+	if (!property || property->value.type != DeviceAcpiPropertyType::String) return false;
+	value = reinterpret_cast<const char*>(property->value.data);
+	length = property->value.length;
+	return true;
+}
+
+bool Devsman::ReadAcpiPropertyBuffer(const DeviceNode* node, const char* name, const uint8*& value, stduint& length) {
+	value = nullptr;
+	length = 0;
+	const auto* property = FindAcpiProperty(node, name);
+	if (!property || property->value.type != DeviceAcpiPropertyType::Buffer) return false;
+	value = property->value.data;
+	length = property->value.length;
+	return true;
+}
+
+bool Devsman::ReadAcpiPropertyReference(const DeviceNode* node, const char* name, const char*& path) {
+	path = nullptr;
+	const auto* property = FindAcpiProperty(node, name);
+	if (!property || property->value.type != DeviceAcpiPropertyType::DeviceReference || !property->value.reference_path) return false;
+	path = property->value.reference_path;
+	return true;
+}
+
+bool Devsman::ReadAcpiPropertyArray(const DeviceNode* node, const char* name, const DeviceAcpiPropertyValue*& values, stduint& count) {
+	values = nullptr;
+	count = 0;
+	const auto* property = FindAcpiProperty(node, name);
+	if (!property || property->value.type != DeviceAcpiPropertyType::Array) return false;
+	values = property->value.elements;
+	count = property->value.element_count;
+	return true;
+}
+
+DeviceControllerResourceContract* Devsman::EnsureControllerResourceContract(DeviceNode* node) {
+	if (!node) return nullptr;
+	if (node->fields.controller_resources) return node->fields.controller_resources;
+	auto* contract = new DeviceControllerResourceContract{};
+	if (!contract) return nullptr;
+	for0(index, node->fields.resource_count) {
+		const auto& resource = node->fields.resources[index];
+		const auto type = DeviceResourceType(resource.type);
+		if (contract->access_type == DeviceControllerAccessType::None && (type == DeviceResourceType::PciBarMmio || type == DeviceResourceType::PciBarIo || type == DeviceResourceType::IoPortRange)) {
+			contract->access_type = type == DeviceResourceType::PciBarMmio ? DeviceControllerAccessType::MMIO : DeviceControllerAccessType::PortIo;
+			contract->access_source = type == DeviceResourceType::IoPortRange ? DeviceControllerResourceSource::AcpiResource : DeviceControllerResourceSource::PciConfiguration;
+			contract->access_index = resource.index;
+			contract->access_base = resource.start;
+			contract->access_length = resource.length;
+		}
+		if (contract->interrupt_mode == DeviceControllerInterruptMode::None && type == DeviceResourceType::IrqLine) {
+			contract->interrupt_mode = DeviceControllerInterruptMode::IRQ;
+			contract->interrupt_source = DeviceNodeType(node->fields.node_type) == DeviceNodeType::PciDevice ? DeviceControllerResourceSource::PciConfiguration : DeviceControllerResourceSource::AcpiResource;
+			contract->interrupt = uint32(resource.start);
+		}
+		if (contract->dma_mode == DeviceControllerDmaMode::Unknown && type == DeviceResourceType::DmaChannel) {
+			contract->dma_mode = DeviceControllerDmaMode::Supported;
+			contract->dma_source = DeviceControllerResourceSource::AcpiResource;
+		}
+	}
+	const auto* acpi = node->fields.acpi_info;
+	if (acpi && contract->access_type == DeviceControllerAccessType::None) {
+		for0(index, acpi->range_resource_count) {
+			const auto& range = acpi->range_resources[index];
+			if (!range.length || range.minimum > ~uint64(0) - range.translation) continue;
+			contract->access_type = range.type == DeviceAcpiRangeType::Memory ? DeviceControllerAccessType::MMIO : DeviceControllerAccessType::PortIo;
+			contract->access_source = DeviceControllerResourceSource::AcpiResource;
+			contract->access_index = index;
+			contract->access_base = range.minimum + range.translation;
+			contract->access_length = range.length;
+			break;
+		}
+	}
+	if (acpi && contract->interrupt_mode == DeviceControllerInterruptMode::None && acpi->irq_resource_count) {
+		contract->interrupt_mode = DeviceControllerInterruptMode::IRQ;
+		contract->interrupt_source = DeviceControllerResourceSource::AcpiResource;
+		contract->interrupt = acpi->irq_resources[0].interrupt;
+	}
+	if (acpi && acpi->path[0]) contract->acpi_path = acpi->path;
+	if (DeviceNodeType(node->fields.node_type) == DeviceNodeType::PciDevice) {
+		contract->identity_type = DeviceControllerIdentityType::Pci;
+		contract->identity_source = DeviceControllerResourceSource::PciConfiguration;
+		contract->pci_segment = node->fields.pci_segment;
+		contract->pci_bus = node->fields.pci_bus;
+		contract->pci_device = node->fields.pci_device;
+		contract->pci_function = node->fields.pci_function;
+	}
+	else if (DeviceNodeType(node->fields.node_type) == DeviceNodeType::PlatformDevice) {
+		contract->identity_type = DeviceControllerIdentityType::Platform;
+		contract->identity_source = contract->acpi_path ? DeviceControllerResourceSource::AcpiResource : DeviceControllerResourceSource::DriverPolicy;
+		contract->platform_identity = node->link.addr;
+	}
+	node->fields.controller_resources = contract;
+	return contract;
+}
+
+DeviceControllerContractStatus Devsman::ValidateControllerResourceContract(DeviceControllerResourceContract& contract) {
+	const uint32 required = contract.requirements;
+	if ((required & DeviceControllerRequirement_Access) && (contract.access_type == DeviceControllerAccessType::None || contract.access_source == DeviceControllerResourceSource::None || !contract.access_base || !contract.access_length)) contract.status = DeviceControllerContractStatus::MissingAccess;
+	else if ((required & DeviceControllerRequirement_Interrupt) && (contract.interrupt_mode == DeviceControllerInterruptMode::None || contract.interrupt_source == DeviceControllerResourceSource::None)) contract.status = DeviceControllerContractStatus::MissingInterrupt;
+	else if ((required & DeviceControllerRequirement_Clock) && (contract.clock_source == DeviceControllerResourceSource::None || !contract.input_clock_hz)) contract.status = DeviceControllerContractStatus::MissingClock;
+	else if ((required & DeviceControllerRequirement_Reset) && (contract.reset_type == DeviceControllerResetType::None || contract.reset_source == DeviceControllerResourceSource::None || (contract.reset_type == DeviceControllerResetType::Register && !contract.reset_mask))) contract.status = DeviceControllerContractStatus::MissingReset;
+	else if ((required & DeviceControllerRequirement_Power) && (contract.power_state == DeviceControllerPowerState::Unknown || contract.power_source == DeviceControllerResourceSource::None)) contract.status = DeviceControllerContractStatus::MissingPower;
+	else if ((required & DeviceControllerRequirement_Namespace) && (!contract.acpi_path || !contract.acpi_path[0])) contract.status = DeviceControllerContractStatus::MissingNamespace;
+	else if ((required & DeviceControllerRequirement_Identity) && (contract.identity_type == DeviceControllerIdentityType::None || contract.identity_source == DeviceControllerResourceSource::None || (contract.identity_type == DeviceControllerIdentityType::Platform && (!contract.platform_identity || !contract.platform_identity[0])))) contract.status = DeviceControllerContractStatus::MissingIdentity;
+	else if ((required & DeviceControllerRequirement_Dma) && (contract.dma_mode == DeviceControllerDmaMode::Unknown || contract.dma_source == DeviceControllerResourceSource::None)) contract.status = DeviceControllerContractStatus::MissingDma;
+	else contract.status = DeviceControllerContractStatus::Ready;
+	return contract.status;
 }
 
 #endif

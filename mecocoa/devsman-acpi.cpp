@@ -39,10 +39,14 @@ namespace Devs {
 		constexpr stduint AmlDynamicObjectCapacity = 128;
 		constexpr stduint AmlMutexStateCapacity = 64;
 		constexpr stduint AmlBufferCapacity = 65536;
+		constexpr stduint AmlPackageValueCapacity = 1024;
+		constexpr stduint AmlMethodArgumentCapacity = AmlExecutionFrameCapacity * 7;
 		constexpr stduint AmlEvaluationSummaryCapacity = 32;
 		constexpr stduint AmlRegionSummaryCapacity = 16;
 		constexpr uint16 InvalidAcpiDeviceIndex = 0xFFFFu;
+		#if CONFIG_ACPI_BOOT_TEST
 		constexpr bool LogAllAcpiDevices = false;
+		#endif
 
 		enum class AmlPciReadStatus : uint8 {
 			Success,
@@ -240,11 +244,6 @@ namespace Devs {
 		bool acpi_resource_truncated = false;
 		AmlTableView aml_tables[AmlTableCapacity] = {};
 		stduint aml_table_count = 0;
-		uni::AMLNamespace::Object aml_namespace_objects[AmlNamespaceObjectCapacity] = {};
-		uni::AMLExecutor::Frame aml_execution_frames[AmlExecutionFrameCapacity] = {};
-		uni::AMLExecutor::ObjectValue aml_object_values[AmlObjectValueCapacity] = {};
-		uni::AMLNamespace::Object aml_dynamic_objects[AmlDynamicObjectCapacity] = {};
-		uni::AMLExecutor::MutexState aml_mutex_states[AmlMutexStateCapacity] = {};
 		AmlEvaluationSummary aml_evaluation_summaries[AmlEvaluationSummaryCapacity] = {};
 		stduint aml_evaluation_summary_count = 0;
 		AmlRegionSummary aml_region_summaries[AmlRegionSummaryCapacity] = {};
@@ -496,6 +495,7 @@ namespace Devs {
 			}
 		}
 
+		#if CONFIG_ACPI_BOOT_TEST
 		void append_hex_byte(char* destination, stduint capacity, uint8 value) {
 			constexpr char HexDigits[] = "0123456789ABCDEF";
 			char text[3] = {
@@ -505,6 +505,7 @@ namespace Devs {
 			};
 			append_text(destination, capacity, text);
 		}
+		#endif
 
 		void append_decimal(char* destination, stduint capacity, uint64 value) {
 			char digits[24] = {};
@@ -519,6 +520,7 @@ namespace Devs {
 			}
 		}
 
+		#if CONFIG_ACPI_BOOT_TEST
 		const char* acpi_malformed_kind_name(AcpiMalformedKind kind) {
 			switch (kind) {
 			case AcpiMalformedKind::SerialHeader: return "serial-header";
@@ -530,6 +532,7 @@ namespace Devs {
 			default: return "unknown";
 			}
 		}
+		#endif
 
 		void report_acpi_malformed(AcpiMalformedKind kind, const uint8* address) {
 			++acpi_malformed_count;
@@ -828,10 +831,17 @@ namespace Devs {
 		}
 
 		void record_aml_pci_read(const uni::AMLNamespace& aml_namespace, stduint region_object, stduint region_scope, AmlPciReadStatus status) {
+			#if CONFIG_ACPI_BOOT_TEST
 			const stduint index = stduint(status);
 			if (index >= stduint(AmlPciReadStatus::Count)) return;
 			if (!aml_pci_read_counts[index] && !aml_namespace.FormatPath(region_object, aml_pci_read_examples[index], sizeof(aml_pci_read_examples[index])) && !aml_namespace.FormatPath(region_scope, aml_pci_read_examples[index], sizeof(aml_pci_read_examples[index]))) copy_text(aml_pci_read_examples[index], sizeof(aml_pci_read_examples[index]), "<unknown>");
 			++aml_pci_read_counts[index];
+			#else
+			(void)aml_namespace;
+			(void)region_object;
+			(void)region_scope;
+			(void)status;
+			#endif
 		}
 
 		bool read_aml_pci_region(void* context, const uni::AMLNamespace& aml_namespace, stduint region_object, stduint region_scope, uint8 space, uint64 address, uint8 width, uint64& value) {
@@ -869,10 +879,17 @@ namespace Devs {
 		}
 
 		void record_aml_pci_write(const uni::AMLNamespace& aml_namespace, stduint region_object, stduint region_scope, AmlPciWriteStatus status) {
+			#if CONFIG_ACPI_BOOT_TEST
 			const stduint index = stduint(status);
 			if (index >= stduint(AmlPciWriteStatus::Count)) return;
 			if (!aml_pci_write_counts[index] && !aml_namespace.FormatPath(region_object, aml_pci_write_examples[index], sizeof(aml_pci_write_examples[index])) && !aml_namespace.FormatPath(region_scope, aml_pci_write_examples[index], sizeof(aml_pci_write_examples[index]))) copy_text(aml_pci_write_examples[index], sizeof(aml_pci_write_examples[index]), "<unknown>");
 			++aml_pci_write_counts[index];
+			#else
+			(void)aml_namespace;
+			(void)region_object;
+			(void)region_scope;
+			(void)status;
+			#endif
 		}
 
 		bool write_aml_pci_region(void* context, const uni::AMLNamespace& aml_namespace, stduint region_object, stduint region_scope, uint8 space, uint64 address, uint8 width, uint64 value) {
@@ -920,10 +937,16 @@ namespace Devs {
 		}
 
 		void record_aml_memory_read(const uni::AMLNamespace& aml_namespace, stduint region_object, AmlMemoryReadStatus status) {
+			#if CONFIG_ACPI_BOOT_TEST
 			const stduint index = stduint(status);
 			if (index >= stduint(AmlMemoryReadStatus::Count)) return;
 			if (!aml_memory_read_counts[index] && !aml_namespace.FormatPath(region_object, aml_memory_read_examples[index], sizeof(aml_memory_read_examples[index]))) copy_text(aml_memory_read_examples[index], sizeof(aml_memory_read_examples[index]), "<unknown>");
 			++aml_memory_read_counts[index];
+			#else
+			(void)aml_namespace;
+			(void)region_object;
+			(void)status;
+			#endif
 		}
 
 		bool ensure_aml_memory_page(stduint page_address) {
@@ -969,10 +992,17 @@ namespace Devs {
 		}
 
 		void record_aml_memory_write(const uni::AMLNamespace& aml_namespace, stduint region_object, stduint region_scope, AmlMemoryWriteStatus status) {
+			#if CONFIG_ACPI_BOOT_TEST
 			const stduint index = stduint(status);
 			if (index >= stduint(AmlMemoryWriteStatus::Count)) return;
 			if (!aml_memory_write_counts[index] && !aml_namespace.FormatPath(region_object, aml_memory_write_examples[index], sizeof(aml_memory_write_examples[index])) && !aml_namespace.FormatPath(region_scope, aml_memory_write_examples[index], sizeof(aml_memory_write_examples[index]))) copy_text(aml_memory_write_examples[index], sizeof(aml_memory_write_examples[index]), "<unknown>");
 			++aml_memory_write_counts[index];
+			#else
+			(void)aml_namespace;
+			(void)region_object;
+			(void)region_scope;
+			(void)status;
+			#endif
 		}
 
 		bool write_aml_memory_region(const uni::AMLNamespace& aml_namespace, stduint region_object, stduint region_scope, uint64 address, uint8 width, uint64 value) {
@@ -1005,10 +1035,17 @@ namespace Devs {
 		}
 
 		void record_aml_io_read(const uni::AMLNamespace& aml_namespace, stduint region_object, stduint region_scope, AmlIoReadStatus status) {
+			#if CONFIG_ACPI_BOOT_TEST
 			const stduint index = stduint(status);
 			if (index >= stduint(AmlIoReadStatus::Count)) return;
 			if (!aml_io_read_counts[index] && !aml_namespace.FormatPath(region_object, aml_io_read_examples[index], sizeof(aml_io_read_examples[index])) && !aml_namespace.FormatPath(region_scope, aml_io_read_examples[index], sizeof(aml_io_read_examples[index]))) copy_text(aml_io_read_examples[index], sizeof(aml_io_read_examples[index]), "<unknown>");
 			++aml_io_read_counts[index];
+			#else
+			(void)aml_namespace;
+			(void)region_object;
+			(void)region_scope;
+			(void)status;
+			#endif
 		}
 
 		bool read_aml_io_region(const uni::AMLNamespace& aml_namespace, stduint region_object, stduint region_scope, uint64 address, uint8 width, uint64& value) {
@@ -1030,10 +1067,17 @@ namespace Devs {
 		}
 
 		void record_aml_io_write(const uni::AMLNamespace& aml_namespace, stduint region_object, stduint region_scope, AmlIoWriteStatus status) {
+			#if CONFIG_ACPI_BOOT_TEST
 			const stduint index = stduint(status);
 			if (index >= stduint(AmlIoWriteStatus::Count)) return;
 			if (!aml_io_write_counts[index] && !aml_namespace.FormatPath(region_object, aml_io_write_examples[index], sizeof(aml_io_write_examples[index])) && !aml_namespace.FormatPath(region_scope, aml_io_write_examples[index], sizeof(aml_io_write_examples[index]))) copy_text(aml_io_write_examples[index], sizeof(aml_io_write_examples[index]), "<unknown>");
 			++aml_io_write_counts[index];
+			#else
+			(void)aml_namespace;
+			(void)region_object;
+			(void)region_scope;
+			(void)status;
+			#endif
 		}
 
 		bool write_aml_io_region(const uni::AMLNamespace& aml_namespace, stduint region_object, stduint region_scope, uint64 address, uint8 width, uint64 value) {
@@ -1504,6 +1548,7 @@ namespace Devs {
 			}
 		}
 
+		#if CONFIG_ACPI_BOOT_TEST
 		const char* aml_execution_status_name(uni::AMLExecutor::Status status) {
 			switch (status) {
 			case uni::AMLExecutor::Status::Success: return "success";
@@ -1523,6 +1568,8 @@ namespace Devs {
 			case uni::AMLExecutor::Status::DynamicObjectCapacity: return "dynamic-object-capacity";
 			case uni::AMLExecutor::Status::MutexCapacity: return "mutex-capacity";
 			case uni::AMLExecutor::Status::BufferCapacity: return "buffer-capacity";
+			case uni::AMLExecutor::Status::PackageCapacity: return "package-capacity";
+			case uni::AMLExecutor::Status::Timeout: return "timeout";
 			case uni::AMLExecutor::Status::NoReturn: return "no-return";
 			default: return "unknown";
 			}
@@ -1599,7 +1646,9 @@ namespace Devs {
 			default: return "unknown";
 			}
 		}
+		#endif
 
+		#if CONFIG_ACPI_BOOT_TEST
 		void record_aml_region(const uni::AMLNamespace& aml_namespace, const char* path, const uni::AMLExecutor::Error& error) {
 			const auto* field = aml_namespace.At(error.object);
 			if (!field || field->type != uni::AMLNamespace::ObjectType::FieldUnit) return;
@@ -1647,8 +1696,10 @@ namespace Devs {
 			}
 			return true;
 		}
+		#endif
 
 		void record_aml_evaluation(const uni::AMLNamespace& aml_namespace, const char* object_name, uni::AMLExecutor::Status status, const char* path, const uni::AMLExecutor::Error& error) {
+			#if CONFIG_ACPI_BOOT_TEST
 			stduint index = 0;
 			while (index < aml_evaluation_summary_count && (!equal_text(aml_evaluation_summaries[index].object, object_name) || aml_evaluation_summaries[index].status != status || aml_evaluation_summaries[index].opcode != error.opcode)) ++index;
 			if (index >= aml_evaluation_summary_count) {
@@ -1665,8 +1716,16 @@ namespace Devs {
 			}
 			++aml_evaluation_summaries[index].count;
 			if (status == uni::AMLExecutor::Status::RegionUnavailable) record_aml_region(aml_namespace, path, error);
+			#else
+			(void)aml_namespace;
+			(void)object_name;
+			(void)status;
+			(void)path;
+			(void)error;
+			#endif
 		}
 
+		#if CONFIG_ACPI_BOOT_TEST
 		void log_aml_evaluation_summaries() {
 			for0(index, aml_evaluation_summary_count) {
 				const auto& summary = aml_evaluation_summaries[index];
@@ -1702,6 +1761,7 @@ namespace Devs {
 				ploginfo("[ACPI-IO-WRITE-SUM] status=%s count=%u example=%s", aml_io_write_status_name(AmlIoWriteStatus(index)), aml_io_write_counts[index], aml_io_write_examples[index]);
 			}
 		}
+		#endif
 
 		void load_x86_aml_namespace(uni::AMLNamespace& aml_namespace) {
 			aml_namespace.Reset();
@@ -1711,7 +1771,7 @@ namespace Devs {
 				if (status == uni::AMLNamespace::Status::Success) continue;
 				const auto& error = aml_namespace.LastError();
 				report_acpi_malformed(AcpiMalformedKind::Namespace, error.address);
-				plogwarn("[ACPI-NS-WARN] table=%s index=%u offset=%[x] status=%s",
+				plogerro("[ACPI] namespace load failed table=%s index=%u offset=%[x] status=%s",
 					table.signature, table_index, error.offset, aml_namespace_status_name(status));
 				if (status == uni::AMLNamespace::Status::Capacity) break;
 			}
@@ -1920,11 +1980,13 @@ namespace Devs {
 			}
 		}
 
+		#if CONFIG_ACPI_BOOT_TEST
 		void log_acpi_controller_links() {
 			if (!acpi_serial_resource_count) return;
 			ploginfo("[ACPI-CONTROLLER-SUM] pci=%u acpi=%u source-missing=%u malformed=%u namespace-missing=%u pci-unresolved=%u pci-node-missing=%u",
 				acpi_controller_link_counts[stduint(AcpiControllerLinkStatus::Pci)], acpi_controller_link_counts[stduint(AcpiControllerLinkStatus::AcpiOnly)], acpi_controller_link_counts[stduint(AcpiControllerLinkStatus::SourceMissing)], acpi_controller_link_counts[stduint(AcpiControllerLinkStatus::MalformedSource)], acpi_controller_link_counts[stduint(AcpiControllerLinkStatus::NamespaceMissing)], acpi_controller_link_counts[stduint(AcpiControllerLinkStatus::PciUnresolved)], acpi_controller_link_counts[stduint(AcpiControllerLinkStatus::PciNodeMissing)]);
 		}
+		#endif
 
 		bool acpi_device_is_present(uint16 device_index) {
 			if (device_index >= acpi_device_count) return false;
@@ -1932,12 +1994,17 @@ namespace Devs {
 			return !device.conditional && !device.sta_dynamic && (!device.has_sta || (device.sta & 1u));
 		}
 
+		void populate_acpi_properties(DeviceAcpiInfo* info, uint16 device_index);
+
 		void release_acpi_info(DeviceAcpiInfo* info) {
 			if (!info) return;
 			delete[] info->serial_resources;
 			delete[] info->gpio_resources;
 			delete[] info->irq_resources;
 			delete[] info->range_resources;
+			delete[] info->properties;
+			delete[] info->property_values;
+			delete[] info->property_data;
 			delete info;
 		}
 
@@ -2039,6 +2106,7 @@ namespace Devs {
 				default: break;
 				}
 			}
+			populate_acpi_properties(info, device_index);
 			return info;
 		}
 
@@ -2194,9 +2262,18 @@ namespace Devs {
 				}
 				if (endpoint_created) ++endpoint_count;
 			}
+			#if CONFIG_ACPI_BOOT_TEST
 			if (acpi_serial_resource_count) ploginfo("[ACPI-NODE-SUM] pci-controller=%u platform-controller=%u bus=%u endpoint=%u skipped=%u", pci_controller_count, platform_controller_count, bus_count, endpoint_count, skipped_count);
+			#else
+			(void)pci_controller_count;
+			(void)platform_controller_count;
+			(void)bus_count;
+			(void)endpoint_count;
+			(void)skipped_count;
+			#endif
 		}
 
+		#if CONFIG_ACPI_BOOT_TEST
 		void log_acpi_device(const AcpiDeviceRecord& device) {
 			char line[512] = {};
 			append_text(line, sizeof(line), "[ACPI-DEV] ");
@@ -2255,7 +2332,9 @@ namespace Devs {
 				break;
 			}
 		}
+		#endif
 
+		#if CONFIG_ACPI_BOOT_TEST
 		void log_acpi_malformed_records() {
 			for (stduint kind_index = 0;
 				kind_index < stduint(AcpiMalformedKind::Count); ++kind_index) {
@@ -2312,7 +2391,9 @@ namespace Devs {
 					acpi_malformed_count - acpi_malformed_record_count);
 			}
 		}
+		#endif
 
+		#if CONFIG_ACPI_BOOT_TEST
 		void log_acpi_sta_patterns() {
 			struct PatternCount {
 				uint8 first_opcode;
@@ -2383,6 +2464,578 @@ namespace Devs {
 					unclassified_count);
 			}
 		}
+		#endif
+
+		struct AmlTimeoutState {
+			stduint remaining;
+			bool enabled;
+		};
+
+		bool aml_timeout_expired(void* context) {
+			auto* state = reinterpret_cast<AmlTimeoutState*>(context);
+			if (!state || !state->enabled) return false;
+			if (!state->remaining) return true;
+			--state->remaining;
+			return false;
+		}
+
+		struct AmlRuntime {
+			uni::AMLNamespace::Object namespace_objects[AmlNamespaceObjectCapacity] = {};
+			uni::AMLExecutor::Frame execution_frames[AmlExecutionFrameCapacity] = {};
+			uni::AMLExecutor::ObjectValue object_values[AmlObjectValueCapacity] = {};
+			uni::AMLNamespace::Object dynamic_objects[AmlDynamicObjectCapacity] = {};
+			uni::AMLExecutor::MutexState mutex_states[AmlMutexStateCapacity] = {};
+			uni::AMLExecutor::Value package_values[AmlPackageValueCapacity] = {};
+			uni::AMLExecutor::Value method_arguments[AmlMethodArgumentCapacity] = {};
+			uint8 buffer_storage[AmlBufferCapacity] = {};
+			AmlTimeoutState timeout_state = {};
+			uni::AMLNamespace aml_namespace;
+			uni::AMLExecutor aml_executor;
+			uni::ACPIDSM acpi_dsm;
+			uni::ACPIDSD acpi_dsd;
+
+			AmlRuntime() : aml_namespace(namespace_objects, numsof(namespace_objects)), aml_executor(aml_namespace, { execution_frames, numsof(execution_frames), object_values, numsof(object_values), { nullptr, read_aml_region, write_aml_region }, dynamic_objects, numsof(dynamic_objects), mutex_states, numsof(mutex_states), buffer_storage, numsof(buffer_storage), package_values, numsof(package_values), method_arguments, numsof(method_arguments) }, { 4096, 256, AmlExecutionFrameCapacity, &timeout_state, aml_timeout_expired }), acpi_dsm(aml_namespace, aml_executor), acpi_dsd(aml_namespace, aml_executor) {}
+		};
+
+		AmlRuntime* aml_runtime = nullptr;
+		#if CONFIG_ACPI_BOOT_TEST
+		constexpr uni::ACPIUUID HidOverI2cDsmUuid = { 0x3CDFF6F7u, 0x4267u, 0x4555u, { 0xAD, 0x05, 0xB3, 0x0A, 0x3D, 0x89, 0x38, 0xDE } };
+		constexpr uni::ACPIUUID AmlDsmSecondUuid = { 0x107EDEDDu, 0xD381u, 0x4FD7u, { 0x8D, 0xA9, 0x08, 0xE9, 0xA6, 0xC7, 0x96, 0x44 } };
+		constexpr uni::ACPIUUID AmlDsmMalformedUuid = { 0x893F00A6u, 0x660Cu, 0x494Eu, { 0xBC, 0xFD, 0x30, 0x43, 0xF4, 0xFB, 0x67, 0xC0 } };
+		#endif
+		constexpr stduint AmlDsdResultValueCapacity = AmlPackageValueCapacity;
+		constexpr stduint AmlDsdResultByteCapacity = AmlBufferCapacity;
+
+		struct AmlDsdAttachWorkspace {
+			uni::AMLExecutor::Value values[AmlDsdResultValueCapacity] = {};
+			uint8 bytes[AmlDsdResultByteCapacity] = {};
+			char path[DeviceAcpiPathCapacity] = {};
+		};
+
+		struct AmlDsdPropertyCounts {
+			stduint values;
+			stduint bytes;
+		};
+
+		stduint acpi_dsd_checked_count = 0;
+		stduint acpi_dsd_present_count = 0;
+		stduint acpi_dsd_property_count = 0;
+		stduint acpi_dsd_nonstandard_count = 0;
+		stduint acpi_dsd_failed_count = 0;
+		char acpi_dsd_failure_example[AcpiPathCapacity] = {};
+
+		bool add_acpi_dsd_count(stduint& target, stduint value) {
+			if (target > ~stduint(0) - value) return false;
+			target += value;
+			return true;
+		}
+
+		bool count_acpi_property_value(const uni::ACPIDSD::Value& source, AmlDsdPropertyCounts& counts, AmlDsdAttachWorkspace& workspace, stduint depth) {
+			if (!aml_runtime || depth > 8) return false;
+			switch (source.type) {
+			case uni::ACPIDSD::ValueType::Integer: return true;
+			case uni::ACPIDSD::ValueType::String: return add_acpi_dsd_count(counts.bytes, source.length) && add_acpi_dsd_count(counts.bytes, 1u);
+			case uni::ACPIDSD::ValueType::Buffer: return add_acpi_dsd_count(counts.bytes, source.length);
+			case uni::ACPIDSD::ValueType::DeviceReference: {
+				if (!aml_runtime->aml_namespace.FormatPath(source.reference, workspace.path, sizeof(workspace.path))) return false;
+				stduint length = 0;
+				while (workspace.path[length]) ++length;
+				return add_acpi_dsd_count(counts.bytes, length + 1u);
+			}
+			case uni::ACPIDSD::ValueType::Array:
+				if (!add_acpi_dsd_count(counts.values, source.element_count)) return false;
+				for0(index, source.element_count) {
+					uni::ACPIDSD::Value element = {};
+					if (aml_runtime->acpi_dsd.ArrayAt(source, index, element) != uni::ACPIDSD::Status::Success || !count_acpi_property_value(element, counts, workspace, depth + 1)) return false;
+				}
+				return true;
+			default: return false;
+			}
+		}
+
+		bool copy_acpi_property_bytes(const uint8* source, stduint length, DeviceAcpiInfo& info, stduint& byte_index, const uint8*& destination, bool terminate) {
+			if (terminate && length == ~stduint(0)) return false;
+			const stduint required = length + (terminate ? 1u : 0u);
+			if (byte_index > info.property_data_length || required > info.property_data_length - byte_index || (length && !source)) return false;
+			destination = required ? info.property_data + byte_index : nullptr;
+			for0(index, length) info.property_data[byte_index + index] = source[index];
+			byte_index += length;
+			if (terminate) info.property_data[byte_index++] = 0;
+			return true;
+		}
+
+		bool copy_acpi_property_value(const uni::ACPIDSD::Value& source, DeviceAcpiPropertyValue& target, DeviceAcpiInfo& info, AmlDsdAttachWorkspace& workspace, stduint& value_index, stduint& byte_index, stduint depth) {
+			if (!aml_runtime || depth > 8) return false;
+			target = {};
+			target.flags = source.flags & uni::ACPIDSD::ValueFlagNonStandard ? DeviceAcpiPropertyFlag_NonStandard : DeviceAcpiPropertyFlag_None;
+			target.integer = source.integer;
+			target.length = uint32(source.length);
+			target.element_count = uint16(source.element_count);
+			if (stduint(target.length) != source.length || stduint(target.element_count) != source.element_count) return false;
+			switch (source.type) {
+			case uni::ACPIDSD::ValueType::Integer:
+				target.type = DeviceAcpiPropertyType::Integer;
+				return true;
+			case uni::ACPIDSD::ValueType::String:
+				target.type = DeviceAcpiPropertyType::String;
+				return copy_acpi_property_bytes(source.data, source.length, info, byte_index, target.data, true);
+			case uni::ACPIDSD::ValueType::Buffer:
+				target.type = DeviceAcpiPropertyType::Buffer;
+				return copy_acpi_property_bytes(source.data, source.length, info, byte_index, target.data, false);
+			case uni::ACPIDSD::ValueType::DeviceReference: {
+				target.type = DeviceAcpiPropertyType::DeviceReference;
+				if (!aml_runtime->aml_namespace.FormatPath(source.reference, workspace.path, sizeof(workspace.path))) return false;
+				stduint length = 0;
+				while (workspace.path[length]) ++length;
+				const uint8* destination = nullptr;
+				if (!copy_acpi_property_bytes(reinterpret_cast<const uint8*>(workspace.path), length, info, byte_index, destination, true)) return false;
+				target.reference_path = reinterpret_cast<const char*>(destination);
+				target.length = uint32(length);
+				return true;
+			}
+			case uni::ACPIDSD::ValueType::Array: {
+				target.type = DeviceAcpiPropertyType::Array;
+				if (value_index > info.property_value_count || source.element_count > info.property_value_count - value_index) return false;
+				const stduint first = value_index;
+				value_index += source.element_count;
+				target.elements = source.element_count ? info.property_values + first : nullptr;
+				for0(index, source.element_count) {
+					uni::ACPIDSD::Value element = {};
+					if (aml_runtime->acpi_dsd.ArrayAt(source, index, element) != uni::ACPIDSD::Status::Success || !copy_acpi_property_value(element, info.property_values[first + index], info, workspace, value_index, byte_index, depth + 1)) return false;
+				}
+				return true;
+			}
+			default: return false;
+			}
+		}
+
+		DeviceAcpiPropertyStatus device_acpi_property_status(uni::ACPIDSD::Status status) {
+			switch (status) {
+			case uni::ACPIDSD::Status::Success: return DeviceAcpiPropertyStatus::Success;
+			case uni::ACPIDSD::Status::ObjectNotFound: return DeviceAcpiPropertyStatus::NotFound;
+			case uni::ACPIDSD::Status::DevicePropertiesNotFound: return DeviceAcpiPropertyStatus::DevicePropertiesNotFound;
+			case uni::ACPIDSD::Status::ExecutionFailed: return DeviceAcpiPropertyStatus::ExecutionFailed;
+			default: return DeviceAcpiPropertyStatus::Malformed;
+			}
+		}
+
+		void populate_acpi_properties(DeviceAcpiInfo* info, uint16 device_index) {
+			if (!info || !aml_runtime || device_index >= acpi_device_count) return;
+			++acpi_dsd_checked_count;
+			auto* workspace = new AmlDsdAttachWorkspace;
+			if (!workspace) {
+				info->property_status = DeviceAcpiPropertyStatus::AllocationFailed;
+				++acpi_dsd_failed_count;
+				return;
+			}
+			const uni::AMLExecutor::ValueStorage storage = { workspace->values, numsof(workspace->values), workspace->bytes, numsof(workspace->bytes) };
+			uni::ACPIDSD::Result result = {};
+			const auto status = aml_runtime->acpi_dsd.Evaluate(acpi_devices[device_index].namespace_object, result, storage);
+			info->property_status = device_acpi_property_status(status);
+			if (status != uni::ACPIDSD::Status::Success) {
+				if (status != uni::ACPIDSD::Status::ObjectNotFound && status != uni::ACPIDSD::Status::DevicePropertiesNotFound) {
+					++acpi_dsd_failed_count;
+					if (!acpi_dsd_failure_example[0]) copy_text(acpi_dsd_failure_example, sizeof(acpi_dsd_failure_example), acpi_devices[device_index].path);
+				}
+				delete workspace;
+				return;
+			}
+			if (result.property_count > 0xFFFFu || result.nonstandard_count > 0xFFFFu) {
+				info->property_status = DeviceAcpiPropertyStatus::Malformed;
+				++acpi_dsd_failed_count;
+				delete workspace;
+				return;
+			}
+			AmlDsdPropertyCounts counts = {};
+			bool valid = true;
+			for0(index, result.property_count) {
+				uni::ACPIDSD::Property property = {};
+				if (aml_runtime->acpi_dsd.PropertyAt(result, index, property) != uni::ACPIDSD::Status::Success || !add_acpi_dsd_count(counts.bytes, property.name_length) || !add_acpi_dsd_count(counts.bytes, 1u) || !count_acpi_property_value(property.value, counts, *workspace, 0)) {
+					valid = false;
+					break;
+				}
+			}
+			if (!valid || stduint(uint16(counts.values)) != counts.values || stduint(uint32(counts.bytes)) != counts.bytes) {
+				info->property_status = DeviceAcpiPropertyStatus::Malformed;
+				++acpi_dsd_failed_count;
+				delete workspace;
+				return;
+			}
+			info->properties = result.property_count ? new DeviceAcpiProperty[result.property_count]{} : nullptr;
+			info->property_values = counts.values ? new DeviceAcpiPropertyValue[counts.values]{} : nullptr;
+			info->property_data = counts.bytes ? new uint8[counts.bytes]{} : nullptr;
+			if ((result.property_count && !info->properties) || (counts.values && !info->property_values) || (counts.bytes && !info->property_data)) {
+				delete[] info->properties;
+				delete[] info->property_values;
+				delete[] info->property_data;
+				info->properties = nullptr;
+				info->property_values = nullptr;
+				info->property_data = nullptr;
+				info->property_status = DeviceAcpiPropertyStatus::AllocationFailed;
+				++acpi_dsd_failed_count;
+				delete workspace;
+				return;
+			}
+			info->property_count = uint16(result.property_count);
+			info->property_value_count = uint16(counts.values);
+			info->nonstandard_property_count = uint16(result.nonstandard_count);
+			info->property_data_length = uint32(counts.bytes);
+			stduint value_index = 0;
+			stduint byte_index = 0;
+			for0(index, result.property_count) {
+				uni::ACPIDSD::Property property = {};
+				const uint8* name = nullptr;
+				if (aml_runtime->acpi_dsd.PropertyAt(result, index, property) != uni::ACPIDSD::Status::Success || !copy_acpi_property_bytes(property.name, property.name_length, *info, byte_index, name, true) || !copy_acpi_property_value(property.value, info->properties[index].value, *info, *workspace, value_index, byte_index, 0)) {
+					valid = false;
+					break;
+				}
+				info->properties[index].name = reinterpret_cast<const char*>(name);
+			}
+			if (!valid || value_index != counts.values || byte_index != counts.bytes) {
+				delete[] info->properties;
+				delete[] info->property_values;
+				delete[] info->property_data;
+				info->properties = nullptr;
+				info->property_values = nullptr;
+				info->property_data = nullptr;
+				info->property_count = 0;
+				info->property_value_count = 0;
+				info->nonstandard_property_count = 0;
+				info->property_data_length = 0;
+				info->property_status = DeviceAcpiPropertyStatus::Malformed;
+				++acpi_dsd_failed_count;
+				delete workspace;
+				return;
+			}
+			++acpi_dsd_present_count;
+			acpi_dsd_property_count += result.property_count;
+			acpi_dsd_nonstandard_count += result.nonstandard_count;
+			delete workspace;
+		}
+
+		#if CONFIG_ACPI_BOOT_TEST
+		uni::AMLExecutor::Value aml_test_integer(uint64 integer) {
+			uni::AMLExecutor::Value value = {};
+			value.type = uni::AMLExecutor::ValueType::Integer;
+			value.integer = integer;
+			return value;
+		}
+
+		struct AmlCallTestWorkspace {
+			uni::AMLExecutor::Value arguments[7] = {};
+			uni::AMLExecutor::Value input_package[2] = {};
+			uni::AMLExecutor::Value nested_package[1] = {};
+			uni::AMLExecutor::Value result_values_a[32] = {};
+			uni::AMLExecutor::Value result_values_b[32] = {};
+			uint8 input_buffer[4] = {};
+			uint8 input_string[4] = {};
+			uint8 result_bytes_a[128] = {};
+			uint8 result_bytes_b[128] = {};
+		};
+
+		struct AmlDsmTestWorkspace {
+			uni::ACPIDSM::Workspace dsm = {};
+			uni::AMLExecutor::Value parameter_elements[2] = {};
+			uni::AMLExecutor::Value parameters = {};
+			uni::AMLExecutor::Value result_values[32] = {};
+			uint8 result_bytes[128] = {};
+		};
+
+		struct AmlDsmProbeWorkspace {
+			uni::ACPIDSM::Workspace dsm = {};
+			uni::AMLExecutor::Value result_values[16] = {};
+			uint8 result_bytes[64] = {};
+		};
+
+		struct AmlDsdTestWorkspace {
+			uni::AMLExecutor::Value result_values_a[128] = {};
+			uni::AMLExecutor::Value result_values_b[32] = {};
+			uint8 result_bytes_a[1024] = {};
+			uint8 result_bytes_b[256] = {};
+		};
+
+		void test_aml_method_calls() {
+			if (!aml_runtime || aml_runtime->aml_namespace.FindPath("\\_SB_.MZER") == uni::AMLNamespace::InvalidIndex || aml_runtime->aml_namespace.FindPath("\\_SB_.M7AR") == uni::AMLNamespace::InvalidIndex || aml_runtime->aml_namespace.FindPath("\\_SB_.MUNS") == uni::AMLNamespace::InvalidIndex) return;
+			auto* test = new AmlCallTestWorkspace;
+			if (!test) {
+				plogwarn("[ACPI-CALL-TEST] allocation=failed");
+				return;
+			}
+			const uni::AMLExecutor::ValueStorage storage_a = { test->result_values_a, numsof(test->result_values_a), test->result_bytes_a, numsof(test->result_bytes_a) };
+			const uni::AMLExecutor::ValueStorage storage_b = { test->result_values_b, numsof(test->result_values_b), test->result_bytes_b, numsof(test->result_bytes_b) };
+			uni::AMLExecutor::Value result = {};
+			auto status = aml_runtime->aml_executor.Invoke("\\_SB_.MZER", nullptr, 0, result, storage_a);
+			const bool zero_passed = status == uni::AMLExecutor::Status::Success && result.type == uni::AMLExecutor::ValueType::Integer && result.integer == 0x42;
+
+			test->arguments[0] = aml_test_integer(0x20);
+			test->arguments[1] = aml_test_integer(0x22);
+			status = aml_runtime->aml_executor.Invoke("\\_SB_.MINT", test->arguments, 2, result, storage_a);
+			const bool integer_passed = status == uni::AMLExecutor::Status::Success && result.type == uni::AMLExecutor::ValueType::Integer && result.integer == 0x42;
+
+			for0(index, 7) test->arguments[index] = aml_test_integer(index);
+			test->arguments[6] = aml_test_integer(0x77);
+			status = aml_runtime->aml_executor.Invoke("\\_SB_.M7AR", test->arguments, 7, result, storage_a);
+			const bool seven_passed = status == uni::AMLExecutor::Status::Success && result.type == uni::AMLExecutor::ValueType::Integer && result.integer == 0x77;
+
+			test->input_buffer[0] = 0x12;
+			test->input_buffer[1] = 0x34;
+			test->input_buffer[2] = 0x56;
+			test->input_buffer[3] = 0x78;
+			test->arguments[0] = {};
+			test->arguments[0].type = uni::AMLExecutor::ValueType::Buffer;
+			test->arguments[0].data = test->input_buffer;
+			test->arguments[0].length = numsof(test->input_buffer);
+			test->arguments[0].data_length = numsof(test->input_buffer);
+			status = aml_runtime->aml_executor.Invoke("\\_SB_.MBUF", test->arguments, 1, result, storage_a);
+			const bool buffer_passed = status == uni::AMLExecutor::Status::Success && result.type == uni::AMLExecutor::ValueType::Buffer && result.length == 4 && result.data && result.data[0] == 0x12 && result.data[3] == 0x78;
+			const uint8* retained_buffer = result.data;
+			test->arguments[0] = aml_test_integer(0x20);
+			test->arguments[1] = aml_test_integer(0x22);
+			status = aml_runtime->aml_executor.Invoke("\\_SB_.MINT", test->arguments, 2, result, storage_b);
+			const bool lifetime_passed = status == uni::AMLExecutor::Status::Success && retained_buffer && retained_buffer[0] == 0x12 && retained_buffer[3] == 0x78;
+
+			test->input_string[0] = 'A';
+			test->input_string[1] = 'M';
+			test->input_string[2] = 'L';
+			test->input_string[3] = 0;
+			test->arguments[0] = {};
+			test->arguments[0].type = uni::AMLExecutor::ValueType::String;
+			test->arguments[0].data = test->input_string;
+			test->arguments[0].length = 3;
+			test->arguments[0].data_length = 3;
+			status = aml_runtime->aml_executor.Invoke("\\_SB_.MBUF", test->arguments, 1, result, storage_a);
+			const bool string_passed = status == uni::AMLExecutor::Status::Success && result.type == uni::AMLExecutor::ValueType::String && result.length == 3 && result.data && result.data[0] == 'A' && result.data[2] == 'L' && !result.data[3];
+
+			test->nested_package[0] = aml_test_integer(0x22);
+			test->input_package[0] = aml_test_integer(0x11);
+			test->input_package[1] = {};
+			test->input_package[1].type = uni::AMLExecutor::ValueType::Package;
+			test->input_package[1].elements = test->nested_package;
+			test->input_package[1].element_count = numsof(test->nested_package);
+			test->arguments[0] = {};
+			test->arguments[0].type = uni::AMLExecutor::ValueType::Package;
+			test->arguments[0].elements = test->input_package;
+			test->arguments[0].element_count = numsof(test->input_package);
+			status = aml_runtime->aml_executor.Invoke("\\_SB_.MPKG", test->arguments, 1, result, storage_a);
+			const bool package_passed = status == uni::AMLExecutor::Status::Success && result.type == uni::AMLExecutor::ValueType::Package && result.element_count == 3 && result.elements && result.elements[0].type == uni::AMLExecutor::ValueType::Package && result.elements[0].element_count == 2 && result.elements[0].elements && result.elements[0].elements[1].type == uni::AMLExecutor::ValueType::Package && result.elements[0].elements[1].elements && result.elements[0].elements[1].elements[0].integer == 0x22 && result.elements[1].type == uni::AMLExecutor::ValueType::Buffer && result.elements[1].length == 2 && result.elements[1].data && result.elements[1].data[0] == 0xA5 && result.elements[2].type == uni::AMLExecutor::ValueType::Package && result.elements[2].elements && result.elements[2].elements[0].integer == 0x33;
+
+			test->arguments[0] = aml_test_integer(0x40);
+			status = aml_runtime->aml_executor.Invoke("\\_SB_.MNST", test->arguments, 1, result, storage_a);
+			const bool nested_passed = status == uni::AMLExecutor::Status::Success && result.type == uni::AMLExecutor::ValueType::Integer && result.integer == 0x42;
+			const bool serialized_passed = nested_passed;
+
+			const stduint reference_object = aml_runtime->aml_namespace.FindPath("\\_SB_.MVAL");
+			test->arguments[0] = {};
+			test->arguments[0].type = uni::AMLExecutor::ValueType::Reference;
+			test->arguments[0].reference_type = uni::AMLExecutor::ReferenceType::Object;
+			test->arguments[0].reference = reference_object;
+			status = aml_runtime->aml_executor.Invoke("\\_SB_.MBUF", test->arguments, 1, result, storage_a);
+			const bool reference_returned = status == uni::AMLExecutor::Status::Success && result.type == uni::AMLExecutor::ValueType::Reference && result.reference_type == uni::AMLExecutor::ReferenceType::Object && result.reference == reference_object;
+			status = aml_runtime->aml_executor.Invoke("\\_SB_.MREF", test->arguments, 1, result, storage_a);
+			const bool reference_passed = reference_returned && status == uni::AMLExecutor::Status::Success && result.type == uni::AMLExecutor::ValueType::Integer && result.integer == 0x2A;
+
+			test->arguments[0] = {};
+			test->arguments[0].type = uni::AMLExecutor::ValueType::Buffer;
+			test->arguments[0].data = test->input_buffer;
+			test->arguments[0].length = numsof(test->input_buffer);
+			test->arguments[1] = aml_test_integer(1);
+			status = aml_runtime->aml_executor.Invoke("\\_SB_.MINT", test->arguments, 2, result, storage_a);
+			const bool type_passed = status == uni::AMLExecutor::Status::TypeMismatch;
+			status = aml_runtime->aml_executor.Invoke("\\_SB_.MISS", nullptr, 0, result, storage_a);
+			const bool missing_passed = status == uni::AMLExecutor::Status::NotFound;
+
+			test->arguments[0] = aml_test_integer(1);
+			aml_runtime->timeout_state.remaining = 16;
+			aml_runtime->timeout_state.enabled = true;
+			status = aml_runtime->aml_executor.Invoke("\\_SB_.MLOP", test->arguments, 1, result, storage_a);
+			aml_runtime->timeout_state.enabled = false;
+			const bool timeout_passed = status == uni::AMLExecutor::Status::Timeout;
+			status = aml_runtime->aml_executor.Invoke("\\_SB_.MREC", test->arguments, 1, result, storage_a);
+			const bool depth_passed = status == uni::AMLExecutor::Status::FrameLimit;
+			status = aml_runtime->aml_executor.Invoke("\\_SB_.MUNS", nullptr, 0, result, storage_a);
+			const bool unsupported_passed = status == uni::AMLExecutor::Status::UnsupportedOpcode;
+			status = aml_runtime->aml_executor.Invoke("\\_SB_.MZER", nullptr, 0, result, storage_a);
+			const bool recovery_passed = status == uni::AMLExecutor::Status::Success && result.type == uni::AMLExecutor::ValueType::Integer && result.integer == 0x42;
+
+			ploginfo("[ACPI-CALL-TEST] zero=%s seven=%s integer=%s string=%s buffer=%s package=%s nested=%s reference=%s serialized=%s lifetime=%s unsupported=%s not-found=%s timeout=%s type=%s depth=%s recovery=%s", zero_passed ? "success" : "failed", seven_passed ? "success" : "failed", integer_passed ? "success" : "failed", string_passed ? "success" : "failed", buffer_passed ? "success" : "failed", package_passed ? "success" : "failed", nested_passed ? "success" : "failed", reference_passed ? "success" : "failed", serialized_passed ? "success" : "failed", lifetime_passed ? "success" : "failed", unsupported_passed ? "success" : "failed", missing_passed ? "success" : "failed", timeout_passed ? "success" : "failed", type_passed ? "success" : "failed", depth_passed ? "success" : "failed", recovery_passed ? "success" : "failed");
+			delete test;
+		}
+
+		const char* acpi_dsm_status_name(uni::ACPIDSM::Status status) {
+			switch (status) {
+			case uni::ACPIDSM::Status::Success: return "success";
+			case uni::ACPIDSM::Status::InvalidArgument: return "invalid-argument";
+			case uni::ACPIDSM::Status::MethodNotFound: return "method-not-found";
+			case uni::ACPIDSM::Status::MalformedMethod: return "malformed-method";
+			case uni::ACPIDSM::Status::UUIDUnsupported: return "uuid-unsupported";
+			case uni::ACPIDSM::Status::FunctionUnsupported: return "function-unsupported";
+			case uni::ACPIDSM::Status::MalformedFunctionMask: return "malformed-mask";
+			case uni::ACPIDSM::Status::ReturnTypeMismatch: return "type-mismatch";
+			case uni::ACPIDSM::Status::ExecutionFailed: return "execution-failed";
+			default: return "unknown";
+			}
+		}
+
+		void test_acpi_dsm() {
+			if (!aml_runtime) return;
+			const stduint touchpad = aml_runtime->aml_namespace.FindPath("\\_SB_.PCI0.MI2C.MTPD");
+			const stduint missing = aml_runtime->aml_namespace.FindPath("\\_SB_.PCI0.MI2C.MOFF");
+			const char dsm_name[5] = { '_', 'D', 'S', 'M', 0 };
+			if (touchpad == uni::AMLNamespace::InvalidIndex || aml_runtime->aml_namespace.FindChild(touchpad, dsm_name) == uni::AMLNamespace::InvalidIndex) return;
+			auto* test = new AmlDsmTestWorkspace;
+			if (!test) {
+				plogwarn("[ACPI-DSM-TEST] allocation=failed");
+				return;
+			}
+			const uni::AMLExecutor::ValueStorage storage = { test->result_values, numsof(test->result_values), test->result_bytes, numsof(test->result_bytes) };
+			uni::ACPIDSM::Result result = {};
+			auto status = aml_runtime->acpi_dsm.Query(touchpad, HidOverI2cDsmUuid, 1, result, test->dsm, storage);
+			const bool query_passed = status == uni::ACPIDSM::Status::Success && result.value.type == uni::AMLExecutor::ValueType::Buffer && result.value.length == 1 && result.value.data && result.value.data[0] == 0x1F;
+
+			status = aml_runtime->acpi_dsm.Invoke(touchpad, HidOverI2cDsmUuid, 1, 1, nullptr, uni::ACPIDSM::ReturnType::Integer, result, test->dsm, storage);
+			const bool integer_passed = status == uni::ACPIDSM::Status::Success && result.value.integer == 0x20;
+			status = aml_runtime->acpi_dsm.Invoke(touchpad, HidOverI2cDsmUuid, 1, 2, nullptr, uni::ACPIDSM::ReturnType::Buffer, result, test->dsm, storage);
+			const bool buffer_passed = status == uni::ACPIDSM::Status::Success && result.value.length == 2 && result.value.data && result.value.data[0] == 0xA5 && result.value.data[1] == 0x5A;
+
+			test->parameter_elements[0] = aml_test_integer(0x33);
+			test->parameter_elements[1] = aml_test_integer(0x44);
+			test->parameters.type = uni::AMLExecutor::ValueType::Package;
+			test->parameters.elements = test->parameter_elements;
+			test->parameters.element_count = numsof(test->parameter_elements);
+			status = aml_runtime->acpi_dsm.Invoke(touchpad, HidOverI2cDsmUuid, 1, 3, &test->parameters, uni::ACPIDSM::ReturnType::Package, result, test->dsm, storage);
+			const bool package_passed = status == uni::ACPIDSM::Status::Success && result.value.element_count == 2 && result.value.elements && result.value.elements[0].integer == 0x33 && result.value.elements[1].integer == 0x44;
+
+			status = aml_runtime->acpi_dsm.Invoke(touchpad, AmlDsmSecondUuid, 1, 1, nullptr, uni::ACPIDSM::ReturnType::Integer, result, test->dsm, storage);
+			const bool uuid_passed = status == uni::ACPIDSM::Status::Success && result.value.integer == 0x55;
+			status = aml_runtime->acpi_dsm.Query(touchpad, HidOverI2cDsmUuid, 2, result, test->dsm, storage);
+			const bool revision_passed = status == uni::ACPIDSM::Status::UUIDUnsupported;
+			status = aml_runtime->acpi_dsm.Invoke(touchpad, HidOverI2cDsmUuid, 1, 5, nullptr, uni::ACPIDSM::ReturnType::Any, result, test->dsm, storage);
+			const bool unsupported_passed = status == uni::ACPIDSM::Status::FunctionUnsupported;
+			status = aml_runtime->acpi_dsm.Query(touchpad, AmlDsmMalformedUuid, 1, result, test->dsm, storage);
+			const bool malformed_passed = status == uni::ACPIDSM::Status::MalformedFunctionMask;
+			status = aml_runtime->acpi_dsm.Invoke(touchpad, HidOverI2cDsmUuid, 1, 4, nullptr, uni::ACPIDSM::ReturnType::Integer, result, test->dsm, storage);
+			const bool type_passed = status == uni::ACPIDSM::Status::ReturnTypeMismatch;
+			status = aml_runtime->acpi_dsm.Query(missing, HidOverI2cDsmUuid, 1, result, test->dsm, storage);
+			const bool missing_passed = status == uni::ACPIDSM::Status::MethodNotFound;
+			status = aml_runtime->acpi_dsm.Invoke(touchpad, HidOverI2cDsmUuid, 1, 1, nullptr, uni::ACPIDSM::ReturnType::Integer, result, test->dsm, storage);
+			const bool recovery_passed = status == uni::ACPIDSM::Status::Success && result.value.integer == 0x20;
+
+			ploginfo("[ACPI-DSM-TEST] query=%s integer=%s buffer=%s package=%s uuid=%s revision=%s unsupported=%s malformed=%s type=%s missing=%s recovery=%s", query_passed ? "success" : "failed", integer_passed ? "success" : "failed", buffer_passed ? "success" : "failed", package_passed ? "success" : "failed", uuid_passed ? "success" : "failed", revision_passed ? "success" : "failed", unsupported_passed ? "success" : "failed", malformed_passed ? "success" : "failed", type_passed ? "success" : "failed", missing_passed ? "success" : "failed", recovery_passed ? "success" : "failed");
+			delete test;
+		}
+
+		void test_acpi_dsd() {
+			if (!aml_runtime) return;
+			const stduint touchpad = aml_runtime->aml_namespace.FindPath("\\_SB_.PCI0.MI2C.MTPD");
+			const stduint method_device = aml_runtime->aml_namespace.FindPath("\\_SB_.PCI0.MI2C.MDSD");
+			const stduint duplicate_device = aml_runtime->aml_namespace.FindPath("\\_SB_.PCI0.MI2C.MDUP");
+			const stduint malformed_device = aml_runtime->aml_namespace.FindPath("\\_SB_.PCI0.MI2C.MBAD");
+			const stduint duplicate_uuid_device = aml_runtime->aml_namespace.FindPath("\\_SB_.PCI0.MI2C.MDUD");
+			const stduint bad_uuid_device = aml_runtime->aml_namespace.FindPath("\\_SB_.PCI0.MI2C.MUID");
+			const stduint missing_device = aml_runtime->aml_namespace.FindPath("\\_SB_.PCI0.MI2C.MOFF");
+			const stduint controller = aml_runtime->aml_namespace.FindPath("\\_SB_.PCI0.MI2C");
+			if (touchpad == uni::AMLNamespace::InvalidIndex || method_device == uni::AMLNamespace::InvalidIndex || duplicate_device == uni::AMLNamespace::InvalidIndex || malformed_device == uni::AMLNamespace::InvalidIndex || duplicate_uuid_device == uni::AMLNamespace::InvalidIndex || bad_uuid_device == uni::AMLNamespace::InvalidIndex || missing_device == uni::AMLNamespace::InvalidIndex || controller == uni::AMLNamespace::InvalidIndex) return;
+			auto* test = new AmlDsdTestWorkspace;
+			if (!test) {
+				plogwarn("[ACPI-DSD-TEST] allocation=failed");
+				return;
+			}
+			const uni::AMLExecutor::ValueStorage storage_a = { test->result_values_a, numsof(test->result_values_a), test->result_bytes_a, numsof(test->result_bytes_a) };
+			const uni::AMLExecutor::ValueStorage storage_b = { test->result_values_b, numsof(test->result_values_b), test->result_bytes_b, numsof(test->result_bytes_b) };
+			uni::ACPIDSD::Result result = {};
+			auto status = aml_runtime->acpi_dsd.Evaluate(touchpad, result, storage_a);
+			uni::ACPIDSD::Property property = {};
+			const bool uuid_passed = status == uni::ACPIDSD::Status::Success && result.property_count == 6 && result.nonstandard_count == 1 && aml_runtime->acpi_dsd.Find(result, "ignored", property) == uni::ACPIDSD::Status::PropertyNotFound;
+			const bool integer_passed = aml_runtime->acpi_dsd.Find(result, "mcoa-integer", property) == uni::ACPIDSD::Status::Success && property.value.type == uni::ACPIDSD::ValueType::Integer && property.value.integer == 0x1234;
+			const bool string_passed = aml_runtime->acpi_dsd.Find(result, "mcoa-string", property) == uni::ACPIDSD::Status::Success && property.value.type == uni::ACPIDSD::ValueType::String && property.value.length == 5 && property.value.data && property.value.data[0] == 'r' && property.value.data[4] == 'y';
+			const uint8* retained_string = property.value.data;
+			const bool buffer_passed = aml_runtime->acpi_dsd.Find(result, "mcoa-buffer", property) == uni::ACPIDSD::Status::Success && property.value.type == uni::ACPIDSD::ValueType::Buffer && property.value.length == 2 && property.value.data && property.value.data[0] == 0xA5 && property.value.data[1] == 0x5A && (property.value.flags & uni::ACPIDSD::ValueFlagNonStandard);
+			bool array_passed = aml_runtime->acpi_dsd.Find(result, "mcoa-array", property) == uni::ACPIDSD::Status::Success && property.value.type == uni::ACPIDSD::ValueType::Array && property.value.element_count == 3;
+			if (array_passed) {
+				uni::ACPIDSD::Value element = {};
+				array_passed = aml_runtime->acpi_dsd.ArrayAt(property.value, 0, element) == uni::ACPIDSD::Status::Success && element.type == uni::ACPIDSD::ValueType::Integer && element.integer == 1;
+				array_passed = array_passed && aml_runtime->acpi_dsd.ArrayAt(property.value, 1, element) == uni::ACPIDSD::Status::Success && element.type == uni::ACPIDSD::ValueType::String && element.length == 3 && element.data && element.data[0] == 't';
+				array_passed = array_passed && aml_runtime->acpi_dsd.ArrayAt(property.value, 2, element) == uni::ACPIDSD::Status::Success && element.type == uni::ACPIDSD::ValueType::DeviceReference && element.reference == controller;
+			}
+			const bool reference_passed = aml_runtime->acpi_dsd.Find(result, "mcoa-reference", property) == uni::ACPIDSD::Status::Success && property.value.type == uni::ACPIDSD::ValueType::DeviceReference && property.value.reference == controller;
+			status = aml_runtime->acpi_dsd.Evaluate(method_device, result, storage_b);
+			const bool method_passed = status == uni::ACPIDSD::Status::Success && aml_runtime->acpi_dsd.Find(result, "method-value", property) == uni::ACPIDSD::Status::Success && property.value.integer == 0x77;
+			const bool lifetime_passed = method_passed && retained_string && retained_string[0] == 'r' && retained_string[4] == 'y';
+			status = aml_runtime->acpi_dsd.Evaluate(duplicate_device, result, storage_b);
+			const bool duplicate_passed = status == uni::ACPIDSD::Status::DuplicateProperty;
+			status = aml_runtime->acpi_dsd.Evaluate(malformed_device, result, storage_b);
+			const bool malformed_passed = status == uni::ACPIDSD::Status::MalformedPackage;
+			status = aml_runtime->acpi_dsd.Evaluate(duplicate_uuid_device, result, storage_b);
+			const bool descriptor_passed = status == uni::ACPIDSD::Status::DuplicateDescriptor;
+			status = aml_runtime->acpi_dsd.Evaluate(bad_uuid_device, result, storage_b);
+			const bool uuid_length_passed = status == uni::ACPIDSD::Status::MalformedPackage;
+			status = aml_runtime->acpi_dsd.Evaluate(missing_device, result, storage_b);
+			const bool missing_passed = status == uni::ACPIDSD::Status::ObjectNotFound;
+			status = aml_runtime->acpi_dsd.Evaluate(touchpad, result, storage_a);
+			const bool recovery_passed = status == uni::ACPIDSD::Status::Success && result.property_count == 6;
+
+			auto* endpoint = Devsman::FindNamedNode(DeviceNodeType::I2cDevice, "i2c-dev@0x2C");
+			uint64 node_integer = 0;
+			const char* node_string = nullptr;
+			stduint node_string_length = 0;
+			const uint8* node_buffer = nullptr;
+			stduint node_buffer_length = 0;
+			const char* node_reference = nullptr;
+			const DeviceAcpiPropertyValue* node_array = nullptr;
+			stduint node_array_count = 0;
+			const bool node_passed = endpoint && endpoint->fields.acpi_info && endpoint->fields.acpi_info->property_status == DeviceAcpiPropertyStatus::Success && endpoint->fields.acpi_info->property_count == 6 && endpoint->fields.acpi_info->nonstandard_property_count == 1 && Devsman::ReadAcpiPropertyInteger(endpoint, "mcoa-integer", node_integer) && node_integer == 0x1234 && Devsman::ReadAcpiPropertyString(endpoint, "mcoa-string", node_string, node_string_length) && node_string_length == 5 && node_string && node_string[4] == 'y' && Devsman::ReadAcpiPropertyBuffer(endpoint, "mcoa-buffer", node_buffer, node_buffer_length) && node_buffer_length == 2 && node_buffer && node_buffer[1] == 0x5A && Devsman::ReadAcpiPropertyReference(endpoint, "mcoa-reference", node_reference) && node_reference && equal_text(node_reference, "\\_SB_.PCI0.MI2C") && Devsman::ReadAcpiPropertyArray(endpoint, "mcoa-array", node_array, node_array_count) && node_array_count == 3 && node_array && node_array[0].type == DeviceAcpiPropertyType::Integer && node_array[0].integer == 1 && node_array[1].type == DeviceAcpiPropertyType::String && node_array[1].data && node_array[1].length == 3 && node_array[2].type == DeviceAcpiPropertyType::DeviceReference && node_array[2].reference_path && equal_text(node_array[2].reference_path, "\\_SB_.PCI0.MI2C");
+			uint64 property_clock = 0;
+			const bool precedence_passed = endpoint && endpoint->fields.acpi_info && endpoint->fields.acpi_info->serial_resource_count && endpoint->fields.acpi_info->serial_resources[0].speed == 400000 && Devsman::ReadAcpiPropertyInteger(endpoint, "clock-frequency", property_clock) && property_clock == 100000;
+
+			ploginfo("[ACPI-DSD-TEST] integer=%s string=%s buffer=%s array=%s reference=%s uuid=%s method=%s duplicate=%s descriptor=%s uuid-length=%s malformed=%s missing=%s lifetime=%s node=%s precedence=%s recovery=%s", integer_passed ? "success" : "failed", string_passed ? "success" : "failed", buffer_passed ? "success" : "failed", array_passed ? "success" : "failed", reference_passed ? "success" : "failed", uuid_passed ? "success" : "failed", method_passed ? "success" : "failed", duplicate_passed ? "success" : "failed", descriptor_passed ? "success" : "failed", uuid_length_passed ? "success" : "failed", malformed_passed ? "success" : "failed", missing_passed ? "success" : "failed", lifetime_passed ? "success" : "failed", node_passed ? "success" : "failed", precedence_passed ? "success" : "failed", recovery_passed ? "success" : "failed");
+			delete test;
+		}
+
+		void probe_hid_i2c_dsm() {
+			if (!aml_runtime) return;
+			auto* probe = new AmlDsmProbeWorkspace;
+			if (!probe) {
+				plogwarn("[ACPI-DSM-SUM] allocation=failed");
+				return;
+			}
+			const uni::AMLExecutor::ValueStorage storage = { probe->result_values, numsof(probe->result_values), probe->result_bytes, numsof(probe->result_bytes) };
+			stduint checked = 0;
+			stduint succeeded = 0;
+			stduint unsupported = 0;
+			stduint failed = 0;
+			const char* example = nullptr;
+			uint64 example_register = 0;
+			uni::ACPIDSM::Status example_status = uni::ACPIDSM::Status::Success;
+			uni::AMLExecutor::Status example_aml_status = uni::AMLExecutor::Status::Success;
+			bool example_register_valid = false;
+			for0(index, acpi_device_count) {
+				const auto& device = acpi_devices[index];
+				if (!device.has_cid || !equal_text(device.cid, "PNP0C50") || device.conditional || device.sta_dynamic || (device.has_sta && !(device.sta & 1u))) continue;
+				++checked;
+				uni::ACPIDSM::Result result = {};
+				const auto status = aml_runtime->acpi_dsm.Invoke(device.namespace_object, HidOverI2cDsmUuid, 1, 1, nullptr, uni::ACPIDSM::ReturnType::Integer, result, probe->dsm, storage);
+				if (!example) {
+					example = device.path;
+					example_status = status;
+					example_aml_status = result.aml_status;
+					example_register = result.value.integer;
+					example_register_valid = status == uni::ACPIDSM::Status::Success && result.value.integer <= 0xFFFFu;
+				}
+				if (status == uni::ACPIDSM::Status::Success && result.value.integer <= 0xFFFFu) {
+					++succeeded;
+				}
+				else if (status == uni::ACPIDSM::Status::MethodNotFound || status == uni::ACPIDSM::Status::UUIDUnsupported || status == uni::ACPIDSM::Status::FunctionUnsupported) ++unsupported;
+				else ++failed;
+			}
+			if (checked) {
+				if (example_register_valid) ploginfo("[ACPI-DSM-SUM] hid-i2c=%u success=%u unsupported=%u failed=%u example=%s status=success register=%04X", checked, succeeded, unsupported, failed, example, uint32(example_register));
+				else if (example_status == uni::ACPIDSM::Status::ExecutionFailed) ploginfo("[ACPI-DSM-SUM] hid-i2c=%u success=%u unsupported=%u failed=%u example=%s status=%s aml=%s", checked, succeeded, unsupported, failed, example, acpi_dsm_status_name(example_status), aml_execution_status_name(example_aml_status));
+				else if (example_status == uni::ACPIDSM::Status::Success) ploginfo("[ACPI-DSM-SUM] hid-i2c=%u success=%u unsupported=%u failed=%u example=%s status=invalid-register", checked, succeeded, unsupported, failed, example);
+				else ploginfo("[ACPI-DSM-SUM] hid-i2c=%u success=%u unsupported=%u failed=%u example=%s status=%s", checked, succeeded, unsupported, failed, example, acpi_dsm_status_name(example_status));
+			}
+			delete probe;
+		}
+		#endif
 
 	}
 
@@ -2396,6 +3049,12 @@ namespace Devs {
 		acpi_parent_absent_count = 0;
 		acpi_parent_unknown_count = 0;
 		acpi_pci_absent_count = 0;
+		acpi_dsd_checked_count = 0;
+		acpi_dsd_present_count = 0;
+		acpi_dsd_property_count = 0;
+		acpi_dsd_nonstandard_count = 0;
+		acpi_dsd_failed_count = 0;
+		acpi_dsd_failure_example[0] = 0;
 		acpi_malformed_count = 0;
 		for0(index, stduint(AcpiMalformedKind::Count)) {
 			acpi_malformed_kind_counts[index] = 0;
@@ -2404,6 +3063,7 @@ namespace Devs {
 		acpi_device_truncated = false;
 		acpi_serial_resource_truncated = false;
 		acpi_resource_truncated = !acpi_resources;
+		#if CONFIG_ACPI_BOOT_TEST
 		for0(index, aml_evaluation_summary_count) aml_evaluation_summaries[index] = {};
 		aml_evaluation_summary_count = 0;
 		for0(index, aml_region_summary_count) aml_region_summaries[index] = {};
@@ -2432,30 +3092,44 @@ namespace Devs {
 			aml_io_write_counts[index] = 0;
 			aml_io_write_examples[index][0] = 0;
 		}
+		#endif
 		collect_x86_aml_tables();
-		uni::AMLNamespace aml_namespace(aml_namespace_objects, numsof(aml_namespace_objects));
-		load_x86_aml_namespace(aml_namespace);
-		uint8* aml_buffer_storage = new uint8[AmlBufferCapacity];
-		const uni::AMLExecutor::Workspace aml_workspace = { aml_execution_frames, numsof(aml_execution_frames), aml_object_values, numsof(aml_object_values), { nullptr, read_aml_region, write_aml_region }, aml_dynamic_objects, numsof(aml_dynamic_objects), aml_mutex_states, numsof(aml_mutex_states), aml_buffer_storage, aml_buffer_storage ? AmlBufferCapacity : 0 };
-		const uni::AMLExecutor::Limits aml_limits = { 4096, 256 };
-		uni::AMLExecutor aml_executor(aml_namespace, aml_workspace, aml_limits);
-		acpi_conditional_block_count = aml_namespace.ConditionalCount();
-		collect_x86_acpi_devices(aml_namespace, aml_executor);
-		resolve_x86_acpi_serial_controllers(aml_namespace);
+		if (aml_runtime) delete aml_runtime;
+		aml_runtime = new AmlRuntime;
+		if (!aml_runtime) {
+			plogerro("[ACPI] AML runtime allocation failed");
+			return;
+		}
+		load_x86_aml_namespace(aml_runtime->aml_namespace);
+		acpi_conditional_block_count = aml_runtime->aml_namespace.ConditionalCount();
+		collect_x86_acpi_devices(aml_runtime->aml_namespace, aml_runtime->aml_executor);
+		#if CONFIG_ACPI_BOOT_TEST
+		test_aml_method_calls();
+		test_acpi_dsm();
+		probe_hid_i2c_dsm();
+		#endif
+		resolve_x86_acpi_serial_controllers(aml_runtime->aml_namespace);
+		stduint present_count = 0;
+		stduint absent_count = 0;
+		stduint unknown_count = 0;
+		#if CONFIG_ACPI_BOOT_TEST
 		stduint i2c_count = 0;
 		stduint spi_count = 0;
 		stduint uart_count = 0;
 		stduint other_serial_count = 0;
-		stduint present_count = 0;
-		stduint absent_count = 0;
-		stduint unknown_count = 0;
 		stduint resource_counts[stduint(AcpiResourceType::Count)] = {};
+		#endif
 		for0(index, acpi_device_count) {
 			const auto& device = acpi_devices[index];
 			if (device.conditional || device.sta_dynamic) ++unknown_count;
 			else if (device.has_sta && !(device.sta & 1u)) ++absent_count;
 			else ++present_count;
 		}
+		#if !CONFIG_ACPI_BOOT_TEST
+		(void)present_count;
+		(void)absent_count;
+		#endif
+		#if CONFIG_ACPI_BOOT_TEST
 		for0(index, acpi_serial_resource_count) {
 			switch (AcpiSerialBusType(acpi_serial_resources[index].bus_type)) {
 			case AcpiSerialBusType::I2C: ++i2c_count; break;
@@ -2467,14 +3141,21 @@ namespace Devs {
 		for0(index, acpi_resource_count) ++resource_counts[stduint(acpi_resources[index].type)];
 		ploginfo("[ACPI-ENUM] mode=namespace bits=%u tables=%u objects=%u devices=%u present=%u absent=%u unknown=%u serial=%u i2c=%u spi=%u uart=%u other=%u conditional=%u malformed=%u truncated=%u",
 			stduint(sizeof(stduint) * 8), aml_table_count,
-			aml_namespace.Count(), acpi_device_count, present_count, absent_count, unknown_count,
+			aml_runtime->aml_namespace.Count(), acpi_device_count, present_count, absent_count, unknown_count,
 			acpi_serial_resource_count,
 			i2c_count, spi_count, uart_count, other_serial_count,
 			acpi_conditional_block_count, acpi_malformed_count,
-			stduint(acpi_device_truncated || acpi_serial_resource_truncated || acpi_resource_truncated || aml_namespace.Truncated()));
+			stduint(acpi_device_truncated || acpi_serial_resource_truncated || acpi_resource_truncated || aml_runtime->aml_namespace.Truncated()));
 		ploginfo("[ACPI-RESOURCE-SUM] irq=%u gpio-int=%u gpio-io=%u memory=%u io=%u total=%u truncated=%u", resource_counts[stduint(AcpiResourceType::Irq)], resource_counts[stduint(AcpiResourceType::GpioInterrupt)], resource_counts[stduint(AcpiResourceType::GpioIo)], resource_counts[stduint(AcpiResourceType::Memory)], resource_counts[stduint(AcpiResourceType::IoPort)], acpi_resource_count, stduint(acpi_resource_truncated));
 		log_acpi_controller_links();
+		#endif
 		materialize_x86_acpi_serial_devices();
+		#if CONFIG_ACPI_BOOT_TEST
+		test_acpi_dsd();
+		if (acpi_dsd_present_count || acpi_dsd_failed_count) {
+			if (acpi_dsd_failure_example[0]) ploginfo("[ACPI-DSD-SUM] checked=%u present=%u properties=%u nonstandard=%u failed=%u example=%s", acpi_dsd_checked_count, acpi_dsd_present_count, acpi_dsd_property_count, acpi_dsd_nonstandard_count, acpi_dsd_failed_count, acpi_dsd_failure_example);
+			else ploginfo("[ACPI-DSD-SUM] checked=%u present=%u properties=%u nonstandard=%u failed=%u", acpi_dsd_checked_count, acpi_dsd_present_count, acpi_dsd_property_count, acpi_dsd_nonstandard_count, acpi_dsd_failed_count);
+		}
 		if (acpi_parent_absent_count || acpi_parent_unknown_count || acpi_pci_absent_count) ploginfo("[ACPI-PARENT-SUM] absent=%u unknown=%u pci-absent=%u", acpi_parent_absent_count, acpi_parent_unknown_count, acpi_pci_absent_count);
 		log_acpi_malformed_records();
 		log_aml_evaluation_summaries();
@@ -2489,7 +3170,13 @@ namespace Devs {
 			}
 			log_acpi_serial_resource(acpi_serial_resources[index]);
 		}
-		delete[] aml_buffer_storage;
+		#else
+		const bool discovery_truncated = acpi_device_truncated || acpi_serial_resource_truncated || acpi_resource_truncated || aml_runtime->aml_namespace.Truncated();
+		if (discovery_truncated) plogerro("[ACPI] device discovery truncated");
+		if (acpi_malformed_count) plogerro("[ACPI] malformed AML count=%u", acpi_malformed_count);
+		if (unknown_count) plogerro("[ACPI] unresolved device status count=%u", unknown_count);
+		if (acpi_dsd_failed_count) plogerro("[ACPI] _DSD processing failed count=%u example=%s", acpi_dsd_failed_count, acpi_dsd_failure_example[0] ? acpi_dsd_failure_example : "<unknown>");
+		#endif
 	}
 
 }

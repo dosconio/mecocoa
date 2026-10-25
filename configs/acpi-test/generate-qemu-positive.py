@@ -108,12 +108,41 @@ def buffer(data):
 	return b"\x11" + package(integer(len(data)) + data)
 
 
+def uuid_buffer(value):
+	parts = value.split("-")
+	if len(parts) != 5 or tuple(map(len, parts)) != (8, 4, 4, 4, 12):
+		raise ValueError("invalid UUID")
+	data = struct.pack("<IHH", int(parts[0], 16), int(parts[1], 16), int(parts[2], 16))
+	data += bytes.fromhex(parts[3] + parts[4])
+	return buffer(data)
+
+
 def store(source, target_opcode):
 	return b"\x70" + name_string(source) + bytes((target_opcode,))
 
 
 def return_value(value):
 	return b"\xA4" + value
+
+
+def add(left, right):
+	return b"\x72" + left + right + b"\x00"
+
+
+def equal(left, right):
+	return b"\x93" + left + right
+
+
+def dereference(value):
+	return b"\x83" + value
+
+
+def while_block(predicate, *terms):
+	return b"\xA2" + package(predicate + b"".join(terms))
+
+
+def method_call(path, *arguments):
+	return name_string(path) + b"".join(arguments)
 
 
 def concatenate_resource_templates(left, right):
@@ -159,8 +188,64 @@ def resource_template(*resources):
 	return b"".join(resources) + b"\x79\x00"
 
 
+def dsm_test_method():
+	hid_i2c_uuid = uuid_buffer("3cdff6f7-4267-4555-ad05-b30a3d8938de")
+	second_uuid = uuid_buffer("107ededd-d381-4fd7-8da9-08e9a6c79644")
+	malformed_uuid = uuid_buffer("893f00a6-660c-494e-bcfd-3043f4fb67c0")
+	hid_i2c_functions = if_block(
+		equal(b"\x69", integer(1)),
+		if_block(equal(b"\x6A", integer(0)), return_value(buffer(bytes((0x1F,))))),
+		if_block(equal(b"\x6A", integer(1)), return_value(integer(0x20))),
+		if_block(equal(b"\x6A", integer(2)), return_value(buffer(bytes((0xA5, 0x5A))))),
+		if_block(equal(b"\x6A", integer(3)), return_value(b"\x6B")),
+		if_block(equal(b"\x6A", integer(4)), return_value(string("bad"))),
+	)
+	second_functions = if_block(
+		equal(b"\x69", integer(1)),
+		if_block(equal(b"\x6A", integer(0)), return_value(buffer(bytes((0x03,))))),
+		if_block(equal(b"\x6A", integer(1)), return_value(integer(0x55))),
+	)
+	return method(
+		"_DSM",
+		0x0C,
+		if_block(equal(b"\x68", hid_i2c_uuid), hid_i2c_functions, return_value(buffer(bytes((0,))))),
+		if_block(equal(b"\x68", second_uuid), second_functions, return_value(buffer(bytes((0,))))),
+		if_block(equal(b"\x68", malformed_uuid), return_value(integer(0))),
+		return_value(buffer(bytes((0,)))),
+	)
+
+
+def dsd_device_properties():
+	return data_package(
+		uuid_buffer("107ededd-d381-4fd7-8da9-08e9a6c79644"),
+		data_package(data_package(string("ignored"), integer(0x55))),
+		uuid_buffer("daffd814-6eba-4d8c-8a91-bc9bbf4aa301"),
+		data_package(
+			data_package(string("mcoa-integer"), integer(0x1234)),
+			data_package(string("mcoa-string"), string("ready")),
+			data_package(string("mcoa-buffer"), buffer(bytes((0xA5, 0x5A)))),
+			data_package(string("mcoa-array"), data_package(integer(1), string("two"), name_string("\\_SB_.PCI0.MI2C"))),
+			data_package(string("mcoa-reference"), name_string("\\_SB_.PCI0.MI2C")),
+			data_package(string("clock-frequency"), integer(100000)),
+		),
+	)
+
+
 def build_aml():
 	gpio = device("MGPO", name("_HID", string("MCOA0005")), name("_STA", integer(0x0F)))
+	method_tests = (
+		name("MVAL", integer(0x2A)),
+		method("MZER", 0, return_value(integer(0x42))),
+		method("MINT", 2, return_value(add(b"\x68", b"\x69"))),
+		method("MBUF", 1, return_value(b"\x68")),
+		method("MPKG", 1, return_value(data_package(b"\x68", buffer(bytes((0xA5, 0x5A))), data_package(integer(0x33))))),
+		method("MNST", 0x09, return_value(method_call("MINT", method_call("MINT", b"\x68", integer(1)), integer(1)))),
+		method("MREF", 1, return_value(dereference(b"\x68"))),
+		method("M7AR", 7, return_value(b"\x6E")),
+		method("MLOP", 1, while_block(b"\x68", b"\xA3"), return_value(integer(0))),
+		method("MREC", 1, if_block(b"\x68", return_value(method_call("MREC", b"\x68"))), return_value(integer(0))),
+		method("MUNS", 0, b"\x5B\x22" + integer(1), return_value(integer(0))),
+	)
 
 	touchpad_bus_resources = resource_template(i2c_resource(0x2C, 400000, "\\_SB.PCI0.MI2C"))
 	touchpad_gpio_resources = resource_template(gpio_interrupt(0x14, "\\_SB.MGPO"))
@@ -171,6 +256,8 @@ def build_aml():
 		name("_UID", integer(1)),
 		name("SBFB", buffer(touchpad_bus_resources)),
 		name("SBFG", buffer(touchpad_gpio_resources)),
+		name("_DSD", dsd_device_properties()),
+		dsm_test_method(),
 		method("_STA", 0, return_value(integer(0x0F))),
 		method("_CRS", 0, return_value(concatenate_resource_templates("SBFB", "SBFG"))),
 	)
@@ -179,6 +266,54 @@ def build_aml():
 		name("_HID", string("MCOA00FF")),
 		name("_STA", integer(0)),
 		name("_CRS", buffer(resource_template(i2c_resource(0x3E, 100000, "\\_SB.PCI0.MI2C")))),
+	)
+	dsd_method = device(
+		"MDSD",
+		name("_HID", string("MCOA0008")),
+		name("_STA", integer(0x0F)),
+		method(
+			"_DSD",
+			0,
+			return_value(data_package(
+				uuid_buffer("daffd814-6eba-4d8c-8a91-bc9bbf4aa301"),
+				data_package(data_package(string("method-value"), integer(0x77))),
+			)),
+		),
+	)
+	dsd_duplicate = device(
+		"MDUP",
+		name("_HID", string("MCOA0009")),
+		name("_STA", integer(0x0F)),
+		name("_DSD", data_package(
+			uuid_buffer("daffd814-6eba-4d8c-8a91-bc9bbf4aa301"),
+			data_package(
+				data_package(string("duplicate"), integer(1)),
+				data_package(string("duplicate"), integer(2)),
+			),
+		)),
+	)
+	dsd_malformed = device(
+		"MBAD",
+		name("_HID", string("MCOA000A")),
+		name("_STA", integer(0x0F)),
+		name("_DSD", data_package(uuid_buffer("daffd814-6eba-4d8c-8a91-bc9bbf4aa301"))),
+	)
+	dsd_duplicate_uuid = device(
+		"MDUD",
+		name("_HID", string("MCOA000B")),
+		name("_STA", integer(0x0F)),
+		name("_DSD", data_package(
+			uuid_buffer("daffd814-6eba-4d8c-8a91-bc9bbf4aa301"),
+			data_package(),
+			uuid_buffer("daffd814-6eba-4d8c-8a91-bc9bbf4aa301"),
+			data_package(),
+		)),
+	)
+	dsd_bad_uuid = device(
+		"MUID",
+		name("_HID", string("MCOA000C")),
+		name("_STA", integer(0x0F)),
+		name("_DSD", data_package(buffer(bytes(15)), data_package())),
 	)
 	i2c = device(
 		"MI2C",
@@ -226,7 +361,7 @@ def build_aml():
 		scope("\\_SB_.PCI0.MI2C", name("_DEP", data_package(name_string("\\_SB_.MGPO")))),
 	)
 
-	return scope("\\_SB_", gpio) + scope("\\_SB_.PCI0", i2c, spi, uart) + scope("\\_SB_.PCI0.MI2C", touchpad, absent) + conditional_dependency
+	return scope("\\_SB_", *method_tests, gpio) + scope("\\_SB_.PCI0", i2c, spi, uart) + scope("\\_SB_.PCI0.MI2C", touchpad, absent, dsd_method, dsd_duplicate, dsd_malformed, dsd_duplicate_uuid, dsd_bad_uuid) + conditional_dependency
 
 
 def build_table():

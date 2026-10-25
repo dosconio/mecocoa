@@ -28,6 +28,7 @@ asmfile=prehost/atx-x64-uefi64/atx-x64.asm\
 	$(ulibpath)/asm/x64/interrupt/ruptable.asm \
 
 cppfile=\
+	$(wildcard archits/x86and64/*.cpp) \
 	$(ulibpath)/cpp/color.cpp \
 	$(ulibpath)/cpp/Witch/Form.cpp \
 	$(ulibpath)/cpp/Device/ACPI.cpp \
