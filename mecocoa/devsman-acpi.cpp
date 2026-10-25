@@ -11,6 +11,10 @@
 #include <cpp/Device/Bus/PCI.hpp>
 
 namespace Devs {
+	DeviceNode* find_pci_bus_node(uint16 segment, uint8 bus);
+	DeviceNode* get_bus_root(DeviceBusType bus_type);
+	DeviceNode* find_named_child(DeviceNode* parent, DeviceNodeType node_type, const char* name);
+	DeviceNode* append_plain_device(DeviceNode* parent, DeviceNodeType node_type, DeviceBusType bus_type, const char* name);
 
 	namespace {
 
@@ -22,6 +26,7 @@ namespace Devs {
 
 		constexpr stduint AcpiDeviceCapacity = 512;
 		constexpr stduint AcpiSerialResourceCapacity = 512;
+		constexpr stduint AcpiResourceCapacity = 1024;
 		constexpr stduint AmlTableCapacity = 64;
 		constexpr stduint AcpiPathCapacity = 160;
 		constexpr stduint AcpiIdCapacity = 48;
@@ -31,8 +36,12 @@ namespace Devs {
 		constexpr stduint AmlNamespaceObjectCapacity = 8192;
 		constexpr stduint AmlExecutionFrameCapacity = 16;
 		constexpr stduint AmlObjectValueCapacity = 512;
+		constexpr stduint AmlDynamicObjectCapacity = 128;
+		constexpr stduint AmlMutexStateCapacity = 64;
+		constexpr stduint AmlBufferCapacity = 65536;
 		constexpr stduint AmlEvaluationSummaryCapacity = 32;
 		constexpr stduint AmlRegionSummaryCapacity = 16;
+		constexpr uint16 InvalidAcpiDeviceIndex = 0xFFFFu;
 		constexpr bool LogAllAcpiDevices = false;
 
 		enum class AmlPciReadStatus : uint8 {
@@ -40,6 +49,40 @@ namespace Devs {
 			OwnerUnresolved,
 			InvalidAccess,
 			ConfigUnavailable,
+			Count,
+		};
+
+		enum class AmlPciWriteStatus : uint8 {
+			Success,
+			OwnerUnresolved,
+			InvalidAccess,
+			ConfigUnavailable,
+			Count,
+		};
+
+		enum class AmlMemoryReadStatus : uint8 {
+			Success,
+			InvalidAccess,
+			MappingUnavailable,
+			Count,
+		};
+
+		enum class AmlMemoryWriteStatus : uint8 {
+			Success,
+			InvalidAccess,
+			MappingUnavailable,
+			Count,
+		};
+
+		enum class AmlIoReadStatus : uint8 {
+			Success,
+			InvalidAccess,
+			Count,
+		};
+
+		enum class AmlIoWriteStatus : uint8 {
+			Success,
+			InvalidAccess,
 			Count,
 		};
 
@@ -67,6 +110,26 @@ namespace Devs {
 			CSI2 = 4,
 		};
 
+		enum class AcpiControllerLinkStatus : uint8 {
+			Pci,
+			AcpiOnly,
+			SourceMissing,
+			MalformedSource,
+			NamespaceMissing,
+			PciUnresolved,
+			PciNodeMissing,
+			Count,
+		};
+
+		enum class AcpiResourceType : uint8 {
+			Irq,
+			GpioInterrupt,
+			GpioIo,
+			Memory,
+			IoPort,
+			Count,
+		};
+
 		struct AcpiNamePath {
 			char segments[AcpiNameSegmentCapacity][5];
 			uint8 segment_count;
@@ -83,6 +146,7 @@ namespace Devs {
 			stduint sta_expression_length;
 			uint64 sta;
 			uint64 adr;
+			stduint namespace_object;
 			uint8 sta_first_opcode;
 			uint8 sta_value_opcode;
 			bool has_hid;
@@ -99,13 +163,16 @@ namespace Devs {
 
 		struct AcpiSerialResourceRecord {
 			char controller[AcpiPathCapacity];
+			DeviceNode* pci_controller;
 			uint32 speed;
 			uint16 address;
 			uint16 receive_fifo;
 			uint16 transmit_fifo;
 			uint16 type_flags;
 			uint16 device_index;
+			uint16 controller_device_index;
 			uint8 bus_type;
+			uint8 controller_status;
 			uint8 general_flags;
 			uint8 data_bits;
 			uint8 clock_phase;
@@ -114,13 +181,30 @@ namespace Devs {
 			uint8 lines_enabled;
 		};
 
+		struct AcpiResourceRecord {
+			char source[AcpiPathCapacity];
+			uint64 minimum;
+			uint64 maximum;
+			uint64 length;
+			uint64 granularity;
+			uint64 translation;
+			uint32 value;
+			uint32 flags;
+			uint16 device_index;
+			uint8 width;
+			AcpiResourceType type;
+		};
+
 		struct AcpiMalformedRecord {
 			const uint8* address;
 			AcpiMalformedKind kind;
 		};
 
 		struct AmlEvaluationSummary {
+			char object[5];
 			char example[AcpiPathCapacity];
+			char scope[AcpiPathCapacity];
+			char target[AcpiPathCapacity];
 			stduint count;
 			uint16 opcode;
 			uni::AMLExecutor::Status status;
@@ -136,29 +220,47 @@ namespace Devs {
 
 		AcpiDeviceRecord acpi_devices[AcpiDeviceCapacity] = {};
 		AcpiSerialResourceRecord acpi_serial_resources[AcpiSerialResourceCapacity] = {};
+		DeviceNode* acpi_controller_nodes[AcpiDeviceCapacity] = {};
+		DeviceNode* acpi_endpoint_nodes[AcpiDeviceCapacity] = {};
+		AcpiResourceRecord* acpi_resources = nullptr;
 		stduint acpi_device_count = 0;
 		stduint acpi_serial_resource_count = 0;
+		stduint acpi_resource_count = 0;
 		stduint acpi_conditional_block_count = 0;
 		stduint acpi_parent_absent_count = 0;
 		stduint acpi_parent_unknown_count = 0;
 		stduint acpi_pci_absent_count = 0;
 		stduint acpi_malformed_count = 0;
 		stduint acpi_malformed_kind_counts[stduint(AcpiMalformedKind::Count)] = {};
+		stduint acpi_controller_link_counts[stduint(AcpiControllerLinkStatus::Count)] = {};
 		AcpiMalformedRecord acpi_malformed_records[AcpiMalformedRecordCapacity] = {};
 		stduint acpi_malformed_record_count = 0;
 		bool acpi_device_truncated = false;
 		bool acpi_serial_resource_truncated = false;
+		bool acpi_resource_truncated = false;
 		AmlTableView aml_tables[AmlTableCapacity] = {};
 		stduint aml_table_count = 0;
 		uni::AMLNamespace::Object aml_namespace_objects[AmlNamespaceObjectCapacity] = {};
 		uni::AMLExecutor::Frame aml_execution_frames[AmlExecutionFrameCapacity] = {};
 		uni::AMLExecutor::ObjectValue aml_object_values[AmlObjectValueCapacity] = {};
+		uni::AMLNamespace::Object aml_dynamic_objects[AmlDynamicObjectCapacity] = {};
+		uni::AMLExecutor::MutexState aml_mutex_states[AmlMutexStateCapacity] = {};
 		AmlEvaluationSummary aml_evaluation_summaries[AmlEvaluationSummaryCapacity] = {};
 		stduint aml_evaluation_summary_count = 0;
 		AmlRegionSummary aml_region_summaries[AmlRegionSummaryCapacity] = {};
 		stduint aml_region_summary_count = 0;
 		stduint aml_pci_read_counts[stduint(AmlPciReadStatus::Count)] = {};
 		char aml_pci_read_examples[stduint(AmlPciReadStatus::Count)][AcpiPathCapacity] = {};
+		stduint aml_pci_write_counts[stduint(AmlPciWriteStatus::Count)] = {};
+		char aml_pci_write_examples[stduint(AmlPciWriteStatus::Count)][AcpiPathCapacity] = {};
+		stduint aml_memory_read_counts[stduint(AmlMemoryReadStatus::Count)] = {};
+		char aml_memory_read_examples[stduint(AmlMemoryReadStatus::Count)][AcpiPathCapacity] = {};
+		stduint aml_memory_write_counts[stduint(AmlMemoryWriteStatus::Count)] = {};
+		char aml_memory_write_examples[stduint(AmlMemoryWriteStatus::Count)][AcpiPathCapacity] = {};
+		stduint aml_io_read_counts[stduint(AmlIoReadStatus::Count)] = {};
+		char aml_io_read_examples[stduint(AmlIoReadStatus::Count)][AcpiPathCapacity] = {};
+		stduint aml_io_write_counts[stduint(AmlIoWriteStatus::Count)] = {};
+		char aml_io_write_examples[stduint(AmlIoWriteStatus::Count)][AcpiPathCapacity] = {};
 
 		bool decode_aml_package_length(const uint8* aml, stduint available, uint32& package_length, uint8& encoded_length) {
 			if (!aml || !available) return false;
@@ -208,24 +310,6 @@ namespace Devs {
 			default:
 				return false;
 			}
-		}
-
-		bool decode_aml_buffer(const uint8* buffer_opcode, const uint8* end, const uint8*& data, stduint& data_length) {
-			if (!buffer_opcode || buffer_opcode >= end || *buffer_opcode != 0x11)
-				return false;
-			uint32 package_length = 0;
-			uint8 encoded_length = 0;
-			if (!decode_aml_package_length(buffer_opcode + 1,
-				end - buffer_opcode - 1, package_length, encoded_length) ||
-				package_length > stduint(end - buffer_opcode - 1)) return false;
-			const uint8* buffer_end = buffer_opcode + 1 + package_length;
-			const uint8* cursor = buffer_opcode + 1 + encoded_length;
-			uint64 declared_length = 0;
-			if (!decode_aml_integer(cursor, buffer_end, declared_length) ||
-				declared_length > stduint(buffer_end - cursor)) return false;
-			data = cursor;
-			data_length = stduint(declared_length);
-			return true;
 		}
 
 		const uni::ACPI::DescriptionHeader* acpi_table_at(uint64 address) {
@@ -504,6 +588,36 @@ namespace Devs {
 			return true;
 		}
 
+		bool parse_acpi_resource_source(const char* source, uni::AMLBytecode::Name& name) {
+			name = {};
+			if (!source || !source[0] || equal_text(source, "<none>")) return false;
+			if (*source == '\\') {
+				name.rooted = true;
+				++source;
+			}
+			while (*source == '^') {
+				if (name.parent_count == 0xFFu) return false;
+				++name.parent_count;
+				++source;
+			}
+			while (*source) {
+				if (name.segment_count >= uni::AMLBytecode::NameSegmentCapacity) return false;
+				char segment[5] = { '_', '_', '_', '_', 0 };
+				stduint length = 0;
+				while (*source && *source != '.') {
+					if (length >= 4 || !is_aml_name_char(uint8(*source))) return false;
+					segment[length++] = *source++;
+				}
+				if (!length || !is_aml_name_lead(uint8(segment[0]))) return false;
+				for0(index, 5) name.segments[name.segment_count][index] = segment[index];
+				++name.segment_count;
+				if (!*source) break;
+				++source;
+				if (!*source) return false;
+			}
+			return name.segment_count != 0;
+		}
+
 		bool path_is_child_name(const char* path, const char* parent, const char* name) {
 			char expected[AcpiPathCapacity] = {};
 			copy_text(expected, sizeof(expected), parent);
@@ -519,10 +633,11 @@ namespace Devs {
 			return -1;
 		}
 
-		int find_or_add_acpi_device(const char* path, bool conditional) {
+		int find_or_add_acpi_device(const char* path, bool conditional, stduint namespace_object) {
 			const int existing = find_acpi_device(path);
 			if (existing >= 0) {
 				acpi_devices[existing].conditional |= conditional;
+				acpi_devices[existing].namespace_object = namespace_object;
 				return existing;
 			}
 			if (acpi_device_count >= AcpiDeviceCapacity) {
@@ -533,6 +648,7 @@ namespace Devs {
 			device = {};
 			copy_text(device.path, sizeof(device.path), path);
 			device.conditional = conditional;
+			device.namespace_object = namespace_object;
 			return int(acpi_device_count++);
 		}
 
@@ -543,6 +659,10 @@ namespace Devs {
 		uint32 read_le32(const uint8* data) {
 			return uint32(data[0]) | uint32(data[1]) << 8 |
 				uint32(data[2]) << 16 | uint32(data[3]) << 24;
+		}
+
+		uint64 read_le64(const uint8* data) {
+			return uint64(read_le32(data)) | uint64(read_le32(data + 4)) << 32;
 		}
 
 		void encode_eisa_id(uint32 encoded, char output[AcpiIdCapacity]) {
@@ -669,9 +789,35 @@ namespace Devs {
 			return false;
 		}
 
-		bool resolve_aml_pci_region_owner(const uni::AMLNamespace& aml_namespace, stduint region_object, AmlPciLocation& location) {
+		bool aml_scope_declares_pci_address(const uni::AMLNamespace& aml_namespace, stduint scope) {
+			const char adr_name[5] = { '_', 'A', 'D', 'R', 0 };
+			for0(depth, uni::AMLNamespace::MaximumDepth) {
+				const auto* object = aml_namespace.At(scope);
+				if (!object) break;
+				if (object->type == uni::AMLNamespace::ObjectType::Device) {
+					if (aml_device_is_pci_root(aml_namespace, scope)) return false;
+					if (aml_namespace.FindChild(scope, adr_name) != uni::AMLNamespace::InvalidIndex) return true;
+				}
+				if (object->parent == uni::AMLNamespace::InvalidIndex || object->parent == scope) break;
+				scope = object->parent;
+			}
+			return false;
+		}
+
+		DeviceNode* find_pci_device_node(const AmlPciLocation& location) {
+			auto* bus_node = find_pci_bus_node(location.segment, location.bus);
+			if (!bus_node) return nullptr;
+			for (auto* node = reinterpret_cast<DeviceNode*>(bus_node->link.subf); node; node = reinterpret_cast<DeviceNode*>(node->link.next)) {
+				if (DeviceNodeType(node->fields.node_type) != DeviceNodeType::PciDevice) continue;
+				if (node->fields.pci_segment == location.segment && node->fields.pci_bus == location.bus && node->fields.pci_device == location.device && node->fields.pci_function == location.function) return node;
+			}
+			return nullptr;
+		}
+
+		bool resolve_aml_pci_region_owner(const uni::AMLNamespace& aml_namespace, stduint region_object, stduint region_scope, AmlPciLocation& location) {
 			const auto* region = aml_namespace.At(region_object);
-			return region && region->type == uni::AMLNamespace::ObjectType::OperationRegion && resolve_aml_pci_scope(aml_namespace, region->parent, location);
+			if (region && region->type == uni::AMLNamespace::ObjectType::OperationRegion) region_scope = region->parent;
+			return resolve_aml_pci_scope(aml_namespace, region_scope, location);
 		}
 
 		bool aml_pci_device_presence(const uni::AMLNamespace& aml_namespace, stduint device_object, bool& present) {
@@ -681,23 +827,23 @@ namespace Devs {
 			return true;
 		}
 
-		void record_aml_pci_read(const uni::AMLNamespace& aml_namespace, stduint region_object, AmlPciReadStatus status) {
+		void record_aml_pci_read(const uni::AMLNamespace& aml_namespace, stduint region_object, stduint region_scope, AmlPciReadStatus status) {
 			const stduint index = stduint(status);
 			if (index >= stduint(AmlPciReadStatus::Count)) return;
-			if (!aml_pci_read_counts[index] && !aml_namespace.FormatPath(region_object, aml_pci_read_examples[index], sizeof(aml_pci_read_examples[index]))) copy_text(aml_pci_read_examples[index], sizeof(aml_pci_read_examples[index]), "<unknown>");
+			if (!aml_pci_read_counts[index] && !aml_namespace.FormatPath(region_object, aml_pci_read_examples[index], sizeof(aml_pci_read_examples[index])) && !aml_namespace.FormatPath(region_scope, aml_pci_read_examples[index], sizeof(aml_pci_read_examples[index]))) copy_text(aml_pci_read_examples[index], sizeof(aml_pci_read_examples[index]), "<unknown>");
 			++aml_pci_read_counts[index];
 		}
 
-		bool read_aml_pci_region(void* context, const uni::AMLNamespace& aml_namespace, stduint region_object, uint8 space, uint64 address, uint8 width, uint64& value) {
+		bool read_aml_pci_region(void* context, const uni::AMLNamespace& aml_namespace, stduint region_object, stduint region_scope, uint8 space, uint64 address, uint8 width, uint64& value) {
 			(void)context;
 			if (space != 0x02) return false;
 			AmlPciLocation location = {};
-			if (!resolve_aml_pci_region_owner(aml_namespace, region_object, location)) {
-				record_aml_pci_read(aml_namespace, region_object, AmlPciReadStatus::OwnerUnresolved);
+			if (!resolve_aml_pci_region_owner(aml_namespace, region_object, region_scope, location)) {
+				record_aml_pci_read(aml_namespace, region_object, region_scope, AmlPciReadStatus::OwnerUnresolved);
 				return false;
 			}
 			if ((width != 8 && width != 16 && width != 32 && width != 64) || address >= 0x1000u || width / 8 > 0x1000u - address) {
-				record_aml_pci_read(aml_namespace, region_object, AmlPciReadStatus::InvalidAccess);
+				record_aml_pci_read(aml_namespace, region_object, region_scope, AmlPciReadStatus::InvalidAccess);
 				return false;
 			}
 			const uint8 byte_count = width / 8;
@@ -710,7 +856,7 @@ namespace Devs {
 				if (register_address != cached_register) {
 					const bool available = aml_pci_config_available(location, register_address);
 					if (!available) {
-						record_aml_pci_read(aml_namespace, region_object, AmlPciReadStatus::ConfigUnavailable);
+						record_aml_pci_read(aml_namespace, region_object, region_scope, AmlPciReadStatus::ConfigUnavailable);
 						return false;
 					}
 					register_value = uni::PCI::read_config_register(location.segment, location.bus, location.device, location.function, register_address);
@@ -718,8 +864,211 @@ namespace Devs {
 				}
 				value |= uint64(uint8(register_value >> ((byte_address & 3u) * 8))) << (index * 8);
 			}
-			record_aml_pci_read(aml_namespace, region_object, AmlPciReadStatus::Success);
+			record_aml_pci_read(aml_namespace, region_object, region_scope, AmlPciReadStatus::Success);
 			return true;
+		}
+
+		void record_aml_pci_write(const uni::AMLNamespace& aml_namespace, stduint region_object, stduint region_scope, AmlPciWriteStatus status) {
+			const stduint index = stduint(status);
+			if (index >= stduint(AmlPciWriteStatus::Count)) return;
+			if (!aml_pci_write_counts[index] && !aml_namespace.FormatPath(region_object, aml_pci_write_examples[index], sizeof(aml_pci_write_examples[index])) && !aml_namespace.FormatPath(region_scope, aml_pci_write_examples[index], sizeof(aml_pci_write_examples[index]))) copy_text(aml_pci_write_examples[index], sizeof(aml_pci_write_examples[index]), "<unknown>");
+			++aml_pci_write_counts[index];
+		}
+
+		bool write_aml_pci_region(void* context, const uni::AMLNamespace& aml_namespace, stduint region_object, stduint region_scope, uint8 space, uint64 address, uint8 width, uint64 value) {
+			(void)context;
+			if (space != 0x02) return false;
+			AmlPciLocation location = {};
+			if (!resolve_aml_pci_region_owner(aml_namespace, region_object, region_scope, location)) {
+				record_aml_pci_write(aml_namespace, region_object, region_scope, AmlPciWriteStatus::OwnerUnresolved);
+				return false;
+			}
+			if ((width != 8 && width != 16 && width != 32 && width != 64) || address >= 0x1000u || width / 8 > 0x1000u - address) {
+				record_aml_pci_write(aml_namespace, region_object, region_scope, AmlPciWriteStatus::InvalidAccess);
+				return false;
+			}
+			const uint8 byte_count = width / 8;
+			uint16 previous_register = 0xFFFFu;
+			for (uint8 index = 0; index < byte_count; ++index) {
+				const uint16 register_address = uint16(address + index) & 0xFFFCu;
+				if (register_address == previous_register) continue;
+				if (!aml_pci_config_available(location, register_address)) {
+					record_aml_pci_write(aml_namespace, region_object, region_scope, AmlPciWriteStatus::ConfigUnavailable);
+					return false;
+				}
+				previous_register = register_address;
+			}
+			uint16 cached_register = 0xFFFFu;
+			uint32 register_value = 0;
+			bool dirty = false;
+			for (uint8 index = 0; index < byte_count; ++index) {
+				const uint16 byte_address = uint16(address + index);
+				const uint16 register_address = byte_address & 0xFFFCu;
+				if (register_address != cached_register) {
+					if (dirty) uni::PCI::write_config_register(location.segment, location.bus, location.device, location.function, cached_register, register_value);
+					register_value = uni::PCI::read_config_register(location.segment, location.bus, location.device, location.function, register_address);
+					cached_register = register_address;
+					dirty = false;
+				}
+				const uint8 shift = uint8((byte_address & 3u) * 8);
+				register_value = (register_value & ~(uint32(0xFFu) << shift)) | (uint32(uint8(value >> (index * 8))) << shift);
+				dirty = true;
+			}
+			if (dirty) uni::PCI::write_config_register(location.segment, location.bus, location.device, location.function, cached_register, register_value);
+			record_aml_pci_write(aml_namespace, region_object, region_scope, AmlPciWriteStatus::Success);
+			return true;
+		}
+
+		void record_aml_memory_read(const uni::AMLNamespace& aml_namespace, stduint region_object, AmlMemoryReadStatus status) {
+			const stduint index = stduint(status);
+			if (index >= stduint(AmlMemoryReadStatus::Count)) return;
+			if (!aml_memory_read_counts[index] && !aml_namespace.FormatPath(region_object, aml_memory_read_examples[index], sizeof(aml_memory_read_examples[index]))) copy_text(aml_memory_read_examples[index], sizeof(aml_memory_read_examples[index]), "<unknown>");
+			++aml_memory_read_counts[index];
+		}
+
+		bool ensure_aml_memory_page(stduint page_address) {
+			#if CONFIG_ENABLE_MMU
+			pageint page = page_address;
+			PageEntry* entry = kernel_paging.getEntry(page);
+			if (_IMM(entry) == ~_IMM0) {
+				if (page_address > ~stduint(0) - PAGE_SIZE || !Memory::MapPages(kernel_paging, page_address, page_address, PAGE_SIZE, PAGESIZE_4KB, PGPROP_present | PGTYPE_device | PGOPTS_omit_warnings)) return false;
+			}
+			return _IMM(kernel_paging[page_address]) == page_address;
+			#else
+			(void)page_address;
+			return true;
+			#endif
+		}
+
+		bool read_aml_memory_region(const uni::AMLNamespace& aml_namespace, stduint region_object, uint64 address, uint8 width, uint64& value) {
+			if ((width != 8 && width != 16 && width != 32 && width != 64) || address > uint64(~stduint(0)) || width / 8 > uint64(~stduint(0)) - address || (address & (width / 8 - 1))) {
+				record_aml_memory_read(aml_namespace, region_object, AmlMemoryReadStatus::InvalidAccess);
+				return false;
+			}
+			const stduint page_address = stduint(address) & ~stduint(PAGE_SIZE - 1);
+			if (!ensure_aml_memory_page(page_address)) {
+				record_aml_memory_read(aml_namespace, region_object, AmlMemoryReadStatus::MappingUnavailable);
+				return false;
+			}
+			const stduint mapped_address = stduint(address);
+			switch (width) {
+			case 8: value = *reinterpret_cast<const volatile uint8*>(mapped_address); break;
+			case 16: value = *reinterpret_cast<const volatile uint16*>(mapped_address); break;
+			case 32: value = *reinterpret_cast<const volatile uint32*>(mapped_address); break;
+			case 64:
+				#if defined(_ARC_x86)
+				value = uint64(*reinterpret_cast<const volatile uint32*>(mapped_address)) | (uint64(*reinterpret_cast<const volatile uint32*>(mapped_address + sizeof(uint32))) << 32);
+				#else
+				value = *reinterpret_cast<const volatile uint64*>(mapped_address);
+				#endif
+				break;
+			default: return false;
+			}
+			record_aml_memory_read(aml_namespace, region_object, AmlMemoryReadStatus::Success);
+			return true;
+		}
+
+		void record_aml_memory_write(const uni::AMLNamespace& aml_namespace, stduint region_object, stduint region_scope, AmlMemoryWriteStatus status) {
+			const stduint index = stduint(status);
+			if (index >= stduint(AmlMemoryWriteStatus::Count)) return;
+			if (!aml_memory_write_counts[index] && !aml_namespace.FormatPath(region_object, aml_memory_write_examples[index], sizeof(aml_memory_write_examples[index])) && !aml_namespace.FormatPath(region_scope, aml_memory_write_examples[index], sizeof(aml_memory_write_examples[index]))) copy_text(aml_memory_write_examples[index], sizeof(aml_memory_write_examples[index]), "<unknown>");
+			++aml_memory_write_counts[index];
+		}
+
+		bool write_aml_memory_region(const uni::AMLNamespace& aml_namespace, stduint region_object, stduint region_scope, uint64 address, uint8 width, uint64 value) {
+			if ((width != 8 && width != 16 && width != 32 && width != 64) || address > uint64(~stduint(0)) || width / 8 > uint64(~stduint(0)) - address || (address & (width / 8 - 1))) {
+				record_aml_memory_write(aml_namespace, region_object, region_scope, AmlMemoryWriteStatus::InvalidAccess);
+				return false;
+			}
+			const stduint page_address = stduint(address) & ~stduint(PAGE_SIZE - 1);
+			if (!ensure_aml_memory_page(page_address)) {
+				record_aml_memory_write(aml_namespace, region_object, region_scope, AmlMemoryWriteStatus::MappingUnavailable);
+				return false;
+			}
+			const stduint mapped_address = stduint(address);
+			switch (width) {
+			case 8: *reinterpret_cast<volatile uint8*>(mapped_address) = uint8(value); break;
+			case 16: *reinterpret_cast<volatile uint16*>(mapped_address) = uint16(value); break;
+			case 32: *reinterpret_cast<volatile uint32*>(mapped_address) = uint32(value); break;
+			case 64:
+				#if defined(_ARC_x86)
+				*reinterpret_cast<volatile uint32*>(mapped_address) = uint32(value);
+				*reinterpret_cast<volatile uint32*>(mapped_address + sizeof(uint32)) = uint32(value >> 32);
+				#else
+				*reinterpret_cast<volatile uint64*>(mapped_address) = value;
+				#endif
+				break;
+			default: return false;
+			}
+			record_aml_memory_write(aml_namespace, region_object, region_scope, AmlMemoryWriteStatus::Success);
+			return true;
+		}
+
+		void record_aml_io_read(const uni::AMLNamespace& aml_namespace, stduint region_object, stduint region_scope, AmlIoReadStatus status) {
+			const stduint index = stduint(status);
+			if (index >= stduint(AmlIoReadStatus::Count)) return;
+			if (!aml_io_read_counts[index] && !aml_namespace.FormatPath(region_object, aml_io_read_examples[index], sizeof(aml_io_read_examples[index])) && !aml_namespace.FormatPath(region_scope, aml_io_read_examples[index], sizeof(aml_io_read_examples[index]))) copy_text(aml_io_read_examples[index], sizeof(aml_io_read_examples[index]), "<unknown>");
+			++aml_io_read_counts[index];
+		}
+
+		bool read_aml_io_region(const uni::AMLNamespace& aml_namespace, stduint region_object, stduint region_scope, uint64 address, uint8 width, uint64& value) {
+			const uint8 byte_count = width / 8;
+			if ((width != 8 && width != 16 && width != 32 && width != 64) || address > 0xFFFFu || byte_count > 0x10000u - address) {
+				record_aml_io_read(aml_namespace, region_object, region_scope, AmlIoReadStatus::InvalidAccess);
+				return false;
+			}
+			const uint16 port = uint16(address);
+			switch (width) {
+			case 8: value = IN_b(port); break;
+			case 16: value = IN_w(port); break;
+			case 32: value = IN_d(port); break;
+			case 64: value = uint64(IN_d(port)) | (uint64(IN_d(uint16(port + sizeof(uint32)))) << 32); break;
+			default: return false;
+			}
+			record_aml_io_read(aml_namespace, region_object, region_scope, AmlIoReadStatus::Success);
+			return true;
+		}
+
+		void record_aml_io_write(const uni::AMLNamespace& aml_namespace, stduint region_object, stduint region_scope, AmlIoWriteStatus status) {
+			const stduint index = stduint(status);
+			if (index >= stduint(AmlIoWriteStatus::Count)) return;
+			if (!aml_io_write_counts[index] && !aml_namespace.FormatPath(region_object, aml_io_write_examples[index], sizeof(aml_io_write_examples[index])) && !aml_namespace.FormatPath(region_scope, aml_io_write_examples[index], sizeof(aml_io_write_examples[index]))) copy_text(aml_io_write_examples[index], sizeof(aml_io_write_examples[index]), "<unknown>");
+			++aml_io_write_counts[index];
+		}
+
+		bool write_aml_io_region(const uni::AMLNamespace& aml_namespace, stduint region_object, stduint region_scope, uint64 address, uint8 width, uint64 value) {
+			const uint8 byte_count = width / 8;
+			if ((width != 8 && width != 16 && width != 32 && width != 64) || address > 0xFFFFu || byte_count > 0x10000u - address) {
+				record_aml_io_write(aml_namespace, region_object, region_scope, AmlIoWriteStatus::InvalidAccess);
+				return false;
+			}
+			const uint16 port = uint16(address);
+			switch (width) {
+			case 8: OUT_b(port, uint8(value)); break;
+			case 16: OUT_w(port, uint16(value)); break;
+			case 32: OUT_d(port, uint32(value)); break;
+			case 64:
+				OUT_d(port, uint32(value));
+				OUT_d(uint16(port + sizeof(uint32)), uint32(value >> 32));
+				break;
+			default: return false;
+			}
+			record_aml_io_write(aml_namespace, region_object, region_scope, AmlIoWriteStatus::Success);
+			return true;
+		}
+
+		bool read_aml_region(void* context, const uni::AMLNamespace& aml_namespace, stduint region_object, stduint region_scope, uint8 space, uint64 address, uint8 width, uint64& value) {
+			if (space == 0x00) return read_aml_memory_region(aml_namespace, region_object, address, width, value);
+			if (space == 0x01) return read_aml_io_region(aml_namespace, region_object, region_scope, address, width, value);
+			if (space == 0x02) return read_aml_pci_region(context, aml_namespace, region_object, region_scope, space, address, width, value);
+			return false;
+		}
+
+		bool write_aml_region(void* context, const uni::AMLNamespace& aml_namespace, stduint region_object, stduint region_scope, uint8 space, uint64 address, uint8 width, uint64 value) {
+			if (space == 0x00) return write_aml_memory_region(aml_namespace, region_object, region_scope, address, width, value);
+			if (space == 0x01) return write_aml_io_region(aml_namespace, region_object, region_scope, address, width, value);
+			if (space == 0x02) return write_aml_pci_region(context, aml_namespace, region_object, region_scope, space, address, width, value);
+			return false;
 		}
 
 		bool aml_package_end(const uint8* length_at, const uint8* limit, const uint8*& content, const uint8*& package_end) {
@@ -843,7 +1192,183 @@ namespace Devs {
 			++acpi_serial_resource_count;
 		}
 
+		AcpiResourceRecord* append_acpi_resource(uint16 device_index, AcpiResourceType type) {
+			if (!acpi_resources || acpi_resource_count >= AcpiResourceCapacity) {
+				acpi_resource_truncated = true;
+				return nullptr;
+			}
+			auto& resource = acpi_resources[acpi_resource_count++];
+			resource = {};
+			resource.device_index = device_index;
+			resource.type = type;
+			return &resource;
+		}
+
+		void append_irq_resource(uint16 device_index, uint32 interrupt, uint32 flags) {
+			auto* resource = append_acpi_resource(device_index, AcpiResourceType::Irq);
+			if (!resource) return;
+			resource->value = interrupt;
+			resource->flags = flags;
+		}
+
+		void append_range_resource(uint16 device_index, AcpiResourceType type, uint8 width, uint32 flags, uint64 minimum, uint64 maximum, uint64 length, uint64 granularity = 0, uint64 translation = 0) {
+			auto* resource = append_acpi_resource(device_index, type);
+			if (!resource) return;
+			resource->minimum = minimum;
+			resource->maximum = maximum;
+			resource->length = length;
+			resource->granularity = granularity;
+			resource->translation = translation;
+			resource->flags = flags;
+			resource->width = width;
+		}
+
+		void append_address_resource(uint16 device_index, const uint8* descriptor, stduint descriptor_length, uint8 width) {
+			stduint value_offset = 0;
+			if (width == 16) value_offset = 6;
+			else if (width == 32) value_offset = 6;
+			else if (width == 64) value_offset = 6;
+			else return;
+			const stduint value_bytes = width / 8;
+			if (descriptor_length < value_offset + value_bytes * 5) {
+				report_acpi_malformed(AcpiMalformedKind::ResourceLength, descriptor);
+				return;
+			}
+			const uint8 resource_type = descriptor[3];
+			if (resource_type > 1) return;
+			uint64 granularity = 0;
+			uint64 minimum = 0;
+			uint64 maximum = 0;
+			uint64 translation = 0;
+			uint64 length = 0;
+			if (width == 16) {
+				granularity = read_le16(descriptor + 6);
+				minimum = read_le16(descriptor + 8);
+				maximum = read_le16(descriptor + 10);
+				translation = read_le16(descriptor + 12);
+				length = read_le16(descriptor + 14);
+			}
+			else if (width == 32) {
+				granularity = read_le32(descriptor + 6);
+				minimum = read_le32(descriptor + 10);
+				maximum = read_le32(descriptor + 14);
+				translation = read_le32(descriptor + 18);
+				length = read_le32(descriptor + 22);
+			}
+			else {
+				granularity = read_le64(descriptor + 6);
+				minimum = read_le64(descriptor + 14);
+				maximum = read_le64(descriptor + 22);
+				translation = read_le64(descriptor + 30);
+				length = read_le64(descriptor + 38);
+			}
+			const uint32 flags = uint32(descriptor[4]) | uint32(descriptor[5]) << 8;
+			append_range_resource(device_index, resource_type ? AcpiResourceType::IoPort : AcpiResourceType::Memory, width, flags, minimum, maximum, length, granularity, translation);
+		}
+
+		void append_extended_address_resource(uint16 device_index, const uint8* descriptor, stduint descriptor_length) {
+			if (descriptor_length < 56) {
+				report_acpi_malformed(AcpiMalformedKind::ResourceLength, descriptor);
+				return;
+			}
+			const uint8 resource_type = descriptor[3];
+			if (resource_type > 1) return;
+			const uint32 flags = uint32(descriptor[4]) | uint32(descriptor[5]) << 8;
+			append_range_resource(device_index, resource_type ? AcpiResourceType::IoPort : AcpiResourceType::Memory, 64, flags, read_le64(descriptor + 16), read_le64(descriptor + 24), read_le64(descriptor + 40), read_le64(descriptor + 8), read_le64(descriptor + 32));
+		}
+
+		void append_gpio_resources(uint16 device_index, const uint8* descriptor, stduint descriptor_length) {
+			if (descriptor_length < 25) {
+				report_acpi_malformed(AcpiMalformedKind::ResourceLength, descriptor);
+				return;
+			}
+			const uint8 connection_type = descriptor[4];
+			if (connection_type > 1) return;
+			const uint16 pin_offset = read_le16(descriptor + 14);
+			const uint16 source_offset = read_le16(descriptor + 17);
+			const uint16 vendor_offset = read_le16(descriptor + 19);
+			const stduint source_end = vendor_offset ? vendor_offset : descriptor_length;
+			if (pin_offset < 23 || source_offset < pin_offset || source_offset > descriptor_length || source_end < source_offset || source_end > descriptor_length || ((source_offset - pin_offset) & 1u)) {
+				report_acpi_malformed(AcpiMalformedKind::ResourceLength, descriptor);
+				return;
+			}
+			const uint32 flags = uint32(read_le16(descriptor + 5)) | uint32(read_le16(descriptor + 7)) << 16;
+			for (stduint pin = pin_offset; pin + 2 <= source_offset; pin += 2) {
+				auto* resource = append_acpi_resource(device_index, connection_type ? AcpiResourceType::GpioIo : AcpiResourceType::GpioInterrupt);
+				if (!resource) return;
+				resource->value = read_le16(descriptor + pin);
+				resource->flags = flags;
+				resource->width = descriptor[9];
+				copy_resource_source(resource->source, descriptor + source_offset, descriptor + source_end);
+			}
+		}
+
+		void append_large_resource(uint16 device_index, const uint8* descriptor, stduint descriptor_length) {
+			switch (descriptor[0] & 0x7Fu) {
+			case 0x01:
+				if (descriptor_length < 12) report_acpi_malformed(AcpiMalformedKind::ResourceLength, descriptor);
+				else {
+					const uint64 alignment = read_le16(descriptor + 8) ? uint64(read_le16(descriptor + 8)) << 8 : 0x10000;
+					append_range_resource(device_index, AcpiResourceType::Memory, 24, descriptor[3], uint64(read_le16(descriptor + 4)) << 8, uint64(read_le16(descriptor + 6)) << 8, uint64(read_le16(descriptor + 10)) << 8, alignment);
+				}
+				break;
+			case 0x05:
+				if (descriptor_length < 20) report_acpi_malformed(AcpiMalformedKind::ResourceLength, descriptor);
+				else append_range_resource(device_index, AcpiResourceType::Memory, 32, descriptor[3], read_le32(descriptor + 4), read_le32(descriptor + 8), read_le32(descriptor + 16), read_le32(descriptor + 12));
+				break;
+			case 0x06:
+				if (descriptor_length < 12) report_acpi_malformed(AcpiMalformedKind::ResourceLength, descriptor);
+				else {
+					const uint64 minimum = read_le32(descriptor + 4);
+					const uint64 length = read_le32(descriptor + 8);
+					const uint64 maximum = length && minimum <= ~uint64(0) - (length - 1) ? minimum + length - 1 : minimum;
+					append_range_resource(device_index, AcpiResourceType::Memory, 32, descriptor[3], minimum, maximum, length);
+				}
+				break;
+			case 0x07: append_address_resource(device_index, descriptor, descriptor_length, 32); break;
+			case 0x08: append_address_resource(device_index, descriptor, descriptor_length, 16); break;
+			case 0x09:
+				if (descriptor_length < 5 || descriptor_length < stduint(5u + descriptor[4] * 4u)) report_acpi_malformed(AcpiMalformedKind::ResourceLength, descriptor);
+				else for0(index, descriptor[4]) append_irq_resource(device_index, read_le32(descriptor + 5 + index * 4), descriptor[3]);
+				break;
+			case 0x0A: append_address_resource(device_index, descriptor, descriptor_length, 64); break;
+			case 0x0B: append_extended_address_resource(device_index, descriptor, descriptor_length); break;
+			case 0x0C: append_gpio_resources(device_index, descriptor, descriptor_length); break;
+			case 0x0E: append_serial_resource(device_index, descriptor, descriptor_length); break;
+			default: break;
+			}
+		}
+
+		void append_small_resource(uint16 device_index, const uint8* descriptor, stduint descriptor_length) {
+			const uint8 item_name = (descriptor[0] >> 3) & 0x0Fu;
+			if (item_name == 0x04) {
+				if (descriptor_length < 3) {
+					report_acpi_malformed(AcpiMalformedKind::ResourceLength, descriptor);
+					return;
+				}
+				const uint16 mask = read_le16(descriptor + 1);
+				const uint8 flags = descriptor_length >= 4 ? descriptor[3] : 1;
+				for0(interrupt, 16) if (mask & uint16(1u << interrupt)) append_irq_resource(device_index, uint32(interrupt), flags);
+			}
+			else if (item_name == 0x08) {
+				if (descriptor_length < 8) report_acpi_malformed(AcpiMalformedKind::ResourceLength, descriptor);
+				else append_range_resource(device_index, AcpiResourceType::IoPort, 16, descriptor[1], read_le16(descriptor + 2), read_le16(descriptor + 4), descriptor[7], descriptor[6]);
+			}
+			else if (item_name == 0x09) {
+				if (descriptor_length < 4) report_acpi_malformed(AcpiMalformedKind::ResourceLength, descriptor);
+				else {
+					const uint64 minimum = read_le16(descriptor + 1);
+					const uint64 length = descriptor[3];
+					append_range_resource(device_index, AcpiResourceType::IoPort, 16, 0, minimum, length ? minimum + length - 1 : minimum, length);
+				}
+			}
+		}
+
 		void parse_resource_template(uint16 device_index, const uint8* data, stduint length) {
+			if (!data) {
+				if (length) report_acpi_malformed(AcpiMalformedKind::ResourceHeader, data);
+				return;
+			}
 			const uint8* cursor = data;
 			const uint8* end = data + length;
 			while (cursor < end) {
@@ -858,9 +1383,7 @@ namespace Devs {
 						report_acpi_malformed(AcpiMalformedKind::ResourceLength, cursor);
 						return;
 					}
-					if (*cursor == 0x8E) {
-						append_serial_resource(device_index, cursor, descriptor_length);
-					}
+					append_large_resource(device_index, cursor, descriptor_length);
 					cursor += descriptor_length;
 					continue;
 				}
@@ -871,6 +1394,7 @@ namespace Devs {
 					return;
 				}
 				const uint8 item_name = (*cursor >> 3) & 0x0Fu;
+				append_small_resource(device_index, cursor, descriptor_length);
 				cursor += descriptor_length;
 				if (item_name == 0x0Fu) return;
 			}
@@ -927,14 +1451,7 @@ namespace Devs {
 				if (decode_aml_integer(cursor, end, device.adr)) device.has_adr = true;
 				return;
 			}
-			if (path_is_child_name(object_path, device_path, "_CRS")) {
-				const uint8* data = nullptr;
-				stduint length = 0;
-				if (decode_aml_buffer(value, end, data, length)) {
-					parse_resource_template(uint16(device_index), data, length);
-				}
-				else device.crs_dynamic = true;
-			}
+			if (path_is_child_name(object_path, device_path, "_CRS")) device.crs_dynamic = true;
 		}
 
 		void mark_dynamic_method(int device_index, const char* device_path, const char* method_path) {
@@ -948,66 +1465,6 @@ namespace Devs {
 			if (!body || body >= end || *body != 0xA4) return false;
 			const uint8* cursor = body + 1;
 			return decode_aml_integer(cursor, end, value);
-		}
-
-		bool decode_static_method_buffer(const uint8* body, const uint8* end, const uint8*& data, stduint& data_length) {
-			struct NamedBuffer {
-				char name[5];
-				const uint8* data;
-				stduint length;
-			};
-			NamedBuffer named_buffers[8] = {};
-			stduint named_buffer_count = 0;
-			const uint8* cursor = body;
-			while (cursor < end) {
-				if (*cursor == 0xA4) {
-					const uint8* value = cursor + 1;
-					if (decode_aml_buffer(value, end, data, data_length)) return true;
-					AcpiNamePath return_name = {};
-					if (parse_aml_name_path(value, end, return_name) &&
-						!return_name.rooted && !return_name.parent_count &&
-						return_name.segment_count == 1) {
-						for0(index, named_buffer_count) {
-							if (equal_text(named_buffers[index].name,
-								return_name.segments[0])) {
-								data = named_buffers[index].data;
-								data_length = named_buffers[index].length;
-								return true;
-							}
-						}
-					}
-					++cursor;
-					continue;
-				}
-				if (*cursor == 0x08) {
-					const uint8* value = cursor + 1;
-					AcpiNamePath name = {};
-					if (!parse_aml_name_path(value, end, name)) {
-						++cursor;
-						continue;
-					}
-					const uint8* buffer_data = nullptr;
-					stduint buffer_length = 0;
-					if (!name.rooted && !name.parent_count &&
-						name.segment_count == 1 &&
-						named_buffer_count < numsof(named_buffers) &&
-						decode_aml_buffer(value, end, buffer_data, buffer_length)) {
-						auto& named = named_buffers[named_buffer_count++];
-						copy_text(named.name, sizeof(named.name), name.segments[0]);
-						named.data = buffer_data;
-						named.length = buffer_length;
-					}
-					cursor = skip_aml_data_object(value, end);
-					continue;
-				}
-				if (*cursor == 0x11 || *cursor == 0x12 || *cursor == 0x13 ||
-					*cursor == 0x0D) {
-					cursor = skip_aml_data_object(cursor, end);
-					continue;
-				}
-				++cursor;
-			}
-			return false;
 		}
 
 		void apply_method_object(int device_index, const char* device_path, const char* method_path, const uint8* body, const uint8* end) {
@@ -1031,14 +1488,7 @@ namespace Devs {
 				}
 				return;
 			}
-			if (path_is_child_name(method_path, device_path, "_CRS")) {
-				const uint8* data = nullptr;
-				stduint data_length = 0;
-				device.crs_dynamic = true;
-				if (decode_static_method_buffer(body, end, data, data_length)) {
-					parse_resource_template(uint16(device_index), data, data_length);
-				}
-			}
+			if (path_is_child_name(method_path, device_path, "_CRS")) device.crs_dynamic = true;
 		}
 
 		const char* aml_namespace_status_name(uni::AMLNamespace::Status status) {
@@ -1070,6 +1520,9 @@ namespace Devs {
 			case uni::AMLExecutor::Status::InstructionLimit: return "instruction-limit";
 			case uni::AMLExecutor::Status::LoopLimit: return "loop-limit";
 			case uni::AMLExecutor::Status::ObjectValueCapacity: return "object-value-capacity";
+			case uni::AMLExecutor::Status::DynamicObjectCapacity: return "dynamic-object-capacity";
+			case uni::AMLExecutor::Status::MutexCapacity: return "mutex-capacity";
+			case uni::AMLExecutor::Status::BufferCapacity: return "buffer-capacity";
 			case uni::AMLExecutor::Status::NoReturn: return "no-return";
 			default: return "unknown";
 			}
@@ -1103,6 +1556,50 @@ namespace Devs {
 			}
 		}
 
+		const char* aml_pci_write_status_name(AmlPciWriteStatus status) {
+			switch (status) {
+			case AmlPciWriteStatus::Success: return "success";
+			case AmlPciWriteStatus::OwnerUnresolved: return "owner-unresolved";
+			case AmlPciWriteStatus::InvalidAccess: return "invalid-access";
+			case AmlPciWriteStatus::ConfigUnavailable: return "config-unavailable";
+			default: return "unknown";
+			}
+		}
+
+		const char* aml_memory_read_status_name(AmlMemoryReadStatus status) {
+			switch (status) {
+			case AmlMemoryReadStatus::Success: return "success";
+			case AmlMemoryReadStatus::InvalidAccess: return "invalid-access";
+			case AmlMemoryReadStatus::MappingUnavailable: return "mapping-unavailable";
+			default: return "unknown";
+			}
+		}
+
+		const char* aml_memory_write_status_name(AmlMemoryWriteStatus status) {
+			switch (status) {
+			case AmlMemoryWriteStatus::Success: return "success";
+			case AmlMemoryWriteStatus::InvalidAccess: return "invalid-access";
+			case AmlMemoryWriteStatus::MappingUnavailable: return "mapping-unavailable";
+			default: return "unknown";
+			}
+		}
+
+		const char* aml_io_read_status_name(AmlIoReadStatus status) {
+			switch (status) {
+			case AmlIoReadStatus::Success: return "success";
+			case AmlIoReadStatus::InvalidAccess: return "invalid-access";
+			default: return "unknown";
+			}
+		}
+
+		const char* aml_io_write_status_name(AmlIoWriteStatus status) {
+			switch (status) {
+			case AmlIoWriteStatus::Success: return "success";
+			case AmlIoWriteStatus::InvalidAccess: return "invalid-access";
+			default: return "unknown";
+			}
+		}
+
 		void record_aml_region(const uni::AMLNamespace& aml_namespace, const char* path, const uni::AMLExecutor::Error& error) {
 			const auto* field = aml_namespace.At(error.object);
 			if (!field || field->type != uni::AMLNamespace::ObjectType::FieldUnit) return;
@@ -1122,15 +1619,49 @@ namespace Devs {
 			++aml_region_summaries[index].count;
 		}
 
-		void record_aml_evaluation(const uni::AMLNamespace& aml_namespace, uni::AMLExecutor::Status status, const char* path, const uni::AMLExecutor::Error& error) {
+		const uint8* aml_table_end(const uint8* address) {
+			if (!address) return nullptr;
+			const stduint target = reinterpret_cast<stduint>(address);
+			for0(index, aml_table_count) {
+				if (!aml_tables[index].aml) continue;
+				const stduint begin = reinterpret_cast<stduint>(aml_tables[index].aml);
+				if (target < begin || target - begin >= aml_tables[index].length) continue;
+				return aml_tables[index].aml + aml_tables[index].length;
+			}
+			return nullptr;
+		}
+
+		bool format_aml_name(const uint8* address, char* output, stduint capacity) {
+			if (!output || !capacity) return false;
+			output[0] = 0;
+			const uint8* end = aml_table_end(address);
+			if (!end) return false;
+			const uint8* cursor = address;
+			uni::AMLBytecode::Name name = {};
+			if (!uni::AMLBytecode::DecodeName(cursor, end, name)) return false;
+			if (name.rooted) append_text(output, capacity, "\\");
+			for0(index, name.parent_count) append_text(output, capacity, "^");
+			for0(index, name.segment_count) {
+				if (index) append_text(output, capacity, ".");
+				append_text(output, capacity, name.segments[index]);
+			}
+			return true;
+		}
+
+		void record_aml_evaluation(const uni::AMLNamespace& aml_namespace, const char* object_name, uni::AMLExecutor::Status status, const char* path, const uni::AMLExecutor::Error& error) {
 			stduint index = 0;
-			while (index < aml_evaluation_summary_count && (aml_evaluation_summaries[index].status != status || aml_evaluation_summaries[index].opcode != error.opcode)) ++index;
+			while (index < aml_evaluation_summary_count && (!equal_text(aml_evaluation_summaries[index].object, object_name) || aml_evaluation_summaries[index].status != status || aml_evaluation_summaries[index].opcode != error.opcode)) ++index;
 			if (index >= aml_evaluation_summary_count) {
 				if (aml_evaluation_summary_count >= numsof(aml_evaluation_summaries)) return;
 				auto& summary = aml_evaluation_summaries[aml_evaluation_summary_count++];
+				copy_text(summary.object, sizeof(summary.object), object_name);
 				summary.status = status;
 				summary.opcode = error.opcode;
 				copy_text(summary.example, sizeof(summary.example), path);
+				if (status == uni::AMLExecutor::Status::NotFound && error.address) {
+					if (!aml_namespace.FormatPath(error.scope, summary.scope, sizeof(summary.scope))) copy_text(summary.scope, sizeof(summary.scope), "<unknown>");
+					if (!format_aml_name(error.address, summary.target, sizeof(summary.target))) copy_text(summary.target, sizeof(summary.target), "<unknown>");
+				}
 			}
 			++aml_evaluation_summaries[index].count;
 			if (status == uni::AMLExecutor::Status::RegionUnavailable) record_aml_region(aml_namespace, path, error);
@@ -1139,7 +1670,8 @@ namespace Devs {
 		void log_aml_evaluation_summaries() {
 			for0(index, aml_evaluation_summary_count) {
 				const auto& summary = aml_evaluation_summaries[index];
-				ploginfo("[ACPI-EVAL-SUM] object=_STA status=%s count=%u example=%s opcode=%[16H]", aml_execution_status_name(summary.status), summary.count, summary.example, summary.opcode);
+				ploginfo("[ACPI-EVAL-SUM] object=%s status=%s count=%u example=%s opcode=%[16H]", summary.object, aml_execution_status_name(summary.status), summary.count, summary.example, summary.opcode);
+				if (summary.status == uni::AMLExecutor::Status::NotFound && summary.target[0]) ploginfo("[ACPI-NAME-SUM] object=%s scope=%s target=%s count=%u example=%s", summary.object, summary.scope, summary.target, summary.count, summary.example);
 			}
 			for0(index, aml_region_summary_count) {
 				const auto& summary = aml_region_summaries[index];
@@ -1148,6 +1680,26 @@ namespace Devs {
 			for0(index, stduint(AmlPciReadStatus::Count)) {
 				if (!aml_pci_read_counts[index]) continue;
 				ploginfo("[ACPI-PCI-READ-SUM] status=%s count=%u example=%s", aml_pci_read_status_name(AmlPciReadStatus(index)), aml_pci_read_counts[index], aml_pci_read_examples[index]);
+			}
+			for0(index, stduint(AmlPciWriteStatus::Count)) {
+				if (!aml_pci_write_counts[index]) continue;
+				ploginfo("[ACPI-PCI-WRITE-SUM] status=%s count=%u example=%s", aml_pci_write_status_name(AmlPciWriteStatus(index)), aml_pci_write_counts[index], aml_pci_write_examples[index]);
+			}
+			for0(index, stduint(AmlMemoryReadStatus::Count)) {
+				if (!aml_memory_read_counts[index]) continue;
+				ploginfo("[ACPI-MEMORY-READ-SUM] status=%s count=%u example=%s", aml_memory_read_status_name(AmlMemoryReadStatus(index)), aml_memory_read_counts[index], aml_memory_read_examples[index]);
+			}
+			for0(index, stduint(AmlMemoryWriteStatus::Count)) {
+				if (!aml_memory_write_counts[index]) continue;
+				ploginfo("[ACPI-MEMORY-WRITE-SUM] status=%s count=%u example=%s", aml_memory_write_status_name(AmlMemoryWriteStatus(index)), aml_memory_write_counts[index], aml_memory_write_examples[index]);
+			}
+			for0(index, stduint(AmlIoReadStatus::Count)) {
+				if (!aml_io_read_counts[index]) continue;
+				ploginfo("[ACPI-IO-READ-SUM] status=%s count=%u example=%s", aml_io_read_status_name(AmlIoReadStatus(index)), aml_io_read_counts[index], aml_io_read_examples[index]);
+			}
+			for0(index, stduint(AmlIoWriteStatus::Count)) {
+				if (!aml_io_write_counts[index]) continue;
+				ploginfo("[ACPI-IO-WRITE-SUM] status=%s count=%u example=%s", aml_io_write_status_name(AmlIoWriteStatus(index)), aml_io_write_counts[index], aml_io_write_examples[index]);
 			}
 		}
 
@@ -1236,7 +1788,7 @@ namespace Devs {
 						if (sta_index == uni::AMLNamespace::InvalidIndex) continue;
 						uint64 sta = 0;
 						const auto status = aml_executor.EvaluateInteger(sta_index, sta);
-						record_aml_evaluation(aml_namespace, status, device_path, aml_executor.LastError());
+						record_aml_evaluation(aml_namespace, "_STA", status, device_path, aml_executor.LastError());
 						if (status == uni::AMLExecutor::Status::Success) {
 							device.sta = sta;
 							device.has_sta = true;
@@ -1256,6 +1808,35 @@ namespace Devs {
 			}
 		}
 
+		void evaluate_x86_acpi_device_resources(const uni::AMLNamespace& aml_namespace, uni::AMLExecutor& aml_executor) {
+			const char crs_name[5] = { '_', 'C', 'R', 'S', 0 };
+			for (stduint object_index = 1; object_index < aml_namespace.Count(); ++object_index) {
+				const auto* object = aml_namespace.At(object_index);
+				if (!object || object->type != uni::AMLNamespace::ObjectType::Device) continue;
+				char device_path[AcpiPathCapacity] = {};
+				if (!aml_namespace.FormatPath(object_index, device_path, sizeof(device_path))) continue;
+				const int device_index = find_acpi_device(device_path);
+				if (device_index < 0) continue;
+				auto& device = acpi_devices[device_index];
+				if (!device.crs_dynamic || device.conditional || device.sta_dynamic || (device.has_sta && !(device.sta & 1u))) continue;
+				const stduint crs_index = aml_namespace.FindChild(object_index, crs_name);
+				if (crs_index == uni::AMLNamespace::InvalidIndex) continue;
+				uni::AMLExecutor::Value value = {};
+				auto status = aml_executor.Evaluate(crs_index, value);
+				uni::AMLExecutor::Error error = aml_executor.LastError();
+				if (status == uni::AMLExecutor::Status::Success && (value.type != uni::AMLExecutor::ValueType::Buffer || (value.length && !value.data))) {
+					status = uni::AMLExecutor::Status::TypeMismatch;
+					error = {};
+					error.object = crs_index;
+					error.status = status;
+				}
+				record_aml_evaluation(aml_namespace, "_CRS", status, device_path, error);
+				if (status != uni::AMLExecutor::Status::Success) continue;
+				parse_resource_template(uint16(device_index), value.data, value.length);
+				device.crs_dynamic = false;
+			}
+		}
+
 		void collect_x86_acpi_devices(const uni::AMLNamespace& aml_namespace, uni::AMLExecutor& aml_executor) {
 			for (stduint object_index = 1; object_index < aml_namespace.Count(); ++object_index) {
 				const auto* object = aml_namespace.At(object_index);
@@ -1265,7 +1846,7 @@ namespace Devs {
 					report_acpi_malformed(AcpiMalformedKind::Path, object->value);
 					continue;
 				}
-				find_or_add_acpi_device(path, object->flags & uni::AMLNamespace::ObjectFlagConditional);
+				find_or_add_acpi_device(path, object->flags & uni::AMLNamespace::ObjectFlagConditional, object_index);
 			}
 
 			for (stduint object_index = 1; object_index < aml_namespace.Count(); ++object_index) {
@@ -1283,7 +1864,7 @@ namespace Devs {
 				const int device_index = find_acpi_device(device_path);
 				if (device_index < 0) continue;
 				if (object->flags & uni::AMLNamespace::ObjectFlagConditional) {
-					acpi_devices[device_index].conditional = true;
+					if (path_is_child_name(object_path, device_path, "_STA")) acpi_devices[device_index].sta_dynamic = true;
 					continue;
 				}
 				const uint8* value_end = object->value + object->value_length;
@@ -1294,6 +1875,326 @@ namespace Devs {
 				}
 			}
 			evaluate_x86_acpi_device_statuses(aml_namespace, aml_executor);
+			evaluate_x86_acpi_device_resources(aml_namespace, aml_executor);
+		}
+
+		void resolve_x86_acpi_serial_controllers(const uni::AMLNamespace& aml_namespace) {
+			for0(index, stduint(AcpiControllerLinkStatus::Count)) acpi_controller_link_counts[index] = 0;
+			for0(resource_index, acpi_serial_resource_count) {
+				auto& resource = acpi_serial_resources[resource_index];
+				resource.controller_device_index = InvalidAcpiDeviceIndex;
+				resource.pci_controller = nullptr;
+				AcpiControllerLinkStatus status = AcpiControllerLinkStatus::SourceMissing;
+				if (resource.controller[0] && !equal_text(resource.controller, "<none>")) {
+					uni::AMLBytecode::Name source = {};
+					if (!parse_acpi_resource_source(resource.controller, source)) status = AcpiControllerLinkStatus::MalformedSource;
+					else if (resource.device_index >= acpi_device_count) status = AcpiControllerLinkStatus::NamespaceMissing;
+					else {
+						stduint controller_object = aml_namespace.Find(acpi_devices[resource.device_index].namespace_object, source);
+						for0(depth, uni::AMLNamespace::MaximumDepth) {
+							const auto* object = aml_namespace.At(controller_object);
+							if (!object || object->type != uni::AMLNamespace::ObjectType::Alias || object->reference == uni::AMLNamespace::InvalidIndex) break;
+							controller_object = object->reference;
+						}
+						const auto* controller = aml_namespace.At(controller_object);
+						if (!controller || controller->type != uni::AMLNamespace::ObjectType::Device) status = AcpiControllerLinkStatus::NamespaceMissing;
+						else {
+							char controller_path[AcpiPathCapacity] = {};
+							const int controller_device_index = aml_namespace.FormatPath(controller_object, controller_path, sizeof(controller_path)) ? find_acpi_device(controller_path) : -1;
+							if (controller_device_index < 0) status = AcpiControllerLinkStatus::NamespaceMissing;
+							else {
+								resource.controller_device_index = uint16(controller_device_index);
+								if (!aml_scope_declares_pci_address(aml_namespace, controller_object)) status = AcpiControllerLinkStatus::AcpiOnly;
+								else {
+									AmlPciLocation location = {};
+									if (!resolve_aml_pci_scope(aml_namespace, controller_object, location)) status = AcpiControllerLinkStatus::PciUnresolved;
+									else if (!(resource.pci_controller = find_pci_device_node(location))) status = AcpiControllerLinkStatus::PciNodeMissing;
+									else status = AcpiControllerLinkStatus::Pci;
+								}
+							}
+						}
+					}
+				}
+				resource.controller_status = uint8(status);
+				++acpi_controller_link_counts[stduint(status)];
+			}
+		}
+
+		void log_acpi_controller_links() {
+			if (!acpi_serial_resource_count) return;
+			ploginfo("[ACPI-CONTROLLER-SUM] pci=%u acpi=%u source-missing=%u malformed=%u namespace-missing=%u pci-unresolved=%u pci-node-missing=%u",
+				acpi_controller_link_counts[stduint(AcpiControllerLinkStatus::Pci)], acpi_controller_link_counts[stduint(AcpiControllerLinkStatus::AcpiOnly)], acpi_controller_link_counts[stduint(AcpiControllerLinkStatus::SourceMissing)], acpi_controller_link_counts[stduint(AcpiControllerLinkStatus::MalformedSource)], acpi_controller_link_counts[stduint(AcpiControllerLinkStatus::NamespaceMissing)], acpi_controller_link_counts[stduint(AcpiControllerLinkStatus::PciUnresolved)], acpi_controller_link_counts[stduint(AcpiControllerLinkStatus::PciNodeMissing)]);
+		}
+
+		bool acpi_device_is_present(uint16 device_index) {
+			if (device_index >= acpi_device_count) return false;
+			const auto& device = acpi_devices[device_index];
+			return !device.conditional && !device.sta_dynamic && (!device.has_sta || (device.sta & 1u));
+		}
+
+		void release_acpi_info(DeviceAcpiInfo* info) {
+			if (!info) return;
+			delete[] info->serial_resources;
+			delete[] info->gpio_resources;
+			delete[] info->irq_resources;
+			delete[] info->range_resources;
+			delete info;
+		}
+
+		DeviceAcpiInfo* create_acpi_info(uint16 device_index) {
+			if (device_index >= acpi_device_count) return nullptr;
+			const auto& device = acpi_devices[device_index];
+			auto* info = new DeviceAcpiInfo{};
+			if (!info) return nullptr;
+			copy_text(info->path, sizeof(info->path), device.path);
+			copy_text(info->hardware_id, sizeof(info->hardware_id), device.hid);
+			copy_text(info->compatible_ids, sizeof(info->compatible_ids), device.cid);
+			copy_text(info->unique_id, sizeof(info->unique_id), device.uid);
+			info->status = device.has_sta ? device.sta : 0x0Fu;
+			info->address = device.adr;
+			if (device.has_hid) info->flags |= DeviceAcpiInfoFlag_HasHardwareId;
+			if (device.has_cid) info->flags |= DeviceAcpiInfoFlag_HasCompatibleId;
+			if (device.has_uid) info->flags |= DeviceAcpiInfoFlag_HasUniqueId;
+			if (device.has_sta) info->flags |= DeviceAcpiInfoFlag_HasStatus;
+			if (device.has_adr) info->flags |= DeviceAcpiInfoFlag_HasAddress;
+			if (device.conditional) info->flags |= DeviceAcpiInfoFlag_Conditional;
+			for0(index, acpi_serial_resource_count) {
+				if (acpi_serial_resources[index].device_index == device_index) ++info->serial_resource_count;
+			}
+			for0(index, acpi_resource_count) {
+				const auto& resource = acpi_resources[index];
+				if (resource.device_index != device_index) continue;
+				switch (resource.type) {
+				case AcpiResourceType::Irq: ++info->irq_resource_count; break;
+				case AcpiResourceType::GpioInterrupt:
+				case AcpiResourceType::GpioIo: ++info->gpio_resource_count; break;
+				case AcpiResourceType::Memory:
+				case AcpiResourceType::IoPort: ++info->range_resource_count; break;
+				default: break;
+				}
+			}
+			if (info->serial_resource_count) info->serial_resources = new DeviceAcpiSerialResource[info->serial_resource_count]{};
+			if (info->gpio_resource_count) info->gpio_resources = new DeviceAcpiGpioResource[info->gpio_resource_count]{};
+			if (info->irq_resource_count) info->irq_resources = new DeviceAcpiIrqResource[info->irq_resource_count]{};
+			if (info->range_resource_count) info->range_resources = new DeviceAcpiRangeResource[info->range_resource_count]{};
+			if ((info->serial_resource_count && !info->serial_resources) || (info->gpio_resource_count && !info->gpio_resources) || (info->irq_resource_count && !info->irq_resources) || (info->range_resource_count && !info->range_resources)) {
+				release_acpi_info(info);
+				return nullptr;
+			}
+			uint16 serial_index = 0;
+			uint16 gpio_index = 0;
+			uint16 irq_index = 0;
+			uint16 range_index = 0;
+			for0(index, acpi_serial_resource_count) {
+				const auto& source = acpi_serial_resources[index];
+				if (source.device_index != device_index) continue;
+				auto& target = info->serial_resources[serial_index++];
+				copy_text(target.controller_path, sizeof(target.controller_path), source.controller);
+				target.speed = source.speed;
+				target.address = source.address;
+				target.receive_fifo = source.receive_fifo;
+				target.transmit_fifo = source.transmit_fifo;
+				target.type_flags = source.type_flags;
+				target.bus_type = DeviceAcpiSerialBusType(source.bus_type);
+				target.general_flags = source.general_flags;
+				target.data_bits = source.data_bits;
+				target.clock_phase = source.clock_phase;
+				target.clock_polarity = source.clock_polarity;
+				target.parity = source.parity;
+				target.lines_enabled = source.lines_enabled;
+			}
+			for0(index, acpi_resource_count) {
+				const auto& source = acpi_resources[index];
+				if (source.device_index != device_index) continue;
+				switch (source.type) {
+				case AcpiResourceType::Irq: {
+					auto& target = info->irq_resources[irq_index++];
+					target.interrupt = source.value;
+					target.flags = source.flags;
+					break;
+				}
+				case AcpiResourceType::GpioInterrupt:
+				case AcpiResourceType::GpioIo: {
+					auto& target = info->gpio_resources[gpio_index++];
+					copy_text(target.controller_path, sizeof(target.controller_path), source.source);
+					target.pin = source.value;
+					target.flags = source.flags;
+					target.type = source.type == AcpiResourceType::GpioInterrupt ? DeviceAcpiGpioType::Interrupt : DeviceAcpiGpioType::Io;
+					target.pin_config = source.width;
+					break;
+				}
+				case AcpiResourceType::Memory:
+				case AcpiResourceType::IoPort: {
+					auto& target = info->range_resources[range_index++];
+					target.minimum = source.minimum;
+					target.maximum = source.maximum;
+					target.length = source.length;
+					target.granularity = source.granularity;
+					target.translation = source.translation;
+					target.flags = source.flags;
+					target.type = source.type == AcpiResourceType::Memory ? DeviceAcpiRangeType::Memory : DeviceAcpiRangeType::IoPort;
+					target.width = source.width;
+					break;
+				}
+				default: break;
+				}
+			}
+			return info;
+		}
+
+		bool attach_acpi_info(DeviceNode* node, uint16 device_index) {
+			if (!node) return false;
+			if (node->fields.acpi_info) return true;
+			node->fields.acpi_info = create_acpi_info(device_index);
+			return node->fields.acpi_info != nullptr;
+		}
+
+		void format_acpi_node_name(char* destination, stduint capacity, const char* prefix, uint64 value, bool hexadecimal) {
+			if (!destination || !capacity) return;
+			destination[0] = 0;
+			append_text(destination, capacity, prefix);
+			if (hexadecimal) append_hex(destination, capacity, value);
+			else append_decimal(destination, capacity, value);
+		}
+
+		bool serial_node_types(uint8 serial_type, DeviceBusType& bus_type, DeviceNodeType& bus_node_type, DeviceNodeType& endpoint_node_type, const char*& bus_name, const char*& endpoint_name) {
+			switch (AcpiSerialBusType(serial_type)) {
+			case AcpiSerialBusType::I2C:
+				bus_type = DeviceBusType::I2C;
+				bus_node_type = DeviceNodeType::I2cBus;
+				endpoint_node_type = DeviceNodeType::I2cDevice;
+				bus_name = "i2c-bus@";
+				endpoint_name = "i2c-dev@";
+				return true;
+			case AcpiSerialBusType::SPI:
+				bus_type = DeviceBusType::SPI;
+				bus_node_type = DeviceNodeType::SpiBus;
+				endpoint_node_type = DeviceNodeType::SpiDevice;
+				bus_name = "spi-bus@";
+				endpoint_name = "spi-dev@";
+				return true;
+			case AcpiSerialBusType::UART:
+				bus_type = DeviceBusType::UART;
+				bus_node_type = DeviceNodeType::UartBus;
+				endpoint_node_type = DeviceNodeType::UartDevice;
+				bus_name = "uart-bus@";
+				endpoint_name = "uart-dev@";
+				return true;
+			default:
+				return false;
+			}
+		}
+
+		DeviceNode* ensure_acpi_controller_node(const AcpiSerialResourceRecord& resource, bool& first_link, bool& platform_controller) {
+			first_link = false;
+			platform_controller = false;
+			if (resource.controller_device_index >= acpi_device_count) return nullptr;
+			const uint16 device_index = resource.controller_device_index;
+			if (acpi_controller_nodes[device_index]) return acpi_controller_nodes[device_index];
+			DeviceNode* controller = nullptr;
+			const auto status = AcpiControllerLinkStatus(resource.controller_status);
+			if (status == AcpiControllerLinkStatus::Pci) controller = resource.pci_controller;
+			else if (status == AcpiControllerLinkStatus::AcpiOnly) {
+				char name[48] = {};
+				format_acpi_node_name(name, sizeof(name), "acpi-controller@", device_index, false);
+				auto* root = get_bus_root(DeviceBusType::Platform);
+				controller = find_named_child(root, DeviceNodeType::PlatformDevice, name);
+				if (!controller) controller = append_plain_device(root, DeviceNodeType::PlatformDevice, DeviceBusType::Platform, StrHeap(name));
+				platform_controller = true;
+			}
+			if (!controller || !attach_acpi_info(controller, device_index)) return nullptr;
+			acpi_controller_nodes[device_index] = controller;
+			first_link = true;
+			return controller;
+		}
+
+		DeviceNode* ensure_acpi_serial_bus(const AcpiSerialResourceRecord& resource, DeviceNode* controller, bool& created) {
+			created = false;
+			DeviceBusType bus_type = DeviceBusType::None;
+			DeviceNodeType bus_node_type = DeviceNodeType::BusRoot;
+			DeviceNodeType endpoint_node_type = DeviceNodeType::BusRoot;
+			const char* bus_prefix = nullptr;
+			const char* endpoint_prefix = nullptr;
+			if (!serial_node_types(resource.bus_type, bus_type, bus_node_type, endpoint_node_type, bus_prefix, endpoint_prefix)) return nullptr;
+			char name[48] = {};
+			format_acpi_node_name(name, sizeof(name), bus_prefix, resource.controller_device_index, false);
+			auto* root = get_bus_root(bus_type);
+			auto* bus = find_named_child(root, bus_node_type, name);
+			if (!bus) {
+				bus = append_plain_device(root, bus_node_type, bus_type, StrHeap(name));
+				created = bus != nullptr;
+			}
+			if (bus) bus->fields.controller = controller;
+			return bus;
+		}
+
+		DeviceNode* ensure_acpi_endpoint_node(const AcpiSerialResourceRecord& resource, DeviceNode* bus, bool& created) {
+			created = false;
+			if (!bus || resource.device_index >= acpi_device_count) return nullptr;
+			if (acpi_endpoint_nodes[resource.device_index]) return acpi_endpoint_nodes[resource.device_index];
+			DeviceBusType bus_type = DeviceBusType::None;
+			DeviceNodeType bus_node_type = DeviceNodeType::BusRoot;
+			DeviceNodeType endpoint_node_type = DeviceNodeType::BusRoot;
+			const char* bus_prefix = nullptr;
+			const char* endpoint_prefix = nullptr;
+			if (!serial_node_types(resource.bus_type, bus_type, bus_node_type, endpoint_node_type, bus_prefix, endpoint_prefix)) return nullptr;
+			const uint64 unit_address = AcpiSerialBusType(resource.bus_type) == AcpiSerialBusType::UART ? resource.device_index : resource.address;
+			char name[48] = {};
+			format_acpi_node_name(name, sizeof(name), endpoint_prefix, unit_address, AcpiSerialBusType(resource.bus_type) != AcpiSerialBusType::UART);
+			auto* endpoint = find_named_child(bus, endpoint_node_type, name);
+			if (!endpoint) {
+				endpoint = append_plain_device(bus, endpoint_node_type, bus_type, StrHeap(name));
+				created = endpoint != nullptr;
+			}
+			if (!endpoint || !attach_acpi_info(endpoint, resource.device_index)) return nullptr;
+			acpi_endpoint_nodes[resource.device_index] = endpoint;
+			return endpoint;
+		}
+
+		void materialize_x86_acpi_serial_devices() {
+			for0(index, AcpiDeviceCapacity) {
+				acpi_controller_nodes[index] = nullptr;
+				acpi_endpoint_nodes[index] = nullptr;
+			}
+			stduint pci_controller_count = 0;
+			stduint platform_controller_count = 0;
+			stduint bus_count = 0;
+			stduint endpoint_count = 0;
+			stduint skipped_count = 0;
+			for0(index, acpi_serial_resource_count) {
+				const auto& resource = acpi_serial_resources[index];
+				const auto status = AcpiControllerLinkStatus(resource.controller_status);
+				if (!acpi_device_is_present(resource.device_index) || !acpi_device_is_present(resource.controller_device_index) || (status != AcpiControllerLinkStatus::Pci && status != AcpiControllerLinkStatus::AcpiOnly)) {
+					++skipped_count;
+					continue;
+				}
+				if (acpi_endpoint_nodes[resource.device_index]) continue;
+				bool first_controller_link = false;
+				bool platform_controller = false;
+				auto* controller = ensure_acpi_controller_node(resource, first_controller_link, platform_controller);
+				if (!controller) {
+					++skipped_count;
+					continue;
+				}
+				if (first_controller_link) {
+					if (platform_controller) ++platform_controller_count;
+					else ++pci_controller_count;
+				}
+				bool bus_created = false;
+				auto* bus = ensure_acpi_serial_bus(resource, controller, bus_created);
+				if (!bus) {
+					++skipped_count;
+					continue;
+				}
+				if (bus_created) ++bus_count;
+				bool endpoint_created = false;
+				if (!ensure_acpi_endpoint_node(resource, bus, endpoint_created)) {
+					++skipped_count;
+					continue;
+				}
+				if (endpoint_created) ++endpoint_count;
+			}
+			if (acpi_serial_resource_count) ploginfo("[ACPI-NODE-SUM] pci-controller=%u platform-controller=%u bus=%u endpoint=%u skipped=%u", pci_controller_count, platform_controller_count, bus_count, endpoint_count, skipped_count);
 		}
 
 		void log_acpi_device(const AcpiDeviceRecord& device) {
@@ -1486,8 +2387,11 @@ namespace Devs {
 	}
 
 	void discover_x86_acpi_devices() {
+		if (acpi_resources) delete[] acpi_resources;
+		acpi_resources = new AcpiResourceRecord[AcpiResourceCapacity];
 		acpi_device_count = 0;
 		acpi_serial_resource_count = 0;
+		acpi_resource_count = 0;
 		acpi_conditional_block_count = 0;
 		acpi_parent_absent_count = 0;
 		acpi_parent_unknown_count = 0;
@@ -1499,6 +2403,7 @@ namespace Devs {
 		acpi_malformed_record_count = 0;
 		acpi_device_truncated = false;
 		acpi_serial_resource_truncated = false;
+		acpi_resource_truncated = !acpi_resources;
 		for0(index, aml_evaluation_summary_count) aml_evaluation_summaries[index] = {};
 		aml_evaluation_summary_count = 0;
 		for0(index, aml_region_summary_count) aml_region_summaries[index] = {};
@@ -1507,14 +2412,36 @@ namespace Devs {
 			aml_pci_read_counts[index] = 0;
 			aml_pci_read_examples[index][0] = 0;
 		}
+		for0(index, stduint(AmlPciWriteStatus::Count)) {
+			aml_pci_write_counts[index] = 0;
+			aml_pci_write_examples[index][0] = 0;
+		}
+		for0(index, stduint(AmlMemoryReadStatus::Count)) {
+			aml_memory_read_counts[index] = 0;
+			aml_memory_read_examples[index][0] = 0;
+		}
+		for0(index, stduint(AmlMemoryWriteStatus::Count)) {
+			aml_memory_write_counts[index] = 0;
+			aml_memory_write_examples[index][0] = 0;
+		}
+		for0(index, stduint(AmlIoReadStatus::Count)) {
+			aml_io_read_counts[index] = 0;
+			aml_io_read_examples[index][0] = 0;
+		}
+		for0(index, stduint(AmlIoWriteStatus::Count)) {
+			aml_io_write_counts[index] = 0;
+			aml_io_write_examples[index][0] = 0;
+		}
 		collect_x86_aml_tables();
 		uni::AMLNamespace aml_namespace(aml_namespace_objects, numsof(aml_namespace_objects));
 		load_x86_aml_namespace(aml_namespace);
-		const uni::AMLExecutor::Workspace aml_workspace = { aml_execution_frames, numsof(aml_execution_frames), aml_object_values, numsof(aml_object_values), { nullptr, read_aml_pci_region } };
+		uint8* aml_buffer_storage = new uint8[AmlBufferCapacity];
+		const uni::AMLExecutor::Workspace aml_workspace = { aml_execution_frames, numsof(aml_execution_frames), aml_object_values, numsof(aml_object_values), { nullptr, read_aml_region, write_aml_region }, aml_dynamic_objects, numsof(aml_dynamic_objects), aml_mutex_states, numsof(aml_mutex_states), aml_buffer_storage, aml_buffer_storage ? AmlBufferCapacity : 0 };
 		const uni::AMLExecutor::Limits aml_limits = { 4096, 256 };
 		uni::AMLExecutor aml_executor(aml_namespace, aml_workspace, aml_limits);
 		acpi_conditional_block_count = aml_namespace.ConditionalCount();
 		collect_x86_acpi_devices(aml_namespace, aml_executor);
+		resolve_x86_acpi_serial_controllers(aml_namespace);
 		stduint i2c_count = 0;
 		stduint spi_count = 0;
 		stduint uart_count = 0;
@@ -1522,6 +2449,7 @@ namespace Devs {
 		stduint present_count = 0;
 		stduint absent_count = 0;
 		stduint unknown_count = 0;
+		stduint resource_counts[stduint(AcpiResourceType::Count)] = {};
 		for0(index, acpi_device_count) {
 			const auto& device = acpi_devices[index];
 			if (device.conditional || device.sta_dynamic) ++unknown_count;
@@ -1536,13 +2464,17 @@ namespace Devs {
 			default: ++other_serial_count; break;
 			}
 		}
+		for0(index, acpi_resource_count) ++resource_counts[stduint(acpi_resources[index].type)];
 		ploginfo("[ACPI-ENUM] mode=namespace bits=%u tables=%u objects=%u devices=%u present=%u absent=%u unknown=%u serial=%u i2c=%u spi=%u uart=%u other=%u conditional=%u malformed=%u truncated=%u",
 			stduint(sizeof(stduint) * 8), aml_table_count,
 			aml_namespace.Count(), acpi_device_count, present_count, absent_count, unknown_count,
 			acpi_serial_resource_count,
 			i2c_count, spi_count, uart_count, other_serial_count,
 			acpi_conditional_block_count, acpi_malformed_count,
-			stduint(acpi_device_truncated || acpi_serial_resource_truncated || aml_namespace.Truncated()));
+			stduint(acpi_device_truncated || acpi_serial_resource_truncated || acpi_resource_truncated || aml_namespace.Truncated()));
+		ploginfo("[ACPI-RESOURCE-SUM] irq=%u gpio-int=%u gpio-io=%u memory=%u io=%u total=%u truncated=%u", resource_counts[stduint(AcpiResourceType::Irq)], resource_counts[stduint(AcpiResourceType::GpioInterrupt)], resource_counts[stduint(AcpiResourceType::GpioIo)], resource_counts[stduint(AcpiResourceType::Memory)], resource_counts[stduint(AcpiResourceType::IoPort)], acpi_resource_count, stduint(acpi_resource_truncated));
+		log_acpi_controller_links();
+		materialize_x86_acpi_serial_devices();
 		if (acpi_parent_absent_count || acpi_parent_unknown_count || acpi_pci_absent_count) ploginfo("[ACPI-PARENT-SUM] absent=%u unknown=%u pci-absent=%u", acpi_parent_absent_count, acpi_parent_unknown_count, acpi_pci_absent_count);
 		log_acpi_malformed_records();
 		log_aml_evaluation_summaries();
@@ -1557,6 +2489,7 @@ namespace Devs {
 			}
 			log_acpi_serial_resource(acpi_serial_resources[index]);
 		}
+		delete[] aml_buffer_storage;
 	}
 
 }

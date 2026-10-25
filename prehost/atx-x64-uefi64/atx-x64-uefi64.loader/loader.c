@@ -425,6 +425,20 @@ _ESYM_C EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image_handle, EFI_SYSTEM_TABLE* Sy
 
 	Print(L"Kernel entry address: 0x%0lx\n", entry_addr);
 
+	// Prefer the ACPI 2.0 root pointer so the kernel can use XSDT.
+	VOID* acpi_table = NULL;
+	for0 (i, SystemTable->NumberOfTableEntries) {
+		if (CompareGuid(&gEfiAcpi20TableGuid,
+			&SystemTable->ConfigurationTable[i].VendorGuid)) {
+			acpi_table = SystemTable->ConfigurationTable[i].VendorTable;
+			break;
+		}
+		if (!acpi_table && CompareGuid(&gEfiAcpiTableGuid,
+			&SystemTable->ConfigurationTable[i].VendorGuid)) {
+			acpi_table = SystemTable->ConfigurationTable[i].VendorTable;
+		}
+	}
+
 	_Comment(exit bs) {
 		EFI_STATUS status;
 		status = gBS->ExitBootServices(image_handle, memmap.map_key);
@@ -433,16 +447,6 @@ _ESYM_C EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image_handle, EFI_SYSTEM_TABLE* Sy
 			expect(status, L"Failed to get memory map");
 			status = gBS->ExitBootServices(image_handle, memmap.map_key);
 			expect(status, L"Could not exit boot service");
-		}
-	}
-
-	// get acpi table for init LAPIC Timer
-	VOID* acpi_table = NULL;
-	for0 (i, SystemTable->NumberOfTableEntries) {
-		if (CompareGuid(&gEfiAcpiTableGuid,
-			&SystemTable->ConfigurationTable[i].VendorGuid)) {
-			acpi_table = SystemTable->ConfigurationTable[i].VendorTable;
-			break;
 		}
 	}
 

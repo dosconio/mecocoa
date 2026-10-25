@@ -56,6 +56,12 @@ enum class DeviceNodeType : uint16 {
 	PlatformDevice,
 	SerioController,
 	SerioDevice,
+	I2cBus,
+	I2cDevice,
+	SpiBus,
+	SpiDevice,
+	UartBus,
+	UartDevice,
 };
 
 enum class DeviceBusType : uint16 {
@@ -68,6 +74,8 @@ enum class DeviceBusType : uint16 {
 	SPI,
 	Serio,
 	Virtio,
+	UART,
+	Count,
 };
 
 enum class DeviceResourceType : uint16 {
@@ -94,6 +102,9 @@ enum DeviceResourceFlags : uint16 {
 
 constexpr uint16 DeviceNodeInlineResourceCapacity = 8;
 constexpr stduint DeviceAliasNameCapacity = 64;
+constexpr stduint DeviceAcpiPathCapacity = 160;
+constexpr stduint DeviceAcpiIdCapacity = 48;
+constexpr stduint DeviceAcpiUidCapacity = 32;
 
 struct DeviceResource {
 	uint16 type;
@@ -102,6 +113,92 @@ struct DeviceResource {
 	uint64 start;
 	uint64 length;
 	uint64 extra;
+};
+
+enum DeviceAcpiInfoFlags : uint32 {
+	DeviceAcpiInfoFlag_None = 0,
+	DeviceAcpiInfoFlag_HasHardwareId = 1 << 0,
+	DeviceAcpiInfoFlag_HasCompatibleId = 1 << 1,
+	DeviceAcpiInfoFlag_HasUniqueId = 1 << 2,
+	DeviceAcpiInfoFlag_HasStatus = 1 << 3,
+	DeviceAcpiInfoFlag_HasAddress = 1 << 4,
+	DeviceAcpiInfoFlag_Conditional = 1 << 5,
+};
+
+enum class DeviceAcpiSerialBusType : uint8 {
+	I2C = 1,
+	SPI = 2,
+	UART = 3,
+	CSI2 = 4,
+};
+
+enum class DeviceAcpiGpioType : uint8 {
+	Interrupt,
+	Io,
+};
+
+enum class DeviceAcpiRangeType : uint8 {
+	Memory,
+	IoPort,
+};
+
+struct DeviceAcpiSerialResource {
+	char controller_path[DeviceAcpiPathCapacity];
+	uint32 speed;
+	uint16 address;
+	uint16 receive_fifo;
+	uint16 transmit_fifo;
+	uint16 type_flags;
+	DeviceAcpiSerialBusType bus_type;
+	uint8 general_flags;
+	uint8 data_bits;
+	uint8 clock_phase;
+	uint8 clock_polarity;
+	uint8 parity;
+	uint8 lines_enabled;
+};
+
+struct DeviceAcpiGpioResource {
+	char controller_path[DeviceAcpiPathCapacity];
+	uint32 pin;
+	uint32 flags;
+	DeviceAcpiGpioType type;
+	uint8 pin_config;
+};
+
+struct DeviceAcpiIrqResource {
+	uint32 interrupt;
+	uint32 flags;
+};
+
+struct DeviceAcpiRangeResource {
+	uint64 minimum;
+	uint64 maximum;
+	uint64 length;
+	uint64 granularity;
+	uint64 translation;
+	uint32 flags;
+	DeviceAcpiRangeType type;
+	uint8 width;
+};
+
+struct DeviceAcpiInfo {
+	char path[DeviceAcpiPathCapacity];
+	char hardware_id[DeviceAcpiIdCapacity];
+	char compatible_ids[DeviceAcpiIdCapacity];
+	char unique_id[DeviceAcpiUidCapacity];
+	uint64 status;
+	uint64 address;
+	uint32 flags;
+	uint16 serial_resource_count;
+	uint16 gpio_resource_count;
+	uint16 irq_resource_count;
+	uint16 range_resource_count;
+	// These arrays are owned together with this heap-allocated record.
+	DeviceAcpiSerialResource* serial_resources;
+	DeviceAcpiGpioResource* gpio_resources;
+	DeviceAcpiIrqResource* irq_resources;
+	DeviceAcpiRangeResource* range_resources;
 };
 
 enum class DriverBindingState : uint32 {
@@ -150,6 +247,9 @@ struct DevExt {
 	const char* dev_alias;
 
 	void* acpi_handle;
+	DeviceAcpiInfo* acpi_info;
+	// Bus nodes reference their physical controller without owning it.
+	DeviceNode* controller;
 	DriverBinding binding;
 };
 

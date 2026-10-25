@@ -1604,8 +1604,8 @@ static_assert(offsetof(CallgateFrame, sp0) == 120, "x64 syscall stack pointer of
 static_assert(offsetof(CallgateFrame, return_to_ring1) == 128, "x64 syscall return flag offset changed");
 static_assert(offsetof(CallgateFrame, caller_cr3) == 136, "x64 syscall CR3 offset changed");
 static_assert(sizeof(CallgateFrame) == 144, "x64 syscall frame size changed");
-extern "C" const stduint x64_syscall_ring1_cs = SegCoR1 | RING_S;
-extern "C" const stduint x64_syscall_ring1_ss = SegDaR1 | RING_S;
+extern "C" const stduint x64_syscall_ring1_cs = _IMM(SegCoR1) | _IMM(RING_S);
+extern "C" const stduint x64_syscall_ring1_ss = _IMM(SegDaR1) | _IMM(RING_S);
 #endif
 
 

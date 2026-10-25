@@ -49,7 +49,7 @@ namespace Devs {
 	extern bool pci_devices_attached;
 
 	DeviceNode* legacy_isa_bus = nullptr;
-	DeviceNode* bus_roots[9]{};
+	DeviceNode* bus_roots[static_cast<stduint>(DeviceBusType::Count)]{};
 	
 
 	struct NamedDriverMatchEntry {
@@ -400,6 +400,7 @@ namespace Devs {
 		case DeviceBusType::SPI:      return "spi-root";
 		case DeviceBusType::Serio:    return "serio-root";
 		case DeviceBusType::Virtio:   return "virtio-root";
+		case DeviceBusType::UART:     return "uart-root";
 		default:                      return "bus-root";
 		}
 	}
@@ -460,10 +461,18 @@ namespace Devs {
 			auto* text = const_cast<char*>(node->fields.dev_alias);
 			mfree(text);
 		}
+		if (node->fields.acpi_info) {
+			delete[] node->fields.acpi_info->serial_resources;
+			delete[] node->fields.acpi_info->gpio_resources;
+			delete[] node->fields.acpi_info->irq_resources;
+			delete[] node->fields.acpi_info->range_resources;
+			delete node->fields.acpi_info;
+		}
 		node->fields.text_manufacturer = nullptr;
 		node->fields.text_product = nullptr;
 		node->fields.text_serial = nullptr;
 		node->fields.dev_alias = nullptr;
+		node->fields.acpi_info = nullptr;
 		NnodeHeapFreeSimple(inp);
 	}
 
@@ -787,6 +796,7 @@ namespace Devs {
 		create_bus_root(DeviceBusType::SPI);
 		create_bus_root(DeviceBusType::Serio);
 		create_bus_root(DeviceBusType::Virtio);
+		create_bus_root(DeviceBusType::UART);
 		primary_pci_bus = create_pci_bus_node(0, 0);
 
 		ploginfo("[DEVSMAN] Device tree root ready");
@@ -2931,7 +2941,7 @@ namespace {
 				files_seen++;
 				const char* driver_name = SelectRingDriver(entries[i].name);
 				if (!driver_name) {
-					ploginfo("[Devsman] driver skipped (no matching device or policy): %s",
+					plogtrac("[Devsman] driver skipped (no matching device or policy): %s",
 						entries[i].name);
 					continue;
 				}

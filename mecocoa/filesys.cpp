@@ -402,6 +402,12 @@ namespace uni {
 		case DeviceNodeType::PlatformDevice: return "PlatformDevice";
 		case DeviceNodeType::SerioController: return "SerioController";
 		case DeviceNodeType::SerioDevice: return "SerioDevice";
+		case DeviceNodeType::I2cBus: return "I2cBus";
+		case DeviceNodeType::I2cDevice: return "I2cDevice";
+		case DeviceNodeType::SpiBus: return "SpiBus";
+		case DeviceNodeType::SpiDevice: return "SpiDevice";
+		case DeviceNodeType::UartBus: return "UartBus";
+		case DeviceNodeType::UartDevice: return "UartDevice";
 		default: return "Unknown";
 		}
 	}

@@ -58,6 +58,7 @@ cppfile=\
 	$(ulibpath)/cpp/Device/ACPI/AML-Execute.cpp \
 	$(ulibpath)/cpp/Device/Cache.cpp \
 	$(ulibpath)/cpp/Device/Bus/PCI.cpp \
+	$(ulibpath)/cpp/Device/Bus/Serial/IIC-DesignWare.cpp \
 	$(ulibpath)/cpp/Device/Bus/ISA.cpp \
 	$(ulibpath)/cpp/Device/Keyboard.cpp \
 	$(ulibpath)/cpp/Device/DMA.cpp \
@@ -186,7 +187,7 @@ build_iso:
 	cd $(ubinpath) && sudo -S grub-mkrescue -o mcca.iso mecocoa
 
 edkdir=/home/$(USER)/soft/edk2
-$(loader): prehost/$(arch)/$(arch).loader/loader.c
+$(loader): prehost/$(arch)/$(arch).loader/loader.c prehost/$(arch)/$(arch).loader/loader-graph.h prehost/$(arch)/$(arch).loader/Loader.inf prehost/$(arch)/$(arch).loader.cfg
 	@echo MK $(arch) loader
 	mkdir -p $(edkdir)/MccaLoaderPkg
 	cp prehost/$(arch)/$(arch).loader/*    $(edkdir)/MccaLoaderPkg/
@@ -237,7 +238,7 @@ qemu_args=\
 
 run: build build_iso
 	@echo [ running] MCCA for $(arch)
-	@${QEMU} $(qemu_args) -m 512M -enable-kvm -cpu host || ${QEMU} $(qemu_args) -m 512M
+	@${QEMU} $(qemu_args) $(qemu_extra_args) -m 512M -enable-kvm -cpu host || ${QEMU} $(qemu_args) $(qemu_extra_args) -m 512M
 	@echo
 	@echo 'Mount the image:' 
 	@echo '  mount -o loop $(ubinpath)/$(arch).img $(mntdir)'
@@ -246,7 +247,7 @@ run: build build_iso
 	@echo $(sudokey) | sudo -S umount $(mntdir)
 	@echo
 run-only:
-	@${QEMU} $(qemu_args) -m 512M -enable-kvm -cpu host || ${QEMU} $(qemu_args) -m 512M
+	@${QEMU} $(qemu_args) $(qemu_extra_args) -m 512M -enable-kvm -cpu host || ${QEMU} $(qemu_args) $(qemu_extra_args) -m 512M
 
 #{TODO} debug
 

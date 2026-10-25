@@ -8,6 +8,9 @@
 #include <c/driver/mouse.h>
 #include <c/driver/keyboard.h>
 #include <c/driver/RealtimeClock.h>
+#if (_MCCA & 0xFF00) == 0x8600
+#include <cpp/Device/IIC>
+#endif
 #include "../include/console.hpp"
 #include "../depends/desktop.hpp"
 
@@ -143,6 +146,12 @@ static rostr text_device_node_type(uint16 node_type) {
 	case DeviceNodeType::PlatformDevice: return "platform-dev";
 	case DeviceNodeType::SerioController: return "serio-ctl";
 	case DeviceNodeType::SerioDevice: return "serio-dev";
+	case DeviceNodeType::I2cBus: return "i2c-bus";
+	case DeviceNodeType::I2cDevice: return "i2c-dev";
+	case DeviceNodeType::SpiBus: return "spi-bus";
+	case DeviceNodeType::SpiDevice: return "spi-dev";
+	case DeviceNodeType::UartBus: return "uart-bus";
+	case DeviceNodeType::UartDevice: return "uart-dev";
 	default: return "unknown";
 	}
 }
@@ -157,6 +166,7 @@ static rostr text_device_bus_type(uint16 bus_type) {
 	case DeviceBusType::SPI: return "spi";
 	case DeviceBusType::Serio: return "serio";
 	case DeviceBusType::Virtio: return "virtio";
+	case DeviceBusType::UART: return "uart";
 	default: return "none";
 	}
 }
@@ -227,6 +237,51 @@ static void dump_device_tree_pci_description(OstreamTrait& com1, const DeviceNod
 	com1.OutFormat("%s\n\r", product_name);
 	#endif
 }
+
+#if (_MCCA & 0xFF00) == 0x8600
+static rostr text_intel_lpss_i2c_failure(int32 result) {
+	switch (-result) {
+	case 1: return "missing-mmio";
+	case 2: return "address-range";
+	case 3: return "caps-unavailable";
+	case 4: return "wrong-controller-type";
+	case 5: return "allocation";
+	case 6: return "component-signature";
+	case 7: return "clock-unavailable";
+	case 8: return "initialization";
+	default: return "unknown";
+	}
+}
+
+static void dump_device_tree_intel_lpss_i2c(OstreamTrait& com1, const DeviceNode& node, stduint depth) {
+	if (!node.fields.binding.driver_name || StrCompare(node.fields.binding.driver_name, "intel-lpss-i2c") != 0) return;
+	if (DriverBindingState(node.fields.binding.state) == DriverBindingState::Failed) {
+		dump_device_tree_indent(com1, depth);
+		com1.OutFormat("- LPSS-I2C failure=%s result=%d\n\r", text_intel_lpss_i2c_failure(node.fields.binding.probe_result), node.fields.binding.probe_result);
+		return;
+	}
+	if (DriverBindingState(node.fields.binding.state) != DriverBindingState::Started || !node.fields.binding.driver_data) return;
+	auto* controller = static_cast<uni::IIC_DESIGNWARE*>(node.fields.binding.driver_data);
+	uni::IICDesignWareCapabilities capabilities{};
+	if (!controller->Probe(capabilities)) {
+		dump_device_tree_indent(com1, depth);
+		com1.OutFormat("- LPSS-I2C probe=failed component=%[32H]\n\r", capabilities.component_type);
+		return;
+	}
+	const stduint mmio = controller->getAddress();
+	if (!mmio) {
+		dump_device_tree_indent(com1, depth);
+		com1.OutFormat("- LPSS-I2C backend=callback dw-version=%[32H] tx-fifo=%u rx-fifo=%u\n\r", capabilities.component_version, (stduint)capabilities.transmit_fifo_depth, (stduint)capabilities.receive_fifo_depth);
+		return;
+	}
+	const uint32 lpss_reset = *reinterpret_cast<volatile uint32*>(mmio + 0x204u);
+	const uint32 lpss_capabilities = *reinterpret_cast<volatile uint32*>(mmio + 0x2FCu);
+	dump_device_tree_indent(com1, depth);
+	com1.OutFormat("- LPSS-I2C mmio=%p caps=%[32H] reset=%[32H] dw-version=%[32H] tx-fifo=%u rx-fifo=%u\n\r", (void*)mmio, lpss_capabilities, lpss_reset, capabilities.component_version, (stduint)capabilities.transmit_fifo_depth, (stduint)capabilities.receive_fifo_depth);
+}
+#else
+static void dump_device_tree_intel_lpss_i2c(OstreamTrait&, const DeviceNode&, stduint) {}
+#endif
 
 static void dump_device_tree_indent(OstreamTrait& com1, stduint depth) {
 	for0(i, depth) com1.OutFormat("  ");
@@ -403,6 +458,12 @@ static void dump_device_tree_node(OstreamTrait& com1, const DeviceNode* node, st
 		case DeviceNodeType::PlatformDevice:
 		case DeviceNodeType::SerioController:
 		case DeviceNodeType::SerioDevice:
+		case DeviceNodeType::I2cBus:
+		case DeviceNodeType::I2cDevice:
+		case DeviceNodeType::SpiBus:
+		case DeviceNodeType::SpiDevice:
+		case DeviceNodeType::UartBus:
+		case DeviceNodeType::UartDevice:
 			com1.OutFormat("%s <%s bus=%s%s%s%s%s>\n\r",
 				name, text_device_node_type(crt->fields.node_type),
 				text_device_bus_type(crt->fields.bus_type),
@@ -422,6 +483,7 @@ static void dump_device_tree_node(OstreamTrait& com1, const DeviceNode* node, st
 		}
 		if (verbose) {
 			dump_device_tree_pci_description(com1, *crt, depth + 1);
+			dump_device_tree_intel_lpss_i2c(com1, *crt, depth + 1);
 		}
 		if (verbose && crt->fields.resource_count) {
 			dump_device_tree_resources(com1, *crt, depth + 1);

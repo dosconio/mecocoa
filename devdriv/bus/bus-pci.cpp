@@ -24,6 +24,7 @@ namespace Devs {
 		Xhci,
 		E1000,
 		Piix4Acpi,
+		IntelLpssI2c,
 		Lance,
 		Vmci,
 	};
@@ -69,6 +70,14 @@ namespace Devs {
 		{0x8086u, 0x7110u, "82371AB PIIX4 ISA bridge"},
 		{0x8086u, 0x7111u, "82371AB PIIX4 IDE"},
 		{0x8086u, 0x7113u, "82371AB/EB/MB PIIX4 ACPI"},
+		{0x8086u, 0x5AACu, "Apollo Lake LPSS I2C controller"},
+		{0x8086u, 0x5AAEu, "Apollo Lake LPSS I2C controller"},
+		{0x8086u, 0x5AB0u, "Apollo Lake LPSS I2C controller"},
+		{0x8086u, 0x5AB2u, "Apollo Lake LPSS I2C controller"},
+		{0x8086u, 0x5AB4u, "Apollo Lake LPSS I2C controller"},
+		{0x8086u, 0x5AB6u, "Apollo Lake LPSS I2C controller"},
+		{0x8086u, 0x5AB8u, "Apollo Lake LPSS I2C controller"},
+		{0x8086u, 0x5ABAu, "Apollo Lake LPSS I2C controller"},
 
 		// ETH
 		{0x8086u, 0x100Eu, "82540EM Gigabit Ethernet Controller"},
@@ -106,6 +115,7 @@ namespace Devs {
 	const DriverOpsEntry* find_driver_ops(const char* driver_name, const DriverOpsEntry* table, stduint count);
 	bool append_resource(DeviceNode* node, DeviceResourceType type, uint16 flags, uint32 index, uint64 start, uint64 length, uint64 extra);
 	bool is_e1000_device(const DeviceNode* node);
+	bool is_intel_lpss_i2c_device(const DeviceNode* node);
 	bool is_lance_pci_device(const DeviceNode* node);
 	bool is_vmci_pci_device(const DeviceNode* node);
 	bool set_driver_binding(DeviceNode* node, const char* driver_name);
@@ -282,6 +292,15 @@ namespace Devs {
 	bool probe_piix4_acpi_device(DeviceNode* node);
 	bool probe_lance_device(DeviceNode* node);
 	bool probe_vmci_device(DeviceNode* node);
+	bool probe_intel_lpss_i2c_device(DeviceNode* node) {
+		if (!is_intel_lpss_i2c_device(node)) return false;
+		const auto* mmio = Devsman::FindResource(node, DeviceResourceType::PciBarMmio, 0);
+		if (!mmio || mmio->length < 0x300u) {
+			plogwarn("[I2C] Intel LPSS %s missing BAR0 register window", node->link.addr ? node->link.addr : "(unnamed)");
+			return false;
+		}
+		return true;
+	}
 	constexpr DriverOpsEntry pci_driver_ops_table[] = {
 		{"uhci", probe_uhci_device},
 		{"ehci", probe_ehci_device},
@@ -294,6 +313,7 @@ namespace Devs {
 		{"video-bochs", probe_video_bochs_device},
 		{"e1000", probe_e1000_device},
 		{"piix4-acpi", probe_piix4_acpi_device},
+		{"intel-lpss-i2c", probe_intel_lpss_i2c_device},
 		{"lance", probe_lance_device},
 		{"vmci", probe_vmci_device},
 	};
@@ -323,6 +343,39 @@ namespace Devs {
 		if (!node) return false;
 		return node->fields.vendor_id == 0x15AD &&
 			node->fields.device_id == 0x0405;
+	}
+
+	bool is_intel_lpss_i2c_device(const DeviceNode* node) {
+		if (!node || node->fields.vendor_id != 0x8086u) return false;
+		switch (node->fields.device_id) {
+		case 0x0AACu:
+		case 0x0AAEu:
+		case 0x0AB0u:
+		case 0x0AB2u:
+		case 0x0AB4u:
+		case 0x0AB6u:
+		case 0x0AB8u:
+		case 0x0ABAu:
+		case 0x1AACu:
+		case 0x1AAEu:
+		case 0x1AB0u:
+		case 0x1AB2u:
+		case 0x1AB4u:
+		case 0x1AB6u:
+		case 0x1AB8u:
+		case 0x1ABAu:
+		case 0x5AACu:
+		case 0x5AAEu:
+		case 0x5AB0u:
+		case 0x5AB2u:
+		case 0x5AB4u:
+		case 0x5AB6u:
+		case 0x5AB8u:
+		case 0x5ABAu:
+			return true;
+		default:
+			return false;
+		}
 	}
 
 	//{TEMP}
@@ -412,6 +465,9 @@ namespace Devs {
 			node->fields.device_id == 0x7113u) {
 			return PciDriverKind::Piix4Acpi;
 		}
+		if (is_intel_lpss_i2c_device(node)) {
+			return PciDriverKind::IntelLpssI2c;
+		}
 		if (is_lance_pci_device(node)) {
 			return PciDriverKind::Lance;
 		}
@@ -472,6 +528,9 @@ namespace Devs {
 			return;
 		case PciDriverKind::Piix4Acpi:
 			set_driver_binding(node, "piix4-acpi");
+			return;
+		case PciDriverKind::IntelLpssI2c:
+			set_driver_binding(node, "intel-lpss-i2c");
 			return;
 		case PciDriverKind::Lance:
 			set_driver_binding(node, "lance");
@@ -782,7 +841,8 @@ namespace Devs {
 		auto starter = find_driver_starter(node->fields.binding.driver_name);
 		if (!starter) return;
 		const bool ok = starter(node);
-		set_driver_probe_state(node, ok ? DriverBindingState::Started : DriverBindingState::Failed, ok ? 0 : -1);
+		const int32 failure = node->fields.binding.probe_result < 0 ? node->fields.binding.probe_result : -1;
+		set_driver_probe_state(node, ok ? DriverBindingState::Started : DriverBindingState::Failed, ok ? 0 : failure);
 		plogtrac("[DEVSMAN] Start %s -> %s", node->link.addr ? node->link.addr : "(unnamed)", ok ? "ok" : "failed");
 	}
 

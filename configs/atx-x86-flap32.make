@@ -211,7 +211,7 @@ qemu_args=-smp 4,cores=2,threads=2 -M pc \
 run: build run-only
 run-only:
 	$(qemu) \
-		$(qemu_args) -audiodev pa,id=speaker -machine pcspk-audiodev=speaker \
+		$(qemu_args) $(qemu_extra_args) -audiodev pa,id=speaker -machine pcspk-audiodev=speaker \
 		-audiodev pa,id=sb16audio \
 		-device sb16,audiodev=sb16audio,iobase=0x220,irq=5,dma=1,dma16=5 \
 		-enable-kvm -cpu host \
@@ -219,7 +219,7 @@ run-only:
 		-netdev tap,id=e1000net,ifname=tap0,script=no,downscript=no \
 		-device e1000,netdev=e1000net,mac=52:54:00:12:34:56 \
 		|| $(qemu) \
-		$(qemu_args) -audiodev dsound,id=speaker -machine pcspk-audiodev=speaker \
+		$(qemu_args) $(qemu_extra_args) -audiodev dsound,id=speaker -machine pcspk-audiodev=speaker \
 		-audiodev dsound,id=sb16audio \
 		-device sb16,audiodev=sb16audio,iobase=0x220,irq=5,dma=1,dma16=5
 

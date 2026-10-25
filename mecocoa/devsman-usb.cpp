@@ -177,7 +177,7 @@ namespace Devs {
 			static_cast<DeviceNode*>(context));
 		if (event == uni::device::SpaceUSB::USBHost_MSC::Event::BringUpComplete) {
 			if (driver.IsReady()) {
-				ploginfo("USB MSC observer ready port=%u slot=%u interface=%u max-lun=%u blocks=%u block-size=%u commands=%u completions=%u",
+				plogtrac("USB MSC observer ready port=%u slot=%u interface=%u max-lun=%u blocks=%u block-size=%u commands=%u completions=%u",
 					port, slot, (stduint)driver.InterfaceNumber(),
 					(stduint)driver.MaxLun(), (stduint)driver.BlockCount(),
 					(stduint)driver.BlockSize(), (stduint)driver.CommandCount(),

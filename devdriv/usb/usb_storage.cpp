@@ -339,7 +339,7 @@ namespace Devs {
 				for (stduint i = 0; i < Block_Size && i < sizeof(first); ++i) {
 					first |= uint32(data[i]) << (i * 8);
 				}
-				ploginfo("USB MSC LBA0 read ok interface=%u block-size=%u first=%[32H] mbr-signature=%[16H]",
+				plogtrac("USB MSC LBA0 read ok interface=%u block-size=%u first=%[32H] mbr-signature=%[16H]",
 					(stduint)interface_number_, Block_Size, (stduint)first,
 					(stduint)signature);
 				return true;
@@ -427,11 +427,11 @@ namespace Devs {
 					if (!node) return false;
 					partition_nodes_.Append(USBMSCPartitionNode{i + 1, node});
 					registered++;
-					ploginfo("USB MSC partition registered interface=%u partition=%u lba=%u blocks=%u type=%[8H]",
+					plogtrac("USB MSC partition registered interface=%u partition=%u lba=%u blocks=%u type=%[8H]",
 						(stduint)interface_number_, i + 1, slice.address,
 						slice.length, (stduint)slice.sys_id);
 				}
-				ploginfo("USB MSC storage registered interface=%u blocks=%u block-size=%u partitions=%u registered=%u",
+				plogtrac("USB MSC storage registered interface=%u blocks=%u block-size=%u partitions=%u registered=%u",
 					(stduint)interface_number_, (stduint)block_count_, Block_Size,
 					partitions_.Count(), registered);
 				return true;
