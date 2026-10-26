@@ -5,6 +5,8 @@
 #include <cpp/System/Audiosys.hpp>
 #include <cpp/Device/Audio/SoundBlaster.hpp>
 #include <cpp/System/Audiosys/AudioManager.hpp>
+#include "devsman.inn.hpp"
+#include "devsman.gpio.hpp"
 
 extern uni::AudioManager audio_manager;
 
@@ -142,6 +144,7 @@ enum DeviceAcpiInfoFlags : uint32 {
 	DeviceAcpiInfoFlag_HasStatus = 1 << 3,
 	DeviceAcpiInfoFlag_HasAddress = 1 << 4,
 	DeviceAcpiInfoFlag_Conditional = 1 << 5,
+	DeviceAcpiInfoFlag_HasHidI2cDescriptorRegister = 1 << 6,
 };
 
 enum class DeviceAcpiSerialBusType : uint8 {
@@ -149,11 +152,6 @@ enum class DeviceAcpiSerialBusType : uint8 {
 	SPI = 2,
 	UART = 3,
 	CSI2 = 4,
-};
-
-enum class DeviceAcpiGpioType : uint8 {
-	Interrupt,
-	Io,
 };
 
 enum class DeviceAcpiRangeType : uint8 {
@@ -175,14 +173,6 @@ struct DeviceAcpiSerialResource {
 	uint8 clock_polarity;
 	uint8 parity;
 	uint8 lines_enabled;
-};
-
-struct DeviceAcpiGpioResource {
-	char controller_path[DeviceAcpiPathCapacity];
-	uint32 pin;
-	uint32 flags;
-	DeviceAcpiGpioType type;
-	uint8 pin_config;
 };
 
 struct DeviceAcpiIrqResource {
@@ -255,11 +245,12 @@ struct DeviceAcpiInfo {
 	uint16 property_count;
 	uint16 property_value_count;
 	uint16 nonstandard_property_count;
+	uint16 hid_i2c_descriptor_register;
 	uint32 property_data_length;
 	DeviceAcpiPropertyStatus property_status;
 	// These arrays are owned together with this heap-allocated record.
 	DeviceAcpiSerialResource* serial_resources;
-	DeviceAcpiGpioResource* gpio_resources;
+	DeviceAcpiGPIOResource* gpio_resources;
 	DeviceAcpiIrqResource* irq_resources;
 	DeviceAcpiRangeResource* range_resources;
 	DeviceAcpiProperty* properties;
@@ -597,6 +588,9 @@ public:
 	static void StartKnownDrivers();
 	static void RegisterUSBDeviceTreeHooks();
 	static bool RegisterDriverStarter(const char* driver_name, DriverStartRoutine starter);
+	static bool RegisterInputObserver(DeviceInputObserver observer, void* context = nullptr);
+	static uint32 GetInputCapabilities(const DeviceNode* node);
+	static bool SubmitHidInputReport(DeviceNode* node, const byte* report, stduint length);
 	static DeviceDriverMatchDecision MatchDriver(const DeviceNode* node, const DeviceDriverMatchEntry* entries, stduint count);
 	static const char* DriverMatchResultName(DriverMatchResult result);
 	static DeviceNode* RegisterUSBBus(const char* name, const char* driver_name = nullptr, void* driver_data = nullptr);
@@ -661,6 +655,7 @@ public:
 	static const DeviceControllerCompatibilityDescription* FindPciControllerCompatibility(uint16 vendor_id, uint16 device_id);
 	static const DeviceControllerCompatibilityDescription* FindPciControllerCompatibility(uint16 vendor_id, uint16 device_id, uint16 subsystem_vendor_id, uint16 subsystem_device_id, uint8 revision);
 	static const DeviceControllerCompatibilityDescription* FindControllerCompatibility(const DeviceNode* node);
+	static const DeviceGPIOControllerCompatibilityDescription* FindGPIOControllerCompatibility(const DeviceNode* node);
 	#endif
 	static bool SetOps(DeviceNode* node, const DeviceNodeOps* ops);
 	static const DeviceNodeOps* GetOps(const DeviceNode* node);

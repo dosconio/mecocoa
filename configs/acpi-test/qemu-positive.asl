@@ -74,7 +74,24 @@ DefinitionBlock ("", "SSDT", 2, "MECOCO", "ACPITEST", 0x00000001)
 		Device (MGPO)
 		{
 			Name (_HID, "MCOA0005")
+			Name (_ADR, Zero)
 			Name (_STA, 0x0F)
+		}
+
+		Device (MGED)
+		{
+			Name (_HID, "MCOA0010")
+			Name (_STA, 0x0F)
+			Name (_CRS, ResourceTemplate ()
+			{
+				GpioInt (Edge, ActiveHigh, Shared, PullDefault, 0,
+					"\\_SB.MGPO", 0, ResourceConsumer, ,)
+					{ 0x0016 }
+			})
+			Name (_DEP, Package (One)
+			{
+				\_SB_.MGPO
+			})
 		}
 	}
 
@@ -172,6 +189,15 @@ DefinitionBlock ("", "SSDT", 2, "MECOCO", "ACPITEST", 0x00000001)
 				{
 					0x0014
 				}
+				GpioIo (Shared, PullDefault, 0x0000, 0x0000, IoRestrictionInputOnly,
+					"\\_SB.MGPO", 0x00, ResourceConsumer, ,)
+				{
+					0x0015
+				}
+			})
+			Name (_DEP, Package (One)
+			{
+				\_SB_.MGPO
 			})
 			Name (_DSD, Package ()
 			{

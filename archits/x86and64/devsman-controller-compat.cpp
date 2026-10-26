@@ -6,6 +6,7 @@
 #include "../../include/mecocoa.hpp"
 
 #if (_MCCA & 0xFF00) == 0x8600
+#include "../../../unisym/lib/cpp/Device/GPIO/GPIO-Intel.hpp"
 
 namespace {
 	struct PciControllerCompatibilityEntry {
@@ -18,6 +19,13 @@ namespace {
 		uint8 revision;
 		uint8 revision_mask;
 		const DeviceControllerCompatibilityDescription* description;
+	};
+
+	struct AcpiGPIOControllerCompatibilityEntry {
+		const char* hardware_id;
+		const char* compatible_id;
+		const char* unique_id;
+		const DeviceGPIOControllerCompatibilityDescription* description;
 	};
 
 	constexpr DeviceControllerCompatibilityDescription intel_lpss_i2c_description(const char* family_name, const char* product_name, uint32 sda_hold_time_ns, uint32 evidence_flags) {
@@ -80,6 +88,35 @@ namespace {
 		{0x8086u, 0x5ABAu, 0, 0, 0, 0, 0, 0, &ApolloLakeLpssI2c},
 	};
 
+	constexpr uni::IntelGPIOCommunityDescription intel_broxton_GPIO_community(uint16 pin_count) {
+		// The fixed register block ends after the per-group GPI_IE array; PADBAR supplies the separately bounded pad-register base.
+		const uint32 group_count = (uint32(pin_count) + 31u) / 32u;
+		return { pin_count, 32u, 4u, 8u, 0x110u + group_count * sizeof(uint32), 0x000u, 0x00Cu, 0x020u, 0x060u, 0x080u, 0x100u, 0x110u };
+	}
+
+	constexpr auto ApolloLakeGPIONorthLayout = intel_broxton_GPIO_community(78u);
+	constexpr auto ApolloLakeGPIONorthwestLayout = intel_broxton_GPIO_community(77u);
+	constexpr auto ApolloLakeGPIOWestLayout = intel_broxton_GPIO_community(47u);
+	constexpr auto ApolloLakeGPIOSouthwestLayout = intel_broxton_GPIO_community(43u);
+
+	constexpr DeviceGPIOControllerCompatibilityDescription intel_apollo_lake_GPIO_description(const char* product_name, const uni::IntelGPIOCommunityDescription& layout) {
+		return { "apollo-lake", product_name, "intel-gpio-community", &layout, DeviceControllerCompatibilityEvidence_PublicReference | DeviceControllerCompatibilityEvidence_RegisterModel | DeviceControllerCompatibilityEvidence_FirmwareReplay | DeviceControllerCompatibilityEvidence_PhysicalHardware, layout.minimum_access_length, 0u };
+	}
+
+	// ACPI Specification 6.5 section 6.1.12 makes _UID the persistent device differentiator.
+	// Linux pinctrl-broxton.c maps ACPI INT3452 _UID 1..4 to these Apollo Lake communities.
+	constexpr auto ApolloLakeGPIONorth = intel_apollo_lake_GPIO_description("Apollo Lake GPIO North community", ApolloLakeGPIONorthLayout);
+	constexpr auto ApolloLakeGPIONorthwest = intel_apollo_lake_GPIO_description("Apollo Lake GPIO Northwest community", ApolloLakeGPIONorthwestLayout);
+	constexpr auto ApolloLakeGPIOWest = intel_apollo_lake_GPIO_description("Apollo Lake GPIO West community", ApolloLakeGPIOWestLayout);
+	constexpr auto ApolloLakeGPIOSouthwest = intel_apollo_lake_GPIO_description("Apollo Lake GPIO Southwest community", ApolloLakeGPIOSouthwestLayout);
+
+	constexpr AcpiGPIOControllerCompatibilityEntry acpi_GPIO_controller_compatibility_table[] = {
+		{"INT3452", "INT3452", "1", &ApolloLakeGPIONorth},
+		{"INT3452", "INT3452", "2", &ApolloLakeGPIONorthwest},
+		{"INT3452", "INT3452", "3", &ApolloLakeGPIOWest},
+		{"INT3452", "INT3452", "4", &ApolloLakeGPIOSouthwest},
+	};
+
 	bool pci_controller_compatibility_mask(uint16 value, uint16 expected, uint16 mask) {
 		return !mask || (value & mask) == (expected & mask);
 	}
@@ -101,6 +138,19 @@ namespace {
 		}
 		return best ? best->description : nullptr;
 	}
+
+	bool acpi_compatible_id_matches(const char* ids, const char* expected) {
+		if (!ids || !expected) return false;
+		const stduint expected_length = StrLength(expected);
+		const char* cursor = ids;
+		while (*cursor) {
+			const char* end = cursor;
+			while (*end && *end != ',') ++end;
+			if (stduint(end - cursor) == expected_length && StrCompareN(cursor, expected, expected_length) == 0) return true;
+			cursor = *end ? end + 1 : end;
+		}
+		return false;
+	}
 }
 
 const DeviceControllerCompatibilityDescription* Devsman::FindPciControllerCompatibility(uint16 vendor_id, uint16 device_id) {
@@ -114,6 +164,18 @@ const DeviceControllerCompatibilityDescription* Devsman::FindPciControllerCompat
 const DeviceControllerCompatibilityDescription* Devsman::FindControllerCompatibility(const DeviceNode* node) {
 	if (!node || DeviceNodeType(node->fields.node_type) != DeviceNodeType::PciDevice) return nullptr;
 	return FindPciControllerCompatibility(node->fields.vendor_id, node->fields.device_id, node->fields.subsystem_vendor_id, node->fields.subsystem_device_id, node->fields.revision);
+}
+
+const DeviceGPIOControllerCompatibilityDescription* Devsman::FindGPIOControllerCompatibility(const DeviceNode* node) {
+	if (!node || DeviceNodeType(node->fields.node_type) != DeviceNodeType::PlatformDevice || !node->fields.acpi_info) return nullptr;
+	const auto& acpi = *node->fields.acpi_info;
+	if (!(acpi.flags & DeviceAcpiInfoFlag_HasUniqueId)) return nullptr;
+	for (const auto& entry : acpi_GPIO_controller_compatibility_table) {
+		const bool hardware_id_matches = (acpi.flags & DeviceAcpiInfoFlag_HasHardwareId) && StrCompare(acpi.hardware_id, entry.hardware_id) == 0;
+		const bool compatible_id_matches = (acpi.flags & DeviceAcpiInfoFlag_HasCompatibleId) && acpi_compatible_id_matches(acpi.compatible_ids, entry.compatible_id);
+		if ((hardware_id_matches || compatible_id_matches) && StrCompare(acpi.unique_id, entry.unique_id) == 0) return entry.description;
+	}
+	return nullptr;
 }
 
 #endif

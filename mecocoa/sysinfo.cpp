@@ -9,6 +9,7 @@
 #include <c/driver/keyboard.h>
 #include <c/driver/RealtimeClock.h>
 #if (_MCCA & 0xFF00) == 0x8600
+#include <cpp/Device/Bus/Serial/IIC-HID.hpp>
 #include <cpp/Device/IIC>
 #endif
 #include "../include/console.hpp"
@@ -458,6 +459,90 @@ static void dump_device_tree_resources(OstreamTrait& com1, const DeviceNode& nod
 	}
 }
 
+static rostr text_acpi_GPIO_type(DeviceAcpiGPIOConnectionType type) {
+	return type == DeviceAcpiGPIOConnectionType::Interrupt ? "interrupt" : "io";
+}
+
+static rostr text_acpi_GPIO_status(DeviceAcpiGPIOResourceStatus status) {
+	switch (status) {
+	case DeviceAcpiGPIOResourceStatus::Success: return "success";
+	case DeviceAcpiGPIOResourceStatus::MalformedDescriptor: return "malformed-descriptor";
+	case DeviceAcpiGPIOResourceStatus::UnsupportedRevision: return "unsupported-revision";
+	case DeviceAcpiGPIOResourceStatus::UnsupportedConnectionType: return "unsupported-type";
+	case DeviceAcpiGPIOResourceStatus::ReservedValue: return "reserved-value";
+	case DeviceAcpiGPIOResourceStatus::InvalidPinTable: return "invalid-pin-table";
+	case DeviceAcpiGPIOResourceStatus::InvalidResourceSource: return "invalid-source";
+	case DeviceAcpiGPIOResourceStatus::InvalidVendorData: return "invalid-vendor-data";
+	case DeviceAcpiGPIOResourceStatus::DuplicatePin: return "duplicate-pin";
+	case DeviceAcpiGPIOResourceStatus::DuplicateResource: return "duplicate-resource";
+	case DeviceAcpiGPIOResourceStatus::MalformedResourceSource: return "malformed-source";
+	case DeviceAcpiGPIOResourceStatus::ControllerNotFound: return "controller-not-found";
+	case DeviceAcpiGPIOResourceStatus::ControllerNotDevice: return "controller-not-device";
+	default: return "unknown";
+	}
+}
+
+static rostr text_acpi_GPIO_dependency(DeviceAcpiGPIODependencyStatus status) {
+	switch (status) {
+	case DeviceAcpiGPIODependencyStatus::NotDeclared: return "not-declared";
+	case DeviceAcpiGPIODependencyStatus::Satisfied: return "satisfied";
+	case DeviceAcpiGPIODependencyStatus::ControllerNotListed: return "controller-not-listed";
+	case DeviceAcpiGPIODependencyStatus::ControllerUnavailable: return "controller-unavailable";
+	case DeviceAcpiGPIODependencyStatus::Malformed: return "malformed";
+	case DeviceAcpiGPIODependencyStatus::EvaluationFailed: return "evaluation-failed";
+	default: return "unknown";
+	}
+}
+
+static rostr text_acpi_GPIO_trigger(DeviceAcpiGPIOTrigger trigger) {
+	switch (trigger) {
+	case DeviceAcpiGPIOTrigger::Level: return "level";
+	case DeviceAcpiGPIOTrigger::Edge: return "edge";
+	default: return "n/a";
+	}
+}
+
+static rostr text_acpi_GPIO_polarity(DeviceAcpiGPIOPolarity polarity) {
+	switch (polarity) {
+	case DeviceAcpiGPIOPolarity::ActiveHigh: return "active-high";
+	case DeviceAcpiGPIOPolarity::ActiveLow: return "active-low";
+	case DeviceAcpiGPIOPolarity::ActiveBoth: return "active-both";
+	default: return "n/a";
+	}
+}
+
+static rostr text_acpi_GPIO_pull(DeviceAcpiGPIOPull pull) {
+	switch (pull) {
+	case DeviceAcpiGPIOPull::Default: return "default";
+	case DeviceAcpiGPIOPull::Up: return "up";
+	case DeviceAcpiGPIOPull::Down: return "down";
+	case DeviceAcpiGPIOPull::None: return "none";
+	default: return "vendor";
+	}
+}
+
+static rostr text_acpi_GPIO_IO_restriction(DeviceAcpiGPIOIORestriction restriction) {
+	switch (restriction) {
+	case DeviceAcpiGPIOIORestriction::None: return "none";
+	case DeviceAcpiGPIOIORestriction::InputOnly: return "input";
+	case DeviceAcpiGPIOIORestriction::OutputOnly: return "output";
+	case DeviceAcpiGPIOIORestriction::NoneAndPreserve: return "preserve";
+	default: return "n/a";
+	}
+}
+
+static void dump_device_tree_acpi_GPIO(OstreamTrait& com1, const DeviceNode& node, stduint depth) {
+	const auto* info = node.fields.acpi_info;
+	if (!info || !info->gpio_resources) return;
+	for0(index, info->gpio_resource_count) {
+		const auto& resource = info->gpio_resources[index];
+		dump_device_tree_indent(com1, depth);
+		com1.OutFormat("- ACPI-GPIO endpoint=%s type=%s pin=%u source=%s controller=%s status=%s dependency=%s\n\r", info->path[0] ? info->path : "<unknown>", text_acpi_GPIO_type(resource.type), resource.pin, resource.resource_source[0] ? resource.resource_source : "<none>", resource.controller_path[0] ? resource.controller_path : "<unresolved>", text_acpi_GPIO_status(resource.status), text_acpi_GPIO_dependency(resource.dependency_status));
+		dump_device_tree_indent(com1, depth + 1);
+		com1.OutFormat("consumer=%u trigger=%s polarity=%s sharing=%s wake=%u pull=%s io=%s drive=%u debounce=%u flags=%04X/%04X\n\r", stduint(resource.consumer), text_acpi_GPIO_trigger(resource.trigger), text_acpi_GPIO_polarity(resource.polarity), resource.sharing == DeviceAcpiGPIOSharing::Shared ? "shared" : "exclusive", stduint(resource.wake_capable), text_acpi_GPIO_pull(resource.pull), text_acpi_GPIO_IO_restriction(resource.io_restriction), (stduint)resource.drive_strength, (stduint)resource.debounce_timeout, (stduint)resource.general_flags, (stduint)resource.connection_flags);
+	}
+}
+
 static void dump_device_tree_usb_strings(OstreamTrait& com1, const DeviceNode& node, stduint depth) {
 	if (DeviceNodeType(node.fields.node_type) != DeviceNodeType::UsbDevice) return;
 	if (node.fields.text_manufacturer) {
@@ -575,12 +660,29 @@ static void dump_device_tree_node(OstreamTrait& com1, const DeviceNode* node, st
 				has_binding ? " state=" : "",
 				has_binding ? text_driver_binding_state(crt->fields.binding.state) : "");
 			break;
+		case DeviceNodeType::I2cDevice:
+			#if (_MCCA & 0xFF00) == 0x8600
+			if (driver_name0 && StrCompare(driver_name0, "hid-i2c") == 0 && DriverBindingState(crt->fields.binding.state) == DriverBindingState::Started && crt->fields.binding.driver_data) {
+				const auto& descriptor = static_cast<const uni::HIDI2CDevice*>(crt->fields.binding.driver_data)->Descriptor();
+				com1.OutFormat("%s <%s bus=%s drv=%s state=%s hid-ver=%04X vid=%04X pid=%04X report=%u input=%u output=%u input-caps=%08X>\n\r",
+					name, text_device_node_type(crt->fields.node_type), text_device_bus_type(crt->fields.bus_type), driver_name,
+					text_driver_binding_state(crt->fields.binding.state), (stduint)descriptor.version,
+					(stduint)descriptor.vendor_id, (stduint)descriptor.product_id,
+					(stduint)descriptor.report_descriptor_length, (stduint)descriptor.maximum_input_length,
+					(stduint)descriptor.maximum_output_length, Devsman::GetInputCapabilities(crt));
+				break;
+			}
+			#endif
+			com1.OutFormat("%s <%s bus=%s%s%s%s%s>\n\r",
+				name, text_device_node_type(crt->fields.node_type), text_device_bus_type(crt->fields.bus_type),
+				driver_name ? " drv=" : "", driver_name ? driver_name : "",
+				has_binding ? " state=" : "", has_binding ? text_driver_binding_state(crt->fields.binding.state) : "");
+			break;
 		case DeviceNodeType::UsbBus:
 		case DeviceNodeType::PlatformDevice:
 		case DeviceNodeType::SerioController:
 		case DeviceNodeType::SerioDevice:
 		case DeviceNodeType::I2cBus:
-		case DeviceNodeType::I2cDevice:
 		case DeviceNodeType::SpiBus:
 		case DeviceNodeType::SpiDevice:
 		case DeviceNodeType::UartBus:
@@ -607,6 +709,7 @@ static void dump_device_tree_node(OstreamTrait& com1, const DeviceNode* node, st
 			dump_device_tree_controller_resources(com1, *crt, depth + 1);
 			dump_device_tree_intel_lpss_i2c(com1, *crt, depth + 1);
 			dump_device_tree_driver_match(com1, *crt, depth + 1);
+			dump_device_tree_acpi_GPIO(com1, *crt, depth + 1);
 		}
 		if (verbose && crt->fields.resource_count) {
 			dump_device_tree_resources(com1, *crt, depth + 1);

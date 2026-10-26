@@ -25,6 +25,8 @@
 #include "c/proctrl/IAx86_64.msr.h"
 #endif
 
+static constexpr bool echo_drvname = true;
+
 #if _MCCA == 0x8664
 extern "C" void Handint_Double_Fault_Emergency_Entry();
 #endif
@@ -73,6 +75,26 @@ namespace Devs {
 		return entry;
 	}
 
+	constexpr DeviceDriverMatchEntry acpi_platform_driver_match(const char* hardware_id, const char* driver_name, uint16 priority = 300) {
+		DeviceDriverMatchEntry entry{};
+		entry.driver_name = driver_name;
+		entry.acpi_hardware_id = hardware_id;
+		entry.priority = priority;
+		entry.node_type = uint16(DeviceNodeType::PlatformDevice);
+		entry.bus_type = uint16(DeviceBusType::Platform);
+		return entry;
+	}
+
+	bool has_GPIO_controller_compatibility(const DeviceNode* node) {
+		return Devsman::FindGPIOControllerCompatibility(node) != nullptr;
+	}
+
+	constexpr DeviceDriverMatchEntry intel_GPIO_platform_driver_match() {
+		auto entry = acpi_platform_driver_match(nullptr, "intel-gpio-community");
+		entry.capability = has_GPIO_controller_compatibility;
+		return entry;
+	}
+
 	constexpr DeviceDriverMatchEntry platform_driver_match_table[] = {
 		named_driver_match("uart@com1", "uart-8250", DeviceNodeType::PlatformDevice, DeviceBusType::Platform),
 		named_driver_match("uart@com2", "uart-8250", DeviceNodeType::PlatformDevice, DeviceBusType::Platform),
@@ -80,6 +102,10 @@ namespace Devs {
 		named_driver_match("uart@com4", "uart-8250", DeviceNodeType::PlatformDevice, DeviceBusType::Platform),
 		named_driver_match("rtc@cmos", "rtc-cmos", DeviceNodeType::PlatformDevice, DeviceBusType::Platform),
 		named_driver_match("floppy@flc0", "flopdisk", DeviceNodeType::PlatformDevice, DeviceBusType::Platform),
+		intel_GPIO_platform_driver_match(),
+	#if CONFIG_ACPI_BOOT_TEST
+		acpi_platform_driver_match("MCOA0005", "gpio-model"),
+	#endif
 	};
 
 	constexpr DeviceDriverMatchEntry serio_controller_match_table[] = {
@@ -89,6 +115,33 @@ namespace Devs {
 	constexpr DeviceDriverMatchEntry serio_device_match_table[] = {
 		named_driver_match("ps2kbd", "ps2-keyboard", DeviceNodeType::SerioDevice, DeviceBusType::Serio),
 		named_driver_match("ps2mouse", "ps2-mouse", DeviceNodeType::SerioDevice, DeviceBusType::Serio),
+	};
+
+	bool has_hid_i2c_description(const DeviceNode* node) {
+		if (!node || !node->fields.acpi_info) return false;
+		const auto* info = node->fields.acpi_info;
+		if (!(info->flags & DeviceAcpiInfoFlag_HasHidI2cDescriptorRegister)) return false;
+		for0(index, info->serial_resource_count) {
+			if (info->serial_resources[index].bus_type == DeviceAcpiSerialBusType::I2C) return true;
+		}
+		return false;
+	}
+
+	constexpr DeviceDriverMatchEntry hid_i2c_driver_match(const char* hardware_id, const char* compatible_id) {
+		DeviceDriverMatchEntry entry{};
+		entry.driver_name = "hid-i2c";
+		entry.acpi_hardware_id = hardware_id;
+		entry.acpi_compatible_id = compatible_id;
+		entry.priority = 300;
+		entry.node_type = uint16(DeviceNodeType::I2cDevice);
+		entry.bus_type = uint16(DeviceBusType::I2C);
+		entry.capability = has_hid_i2c_description;
+		return entry;
+	}
+
+	constexpr DeviceDriverMatchEntry i2c_device_match_table[] = {
+		hid_i2c_driver_match("PNP0C50", nullptr),
+		hid_i2c_driver_match(nullptr, "PNP0C50"),
 	};
 
 
@@ -672,6 +725,10 @@ namespace Devs {
 		apply_driver_match(node, Devsman::MatchDriver(node, serio_device_match_table, numsof(serio_device_match_table)));
 	}
 
+	void bind_i2c_device(DeviceNode* node) {
+		apply_driver_match(node, Devsman::MatchDriver(node, i2c_device_match_table, numsof(i2c_device_match_table)));
+	}
+
 	void bind_device_node(DeviceNode* node) {
 		if (!node) return;
 		switch (DeviceNodeType(node->fields.node_type)) {
@@ -686,6 +743,9 @@ namespace Devs {
 			break;
 		case DeviceNodeType::SerioDevice:
 			bind_serio_device(node);
+			break;
+		case DeviceNodeType::I2cDevice:
+			bind_i2c_device(node);
 			break;
 		default:
 			break;
@@ -814,9 +874,29 @@ namespace Devs {
 	void start_device_node(DeviceNode* node) {
 		if (!node) return;
 		switch (DeviceNodeType(node->fields.node_type)) {
+		case DeviceNodeType::PlatformDevice: {
+			if (DriverBindingState(node->fields.binding.state) != DriverBindingState::Matched) break;
+			auto starter = find_driver_starter(node->fields.binding.driver_name);
+			if (!starter) break;
+			const bool ok = starter(node);
+			const int32 failure = node->fields.binding.probe_result < 0 ? node->fields.binding.probe_result : -1;
+			set_driver_probe_state(node, ok ? DriverBindingState::Started : DriverBindingState::Failed, ok ? 0 : failure);
+			break;
+		}
 		case DeviceNodeType::PciDevice:
 			start_pci_device(node);
 			break;
+		case DeviceNodeType::I2cDevice: {
+			if (DriverBindingState(node->fields.binding.state) != DriverBindingState::Matched || !node->fields.ops || !node->fields.ops->ctrl) break;
+			auto* bus = reinterpret_cast<DeviceNode*>(node->link.getParent());
+			if (!bus || DeviceNodeType(bus->fields.node_type) != DeviceNodeType::I2cBus || DriverBindingState(bus->fields.binding.state) != DriverBindingState::Started) break;
+			auto starter = find_driver_starter(node->fields.binding.driver_name);
+			if (!starter) break;
+			const bool ok = starter(node);
+			const int32 failure = node->fields.binding.probe_result < 0 ? node->fields.binding.probe_result : -1;
+			set_driver_probe_state(node, ok ? DriverBindingState::Started : DriverBindingState::Failed, ok ? 0 : failure);
+			break;
+		}
 		default:
 			break;
 		}
@@ -2548,7 +2628,7 @@ bool Devsman::Initialize() {
 	auto rmod_endo = __init_rmod_endo;
 	#endif
 	for (; func < rmod_endo; func++) {
-		ploginfo("Loading %s", func->name);
+		if constexpr(echo_drvname) ploginfo("Loading %s", func->name);
 		(func->init)();
 	}
 	#endif

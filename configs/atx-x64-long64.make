@@ -35,6 +35,9 @@ cppfile=\
 	$(ulibpath)/cpp/Device/ACPI/AML.cpp \
 	$(ulibpath)/cpp/Device/ACPI/AML-Execute.cpp \
 	$(ulibpath)/cpp/Device/Bus/Serial/IIC-DesignWare.cpp \
+	$(ulibpath)/cpp/Device/Bus/Serial/IIC-HID.cpp \
+	$(ulibpath)/cpp/Device/HID/HID-Report.cpp \
+	$(ulibpath)/cpp/Device/GPIO.cpp $(wildcard $(ulibpath)/cpp/Device/GPIO/*.cpp) \
 	$(ulibpath)/cpp/Device/Buzzer.cpp \
 	$(ulibpath)/cpp/Device/Keyboard.cpp \
 	$(ulibpath)/cpp/Datype/Charset/Unicode.cpp \

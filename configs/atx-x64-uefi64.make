@@ -53,29 +53,30 @@ cppfile=\
 	$(ulibpath)/cpp/color.cpp \
 	$(ulibpath)/cpp/Witch/Form.cpp \
 	$(ulibpath)/cpp/Witch/_TextChrome.cpp \
+	$(ulibpath)/cpp/Datype/Charset/Unicode.cpp \
 	\
-	$(ulibpath)/cpp/Device/ACPI.cpp \
-	$(ulibpath)/cpp/Device/ACPI/AML.cpp \
-	$(ulibpath)/cpp/Device/ACPI/AML-Execute.cpp \
+	$(ulibpath)/cpp/Device/GPIO.cpp $(wildcard $(ulibpath)/cpp/Device/GPIO/*.cpp) \
 	$(ulibpath)/cpp/Device/Cache.cpp \
 	$(ulibpath)/cpp/Device/Bus/PCI.cpp \
 	$(ulibpath)/cpp/Device/Bus/Serial/IIC-DesignWare.cpp \
+	$(ulibpath)/cpp/Device/Bus/Serial/IIC-HID.cpp \
+	$(ulibpath)/cpp/Device/HID/HID-Report.cpp \
 	$(ulibpath)/cpp/Device/Bus/ISA.cpp \
 	$(ulibpath)/cpp/Device/Keyboard.cpp \
 	$(ulibpath)/cpp/Device/DMA.cpp \
 	$(ulibpath)/cpp/Device/Timer.cpp \
 	$(ulibpath)/cpp/Device/Mouse.cpp \
-	$(ulibpath)/cpp/Datype/Charset/Unicode.cpp \
 	$(ulibpath)/cpp/Device/Video/Bochs-GrafAda.cpp \
 	$(ulibpath)/cpp/Device/Video/VMware-SVGA.cpp \
 	$(ulibpath)/cpp/Device/Video-VCI.cpp \
-	$(ulibpath)/cpp/Device/Video.cpp $(ulibpath)/cpp/Device/Video-VideoConsole2.cpp \
 	$(ulibpath)/cpp/Device/Storage/Harddisk-SATA.cpp\
 	$(ulibpath)/cpp/Device/Storage/Harddisk-NVMe.cpp\
-	$(ulibpath)/cpp/System/Audiosys/AudioManager.cpp \
+	$(ulibpath)/cpp/Device/ACPI.cpp $(wildcard $(ulibpath)/cpp/Device/ACPI/*.cpp) \
 	$(wildcard $(ulibpath)/cpp/Device/USB/*.cpp) $(wildcard $(ulibpath)/cpp/Device/USB/xHCI/*.cpp) $(wildcard $(ulibpath)/cpp/Device/USB/uHCI/*.cpp) $(wildcard $(ulibpath)/cpp/Device/USB/eHCI/*.cpp) \
 	$(wildcard $(ulibpath)/cpp/System/Network/Layer/*/*.cpp) \
 	\
+	$(ulibpath)/cpp/Device/Video.cpp $(ulibpath)/cpp/Device/Video-VideoConsole2.cpp \
+	$(ulibpath)/cpp/System/Audiosys/AudioManager.cpp \
 	$(ulibpath)/cpp/System/Picture.cpp \
 	depends/cotlabx.cpp \
 	depends/desktop.cpp \

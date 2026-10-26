@@ -8,6 +8,7 @@
 
 #include <cpp/Device/ACPI.hpp>
 #include <cpp/Device/ACPI/AML.hpp>
+#include <cpp/Device/ACPI/ACPI-Resource.hpp>
 #include <cpp/Device/Bus/PCI.hpp>
 
 namespace Devs {
@@ -26,6 +27,7 @@ namespace Devs {
 
 		constexpr stduint AcpiDeviceCapacity = 512;
 		constexpr stduint AcpiSerialResourceCapacity = 512;
+		constexpr stduint AcpiGPIOResourceCapacity = 1024;
 		constexpr stduint AcpiResourceCapacity = 1024;
 		constexpr stduint AmlTableCapacity = 64;
 		constexpr stduint AcpiPathCapacity = 160;
@@ -102,6 +104,7 @@ namespace Devs {
 			SerialLength,
 			ResourceHeader,
 			ResourceLength,
+			GPIODescriptor,
 			Path,
 			Namespace,
 			Count,
@@ -127,8 +130,6 @@ namespace Devs {
 
 		enum class AcpiResourceType : uint8 {
 			Irq,
-			GpioInterrupt,
-			GpioIo,
 			Memory,
 			IoPort,
 			Count,
@@ -199,6 +200,29 @@ namespace Devs {
 			AcpiResourceType type;
 		};
 
+		struct AcpiGPIOResourceRecord {
+			char resource_source[AcpiPathCapacity];
+			char controller_path[AcpiPathCapacity];
+			uint32 pin;
+			uint16 general_flags;
+			uint16 connection_flags;
+			uint16 drive_strength;
+			uint16 debounce_timeout;
+			uint16 device_index;
+			uint16 controller_device_index;
+			uint16 descriptor_index;
+			uint16 pin_index;
+			uint16 dependency_count;
+			uint8 revision;
+			uint8 resource_source_index;
+			uint8 pin_configuration;
+			uint8 controller_status;
+			uni::ACPIResource::GPIOConnectionType type;
+			DeviceAcpiGPIOResourceStatus status;
+			DeviceAcpiGPIODependencyStatus dependency_status;
+			DeviceNode* pci_controller;
+		};
+
 		struct AcpiMalformedRecord {
 			const uint8* address;
 			AcpiMalformedKind kind;
@@ -224,11 +248,14 @@ namespace Devs {
 
 		AcpiDeviceRecord acpi_devices[AcpiDeviceCapacity] = {};
 		AcpiSerialResourceRecord acpi_serial_resources[AcpiSerialResourceCapacity] = {};
+		AcpiGPIOResourceRecord* acpi_gpio_resources = nullptr;
 		DeviceNode* acpi_controller_nodes[AcpiDeviceCapacity] = {};
 		DeviceNode* acpi_endpoint_nodes[AcpiDeviceCapacity] = {};
 		AcpiResourceRecord* acpi_resources = nullptr;
 		stduint acpi_device_count = 0;
 		stduint acpi_serial_resource_count = 0;
+		stduint acpi_gpio_resource_count = 0;
+		stduint acpi_gpio_descriptor_count = 0;
 		stduint acpi_resource_count = 0;
 		stduint acpi_conditional_block_count = 0;
 		stduint acpi_parent_absent_count = 0;
@@ -241,6 +268,7 @@ namespace Devs {
 		stduint acpi_malformed_record_count = 0;
 		bool acpi_device_truncated = false;
 		bool acpi_serial_resource_truncated = false;
+		bool acpi_gpio_resource_truncated = false;
 		bool acpi_resource_truncated = false;
 		AmlTableView aml_tables[AmlTableCapacity] = {};
 		stduint aml_table_count = 0;
@@ -446,6 +474,28 @@ namespace Devs {
 			return *left == *right;
 		}
 
+		bool text_list_contains(const char* list, const char* expected) {
+			if (!list || !expected) return false;
+			stduint expected_length = 0;
+			while (expected[expected_length]) ++expected_length;
+			const char* cursor = list;
+			while (*cursor) {
+				const char* end = cursor;
+				while (*end && *end != ',') ++end;
+				if (stduint(end - cursor) == expected_length) {
+					stduint index = 0;
+					while (index < expected_length && cursor[index] == expected[index]) ++index;
+					if (index == expected_length) return true;
+				}
+				cursor = *end ? end + 1 : end;
+			}
+			return false;
+		}
+
+		bool is_hid_i2c_device_description(const AcpiDeviceRecord& device) {
+			return (device.has_hid && equal_text(device.hid, "PNP0C50")) || (device.has_cid && text_list_contains(device.cid, "PNP0C50"));
+		}
+
 		stduint text_length(const char* text) {
 			stduint length = 0;
 			if (!text) return 0;
@@ -527,6 +577,7 @@ namespace Devs {
 			case AcpiMalformedKind::SerialLength: return "serial-length";
 			case AcpiMalformedKind::ResourceHeader: return "resource-header";
 			case AcpiMalformedKind::ResourceLength: return "resource-length";
+			case AcpiMalformedKind::GPIODescriptor: return "gpio-descriptor";
 			case AcpiMalformedKind::Path: return "path";
 			case AcpiMalformedKind::Namespace: return "namespace";
 			default: return "unknown";
@@ -794,12 +845,14 @@ namespace Devs {
 
 		bool aml_scope_declares_pci_address(const uni::AMLNamespace& aml_namespace, stduint scope) {
 			const char adr_name[5] = { '_', 'A', 'D', 'R', 0 };
+			bool address_declared = false;
 			for0(depth, uni::AMLNamespace::MaximumDepth) {
 				const auto* object = aml_namespace.At(scope);
 				if (!object) break;
 				if (object->type == uni::AMLNamespace::ObjectType::Device) {
-					if (aml_device_is_pci_root(aml_namespace, scope)) return false;
-					if (aml_namespace.FindChild(scope, adr_name) != uni::AMLNamespace::InvalidIndex) return true;
+					// ACPI Specification 6.5 section 6.1.1 defines _ADR relative to the parent bus; only a PCI-root ancestry makes it a PCI address.
+					if (aml_device_is_pci_root(aml_namespace, scope)) return address_declared;
+					if (aml_namespace.FindChild(scope, adr_name) != uni::AMLNamespace::InvalidIndex) address_declared = true;
 				}
 				if (object->parent == uni::AMLNamespace::InvalidIndex || object->parent == scope) break;
 				scope = object->parent;
@@ -1275,7 +1328,7 @@ namespace Devs {
 			else return;
 			const stduint value_bytes = width / 8;
 			if (descriptor_length < value_offset + value_bytes * 5) {
-				report_acpi_malformed(AcpiMalformedKind::ResourceLength, descriptor);
+				report_acpi_malformed(AcpiMalformedKind::GPIODescriptor, descriptor);
 				return;
 			}
 			const uint8 resource_type = descriptor[3];
@@ -1321,29 +1374,63 @@ namespace Devs {
 			append_range_resource(device_index, resource_type ? AcpiResourceType::IoPort : AcpiResourceType::Memory, 64, flags, read_le64(descriptor + 16), read_le64(descriptor + 24), read_le64(descriptor + 40), read_le64(descriptor + 8), read_le64(descriptor + 32));
 		}
 
+		DeviceAcpiGPIOResourceStatus device_acpi_gpio_status(uni::ACPIResource::GPIOConnectionStatus status) {
+			switch (status) {
+			case uni::ACPIResource::GPIOConnectionStatus::Success: return DeviceAcpiGPIOResourceStatus::Success;
+			case uni::ACPIResource::GPIOConnectionStatus::UnsupportedRevision: return DeviceAcpiGPIOResourceStatus::UnsupportedRevision;
+			case uni::ACPIResource::GPIOConnectionStatus::UnsupportedConnectionType: return DeviceAcpiGPIOResourceStatus::UnsupportedConnectionType;
+			case uni::ACPIResource::GPIOConnectionStatus::ReservedValue: return DeviceAcpiGPIOResourceStatus::ReservedValue;
+			case uni::ACPIResource::GPIOConnectionStatus::InvalidPinTable: return DeviceAcpiGPIOResourceStatus::InvalidPinTable;
+			case uni::ACPIResource::GPIOConnectionStatus::InvalidResourceSource: return DeviceAcpiGPIOResourceStatus::InvalidResourceSource;
+			case uni::ACPIResource::GPIOConnectionStatus::InvalidVendorData: return DeviceAcpiGPIOResourceStatus::InvalidVendorData;
+			case uni::ACPIResource::GPIOConnectionStatus::DuplicatePin: return DeviceAcpiGPIOResourceStatus::DuplicatePin;
+			default: return DeviceAcpiGPIOResourceStatus::MalformedDescriptor;
+			}
+		}
+
+		AcpiGPIOResourceRecord* append_acpi_gpio_resource(uint16 device_index, uint16 descriptor_index, uint16 pin_index) {
+			if (!acpi_gpio_resources || acpi_gpio_resource_count >= AcpiGPIOResourceCapacity) {
+				acpi_gpio_resource_truncated = true;
+				return nullptr;
+			}
+			auto& resource = acpi_gpio_resources[acpi_gpio_resource_count++];
+			resource = {};
+			resource.device_index = device_index;
+			resource.controller_device_index = InvalidAcpiDeviceIndex;
+			resource.descriptor_index = descriptor_index;
+			resource.pin_index = pin_index;
+			resource.pin = 0xFFFFu;
+			resource.controller_status = uint8(AcpiControllerLinkStatus::SourceMissing);
+			resource.dependency_status = DeviceAcpiGPIODependencyStatus::NotDeclared;
+			return &resource;
+		}
+
 		void append_gpio_resources(uint16 device_index, const uint8* descriptor, stduint descriptor_length) {
-			if (descriptor_length < 25) {
+			const uint16 descriptor_index = uint16(acpi_gpio_descriptor_count++);
+			uni::ACPIResource::GPIOConnection connection = {};
+			const auto decode_status = uni::ACPIResource::DecodeGPIOConnection(descriptor, descriptor_length, connection);
+			if (decode_status != uni::ACPIResource::GPIOConnectionStatus::Success) {
+				auto* resource = append_acpi_gpio_resource(device_index, descriptor_index, 0);
+				if (resource) resource->status = device_acpi_gpio_status(decode_status);
 				report_acpi_malformed(AcpiMalformedKind::ResourceLength, descriptor);
 				return;
 			}
-			const uint8 connection_type = descriptor[4];
-			if (connection_type > 1) return;
-			const uint16 pin_offset = read_le16(descriptor + 14);
-			const uint16 source_offset = read_le16(descriptor + 17);
-			const uint16 vendor_offset = read_le16(descriptor + 19);
-			const stduint source_end = vendor_offset ? vendor_offset : descriptor_length;
-			if (pin_offset < 23 || source_offset < pin_offset || source_offset > descriptor_length || source_end < source_offset || source_end > descriptor_length || ((source_offset - pin_offset) & 1u)) {
-				report_acpi_malformed(AcpiMalformedKind::ResourceLength, descriptor);
-				return;
-			}
-			const uint32 flags = uint32(read_le16(descriptor + 5)) | uint32(read_le16(descriptor + 7)) << 16;
-			for (stduint pin = pin_offset; pin + 2 <= source_offset; pin += 2) {
-				auto* resource = append_acpi_resource(device_index, connection_type ? AcpiResourceType::GpioIo : AcpiResourceType::GpioInterrupt);
+			for0(pin_index, connection.pin_count) {
+				uint16 pin = 0;
+				if (!uni::ACPIResource::ReadGPIOPin(connection, pin_index, pin) || pin == 0xFFFFu) continue;
+				auto* resource = append_acpi_gpio_resource(device_index, descriptor_index, uint16(pin_index));
 				if (!resource) return;
-				resource->value = read_le16(descriptor + pin);
-				resource->flags = flags;
-				resource->width = descriptor[9];
-				copy_resource_source(resource->source, descriptor + source_offset, descriptor + source_end);
+				resource->pin = pin;
+				resource->general_flags = connection.general_flags;
+				resource->connection_flags = connection.connection_flags;
+				resource->drive_strength = connection.drive_strength;
+				resource->debounce_timeout = connection.debounce_timeout;
+				resource->revision = connection.revision;
+				resource->resource_source_index = connection.resource_source_index;
+				resource->pin_configuration = connection.pin_configuration;
+				resource->type = connection.type;
+				resource->status = DeviceAcpiGPIOResourceStatus::Success;
+				copy_text_range(resource->resource_source, sizeof(resource->resource_source), reinterpret_cast<const uint8*>(connection.resource_source), reinterpret_cast<const uint8*>(connection.resource_source) + connection.resource_source_length);
 			}
 		}
 
@@ -1980,6 +2067,281 @@ namespace Devs {
 			}
 		}
 
+		stduint follow_acpi_alias(const uni::AMLNamespace& aml_namespace, stduint object) {
+			for0(depth, uni::AMLNamespace::MaximumDepth) {
+				const auto* current = aml_namespace.At(object);
+				if (!current || current->type != uni::AMLNamespace::ObjectType::Alias) return object;
+				if (current->reference == uni::AMLNamespace::InvalidIndex) return uni::AMLNamespace::InvalidIndex;
+				object = current->reference;
+			}
+			return uni::AMLNamespace::InvalidIndex;
+		}
+
+		void resolve_x86_acpi_gpio_controllers(const uni::AMLNamespace& aml_namespace) {
+			for0(index, acpi_gpio_resource_count) {
+				auto& resource = acpi_gpio_resources[index];
+				if (resource.status != DeviceAcpiGPIOResourceStatus::Success) continue;
+				resource.controller_device_index = InvalidAcpiDeviceIndex;
+				resource.pci_controller = nullptr;
+				resource.controller_status = uint8(AcpiControllerLinkStatus::SourceMissing);
+				uni::AMLBytecode::Name source = {};
+				if (!parse_acpi_resource_source(resource.resource_source, source)) {
+					resource.status = DeviceAcpiGPIOResourceStatus::MalformedResourceSource;
+					resource.controller_status = uint8(AcpiControllerLinkStatus::MalformedSource);
+					continue;
+				}
+				if (resource.device_index >= acpi_device_count) {
+					resource.status = DeviceAcpiGPIOResourceStatus::ControllerNotFound;
+					resource.controller_status = uint8(AcpiControllerLinkStatus::NamespaceMissing);
+					continue;
+				}
+				const stduint controller_object = follow_acpi_alias(aml_namespace, aml_namespace.Find(acpi_devices[resource.device_index].namespace_object, source));
+				const auto* controller = aml_namespace.At(controller_object);
+				if (!controller) {
+					resource.status = DeviceAcpiGPIOResourceStatus::ControllerNotFound;
+					resource.controller_status = uint8(AcpiControllerLinkStatus::NamespaceMissing);
+					continue;
+				}
+				if (controller->type != uni::AMLNamespace::ObjectType::Device) {
+					resource.status = DeviceAcpiGPIOResourceStatus::ControllerNotDevice;
+					resource.controller_status = uint8(AcpiControllerLinkStatus::NamespaceMissing);
+					continue;
+				}
+				if (!aml_namespace.FormatPath(controller_object, resource.controller_path, sizeof(resource.controller_path))) {
+					resource.status = DeviceAcpiGPIOResourceStatus::ControllerNotFound;
+					resource.controller_status = uint8(AcpiControllerLinkStatus::NamespaceMissing);
+					continue;
+				}
+				const int controller_device_index = find_acpi_device(resource.controller_path);
+				if (controller_device_index < 0) {
+					resource.status = DeviceAcpiGPIOResourceStatus::ControllerNotFound;
+					resource.controller_status = uint8(AcpiControllerLinkStatus::NamespaceMissing);
+					continue;
+				}
+				resource.controller_device_index = uint16(controller_device_index);
+				if (!aml_scope_declares_pci_address(aml_namespace, controller_object)) resource.controller_status = uint8(AcpiControllerLinkStatus::AcpiOnly);
+				else {
+					AmlPciLocation location = {};
+					if (!resolve_aml_pci_scope(aml_namespace, controller_object, location)) resource.controller_status = uint8(AcpiControllerLinkStatus::PciUnresolved);
+					else if (!(resource.pci_controller = find_pci_device_node(location))) resource.controller_status = uint8(AcpiControllerLinkStatus::PciNodeMissing);
+					else resource.controller_status = uint8(AcpiControllerLinkStatus::Pci);
+				}
+				for0(previous_index, index) {
+					const auto& previous = acpi_gpio_resources[previous_index];
+					if (previous.status == DeviceAcpiGPIOResourceStatus::Success && previous.device_index == resource.device_index && previous.type == resource.type && previous.pin == resource.pin && equal_text(previous.controller_path, resource.controller_path)) {
+						resource.status = DeviceAcpiGPIOResourceStatus::DuplicateResource;
+						break;
+					}
+				}
+			}
+		}
+
+		struct AcpiDependencyWorkspace {
+			uni::AMLExecutor::Value values[64];
+			uint8 bytes[256];
+		};
+
+		void resolve_x86_acpi_gpio_dependencies(const uni::AMLNamespace& aml_namespace, uni::AMLExecutor& aml_executor) {
+			auto* workspace = new AcpiDependencyWorkspace{};
+			if (!workspace) {
+				for0(index, acpi_gpio_resource_count) if (acpi_gpio_resources[index].status == DeviceAcpiGPIOResourceStatus::Success) acpi_gpio_resources[index].dependency_status = DeviceAcpiGPIODependencyStatus::EvaluationFailed;
+				return;
+			}
+			const uni::AMLExecutor::ValueStorage storage = { workspace->values, numsof(workspace->values), workspace->bytes, numsof(workspace->bytes) };
+			const char dependency_name[5] = { '_', 'D', 'E', 'P', 0 };
+			for0(device_index, acpi_device_count) {
+				bool has_gpio = false;
+				for0(resource_index, acpi_gpio_resource_count) if (acpi_gpio_resources[resource_index].device_index == device_index && acpi_gpio_resources[resource_index].status == DeviceAcpiGPIOResourceStatus::Success) has_gpio = true;
+				if (!has_gpio) continue;
+				const stduint dependency_object = aml_namespace.FindChild(acpi_devices[device_index].namespace_object, dependency_name);
+				if (dependency_object == uni::AMLNamespace::InvalidIndex) continue;
+				uni::AMLExecutor::Value value = {};
+				const auto evaluation_status = aml_executor.Evaluate(dependency_object, value, storage);
+				const bool package_valid = evaluation_status == uni::AMLExecutor::Status::Success && value.type == uni::AMLExecutor::ValueType::Package && (!value.element_count || value.elements);
+				bool malformed = !package_valid;
+				if (package_valid) {
+					for0(element_index, value.element_count) {
+						const auto& element = value.elements[element_index];
+						if (element.type != uni::AMLExecutor::ValueType::Reference || element.reference_type != uni::AMLExecutor::ReferenceType::Object || follow_acpi_alias(aml_namespace, element.reference) == uni::AMLNamespace::InvalidIndex) {
+							malformed = true;
+							break;
+						}
+					}
+				}
+				for0(resource_index, acpi_gpio_resource_count) {
+					auto& resource = acpi_gpio_resources[resource_index];
+					if (resource.device_index != device_index || resource.status != DeviceAcpiGPIOResourceStatus::Success) continue;
+					resource.dependency_count = package_valid && value.element_count <= 0xFFFFu ? uint16(value.element_count) : 0;
+					if (evaluation_status != uni::AMLExecutor::Status::Success) {
+						resource.dependency_status = DeviceAcpiGPIODependencyStatus::EvaluationFailed;
+						continue;
+					}
+					if (malformed) {
+						resource.dependency_status = DeviceAcpiGPIODependencyStatus::Malformed;
+						continue;
+					}
+					resource.dependency_status = DeviceAcpiGPIODependencyStatus::ControllerNotListed;
+					for0(element_index, value.element_count) {
+						const stduint target = follow_acpi_alias(aml_namespace, value.elements[element_index].reference);
+						const auto* target_object = aml_namespace.At(target);
+						if (!target_object || target_object->type != uni::AMLNamespace::ObjectType::Device) continue;
+						char target_path[AcpiPathCapacity] = {};
+						if (!aml_namespace.FormatPath(target, target_path, sizeof(target_path)) || !equal_text(target_path, resource.controller_path)) continue;
+						const bool available = resource.controller_device_index < acpi_device_count && !acpi_devices[resource.controller_device_index].conditional && !acpi_devices[resource.controller_device_index].sta_dynamic && (!acpi_devices[resource.controller_device_index].has_sta || (acpi_devices[resource.controller_device_index].sta & 1u));
+						resource.dependency_status = available ? DeviceAcpiGPIODependencyStatus::Satisfied : DeviceAcpiGPIODependencyStatus::ControllerUnavailable;
+						break;
+					}
+				}
+			}
+			delete workspace;
+		}
+
+		#if CONFIG_ACPI_BOOT_TEST
+		const char* acpi_gpio_resource_status_name(DeviceAcpiGPIOResourceStatus status) {
+			switch (status) {
+			case DeviceAcpiGPIOResourceStatus::Success: return "success";
+			case DeviceAcpiGPIOResourceStatus::MalformedDescriptor: return "malformed-descriptor";
+			case DeviceAcpiGPIOResourceStatus::UnsupportedRevision: return "unsupported-revision";
+			case DeviceAcpiGPIOResourceStatus::UnsupportedConnectionType: return "unsupported-type";
+			case DeviceAcpiGPIOResourceStatus::ReservedValue: return "reserved-value";
+			case DeviceAcpiGPIOResourceStatus::InvalidPinTable: return "invalid-pin-table";
+			case DeviceAcpiGPIOResourceStatus::InvalidResourceSource: return "invalid-source";
+			case DeviceAcpiGPIOResourceStatus::InvalidVendorData: return "invalid-vendor-data";
+			case DeviceAcpiGPIOResourceStatus::DuplicatePin: return "duplicate-pin";
+			case DeviceAcpiGPIOResourceStatus::DuplicateResource: return "duplicate-resource";
+			case DeviceAcpiGPIOResourceStatus::MalformedResourceSource: return "malformed-source";
+			case DeviceAcpiGPIOResourceStatus::ControllerNotFound: return "controller-not-found";
+			case DeviceAcpiGPIOResourceStatus::ControllerNotDevice: return "controller-not-device";
+			default: return "unknown";
+			}
+		}
+
+		const char* acpi_gpio_dependency_status_name(DeviceAcpiGPIODependencyStatus status) {
+			switch (status) {
+			case DeviceAcpiGPIODependencyStatus::NotDeclared: return "not-declared";
+			case DeviceAcpiGPIODependencyStatus::Satisfied: return "satisfied";
+			case DeviceAcpiGPIODependencyStatus::ControllerNotListed: return "controller-not-listed";
+			case DeviceAcpiGPIODependencyStatus::ControllerUnavailable: return "controller-unavailable";
+			case DeviceAcpiGPIODependencyStatus::Malformed: return "malformed";
+			case DeviceAcpiGPIODependencyStatus::EvaluationFailed: return "evaluation-failed";
+			default: return "unknown";
+			}
+		}
+
+		void test_acpi_gpio_resource_decoder(const uni::AMLNamespace& aml_namespace, uni::AMLExecutor& aml_executor) {
+			static const uint8 ValidDescriptor[] = {
+				0x8C, 0x20, 0x00, 0x01, 0x00, 0x01, 0x00, 0x12, 0x00, 0x00, 0x00, 0x00,
+				0x00, 0x00, 0x17, 0x00, 0x00, 0x19, 0x00, 0x23, 0x00, 0x00, 0x00, 0x14,
+				0x00, '\\', '_', 'S', 'B', '.', 'M', 'G', 'P', 'O', 0x00,
+			};
+			static const uint8 DuplicateDescriptor[] = {
+				0x8C, 0x22, 0x00, 0x01, 0x00, 0x01, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00,
+				0x00, 0x00, 0x17, 0x00, 0x00, 0x1B, 0x00, 0x25, 0x00, 0x00, 0x00, 0x14,
+				0x00, 0x14, 0x00, '\\', '_', 'S', 'B', '.', 'M', 'G', 'P', 'O', 0x00,
+			};
+			uni::ACPIResource::GPIOConnection connection = {};
+			const bool decode_passed = uni::ACPIResource::DecodeGPIOConnection(ValidDescriptor, sizeof(ValidDescriptor), connection) == uni::ACPIResource::GPIOConnectionStatus::Success && connection.type == uni::ACPIResource::GPIOConnectionType::Interrupt && connection.pin_count == 1 && connection.connection_flags == 0x12 && connection.resource_source_length == 9;
+			uint16 pin = 0;
+			const bool pin_passed = decode_passed && uni::ACPIResource::ReadGPIOPin(connection, 0, pin) && pin == 0x14;
+			auto* workspace = new uint8[sizeof(ValidDescriptor)];
+			bool offset_passed = false;
+			bool missing_source_passed = false;
+			bool source_passed = false;
+			bool vendor_passed = false;
+			bool revision_passed = false;
+			if (workspace) {
+				MemCopyN(workspace, ValidDescriptor, sizeof(ValidDescriptor));
+				workspace[14] = 0x16;
+				offset_passed = uni::ACPIResource::DecodeGPIOConnection(workspace, sizeof(ValidDescriptor), connection) == uni::ACPIResource::GPIOConnectionStatus::InvalidPinTable;
+				MemCopyN(workspace, ValidDescriptor, sizeof(ValidDescriptor));
+				workspace[25] = 0;
+				missing_source_passed = uni::ACPIResource::DecodeGPIOConnection(workspace, sizeof(ValidDescriptor), connection) == uni::ACPIResource::GPIOConnectionStatus::InvalidResourceSource;
+				MemCopyN(workspace, ValidDescriptor, sizeof(ValidDescriptor));
+				workspace[34] = 'X';
+				source_passed = uni::ACPIResource::DecodeGPIOConnection(workspace, sizeof(ValidDescriptor), connection) == uni::ACPIResource::GPIOConnectionStatus::InvalidResourceSource;
+				MemCopyN(workspace, ValidDescriptor, sizeof(ValidDescriptor));
+				workspace[21] = 1;
+				vendor_passed = uni::ACPIResource::DecodeGPIOConnection(workspace, sizeof(ValidDescriptor), connection) == uni::ACPIResource::GPIOConnectionStatus::InvalidVendorData;
+				MemCopyN(workspace, ValidDescriptor, sizeof(ValidDescriptor));
+				workspace[3] = 2;
+				revision_passed = uni::ACPIResource::DecodeGPIOConnection(workspace, sizeof(ValidDescriptor), connection) == uni::ACPIResource::GPIOConnectionStatus::UnsupportedRevision;
+				delete[] workspace;
+			}
+			const bool duplicate_passed = uni::ACPIResource::DecodeGPIOConnection(DuplicateDescriptor, sizeof(DuplicateDescriptor), connection) == uni::ACPIResource::GPIOConnectionStatus::DuplicatePin;
+			bool path_tested = false;
+			bool path_passed = false;
+			bool dependency_passed = false;
+			bool duplicate_resource_passed = false;
+			const AcpiGPIOResourceRecord* base = nullptr;
+			for0(index, acpi_gpio_resource_count) {
+				const auto& resource = acpi_gpio_resources[index];
+				if (resource.status != DeviceAcpiGPIOResourceStatus::Success || resource.dependency_status != DeviceAcpiGPIODependencyStatus::Satisfied || resource.controller_device_index >= acpi_device_count) continue;
+				if (equal_text(acpi_devices[resource.controller_device_index].hid, "MCOA0005")) {
+					base = &resource;
+					break;
+				}
+			}
+			if (base && acpi_gpio_resource_count <= AcpiGPIOResourceCapacity - 3) {
+				path_tested = true;
+				const stduint saved_count = acpi_gpio_resource_count;
+				auto& invalid_path = acpi_gpio_resources[acpi_gpio_resource_count++];
+				invalid_path = *base;
+				copy_text(invalid_path.resource_source, sizeof(invalid_path.resource_source), "\\_SB_.MISS");
+				invalid_path.controller_path[0] = 0;
+				invalid_path.controller_device_index = InvalidAcpiDeviceIndex;
+				invalid_path.status = DeviceAcpiGPIOResourceStatus::Success;
+				invalid_path.dependency_status = DeviceAcpiGPIODependencyStatus::NotDeclared;
+				auto& unmet_dependency = acpi_gpio_resources[acpi_gpio_resource_count++];
+				unmet_dependency = *base;
+				copy_text(unmet_dependency.resource_source, sizeof(unmet_dependency.resource_source), "\\_SB_.PCI0.MI2C");
+				unmet_dependency.controller_path[0] = 0;
+				unmet_dependency.controller_device_index = InvalidAcpiDeviceIndex;
+				unmet_dependency.status = DeviceAcpiGPIOResourceStatus::Success;
+				unmet_dependency.dependency_status = DeviceAcpiGPIODependencyStatus::NotDeclared;
+				auto& duplicate_resource = acpi_gpio_resources[acpi_gpio_resource_count++];
+				duplicate_resource = *base;
+				duplicate_resource.status = DeviceAcpiGPIOResourceStatus::Success;
+				resolve_x86_acpi_gpio_controllers(aml_namespace);
+				resolve_x86_acpi_gpio_dependencies(aml_namespace, aml_executor);
+				path_passed = invalid_path.status == DeviceAcpiGPIOResourceStatus::ControllerNotFound;
+				dependency_passed = unmet_dependency.status == DeviceAcpiGPIOResourceStatus::Success && unmet_dependency.dependency_status == DeviceAcpiGPIODependencyStatus::ControllerNotListed;
+				duplicate_resource_passed = duplicate_resource.status == DeviceAcpiGPIOResourceStatus::DuplicateResource;
+				invalid_path = {};
+				unmet_dependency = {};
+				duplicate_resource = {};
+				acpi_gpio_resource_count = saved_count;
+			}
+			ploginfo("[ACPI-GPIO-TEST] decode=%s pin=%s offset=%s missing-source=%s source-end=%s vendor=%s revision=%s duplicate-pin=%s path=%s duplicate-resource=%s dependency=%s", decode_passed ? "success" : "failed", pin_passed ? "success" : "failed", offset_passed ? "success" : "failed", missing_source_passed ? "success" : "failed", source_passed ? "success" : "failed", vendor_passed ? "success" : "failed", revision_passed ? "success" : "failed", duplicate_passed ? "success" : "failed", path_tested ? (path_passed ? "success" : "failed") : "not-run", path_tested ? (duplicate_resource_passed ? "success" : "failed") : "not-run", path_tested ? (dependency_passed ? "success" : "failed") : "not-run");
+		}
+
+		void log_acpi_gpio_summary() {
+			if (!acpi_gpio_descriptor_count) return;
+			stduint valid = 0;
+			stduint invalid = 0;
+			stduint dependency_satisfied = 0;
+			stduint dependency_unmet = 0;
+			stduint dependency_not_declared = 0;
+			const AcpiGPIOResourceRecord* example = nullptr;
+			for0(index, acpi_gpio_resource_count) {
+				const auto& resource = acpi_gpio_resources[index];
+				if (resource.status == DeviceAcpiGPIOResourceStatus::Success) ++valid;
+				else {
+					++invalid;
+					if (!example) example = &resource;
+				}
+				if (resource.dependency_status == DeviceAcpiGPIODependencyStatus::Satisfied) ++dependency_satisfied;
+				else if (resource.dependency_status == DeviceAcpiGPIODependencyStatus::NotDeclared) ++dependency_not_declared;
+				else {
+					++dependency_unmet;
+					if (!example) example = &resource;
+				}
+			}
+			if (!example && acpi_gpio_resource_count) example = acpi_gpio_resources;
+			if (example && example->device_index < acpi_device_count) ploginfo("[ACPI-GPIO-SUM] descriptors=%u pins=%u valid=%u invalid=%u dep-ok=%u dep-none=%u dep-unmet=%u example=%s status=%s dependency=%s", acpi_gpio_descriptor_count, acpi_gpio_resource_count, valid, invalid, dependency_satisfied, dependency_not_declared, dependency_unmet, acpi_devices[example->device_index].path, acpi_gpio_resource_status_name(example->status), acpi_gpio_dependency_status_name(example->dependency_status));
+			else ploginfo("[ACPI-GPIO-SUM] descriptors=%u pins=%u valid=%u invalid=%u dep-ok=%u dep-none=%u dep-unmet=%u", acpi_gpio_descriptor_count, acpi_gpio_resource_count, valid, invalid, dependency_satisfied, dependency_not_declared, dependency_unmet);
+		}
+		#endif
+
 		#if CONFIG_ACPI_BOOT_TEST
 		void log_acpi_controller_links() {
 			if (!acpi_serial_resource_count) return;
@@ -1995,6 +2357,7 @@ namespace Devs {
 		}
 
 		void populate_acpi_properties(DeviceAcpiInfo* info, uint16 device_index);
+		void populate_hid_i2c_descriptor_register(DeviceAcpiInfo* info, uint16 device_index);
 
 		void release_acpi_info(DeviceAcpiInfo* info) {
 			if (!info) return;
@@ -2033,15 +2396,14 @@ namespace Devs {
 				if (resource.device_index != device_index) continue;
 				switch (resource.type) {
 				case AcpiResourceType::Irq: ++info->irq_resource_count; break;
-				case AcpiResourceType::GpioInterrupt:
-				case AcpiResourceType::GpioIo: ++info->gpio_resource_count; break;
 				case AcpiResourceType::Memory:
 				case AcpiResourceType::IoPort: ++info->range_resource_count; break;
 				default: break;
 				}
 			}
+			for0(index, acpi_gpio_resource_count) if (acpi_gpio_resources[index].device_index == device_index) ++info->gpio_resource_count;
 			if (info->serial_resource_count) info->serial_resources = new DeviceAcpiSerialResource[info->serial_resource_count]{};
-			if (info->gpio_resource_count) info->gpio_resources = new DeviceAcpiGpioResource[info->gpio_resource_count]{};
+			if (info->gpio_resource_count) info->gpio_resources = new DeviceAcpiGPIOResource[info->gpio_resource_count]{};
 			if (info->irq_resource_count) info->irq_resources = new DeviceAcpiIrqResource[info->irq_resource_count]{};
 			if (info->range_resource_count) info->range_resources = new DeviceAcpiRangeResource[info->range_resource_count]{};
 			if ((info->serial_resource_count && !info->serial_resources) || (info->gpio_resource_count && !info->gpio_resources) || (info->irq_resource_count && !info->irq_resources) || (info->range_resource_count && !info->range_resources)) {
@@ -2070,6 +2432,60 @@ namespace Devs {
 				target.parity = source.parity;
 				target.lines_enabled = source.lines_enabled;
 			}
+			for0(index, acpi_gpio_resource_count) {
+				const auto& source = acpi_gpio_resources[index];
+				if (source.device_index != device_index) continue;
+				auto& target = info->gpio_resources[gpio_index++];
+				copy_text(target.resource_source, sizeof(target.resource_source), source.resource_source);
+				copy_text(target.controller_path, sizeof(target.controller_path), source.controller_path);
+				target.pin = source.pin;
+				target.general_flags = source.general_flags;
+				target.connection_flags = source.connection_flags;
+				target.drive_strength = source.drive_strength;
+				target.debounce_timeout = source.debounce_timeout;
+				target.descriptor_index = source.descriptor_index;
+				target.pin_index = source.pin_index;
+				target.dependency_count = source.dependency_count;
+				target.revision = source.revision;
+				target.resource_source_index = source.resource_source_index;
+				target.pin_configuration = source.pin_configuration;
+				target.type = source.type == uni::ACPIResource::GPIOConnectionType::Interrupt ? DeviceAcpiGPIOConnectionType::Interrupt : DeviceAcpiGPIOConnectionType::IO;
+				target.status = source.status;
+				target.dependency_status = source.dependency_status;
+				target.binding_status = DeviceGPIOBindingStatus::Unresolved;
+				target.consumer = (source.general_flags & 1u) != 0;
+				target.sharing = source.connection_flags & 8u ? DeviceAcpiGPIOSharing::Shared : DeviceAcpiGPIOSharing::Exclusive;
+				switch (source.pin_configuration) {
+				case 0: target.pull = DeviceAcpiGPIOPull::Default; break;
+				case 1: target.pull = DeviceAcpiGPIOPull::Up; break;
+				case 2: target.pull = DeviceAcpiGPIOPull::Down; break;
+				case 3: target.pull = DeviceAcpiGPIOPull::None; break;
+				default: target.pull = DeviceAcpiGPIOPull::VendorDefined; break;
+				}
+				if (target.type == DeviceAcpiGPIOConnectionType::Interrupt) {
+					// ACPI Specification 6.5, section 6.4.3.8.1: GPIO Interrupt Connection flags.
+					target.trigger = source.connection_flags & 1u ? DeviceAcpiGPIOTrigger::Edge : DeviceAcpiGPIOTrigger::Level;
+					switch ((source.connection_flags >> 1) & 3u) {
+					case 0: target.polarity = DeviceAcpiGPIOPolarity::ActiveHigh; break;
+					case 1: target.polarity = DeviceAcpiGPIOPolarity::ActiveLow; break;
+					default: target.polarity = DeviceAcpiGPIOPolarity::ActiveBoth; break;
+					}
+					target.io_restriction = DeviceAcpiGPIOIORestriction::NotApplicable;
+					target.wake_capable = (source.connection_flags & 0x10u) != 0;
+				}
+				else {
+					// ACPI Specification 6.5, section 6.4.3.8.2: GPIO I/O Connection flags.
+					target.trigger = DeviceAcpiGPIOTrigger::NotApplicable;
+					target.polarity = DeviceAcpiGPIOPolarity::NotApplicable;
+					target.wake_capable = false;
+					switch (source.connection_flags & 3u) {
+					case 0: target.io_restriction = DeviceAcpiGPIOIORestriction::None; break;
+					case 1: target.io_restriction = DeviceAcpiGPIOIORestriction::InputOnly; break;
+					case 2: target.io_restriction = DeviceAcpiGPIOIORestriction::OutputOnly; break;
+					default: target.io_restriction = DeviceAcpiGPIOIORestriction::NoneAndPreserve; break;
+					}
+				}
+			}
 			for0(index, acpi_resource_count) {
 				const auto& source = acpi_resources[index];
 				if (source.device_index != device_index) continue;
@@ -2078,16 +2494,6 @@ namespace Devs {
 					auto& target = info->irq_resources[irq_index++];
 					target.interrupt = source.value;
 					target.flags = source.flags;
-					break;
-				}
-				case AcpiResourceType::GpioInterrupt:
-				case AcpiResourceType::GpioIo: {
-					auto& target = info->gpio_resources[gpio_index++];
-					copy_text(target.controller_path, sizeof(target.controller_path), source.source);
-					target.pin = source.value;
-					target.flags = source.flags;
-					target.type = source.type == AcpiResourceType::GpioInterrupt ? DeviceAcpiGpioType::Interrupt : DeviceAcpiGpioType::Io;
-					target.pin_config = source.width;
 					break;
 				}
 				case AcpiResourceType::Memory:
@@ -2107,6 +2513,7 @@ namespace Devs {
 				}
 			}
 			populate_acpi_properties(info, device_index);
+			populate_hid_i2c_descriptor_register(info, device_index);
 			return info;
 		}
 
@@ -2153,15 +2560,13 @@ namespace Devs {
 			}
 		}
 
-		DeviceNode* ensure_acpi_controller_node(const AcpiSerialResourceRecord& resource, bool& first_link, bool& platform_controller) {
+		DeviceNode* ensure_acpi_controller_node(uint16 device_index, AcpiControllerLinkStatus status, DeviceNode* pci_controller, bool& first_link, bool& platform_controller) {
 			first_link = false;
 			platform_controller = false;
-			if (resource.controller_device_index >= acpi_device_count) return nullptr;
-			const uint16 device_index = resource.controller_device_index;
+			if (device_index >= acpi_device_count) return nullptr;
 			if (acpi_controller_nodes[device_index]) return acpi_controller_nodes[device_index];
 			DeviceNode* controller = nullptr;
-			const auto status = AcpiControllerLinkStatus(resource.controller_status);
-			if (status == AcpiControllerLinkStatus::Pci) controller = resource.pci_controller;
+			if (status == AcpiControllerLinkStatus::Pci) controller = pci_controller;
 			else if (status == AcpiControllerLinkStatus::AcpiOnly) {
 				char name[48] = {};
 				format_acpi_node_name(name, sizeof(name), "acpi-controller@", device_index, false);
@@ -2174,6 +2579,10 @@ namespace Devs {
 			acpi_controller_nodes[device_index] = controller;
 			first_link = true;
 			return controller;
+		}
+
+		DeviceNode* ensure_acpi_controller_node(const AcpiSerialResourceRecord& resource, bool& first_link, bool& platform_controller) {
+			return ensure_acpi_controller_node(resource.controller_device_index, AcpiControllerLinkStatus(resource.controller_status), resource.pci_controller, first_link, platform_controller);
 		}
 
 		DeviceNode* ensure_acpi_serial_bus(const AcpiSerialResourceRecord& resource, DeviceNode* controller, bool& created) {
@@ -2269,6 +2678,72 @@ namespace Devs {
 			(void)platform_controller_count;
 			(void)bus_count;
 			(void)endpoint_count;
+			(void)skipped_count;
+			#endif
+		}
+
+		DeviceNode* ensure_acpi_gpio_endpoint_node(uint16 device_index, bool& created) {
+			created = false;
+			if (device_index >= acpi_device_count) return nullptr;
+			if (acpi_endpoint_nodes[device_index]) return acpi_endpoint_nodes[device_index];
+			char name[48] = {};
+			format_acpi_node_name(name, sizeof(name), "acpi-device@", device_index, false);
+			auto* root = get_bus_root(DeviceBusType::Platform);
+			auto* endpoint = find_named_child(root, DeviceNodeType::PlatformDevice, name);
+			if (!endpoint) {
+				endpoint = append_plain_device(root, DeviceNodeType::PlatformDevice, DeviceBusType::Platform, StrHeap(name));
+				created = endpoint != nullptr;
+			}
+			if (!endpoint || !attach_acpi_info(endpoint, device_index)) return nullptr;
+			acpi_endpoint_nodes[device_index] = endpoint;
+			return endpoint;
+		}
+
+		void materialize_x86_acpi_gpio_devices() {
+			stduint controller_count = 0;
+			stduint endpoint_count = 0;
+			stduint linked_count = 0;
+			stduint skipped_count = 0;
+			for0(index, acpi_gpio_resource_count) {
+				const auto& resource = acpi_gpio_resources[index];
+				const auto status = AcpiControllerLinkStatus(resource.controller_status);
+				if (resource.status != DeviceAcpiGPIOResourceStatus::Success || !acpi_device_is_present(resource.device_index) || !acpi_device_is_present(resource.controller_device_index) || (status != AcpiControllerLinkStatus::Pci && status != AcpiControllerLinkStatus::AcpiOnly)) {
+					++skipped_count;
+					continue;
+				}
+				bool first_controller_link = false;
+				bool platform_controller = false;
+				auto* controller = ensure_acpi_controller_node(resource.controller_device_index, status, resource.pci_controller, first_controller_link, platform_controller);
+				if (!controller) {
+					++skipped_count;
+					continue;
+				}
+				if (first_controller_link) ++controller_count;
+				bool endpoint_created = false;
+				auto* endpoint = ensure_acpi_gpio_endpoint_node(resource.device_index, endpoint_created);
+				if (!endpoint || !endpoint->fields.acpi_info) {
+					++skipped_count;
+					continue;
+				}
+				if (endpoint_created) ++endpoint_count;
+				bool linked = false;
+				for0(gpio_index, endpoint->fields.acpi_info->gpio_resource_count) {
+					auto& runtime = endpoint->fields.acpi_info->gpio_resources[gpio_index];
+					if (runtime.descriptor_index != resource.descriptor_index || runtime.pin_index != resource.pin_index || runtime.pin != resource.pin || !equal_text(runtime.controller_path, resource.controller_path)) continue;
+					runtime.controller_node = controller;
+					runtime.binding_status = runtime.dependency_status == DeviceAcpiGPIODependencyStatus::NotDeclared || runtime.dependency_status == DeviceAcpiGPIODependencyStatus::Satisfied ? DeviceGPIOBindingStatus::WaitingController : DeviceGPIOBindingStatus::Failed;
+					linked = true;
+					break;
+				}
+				if (linked) ++linked_count;
+				else ++skipped_count;
+			}
+			#if CONFIG_ACPI_BOOT_TEST
+			if (acpi_gpio_resource_count) ploginfo("[ACPI-GPIO-NODE-SUM] controller=%u endpoint=%u linked=%u skipped=%u", controller_count, endpoint_count, linked_count, skipped_count);
+			#else
+			(void)controller_count;
+			(void)endpoint_count;
+			(void)linked_count;
 			(void)skipped_count;
 			#endif
 		}
@@ -2498,8 +2973,8 @@ namespace Devs {
 		};
 
 		AmlRuntime* aml_runtime = nullptr;
-		#if CONFIG_ACPI_BOOT_TEST
 		constexpr uni::ACPIUUID HidOverI2cDsmUuid = { 0x3CDFF6F7u, 0x4267u, 0x4555u, { 0xAD, 0x05, 0xB3, 0x0A, 0x3D, 0x89, 0x38, 0xDE } };
+		#if CONFIG_ACPI_BOOT_TEST
 		constexpr uni::ACPIUUID AmlDsmSecondUuid = { 0x107EDEDDu, 0xD381u, 0x4FD7u, { 0x8D, 0xA9, 0x08, 0xE9, 0xA6, 0xC7, 0x96, 0x44 } };
 		constexpr uni::ACPIUUID AmlDsmMalformedUuid = { 0x893F00A6u, 0x660Cu, 0x494Eu, { 0xBC, 0xFD, 0x30, 0x43, 0xF4, 0xFB, 0x67, 0xC0 } };
 		#endif
@@ -2523,6 +2998,28 @@ namespace Devs {
 		stduint acpi_dsd_nonstandard_count = 0;
 		stduint acpi_dsd_failed_count = 0;
 		char acpi_dsd_failure_example[AcpiPathCapacity] = {};
+
+		struct AmlHidI2cDsmWorkspace {
+			uni::ACPIDSM::Workspace dsm = {};
+			uni::AMLExecutor::Value result_values[16] = {};
+			uint8 result_bytes[64] = {};
+		};
+
+		void populate_hid_i2c_descriptor_register(DeviceAcpiInfo* info, uint16 device_index) {
+			if (!info || !aml_runtime || device_index >= acpi_device_count) return;
+			const auto& device = acpi_devices[device_index];
+			if (!is_hid_i2c_device_description(device)) return;
+			auto* workspace = new AmlHidI2cDsmWorkspace;
+			if (!workspace) return;
+			const uni::AMLExecutor::ValueStorage storage = { workspace->result_values, numsof(workspace->result_values), workspace->result_bytes, numsof(workspace->result_bytes) };
+			uni::ACPIDSM::Result result = {};
+			const auto status = aml_runtime->acpi_dsm.Invoke(device.namespace_object, HidOverI2cDsmUuid, 1, 1, nullptr, uni::ACPIDSM::ReturnType::Integer, result, workspace->dsm, storage);
+			if (status == uni::ACPIDSM::Status::Success && result.value.integer <= 0xFFFFu) {
+				info->hid_i2c_descriptor_register = uint16(result.value.integer);
+				info->flags |= DeviceAcpiInfoFlag_HasHidI2cDescriptorRegister;
+			}
+			delete workspace;
+		}
 
 		bool add_acpi_dsd_count(stduint& target, stduint value) {
 			if (target > ~stduint(0) - value) return false;
@@ -3010,7 +3507,7 @@ namespace Devs {
 			bool example_register_valid = false;
 			for0(index, acpi_device_count) {
 				const auto& device = acpi_devices[index];
-				if (!device.has_cid || !equal_text(device.cid, "PNP0C50") || device.conditional || device.sta_dynamic || (device.has_sta && !(device.sta & 1u))) continue;
+				if (!is_hid_i2c_device_description(device) || device.conditional || device.sta_dynamic || (device.has_sta && !(device.sta & 1u))) continue;
 				++checked;
 				uni::ACPIDSM::Result result = {};
 				const auto status = aml_runtime->acpi_dsm.Invoke(device.namespace_object, HidOverI2cDsmUuid, 1, 1, nullptr, uni::ACPIDSM::ReturnType::Integer, result, probe->dsm, storage);
@@ -3041,9 +3538,13 @@ namespace Devs {
 
 	void discover_x86_acpi_devices() {
 		if (acpi_resources) delete[] acpi_resources;
+		if (acpi_gpio_resources) delete[] acpi_gpio_resources;
 		acpi_resources = new AcpiResourceRecord[AcpiResourceCapacity];
+		acpi_gpio_resources = new AcpiGPIOResourceRecord[AcpiGPIOResourceCapacity];
 		acpi_device_count = 0;
 		acpi_serial_resource_count = 0;
+		acpi_gpio_resource_count = 0;
+		acpi_gpio_descriptor_count = 0;
 		acpi_resource_count = 0;
 		acpi_conditional_block_count = 0;
 		acpi_parent_absent_count = 0;
@@ -3062,6 +3563,7 @@ namespace Devs {
 		acpi_malformed_record_count = 0;
 		acpi_device_truncated = false;
 		acpi_serial_resource_truncated = false;
+		acpi_gpio_resource_truncated = !acpi_gpio_resources;
 		acpi_resource_truncated = !acpi_resources;
 		#if CONFIG_ACPI_BOOT_TEST
 		for0(index, aml_evaluation_summary_count) aml_evaluation_summaries[index] = {};
@@ -3109,6 +3611,12 @@ namespace Devs {
 		probe_hid_i2c_dsm();
 		#endif
 		resolve_x86_acpi_serial_controllers(aml_runtime->aml_namespace);
+		resolve_x86_acpi_gpio_controllers(aml_runtime->aml_namespace);
+		resolve_x86_acpi_gpio_dependencies(aml_runtime->aml_namespace, aml_runtime->aml_executor);
+		#if CONFIG_ACPI_BOOT_TEST
+		test_acpi_gpio_resource_decoder(aml_runtime->aml_namespace, aml_runtime->aml_executor);
+		log_acpi_gpio_summary();
+		#endif
 		stduint present_count = 0;
 		stduint absent_count = 0;
 		stduint unknown_count = 0;
@@ -3139,17 +3647,25 @@ namespace Devs {
 			}
 		}
 		for0(index, acpi_resource_count) ++resource_counts[stduint(acpi_resources[index].type)];
+		stduint gpio_interrupt_count = 0;
+		stduint gpio_io_count = 0;
+		for0(index, acpi_gpio_resource_count) {
+			if (acpi_gpio_resources[index].status != DeviceAcpiGPIOResourceStatus::Success) continue;
+			if (acpi_gpio_resources[index].type == uni::ACPIResource::GPIOConnectionType::Interrupt) ++gpio_interrupt_count;
+			else ++gpio_io_count;
+		}
 		ploginfo("[ACPI-ENUM] mode=namespace bits=%u tables=%u objects=%u devices=%u present=%u absent=%u unknown=%u serial=%u i2c=%u spi=%u uart=%u other=%u conditional=%u malformed=%u truncated=%u",
 			stduint(sizeof(stduint) * 8), aml_table_count,
 			aml_runtime->aml_namespace.Count(), acpi_device_count, present_count, absent_count, unknown_count,
 			acpi_serial_resource_count,
 			i2c_count, spi_count, uart_count, other_serial_count,
 			acpi_conditional_block_count, acpi_malformed_count,
-			stduint(acpi_device_truncated || acpi_serial_resource_truncated || acpi_resource_truncated || aml_runtime->aml_namespace.Truncated()));
-		ploginfo("[ACPI-RESOURCE-SUM] irq=%u gpio-int=%u gpio-io=%u memory=%u io=%u total=%u truncated=%u", resource_counts[stduint(AcpiResourceType::Irq)], resource_counts[stduint(AcpiResourceType::GpioInterrupt)], resource_counts[stduint(AcpiResourceType::GpioIo)], resource_counts[stduint(AcpiResourceType::Memory)], resource_counts[stduint(AcpiResourceType::IoPort)], acpi_resource_count, stduint(acpi_resource_truncated));
+			stduint(acpi_device_truncated || acpi_serial_resource_truncated || acpi_gpio_resource_truncated || acpi_resource_truncated || aml_runtime->aml_namespace.Truncated()));
+		ploginfo("[ACPI-RESOURCE-SUM] irq=%u gpio-int=%u gpio-io=%u memory=%u io=%u total=%u truncated=%u", resource_counts[stduint(AcpiResourceType::Irq)], gpio_interrupt_count, gpio_io_count, resource_counts[stduint(AcpiResourceType::Memory)], resource_counts[stduint(AcpiResourceType::IoPort)], acpi_resource_count + acpi_gpio_resource_count, stduint(acpi_gpio_resource_truncated || acpi_resource_truncated));
 		log_acpi_controller_links();
 		#endif
 		materialize_x86_acpi_serial_devices();
+		materialize_x86_acpi_gpio_devices();
 		#if CONFIG_ACPI_BOOT_TEST
 		test_acpi_dsd();
 		if (acpi_dsd_present_count || acpi_dsd_failed_count) {
@@ -3171,11 +3687,20 @@ namespace Devs {
 			log_acpi_serial_resource(acpi_serial_resources[index]);
 		}
 		#else
-		const bool discovery_truncated = acpi_device_truncated || acpi_serial_resource_truncated || acpi_resource_truncated || aml_runtime->aml_namespace.Truncated();
+		const bool discovery_truncated = acpi_device_truncated || acpi_serial_resource_truncated || acpi_gpio_resource_truncated || acpi_resource_truncated || aml_runtime->aml_namespace.Truncated();
 		if (discovery_truncated) plogerro("[ACPI] device discovery truncated");
 		if (acpi_malformed_count) plogerro("[ACPI] malformed AML count=%u", acpi_malformed_count);
 		if (unknown_count) plogerro("[ACPI] unresolved device status count=%u", unknown_count);
 		if (acpi_dsd_failed_count) plogerro("[ACPI] _DSD processing failed count=%u example=%s", acpi_dsd_failed_count, acpi_dsd_failure_example[0] ? acpi_dsd_failure_example : "<unknown>");
+		stduint invalid_gpio_count = 0;
+		stduint unmet_gpio_dependency_count = 0;
+		for0(index, acpi_gpio_resource_count) {
+			if (acpi_gpio_resources[index].status != DeviceAcpiGPIOResourceStatus::Success) ++invalid_gpio_count;
+			const auto dependency_status = acpi_gpio_resources[index].dependency_status;
+			if (dependency_status != DeviceAcpiGPIODependencyStatus::NotDeclared && dependency_status != DeviceAcpiGPIODependencyStatus::Satisfied) ++unmet_gpio_dependency_count;
+		}
+		if (invalid_gpio_count) plogerro("[ACPI] invalid GPIO resource count=%u", invalid_gpio_count);
+		if (unmet_gpio_dependency_count) plogerro("[ACPI] unmet GPIO dependency count=%u", unmet_gpio_dependency_count);
 		#endif
 	}
 

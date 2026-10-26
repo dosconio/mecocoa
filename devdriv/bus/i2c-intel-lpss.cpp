@@ -7,6 +7,7 @@
 
 #if (_MCCA & 0xFF00) == 0x8600
 #include <cpp/Device/Bus/PCI.hpp>
+#include <cpp/Device/Bus/Serial/IIC-HID.hpp>
 #include <cpp/Device/IIC>
 
 namespace {
@@ -65,8 +66,9 @@ namespace {
 		uint16 receive_head = 0;
 		uint16 receive_tail = 0;
 		uint16 receive_count = 0;
-		byte register_pointer = 0;
-		bool expect_register = true;
+		byte pending_write[66]{};
+		uint16 register_pointer = 0;
+		uint16 pending_write_length = 0;
 		bool hold_enable_status = false;
 		bool hold_transfer_progress = false;
 		bool hold_bus_busy = false;
@@ -95,6 +97,29 @@ namespace {
 		uni::IICTransferResult transfer_result{};
 	};
 
+	struct HidI2cProtocolTestModel {
+		byte descriptor[uni::HIDI2CDescriptorLength]{};
+		byte report_descriptor[52]{};
+		byte input_packet[64]{};
+		byte feature_packet[64]{};
+		byte output_packet[64]{};
+		byte set_report_packet[64]{};
+		stduint output_length = 0;
+		stduint set_report_length = 0;
+		bool power_on = false;
+		bool reset_requested = false;
+		bool return_reset_completion = false;
+		bool inject_address_nack = false;
+		bool inject_short_transfer = false;
+	};
+
+	struct HidI2cProtocolTestFixture {
+		HidI2cProtocolTestModel model;
+		byte report[64]{};
+		byte payload[4]{};
+		uni::HIDI2CResult result{};
+	};
+
 	DesignWareI2cTestFixture* designware_i2c_test_fixture = nullptr;
 	#endif
 
@@ -107,6 +132,23 @@ namespace {
 	}
 
 	#if CONFIG_ACPI_BOOT_TEST
+	static const byte HidI2cTestReportDescriptor[52] = {
+		0x05, 0x01, 0x09, 0x02, 0xA1, 0x01, 0x09, 0x01, 0xA1, 0x00, 0x05, 0x09,
+		0x19, 0x01, 0x29, 0x03, 0x15, 0x00, 0x25, 0x01, 0x95, 0x03, 0x75, 0x01,
+		0x81, 0x02, 0x95, 0x01, 0x75, 0x05, 0x81, 0x01, 0x05, 0x01, 0x09, 0x30,
+		0x09, 0x31, 0x15, 0x81, 0x25, 0x7F, 0x75, 0x08, 0x95, 0x02, 0x81, 0x06,
+		0xC0, 0xC0, 0x05, 0x01,
+	};
+
+	void FinishDesignWareI2cTestWrite(DesignWareI2cTestModel& model, bool register_only) {
+		if (!model.pending_write_length) return;
+		const stduint address_length = register_only && model.pending_write_length == 2 ? 2u : 1u;
+		model.register_pointer = model.pending_write[0];
+		if (address_length == 2) model.register_pointer |= uint16(model.pending_write[1]) << 8;
+		for (stduint index = address_length; index < model.pending_write_length; ++index) model.memory[byte(model.register_pointer++)] = model.pending_write[index];
+		model.pending_write_length = 0;
+	}
+
 	uint32 ReadDesignWareI2cTestRegister(void* context, stduint offset) {
 		auto* model = static_cast<DesignWareI2cTestModel*>(context);
 		if (!model || offset >= sizeof(model->registers) || offset % sizeof(uint32)) return 0xFFFFFFFFu;
@@ -153,7 +195,7 @@ namespace {
 		if (offset == _IMM(uni::IICDesignWareReg::Enable)) {
 			if (!model->hold_enable_status) model->registers[_IMM(uni::IICDesignWareReg::EnableStatus) / sizeof(uint32)] = value & 1u;
 			if (value & 1u) {
-				model->expect_register = true;
+				model->pending_write_length = 0;
 				model->receive_head = 0;
 				model->receive_tail = 0;
 				model->receive_count = 0;
@@ -184,23 +226,129 @@ namespace {
 			++model->restart_count;
 		}
 		if (value & (1u << 8)) {
+			if (value & (1u << 10)) FinishDesignWareI2cTestWrite(*model, true);
 			if (model->receive_count < numsof(model->receive_fifo)) {
-				model->receive_fifo[model->receive_tail] = model->memory[model->register_pointer++];
+				model->receive_fifo[model->receive_tail] = model->memory[byte(model->register_pointer++)];
 				model->receive_tail = uint16((model->receive_tail + 1u) % numsof(model->receive_fifo));
 				++model->receive_count;
 			}
 		}
-		else if (model->expect_register) {
-			model->register_pointer = byte(value);
-			model->expect_register = false;
-		}
-		else model->memory[model->register_pointer++] = byte(value);
+		else if (model->pending_write_length < numsof(model->pending_write)) model->pending_write[model->pending_write_length++] = byte(value);
 		if (value & (1u << 9)) {
+			if (!(value & (1u << 8))) FinishDesignWareI2cTestWrite(*model, false);
 			model->saw_stop = true;
 			++model->stop_count;
-			model->expect_register = true;
 			model->registers[_IMM(uni::IICDesignWareReg::RawInterruptStatus) / sizeof(uint32)] |= 1u << 9;
 		}
+	}
+
+	void LoadDesignWareI2cHidDescriptor(DesignWareI2cTestModel& model) {
+		static const byte descriptor[uni::HIDI2CDescriptorLength] = {
+			0x1E, 0x00, 0x00, 0x01, 0x34, 0x00, 0x40, 0x00,
+			0x50, 0x00, 0x40, 0x00, 0x60, 0x00, 0x40, 0x00,
+			0x70, 0x00, 0x72, 0x00, 0x34, 0x12, 0x78, 0x56,
+			0x00, 0x01, 0x00, 0x00, 0x00, 0x00,
+		};
+		for0(index, numsof(descriptor)) model.memory[0x20u + index] = descriptor[index];
+		for0(index, numsof(HidI2cTestReportDescriptor)) model.memory[0x40u + index] = HidI2cTestReportDescriptor[index];
+	}
+
+	void LoadHidI2cProtocolTestData(HidI2cProtocolTestModel& model) {
+		static const byte descriptor[uni::HIDI2CDescriptorLength] = {
+			0x1E, 0x00, 0x00, 0x01, 0x34, 0x00, 0x40, 0x00,
+			0x50, 0x00, 0x40, 0x00, 0x60, 0x00, 0x40, 0x00,
+			0x70, 0x00, 0x72, 0x00, 0x34, 0x12, 0x78, 0x56,
+			0x00, 0x01, 0x00, 0x00, 0x00, 0x00,
+		};
+		for0(index, numsof(descriptor)) model.descriptor[index] = descriptor[index];
+		for0(index, numsof(model.report_descriptor)) model.report_descriptor[index] = HidI2cTestReportDescriptor[index];
+		model.input_packet[0] = 5;
+		model.input_packet[1] = 0;
+		model.input_packet[2] = 1;
+		model.input_packet[3] = 0xAAu;
+		model.input_packet[4] = 0x55u;
+		model.feature_packet[0] = 5;
+		model.feature_packet[1] = 0;
+		model.feature_packet[2] = 0x23u;
+		model.feature_packet[3] = 0x33u;
+		model.feature_packet[4] = 0x44u;
+	}
+
+	void CopyHidI2cProtocolTestData(byte* destination, stduint capacity, const byte* source, stduint length) {
+		for0(index, capacity) destination[index] = index < length ? source[index] : 0;
+	}
+
+	uni::IICTransferStatus TransferHidI2cProtocolTest(void* context, uni::IICMessage* messages, stduint count, stduint, uni::IICTransferResult& result) {
+		auto* model = static_cast<HidI2cProtocolTestModel*>(context);
+		result = {};
+		result.failed_message = count;
+		if (!model || !messages || !count) return uni::IICTransferStatus::InvalidArgument;
+		if (model->inject_address_nack) {
+			model->inject_address_nack = false;
+			result.failed_message = 0;
+			result.hardware_status = 1;
+			return uni::IICTransferStatus::AddressNack;
+		}
+		for0(index, count) {
+			if (messages[index].address != 0x2Cu) {
+				result.failed_message = index;
+				return uni::IICTransferStatus::AddressNack;
+			}
+			result.submitted_bytes += messages[index].length;
+		}
+		if (count == 2) {
+			const auto& write = messages[0];
+			auto& read = messages[1];
+			if (!write.write_buffer || write.length < 2 || !read.read_buffer || !(read.flags & uni::IICMessageFlag_Read)) return uni::IICTransferStatus::InvalidArgument;
+			const uint16 register_address = uni::DecodeHIDI2CWord(write.write_buffer);
+			if (register_address == 0x20u) CopyHidI2cProtocolTestData(read.read_buffer, read.length, model->descriptor, numsof(model->descriptor));
+			else if (register_address == 0x40u) CopyHidI2cProtocolTestData(read.read_buffer, read.length, model->report_descriptor, numsof(model->report_descriptor));
+			else if (register_address == 0x70u && write.length == 7u && write.write_buffer[2] == 0x3Fu && write.write_buffer[3] == 2u && write.write_buffer[4] == 0x23u && uni::DecodeHIDI2CWord(write.write_buffer + 5) == 0x72u) CopyHidI2cProtocolTestData(read.read_buffer, read.length, model->feature_packet, numsof(model->feature_packet));
+			else return uni::IICTransferStatus::InvalidArgument;
+			messages[0].transferred = messages[0].length;
+			messages[1].transferred = model->inject_short_transfer && messages[1].length ? messages[1].length - 1 : messages[1].length;
+			model->inject_short_transfer = false;
+			result.completed_messages = 2;
+			result.completed_bytes = messages[0].transferred + messages[1].transferred;
+			return uni::IICTransferStatus::Success;
+		}
+		auto& message = messages[0];
+		if (message.flags & uni::IICMessageFlag_Read) {
+			if (!message.read_buffer) return uni::IICTransferStatus::InvalidArgument;
+			if (model->return_reset_completion) {
+				for0(index, message.length) message.read_buffer[index] = 0;
+				model->return_reset_completion = false;
+			}
+			else CopyHidI2cProtocolTestData(message.read_buffer, message.length, model->input_packet, numsof(model->input_packet));
+		}
+		else {
+			if (!message.write_buffer || message.length < 4) return uni::IICTransferStatus::InvalidArgument;
+			const uint16 register_address = uni::DecodeHIDI2CWord(message.write_buffer);
+			if (register_address == 0x60u) {
+				model->output_length = message.length - 2;
+				CopyHidI2cProtocolTestData(model->output_packet, numsof(model->output_packet), message.write_buffer + 2, model->output_length);
+			}
+			else if (register_address == 0x70u) {
+				const uint8 opcode = message.write_buffer[3] & 0x0Fu;
+				if (opcode == 1u && message.length == 4u && message.write_buffer[2] == 0) model->reset_requested = true;
+				else if (opcode == 8u && message.length == 4u) model->power_on = message.write_buffer[2] == 0;
+				else if (opcode == 3u) {
+					stduint data_offset = (message.write_buffer[2] & 0x0Fu) == 0x0Fu ? 5u : 4u;
+					if (data_offset == 5u && (message.write_buffer[2] != 0x3Fu || message.write_buffer[4] != 0x23u)) return uni::IICTransferStatus::InvalidArgument;
+					if (message.length < data_offset + 4 || uni::DecodeHIDI2CWord(message.write_buffer + data_offset) != 0x72u) return uni::IICTransferStatus::InvalidArgument;
+					data_offset += 2;
+					model->set_report_length = message.length - data_offset;
+					CopyHidI2cProtocolTestData(model->set_report_packet, numsof(model->set_report_packet), message.write_buffer + data_offset, model->set_report_length);
+				}
+				else return uni::IICTransferStatus::InvalidArgument;
+			}
+			else return uni::IICTransferStatus::InvalidArgument;
+		}
+		message.transferred = model->inject_short_transfer && message.length ? message.length - 1 : message.length;
+		model->inject_short_transfer = false;
+		result.completed_messages = 1;
+		result.completed_bytes = message.transferred;
+		return uni::IICTransferStatus::Success;
 	}
 
 	bool RecoverDesignWareI2cTestBus(void* context, stduint timeout) {
@@ -306,10 +454,7 @@ namespace {
 		bus->fields.binding.state = static_cast<uint32>(DriverBindingState::Started);
 		for (auto* endpoint = reinterpret_cast<DeviceNode*>(bus->link.subf); endpoint; endpoint = reinterpret_cast<DeviceNode*>(endpoint->link.next)) {
 			if (DeviceNodeType(endpoint->fields.node_type) != DeviceNodeType::I2cDevice || !FindI2cEndpointResource(endpoint)) continue;
-			if (!Devsman::SetOps(endpoint, &designware_i2c_endpoint_ops)) continue;
-			endpoint->fields.binding.driver_name = "i2c-designware-endpoint";
-			endpoint->fields.binding.probe_result = 0;
-			endpoint->fields.binding.state = static_cast<uint32>(DriverBindingState::Started);
+			Devsman::SetOps(endpoint, &designware_i2c_endpoint_ops);
 		}
 		return true;
 	}
@@ -533,7 +678,7 @@ namespace {
 		ProgramIntelLpssI2cRemap(base, *compatibility);
 		instance->input_clock_hz = resources->input_clock_hz;
 		instance->bus_speed_hz = bus_plan.speed_hz;
-		const uni::IICDesignWareInitialization initialization{ instance->input_clock_hz, instance->bus_speed_hz, DesignWareI2cTransferBudget, nullptr, nullptr };
+		const uni::IICDesignWareInitialization initialization{ instance->input_clock_hz, instance->bus_speed_hz, DesignWareI2cTransferBudget, nullptr, nullptr, compatibility->i2c_sda_hold_time_ns };
 		const auto status = instance->controller.Initialize(initialization);
 		if (status != uni::IICDesignWareStatus::Success) {
 			instance->~IntelLpssI2cInstance();
@@ -588,6 +733,65 @@ namespace {
 	}
 
 	#if CONFIG_ACPI_BOOT_TEST
+	void RunHidI2cProtocolTest() {
+		void* fixture_storage = uni_hostenv_allocator->allocate(sizeof(HidI2cProtocolTestFixture), 4);
+		void* device_storage = uni_hostenv_allocator->allocate(sizeof(uni::HIDI2CDevice), 4);
+		if (!fixture_storage || !device_storage) {
+			if (fixture_storage) uni_hostenv_allocator->deallocate(fixture_storage, sizeof(HidI2cProtocolTestFixture));
+			if (device_storage) uni_hostenv_allocator->deallocate(device_storage, sizeof(uni::HIDI2CDevice));
+			plogwarn("[I2C-HID-CORE-TEST] allocation=failed");
+			return;
+		}
+		auto* fixture = new (fixture_storage) HidI2cProtocolTestFixture();
+		LoadHidI2cProtocolTestData(fixture->model);
+		const uni::HIDI2CTransport transport{ &fixture->model, TransferHidI2cProtocolTest, 0x2Cu, uni::IICMessageFlag_None };
+		auto* device = new (device_storage) uni::HIDI2CDevice(transport, uni_hostenv_allocator);
+
+		const bool descriptor_passed = device->Initialize(0x20u, 128u, fixture->result) == uni::HIDI2CStatus::Success && device->Descriptor().vendor_id == 0x1234u && device->Descriptor().product_id == 0x5678u;
+		const bool report_descriptor_passed = device->ReadReportDescriptor(128u, fixture->result) == uni::HIDI2CStatus::Success && fixture->result.length == numsof(fixture->model.report_descriptor) && device->ReportDescriptor()[0] == 0x05u && device->ReportDescriptor()[51] == 0x01u;
+		uni::HIDReportParseResult parse_result{};
+		const bool report_layout_passed = device->ParseReportDescriptor(parse_result) == uni::HIDReportDescriptorStatus::Success && device->ReportLayout().DefinitionCount() == 1 && device->ReportLayout().FieldCount() == 3 && device->ReportLayout().CollectionCount() == 2;
+		const bool input_passed = device->ReadInput(fixture->report, numsof(fixture->report), 128u, fixture->result) == uni::HIDI2CStatus::Success && fixture->result.length == 3u && fixture->report[0] == 1u && fixture->report[1] == 0xAAu && fixture->report[2] == 0x55u;
+
+		fixture->payload[0] = 0x11u;
+		fixture->payload[1] = 0x22u;
+		const bool output_passed = device->WriteOutput(3u, fixture->payload, 2u, 128u, fixture->result) == uni::HIDI2CStatus::Success && fixture->model.output_length == 5u && uni::DecodeHIDI2CWord(fixture->model.output_packet) == 5u && fixture->model.output_packet[2] == 3u && fixture->model.output_packet[3] == 0x11u && fixture->model.output_packet[4] == 0x22u;
+		const bool feature_get_passed = device->getReport(uni::HIDI2CReportType::Feature, 0x23u, fixture->report, numsof(fixture->report) - 2u, 128u, fixture->result) == uni::HIDI2CStatus::Success && fixture->result.length == 3u && fixture->report[0] == 0x23u && fixture->report[1] == 0x33u && fixture->report[2] == 0x44u;
+		fixture->payload[0] = 0x55u;
+		fixture->payload[1] = 0x66u;
+		const bool feature_set_passed = device->setReport(uni::HIDI2CReportType::Feature, 0x23u, fixture->payload, 2u, 128u, fixture->result) == uni::HIDI2CStatus::Success && fixture->model.set_report_length == 5u && uni::DecodeHIDI2CWord(fixture->model.set_report_packet) == 5u && fixture->model.set_report_packet[2] == 0x23u && fixture->model.set_report_packet[3] == 0x55u && fixture->model.set_report_packet[4] == 0x66u;
+
+		const bool power_passed = device->setPower(uni::HIDI2CPowerState::On, 128u, fixture->result) == uni::HIDI2CStatus::Success && fixture->model.power_on;
+		const bool reset_started = device->BeginReset(128u, fixture->result) == uni::HIDI2CStatus::Success && device->IsResetPending() && fixture->model.reset_requested;
+		fixture->model.return_reset_completion = true;
+		const bool reset_completed = device->ReadInput(fixture->report, numsof(fixture->report), 128u, fixture->result) == uni::HIDI2CStatus::ResetComplete && !device->IsResetPending();
+		const bool reset_passed = power_passed && reset_started && reset_completed;
+		const bool reset_timeout_started = device->BeginReset(128u, fixture->result) == uni::HIDI2CStatus::Success;
+		const bool reset_expired = reset_timeout_started && device->ExpireReset(fixture->result) == uni::HIDI2CStatus::Timeout && !device->IsResetPending();
+		const bool reset_restarted = reset_expired && device->BeginReset(128u, fixture->result) == uni::HIDI2CStatus::Success;
+		fixture->report[0] = 0;
+		fixture->report[1] = 0;
+		const bool reset_timeout_passed = reset_restarted && device->AcceptInput(fixture->report, 2u, fixture->report, numsof(fixture->report), fixture->result) == uni::HIDI2CStatus::ResetComplete && !device->IsResetPending();
+
+		fixture->model.inject_short_transfer = true;
+		const bool short_passed = device->ReadReportDescriptor(128u, fixture->result) == uni::HIDI2CStatus::ShortTransfer;
+		fixture->model.inject_address_nack = true;
+		const bool nack_passed = device->ReadReportDescriptor(128u, fixture->result) == uni::HIDI2CStatus::TransferFailed && fixture->result.transfer_status == uni::IICTransferStatus::AddressNack;
+		fixture->model.input_packet[0] = 65u;
+		const bool length_passed = device->ReadInput(fixture->report, numsof(fixture->report), 128u, fixture->result) == uni::HIDI2CStatus::InvalidReportLength;
+		const bool oversized_report_passed = device->WriteOutput(3u, fixture->payload, uni::HIDI2CMaximumTransferLength + 1u, 128u, fixture->result) == uni::HIDI2CStatus::InvalidReportLength;
+		fixture->model.descriptor[10] = 0x01u;
+		fixture->model.descriptor[11] = 0x10u;
+		const bool oversized_descriptor_passed = device->Initialize(0x20u, 128u, fixture->result) == uni::HIDI2CStatus::InvalidDescriptor && fixture->result.descriptor_status == uni::HIDI2CDescriptorStatus::InvalidInputLength;
+		const bool oversize_passed = oversized_report_passed && oversized_descriptor_passed;
+
+		ploginfo("[I2C-HID-CORE-TEST] descriptor=%s report-desc=%s report-layout=%s input=%s output=%s feature-get=%s feature-set=%s reset=%s reset-timeout=%s short=%s nack=%s length=%s oversize=%s", descriptor_passed ? "success" : "failed", report_descriptor_passed ? "success" : "failed", report_layout_passed ? "success" : "failed", input_passed ? "success" : "failed", output_passed ? "success" : "failed", feature_get_passed ? "success" : "failed", feature_set_passed ? "success" : "failed", reset_passed ? "success" : "failed", reset_timeout_passed ? "success" : "failed", short_passed ? "success" : "failed", nack_passed ? "success" : "failed", length_passed ? "success" : "failed", oversize_passed ? "success" : "failed");
+		device->~HIDI2CDevice();
+		fixture->~HidI2cProtocolTestFixture();
+		uni_hostenv_allocator->deallocate(device_storage, sizeof(uni::HIDI2CDevice));
+		uni_hostenv_allocator->deallocate(fixture_storage, sizeof(HidI2cProtocolTestFixture));
+	}
+
 	void RunDesignWareI2cInitializationTest() {
 		if (designware_i2c_test_fixture) return;
 		auto* endpoint = Devsman::FindNamedNode(DeviceNodeType::I2cDevice, "i2c-dev@0x2C");
@@ -615,8 +819,9 @@ namespace {
 		const bool fast_initialize_passed = fast_initialize_status == uni::IICDesignWareStatus::Success && control == 0x65u && standard_high == 427u && standard_low == 499u && fast_high == 87u && fast_low == 159u;
 		const auto standard_initialize_status = fixture->controller.Initialize(100000000u, 100000u, 32u);
 		const bool standard_initialize_passed = standard_initialize_status == uni::IICDesignWareStatus::Success && fixture->controller.ReadRegister(uni::IICDesignWareReg::Control) == 0x63u;
-		const auto apollo_lake_initialize_status = fixture->controller.Initialize(apollo_lake ? apollo_lake->input_clock_hz : 0, 400000u, 32u);
-		const bool apollo_lake_initialize_passed = apollo_lake_initialize_status == uni::IICDesignWareStatus::Success && fixture->controller.ReadRegister(uni::IICDesignWareReg::StandardSclHighCount) == 569u && fixture->controller.ReadRegister(uni::IICDesignWareReg::StandardSclLowCount) == 664u && fixture->controller.ReadRegister(uni::IICDesignWareReg::FastSclHighCount) == 117u && fixture->controller.ReadRegister(uni::IICDesignWareReg::FastSclLowCount) == 212u;
+		const uni::IICDesignWareInitialization apollo_lake_initialization{ apollo_lake ? apollo_lake->input_clock_hz : 0, 400000u, 32u, nullptr, nullptr, apollo_lake ? apollo_lake->i2c_sda_hold_time_ns : 0 };
+		const auto apollo_lake_initialize_status = fixture->controller.Initialize(apollo_lake_initialization);
+		const bool apollo_lake_initialize_passed = apollo_lake_initialize_status == uni::IICDesignWareStatus::Success && fixture->controller.ReadRegister(uni::IICDesignWareReg::StandardSclHighCount) == 569u && fixture->controller.ReadRegister(uni::IICDesignWareReg::StandardSclLowCount) == 664u && fixture->controller.ReadRegister(uni::IICDesignWareReg::FastSclHighCount) == 117u && fixture->controller.ReadRegister(uni::IICDesignWareReg::FastSclLowCount) == 212u && fixture->controller.ReadRegister(uni::IICDesignWareReg::SdaHold) == 0x0001001Cu;
 		fixture->model.hold_enable_status = true;
 		fixture->model.registers[_IMM(uni::IICDesignWareReg::EnableStatus) / sizeof(uint32)] = 1;
 		const auto disable_timeout_status = fixture->controller.Initialize(100000000u, 400000u, 8u);
@@ -692,7 +897,7 @@ namespace {
 		for0(index, numsof(fixture->received)) {
 			if (fixture->received[index] != byte(index ^ 0x5Au)) message_fifo_passed = false;
 		}
-		const uni::IICDesignWareInitialization recovery_initialization{ 100000000u, 400000u, 32u, &fixture->model, RecoverDesignWareI2cTestBus };
+		const uni::IICDesignWareInitialization recovery_initialization{ 100000000u, 400000u, 32u, &fixture->model, RecoverDesignWareI2cTestBus, 0u };
 		const bool recovery_initialization_passed = fixture->controller.Initialize(recovery_initialization) == uni::IICDesignWareStatus::Success;
 
 		ResetMessages();
@@ -799,6 +1004,7 @@ namespace {
 		const bool reconfigure_passed = reinitialize_after_timeout_passed && recovery_initialization_passed && recovery_failure_reinitialized && fixture->controller.ReadRegister(uni::IICDesignWareReg::Control) == 0x65u && fixture->controller.ReadRegister(uni::IICDesignWareReg::StandardSclHighCount) == 427u && fixture->controller.ReadRegister(uni::IICDesignWareReg::FastSclHighCount) == 87u && fixture->controller.ReadRegister(uni::IICDesignWareReg::EnableStatus) == 1u;
 
 		const bool route_initialized = fixture->controller.Initialize(100000000u, 400000u, 32u) == uni::IICDesignWareStatus::Success;
+		LoadDesignWareI2cHidDescriptor(fixture->model);
 		const bool route_bound = route_initialized && SelectDesignWareI2cBusSpeed(bus) == 400000u && BindDesignWareI2cBus(bus, &fixture->controller);
 		bool route_passed = false;
 		bool message_route_passed = false;
@@ -849,7 +1055,7 @@ namespace {
 			contract_a.dma_mode = DeviceControllerDmaMode::NotRequired;
 			contract_a.dma_source = DeviceControllerResourceSource::DriverPolicy;
 			fixture->model.registers[contract_a.reset_register_offset / sizeof(uint32)] = 0xA0u;
-			const uni::IICDesignWareInitialization initialization_a{ contract_a.input_clock_hz, 400000u, 32u, nullptr, nullptr };
+			const uni::IICDesignWareInitialization initialization_a{ contract_a.input_clock_hz, 400000u, 32u, nullptr, nullptr, 0u };
 			contract_a_passed = Devsman::ValidateControllerResourceContract(contract_a) == DeviceControllerContractStatus::Ready && ApplyControllerReset(contract_a, &fixture->model, ReadDesignWareI2cTestRegister, WriteDesignWareI2cTestRegister) && fixture->controller.Initialize(initialization_a) == uni::IICDesignWareStatus::Success && (fixture->model.registers[contract_a.reset_register_offset / sizeof(uint32)] & contract_a.reset_mask) == (contract_a.reset_deassert_value & contract_a.reset_mask);
 
 			auto& contract_b = contracts[1];
@@ -860,7 +1066,7 @@ namespace {
 			contract_b.reset_mask = 0x30u;
 			contract_b.reset_deassert_value = 0x20u;
 			fixture->model.registers[contract_b.reset_register_offset / sizeof(uint32)] = 0xC0u;
-			const uni::IICDesignWareInitialization initialization_b{ contract_b.input_clock_hz, 400000u, 32u, nullptr, nullptr };
+			const uni::IICDesignWareInitialization initialization_b{ contract_b.input_clock_hz, 400000u, 32u, nullptr, nullptr, 0u };
 			contract_b_passed = Devsman::ValidateControllerResourceContract(contract_b) == DeviceControllerContractStatus::Ready && ApplyControllerReset(contract_b, &fixture->model, ReadDesignWareI2cTestRegister, WriteDesignWareI2cTestRegister) && fixture->controller.Initialize(initialization_b) == uni::IICDesignWareStatus::Success && (fixture->model.registers[contract_b.reset_register_offset / sizeof(uint32)] & contract_b.reset_mask) == (contract_b.reset_deassert_value & contract_b.reset_mask);
 
 			auto& missing_clock = contracts[2];
@@ -877,6 +1083,7 @@ namespace {
 		ploginfo("[I2C-DW-TEST] fast=%s standard=%s apl=%s compat=%s disable-timeout=%s enable-timeout=%s write=%s restart-read=%s fifo=%s nack=%s transfer-timeout=%s route=%s contract-a=%s contract-b=%s missing-clock=%s", fast_initialize_passed ? "success" : "failed", standard_initialize_passed ? "success" : "failed", apollo_lake_initialize_passed ? "success" : "failed", compatibility_passed ? "success" : "failed", disable_timeout_passed ? "success" : "failed", enable_timeout_passed ? "success" : "failed", write_passed ? "success" : "failed", combined_passed ? "success" : "failed", fifo_passed ? "success" : "failed", nack_passed ? "success" : "failed", transfer_timeout_passed ? "success" : "failed", route_passed ? "success" : "failed", contract_a_passed ? "success" : "failed", contract_b_passed ? "success" : "failed", missing_clock_passed ? "success" : "failed");
 		ploginfo("[I2C-MSG-TEST] write=%s read=%s restart=%s fifo=%s addr-nack=%s data-nack=%s arbitration=%s busy=%s timeout=%s invalid=%s ten-bit=%s split-stop=%s route=%s", message_write_passed ? "success" : "failed", message_read_passed ? "success" : "failed", message_restart_passed ? "success" : "failed", message_fifo_passed ? "success" : "failed", message_address_nack_passed ? "success" : "failed", message_data_nack_passed ? "success" : "failed", message_arbitration_passed ? "success" : "failed", message_busy_passed ? "success" : "failed", message_timeout_passed ? "success" : "failed", message_invalid_passed ? "success" : "failed", message_ten_bit_passed ? "success" : "failed", message_split_passed ? "success" : "failed", message_route_passed ? "success" : "failed");
 		ploginfo("[I2C-DW-CORE-TEST] recovery-init=%s abort-recovery=%s timeout-recovery=%s bus-recovery=%s recovery-failed=%s continuous=%s fifo-clean=%s reconfigure=%s", recovery_initialization_passed ? "success" : "failed", abort_recovery_passed ? "success" : "failed", timeout_recovery_passed ? "success" : "failed", bus_recovery_passed ? "success" : "failed", recovery_failure_passed ? "success" : "failed", continuous_passed ? "success" : "failed", fifo_clean_passed ? "success" : "failed", reconfigure_passed ? "success" : "failed");
+		RunHidI2cProtocolTest();
 		if (!route_bound) {
 			fixture->~DesignWareI2cTestFixture();
 			uni_hostenv_allocator->deallocate(fixture);
@@ -902,6 +1109,7 @@ void R_INTEL_LPSS_I2C_INIT() {
 	LogIntelLpssI2cSummary();
 	#if CONFIG_ACPI_BOOT_TEST
 	RunDesignWareI2cInitializationTest();
+	Devsman::StartKnownDrivers();
 	#endif
 }
 #endif

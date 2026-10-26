@@ -173,15 +173,30 @@ def uart_resource(baud, source):
 	return serial_resource(3, 0x13, struct.pack("<IHHBB", baud, 0x40, 0x40, 0, 0xC0), source)
 
 
-def gpio_interrupt(pin, source):
+def gpio_resource(connection_type, general_flags, connection_flags, pin_configuration, drive_strength, debounce_timeout, pins, source):
 	pin_offset = 23
-	source_offset = pin_offset + 2
-	body = bytes((1, 0))
-	body += struct.pack("<HHBHH", 2, 2, 0, 0, 0)
+	source_offset = pin_offset + len(pins) * 2
+	source_data = source.encode("ascii") + b"\x00"
+	vendor_offset = source_offset + len(source_data)
+	body = bytes((1, connection_type))
+	body += struct.pack("<HHBHH", general_flags, connection_flags, pin_configuration, drive_strength, debounce_timeout)
 	body += struct.pack("<H", pin_offset) + bytes((0,))
-	body += struct.pack("<HHH", source_offset, 0, 0)
-	body += struct.pack("<H", pin) + source.encode("ascii") + b"\x00"
+	body += struct.pack("<HHH", source_offset, vendor_offset, 0)
+	body += b"".join(struct.pack("<H", pin) for pin in pins) + source_data
 	return large_resource(0x8C, body)
+
+
+def gpio_interrupt(pin, source):
+	return gpio_resource(0, 1, 0x12, 0, 0, 0, (pin,), source)
+
+
+def gpio_edge_interrupt(pin, source):
+	# ACPI Specification 6.5, section 6.4.3.8.1: Edge, ActiveHigh, Shared.
+	return gpio_resource(0, 1, 0x09, 0, 0, 0, (pin,), source)
+
+
+def gpio_io(pin, source):
+	return gpio_resource(1, 1, 0x09, 0, 0, 0, (pin,), source)
 
 
 def resource_template(*resources):
@@ -232,7 +247,14 @@ def dsd_device_properties():
 
 
 def build_aml():
-	gpio = device("MGPO", name("_HID", string("MCOA0005")), name("_STA", integer(0x0F)))
+	gpio = device("MGPO", name("_HID", string("MCOA0005")), name("_ADR", integer(0)), name("_STA", integer(0x0F)))
+	gpio_edge = device(
+		"MGED",
+		name("_HID", string("MCOA0010")),
+		name("_STA", integer(0x0F)),
+		name("_CRS", buffer(resource_template(gpio_edge_interrupt(0x16, "\\_SB.MGPO")))),
+		name("_DEP", data_package(name_string("\\_SB_.MGPO"))),
+	)
 	method_tests = (
 		name("MVAL", integer(0x2A)),
 		method("MZER", 0, return_value(integer(0x42))),
@@ -248,7 +270,7 @@ def build_aml():
 	)
 
 	touchpad_bus_resources = resource_template(i2c_resource(0x2C, 400000, "\\_SB.PCI0.MI2C"))
-	touchpad_gpio_resources = resource_template(gpio_interrupt(0x14, "\\_SB.MGPO"))
+	touchpad_gpio_resources = resource_template(gpio_interrupt(0x14, "\\_SB.MGPO"), gpio_io(0x15, "\\_SB.MGPO"))
 	touchpad = device(
 		"MTPD",
 		name("_HID", string("ALPS0001")),
@@ -256,6 +278,7 @@ def build_aml():
 		name("_UID", integer(1)),
 		name("SBFB", buffer(touchpad_bus_resources)),
 		name("SBFG", buffer(touchpad_gpio_resources)),
+		name("_DEP", data_package(name_string("\\_SB_.MGPO"))),
 		name("_DSD", dsd_device_properties()),
 		dsm_test_method(),
 		method("_STA", 0, return_value(integer(0x0F))),
@@ -361,7 +384,7 @@ def build_aml():
 		scope("\\_SB_.PCI0.MI2C", name("_DEP", data_package(name_string("\\_SB_.MGPO")))),
 	)
 
-	return scope("\\_SB_", *method_tests, gpio) + scope("\\_SB_.PCI0", i2c, spi, uart) + scope("\\_SB_.PCI0.MI2C", touchpad, absent, dsd_method, dsd_duplicate, dsd_malformed, dsd_duplicate_uuid, dsd_bad_uuid) + conditional_dependency
+	return scope("\\_SB_", *method_tests, gpio, gpio_edge) + scope("\\_SB_.PCI0", i2c, spi, uart) + scope("\\_SB_.PCI0.MI2C", touchpad, absent, dsd_method, dsd_duplicate, dsd_malformed, dsd_duplicate_uuid, dsd_bad_uuid) + conditional_dependency
 
 
 def build_table():

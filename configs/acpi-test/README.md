@@ -1,6 +1,6 @@
 # QEMU ACPI positive table
 
-`qemu-positive.asl` adds one test I2C controller and one I2C, SPI, and UART endpoint under `\_SB.PCI0`. It also covers static and method `_STA`, static and method `_CRS`, PCI Config and System Memory fields, `_DSM`, `_DSD`, a GPIO interrupt, one absent device, and a conditional `_DEP` attached to an unconditional controller. The I2C endpoint follows the physical ALPS touchpad AML shape: it reopens its controller through an absolute `Scope`, then returns separate `SBFB` and `SBFG` resource buffers through `ConcatenateResTemplate`.
+`qemu-positive.asl` adds one test I2C controller and one I2C, SPI, and UART endpoint under `\_SB.PCI0`. It also covers static and method `_STA`, static and method `_CRS`, PCI Config and System Memory fields, `_DSM`, `_DSD`, level and edge GPIO interrupt resources, a GPIO I/O resource, one absent device, endpoint `_DEP` relationships, and a conditional `_DEP` attached to an unconditional controller. The I2C endpoint follows the physical ALPS touchpad AML shape: it reopens its controller through an absolute `Scope`, then returns separate `SBFB` and `SBFG` resource buffers through `ConcatenateResTemplate`.
 
 Build Mecocoa and run with the table injected:
 
@@ -29,13 +29,23 @@ The build uses `iasl` when available and otherwise uses the fixed-table Python g
 Expected deltas from the same QEMU image without this table are:
 
 - `tables`: +1
-- `devices`: +13, with twelve present and one absent
+- `devices`: +14, with thirteen present and one absent
 - `serial`: +3, split into one I2C, one SPI, and one UART resource
-- `gpio-int`: +1
+- `gpio-int`: +2
+- `gpio-io`: +1
 - successful PCI Config reads: at least +1
 - successful System Memory reads: at least +1
 
 The endpoint lines identify `MTPD` as `ALPS0001` at I2C address `0x2C`, `MSPD` at SPI chip select 1, and `MURT` at 115200 baud. Exact global totals depend on QEMU firmware.
+
+The GPIO decoder test checks the descriptor layout, PinTable access, ResourceSource termination, VendorData bounds, revision handling and duplicate pins. The summary confirms that all three synthetic GPIO resources resolve to `\_SB_.MGPO` and that their endpoint `_DEP` relationships are satisfied:
+
+```text
+[ACPI-GPIO-TEST] decode=success pin=success offset=success missing-source=success source-end=success vendor=success revision=success duplicate-pin=success path=success duplicate-resource=success dependency=success
+[ACPI-GPIO-SUM] descriptors=3 pins=3 valid=3 invalid=0 dep-ok=3 dep-none=0 dep-unmet=0 example=\_SB_.PCI0.MI2C.MTPD status=success dependency=satisfied
+[ACPI-GPIO-NODE-SUM] controller=1 endpoint=1 linked=3 skipped=0
+[GPIO-CONTROLLER-TEST] capability=success claim=success release=success duplicate=success range=success conflict=success input=success output=success pending=success mask=success unmask=success acknowledge=success firmware=success waiting=success recovery=success
+```
 
 The table also supplies methods for the generic AML invocation test. A successful run prints one compact line:
 
@@ -53,6 +63,12 @@ The synthetic `PNP0C50` endpoint also produces one HID-over-I2C summary. The des
 
 ```text
 [ACPI-DSM-SUM] hid-i2c=1 success=1 unsupported=0 failed=0 example=\_SB_.PCI0.MI2C.MTPD status=success register=0020
+```
+
+After the DesignWare model is bound, the same endpoint performs the real DeviceNode transaction used for the physical probe. It writes the two-byte descriptor register, issues a repeated START, reads 30 bytes and validates the generic HID-over-I2C descriptor:
+
+```text
+[I2C-HID-PROBE] status=success i2c=success descriptor=success endpoint=\_SB_.PCI0.MI2C.MTPD address=002C controller=0000:00:00.0 register=0020 messages=2 bytes=32 abort=00000000 length=30 version=0100 vid=1234 pid=5678
 ```
 
 The `_DSD` cases cover a named package, a zero-argument method, multiple UUID descriptors, integer, string, buffer, array and device-reference values, duplicate properties, malformed packages, owned DeviceNode storage and `_CRS` precedence. Buffer values under the Device Properties UUID are retained for firmware compatibility and marked nonstandard:
