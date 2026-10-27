@@ -37,6 +37,7 @@ cppfile=\
 	$(ulibpath)/cpp/Device/Bus/Serial/IIC-DesignWare.cpp \
 	$(ulibpath)/cpp/Device/Bus/Serial/IIC-HID.cpp \
 	$(ulibpath)/cpp/Device/HID/HID-Report.cpp \
+	$(ulibpath)/cpp/Device/HID/HID-ALPS.cpp \
 	$(ulibpath)/cpp/Device/GPIO.cpp $(wildcard $(ulibpath)/cpp/Device/GPIO/*.cpp) \
 	$(ulibpath)/cpp/Device/Buzzer.cpp \
 	$(ulibpath)/cpp/Device/Keyboard.cpp \

@@ -11,7 +11,11 @@
 
 #endif
 
+#ifndef CONFIG_ACPI_BOOT_TEST
 #define CONFIG_ACPI_BOOT_TEST 1
+#endif
+// 0 disables boot tests, 1 reports failures only, and 2 reports full test results.
+#define MCCA_BOOT_TEST_LOG(passed, ...) do { if (!(passed)) plogerro(__VA_ARGS__); else if (CONFIG_ACPI_BOOT_TEST >= 2) plogpass(__VA_ARGS__); } while (0)
 
 // _GUI_ENABLE
 #ifdef CONFIG_ENABLE_GRAPHIC

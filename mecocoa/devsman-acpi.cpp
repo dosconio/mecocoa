@@ -1308,6 +1308,42 @@ namespace Devs {
 			resource->flags = flags;
 		}
 
+		uint32 normalize_extended_irq_flags(uint8 flags) {
+			// ACPI Specification 6.5, section 6.4.3.6: Extended Interrupt Descriptor flags.
+			uint32 normalized = DeviceResourceFlag_None;
+			if (!(flags & (1u << 1))) normalized |= DeviceResourceFlag_IrqLevel;
+			if (flags & (1u << 2)) normalized |= DeviceResourceFlag_IrqActiveLow;
+			if (flags & (1u << 3)) normalized |= DeviceResourceFlag_IrqShareable;
+			return normalized;
+		}
+
+		uint32 normalize_small_irq_flags(uint8 flags) {
+			// ACPI Specification 6.5, section 6.4.2.1: IRQ Descriptor information flags.
+			uint32 normalized = DeviceResourceFlag_None;
+			if (!(flags & 1u)) normalized |= DeviceResourceFlag_IrqLevel;
+			if (flags & (1u << 3)) normalized |= DeviceResourceFlag_IrqActiveLow;
+			if (flags & (1u << 4)) normalized |= DeviceResourceFlag_IrqShareable;
+			return normalized;
+		}
+
+		uint32 translate_legacy_irq_to_GSI(uint32 interrupt) {
+			if (interrupt >= 16 || !acpi_madt_addr) return interrupt;
+			const auto* madt = reinterpret_cast<const uni::ACPI::MADT*>(acpi_madt_addr);
+			if (madt->header.length < sizeof(*madt) || madt->header.length > ~stduint(0) - acpi_madt_addr || !madt->header.isValid("APIC")) return interrupt;
+			const stduint end = acpi_madt_addr + madt->header.length;
+			for (stduint address = acpi_madt_addr + sizeof(*madt); address + sizeof(uni::ACPI::MADTEntry) <= end;) {
+				const auto* entry = reinterpret_cast<const uni::ACPI::MADTEntry*>(address);
+				if (entry->length < sizeof(*entry) || entry->length > end - address) return interrupt;
+				// ACPI Specification 6.5, section 5.2.12.5: Interrupt Source Override Structure.
+				if (entry->type == uni::ACPI::MADTTypeInterruptSourceOverride && entry->length >= sizeof(uni::ACPI::MADTInterruptSourceOverride)) {
+					const auto* override_entry = reinterpret_cast<const uni::ACPI::MADTInterruptSourceOverride*>(entry);
+					if (override_entry->bus == 0 && override_entry->source == interrupt) return override_entry->global_system_interrupt;
+				}
+				address += entry->length;
+			}
+			return interrupt;
+		}
+
 		void append_range_resource(uint16 device_index, AcpiResourceType type, uint8 width, uint32 flags, uint64 minimum, uint64 maximum, uint64 length, uint64 granularity = 0, uint64 translation = 0) {
 			auto* resource = append_acpi_resource(device_index, type);
 			if (!resource) return;
@@ -1460,7 +1496,7 @@ namespace Devs {
 			case 0x08: append_address_resource(device_index, descriptor, descriptor_length, 16); break;
 			case 0x09:
 				if (descriptor_length < 5 || descriptor_length < stduint(5u + descriptor[4] * 4u)) report_acpi_malformed(AcpiMalformedKind::ResourceLength, descriptor);
-				else for0(index, descriptor[4]) append_irq_resource(device_index, read_le32(descriptor + 5 + index * 4), descriptor[3]);
+				else for0(index, descriptor[4]) append_irq_resource(device_index, read_le32(descriptor + 5 + index * 4), normalize_extended_irq_flags(descriptor[3]));
 				break;
 			case 0x0A: append_address_resource(device_index, descriptor, descriptor_length, 64); break;
 			case 0x0B: append_extended_address_resource(device_index, descriptor, descriptor_length); break;
@@ -1479,7 +1515,7 @@ namespace Devs {
 				}
 				const uint16 mask = read_le16(descriptor + 1);
 				const uint8 flags = descriptor_length >= 4 ? descriptor[3] : 1;
-				for0(interrupt, 16) if (mask & uint16(1u << interrupt)) append_irq_resource(device_index, uint32(interrupt), flags);
+				for0(interrupt, 16) if (mask & uint16(1u << interrupt)) append_irq_resource(device_index, translate_legacy_irq_to_GSI(uint32(interrupt)), normalize_small_irq_flags(flags));
 			}
 			else if (item_name == 0x08) {
 				if (descriptor_length < 8) report_acpi_malformed(AcpiMalformedKind::ResourceLength, descriptor);
@@ -2311,7 +2347,8 @@ namespace Devs {
 				duplicate_resource = {};
 				acpi_gpio_resource_count = saved_count;
 			}
-			ploginfo("[ACPI-GPIO-TEST] decode=%s pin=%s offset=%s missing-source=%s source-end=%s vendor=%s revision=%s duplicate-pin=%s path=%s duplicate-resource=%s dependency=%s", decode_passed ? "success" : "failed", pin_passed ? "success" : "failed", offset_passed ? "success" : "failed", missing_source_passed ? "success" : "failed", source_passed ? "success" : "failed", vendor_passed ? "success" : "failed", revision_passed ? "success" : "failed", duplicate_passed ? "success" : "failed", path_tested ? (path_passed ? "success" : "failed") : "not-run", path_tested ? (duplicate_resource_passed ? "success" : "failed") : "not-run", path_tested ? (dependency_passed ? "success" : "failed") : "not-run");
+			const bool passed = decode_passed && pin_passed && offset_passed && missing_source_passed && source_passed && vendor_passed && revision_passed && duplicate_passed && (!path_tested || (path_passed && duplicate_resource_passed && dependency_passed));
+			MCCA_BOOT_TEST_LOG(passed, "[ACPI-GPIO-TEST] decode=%s pin=%s offset=%s missing-source=%s source-end=%s vendor=%s revision=%s duplicate-pin=%s path=%s duplicate-resource=%s dependency=%s", decode_passed ? "success" : "failed", pin_passed ? "success" : "failed", offset_passed ? "success" : "failed", missing_source_passed ? "success" : "failed", source_passed ? "success" : "failed", vendor_passed ? "success" : "failed", revision_passed ? "success" : "failed", duplicate_passed ? "success" : "failed", path_tested ? (path_passed ? "success" : "failed") : "not-run", path_tested ? (duplicate_resource_passed ? "success" : "failed") : "not-run", path_tested ? (dependency_passed ? "success" : "failed") : "not-run");
 		}
 
 		void log_acpi_gpio_summary() {
@@ -3255,7 +3292,7 @@ namespace Devs {
 			if (!aml_runtime || aml_runtime->aml_namespace.FindPath("\\_SB_.MZER") == uni::AMLNamespace::InvalidIndex || aml_runtime->aml_namespace.FindPath("\\_SB_.M7AR") == uni::AMLNamespace::InvalidIndex || aml_runtime->aml_namespace.FindPath("\\_SB_.MUNS") == uni::AMLNamespace::InvalidIndex) return;
 			auto* test = new AmlCallTestWorkspace;
 			if (!test) {
-				plogwarn("[ACPI-CALL-TEST] allocation=failed");
+				plogerro("[ACPI-CALL-TEST] allocation=failed");
 				return;
 			}
 			const uni::AMLExecutor::ValueStorage storage_a = { test->result_values_a, numsof(test->result_values_a), test->result_bytes_a, numsof(test->result_bytes_a) };
@@ -3354,7 +3391,8 @@ namespace Devs {
 			status = aml_runtime->aml_executor.Invoke("\\_SB_.MZER", nullptr, 0, result, storage_a);
 			const bool recovery_passed = status == uni::AMLExecutor::Status::Success && result.type == uni::AMLExecutor::ValueType::Integer && result.integer == 0x42;
 
-			ploginfo("[ACPI-CALL-TEST] zero=%s seven=%s integer=%s string=%s buffer=%s package=%s nested=%s reference=%s serialized=%s lifetime=%s unsupported=%s not-found=%s timeout=%s type=%s depth=%s recovery=%s", zero_passed ? "success" : "failed", seven_passed ? "success" : "failed", integer_passed ? "success" : "failed", string_passed ? "success" : "failed", buffer_passed ? "success" : "failed", package_passed ? "success" : "failed", nested_passed ? "success" : "failed", reference_passed ? "success" : "failed", serialized_passed ? "success" : "failed", lifetime_passed ? "success" : "failed", unsupported_passed ? "success" : "failed", missing_passed ? "success" : "failed", timeout_passed ? "success" : "failed", type_passed ? "success" : "failed", depth_passed ? "success" : "failed", recovery_passed ? "success" : "failed");
+			const bool passed = zero_passed && seven_passed && integer_passed && string_passed && buffer_passed && package_passed && nested_passed && reference_passed && serialized_passed && lifetime_passed && unsupported_passed && missing_passed && timeout_passed && type_passed && depth_passed && recovery_passed;
+			MCCA_BOOT_TEST_LOG(passed, "[ACPI-CALL-TEST] zero=%s seven=%s integer=%s string=%s buffer=%s package=%s nested=%s reference=%s serialized=%s lifetime=%s unsupported=%s not-found=%s timeout=%s type=%s depth=%s recovery=%s", zero_passed ? "success" : "failed", seven_passed ? "success" : "failed", integer_passed ? "success" : "failed", string_passed ? "success" : "failed", buffer_passed ? "success" : "failed", package_passed ? "success" : "failed", nested_passed ? "success" : "failed", reference_passed ? "success" : "failed", serialized_passed ? "success" : "failed", lifetime_passed ? "success" : "failed", unsupported_passed ? "success" : "failed", missing_passed ? "success" : "failed", timeout_passed ? "success" : "failed", type_passed ? "success" : "failed", depth_passed ? "success" : "failed", recovery_passed ? "success" : "failed");
 			delete test;
 		}
 
@@ -3381,7 +3419,7 @@ namespace Devs {
 			if (touchpad == uni::AMLNamespace::InvalidIndex || aml_runtime->aml_namespace.FindChild(touchpad, dsm_name) == uni::AMLNamespace::InvalidIndex) return;
 			auto* test = new AmlDsmTestWorkspace;
 			if (!test) {
-				plogwarn("[ACPI-DSM-TEST] allocation=failed");
+				plogerro("[ACPI-DSM-TEST] allocation=failed");
 				return;
 			}
 			const uni::AMLExecutor::ValueStorage storage = { test->result_values, numsof(test->result_values), test->result_bytes, numsof(test->result_bytes) };
@@ -3417,7 +3455,8 @@ namespace Devs {
 			status = aml_runtime->acpi_dsm.Invoke(touchpad, HidOverI2cDsmUuid, 1, 1, nullptr, uni::ACPIDSM::ReturnType::Integer, result, test->dsm, storage);
 			const bool recovery_passed = status == uni::ACPIDSM::Status::Success && result.value.integer == 0x20;
 
-			ploginfo("[ACPI-DSM-TEST] query=%s integer=%s buffer=%s package=%s uuid=%s revision=%s unsupported=%s malformed=%s type=%s missing=%s recovery=%s", query_passed ? "success" : "failed", integer_passed ? "success" : "failed", buffer_passed ? "success" : "failed", package_passed ? "success" : "failed", uuid_passed ? "success" : "failed", revision_passed ? "success" : "failed", unsupported_passed ? "success" : "failed", malformed_passed ? "success" : "failed", type_passed ? "success" : "failed", missing_passed ? "success" : "failed", recovery_passed ? "success" : "failed");
+			const bool passed = query_passed && integer_passed && buffer_passed && package_passed && uuid_passed && revision_passed && unsupported_passed && malformed_passed && type_passed && missing_passed && recovery_passed;
+			MCCA_BOOT_TEST_LOG(passed, "[ACPI-DSM-TEST] query=%s integer=%s buffer=%s package=%s uuid=%s revision=%s unsupported=%s malformed=%s type=%s missing=%s recovery=%s", query_passed ? "success" : "failed", integer_passed ? "success" : "failed", buffer_passed ? "success" : "failed", package_passed ? "success" : "failed", uuid_passed ? "success" : "failed", revision_passed ? "success" : "failed", unsupported_passed ? "success" : "failed", malformed_passed ? "success" : "failed", type_passed ? "success" : "failed", missing_passed ? "success" : "failed", recovery_passed ? "success" : "failed");
 			delete test;
 		}
 
@@ -3434,7 +3473,7 @@ namespace Devs {
 			if (touchpad == uni::AMLNamespace::InvalidIndex || method_device == uni::AMLNamespace::InvalidIndex || duplicate_device == uni::AMLNamespace::InvalidIndex || malformed_device == uni::AMLNamespace::InvalidIndex || duplicate_uuid_device == uni::AMLNamespace::InvalidIndex || bad_uuid_device == uni::AMLNamespace::InvalidIndex || missing_device == uni::AMLNamespace::InvalidIndex || controller == uni::AMLNamespace::InvalidIndex) return;
 			auto* test = new AmlDsdTestWorkspace;
 			if (!test) {
-				plogwarn("[ACPI-DSD-TEST] allocation=failed");
+				plogerro("[ACPI-DSD-TEST] allocation=failed");
 				return;
 			}
 			const uni::AMLExecutor::ValueStorage storage_a = { test->result_values_a, numsof(test->result_values_a), test->result_bytes_a, numsof(test->result_bytes_a) };
@@ -3484,7 +3523,8 @@ namespace Devs {
 			uint64 property_clock = 0;
 			const bool precedence_passed = endpoint && endpoint->fields.acpi_info && endpoint->fields.acpi_info->serial_resource_count && endpoint->fields.acpi_info->serial_resources[0].speed == 400000 && Devsman::ReadAcpiPropertyInteger(endpoint, "clock-frequency", property_clock) && property_clock == 100000;
 
-			ploginfo("[ACPI-DSD-TEST] integer=%s string=%s buffer=%s array=%s reference=%s uuid=%s method=%s duplicate=%s descriptor=%s uuid-length=%s malformed=%s missing=%s lifetime=%s node=%s precedence=%s recovery=%s", integer_passed ? "success" : "failed", string_passed ? "success" : "failed", buffer_passed ? "success" : "failed", array_passed ? "success" : "failed", reference_passed ? "success" : "failed", uuid_passed ? "success" : "failed", method_passed ? "success" : "failed", duplicate_passed ? "success" : "failed", descriptor_passed ? "success" : "failed", uuid_length_passed ? "success" : "failed", malformed_passed ? "success" : "failed", missing_passed ? "success" : "failed", lifetime_passed ? "success" : "failed", node_passed ? "success" : "failed", precedence_passed ? "success" : "failed", recovery_passed ? "success" : "failed");
+			const bool passed = integer_passed && string_passed && buffer_passed && array_passed && reference_passed && uuid_passed && method_passed && duplicate_passed && descriptor_passed && uuid_length_passed && malformed_passed && missing_passed && lifetime_passed && node_passed && precedence_passed && recovery_passed;
+			MCCA_BOOT_TEST_LOG(passed, "[ACPI-DSD-TEST] integer=%s string=%s buffer=%s array=%s reference=%s uuid=%s method=%s duplicate=%s descriptor=%s uuid-length=%s malformed=%s missing=%s lifetime=%s node=%s precedence=%s recovery=%s", integer_passed ? "success" : "failed", string_passed ? "success" : "failed", buffer_passed ? "success" : "failed", array_passed ? "success" : "failed", reference_passed ? "success" : "failed", uuid_passed ? "success" : "failed", method_passed ? "success" : "failed", duplicate_passed ? "success" : "failed", descriptor_passed ? "success" : "failed", uuid_length_passed ? "success" : "failed", malformed_passed ? "success" : "failed", missing_passed ? "success" : "failed", lifetime_passed ? "success" : "failed", node_passed ? "success" : "failed", precedence_passed ? "success" : "failed", recovery_passed ? "success" : "failed");
 			delete test;
 		}
 

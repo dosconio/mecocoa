@@ -37,6 +37,7 @@ void R_MOU_INIT() {
 
 static bool fa_mouse = false;
 static byte mouse_buf[4] = { 0 };
+static byte PS2_mouse_source;
 
 
 static void process_mouse(byte ch) {
@@ -44,13 +45,8 @@ static void process_mouse(byte ch) {
 	mouse_buf[3] %= 3;
 	MouseMessage& mm = *(MouseMessage*)mouse_buf;
 	if (!mouse_buf[3]) {
-		if (!Consman::ento_gui) return; // No GUI: mouse events are meaningless
-		SysMessage smsg{
-			.type = SysMessage::RUPT_MOUSE,
-		};
 		mm.Y = -mm.Y;
-		smsg.args.mou_event = mm;
-		message_queue_conv.Lock()->Enqueue(smsg);
+		hand_mouse_from_device(mm, &PS2_mouse_source);
 	}
 	else if (mouse_buf[3] == 1) {
 		if (!mm.HIGH) mouse_buf[3] = 0;

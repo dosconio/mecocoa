@@ -541,6 +541,9 @@ IRQ_TRAMPOLINE_64 Handint_AHCI_Entry, 0x72
 ; NVMe Interrupt
 IRQ_TRAMPOLINE_64 Handint_NVME_Entry, 0x73
 
+; ACPI Global System Interrupt broker
+IRQ_TRAMPOLINE_64 Handint_ACPI_GSI_Entry, 0xA0
+
 ; Ring1 device interrupt vector pool
 IRQ_TRAMPOLINE_64 Handint_PWDEV0_Entry, 0x78
 IRQ_TRAMPOLINE_64 Handint_PWDEV1_Entry, 0x79

@@ -34,6 +34,7 @@ struct Systimex {
 	static bool
 		AppendDeferredCallback(stduint timeout, stduint iden,
 			_tocall_ft hand);
+	static stduint CancelDeferredCallback(stduint iden, _tocall_ft hand = nullptr);
 	static void
 		CancelThreadWake(stduint tid);
 };

@@ -18,6 +18,8 @@ make arch=atx-x64-uefi64 run-only acpi-test=1
 
 The shell environment form `ACPI_TEST=1 make ...` is also supported. Without either setting, `run` and `run-only` keep their normal QEMU configuration.
 
+`CONFIG_ACPI_BOOT_TEST=1` runs the boot tests but reports only failures. Set it to `2` when comparing the detailed successful test lines documented below; successful lines then use the pass log level. Set it to `0` to omit the boot tests.
+
 Build only the AML table:
 
 ```sh
@@ -33,6 +35,7 @@ Expected deltas from the same QEMU image without this table are:
 - `serial`: +3, split into one I2C, one SPI, and one UART resource
 - `gpio-int`: +2
 - `gpio-io`: +1
+- `irq`: +1
 - successful PCI Config reads: at least +1
 - successful System Memory reads: at least +1
 
@@ -44,7 +47,9 @@ The GPIO decoder test checks the descriptor layout, PinTable access, ResourceSou
 [ACPI-GPIO-TEST] decode=success pin=success offset=success missing-source=success source-end=success vendor=success revision=success duplicate-pin=success path=success duplicate-resource=success dependency=success
 [ACPI-GPIO-SUM] descriptors=3 pins=3 valid=3 invalid=0 dep-ok=3 dep-none=0 dep-unmet=0 example=\_SB_.PCI0.MI2C.MTPD status=success dependency=satisfied
 [ACPI-GPIO-NODE-SUM] controller=1 endpoint=1 linked=3 skipped=0
-[GPIO-CONTROLLER-TEST] capability=success claim=success release=success duplicate=success range=success conflict=success input=success output=success pending=success mask=success unmask=success acknowledge=success firmware=success waiting=success recovery=success
+[GPIO-CONTROLLER-TEST] capability=success claim=success release=success runtime-wake=success duplicate=success range=success conflict=success input=success output=success pending=success mask=success unmask=success acknowledge=success firmware=success waiting=success recovery=success
+[ACPI-GSI-TEST] route=success shared=success conflict=success dispatch=success spurious=success release=success
+[GPIO-IRQ-TEST] edge=success level=success active-low=success shared=success spurious=success repeated=success completion=success release=success
 ```
 
 The table also supplies methods for the generic AML invocation test. A successful run prints one compact line:

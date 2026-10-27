@@ -621,15 +621,50 @@ void hand_mouse(MouseMessage mmsg) {
 	}
 }
 
-// USB mouse callback — enqueues to message_queue_conv so serv_graf_loop
-// (Graphic thread) processes the event via hand_mouse. This avoids racing
-// with GraphicMsg::FDEL on global_layman / Consman::last_click_sheet.
-void hand_mouse_usb(MouseMessage mmsg) {
+namespace {
+	constexpr stduint MouseInputSourceLimit = 16u;
+
+	struct MouseInputSourceState {
+		const void* source;
+		byte buttons;
+	};
+
+	MouseInputSourceState mouse_input_sources[MouseInputSourceLimit]{};
+	byte USB_mouse_source;
+}
+
+// Pointer callbacks enqueue to message_queue_conv so the Graphic thread owns GUI state.
+// Per-source button state prevents one pointer device from releasing another device's buttons.
+void hand_mouse_from_device(MouseMessage mmsg, const void* source) {
 	if (!Consman::ento_gui) return; // No GUI: mouse events are meaningless
 	SysMessage msg;
 	msg.type = SysMessage::RUPT_MOUSE;
+	auto queue = message_queue_conv.Lock();
+	MouseInputSourceState* state = nullptr;
+	MouseInputSourceState* free_state = nullptr;
+	for0(index, MouseInputSourceLimit) {
+		if (mouse_input_sources[index].source == source) {
+			state = &mouse_input_sources[index];
+			break;
+		}
+		if (!mouse_input_sources[index].source && !free_state) free_state = &mouse_input_sources[index];
+	}
+	if (!state) {
+		state = free_state;
+		if (state) state->source = source;
+	}
+	if (state) state->buttons = byte((mmsg.BtnLeft ? 1u : 0u) | (mmsg.BtnRight ? 2u : 0u) | (mmsg.BtnMiddle ? 4u : 0u));
+	byte buttons = 0;
+	for0(index, MouseInputSourceLimit) buttons |= mouse_input_sources[index].buttons;
+	mmsg.BtnLeft = (buttons & 1u) != 0;
+	mmsg.BtnRight = (buttons & 2u) != 0;
+	mmsg.BtnMiddle = (buttons & 4u) != 0;
 	msg.args.mou_event = mmsg;
-	message_queue_conv.Lock()->Enqueue(msg);
+	queue->Enqueue(msg);
+}
+
+void hand_mouse_usb(MouseMessage mmsg) {
+	hand_mouse_from_device(mmsg, &USB_mouse_source);
 }
 
 void LayerManager::Dorupt(SheetTrait* who, SheetEvent event, Point rel_p, para_list args) {

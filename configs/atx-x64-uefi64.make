@@ -61,6 +61,7 @@ cppfile=\
 	$(ulibpath)/cpp/Device/Bus/Serial/IIC-DesignWare.cpp \
 	$(ulibpath)/cpp/Device/Bus/Serial/IIC-HID.cpp \
 	$(ulibpath)/cpp/Device/HID/HID-Report.cpp \
+	$(ulibpath)/cpp/Device/HID/HID-ALPS.cpp \
 	$(ulibpath)/cpp/Device/Bus/ISA.cpp \
 	$(ulibpath)/cpp/Device/Keyboard.cpp \
 	$(ulibpath)/cpp/Device/DMA.cpp \

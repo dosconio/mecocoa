@@ -91,7 +91,7 @@ namespace {
 	constexpr uni::IntelGPIOCommunityDescription intel_broxton_GPIO_community(uint16 pin_count) {
 		// The fixed register block ends after the per-group GPI_IE array; PADBAR supplies the separately bounded pad-register base.
 		const uint32 group_count = (uint32(pin_count) + 31u) / 32u;
-		return { pin_count, 32u, 4u, 8u, 0x110u + group_count * sizeof(uint32), 0x000u, 0x00Cu, 0x020u, 0x060u, 0x080u, 0x100u, 0x110u };
+		return { pin_count, 32u, 4u, 8u, 0x110u + group_count * uint32(sizeof(uint32)), 0x000u, 0x00Cu, 0x020u, 0x060u, 0x080u, 0x100u, 0x110u };
 	}
 
 	constexpr auto ApolloLakeGPIONorthLayout = intel_broxton_GPIO_community(78u);

@@ -79,6 +79,21 @@ namespace {
 		}
 	}
 
+	stduint CancelDeferredCallbackFromChain(Dchain& timers, stduint iden, _tocall_ft hand) {
+		stduint cancelled = 0;
+		for (auto* node = timers.Root(); node; ) {
+			auto* next = node->next;
+			auto& timer = treat<MsgTimer>(node->offs);
+			if (timer.action == TimerAction::DeferredCallback && timer.iden == iden &&
+				(!hand || timer.hand == hand)) {
+				timers.Remove(node);
+				++cancelled;
+			}
+			node = next;
+		}
+		return cancelled;
+	}
+
 	bool AppendTimer(stduint timeout, MsgTimer timer) {
 		SpinlockLocal guard(&timer_lock);
 		timer.timeout = tick + timeout;
@@ -131,6 +146,12 @@ bool Systimex::AppendDeferredCallback(stduint timeout, stduint iden,
 	timer.hand = hand;
 	timer.action = TimerAction::DeferredCallback;
 	return AppendTimer(timeout, timer);
+}
+
+stduint Systimex::CancelDeferredCallback(stduint iden, _tocall_ft hand) {
+	SpinlockLocal guard(&timer_lock);
+	return CancelDeferredCallbackFromChain(TimerManager, iden, hand) +
+		CancelDeferredCallbackFromChain(TimerRetryManager, iden, hand);
 }
 
 void Systimex::CancelThreadWake(stduint tid) {

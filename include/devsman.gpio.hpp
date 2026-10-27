@@ -8,6 +8,7 @@
 #include <c/stdinc.h>
 
 struct DeviceNode;
+struct DeviceEvent;
 
 namespace uni {
 	struct GeneralPurposeInputOutputPortBackend;
@@ -140,6 +141,14 @@ struct DeviceGPIOLease {
 	bool active;
 };
 
+using DeviceGPIOInterruptHandler = void (*)(DeviceNode* owner, stduint resource_index, uint32 count, void* context);
+
+struct DeviceGPIOInterruptRegistration {
+	uint32 generation;
+	uint16 slot;
+	bool active;
+};
+
 struct DeviceGPIOControllerCompatibilityDescription {
 	const char* family_name;
 	const char* product_name;
@@ -156,6 +165,13 @@ namespace Devs {
 	DeviceGPIOStatus UnregisterGPIOController(DeviceNode* controller);
 	DeviceGPIOStatus ClaimGPIO(DeviceNode* owner, stduint resource_index, DeviceGPIOLease& lease);
 	DeviceGPIOStatus ReleaseGPIO(DeviceGPIOLease& lease);
+	DeviceGPIOStatus RegisterGPIOInterrupt(DeviceNode* owner, stduint resource_index, DeviceGPIOInterruptHandler handler, void* context, DeviceGPIOInterruptRegistration& registration);
+	DeviceGPIOStatus CompleteGPIOInterrupt(DeviceGPIOInterruptRegistration& registration);
+	DeviceGPIOStatus UnregisterGPIOInterrupt(DeviceGPIOInterruptRegistration& registration);
+	bool DispatchGPIOInterruptEvent(const DeviceEvent& event);
+	#if CONFIG_ACPI_BOOT_TEST
+	DeviceGPIOStatus TriggerGPIOModelInterrupt(DeviceNode* owner, stduint resource_index);
+	#endif
 }
 #endif
 

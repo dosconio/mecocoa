@@ -200,6 +200,7 @@ struct Consman {
 
 
 void hand_mouse(MouseMessage mmsg);
+void hand_mouse_from_device(MouseMessage mmsg, const void* source);
 void hand_mouse_usb(MouseMessage mmsg);
 void hand_kboard(keyboard_event_t mmsg);
 

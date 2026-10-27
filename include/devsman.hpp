@@ -10,6 +10,11 @@
 
 extern uni::AudioManager audio_manager;
 
+enum class SysinfoDumpDevsType {
+	General,
+	Audio,
+};
+
 struct DeviceNode;
 struct DeviceEvent;
 

@@ -78,6 +78,12 @@ namespace {
 		}
 	}
 
+	bool FinishIntelGPIOOperation(IntelGPIOInstance& instance, const char* operation, stduint pin) {
+		if (instance.last_status == uni::IntelGPIOStatus::Success) return true;
+		plogerro("[GPIO-INTEL] controller=%s operation=%s pin=%u status=%s", instance.node && instance.node->fields.acpi_info ? instance.node->fields.acpi_info->path : "(unknown)", operation, pin, IntelGPIOStatusName(instance.last_status));
+		return false;
+	}
+
 	void TrackIntelGPIOFailure(DeviceNode* node, IntelGPIOFailure failure) {
 		#if CONFIG_ACPI_BOOT_TEST
 		++intel_GPIO_failed;
@@ -166,7 +172,7 @@ namespace {
 		if (!instance) return false;
 		SpinlockLocal guard(&instance->lock);
 		instance->last_status = instance->community.ConfigurePin(pin, mode);
-		return instance->last_status == uni::IntelGPIOStatus::Success;
+		return FinishIntelGPIOOperation(*instance, "configure-pin", pin);
 	}
 
 	bool IntelGPIOIsInput(void* context, stduint pin, bool& input) {
@@ -182,7 +188,7 @@ namespace {
 		if (!instance) return false;
 		SpinlockLocal guard(&instance->lock);
 		instance->last_status = instance->community.SetPull(pin, pull_up);
-		return instance->last_status == uni::IntelGPIOStatus::Success;
+		return FinishIntelGPIOOperation(*instance, "set-pull", pin);
 	}
 
 	bool IntelGPIOConfigureInterrupt(void* context, stduint pin, const uni::GPIOInterruptConfiguration& configuration) {
@@ -190,7 +196,7 @@ namespace {
 		if (!instance) return false;
 		SpinlockLocal guard(&instance->lock);
 		instance->last_status = instance->community.ConfigureInterrupt(pin, configuration);
-		return instance->last_status == uni::IntelGPIOStatus::Success;
+		return FinishIntelGPIOOperation(*instance, "configure-interrupt", pin);
 	}
 
 	bool IntelGPIOEnableInterrupt(void* context, stduint pin, bool enable) {
@@ -414,7 +420,8 @@ namespace {
 		const bool lock_passed = community.ConfigurePin(TestPin, uni::GPIOMode::IN_Floating) == uni::IntelGPIOStatus::ConfigurationLocked;
 		const bool range_passed = community.ReadPin(TestLayout.pin_count, input_value) == uni::IntelGPIOStatus::OutOfRange;
 
-		ploginfo("[GPIO-INTEL-TEST] compat=%s probe=%s boundary=%s read-only=%s input=%s output=%s pull=%s interrupt=%s mask=%s pending=%s acknowledge=%s ownership=%s lock=%s range=%s", compatibility_passed ? "success" : "failed", probe_passed ? "success" : "failed", boundary_passed ? "success" : "failed", read_only_passed ? "success" : "failed", input_passed ? "success" : "failed", output_passed ? "success" : "failed", pull_passed ? "success" : "failed", interrupt_passed ? "success" : "failed", mask_passed ? "success" : "failed", pending_passed ? "success" : "failed", acknowledge_passed ? "success" : "failed", ownership_passed ? "success" : "failed", lock_passed ? "success" : "failed", range_passed ? "success" : "failed");
+		const bool passed = compatibility_passed && probe_passed && boundary_passed && read_only_passed && input_passed && output_passed && pull_passed && interrupt_passed && mask_passed && pending_passed && acknowledge_passed && ownership_passed && lock_passed && range_passed;
+		MCCA_BOOT_TEST_LOG(passed, "[GPIO-INTEL-TEST] compat=%s probe=%s boundary=%s read-only=%s input=%s output=%s pull=%s interrupt=%s mask=%s pending=%s acknowledge=%s ownership=%s lock=%s range=%s", compatibility_passed ? "success" : "failed", probe_passed ? "success" : "failed", boundary_passed ? "success" : "failed", read_only_passed ? "success" : "failed", input_passed ? "success" : "failed", output_passed ? "success" : "failed", pull_passed ? "success" : "failed", interrupt_passed ? "success" : "failed", mask_passed ? "success" : "failed", pending_passed ? "success" : "failed", acknowledge_passed ? "success" : "failed", ownership_passed ? "success" : "failed", lock_passed ? "success" : "failed", range_passed ? "success" : "failed");
 		delete compatibility_acpi;
 		delete compatibility_node;
 		delete[] model->registers;

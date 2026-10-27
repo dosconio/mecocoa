@@ -173,6 +173,11 @@ def uart_resource(baud, source):
 	return serial_resource(3, 0x13, struct.pack("<IHHBB", baud, 0x40, 0x40, 0, 0xC0), source)
 
 
+def extended_interrupt(interrupt, flags):
+	# ACPI Specification 6.5, section 6.4.3.6: Extended Interrupt Descriptor.
+	return large_resource(0x89, bytes((flags, 1)) + struct.pack("<I", interrupt))
+
+
 def gpio_resource(connection_type, general_flags, connection_flags, pin_configuration, drive_strength, debounce_timeout, pins, source):
 	pin_offset = 23
 	source_offset = pin_offset + len(pins) * 2
@@ -247,7 +252,13 @@ def dsd_device_properties():
 
 
 def build_aml():
-	gpio = device("MGPO", name("_HID", string("MCOA0005")), name("_ADR", integer(0)), name("_STA", integer(0x0F)))
+	gpio = device(
+		"MGPO",
+		name("_HID", string("MCOA0005")),
+		name("_ADR", integer(0)),
+		name("_STA", integer(0x0F)),
+		name("_CRS", buffer(resource_template(extended_interrupt(19, 0x0D)))),
+	)
 	gpio_edge = device(
 		"MGED",
 		name("_HID", string("MCOA0010")),

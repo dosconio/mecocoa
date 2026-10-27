@@ -935,6 +935,9 @@ IRQ_TRAMPOLINE Handint_NVME_Entry, 0x73
 IRQ_TRAMPOLINE Handint_MOU_Entry, 0x74
 IRQ_TRAMPOLINE Handint_HDD_Entry, 0x76
 IRQ_TRAMPOLINE Handint_HDD1_Entry, 0x77
+
+; ACPI Global System Interrupt broker
+IRQ_TRAMPOLINE Handint_ACPI_GSI_Entry, 0xA0
 IRQ_TRAMPOLINE Handint_PWDEV0_Entry, 0x78
 IRQ_TRAMPOLINE Handint_PWDEV1_Entry, 0x79
 IRQ_TRAMPOLINE Handint_PWDEV2_Entry, 0x7A

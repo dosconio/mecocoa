@@ -25,7 +25,7 @@
 #include "c/proctrl/IAx86_64.msr.h"
 #endif
 
-static constexpr bool echo_drvname = true;
+static constexpr bool echo_drvname = false;
 
 #if _MCCA == 0x8664
 extern "C" void Handint_Double_Fault_Emergency_Entry();
@@ -775,7 +775,7 @@ namespace Devs {
 			delete[] entries;
 			delete info;
 			delete node;
-			plogwarn("[DRIVER-MATCH-TEST] allocation=failed");
+			plogerro("[DRIVER-MATCH-TEST] allocation=failed");
 			return;
 		}
 		node->fields.node_type = uint16(DeviceNodeType::PciDevice);
@@ -831,7 +831,8 @@ namespace Devs {
 		const bool missing_passed = missing.result == DriverMatchResult::MissingResource && missing.missing_resource_type == uint16(DeviceResourceType::PciBarMmio);
 		const bool ambiguous_passed = ambiguous.result == DriverMatchResult::Ambiguous;
 		const bool rejected_passed = rejected.result == DriverMatchResult::RejectedByCapability;
-		ploginfo("[DRIVER-MATCH-TEST] acpi=%s pci-priority=%s class=%s missing-resource=%s ambiguous=%s capability=%s", acpi_passed ? "success" : "failed", pci_passed ? "success" : "failed", class_passed ? "success" : "failed", missing_passed ? "success" : "failed", ambiguous_passed ? "success" : "failed", rejected_passed ? "success" : "failed");
+		const bool passed = acpi_passed && pci_passed && class_passed && missing_passed && ambiguous_passed && rejected_passed;
+		MCCA_BOOT_TEST_LOG(passed, "[DRIVER-MATCH-TEST] acpi=%s pci-priority=%s class=%s missing-resource=%s ambiguous=%s capability=%s", acpi_passed ? "success" : "failed", pci_passed ? "success" : "failed", class_passed ? "success" : "failed", missing_passed ? "success" : "failed", ambiguous_passed ? "success" : "failed", rejected_passed ? "success" : "failed");
 		delete[] entries;
 		delete info;
 		delete node;
@@ -3489,6 +3490,9 @@ namespace {
 			Systimex::DispatchExpired();
 			break;
 		case DeviceEventKind::Interrupt:
+			#if (_MCCA & 0xFF00) == 0x8600
+			if (Devs::DispatchGPIOInterruptEvent(event)) break;
+			#endif
 			plogwarn("[Devsman] unclaimed interrupt event handle=%u source=%u", event.device_handle, event.source);
 			break;
 		default:

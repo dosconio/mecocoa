@@ -84,6 +84,7 @@ namespace {
 		stduint register_access_count = 0;
 		stduint data_register_access_count = 0;
 		stduint recovery_count = 0;
+		bool hid_reset_complete_pending = false;
 	};
 
 	struct DesignWareI2cTestFixture {
@@ -142,6 +143,12 @@ namespace {
 
 	void FinishDesignWareI2cTestWrite(DesignWareI2cTestModel& model, bool register_only) {
 		if (!model.pending_write_length) return;
+		// Microsoft HID over I2C Protocol Specification 1.0, RESET requests complete with a zero-length input report.
+		if (!register_only && model.pending_write_length == 4u && model.pending_write[0] == 0x70u && model.pending_write[1] == 0u && model.pending_write[2] == 0u && model.pending_write[3] == 1u) {
+			model.hid_reset_complete_pending = true;
+			model.pending_write_length = 0;
+			return;
+		}
 		const stduint address_length = register_only && model.pending_write_length == 2 ? 2u : 1u;
 		model.register_pointer = model.pending_write[0];
 		if (address_length == 2) model.register_pointer |= uint16(model.pending_write[1]) << 8;
@@ -228,7 +235,7 @@ namespace {
 		if (value & (1u << 8)) {
 			if (value & (1u << 10)) FinishDesignWareI2cTestWrite(*model, true);
 			if (model->receive_count < numsof(model->receive_fifo)) {
-				model->receive_fifo[model->receive_tail] = model->memory[byte(model->register_pointer++)];
+				model->receive_fifo[model->receive_tail] = model->hid_reset_complete_pending ? 0u : model->memory[byte(model->register_pointer++)];
 				model->receive_tail = uint16((model->receive_tail + 1u) % numsof(model->receive_fifo));
 				++model->receive_count;
 			}
@@ -236,6 +243,7 @@ namespace {
 		else if (model->pending_write_length < numsof(model->pending_write)) model->pending_write[model->pending_write_length++] = byte(value);
 		if (value & (1u << 9)) {
 			if (!(value & (1u << 8))) FinishDesignWareI2cTestWrite(*model, false);
+			else if (model->hid_reset_complete_pending) model->hid_reset_complete_pending = false;
 			model->saw_stop = true;
 			++model->stop_count;
 			model->registers[_IMM(uni::IICDesignWareReg::RawInterruptStatus) / sizeof(uint32)] |= 1u << 9;
@@ -739,7 +747,7 @@ namespace {
 		if (!fixture_storage || !device_storage) {
 			if (fixture_storage) uni_hostenv_allocator->deallocate(fixture_storage, sizeof(HidI2cProtocolTestFixture));
 			if (device_storage) uni_hostenv_allocator->deallocate(device_storage, sizeof(uni::HIDI2CDevice));
-			plogwarn("[I2C-HID-CORE-TEST] allocation=failed");
+			plogerro("[I2C-HID-CORE-TEST] allocation=failed");
 			return;
 		}
 		auto* fixture = new (fixture_storage) HidI2cProtocolTestFixture();
@@ -779,13 +787,16 @@ namespace {
 		const bool nack_passed = device->ReadReportDescriptor(128u, fixture->result) == uni::HIDI2CStatus::TransferFailed && fixture->result.transfer_status == uni::IICTransferStatus::AddressNack;
 		fixture->model.input_packet[0] = 65u;
 		const bool length_passed = device->ReadInput(fixture->report, numsof(fixture->report), 128u, fixture->result) == uni::HIDI2CStatus::InvalidReportLength;
+		device->ConfigureInputQuirks(uni::HIDI2CInputQuirk_BadReportLength);
+		const bool bad_length_passed = device->ReadInput(fixture->report, numsof(fixture->report), 128u, fixture->result) == uni::HIDI2CStatus::Success && fixture->result.length == 62u;
 		const bool oversized_report_passed = device->WriteOutput(3u, fixture->payload, uni::HIDI2CMaximumTransferLength + 1u, 128u, fixture->result) == uni::HIDI2CStatus::InvalidReportLength;
 		fixture->model.descriptor[10] = 0x01u;
 		fixture->model.descriptor[11] = 0x10u;
 		const bool oversized_descriptor_passed = device->Initialize(0x20u, 128u, fixture->result) == uni::HIDI2CStatus::InvalidDescriptor && fixture->result.descriptor_status == uni::HIDI2CDescriptorStatus::InvalidInputLength;
 		const bool oversize_passed = oversized_report_passed && oversized_descriptor_passed;
 
-		ploginfo("[I2C-HID-CORE-TEST] descriptor=%s report-desc=%s report-layout=%s input=%s output=%s feature-get=%s feature-set=%s reset=%s reset-timeout=%s short=%s nack=%s length=%s oversize=%s", descriptor_passed ? "success" : "failed", report_descriptor_passed ? "success" : "failed", report_layout_passed ? "success" : "failed", input_passed ? "success" : "failed", output_passed ? "success" : "failed", feature_get_passed ? "success" : "failed", feature_set_passed ? "success" : "failed", reset_passed ? "success" : "failed", reset_timeout_passed ? "success" : "failed", short_passed ? "success" : "failed", nack_passed ? "success" : "failed", length_passed ? "success" : "failed", oversize_passed ? "success" : "failed");
+		const bool passed = descriptor_passed && report_descriptor_passed && report_layout_passed && input_passed && output_passed && feature_get_passed && feature_set_passed && reset_passed && reset_timeout_passed && short_passed && nack_passed && length_passed && bad_length_passed && oversize_passed;
+		MCCA_BOOT_TEST_LOG(passed, "[I2C-HID-CORE-TEST] descriptor=%s report-desc=%s report-layout=%s input=%s output=%s feature-get=%s feature-set=%s reset=%s reset-timeout=%s short=%s nack=%s length=%s bad-length=%s oversize=%s", descriptor_passed ? "success" : "failed", report_descriptor_passed ? "success" : "failed", report_layout_passed ? "success" : "failed", input_passed ? "success" : "failed", output_passed ? "success" : "failed", feature_get_passed ? "success" : "failed", feature_set_passed ? "success" : "failed", reset_passed ? "success" : "failed", reset_timeout_passed ? "success" : "failed", short_passed ? "success" : "failed", nack_passed ? "success" : "failed", length_passed ? "success" : "failed", bad_length_passed ? "success" : "failed", oversize_passed ? "success" : "failed");
 		device->~HIDI2CDevice();
 		fixture->~HidI2cProtocolTestFixture();
 		uni_hostenv_allocator->deallocate(device_storage, sizeof(uni::HIDI2CDevice));
@@ -801,7 +812,7 @@ namespace {
 		if (!controller || !controller->fields.acpi_info || !(controller->fields.acpi_info->flags & DeviceAcpiInfoFlag_HasHardwareId) || StrCompare(controller->fields.acpi_info->hardware_id, "MCOA0001") != 0) return;
 		void* storage = uni_hostenv_allocator->allocate(sizeof(DesignWareI2cTestFixture), 4);
 		if (!storage) {
-			plogwarn("[I2C-DW-TEST] allocation=failed");
+			plogerro("[I2C-DW-TEST] allocation=failed");
 			return;
 		}
 		auto* fixture = new (storage) DesignWareI2cTestFixture();
@@ -1080,9 +1091,12 @@ namespace {
 			delete[] contracts;
 		}
 
-		ploginfo("[I2C-DW-TEST] fast=%s standard=%s apl=%s compat=%s disable-timeout=%s enable-timeout=%s write=%s restart-read=%s fifo=%s nack=%s transfer-timeout=%s route=%s contract-a=%s contract-b=%s missing-clock=%s", fast_initialize_passed ? "success" : "failed", standard_initialize_passed ? "success" : "failed", apollo_lake_initialize_passed ? "success" : "failed", compatibility_passed ? "success" : "failed", disable_timeout_passed ? "success" : "failed", enable_timeout_passed ? "success" : "failed", write_passed ? "success" : "failed", combined_passed ? "success" : "failed", fifo_passed ? "success" : "failed", nack_passed ? "success" : "failed", transfer_timeout_passed ? "success" : "failed", route_passed ? "success" : "failed", contract_a_passed ? "success" : "failed", contract_b_passed ? "success" : "failed", missing_clock_passed ? "success" : "failed");
-		ploginfo("[I2C-MSG-TEST] write=%s read=%s restart=%s fifo=%s addr-nack=%s data-nack=%s arbitration=%s busy=%s timeout=%s invalid=%s ten-bit=%s split-stop=%s route=%s", message_write_passed ? "success" : "failed", message_read_passed ? "success" : "failed", message_restart_passed ? "success" : "failed", message_fifo_passed ? "success" : "failed", message_address_nack_passed ? "success" : "failed", message_data_nack_passed ? "success" : "failed", message_arbitration_passed ? "success" : "failed", message_busy_passed ? "success" : "failed", message_timeout_passed ? "success" : "failed", message_invalid_passed ? "success" : "failed", message_ten_bit_passed ? "success" : "failed", message_split_passed ? "success" : "failed", message_route_passed ? "success" : "failed");
-		ploginfo("[I2C-DW-CORE-TEST] recovery-init=%s abort-recovery=%s timeout-recovery=%s bus-recovery=%s recovery-failed=%s continuous=%s fifo-clean=%s reconfigure=%s", recovery_initialization_passed ? "success" : "failed", abort_recovery_passed ? "success" : "failed", timeout_recovery_passed ? "success" : "failed", bus_recovery_passed ? "success" : "failed", recovery_failure_passed ? "success" : "failed", continuous_passed ? "success" : "failed", fifo_clean_passed ? "success" : "failed", reconfigure_passed ? "success" : "failed");
+		const bool designware_passed = fast_initialize_passed && standard_initialize_passed && apollo_lake_initialize_passed && compatibility_passed && disable_timeout_passed && enable_timeout_passed && write_passed && combined_passed && fifo_passed && nack_passed && transfer_timeout_passed && route_passed && contract_a_passed && contract_b_passed && missing_clock_passed;
+		const bool message_passed = message_write_passed && message_read_passed && message_restart_passed && message_fifo_passed && message_address_nack_passed && message_data_nack_passed && message_arbitration_passed && message_busy_passed && message_timeout_passed && message_invalid_passed && message_ten_bit_passed && message_split_passed && message_route_passed;
+		const bool core_passed = recovery_initialization_passed && abort_recovery_passed && timeout_recovery_passed && bus_recovery_passed && recovery_failure_passed && continuous_passed && fifo_clean_passed && reconfigure_passed;
+		MCCA_BOOT_TEST_LOG(designware_passed, "[I2C-DW-TEST] fast=%s standard=%s apl=%s compat=%s disable-timeout=%s enable-timeout=%s write=%s restart-read=%s fifo=%s nack=%s transfer-timeout=%s route=%s contract-a=%s contract-b=%s missing-clock=%s", fast_initialize_passed ? "success" : "failed", standard_initialize_passed ? "success" : "failed", apollo_lake_initialize_passed ? "success" : "failed", compatibility_passed ? "success" : "failed", disable_timeout_passed ? "success" : "failed", enable_timeout_passed ? "success" : "failed", write_passed ? "success" : "failed", combined_passed ? "success" : "failed", fifo_passed ? "success" : "failed", nack_passed ? "success" : "failed", transfer_timeout_passed ? "success" : "failed", route_passed ? "success" : "failed", contract_a_passed ? "success" : "failed", contract_b_passed ? "success" : "failed", missing_clock_passed ? "success" : "failed");
+		MCCA_BOOT_TEST_LOG(message_passed, "[I2C-MSG-TEST] write=%s read=%s restart=%s fifo=%s addr-nack=%s data-nack=%s arbitration=%s busy=%s timeout=%s invalid=%s ten-bit=%s split-stop=%s route=%s", message_write_passed ? "success" : "failed", message_read_passed ? "success" : "failed", message_restart_passed ? "success" : "failed", message_fifo_passed ? "success" : "failed", message_address_nack_passed ? "success" : "failed", message_data_nack_passed ? "success" : "failed", message_arbitration_passed ? "success" : "failed", message_busy_passed ? "success" : "failed", message_timeout_passed ? "success" : "failed", message_invalid_passed ? "success" : "failed", message_ten_bit_passed ? "success" : "failed", message_split_passed ? "success" : "failed", message_route_passed ? "success" : "failed");
+		MCCA_BOOT_TEST_LOG(core_passed, "[I2C-DW-CORE-TEST] recovery-init=%s abort-recovery=%s timeout-recovery=%s bus-recovery=%s recovery-failed=%s continuous=%s fifo-clean=%s reconfigure=%s", recovery_initialization_passed ? "success" : "failed", abort_recovery_passed ? "success" : "failed", timeout_recovery_passed ? "success" : "failed", bus_recovery_passed ? "success" : "failed", recovery_failure_passed ? "success" : "failed", continuous_passed ? "success" : "failed", fifo_clean_passed ? "success" : "failed", reconfigure_passed ? "success" : "failed");
 		RunHidI2cProtocolTest();
 		if (!route_bound) {
 			fixture->~DesignWareI2cTestFixture();

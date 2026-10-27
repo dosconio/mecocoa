@@ -76,6 +76,13 @@ DefinitionBlock ("", "SSDT", 2, "MECOCO", "ACPITEST", 0x00000001)
 			Name (_HID, "MCOA0005")
 			Name (_ADR, Zero)
 			Name (_STA, 0x0F)
+			Name (_CRS, ResourceTemplate ()
+			{
+				Interrupt (ResourceConsumer, Level, ActiveLow, Shared, , , )
+				{
+					0x0013
+				}
+			})
 		}
 
 		Device (MGED)
