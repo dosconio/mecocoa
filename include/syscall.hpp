@@ -1,7 +1,7 @@
 #ifndef SYSCALL_HPP_
 #define SYSCALL_HPP_
 
-#include <c/ISO_IEC_STD/time.h>
+#include <c/datime.h>
 
 enum
 	#ifdef _INC_CPP

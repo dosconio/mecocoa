@@ -929,9 +929,11 @@ void serv_file_loop()// for IDE 0:0, 0:1
 			stduint retval = ~_IMM0;
 			ProcessBlock* safe_pb = ProcessBlock::AcquireActive(to_args[1]);
 			if (safe_pb) {
-				auto len = StrCopyP((char*)pathbuf, kernel_paging, (rostr)to_args[2], safe_pb->paging, pathbuf_size);
+				const bool valid_path = MccaStrCopyP((char*)pathbuf, pathbuf_size,
+					(rostr)to_args[2], safe_pb) && pathbuf[0];
 				// ploginfo("[fileman] TID %u open %s with %[32H]", to_args[1], pathbuf, to_args[0]);
-				retval = static_cast<stduint>(safe_pb->Open((rostr)pathbuf, to_args[0]));
+				if (valid_path)
+					retval = static_cast<stduint>(safe_pb->Open((rostr)pathbuf, to_args[0]));
 				ProcessBlock::Release(safe_pb);
 			}
 			syssend(sig_src, &retval, sizeof(retval), 0);
@@ -973,12 +975,11 @@ void serv_file_loop()// for IDE 0:0, 0:1
 			retval[0] = ~_IMM0;
 			ProcessBlock* safe_pb = ProcessBlock::AcquireActive(to_args[1]);
 			if (safe_pb) {
-				{
+				const bool valid_path = MccaStrCopyP((char*)pathbuf, pathbuf_size,
+					(rostr)to_args[0], safe_pb) && pathbuf[0];
+				if (valid_path) {
 					auto files = safe_pb->fileman.Lock();
-					auto len = StrCopyP((char*)pathbuf, kernel_paging, (rostr)to_args[0], safe_pb->paging, pathbuf_size);
-					if (len > 0) {
-						retval[0] = Filesys::Remove((rostr)pathbuf, files->cwd);
-					}
+					retval[0] = Filesys::Remove((rostr)pathbuf, files->cwd);
 				}
 				ProcessBlock::Release(safe_pb);
 			}
@@ -1017,25 +1018,23 @@ void serv_file_loop()// for IDE 0:0, 0:1
 				syssend(sig_src, &err_ret, sizeof(err_ret));
 				break;
 			}
-			{
+			const bool valid_path = MccaStrCopyP((char*)pathbuf, pathbuf_size,
+				(rostr)to_args[0], safe_pb) && pathbuf[0];
+			if (valid_path) {
 				auto files = safe_pb->fileman.Lock();
-				auto len = StrCopyP((char*)pathbuf, kernel_paging, (rostr)to_args[0], safe_pb->paging, pathbuf_size);
-				if (len == 0) {
+				vfs_dentry* target_dentry = Filesys::Index((const char*)pathbuf, files->cwd);
+				if (!target_dentry) {
 					reply = err_ret;
 				}
+				else if (!target_dentry->d_inode ||
+					(target_dentry->d_inode->i_mode & I_TYPE_MASK) != I_DIRECTORY) {
+					reply = -2;
+				}
 				else {
-					vfs_dentry* target_dentry = Filesys::Index((const char*)pathbuf, files->cwd);
-					if (!target_dentry) {
-						reply = err_ret;
-					}
-					else if (!target_dentry->d_inode || (target_dentry->d_inode->i_mode & I_TYPE_MASK) != I_DIRECTORY) {
-						reply = -2;
-					}
-					else {
-						files->cwd = target_dentry;
-					}
+					files->cwd = target_dentry;
 				}
 			}
+			else reply = err_ret;
 			syssend(sig_src, &reply, sizeof(reply));
 			ProcessBlock::Release(safe_pb);
 			break;

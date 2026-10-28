@@ -5,6 +5,10 @@
 #include "../include/mecocoa.hpp"
 #include "../include/filesys.hpp"
 
+#if CONFIG_ENABLE_MMU
+namespace uni { void UnpinExecutableImage(ProcessBlock* process); }
+#endif
+
 extern Spinlock scheduler_lock;
 
 #include <c/driver/keyboard.h>
@@ -532,6 +536,8 @@ static void _Exit_Cleanup(stduint pid)
 	#endif
 	// Release Heap/Paging
 	#if CONFIG_ENABLE_MMU
+	// Drop the ELF inode pin after releasing its VMAs and load slices.
+	uni::UnpinExecutableImage(ppb);
 	Memory::ReleasePagingMappings(ppb->paging);
 	if (!ppb->ring) {
 		ppb->paging.root_level_page = nullptr;

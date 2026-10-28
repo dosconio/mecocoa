@@ -4,6 +4,156 @@
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 #include "../include/mecocoa.hpp"
 #include <c/format/ELF.h>
+#include "../include/filesys.hpp"
+
+#if CONFIG_ENABLE_MMU
+namespace uni {
+	extern Mutex vfs_lock;
+	bool PinExecutableImage(ProcessBlock* process, vfs_file* file,
+		uint64 expected_version);
+	void UnpinExecutableImage(ProcessBlock* process);
+}
+
+struct ExecutablePinScope {
+	ProcessBlock* process = nullptr;
+	~ExecutablePinScope() {
+		if (!process) return;
+		{
+			MutexLocal guard(&process->mutex_mapping);
+			process->ReleaseAllVmas();
+			process->ReleaseLoadslices();
+		}
+		uni::UnpinExecutableImage(process);
+	}
+	void Keep() { process = nullptr; }
+};
+
+// Only a complete, aligned PT_LOAD page can use the shared file cache.
+static bool FullFileLoadPage(const ELF_PHT_t* headers, stduint count,
+	stduint segment, stduint page, stduint load_bias) {
+	const auto& ph = headers[segment];
+	const stduint begin = ph.p_vaddr + load_bias;
+	if (page < begin || ph.p_filesz < PAGE_SIZE ||
+		page - begin > ph.p_filesz - PAGE_SIZE ||
+		((ph.p_offset + page - begin) & (PAGE_SIZE - 1))) return false;
+	for (stduint i = 0; i < count; i++) {
+		if (i == segment || headers[i].p_type != PT_LOAD ||
+			!headers[i].p_memsz) continue;
+		const stduint other_begin = headers[i].p_vaddr + load_bias;
+		const stduint other_end = other_begin + headers[i].p_memsz;
+		if (page < other_end && other_begin < page + PAGE_SIZE) return false;
+	}
+	return true;
+}
+
+static bool PlanMainFileLoads(BlockTrait* source, const ELF_Header_t& header,
+	stduint file_size, stduint load_bias, byte* buffer,
+	ELF_PHT_t* headers) {
+	if ((header.e_type != ET_EXEC && header.e_type != ET_DYN) ||
+		!header.e_phnum || header.e_phentsize != sizeof(ELF_PHT_t) ||
+		header.e_phoff > file_size ||
+		stduint(header.e_phnum) >
+			(file_size - header.e_phoff) / sizeof(ELF_PHT_t)) return false;
+	bool has_load = false;
+	bool entry_in_segment = false;
+	#if _MCCA == 0x8664
+	const stduint user_end = 0x0000800000000000ull;
+	#elif _MCCA == 0x1064
+	const stduint user_end = 0x4000000000ull;
+	#else
+	const stduint user_end = 0x80000000;
+	#endif
+	for (stduint i = 0; i < header.e_phnum; i++) {
+		if (source->Read(header.e_phoff + i * sizeof(ELF_PHT_t),
+			&headers[i], sizeof(ELF_PHT_t), buffer) != sizeof(ELF_PHT_t))
+			return false;
+		const auto& ph = headers[i];
+		if (ph.p_type != PT_LOAD || !ph.p_memsz) continue;
+		has_load = true;
+		if (ph.p_filesz > ph.p_memsz || ph.p_offset > file_size ||
+			ph.p_filesz > file_size - ph.p_offset ||
+			((ph.p_offset ^ ph.p_vaddr) & (PAGE_SIZE - 1)) ||
+			(ph.p_align > 1 &&
+				((ph.p_align & (ph.p_align - 1)) ||
+				((ph.p_vaddr - ph.p_offset) & (ph.p_align - 1)))) ||
+			ph.p_vaddr > ~_IMM0 - load_bias) return false;
+		const stduint begin = ph.p_vaddr + load_bias;
+		if (begin < 0x10000 || begin >= user_end ||
+			ph.p_memsz > user_end - begin ||
+			ph.p_memsz > ~_IMM0 - (PAGE_SIZE - 1) - begin)
+			return false;
+		if (begin < 0x1000 + HIGHER_STACK_SIZE &&
+			begin + ph.p_memsz > 0x1000) return false;
+		const stduint entry = header.e_entry + load_bias;
+		if ((ph.p_flags & PF_X) && entry >= begin &&
+			entry - begin < ph.p_memsz) entry_in_segment = true;
+	}
+	return has_load && header.e_entry <= ~_IMM0 - load_bias &&
+		entry_in_segment;
+}
+
+static bool MapMainFileLoads(ProcessBlock* pb, BlockTrait* source,
+	uni::vfs_file* file, const ELF_PHT_t* headers, stduint count,
+	stduint load_bias, byte* buffer, stduint& load_slice_p,
+	stduint& max_seg_end) {
+	for (stduint i = 0; i < count; i++) {
+		const auto& ph = headers[i];
+		if (ph.p_type != PT_LOAD || !ph.p_memsz) continue;
+		const stduint begin = ph.p_vaddr + load_bias;
+		const stduint end = begin + ph.p_memsz;
+		const stduint file_end = begin + ph.p_filesz;
+		const bool executable = !!(ph.p_flags & PF_X);
+		const bool writable = !!(ph.p_flags & PF_W);
+		stduint flags = PGPROP_present | PGPROP_user_access;
+		if (writable) flags |= PGPROP_writable;
+		#if _MCCA != 0x8632
+		if (!executable) flags |= PGPROP_nonexecutable;
+		#endif
+		for (stduint page = begin & ~_IMM(PAGE_SIZE - 1);
+			page < end; page += PAGE_SIZE) {
+			if (FullFileLoadPage(headers, count, i, page, load_bias)) {
+				const stduint file_offset = ph.p_offset + page - begin;
+				stduint run_end = page + PAGE_SIZE;
+				while (run_end < end && FullFileLoadPage(headers, count,
+					i, run_end, load_bias)) run_end += PAGE_SIZE;
+				auto* backing = new uni::vfs_file(*file);
+				if (!backing) return false;
+				VirtualMemoryArea vma(page, run_end, flags);
+				vma.vm_type = VirtualMemoryAreaType::File;
+				vma.vm_mode = VirtualMemoryAreaMode::Private;
+				vma.vfile = backing;
+				vma.file_offset = file_offset;
+				bool inserted = false;
+				{
+					// The new process is unpublished; Exet already holds mutex_mapping.
+					SpinlockLocal vma_guard(&pb->vma_lock);
+					inserted = pb->InsertVmaSorted(vma);
+				}
+				if (!inserted) {
+					uni::Filesys::Close(backing);
+					return false;
+				}
+				page = run_end - PAGE_SIZE;
+				continue;
+			}
+			const stduint chunk_begin = maxof(begin, page);
+			const stduint chunk_end = minof(end, page + PAGE_SIZE);
+			const stduint chunk_file_size = chunk_begin < file_end ?
+				minof(chunk_end, file_end) - chunk_begin : 0;
+			if (!Taskman::CreateELF_Carry((char*)chunk_begin,
+				chunk_end - chunk_begin, source,
+				ph.p_offset + chunk_begin - begin, chunk_file_size,
+				pb->paging, buffer, executable, writable, true)) return false;
+		}
+		if (load_slice_p >= numsof(pb->load_slices)) return false;
+		pb->load_slices[load_slice_p].address = begin;
+		pb->load_slices[load_slice_p].length = ph.p_memsz;
+		load_slice_p++;
+		max_seg_end = maxof(max_seg_end, end);
+	}
+	return true;
+}
+#endif
 #if defined(_ARCH_ARM_ProfileM)
 #include <cpp/Device/Cache>
 #endif
@@ -129,7 +279,9 @@ bool Taskman::CreateELF_Carry(char* vaddr, stduint mem_length, BlockTrait* sourc
 	return false;
 }
 
-bool _Taskman_Relocate_PIE(BlockTrait* source, const ELF_Header_t& header, stduint load_bias, Paging& pg, byte* block_buffer) {
+bool _Taskman_Relocate_PIE(BlockTrait* source, const ELF_Header_t& header,
+	stduint load_bias, ProcessBlock* pb, bool mapping_lock_held,
+	byte* block_buffer) {
 	if (!load_bias) return true;
 	#if _MCCA != 0x8632 && _MCCA != 0x8664
 	plogerro("%s: ET_DYN (PIE) is not relocatable on this architecture (_MCCA=%[x])", __FUNCIDEN__, (stduint)_MCCA);
@@ -172,7 +324,9 @@ bool _Taskman_Relocate_PIE(BlockTrait* source, const ELF_Header_t& header, stdui
 					source->Read(rel_file_off + r * sizeof(Elf32_Rel), &rel, sizeof(rel), block_buffer);
 					if (ELF32_R_TYPE(rel.r_info) == R_386_RELATIVE) {
 						stduint target_vaddr = rel.r_offset + load_bias;
-						void* phy_page = pg[target_vaddr & ~_IMM(0xFFF)];
+						if (!PrepareUserBuffer(pb, target_vaddr,
+							sizeof(uint32), true, mapping_lock_held)) return false;
+						void* phy_page = pb->paging[target_vaddr & ~_IMM(0xFFF)];
 						if (phy_page != (void*)~_IMM0) {
 							uint32* val_ptr = (uint32*)((byte*)phy_page + (target_vaddr & _IMM(0xFFF)));
 							*val_ptr += (uint32)load_bias;
@@ -213,7 +367,9 @@ bool _Taskman_Relocate_PIE(BlockTrait* source, const ELF_Header_t& header, stdui
 					source->Read(rela_file_off + r * sizeof(Elf64_Rela), &rela, sizeof(rela), block_buffer);
 					if (ELF64_R_TYPE(rela.r_info) == R_X86_64_RELATIVE) {
 						stduint target_vaddr = rela.r_offset + load_bias;
-						void* phy_page = pg[target_vaddr & ~_IMM(0xFFF)];
+						if (!PrepareUserBuffer(pb, target_vaddr,
+							sizeof(uint64), true, mapping_lock_held)) return false;
+						void* phy_page = pb->paging[target_vaddr & ~_IMM(0xFFF)];
 						if (phy_page != (void*)~_IMM0) {
 							uint64* val_ptr = (uint64*)((byte*)phy_page + (target_vaddr & _IMM(0xFFF)));
 							*val_ptr = (uint64)(rela.r_addend + load_bias);
@@ -342,6 +498,8 @@ bool _Taskman_Resolve_Interp(BlockTrait* source, const ELF_Header_t& header, byt
 // Load the interpreter into pb->paging, register its load slices, report its entry point
 bool _Taskman_Load_Interp(vfs_dentry* interp_d, ProcessBlock* pb, byte* block_buffer, stduint& load_slice_p, stduint* out_entry) {
 	#if CONFIG_ENABLE_MMU
+	// FileBlockBridge shares backend buffers with VFS operations.
+	MutexLocal file_guard(&uni::vfs_lock);
 	FileBlockBridge interp_device(interp_d->d_inode->i_sb->fs, interp_d->d_inode->internal_handler, interp_d->d_inode->i_size, 512);
 	ELF_Header_t interp_header;
 	interp_device.Read(0, &interp_header, sizeof(interp_header), block_buffer);
@@ -372,22 +530,56 @@ bool _Taskman_Load_Interp(vfs_dentry* interp_d, ProcessBlock* pb, byte* block_bu
 	#endif
 }
 
-ProcessBlock* Taskman::CreateELF(BlockTrait* source, byte ring, bool append) {
+static ProcessBlock* CreateELFImage(BlockTrait* source,
+	uni::vfs_file* image_file, byte ring, bool append) {
 	#if (_MCCA & 0xFF00) == 0x8600 || (_MCCA & 0xFF00) == 0x1000
+	#if CONFIG_ENABLE_MMU
+	uint64 image_version = 0;
+	stduint image_size = 0;
+	if (image_file) {
+		MutexLocal guard(&uni::vfs_lock);
+		image_version = image_file->f_inode->content_version;
+		image_size = image_file->f_inode->i_size;
+	}
+	#endif
 	String block_buffer(String::Charset::Memory, 512);
 	struct ELF_Header_t header;
-	source->Read(0, &header, sizeof(header), (byte*)block_buffer.reflect());
+	if (source->Read(0, &header, sizeof(header),
+		(byte*)block_buffer.reflect()) != sizeof(header)) return nullptr;
 	if (MemCompare((const char*)header.e_ident, "\x7F""ELF", 4)) {
 		plogerro("%s: Invalid ELF File Magic Number", __FUNCIDEN__);
 		return nullptr;
 	}
+	const bool map_main_file = CONFIG_ENABLE_MMU && image_file && ring != RING_M;
+	#if CONFIG_ENABLE_MMU
+	auto program_headers = map_main_file ?
+		uni::make_unique<ELF_PHT_t[]>(header.e_phnum) :
+		uni::UniquePtr<ELF_PHT_t[]>();
+	const stduint planned_bias = header.e_type == ET_DYN ? 0x400000 : 0;
+	if (map_main_file && (!program_headers ||
+		!PlanMainFileLoads(source, header, image_size,
+			planned_bias, (byte*)block_buffer.reflect(),
+			program_headers.get()))) return nullptr;
+	#endif
 	
 	ProcessBlock* pb = Taskman::AllocateTask();
+	if (!pb) return nullptr;
+	#if CONFIG_ENABLE_MMU
+	ExecutablePinScope pin_scope;
+	if (map_main_file) {
+		if (!uni::PinExecutableImage(pb, image_file,
+			image_version)) {
+			ProcessBlock::Release(pb);
+			return nullptr;
+		}
+		pin_scope.process = pb;
+	}
+	#endif
 	pb->ring = ring;
 	pb->parent_id = Task_Kernel;
 	*pb->focus_tty.Lock() = nullptr;
 	
-	auto tb = AllocateThread();
+	auto tb = Taskman::AllocateThread();
 	pb->main_thread = tb;
 	pb->thread_list_head = tb;
 	tb->parent_process = pb;
@@ -419,6 +611,14 @@ ProcessBlock* Taskman::CreateELF(BlockTrait* source, byte ring, bool append) {
 	stduint load_slice_p = 0;
 	stduint max_seg_end = 0;
 	stduint phdr_addr = 0;
+	#if CONFIG_ENABLE_MMU
+	if (map_main_file) {
+		if (!MapMainFileLoads(pb, source, image_file,
+			program_headers.get(), header.e_phnum, load_bias,
+			(byte*)block_buffer.reflect(), load_slice_p, max_seg_end))
+			return nullptr;
+	}
+	#endif
 	for0(i, header.e_phnum) {
 		struct ELF_PHT_t ph;
 		stduint ph_offset = header.e_phoff + header.e_phentsize * i;
@@ -428,7 +628,7 @@ ProcessBlock* Taskman::CreateELF(BlockTrait* source, byte ring, bool append) {
 		}
 		if (ph.p_type == PT_PHDR) phdr_addr = ph.p_vaddr + load_bias;
 		if (ph.p_type == PT_LOAD && ph.p_offset == 0 && !phdr_addr) phdr_addr = ph.p_vaddr + load_bias + header.e_phoff;
-		if (ph.p_type == PT_LOAD && ph.p_memsz) 
+		if (ph.p_type == PT_LOAD && ph.p_memsz && !map_main_file)
 		{
 			bool executable = !!(ph.p_flags & PF_X);
 			bool writable = !!(ph.p_flags & PF_W);
@@ -451,7 +651,8 @@ ProcessBlock* Taskman::CreateELF(BlockTrait* source, byte ring, bool append) {
 			}
 		}
 	}
-	if (!_Taskman_Relocate_PIE(source, header, load_bias, pb->paging, (byte*)block_buffer.reflect())) {
+	if (!_Taskman_Relocate_PIE(source, header, load_bias, pb, false,
+		(byte*)block_buffer.reflect())) {
 		plogerro("%s: PIE relocation failed", __FUNCIDEN__);
 		return nullptr;
 	}
@@ -475,7 +676,7 @@ ProcessBlock* Taskman::CreateELF(BlockTrait* source, byte ring, bool append) {
 	tb->context.SP = initial_sp;
 	// ploginfo("[elf] entry=%[x] sp=%[x] stack=[%[x],%[x]) heap=[%[x],%[x]) ring=%u",
 	// 	tb->context.IP, tb->context.SP, tb->stack_lineaddr, stack_loc_top, pb->heapbtm, pb->heaptop, ring);
-	SetSegment(&tb->context);
+	Taskman::SetSegment(&tb->context);
 	#if (_MCCA & 0xFF00) == 0x8600
 	// Initialize FPU/SSE context to a safe state (masked exceptions)
 	// Offset 0: FPU Control Word (0x037F = Mask all exceptions)
@@ -507,6 +708,9 @@ ProcessBlock* Taskman::CreateELF(BlockTrait* source, byte ring, bool append) {
 		Taskman::Append(pb);
 		Taskman::AppendThread(tb);
 	}
+	#if CONFIG_ENABLE_MMU
+	pin_scope.Keep();
+	#endif
 	return pb;
 	#elif !CONFIG_ENABLE_MMU
 	// NoMMU: one contiguous flat region holds the whole image, relocations are applied in place
@@ -607,5 +811,48 @@ ProcessBlock* Taskman::CreateELF(BlockTrait* source, byte ring, bool append) {
 	#endif
 	return nullptr;
 }
+
+ProcessBlock* Taskman::CreateELF(BlockTrait* source, byte ring, bool append) {
+	return CreateELFImage(source, nullptr, ring, append);
+}
+
+#if CONFIG_ENABLE_MMU
+ProcessBlock* Taskman_CreateELF_File(BlockTrait* source,
+	uni::vfs_file* image_file, byte ring, bool append) {
+	return CreateELFImage(source, image_file, ring, append);
+}
+
+bool Taskman_ValidateELF_FileSegments(BlockTrait* source,
+	const ELF_Header_t& header, stduint image_size,
+	stduint load_bias, byte* buffer) {
+	if (MemCompare((const char*)header.e_ident, "\x7F""ELF", 4))
+		return false;
+	auto headers = uni::make_unique<ELF_PHT_t[]>(header.e_phnum);
+	return headers && PlanMainFileLoads(source, header, image_size,
+		load_bias, buffer, headers.get());
+}
+
+// Map PT_LOAD pages and retain the executable inode for the image lifetime.
+bool Taskman_MapELF_FileSegments(ProcessBlock* pb, BlockTrait* source,
+	uni::vfs_file* image_file, const ELF_Header_t& header,
+	uint64 image_version, stduint image_size, stduint load_bias,
+	byte* buffer,
+	stduint& load_slice_p,
+	stduint& max_seg_end) {
+	if (!pb || !source || !image_file || !image_file->f_inode ||
+		(image_file->f_inode->i_mode & I_TYPE_MASK) != I_REGULAR)
+		return false;
+	auto headers = uni::make_unique<ELF_PHT_t[]>(header.e_phnum);
+	if (!headers || !PlanMainFileLoads(source, header,
+		image_size, load_bias, buffer, headers.get()) ||
+		!uni::PinExecutableImage(pb, image_file,
+			image_version)) return false;
+	if (MapMainFileLoads(pb, source, image_file, headers.get(),
+		header.e_phnum, load_bias, buffer, load_slice_p, max_seg_end))
+		return true;
+	uni::UnpinExecutableImage(pb);
+	return false;
+}
+#endif
 
 

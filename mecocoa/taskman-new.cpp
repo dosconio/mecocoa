@@ -9,6 +9,8 @@
 namespace uni {
 	bool RegisterSharedFileAlias(vfs_inode* inode, stduint file_offset,
 		ProcessBlock* process, stduint address, stduint physical_address);
+	bool CloneExecutableImagePin(ProcessBlock* parent, ProcessBlock* child);
+	void UnpinExecutableImage(ProcessBlock* process);
 }
 #endif
 #if !CONFIG_ENABLE_MMU
@@ -21,6 +23,16 @@ static inline stduint _taskman_strcopy(char* dest, const char* sors, stduint len
 #define MemCopyP(a,b,c,d,e) (MemCopyN(a,c,e), _IMM(e))
 #define StrCopyP(a,b,c,d,e) _taskman_strcopy(a,c,e)
 #endif
+
+static bool CopyUserStringPointer(stduint& value, char** array,
+	stduint index, ProcessBlock* process) {
+	if (!array || !process || index > (~_IMM0 - (stduint)array) / sizeof(stduint))
+		return false;
+	const stduint address = (stduint)array + index * sizeof(stduint);
+	value = 0;
+	return MccaMemCopyP(&value, nullptr, true,
+		(const void*)address, process, false, sizeof(value)) == sizeof(value);
+}
 
 #if (_MCCA & 0xFF00) == 0x8600
 extern "C" {
@@ -43,17 +55,22 @@ stduint Taskman::SetupStack(ProcessBlock* pb, ProcessBlock* parent, char** usr_a
 	stduint str_len = 0;
 	stduint* argv_ptrs = nullptr, * envp_ptrs = nullptr;
 
-	auto count_and_size = [&](char** usr_ptr, stduint& count) {
-		if (!usr_ptr) return;
+	auto count_and_size = [&](char** usr_ptr, stduint& count) -> bool {
+		if (!usr_ptr) return true;
 		while (true) {
 			stduint ptr;
-			MemCopyP(&ptr, kernel_paging, (void*)((stduint)usr_ptr + count * sizeof(stduint)), parent->paging, sizeof(stduint));
+			if (count >= pb->main_thread->stack_size / sizeof(stduint) ||
+				!CopyUserStringPointer(ptr, usr_ptr, count, parent)) return false;
 			if (!ptr) break;
-			char buf[256];
-			stduint len = StrCopyP(buf, kernel_paging, (rostr)ptr, parent->paging, sizeof(buf));
+			stduint len = 0;
+			if (!MccaStrCopyP(nullptr, PAGE_SIZE, (rostr)ptr,
+				parent, &len)) return false;
+			if (str_len >= pb->main_thread->stack_size ||
+				len >= pb->main_thread->stack_size - str_len) return false;
 			str_len += len + 1;
 			count++;
 		}
+		return true;
 	};
 
 	// Check if we should inject default environment variables for non-ring0 user space task
@@ -62,7 +79,7 @@ stduint Taskman::SetupStack(ProcessBlock* pb, ProcessBlock* parent, char** usr_a
 		stduint temp_envc = 0;
 		if (usr_envp) {
 			stduint ptr = 0;
-			MemCopyP(&ptr, kernel_paging, usr_envp, parent->paging, sizeof(stduint));
+			if (!CopyUserStringPointer(ptr, usr_envp, 0, parent)) return 0;
 			if (ptr) {
 				temp_envc = 1;
 			}
@@ -72,7 +89,7 @@ stduint Taskman::SetupStack(ProcessBlock* pb, ProcessBlock* parent, char** usr_a
 		}
 	}
 
-	count_and_size(usr_argv, argc);
+	if (!count_and_size(usr_argv, argc)) return 0;
 	String default_path_env;
 	String default_vrpath_env;
 	String default_volumepath_env;
@@ -94,15 +111,23 @@ stduint Taskman::SetupStack(ProcessBlock* pb, ProcessBlock* parent, char** usr_a
 		if (default_vrpath_env.getByteCount()) str_len += default_vrpath_env.getByteCount() + 1;
 		if (default_volumepath_env.getByteCount()) str_len += default_volumepath_env.getByteCount() + 1;
 	} else {
-		count_and_size(usr_envp, envc);
+		if (!count_and_size(usr_envp, envc)) return 0;
 	}
 
 	constexpr stduint auxc = 6; // PHDR, PHENT, PHNUM, PAGESZ, ENTRY, NULL
+	const stduint max_ptrs = pb->main_thread->stack_size / sizeof(stduint);
+	const stduint fixed_ptrs = 1 + 1 + 1 + auxc * 2;
+	if (max_ptrs < fixed_ptrs || argc > max_ptrs - fixed_ptrs ||
+		envc > max_ptrs - fixed_ptrs - argc) return 0;
 	stduint ptr_count = 1 + (argc + 1) + (envc + 1) + (auxc * 2); // argc, argv[], envp[], auxv[]
+	if (str_len > pb->main_thread->stack_size - ptr_count * sizeof(stduint) ||
+		ptr_count * sizeof(stduint) + str_len >
+			pb->main_thread->stack_size - 15) return 0;
 	stduint total_len = ptr_count * sizeof(stduint) + str_len;
 	total_len = (total_len + 15) & ~15; // Align
 
 	byte* temp_buf = new byte[total_len];
+	if (!temp_buf) return 0;
 	MemSet(temp_buf, 0, total_len);
 
 	stduint* ptr_area = (stduint*)temp_buf;
@@ -113,19 +138,27 @@ stduint Taskman::SetupStack(ProcessBlock* pb, ProcessBlock* parent, char** usr_a
 	stduint delta = new_sp;
 
 	*ptr_area++ = argc;
-	auto copy_strings = [&](char** usr_ptr, stduint count) {
+	auto copy_strings = [&](char** usr_ptr, stduint count) -> bool {
 		for (stduint i = 0; i < count; i++) {
 			stduint ptr;
-			MemCopyP(&ptr, kernel_paging, (void*)((stduint)usr_ptr + i * sizeof(stduint)), parent->paging, sizeof(stduint));
+			if (!CopyUserStringPointer(ptr, usr_ptr, i, parent) || !ptr)
+				return false;
 			char* dest = str_area;
-			stduint len = StrCopyP(dest, kernel_paging, (rostr)ptr, parent->paging, 0x1000); // assume max 4k
+			stduint len = 0;
+			const stduint remaining = (stduint)(temp_buf + total_len - (byte*)str_area);
+			if (!MccaStrCopyP(dest, minof(remaining, _IMM(PAGE_SIZE)),
+				(rostr)ptr, parent, &len)) return false;
 			*ptr_area++ = delta + (stduint)((byte*)dest - temp_buf);
 			str_area += len + 1;
 		}
 		*ptr_area++ = 0; // NULL terminator
+		return true;
 	};
 
-	copy_strings(usr_argv, argc);
+	if (!copy_strings(usr_argv, argc)) {
+		free(temp_buf);
+		return 0;
+	}
 	if (use_default_env) {
 		const char* defaults[5] = { "?=0", default_path_env.reference(), "USER=root", nullptr, nullptr };
 		stduint default_count = 3;
@@ -133,14 +166,21 @@ stduint Taskman::SetupStack(ProcessBlock* pb, ProcessBlock* parent, char** usr_a
 		if (default_volumepath_env.getByteCount()) defaults[default_count++] = default_volumepath_env.reference();
 		for (stduint i = 0; i < default_count; i++) {
 			char* dest = str_area;
-			StrCopy(dest, defaults[i]);
 			stduint len = StrLength(defaults[i]);
+			if (len >= (stduint)(temp_buf + total_len - (byte*)str_area)) {
+				free(temp_buf);
+				return 0;
+			}
+			StrCopy(dest, defaults[i]);
 			*ptr_area++ = delta + (stduint)((byte*)dest - temp_buf);
 			str_area += len + 1;
 		}
 		*ptr_area++ = 0; // NULL terminator
 	} else {
-		copy_strings(usr_envp, envc);
+		if (!copy_strings(usr_envp, envc)) {
+			free(temp_buf);
+			return 0;
+		}
 	}
 
 	// ELF relative
@@ -155,8 +195,10 @@ stduint Taskman::SetupStack(ProcessBlock* pb, ProcessBlock* parent, char** usr_a
 	add_aux(AT_ENTRY, entry);
 	add_aux(AT_NULL, 0);
 
-	MemCopyP((void*)new_sp, pb->paging, temp_buf, kernel_paging, total_len);
+	const stduint copied = MemCopyP((void*)new_sp, pb->paging,
+		temp_buf, kernel_paging, total_len);
 	free(temp_buf);
+	if (copied != total_len) return 0;
 	return new_sp;
 }
 
@@ -346,7 +388,9 @@ void Taskman::Initialize(stduint cpuid) {
 
 
 bool _Taskman_Load_Interp(vfs_dentry* interp_d, ProcessBlock* pb, byte* block_buffer, stduint& load_slice_p, stduint* out_entry);
-bool _Taskman_Relocate_PIE(BlockTrait* source, const ELF_Header_t& header, stduint load_bias, Paging& pg, byte* block_buffer);
+bool _Taskman_Relocate_PIE(BlockTrait* source, const ELF_Header_t& header,
+	stduint load_bias, ProcessBlock* pb, bool mapping_lock_held,
+	byte* block_buffer);
 bool _Taskman_Resolve_Interp(BlockTrait* source, const ELF_Header_t& header, byte* block_buffer, vfs_dentry* cwd, vfs_dentry** out_interp);
 
 
@@ -490,6 +534,7 @@ ProcessBlock* Taskman::CreateFork(ProcessBlock* fo, const CallgateFrame* frame) 
 	uni::Vector<ForkCowParentPage> cow_parent_pages;
 	bool child_vmas_owned = false;
 	auto discard_child = [&]() -> ProcessBlock* {
+		uni::UnpinExecutableImage(pb);
 		for (stduint i = 0; i < cow_parent_pages.Count(); i++) {
 			const auto& cow_page = cow_parent_pages[i];
 			bool restored = false;
@@ -819,6 +864,7 @@ ProcessBlock* Taskman::CreateFork(ProcessBlock* fo, const CallgateFrame* frame) 
 		}
 	}
 
+	if (!uni::CloneExecutableImagePin(fo, pb)) return discard_child();
 	// Taskman::DumpTask(pb);
 	Taskman::Append(pb);
 	Taskman::AppendThread(tb);
@@ -838,6 +884,42 @@ ProcessBlock* Taskman::CreateFork(ProcessBlock* fo, const CallgateFrame* frame) 
 #endif
 
 namespace uni { extern Mutex vfs_lock; }// the VFS serializes file I/O on this lock; the loader shares it to keep the FAT buffers private per reader
+#if CONFIG_ENABLE_MMU
+ProcessBlock* Taskman_CreateELF_File(BlockTrait* source,
+	uni::vfs_file* image_file, byte ring, bool append);
+bool Taskman_ValidateELF_FileSegments(BlockTrait* source,
+	const ELF_Header_t& header, stduint image_size,
+	stduint load_bias, byte* buffer);
+bool Taskman_MapELF_FileSegments(ProcessBlock* pb, BlockTrait* source,
+	uni::vfs_file* image_file, const ELF_Header_t& header,
+	uint64 image_version, stduint image_size, stduint load_bias,
+	byte* buffer,
+	stduint& load_slice_p,
+	stduint& max_seg_end);
+
+// File reads release vfs_lock before the ELF loader acquires other locks.
+class LockedFileBlockBridge : public FileBlockBridge {
+public:
+	using FileBlockBridge::FileBlockBridge;
+	using FileBlockBridge::Read;
+	bool Read(stduint block, void* destination, stduint times = 1) override {
+		MutexLocal guard(&uni::vfs_lock);
+		return FileBlockBridge::Read(block, destination, times);
+	}
+};
+
+struct ExecReplacementPinScope {
+	ProcessBlock* process = nullptr;
+	~ExecReplacementPinScope() {
+		if (!process) return;
+		// Exet still holds mutex_mapping while this scope unwinds.
+		process->ReleaseAllVmas();
+		process->ReleaseLoadslices();
+		uni::UnpinExecutableImage(process);
+	}
+	void Keep() { process = nullptr; }
+};
+#endif
 
 //
 ProcessBlock* Taskman::CreateFile(const char* path, byte ring, stduint parent, vfs_dentry* base, bool append) {
@@ -846,12 +928,24 @@ ProcessBlock* Taskman::CreateFile(const char* path, byte ring, stduint parent, v
 	if (!label) label = path; else label++;
 	vfs_dentry* d = Filesys::Index(path, base);
 	if (d && d->d_inode && d->d_inode->i_sb && d->d_inode->i_sb->fs) {
-		FileBlockBridge loop_device(d->d_inode->i_sb->fs, d->d_inode->internal_handler, d->d_inode->i_size, 512);
 		ProcessBlock* task = nullptr;
+		#if CONFIG_ENABLE_MMU
+		LockedFileBlockBridge loop_device(d->d_inode->i_sb->fs,
+			d->d_inode->internal_handler, d->d_inode->i_size, 512);
+		uni::vfs_file image_file;
+		image_file.f_inode = d->d_inode;
+		image_file.f_mode = O_RDONLY;
+		task = (image_file.f_inode->i_mode & I_TYPE_MASK) == I_REGULAR ?
+			Taskman_CreateELF_File(&loop_device, &image_file, ring, append) :
+			Taskman::CreateELF(&loop_device, ring, append);
+		#else
+		FileBlockBridge loop_device(d->d_inode->i_sb->fs,
+			d->d_inode->internal_handler, d->d_inode->i_size, 512);
 		{
 			MutexLocal guard(&vfs_lock);// the loader reads through the same FAT buffers as the VFS: one reader at a time
 			task = Taskman::CreateELF(&loop_device, ring, append);
 		}
+		#endif
 		if (task) {
 			task->parent_id = parent;
 			ProcessBlock* pparent = Taskman::Locate(parent);
@@ -872,12 +966,39 @@ ProcessBlock* Taskman::CreateFile(const char* path, byte ring, stduint parent, v
 
 #if CONFIG_ENABLE_MMU
 
+// The new image is not yet on the task or thread chain.
+static void DiscardUnstartedImage(ProcessBlock* process) {
+	if (!process) return;
+	ThreadBlock* thread = process->main_thread;
+	void* user_stack = thread ?
+		process->paging[_IMM(thread->stack_lineaddr) & ~_IMM(PAGE_SIZE - 1)] :
+		(void*)~_IMM0;
+	{
+		MutexLocal mapping_guard(&process->mutex_mapping);
+		process->ReleaseAllVmas();
+		process->ReleaseLoadslices();
+	}
+	uni::UnpinExecutableImage(process);
+	if (thread) {
+		if (thread->stack_levladdr && thread->stack_levladdr != user_stack)
+			mempool.deallocate(thread->stack_levladdr, thread->stack_size);
+		if (user_stack != (void*)~_IMM0)
+			mempool.deallocate(user_stack, thread->stack_size);
+		thread->~ThreadBlock();
+		mempool.deallocate(thread, sizeof(ThreadBlock));
+		process->main_thread = nullptr;
+		process->thread_list_head = nullptr;
+	}
+	ProcessBlock::Release(process);
+}
+
 //
 ProcessBlock* Taskman::Exec(stduint parent, rostr usr_fullpath, char** usr_argv, char** usr_envp)
 {
 	static char buf_fullpath[_TEMP 512];
 	auto parent_pb = Locate(parent);
-	StrCopyP(buf_fullpath, kernel_paging, usr_fullpath, parent_pb->paging, 512);
+	if (!parent_pb || !MccaStrCopyP(buf_fullpath, sizeof(buf_fullpath),
+		usr_fullpath, parent_pb) || !buf_fullpath[0]) return nullptr;
 	vfs_dentry* parent_cwd = nullptr;
 	{
 		auto parent_files = parent_pb->fileman.Lock();
@@ -888,7 +1009,10 @@ ProcessBlock* Taskman::Exec(stduint parent, rostr usr_fullpath, char** usr_argv,
 	if (!new_pb) return nullptr;
 
 	vfs_dentry* d = Filesys::Index(buf_fullpath, parent_cwd);
-	if (!d) return nullptr;
+	if (!d) {
+		DiscardUnstartedImage(new_pb);
+		return nullptr;
+	}
 	FileBlockBridge loop_device(d->d_inode->i_sb->fs, d->d_inode->internal_handler, d->d_inode->i_size, 512);
 	ELF_Header_t header;
 	String block_buffer(String::Charset::Memory, 512);
@@ -907,6 +1031,10 @@ ProcessBlock* Taskman::Exec(stduint parent, rostr usr_fullpath, char** usr_argv,
 	}
 
 	stduint new_sp = Taskman::SetupStack(new_pb, parent_pb, usr_argv, usr_envp, (stduint)header.e_entry + load_bias, phdr_addr, header.e_phnum, header.e_phentsize);
+	if (!new_sp) {
+		DiscardUnstartedImage(new_pb);
+		return nullptr;
+	}
 
 	#if (_MCCA & 0xFF00) == 0x8600
 	new_pb->main_thread->context.SP = new_sp;
@@ -963,7 +1091,8 @@ ProcessBlock* Taskman::Exet(stduint parent, rostr usr_fullpath, char** usr_argv,
 		plogerro("%s: multi-threaded exec is not supported", __FUNCIDEN__);
 		return nullptr;
 	}
-	StrCopyP(buf_fullpath, kernel_paging, usr_fullpath, current_pb->paging, 512);
+	if (!MccaStrCopyP(buf_fullpath, sizeof(buf_fullpath),
+		usr_fullpath, current_pb) || !buf_fullpath[0]) return nullptr;
 	vfs_dentry* current_cwd = nullptr;
 	{
 		auto current_files = current_pb->fileman.Lock();
@@ -972,13 +1101,34 @@ ProcessBlock* Taskman::Exet(stduint parent, rostr usr_fullpath, char** usr_argv,
 
 	vfs_dentry* d = Filesys::Index(buf_fullpath, current_cwd);
 	if (!d) return nullptr;
-	FileBlockBridge loop_device(d->d_inode->i_sb->fs, d->d_inode->internal_handler, d->d_inode->i_size, 512);
+	#if CONFIG_ENABLE_MMU
+	LockedFileBlockBridge loop_device(d->d_inode->i_sb->fs,
+		d->d_inode->internal_handler, d->d_inode->i_size, 512);
+	uni::vfs_file image_file;
+	image_file.f_inode = d->d_inode;
+	image_file.f_mode = O_RDONLY;
+	uint64 image_version;
+	stduint image_size;
+	{
+		MutexLocal guard(&uni::vfs_lock);
+		image_version = image_file.f_inode->content_version;
+		image_size = image_file.f_inode->i_size;
+	}
+	#else
+	FileBlockBridge loop_device(d->d_inode->i_sb->fs,
+		d->d_inode->internal_handler, d->d_inode->i_size, 512);
+	#endif
 	
 	String block_buffer(String::Charset::Memory, 512);
 	ELF_Header_t header;
-	loop_device.Read(0, &header, sizeof(header), (byte*)block_buffer.reflect());
+	if (loop_device.Read(0, &header, sizeof(header),
+		(byte*)block_buffer.reflect()) != sizeof(header)) return nullptr;
 
 	stduint load_bias = (header.e_type == ET_DYN) ? 0x400000 : 0;
+	#if CONFIG_ENABLE_MMU
+	if (!Taskman_ValidateELF_FileSegments(&loop_device, header,
+		image_size, load_bias, (byte*)block_buffer.reflect())) return nullptr;
+	#endif
 	vfs_dentry* interp_d = nullptr;
 	if (!_Taskman_Resolve_Interp(&loop_device, header, (byte*)block_buffer.reflect(), current_cwd, &interp_d)) {
 		return nullptr;
@@ -997,6 +1147,7 @@ ProcessBlock* Taskman::Exet(stduint parent, rostr usr_fullpath, char** usr_argv,
 	// 1. Prepare stack frame in temporary kernel buffer while old paging is still active
 	MutexLocal mapping_guard(&current_pb->mutex_mapping);
 	stduint new_sp = Taskman::SetupStack(current_pb, current_pb, usr_argv, usr_envp, (stduint)header.e_entry + load_bias, phdr_addr, header.e_phnum, header.e_phentsize);
+	if (!new_sp) return nullptr;
 
 	// 2. Destroy Old Image
 	if (!current_pb->ReleaseAllVmas()) {
@@ -1004,6 +1155,9 @@ ProcessBlock* Taskman::Exet(stduint parent, rostr usr_fullpath, char** usr_argv,
 		return nullptr;
 	}
 	current_pb->ReleaseLoadslices();
+	#if CONFIG_ENABLE_MMU
+	uni::UnpinExecutableImage(current_pb);
+	#endif
 
 	stduint stack_norm_phy;
 	if (current_pb->main_thread->stack_lineaddr == current_pb->main_thread->stack_levladdr)
@@ -1024,6 +1178,17 @@ ProcessBlock* Taskman::Exet(stduint parent, rostr usr_fullpath, char** usr_argv,
 	current_pb->main_thread->context.IP = _IMM(header.e_entry) + load_bias;
 	stduint load_slice_p = 0;
 	stduint max_seg_end = 0;
+	#if CONFIG_ENABLE_MMU
+	if (!Taskman_MapELF_FileSegments(current_pb, &loop_device,
+		&image_file, header, image_version, image_size, load_bias,
+		(byte*)block_buffer.reflect(),
+		load_slice_p, max_seg_end)) {
+		current_pb->ReleaseAllVmas();
+		current_pb->ReleaseLoadslices();
+		return nullptr;
+	}
+	ExecReplacementPinScope pin_scope { current_pb };
+	#else
 	for0(i, header.e_phnum) {
 		struct ELF_PHT_t ph;
 		loop_device.Read(header.e_phoff + i * header.e_phentsize, &ph, sizeof(ph), (byte*)block_buffer.reflect());
@@ -1046,7 +1211,9 @@ ProcessBlock* Taskman::Exet(stduint parent, rostr usr_fullpath, char** usr_argv,
 			}
 		}
 	}
-	if (!_Taskman_Relocate_PIE(&loop_device, header, load_bias, current_pb->paging, (byte*)block_buffer.reflect())) {
+	#endif
+	if (!_Taskman_Relocate_PIE(&loop_device, header, load_bias, current_pb,
+		true, (byte*)block_buffer.reflect())) {
 		plogerro("%s: PIE relocation failed", __FUNCIDEN__);
 		return nullptr;
 	}
@@ -1095,6 +1262,9 @@ ProcessBlock* Taskman::Exet(stduint parent, rostr usr_fullpath, char** usr_argv,
 		current_pb->main_thread->state = TBS::Ready;
 	}
 	Taskman::EnqueueReady(current_pb->main_thread);
+	#if CONFIG_ENABLE_MMU
+	pin_scope.Keep();
+	#endif
 	return current_pb;
 }
 #endif

@@ -15,6 +15,8 @@ namespace uni {
 		size_t length);
 	bool AcquireCachedFileMappingPage(vfs_inode* inode, stduint file_offset,
 		uint64& version, stduint& physical_address);
+	void LogExecutableFilePage(ProcessBlock* process, vfs_inode* inode,
+		stduint address, stduint physical_address);
 	void* MapSharedFileVmaPage(ProcessBlock* process, stduint address,
 		VirtualMemoryAccess access, stduint expected_flags,
 		stduint file_offset, vfs_inode* inode);
@@ -63,6 +65,49 @@ stduint MccaMemCopyPPrepared(
 	#else
 	return (MemCopyN(dest, sors, n), n);
 	#endif
+}
+
+bool MccaStrCopyP(char* destination, stduint capacity,
+	const char* source, ProcessBlock* process, stduint* length) {
+	if (length) *length = 0;
+	if (destination && capacity) destination[0] = '\0';
+	if (!capacity || !source || !process || (!destination && !length))
+		return false;
+	#if !CONFIG_ENABLE_MMU
+	for (stduint copied = 0; copied < capacity; copied++) {
+		const char value = source[copied];
+		if (destination) destination[copied] = value;
+		if (value) continue;
+		if (length) *length = copied;
+		return true;
+	}
+	#else
+	const stduint base = (stduint)source;
+	const bool source_in_kernel = process->ring == RING_M;
+	for (stduint copied = 0; copied < capacity;) {
+		if (base > ~_IMM0 - copied) return false;
+		const stduint address = base + copied;
+		stduint chunk = minof(capacity - copied,
+			_IMM(PAGE_SIZE) - (address & (PAGE_SIZE - 1)));
+		uint64 word = 0;
+		if (!destination) chunk = minof(chunk, _IMM(sizeof(word)));
+		char* target = destination ? destination + copied : (char*)&word;
+		if (MccaMemCopyP(target, nullptr, true,
+			(const void*)address, source_in_kernel ? nullptr : process,
+			source_in_kernel, chunk) != chunk) {
+			if (destination) destination[0] = '\0';
+			return false;
+		}
+		for (stduint i = 0; i < chunk; i++) {
+			if (target[i]) continue;
+			if (length) *length = copied + i;
+			return true;
+		}
+		copied += chunk;
+	}
+	#endif
+	if (destination) destination[0] = '\0';
+	return false;
 }
 
 _ESYM_C Handler_t FILE_ENTO, FILE_ENDO;
@@ -702,6 +747,9 @@ static void* MapCachedFileVmaPage(ProcessBlock* pb, stduint address,
 			KASSERT(released);
 		}
 		if (stale) continue;
+		// Log only a newly installed read-only ELF page after releasing VMA locks.
+		if (installed && !(expected_flags & (PGPROP_writable | PGPROP_nonexecutable)))
+			uni::LogExecutableFilePage(pb, inode, address, physical);
 		return result;
 	}
 }

@@ -819,6 +819,10 @@ static inline stduint MccaMemCopyP(
 	#endif
 }
 
+// Capacity includes NUL; empty strings succeed. A null destination measures. May fault; call without a spinlock or vfs_lock.
+bool MccaStrCopyP(char* destination, stduint capacity, const char* source, ProcessBlock* process, stduint* length = nullptr);
+
+
 #endif
 
 #endif

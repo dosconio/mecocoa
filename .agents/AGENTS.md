@@ -32,6 +32,7 @@ singleline
 原则：
 - Spinlock 不要嵌套（一个内核不能同时持有一个以上的自旋锁）
 	- 仅允许普通Spinlock持有的情况下短暂使用内存分配和调试输出
+- 考虑不同平台，考虑不同架构，例如 CONFIG_ENABLE_MMU 等
 
 ---
 

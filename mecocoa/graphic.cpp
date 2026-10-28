@@ -1510,7 +1510,7 @@ static stdsint GraphicMsg_FCHR(const FMT_ConsoleMsg_FCHR* data, ProcessBlock* pb
 		data->usrp_vertex, pb, false,
 		sizeof(vertex)) != sizeof(vertex)) return -1;
 	String buf(String::Charset::UTF8, 256);
-	StrCopyP(buf.reflect(), kernel_paging, data->usrp_str, pb->paging, 256);
+	if (!MccaStrCopyP(buf.reflect(), 256, data->usrp_str, pb)) return -1;
 	buf.Refresh();
 
 	#if _GUI_FREETYPE && _MCCA == 0x8632
@@ -1613,7 +1613,8 @@ static stdsint GraphicMsg_FSET(const FMT_ConsoleMsg_FSET* data, ProcessBlock* pb
 	case 1: { // 1: Title
 		if (!data->value) return -1;
 		String buf(String::Charset::UTF8, 256);
-		StrCopyP(buf.reflect(), kernel_paging, (const char*)data->value, pb->paging, 256);
+		if (!MccaStrCopyP(buf.reflect(), 256,
+			(const char*)data->value, pb)) return -1;
 		buf.Refresh();
 		pfrm->setTitle(buf);
 		return 0;
@@ -1759,6 +1760,7 @@ static bool GraphicMsgSourceCanControlDriver(const ProcessBlock* pb) {
 	return pb && pb->ring == RING_S;
 }
 
+#if (_MCCA & 0xFF00) == 0x8600
 static stdsint GraphicMsg_HOST_SET_RESOLUTION(stduint source,
 	uint32 width, uint32 height) {
 	DeviceNode* source_node = Devsman::FindOwnedNode(source);
@@ -1778,6 +1780,7 @@ static stdsint GraphicMsg_HOST_SET_RESOLUTION(stduint source,
 	ploginfo("[Graphic] VMware resolution changed to %ux%u", width, height);
 	return 0;
 }
+#endif
 
 void serv_graf_loop() {
 	SysMessage msg;// Inner Module Message System
@@ -2250,8 +2253,12 @@ void serv_graf_loop() {
 			syssend_async(sig_src, (void*)&ret, sizeof(ret));
 			break;
 		case GraphicMsg::HOST_SET_RESOLUTION:
+			#if (_MCCA & 0xFF00) == 0x8600
 			ret = GraphicMsg_HOST_SET_RESOLUTION(sig_src,
 				uint32(to_args[0]), uint32(to_args[1]));
+			#else
+			ret = (stduint)-1;
+			#endif
 			syssend_async(sig_src, (void*)&ret, sizeof(ret));
 			break;
 		case GraphicMsg::SET_WALLPAPER:

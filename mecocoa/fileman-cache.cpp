@@ -11,6 +11,16 @@ namespace uni {
 }
 
 namespace {
+	// A process pin retains the ELF inode and freezes its content until image teardown.
+	struct ExecutableImagePin {
+		ProcessBlock* process;
+		uni::SharedPtr<uni::vfs_inode> inode;
+		bool logged_code_page = false;
+		ExecutableImagePin* next = nullptr;
+	};
+	// vfs_lock protects this list; the inode reference survives unlink and unmount.
+	ExecutableImagePin* executable_image_pins = nullptr;
+
 	struct FileCacheKey {
 		uint64 identity;
 		uint64 content_version;
@@ -757,6 +767,102 @@ namespace {
 }
 
 namespace uni {
+	bool PrepareSharedFileTruncate(vfs_inode* inode);
+	// Caller holds vfs_lock; regular writes, truncation, and shared writes check this list.
+	bool ExecutableFilePinned(vfs_inode* inode) {
+		if (!inode) return false;
+		for (auto* pin = executable_image_pins; pin; pin = pin->next)
+			if (pin->inode.get() == inode) return true;
+		return false;
+	}
+
+	void LogExecutableFilePage(ProcessBlock* process, vfs_inode* inode,
+		stduint address, stduint physical_address) {
+		uint64 identity = 0;
+		{
+			MutexLocal guard(&vfs_lock);
+			for (auto* pin = executable_image_pins; pin; pin = pin->next) {
+				if (pin->process != process || pin->inode.get() != inode ||
+					pin->logged_code_page) continue;
+				pin->logged_code_page = true;
+				identity = inode->identity;
+				break;
+			}
+		}
+		if (identity)
+			ploginfo("[elf-filemap] pid=%u inode=%[64H] va=%[x] pa=%[x]",
+				process->pid, identity, address, physical_address);
+	}
+
+	bool PinExecutableImage(ProcessBlock* process, vfs_file* file,
+		uint64 expected_version) {
+		if (!process || !file || !file->f_inode) return false;
+		auto* pin = new ExecutableImagePin { process, file->f_inode,
+			false, nullptr };
+		if (!pin) return false;
+		bool pinned = false;
+		{
+			MutexLocal copy_guard(&shared_file_copy_lock);
+			MutexLocal file_guard(&vfs_lock);
+			// Revoke writable shared aliases before freezing the ELF image.
+			bool clean = file->f_inode->content_version == expected_version &&
+				PrepareSharedFileTruncate(file->f_inode.get());
+			uni::Vector<stduint> offsets;
+			if (clean && !shared_file_pages.SnapshotInode(
+				file->f_inode->identity, offsets)) clean = false;
+			// Dirty shared pages would make the backend ELF image inconsistent.
+			for (stduint i = 0; clean && i < offsets.Count(); i++) {
+				auto page = FindReadySharedFilePageWithoutWait(
+					{ file->f_inode->identity, uint64(offsets[i]) });
+				if (!page) continue;
+				MutexLocal page_guard(&page->lock);
+				if (page->dirty) clean = false;
+			}
+			if (clean) {
+				pin->next = executable_image_pins;
+				executable_image_pins = pin;
+				pinned = true;
+			}
+		}
+		if (!pinned) delete pin;
+		return pinned;
+	}
+
+	bool CloneExecutableImagePin(ProcessBlock* parent, ProcessBlock* child) {
+		MutexLocal guard(&vfs_lock);
+		for (auto* source = executable_image_pins; source; source = source->next) {
+			if (source->process != parent) continue;
+			auto* pin = new ExecutableImagePin { child, source->inode,
+				false, executable_image_pins };
+			if (!pin) return false;
+			executable_image_pins = pin;
+		}
+		return true;
+	}
+
+	void UnpinExecutableImage(ProcessBlock* process) {
+		ExecutableImagePin* removed = nullptr;
+		{
+			MutexLocal guard(&vfs_lock);
+			auto** link = &executable_image_pins;
+			while (*link) {
+				if ((*link)->process != process) {
+					link = &(*link)->next;
+					continue;
+				}
+				auto* pin = *link;
+				*link = pin->next;
+				pin->next = removed;
+				removed = pin;
+			}
+		}
+		while (removed) {
+			auto* next = removed->next;
+			delete removed;
+			removed = next;
+		}
+	}
+
 	// Caller holds vfs_lock. A loading page will observe the completed I/O
 	// before publication because its filler also publishes under vfs_lock.
 	bool ReadSharedFilePageIfPresent(vfs_inode* inode, stduint file_offset,
@@ -1000,6 +1106,7 @@ namespace uni {
 		auto page = FindReadySharedFilePage(key);
 		if (!page) return nullptr;
 		MutexLocal file_guard(&vfs_lock);
+		if (ExecutableFilePinned(inode.get())) return nullptr;
 		if (key.file_offset >= inode->i_size) return nullptr;
 		{
 			MutexLocal guard(&page->lock);

@@ -25,6 +25,7 @@ namespace uni {
 	String Filesys::system_virtual_root_path = (const char *)NULL;
 	String Filesys::system_runtime_root_path = (const char *)NULL;
 	#if CONFIG_ENABLE_MMU
+	bool ExecutableFilePinned(vfs_inode* inode); // Caller holds vfs_lock.
 	int ReadCachedRegularFile(vfs_file* file, void* buffer, stduint count);
 	void InvalidateFileCacheVersions(uint64 identity, uint64 current_version);
 	void ForgetFileCacheInode(uint64 identity);
@@ -310,6 +311,9 @@ namespace uni {
 	// Caller holds vfs_lock.
 	static bool TruncateInode(vfs_inode* inode, stduint size) {
 		if (!inode || (inode->i_mode & I_TYPE_MASK) != I_REGULAR) return false;
+		#if CONFIG_ENABLE_MMU
+		if (ExecutableFilePinned(inode)) return false;
+		#endif
 		auto* fs = GetInodeFilesystem(inode);
 		if (!fs) return false;
 		#if CONFIG_ENABLE_MMU
@@ -1306,16 +1310,17 @@ struct PathHarvest {
 
 struct EnumContext {
 	ProcessBlock* pb;
-	void* user_addr;          // User-space address of dirent_t array
+	void* buffer_addr;        // User-space address of dirent_t array, or kernel address for RING_M
 	stduint max_count;        // Maximum number of entries to read
 	stduint skip_count;       // Entries to skip (file->f_pos)
 	stduint current_idx;      // Current item being enumerated in VFS call
-	stduint filled_count;     // Number of entries successfully copied to user space
+	stduint filled_count;     // Number of entries successfully copied to user space or a kernel buffer
 	bool copy_failed;
+	bool kernel_buffer;
 };
 static EnumContext g_enum_cxt;
 
-static void user_enumer_callback(void* is_dir, void* name) {
+static void enumer_buffer_callback(void* is_dir, void* name) {
 	if (g_enum_cxt.copy_failed ||
 		g_enum_cxt.filled_count >= g_enum_cxt.max_count) return;
 
@@ -1335,10 +1340,11 @@ static void user_enumer_callback(void* is_dir, void* name) {
 	MemCopyN(kde.name, (const char*)name, name_len);
 	kde.name[name_len] = '\0';
 
-	// Copy to user space memory
+	// Copy to user space memory or a RING_M kernel buffer
 	stduint offset = g_enum_cxt.filled_count * sizeof(dirent_t);
-	if (MccaMemCopyPPrepared((void*)((stduint)g_enum_cxt.user_addr + offset),
-		g_enum_cxt.pb, false, &kde, nullptr, true,
+	if (MccaMemCopyPPrepared((void*)((stduint)g_enum_cxt.buffer_addr + offset),
+		g_enum_cxt.kernel_buffer ? nullptr : g_enum_cxt.pb,
+		g_enum_cxt.kernel_buffer, &kde, nullptr, true,
 		sizeof(dirent_t)) != sizeof(dirent_t)) {
 		g_enum_cxt.copy_failed = true;
 		return;
@@ -1623,6 +1629,9 @@ int Filesys::Write(vfs_file* file, const void* buf, stduint count) {
 	const bool regular = (file->f_inode->i_mode & I_TYPE_MASK) == I_REGULAR;
 	OptionalSharedFileCopyLock copy_guard(regular);
 	MutexLocal guard(&vfs_lock);
+	#if CONFIG_ENABLE_MMU
+	if (regular && count && ExecutableFilePinned(file->f_inode.get())) return -1;
+	#endif
 	FilesysTrait* fs = GetInodeFilesystem(file->f_inode.get());
 	if (!fs) return -1;
 	if (regular && !count) return 0;
@@ -1740,29 +1749,45 @@ int Filesys::Close(vfs_file* file) {
 }
 
 int Filesys::Enumer(vfs_file* file, void* buf, stduint count, ProcessBlock* pb) {
-	if (!file || !file->f_inode) return -1;
+	if (!file || !file->f_inode) {
+		plogwarn("[Enumer] file inode unavailable pid=%u", pb ? pb->pid : 0);
+		return -1;
+	}
 	if (count == 0) return 0;
 	#if CONFIG_ENABLE_MMU
-	if (!pb || count > ~_IMM0 / sizeof(dirent_t) ||
-		!PrepareUserBuffer(pb, (stduint)buf,
-			count * sizeof(dirent_t), true)) return -1;
+	if (!pb || !buf || count > ~_IMM0 / sizeof(dirent_t) ||
+		(stduint)buf > ~_IMM0 - count * sizeof(dirent_t) ||
+		(pb->ring != RING_M && !PrepareUserBuffer(pb, (stduint)buf,
+			count * sizeof(dirent_t), true))) {
+		plogwarn("[Enumer] buffer preparation failed pid=%u ring=%u addr=%[x] count=%u",
+			pb ? pb->pid : 0, pb ? pb->ring : 0, (stduint)buf, count);
+		return -1;
+	}
 	#endif
 	MutexLocal guard(&vfs_lock);
 	FilesysTrait* fs = GetInodeFilesystem(file->f_inode.get());
-	if (!fs) return -1;
+	if (!fs) {
+		plogwarn("[Enumer] filesystem unavailable pid=%u", pb ? pb->pid : 0);
+		return -1;
+	}
 	file->f_enum_state.begin(count);
 
 	g_enum_cxt.pb = pb;
-	g_enum_cxt.user_addr = buf;
+	g_enum_cxt.buffer_addr = buf;
+	// Kernel services supply kernel buffers; other rings need prepared user pages.
+	g_enum_cxt.kernel_buffer = pb && pb->ring == RING_M;
 	g_enum_cxt.max_count = count;
 	g_enum_cxt.skip_count = 0;
 	g_enum_cxt.current_idx = 0;
 	g_enum_cxt.filled_count = 0;
 	g_enum_cxt.copy_failed = false;
 
-	fs->enumer(file->f_inode->internal_handler, (_tocall_ft)user_enumer_callback, &file->f_enum_state);
+	fs->enumer(file->f_inode->internal_handler, (_tocall_ft)enumer_buffer_callback, &file->f_enum_state);
 
 	file->f_pos = file->f_enum_state.position;
+	if (g_enum_cxt.copy_failed)
+		plogwarn("[Enumer] result copy failed pid=%u addr=%[x] filled=%u",
+			pb ? pb->pid : 0, (stduint)buf, g_enum_cxt.filled_count);
 	return g_enum_cxt.copy_failed ? -1 : int(g_enum_cxt.filled_count);
 }
 
