@@ -234,8 +234,6 @@ static void dump_device_tree_pci_description(OstreamTrait& com1, const DeviceNod
 	#endif
 }
 
-#if (_MCCA & 0xFF00) == 0x8600
-
 static void dump_device_tree_resources(OstreamTrait& com1, const DeviceNode& node, stduint depth) {
 	for0(i, node.fields.resource_count) {
 		const auto& res = node.fields.resources[i];
@@ -289,6 +287,7 @@ static void dump_device_tree_resources(OstreamTrait& com1, const DeviceNode& nod
 
 // ==== ==== ==== ==== IIC ==== ==== ==== ==== //
 
+#if (_MCCA & 0xFF00) == 0x8600
 static rostr text_intel_lpss_i2c_failure(int32 result) {
 	switch (-result) {
 	case 1: return "missing-mmio";

@@ -7,6 +7,7 @@
 #include <cpp/Device/UART>
 #include <c/driver/timer.h>
 #include <c/driver/keyboard.h>
+#include <c/ustring.h>
 #include <c/proctrl/IAx86_64.msr.h>
 #include <c/API-POSIX/sys/mman.h>
 
@@ -131,7 +132,7 @@ DEFSYSC sysc_OUTC(stduint ch, stduint len) {
 				stduint crt_len = 0x1000 - (ch & 0xFFF);
 				if (len < crt_len) crt_len = len;
 				#if CONFIG_ENABLE_MMU
-				auto pa = mglb(pid->paging[ch]);
+				auto pa = pid->paging[ch];
 				if (_IMM(pa) == ~_IMM0) {
 					plogerro("OUTC");
 					return -1;
@@ -1085,8 +1086,16 @@ DEFSYSC sysc_PORP(stduint fd, stduint usr_proper) {
 	}
 
 	file_proper_t prop;
+	MemSet(&prop, 0, sizeof(prop));
 	prop.size = inode->i_size;
 	prop.mode = inode->i_mode & I_TYPE_MASK;
+	#ifdef _FILESYS_DATETIME
+	uni::FilesysFileInfo info = {};
+	if (uni::Filesys::GetInfo(vfile, info) && (info.time_valid & uni::FILESYS_TIME_MODIFIED)) {
+		prop.modified = info.modified;
+		prop.modified_valid = 1;
+	}
+	#endif
 
 	MccaMemCopyP(
 		(void*)usr_proper, pb, false,
@@ -1308,6 +1317,7 @@ DEFSYSC sysc_MMAP(stduint len, stduint flag, stduint fd) {
 		return ~_IMM0; // Reject kernel page table
 	}
 	stduint offset = 0;
+	VirtualMemoryAreaMode requested_mode = VirtualMemoryAreaMode::Shared;
 	if (flag == ~_IMM0) {
 		const stduint usr_req = fd;
 		if (usr_req < 0x1000 ||
@@ -1318,8 +1328,11 @@ DEFSYSC sysc_MMAP(stduint len, stduint flag, stduint fd) {
 			sizeof(req)) != sizeof(req)) return ~_IMM0;
 		if (req.address || (req.prot & ~(PROT_READ | PROT_WRITE | PROT_EXEC)) ||
 			!(req.prot & PROT_READ) ||
-			req.flags != MAP_SHARED || req.fd < 0 || req.offset < 0 ||
+			(req.flags != MAP_SHARED && req.flags != MAP_PRIVATE) ||
+			req.fd < 0 || req.offset < 0 ||
 			(req.offset & 0xFFF)) return ~_IMM0;
+		requested_mode = req.flags == MAP_PRIVATE ?
+			VirtualMemoryAreaMode::Private : VirtualMemoryAreaMode::Shared;
 		flag = PGPROP_present | PGPROP_user_access;
 		if (req.prot & PROT_WRITE) flag |= PGPROP_writable;
 		#if _MCCA != 0x8632
@@ -1352,7 +1365,7 @@ DEFSYSC sysc_MMAP(stduint len, stduint flag, stduint fd) {
 		uni::vfs_file* nvfile = new uni::vfs_file(*parent_vfile);
 		if (!nvfile) return ~_IMM0;
 		vma.vm_type = VirtualMemoryAreaType::File;
-		vma.vm_mode = VirtualMemoryAreaMode::Shared;
+		vma.vm_mode = requested_mode;
 		vma.vfile = nvfile;
 		vma.file_offset = offset;
 	}

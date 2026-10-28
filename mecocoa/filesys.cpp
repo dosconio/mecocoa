@@ -24,6 +24,34 @@ file_system_type* registered_filesystems = nullptr;
 namespace uni {
 	String Filesys::system_virtual_root_path = (const char *)NULL;
 	String Filesys::system_runtime_root_path = (const char *)NULL;
+	#if CONFIG_ENABLE_MMU
+	int ReadCachedRegularFile(vfs_file* file, void* buffer, stduint count);
+	void InvalidateFileCacheVersions(uint64 identity, uint64 current_version);
+	void ForgetFileCacheInode(uint64 identity);
+	extern Mutex shared_file_copy_lock;
+	bool PrepareSharedFileWrite(vfs_inode* inode, stduint position, stduint length);
+	void UpdateSharedFilePages(vfs_inode* inode, stduint position,
+		const byte* data, stduint length);
+	bool PrepareSharedFileTruncate(vfs_inode* inode);
+	void CompleteSharedFileTruncate(vfs_inode* inode, stduint old_size,
+		stduint new_size);
+	#endif
+
+	// Take the shared-page copy lock before vfs_lock only when the operation
+	// can change a regular file. The two locks have a fixed acquisition order.
+	struct OptionalSharedFileCopyLock {
+		#if CONFIG_ENABLE_MMU
+		bool locked;
+		explicit OptionalSharedFileCopyLock(bool needed) : locked(needed) {
+			if (locked) shared_file_copy_lock.Acquire();
+		}
+		~OptionalSharedFileCopyLock() {
+			if (locked) shared_file_copy_lock.Release();
+		}
+		#else
+		explicit OptionalSharedFileCopyLock(bool) {}
+		#endif
+	};
 
 	static void ReleaseMountResources(FilesysTrait* filesystem,
 		VFSMountOwnership ownership) {
@@ -47,6 +75,10 @@ namespace uni {
 	}
 
 	vfs_inode::~vfs_inode() {
+		#if CONFIG_ENABLE_MMU
+		if (identity && (i_mode & I_TYPE_MASK) == I_REGULAR)
+			ForgetFileCacheInode(identity);
+		#endif
 		if (!is_unlinked || !internal_handler || !mount_state ||
 			!mount_state->filesystem) return;
 		mount_state->filesystem->reclaim(internal_handler);
@@ -264,6 +296,9 @@ namespace uni {
 		// Never wrap because future page-cache keys contain both identity and content_version.
 		KASSERT(inode->content_version != ~(uint64)0);
 		inode->content_version++;
+		#if CONFIG_ENABLE_MMU
+		InvalidateFileCacheVersions(inode->identity, inode->content_version);
+		#endif
 	}
 
 	static FilesysTrait* GetInodeFilesystem(vfs_inode* inode) {
@@ -276,8 +311,16 @@ namespace uni {
 	static bool TruncateInode(vfs_inode* inode, stduint size) {
 		if (!inode || (inode->i_mode & I_TYPE_MASK) != I_REGULAR) return false;
 		auto* fs = GetInodeFilesystem(inode);
-		if (!fs || !fs->truncate(inode->internal_handler, size)) return false;
+		if (!fs) return false;
+		#if CONFIG_ENABLE_MMU
+		if (!PrepareSharedFileTruncate(inode)) return false;
+		const stduint old_size = inode->i_size;
+		#endif
+		if (!fs->truncate(inode->internal_handler, size)) return false;
 		inode->i_size = size;
+		#if CONFIG_ENABLE_MMU
+		CompleteSharedFileTruncate(inode, old_size, size);
+		#endif
 		AdvanceContentVersion(inode);
 		return true;
 	}
@@ -1268,11 +1311,13 @@ struct EnumContext {
 	stduint skip_count;       // Entries to skip (file->f_pos)
 	stduint current_idx;      // Current item being enumerated in VFS call
 	stduint filled_count;     // Number of entries successfully copied to user space
+	bool copy_failed;
 };
 static EnumContext g_enum_cxt;
 
 static void user_enumer_callback(void* is_dir, void* name) {
-	if (g_enum_cxt.filled_count >= g_enum_cxt.max_count) return;
+	if (g_enum_cxt.copy_failed ||
+		g_enum_cxt.filled_count >= g_enum_cxt.max_count) return;
 
 	// Check if we need to skip this entry
 	if (g_enum_cxt.current_idx < g_enum_cxt.skip_count) {
@@ -1292,7 +1337,12 @@ static void user_enumer_callback(void* is_dir, void* name) {
 
 	// Copy to user space memory
 	stduint offset = g_enum_cxt.filled_count * sizeof(dirent_t);
-	MemCopyP((void*)((stduint)g_enum_cxt.user_addr + offset), g_enum_cxt.pb->paging, &kde, kernel_paging, sizeof(dirent_t));// To local area
+	if (MccaMemCopyPPrepared((void*)((stduint)g_enum_cxt.user_addr + offset),
+		g_enum_cxt.pb, false, &kde, nullptr, true,
+		sizeof(dirent_t)) != sizeof(dirent_t)) {
+		g_enum_cxt.copy_failed = true;
+		return;
+	}
 
 	g_enum_cxt.filled_count++;
 }
@@ -1412,6 +1462,7 @@ void Filesys::Tree(uni::OstreamTrait& os, bool mount_expand) {
 
 int Filesys::Open(const char* pathname, int flags, vfs_file** out_file, vfs_dentry* base) {
 	if (!out_file) return -1;
+	OptionalSharedFileCopyLock copy_guard(flags & O_TRUNC);
 	MutexLocal guard(&vfs_lock);
 	vfs_dentry* dentry = _Index_unlocked(pathname, base);
 	if (dentry && dentry->d_inode) {
@@ -1538,6 +1589,11 @@ int Filesys::Read(vfs_file* file, void* buf, stduint count) {
 		const stduint io_flags = (file->f_mode & O_NONBLOCK) ? 0 : syscall_net_io_flag_wait;
 		return Filesys::RecvSocket(file, buf, count, nullptr, nullptr, io_flags);
 	}
+	#if CONFIG_ENABLE_MMU
+	if ((file->f_inode->i_mode & I_TYPE_MASK) == I_REGULAR) {
+		return ReadCachedRegularFile(file, buf, count);
+	}
+	#endif
 	MutexLocal guard(&vfs_lock);
 	FilesysTrait* fs = GetInodeFilesystem(file->f_inode.get());
 	if (!fs) return -1;
@@ -1564,9 +1620,12 @@ int Filesys::Write(vfs_file* file, const void* buf, stduint count) {
 		if (!socket) return -1;
 		return Filesys::SendSocket(file, buf, count, nullptr);
 	}
+	const bool regular = (file->f_inode->i_mode & I_TYPE_MASK) == I_REGULAR;
+	OptionalSharedFileCopyLock copy_guard(regular);
 	MutexLocal guard(&vfs_lock);
 	FilesysTrait* fs = GetInodeFilesystem(file->f_inode.get());
 	if (!fs) return -1;
+	if (regular && !count) return 0;
 	if (fs == &global_devfs) {
 		if (auto* node = DevFs::GetDeviceNode(file->f_inode->internal_handler)) {
 			const stdsint bytes = Devsman::Send(node, buf, count, file->f_pos);
@@ -1575,12 +1634,62 @@ int Filesys::Write(vfs_file* file, const void* buf, stduint count) {
 		}
 	}
 
+	const stduint write_position = file->f_pos;
+	const stduint old_size = file->f_inode->i_size;
+	const bool fill_gap = regular && count && write_position > old_size;
+	#if CONFIG_ENABLE_MMU
+	if (fill_gap && !PrepareSharedFileTruncate(file->f_inode.get())) return -1;
+	if (regular && !PrepareSharedFileWrite(file->f_inode.get(), write_position,
+		count)) return -1;
+	#endif
+	if (fill_gap) {
+		// Do not expose stale backend sectors when a regular-file write skips EOF.
+		static const byte zeroes[256] = {};
+		stduint filled_end = old_size;
+		while (filled_end < write_position) {
+			const stduint chunk = minof(stduint(sizeof(zeroes)),
+				write_position - filled_end);
+			const stduint filled = fs->writfl(file->f_inode->internal_handler,
+				Slice { filled_end, chunk }, zeroes);
+			if (filled > chunk) return -1;
+			filled_end += filled;
+			if (filled != chunk) {
+				if (filled_end != old_size) {
+					#if CONFIG_ENABLE_MMU
+					CompleteSharedFileTruncate(file->f_inode.get(), old_size,
+						filled_end);
+					#endif
+					file->f_inode->i_size = filled_end;
+					AdvanceContentVersion(file->f_inode.get());
+				}
+				return -1;
+			}
+		}
+		#if CONFIG_ENABLE_MMU
+		CompleteSharedFileTruncate(file->f_inode.get(), old_size,
+			write_position);
+		#endif
+		file->f_inode->i_size = write_position;
+	}
 	stduint bytes = fs->writfl(file->f_inode->internal_handler, Slice{ file->f_pos, count }, (const byte*)buf);
+	if (bytes > count || bytes > ~_IMM0 - write_position) {
+		if (fill_gap) AdvanceContentVersion(file->f_inode.get());
+		return -1;
+	}
+	#if CONFIG_ENABLE_MMU
+	if (regular && bytes) {
+		if (write_position + bytes > file->f_inode->i_size)
+			CompleteSharedFileTruncate(file->f_inode.get(), file->f_inode->i_size,
+				write_position + bytes);
+		UpdateSharedFilePages(file->f_inode.get(), write_position,
+			(const byte*)buf, bytes);
+	}
+	#endif
 	file->f_pos += bytes;
 	if (file->f_pos > file->f_inode->i_size) {
 		file->f_inode->i_size = file->f_pos;
 	}
-	if (bytes && (file->f_inode->i_mode & I_TYPE_MASK) == I_REGULAR) {
+	if (regular && (bytes || fill_gap)) {
 		AdvanceContentVersion(file->f_inode.get());
 	}
 	return bytes;
@@ -1588,11 +1697,22 @@ int Filesys::Write(vfs_file* file, const void* buf, stduint count) {
 
 bool Filesys::Truncate(vfs_file* file, stduint size) {
 	if (!file || !file->f_inode) return false;
+	OptionalSharedFileCopyLock copy_guard(true);
 	MutexLocal guard(&vfs_lock);
 	int mode = file->f_mode & O_ACCMODE;
 	if (mode != O_WRONLY && mode != O_RDWR) return false;
 	return TruncateInode(file->f_inode.get(), size);
 }
+
+#ifdef _FILESYS_DATETIME
+bool Filesys::GetInfo(vfs_file* file, FilesysFileInfo& info) {
+	if (!file || !file->f_inode) return false;
+	MutexLocal guard(&vfs_lock);
+	FilesysTrait* fs = GetInodeFilesystem(file->f_inode.get());
+	if (!fs) return false;
+	return fs->proper(file->f_inode->internal_handler, (stduint)FilesysCmd::FS_CMD_GET_INFO, &info);
+}
+#endif
 
 stdsint Filesys::Ctrl(vfs_file* file, stduint cmd, void* args) {
 	if (!file || !file->f_inode) return -1;
@@ -1622,6 +1742,11 @@ int Filesys::Close(vfs_file* file) {
 int Filesys::Enumer(vfs_file* file, void* buf, stduint count, ProcessBlock* pb) {
 	if (!file || !file->f_inode) return -1;
 	if (count == 0) return 0;
+	#if CONFIG_ENABLE_MMU
+	if (!pb || count > ~_IMM0 / sizeof(dirent_t) ||
+		!PrepareUserBuffer(pb, (stduint)buf,
+			count * sizeof(dirent_t), true)) return -1;
+	#endif
 	MutexLocal guard(&vfs_lock);
 	FilesysTrait* fs = GetInodeFilesystem(file->f_inode.get());
 	if (!fs) return -1;
@@ -1633,11 +1758,12 @@ int Filesys::Enumer(vfs_file* file, void* buf, stduint count, ProcessBlock* pb) 
 	g_enum_cxt.skip_count = 0;
 	g_enum_cxt.current_idx = 0;
 	g_enum_cxt.filled_count = 0;
+	g_enum_cxt.copy_failed = false;
 
 	fs->enumer(file->f_inode->internal_handler, (_tocall_ft)user_enumer_callback, &file->f_enum_state);
 
 	file->f_pos = file->f_enum_state.position;
-	return g_enum_cxt.filled_count;
+	return g_enum_cxt.copy_failed ? -1 : int(g_enum_cxt.filled_count);
 }
 
 bool Filesys::Remove(const char* pathname, vfs_dentry* base) {
@@ -1991,6 +2117,28 @@ stduint DevFs::writfl(void* fil_handler, Slice file_slice, const byte* src) {
 #include <c/format/filesys.h>
 #include <c/format/filesys/FAT.h>
 #include <c/format/filesys/CD.h>
+#if defined(_FILESYS_DATETIME) && ((_MCCA & 0xFF00) == 0x8600)
+#include <c/driver/RealtimeClock.h>
+
+static bool ReadFatDateTime(datime_t& result, void*) {
+	tm clock = {};
+	CMOS_Readtime(&clock);
+	if (clock.tm_year < 1980 || clock.tm_year > 2107 ||
+		clock.tm_mon < 1 || clock.tm_mon > 12 ||
+		clock.tm_mday < 1 || clock.tm_mday > 31 ||
+		clock.tm_hour < 0 || clock.tm_hour > 23 ||
+		clock.tm_min < 0 || clock.tm_min > 59 ||
+		clock.tm_sec < 0 || clock.tm_sec > 59) return false;
+	result = {};
+	result.year = clock.tm_year - 1900;
+	result.month = (byte)(clock.tm_mon - 1);
+	result.mday = (byte)clock.tm_mday;
+	result.hour = (byte)clock.tm_hour;
+	result.minute = (byte)clock.tm_min;
+	result.second = (byte)clock.tm_sec;
+	return true;
+}
+#endif
 
 #if CONFIG_FILESYS_UDF
 file_system_type fs_udf = { "udf", [](StorageTrait& storage, stduint dev) -> FilesysTrait* {
@@ -2067,6 +2215,9 @@ file_system_type fs_fat = { "fat", [](StorageTrait& storage, stduint dev) -> Fil
 			byte* fat_buf = new byte[0x1000];
 			FilesysFAT* fs = new FilesysFAT(fat_ver, *p_part, fat_sec_buf, fat_buf);
 			fs->allow_allocate = true;
+#if defined(_FILESYS_DATETIME) && ((_MCCA & 0xFF00) == 0x8600)
+			fs->setTimeSource({ ReadFatDateTime, nullptr });
+#endif
 
 			if (fs->loadfs()) {
 				return fs;

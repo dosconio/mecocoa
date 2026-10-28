@@ -316,6 +316,7 @@ public: // VirtualMemory
 	#if CONFIG_ENABLE_MMU
 	uni::Paging paging;
 	Mutex mutex_mapping; // _TEMP: sysc_MMAP, sysc_UMAP, MapPwcallPhysicalRange, CreateFork, Exet.
+	bool force_vma_release = false; // ReleaseAllVmas may detach a failed dirty page at exit/exec.
 	#endif
 	stduint heaptop = 0;
 	stduint heapbtm = 0;// norm: max seg + 0x10000
@@ -792,19 +793,29 @@ static inline void* SeekAddress(ProcessBlock* pb, stduint addr, bool from_kernel
 
 extern "C" void* kernel_prefault_page(ProcessBlock* pb, stduint addr, bool write = false);
 
+// Callers preflight user pages before entering a spinlock or vfs_lock.
+// The prepared variant only checks already-present PTEs before copying.
+stduint MccaMemCopyPPrepared(
+	void* dest, ProcessBlock* pd, bool dker,
+	const void* sors, ProcessBlock* ps, bool sker,
+	size_t n);
+
 static inline stduint MccaMemCopyP(
 	void* dest, ProcessBlock* pd, bool dker,
 	const void* sors, ProcessBlock* ps, bool sker,
 	size_t n) {
 	#if CONFIG_ENABLE_MMU
-	extern Paging kernel_paging;
 	if (ps && !sker && !PrepareUserBuffer(ps, (stduint)sors, n, false)) return 0;
-	if (pd && !dker && !PrepareUserBuffer(pd, (stduint)dest, n, true)) return 0;
-	return MemCopyP(
-		dest, pd && !dker ? pd->paging : kernel_paging,
-		sors, ps && !sker ? ps->paging : kernel_paging, n);
+	for (unsigned retry = 0; retry < 4; retry++) {
+		if (pd && !dker && !PrepareUserBuffer(pd, (stduint)dest, n, true))
+			return 0;
+		const stduint copied = MccaMemCopyPPrepared(dest, pd, dker,
+			sors, ps, sker, n);
+		if (copied || !n) return copied;
+	}
+	return 0;
 	#else
-	return (MemCopyN(dest, sors, n), n);
+	return MccaMemCopyPPrepared(dest, pd, dker, sors, ps, sker, n);
 	#endif
 }
 

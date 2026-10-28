@@ -550,6 +550,40 @@ int main(int argc, char** argv)
 		}
 		outsfmt("Success: Exec released and wrote back its old mapping.\n\r");
 
+		// 15a. Cached reads must handle a page boundary and a later file version.
+		fd = sysopen(test_file);
+		char cache_boundary[4] = {};
+		if (fd < 0 || lseek(fd, 4094, SEEK_SET) != 4094 ||
+			read(fd, cache_boundary, sizeof(cache_boundary)) != sizeof(cache_boundary) ||
+			cache_boundary[0] != 0 || cache_boundary[1] != 0 ||
+			cache_boundary[2] != 's' || cache_boundary[3] != 'e' ||
+			lseek(fd, 4094, SEEK_SET) != 4094 ||
+			read(fd, cache_boundary, sizeof(cache_boundary)) != sizeof(cache_boundary) ||
+			cache_boundary[2] != 's') {
+			outsfmt("Error: Cached read across a page boundary failed!\n\r");
+			if (fd >= 0) close(fd);
+			return -1;
+		}
+		close(fd);
+		fd = open(test_file, O_WRONLY);
+		char changed_byte = 'C';
+		if (fd < 0 || lseek(fd, 0, SEEK_SET) != 0 ||
+			write(fd, &changed_byte, 1) != 1) {
+			outsfmt("Error: Failed to change a cached file version!\n\r");
+			if (fd >= 0) close(fd);
+			return -1;
+		}
+		close(fd);
+		fd = sysopen(test_file);
+		char updated_byte = 0;
+		if (fd < 0 || read(fd, &updated_byte, 1) != 1 || updated_byte != 'C') {
+			outsfmt("Error: File write reused an old cached page!\n\r");
+			if (fd >= 0) close(fd);
+			return -1;
+		}
+		close(fd);
+		outsfmt("Success: Cached reads crossed a page and observed a new file version.\n\r");
+
 		// 16. O_TRUNC must update the backend file and the shared inode size.
 		fd = open(test_file, O_WRONLY | O_TRUNC);
 		if (fd < 0) {
@@ -634,11 +668,433 @@ int main(int argc, char** argv)
 		close(new_fd);
 		sys_removefil(unlink_file);
 		outsfmt("Success: Unlink retained the old file and isolated its replacement.\n\r");
+
+		// 18. Independent processes must reuse one cached page for the same file.
+		rostr cache_file = "/md0/mmap_c.txt";
+		sys_removefil(cache_file);
+		fd = sys_createfil(cache_file);
+		static const char cache_content[] = "shared cache page";
+		if (fd < 0 || write(fd, cache_content, sizeof(cache_content) - 1) !=
+			sizeof(cache_content) - 1) {
+			outsfmt("Error: Failed to prepare cache concurrency file!\n\r");
+			if (fd >= 0) close(fd);
+			return -1;
+		}
+		close(fd);
+		int cache_gate[2];
+		if (pipe(cache_gate) != 0) {
+			outsfmt("Error: Failed to create cache concurrency gate!\n\r");
+			unlink(cache_file);
+			return -1;
+		}
+		pid_t cache_children[2] = { -1, -1 };
+		for (int index = 0; index < 2; index++) {
+			cache_children[index] = fork();
+			if (cache_children[index] < 0) {
+				outsfmt("Error: Failed to fork cache reader %d!\n\r", index);
+				close(cache_gate[0]);
+				close(cache_gate[1]);
+				for (int previous = 0; previous < index; previous++) wait(&child_status);
+				unlink(cache_file);
+				return -1;
+			}
+			if (!cache_children[index]) {
+				close(cache_gate[1]);
+				char token = 0;
+				if (read(cache_gate[0], &token, 1) != 1 || token != 'C') _exit(20);
+				close(cache_gate[0]);
+				int cache_fd = sysopen(cache_file);
+				char observed[sizeof(cache_content)] = {};
+				int cache_read = cache_fd < 0 ? -1 :
+					read(cache_fd, observed, sizeof(cache_content) - 1);
+				if (cache_fd >= 0) close(cache_fd);
+				_exit(cache_read == sizeof(cache_content) - 1 &&
+					!memcmp(observed, cache_content, sizeof(cache_content) - 1) ? 0 : 21);
+			}
+		}
+		close(cache_gate[0]);
+		const char cache_tokens[2] = { 'C', 'C' };
+		int gate_written = write(cache_gate[1], cache_tokens, sizeof(cache_tokens));
+		close(cache_gate[1]);
+		if (gate_written != sizeof(cache_tokens)) {
+			outsfmt("Error: Failed to release cache readers!\n\r");
+			wait(&child_status);
+			wait(&child_status);
+			unlink(cache_file);
+			return -1;
+		}
+		bool cache_children_ok = true;
+		for (int index = 0; index < 2; index++) {
+			child_status = -1;
+			pid_t completed = wait(&child_status);
+			if ((completed != cache_children[0] && completed != cache_children[1]) ||
+				child_status != 0) {
+				outsfmt("Error: Cache reader exited with status %d!\n\r", child_status);
+				cache_children_ok = false;
+			}
+		}
+		if (!cache_children_ok) {
+			unlink(cache_file);
+			return -1;
+		}
+		fd = sysopen(cache_file);
+		char cache_verify[sizeof(cache_content)] = {};
+		int cache_read = fd < 0 ? -1 :
+			read(fd, cache_verify, sizeof(cache_content) - 1);
+		if (fd >= 0) close(fd);
+		if (cache_read != sizeof(cache_content) - 1 ||
+			memcmp(cache_verify, cache_content, sizeof(cache_content) - 1) ||
+			unlink(cache_file) != 0) {
+			outsfmt("Error: Cache reuse or cleanup failed!\n\r");
+			return -1;
+		}
+		outsfmt("Success: Independent processes read the same cached file page.\n\r");
+
+		// 19. Two independent mappings must retain the same read-only file page.
+		rostr map_file = "/md0/mmap_v.txt";
+		const stduint map_page_size = 4096;
+		sys_removefil(map_file);
+		fd = sys_createfil(map_file);
+		static const char map_content[] = "read-only cached page";
+		if (fd < 0 || write(fd, map_content, sizeof(map_content) - 1) !=
+			sizeof(map_content) - 1) {
+			outsfmt("Error: Failed to prepare shared mapping file!\n\r");
+			if (fd >= 0) close(fd);
+			return -1;
+		}
+		close(fd);
+		int map_ready_pipe[2] = { -1, -1 };
+		int map_release[2][2] = { { -1, -1 }, { -1, -1 } };
+		if (pipe(map_ready_pipe) != 0 || pipe(map_release[0]) != 0 ||
+			pipe(map_release[1]) != 0) {
+			outsfmt("Error: Failed to create shared mapping gates!\n\r");
+			if (map_ready_pipe[0] >= 0) close(map_ready_pipe[0]);
+			if (map_ready_pipe[1] >= 0) close(map_ready_pipe[1]);
+			for (int index = 0; index < 2; index++) {
+				if (map_release[index][0] >= 0) close(map_release[index][0]);
+				if (map_release[index][1] >= 0) close(map_release[index][1]);
+			}
+			unlink(map_file);
+			return -1;
+		}
+		pid_t map_children[2] = { -1, -1 };
+		for (int index = 0; index < 2; index++) {
+			map_children[index] = fork();
+			if (map_children[index] < 0) {
+				outsfmt("Error: Failed to fork shared mapping child %d!\n\r", index);
+				close(map_ready_pipe[0]);
+				close(map_ready_pipe[1]);
+				for (int gate = 0; gate < 2; gate++) {
+					close(map_release[gate][0]);
+					close(map_release[gate][1]);
+				}
+				for (int previous = 0; previous < index; previous++) wait(&child_status);
+				unlink(map_file);
+				return -1;
+			}
+			if (!map_children[index]) {
+				close(map_ready_pipe[0]);
+				for (int gate = 0; gate < 2; gate++) {
+					close(map_release[gate][1]);
+					if (gate != index) close(map_release[gate][0]);
+				}
+				int map_fd = sysopen(map_file);
+				void* mapped = map_fd < 0 ? MAP_FAILED :
+					mmap(nullptr, map_page_size * 2, PROT_READ, MAP_SHARED, map_fd, 0);
+				if (map_fd >= 0) close(map_fd);
+				if (mapped == MAP_FAILED) _exit(30);
+				const char* bytes = (const char*)mapped;
+				if (memcmp(bytes, map_content, sizeof(map_content) - 1) ||
+					bytes[sizeof(map_content) - 1] != 0 ||
+					bytes[map_page_size - 1] != 0 || bytes[map_page_size] != 0 ||
+					bytes[map_page_size * 2 - 1] != 0) _exit(31);
+				const char ready = 'R';
+				if (write(map_ready_pipe[1], &ready, 1) != 1) _exit(32);
+				close(map_ready_pipe[1]);
+				char release = 0;
+				if (read(map_release[index][0], &release, 1) != 1 ||
+					release != 'G') _exit(33);
+				close(map_release[index][0]);
+				if (bytes[map_page_size] != 0 ||
+					(bytes[0] != map_content[0] && bytes[0] != 'U') ||
+					munmap(mapped, map_page_size * 2) != 0) _exit(34);
+				_exit(0);
+			}
+		}
+		close(map_ready_pipe[1]);
+		close(map_release[0][0]);
+		close(map_release[1][0]);
+		bool map_ready = true;
+		for (int index = 0; index < 2; index++) {
+			char ready = 0;
+			if (read(map_ready_pipe[0], &ready, 1) != 1 || ready != 'R')
+				map_ready = false;
+		}
+		close(map_ready_pipe[0]);
+		outsfmt("Stage 10 map children: pid=%d and pid=%d.\n\r",
+			map_children[0], map_children[1]);
+		bool new_version_ok = false;
+		if (map_ready) {
+			fd = open(map_file, O_WRONLY);
+			const char updated = 'U';
+			bool written = fd >= 0 && write(fd, &updated, 1) == 1;
+			if (fd >= 0) close(fd);
+			fd = written ? sysopen(map_file) : -1;
+			void* new_map = fd < 0 ? MAP_FAILED :
+				mmap(nullptr, map_page_size, PROT_READ, MAP_SHARED, fd, 0);
+			if (fd >= 0) close(fd);
+			new_version_ok = new_map != MAP_FAILED &&
+				((const char*)new_map)[0] == updated;
+			if (new_map != MAP_FAILED)
+				new_version_ok = munmap(new_map, map_page_size) == 0 &&
+					new_version_ok;
+		}
+		const char release = 'G';
+		bool first_released = map_ready &&
+			write(map_release[0][1], &release, 1) == 1;
+		close(map_release[0][1]);
+		child_status = -1;
+		pid_t first_completed = wait(&child_status);
+		bool first_ok = first_completed == map_children[0] && child_status == 0;
+		bool second_released = map_ready &&
+			write(map_release[1][1], &release, 1) == 1;
+		close(map_release[1][1]);
+		child_status = -1;
+		pid_t second_completed = wait(&child_status);
+		bool second_ok = second_completed == map_children[1] && child_status == 0;
+		// 20. Private file mappings must isolate user writes, kernel writes and fork.
+		fd = sysopen(map_file);
+		void* private_read_map = fd < 0 ? MAP_FAILED :
+			mmap(nullptr, map_page_size, PROT_READ, MAP_PRIVATE, fd, 0);
+		void* private_write_map = fd < 0 ? MAP_FAILED :
+			mmap(nullptr, map_page_size, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0);
+		void* private_fork_map = fd < 0 ? MAP_FAILED :
+			mmap(nullptr, map_page_size, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0);
+		void* private_kernel_map = fd < 0 ? MAP_FAILED :
+			mmap(nullptr, map_page_size, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0);
+		if (fd >= 0) close(fd);
+		if (private_read_map == MAP_FAILED || private_write_map == MAP_FAILED ||
+			private_fork_map == MAP_FAILED || private_kernel_map == MAP_FAILED ||
+			((const char*)private_read_map)[0] != 'U' ||
+			((const char*)private_write_map)[0] != 'U' ||
+			((const char*)private_fork_map)[0] != 'U' ||
+			((const char*)private_read_map)[sizeof(map_content) - 1] != 0) {
+			outsfmt("Error: MAP_PRIVATE setup failed!\n\r");
+			return -1;
+		}
+		((char*)private_write_map)[0] = 'P';
+		if (((const char*)private_write_map)[0] != 'P' ||
+			((const char*)private_fork_map)[0] != 'U' ||
+			((const char*)private_read_map)[0] != 'U') {
+			outsfmt("Error: User write changed another file mapping!\n\r");
+			return -1;
+		}
+		int private_pipe[2] = { -1, -1 };
+		const char kernel_marker = 'K';
+		if (pipe(private_pipe) != 0 ||
+			write(private_pipe[1], &kernel_marker, 1) != 1 ||
+			read(private_pipe[0], private_kernel_map, 1) != 1) {
+			outsfmt("Error: Kernel write into MAP_PRIVATE failed!\n\r");
+			return -1;
+		}
+		close(private_pipe[0]);
+		close(private_pipe[1]);
+		if (((const char*)private_kernel_map)[0] != 'K' ||
+			((const char*)private_read_map)[0] != 'U' ||
+			((const char*)private_fork_map)[0] != 'U') {
+			outsfmt("Error: Kernel write changed another file mapping!\n\r");
+			return -1;
+		}
+		pid_t private_child = fork();
+		if (private_child < 0) {
+			outsfmt("Error: MAP_PRIVATE fork failed!\n\r");
+			return -1;
+		}
+		if (!private_child) {
+			if (((const char*)private_write_map)[0] != 'P' ||
+				((const char*)private_fork_map)[0] != 'U' ||
+				((const char*)private_kernel_map)[0] != 'K') _exit(40);
+			((char*)private_write_map)[0] = 'C';
+			((char*)private_fork_map)[0] = 'D';
+			((char*)private_kernel_map)[0] = 'E';
+			if (((const char*)private_write_map)[0] != 'C' ||
+				((const char*)private_fork_map)[0] != 'D' ||
+				((const char*)private_kernel_map)[0] != 'E' ||
+				((const char*)private_read_map)[0] != 'U') _exit(41);
+			_exit(0);
+		}
+		int private_child_status = -1;
+		pid_t private_completed = wait(&private_child_status);
+		if (private_completed != private_child || private_child_status != 0 ||
+			((const char*)private_write_map)[0] != 'P' ||
+			((const char*)private_fork_map)[0] != 'U' ||
+			((const char*)private_kernel_map)[0] != 'K' ||
+			((const char*)private_read_map)[0] != 'U') {
+			outsfmt("Error: MAP_PRIVATE fork changed the parent mapping!\n\r");
+			return -1;
+		}
+
+		((char*)private_write_map)[0] = 'Q';
+		((char*)private_fork_map)[0] = 'R';
+		if (((const char*)private_write_map)[0] != 'Q' ||
+			((const char*)private_fork_map)[0] != 'R' ||
+			((const char*)private_read_map)[0] != 'U') {
+			outsfmt("Error: Parent MAP_PRIVATE write after fork failed!\n\r");
+			return -1;
+		}
+		bool private_unmapped = munmap(private_read_map, map_page_size) == 0;
+		private_unmapped = munmap(private_write_map, map_page_size) == 0 &&
+			private_unmapped;
+		private_unmapped = munmap(private_fork_map, map_page_size) == 0 &&
+			private_unmapped;
+		private_unmapped = munmap(private_kernel_map, map_page_size) == 0 &&
+			private_unmapped;
+		fd = sysopen(map_file);
+		char private_disk_byte = 0;
+		bool private_disk_ok = fd >= 0 &&
+			read(fd, &private_disk_byte, 1) == 1 && private_disk_byte == 'U';
+		if (fd >= 0) close(fd);
+		if (!private_unmapped || !private_disk_ok) {
+			outsfmt("Error: MAP_PRIVATE unmap wrote back to the file!\n\r");
+			return -1;
+		}
+		bool map_removed = unlink(map_file) == 0;
+		if (!map_ready || !new_version_ok || !first_released || !first_ok ||
+			!second_released || !second_ok || !map_removed) {
+			outsfmt("Error: Independent cached mappings failed!\n\r");
+			return -1;
+		}
+		outsfmt("Success: Independent read-only mappings survived version and unmap changes.\n\r");
+		outsfmt("Success: Read-only MAP_PRIVATE read cached content.\n\r");
+		outsfmt("Success: MAP_PRIVATE isolated user writes, kernel writes, fork and unmap.\n\r");
+
+		// 21. Mutable shared pages must agree across aliases, fork and regular I/O.
+		rostr shared_file = "/md0/mmap_s.txt";
+		sys_removefil(shared_file);
+		fd = sys_createfil(shared_file);
+		static const char shared_initial[] = "abcd";
+		if (fd < 0 || write(fd, shared_initial, 4) != 4) {
+			outsfmt("Error: Failed to prepare mutable shared file!\n\r");
+			if (fd >= 0) close(fd);
+			return -1;
+		}
+		void* shared_writer = mmap(nullptr, map_page_size,
+			PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+		void* shared_reader = mmap(nullptr, map_page_size,
+			PROT_READ, MAP_SHARED, fd, 0);
+		void* private_snapshot = mmap(nullptr, map_page_size,
+			PROT_READ, MAP_PRIVATE, fd, 0);
+		if (shared_writer == MAP_FAILED || shared_reader == MAP_FAILED ||
+			private_snapshot == MAP_FAILED ||
+			((char*)shared_writer)[0] != 'a' ||
+			((char*)shared_reader)[0] != 'a' ||
+			((char*)private_snapshot)[0] != 'a') {
+			outsfmt("Error: Mutable shared mapping setup failed!\n\r");
+			return -1;
+		}
+		((char*)shared_writer)[0] = 'S';
+		char shared_readback = 0;
+		if (((char*)shared_reader)[0] != 'S' ||
+			lseek(fd, 0, SEEK_SET) != 0 ||
+			read(fd, &shared_readback, 1) != 1 || shared_readback != 'S' ||
+			((char*)private_snapshot)[0] != 'a') {
+			outsfmt("Error: Shared user write was not visible to read()!\n\r");
+			return -1;
+		}
+		void* private_after_write = mmap(nullptr, map_page_size,
+			PROT_READ, MAP_PRIVATE, fd, 0);
+		if (private_after_write == MAP_FAILED ||
+			((char*)private_after_write)[0] != 'S') {
+			outsfmt("Error: New private snapshot missed an earlier shared write!\n\r");
+			return -1;
+		}
+		pid_t shared_child = fork();
+		if (shared_child < 0) {
+			outsfmt("Error: Mutable shared fork failed!\n\r");
+			return -1;
+		}
+		if (!shared_child) {
+			if (((char*)shared_reader)[0] != 'S') _exit(50);
+			((char*)shared_writer)[1] = 'F';
+			_exit(((char*)shared_reader)[1] == 'F' ? 0 : 51);
+		}
+		int shared_status = -1;
+		if (wait(&shared_status) != shared_child || shared_status != 0 ||
+			((char*)shared_reader)[1] != 'F') {
+			outsfmt("Error: Fork did not retain one mutable shared page!\n\r");
+			return -1;
+		}
+		char ordinary_marker = 'W';
+		if (lseek(fd, 2, SEEK_SET) != 2 ||
+			write(fd, &ordinary_marker, 1) != 1 ||
+			((char*)shared_writer)[2] != 'W' ||
+			((char*)shared_reader)[2] != 'W' ||
+			((char*)private_snapshot)[2] != 'c') {
+			outsfmt("Error: Ordinary write did not update shared aliases!\n\r");
+			return -1;
+		}
+		((char*)shared_writer)[16] = 'X'; // A mapped write past EOF does not extend the file.
+		ordinary_marker = 'E';
+		const int growth_seek = lseek(fd, 20, SEEK_SET);
+		const int growth_write = growth_seek == 20 ?
+			write(fd, &ordinary_marker, 1) : -1;
+		const char growth_gap = growth_write == 1 ?
+			((char*)shared_reader)[16] : 0;
+		const char growth_marker = growth_write == 1 ?
+			((char*)shared_reader)[20] : 0;
+		if (growth_seek != 20 || growth_write != 1 ||
+			growth_gap != 0 || growth_marker != 'E') {
+			outsfmt("Error: File growth mismatch: seek=%d write=%d gap=%d marker=%d!\n\r",
+				growth_seek, growth_write, (int)growth_gap, (int)growth_marker);
+			return -1;
+		}
+		int shared_pipe[2] = { -1, -1 };
+		ordinary_marker = 'K';
+		if (pipe(shared_pipe) != 0 ||
+			write(shared_pipe[1], &ordinary_marker, 1) != 1 ||
+			read(shared_pipe[0], (char*)shared_writer + 3, 1) != 1) {
+			outsfmt("Error: Kernel copy into shared page failed!\n\r");
+			return -1;
+		}
+		close(shared_pipe[0]);
+		close(shared_pipe[1]);
+		if (((char*)shared_reader)[3] != 'K' ||
+			lseek(fd, 3, SEEK_SET) != 3 ||
+			read(fd, &shared_readback, 1) != 1 || shared_readback != 'K' ||
+			munmap(shared_writer, map_page_size) != 0 ||
+			((char*)shared_reader)[0] != 'S') {
+			outsfmt("Error: Kernel shared write or partial alias release failed!\n\r");
+			return -1;
+		}
+		int truncate_fd = open(shared_file, O_WRONLY | O_TRUNC);
+		if (truncate_fd < 0) {
+			outsfmt("Error: Shared-page truncate failed!\n\r");
+			return -1;
+		}
+		ordinary_marker = 'N';
+		int new_written = write(truncate_fd, &ordinary_marker, 1);
+		close(truncate_fd);
+		if (new_written != 1 || ((char*)shared_reader)[0] != 'N' ||
+			((char*)shared_reader)[1] != 0 ||
+			((char*)private_snapshot)[0] != 'a' ||
+			((char*)private_after_write)[0] != 'S' ||
+			munmap(shared_reader, map_page_size) != 0 ||
+			munmap(private_snapshot, map_page_size) != 0 ||
+			munmap(private_after_write, map_page_size) != 0) {
+			outsfmt("Error: Truncate or private snapshot consistency failed!\n\r");
+			return -1;
+		}
+		close(fd);
+		if (unlink(shared_file) != 0) {
+			outsfmt("Error: Mutable shared file cleanup failed!\n\r");
+			return -1;
+		}
+		outsfmt("Success: Shared aliases, fork, read/write, kernel copy and truncate stayed coherent.\n\r");
 		outsfmt("=== File MMAP Test ALL PASSED! ===\n\r");
 
-		// 18. Clean up the temporary test file
+		// 22. Clean up the temporary test file
 		sys_removefil(test_file);
-		outsfmt("Step 18: Cleaned up test file.\n\r");
+		outsfmt("Step 22: Cleaned up test file.\n\r");
 	}
 	#endif
 

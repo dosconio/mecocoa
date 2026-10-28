@@ -627,8 +627,9 @@ static bool DeliverWaitResultAtomically(ProcessBlock* pparent, stduint child_pid
 				current_message.data.length != prepared_message.data.length) return false;
 			if (prepared_length) {
 				#if CONFIG_ENABLE_MMU
-				if (MemCopyP((void*)current_message.data.address, message_paging,
-					args, kernel_paging, prepared_length) != prepared_length) return false;
+				if (MccaMemCopyPPrepared((void*)current_message.data.address,
+					pparent, message_in_kernel, args, nullptr, true,
+					prepared_length) != prepared_length) return false;
 				#else
 				MemCopyN((void*)current_message.data.address, args, prepared_length);
 				#endif
@@ -636,8 +637,9 @@ static bool DeliverWaitResultAtomically(ProcessBlock* pparent, stduint child_pid
 			current_message.type = 0;
 			current_message.src = taskman_th->tid;
 			#if CONFIG_ENABLE_MMU
-			if (MemCopyP(pending_message, message_paging, &current_message,
-				kernel_paging, sizeof(current_message)) != sizeof(current_message)) return false;
+			if (MccaMemCopyPPrepared(pending_message, pparent,
+				message_in_kernel, &current_message, nullptr, true,
+				sizeof(current_message)) != sizeof(current_message)) return false;
 			#else
 			*pending_message = current_message;
 			#endif

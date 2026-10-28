@@ -5,6 +5,66 @@
 #include "c/arith.h"
 // for x86, one slice should begin with 0x100000 (above F000:FFFF)
 
+#if CONFIG_ENABLE_MMU
+namespace uni {
+	extern Mutex vfs_lock;
+	extern Mutex shared_file_copy_lock;
+	extern Atomic<stduint> shared_file_copy_epoch;
+	extern Atomic<stduint> shared_file_active_user_copies[2];
+	bool UserBufferWritableWithoutFault(ProcessBlock* process, stduint address,
+		size_t length);
+	bool AcquireCachedFileMappingPage(vfs_inode* inode, stduint file_offset,
+		uint64& version, stduint& physical_address);
+	void* MapSharedFileVmaPage(ProcessBlock* process, stduint address,
+		VirtualMemoryAccess access, stduint expected_flags,
+		stduint file_offset, vfs_inode* inode);
+	void* ResolveSharedFileWrite(ProcessBlock* process, stduint address);
+	bool UnregisterSharedFileAlias(uint64 identity, stduint file_offset,
+		ProcessBlock* process, stduint address);
+	bool FlushSharedFilePage(uint64 identity, stduint file_offset);
+	bool FlushSharedFilePageWithCopyLock(uint64 identity, stduint file_offset);
+}
+#endif
+
+stduint MccaMemCopyPPrepared(
+	void* dest, ProcessBlock* pd, bool dker,
+	const void* sors, ProcessBlock* ps, bool sker,
+	size_t n) {
+	#if CONFIG_ENABLE_MMU
+	extern Paging kernel_paging;
+	for (unsigned retry = 0; retry < 4; retry++) {
+		if (pd && !dker) {
+			// Join an epoch, then recheck permissions after a possible downgrade.
+			// A flush waits for copies counted in its previous epoch.
+			const stduint epoch = uni::shared_file_copy_epoch.load(
+				uni::MemoryOrder_Seq_Cst);
+			auto& active = uni::shared_file_active_user_copies[epoch & 1];
+			active.fetch_add(1, uni::MemoryOrder_Seq_Cst);
+			if (uni::shared_file_copy_epoch.load(
+				uni::MemoryOrder_Seq_Cst) != epoch) {
+				active.fetch_sub(1, uni::MemoryOrder_Seq_Cst);
+				continue;
+			}
+			if (!uni::UserBufferWritableWithoutFault(pd, (stduint)dest, n)) {
+				active.fetch_sub(1, uni::MemoryOrder_Seq_Cst);
+				return 0;
+			}
+			const stduint copied = MemCopyP(
+				dest, pd->paging,
+				sors, ps && !sker ? ps->paging : kernel_paging, n);
+			active.fetch_sub(1, uni::MemoryOrder_Seq_Cst);
+			return copied;
+		}
+		return MemCopyP(
+			dest, kernel_paging,
+			sors, ps && !sker ? ps->paging : kernel_paging, n);
+	}
+	return 0;
+	#else
+	return (MemCopyN(dest, sors, n), n);
+	#endif
+}
+
 _ESYM_C Handler_t FILE_ENTO, FILE_ENDO;
 
 Memory mem;
@@ -69,6 +129,30 @@ Spinlock mempool_lock;
 // ---------------------------------------------------------
 
 #if CONFIG_ENABLE_MMU
+namespace uni {
+	Atomic<stduint> shared_file_copy_epoch = 0;
+	Atomic<stduint> shared_file_active_user_copies[2] = { 0, 0 };
+
+	bool UserBufferWritableWithoutFault(ProcessBlock* process, stduint address,
+		size_t length) {
+		if (!process || length > ~_IMM0 - address) return false;
+		if (!length) return true;
+		const stduint last = (address + length - 1) & ~_IMM(PAGE_SIZE - 1);
+		for (stduint page = address & ~_IMM(PAGE_SIZE - 1);;
+			page += PAGE_SIZE) {
+			pageint index = page;
+			PageEntry* leaf = process->paging.getEntry(index);
+			stduint properties = 0;
+			if (!leaf || _IMM(leaf) == ~_IMM0 ||
+				!leaf->DecodeLeafProperties(index.crt_level, properties) ||
+				!(properties & PGPROP_present) ||
+				!(properties & PGPROP_user_access) ||
+				!(properties & PGPROP_writable)) return false;
+			if (page == last) return true;
+		}
+	}
+}
+
 #if _MCCA == 0x8632
 struct TLBShootdownMailbox {
 	stduint address = 0;
@@ -144,7 +228,7 @@ void Memory::HandleTLBShootdownIPI() {
 }
 #endif
 
-static void* ResolveAnonymousCowPage(ProcessBlock* pb, stduint address);
+static void* ResolvePrivateCowPage(ProcessBlock* pb, stduint address);
 #endif
 
 bool PrepareUserBuffer(ProcessBlock* pb, stduint address,
@@ -155,9 +239,12 @@ bool PrepareUserBuffer(ProcessBlock* pb, stduint address,
 	const stduint first_page = address & ~_IMM(0xFFF);
 	const stduint last_page = (address + length - 1) & ~_IMM(0xFFF);
 	for (stduint page = first_page;; page += 0x1000) {
-		if (_IMM(pb->paging[page]) == ~_IMM0 &&
-			!pb->EnsureVmaPage(page, write ? VirtualMemoryAccess::Write :
-				VirtualMemoryAccess::Read)) return false;
+		if (_IMM(pb->paging[page]) == ~_IMM0) {
+			void* physical = pb->EnsureVmaPage(page, write ?
+				VirtualMemoryAccess::Write : VirtualMemoryAccess::Read);
+			if (!physical && (!write || _IMM(pb->paging[page]) == ~_IMM0))
+				return false;
+		}
 		pageint page_index = page;
 		PageEntry* entry = pb->paging.getEntry(page_index);
 		stduint properties;
@@ -168,11 +255,13 @@ bool PrepareUserBuffer(ProcessBlock* pb, stduint address,
 		if (write && !(properties & PGPROP_writable)) {
 			void* physical = nullptr;
 			if (mapping_lock_held) {
-				physical = ResolveAnonymousCowPage(pb, page);
+				physical = uni::ResolveSharedFileWrite(pb, page);
+				if (!physical) physical = ResolvePrivateCowPage(pb, page);
 			}
 			else {
 				MutexLocal mapping_guard(&pb->mutex_mapping);
-				physical = ResolveAnonymousCowPage(pb, page);
+				physical = uni::ResolveSharedFileWrite(pb, page);
+				if (!physical) physical = ResolvePrivateCowPage(pb, page);
 			}
 			if (!physical) return false;
 			page_index = page;
@@ -258,13 +347,10 @@ struct VmaPageReleasePlan {
 	stduint address = 0;
 	void* physical = nullptr;
 	stduint properties = 0;
-	stduint writeback_index = ~_IMM0;
 	stduint file_offset = 0;
+	uint64 shared_identity = 0;
 	bool release_physical = false;
-};
-
-struct VmaWritebackPlan {
-	VmaFileOwner file;
+	bool unmapped = false;
 };
 
 struct VmaDeviceUnmapPlan {
@@ -300,7 +386,6 @@ bool ProcessBlock::UnmapVmaRange(stduint address, stduint length) {
 		(length & (PAGE_SIZE - 1)) || length > ~_IMM0 - address) return false;
 	const stduint end = address + length;
 	stduint page_capacity = 0;
-	stduint writeback_capacity = 0;
 	stduint released_file_capacity = 0;
 	stduint device_capacity = 0;
 	bool split_file_required = false;
@@ -315,9 +400,6 @@ bool ProcessBlock::UnmapVmaRange(stduint address, stduint length) {
 			if (pages > ~_IMM0 - page_capacity) return false;
 			page_capacity += pages;
 			if (vma.vm_type == VirtualMemoryAreaType::Device) device_capacity++;
-			if (vma.vm_type == VirtualMemoryAreaType::File && vma.vfile &&
-				vma.vm_mode == VirtualMemoryAreaMode::Shared &&
-				(vma.vm_flags & PGPROP_writable)) writeback_capacity++;
 			if (vma.vm_start >= address && vma.vm_end <= end &&
 				vma.vm_type == VirtualMemoryAreaType::File && vma.vfile)
 				released_file_capacity++;
@@ -327,29 +409,24 @@ bool ProcessBlock::UnmapVmaRange(stduint address, stduint length) {
 		}
 	}
 	if (page_capacity > ~_IMM0 / sizeof(VmaPageReleasePlan) ||
-		writeback_capacity > ~_IMM0 / sizeof(VmaWritebackPlan) ||
 		released_file_capacity > ~_IMM0 / sizeof(VmaFileOwner) ||
 		device_capacity > ~_IMM0 / sizeof(VmaDeviceUnmapPlan)) return false;
 
 	auto pages = page_capacity ?
 		uni::make_unique<VmaPageReleasePlan[]>(page_capacity) :
 		uni::UniquePtr<VmaPageReleasePlan[]>();
-	auto writebacks = writeback_capacity ?
-		uni::make_unique<VmaWritebackPlan[]>(writeback_capacity) :
-		uni::UniquePtr<VmaWritebackPlan[]>();
 	auto released_files = released_file_capacity ?
 		uni::make_unique<VmaFileOwner[]>(released_file_capacity) :
 		uni::UniquePtr<VmaFileOwner[]>();
 	auto devices = device_capacity ?
 		uni::make_unique<VmaDeviceUnmapPlan[]>(device_capacity) :
 		uni::UniquePtr<VmaDeviceUnmapPlan[]>();
-	if ((page_capacity && !pages) || (writeback_capacity && !writebacks) ||
+	if ((page_capacity && !pages) ||
 		(released_file_capacity && !released_files) ||
 		(device_capacity && !devices)) return false;
 
 	VmaFileOwner split_file;
 	stduint page_count = 0;
-	stduint writeback_count = 0;
 	stduint device_count = 0;
 	bool prepared = true;
 	{
@@ -359,17 +436,6 @@ bool ProcessBlock::UnmapVmaRange(stduint address, stduint length) {
 			const stduint overlap_begin = maxof(address, vma.vm_start);
 			const stduint overlap_end = minof(end, vma.vm_end);
 			if (overlap_begin >= overlap_end) continue;
-			stduint writeback_index = ~_IMM0;
-			if (vma.vm_type == VirtualMemoryAreaType::File && vma.vfile &&
-				vma.vm_mode == VirtualMemoryAreaMode::Shared &&
-				(vma.vm_flags & PGPROP_writable)) {
-				writebacks[writeback_count].file.reset(CloneVmaFile(vma.vfile));
-				if (!writebacks[writeback_count].file) {
-					prepared = false;
-					break;
-				}
-				writeback_index = writeback_count++;
-			}
 			if (vma.vm_type == VirtualMemoryAreaType::Device) {
 				devices[device_count].address = overlap_begin;
 				devices[device_count].length = overlap_end - overlap_begin;
@@ -380,8 +446,10 @@ bool ProcessBlock::UnmapVmaRange(stduint address, stduint length) {
 				item.address = page;
 				item.properties = vma.vm_flags & (PGPROP_present |
 					PGPROP_writable | PGPROP_user_access | PGPROP_nonexecutable);
-				item.writeback_index = writeback_index;
 				item.file_offset = vma.file_offset + page - vma.vm_start;
+				item.shared_identity = vma.vm_type == VirtualMemoryAreaType::File &&
+					vma.vm_mode == VirtualMemoryAreaMode::Shared && vma.vfile &&
+					vma.vfile->f_inode ? vma.vfile->f_inode->identity : 0;
 				item.release_physical = vma.vm_type != VirtualMemoryAreaType::Device;
 			}
 			if (split_file_required && !split_file &&
@@ -393,8 +461,27 @@ bool ProcessBlock::UnmapVmaRange(stduint address, stduint length) {
 		}
 	}
 	if (!prepared || page_count != page_capacity ||
-		writeback_count != writeback_capacity || device_count != device_capacity ||
+		device_count != device_capacity ||
 		(split_file_required && !split_file)) return false;
+
+	MutexLocal copy_guard(&uni::shared_file_copy_lock);
+	// Keep an explicit UMAP intact if a dirty shared page cannot be written.
+	// Exit/exec may drop its alias; the dirty cache page retains the inode pin.
+	for (stduint i = 0; i < page_count; i++) {
+		const auto& item = pages[i];
+		if (!item.shared_identity) continue;
+		bool mapped = false;
+		{
+			SpinlockLocal guard(&vma_lock);
+			mapped = _IMM(paging[item.address]) != ~_IMM0;
+		}
+		if (mapped && !uni::FlushSharedFilePageWithCopyLock(item.shared_identity,
+			item.file_offset)) {
+			if (!force_vma_release) return false;
+			plogerro("Shared file page remains dirty after process release: inode=%[64H] offset=%[x]",
+				item.shared_identity, item.file_offset);
+		}
+	}
 
 	for (stduint i = 0; i < device_count; i++) {
 		if (!Memory::UnmapPages(paging, devices[i].address,
@@ -411,12 +498,20 @@ bool ProcessBlock::UnmapVmaRange(stduint address, stduint length) {
 			item.physical = paging[item.address];
 		}
 		for (stduint i = 0; i < page_count; i++) {
-			const auto& item = pages[i];
+			auto& item = pages[i];
 			if (!item.release_physical || item.physical == (void*)~_IMM0) continue;
+			pageint index = item.address;
+			PageEntry* leaf = paging.getEntry(index);
+			if (!leaf || _IMM(leaf) == ~_IMM0 ||
+				!leaf->DecodeLeafProperties(index.crt_level, item.properties)) {
+				committed = false;
+				break;
+			}
 			if (!paging.Unmap(item.address, PAGE_SIZE)) {
 				committed = false;
 				break;
 			}
+			item.unmapped = true;
 		}
 		if (committed) {
 			for (stduint i = 0; i < vmas.Count();) {
@@ -462,28 +557,26 @@ bool ProcessBlock::UnmapVmaRange(stduint address, stduint length) {
 		else {
 			for (stduint i = 0; i < page_count; i++) {
 				const auto& item = pages[i];
-				if (!item.release_physical || !item.physical ||
+				if (!item.unmapped || !item.physical ||
 					item.physical == (void*)~_IMM0) continue;
 				paging.Map(item.address, (stduint)item.physical, PAGE_SIZE,
 					PAGESIZE_4KB, item.properties | PGOPTS_omit_warnings);
 			}
 		}
 	}
-	for (stduint i = 0; i < page_count; i++) RefreshVirtualAddress(pages[i].address);
+	for (stduint i = 0; i < page_count; i++)
+		Memory::InvalidateProcessPage(this, pages[i].address);
 	if (!committed) return false;
-
+	for (stduint i = 0; i < page_count; i++) {
+		const auto& item = pages[i];
+		if (item.shared_identity && item.physical &&
+			item.physical != (void*)~_IMM0)
+			uni::UnregisterSharedFileAlias(item.shared_identity,
+				item.file_offset, this, item.address);
+	}
 	for (stduint i = 0; i < page_count; i++) {
 		const auto& item = pages[i];
 		if (!item.physical || item.physical == (void*)~_IMM0) continue;
-		if (item.writeback_index != ~_IMM0) {
-			auto* file = writebacks[item.writeback_index].file.get();
-			if (file && file->f_inode && item.file_offset < file->f_inode->i_size) {
-				const stduint write_length = minof(_IMM(PAGE_SIZE),
-					file->f_inode->i_size - item.file_offset);
-				file->f_pos = item.file_offset;
-				Filesys::Write(file, (const void*)mglb(item.physical), write_length);
-			}
-		}
 		if (item.release_physical &&
 			!Memory::ReleaseManagedPageMapping(_IMM(item.physical)))
 			plogerro("Missing managed VMA page at physical address %[x]",
@@ -506,7 +599,10 @@ bool ProcessBlock::ReleaseAllVmas() {
 			end = maxof(end, vmas[i].vm_end);
 		}
 	}
-	return end > begin && UnmapVmaRange(begin, end - begin);
+	force_vma_release = true;
+	const bool released = end > begin && UnmapVmaRange(begin, end - begin);
+	force_vma_release = false;
+	return released;
 }
 
 static bool VmaAllowsAccess(const VirtualMemoryArea& vma,
@@ -539,6 +635,75 @@ static bool PageAllowsAccess(ProcessBlock* pb, stduint address,
 static void ReleaseVmaReadFile(uni::vfs_file* file) {
 	if (!file) return;
 	Filesys::Close(file);
+}
+
+static void* MapCachedFileVmaPage(ProcessBlock* pb, stduint address,
+	VirtualMemoryAccess access, stduint expected_flags,
+	VirtualMemoryAreaMode expected_mode, stduint file_offset,
+	uni::vfs_file* read_file) {
+	uni::vfs_inode* inode = read_file->f_inode.get();
+	if (!inode) return nullptr;
+	for (;;) {
+		// An initial private snapshot must include earlier shared writes,
+		// while keeping its own immutable physical page afterwards.
+		if (!uni::FlushSharedFilePage(inode->identity, file_offset)) return nullptr;
+		uint64 version = 0;
+		stduint physical = 0;
+		if (!uni::AcquireCachedFileMappingPage(inode, file_offset,
+			version, physical)) return nullptr;
+		const bool cached = physical != 0;
+		if (!cached) {
+			void* zero_page = mempool.allocate(PAGE_SIZE, 12);
+			if (!zero_page || zero_page == (void*)~_IMM0) return nullptr;
+			MemSet(zero_page, 0, PAGE_SIZE);
+			if (!Memory::AdoptManagedPage(_IMM(zero_page),
+				ManagedPageSource::File)) return nullptr;
+			physical = _IMM(zero_page);
+		}
+
+		void* result = nullptr;
+		bool installed = false;
+		bool stale = false;
+		{
+			MutexLocal file_guard(&uni::vfs_lock);
+			if (inode->content_version != version) stale = true;
+			else {
+				SpinlockLocal guard(&pb->vma_lock);
+				for (stduint i = 0; i < pb->vmas.Count(); i++) {
+					const auto& vma = pb->vmas[i];
+					if (address < vma.vm_start || address >= vma.vm_end) continue;
+					if (vma.vm_type != VirtualMemoryAreaType::File ||
+						vma.vm_mode != expected_mode || vma.vm_flags != expected_flags ||
+						((vma.vm_flags & PGPROP_writable) &&
+							vma.vm_mode != VirtualMemoryAreaMode::Private) ||
+						!VmaAllowsAccess(vma, access) || !vma.vfile ||
+						vma.vfile->f_inode.get() != inode ||
+						address - vma.vm_start + vma.file_offset != file_offset) break;
+					if (_IMM(pb->paging[address]) != ~_IMM0) {
+						PageAllowsAccess(pb, address, access, result);
+						break;
+					}
+					const stduint properties = vma.vm_flags & (PGPROP_present |
+						PGPROP_user_access | PGPROP_nonexecutable);
+					if (pb->paging.Map(address, physical, PAGE_SIZE,
+						PAGESIZE_4KB, properties)) {
+						RefreshVirtualAddress(address);
+						// A private write continues into COW after installing this read-only page.
+						result = access == VirtualMemoryAccess::Write ?
+							nullptr : (void*)physical;
+						installed = true;
+					}
+					break;
+				}
+			}
+		}
+		if (!installed) {
+			const bool released = Memory::ReleaseManagedPageMapping(physical);
+			KASSERT(released);
+		}
+		if (stale) continue;
+		return result;
+	}
 }
 
 void* ProcessBlock::EnsureVmaPage(stduint address, VirtualMemoryAccess access) {
@@ -611,19 +776,31 @@ void* ProcessBlock::EnsureVmaPage(stduint address, VirtualMemoryAccess access) {
 			return nullptr;
 		}
 	}
+	if (file_backed && expected_mode == VirtualMemoryAreaMode::Private) {
+		void* result = MapCachedFileVmaPage(this, address, access,
+			expected_flags, expected_mode, expected_file_offset, read_file);
+		ReleaseVmaReadFile(read_file);
+		return result;
+	}
+	if (file_backed && expected_mode == VirtualMemoryAreaMode::Shared) {
+		void* result = uni::MapSharedFileVmaPage(this, address, access,
+			expected_flags, expected_file_offset, read_file->f_inode.get());
+		ReleaseVmaReadFile(read_file);
+		return result;
+	}
 
 	void* physical = mempool.allocate(0x1000, 12);
 	if (!physical || physical == (void*)~_IMM0) {
 		ReleaseVmaReadFile(read_file);
 		return nullptr;
 	}
-	MemSet((void*)mglb(physical), 0, 0x1000);
+	MemSet(physical, 0, 0x1000);
 	if (read_file && read_file->f_inode &&
 		expected_file_offset < read_file->f_inode->i_size) {
 		stduint read_length = minof(_IMM(0x1000),
 			read_file->f_inode->i_size - expected_file_offset);
 		read_file->f_pos = expected_file_offset;
-		if (Filesys::Read(read_file, (void*)mglb(physical), read_length) !=
+		if (Filesys::Read(read_file, physical, read_length) !=
 			(stdsint)read_length) {
 			mempool.deallocate(physical, 0x1000);
 			ReleaseVmaReadFile(read_file);
@@ -668,42 +845,46 @@ void* ProcessBlock::EnsureVmaPage(stduint address, VirtualMemoryAccess access) {
 	return result;
 }
 
-static bool ReadAnonymousCowPage(ProcessBlock* pb, stduint address,
-	stduint& physical_address, stduint& properties) {
+static bool ReadPrivateCowPage(ProcessBlock* pb, stduint address,
+	stduint& physical_address, stduint& properties,
+	VirtualMemoryAreaType& vma_type) {
 	SpinlockLocal guard(&pb->vma_lock);
 	for (stduint i = 0; i < pb->vmas.Count(); i++) {
 		const auto& vma = pb->vmas[i];
 		if (address < vma.vm_start || address >= vma.vm_end) continue;
-		if (vma.vm_type != VirtualMemoryAreaType::Anonymous ||
-			vma.vm_mode != VirtualMemoryAreaMode::Private ||
+		if (vma.vm_mode != VirtualMemoryAreaMode::Private ||
+			(vma.vm_type != VirtualMemoryAreaType::Anonymous &&
+				vma.vm_type != VirtualMemoryAreaType::File) ||
 			!VmaAllowsAccess(vma, VirtualMemoryAccess::Write)) return false;
 		pageint page = address;
 		PageEntry* entry = pb->paging.getEntry(page);
-		if (_IMM(entry) == ~_IMM0 || page.crt_level != 0 ||
+		if (!entry || _IMM(entry) == ~_IMM0 || page.crt_level != 0 ||
 			!entry->DecodeLeafProperties(page.crt_level, properties) ||
 			!(properties & PGPROP_present) ||
 			!(properties & PGPROP_user_access) ||
 			(properties & PGPROP_writable)) return false;
 		physical_address = _IMM(pb->paging[address]);
+		vma_type = vma.vm_type;
 		return physical_address != ~_IMM0;
 	}
 	return false;
 }
 
-static bool ReplaceAnonymousCowPage(ProcessBlock* pb, stduint address,
+static bool ReplacePrivateCowPage(ProcessBlock* pb, stduint address,
+	VirtualMemoryAreaType expected_type,
 	stduint expected_physical, stduint expected_properties,
 	stduint replacement_physical) {
 	SpinlockLocal guard(&pb->vma_lock);
 	for (stduint i = 0; i < pb->vmas.Count(); i++) {
 		const auto& vma = pb->vmas[i];
 		if (address < vma.vm_start || address >= vma.vm_end) continue;
-		if (vma.vm_type != VirtualMemoryAreaType::Anonymous ||
+		if (vma.vm_type != expected_type ||
 			vma.vm_mode != VirtualMemoryAreaMode::Private ||
 			!VmaAllowsAccess(vma, VirtualMemoryAccess::Write)) return false;
 		pageint page = address;
 		PageEntry* entry = pb->paging.getEntry(page);
 		stduint current_properties;
-		if (_IMM(entry) == ~_IMM0 || page.crt_level != 0 ||
+		if (!entry || _IMM(entry) == ~_IMM0 || page.crt_level != 0 ||
 			!entry->DecodeLeafProperties(page.crt_level, current_properties) ||
 			current_properties != expected_properties ||
 			_IMM(pb->paging[address]) != expected_physical) return false;
@@ -717,19 +898,27 @@ static bool ReplaceAnonymousCowPage(ProcessBlock* pb, stduint address,
 }
 
 // The caller holds pb->mutex_mapping.
-static void* ResolveAnonymousCowPage(ProcessBlock* pb, stduint address) {
+static void* ResolvePrivateCowPage(ProcessBlock* pb, stduint address) {
 	stduint old_physical;
 	stduint old_properties;
-	if (!ReadAnonymousCowPage(pb, address, old_physical, old_properties))
+	VirtualMemoryAreaType vma_type;
+	if (!ReadPrivateCowPage(pb, address, old_physical, old_properties,
+		vma_type))
 		return nullptr;
 
 	ManagedPageInfo old_page;
 	if (!Memory::QueryManagedPage(old_physical, old_page) ||
-		old_page.source != ManagedPageSource::Anonymous ||
+		(vma_type == VirtualMemoryAreaType::Anonymous &&
+			old_page.source != ManagedPageSource::Anonymous) ||
+		(vma_type == VirtualMemoryAreaType::File &&
+			old_page.source != ManagedPageSource::File &&
+			old_page.source != ManagedPageSource::Anonymous) ||
 		!old_page.mapping_refs) return nullptr;
 
-	if (old_page.mapping_refs == 1 && !old_page.cache_refs) {
-		if (!ReplaceAnonymousCowPage(pb, address, old_physical,
+	// A file-origin page must be copied even after cache eviction.
+	if (old_page.source == ManagedPageSource::Anonymous &&
+		old_page.mapping_refs == 1 && !old_page.cache_refs) {
+		if (!ReplacePrivateCowPage(pb, address, vma_type, old_physical,
 			old_properties, old_physical)) return nullptr;
 		Memory::InvalidateProcessPage(pb, address);
 		return (void*)old_physical;
@@ -744,7 +933,7 @@ static void* ResolveAnonymousCowPage(ProcessBlock* pb, stduint address) {
 	}
 	if (!Memory::AdoptManagedPage(_IMM(new_physical),
 		ManagedPageSource::Anonymous)) return nullptr;
-	if (!ReplaceAnonymousCowPage(pb, address, old_physical,
+	if (!ReplacePrivateCowPage(pb, address, vma_type, old_physical,
 		old_properties, _IMM(new_physical))) {
 		Memory::ReleaseManagedPageMapping(_IMM(new_physical));
 		return nullptr;
@@ -763,7 +952,8 @@ void* ProcessBlock::ResolveVmaFault(stduint address,
 	}
 	if (access != VirtualMemoryAccess::Write) return nullptr;
 	MutexLocal mapping_guard(&mutex_mapping);
-	return ResolveAnonymousCowPage(this, address);
+	if (void* shared = uni::ResolveSharedFileWrite(this, address)) return shared;
+	return ResolvePrivateCowPage(this, address);
 }
 
 extern "C" void* kernel_prefault_page(ProcessBlock* pb, stduint address,

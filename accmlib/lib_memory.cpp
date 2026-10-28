@@ -82,8 +82,8 @@ _ESYM_C void* realloc(void* ptr, size_t size) {
 }
 
 _ESYM_C void* mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset) {
-	// File mappings currently support a kernel-chosen address and MAP_SHARED.
-	if (addr || !length || offset < 0 || (offset & 0xFFF) || flags != MAP_SHARED || fd < 0 ||
+	if (addr || !length || offset < 0 || (offset & 0xFFF) ||
+		(flags != MAP_SHARED && flags != MAP_PRIVATE) || fd < 0 ||
 		(prot & ~(PROT_READ | PROT_WRITE | PROT_EXEC)) ||
 		!(prot & PROT_READ)) return MAP_FAILED;
 	#if (_ACCM & 0xFF00) == 0x8600 || (_ACCM & 0xFF00) == 0x1000

@@ -183,13 +183,16 @@ static stdsint ConsoleMsg_RDWR(const FMT_ConsoleMsg_RDWR* data, bool wr_type) {
 		stdsint bytes_processed = 0;
 
 		if (wr_type) {
-			MemCopyP(rw_buffer, kernel_paging, (void*)curr_addr, pb->paging, chunk);
+			if (MccaMemCopyP(rw_buffer, nullptr, true,
+				(void*)curr_addr, pb, false, chunk) != chunk) break;
 			bytes_processed = (stdsint)global_devfs.writfl(tty_node, Slice{ 0, chunk }, rw_buffer);
 		}
 		else {
 			bytes_processed = (stdsint)global_devfs.readfl(tty_node, Slice{ 0, chunk }, rw_buffer);
 			if (bytes_processed > 0) {
-				MemCopyP((void*)curr_addr, pb->paging, rw_buffer, kernel_paging, bytes_processed);
+				if (MccaMemCopyP((void*)curr_addr, pb, false,
+					rw_buffer, nullptr, true, bytes_processed) !=
+					stduint(bytes_processed)) break;
 			}
 		}
 

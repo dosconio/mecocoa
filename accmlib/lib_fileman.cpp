@@ -132,6 +132,18 @@ int fstat(int fd, struct stat *buf) {
 	if (ret < 0) return ret;
 	buf->st_size = prop.size;
 	buf->st_mode = prop.mode;
+	buf->st_mtime = 0;
+	if (prop.modified_valid) {
+		struct tm date = {};
+		date.tm_year = prop.modified.year;
+		date.tm_mon = prop.modified.month;
+		date.tm_mday = prop.modified.mday;
+		date.tm_hour = prop.modified.hour;
+		date.tm_min = prop.modified.minute;
+		date.tm_sec = prop.modified.second;
+		date.tm_isdst = 0;
+		buf->st_mtime = mktime(&date);
+	}
 	return 0;
 }
 

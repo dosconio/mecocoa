@@ -431,10 +431,13 @@ stduint ProcessBlock::Rdwt(bool wr_type, stduint fid, Slice slice)
 		int bytes_processed = 0;
 
 		if (wr_type) {
-			MccaMemCopyP(
+			if (MccaMemCopyP(
 				buffer, nullptr, true,
 				(void*)curr_addr, pb, false,
-				chunk);
+				chunk) != stduint(chunk)) {
+				io_error = -1;
+				break;
+			}
 			if (is_pipe) {
 				bytes_processed = Filesys::WritePipe(pipe_chan, buffer, chunk);
 			}
@@ -458,10 +461,13 @@ stduint ProcessBlock::Rdwt(bool wr_type, stduint fid, Slice slice)
 				bytes_processed = Filesys::Read(file, buffer, chunk);
 			}
 			if (bytes_processed > 0) {
-				MccaMemCopyP(
+				if (MccaMemCopyP(
 					(void*)curr_addr, pb, false,
 					buffer, nullptr, true,
-					bytes_processed);
+					bytes_processed) != stduint(bytes_processed)) {
+					io_error = -1;
+					break;
+				}
 			}
 		}
 
@@ -565,8 +571,9 @@ stdsint ProcessBlock::Seek(int fd, stdsint off, int whence) {
 		return -1;
 	}
 
-	// strictly prevent seeking past EOF in your OS
-	MIN(pos, f_size);
+	// Regular files may seek past EOF; the write path zero-fills the gap.
+	if ((file->f_inode->i_mode & I_TYPE_MASK) != I_REGULAR)
+		MIN(pos, f_size);
 
 	// Update position in both the process file descriptor and the VFS file object
 	files->pfiles[fd]->fd_pos = pos;
@@ -1061,7 +1068,8 @@ void serv_file_loop()// for IDE 0:0, 0:1
 				ProcessBlock::Release(safe_pb);
 				break;
 			}
-			stduint copied = MemCopyP((void*)usr_buf, safe_pb->paging, abs_path.reference(), kernel_paging, path_len + 1);
+			stduint copied = MccaMemCopyP((void*)usr_buf, safe_pb, false,
+				abs_path.reference(), nullptr, true, path_len + 1);
 			stdsint get_ret = (copied < path_len + 1) ? -3 : (stdsint)path_len;
 			syssend(sig_src, &get_ret, sizeof(get_ret));
 			ProcessBlock::Release(safe_pb);

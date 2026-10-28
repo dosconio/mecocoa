@@ -1,6 +1,8 @@
 #ifndef SYSCALL_HPP_
 #define SYSCALL_HPP_
 
+#include <c/ISO_IEC_STD/time.h>
+
 enum
 	#ifdef _INC_CPP
 	class
@@ -135,6 +137,8 @@ void syscall(NormalTaskContext* cxt);
 struct file_proper_t {
 	stduint size = 0;					// File size in bytes
 	stduint mode = 0;					// File mode (type and permissions)
+	datime_t modified = {};
+	byte modified_valid = 0;
 };
 
 struct syscall_mmap_request_t {

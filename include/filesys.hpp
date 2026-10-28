@@ -212,6 +212,9 @@ public:
 	static int Read(vfs_file* file, void* buf, stduint count);
 	static int Write(vfs_file* file, const void* buf, stduint count);
 	static bool Truncate(vfs_file* file, stduint size);
+	#ifdef _FILESYS_DATETIME
+	static bool GetInfo(vfs_file* file, FilesysFileInfo& info);
+	#endif
 	static stdsint Ctrl(vfs_file* file, stduint cmd, void* args);
 	static int Close(vfs_file* file);
 	static int Enumer(vfs_file* file, void* buf, stduint count, ProcessBlock* pb);

@@ -5,6 +5,12 @@
 #include "../include/mecocoa.hpp"
 #include <c/format/ELF.h>
 #include "../include/filesys.hpp"
+#if CONFIG_ENABLE_MMU
+namespace uni {
+	bool RegisterSharedFileAlias(vfs_inode* inode, stduint file_offset,
+		ProcessBlock* process, stduint address, stduint physical_address);
+}
+#endif
 #if !CONFIG_ENABLE_MMU
 static inline stduint _taskman_strcopy(char* dest, const char* sors, stduint length) {
 	if (!length) return 0;
@@ -615,18 +621,28 @@ ProcessBlock* Taskman::CreateFork(ProcessBlock* fo, const CallgateFrame* frame) 
 				if (vma.vm_type == VirtualMemoryAreaType::Device) continue;
 				ManagedPageSource source = vma.vm_type == VirtualMemoryAreaType::File ?
 					ManagedPageSource::File : ManagedPageSource::Anonymous;
-				const bool cow_page = vma.vm_type == VirtualMemoryAreaType::Anonymous &&
+				const bool cow_page =
+					(vma.vm_type == VirtualMemoryAreaType::Anonymous ||
+						vma.vm_type == VirtualMemoryAreaType::File) &&
 					vma.vm_mode == VirtualMemoryAreaMode::Private &&
 					(vma.vm_flags & PGPROP_writable);
-				if (!(vma.vm_flags & PGPROP_writable) || cow_page) {
+				const bool shared_file_page =
+					vma.vm_type == VirtualMemoryAreaType::File &&
+					vma.vm_mode == VirtualMemoryAreaMode::Shared;
+				#if _MCCA != 0x8632 && _SYS_MULTICORE
+				if (shared_file_page && (parent_properties & PGPROP_writable) &&
+					Taskman::PCU_CORES > 1) return discard_child();
+				#endif
+				const bool protect_parent = cow_page || shared_file_page;
+				if (!(vma.vm_flags & PGPROP_writable) || protect_parent) {
 					if (!Memory::RetainManagedPageMapping(_IMM(parent_phy))) {
 						plogerro("Failed to retain shared VMA page during fork at VA=%[x]",
 							addr);
 						return discard_child();
 					}
 					stduint child_properties = parent_properties;
-					if (cow_page) child_properties &= ~PGPROP_writable;
-					if (cow_page && (parent_properties & PGPROP_writable)) {
+					if (protect_parent) child_properties &= ~PGPROP_writable;
+					if (protect_parent && (parent_properties & PGPROP_writable)) {
 						cow_parent_pages.Append({ addr, _IMM(parent_phy), parent_properties });
 						bool downgraded = false;
 						{
@@ -663,9 +679,21 @@ ProcessBlock* Taskman::CreateFork(ProcessBlock* fo, const CallgateFrame* frame) 
 							addr);
 						return discard_child();
 					}
+					if (shared_file_page &&
+						!uni::RegisterSharedFileAlias(vma.vfile->f_inode.get(),
+							vma.file_offset + addr - vma.vm_start, pb, addr,
+							_IMM(parent_phy))) {
+						pb->paging.Unmap(addr, PAGE_SIZE);
+						Memory::ReleaseManagedPageMapping(_IMM(parent_phy));
+						return discard_child();
+					}
 					ManagedPageInfo page_info;
-					KASSERT(Memory::QueryManagedPage(_IMM(parent_phy), page_info) &&
-						page_info.source == source && page_info.mapping_refs >= 2);
+					// A private file VMA may already hold an anonymous COW page.
+				KASSERT(Memory::QueryManagedPage(_IMM(parent_phy), page_info) &&
+						(page_info.source == source ||
+							(cow_page && vma.vm_type == VirtualMemoryAreaType::File &&
+								page_info.source == ManagedPageSource::Anonymous)) &&
+						page_info.mapping_refs >= 2);
 					if (cow_page) {
 						bool cow_mapping_valid;
 						{
