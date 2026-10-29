@@ -1,16 +1,80 @@
 
 [BITS 64]
 
+%ifdef _UEFI
+; Multiboot2 Specification 2.0, sections 3.1.10 and 3.1.12.
+MB2_HEADER_MAGIC EQU 0xE85250D6
+
+SECTION .multiboot2 progbits alloc
+ALIGN 8
+grub_header:
+	DD MB2_HEADER_MAGIC
+	DD 0
+	DD grub_header_end - grub_header
+	DD -(MB2_HEADER_MAGIC + grub_header_end - grub_header)
+
+	DW 7
+	DW 0
+	DD 8
+
+	DW 9
+	DW 0
+	DD 12
+	DD _entry_grub
+	ALIGN 8
+
+	DW 5
+	DW 0
+	DD 20
+	DD 0
+	DD 0
+	DD 32
+	ALIGN 8
+
+	DW 0
+	DW 0
+	DD 8
+grub_header_end:
+
+SECTION .data
+GLOBAL grub_boot_magic, grub_boot_info
+ALIGN 8
+grub_boot_magic: DD 0
+ALIGN 8
+grub_boot_info: DQ 0
+
+SECTION .text
+%endif
+
 EXTERN kernel_stack
 
 EXTERN EnableSSE
 EXTERN _ZN6Memory9clear_bssEv
 EXTERN _preprocess
+EXTERN grub_bootstrap
 
 EXTERN mecocoa
 EXTERN PG_PUSH, PG_POP
 
 GLOBAL _entry
+
+%ifdef _UEFI
+GLOBAL _entry_grub
+_entry_grub:
+	CMP EAX, 0x36D76289
+	JNE .halt
+	MOV [grub_boot_magic], EAX
+	MOV [grub_boot_info], RBX
+	MOV RSP, kernel_stack + 1024*1024
+	CALL EnableSSE
+	CALL _ZN6Memory9clear_bssEv
+	CALL _preprocess
+	CALL grub_bootstrap
+.halt:
+	CLI
+	HLT
+	JMP .halt
+%endif
 
 SegCo16 EQU 8*1
 SegData EQU 8*3

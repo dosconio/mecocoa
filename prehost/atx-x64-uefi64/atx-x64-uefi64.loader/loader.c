@@ -199,7 +199,7 @@ const CHAR16* GetPixelFormatUnicode(EFI_GRAPHICS_PIXEL_FORMAT fmt) {
 
 // ---- FAT Fs ----
 
-EFI_STATUS ReadFile(EFI_FILE_PROTOCOL* file, VOID** buffer) {
+EFI_STATUS ReadFile(EFI_FILE_PROTOCOL* file, VOID** buffer, UINTN* bytes_read) {
 	EFI_STATUS status;
 	UINTN file_info_size = sizeof(EFI_FILE_INFO) + sizeof(CHAR16) * 12;
 	UINT8 file_info_buffer[file_info_size];
@@ -215,7 +215,9 @@ EFI_STATUS ReadFile(EFI_FILE_PROTOCOL* file, VOID** buffer) {
 	if (EFI_ERROR(status)) {
 		return status;
 	}
-	return file->Read(file, &file_size, *buffer);
+	status = file->Read(file, &file_size, *buffer);
+	if (!EFI_ERROR(status) && bytes_read) *bytes_read = file_size;
+	return status;
 }
 
 EFI_STATUS OpenBlockIoProtocolForLoadedImage(EFI_HANDLE image_handle, EFI_BLOCK_IO_PROTOCOL** block_io) {
@@ -270,7 +272,7 @@ void CalcLoadAddressRange(Elf64_Ehdr* ehdr, UINT64* first, UINT64* last) {
 	Elf64_Phdr* phdr = (Elf64_Phdr*)((UINT64)ehdr + ehdr->e_phoff);
 	*first = MAX_UINT64;
 	*last = 0;
-	for (Elf64_Half i = 0; i < ehdr->e_phnum; ++i) {
+	for (Elf_Half i = 0; i < ehdr->e_phnum; ++i) {
 		if (phdr[i].p_type != PT_LOAD) continue;
 		*first = MIN(*first, phdr[i].p_vaddr);
 		*last = MAX(*last, phdr[i].p_vaddr + phdr[i].p_memsz);
@@ -281,7 +283,7 @@ void CalcLoadAddressRange(Elf64_Ehdr* ehdr, UINT64* first, UINT64* last) {
 // #@@range_begin(copy_segm_func)
 void CopyLoadSegments(Elf64_Ehdr* ehdr) {
 	Elf64_Phdr* phdr = (Elf64_Phdr*)((UINT64)ehdr + ehdr->e_phoff);
-	for (Elf64_Half i = 0; i < ehdr->e_phnum; ++i) {
+	for (Elf_Half i = 0; i < ehdr->e_phnum; ++i) {
 		if (phdr[i].p_type != PT_LOAD) continue;
 
 		UINT64 segm_in_file = (UINT64)ehdr + phdr[i].p_offset;
@@ -298,7 +300,7 @@ void CopyLoadSegments(Elf64_Ehdr* ehdr) {
 #define expect(status,str) if (EFI_ERROR(status))\
 	{ Print(L"%s: %r at loader.c(%u)\n", str, status, __LINE__); while (1); }
 
-#define path_fatvhd L"\\kerdisk.fat"
+#define path_fatvhd L"\\kdiskx64.fat"
 
 _ESYM_C EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image_handle, EFI_SYSTEM_TABLE* SystemTable) {
 	Print((const CHAR16*)L"Ciallo, Mecocoa~ __BITS=%u\n", sizeof(void*) << 3);
@@ -369,7 +371,7 @@ _ESYM_C EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image_handle, EFI_SYSTEM_TABLE* Sy
 		EFI_FILE_MODE_READ, 0);
 	expect(status, L"Failed to open file '\\kernel.elf'");
 	VOID* kernel_buffer;
-	status = ReadFile(kernel_file, &kernel_buffer);
+	status = ReadFile(kernel_file, &kernel_buffer, NULL);
 	expect(status, L"Failed to load kernel");
 	
 
@@ -390,11 +392,12 @@ _ESYM_C EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image_handle, EFI_SYSTEM_TABLE* Sy
 
 	_Comment(load fatvhd)
 	VOID* volume_image;
+	UINTN volume_bytes = 0;
 
 	EFI_FILE_PROTOCOL* volume_file;
 	status = root_dir->Open(root_dir, &volume_file, path_fatvhd, EFI_FILE_MODE_READ, 0);
 	if (status == EFI_SUCCESS) {
-		status = ReadFile(volume_file, &volume_image);
+		status = ReadFile(volume_file, &volume_image, &volume_bytes);
 		if (EFI_ERROR(status)) {
 			Print(L"failed to read volume file: %r", status);
 			while (1) __asm__("hlt");
@@ -408,7 +411,7 @@ _ESYM_C EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image_handle, EFI_SYSTEM_TABLE* Sy
 			while (1) __asm__("hlt");
 		}
 		EFI_BLOCK_IO_MEDIA* media = block_io->Media;
-		UINTN volume_bytes = (UINTN)media->BlockSize * (media->LastBlock + 1);
+		volume_bytes = (UINTN)media->BlockSize * (media->LastBlock + 1);
 		if (volume_bytes > 16 * 1024 * 1024) {
 			volume_bytes = 16 * 1024 * 1024;
 		}// 16MB
@@ -451,11 +454,12 @@ _ESYM_C EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image_handle, EFI_SYSTEM_TABLE* Sy
 	}
 
 	typedef void (*entry_t)(UefiData*);
-	UefiData uefi_data;
+	UefiData uefi_data = {0};
 	uefi_data.frame_buffer_config = config;
 	uefi_data.memory_map = memmap;
 	uefi_data.acpi_table = acpi_table;
 	uefi_data.fatvhd_addr = (pureptr_t)volume_image;
+	uefi_data.fatvhd_size = volume_bytes;
 
 	((entry_t)entry_addr)(&uefi_data);
 

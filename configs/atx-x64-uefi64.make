@@ -50,6 +50,8 @@ asmfile=prehost/$(arch)/atx-x64.asm\
 
 cppfile=\
 	$(wildcard archits/x86and64/*.cpp) \
+	depends/loaders/from-grub.cpp \
+	depends/loaders/from-uefi.cpp \
 	$(ulibpath)/cpp/color.cpp \
 	$(ulibpath)/cpp/Witch/Form.cpp \
 	$(ulibpath)/cpp/Witch/_TextChrome.cpp \
@@ -100,7 +102,7 @@ uherpath=/her
 loader=$(ubinpath)/AMD64/loader.efi
 
 .PHONY : build build_drvs
-build: clean accm $(archdir)/kerdisk.fat $(ubinpath)/$(arch).img $(asmobjs) $(cppobjs) $(cplobjs) build_util build_drvs
+build: clean accm $(archdir)/kdiskx64.fat $(ubinpath)/$(arch).img $(asmobjs) $(cppobjs) $(cplobjs) build_util build_drvs
 	@echo MK $(elf_kernel)
 	$(CX) $(XFLAGS) \
 		-T prehost/$(arch)/$(arch).ld -o $(ubinpath)/$(elf_kernel) \
@@ -111,7 +113,7 @@ build: clean accm $(archdir)/kerdisk.fat $(ubinpath)/$(arch).img $(asmobjs) $(cp
 	${MKDIR} $(ubinpath)/mecocoa/x64/{apps,drvs,lib}
 	cp $(uobjpath)/sapp-$(arch)/* $(ubinpath)/mecocoa/x64/apps/
 	@echo $(sudokey) | sudo -S mkdir -p $(mntdir)
-	@echo $(sudokey) | sudo -S mount -o loop $(archdir)/kerdisk.fat $(mntdir)
+	@echo $(sudokey) | sudo -S mount -o loop $(archdir)/kdiskx64.fat $(mntdir)
 	#
 	@echo $(sudokey) | sudo -S cp $(uobjpath)/sapp-$(arch)/*    $(mntdir)/
 	@if [ -f depends/cotlabx/init.cot ]; then echo $(sudokey) | sudo -S cp depends/cotlabx/init.cot $(mntdir)/init.cot; fi
@@ -121,7 +123,7 @@ build: clean accm $(archdir)/kerdisk.fat $(ubinpath)/$(arch).img $(asmobjs) $(cp
 	@echo $(sudokey) | sudo -S mkdir -p $(mntdir)/EFI/BOOT
 	@echo $(sudokey) | sudo -S cp $(loader) $(mntdir)/EFI/BOOT/BOOTX64.EFI
 	@echo $(sudokey) | sudo -S cp $(ubinpath)/$(elf_kernel) $(mntdir)/kernel.elf
-	@echo $(sudokey) | sudo -S cp $(archdir)/kerdisk.fat $(mntdir)/
+	@echo $(sudokey) | sudo -S cp $(archdir)/kdiskx64.fat $(mntdir)/
 # 	tree $(mntdir)
 	@echo $(sudokey) | sudo -S umount $(mntdir)
 	# update
@@ -131,7 +133,7 @@ accm:
 	@echo MK lib for ACCM-x64
 	make -f accmlib/accmx64.clang.make
 
-$(archdir)/kerdisk.fat:
+$(archdir)/kdiskx64.fat:
 	dd if=/dev/zero of=$@ bs=1M count=32
 	mkfs.fat -n 'MECOCOA2' -s 2 -f 2 -R 32 -F 32 $@
 
@@ -187,6 +189,8 @@ iso_kernel=$(ubinpath)/mcca.iso
 # $(iso_kernel):
 build_iso:
 	-rm -rf $(iso_kernel)
+	cp $(ubinpath)/$(elf_kernel) $(ubinpath)/mecocoa/boot/
+	cp $(archdir)/kdiskx64.fat    $(ubinpath)/mecocoa/kdiskx64.fat
 	cd $(ubinpath) && sudo -S grub-mkrescue -o mcca.iso mecocoa
 
 edkdir=/home/$(USER)/soft/edk2
@@ -258,7 +262,7 @@ run-only:
 clean:
 	@echo ---- Mecocoa $(arch) ----#[clearing]
 # 	${RM} $(uobjpath)/mcca-$(arch)/*
-	${RM} $(archdir)/kerdisk.fat
+	${RM} $(archdir)/kdiskx64.fat
 	${RM} $(ubinpath)/$(arch).img
 	@${MKDIR} $(uobjpath)/mcca-$(arch)
 

@@ -27,6 +27,9 @@ typedef struct {
 	struct MemoryMap memory_map;
 	pureptr_t acpi_table;
 	pureptr_t fatvhd_addr;
+	stduint fatvhd_size;
+	pureptr_t boot_info_addr;
+	stduint boot_info_size;
 } UefiData;
 
 #endif

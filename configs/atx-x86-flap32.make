@@ -74,7 +74,7 @@ build: lib accm prehost/$(arch)/fatvhd.ignore $(cppobjs) build_util build_drvs
 	mkdir -p $(ubinpath)/mecocoa/x86/lib
 	-rm -f  $(ubinpath)/mecocoa/x86/apps/*
 	-rm -rf $(iso_kernel)
-	cp configs/grub-x86.txt $(ubinpath)/mecocoa/boot/grub/grub.cfg
+	cp configs/x86-series/grub/* $(ubinpath)/mecocoa/boot/grub/
 	cp $(elf_kernel) $(ubinpath)/mecocoa/boot/
 	cp $(uobjpath)/sapp-$(arch)/*    $(ubinpath)/mecocoa/x86/apps/
 	# echo "ようこそ，メココAの世界へ！" | sudo tee "$(ubinpath)/mecocoa/ciallo.txt" > /dev/null

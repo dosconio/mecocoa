@@ -376,8 +376,8 @@ static void log_acpi_topology(stduint rsdp_addr) {
 
 #endif
 
-#if _MCCA == 0x8664
-static void parse_uefi(const MemoryMap& memory_map);
+#if _MCCA == 0x8664 && defined(_UEFI)
+static bool parse_uefi(const MemoryMap& memory_map);
 
 #endif
 
@@ -495,7 +495,7 @@ bool Memory::initialize(stduint eax, byte* ebx) {
 	#if _MCCA == 0x8664 && defined(_UEFI)
 	case 'UEFI':
 		acpi_rsdp_addr = _IMM(uefi_data.acpi_table);
-		parse_uefi(*reinterpret_cast<MemoryMap*>(ebx));
+		if (!parse_uefi(*reinterpret_cast<MemoryMap*>(ebx))) return false;
 		break;
 	#endif
 	default:
@@ -551,16 +551,19 @@ bool Memory::initialize(stduint eax, byte* ebx) {
 	InitialPageRegion* uefi_initial_page_plan = nullptr;
 	stduint uefi_initial_page_count = 0;
 	stduint uefi_initial_page_storage_bytes = 0;
-	if (!Memory::BuildInitialPagePlan(eax, ebx,
-		uefi_initial_page_plan, uefi_initial_page_count,
-		uefi_initial_page_storage_bytes) ||
-		!Memory::MapInitialPagePlan(kernel_paging,
-			uefi_initial_page_plan, uefi_initial_page_count)) {
-		plogwarn("[PAGING] Failed to apply the UEFI initial page plan");
-	}
+	const bool uefi_page_plan_ready =
+		Memory::BuildInitialPagePlan(eax, ebx,
+			uefi_initial_page_plan, uefi_initial_page_count,
+			uefi_initial_page_storage_bytes) &&
+		Memory::MapInitialPagePlan(kernel_paging,
+			uefi_initial_page_plan, uefi_initial_page_count);
 	if (uefi_initial_page_plan)
 		mempool.deallocate(uefi_initial_page_plan,
 			uefi_initial_page_storage_bytes);
+	if (!uefi_page_plan_ready) {
+		plogerro("[PAGING] Failed to apply the UEFI initial page plan");
+		return false;
+	}
 	#endif
 	setCR3 _IMM(kernel_paging.root_level_page);
 	mecocoa_global->kernel_cr3 = _IMM(kernel_paging.root_level_page);
@@ -636,19 +639,80 @@ static stduint parse_norm(stduint addr) {
 
 
 
-#elif _MCCA == 0x8664
+#elif _MCCA == 0x8664 && defined(_UEFI)
 
 
-static void parse_uefi(const MemoryMap& memory_map) {
-	stduint top = _IMM(memory_map.buffer) + memory_map.map_size;
-	for (stduint iter = _IMM(memory_map.buffer); iter < top; iter += memory_map.descriptor_size) {
-		auto desc = reinterpret_cast<MemoryDescriptor*>(iter);
+struct BootReservedRange {
+	stduint begin;
+	stduint end;
+};
+
+static bool make_boot_reserved_range(pureptr_t address, stduint length,
+	BootReservedRange& range) {
+	const stduint begin = _IMM(address);
+	if ((!begin) != (!length) || length > ~_IMM0 - begin) return false;
+	range = {begin, begin + length};
+	return true;
+}
+
+static void append_uefi_available_range(stduint begin, stduint end,
+	const BootReservedRange* reserved, stduint index) {
+	if (begin >= end) return;
+	if (index == 4) {
+		Memory::AppendAvailableRange(begin, end);
+		return;
+	}
+	const BootReservedRange& range = reserved[index];
+	if (end <= range.begin || begin >= range.end) {
+		append_uefi_available_range(begin, end, reserved, index + 1);
+		return;
+	}
+	if (begin < range.begin)
+		append_uefi_available_range(begin, range.begin, reserved, index + 1);
+	if (end > range.end)
+		append_uefi_available_range(range.end, end, reserved, index + 1);
+}
+
+static bool parse_uefi(const MemoryMap& memory_map) {
+	if (!memory_map.buffer || !memory_map.descriptor_size ||
+		memory_map.descriptor_size < sizeof(MemoryDescriptor) ||
+		!memory_map.map_size ||
+		memory_map.map_size % memory_map.descriptor_size ||
+		memory_map.map_size > memory_map.buffer_size ||
+		memory_map.buffer_size > ~_IMM0 - _IMM(memory_map.buffer) ||
+		!uefi_data.fatvhd_addr || uefi_data.fatvhd_size < 512 ||
+		(uefi_data.fatvhd_size & 511)) return false;
+	const auto& framebuffer = uefi_data.frame_buffer_config;
+	const uint64 framebuffer_height = framebuffer.vertical_resolution;
+	const uint64 framebuffer_pitch =
+		(uint64)framebuffer.pixels_per_scan_line * 4;
+	if (!framebuffer.frame_buffer || !framebuffer_pitch || !framebuffer_height ||
+		framebuffer_pitch > ~uint64(0) / framebuffer_height ||
+		framebuffer_pitch * framebuffer_height > ~_IMM0) return false;
+	BootReservedRange reserved[4];
+	if (!make_boot_reserved_range(uefi_data.fatvhd_addr,
+		uefi_data.fatvhd_size, reserved[0]) ||
+		!make_boot_reserved_range(memory_map.buffer,
+			memory_map.buffer_size, reserved[1]) ||
+		!make_boot_reserved_range(uefi_data.boot_info_addr,
+			uefi_data.boot_info_size, reserved[2]) ||
+		!make_boot_reserved_range(framebuffer.frame_buffer,
+			(stduint)(framebuffer_pitch * framebuffer_height),
+			reserved[3])) return false;
+	const stduint top = _IMM(memory_map.buffer) + memory_map.map_size;
+	for (stduint iter = _IMM(memory_map.buffer); iter < top;
+		iter += memory_map.descriptor_size) {
+		const auto* desc = reinterpret_cast<const MemoryDescriptor*>(iter);
 		if (MemIsAvailable((MemoryType)desc->type)) {
-			stduint beg = desc->physical_start;
-			stduint len = desc->number_of_pages * 4096;
-			Memory::AppendAvailableRange(beg, beg + len);
+			const stduint begin = desc->physical_start;
+			if (desc->number_of_pages > (uint64)(~_IMM0 - begin) / UEFIPageSize)
+				continue;
+			const stduint end = begin +
+				(stduint)desc->number_of_pages * UEFIPageSize;
+			append_uefi_available_range(begin, end, reserved, 0);
 		}
 	}
+	return true;
 }
 
 

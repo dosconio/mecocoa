@@ -18,6 +18,8 @@ SECTIONS
 	. = 0x100000;
 	FILE_ENTO = .;
 	.text : {
+		. = ALIGN(8);
+		KEEP(*(.multiboot2))
 		*(.text)
 	} > RAM :text
 	
@@ -28,16 +30,6 @@ SECTIONS
 		*(.eh_frame)
 	} > RAM :data
 	
-	.bss : {
-		BSS_ENTO = .;
-		*(.bss)
-		BSS_ENDO = .;
-	} > RAM :bss
-	
-	.rodata : {
-		*(.rodata)
-	} > RAM :rodata
-
 	. = ALIGN(8);
 	.init.rmod : {
 		__init_rmod_ento = .;
@@ -54,5 +46,16 @@ SECTIONS
 		KEEP(*(.init_array))
 	__init_array_end = .;
 	} > RAM :data
+
+	.bss : {
+		BSS_ENTO = .;
+		*(.bss)
+		BSS_ENDO = .;
+	} > RAM :bss
+
+	.rodata : {
+		*(.rodata)
+	} > RAM :rodata
+
 	FILE_ENDO = .;
 }

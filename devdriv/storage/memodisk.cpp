@@ -107,8 +107,14 @@ void R_MEMDISK_INIT() {
 		ploginfo("[Memdisk] Loaded %s", fs->name);
 	}
 	#elif _MCCA == 0x8664 && defined(_UEFI)
-	auto dev0 = open(uefi_data.fatvhd_addr, 32 * 1024 * 1024, FILESYS_FAT32_LBA);
+	if (!uefi_data.fatvhd_addr || uefi_data.fatvhd_size < 512 ||
+		(uefi_data.fatvhd_size & 511)) {
+		plogerro("[Memdisk] Invalid FAT image address or size");
+		return;
+	}
+	auto dev0 = open(uefi_data.fatvhd_addr, uefi_data.fatvhd_size, FILESYS_FAT32_LBA);
 	printlog(dev0 >= 0 ? _LOG_INFO : _LOG_ERROR, "[Memdisk] Created Memdisk %u, trying FAT32", dev0);
+	if (dev0 < 0) return;
 	if (auto fs = Filesys::Mount(*locate(0), 0, "/md0")) {
 		ploginfo("[Memdisk] Loaded %s", fs->name);
 	}
