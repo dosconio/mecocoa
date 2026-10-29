@@ -82,10 +82,16 @@ _ESYM_C void* realloc(void* ptr, size_t size) {
 }
 
 _ESYM_C void* mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset) {
-	if (addr || !length || offset < 0 || (offset & 0xFFF) ||
-		(flags != MAP_SHARED && flags != MAP_PRIVATE) || fd < 0 ||
+	const int mode = flags & (MAP_SHARED | MAP_PRIVATE);
+	if (!length || offset < 0 || (offset & 0xFFF) ||
+		(flags & ~(MAP_SHARED | MAP_PRIVATE | MAP_FIXED | MAP_ANONYMOUS)) ||
+		(mode != MAP_SHARED && mode != MAP_PRIVATE) ||
+		((flags & MAP_ANONYMOUS) && mode != MAP_PRIVATE) ||
+		((flags & MAP_FIXED) ?
+			(!addr || ((stduint)addr & 0xFFF)) : !!addr) ||
+		((flags & MAP_ANONYMOUS) ? (fd != -1 || offset) : fd < 0) ||
 		(prot & ~(PROT_READ | PROT_WRITE | PROT_EXEC)) ||
-		!(prot & PROT_READ)) return MAP_FAILED;
+		(prot && !(prot & PROT_READ))) return MAP_FAILED;
 	#if (_ACCM & 0xFF00) == 0x8600 || (_ACCM & 0xFF00) == 0x1000
 	syscall_mmap_request_t req;
 	req.address = (stduint)addr;
@@ -96,6 +102,17 @@ _ESYM_C void* mmap(void* addr, size_t length, int prot, int flags, int fd, off_t
 	return (void*)syscall(syscall_t::MMAP, length, ~_IMM0, (stduint)&req);
 	#else
 	return MAP_FAILED;
+	#endif
+}
+
+_ESYM_C int mprotect(void* addr, size_t length, int prot) {
+	if (!addr || ((stduint)addr & 0xFFF) || !length ||
+		(prot & ~(PROT_READ | PROT_WRITE | PROT_EXEC)) ||
+		(prot && !(prot & PROT_READ))) return -1;
+	#if (_ACCM & 0xFF00) == 0x8600 || (_ACCM & 0xFF00) == 0x1000
+	return syscall(syscall_t::SMAP, (stduint)addr, length, (stduint)prot) == 0 ? 0 : -1;
+	#else
+	return -1;
 	#endif
 }
 

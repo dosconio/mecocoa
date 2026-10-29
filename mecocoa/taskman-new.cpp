@@ -387,11 +387,9 @@ void Taskman::Initialize(stduint cpuid) {
 }
 
 
-bool _Taskman_Load_Interp(vfs_dentry* interp_d, ProcessBlock* pb, byte* block_buffer, stduint& load_slice_p, stduint* out_entry);
 bool _Taskman_Relocate_PIE(BlockTrait* source, const ELF_Header_t& header,
 	stduint load_bias, ProcessBlock* pb, bool mapping_lock_held,
 	byte* block_buffer);
-bool _Taskman_Resolve_Interp(BlockTrait* source, const ELF_Header_t& header, byte* block_buffer, vfs_dentry* cwd, vfs_dentry** out_interp);
 
 
 
@@ -885,17 +883,12 @@ ProcessBlock* Taskman::CreateFork(ProcessBlock* fo, const CallgateFrame* frame) 
 
 namespace uni { extern Mutex vfs_lock; }// the VFS serializes file I/O on this lock; the loader shares it to keep the FAT buffers private per reader
 #if CONFIG_ENABLE_MMU
+namespace uni {
+	bool TransferExecutableImagePin(ProcessBlock* source,
+		ProcessBlock* destination);
+}
 ProcessBlock* Taskman_CreateELF_File(BlockTrait* source,
 	uni::vfs_file* image_file, byte ring, bool append);
-bool Taskman_ValidateELF_FileSegments(BlockTrait* source,
-	const ELF_Header_t& header, stduint image_size,
-	stduint load_bias, byte* buffer);
-bool Taskman_MapELF_FileSegments(ProcessBlock* pb, BlockTrait* source,
-	uni::vfs_file* image_file, const ELF_Header_t& header,
-	uint64 image_version, stduint image_size, stduint load_bias,
-	byte* buffer,
-	stduint& load_slice_p,
-	stduint& max_seg_end);
 
 // File reads release vfs_lock before the ELF loader acquires other locks.
 class LockedFileBlockBridge : public FileBlockBridge {
@@ -908,17 +901,6 @@ public:
 	}
 };
 
-struct ExecReplacementPinScope {
-	ProcessBlock* process = nullptr;
-	~ExecReplacementPinScope() {
-		if (!process) return;
-		// Exet still holds mutex_mapping while this scope unwinds.
-		process->ReleaseAllVmas();
-		process->ReleaseLoadslices();
-		uni::UnpinExecutableImage(process);
-	}
-	void Keep() { process = nullptr; }
-};
 #endif
 
 //
@@ -1081,7 +1063,8 @@ ProcessBlock* Taskman::Exec(stduint parent, rostr usr_fullpath, char** usr_argv,
 }
 
 //
-ProcessBlock* Taskman::Exet(stduint parent, rostr usr_fullpath, char** usr_argv, char** usr_envp)
+ProcessBlock* Taskman::Exet(stduint parent, rostr usr_fullpath,
+	char** usr_argv, char** usr_envp)
 {
 	static char buf_fullpath[512];
 	auto current_pb = Locate(parent);
@@ -1100,149 +1083,106 @@ ProcessBlock* Taskman::Exet(stduint parent, rostr usr_fullpath, char** usr_argv,
 	}
 
 	vfs_dentry* d = Filesys::Index(buf_fullpath, current_cwd);
-	if (!d) return nullptr;
-	#if CONFIG_ENABLE_MMU
+	if (!d || !d->d_inode || !d->d_inode->i_sb ||
+		!d->d_inode->i_sb->fs) return nullptr;
 	LockedFileBlockBridge loop_device(d->d_inode->i_sb->fs,
 		d->d_inode->internal_handler, d->d_inode->i_size, 512);
-	uni::vfs_file image_file;
-	image_file.f_inode = d->d_inode;
-	image_file.f_mode = O_RDONLY;
-	uint64 image_version;
-	stduint image_size;
-	{
-		MutexLocal guard(&uni::vfs_lock);
-		image_version = image_file.f_inode->content_version;
-		image_size = image_file.f_inode->i_size;
-	}
-	#else
-	FileBlockBridge loop_device(d->d_inode->i_sb->fs,
-		d->d_inode->internal_handler, d->d_inode->i_size, 512);
-	#endif
-	
 	String block_buffer(String::Charset::Memory, 512);
 	ELF_Header_t header;
+	auto replacement = Taskman::CreateFile(buf_fullpath, current_pb->ring,
+		current_pb->parent_id, current_cwd, false);
+	if (!replacement) return nullptr;
 	if (loop_device.Read(0, &header, sizeof(header),
-		(byte*)block_buffer.reflect()) != sizeof(header)) return nullptr;
-
-	stduint load_bias = (header.e_type == ET_DYN) ? 0x400000 : 0;
-	#if CONFIG_ENABLE_MMU
-	if (!Taskman_ValidateELF_FileSegments(&loop_device, header,
-		image_size, load_bias, (byte*)block_buffer.reflect())) return nullptr;
-	#endif
-	vfs_dentry* interp_d = nullptr;
-	if (!_Taskman_Resolve_Interp(&loop_device, header, (byte*)block_buffer.reflect(), current_cwd, &interp_d)) {
+		(byte*)block_buffer.reflect()) != sizeof(header)) {
+		DiscardUnstartedImage(replacement);
 		return nullptr;
 	}
+	const stduint load_bias = header.e_type == ET_DYN ? 0x400000 : 0;
 	stduint phdr_addr = 0;
 	for (stduint i = 0; i < header.e_phnum; i++) {
-		struct ELF_PHT_t ph;
-		loop_device.Read(header.e_phoff + i * header.e_phentsize, &ph, sizeof(ph), (byte*)block_buffer.reflect());
-		if (ph.p_type == PT_DYNAMIC) {
-			// It's normal for dynamic executables to have PT_DYNAMIC. We don't need to abort.
-		}
-		if (ph.p_type == PT_PHDR) phdr_addr = ph.p_vaddr + load_bias;
-		if (ph.p_type == PT_LOAD && ph.p_offset == 0 && !phdr_addr) phdr_addr = ph.p_vaddr + load_bias + header.e_phoff;
-	}
-
-	// 1. Prepare stack frame in temporary kernel buffer while old paging is still active
-	MutexLocal mapping_guard(&current_pb->mutex_mapping);
-	stduint new_sp = Taskman::SetupStack(current_pb, current_pb, usr_argv, usr_envp, (stduint)header.e_entry + load_bias, phdr_addr, header.e_phnum, header.e_phentsize);
-	if (!new_sp) return nullptr;
-
-	// 2. Destroy Old Image
-	if (!current_pb->ReleaseAllVmas()) {
-		plogerro("%s: failed to release old VMAs", __FUNCIDEN__);
-		return nullptr;
-	}
-	current_pb->ReleaseLoadslices();
-	#if CONFIG_ENABLE_MMU
-	uni::UnpinExecutableImage(current_pb);
-	#endif
-
-	stduint stack_norm_phy;
-	if (current_pb->main_thread->stack_lineaddr == current_pb->main_thread->stack_levladdr)
-		stack_norm_phy = _IMM(current_pb->main_thread->stack_levladdr);
-	else
-		stack_norm_phy = _IMM(current_pb->paging[_IMM(current_pb->main_thread->stack_lineaddr) & ~0xFFF]);
-
-	Memory::ReleasePagingMappings(current_pb->paging);
-	current_pb->paging.~Paging();
-
-	// 3. Setup New Paging and Load ELF
-	#if (_MCCA & 0xFF00) == 0x8600
-	current_pb->main_thread->context.CR3 = Taskman::CreatePaging(current_pb, current_pb->ring, stack_norm_phy);
-	#elif (_MCCA & 0xFF00) == 0x1000
-	current_pb->main_thread->context.satp = Taskman::CreatePaging(current_pb, current_pb->ring, stack_norm_phy);
-	#endif
-
-	current_pb->main_thread->context.IP = _IMM(header.e_entry) + load_bias;
-	stduint load_slice_p = 0;
-	stduint max_seg_end = 0;
-	#if CONFIG_ENABLE_MMU
-	if (!Taskman_MapELF_FileSegments(current_pb, &loop_device,
-		&image_file, header, image_version, image_size, load_bias,
-		(byte*)block_buffer.reflect(),
-		load_slice_p, max_seg_end)) {
-		current_pb->ReleaseAllVmas();
-		current_pb->ReleaseLoadslices();
-		return nullptr;
-	}
-	ExecReplacementPinScope pin_scope { current_pb };
-	#else
-	for0(i, header.e_phnum) {
-		struct ELF_PHT_t ph;
-		loop_device.Read(header.e_phoff + i * header.e_phentsize, &ph, sizeof(ph), (byte*)block_buffer.reflect());
-		if (ph.p_type == PT_LOAD && ph.p_memsz) {
-			bool executable = !!(ph.p_flags & PF_X);
-			bool writable = !!(ph.p_flags & PF_W);
-			bool user = (current_pb->ring != RING_M);
-			if (!Taskman::CreateELF_Carry((char*)(ph.p_vaddr + load_bias), ph.p_memsz, &loop_device, ph.p_offset, ph.p_filesz, current_pb->paging, (byte*)block_buffer.reflect(), executable, writable, user)) {
-				plogerro("%s: segment load failed (vaddr=%[x] memsz=%u)", __FUNCIDEN__, ph.p_vaddr + load_bias, ph.p_memsz);
-				return nullptr;
-			}
-			if (load_slice_p < numsof(current_pb->load_slices)) {
-				current_pb->load_slices[load_slice_p].address = ph.p_vaddr + load_bias;
-				current_pb->load_slices[load_slice_p].length = ph.p_memsz;
-				load_slice_p++;
-			}
-			stduint seg_end = ph.p_vaddr + load_bias + ph.p_memsz;
-			if (seg_end > max_seg_end) {
-				max_seg_end = seg_end;
-			}
-		}
-	}
-	#endif
-	if (!_Taskman_Relocate_PIE(&loop_device, header, load_bias, current_pb,
-		true, (byte*)block_buffer.reflect())) {
-		plogerro("%s: PIE relocation failed", __FUNCIDEN__);
-		return nullptr;
-	}
-
-	if (interp_d) {
-		stduint interp_entry = 0;
-		if (!_Taskman_Load_Interp(interp_d, current_pb, (byte*)block_buffer.reflect(), load_slice_p, &interp_entry)) {
+		ELF_PHT_t ph;
+		if (loop_device.Read(header.e_phoff + i * header.e_phentsize,
+			&ph, sizeof(ph), (byte*)block_buffer.reflect()) != sizeof(ph)) {
+			DiscardUnstartedImage(replacement);
 			return nullptr;
 		}
-		current_pb->main_thread->context.IP = interp_entry; // Override entry point
+		if (ph.p_type == PT_PHDR) phdr_addr = ph.p_vaddr + load_bias;
+		if (ph.p_type == PT_LOAD && !ph.p_offset && !phdr_addr)
+			phdr_addr = ph.p_vaddr + load_bias + header.e_phoff;
 	}
 
-	if (max_seg_end > 0) {
-		current_pb->heapbtm = (max_seg_end + 0xFFF) & ~_IMM(0xFFF);
-		current_pb->heapbtm += 0x10000;
-		current_pb->heaptop = current_pb->heapbtm;
-	} else {
-		current_pb->heapbtm = 0x08000000;
-		current_pb->heaptop = current_pb->heapbtm;
+	const stduint new_sp = Taskman::SetupStack(replacement, current_pb,
+		usr_argv, usr_envp, (stduint)header.e_entry + load_bias,
+		phdr_addr, header.e_phnum, header.e_phentsize);
+	if (!new_sp) {
+		DiscardUnstartedImage(replacement);
+		return nullptr;
 	}
 
 	#if (_MCCA & 0xFF00) == 0x8600
-	current_pb->main_thread->context.SP = new_sp;
-	current_pb->main_thread->context.AX = 0;
-	current_pb->main_thread->context.CX = 0;
-	SetSegment(&current_pb->main_thread->context);
+	replacement->main_thread->context.SP = new_sp;
 	#elif (_MCCA & 0xFF00) == 0x1000
-	current_pb->main_thread->context.sp = new_sp;
+	replacement->main_thread->context.sp = new_sp;
 	#endif
+
+	bool old_image_released = false;
+	{
+		MutexLocal mapping_guard(&current_pb->mutex_mapping);
+		// The replacement is complete; this is the only destructive commit point.
+		if (current_pb->ReleaseAllVmas()) {
+			current_pb->ReleaseLoadslices();
+
+			auto* old_root = current_pb->paging.root_level_page;
+			current_pb->paging.root_level_page =
+				replacement->paging.root_level_page;
+			replacement->paging.root_level_page = old_root;
+			{
+				SpinlockLocal guard(&current_pb->vma_lock);
+				current_pb->vmas = replacement->vmas;
+			}
+			for (stduint i = 0; i < replacement->vmas.Count(); i++)
+				replacement->vmas[i].vfile = nullptr;
+			replacement->vmas.Clear();
+			for0a(i, current_pb->load_slices) {
+				current_pb->load_slices[i] = replacement->load_slices[i];
+				replacement->load_slices[i].address = 0;
+				replacement->load_slices[i].length = 0;
+			}
+			current_pb->heapbtm = replacement->heapbtm;
+			current_pb->heaptop = replacement->heaptop;
+
+			#if (_MCCA & 0xFF00) == 0x8600
+			current_pb->main_thread->context.CR3 =
+				replacement->main_thread->context.CR3;
+			current_pb->main_thread->context.IP =
+				replacement->main_thread->context.IP;
+			current_pb->main_thread->context.SP = new_sp;
+			current_pb->main_thread->context.AX = 0;
+			current_pb->main_thread->context.CX = 0;
+			treat<uint16>(&current_pb->main_thread->
+				context.floating_point_context[0]) = 0x037F;
+			treat<uint32>(&current_pb->main_thread->
+				context.floating_point_context[24]) = 0x1F80;
+			SetSegment(&current_pb->main_thread->context);
+			#elif (_MCCA & 0xFF00) == 0x1000
+			current_pb->main_thread->context.satp =
+				replacement->main_thread->context.satp;
+			current_pb->main_thread->context.IP =
+				replacement->main_thread->context.IP;
+			current_pb->main_thread->context.sp = new_sp;
+			#endif
+
+			const bool pin_transferred =
+				uni::TransferExecutableImagePin(replacement, current_pb);
+			KASSERT(pin_transferred);
+			old_image_released = true;
+		}
+	}
+	if (!old_image_released) {
+		DiscardUnstartedImage(replacement);
+		return nullptr;
+	}
+	DiscardUnstartedImage(replacement);
 
 	{
 		extern Spinlock comm_lock;
@@ -1256,15 +1196,10 @@ ProcessBlock* Taskman::Exet(stduint parent, rostr usr_fullpath, char** usr_argv,
 		current_pb->main_thread->queue_send_queuenext = nullptr;
 	}
 	current_pb->main_thread->block_reason = ThreadBlock::BlockReason::BR_None;
-	
 	using TBS = ThreadBlock::State;
-	if (current_pb->main_thread->state != TBS::Ready) {
+	if (current_pb->main_thread->state != TBS::Ready)
 		current_pb->main_thread->state = TBS::Ready;
-	}
 	Taskman::EnqueueReady(current_pb->main_thread);
-	#if CONFIG_ENABLE_MMU
-	pin_scope.Keep();
-	#endif
 	return current_pb;
 }
 #endif

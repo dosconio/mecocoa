@@ -3,6 +3,7 @@
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 #include "../include/mecocoa.hpp"
 #include "c/arith.h"
+#include <c/API-POSIX/fcntl.h>
 // for x86, one slice should begin with 0x100000 (above F000:FFFF)
 
 #if CONFIG_ENABLE_MMU
@@ -15,8 +16,7 @@ namespace uni {
 		size_t length);
 	bool AcquireCachedFileMappingPage(vfs_inode* inode, stduint file_offset,
 		uint64& version, stduint& physical_address);
-	void LogExecutableFilePage(ProcessBlock* process, vfs_inode* inode,
-		stduint address, stduint physical_address);
+	void UnpinMappedExecutableImage(ProcessBlock* process, vfs_inode* inode);
 	void* MapSharedFileVmaPage(ProcessBlock* process, stduint address,
 		VirtualMemoryAccess access, stduint expected_flags,
 		stduint file_offset, vfs_inode* inode);
@@ -376,6 +376,54 @@ bool ProcessBlock::InsertVmaSorted(const VirtualMemoryArea& vma) {
 	return true;
 }
 
+bool ProcessBlock::ReplaceReservedVmaRange(const VirtualMemoryArea& replacement) {
+	if (replacement.vm_start >= replacement.vm_end ||
+		((replacement.vm_start | replacement.vm_end) & (PAGE_SIZE - 1)) ||
+		replacement.vm_reservation) return false;
+	SpinlockLocal guard(&vma_lock);
+	for (stduint i = 0; i < vmas.Count(); i++) {
+		const VirtualMemoryArea reserved = vmas[i];
+		if (replacement.vm_start < reserved.vm_start ||
+			replacement.vm_end > reserved.vm_end ||
+			!reserved.vm_reservation ||
+			reserved.vm_type != VirtualMemoryAreaType::Anonymous ||
+			reserved.vm_flags || reserved.vfile) continue;
+		for (stduint page = replacement.vm_start;
+			page < replacement.vm_end; page += PAGE_SIZE) {
+			if (_IMM(paging[page]) != ~_IMM0) return false;
+		}
+		if (replacement.vm_start == reserved.vm_start &&
+			replacement.vm_end == reserved.vm_end) {
+			vmas[i] = replacement;
+			return true;
+		}
+		if (replacement.vm_start == reserved.vm_start) {
+			vmas[i].vm_start = replacement.vm_end;
+			if (InsertVmaSorted(replacement)) return true;
+			vmas[i].vm_start = reserved.vm_start;
+			return false;
+		}
+		if (replacement.vm_end == reserved.vm_end) {
+			vmas[i].vm_end = replacement.vm_start;
+			if (InsertVmaSorted(replacement)) return true;
+			vmas[i].vm_end = reserved.vm_end;
+			return false;
+		}
+		VirtualMemoryArea right = reserved;
+		right.vm_start = replacement.vm_end;
+		vmas[i].vm_end = replacement.vm_start;
+		if (!InsertVmaSorted(right)) {
+			vmas[i].vm_end = reserved.vm_end;
+			return false;
+		}
+		if (InsertVmaSorted(replacement)) return true;
+		vmas.Remove(i + 1, 1);
+		vmas[i].vm_end = reserved.vm_end;
+		return false;
+	}
+	return false;
+}
+
 struct VmaFileDeleter {
 	void operator()(uni::vfs_file* file) const {
 		if (!file) return;
@@ -411,6 +459,151 @@ static uni::vfs_file* CloneVmaFile(uni::vfs_file* source) {
 }
 
 // Caller holds vma_lock.
+static void MergeAdjacentAnonymousVmas(ProcessBlock* pb);
+
+struct ProtectedVmaSplit {
+	stduint original_index = ~_IMM0;
+	stduint original_end = 0;
+};
+
+// Caller holds vma_lock; the caller retains each file clone until both splits commit.
+static bool SplitProtectedVmaAt(ProcessBlock* pb, stduint boundary,
+	VmaFileOwner& file_clone, ProtectedVmaSplit& split) {
+	for (stduint i = 0; i < pb->vmas.Count(); i++) {
+		const VirtualMemoryArea original = pb->vmas[i];
+		if (boundary <= original.vm_start || boundary >= original.vm_end) continue;
+		VirtualMemoryArea right = original;
+		right.vm_start = boundary;
+		if (original.vfile) {
+			if (!file_clone) return false;
+			right.file_offset += boundary - original.vm_start;
+			right.vfile = file_clone.get();
+		}
+		pb->vmas[i].vm_end = boundary;
+		if (!pb->InsertVmaSorted(right)) {
+			pb->vmas[i].vm_end = original.vm_end;
+			return false;
+		}
+		split.original_index = i;
+		split.original_end = original.vm_end;
+		return true;
+	}
+	return true;
+}
+
+bool ProcessBlock::ProtectVmaRange(stduint address, stduint length,
+	stduint flags) {
+	if (!length || ((address | length) & (PAGE_SIZE - 1)) ||
+		length > ~_IMM0 - address ||
+		(flags & ~(PGPROP_present | PGPROP_user_access |
+			PGPROP_writable | PGPROP_nonexecutable)) ||
+		!!(flags & PGPROP_present) != !!(flags & PGPROP_user_access))
+		return false;
+	const stduint end = address + length;
+	struct ProtectionPage {
+		PageEntry* leaf = nullptr;
+		stduint replacement_raw = 0;
+	};
+	const stduint page_count = length / PAGE_SIZE;
+	if (page_count > ~_IMM0 / sizeof(ProtectionPage)) return false;
+	auto pages = uni::make_unique<ProtectionPage[]>(page_count);
+	if (!pages) return false;
+	uni::vfs_file* start_file = nullptr;
+	uni::vfs_file* end_file = nullptr;
+	{
+		SpinlockLocal guard(&vma_lock);
+		stduint covered = address;
+		for (stduint i = 0; i < vmas.Count() && covered < end; i++) {
+			const auto& vma = vmas[i];
+			if (vma.vm_end <= covered) continue;
+			if (vma.vm_start > covered ||
+				vma.vm_type == VirtualMemoryAreaType::Device) return false;
+			if (vma.vm_type == VirtualMemoryAreaType::File) {
+				if (!vma.vfile ||
+					((flags & PGPROP_present) &&
+						(vma.vfile->f_mode & O_ACCMODE) == O_WRONLY) ||
+					((flags & PGPROP_writable) &&
+						vma.vm_mode == VirtualMemoryAreaMode::Shared &&
+						(vma.vfile->f_mode & O_ACCMODE) != O_RDWR))
+					return false;
+			}
+			if (address > vma.vm_start && address < vma.vm_end)
+				start_file = vma.vfile;
+			if (end > vma.vm_start && end < vma.vm_end)
+				end_file = vma.vfile;
+			covered = minof(end, vma.vm_end);
+		}
+		if (covered != end) return false;
+	}
+	VmaFileOwner start_clone(CloneVmaFile(start_file));
+	VmaFileOwner end_clone(CloneVmaFile(end_file));
+	if ((start_file && !start_clone) || (end_file && !end_clone))
+		return false;
+	{
+		SpinlockLocal guard(&vma_lock);
+		// Preflight every resident leaf before changing any VMA or page table.
+		for (stduint i = 0; i < page_count; i++) {
+			const stduint page = address + i * PAGE_SIZE;
+			const stduint physical = _IMM(paging[page]);
+			if (physical == ~_IMM0) continue;
+			pageint index = page;
+			PageEntry* leaf = paging.getEntry(index);
+			stduint current;
+			if (!leaf || _IMM(leaf) == ~_IMM0 || index.crt_level != 0 ||
+				!leaf->DecodeLeafProperties(index.crt_level, current)) return false;
+			stduint next = current & ~_IMM(PGPROP_writable |
+				PGPROP_user_access | PGPROP_nonexecutable);
+			next |= flags & (PGPROP_user_access | PGPROP_nonexecutable);
+			// A newly writable VMA still faults through the existing COW path.
+			if ((flags & PGPROP_writable) && (current & PGPROP_writable))
+				next |= PGPROP_writable;
+			#if _MCCA != 0x8632 && _SYS_MULTICORE
+			// Remote TLB invalidation is currently implemented only for x86-32.
+			if (Taskman::PCU_CORES > 1 &&
+				((current ^ next) & (PGPROP_writable |
+					PGPROP_user_access | PGPROP_nonexecutable)))
+				return false;
+			#endif
+			PageEntry probe;
+			if (!probe.SetupAsLeaf(physical, index.crt_level, next))
+				return false;
+			pages[i].leaf = leaf;
+			pages[i].replacement_raw = probe.raw;
+		}
+		ProtectedVmaSplit start_split;
+		ProtectedVmaSplit end_split;
+		if (!SplitProtectedVmaAt(this, address, start_clone, start_split))
+			return false;
+		if (!SplitProtectedVmaAt(this, end, end_clone, end_split)) {
+			if (start_split.original_index != ~_IMM0) {
+				// The inserted right VMA follows its original in sorted order.
+				vmas.Remove(start_split.original_index + 1, 1);
+				vmas[start_split.original_index].vm_end =
+					start_split.original_end;
+			}
+			return false;
+		}
+		start_clone.release();
+		end_clone.release();
+		for (stduint i = 0; i < vmas.Count(); i++) {
+			auto& vma = vmas[i];
+			if (vma.vm_start >= address && vma.vm_end <= end) {
+				vma.vm_flags = flags;
+				if (flags) vma.vm_reservation = false;
+			}
+		}
+		for (stduint i = 0; i < page_count; i++) {
+			if (pages[i].leaf)
+				pages[i].leaf->raw = pages[i].replacement_raw;
+		}
+		MergeAdjacentAnonymousVmas(this);
+	}
+	for (stduint page = address; page < end; page += PAGE_SIZE)
+		Memory::InvalidateProcessPage(this, page);
+	return true;
+}
+
+// Caller holds vma_lock.
 static void MergeAdjacentAnonymousVmas(ProcessBlock* pb) {
 	for (stduint i = 0; i + 1 < pb->vmas.Count();) {
 		auto& left = pb->vmas[i];
@@ -418,7 +611,8 @@ static void MergeAdjacentAnonymousVmas(ProcessBlock* pb) {
 		if (left.vm_type == VirtualMemoryAreaType::Anonymous &&
 			right.vm_type == VirtualMemoryAreaType::Anonymous &&
 			left.vm_end == right.vm_start && left.vm_flags == right.vm_flags &&
-			left.vm_mode == right.vm_mode) {
+			left.vm_mode == right.vm_mode &&
+			left.vm_reservation == right.vm_reservation) {
 			left.vm_end = right.vm_end;
 			pb->vmas.Remove(i + 1, 1);
 		}
@@ -628,6 +822,22 @@ bool ProcessBlock::UnmapVmaRange(stduint address, stduint length) {
 				item.physical);
 	}
 	KASSERT(released_file_count == released_file_capacity);
+	for (stduint i = 0; i < released_file_count; i++) {
+		auto* inode = released_files[i]->f_inode.get();
+		bool still_mapped = false;
+		{
+			SpinlockLocal guard(&vma_lock);
+			for (stduint j = 0; j < vmas.Count(); j++) {
+				const auto& vma = vmas[j];
+				if (vma.vm_type == VirtualMemoryAreaType::File && vma.vfile &&
+					vma.vfile->f_inode.get() == inode) {
+					still_mapped = true;
+					break;
+				}
+			}
+		}
+		if (!still_mapped) uni::UnpinMappedExecutableImage(this, inode);
+	}
 	return true;
 }
 
@@ -747,9 +957,6 @@ static void* MapCachedFileVmaPage(ProcessBlock* pb, stduint address,
 			KASSERT(released);
 		}
 		if (stale) continue;
-		// Log only a newly installed read-only ELF page after releasing VMA locks.
-		if (installed && !(expected_flags & (PGPROP_writable | PGPROP_nonexecutable)))
-			uni::LogExecutableFilePage(pb, inode, address, physical);
 		return result;
 	}
 }

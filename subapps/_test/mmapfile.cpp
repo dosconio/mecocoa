@@ -12,8 +12,245 @@
 
 using namespace uni;
 
+static volatile char elf_bss_probe[8192 + 17];
+
+static int TestMappingABI() {
+	const stduint page_size = 4096;
+	char* reserved = (char*)mmap(nullptr, 3 * page_size, PROT_NONE,
+		MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	if (reserved == MAP_FAILED) {
+		outsfmt("Error: Stage 15 address reservation failed!\n\r");
+		return -1;
+	}
+	char* first = (char*)mmap(reserved, page_size,
+		PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED,
+		-1, 0);
+	char* second = (char*)mmap(reserved + page_size, page_size,
+		PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED,
+		-1, 0);
+	if (first != reserved || second != reserved + page_size) {
+		outsfmt("Error: Stage 15 fixed anonymous mapping failed!\n\r");
+		return -1;
+	}
+	first[0] = 'A';
+	second[0] = 'B';
+	if (mmap(first, page_size, PROT_READ | PROT_WRITE,
+		MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0) != MAP_FAILED ||
+		first[0] != 'A') {
+		outsfmt("Error: Stage 15 MAP_FIXED replaced a live mapping!\n\r");
+		return -1;
+	}
+	if (mprotect(reserved, 2 * page_size, PROT_READ) ||
+		mprotect(reserved, 2 * page_size, PROT_NONE) ||
+		mprotect(reserved, 3 * page_size, PROT_READ | PROT_WRITE)) {
+		outsfmt("Error: Stage 15 SMAP permission transition failed!\n\r");
+		return -1;
+	}
+	reserved[2 * page_size] = 'C';
+	first[1] = 'D';
+	if (first[0] != 'A' || first[1] != 'D' || second[0] != 'B' ||
+		reserved[2 * page_size] != 'C') {
+		outsfmt("Error: Stage 15 SMAP lost anonymous contents!\n\r");
+		return -1;
+	}
+	const char* vroot = getenv("VRPATH");
+	char program[256];
+	const int path_length = vroot && *vroot ?
+		snprintf(program, sizeof(program), "%s/apps/test_mmapfile", vroot) : -1;
+	if (path_length < 0 || (stduint)path_length >= sizeof(program)) {
+		outsfmt("Error: Stage 15 test_mmapfile path is unavailable!\n\r");
+		return -1;
+	}
+	int fd = open(program, O_RDONLY);
+	if (fd < 0) {
+		outsfmt("Error: Stage 15 test_mmapfile open failed!\n\r");
+		return -1;
+	}
+	char* file_reservation = (char*)mmap(nullptr, page_size, PROT_NONE,
+		MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	char* file_page = file_reservation == MAP_FAILED ? (char*)MAP_FAILED :
+		(char*)mmap(file_reservation, page_size, PROT_READ,
+			MAP_PRIVATE | MAP_FIXED, fd, 0);
+	if (file_page != file_reservation || file_page == MAP_FAILED ||
+		file_page[0] != '\x7F' || file_page[1] != 'E' ||
+		mprotect(file_page, page_size, PROT_READ | PROT_WRITE)) {
+		close(fd);
+		outsfmt("Error: Stage 15 fixed private file mapping failed!\n\r");
+		return -1;
+	}
+	file_page[0] = 'X';
+	char original = 0;
+	if (lseek(fd, 0, SEEK_SET) != 0 || read(fd, &original, 1) != 1 ||
+		original != '\x7F' || file_page[0] != 'X' ||
+		mprotect(file_page, page_size, PROT_READ) ||
+		munmap(file_reservation, page_size)) {
+		close(fd);
+		outsfmt("Error: Stage 15 private file COW or cleanup failed!\n\r");
+		return -1;
+	}
+	char* file_span = (char*)mmap(nullptr, 3 * page_size, PROT_READ,
+		MAP_PRIVATE, fd, 0);
+	if (file_span == MAP_FAILED) {
+		close(fd);
+		outsfmt("Error: Stage 15 file split setup failed!\n\r");
+		return -1;
+	}
+	const char left_byte = file_span[0];
+	const char middle_byte = file_span[page_size];
+	const char right_byte = file_span[2 * page_size];
+	if (mprotect(file_span + page_size, page_size,
+		PROT_READ | PROT_WRITE)) {
+		close(fd);
+		outsfmt("Error: Stage 15 file VMA split failed!\n\r");
+		return -1;
+	}
+	file_span[page_size] ^= 1;
+	if (file_span[0] != left_byte ||
+		file_span[page_size] == middle_byte ||
+		file_span[2 * page_size] != right_byte ||
+		mprotect(file_span + page_size, page_size, PROT_READ) ||
+		munmap(file_span, 3 * page_size)) {
+		close(fd);
+		outsfmt("Error: Stage 15 file VMA split changed adjacent pages!\n\r");
+		return -1;
+	}
+	close(fd);
+	if (munmap(reserved, 3 * page_size)) {
+		outsfmt("Error: Stage 15 reservation cleanup failed!\n\r");
+		return -1;
+	}
+	outsfmt("Success: Stage 15 reserve, MAP_FIXED, SMAP and private file COW passed.\n\r");
+	return 0;
+}
+
+static int TestInterpreterSharing(bool library) {
+	const char* vroot = getenv("VRPATH");
+	char program[256];
+	const int path_length = vroot && *vroot ?
+		snprintf(program, sizeof(program), "%s/apps/testso", vroot) : -1;
+	if (path_length < 0 || (stduint)path_length >= sizeof(program)) {
+		outsfmt("Error: Cannot resolve testso through VRPATH!\n\r");
+		return -1;
+	}
+	const int stage = library ? 15 : 14;
+	int ready_pipe[2] = { -1, -1 };
+	int release_pipe[2][2] = { { -1, -1 }, { -1, -1 } };
+	if (pipe(ready_pipe) || pipe(release_pipe[0]) || pipe(release_pipe[1])) {
+		outsfmt("Error: Stage %d pipe creation failed!\n\r", stage);
+		for (int index = 0; index < 2; index++) {
+			if (ready_pipe[index] >= 0) close(ready_pipe[index]);
+			for (int side = 0; side < 2; side++)
+				if (release_pipe[index][side] >= 0)
+					close(release_pipe[index][side]);
+		}
+		return -1;
+	}
+	pid_t children[2] = { -1, -1 };
+	for (int index = 0; index < 2; index++) {
+		children[index] = fork();
+		if (children[index] < 0) {
+			outsfmt("Error: Stage %d fork %d failed!\n\r", stage, index);
+			close(ready_pipe[0]);
+			close(ready_pipe[1]);
+			for (int gate = 0; gate < 2; gate++) {
+				close(release_pipe[gate][0]);
+				close(release_pipe[gate][1]);
+			}
+			for (int previous = 0; previous < index; previous++) {
+				int status;
+				wait(&status);
+			}
+			return -1;
+		}
+		if (!children[index]) {
+			close(ready_pipe[0]);
+			for (int gate = 0; gate < 2; gate++) {
+				close(release_pipe[gate][1]);
+				if (gate != index) close(release_pipe[gate][0]);
+			}
+			char ready_arg[16];
+			char release_arg[16];
+			char marker_arg[4];
+			snprintf(ready_arg, sizeof(ready_arg), "%d", ready_pipe[1]);
+			snprintf(release_arg, sizeof(release_arg), "%d",
+				release_pipe[index][0]);
+			snprintf(marker_arg, sizeof(marker_arg), "%d", index + 1);
+			char* args[] = { program,
+				(char*)(library ? "--stage15-hold" : "--stage14-hold"),
+				ready_arg, release_arg, marker_arg, nullptr };
+			execv(program, args);
+			_exit(10);
+		}
+	}
+	close(ready_pipe[1]);
+	close(release_pipe[0][0]);
+	close(release_pipe[1][0]);
+	bool ready = true;
+	for (int index = 0; index < 2; index++) {
+		char token = 0;
+		if (read(ready_pipe[0], &token, 1) != 1 || token != 'R') {
+			ready = false;
+			break;
+		}
+	}
+	close(ready_pipe[0]);
+	outsfmt("Stage %d %s workers: pid=%d and pid=%d.\n\r",
+		stage, library ? "libc" : "interpreter", children[0], children[1]);
+	const char release = 'G';
+	const bool first_sent = ready &&
+		write(release_pipe[0][1], &release, 1) == 1;
+	close(release_pipe[0][1]);
+	int first_status = -1;
+	const pid_t first_done = wait(&first_status);
+	const bool first_ok = first_sent && first_done == children[0] &&
+		first_status == 0;
+	const bool second_sent = ready &&
+		write(release_pipe[1][1], &release, 1) == 1;
+	close(release_pipe[1][1]);
+	int second_status = -1;
+	const pid_t second_done = wait(&second_status);
+	if (!first_ok || !second_sent || second_done != children[1] ||
+		second_status != 0) {
+		outsfmt("Error: Stage %d workers failed: ready=%d first=%d second=%d!\n\r",
+			stage, ready, first_status, second_status);
+		return -1;
+	}
+	if (library)
+		outsfmt("Success: Independent programs kept libc state private and survived peer exit.\n\r");
+	else
+		outsfmt("Success: Concurrent dynamic programs kept private data and survived independent exit.\n\r");
+	const pid_t reload = fork();
+	if (reload < 0) {
+		outsfmt("Error: Stage %d reload fork failed!\n\r", stage);
+		return -1;
+	}
+	if (!reload) {
+		char* args[] = { program,
+			(char*)(library ? "stage15-reload" : "stage14-reload"), nullptr };
+		execv(program, args);
+		_exit(11);
+	}
+	int reload_status = -1;
+	if (wait(&reload_status) != reload || reload_status != 0) {
+		outsfmt("Error: Stage %d reload failed with status %d!\n\r",
+			stage, reload_status);
+		return -1;
+	}
+	if (library)
+		outsfmt("Success: libc loaded again after both workers exited.\n\r");
+	else
+		outsfmt("Success: Interpreter loaded again after both workers exited.\n\r");
+	return 0;
+}
+
 int main(int argc, char** argv)
 {
+	if (argc > 1 && !strcmp(argv[1], "abi"))
+		return TestMappingABI();
+	if (argc > 1 && !strcmp(argv[1], "interp"))
+		return TestInterpreterSharing(false);
+	if (argc > 1 && !strcmp(argv[1], "so"))
+		return TestInterpreterSharing(true);
 	if (argc > 1 && argv[1][0] == 'e') {
 		outsfmt("Success: exec replacement image started.\n\r");
 		return 0;
@@ -27,6 +264,21 @@ int main(int argc, char** argv)
 		free(tmp);
 
 		outsfmt("=== File MMAP Test Start ===\n\r");
+		for (stduint i = 0; i < sizeof(elf_bss_probe); i++) {
+			if (elf_bss_probe[i]) {
+				outsfmt("Error: ELF BSS contains non-zero data at %u!\n\r", i);
+				return -1;
+			}
+		}
+		elf_bss_probe[0] = 'B';
+		elf_bss_probe[4096] = 'S';
+		elf_bss_probe[sizeof(elf_bss_probe) - 1] = 'S';
+		if (elf_bss_probe[0] != 'B' || elf_bss_probe[4096] != 'S' ||
+			elf_bss_probe[sizeof(elf_bss_probe) - 1] != 'S') {
+			outsfmt("Error: ELF BSS page writes did not remain independent!\n\r");
+			return -1;
+		}
+		outsfmt("Success: ELF BSS full pages and boundary bytes were zero-filled.\n\r");
 		rostr test_file = "/md0/mmap_t.txt";
 
 		// 1. Create and write to the test file

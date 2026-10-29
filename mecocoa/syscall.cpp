@@ -11,6 +11,14 @@
 #include <c/proctrl/IAx86_64.msr.h>
 #include <c/API-POSIX/sys/mman.h>
 
+#if CONFIG_ENABLE_MMU
+namespace uni {
+	bool PinMappedExecutableImage(ProcessBlock* process, vfs_file* file,
+		bool& created);
+	void UnpinMappedExecutableImage(ProcessBlock* process, vfs_inode* inode);
+}
+#endif
+
 #if !CONFIG_ENABLE_MMU
 #undef mglb
 #define mglb(x) _IMM(x)// the syscall table holds handler addresses as plain numbers
@@ -46,7 +54,7 @@ extern "C" stdsint sysc_IOCT(stduint, stduint, stduint);
 extern "C" void check_and_deliver_signals(void* context);
 
 // Syscall Wrappers
-extern stduint SYSCALL_TABLE[52];
+extern stduint SYSCALL_TABLE[53];
 
 void Syscall::Initialize() {
 	#if _MCCA == 0x8632
@@ -1318,6 +1326,11 @@ DEFSYSC sysc_MMAP(stduint len, stduint flag, stduint fd) {
 	}
 	stduint offset = 0;
 	VirtualMemoryAreaMode requested_mode = VirtualMemoryAreaMode::Shared;
+	stduint requested_address = 0;
+	bool fixed = false;
+	bool anonymous = false;
+	bool reservation = false;
+	bool executable_file = false;
 	if (flag == ~_IMM0) {
 		const stduint usr_req = fd;
 		if (usr_req < 0x1000 ||
@@ -1326,20 +1339,38 @@ DEFSYSC sysc_MMAP(stduint len, stduint flag, stduint fd) {
 		syscall_mmap_request_t req;
 		if (MccaMemCopyP(&req, nullptr, true, (const void*)usr_req, pb, false,
 			sizeof(req)) != sizeof(req)) return ~_IMM0;
-		if (req.address || (req.prot & ~(PROT_READ | PROT_WRITE | PROT_EXEC)) ||
-			!(req.prot & PROT_READ) ||
-			(req.flags != MAP_SHARED && req.flags != MAP_PRIVATE) ||
-			req.fd < 0 || req.offset < 0 ||
+		const stduint allowed_map_flags = MAP_SHARED | MAP_PRIVATE |
+			MAP_FIXED | MAP_ANONYMOUS;
+		const stduint mode = req.flags & (MAP_SHARED | MAP_PRIVATE);
+		if ((req.prot & ~(PROT_READ | PROT_WRITE | PROT_EXEC)) ||
+			(req.prot && !(req.prot & PROT_READ)) ||
+			(req.flags & ~allowed_map_flags) ||
+			(mode != MAP_SHARED && mode != MAP_PRIVATE) ||
+			((req.flags & MAP_ANONYMOUS) && mode != MAP_PRIVATE) ||
+			(req.flags & MAP_FIXED ?
+				(!req.address || (req.address & 0xFFF)) : !!req.address) ||
+			(req.flags & MAP_ANONYMOUS ?
+				(req.fd != -1 || req.offset) : req.fd < 0) ||
+			req.offset < 0 ||
 			(req.offset & 0xFFF)) return ~_IMM0;
-		requested_mode = req.flags == MAP_PRIVATE ?
+		requested_mode = mode == MAP_PRIVATE ?
 			VirtualMemoryAreaMode::Private : VirtualMemoryAreaMode::Shared;
-		flag = PGPROP_present | PGPROP_user_access;
+		fixed = !!(req.flags & MAP_FIXED);
+		anonymous = !!(req.flags & MAP_ANONYMOUS);
+		// Preserve legacy writable shared mappings; loader images use MAP_PRIVATE.
+		executable_file = !anonymous && !!(req.prot & PROT_EXEC) &&
+			!(mode == MAP_SHARED && (req.prot & PROT_WRITE));
+		reservation = anonymous && !fixed && req.prot == PROT_NONE;
+		requested_address = req.address;
+		flag = req.prot ? PGPROP_present | PGPROP_user_access : 0;
 		if (req.prot & PROT_WRITE) flag |= PGPROP_writable;
 		#if _MCCA != 0x8632
-		if (!(req.prot & PROT_EXEC)) flag |= PGPROP_nonexecutable;
+		if (req.prot && !(req.prot & PROT_EXEC))
+			flag |= PGPROP_nonexecutable;
 		#endif
 		#if _MCCA == 0x8664
-		if (!(req.prot & PROT_EXEC) && !uni::PagingNXEnabled()) return ~_IMM0;
+		if (req.prot && !(req.prot & PROT_EXEC) &&
+			!uni::PagingNXEnabled()) return ~_IMM0;
 		#endif
 		fd = (stduint)req.fd;
 		offset = (stduint)req.offset;
@@ -1355,8 +1386,17 @@ DEFSYSC sysc_MMAP(stduint len, stduint flag, stduint fd) {
 	if (!len || len > ~_IMM0 - 0xFFF) return ~_IMM0;
 	len = (len + 0xFFF) & ~_IMM(0xFFF); // Align to 4KB page size
 	if (offset > ~_IMM0 - len) return ~_IMM0;
+	#if _MCCA == 0x8664
+	const stduint user_end = 0x0000800000000000ull;
+	#else
+	const stduint user_end = 0x80000000;
+	#endif
+	if (fixed && (requested_address < 0x1000 ||
+		requested_address >= user_end || len > user_end - requested_address))
+		return ~_IMM0;
 	MutexLocal mapping_guard(&pb->mutex_mapping);
 	VirtualMemoryArea vma(0, 0, flag);
+	vma.vm_reservation = reservation;
 	if (fd != ~_IMM0) {
 		auto files = pb->fileman.Lock();
 		if (fd >= files->pfiles.Count() || !files->pfiles[fd] ||
@@ -1369,9 +1409,20 @@ DEFSYSC sysc_MMAP(stduint len, stduint flag, stduint fd) {
 		vma.vfile = nvfile;
 		vma.file_offset = offset;
 	}
-	stduint addr;
+	bool mapped_pin_added = false;
+	if (executable_file &&
+		!uni::PinMappedExecutableImage(pb, vma.vfile, mapped_pin_added)) {
+		Filesys::Close(vma.vfile);
+		return ~_IMM0;
+	}
+	stduint addr = requested_address;
 	bool appended = false;
-	{
+	if (fixed) {
+		vma.vm_start = addr;
+		vma.vm_end = addr + len;
+		appended = pb->ReplaceReservedVmaRange(vma);
+	}
+	else {
 		SpinlockLocal guard(&pb->vma_lock);
 		if (pb->FindFreeVmaRange(len, addr)) {
 			vma.vm_start = addr;
@@ -1381,12 +1432,78 @@ DEFSYSC sysc_MMAP(stduint len, stduint flag, stduint fd) {
 		}
 	}
 	if (!appended) {
+		if (mapped_pin_added)
+			uni::UnpinMappedExecutableImage(pb, vma.vfile->f_inode.get());
 		if (vma.vm_type == VirtualMemoryAreaType::File && vma.vfile) {
 			Filesys::Close(vma.vfile);
 		}
 		return ~_IMM0;
 	}
 	return addr;
+}
+
+DEFSYSC sysc_SMAP(stduint addr, stduint len, stduint prot) {
+	if (addr < 0x1000 || (addr & 0xFFF) || !len ||
+		len > ~_IMM0 - 0xFFF ||
+		(prot & ~(PROT_READ | PROT_WRITE | PROT_EXEC)) ||
+		(prot && !(prot & PROT_READ))) return ~_IMM0;
+	len = (len + 0xFFF) & ~_IMM(0xFFF);
+	#if _MCCA == 0x8664
+	const stduint user_end = 0x0000800000000000ull;
+	if (prot && !(prot & PROT_EXEC) && !uni::PagingNXEnabled())
+		return ~_IMM0;
+	#else
+	const stduint user_end = 0x80000000;
+	#endif
+	if (addr >= user_end || len > user_end - addr) return ~_IMM0;
+	ThreadBlock* th = Taskman::CurrentTB();
+	ProcessBlock* pb = th->parent_process;
+	if (&pb->paging == &kernel_paging) return ~_IMM0;
+	stduint flags = prot ? PGPROP_present | PGPROP_user_access : 0;
+	if (prot & PROT_WRITE) flags |= PGPROP_writable;
+	#if _MCCA != 0x8632
+	if (prot && !(prot & PROT_EXEC)) flags |= PGPROP_nonexecutable;
+	#endif
+	MutexLocal mapping_guard(&pb->mutex_mapping);
+	struct ExecutableFilePinPlan {
+		uni::vfs_file* file = nullptr;
+		bool created = false;
+	};
+	if ((prot & PROT_EXEC) && len / PAGE_SIZE >
+		~_IMM0 / sizeof(ExecutableFilePinPlan)) return ~_IMM0;
+	auto pins = (prot & PROT_EXEC) ?
+		uni::make_unique<ExecutableFilePinPlan[]>(len / PAGE_SIZE) :
+		uni::UniquePtr<ExecutableFilePinPlan[]>();
+	if ((prot & PROT_EXEC) && !pins) return ~_IMM0;
+	stduint pin_count = 0;
+	if (prot & PROT_EXEC) {
+		SpinlockLocal guard(&pb->vma_lock);
+		for (stduint i = 0; i < pb->vmas.Count(); i++) {
+			const auto& vma = pb->vmas[i];
+			if (vma.vm_end <= addr || vma.vm_start >= addr + len ||
+				vma.vm_type != VirtualMemoryAreaType::File) continue;
+			if ((prot & PROT_WRITE) &&
+				vma.vm_mode == VirtualMemoryAreaMode::Shared) continue;
+			if (pin_count >= len / PAGE_SIZE) return ~_IMM0;
+			pins[pin_count++].file = vma.vfile;
+		}
+	}
+	for (stduint i = 0; i < pin_count; i++) {
+		if (pins[i].file && uni::PinMappedExecutableImage(pb,
+			pins[i].file, pins[i].created)) continue;
+		for (stduint j = 0; j < i; j++)
+			if (pins[j].created)
+				uni::UnpinMappedExecutableImage(pb,
+					pins[j].file->f_inode.get());
+		return ~_IMM0;
+	}
+	const bool protected_range = pb->ProtectVmaRange(addr, len, flags);
+	if (!protected_range)
+		for (stduint i = 0; i < pin_count; i++)
+			if (pins[i].created)
+				uni::UnpinMappedExecutableImage(pb,
+					pins[i].file->f_inode.get());
+	return protected_range ? 0 : ~_IMM0;
 }
 #else
 DEFSYSC sysc_MMAP(stduint len, stduint flag, stduint fd) {
@@ -1404,6 +1521,10 @@ DEFSYSC sysc_MMAP(stduint len, stduint flag, stduint fd) {
 	const stduint addr = pb->heaptop;
 	pb->heaptop += len;
 	return addr;
+}
+DEFSYSC sysc_SMAP(stduint addr, stduint len, stduint prot) {
+	(void)addr; (void)len; (void)prot;
+	return ~_IMM0;
 }
 #endif
 
@@ -1456,9 +1577,10 @@ stduint SYSCALL_TABLE[] = {
 	mglb(sysc_GETD), // 0x17 (GETD)
 	mglb(sysc_MMAP), // 0x18 (MMAP)
 	mglb(sysc_UMAP), // 0x19 (UMAP)
-	mglb(sysc_DUP2), // 0x1A (DUP2)
-	mglb(sysc_PIPE), // 0x1B (PIPE)
-	mglb(sysc_SEEK), // 0x1C (SEEK)
+	mglb(sysc_SMAP),
+	mglb(sysc_DUP2),
+	mglb(sysc_PIPE),
+	mglb(sysc_SEEK),
 	0, // 0x1D (GET_CORE_ID)
 	mglb(sysc_MANA),
 	mglb(sysc_TNEW),
@@ -1586,6 +1708,13 @@ void syscall_body(NormalTaskContext* cxt)
 	case syscall_t::MMAP:
 		#if CONFIG_ENABLE_MMU
 		cxt->a0 = sysc_MMAP(cxt->a0, cxt->a1, cxt->a2);
+		#else
+		cxt->a0 = ~_IMM0;
+		#endif
+		break;
+	case syscall_t::SMAP:
+		#if CONFIG_ENABLE_MMU
+		cxt->a0 = sysc_SMAP(cxt->a0, cxt->a1, cxt->a2);
 		#else
 		cxt->a0 = ~_IMM0;
 		#endif

@@ -42,6 +42,7 @@ enum
 	GETD = 0x17, // getcwd (buf, size)->len   | x86
 	MMAP = 0x18, // mmap   (size,fl,fd)->addr | x86
 	UMAP = 0x19, // munmap (addr,size) ->0    | x86
+	SMAP = 0x1A, // setmap (addr,size,prot)->0| x86 x64 rv
 	DUP2, // dup2   (oldfd, newfd)->newfd | x86
 	PIPE, // pipe   (pipefd)->0           | x86
 	SEEK, // lseek  (fd, offset, whence)->pos | x86

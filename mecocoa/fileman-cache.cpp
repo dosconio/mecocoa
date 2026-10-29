@@ -11,11 +11,11 @@ namespace uni {
 }
 
 namespace {
-	// A process pin retains the ELF inode and freezes its content until image teardown.
+	// A process pin retains an executable inode and freezes its content until teardown.
 	struct ExecutableImagePin {
 		ProcessBlock* process;
 		uni::SharedPtr<uni::vfs_inode> inode;
-		bool logged_code_page = false;
+		bool mapped_file = false;
 		ExecutableImagePin* next = nullptr;
 	};
 	// vfs_lock protects this list; the inode reference survives unlink and unmount.
@@ -776,36 +776,31 @@ namespace uni {
 		return false;
 	}
 
-	void LogExecutableFilePage(ProcessBlock* process, vfs_inode* inode,
-		stduint address, stduint physical_address) {
-		uint64 identity = 0;
-		{
-			MutexLocal guard(&vfs_lock);
-			for (auto* pin = executable_image_pins; pin; pin = pin->next) {
-				if (pin->process != process || pin->inode.get() != inode ||
-					pin->logged_code_page) continue;
-				pin->logged_code_page = true;
-				identity = inode->identity;
-				break;
-			}
-		}
-		if (identity)
-			ploginfo("[elf-filemap] pid=%u inode=%[64H] va=%[x] pa=%[x]",
-				process->pid, identity, address, physical_address);
-	}
-
-	bool PinExecutableImage(ProcessBlock* process, vfs_file* file,
-		uint64 expected_version) {
+	static bool PinExecutableImageInternal(ProcessBlock* process, vfs_file* file,
+		uint64 expected_version, bool mapped_file, bool& created) {
+		created = false;
 		if (!process || !file || !file->f_inode) return false;
 		auto* pin = new ExecutableImagePin { process, file->f_inode,
-			false, nullptr };
+			mapped_file, nullptr };
 		if (!pin) return false;
 		bool pinned = false;
+		bool already_pinned = false;
 		{
 			MutexLocal copy_guard(&shared_file_copy_lock);
 			MutexLocal file_guard(&vfs_lock);
+			if (mapped_file) {
+				for (auto* previous = executable_image_pins; previous;
+					previous = previous->next) {
+					if (previous->mapped_file && previous->process == process &&
+						previous->inode.get() == file->f_inode.get()) {
+						already_pinned = true;
+						break;
+					}
+				}
+			}
 			// Revoke writable shared aliases before freezing the ELF image.
-			bool clean = file->f_inode->content_version == expected_version &&
+			bool clean = !already_pinned && (mapped_file ||
+				file->f_inode->content_version == expected_version) &&
 				PrepareSharedFileTruncate(file->f_inode.get());
 			uni::Vector<stduint> offsets;
 			if (clean && !shared_file_pages.SnapshotInode(
@@ -822,10 +817,42 @@ namespace uni {
 				pin->next = executable_image_pins;
 				executable_image_pins = pin;
 				pinned = true;
+				created = true;
 			}
 		}
 		if (!pinned) delete pin;
-		return pinned;
+		return pinned || already_pinned;
+	}
+
+	bool PinExecutableImage(ProcessBlock* process, vfs_file* file,
+		uint64 expected_version) {
+		bool created = false;
+		return PinExecutableImageInternal(process, file, expected_version,
+			false, created);
+	}
+
+	bool PinMappedExecutableImage(ProcessBlock* process, vfs_file* file,
+		bool& created) {
+		return PinExecutableImageInternal(process, file, 0, true, created);
+	}
+
+	void UnpinMappedExecutableImage(ProcessBlock* process, vfs_inode* inode) {
+		ExecutableImagePin* removed = nullptr;
+		{
+			MutexLocal guard(&vfs_lock);
+			auto** link = &executable_image_pins;
+			while (*link) {
+				if (!(*link)->mapped_file || (*link)->process != process ||
+					(*link)->inode.get() != inode) {
+					link = &(*link)->next;
+					continue;
+				}
+				removed = *link;
+				*link = removed->next;
+				break;
+			}
+		}
+		delete removed;
 	}
 
 	bool CloneExecutableImagePin(ProcessBlock* parent, ProcessBlock* child) {
@@ -833,7 +860,7 @@ namespace uni {
 		for (auto* source = executable_image_pins; source; source = source->next) {
 			if (source->process != parent) continue;
 			auto* pin = new ExecutableImagePin { child, source->inode,
-				false, executable_image_pins };
+				source->mapped_file, executable_image_pins };
 			if (!pin) return false;
 			executable_image_pins = pin;
 		}
@@ -861,6 +888,45 @@ namespace uni {
 			delete removed;
 			removed = next;
 		}
+	}
+
+	// Replace the old exec pin without exposing either inode to a writable gap.
+	bool TransferExecutableImagePin(ProcessBlock* source,
+		ProcessBlock* destination) {
+		if (!source || !destination || source == destination) return false;
+		ExecutableImagePin* removed = nullptr;
+		bool transferred = false;
+		{
+			MutexLocal guard(&vfs_lock);
+			for (auto* pin = executable_image_pins; pin; pin = pin->next) {
+				if (pin->process == source) {
+					transferred = true;
+					break;
+				}
+			}
+			if (!transferred) return false;
+			auto** link = &executable_image_pins;
+			while (*link) {
+				if ((*link)->process != destination) {
+					link = &(*link)->next;
+					continue;
+				}
+				auto* pin = *link;
+				*link = pin->next;
+				pin->next = removed;
+				removed = pin;
+			}
+			for (auto* pin = executable_image_pins; pin; pin = pin->next) {
+				if (pin->process != source) continue;
+				pin->process = destination;
+			}
+		}
+		while (removed) {
+			auto* next = removed->next;
+			delete removed;
+			removed = next;
+		}
+		return transferred;
 	}
 
 	// Caller holds vfs_lock. A loading page will observe the completed I/O

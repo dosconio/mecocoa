@@ -261,6 +261,7 @@ struct VirtualMemoryArea {
 	stduint vm_start;	// Align by 4KB page size
 	stduint vm_end;		// Align by 4KB page size
 	stduint vm_flags;	// Attributes (e.g. PGPROP_writable, PGPROP_user_access)
+	bool vm_reservation = false; // Only a reserved span may be replaced by user MAP_FIXED.
 	
 	// File backing extensions
 	VirtualMemoryAreaType vm_type = VirtualMemoryAreaType::Anonymous;
@@ -274,6 +275,7 @@ struct VirtualMemoryArea {
 	bool operator==(const VirtualMemoryArea& other) const {
 		return vm_start == other.vm_start && vm_end == other.vm_end && vm_flags == other.vm_flags &&
 			vm_type == other.vm_type && vm_mode == other.vm_mode &&
+			vm_reservation == other.vm_reservation &&
 			vfile == other.vfile && file_offset == other.file_offset;
 	}
 };
@@ -315,7 +317,7 @@ public: // Threads
 public: // VirtualMemory
 	#if CONFIG_ENABLE_MMU
 	uni::Paging paging;
-	Mutex mutex_mapping; // _TEMP: sysc_MMAP, sysc_UMAP, MapPwcallPhysicalRange, CreateFork, Exet.
+	Mutex mutex_mapping; // _TEMP: sysc_MMAP, sysc_SMAP, sysc_UMAP, MapPwcallPhysicalRange, CreateFork, Exet.
 	bool force_vma_release = false; // ReleaseAllVmas may detach a failed dirty page at exit/exec.
 	#endif
 	stduint heaptop = 0;
@@ -330,6 +332,8 @@ public: // VirtualMemory Operations
 	bool FindFreeVmaRange(stduint length, stduint& address);
 	bool InsertVmaSorted(const VirtualMemoryArea& vma);
 	// Caller holds mutex_mapping; these methods acquire vma_lock internally.
+	bool ReplaceReservedVmaRange(const VirtualMemoryArea& vma);
+	bool ProtectVmaRange(stduint address, stduint length, stduint flags);
 	bool UnmapVmaRange(stduint address, stduint length);
 	bool ReleaseAllVmas();
 	// ResolveVmaFault may acquire mutex_mapping; both methods acquire vma_lock internally. File I/O and page copying are performed without the spinlock.
