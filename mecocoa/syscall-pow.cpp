@@ -653,9 +653,19 @@ static bool PwcallBindDeviceInterrupt(ProcessBlock* process, stduint device_hand
 	if (msi_only && !use_message_interrupt) return false;
 	if (!irq && !use_message_interrupt) return false;
 	if (!use_message_interrupt && irq->start > uint64(~uint32(0))) return false;
+	if (!pci && irq->start > 0xFFu) return false;
 	const uint8 requested_vector = pci ? 0 : uint8(irq->start);
-	const uint32 line = use_message_interrupt ? 0xFFFFFFFFu :
+	uint32 line = use_message_interrupt ? 0xFFFFFFFFu :
 		(pci ? uint32(irq->start) : uint32(PwcallLegacyVectorToLine(requested_vector)));
+	#if _MCCA == 0x8664
+	bool isa_level_triggered = false;
+	bool isa_active_low = false;
+	if (!pci) {
+		// ACPI MADT supplies the actual GSI and electrical mode for a legacy ISA IRQ.
+		if (!using_ioapic || line >= 16 ||
+			!Devs::x64_resolve_isa_irq(uint8(line), line, isa_level_triggered, isa_active_low)) return false;
+	}
+	#endif
 	if (!use_message_interrupt && !using_ioapic && line >= 16) return false;
 	#if _MCCA == 0x8664
 	if (!use_message_interrupt && using_ioapic && !Devs::x64_ioapic_has_gsi(line)) return false;
@@ -666,6 +676,16 @@ static bool PwcallBindDeviceInterrupt(ProcessBlock* process, stduint device_hand
 	bool level_triggered = irq && (irq->flags & DeviceResourceFlag_IrqLevel) != 0;
 	bool active_low = irq && (irq->flags & DeviceResourceFlag_IrqActiveLow) != 0;
 	const bool shareable = irq && (irq->flags & DeviceResourceFlag_IrqShareable) != 0;
+	#if _MCCA == 0x8664
+	if (!pci) {
+		level_triggered = isa_level_triggered;
+		active_low = isa_active_low;
+	}
+	#endif
+	bool dynamic_vector = pci;
+	#if _MCCA == 0x8664
+	dynamic_vector = true;
+	#endif
 
 	uint32 generation = 0;
 	uint8 vector = requested_vector;
@@ -700,7 +720,7 @@ static bool PwcallBindDeviceInterrupt(ProcessBlock* process, stduint device_hand
 				line_binding->active_low != active_low) return false;
 			vector = line_binding->vector;
 		}
-		else if (pci) {
+		else if (dynamic_vector) {
 			for (uint8 offset = 0; offset < PwcallPciIrqVectorCount; ++offset) {
 				const uint8 candidate = PwcallPciInterruptVector(offset);
 				if (!PwcallVectorInUse(candidate)) {
@@ -749,8 +769,10 @@ static bool PwcallBindDeviceInterrupt(ProcessBlock* process, stduint device_hand
 			if (active_low) route |= uint64(1) << 13;
 			if (level_triggered) route |= uint64(1) << 15;
 			#if _MCCA == 0x8664
-			route &= ~(uint64(0xFFu) << 56);
-			route |= uint64(uint8(target_lapic_id)) << 56;
+			if (pci) {
+				route &= ~(uint64(0xFFu) << 56);
+				route |= uint64(uint8(target_lapic_id)) << 56;
+			}
 			Devs::x64_ioapic_write_route(line, route);
 			intx_route = route;
 			#else
@@ -758,7 +780,7 @@ static bool PwcallBindDeviceInterrupt(ProcessBlock* process, stduint device_hand
 			#endif
 		}
 	}
-	if (pci) {
+	if (dynamic_vector) {
 		const stduint entry = PwcallPciInterruptEntry(vector);
 		if (!entry) return false;
 		#if _MCCA == 0x8664
@@ -1332,7 +1354,14 @@ static stdsint HandlePwcallDeviceDmaAlloc(ProcessBlock* pb, stduint dev_handle, 
 	const stduint alloc_size = (size + 0xFFFu) & ~0xFFFu;
 	void* phys = nullptr;
 	#if (_MCCA & 0xFF00) == 0x8600
-	if ((flags & _IMM(PwcallDeviceDmaAllocFlag::NoLowMemory)) == 0) {
+	if (dma_channel != 0xFF) {
+		// The 8237 uses a physical 24-bit address; never substitute high memory or an IOVA.
+		if (flags & (_IMM(PwcallDeviceDmaAllocFlag::NoLowMemory) |
+			_IMM(PwcallDeviceDmaAllocFlag::Iova))) return -1;
+		phys = DmaLowAlloc(alloc_size);
+		if (!phys) return -1;
+	}
+	else if ((flags & _IMM(PwcallDeviceDmaAllocFlag::NoLowMemory)) == 0) {
 		phys = DmaLowAlloc(alloc_size);
 	}
 	#endif

@@ -8,8 +8,11 @@
 #include <c/driver/i8259A.h>
 #include <cpp/Device/Audio/SoundBlaster.hpp>
 #include <cpp/atomic>
+#if _MCCA == 0x8664
+#include "../../mecocoa/devsman-acpi-gsi.h"
+#endif
 
-#if _MCCA == 0x8632
+#if (_MCCA & 0xFF00) == 0x8600
 class SoundBlasterAudioDevice : public uni::AudioControlInterface {
 public:
 	virtual bool StartStream(const uni::AudioFormat& format,
@@ -209,6 +212,12 @@ namespace {
 		SoundBlasterDefaultConfig.io_base,
 		sound_blaster_io,
 	};
+	#if _MCCA == 0x8664
+	// The GSI filter can change the mixer index between a thread's index and data I/O; this IRQ-safe lock serializes both transactions.
+	Spinlock sound_blaster_mixer_lock;
+	ACPIGSIBinding sound_blaster_gsi_binding{};
+	bool BindSoundBlasterGSI();
+	#endif
 
 	void FillSoundBlasterTestTone(uint8* destination, uint32 sample_count,
 		uint32& phase) {
@@ -948,6 +957,10 @@ namespace {
 	}
 
 	bool StartSoundBlaster(DeviceNode* node) {
+		#if _MCCA == 0x8664
+		// Reprobing an active device would replace the SoundBlaster object while its GSI filter uses it.
+		if (sound_blaster_gsi_binding.active) return true;
+		#endif
 		const auto* io_resource = Devsman::FindResource(
 			node, DeviceResourceType::IoPortRange, 0);
 		if (!io_resource || io_resource->length < SoundBlasterDefaultConfig.io_length ||
@@ -969,14 +982,29 @@ namespace {
 			(stduint)sound_blaster.GetDspMinorVersion());
 		sound_blaster_pcm_path = SoundBlasterPcmPath::Unknown;
 		(void)PrepareSoundBlasterDma(node);
-		(void)sound_blaster.ResetMixer();
+		(void)SoundBlasterResetMixer();
 		// Unity on both stages; the system volume rides the Master stage alone (was 204 = -14 dB per stage).
 		(void)SoundBlasterSetVolume(uni::SoundBlasterMixerChannel::MasterVolume,
 			uni::SoundBlasterUnityRaw, uni::SoundBlasterUnityRaw);
 		(void)SoundBlasterSetVolume(uni::SoundBlasterMixerChannel::VoiceVolume,
 			uni::SoundBlasterUnityRaw, uni::SoundBlasterUnityRaw);
+		#if _MCCA == 0x8664
+		if (sound_blaster.GetDspMajorVersion() < 4) {
+			// Mixer register 82h is an SB16 feature required to filter the shared GSI vector.
+			plogwarn("[SB16] Shared GSI dispatch requires SB16 DSP version 4 or newer");
+			return false;
+		}
+		if (!BindSoundBlasterGSI()) return false;
+		#endif
 		// Register as unified audio backend in Devsman
+		#if _MCCA == 0x8664
+		if (!audio_manager.AppendCard("sb16", &::g_sb16_audio_device)) {
+			(void)Devs::UnbindACPIGSI(sound_blaster_gsi_binding);
+			return false;
+		}
+		#else
 		(void)audio_manager.AppendCard("sb16", &::g_sb16_audio_device);
+		#endif
 		// Keep boot quiet. Explicit AudioMsg::TEST / playback paths can still
 		// exercise the device after normal service scheduling is available.
 		return true;
@@ -1201,6 +1229,9 @@ void SoundBlasterAbortPcmStream() {
 	}
 
 	bool SoundBlasterSetVolume(uni::SoundBlasterMixerChannel channel, uint8 left, uint8 right) {
+		#if _MCCA == 0x8664
+		SpinlockLocal mixer_guard(&sound_blaster_mixer_lock);
+		#endif
 		if (channel == uni::SoundBlasterMixerChannel::MasterVolume) {
 			sound_blaster_master_vol_l = left;
 			sound_blaster_master_vol_r = right;
@@ -1209,10 +1240,16 @@ void SoundBlasterAbortPcmStream() {
 	}
 
 	bool SoundBlasterGetVolume(uni::SoundBlasterMixerChannel channel, uint8& left, uint8& right) {
+		#if _MCCA == 0x8664
+		SpinlockLocal mixer_guard(&sound_blaster_mixer_lock);
+		#endif
 		return sound_blaster.GetVolume(channel, left, right);
 	}
 
 	bool SoundBlasterSetMute(uni::SoundBlasterMixerChannel channel, bool mute) {
+		#if _MCCA == 0x8664
+		SpinlockLocal mixer_guard(&sound_blaster_mixer_lock);
+		#endif
 		if (channel == uni::SoundBlasterMixerChannel::MasterVolume) {
 			sound_blaster_master_mute = mute;
 		}
@@ -1220,6 +1257,9 @@ void SoundBlasterAbortPcmStream() {
 	}
 
 bool SoundBlasterResetMixer() {
+	#if _MCCA == 0x8664
+	SpinlockLocal mixer_guard(&sound_blaster_mixer_lock);
+	#endif
 	return sound_blaster.ResetMixer();
 }
 
@@ -1255,6 +1295,16 @@ bool SoundBlasterRecoverDevice() {
 	}
 
 	// 3. Restore mixer settings
+	#if _MCCA == 0x8664
+	SoundBlasterSetVolume(uni::SoundBlasterMixerChannel::MasterVolume,
+		sound_blaster_master_vol_l, sound_blaster_master_vol_r);
+	if (sound_blaster_master_mute) {
+		SoundBlasterSetMute(uni::SoundBlasterMixerChannel::MasterVolume, true);
+	}
+	// Voice stays at unity: the system volume lives on the Master stage only.
+	SoundBlasterSetVolume(uni::SoundBlasterMixerChannel::VoiceVolume,
+		uni::SoundBlasterUnityRaw, uni::SoundBlasterUnityRaw);
+	#else
 	sound_blaster.SetVolume(uni::SoundBlasterMixerChannel::MasterVolume,
 		sound_blaster_master_vol_l, sound_blaster_master_vol_r);
 	if (sound_blaster_master_mute) {
@@ -1263,6 +1313,7 @@ bool SoundBlasterRecoverDevice() {
 	// Voice stays at unity: the system volume lives on the Master stage only.
 	sound_blaster.SetVolume(uni::SoundBlasterMixerChannel::VoiceVolume,
 		uni::SoundBlasterUnityRaw, uni::SoundBlasterUnityRaw);
+	#endif
 
 	// 4. If we were streaming, re-arm the auto-init DMA
 	if (was_streaming && sound_blaster_auto_buffer.refill) {
@@ -1397,7 +1448,10 @@ void Handint_SB16() {
 		IsaDmaMask(sound_blaster_dma8_channel);
 		IsaDmaMask(sound_blaster_dma16_channel);
 	}
+	// The x64 shared GSI dispatcher sends the LAPIC EOI after all filters return.
+	#if _MCCA == 0x8632
 	IC.SendEOI(IRQ_SB16);
+	#endif
 	if (single_cycle_completed) {
 		ploginfo("[SB16] PCM test complete irq-count=%u", (stduint)count);
 	}
@@ -1408,6 +1462,46 @@ void Handint_SB16() {
 	}
 }
 
+#if _MCCA == 0x8664
+namespace {
+	bool DispatchSoundBlasterGSI(void* context) {
+		if (context != &sound_blaster) return false;
+		uint8 irq_status = 0;
+		{
+			SpinlockLocal mixer_guard(&sound_blaster_mixer_lock);
+			// Creative Sound Blaster Series Hardware Programming Guide: mixer register 82h reports pending IRQ sources.
+			constexpr uint8 MixerIrqStatusRegister = 0x82;
+			if (!sound_blaster.ReadMixer(MixerIrqStatusRegister, irq_status)) return false;
+		}
+		// This filter runs for every shared-vector interrupt; only bits 0/1 identify SB16 8/16-bit PCM IRQs.
+		if (!(irq_status & 0x03u)) return false;
+		Handint_SB16();
+		return true;
+	}
+
+	bool BindSoundBlasterGSI() {
+		if (sound_blaster_gsi_binding.active) return true;
+		uint32 gsi = 0;
+		bool level_triggered = false;
+		bool active_low = false;
+		// ACPI MADT Interrupt Source Overrides may remap ISA IRQ5 and change its polarity or trigger mode.
+		if (!Devs::x64_resolve_isa_irq(SoundBlasterDefaultConfig.irq, gsi, level_triggered, active_low)) {
+			plogwarn("[SB16] ISA IRQ%u has no routable GSI", SoundBlasterDefaultConfig.irq);
+			return false;
+		}
+		const ACPIGSIConfiguration configuration{gsi, level_triggered, active_low, false};
+		const auto status = Devs::BindACPIGSI(configuration, DispatchSoundBlasterGSI,
+			&sound_blaster, sound_blaster_gsi_binding);
+		if (status != ACPIGSIStatus::Success) {
+			plogwarn("[SB16] GSI%u binding failed, status=%u", gsi, uint8(status));
+			return false;
+		}
+		ploginfo("[SB16] ISA IRQ%u bound to GSI%u", SoundBlasterDefaultConfig.irq, gsi);
+		return true;
+	}
+}
+#endif
+
 _ESYM_C void R_SB16_INIT();
 
 __attribute__((section(".init.rmod")))
@@ -1417,6 +1511,10 @@ RMOD_LIST RMOD_LIST_SB16{
 };
 
 void R_SB16_INIT() {
+	// Legacy ISA has no enumeration record; verify the DSP before publishing a device node.
+	uni::SoundBlaster probe(SoundBlasterDefaultConfig.io_base, sound_blaster_io);
+	if (!probe.Probe()) return;
+
 	auto* node = Devsman::RegisterPlatformDevice("sound-blaster");
 	if (!node) return;
 	if (!Devsman::AddIoPortResource(node, 0,
@@ -1433,9 +1531,11 @@ void R_SB16_INIT() {
 		plogwarn("[SB16] Failed to register DMA resources");
 		return;
 	}
+	#if _MCCA == 0x8632
 	IC[IRQ_SB16].setRange(mglb(Handint_SB16_Entry), SegCo32);
 	register_interrupt_handler(IRQ_SB16, Handint_SB16);
 	if (IC.getType() == 0) i8259Master_Enable(DEV_MAS_SB16);
+	#endif
 	if (!Devsman::RegisterDriverStarter("sb16", StartSoundBlaster)) {
 		plogwarn("[SB16] Failed to register driver starter");
 		return;

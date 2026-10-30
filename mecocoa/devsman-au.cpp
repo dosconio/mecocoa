@@ -7,7 +7,7 @@
 #include "../devdriv/audio/au-sb16.hpp"
 #include <c/format/audio/WAV.h>
 
-#if _MCCA == 0x8632
+#if (_MCCA & 0xFF00) == 0x8600
 
 namespace {
 	constexpr uint32 AudioMaxTracks = 8;

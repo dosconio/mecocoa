@@ -6,12 +6,11 @@
 #if defined(_MCCA) && (_MCCA == 0x8632)
 #include "../../include/mecocoa.hpp"
 #include <c/storage/floppy.h>
-#include <c/format/filesys.h>
 #elif defined(_ACCM) && ((_ACCM & 0xFF00) == 0x8600)
 #include <stdio.h>
 #include <c/stdinc.h>
 #include <c/storage/floppy.h>
-#include <c/format/filesys.h>
+#include <c/proctrl/x64/x64.h>
 #include <cpp/Device/DMA>
 #include "../../include/taskman.com.hpp"
 #include "../../include/syscall-pow.hpp"
@@ -167,8 +166,10 @@ namespace {
 		PwcallDeviceDmaMapRequest mapping = {};
 		mapping.map_flags = _IMM(PwcallDeviceDmaMapFlag::Writable);
 		const stdsint mapped = Powercall::DevDmaMap(stduint(handle), &mapping);
+		// The 8237 programs a physical address, so an IOVA would target the wrong memory.
 		if (mapped != 0 ||
 			!mapping.address || !mapping.physical || mapping.length < 512 ||
+			mapping.device_address != mapping.physical ||
 			mapping.physical > 0x00FFFE00u ||
 			(mapping.physical & 0xFFFFu) + 512 > 0x10000u) {
 			printf("flopdisk: DMA map failed rc=%d phys=%x addr=%x len=%u\n\r",
@@ -431,7 +432,7 @@ int main(int argc, char** argv) {
 		registration.block_count = floppy_drives[i]->getUnits();
 		registration.flags = StorageDriverFlag_Readable | StorageDriverFlag_Writable |
 			(floppy_media_present[i] ? StorageDriverFlag_MediaPresent : 0);
-		registration.slice_type = FILESYS_FAT12;
+		registration.slice_type = uint32(ClassicFilesysType::FAT12);
 		if (i == 0) MemCopyN(registration.name, "floppy@0", sizeof("floppy@0"));
 		else MemCopyN(registration.name, "floppy@1", sizeof("floppy@1"));
 		if (!FloppySend(Task_Devsman, _IMM(StorageDriverMsg::Attach), &registration, sizeof(registration))) {

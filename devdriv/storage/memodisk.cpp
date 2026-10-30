@@ -4,7 +4,6 @@
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 
 #include "../../include/mecocoa.hpp"
-#include <c/format/filesys.h>
 
 _ESYM_C void R_MEMDISK_INIT();
 
@@ -68,7 +67,7 @@ public:
 
 	virtual PartitionSlice getSlice(stduint dev = 0) override {
 		PartitionSlice slice = StorageTrait::getSlice(dev);
-		slice.sys_id = part_type;
+		slice.sys_id = (ClassicFilesysType)part_type;
 		return slice;
 	}
 };
@@ -100,7 +99,7 @@ static bool read(stduint diskno, stduint lba, void* buffer) {
 void R_MEMDISK_INIT() {
 	#if (_MCCA & 0xFF00) == 0x1000 || _MCCA == 0x8632
 	ploginfo("[Memdisk] Default FATVHD Size: %[x]", sizeof(_FOLLOW_VHD));
-	stduint sectype = FILESYS_FAT32_LBA;
+	stduint sectype = (stduint)ClassicFilesysType::FAT32_LBA;
 	auto dev0 = open(sliceof(_FOLLOW_VHD), sectype);
 	printlog(dev0 >= 0 ? _LOG_INFO : _LOG_ERROR, "[Memdisk] Created Memdisk %u, trying FAT", dev0);
 	if (auto fs = Filesys::Mount(*locate(0), 0, "/md0")) {
@@ -112,7 +111,7 @@ void R_MEMDISK_INIT() {
 		plogerro("[Memdisk] Invalid FAT image address or size");
 		return;
 	}
-	auto dev0 = open(uefi_data.fatvhd_addr, uefi_data.fatvhd_size, FILESYS_FAT32_LBA);
+	auto dev0 = open(uefi_data.fatvhd_addr, uefi_data.fatvhd_size, (stduint)ClassicFilesysType::FAT32_LBA);
 	printlog(dev0 >= 0 ? _LOG_INFO : _LOG_ERROR, "[Memdisk] Created Memdisk %u, trying FAT32", dev0);
 	if (dev0 < 0) return;
 	if (auto fs = Filesys::Mount(*locate(0), 0, "/md0")) {

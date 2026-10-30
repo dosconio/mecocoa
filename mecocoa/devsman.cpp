@@ -47,6 +47,7 @@ namespace Devs {
 	DeviceNode* device_root = nullptr;
 	#if (_MCCA & 0xFF00) == 0x8600
 	void discover_x86_acpi_devices();
+	void materialize_x86_acpi_floppy_nodes();
 	#endif
 	
 	#if (_MCCA & 0xFF00) == 0x8600
@@ -996,15 +997,6 @@ namespace Devs {
 			Devsman::RegisterPlatformDevice("lapic@0", "lapic");
 			Devsman::RegisterPlatformDevice("ioapic@0", "ioapic");
 		}
-		if (auto* fdc = Devsman::RegisterPlatformDevice(legacy_bus, "floppy@flc0", "flopdisk")) {
-			Devsman::AddIoPortResource(fdc, 0, 0x3F0, 8);
-			Devsman::AddIrqResource(fdc, IRQ_PIT + 6);
-			Devsman::AddDmaResource(fdc, 0, 2, 8);
-			auto* floppy0 = Devsman::RegisterStorageDevice(fdc, "floppy@0", DeviceBusType::ISA);
-			auto* floppy1 = Devsman::RegisterStorageDevice(fdc, "floppy@1", DeviceBusType::ISA);
-			Devsman::RegisterDevAlias(floppy0, "fd0");
-			Devsman::RegisterDevAlias(floppy1, "fd1");
-		}
 	}
 
 
@@ -1152,6 +1144,30 @@ namespace Devs {
 
 	bool x64_ioapic_has_gsi(uint32 gsi) {
 		return find_x64_ioapic(gsi) != nullptr;
+	}
+
+	bool x64_resolve_isa_irq(uint8 irq, uint32& gsi, bool& level_triggered, bool& active_low) {
+		// ACPI MADT Interrupt Source Override: ISA source, GSI, and MPS polarity/trigger flags.
+		if (irq >= 16) return false;
+		gsi = irq;
+		level_triggered = false;
+		active_low = false;
+		if (irq != 0) {
+			for0(index, interrupt_source_override_count) {
+				const auto& entry = interrupt_source_overrides[index];
+				if (entry.source != irq) continue;
+				const uint16 polarity = entry.flags & 3u;
+				const uint16 trigger = (entry.flags >> 2) & 3u;
+				// Match program_isa_irq_routes(): invalid overrides keep the legacy route.
+				if (!(entry.flags & ~uint16(0xFu)) && polarity != 2 && trigger != 2) {
+					gsi = entry.gsi;
+					active_low = polarity == 3;
+					level_triggered = trigger == 3;
+				}
+				break;
+			}
+		}
+		return x64_ioapic_has_gsi(gsi);
 	}
 
 	bool x64_ioapic_read_route(uint32 gsi, uint64& route) {
@@ -2617,6 +2633,10 @@ bool Devsman::Initialize() {
 
 
 
+	#endif
+	#if (_MCCA & 0xFF00) == 0x8600
+	// Both x86 targets use the same ACPI controller and CMOS drive discovery.
+	materialize_x86_acpi_floppy_nodes();
 	#endif
 	
 	#if (_MCCA & 0xFF00) == 0x8600 || (_MCCA & 0xFFFF) == 0x2032

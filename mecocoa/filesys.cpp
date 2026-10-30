@@ -2139,7 +2139,6 @@ stduint DevFs::writfl(void* fil_handler, Slice file_slice, const byte* src) {
 }
 
 // FS
-#include <c/format/filesys.h>
 #include <c/format/filesys/FAT.h>
 #include <c/format/filesys/CD.h>
 #if defined(_FILESYS_DATETIME) && ((_MCCA & 0xFF00) == 0x8600)
@@ -2230,7 +2229,7 @@ file_system_type fs_iso9660 = { "iso9660", [](StorageTrait& storage, stduint dev
 file_system_type fs_fat = { "fat", [](StorageTrait& storage, stduint dev) -> FilesysTrait* {
 		DiscPartition part(storage, dev);
 		if (part.getSlice().length == 0) return nullptr;
-		byte sys_id = part.getSlice().sys_id;
+		ClassicFilesysType sys_id = part.getSlice().sys_id;
 		auto try_fat = [&](int fat_ver) -> FilesysTrait* {
 			DiscPartition* p_part = new DiscPartition(storage, dev);
 			p_part->getSlice(); // initialize internal slice
@@ -2256,10 +2255,10 @@ file_system_type fs_fat = { "fat", [](StorageTrait& storage, stduint dev) -> Fil
 		};
 
 		// Prefer explicit type declaration. ESP is allowed to directly try FAT.
-		if (sys_id == FILESYS_FAT12) return try_fat(12);
-		if (sys_id == FILESYS_FAT16_CHS || sys_id == FILESYS_FAT16_CHSX || sys_id == FILESYS_FAT16_LBA) return try_fat(16);
-		if (sys_id == FILESYS_FAT32_CHS || sys_id == FILESYS_FAT32_LBA) return try_fat(32);
-		if (sys_id == FILESYS_EFI_SYS) {
+		if (sys_id == ClassicFilesysType::FAT12) return try_fat(12);
+		if (sys_id == ClassicFilesysType::FAT16_CHS || sys_id == ClassicFilesysType::FAT16_CHSX || sys_id == ClassicFilesysType::FAT16_LBA) return try_fat(16);
+		if (sys_id == ClassicFilesysType::FAT32_CHS || sys_id == ClassicFilesysType::FAT32_LBA) return try_fat(32);
+		if (sys_id == ClassicFilesysType::EFI_SYS) {
 			if (auto fs = try_fat(32)) return fs;
 			if (auto fs = try_fat(16)) return fs;
 			if (auto fs = try_fat(12)) return fs;

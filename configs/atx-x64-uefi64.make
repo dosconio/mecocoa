@@ -69,6 +69,7 @@ cppfile=\
 	$(ulibpath)/cpp/Device/DMA.cpp \
 	$(ulibpath)/cpp/Device/Timer.cpp \
 	$(ulibpath)/cpp/Device/Mouse.cpp \
+	$(ulibpath)/cpp/Device/Audio/SoundBlaster.cpp \
 	$(ulibpath)/cpp/Device/Video/Bochs-GrafAda.cpp \
 	$(ulibpath)/cpp/Device/Video/VMware-SVGA.cpp \
 	$(ulibpath)/cpp/Device/Video-VCI.cpp \
@@ -179,6 +180,13 @@ build_drvs:
 		DRV=vmci \
 		SRCS="devdriv/vmhost/vmci.cpp" \
 		build
+	@make -f devdriv/Makefile.$(TOOLSYS).x64 \
+		arch=$(arch) \
+		uincpath=$(uincpath) \
+		ubinpath=$(ubinpath) \
+		DRV=flopdisk \
+		SRCS="devdriv/storage/flopdisk.cpp $(ulibpath)/cpp/Device/Storage/Floppy.cpp $(ulibpath)/cpp/Device/DMA.cpp" \
+		build
 # (ASM TEMPLATE)
 #	echo MK a
 #	aasm subapps/_hello/asm/helloa-x64.asm -felf64 -o subapps/_hello/asm/helloa-x64.o
@@ -242,6 +250,10 @@ qemu_args=\
 # -drive if=none,id=usbdisk,file=/mnt/hgfs/tmp/ehci-stage7.img,format=raw
 # -device usb-ehci,id=ehci
 # -device usb-storage,id=storage0,bus=ehci.0,port=1,drive=usbdisk
+# ----
+# -audiodev pa,id=sb16audio \
+# -device sb16,audiodev=sb16audio,iobase=0x220,irq=5,dma=1,dma16=5 \
+
 
 run: build build_iso
 	@echo [ running] MCCA for $(arch)

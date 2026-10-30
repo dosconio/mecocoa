@@ -5,8 +5,9 @@
 #include "../../include/mecocoa.hpp"
 #include "dma-isa.hpp"
 
-#if _MCCA == 0x8632
+#if (_MCCA & 0xFF00) == 0x8600
 namespace {
+	// ISA DMA still uses the 8237 port interface on x64; callers supply a physical buffer below 16 MiB.
 	Spinlock isa_dma_lock;
 
 	void IsaDmaWrite8(void*, uint16 port, uint8 value) {

@@ -4,7 +4,6 @@
 
 #include "../../include/mecocoa.hpp"
 #include <c/storage/harddisk.h>
-#include <c/format/filesys.h>
 #include <cpp/Device/Bus/PCI.hpp>
 
 #if _MCCA == 0x8632
@@ -642,7 +641,7 @@ namespace {
 			auto& hdinfo = slot.disk.hd_info;
 			for (stduint part_dev = 1; part_dev <= hdinfo.part_count; ++part_dev) {
 				uni::PartitionSlice slice = GetPartitionSlice(hdinfo, part_dev);
-				if (slice.sys_id == 0x00 || slice.sys_id == FILESYS_EXT || slice.length == 0) continue;
+				if (slice.sys_id == ClassicFilesysType::None || slice.sys_id == ClassicFilesysType::EXT || slice.length == 0) continue;
 				String name;
 				name.Format("partition@%u", part_dev);
 				Devsman::RegisterStoragePartition(slot.node, name.reference(), slot.disk, part_dev);
@@ -653,8 +652,8 @@ namespace {
 			auto& hdinfo = slot.disk.hd_info;
 			for (stduint part_dev = 1; part_dev <= hdinfo.part_count; ++part_dev) {
 				uni::PartitionSlice slice = GetPartitionSlice(hdinfo, part_dev);
-				if (slice.sys_id == 0x00) continue;
-				if (slice.sys_id == FILESYS_EXT) continue;
+				if (slice.sys_id == ClassicFilesysType::None) continue;
+				if (slice.sys_id == ClassicFilesysType::EXT) continue;
 				String node_name;
 				node_name.Format("partition@%u", part_dev);
 				DeviceNode* part_node = Devsman::RegisterStoragePartition(

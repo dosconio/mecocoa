@@ -6,7 +6,6 @@
 
 #if (_MCCA & 0xFFFF) == 0x2032
 #include <cpp/Device/SD.hpp>
-#include <c/format/filesys.h>
 #include <c/format/filesys/FAT.h>
 
 _ESYM_C void R_SDCARD_INIT();

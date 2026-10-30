@@ -7,7 +7,6 @@
 
 #include "../../include/mecocoa.hpp"
 #include <c/storage/harddisk.h>
-#include <c/format/filesys.h>
 #include <cpp/atomic>
 #include <cpp/Device/Bus/PCI.hpp>
 
@@ -608,7 +607,7 @@ PartitionSlice Harddisk_PATA::getSlice(stduint dev) {
 		}
 		slice.address = 0;
 		slice.length = (getID() < numsof(disks) && disks[getID()]) ? disks[getID()]->getUnits() : 0;
-		slice.sys_id = 0;
+		slice.sys_id = ClassicFilesysType::None;
 		return slice;
 	}
 	HD_Info& hdinfo = (*hd_info)[getHigID() * 2 + getLowID()];
@@ -690,7 +689,7 @@ static void register_pata_partition_nodes(stduint disk_id) {
 	HD_Info& hdinfo = (*hd_info)[disk_id];
 	for (stduint part_dev = 1; part_dev <= hdinfo.part_count; ++part_dev) {
 		uni::PartitionSlice slice = GetPartitionSlice(hdinfo, part_dev);
-		if (slice.sys_id == 0x00 || slice.sys_id == FILESYS_EXT || slice.length == 0) continue;
+		if (slice.sys_id == ClassicFilesysType::None || slice.sys_id == ClassicFilesysType::EXT || slice.length == 0) continue;
 		String node_name = String::newFormat("partition@%u", part_dev);
 		Devsman::RegisterStoragePartition(
 			pata_storage_nodes[disk_id],
@@ -819,8 +818,8 @@ static bool start_pata_driver(DeviceNode* pata_node) {
 		HD_Info& hdinfo = (*hd_info)[i];
 		for (unsigned part_dev = 1; part_dev <= hdinfo.part_count; part_dev++) {
 			uni::PartitionSlice slice = GetPartitionSlice(hdinfo, part_dev);
-			byte sys_id = slice.sys_id;
-			if (sys_id == 0x00 || slice.sys_id == FILESYS_EXT || slice.length == 0) continue;
+			auto sys_id = slice.sys_id;
+			if (sys_id == ClassicFilesysType::None || slice.sys_id == ClassicFilesysType::EXT || slice.length == 0) continue;
 			String node_name = String::newFormat("partition@%u", part_dev);
 			DeviceNode* part_node = Devsman::RegisterStoragePartition(
 				pata_storage_nodes[i], node_name.reference(), (*disks[i]), part_dev);

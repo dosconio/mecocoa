@@ -6,6 +6,7 @@
 
 #if (_MCCA & 0xFF00) == 0x8600
 
+#include <c/board/IBM.h>
 #include <cpp/Device/ACPI.hpp>
 #include <cpp/Device/ACPI/AML.hpp>
 #include <cpp/Device/ACPI/ACPI-Resource.hpp>
@@ -3567,6 +3568,54 @@ namespace Devs {
 		}
 		#endif
 
+	}
+
+	void materialize_x86_acpi_floppy_nodes() {
+		for0(device_index, acpi_devices.Count()) {
+			const auto& device = acpi_devices[device_index];
+			// ACPI Specification 6.5: _HID/_CID identify the FDC, _STA enables it, and _CRS assigns its resources.
+			if (!(device.has_hid && equal_text(device.hid, "PNP0700")) &&
+				!(device.has_cid && text_list_contains(device.cid, "PNP0700"))) continue;
+			if (!acpi_device_is_present(uint16(device_index)) ||
+				(device.has_sta && !(device.sta & 2u)) || device.crs_dynamic) continue;
+
+			bool has_legacy_ports = false;
+			bool has_irq6 = false;
+			for0(resource_index, acpi_resource_count) {
+				const auto& resource = acpi_resources[resource_index];
+				if (resource.device_index != device_index) continue;
+				if (resource.type == AcpiResourceType::IoPort &&
+					resource.minimum == 0x3F0 && resource.length >= 6 && !resource.translation)
+					has_legacy_ports = true;
+				if (resource.type == AcpiResourceType::Irq &&
+					resource.value == translate_legacy_irq_to_GSI(6) &&
+					!(resource.flags & (DeviceResourceFlag_IrqLevel | DeviceResourceFlag_IrqActiveLow)))
+					has_irq6 = true;
+			}
+			// This driver still assumes the standard 0x3F0/IRQ6/DMA2 configuration.
+			if (!has_legacy_ports || !has_irq6) continue;
+
+			auto* fdc = Devsman::RegisterPlatformDevice("floppy@flc0", "flopdisk");
+			if (!fdc) return;
+			if (!attach_acpi_info(fdc, uint16(device_index)))
+				plogwarn("[FLOPPY] Failed to attach ACPI information for %s", device.path);
+			Devsman::AddIoPortResource(fdc, 0, 0x3F0, 8);
+			Devsman::AddIrqResource(fdc, IRQ_PIT + 6);
+			Devsman::AddDmaResource(fdc, 0, 2, 8);
+
+			// CMOS register 0x10 describes drives A/B, not whether the FDC exists.
+			outpb(PORT_CMOS_ADDR, CMOS_FLOPPY_TYPE);
+			const uint8 drive_types = innpb(PORT_CMOS_DATA);
+			if (drive_types >> 4) {
+				if (auto* floppy0 = Devsman::RegisterStorageDevice(fdc, "floppy@0", DeviceBusType::ISA))
+					Devsman::RegisterDevAlias(floppy0, "fd0");
+			}
+			if (drive_types & 0x0Fu) {
+				if (auto* floppy1 = Devsman::RegisterStorageDevice(fdc, "floppy@1", DeviceBusType::ISA))
+					Devsman::RegisterDevAlias(floppy1, "fd1");
+			}
+			return;
+		}
 	}
 
 	void discover_x86_acpi_devices() {

@@ -419,7 +419,7 @@ namespace Devs {
 				stduint registered = 0;
 				for (stduint i = 0; i < partitions_.Count(); ++i) {
 					const auto slice = partitions_[i].slice;
-					if (!slice.length || !slice.sys_id || slice.sys_id == Part_EX_PART)
+					if (!slice.length || !_IMM(slice.sys_id) || slice.sys_id == ClassicFilesysType::EXT)
 						continue;
 					auto name = String::newFormat("partition@%u", i + 1);
 					auto* node = Devsman::RegisterStoragePartition(storage_node_,

@@ -17,7 +17,7 @@ enum {
 	#if _MCCA == 0x8664 && defined(_UEFI)
 	Task_Usb_Serv,
 	#endif
-	#if _MCCA == 0x8632 || _ACCM == 0x8632
+	#if (_MCCA & 0xFF00) == 0x8600 || (_ACCM & 0xFF00) == 0x8600
 	Task_Audio_Serv,
 	#endif
 	Task_Init,

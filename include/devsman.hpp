@@ -569,6 +569,7 @@ namespace Devs {
 	};
 
 	#if defined(_MCCA) && _MCCA == 0x8664
+	bool x64_resolve_isa_irq(uint8 irq, uint32& gsi, bool& level_triggered, bool& active_low);
 	bool x64_ioapic_has_gsi(uint32 gsi);
 	bool x64_ioapic_read_route(uint32 gsi, uint64& route);
 	bool x64_ioapic_write_route(uint32 gsi, uint64 route);

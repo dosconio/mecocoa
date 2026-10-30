@@ -143,7 +143,7 @@ namespace Powercall {
 		if (!dev) {
 			slice.address = 0;
 			slice.length = block_count;
-			slice.sys_id = byte(slice_type);
+			slice.sys_id = (ClassicFilesysType)byte(slice_type);
 		}
 		return slice;
 	}

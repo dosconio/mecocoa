@@ -382,6 +382,10 @@ static bool parse_uefi(const MemoryMap& memory_map);
 #endif
 
 
+#if (_MCCA & 0xFF00) == 0x8600
+static stduint isa_dma_pool_base = 0;
+#endif
+
 void Memory::AppendAvailableRange(stduint beg, stduint end) {
 	beg = ceilAlign(0x1000, beg);
 	end = floorAlign(0x1000, end);
@@ -395,22 +399,42 @@ void Memory::AppendAvailableRange(stduint beg, stduint end) {
 	}
 	#endif
 
+	auto append_available = [](stduint first, stduint last) {
+		if (first >= last) return;
+		#if (_MCCA & 0xFF00) == 0x8600
+		// ISA DMA needs a 64KB-aligned physical window below the 16MB address limit.
+		if (!isa_dma_pool_base && first < 0x01000000u) {
+			const stduint candidate = ceilAlign(0x10000, first);
+			if (candidate + 0x10000 <= last && candidate + 0x10000 <= 0x01000000u) {
+				if (first < candidate) {
+					mempool.Append(Slice{ first, candidate - first });
+					Memory::total_memsize += candidate - first;
+				}
+				isa_dma_pool_base = candidate;
+				DmaLowPoolInit(candidate);
+				first = candidate + 0x10000;
+			}
+		}
+		#endif
+		if (first < last) {
+			mempool.Append(Slice{ first, last - first });
+			Memory::total_memsize += last - first;
+		}
+	};
+
 	// Exclude Kernel Image: FILE_ENTO .. FILE_ENDO
 	if (_IMM(&FILE_ENTO) < _IMM(&FILE_ENDO)) {
 		stduint k_beg = floorAlign(0x1000, _IMM(&FILE_ENTO));
 		stduint k_end = ceilAlign(0x1000, _IMM(&FILE_ENDO));
 		if (end <= k_beg || beg >= k_end) {
-			mempool.Append(Slice{ beg, end - beg });
-			Memory::total_memsize += end - beg;
+			append_available(beg, end);
 		}
 		else {
 			if (beg < k_beg) {
-				mempool.Append(Slice{ beg, k_beg - beg });
-				Memory::total_memsize += k_beg - beg;
+				append_available(beg, k_beg);
 			}
 			if (end > k_end) {
-				mempool.Append(Slice{ k_end, end - k_end });
-				Memory::total_memsize += end - k_end;
+				append_available(k_end, end);
 			}
 		}
 	}
@@ -425,6 +449,8 @@ bool Memory::initialize(stduint eax, byte* ebx) {
 	mempool0.expand_only_from_self = true;
 	mempool.Reset();
 	Memory::total_memsize = 0;
+	isa_dma_pool_base = 0;
+	DmaLowPoolInit(0);
 
 	// x64 has default paging now
 	#if _MCCA == 0x8632
@@ -583,11 +609,8 @@ bool Memory::initialize(stduint eax, byte* ebx) {
 
 	#if (_MCCA & 0xFF00) == 0x8600
 	#undef ACPI_BOOT_ERROR
-	void* dma_phys = mempool.allocate(0x10000, 16, 16);
-	if (dma_phys && stduint(dma_phys) + 0x10000 <= 0x01000000) {
-		DmaLowPoolInit(stduint(dma_phys));
-		ploginfo("[MEM] ISA DMA 64KB low pool reserved at %[x]", (stduint)dma_phys);
-	}
+	if (isa_dma_pool_base)
+		ploginfo("[MEM] ISA DMA 64KB low pool reserved at %[x]", isa_dma_pool_base);
 	else {
 		plogwarn("[MEM] Failed to reserve ISA DMA low pool (<16MB)");
 	}

@@ -9,7 +9,7 @@
 #include <cpp/System/Network/Layer/Transport/TCP.hpp>
 #include <cpp/System/Network/Layer/Transport/UDP.hpp>
 #include <cpp/ISO_IEC_STD/memory>
-#include <cpp/trait/FilesysTrait.hpp>
+#include <cpp/System/Filesys.hpp>
 #include <cpp/trait/StorageTrait.hpp>
 
 struct DeviceNode;

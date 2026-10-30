@@ -1150,7 +1150,7 @@ namespace {
 		for (stduint partition = 1; partition <= partitions.part_count;
 			++partition) {
 			const auto slice = GetPartitionSlice(partitions, partition);
-			if (!slice.length || !slice.sys_id || slice.sys_id == Part_EX_PART) {
+			if (!slice.length || !_IMM(slice.sys_id) || slice.sys_id == ClassicFilesysType::EXT) {
 				continue;
 			}
 			auto name = String::newFormat("partition@%u", partition);
