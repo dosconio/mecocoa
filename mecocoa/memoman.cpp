@@ -1291,6 +1291,13 @@ bool LockedAllocator::deallocate(void* ptr, stduint size) {
 	return ret;
 }
 
+bool LockedAllocator::Reserve(const Slice& slice) {
+	bool old_if = mempool_lock.Acquire();
+	bool ret = base_allocator->Reserve(slice);
+	mempool_lock.Release(old_if);
+	return ret;
+}
+
 // ---- INTERFACE ----
 
 #if 1
@@ -1483,24 +1490,56 @@ _ESYM_C void* realloc(void* ptr, size_t size) {
 namespace {
 	struct DmaLowPool {
 		stduint base_phys = 0;
-		uint16 page_bitmap = 0; // 1 bit per 4KB page (0: free, 1: used), 16 pages = 64KB
+		byte page_bitmap[0x00800000 / (0x1000 * 8)] = {}; // 1 bit per 4KB page (0: free, 1: used), 16 pages = 64KB
+		// Ownership is separate: holes and existing mempool allocations must never become DMA pages.
+		byte pool_page_bits[sizeof(page_bitmap)] = {};
+		stduint page_count = 16;
+		stduint reserved_bytes = 0;
 		Spinlock lock;
 
 		void Init(stduint base) {
 			base_phys = base;
-			page_bitmap = 0;
+			if (base) {
+				uni::Bitmap pool_pages(pool_page_bits, sizeof(pool_page_bits));
+				for0(page, 16) pool_pages.setof(page);
+				reserved_bytes = 0x10000;
+			}
+		}
+
+		stduint Expand() {
+			if (!base_phys) return 0;
+			if (uint64(Memory::total_memsize) + reserved_bytes <= 0x02000000)
+				return reserved_bytes;
+			const stduint limit = minof(base_phys + 0x00800000u, stduint(0x01000000));
+			page_count = (limit - base_phys) >> 12;
+			uni::Bitmap pool_pages(pool_page_bits, sizeof(pool_page_bits));
+			// Boot-only, after all parsers: existing allocations remain in the normal mempool.
+			for0(i, page_count - 16) {
+				const stduint page = i + 16;
+				if (!mempool.Reserve(Slice{ base_phys + (page << 12), 0x1000 })) continue;
+				pool_pages.setof(page);
+				reserved_bytes += 0x1000;
+				Memory::total_memsize -= 0x1000;
+			}
+			return reserved_bytes;
 		}
 
 		void* Allocate(stduint bytes) {
-			if (!base_phys || !bytes) return nullptr;
+			if (!base_phys || !bytes || bytes > 0x10000) return nullptr;
 			stduint pages = (bytes + 0xFFF) >> 12;
-			if (pages > 16) return nullptr;
 			SpinlockLocal guard(&lock);
-			for (stduint i = 0; i <= 16 - pages; ++i) {
-				uint16 mask = uint16(((1u << pages) - 1u) << i);
-				if ((page_bitmap & mask) == 0) {
-					page_bitmap |= mask;
-					return reinterpret_cast<void*>(base_phys + (i << 12));
+			uni::Bitmap pool_pages(pool_page_bits, sizeof(pool_page_bits));
+			uni::Bitmap used_pages(page_bitmap, sizeof(page_bitmap));
+			// Keep the existing 64KB transfer boundary for every returned buffer.
+			for0(window, page_count >> 4) {
+				for0(i, 17 - pages) {
+					const stduint first = (window << 4) + i;
+					stduint count = 0;
+					while (count < pages && pool_pages.bitof(first + count) &&
+						!used_pages.bitof(first + count)) ++count;
+					if (count != pages) continue;
+					for0(page, pages) used_pages.setof(first + page);
+					return reinterpret_cast<void*>(base_phys + (first << 12));
 				}
 			}
 			return nullptr;
@@ -1508,19 +1547,29 @@ namespace {
 
 		bool Deallocate(void* ptr, stduint bytes) {
 			stduint addr = reinterpret_cast<stduint>(ptr);
-			if (!base_phys || addr < base_phys || addr >= base_phys + 0x10000) return false;
+			if (!base_phys || addr < base_phys || (addr & 0xFFF) || bytes > 0x10000)
+				return false;
 			stduint start_page = (addr - base_phys) >> 12;
 			stduint pages = bytes ? ((bytes + 0xFFF) >> 12) : 1;
-			if (start_page + pages > 16) pages = 16 - start_page;
-			uint16 mask = uint16(((1u << pages) - 1u) << start_page);
+			if (start_page >= page_count || pages > page_count - start_page ||
+				(start_page & 15) + pages > 16) return false;
 			SpinlockLocal guard(&lock);
-			page_bitmap &= ~mask;
+			uni::Bitmap pool_pages(pool_page_bits, sizeof(pool_page_bits));
+			uni::Bitmap used_pages(page_bitmap, sizeof(page_bitmap));
+			for0(page, pages) {
+				if (!pool_pages.bitof(start_page + page) ||
+					!used_pages.bitof(start_page + page)) return false;
+			}
+			for0(page, pages) used_pages.setof(start_page + page, false);
 			return true;
 		}
 
 		bool IsInRange(void* ptr) const {
 			stduint addr = reinterpret_cast<stduint>(ptr);
-			return base_phys && addr >= base_phys && addr < base_phys + 0x10000;
+			if (!base_phys || addr < base_phys || ((addr - base_phys) >> 12) >= page_count)
+				return false;
+			uni::Bitmap pool_pages(const_cast<byte*>(pool_page_bits), sizeof(pool_page_bits));
+			return pool_pages.bitof((addr - base_phys) >> 12);
 		}
 	};
 
@@ -1529,6 +1578,10 @@ namespace {
 
 void DmaLowPoolInit(stduint base_phys) {
 	dma_low_pool.Init(base_phys);
+}
+
+stduint DmaLowPoolExpand() {
+	return dma_low_pool.Expand();
 }
 
 void* DmaLowAlloc(stduint bytes) {

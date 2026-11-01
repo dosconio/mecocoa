@@ -166,6 +166,7 @@ public:
 	void Reset() { base_allocator->Reset(); }
 	void Reset(const Slice& slice) { base_allocator->Reset(slice); }
 	void Append(const Slice& slice) { base_allocator->Append(slice); }
+	bool Reserve(const Slice& slice);
 };
 extern LockedAllocator mempool;
 
@@ -271,6 +272,7 @@ word GDT_Alloc();
 
 #if (_MCCA & 0xFF00) == 0x8600
 void DmaLowPoolInit(stduint base_phys);
+stduint DmaLowPoolExpand();
 void* DmaLowAlloc(stduint bytes);
 bool DmaLowFree(void* ptr, stduint bytes = 0);
 bool DmaLowIsInRange(void* ptr);

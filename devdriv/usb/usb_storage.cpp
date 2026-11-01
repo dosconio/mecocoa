@@ -8,7 +8,7 @@
 // #include <c/storage/AHCI.h>
 // #include <c/storage/NVMe.h>
 // #include <cpp/System/Audiosys/AudioManager.hpp>
-#if _MCCA == 0x8664
+#if (_MCCA & 0xFF00) == 0x8600 && CONFIG_ENABLE_USB
 #include <cpp/Device/USB/USB.hpp>
 #include <cpp/Device/USB/USBHost-MSC.hpp>
 #endif
@@ -17,7 +17,7 @@
 #include "c/proctrl/IAx86_64.msr.h"
 #endif
 
-#if _MCCA == 0x8664
+#if (_MCCA & 0xFF00) == 0x8600 && CONFIG_ENABLE_USB
 namespace Devs {
 	namespace {
 		using USBHostDevice = uni::device::SpaceUSB::USBHostDevice;
@@ -154,10 +154,8 @@ namespace Devs {
 				auto* thread = Taskman::CurrentTB();
 				if (!thread || Taskman::CurrentTID() == Task_Devsman || !driver_ ||
 					!IsOnline()) return false;
-				#if defined(_UEFI)
 				if (thread->parent_process &&
 					thread->parent_process->pid == Task_Usb_Serv) return false;
-				#endif
 
 				waiter_.store(thread, uni::MemoryOrder_Release);
 				pending_command_id_.store(0, uni::MemoryOrder_Release);

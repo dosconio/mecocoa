@@ -4,6 +4,13 @@
 #include <c/stdinc.h>
 #include <cpp/string>
 
+// Keep configured service IDs identical in the kernel and _ACCM consumers.
+#ifndef MECOCOA_HPP_
+#if __has_include("autoconf.h")
+#include "autoconf.h"
+#endif
+#endif
+
 enum {
 	Task_Kernel,
 	Task_TaskMan,
@@ -14,7 +21,7 @@ enum {
 	#if (_MCCA & 0xFF00) == 0x8600 || (_ACCM & 0xFF00) == 0x8600
 	Task_Net_Serv,
 	#endif
-	#if _MCCA == 0x8664 && defined(_UEFI)
+	#if (((_MCCA & 0xFF00) == 0x8600) || ((_ACCM & 0xFF00) == 0x8600)) && CONFIG_ENABLE_USB
 	Task_Usb_Serv,
 	#endif
 	#if (_MCCA & 0xFF00) == 0x8600 || (_ACCM & 0xFF00) == 0x8600

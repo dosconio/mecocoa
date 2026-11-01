@@ -26,6 +26,7 @@ extern "C" void Handint_KBD_Entry();
 extern "C" void Handint_KBD();
 extern "C" void Handint_MOU_Entry();
 extern "C" void Handint_MOU();
+extern "C" void Handint_XHCI_Entry();
 extern "C" void Handint_FLP_Entry();
 extern "C" void Handint_FLP();
 extern "C" void Handint_SB16_Entry();

@@ -52,187 +52,58 @@ void Handint_KBD() {
 }
 
 static void setLED_ps2() {
+	// USB class drivers update their own LEDs; mirror the shared lock state to PS/2.
 	KbdSetLED((_IMM(kbd_state.lock_caps) << 2) | (_IMM(kbd_state.lock_number) << 1) | _IMM(kbd_state.lock_scroll));
 }
 
 KeyboardBridge kbdbridge;
 extern BareConsole Bcons[TTY_NUMBER];
+void hand_kboard(keyboard_event_t event);
+
 int KeyboardBridge::out(const char* str, stduint len) {
 	static bool last_E0 = false;
+	// Keep a decoder-local modifier snapshot: queued events may not have been processed yet.
+	static byte modifiers = 0;
 	extern const byte key_ps2set1_usb[128];
 	extern const uint8_t key_ps2set1_usb_E0[128];
 
 	for0(i, len) {
-		byte ch = str[i];
+		const byte ch = str[i];
 		if (ch == 0xE0) {
 			last_E0 = true;
 			continue;
 		}
 
+		const byte scancode = ch & 0x7F;
+		const byte vkc = last_E0 ? key_ps2set1_usb_E0[scancode] : key_ps2set1_usb[scancode];
+		last_E0 = false;
+		if (!vkc) continue;
+
 		keyboard_event_t event = {};
-		event.mod = kbd_state.mod;
 		event.method = (ch & 0x80) ? keyboard_event_t::method_t::keyup : keyboard_event_t::method_t::keydown;
-		
-		byte scancode = ch & 0x7F;
-		byte vkc = 0;
-
-		if (last_E0) {
-			vkc = key_ps2set1_usb_E0[scancode];
-			last_E0 = false;
-		} else {
-			vkc = key_ps2set1_usb[scancode];
+		event.keycode = vkc;
+		if (vkc >= 0xE0 && vkc <= 0xE7) {
+			const byte bit = 1 << (vkc - 0xE0);
+			if (event.method == keyboard_event_t::method_t::keydown) modifiers |= bit;
+			else modifiers &= ~bit;
+			// Match USB HID reports: modifier changes use keycode zero.
+			event.keycode = 0;
 		}
-
-		if (vkc) {
-			event.keycode = vkc;
-			// Update Modifiers Inline
-			if (vkc >= 0xE0 && vkc <= 0xE7) {
-				byte bit = 1 << (vkc - 0xE0);
-				if (event.method == keyboard_event_t::method_t::keydown) {
-					kbd_state.mod_val |= bit;
-				} else {
-					kbd_state.mod_val &= ~bit;
-				}
-				event.mod = kbd_state.mod;
-			}
-			
-			// Global Hotkeys
-			if (event.method == keyboard_event_t::method_t::keydown && (event.mod.l_logo || event.mod.r_logo)) {
-				if (event.keycode == 0x06) { // Win + C
-					SysMessage msg;
-					msg.type = SysMessage::RUPT_NEW_TERM;
-					message_queue_conv.Lock()->Enqueue(msg);
-				}
-				else if (event.keycode == 0x15) { // Win + R (R is 0x15 in USB HID)
-					// TEMP
-					SysMessage msg;
-					msg.type = SysMessage::RUPT_SET_RES;
-					static int s_res_idx = 0;
-					s_res_idx = (s_res_idx + 1) % 3;
-					if (s_res_idx == 0) { msg.args.res.width = 1024; msg.args.res.height = 768; }
-					else if (s_res_idx == 1) { msg.args.res.width = 800; msg.args.res.height = 600; }
-					else if (s_res_idx == 2) { msg.args.res.width = 1280; msg.args.res.height = 720; }
-					message_queue_conv.Lock()->Enqueue(msg);
-				}
-				return 0; // Intercept: do not pass to VTTY or other sheets
-			}
-			else if (event.method == keyboard_event_t::method_t::keydown && event.keycode == _USB_IF_KEYENUM::_UKEY_CAPSLOCK) {
-				kbd_state.lock_caps = !kbd_state.lock_caps; setLED_ps2();
-				continue;
-			}
-			else if (event.method == keyboard_event_t::method_t::keydown && event.keycode == _USB_IF_KEYENUM::_UKEY_NUMLOCK) {
-				kbd_state.lock_number = !kbd_state.lock_number; setLED_ps2();
-				continue;
-			}
-			else if (event.method == keyboard_event_t::method_t::keydown && event.keycode == _USB_IF_KEYENUM::_UKEY_SCROLLLOCK) {
-				kbd_state.lock_scroll = !kbd_state.lock_scroll; setLED_ps2();
-				continue;
-			}
-			else if (event.method == keyboard_event_t::method_t::keydown) {
-				auto ascii_ch = (kbd_state.mod.l_shift || kbd_state.mod.r_shift ? key_map_shift : key_map)[event.keycode];
-				if (!ascii_ch && kbd_state.lock_number && event.keycode >= 0x59 && event.keycode <= 0x63) {
-					ascii_ch = key_map_shift[event.keycode];
-				}
-
-				#if !_GUI_ENABLE
-				BareConsole* ttycon = static_cast<BareConsole*>((Console_t*)ttys[Consman::current_screen_TTY]->offs);
-				if (!ttycon) {
-					plogerro("assert ttycons");
-				}
-				auto p_vtty = vttys[Consman::current_screen_TTY];
-				if (!p_vtty) {
-					plogerro("assert p_vtty");
-				}
-				#endif
-				#if !_GUI_ENABLE
-				if (event.keycode == _USB_IF_KEYENUM::_UKEY_PAGEUP && ttycon->crtline > 0) {
-					ttycon->auto_incbegaddr = 0;
-					ttycon->setStartLine(--ttycon->crtline + ttycon->topline);
-				}
-				else if (event.keycode == _USB_IF_KEYENUM::_UKEY_PAGEDOWN && ttycon->crtline < ttycon->area_total.y - ttycon->area_show.height) {
-					ttycon->auto_incbegaddr = 0;
-					ttycon->setStartLine(++ttycon->crtline + ttycon->topline);
-				}
-				else if (Ranglin(event.keycode, 0x3A, 4))// F1~4 doshow
-				{
-					unsigned tty_no = event.keycode - 0x3A;
-					Bcons_EnsureCot(tty_no);
-					Bcons[tty_no].doshow(pureptr_t(tty_no));
-				}
-				#endif
-				if (ascii_ch) {
-					#if _GUI_ENABLE
-					// Delegate keyboard event to serv_graf_loop to avoid
-					// accessing last_click_sheet in interrupt context.
-					// Direct onrupt() here causes UAF when GraphicMsg_FDEL deletes the sheet.
-					{
-						SysMessage msg;
-						msg.type = SysMessage::RUPT_KBD;
-						msg.args.kbd_event = event;
-						message_queue_conv.Lock()->Enqueue(msg);
-					}
-					return 0; // Intercept: event will be forwarded in serv_graf_loop
-					#else
-					// Check for Ctrl+C to trigger SIGINT (Non-GUI Mode, exclude Shift)
-					if ((kbd_state.mod.l_ctrl || kbd_state.mod.r_ctrl) && !kbd_state.mod.l_shift && !kbd_state.mod.r_shift && ascii_ch == 'c') {
-						if (p_vtty && p_vtty->type) {
-							auto pblock = (vtty_type_t*)p_vtty->type;
-							for (stduint idx = 0; idx < pblock->proc_group.Count(); idx++) {
-								stduint target_pid = pblock->proc_group[idx];
-								if (target_pid >= TaskCount && target_pid != pblock->master_pid) {
-									sys_kill(target_pid, SIGINT, 0);
-								}
-							}
-						}
-						return 0;
-					}
-					// Translate Ctrl + letters to control characters (e.g., Ctrl+D -> 0x04)
-					if ((kbd_state.mod.l_ctrl || kbd_state.mod.r_ctrl) && !kbd_state.mod.l_shift && !kbd_state.mod.r_shift) {
-						if (ascii_ch >= 'a' && ascii_ch <= 'z') {
-							ascii_ch = ascii_ch - 'a' + 1;
-						}
-					}
-					VTTY_INNQ(p_vtty)->Enqueue({(byte)ascii_ch, event.keycode});
-					Consman::WakeBlockedWaitersDeferred();
-					#endif
-				}
-				#if !_GUI_ENABLE
-				else if (event.keycode) {
-					// No character for this key yet it is meaningful: enqueue the keycode alone.
-					VTTY_INNQ(p_vtty)->Enqueue({0, event.keycode});
-					Consman::WakeBlockedWaitersDeferred();
-				}
-				#endif
-			}
-			else if (event.method == keyboard_event_t::method_t::keyup) {
-				#if !_GUI_ENABLE
-				if (event.keycode) {
-					auto p_vtty_up = vttys[Consman::current_screen_TTY];
-					if (p_vtty_up) {
-						VTTY_INNQ(p_vtty_up)->Enqueue({_VTTY_MASK_INN_UP, event.keycode});
-						Consman::WakeBlockedWaitersDeferred();
-					}
-				}
-				#endif
-			}
-		}
-		// Forward ALL keyboard events (down/up/repeat) to focused window
-		#if _GUI_ENABLE
-		// Delegate keyboard event to serv_graf_loop to avoid
-		// accessing last_click_sheet in interrupt context.
-		{
-			SysMessage msg;
-			msg.type = SysMessage::RUPT_KBD;
-			msg.args.kbd_event = event;
-			message_queue_conv.Lock()->Enqueue(msg);
-		}
-		#else
-		if (asrtand(Consman::last_click_sheet)->refSheetNode().next) {
-			Consman::last_click_sheet->onrupt(SheetEvent::onKeybd, Point(0, 0), &event);
-			Consman::WakeBlockedWaitersDeferred();
-		}
-		#endif
+		event.mod_val = modifiers;
+		hand_kboard(event);
 	}
+	return 0;
+}
+
+#endif
+
+// PS/2 and USB share the same normalized keyboard-event processing.
+#if (_MCCA & 0xFF00) == 0x8600
+
+void sysmsg_kbd(keyboard_event_t kbd_event) {
+	// Both transports supply a modifier snapshot; only this consumer changes shared state.
+	kbd_state.mod = kbd_event.mod;
+
 	// Render the bottom ribbon
 	#if !_GUI_ENABLE
 	struct element { byte ch; byte attr; };
@@ -242,54 +113,86 @@ int KeyboardBridge::out(const char* str, stduint len) {
 		Ribbon[1].attr = kbd_state.mod.l_shift ? 0x70 : 0x07;
 		Ribbon[2].attr = kbd_state.mod.l_alt ? 0x70 : 0x07;
 		Ribbon[77].attr = kbd_state.mod.r_alt ? 0x70 : 0x07;
-		Ribbon[78].attr = kbd_state.mod.r_shift ? 0x70 : 0x07;
+		Ribbon[78].attr = kbd_state.mod.r_alt ? 0x70 : 0x07;
 		Ribbon[79].attr = kbd_state.mod.r_ctrl ? 0x70 : 0x07;
 	}
 	#endif
-	return 0;
-}
 
-#endif
+	if (!kbd_event.keycode) return;
+	if (kbd_event.method == keyboard_event_t::method_t::keydown &&
+		kbd_event.keycode == _USB_IF_KEYENUM::_UKEY_CAPSLOCK) {
+		kbd_state.lock_caps = !kbd_state.lock_caps; setLED_ps2();
+		return;
+	}
+	if (kbd_event.method == keyboard_event_t::method_t::keydown &&
+		kbd_event.keycode == _USB_IF_KEYENUM::_UKEY_NUMLOCK) {
+		kbd_state.lock_number = !kbd_state.lock_number; setLED_ps2();
+		return;
+	}
+	if (kbd_event.method == keyboard_event_t::method_t::keydown &&
+		kbd_event.keycode == _USB_IF_KEYENUM::_UKEY_SCROLLLOCK) {
+		kbd_state.lock_scroll = !kbd_state.lock_scroll; setLED_ps2();
+		return;
+	}
 
-// USB3-KBD
-#if _MCCA == 0x8664// x64 only now
-
-static void setLED() {
-	// {} KbdSetLED((_IMM(kbd_state.lock_caps) << 2) | (_IMM(kbd_state.lock_number) << 1) | _IMM(kbd_state.lock_scroll));
-}
-
-void sysmsg_kbd(keyboard_event_t kbd_event) {
-	if (!kbd_event.keycode) {
-		kbd_state.mod = kbd_event.mod;
-	}
-	else if (kbd_event.method == keyboard_event_t::method_t::keydown && kbd_event.keycode == 0x39) { // CapsLock
-		kbd_state.lock_caps = !kbd_state.lock_caps; setLED();
-	}
-	else if (kbd_event.method == keyboard_event_t::method_t::keydown && kbd_event.keycode == 0x53) { // NumLock
-		kbd_state.lock_number = !kbd_state.lock_number; setLED();
-	}
-	else if (kbd_event.method == keyboard_event_t::method_t::keydown && kbd_event.keycode == 0x47) { // ScrollLock
-		kbd_state.lock_scroll = !kbd_state.lock_scroll; setLED();
-	}
-	else if (kbd_event.method == keyboard_event_t::method_t::keydown && (kbd_state.mod.l_logo || kbd_state.mod.r_logo)) {
+	// Global Hotkeys
+	if (kbd_event.method == keyboard_event_t::method_t::keydown &&
+		(kbd_state.mod.l_logo || kbd_state.mod.r_logo)) {
 		if (kbd_event.keycode == 0x06) { // Win + C
 			// Global Hotkey: Win + C
 			SysMessage msg;
 			msg.type = SysMessage::RUPT_NEW_TERM;
 			message_queue_conv.Lock()->Enqueue(msg);
 		}
+		else if (kbd_event.keycode == 0x15) { // Win + R (R is 0x15 in USB HID)
+			// TEMP
+			SysMessage msg;
+			msg.type = SysMessage::RUPT_SET_RES;
+			static int s_res_idx = 0;
+			s_res_idx = (s_res_idx + 1) % 3;
+			if (s_res_idx == 0) { msg.args.res.width = 1024; msg.args.res.height = 768; }
+			else if (s_res_idx == 1) { msg.args.res.width = 800; msg.args.res.height = 600; }
+			else if (s_res_idx == 2) { msg.args.res.width = 1280; msg.args.res.height = 720; }
+			message_queue_conv.Lock()->Enqueue(msg);
+		}
+		return; // Intercept: do not pass to VTTY or other sheets
 	}
-	else {
-		if (kbd_event.method == keyboard_event_t::method_t::keydown) {
+
+	if (!Consman::ento_gui) {
+		if (kbd_event.method == keyboard_event_t::method_t::keydown ||
+			kbd_event.method == keyboard_event_t::method_t::keyrepeat) {
 			auto ch = (kbd_state.mod.l_shift || kbd_state.mod.r_shift ? key_map_shift : key_map)[kbd_event.keycode];
 			if (!ch && kbd_state.lock_number && kbd_event.keycode >= 0x59 && kbd_event.keycode <= 0x63) {
 				// NumPad adjustments
 				ch = key_map_shift[kbd_event.keycode];
 			}
+
+			#if !_GUI_ENABLE
+			BareConsole* ttycon = static_cast<BareConsole*>((Console_t*)ttys[Consman::current_screen_TTY]->offs);
+			if (!ttycon) {
+				plogerro("assert ttycons");
+				return;
+			}
+			if (kbd_event.keycode == _USB_IF_KEYENUM::_UKEY_PAGEUP && ttycon->crtline > 0) {
+				ttycon->auto_incbegaddr = 0;
+				ttycon->setStartLine(--ttycon->crtline + ttycon->topline);
+			}
+			else if (kbd_event.keycode == _USB_IF_KEYENUM::_UKEY_PAGEDOWN && ttycon->crtline < ttycon->area_total.y - ttycon->area_show.height) {
+				ttycon->auto_incbegaddr = 0;
+				ttycon->setStartLine(++ttycon->crtline + ttycon->topline);
+			}
+			else if (Ranglin(kbd_event.keycode, 0x3A, 4))// F1~4 doshow
+			{
+				unsigned tty_no = kbd_event.keycode - 0x3A;
+				Bcons_EnsureCot(tty_no);
+				Bcons[tty_no].doshow(pureptr_t(tty_no));
+			}
+			#endif
+
+			auto p_vtty = vttys[Consman::current_screen_TTY];
 			// Check for Ctrl+C to trigger SIGINT (Non-GUI Mode, exclude Shift)
 			#if !_GUI_ENABLE
 			if ((kbd_state.mod.l_ctrl || kbd_state.mod.r_ctrl) && !kbd_state.mod.l_shift && !kbd_state.mod.r_shift && ch == 'c') {
-				auto p_vtty = vttys[Consman::current_screen_TTY];
 				if (p_vtty && p_vtty->type) {
 					auto pblock = (vtty_type_t*)p_vtty->type;
 					for (stduint idx = 0; idx < pblock->proc_group.Count(); idx++) {
@@ -302,32 +205,43 @@ void sysmsg_kbd(keyboard_event_t kbd_event) {
 				return;
 			}
 			#endif
-			if (!Consman::ento_gui) {
-				// Ctrl + letter -> control character
-				if ((kbd_state.mod.l_ctrl || kbd_state.mod.r_ctrl) && !kbd_state.mod.l_shift && !kbd_state.mod.r_shift) {
-					if (ch >= 'a' && ch <= 'z') {
-						ch = ch - 'a' + 1;
-					}
-				}
-				auto p_vtty = vttys[Consman::current_screen_TTY];
-				if (auto* q = VTTY_INNQ(p_vtty)) {
-					q->Enqueue({(byte)ch, kbd_event.keycode});
-				}
-				return;
+			// Translate Ctrl + letters to control characters (e.g., Ctrl+D -> 0x04)
+			if ((kbd_state.mod.l_ctrl || kbd_state.mod.r_ctrl) && !kbd_state.mod.l_shift && !kbd_state.mod.r_shift) {
+				if (ch >= 'a' && ch <= 'z') ch = ch - 'a' + 1;
+			}
+			if (auto* q = VTTY_INNQ(p_vtty)) {
+				// No character for this key yet it is meaningful: enqueue the keycode alone.
+				q->Enqueue({(byte)ch, kbd_event.keycode});
 			}
 		}
-		if (asrtand(Consman::last_click_sheet)->refSheetNode().next) {
-			Consman::last_click_sheet->onrupt(SheetEvent::onKeybd, Point(0, 0), &kbd_event);
+		else if (kbd_event.method == keyboard_event_t::method_t::keyup) {
+			auto p_vtty = vttys[Consman::current_screen_TTY];
+			if (auto* q = VTTY_INNQ(p_vtty)) {
+				q->Enqueue({_VTTY_MASK_INN_UP, kbd_event.keycode});
+			}
 		}
+		return;
+	}
+
+	// Forward ALL keyboard events (down/up/repeat) to focused window
+	if (asrtand(Consman::last_click_sheet)->refSheetNode().next) {
+		Consman::last_click_sheet->onrupt(SheetEvent::onKeybd, Point(0, 0), &kbd_event);
 	}
 }
 
-void hand_kboard(keyboard_event_t  kmsg) {
-	// Enqueue to message_queue_conv so serv_graf_loop (Graphic thread) processes
-	// the event. This avoids racing with GraphicMsg::FDEL on last_click_sheet.
+void hand_kboard(keyboard_event_t kmsg) {
+	#if !_GUI_ENABLE
+	// There is no graphic consumer in text-only builds; use the same processing at the caller.
+	sysmsg_kbd(kmsg);
+	Consman::WakeBlockedWaitersDeferred();
+	#else
+	// Delegate keyboard event to serv_graf_loop to avoid accessing last_click_sheet in interrupt context.
+	// Direct onrupt() here causes UAF when GraphicMsg_FDEL deletes the sheet.
+	// Enqueue to message_queue_conv so serv_graf_loop (Graphic thread) processes the event.
 	SysMessage msg;
 	msg.type = SysMessage::RUPT_KBD;
 	msg.args.kbd_event = kmsg;
 	message_queue_conv.Lock()->Enqueue(msg);
+	#endif
 }
 #endif

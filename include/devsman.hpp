@@ -617,7 +617,7 @@ public:
 		uint8 endpoint_addr, uint8 transfer_type, uint16 max_packet_size, uint8 interval);
 	static bool RemoveUSBDevice(DeviceNode* parent, const char* name);
 	static bool RemoveUSBDevice(DeviceNode* node);
-	#if defined(_MCCA) && _MCCA == 0x8664
+	#if defined(_MCCA) && (_MCCA & 0xFF00) == 0x8600 && CONFIG_ENABLE_USB
 	static void ProcessUSBMSCProbe(void* context);
 	static void RegisterUSBMSCStorage(void* context);
 	static void MountUSBMSCStorage(void* context);
@@ -668,7 +668,7 @@ public:
 	static stdsint Read(DeviceNode* node, void* buf, stduint count, stduint idx = 0, stduint flags = 0);
 	static stdsint Send(DeviceNode* node, const void* buf, stduint count, stduint idx = 0, stduint flags = 0);
 	static stdsint Ctrl(DeviceNode* node, stduint cmd, void* args, stduint flags = 0);
-	#if _MCCA == 0x8664 && defined(_UEFI)
+	#if (_MCCA & 0xFF00) == 0x8600 && CONFIG_ENABLE_USB && CONFIG_ENABLE_USB_XHCI
 	static bool BindXHCIEventOwner(stduint owner_pid, stduint owner_tid);
 	static bool AcknowledgeXHCIInterrupt();
 	static bool ProcessXHCIEvent(const DeviceEvent& event);

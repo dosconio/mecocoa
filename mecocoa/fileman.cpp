@@ -749,12 +749,10 @@ static void _TryStartUserApp() {
 
 //// ---- ---- SERVICE ---- ---- ////
 
-#if _MCCA == 0x8664
+#if (_MCCA & 0xFF00) == 0x8600 && CONFIG_ENABLE_USB
 static bool IsUSBStorageSource(stduint tid) {
 	if (tid == Task_Devsman) return true;
-	#if defined(_UEFI)
 	if (tid == Task_Usb_Serv) return true;
-	#endif
 	return false;
 }
 #endif
@@ -805,7 +803,7 @@ void serv_file_loop()// for IDE 0:0, 0:1
 			break;
 		}
 		#endif
-		#if _MCCA == 0x8664
+		#if (_MCCA & 0xFF00) == 0x8600 && CONFIG_ENABLE_USB
 		case FilemanMsg::USB_MSC_PROBE:
 			if (IsUSBStorageSource(sig_src)) {
 				Devsman::ProcessUSBMSCProbe(reinterpret_cast<void*>(to_args[0]));
@@ -824,6 +822,8 @@ void serv_file_loop()// for IDE 0:0, 0:1
 			}
 			else plogwarn("[Fileman] USB_MSC_UNMOUNT rejected source=%u", sig_src);
 			break;
+		#endif
+		#if _MCCA == 0x8664
 		case FilemanMsg::LOAD_DRIVER_FILE:
 			if (sig_src == Task_Devsman) {
 				ProcessBlock* driver = Taskman::CreateFile(

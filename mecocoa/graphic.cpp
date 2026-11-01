@@ -1828,20 +1828,15 @@ void serv_graf_loop() {
 				Consman::WakeBlockedWaiters();
 				break;
 			case SysMessage::RUPT_KBD:
-				if (Consman::ento_gui) {
-					#if _MCCA == 0x8664
-					// USB keyboard: sysmsg_kbd handles modifiers, LEDs, hotkeys,
-					// and forwards to last_click_sheet->onrupt — all in Graphic thread.
-					sysmsg_kbd(msg.args.kbd_event);
-					#else
-					// PS/2 keyboard: modifiers/LEDs/hotkeys already handled in
-					// interrupt context; just forward to the focused sheet.
+				#if (_MCCA & 0xFF00) == 0x8600
+				// PS/2 and USB share modifier, LED, hotkey and focused-window processing here.
+				sysmsg_kbd(msg.args.kbd_event);
+				#else
+				if (Consman::ento_gui && Consman::last_click_sheet) {
 					auto& kbd_event = msg.args.kbd_event;
-					if (Consman::last_click_sheet) {
-						Consman::last_click_sheet->onrupt(SheetEvent::onKeybd, Point(0, 0), &kbd_event);
-					}
-					#endif
+					Consman::last_click_sheet->onrupt(SheetEvent::onKeybd, Point(0, 0), &kbd_event);
 				}
+				#endif
 				Consman::WakeBlockedWaiters();
 				break;
 			case SysMessage::RUPT_FLUSH:

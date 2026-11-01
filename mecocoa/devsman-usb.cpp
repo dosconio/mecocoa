@@ -8,16 +8,16 @@
 #include <c/storage/AHCI.h>
 #include <c/storage/NVMe.h>
 #include <cpp/System/Audiosys/AudioManager.hpp>
-#if _MCCA == 0x8664
+#if (_MCCA & 0xFF00) == 0x8600 && CONFIG_ENABLE_USB
 #include <cpp/Device/USB/USB.hpp>
 #include <cpp/Device/USB/USBHost-MSC.hpp>
 #endif
-#if (_MCCA & 0xFF00) == 0x8600
+#if (_MCCA & 0xFF00) == 0x8600 && CONFIG_ENABLE_USB
 #include "c/proctrl/IAx86_64.ext.h"
 #include "c/proctrl/IAx86_64.msr.h"
 #endif
 
-#if (_MCCA & 0xFF00) == 0x8600
+#if (_MCCA & 0xFF00) == 0x8600 && CONFIG_ENABLE_USB
 
 namespace Devs {
 	void initialize_device_tree();
@@ -30,7 +30,6 @@ namespace Devs {
 	DeviceNode* append_plain_device(DeviceNode* parent, DeviceNodeType node_type, DeviceBusType bus_type, const char* name);
 	bool append_resource(DeviceNode* node, DeviceResourceType type, uint16 flags, uint32 index, uint64 start, uint64 length, uint64 extra);
 
-	#if _MCCA == 0x8664
 	struct USBNodeClassInfo {
 		uint8 class_base;
 		uint8 class_sub;
@@ -348,7 +347,6 @@ namespace Devs {
 				(stduint)location.device_id);
 		}
 	}
-	#endif
 
 }
 
@@ -428,11 +426,7 @@ DeviceNode* Devsman::RegisterUSBDevice(DeviceNode* parent, const char* name,
 	const char* driver_name, void* driver_data) {
 	initialize_device_tree();
 	if (!parent || !name) return nullptr;
-	#if _MCCA == 0x8664
 	if (auto* node = find_reusable_usb_device(parent, name)) {
-	#else
-	if (auto* node = find_named_child(parent, DeviceNodeType::UsbDevice, name)) {
-	#endif
 		node->fields.vendor_id = vendor_id;
 		node->fields.device_id = product_id;
 		node->fields.text_manufacturer = text_manufacturer ? StrHeap(text_manufacturer) : nullptr;
@@ -512,12 +506,8 @@ bool Devsman::AddUSBEndpointResource(DeviceNode* node, uint32 index,
 bool Devsman::RemoveUSBDevice(DeviceNode* parent, const char* name) {
 	initialize_device_tree();
 	if (!parent || !name) return false;
-	#if _MCCA == 0x8664
 	auto* node = find_reusable_usb_device(parent, name);
 	if (!node) node = find_named_child(parent, DeviceNodeType::UsbDevice, name);
-	#else
-	auto* node = find_named_child(parent, DeviceNodeType::UsbDevice, name);
-	#endif
 	return node ? RemoveUSBDevice(node) : false;
 }
 
@@ -527,30 +517,23 @@ bool Devsman::RemoveUSBDevice(DeviceNode* node) {
 		return false;
 	auto* parent = reinterpret_cast<DeviceNode*>(node->link.getParent());
 	if (!parent) return false;
-	#if _MCCA == 0x8664
 	if (has_usb_device_descendant(node)) {
 		clear_disconnected_usb_binding(node, node->fields.binding.driver_data);
 		return true;
 	}
-	#endif
 	if (!detach_child(parent, node)) return false;
 	release_device_subtree(node);
-	#if _MCCA == 0x8664
 	prune_disconnected_usb_ancestors(parent);
-	#endif
 	return true;
 }
 
 void Devsman::RegisterUSBDeviceTreeHooks() {
-	#if _MCCA == 0x8664
 	uni::device::SpaceUSB::g_host_device_configured_hook = on_usb_host_device_configured;
 	uni::device::SpaceUSB::g_host_device_disconnected_hook = on_usb_host_device_disconnected;
 	uni::device::SpaceUSB::g_hub_descriptor_complete_hook = on_usb_hub_descriptor_complete;
 	uni::device::SpaceUSB::g_hub_port_status_hook = on_usb_hub_port_status;
-	#endif
 }
 
-#if _MCCA == 0x8664 && defined(_UEFI)
 void serv_usb_loop() {
 	auto* current = Taskman::CurrentTB();
 	if (!current || !current->parent_process || !device_event_prepare(current)) {
@@ -570,20 +553,21 @@ void serv_usb_loop() {
 		if (type == _IMM(DevsmanMsg::USB_SERVICE_START)) break;
 		plogwarn("[USB] unexpected startup request type=%u source=%u", type, source);
 	}
-	ploginfo("[USB] xHCI event service started pid=%u tid=%u",
+	ploginfo("[USB] event service started pid=%u tid=%u",
 		current->parent_process->pid, current->tid);
 	for (;;) {
 		DeviceEvent event = {};
 		stduint type = 0;
 		stduint source = 0;
 		if (sysrecv(ANYPROC, &event, sizeof(event), &type, &source)) continue;
-		if (type != _IMM(KernelMsg::DeviceEvent) ||
-			event.version != DeviceEventProtocolVersion ||
-			!Devsman::ProcessXHCIEvent(event)) {
-			plogwarn("[USB] unexpected event type=%u source=%u", type, source);
+		if (type == _IMM(KernelMsg::DeviceEvent) &&
+			event.version == DeviceEventProtocolVersion) {
+			#if CONFIG_ENABLE_USB_XHCI
+			if (Devsman::ProcessXHCIEvent(event)) continue;
+			#endif
 		}
+		plogwarn("[USB] unexpected event type=%u source=%u", type, source);
 	}
 }
-#endif
 
 #endif

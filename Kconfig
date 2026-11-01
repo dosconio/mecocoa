@@ -72,3 +72,25 @@ menu "Debugging"
 		default y
 endmenu
 
+menu "Devices"
+	config ENABLE_USB
+		bool "USB Support"
+		default y
+		
+	if ENABLE_USB
+		config ENABLE_USB_XHCI
+			bool "xHCI (USB 3.x) support"
+			default y
+		config ENABLE_USB_EHCI
+			bool "EHCI (USB 2.0) support"
+			default y
+		config ENABLE_USB_UHCI
+			bool "UHCI (USB 1.1) support"
+			default n
+		config ENABLE_USB_OTG
+			bool "OTG support"
+			default n
+	endif
+endmenu
+
+

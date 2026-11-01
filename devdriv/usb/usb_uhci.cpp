@@ -5,7 +5,7 @@
 
 #include "../../include/mecocoa.hpp"
 
-#if _MCCA == 0x8664 && defined(_UEFI)
+#if (_MCCA & 0xFF00) == 0x8600 && CONFIG_ENABLE_USB && CONFIG_ENABLE_USB_UHCI
 #include <c/driver/keyboard.h>
 #include <cpp/Device/Bus/PCI.hpp>
 #include <cpp/Device/USB/USBHost-HID.hpp>

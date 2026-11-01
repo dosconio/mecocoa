@@ -873,7 +873,7 @@ namespace {
 	}
 
 	void RouteMecocoaInput(DeviceNode* endpoint, const DeviceInputEvent& event, void*) {
-		#if _GUI_ENABLE && _MCCA == 0x8664
+		#if _GUI_ENABLE
 		if (event.type == DeviceInputEventType::Key && event.usage_page == HidUsagePageKeyboard && event.usage <= 0xFFu) {
 			keyboard_event_t key{};
 			key.mod_val = event.modifiers;

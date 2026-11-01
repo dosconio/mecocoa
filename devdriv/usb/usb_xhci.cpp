@@ -4,11 +4,13 @@
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 
 #include "../../include/mecocoa.hpp"
-#if _MCCA == 0x8664 && defined(_UEFI)
+#if (_MCCA & 0xFF00) == 0x8600 && CONFIG_ENABLE_USB && CONFIG_ENABLE_USB_XHCI
 #include <cpp/Device/Bus/PCI.hpp>
 #include <cpp/Device/USB/xHCI/xHCI.hpp>
 #include <cpp/interrupt>
 #include <c/proctrl/IAx86_64.msr.h>
+
+void hand_kboard(keyboard_event_t event);
 
 #if _OPT_BUS_USB_xHCI_MultiInterrupter
 extern "C" void Handint_XHCI1_Entry();
@@ -294,7 +296,18 @@ static bool arm_xhci_event_watchdog() {
 static bool start_xhci_driver(DeviceNode* xhc_node) {
 	if (!xhc_node) return false;
 	auto* mmio = Devsman::FindResource(xhc_node, DeviceResourceType::PciBarMmio, 0);
-	if (!mmio) return false;
+	if (!mmio || !mmio->start ||
+		mmio->length < sizeof(uni::device::SpaceUSB3::CapabilityRegisters) ||
+		mmio->start > uint64(~stduint(0)) ||
+		mmio->length > uint64(~stduint(0)) - mmio->start) {
+		plogwarn("xHCI has an invalid or unaddressable BAR0 MMIO resource");
+		return false;
+	}
+	// MSI/MSI-X needs a local APIC; do not access APIC MSRs on a PIC-only target.
+	if (IC.getType() == 0) {
+		plogwarn("xHCI requires APIC interrupt delivery");
+		return false;
+	}
 	uni::PCI::Device xhc_tree_dev{};
 	xhc_tree_dev.segment_group = xhc_node->fields.pci_segment;
 	xhc_tree_dev.bus = xhc_node->fields.pci_bus;
@@ -445,11 +458,16 @@ void R_XHCI_INIT() {
 	}
 	for (uint16 index = 0; index < XHCIMaxConfiguredInterrupters; ++index) {
 		const uint8 vector = XHCIInterruptVectors[index];
+		#if _MCCA == 0x8664
 		IC[vector].setModeRupt(XHCIInterruptEntry(index), SegCo64);
+		#else
+		IC[vector].setRange(XHCIInterruptEntry(index), SegCo32);
+		#endif
 		register_interrupt_vector_handler(vector, HandleXHCIInterruptVector);
 	}
+	#if _GUI_ENABLE
 	uni::device::SpaceUSB::HIDMouseDriver::default_observer = hand_mouse_usb;
+	#endif
 	uni::device::SpaceUSB::HIDKeyboardDriver::default_observer = hand_kboard;
-	Devsman::RegisterUSBDeviceTreeHooks();
 }
 #endif

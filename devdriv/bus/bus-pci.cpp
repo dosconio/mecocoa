@@ -132,9 +132,15 @@ namespace Devs {
 		pci_class_driver_match("ahci", AHCI_PCI_CLASS_BASE, AHCI_PCI_CLASS_SUB, AHCI_PCI_CLASS_IF, 0xFFu, PciQualifiedClassMatchPriority, PciBarMmioRequired),
 		pci_class_driver_match("nvme", NVME_PCI_CLASS_BASE, NVME_PCI_CLASS_SUB, NVME_PCI_CLASS_IF, 0xFFu, PciQualifiedClassMatchPriority, PciBarMmioRequired),
 		pci_class_driver_match("pci-bridge", 0x06u, 0x04u, 0, 0, PciClassMatchPriority),
+		#if CONFIG_ENABLE_USB && CONFIG_ENABLE_USB_UHCI
 		pci_class_driver_match("uhci", ClassBase_SerialBusController, ClassSub_UniversalSerialBusController, ClassInterface_UHCI, 0xFFu, PciQualifiedClassMatchPriority, PciBarIoRequired),
+		#endif
+		#if CONFIG_ENABLE_USB && CONFIG_ENABLE_USB_EHCI
 		pci_class_driver_match("ehci", ClassBase_SerialBusController, ClassSub_UniversalSerialBusController, ClassInterface_EHCI, 0xFFu, PciQualifiedClassMatchPriority, PciBarMmioRequired),
+		#endif
+		#if CONFIG_ENABLE_USB && CONFIG_ENABLE_USB_XHCI
 		pci_class_driver_match("xhci", ClassBase_SerialBusController, ClassSub_UniversalSerialBusController, ClassInterface_XHCI, 0xFFu, PciQualifiedClassMatchPriority, PciBarMmioRequired),
+		#endif
 		pci_id_driver_match("e1000", 0x8086u, 0x100Eu, PciExactMatchPriority),
 		pci_id_driver_match("e1000", 0x8086u, 0x100Fu, PciExactMatchPriority),
 		pci_id_driver_match("e1000", 0x8086u, 0x1010u, PciExactMatchPriority),
@@ -228,6 +234,7 @@ namespace Devs {
 		Devsman::AttachPCIDevices(pci);
 	}
 
+	#if CONFIG_ENABLE_USB && CONFIG_ENABLE_USB_UHCI
 	bool probe_uhci_device(DeviceNode* node) {
 		if (!node) return false;
 		const auto* io = Devsman::FindResource(node, DeviceResourceType::PciBarIo, 4);
@@ -246,6 +253,8 @@ namespace Devs {
 		return true;
 	}
 
+	#endif
+	#if CONFIG_ENABLE_USB && CONFIG_ENABLE_USB_EHCI
 	bool probe_ehci_device(DeviceNode* node) {
 		if (!node) return false;
 		const auto* mmio = Devsman::FindResource(node, DeviceResourceType::PciBarMmio, 0);
@@ -264,6 +273,8 @@ namespace Devs {
 		return true;
 	}
 
+	#endif
+	#if CONFIG_ENABLE_USB && CONFIG_ENABLE_USB_XHCI
 	bool probe_xhci_device(DeviceNode* node) {
 		if (!node) return false;
 		const auto* mmio = Devsman::FindResource(node, DeviceResourceType::PciBarMmio, 0);
@@ -273,6 +284,7 @@ namespace Devs {
 		return true;
 	}
 
+	#endif
 	bool probe_ahci_device(DeviceNode* node) {
 		if (!node) return false;
 		const auto* abar = Devsman::FindResource(node, DeviceResourceType::PciBarMmio, 5);
@@ -354,9 +366,15 @@ namespace Devs {
 		return true;
 	}
 	constexpr DriverOpsEntry pci_driver_ops_table[] = {
+		#if CONFIG_ENABLE_USB && CONFIG_ENABLE_USB_UHCI
 		{"uhci", probe_uhci_device},
+		#endif
+		#if CONFIG_ENABLE_USB && CONFIG_ENABLE_USB_EHCI
 		{"ehci", probe_ehci_device},
+		#endif
+		#if CONFIG_ENABLE_USB && CONFIG_ENABLE_USB_XHCI
 		{"xhci", probe_xhci_device},
+		#endif
 		{"pata", probe_pata_device},
 		{"ahci", probe_ahci_device},
 		{"nvme", probe_nvme_device},

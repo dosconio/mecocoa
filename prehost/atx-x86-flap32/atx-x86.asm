@@ -928,6 +928,12 @@ IRQ_TRAMPOLINE Handint_SB16_Entry, 0x25
 IRQ_TRAMPOLINE Handint_FLP_Entry, 0x26
 IRQ_TRAMPOLINE Handint_LPT1_Entry, 0x27
 
+; Match the x64 xHCI MSI/MSI-X vectors; all entries use the common dispatcher.
+IRQ_TRAMPOLINE Handint_XHCI_Entry, 0x40
+IRQ_TRAMPOLINE Handint_XHCI1_Entry, 0x42
+IRQ_TRAMPOLINE Handint_XHCI2_Entry, 0x43
+IRQ_TRAMPOLINE Handint_XHCI3_Entry, 0x44
+
 ; 0x70..0x77
 IRQ_TRAMPOLINE Handint_RTC_Entry, 0x70
 IRQ_TRAMPOLINE Handint_AHCI_Entry, 0x72

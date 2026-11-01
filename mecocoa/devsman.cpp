@@ -16,7 +16,9 @@
 #include <cpp/System/Audiosys/AudioManager.hpp>
 #if _MCCA == 0x8664
 #include <cpp/Device/ACPI.hpp>
+#if CONFIG_ENABLE_USB && CONFIG_ENABLE_USB_XHCI
 #include <cpp/Device/USB/xHCI/xHCI.hpp>
+#endif
 #endif
 #if (_MCCA & 0xFF00) == 0x8600
 #include "../include/devsman-storage.hpp"
@@ -964,7 +966,9 @@ namespace Devs {
 		init_node(device_root, DeviceNodeType::SystemRoot, DeviceBusType::None, "system-root");
 		device_tree.SetRoot(device_root);
 		create_bus_root(DeviceBusType::PCI);
+		#if CONFIG_ENABLE_USB
 		create_bus_root(DeviceBusType::USB);
+		#endif
 		create_bus_root(DeviceBusType::Platform);
 		create_bus_root(DeviceBusType::I2C);
 		create_bus_root(DeviceBusType::SPI);
@@ -2542,6 +2546,10 @@ const char* Devsman::DriverMatchResultName(DriverMatchResult result) {
 bool Devsman::Initialize() {
 	#if (_MCCA & 0xFF00) == 0x8600
 	initialize_device_tree();
+	#if CONFIG_ENABLE_USB
+	// Install shared enumeration hooks before any host controller starts probing.
+	RegisterUSBDeviceTreeHooks();
+	#endif
 	probe_and_attach_pci_devices();
 	discover_x86_acpi_devices();
 	bind_known_drivers_subtree(device_root);
@@ -3544,7 +3552,7 @@ namespace {
 	}
 
 	void RunDevsmanMessageLoop() {
-		#if _MCCA == 0x8664 && defined(_UEFI)
+		#if (_MCCA & 0xFF00) == 0x8600 && CONFIG_ENABLE_USB
 		bool usb_service_started = false;
 		#endif
 		for (;;) {
@@ -3592,31 +3600,34 @@ namespace {
 				DispatchVmciDiscovery(type, source, payload);
 			}
 			#endif
-			#if _MCCA == 0x8664
-			#if defined(_UEFI)
+			#if (_MCCA & 0xFF00) == 0x8600 && CONFIG_ENABLE_USB
 			else if (type == _IMM(DevsmanMsg::USB_SERVICE_READY)) {
 				if (source != Task_Usb_Serv || usb_service_started) {
 					plogwarn("[Devsman] invalid USB service ready source=%u", source);
 					continue;
 				}
 				auto* usb_thread = Taskman::LocateThread(source);
-				if (!usb_thread || !usb_thread->parent_process ||
-					!Devsman::BindXHCIEventOwner(
-						usb_thread->parent_process->pid, usb_thread->tid)) {
+				if (!usb_thread || !usb_thread->parent_process) {
+					plogerro("[Devsman] invalid USB service thread");
+					continue;
+				}
+				#if CONFIG_ENABLE_USB_XHCI
+				if (!Devsman::BindXHCIEventOwner(
+					usb_thread->parent_process->pid, usb_thread->tid)) {
 					plogerro("[Devsman] failed to bind xHCI interrupt events");
 					continue;
 				}
+				#endif
 				usb_service_started = true;
 				if (syssend_async(Task_Usb_Serv, nullptr, 0,
 					_IMM(DevsmanMsg::USB_SERVICE_START))) {
 					plogerro("[Devsman] failed to start USB service");
 				}
 				else {
-					ploginfo("[Devsman] xHCI events bound to USB service pid=%u tid=%u",
+					ploginfo("[Devsman] USB service started pid=%u tid=%u",
 						usb_thread->parent_process->pid, usb_thread->tid);
 				}
 			}
-			#endif
 			else if (type == _IMM(DevsmanMsg::USB_MSC_READY)) {
 				if (source != Task_FileSys) {
 					plogwarn("[Devsman] USB MSC ready from invalid source=%u", source);

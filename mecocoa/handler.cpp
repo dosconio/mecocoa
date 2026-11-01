@@ -274,7 +274,7 @@ extern "C" void register_interrupt_vector_handler(stduint irq_id, InterruptVecto
 
 
 
-#if _MCCA == 0x8664 && defined(_UEFI)
+#if _MCCA == 0x8664 && defined(_UEFI) && CONFIG_ENABLE_USB && CONFIG_ENABLE_USB_XHCI
 
 __attribute__((target("general-regs-only"), optimize("O0")))
 void Handint_XHCI() {

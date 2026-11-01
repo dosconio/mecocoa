@@ -528,6 +528,7 @@ bool Memory::initialize(stduint eax, byte* ebx) {
 		return false;
 	}
 
+	const stduint isa_dma_reserved_bytes = DmaLowPoolExpand();
 	map_ready = true;
 
 	uni_default_allocator = &mempool;
@@ -610,7 +611,8 @@ bool Memory::initialize(stduint eax, byte* ebx) {
 	#if (_MCCA & 0xFF00) == 0x8600
 	#undef ACPI_BOOT_ERROR
 	if (isa_dma_pool_base)
-		ploginfo("[MEM] ISA DMA 64KB low pool reserved at %[x]", isa_dma_pool_base);
+		ploginfo("[MEM] ISA DMA %uKB low pool reserved at %[x]",
+			isa_dma_reserved_bytes >> 10, isa_dma_pool_base);
 	else {
 		plogwarn("[MEM] Failed to reserve ISA DMA low pool (<16MB)");
 	}
