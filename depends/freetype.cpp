@@ -41,6 +41,12 @@ static bool ascii_glyph_cache_valid[128] = { false };
 static bool loading_ascii = false;
 static uint32 ascii_bytes_read = 0;
 
+// Baseline row inside a cell, taken from the face ascender instead of a fixed fraction (FT_Size_Metrics, 26.6 fixed point, FreeType 2 API).
+static int FontCellBaseline(FT_Face face, stduint cell_height) {
+	if (!face || !face->size) return (int)(cell_height * 3 / 4);
+	return (int)((face->size->metrics.ascender + 63) >> 6);
+}
+
 // CJK mono rendering glyph cache (16x16 pixels single-bit bitmap)
 struct CJKCacheEntry {
 	uint32 unicode_char;
@@ -136,7 +142,7 @@ public:
 		if (err) return;
 
 		FT_Bitmap& bitmap = m_face->glyph->bitmap;
-		int baseline = m_cell_size.y * 3 / 4;
+		const int baseline = FontCellBaseline(m_face, m_cell_size.y);
 		int glyph_left = m_face->glyph->bitmap_left;
 		int glyph_top = baseline - m_face->glyph->bitmap_top;
 
@@ -227,7 +233,7 @@ public:
 		if (err) return bg;
 
 		FT_Bitmap& bitmap = m_face->glyph->bitmap;
-		int baseline = m_cell_size.y * 3 / 4;
+		const int baseline = FontCellBaseline(m_face, m_cell_size.y);
 		int glyph_left = m_face->glyph->bitmap_left;
 		int glyph_top = baseline - m_face->glyph->bitmap_top;
 
@@ -519,7 +525,9 @@ bool InitializeFont() {
 	// ploginfo("InitializeFont: FT_Open_Face returned %d, face = %p", face_err, face);
 	if (face_err == 0) {
 		// plogtrac("InitializeFont: Setting pixel sizes...");
-		FT_Set_Pixel_Sizes(face, 16, 16);
+		// 15px EM leaves ascent 12.89 + descent 2.11 inside the 16-row cell (OpenType hhea metrics of simsun).
+		const auto size = 16;// 15 or 16
+		FT_Set_Pixel_Sizes(face, size, size);
 
 		// Pre-populate ASCII glyph cache (32 to 127) while in safe Task_FileSys context
 		loading_ascii = true;
@@ -530,7 +538,7 @@ bool InitializeFont() {
 			if (FT_Load_Glyph(face, glyph_index, FT_LOAD_RENDER | FT_LOAD_TARGET_MONO)) continue;
 
 			FT_Bitmap& bitmap = face->glyph->bitmap;
-			int baseline = 16 * 3 / 4;
+			const int baseline = FontCellBaseline(face, 16);
 			int glyph_left = face->glyph->bitmap_left;
 			int glyph_top = baseline - face->glyph->bitmap_top;
 

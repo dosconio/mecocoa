@@ -30,6 +30,11 @@ cppfile=$(wildcard $(ulibpath)/cpp/*.cpp) \
 	$(wildcard $(ulibpath)/cpp/**/**/**/*.cpp) \
 	$(wildcard accmlib/*.cpp) prehost/_auxiliary.cpp
 
+accm_lango_end_cpp := \
+	$(wildcard $(ulibpath)/cpp/Lango/*end/*.cpp) \
+	$(wildcard $(ulibpath)/cpp/Lango/*end/**/*.cpp)
+cppfile := $(filter-out $(accm_lango_end_cpp),$(cppfile))
+
 dest_obj=$(uobjpath)/accm-$(arch)
 COMWAN = -Wno-incompatible-library-redeclaration -Wno-invalid-constexpr -Wno-empty-body -Wno-unknown-warning-option
 COMFLG = -m32 -fno-builtin -nostdlib -fno-stack-protector -O2 -fno-strict-aliasing $(COMWAN)

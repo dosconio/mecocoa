@@ -1,6 +1,7 @@
 #ifndef FILEMAN_HPP_
 #define FILEMAN_HPP_
 
+#include <cpp/vector>
 #include <cpp/trait/StorageTrait.hpp>
 #include <c/storage/harddisk.h>
 // The version just consider primary IDE

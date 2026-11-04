@@ -62,12 +62,6 @@ struct SysMessage {
 };
 extern SpinlockBlock<uni::Queue<SysMessage>> message_queue_conv;// for serv_graf_loop
 
-enum GraphicFormStyle {
-	GraphicFormStyle_Titleless   = 0x00000001,
-	GraphicFormStyle_Dock        = 0x00000002,
-	GraphicFormStyle_MaximizeBox = 0x00000004,
-};
-
 // >= 1
 #ifndef PCU_CORES_MAX
 #define PCU_CORES_MAX 16

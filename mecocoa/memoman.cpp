@@ -1419,16 +1419,27 @@ _ESYM_C void* calloc(size_t nmemb, size_t size) {
 	if (ret) MemSet(ret, 0, nmemb * size);
 	return ret;
 }
+static size_t GetDefaultAllocationAlignment(size_t size) {
+	if (!size) return 1;
+	const size_t natural_alignment = size & (~size + 1);
+	constexpr size_t maximum_alignment = __STDCPP_DEFAULT_NEW_ALIGNMENT__;
+	return minof(natural_alignment, maximum_alignment);
+}
 void* operator new(size_t size) {
-	return malc(size);
+	const size_t alignment = GetDefaultAllocationAlignment(size);
+	return mempool.allocate(size, intlog2_iexpo(alignment));
 }
 void* operator new[](size_t size) {
-	// ploginfo("new[] %u", size);
-	return malc(size);
+	const size_t alignment = GetDefaultAllocationAlignment(size);
+	return mempool.allocate(size, intlog2_iexpo(alignment));
 }
-void* operator new[](size_t size, std::align_val_t ali) {
-	auto bit = intlog2_iexpo _IMM(ali);
-	return mempool.allocate(size, bit);
+void* operator new(size_t size, std::align_val_t alignment) {
+	const size_t value = static_cast<size_t>(alignment);
+	return mempool.allocate(size, intlog2_iexpo(value));
+}
+void* operator new[](size_t size, std::align_val_t alignment) {
+	const size_t value = static_cast<size_t>(alignment);
+	return mempool.allocate(size, intlog2_iexpo(value));
 }
 void operator delete(void* p) {
 	free(p);

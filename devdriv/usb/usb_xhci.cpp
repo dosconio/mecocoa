@@ -32,11 +32,15 @@ namespace {
 		CONFIG_SysTickFreq / 10 : 1;
 	constexpr uint8 XHCIEventStallPolls = 10;
 	constexpr stduint XHCIPolicyTicks = 1;
+	// USB 2.0 Specification, 7.1.7.3: debounce a new connection for at least 100 ms.
+	constexpr uint16 XHCIRootPortDebounceTicks = CONFIG_SysTickFreq >= 10 ?
+		(CONFIG_SysTickFreq + 9) / 10 : 1;
 	uni::device::SpaceUSB3::HostControllerResourceConfig XHCIResources(
 		uint16 interrupter_count) {
 		uni::device::SpaceUSB3::HostControllerResourceConfig resources{};
 		resources.max_interrupters = interrupter_count;
 		resources.event_ring_segments = interrupter_count > 1 ? 2 : 1;
+		resources.root_port_debounce_ticks = XHCIRootPortDebounceTicks;
 		return resources;
 	}
 

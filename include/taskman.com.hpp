@@ -32,6 +32,8 @@ enum {
 	TaskCount
 };
 
+// ---- ---- Graphic ---- ---- //
+
 // Graphic-thread IPC message types for GUI operations.
 // Console forwards Form/VConsole requests to Graphic via these.
 enum class GraphicMsg {
@@ -60,6 +62,12 @@ enum class GraphicMsg {
 	HOST_SET_RESOLUTION,// trusted host integration requests a display mode
 };
 
+enum GraphicFormStyle {
+	GraphicFormStyle_Titleless   = 0x00000001,
+	GraphicFormStyle_Dock        = 0x00000002,
+	GraphicFormStyle_MaximizeBox = 0x00000004,
+};
+
 _PACKED(struct) WindowInfo {
 	uint32 pid;
 	uint32 form_id;
@@ -72,6 +80,9 @@ _PACKED(struct) WindowInfo {
 	uint32 height;
 	char title[64];
 };
+
+// ---- ---- Network ---- ---- //
+
 
 enum class NetworkMsg {
 	DRV_ATTACH,// driver publishes link session
