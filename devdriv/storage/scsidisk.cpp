@@ -5,168 +5,20 @@
 #include "../../include/mecocoa.hpp"
 #include <c/storage/harddisk.h>
 #include <cpp/Device/Bus/PCI.hpp>
+#include <cpp/Device/Storage/SCSI/BusLogic.hpp>
+#include <cpp/Device/Storage/SCSI/LsiLogic-Para.hpp>
+#include <cpp/Device/Storage/SCSI/LsiLogic-SAS.hpp>
+#include <cpp/vector>
+#include <cpp/ISO_IEC_STD/memory>
+#include "../../mecocoa/devsman-acpi-gsi.h"
 
 #if (_MCCA & 0xFF00) == 0x8600
 
 namespace {
-	static constexpr uint16 BusLogicVendorId = 0x104Bu;
-	static constexpr uint16 BusLogicMultiMasterDeviceId = 0x1040u;
 	static constexpr uint16 PciCommandIoSpace = 1u << 0;
 	static constexpr uint16 PciCommandBusMaster = 1u << 2;
 	static constexpr uint16 PciCommandInterruptDisable = 1u << 10;
-	enum : byte {
-		BLOGIC_CNTRL_REG = 0,
-		BLOGIC_STATUS_REG = 0,
-		BLOGIC_CMD_PARM_REG = 1,
-		BLOGIC_DATAIN_REG = 1,
-		BLOGIC_INT_REG = 2,
-		BLOGIC_GET_BOARD_ID = 0x04,
-		BLOGIC_INQ_DEV0TO7 = 0x0A,
-		BLOGIC_INQ_CONFIG = 0x0B,
-		BLOGIC_INQ_SETUPINFO = 0x0D,
-		BLOGIC_INQ_DEV8TO15 = 0x23,
-		BLOGIC_INQ_DEV = 0x24,
-		BLOGIC_DISABLE_INT = 0x25,
-		BLOGIC_EXEC_MBOX_CMD = 0x02,
-		BLOGIC_INIT_EXT_MBOX = 0x81,
-		BLOGIC_SETCCB_FMT = 0x96,
-		BLOGIC_INQ_FWVER_D3 = 0x84,
-		BLOGIC_INQ_FWVER_LETTER = 0x85,
-		BLOGIC_INQ_PCI_INFO = 0x86,
-		BLOGIC_INQ_MODELNO = 0x8B,
-		BLOGIC_INQ_EXTSETUP = 0x8D,
-	};
-
-	enum : byte {
-		BLOGIC_CTRL_INT_RESET = 1u << 5,
-		BLOGIC_CTRL_SOFT_RESET = 1u << 6,
-		BLOGIC_CTRL_HARD_RESET = 1u << 7,
-	};
-
-	enum : byte {
-		BLOGIC_STAT_CMD_INVALID = 1u << 0,
-		BLOGIC_STAT_DATAIN_READY = 1u << 2,
-		BLOGIC_STAT_CMD_BUSY = 1u << 3,
-		BLOGIC_STAT_ADAPTER_READY = 1u << 4,
-		BLOGIC_STAT_INIT_REQUIRED = 1u << 5,
-		BLOGIC_STAT_DIAG_FAILED = 1u << 6,
-		BLOGIC_STAT_DIAG_ACTIVE = 1u << 7,
-	};
-
-	enum : byte {
-		BLOGIC_INT_CMD_COMPLETE = 1u << 2,
-	};
-
-	enum : byte {
-		BLOGIC_MBOX_START = 0x01,
-		BLOGIC_INBOX_FREE = 0x00,
-		BLOGIC_CMD_COMPLETE_GOOD = 0x01,
-		BLOGIC_CMD_ABORT_BY_HOST = 0x02,
-		BLOGIC_CMD_NOTFOUND = 0x03,
-		BLOGIC_CMD_COMPLETE_ERROR = 0x04,
-		BLOGIC_INVALID_CCB = 0x05,
-		BLOGIC_CCB_INITIATOR = 0x00,
-		BLOGIC_DIR_DATAIN = 0x01,
-		BLOGIC_DIR_DATAOUT = 0x02,
-		BLOGIC_DIR_NOTX = 0x03,
-		BLOGIC_LEGACY_LUN_CCB = 0x00,
-		BLOGIC_EXT_LUN_CCB = 0x01,
-		BLOGIC_ADAPTER_STATUS_OK = 0x00,
-		BLOGIC_TARGET_STATUS_GOOD = 0x00,
-		SCSI_CMD_INQUIRY = 0x12,
-		SCSI_CMD_READ_CAPACITY10 = 0x25,
-	};
-
-	struct BusLogicBoardId {
-		byte type = 0;
-		byte custom_features = 0;
-		byte fw_ver_digit1 = 0;
-		byte fw_ver_digit2 = 0;
-	};
-
-	struct BusLogicConfig {
-		byte byte0 = 0;
-		byte byte1 = 0;
-		byte byte2 = 0;
-	};
-
-	struct BusLogicSetupInfo {
-		byte bytes[34] = {};
-	};
-
-	struct BusLogicExtSetup {
-		byte bytes[14] = {};
-	};
-
-	struct BusLogicPciInfo {
-		byte isa_port = 0;
-		byte irq_channel = 0;
-		byte termination = 0;
-		byte reserved = 0;
-	};
-
-	_PACKED(struct) BusLogicExtMailboxInitReq {
-		byte mbox_count;
-		uint32 base_mbox_addr;
-	};
-
-	_PACKED(struct) BusLogicOutbox {
-		uint32 ccb;
-		byte reserved[3];
-		byte action;
-	};
-
-	_PACKED(struct) BusLogicInbox {
-		uint32 ccb;
-		byte adapter_status;
-		byte target_status;
-		byte reserved;
-		byte completion_code;
-	};
-
-	_PACKED(struct) BusLogicCcb32 {
-		byte opcode;
-		byte control;
-		byte cdb_length;
-		byte sense_length;
-		uint32 data_length;
-		uint32 data_addr;
-		byte reserved12;
-		byte reserved13;
-		byte adapter_status;
-		byte target_status;
-		byte target_id;
-		byte lun_legacy;
-		byte cdb[12];
-		byte reserved30;
-		byte reserved31;
-		uint32 host_reserved;
-		uint32 sense_addr;
-	};
-	// BusLogic MultiMaster 32-bit wire layouts: Linux drivers/scsi/BusLogic.h, blogic_ccb/outbox/inbox.
-	static_assert(sizeof(BusLogicExtMailboxInitReq) == 5);
-	static_assert(sizeof(BusLogicOutbox) == 8);
-	static_assert(sizeof(BusLogicInbox) == 8);
-	static_assert(sizeof(BusLogicCcb32) == 40);
-
-	_PACKED(struct) ScsiInquiryReply {
-		byte peripheral;
-		byte rmb;
-		byte version;
-		byte response_format;
-		byte additional_length;
-		byte flags5;
-		byte flags6;
-		byte flags7;
-		char vendor[8];
-		char product[16];
-		char revision[4];
-	};
-
-	_PACKED(struct) ScsiReadCapacity10Reply {
-		byte last_lba[4];
-		byte block_size[4];
-	};
+	stduint g_scsi_controller_count = 0;
 
 	struct DmaRegion {
 		byte* virt = nullptr;
@@ -175,7 +27,7 @@ namespace {
 		bool translated = false;
 
 		static void FreeBuffer(void* buffer, stduint bytes) {
-			if (DmaLowIsInRange(buffer)) DmaLowFree(buffer, bytes);
+			if (dma_low_pool.IsInRange(buffer)) dma_low_pool.Deallocate(buffer, bytes);
 			else mempool.deallocate(buffer, bytes);
 		}
 
@@ -196,11 +48,11 @@ namespace {
 			// Only called with no command in flight; never replace a buffer still owned by the adapter.
 			if (!Release(node)) return false;
 			const stduint bytes = (want_size + PAGE_SIZE - 1) & ~(stduint(PAGE_SIZE) - 1);
-			byte* buf = bytes <= 0x10000 ? static_cast<byte*>(DmaLowAlloc(bytes)) : nullptr;
+			byte* buf = bytes <= 0x10000 ? static_cast<byte*>(dma_low_pool.Allocate(bytes)) : nullptr;
 			if (!buf) buf = static_cast<byte*>(mempool.allocate(bytes, 12));
 			if (!buf) return false;
 			const uint64 physical = uint64(_IMM(buf));
-			// The extended mailbox and CCB formats still carry 32-bit DMA addresses on x64.
+			// BusLogic mailboxes/CCBs and MPI 32-bit request/reply/SGE formats use low DMA addresses on x64 too.
 			if ((physical & (PAGE_SIZE - 1)) || physical > 0x100000000ull - bytes) {
 				FreeBuffer(buf, bytes);
 				return false;
@@ -224,485 +76,259 @@ namespace {
 		}
 	};
 
-	static void scsi_io_pause() {
-		for (volatile stduint spin = 0; spin < 256; ++spin) {
-			_ASM volatile("" ::: "memory");
-		}
-	}
+	struct ScsiAsyncState {
+		ACPIGSIBinding interrupt{};
+		uni::Atomic<byte> service_pending{0};
+		uni::Atomic<stduint> waiter{~stduint(0)};
+		bool deadline_armed = false;
+		uint32 service_deadline = 0;
+		// Serialize BusLogic interrupt-register acknowledgement against polling administrative commands on another CPU.
+		Spinlock interrupt_register_lock;
+	};
 
+	template <typename Controller>
+	struct ScsiAsyncHost {
+		static bool LockInterrupt(void* context) {
+			return static_cast<Controller*>(context)->async.interrupt_register_lock.Acquire();
+		}
+		static void UnlockInterrupt(void* context, bool previous_if) {
+			static_cast<Controller*>(context)->async.interrupt_register_lock.Release(previous_if);
+		}
+		static uint32 Milliseconds(void*) {
+			return uint32(uint64(stduint(tick)) * 1000 / CONFIG_SysTickFreq);
+		}
+
+		static bool AllocateDma(void* context, stduint bytes, uni::SCSI::CommandDma& buffer) {
+			auto* controller = static_cast<Controller*>(context);
+			auto* region = new (std::nothrow_t{}) DmaRegion();
+			if (!region) return false;
+			if (!region->Ensure(controller->node, bytes)) {
+				delete region;
+				return false;
+			}
+			buffer = {region->virt, region->device_address, region->size, region};
+			return true;
+		}
+
+		static void ReleaseDma(void* context, uni::SCSI::CommandDma& buffer) {
+			auto* region = static_cast<DmaRegion*>(buffer.token);
+			if (!region) return;
+			if (!region->Release(static_cast<Controller*>(context)->node)) {
+				plogwarn("[SCSI] retaining DMA mapping after failed invalidation");
+				return;
+			}
+			delete region;
+			buffer = {};
+		}
+
+		static void Completed(void*, stduint origin) {
+			if (origin != ~stduint(0)) (void)Taskman::UnblockThread(origin, ThreadBlock::BlockReason::BR_Resting);
+		}
+
+		static void ArmDeadline(Controller& controller) {
+			uint32 milliseconds = controller.adapter.NextTimeout();
+			if (milliseconds == 0xFFFFFFFFu) {
+				Systimex::CancelDeferredCallback(_IMM(&controller), Deadline);
+				controller.async.deadline_armed = false;
+				return;
+			}
+			// Without a routed interrupt, a short deferred service interval provides the polling fallback.
+			if (!controller.adapter.IsInterruptDriven() && milliseconds > 10) milliseconds = 10;
+			const uint32 next = Milliseconds(nullptr) + milliseconds;
+			if (controller.async.deadline_armed && int32(next - controller.async.service_deadline) >= 0) return;
+			Systimex::CancelDeferredCallback(_IMM(&controller), Deadline);
+			stduint delay = stduint((uint64(milliseconds) * CONFIG_SysTickFreq + 999) / 1000);
+			if (!delay) delay = 1;
+			controller.async.deadline_armed = Systimex::AppendDeferredCallback(delay, _IMM(&controller), Deadline);
+			controller.async.service_deadline = next;
+			if (!controller.async.deadline_armed) {
+				plogwarn("[SCSI] cannot arm request deadline; resetting before abandoning DMA ownership");
+				(void)controller.adapter.Recover();
+			}
+		}
+
+		static void Deadline(pureptr_t timeout, ...) {
+			Letpara(arguments, timeout);
+			const stduint context = para_next(arguments, stduint);
+			para_endo(arguments);
+			auto& controller = *reinterpret_cast<Controller*>(context);
+			MutexLocal lock(&controller.command_lock);
+			controller.async.deadline_armed = false;
+			controller.async.service_pending.exchange(0, uni::MemoryOrder_Acq_Rel);
+			controller.adapter.Service();
+			ArmDeadline(controller);
+		}
+
+		static bool DispatchInterrupt(void* context) {
+			auto& controller = *static_cast<Controller*>(context);
+			if (!controller.adapter.OnInterrupt()) return false;
+			// Never take the command mutex in IRQ context; a sleeping caller can also service the completion FIFO.
+			controller.async.service_pending.store(1, uni::MemoryOrder_Release);
+			const stduint waiter = controller.async.waiter.load(uni::MemoryOrder_Acquire);
+			if (waiter != ~stduint(0)) (void)Taskman::UnblockThread(waiter, ThreadBlock::BlockReason::BR_Resting);
+			return true;
+		}
+
+		static void ConfigureInterrupt(Controller& controller) {
+			const auto* irq = Devsman::FindResource(controller.node, DeviceResourceType::IrqLine, 0);
+			if (!irq || irq->start >= 0xFFu) {
+				plogwarn("[SCSI] no PCI INTx route; polling fallback");
+				return;
+			}
+			const ACPIGSIConfiguration configuration{uint32(irq->start), true, true, true};
+			const auto status = Devs::BindACPIGSI(configuration, DispatchInterrupt, &controller, controller.async.interrupt);
+			if (status != ACPIGSIStatus::Success) {
+				plogwarn("[SCSI] PCI INTx GSI%u binding failed status=%u; polling fallback", (unsigned)irq->start, unsigned(status));
+				return;
+			}
+			auto* node = controller.node;
+			const uint16 command = uint16(uni::PCI::read_config_register(node->fields.pci_segment,
+				node->fields.pci_bus, node->fields.pci_device, node->fields.pci_function, 0x04));
+			uni::PCI::write_config_register(node->fields.pci_segment, node->fields.pci_bus,
+				node->fields.pci_device, node->fields.pci_function, 0x04, command & uint16(~PciCommandInterruptDisable));
+			const uint16 actual = uint16(uni::PCI::read_config_register(node->fields.pci_segment,
+				node->fields.pci_bus, node->fields.pci_device, node->fields.pci_function, 0x04));
+			if (actual & PciCommandInterruptDisable) {
+				(void)Devs::UnbindACPIGSI(controller.async.interrupt);
+				plogwarn("[SCSI] PCI INTx remains masked; polling fallback");
+				return;
+			}
+			controller.adapter.SetInterrupts(true);
+			if (!controller.adapter.IsInterruptDriven()) {
+				(void)Devs::UnbindACPIGSI(controller.async.interrupt);
+				plogwarn("[SCSI] adapter interrupts unavailable; polling fallback");
+				return;
+			}
+			ploginfo("[SCSI] %s INTx GSI%u, asynchronous command queue enabled",
+				node->link.addr ? node->link.addr : "(unnamed)", controller.async.interrupt.gsi);
+		}
+
+		static bool Execute(Controller& controller, stduint target, byte lun, const byte* cdb, byte cdb_length,
+			void* data, stduint bytes, bool data_in, byte& completion, byte& host, byte& target_status) {
+			completion = byte(uni::SCSI::Completion::Failed);
+			host = byte(uni::SCSI::HostStatus::Error);
+			target_status = 0xFF;
+			if (bytes && !data) return false;
+			const stduint tid = Taskman::CurrentTID();
+			uni::SCSI::CommandHandle request;
+			{
+				MutexLocal lock(&controller.command_lock);
+				request = controller.adapter.SubmitScsi(target, lun, cdb, cdb_length, data, bytes, data_in, 60000, tid);
+				if (!request) return false;
+				controller.async.waiter.store(tid, uni::MemoryOrder_Release);
+				ArmDeadline(controller);
+			}
+			stduint boot_spins = 0;
+			while (!request->done.load(uni::MemoryOrder_Acquire)) {
+				auto* thread = Taskman::CurrentTB();
+				const bool old_if = IC.TryMaskInterrupt();
+				// Initialization precedes the reserved service tasks; do not start scheduling during that phase.
+				if (old_if && thread && Taskman::Locate(Task_Devsman)) {
+					thread->Block(ThreadBlock::BlockReason::BR_Resting);
+					// Recheck the IRQ latch after blocking so an interrupt just before Block cannot be lost.
+					if (request->done.load(uni::MemoryOrder_Acquire) || controller.async.service_pending.load(uni::MemoryOrder_Acquire) ||
+						!Systimex::AppendThreadWake(1, tid)) {
+						thread->Unblock(ThreadBlock::BlockReason::BR_Resting);
+					}
+					if (old_if) IC.enInterrupt(true);
+					Taskman::Schedule(true);
+					Systimex::CancelThreadWake(tid);
+				}
+				else {
+					if (old_if) IC.enInterrupt(true);
+					_ASM volatile("pause" ::: "memory");
+					++boot_spins;
+				}
+				{
+					MutexLocal lock(&controller.command_lock);
+					controller.async.waiter.store(tid, uni::MemoryOrder_Release);
+					controller.async.service_pending.exchange(0, uni::MemoryOrder_Acq_Rel);
+					if (boot_spins >= 10000000u) (void)controller.adapter.Recover();
+					else controller.adapter.Service();
+					ArmDeadline(controller);
+				}
+			}
+			{
+				MutexLocal lock(&controller.command_lock);
+				if (controller.async.waiter.load(uni::MemoryOrder_Acquire) == tid) {
+					const stduint next = controller.adapter.getWaiter();
+					controller.async.waiter.store(next, uni::MemoryOrder_Release);
+					if (next != ~stduint(0) && controller.async.service_pending.load(uni::MemoryOrder_Acquire)) {
+						(void)Taskman::UnblockThread(next, ThreadBlock::BlockReason::BR_Resting);
+					}
+				}
+			}
+			return request->CopyResult(data, completion, host, target_status);
+		}
+	};
+
+	// Common SCSI storage integration: no adapter registers, DMA descriptors or mailbox status codes.
 	struct ScsiController {
-		static constexpr byte kControllerSlot = 0;
-		static constexpr byte kMaxTargets = 16;
-		static constexpr byte kMaxLuns = 8;
-		static constexpr stduint kMaxDiskSlots = 8;
-		static constexpr stduint kMaxCdromSlots = 4;
+		stduint controller_slot = 0;
 
 		struct DiskSlot {
-			bool used = false;
-			byte target = 0;
+			stduint target = 0;
 			byte lun = 0;
 			DeviceNode* node = nullptr;
 			uni::Harddisk_SCSI disk = {};
 		};
 
 		struct CdromSlot {
-			bool used = false;
-			byte target = 0;
+			stduint target = 0;
 			byte lun = 0;
 			DeviceNode* node = nullptr;
 			uni::CDROM_SCSI cdrom = {};
 		};
 
 		DeviceNode* node = nullptr;
-		const DeviceResource* bar0_io = nullptr;
-		const DeviceResource* bar0_mmio = nullptr;
-		const DeviceResource* irq = nullptr;
-		word io_base = 0;
-		// Targets/LUNs share one CCB and mailbox set; hold a mutex, not a spinlock, across polling and DMA mapping.
-		Mutex command_lock;
-		bool faulted = false;
-		volatile BusLogicOutbox* outboxes = nullptr;
-		volatile BusLogicInbox* inboxes = nullptr;
-		stduint mailbox_count = 0;
-		stduint next_outbox_index = 0;
-		DmaRegion mailbox_region{};
-		DmaRegion probe_ccb_region{};
-		DmaRegion data_region{};
-		DmaRegion probe_sense_region{};
+		void* context = nullptr;
+		uni::SCSI::ExecuteCommandFn execute = nullptr;
+		bool (*is_available)(void* context) = nullptr;
+		bool (*is_target_present)(void* context, stduint target) = nullptr;
+		stduint target_count = 0;
+		stduint lun_count = 0;
 		byte* sector_buf = nullptr;
 		stduint sector_buf_size = 0;
-		DiskSlot disk_slots[kMaxDiskSlots] = {};
-		CdromSlot cdrom_slots[kMaxCdromSlots] = {};
-
-		bool has_io() const { return io_base != 0; }
-
-		byte ReadStatus() const {
-			return innpb(io_base + BLOGIC_STATUS_REG);
-		}
-
-		byte ReadInterrupt() const {
-			return innpb(io_base + BLOGIC_INT_REG);
-		}
-
-		byte ReadDataIn() const {
-			return innpb(io_base + BLOGIC_DATAIN_REG);
-		}
-
-		void WriteControl(byte value) const {
-			outpb(io_base + BLOGIC_CNTRL_REG, value);
-		}
-
-		void WriteCommand(byte value) const {
-			outpb(io_base + BLOGIC_CMD_PARM_REG, value);
-		}
-
-		void InterruptReset() const {
-			WriteControl(BLOGIC_CTRL_INT_RESET);
-		}
-
-		void ClearAdapterInterruptState() const {
-			byte intreg = ReadInterrupt();
-			if (intreg & 0x80u) {
-				InterruptReset();
-			}
-		}
-
-		void DisableAfterCommandFailure() {
-			faulted = true;
-			const uint16 command = uint16(uni::PCI::read_config_register(node->fields.pci_segment,
-				node->fields.pci_bus, node->fields.pci_device, node->fields.pci_function, 0x04));
-			uni::PCI::write_config_register(node->fields.pci_segment, node->fields.pci_bus,
-				node->fields.pci_device, node->fields.pci_function, 0x04,
-				(command & uint16(~PciCommandBusMaster)) | PciCommandInterruptDisable);
-			ClearAdapterInterruptState();
-			// A late completion may still arrive; pin all DMA buffers and reject every subsequent command.
-			plogwarn("[SCSI] controller disabled after command failure; DMA buffers retained");
-		}
-
-		void ClearLocalCommandState() const {
-			stduint drain_limit = 64;
-			while (drain_limit--) {
-				byte status = ReadStatus();
-				if ((status & BLOGIC_STAT_DATAIN_READY) == 0) break;
-				(void)ReadDataIn();
-			}
-			ClearAdapterInterruptState();
-		}
-
-		bool HardwareReset(bool hard_reset) {
-			if (!has_io()) return false;
-
-			WriteControl(hard_reset ? BLOGIC_CTRL_HARD_RESET : BLOGIC_CTRL_SOFT_RESET);
-
-			bool diagnostic_active = false;
-			for0(spin, 50000) {
-				byte status = ReadStatus();
-				if (status & BLOGIC_STAT_DIAG_ACTIVE) {
-					diagnostic_active = true;
-					break;
-				}
-				scsi_io_pause();
-			}
-			if (!diagnostic_active) return false;
-
-			for0(spin, 100000) {
-				byte status = ReadStatus();
-				if ((status & BLOGIC_STAT_DIAG_ACTIVE) == 0) {
-					diagnostic_active = false;
-					break;
-				}
-				scsi_io_pause();
-			}
-			if (diagnostic_active) return false;
-
-			for0(spin, 10000) {
-				byte status = ReadStatus();
-				if (status & (BLOGIC_STAT_DIAG_FAILED | BLOGIC_STAT_ADAPTER_READY | BLOGIC_STAT_DATAIN_READY)) {
-					if ((status & BLOGIC_STAT_DIAG_FAILED) || !(status & BLOGIC_STAT_ADAPTER_READY)) {
-						return false;
-					}
-					if (status & BLOGIC_STAT_DATAIN_READY) {
-						(void)ReadDataIn();
-					}
-					plogtrac("[SCSI] reset %s ok status=%[8H]",
-						hard_reset ? "hard" : "soft", (unsigned)status);
-					return true;
-				}
-				scsi_io_pause();
-			}
-			return false;
-		}
-
-		bool WaitUntilReady(stduint limit = 100000) const {
-			while (limit--) {
-				byte status = ReadStatus();
-				if ((status & (BLOGIC_STAT_ADAPTER_READY | BLOGIC_STAT_CMD_BUSY)) == BLOGIC_STAT_ADAPTER_READY) {
-					return true;
-				}
-				scsi_io_pause();
-			}
-			return false;
-		}
-
-		int Command(byte opcode, const void* param_data, stduint param_len, void* reply_data, stduint reply_len) const {
-			if (!has_io() || faulted) return -1;
-			ClearLocalCommandState();
-			if (!WaitUntilReady()) return -2;
-
-			const byte* param = reinterpret_cast<const byte*>(param_data);
-			byte* reply = reinterpret_cast<byte*>(reply_data);
-			stduint reply_bytes = 0;
-			WriteCommand(opcode);
-
-			stduint param_timeout = 100000;
-			while (param_len && param_timeout--) {
-				scsi_io_pause();
-				byte intreg = ReadInterrupt();
-				byte status = ReadStatus();
-				if (intreg & BLOGIC_INT_CMD_COMPLETE) break;
-				if (status & BLOGIC_STAT_DATAIN_READY) break;
-				if (status & BLOGIC_STAT_CMD_BUSY) continue;
-				WriteCommand(*param++);
-				--param_len;
-			}
-			if (param_len) {
-				ClearLocalCommandState();
-				return -3;
-			}
-
-			stduint reply_timeout = 100000;
-			if (opcode == BLOGIC_INQ_DEV0TO7 ||
-				opcode == BLOGIC_INQ_DEV8TO15 ||
-				opcode == BLOGIC_INQ_DEV) {
-				reply_timeout = 6000000;
-			}
-			while (reply_timeout--) {
-				byte intreg = ReadInterrupt();
-				byte status = ReadStatus();
-				if (status & BLOGIC_STAT_DATAIN_READY) {
-					byte value = ReadDataIn();
-					if (reply && reply_bytes < reply_len) {
-						reply[reply_bytes] = value;
-					}
-					++reply_bytes;
-					continue;
-				}
-				if (intreg & BLOGIC_INT_CMD_COMPLETE) {
-					InterruptReset();
-					if (status & BLOGIC_STAT_CMD_INVALID) {
-						ClearLocalCommandState();
-						return -4;
-					}
-					return int(reply_bytes);
-				}
-				scsi_io_pause();
-			}
-			ClearLocalCommandState();
-			return -5;
-		}
-
-		bool QueryBoardId(BusLogicBoardId& out) const {
-			MemSet(&out, 0, sizeof(out));
-			return Command(BLOGIC_GET_BOARD_ID, nullptr, 0, &out, sizeof(out)) == sizeof(out);
-		}
-
-		bool PreparePolling() const {
-			const uint16 command = uint16(uni::PCI::read_config_register(node->fields.pci_segment,
-				node->fields.pci_bus, node->fields.pci_device, node->fields.pci_function, 0x04));
-			if (command & PciCommandInterruptDisable) return true;
-			// BusLogic MultiMaster Disable Host Adapter Interrupt (0x25): zero masks IRQ, but CMDC remains pollable.
-			const byte enable = 0;
-			if (Command(BLOGIC_DISABLE_INT, &enable, sizeof(enable), nullptr, 0) != 0) {
-				plogwarn("[SCSI] cannot disable adapter IRQ for polling");
-				return false;
-			}
-			ClearAdapterInterruptState();
-			plogtrac("[SCSI] PCI INTx masking unavailable; adapter IRQ disabled for polling");
-			return true;
-		}
-
-		bool QueryConfig(BusLogicConfig& out) const {
-			MemSet(&out, 0, sizeof(out));
-			return Command(BLOGIC_INQ_CONFIG, nullptr, 0, &out, sizeof(out)) == sizeof(out);
-		}
-
-		bool QuerySetupInfo(BusLogicSetupInfo& out) const {
-			byte reply_len = sizeof(out.bytes);
-			MemSet(&out, 0, sizeof(out));
-			return Command(BLOGIC_INQ_SETUPINFO, &reply_len, 1, out.bytes, sizeof(out.bytes)) == sizeof(out.bytes);
-		}
-
-		bool QueryExtSetup(BusLogicExtSetup& out) const {
-			byte reply_len = sizeof(out.bytes);
-			MemSet(&out, 0, sizeof(out));
-			return Command(BLOGIC_INQ_EXTSETUP, &reply_len, 1, out.bytes, sizeof(out.bytes)) == sizeof(out.bytes);
-		}
-
-		bool QueryPciInfo(BusLogicPciInfo& out) const {
-			MemSet(&out, 0, sizeof(out));
-			return Command(BLOGIC_INQ_PCI_INFO, nullptr, 0, &out, sizeof(out)) == sizeof(out);
-		}
-
-		bool QueryFirmwareExtra(byte& digit3, byte& letter) const {
-			digit3 = 0;
-			letter = 0;
-			const bool ok3 = Command(BLOGIC_INQ_FWVER_D3, nullptr, 0, &digit3, 1) == 1;
-			const bool ok4 = Command(BLOGIC_INQ_FWVER_LETTER, nullptr, 0, &letter, 1) == 1;
-			return ok3 && ok4;
-		}
-
-		bool QueryModelNumber(char model[6]) const {
-			MemSet(model, 0, 6);
-			return Command(BLOGIC_INQ_MODELNO, nullptr, 0, model, 5) == 5;
-		}
-
-		bool QueryInstalledTargets(uint16& out_mask) const {
-			out_mask = 0;
-			return Command(BLOGIC_INQ_DEV, nullptr, 0, &out_mask, sizeof(out_mask)) == sizeof(out_mask);
-		}
-
-		bool QueryInstalledTargetsLegacy(byte out_luns0to7[8]) const {
-			MemSet(out_luns0to7, 0, 8);
-			return Command(BLOGIC_INQ_DEV0TO7, nullptr, 0, out_luns0to7, 8) == 8;
-		}
-
-		bool InitializeMailbox(byte requested_count) {
-			if (!has_io()) return false;
-			if (mailbox_region.virt && mailbox_count == requested_count) return true;
-
-			const stduint total_size =
-				stduint(requested_count) * (sizeof(BusLogicOutbox) + sizeof(BusLogicInbox));
-			if (!mailbox_region.Ensure(node, total_size)) return false;
-
-			MemSet(mailbox_region.virt, 0, total_size);
-			outboxes = reinterpret_cast<BusLogicOutbox*>(mailbox_region.virt);
-			inboxes = reinterpret_cast<BusLogicInbox*>(
-				mailbox_region.virt + requested_count * sizeof(BusLogicOutbox));
-
-			BusLogicExtMailboxInitReq req{};
-			req.mbox_count = requested_count;
-			req.base_mbox_addr = mailbox_region.device_address;
-			if (Command(BLOGIC_INIT_EXT_MBOX, &req, sizeof(req), nullptr, 0) < 0) {
-				DisableAfterCommandFailure();
-				return false;
-			}
-			mailbox_count = requested_count;
-			next_outbox_index = 0;
-			plogtrac("[SCSI] mailbox init count=%u base=%[32H]",
-				(unsigned)mailbox_count, req.base_mbox_addr);
-			return true;
-		}
-
-		bool SetCcbFormat(byte fmt) const {
-			return Command(BLOGIC_SETCCB_FMT, &fmt, 1, nullptr, 0) >= 0;
-		}
-
-		bool EnsureProbeBuffers() {
-			if (!probe_ccb_region.Ensure(node, 512)) return false;
-			if (!probe_sense_region.Ensure(node, 256)) return false;
-			MemSet(probe_ccb_region.virt, 0, 512);
-			MemSet(probe_sense_region.virt, 0, 256);
-			return true;
-		}
+		// Nodes retain pointers into these objects; allocating each slot separately keeps its address stable.
+		uni::Vector<uni::SharedPtr<DiskSlot>> disk_slots;
+		uni::Vector<uni::SharedPtr<CdromSlot>> cdrom_slots;
 
 		bool EnsureSectorBuffer(stduint block_size) {
 			if (!block_size) return false;
 			if (!sector_buf || sector_buf_size < block_size) {
-				sector_buf = (byte*)mempool.allocate(block_size, 12);
-				if (!sector_buf) return false;
+				auto* replacement = (byte*)mempool.allocate(block_size, 12);
+				if (!replacement) return false;
+				if (sector_buf) mempool.deallocate(sector_buf, sector_buf_size);
+				sector_buf = replacement;
 				sector_buf_size = block_size;
 			}
 			MemSet(sector_buf, 0, block_size);
 			return true;
 		}
 
-		static bool ExecScsiCommandThunk(void* context,
-			byte target_id, byte lun,
-			const byte* cdb, byte cdb_length,
-			void* data_buf, stduint data_length, bool data_in,
-			byte& completion_code, byte& adapter_status, byte& target_status) {
-			auto* ctlr = reinterpret_cast<ScsiController*>(context);
-			if (!ctlr) return false;
-			return ctlr->ExecuteMailboxScsi(target_id, lun, cdb, cdb_length,
-				data_buf, data_length, data_in,
-				completion_code, adapter_status, target_status);
-		}
-
-		bool ExecuteMailboxScsi(byte target_id, byte lun, const byte* cdb, byte cdb_length,
-			void* data_buf, stduint data_length, bool data_in,
-			byte& completion_code, byte& adapter_status, byte& target_status) {
-			MutexLocal lock(&command_lock);
-			completion_code = adapter_status = target_status = 0xFF;
-			if (faulted || !mailbox_count || !outboxes || !inboxes) return false;
-			if (!cdb || cdb_length == 0 || cdb_length > 12) return false;
-			if (target_id >= kMaxTargets || lun >= kMaxLuns || uint64(data_length) > 0xFFFFFFFFull) return false;
-			if (data_length && (!data_buf || !data_region.Ensure(node, data_length))) return false;
-			if (!EnsureProbeBuffers()) return false;
-			// Caller buffers (including REQUEST SENSE on the stack) are CPU addresses, never device addresses.
-			if (data_length) {
-				if (data_in) MemSet(data_region.virt, 0, data_length);
-				else MemCopyN(data_region.virt, data_buf, data_length);
-			}
-			ClearLocalCommandState();
-			ClearAdapterInterruptState();
-			if (!WaitUntilReady()) {
-				plogwarn("[SCSI] exec mailbox while adapter not ready status=%[8H] int=%[8H]",
-					(unsigned)ReadStatus(), (unsigned)ReadInterrupt());
-				return false;
-			}
-
-			const stduint outbox_index = next_outbox_index % mailbox_count;
-			auto* outbox = &outboxes[outbox_index];
-			auto* probe_ccb = reinterpret_cast<BusLogicCcb32*>(probe_ccb_region.virt);
-			const uint32 data_phys = data_length ? data_region.device_address : 0;
-			MemSet(mailbox_region.virt, 0, mailbox_count * (sizeof(BusLogicOutbox) + sizeof(BusLogicInbox)));
-			MemSet(probe_ccb, 0, sizeof(*probe_ccb));
-
-			probe_ccb->opcode = BLOGIC_CCB_INITIATOR;
-			probe_ccb->control = byte((data_length == 0 ? BLOGIC_DIR_NOTX :
-				(data_in ? BLOGIC_DIR_DATAIN : BLOGIC_DIR_DATAOUT)) << 3);
-			probe_ccb->cdb_length = cdb_length;
-			probe_ccb->sense_length = 18;
-			probe_ccb->data_length = uint32(data_length);
-			probe_ccb->data_addr = data_phys;
-			probe_ccb->target_id = target_id;
-			probe_ccb->lun_legacy = byte(lun & 0x1Fu);
-			MemCopyN(probe_ccb->cdb, cdb, cdb_length);
-			probe_ccb->sense_addr = probe_sense_region.device_address;
-
-			outbox->ccb = probe_ccb_region.device_address;
-			// Publish ownership only after the CCB, data and mailbox address are visible to the adapter.
-			_ASM volatile("" ::: "memory");
-			outbox->action = BLOGIC_MBOX_START;
-			next_outbox_index = (outbox_index + 1) % mailbox_count;
-			// ploginfo("[SCSI] exec ccb=%[32H] data=%[32H] sense=%[32H] outbox=%[32H]",
-			// 	(unsigned)probe_ccb_region.device_address,
-			// 	(unsigned)data_phys,
-			// 	(unsigned)probe_sense_region.device_address,
-			// 	(unsigned)(mailbox_region.device_address + stduint((byte*)outbox - mailbox_region.virt)));
-			_ASM volatile("" ::: "memory");
-			WriteCommand(BLOGIC_EXEC_MBOX_CMD);
-
-			stduint timeout = 1000000;
-			while (timeout--) {
-				for0(i, mailbox_count) {
-					auto* inbox = &inboxes[i];
-					if (inbox->completion_code == BLOGIC_INBOX_FREE) continue;
-					_ASM volatile("" ::: "memory");
-					if (inbox->ccb != probe_ccb_region.device_address) continue;
-					completion_code = inbox->completion_code;
-					adapter_status = inbox->adapter_status;
-					target_status = inbox->target_status;
-					ClearAdapterInterruptState();
-					if (data_in && data_length && completion_code == BLOGIC_CMD_COMPLETE_GOOD &&
-						adapter_status == BLOGIC_ADAPTER_STATUS_OK && target_status == BLOGIC_TARGET_STATUS_GOOD) {
-						MemCopyN(data_buf, data_region.virt, data_length);
-					}
-					inbox->completion_code = BLOGIC_INBOX_FREE;
-					outbox->action = 0;
-					return true;
-				}
-				const byte intreg = ReadInterrupt();
-				if (intreg & 0x80u) {
-					InterruptReset();
-					if ((intreg & BLOGIC_INT_CMD_COMPLETE) && outbox->action != 0) {
-						byte diag[8] = {};
-						stduint diag_len = 0;
-						while (diag_len < numsof(diag) && (ReadStatus() & BLOGIC_STAT_DATAIN_READY)) {
-							diag[diag_len++] = ReadDataIn();
-						}
-						plogwarn("[SCSI] exec cmd-complete before mailbox consume status=%[8H] diag0=%[8H] diag1=%[8H] diaglen=%u",
-							(unsigned)ReadStatus(),
-							(unsigned)diag[0],
-							(unsigned)diag[1],
-							(unsigned)diag_len);
-						ClearLocalCommandState();
-						DisableAfterCommandFailure();
-						return false;
-					}
-				}
-				scsi_io_pause();
-			}
-			completion_code = 0;
-			adapter_status = 0;
-			target_status = 0;
-			for0(i, mailbox_count) {
-				auto* inbox = &inboxes[i];
-				if (inbox->ccb != probe_ccb_region.device_address) continue;
-				completion_code = inbox->completion_code;
-				adapter_status = inbox->adapter_status;
-				target_status = inbox->target_status;
-				break;
-			}
-			plogwarn("[SCSI] exec timeout status=%[8H] int=%[8H] outbox-action=%[8H]",
-				(unsigned)ReadStatus(), (unsigned)ReadInterrupt(), (unsigned)outbox->action);
-			DisableAfterCommandFailure();
-			return false;
-		}
-
 		void RegisterStorageNode(DiskSlot& slot) {
 			if (!node || slot.node) return;
 			String name;
-			if (slot.lun == 0) name.Format("scsi-disk@%u:%u", (stduint)kControllerSlot, (stduint)slot.target);
-			else name.Format("scsi-disk@%u:%u:%u", (stduint)kControllerSlot, (stduint)slot.target, (stduint)slot.lun);
+			if (slot.lun == 0) name.Format("scsi-disk@%u:%u", (stduint)controller_slot, (stduint)slot.target);
+			else name.Format("scsi-disk@%u:%u:%u", (stduint)controller_slot, (stduint)slot.target, (stduint)slot.lun);
 			slot.node = Devsman::RegisterStorageDevice(
 				node, name.reference(), DeviceBusType::PCI, "scsi-disk", &slot.disk);
 			String alias;
-			if (slot.lun == 0) alias.Format("scsi%u-%u", (stduint)kControllerSlot, (stduint)slot.target);
-			else alias.Format("scsi%u-%u-%u", (stduint)kControllerSlot, (stduint)slot.target, (stduint)slot.lun);
+			if (slot.lun == 0) alias.Format("scsi%u-%u", (stduint)controller_slot, (stduint)slot.target);
+			else alias.Format("scsi%u-%u-%u", (stduint)controller_slot, (stduint)slot.target, (stduint)slot.lun);
 			Devsman::RegisterDevAlias(slot.node, alias.reference());
 		}
 
 		void RegisterCdromNode(CdromSlot& slot) {
 			if (!node || slot.node) return;
 			String name;
-			if (slot.lun == 0) name.Format("scsi-cdrom@%u:%u", (stduint)kControllerSlot, (stduint)slot.target);
-			else name.Format("scsi-cdrom@%u:%u:%u", (stduint)kControllerSlot, (stduint)slot.target, (stduint)slot.lun);
+			if (slot.lun == 0) name.Format("scsi-cdrom@%u:%u", (stduint)controller_slot, (stduint)slot.target);
+			else name.Format("scsi-cdrom@%u:%u:%u", (stduint)controller_slot, (stduint)slot.target, (stduint)slot.lun);
 			slot.node = Devsman::RegisterStorageDevice(
 				node, name.reference(), DeviceBusType::PCI, "scsi-cdrom", &slot.cdrom);
 			String alias;
-			if (slot.lun == 0) alias.Format("sr-scsi%u-%u", (stduint)kControllerSlot, (stduint)slot.target);
-			else alias.Format("sr-scsi%u-%u-%u", (stduint)kControllerSlot, (stduint)slot.target, (stduint)slot.lun);
+			if (slot.lun == 0) alias.Format("sr-scsi%u-%u", (stduint)controller_slot, (stduint)slot.target);
+			else alias.Format("sr-scsi%u-%u-%u", (stduint)controller_slot, (stduint)slot.target, (stduint)slot.lun);
 			Devsman::RegisterDevAlias(slot.node, alias.reference());
 		}
 
@@ -752,7 +378,9 @@ namespace {
 				DeviceNode* part_node = Devsman::RegisterStoragePartition(
 					slot.node, node_name.reference(), slot.disk, part_dev);
 				String lab;
-				if (slot.lun == 0) lab.Format("/mnt/scsi%u.%u", (stduint)slot.target, part_dev);
+				// Preserve the first controller's paths; other controllers need a distinct mount namespace.
+				if (controller_slot) lab.Format("/mnt/scsi%u-%u-%u.%u", (stduint)controller_slot, (stduint)slot.target, (stduint)slot.lun, part_dev);
+				else if (slot.lun == 0) lab.Format("/mnt/scsi%u.%u", (stduint)slot.target, part_dev);
 				else lab.Format("/mnt/scsi%u-%u.%u", (stduint)slot.target, (stduint)slot.lun, part_dev);
 				if (auto fs = Filesys::Mount(slot.disk, part_dev, lab.reference(), part_node)) {
 					ploginfo("[SCSI] mount %s on %s", fs->name, lab.reference());
@@ -762,7 +390,8 @@ namespace {
 
 		void MountCdromWholeDisk(CdromSlot& slot) {
 			String lab;
-			if (slot.lun == 0) lab.Format("/mnt/scsi%u.0", (stduint)slot.target);
+			if (controller_slot) lab.Format("/mnt/scsi%u-%u-%u.0", (stduint)controller_slot, (stduint)slot.target, (stduint)slot.lun);
+			else if (slot.lun == 0) lab.Format("/mnt/scsi%u.0", (stduint)slot.target);
 			else lab.Format("/mnt/scsi%u-%u.0", (stduint)slot.target, (stduint)slot.lun);
 			if (auto fs = Filesys::Mount(slot.cdrom, 0, lab.reference(), slot.node)) {
 				ploginfo("[SCSI] mount %s on %s", fs->name, lab.reference());
@@ -773,68 +402,50 @@ namespace {
 			}
 		}
 
-		DiskSlot* AcquireDiskSlot(byte target, byte lun) {
-			for0(i, kMaxDiskSlots) {
-				if (disk_slots[i].used &&
-					disk_slots[i].target == target &&
-					disk_slots[i].lun == lun) return &disk_slots[i];
+		DiskSlot* AcquireDiskSlot(stduint target, byte lun) {
+			for (auto& slot : disk_slots) {
+				if (slot->target == target && slot->lun == lun) return slot.get();
 			}
-			for0(i, kMaxDiskSlots) {
-				if (disk_slots[i].used) continue;
-				disk_slots[i].used = true;
-				disk_slots[i].target = target;
-				disk_slots[i].lun = lun;
-				return &disk_slots[i];
-			}
-			return nullptr;
+			auto owner = uni::make_shared<DiskSlot>();
+			if (!owner) return nullptr;
+			owner->target = target;
+			owner->lun = lun;
+			if (!disk_slots.Append(owner)) return nullptr;
+			return owner.get();
 		}
 
-		CdromSlot* AcquireCdromSlot(byte target, byte lun) {
-			for0(i, kMaxCdromSlots) {
-				if (cdrom_slots[i].used &&
-					cdrom_slots[i].target == target &&
-					cdrom_slots[i].lun == lun) return &cdrom_slots[i];
+		CdromSlot* AcquireCdromSlot(stduint target, byte lun) {
+			for (auto& slot : cdrom_slots) {
+				if (slot->target == target && slot->lun == lun) return slot.get();
 			}
-			for0(i, kMaxCdromSlots) {
-				if (cdrom_slots[i].used) continue;
-				cdrom_slots[i].used = true;
-				cdrom_slots[i].target = target;
-				cdrom_slots[i].lun = lun;
-				return &cdrom_slots[i];
-			}
-			return nullptr;
+			auto owner = uni::make_shared<CdromSlot>();
+			if (!owner) return nullptr;
+			owner->target = target;
+			owner->lun = lun;
+			if (!cdrom_slots.Append(owner)) return nullptr;
+			return owner.get();
 		}
 
-		bool ProbeReadCapacity(byte target, byte lun, ScsiReadCapacity10Reply& out_cap) {
-			if (!mailbox_count) return false;
-
-			byte cdb[10] = {};
-			cdb[0] = SCSI_CMD_READ_CAPACITY10;
-
-			byte completion_code = 0xFF;
-			byte adapter_status = 0xFF;
-			byte target_status = 0xFF;
-			if (!ExecuteMailboxScsi(target, lun, cdb, 10, &out_cap, sizeof(out_cap), true,
-				completion_code, adapter_status, target_status)) {
+		bool ProbeReadCapacity(stduint target, byte lun, uni::SCSI::ReadCapacity10Reply& out_cap) {
+			uni::SCSI::CommandResult result{};
+			if (!uni::SCSI::ReadCapacity10(execute, context, target, lun, out_cap, result)) {
 				plogwarn("[SCSI] readcap t%ul%u timeout comp=%[8H] host=%[8H] tgt=%[8H]",
 					(unsigned)target, (unsigned)lun,
-					(unsigned)completion_code, (unsigned)adapter_status, (unsigned)target_status);
+					(unsigned)result.completion, (unsigned)result.host_status, (unsigned)result.target_status);
 				return false;
 			}
-
 			// ploginfo("[SCSI] readcap t0l0 comp=%[8H] host=%[8H] tgt=%[8H]",
-			// 	(unsigned)completion_code, (unsigned)adapter_status, (unsigned)target_status);
-			if (completion_code != BLOGIC_CMD_COMPLETE_GOOD ||
-				adapter_status != BLOGIC_ADAPTER_STATUS_OK ||
-				target_status != BLOGIC_TARGET_STATUS_GOOD) {
-				plogwarn("[SCSI] readcap t%ul%u failed sense0=%[8H]",
-					(unsigned)target, (unsigned)lun, (unsigned)probe_sense_region.virt[0]);
+			// 	(unsigned)result.completion, (unsigned)result.host_status, (unsigned)result.target_status);
+			if (!result.Succeeded()) {
+				plogwarn("[SCSI] readcap t%ul%u failed comp=%[8H] host=%[8H] tgt=%[8H]",
+					(unsigned)target, (unsigned)lun,
+					(unsigned)result.completion, (unsigned)result.host_status, (unsigned)result.target_status);
 				return false;
 			}
 			return true;
 		}
 
-		bool SetupDiskTarget(byte target, byte lun, const ScsiReadCapacity10Reply& cap) {
+		bool SetupDiskTarget(stduint target, byte lun, const uni::SCSI::ReadCapacity10Reply& cap) {
 			auto* slot = AcquireDiskSlot(target, lun);
 			if (!slot) {
 				plogwarn("[SCSI] no disk slot for t%u:%u", (unsigned)target, (unsigned)lun);
@@ -850,7 +461,7 @@ namespace {
 				(uint32(cap.block_size[1]) << 16) |
 				(uint32(cap.block_size[2]) << 8) |
 				uint32(cap.block_size[3]);
-			slot->disk.Bind(target, lun, this, ExecScsiCommandThunk);
+			slot->disk.Bind(target, lun, context, execute);
 			slot->disk.UpdateCapacity(last_lba, block_size);
 			const uint64 block_count = uint64(last_lba) + 1;
 			const uint64 total_bytes = block_count * uint64(block_size);
@@ -867,7 +478,7 @@ namespace {
 			return true;
 		}
 
-		bool SetupCdromTarget(byte target, byte lun, const ScsiReadCapacity10Reply& cap) {
+		bool SetupCdromTarget(stduint target, byte lun, const uni::SCSI::ReadCapacity10Reply& cap) {
 			auto* slot = AcquireCdromSlot(target, lun);
 			if (!slot) {
 				plogwarn("[SCSI] no cdrom slot for t%u:%u", (unsigned)target, (unsigned)lun);
@@ -883,7 +494,7 @@ namespace {
 				(uint32(cap.block_size[1]) << 16) |
 				(uint32(cap.block_size[2]) << 8) |
 				uint32(cap.block_size[3]);
-			slot->cdrom.Bind(target, lun, this, ExecScsiCommandThunk);
+			slot->cdrom.Bind(target, lun, context, execute);
 			slot->cdrom.UpdateCapacity(last_lba, block_size);
 			ploginfo("[SCSI] t%ul%u cdrom capacity blocks=%u block-size=%u",
 				(unsigned)target, (unsigned)lun,
@@ -893,208 +504,160 @@ namespace {
 			return true;
 		}
 
-		bool ProbeInquiry(byte target, byte lun, ScsiInquiryReply& out_inq) {
-			if (!mailbox_count) return false;
-
-			byte cdb[6] = {};
-			cdb[0] = SCSI_CMD_INQUIRY;
-			cdb[4] = sizeof(ScsiInquiryReply);
-
-			byte completion_code = 0xFF;
-			byte adapter_status = 0xFF;
-			byte target_status = 0xFF;
-			if (!ExecuteMailboxScsi(target, lun, cdb, 6, &out_inq, sizeof(out_inq), true,
-				completion_code, adapter_status, target_status)) {
-				return false;
-			}
-
-			if (completion_code != BLOGIC_CMD_COMPLETE_GOOD ||
-				adapter_status != BLOGIC_ADAPTER_STATUS_OK ||
-				target_status != BLOGIC_TARGET_STATUS_GOOD) {
-				return false;
-			}
-			return true;
+		bool ProbeInquiry(stduint target, byte lun, uni::SCSI::InquiryReply& out_inq) {
+			uni::SCSI::CommandResult result{};
+			return uni::SCSI::Inquiry(execute, context, target, lun, out_inq, result) && result.Succeeded();
 		}
 
-		static bool InquiryIsAbsent(const ScsiInquiryReply& inq) {
+		static bool InquiryIsAbsent(const uni::SCSI::InquiryReply& inq) {
 			const byte devtype = inq.peripheral & 0x1Fu;
 			const byte qual = (inq.peripheral >> 5) & 0x07u;
 			return qual == 0x03u || devtype == 0x1Fu;
 		}
 
-		void ProbeScsiTargets() {
-			byte target_present[kMaxTargets] = {};
-			uint16 target_mask = 0;
-			if (QueryInstalledTargets(target_mask)) {
-				for0(t, kMaxTargets) target_present[t] = byte((target_mask >> t) & 1u);
-			}
-			else {
-				for0(t, kMaxTargets) target_present[t] = 1;
-			}
-
-			for0(target, kMaxTargets) {
-				if (!target_present[target]) continue;
-				for0(lun, kMaxLuns) {
-					if (faulted) return;
-					ScsiInquiryReply inq = {};
-					if (!ProbeInquiry((byte)target, (byte)lun, inq)) {
-						continue;
-					}
-					if (InquiryIsAbsent(inq)) continue;
-
-					char vendor[9] = {};
-					char product[17] = {};
-					char revision[5] = {};
-					MemCopyN(vendor, inq.vendor, 8);
-					MemCopyN(product, inq.product, 16);
-					MemCopyN(revision, inq.revision, 4);
-					const byte devtype = inq.peripheral & 0x1Fu;
-					ploginfo("[SCSI] t%ul%u inquiry devtype=%u qual=%u vendor=\"%s\" product=\"%s\" rev=\"%s\"",
-						(unsigned)target, (unsigned)lun,
-						(unsigned)devtype,
-						(unsigned)((inq.peripheral >> 5) & 0x07u),
-						vendor, product, revision);
-
-					ScsiReadCapacity10Reply cap = {};
-					if (!ProbeReadCapacity((byte)target, (byte)lun, cap)) continue;
-					if (devtype == 0) {
-						(void)SetupDiskTarget((byte)target, (byte)lun, cap);
-					}
-					else if (devtype == 5) {
-						(void)SetupCdromTarget((byte)target, (byte)lun, cap);
-					}
-				}
-			}
+		void ProbeScsiTarget(stduint target, byte lun) {
+			if (!is_available || !is_available(context)) return;
+			uni::SCSI::InquiryReply inq{};
+			if (!ProbeInquiry(target, lun, inq) || InquiryIsAbsent(inq)) return;
+			char vendor[9]{}, product[17]{}, revision[5]{};
+			MemCopyN(vendor, inq.vendor, 8);
+			MemCopyN(product, inq.product, 16);
+			MemCopyN(revision, inq.revision, 4);
+			const byte devtype = inq.peripheral & 0x1Fu;
+			ploginfo("[SCSI] t%ul%u inquiry devtype=%u qual=%u vendor=\"%s\" product=\"%s\" rev=\"%s\"",
+				(unsigned)target, (unsigned)lun, (unsigned)devtype,
+				(unsigned)((inq.peripheral >> 5) & 0x07u), vendor, product, revision);
+			uni::SCSI::ReadCapacity10Reply cap{};
+			if (!ProbeReadCapacity(target, lun, cap)) return;
+			if (devtype == 0) (void)SetupDiskTarget(target, lun, cap);
+			else if (devtype == 5) (void)SetupCdromTarget(target, lun, cap);
 		}
 
-		void DumpInquiryResults() {
-			if (!has_io()) return;
+		static uint32 ReadBigEndian32(const byte* p) {
+			return (uint32(p[0]) << 24) | (uint32(p[1]) << 16) | (uint32(p[2]) << 8) | p[3];
+		}
 
-			BusLogicBoardId board_id{};
-			if (QueryBoardId(board_id)) {
-				plogtrac("[SCSI] board id type=%[8H] fw=%c.%c custom=%[8H]",
-					(unsigned)board_id.type,
-					board_id.fw_ver_digit1 ? board_id.fw_ver_digit1 : '?',
-					board_id.fw_ver_digit2 ? board_id.fw_ver_digit2 : '?',
-					(unsigned)board_id.custom_features);
-				if (board_id.fw_ver_digit1 == '4') {
-					ploginfo("[SCSI] family=BusLogic MultiMaster C-series (BT-946C/956C/956CD class)");
+		bool ReadReportedLuns(stduint target, uni::Vector<byte>& luns) {
+			// SPC REPORT LUNS (0xA0): an eight-byte header followed by eight-byte SAM LUN addresses.
+			byte cdb[12]{};
+			cdb[0] = 0xA0;
+			stduint bytes = 16;
+			for0(pass, 2) {
+				if (!is_available || !is_available(context) || !EnsureSectorBuffer(bytes)) return false;
+				cdb[6] = byte(bytes >> 24);
+				cdb[7] = byte(bytes >> 16);
+				cdb[8] = byte(bytes >> 8);
+				cdb[9] = byte(bytes);
+				uni::SCSI::CommandResult result{};
+				if (!execute(context, target, 0, cdb, sizeof(cdb), sector_buf, bytes, true,
+					result.completion, result.host_status, result.target_status) || !result.Succeeded()) return false;
+				const uint32 list_bytes = ReadBigEndian32(sector_buf);
+				if (list_bytes & 7) return false;
+				const uint64 needed = uint64(list_bytes) + 8;
+				if (needed > 0xFFFFFFFFull || needed > ~stduint(0)) return false;
+				if (needed > bytes) {
+					bytes = stduint(needed);
+					continue;
 				}
-				else if (board_id.fw_ver_digit1 == '5') {
-					ploginfo("[SCSI] family=BusLogic MultiMaster W-series (BT-948/958/958D class)");
+				// Copy addresses before probing: partition reads and mounts reuse sector_buf.
+				for0(i, list_bytes / 8) {
+					const byte* entry = sector_buf + 8 + i * 8;
+					bool flat = entry[0] == 0 && entry[1] < lun_count;
+					for (stduint j = 2; j < 8; ++j) if (entry[j]) flat = false;
+					if (!flat) {
+						plogwarn("[SCSI] t%u LUN addressing unsupported by this transport", (unsigned)target);
+						continue;
+					}
+					bool duplicate = false;
+					for (byte existing : luns) if (existing == entry[1]) duplicate = true;
+					if (!duplicate && !luns.Append(entry[1])) return false;
 				}
+				return true;
 			}
-			else {
-				plogwarn("[SCSI] GET_BOARD_ID failed");
-			}
+			return false;
+		}
 
-			BusLogicConfig config{};
-			if (QueryConfig(config)) {
-				// ploginfo("[SCSI] config dma=%[8H] irq=%[8H] hostid=%u",
-				// 	(unsigned)config.byte0,
-				// 	(unsigned)config.byte1,
-				// 	(unsigned)(config.byte2 & 0x0Fu));
-			}
-			else {
-				plogwarn("[SCSI] INQ_CONFIG failed");
-			}
-
-			BusLogicSetupInfo setup{};
-			if (QuerySetupInfo(setup)) {
-				(void)setup;
-				// ploginfo("[SCSI] setup parity=%u sync=%u tx=%u preempt=%u timeoff=%u mbox=%u base=%[32H]",
-				// 	(unsigned)((flags >> 1) & 1u),
-				// 	(unsigned)(flags & 1u),
-				// 	(unsigned)setup.bytes[1],
-				// 	(unsigned)setup.bytes[2],
-				// 	(unsigned)setup.bytes[3],
-				// 	(unsigned)setup.bytes[4],
-				// 	mbox_addr);
-			}
-			else {
-				plogwarn("[SCSI] INQ_SETUPINFO failed");
-			}
-
-			BusLogicExtSetup ext{};
-			byte ext_mbox_count = 0;
-			if (QueryExtSetup(ext)) {
-				ext_mbox_count = ext.bytes[4];
-				(void)ext;
-				// ploginfo("[SCSI] extsetup bus=%[8H] bios=%[8H] sg-limit=%u mbox=%u fw=%c%c%c features=%[8H]",
-				// 	(unsigned)ext.bytes[0],
-				// 	(unsigned)ext.bytes[1],
-				// 	(unsigned)(uint16(ext.bytes[2]) | (uint16(ext.bytes[3]) << 8)),
-				// 	(unsigned)ext.bytes[4],
-				// 	ext.bytes[10] ? ext.bytes[10] : '?',
-				// 	ext.bytes[11] ? ext.bytes[11] : '?',
-				// 	ext.bytes[12] ? ext.bytes[12] : '?',
-				// 	(unsigned)feature);
-				// ploginfo("[SCSI] caps wide=%u differential=%u scam=%u ultra=%u smart-term=%u",
-				// 	(unsigned)((feature >> 0) & 1u),
-				// 	(unsigned)((feature >> 1) & 1u),
-				// 	(unsigned)((feature >> 2) & 1u),
-				// 	(unsigned)((feature >> 3) & 1u),
-				// 	(unsigned)((feature >> 4) & 1u));
-			}
-			else {
-				plogwarn("[SCSI] INQ_EXTSETUP failed");
-			}
-
-			if (ext_mbox_count) {
-				const byte init_mbox_count = ext_mbox_count > 32 ? 32 : ext_mbox_count;
-				if (!InitializeMailbox(init_mbox_count)) {
-					plogwarn("[SCSI] INIT_EXT_MBOX failed");
+		void ProbeScsiTargets() {
+			for0(target, target_count) {
+				if (is_target_present && !is_target_present(context, target)) continue;
+				uni::Vector<byte> luns;
+				if (ReadReportedLuns(target, luns)) {
+					for (byte lun : luns) ProbeScsiTarget(target, lun);
 				}
 				else {
-					if (SetCcbFormat(BLOGIC_EXT_LUN_CCB)) {
-						plogtrac("[SCSI] ccb format=extended");
-					}
-					else {
-						plogwarn("[SCSI] SETCCB_FMT failed");
-					}
-					BusLogicSetupInfo setup_after_mbox{};
-					if (QuerySetupInfo(setup_after_mbox)) {
-						(void)setup_after_mbox;
-						// ploginfo("[SCSI] setup-after-mbox mbox=%u base=%[32H]",
-						// 	(unsigned)setup_after_mbox.bytes[4], mbox_addr_after);
-					}
+					uni::SCSI::InquiryReply inq{};
+					if (!ProbeInquiry(target, 0, inq)) continue;
+					// Old targets may not implement REPORT LUNS; scan the transport's representable flat-LUN range.
+					for0(lun, lun_count) ProbeScsiTarget(target, byte(lun));
 				}
+				if (!is_available || !is_available(context)) return;
 			}
+		}
+	};
 
-			BusLogicPciInfo pci{};
-			if (QueryPciInfo(pci)) {
-				(void)pci;
-				// ploginfo("[SCSI] pci-info isa-port=%u irq=%u low-term=%u high-term=%u valid=%u",
-				// 	(unsigned)pci.isa_port,
-				// 	(unsigned)pci.irq_channel,
-				// 	(unsigned)(pci.termination & 0x01u),
-				// 	(unsigned)((pci.termination >> 1) & 0x01u),
-				// 	(unsigned)((pci.termination >> 7) & 0x01u));
-			}
-			else {
-				plogwarn("[SCSI] INQ_PCI_INFO failed");
-			}
+	struct BusLogicController {
+		DeviceNode* node = nullptr;
+		const DeviceResource* bar0_io = nullptr;
+		const DeviceResource* bar0_mmio = nullptr;
+		const DeviceResource* irq = nullptr;
+		word io_base = 0;
+		// Protect queue/mailbox changes against other callers and deferred completions, not the whole wait.
+		Mutex command_lock;
+		ScsiAsyncState async;
+		DmaRegion regions[stduint(uni::SCSI::BusLogic::DmaSlot::Count)]{};
+		uni::SCSI::BusLogic adapter;
+		ScsiController storage;
+		uint16 target_mask = 0;
+		bool target_mask_valid = false;
 
-			byte fw_digit3 = 0;
-			byte fw_letter = 0;
-			if (QueryFirmwareExtra(fw_digit3, fw_letter)) {
-				(void)fw_digit3;
-				(void)fw_letter;
-				// ploginfo("[SCSI] firmware extra d3=%c letter=%c",
-				// 	fw_digit3 ? fw_digit3 : '?',
-				// 	fw_letter ? fw_letter : '?');
-			}
-			else {
-				plogwarn("[SCSI] INQ_FWVER extra failed");
-			}
-			ProbeScsiTargets();
+		static bool EnsureDma(void* context, uni::SCSI::BusLogic::DmaSlot slot, stduint bytes,
+			uni::SCSI::BusLogic::DmaBuffer& buffer) {
+			auto* controller = static_cast<BusLogicController*>(context);
+			const stduint index = stduint(slot);
+			if (index >= numsof(controller->regions)) return false;
+			auto& region = controller->regions[index];
+			const bool ready = region.Ensure(controller->node, bytes);
+			// Also return empty/old metadata on failure so the controller never keeps a freed CPU address.
+			buffer = {region.virt, region.device_address, region.size};
+			return ready;
+		}
+
+		static void DisableDma(void* context) {
+			auto* controller = static_cast<BusLogicController*>(context);
+			auto* node = controller->node;
+			const uint16 command = uint16(uni::PCI::read_config_register(node->fields.pci_segment,
+				node->fields.pci_bus, node->fields.pci_device, node->fields.pci_function, 0x04));
+			uni::PCI::write_config_register(node->fields.pci_segment, node->fields.pci_bus,
+				node->fields.pci_device, node->fields.pci_function, 0x04,
+				(command & uint16(~PciCommandBusMaster)) | PciCommandInterruptDisable);
+		}
+
+		static bool ExecScsiCommandThunk(void* context, stduint target_id, byte lun,
+			const byte* cdb, byte cdb_length, void* data_buf, stduint data_length, bool data_in,
+			byte& completion_code, byte& adapter_status, byte& target_status) {
+			auto* controller = static_cast<BusLogicController*>(context);
+			return ScsiAsyncHost<BusLogicController>::Execute(*controller, target_id, lun, cdb, cdb_length,
+				data_buf, data_length, data_in, completion_code, adapter_status, target_status);
+		}
+
+		static bool IsAvailable(void* context) {
+			auto* controller = static_cast<BusLogicController*>(context);
+			MutexLocal lock(&controller->command_lock);
+			return controller->adapter.IsReady();
+		}
+
+		static bool IsTargetPresent(void* context, stduint target) {
+			auto* controller = static_cast<BusLogicController*>(context);
+			MutexLocal lock(&controller->command_lock);
+			return target < uni::SCSI::BusLogic::MaxTargets &&
+				(!controller->target_mask_valid || (controller->target_mask & (uint16(1u) << target)));
 		}
 
 		bool Bind(DeviceNode* scsi_node) {
-			if (!scsi_node || faulted) return false;
+			if (!scsi_node || adapter.IsFaulted()) return false;
 			if (node && node != scsi_node) return false;
-			if (scsi_node->fields.vendor_id != BusLogicVendorId ||
-				scsi_node->fields.device_id != BusLogicMultiMasterDeviceId) return false;
+			if (scsi_node->fields.vendor_id != uni::SCSI::BusLogic::VendorId ||
+				scsi_node->fields.device_id != uni::SCSI::BusLogic::DeviceId) return false;
 			bar0_io = Devsman::FindResource(scsi_node, DeviceResourceType::PciBarIo, 0);
 			bar0_mmio = Devsman::FindResource(scsi_node, DeviceResourceType::PciBarMmio, 0);
 			irq = Devsman::FindResource(scsi_node, DeviceResourceType::IrqLine, 0);
@@ -1114,7 +677,10 @@ namespace {
 				plogwarn("[SCSI] PCI I/O or bus mastering unavailable command=%[16H]", (stduint)actual);
 				return false;
 			}
-			return true;
+			using Host = ScsiAsyncHost<BusLogicController>;
+			const uni::SCSI::BusLogic::Services services{this, EnsureDma, DisableDma,
+				{this, Host::AllocateDma, Host::ReleaseDma, Host::Milliseconds, Host::Completed}, Host::LockInterrupt, Host::UnlockInterrupt};
+			return adapter.Bind(io_base, services);
 		}
 
 		void DumpSummary() const {
@@ -1140,31 +706,181 @@ namespace {
 					(unsigned)irq->start, (unsigned)irq->extra);
 			}
 			else {
-				plogwarn("[SCSI] IRQ resource missing; stage0 will stay polling-only");
+				plogwarn("[SCSI] IRQ resource missing; polling fallback");
 			}
+		}
+
+		bool Start() {
+			if (adapter.IsReady()) return true;
+			DumpSummary();
+			const uint16 command = uint16(uni::PCI::read_config_register(node->fields.pci_segment,
+				node->fields.pci_bus, node->fields.pci_device, node->fields.pci_function, 0x04));
+			if (!adapter.Initialize(bool(command & PciCommandInterruptDisable))) return false;
+			storage.controller_slot = g_scsi_controller_count++;
+			target_mask_valid = adapter.QueryInstalledTargets(target_mask);
+			ScsiAsyncHost<BusLogicController>::ConfigureInterrupt(*this);
+			storage.node = node;
+			storage.context = this;
+			storage.execute = ExecScsiCommandThunk;
+			storage.is_available = IsAvailable;
+			storage.is_target_present = IsTargetPresent;
+			storage.target_count = uni::SCSI::BusLogic::MaxTargets;
+			storage.lun_count = uni::SCSI::BusLogic::MaxLuns;
+			storage.ProbeScsiTargets();
+			return adapter.IsReady();
 		}
 	};
 
-	ScsiController g_scsi_controller;
+	template <typename Adapter>
+	struct LsiLogicController {
+		DeviceNode* node = nullptr;
+		// Serialize queue/FIFO changes only; release this mutex while individual requests wait for completion.
+		Mutex command_lock;
+		ScsiAsyncState async;
+		DmaRegion regions[stduint(Adapter::DmaSlot::Count)]{};
+		Adapter adapter;
+		ScsiController storage;
+
+		static bool EnsureDma(void* context, typename Adapter::DmaSlot slot, stduint bytes,
+			typename Adapter::DmaBuffer& buffer) {
+			auto* controller = static_cast<LsiLogicController*>(context);
+			const stduint index = stduint(slot);
+			if (index >= numsof(controller->regions)) return false;
+			auto& region = controller->regions[index];
+			const bool allocated = region.Ensure(controller->node, bytes);
+			buffer = {region.virt, region.device_address, region.size};
+			return allocated;
+		}
+
+		static void DisableDma(void* context) {
+			const auto* node = static_cast<LsiLogicController*>(context)->node;
+			const uint16 command = uint16(uni::PCI::read_config_register(node->fields.pci_segment,
+				node->fields.pci_bus, node->fields.pci_device, node->fields.pci_function, 0x04));
+			uni::PCI::write_config_register(node->fields.pci_segment, node->fields.pci_bus,
+				node->fields.pci_device, node->fields.pci_function, 0x04,
+				(command & uint16(~PciCommandBusMaster)) | PciCommandInterruptDisable);
+		}
+
+		static bool ExecScsiCommandThunk(void* context, stduint target_id, byte lun,
+			const byte* cdb, byte cdb_length, void* data_buf, stduint data_length, bool data_in,
+			byte& completion_code, byte& adapter_status, byte& target_status) {
+			auto* controller = static_cast<LsiLogicController*>(context);
+			return ScsiAsyncHost<LsiLogicController>::Execute(*controller, target_id, lun, cdb, cdb_length,
+				data_buf, data_length, data_in, completion_code, adapter_status, target_status);
+		}
+
+		static bool IsAvailable(void* context) {
+			auto* controller = static_cast<LsiLogicController*>(context);
+			MutexLocal lock(&controller->command_lock);
+			return controller->adapter.IsReady();
+		}
+
+		static bool IsTargetPresent(void* context, stduint target) {
+			auto* controller = static_cast<LsiLogicController*>(context);
+			MutexLocal lock(&controller->command_lock);
+			return controller->adapter.IsTargetPresent(target);
+		}
+
+		bool Bind(DeviceNode* scsi_node) {
+			if (!scsi_node || adapter.IsFaulted() || (node && node != scsi_node)) return false;
+			if (scsi_node->fields.vendor_id != Adapter::VendorId ||
+				scsi_node->fields.device_id != Adapter::DeviceId) return false;
+			if (adapter.IsReady()) return true;
+			const auto* io = Devsman::FindResource(scsi_node, DeviceResourceType::PciBarIo, 0);
+			if (!io || !io->start || io->start > 0xFFB8u || io->length < 0x48) {
+				plogwarn("[%s] BAR0 I/O window missing or too small", Adapter::Name);
+				return false;
+			}
+			node = scsi_node;
+			const uint16 command = uint16(uni::PCI::read_config_register(node->fields.pci_segment,
+				node->fields.pci_bus, node->fields.pci_device, node->fields.pci_function, 0x04));
+			uni::PCI::write_config_register(node->fields.pci_segment, node->fields.pci_bus,
+				node->fields.pci_device, node->fields.pci_function, 0x04,
+				command | PciCommandIoSpace | PciCommandBusMaster | PciCommandInterruptDisable);
+			const uint16 actual = uint16(uni::PCI::read_config_register(node->fields.pci_segment,
+				node->fields.pci_bus, node->fields.pci_device, node->fields.pci_function, 0x04));
+			const uint16 required = PciCommandIoSpace | PciCommandBusMaster;
+			if ((actual & required) != required) {
+				plogwarn("[%s] PCI I/O or bus mastering unavailable command=%[16H]", Adapter::Name, (unsigned)actual);
+				return false;
+			}
+			ploginfo("[%s] controller %s IO=%[64H] initializing",
+				Adapter::Name, node->link.addr ? node->link.addr : "(unnamed)", io->start);
+			using Host = ScsiAsyncHost<LsiLogicController>;
+			const typename Adapter::Services services{this, EnsureDma, DisableDma, Host::Milliseconds,
+				{this, Host::AllocateDma, Host::ReleaseDma, Host::Milliseconds, Host::Completed}};
+			return adapter.Bind(word(io->start), services);
+		}
+
+		bool Start() {
+			if (adapter.IsReady()) return true;
+			if (!adapter.Initialize()) return false;
+			ScsiAsyncHost<LsiLogicController>::ConfigureInterrupt(*this);
+			storage.controller_slot = g_scsi_controller_count++;
+			storage.node = node;
+			storage.context = this;
+			storage.execute = ExecScsiCommandThunk;
+			storage.is_available = IsAvailable;
+			storage.is_target_present = IsTargetPresent;
+			storage.target_count = adapter.getTargetCount();
+			storage.lun_count = Adapter::MaxLuns;
+			storage.ProbeScsiTargets();
+			return adapter.IsReady();
+		}
+	};
+
+	using LsiLogicParallelController = LsiLogicController<uni::SCSI::LsiLogicParallel>;
+	using LsiLogicSASController = LsiLogicController<uni::SCSI::LsiLogicSAS>;
+
+	// Registry owners are never erased: failed controllers may retain DMA buffers or published storage nodes.
+	uni::Vector<uni::SharedPtr<BusLogicController>> g_buslogic_controllers;
+	uni::Vector<uni::SharedPtr<LsiLogicParallelController>> g_lsi_parallel_controllers;
+	uni::Vector<uni::SharedPtr<LsiLogicSASController>> g_lsi_sas_controllers;
+
+	template <typename Controller>
+	bool StartScsiController(DeviceNode* node, uni::Vector<uni::SharedPtr<Controller>>& controllers) {
+		uni::SharedPtr<Controller> owner;
+		for (auto& existing : controllers) {
+			if (existing->node == node) {
+				owner = existing;
+				break;
+			}
+		}
+		if (!owner) {
+			owner = uni::make_shared<Controller>();
+			if (!owner) {
+				plogwarn("[SCSI] controller allocation failed for %s", node->link.addr ? node->link.addr : "(unnamed)");
+				return false;
+			}
+			owner->node = node;
+			// Retain ownership before Bind/Start can enable DMA or publish pointers; later vector growth never moves objects.
+			if (!controllers.Append(owner)) return false;
+		}
+		if (!owner->Bind(node)) {
+			plogwarn("[SCSI] Failed to bind controller %s", node->link.addr ? node->link.addr : "(unnamed)");
+			return false;
+		}
+		if (!owner->Start()) return false;
+		node->fields.binding.driver_data = owner.get();
+		return true;
+	}
 }
 
 static bool start_scsi_driver(DeviceNode* scsi_node) {
-	if (!g_scsi_controller.Bind(scsi_node)) {
-		plogwarn("[SCSI] Failed to bind controller %s",
-			scsi_node && scsi_node->link.addr ? scsi_node->link.addr : "(unnamed)");
-		return false;
+	if (!scsi_node) return false;
+	if (scsi_node->fields.vendor_id == uni::SCSI::LsiLogicSAS::VendorId &&
+		scsi_node->fields.device_id == uni::SCSI::LsiLogicSAS::DeviceId) {
+		return StartScsiController(scsi_node, g_lsi_sas_controllers);
 	}
-	g_scsi_controller.DumpSummary();
-	if (!g_scsi_controller.HardwareReset(true)) {
-		plogwarn("[SCSI] hard reset failed");
-		return false;
+	if (scsi_node->fields.vendor_id == uni::SCSI::LsiLogicParallel::VendorId &&
+		scsi_node->fields.device_id == uni::SCSI::LsiLogicParallel::DeviceId) {
+		return StartScsiController(scsi_node, g_lsi_parallel_controllers);
 	}
-	// Reset restores adapter IRQ generation; establish polling mode before inquiry or mailbox commands.
-	if (!g_scsi_controller.PreparePolling()) return false;
-	g_scsi_controller.DumpInquiryResults();
-	if (g_scsi_controller.faulted || !g_scsi_controller.mailbox_count) return false;
-	scsi_node->fields.binding.driver_data = &g_scsi_controller;
-	return true;
+	if (scsi_node->fields.vendor_id == uni::SCSI::BusLogic::VendorId &&
+		scsi_node->fields.device_id == uni::SCSI::BusLogic::DeviceId) {
+		return StartScsiController(scsi_node, g_buslogic_controllers);
+	}
+	return false;
 }
 
 _ESYM_C void R_SCSI_INIT();

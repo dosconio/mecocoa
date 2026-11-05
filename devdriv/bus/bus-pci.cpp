@@ -7,6 +7,7 @@
 #include <cpp/Device/Bus/PCI.hpp>
 
 #if (_MCCA & 0xFF00) == 0x8600
+#include <cpp/Device/Storage/SCSI/LsiLogic-SAS.hpp>
 #include "../../include/devsman-storage.hpp"
 #include "c/proctrl/IAx86_64.ext.h"
 #include "c/proctrl/IAx86_64.msr.h"
@@ -128,6 +129,7 @@ namespace Devs {
 		pci_id_class_driver_match("video-vmware", 0x15ADu, 0x0405u, 0x03u, 0x00u, PciExactMatchPriority),
 		pci_id_class_driver_match("video-bochs", 0x1234u, 0x1111u, 0x03u, 0x00u, PciExactMatchPriority),
 		pci_class_driver_match("scsi", 0x01u, 0x00u, 0, 0, PciClassMatchPriority),
+		pci_id_driver_match("scsi", uni::SCSI::LsiLogicSAS::VendorId, uni::SCSI::LsiLogicSAS::DeviceId, PciExactMatchPriority, PciBarIoRequired),
 		pci_class_driver_match("pata", 0x01u, 0x01u, 0, 0, PciClassMatchPriority),
 		pci_class_driver_match("ahci", AHCI_PCI_CLASS_BASE, AHCI_PCI_CLASS_SUB, AHCI_PCI_CLASS_IF, 0xFFu, PciQualifiedClassMatchPriority, PciBarMmioRequired),
 		pci_class_driver_match("nvme", NVME_PCI_CLASS_BASE, NVME_PCI_CLASS_SUB, NVME_PCI_CLASS_IF, 0xFFu, PciQualifiedClassMatchPriority, PciBarMmioRequired),

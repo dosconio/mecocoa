@@ -307,12 +307,6 @@ struct MempoolLowdma {
 };
 
 extern MempoolLowdma dma_low_pool;
-
-void DmaLowPoolInit(stduint base_phys);
-stduint DmaLowPoolExpand();
-void* DmaLowAlloc(stduint bytes);
-bool DmaLowFree(void* ptr, stduint bytes = 0);
-bool DmaLowIsInRange(void* ptr);
 #endif
 
 #endif // __MEMOMAN_HPP__

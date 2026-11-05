@@ -4,6 +4,7 @@
 
 #include "freetype/x86/include/ft2build.h"
 #include "freetype/x86/include/freetype/freetype.h"
+#include "freetype/x86/include/freetype/ftsizes.h"
 #include "../include/filesys.hpp"
 
 FT_Library ft_library;
@@ -61,15 +62,119 @@ static CJKCacheEntry cjk_cache[CJK_CACHE_SIZE];
 class FreeTypeFontEngine : public uni::FontEngine {
 private:
 	FT_Face m_face;
+	FT_Size m_draw_size = nullptr;
 	uni::Size2 m_cell_size;
 public:
-	FreeTypeFontEngine(FT_Face face, uni::Size2 size) : m_face(face), m_cell_size(size) {}
+	FreeTypeFontEngine(FT_Face face, uni::Size2 size) : m_face(face), m_cell_size(size) {
+		if (int err = FT_New_Size(m_face, &m_draw_size)) {
+			plogerro("FreeTypeFontEngine: FT_New_Size failed: %d", err);
+		}
+	}
 	virtual ~FreeTypeFontEngine() {
 		FT_Done_Face(m_face);
 	}
 
 	virtual uni::Size2 GetCellSize() const override {
 		return m_cell_size;
+	}
+
+	__attribute__((section(".ext.freetype.vcode")))
+	bool DrawStringSized(Color* pixel_buffer, stduint pitch_pixels, const Size2& buffer_size, const Point& vertex,
+		const String& str, Color color, stduint pixel_size, Rectangle& dirty_rect) const {
+		dirty_rect = Rectangle(vertex, Size2(0, 0));
+		if (!pixel_buffer || !m_draw_size || !pixel_size || pixel_size > 128) return false;
+		if (pitch_pixels < buffer_size.x) return false;
+		if (!buffer_size.x || !buffer_size.y) return true;
+		if ((vertex.x_signed >= 0 && vertex.x >= buffer_size.x) ||
+			(vertex.y_signed >= 0 && vertex.y >= buffer_size.y)) return true;
+
+		const stduint cell_width = (pixel_size + 1) / 2;
+		const stduint max_width = ~stduint(0) >> 1;
+		stduint text_width = 0;
+		for (auto unicode_char : str.chars()) {
+			const stduint width = unicode_char >= 0x100 ? cell_width * 2 : cell_width;
+			if (width > max_width - text_width) return false;
+			text_width += width;
+		}
+		if (!text_width) return true;
+
+		MutexLocal guard(&ft_lock);
+		// FreeType 2 Size Management: restore the active FT_Size before releasing ft_lock.
+		struct ActiveSizeRestore {
+			FT_Size size;
+			~ActiveSizeRestore() { FT_Activate_Size(size); }
+		} restore_size = { m_face->size };
+		if (FT_Activate_Size(m_draw_size) || FT_Set_Pixel_Sizes(m_face, pixel_size, pixel_size)) return false;
+
+		const int baseline = FontCellBaseline(m_face, pixel_size);
+		const int descent = (int)((-m_face->size->metrics.descender + 63) >> 6);
+		if (baseline < 0) return false;
+		stduint cell_height = baseline + (descent > 0 ? descent : 0);
+		if (cell_height < pixel_size) cell_height = pixel_size;
+		const stduint skipped_x = vertex.x_signed < 0 ? stduint(0) - vertex.x : 0;
+		const stduint skipped_y = vertex.y_signed < 0 ? stduint(0) - vertex.y : 0;
+		if (skipped_x >= text_width || skipped_y >= cell_height) return true;
+		const stduint left = vertex.x_signed < 0 ? 0 : vertex.x;
+		const stduint top = vertex.y_signed < 0 ? 0 : vertex.y;
+		const stduint visible_width = minof(text_width - skipped_x, buffer_size.x - left);
+		const stduint visible_height = minof(cell_height - skipped_y, buffer_size.y - top);
+		dirty_rect = Rectangle(Point(left, top), Size2(visible_width, visible_height));
+
+		stduint x = vertex.x;
+		for (auto unicode_char : str.chars()) {
+			const stduint width = unicode_char >= 0x100 ? cell_width * 2 : cell_width;
+			const stduint glyph_x = x;
+			x += width;
+			if (unicode_char <= 32 || unicode_char == 0xFFFFFFFF) continue;
+			const auto glyph_index = FT_Get_Char_Index(m_face, (uint32)unicode_char);
+			if (!glyph_index) continue;
+
+			// FreeType 2 FT_LOAD_DEFAULT: prefer matching embedded bitmaps, otherwise render outlines normally.
+			if (FT_Load_Glyph(m_face, glyph_index, FT_LOAD_RENDER | FT_LOAD_TARGET_NORMAL)) return false;
+			const FT_Bitmap& bitmap = m_face->glyph->bitmap;
+			if (!bitmap.width || !bitmap.rows) continue;
+			if (!bitmap.buffer || (bitmap.pixel_mode != FT_PIXEL_MODE_MONO && bitmap.pixel_mode != FT_PIXEL_MODE_GRAY)) return false;
+			if (bitmap.pixel_mode == FT_PIXEL_MODE_GRAY && bitmap.num_grays < 2) return false;
+			const int glyph_left = m_face->glyph->bitmap_left;
+			const int glyph_top = baseline - m_face->glyph->bitmap_top;
+
+			for (stduint dy = 0; dy < bitmap.rows; ++dy) {
+				const stdsint target_y = glyph_top + (stdsint)dy;
+				if (target_y < 0 || (stduint)target_y >= cell_height) continue;
+				const stduint buffer_y = vertex.y + target_y;
+				if (buffer_y >= buffer_size.y) continue;
+				// FT_Bitmap::pitch is a signed byte stride, including any row padding.
+				const byte* row = bitmap.buffer + (stdsint)dy * bitmap.pitch;
+				Color* target = pixel_buffer + buffer_y * pitch_pixels;
+				for (stduint dx = 0; dx < bitmap.width; ++dx) {
+					const stdsint target_x = glyph_left + (stdsint)dx;
+					if (target_x < 0 || (stduint)target_x >= width) continue;
+					const stduint buffer_x = glyph_x + target_x;
+					if (buffer_x >= buffer_size.x) continue;
+					uint32 coverage;
+					if (bitmap.pixel_mode == FT_PIXEL_MODE_MONO) {
+						coverage = (row[dx >> 3] & (0x80 >> (dx & 7))) ? 255 : 0;
+					}
+					else {
+						coverage = ((uint32)row[dx] * 255 + (bitmap.num_grays - 1) / 2) / (bitmap.num_grays - 1);
+					}
+					const uint32 alpha = (coverage * color.a + 127) / 255;
+					if (!alpha) continue;
+					Color& dest = target[buffer_x];
+					if (alpha == 255) {
+						dest = color;
+						continue;
+					}
+					const uint32 dest_alpha = ((uint32)dest.a * (255 - alpha) + 127) / 255;
+					const uint32 out_alpha = alpha + dest_alpha;
+					dest.r = (byte)(((uint32)color.r * alpha + (uint32)dest.r * dest_alpha + out_alpha / 2) / out_alpha);
+					dest.g = (byte)(((uint32)color.g * alpha + (uint32)dest.g * dest_alpha + out_alpha / 2) / out_alpha);
+					dest.b = (byte)(((uint32)color.b * alpha + (uint32)dest.b * dest_alpha + out_alpha / 2) / out_alpha);
+					dest.a = (byte)out_alpha;
+				}
+			}
+		}
+		return true;
 	}
 
 	__attribute__((section(".ext.freetype.vcode")))
@@ -251,6 +356,14 @@ public:
 };
 
 uni::FontEngine* global_ft_engine = nullptr;
+
+__attribute__((section(".ext.freetype.code")))
+bool DrawFreeTypeString(Color* pixel_buffer, stduint pitch_pixels, const Size2& buffer_size, const Point& vertex,
+	const String& str, Color color, stduint pixel_size, Rectangle& dirty_rect) {
+	if (!global_ft_engine) return false;
+	return static_cast<FreeTypeFontEngine*>(global_ft_engine)->DrawStringSized(
+		pixel_buffer, pitch_pixels, buffer_size, vertex, str, color, pixel_size, dirty_rect);
+}
 
 extern "C" stdsint sysc_OPEN(stduint usr_filepath, stduint flag);
 extern "C" stdsint sysc_CLOS(stduint fd);

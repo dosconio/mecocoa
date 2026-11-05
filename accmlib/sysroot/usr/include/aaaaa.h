@@ -89,13 +89,13 @@ extern "C" {
 
 	stdsint sys_fetch_msg(stduint formid, stduint if_blocked, SheetMessage* u_msg);
 
-	stdsint sys_draw_default_string(stduint form_id, Point vertex, rostr string, Color color);
+	stdsint sys_draw_default_string(stduint form_id, Point vertex, rostr string, Color color, stduint pixel_size = 16, DrawArea area = DrawArea::Client);
 
-	stdsint sys_draw_point(stduint form_id, Point po, Color co);
+	stdsint sys_draw_point(stduint form_id, Point po, Color co, DrawArea area = DrawArea::Client);
 
-	stdsint sys_draw_line(stduint form_id, Point disp, Size2 size, Color co);
+	stdsint sys_draw_line(stduint form_id, Point disp, Size2 size, Color co, DrawArea area = DrawArea::Client);
 
-	stdsint sys_draw_rectangle(stduint form_id, const Rectangle* rect);
+	stdsint sys_draw_rectangle(stduint form_id, const Rectangle* rect, DrawArea area = DrawArea::Client);
 	stdsint sys_set_timer(stduint form_id, stduint ms);
 	stdsint sys_set_form_buffer(stduint form_id, void* buffer);
 	stdsint sys_update_form(stduint form_id, const Rectangle* rect);

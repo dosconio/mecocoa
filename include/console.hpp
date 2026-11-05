@@ -91,6 +91,19 @@ _PACKED(struct) FMT_ConsoleMsg_FUPD {
 	stduint pform_id;
 	Rectangle* usrp_rect;
 };
+enum class DrawArea : stduint {
+	Client = 0,
+	Window = 1,
+};
+struct FMT_ConsoleMsg_FCHR {
+	stduint pform_id;// in pforms
+	const Point* usrp_vertex;
+	const char* usrp_str;
+	Color color;
+	stduint pixel_size;// 0 selects the default 16-pixel size
+	DrawArea area;
+};
+static_assert(sizeof(FMT_ConsoleMsg_FCHR) == 6 * sizeof(stduint), "FCHR must occupy six IPC words");
 _PACKED(struct) FMT_ConsoleMsg_FDRW {
 	stduint pform_id;// in pforms
 	enum class Shape {
@@ -103,7 +116,9 @@ _PACKED(struct) FMT_ConsoleMsg_FDRW {
 		struct ColorLine { Point disp; Size2 size; Color color; } *cline;
 		Rectangle *crect;
 	} usr_shape_info;
+	DrawArea area;
 };
+static_assert(sizeof(FMT_ConsoleMsg_FDRW) <= 4 * sizeof(stduint), "FDRW must fit in four IPC words");
 _PACKED(struct) FMT_ConsoleMsg_FSET {
 	stduint pform_id;// in pforms
 	stduint prop;
@@ -111,6 +126,11 @@ _PACKED(struct) FMT_ConsoleMsg_FSET {
 };
 
 #if _GUI_ENABLE
+#if _GUI_FREETYPE && _MCCA == 0x8632
+bool DrawFreeTypeString(Color* pixel_buffer, stduint pitch_pixels, const Size2& buffer_size, const Point& vertex,
+	const String& str, Color color, stduint pixel_size, Rectangle& dirty_rect);
+#endif
+
 class LayerManager2 : public uni::LayerManager {
 public:
 	using LayerManager::LayerManager;

@@ -1462,27 +1462,6 @@ bool MempoolLowdma::Deallocate(void* ptr, stduint bytes) {
 	return true;
 }
 
-//
-
-void DmaLowPoolInit(stduint base_phys) {
-	dma_low_pool.Initialize(base_phys);
-}
-
-stduint DmaLowPoolExpand() {
-	return dma_low_pool.Expand();
-}
-
-void* DmaLowAlloc(stduint bytes) {
-	return dma_low_pool.Allocate(bytes);
-}
-
-bool DmaLowFree(void* ptr, stduint bytes) {
-	return dma_low_pool.Deallocate(ptr, bytes);
-}
-
-bool DmaLowIsInRange(void* ptr) {
-	return dma_low_pool.IsInRange(ptr);
-}
 #endif
 
 // ---- STDLIB ----
@@ -1526,6 +1505,24 @@ void* operator new[](size_t size, std::align_val_t alignment) {
 	const size_t value = static_cast<size_t>(alignment);
 	return mempool.allocate(size, intlog2_iexpo(value));
 }
+// Nonthrowing allocation lets a new-expression skip construction when the pool is exhausted.
+void* operator new(size_t size, const std::nothrow_t&) noexcept {
+	return mempool.allocate(size, intlog2_iexpo(GetDefaultAllocationAlignment(size)));
+}
+void* operator new[](size_t size, const std::nothrow_t&) noexcept {
+	return mempool.allocate(size, intlog2_iexpo(GetDefaultAllocationAlignment(size)));
+}
+void* operator new(size_t size, std::align_val_t alignment, const std::nothrow_t&) noexcept {
+	return mempool.allocate(size, intlog2_iexpo(static_cast<size_t>(alignment)));
+}
+void* operator new[](size_t size, std::align_val_t alignment, const std::nothrow_t&) noexcept {
+	return mempool.allocate(size, intlog2_iexpo(static_cast<size_t>(alignment)));
+}
+void operator delete(void* p, const std::nothrow_t&) noexcept { free(p); }
+void operator delete[](void* p, const std::nothrow_t&) noexcept { free(p); }
+void operator delete(void* p, std::align_val_t, const std::nothrow_t&) noexcept { free(p); }
+void operator delete[](void* p, std::align_val_t, const std::nothrow_t&) noexcept { free(p); }
+void operator delete(void* p, std::align_val_t) noexcept { free(p); }
 void operator delete(void* p) {
 	free(p);
 }
@@ -1543,9 +1540,7 @@ void operator delete(void* ptr, stduint size) noexcept {
 void operator delete[](void* ptr, stduint size) {
 	::operator delete(ptr, size);
 }
-#if defined(_UEFI)
 void operator delete(void* ptr, stduint size, std::align_val_t) noexcept { ::operator delete(ptr, size); }
-#endif
 //
 _ESYM_C void free(void* p) {
 	if (!p) return;

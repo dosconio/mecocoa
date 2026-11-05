@@ -435,6 +435,14 @@ void hand_mouse(MouseMessage mmsg) {
 	Cursor::mouse_btnl_dn = mmsg.BtnLeft;
 	Cursor::mouse_btnm_dn = mmsg.BtnMiddle;
 	Cursor::mouse_btnr_dn = mmsg.BtnRight;
+
+	// for paint app
+	const bool cursor_moved_before_click = (change_btns & 0b1) && !mmsg.BtnLeft && (mmsg.X || mmsg.Y);
+	if (cursor_moved_before_click) {
+		// A release packet can also carry the final stroke displacement.
+		auto layman = global_layman.Lock();
+		layman->Domove(Cursor::global_cursor, { mmsg.X, mmsg.Y });
+	}
 	Point cursor_p = Cursor::global_cursor->sheet_area.getVertex();
 
 	// Handle Clicks and Z-order
@@ -491,7 +499,7 @@ void hand_mouse(MouseMessage mmsg) {
 	if (mmsg.X || mmsg.Y) {
 		{
 			auto layman = global_layman.Lock();
-			layman->Domove(Cursor::global_cursor, { mmsg.X, mmsg.Y });
+			if (!cursor_moved_before_click) layman->Domove(Cursor::global_cursor, { mmsg.X, mmsg.Y });
 			if (Cursor::moving_sheet) {
 				layman->Domove(Cursor::moving_sheet, { mmsg.X, mmsg.Y });
 			}
@@ -609,7 +617,11 @@ void hand_mouse(MouseMessage mmsg) {
 		}
 
 		static uint64 last_onmoved_tick = 0;
-		if (!Cursor::resizing_sheet && ((change_btns & 0b111) || (tick - last_onmoved_tick >= 20))) {
+
+		//{} Parameter in kconfig
+		constexpr uint64 mouse_move_interval_ticks = (20u * CONFIG_SysTickFreq + 999u) / 1000u;
+
+		if (!Cursor::resizing_sheet && ((change_btns & 0b111) || (tick - last_onmoved_tick >= mouse_move_interval_ticks))) {
 			Point current_cursor_p = Cursor::global_cursor->sheet_area.getVertex();
 			SheetTrait* hover_sheet = global_layman.Lock()->getTop(current_cursor_p, 1);
 			if (hover_sheet) {
@@ -1432,9 +1444,99 @@ static stdsint GraphicMsg_FMSG(const FMT_ConsoleMsg_FMSG* data, ProcessBlock* pb
 	return 0; // No message available
 }
 
+static bool GraphicGetDrawRegion(SheetTrait* form, DrawArea area, Rectangle& region) {
+	if (!form || !form->sheet_buffer) return false;
+	switch (area) {
+	case DrawArea::Client:
+		region = static_cast<::uni::Witch::Form*>(form)->getClientArea();
+		break;
+	case DrawArea::Window:
+		region = Rectangle(Point(0, 0), form->sheet_area.getSize());
+		break;
+	default: return false;
+	}
+	return region.x <= form->sheet_area.width && region.width <= form->sheet_area.width - region.x &&
+		region.y <= form->sheet_area.height && region.height <= form->sheet_area.height - region.y;
+}
+
+static bool GraphicClipDrawRectangle(Rectangle& rect, const Size2& size) {
+	if ((stdsint)rect.x < 0) {
+		const stduint skipped = stduint(0) - rect.x;
+		if (rect.width <= skipped) return false;
+		rect.width -= skipped;
+		rect.x = 0;
+	}
+	if ((stdsint)rect.y < 0) {
+		const stduint skipped = stduint(0) - rect.y;
+		if (rect.height <= skipped) return false;
+		rect.height -= skipped;
+		rect.y = 0;
+	}
+	if (rect.x >= size.x || rect.y >= size.y) return false;
+	if (rect.width > size.x - rect.x) rect.width = size.x - rect.x;
+	if (rect.height > size.y - rect.y) rect.height = size.y - rect.y;
+	return rect.width && rect.height;
+}
+
+class GraphicDrawSurface : public uni::VideoControlInterface {
+	SheetTrait* form;
+	Rectangle region;
+	mutable Rectangle dirty;
+public:
+	GraphicDrawSurface(SheetTrait* form, const Rectangle& region) : form(form), region(region) {}
+	Color* GetBuffer() const { return form->sheet_buffer + region.y * form->sheet_area.width + region.x; }
+	stduint GetPitch() const { return form->sheet_area.width; }
+	Size2 GetSize() const { return region.getSize(); }
+	void RecordDirty(Rectangle rect) const {
+		if (!GraphicClipDrawRectangle(rect, GetSize())) return;
+		if (!dirty.width) {
+			dirty = rect;
+			return;
+		}
+		const stduint right = maxof(dirty.x + dirty.width, rect.x + rect.width);
+		const stduint bottom = maxof(dirty.y + dirty.height, rect.y + rect.height);
+		dirty.x = minof(dirty.x, rect.x);
+		dirty.y = minof(dirty.y, rect.y);
+		dirty.width = right - dirty.x;
+		dirty.height = bottom - dirty.y;
+	}
+	void Refresh() const {
+		if (!dirty.width) return;
+		Rectangle rect = dirty;
+		rect.x += region.x;
+		rect.y += region.y;
+		SafeLaymanUpdate(form, rect);
+	}
+	virtual void SetCursor(const Point&) const override {}
+	virtual Point GetCursor() const override { return Point(0, 0); }
+	virtual void DrawPoint(const Point& point, Color color) const override {
+		if (point.x >= region.width || point.y >= region.height) return;
+		GetBuffer()[point.y * GetPitch() + point.x] = color;
+		RecordDirty(Rectangle(point, Size2(1, 1)));
+	}
+	virtual void DrawRectangle(const Rectangle& rect) const override {
+		Rectangle clipped = rect;
+		if (!GraphicClipDrawRectangle(clipped, GetSize())) return;
+		for (stduint y = 0; y < clipped.height; ++y) {
+			Color* row = GetBuffer() + (clipped.y + y) * GetPitch() + clipped.x;
+			for (stduint x = 0; x < clipped.width; ++x) row[x] = rect.color;
+		}
+		RecordDirty(clipped);
+	}
+	virtual void DrawFont(const Point&, const DisplayFont&, const String&) const override {}
+	virtual Color GetColor(Point point) const override {
+		if (point.x >= region.width || point.y >= region.height) return Color();
+		return GetBuffer()[point.y * GetPitch() + point.x];
+	}
+};
+
 static stdsint GraphicMsg_FDRW(const FMT_ConsoleMsg_FDRW* data, ProcessBlock* pb) {
 	SheetTrait* pfrm = ProcFormsGet(pb, data->pform_id);
 	if (!pfrm) return -1;
+	Rectangle region;
+	if (!GraphicGetDrawRegion(pfrm, data->area, region)) return -1;
+	if (!region.width || !region.height) return 0;
+	GraphicDrawSurface surface(pfrm, region);
 	switch (data->shape_type) {
 	case FMT_ConsoleMsg_FDRW::Shape::Point: {
 		FMT_ConsoleMsg_FDRW::ShapeInfo::ColorPoint cp;
@@ -1442,8 +1544,8 @@ static stdsint GraphicMsg_FDRW(const FMT_ConsoleMsg_FDRW* data, ProcessBlock* pb
 			&cp, NULL, true,
 			data->usr_shape_info.cpoint, pb, false,
 			sizeof(cp)) != sizeof(cp)) return -1;
-		if (!pfrm->sheet_buffer) return -1;
-		pfrm->sheet_buffer[cp.po.y * pfrm->sheet_area.width + cp.po.x] = cp.co;
+		surface.DrawPoint(cp.po, cp.co);
+		surface.Refresh();
 		return 0;
 	}
 	case FMT_ConsoleMsg_FDRW::Shape::Line: {
@@ -1452,24 +1554,16 @@ static stdsint GraphicMsg_FDRW(const FMT_ConsoleMsg_FDRW* data, ProcessBlock* pb
 			&cl, NULL, true,
 			data->usr_shape_info.cline, pb, false,
 			sizeof(cl)) != sizeof(cl)) return -1;
-		if (!pfrm->sheet_buffer) return -1;
-
-		VideoControlInterfaceMARGB8888 vcim(pfrm->sheet_buffer, pfrm->sheet_area.getSize());
-		LayerManager lm(&vcim, Rectangle{ Point(0,0), pfrm->sheet_area.getSize() });
+		const stduint sign_bit = stduint(1) << (sizeof(stduint) * 8 - 1);
+		if (cl.size.x == sign_bit || cl.size.y == sign_bit) return -1;
+		LayerManager lm(&surface, Rectangle(Point(0, 0), surface.GetSize()));
 
 		Size2dif off;
 		off.x = cl.size.x;
 		off.y = cl.size.y;
 		lm.DrawLine(cl.disp, off, cl.color);
 
-		stdsint x1 = cl.disp.x, y1 = cl.disp.y;
-		stdsint x2 = cl.disp.x + cl.size.x, y2 = cl.disp.y + cl.size.y;
-		stdsint rx = (x1 < x2 ? x1 : x2) - 1;
-		stdsint ry = (y1 < y2 ? y1 : y2) - 1;
-		stdsint rw = (x1 < x2 ? x2 - x1 : x1 - x2) + 3;
-		stdsint rh = (y1 < y2 ? y2 - y1 : y1 - y2) + 3;
-
-		SafeLaymanUpdate(pfrm, Rectangle(Point(rx, ry), Size2(rw, rh)));
+		surface.Refresh();
 		return 0;
 	}
 	case FMT_ConsoleMsg_FDRW::Shape::Rect: {
@@ -1478,22 +1572,13 @@ static stdsint GraphicMsg_FDRW(const FMT_ConsoleMsg_FDRW* data, ProcessBlock* pb
 			&rect, NULL, true,
 			data->usr_shape_info.crect, pb, false,
 			sizeof(rect)) != sizeof(rect)) return -1;
-		if (!pfrm->sheet_buffer) return -1;
-		VideoControlInterfaceMARGB8888 vcim(pfrm->sheet_buffer, pfrm->sheet_area.getSize());
-		vcim.DrawRectangle(rect);
-		SafeLaymanUpdate(pfrm, rect);
+		surface.DrawRectangle(rect);
+		surface.Refresh();
 		return 0;
 	}
 	default: return -1;
 	}
 }
-
-struct FMT_ConsoleMsg_FCHR {
-	stduint pform_id;// in pforms
-	Point* usrp_vertex;
-	const char* usrp_str;
-	Color color;
-};
 
 static stduint GraphicGlyphCellWidth(const uni::FontEngine* font_engine, uint32 unicode_char) {
 	Size2 cell_size = font_engine->GetCellSize();
@@ -1503,6 +1588,10 @@ static stduint GraphicGlyphCellWidth(const uni::FontEngine* font_engine, uint32 
 static stdsint GraphicMsg_FCHR(const FMT_ConsoleMsg_FCHR* data, ProcessBlock* pb) {
 	SheetTrait* pfrm = ProcFormsGet(pb, data->pform_id);
 	if (!pfrm) return -1;
+	Rectangle region;
+	if (!GraphicGetDrawRegion(pfrm, data->area, region)) return -1;
+	if (!region.width || !region.height) return 0;
+	GraphicDrawSurface surface(pfrm, region);
 
 	Point vertex;
 	if (MccaMemCopyP(
@@ -1512,57 +1601,72 @@ static stdsint GraphicMsg_FCHR(const FMT_ConsoleMsg_FCHR* data, ProcessBlock* pb
 	String buf(String::Charset::UTF8, 256);
 	if (!MccaStrCopyP(buf.reflect(), 256, data->usrp_str, pb)) return -1;
 	buf.Refresh();
+	const stduint pixel_size = data->pixel_size ? data->pixel_size : 16;
 
 	#if _GUI_FREETYPE && _MCCA == 0x8632
 	extern uni::FontEngine* global_ft_engine;
 	if (!global_ft_engine || !pfrm->sheet_buffer) return -1;
+	if (pixel_size != 16) {
+		Rectangle dirty_rect;
+		const bool success = DrawFreeTypeString(surface.GetBuffer(), surface.GetPitch(), surface.GetSize(), vertex,
+			buf, data->color, pixel_size, dirty_rect);
+		surface.RecordDirty(dirty_rect);
+		surface.Refresh();
+		return success ? 0 : -1;
+	}
+	const uni::FontEngine* font_engine = global_ft_engine;
+	#else
+	if (pixel_size != 16) return -1;
+	uni::BitmapFontEngine bitmap_engine(1);
+	const uni::FontEngine* font_engine = &bitmap_engine;
+	#endif
 
-	Size2 cell_size = global_ft_engine->GetCellSize();
+	Size2 cell_size = font_engine->GetCellSize();
 	stduint text_width = 0;
 	for (auto unicode_char : buf.chars()) {
-		text_width += GraphicGlyphCellWidth(global_ft_engine, (uint32)unicode_char);
+		#if !(_GUI_FREETYPE && _MCCA == 0x8632)
+		if (unicode_char < 32 || unicode_char >= 127) continue;
+		#endif
+		text_width += GraphicGlyphCellWidth(font_engine, (uint32)unicode_char);
 	}
 
 	if (!text_width) return 0;
-
-	if (vertex.x > pfrm->sheet_area.width ||
-		text_width > pfrm->sheet_area.width - vertex.x ||
-		vertex.y > pfrm->sheet_area.height ||
-		cell_size.y > pfrm->sheet_area.height - vertex.y) {
-		return -1;
-	}
+	// Validate drawing bounds to prevent heap corruption.
+	Rectangle dirty_rect(vertex, Size2(text_width, cell_size.y));
+	if (!GraphicClipDrawRectangle(dirty_rect, surface.GetSize())) return 0;
 
 	Color transparent_bg = {};
 	stduint x = vertex.x;
 	for (auto unicode_char : buf.chars()) {
-		global_ft_engine->DrawChar(
-			pfrm->sheet_buffer,
-			pfrm->sheet_area.width,
-			x,
-			vertex.y,
-			(uint32)unicode_char,
-			data->color,
-			transparent_bg);
-		x += GraphicGlyphCellWidth(global_ft_engine, (uint32)unicode_char);
+		#if !(_GUI_FREETYPE && _MCCA == 0x8632)
+		if (unicode_char < 32 || unicode_char >= 127) continue;
+		#endif
+		const stduint width = GraphicGlyphCellWidth(font_engine, (uint32)unicode_char);
+		if (x < region.width && width <= region.width - x &&
+			vertex.y < region.height && cell_size.y <= region.height - vertex.y) {
+			font_engine->DrawChar(surface.GetBuffer(), surface.GetPitch(), x, vertex.y,
+				(uint32)unicode_char, data->color, transparent_bg);
+		}
+		else {
+			Color glyph_pixels[16 * 16] = {};
+			if (width > 16 || cell_size.y > 16) return -1;
+			Color mask_color = data->color;
+			mask_color.a = 255;
+			font_engine->DrawChar(glyph_pixels, 16, 0, 0, (uint32)unicode_char, mask_color, transparent_bg);
+			for (stduint gy = 0; gy < cell_size.y; ++gy) {
+				for (stduint gx = 0; gx < width; ++gx) {
+					if (glyph_pixels[gy * 16 + gx].a) {
+						surface.DrawPoint(Point(x + gx, vertex.y + gy), data->color);
+					}
+				}
+			}
+		}
+		x += width;
 	}
 
-	Rectangle dirty_rect(vertex, Size2(text_width, cell_size.y));
-	SafeLaymanUpdate(pfrm, dirty_rect);
+	surface.RecordDirty(dirty_rect);
+	surface.Refresh();
 	return 0;
-	#else
-	// Validate drawing bounds to prevent heap corruption.
-	if ((vertex.x + (stdsint)buf.getByteCount() * _TEMP 8) > pfrm->sheet_area.width ||
-		(vertex.y + 16) > pfrm->sheet_area.height) {
-		return -1;
-	}
-
-	uni::DrawString_16(*pfrm, vertex, String(buf), data->color);
-
-	Rectangle dirty_rect(vertex, Size2(buf.getByteCount() * 8, 16));
-	SafeLaymanUpdate(pfrm, dirty_rect);
-
-	return 0;
-	#endif
 }
 
 static stdsint GraphicMsg_FTIM(stduint pform_id, stduint ms, ProcessBlock* pb) {
@@ -1942,7 +2046,7 @@ void serv_graf_loop() {
 		// Priority 2: try non-blocking IPC receive
 		// Use TMSG to check for pending messages, then sysrecv only if available
 		volatile stduint sig_type = 0, sig_src;
-		volatile stduint to_args[4];
+		volatile stduint to_args[8] = {};
 		if (!syscall(syscall_t::TMSG)) {
 			#if (_MCCA & 0xFFFF) == 0x2032
 			// No RenderFrameFlush interrupt source here, so this thread posts its own timer tick

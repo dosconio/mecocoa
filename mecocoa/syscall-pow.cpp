@@ -158,8 +158,8 @@ namespace {
 		#endif
 		if (slot->physical && slot->size) {
 			#if (_MCCA & 0xFF00) == 0x8600
-			if (DmaLowIsInRange((void*)slot->physical)) {
-				DmaLowFree((void*)slot->physical, slot->size);
+			if (dma_low_pool.IsInRange((void*)slot->physical)) {
+				dma_low_pool.Deallocate((void*)slot->physical, slot->size);
 			}
 			else {
 				mempool.deallocate((void*)slot->physical, slot->size);
@@ -1358,11 +1358,11 @@ static stdsint HandlePwcallDeviceDmaAlloc(ProcessBlock* pb, stduint dev_handle, 
 		// The 8237 uses a physical 24-bit address; never substitute high memory or an IOVA.
 		if (flags & (_IMM(PwcallDeviceDmaAllocFlag::NoLowMemory) |
 			_IMM(PwcallDeviceDmaAllocFlag::Iova))) return -1;
-		phys = DmaLowAlloc(alloc_size);
+		phys = dma_low_pool.Allocate(alloc_size);
 		if (!phys) return -1;
 	}
 	else if ((flags & _IMM(PwcallDeviceDmaAllocFlag::NoLowMemory)) == 0) {
-		phys = DmaLowAlloc(alloc_size);
+		phys = dma_low_pool.Allocate(alloc_size);
 	}
 	#endif
 	if (!phys) {
@@ -1378,7 +1378,7 @@ static stdsint HandlePwcallDeviceDmaAlloc(ProcessBlock* pb, stduint dev_handle, 
 	if ((flags & _IMM(PwcallDeviceDmaAllocFlag::Iova)) &&
 		!Iova::MapDeviceDma(device, stduint(phys), alloc_size, iova_flags,
 			dma_mapping)) {
-		if (DmaLowIsInRange(phys)) DmaLowFree(phys, alloc_size);
+		if (dma_low_pool.IsInRange(phys)) dma_low_pool.Deallocate(phys, alloc_size);
 		else mempool.deallocate(phys, alloc_size);
 		return -1;
 	}
@@ -1418,7 +1418,7 @@ static stdsint HandlePwcallDeviceDmaAlloc(ProcessBlock* pb, stduint dev_handle, 
 	#endif
 	if (!release_physical) return -1;
 	#if (_MCCA & 0xFF00) == 0x8600
-	if (DmaLowIsInRange(phys)) DmaLowFree(phys, alloc_size);
+	if (dma_low_pool.IsInRange(phys)) dma_low_pool.Deallocate(phys, alloc_size);
 	else mempool.deallocate(phys, alloc_size);
 	#else
 	mempool.deallocate(phys, alloc_size);
@@ -1492,8 +1492,8 @@ static stdsint HandlePwcallDeviceDmaFree(ProcessBlock* pb, stduint dma_handle) {
 	}
 	if (physical && size) {
 		#if (_MCCA & 0xFF00) == 0x8600
-		if (DmaLowIsInRange((void*)physical)) {
-			DmaLowFree((void*)physical, size);
+		if (dma_low_pool.IsInRange((void*)physical)) {
+			dma_low_pool.Deallocate((void*)physical, size);
 		}
 		else {
 			mempool.deallocate((void*)physical, size);

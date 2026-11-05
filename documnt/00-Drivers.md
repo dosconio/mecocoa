@@ -81,6 +81,9 @@ No Use
 - SATA 
 	- AHCI (MBR, GPT, ATAPI) 4:30
 - SCSI (MBR, GPT, ATAPI) 4:16
+	- BusLogic
+	- ❌LSI Logic Parallel
+	- ❌LSI Logic SAS
 - NVMe (MBR, GPT) 4:64
 
 Filesys

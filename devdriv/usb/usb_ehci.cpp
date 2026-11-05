@@ -364,14 +364,14 @@ namespace {
 
 	void ReleaseEhciPeriodicList(EhciDriverInstance& controller) {
 		if (!controller.periodic_list) return;
-		DmaLowFree(controller.periodic_list,
+		dma_low_pool.Deallocate(controller.periodic_list,
 			EhciHostController::kPeriodicListBytes);
 		controller.periodic_list = nullptr;
 	}
 
 	void ReleaseEhciTransferWorkspace(EhciDriverInstance& controller) {
 		if (!controller.transfer_workspace) return;
-		DmaLowFree(controller.transfer_workspace,
+		dma_low_pool.Deallocate(controller.transfer_workspace,
 			EhciHostController::kTransferWorkspaceBytes);
 		controller.transfer_workspace = nullptr;
 	}
@@ -379,9 +379,9 @@ namespace {
 	bool AllocateEhciDma(EhciDriverInstance& controller) {
 		if (controller.periodic_list || controller.transfer_workspace) return false;
 		controller.periodic_list = static_cast<uint32*>(
-			DmaLowAlloc(EhciHostController::kPeriodicListBytes));
+			dma_low_pool.Allocate(EhciHostController::kPeriodicListBytes));
 		if (!controller.periodic_list) return false;
-		controller.transfer_workspace = DmaLowAlloc(
+		controller.transfer_workspace = dma_low_pool.Allocate(
 			EhciHostController::kTransferWorkspaceBytes);
 		if (!controller.transfer_workspace) {
 			ReleaseEhciPeriodicList(controller);

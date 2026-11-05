@@ -364,7 +364,7 @@ namespace {
 		}
 		if (!sound_blaster_dma_buffer) {
 			sound_blaster_dma_buffer = static_cast<uint8*>(
-				DmaLowAlloc(SoundBlasterDmaBufferSize));
+				dma_low_pool.Allocate(SoundBlasterDmaBufferSize));
 			if (!sound_blaster_dma_buffer) {
 				sound_blaster_dma_buffer = static_cast<uint8*>(
 					mempool.allocate(SoundBlasterDmaBufferSize, PAGESIZE_4KB, 16));

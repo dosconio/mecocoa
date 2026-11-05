@@ -411,7 +411,7 @@ void Memory::AppendAvailableRange(stduint beg, stduint end) {
 					Memory::total_memsize += candidate - first;
 				}
 				isa_dma_pool_base = candidate;
-				DmaLowPoolInit(candidate);
+				dma_low_pool.Initialize(candidate);
 				first = candidate + 0x10000;
 			}
 		}
@@ -450,7 +450,7 @@ bool Memory::initialize(stduint eax, byte* ebx) {
 	mempool.Reset();
 	Memory::total_memsize = 0;
 	isa_dma_pool_base = 0;
-	DmaLowPoolInit(0);
+	dma_low_pool.Initialize(0);
 
 	// x64 has default paging now
 	#if _MCCA == 0x8632
@@ -528,7 +528,7 @@ bool Memory::initialize(stduint eax, byte* ebx) {
 		return false;
 	}
 
-	const stduint isa_dma_reserved_bytes = DmaLowPoolExpand();
+	const stduint isa_dma_reserved_bytes = dma_low_pool.Expand();
 	map_ready = true;
 
 	uni_default_allocator = &mempool;

@@ -24,6 +24,19 @@ int main(int argc, char** argv)
 	Point last_p = {0, 0};
 	Color pen_color = Color::Red;
 
+	auto draw_to = [&](const Point& curr_p) {
+		// Ensure movement occurred to avoid redundant draws
+		if (curr_p.x != last_p.x || curr_p.y != last_p.y) {
+			// Draw line segment for continuity
+			Size2 delta = { curr_p.x - last_p.x, curr_p.y - last_p.y };
+			// ploginfo(">>> %d %d %d %d", last_p.x, last_p.y, delta.x, delta.y);
+			if (sys_draw_line(form_id, last_p, delta, pen_color, DrawArea::Window) >= 0) {
+				// Update tracking point
+				last_p = curr_p;
+			}
+		}
+	};
+
 	SheetMessage smsg;
 	// Main message loop with clear onClick/onMoved separation
 	while (sys_fetch_msg(form_id, true, &smsg)) {
@@ -36,10 +49,11 @@ int main(int argc, char** argv)
 				// START DRAWING: Button Pressed
 				is_drawing = true;
 				last_p = { smsg.args[0], smsg.args[1] };
-				sys_draw_point(form_id, last_p, pen_color);
+				sys_draw_point(form_id, last_p, pen_color, DrawArea::Window);
 			}
 			else {
 				// STOP DRAWING: Button Released
+				if (is_drawing) draw_to(Point(smsg.args[0], smsg.args[1]));
 				is_drawing = false;
 
 				// Close Button check (Component ID 1)
@@ -59,17 +73,7 @@ int main(int argc, char** argv)
 			// Only draw if the button is currently held down
 			if (is_drawing) {
 				Point curr_p = { smsg.args[0], smsg.args[1] };
-				
-				// Ensure movement occurred to avoid redundant draws
-				if (curr_p.x != last_p.x || curr_p.y != last_p.y) {
-					// Draw line segment for continuity
-					Size2 delta = { curr_p.x - last_p.x, curr_p.y - last_p.y };
-					// ploginfo(">>> %d %d %d %d", last_p.x, last_p.y, delta.x, delta.y);
-					sys_draw_line(form_id, last_p, delta, pen_color);
-
-					// Update tracking point
-					last_p = curr_p;
-				}
+				draw_to(curr_p);
 			}
 			break;
 		}

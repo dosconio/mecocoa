@@ -27,7 +27,7 @@
 #include "c/proctrl/IAx86_64.msr.h"
 #endif
 
-static constexpr bool echo_drvname = false;
+static constexpr bool echo_drvname = true;
 
 #if _MCCA == 0x8664
 extern "C" void Handint_Double_Fault_Emergency_Entry();

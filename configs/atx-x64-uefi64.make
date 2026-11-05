@@ -78,6 +78,9 @@ cppfile=\
 	$(ulibpath)/cpp/Device/Storage/Harddisk.cpp \
 	$(ulibpath)/cpp/Device/Storage/Harddisk-PATA.cpp \
 	$(ulibpath)/cpp/Device/Storage/Harddisk-SCSI.cpp \
+	$(ulibpath)/cpp/Device/Storage/SCSI/BusLogic.cpp \
+	$(ulibpath)/cpp/Device/Storage/SCSI/LsiLogic-Para.cpp \
+	$(ulibpath)/cpp/Device/Storage/SCSI/LsiLogic-SAS.cpp \
 	$(ulibpath)/cpp/Device/Storage/xCD-SCSI.cpp \
 	$(ulibpath)/cpp/Device/Storage/xCD.cpp \
 	$(ulibpath)/cpp/Device/ACPI.cpp $(wildcard $(ulibpath)/cpp/Device/ACPI/*.cpp) \

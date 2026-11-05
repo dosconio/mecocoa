@@ -32,8 +32,8 @@ int main(int argc, char** argv)
 		}
 		sys_update_form(form_id, nullptr);
 
-		auto str = "Cialloこ~"_ustr;
-		sys_draw_default_string(form_id, Point2(50, 50), str.reference(), Color::Maroon);
+		auto str = "Ciallo~"_ustr;
+		sys_draw_default_string(form_id, Point2(50, 50), str.reference(), Color::Maroon, 24);
 		sys_draw_point(form_id, Point2(100, 100), Color::Red);
 		sys_draw_line(form_id, Point2(80, 100), Point2(40, 30), Color::Blue);
 		Rectangle rect0{ Point(16, 16), Size2(10, 40), Color::Green };
@@ -57,6 +57,8 @@ int main(int argc, char** argv)
 			for (int i = 0; i < 318 * 221; i++) test_buffer[i] = c;
 			color_idx = (color_idx + 1) % 6;
 			sys_update_form(form_id, nullptr);
+			auto str = "Ciallo こん日は~"_ustr;
+			sys_draw_default_string(form_id, Point2(50, 50), str.reference(), c ^ 0xFFFFFF, 24);
 			// outsfmt("msg: onTimer at %u\n\r", smsg.args[3]);
 			break;
 		}

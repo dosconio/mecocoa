@@ -79,12 +79,12 @@ static constexpr byte PataBmideStatusActive = 0x01;
 
 static void free_pata_dma_page(void* buffer) {
 	if (!buffer) return;
-	if (DmaLowIsInRange(buffer)) DmaLowFree(buffer, PataDmaPageSize);
+	if (dma_low_pool.IsInRange(buffer)) dma_low_pool.Deallocate(buffer, PataDmaPageSize);
 	else mempool.deallocate(buffer, PataDmaPageSize);
 }
 
 static void* allocate_pata_dma_page(DeviceNode* node, uint32& device_address) {
-	void* buffer = DmaLowAlloc(PataDmaPageSize);
+	void* buffer = dma_low_pool.Allocate(PataDmaPageSize);
 	if (!buffer) buffer = mempool.allocate(PataDmaPageSize, 12);
 	if (!buffer) return nullptr;
 	const uint64 physical = uint64(_IMM(buffer));
@@ -183,7 +183,7 @@ static void initialize_pata_dma_channels_once(DeviceNode* pata_node) {
 			(stduint)(state.ready ? 1u : 0u),
 			(stduint)state.bmide_base,
 			state.prdt, state.prdt_address, state.bounce, state.bounce_address,
-			(stduint)((state.prdt && DmaLowIsInRange(state.prdt)) ? 1u : 0u));
+			(stduint)((state.prdt && dma_low_pool.IsInRange(state.prdt)) ? 1u : 0u));
 	}
 }
 

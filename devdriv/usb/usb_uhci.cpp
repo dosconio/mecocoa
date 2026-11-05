@@ -140,13 +140,13 @@ namespace {
 
 	void ReleaseUhciFrameList(UhciDriverInstance& controller) {
 		if (!controller.frame_list) return;
-		DmaLowFree(controller.frame_list, UhciHostController::kFrameListBytes);
+		dma_low_pool.Deallocate(controller.frame_list, UhciHostController::kFrameListBytes);
 		controller.frame_list = nullptr;
 	}
 
 	void ReleaseUhciTransferWorkspace(UhciDriverInstance& controller) {
 		if (!controller.transfer_workspace) return;
-		DmaLowFree(controller.transfer_workspace,
+		dma_low_pool.Deallocate(controller.transfer_workspace,
 			UhciHostController::kTransferWorkspaceBytes);
 		controller.transfer_workspace = nullptr;
 	}
@@ -154,7 +154,7 @@ namespace {
 	bool AllocateUhciFrameList(UhciDriverInstance& controller) {
 		if (controller.frame_list) return false;
 		controller.frame_list = static_cast<uint32*>(
-			DmaLowAlloc(UhciHostController::kFrameListBytes));
+			dma_low_pool.Allocate(UhciHostController::kFrameListBytes));
 		if (!controller.frame_list) return false;
 		const uint64 address = uint64(stduint(controller.frame_list));
 		if ((address & 0xFFFu) ||
@@ -169,7 +169,7 @@ namespace {
 
 	bool AllocateUhciTransferWorkspace(UhciDriverInstance& controller) {
 		if (controller.transfer_workspace) return true;
-		controller.transfer_workspace = DmaLowAlloc(
+		controller.transfer_workspace = dma_low_pool.Allocate(
 			UhciHostController::kTransferWorkspaceBytes);
 		if (!controller.transfer_workspace) return false;
 		const uint64 address = uint64(stduint(controller.transfer_workspace));

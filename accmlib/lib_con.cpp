@@ -42,25 +42,29 @@ stdsint sys_fetch_msg(stduint form_id, stduint if_blocked, SheetMessage* u_msg) 
 	return ret;
 }
 
-stdsint sys_draw_default_string(stduint form_id, Point vertex, rostr string, Color color)
+stdsint sys_draw_default_string(stduint form_id, Point vertex, rostr string, Color color, stduint pixel_size, DrawArea area)
 {
-	stduint buf[4] = { form_id, _IMM(&vertex), _IMM(string), _IMM(color) };
+	FMT_ConsoleMsg_FCHR fdraw = { form_id, &vertex, string, color, pixel_size, area };
+	stdsint ret = -1;
 	CommMsg msg;
-	msg.data.address = _IMM(buf);
-	msg.data.length = sizeof(buf);
+	msg.data.address = _IMM(&fdraw);
+	msg.data.length = sizeof(fdraw);
 	msg.type = _IMM(GraphicMsg::FCHR);
 	syscomm(1, Task_ConsoleVideo, &msg);
+	msg.data.address = _IMM(&ret);
+	msg.data.length = sizeof(ret);
 	syscomm(0, Task_ConsoleVideo, &msg);
-	return buf[0];// should be 0
+	return ret;// should be 0
 }
 
-stdsint sys_draw_point(stduint form_id, Point po, Color co) {
+stdsint sys_draw_point(stduint form_id, Point po, Color co, DrawArea area) {
 	FMT_ConsoleMsg_FDRW fdraw;
 	FMT_ConsoleMsg_FDRW::ShapeInfo::ColorPoint cp = { po, co };
 	stdsint ret = -1;
 	fdraw.pform_id = form_id;
 	fdraw.shape_type = FMT_ConsoleMsg_FDRW::Shape::Point;
 	fdraw.usr_shape_info.cpoint = &cp;
+	fdraw.area = area;
 	CommMsg msg;
 	msg.data.address = _IMM(&fdraw);
 	msg.data.length = sizeof(fdraw);
@@ -72,13 +76,14 @@ stdsint sys_draw_point(stduint form_id, Point po, Color co) {
 	return ret;// should be 0
 }
 
-stdsint sys_draw_line(stduint form_id, Point disp, Size2 size, Color co) {
+stdsint sys_draw_line(stduint form_id, Point disp, Size2 size, Color co, DrawArea area) {
 	FMT_ConsoleMsg_FDRW fdraw;
 	FMT_ConsoleMsg_FDRW::ShapeInfo::ColorLine cl = { disp, size, co };
 	stdsint ret = -1;
 	fdraw.pform_id = form_id;
 	fdraw.shape_type = FMT_ConsoleMsg_FDRW::Shape::Line;
 	fdraw.usr_shape_info.cline = &cl;
+	fdraw.area = area;
 	CommMsg msg;
 	msg.data.address = _IMM(&fdraw);
 	msg.data.length = sizeof(fdraw);
@@ -90,12 +95,13 @@ stdsint sys_draw_line(stduint form_id, Point disp, Size2 size, Color co) {
 	return ret;// should be 0
 }
 
-stdsint sys_draw_rectangle(stduint form_id, const Rectangle* rect) {
+stdsint sys_draw_rectangle(stduint form_id, const Rectangle* rect, DrawArea area) {
 	FMT_ConsoleMsg_FDRW fdraw;
 	stdsint ret = -1;
 	fdraw.pform_id = form_id;
 	fdraw.shape_type = FMT_ConsoleMsg_FDRW::Shape::Rect;
 	fdraw.usr_shape_info.crect = (Rectangle*)rect;
+	fdraw.area = area;
 	CommMsg msg;
 	msg.data.address = _IMM(&fdraw);
 	msg.data.length = sizeof(fdraw);
