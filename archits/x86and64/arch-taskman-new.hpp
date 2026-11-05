@@ -3,11 +3,6 @@ constexpr unsigned ldt_entry_cnt = 8;
 alignas(16) static descriptor_t _LDT[ldt_entry_cnt];
 #define FLAT_CODE_R3_PROP 0x00CFFA00
 #define FLAT_DATA_R3_PROP 0x00CFF200
-static uint32 current_bootstrap_lapic_id() {
-	uint32 a = 0, b = 0, c = 0, d = 0;
-	_IO_CPUID(1, 0, &a, &b, &c, &d);
-	return (b >> 24) & 0xFF;
-}
 #if _MCCA == 0x8632
 static void make_LDT(descriptor_t* ldt_alias, byte ring) {
 	for0(i, 4) {
@@ -97,16 +92,12 @@ static void SetPercoreFore(stduint cpuid) {
 		#endif
 		#if _MCCA == 0x8632 || _MCCA == 0x8664
 		percore->lapic_id = acpi_cpu_count ? acpi_cpu_lapic_ids[i] :
-			(i == 0 ? current_bootstrap_lapic_id() : CORE_ID_INVALID);
+			(i == 0 ? GetCurrentLapicId() : CORE_ID_INVALID);
 		if (percore->lapic_id < LAPIC_ID_MAP_SIZE) {
 			g_lapicid_to_coreid[percore->lapic_id] = i;
 			#if _MCCA == 0x8632
 			ap_lapicid_to_coreid[percore->lapic_id] = i;
 			#endif
-		}
-		else {
-			plogwarn("[COREMAN] LAPIC ID %[x] exceeds direct map size %u",
-				percore->lapic_id, LAPIC_ID_MAP_SIZE);
 		}
 		#else
 		percore->lapic_id = CORE_ID_INVALID;
@@ -175,4 +166,6 @@ static void SetPercoreFore(stduint cpuid) {
 	_ASM("LLDT %w0" : : "r"(SegGLDT) : "memory");
 	#endif
 
+	// Release publishes complete core records, stacks and direct maps before APs can use them.
+	g_core_id_map_count.store(uint32(Taskman::PCU_CORES), uni::MemoryOrder_Release);
 }

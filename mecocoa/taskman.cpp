@@ -21,21 +21,73 @@ extern Spinlock scheduler_lock;
 // #pragma GCC push_options
 // #pragma GCC optimize("O2")
 
-#if _MCCA == 0x8632
-stduint Taskman::getID() {
+#if _MCCA == 0x8632 || _MCCA == 0x8664
+uint32 GetCurrentLapicId() {
 	uint32 a = 0, b = 0, c = 0, d = 0;
-	_IO_CPUID(1, 0, &a, &b, &c, &d);
-	const uint32 lapic_id = (b >> 24) & 0xFF; // xAPIC LAPIC ID (Initial APIC ID), consistent with table keys
-	if (lapic_id < LAPIC_ID_MAP_SIZE) {
-		const auto core_id = g_lapicid_to_coreid[lapic_id];
-		if (core_id != CORE_ID_INVALID) return core_id;
+	// Intel SDM Vol. 2A, CPUID leaves 1FH/0BH: EDX contains the full x2APIC ID.
+	_IO_CPUID(0, 0, &a, &b, &c, &d);
+	const uint32 maximum_leaf = a;
+	if (maximum_leaf >= 0x1Fu) {
+		_IO_CPUID(0x1F, 0, &a, &b, &c, &d);
+		if ((b & 0xFFFFu) && (c & 0xFF00u)) return d;
 	}
-	return 0;
+	if (maximum_leaf >= 0x0Bu) {
+		_IO_CPUID(0x0B, 0, &a, &b, &c, &d);
+		if ((b & 0xFFFFu) && (c & 0xFF00u)) return d;
+	}
+	// AMD APM Vol. 3, CPUID: Fn8000_0026 EDX / Fn8000_001E EAX report the extended APIC ID.
+	_IO_CPUID(0x80000000u, 0, &a, &b, &c, &d);
+	const uint32 maximum_extended_leaf = a;
+	if (maximum_extended_leaf >= 0x80000026u) {
+		_IO_CPUID(0x80000026u, 0, &a, &b, &c, &d);
+		if ((b & 0xFFFFu) && (c & 0xFF00u)) return d;
+	}
+	if (maximum_extended_leaf >= 0x8000001Eu) {
+		_IO_CPUID(0x80000001u, 0, &a, &b, &c, &d);
+		if (c & (1u << 22)) { // AMD TopologyExtensions gates Fn8000_001E.
+			_IO_CPUID(0x8000001Eu, 0, &a, &b, &c, &d);
+			return a;
+		}
+	}
+	_IO_CPUID(1, 0, &a, &b, &c, &d);
+	return (b >> 24) & 0xFF; // Legacy Initial APIC ID is only eight bits wide.
 }
 
+[[noreturn]] static void FailCurrentCoreId(uint32 lapic_id) {
+	asm volatile("cli" ::: "memory");
+	printlog(_LOG_FATAL, "[COREMAN] Unmapped current LAPIC ID %[x]", stduint(lapic_id));
+	loop HALT();
+}
 
+stduint Taskman::getID() {
+	const uint32 core_count = g_core_id_map_count.load(uni::MemoryOrder_Acquire);
+	if (!core_count) {
+		uint32 a = 0, b = 0, c = 0, d = 0;
+		_IO_CPUID(1, 0, &a, &b, &c, &d);
+		// Intel SDM Vol. 3A, IA32_APIC_BASE.BSP (bit 8): only BSP may use the early CPU-0 fallback.
+		if (!(d & (1u << 9)) || !(d & (1u << 5)) ||
+			(getMSR(x86MSR::APIC_BASE) & (1ull << 8))) return 0;
+		FailCurrentCoreId(GetCurrentLapicId());
+	}
+	const uint32 lapic_id = GetCurrentLapicId();
+	if (lapic_id == CORE_ID_INVALID) FailCurrentCoreId(lapic_id);
+	if (lapic_id < LAPIC_ID_MAP_SIZE) {
+		const auto core_id = g_lapicid_to_coreid[lapic_id];
+		if (core_id < core_count) return core_id;
+	}
+	else {
+		for0(i, core_count) {
+			const auto percore = PCU_CORES_PERCORE[i];
+			if (percore && percore->lapic_id == lapic_id) return i;
+		}
+	}
+	FailCurrentCoreId(lapic_id);
+}
+#else
+stduint Taskman::getID() { return _TEMP 0; }
+#endif
 
-
+#if _MCCA == 0x8632
 static void SendFixedIPIByCore(stduint core_id, uint8 vector) {
 	if (core_id >= Taskman::PCU_CORES) return;
 	auto percore = Taskman::PCU_CORES_PERCORE[core_id];
@@ -77,8 +129,6 @@ void SendWakeAllApsIPI() {
 	}
 	#endif
 }
-#else
-stduint Taskman::getID() { return _TEMP 0; }
 #endif
 
 namespace uni {

@@ -21,6 +21,9 @@ extern "C" uint32 C_SegTSS0;                            // exported for assembly
 uint32 C_SegTSS0 = SegTSS0;
 
 uint32 g_lapicid_to_coreid[LAPIC_ID_MAP_SIZE] = {};
+extern "C" {
+	uni::Atomic<uint32> g_core_id_map_count = 0;
+}
 #if _MCCA == 0x8632
 uint32 ap_lapicid_to_coreid[LAPIC_ID_MAP_SIZE] = {};
 stduint ap_higher_stack_tops[PCU_CORES_MAX] = {};
@@ -406,7 +409,7 @@ ThreadBlock* Taskman::PickNext() {
 		while (node) {
 			if (!node->just_schedule && node->state != ThreadBlock::State::Running) {
 				bool active_on_other_cpu = false;
-				for (int c = 0; c < Taskman::PCU_CORES; c++) {
+				for0 (c, Taskman::PCU_CORES) {
 					if (c != (int)current_cpuid && current_thread(c) == node) {
 						active_on_other_cpu = true;
 						#if 0 && defined(_DEBUG)
@@ -422,7 +425,7 @@ ThreadBlock* Taskman::PickNext() {
 					#endif
 					if (runnable_here) {
 						// Check whether node is in the array: 
-						for (int i = 0; i < Taskman::PCU_CORES; i++) {
+						for0 (i, Taskman::PCU_CORES) {
 							if (switching_out_threads(i) == node) {
 								switching_out_threads(i) = nullptr;
 								break;
@@ -452,7 +455,7 @@ ThreadBlock* Taskman::PickNext() {
 			while (node) {
 				if (!node->just_schedule && node->state != ThreadBlock::State::Running) {
 					bool active_on_other_cpu = false;
-					for (int c = 0; c < Taskman::PCU_CORES; c++) {
+					for0 (c, Taskman::PCU_CORES) {
 						if (c != (int)current_cpuid && current_thread(c) == node) {
 							active_on_other_cpu = true;
 							#if 0 && defined(_DEBUG)
@@ -464,7 +467,7 @@ ThreadBlock* Taskman::PickNext() {
 					if (!active_on_other_cpu) {
 						bool runnable_here = (node->ring_coreid == CORE_ID_INVALID || node->ring_coreid == current_cpuid);
 						if (runnable_here) {
-							for (int i = 0; i < Taskman::PCU_CORES; i++) {
+							for0 (i, Taskman::PCU_CORES) {
 								if (switching_out_threads(i) == node) {
 									switching_out_threads(i) = nullptr;
 									break;

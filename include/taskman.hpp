@@ -77,6 +77,7 @@ static constexpr stduint LAPIC_ID_MAP_SIZE = 256;
 extern stduint acpi_madt_addr;
 extern stduint acpi_cpu_count;
 extern uint32 acpi_cpu_lapic_ids[PCU_CORES_MAX];
+uint32 GetCurrentLapicId();
 #endif
 #if _MCCA == 0x8632
 static constexpr uint8 IRQ_TLB_SHOOTDOWN_IPI = 0xF0;
@@ -193,11 +194,15 @@ static_assert(offsetof(PERCORE, scratch) == 136, "PERCORE.scratch offset mismatc
 static_assert(offsetof(PERCORE, user_cr3) == 144, "PERCORE.user_cr3 offset mismatch!");
 static_assert(offsetof(PERCORE, kernel_stack) == 392, "PERCORE.kernel_stack offset mismatch!");
 #elif _MCCA == 0x8632
+static_assert(LAPIC_ID_MAP_SIZE == 256, "AP trampoline direct map size mismatch!");
+static_assert(offsetof(PERCORE, lapic_id) == 256, "PERCORE.lapic_id offset mismatch in AP trampoline!");
 static_assert(offsetof(PERCORE, kernel_stack) == 264, "PERCORE.kernel_stack offset mismatch in x86_32!");
 static_assert(offsetof(PERCORE, tss_selector) == 268, "PERCORE.tss_selector offset mismatch in x86_32!");
 static_assert(offsetof(PERCORE, user_cr3) == 272, "PERCORE.user_cr3 offset mismatch in x86_32!");
 #endif
 extern uint32 g_lapicid_to_coreid[LAPIC_ID_MAP_SIZE];
+// Published after the core records and both direct maps are complete; zero means BSP-only initialization.
+extern "C" uni::Atomic<uint32> g_core_id_map_count;
 
 #else
 struct PERCORE;

@@ -412,6 +412,12 @@ void dump_ready_queue(OstreamTrait& com1) {
 static Spinlock log_lock;
 void printlog(loglevel_t level, const char* fmt, ...)
 {
+	if (level == _LOG_FATAL) { // pass the lock
+		Letpara(paras, fmt);
+		printlogx(level, fmt, paras);
+		para_endo(paras);
+		return;
+	}
 	SpinlockLocal lock(&log_lock);
 	Letpara(paras, fmt);
 	printlogx(level, fmt, paras);

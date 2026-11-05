@@ -82,6 +82,8 @@ PointBack32:
 JMP FAR [KernelJump]
 
 %elif _MCCA == 0x8632
+EXTERN C_PCU_CORES_PERCORE
+EXTERN g_core_id_map_count
 [BITS 16]
 ; Entry of Application Processor
 GLOBAL SMP_AP_ENTRY
@@ -107,17 +109,98 @@ OLD_STACK: DD 0
 TMP1:DD 0,0
 
 [BITS 32]
+LAPIC_ID_MAP_SIZE EQU 256
+PERCORE_lapic_id EQU 256 ; Checked by offsetof(PERCORE, lapic_id) in taskman.hpp.
 TMP32:
 	LoadDataSegs SegData
 	LGDT [0x510]; GDT addr < 0x10000
+	; No stack is available yet; mirror GetCurrentLapicId() without calls or pushes.
+	; Intel SDM Vol. 2A, CPUID 1FH/0BH; AMD APM Vol. 3, CPUID 80000026H/8000001EH.
+	XOR EAX, EAX
 	XOR ECX, ECX
+	CPUID
+	MOV ESI, EAX
+	CMP ESI, 0x1F
+	JB .try_leaf_b
+	MOV EAX, 0x1F
+	XOR ECX, ECX
+	CPUID
+	TEST EBX, 0xFFFF
+	JZ .try_leaf_b
+	TEST ECX, 0xFF00
+	JNZ .have_lapic_id
+.try_leaf_b:
+	CMP ESI, 0x0B
+	JB .try_extended
+	MOV EAX, 0x0B
+	XOR ECX, ECX
+	CPUID
+	TEST EBX, 0xFFFF
+	JZ .try_extended
+	TEST ECX, 0xFF00
+	JNZ .have_lapic_id
+.try_extended:
+	MOV EAX, 0x80000000
+	XOR ECX, ECX
+	CPUID
+	MOV ESI, EAX
+	CMP ESI, 0x80000026
+	JB .try_leaf_1e
+	MOV EAX, 0x80000026
+	XOR ECX, ECX
+	CPUID
+	TEST EBX, 0xFFFF
+	JZ .try_leaf_1e
+	TEST ECX, 0xFF00
+	JNZ .have_lapic_id
+.try_leaf_1e:
+	CMP ESI, 0x8000001E
+	JB .legacy_lapic_id
+	MOV EAX, 0x80000001
+	XOR ECX, ECX
+	CPUID
+	TEST ECX, 0x00400000 ; AMD TopologyExtensions gates Fn8000_001E.
+	JZ .legacy_lapic_id
+	MOV EAX, 0x8000001E
+	XOR ECX, ECX
+	CPUID
+	MOV EDX, EAX
+	JMP .have_lapic_id
+.legacy_lapic_id:
 	MOV EAX, 1
+	XOR ECX, ECX
 	CPUID
 	MOV EDX, EBX
-	SHR EDX, 24 ; xAPIC LAPIC ID (Initial APIC ID), consistent with table keys
+	SHR EDX, 24 ; Legacy Initial APIC ID, only used when full-ID leaves are unavailable.
+.have_lapic_id:
+	; x86 acquire load: nonzero count publishes all core records and both direct maps.
+	MOV ESI, [g_core_id_map_count]
+	TEST ESI, ESI
+	JZ SMP_AP_ENTRY_END
+	CMP EDX, 0xFFFFFFFF
+	JE SMP_AP_ENTRY_END
+	CMP EDX, LAPIC_ID_MAP_SIZE
+	JAE .scan_core_records
 	MOV EAX, [ap_lapicid_to_coreid + EDX * 4]
-	CMP EAX, 0xFFFFFFFF
-	JE  SMP_AP_ENTRY_END
+	CMP EAX, ESI
+	JAE SMP_AP_ENTRY_END
+	JMP .core_found
+.scan_core_records:
+	XOR ECX, ECX
+.next_core:
+	CMP ECX, ESI
+	JAE SMP_AP_ENTRY_END
+	MOV EDI, [C_PCU_CORES_PERCORE + ECX * 4]
+	TEST EDI, EDI
+	JZ .skip_core
+	CMP EDX, [EDI + PERCORE_lapic_id]
+	JE .large_id_found
+.skip_core:
+	INC ECX
+	JMP .next_core
+.large_id_found:
+	MOV EAX, ECX
+.core_found:
 	MOV ECX, EAX
 	MOV ESP, [ap_higher_stack_tops + ECX * 4]
 	PUSH ECX

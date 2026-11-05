@@ -145,29 +145,6 @@ static stduint find_rsdp_bios() {
 	return scan_rsdp_range(0xE0000, 0x20000, "BIOS-HIGH");
 }
 
-static uint32 current_bootstrap_lapic_id() {
-	uint32 a = 0, b = 0, c = 0, d = 0;
-	#if _MCCA == 0x8664
-	_IO_CPUID(0, 0, &a, &b, &c, &d);
-	const uint32 maximum_leaf = a;
-	if (maximum_leaf >= 0x1Fu) {
-		_IO_CPUID(0x1F, 0, &a, &b, &c, &d);
-		if (b) return d;
-	}
-	if (maximum_leaf >= 0x0Bu) {
-		_IO_CPUID(0x0B, 0, &a, &b, &c, &d);
-		if (b) return d;
-	}
-	_IO_CPUID(0x80000000u, 0, &a, &b, &c, &d);
-	if (a >= 0x8000001Eu) {
-		_IO_CPUID(0x8000001Eu, 0, &a, &b, &c, &d);
-		return a;
-	}
-	#endif
-	_IO_CPUID(1, 0, &a, &b, &c, &d);
-	return (b >> 24) & 0xFF;
-}
-
 static void register_acpi_cpu_lapic_id(uint32 lapic_id, uint32 bsp_lapic_id) {
 	for0(i, acpi_cpu_count) {
 		if (acpi_cpu_lapic_ids[i] == lapic_id) return;
@@ -261,7 +238,9 @@ static void enumerate_madt_cpus(stduint madt_addr) {
 		return;
 	}
 	if (!madt->header.isValid("APIC")) return;
-	const uint32 bsp_lapic_id = current_bootstrap_lapic_id();
+	const uint32 bsp_lapic_id = GetCurrentLapicId();
+	// Keep BSP at logical CPU 0 even when MADT order would put it beyond PCU_CORES_MAX.
+	register_acpi_cpu_lapic_id(bsp_lapic_id, bsp_lapic_id);
 	const stduint entries_begin = madt_addr + sizeof(uni::ACPI::MADT);
 	const stduint entries_end = madt_addr + madt->header.length;
 	for (stduint addr = entries_begin; addr + sizeof(uni::ACPI::MADTEntry) <= entries_end;) {
@@ -281,9 +260,6 @@ static void enumerate_madt_cpus(stduint madt_addr) {
 			}
 		}
 		addr += entry->length;
-	}
-	if (!acpi_cpu_count) {
-		register_acpi_cpu_lapic_id(bsp_lapic_id, bsp_lapic_id);
 	}
 }
 
