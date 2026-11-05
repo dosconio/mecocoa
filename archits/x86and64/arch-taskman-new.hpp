@@ -78,11 +78,7 @@ static void SetPercoreFore(stduint cpuid) {
 		MemSet(percore, 0, sizeof(PERCORE));
 		Taskman::PCU_CORES_PERCORE[i] = percore;
 		C_PCU_CORES_PERCORE[i] = percore;
-		#if _MCCA == 0x8664
-		higher_stacks[i] = mem.allocate(X64_TRANSITION_STACK_SIZE, PAGESIZE_4KB);
-		#else
-		higher_stacks[i] = mem.allocate(0x1000, PAGESIZE_4KB);
-		#endif
+		higher_stacks[i] = mem.allocate(TRANSITION_STACK_SIZE, PAGESIZE_4KB);
 		#if _MCCA == 0x8664
 		kernel_paging.Map(
 			PERCORE_VBASE + i * PERCORE_STRIDE,
@@ -93,11 +89,11 @@ static void SetPercoreFore(stduint cpuid) {
 		);
 		#endif
 		#if _MCCA == 0x8632
-		ring3_iret_stacks[i] = (mem.allocate(0x1000, PAGESIZE_4KB));
+		ring3_iret_stacks[i] = (mem.allocate(TRANSITION_STACK_SIZE, PAGESIZE_4KB));
 		// ploginfo("ring3_iret_stacks %u: %p", i, ring3_iret_stacks[i]);
 		treat<uint32>(ring3_iret_stacks[i]) = 0xdeadbeef;
-		ap_ring3_iret_stack_tops[i] = (0xFFFFF000u - i * 0x1000u) + 0x1000u - 0x10u;
-		ap_higher_stack_tops[i] = _IMM(higher_stacks[i]) + 0x1000 - 0x10;
+		ap_ring3_iret_stack_tops[i] = GetCoreTransitionStackTop(i);
+		ap_higher_stack_tops[i] = _IMM(higher_stacks[i]) + TRANSITION_STACK_SIZE - 0x10;
 		#endif
 		#if _MCCA == 0x8632 || _MCCA == 0x8664
 		percore->lapic_id = acpi_cpu_count ? acpi_cpu_lapic_ids[i] :

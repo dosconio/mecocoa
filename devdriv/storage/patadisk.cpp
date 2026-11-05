@@ -9,10 +9,13 @@
 #include <c/storage/harddisk.h>
 #include <cpp/atomic>
 #include <cpp/Device/Bus/PCI.hpp>
+#if _MCCA == 0x8664
+#include "../../mecocoa/devsman-acpi-gsi.h"
+#endif
 
 _ESYM_C void R_HDD_INIT();
 
-#if _MCCA == 0x8632
+#if _MCCA == 0x8632 || _MCCA == 0x8664
 
 #if 1
 __attribute__((section(".init.rmod")))
@@ -29,10 +32,26 @@ static constexpr byte PATA_PRIMARY_NATIVE_MODE = 0x01u;
 static constexpr byte PATA_SECONDARY_NATIVE_MODE = 0x04u;
 static constexpr byte PATA_NATIVE_MODE_MASK = PATA_PRIMARY_NATIVE_MODE | PATA_SECONDARY_NATIVE_MODE;
 static DeviceNode* pata_controller_node = nullptr;
+#if _MCCA == 0x8664
+enum class PataPIOPhase : byte {
+	DataIn,
+	// Initial DRQ for a write requests data; it does not complete the command.
+	WriteCommand,
+	WriteData,
+	Dma,
+};
+#endif
 struct IdeChannelState {
-	Spinlock lock;
-	volatile byte irq_waiting = 0;
-	volatile byte irq_seen = 0;
+	// Master/slave register sequences share a channel; a spinlock would mask the completion IRQ while waiting.
+	Mutex lock;
+	// The GSI handler can run on the BSP while another CPU owns the channel transaction.
+	uni::Atomic<byte> irq_waiting = 0;
+	uni::Atomic<byte> irq_seen = 0;
+	#if _MCCA == 0x8664
+	ACPIGSIBinding gsi_binding{};
+	uni::Atomic<PataPIOPhase> pio_phase = PataPIOPhase::DataIn;
+	bool irq_fallback_reported = false;
+	#endif
 };
 static IdeChannelState g_ide_channels[2];
 static char* single_sector = NULL;// file-hd used buffer
@@ -41,13 +60,68 @@ struct PataDmaChannelState {
 	word bmide_base = 0;
 	PataBmidePrd* prdt = nullptr;
 	byte* bounce = nullptr;
+	uint32 prdt_address = 0;
+	uint32 bounce_address = 0;
+	// Serialize BSP GSI acknowledgement against another CPU retiring or rearming the DMA request.
+	Spinlock irq_lock;
+	uni::Atomic<byte> irq_status = 0;
+	bool quiesced = true;
 	bool ready = false;
 };
 
 static PataDmaChannelState pata_dma_channels[2];
-// Cleared to true by probe_pata_dma_read_once() when bus-master DMA cannot be
-// trusted (fails outright, or disagrees with a PIO read of the same sector).
-static bool pata_dma_disabled = false;
+// A drive stays on PIO until its DMA read matches the PIO reference sector.
+static bool pata_dma_capable[MAX_DRIVES] = {};
+static bool pata_dma_enabled[MAX_DRIVES] = {};
+static constexpr stduint PataDmaPageSize = 0x1000;
+// Intel 82801DB ICH4 datasheet, section 10.2.2: BMIS bit 0 reports engine activity.
+static constexpr byte PataBmideStatusActive = 0x01;
+
+static void free_pata_dma_page(void* buffer) {
+	if (!buffer) return;
+	if (DmaLowIsInRange(buffer)) DmaLowFree(buffer, PataDmaPageSize);
+	else mempool.deallocate(buffer, PataDmaPageSize);
+}
+
+static void* allocate_pata_dma_page(DeviceNode* node, uint32& device_address) {
+	void* buffer = DmaLowAlloc(PataDmaPageSize);
+	if (!buffer) buffer = mempool.allocate(PataDmaPageSize, 12);
+	if (!buffer) return nullptr;
+	const uint64 physical = uint64(_IMM(buffer));
+	// ICH4 sections 5.15.2.1/10.2.3: 32-bit DMA addresses, aligned PRDT, no 64KB crossing.
+	if ((physical & (PataDmaPageSize - 1)) || physical > 0x100000000ull - PataDmaPageSize) {
+		free_pata_dma_page(buffer);
+		return nullptr;
+	}
+	Iova::DmaMapping mapping{};
+	if (!Iova::MapDeviceDma(node, _IMM(buffer), PataDmaPageSize, Iova::DmaMappingFlag::Identity, mapping)) {
+		free_pata_dma_page(buffer);
+		return nullptr;
+	}
+	if ((mapping.device_address & (PataDmaPageSize - 1)) || mapping.device_address > 0x100000000ull - PataDmaPageSize) {
+		if (!mapping.translated || Iova::UnmapDeviceDma(node, mapping.device_address, PataDmaPageSize)) free_pata_dma_page(buffer);
+		return nullptr;
+	}
+	device_address = uint32(mapping.device_address);
+	MemSet(buffer, 0, PataDmaPageSize);
+	return buffer;
+}
+
+static bool stop_pata_dma(PataDmaChannelState& state) {
+	const byte command = innpb(state.bmide_base + BMIDE_REG_CMD);
+	outpb(state.bmide_base + BMIDE_REG_CMD, byte(command & ~BMIDE_CMD_START));
+	for0(spin, 1000000) {
+		if (!(innpb(state.bmide_base + BMIDE_REG_STATUS) & PataBmideStatusActive)) {
+			state.quiesced = true;
+			return true;
+		}
+		_ASM volatile("pause" ::: "memory");
+	}
+	state.quiesced = false;
+	state.ready = false;
+	plogwarn("[PATA-DMA] BMIDE=%[16H] engine did not stop; channel I/O disabled", (stduint)state.bmide_base);
+	return false;
+}
 
 static bool build_pata_pci_device(DeviceNode* pata_node, uni::PCI::Device& pci_dev) {
 	if (!pata_node) return false;
@@ -66,37 +140,49 @@ static void initialize_pata_dma_channels_once(DeviceNode* pata_node) {
 	static bool done = false;
 	if (done) return;
 	done = true;
+	if (!pata_node || !(pata_node->fields.class_if & 0x80u)) return;
 
 	uni::PCI::Device pci_dev{};
 	if (!build_pata_pci_device(pata_node, pci_dev)) {
 		// ploginfo("[PATA-DMA] skip channel init: no PCI IDE controller node");
 		return;
 	}
+	if (!(uni::PCI::read_config_register(pci_dev, 0x04) & 0x0004u)) {
+		plogwarn("[PATA-DMA] PCI bus mastering is unavailable; using PIO");
+		return;
+	}
 
 	const auto* bmide_bar = Devsman::FindResource(pata_node, DeviceResourceType::PciBarIo, 4);
-	if (!bmide_bar || !bmide_bar->start) {
+	if (!bmide_bar || !bmide_bar->start || (bmide_bar->start & 0xFu) || bmide_bar->start > 0xFFF0u || bmide_bar->length < 16) {
 		// ploginfo("[PATA-DMA] skip channel init: BAR4(BMIDE) absent");
 		return;
 	}
 
 	const word bmide_base = word(bmide_bar->start & 0xFFF8u);
 	for0(channel, 2) {
+		if ((!disks[channel * 2] || disks[channel * 2]->Block_Size != 512) &&
+			(!disks[channel * 2 + 1] || disks[channel * 2 + 1]->Block_Size != 512)) continue;
 		auto& state = pata_dma_channels[channel];
 		state.bmide_base = word(bmide_base + channel * 8);
-		// DMA descriptors and the bounce buffer must be device-reachable; the pool
-		// guarantees a physical address below 16MB (memoman-init.cpp reserves it).
-		if (!state.prdt) state.prdt = (PataBmidePrd*)DmaLowAlloc(0x1000);
-		if (!state.bounce) state.bounce = (byte*)DmaLowAlloc(0x1000);
-		if (!state.prdt) state.prdt = (PataBmidePrd*)mempool.allocate(0x1000, 12);
-		if (!state.bounce) state.bounce = (byte*)mempool.allocate(0x1000, 12);
-		if (state.prdt) MemSet(state.prdt, 0, 0x1000);
-		if (state.bounce) MemSet(state.bounce, 0, 0x1000);
+		if (!stop_pata_dma(state)) continue;
+		state.prdt = static_cast<PataBmidePrd*>(allocate_pata_dma_page(pata_node, state.prdt_address));
+		state.bounce = static_cast<byte*>(allocate_pata_dma_page(pata_node, state.bounce_address));
 		state.ready = state.prdt && state.bounce;
-		ploginfo("[PATA-DMA] ch%u init ready=%u BMIDE=%[16H] prdt=%p bounce=%p low=%u",
+		if (!state.ready) {
+			if (state.prdt && Iova::UnmapDeviceDma(pata_node, state.prdt_address, PataDmaPageSize)) {
+				free_pata_dma_page(state.prdt);
+				state.prdt = nullptr;
+			}
+			if (state.bounce && Iova::UnmapDeviceDma(pata_node, state.bounce_address, PataDmaPageSize)) {
+				free_pata_dma_page(state.bounce);
+				state.bounce = nullptr;
+			}
+		}
+		ploginfo("[PATA-DMA] ch%u init ready=%u BMIDE=%[16H] prdt=%p->%[32H] bounce=%p->%[32H] low=%u",
 			(stduint)channel,
 			(stduint)(state.ready ? 1u : 0u),
 			(stduint)state.bmide_base,
-			state.prdt, state.bounce,
+			state.prdt, state.prdt_address, state.bounce, state.bounce_address,
 			(stduint)((state.prdt && DmaLowIsInRange(state.prdt)) ? 1u : 0u));
 	}
 }
@@ -105,6 +191,7 @@ static void ensure_pata_pci_bus_master_once(DeviceNode* pata_node) {
 	static bool done = false;
 	if (done) return;
 	done = true;
+	if (!pata_node || !(pata_node->fields.class_if & 0x80u)) return;
 
 	uni::PCI::Device pci_dev{};
 	if (!build_pata_pci_device(pata_node, pci_dev)) {
@@ -192,9 +279,11 @@ static void register_pata_storage_nodes(DeviceNode* pata_node) {
 	}
 }
 
+static bool start_pata_driver(DeviceNode* pata_node);
+
+#if _MCCA == 0x8632
 _ESYM_C void Handint_HDD1_Entry();
 _ESYM_C void Handint_HDD_Entry();
-static bool start_pata_driver(DeviceNode* pata_node);
 
 void Handint_HDD1()
 {
@@ -202,8 +291,8 @@ void Handint_HDD1()
 	else if (disks[3]) disks[3]->getStatus();
 	auto& ch = g_ide_channels[1];
 	if (ch.irq_waiting) {
-		ch.irq_seen = 1;
 		ch.irq_waiting = 0;
+		ch.irq_seen = 1;
 	}
 	IC.SendEOI(IRQ_ATA_DISK1);
 }
@@ -214,11 +303,12 @@ void Handint_HDD()// HDD Master
 	else if (disks[1]) disks[1]->getStatus();
 	auto& ch = g_ide_channels[0];
 	if (ch.irq_waiting) {
-		ch.irq_seen = 1;
 		ch.irq_waiting = 0;
+		ch.irq_seen = 1;
 	}
 	IC.SendEOI(IRQ_ATA_DISK0); // Acknowledge interrupt
 }
+#endif
 
 //
 typedef HD_Info hd_info_t[4];// 0:0 0:1 1:0 1:1
@@ -227,8 +317,77 @@ static bool hd_info_valid[4] = { 0 };
 
 #define	STATUS_BSY	0x80
 #define	STATUS_DRQ	0x08
+#define STATUS_ERR 0x01
+#define STATUS_DF 0x20
 #define	HD_TIMEOUT		10000	/* in millisec */
 #define	HD_WAITFOR_TIMEOUT	(HD_TIMEOUT / 1000)
+
+#if _MCCA == 0x8664
+static bool PataPIOReady(byte status, const IdeChannelState& channel) {
+	if (status == 0 || status == 0xFF || (status & STATUS_BSY)) return false;
+	if (status & (STATUS_ERR | STATUS_DF)) return true;
+	const auto phase = channel.pio_phase.load(uni::MemoryOrder_Acquire);
+	if (phase == PataPIOPhase::WriteCommand) return false;
+	return bool(status & STATUS_DRQ) == (phase == PataPIOPhase::DataIn);
+}
+
+static bool DispatchPataGSI(void* context) {
+	if (context != &g_ide_channels[0] && context != &g_ide_channels[1]) return false;
+	const byte channel = context == &g_ide_channels[0] ? 0 : 1;
+	auto& state = g_ide_channels[channel];
+	const word io_base = channel == 0 ? PORT_IDE_CommandBlock_0 : PORT_IDE_CommandBlock_1;
+	const word ctrl_base = channel == 0 ? PORT_IDE_ControlBlock_0 : PORT_IDE_ControlBlock_1;
+	if (state.pio_phase.load(uni::MemoryOrder_Acquire) == PataPIOPhase::Dma) {
+		auto& dma = pata_dma_channels[channel];
+		if (!dma.bmide_base) return false;
+		SpinlockLocal irq_guard(&dma.irq_lock);
+		const byte bmide_status = innpb(dma.bmide_base + BMIDE_REG_STATUS);
+		if (!(bmide_status & (BMIDE_STATUS_IRQ | BMIDE_STATUS_ERROR))) return false;
+		// Preserve completion/error bits before W1C; the waiting CPU may not run on the BSP.
+		dma.irq_status.store(byte(dma.irq_status.load(uni::MemoryOrder_Relaxed) | bmide_status), uni::MemoryOrder_Release);
+		(void)innpb(io_base + 7);
+		outpb(dma.bmide_base + BMIDE_REG_STATUS, bmide_status);
+		if (state.irq_waiting) {
+			state.irq_waiting = 0;
+			state.irq_seen = 1;
+		}
+		return true;
+	}
+	const byte status = innpb(ctrl_base);
+	if (status == 0 || status == 0xFF || (status & STATUS_BSY)) return false;
+	if (state.irq_waiting && !PataPIOReady(status, state)) {
+		if (state.pio_phase.load(uni::MemoryOrder_Acquire) != PataPIOPhase::WriteCommand || !(status & STATUS_DRQ)) return false;
+		(void)innpb(io_base + 7);
+		return true;
+	}
+	// ATA/ATAPI-6: Alternate Status preserves INTRQ; reading Status acknowledges it.
+	(void)innpb(io_base + 7);
+	if (!state.irq_waiting) return false;
+	state.irq_waiting = 0;
+	state.irq_seen = 1;
+	// The shared GSI dispatcher sends EOI after all device filters return.
+	return true;
+}
+
+static bool BindPataGSI(byte channel) {
+	if (channel >= numsof(g_ide_channels)) return false;
+	auto& state = g_ide_channels[channel];
+	if (state.gsi_binding.active) return true;
+	const word io_base = channel == 0 ? PORT_IDE_CommandBlock_0 : PORT_IDE_CommandBlock_1;
+	const word ctrl_base = channel == 0 ? PORT_IDE_ControlBlock_0 : PORT_IDE_ControlBlock_1;
+	constexpr byte PataControlNIEN = 1u << 1;
+	outpb(ctrl_base, PataControlNIEN);
+	(void)innpb(io_base + 7);
+	const byte isa_irq = byte(8 + (channel == 0 ? DEV_SLV_ATA_DISK0 : DEV_SLV_ATA_DISK1));
+	const auto status = Devs::BindISAGSI(isa_irq, DispatchPataGSI, &state, state.gsi_binding);
+	if (status != ACPIGSIStatus::Success) {
+		plogwarn("[PATA] ch%u ISA IRQ%u binding failed status=%u; using polling", (stduint)channel, (stduint)isa_irq, uint8(status));
+		return false;
+	}
+	ploginfo("[PATA] ch%u ISA IRQ%u bound to GSI%u", (stduint)channel, (stduint)isa_irq, state.gsi_binding.gsi);
+	return true;
+}
+#endif
 
 static bool waitfor(Harddisk_PATA* hdd, stduint mask, stduint val, stduint timeout_second)// return seccess
 {
@@ -257,12 +416,27 @@ static bool hd_int_wait_channel(byte channel) {
 	if (channel >= 2) return false;
 	auto& ch = g_ide_channels[channel];
 	const word io_base = (channel == 0) ? PORT_IDE_CommandBlock_0 : PORT_IDE_CommandBlock_1;
+	#if _MCCA == 0x8664
+	const word ctrl_base = channel == 0 ? PORT_IDE_ControlBlock_0 : PORT_IDE_ControlBlock_1;
+	// Boot probing with IF clear must poll rather than await an undeliverable IRQ.
+	const bool wait_for_irq = ch.gsi_binding.active && (getFlags() & 0x200u);
+	#endif
 	const stduint start_tick = tick;
 	const stduint timeout_ticks = HD_WAITFOR_TIMEOUT * CONFIG_SysTickFreq;
 	const stduint max_spins = HD_WAITFOR_TIMEOUT * 2000000;
 	stduint spin = 0;
 
 	while (true) {
+		#if _MCCA == 0x8664
+		// Do not acknowledge INTRQ while the routed handler is still expected to run.
+		const byte status = innpb(ctrl_base);
+		if (PataPIOReady(status, ch) && (ch.irq_seen || !wait_for_irq)) {
+			if (!wait_for_irq) (void)innpb(io_base + 7);
+			ch.irq_seen = 0;
+			ch.irq_waiting = 0;
+			return !(status & (STATUS_ERR | STATUS_DF));
+		}
+		#else
 		if (ch.irq_seen) {
 			ch.irq_seen = 0;
 			ch.irq_waiting = 0;
@@ -274,6 +448,7 @@ static bool hd_int_wait_channel(byte channel) {
 			ch.irq_waiting = 0;
 			return true;
 		}
+		#endif
 		if (tick != start_tick && (tick - start_tick >= timeout_ticks))
 			break;
 		if (++spin >= max_spins)
@@ -281,6 +456,17 @@ static bool hd_int_wait_channel(byte channel) {
 		__asm__ __volatile__("pause" ::: "memory");
 	}
 	ch.irq_waiting = 0;
+	#if _MCCA == 0x8664
+	const byte status = innpb(io_base + 7);
+	ch.irq_seen = 0;
+	if (PataPIOReady(status, ch)) {
+		if (wait_for_irq && !ch.irq_fallback_reported) {
+			ch.irq_fallback_reported = true;
+			plogwarn("[PATA] ch%u IRQ wait timed out; falling back to status", (stduint)channel);
+		}
+		return !(status & (STATUS_ERR | STATUS_DF));
+	}
+	#endif
 	return false;
 }
 
@@ -293,30 +479,64 @@ static bool hd_int_wait_1() {
 }
 
 static void hd_rw_foreback_0() {
+	#if _MCCA == 0x8664
+	g_ide_channels[0].pio_phase = PataPIOPhase::DataIn;
+	#endif
 	g_ide_channels[0].irq_seen = 0;
 	g_ide_channels[0].irq_waiting = 1;
 }
 
 static void hd_rw_foreback_1() {
+	#if _MCCA == 0x8664
+	g_ide_channels[1].pio_phase = PataPIOPhase::DataIn;
+	#endif
 	g_ide_channels[1].irq_seen = 0;
 	g_ide_channels[1].irq_waiting = 1;
 }
 
+static bool finish_pata_dma(Harddisk_PATA& hd, PataDmaChannelState& state, bool completed, byte observed_status) {
+	const bool stopped = stop_pata_dma(state);
+	byte bmide_status = 0;
+	byte ata_status = 0;
+	{
+		SpinlockLocal irq_guard(&state.irq_lock);
+		const byte live_status = innpb(state.bmide_base + BMIDE_REG_STATUS);
+		bmide_status = byte(observed_status | live_status | state.irq_status.load(uni::MemoryOrder_Acquire));
+		ata_status = hd.getStatus();
+		outpb(state.bmide_base + BMIDE_REG_STATUS, byte(live_status | BMIDE_STATUS_IRQ | BMIDE_STATUS_ERROR));
+		auto& channel = g_ide_channels[hd.getHigID()];
+		channel.irq_waiting = 0;
+		channel.irq_seen = 0;
+	}
+	// Stopping BMIDE does not cancel the drive's ATA command; an unfinished command needs channel recovery.
+	if (ata_status & (STATUS_BSY | STATUS_DRQ)) {
+		state.quiesced = false;
+		plogwarn("[PATA-DMA] ide%u:%u ATA command is still active; channel I/O disabled",
+			(stduint)hd.getHigID(), (stduint)hd.getLowID());
+	}
+	if (!stopped || !completed || !(bmide_status & BMIDE_STATUS_IRQ) || (bmide_status & BMIDE_STATUS_ERROR) ||
+		(ata_status & (STATUS_BSY | STATUS_DRQ | STATUS_ERR | STATUS_DF))) {
+		state.ready = false;
+		plogwarn("[PATA-DMA] ide%u:%u transfer failed BM=%[8H] ATA=%[8H]; DMA disabled",
+			(stduint)hd.getHigID(), (stduint)hd.getLowID(), (stduint)bmide_status, (stduint)ata_status);
+		return false;
+	}
+	_ASM volatile("" ::: "memory");
+	return true;
+}
+
 static bool hd_read_dma_once(Harddisk_PATA& hd, stduint BlockIden, void* Dest) {
 	if (hd.Block_Size != 512 || hd.getHigID() >= numsof(pata_dma_channels) || !Dest) return false;
+	if (hd.getID() >= MAX_DRIVES || !pata_dma_capable[hd.getID()] || BlockIden > 0x0FFFFFFFu) return false;
 	auto& state = pata_dma_channels[hd.getHigID()];
-	if (!state.ready || !state.prdt || !state.bounce) return false;
+	if (!state.ready || !state.quiesced || !state.prdt || !state.bounce) return false;
 	if (!hd.fn_int_wait || !hd.fn_lup_wait) return false;
 
 	MemSet(state.prdt, 0, sizeof(*state.prdt));
 	MemSet(state.bounce, 0, 512);
-	state.prdt[0].phys_base = uint32(stduint(state.bounce));
+	state.prdt[0].phys_base = state.bounce_address;
 	state.prdt[0].byte_count = 512;
 	state.prdt[0].flags = 0x8000u;
-
-	outpb(state.bmide_base + BMIDE_REG_CMD, 0);
-	outpb(state.bmide_base + BMIDE_REG_STATUS, BMIDE_STATUS_IRQ | BMIDE_STATUS_ERROR);
-	outpd(state.bmide_base + BMIDE_REG_PRDT, uint32(stduint(state.prdt)));
 
 	HdiskCommand cmd = {};
 	cmd.feature = 0;
@@ -324,23 +544,41 @@ static bool hd_read_dma_once(Harddisk_PATA& hd, stduint BlockIden, void* Dest) {
 	for0(i, 3) cmd.LBA[i] = (BlockIden >> (i * 8));
 	cmd.device = MAKE_DEVICE_REG(1, hd.getLowID(), (BlockIden >> 24) & 0xF);
 	cmd.command = ATA_READ_DMA;
-	asserv(hd.fn_feedback)();
-	if (!hd.Hdisk_OUT(&cmd)) return false;
+	{
+		SpinlockLocal irq_guard(&state.irq_lock);
+		outpb(state.bmide_base + BMIDE_REG_CMD, BMIDE_CMD_READ);
+		const byte old_status = innpb(state.bmide_base + BMIDE_REG_STATUS);
+		outpb(state.bmide_base + BMIDE_REG_STATUS, byte(old_status | BMIDE_STATUS_IRQ | BMIDE_STATUS_ERROR));
+		state.irq_status = 0;
+		outpd(state.bmide_base + BMIDE_REG_PRDT, state.prdt_address);
+		asserv(hd.fn_feedback)();
+		#if _MCCA == 0x8664
+		g_ide_channels[hd.getHigID()].pio_phase = PataPIOPhase::Dma;
+		#endif
+	}
+	if (!hd.Hdisk_OUT(&cmd)) {
+		g_ide_channels[hd.getHigID()].irq_waiting = 0;
+		return false;
+	}
 
+	_ASM volatile("" ::: "memory");
+	state.quiesced = false;
 	outpb(state.bmide_base + BMIDE_REG_CMD, BMIDE_CMD_READ | BMIDE_CMD_START);
 
-	const word io_base = (hd.getHigID() == 0) ? PORT_IDE_CommandBlock_0 : PORT_IDE_CommandBlock_1;
+	const word ctrl_base = (hd.getHigID() == 0) ? PORT_IDE_ControlBlock_0 : PORT_IDE_ControlBlock_1;
 	const stduint start_tick = tick;
 	const stduint timeout_ticks = (HD_TIMEOUT / 1000) * CONFIG_SysTickFreq;
 	const stduint max_spins = (HD_TIMEOUT / 1000) * 2000000;
 	stduint spin = 0;
 	bool completed = false;
+	byte observed_status = 0;
 
 	while (true) {
-		const byte bmide_status = innpb(state.bmide_base + BMIDE_REG_STATUS);
+		const byte bmide_status = byte(innpb(state.bmide_base + BMIDE_REG_STATUS) | state.irq_status.load(uni::MemoryOrder_Acquire));
+		observed_status |= bmide_status;
 		if (bmide_status & BMIDE_STATUS_ERROR) break;
-		if ((bmide_status & BMIDE_STATUS_IRQ) || g_ide_channels[hd.getHigID()].irq_seen) {
-			const byte status = innpb(io_base + 7);
+		if (bmide_status & BMIDE_STATUS_IRQ) {
+			const byte status = innpb(ctrl_base);
 			if (!(status & STATUS_BSY)) {
 				completed = true;
 				break;
@@ -353,14 +591,7 @@ static bool hd_read_dma_once(Harddisk_PATA& hd, stduint BlockIden, void* Dest) {
 		__asm__ __volatile__("pause" ::: "memory");
 	}
 
-	outpb(state.bmide_base + BMIDE_REG_CMD, 0);
-	const byte bmide_status = innpb(state.bmide_base + BMIDE_REG_STATUS);
-	outpb(state.bmide_base + BMIDE_REG_STATUS, bmide_status & (BMIDE_STATUS_IRQ | BMIDE_STATUS_ERROR));
-	if (!completed || (bmide_status & BMIDE_STATUS_ERROR)) return false;
-	if (!(bmide_status & BMIDE_STATUS_IRQ) && !g_ide_channels[hd.getHigID()].irq_seen) return false;
-
-	const byte ata_status = innpb(io_base + 7);
-	if (ata_status & STATUS_BSY) return false;
+	if (!finish_pata_dma(hd, state, completed, observed_status)) return false;
 
 	MemCopyN(Dest, state.bounce, 512);
 	return true;
@@ -368,19 +599,16 @@ static bool hd_read_dma_once(Harddisk_PATA& hd, stduint BlockIden, void* Dest) {
 
 static bool hd_write_dma_once(Harddisk_PATA& hd, stduint BlockIden, const void* Sors) {
 	if (hd.Block_Size != 512 || hd.getHigID() >= numsof(pata_dma_channels) || !Sors) return false;
+	if (hd.getID() >= MAX_DRIVES || !pata_dma_capable[hd.getID()] || BlockIden > 0x0FFFFFFFu) return false;
 	auto& state = pata_dma_channels[hd.getHigID()];
-	if (!state.ready || !state.prdt || !state.bounce) return false;
+	if (!state.ready || !state.quiesced || !state.prdt || !state.bounce) return false;
 	if (!hd.fn_int_wait || !hd.fn_lup_wait) return false;
 
 	MemSet(state.prdt, 0, sizeof(*state.prdt));
 	MemCopyN(state.bounce, Sors, 512);
-	state.prdt[0].phys_base = uint32(stduint(state.bounce));
+	state.prdt[0].phys_base = state.bounce_address;
 	state.prdt[0].byte_count = 512;
 	state.prdt[0].flags = 0x8000u;
-
-	outpb(state.bmide_base + BMIDE_REG_CMD, 0);
-	outpb(state.bmide_base + BMIDE_REG_STATUS, BMIDE_STATUS_IRQ | BMIDE_STATUS_ERROR);
-	outpd(state.bmide_base + BMIDE_REG_PRDT, uint32(stduint(state.prdt)));
 
 	HdiskCommand cmd = {};
 	cmd.feature = 0;
@@ -388,23 +616,41 @@ static bool hd_write_dma_once(Harddisk_PATA& hd, stduint BlockIden, const void* 
 	for0(i, 3) cmd.LBA[i] = (BlockIden >> (i * 8));
 	cmd.device = MAKE_DEVICE_REG(1, hd.getLowID(), (BlockIden >> 24) & 0xF);
 	cmd.command = ATA_WRITE_DMA;
-	asserv(hd.fn_feedback)();
-	if (!hd.Hdisk_OUT(&cmd)) return false;
+	{
+		SpinlockLocal irq_guard(&state.irq_lock);
+		outpb(state.bmide_base + BMIDE_REG_CMD, 0);
+		const byte old_status = innpb(state.bmide_base + BMIDE_REG_STATUS);
+		outpb(state.bmide_base + BMIDE_REG_STATUS, byte(old_status | BMIDE_STATUS_IRQ | BMIDE_STATUS_ERROR));
+		state.irq_status = 0;
+		outpd(state.bmide_base + BMIDE_REG_PRDT, state.prdt_address);
+		asserv(hd.fn_feedback)();
+		#if _MCCA == 0x8664
+		g_ide_channels[hd.getHigID()].pio_phase = PataPIOPhase::Dma;
+		#endif
+	}
+	if (!hd.Hdisk_OUT(&cmd)) {
+		g_ide_channels[hd.getHigID()].irq_waiting = 0;
+		return false;
+	}
 
+	_ASM volatile("" ::: "memory");
+	state.quiesced = false;
 	outpb(state.bmide_base + BMIDE_REG_CMD, BMIDE_CMD_START);
 
-	const word io_base = (hd.getHigID() == 0) ? PORT_IDE_CommandBlock_0 : PORT_IDE_CommandBlock_1;
+	const word ctrl_base = (hd.getHigID() == 0) ? PORT_IDE_ControlBlock_0 : PORT_IDE_ControlBlock_1;
 	const stduint start_tick = tick;
 	const stduint timeout_ticks = (HD_TIMEOUT / 1000) * CONFIG_SysTickFreq;
 	const stduint max_spins = (HD_TIMEOUT / 1000) * 2000000;
 	stduint spin = 0;
 	bool completed = false;
+	byte observed_status = 0;
 
 	while (true) {
-		const byte bmide_status = innpb(state.bmide_base + BMIDE_REG_STATUS);
+		const byte bmide_status = byte(innpb(state.bmide_base + BMIDE_REG_STATUS) | state.irq_status.load(uni::MemoryOrder_Acquire));
+		observed_status |= bmide_status;
 		if (bmide_status & BMIDE_STATUS_ERROR) break;
-		if ((bmide_status & BMIDE_STATUS_IRQ) || g_ide_channels[hd.getHigID()].irq_seen) {
-			const byte status = innpb(io_base + 7);
+		if (bmide_status & BMIDE_STATUS_IRQ) {
+			const byte status = innpb(ctrl_base);
 			if (!(status & STATUS_BSY)) {
 				completed = true;
 				break;
@@ -417,16 +663,7 @@ static bool hd_write_dma_once(Harddisk_PATA& hd, stduint BlockIden, const void* 
 		__asm__ __volatile__("pause" ::: "memory");
 	}
 
-	outpb(state.bmide_base + BMIDE_REG_CMD, 0);
-	const byte bmide_status = innpb(state.bmide_base + BMIDE_REG_STATUS);
-	outpb(state.bmide_base + BMIDE_REG_STATUS, bmide_status & (BMIDE_STATUS_IRQ | BMIDE_STATUS_ERROR));
-	if (!completed || (bmide_status & BMIDE_STATUS_ERROR)) return false;
-	if (!(bmide_status & BMIDE_STATUS_IRQ) && !g_ide_channels[hd.getHigID()].irq_seen) return false;
-
-	const byte ata_status = innpb(io_base + 7);
-	if (ata_status & STATUS_BSY) return false;
-
-	return true;
+	return finish_pata_dma(hd, state, completed, observed_status);
 }
 
 
@@ -435,11 +672,6 @@ static void probe_pata_dma_read_once() {
 	static bool probed = false;
 	if (probed) return;
 	probed = true;
-
-	if (!disks[0] || disks[0]->Block_Size != 512) {
-		// ploginfo("[PATA-DMA] skip dma-read probe: ide0:0 unavailable");
-		return;
-	}
 	if (!single_sector) {
 		// ploginfo("[PATA-DMA] skip dma-read probe: no sector buffer");
 		return;
@@ -448,38 +680,37 @@ static void probe_pata_dma_read_once() {
 	// Reference: plain PIO read of LBA 0.
 	static byte pio_sector[512];
 	static byte dma_sector[512];
-	pata_dma_disabled = true;
-	const bool pio_ok = disks[0]->Read(0, pio_sector, 1);
-	pata_dma_disabled = false;
-	if (!pio_ok) {
-		plogwarn("[PATA-DMA] pio reference read lba0 failed, DMA left disabled");
-		pata_dma_disabled = true;
-		return;
+	for0(drive, MAX_DRIVES) {
+		if (!disks[drive] || disks[drive]->Block_Size != 512 || !pata_dma_capable[drive]) continue;
+		auto& state = pata_dma_channels[disks[drive]->getHigID()];
+		if (!state.ready) continue;
+		const bool pio_ok = disks[drive]->Read(0, pio_sector, 1);
+		if (!pio_ok) {
+			plogwarn("[PATA-DMA] ide%u:%u PIO reference read failed; DMA left disabled", drive / 2, drive % 2);
+			continue;
+		}
+		MutexLocal lock(&g_ide_channels[disks[drive]->getHigID()].lock);
+		if (!hd_read_dma_once(*disks[drive], 0, dma_sector)) {
+			plogwarn("[PATA-DMA] ide%u:%u DMA read probe failed; using PIO", drive / 2, drive % 2);
+			continue;
+		}
+		stduint diff = 0;
+		for0(i, sizeof(dma_sector)) {
+			if (dma_sector[i] != pio_sector[i]) diff++;
+		}
+		if (diff) {
+			state.ready = false;
+			plogwarn("[PATA-DMA] ide%u:%u DMA/PIO mismatch on LBA0 (%u bytes); using PIO", drive / 2, drive % 2, diff);
+			plogwarn("[PATA-DMA] dma=%02X %02X %02X %02X pio=%02X %02X %02X %02X",
+				(unsigned)dma_sector[0], (unsigned)dma_sector[1],
+				(unsigned)dma_sector[2], (unsigned)dma_sector[3],
+				(unsigned)pio_sector[0], (unsigned)pio_sector[1],
+				(unsigned)pio_sector[2], (unsigned)pio_sector[3]);
+			continue;
+		}
+		pata_dma_enabled[drive] = true;
+		ploginfo("[PATA-DMA] ide%u:%u DMA read verified against PIO on LBA0", drive / 2, drive % 2);
 	}
-
-	const bool dma_ok = hd_read_dma_once(*disks[0], 0, dma_sector);
-	if (!dma_ok) {
-		plogwarn("[PATA-DMA] dma-read probe ide0:0 lba0 failed, using PIO");
-		pata_dma_disabled = true;
-		return;
-	}
-
-	stduint diff = 0;
-	for0(i, sizeof(dma_sector)) {
-		if (dma_sector[i] != pio_sector[i]) diff++;
-	}
-	if (diff) {
-		plogwarn("[PATA-DMA] dma/pio mismatch on lba0 (%u bytes differ), using PIO",
-			diff);
-		plogwarn("[PATA-DMA] dma=%02X %02X %02X %02X pio=%02X %02X %02X %02X",
-			(unsigned)dma_sector[0], (unsigned)dma_sector[1],
-			(unsigned)dma_sector[2], (unsigned)dma_sector[3],
-			(unsigned)pio_sector[0], (unsigned)pio_sector[1],
-			(unsigned)pio_sector[2], (unsigned)pio_sector[3]);
-		pata_dma_disabled = true;
-		return;
-	}
-	ploginfo("[PATA-DMA] dma-read verified against PIO on lba0");
 }
 
 // Use after print_identify_info
@@ -520,6 +751,7 @@ static void print_identify_info(uint16* hdinfo, Harddisk_PATA& hd)
 	}
 
 	int capabilities = hdinfo[49];
+	pata_dma_capable[hd.getID()] = hd.Block_Size == 512 && (capabilities & 0x0100u);
 	int cmd_set_supported = hdinfo[83];
 	if (false) outsfmt("[Hrddisk] LBA  : %s\n\r",
 		(capabilities & 0x0200) ? (cmd_set_supported & 0x0400) ? "Supported LBA48" : "Supported" : "No");
@@ -573,7 +805,7 @@ static void hd_open(Harddisk_PATA& hd) { // 0x00
 	const byte ch = hd.getHigID();
 	const byte low_id = hd.getLowID();
 	{
-		SpinlockLocal lock(&g_ide_channels[ch].lock);
+		MutexLocal lock(&g_ide_channels[ch].lock);
 		HdiskCommand cmd = {};
 		cmd.command = (hd.Block_Size == 2048) ? ATAPI_CMD_IDENTIFY : ATA_IDENTIFY;
 		cmd.device = MAKE_DEVICE_REG(0, low_id, 0);
@@ -616,15 +848,18 @@ PartitionSlice Harddisk_PATA::getSlice(stduint dev) {
 
 bool Harddisk_PATA::Read(stduint BlockIden, void* Dest, stduint Times) {
 	if (BlockIden + Times > getUnits() || !Dest) return false;
+	if (BlockIden > 0x0FFFFFFFu || Times > 0x10000000u - BlockIden) return false;
 	const byte ch = getHigID();
 	if (ch >= 2) return false;
-	SpinlockLocal lock(&g_ide_channels[ch].lock);
+	MutexLocal lock(&g_ide_channels[ch].lock);
+	if (!pata_dma_channels[ch].quiesced) return false;
 	for0(t, Times) {
 		stduint blk = BlockIden + t;
 		byte* dst = (byte*)Dest + t * Block_Size;
-		if (Block_Size == 512 && !pata_dma_disabled && hd_read_dma_once(*this, blk, dst)) {
+		if (Block_Size == 512 && pata_dma_enabled[getID()] && hd_read_dma_once(*this, blk, dst)) {
 			continue;
 		}
+		if (!pata_dma_channels[ch].quiesced) return false;
 		// Fallback to PIO
 		HdiskCommand cmd = {};
 		cmd.feature = 0;
@@ -633,7 +868,7 @@ bool Harddisk_PATA::Read(stduint BlockIden, void* Dest, stduint Times) {
 		cmd.device = MAKE_DEVICE_REG(1, getLowID(), (blk >> 24) & 0xF);
 		cmd.command = ATA_READ;
 		asserv(fn_feedback)();
-		Harddisk_PATA::Hdisk_OUT(&cmd);
+		if (!Harddisk_PATA::Hdisk_OUT(&cmd)) return false;
 		if (fn_int_wait && fn_lup_wait) {
 			const bool use_loop_fallback = !fn_int_wait();
 			if (use_loop_fallback) {
@@ -652,15 +887,18 @@ bool Harddisk_PATA::Read(stduint BlockIden, void* Dest, stduint Times) {
 
 bool Harddisk_PATA::Write(stduint BlockIden, const void* Sors, stduint Times) {
 	if (BlockIden + Times > getUnits() || !Sors) return false;
+	if (BlockIden > 0x0FFFFFFFu || Times > 0x10000000u - BlockIden) return false;
 	const byte ch = getHigID();
 	if (ch >= 2) return false;
-	SpinlockLocal lock(&g_ide_channels[ch].lock);
+	MutexLocal lock(&g_ide_channels[ch].lock);
+	if (!pata_dma_channels[ch].quiesced) return false;
 	for0(t, Times) {
 		stduint blk = BlockIden + t;
 		const byte* src = (const byte*)Sors + t * Block_Size;
-		if (Block_Size == 512 && hd_write_dma_once(*this, blk, src)) {
+		if (Block_Size == 512 && pata_dma_enabled[getID()] && hd_write_dma_once(*this, blk, src)) {
 			continue;
 		}
+		if (!pata_dma_channels[ch].quiesced) return false;
 		// Fallback to PIO
 		HdiskCommand cmd = {};
 		cmd.feature = 0;
@@ -669,15 +907,22 @@ bool Harddisk_PATA::Write(stduint BlockIden, const void* Sors, stduint Times) {
 		cmd.device = MAKE_DEVICE_REG(1, getLowID(), (blk >> 24) & 0xF);
 		cmd.command = ATA_WRITE;
 		asserv(fn_feedback)();
-		Harddisk_PATA::Hdisk_OUT(&cmd);
+		#if _MCCA == 0x8664
+		g_ide_channels[ch].pio_phase = PataPIOPhase::WriteCommand;
+		#endif
+		if (!Harddisk_PATA::Hdisk_OUT(&cmd)) return false;
 		if (fn_int_wait && fn_lup_wait) {
 			if (!fn_lup_wait(this, STATUS_DRQ, STATUS_DRQ, HD_TIMEOUT / 1000)) return false;
 			word io_base = (ch == 0) ? PORT_IDE_CommandBlock_0 : PORT_IDE_CommandBlock_1;
+			#if _MCCA == 0x8664
+			g_ide_channels[ch].pio_phase = PataPIOPhase::WriteData;
+			#endif
 			OUT_wn(io_base + 0, (word*)src, Block_Size);
 			const bool use_loop_fallback = !fn_int_wait();
 			if (use_loop_fallback) {
 				if (!PataWaitRetry(this, fn_lup_wait, STATUS_BSY, 0)) return false;
 			}
+			if (getStatus() & (STATUS_ERR | STATUS_DF)) return false;
 		}
 		else return false;
 	}
@@ -708,7 +953,8 @@ struct MecocoaCD_ATAPI : public xCD_ATAPI {
 	virtual bool Read(stduint BlockIden, void* Dest, stduint Times = 1) override {
 		const byte ch = getHigID();
 		if (ch >= 2) return false;
-		SpinlockLocal lock(&g_ide_channels[ch].lock);
+		MutexLocal lock(&g_ide_channels[ch].lock);
+		if (!pata_dma_channels[ch].quiesced) return false;
 		const bool ok = xCD_ATAPI::Read(BlockIden, Dest, Times);
 		if (!ok) {
 			// 1 = Error, 7 = Status: 0x80 BSY, 0x08 DRQ, 0x01 ERR
@@ -740,6 +986,16 @@ static bool start_pata_driver(DeviceNode* pata_node) {
 			(stduint)pata_node->fields.class_if);
 		return false;
 	}
+	uni::PCI::Device pci_dev{};
+	if (!build_pata_pci_device(pata_node, pci_dev)) return false;
+	const uint16 pci_command = uint16(uni::PCI::read_config_register(pci_dev, 0x04));
+	if (!(pci_command & 0x0001u)) {
+		uni::PCI::write_config_register(pci_dev, 0x04, uint16(pci_command | 0x0001u));
+		if (!(uni::PCI::read_config_register(pci_dev, 0x04) & 0x0001u)) {
+			plogwarn("[PATA] PCI I/O space enable failed");
+			return false;
+		}
+	}
 	pata_controller_node = pata_node;
 	ensure_pata_pci_bus_master_once(pata_node);
 	probe_pata_bus_master_capability_once(pata_node);
@@ -759,12 +1015,28 @@ static bool start_pata_driver(DeviceNode* pata_node) {
 			disks[i]->fn_int_wait = (disks[i]->getHigID() == 0) ? hd_int_wait_0 : hd_int_wait_1;
 			disks[i]->fn_lup_wait = waitfor;
 			disks[i]->fn_feedback = (disks[i]->getHigID() == 0) ? hd_rw_foreback_0 : hd_rw_foreback_1;
+			#if _MCCA == 0x8632
 			disks[i]->react_type = Harddisk_PATA::ReactType::Rupt;
+			#else
+			// Keep INTRQ masked until this channel has an installed GSI route.
+			disks[i]->react_type = Harddisk_PATA::ReactType::Loop;
+			#endif
 		}
 	}
+	#if _MCCA == 0x8632
 	if (disks[0] || disks[1]) (disks[0] ? disks[0] : disks[1])->setInterrupt(NULL);
 	if (disks[2] || disks[3]) (disks[2] ? disks[2] : disks[3])->setInterrupt(NULL);
 
+	#else
+	for0(channel, numsof(g_ide_channels)) {
+		const stduint first_drive = channel * 2;
+		if (!disks[first_drive] && !disks[first_drive + 1]) continue;
+		if (!BindPataGSI(byte(channel))) continue;
+		for0(drive, 2) {
+			if (disks[first_drive + drive]) disks[first_drive + drive]->react_type = Harddisk_PATA::ReactType::Rupt;
+		}
+	}
+	#endif
 	initialize_pata_dma_channels_once(pata_node);
 
 	if (!single_sector) single_sector = new char[0x1000];
@@ -836,10 +1108,12 @@ static bool start_pata_driver(DeviceNode* pata_node) {
 }
 
 void R_HDD_INIT() {
+	#if _MCCA == 0x8632
 	IC[IRQ_ATA_DISK0].setRange(mglb(Handint_HDD_Entry), SegCo32);
 	register_interrupt_handler(IRQ_ATA_DISK0, Handint_HDD);
 	IC[IRQ_ATA_DISK1].setRange(mglb(Handint_HDD1_Entry), SegCo32);
 	register_interrupt_handler(IRQ_ATA_DISK1, Handint_HDD1);
+	#endif
 	Devsman::RegisterDriverStarter("pata", start_pata_driver);
 	Devsman::StartKnownDrivers();
 }

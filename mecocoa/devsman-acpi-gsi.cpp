@@ -228,6 +228,19 @@ ACPIGSIStatus Devs::BindACPIGSI(const ACPIGSIConfiguration& configuration, ACPIG
 	return ACPIGSIStatus::Success;
 }
 
+#if _MCCA == 0x8664
+ACPIGSIStatus Devs::BindISAGSI(uint8 isa_irq, ACPIGSIFilter filter, void* context, ACPIGSIBinding& binding) {
+	if (isa_irq >= 16 || !filter || !context || binding.active) return ACPIGSIStatus::InvalidArgument;
+	uint32 gsi = 0;
+	bool level_triggered = false;
+	bool active_low = false;
+	// ACPI MADT Interrupt Source Overrides may remap ISA IRQs and change their polarity or trigger mode.
+	if (!x64_resolve_isa_irq(isa_irq, gsi, level_triggered, active_low)) return ACPIGSIStatus::GSIUnavailable;
+	const ACPIGSIConfiguration configuration{gsi, level_triggered, active_low, false};
+	return BindACPIGSI(configuration, filter, context, binding);
+}
+#endif
+
 ACPIGSIStatus Devs::UnbindACPIGSI(ACPIGSIBinding& binding) {
 	if (!binding.active || binding.slot >= ACPIGSIBindingCapacity) return ACPIGSIStatus::InvalidArgument;
 	auto& slot = acpi_GSI_bindings[binding.slot];

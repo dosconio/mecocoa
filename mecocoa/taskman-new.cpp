@@ -213,17 +213,14 @@ static int ProcCmp(pureptr_t a, pureptr_t b) {
 
 #if CONFIG_ENABLE_MMU
 static void _Mapping_Core_Stack(Paging& paging) {
-	#if _MCCA == 0x8632
-	for0(cpu_i, PCU_CORES_MAX) {
-		if (!ring3_iret_stacks[cpu_i]) continue;
-		const stduint vaddr = 0xFFFFF000u - cpu_i * 0x1000u;
-		paging.Map(vaddr, _IMM(ring3_iret_stacks[cpu_i]), 0x1000, PAGESIZE_4KB, PGPROP_present | PGPROP_writable);
+	#if _MCCA == 0x8632 || _MCCA == 0x8664
+	auto stacks = (_MCCA == 0x8632) ? ring3_iret_stacks : higher_stacks;
+	for0(cpu_i, Taskman::PCU_CORES) {
+		if (!stacks[cpu_i]) continue;
+		const stduint vaddr = TRANSITION_STACK_BASE - cpu_i * TRANSITION_STACK_SIZE;
+		paging.Map(vaddr, _IMM(stacks[cpu_i]), TRANSITION_STACK_SIZE,
+			PAGESIZE_4KB, PGPROP_present | PGPROP_writable);
 	}
-
-	#elif _MCCA == 0x8664
-	//{TODO} Map more cores, cpu1 at 0x0000FFFFFFFF8000ull...
-	paging.Map(X64_TRANSITION_STACK_BASE, _IMM(higher_stacks[0]), X64_TRANSITION_STACK_SIZE,
-		PAGESIZE_4KB, PGPROP_present | PGPROP_writable);
 
 	#elif (_MCCA & 0xFF00) == 0x1000
 	// M-MCCA need not map kernel
@@ -339,7 +336,7 @@ void Taskman::Initialize(stduint cpuid) {
 	current_thread(cpuid) = kernel_thread;
 	#if _MCCA == 0x8664
 	PCU_CORES_PERCORE[cpuid]->current_thread = kernel_thread;
-	PCU_CORES_PERCORE[cpuid]->kernel_rsp = X64_TRANSITION_STACK_TOP - cpuid * X64_TRANSITION_STACK_SIZE;
+	PCU_CORES_PERCORE[cpuid]->kernel_rsp = TRANSITION_STACK_TOP - cpuid * TRANSITION_STACK_SIZE;
 	PCU_CORES_PERCORE[cpuid]->tss.RSP0 = PCU_CORES_PERCORE[cpuid]->kernel_rsp;
 	#elif _MCCA == 0x8632
 	if (PCU_CORES_PERCORE[cpuid]) {

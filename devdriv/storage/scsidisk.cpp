@@ -6,9 +6,14 @@
 #include <c/storage/harddisk.h>
 #include <cpp/Device/Bus/PCI.hpp>
 
-#if _MCCA == 0x8632
+#if (_MCCA & 0xFF00) == 0x8600
 
 namespace {
+	static constexpr uint16 BusLogicVendorId = 0x104Bu;
+	static constexpr uint16 BusLogicMultiMasterDeviceId = 0x1040u;
+	static constexpr uint16 PciCommandIoSpace = 1u << 0;
+	static constexpr uint16 PciCommandBusMaster = 1u << 2;
+	static constexpr uint16 PciCommandInterruptDisable = 1u << 10;
 	enum : byte {
 		BLOGIC_CNTRL_REG = 0,
 		BLOGIC_STATUS_REG = 0,
@@ -21,6 +26,7 @@ namespace {
 		BLOGIC_INQ_SETUPINFO = 0x0D,
 		BLOGIC_INQ_DEV8TO15 = 0x23,
 		BLOGIC_INQ_DEV = 0x24,
+		BLOGIC_DISABLE_INT = 0x25,
 		BLOGIC_EXEC_MBOX_CMD = 0x02,
 		BLOGIC_INIT_EXT_MBOX = 0x81,
 		BLOGIC_SETCCB_FMT = 0x96,
@@ -137,6 +143,11 @@ namespace {
 		uint32 host_reserved;
 		uint32 sense_addr;
 	};
+	// BusLogic MultiMaster 32-bit wire layouts: Linux drivers/scsi/BusLogic.h, blogic_ccb/outbox/inbox.
+	static_assert(sizeof(BusLogicExtMailboxInitReq) == 5);
+	static_assert(sizeof(BusLogicOutbox) == 8);
+	static_assert(sizeof(BusLogicInbox) == 8);
+	static_assert(sizeof(BusLogicCcb32) == 40);
 
 	_PACKED(struct) ScsiInquiryReply {
 		byte peripheral;
@@ -159,17 +170,56 @@ namespace {
 
 	struct DmaRegion {
 		byte* virt = nullptr;
-		uint32 phys = 0;
+		uint32 device_address = 0;
 		stduint size = 0;
+		bool translated = false;
 
-		bool Ensure(stduint want_size) {
+		static void FreeBuffer(void* buffer, stduint bytes) {
+			if (DmaLowIsInRange(buffer)) DmaLowFree(buffer, bytes);
+			else mempool.deallocate(buffer, bytes);
+		}
+
+		bool Release(DeviceNode* node) {
+			if (!virt) return true;
+			if (translated && !Iova::UnmapDeviceDma(node, device_address, size)) return false;
+			FreeBuffer(virt, size);
+			virt = nullptr;
+			device_address = 0;
+			size = 0;
+			translated = false;
+			return true;
+		}
+
+		bool Ensure(DeviceNode* node, stduint want_size) {
+			if (!want_size || uint64(want_size) > 0x100000000ull - PAGE_SIZE) return false;
 			if (virt && size >= want_size) return true;
-			byte* buf = (byte*)mempool.allocate(want_size, 12);
+			// Only called with no command in flight; never replace a buffer still owned by the adapter.
+			if (!Release(node)) return false;
+			const stduint bytes = (want_size + PAGE_SIZE - 1) & ~(stduint(PAGE_SIZE) - 1);
+			byte* buf = bytes <= 0x10000 ? static_cast<byte*>(DmaLowAlloc(bytes)) : nullptr;
+			if (!buf) buf = static_cast<byte*>(mempool.allocate(bytes, 12));
 			if (!buf) return false;
+			const uint64 physical = uint64(_IMM(buf));
+			// The extended mailbox and CCB formats still carry 32-bit DMA addresses on x64.
+			if ((physical & (PAGE_SIZE - 1)) || physical > 0x100000000ull - bytes) {
+				FreeBuffer(buf, bytes);
+				return false;
+			}
+			Iova::DmaMapping mapping{};
+			if (!Iova::MapDeviceDma(node, _IMM(buf), bytes, Iova::DmaMappingFlag::Identity, mapping)) {
+				FreeBuffer(buf, bytes);
+				return false;
+			}
+			if ((mapping.device_address & (PAGE_SIZE - 1)) || mapping.device_address > 0x100000000ull - bytes) {
+				// Retain the page if invalidation fails: freeing a device-reachable mapping would be unsafe.
+				if (!mapping.translated || Iova::UnmapDeviceDma(node, mapping.device_address, bytes)) FreeBuffer(buf, bytes);
+				return false;
+			}
 			virt = buf;
-			phys = uint32(_IMM(buf));
-			size = want_size;
-			MemSet(virt, 0, want_size);
+			device_address = uint32(mapping.device_address);
+			size = bytes;
+			translated = mapping.translated;
+			MemSet(virt, 0, size);
 			return true;
 		}
 	};
@@ -208,13 +258,16 @@ namespace {
 		const DeviceResource* bar0_mmio = nullptr;
 		const DeviceResource* irq = nullptr;
 		word io_base = 0;
-		BusLogicOutbox* outboxes = nullptr;
-		BusLogicInbox* inboxes = nullptr;
+		// Targets/LUNs share one CCB and mailbox set; hold a mutex, not a spinlock, across polling and DMA mapping.
+		Mutex command_lock;
+		bool faulted = false;
+		volatile BusLogicOutbox* outboxes = nullptr;
+		volatile BusLogicInbox* inboxes = nullptr;
 		stduint mailbox_count = 0;
 		stduint next_outbox_index = 0;
 		DmaRegion mailbox_region{};
 		DmaRegion probe_ccb_region{};
-		DmaRegion probe_data_region{};
+		DmaRegion data_region{};
 		DmaRegion probe_sense_region{};
 		byte* sector_buf = nullptr;
 		stduint sector_buf_size = 0;
@@ -254,6 +307,18 @@ namespace {
 			}
 		}
 
+		void DisableAfterCommandFailure() {
+			faulted = true;
+			const uint16 command = uint16(uni::PCI::read_config_register(node->fields.pci_segment,
+				node->fields.pci_bus, node->fields.pci_device, node->fields.pci_function, 0x04));
+			uni::PCI::write_config_register(node->fields.pci_segment, node->fields.pci_bus,
+				node->fields.pci_device, node->fields.pci_function, 0x04,
+				(command & uint16(~PciCommandBusMaster)) | PciCommandInterruptDisable);
+			ClearAdapterInterruptState();
+			// A late completion may still arrive; pin all DMA buffers and reject every subsequent command.
+			plogwarn("[SCSI] controller disabled after command failure; DMA buffers retained");
+		}
+
 		void ClearLocalCommandState() const {
 			stduint drain_limit = 64;
 			while (drain_limit--) {
@@ -269,24 +334,28 @@ namespace {
 
 			WriteControl(hard_reset ? BLOGIC_CTRL_HARD_RESET : BLOGIC_CTRL_SOFT_RESET);
 
-			stduint timeout = 50000;
-			while (timeout--) {
+			bool diagnostic_active = false;
+			for0(spin, 50000) {
 				byte status = ReadStatus();
-				if (status & BLOGIC_STAT_DIAG_ACTIVE) break;
+				if (status & BLOGIC_STAT_DIAG_ACTIVE) {
+					diagnostic_active = true;
+					break;
+				}
 				scsi_io_pause();
 			}
-			if (!timeout) return false;
+			if (!diagnostic_active) return false;
 
-			timeout = 100000;
-			while (timeout--) {
+			for0(spin, 100000) {
 				byte status = ReadStatus();
-				if ((status & BLOGIC_STAT_DIAG_ACTIVE) == 0) break;
+				if ((status & BLOGIC_STAT_DIAG_ACTIVE) == 0) {
+					diagnostic_active = false;
+					break;
+				}
 				scsi_io_pause();
 			}
-			if (!timeout) return false;
+			if (diagnostic_active) return false;
 
-			timeout = 10000;
-			while (timeout--) {
+			for0(spin, 10000) {
 				byte status = ReadStatus();
 				if (status & (BLOGIC_STAT_DIAG_FAILED | BLOGIC_STAT_ADAPTER_READY | BLOGIC_STAT_DATAIN_READY)) {
 					if ((status & BLOGIC_STAT_DIAG_FAILED) || !(status & BLOGIC_STAT_ADAPTER_READY)) {
@@ -316,7 +385,7 @@ namespace {
 		}
 
 		int Command(byte opcode, const void* param_data, stduint param_len, void* reply_data, stduint reply_len) const {
-			if (!has_io()) return -1;
+			if (!has_io() || faulted) return -1;
 			ClearLocalCommandState();
 			if (!WaitUntilReady()) return -2;
 
@@ -377,6 +446,21 @@ namespace {
 			return Command(BLOGIC_GET_BOARD_ID, nullptr, 0, &out, sizeof(out)) == sizeof(out);
 		}
 
+		bool PreparePolling() const {
+			const uint16 command = uint16(uni::PCI::read_config_register(node->fields.pci_segment,
+				node->fields.pci_bus, node->fields.pci_device, node->fields.pci_function, 0x04));
+			if (command & PciCommandInterruptDisable) return true;
+			// BusLogic MultiMaster Disable Host Adapter Interrupt (0x25): zero masks IRQ, but CMDC remains pollable.
+			const byte enable = 0;
+			if (Command(BLOGIC_DISABLE_INT, &enable, sizeof(enable), nullptr, 0) != 0) {
+				plogwarn("[SCSI] cannot disable adapter IRQ for polling");
+				return false;
+			}
+			ClearAdapterInterruptState();
+			plogtrac("[SCSI] PCI INTx masking unavailable; adapter IRQ disabled for polling");
+			return true;
+		}
+
 		bool QueryConfig(BusLogicConfig& out) const {
 			MemSet(&out, 0, sizeof(out));
 			return Command(BLOGIC_INQ_CONFIG, nullptr, 0, &out, sizeof(out)) == sizeof(out);
@@ -428,7 +512,7 @@ namespace {
 
 			const stduint total_size =
 				stduint(requested_count) * (sizeof(BusLogicOutbox) + sizeof(BusLogicInbox));
-			if (!mailbox_region.Ensure(total_size)) return false;
+			if (!mailbox_region.Ensure(node, total_size)) return false;
 
 			MemSet(mailbox_region.virt, 0, total_size);
 			outboxes = reinterpret_cast<BusLogicOutbox*>(mailbox_region.virt);
@@ -437,8 +521,9 @@ namespace {
 
 			BusLogicExtMailboxInitReq req{};
 			req.mbox_count = requested_count;
-			req.base_mbox_addr = mailbox_region.phys;
+			req.base_mbox_addr = mailbox_region.device_address;
 			if (Command(BLOGIC_INIT_EXT_MBOX, &req, sizeof(req), nullptr, 0) < 0) {
+				DisableAfterCommandFailure();
 				return false;
 			}
 			mailbox_count = requested_count;
@@ -453,11 +538,9 @@ namespace {
 		}
 
 		bool EnsureProbeBuffers() {
-			if (!probe_ccb_region.Ensure(512)) return false;
-			if (!probe_data_region.Ensure(512)) return false;
-			if (!probe_sense_region.Ensure(256)) return false;
+			if (!probe_ccb_region.Ensure(node, 512)) return false;
+			if (!probe_sense_region.Ensure(node, 256)) return false;
 			MemSet(probe_ccb_region.virt, 0, 512);
-			MemSet(probe_data_region.virt, 0, 512);
 			MemSet(probe_sense_region.virt, 0, 256);
 			return true;
 		}
@@ -488,8 +571,18 @@ namespace {
 		bool ExecuteMailboxScsi(byte target_id, byte lun, const byte* cdb, byte cdb_length,
 			void* data_buf, stduint data_length, bool data_in,
 			byte& completion_code, byte& adapter_status, byte& target_status) {
-			if (!mailbox_count || !outboxes || !inboxes || !EnsureProbeBuffers()) return false;
+			MutexLocal lock(&command_lock);
+			completion_code = adapter_status = target_status = 0xFF;
+			if (faulted || !mailbox_count || !outboxes || !inboxes) return false;
 			if (!cdb || cdb_length == 0 || cdb_length > 12) return false;
+			if (target_id >= kMaxTargets || lun >= kMaxLuns || uint64(data_length) > 0xFFFFFFFFull) return false;
+			if (data_length && (!data_buf || !data_region.Ensure(node, data_length))) return false;
+			if (!EnsureProbeBuffers()) return false;
+			// Caller buffers (including REQUEST SENSE on the stack) are CPU addresses, never device addresses.
+			if (data_length) {
+				if (data_in) MemSet(data_region.virt, 0, data_length);
+				else MemCopyN(data_region.virt, data_buf, data_length);
+			}
 			ClearLocalCommandState();
 			ClearAdapterInterruptState();
 			if (!WaitUntilReady()) {
@@ -501,16 +594,8 @@ namespace {
 			const stduint outbox_index = next_outbox_index % mailbox_count;
 			auto* outbox = &outboxes[outbox_index];
 			auto* probe_ccb = reinterpret_cast<BusLogicCcb32*>(probe_ccb_region.virt);
-			byte* probe_sense = probe_sense_region.virt;
-			uint32 data_phys = 0;
-			if (data_buf) {
-				if (data_buf == probe_data_region.virt) data_phys = probe_data_region.phys;
-				else data_phys = uint32(_IMM(data_buf));
-			}
-			MemSet(outbox, 0, sizeof(*outbox));
-			for0(i, mailbox_count) {
-				MemSet(&inboxes[i], 0, sizeof(inboxes[i]));
-			}
+			const uint32 data_phys = data_length ? data_region.device_address : 0;
+			MemSet(mailbox_region.virt, 0, mailbox_count * (sizeof(BusLogicOutbox) + sizeof(BusLogicInbox)));
 			MemSet(probe_ccb, 0, sizeof(*probe_ccb));
 
 			probe_ccb->opcode = BLOGIC_CCB_INITIATOR;
@@ -523,16 +608,18 @@ namespace {
 			probe_ccb->target_id = target_id;
 			probe_ccb->lun_legacy = byte(lun & 0x1Fu);
 			MemCopyN(probe_ccb->cdb, cdb, cdb_length);
-			probe_ccb->sense_addr = probe_sense_region.phys;
+			probe_ccb->sense_addr = probe_sense_region.device_address;
 
-			outbox->ccb = probe_ccb_region.phys;
+			outbox->ccb = probe_ccb_region.device_address;
+			// Publish ownership only after the CCB, data and mailbox address are visible to the adapter.
+			_ASM volatile("" ::: "memory");
 			outbox->action = BLOGIC_MBOX_START;
 			next_outbox_index = (outbox_index + 1) % mailbox_count;
 			// ploginfo("[SCSI] exec ccb=%[32H] data=%[32H] sense=%[32H] outbox=%[32H]",
-			// 	(unsigned)probe_ccb_region.phys,
+			// 	(unsigned)probe_ccb_region.device_address,
 			// 	(unsigned)data_phys,
-			// 	(unsigned)probe_sense_region.phys,
-			// 	(unsigned)(mailbox_region.phys + stduint((byte*)outbox - mailbox_region.virt)));
+			// 	(unsigned)probe_sense_region.device_address,
+			// 	(unsigned)(mailbox_region.device_address + stduint((byte*)outbox - mailbox_region.virt)));
 			_ASM volatile("" ::: "memory");
 			WriteCommand(BLOGIC_EXEC_MBOX_CMD);
 
@@ -541,11 +628,16 @@ namespace {
 				for0(i, mailbox_count) {
 					auto* inbox = &inboxes[i];
 					if (inbox->completion_code == BLOGIC_INBOX_FREE) continue;
-					if (inbox->ccb != probe_ccb_region.phys) continue;
+					_ASM volatile("" ::: "memory");
+					if (inbox->ccb != probe_ccb_region.device_address) continue;
 					completion_code = inbox->completion_code;
 					adapter_status = inbox->adapter_status;
 					target_status = inbox->target_status;
 					ClearAdapterInterruptState();
+					if (data_in && data_length && completion_code == BLOGIC_CMD_COMPLETE_GOOD &&
+						adapter_status == BLOGIC_ADAPTER_STATUS_OK && target_status == BLOGIC_TARGET_STATUS_GOOD) {
+						MemCopyN(data_buf, data_region.virt, data_length);
+					}
 					inbox->completion_code = BLOGIC_INBOX_FREE;
 					outbox->action = 0;
 					return true;
@@ -565,6 +657,7 @@ namespace {
 							(unsigned)diag[1],
 							(unsigned)diag_len);
 						ClearLocalCommandState();
+						DisableAfterCommandFailure();
 						return false;
 					}
 				}
@@ -575,7 +668,7 @@ namespace {
 			target_status = 0;
 			for0(i, mailbox_count) {
 				auto* inbox = &inboxes[i];
-				if (inbox->ccb != probe_ccb_region.phys) continue;
+				if (inbox->ccb != probe_ccb_region.device_address) continue;
 				completion_code = inbox->completion_code;
 				adapter_status = inbox->adapter_status;
 				target_status = inbox->target_status;
@@ -583,7 +676,7 @@ namespace {
 			}
 			plogwarn("[SCSI] exec timeout status=%[8H] int=%[8H] outbox-action=%[8H]",
 				(unsigned)ReadStatus(), (unsigned)ReadInterrupt(), (unsigned)outbox->action);
-			ClearAdapterInterruptState();
+			DisableAfterCommandFailure();
 			return false;
 		}
 
@@ -714,12 +807,6 @@ namespace {
 
 		bool ProbeReadCapacity(byte target, byte lun, ScsiReadCapacity10Reply& out_cap) {
 			if (!mailbox_count) return false;
-			if (!EnsureProbeBuffers()) {
-				plogwarn("[SCSI] probe buffer allocation failed");
-				return false;
-			}
-			byte* probe_data = probe_data_region.virt;
-			byte* probe_sense = probe_sense_region.virt;
 
 			byte cdb[10] = {};
 			cdb[0] = SCSI_CMD_READ_CAPACITY10;
@@ -727,7 +814,7 @@ namespace {
 			byte completion_code = 0xFF;
 			byte adapter_status = 0xFF;
 			byte target_status = 0xFF;
-			if (!ExecuteMailboxScsi(target, lun, cdb, 10, probe_data, sizeof(ScsiReadCapacity10Reply), true,
+			if (!ExecuteMailboxScsi(target, lun, cdb, 10, &out_cap, sizeof(out_cap), true,
 				completion_code, adapter_status, target_status)) {
 				plogwarn("[SCSI] readcap t%ul%u timeout comp=%[8H] host=%[8H] tgt=%[8H]",
 					(unsigned)target, (unsigned)lun,
@@ -741,10 +828,9 @@ namespace {
 				adapter_status != BLOGIC_ADAPTER_STATUS_OK ||
 				target_status != BLOGIC_TARGET_STATUS_GOOD) {
 				plogwarn("[SCSI] readcap t%ul%u failed sense0=%[8H]",
-					(unsigned)target, (unsigned)lun, (unsigned)probe_sense[0]);
+					(unsigned)target, (unsigned)lun, (unsigned)probe_sense_region.virt[0]);
 				return false;
 			}
-			MemCopyN(&out_cap, probe_data, sizeof(out_cap));
 			return true;
 		}
 
@@ -809,12 +895,6 @@ namespace {
 
 		bool ProbeInquiry(byte target, byte lun, ScsiInquiryReply& out_inq) {
 			if (!mailbox_count) return false;
-			if (!EnsureProbeBuffers()) {
-				plogwarn("[SCSI] probe buffer allocation failed");
-				return false;
-			}
-			byte* probe_data = probe_data_region.virt;
-			byte* probe_sense = probe_sense_region.virt;
 
 			byte cdb[6] = {};
 			cdb[0] = SCSI_CMD_INQUIRY;
@@ -823,7 +903,7 @@ namespace {
 			byte completion_code = 0xFF;
 			byte adapter_status = 0xFF;
 			byte target_status = 0xFF;
-			if (!ExecuteMailboxScsi(target, lun, cdb, 6, probe_data, sizeof(ScsiInquiryReply), true,
+			if (!ExecuteMailboxScsi(target, lun, cdb, 6, &out_inq, sizeof(out_inq), true,
 				completion_code, adapter_status, target_status)) {
 				return false;
 			}
@@ -833,7 +913,6 @@ namespace {
 				target_status != BLOGIC_TARGET_STATUS_GOOD) {
 				return false;
 			}
-			MemCopyN(&out_inq, probe_data, sizeof(out_inq));
 			return true;
 		}
 
@@ -856,6 +935,7 @@ namespace {
 			for0(target, kMaxTargets) {
 				if (!target_present[target]) continue;
 				for0(lun, kMaxLuns) {
+					if (faulted) return;
 					ScsiInquiryReply inq = {};
 					if (!ProbeInquiry((byte)target, (byte)lun, inq)) {
 						continue;
@@ -1011,13 +1091,30 @@ namespace {
 		}
 
 		bool Bind(DeviceNode* scsi_node) {
-			if (!scsi_node) return false;
-			node = scsi_node;
+			if (!scsi_node || faulted) return false;
+			if (node && node != scsi_node) return false;
+			if (scsi_node->fields.vendor_id != BusLogicVendorId ||
+				scsi_node->fields.device_id != BusLogicMultiMasterDeviceId) return false;
 			bar0_io = Devsman::FindResource(scsi_node, DeviceResourceType::PciBarIo, 0);
 			bar0_mmio = Devsman::FindResource(scsi_node, DeviceResourceType::PciBarMmio, 0);
 			irq = Devsman::FindResource(scsi_node, DeviceResourceType::IrqLine, 0);
-			io_base = bar0_io ? word(bar0_io->start) : 0;
-			return bar0_io || bar0_mmio;
+			if (!bar0_io || !bar0_io->start || bar0_io->start > 0xFFFCu || bar0_io->length < 4) return false;
+			node = scsi_node;
+			io_base = word(bar0_io->start);
+			const uint16 command = uint16(uni::PCI::read_config_register(node->fields.pci_segment,
+				node->fields.pci_bus, node->fields.pci_device, node->fields.pci_function, 0x04));
+			// PCI Local Bus Specification, Command register: require I/O and DMA; try masking INTx if supported.
+			const uint16 requested = command | PciCommandIoSpace | PciCommandBusMaster | PciCommandInterruptDisable;
+			uni::PCI::write_config_register(node->fields.pci_segment, node->fields.pci_bus,
+				node->fields.pci_device, node->fields.pci_function, 0x04, requested);
+			const uint16 actual = uint16(uni::PCI::read_config_register(node->fields.pci_segment,
+				node->fields.pci_bus, node->fields.pci_device, node->fields.pci_function, 0x04));
+			const uint16 required = PciCommandIoSpace | PciCommandBusMaster;
+			if ((actual & required) != required) {
+				plogwarn("[SCSI] PCI I/O or bus mastering unavailable command=%[16H]", (stduint)actual);
+				return false;
+			}
+			return true;
 		}
 
 		void DumpSummary() const {
@@ -1060,8 +1157,12 @@ static bool start_scsi_driver(DeviceNode* scsi_node) {
 	g_scsi_controller.DumpSummary();
 	if (!g_scsi_controller.HardwareReset(true)) {
 		plogwarn("[SCSI] hard reset failed");
+		return false;
 	}
+	// Reset restores adapter IRQ generation; establish polling mode before inquiry or mailbox commands.
+	if (!g_scsi_controller.PreparePolling()) return false;
 	g_scsi_controller.DumpInquiryResults();
+	if (g_scsi_controller.faulted || !g_scsi_controller.mailbox_count) return false;
 	scsi_node->fields.binding.driver_data = &g_scsi_controller;
 	return true;
 }

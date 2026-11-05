@@ -41,6 +41,11 @@ cppfile=\
 	$(ulibpath)/cpp/Device/GPIO.cpp $(wildcard $(ulibpath)/cpp/Device/GPIO/*.cpp) \
 	$(ulibpath)/cpp/Device/Buzzer.cpp \
 	$(ulibpath)/cpp/Device/Keyboard.cpp \
+	$(ulibpath)/cpp/Device/Storage/Harddisk.cpp \
+	$(ulibpath)/cpp/Device/Storage/Harddisk-PATA.cpp \
+	$(ulibpath)/cpp/Device/Storage/Harddisk-SCSI.cpp \
+	$(ulibpath)/cpp/Device/Storage/xCD-SCSI.cpp \
+	$(ulibpath)/cpp/Device/Storage/xCD.cpp \
 	$(ulibpath)/cpp/Datype/Charset/Unicode.cpp \
 	$(ulibpath)/cpp/Device/Video/VMware-SVGA.cpp \
 	$(ulibpath)/cpp/Device/Video-VCI.cpp \

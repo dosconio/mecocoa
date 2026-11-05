@@ -7,6 +7,7 @@
 #include <c/bitmap.h>
 #include <c/mempool.h>
 #include <c/system/paging.h>
+#include <cpp/lock>
 #include <cpp/string>
 #include <cpp/trait/MallocTrait.hpp>
 
@@ -271,6 +272,42 @@ word GDT_Alloc();
 #endif
 
 #if (_MCCA & 0xFF00) == 0x8600
+
+// ---- DMA LOW POOL (< 16MB) ----
+struct MempoolLowdma {
+	stduint base_phys = 0;
+	byte page_bitmap[0x00800000 / (0x1000 * 8)] = {}; // 1 bit per 4KB page (0: free, 1: used), 16 pages = 64KB
+	// Ownership is separate: holes and existing mempool allocations must never become DMA pages.
+	byte pool_page_bits[sizeof(page_bitmap)] = {};
+	stduint page_count = 16;
+	stduint reserved_bytes = 0;
+	Spinlock lock;
+
+	void Initialize(stduint base) {
+		base_phys = base;
+		if (base) {
+			uni::Bitmap pool_pages(pool_page_bits, sizeof(pool_page_bits));
+			for0(page, 16) pool_pages.setof(page);
+			reserved_bytes = 0x10000;
+		}
+	}
+
+	stduint Expand();
+
+	void* Allocate(stduint bytes);
+
+	bool Deallocate(void* ptr, stduint bytes);
+
+	bool IsInRange(void* ptr) const {
+		stduint addr = reinterpret_cast<stduint>(ptr);
+		if (!base_phys || addr < base_phys || ((addr - base_phys) >> 12) >= page_count) return false;
+		uni::Bitmap pool_pages(const_cast<byte*>(pool_page_bits), sizeof(pool_page_bits));
+		return pool_pages.bitof((addr - base_phys) >> 12);
+	}
+};
+
+extern MempoolLowdma dma_low_pool;
+
 void DmaLowPoolInit(stduint base_phys);
 stduint DmaLowPoolExpand();
 void* DmaLowAlloc(stduint bytes);

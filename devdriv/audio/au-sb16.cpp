@@ -1481,22 +1481,13 @@ namespace {
 
 	bool BindSoundBlasterGSI() {
 		if (sound_blaster_gsi_binding.active) return true;
-		uint32 gsi = 0;
-		bool level_triggered = false;
-		bool active_low = false;
-		// ACPI MADT Interrupt Source Overrides may remap ISA IRQ5 and change its polarity or trigger mode.
-		if (!Devs::x64_resolve_isa_irq(SoundBlasterDefaultConfig.irq, gsi, level_triggered, active_low)) {
-			plogwarn("[SB16] ISA IRQ%u has no routable GSI", SoundBlasterDefaultConfig.irq);
-			return false;
-		}
-		const ACPIGSIConfiguration configuration{gsi, level_triggered, active_low, false};
-		const auto status = Devs::BindACPIGSI(configuration, DispatchSoundBlasterGSI,
+		const auto status = Devs::BindISAGSI(SoundBlasterDefaultConfig.irq, DispatchSoundBlasterGSI,
 			&sound_blaster, sound_blaster_gsi_binding);
 		if (status != ACPIGSIStatus::Success) {
-			plogwarn("[SB16] GSI%u binding failed, status=%u", gsi, uint8(status));
+			plogwarn("[SB16] ISA IRQ%u binding failed, status=%u", SoundBlasterDefaultConfig.irq, uint8(status));
 			return false;
 		}
-		ploginfo("[SB16] ISA IRQ%u bound to GSI%u", SoundBlasterDefaultConfig.irq, gsi);
+		ploginfo("[SB16] ISA IRQ%u bound to GSI%u", SoundBlasterDefaultConfig.irq, sound_blaster_gsi_binding.gsi);
 		return true;
 	}
 }

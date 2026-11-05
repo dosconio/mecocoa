@@ -116,7 +116,7 @@ static void HandleTLBShootdownIPI() {
 
 static void HandleRescheduleIPI() {
 	stduint cpuid = Taskman::getID();
-	if (cpuid < PCU_CORES_MAX) ap_resched_ipi_hits[cpuid]++;
+	if (cpuid < Taskman::PCU_CORES) ap_resched_ipi_hits[cpuid]++;
 	IC.SendEOI();
 	if (g_enable_ap_scheduling) {
 		Taskman::Schedule(true);
@@ -175,7 +175,7 @@ bool WakeOneIdleApForReadyWork() {
 	// if (CountQueuedReadyTasks(2) < 2) return false;
 
 	static stduint next_ap = 1;
-	for0(try_i, PCU_CORES_MAX) {
+	for0(try_i, Taskman::PCU_CORES - 1) {
 		if (next_ap >= Taskman::PCU_CORES) {
 			next_ap = 1;
 		}
@@ -254,7 +254,7 @@ static void BindCurrentKernelEntryStack(ThreadBlock* th, stduint cpuid) {
 	if (!percore) return;
 	percore->current_thread = th;
 	// Transition stack (jump board) used for ring3 entry and SYSRET
-	percore->kernel_rsp = X64_TRANSITION_STACK_TOP - cpuid * X64_TRANSITION_STACK_SIZE;
+	percore->kernel_rsp = TRANSITION_STACK_TOP - cpuid * TRANSITION_STACK_SIZE;
 	percore->tss.RSP0 = percore->kernel_rsp;
 	
 	// Real kernel stack for the thread
@@ -406,7 +406,7 @@ ThreadBlock* Taskman::PickNext() {
 		while (node) {
 			if (!node->just_schedule && node->state != ThreadBlock::State::Running) {
 				bool active_on_other_cpu = false;
-				for (int c = 0; c < PCU_CORES_MAX; c++) {
+				for (int c = 0; c < Taskman::PCU_CORES; c++) {
 					if (c != (int)current_cpuid && current_thread(c) == node) {
 						active_on_other_cpu = true;
 						#if 0 && defined(_DEBUG)
@@ -422,7 +422,7 @@ ThreadBlock* Taskman::PickNext() {
 					#endif
 					if (runnable_here) {
 						// Check whether node is in the array: 
-						for (int i = 0; i < PCU_CORES_MAX; i++) {
+						for (int i = 0; i < Taskman::PCU_CORES; i++) {
 							if (switching_out_threads(i) == node) {
 								switching_out_threads(i) = nullptr;
 								break;
@@ -452,7 +452,7 @@ ThreadBlock* Taskman::PickNext() {
 			while (node) {
 				if (!node->just_schedule && node->state != ThreadBlock::State::Running) {
 					bool active_on_other_cpu = false;
-					for (int c = 0; c < PCU_CORES_MAX; c++) {
+					for (int c = 0; c < Taskman::PCU_CORES; c++) {
 						if (c != (int)current_cpuid && current_thread(c) == node) {
 							active_on_other_cpu = true;
 							#if 0 && defined(_DEBUG)
@@ -464,7 +464,7 @@ ThreadBlock* Taskman::PickNext() {
 					if (!active_on_other_cpu) {
 						bool runnable_here = (node->ring_coreid == CORE_ID_INVALID || node->ring_coreid == current_cpuid);
 						if (runnable_here) {
-							for (int i = 0; i < PCU_CORES_MAX; i++) {
+							for (int i = 0; i < Taskman::PCU_CORES; i++) {
 								if (switching_out_threads(i) == node) {
 									switching_out_threads(i) = nullptr;
 									break;

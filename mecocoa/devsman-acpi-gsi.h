@@ -39,6 +39,7 @@ struct ACPIGSIBinding {
 
 namespace Devs {
 	ACPIGSIStatus BindACPIGSI(const ACPIGSIConfiguration& configuration, ACPIGSIFilter filter, void* context, ACPIGSIBinding& binding);
+	ACPIGSIStatus BindISAGSI(uint8 isa_irq, ACPIGSIFilter filter, void* context, ACPIGSIBinding& binding);
 	ACPIGSIStatus UnbindACPIGSI(ACPIGSIBinding& binding);
 	#if CONFIG_ACPI_BOOT_TEST
 	void RunACPIGSITest();

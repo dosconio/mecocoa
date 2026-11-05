@@ -64,7 +64,11 @@ extern SpinlockBlock<uni::Queue<SysMessage>> message_queue_conv;// for serv_graf
 
 // >= 1
 #ifndef PCU_CORES_MAX
+#ifdef  CONFIG_MaxLocalLogicCore
+#define PCU_CORES_MAX CONFIG_MaxLocalLogicCore
+#else
 #define PCU_CORES_MAX 16
+#endif
 #endif
 
 static constexpr uint32 CORE_ID_INVALID = 0xFFFFFFFFu;
@@ -125,14 +129,15 @@ enum {
 #if (_MCCA & 0xFF00) == 0x8600
 #define PERCORE_VBASE   0xFFFFFFFFB0000000ull
 #define PERCORE_STRIDE  0x1000  // 4KB per CPU
+static constexpr stduint TRANSITION_STACK_SIZE = 0x1000;
 #if _MCCA == 0x8664
 #define _NORMAL_RINGSTACK 0xFFFFFFFFC0001000ull
-static constexpr stduint X64_TRANSITION_STACK_SIZE = 0x1000;
-static constexpr stduint X64_TRANSITION_STACK_BASE = 0xFFFFFFFFFFFFF000ull;
-static constexpr stduint X64_TRANSITION_STACK_TOP = 0xFFFFFFFFFFFFFFF0ull;
+static constexpr stduint TRANSITION_STACK_BASE = 0xFFFFFFFFFFFFF000ull;
 #elif _MCCA == 0x8632
 #define _NORMAL_RINGSTACK 0xFFC01000ull
+static constexpr stduint TRANSITION_STACK_BASE = 0xFFFFF000u;
 #endif
+static constexpr stduint TRANSITION_STACK_TOP = TRANSITION_STACK_BASE + (TRANSITION_STACK_SIZE - 0x10);
 
 inline stduint GetCoreRingStackBase(stduint cpuid) {
 	return _NORMAL_RINGSTACK + cpuid * 0x10000ull;
@@ -140,11 +145,11 @@ inline stduint GetCoreRingStackBase(stduint cpuid) {
 
 #if _MCCA == 0x8632
 static inline stduint GetCoreTransitionStackBase(stduint cpuid) {
-	return 0xFFFFF000u - cpuid * 0x1000u;
+	return TRANSITION_STACK_BASE - cpuid * TRANSITION_STACK_SIZE;
 }
 
 static inline stduint GetCoreTransitionStackTop(stduint cpuid) {
-	return GetCoreTransitionStackBase(cpuid) + 0x1000u - 0x10u;
+	return TRANSITION_STACK_TOP - cpuid * TRANSITION_STACK_SIZE;
 }
 #endif
 

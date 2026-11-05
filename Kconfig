@@ -26,6 +26,10 @@ menu "Parameter"
 		int "Soft-timer Tick Frequency (Hz)"
 		default 100
 
+	config MaxLocalLogicCore
+		int "Max Locale Logic Core"
+		default 32
+
 	config LOG_LEVEL
 		int "(TODO) Kernel Log Level (0-4)"
 		range 0 4

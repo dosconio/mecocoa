@@ -226,7 +226,7 @@ void Taskman::DestroyThread(ThreadBlock* th) {
 	while (true) {
 		bool active = (th->state == ThreadBlock::State::Running);
 		if (!active) {
-			for (stduint _i = 0; _i < Taskman::PCU_CORES && _i < PCU_CORES_MAX; _i++) {
+			for (stduint _i = 0; _i < Taskman::PCU_CORES; _i++) {
 				if (current_thread(_i) == th || switching_out_threads(_i) == th) {
 					active = true;
 					break;

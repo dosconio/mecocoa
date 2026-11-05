@@ -75,6 +75,11 @@ cppfile=\
 	$(ulibpath)/cpp/Device/Video-VCI.cpp \
 	$(ulibpath)/cpp/Device/Storage/Harddisk-SATA.cpp\
 	$(ulibpath)/cpp/Device/Storage/Harddisk-NVMe.cpp\
+	$(ulibpath)/cpp/Device/Storage/Harddisk.cpp \
+	$(ulibpath)/cpp/Device/Storage/Harddisk-PATA.cpp \
+	$(ulibpath)/cpp/Device/Storage/Harddisk-SCSI.cpp \
+	$(ulibpath)/cpp/Device/Storage/xCD-SCSI.cpp \
+	$(ulibpath)/cpp/Device/Storage/xCD.cpp \
 	$(ulibpath)/cpp/Device/ACPI.cpp $(wildcard $(ulibpath)/cpp/Device/ACPI/*.cpp) \
 	$(wildcard $(ulibpath)/cpp/Device/USB/*.cpp) $(wildcard $(ulibpath)/cpp/Device/USB/xHCI/*.cpp) $(wildcard $(ulibpath)/cpp/Device/USB/uHCI/*.cpp) $(wildcard $(ulibpath)/cpp/Device/USB/eHCI/*.cpp) \
 	$(wildcard $(ulibpath)/cpp/System/Network/Layer/*/*.cpp) \
@@ -102,8 +107,8 @@ sudokey=k
 uherpath=/her
 loader=$(ubinpath)/AMD64/loader.efi
 
-.PHONY : build build_drvs
-build: clean accm $(archdir)/kdiskx64.fat $(ubinpath)/$(arch).img $(asmobjs) $(cppobjs) $(cplobjs) build_util build_drvs
+.PHONY : build user accm build_util build_drvs
+build: clean $(archdir)/kdiskx64.fat $(ubinpath)/$(arch).img $(asmobjs) $(cppobjs) $(cplobjs)
 	@echo MK $(elf_kernel)
 	$(CX) $(XFLAGS) \
 		-T prehost/$(arch)/$(arch).ld -o $(ubinpath)/$(elf_kernel) \
@@ -129,6 +134,10 @@ build: clean accm $(archdir)/kdiskx64.fat $(ubinpath)/$(arch).img $(asmobjs) $(c
 	@echo $(sudokey) | sudo -S umount $(mntdir)
 	# update
 	qemu-img convert -f raw -O vpc $(ubinpath)/$(arch).img $(ubinpath)/$(arch).vhd
+
+user: accm
+	@mkdir -p $(uobjpath)/sapp-$(arch)
+	@$(MAKE) -f configs/$(arch).make build_util build_drvs
 
 accm:
 	@echo MK lib for ACCM-x64

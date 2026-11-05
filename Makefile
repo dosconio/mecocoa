@@ -10,7 +10,7 @@
 ### qemuvirt-r32
 arch?=atx-x86-flap32
 
-.PHONY: build config run debug clean clean-app read run-only line devenv-arch acpi-test-table
+.PHONY: build user config run debug clean clean-app read run-only line devenv-arch acpi-test-table
 
 IASL ?= iasl
 PYTHON ?= python3
@@ -32,6 +32,9 @@ acpi_dump_qemu_arg=$(if $(acpi_dump_enabled),-acpitable file=$(acpi_dump_dsdt_ta
 
 build:
 	@make -f configs/$(arch).make build --silent
+
+user:
+	@$(MAKE) -f configs/$(arch).make user --silent
 
 config:
 	@menuconfig

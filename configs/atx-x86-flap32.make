@@ -37,9 +37,22 @@ sudokey=k
 elf_kernel=$(archdir)/mcca-$(arch).elf
 iso_kernel=$(ubinpath)/mcca.iso
 
-.PHONY: build install lib accm run clean build_drvs
+.PHONY: build user check-user install lib accm run clean build_util build_drvs
+.DEFAULT_GOAL := build
 
-build: lib accm prehost/$(arch)/fatvhd.ignore $(cppobjs) build_util build_drvs
+user: accm
+	@$(MAKE) -f configs/$(arch).make build_util build_drvs
+
+check-user:
+	@for file in $(addprefix $(uobjpath)/sapp-$(arch)/,init cot ls ribbon) \
+		$(addprefix $(ubinpath)/mecocoa/x86/drvs/,video-bochs.elf e1000.elf lance.elf vmci.elf flopdisk.elf) \
+		accmlib/sysroot/usr/lib/i686-mcca/libc.so $(ubinpath)/mecocoa/x86/lib/ld-mcca.so; do \
+		if [ ! -f "$$file" ]; then \
+			echo "Missing user artifact: $$file; run make user arch=$(arch) first."; exit 1; \
+		fi; \
+	done
+
+build: check-user lib prehost/$(arch)/fatvhd.ignore $(cppobjs)
 	@echo "MK $(arch) real16 support"
 	aasm prehost/$(arch)/atx-x86.asm        -felf   -o $(uobjpath)/mcca-$(arch)/mcca-$(arch)-elf16.o  -Iinclude/
 	aasm prehost/$(arch)/atx-ladder.asm     -felf   -o $(uobjpath)/mcca-$(arch)/mcca-$(arch)-ladder.o -Iinclude/ -D_MCCA=0x8632
@@ -94,7 +107,7 @@ build: lib accm prehost/$(arch)/fatvhd.ignore $(cppobjs) build_util build_drvs
 	@echo $(sudokey) | sudo -S kpartx -dv $(ubinpath)/fixed2.vhd >/dev/null
 	#
 	@echo
-	@echo Run \"make -f accmlib/accmx86.make\" to build accm-x86
+	@echo Run \"make user arch=$(arch)\" to update user artifacts
 	@echo "You can now debug in bochs with the command:"
 	@echo "  " $(bochd) -f %ubinpath%/I686/mecocoa/bochsrc.bxrc
 	@echo "  " bochs -f $(archdir)/bochsrc-lin.bxrc -debugger
@@ -167,17 +180,18 @@ accm:
 	@mkdir -p $(uobjpath)/sapp-$(arch)
 	make -f accmlib/accmx86.$(TOOLSYS).make
 
-prehost/$(arch)/fatvhd.ignore: build_util
+# Repack changed applications without rebuilding or consuming their binaries.
+prehost/$(arch)/fatvhd.ignore: $(wildcard $(uobjpath)/sapp-$(arch)/*) $(wildcard depends/cotlabx/init.cot) | check-user
 	@echo MK  $(arch) memdisk
 	dd if=/dev/zero of=$@ bs=1M count=1
 	mkfs.fat -n 'MECOCOA2' -s 2 -f 2 -R 32 -F 32 $@
 	@echo $(sudokey) | sudo -S mount -o loop $@ $(mntdir)
-	@echo $(sudokey) | sudo -S mv $(uobjpath)/sapp-$(arch)/init $(mntdir)/init
+	@echo $(sudokey) | sudo -S cp $(uobjpath)/sapp-$(arch)/init $(mntdir)/init
 	@echo $(sudokey) | sudo -S cp $(uobjpath)/sapp-$(arch)/cot  $(mntdir)/cot
 	@if [ -f depends/cotlabx/init.cot ]; then echo $(sudokey) | sudo -S cp depends/cotlabx/init.cot $(mntdir)/init.cot; fi
 	# from uni-utils:
-	@echo $(sudokey) | sudo -S mv $(uobjpath)/sapp-$(arch)/ls     $(mntdir)/ls
-	@echo $(sudokey) | sudo -S mv $(uobjpath)/sapp-$(arch)/ribbon $(mntdir)/ribbon
+	@echo $(sudokey) | sudo -S cp $(uobjpath)/sapp-$(arch)/ls     $(mntdir)/ls
+	@echo $(sudokey) | sudo -S cp $(uobjpath)/sapp-$(arch)/ribbon $(mntdir)/ribbon
 	@echo $(sudokey) | sudo -S umount $(mntdir)
 
 $(uobjpath)/mcca-$(arch)/memodisk.o: prehost/$(arch)/fatvhd.ignore
