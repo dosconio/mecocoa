@@ -30,6 +30,9 @@ namespace {
 		USB::HIDBootKeyboardReportDecoder::kReportBytes;
 	constexpr uint16 UhciHotplugDebouncePolls = 10;
 	constexpr uint16 UhciHotplugRetryPolls = 100;
+	// UHCI Design Guide: FRNUM bits 10:0 advance once per 1 ms frame.
+	constexpr uint16 UhciFrameNumberMask = 0x07FFu;
+	constexpr stduint UhciFrameStallPollLimit = 1u << 20;
 	constexpr stduint UhciPollIntervalTicks = CONFIG_SysTickFreq >= 100 ?
 		CONFIG_SysTickFreq / 100 : 1;
 
@@ -117,8 +120,33 @@ namespace {
 		outpd(uint16(controller.io_base + offset), value);
 	}
 
-	void UhciDelayMilliseconds(void*, stduint milliseconds) {
-		TSC_Wait_MS(milliseconds);
+	void UhciDelayMilliseconds(void* context, stduint milliseconds) {
+		if (!milliseconds) return;
+		auto& controller = *static_cast<UhciDriverInstance*>(context);
+		if (!controller.host.IsRunning() || milliseconds > UhciFrameNumberMask) {
+			TSC_Wait_MS(milliseconds);
+			return;
+		}
+
+		const uint16 start_frame = controller.host.FrameNumber();
+		uint16 previous_frame = start_frame;
+		stduint stagnant_polls = 0;
+		for (;;) {
+			const uint16 current_frame = controller.host.FrameNumber();
+			const stduint elapsed =
+				(current_frame - start_frame) & UhciFrameNumberMask;
+			if (elapsed >= milliseconds) return;
+			if (!controller.host.IsRunning()) return;
+			if (current_frame != previous_frame) {
+				previous_frame = current_frame;
+				stagnant_polls = 0;
+			}
+			else if (++stagnant_polls >= UhciFrameStallPollLimit) {
+				TSC_Wait_MS(milliseconds - elapsed);
+				return;
+			}
+			_ASM volatile ("pause" ::: "memory");
+		}
 	}
 
 	void UhciSynchronizeMemory(void*) {

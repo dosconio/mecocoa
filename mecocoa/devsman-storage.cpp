@@ -256,3 +256,217 @@ namespace Powercall {
 	}
 }
 #endif
+
+#if defined(_MCCA)
+namespace Devs {
+	void NotifyStorageWait(StorageWaitContext& wait) {
+		wait.notification.fetch_add(1, uni::MemoryOrder_Release);
+		const stduint tid = wait.waiter.load(uni::MemoryOrder_Acquire);
+		if (tid != ~stduint(0)) (void)Taskman::UnblockThread(tid, ThreadBlock::BlockReason::BR_Resting);
+	}
+
+	void NotifyStorageWait(StorageWaitContext& wait, stduint tid) {
+		wait.notification.fetch_add(1, uni::MemoryOrder_Release);
+		if (tid != ~stduint(0)) (void)Taskman::UnblockThread(tid, ThreadBlock::BlockReason::BR_Resting);
+	}
+
+	StorageWaitStatus WaitStorage(StorageWaitContext& wait, StorageWaitProbe probe, void* context,
+		stduint timeout_ticks, stduint poll_limit, bool interrupt_driven) {
+		if (!probe || !timeout_ticks || !poll_limit) return StorageWaitStatus::Failed;
+		const stduint start_tick = tick;
+		stduint polls = 0;
+		bool can_sleep = false, can_yield = false;
+		#if (_MCCA & 0xFF00) == 0x8600
+		auto* thread = Taskman::CurrentTB();
+		const stduint tid = Taskman::CurrentTID();
+		const bool initial_if = IC.TryMaskInterrupt();
+		if (initial_if) IC.enInterrupt(true);
+		// Initialization precedes the reserved service tasks; do not start scheduling during that phase.
+		can_yield = initial_if && thread && Taskman::Locate(Task_Devsman) && stduint(tick) != 0;
+		/* Thread-wake timers run on Devsman. Neither it nor FileSys, which it may synchronously
+		   wait for, may sleep on that timer; those service paths must keep polling hardware. */
+		can_sleep = can_yield && interrupt_driven && tid != Task_Devsman && tid != Task_FileSys;
+		auto release_waiter = [&]() {
+			stduint expected = tid;
+			// A concurrent probe may have become the IRQ service waiter while this request completed.
+			(void)wait.waiter.compare_exchange(expected, ~stduint(0), uni::MemoryOrder_Acq_Rel, uni::MemoryOrder_Acquire);
+		};
+		#endif
+		StorageWaitStatus result = StorageWaitStatus::Pending;
+		for (;;) {
+			#if (_MCCA & 0xFF00) == 0x8600
+			if (can_sleep) wait.waiter.store(tid, uni::MemoryOrder_Release);
+			#endif
+			const uint32 observed = wait.notification.load(uni::MemoryOrder_Acquire);
+			result = probe(context);
+			if (result != StorageWaitStatus::Pending) break;
+			if (stduint(stduint(tick) - start_tick) >= timeout_ticks) {
+				result = StorageWaitStatus::TimedOut;
+				break;
+			}
+			++polls;
+			if (!can_sleep && polls >= poll_limit) {
+				result = StorageWaitStatus::TimedOut;
+				break;
+			}
+			#if (_MCCA & 0xFF00) == 0x8600
+			if (can_sleep && polls >= 64) {
+				const bool old_if = IC.TryMaskInterrupt();
+				if (!old_if) {
+					can_sleep = can_yield = false;
+					release_waiter();
+					continue;
+				}
+				thread->Block(ThreadBlock::BlockReason::BR_Resting);
+				StorageTimer wake_timer;
+				/* Recheck after Block: an IRQ between the probe and Block must not leave us asleep.
+				   A one-tick wake also covers IRQ service-waiter turnover between concurrent requests. */
+				if (wait.notification.load(uni::MemoryOrder_Acquire) != observed) {
+					thread->Unblock(ThreadBlock::BlockReason::BR_Resting);
+				}
+				else if (!wake_timer.ArmWake(1, tid)) {
+					thread->Unblock(ThreadBlock::BlockReason::BR_Resting);
+					can_sleep = false;
+					release_waiter();
+				}
+				if (old_if) IC.enInterrupt(true);
+				Taskman::Schedule(true);
+				wake_timer.Cancel();
+			}
+			else if (can_yield && !(polls & 63u)) Taskman::Schedule(true);
+			else _ASM volatile("pause" ::: "memory");
+			#else
+			_ASM volatile("" ::: "memory");
+			#endif
+		}
+		#if (_MCCA & 0xFF00) == 0x8600
+		release_waiter();
+		#endif
+		return result;
+	}
+
+	#if (_MCCA & 0xFF00) == 0x8600
+	bool StorageTimer::ArmWake(stduint delay, stduint tid) {
+		if (!delay || tid == ~stduint(0)) return false;
+		Cancel();
+		target = tid;
+		callback = nullptr;
+		deadline = stduint(tick) + delay;
+		armed = Systimex::AppendThreadWake(delay, tid);
+		return armed;
+	}
+
+	bool StorageTimer::ArmService(stduint delay, stduint context, _tocall_ft handler) {
+		if (!handler) return false;
+		if (!delay) delay = 1;
+		const stduint next = stduint(tick) + delay;
+		if (armed && callback == handler && target == context && stdsint(next - deadline) >= 0) return true;
+		Cancel();
+		target = context;
+		callback = handler;
+		deadline = next;
+		armed = Systimex::AppendDeferredCallback(delay, context, handler);
+		return armed;
+	}
+
+	bool StorageTimer::Consume(stduint context, _tocall_ft handler) {
+		if (!armed || !callback || callback != handler || target != context ||
+			stdsint(stduint(tick) - deadline) < 0) return false;
+		Cancel();
+		return true;
+	}
+
+	void StorageTimer::Cancel() {
+		if (!armed) return;
+		if (callback) Systimex::CancelDeferredCallback(target, callback);
+		else Systimex::CancelThreadWake(target);
+		armed = false;
+	}
+
+	namespace {
+		bool StorageDmaRangeFits(uint64 address, stduint bytes, const StorageDmaRequirements& requirements) {
+			if (!bytes || address > requirements.address_limit || uint64(bytes - 1) > requirements.address_limit - address) return false;
+			const uint64 alignment = uint64(1) << requirements.alignment_bits;
+			if (address & (alignment - 1)) return false;
+			return !requirements.boundary ||
+				(address / requirements.boundary == (address + bytes - 1) / requirements.boundary);
+		}
+
+		void FreeStorageDma(void* buffer, stduint bytes) {
+			if (dma_low_pool.IsInRange(buffer)) dma_low_pool.Deallocate(buffer, bytes);
+			else mempool.deallocate(buffer, bytes);
+		}
+	}
+
+	StorageDmaBuffer::~StorageDmaBuffer() {
+		if (!Release()) plogwarn("[Storage] retaining DMA buffer %p bytes=%u", virt, size);
+	}
+
+	bool StorageDmaBuffer::Ensure(DeviceNode* node, stduint bytes, const StorageDmaRequirements& requirements) {
+		if (!node || !bytes || in_flight || requirements.alignment_bits >= sizeof(stduint) * 8 ||
+			bytes > ~stduint(0) - (PAGE_SIZE - 1) ||
+			(requirements.boundary && (requirements.boundary & (requirements.boundary - 1)))) return false;
+		const stduint allocation_bytes = (bytes + PAGE_SIZE - 1) & ~(stduint(PAGE_SIZE) - 1);
+		if (uint64(allocation_bytes - 1) > requirements.address_limit ||
+			(requirements.boundary && allocation_bytes > requirements.boundary)) return false;
+		if (virt && device == node && device_address == uint64(_IMM(virt)) && size >= allocation_bytes &&
+			StorageDmaRangeFits(device_address, size, requirements)) return true;
+		if (!Release()) return false;
+		const byte alignment_bits = maxof(byte(12), requirements.alignment_bits);
+		byte* buffer = requirements.prefer_low_pool && alignment_bits == 12 && allocation_bytes <= 0x10000
+			? static_cast<byte*>(dma_low_pool.Allocate(allocation_bytes)) : nullptr;
+		if (!buffer) buffer = static_cast<byte*>(mempool.allocate(allocation_bytes, alignment_bits));
+		if (!buffer) return false;
+		if (!StorageDmaRangeFits(uint64(_IMM(buffer)), allocation_bytes, requirements)) {
+			FreeStorageDma(buffer, allocation_bytes);
+			return false;
+		}
+		Iova::DmaMapping mapping{};
+		if (!Iova::MapDeviceDma(node, _IMM(buffer), allocation_bytes, Iova::DmaMappingFlag::Identity, mapping)) {
+			FreeStorageDma(buffer, allocation_bytes);
+			return false;
+		}
+		device = node;
+		virt = buffer;
+		device_address = mapping.device_address;
+		size = allocation_bytes;
+		translated = mapping.translated;
+		if (device_address != uint64(_IMM(virt)) || !StorageDmaRangeFits(device_address, size, requirements)) {
+			// Retain the page if invalidation fails: freeing a device-reachable mapping would be unsafe.
+			if (!Release()) plogwarn("[Storage] retaining DMA mapping after failed invalidation");
+			return false;
+		}
+		MemSet(virt, 0, size);
+		SyncForDevice();
+		return true;
+	}
+
+	bool StorageDmaBuffer::Release() {
+		if (!virt) return true;
+		if (in_flight) return false;
+		if (translated && !Iova::UnmapDeviceDma(device, device_address, size)) return false;
+		FreeStorageDma(virt, size);
+		device = nullptr;
+		virt = nullptr;
+		device_address = 0;
+		size = 0;
+		translated = false;
+		return true;
+	}
+
+	void StorageDmaBuffer::MarkInFlight() {
+		SyncForDevice();
+		in_flight = true;
+	}
+
+	void StorageDmaBuffer::MarkQuiesced() {
+		in_flight = false;
+		SyncForCpu();
+	}
+
+	// x86/x64 DMA is cache-coherent; ownership barriers still order descriptors, doorbells and payload accesses.
+	void StorageDmaBuffer::SyncForDevice() const { __sync_synchronize(); }
+	void StorageDmaBuffer::SyncForCpu() const { __sync_synchronize(); }
+	#endif
+}
+#endif

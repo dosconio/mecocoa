@@ -3,6 +3,7 @@
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 
 #include "../../include/mecocoa.hpp"
+#include "../../include/devsman-storage.hpp"
 #if (_MCCA & 0xFF00) == 0x8600
 #include <cpp/Device/Bus/PCI.hpp>
 #include <cpp/ISO_IEC_STD/memory>
@@ -13,37 +14,79 @@ namespace {
 	uni::PCI pci;
 	static constexpr uint8 IRQ_AHCI = IRQ_RTC + 2;
 	static constexpr stduint InvalidAhciUnit = ~stduint(0);
+	// AHCI 1.3.1, sections 3.1.1 and 4.2.3.3: CAP.S64A and the PRD's 22-bit DBC field.
+	static constexpr uint32 AhciCapS64A = 1u << 31;
+	static constexpr stduint AhciPrdtMaxBytes = 1u << 22;
 	#if _MCCA == 0x8664
 	static constexpr uint16 AhciPciCommandInterruptDisable = 1u << 10;
 	#endif
 	bool ahci_irq_wait(uni::AHCI_Port_Base* port_base, uint32 slot_mask);
 
-	class SerializedAhciDisk : public uni::Harddisk_SATA_AHCI {
+	Devs::StorageDmaRequirements AhciDmaRequirements(volatile AHCI_MEM* abar) {
+		Devs::StorageDmaRequirements requirements;
+		requirements.address_limit = (abar->cap & AhciCapS64A) ? ~uint64(0) : 0xFFFFFFFFull;
+		requirements.prefer_low_pool = !(abar->cap & AhciCapS64A);
+		return requirements;
+	}
+
+	template <typename Storage, bool Writable>
+	class SerializedAhciStorage : public Storage {
 		Mutex* transaction = nullptr;
-	public:
-		void SetTransaction(Mutex* value) { transaction = value; }
-		bool Read(stduint block, void* destination, stduint times = 1) override {
-			if (!transaction) return uni::Harddisk_SATA_AHCI::Read(block, destination, times);
+		DeviceNode* device = nullptr;
+		Devs::StorageDmaBuffer data_buffer;
+		bool faulted = false;
+
+		bool Transfer(stduint block, void* buffer, stduint count, bool is_write) {
+			if (!transaction || !device || !buffer || !count || !this->Block_Size || this->Block_Size > AhciPrdtMaxBytes) return false;
 			MutexLocal guard(transaction);
-			return uni::Harddisk_SATA_AHCI::Read(block, destination, times);
+			if (faulted) return false;
+			const auto requirements = AhciDmaRequirements(this->abar);
+			const stduint max_blocks = AhciPrdtMaxBytes / this->Block_Size;
+			auto* caller = static_cast<byte*>(buffer);
+			while (count) {
+				const stduint blocks = minof(count, max_blocks);
+				const stduint bytes = blocks * this->Block_Size;
+				if (!data_buffer.Ensure(device, bytes, requirements)) return false;
+				if (is_write) MemCopyN(data_buffer.virt, caller, bytes);
+				data_buffer.MarkInFlight();
+				const bool completed = is_write ? Storage::Write(block, data_buffer.virt, blocks)
+					: Storage::Read(block, data_buffer.virt, blocks);
+				if (!completed) {
+					if (!faulted) (void)RetireAfterFailure();
+					return false;
+				}
+				data_buffer.MarkQuiesced();
+				if (!is_write) MemCopyN(caller, data_buffer.virt, bytes);
+				caller += bytes;
+				block += blocks;
+				count -= blocks;
+			}
+			return true;
+		}
+	public:
+		void SetHost(Mutex* value, DeviceNode* node) { transaction = value; device = node; }
+		// Keep completed command errors retryable; an unfinished command requires stopping and retiring the port.
+		bool RetireAfterFailure() {
+			auto& port = this->abar->ports[this->port_index];
+			if (!(port.ci | port.sact)) {
+				data_buffer.MarkQuiesced();
+				return false;
+			}
+			faulted = true;
+			if (!this->StopCommandEngine()) return false;
+			data_buffer.MarkQuiesced();
+			return true;
+		}
+		bool Read(stduint block, void* destination, stduint times = 1) override {
+			return Transfer(block, destination, times, false);
 		}
 		bool Write(stduint block, const void* source, stduint times = 1) override {
-			if (!transaction) return uni::Harddisk_SATA_AHCI::Write(block, source, times);
-			MutexLocal guard(transaction);
-			return uni::Harddisk_SATA_AHCI::Write(block, source, times);
+			if constexpr (Writable) return Transfer(block, const_cast<void*>(source), times, true);
+			else return false;
 		}
 	};
-
-	class SerializedAhciCdrom : public uni::CDROM_ATAPI_AHCI {
-		Mutex* transaction = nullptr;
-	public:
-		void SetTransaction(Mutex* value) { transaction = value; }
-		bool Read(stduint block, void* destination, stduint times = 1) override {
-			if (!transaction) return uni::CDROM_ATAPI_AHCI::Read(block, destination, times);
-			MutexLocal guard(transaction);
-			return uni::CDROM_ATAPI_AHCI::Read(block, destination, times);
-		}
-	};
+	using SerializedAhciDisk = SerializedAhciStorage<uni::Harddisk_SATA_AHCI, true>;
+	using SerializedAhciCdrom = SerializedAhciStorage<uni::CDROM_ATAPI_AHCI, false>;
 
 	struct AHCI_Controller {
 		stduint index = 0;
@@ -57,6 +100,7 @@ namespace {
 		uint8 irq_pin = 0;
 		int active_port = -1;
 		int active_atapi_port = -1;
+		Devs::StorageDmaBuffer disk_workspace, cdrom_workspace;
 		byte* cmd_list = nullptr;
 		byte* rx_fis = nullptr;
 		byte* cmd_table = nullptr;
@@ -72,9 +116,10 @@ namespace {
 		SerializedAhciDisk disk = {};
 		SerializedAhciCdrom cdrom = {};
 		volatile uint32 irq_global_is = 0;
-		volatile uint32 irq_port_is = 0;
-		volatile byte irq_waiting = 0;
-		volatile byte irq_seen = 0;
+		uint32 disk_irq_status = 0, cdrom_irq_status = 0;
+		// The IRQ and polling CPU must not race while acknowledging or retiring a port's saved error status.
+		Spinlock completion_lock;
+		Devs::StorageWaitContext completion_wait;
 
 		bool Bind(DeviceNode* ahci_node) {
 			if (!ahci_node) return false;
@@ -90,23 +135,28 @@ namespace {
 		}
 
 		bool AllocateBuffers() {
-			if (!cmd_list) cmd_list = (byte*)mempool.allocate(1024, 10);
-			if (!rx_fis) rx_fis = (byte*)mempool.allocate(256, 8);
-			if (!cmd_table) cmd_table = (byte*)mempool.allocate(256, 7);
-			if (!identify_buf) identify_buf = (byte*)mempool.allocate(512, 9);
-			if (!sector_buf) sector_buf = (byte*)mempool.allocate(512, 9);
-			return cmd_list && rx_fis && cmd_table && identify_buf && sector_buf;
+			if (cmd_list) return true;
+			if (!disk_workspace.Ensure(node, 0x1000, AhciDmaRequirements(abar))) return false;
+			cmd_list = disk_workspace.virt;
+			rx_fis = cmd_list + 0x400;
+			cmd_table = cmd_list + 0x500;
+			identify_buf = cmd_list + 0x600;
+			sector_buf = cmd_list + 0x800;
+			disk_workspace.MarkInFlight();
+			return true;
 		}
 
 		bool AllocateCdromBuffers() {
-			if (!cd_cmd_list) cd_cmd_list = (byte*)mempool.allocate(1024, 10);
-			if (!cd_rx_fis) cd_rx_fis = (byte*)mempool.allocate(256, 8);
-			if (!cd_cmd_table) cd_cmd_table = (byte*)mempool.allocate(256, 7);
-			if (!cd_identify_buf) cd_identify_buf = (byte*)mempool.allocate(512, 9);
-			if (!cd_capacity_buf) cd_capacity_buf = (byte*)mempool.allocate(512, 9);
-			if (!cd_sector_buf) cd_sector_buf = (byte*)mempool.allocate(2048, 11);
-			return cd_cmd_list && cd_rx_fis && cd_cmd_table &&
-				cd_identify_buf && cd_capacity_buf && cd_sector_buf;
+			if (cd_cmd_list) return true;
+			if (!cdrom_workspace.Ensure(node, 0x2000, AhciDmaRequirements(abar))) return false;
+			cd_cmd_list = cdrom_workspace.virt;
+			cd_rx_fis = cd_cmd_list + 0x400;
+			cd_cmd_table = cd_cmd_list + 0x500;
+			cd_identify_buf = cd_cmd_list + 0x600;
+			cd_capacity_buf = cd_cmd_list + 0x800;
+			cd_sector_buf = cd_cmd_list + 0x1000;
+			cdrom_workspace.MarkInFlight();
+			return true;
 		}
 
 		void DumpSummary() const {
@@ -184,28 +234,26 @@ namespace {
 		}
 
 		void SetupDisk() {
-			disk.SetTransaction(&transaction);
+			disk.SetHost(&transaction, node);
 			disk.Bind(abar, active_port);
 			if (cmd_list && rx_fis && cmd_table) {
 				disk.SetWorkspace(cmd_list, rx_fis, cmd_table);
 			}
-			disk.fn_irq_wait = nullptr;
+			disk.fn_irq_wait = ahci_irq_wait;
 			if (UsesInterruptCompletion()) {
-				disk.fn_irq_wait = ahci_irq_wait;
 				abar->ghc |= AHCI_GHC_IE | AHCI_GHC_AE;
 				abar->ports[active_port].ie = 0xFFFFFFFFu;
 			}
 		}
 
 		void SetupCdrom() {
-			cdrom.SetTransaction(&transaction);
+			cdrom.SetHost(&transaction, node);
 			cdrom.Bind(abar, active_atapi_port);
 			if (cd_cmd_list && cd_rx_fis && cd_cmd_table) {
 				cdrom.SetWorkspace(cd_cmd_list, cd_rx_fis, cd_cmd_table);
 			}
-			cdrom.fn_irq_wait = nullptr;
+			cdrom.fn_irq_wait = ahci_irq_wait;
 			if (UsesInterruptCompletion()) {
-				cdrom.fn_irq_wait = ahci_irq_wait;
 				abar->ghc |= AHCI_GHC_IE | AHCI_GHC_AE;
 				abar->ports[active_atapi_port].ie = 0xFFFFFFFFu;
 			}
@@ -442,30 +490,44 @@ namespace {
 		return nullptr;
 	}
 
+	struct AhciCompletionWait {
+		AHCI_Controller* controller;
+		int port_index;
+		uint32 slot_mask;
+	};
+
+	Devs::StorageWaitStatus ProbeAhciCompletion(void* context) {
+		auto& wait = *static_cast<AhciCompletionWait*>(context);
+		auto& controller = *wait.controller;
+		SpinlockLocal guard(&controller.completion_lock);
+		auto& port = controller.abar->ports[wait.port_index];
+		uint32& saved = wait.port_index == controller.active_port
+			? controller.disk_irq_status : controller.cdrom_irq_status;
+		const uint32 live = port.is;
+		const bool failed = ((saved | live) & AHCI_PxIS_TFES) != 0;
+		if (!failed && (port.ci & wait.slot_mask)) return Devs::StorageWaitStatus::Pending;
+		// Retire both snapshots under the IRQ lock so a delayed handler cannot poison the next command.
+		if (live) port.is = live;
+		saved = 0;
+		return failed ? Devs::StorageWaitStatus::Failed : Devs::StorageWaitStatus::Completed;
+	}
+
 	bool ahci_irq_wait(uni::AHCI_Port_Base* port_base, uint32 slot_mask) {
 		AHCI_Controller* controller = FindAhciController(port_base);
 		if (!controller || !controller->abar) return false;
 		if (port_base->port_index < 0 || port_base->port_index >= 32) return false;
-		auto& port = controller->abar->ports[port_base->port_index];
-		const bool interrupts_enabled = IC.TryMaskInterrupt();
-		controller->irq_seen = 0;
-		controller->irq_port_is = 0;
-		controller->irq_waiting = 1;
-		if (interrupts_enabled) IC.enInterrupt(true);
-		for (stduint spin = 0; spin < 5000000; ++spin) {
-			if (controller->irq_seen) {
-				controller->irq_waiting = 0;
-				if (controller->irq_port_is & AHCI_PxIS_TFES) return false;
-				return true;
-			}
-			if ((port.ci & slot_mask) == 0) {
-				controller->irq_waiting = 0;
-				if (port.is & AHCI_PxIS_TFES) return false;
-				return true;
-			}
-			__asm__ __volatile__("pause" ::: "memory");
+		AhciCompletionWait wait{controller, port_base->port_index, slot_mask};
+		auto outcome = Devs::WaitStorage(controller->completion_wait, ProbeAhciCompletion, &wait,
+			5 * CONFIG_SysTickFreq, 5000000u, controller->UsesInterruptCompletion());
+		if (outcome == Devs::StorageWaitStatus::TimedOut) outcome = ProbeAhciCompletion(&wait);
+		const bool disk_port = port_base->port_index == controller->active_port;
+		auto& workspace = disk_port ? controller->disk_workspace : controller->cdrom_workspace;
+		if (outcome != Devs::StorageWaitStatus::Completed) {
+			const bool stopped = disk_port ? controller->disk.RetireAfterFailure() : controller->cdrom.RetireAfterFailure();
+			if (stopped) workspace.MarkQuiesced();
+			return false;
 		}
-		controller->irq_waiting = 0;
+		workspace.SyncForCpu();
 		return true;
 	}
 
@@ -473,18 +535,21 @@ namespace {
 		for (auto& owner : ahci_controllers) {
 			if (!owner || !owner->abar || !owner->UsesInterruptCompletion()) continue;
 			AHCI_Controller& controller = *owner;
-			controller.irq_global_is = controller.abar->is;
-			if (!controller.irq_global_is) continue;
-			controller.irq_port_is = 0;
-			for0(port_index, 32) {
-				if (((controller.irq_global_is >> port_index) & 1u) == 0) continue;
-				auto& port = controller.abar->ports[port_index];
-				const uint32 port_status = port.is;
-				controller.irq_port_is |= port_status;
-				if (port_status) port.is = port_status;
+			{
+				SpinlockLocal guard(&controller.completion_lock);
+				controller.irq_global_is = controller.abar->is;
+				if (!controller.irq_global_is) continue;
+				for0(port_index, 32) {
+					if (((controller.irq_global_is >> port_index) & 1u) == 0) continue;
+					auto& port = controller.abar->ports[port_index];
+					const uint32 port_status = port.is;
+					if (int(port_index) == controller.active_port) controller.disk_irq_status |= port_status;
+					if (int(port_index) == controller.active_atapi_port) controller.cdrom_irq_status |= port_status;
+					if (port_status) port.is = port_status;
+				}
+				controller.abar->is = controller.irq_global_is;
 			}
-			controller.abar->is = controller.irq_global_is;
-			if (controller.irq_waiting) controller.irq_seen = 1;
+			Devs::NotifyStorageWait(controller.completion_wait);
 		}
 		IC.SendEOI(IRQ_AHCI);
 	}
@@ -552,8 +617,9 @@ static bool start_ahci_driver(DeviceNode* ahci_node) {
 	controller->DisableControllerInterrupts();
 	#endif
 	const bool interrupts_enabled = IC.TryMaskInterrupt();
-	ahci_controllers.Append(owner);
+	const bool retained = ahci_controllers.Append(owner);
 	if (interrupts_enabled) IC.enInterrupt(true);
+	if (!retained) return false;
 	if (controller->active_port >= 0) {
 		controller->SetupDisk();
 		controller->RegisterStorageNode();

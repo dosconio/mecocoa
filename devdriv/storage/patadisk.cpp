@@ -6,6 +6,7 @@
 // unchk: IDE1:0, IDE1:1
 
 #include "../../include/mecocoa.hpp"
+#include "../../include/devsman-storage.hpp"
 #include <c/storage/harddisk.h>
 #include <cpp/atomic>
 #include <cpp/Device/Bus/PCI.hpp>
@@ -47,6 +48,7 @@ struct IdeChannelState {
 	// The GSI handler can run on the BSP while another CPU owns the channel transaction.
 	uni::Atomic<byte> irq_waiting = 0;
 	uni::Atomic<byte> irq_seen = 0;
+	Devs::StorageWaitContext completion_wait;
 	#if _MCCA == 0x8664
 	ACPIGSIBinding gsi_binding{};
 	uni::Atomic<PataPIOPhase> pio_phase = PataPIOPhase::DataIn;
@@ -58,6 +60,7 @@ static char* single_sector = NULL;// file-hd used buffer
 
 struct PataDmaChannelState {
 	word bmide_base = 0;
+	Devs::StorageDmaBuffer prdt_buffer, bounce_buffer;
 	PataBmidePrd* prdt = nullptr;
 	byte* bounce = nullptr;
 	uint32 prdt_address = 0;
@@ -77,35 +80,8 @@ static constexpr stduint PataDmaPageSize = 0x1000;
 // Intel 82801DB ICH4 datasheet, section 10.2.2: BMIS bit 0 reports engine activity.
 static constexpr byte PataBmideStatusActive = 0x01;
 
-static void free_pata_dma_page(void* buffer) {
-	if (!buffer) return;
-	if (dma_low_pool.IsInRange(buffer)) dma_low_pool.Deallocate(buffer, PataDmaPageSize);
-	else mempool.deallocate(buffer, PataDmaPageSize);
-}
-
-static void* allocate_pata_dma_page(DeviceNode* node, uint32& device_address) {
-	void* buffer = dma_low_pool.Allocate(PataDmaPageSize);
-	if (!buffer) buffer = mempool.allocate(PataDmaPageSize, 12);
-	if (!buffer) return nullptr;
-	const uint64 physical = uint64(_IMM(buffer));
-	// ICH4 sections 5.15.2.1/10.2.3: 32-bit DMA addresses, aligned PRDT, no 64KB crossing.
-	if ((physical & (PataDmaPageSize - 1)) || physical > 0x100000000ull - PataDmaPageSize) {
-		free_pata_dma_page(buffer);
-		return nullptr;
-	}
-	Iova::DmaMapping mapping{};
-	if (!Iova::MapDeviceDma(node, _IMM(buffer), PataDmaPageSize, Iova::DmaMappingFlag::Identity, mapping)) {
-		free_pata_dma_page(buffer);
-		return nullptr;
-	}
-	if ((mapping.device_address & (PataDmaPageSize - 1)) || mapping.device_address > 0x100000000ull - PataDmaPageSize) {
-		if (!mapping.translated || Iova::UnmapDeviceDma(node, mapping.device_address, PataDmaPageSize)) free_pata_dma_page(buffer);
-		return nullptr;
-	}
-	device_address = uint32(mapping.device_address);
-	MemSet(buffer, 0, PataDmaPageSize);
-	return buffer;
-}
+// ICH4 sections 5.15.2.1/10.2.3: 32-bit DMA addresses, aligned PRDT, no 64KB crossing.
+static constexpr Devs::StorageDmaRequirements PataDmaRequirements{12, 0xFFFFFFFFull, 0x10000, true};
 
 static bool stop_pata_dma(PataDmaChannelState& state) {
 	const byte command = innpb(state.bmide_base + BMIDE_REG_CMD);
@@ -113,6 +89,8 @@ static bool stop_pata_dma(PataDmaChannelState& state) {
 	for0(spin, 1000000) {
 		if (!(innpb(state.bmide_base + BMIDE_REG_STATUS) & PataBmideStatusActive)) {
 			state.quiesced = true;
+			state.prdt_buffer.MarkQuiesced();
+			state.bounce_buffer.MarkQuiesced();
 			return true;
 		}
 		_ASM volatile("pause" ::: "memory");
@@ -165,19 +143,16 @@ static void initialize_pata_dma_channels_once(DeviceNode* pata_node) {
 		auto& state = pata_dma_channels[channel];
 		state.bmide_base = word(bmide_base + channel * 8);
 		if (!stop_pata_dma(state)) continue;
-		state.prdt = static_cast<PataBmidePrd*>(allocate_pata_dma_page(pata_node, state.prdt_address));
-		state.bounce = static_cast<byte*>(allocate_pata_dma_page(pata_node, state.bounce_address));
-		state.ready = state.prdt && state.bounce;
+		state.ready = state.prdt_buffer.Ensure(pata_node, PataDmaPageSize, PataDmaRequirements) &&
+			state.bounce_buffer.Ensure(pata_node, PataDmaPageSize, PataDmaRequirements);
 		if (!state.ready) {
-			if (state.prdt && Iova::UnmapDeviceDma(pata_node, state.prdt_address, PataDmaPageSize)) {
-				free_pata_dma_page(state.prdt);
-				state.prdt = nullptr;
-			}
-			if (state.bounce && Iova::UnmapDeviceDma(pata_node, state.bounce_address, PataDmaPageSize)) {
-				free_pata_dma_page(state.bounce);
-				state.bounce = nullptr;
-			}
+			(void)state.prdt_buffer.Release();
+			(void)state.bounce_buffer.Release();
 		}
+		state.prdt = reinterpret_cast<PataBmidePrd*>(state.prdt_buffer.virt);
+		state.bounce = state.bounce_buffer.virt;
+		state.prdt_address = uint32(state.prdt_buffer.device_address);
+		state.bounce_address = uint32(state.bounce_buffer.device_address);
 		ploginfo("[PATA-DMA] ch%u init ready=%u BMIDE=%[16H] prdt=%p->%[32H] bounce=%p->%[32H] low=%u",
 			(stduint)channel,
 			(stduint)(state.ready ? 1u : 0u),
@@ -293,6 +268,7 @@ void Handint_HDD1()
 	if (ch.irq_waiting) {
 		ch.irq_waiting = 0;
 		ch.irq_seen = 1;
+		Devs::NotifyStorageWait(ch.completion_wait);
 	}
 	IC.SendEOI(IRQ_ATA_DISK1);
 }
@@ -305,6 +281,7 @@ void Handint_HDD()// HDD Master
 	if (ch.irq_waiting) {
 		ch.irq_waiting = 0;
 		ch.irq_seen = 1;
+		Devs::NotifyStorageWait(ch.completion_wait);
 	}
 	IC.SendEOI(IRQ_ATA_DISK0); // Acknowledge interrupt
 }
@@ -340,17 +317,20 @@ static bool DispatchPataGSI(void* context) {
 	if (state.pio_phase.load(uni::MemoryOrder_Acquire) == PataPIOPhase::Dma) {
 		auto& dma = pata_dma_channels[channel];
 		if (!dma.bmide_base) return false;
-		SpinlockLocal irq_guard(&dma.irq_lock);
-		const byte bmide_status = innpb(dma.bmide_base + BMIDE_REG_STATUS);
-		if (!(bmide_status & (BMIDE_STATUS_IRQ | BMIDE_STATUS_ERROR))) return false;
-		// Preserve completion/error bits before W1C; the waiting CPU may not run on the BSP.
-		dma.irq_status.store(byte(dma.irq_status.load(uni::MemoryOrder_Relaxed) | bmide_status), uni::MemoryOrder_Release);
-		(void)innpb(io_base + 7);
-		outpb(dma.bmide_base + BMIDE_REG_STATUS, bmide_status);
-		if (state.irq_waiting) {
-			state.irq_waiting = 0;
-			state.irq_seen = 1;
+		{
+			SpinlockLocal irq_guard(&dma.irq_lock);
+			const byte bmide_status = innpb(dma.bmide_base + BMIDE_REG_STATUS);
+			if (!(bmide_status & (BMIDE_STATUS_IRQ | BMIDE_STATUS_ERROR))) return false;
+			// Preserve completion/error bits before W1C; the waiting CPU may not run on the BSP.
+			dma.irq_status.store(byte(dma.irq_status.load(uni::MemoryOrder_Relaxed) | bmide_status), uni::MemoryOrder_Release);
+			(void)innpb(io_base + 7);
+			outpb(dma.bmide_base + BMIDE_REG_STATUS, bmide_status);
+			if (state.irq_waiting) {
+				state.irq_waiting = 0;
+				state.irq_seen = 1;
+			}
 		}
+		Devs::NotifyStorageWait(state.completion_wait);
 		return true;
 	}
 	const byte status = innpb(ctrl_base);
@@ -366,6 +346,7 @@ static bool DispatchPataGSI(void* context) {
 	state.irq_waiting = 0;
 	state.irq_seen = 1;
 	// The shared GSI dispatcher sends EOI after all device filters return.
+	Devs::NotifyStorageWait(state.completion_wait);
 	return true;
 }
 
@@ -389,76 +370,72 @@ static bool BindPataGSI(byte channel) {
 }
 #endif
 
+struct PataStatusWait {
+	Harddisk_PATA* disk;
+	stduint mask, value;
+};
+
+static Devs::StorageWaitStatus ProbePataStatus(void* context) {
+	auto& wait = *static_cast<PataStatusWait*>(context);
+	return (wait.disk->getStatus() & wait.mask) == wait.value
+		? Devs::StorageWaitStatus::Completed : Devs::StorageWaitStatus::Pending;
+}
+
 static bool waitfor(Harddisk_PATA* hdd, stduint mask, stduint val, stduint timeout_second)// return seccess
 {
-	if (!hdd) return false;
+	if (!hdd || hdd->getHigID() >= numsof(g_ide_channels)) return false;
 	const stduint safe_timeout = timeout_second ? timeout_second : 1;
-	const stduint timeout_ticks = safe_timeout * CONFIG_SysTickFreq;
-	const stduint start_tick = tick;
-	const stduint max_spins = safe_timeout * 2000000;
-	stduint spin = 0;
-
-	while (true) {
-		if ((hdd->getStatus() & mask) == val)
-			return true;
-		if (tick != start_tick && (tick - start_tick >= timeout_ticks))
-			return false;
-		if (++spin >= max_spins)
-			return false;
-		__asm__ __volatile__("pause" ::: "memory");
-	}
+	PataStatusWait wait{hdd, mask, val};
+	return Devs::WaitStorage(g_ide_channels[hdd->getHigID()].completion_wait, ProbePataStatus, &wait,
+		safe_timeout * CONFIG_SysTickFreq, safe_timeout * 2000000, false) == Devs::StorageWaitStatus::Completed;
 }
 static bool hd_cmd_wait(Harddisk_PATA* hdd) {
 	return waitfor(hdd, STATUS_BSY, 0, HD_WAITFOR_TIMEOUT);
 }
 
+struct PataInterruptWait {
+	byte channel;
+	bool wait_for_irq;
+};
+
+static Devs::StorageWaitStatus ProbePataInterrupt(void* context) {
+	auto& wait = *static_cast<PataInterruptWait*>(context);
+	auto& ch = g_ide_channels[wait.channel];
+	const word io_base = wait.channel == 0 ? PORT_IDE_CommandBlock_0 : PORT_IDE_CommandBlock_1;
+	#if _MCCA == 0x8664
+	const word ctrl_base = wait.channel == 0 ? PORT_IDE_ControlBlock_0 : PORT_IDE_ControlBlock_1;
+	// Do not acknowledge INTRQ while the routed handler is still expected to run.
+	const byte status = innpb(ctrl_base);
+	if (PataPIOReady(status, ch) && (ch.irq_seen || !wait.wait_for_irq)) {
+		if (!wait.wait_for_irq) (void)innpb(io_base + 7);
+		return (status & (STATUS_ERR | STATUS_DF)) ? Devs::StorageWaitStatus::Failed : Devs::StorageWaitStatus::Completed;
+	}
+	#else
+	if (ch.irq_seen) return Devs::StorageWaitStatus::Completed;
+	const byte status = innpb(io_base + 7);
+	if (!(status & STATUS_BSY)) return Devs::StorageWaitStatus::Completed;
+	#endif
+	return Devs::StorageWaitStatus::Pending;
+}
+
 static bool hd_int_wait_channel(byte channel) {
 	if (channel >= 2) return false;
 	auto& ch = g_ide_channels[channel];
-	const word io_base = (channel == 0) ? PORT_IDE_CommandBlock_0 : PORT_IDE_CommandBlock_1;
 	#if _MCCA == 0x8664
-	const word ctrl_base = channel == 0 ? PORT_IDE_ControlBlock_0 : PORT_IDE_ControlBlock_1;
 	// Boot probing with IF clear must poll rather than await an undeliverable IRQ.
 	const bool wait_for_irq = ch.gsi_binding.active && (getFlags() & 0x200u);
+	#else
+	const bool wait_for_irq = (getFlags() & 0x200u) != 0;
 	#endif
-	const stduint start_tick = tick;
-	const stduint timeout_ticks = HD_WAITFOR_TIMEOUT * CONFIG_SysTickFreq;
-	const stduint max_spins = HD_WAITFOR_TIMEOUT * 2000000;
-	stduint spin = 0;
-
-	while (true) {
-		#if _MCCA == 0x8664
-		// Do not acknowledge INTRQ while the routed handler is still expected to run.
-		const byte status = innpb(ctrl_base);
-		if (PataPIOReady(status, ch) && (ch.irq_seen || !wait_for_irq)) {
-			if (!wait_for_irq) (void)innpb(io_base + 7);
-			ch.irq_seen = 0;
-			ch.irq_waiting = 0;
-			return !(status & (STATUS_ERR | STATUS_DF));
-		}
-		#else
-		if (ch.irq_seen) {
-			ch.irq_seen = 0;
-			ch.irq_waiting = 0;
-			return true;
-		}
-		const byte status = innpb(io_base + 7);
-		if (!(status & STATUS_BSY)) {
-			ch.irq_seen = 0;
-			ch.irq_waiting = 0;
-			return true;
-		}
-		#endif
-		if (tick != start_tick && (tick - start_tick >= timeout_ticks))
-			break;
-		if (++spin >= max_spins)
-			break;
-		__asm__ __volatile__("pause" ::: "memory");
-	}
+	PataInterruptWait wait{channel, wait_for_irq};
+	const auto outcome = Devs::WaitStorage(ch.completion_wait, ProbePataInterrupt, &wait,
+		HD_WAITFOR_TIMEOUT * CONFIG_SysTickFreq, HD_WAITFOR_TIMEOUT * 2000000, wait_for_irq);
 	ch.irq_waiting = 0;
-	#if _MCCA == 0x8664
-	const byte status = innpb(io_base + 7);
 	ch.irq_seen = 0;
+	if (outcome != Devs::StorageWaitStatus::TimedOut) return outcome == Devs::StorageWaitStatus::Completed;
+	#if _MCCA == 0x8664
+	const word io_base = channel == 0 ? PORT_IDE_CommandBlock_0 : PORT_IDE_CommandBlock_1;
+	const byte status = innpb(io_base + 7);
 	if (PataPIOReady(status, ch)) {
 		if (wait_for_irq && !ch.irq_fallback_reported) {
 			ch.irq_fallback_reported = true;
@@ -525,6 +502,36 @@ static bool finish_pata_dma(Harddisk_PATA& hd, PataDmaChannelState& state, bool 
 	return true;
 }
 
+struct PataDmaWait {
+	Harddisk_PATA* disk;
+	PataDmaChannelState* dma;
+	byte observed = 0;
+};
+
+static Devs::StorageWaitStatus ProbePataDma(void* context) {
+	auto& wait = *static_cast<PataDmaWait*>(context);
+	const byte bmide_status = byte(innpb(wait.dma->bmide_base + BMIDE_REG_STATUS) |
+		wait.dma->irq_status.load(uni::MemoryOrder_Acquire));
+	wait.observed |= bmide_status;
+	if (bmide_status & BMIDE_STATUS_ERROR) return Devs::StorageWaitStatus::Failed;
+	const word ctrl_base = wait.disk->getHigID() == 0 ? PORT_IDE_ControlBlock_0 : PORT_IDE_ControlBlock_1;
+	if ((bmide_status & BMIDE_STATUS_IRQ) && !(innpb(ctrl_base) & STATUS_BSY)) return Devs::StorageWaitStatus::Completed;
+	return Devs::StorageWaitStatus::Pending;
+}
+
+static bool WaitPataDma(Harddisk_PATA& hd, PataDmaChannelState& state, byte& observed) {
+	PataDmaWait wait{&hd, &state};
+	#if _MCCA == 0x8664
+	const bool interrupt_driven = g_ide_channels[hd.getHigID()].gsi_binding.active;
+	#else
+	const bool interrupt_driven = true;
+	#endif
+	const auto outcome = Devs::WaitStorage(g_ide_channels[hd.getHigID()].completion_wait, ProbePataDma, &wait,
+		(HD_TIMEOUT / 1000) * CONFIG_SysTickFreq, (HD_TIMEOUT / 1000) * 2000000, interrupt_driven);
+	observed = wait.observed;
+	return outcome == Devs::StorageWaitStatus::Completed;
+}
+
 static bool hd_read_dma_once(Harddisk_PATA& hd, stduint BlockIden, void* Dest) {
 	if (hd.Block_Size != 512 || hd.getHigID() >= numsof(pata_dma_channels) || !Dest) return false;
 	if (hd.getID() >= MAX_DRIVES || !pata_dma_capable[hd.getID()] || BlockIden > 0x0FFFFFFFu) return false;
@@ -563,33 +570,12 @@ static bool hd_read_dma_once(Harddisk_PATA& hd, stduint BlockIden, void* Dest) {
 
 	_ASM volatile("" ::: "memory");
 	state.quiesced = false;
+	state.prdt_buffer.MarkInFlight();
+	state.bounce_buffer.MarkInFlight();
 	outpb(state.bmide_base + BMIDE_REG_CMD, BMIDE_CMD_READ | BMIDE_CMD_START);
 
-	const word ctrl_base = (hd.getHigID() == 0) ? PORT_IDE_ControlBlock_0 : PORT_IDE_ControlBlock_1;
-	const stduint start_tick = tick;
-	const stduint timeout_ticks = (HD_TIMEOUT / 1000) * CONFIG_SysTickFreq;
-	const stduint max_spins = (HD_TIMEOUT / 1000) * 2000000;
-	stduint spin = 0;
-	bool completed = false;
 	byte observed_status = 0;
-
-	while (true) {
-		const byte bmide_status = byte(innpb(state.bmide_base + BMIDE_REG_STATUS) | state.irq_status.load(uni::MemoryOrder_Acquire));
-		observed_status |= bmide_status;
-		if (bmide_status & BMIDE_STATUS_ERROR) break;
-		if (bmide_status & BMIDE_STATUS_IRQ) {
-			const byte status = innpb(ctrl_base);
-			if (!(status & STATUS_BSY)) {
-				completed = true;
-				break;
-			}
-		}
-		if (tick != start_tick && (tick - start_tick >= timeout_ticks))
-			break;
-		if (++spin >= max_spins)
-			break;
-		__asm__ __volatile__("pause" ::: "memory");
-	}
+	const bool completed = WaitPataDma(hd, state, observed_status);
 
 	if (!finish_pata_dma(hd, state, completed, observed_status)) return false;
 
@@ -635,33 +621,12 @@ static bool hd_write_dma_once(Harddisk_PATA& hd, stduint BlockIden, const void* 
 
 	_ASM volatile("" ::: "memory");
 	state.quiesced = false;
+	state.prdt_buffer.MarkInFlight();
+	state.bounce_buffer.MarkInFlight();
 	outpb(state.bmide_base + BMIDE_REG_CMD, BMIDE_CMD_START);
 
-	const word ctrl_base = (hd.getHigID() == 0) ? PORT_IDE_ControlBlock_0 : PORT_IDE_ControlBlock_1;
-	const stduint start_tick = tick;
-	const stduint timeout_ticks = (HD_TIMEOUT / 1000) * CONFIG_SysTickFreq;
-	const stduint max_spins = (HD_TIMEOUT / 1000) * 2000000;
-	stduint spin = 0;
-	bool completed = false;
 	byte observed_status = 0;
-
-	while (true) {
-		const byte bmide_status = byte(innpb(state.bmide_base + BMIDE_REG_STATUS) | state.irq_status.load(uni::MemoryOrder_Acquire));
-		observed_status |= bmide_status;
-		if (bmide_status & BMIDE_STATUS_ERROR) break;
-		if (bmide_status & BMIDE_STATUS_IRQ) {
-			const byte status = innpb(ctrl_base);
-			if (!(status & STATUS_BSY)) {
-				completed = true;
-				break;
-			}
-		}
-		if (tick != start_tick && (tick - start_tick >= timeout_ticks))
-			break;
-		if (++spin >= max_spins)
-			break;
-		__asm__ __volatile__("pause" ::: "memory");
-	}
+	const bool completed = WaitPataDma(hd, state, observed_status);
 
 	return finish_pata_dma(hd, state, completed, observed_status);
 }

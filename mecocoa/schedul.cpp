@@ -206,6 +206,7 @@ bool WakeOneIdleApForReadyWork() {
 
 extern SpinlockBlock<unsigned> cores_count;
 extern "C" void AP_Main(stduint core_id) {
+	Taskman::InitializeCurrentCoreId(core_id);
 	auto percore = Taskman::PCU_CORES_PERCORE[core_id];
 	if (!percore) {
 		plogerro("[COREMAN] AP core%u missing PERCORE", core_id);
@@ -410,7 +411,7 @@ ThreadBlock* Taskman::PickNext() {
 			if (!node->just_schedule && node->state != ThreadBlock::State::Running) {
 				bool active_on_other_cpu = false;
 				for0 (c, Taskman::PCU_CORES) {
-					if (c != (int)current_cpuid && current_thread(c) == node) {
+					if (c != current_cpuid && current_thread(c) == node) {
 						active_on_other_cpu = true;
 						#if 0 && defined(_DEBUG)
 						ploginfo("[SMP] PickNext: Th%u already running on CPU%u, attempted pick on CPU%u!", node->tid, (unsigned)c, (unsigned)current_cpuid);
@@ -456,7 +457,7 @@ ThreadBlock* Taskman::PickNext() {
 				if (!node->just_schedule && node->state != ThreadBlock::State::Running) {
 					bool active_on_other_cpu = false;
 					for0 (c, Taskman::PCU_CORES) {
-						if (c != (int)current_cpuid && current_thread(c) == node) {
+						if (c != current_cpuid && current_thread(c) == node) {
 							active_on_other_cpu = true;
 							#if 0 && defined(_DEBUG)
 							ploginfo("[SMP] PickNext (expired): Th%u already running on CPU%u, attempted pick on CPU%u!", node->tid, (unsigned)c, (unsigned)current_cpuid);

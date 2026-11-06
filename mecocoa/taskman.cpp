@@ -22,34 +22,63 @@ extern Spinlock scheduler_lock;
 // #pragma GCC optimize("O2")
 
 #if _MCCA == 0x8632 || _MCCA == 0x8664
+namespace {
+	enum class CurrentCoreIdMethod : byte { Cpuid, Rdtscp, Rdpid };
+	CurrentCoreIdMethod current_core_id_method = CurrentCoreIdMethod::Cpuid;
+	uint32 current_lapic_id_cpuid_leaf = 0;
+	// APs publish this only after binding their local ID; until then only BSP runs kernel code.
+	uni::Atomic<byte> current_core_id_smp = 0;
+	constexpr uint32 Ia32TscAuxMsr = 0xC0000103u; // Intel SDM Vol. 4, IA32_TSC_AUX; bits 63:32 are reserved.
+
+	uint32 ReadCurrentLapicId(uint32 leaf) {
+		uint32 a = 0, b = 0, c = 0, d = 0;
+		_IO_CPUID(leaf, 0, &a, &b, &c, &d);
+		if (leaf == 1) return (b >> 24) & 0xFF;
+		return leaf == 0x8000001Eu ? a : d;
+	}
+}
+
 uint32 GetCurrentLapicId() {
+	// BSP selects the leaf once; later AP initialization and legacy CPUs execute only that leaf.
+	if (current_lapic_id_cpuid_leaf) return ReadCurrentLapicId(current_lapic_id_cpuid_leaf);
 	uint32 a = 0, b = 0, c = 0, d = 0;
 	// Intel SDM Vol. 2A, CPUID leaves 1FH/0BH: EDX contains the full x2APIC ID.
 	_IO_CPUID(0, 0, &a, &b, &c, &d);
 	const uint32 maximum_leaf = a;
 	if (maximum_leaf >= 0x1Fu) {
 		_IO_CPUID(0x1F, 0, &a, &b, &c, &d);
-		if ((b & 0xFFFFu) && (c & 0xFF00u)) return d;
+		if ((b & 0xFFFFu) && (c & 0xFF00u)) {
+			current_lapic_id_cpuid_leaf = 0x1F;
+			return d;
+		}
 	}
 	if (maximum_leaf >= 0x0Bu) {
 		_IO_CPUID(0x0B, 0, &a, &b, &c, &d);
-		if ((b & 0xFFFFu) && (c & 0xFF00u)) return d;
+		if ((b & 0xFFFFu) && (c & 0xFF00u)) {
+			current_lapic_id_cpuid_leaf = 0x0B;
+			return d;
+		}
 	}
 	// AMD APM Vol. 3, CPUID: Fn8000_0026 EDX / Fn8000_001E EAX report the extended APIC ID.
 	_IO_CPUID(0x80000000u, 0, &a, &b, &c, &d);
 	const uint32 maximum_extended_leaf = a;
 	if (maximum_extended_leaf >= 0x80000026u) {
 		_IO_CPUID(0x80000026u, 0, &a, &b, &c, &d);
-		if ((b & 0xFFFFu) && (c & 0xFF00u)) return d;
+		if ((b & 0xFFFFu) && (c & 0xFF00u)) {
+			current_lapic_id_cpuid_leaf = 0x80000026u;
+			return d;
+		}
 	}
 	if (maximum_extended_leaf >= 0x8000001Eu) {
 		_IO_CPUID(0x80000001u, 0, &a, &b, &c, &d);
 		if (c & (1u << 22)) { // AMD TopologyExtensions gates Fn8000_001E.
 			_IO_CPUID(0x8000001Eu, 0, &a, &b, &c, &d);
+			current_lapic_id_cpuid_leaf = 0x8000001Eu;
 			return a;
 		}
 	}
 	_IO_CPUID(1, 0, &a, &b, &c, &d);
+	current_lapic_id_cpuid_leaf = 1;
 	return (b >> 24) & 0xFF; // Legacy Initial APIC ID is only eight bits wide.
 }
 
@@ -59,17 +88,56 @@ uint32 GetCurrentLapicId() {
 	loop HALT();
 }
 
-stduint Taskman::getID() {
-	const uint32 core_count = g_core_id_map_count.load(uni::MemoryOrder_Acquire);
-	if (!core_count) {
-		uint32 a = 0, b = 0, c = 0, d = 0;
-		_IO_CPUID(1, 0, &a, &b, &c, &d);
-		// Intel SDM Vol. 3A, IA32_APIC_BASE.BSP (bit 8): only BSP may use the early CPU-0 fallback.
-		if (!(d & (1u << 9)) || !(d & (1u << 5)) ||
-			(getMSR(x86MSR::APIC_BASE) & (1ull << 8))) return 0;
-		FailCurrentCoreId(GetCurrentLapicId());
-	}
+void Taskman::InitializeCurrentCoreId(stduint core_id) {
+	const stduint core_count = core_id ?
+		g_core_id_map_count.load(uni::MemoryOrder_Acquire) : PCU_CORES;
 	const uint32 lapic_id = GetCurrentLapicId();
+	if (core_id >= core_count || !PCU_CORES_PERCORE[core_id] ||
+		PCU_CORES_PERCORE[core_id]->lapic_id != lapic_id) FailCurrentCoreId(lapic_id);
+	if (!core_id) {
+		uint32 a = 0, b = 0, c = 0, d = 0;
+		// Intel SDM Vol. 2, CPUID: 07H.0:ECX[22] selects RDPID; 80000001H:EDX[27] selects RDTSCP.
+		_IO_CPUID(0, 0, &a, &b, &c, &d);
+		if (a >= 7) {
+			_IO_CPUID(7, 0, &a, &b, &c, &d);
+			if (c & (1u << 22)) current_core_id_method = CurrentCoreIdMethod::Rdpid;
+		}
+		if (current_core_id_method == CurrentCoreIdMethod::Cpuid) {
+			_IO_CPUID(0x80000000u, 0, &a, &b, &c, &d);
+			if (a >= 0x80000001u) {
+				_IO_CPUID(0x80000001u, 0, &a, &b, &c, &d);
+				if (d & (1u << 27)) current_core_id_method = CurrentCoreIdMethod::Rdtscp;
+			}
+		}
+	}
+	if (current_core_id_method != CurrentCoreIdMethod::Cpuid) {
+		// Store ID + 1 so an uninitialized TSC_AUX value of zero cannot silently identify BSP.
+		asm volatile("wrmsr" : : "c"(Ia32TscAuxMsr), "a"(uint32(core_id) + 1u), "d"(0u) : "memory");
+	}
+	// BSP published the immutable access method with the core map; APs initialize TSC_AUX before this release.
+	if (core_id) current_core_id_smp.store(1, uni::MemoryOrder_Release);
+}
+
+stduint Taskman::getID() {
+	if (!current_core_id_smp.load(uni::MemoryOrder_Acquire)) return 0;
+	const uint32 core_count = g_core_id_map_count.load(uni::MemoryOrder_Acquire);
+	if (current_core_id_method != CurrentCoreIdMethod::Cpuid) {
+		uint32 core_id;
+		if (current_core_id_method == CurrentCoreIdMethod::Rdpid) {
+			stduint local_id;
+			asm volatile("rdpid %0" : "=r"(local_id));
+			core_id = uint32(local_id) - 1u;
+		}
+		else {
+			uint32 low, high, local_id;
+			asm volatile("rdtscp" : "=a"(low), "=d"(high), "=c"(local_id));
+			core_id = local_id - 1u;
+		}
+		if (core_id < core_count) return core_id;
+		FailCurrentCoreId(ReadCurrentLapicId(current_lapic_id_cpuid_leaf));
+	}
+	// Compatibility path for CPUs without TSC_AUX: one CPUID using the leaf cached during BSP initialization.
+	const uint32 lapic_id = ReadCurrentLapicId(current_lapic_id_cpuid_leaf);
 	if (lapic_id == CORE_ID_INVALID) FailCurrentCoreId(lapic_id);
 	if (lapic_id < LAPIC_ID_MAP_SIZE) {
 		const auto core_id = g_lapicid_to_coreid[lapic_id];

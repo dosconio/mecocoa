@@ -166,6 +166,9 @@ static void SetPercoreFore(stduint cpuid) {
 	_ASM("LLDT %w0" : : "r"(SegGLDT) : "memory");
 	#endif
 
+	#if _MCCA == 0x8632 || _MCCA == 0x8664
+	Taskman::InitializeCurrentCoreId(cpuid);
+	#endif
 	// Release publishes complete core records, stacks and direct maps before APs can use them.
 	g_core_id_map_count.store(uint32(Taskman::PCU_CORES), uni::MemoryOrder_Release);
 }

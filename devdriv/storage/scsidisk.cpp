@@ -3,6 +3,7 @@
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 
 #include "../../include/mecocoa.hpp"
+#include "../../include/devsman-storage.hpp"
 #include <c/storage/harddisk.h>
 #include <cpp/Device/Bus/PCI.hpp>
 #include <cpp/Device/Storage/SCSI/BusLogic.hpp>
@@ -20,68 +21,13 @@ namespace {
 	static constexpr uint16 PciCommandInterruptDisable = 1u << 10;
 	stduint g_scsi_controller_count = 0;
 
-	struct DmaRegion {
-		byte* virt = nullptr;
-		uint32 device_address = 0;
-		stduint size = 0;
-		bool translated = false;
-
-		static void FreeBuffer(void* buffer, stduint bytes) {
-			if (dma_low_pool.IsInRange(buffer)) dma_low_pool.Deallocate(buffer, bytes);
-			else mempool.deallocate(buffer, bytes);
-		}
-
-		bool Release(DeviceNode* node) {
-			if (!virt) return true;
-			if (translated && !Iova::UnmapDeviceDma(node, device_address, size)) return false;
-			FreeBuffer(virt, size);
-			virt = nullptr;
-			device_address = 0;
-			size = 0;
-			translated = false;
-			return true;
-		}
-
-		bool Ensure(DeviceNode* node, stduint want_size) {
-			if (!want_size || uint64(want_size) > 0x100000000ull - PAGE_SIZE) return false;
-			if (virt && size >= want_size) return true;
-			// Only called with no command in flight; never replace a buffer still owned by the adapter.
-			if (!Release(node)) return false;
-			const stduint bytes = (want_size + PAGE_SIZE - 1) & ~(stduint(PAGE_SIZE) - 1);
-			byte* buf = bytes <= 0x10000 ? static_cast<byte*>(dma_low_pool.Allocate(bytes)) : nullptr;
-			if (!buf) buf = static_cast<byte*>(mempool.allocate(bytes, 12));
-			if (!buf) return false;
-			const uint64 physical = uint64(_IMM(buf));
-			// BusLogic mailboxes/CCBs and MPI 32-bit request/reply/SGE formats use low DMA addresses on x64 too.
-			if ((physical & (PAGE_SIZE - 1)) || physical > 0x100000000ull - bytes) {
-				FreeBuffer(buf, bytes);
-				return false;
-			}
-			Iova::DmaMapping mapping{};
-			if (!Iova::MapDeviceDma(node, _IMM(buf), bytes, Iova::DmaMappingFlag::Identity, mapping)) {
-				FreeBuffer(buf, bytes);
-				return false;
-			}
-			if ((mapping.device_address & (PAGE_SIZE - 1)) || mapping.device_address > 0x100000000ull - bytes) {
-				// Retain the page if invalidation fails: freeing a device-reachable mapping would be unsafe.
-				if (!mapping.translated || Iova::UnmapDeviceDma(node, mapping.device_address, bytes)) FreeBuffer(buf, bytes);
-				return false;
-			}
-			virt = buf;
-			device_address = uint32(mapping.device_address);
-			size = bytes;
-			translated = mapping.translated;
-			MemSet(virt, 0, size);
-			return true;
-		}
-	};
+	// BusLogic mailboxes/CCBs and MPI 32-bit request/reply/SGE formats use low DMA addresses on x64 too.
+	static constexpr Devs::StorageDmaRequirements ScsiDmaRequirements{12, 0xFFFFFFFFull, 0, true};
 
 	struct ScsiAsyncState {
 		ACPIGSIBinding interrupt{};
-		uni::Atomic<byte> service_pending{0};
-		uni::Atomic<stduint> waiter{~stduint(0)};
-		bool deadline_armed = false;
-		uint32 service_deadline = 0;
+		Devs::StorageWaitContext completion_wait;
+		Devs::StorageTimer service_timer;
 		// Serialize BusLogic interrupt-register acknowledgement against polling administrative commands on another CPU.
 		Spinlock interrupt_register_lock;
 	};
@@ -100,20 +46,23 @@ namespace {
 
 		static bool AllocateDma(void* context, stduint bytes, uni::SCSI::CommandDma& buffer) {
 			auto* controller = static_cast<Controller*>(context);
-			auto* region = new (std::nothrow_t{}) DmaRegion();
+			auto* region = new (std::nothrow_t{}) Devs::StorageDmaBuffer();
 			if (!region) return false;
-			if (!region->Ensure(controller->node, bytes)) {
+			if (!region->Ensure(controller->node, bytes, ScsiDmaRequirements)) {
 				delete region;
 				return false;
 			}
-			buffer = {region->virt, region->device_address, region->size, region};
+			region->MarkInFlight();
+			buffer = {region->virt, uint32(region->device_address), region->size, region};
 			return true;
 		}
 
-		static void ReleaseDma(void* context, uni::SCSI::CommandDma& buffer) {
-			auto* region = static_cast<DmaRegion*>(buffer.token);
+		static void ReleaseDma(void*, uni::SCSI::CommandDma& buffer) {
+			auto* region = static_cast<Devs::StorageDmaBuffer*>(buffer.token);
 			if (!region) return;
-			if (!region->Release(static_cast<Controller*>(context)->node)) {
+			// CommandRequest releases only before submission or after quiescence; pinned requests never reach here.
+			region->MarkQuiesced();
+			if (!region->Release()) {
 				plogwarn("[SCSI] retaining DMA mapping after failed invalidation");
 				return;
 			}
@@ -121,27 +70,22 @@ namespace {
 			buffer = {};
 		}
 
-		static void Completed(void*, stduint origin) {
-			if (origin != ~stduint(0)) (void)Taskman::UnblockThread(origin, ThreadBlock::BlockReason::BR_Resting);
+		static void Completed(void* context, stduint origin) {
+			auto& controller = *static_cast<Controller*>(context);
+			Devs::NotifyStorageWait(controller.async.completion_wait, origin);
 		}
 
 		static void ArmDeadline(Controller& controller) {
 			uint32 milliseconds = controller.adapter.NextTimeout();
 			if (milliseconds == 0xFFFFFFFFu) {
-				Systimex::CancelDeferredCallback(_IMM(&controller), Deadline);
-				controller.async.deadline_armed = false;
+				controller.async.service_timer.Cancel();
 				return;
 			}
 			// Without a routed interrupt, a short deferred service interval provides the polling fallback.
 			if (!controller.adapter.IsInterruptDriven() && milliseconds > 10) milliseconds = 10;
-			const uint32 next = Milliseconds(nullptr) + milliseconds;
-			if (controller.async.deadline_armed && int32(next - controller.async.service_deadline) >= 0) return;
-			Systimex::CancelDeferredCallback(_IMM(&controller), Deadline);
 			stduint delay = stduint((uint64(milliseconds) * CONFIG_SysTickFreq + 999) / 1000);
 			if (!delay) delay = 1;
-			controller.async.deadline_armed = Systimex::AppendDeferredCallback(delay, _IMM(&controller), Deadline);
-			controller.async.service_deadline = next;
-			if (!controller.async.deadline_armed) {
+			if (!controller.async.service_timer.ArmService(delay, _IMM(&controller), Deadline)) {
 				plogwarn("[SCSI] cannot arm request deadline; resetting before abandoning DMA ownership");
 				(void)controller.adapter.Recover();
 			}
@@ -153,8 +97,7 @@ namespace {
 			para_endo(arguments);
 			auto& controller = *reinterpret_cast<Controller*>(context);
 			MutexLocal lock(&controller.command_lock);
-			controller.async.deadline_armed = false;
-			controller.async.service_pending.exchange(0, uni::MemoryOrder_Acq_Rel);
+			if (!controller.async.service_timer.Consume(_IMM(&controller), Deadline)) return;
 			controller.adapter.Service();
 			ArmDeadline(controller);
 		}
@@ -163,9 +106,7 @@ namespace {
 			auto& controller = *static_cast<Controller*>(context);
 			if (!controller.adapter.OnInterrupt()) return false;
 			// Never take the command mutex in IRQ context; a sleeping caller can also service the completion FIFO.
-			controller.async.service_pending.store(1, uni::MemoryOrder_Release);
-			const stduint waiter = controller.async.waiter.load(uni::MemoryOrder_Acquire);
-			if (waiter != ~stduint(0)) (void)Taskman::UnblockThread(waiter, ThreadBlock::BlockReason::BR_Resting);
+			Devs::NotifyStorageWait(controller.async.completion_wait);
 			return true;
 		}
 
@@ -203,6 +144,22 @@ namespace {
 				node->link.addr ? node->link.addr : "(unnamed)", controller.async.interrupt.gsi);
 		}
 
+		// Execute retains the request handle; IRQs never retain this stack-local probe context.
+		struct CommandWait {
+			Controller* controller;
+			uni::SCSI::CommandRequest* request;
+		};
+
+		static Devs::StorageWaitStatus ProbeCompletion(void* context) {
+			auto& wait = *static_cast<CommandWait*>(context);
+			MutexLocal lock(&wait.controller->command_lock);
+			if (!wait.request->IsDone()) {
+				wait.controller->adapter.Service();
+				ArmDeadline(*wait.controller);
+			}
+			return wait.request->IsDone() ? Devs::StorageWaitStatus::Completed : Devs::StorageWaitStatus::Pending;
+		}
+
 		static bool Execute(Controller& controller, stduint target, byte lun, const byte* cdb, byte cdb_length,
 			void* data, stduint bytes, bool data_in, byte& completion, byte& host, byte& target_status) {
 			completion = byte(uni::SCSI::Completion::Failed);
@@ -215,48 +172,17 @@ namespace {
 				MutexLocal lock(&controller.command_lock);
 				request = controller.adapter.SubmitScsi(target, lun, cdb, cdb_length, data, bytes, data_in, 60000, tid);
 				if (!request) return false;
-				controller.async.waiter.store(tid, uni::MemoryOrder_Release);
 				ArmDeadline(controller);
 			}
-			stduint boot_spins = 0;
-			while (!request->done.load(uni::MemoryOrder_Acquire)) {
-				auto* thread = Taskman::CurrentTB();
-				const bool old_if = IC.TryMaskInterrupt();
-				// Initialization precedes the reserved service tasks; do not start scheduling during that phase.
-				if (old_if && thread && Taskman::Locate(Task_Devsman)) {
-					thread->Block(ThreadBlock::BlockReason::BR_Resting);
-					// Recheck the IRQ latch after blocking so an interrupt just before Block cannot be lost.
-					if (request->done.load(uni::MemoryOrder_Acquire) || controller.async.service_pending.load(uni::MemoryOrder_Acquire) ||
-						!Systimex::AppendThreadWake(1, tid)) {
-						thread->Unblock(ThreadBlock::BlockReason::BR_Resting);
-					}
-					if (old_if) IC.enInterrupt(true);
-					Taskman::Schedule(true);
-					Systimex::CancelThreadWake(tid);
-				}
-				else {
-					if (old_if) IC.enInterrupt(true);
-					_ASM volatile("pause" ::: "memory");
-					++boot_spins;
-				}
-				{
-					MutexLocal lock(&controller.command_lock);
-					controller.async.waiter.store(tid, uni::MemoryOrder_Release);
-					controller.async.service_pending.exchange(0, uni::MemoryOrder_Acq_Rel);
-					if (boot_spins >= 10000000u) (void)controller.adapter.Recover();
-					else controller.adapter.Service();
-					ArmDeadline(controller);
-				}
-			}
-			{
+			CommandWait wait{&controller, request.get()};
+			const auto outcome = Devs::WaitStorage(controller.async.completion_wait, ProbeCompletion, &wait,
+				60 * CONFIG_SysTickFreq, 10000000u, controller.adapter.IsInterruptDriven());
+			if (outcome != Devs::StorageWaitStatus::Completed) {
 				MutexLocal lock(&controller.command_lock);
-				if (controller.async.waiter.load(uni::MemoryOrder_Acquire) == tid) {
-					const stduint next = controller.adapter.getWaiter();
-					controller.async.waiter.store(next, uni::MemoryOrder_Release);
-					if (next != ~stduint(0) && controller.async.service_pending.load(uni::MemoryOrder_Acquire)) {
-						(void)Taskman::UnblockThread(next, ThreadBlock::BlockReason::BR_Resting);
-					}
-				}
+				// Drain a completion racing the timeout before resetting; never abandon device-owned DMA.
+				controller.adapter.Service();
+				if (!request->IsDone()) (void)controller.adapter.Recover();
+				ArmDeadline(controller);
 			}
 			return request->CopyResult(data, completion, host, target_status);
 		}
@@ -604,7 +530,7 @@ namespace {
 		// Protect queue/mailbox changes against other callers and deferred completions, not the whole wait.
 		Mutex command_lock;
 		ScsiAsyncState async;
-		DmaRegion regions[stduint(uni::SCSI::BusLogic::DmaSlot::Count)]{};
+		Devs::StorageDmaBuffer regions[stduint(uni::SCSI::BusLogic::DmaSlot::Count)]{};
 		uni::SCSI::BusLogic adapter;
 		ScsiController storage;
 		uint16 target_mask = 0;
@@ -616,9 +542,12 @@ namespace {
 			const stduint index = stduint(slot);
 			if (index >= numsof(controller->regions)) return false;
 			auto& region = controller->regions[index];
-			const bool ready = region.Ensure(controller->node, bytes);
+			// Only called with no command in flight; never replace a buffer still owned by the adapter.
+			region.MarkQuiesced();
+			const bool ready = region.Ensure(controller->node, bytes, ScsiDmaRequirements);
+			if (ready) region.MarkInFlight();
 			// Also return empty/old metadata on failure so the controller never keeps a freed CPU address.
-			buffer = {region.virt, region.device_address, region.size};
+			buffer = {region.virt, uint32(region.device_address), region.size};
 			return ready;
 		}
 
@@ -737,7 +666,7 @@ namespace {
 		// Serialize queue/FIFO changes only; release this mutex while individual requests wait for completion.
 		Mutex command_lock;
 		ScsiAsyncState async;
-		DmaRegion regions[stduint(Adapter::DmaSlot::Count)]{};
+		Devs::StorageDmaBuffer regions[stduint(Adapter::DmaSlot::Count)]{};
 		Adapter adapter;
 		ScsiController storage;
 
@@ -747,8 +676,11 @@ namespace {
 			const stduint index = stduint(slot);
 			if (index >= numsof(controller->regions)) return false;
 			auto& region = controller->regions[index];
-			const bool allocated = region.Ensure(controller->node, bytes);
-			buffer = {region.virt, region.device_address, region.size};
+			// Initialize/reset has stopped DMA before the adapter asks to reuse these shared regions.
+			region.MarkQuiesced();
+			const bool allocated = region.Ensure(controller->node, bytes, ScsiDmaRequirements);
+			if (allocated) region.MarkInFlight();
+			buffer = {region.virt, uint32(region.device_address), region.size};
 			return allocated;
 		}
 

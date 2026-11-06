@@ -83,4 +83,69 @@ namespace Powercall {
 }
 #endif
 
+#if defined(_MCCA)
+#include <cpp/atomic>
+namespace Devs {
+	enum class StorageWaitStatus : byte { Pending, Completed, Failed, TimedOut };
+	struct StorageWaitContext {
+		// IRQs wake one service waiter; concurrent requests receive targeted completion notifications.
+		uni::Atomic<stduint> waiter{~stduint(0)};
+		uni::Atomic<uint32> notification{0};
+	};
+	using StorageWaitProbe = StorageWaitStatus (*)(void* context);
+	// Probes run in thread context; drivers serialize shared queue/hardware access inside the probe.
+	StorageWaitStatus WaitStorage(StorageWaitContext& wait, StorageWaitProbe probe, void* context,
+		stduint timeout_ticks, stduint poll_limit, bool interrupt_driven);
+	// Call only after releasing any driver spinlock; waking a thread takes scheduler_lock.
+	void NotifyStorageWait(StorageWaitContext& wait);
+	void NotifyStorageWait(StorageWaitContext& wait, stduint tid);
+
+	#if (_MCCA & 0xFF00) == 0x8600
+	/* The owner serializes service timers. A deferred handler must call Consume() under that
+	   same lock: cancellation cannot retract a callback already dispatched on another CPU. */
+	class StorageTimer {
+		bool armed = false;
+		stduint deadline = 0, target = 0;
+		_tocall_ft callback = nullptr;
+	public:
+		StorageTimer() = default;
+		StorageTimer(const StorageTimer&) = delete;
+		StorageTimer& operator=(const StorageTimer&) = delete;
+		bool ArmWake(stduint delay, stduint tid);
+		bool ArmService(stduint delay, stduint context, _tocall_ft handler);
+		bool Consume(stduint context, _tocall_ft handler);
+		void Cancel();
+	};
+
+	struct StorageDmaRequirements {
+		byte alignment_bits = 12;
+		uint64 address_limit = ~uint64(0);
+		stduint boundary = 0;
+		bool prefer_low_pool = false;
+	};
+
+	// Page-owned, identity-mapped DMA storage; drivers serialize access and certify hardware quiescence.
+	class StorageDmaBuffer {
+		DeviceNode* device = nullptr;
+		bool translated = false, in_flight = false;
+	public:
+		byte* virt = nullptr;
+		uint64 device_address = 0;
+		stduint size = 0;
+		StorageDmaBuffer() = default;
+		~StorageDmaBuffer();
+		StorageDmaBuffer(const StorageDmaBuffer&) = delete;
+		StorageDmaBuffer& operator=(const StorageDmaBuffer&) = delete;
+		bool Ensure(DeviceNode* node, stduint bytes, const StorageDmaRequirements& requirements = {});
+		// Active hardware or failed IOMMU invalidation leaves both allocation and mapping retained.
+		bool Release();
+		void MarkInFlight();
+		void MarkQuiesced();
+		void SyncForDevice() const;
+		void SyncForCpu() const;
+	};
+	#endif
+}
+#endif
+
 #endif

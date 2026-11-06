@@ -3,6 +3,7 @@
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 
 #include "../../include/mecocoa.hpp"
+#include "../../include/devsman-storage.hpp"
 
 #if (_MCCA & 0xFF00) == 0x8600
 #include <cpp/Device/Bus/PCI.hpp>
@@ -22,6 +23,8 @@ namespace {
 	static constexpr stduint NVME_ADMIN_PAGE_SIZE = 0x1000;
 	static constexpr uint16 NVME_IO_QID = 1;
 	static constexpr uint16 NVME_IO_DEPTH_LIMIT = 64;
+	// NVMe 1.4c, Read/Write CDW12.NLB: a 16-bit zero-based block count.
+	static constexpr stduint NVME_IO_MAX_BLOCKS = 1u << 16;
 	static constexpr uint8 IRQ_NVME = IRQ_RTC + 3;
 	static constexpr stduint NVME_IRQ_WAIT_SPINS = 100000u;
 
@@ -70,6 +73,7 @@ namespace {
 		volatile uni::NVME_BAR* regs = nullptr;
 		const DeviceResource* bar0 = nullptr;
 		const DeviceResource* irq = nullptr;
+		Devs::StorageDmaBuffer admin_workspace, io_workspace, data_buffer;
 		byte* admin_sq = nullptr;
 		byte* admin_cq = nullptr;
 		byte* identify_ctrl = nullptr;
@@ -93,17 +97,12 @@ namespace {
 		uint32 controller_nn = 0;
 		uint8 irq_vector = 0xFF;
 		volatile uint32 irq_count = 0;
-		volatile uint16 io_irq_wait_cid = 0;
-		volatile byte io_irq_done = 0;
-		uint32 io_irq_dw0 = 0;
-		uint32 io_irq_reserved0 = 0;
-		uint16 io_irq_sq_head = 0;
-		uint16 io_irq_sq_id = 0;
-		uint16 io_irq_cid = 0;
-		uint16 io_irq_status = 0;
+		uni::Atomic<byte> io_wait_active{0};
+		Devs::StorageWaitContext completion_wait;
 		bool msi_enabled = false;
 		bool irq_log_once = false;
 		bool io_submit_log_once = false;
+		bool faulted = false, started = false;
 		Mutex transaction;
 		uni::Vector<uni::SharedPtr<NamespaceInfo>> namespaces;
 
@@ -175,11 +174,11 @@ namespace {
 		}
 
 		bool AllocateAdminBuffers() {
-			if (!admin_sq) admin_sq = (byte*)mempool.allocate(NVME_ADMIN_PAGE_SIZE, 12);
-			if (!admin_cq) admin_cq = (byte*)mempool.allocate(NVME_ADMIN_PAGE_SIZE, 12);
-			if (!identify_ctrl) identify_ctrl = (byte*)mempool.allocate(NVME_ADMIN_PAGE_SIZE, 12);
-			if (!identify_nslist) identify_nslist = (byte*)mempool.allocate(NVME_ADMIN_PAGE_SIZE, 12);
-			if (!admin_sq || !admin_cq || !identify_ctrl || !identify_nslist) return false;
+			if (!admin_workspace.Ensure(node, 4 * NVME_ADMIN_PAGE_SIZE)) return false;
+			admin_sq = admin_workspace.virt;
+			admin_cq = admin_sq + NVME_ADMIN_PAGE_SIZE;
+			identify_ctrl = admin_cq + NVME_ADMIN_PAGE_SIZE;
+			identify_nslist = identify_ctrl + NVME_ADMIN_PAGE_SIZE;
 			MemSet(admin_sq, 0, NVME_ADMIN_PAGE_SIZE);
 			MemSet(admin_cq, 0, NVME_ADMIN_PAGE_SIZE);
 			MemSet(identify_ctrl, 0, NVME_ADMIN_PAGE_SIZE);
@@ -188,12 +187,12 @@ namespace {
 		}
 
 		bool AllocateIoBuffers() {
-			if (!io_sq) io_sq = (byte*)mempool.allocate(NVME_ADMIN_PAGE_SIZE, 12);
-			if (!io_cq) io_cq = (byte*)mempool.allocate(NVME_ADMIN_PAGE_SIZE, 12);
-			if (!identify_ns) identify_ns = (byte*)mempool.allocate(NVME_ADMIN_PAGE_SIZE, 12);
-			if (!sector_buf) sector_buf = (byte*)mempool.allocate(NVME_ADMIN_PAGE_SIZE, 12);
-			if (!io_prp_list) io_prp_list = (uint64*)mempool.allocate(NVME_ADMIN_PAGE_SIZE, 12);
-			if (!io_sq || !io_cq || !identify_ns || !sector_buf || !io_prp_list) return false;
+			if (!io_workspace.Ensure(node, 5 * NVME_ADMIN_PAGE_SIZE)) return false;
+			io_sq = io_workspace.virt;
+			io_cq = io_sq + NVME_ADMIN_PAGE_SIZE;
+			identify_ns = io_cq + NVME_ADMIN_PAGE_SIZE;
+			sector_buf = identify_ns + NVME_ADMIN_PAGE_SIZE;
+			io_prp_list = reinterpret_cast<uint64*>(sector_buf + NVME_ADMIN_PAGE_SIZE);
 			MemSet(io_sq, 0, NVME_ADMIN_PAGE_SIZE);
 			MemSet(io_cq, 0, NVME_ADMIN_PAGE_SIZE);
 			MemSet(identify_ns, 0, NVME_ADMIN_PAGE_SIZE);
@@ -216,40 +215,43 @@ namespace {
 			return reinterpret_cast<volatile uint32*>(doorbell_base + stduint(2 * qid + 1) * stride);
 		}
 
-		bool ConsumeIoCompletionFromIrq() {
-			if (!io_cq || io_depth == 0 || io_irq_wait_cid == 0) return false;
-			auto* cq = reinterpret_cast<volatile NVMe_Completion*>(io_cq);
-			const volatile NVMe_Completion& entry = cq[io_cq_head];
-			if ((entry.status & 1u) != io_cq_phase) return false;
+		struct CommandWait {
+			NVMe_Controller* controller;
+			volatile NVMe_Completion* cq;
+			uint16* head;
+			byte* phase;
+			uint16 depth, qid;
+			NVMe_Completion* completion;
+		};
 
-			io_irq_dw0 = entry.dw0;
-			io_irq_reserved0 = entry.reserved0;
-			io_irq_sq_head = entry.sq_head;
-			io_irq_sq_id = entry.sq_id;
-			io_irq_cid = entry.cid;
-			io_irq_status = entry.status;
-			// plogtrac("[NVMe] irq cqe cid=%u status=%[16H] sqh=%u sqid=%u dw0=%[32H]",
-			// 	(unsigned)io_irq_cid, (unsigned)io_irq_status,
-			// 	(unsigned)io_irq_sq_head, (unsigned)io_irq_sq_id, (unsigned)io_irq_dw0);
-
-			++io_cq_head;
-			if (io_cq_head == io_depth) {
-				io_cq_head = 0;
-				io_cq_phase ^= 1;
-			}
-			*DoorbellCq(NVME_IO_QID) = io_cq_head;
+		static Devs::StorageWaitStatus ProbeCompletion(void* context) {
+			auto& wait = *static_cast<CommandWait*>(context);
+			const volatile NVMe_Completion& entry = wait.cq[*wait.head];
+			if ((entry.status & 1u) != *wait.phase) return Devs::StorageWaitStatus::Pending;
 			nvme_fence();
-			io_irq_done = 1;
-			return true;
-		}
+			auto& cpl = *wait.completion;
+			cpl.dw0 = entry.dw0;
+			cpl.reserved0 = entry.reserved0;
+			cpl.sq_head = entry.sq_head;
+			cpl.sq_id = entry.sq_id;
+			cpl.cid = entry.cid;
+			cpl.status = entry.status;
+			// plogtrac("[NVMe] cqe cid=%u status=%[16H] sqh=%u sqid=%u dw0=%[32H]",
+			// 	(unsigned)cpl.cid, (unsigned)cpl.status,
+			// 	(unsigned)cpl.sq_head, (unsigned)cpl.sq_id, (unsigned)cpl.dw0);
 
-		void LoadIoIrqCompletion(NVMe_Completion& cpl) {
-			cpl.dw0 = io_irq_dw0;
-			cpl.reserved0 = io_irq_reserved0;
-			cpl.sq_head = io_irq_sq_head;
-			cpl.sq_id = io_irq_sq_id;
-			cpl.cid = io_irq_cid;
-			cpl.status = io_irq_status;
+			if (wait.qid == NVME_IO_QID) {
+				// plogtrac("[NVMe] poll cqe cid=%u status=%[16H] sqh=%u sqid=%u dw0=%[32H]",
+				// 	(unsigned)cpl.cid, (unsigned)cpl.status,
+				// 	(unsigned)cpl.sq_head, (unsigned)cpl.sq_id, (unsigned)cpl.dw0);
+			}
+			if (++*wait.head == wait.depth) {
+				*wait.head = 0;
+				*wait.phase ^= 1;
+			}
+			*wait.controller->DoorbellCq(wait.qid) = *wait.head;
+			nvme_fence();
+			return Devs::StorageWaitStatus::Completed;
 		}
 
 		bool WaitReady(bool want_ready) const {
@@ -267,14 +269,25 @@ namespace {
 
 		bool DisableController() {
 			if (!regs) return false;
-			if ((regs->cc & NVME_CC_EN) == 0) return true;
 			regs->cc &= ~NVME_CC_EN;
 			nvme_fence();
 			if (!WaitReady(false)) {
 				plogwarn("[NVMe] disable timeout cc=%[32H] csts=%[32H]", regs->cc, regs->csts);
 				return false;
 			}
+			// NVMe CC.EN=0 is only a request; CSTS.RDY=0 confirms that queue/data DMA has stopped.
+			admin_workspace.MarkQuiesced();
+			io_workspace.MarkQuiesced();
+			data_buffer.MarkQuiesced();
 			return true;
+		}
+
+		void FailController() {
+			faulted = true;
+			io_wait_active.store(0, uni::MemoryOrder_Release);
+			regs->intms = 0xFFFFFFFFu;
+			// A failed stop leaves all active DMA storage retained and forbids subsequent submissions.
+			(void)DisableController();
 		}
 
 		bool EnableController() {
@@ -295,7 +308,7 @@ namespace {
 		}
 
 		bool ConfigureAdminQueue() {
-			if (!regs) return false;
+			if (!regs || faulted || !DisableController()) return false;
 			if (!AllocateAdminBuffers()) {
 				plogwarn("[NVMe] admin buffer allocation failed");
 				return false;
@@ -312,13 +325,15 @@ namespace {
 			cq_phase = 1;
 			next_cid = 1;
 
-			if (!DisableController()) return false;
-
 			regs->aqa = (uint32(admin_depth - 1) << 16) | uint32(admin_depth - 1);
-			regs->asq = _IMM64(_IMM(admin_sq));
-			regs->acq = _IMM64(_IMM(admin_cq));
+			regs->asq = admin_workspace.device_address;
+			regs->acq = admin_workspace.device_address + NVME_ADMIN_PAGE_SIZE;
 			nvme_fence();
-			if (!EnableController()) return false;
+			admin_workspace.MarkInFlight();
+			if (!EnableController()) {
+				FailController();
+				return false;
+			}
 
 			plogtrac("[NVMe] adminq depth=%u sq=%p cq=%p", (unsigned)admin_depth, admin_sq, admin_cq);
 			return true;
@@ -328,131 +343,45 @@ namespace {
 			byte* sq_mem, byte* cq_mem,
 			uint16& sq_tail_ref, uint16& cq_head_ref, byte& cq_phase_ref,
 			uint16 depth, uint16 qid) {
-			if (!regs || !sq_mem || !cq_mem || depth == 0) return false;
+			if (!regs || faulted || !sq_mem || !cq_mem || depth == 0) return false;
 			auto* sq = reinterpret_cast<NVMe_Command*>(sq_mem);
-			auto* cq = reinterpret_cast<volatile NVMe_Completion*>(cq_mem);
 			const uint16 cid = next_cid++;
 			cmd.cid = cid;
 			sq[sq_tail_ref] = cmd;
 			nvme_fence();
 			sq_tail_ref = uint16((sq_tail_ref + 1) % depth);
-			const bool irq_completion =
-				(qid == NVME_IO_QID) && msi_enabled;
-			if (irq_completion) {
-				io_irq_wait_cid = cid;
-				io_irq_done = 0;
-				io_irq_cid = 0;
-				io_irq_status = 0;
-			}
+			const bool irq_completion = (qid == NVME_IO_QID) && msi_enabled;
+			io_wait_active.store(irq_completion, uni::MemoryOrder_Release);
 			*DoorbellSq(qid) = sq_tail_ref;
 			nvme_fence();
 
-			const stduint loops = 5000000u;
-			if (irq_completion) {
-				for (stduint spin = 0; spin < loops; ++spin) {
-					if (io_irq_done) {
-						LoadIoIrqCompletion(cpl);
-						if (cpl.cid != cid) {
-							plogwarn("[NVMe] irq cid mismatch got=%u want=%u",
-								(unsigned)cpl.cid, (unsigned)cid);
-							io_irq_wait_cid = 0;
-							io_irq_done = 0;
-							return false;
-						}
-						if ((cpl.status >> 1) != 0) {
-							const uint16 sc = (cpl.status >> 1) & 0xFFu;
-							const uint16 sct = (cpl.status >> 9) & 0x7u;
-							plogwarn("[NVMe] irq cmd opcode=%[8H] cid=%u fail sc=%u sct=%u status=%[16H]",
-								(unsigned)cmd.opc, (unsigned)cid, (unsigned)sc, (unsigned)sct, (unsigned)cpl.status);
-							io_irq_wait_cid = 0;
-							io_irq_done = 0;
-							return false;
-						}
-						io_irq_wait_cid = 0;
-						io_irq_done = 0;
-						return true;
-					}
-					__asm__ __volatile__("pause" ::: "memory");
-				}
+			// Only this serialized submitting thread consumes CQEs; the MSI handler merely notifies it.
+			CommandWait wait{this, reinterpret_cast<volatile NVMe_Completion*>(cq_mem),
+				&cq_head_ref, &cq_phase_ref, depth, qid, &cpl};
+			auto outcome = Devs::WaitStorage(completion_wait, ProbeCompletion, &wait,
+				5 * CONFIG_SysTickFreq, 5000000u, irq_completion);
+			io_wait_active.store(0, uni::MemoryOrder_Release);
+			if (outcome == Devs::StorageWaitStatus::TimedOut) outcome = ProbeCompletion(&wait);
+			if (outcome != Devs::StorageWaitStatus::Completed) {
+				plogwarn("[NVMe] q%u cmd opcode=%[8H] timeout tail=%u head=%u cc=%[32H] csts=%[32H]",
+					(unsigned)qid, (unsigned)cmd.opc, (unsigned)sq_tail_ref, (unsigned)cq_head_ref,
+					regs->cc, regs->csts);
+				FailController();
+				return false;
 			}
-
-			for (stduint spin = 0; spin < loops; ++spin) {
-				if (irq_completion && io_irq_done) {
-					LoadIoIrqCompletion(cpl);
-					if (cpl.cid != cid) {
-						plogwarn("[NVMe] irq cid mismatch got=%u want=%u",
-							(unsigned)cpl.cid, (unsigned)cid);
-						io_irq_wait_cid = 0;
-						io_irq_done = 0;
-						return false;
-					}
-					if ((cpl.status >> 1) != 0) {
-						const uint16 sc = (cpl.status >> 1) & 0xFFu;
-						const uint16 sct = (cpl.status >> 9) & 0x7u;
-						plogwarn("[NVMe] irq cmd opcode=%[8H] cid=%u fail sc=%u sct=%u status=%[16H]",
-							(unsigned)cmd.opc, (unsigned)cid, (unsigned)sc, (unsigned)sct, (unsigned)cpl.status);
-						io_irq_wait_cid = 0;
-						io_irq_done = 0;
-						return false;
-					}
-					io_irq_wait_cid = 0;
-					io_irq_done = 0;
-					return true;
-				}
-				const volatile NVMe_Completion& entry = cq[cq_head_ref];
-				if ((entry.status & 1u) != cq_phase_ref) {
-					__asm__ __volatile__("pause" ::: "memory");
-					continue;
-				}
-				cpl.dw0 = entry.dw0;
-				cpl.reserved0 = entry.reserved0;
-				cpl.sq_head = entry.sq_head;
-				cpl.sq_id = entry.sq_id;
-				cpl.cid = entry.cid;
-				cpl.status = entry.status;
-				if (qid == NVME_IO_QID) {
-					// plogtrac("[NVMe] poll cqe cid=%u status=%[16H] sqh=%u sqid=%u dw0=%[32H]",
-					// 	(unsigned)cpl.cid, (unsigned)cpl.status,
-					// 	(unsigned)cpl.sq_head, (unsigned)cpl.sq_id, (unsigned)cpl.dw0);
-				}
-				if (cpl.cid != cid) {
-					plogwarn("[NVMe] admin cid mismatch got=%u want=%u",
-						(unsigned)cpl.cid, (unsigned)cid);
-					return false;
-				}
-				const uint16 status_field = cpl.status;
-				++cq_head_ref;
-				if (cq_head_ref == depth) {
-					cq_head_ref = 0;
-					cq_phase_ref ^= 1;
-				}
-				*DoorbellCq(qid) = cq_head_ref;
-				nvme_fence();
-				if ((status_field >> 1) != 0) {
-					const uint16 sc = (status_field >> 1) & 0xFFu;
-					const uint16 sct = (status_field >> 9) & 0x7u;
-					plogwarn("[NVMe] admin cmd opcode=%[8H] cid=%u fail sc=%u sct=%u status=%[16H]",
-						(unsigned)cmd.opc, (unsigned)cid, (unsigned)sc, (unsigned)sct, (unsigned)status_field);
-					if (irq_completion) {
-						io_irq_wait_cid = 0;
-						io_irq_done = 0;
-					}
-					return false;
-				}
-				if (irq_completion) {
-					io_irq_wait_cid = 0;
-					io_irq_done = 0;
-				}
-				return true;
+			if (cpl.cid != cid) {
+				plogwarn("[NVMe] q%u cid mismatch got=%u want=%u", (unsigned)qid, (unsigned)cpl.cid, (unsigned)cid);
+				FailController();
+				return false;
 			}
-			if (irq_completion) {
-				io_irq_wait_cid = 0;
-				io_irq_done = 0;
+			if ((cpl.status >> 1) != 0) {
+				const uint16 sc = (cpl.status >> 1) & 0xFFu;
+				const uint16 sct = (cpl.status >> 9) & 0x7u;
+				plogwarn("[NVMe] q%u cmd opcode=%[8H] cid=%u fail sc=%u sct=%u status=%[16H]",
+					(unsigned)qid, (unsigned)cmd.opc, (unsigned)cid, (unsigned)sc, (unsigned)sct, (unsigned)cpl.status);
+				return false;
 			}
-			plogwarn("[NVMe] q%u cmd opcode=%[8H] timeout tail=%u head=%u cc=%[32H] csts=%[32H]",
-				(unsigned)qid, (unsigned)cmd.opc, (unsigned)sq_tail_ref, (unsigned)cq_head_ref,
-				regs->cc, regs->csts);
-			return false;
+			return true;
 		}
 
 		bool SubmitAdminCommand(NVMe_Command& cmd, NVMe_Completion& cpl) {
@@ -546,7 +475,7 @@ namespace {
 			NVMe_Completion cpl{};
 			cmd.opc = NVME_ADMIN_OPC_IDENTIFY;
 			cmd.nsid = 0;
-			cmd.prp1 = _IMM64(_IMM(identify_ctrl));
+			cmd.prp1 = admin_workspace.device_address + 2 * NVME_ADMIN_PAGE_SIZE;
 			cmd.cdw10 = 1; // CNS = Identify Controller
 			MemSet(identify_ctrl, 0, NVME_ADMIN_PAGE_SIZE);
 			if (!SubmitAdminCommand(cmd, cpl)) return false;
@@ -591,7 +520,7 @@ namespace {
 				NVMe_Completion cpl{};
 				cmd.opc = NVME_ADMIN_OPC_IDENTIFY;
 				cmd.nsid = cursor;
-				cmd.prp1 = _IMM64(_IMM(identify_nslist));
+				cmd.prp1 = admin_workspace.device_address + 3 * NVME_ADMIN_PAGE_SIZE;
 				cmd.cdw10 = 2; // CNS = Active Namespace ID List
 				MemSet(identify_nslist, 0, NVME_ADMIN_PAGE_SIZE);
 				if (!SubmitAdminCommand(cmd, cpl)) {
@@ -647,7 +576,8 @@ namespace {
 			NVMe_Completion cpl{};
 
 			cmd.opc = NVME_ADMIN_OPC_CREATE_IO_CQ;
-			cmd.prp1 = _IMM64(_IMM(io_cq));
+			io_workspace.MarkInFlight();
+			cmd.prp1 = io_workspace.device_address + NVME_ADMIN_PAGE_SIZE;
 			cmd.cdw10 = uint32(NVME_IO_QID) | (uint32(io_depth - 1) << 16);
 			cmd.cdw11 = msi_enabled ? 0x00000003u : 0x00000001u;
 			if (msi_enabled) {
@@ -658,7 +588,7 @@ namespace {
 
 			cmd = {};
 			cmd.opc = NVME_ADMIN_OPC_CREATE_IO_SQ;
-			cmd.prp1 = _IMM64(_IMM(io_sq));
+			cmd.prp1 = io_workspace.device_address;
 			cmd.cdw10 = uint32(NVME_IO_QID) | (uint32(io_depth - 1) << 16);
 			cmd.cdw11 = 0x00000001u | (uint32(NVME_IO_QID) << 16);
 			if (!SubmitAdminCommand(cmd, cpl)) return false;
@@ -674,7 +604,7 @@ namespace {
 			NVMe_Completion cpl{};
 			cmd.opc = NVME_ADMIN_OPC_IDENTIFY;
 			cmd.nsid = ns.nsid;
-			cmd.prp1 = _IMM64(_IMM(identify_ns));
+			cmd.prp1 = io_workspace.device_address + 2 * NVME_ADMIN_PAGE_SIZE;
 			cmd.cdw10 = 0; // CNS = Identify Namespace
 			MemSet(identify_ns, 0, NVME_ADMIN_PAGE_SIZE);
 			if (!SubmitAdminCommand(cmd, cpl)) return false;
@@ -697,8 +627,8 @@ namespace {
 
 		bool PrepareDataPrps(NVMe_Command& cmd, byte* data_buf, uint32 block_size,
 			stduint want_blocks, stduint& chunk_blocks) {
-			if (!data_buf || !block_size || !want_blocks) return false;
-			const uint64 start_addr = _IMM64(_IMM(data_buf));
+			if (!data_buf || data_buf != data_buffer.virt || !block_size || !want_blocks) return false;
+			const uint64 start_addr = data_buffer.device_address;
 			const stduint page_mask = NVME_ADMIN_PAGE_SIZE - 1;
 			const stduint page_off = stduint(start_addr & page_mask);
 			const stduint first_page_bytes = NVME_ADMIN_PAGE_SIZE - page_off;
@@ -711,6 +641,7 @@ namespace {
 			if (!chunk_blocks) return false;
 
 			const uint64 chunk_bytes = uint64(chunk_blocks) * block_size;
+			if (chunk_bytes > data_buffer.size) return false;
 			cmd.prp1 = start_addr;
 			cmd.prp2 = 0;
 			if (chunk_bytes <= first_page_bytes) {
@@ -730,13 +661,13 @@ namespace {
 			for0(i, extra_pages) {
 				io_prp_list[i] = second_page_addr + uint64(i) * NVME_ADMIN_PAGE_SIZE;
 			}
-			cmd.prp2 = _IMM64(_IMM(io_prp_list));
+			cmd.prp2 = io_workspace.device_address + 4 * NVME_ADMIN_PAGE_SIZE;
 			return true;
 		}
 
 		bool SubmitIoBlocks(uint32 nsid, uint64 lba, byte* data_buf,
 			uint32 block_size, stduint block_count, bool is_write) {
-			if (!data_buf || !block_count) return false;
+			if (!data_buf || !block_count || block_count > NVME_IO_MAX_BLOCKS) return false;
 			NVMe_Command cmd{};
 			NVMe_Completion cpl{};
 			stduint prepared_blocks = 0;
@@ -763,22 +694,27 @@ namespace {
 		bool ExecuteBlocks(uint32 nsid, uint64 lba, void* data_buf, stduint block_count, bool is_write) {
 			auto* ns = FindNamespace(nsid);
 			if (!data_buf || !block_count || !ns || !ns->block_size) return false;
-			if (lba >= ns->total_blocks || lba + block_count > ns->total_blocks) return false;
+			if (lba >= ns->total_blocks || block_count > ns->total_blocks - lba) return false;
 			MutexLocal guard(&transaction);
+			if (faulted) return false;
 
 			byte* user_buf = reinterpret_cast<byte*>(data_buf);
 			uint64 current_lba = lba;
 			stduint remaining_blocks = block_count;
+			// Each command is bounded by PRP-list coverage and CDW12.NLB; its data buffer grows on demand.
+			const stduint max_bytes = (1 + NVME_ADMIN_PAGE_SIZE / sizeof(uint64)) * NVME_ADMIN_PAGE_SIZE;
+			const stduint max_blocks = minof(max_bytes / ns->block_size, NVME_IO_MAX_BLOCKS);
+			if (!max_blocks) return false;
 			while (remaining_blocks) {
-				NVMe_Command probe{};
-				stduint chunk_blocks = 0;
-				if (!PrepareDataPrps(probe, user_buf, ns->block_size, remaining_blocks, chunk_blocks)) {
-					plogwarn("[NVMe] prp prepare failed nsid=%[32H] lba=%[64H] remain=%u",
-						nsid, current_lba, (unsigned)remaining_blocks);
-					return false;
-				}
-				if (!SubmitIoBlocks(nsid, current_lba, user_buf, ns->block_size, chunk_blocks, is_write)) return false;
+				const stduint chunk_blocks = minof(remaining_blocks, max_blocks);
 				const stduint chunk_bytes = chunk_blocks * ns->block_size;
+				if (!data_buffer.Ensure(node, chunk_bytes)) return false;
+				if (is_write) MemCopyN(data_buffer.virt, user_buf, chunk_bytes);
+				data_buffer.MarkInFlight();
+				const bool completed = SubmitIoBlocks(nsid, current_lba, data_buffer.virt, ns->block_size, chunk_blocks, is_write);
+				if (!faulted) data_buffer.MarkQuiesced();
+				if (!completed) return false;
+				if (!is_write) MemCopyN(user_buf, data_buffer.virt, chunk_bytes);
 				user_buf += chunk_bytes;
 				current_lba += chunk_blocks;
 				remaining_blocks -= chunk_blocks;
@@ -892,7 +828,9 @@ namespace {
 		// plogerro(">>>");
 		for (auto& owner : nvme_controllers) {
 			if (!owner || !owner->regs || !owner->msi_enabled) continue;
-			if (!owner->ConsumeIoCompletionFromIrq()) continue;
+			if (!owner->io_wait_active.load(uni::MemoryOrder_Acquire)) continue;
+			// Controllers share this MSI vector; each waiter checks its own CQ before accepting completion.
+			Devs::NotifyStorageWait(owner->completion_wait);
 			++owner->irq_count;
 			if (!owner->irq_log_once) {
 				owner->irq_log_once = true;
@@ -923,7 +861,7 @@ static bool start_nvme_driver(DeviceNode* nvme_node) {
 	if (!nvme_node) return false;
 	if (NVMe_Controller* existing = FindNvmeController(nvme_node)) {
 		nvme_node->fields.binding.driver_data = existing;
-		return true;
+		return existing->started && !existing->faulted;
 	}
 	auto dev = make_pci_device(*nvme_node);
 	pci.enable_MMIO(dev);
@@ -936,6 +874,11 @@ static bool start_nvme_driver(DeviceNode* nvme_node) {
 			nvme_node->link.addr ? nvme_node->link.addr : "(unnamed)");
 		return false;
 	}
+	// Keep the controller and its DMA ownership alive even if initialization or a later stop fails.
+	const bool interrupts_enabled = IC.TryMaskInterrupt();
+	const bool retained = nvme_controllers.Append(owner);
+	if (interrupts_enabled) IC.enInterrupt(true);
+	if (!retained) return false;
 	controller->DumpSummary();
 	if (!controller->ConfigureAdminQueue()) {
 		return false;
@@ -945,9 +888,7 @@ static bool start_nvme_driver(DeviceNode* nvme_node) {
 	}
 	(void)controller->DisableInterruptCoalescing();
 	const bool namespaces_ready = controller->IdentifyNamespaceList();
-	const bool interrupts_enabled = IC.TryMaskInterrupt();
-	nvme_controllers.Append(owner);
-	if (interrupts_enabled) IC.enInterrupt(true);
+	if (controller->faulted) return false;
 	nvme_node->fields.binding.driver_data = controller;
 	if (!controller->ConfigureInterrupts(dev)) {
 		plogwarn("[NVMe] keep polling completion");
@@ -958,7 +899,8 @@ static bool start_nvme_driver(DeviceNode* nvme_node) {
 	else if (controller->CreateIoQueues()) {
 		controller->EnumerateNamespaces();
 	}
-	return true;
+	controller->started = !controller->faulted;
+	return controller->started;
 }
 
 _ESYM_C void R_NVME_INIT();

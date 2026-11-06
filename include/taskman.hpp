@@ -572,6 +572,10 @@ public:// Gen.2
 	
 	static stduint min_available_tid;// in threads
 public:// for local core
+	#if _MCCA == 0x8632 || _MCCA == 0x8664
+	// APs must bind their processor-local ID before logging, acquiring locks or enabling interrupts.
+	static void InitializeCurrentCoreId(stduint core_id);
+	#endif
 	static stduint getID();// get core id
 	static ThreadBlock* CurrentTB() {
 		return current_thread(getID());
