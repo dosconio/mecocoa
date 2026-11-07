@@ -555,6 +555,11 @@
               <FileType>8</FileType>
               <FilePath>..\..\devdriv\video\video-ltdc.cpp</FilePath>
             </File>
+            <File>
+              <FileName>touch-gtxxx.cpp</FileName>
+              <FileType>8</FileType>
+              <FilePath>..\..\devdriv\touch\touch-gtxxx.cpp</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>

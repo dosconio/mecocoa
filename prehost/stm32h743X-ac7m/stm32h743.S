@@ -44,6 +44,8 @@ RMOD_BoundLimit	PROC
 	LDR	R0, =|Image$$ER_RMOD$$Limit|
 	BX	LR
 	ENDP
+	ALIGN
+	LTORG
 
 ; Run the syscall body in thread mode on the caller's stack, so it may block.
 ; On entry R0-R3 hold (callid, p1, p2, p3). The handler kept the caller frame on the thread,
@@ -99,11 +101,13 @@ SwitchTaskContext	PROC
 	ISB
 	BX	LR
 	ENDP
+	ALIGN
+	LTORG
 
 PendSV_Handler	PROC
 	EXPORT	PendSV_Handler
 	MRS	R0, PSP	; the thread frame of the outgoing task, wherever it was interrupted
-	; With ASPEN off the core never stacks S0-S15, so every thread frame is the basic 8 words on the PSP and the EXC_RETURN is always the thread-mode one.
+	; Boot disables ASPEN and clears FPCA, so every thread frame is the basic 8 words on the PSP.
 	MOV32	LR, #0xFFFFFFFD
 PendSV_LRReady
 	LDR	R1, =C_SwitchCrt
@@ -160,6 +164,8 @@ PendSV_FPSkipRes
 	STR	R0, [R2]	; the thread that is running now
 	BX	LR	; exception return pops the frame of the incoming task
 	ENDP
+	ALIGN
+	LTORG
 
 DirectTaskContext	PROC
 	EXPORT	DirectTaskContext

@@ -21,6 +21,12 @@ cppfile=$(wildcard $(ulibpath)/cpp/*.cpp) \
 	$(wildcard $(ulibpath)/cpp/**/**/**/*.cpp) \
 	$(wildcard accmlib/*.cpp) prehost/_auxiliary.cpp
 
+# Exclude the Lango compiler frontends and backends from the user library.
+accm_lango_end_cpp := $(wildcard $(ulibpath)/cpp/Lango/*end/*.cpp) \
+	$(wildcard $(ulibpath)/cpp/Lango/*end/**/*.cpp) \
+	$(wildcard $(ulibpath)/cpp/Lango/*end/**/**/*.cpp)
+cppfile := $(filter-out $(accm_lango_end_cpp),$(cppfile))
+
 dest_obj=$(uobjpath)/accm-$(arch)
 # ARMv7E-M (DSP) + double-precision FPv5 (D16) + hard-float ABI
 SYSROOT_TRIPLE=armv7em-mcca-eabihf
@@ -73,6 +79,7 @@ $(dest_obj):
 $(SYSROOT_USR_LIB):
 	mkdir -p $@
 
+# Compile only the declared objects; source prerequisites are supplied by the mappings below.
 $(asmobjs) $(cppobjs) $(cplobjs) $(asmobjs_pic) $(cppobjs_pic) $(cplobjs_pic): | $(dest_obj)
 
 ${dest_obj}/lib$(arch).a: $(asmobjs) $(cppobjs) $(cplobjs)
@@ -111,23 +118,23 @@ $(foreach src,$(cppfile),$(eval $(call cpp_to_o,$(src))))
 clean:
 	@-rm -rf $(dest_obj)
 
-_ag_%.o:
+$(asmobjs):
 	@echo AS $(notdir $<)
 	@${CC} -c ${CFLAGS_STA} -o $@ $< -MMD -MF $(patsubst %.o,%.d,$@) -MT $@
 
-_ag_%.pic.o:
+$(asmobjs_pic):
 	@echo AS $(notdir $<) DYN
 	@${CC} -c ${CFLAGS_PIC} -o $@ $< -MMD -MF $(patsubst %.o,%.d,$@) -MT $@
 
-_cc_%.o:
+$(cplobjs):
 	@echo CC $(notdir $<)
 	@${CC} -c ${CFLAGS_STA} -o $@ $< -MMD -MF $(patsubst %.o,%.d,$@) -MT $@
 
-_cc_%.pic.o:
+$(cplobjs_pic):
 	@echo CC $(notdir $<) DYN
 	@${CC} -c ${CFLAGS_PIC} -o $@ $< -MMD -MF $(patsubst %.o,%.d,$@) -MT $@
 
-_cx_%.o:
+$(cppobjs):
 	@echo CX $(notdir $<)
 	@${CX} -c ${XFLAGS_STA} -o $@ $< -MMD -MF $(patsubst %.o,%.d,$@) -MT $@
 
@@ -144,7 +151,7 @@ $(dest_obj)/_cx_Storage.pic.o: XFLAGS_PIC += -O0
 $(dest_obj)/_cx_PNG.o: XFLAGS_STA += -O2
 $(dest_obj)/_cx_PNG.pic.o: XFLAGS_PIC += -O2
 
-_cx_%.pic.o:
+$(cppobjs_pic):
 	@echo CX $(notdir $<) DYN
 	@${CX} -c ${XFLAGS_PIC} -o $@ $< -MMD -MF $(patsubst %.o,%.d,$@) -MT $@
 

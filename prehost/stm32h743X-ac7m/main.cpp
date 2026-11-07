@@ -1,8 +1,6 @@
 #include "../../include/mecocoa.hpp"
 #include <c/prochip/CortexM7.h>
 #include <cpp/MCU/ST/STM32H7>
-#include "../../depends/desktop.hpp"
-#include "_openedv/RGB-LCD.hpp"
 
 /*
 make -f accmlib/accma32.clang.make all
@@ -39,7 +37,7 @@ void _test() {
 
 void key_isr_up() { erro(); }
 
-// FPCCR.ASPEN=0: the hardware never stacks S0-S15, the frame is the plain 8 words.
+// ASPEN=0 and boot FPCA cleared: the hardware frame is the plain 8 words.
 _ESYM_C stduint* _arm_frame(stduint lr, stduint sp) {
 	return (stduint*)sp;
 }
@@ -150,7 +148,7 @@ int main()
 	if (!RCC.setClock(SysclkSource::HSE)) erro();
 	XART1.setMode(115200);
 	SysTick::enClock(CONFIG_SysTickFreq);
-	SCB->FPCCR = SCB->FPCCR & ~(1u << 31);// ASPEN=0: the asm, handler.cpp and _arm_frame assume the plain 8-word frame, S0-S15 are caller-saved scratch
+	SCB->FPCCR = SCB->FPCCR & ~(1u << 31);// ASPEN=0; boot FPCA is cleared below to establish the plain 8-word frame used by the asm, handler.cpp and _arm_frame
 	GPIN& KEYU = GPIOA[ 0];// Up
 	KEYU.setMode(GPIOMode::IN_Pull).setPull(false);
 	KEYU.setMode(GPIORupt::Posedge);
@@ -158,7 +156,8 @@ int main()
 	KEYU.enInterrupt();
 	IC.enInterrupt(false);
 	_ASM volatile("msr psp, %0" :: "r"((stduint)(_boot_stack + sizeof(_boot_stack))));
-	_ASM volatile("mrs r0, control \n orr r0, r0, #2 \n msr control, r0 \n isb" ::: "r0");
+	// PM0253 CONTROL/FPCCR: disabling ASPEN does not clear an already active FPCA.
+	_ASM volatile("mrs r0, control \n bic r0, r0, #4 \n orr r0, r0, #2 \n msr control, r0 \n isb" ::: "r0", "memory");
 	mecocoa();
 	inited = true;
 	
@@ -194,52 +193,8 @@ _ESYM_C void SysTick_Handler_Mcca() {
 }
 
 // Graphic
-
-void ltdc_gpio_config();
-void ltdc_clock_config();
-VideoDevice* InitClassicVideo(const uni::FramebufferInfo& info);
-void RgbLcd_ConfigPanel(stduint hsw, stduint hbp, stduint hact, stduint hfp, stduint vsw, stduint vbp, stduint vact, stduint vfp);
-VideoDevice* RgbLcd_ScreenInit(pureptr_t fb_addr);
-extern byte _BUF_cursor[byteof(Cursor)];
-#define LCD_FRAME_BUF_ADDR FMC_SDRAM_BANK1_BASE
 bool Consman::Initialize() {
 	new (&message_queue_conv) SpinlockBlock<uni::Queue<SysMessage>>(64);
-	// register the serial port as the first virtual TTY for /dev/tty
-	//
-	bool state = false;
-	// ltdc_init();
-	// 800x480：hsw48 hbp88 hfp40 / vsw3 vbp32 vfp13
-	RgbLcd_ConfigPanel(48, 88, 800, 40, 3, 32, 480, 13);
-	VideoDevice* screen = RgbLcd_ScreenInit((pureptr_t)LCD_FRAME_BUF_ADDR);
-	if (!screen) {
-		erro("!screen");
-	}
-	Consman::ento_gui = _TEMP true;
-	
-	sys_framebuffer = screen->GetFramebuffer();
-	const auto screen_size = sys_framebuffer.screen_size;
-	const Rectangle screen0_win{ Point(0,0), screen_size, Color::Black };
-	// TEMP BEGIN
-	Consman::AdoptVideoDevice(screen);
-	
-	Cursor::global_cursor = new (_BUF_cursor)Cursor{ &global_layman.Lock()->getVCI() };
-	Cursor::global_cursor->setSheet(*global_layman.Lock(), Point{ 300, 200 });
-	
-	auto desktop = new Desktop(Desktop::kDefaultBgColor);
-	global_desktop = desktop;
-	desktop->Initialize(*global_layman.Lock(), screen0_win, Desktop::kDefaultBgColor);
-	global_layman.Lock()->Append(desktop);
-	
-	// TEMP single layout
-	{
-		auto layman = global_layman.Lock();
-		layman->AddDirty(screen0_win);
-		layman->is_dirty = true;
-		layman->UpdateForce(nullptr, screen0_win);
-		if (Consman::real_pvci && layman->sheet_buffer) {
-			Consman::real_pvci->DrawPoints(screen0_win, layman->sheet_buffer);
-		}
-	}
 	return true;
 }
 

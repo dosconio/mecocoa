@@ -33,7 +33,8 @@ cppfile=$(wildcard $(ulibpath)/cpp/*.cpp) \
 
 accm_lango_end_cpp := \
 	$(wildcard $(ulibpath)/cpp/Lango/*end/*.cpp) \
-	$(wildcard $(ulibpath)/cpp/Lango/*end/**/*.cpp)
+	$(wildcard $(ulibpath)/cpp/Lango/*end/**/*.cpp) \
+	$(wildcard $(ulibpath)/cpp/Lango/*end/**/**/*.cpp)
 cppfile := $(filter-out $(accm_lango_end_cpp),$(cppfile))
 
 dest_obj=$(uobjpath)/accm-$(arch)
