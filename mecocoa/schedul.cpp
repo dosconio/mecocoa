@@ -2,6 +2,7 @@
 // AllAuthor: @ArinaMgk
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 #include "../include/mecocoa.hpp"
+#include "../include/devsman-storage.hpp"
 #include <c/format/ELF.h>
 #include <c/driver/keyboard.h>
 #if defined(_ARCH_ARM_ProfileM)
@@ -487,16 +488,20 @@ ThreadBlock* Taskman::PickNext() {
 	return nullptr;
 }
 
-void ThreadBlock::Block(BlockReason reason) {
-	SpinlockLocal guard(&scheduler_lock);
-	Taskman::DequeueReady(this, false);
-	if (pending_wake & reason) {
-		pending_wake = BlockReason(pending_wake & ~reason);
-		block_reason = BlockReason(block_reason & ~reason);
+static void BlockThreadLocked(ThreadBlock* thread, ThreadBlock::BlockReason reason) {
+	Taskman::DequeueReady(thread, false);
+	if (thread->pending_wake & reason) {
+		thread->pending_wake = ThreadBlock::BlockReason(thread->pending_wake & ~reason);
+		thread->block_reason = ThreadBlock::BlockReason(thread->block_reason & ~reason);
 		return;
 	}
-	state = State::Pended;
-	block_reason = BlockReason(block_reason | reason);
+	thread->state = ThreadBlock::State::Pended;
+	thread->block_reason = ThreadBlock::BlockReason(thread->block_reason | reason);
+}
+
+void ThreadBlock::Block(BlockReason reason) {
+	SpinlockLocal guard(&scheduler_lock);
+	BlockThreadLocked(this, reason);
 }
 
 static void UnblockThreadLocked(ThreadBlock* thread, ThreadBlock::BlockReason reason) {
@@ -538,6 +543,71 @@ bool Taskman::UnblockThread(stduint tid, ThreadBlock::BlockReason reason) {
 	}
 	return false;
 }
+
+#if (_MCCA & 0xFF00) == 0x8600
+namespace {
+	Devs::StorageWaiter* active_storage_waiters = nullptr;
+	stduint storage_wait_generation = 0;
+
+	void WakeStorageWaiterLocked(Devs::StorageWaiter& waiter) {
+		auto* thread = waiter.thread;
+		if (thread->state != ThreadBlock::State::Pended) return;
+		// Repeated IRQs must not leave pending_wake set for an unrelated future REST.
+		if (thread->block_reason & ThreadBlock::BlockReason::BR_Resting)
+			UnblockThreadLocked(thread, ThreadBlock::BlockReason::BR_Resting);
+	}
+}
+
+bool Taskman::PrepareStorageWait(Devs::StorageWaitContext& wait, Devs::StorageWaiter& waiter,
+	ThreadBlock* thread, uint32 observed) {
+	SpinlockLocal guard(&scheduler_lock);
+	if (!thread || wait.notification.load(uni::MemoryOrder_Acquire) != observed) return false;
+	for (auto* active = active_storage_waiters; active; active = active->next_active)
+		if (active->thread == thread) return false;
+	BlockThreadLocked(thread, ThreadBlock::BlockReason::BR_Resting);
+	if (!(thread->block_reason & ThreadBlock::BlockReason::BR_Resting)) return false;
+	if (!++storage_wait_generation) ++storage_wait_generation;
+	waiter = {&wait, thread, wait.waiters, active_storage_waiters, storage_wait_generation};
+	wait.waiters = &waiter;
+	active_storage_waiters = &waiter;
+	return true;
+}
+
+void Taskman::CancelStorageWait(stduint tid, bool lock) {
+	bool old_if = false;
+	if (lock) old_if = scheduler_lock.Acquire();
+	for (auto** active = &active_storage_waiters; *active; active = &(*active)->next_active) {
+		auto* waiter = *active;
+		if (waiter->thread->tid != tid) continue;
+		for (auto** link = &waiter->context->waiters; *link; link = &(*link)->next) {
+			if (*link != waiter) continue;
+			*link = waiter->next;
+			break;
+		}
+		*active = waiter->next_active;
+		break;
+	}
+	if (lock) scheduler_lock.Release(old_if);
+}
+
+void Taskman::NotifyStorageWait(Devs::StorageWaitContext& wait, stduint tid) {
+	SpinlockLocal guard(&scheduler_lock);
+	wait.notification.fetch_add(1, uni::MemoryOrder_Release);
+	for (auto* waiter = wait.waiters; waiter; waiter = waiter->next) {
+		if (tid == ~stduint(0) || waiter->thread->tid == tid) WakeStorageWaiterLocked(*waiter);
+	}
+}
+
+void Taskman::WakeStorageWait(stduint generation) {
+	SpinlockLocal guard(&scheduler_lock);
+	// Cancellation unlinks under this same lock before the caller can reuse its stack node.
+	for (auto* waiter = active_storage_waiters; waiter; waiter = waiter->next_active) {
+		if (waiter->generation != generation) continue;
+		WakeStorageWaiterLocked(*waiter);
+		return;
+	}
+}
+#endif
 
 static uni::Atomic<stduint> next_global_id = 1;
 

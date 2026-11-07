@@ -83,7 +83,7 @@ static constexpr byte PataBmideStatusActive = 0x01;
 // ICH4 sections 5.15.2.1/10.2.3: 32-bit DMA addresses, aligned PRDT, no 64KB crossing.
 static constexpr Devs::StorageDmaRequirements PataDmaRequirements{12, 0xFFFFFFFFull, 0x10000, true};
 
-static bool stop_pata_dma(PataDmaChannelState& state) {
+static uni::StorageRecoveryResult stop_pata_dma(PataDmaChannelState& state) {
 	const byte command = innpb(state.bmide_base + BMIDE_REG_CMD);
 	outpb(state.bmide_base + BMIDE_REG_CMD, byte(command & ~BMIDE_CMD_START));
 	for0(spin, 1000000) {
@@ -91,14 +91,15 @@ static bool stop_pata_dma(PataDmaChannelState& state) {
 			state.quiesced = true;
 			state.prdt_buffer.MarkQuiesced();
 			state.bounce_buffer.MarkQuiesced();
-			return true;
+			// Only BMIDE is stopped here; ATA status must still permit the next command.
+			return {false, true, true};
 		}
 		_ASM volatile("pause" ::: "memory");
 	}
 	state.quiesced = false;
 	state.ready = false;
 	plogwarn("[PATA-DMA] BMIDE=%[16H] engine did not stop; channel I/O disabled", (stduint)state.bmide_base);
-	return false;
+	return {};
 }
 
 static bool build_pata_pci_device(DeviceNode* pata_node, uni::PCI::Device& pci_dev) {
@@ -142,7 +143,7 @@ static void initialize_pata_dma_channels_once(DeviceNode* pata_node) {
 			(!disks[channel * 2 + 1] || disks[channel * 2 + 1]->Block_Size != 512)) continue;
 		auto& state = pata_dma_channels[channel];
 		state.bmide_base = word(bmide_base + channel * 8);
-		if (!stop_pata_dma(state)) continue;
+		if (!stop_pata_dma(state).engine_stopped) continue;
 		state.ready = state.prdt_buffer.Ensure(pata_node, PataDmaPageSize, PataDmaRequirements) &&
 			state.bounce_buffer.Ensure(pata_node, PataDmaPageSize, PataDmaRequirements);
 		if (!state.ready) {
@@ -472,7 +473,7 @@ static void hd_rw_foreback_1() {
 }
 
 static bool finish_pata_dma(Harddisk_PATA& hd, PataDmaChannelState& state, bool completed, byte observed_status) {
-	const bool stopped = stop_pata_dma(state);
+	auto recovery = stop_pata_dma(state);
 	byte bmide_status = 0;
 	byte ata_status = 0;
 	{
@@ -486,14 +487,16 @@ static bool finish_pata_dma(Harddisk_PATA& hd, PataDmaChannelState& state, bool 
 		channel.irq_seen = 0;
 	}
 	// Stopping BMIDE does not cancel the drive's ATA command; an unfinished command needs channel recovery.
+	state.quiesced = recovery.requests_quiesced && !(ata_status & (STATUS_BSY | STATUS_DRQ));
 	if (ata_status & (STATUS_BSY | STATUS_DRQ)) {
-		state.quiesced = false;
 		plogwarn("[PATA-DMA] ide%u:%u ATA command is still active; channel I/O disabled",
 			(stduint)hd.getHigID(), (stduint)hd.getLowID());
 	}
-	if (!stopped || !completed || !(bmide_status & BMIDE_STATUS_IRQ) || (bmide_status & BMIDE_STATUS_ERROR) ||
-		(ata_status & (STATUS_BSY | STATUS_DRQ | STATUS_ERR | STATUS_DF))) {
-		state.ready = false;
+	// DMA-path admission remains separate from state.quiesced, which also gates the existing PIO fallback.
+	recovery.can_submit = recovery.engine_stopped && completed && (bmide_status & BMIDE_STATUS_IRQ) &&
+		!(bmide_status & BMIDE_STATUS_ERROR) && !(ata_status & (STATUS_BSY | STATUS_DRQ | STATUS_ERR | STATUS_DF));
+	if (!recovery.can_submit) {
+		state.ready = recovery.can_submit;
 		plogwarn("[PATA-DMA] ide%u:%u transfer failed BM=%[8H] ATA=%[8H]; DMA disabled",
 			(stduint)hd.getHigID(), (stduint)hd.getLowID(), (stduint)bmide_status, (stduint)ata_status);
 		return false;

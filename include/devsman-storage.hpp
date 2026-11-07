@@ -85,12 +85,23 @@ namespace Powercall {
 
 #if defined(_MCCA)
 #include <cpp/atomic>
+class ThreadBlock;
 namespace Devs {
 	enum class StorageWaitStatus : byte { Pending, Completed, Failed, TimedOut };
+	struct StorageWaiter;
 	struct StorageWaitContext {
-		// IRQs wake one service waiter; concurrent requests receive targeted completion notifications.
-		uni::Atomic<stduint> waiter{~stduint(0)};
+		// scheduler_lock protects the stack-owned waiter list and its lifetime.
+		StorageWaiter* waiters = nullptr;
 		uni::Atomic<uint32> notification{0};
+	};
+	struct StorageWaiter {
+		/* One node per sleeping call: next serves controller notifications; next_active
+		   lets IRQ callbacks resolve a generation without retaining a stack pointer. */
+		StorageWaitContext* context = nullptr;
+		ThreadBlock* thread = nullptr;
+		StorageWaiter* next = nullptr;
+		StorageWaiter* next_active = nullptr;
+		stduint generation = 0;
 	};
 	using StorageWaitProbe = StorageWaitStatus (*)(void* context);
 	// Probes run in thread context; drivers serialize shared queue/hardware access inside the probe.
@@ -106,12 +117,14 @@ namespace Devs {
 	class StorageTimer {
 		bool armed = false;
 		stduint deadline = 0, target = 0;
+		stduint wake_generation = 0;
 		_tocall_ft callback = nullptr;
+		static void Wake(pureptr_t timeout, ...);
 	public:
 		StorageTimer() = default;
 		StorageTimer(const StorageTimer&) = delete;
 		StorageTimer& operator=(const StorageTimer&) = delete;
-		bool ArmWake(stduint delay, stduint tid);
+		bool ArmWake(stduint delay, stduint tid, stduint generation);
 		bool ArmService(stduint delay, stduint context, _tocall_ft handler);
 		bool Consume(stduint context, _tocall_ft handler);
 		void Cancel();

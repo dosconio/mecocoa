@@ -381,6 +381,10 @@ void Taskman::DestroyThread(ThreadBlock* th) {
 	}
 	{
 		SpinlockLocal guard(&scheduler_lock);
+		#if (_MCCA & 0xFF00) == 0x8600
+		// Detach stack-owned storage wait nodes before destroying an abandoned kernel stack.
+		CancelStorageWait(th->tid, false);
+		#endif
 		Taskman::DequeueReady(th, false);
 		Taskman::thchain.Remove(th);
 	}

@@ -260,14 +260,20 @@ namespace Powercall {
 #if defined(_MCCA)
 namespace Devs {
 	void NotifyStorageWait(StorageWaitContext& wait) {
+		#if (_MCCA & 0xFF00) == 0x8600
+		Taskman::NotifyStorageWait(wait, ~stduint(0));
+		#else
 		wait.notification.fetch_add(1, uni::MemoryOrder_Release);
-		const stduint tid = wait.waiter.load(uni::MemoryOrder_Acquire);
-		if (tid != ~stduint(0)) (void)Taskman::UnblockThread(tid, ThreadBlock::BlockReason::BR_Resting);
+		#endif
 	}
 
 	void NotifyStorageWait(StorageWaitContext& wait, stduint tid) {
+		#if (_MCCA & 0xFF00) == 0x8600
+		Taskman::NotifyStorageWait(wait, tid);
+		#else
 		wait.notification.fetch_add(1, uni::MemoryOrder_Release);
 		if (tid != ~stduint(0)) (void)Taskman::UnblockThread(tid, ThreadBlock::BlockReason::BR_Resting);
+		#endif
 	}
 
 	StorageWaitStatus WaitStorage(StorageWaitContext& wait, StorageWaitProbe probe, void* context,
@@ -278,25 +284,17 @@ namespace Devs {
 		bool can_sleep = false, can_yield = false;
 		#if (_MCCA & 0xFF00) == 0x8600
 		auto* thread = Taskman::CurrentTB();
-		const stduint tid = Taskman::CurrentTID();
+		const stduint tid = thread ? thread->tid : ~stduint(0);
+		StorageWaiter waiter{};
 		const bool initial_if = IC.TryMaskInterrupt();
 		if (initial_if) IC.enInterrupt(true);
 		// Initialization precedes the reserved service tasks; do not start scheduling during that phase.
 		can_yield = initial_if && thread && Taskman::Locate(Task_Devsman) && stduint(tick) != 0;
-		/* Thread-wake timers run on Devsman. Neither it nor FileSys, which it may synchronously
-		   wait for, may sleep on that timer; those service paths must keep polling hardware. */
-		can_sleep = can_yield && interrupt_driven && tid != Task_Devsman && tid != Task_FileSys;
-		auto release_waiter = [&]() {
-			stduint expected = tid;
-			// A concurrent probe may have become the IRQ service waiter while this request completed.
-			(void)wait.waiter.compare_exchange(expected, ~stduint(0), uni::MemoryOrder_Acq_Rel, uni::MemoryOrder_Acquire);
-		};
+		// Storage wake timers run in the timer IRQ, including while FileSys or Devsman is blocked here.
+		can_sleep = can_yield;
 		#endif
 		StorageWaitStatus result = StorageWaitStatus::Pending;
 		for (;;) {
-			#if (_MCCA & 0xFF00) == 0x8600
-			if (can_sleep) wait.waiter.store(tid, uni::MemoryOrder_Release);
-			#endif
 			const uint32 observed = wait.notification.load(uni::MemoryOrder_Acquire);
 			result = probe(context);
 			if (result != StorageWaitStatus::Pending) break;
@@ -314,23 +312,35 @@ namespace Devs {
 				const bool old_if = IC.TryMaskInterrupt();
 				if (!old_if) {
 					can_sleep = can_yield = false;
-					release_waiter();
 					continue;
 				}
-				thread->Block(ThreadBlock::BlockReason::BR_Resting);
-				StorageTimer wake_timer;
-				/* Recheck after Block: an IRQ between the probe and Block must not leave us asleep.
-				   A one-tick wake also covers IRQ service-waiter turnover between concurrent requests. */
-				if (wait.notification.load(uni::MemoryOrder_Acquire) != observed) {
-					thread->Unblock(ThreadBlock::BlockReason::BR_Resting);
+				/* Registration and Block share scheduler_lock with notification. An IRQ before
+				   registration changes observed; an IRQ afterwards finds this waiter's stack node. */
+				if (!Taskman::PrepareStorageWait(wait, waiter, thread, observed)) {
+					if (old_if) IC.enInterrupt(true);
+					continue;
 				}
-				else if (!wake_timer.ArmWake(1, tid)) {
+				StorageTimer wake_timer;
+				const stduint elapsed = stduint(stduint(tick) - start_tick);
+				// Registration may consume the last tick; recheck completion before reporting timeout.
+				if (elapsed >= timeout_ticks) {
+					Taskman::CancelStorageWait(tid);
+					thread->Unblock(ThreadBlock::BlockReason::BR_Resting);
+					if (old_if) IC.enInterrupt(true);
+					continue;
+				}
+				/* IRQs wake completion waiters; their timer only guards the original deadline.
+				   Without IRQs, one-tick sleeps bound polling CPU use after the initial short spin. */
+				const stduint delay = interrupt_driven ? timeout_ticks - elapsed : 1;
+				if (!wake_timer.ArmWake(delay, tid, waiter.generation)) {
+					Taskman::CancelStorageWait(tid);
 					thread->Unblock(ThreadBlock::BlockReason::BR_Resting);
 					can_sleep = false;
-					release_waiter();
 				}
 				if (old_if) IC.enInterrupt(true);
 				Taskman::Schedule(true);
+				// Invalidate the generation before cancelling a timer already collected by another CPU.
+				Taskman::CancelStorageWait(tid);
 				wake_timer.Cancel();
 			}
 			else if (can_yield && !(polls & 63u)) Taskman::Schedule(true);
@@ -339,21 +349,15 @@ namespace Devs {
 			_ASM volatile("" ::: "memory");
 			#endif
 		}
-		#if (_MCCA & 0xFF00) == 0x8600
-		release_waiter();
-		#endif
 		return result;
 	}
 
 	#if (_MCCA & 0xFF00) == 0x8600
-	bool StorageTimer::ArmWake(stduint delay, stduint tid) {
-		if (!delay || tid == ~stduint(0)) return false;
-		Cancel();
-		target = tid;
-		callback = nullptr;
-		deadline = stduint(tick) + delay;
-		armed = Systimex::AppendThreadWake(delay, tid);
-		return armed;
+	void StorageTimer::Wake(pureptr_t timeout, ...) {
+		Letpara(arguments, timeout);
+		const stduint generation = para_next(arguments, stduint);
+		para_endo(arguments);
+		Taskman::WakeStorageWait(generation);
 	}
 
 	bool StorageTimer::ArmService(stduint delay, stduint context, _tocall_ft handler) {
@@ -374,13 +378,6 @@ namespace Devs {
 			stdsint(stduint(tick) - deadline) < 0) return false;
 		Cancel();
 		return true;
-	}
-
-	void StorageTimer::Cancel() {
-		if (!armed) return;
-		if (callback) Systimex::CancelDeferredCallback(target, callback);
-		else Systimex::CancelThreadWake(target);
-		armed = false;
 	}
 
 	namespace {

@@ -66,16 +66,17 @@ namespace {
 	public:
 		void SetHost(Mutex* value, DeviceNode* node) { transaction = value; device = node; }
 		// Keep completed command errors retryable; an unfinished command requires stopping and retiring the port.
-		bool RetireAfterFailure() {
+		uni::StorageRecoveryResult RetireAfterFailure() {
 			auto& port = this->abar->ports[this->port_index];
 			if (!(port.ci | port.sact)) {
 				data_buffer.MarkQuiesced();
-				return false;
+				// This command is finished, but the running port may still DMA into its shared workspace.
+				return {!faulted, true, false};
 			}
 			faulted = true;
-			if (!this->StopCommandEngine()) return false;
+			if (!this->StopCommandEngine()) return {};
 			data_buffer.MarkQuiesced();
-			return true;
+			return {false, true, true};
 		}
 		bool Read(stduint block, void* destination, stduint times = 1) override {
 			return Transfer(block, destination, times, false);
@@ -499,17 +500,23 @@ namespace {
 	Devs::StorageWaitStatus ProbeAhciCompletion(void* context) {
 		auto& wait = *static_cast<AhciCompletionWait*>(context);
 		auto& controller = *wait.controller;
+		auto probe = [&]() {
+			auto& port = controller.abar->ports[wait.port_index];
+			uint32& saved = wait.port_index == controller.active_port
+				? controller.disk_irq_status : controller.cdrom_irq_status;
+			const uint32 live = port.is;
+			const bool failed = ((saved | live) & AHCI_PxIS_TFES) != 0;
+			if (!failed && (port.ci & wait.slot_mask)) return Devs::StorageWaitStatus::Pending;
+			// With IRQs enabled, retire both snapshots under the IRQ lock so a delayed handler cannot poison the next command.
+			if (live) port.is = live;
+			saved = 0;
+			return failed ? Devs::StorageWaitStatus::Failed : Devs::StorageWaitStatus::Completed;
+		};
+		/* Handint_AHCI skips polling controllers; runtime commands are serialized by transaction.
+		   Only an IRQ-enabled controller needs the completion lock around status retirement. */
+		if (!controller.UsesInterruptCompletion()) return probe();
 		SpinlockLocal guard(&controller.completion_lock);
-		auto& port = controller.abar->ports[wait.port_index];
-		uint32& saved = wait.port_index == controller.active_port
-			? controller.disk_irq_status : controller.cdrom_irq_status;
-		const uint32 live = port.is;
-		const bool failed = ((saved | live) & AHCI_PxIS_TFES) != 0;
-		if (!failed && (port.ci & wait.slot_mask)) return Devs::StorageWaitStatus::Pending;
-		// Retire both snapshots under the IRQ lock so a delayed handler cannot poison the next command.
-		if (live) port.is = live;
-		saved = 0;
-		return failed ? Devs::StorageWaitStatus::Failed : Devs::StorageWaitStatus::Completed;
+		return probe();
 	}
 
 	bool ahci_irq_wait(uni::AHCI_Port_Base* port_base, uint32 slot_mask) {
@@ -523,8 +530,8 @@ namespace {
 		const bool disk_port = port_base->port_index == controller->active_port;
 		auto& workspace = disk_port ? controller->disk_workspace : controller->cdrom_workspace;
 		if (outcome != Devs::StorageWaitStatus::Completed) {
-			const bool stopped = disk_port ? controller->disk.RetireAfterFailure() : controller->cdrom.RetireAfterFailure();
-			if (stopped) workspace.MarkQuiesced();
+			const auto recovery = disk_port ? controller->disk.RetireAfterFailure() : controller->cdrom.RetireAfterFailure();
+			if (recovery.engine_stopped) workspace.MarkQuiesced();
 			return false;
 		}
 		workspace.SyncForCpu();

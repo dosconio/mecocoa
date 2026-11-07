@@ -3,6 +3,7 @@
 // ModuTitle: Handler and Soft Timer
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 #include "../include/mecocoa.hpp"
+#include "../include/devsman-storage.hpp"
 #include <c/driver/timer.h>
 
 // ---- ---- ---- ---- SOFT-TIM ---- ---- ---- ---- //
@@ -79,12 +80,13 @@ namespace {
 		}
 	}
 
-	stduint CancelDeferredCallbackFromChain(Dchain& timers, stduint iden, _tocall_ft hand) {
+	stduint CancelCallbackFromChain(Dchain& timers, stduint iden, _tocall_ft hand,
+		TimerAction action = TimerAction::DeferredCallback) {
 		stduint cancelled = 0;
 		for (auto* node = timers.Root(); node; ) {
 			auto* next = node->next;
 			auto& timer = treat<MsgTimer>(node->offs);
-			if (timer.action == TimerAction::DeferredCallback && timer.iden == iden &&
+			if (timer.action == action && timer.iden == iden &&
 				(!hand || timer.hand == hand)) {
 				timers.Remove(node);
 				++cancelled;
@@ -150,8 +152,8 @@ bool Systimex::AppendDeferredCallback(stduint timeout, stduint iden,
 
 stduint Systimex::CancelDeferredCallback(stduint iden, _tocall_ft hand) {
 	SpinlockLocal guard(&timer_lock);
-	return CancelDeferredCallbackFromChain(TimerManager, iden, hand) +
-		CancelDeferredCallbackFromChain(TimerRetryManager, iden, hand);
+	return CancelCallbackFromChain(TimerManager, iden, hand) +
+		CancelCallbackFromChain(TimerRetryManager, iden, hand);
 }
 
 void Systimex::CancelThreadWake(stduint tid) {
@@ -302,5 +304,37 @@ void Systimex::DispatchExpired() {
 		}
 	}
 }
+
+#if (_MCCA & 0xFF00) == 0x8600
+namespace Devs {
+	/* Keep the storage adapter here to use the fallible timer backend without adding
+	   storage-specific entry points to Systimex or changing ordinary ThreadWake dispatch. */
+	bool StorageTimer::ArmWake(stduint delay, stduint tid, stduint generation) {
+		if (!delay || tid == ~stduint(0) || !generation) return false;
+		Cancel();
+		target = tid;
+		callback = nullptr;
+		wake_generation = generation;
+		deadline = stduint(tick) + delay;
+		MsgTimer timer{};
+		timer.action = TimerAction::Callback;
+		timer.iden = generation;
+		timer.hand = Wake;
+		armed = AppendTimer(delay, timer);
+		return armed;
+	}
+
+	void StorageTimer::Cancel() {
+		if (!armed) return;
+		if (callback) Systimex::CancelDeferredCallback(target, callback);
+		else {
+			SpinlockLocal guard(&timer_lock);
+			(void)CancelCallbackFromChain(TimerManager, wake_generation, Wake, TimerAction::Callback);
+			(void)CancelCallbackFromChain(TimerRetryManager, wake_generation, Wake, TimerAction::Callback);
+		}
+		armed = false;
+	}
+}
+#endif
 
 #endif

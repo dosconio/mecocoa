@@ -75,19 +75,27 @@ namespace {
 			Devs::NotifyStorageWait(controller.async.completion_wait, origin);
 		}
 
+		static void Recover(Controller& controller) {
+			const auto recovery = controller.adapter.RecoverDetailed();
+			// The queue retires/pins old requests; recovery may restart DMA into shared workspaces.
+			if (!recovery.can_submit) {
+				plogwarn("[SCSI] recovery unavailable: request DMA quiesced=%u engine stopped=%u",
+					(unsigned)recovery.requests_quiesced, (unsigned)recovery.engine_stopped);
+			}
+		}
+
 		static void ArmDeadline(Controller& controller) {
 			uint32 milliseconds = controller.adapter.NextTimeout();
 			if (milliseconds == 0xFFFFFFFFu) {
 				controller.async.service_timer.Cancel();
 				return;
 			}
-			// Without a routed interrupt, a short deferred service interval provides the polling fallback.
-			if (!controller.adapter.IsInterruptDriven() && milliseconds > 10) milliseconds = 10;
+			// WaitStorage supplies polling wakeups; this service timer only guards the earliest request deadline.
 			stduint delay = stduint((uint64(milliseconds) * CONFIG_SysTickFreq + 999) / 1000);
 			if (!delay) delay = 1;
 			if (!controller.async.service_timer.ArmService(delay, _IMM(&controller), Deadline)) {
 				plogwarn("[SCSI] cannot arm request deadline; resetting before abandoning DMA ownership");
-				(void)controller.adapter.Recover();
+				Recover(controller);
 			}
 		}
 
@@ -181,7 +189,7 @@ namespace {
 				MutexLocal lock(&controller.command_lock);
 				// Drain a completion racing the timeout before resetting; never abandon device-owned DMA.
 				controller.adapter.Service();
-				if (!request->IsDone()) (void)controller.adapter.Recover();
+				if (!request->IsDone()) Recover(controller);
 				ArmDeadline(controller);
 			}
 			return request->CopyResult(data, completion, host, target_status);

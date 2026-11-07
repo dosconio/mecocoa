@@ -20,6 +20,7 @@
 #include <cpp/ISO_IEC_STD/memory>
 
 namespace uni { struct PipeChannel; }
+namespace Devs { struct StorageWaitContext; struct StorageWaiter; }
 
 struct Systimex {
 	static void
@@ -607,6 +608,15 @@ public:
 	static auto
 		LocateThread(stduint tid) -> ThreadBlock*;
 	static bool UnblockThread(stduint tid, ThreadBlock::BlockReason reason);
+	#if (_MCCA & 0xFF00) == 0x8600
+	// Register/block and validate/wake under scheduler_lock; timer callbacks carry no stack pointers.
+	static bool PrepareStorageWait(Devs::StorageWaitContext& wait, Devs::StorageWaiter& waiter,
+		ThreadBlock* thread, uint32 observed);
+	// lock=false is only for thread destruction while scheduler_lock is already held.
+	static void CancelStorageWait(stduint tid, bool lock = true);
+	static void NotifyStorageWait(Devs::StorageWaitContext& wait, stduint tid);
+	static void WakeStorageWait(stduint generation);
+	#endif
 public:
 	// ring:
 	// - Intel: 0 1 2 3

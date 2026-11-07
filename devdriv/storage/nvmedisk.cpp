@@ -282,12 +282,13 @@ namespace {
 			return true;
 		}
 
-		void FailController() {
+		uni::StorageRecoveryResult FailController() {
 			faulted = true;
 			io_wait_active.store(0, uni::MemoryOrder_Release);
 			regs->intms = 0xFFFFFFFFu;
 			// A failed stop leaves all active DMA storage retained and forbids subsequent submissions.
-			(void)DisableController();
+			const bool stopped = DisableController();
+			return {false, stopped, stopped};
 		}
 
 		bool EnableController() {
@@ -342,8 +343,11 @@ namespace {
 		bool SubmitCommand(NVMe_Command& cmd, NVMe_Completion& cpl,
 			byte* sq_mem, byte* cq_mem,
 			uint16& sq_tail_ref, uint16& cq_head_ref, byte& cq_phase_ref,
-			uint16 depth, uint16 qid) {
-			if (!regs || faulted || !sq_mem || !cq_mem || depth == 0) return false;
+			uint16 depth, uint16 qid, uni::StorageRecoveryResult* recovery = nullptr) {
+			// This output describes only the current command, not any previously retained request.
+			const bool can_submit = regs && !faulted && sq_mem && cq_mem && depth;
+			if (recovery) *recovery = {can_submit, true, false};
+			if (!can_submit) return false;
 			auto* sq = reinterpret_cast<NVMe_Command*>(sq_mem);
 			const uint16 cid = next_cid++;
 			cmd.cid = cid;
@@ -352,6 +356,7 @@ namespace {
 			sq_tail_ref = uint16((sq_tail_ref + 1) % depth);
 			const bool irq_completion = (qid == NVME_IO_QID) && msi_enabled;
 			io_wait_active.store(irq_completion, uni::MemoryOrder_Release);
+			if (recovery) recovery->requests_quiesced = false;
 			*DoorbellSq(qid) = sq_tail_ref;
 			nvme_fence();
 
@@ -366,14 +371,18 @@ namespace {
 				plogwarn("[NVMe] q%u cmd opcode=%[8H] timeout tail=%u head=%u cc=%[32H] csts=%[32H]",
 					(unsigned)qid, (unsigned)cmd.opc, (unsigned)sq_tail_ref, (unsigned)cq_head_ref,
 					regs->cc, regs->csts);
-				FailController();
+				const auto failure = FailController();
+				if (recovery) *recovery = failure;
 				return false;
 			}
 			if (cpl.cid != cid) {
 				plogwarn("[NVMe] q%u cid mismatch got=%u want=%u", (unsigned)qid, (unsigned)cpl.cid, (unsigned)cid);
-				FailController();
+				const auto failure = FailController();
+				if (recovery) *recovery = failure;
 				return false;
 			}
+			// Only a matching completion retires this request, even when its protocol status is an error.
+			if (recovery) *recovery = {true, true, false};
 			if ((cpl.status >> 1) != 0) {
 				const uint16 sc = (cpl.status >> 1) & 0xFFu;
 				const uint16 sct = (cpl.status >> 9) & 0x7u;
@@ -389,9 +398,9 @@ namespace {
 				sq_tail, cq_head, cq_phase, admin_depth, 0);
 		}
 
-		bool SubmitIoCommand(NVMe_Command& cmd, NVMe_Completion& cpl) {
+		bool SubmitIoCommand(NVMe_Command& cmd, NVMe_Completion& cpl, uni::StorageRecoveryResult& recovery) {
 			return SubmitCommand(cmd, cpl, io_sq, io_cq,
-				io_sq_tail, io_cq_head, io_cq_phase, io_depth, NVME_IO_QID);
+				io_sq_tail, io_cq_head, io_cq_phase, io_depth, NVME_IO_QID, &recovery);
 		}
 
 		static uint32 LoadLe32(const byte* src) {
@@ -666,7 +675,9 @@ namespace {
 		}
 
 		bool SubmitIoBlocks(uint32 nsid, uint64 lba, byte* data_buf,
-			uint32 block_size, stduint block_count, bool is_write) {
+			uint32 block_size, stduint block_count, bool is_write, uni::StorageRecoveryResult& recovery) {
+			// PRP/argument rejection occurs before DMA submission; the caller can retire its current buffer.
+			recovery = {regs && !faulted && io_sq && io_cq && io_depth, true, false};
 			if (!data_buf || !block_count || block_count > NVME_IO_MAX_BLOCKS) return false;
 			NVMe_Command cmd{};
 			NVMe_Completion cpl{};
@@ -685,7 +696,7 @@ namespace {
 			cmd.cdw10 = uint32(lba);
 			cmd.cdw11 = uint32(lba >> 32);
 			cmd.cdw12 = uint32(block_count - 1);
-			if (!SubmitIoCommand(cmd, cpl)) return false;
+			if (!SubmitIoCommand(cmd, cpl, recovery)) return false;
 			// ploginfo("[NVMe] io complete cid=%u sqh=%u sqid=%u dw0=%[32H] wr=%u",
 			// 	(unsigned)cpl.cid, (unsigned)cpl.sq_head, (unsigned)cpl.sq_id, cpl.dw0, (unsigned)is_write);
 			return true;
@@ -711,8 +722,9 @@ namespace {
 				if (!data_buffer.Ensure(node, chunk_bytes)) return false;
 				if (is_write) MemCopyN(data_buffer.virt, user_buf, chunk_bytes);
 				data_buffer.MarkInFlight();
-				const bool completed = SubmitIoBlocks(nsid, current_lba, data_buffer.virt, ns->block_size, chunk_blocks, is_write);
-				if (!faulted) data_buffer.MarkQuiesced();
+				uni::StorageRecoveryResult recovery{};
+				const bool completed = SubmitIoBlocks(nsid, current_lba, data_buffer.virt, ns->block_size, chunk_blocks, is_write, recovery);
+				if (recovery.requests_quiesced) data_buffer.MarkQuiesced();
 				if (!completed) return false;
 				if (!is_write) MemCopyN(user_buf, data_buffer.virt, chunk_bytes);
 				user_buf += chunk_bytes;
