@@ -9,6 +9,9 @@ namespace TouchGt1xx {
 	uni::TouchTrait* Initialize(const uni::Size2& screen);
 	// Process acquisition/diagnostics and yield the owner; false means acquisition stopped.
 	bool Process();
+	uni::TouchControlBlock* GetControlBlock();
+	// Call only after the Graphic thread has acknowledged unregistering the block.
+	void Shutdown();
 }
 
 #endif

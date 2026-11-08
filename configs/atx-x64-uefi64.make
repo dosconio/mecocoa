@@ -69,6 +69,7 @@ cppfile=\
 	$(ulibpath)/cpp/Device/DMA.cpp \
 	$(ulibpath)/cpp/Device/Timer.cpp \
 	$(ulibpath)/cpp/Device/Mouse.cpp \
+	$(ulibpath)/cpp/Device/Touch.cpp \
 	$(ulibpath)/cpp/Device/Audio/SoundBlaster.cpp \
 	$(ulibpath)/cpp/Device/Video/Bochs-GrafAda.cpp \
 	$(ulibpath)/cpp/Device/Video/VMware-SVGA.cpp \

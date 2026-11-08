@@ -40,20 +40,10 @@ namespace {
 		}
 	};
 
-	enum class TouchReadStatus { NoFrame, Frame, IoError, InvalidFrame };
+	using TouchReadStatus = uni::TouchReadResult;
 
 	class Gt1xxController : public uni::TouchTrait {
 	public:
-		enum : unsigned { Capacity = 10 };
-		struct Contact {
-			byte id = 0;
-			uint16 x = 0, y = 0, size = 0;
-		};
-		struct Frame {
-			stduint sequence = 0, time = 0;
-			byte count = 0;
-			Contact contacts[Capacity];
-		};
 		byte pid[5] = {};
 		byte ack_stage = 0xFF, status_byte = 0, interrupt_mode = 1;
 		uint16 config_register = 0;
@@ -66,7 +56,14 @@ namespace {
 		uni::Size2 screen;
 		volatile bool pending = false;
 		bool ack_pending = false, staged_valid = false;
-		Frame latest = {}, staged = {};
+		uni::UniquePtr<byte[]> raw_;
+		uni::UniquePtr<uni::TouchContact[]> latest_;
+		uni::TouchFrameInfo latest_info_;
+		uni::TouchFrameInfo* pending_info_ = nullptr;
+		uni::TouchContact* pending_data_ = nullptr;
+		uint32 sequence_ = 0;
+		stduint last_tick_ = 0;
+		uint64 elapsed_ticks_ = 0;
 
 		bool SendChecked(byte value, byte stage) {
 			if (iic << value) return true;
@@ -95,13 +92,16 @@ namespace {
 			return !iic.getError();
 		}
 		static uint16 Read16(const byte* p) { return uint16(p[0] | (uint16(p[1]) << 8)); }
-		TouchReadStatus FinishFrame() {
-			// Keep the staged frame on acknowledgement failure; publish it only once.
-			if (!WriteRegister(0x814E, 0)) return TouchReadStatus::IoError;
+		TouchReadStatus FinishFrame(uni::TouchFrameWriter& target) {
+			// Retain this target until the hardware acknowledges the complete snapshot.
+			if (!WriteRegister(0x814E, 0)) return TouchReadStatus::Retry;
 			ack_pending = false;
-			if (!staged_valid) return TouchReadStatus::InvalidFrame;
-			staged.sequence = latest.sequence + 1;
-			latest = staged;
+			pending_info_ = nullptr;
+			pending_data_ = nullptr;
+			if (!staged_valid) return TouchReadStatus::Invalid;
+			target.info->sequence = ++sequence_;
+			latest_info_ = *target.info;
+			for (uint16 i = 0; i < latest_info_.count; ++i) latest_[i] = target.data[i];
 			return TouchReadStatus::Frame;
 		}
 	public:
@@ -109,6 +109,9 @@ namespace {
 			: iic(bus), reset(rst), interrupt(irq), screen(size) {}
 
 		bool Initialize() {
+			raw_.reset(new (std::nothrow_t{}) byte[BoardConfig::Touch::MaxContacts * 8]);
+			latest_.reset(new (std::nothrow_t{}) uni::TouchContact[BoardConfig::Touch::MaxContacts]);
+			if (!raw_ || !latest_) return false;
 			iic.Initialize();
 			// INT selects the seven-bit address while reset is asserted.
 			reset.setMode(uni::GPIOMode::OUT_PushPull);
@@ -128,6 +131,7 @@ namespace {
 			const bool gt911 = pid[0] == '9' && pid[1] == '1' && pid[2] == '1' && pid[3] == 0;
 			const bool gt9271 = pid[0] == '9' && pid[1] == '2' && pid[2] == '7' && pid[3] == '1';
 			if (!gt9147 && !gt1158 && !gt911 && !gt9271) return false;
+			if (BoardConfig::Touch::MaxContacts > (gt9271 ? 10u : 5u)) return false;
 			if (gt9147) {
 				if (!WriteRegister(0x8040, 2) || !RestTouchThread(TouchTicks(10)) ||
 					!WriteRegister(0x8040, 0) || !RestTouchThread(TouchTicks(10))) return false;
@@ -161,27 +165,40 @@ namespace {
 		bool IsLevelAsserted() const {
 			return interrupt_mode >= 2 && bool(interrupt) == (interrupt_mode == 3);
 		}
-		const Frame& GetFrame() const { return latest; }
 		bool HasUnacknowledgedFrame() const { return ack_pending; }
+		void AbortRead() { ack_pending = false; pending_info_ = nullptr; pending_data_ = nullptr; }
+		bool getCapabilities(uni::TouchCapabilities& caps) const override {
+			caps.bounds = uni::Rectangle(uni::Point(0, 0), screen);
+			caps.max_contacts = BoardConfig::Touch::MaxContacts;
+			caps.features = uni::TouchFeature_HardwareId | uni::TouchFeature_ContactSize;
+			return true;
+		}
 
-		TouchReadStatus ReadFrame() {
-			if (ack_pending) return FinishFrame();
+		TouchReadStatus ReadFrame(uni::TouchFrameWriter& target) override {
+			if (!target.info || !target.data || target.capacity < BoardConfig::Touch::MaxContacts || !raw_ || !latest_)
+				return TouchReadStatus::InvalidTarget;
+			if (ack_pending) {
+				if (target.info != pending_info_ || target.data != pending_data_) return TouchReadStatus::InvalidTarget;
+				return FinishFrame(target);
+			}
 			byte status = 0;
-			if (!ReadRegister(0x814E, &status, 1)) return TouchReadStatus::IoError;
+			if (!ReadRegister(0x814E, &status, 1)) return TouchReadStatus::Retry;
 			status_byte = status;
-			if (!(status & 0x80)) return TouchReadStatus::NoFrame;
-			staged = Frame{};
-			staged.time = tick;
-			staged.count = status & 0x0F;
-			staged_valid = staged.count <= BoardConfig::Touch::MaxContacts;
-			if (staged_valid && staged.count) {
-				byte raw[Capacity * 8];
-				// Each full record starts with its hardware contact ID at 0x814F.
-				if (!ReadRegister(0x814F, raw, staged.count * 8)) return TouchReadStatus::IoError;
+			if (!(status & 0x80)) return TouchReadStatus::NoData;
+			const stduint now = tick;
+			elapsed_ticks_ += stduint(now - last_tick_);
+			last_tick_ = now;
+			target.info->timestamp_us = (elapsed_ticks_ / CONFIG_SysTickFreq) * 1000000u +
+				(elapsed_ticks_ % CONFIG_SysTickFreq) * 1000000u / CONFIG_SysTickFreq;
+			target.info->count = status & 0x0F;
+			target.info->flags = 0;
+			staged_valid = target.info->count <= BoardConfig::Touch::MaxContacts;
+			if (staged_valid && target.info->count) {
+				if (!ReadRegister(0x814F, raw_.get(), target.info->count * 8)) return TouchReadStatus::Retry;
 				unsigned ids = 0;
-				for (byte i = 0; i < staged.count; ++i) {
-					const byte* record = raw + i * 8;
-					auto& contact = staged.contacts[i];
+				for (uint16 i = 0; i < target.info->count; ++i) {
+					const byte* record = raw_.get() + i * 8;
+					auto& contact = target.data[i];
 					contact.id = record[0] & 0x0F;
 					stduint x = Read16(record + 1), y = Read16(record + 3);
 					if (BoardConfig::Touch::SwapXY) { const stduint swap = x; x = y; y = swap; }
@@ -190,23 +207,26 @@ namespace {
 						break;
 					}
 					ids |= 1u << contact.id;
-					contact.x = uint16(BoardConfig::Touch::MirrorX ? screen.x - 1 - x : x);
-					contact.y = uint16(BoardConfig::Touch::MirrorY ? screen.y - 1 - y : y);
+					contact.position.x = BoardConfig::Touch::MirrorX ? screen.x - 1 - x : x;
+					contact.position.y = BoardConfig::Touch::MirrorY ? screen.y - 1 - y : y;
 					contact.size = Read16(record + 5);
+					contact.pressure = 0;
+					contact.valid = uni::TouchContactField_Id | uni::TouchContactField_Size;
 				}
 			}
 			ack_pending = true;
-			return FinishFrame();
+			pending_info_ = target.info;
+			pending_data_ = target.data;
+			return FinishFrame(target);
 		}
-		byte Scan() override { (void)ReadFrame(); return latest.count; }
-		byte GetPointCount() const override { return latest.count; }
-		uni::Point GetPoint(byte i) const override {
-			return i < latest.count ? uni::Point(latest.contacts[i].x, latest.contacts[i].y) : uni::Point(0, 0);
-		}
+		// The RTOS owner drives acquisition; legacy queries observe the last acknowledged frame.
+		byte Scan() override { return getPointCount(); }
+		byte getPointCount() const override { return byte(latest_info_.count); }
+		uni::Point getPoint(byte i) const override { return i < latest_info_.count ? latest_[i].position : uni::Point(0, 0); }
 	};
 
-	static_assert(BoardConfig::Touch::MaxContacts > 0 && unsigned(BoardConfig::Touch::MaxContacts) <= unsigned(Gt1xxController::Capacity),
-		"Touch contact limit exceeds the frame buffer");
+	static_assert(BoardConfig::Touch::MaxContacts > 0 && BoardConfig::Touch::MaxContacts <= 10,
+		"GT9xx supports at most ten contacts");
 	static_assert(BoardConfig::Touch::Address7 == 0x14 || BoardConfig::Touch::Address7 == 0x5D,
 		"GT9xx reset address must be 0x14 or 0x5D");
 	static_assert(BoardConfig::Touch::ReadyRetryTicks > 0 && BoardConfig::Touch::ReadyTimeoutMs > 0,
@@ -214,46 +234,23 @@ namespace {
 	static_assert(BoardConfig::Touch::IoRetryLimit > 0 && BoardConfig::Touch::IoRetryLimit <= 8 &&
 		BoardConfig::Touch::IoRetryDelayMs > 0, "Touch I2C retries must be bounded");
 
+	constexpr uint16 kTouchFrameSlots = 8;
 	constexpr uint32 kTouchEventHandle = 0x47543158;// private GT1X event source on this device thread
 
 	struct TouchDiagnostics {
-		stduint frames = 0, reads = 0, receives = 0, retries = 0, stale_retries = 0;
-		stduint errors = 0, invalid = 0, not_ready = 0, max_read_ticks = 0;
-		stduint last_log = tick, last_error_log = tick, last_stats = tick;
-		unsigned previous_ids = 0;
-		bool have_frame = false;
+		stduint receives = 0, retries = 0, stale_retries = 0;
+		stduint errors = 0, invalid = 0, not_ready = 0;
+		stduint last_error_log = 0, last_notify_log = 0, reported_notify_fail = 0;
 
 		void Record(Gt1xxController& touch, TouchReadStatus status, stduint now) {
-			++reads;
-			max_read_ticks = maxof(max_read_ticks, stduint(tick - now));
-			if (status == TouchReadStatus::Frame) {
-				++frames;
-				const auto& frame = touch.GetFrame();
-				unsigned ids = 0;
-				for (byte i = 0; i < frame.count; ++i) ids |= 1u << frame.contacts[i].id;
-				if (!have_frame || ids != previous_ids || now - last_log >= TouchTicks(BoardConfig::Touch::MoveLogPeriodMs)) {
-					ploginfo("[TOUCH B] frame=%u tick=%u count=%u ids=%04X",
-						(unsigned)frame.sequence, (unsigned)frame.time, (unsigned)frame.count, ids);
-					for (byte i = 0; i < frame.count; ++i) {
-						const auto& point = frame.contacts[i];
-						ploginfo("[TOUCH B] id=%u x=%u y=%u size=%u", (unsigned)point.id,
-							(unsigned)point.x, (unsigned)point.y, (unsigned)point.size);
-					}
-					last_log = now;
-				}
-				previous_ids = ids;
-				have_frame = true;
-			}
-			else {
-				if (status == TouchReadStatus::IoError) ++errors;
-				if (status == TouchReadStatus::InvalidFrame) ++invalid;
-				if (status != TouchReadStatus::NoFrame &&
-					(errors + invalid == 1 || now - last_error_log >= TouchTicks(1000))) {
-					plogwarn("[TOUCH B] read=%s status=%02X reg=%04X ack_stage=%u io=%u invalid=%u",
-						status == TouchReadStatus::IoError ? "I2C_ERROR" : "INVALID_FRAME", (unsigned)touch.status_byte,
-						(unsigned)touch.error_register, (unsigned)touch.ack_stage, (unsigned)errors, (unsigned)invalid);
-					last_error_log = now;
-				}
+			if (status == TouchReadStatus::Retry) ++errors;
+			else if (status == TouchReadStatus::Invalid) ++invalid;
+			else return;
+			if (errors + invalid == 1 || now - last_error_log >= TouchTicks(1000)) {
+				plogwarn("[TOUCH B] read=%s status=%02X reg=%04X ack_stage=%u io=%u invalid=%u",
+					status == TouchReadStatus::Retry ? "I2C_ERROR" : "INVALID_FRAME", (unsigned)touch.status_byte,
+					(unsigned)touch.error_register, (unsigned)touch.ack_stage, (unsigned)errors, (unsigned)invalid);
+				last_error_log = now;
 			}
 		}
 	};
@@ -262,6 +259,11 @@ namespace {
 		Gt1xxIic bus;
 		Gt1xxController controller;
 		TouchDiagnostics diagnostics;
+		uni::TouchStorage storage;
+		uni::TouchControlBlock control;
+		uni::TouchFrameToken capture_token;
+		uni::TouchFrameWriter capture_target;
+		bool capture_active = false;
 		stduint owner_tid = 0, ready_since = 0, io_failures = 0;
 		volatile bool running = false, retry_armed = false, retry_due = false;
 		volatile uint32 retry_token = 0;
@@ -276,6 +278,7 @@ namespace {
 	};
 
 	TouchRuntime* touch_runtime = nullptr;
+	uint32 touch_retry_serial = 0;
 
 	void Gt1xxInterrupt() {
 		auto* runtime = touch_runtime;
@@ -311,7 +314,8 @@ namespace {
 		const bool armed = runtime.retry_armed;
 		runtime.retry_armed = false;
 		runtime.retry_due = false;
-		if (!++runtime.retry_token) ++runtime.retry_token;
+		if (!++touch_retry_serial) ++touch_retry_serial;
+		runtime.retry_token = touch_retry_serial;
 		if (armed) (void)Systimex::CancelDeferredCallback(token, (_tocall_ft)TouchRetryWake);
 		if (restore_interrupts) IC.enInterrupt(true);
 	}
@@ -356,25 +360,44 @@ namespace {
 		}
 	}
 
-	void PrintTouchStats(TouchRuntime& runtime) {
+	void ReportTouchNotificationErrors(TouchRuntime& runtime) {
 		auto& stats = runtime.diagnostics;
-		if (stduint(tick - stats.last_stats) < TouchTicks(5000)) return;
-		ploginfo("[TOUCH B] stats irq=%u recv=%u reads=%u frames=%u retry=%u stale=%u notifyfail=%u io=%u invalid=%u notready=%u maxread_ticks=%u",
-			(unsigned)runtime.controller.interrupts, (unsigned)stats.receives, (unsigned)stats.reads,
-			(unsigned)stats.frames, (unsigned)stats.retries, (unsigned)stats.stale_retries,
-			(unsigned)(runtime.irq_notify_fail + runtime.retry_notify_fail), (unsigned)stats.errors,
-			(unsigned)stats.invalid, (unsigned)stats.not_ready, (unsigned)stats.max_read_ticks);
-		stats.last_stats = tick;// statistics never schedule an idle wakeup
+		const stduint failed = runtime.irq_notify_fail + runtime.retry_notify_fail;
+		if (failed == stats.reported_notify_fail) return;
+		if (stats.reported_notify_fail && stduint(tick - stats.last_notify_log) < TouchTicks(1000)) return;
+		plogwarn("[TOUCH B] event notification failures=%u", (unsigned)failed);
+		stats.reported_notify_fail = failed;
+		stats.last_notify_log = tick;
 	}
 
 	bool ProcessTouchWork(TouchRuntime& runtime) {
 		if (!WaitTouchWork(runtime)) return false;
 		CancelTouchRetry(runtime);
 		const stduint now = tick;
-		const auto status = runtime.controller.ReadFrame();
+		if (!runtime.capture_active) {
+			if (!runtime.control.BeginCapture(runtime.capture_token, runtime.capture_target)) {
+				plogerro("[TOUCH] cannot acquire a frame slot; touch stopped");
+				return false;
+			}
+			runtime.capture_active = true;
+		}
+		const auto status = runtime.controller.ReadFrame(runtime.capture_target);
 		runtime.diagnostics.Record(runtime.controller, status, now);
+		if (status != TouchReadStatus::Retry) {
+			if (status == TouchReadStatus::Frame) {
+				if (!runtime.control.CommitCapture(runtime.capture_token))
+					plogwarn("[TOUCH] invalid or cancelled frame rejected");
+			}
+			else runtime.control.AbortCapture(runtime.capture_token);
+			runtime.capture_active = false;
+			if (status == TouchReadStatus::Invalid) runtime.control.RequestCancel(uni::TouchCancelReason::InvalidFrame);
+		}
+		if (status == TouchReadStatus::InvalidTarget || status == TouchReadStatus::Unsupported || status == TouchReadStatus::Stopped) {
+			plogerro("[TOUCH] acquisition contract failed; touch stopped");
+			return false;
+		}
 		bool okay = true;
-		if (status == TouchReadStatus::IoError) {
+		if (status == TouchReadStatus::Retry) {
 			runtime.ready_waiting = false;
 			if (++runtime.io_failures >= BoardConfig::Touch::IoRetryLimit) {
 				plogerro("[TOUCH B] I2C retry limit reached; touch stopped");
@@ -384,7 +407,7 @@ namespace {
 		}
 		else {
 			runtime.io_failures = 0;
-			if (status == TouchReadStatus::NoFrame) {
+			if (status == TouchReadStatus::NoData) {
 				if (!runtime.ready_waiting) { runtime.ready_waiting = true; runtime.ready_since = now; }
 				if (stduint(tick - runtime.ready_since) < TouchTicks(BoardConfig::Touch::ReadyTimeoutMs)) {
 					okay = ArmTouchRetry(runtime, BoardConfig::Touch::ReadyRetryTicks);
@@ -403,7 +426,7 @@ namespace {
 				runtime.drain_pending = runtime.controller.IsLevelAsserted();
 			}
 		}
-		PrintTouchStats(runtime);
+		ReportTouchNotificationErrors(runtime);
 		return okay;
 	}
 
@@ -415,6 +438,12 @@ namespace {
 		// Remove stale touch notifications before the owner returns to its generic idle loop.
 		device_event_cancel(runtime.owner_tid, kTouchEventHandle, 0);
 		if (restore_interrupts) IC.enInterrupt(true);
+		runtime.controller.AbortRead();
+		if (runtime.capture_active) {
+			runtime.control.AbortCapture(runtime.capture_token);
+			runtime.capture_active = false;
+		}
+		runtime.control.RequestCancel(uni::TouchCancelReason::Stopped);
 	}
 
 }
@@ -432,11 +461,8 @@ uni::TouchTrait* TouchGt1xx::Initialize(const uni::Size2& screen) {
 		return nullptr;
 	}
 	auto& touch = runtime->controller;
-	ploginfo("[TOUCH B] init addr7=%02X SCL=%c%u SDA=%c%u RST=%c%u INT=%c%u",
-		(unsigned)BoardConfig::Touch::Address7, BoardConfig::Touch::SclPort, (unsigned)BoardConfig::Touch::SclPin,
-		BoardConfig::Touch::SdaPort, (unsigned)BoardConfig::Touch::SdaPin, BoardConfig::Touch::ResetPort,
-		(unsigned)BoardConfig::Touch::ResetPin, BoardConfig::Touch::InterruptPort, (unsigned)BoardConfig::Touch::InterruptPin);
-	if (!touch.Initialize()) {
+	if (!touch.Initialize() || !runtime->storage.Initialize(BoardConfig::Touch::MaxContacts, kTouchFrameSlots) ||
+		!runtime->control.Initialize(touch, runtime->storage)) {
 		plogerro("[TOUCH B] init failed reg=%04X ack_stage=%u PID=%02X%02X%02X%02X; display stays active",
 			(unsigned)touch.error_register, (unsigned)touch.ack_stage, (unsigned)touch.pid[0],
 			(unsigned)touch.pid[1], (unsigned)touch.pid[2], (unsigned)touch.pid[3]);
@@ -447,10 +473,21 @@ uni::TouchTrait* TouchGt1xx::Initialize(const uni::Size2& screen) {
 	runtime->running = true;
 	touch_runtime = runtime;
 	touch.EnableInterrupt(Gt1xxInterrupt);
-	ploginfo("[TOUCH B] PID=%s ready event-driven int_mode=%u config=%04X max_contacts=%u screen=%ux%u",
-		(char*)touch.pid, (unsigned)touch.interrupt_mode, (unsigned)touch.config_register,
-		(unsigned)BoardConfig::Touch::MaxContacts, (unsigned)screen.x, (unsigned)screen.y);
 	return &touch;
+}
+
+uni::TouchControlBlock* TouchGt1xx::GetControlBlock() {
+	return touch_runtime ? &touch_runtime->control : nullptr;
+}
+
+void TouchGt1xx::Shutdown() {
+	if (!touch_runtime) return;
+	auto* runtime = touch_runtime;
+	if (runtime->running) StopTouch(*runtime);
+	const bool restore_interrupts = IC.TryMaskInterrupt();
+	touch_runtime = nullptr;
+	if (restore_interrupts) IC.enInterrupt(true);
+	delete runtime;
 }
 
 bool TouchGt1xx::Process() {

@@ -34,8 +34,12 @@ void _test() {
 	}
 }
 
-
-void key_isr_up() { erro(); }
+void sysinfo_classic(OstreamTrait& com1, byte func);
+void key_isr_up() {
+	sysinfo_classic(XART1, 'w');
+	sysinfo_classic(XART1, 's');
+	erro();
+}
 
 // ASPEN=0 and boot FPCA cleared: the hardware frame is the plain 8 words.
 _ESYM_C stduint* _arm_frame(stduint lr, stduint sp) {
@@ -47,6 +51,8 @@ _ESYM_C void MemSetTrapReport(void* d, int c, size_t n, int which) {
 	_ASM volatile("mov %0, lr" : "=r"(ra));
 	XART1.OutFormat("MTRAP[%d] d=%08X c=%02X n=%u lr=%08X\r\n", which, (unsigned)d, (unsigned)(c & 0xFF), (unsigned)n, (unsigned)ra);
 }
+
+void DumpH7MpuTrace();
 
 static bool _fault_reported = false;// a fault inside the reporting path itself cannot be resumed
 
@@ -62,6 +68,10 @@ static void _fault_report(rostr tag, stduint lr, stduint psp, stduint msp) {
 	XART1.OutFormat("  r0=%08X r1=%08X r2=%08X r3=%08X r12=%08X\r\n",
 		frame[0], frame[1], frame[2], frame[3], frame[4]);
 	XART1.OutFormat("  shcsr=%08X icsr=%08X\r\n", (unsigned)SCB->SHCSR, (unsigned)SCB->ICSR);
+	stduint control = 0;
+	_ASM volatile("mrs %0, control" : "=r"(control));
+	XART1.OutFormat("  control=%08X mpu_ctrl=%08X mpu_type=%08X\r\n",
+		(unsigned)control, (unsigned)MPU->CTRL, (unsigned)MPU->TYPE);
 	{// the thread the fault belongs to: reading stack buffers here would fault again, the guard region covers the canary
 		auto* tb = Taskman::CurrentTB();
 		if (tb) {
@@ -71,14 +81,28 @@ static void _fault_report(rostr tag, stduint lr, stduint psp, stduint msp) {
 			XART1.OutFormat("  stk line=%08X levl=%08X size=%u\r\n",
 				(unsigned)_IMM(tb->stack_lineaddr), (unsigned)_IMM(tb->stack_levladdr),
 				(unsigned)tb->stack_size);
+			const auto* pb = tb->parent_process;
+			if (pb) {
+				XART1.OutFormat("  image base=%08X size=%08X pb=%08X ring=%u\r\n",
+					(unsigned)pb->load_slices[0].address, (unsigned)pb->load_slices[0].length,
+					(unsigned)_IMM(pb), (unsigned)pb->ring);
+			}
 		}
 	}
-	if (SCB->CFSR & ((1u << 3) | (1u << 4) | (1u << 12))) {
-		for (stduint i = 0; i < 8; i++) {// which region denied the access: dump the whole table
+	if (SCB->CFSR & (0xFFu | (1u << 12))) {
+		const bool trace_if = IC.TryMaskInterrupt();
+		const stduint saved_region = MPU->RNR;
+		for (stduint i = 0; i < ((MPU->TYPE >> 8) & 0xFFu); i++) {// which region denied the access: dump the whole table
 			MPU->RNR = i;
 			__DSB();// RBAR/RASR read back the region selected by RNR: let the RNR write land first
 			XART1.OutFormat("  mpu%u base=%08X attr=%08X\r\n", (unsigned)i, (unsigned)(MPU->RBAR & ~0x1Fu), (unsigned)MPU->RASR);
 		}
+		MPU->RNR = saved_region;
+		__DSB();
+		DumpH7MpuTrace();
+		if (trace_if) IC.enInterrupt(true);
+	}
+	if (SCB->CFSR & ((1u << 3) | (1u << 4) | (1u << 12))) {
 		erro();// MSTKERR/MUNSTKERR/BFSTKERR: nothing was stacked, nothing to resume
 	}
 	// a fault inside a loaded image is turned into an exit syscall, so only that task dies
@@ -213,7 +237,6 @@ _ESYM_C int _in_svc_handler() {
 void CleanupPwcallThreadInterrupts(stduint tid){}
 void CleanupPwcallProcessHandles(stduint pid) {}
 extern "C" stduint sys_sigaction(int, const struct _POSIX_sigaction*, struct _POSIX_sigaction*){return ~_IMM0;}
-void sysinfo_classic(OstreamTrait& com1, byte func) {}
 
 void Coreman::Initialize() {}
 bool Virtman::Initialize() { return false; }

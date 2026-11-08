@@ -8,6 +8,8 @@
 #include <cpp/Witch/Form.hpp>
 #include <cpp/Witch/TextChrome.hpp>
 
+namespace uni { class TouchControlBlock; }
+
 extern OstreamTrait* con0_out;
 
 extern FramebufferInfo sys_framebuffer;
@@ -131,6 +133,21 @@ bool DrawFreeTypeString(Color* pixel_buffer, stduint pitch_pixels, const Size2& 
 	const String& str, Color color, stduint pixel_size, Rectangle& dirty_rect);
 #endif
 
+class LayerManager2;
+struct GraphicLayer {
+	uni::VideoDevice* screen = nullptr;
+	LayerManager2* manager = nullptr;
+	uni::VideoControlInterface* surface = nullptr;
+	uni::Rectangle window;
+	uni::Size2 capacity;
+	uni::PixelFormat format = uni::PixelFormat::ARGB8888;
+	stduint address = 0, bytes = 0, pitch = 0;
+	uint32 id = 0;// zero-based within the owning screen
+	bool enabled = false, input_passthrough = false;
+	bool (*Place)(GraphicLayer&, const Point&) = nullptr;
+	void (*Disable)(GraphicLayer&) = nullptr;
+};
+
 class LayerManager2 : public uni::LayerManager {
 public:
 	using LayerManager::LayerManager;
@@ -140,6 +157,8 @@ public:
 	// Force the update immediately (Composition)
 	void UpdateForce(SheetTrait* who, const Rectangle& rect);
 	virtual void setCursorType(uni::CursorType type) override;
+	SheetTrait* FindInputSheet(const Point& position);
+	bool RaiseSheet(SheetTrait* sheet);
 };
 extern SpinlockBlock<LayerManager2> global_layman;
 #endif
@@ -159,6 +178,11 @@ public:
 	virtual void doshow(void* _) override;
 	virtual void onrupt(uni::SheetEvent event, Point rel_p, ...) override {}
 	void setType(uni::CursorType type);
+	Point GetScreenPosition() const;
+	void MoveTo(const Point& position);
+	void MoveBy(stdsint dx, stdsint dy);
+	bool MoveToLayer(GraphicLayer* layer);
+	GraphicLayer* GetDisplayLayer() const { return display_layer_; }
 public:// single instance
 	static Cursor* global_cursor;
 	static SheetTrait* moving_sheet;
@@ -176,6 +200,8 @@ public:
 	void setSheet(LayerManager& layman, const Point& vertex);
 public:
 	uni::VideoControlInterface* pixel_writer_ = nullptr;
+private:
+	GraphicLayer* display_layer_ = nullptr;
 };
 #endif
 
@@ -205,6 +231,9 @@ struct Consman {
 	static bool AdoptVideoDevice(VideoDevice* dev);
 	static void enable_2buffer();
 	static _RET_CreateVconsole CreateVconsole(const Rectangle& rect, rostr title);
+
+	// ---- Form
+
 	// Detaches one Form subtree from GUI roots, clears graf input references that still point into it, and returns the dirty area that should be refreshed afterward.
 	static Rectangle DetachForm(::uni::Witch::Form* pfrm, SheetTrait* exact_sheet = nullptr);
 	static void RemoveVconsole(Dnode* nod);
@@ -213,11 +242,25 @@ struct Consman {
 	static void MaximizeForm(::uni::Witch::Form* pfrm);
 	static void RestoreForm(::uni::Witch::Form* pfrm);
 	static Rectangle GetWorkArea();
+
+	// ---- Touch
+	
+	static bool RegisterTouchDevice(uni::TouchControlBlock* control);
+	static void UnregisterTouchDevice(uni::TouchControlBlock* control);
+	static bool IsTouchDeviceRegistered(uni::TouchControlBlock* control);
 };
 
 #if _GUI_ENABLE
 #define TTY_NUMBER 4
 
+
+// Internal Graphic-thread dispatch shared with graphic-touch.cpp.
+void HandlePointerMessage(MouseMessage mmsg, stdsint movement_x, stdsint movement_y);
+void ConsumeMouseForGraphic(MouseMessage message);
+bool PumpTouchDevices();
+#if defined(_MCU_STM32H7x)
+void RgbLcd_PumpPresentation();
+#endif
 
 void hand_mouse(MouseMessage mmsg);
 void hand_mouse_from_device(MouseMessage mmsg, const void* source);

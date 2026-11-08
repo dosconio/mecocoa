@@ -508,147 +508,202 @@ static const char* find_video_driver_name_recursive(const DeviceNode* root, void
 }
 #endif
 
-void dump_screens_and_forms(OstreamTrait& com1) {
-	com1.OutFormat("=== Display & Screen Devices ===\n\r");
-	#if _GUI_ENABLE && ((_MCCA & 0xFF00) == 0x8600)
-	if (Consman::current_video_device) {
-		auto fb = Consman::current_video_device->GetFramebuffer();
-		const char* drv_name = find_video_driver_name_recursive(Devsman::Root(), Consman::current_video_device);
-		if (!drv_name) drv_name = "classic-video-driver";
+#if _GUI_ENABLE
+#if defined(_MCU_STM32H7x)
+extern stduint RgbLcd_LayerCount();
+#endif
+namespace {
+	struct ScreenDumpForm {
+		ScreenDumpForm* next = nullptr;
+		stduint pid = 0, form_id = 0, parent = 0;
+		uint32 layer_id = 0;
+		stdsint z_index = -1;
+		Point position;
+		Size2 size;
+		uni::Witch::FormState state = uni::Witch::FormState::Normal;
+		bool has_layer = false, is_top = false, is_dock = false, is_cursor = false;
+		uni::UniquePtr<char[]> title;
+	};
+	struct ScreenDumpSnapshot {
+		FramebufferInfo framebuffer{};
+		ScreenDumpForm cursor;
+		ScreenDumpForm* first = nullptr;
+		ScreenDumpForm* last = nullptr;
+		Vector<stduint> pids;
+		const char* driver = "(unregistered)";
+		stduint layers = 0, count = 0;
+		bool active = false, has_cursor = false, incomplete = false;
+		~ScreenDumpSnapshot() {
+			while (first) { auto* item = first; first = first->next; delete item; }
+		}
+	};
 
-		const char* fmt_str = "Unknown";
-		if (fb.format == PixelFormat::ARGB8888) fmt_str = "ARGB8888";
-		else if (fb.format == PixelFormat::RGB565) fmt_str = "RGB565";
-		else if (fb.format == PixelFormat::RGB888) fmt_str = "RGB888";
-		else if (fb.format == PixelFormat::RGBA8888) fmt_str = "RGBA8888";
-
-		com1.OutFormat("Screen 0: [Active] %[u]x%[u] (%[u] bpp, %s) | Driver: %s\n\r",
-			(stduint)fb.screen_size.x, (stduint)fb.screen_size.y,
-			(stduint)fb.bpp, fmt_str, drv_name);
-		com1.OutFormat("          FB Physical Address: %p, Pitch: %[u] bytes, Size: %[u] bytes\n\r",
-			(void*)fb.physical_range.address, (stduint)fb.pitch, (stduint)fb.physical_range.length);
-	} else {
-		com1.OutFormat("No active video device.\n\r");
+	// Caller holds global_layman and keeps the Form alive through its process's pforms lock.
+	void capture_screen_dump_placement(ScreenDumpForm& item, SheetTrait& sheet, GraphicLayer* overlay) {
+		item.position = sheet.sheet_area.getVertex();
+		item.size = sheet.sheet_area.getSize();
+		auto* parent = sheet.refSheetParent();
+		item.parent = (stduint)parent;
+		// Calculate Z-index in the owning manager (from bottom to top).
+		stduint z = 0;
+		for (auto* node = parent ? parent->subl : nullptr; node; node = node->left) {
+			if (!node->offs || (!item.is_cursor && node->offs == Cursor::global_cursor)) continue;
+			if (node->offs == &sheet) { item.z_index = stdsint(z); break; }
+			++z;
+		}
+		for (; parent; parent = parent->refSheetParent()) {
+			if (overlay && overlay->manager == parent) {
+				item.layer_id = overlay->id;
+				item.has_layer = true;
+				item.position = item.position + overlay->window.getVertex();
+				return;
+			}
+			if (parent == global_layman.unsafe_ptr()) { item.has_layer = true; item.layer_id = 0; return; }
+			item.position = item.position + parent->sheet_area.getVertex();
+		}
 	}
 
-	com1.OutFormat("\n\r=== Window / Form Topology ===\n\r");
-	com1.OutFormat("PID  FormID State        Z-Index  Position & Size       Title\n\r");
+	void pad_screen_dump(OstreamTrait& output, int used, int width) {
+		for (; used < width; ++used) output.OutChar(' ');
+	}
 
+	void print_screen_dump_form(OstreamTrait& output, const ScreenDumpForm& item) {
+		int used = 0;
+		if (item.is_cursor) output.OutFormat("/    /      ");
+		else {
+			output.OutFormat("%[u]%n", item.pid, &used); pad_screen_dump(output, used, 5);
+			output.OutFormat("%[u]%n", item.form_id, &used); pad_screen_dump(output, used, 7);
+		}
+		if (item.has_layer) { output.OutFormat("%u%n", (unsigned)item.layer_id, &used); pad_screen_dump(output, used, 8); }
+		else output.OutFormat("-       ");
+		const char* state = "[NORMAL]";
+		if (item.is_cursor) state = "[CURSOR]";
+		else if (item.is_dock) state = "[DOCK]";
+		else if (item.state == uni::Witch::FormState::Minimized) state = "[MINIMIZED]";
+		else if (item.state == uni::Witch::FormState::Maximized) state = "[MAXIMIZED]";
+		else if (item.state == uni::Witch::FormState::Hidden) state = "[HIDDEN]";
+		output.OutFormat("%s%n", state, &used); pad_screen_dump(output, used, 13);
+		if (item.z_index < 0) output.OutFormat("-           ");
+		else { output.OutFormat("Z=%[i]%s%n", item.z_index, item.is_top ? " (Top)" : "", &used); pad_screen_dump(output, used, 12); }
+		output.OutFormat("(%[i], %[i]) %[u]x%[u]%n", stdsint(item.position.x), stdsint(item.position.y), item.size.x, item.size.y, &used);
+		pad_screen_dump(output, used, 22);
+		const char* title = item.is_cursor ? "Cursor" : item.title && item.title[0] ? item.title.get() : item.is_dock ? "(Dock)" : "(Titleless)";
+		output.OutFormat("%s\n\r", title);
+	}
+}
+#endif
+
+void dump_screens_and_forms(OstreamTrait& com1) {
+	com1.OutFormat("=== Display & Screen Devices ===\n\r");
+	#if _GUI_ENABLE
+	uni::UniquePtr<ScreenDumpSnapshot> snapshot(new (std::nothrow_t{}) ScreenDumpSnapshot);
+	if (!snapshot) { com1.OutFormat("(screen snapshot allocation failed)\n\r"); return; }
+	{
+		auto layman = global_layman.Lock();
+		if (auto* device = Consman::current_video_device) {
+			snapshot->active = true;
+			snapshot->framebuffer = device->GetFramebuffer();
+			snapshot->layers = 1;
+			#if defined(_MCU_STM32H7x)
+			snapshot->layers = RgbLcd_LayerCount();
+			#endif
+			if (auto* name = find_video_driver_name_recursive(Devsman::Root(), device)) snapshot->driver = name;
+			if (auto* cursor = Cursor::global_cursor) {
+				auto* overlay = cursor->GetDisplayLayer();
+				if (overlay && overlay->screen != device) overlay = nullptr;
+				snapshot->cursor.is_cursor = true;
+				capture_screen_dump_placement(snapshot->cursor, *cursor, overlay);
+				snapshot->has_cursor = snapshot->cursor.has_layer;
+			}
+		}
+	}
+	if (snapshot->active) {
+		const auto& fb = snapshot->framebuffer;
+		const char* format = "Unknown";
+		if (fb.format == PixelFormat::ARGB8888) format = "ARGB8888";
+		else if (fb.format == PixelFormat::ABGR8888) format = "ABGR8888";
+		else if (fb.format == PixelFormat::RGB565) format = "RGB565";
+		else if (fb.format == PixelFormat::RGB888) format = "RGB888";
+		else if (fb.format == PixelFormat::RGBA8888) format = "RGBA8888";
+		com1.OutFormat("Screen 0: [Active] %[u]x%[u] (%[u] bpp, %s) | Driver: %s\n\r",
+			fb.screen_size.x, fb.screen_size.y, stduint(fb.bpp), format, snapshot->driver);
+		com1.OutFormat("          FB Physical Address: %p, Pitch: %[u] bytes, Size: %[u] bytes\n\r",
+			(void*)fb.physical_range.address, stduint(fb.pitch), fb.physical_range.length);
+		com1.OutFormat("          Layers: %[u]\n\r", snapshot->layers);
+	}
+	else com1.OutFormat("No active video device.\n\r");
+
+	com1.OutFormat("\n\r=== Window / Form Topology ===\n\r");
+	com1.OutFormat("PID  FormID LayerID State        Z-Index     Position & Size       Title\n\r");
 	extern Spinlock scheduler_lock;
 	bool old_if = false;
 	if (!scheduler_lock.TryAcquire(old_if)) {
+		if (snapshot->has_cursor) print_screen_dump_form(com1, snapshot->cursor);
 		com1.OutFormat("(skip form walk: scheduler_lock busy on CPU %[i])\n\r", (stdsint)scheduler_lock.cpu_id);
 		return;
 	}
-
-	constexpr stduint MAX_PROCS = 128;
-	stduint pids[MAX_PROCS];
-	stduint proc_count = 0;
-	for (auto pnod = Taskman::chain.Root(); pnod && proc_count < MAX_PROCS; pnod = pnod->next) {
-		auto p = cast<ProcessBlock*>(pnod->offs);
-		pids[proc_count++] = p->pid;
+	for (auto* node = Taskman::chain.Root(); node; node = node->next) {
+		if (snapshot->pids.Count() >= 128 || !snapshot->pids.Append(static_cast<ProcessBlock*>(node->offs)->pid)) {
+			snapshot->incomplete = true;
+			break;
+		}
 	}
 	scheduler_lock.Release(old_if);
-
-	stduint total_forms = 0;
-	struct FormItem {
-		stduint pid;
-		stduint form_id;
-		::uni::Witch::Form* pfrm;
-	};
-	constexpr stduint MAX_DUMP_FORMS = 128;
-	FormItem items[MAX_DUMP_FORMS];
-	stduint item_count = 0;
-
-	for (stduint i = 0; i < proc_count && item_count < MAX_DUMP_FORMS; i++) {
-		ProcessBlock* pb = ProcessBlock::AcquireActiveByPID(pids[i]);
-		if (!pb) continue;
+	for0(i, snapshot->pids.Count()) {
+		auto* process = ProcessBlock::AcquireActiveByPID(snapshot->pids[i]);
+		if (!process) continue;
 		{
-			auto pforms = pb->pforms.Lock();
-			for (stduint j = 0; j < pforms->Count() && item_count < MAX_DUMP_FORMS; j++) {
-				SheetTrait* st = (*pforms)[j];
-				if (!st) continue;
-				items[item_count++] = { pb->pid, j, static_cast<::uni::Witch::Form*>(st) };
-			}
-		}
-		ProcessBlock::Release(pb);
-	}
-
-	for (stduint k = 0; k < item_count; k++) {
-		auto& item = items[k];
-		auto pfrm = item.pfrm;
-		total_forms++;
-
-		// Calculate Z-index in global_layman (from bottom to top)
-		stdsint z_index = -1;
-		bool is_top = false;
-		{
-			auto layman = global_layman.Lock();
-			stduint cur_z = 0;
-			for (auto nod = layman->subl; nod; nod = nod->left) {
-				if (nod->offs == pfrm) {
-					z_index = (stdsint)cur_z;
-				}
-				cur_z++;
-			}
-			for (auto nod = layman->subf ? layman->subf->next : nullptr; nod; nod = nod->next) {
-				if (!nod->offs || nod->offs == global_desktop || nod->offs == Cursor::global_cursor) continue;
-				auto nod_frm = static_cast<::uni::Witch::Form*>(nod->offs);
-				if (!nod_frm->is_dock) {
-					if (nod_frm == pfrm) {
-						is_top = true;
+			auto forms = process->pforms.Lock();
+			for0(j, forms->Count()) {
+				if (!(*forms)[j]) continue;
+				auto* item = snapshot->count < 128 ? new (std::nothrow_t{}) ScreenDumpForm : nullptr;
+				if (!item) { snapshot->incomplete = true; break; }
+				item->pid = process->pid; item->form_id = j;
+				{
+					auto layman = global_layman.Lock();
+					auto* form = static_cast<uni::Witch::Form*>((*forms)[j]);
+					item->is_dock = form->is_dock; item->state = form->state;
+					const stduint length = form->Title.getByteCount();
+					if (length != ~stduint(0)) item->title.reset(new (std::nothrow_t{}) char[length + 1]);
+					if (item->title) {
+						if (length) MemCopyN(item->title.get(), form->Title.reference(), length);
+						item->title[length] = 0;
 					}
-					break;
+					else snapshot->incomplete = true;
+					auto* overlay = Cursor::global_cursor ? Cursor::global_cursor->GetDisplayLayer() : nullptr;
+					if (overlay && overlay->screen != Consman::current_video_device) overlay = nullptr;
+					capture_screen_dump_placement(*item, *form, overlay);
 				}
+				if (snapshot->last) snapshot->last->next = item;
+				else snapshot->first = item;
+				snapshot->last = item;
+				++snapshot->count;
 			}
 		}
-
-		const char* state_str = "[NORMAL]   ";
-		if (pfrm->is_dock) {
-			state_str = "[DOCK]     ";
-		} else if (pfrm->state == ::uni::Witch::FormState::Minimized) {
-			state_str = "[MINIMIZED]";
-		} else if (pfrm->state == ::uni::Witch::FormState::Maximized) {
-			state_str = "[MAXIMIZED]";
-		} else if (pfrm->state == ::uni::Witch::FormState::Hidden) {
-			state_str = "[HIDDEN]   ";
-		}
-
-		com1.OutFormat("%[u]    %[u]      %s  ", item.pid, item.form_id, state_str);
-
-		if (z_index >= 0) {
-			if (is_top) {
-				com1.OutFormat("Z=%[i] (Top) ", z_index);
-			} else {
-				com1.OutFormat("Z=%[i]       ", z_index);
-			}
-		} else {
-			com1.OutFormat("-           ");
-		}
-
-		com1.OutFormat("(%[i], %[i]) %[u]x%[u] ",
-			(stdsint)pfrm->sheet_area.x, (stdsint)pfrm->sheet_area.y,
-			(stduint)pfrm->sheet_area.width, (stduint)pfrm->sheet_area.height);
-
-		if (pfrm->Title.reference() && pfrm->Title.reference()[0] != '\0') {
-			com1.OutFormat("%s\n\r", pfrm->Title.reference());
-		} else if (pfrm->is_dock) {
-			com1.OutFormat("(Dock)\n\r");
-		} else {
-			com1.OutFormat("(Titleless)\n\r");
-		}
+		ProcessBlock::Release(process);
 	}
-
-	if (total_forms == 0) {
-		com1.OutFormat("(no active forms in system)\n\r");
+	for (auto* item = snapshot->first; item; item = item->next) {
+		if (!item->has_layer || item->is_dock || item->z_index < 0 ||
+			item->state == uni::Witch::FormState::Minimized || item->state == uni::Witch::FormState::Hidden) continue;
+		item->is_top = true;
+		for (auto* peer = snapshot->first; peer; peer = peer->next)
+			if (peer->has_layer && !peer->is_dock && peer->layer_id == item->layer_id && peer->parent == item->parent &&
+				peer->state != uni::Witch::FormState::Minimized && peer->state != uni::Witch::FormState::Hidden &&
+				peer->z_index > item->z_index) item->is_top = false;
 	}
+	if (snapshot->has_cursor) print_screen_dump_form(com1, snapshot->cursor);
+	for (auto* item = snapshot->first; item; item = item->next) print_screen_dump_form(com1, *item);
+	if (!snapshot->count) com1.OutFormat("(no active forms in system)\n\r");
+	if (snapshot->incomplete) com1.OutFormat("(snapshot incomplete: process/form limit or allocation failure)\n\r");
 	#else
-	com1.OutFormat("GUI not enabled or non-x86 architecture.\n\r");
+	com1.OutFormat("GUI not enabled.\n\r");
 	#endif
 }
 
+#if (_MCCA & 0xFF00) == 0x8600
 void dump_device_tree(OstreamTrait& com1, bool verbose);
 void dump_backends(OstreamTrait& com1, SysinfoDumpDevsType type);
+#endif
 void sysinfo_classic(OstreamTrait& com1, byte func)
 {
 	switch (func)
@@ -661,6 +716,7 @@ void sysinfo_classic(OstreamTrait& com1, byte func)
 		Filesys::Tree(com1, false);
 		break;
 
+	#if (_MCCA & 0xFF00) == 0x8600
 	case 'h': case 'H':// hardware
 		com1.OutFormat("\n\r");
 		if (func == 'H') {
@@ -671,6 +727,7 @@ void sysinfo_classic(OstreamTrait& com1, byte func)
 		}
 		dump_device_tree(com1, func != 'h');
 		break;
+	#endif
 
 	case 'l':// lock
 		com1.OutFormat("\n\r");
@@ -697,12 +754,14 @@ void sysinfo_classic(OstreamTrait& com1, byte func)
 		dump_screens_and_forms(com1);
 		break;
 
+	#if (_MCCA & 0xFF00) == 0x8600
 	case '-':
 		Coreman::Reboot();
 		break;
 	case '+':
 		Coreman::Shutdown();
 		break;
+	#endif
 
 	default:
 		break;

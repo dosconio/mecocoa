@@ -35,6 +35,7 @@ singleline
 - 考虑不同平台，考虑不同架构，例如 CONFIG_ENABLE_MMU 等
 - 如果要新建文件，跟我商量，不要擅自放到不合适的文件或文件夹里，也不要擅自命名
 - mecocoa的改动写进 documnt\doczhcn\DEVELOG.zh-cn.md。简要说明改了什么。加上修改的时间日期戳
+- 注意栈大小。尽量少用一百字节以上的本地变量，有条件用堆
 
 ---
 

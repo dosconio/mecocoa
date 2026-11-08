@@ -476,6 +476,11 @@
               <FilePath>..\..\mecocoa\syscall.cpp</FilePath>
             </File>
             <File>
+              <FileName>sysinfo.cpp</FileName>
+              <FileType>8</FileType>
+              <FilePath>..\..\mecocoa\sysinfo.cpp</FilePath>
+            </File>
+            <File>
               <FileName>devsman.cpp</FileName>
               <FileType>8</FileType>
               <FilePath>..\..\mecocoa\devsman.cpp</FilePath>
@@ -484,6 +489,11 @@
               <FileName>threads.cpp</FileName>
               <FileType>8</FileType>
               <FilePath>..\..\mecocoa\threads.cpp</FilePath>
+            </File>
+            <File>
+              <FileName>graphic-touch.cpp</FileName>
+              <FileType>8</FileType>
+              <FilePath>..\..\mecocoa\graphic-touch.cpp</FilePath>
             </File>
           </Files>
         </Group>

@@ -47,6 +47,9 @@ namespace Devs {
 
 	DeviceTree device_tree;
 	DeviceNode* device_root = nullptr;
+	#if (_MCCA & 0xFF00) == 0x8600 || defined(_MCU_STM32H7x)
+	DeviceNode* bus_roots[static_cast<stduint>(DeviceBusType::Count)]{};
+	#endif
 	#if (_MCCA & 0xFF00) == 0x8600
 	void discover_x86_acpi_devices();
 	void materialize_x86_acpi_floppy_nodes();
@@ -60,7 +63,6 @@ namespace Devs {
 	extern bool pci_devices_attached;
 
 	DeviceNode* legacy_isa_bus = nullptr;
-	DeviceNode* bus_roots[static_cast<stduint>(DeviceBusType::Count)]{};
 	
 
 	struct DriverStartHookEntry {
@@ -439,6 +441,9 @@ namespace Devs {
 		}
 	}
 
+	#endif
+	#if (_MCCA & 0xFF00) == 0x8600 || defined(_MCU_STM32H7x)
+
 	void init_node(DeviceNode* node, DeviceNodeType node_type, DeviceBusType bus_type, const char* name) {
 		MemSet(node, 0, sizeof(DeviceNode));
 		node->link.addr = const_cast<char*>(name);
@@ -482,6 +487,9 @@ namespace Devs {
 		last->next = child_link;
 		child_link->left = last;
 	}
+
+	#endif
+	#if (_MCCA & 0xFF00) == 0x8600
 
 	bool detach_child(DeviceNode* parent, DeviceNode* child) {
 		if (!parent || !child || !parent->link.subf) return false;
@@ -553,15 +561,21 @@ namespace Devs {
 		return StrHeap(String::newFormat(fmt, a0, a1, a2, a3).reference());
 	}
 
+	#endif
+	#if (_MCCA & 0xFF00) == 0x8600 || defined(_MCU_STM32H7x)
+
 	DeviceNode* create_bus_root(DeviceBusType bus_type, const char* name = nullptr) {
 		const stduint idx = bus_root_index(bus_type);
 		if (bus_roots[idx]) return bus_roots[idx];
 		auto* root = device_tree.NewNode();
+		if (!root) return nullptr;
 		init_node(root, bus_type == DeviceBusType::PCI ? DeviceNodeType::PCI_Root : DeviceNodeType::BusRoot,
 			bus_type, name ? name : default_bus_root_name(bus_type));
 		append_child(device_root, root);
 		bus_roots[idx] = root;
+		#if (_MCCA & 0xFF00) == 0x8600
 		if (bus_type == DeviceBusType::PCI) pci_root = root;
+		#endif
 		return root;
 	}
 
@@ -571,6 +585,9 @@ namespace Devs {
 
 
 
+	#endif
+	#if (_MCCA & 0xFF00) == 0x8600
+
 	DeviceNode* find_child_by_type(DeviceNode* parent, DeviceNodeType node_type) {
 		if (!parent) return nullptr;
 		for (auto* crt = reinterpret_cast<DeviceNode*>(parent->link.subf); crt; crt = reinterpret_cast<DeviceNode*>(crt->link.next)) {
@@ -579,10 +596,20 @@ namespace Devs {
 		return nullptr;
 	}
 
+	#endif
+	#if (_MCCA & 0xFF00) == 0x8600 || defined(_MCU_STM32H7x)
+
 	DeviceNode* resolve_default_platform_parent(const char* name) {
+		#if (_MCCA & 0xFF00) == 0x8600
 		if (legacy_isa_bus && is_x86_legacy_isa_platform_name(name)) return legacy_isa_bus;
+		#else
+		(void)name;
+		#endif
 		return get_bus_root(DeviceBusType::Platform);
 	}
+
+	#endif
+	#if (_MCCA & 0xFF00) == 0x8600
 
 	DeviceNode* resolve_default_serio_parent(const char* name) {
 		if (legacy_isa_bus && is_x86_legacy_isa_serio_name(name)) return legacy_isa_bus;
@@ -603,8 +630,17 @@ namespace Devs {
 		return true;
 	}
 
+	#endif
+	#if (_MCCA & 0xFF00) == 0x8600 || defined(_MCU_STM32H7x)
+
 	DeviceNode* append_plain_device(DeviceNode* parent, DeviceNodeType node_type, DeviceBusType bus_type, const char* name) {
+		if (!name) return nullptr;
 		auto* node = device_tree.NewNode();
+		if (!node) {
+			auto* text = const_cast<char*>(name);
+			mfree(text);
+			return nullptr;
+		}
 		init_node(node, node_type, bus_type, name);
 		append_child(parent, node);
 		return node;
@@ -618,6 +654,9 @@ namespace Devs {
 		}
 		return nullptr;
 	}
+
+	#endif
+	#if (_MCCA & 0xFF00) == 0x8600
 
 	DeviceNode* find_named_node_in_subtree(DeviceNode* node, DeviceNodeType node_type, const char* name) {
 		for (auto* crt = node; crt; crt = reinterpret_cast<DeviceNode*>(crt->link.next)) {
@@ -663,14 +702,22 @@ namespace Devs {
 		return set_driver_binding(node, decision.driver_name);
 	}
 
+	#endif
+	#if (_MCCA & 0xFF00) == 0x8600 || defined(_MCU_STM32H7x)
+
 	void set_driver_started(DeviceNode* node, const char* driver_name, void* driver_data = nullptr) {
 		if (!node || !driver_name) return;
 		node->fields.binding.driver_name = driver_name;
 		node->fields.binding.state = static_cast<uint32>(DriverBindingState::Started);
 		node->fields.binding.probe_result = 0;
 		node->fields.binding.driver_data = driver_data;
+		#if (_MCCA & 0xFF00) == 0x8600
 		attach_builtin_node_ops(node, driver_data);
+		#endif
 	}
+
+	#endif
+	#if (_MCCA & 0xFF00) == 0x8600
 
 	bool set_driver_probe_state(DeviceNode* node, DriverBindingState state, int32 result) {
 		if (!node || !node->fields.binding.driver_name) return false;
@@ -959,23 +1006,33 @@ namespace Devs {
 		return isa_node;
 	}
 
+	#endif
+	#if (_MCCA & 0xFF00) == 0x8600 || defined(_MCU_STM32H7x)
+
 	void initialize_device_tree() {
 		if (device_root) return;
 
 		device_root = device_tree.NewNode();
+		if (!device_root) return;
 		init_node(device_root, DeviceNodeType::SystemRoot, DeviceBusType::None, "system-root");
 		device_tree.SetRoot(device_root);
+		#if (_MCCA & 0xFF00) == 0x8600
 		create_bus_root(DeviceBusType::PCI);
+		#endif
 		#if CONFIG_ENABLE_USB
 		create_bus_root(DeviceBusType::USB);
 		#endif
 		create_bus_root(DeviceBusType::Platform);
 		create_bus_root(DeviceBusType::I2C);
 		create_bus_root(DeviceBusType::SPI);
+		#if (_MCCA & 0xFF00) == 0x8600
 		create_bus_root(DeviceBusType::Serio);
 		create_bus_root(DeviceBusType::Virtio);
+		#endif
 		create_bus_root(DeviceBusType::UART);
+		#if (_MCCA & 0xFF00) == 0x8600
 		primary_pci_bus = create_pci_bus_node(0, 0);
+		#endif
 
 		ploginfo("[DEVSMAN] Device tree root ready");
 		if constexpr (0) {
@@ -983,11 +1040,16 @@ namespace Devs {
 			for (stduint i = 1; i < byteof(bus_roots) / byteof(bus_roots[0]); ++i) {
 				if (bus_roots[i]) ploginfo("[DEVSMAN] Node: %s", bus_roots[i]->link.addr);
 			}
+			#if (_MCCA & 0xFF00) == 0x8600
 			ploginfo("[DEVSMAN] Node: %s", primary_pci_bus->link.addr);
+			#endif
 		}
 	}
 
 
+
+	#endif
+	#if (_MCCA & 0xFF00) == 0x8600
 
 	void register_legacy_x86_platform_nodes(bool support_apic) {
 		auto* legacy_bus = legacy_isa_bus ? legacy_isa_bus : get_bus_root(DeviceBusType::Platform);
@@ -2712,7 +2774,7 @@ bool Devsman::RegisterDriverStarter(const char* driver_name, DriverStartRoutine 
 
 
 
-#if (_MCCA & 0xFF00) == 0x8600
+#if (_MCCA & 0xFF00) == 0x8600 || defined(_MCU_STM32H7x)
 
 DeviceNode* Devsman::RegisterPlatformDevice(const char* name, const char* driver_name, void* driver_data) {
 	initialize_device_tree();
@@ -2723,11 +2785,16 @@ DeviceNode* Devsman::RegisterPlatformDevice(const char* name, const char* driver
 	const auto node_bus_type = root_bus_type == DeviceBusType::ISA ? DeviceBusType::ISA : DeviceBusType::Platform;
 	if (auto* node = find_named_child(root, DeviceNodeType::PlatformDevice, name)) {
 		node->fields.bus_type = static_cast<uint16>(node_bus_type);
+		#if (_MCCA & 0xFF00) == 0x8600
 		bind_device_node(node);
+		#endif
 		return node;
 	}
 	auto* node = append_plain_device(root, DeviceNodeType::PlatformDevice, node_bus_type, StrHeap(name));
+	if (!node) return nullptr;
+	#if (_MCCA & 0xFF00) == 0x8600
 	bind_device_node(node);
+	#endif
 	return node;
 }
 
@@ -2739,22 +2806,33 @@ DeviceNode* Devsman::RegisterPlatformDevice(DeviceNode* parent, const char* name
 	const auto node_bus_type = parent_bus_type == DeviceBusType::ISA ? DeviceBusType::ISA : DeviceBusType::Platform;
 	if (auto* node = find_named_child(parent, DeviceNodeType::PlatformDevice, name)) {
 		if (driver_name) {
-			if (!try_start_platform_driver(node, driver_name, driver_data)) {
-				set_driver_started(node, driver_name, driver_data);
-			}
+			#if (_MCCA & 0xFF00) == 0x8600
+			if (try_start_platform_driver(node, driver_name, driver_data)) return node;
+			#endif
+			set_driver_started(node, driver_name, driver_data);
 		}
+		#if (_MCCA & 0xFF00) == 0x8600
 		else bind_device_node(node);
+		#endif
 		return node;
 	}
 	auto* node = append_plain_device(parent, DeviceNodeType::PlatformDevice, node_bus_type, StrHeap(name));
+	if (!node) return nullptr;
 	if (driver_name) {
-		if (!try_start_platform_driver(node, driver_name, driver_data)) {
-			set_driver_started(node, driver_name, driver_data);
-		}
+		#if (_MCCA & 0xFF00) == 0x8600
+		if (try_start_platform_driver(node, driver_name, driver_data)) return node;
+		#endif
+		set_driver_started(node, driver_name, driver_data);
 	}
+	#if (_MCCA & 0xFF00) == 0x8600
 	else bind_device_node(node);
+	#endif
 	return node;
 }
+
+#endif
+
+#if (_MCCA & 0xFF00) == 0x8600
 
 DeviceNode* Devsman::RegisterStorageDevice(DeviceNode* parent, const char* name,
 	DeviceBusType bus_type, const char* driver_name, void* driver_data) {

@@ -202,7 +202,7 @@ void Cursor::setType(uni::CursorType type) {
 	if (cur_type == type) return;
 	cur_type = type;
 	doshow(sheet_buffer);
-	SafeLaymanUpdate(this, Rectangle(Point(0, 0), sheet_area.getSize()));
+	if (sheet_parent) sheet_parent->Update(this, Rectangle(Point(0, 0), sheet_area.getSize()));
 }
 
 void LayerManager2::setCursorType(uni::CursorType type) {
@@ -218,6 +218,86 @@ void Cursor::setSheet(LayerManager& layman, const Point& vertex) {
 	layman.Append(this);
 }
 
+// Cursor mutation uses the same global_layman lock for all screen layers.
+Point Cursor::GetScreenPosition() const {
+	return display_layer_ ? display_layer_->window.getVertex() + sheet_area.getVertex() : sheet_area.getVertex();
+}
+
+void Cursor::MoveTo(const Point& position) {
+	const auto screen = sys_framebuffer.screen_size;
+	if (!screen.x || !screen.y || !sheet_parent) return;
+	const Point target(minof(position.x, screen.x - 1), minof(position.y, screen.y - 1));
+	if (display_layer_) {
+		if (display_layer_->Place) display_layer_->Place(*display_layer_, target - sheet_area.getVertex());
+	}
+	else {
+		const auto current = sheet_area.getVertex();
+		sheet_parent->Domove(this, { stdsint(target.x) - stdsint(current.x), stdsint(target.y) - stdsint(current.y) });
+	}
+}
+
+void Cursor::MoveBy(stdsint dx, stdsint dy) {
+	const auto current = GetScreenPosition();
+	const auto screen = sys_framebuffer.screen_size;
+	if (!screen.x || !screen.y) return;
+	const stdsint x = maxof(stdsint(0), minof(stdsint(screen.x - 1), stdsint(current.x) + dx));
+	const stdsint y = maxof(stdsint(0), minof(stdsint(screen.y - 1), stdsint(current.y) + dy));
+	MoveTo(Point(stduint(x), stduint(y)));
+}
+
+bool Cursor::MoveToLayer(GraphicLayer* layer) {
+	if (layer == display_layer_) return true;
+	if (!sheet_buffer || !sheet_parent) return false;
+	if (layer && (!layer->manager || !layer->surface || !layer->Place || !layer->Disable ||
+		layer->screen != Consman::current_video_device || layer->manager->subf ||
+		sheet_area.width > layer->manager->window.width || sheet_area.height > layer->manager->window.height)) return false;
+	const Point position = GetScreenPosition();
+	const Rectangle old_area = sheet_area;
+	auto* previous = sheet_parent;
+	if (display_layer_ && display_layer_->Disable) display_layer_->Disable(*display_layer_);
+	if (!previous->Remove(this)) return false;
+	display_layer_ = layer;
+	auto* target = layer ? layer->manager : global_layman.unsafe_ptr();
+	InitializeSheet(*target, layer ? Point(0, 0) : position, old_area.getSize(), sheet_buffer);
+	target->Append(this);
+	pixel_writer_ = &target->getVCI();
+	if (!layer) target->RaiseSheet(this);
+	previous->Update(nullptr, old_area);
+	target->Update(this, Rectangle(Point(0, 0), sheet_area.getSize()));
+	if (layer && !layer->Place(*layer, position)) {
+		MoveToLayer(nullptr);
+		MoveTo(position);
+		return false;
+	}
+	return true;
+}
+
+SheetTrait* LayerManager2::FindInputSheet(const Point& position) {
+	for (auto* node = subf; node; node = node->next) {
+		auto* sheet = static_cast<SheetTrait*>(node->offs);
+		if (sheet && sheet != Cursor::global_cursor && sheet->sheet_area.ifContain(position)) return sheet;
+	}
+	return nullptr;
+}
+
+bool LayerManager2::RaiseSheet(SheetTrait* sheet) {
+	if (!sheet || sheet == global_desktop || sheet->refSheetParent() != this) return false;
+	auto* node = &sheet->refSheetNode();
+	auto* anchor = subf && subf->offs == Cursor::global_cursor && sheet != Cursor::global_cursor ? subf : nullptr;
+	if (node == (anchor ? anchor->next : subf)) return false;
+	if (node->left) node->left->next = node->next;
+	else subf = node->next;
+	if (node->next) node->next->left = node->left;
+	else subl = node->left;
+	node->left = anchor;
+	node->next = anchor ? anchor->next : subf;
+	if (node->next) node->next->left = node;
+	else subl = node;
+	if (anchor) anchor->next = node;
+	else subf = node;
+	return true;
+}
+
 static void ClampSheetToWindow(SheetTrait* sheet, const Rectangle& window) {
 	if (!sheet) return;
 	stdsint max_x = maxof(0, (stdsint)window.width - (stdsint)minof((stduint)sheet->sheet_area.width, (stduint)window.width));
@@ -230,6 +310,10 @@ static void ClampSheetToWindow(SheetTrait* sheet, const Rectangle& window) {
 
 bool Consman::AdoptVideoDevice(VideoDevice* dev) {
 	if (!dev) return false;
+	if (Cursor::global_cursor && Cursor::global_cursor->GetDisplayLayer()) {
+		auto layman = global_layman.Lock();
+		if (!Cursor::global_cursor->MoveToLayer(nullptr)) return false;
+	}
 	Rectangle screen_rect(Point(0, 0), dev->GetFramebuffer().screen_size, Color::Black);
 	bool has_runtime_gui = false;
 	{
@@ -381,7 +465,7 @@ static stdsint GraphicMsg_DRV_ATTACH(FMT_GraphicMsg_DRV_ATTACH* usr_info, Proces
 #endif
 
 // hand_mouse - runs only in Graphic thread, no lock needed
-void hand_mouse(MouseMessage mmsg) {
+void HandlePointerMessage(MouseMessage mmsg, stdsint movement_x, stdsint movement_y) {
 	byte change_btns = 0;// 0RML0RML
 	if (Cursor::mouse_btnl_dn != mmsg.BtnLeft) change_btns |= 0b001;
 	if (Cursor::mouse_btnm_dn != mmsg.BtnMiddle) change_btns |= 0b010;
@@ -437,13 +521,13 @@ void hand_mouse(MouseMessage mmsg) {
 	Cursor::mouse_btnr_dn = mmsg.BtnRight;
 
 	// for paint app
-	const bool cursor_moved_before_click = (change_btns & 0b1) && !mmsg.BtnLeft && (mmsg.X || mmsg.Y);
+	const bool cursor_moved_before_click = (change_btns & 0b1) && !mmsg.BtnLeft && (movement_x || movement_y);
 	if (cursor_moved_before_click) {
 		// A release packet can also carry the final stroke displacement.
 		auto layman = global_layman.Lock();
-		layman->Domove(Cursor::global_cursor, { mmsg.X, mmsg.Y });
+		Cursor::global_cursor->MoveBy(movement_x, movement_y);
 	}
-	Point cursor_p = Cursor::global_cursor->sheet_area.getVertex();
+	Point cursor_p = Cursor::global_cursor->GetScreenPosition();
 
 	// Handle Clicks and Z-order
 	SheetTrait* sheet = nullptr;
@@ -454,7 +538,7 @@ void hand_mouse(MouseMessage mmsg) {
 
 	{
 		auto layman = global_layman.Lock();
-		if ((change_btns & 0b111) && (sheet = layman->getTop(cursor_p, 1))) {
+		if ((change_btns & 0b111) && (sheet = layman->FindInputSheet(cursor_p))) {
 			click_rel_p = cursor_p - sheet->sheet_area.getVertex();
 			if (Consman::last_click_sheet && Consman::last_click_sheet != sheet) {
 				leave_sheet = Consman::last_click_sheet;
@@ -462,25 +546,7 @@ void hand_mouse(MouseMessage mmsg) {
 			click_sheet = sheet;
 			Consman::last_click_sheet = sheet;
 
-			// Bring to front (Insert after subf, which is the cursor)
-			Nnode* target = &sheet->refSheetNode();
-			if (layman->subf && target != layman->subf->next && target != layman->subl) {
-				// Nchain::Exchange-like manual manipulation
-				Nnode* prev = target->left;
-				Nnode* next = target->next;
-				if (prev) prev->next = next;
-				if (next) next->left = prev;
-
-				Nnode* top = layman->subf;
-				Nnode* sec = top->next;
-
-				target->left = top;
-				target->next = sec;
-				top->next = target;
-				if (sec) sec->left = target;
-
-				needs_update = true;
-			}
+			needs_update = layman->RaiseSheet(sheet);
 		}
 	}
 	
@@ -496,17 +562,17 @@ void hand_mouse(MouseMessage mmsg) {
 	}
 
 	// Handle Movement
-	if (mmsg.X || mmsg.Y) {
+	if (movement_x || movement_y) {
 		{
 			auto layman = global_layman.Lock();
-			if (!cursor_moved_before_click) layman->Domove(Cursor::global_cursor, { mmsg.X, mmsg.Y });
+			if (!cursor_moved_before_click) Cursor::global_cursor->MoveBy(movement_x, movement_y);
 			if (Cursor::moving_sheet) {
-				layman->Domove(Cursor::moving_sheet, { mmsg.X, mmsg.Y });
+				layman->Domove(Cursor::moving_sheet, { movement_x, movement_y });
 			}
 		}
 		// Shape of Cursor
 		if (Cursor::resizing_sheet) {
-			Point current_cursor_p = Cursor::global_cursor->sheet_area.getVertex();
+			Point current_cursor_p = Cursor::global_cursor->GetScreenPosition();
 			stdsint delta_x = current_cursor_p.x - Cursor::resize_start_cursor.x;
 			stdsint delta_y = current_cursor_p.y - Cursor::resize_start_cursor.y;
 			Rectangle old_ghost = Cursor::ghost_rect;
@@ -622,8 +688,8 @@ void hand_mouse(MouseMessage mmsg) {
 		constexpr uint64 mouse_move_interval_ticks = (20u * CONFIG_SysTickFreq + 999u) / 1000u;
 
 		if (!Cursor::resizing_sheet && ((change_btns & 0b111) || (tick - last_onmoved_tick >= mouse_move_interval_ticks))) {
-			Point current_cursor_p = Cursor::global_cursor->sheet_area.getVertex();
-			SheetTrait* hover_sheet = global_layman.Lock()->getTop(current_cursor_p, 1);
+			Point current_cursor_p = Cursor::global_cursor->GetScreenPosition();
+			SheetTrait* hover_sheet = global_layman.Lock()->FindInputSheet(current_cursor_p);
 			if (hover_sheet) {
 				Point rel_p = current_cursor_p - hover_sheet->sheet_area.getVertex();
 				hover_sheet->onrupt(SheetEvent::onMoved, rel_p, change_btns);
@@ -631,6 +697,10 @@ void hand_mouse(MouseMessage mmsg) {
 			last_onmoved_tick = tick;
 		}
 	}
+}
+
+void hand_mouse(MouseMessage mmsg) {
+	HandlePointerMessage(mmsg, mmsg.X, mmsg.Y);
 }
 
 namespace {
@@ -691,7 +761,7 @@ void LayerManager::Dorupt(SheetTrait* who, SheetEvent event, Point rel_p, para_l
 					Cursor::moving_sheet = nullptr;
 					Cursor::resizing_sheet = who;
 					Cursor::resize_hit_mode = hit;
-					Cursor::resize_start_cursor = Cursor::global_cursor ? Cursor::global_cursor->sheet_area.getVertex() : Point();
+					Cursor::resize_start_cursor = Cursor::global_cursor ? Cursor::global_cursor->GetScreenPosition() : Point();
 					Cursor::resize_start_rect = who->sheet_area;
 					Cursor::ghost_rect = who->sheet_area;
 					SafeLaymanUpdate(nullptr, Cursor::ghost_rect);
@@ -998,27 +1068,9 @@ void Consman::SwitchForm(SheetTrait* pfrm) {
 
 	if (!pfrm) return;
 
-	Nnode* target = &pfrm->refSheetNode();
 	{
 		auto layman = global_layman.Lock();
-		if (layman->subf && target != layman->subf && target != layman->subf->next) {
-			// Remove from current position
-			if (target->left) target->left->next = target->next;
-			else layman->subf = target->next;
-
-			if (target->next) target->next->left = target->left;
-			else layman->subl = target->left;
-
-			// Insert after the top layer (cursor)
-			Nnode* top = layman->subf;
-			Nnode* sec = top ? top->next : nullptr;
-
-			target->left = top;
-			target->next = sec;
-			if (top) top->next = target;
-			if (sec) sec->left = target;
-			else layman->subl = target;
-		}
+		layman->RaiseSheet(pfrm);
 	}
 	SafeLaymanUpdate(pfrm, Rectangle(Point(0, 0), pfrm->sheet_area.getSize()));
 }
@@ -1061,7 +1113,7 @@ Rectangle Consman::GetWorkArea() {
 	{
 		auto layman = global_layman.Lock();
 		scr_size = layman->window.getSize();
-		for (auto nod = layman->subf ? layman->subf->next : nullptr; nod; nod = nod->next) {
+		for (auto nod = layman->subf; nod; nod = nod->next) {
 			if (!nod->offs || nod->offs == global_desktop || nod->offs == Cursor::global_cursor) continue;
 			auto f = static_cast<::uni::Witch::Form*>(nod->offs);
 			if (f->is_dock) {
@@ -1215,7 +1267,7 @@ static void FocusTopFormAfterCloseIfNeeded() {
 	SheetTrait* top_form = nullptr;
 	{
 		auto layman = global_layman.Lock();
-		for (auto nod = layman->subf ? layman->subf->next : nullptr; nod; nod = nod->next) {
+		for (auto nod = layman->subf; nod; nod = nod->next) {
 			if (!nod->offs || nod->offs == global_desktop || nod->offs == Cursor::global_cursor) continue;
 			auto nod_frm = static_cast<::uni::Witch::Form*>(nod->offs);
 			if (!nod_frm->is_dock) {
@@ -1907,6 +1959,11 @@ void serv_graf_loop() {
 			RunGuiCleanupJob(cleanup_job);
 			continue;
 		}
+		#if defined(_MCU_STM32H7x)
+		RgbLcd_PumpPresentation();
+		#endif
+		const bool has_touch_frame = PumpTouchDevices();
+		if (has_touch_frame) Consman::WakeBlockedWaiters();
 		// Priority 1: check internal interrupt queue (non-blocking)
 		bool has_int_msg = false;
 		{
@@ -1927,7 +1984,7 @@ void serv_graf_loop() {
 				break;
 			case SysMessage::RUPT_MOUSE:
 				if (Consman::ento_gui) {
-					hand_mouse(msg.args.mou_event);
+					ConsumeMouseForGraphic(msg.args.mou_event);
 				}
 				Consman::WakeBlockedWaiters();
 				break;
@@ -2059,7 +2116,7 @@ void serv_graf_loop() {
 			}
 			#endif
 			// No IPC message pending, sleep briefly then re-check interrupts
-			syscall(syscall_t::REST, 1, 2);
+			if (!has_touch_frame) syscall(syscall_t::REST, 1, 2);
 			continue;
 		}
 		sysrecv(ANYPROC, (void*)to_args, byteof(to_args), (usize*)&sig_type, (usize*)&sig_src);
@@ -2248,7 +2305,7 @@ void serv_graf_loop() {
 			::uni::Witch::Form* top_form = nullptr;
 			if (Consman::last_click_sheet && Consman::last_click_sheet != global_desktop) {
 				auto layman = global_layman.Lock();
-				for (auto nod = layman->subf ? layman->subf->next : nullptr; nod; nod = nod->next) {
+				for (auto nod = layman->subf; nod; nod = nod->next) {
 					if (!nod->offs || nod->offs == global_desktop || nod->offs == Cursor::global_cursor) continue;
 					auto nod_frm = static_cast<::uni::Witch::Form*>(nod->offs);
 					if (!nod_frm->is_dock) {
