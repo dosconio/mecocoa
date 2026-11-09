@@ -225,6 +225,7 @@ bool Memory::initialize(stduint eax, byte* ebx) {
 	mempool_bdma.Append(Slice{ memreg[2].base, memreg[2].size });
 	map_ready = true;
 	uni_default_allocator = &mempool;
+	uni_hostenv_allocator = &mempool;
 	_mpu_sdram_normal();
 	L1C.enAbleICacheAll();// I-Cache only: it caches flash fetches, and DMA never touches instruction traffic
 

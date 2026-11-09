@@ -332,6 +332,9 @@ namespace Devs {
 
 
 
+	#endif
+	#if ((_MCCA & 0xFF00) == 0x8600 || defined(_MCU_STM32H7x))
+
 	uni::StorageTrait* storage_trait_from_node(DeviceNode* node) {
 		if (!node) return nullptr;
 		if (DeviceNodeType(node->fields.node_type) != DeviceNodeType::StorageDevice) return nullptr;
@@ -489,7 +492,7 @@ namespace Devs {
 	}
 
 	#endif
-	#if (_MCCA & 0xFF00) == 0x8600
+	#if ((_MCCA & 0xFF00) == 0x8600 || defined(_MCU_STM32H7x))
 
 	bool detach_child(DeviceNode* parent, DeviceNode* child) {
 		if (!parent || !child || !parent->link.subf) return false;
@@ -557,6 +560,9 @@ namespace Devs {
 		NnodesRelease(&node->link, release_device_node_payload);
 	}
 
+	#endif
+	#if (_MCCA & 0xFF00) == 0x8600
+
 	const char* heap_name(const char* fmt, stduint a0, stduint a1 = 0, stduint a2 = 0, stduint a3 = 0) {
 		return StrHeap(String::newFormat(fmt, a0, a1, a2, a3).reference());
 	}
@@ -616,6 +622,9 @@ namespace Devs {
 		return get_bus_root(DeviceBusType::Serio);
 	}
 
+	#endif
+	#if ((_MCCA & 0xFF00) == 0x8600 || defined(_MCU_STM32H7x))
+
 	bool append_resource(DeviceNode* node, DeviceResourceType type, uint16 flags, uint32 index, uint64 start, uint64 length, uint64 extra) {
 		if (!node->fields.resources || node->fields.resource_count >= node->fields.resource_capacity) {
 			return false;
@@ -674,6 +683,9 @@ namespace Devs {
 		return nullptr;
 	}
 
+	#endif
+	#if ((_MCCA & 0xFF00) == 0x8600 || defined(_MCU_STM32H7x))
+
 	bool set_driver_binding(DeviceNode* node, const char* driver_name) {
 		if (!node || !driver_name) return false;
 		if (node->fields.binding.driver_name &&
@@ -689,6 +701,9 @@ namespace Devs {
 		// ploginfo("[DEVSMAN] Bind %s -> %s", node->link.addr ? node->link.addr : "(unnamed)", driver_name);
 		return true;
 	}
+
+	#endif
+	#if (_MCCA & 0xFF00) == 0x8600
 
 	bool apply_driver_match(DeviceNode* node, const DeviceDriverMatchDecision& decision) {
 		if (!node) return false;
@@ -711,9 +726,7 @@ namespace Devs {
 		node->fields.binding.state = static_cast<uint32>(DriverBindingState::Started);
 		node->fields.binding.probe_result = 0;
 		node->fields.binding.driver_data = driver_data;
-		#if (_MCCA & 0xFF00) == 0x8600
 		attach_builtin_node_ops(node, driver_data);
-		#endif
 	}
 
 	#endif
@@ -1067,6 +1080,9 @@ namespace Devs {
 
 
 
+	#endif
+	#if ((_MCCA & 0xFF00) == 0x8600 || defined(_MCU_STM32H7x))
+
 	const DeviceResource* find_resource(const DeviceNode* node, DeviceResourceType type, uint32 index) {
 		if (!node || !node->fields.resources) return nullptr;
 		for0(i, node->fields.resource_count) {
@@ -1079,6 +1095,9 @@ namespace Devs {
 		}
 		return nullptr;
 	}
+
+	#endif
+	#if (_MCCA & 0xFF00) == 0x8600
 
 	void reparent_secondary_buses_under_bridges() {
 		if (!pci_root) return;
@@ -2606,12 +2625,14 @@ const char* Devsman::DriverMatchResultName(DriverMatchResult result) {
 }
 
 bool Devsman::Initialize() {
-	#if (_MCCA & 0xFF00) == 0x8600
+	#if ((_MCCA & 0xFF00) == 0x8600 || defined(_MCU_STM32H7x))
 	initialize_device_tree();
 	#if CONFIG_ENABLE_USB
 	// Install shared enumeration hooks before any host controller starts probing.
 	RegisterUSBDeviceTreeHooks();
 	#endif
+	#endif
+	#if (_MCCA & 0xFF00) == 0x8600
 	probe_and_attach_pci_devices();
 	discover_x86_acpi_devices();
 	bind_known_drivers_subtree(device_root);
@@ -2832,7 +2853,7 @@ DeviceNode* Devsman::RegisterPlatformDevice(DeviceNode* parent, const char* name
 
 #endif
 
-#if (_MCCA & 0xFF00) == 0x8600
+#if ((_MCCA & 0xFF00) == 0x8600 || defined(_MCU_STM32H7x))
 
 DeviceNode* Devsman::RegisterStorageDevice(DeviceNode* parent, const char* name,
 	DeviceBusType bus_type, const char* driver_name, void* driver_data) {
@@ -2851,6 +2872,10 @@ DeviceNode* Devsman::RegisterStorageDevice(DeviceNode* parent, const char* name,
 
 
 
+
+#endif
+
+#if (_MCCA & 0xFF00) == 0x8600
 
 DeviceNode* Devsman::RegisterSerioController(const char* name) {
 	initialize_device_tree();
@@ -2995,13 +3020,17 @@ DeviceNode* Devsman::FindOwnedNode(stduint pid) {
 	return device_root && pid ? FindOwnedNodeInSubtree(device_root, pid) : nullptr;
 }
 
-#if (_MCCA & 0xFF00) == 0x8600
+#if ((_MCCA & 0xFF00) == 0x8600 || defined(_MCU_STM32H7x))
 
 
 
 const DeviceResource* Devsman::FindResource(const DeviceNode* node, DeviceResourceType type, uint32 index) {
 	return find_resource(node, type, index);
 }
+
+#endif
+
+#if (_MCCA & 0xFF00) == 0x8600
 
 const DeviceAcpiProperty* Devsman::FindAcpiProperty(const DeviceNode* node, const char* name) {
 	if (!node || !node->fields.acpi_info || !name) return nullptr;
@@ -3161,7 +3190,7 @@ stdsint Devsman::Ctrl(DeviceNode* node, stduint cmd, void* args, stduint flags) 
 	return node->fields.ops->ctrl(node, cmd, args, flags);
 }
 
-#if (_MCCA & 0xFF00) == 0x8600
+#if ((_MCCA & 0xFF00) == 0x8600 || defined(_MCU_STM32H7x))
 
 namespace {
 	void RegisterStoragePartitionAlias(DeviceNode* parent, DeviceNode* partition, stduint part_dev) {
@@ -3630,7 +3659,7 @@ namespace {
 	}
 
 	void RunDevsmanMessageLoop() {
-		#if (_MCCA & 0xFF00) == 0x8600 && CONFIG_ENABLE_USB
+		#if ((_MCCA & 0xFF00) == 0x8600 || _MCCA == 0x1A072032) && CONFIG_ENABLE_USB
 		bool usb_service_started = false;
 		#endif
 		for (;;) {
@@ -3678,7 +3707,7 @@ namespace {
 				DispatchVmciDiscovery(type, source, payload);
 			}
 			#endif
-			#if (_MCCA & 0xFF00) == 0x8600 && CONFIG_ENABLE_USB
+			#if ((_MCCA & 0xFF00) == 0x8600 || _MCCA == 0x1A072032) && CONFIG_ENABLE_USB
 			else if (type == _IMM(DevsmanMsg::USB_SERVICE_READY)) {
 				if (source != Task_Usb_Serv || usb_service_started) {
 					plogwarn("[Devsman] invalid USB service ready source=%u", source);
@@ -3689,7 +3718,7 @@ namespace {
 					plogerro("[Devsman] invalid USB service thread");
 					continue;
 				}
-				#if CONFIG_ENABLE_USB_XHCI
+				#if (_MCCA & 0xFF00) == 0x8600 && CONFIG_ENABLE_USB_XHCI
 				if (!Devsman::BindXHCIEventOwner(
 					usb_thread->parent_process->pid, usb_thread->tid)) {
 					plogerro("[Devsman] failed to bind xHCI interrupt events");
@@ -3706,6 +3735,8 @@ namespace {
 						usb_thread->parent_process->pid, usb_thread->tid);
 				}
 			}
+			#endif
+			#if ((_MCCA & 0xFF00) == 0x8600 || defined(_MCU_STM32H7x)) && CONFIG_ENABLE_USB
 			else if (type == _IMM(DevsmanMsg::USB_MSC_READY)) {
 				if (source != Task_FileSys) {
 					plogwarn("[Devsman] USB MSC ready from invalid source=%u", source);

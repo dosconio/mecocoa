@@ -224,7 +224,7 @@ Point Cursor::GetScreenPosition() const {
 }
 
 void Cursor::MoveTo(const Point& position) {
-	const auto screen = sys_framebuffer.screen_size;
+	const auto screen = global_layman.unsafe_ptr()->window.getSize();
 	if (!screen.x || !screen.y || !sheet_parent) return;
 	const Point target(minof(position.x, screen.x - 1), minof(position.y, screen.y - 1));
 	if (display_layer_) {
@@ -238,11 +238,12 @@ void Cursor::MoveTo(const Point& position) {
 
 void Cursor::MoveBy(stdsint dx, stdsint dy) {
 	const auto current = GetScreenPosition();
-	const auto screen = sys_framebuffer.screen_size;
+	const auto screen = global_layman.unsafe_ptr()->window.getSize();
 	if (!screen.x || !screen.y) return;
-	const stdsint x = maxof(stdsint(0), minof(stdsint(screen.x - 1), stdsint(current.x) + dx));
-	const stdsint y = maxof(stdsint(0), minof(stdsint(screen.y - 1), stdsint(current.y) + dy));
-	MoveTo(Point(stduint(x), stduint(y)));
+	const stdsint current_x = stdsint(current.x), current_y = stdsint(current.y);
+	const stdsint bounded_x = maxof(-current_x, minof(stdsint(screen.x - 1) - current_x, dx));
+	const stdsint bounded_y = maxof(-current_y, minof(stdsint(screen.y - 1) - current_y, dy));
+	MoveTo(Point(stduint(current_x + bounded_x), stduint(current_y + bounded_y)));
 }
 
 bool Cursor::MoveToLayer(GraphicLayer* layer) {
@@ -465,16 +466,18 @@ static stdsint GraphicMsg_DRV_ATTACH(FMT_GraphicMsg_DRV_ATTACH* usr_info, Proces
 #endif
 
 // hand_mouse - runs only in Graphic thread, no lock needed
-void HandlePointerMessage(MouseMessage mmsg, stdsint movement_x, stdsint movement_y) {
+void HandlePointerMessage(MouseGeneralMessage mmsg) {
+	const stdsint movement_x = mmsg.movement.x;
+	const stdsint movement_y = mmsg.movement.y;
 	byte change_btns = 0;// 0RML0RML
-	if (Cursor::mouse_btnl_dn != mmsg.BtnLeft) change_btns |= 0b001;
-	if (Cursor::mouse_btnm_dn != mmsg.BtnMiddle) change_btns |= 0b010;
-	if (Cursor::mouse_btnr_dn != mmsg.BtnRight) change_btns |= 0b100;
-	if (mmsg.BtnLeft) change_btns |= 0b00010000;
-	if (mmsg.BtnMiddle) change_btns |= 0b00100000;
-	if (mmsg.BtnRight) change_btns |= 0b01000000;
+	if (Cursor::mouse_btnl_dn != mmsg.btn_left) change_btns |= 0b001;
+	if (Cursor::mouse_btnm_dn != mmsg.btn_middle) change_btns |= 0b010;
+	if (Cursor::mouse_btnr_dn != mmsg.btn_right) change_btns |= 0b100;
+	if (mmsg.btn_left) change_btns |= 0b00010000;
+	if (mmsg.btn_middle) change_btns |= 0b00100000;
+	if (mmsg.btn_right) change_btns |= 0b01000000;
 
-	if ((change_btns & 0b1) && !mmsg.BtnLeft) {
+	if ((change_btns & 0b1) && !mmsg.btn_left) {
 		Cursor::moving_sheet = nullptr;
 		// Shape of Cursor
 		if (Cursor::resizing_sheet) {
@@ -516,12 +519,12 @@ void HandlePointerMessage(MouseMessage mmsg, stdsint movement_x, stdsint movemen
 		}
 	}
 
-	Cursor::mouse_btnl_dn = mmsg.BtnLeft;
-	Cursor::mouse_btnm_dn = mmsg.BtnMiddle;
-	Cursor::mouse_btnr_dn = mmsg.BtnRight;
+	Cursor::mouse_btnl_dn = mmsg.btn_left;
+	Cursor::mouse_btnm_dn = mmsg.btn_middle;
+	Cursor::mouse_btnr_dn = mmsg.btn_right;
 
 	// for paint app
-	const bool cursor_moved_before_click = (change_btns & 0b1) && !mmsg.BtnLeft && (movement_x || movement_y);
+	const bool cursor_moved_before_click = (change_btns & 0b1) && !mmsg.btn_left && (movement_x || movement_y);
 	if (cursor_moved_before_click) {
 		// A release packet can also carry the final stroke displacement.
 		auto layman = global_layman.Lock();
@@ -567,7 +570,11 @@ void HandlePointerMessage(MouseMessage mmsg, stdsint movement_x, stdsint movemen
 			auto layman = global_layman.Lock();
 			if (!cursor_moved_before_click) Cursor::global_cursor->MoveBy(movement_x, movement_y);
 			if (Cursor::moving_sheet) {
-				layman->Domove(Cursor::moving_sheet, { movement_x, movement_y });
+				const auto current = Cursor::moving_sheet->sheet_area.getVertex();
+				const stdsint x = stdsint(current.x), y = stdsint(current.y);
+				const stdsint dx = maxof(-x, minof(stdsint(layman->window.width - 1) - x, movement_x));
+				const stdsint dy = maxof(-y, minof(stdsint(layman->window.height - 1) - y, movement_y));
+				layman->Domove(Cursor::moving_sheet, { dx, dy });
 			}
 		}
 		// Shape of Cursor
@@ -699,8 +706,8 @@ void HandlePointerMessage(MouseMessage mmsg, stdsint movement_x, stdsint movemen
 	}
 }
 
-void hand_mouse(MouseMessage mmsg) {
-	HandlePointerMessage(mmsg, mmsg.X, mmsg.Y);
+void hand_mouse(MouseGeneralMessage mmsg) {
+	HandlePointerMessage(mmsg);
 }
 
 namespace {
@@ -717,7 +724,7 @@ namespace {
 
 // Pointer callbacks enqueue to message_queue_conv so the Graphic thread owns GUI state.
 // Per-source button state prevents one pointer device from releasing another device's buttons.
-void hand_mouse_from_device(MouseMessage mmsg, const void* source) {
+void hand_mouse_from_device(MouseGeneralMessage mmsg, const void* source) {
 	if (!Consman::ento_gui) return; // No GUI: mouse events are meaningless
 	SysMessage msg;
 	msg.type = SysMessage::RUPT_MOUSE;
@@ -735,17 +742,17 @@ void hand_mouse_from_device(MouseMessage mmsg, const void* source) {
 		state = free_state;
 		if (state) state->source = source;
 	}
-	if (state) state->buttons = byte((mmsg.BtnLeft ? 1u : 0u) | (mmsg.BtnRight ? 2u : 0u) | (mmsg.BtnMiddle ? 4u : 0u));
+	if (state) state->buttons = byte((mmsg.btn_left ? 1u : 0u) | (mmsg.btn_right ? 2u : 0u) | (mmsg.btn_middle ? 4u : 0u));
 	byte buttons = 0;
 	for0(index, MouseInputSourceLimit) buttons |= mouse_input_sources[index].buttons;
-	mmsg.BtnLeft = (buttons & 1u) != 0;
-	mmsg.BtnRight = (buttons & 2u) != 0;
-	mmsg.BtnMiddle = (buttons & 4u) != 0;
+	mmsg.btn_left = (buttons & 1u) != 0;
+	mmsg.btn_right = (buttons & 2u) != 0;
+	mmsg.btn_middle = (buttons & 4u) != 0;
 	msg.args.mou_event = mmsg;
 	queue->Enqueue(msg);
 }
 
-void hand_mouse_usb(MouseMessage mmsg) {
+void hand_mouse_usb(MouseGeneralMessage mmsg) {
 	hand_mouse_from_device(mmsg, &USB_mouse_source);
 }
 

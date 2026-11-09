@@ -229,6 +229,9 @@ void sysmsg_kbd(keyboard_event_t kbd_event) {
 	}
 }
 
+#endif
+
+#if (_MCCA & 0xFF00) == 0x8600 || (defined(_MCU_STM32H7x) && _GUI_ENABLE)
 void hand_kboard(keyboard_event_t kmsg) {
 	#if !_GUI_ENABLE
 	// There is no graphic consumer in text-only builds; use the same processing at the caller.

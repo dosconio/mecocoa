@@ -43,13 +43,15 @@ static byte PS2_mouse_source;
 static void process_mouse(byte ch) {
 	mouse_buf[mouse_buf[3]++] = ch;
 	mouse_buf[3] %= 3;
-	MouseMessage& mm = *(MouseMessage*)mouse_buf;
 	if (!mouse_buf[3]) {
-		mm.Y = -mm.Y;
-		hand_mouse_from_device(mm, &PS2_mouse_source);
+		MouseMessage raw{};
+		MemCopyN(&raw, mouse_buf, sizeof(raw));
+		MouseGeneralMessage message(raw);
+		if (raw.OvfX || raw.OvfY) message.movement = uni::Size2dif();
+		hand_mouse_from_device(message, &PS2_mouse_source);
 	}
 	else if (mouse_buf[3] == 1) {
-		if (!mm.HIGH) mouse_buf[3] = 0;
+		if (!(mouse_buf[0] & 0x08)) mouse_buf[3] = 0;
 	}
 }
 void Handint_MOU() {

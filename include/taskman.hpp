@@ -54,7 +54,7 @@ struct SysMessage {
 		RUPT_TTY_OUT,// async TTY text ready to render (sent by DevFs::writfl)
 	} type = Type::RUPT_TIMER;
 	union {
-		MouseMessage mou_event;
+		MouseGeneralMessage mou_event;
 		keyboard_event_t kbd_event;
 		MccaRectangle rect;// RUPT_FLUSH
 		Dnode* tty_node;// RUPT_TTY_OUT: which vtty has pending output

@@ -883,24 +883,12 @@ namespace {
 			return;
 		}
 		if (event.type == DeviceInputEventType::RelativePointer) {
-			int32 remaining_x = event.x;
-			int32 remaining_y = event.y;
-			do {
-				const int32 x = remaining_x > 127 ? 127 : remaining_x < -127 ? -127 : remaining_x;
-				const int32 y = remaining_y > 127 ? 127 : remaining_y < -127 ? -127 : remaining_y;
-				MouseMessage mouse{};
-				mouse.BtnLeft = (event.buttons & 1u) != 0;
-				mouse.BtnRight = (event.buttons & 2u) != 0;
-				mouse.BtnMiddle = (event.buttons & 4u) != 0;
-				mouse.HIGH = 1;
-				mouse.DirX = x < 0;
-				mouse.DirY = y < 0;
-				mouse.X = int8(x);
-				mouse.Y = int8(y);
-				hand_mouse_from_device(mouse, endpoint);
-				remaining_x -= x;
-				remaining_y -= y;
-			} while (remaining_x || remaining_y);
+			MouseGeneralMessage mouse;
+			mouse.btn_left = (event.buttons & 1u) != 0;
+			mouse.btn_right = (event.buttons & 2u) != 0;
+			mouse.btn_middle = (event.buttons & 4u) != 0;
+			mouse.movement = uni::Size2dif(event.x, event.y);
+			hand_mouse_from_device(mouse, endpoint);
 		}
 		#else
 		(void)event;

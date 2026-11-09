@@ -255,16 +255,16 @@ struct Consman {
 
 
 // Internal Graphic-thread dispatch shared with graphic-touch.cpp.
-void HandlePointerMessage(MouseMessage mmsg, stdsint movement_x, stdsint movement_y);
-void ConsumeMouseForGraphic(MouseMessage message);
+void HandlePointerMessage(MouseGeneralMessage mmsg);
+void ConsumeMouseForGraphic(MouseGeneralMessage message);
 bool PumpTouchDevices();
 #if defined(_MCU_STM32H7x)
 void RgbLcd_PumpPresentation();
 #endif
 
-void hand_mouse(MouseMessage mmsg);
-void hand_mouse_from_device(MouseMessage mmsg, const void* source);
-void hand_mouse_usb(MouseMessage mmsg);
+void hand_mouse(MouseGeneralMessage mmsg);
+void hand_mouse_from_device(MouseGeneralMessage mmsg, const void* source);
+void hand_mouse_usb(MouseGeneralMessage mmsg);
 void hand_kboard(keyboard_event_t mmsg);
 
 

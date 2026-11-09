@@ -700,7 +700,7 @@ void dump_screens_and_forms(OstreamTrait& com1) {
 	#endif
 }
 
-#if (_MCCA & 0xFF00) == 0x8600
+#if (_MCCA & 0xFF00) == 0x8600 || defined(_MCU_STM32H7x)
 void dump_device_tree(OstreamTrait& com1, bool verbose);
 void dump_backends(OstreamTrait& com1, SysinfoDumpDevsType type);
 #endif
@@ -716,7 +716,7 @@ void sysinfo_classic(OstreamTrait& com1, byte func)
 		Filesys::Tree(com1, false);
 		break;
 
-	#if (_MCCA & 0xFF00) == 0x8600
+	#if (_MCCA & 0xFF00) == 0x8600 || defined(_MCU_STM32H7x)
 	case 'h': case 'H':// hardware
 		com1.OutFormat("\n\r");
 		if (func == 'H') {

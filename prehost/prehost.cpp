@@ -25,6 +25,9 @@ _ESYM_C void mecocoa()
 	Taskman::Create((void*)&serv_devs_loop, RING_M)->main_thread->name.reset(StrHeap("serv_devs_loop"));
 	//
 	//Taskman::Create((void*)&serv_netw_loop, RING_M)->main_thread->name = "serv_netw_loop";
+	#if CONFIG_ENABLE_USB
+	Taskman::Create((void*)&serv_usb_loop, RING_M)->main_thread->name.reset(StrHeap("serv_usb_loop"));
+	#endif
 	//Taskman::Create((void*)&serv_dev_audio_loop, RING_M)->main_thread->name = "serv_dev_audio_loop";
 	
 	IC.enInterrupt();

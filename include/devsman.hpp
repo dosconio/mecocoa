@@ -17,6 +17,8 @@ enum class SysinfoDumpDevsType {
 
 struct DeviceNode;
 struct DeviceEvent;
+struct UsbMSCRequest;
+namespace uni::device::SpaceUSB { class USBHostDevice; }
 
 namespace uni {
 	enum class IICTransferStatus : uint8;
@@ -577,6 +579,39 @@ namespace Devs {
 }
 
 
+// ---- USB OTG/*HCI ----
+
+enum class UsbCtrlCommand : uint32 {
+	Base = uint32(DeviceCtrlCommand::GetBackingObject),
+	GetUsbRole,
+	RequestUsbRole,
+};
+
+enum class UsbRole : uint32 { None, Host, Device };
+enum class UsbRoleState : uint32 { Stopped, Starting, Running, Switching, Fault };
+enum class UsbRoleError : uint32 { None, Power, Clock, Controller, Timeout, Notification };
+enum class UsbTransferStopResult : byte { Pending, Stopped, Failed };
+
+struct UsbRoleStatus {
+	UsbRole current = UsbRole::None;
+	UsbRole target = UsbRole::None;
+	UsbRoleState state = UsbRoleState::Stopped;
+	UsbRoleError error = UsbRoleError::None;
+	uint32 generation = 0;
+	uint32 sequence = 0;
+	uint32 host_connected = 0;
+	uint32 device_configured = 0;
+};
+
+// RequestUsbRole copies this request; sequence identifies the accepted transition.
+struct UsbRoleRequest {
+	uint32 controller = 2;
+	UsbRole role = UsbRole::None;
+	uint32 sequence = 0;
+};
+
+// ---- . ----
+
 class Devsman {
 public:
 	using DriverStartRoutine = bool (*)(DeviceNode* node);
@@ -617,7 +652,7 @@ public:
 		uint8 endpoint_addr, uint8 transfer_type, uint16 max_packet_size, uint8 interval);
 	static bool RemoveUSBDevice(DeviceNode* parent, const char* name);
 	static bool RemoveUSBDevice(DeviceNode* node);
-	#if defined(_MCCA) && (_MCCA & 0xFF00) == 0x8600 && CONFIG_ENABLE_USB
+	#if defined(_MCCA) && ((_MCCA & 0xFF00) == 0x8600 || defined(_MCU_STM32H7x)) && CONFIG_ENABLE_USB
 	static void ProcessUSBMSCProbe(void* context);
 	static void RegisterUSBMSCStorage(void* context);
 	static void MountUSBMSCStorage(void* context);
@@ -672,6 +707,15 @@ public:
 	static bool BindXHCIEventOwner(stduint owner_pid, stduint owner_tid);
 	static bool AcknowledgeXHCIInterrupt();
 	static bool ProcessXHCIEvent(const DeviceEvent& event);
+	#endif
+	#if defined(_MCU_STM32H7x) && CONFIG_ENABLE_USB
+	static bool InitializeOTG(stduint owner_tid);
+	static bool ProcessOTGEvent(const DeviceEvent& event);
+	static void PumpOTG();
+	static void ProcessOTGRoleRequest(const UsbRoleRequest& request);
+	static void ProcessUSBMSCRequest(const UsbMSCRequest& request, stduint source);
+	static void PumpUSBMSCRequests();
+	static UsbTransferStopResult StopOTGTransfers(uni::device::SpaceUSB::USBHostDevice* device);
 	#endif
 	static bool AttachStorageOps(DeviceNode* node, uni::StorageTrait* storage);
 	static DeviceNode* RegisterStoragePartition(DeviceNode* parent, const char* name,

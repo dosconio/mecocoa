@@ -481,9 +481,19 @@
               <FilePath>..\..\mecocoa\sysinfo.cpp</FilePath>
             </File>
             <File>
+              <FileName>sysinfo-dev.cpp</FileName>
+              <FileType>8</FileType>
+              <FilePath>..\..\mecocoa\sysinfo-dev.cpp</FilePath>
+            </File>
+            <File>
               <FileName>devsman.cpp</FileName>
               <FileType>8</FileType>
               <FilePath>..\..\mecocoa\devsman.cpp</FilePath>
+            </File>
+            <File>
+              <FileName>devsman-usb.cpp</FileName>
+              <FileType>8</FileType>
+              <FilePath>..\..\mecocoa\devsman-usb.cpp</FilePath>
             </File>
             <File>
               <FileName>threads.cpp</FileName>
@@ -569,6 +579,21 @@
               <FileName>touch-gtxxx.cpp</FileName>
               <FileType>8</FileType>
               <FilePath>..\..\devdriv\touch\touch-gtxxx.cpp</FilePath>
+            </File>
+            <File>
+              <FileName>kboard.cpp</FileName>
+              <FileType>8</FileType>
+              <FilePath>..\..\devdriv\kboard.cpp</FilePath>
+            </File>
+            <File>
+              <FileName>usb_otg.cpp</FileName>
+              <FileType>8</FileType>
+              <FilePath>..\..\devdriv\usb\usb_otg.cpp</FilePath>
+            </File>
+            <File>
+              <FileName>usb_storage.cpp</FileName>
+              <FileType>8</FileType>
+              <FilePath>..\..\devdriv\usb\usb_storage.cpp</FilePath>
             </File>
           </Files>
         </Group>

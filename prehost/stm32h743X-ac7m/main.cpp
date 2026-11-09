@@ -38,7 +38,10 @@ void sysinfo_classic(OstreamTrait& com1, byte func);
 void key_isr_up() {
 	sysinfo_classic(XART1, 'w');
 	sysinfo_classic(XART1, 's');
-	erro();
+	sysinfo_classic(XART1, 'H');
+}
+void key_isr_dn() {
+    erro();
 }
 
 // ASPEN=0 and boot FPCA cleared: the hardware frame is the plain 8 words.
@@ -174,10 +177,15 @@ int main()
 	SysTick::enClock(CONFIG_SysTickFreq);
 	SCB->FPCCR = SCB->FPCCR & ~(1u << 31);// ASPEN=0; boot FPCA is cleared below to establish the plain 8-word frame used by the asm, handler.cpp and _arm_frame
 	GPIN& KEYU = GPIOA[ 0];// Up
+	GPIN& KEYD = GPIOH[ 2];// Down
 	KEYU.setMode(GPIOMode::IN_Pull).setPull(false);
 	KEYU.setMode(GPIORupt::Posedge);
 	KEYU.setInterrupt(key_isr_up);
 	KEYU.enInterrupt();
+	KEYD.setMode(GPIOMode::IN_Pull).setPull(true);
+	KEYD.setMode(GPIORupt::Negedge);
+	KEYD.setInterrupt(key_isr_dn);
+	KEYD.enInterrupt();
 	IC.enInterrupt(false);
 	_ASM volatile("msr psp, %0" :: "r"((stduint)(_boot_stack + sizeof(_boot_stack))));
 	// PM0253 CONTROL/FPCCR: disabling ASPEN does not clear an already active FPCA.

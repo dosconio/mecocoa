@@ -208,18 +208,14 @@ namespace uni {
 
 			if (tail->type == SysMessage::RUPT_MOUSE) {
 				// Check if button states are identical (ensures correct logic for dragging operations)
-				if (tail->args.mou_event.BtnLeft == item.args.mou_event.BtnLeft &&
-					tail->args.mou_event.BtnRight == item.args.mou_event.BtnRight &&
-					tail->args.mou_event.BtnMiddle == item.args.mou_event.BtnMiddle)
+				if (tail->args.mou_event.btn_left == item.args.mou_event.btn_left &&
+					tail->args.mou_event.btn_right == item.args.mou_event.btn_right &&
+					tail->args.mou_event.btn_middle == item.args.mou_event.btn_middle)
 				{
-					int new_x = tail->args.mou_event.X + item.args.mou_event.X;
-					int new_y = tail->args.mou_event.Y + item.args.mou_event.Y;
-					// Prevent overflow/wrap-around if the accumulated value exceeds the int8 range (-128 to 127)
-					if (new_x >= -128 && new_x <= 127 && new_y >= -128 && new_y <= 127) {
-						tail->args.mou_event.X = (int8)new_x;
-						tail->args.mou_event.Y = (int8)new_y;
-						tail->args.mou_event.DirX = (new_x < 0) ? 1 : 0;
-						tail->args.mou_event.DirY = (new_y < 0) ? 1 : 0;
+					stdsint new_x, new_y;
+					if (!__builtin_add_overflow(tail->args.mou_event.movement.x, item.args.mou_event.movement.x, &new_x) &&
+						!__builtin_add_overflow(tail->args.mou_event.movement.y, item.args.mou_event.movement.y, &new_y)) {
+						tail->args.mou_event.movement = uni::Size2dif(new_x, new_y);
 						return true;
 					}
 				}

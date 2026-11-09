@@ -19,6 +19,37 @@ namespace BoardConfig {
 			};
 		}
 	}
+	namespace Usb {
+		namespace Otg2 {
+			constexpr UsbRole DefaultRole = UsbRole::Host;
+			enum : unsigned {
+				DmPort = 'A', DmPin = 11,
+				DpPort = 'A', DpPin = 12,
+				AlternateFunction = 10,
+				SdaPort = 'H', SdaPin = 5,
+				SclPort = 'H', SclPin = 4,
+				PowerAddress7 = 0x20, PowerBit = 3,
+				PowerActiveHigh = 1,
+				IicDelayLoops = 500,
+				PowerStableMs = 500,
+				DisconnectMs = 100,
+				ClockTimeoutMs = 100,
+				VbusSensing = 0,
+				HostChannels = 8,
+				MscWriteEnabled = 0,
+				HostDebounceMs = 100,
+				HostResetHoldMs = 100,
+				HostEnableTimeoutMs = 100,
+				HostRecoveryMs = 20,
+				HostEnumerationTimeoutMs = 3000,
+				HostRetryDelayMs = 100,
+				HostRetryLimit = 2,
+				// Prototype identity inherited from the board's USB examples.
+				DeviceVendorId = 0x0483,
+				DeviceProductId = 0x5740,
+			};
+		}
+	}
 	namespace Touch {
 		// GT9xx on the RGB panel; GPIO port names are ASCII letters.
 		enum : unsigned {

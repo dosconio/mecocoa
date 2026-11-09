@@ -15,6 +15,17 @@ enum class DevsmanMsg : stduint {
 	USB_MSC_REMOVE,
 	USB_SERVICE_READY,
 	USB_SERVICE_START,
+	USB_ROLE_REQUEST,
+	USB_MSC_REQUEST,
+};
+
+// ---- USB ----
+
+
+// Kernel-internal handoff; the storage adapter owns the request fields and buffer lifetime.
+struct UsbMSCRequest {
+	void* context = nullptr;
+	uint32 sequence = 0;
 };
 
 // ---- AUDIO IPC PROTOCOL ----

@@ -8,7 +8,7 @@
 #include <c/storage/AHCI.h>
 #include <c/storage/NVMe.h>
 #include <cpp/System/Audiosys/AudioManager.hpp>
-#if (_MCCA & 0xFF00) == 0x8600 && CONFIG_ENABLE_USB
+#if ((_MCCA & 0xFF00) == 0x8600 || defined(_MCU_STM32H7x)) && CONFIG_ENABLE_USB
 #include <cpp/Device/USB/USB.hpp>
 #include <cpp/Device/USB/USBHost-MSC.hpp>
 #endif
@@ -17,7 +17,7 @@
 #include "c/proctrl/IAx86_64.msr.h"
 #endif
 
-#if (_MCCA & 0xFF00) == 0x8600 && CONFIG_ENABLE_USB
+#if ((_MCCA & 0xFF00) == 0x8600 || defined(_MCU_STM32H7x)) && CONFIG_ENABLE_USB
 
 namespace Devs {
 	void initialize_device_tree();
@@ -290,14 +290,19 @@ namespace Devs {
 		auto* root = Devsman::Root();
 		if (!root || !controller.driver_name || !controller.driver_data) return nullptr;
 		auto* host_node = find_pci_device_node_by_driver_data(root, controller.driver_data);
+		if (!host_node) host_node = find_device_node_by_driver_data(root,
+			uint16(DeviceNodeType::PlatformDevice), controller.driver_data);
 		if (!host_node) return nullptr;
-		auto usb_bus_name = String::newFormat("usb-bus@%04x:%02x:%02x.%x",
-			(stduint)host_node->fields.pci_segment,
-			(stduint)host_node->fields.pci_bus,
-			(stduint)host_node->fields.pci_device,
-			(stduint)host_node->fields.pci_function);
+		auto usb_bus_name = DeviceNodeType(host_node->fields.node_type) == DeviceNodeType::PciDevice
+			? String::newFormat("usb-bus@%04x:%02x:%02x.%x",
+				(stduint)host_node->fields.pci_segment,
+				(stduint)host_node->fields.pci_bus,
+				(stduint)host_node->fields.pci_device,
+				(stduint)host_node->fields.pci_function)
+			: String::newFormat("usb-bus@%s", host_node->link.addr);
 		auto* usb_bus_node = Devsman::RegisterUSBBus(usb_bus_name.reference(),
 			controller.driver_name, controller.driver_data);
+		if (usb_bus_node) usb_bus_node->fields.controller = host_node;
 		return Devsman::RegisterUSBRootHub(usb_bus_node, "usb-root-hub@0",
 			0x09u, 0x00u, controller.root_hub_protocol,
 			"usb-root-hub", controller.driver_data);
@@ -330,7 +335,13 @@ namespace Devs {
 	void on_usb_host_device_disconnected(const uni::device::SpaceUSB::USBHostControllerIdentity& controller,
 		const uni::device::SpaceUSB::USBHostDeviceLocation& location,
 		uni::device::SpaceUSB::USBHostDevice& dev) {
-		if (disconnect_usb_msc_storage(dev)) return;
+		if (disconnect_usb_msc_storage(dev)) {
+			#if defined(_MCU_STM32H7x)
+			auto* node = find_usb_device_node_by_driver_data(Devsman::Root(), &dev);
+			clear_disconnected_usb_binding(node, &dev);
+			#endif
+			return;
+		}
 		auto* usb_root_node = ensure_usb_root_hub_node(controller);
 		if (!usb_root_node) return;
 		DeviceNode* usb_parent_node = usb_root_node;
@@ -534,6 +545,10 @@ void Devsman::RegisterUSBDeviceTreeHooks() {
 	uni::device::SpaceUSB::g_hub_port_status_hook = on_usb_hub_port_status;
 }
 
+#endif
+
+#if ((_MCCA & 0xFF00) == 0x8600 || _MCCA == 0x1A072032) && CONFIG_ENABLE_USB
+
 void serv_usb_loop() {
 	auto* current = Taskman::CurrentTB();
 	if (!current || !current->parent_process || !device_event_prepare(current)) {
@@ -555,14 +570,40 @@ void serv_usb_loop() {
 	}
 	ploginfo("[USB] event service started pid=%u tid=%u",
 		current->parent_process->pid, current->tid);
+	#if defined(_MCU_STM32H7x)
+	static_assert(sizeof(UsbRoleRequest) <= sizeof(DeviceEvent), "USB role request exceeds service receive buffer");
+	static_assert(sizeof(UsbMSCRequest) <= sizeof(DeviceEvent), "USB MSC request exceeds service receive buffer");
+	if (!Devsman::InitializeOTG(current->tid)) plogerro("[USB] OTG initialization failed");
+	#endif
 	for (;;) {
+		#if defined(_MCU_STM32H7x)
+		Devsman::PumpOTG();
+		Devsman::PumpUSBMSCRequests();
+		#endif
 		DeviceEvent event = {};
 		stduint type = 0;
 		stduint source = 0;
 		if (sysrecv(ANYPROC, &event, sizeof(event), &type, &source)) continue;
+		#if defined(_MCU_STM32H7x)
+		if (type == _IMM(DevsmanMsg::USB_MSC_REQUEST)) {
+			UsbMSCRequest request{};
+			MemCopyN(&request, &event, sizeof(request));
+			Devsman::ProcessUSBMSCRequest(request, source);
+			continue;
+		}
+		if (type == _IMM(DevsmanMsg::USB_ROLE_REQUEST)) {
+			UsbRoleRequest request{};
+			MemCopyN(&request, &event, sizeof(request));
+			Devsman::ProcessOTGRoleRequest(request);
+			continue;
+		}
+		#endif
 		if (type == _IMM(KernelMsg::DeviceEvent) &&
 			event.version == DeviceEventProtocolVersion) {
-			#if CONFIG_ENABLE_USB_XHCI
+			#if defined(_MCU_STM32H7x)
+			if (Devsman::ProcessOTGEvent(event)) continue;
+			#endif
+			#if (_MCCA & 0xFF00) == 0x8600 && CONFIG_ENABLE_USB_XHCI
 			if (Devsman::ProcessXHCIEvent(event)) continue;
 			#endif
 		}

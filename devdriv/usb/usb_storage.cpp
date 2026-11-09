@@ -8,16 +8,21 @@
 // #include <c/storage/AHCI.h>
 // #include <c/storage/NVMe.h>
 // #include <cpp/System/Audiosys/AudioManager.hpp>
-#if (_MCCA & 0xFF00) == 0x8600 && CONFIG_ENABLE_USB
+#if ((_MCCA & 0xFF00) == 0x8600 || defined(_MCU_STM32H7x)) && CONFIG_ENABLE_USB
 #include <cpp/Device/USB/USB.hpp>
 #include <cpp/Device/USB/USBHost-MSC.hpp>
+#include <c/format/filesys/FAT.h>
+#if defined(_MCU_STM32H7x)
+#include <cpp/Device/USB/OTGHostDevice.hpp>
+#include "../../prehost/stm32h743X-ac7m/_openedv/unicfg.hpp"
+#endif
 #endif
 #if (_MCCA & 0xFF00) == 0x8600
 #include "c/proctrl/IAx86_64.ext.h"
 #include "c/proctrl/IAx86_64.msr.h"
 #endif
 
-#if (_MCCA & 0xFF00) == 0x8600 && CONFIG_ENABLE_USB
+#if ((_MCCA & 0xFF00) == 0x8600 || defined(_MCU_STM32H7x)) && CONFIG_ENABLE_USB
 namespace Devs {
 	namespace {
 		using USBHostDevice = uni::device::SpaceUSB::USBHostDevice;
@@ -36,10 +41,10 @@ namespace Devs {
 			return nullptr;
 		}
 
-		stduint FindXHCIControllerIndex(DeviceNode* interface_node) {
+		stduint FindUSBControllerIndex(DeviceNode* interface_node) {
 			auto* bus = FindUSBAncestor(interface_node, DeviceNodeType::UsbBus);
 			if (!bus || !bus->fields.binding.driver_name ||
-				StrCompare(bus->fields.binding.driver_name, "xhci")) return stduint(-1);
+				!bus->fields.binding.driver_name[0]) return stduint(-1);
 			auto* parent = reinterpret_cast<DeviceNode*>(bus->link.getParent());
 			if (!parent) return stduint(-1);
 			stduint index = 0;
@@ -47,14 +52,14 @@ namespace Devs {
 				node = reinterpret_cast<DeviceNode*>(node->link.next)) {
 				if (DeviceNodeType(node->fields.node_type) != DeviceNodeType::UsbBus ||
 					!node->fields.binding.driver_name ||
-					StrCompare(node->fields.binding.driver_name, "xhci")) continue;
+					StrCompare(node->fields.binding.driver_name, bus->fields.binding.driver_name)) continue;
 				if (node == bus) return index;
 				index++;
 			}
 			return stduint(-1);
 		}
 
-		uint8 FindUSBSlotID(DeviceNode* interface_node) {
+		uint8 FindUSBDeviceID(DeviceNode* interface_node) {
 			auto* device = FindUSBAncestor(interface_node, DeviceNodeType::UsbDevice);
 			const auto* location = Devsman::FindResource(device,
 				DeviceResourceType::UsbLocation, 0);
@@ -69,12 +74,46 @@ namespace Devs {
 			Offline,
 		};
 
+		#if defined(_MCU_STM32H7x)
+		enum class USBMSCServiceState : byte { Idle, Queued, Active, Cancelling, Quarantined, Finished };
+		uni::Atomic<uint32> usb_msc_request_sequence = 0;
+		#endif
+
 		enum class USBMSCStorageState : byte {
 			Initializing,
 			Online,
 			Disconnecting,
 			Offline,
 		};
+
+		ClassicFilesysType WholeDiskFATType(const byte* sector, stduint block_size, uint32 blocks) {
+			if (block_size < 512 || block_size > 4096 || (block_size & (block_size - 1)) ||
+				sector[510] != 0x55 || sector[511] != 0xAA) return ClassicFilesysType::None;
+			const auto& boot = *reinterpret_cast<const FAT_BootSector32*>(sector);
+			if ((boot.jmpBoot[0] != 0xEB && boot.jmpBoot[0] != 0xE9) ||
+				uint16(boot.bytes_per_sector) != block_size || !boot.reserved_sectors ||
+				!boot.fat_count || !boot.sectors_per_cluster || boot.sectors_per_cluster > 128 ||
+				(boot.sectors_per_cluster & (boot.sectors_per_cluster - 1))) return ClassicFilesysType::None;
+			const uint32 sectors = boot.total_sectors_16 ? uint16(boot.total_sectors_16) : boot.total_sectors_32;
+			const uint32 fat_sectors = boot.sectors_per_fat_16 ? boot.sectors_per_fat_16 : boot.sectors_per_fat_32;
+			const uint32 root_sectors = (uint32(uint16(boot.root_entries)) * 32 + block_size - 1) / block_size;
+			const uint64 first_data = boot.reserved_sectors + uint64(boot.fat_count) * fat_sectors + root_sectors;
+			if (!sectors || sectors > blocks || !fat_sectors || first_data >= sectors)
+				return ClassicFilesysType::None;
+			// Microsoft FAT specification: FAT Type Determination uses the data cluster count.
+			const uint32 clusters = (sectors - uint32(first_data)) / boot.sectors_per_cluster;
+			const unsigned bits = clusters < 4085 ? 12 : clusters < 65525 ? 16 : 32;
+			if (!clusters || uint64(fat_sectors) * block_size * 8 / bits < uint64(clusters) + 2)
+				return ClassicFilesysType::None;
+			if (bits == 32) {
+				if (boot.sectors_per_fat_16 || uint16(boot.root_entries) || boot.fat_version ||
+					clusters >= 0x0FFFFFF5u || boot.root_cluster < 2 ||
+					boot.root_cluster >= uint64(clusters) + 2) return ClassicFilesysType::None;
+				return ClassicFilesysType::FAT32_LBA;
+			}
+			if (!boot.sectors_per_fat_16 || !uint16(boot.root_entries)) return ClassicFilesysType::None;
+			return bits == 12 ? ClassicFilesysType::FAT12 : ClassicFilesysType::FAT16_LBA;
+		}
 
 		struct USBMSCPartition {
 			uni::PartitionSlice slice = {};
@@ -89,6 +128,9 @@ namespace Devs {
 		struct USBMSCPartitionNode {
 			stduint device = 0;
 			DeviceNode* node = nullptr;
+			#if defined(_MCU_STM32H7x)
+			uni::SharedPtr<uni::VFSMountState> mount_state;
+			#endif
 
 			bool operator==(const USBMSCPartitionNode& other) const {
 				return device == other.device && node == other.node;
@@ -100,6 +142,7 @@ namespace Devs {
 			USBHostDevice* device_ = nullptr;
 			DeviceNode* interface_node_ = nullptr;
 			DeviceNode* storage_node_ = nullptr;
+			bool nodes_registered_ = false;
 			Mutex transaction_;
 			uni::Atomic<uint32> references_ = 1;
 			uni::Atomic<byte> state_ = byte(USBMSCStorageState::Initializing);
@@ -113,14 +156,26 @@ namespace Devs {
 			uni::Vector<USBMSCPartition> partitions_;
 			uni::Vector<USBMSCPartitionNode> partition_nodes_;
 			PartitionSchemeKind partition_scheme_ = PartitionSchemeKind::Unknown;
+			ClassicFilesysType whole_disk_type_ = ClassicFilesysType::None;
 			uint32 partition_overflow_ = 0;
 			bool partition_scan_active_ = false;
 			bool partition_scan_failed_ = false;
 			uint32 block_count_ = 0;
+			stduint maximum_transfer_bytes_ = USBMSCMaximumTransferBytes;
 			uint8 interface_number_ = 0;
 			uint8 lun_ = 0;
 			stduint controller_index_ = stduint(-1);
-			uint8 slot_id_ = 0;
+			String controller_name_;
+			#if defined(_MCU_STM32H7x)
+			uni::Atomic<byte> service_state_ = byte(USBMSCServiceState::Idle);
+			uint32 service_sequence_ = 0;
+			stduint service_source_ = 0, service_block_ = 0, service_count_ = 0;
+			byte* transfer_buffer_ = nullptr;
+			bool service_command_started_ = false;
+			bool service_write_ = false, service_submitting_ = false, service_completed_ = false;
+			stduint service_start_tick_ = 0;
+			#endif
+			uint8 device_id_ = 0;
 			stduint cached_block_ = stduint(-1);
 			USBMSCStorage* registry_next_ = nullptr;
 			USBMSCStorage* disconnect_next_ = nullptr;
@@ -133,7 +188,7 @@ namespace Devs {
 			void ReleaseDeviceNodes() {
 				for (stduint i = 0; i < partition_nodes_.Count(); ++i) {
 					auto* node = partition_nodes_[i].node;
-					if (!node) continue;
+					if (!node || node == storage_node_) continue;
 					auto* partition = static_cast<uni::DiscPartition*>(
 						node->fields.binding.driver_data);
 					node->fields.binding.driver_data = nullptr;
@@ -149,8 +204,120 @@ namespace Devs {
 				interface_node_ = nullptr;
 			}
 
+			#if defined(_MCU_STM32H7x)
+			void FinishServiceRequest() {
+				const bool restore = IC.TryMaskInterrupt();
+				byte expected = service_state_.load(uni::MemoryOrder_Acquire);
+				if ((expected == byte(USBMSCServiceState::Active) || expected == byte(USBMSCServiceState::Cancelling)) &&
+					service_state_.compare_exchange(expected, byte(USBMSCServiceState::Finished),
+					uni::MemoryOrder_Acq_Rel, uni::MemoryOrder_Acquire)) {
+					if (wait_armed_.load(uni::MemoryOrder_Acquire)) {
+						Systimex::CancelThreadWake(service_source_);
+						(void)Taskman::UnblockThread(service_source_, ThreadBlock::BlockReason::BR_Resting);
+					}
+					Release(); // The service releases the reference acquired before enqueueing.
+				}
+				if (restore) IC.enInterrupt(true);
+			}
+
+			bool TransferServiceChunk(stduint block, void* buffer, stduint count, bool write) {
+				auto* thread = Taskman::CurrentTB();
+				if (!thread || !thread->parent_process || thread->parent_process->ring != RING_M ||
+					thread->tid == Task_Devsman || thread->parent_process->pid == Task_Usb_Serv ||
+					!driver_ || !IsOnline() || !transfer_buffer_ || !buffer || !count || !Block_Size ||
+					count > maximum_transfer_bytes_ / Block_Size || count > 0xFFFFu ||
+					service_state_.load(uni::MemoryOrder_Acquire) != byte(USBMSCServiceState::Idle)) return false;
+				const stduint bytes = count * Block_Size;
+				if (write) MemCopyN(transfer_buffer_, buffer, bytes);
+				const bool restore = IC.TryMaskInterrupt();
+				if (!restore) return false;
+				if (!IsOnline() || !driver_ || service_state_.load(uni::MemoryOrder_Acquire) != byte(USBMSCServiceState::Idle)) {
+					IC.enInterrupt(true);
+					return false;
+				}
+				const stduint start = tick;
+				if (!Systimex::AppendThreadWake(USBMSCCommandTimeoutTicks, thread->tid)) {
+					IC.enInterrupt(true);
+					return false;
+				}
+				service_source_ = thread->tid;
+				service_block_ = block;
+				service_count_ = count;
+				service_command_started_ = false;
+				service_write_ = write;
+				service_start_tick_ = start;
+				service_completed_ = false;
+				service_sequence_ = usb_msc_request_sequence.fetch_add(1, uni::MemoryOrder_Acq_Rel) + 1;
+				if (!service_sequence_) service_sequence_ = usb_msc_request_sequence.fetch_add(1, uni::MemoryOrder_Acq_Rel) + 1;
+				pending_command_id_.store(0, uni::MemoryOrder_Release);
+				completed_command_id_.store(0, uni::MemoryOrder_Release);
+				completed_result_.store(byte(USBHost_MSC::Result::Busy), uni::MemoryOrder_Release);
+				wait_state_.store(byte(USBMSCWaitState::Pending), uni::MemoryOrder_Release);
+				wait_armed_.store(1, uni::MemoryOrder_Release);
+				service_state_.store(byte(USBMSCServiceState::Queued), uni::MemoryOrder_Release);
+				Retain(); // Keep the adapter alive until the waiting call returns.
+				Retain(); // The queued message transfers this reference to the USB service.
+				UsbMSCRequest request{this, service_sequence_};
+				const auto error = syssend_async(Task_Usb_Serv, &request, sizeof(request),
+					_IMM(DevsmanMsg::USB_MSC_REQUEST));
+				if (error) {
+					service_state_.store(byte(USBMSCServiceState::Idle), uni::MemoryOrder_Release);
+					wait_state_.store(byte(USBMSCWaitState::Idle), uni::MemoryOrder_Release);
+					wait_armed_.store(0, uni::MemoryOrder_Release);
+					Systimex::CancelThreadWake(thread->tid);
+					Release();
+					Release();
+					IC.enInterrupt(true);
+					return false;
+				}
+				IC.enInterrupt(true);
+
+				for (;;) {
+					const bool resume = IC.TryMaskInterrupt();
+					const byte service_state = service_state_.load(uni::MemoryOrder_Acquire);
+					if (service_state == byte(USBMSCServiceState::Finished) || service_state == byte(USBMSCServiceState::Quarantined)) {
+						if (resume) IC.enInterrupt(true);
+						break;
+					}
+					if (stduint(stduint(tick) - start) >= USBMSCCommandTimeoutTicks) {
+						byte expected = byte(USBMSCWaitState::Pending);
+						if (wait_state_.compare_exchange(expected, byte(USBMSCWaitState::TimedOut),
+							uni::MemoryOrder_Acq_Rel, uni::MemoryOrder_Acquire)) {
+							byte online = byte(USBMSCStorageState::Online);
+							(void)state_.compare_exchange(online, byte(USBMSCStorageState::Offline),
+								uni::MemoryOrder_Acq_Rel, uni::MemoryOrder_Acquire);
+							plogwarn("USB MSC service timeout controller=%s device=%u sequence=%u",
+								controller_name_.reference(), (stduint)device_id_, (stduint)service_sequence_);
+						}
+					}
+					// The USB service stops the transport before completing cancellation.
+					thread->Block(ThreadBlock::BlockReason::BR_Resting);
+					if (resume) IC.enInterrupt(true);
+					if (thread->state == ThreadBlock::State::Pended) Taskman::Schedule(true);
+				}
+
+				const bool cleanup = IC.TryMaskInterrupt();
+				wait_armed_.store(0, uni::MemoryOrder_Release);
+				Systimex::CancelThreadWake(thread->tid);
+				const bool success = service_state_.load(uni::MemoryOrder_Acquire) == byte(USBMSCServiceState::Finished) &&
+					wait_state_.load(uni::MemoryOrder_Acquire) == byte(USBMSCWaitState::Completed) &&
+					pending_command_id_.load(uni::MemoryOrder_Acquire) == completed_command_id_.load(uni::MemoryOrder_Acquire) &&
+					completed_result_.load(uni::MemoryOrder_Acquire) == byte(USBHost_MSC::Result::Ok) && IsOnline();
+				if (service_state_.load(uni::MemoryOrder_Acquire) == byte(USBMSCServiceState::Finished))
+					service_state_.store(byte(USBMSCServiceState::Idle), uni::MemoryOrder_Release);
+				wait_state_.store(byte(IsOnline() ? USBMSCWaitState::Idle : USBMSCWaitState::Offline), uni::MemoryOrder_Release);
+				if (cleanup) IC.enInterrupt(true);
+				if (success && !write) MemCopyN(buffer, transfer_buffer_, bytes);
+				Release();
+				return success;
+			}
+			#endif
+
 			bool TransferChunkLocked(stduint block, void* buffer, stduint count,
 				bool write) {
+				#if defined(_MCU_STM32H7x)
+				return TransferServiceChunk(block, buffer, count, write);
+				#else
 				auto* thread = Taskman::CurrentTB();
 				if (!thread || Taskman::CurrentTID() == Task_Devsman || !driver_ ||
 					!IsOnline()) return false;
@@ -221,6 +388,7 @@ namespace Devs {
 						(stduint)command_id, block, count);
 				}
 				return success;
+				#endif
 			}
 
 		public:
@@ -230,24 +398,43 @@ namespace Devs {
 					block_count_(driver.BlockCount()),
 					interface_number_(uint8(driver.InterfaceNumber())),
 					lun_(driver.Lun()),
-					controller_index_(FindXHCIControllerIndex(interface_node)),
-					slot_id_(FindUSBSlotID(interface_node)) {
+					controller_index_(FindUSBControllerIndex(interface_node)),
+					device_id_(FindUSBDeviceID(interface_node)) {
+				auto* bus = FindUSBAncestor(interface_node, DeviceNodeType::UsbBus);
+				auto* controller = bus ? bus->fields.controller : nullptr;
+				if (controller && DeviceNodeType(controller->fields.node_type) == DeviceNodeType::PlatformDevice && controller->link.addr) {
+					controller_name_ = String::newFormat("%s", controller->link.addr);
+				} else if (bus && bus->fields.binding.driver_name && controller_index_ != stduint(-1)) {
+					controller_name_ = String::newFormat("%s%u", bus->fields.binding.driver_name, controller_index_);
+				}
+				#if defined(_MCU_STM32H7x)
+				maximum_transfer_bytes_ = static_cast<uni::device::SpaceUSB::OTGHostDevice*>(device_)->getBulkTransferLimit();
+				if (maximum_transfer_bytes_) transfer_buffer_ = new byte[maximum_transfer_bytes_];
+				#endif
 				Block_Size = driver.BlockSize();
-				Block_buffer = Block_Size && Block_Size <= USBMSCMaximumTransferBytes ?
+				Block_buffer = Block_Size && Block_Size <= maximum_transfer_bytes_ ?
 					new byte[Block_Size] : nullptr;
 				readable = Block_buffer && block_count_;
+				#if defined(_MCU_STM32H7x)
+				readable = readable && transfer_buffer_;
+				writable = readable && BoardConfig::Usb::Otg2::MscWriteEnabled;
+				#else
 				writable = readable;
+				#endif
 				state_.store(byte(readable ? USBMSCStorageState::Online :
 					USBMSCStorageState::Offline), uni::MemoryOrder_Release);
 			}
 
 			~USBMSCStorage() override {
+				#if defined(_MCU_STM32H7x)
+				delete[] transfer_buffer_;
+				#endif
 				delete[] static_cast<byte*>(Block_buffer);
 			}
 
 			bool Valid() const {
-				return Block_buffer && Block_Size && block_count_ && driver_ && device_ &&
-					interface_node_ && controller_index_ != stduint(-1) && slot_id_;
+				return readable && Block_buffer && Block_Size && block_count_ && driver_ && device_ &&
+					interface_node_ && controller_index_ != stduint(-1) && controller_name_.getByteCount() && device_id_;
 			}
 
 			USBHost_MSC* Driver() const { return driver_; }
@@ -268,12 +455,101 @@ namespace Devs {
 				if (references_.fetch_sub(1, uni::MemoryOrder_Acq_Rel) == 1) delete this;
 			}
 
+			#if defined(_MCU_STM32H7x)
+			void PumpServiceRequest() {
+				byte current = service_state_.load(uni::MemoryOrder_Acquire);
+				const bool expired = stduint(stduint(tick) - service_start_tick_) >= USBMSCCommandTimeoutTicks;
+				if (current == byte(USBMSCServiceState::Queued)) {
+					if (!expired && IsOnline()) return;
+					service_state_.store(byte(USBMSCServiceState::Active), uni::MemoryOrder_Release);
+					current = byte(USBMSCServiceState::Active);
+				}
+				if (current == byte(USBMSCServiceState::Active)) {
+					const bool failed = service_completed_ &&
+						completed_result_.load(uni::MemoryOrder_Acquire) != byte(USBHost_MSC::Result::Ok);
+					if (!expired && !failed && IsOnline()) return;
+					if (expired) {
+						byte expected = byte(USBMSCWaitState::Pending);
+						(void)wait_state_.compare_exchange(expected, byte(USBMSCWaitState::TimedOut),
+							uni::MemoryOrder_Acq_Rel, uni::MemoryOrder_Acquire);
+					}
+					byte online = byte(USBMSCStorageState::Online);
+					(void)state_.compare_exchange(online, byte(USBMSCStorageState::Offline),
+						uni::MemoryOrder_Acq_Rel, uni::MemoryOrder_Acquire);
+					if (!service_command_started_) {
+						FinishServiceRequest();
+						return;
+					}
+					service_state_.store(byte(USBMSCServiceState::Cancelling), uni::MemoryOrder_Release);
+					current = byte(USBMSCServiceState::Cancelling);
+				}
+				if (current != byte(USBMSCServiceState::Cancelling)) return;
+				const auto stopped = Devsman::StopOTGTransfers(device_);
+				if (stopped == UsbTransferStopResult::Pending) return;
+				if (stopped == UsbTransferStopResult::Failed) {
+					const bool restore = IC.TryMaskInterrupt();
+					service_state_.store(byte(USBMSCServiceState::Quarantined), uni::MemoryOrder_Release);
+					if (wait_armed_.load(uni::MemoryOrder_Acquire)) {
+						Systimex::CancelThreadWake(service_source_);
+						(void)Taskman::UnblockThread(service_source_, ThreadBlock::BlockReason::BR_Resting);
+					}
+					if (restore) IC.enInterrupt(true);
+					// Keep the service reference and owned buffer until hardware quiescence is certified.
+					plogerro("USB MSC transfer buffer retained controller=%s device=%u sequence=%u",
+						controller_name_.reference(), (stduint)device_id_, (stduint)service_sequence_);
+					return;
+				}
+				if (driver_) driver_->AbortCommand();
+				completed_result_.store(byte(USBHost_MSC::Result::TransferFailed), uni::MemoryOrder_Release);
+				FinishServiceRequest();
+			}
+
+			void SubmitServiceRequest(uint32 sequence, stduint source) {
+				if (sequence != service_sequence_ || source != service_source_ ||
+					service_state_.load(uni::MemoryOrder_Acquire) != byte(USBMSCServiceState::Queued)) return;
+				service_state_.store(byte(USBMSCServiceState::Active), uni::MemoryOrder_Release);
+				if (!IsOnline() || !driver_ || driver_->IsBusy() ||
+					wait_state_.load(uni::MemoryOrder_Acquire) != byte(USBMSCWaitState::Pending)) {
+					Complete(0, USBHost_MSC::Result::TransferFailed);
+					return;
+				}
+				service_command_started_ = true;
+				service_submitting_ = true;
+				const auto error = service_write_
+					? driver_->WriteBlocks(uint32(service_block_), uint16(service_count_), transfer_buffer_)
+					: driver_->ReadBlocks(uint32(service_block_), uint16(service_count_), transfer_buffer_);
+				pending_command_id_.store(driver_->CommandID(), uni::MemoryOrder_Release);
+				service_submitting_ = false;
+				// StartCommand can complete synchronously on submission failure.
+				if (service_completed_) {
+					if (wait_state_.load(uni::MemoryOrder_Acquire) == byte(USBMSCWaitState::Completed) &&
+						completed_result_.load(uni::MemoryOrder_Acquire) == byte(USBHost_MSC::Result::Ok)) FinishServiceRequest();
+					else PumpServiceRequest();
+				} else if (error) Complete(driver_->CommandID(), USBHost_MSC::Result::TransferFailed);
+			}
+			#endif
+
 			void Complete(uint32 command_id, USBHost_MSC::Result result) {
+				#if defined(_MCU_STM32H7x)
+				if (service_state_.load(uni::MemoryOrder_Acquire) != byte(USBMSCServiceState::Active)) return;
+				#endif
 				const uint32 pending_id = pending_command_id_.load(uni::MemoryOrder_Acquire);
 				if (pending_id && pending_id != command_id) return;
 				completed_command_id_.store(command_id, uni::MemoryOrder_Release);
 				completed_result_.store(byte(result), uni::MemoryOrder_Release);
 				byte expected = byte(USBMSCWaitState::Pending);
+				#if defined(_MCU_STM32H7x)
+				const bool expired = stduint(stduint(tick) - service_start_tick_) >= USBMSCCommandTimeoutTicks;
+				(void)wait_state_.compare_exchange(expected, byte(expired ? USBMSCWaitState::TimedOut : USBMSCWaitState::Completed),
+					uni::MemoryOrder_Acq_Rel, uni::MemoryOrder_Acquire);
+				if (expired) state_.store(byte(USBMSCStorageState::Offline), uni::MemoryOrder_Release);
+				service_completed_ = true;
+				if (!service_submitting_) {
+					if (!expired && result == USBHost_MSC::Result::Ok &&
+						wait_state_.load(uni::MemoryOrder_Acquire) == byte(USBMSCWaitState::Completed)) FinishServiceRequest();
+					else PumpServiceRequest();
+				}
+				#else
 				if (!wait_state_.compare_exchange(expected, byte(USBMSCWaitState::Completed),
 					uni::MemoryOrder_Acq_Rel, uni::MemoryOrder_Acquire)) return;
 				if (!wait_armed_.load(uni::MemoryOrder_Acquire)) return;
@@ -281,6 +557,7 @@ namespace Devs {
 				if (!waiter) return;
 				Systimex::CancelThreadWake(waiter->tid);
 				waiter->Unblock(ThreadBlock::BlockReason::BR_Resting);
+				#endif
 			}
 
 			void BeginDisconnect() {
@@ -301,6 +578,27 @@ namespace Devs {
 				waiter->Unblock(ThreadBlock::BlockReason::BR_Resting);
 			}
 
+			#if defined(_MCU_STM32H7x)
+			void DetachTransport() {
+				// The controller has certified quiescence before this observer and buffer are released.
+				if (driver_) {
+					driver_->SetObserver(nullptr, nullptr);
+					driver_->AbortCommand();
+				}
+				const bool restore = IC.TryMaskInterrupt();
+				driver_ = nullptr;
+				device_ = nullptr;
+				const byte current = service_state_.load(uni::MemoryOrder_Acquire);
+				if (current == byte(USBMSCServiceState::Queued) || current == byte(USBMSCServiceState::Active) ||
+					current == byte(USBMSCServiceState::Cancelling) || current == byte(USBMSCServiceState::Quarantined)) {
+					service_state_.store(byte(USBMSCServiceState::Cancelling), uni::MemoryOrder_Release);
+					completed_result_.store(byte(USBHost_MSC::Result::TransferFailed), uni::MemoryOrder_Release);
+					FinishServiceRequest();
+				}
+				if (restore) IC.enInterrupt(true);
+			}
+			#endif
+
 			void FinishDisconnect() {
 				ReleaseDeviceNodes();
 				driver_ = nullptr;
@@ -309,8 +607,14 @@ namespace Devs {
 					uni::MemoryOrder_Release);
 			}
 
-			bool QueueProbe() {
+			bool QueueProbe(stduint delay = 0) {
 				Retain();
+				if (delay) {
+					if (Systimex::AppendDriverMessage(delay, Task_FileSys,
+						_IMM(FilemanMsg::USB_MSC_PROBE), reinterpret_cast<stduint>(this))) return true;
+					Release();
+					return false;
+				}
 				USBMSCStorage* context = this;
 				if (!syssend_async(Task_FileSys, &context, sizeof(context),
 					_IMM(FilemanMsg::USB_MSC_PROBE))) return true;
@@ -347,6 +651,15 @@ namespace Devs {
 				if (!IsOnline() || !Block_buffer || !Block_Size)
 					return false;
 				partitions_ready_.store(0, uni::MemoryOrder_Release);
+				if (Block_Size < 512 || !Read(0, Block_buffer)) return false;
+				whole_disk_type_ = WholeDiskFATType(static_cast<const byte*>(Block_buffer), Block_Size, block_count_);
+				if (whole_disk_type_ != ClassicFilesysType::None) {
+					partitions_.Clear();
+					partition_scheme_ = PartitionSchemeKind::Unknown;
+					partition_overflow_ = 0;
+					partitions_ready_.store(1, uni::MemoryOrder_Release);
+					return true;
+				}
 				auto* table = new HD_Info{};
 				if (!table) {
 					plogwarn("USB MSC partition table allocation failed interface=%u",
@@ -397,23 +710,31 @@ namespace Devs {
 				return false;
 			}
 
+			bool PartitionsReady() const {
+				return IsOnline() && partitions_ready_.load(uni::MemoryOrder_Acquire);
+			}
+
 			bool RegisterNodes() {
 				if (!IsOnline() ||
 					!partitions_ready_.load(uni::MemoryOrder_Acquire) ||
 					!interface_node_) return false;
-				if (storage_node_) return true;
+				if (nodes_registered_) return true;
 				auto storage_name = String::newFormat("usb-storage@%u", (stduint)lun_);
 				storage_node_ = Devsman::RegisterStorageDevice(interface_node_,
 					storage_name.reference(), DeviceBusType::USB, "usb-mass-storage", this);
 				if (!storage_node_ || !Devsman::AttachStorageOps(storage_node_, this))
 					return false;
 				auto alias = interface_number_ || lun_
-					? String::newFormat("xhci%u-%u-if%u-lun%u", controller_index_,
-						(stduint)slot_id_, (stduint)interface_number_, (stduint)lun_)
-					: String::newFormat("xhci%u-%u", controller_index_,
-						(stduint)slot_id_);
+					? String::newFormat("%s-%u-if%u-lun%u", controller_name_.reference(),
+						(stduint)device_id_, (stduint)interface_number_, (stduint)lun_)
+					: String::newFormat("%s-%u", controller_name_.reference(),
+						(stduint)device_id_);
 				if (!Devsman::RegisterDevAlias(storage_node_, alias.reference()))
 					return false;
+				if (whole_disk_type_ != ClassicFilesysType::None) {
+					nodes_registered_ = partition_nodes_.Append(USBMSCPartitionNode{0, storage_node_});
+					return nodes_registered_;
+				}
 				stduint registered = 0;
 				for (stduint i = 0; i < partitions_.Count(); ++i) {
 					const auto slice = partitions_[i].slice;
@@ -423,7 +744,10 @@ namespace Devs {
 					auto* node = Devsman::RegisterStoragePartition(storage_node_,
 						name.reference(), *this, i + 1);
 					if (!node) return false;
-					partition_nodes_.Append(USBMSCPartitionNode{i + 1, node});
+					bool recorded = false;
+					for (stduint j = 0; j < partition_nodes_.Count(); ++j)
+						if (partition_nodes_[j].node == node) { recorded = true; break; }
+					if (!recorded && !partition_nodes_.Append(USBMSCPartitionNode{i + 1, node})) return false;
 					registered++;
 					plogtrac("USB MSC partition registered interface=%u partition=%u lba=%u blocks=%u type=%[8H]",
 						(stduint)interface_number_, i + 1, slice.address,
@@ -432,6 +756,7 @@ namespace Devs {
 				plogtrac("USB MSC storage registered interface=%u blocks=%u block-size=%u partitions=%u registered=%u",
 					(stduint)interface_number_, (stduint)block_count_, Block_Size,
 					partitions_.Count(), registered);
+				nodes_registered_ = true;
 				return true;
 			}
 
@@ -440,20 +765,26 @@ namespace Devs {
 					return false;
 				stduint mounted = 0;
 				for (stduint i = 0; i < partition_nodes_.Count(); ++i) {
-					const auto entry = partition_nodes_[i];
-					if (!entry.device || !entry.node || !IsOnline()) continue;
+					auto& entry = partition_nodes_[i];
+					if (!entry.node || !IsOnline()) continue;
 					auto mount_path = interface_number_ || lun_
-						? String::newFormat("/mnt/xhci%u.%u.i%u.l%u.%u",
-							controller_index_, (stduint)slot_id_,
+						? String::newFormat("/mnt/%s.%u.i%u.l%u.%u",
+							controller_name_.reference(), (stduint)device_id_,
 							(stduint)interface_number_, (stduint)lun_, entry.device)
-						: String::newFormat("/mnt/xhci%u.%u.%u",
-							controller_index_, (stduint)slot_id_, entry.device);
+						: String::newFormat("/mnt/%s.%u.%u",
+							controller_name_.reference(), (stduint)device_id_, entry.device);
 					if (Filesys::CountMountsForSourceNode(entry.node)) {
 						mounted++;
 						continue;
 					}
 					if (auto* filesystem = Filesys::Mount(*this, entry.device,
 						mount_path.reference(), entry.node)) {
+						#if defined(_MCU_STM32H7x)
+						if (auto* root = Filesys::Index(mount_path.reference())) {
+							if (root->d_mounts) root = root->d_mounts;
+							if (root->d_inode) entry.mount_state = root->d_inode->mount_state;
+						}
+						#endif
 						mounted++;
 						ploginfo("USB MSC mount %s on %s interface=%u partition=%u",
 							filesystem->name, mount_path.reference(),
@@ -470,19 +801,24 @@ namespace Devs {
 
 			bool UnmountPartitions() {
 				for (stduint i = 0; i < partition_nodes_.Count(); ++i) {
-					const auto entry = partition_nodes_[i];
+					auto& entry = partition_nodes_[i];
 					if (!entry.node) continue;
 					while (Filesys::CountMountsForSourceNode(entry.node)) {
 						auto path = Filesys::GetFirstMountPathForSourceNode(entry.node);
 						if (!path.getByteCount() || !Filesys::Unmount(path.reference())) {
 							plogwarn("USB MSC cannot unmount controller=%u slot=%u partition=%u",
-								controller_index_, (stduint)slot_id_, entry.device);
+								controller_index_, (stduint)device_id_, entry.device);
 							return false;
 						}
 						ploginfo("USB MSC unmounted %s controller=%u slot=%u partition=%u",
-							path.reference(), controller_index_, (stduint)slot_id_,
+							path.reference(), controller_index_, (stduint)device_id_,
 							entry.device);
 					}
+					#if defined(_MCU_STM32H7x)
+					// Detached open files still own their backend and its raw adapter pointer.
+					if (entry.mount_state.use_count() > 1) return false;
+					entry.mount_state.reset();
+					#endif
 				}
 				return true;
 			}
@@ -493,7 +829,7 @@ namespace Devs {
 					if (partition_scan_active_) partition_scan_failed_ = true;
 					return false;
 				}
-				const stduint maximum_blocks = USBMSCMaximumTransferBytes / Block_Size;
+				const stduint maximum_blocks = maximum_transfer_bytes_ / Block_Size;
 				if (!maximum_blocks) {
 					if (partition_scan_active_) partition_scan_failed_ = true;
 					return false;
@@ -524,7 +860,7 @@ namespace Devs {
 			bool Write(stduint block, const void* source, stduint count = 1) override {
 				if (!source || !count || !writable || !Block_Size ||
 					block >= block_count_ || count > block_count_ - block) return false;
-				const stduint maximum_blocks = USBMSCMaximumTransferBytes / Block_Size;
+				const stduint maximum_blocks = maximum_transfer_bytes_ / Block_Size;
 				if (!maximum_blocks) return false;
 				MutexLocal guard(&transaction_);
 				if (!IsOnline()) return false;
@@ -553,6 +889,7 @@ namespace Devs {
 				uni::PartitionSlice slice = {};
 				if (!device && IsOnline()) {
 					slice.length = block_count_;
+					slice.sys_id = whole_disk_type_;
 					return slice;
 				}
 				if (!IsOnline() ||
@@ -583,6 +920,18 @@ namespace Devs {
 
 		Spinlock usb_msc_storage_lock;
 		USBMSCStorage* usb_msc_storage = nullptr;
+
+		#if defined(_MCU_STM32H7x)
+		USBMSCStorage* AcquireUSBMSCStorage(void* context) {
+			SpinlockLocal guard(&usb_msc_storage_lock);
+			for (auto* storage = usb_msc_storage; storage; storage = storage->RegistryNext()) {
+				if (storage != context) continue;
+				storage->Retain();
+				return storage;
+			}
+			return nullptr;
+		}
+		#endif
 
 		USBMSCStorage* AcquireUSBMSCStorage(USBHost_MSC& driver) {
 			SpinlockLocal guard(&usb_msc_storage_lock);
@@ -688,6 +1037,23 @@ namespace Devs {
 			(stduint)driver.InterfaceNumber());
 	}
 
+	#if defined(_MCU_STM32H7x)
+	void prepare_usb_msc_disconnect(uni::device::SpaceUSB::USBHostDevice& device) {
+		auto* storage = AcquireUSBMSCStorage(device);
+		while (storage) {
+			USBMSCStorage* next = nullptr;
+			{
+				SpinlockLocal guard(&usb_msc_storage_lock);
+				next = storage->RegistryNext();
+				if (next) next->Retain();
+			}
+			if (storage->Device() == &device) storage->BeginDisconnect();
+			storage->Release();
+			storage = next;
+		}
+	}
+	#endif
+
 	bool disconnect_usb_msc_storage(uni::device::SpaceUSB::USBHostDevice& device) {
 		auto* first = AcquireUSBMSCStorage(device);
 		if (!first) return false;
@@ -699,6 +1065,9 @@ namespace Devs {
 			for (auto* storage = fallback.storages; storage;
 				storage = storage->DisconnectNext()) {
 				storage->BeginDisconnect();
+				#if defined(_MCU_STM32H7x)
+				storage->DetachTransport();
+				#endif
 			}
 			first->Release();
 			return true;
@@ -709,6 +1078,9 @@ namespace Devs {
 		for (auto* storage = context->storages; storage;
 			storage = storage->DisconnectNext()) {
 			storage->BeginDisconnect();
+			#if defined(_MCU_STM32H7x)
+			storage->DetachTransport();
+			#endif
 		}
 		if (!context->storages) {
 			delete context;
@@ -732,10 +1104,46 @@ namespace Devs {
 
 }
 
+#if defined(_MCU_STM32H7x)
+void Devsman::PumpUSBMSCRequests() {
+	if (Taskman::CurrentTID() != Task_Usb_Serv) return;
+	Devs::USBMSCStorage* storage = nullptr;
+	{
+		SpinlockLocal guard(&Devs::usb_msc_storage_lock);
+		storage = Devs::usb_msc_storage;
+		if (storage) storage->Retain();
+	}
+	while (storage) {
+		Devs::USBMSCStorage* next = nullptr;
+		{
+			SpinlockLocal guard(&Devs::usb_msc_storage_lock);
+			next = storage->RegistryNext();
+			if (next) next->Retain();
+		}
+		storage->PumpServiceRequest();
+		storage->Release();
+		storage = next;
+	}
+}
+
+void Devsman::ProcessUSBMSCRequest(const UsbMSCRequest& request, stduint source) {
+	if (Taskman::CurrentTID() != Task_Usb_Serv) return;
+	const bool restore = IC.TryMaskInterrupt();
+	const auto* sender = Taskman::LocateThread(source);
+	const bool trusted = sender && sender->parent_process && sender->parent_process->ring == RING_M;
+	if (restore) IC.enInterrupt(true);
+	if (!trusted) return;
+	if (auto* storage = Devs::AcquireUSBMSCStorage(request.context)) {
+		storage->SubmitServiceRequest(request.sequence, source);
+		storage->Release();
+	}
+}
+#endif
+
 void Devsman::ProcessUSBMSCProbe(void* context) {
 	auto* storage = static_cast<Devs::USBMSCStorage*>(context);
 	if (!storage) return;
-	if (storage->ProbeLBA0() && storage->ScanPartitions() &&
+	if ((storage->PartitionsReady() || (storage->ProbeLBA0() && storage->ScanPartitions())) &&
 		!storage->QueueRegistration()) {
 		plogwarn("USB MSC storage registration queue failed");
 	}
@@ -746,7 +1154,12 @@ void Devsman::RegisterUSBMSCStorage(void* context) {
 	auto* storage = static_cast<Devs::USBMSCStorage*>(context);
 	if (!storage) return;
 	if (!storage->RegisterNodes()) {
+		#if defined(_MCU_STM32H7x)
+		if (storage->PartitionsReady() && !storage->QueueProbe(Devs::USBMSCDisconnectRetryTicks))
+			plogwarn("USB MSC storage registration retry queue failed");
+		#else
 		plogwarn("USB MSC storage node registration failed");
+		#endif
 	}
 	else if (!storage->QueueMount()) {
 		plogwarn("USB MSC mount queue failed");

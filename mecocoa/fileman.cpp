@@ -749,7 +749,7 @@ static void _TryStartUserApp() {
 
 //// ---- ---- SERVICE ---- ---- ////
 
-#if (_MCCA & 0xFF00) == 0x8600 && CONFIG_ENABLE_USB
+#if ((_MCCA & 0xFF00) == 0x8600 || defined(_MCU_STM32H7x)) && CONFIG_ENABLE_USB
 static bool IsUSBStorageSource(stduint tid) {
 	if (tid == Task_Devsman) return true;
 	if (tid == Task_Usb_Serv) return true;
@@ -803,7 +803,7 @@ void serv_file_loop()// for IDE 0:0, 0:1
 			break;
 		}
 		#endif
-		#if (_MCCA & 0xFF00) == 0x8600 && CONFIG_ENABLE_USB
+		#if ((_MCCA & 0xFF00) == 0x8600 || defined(_MCU_STM32H7x)) && CONFIG_ENABLE_USB
 		case FilemanMsg::USB_MSC_PROBE:
 			if (IsUSBStorageSource(sig_src)) {
 				Devsman::ProcessUSBMSCProbe(reinterpret_cast<void*>(to_args[0]));

@@ -21,7 +21,8 @@ enum {
 	#if (_MCCA & 0xFF00) == 0x8600 || (_ACCM & 0xFF00) == 0x8600
 	Task_Net_Serv,
 	#endif
-	#if (((_MCCA & 0xFF00) == 0x8600) || ((_ACCM & 0xFF00) == 0x8600)) && CONFIG_ENABLE_USB
+	#if CONFIG_ENABLE_USB && (((_MCCA & 0xFF00) == 0x8600) || _MCCA == 0x1A072032 || \
+		((_ACCM & 0xFF00) == 0x8600) || _ACCM == 0x2032)
 	Task_Usb_Serv,
 	#endif
 	#if (_MCCA & 0xFF00) == 0x8600 || (_ACCM & 0xFF00) == 0x8600

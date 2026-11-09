@@ -36,10 +36,10 @@ namespace {
 		return buttons;
 	}
 
-	void ApplyPointerButtons(MouseMessage& message, byte buttons) {
-		message.BtnLeft = (buttons & 1) != 0;
-		message.BtnRight = (buttons & 2) != 0;
-		message.BtnMiddle = (buttons & 4) != 0;
+	void ApplyPointerButtons(MouseGeneralMessage& message, byte buttons) {
+		message.btn_left = (buttons & 1) != 0;
+		message.btn_right = (buttons & 2) != 0;
+		message.btn_middle = (buttons & 4) != 0;
 	}
 
 	void MoveTouchPointer(const uni::Point& position) {
@@ -49,11 +49,12 @@ namespace {
 		const stdsint dx = stdsint(minof(position.x, screen.x - 1)) - stdsint(current.x);
 		const stdsint dy = stdsint(minof(position.y, screen.y - 1)) - stdsint(current.y);
 		if (!dx && !dy) return;
-		MouseMessage movement{};
-		movement.BtnLeft = Cursor::mouse_btnl_dn;
-		movement.BtnRight = Cursor::mouse_btnr_dn;
-		movement.BtnMiddle = Cursor::mouse_btnm_dn;
-		HandlePointerMessage(movement, dx, dy);
+		MouseGeneralMessage movement{};
+		movement.btn_left = Cursor::mouse_btnl_dn;
+		movement.btn_right = Cursor::mouse_btnr_dn;
+		movement.btn_middle = Cursor::mouse_btnm_dn;
+		movement.movement = uni::Size2dif(dx, dy);
+		HandlePointerMessage(movement);
 	}
 
 	void HandleTouchPointer(const uni::TouchEvent& event, void* context) {
@@ -76,15 +77,15 @@ namespace {
 				global_layman.Lock()->Update(nullptr, ghost);
 			}
 		}
-		MouseMessage message{};
+		MouseGeneralMessage message{};
 		ApplyPointerButtons(message, buttons);
 		hand_mouse(message);
 	}
 
 }
 
-void ConsumeMouseForGraphic(MouseMessage message) {
-	graphic_mouse_buttons = byte((message.BtnLeft ? 1 : 0) | (message.BtnRight ? 2 : 0) | (message.BtnMiddle ? 4 : 0));
+void ConsumeMouseForGraphic(MouseGeneralMessage message) {
+	graphic_mouse_buttons = byte((message.btn_left ? 1 : 0) | (message.btn_right ? 2 : 0) | (message.btn_middle ? 4 : 0));
 	ApplyPointerButtons(message, CombinedPointerButtons());
 	hand_mouse(message);
 }
