@@ -763,16 +763,18 @@ namespace Devs {
 			bool MountPartitions() {
 				if (!IsOnline() || !storage_node_)
 					return false;
+				const char* mount_name = controller_name_.reference();
+				if (StrCompareN(mount_name, "usb-otg", 7) == 0) mount_name += 4;
 				stduint mounted = 0;
 				for (stduint i = 0; i < partition_nodes_.Count(); ++i) {
 					auto& entry = partition_nodes_[i];
 					if (!entry.node || !IsOnline()) continue;
 					auto mount_path = interface_number_ || lun_
 						? String::newFormat("/mnt/%s.%u.i%u.l%u.%u",
-							controller_name_.reference(), (stduint)device_id_,
+							mount_name, (stduint)device_id_,
 							(stduint)interface_number_, (stduint)lun_, entry.device)
 						: String::newFormat("/mnt/%s.%u.%u",
-							controller_name_.reference(), (stduint)device_id_, entry.device);
+							mount_name, (stduint)device_id_, entry.device);
 					if (Filesys::CountMountsForSourceNode(entry.node)) {
 						mounted++;
 						continue;

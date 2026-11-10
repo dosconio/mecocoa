@@ -261,6 +261,8 @@ namespace {
 		TouchDiagnostics diagnostics;
 		uni::TouchStorage storage;
 		uni::TouchControlBlock control;
+		DeviceNode* bus_node = nullptr;
+		DeviceNode* device_node = nullptr;
 		uni::TouchFrameToken capture_token;
 		uni::TouchFrameWriter capture_target;
 		bool capture_active = false;
@@ -276,6 +278,53 @@ namespace {
 			controller(bus, uni::GPIO[BoardConfig::Touch::ResetPort][BoardConfig::Touch::ResetPin],
 				uni::GPIO[BoardConfig::Touch::InterruptPort][BoardConfig::Touch::InterruptPin], screen) {}
 	};
+
+	bool UnregisterTouchTopology(TouchRuntime& runtime) {
+		const bool restore_interrupts = IC.TryMaskInterrupt();
+		bool ready = true;
+		if (runtime.device_node) {
+			ready = Devsman::UnregisterDevice(runtime.device_node);
+			if (ready) runtime.device_node = nullptr;
+		}
+		if (ready && runtime.bus_node) {
+			ready = Devsman::UnregisterBus(runtime.bus_node);
+			if (ready) runtime.bus_node = nullptr;
+		}
+		if (restore_interrupts) IC.enInterrupt(true);
+		return ready;
+	}
+
+	bool RegisterTouchTopology(TouchRuntime& runtime) {
+		static_assert(BoardConfig::Touch::InterruptPin < 16, "Touch interrupt must be an EXTI GPIO pin");
+		static const uni::Request_t exti_low[] = {uni::IRQ_EXTI0, uni::IRQ_EXTI1,
+			uni::IRQ_EXTI2, uni::IRQ_EXTI3, uni::IRQ_EXTI4};
+		const auto interrupt_pin = uni::GPIO[BoardConfig::Touch::InterruptPort][BoardConfig::Touch::InterruptPin].getID();
+		const auto irq = interrupt_pin < numsof(exti_low) ? exti_low[interrupt_pin] :
+			interrupt_pin < 10 ? uni::IRQ_EXTI9_5 : uni::IRQ_EXTI15_10;
+		const bool restore_interrupts = IC.TryMaskInterrupt();
+		const auto bus_name = String::newFormat("i2c-soft@P%c%u-P%c%u",
+			(int)BoardConfig::Touch::SclPort, (unsigned)BoardConfig::Touch::SclPin,
+			(int)BoardConfig::Touch::SdaPort, (unsigned)BoardConfig::Touch::SdaPin);
+		runtime.bus_node = Devsman::RegisterBus(DeviceBusType::I2C, DeviceNodeType::I2cBus,
+			bus_name.reference(), nullptr, "i2c-soft", static_cast<uni::IIC_SOFT*>(&runtime.bus));
+		bool ready = runtime.bus_node &&
+			Devsman::AddPinResource(runtime.bus_node, 0, "SCL", BoardConfig::Touch::SclPort, BoardConfig::Touch::SclPin) &&
+			Devsman::AddPinResource(runtime.bus_node, 1, "SDA", BoardConfig::Touch::SdaPort, BoardConfig::Touch::SdaPin) &&
+			Devsman::AddConfigurationResource(runtime.bus_node, 0, "delay-loops", BoardConfig::Touch::IicDelayLoops);
+		if (ready) {
+			const auto name = String::newFormat("touch@%02X", (unsigned)BoardConfig::Touch::Address7);
+			runtime.device_node = Devsman::RegisterDevice(runtime.bus_node, DeviceNodeType::I2cDevice,
+				DeviceBusType::I2C, name.reference(), "touch-gtxxx", &runtime.controller);
+			ready = runtime.device_node &&
+				Devsman::AddAddressResource(runtime.device_node, 0, BoardConfig::Touch::Address7, 7) &&
+				Devsman::AddPinResource(runtime.device_node, 0, "RST", BoardConfig::Touch::ResetPort, BoardConfig::Touch::ResetPin) &&
+				Devsman::AddPinResource(runtime.device_node, 1, "INT", BoardConfig::Touch::InterruptPort, BoardConfig::Touch::InterruptPin) &&
+				Devsman::AddResource(runtime.device_node, DeviceResource{uint16(DeviceResourceType::IrqLine),
+					DeviceResourceFlag_None, 0, uint64(_IMM(irq)), 1, 0});
+		}
+		if (restore_interrupts) IC.enInterrupt(true);
+		return ready;
+	}
 
 	TouchRuntime* touch_runtime = nullptr;
 	uint32 touch_retry_serial = 0;
@@ -469,6 +518,15 @@ uni::TouchTrait* TouchGt1xx::Initialize(const uni::Size2& screen) {
 		delete runtime;
 		return nullptr;
 	}
+	if (!RegisterTouchTopology(*runtime)) {
+		plogerro("[TOUCH] topology registration failed");
+		if (UnregisterTouchTopology(*runtime)) delete runtime;
+		else {
+			plogerro("[TOUCH] cannot remove incomplete topology; runtime retained");
+			touch_runtime = runtime;
+		}
+		return nullptr;
+	}
 	runtime->owner_tid = owner->tid;
 	runtime->running = true;
 	touch_runtime = runtime;
@@ -484,6 +542,10 @@ void TouchGt1xx::Shutdown() {
 	if (!touch_runtime) return;
 	auto* runtime = touch_runtime;
 	if (runtime->running) StopTouch(*runtime);
+	if (!UnregisterTouchTopology(*runtime)) {
+		plogerro("[TOUCH] topology is still referenced; runtime retained");
+		return;
+	}
 	const bool restore_interrupts = IC.TryMaskInterrupt();
 	touch_runtime = nullptr;
 	if (restore_interrupts) IC.enInterrupt(true);

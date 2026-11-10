@@ -116,7 +116,13 @@ enum class DeviceResourceType : uint16 {
 	UsbLocation,
 	UsbEndpoint,
 	DmaChannel,
+	MemoryRange,
+	GpioPin,
+	BusAddress,
+	Configuration,
 };
+
+constexpr uint32 DevicePinNoAlternateFunction = ~uint32(0);
 
 enum DeviceResourceFlags : uint16 {
 	DeviceResourceFlag_None = 0,
@@ -134,6 +140,13 @@ constexpr stduint DeviceAcpiPathCapacity = 160;
 constexpr stduint DeviceAcpiIdCapacity = 48;
 constexpr stduint DeviceAcpiUidCapacity = 32;
 
+/* Resource indices are caller-assigned, independently of names and signal functions.
+ * MemoryRange: start=base, length=byte count, extra=0.
+ * GpioPin: start=(uint64(port ID)<<32)|pin, length=alternate function or DevicePinNoAlternateFunction.
+ * BusAddress: start=address, length=address bits (0 for a controller-defined selector), extra=0.
+ * Configuration: start=value, length=0. The key and value interpretation belong to the driver.
+ * GpioPin/Configuration extra supplies a name; AddResource copies it and the node owns that copy.
+ */
 struct DeviceResource {
 	uint16 type;
 	uint16 flags;
@@ -663,6 +676,23 @@ public:
 		const char* driver_name = nullptr, void* driver_data = nullptr);
 	static DeviceNode* RegisterPlatformDevice(DeviceNode* parent, const char* name,
 		const char* driver_name = nullptr, void* driver_data = nullptr);
+	// The caller serializes topology changes; controller and driver_data are borrowed.
+	static DeviceNode* RegisterBus(DeviceBusType bus_type, DeviceNodeType node_type, const char* name,
+		DeviceNode* controller = nullptr, const char* driver_name = nullptr,
+		void* driver_data = nullptr, bool* created = nullptr);
+	static DeviceNode* RegisterDevice(DeviceNode* parent, DeviceNodeType node_type,
+		DeviceBusType bus_type, const char* name, const char* driver_name = nullptr,
+		void* driver_data = nullptr, bool* created = nullptr);
+	// Stop I/O and release external references before unregistering; the backend remains caller-owned.
+	static bool UnregisterDevice(DeviceNode* node);
+	static bool UnregisterBus(DeviceNode* bus);
+	static bool AddResource(DeviceNode* node, const DeviceResource& resource);
+	static const char* GetResourceName(const DeviceResource& resource);
+	static bool AddMemoryResource(DeviceNode* node, uint32 index, uint64 base, uint64 length);
+	static bool AddPinResource(DeviceNode* node, uint32 index, const char* name,
+		uint32 port, uint32 pin, uint32 alternate = DevicePinNoAlternateFunction);
+	static bool AddAddressResource(DeviceNode* node, uint32 index, uint64 address, uint32 address_bits = 0);
+	static bool AddConfigurationResource(DeviceNode* node, uint32 index, const char* name, uint64 value);
 	static DeviceNode* RegisterStorageDevice(DeviceNode* parent, const char* name,
 		DeviceBusType bus_type = DeviceBusType::Platform,
 		const char* driver_name = nullptr, void* driver_data = nullptr);

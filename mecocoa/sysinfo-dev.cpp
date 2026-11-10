@@ -4,6 +4,12 @@
 // #pragma GCC optimize("O2")
 #include "../include/mecocoa.hpp"
 
+#define PRINT_GPIO_DETAIL 0 // STM32
+
+#if (_MCCA & 0xFF00) == 0x8600 || defined(_MCU_STM32H7x)
+#include <cpp/Device/GPIO>
+#endif
+
 #if (_MCCA & 0xFF00) == 0x8600
 #include <cpp/Device/Bus/Serial/IIC-HID.hpp>
 #include <cpp/Device/IIC>
@@ -94,6 +100,10 @@ static rostr text_device_resource_type(uint16 type) {
 	case DeviceResourceType::UsbLocation:       return "USB-LOC";
 	case DeviceResourceType::UsbEndpoint:       return "USB-EP";
 	case DeviceResourceType::DmaChannel:        return "DMA";
+	case DeviceResourceType::MemoryRange:       return "MMIO";
+	case DeviceResourceType::GpioPin:           return "GPIN";
+	case DeviceResourceType::BusAddress:        return "BUS-ADDR";
+	case DeviceResourceType::Configuration:     return "CONFIG";
 	default: return "RES";
 	}
 }
@@ -239,6 +249,32 @@ static void dump_device_tree_resources(OstreamTrait& com1, const DeviceNode& nod
 		const auto& res = node.fields.resources[i];
 		dump_device_tree_indent(com1, depth);
 		switch (DeviceResourceType(res.type)) {
+		case DeviceResourceType::MemoryRange:
+			com1.OutFormat("- MMIO[%[u]] base=0x%[64H] len=0x%[64H]\n\r",
+				res.index, res.start, res.length);
+			break;
+		case DeviceResourceType::GpioPin: {
+			const uint32 port = uint32(res.start >> 32);
+			com1.OutFormat("- GPIO[%[u]] %s ", res.index, Devsman::GetResourceName(res));
+			if (port >= 'A' && port <= 'Z')
+				com1.OutFormat("P%c%u", (int)port, (unsigned)uint32(res.start));
+			else com1.OutFormat("port=%u pin=%u", (unsigned)port, (unsigned)uint32(res.start));
+			if (res.length != DevicePinNoAlternateFunction)
+				com1.OutFormat(" AF=%[u]", (stduint)res.length);
+			com1.OutFormat("\n\r");
+			break;
+		}
+		case DeviceResourceType::BusAddress:
+			com1.OutFormat("- BUS-ADDR[%[u]] address=0x%[64H]", res.index, res.start);
+			if (res.length) com1.OutFormat(" bits=%[u]", (stduint)res.length);
+			com1.OutFormat("\n\r");
+			break;
+		case DeviceResourceType::Configuration:
+			com1.OutFormat("- CONFIG[%[u]] %s=", res.index, Devsman::GetResourceName(res));
+			if (res.start <= uint64(~stduint(0))) com1.OutFormat("%[u]", (stduint)res.start);
+			else com1.OutFormat("0x%[64H]", res.start);
+			com1.OutFormat("\n\r");
+			break;
 		case DeviceResourceType::PciBarMmio:
 			com1.OutFormat("- %s[%[u]] base=%p flags=%04X\n\r",
 				text_device_resource_type(res.type), res.index, (void*)res.start, (unsigned)res.flags);
@@ -460,6 +496,65 @@ static bool is_partition_storage_node(const DeviceNode& node) {
 	return false;
 }
 
+#if (_MCCA & 0xFF00) == 0x8600 || defined(_MCU_STM32H7x)
+static rostr text_gpio_clock(DeviceGPIOClockState state) {
+	switch (state) {
+	case DeviceGPIOClockState::NotApplicable: return "n/a";
+	case DeviceGPIOClockState::Disabled: return "disabled";
+	case DeviceGPIOClockState::Enabled: return "enabled";
+	default: return "unknown";
+	}
+}
+
+#if (_MCCA & 0xFF00) == 0x8600 || PRINT_GPIO_DETAIL // GPIO pin details are temporarily muted.
+static rostr text_gpio_mode(uni::GPIOMode mode) {
+	switch (mode) {
+	case uni::GPIOMode::IN_Floating: return "input";
+	case uni::GPIOMode::IN_Pull: return "input-pull";
+	case uni::GPIOMode::OUT_PushPull: return "output-push-pull";
+	case uni::GPIOMode::OUT_OpenDrain: return "output-open-drain";
+	#if defined(_MCU_STM32H7x)
+	case uni::GPIOMode::OUT_AF_PushPull: return "af-push-pull";
+	case uni::GPIOMode::OUT_AF_OpenDrain: return "af-open-drain";
+	case uni::GPIOMode::IN_Analog: return "analog";
+	#endif
+	default: return "unknown";
+	}
+}
+
+static rostr text_gpio_pull(uni::GPIOPull pull) {
+	switch (pull) {
+	case uni::GPIOPull::None: return "none";
+	case uni::GPIOPull::Up: return "up";
+	case uni::GPIOPull::Down: return "down";
+	default: return "unknown";
+	}
+}
+
+static void dump_device_tree_gpio_pins(OstreamTrait& com1, const DeviceNode& node,
+	const DeviceGPIOControllerInfo& info, stduint depth) {
+	for0(pin, info.pin_count) {
+		uni::GPIOPinState state{};
+		dump_device_tree_indent(com1, depth);
+		com1.OutFormat("- PIN[%[u]]", pin);
+		if (!Devs::GetGPIOPinState(&node, pin, state)) {
+			com1.OutFormat(" state=unavailable\n\r");
+			continue;
+		}
+		com1.OutFormat(" mode=%s", (state.valid_fields & uni::GPIOPinStateField_Mode) ? text_gpio_mode(state.mode) : "unknown");
+		if (state.valid_fields & uni::GPIOPinStateField_Alternate) com1.OutFormat(" AF=%u", (unsigned)state.alternate);
+		if (state.valid_fields & uni::GPIOPinStateField_Pull) com1.OutFormat(" pull=%s", text_gpio_pull(state.pull));
+		if (state.valid_fields & uni::GPIOPinStateField_Speed) com1.OutFormat(" speed=%u", (unsigned)state.speed);
+		if (state.valid_fields & uni::GPIOPinStateField_Input) com1.OutFormat(" in=%u", (unsigned)state.input_value);
+		if (state.valid_fields & uni::GPIOPinStateField_Output) com1.OutFormat(" out=%u", (unsigned)state.output_value);
+		if (state.valid_fields & uni::GPIOPinStateField_Locked) com1.OutFormat(" locked=%u", (unsigned)state.locked);
+		if (state.valid_fields & uni::GPIOPinStateField_OutputLocked) com1.OutFormat(" output-locked=%u", (unsigned)state.output_locked);
+		com1.OutFormat("\n\r");
+	}
+}
+#endif
+#endif
+
 static void dump_device_tree_node(OstreamTrait& com1, const DeviceNode* node, stduint depth, bool verbose) {
 	for (auto crt = node; crt; crt = cast<DeviceNode*>(crt->link.next)) {
 		if (!verbose && is_partition_storage_node(*crt)) {
@@ -473,6 +568,24 @@ static void dump_device_tree_node(OstreamTrait& com1, const DeviceNode* node, st
 		driver_name_str += driver_name0 ? "\033[27m" : "\033[39m";
 		const rostr driver_name = driver_name0 ? driver_name_str.reference() : nullptr;
 		const bool has_binding = driver_name && crt->fields.binding.state != static_cast<uint32>(DriverBindingState::None);
+		#if (_MCCA & 0xFF00) == 0x8600 || defined(_MCU_STM32H7x)
+		DeviceGPIOControllerInfo gpio_info{};
+		const bool gpio_controller = Devs::GetGPIOControllerInfo(crt, gpio_info);
+		if (gpio_controller) {
+			com1.OutFormat("%s <%s bus=%s%s%s%s%s %s=%s pin-slots=%[u]>\n\r", name,
+				text_device_node_type(crt->fields.node_type), text_device_bus_type(crt->fields.bus_type),
+				driver_name ? " drv=" : "", driver_name ? driver_name : "",
+				has_binding ? " state=" : "", has_binding ? text_driver_binding_state(crt->fields.binding.state) : "",
+				#if defined(_MCU_STM32H7x)
+				"rcc",
+				#else
+				"clock",
+				#endif
+				text_gpio_clock(gpio_info.clock_state), gpio_info.pin_count);
+			if (gpio_info.clock_state == DeviceGPIOClockState::Disabled) continue;
+		}
+		else
+		#endif
 		switch (DeviceNodeType(crt->fields.node_type)) {
 		case DeviceNodeType::BusRoot:
 		case DeviceNodeType::PCI_Root:
@@ -594,6 +707,11 @@ static void dump_device_tree_node(OstreamTrait& com1, const DeviceNode* node, st
 			break;
 		}
 		if (verbose) {
+			if (crt->fields.controller) {
+				dump_device_tree_indent(com1, depth + 1);
+				com1.OutFormat("- CONTROLLER %s\n\r", crt->fields.controller->link.addr ?
+					crt->fields.controller->link.addr : "(unnamed)");
+			}
 			dump_device_tree_pci_description(com1, *crt, depth + 1);
 			dump_device_tree_controller_resources(com1, *crt, depth + 1);
 			dump_device_tree_intel_lpss_i2c(com1, *crt, depth + 1);
@@ -601,8 +719,16 @@ static void dump_device_tree_node(OstreamTrait& com1, const DeviceNode* node, st
 			dump_device_tree_acpi_GPIO(com1, *crt, depth + 1);
 		}
 		if (verbose && crt->fields.resource_count) {
+			#if defined(_MCU_STM32H7x)
+			if (!gpio_controller) // GPIO MMIO details are temporarily muted.
+			#endif
 			dump_device_tree_resources(com1, *crt, depth + 1);
 		}
+		#if (_MCCA & 0xFF00) == 0x8600 || defined(_MCU_STM32H7x)
+		#if (_MCCA & 0xFF00) == 0x8600 || PRINT_GPIO_DETAIL
+		if (verbose && gpio_controller) dump_device_tree_gpio_pins(com1, *crt, gpio_info, depth + 1);
+		#endif
+		#endif
 		if (verbose) {
 			dump_device_tree_usb_strings(com1, *crt, depth + 1);
 		}

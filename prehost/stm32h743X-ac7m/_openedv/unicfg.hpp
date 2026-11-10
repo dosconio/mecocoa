@@ -1,7 +1,37 @@
 #ifndef _MCCA_H7_UNICFG_HPP_
 #define _MCCA_H7_UNICFG_HPP_
 
+#include <cpp/Device/GPIO>
+
 namespace BoardConfig {
+	namespace Gpio {
+		namespace LedBlue {
+			enum : unsigned { Port = 'B', Pin = 0 };
+			constexpr uni::GPIOMode Mode = uni::GPIOMode::OUT;
+		}
+		namespace LedRed {
+			enum : unsigned { Port = 'B', Pin = 1 };
+			constexpr uni::GPIOMode Mode = uni::GPIOMode::OUT;
+		}
+		namespace KeyUp {
+			enum : unsigned { Port = 'A', Pin = 0 };
+			constexpr uni::GPIOMode Mode = uni::GPIOMode::IN_Pull;
+			constexpr bool PullUp = false;
+			constexpr uni::GPIORupt::RuptEdge Edge = uni::GPIORupt::Posedge;
+		}
+		namespace KeyDown {
+			enum : unsigned { Port = 'H', Pin = 2 };
+			constexpr uni::GPIOMode Mode = uni::GPIOMode::IN_Pull;
+			constexpr bool PullUp = true;
+			constexpr uni::GPIORupt::RuptEdge Edge = uni::GPIORupt::Negedge;
+		}
+	}
+	namespace Xart1 {
+		enum : unsigned {
+			TxPort = 'A', TxPin = 9,
+			RxPort = 'A', RxPin = 10,
+		};
+	}
 	namespace Ltdc {
 		namespace Panel {
 			// Shared by both LTDC hardware layers.

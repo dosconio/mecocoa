@@ -2628,14 +2628,7 @@ namespace Devs {
 			if (!serial_node_types(resource.bus_type, bus_type, bus_node_type, endpoint_node_type, bus_prefix, endpoint_prefix)) return nullptr;
 			char name[48] = {};
 			format_acpi_node_name(name, sizeof(name), bus_prefix, resource.controller_device_index, false);
-			auto* root = get_bus_root(bus_type);
-			auto* bus = find_named_child(root, bus_node_type, name);
-			if (!bus) {
-				bus = append_plain_device(root, bus_node_type, bus_type, StrHeap(name));
-				created = bus != nullptr;
-			}
-			if (bus) bus->fields.controller = controller;
-			return bus;
+			return Devsman::RegisterBus(bus_type, bus_node_type, name, controller, nullptr, nullptr, &created);
 		}
 
 		DeviceNode* ensure_acpi_endpoint_node(const AcpiSerialResourceRecord& resource, DeviceNode* bus, bool& created) {
@@ -2652,11 +2645,8 @@ namespace Devs {
 			const uint64 unit_address = AcpiSerialBusType(resource.bus_type) == AcpiSerialBusType::UART ? resource.device_index : resource.address;
 			char name[48] = {};
 			format_acpi_node_name(name, sizeof(name), endpoint_prefix, unit_address, AcpiSerialBusType(resource.bus_type) != AcpiSerialBusType::UART);
-			auto* endpoint = find_named_child(bus, endpoint_node_type, name);
-			if (!endpoint) {
-				endpoint = append_plain_device(bus, endpoint_node_type, bus_type, StrHeap(name));
-				created = endpoint != nullptr;
-			}
+			auto* endpoint = Devsman::RegisterDevice(bus, endpoint_node_type, bus_type,
+				name, nullptr, nullptr, &created);
 			if (!endpoint || !attach_acpi_info(endpoint, resource.device_index)) return nullptr;
 			device.endpoint_node = endpoint;
 			return endpoint;

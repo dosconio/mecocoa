@@ -12,6 +12,7 @@ struct DeviceEvent;
 
 namespace uni {
 	struct GeneralPurposeInputOutputPortBackend;
+	struct GPIOPinState;
 }
 
 constexpr stduint DeviceAcpiGPIOPathCapacity = 160;
@@ -159,10 +160,34 @@ struct DeviceGPIOControllerCompatibilityDescription {
 	uint8 access_index;
 };
 
-#if defined(_MCCA) && ((_MCCA & 0xFF00) == 0x8600)
+enum class DeviceGPIOClockState : uint8 {
+	Unknown,
+	NotApplicable,
+	Disabled,
+	Enabled,
+};
+
+struct DeviceGPIOControllerInfo {
+	stduint port_id;
+	stduint pin_count;
+	uint32 capabilities;
+	DeviceGPIOClockState clock_state;
+};
+
+using DeviceGPIOClockQuery = DeviceGPIOClockState (*)(void* context);
+
+#if defined(_MCCA) && (((_MCCA & 0xFF00) == 0x8600) || defined(_MCU_STM32H7x))
 namespace Devs {
-	DeviceGPIOStatus RegisterGPIOController(DeviceNode* controller, const uni::GeneralPurposeInputOutputPortBackend& backend);
+	bool GetGPIOControllerInfo(const DeviceNode* controller, DeviceGPIOControllerInfo& info);
+	bool GetGPIOPinState(const DeviceNode* controller, stduint pin, uni::GPIOPinState& state);
 	DeviceGPIOStatus UnregisterGPIOController(DeviceNode* controller);
+	#if defined(_MCU_STM32H7x)
+	DeviceGPIOStatus RegisterGPIOController(DeviceNode* controller,
+		const uni::GeneralPurposeInputOutputPortBackend& backend, stduint native_port_id,
+		DeviceGPIOClockQuery clock_query);
+	#endif
+	#if (_MCCA & 0xFF00) == 0x8600
+	DeviceGPIOStatus RegisterGPIOController(DeviceNode* controller, const uni::GeneralPurposeInputOutputPortBackend& backend);
 	DeviceGPIOStatus ClaimGPIO(DeviceNode* owner, stduint resource_index, DeviceGPIOLease& lease);
 	DeviceGPIOStatus ReleaseGPIO(DeviceGPIOLease& lease);
 	DeviceGPIOStatus RegisterGPIOInterrupt(DeviceNode* owner, stduint resource_index, DeviceGPIOInterruptHandler handler, void* context, DeviceGPIOInterruptRegistration& registration);
@@ -171,6 +196,7 @@ namespace Devs {
 	bool DispatchGPIOInterruptEvent(const DeviceEvent& event);
 	#if CONFIG_ACPI_BOOT_TEST
 	DeviceGPIOStatus TriggerGPIOModelInterrupt(DeviceNode* owner, stduint resource_index);
+	#endif
 	#endif
 }
 #endif

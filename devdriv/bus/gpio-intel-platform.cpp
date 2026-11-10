@@ -223,9 +223,18 @@ namespace {
 		return instance->last_status == uni::IntelGPIOStatus::Success;
 	}
 
+	bool IntelGPIOGetState(void* context, stduint pin, uni::GPIOPinState& state) {
+		state = {};
+		auto* instance = static_cast<IntelGPIOInstance*>(context);
+		if (!instance) return false;
+		SpinlockLocal guard(&instance->lock);
+		return instance->community.getState(pin, state) == uni::IntelGPIOStatus::Success;
+	}
+
 	uni::GeneralPurposeInputOutputPortBackend IntelGPIOBackend(IntelGPIOInstance* instance) {
 		uni::GeneralPurposeInputOutputPortBackend backend{};
 		backend.context = instance;
+		backend.get_state = IntelGPIOGetState;
 		backend.pin_count = instance ? instance->community.PinCount() : 0;
 		backend.capabilities = IntelGPIOCapabilities;
 		backend.read_pin = IntelGPIOReadPin;

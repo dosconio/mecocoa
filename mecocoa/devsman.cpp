@@ -545,6 +545,10 @@ namespace Devs {
 			delete[] node->fields.acpi_info->property_data;
 			delete node->fields.acpi_info;
 		}
+		for0(i, node->fields.resource_count) {
+			auto* name = const_cast<char*>(Devsman::GetResourceName(node->fields.resources[i]));
+			if (name && name[0]) mfree(name);
+		}
 		delete node->fields.controller_resources;
 		node->fields.text_manufacturer = nullptr;
 		node->fields.text_product = nullptr;
@@ -665,7 +669,7 @@ namespace Devs {
 	}
 
 	#endif
-	#if (_MCCA & 0xFF00) == 0x8600
+	#if (_MCCA & 0xFF00) == 0x8600 || defined(_MCU_STM32H7x)
 
 	DeviceNode* find_named_node_in_subtree(DeviceNode* node, DeviceNodeType node_type, const char* name) {
 		for (auto* crt = node; crt; crt = reinterpret_cast<DeviceNode*>(crt->link.next)) {
@@ -2931,6 +2935,10 @@ bool Devsman::AddDmaResource(DeviceNode* node, uint32 index, uint8 channel, uint
 
 
 
+#endif
+
+#if (_MCCA & 0xFF00) == 0x8600 || defined(_MCU_STM32H7x)
+
 DeviceNode* Devsman::FindNamedNode(DeviceNodeType node_type, const char* name) {
 	if (!device_root || !name) return nullptr;
 	return find_named_node_in_subtree(device_root, node_type, name);
@@ -3020,9 +3028,143 @@ DeviceNode* Devsman::FindOwnedNode(stduint pid) {
 	return device_root && pid ? FindOwnedNodeInSubtree(device_root, pid) : nullptr;
 }
 
+const char* Devsman::GetResourceName(const DeviceResource& resource) {
+	const auto type = DeviceResourceType(resource.type);
+	return (type == DeviceResourceType::GpioPin || type == DeviceResourceType::Configuration) && resource.extra
+		? reinterpret_cast<const char*>(stduint(resource.extra)) : "";
+}
+
 #if ((_MCCA & 0xFF00) == 0x8600 || defined(_MCU_STM32H7x))
 
 
+
+DeviceNode* Devsman::RegisterDevice(DeviceNode* parent, DeviceNodeType node_type,
+	DeviceBusType bus_type, const char* name, const char* driver_name, void* driver_data, bool* created) {
+	if (created) *created = false;
+	if (!parent || !DeviceSubtreeContains(device_root, parent) || !name || !name[0] ||
+		!uint16(node_type) || node_type == DeviceNodeType::SystemRoot ||
+		uint16(bus_type) >= uint16(DeviceBusType::Count) ||
+		(driver_name && !driver_name[0]) || (driver_data && !driver_name)) return nullptr;
+	auto* node = find_named_child(parent, node_type, name);
+	if (node) {
+		const auto& binding = node->fields.binding;
+		if (DeviceBusType(node->fields.bus_type) != bus_type ||
+			(driver_name && binding.driver_name && StrCompare(binding.driver_name, driver_name)) ||
+			(driver_data && binding.driver_data && binding.driver_data != driver_data)) {
+			plogwarn("[DEVSMAN] device registration conflict node=%s", name);
+			return nullptr;
+		}
+	} else {
+		node = append_plain_device(parent, node_type, bus_type, StrHeap(name));
+		if (!node) return nullptr;
+		if (created) *created = true;
+	}
+	if (driver_name && (!node->fields.binding.driver_name ||
+		(driver_data && !node->fields.binding.driver_data))) {
+		set_driver_started(node, driver_name,
+			driver_data ? driver_data : node->fields.binding.driver_data);
+	}
+	return node;
+}
+
+DeviceNode* Devsman::RegisterBus(DeviceBusType bus_type, DeviceNodeType node_type, const char* name,
+	DeviceNode* controller, const char* driver_name, void* driver_data, bool* created) {
+	if (created) *created = false;
+	if (bus_type == DeviceBusType::None || uint16(bus_type) >= uint16(DeviceBusType::Count) ||
+		!uint16(node_type) || node_type == DeviceNodeType::SystemRoot || !name || !name[0] ||
+		(driver_name && !driver_name[0]) || (driver_data && !driver_name)) return nullptr;
+	initialize_device_tree();
+	if (!device_root || (controller && !DeviceSubtreeContains(device_root, controller))) return nullptr;
+	auto* root = get_bus_root(bus_type);
+	if (!root) root = create_bus_root(bus_type);
+	if (!root) return nullptr;
+	auto* existing = find_named_child(root, node_type, name);
+	if (controller && existing && (controller == existing ||
+		(existing->fields.controller && existing->fields.controller != controller))) {
+		plogwarn("[DEVSMAN] bus controller conflict node=%s", name);
+		return nullptr;
+	}
+	auto* bus = RegisterDevice(root, node_type, bus_type, name, driver_name, driver_data, created);
+	if (bus && controller) bus->fields.controller = controller;
+	return bus;
+}
+
+namespace {
+	bool DeviceControllerReferenced(DeviceNode* root, const DeviceNode* target) {
+		for (auto* node = root; node; node = reinterpret_cast<DeviceNode*>(node->link.next)) {
+			if (node->fields.controller == target) return true;
+			if (node->link.subf && DeviceControllerReferenced(
+				reinterpret_cast<DeviceNode*>(node->link.subf), target)) return true;
+		}
+		return false;
+	}
+}
+
+bool Devsman::UnregisterDevice(DeviceNode* node) {
+	if (!node || !DeviceSubtreeContains(device_root, node) || node == device_root ||
+		node->link.subf || node->fields.binding.owner_pid || DeviceControllerReferenced(device_root, node)) return false;
+	// Firmware discovery retains node pointers until its own detach path removes them.
+	if (node->fields.acpi_info) return false;
+	auto* parent = reinterpret_cast<DeviceNode*>(node->link.getParent());
+	if (!parent || parent == device_root || !detach_child(parent, node)) return false;
+	release_device_subtree(node);
+	return true;
+}
+
+bool Devsman::UnregisterBus(DeviceNode* bus) {
+	if (!bus || !DeviceSubtreeContains(device_root, bus)) return false;
+	const auto type = DeviceBusType(bus->fields.bus_type);
+	if (type == DeviceBusType::None || uint16(type) >= uint16(DeviceBusType::Count)) return false;
+	auto* root = get_bus_root(type);
+	if (!root || bus->link.getParent() != &root->link) return false;
+	return UnregisterDevice(bus);
+}
+
+bool Devsman::AddResource(DeviceNode* node, const DeviceResource& resource) {
+	if (!node || !DeviceSubtreeContains(device_root, node) ||
+		DeviceResourceType(resource.type) == DeviceResourceType::None) return false;
+	const auto type = DeviceResourceType(resource.type);
+	const bool named = type == DeviceResourceType::GpioPin || type == DeviceResourceType::Configuration;
+	const char* name = GetResourceName(resource);
+	if (type == DeviceResourceType::Configuration && !name[0]) return false;
+	for0(i, node->fields.resource_count) {
+		const auto& existing = node->fields.resources[i];
+		if (existing.type != resource.type || existing.index != resource.index) continue;
+		return existing.flags == resource.flags && existing.start == resource.start &&
+			existing.length == resource.length && (named
+				? StrCompare(GetResourceName(existing), name) == 0 : existing.extra == resource.extra);
+	}
+	char* copy = named && name[0] ? StrHeap(name) : nullptr;
+	if (named && name[0] && !copy) return false;
+	if (append_resource(node, type, resource.flags, resource.index, resource.start, resource.length,
+		named ? uint64(reinterpret_cast<stduint>(copy)) : resource.extra)) return true;
+	if (copy) mfree(copy);
+	return false;
+}
+
+bool Devsman::AddMemoryResource(DeviceNode* node, uint32 index, uint64 base, uint64 length) {
+	if (!length || base > ~uint64(0) - (length - 1)) return false;
+	return AddResource(node, DeviceResource{uint16(DeviceResourceType::MemoryRange),
+		DeviceResourceFlag_None, index, base, length, 0});
+}
+
+bool Devsman::AddPinResource(DeviceNode* node, uint32 index, const char* name,
+	uint32 port, uint32 pin, uint32 alternate) {
+	return AddResource(node, DeviceResource{uint16(DeviceResourceType::GpioPin),
+		DeviceResourceFlag_None, index, (uint64(port) << 32) | pin, alternate,
+		uint64(reinterpret_cast<stduint>(name))});
+}
+
+bool Devsman::AddAddressResource(DeviceNode* node, uint32 index, uint64 address, uint32 address_bits) {
+	if (address_bits > 64 || (address_bits && address_bits < 64 && address >= (uint64(1) << address_bits))) return false;
+	return AddResource(node, DeviceResource{uint16(DeviceResourceType::BusAddress),
+		DeviceResourceFlag_None, index, address, address_bits, 0});
+}
+
+bool Devsman::AddConfigurationResource(DeviceNode* node, uint32 index, const char* name, uint64 value) {
+	return AddResource(node, DeviceResource{uint16(DeviceResourceType::Configuration),
+		DeviceResourceFlag_None, index, value, 0, uint64(reinterpret_cast<stduint>(name))});
+}
 
 const DeviceResource* Devsman::FindResource(const DeviceNode* node, DeviceResourceType type, uint32 index) {
 	return find_resource(node, type, index);
@@ -3096,9 +3238,10 @@ DeviceControllerResourceContract* Devsman::EnsureControllerResourceContract(Devi
 	for0(index, node->fields.resource_count) {
 		const auto& resource = node->fields.resources[index];
 		const auto type = DeviceResourceType(resource.type);
-		if (contract->access_type == DeviceControllerAccessType::None && (type == DeviceResourceType::PciBarMmio || type == DeviceResourceType::PciBarIo || type == DeviceResourceType::IoPortRange)) {
-			contract->access_type = type == DeviceResourceType::PciBarMmio ? DeviceControllerAccessType::MMIO : DeviceControllerAccessType::PortIo;
-			contract->access_source = type == DeviceResourceType::IoPortRange ? DeviceControllerResourceSource::AcpiResource : DeviceControllerResourceSource::PciConfiguration;
+		if (contract->access_type == DeviceControllerAccessType::None && (type == DeviceResourceType::PciBarMmio || type == DeviceResourceType::MemoryRange || type == DeviceResourceType::PciBarIo || type == DeviceResourceType::IoPortRange)) {
+			contract->access_type = (type == DeviceResourceType::PciBarMmio || type == DeviceResourceType::MemoryRange) ? DeviceControllerAccessType::MMIO : DeviceControllerAccessType::PortIo;
+			contract->access_source = type == DeviceResourceType::MemoryRange ? DeviceControllerResourceSource::PlatformDescription :
+				(type == DeviceResourceType::IoPortRange ? DeviceControllerResourceSource::AcpiResource : DeviceControllerResourceSource::PciConfiguration);
 			contract->access_index = resource.index;
 			contract->access_base = resource.start;
 			contract->access_length = resource.length;

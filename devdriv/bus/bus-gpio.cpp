@@ -3,10 +3,12 @@
 // ModuTitle: General Purpose Input Output Device Binding
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 #include "../../include/mecocoa.hpp"
-#include "../../mecocoa/devsman-acpi-gsi.h"
 #include <cpp/Device/GPIO>
-
 #if defined(_MCCA) && ((_MCCA & 0xFF00) == 0x8600)
+#include "../../mecocoa/devsman-acpi-gsi.h"
+#endif
+
+#if defined(_MCCA) && (((_MCCA & 0xFF00) == 0x8600) || defined(_MCU_STM32H7x))
 
 namespace {
 	struct DeviceGPIOControllerRuntime {
@@ -14,13 +16,37 @@ namespace {
 		uni::GeneralPurposeInputOutputPortBackend backend;
 		DeviceGPIOLease** claims;
 		DeviceGPIOControllerRuntime* next;
+		stduint port_id;
+		DeviceGPIOClockQuery clock_query;
+		bool native_port;
+		#if (_MCCA & 0xFF00) == 0x8600
 		ACPIGSIBinding GSI_binding;
 		uni::Atomic<uint32> interrupt_dispatching;
-		stduint port_id;
 		uint32 GSI;
 		bool GSI_ready;
+		#endif
 	};
 
+	DeviceGPIOControllerRuntime* gpio_controller_runtimes = nullptr;
+
+	DeviceGPIOControllerRuntime* GPIOControllerRuntime(const DeviceNode* controller) {
+		for (auto* runtime = gpio_controller_runtimes; runtime; runtime = runtime->next) if (runtime->node == controller) return runtime;
+		return nullptr;
+	}
+
+	bool ValidGPIOBackend(const uni::GeneralPurposeInputOutputPortBackend& backend) {
+		if (!backend.context || !backend.pin_count || !backend.configure_pin) return false;
+		if ((backend.capabilities & uni::GeneralPurposeInputOutputCapability_Input) && !backend.read_pin) return false;
+		if ((backend.capabilities & uni::GeneralPurposeInputOutputCapability_Output) && !backend.write_pin) return false;
+		if ((backend.capabilities & (uni::GeneralPurposeInputOutputCapability_InterruptEdge | uni::GeneralPurposeInputOutputCapability_InterruptLevel)) && !backend.configure_interrupt) return false;
+		if ((backend.capabilities & (uni::GeneralPurposeInputOutputCapability_PullUp | uni::GeneralPurposeInputOutputCapability_PullDown)) && !backend.set_pull) return false;
+		if ((backend.capabilities & uni::GeneralPurposeInputOutputCapability_Pending) && !backend.interrupt_pending) return false;
+		if ((backend.capabilities & uni::GeneralPurposeInputOutputCapability_Mask) && !backend.enable_interrupt) return false;
+		if ((backend.capabilities & uni::GeneralPurposeInputOutputCapability_Acknowledge) && !backend.acknowledge_interrupt) return false;
+		return true;
+	}
+
+	#if (_MCCA & 0xFF00) == 0x8600
 	constexpr stduint DeviceGPIOInterruptCapacity = 32;
 	constexpr uint32 DeviceGPIOInterruptEventHandle = 0x4750494Fu;
 
@@ -41,7 +67,6 @@ namespace {
 		bool level_triggered;
 	};
 
-	DeviceGPIOControllerRuntime* gpio_controller_runtimes = nullptr;
 	DeviceGPIOInterruptSlot GPIO_interrupt_slots[DeviceGPIOInterruptCapacity]{};
 	uint32 GPIO_interrupt_generation = 0;
 	#if CONFIG_ACPI_BOOT_TEST
@@ -70,11 +95,6 @@ namespace {
 	};
 	#endif
 
-	DeviceGPIOControllerRuntime* GPIOControllerRuntime(DeviceNode* controller) {
-		for (auto* runtime = gpio_controller_runtimes; runtime; runtime = runtime->next) if (runtime->node == controller) return runtime;
-		return nullptr;
-	}
-
 	bool FindGPIOControllerGSI(const DeviceGPIOControllerRuntime& runtime, ACPIGSIConfiguration& configuration) {
 		const auto* resource = Devsman::FindResource(runtime.node, DeviceResourceType::IrqLine, 0);
 		uint32 flags = 0;
@@ -94,18 +114,6 @@ namespace {
 		configuration.level_triggered = (flags & DeviceResourceFlag_IrqLevel) != 0;
 		configuration.active_low = (flags & DeviceResourceFlag_IrqActiveLow) != 0;
 		configuration.shareable = (flags & DeviceResourceFlag_IrqShareable) != 0;
-		return true;
-	}
-
-	bool ValidGPIOBackend(const uni::GeneralPurposeInputOutputPortBackend& backend) {
-		if (!backend.context || !backend.pin_count || !backend.configure_pin) return false;
-		if ((backend.capabilities & uni::GeneralPurposeInputOutputCapability_Input) && !backend.read_pin) return false;
-		if ((backend.capabilities & uni::GeneralPurposeInputOutputCapability_Output) && !backend.write_pin) return false;
-		if ((backend.capabilities & (uni::GeneralPurposeInputOutputCapability_InterruptEdge | uni::GeneralPurposeInputOutputCapability_InterruptLevel)) && !backend.configure_interrupt) return false;
-		if ((backend.capabilities & (uni::GeneralPurposeInputOutputCapability_PullUp | uni::GeneralPurposeInputOutputCapability_PullDown)) && !backend.set_pull) return false;
-		if ((backend.capabilities & uni::GeneralPurposeInputOutputCapability_Pending) && !backend.interrupt_pending) return false;
-		if ((backend.capabilities & uni::GeneralPurposeInputOutputCapability_Mask) && !backend.enable_interrupt) return false;
-		if ((backend.capabilities & uni::GeneralPurposeInputOutputCapability_Acknowledge) && !backend.acknowledge_interrupt) return false;
 		return true;
 	}
 
@@ -750,43 +758,102 @@ namespace {
 		delete shared_owner;
 	}
 	#endif
+	#endif
 }
 
+namespace {
+	DeviceGPIOStatus RegisterGPIOControllerInternal(DeviceNode* controller,
+		const uni::GeneralPurposeInputOutputPortBackend& backend, bool native_port,
+		stduint port_id, DeviceGPIOClockQuery clock_query) {
+		if (!controller || !ValidGPIOBackend(backend)) return DeviceGPIOStatus::InvalidArgument;
+		if (GPIOControllerRuntime(controller)) return DeviceGPIOStatus::AlreadyClaimed;
+		auto* runtime = new DeviceGPIOControllerRuntime{};
+		if (!runtime) return DeviceGPIOStatus::ResourceUnavailable;
+		runtime->node = controller;
+		runtime->backend = backend;
+		runtime->native_port = native_port;
+		runtime->port_id = port_id;
+		runtime->clock_query = clock_query;
+		#if (_MCCA & 0xFF00) == 0x8600
+		runtime->claims = new DeviceGPIOLease*[backend.pin_count]{};
+		if (!runtime->claims) {
+			delete runtime;
+			return DeviceGPIOStatus::ResourceUnavailable;
+		}
+		if (!native_port && !uni::GPIO.Attach(runtime->backend, runtime->port_id)) {
+			delete[] runtime->claims;
+			delete runtime;
+			return DeviceGPIOStatus::ResourceUnavailable;
+		}
+		#endif
+		runtime->next = gpio_controller_runtimes;
+		gpio_controller_runtimes = runtime;
+		#if (_MCCA & 0xFF00) == 0x8600
+		UpdateGPIOBindings(Devsman::Root(), controller, DeviceGPIOBindingStatus::Ready, runtime->port_id);
+		ActivateWaitingGPIOInterrupts(controller);
+		#endif
+		return DeviceGPIOStatus::Success;
+	}
+}
+
+#if (_MCCA & 0xFF00) == 0x8600
 DeviceGPIOStatus Devs::RegisterGPIOController(DeviceNode* controller, const uni::GeneralPurposeInputOutputPortBackend& backend) {
-	if (!controller || !ValidGPIOBackend(backend)) return DeviceGPIOStatus::InvalidArgument;
-	if (GPIOControllerRuntime(controller)) return DeviceGPIOStatus::AlreadyClaimed;
-	auto* runtime = new DeviceGPIOControllerRuntime{};
-	if (!runtime) return DeviceGPIOStatus::ResourceUnavailable;
-	runtime->claims = new DeviceGPIOLease*[backend.pin_count]{};
-	if (!runtime->claims) {
-		delete runtime;
-		return DeviceGPIOStatus::ResourceUnavailable;
+	return RegisterGPIOControllerInternal(controller, backend, false, 0, nullptr);
+}
+#endif
+
+#if defined(_MCU_STM32H7x)
+DeviceGPIOStatus Devs::RegisterGPIOController(DeviceNode* controller,
+	const uni::GeneralPurposeInputOutputPortBackend& backend, stduint native_port_id,
+	DeviceGPIOClockQuery clock_query) {
+	return RegisterGPIOControllerInternal(controller, backend, true, native_port_id, clock_query);
+}
+#endif
+
+bool Devs::GetGPIOControllerInfo(const DeviceNode* controller, DeviceGPIOControllerInfo& info) {
+	info = {};
+	const auto* runtime = GPIOControllerRuntime(controller);
+	if (!runtime) return false;
+	info.port_id = runtime->port_id;
+	info.pin_count = runtime->backend.pin_count;
+	info.capabilities = runtime->backend.capabilities;
+	info.clock_state = runtime->clock_query ? runtime->clock_query(runtime->backend.context) : DeviceGPIOClockState::NotApplicable;
+	return true;
+}
+
+bool Devs::GetGPIOPinState(const DeviceNode* controller, stduint pin, uni::GPIOPinState& state) {
+	state = {};
+	const auto* runtime = GPIOControllerRuntime(controller);
+	if (!runtime || pin >= runtime->backend.pin_count) return false;
+	if (runtime->clock_query && runtime->clock_query(runtime->backend.context) != DeviceGPIOClockState::Enabled) return false;
+	if (runtime->backend.get_state) {
+		if (runtime->backend.get_state(runtime->backend.context, pin, state)) return true;
+		state = {};
+		return false;
 	}
-	runtime->node = controller;
-	runtime->backend = backend;
-	if (!uni::GPIO.Attach(runtime->backend, runtime->port_id)) {
-		delete[] runtime->claims;
-		delete runtime;
-		return DeviceGPIOStatus::ResourceUnavailable;
+	if (runtime->backend.read_pin && runtime->backend.read_pin(runtime->backend.context, pin, state.input_value)) {
+		state.valid_fields = uni::GPIOPinStateField_Input;
+		return true;
 	}
-	runtime->next = gpio_controller_runtimes;
-	gpio_controller_runtimes = runtime;
-	UpdateGPIOBindings(Devsman::Root(), controller, DeviceGPIOBindingStatus::Ready, runtime->port_id);
-	ActivateWaitingGPIOInterrupts(controller);
-	return DeviceGPIOStatus::Success;
+	state = {};
+	return false;
 }
 
 DeviceGPIOStatus Devs::UnregisterGPIOController(DeviceNode* controller) {
 	auto* runtime = GPIOControllerRuntime(controller);
 	if (!runtime) return DeviceGPIOStatus::ControllerUnavailable;
-	for0(pin, runtime->backend.pin_count) if (runtime->claims[pin]) return DeviceGPIOStatus::AlreadyClaimed;
+	if (runtime->claims) {
+		for0(pin, runtime->backend.pin_count) if (runtime->claims[pin]) return DeviceGPIOStatus::AlreadyClaimed;
+	}
+	#if (_MCCA & 0xFF00) == 0x8600
 	if (runtime->GSI_ready) {
 		if (Devs::UnbindACPIGSI(runtime->GSI_binding) != ACPIGSIStatus::Success) return DeviceGPIOStatus::ResourceUnavailable;
 		runtime->GSI_ready = false;
 		runtime->GSI = 0;
 	}
-	if (!uni::GPIO.Detach(runtime->port_id, runtime->backend.context)) return DeviceGPIOStatus::ControllerUnavailable;
+	if (!runtime->native_port && !uni::GPIO.Detach(runtime->port_id, runtime->backend.context)) return DeviceGPIOStatus::ControllerUnavailable;
 	UpdateGPIOBindings(Devsman::Root(), controller, DeviceGPIOBindingStatus::WaitingController, 0);
+	#endif
 	auto** cursor = &gpio_controller_runtimes;
 	while (*cursor && *cursor != runtime) cursor = &(*cursor)->next;
 	if (*cursor) *cursor = runtime->next;
@@ -795,6 +862,165 @@ DeviceGPIOStatus Devs::UnregisterGPIOController(DeviceNode* controller) {
 	return DeviceGPIOStatus::Success;
 }
 
+#if defined(_MCU_STM32H7x)
+namespace {
+	struct STM32GPIOPort {
+		unsigned name;
+	};
+
+	STM32GPIOPort* stm32_gpio_ports = nullptr;
+	stduint stm32_gpio_port_count = 0;
+	constexpr stduint STM32GPIOPinSlots = 16;// Register slots, not package bonding information.
+
+	uni::GPORT& STM32Port(void* context) {
+		return uni::GPIO[static_cast<STM32GPIOPort*>(context)->name];
+	}
+
+	DeviceGPIOClockState STM32GPIOClock(void* context) {
+		if (!context) return DeviceGPIOClockState::Unknown;
+		return STM32Port(context).isAble() ? DeviceGPIOClockState::Enabled : DeviceGPIOClockState::Disabled;
+	}
+
+	bool STM32GPIOReady(void* context, stduint pin) {
+		return context && pin < STM32GPIOPinSlots && STM32Port(context).isAble();
+	}
+
+	bool STM32GPIOReadPin(void* context, stduint pin, bool& value) {
+		if (!STM32GPIOReady(context, pin)) return false;
+		value = bool(STM32Port(context)[pin]);
+		return true;
+	}
+
+	bool STM32GPIOWritePin(void* context, stduint pin, bool value) {
+		if (!STM32GPIOReady(context, pin)) return false;
+		STM32Port(context)[pin] = value;
+		return true;
+	}
+
+	bool STM32GPIOConfigurePin(void* context, stduint pin, uni::GPIOMode mode, uni::GPIOSpeed speed) {
+		if (!context || pin >= STM32GPIOPinSlots || _IMM(speed) > _IMM(uni::GPIOSpeed::Veryhigh)) return false;
+		switch (mode) {
+		case uni::GPIOMode::IN_Floating: case uni::GPIOMode::IN_Pull: case uni::GPIOMode::IN_Analog:
+		case uni::GPIOMode::OUT_PushPull: case uni::GPIOMode::OUT_OpenDrain:
+		case uni::GPIOMode::OUT_AF_PushPull: case uni::GPIOMode::OUT_AF_OpenDrain: break;
+		default: return false;
+		}
+		auto& port = STM32Port(context);
+		port.enClock();
+		uni::GPIOPinState state{};
+		if (!port[pin].getState(state) || state.locked) return false;
+		port[pin].setMode(mode, speed, false);
+		return true;
+	}
+
+	bool STM32GPIOIsInput(void* context, stduint pin, bool& value) {
+		if (!STM32GPIOReady(context, pin)) return false;
+		value = STM32Port(context)[pin].isInput();
+		return true;
+	}
+
+	bool STM32GPIOSetPull(void* context, stduint pin, bool pull_up) {
+		if (!STM32GPIOReady(context, pin)) return false;
+		uni::GPIOPinState state{};
+		if (!STM32Port(context)[pin].getState(state) || state.locked) return false;
+		STM32Port(context)[pin].setPull(pull_up);
+		return true;
+	}
+
+	bool STM32GPIOReadPort(void* context, stduint& value) {
+		if (!context || !STM32Port(context).isAble()) return false;
+		value = stduint(STM32Port(context));
+		return true;
+	}
+
+	bool STM32GPIOWritePort(void* context, stduint value) {
+		if (!context || !STM32Port(context).isAble()) return false;
+		STM32Port(context) = value;
+		return true;
+	}
+
+	bool STM32GPIOModifyPort(void* context, stduint set_mask, stduint reset_mask) {
+		if (!context || !STM32Port(context).isAble()) return false;
+		STM32Port(context).maset(set_mask, reset_mask);
+		return true;
+	}
+
+	bool STM32GPIOGetState(void* context, stduint pin, uni::GPIOPinState& state) {
+		state = {};
+		return STM32GPIOReady(context, pin) && STM32Port(context)[pin].getState(state);
+	}
+
+	uni::GeneralPurposeInputOutputPortBackend STM32GPIOBackend(STM32GPIOPort& port) {
+		uni::GeneralPurposeInputOutputPortBackend backend{};
+		backend.context = &port;
+		backend.pin_count = STM32GPIOPinSlots;
+		backend.capabilities = uni::GeneralPurposeInputOutputCapability_Input | uni::GeneralPurposeInputOutputCapability_Output |
+			uni::GeneralPurposeInputOutputCapability_PullUp | uni::GeneralPurposeInputOutputCapability_PullDown;
+		backend.read_pin = STM32GPIOReadPin;
+		backend.write_pin = STM32GPIOWritePin;
+		backend.configure_pin = STM32GPIOConfigurePin;
+		backend.is_input = STM32GPIOIsInput;
+		backend.set_pull = STM32GPIOSetPull;
+		backend.read_port = STM32GPIOReadPort;
+		backend.write_port = STM32GPIOWritePort;
+		backend.modify_port = STM32GPIOModifyPort;
+		backend.get_state = STM32GPIOGetState;
+		return backend;
+	}
+}
+
+_ESYM_C void R_GPIO_INIT();
+
+__attribute__((section(".init.rmod")))
+extern const RMOD_LIST RMOD_LIST_GPIO{
+	R_GPIO_INIT,
+	"GPIO",
+};
+
+void R_GPIO_INIT() {
+	const stduint count = uni::GPIO.Count();
+	if (!count || count > 26) {
+		plogerro("[GPIO] invalid port count=%u", (unsigned)count);
+		return;
+	}
+	if (!stm32_gpio_ports) {
+		stm32_gpio_ports = new STM32GPIOPort[count]{};
+		if (!stm32_gpio_ports) { plogerro("[GPIO] cannot allocate port contexts"); return; }
+		stm32_gpio_port_count = count;
+	}
+	if (stm32_gpio_port_count != count) return;
+	for0(index, count) {
+		auto& context = stm32_gpio_ports[index];
+		context.name = unsigned('A' + index);
+		const auto& port = uni::GPIO[context.name];
+		const auto name = String::newFormat("gpio%c", int('a' + index));
+		const bool restore_interrupts = IC.TryMaskInterrupt();
+		auto* node = Devsman::FindNamedNode(DeviceNodeType::PlatformDevice, name.reference());
+		if (node && ((node->fields.binding.driver_data && node->fields.binding.driver_data != &context) ||
+			(node->fields.binding.driver_name && StrCompare(node->fields.binding.driver_name, "stm32-gpio")))) {
+			if (restore_interrupts) IC.enInterrupt(true);
+			plogerro("[GPIO] port registration conflict: %s", name.reference());
+			continue;
+		}
+		node = Devsman::RegisterPlatformDevice(name.reference(), "stm32-gpio", &context);
+		bool ready = node && Devsman::AddMemoryResource(node, 0, port.getAddress(),
+			(_IMM(uni::GPIOReg::AFRH) + 1) * sizeof(uint32));
+		if (ready) {
+			const auto backend = STM32GPIOBackend(context);
+			const auto status = Devs::RegisterGPIOController(node, backend, port.getID(), STM32GPIOClock);
+			ready = status == DeviceGPIOStatus::Success || status == DeviceGPIOStatus::AlreadyClaimed;
+		}
+		if (!ready && node) {
+			if (GPIOControllerRuntime(node) || !Devsman::UnregisterDevice(node))
+				node->fields.binding.state = uint32(DriverBindingState::Failed);
+		}
+		if (restore_interrupts) IC.enInterrupt(true);
+		if (!ready) plogerro("[GPIO] port registration failed: %s", name.reference());
+	}
+}
+#endif
+
+#if (_MCCA & 0xFF00) == 0x8600
 DeviceGPIOStatus Devs::ClaimGPIO(DeviceNode* owner, stduint resource_index, DeviceGPIOLease& lease) {
 	if (!owner || lease.active || !owner->fields.acpi_info || resource_index >= owner->fields.acpi_info->gpio_resource_count) return DeviceGPIOStatus::InvalidArgument;
 	auto& resource = owner->fields.acpi_info->gpio_resources[resource_index];
@@ -939,6 +1165,8 @@ void R_GPIO_INIT() {
 	RunGPIOControllerTest();
 	RunGPIOInterruptRoutingTest();
 }
+#endif
+
 #endif
 
 #endif

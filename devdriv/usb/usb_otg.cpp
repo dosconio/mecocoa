@@ -139,6 +139,8 @@ namespace {
 		byte string_descriptor[64]{};
 		UsbRoleStatus status;
 		DeviceNode* node = nullptr;
+		DeviceNode* power_bus_node = nullptr;
+		DeviceNode* power_device_node = nullptr;
 		stduint owner_tid;
 		UsbRole hardware_role = UsbRole::None;
 		SwitchPhase phase = SwitchPhase::Idle;
@@ -169,6 +171,46 @@ namespace {
 		}
 		~OtgRuntime() { delete[] completions; }
 	};
+
+	bool UnregisterPowerTopology(OtgRuntime& runtime) {
+		const bool restore_interrupts = IC.TryMaskInterrupt();
+		bool ready = true;
+		if (runtime.power_device_node) {
+			ready = Devsman::UnregisterDevice(runtime.power_device_node);
+			if (ready) runtime.power_device_node = nullptr;
+		}
+		if (ready && runtime.power_bus_node) {
+			ready = Devsman::UnregisterBus(runtime.power_bus_node);
+			if (ready) runtime.power_bus_node = nullptr;
+		}
+		if (restore_interrupts) IC.enInterrupt(true);
+		return ready;
+	}
+
+	bool RegisterPowerTopology(OtgRuntime& runtime) {
+		const bool restore_interrupts = IC.TryMaskInterrupt();
+		const auto bus_name = String::newFormat("i2c-soft@P%c%u-P%c%u",
+			(int)Board::SclPort, (unsigned)Board::SclPin, (int)Board::SdaPort, (unsigned)Board::SdaPin);
+		runtime.power_bus_node = Devsman::RegisterBus(DeviceBusType::I2C, DeviceNodeType::I2cBus,
+			bus_name.reference(), nullptr, "i2c-soft", static_cast<uni::IIC_SOFT*>(&runtime.power));
+		bool ready = runtime.power_bus_node &&
+			Devsman::AddPinResource(runtime.power_bus_node, 0, "SCL", Board::SclPort, Board::SclPin) &&
+			Devsman::AddPinResource(runtime.power_bus_node, 1, "SDA", Board::SdaPort, Board::SdaPin) &&
+			Devsman::AddConfigurationResource(runtime.power_bus_node, 0, "delay-loops", Board::IicDelayLoops);
+		if (ready) {
+			const auto name = String::newFormat("gpio-expander@%02X", (unsigned)Board::PowerAddress7);
+			runtime.power_device_node = Devsman::RegisterDevice(runtime.power_bus_node,
+				DeviceNodeType::I2cDevice, DeviceBusType::I2C, name.reference(), "usb-power", &runtime.power);
+			ready = runtime.power_device_node &&
+				Devsman::AddAddressResource(runtime.power_device_node, 0, Board::PowerAddress7, 7) &&
+				Devsman::AddConfigurationResource(runtime.power_device_node, 0, "power-output-bit", Board::PowerBit) &&
+				Devsman::AddConfigurationResource(runtime.power_device_node, 1, "power-active-high", Board::PowerActiveHigh);
+		}
+		if (!ready && !UnregisterPowerTopology(runtime))
+			plogerro("[USB OTG2] cannot remove incomplete power topology");
+		if (restore_interrupts) IC.enInterrupt(true);
+		return ready;
+	}
 
 	OtgRuntime* otg = nullptr;
 
@@ -852,6 +894,8 @@ bool Devsman::InitializeOTG(stduint owner_tid) {
 	runtime->descriptors.GetManufacturerStrDescriptor = GetManufacturerDescriptor;
 	runtime->descriptors.GetProductStrDescriptor = GetProductDescriptor;
 	runtime->power.Initialize();
+	if (!RegisterPowerTopology(*runtime))
+		plogwarn("[USB OTG2] power topology registration failed");
 	HCD2.base = PCD2.base = _OTG2_FS_ADDR;
 	otg = runtime;
 	#if _GUI_ENABLE

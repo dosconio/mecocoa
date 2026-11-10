@@ -1,6 +1,7 @@
 #include "../../include/mecocoa.hpp"
 #include <c/prochip/CortexM7.h>
 #include <cpp/MCU/ST/STM32H7>
+#include "_openedv/unicfg.hpp"
 
 /*
 make -f accmlib/accma32.clang.make all
@@ -12,8 +13,8 @@ extern "C" char _IDN_BOARD[16]{ "STM32H743IIT6" };
 _ESYM_C void mecocoa();
 
 void _idle() {
-	GPIN& LEDB = GPIOB[ 0];
-	LEDB.setMode(GPIOMode::OUT);
+	GPIN& LEDB = GPIO[BoardConfig::Gpio::LedBlue::Port][BoardConfig::Gpio::LedBlue::Pin];
+	LEDB.setMode(BoardConfig::Gpio::LedBlue::Mode);
 	while (true) {
 		// LEDB.Toggle();
 		SysDelay_ms(2000, true);
@@ -21,8 +22,8 @@ void _idle() {
 }
 
 void _test() {
-	GPIN& LEDR = GPIOB[ 1];
-	LEDR.setMode(GPIOMode::OUT);
+	GPIN& LEDR = GPIO[BoardConfig::Gpio::LedRed::Port][BoardConfig::Gpio::LedRed::Pin];
+	LEDR.setMode(BoardConfig::Gpio::LedRed::Mode);
 	while (true) {
 		LEDR.Toggle();
 		auto th = Taskman::CurrentTB();
@@ -176,14 +177,14 @@ int main()
 	XART1.setMode(115200);
 	SysTick::enClock(CONFIG_SysTickFreq);
 	SCB->FPCCR = SCB->FPCCR & ~(1u << 31);// ASPEN=0; boot FPCA is cleared below to establish the plain 8-word frame used by the asm, handler.cpp and _arm_frame
-	GPIN& KEYU = GPIOA[ 0];// Up
-	GPIN& KEYD = GPIOH[ 2];// Down
-	KEYU.setMode(GPIOMode::IN_Pull).setPull(false);
-	KEYU.setMode(GPIORupt::Posedge);
+	GPIN& KEYU = GPIO[BoardConfig::Gpio::KeyUp::Port][BoardConfig::Gpio::KeyUp::Pin];// Up
+	GPIN& KEYD = GPIO[BoardConfig::Gpio::KeyDown::Port][BoardConfig::Gpio::KeyDown::Pin];// Down
+	KEYU.setMode(BoardConfig::Gpio::KeyUp::Mode).setPull(BoardConfig::Gpio::KeyUp::PullUp);
+	KEYU.setMode(BoardConfig::Gpio::KeyUp::Edge);
 	KEYU.setInterrupt(key_isr_up);
 	KEYU.enInterrupt();
-	KEYD.setMode(GPIOMode::IN_Pull).setPull(true);
-	KEYD.setMode(GPIORupt::Negedge);
+	KEYD.setMode(BoardConfig::Gpio::KeyDown::Mode).setPull(BoardConfig::Gpio::KeyDown::PullUp);
+	KEYD.setMode(BoardConfig::Gpio::KeyDown::Edge);
 	KEYD.setInterrupt(key_isr_dn);
 	KEYD.enInterrupt();
 	IC.enInterrupt(false);
@@ -204,8 +205,8 @@ int main()
 }
 
 void erro(const char* str) {
-	GPIN& LEDR = GPIOB[ 1];
-	LEDR.setMode(GPIOMode::OUT);
+	GPIN& LEDR = GPIO[BoardConfig::Gpio::LedRed::Port][BoardConfig::Gpio::LedRed::Pin];
+	LEDR.setMode(BoardConfig::Gpio::LedRed::Mode);
 	while (true) {
 		LEDR.Toggle();
 		for(volatile unsigned i{0}; i < 4000000; i++){}
