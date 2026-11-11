@@ -32,6 +32,19 @@ namespace BoardConfig {
 			RxPort = 'A', RxPin = 10,
 		};
 	}
+	namespace Xart {
+		struct Pins {
+			unsigned TxPort, TxPin, RxPort, RxPin;
+		};
+		inline bool GetPins(unsigned id, Pins& pins) {
+			switch (id) {
+			case 1:
+				pins = { Xart1::TxPort, Xart1::TxPin, Xart1::RxPort, Xart1::RxPin };
+				return true;
+			default: return false;
+			}
+		}
+	}
 	namespace Ltdc {
 		namespace Panel {
 			// Shared by both LTDC hardware layers.

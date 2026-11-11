@@ -497,6 +497,7 @@ static bool is_partition_storage_node(const DeviceNode& node) {
 }
 
 #if (_MCCA & 0xFF00) == 0x8600 || defined(_MCU_STM32H7x)
+#if (_MCCA & 0xFF00) == 0x8600
 static rostr text_gpio_clock(DeviceGPIOClockState state) {
 	switch (state) {
 	case DeviceGPIOClockState::NotApplicable: return "n/a";
@@ -505,6 +506,8 @@ static rostr text_gpio_clock(DeviceGPIOClockState state) {
 	default: return "unknown";
 	}
 }
+
+#endif
 
 #if (_MCCA & 0xFF00) == 0x8600 || PRINT_GPIO_DETAIL // GPIO pin details are temporarily muted.
 static rostr text_gpio_mode(uni::GPIOMode mode) {
@@ -555,6 +558,15 @@ static void dump_device_tree_gpio_pins(OstreamTrait& com1, const DeviceNode& nod
 #endif
 #endif
 
+static rostr text_rcc_state(DeviceRccState state) {
+	switch (state) {
+	case DeviceRccState::NotApplicable: return "n/a";
+	case DeviceRccState::Disabled: return "disabled";
+	case DeviceRccState::Enabled: return "enabled";
+	default: return "unknown";
+	}
+}
+
 static void dump_device_tree_node(OstreamTrait& com1, const DeviceNode* node, stduint depth, bool verbose) {
 	for (auto crt = node; crt; crt = cast<DeviceNode*>(crt->link.next)) {
 		if (!verbose && is_partition_storage_node(*crt)) {
@@ -572,17 +584,13 @@ static void dump_device_tree_node(OstreamTrait& com1, const DeviceNode* node, st
 		DeviceGPIOControllerInfo gpio_info{};
 		const bool gpio_controller = Devs::GetGPIOControllerInfo(crt, gpio_info);
 		if (gpio_controller) {
-			com1.OutFormat("%s <%s bus=%s%s%s%s%s %s=%s pin-slots=%[u]>\n\r", name,
+			com1.OutFormat("%s <%s bus=%s%s%s%s%s", name,
 				text_device_node_type(crt->fields.node_type), text_device_bus_type(crt->fields.bus_type),
 				driver_name ? " drv=" : "", driver_name ? driver_name : "",
-				has_binding ? " state=" : "", has_binding ? text_driver_binding_state(crt->fields.binding.state) : "",
-				#if defined(_MCU_STM32H7x)
-				"rcc",
-				#else
-				"clock",
-				#endif
-				text_gpio_clock(gpio_info.clock_state), gpio_info.pin_count);
-			if (gpio_info.clock_state == DeviceGPIOClockState::Disabled) continue;
+				has_binding ? " state=" : "", has_binding ? text_driver_binding_state(crt->fields.binding.state) : "");
+			#if (_MCCA & 0xFF00) == 0x8600
+			com1.OutFormat(" clock=%s pin-slots=%[u]", text_gpio_clock(gpio_info.clock_state), gpio_info.pin_count);
+			#endif
 		}
 		else
 		#endif
@@ -590,7 +598,7 @@ static void dump_device_tree_node(OstreamTrait& com1, const DeviceNode* node, st
 		case DeviceNodeType::BusRoot:
 		case DeviceNodeType::PCI_Root:
 		case DeviceNodeType::IsaBus:
-			com1.OutFormat("%s <%s bus=%s%s%s%s%s>\n\r",
+			com1.OutFormat("%s <%s bus=%s%s%s%s%s",
 				name, text_device_node_type(crt->fields.node_type),
 				text_device_bus_type(crt->fields.bus_type),
 				driver_name ? " drv=" : "",
@@ -599,7 +607,7 @@ static void dump_device_tree_node(OstreamTrait& com1, const DeviceNode* node, st
 				has_binding ? text_driver_binding_state(crt->fields.binding.state) : "");
 			break;
 		case DeviceNodeType::PciBus:
-			com1.OutFormat("%s <%s seg=%[u] bus=%[u]%s%s%s%s>\n\r",
+			com1.OutFormat("%s <%s seg=%[u] bus=%[u]%s%s%s%s",
 				name, text_device_node_type(crt->fields.node_type),
 				(stduint)crt->fields.pci_segment, (stduint)crt->fields.pci_bus,
 				driver_name ? " drv=" : "",
@@ -608,7 +616,7 @@ static void dump_device_tree_node(OstreamTrait& com1, const DeviceNode* node, st
 				has_binding ? text_driver_binding_state(crt->fields.binding.state) : "");
 			break;
 		case DeviceNodeType::PciDevice:
-			com1.OutFormat("%s <%s %02X.%02X.%02X vend=%04X dev=%04X%s%s%s%s>\n\r",
+			com1.OutFormat("%s <%s %02X.%02X.%02X vend=%04X dev=%04X%s%s%s%s",
 				name, text_device_node_type(crt->fields.node_type),
 				(unsigned)crt->fields.class_base, (unsigned)crt->fields.class_sub, (unsigned)crt->fields.class_if,
 				(unsigned)crt->fields.vendor_id, (unsigned)crt->fields.device_id,
@@ -618,7 +626,7 @@ static void dump_device_tree_node(OstreamTrait& com1, const DeviceNode* node, st
 				has_binding ? text_driver_binding_state(crt->fields.binding.state) : "");
 			break;
 		case DeviceNodeType::StorageDevice:
-			com1.OutFormat("%s <%s bus=%s%s%s%s%s>\n\r",
+			com1.OutFormat("%s <%s bus=%s%s%s%s%s",
 				name, text_device_node_type(crt->fields.node_type),
 				text_device_bus_type(crt->fields.bus_type),
 				driver_name ? " drv=" : "",
@@ -627,7 +635,7 @@ static void dump_device_tree_node(OstreamTrait& com1, const DeviceNode* node, st
 				has_binding ? text_driver_binding_state(crt->fields.binding.state) : "");
 			break;
 		case DeviceNodeType::UsbDevice:
-			com1.OutFormat("%s <%s %02X.%02X.%02X vid=%04X pid=%04X bus=%s%s%s%s%s>\n\r",
+			com1.OutFormat("%s <%s %02X.%02X.%02X vid=%04X pid=%04X bus=%s%s%s%s%s",
 				name, text_device_node_type(crt->fields.node_type),
 				(unsigned)crt->fields.class_base, (unsigned)crt->fields.class_sub, (unsigned)crt->fields.class_if,
 				(unsigned)crt->fields.vendor_id, (unsigned)crt->fields.device_id,
@@ -638,7 +646,7 @@ static void dump_device_tree_node(OstreamTrait& com1, const DeviceNode* node, st
 				has_binding ? text_driver_binding_state(crt->fields.binding.state) : "");
 			break;
 		case DeviceNodeType::UsbRootHub:
-			com1.OutFormat("%s <%s %02X.%02X.%02X bus=%s%s%s%s%s>\n\r",
+			com1.OutFormat("%s <%s %02X.%02X.%02X bus=%s%s%s%s%s",
 				name, text_device_node_type(crt->fields.node_type),
 				(unsigned)crt->fields.class_base, (unsigned)crt->fields.class_sub, (unsigned)crt->fields.class_if,
 				text_device_bus_type(crt->fields.bus_type),
@@ -648,12 +656,12 @@ static void dump_device_tree_node(OstreamTrait& com1, const DeviceNode* node, st
 				has_binding ? text_driver_binding_state(crt->fields.binding.state) : "");
 			break;
 		case DeviceNodeType::UsbPort:
-			com1.OutFormat("%s <%s bus=%s>\n\r",
+			com1.OutFormat("%s <%s bus=%s",
 				name, text_device_node_type(crt->fields.node_type),
 				text_device_bus_type(crt->fields.bus_type));
 			break;
 		case DeviceNodeType::UsbInterface:
-			com1.OutFormat("%s <%s %02X.%02X.%02X bus=%s%s%s%s%s>\n\r",
+			com1.OutFormat("%s <%s %02X.%02X.%02X bus=%s%s%s%s%s",
 				name, text_device_node_type(crt->fields.node_type),
 				(unsigned)crt->fields.class_base, (unsigned)crt->fields.class_sub, (unsigned)crt->fields.class_if,
 				text_device_bus_type(crt->fields.bus_type),
@@ -666,7 +674,7 @@ static void dump_device_tree_node(OstreamTrait& com1, const DeviceNode* node, st
 			#if (_MCCA & 0xFF00) == 0x8600
 			if (driver_name0 && StrCompare(driver_name0, "hid-i2c") == 0 && DriverBindingState(crt->fields.binding.state) == DriverBindingState::Started && crt->fields.binding.driver_data) {
 				const auto& descriptor = static_cast<const uni::HIDI2CDevice*>(crt->fields.binding.driver_data)->Descriptor();
-				com1.OutFormat("%s <%s bus=%s drv=%s state=%s hid-ver=%04X vid=%04X pid=%04X report=%u input=%u output=%u input-caps=%08X>\n\r",
+				com1.OutFormat("%s <%s bus=%s drv=%s state=%s hid-ver=%04X vid=%04X pid=%04X report=%u input=%u output=%u input-caps=%08X",
 					name, text_device_node_type(crt->fields.node_type), text_device_bus_type(crt->fields.bus_type), driver_name,
 					text_driver_binding_state(crt->fields.binding.state), (stduint)descriptor.version,
 					(stduint)descriptor.vendor_id, (stduint)descriptor.product_id,
@@ -675,7 +683,7 @@ static void dump_device_tree_node(OstreamTrait& com1, const DeviceNode* node, st
 				break;
 			}
 			#endif
-			com1.OutFormat("%s <%s bus=%s%s%s%s%s>\n\r",
+			com1.OutFormat("%s <%s bus=%s%s%s%s%s",
 				name, text_device_node_type(crt->fields.node_type), text_device_bus_type(crt->fields.bus_type),
 				driver_name ? " drv=" : "", driver_name ? driver_name : "",
 				has_binding ? " state=" : "", has_binding ? text_driver_binding_state(crt->fields.binding.state) : "");
@@ -689,7 +697,7 @@ static void dump_device_tree_node(OstreamTrait& com1, const DeviceNode* node, st
 		case DeviceNodeType::SpiDevice:
 		case DeviceNodeType::UartBus:
 		case DeviceNodeType::UartDevice:
-			com1.OutFormat("%s <%s bus=%s%s%s%s%s>\n\r",
+			com1.OutFormat("%s <%s bus=%s%s%s%s%s",
 				name, text_device_node_type(crt->fields.node_type),
 				text_device_bus_type(crt->fields.bus_type),
 				driver_name ? " drv=" : "",
@@ -698,7 +706,7 @@ static void dump_device_tree_node(OstreamTrait& com1, const DeviceNode* node, st
 				has_binding ? text_driver_binding_state(crt->fields.binding.state) : "");
 			break;
 		default:
-			com1.OutFormat("%s <%s%s%s%s%s>\n\r",
+			com1.OutFormat("%s <%s%s%s%s%s",
 				name, text_device_node_type(crt->fields.node_type),
 				driver_name ? " drv=" : "",
 				driver_name ? driver_name : "",
@@ -706,6 +714,16 @@ static void dump_device_tree_node(OstreamTrait& com1, const DeviceNode* node, st
 				has_binding ? text_driver_binding_state(crt->fields.binding.state) : "");
 			break;
 		}
+		if (crt->fields.rcc_state != DeviceRccState::NotApplicable)
+			com1.OutFormat(" rcc=%s", text_rcc_state(crt->fields.rcc_state));
+		#if defined(_MCU_STM32H7x)
+		if (gpio_controller) com1.OutFormat(" pin-slots=%[u]", gpio_info.pin_count);
+		#endif
+		com1.OutFormat(">\n\r");
+		if (crt->fields.rcc_state == DeviceRccState::Disabled) continue;
+		#if (_MCCA & 0xFF00) == 0x8600
+		if (gpio_controller && gpio_info.clock_state == DeviceGPIOClockState::Disabled) continue;
+		#endif
 		if (verbose) {
 			if (crt->fields.controller) {
 				dump_device_tree_indent(com1, depth + 1);

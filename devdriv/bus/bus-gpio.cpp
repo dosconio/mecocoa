@@ -817,7 +817,16 @@ bool Devs::GetGPIOControllerInfo(const DeviceNode* controller, DeviceGPIOControl
 	info.port_id = runtime->port_id;
 	info.pin_count = runtime->backend.pin_count;
 	info.capabilities = runtime->backend.capabilities;
+	#if defined(_MCU_STM32H7x)
+	switch (controller->fields.rcc_state) {
+	case DeviceRccState::NotApplicable: info.clock_state = DeviceGPIOClockState::NotApplicable; break;
+	case DeviceRccState::Disabled: info.clock_state = DeviceGPIOClockState::Disabled; break;
+	case DeviceRccState::Enabled: info.clock_state = DeviceGPIOClockState::Enabled; break;
+	default: info.clock_state = DeviceGPIOClockState::Unknown; break;
+	}
+	#else
 	info.clock_state = runtime->clock_query ? runtime->clock_query(runtime->backend.context) : DeviceGPIOClockState::NotApplicable;
+	#endif
 	return true;
 }
 
@@ -1003,6 +1012,7 @@ void R_GPIO_INIT() {
 			continue;
 		}
 		node = Devsman::RegisterPlatformDevice(name.reference(), "stm32-gpio", &context);
+		if (node) node->fields.rcc_state = port.isAble() ? DeviceRccState::Enabled : DeviceRccState::Disabled;
 		bool ready = node && Devsman::AddMemoryResource(node, 0, port.getAddress(),
 			(_IMM(uni::GPIOReg::AFRH) + 1) * sizeof(uint32));
 		if (ready) {

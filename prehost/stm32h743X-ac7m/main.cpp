@@ -37,8 +37,10 @@ void _test() {
 
 void sysinfo_classic(OstreamTrait& com1, byte func);
 void key_isr_up() {
+	void dump_processors(OstreamTrait & com1);
 	sysinfo_classic(XART1, 'w');
-	sysinfo_classic(XART1, 's');
+	dump_processors(XART1);// sysinfo_classic(XART1, 's');
+	sysinfo_classic(XART1, 'f');
 	sysinfo_classic(XART1, 'H');
 }
 void key_isr_dn() {

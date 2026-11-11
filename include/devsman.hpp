@@ -504,9 +504,17 @@ struct DriverBinding {
 	uint16 missing_resource_type;
 };
 
+enum class DeviceRccState : uint8 {
+	NotApplicable = 0,
+	Unknown,
+	Disabled,
+	Enabled,
+};
+
 struct DevExt {
 	uint16 node_type;
 	uint16 flags;
+	DeviceRccState rcc_state = DeviceRccState::NotApplicable;// Driver-maintained RCC snapshot.
 
 	uint16 bus_type;
 	uint16 dev_class;
@@ -626,56 +634,18 @@ struct UsbRoleRequest {
 // ---- . ----
 
 class Devsman {
-public:
+public: // Initialization and driver lifecycle
 	using DriverStartRoutine = bool (*)(DeviceNode* node);
 	static bool Initialize();
-public:// debug
-	// Read-only views of the driver registries, for the Ring0 debug dump
-	static stduint GetDriverStartHookCount();
-	static const char* GetDriverStartHookName(stduint index);
-	static stduint GetDriverProcessCount();
-	static const char* GetDriverProcessName(stduint index);
-public:	
-	static bool AttachPCIDevices(uni::PCI& pci);
 	static void BindKnownDrivers();
 	static void ProbeKnownDrivers();
 	static void StartKnownDrivers();
-	static void RegisterUSBDeviceTreeHooks();
 	static bool RegisterDriverStarter(const char* driver_name, DriverStartRoutine starter);
-	static bool RegisterInputObserver(DeviceInputObserver observer, void* context = nullptr);
-	static uint32 GetInputCapabilities(const DeviceNode* node);
-	static bool SubmitHidInputReport(DeviceNode* node, const byte* report, stduint length);
 	static DeviceDriverMatchDecision MatchDriver(const DeviceNode* node, const DeviceDriverMatchEntry* entries, stduint count);
 	static const char* DriverMatchResultName(DriverMatchResult result);
-	static DeviceNode* RegisterUSBBus(const char* name, const char* driver_name = nullptr, void* driver_data = nullptr);
-	static DeviceNode* RegisterUSBRootHub(DeviceNode* parent, const char* name,
-		uint8 class_base, uint8 class_sub, uint8 class_if,
-		const char* driver_name = nullptr, void* driver_data = nullptr);
-	static DeviceNode* RegisterUSBPort(DeviceNode* parent, const char* name, uint8 port_num);
-	static DeviceNode* RegisterUSBDevice(DeviceNode* parent, const char* name,
-		uint16 vendor_id, uint16 product_id,
-		const char* text_manufacturer, const char* text_product, const char* text_serial,
-		uint8 class_base, uint8 class_sub, uint8 class_if,
-		uint8 port_num, uint8 slot_id,
-		const char* driver_name = nullptr, void* driver_data = nullptr);
-	static DeviceNode* RegisterUSBInterface(DeviceNode* parent, const char* name,
-		uint8 class_base, uint8 class_sub, uint8 class_if,
-		const char* driver_name = nullptr, void* driver_data = nullptr);
-	static bool AddUSBEndpointResource(DeviceNode* node, uint32 index,
-		uint8 endpoint_addr, uint8 transfer_type, uint16 max_packet_size, uint8 interval);
-	static bool RemoveUSBDevice(DeviceNode* parent, const char* name);
-	static bool RemoveUSBDevice(DeviceNode* node);
-	#if defined(_MCCA) && ((_MCCA & 0xFF00) == 0x8600 || defined(_MCU_STM32H7x)) && CONFIG_ENABLE_USB
-	static void ProcessUSBMSCProbe(void* context);
-	static void RegisterUSBMSCStorage(void* context);
-	static void MountUSBMSCStorage(void* context);
-	static void UnmountUSBMSCStorage(void* context);
-	static void RemoveUSBMSCStorage(void* context);
-	#endif
-	static DeviceNode* RegisterPlatformDevice(const char* name,
-		const char* driver_name = nullptr, void* driver_data = nullptr);
-	static DeviceNode* RegisterPlatformDevice(DeviceNode* parent, const char* name,
-		const char* driver_name = nullptr, void* driver_data = nullptr);
+
+public: // Device tree
+	static DeviceNode* Root();
 	// The caller serializes topology changes; controller and driver_data are borrowed.
 	static DeviceNode* RegisterBus(DeviceBusType bus_type, DeviceNodeType node_type, const char* name,
 		DeviceNode* controller = nullptr, const char* driver_name = nullptr,
@@ -686,34 +656,48 @@ public:
 	// Stop I/O and release external references before unregistering; the backend remains caller-owned.
 	static bool UnregisterDevice(DeviceNode* node);
 	static bool UnregisterBus(DeviceNode* bus);
-	static bool AddResource(DeviceNode* node, const DeviceResource& resource);
-	static const char* GetResourceName(const DeviceResource& resource);
-	static bool AddMemoryResource(DeviceNode* node, uint32 index, uint64 base, uint64 length);
-	static bool AddPinResource(DeviceNode* node, uint32 index, const char* name,
-		uint32 port, uint32 pin, uint32 alternate = DevicePinNoAlternateFunction);
-	static bool AddAddressResource(DeviceNode* node, uint32 index, uint64 address, uint32 address_bits = 0);
-	static bool AddConfigurationResource(DeviceNode* node, uint32 index, const char* name, uint64 value);
-	static DeviceNode* RegisterStorageDevice(DeviceNode* parent, const char* name,
-		DeviceBusType bus_type = DeviceBusType::Platform,
+	static DeviceNode* RegisterPlatformDevice(const char* name,
+		const char* driver_name = nullptr, void* driver_data = nullptr);
+	static DeviceNode* RegisterPlatformDevice(DeviceNode* parent, const char* name,
 		const char* driver_name = nullptr, void* driver_data = nullptr);
 	static DeviceNode* RegisterSerioController(const char* name);
 	static DeviceNode* RegisterSerioController(DeviceNode* parent, const char* name);
 	static DeviceNode* RegisterSerioDevice(DeviceNode* parent, const char* name);
-	static bool AddIoPortResource(DeviceNode* node, uint32 index, uint64 base, uint64 length);
-	static bool AddIrqResource(DeviceNode* node, uint64 vector, uint64 pin = 0);
-	static bool AddDmaResource(DeviceNode* node, uint32 index, uint8 channel, uint8 width_bits);
-	static DeviceNode* Root();
-	static DeviceNode* PCI_Root();
-	static DeviceNode* PrimaryPciBus();
 	static DeviceNode* FindNamedNode(DeviceNodeType node_type, const char* name);
 	static DeviceNode* FindBoundNode(const char* driver_name);
 	static DeviceNode* FindOwnedNode(stduint pid);
 	static bool RegisterDevAlias(DeviceNode* node, const char* alias);
 	static const char* GetDevAlias(const DeviceNode* node);
 	static DeviceNode* FindByDevAlias(const char* alias);
+
+public: // Resources
+	static bool AddResource(DeviceNode* node, const DeviceResource& resource);
+	static const char* GetResourceName(const DeviceResource& resource);
+	static const DeviceResource* FindResource(const DeviceNode* node, DeviceResourceType type, uint32 index = 0);
+	static bool AddMemoryResource(DeviceNode* node, uint32 index, uint64 base, uint64 length);
+	static bool AddIoPortResource(DeviceNode* node, uint32 index, uint64 base, uint64 length);
+	static bool AddIrqResource(DeviceNode* node, uint64 vector, uint64 pin = 0);
+	static bool AddDmaResource(DeviceNode* node, uint32 index, uint8 channel, uint8 width_bits);
+	static bool AddPinResource(DeviceNode* node, uint32 index, const char* name,
+		uint32 port, uint32 pin, uint32 alternate = DevicePinNoAlternateFunction);
+	static bool AddAddressResource(DeviceNode* node, uint32 index, uint64 address, uint32 address_bits = 0);
+	static bool AddConfigurationResource(DeviceNode* node, uint32 index, const char* name, uint64 value);
+	static bool AddUSBEndpointResource(DeviceNode* node, uint32 index,
+		uint8 endpoint_addr, uint8 transfer_type, uint16 max_packet_size, uint8 interval);
+
+public: // Device operations
+	static bool SetOps(DeviceNode* node, const DeviceNodeOps* ops);
+	static const DeviceNodeOps* GetOps(const DeviceNode* node);
+	static stdsint Read(DeviceNode* node, void* buf, stduint count, stduint idx = 0, stduint flags = 0);
+	static stdsint Send(DeviceNode* node, const void* buf, stduint count, stduint idx = 0, stduint flags = 0);
+	static stdsint Ctrl(DeviceNode* node, stduint cmd, void* args, stduint flags = 0);
+
+public: // PCI and ACPI
+	static bool AttachPCIDevices(uni::PCI& pci);
+	static DeviceNode* PCI_Root();
+	static DeviceNode* PrimaryPciBus();
 	static DeviceNode* FindPCIDeviceByClass(uint8 class_base, uint8 class_sub, uint8 class_if);
 	static DeviceNode* FindPCIDeviceByVendorDevice(uint16 vendor_id, uint16 device_id);
-	static const DeviceResource* FindResource(const DeviceNode* node, DeviceResourceType type, uint32 index = 0);
 	static const DeviceAcpiProperty* FindAcpiProperty(const DeviceNode* node, const char* name);
 	static bool ReadAcpiPropertyInteger(const DeviceNode* node, const char* name, uint64& value);
 	static bool ReadAcpiPropertyString(const DeviceNode* node, const char* name, const char*& value, stduint& length);
@@ -728,16 +712,49 @@ public:
 	static const DeviceControllerCompatibilityDescription* FindControllerCompatibility(const DeviceNode* node);
 	static const DeviceGPIOControllerCompatibilityDescription* FindGPIOControllerCompatibility(const DeviceNode* node);
 	#endif
-	static bool SetOps(DeviceNode* node, const DeviceNodeOps* ops);
-	static const DeviceNodeOps* GetOps(const DeviceNode* node);
-	static stdsint Read(DeviceNode* node, void* buf, stduint count, stduint idx = 0, stduint flags = 0);
-	static stdsint Send(DeviceNode* node, const void* buf, stduint count, stduint idx = 0, stduint flags = 0);
-	static stdsint Ctrl(DeviceNode* node, stduint cmd, void* args, stduint flags = 0);
+	#if (_MCCA & 0xFF00) == 0x8600
+	static const char* LookupPciClassName(uint8 class_base, uint8 class_sub, uint8 class_if);
+	static const char* LookupPciDeviceName(uint16 vendor_id, uint16 device_id, uint8 class_base = 0, uint8 class_sub = 0);
+	static const char* LookupPciVendorName(uint16 vendor_id);
+	#endif
+
+public: // USB
+	// Topology
+	static void RegisterUSBDeviceTreeHooks();
+	static DeviceNode* RegisterUSBBus(const char* name, const char* driver_name = nullptr, void* driver_data = nullptr);
+	static DeviceNode* RegisterUSBRootHub(DeviceNode* parent, const char* name,
+		uint8 class_base, uint8 class_sub, uint8 class_if,
+		const char* driver_name = nullptr, void* driver_data = nullptr);
+	static DeviceNode* RegisterUSBPort(DeviceNode* parent, const char* name, uint8 port_num);
+	static DeviceNode* RegisterUSBDevice(DeviceNode* parent, const char* name,
+		uint16 vendor_id, uint16 product_id,
+		const char* text_manufacturer, const char* text_product, const char* text_serial,
+		uint8 class_base, uint8 class_sub, uint8 class_if,
+		uint8 port_num, uint8 slot_id,
+		const char* driver_name = nullptr, void* driver_data = nullptr);
+	static DeviceNode* RegisterUSBInterface(DeviceNode* parent, const char* name,
+		uint8 class_base, uint8 class_sub, uint8 class_if,
+		const char* driver_name = nullptr, void* driver_data = nullptr);
+	static bool RemoveUSBDevice(DeviceNode* parent, const char* name);
+	static bool RemoveUSBDevice(DeviceNode* node);
+
+	// Mass storage
+	#if defined(_MCCA) && ((_MCCA & 0xFF00) == 0x8600 || defined(_MCU_STM32H7x)) && CONFIG_ENABLE_USB
+	static void ProcessUSBMSCProbe(void* context);
+	static void RegisterUSBMSCStorage(void* context);
+	static void MountUSBMSCStorage(void* context);
+	static void UnmountUSBMSCStorage(void* context);
+	static void RemoveUSBMSCStorage(void* context);
+	#endif
+
+	// xHCI events
 	#if (_MCCA & 0xFF00) == 0x8600 && CONFIG_ENABLE_USB && CONFIG_ENABLE_USB_XHCI
 	static bool BindXHCIEventOwner(stduint owner_pid, stduint owner_tid);
 	static bool AcknowledgeXHCIInterrupt();
 	static bool ProcessXHCIEvent(const DeviceEvent& event);
 	#endif
+
+	// OTG events and transfers
 	#if defined(_MCU_STM32H7x) && CONFIG_ENABLE_USB
 	static bool InitializeOTG(stduint owner_tid);
 	static bool ProcessOTGEvent(const DeviceEvent& event);
@@ -747,13 +764,29 @@ public:
 	static void PumpUSBMSCRequests();
 	static UsbTransferStopResult StopOTGTransfers(uni::device::SpaceUSB::USBHostDevice* device);
 	#endif
+
+public: // Storage
+	static DeviceNode* RegisterStorageDevice(DeviceNode* parent, const char* name,
+		DeviceBusType bus_type = DeviceBusType::Platform,
+		const char* driver_name = nullptr, void* driver_data = nullptr);
 	static bool AttachStorageOps(DeviceNode* node, uni::StorageTrait* storage);
 	static DeviceNode* RegisterStoragePartition(DeviceNode* parent, const char* name,
 		uni::StorageTrait& storage, stdsint part_dev, const char* driver_name = "storage-partition");
+
+public: // Input
+	static bool RegisterInputObserver(DeviceInputObserver observer, void* context = nullptr);
+	static uint32 GetInputCapabilities(const DeviceNode* node);
+	static bool SubmitHidInputReport(DeviceNode* node, const byte* report, stduint length);
+
+public: // Network
+	// Link devices and socket waits
 	#if (_MCCA & 0xFF00) == 0x8600
 	static bool RegisterLinkDevice(uni::Network::LinkDevice* device);
 	static stduint LinkDeviceCount();
 	static uni::Network::LinkDevice* GetLinkDevice(stduint index);
+	static void CancelSocketWait(::ThreadBlock* th);
+
+	// UDP
 	static bool OpenUdpPort(uint16 port);
 	static bool BindUdpPort(uint16 port);
 	static bool BindUdpPort(uint16 port, bool reuse_address, stduint& inbox_id);
@@ -767,7 +800,6 @@ public:
 	static bool CloseUdpPort(uint16 port, stduint inbox_id);
 	static bool WaitUdp(uint16 port);
 	static bool WaitUdp(uint16 port, stduint inbox_id);
-	static void CancelSocketWait(::ThreadBlock* th);
 	static bool HasUdp(uint16 port, stduint inbox_id);
 	static bool HasUdpFrom(uint16 port, stduint inbox_id,
 		const uni::Network::IPv4Address& remote_ip, uint16 remote_port);
@@ -776,6 +808,15 @@ public:
 	static stdsint ReceiveUdp(uint16 port, uni::Network::UDPDatagramContext& context, void* payload, stduint capacity);
 	static stdsint ReceiveUdp(uint16 port, stduint inbox_id,
 		uni::Network::UDPDatagramContext& context, void* payload, stduint capacity);
+	static stdsint SendUdp(const uni::Network::IPv4Address& source_ip,
+		const uni::Network::IPv4Address& target_ip,
+		uint16 source_port, uint16 destination_port, const void* payload, stduint length);
+	static stdsint SendUdp(const uni::Network::IPv4Address& target_ip,
+		uint16 source_port, uint16 destination_port, const void* payload, stduint length);
+	static stdsint SendUdp(const uni::Network::MacAddress& target_mac, const uni::Network::IPv4Address& target_ip,
+		uint16 source_port, uint16 destination_port, const void* payload, stduint length);
+
+	// TCP
 	static bool ListenTcpPort(uint16 port, stduint backlog);
 	static bool ListenTcpPort(const uni::Network::IPv4Address& local_address,
 		uint16 port, stduint backlog);
@@ -817,16 +858,44 @@ public:
 	static bool ShutdownTcpReceive(const uni::Network::TCPConnectionContext& context);
 	static stdsint ReceiveTcp(const uni::Network::TCPConnectionContext& context, void* payload, stduint capacity);
 	static stdsint SendTcp(const uni::Network::TCPConnectionContext& context, const void* payload, stduint length);
-	static stdsint SendUdp(const uni::Network::IPv4Address& source_ip,
-		const uni::Network::IPv4Address& target_ip,
-		uint16 source_port, uint16 destination_port, const void* payload, stduint length);
-	static stdsint SendUdp(const uni::Network::IPv4Address& target_ip,
-		uint16 source_port, uint16 destination_port, const void* payload, stduint length);
-	static stdsint SendUdp(const uni::Network::MacAddress& target_mac, const uni::Network::IPv4Address& target_ip,
-		uint16 source_port, uint16 destination_port, const void* payload, stduint length);
+
+	// IPv4 configuration
 	static bool GetDefaultIPv4Route(void* route, stduint length);
 	static bool GetIPv4Interface(stduint index, void* iface, stduint length);
 	static bool ApplyIPv4Config(const void* config, stduint length);
+
+	// DNS
+	static bool StoreDnsCacheEntry(const void* entry, stduint length);
+	static bool ClearDnsCache();
+	static bool ClearDnsCache(const char* host);
+	static bool SetDnsServer(const uni::Network::IPv4Address& address);
+	static bool SetDnsServers(const uni::Network::IPv4Address* addresses, stduint count);
+	static stduint GetDnsServers(uni::Network::IPv4Address* addresses, stduint capacity);
+
+	// Socket errors
+	enum class NetSocketErrorSource : uint8 {
+		Icmp,
+		Reset,
+		Timeout,
+		Shutdown,
+	};
+	static void RecordSocketError(NetSocketErrorSource source);
+
+	// DHCP
+	static bool RenewDhcp();
+	static bool ReleaseDhcp();
+	#endif
+
+public: // Debug queries
+	// Drivers
+	// Read-only views of the driver registries, for the Ring0 debug dump
+	static stduint GetDriverStartHookCount();
+	static const char* GetDriverStartHookName(stduint index);
+	static stduint GetDriverProcessCount();
+	static const char* GetDriverProcessName(stduint index);
+
+	// Network state
+	#if (_MCCA & 0xFF00) == 0x8600
 	static stduint IPv4ArpCacheCount();
 	static bool GetIPv4ArpCacheEntry(stduint index, void* entry, stduint length);
 	static stduint UdpInboxCount();
@@ -835,34 +904,17 @@ public:
 	static bool GetPendingUdpEntry(stduint index, void* entry, stduint length);
 	static stduint DnsCacheCount();
 	static bool GetDnsCacheEntry(stduint index, void* entry, stduint length);
-	static bool StoreDnsCacheEntry(const void* entry, stduint length);
-	static bool ClearDnsCache();
-	static bool ClearDnsCache(const char* host);
-	static bool SetDnsServer(const uni::Network::IPv4Address& address);
-	static bool SetDnsServers(const uni::Network::IPv4Address* addresses, stduint count);
-	static stduint GetDnsServers(uni::Network::IPv4Address* addresses, stduint capacity);
 	static stduint TcpListenerCount();
 	static bool GetTcpListenerEntry(stduint index, void* entry, stduint length);
 	static stduint TcpConnectionCount();
 	static bool GetTcpConnectionEntry(stduint index, void* entry, stduint length);
+
+	// Network statistics and fault injection
 	static bool GetNetStats(void* stats, stduint length);
 	static bool GetNetFault(void* state, stduint length);
 	static bool SetNetFault(const void* config, stduint length);
 	static bool ResetNetFault();
-	enum class NetSocketErrorSource : uint8 {
-		Icmp,
-		Reset,
-		Timeout,
-		Shutdown,
-	};
-	static void RecordSocketError(NetSocketErrorSource source);
-	static bool RenewDhcp();
-	static bool ReleaseDhcp();
-	static const char* LookupPciClassName(uint8 class_base, uint8 class_sub, uint8 class_if);
-	static const char* LookupPciDeviceName(uint16 vendor_id, uint16 device_id, uint8 class_base = 0, uint8 class_sub = 0);
-	static const char* LookupPciVendorName(uint16 vendor_id);
 	#endif
-
 };
 
 // ---- AUDIO ----

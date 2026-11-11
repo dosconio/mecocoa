@@ -296,35 +296,56 @@ extern const RMOD_LIST RMOD_LIST_XART1{
 
 namespace {
 	#if defined(_MCU_STM32H7x)
-	bool RegisterXart1() {
-		uint32 data_bits = 0, stop_half_bits = 0;
-		if ((data_bits = XART1.getWordLengthBits())); else {
-			return false;
-		}
-		const auto parity = XART1.getCheck();
-		if (parity != UARTCheck::None) --data_bits;
-		stop_half_bits = XART1.getStopHalfBits();
-		if (!stop_half_bits) return false;
-		const auto baud = XART1.getBaudRate();
-		if (!baud) return false;
+	bool RegisterXart(UART_t& xart) {
+		const auto id = xart.getID();
+		const bool synchronous = XART.isSync(id);
+		const auto name = String::newFormat(synchronous ? "usart%u" : "uart%u", (unsigned)id);
 		bool created = false;
 		auto* node = Devsman::RegisterBus(DeviceBusType::UART, DeviceNodeType::UartBus,
-			"usart1", nullptr, "stm32-usart", &XART1, &created);
+			name.reference(), nullptr, synchronous ? "stm32-usart" : "stm32-uart", &xart, &created);
 		if (!node) return false;
-		const auto& tx = GPIO[BoardConfig::Xart1::TxPort][BoardConfig::Xart1::TxPin];
-		const auto& rx = GPIO[BoardConfig::Xart1::RxPort][BoardConfig::Xart1::RxPin];
-		const bool ready = Devsman::AddMemoryResource(node, 0, XART1.getAddress(),
+		node->fields.rcc_state = xart.isAble() ? DeviceRccState::Enabled : DeviceRccState::Disabled;
+		if (!created) return true;
+		bool ready = Devsman::AddMemoryResource(node, 0, xart.getAddress(),
 			uint64(_IMM(XARTReg::PRESC)) + sizeof(uint32)) &&
 			Devsman::AddResource(node, DeviceResource{uint16(DeviceResourceType::IrqLine),
-				DeviceResourceFlag_None, 0, uint64(_IMM(IRQ_USART1)), 1, 0}) &&
-			Devsman::AddPinResource(node, 0, "TX", BoardConfig::Xart1::TxPort, tx.getID(), tx.getAlternate()) &&
-			Devsman::AddPinResource(node, 1, "RX", BoardConfig::Xart1::RxPort, rx.getID(), rx.getAlternate()) &&
-			Devsman::AddConfigurationResource(node, 0, "baud-rate", baud) &&
-			Devsman::AddConfigurationResource(node, 1, "data-bits", data_bits) &&
-			Devsman::AddConfigurationResource(node, 2, "parity", uint64(parity)) &&
-			Devsman::AddConfigurationResource(node, 3, "stop-half-bits", stop_half_bits);
+				DeviceResourceFlag_None, 0, uint64(_IMM(xart.getRequest())), 1, 0});
+		BoardConfig::Xart::Pins pins{};
+		if (ready && BoardConfig::Xart::GetPins(id, pins)) {
+			const auto& tx_port = GPIO[pins.TxPort];
+			const auto& rx_port = GPIO[pins.RxPort];
+			const bool enabled = xart.isAble();
+			const auto tx_af = enabled && tx_port.isAble()
+				? tx_port[pins.TxPin].getAlternate() : DevicePinNoAlternateFunction;
+			const auto rx_af = enabled && rx_port.isAble()
+				? rx_port[pins.RxPin].getAlternate() : DevicePinNoAlternateFunction;
+			ready = Devsman::AddPinResource(node, 0, "TX", pins.TxPort, pins.TxPin, tx_af) &&
+				Devsman::AddPinResource(node, 1, "RX", pins.RxPort, pins.RxPin, rx_af);
+		}
+		if (ready) {
+			uint32 data_bits = xart.getWordLengthBits();
+			const auto parity = xart.getCheck();
+			if (data_bits && parity != UARTCheck::None) --data_bits;
+			ready = Devsman::AddConfigurationResource(node, 0, "baud-rate", xart.getBaudRate()) &&
+				Devsman::AddConfigurationResource(node, 1, "data-bits", data_bits) &&
+				Devsman::AddConfigurationResource(node, 2, "parity", uint64(parity)) &&
+				Devsman::AddConfigurationResource(node, 3, "stop-half-bits", xart.getStopHalfBits());
+		}
 		if (!ready && created) Devsman::UnregisterBus(node);
 		return ready;
+	}
+
+	void RegisterXarts() {
+		for (stduint id = 1; id <= XART.Count(); ++id) {
+			// Convert USART objects through their actual type before using the UART base.
+			auto* xart = XART.isSync(id)
+				? static_cast<UART_t*>(static_cast<USART_t*>(XART[id]))
+				: static_cast<UART_t*>(XART[id]);
+			const bool restore_interrupts = IC.TryMaskInterrupt();
+			const bool ready = xart && RegisterXart(*xart);
+			if (restore_interrupts) IC.enInterrupt(true);
+			if (!ready) plogwarn("[UART] XART%u resource registration failed", (unsigned)id);
+		}
 	}
 	#endif
 
@@ -359,7 +380,7 @@ void R_XART1_INIT() {
 	USART_CR1_RXNEIE(XART1) = 1;
 	XART1.enInterrupt(true);
 	#if defined(_MCU_STM32H7x)
-	if (!RegisterXart1()) plogwarn("[UART] USART1 resource registration failed");
+	RegisterXarts();
 	#endif
 }
 
