@@ -10,6 +10,23 @@
 ### qemuvirt-r32
 arch?=atx-x86-flap32
 
+# Warn when required workspace paths are missing.
+warning_red := $(shell if test -t 2 && test -z "$$NO_COLOR"; then printf '\033[1;31m'; fi)
+warning_reset := $(shell if test -t 2 && test -z "$$NO_COLOR"; then printf '\033[0m'; fi)
+ifeq ($(strip $(uobjpath)),)
+$(warning $(warning_red)uobjpath is empty; set it before building$(warning_reset))
+uobjpath=.build/
+endif
+ifeq ($(strip $(uincpath)),)
+$(warning $(warning_red)uincpath is empty; set it before building$(warning_reset))
+uincpath=./inc
+endif
+ifeq ($(strip $(ulibpath)),)
+$(warning $(warning_red)ulibpath is empty; set it before building$(warning_reset))
+ulibpath=./lib
+endif
+export uobjpath uincpath ulibpath
+
 .PHONY: build user config run debug clean clean-app read run-only line devenv-arch acpi-test-table
 
 IASL ?= iasl

@@ -1,5 +1,9 @@
 #include "c/stdinc.h"
 #include "c/datype/ruststyle.h"
+
+#ifndef _INC_AAAAA
+#define _INC_AAAAA
+
 #ifdef _INC_CPP
 using namespace uni;
 #endif
@@ -136,4 +140,6 @@ public:
 	void maximize();
 	void restore();
 };
+#endif
+
 #endif

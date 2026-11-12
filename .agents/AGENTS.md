@@ -28,6 +28,7 @@ singleline
 仓库：
 - 禁止擅自git checkout/restore/stage
 - 禁止在仓库存放你的中间文件
+- mecocoa 有在某些目录用7个字符作为文件名的癖好
 
 原则：
 - Spinlock 不要嵌套（一个内核不能同时持有一个以上的自旋锁）
