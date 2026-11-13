@@ -13,8 +13,6 @@
 #include "../../depends/desktop.hpp"
 #include "../../prehost/stm32h743X-ac7m/_openedv/unicfg.hpp"
 
-void ltdc_gpio_config();
-void ltdc_clock_config();
 extern byte _BUF_cursor[byteof(Cursor)];
 
 _ESYM_C void R_LTDC_INIT();
@@ -264,8 +262,8 @@ public:
 	bool Initialize(pureptr_t fb_addr) {
 		if (layers.Root()) return fb_info.physical_range.address == _IMM(fb_addr);
 		if (!BoardConfig::Ltdc::Panel::Width || !BoardConfig::Ltdc::Panel::Height || !fb_addr) return false;
-		ltdc_gpio_config();
-		ltdc_clock_config();
+		if (!ConfigDeviceGPIN(DeviceType::LTDC)) return false;
+		if (!ConfigDeviceClock(DeviceType::LTDC)) return false;
 		auto& h = uni::LTDC.refHorizontal();
 		h.sync_len = BoardConfig::Ltdc::Panel::HorizontalSyncLength;
 		h.back_porch = BoardConfig::Ltdc::Panel::HorizontalBackPorch;
@@ -452,6 +450,25 @@ namespace {
 		rgb_lcd_process = process;
 		Taskman::Append(process);
 		Taskman::AppendThread(process->main_thread);
+	}
+}
+
+void LTDC_LAYER_t::DrawFont(const Point& disp, const DisplayFont& font, const String& str) const {
+	const char* p = str.reference();
+	stduint x = disp.x, y = disp.y;
+	Color fg = font.forecolor;
+	while (*p) {
+		char ch = *p++;
+		if (ch < 32 || ch > 126) ch = '?';
+		ch -= 0x20;
+		const uint16* datptr = (const uint16*)&_BITFONT_ASCII_16x8[(byte)ch];
+		for (byte col = 0; col < 8; col++) {
+			uint16 dat = datptr[col];
+			for (byte row = 0; row < 16; row++) {
+				if (dat & _IMM1S(row)) DrawPoint(Point(x + col, y + (row ^ 0b111)), fg);
+			}
+		}
+		x += 8;
 	}
 }
 

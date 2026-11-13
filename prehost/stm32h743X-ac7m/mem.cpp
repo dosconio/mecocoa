@@ -1,7 +1,7 @@
 #include "../../include/mecocoa.hpp"
 #include <cpp/MCU/ST/STM32H7>
 #include <c/prochip/CortexM7.h>
-#include "_openedv/SDRAM.hpp"
+#include "_openedv/unicfg.hpp"
 
 // SDRAM：外部 SDRAM 1MB 段（避开 0x0 起的测试区）
 #define SDRAM_POOL_OFF 0x100000
@@ -217,6 +217,7 @@ void mpumap_task(ThreadBlock* tb) {
 	if (old_if) IC.enInterrupt(true);
 }
 
+void sdram_init();
 bool Memory::initialize(stduint eax, byte* ebx) {
 	sdram_init();
 	mempool0.Append(Slice{ memreg[0].base, memreg[0].size });

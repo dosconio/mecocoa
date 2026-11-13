@@ -21,6 +21,7 @@ void _idle() {
 	}
 }
 
+#if 0
 void _test() {
 	GPIN& LEDR = GPIO[BoardConfig::Gpio::LedRed::Port][BoardConfig::Gpio::LedRed::Pin];
 	LEDR.setMode(BoardConfig::Gpio::LedRed::Mode);
@@ -34,6 +35,7 @@ void _test() {
 		Taskman::Schedule(true);
 	}
 }
+#endif
 
 void sysinfo_classic(OstreamTrait& com1, byte func);
 void key_isr_up() {
@@ -175,7 +177,7 @@ bool inited = false;
 int main()
 {
 	con0_out = &XART1;
-	if (!RCC.setClock(SysclkSource::HSE)) erro();
+	if (!RCC.setClock(BoardConfig::Clock::PLL1InputSource, &BoardConfig::Clock::SystemConfig)) erro();
 	XART1.setMode(115200);
 	SysTick::enClock(CONFIG_SysTickFreq);
 	SCB->FPCCR = SCB->FPCCR & ~(1u << 31);// ASPEN=0; boot FPCA is cleared below to establish the plain 8-word frame used by the asm, handler.cpp and _arm_frame
@@ -196,7 +198,7 @@ int main()
 	mecocoa();
 	inited = true;
 	
-	Taskman::Create((void*)&_test, RING_M);
+	// Taskman::Create((void*)&_test, RING_M);
 	// mempool0.dump_available();
 	
 

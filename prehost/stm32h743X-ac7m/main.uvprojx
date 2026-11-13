@@ -544,18 +544,6 @@
         </Group>
         <Group>
           <GroupName>Group Board</GroupName>
-          <Files>
-            <File>
-              <FileName>RGB-LCD.cpp</FileName>
-              <FileType>8</FileType>
-              <FilePath>.\_openedv\RGB-LCD.cpp</FilePath>
-            </File>
-            <File>
-              <FileName>SDRAM.cpp</FileName>
-              <FileType>8</FileType>
-              <FilePath>.\_openedv\SDRAM.cpp</FilePath>
-            </File>
-          </Files>
         </Group>
         <Group>
           <GroupName>Group Driv</GroupName>
@@ -599,6 +587,11 @@
               <FileName>bus-gpio.cpp</FileName>
               <FileType>8</FileType>
               <FilePath>..\..\devdriv\bus\bus-gpio.cpp</FilePath>
+            </File>
+            <File>
+              <FileName>fmc-sdram.cpp</FileName>
+              <FileType>8</FileType>
+              <FilePath>..\..\devdriv\mem\fmc-sdram.cpp</FilePath>
             </File>
           </Files>
         </Group>
