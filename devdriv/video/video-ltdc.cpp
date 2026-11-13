@@ -11,7 +11,7 @@
 #include <c/data.h>
 #include "../touch/touch-gtxxx.hpp"
 #include "../../depends/desktop.hpp"
-#include "../../prehost/stm32h743X-ac7m/_openedv/unicfg.hpp"
+#include "../../prehost/stm32h743X-ac7m/unicfg.hpp"
 
 extern byte _BUF_cursor[byteof(Cursor)];
 

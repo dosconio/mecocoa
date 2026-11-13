@@ -14,7 +14,7 @@
 #include <c/format/filesys/FAT.h>
 #if defined(_MCU_STM32H7x)
 #include <cpp/Device/USB/OTGHostDevice.hpp>
-#include "../../prehost/stm32h743X-ac7m/_openedv/unicfg.hpp"
+#include "../../prehost/stm32h743X-ac7m/unicfg.hpp"
 #endif
 #endif
 #if (_MCCA & 0xFF00) == 0x8600

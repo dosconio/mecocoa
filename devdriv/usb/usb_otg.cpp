@@ -17,7 +17,7 @@
 #include <c/driver/keyboard.h>
 #endif
 #include <c/driver/_predefine/predef.usbperi.hpp>
-#include "../../prehost/stm32h743X-ac7m/_openedv/unicfg.hpp"
+#include "../../prehost/stm32h743X-ac7m/unicfg.hpp"
 
 namespace Devs {
 	void prepare_usb_msc_disconnect(uni::device::SpaceUSB::USBHostDevice& device);

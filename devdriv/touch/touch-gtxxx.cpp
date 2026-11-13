@@ -7,7 +7,7 @@
 #include <cpp/MCU/ST/STM32H7>
 #include <cpp/Device/IIC>
 #include "touch-gtxxx.hpp"
-#include "../../prehost/stm32h743X-ac7m/_openedv/unicfg.hpp"
+#include "../../prehost/stm32h743X-ac7m/unicfg.hpp"
 
 namespace {
 	stduint TouchTicks(stduint ms) {

@@ -1,13 +1,13 @@
 #ifndef _MCCA_H7_UNICFG_HPP_
 #define _MCCA_H7_UNICFG_HPP_
 
-#include "../../../include/mecocoa.hpp"
+#include "../../include/mecocoa.hpp"
 #include <cpp/Device/GPIO>
 #include <cpp/Device/RCC/RCC>
 #include <cpp/Device/FMC>
 
 // An example of STM32H743 openedv board configuration.
-
+#if 1
 namespace BoardConfig {
 	namespace Gpio {
 		namespace LedBlue {
@@ -160,8 +160,11 @@ namespace BoardConfig {
 		};
 	}
 
-	#define SDRAM_BANK1_BASE FMC_SDRAM_BANK1_BASE
 	namespace Sdram {
+		constexpr stduint Base = FMC_SDRAM_BANK1_BASE;
+		constexpr stduint Size = 32u * 1024u * 1024u;
+		// Keep the first MiB outside the allocator for the framebuffer and low-address tests.
+		constexpr stduint ReservedSize = 1u * 1024u * 1024u;
 		struct PinConfig {
 			unsigned Port, Pin, AlternateFunction;
 		};
@@ -335,4 +338,5 @@ inline static bool ConfigDeviceClock(DeviceType dev) {
 	return true;
 }
 
+#endif
 #endif

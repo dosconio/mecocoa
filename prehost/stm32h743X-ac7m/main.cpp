@@ -1,7 +1,7 @@
 #include "../../include/mecocoa.hpp"
 #include <c/prochip/CortexM7.h>
 #include <cpp/MCU/ST/STM32H7>
-#include "_openedv/unicfg.hpp"
+#include "unicfg.hpp"
 
 /*
 make -f accmlib/accma32.clang.make all
