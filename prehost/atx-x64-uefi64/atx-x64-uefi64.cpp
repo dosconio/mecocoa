@@ -49,7 +49,7 @@ void mecocoa(const UefiData& uefi_data_ref)
 	Filesys::Initialize();
 	Systime::Initialize();
 	Taskman::Initialize();
-	Devsman::Initialize();
+	if (!Devsman::Initialize()) HALT();
 	Virtman::Initialize();
 	Syscall::Initialize();
 	// Coreman::Initialize();

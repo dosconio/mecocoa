@@ -139,6 +139,18 @@ namespace Iova {
 	bool ProbeVtd(stduint dmar_address);
 	bool EnableVtdPassthrough(DeviceNode* pci_root);
 	bool InterruptRemappingAvailable();
+	#if _MCCA == 0x8664
+	bool PrepareInterruptRemapping(bool extended);
+	bool CommitExtendedInterruptMode();
+	bool DisableInterruptRemapping();
+	bool ExtendedInterruptMode();
+	bool IoApicInterruptSource(uint8 id, uint16& source);
+	// The caller holds the I/O APIC route lock when changing IRTEs for a GSI.
+	bool AllocateIoApicInterruptLocked(uint16 source, uint32 destination, uint8 vector, uint16& handle);
+	void ReleaseInterruptLocked(uint16 handle);
+	bool DisablePciMessageInterrupts(const DeviceNode* device);
+	bool PreparePciMessageInterrupts(const DeviceNode* device);
+	#endif
 	bool AllocatePciInterrupt(DeviceNode* device, uint32 target_lapic_id,
 		uint8 vector, InterruptMessage& message);
 	void ReleaseInterrupt(uint16 handle);

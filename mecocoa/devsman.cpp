@@ -1126,12 +1126,44 @@ namespace Devs {
 		}
 	}
 
+	static Spinlock ioapic_route_lock;
+	constexpr uint32 LegacyIoApicAddress = 0xFEC00000u;
+	#if _MCCA == 0x8632
+	constexpr uint32 LegacyIoApicGsiCount = 24;
+	#endif
+
+	Spinlock* x86_ioapic_route_lock() {
+		return &ioapic_route_lock;
+	}
+
+	// Intel 82093AA I/O APIC, sections 3.1.1 and 3.1.2: IOREGSEL and IOWIN share one transaction.
+	static uint32 read_x86_ioapic_register_locked(uint32 address, uint8 index) {
+		auto* selector = reinterpret_cast<volatile uint32*>(stduint(address));
+		auto* data = reinterpret_cast<volatile uint32*>(stduint(address) + 0x10u);
+		*selector = index;
+		mfence();
+		const uint32 value = *data;
+		mfence();
+		return value;
+	}
+
+	static void write_x86_ioapic_register_locked(uint32 address, uint8 index, uint32 value) {
+		auto* selector = reinterpret_cast<volatile uint32*>(stduint(address));
+		auto* data = reinterpret_cast<volatile uint32*>(stduint(address) + 0x10u);
+		*selector = index;
+		mfence();
+		*data = value;
+		mfence();
+	}
+
 	#if _MCCA == 0x8664
 	struct IoApicTopologyEntry {
 		uint32 address;
 		uint32 gsi_base;
 		uint32 gsi_count;
 		uint8 id;
+		uint16 source = 0;
+		uint8 version = 0;
 	};
 
 	struct InterruptSourceOverrideEntry {
@@ -1175,35 +1207,17 @@ namespace Devs {
 	AcpiPciRoutingEntry acpi_pci_routes[AcpiPciRoutingCapacity] = {};
 	AmlTableView aml_tables[AmlTableCapacity] = {};
 	stduint ioapic_topology_count = 0;
+	bool ioapic_topology_complete = false;
 	stduint interrupt_source_override_count = 0;
 	stduint acpi_pci_route_count = 0;
 	stduint aml_table_count = 0;
 	bool acpi_pic_apic_mode = false;
 	uint32 acpi_pic_target_name = 0;
 
-	uint32 read_x64_ioapic_register(uint32 address, uint8 index) {
-		auto* selector = reinterpret_cast<volatile uint32*>(stduint(address));
-		auto* data = reinterpret_cast<volatile uint32*>(stduint(address) + 0x10u);
-		*selector = index;
-		mfence();
-		const uint32 value = *data;
-		mfence();
-		return value;
-	}
-
-	void write_x64_ioapic_register(uint32 address, uint8 index, uint32 value) {
-		auto* selector = reinterpret_cast<volatile uint32*>(stduint(address));
-		auto* data = reinterpret_cast<volatile uint32*>(stduint(address) + 0x10u);
-		*selector = index;
-		mfence();
-		*data = value;
-		mfence();
-	}
-
 	bool append_x64_ioapic(uint32 address, uint32 gsi_base, uint8 id) {
 		if (!address || (address & 0xFFFu) ||
 			ioapic_topology_count >= IoApicTopologyCapacity) return false;
-		const uint32 version = read_x64_ioapic_register(address, 1);
+		const uint32 version = read_x86_ioapic_register_locked(address, 1);
 		const uint32 gsi_count = ((version >> 16) & 0xFFu) + 1u;
 		if (!gsi_count || gsi_count > 120u ||
 			gsi_base > ~uint32(0) - (gsi_count - 1u)) return false;
@@ -1231,16 +1245,33 @@ namespace Devs {
 		return nullptr;
 	}
 
-	bool x64_ioapic_has_gsi(uint32 gsi) {
+	#endif
+
+	bool x86_ioapic_has_gsi(uint32 gsi) {
+		#if _MCCA == 0x8664
 		return find_x64_ioapic(gsi) != nullptr;
+		#else
+		return gsi < LegacyIoApicGsiCount;
+		#endif
 	}
 
-	bool x64_resolve_isa_irq(uint8 irq, uint32& gsi, bool& level_triggered, bool& active_low) {
-		// ACPI MADT Interrupt Source Override: ISA source, GSI, and MPS polarity/trigger flags.
+	uint8 x86_isa_irq_to_vector(uint8 irq) {
+		return irq < 8 ? uint8(IRQ_PIT + irq) : uint8(IRQ_RTC + irq - 8);
+	}
+
+	uint8 x86_vector_to_isa_irq(uint8 vector) {
+		if (vector >= IRQ_PIT && vector < IRQ_PIT + 8) return uint8(vector - IRQ_PIT);
+		if (vector >= IRQ_RTC && vector < IRQ_RTC + 8) return uint8(8 + vector - IRQ_RTC);
+		return 0xFFu;
+	}
+
+	bool x86_resolve_isa_irq(uint8 irq, uint32& gsi, bool& level_triggered, bool& active_low) {
 		if (irq >= 16) return false;
 		gsi = irq;
 		level_triggered = false;
 		active_low = false;
+		#if _MCCA == 0x8664
+		// ACPI MADT Interrupt Source Override: ISA source, GSI, and MPS polarity/trigger flags.
 		if (irq != 0) {
 			for0(index, interrupt_source_override_count) {
 				const auto& entry = interrupt_source_overrides[index];
@@ -1248,39 +1279,405 @@ namespace Devs {
 				const uint16 polarity = entry.flags & 3u;
 				const uint16 trigger = (entry.flags >> 2) & 3u;
 				// Match program_isa_irq_routes(): invalid overrides keep the legacy route.
-				if (!(entry.flags & ~uint16(0xFu)) && polarity != 2 && trigger != 2) {
-					gsi = entry.gsi;
-					active_low = polarity == 3;
-					level_triggered = trigger == 3;
+				if ((entry.flags & ~uint16(0xFu)) || polarity == 2 || trigger == 2) {
+					ACPI_DEVMAN_ERROR("[ACPI] ISA IRQ%u has invalid override flags=%[16H]; keeping legacy route",
+						(unsigned)irq, entry.flags);
+					break;
 				}
+				gsi = entry.gsi;
+				active_low = polarity == 3;
+				level_triggered = trigger == 3;
 				break;
 			}
 		}
-		return x64_ioapic_has_gsi(gsi);
+		#endif
+		return x86_ioapic_has_gsi(gsi);
 	}
 
-	bool x64_ioapic_read_route(uint32 gsi, uint64& route) {
-		auto* ioapic = find_x64_ioapic(gsi);
+	static bool x86_ioapic_route_register(uint32 gsi, uint32& address, uint8& index) {
+		#if _MCCA == 0x8664
+		const auto* ioapic = find_x64_ioapic(gsi);
 		if (!ioapic) return false;
+		address = ioapic->address;
 		const uint32 pin = gsi - ioapic->gsi_base;
-		const uint8 index = uint8(0x10u + pin * 2u);
-		route = uint64(read_x64_ioapic_register(ioapic->address, uint8(index + 1u))) << 32;
-		route |= read_x64_ioapic_register(ioapic->address, index);
+		#else
+		if (gsi >= LegacyIoApicGsiCount) return false;
+		address = LegacyIoApicAddress;
+		const uint32 pin = gsi;
+		#endif
+		index = uint8(0x10u + pin * 2u);
 		return true;
 	}
 
-	bool x64_ioapic_write_route(uint32 gsi, uint64 route) {
-		auto* ioapic = find_x64_ioapic(gsi);
-		if (!ioapic) return false;
-		const uint32 pin = gsi - ioapic->gsi_base;
-		const uint8 index = uint8(0x10u + pin * 2u);
-		write_x64_ioapic_register(ioapic->address, index,
-			uint32(route) | uint32(1u << 16));
-		write_x64_ioapic_register(ioapic->address, uint8(index + 1u), uint32(route >> 32));
-		write_x64_ioapic_register(ioapic->address, index, uint32(route));
+	static bool x86_ioapic_read_route_locked(uint32 gsi, uint64& route) {
+		uint32 address;
+		uint8 index;
+		if (!x86_ioapic_route_register(gsi, address, index)) return false;
+		route = uint64(read_x86_ioapic_register_locked(address, uint8(index + 1u))) << 32;
+		route |= read_x86_ioapic_register_locked(address, index);
 		return true;
 	}
 
+	static bool x86_ioapic_write_route_locked(uint32 gsi, uint64 route) {
+		uint32 address;
+		uint8 index;
+		if (!x86_ioapic_route_register(gsi, address, index)) return false;
+		write_x86_ioapic_register_locked(address, index, uint32(route) | uint32(1u << 16));
+		write_x86_ioapic_register_locked(address, uint8(index + 1u), uint32(route >> 32));
+		write_x86_ioapic_register_locked(address, index, uint32(route));
+		return true;
+	}
+
+	static constexpr uint64 IoApicRouteFields =
+		uint64(0xFFu | (1u << 13) | (1u << 15) | (1u << 16)) | (uint64(0xFFu) << 56);
+
+	static X86IoApicRoute x86_ioapic_decode_route(uint32 gsi, uint64 entry) {
+		return {gsi, uint32(entry >> 56), uint8(entry),
+			(entry & (uint64(1) << 13)) != 0, (entry & (uint64(1) << 15)) != 0,
+			(entry & (uint64(1) << 16)) != 0};
+	}
+
+	uint64 x86_ioapic_encode_compatible_route(const X86IoApicRoute& route, uint64 previous_entry,
+		bool fixed_physical) {
+		// Intel 82093AA I/O APIC, section 3.2.4: vector, polarity, trigger, mask and destination fields.
+		uint64 entry = (previous_entry & ~IoApicRouteFields) | route.vector | (uint64(uint8(route.destination)) << 56);
+		if (fixed_physical) entry &= ~uint64(0xF00u);
+		if (route.active_low) entry |= uint64(1) << 13;
+		if (route.level_triggered) entry |= uint64(1) << 15;
+		if (route.masked) entry |= uint64(1) << 16;
+		return entry;
+	}
+
+	static bool x86_ioapic_set_mask_locked(uint32 gsi, bool masked) {
+		uint32 address;
+		uint8 index;
+		if (!x86_ioapic_route_register(gsi, address, index)) return false;
+		// Intel 82093AA I/O APIC, section 3.2.4: the interrupt mask is in the low DWORD.
+		const uint32 mask_bit = 1u << 16;
+		const uint32 low = read_x86_ioapic_register_locked(address, index);
+		const uint32 value = masked ? low | mask_bit : low & ~mask_bit;
+		if (value != low) write_x86_ioapic_register_locked(address, index, value);
+		return true;
+	}
+
+	constexpr stduint IoApicAcpiRouteCapacity = 16;
+	// Reserve space for startup ISA routes, distinct ACPI GSIs and all Ring1 IRQ bindings.
+	constexpr stduint IoApicRouteCapacity = 16 + IoApicAcpiRouteCapacity + 32;
+	constexpr uint64 IoApicFixedRouteFields = IoApicRouteFields | 0xF00u;
+	struct IoApicRouteState {
+		X86IoApicRoute route;
+		uint64 original_entry;
+		X86IoApicOwner owner;
+		uint16 references;
+		uint16 draining;
+		bool boot_route;
+		#if _MCCA == 0x8664
+		uint16 irte;
+		uint16 original_irte;
+		X86IoApicRoute original_route;
+		bool release_pending;
+		#endif
+	};
+	static IoApicRouteState ioapic_routes[IoApicRouteCapacity]{};
+
+	#if _MCCA == 0x8664
+	static bool ioapic_remapping = false;
+	static constexpr uint64 IoApicRemoteIrr = uint64(1) << 14;
+	static constexpr uint64 IoApicDeliveryPending = uint64(1) << 12;
+	static constexpr uint64 IoApicRemappedRouteFields = IoApicFixedRouteFields | (uint64(0xFF) << 48);
+
+	static bool prepare_ioapic_remapping() {
+		if (!ioapic_topology_count || !ioapic_topology_complete) return false;
+		for0(index, ioapic_topology_count) {
+			auto& chip = ioapic_topology[index];
+			{
+				SpinlockLocal guard(x86_ioapic_route_lock());
+				chip.version = uint8(read_x86_ioapic_register_locked(chip.address, 1));
+			}
+			if (chip.version < 0x20 || !Iova::IoApicInterruptSource(chip.id, chip.source)) {
+				plogtrac("[DEVIRQ] I/O APIC id=%u version=%02X lacks a usable remapping route",
+					(unsigned)chip.id, (unsigned)chip.version);
+				return false;
+			}
+		}
+		return true;
+	}
+
+	static bool encode_remapped_ioapic_route(const X86IoApicRoute& route, uint16& handle, uint64& entry) {
+		const auto* chip = find_x64_ioapic(route.gsi);
+		if (!chip || route.destination == CORE_ID_INVALID ||
+			!Iova::AllocateIoApicInterruptLocked(chip->source, route.destination, route.vector, handle))
+			return false;
+		// Intel VT-d: the remappable RTE contains the index and uses the pin as virtual vector.
+		const uint16 index = handle - 1u;
+		entry = uint64(route.gsi - chip->gsi_base) | (uint64(1) << 48) |
+			(uint64(index & 0x7FFFu) << 49) | (uint64(index & 0x8000u) >> 4);
+		if (route.active_low) entry |= uint64(1) << 13;
+		if (route.level_triggered) entry |= uint64(1) << 15;
+		if (route.masked) entry |= uint64(1) << 16;
+		return true;
+	}
+	#endif
+
+	static IoApicRouteState* find_ioapic_route_locked(uint32 gsi) {
+		for (auto& state : ioapic_routes) {
+			if ((state.boot_route || state.owner != X86IoApicOwner::None) && state.route.gsi == gsi) return &state;
+		}
+		return nullptr;
+	}
+
+	static IoApicRouteState* free_ioapic_route_locked() {
+		for (auto& state : ioapic_routes) {
+			if (!state.boot_route && state.owner == X86IoApicOwner::None) return &state;
+		}
+		return nullptr;
+	}
+
+	static bool program_ioapic_boot_route_locked(const X86IoApicRoute& route) {
+		auto* state = find_ioapic_route_locked(route.gsi);
+		if (!state) state = free_ioapic_route_locked();
+		if (!state || state->owner != X86IoApicOwner::None) return false;
+		uint64 entry = x86_ioapic_encode_compatible_route(route, 0, true);
+		#if _MCCA == 0x8664
+		uint16 handle = 0;
+		if (ioapic_remapping) {
+			auto masked_route = route;
+			masked_route.masked = true;
+			if (!encode_remapped_ioapic_route(masked_route, handle, entry)) return false;
+		}
+		#endif
+		if (!x86_ioapic_write_route_locked(route.gsi, entry)) {
+			#if _MCCA == 0x8664
+			Iova::ReleaseInterruptLocked(handle);
+			#endif
+			return false;
+		}
+		#if _MCCA == 0x8664
+		if (handle) {
+			uint64 readback;
+			if (!x86_ioapic_read_route_locked(route.gsi, readback) ||
+				((readback ^ entry) & IoApicRemappedRouteFields)) {
+				x86_ioapic_write_route_locked(route.gsi, uint64(1) << 16);
+				Iova::ReleaseInterruptLocked(handle);
+				return false;
+			}
+		}
+		Iova::ReleaseInterruptLocked(state->irte);
+		state->irte = handle;
+		#endif
+		state->route = route;
+		state->boot_route = true;
+		return true;
+	}
+
+	bool x86_ioapic_routes_shareable(const X86IoApicRoute& existing, const X86IoApicRoute& requested) {
+		return existing.shareable && requested.shareable && existing.gsi == requested.gsi &&
+			existing.active_low == requested.active_low && existing.level_triggered == requested.level_triggered;
+	}
+
+	X86IoApicStatus x86_ioapic_acquire_route_locked(X86IoApicOwner owner, X86IoApicRoute& route,
+		bool pci_intx, uint64& entry) {
+		if (owner == X86IoApicOwner::None) return X86IoApicStatus::Unavailable;
+		auto* state = find_ioapic_route_locked(route.gsi);
+		const bool owned = state && state->owner != X86IoApicOwner::None;
+		if (owned && (state->owner != owner || !state->references)) return X86IoApicStatus::Conflict;
+		uint64 previous;
+		if (!x86_ioapic_read_route_locked(route.gsi, previous)) return X86IoApicStatus::Unavailable;
+		auto previous_route = x86_ioapic_decode_route(route.gsi, previous);
+		#if _MCCA == 0x8664
+		if (state && state->irte) previous_route = state->route;
+		#endif
+		const bool acpi = owner == X86IoApicOwner::Acpi;
+		if (!acpi) {
+			#if _MCCA == 0x8664
+			if (pci_intx && previous_route.level_triggered) {
+				route.level_triggered = true;
+				route.active_low = previous_route.active_low;
+			}
+			#else
+			(void)pci_intx;
+			#endif
+			if (route.destination == CORE_ID_INVALID) {
+				route.destination = previous_route.destination;
+				#if _MCCA == 0x8664
+				if (ioapic_remapping && (!state || !state->irte)) route.destination = acpi_cpu_lapic_ids[0];
+				#endif
+			}
+		}
+		if (owned) {
+			if (!x86_ioapic_routes_shareable(state->route, route)) return X86IoApicStatus::Conflict;
+			route.vector = state->route.vector;
+			if (acpi
+				#if _MCCA == 0x8664
+				|| ioapic_remapping
+				#endif
+			) {
+				route = state->route;
+				entry = previous;
+				++state->references;
+				return X86IoApicStatus::Success;
+			}
+		}
+		else if (acpi) {
+			stduint count = 0;
+			for (const auto& slot : ioapic_routes) if (slot.owner == owner) ++count;
+			if (count >= IoApicAcpiRouteCapacity) return X86IoApicStatus::Capacity;
+		}
+		if (!state) state = free_ioapic_route_locked();
+		if (!state) return X86IoApicStatus::Capacity;
+		route.masked = true;
+		entry = x86_ioapic_encode_compatible_route(route, previous, acpi);
+		uint64 fields = IoApicFixedRouteFields;
+		bool verify = acpi;
+		bool masked_for_remapping = false;
+		#if _MCCA == 0x8664
+		uint16 handle = 0;
+		if (ioapic_remapping) {
+			masked_for_remapping = x86_ioapic_set_mask_locked(route.gsi, true);
+			uint64 current;
+			if (!masked_for_remapping || !x86_ioapic_read_route_locked(route.gsi, current) ||
+				(current & (IoApicRemoteIrr | IoApicDeliveryPending))) {
+				(void)x86_ioapic_set_mask_locked(route.gsi, previous_route.masked);
+				return X86IoApicStatus::Conflict;
+			}
+			if (!encode_remapped_ioapic_route(route, handle, entry)) {
+				(void)x86_ioapic_set_mask_locked(route.gsi, previous_route.masked);
+				return X86IoApicStatus::RouteFailure;
+			}
+			fields = IoApicRemappedRouteFields;
+			verify = true;
+		}
+		else
+		#endif
+		if (route.destination > 0xFFu) return X86IoApicStatus::Unavailable;
+		if (!masked_for_remapping) (void)x86_ioapic_set_mask_locked(route.gsi, true);
+		uint64 readback;
+		if (!x86_ioapic_write_route_locked(route.gsi, entry) ||
+			(verify && (!x86_ioapic_read_route_locked(route.gsi, readback) ||
+			((readback ^ entry) & fields)))) {
+			(void)x86_ioapic_write_route_locked(route.gsi, previous);
+			#if _MCCA == 0x8664
+			if (handle && x86_ioapic_read_route_locked(route.gsi, readback) &&
+				!((readback ^ previous) & IoApicRemappedRouteFields))
+				Iova::ReleaseInterruptLocked(handle);
+			#endif
+			return X86IoApicStatus::RouteFailure;
+		}
+		#if _MCCA == 0x8664
+		if (handle) {
+			state->original_entry = previous;
+			state->original_route = previous_route;
+			state->original_irte = state->irte;
+			state->irte = handle;
+		}
+		#endif
+		if (!owned && acpi) state->original_entry = previous;
+		state->owner = owner;
+		state->route = route;
+		++state->references;
+		return X86IoApicStatus::Success;
+	}
+
+	bool x86_ioapic_set_owned_mask_locked(X86IoApicOwner owner, uint32 gsi, bool masked) {
+		auto* state = find_ioapic_route_locked(gsi);
+		if (!state || state->owner != owner || !state->references ||
+			!x86_ioapic_set_mask_locked(gsi, masked)) return false;
+		if (owner == X86IoApicOwner::Acpi) {
+			auto route = state->route;
+			route.masked = masked;
+			const uint64 expected = x86_ioapic_encode_compatible_route(route, 0, true);
+			uint64 readback;
+			#if _MCCA == 0x8664
+			if (state->irte) {
+				if (!x86_ioapic_read_route_locked(gsi, readback) ||
+					bool(readback & (uint64(1) << 16)) != masked) return false;
+			}
+			else
+			#endif
+			if (!x86_ioapic_read_route_locked(gsi, readback) ||
+				((readback ^ expected) & IoApicFixedRouteFields)) return false;
+		}
+		state->route.masked = masked;
+		return true;
+	}
+
+	#if _MCCA == 0x8664
+	static void finish_remapped_route_locked(IoApicRouteState& state) {
+		const uint32 gsi = state.route.gsi;
+		uint64 entry;
+		state.release_pending = true;
+		if (!x86_ioapic_read_route_locked(gsi, entry) ||
+			(entry & (IoApicRemoteIrr | IoApicDeliveryPending))) return;
+		const bool ring1 = state.owner == X86IoApicOwner::Ring1;
+		const uint64 restore = state.original_entry | (ring1 ? uint64(1) << 16 : 0);
+		if (!x86_ioapic_write_route_locked(gsi, restore)) return;
+		uint64 readback;
+		if (!x86_ioapic_read_route_locked(gsi, readback) ||
+			((readback ^ restore) & IoApicRemappedRouteFields)) return;
+		Iova::ReleaseInterruptLocked(state.irte);
+		state.irte = state.original_irte;
+		state.original_irte = 0;
+		state.route = state.original_route;
+		state.route.masked |= ring1;
+		state.owner = X86IoApicOwner::None;
+		state.release_pending = false;
+	}
+
+	void x64_complete_ioapic_interrupt(uint8 vector) {
+		if (!ioapic_remapping) return;
+		SpinlockLocal guard(x86_ioapic_route_lock());
+		uint32 destination = CORE_ID_INVALID;
+		for (auto& state : ioapic_routes) {
+			const auto& route = state.route;
+			if (!state.irte || route.vector != vector || (!route.level_triggered && !state.release_pending)) continue;
+			if (destination == CORE_ID_INVALID) destination = GetCurrentLapicId();
+			if (route.destination != destination) continue;
+			if (route.level_triggered) {
+				uint64 entry;
+				const auto* chip = find_x64_ioapic(route.gsi);
+				if (chip && x86_ioapic_read_route_locked(route.gsi, entry) && (entry & IoApicRemoteIrr)) {
+					// Intel I/O APIC EOI register uses the RTE virtual vector (the local pin).
+					*reinterpret_cast<volatile uint32*>(stduint(chip->address) + 0x40u) = route.gsi - chip->gsi_base;
+					mfence();
+				}
+			}
+			if (state.release_pending) finish_remapped_route_locked(state);
+		}
+	}
+	#endif
+
+	void x86_ioapic_release_route_locked(X86IoApicOwner owner, uint32 gsi) {
+		auto* state = find_ioapic_route_locked(gsi);
+		if (!state || state->owner != owner || !state->references) return;
+		if (owner == X86IoApicOwner::Acpi) ++state->draining;
+		if (--state->references) return;
+		(void)x86_ioapic_set_mask_locked(gsi, true);
+		state->route.masked = true;
+		#if _MCCA == 0x8664
+		if (owner == X86IoApicOwner::Ring1 && state->irte) {
+			finish_remapped_route_locked(*state);
+			return;
+		}
+		#endif
+		if (owner == X86IoApicOwner::Ring1) state->owner = X86IoApicOwner::None;
+	}
+
+	void x86_ioapic_finish_acpi_release_locked(uint32 gsi) {
+		auto* state = find_ioapic_route_locked(gsi);
+		if (!state || state->owner != X86IoApicOwner::Acpi || !state->draining) return;
+		if (--state->draining || state->references) return;
+		#if _MCCA == 0x8664
+		if (state->irte) {
+			finish_remapped_route_locked(*state);
+			return;
+		}
+		#endif
+		(void)x86_ioapic_write_route_locked(gsi, state->original_entry);
+		state->route = x86_ioapic_decode_route(gsi, state->original_entry);
+		state->owner = X86IoApicOwner::None;
+	}
+
+	#if _MCCA == 0x8664
 	const uni::ACPI::FADT* find_x64_fadt() {
 		constexpr uint32 MinimumFadtLength =
 			offsetof(uni::ACPI::FADT, dsdt) + sizeof(uint32);
@@ -2353,15 +2750,21 @@ namespace Devs {
 			madt->header.isValid("APIC");
 		const stduint begin = valid_madt ? acpi_madt_addr + sizeof(*madt) : 0;
 		const stduint end = valid_madt ? acpi_madt_addr + madt->header.length : 0;
-		for (stduint address = begin; valid_madt && end >= begin &&
-			address + sizeof(uni::ACPI::MADTEntry) <= end;) {
+		ioapic_topology_complete = valid_madt && end >= begin;
+		stduint address = begin;
+		while (valid_madt && end >= begin && end - address >= sizeof(uni::ACPI::MADTEntry)) {
 			const auto* entry = reinterpret_cast<const uni::ACPI::MADTEntry*>(address);
 			if (entry->length < sizeof(*entry) || entry->length > end - address) break;
-			if (entry->type == uni::ACPI::MADTTypeIOAPIC &&
-				entry->length >= sizeof(uni::ACPI::MADTIOAPIC)) {
+			if (entry->type == uni::ACPI::MADTTypeIOAPIC) {
+				if (entry->length < sizeof(uni::ACPI::MADTIOAPIC)) {
+					ioapic_topology_complete = false;
+					address += entry->length;
+					continue;
+				}
 				const auto* ioapic = reinterpret_cast<const uni::ACPI::MADTIOAPIC*>(entry);
 				if (!append_x64_ioapic(ioapic->ioapic_address,
 					ioapic->global_system_interrupt_base, ioapic->ioapic_id)) {
+					ioapic_topology_complete = false;
 					ACPI_DEVMAN_ERROR("[ACPI] Ignoring invalid or overlapping I/O APIC id=%u MMIO=%[32H] GSI-base=%u",
 						ioapic->ioapic_id, ioapic->ioapic_address,
 						ioapic->global_system_interrupt_base);
@@ -2384,12 +2787,14 @@ namespace Devs {
 			}
 			address += entry->length;
 		}
+		if (address != end) ioapic_topology_complete = false;
 		if (!ioapic_topology_count) {
-			const uint32 id_register = read_x64_ioapic_register(0xFEC00000u, 0);
+			ioapic_topology_complete = false;
+			const uint32 id_register = read_x86_ioapic_register_locked(LegacyIoApicAddress, 0);
 			const uint8 id = uint8(id_register >> 24);
-			if (!append_x64_ioapic(0xFEC00000u, 0, id)) {
+			if (!append_x64_ioapic(LegacyIoApicAddress, 0, id)) {
 				ioapic_topology[ioapic_topology_count++] = {
-					0xFEC00000u, 0, 24, id };
+					LegacyIoApicAddress, 0, 24, id };
 				#if CONFIG_ACPI_BOOT_TEST
 				plogwarn("[ACPI] Using legacy 24-pin I/O APIC fallback");
 				#endif
@@ -2398,85 +2803,61 @@ namespace Devs {
 	}
 	#endif
 
-	void program_isa_irq_routes() {
+	bool program_isa_irq_routes() {
 		uint16_t enabled_irq_mask = 0xFFFF;
-		bool mirror_irq0_to_pin2 = true;
 		#if _MCCA == 0x8664
-		if (!acpi_cpu_count || acpi_cpu_lapic_ids[0] >= 0xFFu) {
+		if (!acpi_cpu_count || (!ioapic_remapping && acpi_cpu_lapic_ids[0] >= 0xFFu)) {
 			plogerro("[APIC] BSP LAPIC ID=%u cannot be encoded without interrupt remapping",
 				acpi_cpu_count ? acpi_cpu_lapic_ids[0] : ~uint32(0));
-			return;
+			return false;
 		}
-		const uint8 bsp_lapic_id = uint8(acpi_cpu_lapic_ids[0]);
+		const uint32 bsp_lapic_id = acpi_cpu_lapic_ids[0];
 		// x64 UEFI can open the ISA IRQ set, but mirroring IRQ0 onto pin2
 		// currently triggers the legacy cascade path bug.
-		mirror_irq0_to_pin2 = false;
 		#endif
 		#if _MCCA == 0x8664
 		for0(index, ioapic_topology_count) {
 			const auto& ioapic = ioapic_topology[index];
 			for0(pin, ioapic.gsi_count) {
-				x64_ioapic_write_route(ioapic.gsi_base + uint32(pin), 0x10000);
+				x86_ioapic_write_route_locked(ioapic.gsi_base + uint32(pin), 0x10000);
 			}
 		}
 		#else
 		// Reset all 24 IOAPIC pins to masked state first.
-		for (int i = 0; i < 24; i++) {
-			IC.IO_Writ64(0x10 + i * 2, 0x10000); // Bit 16: Masked
+		for (uint32 gsi = 0; gsi < LegacyIoApicGsiCount; ++gsi) {
+			x86_ioapic_write_route_locked(gsi, 0x10000); // Bit 16: Masked
 		}
 		#endif
 		// Then remap ISA IRQs (0-15) to the kernel vectors and clear the mask bit.
 		for (int i = 0; i < 16; i++) {
 			if ((enabled_irq_mask & (1u << i)) == 0) continue;
-			const uint8_t vector = (i < 8) ? (IRQ_PIT + i) : (IRQ_RTC + (i - 8));
-			#if _MCCA == 0x8664
-			uint64_t rte = uint64_t(vector) | uint64_t(bsp_lapic_id) << 56;
+			if (i == 2) continue;
 			// Fixed, Physical, Edge, Active-High, Unmasked
-			uint32 gsi = uint32(i);
-			if (i != 0) {
-				for (stduint j = 0; j < interrupt_source_override_count; ++j) {
-					const auto& override_entry = interrupt_source_overrides[j];
-					if (override_entry.source != i) continue;
-					const uint16 polarity = override_entry.flags & 3u;
-					const uint16 trigger = (override_entry.flags >> 2) & 3u;
-					if ((override_entry.flags & ~uint16(0xFu)) || polarity == 2 || trigger == 2) {
-						ACPI_DEVMAN_ERROR("[ACPI] ISA IRQ%u has invalid override flags=%[16H]; keeping legacy route",
-							(unsigned)i, override_entry.flags);
-						break;
-					}
-					gsi = override_entry.gsi;
-					if (polarity == 3) rte |= uint64_t(1) << 13;
-					if (trigger == 3) rte |= (uint64_t(1) << 15) | (uint64_t(1) << 16);
-					break;
-				}
-			}
-			#else
-			const uint64_t rte = (uint64_t)vector; // Fixed, Physical, Edge, Active-High, Unmasked
+			X86IoApicRoute route{uint32(i), 0, x86_isa_irq_to_vector(uint8(i)), false, false, false};
+			#if _MCCA == 0x8664
+			route.destination = bsp_lapic_id;
 			#endif
+			const bool available = x86_resolve_isa_irq(uint8(i), route.gsi,
+				route.level_triggered, route.active_low);
+			route.masked = route.level_triggered;
+			if (!available || !program_ioapic_boot_route_locked(route)) {
+				ACPI_DEVMAN_ERROR("[ACPI] ISA IRQ%u GSI%u is outside discovered I/O APIC ranges",
+					(unsigned)i, (unsigned)route.gsi);
+				#if _MCCA == 0x8664
+				if (ioapic_remapping) return false;
+				#endif
+			}
+			#if _MCCA == 0x8632
 			if (i == 0) {
 				// Route PIT to pin 0. Some platforms also mirror it to pin 2 for legacy
 				// compatibility, but x64 UEFI currently keeps pin 2 masked while we
 				// localize the transition-stack/legacy-IRQ entry issue.
-				#if _MCCA == 0x8664
-				x64_ioapic_write_route(0, rte);
-				#else
-				IC.IO_Writ64(0x10 + 0 * 2, rte);
-				#endif
-				if (mirror_irq0_to_pin2) {
-					IC.IO_Writ64(0x10 + 2 * 2, rte);
-				}
+				route.gsi = 2;
+				program_ioapic_boot_route_locked(route);
 			}
-			else if (i != 2) {
-				#if _MCCA == 0x8664
-				if (!x64_ioapic_write_route(gsi, rte)) {
-					ACPI_DEVMAN_ERROR("[ACPI] ISA IRQ%u GSI%u is outside discovered I/O APIC ranges",
-						(unsigned)i, (unsigned)gsi);
-				}
-				#else
-				IC.IO_Writ64(0x10 + i * 2, rte);
-				#endif
-			}
+			#endif
 		}
+		return true;
 	}
 
 
@@ -2664,10 +3045,53 @@ bool Devsman::Initialize() {
 	bool support_x2apic = cpuid_x2apic && hw_x2apic; // only use x2APIC if HW is already in x2APIC mode
 	ploginfo("[DEVSMAN] IC Using: %s (CPUID x2apic=%d HW EXTD=%d)", support_apic ? support_x2apic ?
 		"x2APIC" : "APIC" : "PIC", (int)cpuid_x2apic, (int)hw_x2apic);
-	IC.Initialize(support_apic + support_x2apic);
-	if (support_apic + support_x2apic) {
-		discover_x64_interrupt_topology();
-		program_isa_irq_routes();
+	{
+		SpinlockLocal guard(x86_ioapic_route_lock());
+		IC.Initialize(support_apic + support_x2apic);
+		if (support_apic) discover_x64_interrupt_topology();
+	}
+
+	(void)Iova::EnableVtdPassthrough(PCI_Root());
+	const bool can_remap_ioapic = support_x2apic && prepare_ioapic_remapping();
+	if (can_remap_ioapic) {
+		SpinlockLocal guard(x86_ioapic_route_lock());
+		for0(index, ioapic_topology_count) {
+			const auto& chip = ioapic_topology[index];
+			for0(pin, chip.gsi_count)
+				x86_ioapic_set_mask_locked(chip.gsi_base + uint32(pin), true);
+		}
+	}
+	if (can_remap_ioapic && Iova::PrepareInterruptRemapping(true)) {
+		SpinlockLocal guard(x86_ioapic_route_lock());
+		ioapic_remapping = true;
+		if (program_isa_irq_routes() && Iova::CommitExtendedInterruptMode()) {
+			for (const auto& state : ioapic_routes) {
+				if (state.boot_route && !state.route.masked)
+					x86_ioapic_set_mask_locked(state.route.gsi, false);
+			}
+		}
+		else {
+			for (auto& state : ioapic_routes) {
+				if (state.boot_route)
+					x86_ioapic_write_route_locked(state.route.gsi, uint64(1) << 16);
+				state = {};
+			}
+			ioapic_remapping = false;
+		}
+	}
+	if (!ioapic_remapping) {
+		if (!Iova::DisableInterruptRemapping()) {
+			plogerro("[IOMMU] Cannot restore interrupt-remapping hardware state");
+			return false;
+		}
+		if (!Iova::PrepareInterruptRemapping(false) && !Iova::DisableInterruptRemapping()) {
+			plogerro("[IOMMU] Cannot restore hardware state after compatibility setup failure");
+			return false;
+		}
+		if (support_apic) {
+			SpinlockLocal guard(x86_ioapic_route_lock());
+			if (!program_isa_irq_routes()) return false;
+		}
 	}
 
 	#endif
@@ -2682,7 +3106,10 @@ bool Devsman::Initialize() {
 
 	// IC Init
 	IC.Reset(SegCo32, 0x80000000);
-	IC.Initialize(support_apic + support_x2apic);
+	{
+		SpinlockLocal guard(x86_ioapic_route_lock());
+		IC.Initialize(support_apic + support_x2apic);
+	}
 
 	// APIC
 	if (support_apic + support_x2apic) {
@@ -2702,7 +3129,10 @@ bool Devsman::Initialize() {
 		ploginfo("[DEVSMAN] LAPIC TPR %[x], PPR %[x]", IC.ReadLAPIC(0x80), IC.ReadLAPIC(0xA0));
 		// keep APIC-IO ID
 		//
-		val = IC.IO_Read32(1);// VER
+		{
+			SpinlockLocal guard(x86_ioapic_route_lock());
+			val = read_x86_ioapic_register_locked(LegacyIoApicAddress, 1);// VER
+		}
 		ploginfo("[DEVSMAN] IOAPIC Version:%d, RTEs:%d", val & 0xFF, (val >> 16) + 1);
 		// RCBA (Root Complex Base Address)
 		outpd(0xcf8, 0x8000f8f0);
@@ -2721,7 +3151,10 @@ bool Devsman::Initialize() {
 		} else {
 			ploginfo("[DEVSMAN] RCBA not supported, assuming IOAPIC enabled by BIOS");
 		}
-		program_isa_irq_routes();
+		{
+			SpinlockLocal guard(x86_ioapic_route_lock());
+			program_isa_irq_routes();
+		}
 	}
 
 	register_legacy_x86_platform_nodes(support_apic + support_x2apic);
@@ -2760,7 +3193,9 @@ DeviceNode* Devsman::Root() {
 void Devsman::BindKnownDrivers() {
 	#if (_MCCA & 0xFF00) == 0x8600
 	if (!device_root) return;
+	#if _MCCA == 0x8632
 	Iova::EnableVtdPassthrough(PCI_Root());
+	#endif
 	bind_known_drivers_subtree(device_root);
 	#endif
 }

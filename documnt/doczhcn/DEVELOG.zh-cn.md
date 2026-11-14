@@ -1,5 +1,15 @@
 ## 2026-11-14
 
+- 22:14（UTC+8）恢复 Unisym 共用头文件中 ACCM 的 `errno` 声明，并使 libc 的 `_errno()` 使用相同的 C 链接约定，修复 x86 ACCM 文件和套接字封装的编译错误。
+
+- 21:56（UTC+8）x64 使用 DMAR I/O APIC Scope 为启动 ISA、ACPI GSI 和 Ring1 INTx 建立 IRTE，按物理 pin 完成重映射电平中断。固件已启用 x2APIC 且 VT-d 与 I/O APIC 均满足条件时，在启动驱动前提交 EIME。xHCI、NVMe 和 Ring1 使用重映射 MSI/MSI-X，兼容模式继续支持原有消息格式。
+
+- 21:15（UTC+8）统一 flap32 与 x64 的 I/O APIC 路由管理，登记启动 ISA 路由并集中维护 ACPI GSI 与 Ring1 路由的归属、共享引用和屏蔽状态。ACPI 解绑等待回调退出后恢复原 RTE，Ring1 电平中断继续等候各绑定 ACK，flap32 的 PIC 模式继续使用原有屏蔽路径。
+
+- 20:09（UTC+8）将 I/O APIC 路由锁及 GSI 绑定冲突检查扩展到 32 位 x86，统一 `x86_ioapic_` 路由接口。x86 保留固定基址和 24 路 GSI，x64 继续按 MADT 查找控制器。
+
+- 19:57（UTC+8）x64 I/O APIC 启动配置、ACPI GSI 与 Ring1 共用路由锁，保护 selector/data 窗口及路由更新；同一 GSI 拒绝跨路径重复绑定，屏蔽操作只修改 RTE 低 32 位的 mask 位。
+
 - 15:52（UTC+8）LSI SAS 对已枚举的 SATA 硬盘在分区挂载流程后尝试只读 SAT IDENTIFY DEVICE，报告型号和设备声明的 SMART、LBA48、TRIM 能力；不改变常规读写，不发送 SMART 或 TRIM 命令。
 
 - 15:36（UTC+8）x64 LSI SAS／Parallel 硬盘在 READ CAPACITY(10) 饱和时读取 64 位容量，跨 32 位 LBA 的读写使用 16 字节命令；修正 GPT 高 LBA 分区及备份表读取的位宽限制。保留 BusLogic 和光驱原有命令路径。

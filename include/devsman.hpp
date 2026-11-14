@@ -17,6 +17,7 @@ enum class SysinfoDumpDevsType {
 
 struct DeviceNode;
 struct DeviceEvent;
+struct Spinlock;
 struct UsbMSCRequest;
 namespace uni::device::SpaceUSB { class USBHostDevice; }
 
@@ -591,11 +592,38 @@ namespace Devs {
 		bool (*probe)(DeviceNode*);
 	};
 
-	#if defined(_MCCA) && _MCCA == 0x8664
-	bool x64_resolve_isa_irq(uint8 irq, uint32& gsi, bool& level_triggered, bool& active_low);
-	bool x64_ioapic_has_gsi(uint32 gsi);
-	bool x64_ioapic_read_route(uint32 gsi, uint64& route);
-	bool x64_ioapic_write_route(uint32 gsi, uint64 route);
+	#if defined(_MCCA) && (_MCCA & 0xFF00) == 0x8600
+	struct X86IoApicRoute {
+		uint32 gsi;
+		uint32 destination;
+		uint8 vector;
+		bool active_low;
+		bool level_triggered;
+		bool masked;
+		bool shareable = false;
+	};
+	enum class X86IoApicOwner : uint8 { None, Acpi, Ring1 };
+	enum class X86IoApicStatus : uint8 { Success, Unavailable, Conflict, Capacity, RouteFailure };
+
+	uint8 x86_isa_irq_to_vector(uint8 irq);
+	uint8 x86_vector_to_isa_irq(uint8 vector);
+	bool x86_resolve_isa_irq(uint8 irq, uint32& gsi, bool& level_triggered, bool& active_low);
+	uint64 x86_ioapic_encode_compatible_route(const X86IoApicRoute& route, uint64 previous_entry,
+		bool fixed_physical);
+	bool x86_ioapic_routes_shareable(const X86IoApicRoute& existing, const X86IoApicRoute& requested);
+
+	bool x86_ioapic_has_gsi(uint32 gsi);
+	Spinlock* x86_ioapic_route_lock();
+	// The caller holds x86_ioapic_route_lock() across the entire route operation.
+	X86IoApicStatus x86_ioapic_acquire_route_locked(X86IoApicOwner owner, X86IoApicRoute& route,
+		bool pci_intx, uint64& entry);
+	bool x86_ioapic_set_owned_mask_locked(X86IoApicOwner owner, uint32 gsi, bool masked);
+	void x86_ioapic_release_route_locked(X86IoApicOwner owner, uint32 gsi);
+	// Finish an ACPI release after the binding's callbacks have completed.
+	void x86_ioapic_finish_acpi_release_locked(uint32 gsi);
+	#if _MCCA == 0x8664
+	void x64_complete_ioapic_interrupt(uint8 vector);
+	#endif
 	#endif
 }
 

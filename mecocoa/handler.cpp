@@ -166,6 +166,10 @@ extern "C" void interrupt_dispatcher(HardwareInterruptFrame* frame) {
 		else if (irq_id < 256 && interrupt_handlers[irq_id]) {
 			interrupt_handlers[irq_id]();
 		}
+		#if _MCCA == 0x8664
+		if (irq_id < 256 && Iova::ExtendedInterruptMode())
+			Devs::x64_complete_ioapic_interrupt(uint8(irq_id));
+		#endif
 	}
 
 	// Check for pending signals if returning to user mode (Ring > 0)
