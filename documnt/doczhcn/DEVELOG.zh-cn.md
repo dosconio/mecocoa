@@ -1,4 +1,12 @@
+## 2026-11-14
+
+- 15:52（UTC+8）LSI SAS 对已枚举的 SATA 硬盘在分区挂载流程后尝试只读 SAT IDENTIFY DEVICE，报告型号和设备声明的 SMART、LBA48、TRIM 能力；不改变常规读写，不发送 SMART 或 TRIM 命令。
+
+- 15:36（UTC+8）x64 LSI SAS／Parallel 硬盘在 READ CAPACITY(10) 饱和时读取 64 位容量，跨 32 位 LBA 的读写使用 16 字节命令；修正 GPT 高 LBA 分区及备份表读取的位宽限制。保留 BusLogic 和光驱原有命令路径。
+
 ## 2026-11-13
+
+- 16:36（UTC+8）H7 设备树登记两路 SDMMC、SD 卡及已识别的分区，SDMMC1 引脚由板级配置提供。首个可用 FAT 卷继续挂载到 /mnt/sd0.0。
 
 - 15:00（UTC+8）H7 登记 FMC 控制器、RCC 状态和 SDRAM 子节点，集中配置 SDRAM 地址、容量及保留区；早期初始化失败时不将 SDRAM 加入内存池。
 

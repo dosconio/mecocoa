@@ -82,8 +82,6 @@ CPP_SOURCES := \
 	prehost/prehost.cpp \
 	prehost/stm32h743X-ac7m/main.cpp \
 	prehost/stm32h743X-ac7m/mem.cpp \
-	prehost/stm32h743X-ac7m/_openedv/RGB-LCD.cpp \
-	prehost/stm32h743X-ac7m/_openedv/SDRAM.cpp \
 	devdriv/storage/sdcard.cpp \
 	devdriv/tty/serial.cpp \
 	devdriv/video/video-ltdc.cpp \
@@ -92,6 +90,7 @@ CPP_SOURCES := \
 	devdriv/usb/usb_otg.cpp \
 	devdriv/usb/usb_storage.cpp \
 	devdriv/bus/bus-gpio.cpp \
+	devdriv/mem/fmc-sdram.cpp \
 	depends/desktop.cpp \
 	devdriv/video/video-classic.cpp \
 	prehost/_auxiliary.cpp

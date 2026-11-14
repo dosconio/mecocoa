@@ -199,6 +199,7 @@ namespace {
 	// Common SCSI storage integration: no adapter registers, DMA descriptors or mailbox status codes.
 	struct ScsiController {
 		stduint controller_slot = 0;
+		bool supports_capacity16 = false;
 
 		struct DiskSlot {
 			stduint target = 0;
@@ -219,6 +220,7 @@ namespace {
 		uni::SCSI::ExecuteCommandFn execute = nullptr;
 		bool (*is_available)(void* context) = nullptr;
 		bool (*is_target_present)(void* context, stduint target) = nullptr;
+		bool (*is_sata_target)(void* context, stduint target) = nullptr;
 		stduint target_count = 0;
 		stduint lun_count = 0;
 		byte* sector_buf = nullptr;
@@ -380,24 +382,35 @@ namespace {
 		}
 
 		bool SetupDiskTarget(stduint target, byte lun, const uni::SCSI::ReadCapacity10Reply& cap) {
+			uint64 last_lba = ReadBigEndian32(cap.last_lba);
+			uint32 block_size = ReadBigEndian32(cap.block_size);
+			// SBC: a saturated READ CAPACITY(10) last LBA requires READ CAPACITY(16).
+			if (supports_capacity16 && last_lba == 0xFFFFFFFFull) {
+				uni::SCSI::ReadCapacity16Reply capacity{};
+				uni::SCSI::CommandResult result{};
+				if (!uni::SCSI::ReadCapacity16(execute, context, target, lun, capacity, result) || !result.Succeeded()) {
+					plogwarn("[SCSI] READ CAPACITY(16) t%ul%u failed comp=%[8H] host=%[8H] tgt=%[8H]",
+						(unsigned)target, (unsigned)lun,
+						(unsigned)result.completion, (unsigned)result.host_status, (unsigned)result.target_status);
+					return false;
+				}
+				last_lba = (uint64(ReadBigEndian32(capacity.last_lba)) << 32) | ReadBigEndian32(capacity.last_lba + 4);
+				block_size = ReadBigEndian32(capacity.block_size);
+				// The device-node byte capacity must fit before publishing this disk.
+				if (!block_size || last_lba < 0xFFFFFFFFull || last_lba >= ~uint64(0) / block_size) {
+					plogwarn("[SCSI] READ CAPACITY(16) t%ul%u returned an invalid or unrepresentable capacity",
+						(unsigned)target, (unsigned)lun);
+					return false;
+				}
+			}
 			auto* slot = AcquireDiskSlot(target, lun);
 			if (!slot) {
 				plogwarn("[SCSI] no disk slot for t%u:%u", (unsigned)target, (unsigned)lun);
 				return false;
 			}
-			const uint32 last_lba =
-				(uint32(cap.last_lba[0]) << 24) |
-				(uint32(cap.last_lba[1]) << 16) |
-				(uint32(cap.last_lba[2]) << 8) |
-				uint32(cap.last_lba[3]);
-			const uint32 block_size =
-				(uint32(cap.block_size[0]) << 24) |
-				(uint32(cap.block_size[1]) << 16) |
-				(uint32(cap.block_size[2]) << 8) |
-				uint32(cap.block_size[3]);
 			slot->disk.Bind(target, lun, context, execute);
 			slot->disk.UpdateCapacity(last_lba, block_size);
-			const uint64 block_count = uint64(last_lba) + 1;
+			const uint64 block_count = last_lba + 1;
 			const uint64 total_bytes = block_count * uint64(block_size);
 			ploginfo("[SCSI] t%ul%u capacity blocks=%[64H] block-size=%u bytes=%[64H]",
 				(unsigned)target, (unsigned)lun,
@@ -449,6 +462,25 @@ namespace {
 			return qual == 0x03u || devtype == 0x1Fu;
 		}
 
+		void ProbeSataIdentify(stduint target, byte lun) {
+			if (!is_sata_target || !is_sata_target(context, target)) return;
+			if (!EnsureSectorBuffer(uni::SCSI::AtaIdentifyDataSize)) {
+				plogwarn("[SCSI-SATA] t%ul%u IDENTIFY skipped: no probe buffer", (unsigned)target, (unsigned)lun);
+				return;
+			}
+			uni::SCSI::AtaIdentifyInfo info{};
+			uni::SCSI::CommandResult result{};
+			if (!uni::SCSI::IdentifyAtaDevice(execute, context, target, lun, sector_buf, sector_buf_size, info, result)) {
+				plogwarn("[SCSI-SATA] t%ul%u IDENTIFY unavailable comp=%[8H] host=%[8H] tgt=%[8H]",
+					(unsigned)target, (unsigned)lun,
+					(unsigned)result.completion, (unsigned)result.host_status, (unsigned)result.target_status);
+				return;
+			}
+			ploginfo("[SCSI-SATA] t%ul%u IDENTIFY model=\"%s\" SMART=%u LBA48=%u ATA-TRIM=%u",
+				(unsigned)target, (unsigned)lun, info.model,
+				(unsigned)info.smart, (unsigned)info.lba48, (unsigned)info.trim);
+		}
+
 		void ProbeScsiTarget(stduint target, byte lun) {
 			if (!is_available || !is_available(context)) return;
 			uni::SCSI::InquiryReply inq{};
@@ -463,7 +495,10 @@ namespace {
 				(unsigned)((inq.peripheral >> 5) & 0x07u), vendor, product, revision);
 			uni::SCSI::ReadCapacity10Reply cap{};
 			if (!ProbeReadCapacity(target, lun, cap)) return;
-			if (devtype == 0) (void)SetupDiskTarget(target, lun, cap);
+			if (devtype == 0) {
+				// Optional SAT diagnostics follow normal disk setup and do not determine mount success.
+				if (SetupDiskTarget(target, lun, cap)) ProbeSataIdentify(target, lun);
+			}
 			else if (devtype == 5) (void)SetupCdromTarget(target, lun, cap);
 		}
 
@@ -721,6 +756,15 @@ namespace {
 			return controller->adapter.IsTargetPresent(target);
 		}
 
+		static bool IsSataTarget(void* context, stduint target) {
+			if constexpr (uni::IsSame<Adapter, uni::SCSI::LsiLogicSAS>::value) {
+				auto* controller = static_cast<LsiLogicController*>(context);
+				MutexLocal lock(&controller->command_lock);
+				return controller->adapter.IsSataTarget(target);
+			}
+			return false;
+		}
+
 		bool Bind(DeviceNode* scsi_node) {
 			if (!scsi_node || adapter.IsFaulted() || (node && node != scsi_node)) return false;
 			if (scsi_node->fields.vendor_id != Adapter::VendorId ||
@@ -764,6 +808,9 @@ namespace {
 			storage.is_target_present = IsTargetPresent;
 			storage.target_count = adapter.getTargetCount();
 			storage.lun_count = Adapter::MaxLuns;
+			storage.supports_capacity16 = _MCCA == 0x8664;
+			if constexpr (uni::IsSame<Adapter, uni::SCSI::LsiLogicSAS>::value)
+				storage.is_sata_target = IsSataTarget;
 			storage.ProbeScsiTargets();
 			return adapter.IsReady();
 		}

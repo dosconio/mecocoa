@@ -160,6 +160,21 @@ namespace BoardConfig {
 		};
 	}
 
+	namespace Sdmmc1 {
+		struct PinConfig {
+			const char* Signal;
+			unsigned Port, Pin, AlternateFunction;
+		};
+		constexpr PinConfig Pins[] = {
+			{ "D0", 'C', 8, 12 },
+			{ "D1", 'C', 9, 12 },
+			{ "D2", 'C', 10, 12 },
+			{ "D3", 'C', 11, 12 },
+			{ "CLK", 'C', 12, 12 },
+			{ "CMD", 'D', 2, 12 },
+		};
+	}
+
 	namespace Sdram {
 		constexpr stduint Base = FMC_SDRAM_BANK1_BASE;
 		constexpr stduint Size = 32u * 1024u * 1024u;
@@ -290,6 +305,7 @@ namespace BoardConfig {
 enum class DeviceType {
 	LTDC,
 	FmcSDRAM,
+	Sdmmc1,
 	DeviceCount
 };
 
@@ -307,6 +323,13 @@ inline static bool ConfigDeviceGPIN(DeviceType dev) {
 			backlight.setMode(uni::GPIOMode::OUT_PushPull, uni::GPIOSpeed::Veryhigh);
 			backlight.setPull(true);
 			backlight = BoardConfig::Ltdc::Backlight::ActiveHigh;
+		}
+		return true;
+	case DeviceType::Sdmmc1:
+		for (const auto& pin : BoardConfig::Sdmmc1::Pins) {
+			const auto& gpio = uni::GPIO[pin.Port][pin.Pin];
+			gpio.setMode(uni::GPIOMode::OUT_AF_PushPull, uni::GPIOSpeed::High);
+			if (!gpio._set_alternate((byte)pin.AlternateFunction)) return false;
 		}
 		return true;
 	case DeviceType::FmcSDRAM:
