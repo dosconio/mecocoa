@@ -12,14 +12,15 @@
 
 namespace {
 	uni::PCI pci;
+	#if _MCCA == 0x8632
 	static constexpr uint8 IRQ_AHCI = IRQ_RTC + 2;
+	InterruptBinding ahci_fixed_interrupt;
+	#endif
 	static constexpr stduint InvalidAhciUnit = ~stduint(0);
 	// AHCI 1.3.1, sections 3.1.1 and 4.2.3.3: CAP.S64A and the PRD's 22-bit DBC field.
 	static constexpr uint32 AhciCapS64A = 1u << 31;
 	static constexpr stduint AhciPrdtMaxBytes = 1u << 22;
-	#if _MCCA == 0x8664
 	static constexpr uint16 AhciPciCommandInterruptDisable = 1u << 10;
-	#endif
 	bool ahci_irq_wait(uni::AHCI_Port_Base* port_base, uint32 slot_mask);
 
 	Devs::StorageDmaRequirements AhciDmaRequirements(volatile AHCI_MEM* abar) {
@@ -121,6 +122,9 @@ namespace {
 		// The IRQ and polling CPU must not race while acknowledging or retiring a port's saved error status.
 		Spinlock completion_lock;
 		Devs::StorageWaitContext completion_wait;
+		#if _MCCA == 0x8632
+		InterruptBinding interrupt;
+		#endif
 
 		bool Bind(DeviceNode* ahci_node) {
 			if (!ahci_node) return false;
@@ -209,10 +213,12 @@ namespace {
 			if (global_status) abar->is = global_status;
 		}
 
-		#if _MCCA == 0x8664
 		void PrepareInterruptMode() {
 			if (!node || !abar) return;
 			DisableControllerInterrupts();
+			#if _MCCA == 0x8632
+			if (!Iova::ExtendedInterruptMode()) return;
+			#endif
 
 			const uint32 command_status = uni::PCI::read_config_register(
 				node->fields.pci_segment, node->fields.pci_bus,
@@ -224,13 +230,14 @@ namespace {
 				node->fields.pci_bus, node->fields.pci_device,
 				node->fields.pci_function, 0x04, command);
 		}
-		#endif
 
 		bool UsesInterruptCompletion() const {
 			#if _MCCA == 0x8664
 			return false;
 			#else
-			return irq_line == 10;
+			if (Iova::ExtendedInterruptMode()) return false;
+			if (Devs::x86_ioapic_uses_madt()) return bool(interrupt);
+			return irq_line == 10 && bool(ahci_fixed_interrupt);
 			#endif
 		}
 
@@ -538,30 +545,42 @@ namespace {
 		return true;
 	}
 
+	bool DispatchAhciInterrupt(void* context) {
+		auto& controller = *static_cast<AHCI_Controller*>(context);
+		{
+			SpinlockLocal guard(&controller.completion_lock);
+			controller.irq_global_is = controller.abar->is;
+			if (!controller.irq_global_is) return false;
+			for0(port_index, 32) {
+				if (((controller.irq_global_is >> port_index) & 1u) == 0) continue;
+				auto& port = controller.abar->ports[port_index];
+				const uint32 port_status = port.is;
+				if (int(port_index) == controller.active_port) controller.disk_irq_status |= port_status;
+				if (int(port_index) == controller.active_atapi_port) controller.cdrom_irq_status |= port_status;
+				if (port_status) port.is = port_status;
+			}
+			controller.abar->is = controller.irq_global_is;
+		}
+		Devs::NotifyStorageWait(controller.completion_wait);
+		return true;
+	}
+
+	#if _MCCA == 0x8632
+	static void BindAhciGSI(AHCI_Controller& controller) {
+		if (Iova::ExtendedInterruptMode() || !Devs::x86_ioapic_uses_madt() ||
+			(controller.active_port < 0 && controller.active_atapi_port < 0)) return;
+		controller.interrupt = Devsman::EnableInterrupt(
+			InterruptSource::PciIntx(controller.node), DispatchAhciInterrupt, &controller);
+	}
+
 	void Handint_AHCI() {
 		for (auto& owner : ahci_controllers) {
-			if (!owner || !owner->abar || !owner->UsesInterruptCompletion()) continue;
-			AHCI_Controller& controller = *owner;
-			{
-				SpinlockLocal guard(&controller.completion_lock);
-				controller.irq_global_is = controller.abar->is;
-				if (!controller.irq_global_is) continue;
-				for0(port_index, 32) {
-					if (((controller.irq_global_is >> port_index) & 1u) == 0) continue;
-					auto& port = controller.abar->ports[port_index];
-					const uint32 port_status = port.is;
-					if (int(port_index) == controller.active_port) controller.disk_irq_status |= port_status;
-					if (int(port_index) == controller.active_atapi_port) controller.cdrom_irq_status |= port_status;
-					if (port_status) port.is = port_status;
-				}
-				controller.abar->is = controller.irq_global_is;
-			}
-			Devs::NotifyStorageWait(controller.completion_wait);
+			if (!owner || !owner->abar || !owner->UsesInterruptCompletion() || owner->interrupt) continue;
+			(void)DispatchAhciInterrupt(owner.get());
 		}
 		IC.SendEOI(IRQ_AHCI);
 	}
-
-	_ESYM_C void Handint_AHCI_Entry();
+	#endif
 
 	static uni::PCI::Device make_pci_device(const DeviceNode& node) {
 		uni::PCI::Device dev{};
@@ -618,15 +637,14 @@ static bool start_ahci_driver(DeviceNode* ahci_node) {
 		controller->abar->pi,
 		controller->active_port,
 		controller->active_atapi_port);
-	#if _MCCA == 0x8664
 	controller->PrepareInterruptMode();
-	#else
-	controller->DisableControllerInterrupts();
-	#endif
 	const bool interrupts_enabled = IC.TryMaskInterrupt();
 	const bool retained = ahci_controllers.Append(owner);
 	if (interrupts_enabled) IC.enInterrupt(true);
 	if (!retained) return false;
+	#if _MCCA == 0x8632
+	BindAhciGSI(*controller);
+	#endif
 	if (controller->active_port >= 0) {
 		controller->SetupDisk();
 		controller->RegisterStorageNode();
@@ -674,12 +692,10 @@ void R_AHCI_INIT() {
 	if (!PCI_Init(pci)) {
 		plogwarn("[AHCI] No devices on PCI or PCI init failed.");
 	}
-	#if _MCCA == 0x8664
-	IC[IRQ_AHCI].setModeRupt(mglb(Handint_AHCI_Entry), SegCo64);
-	#else
-	IC[IRQ_AHCI].setRange(mglb(Handint_AHCI_Entry), SegCo32);
+	#if _MCCA == 0x8632
+	if (!Devs::x86_ioapic_uses_madt() && !Iova::ExtendedInterruptMode())
+		ahci_fixed_interrupt = Devsman::EnableInterrupt(InterruptSource::Fixed(IRQ_AHCI), Handint_AHCI);
 	#endif
-	register_interrupt_handler(IRQ_AHCI, Handint_AHCI);
 	Devsman::RegisterDriverStarter("ahci", start_ahci_driver);
 	Devsman::StartKnownDrivers();
 }

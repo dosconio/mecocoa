@@ -11,6 +11,11 @@
 #include <cpp/Device/Cache>
 #include <c/format/filesys/FAT.h>
 
+void Check(bool(*func)()) {
+	if (func()) return;
+	// IC.enInterrupt(false);
+	loop HALT();
+}
 
 extern uint32 _start_eax, _start_ebx;
 bool R_COM1_ENTO();
@@ -24,7 +29,7 @@ _sign_entry() {
 	Filesys::Initialize();
 	Systime::Initialize();
 	Taskman::Initialize();
-	Devsman::Initialize();
+	Check(Devsman::Initialize);
 	Syscall::Initialize();
 	Coreman::Initialize();// Multicore:
 	Virtman::Initialize();

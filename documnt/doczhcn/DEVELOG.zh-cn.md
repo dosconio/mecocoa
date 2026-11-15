@@ -1,3 +1,17 @@
+## 2026-11-15
+
+- 15:59（UTC+8）flap32 和 uefi64 共用 Devsman 固定中断绑定与释放，PS/2 键鼠和串口使用同一接口。内核按目标架构安装 IDT 门，固定路由在驱动绑定前保持屏蔽。
+
+- 15:40（UTC+8）flap32 的 PIT、RTC 和 PS/2 初始化沿用 Unisym 的现有入口。Devsman 先安装并启用固定中断路由，再在本核中断关闭的情况下初始化设备，APIC 模式随后恢复 8259 的屏蔽状态。
+
+- 14:48（UTC+8）flap32 的兼容 I/O APIC 模式按 MADT 选择控制器和 GSI，并应用 ISA IRQ Override。PIT 使用 MADT 指定的单条边沿路由，拓扑不可用时沿用固定 24 路及 PIT 双引脚兼容配置。Ring1 ISA 与内核 GSI 绑定共用解析结果，固定 ISA 驱动在就绪后开启电平路由。AHCI 使用 PCI INTx 资源绑定 GSI，绑定失败时轮询。
+
+- 13:13（UTC+8）x86／x64 在启动时按 PCI、xHCI、I/O APIC 和 Ring1 中断预算选择 VT-d IRTE 容量，按二次幂分配 256 至 32768 项。硬件表由 `UniquePtr` 管理，空闲项复用 `Bitmap`，运行期间表地址保持固定，缓存失效确认后才回收表项。
+
+- 12:28（UTC+8）补全 ACCM 正常退出生命周期：实现 `atexit`、`__cxa_atexit` 和 `__cxa_finalize` 的不限量逆序回调登记，x86 CRT 在 `main` 返回后经 `exit` 执行已登记析构，再由 `_exit` 终止进程；移除签名错误的空 `atexit` 实现。
+
+- 11:45（UTC+8）flap32 和 uefi64 共用 BSP 的 x2APIC/EIME 启动决策，先安装并提交带屏蔽的 VT-d 路由，再切换 LAPIC。准备失败时恢复兼容路由。flap32 AP 上线前确认本核已采用 BSP 模式，xHCI、NVMe、Ring1 和 ACPI GSI 共用重映射路径。旧 I/O APIC 支持在屏蔽下切换触发模式完成 EOI，flap32 AHCI 在 EIME 下使用轮询。
+
 ## 2026-11-14
 
 - 22:14（UTC+8）恢复 Unisym 共用头文件中 ACCM 的 `errno` 声明，并使 libc 的 `_errno()` 使用相同的 C 链接约定，修复 x86 ACCM 文件和套接字封装的编译错误。

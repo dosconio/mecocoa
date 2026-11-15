@@ -8,7 +8,7 @@
 ;%include "mecocoa/kernel.inc"
 
 GLOBAL _start
-EXTERN main, _exit
+EXTERN main, exit
 EXTERN _preprocess, _init_environ
 
 section .text
@@ -30,7 +30,7 @@ _start:
 	call	main		; Call main(argc, argv, envp)
 	add	esp, 16			; Clean up arguments and padding
 	push	eax			; Push return value for exit
-	call	_exit		; Call exit(status)
+	call	exit		; Run registered callbacks, then terminate
 mov byte[0], 0
 
 section .note.GNU-stack noalloc noexec nowrite progbits

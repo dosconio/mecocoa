@@ -28,13 +28,7 @@ RMOD_LIST RMOD_LIST_KBD{
 #endif
 
 void R_KBD_INIT() {
-	#if _MCCA == 0x8664
-	IC[IRQ_Keyboard].setModeRupt(mglb(Handint_KBD_Entry), SegCo64);
-	#else
-	IC[IRQ_Keyboard].setRange(mglb(Handint_KBD_Entry), SegCo32);
-	#endif
-	register_interrupt_handler(IRQ_Keyboard, Handint_KBD);
-	Keyboard_Init();
+	if (!Devsman::EnableInterrupt(InterruptSource::Fixed(IRQ_Keyboard), Handint_KBD, Keyboard_Init)) return;
 	auto* i8042 = Devsman::RegisterSerioController("i8042");
 	if (i8042) {
 		Devsman::AddIoPortResource(i8042, 0, PORT_KEYBOARD_DAT, 1);

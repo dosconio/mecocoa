@@ -5,6 +5,9 @@
 #include <cpp/System/Audiosys.hpp>
 #include <cpp/Device/Audio/SoundBlaster.hpp>
 #include <cpp/System/Audiosys/AudioManager.hpp>
+#if defined(_MCCA) && (_MCCA & 0xFF00) == 0x8600 && CONFIG_ENABLE_USB && CONFIG_ENABLE_USB_XHCI
+#include <cpp/Device/USB/USB-Options.hpp>
+#endif
 #include "devsman.inn.hpp"
 #include "devsman.gpio.hpp"
 
@@ -593,6 +596,11 @@ namespace Devs {
 	};
 
 	#if defined(_MCCA) && (_MCCA & 0xFF00) == 0x8600
+	constexpr stduint PwcallIrqBindingCapacity = 32;
+	#if CONFIG_ENABLE_USB && CONFIG_ENABLE_USB_XHCI
+	constexpr uint16 XHCIMaxConfiguredInterrupters = _OPT_BUS_USB_xHCI_MultiInterrupter ? 4 : 1;
+	#endif
+
 	struct X86IoApicRoute {
 		uint32 gsi;
 		uint32 destination;
@@ -613,6 +621,9 @@ namespace Devs {
 	bool x86_ioapic_routes_shareable(const X86IoApicRoute& existing, const X86IoApicRoute& requested);
 
 	bool x86_ioapic_has_gsi(uint32 gsi);
+	#if _MCCA == 0x8632
+	bool x86_ioapic_uses_madt();
+	#endif
 	Spinlock* x86_ioapic_route_lock();
 	// The caller holds x86_ioapic_route_lock() across the entire route operation.
 	X86IoApicStatus x86_ioapic_acquire_route_locked(X86IoApicOwner owner, X86IoApicRoute& route,
@@ -621,9 +632,8 @@ namespace Devs {
 	void x86_ioapic_release_route_locked(X86IoApicOwner owner, uint32 gsi);
 	// Finish an ACPI release after the binding's callbacks have completed.
 	void x86_ioapic_finish_acpi_release_locked(uint32 gsi);
-	#if _MCCA == 0x8664
-	void x64_complete_ioapic_interrupt(uint8 vector);
-	#endif
+	void x86_complete_ioapic_interrupt(uint8 vector);
+	bool x86_set_local_apic_mode(byte type);
 	#endif
 }
 
@@ -661,6 +671,31 @@ struct UsbRoleRequest {
 
 // ---- . ----
 
+#if (_MCCA & 0xFF00) == 0x8600
+struct InterruptSource {
+	enum class Kind : uint8 { Fixed, PciIntx, Msi, Msix };
+
+	Kind kind;
+	DeviceNode* device = nullptr;
+	uint32 index = 0;
+
+	static InterruptSource Fixed(uint8 vector) { return {Kind::Fixed, nullptr, vector}; }
+	static InterruptSource PciIntx(DeviceNode* device, uint32 resource_index = 0) {
+		return {Kind::PciIntx, device, resource_index};
+	}
+	static InterruptSource Msi(DeviceNode* device) { return {Kind::Msi, device}; }
+	static InterruptSource Msix(DeviceNode* device) { return {Kind::Msix, device}; }
+};
+
+struct InterruptBinding {
+	uint32 generation = 0;
+	uint16 slot = 0;
+	InterruptSource::Kind kind = InterruptSource::Kind::Fixed;
+
+	explicit operator bool() const { return generation != 0; }
+};
+#endif
+
 class Devsman {
 public: // Initialization and driver lifecycle
 	using DriverStartRoutine = bool (*)(DeviceNode* node);
@@ -671,6 +706,16 @@ public: // Initialization and driver lifecycle
 	static bool RegisterDriverStarter(const char* driver_name, DriverStartRoutine starter);
 	static DeviceDriverMatchDecision MatchDriver(const DeviceNode* node, const DeviceDriverMatchEntry* entries, stduint count);
 	static const char* DriverMatchResultName(DriverMatchResult result);
+
+#if (_MCCA & 0xFF00) == 0x8600
+	static InterruptBinding EnableInterrupt(InterruptSource source, void (*handler)(),
+		void (*initialize)() = nullptr);
+	static InterruptBinding EnableInterrupt(InterruptSource source, bool (*handler)(void*), void* context);
+	// Message callbacks receive the zero-based index within the binding.
+	static InterruptBinding EnableInterrupt(InterruptSource source,
+		void (*handler)(void*, uint16), void* context, const uint32* targets, uint16 count = 1);
+	static bool DisableInterrupt(InterruptBinding& binding);
+#endif
 
 public: // Device tree
 	static DeviceNode* Root();

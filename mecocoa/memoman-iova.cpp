@@ -4,6 +4,8 @@
 
 #include <cpp/Device/ACPI.hpp>
 #include <cpp/Device/Bus/PCI.hpp>
+#include <cpp/ISO_IEC_STD/memory>
+#include <c/bitmap.h>
 
 #if (_MCCA & 0xFF00) == 0x8600
 
@@ -67,8 +69,9 @@ namespace {
 	static constexpr stduint IovaDomainCapacity = 8;
 	static constexpr stduint IovaMappingCapacity = 48;
 	static constexpr stduint IovaTableCapacity = 64;
-	static constexpr stduint VtdInterruptRemappingTableCapacity = 256;
-	static constexpr uint8 VtdInterruptRemappingTableSize = 7;
+	static constexpr uint8 VtdMinimumInterruptTableSize = 7;
+	// A uint16 handle stores index + 1; the next hardware size would overflow it.
+	static constexpr uint8 VtdMaximumInterruptTableSize = 14;
 	static constexpr stduint VtdInvalidationQueueLength = 256;
 
 	_PACKED(struct) DmarTable {
@@ -128,6 +131,26 @@ namespace {
 		uint64 high;
 	};
 
+	struct VtdInterruptStorageDeleter {
+		stduint bytes = 0;
+
+		void operator()(void* storage) const {
+			mempool.deallocate(storage, bytes);
+		}
+	};
+
+	constexpr stduint InterruptTableCapacity(uint8 size) {
+		// Intel VT-d IRTA.S encodes 2^(S+1) entries.
+		return stduint(1) << (size + 1);
+	}
+
+	constexpr uint8 SelectInterruptTableSize(stduint required_entries) {
+		uint8 size = VtdMinimumInterruptTableSize;
+		while (size < VtdMaximumInterruptTableSize && InterruptTableCapacity(size) < required_entries)
+			++size;
+		return size;
+	}
+
 	struct IovaRange {
 		bool active;
 		uint64 device_address;
@@ -163,14 +186,16 @@ namespace {
 		uint64 capability;
 		uint64 extended_capability;
 		VtdRootEntry* root_table;
-		VtdInterruptRemappingEntry* interrupt_remapping_table;
+		uni::UniquePtr<VtdInterruptRemappingEntry[], VtdInterruptStorageDeleter> interrupt_remapping_table;
+		uni::UniquePtr<byte[], VtdInterruptStorageDeleter> interrupt_remapping_allocated;
+		stduint interrupt_remapping_capacity;
 		void* invalidation_queue;
 		uint32* invalidation_completion;
 		stduint invalidation_queue_length;
 		uint8 invalidation_queue_shift;
-		bool interrupt_remapping_allocated[VtdInterruptRemappingTableCapacity];
 		stduint context_table_count;
 		stduint device_count;
+		stduint xhci_extra_interrupts;
 	};
 
 	static_assert(sizeof(DmarTable) == 48);
@@ -181,20 +206,16 @@ namespace {
 	static_assert(sizeof(VtdRootEntry) == 16);
 	static_assert(sizeof(VtdContextEntry) == 16);
 	static_assert(sizeof(VtdInterruptRemappingEntry) == 16);
+	static_assert(InterruptTableCapacity(VtdMinimumInterruptTableSize) *
+		sizeof(VtdInterruptRemappingEntry) == PAGE_SIZE);
+	static_assert(InterruptTableCapacity(VtdMaximumInterruptTableSize) <= 0xFFFFu);
+	static_assert(SelectInterruptTableSize(256) == 7 && SelectInterruptTableSize(257) == 8);
 
 	VtdState vtd_state{};
 	IovaDomain iova_domains[IovaDomainCapacity] = {};
-	#if _MCCA == 0x8632
-	alignas(Spinlock) byte iova_lock_raw[sizeof(Spinlock)] = {};
-	#endif
-
 	Spinlock* IovaLock() {
-		#if _MCCA == 0x8664
 		// RTE and IRTE changes share the VT-d queue serialization lock.
 		return Devs::x86_ioapic_route_lock();
-		#else
-		return reinterpret_cast<Spinlock*>(iova_lock_raw);
-		#endif
 	}
 
 	uint32 ReadRegister32(volatile uint8* registers, stduint offset) {
@@ -347,12 +368,9 @@ namespace {
 			mempool.deallocate(vtd_state.invalidation_completion, PAGE_SIZE);
 			vtd_state.invalidation_completion = nullptr;
 		}
-		if (vtd_state.interrupt_remapping_table) {
-			mempool.deallocate(vtd_state.interrupt_remapping_table, PAGE_SIZE);
-			vtd_state.interrupt_remapping_table = nullptr;
-		}
-		MemSet(vtd_state.interrupt_remapping_allocated, 0,
-			sizeof(vtd_state.interrupt_remapping_allocated));
+		vtd_state.interrupt_remapping_table.reset();
+		vtd_state.interrupt_remapping_allocated.reset();
+		vtd_state.interrupt_remapping_capacity = 0;
 		vtd_state.interrupt_remapping_enabled = false;
 		vtd_state.extended_interrupt_mode = false;
 		vtd_state.invalidation_queue_failed = false;
@@ -380,7 +398,7 @@ namespace {
 		return true;
 	}
 
-	bool EnableVtdInterruptRemapping(bool extended_mode) {
+	bool EnableVtdInterruptRemapping(bool extended_mode, stduint reserved_irq_entries) {
 		if (!vtd_state.probe_complete || !vtd_state.passthrough_enabled)
 			return false;
 		if (vtd_state.interrupt_remapping_enabled)
@@ -406,6 +424,30 @@ namespace {
 			plogwarn("[IOMMU] Interrupt remapping lacks extended interrupt mode");
 			return false;
 		}
+		// Allow one base interrupt per PCI requester; xHCI can consume multiple entries in EIME mode.
+		const stduint required_entries = reserved_irq_entries + vtd_state.device_count +
+			(extended_mode ? vtd_state.xhci_extra_interrupts : 0);
+		const uint8 table_size = SelectInterruptTableSize(required_entries);
+		const stduint capacity = InterruptTableCapacity(table_size);
+		if (required_entries > capacity) {
+			plogerro("[IOMMU] Interrupt table budget exceeds capacity required=%u limit=%u",
+				unsigned(required_entries), unsigned(capacity));
+			return false;
+		}
+		const stduint table_bytes = capacity * sizeof(VtdInterruptRemappingEntry);
+		const stduint bitmap_bytes = capacity / _BYTE_BITS_;
+		uni::UniquePtr<VtdInterruptRemappingEntry[], VtdInterruptStorageDeleter> table(
+			static_cast<VtdInterruptRemappingEntry*>(mempool.allocate(table_bytes, 12)),
+			VtdInterruptStorageDeleter{table_bytes});
+		uni::UniquePtr<byte[], VtdInterruptStorageDeleter> allocated(
+			static_cast<byte*>(mempool.allocate(bitmap_bytes)), VtdInterruptStorageDeleter{bitmap_bytes});
+		const uint64 table_physical = uint64(stduint(table.get()));
+		if (!table || !allocated ||
+			!PhysicalRangeFits(table_physical, table_bytes, vtd_state.host_address_width)) {
+			plogerro("[IOMMU] Failed to allocate interrupt table required=%u entries=%u bytes=%u",
+				unsigned(required_entries), unsigned(capacity), unsigned(table_bytes));
+			return false;
+		}
 		const bool scalable_queue =
 			(vtd_state.extended_capability & (uint64(1) << 43)) != 0;
 		const bool compatibility_enabled_before =
@@ -417,31 +459,29 @@ namespace {
 		auto* queue = mempool.allocate(queue_length, 12);
 		auto* completion = reinterpret_cast<uint32*>(
 			mempool.allocate(PAGE_SIZE, 12));
-		auto* table = reinterpret_cast<VtdInterruptRemappingEntry*>(
-			mempool.allocate(PAGE_SIZE, 12));
-		if (!queue || !completion || !table ||
+		if (!queue || !completion ||
 			!PhysicalRangeFits(uint64(stduint(queue)), queue_length,
 				vtd_state.host_address_width) ||
 			!PhysicalRangeFits(uint64(stduint(completion)), PAGE_SIZE,
-				vtd_state.host_address_width) ||
-			!PhysicalRangeFits(uint64(stduint(table)), PAGE_SIZE,
 				vtd_state.host_address_width)) {
 			if (queue) mempool.deallocate(queue, queue_length);
 			if (completion) mempool.deallocate(completion, PAGE_SIZE);
-			if (table) mempool.deallocate(table, PAGE_SIZE);
 			plogerro("[IOMMU] Failed to allocate interrupt-remapping storage");
 			return false;
 		}
 		MemSet(queue, 0, queue_length);
 		MemSet(completion, 0, PAGE_SIZE);
-		MemSet(table, 0, PAGE_SIZE);
+		MemSet(table.get(), 0, table_bytes);
+		MemSet(allocated.get(), 0, bitmap_bytes);
 		StoreFence();
 
 		vtd_state.invalidation_queue = queue;
 		vtd_state.invalidation_completion = completion;
 		vtd_state.invalidation_queue_length = queue_length;
 		vtd_state.invalidation_queue_shift = queue_shift;
-		vtd_state.interrupt_remapping_table = table;
+		vtd_state.interrupt_remapping_table.swap(table);
+		vtd_state.interrupt_remapping_allocated.swap(allocated);
+		vtd_state.interrupt_remapping_capacity = capacity;
 		WriteRegister32(vtd_state.registers,
 			VtdInvalidationQueueTailRegister, 0);
 		uint64 queue_address = uint64(stduint(queue));
@@ -457,8 +497,7 @@ namespace {
 			return false;
 		}
 
-		uint64 table_address = uint64(stduint(table)) |
-			VtdInterruptRemappingTableSize;
+		uint64 table_address = table_physical | table_size;
 		if (extended_mode) table_address |= VtdInterruptRemappingExtendedMode;
 		WriteRegister64(vtd_state.registers,
 			VtdInterruptRemappingTableAddressRegister, table_address);
@@ -481,6 +520,8 @@ namespace {
 			return false;
 		}
 		vtd_state.extended_interrupt_mode = extended_mode;
+		ploginfo("[IOMMU] Interrupt table prepared required=%u entries=%u bytes=%u",
+			unsigned(required_entries), unsigned(capacity), unsigned(table_bytes));
 		// Extended mode is committed after Devsman installs masked remappable RTEs.
 		if (extended_mode) return true;
 		if (!SetVtdFeature(VtdGlobalCommandEnableInterruptRemapping,
@@ -493,7 +534,7 @@ namespace {
 		}
 		vtd_state.interrupt_remapping_enabled = true;
 		ploginfo("[IOMMU] Interrupt remapping enabled entries=%u mode=xAPIC",
-			VtdInterruptRemappingTableCapacity);
+			unsigned(capacity));
 		return true;
 	}
 
@@ -652,7 +693,7 @@ namespace {
 
 	bool PopulatePassthroughContexts(DeviceNode* node,
 		VtdRootEntry* root_table, stduint& table_count,
-		stduint& device_count) {
+		stduint& device_count, stduint& xhci_extra_interrupts) {
 		if (!node) return true;
 		if (node->fields.node_type == uint16(DeviceNodeType::PciDevice)) {
 			if (node->fields.pci_segment != vtd_state.segment) {
@@ -685,11 +726,17 @@ namespace {
 			StoreFence();
 			context.low = VtdContextPassthrough | VtdContextPresent;
 			device_count++;
+			#if CONFIG_ENABLE_USB && CONFIG_ENABLE_USB_XHCI
+			if (node->fields.class_base == ClassBase_SerialBusController &&
+				node->fields.class_sub == ClassSub_UniversalSerialBusController &&
+				node->fields.class_if == ClassInterface_XHCI)
+				xhci_extra_interrupts += Devs::XHCIMaxConfiguredInterrupters - 1u;
+			#endif
 		}
 		for (Nnode* child = node->link.subf; child; child = child->next) {
 			if (!PopulatePassthroughContexts(
 				reinterpret_cast<DeviceNode*>(child), root_table,
-				table_count, device_count)) return false;
+				table_count, device_count, xhci_extra_interrupts)) return false;
 		}
 		return true;
 	}
@@ -990,6 +1037,7 @@ namespace {
 }
 
 bool Iova::ProbeVtd(stduint dmar_address) {
+	if (vtd_state.root_table || vtd_state.interrupt_remapping_table) return false;
 	vtd_state = {};
 	MemSet(iova_domains, 0, sizeof(iova_domains));
 	if (!dmar_address) {
@@ -1147,8 +1195,9 @@ bool Iova::EnableVtdPassthrough(DeviceNode* pci_root) {
 	MemSet(root_table, 0, PAGE_SIZE);
 	stduint context_table_count = 0;
 	stduint device_count = 0;
+	stduint xhci_extra_interrupts = 0;
 	if (!PopulatePassthroughContexts(pci_root, root_table,
-		context_table_count, device_count) || !device_count) {
+		context_table_count, device_count, xhci_extra_interrupts) || !device_count) {
 		plogerro("[IOMMU] Failed to build pass-through contexts devices=%u",
 			device_count);
 		ReleasePassthroughTables(root_table);
@@ -1213,15 +1262,13 @@ bool Iova::EnableVtdPassthrough(DeviceNode* pci_root) {
 	vtd_state.root_table = root_table;
 	vtd_state.context_table_count = context_table_count;
 	vtd_state.device_count = device_count;
+	vtd_state.xhci_extra_interrupts = xhci_extra_interrupts;
 	vtd_state.passthrough_enabled = true;
 	ploginfo("[IOMMU] Pass-through enabled root=%[64H] buses=%u devices=%u bytes=%u gsts=%08X fsts=%08X",
 		root_physical, context_table_count, device_count,
 		(context_table_count + 1) * PAGE_SIZE,
 		ReadRegister32(registers, kVtdGlobalStatusRegister),
 		ReadRegister32(registers, kVtdFaultStatusRegister));
-	#if _MCCA == 0x8632
-	(void)EnableVtdInterruptRemapping(false);
-	#endif
 	return true;
 }
 
@@ -1235,14 +1282,14 @@ static bool AllocateInterruptLocked(uint16 source_id, uint32 target_lapic_id,
 	if (!vtd_state.interrupt_remapping_table || vector < 0x20 ||
 		(!vtd_state.extended_interrupt_mode && target_lapic_id > 0xFFu))
 		return false;
-	stduint index = VtdInterruptRemappingTableCapacity;
-	for0(candidate, VtdInterruptRemappingTableCapacity) {
-		if (!vtd_state.interrupt_remapping_allocated[candidate]) {
-			index = candidate;
-			break;
-		}
+	const stduint capacity = vtd_state.interrupt_remapping_capacity;
+	uni::Bitmap allocated(vtd_state.interrupt_remapping_allocated.get(), capacity / _BYTE_BITS_);
+	stduint index = 0;
+	while (index < capacity && allocated[index]) ++index;
+	if (index == capacity) {
+		plogwarn("[IOMMU] Interrupt table exhausted entries=%u", unsigned(capacity));
+		return false;
 	}
-	if (index == VtdInterruptRemappingTableCapacity) return false;
 	auto& entry = vtd_state.interrupt_remapping_table[index];
 	entry.high = uint64(source_id) | (uint64(1) << 18);
 	uint64 destination = target_lapic_id;
@@ -1255,12 +1302,12 @@ static bool AllocateInterruptLocked(uint16 source_id, uint32 target_lapic_id,
 		entry.high = 0;
 		StoreFence();
 		if (!SubmitInterruptCacheInvalidation(uint16(index), 0, true))
-			vtd_state.interrupt_remapping_allocated[index] = true;
+			allocated.setof(index);
 		plogerro("[IOMMU] Interrupt-entry invalidation failed index=%u",
 			index);
 		return false;
 	}
-	vtd_state.interrupt_remapping_allocated[index] = true;
+	allocated.setof(index);
 	handle = uint16(index + 1);
 	return true;
 }
@@ -1285,8 +1332,10 @@ bool Iova::AllocatePciInterrupt(DeviceNode* device, uint32 target_lapic_id,
 static void FreeInterruptLocked(uint16 handle) {
 	if (!handle || !vtd_state.interrupt_remapping_table) return;
 	const stduint index = handle - 1u;
-	if (index >= VtdInterruptRemappingTableCapacity) return;
-	if (!vtd_state.interrupt_remapping_allocated[index]) return;
+	const stduint capacity = vtd_state.interrupt_remapping_capacity;
+	if (index >= capacity) return;
+	uni::Bitmap allocated(vtd_state.interrupt_remapping_allocated.get(), capacity / _BYTE_BITS_);
+	if (!allocated[index]) return;
 	auto& entry = vtd_state.interrupt_remapping_table[index];
 	entry.low = 0;
 	entry.high = 0;
@@ -1296,7 +1345,7 @@ static void FreeInterruptLocked(uint16 handle) {
 			index);
 		return;
 	}
-	vtd_state.interrupt_remapping_allocated[index] = false;
+	allocated.setof(index, false);
 }
 
 void Iova::ReleaseInterrupt(uint16 handle) {
@@ -1305,9 +1354,8 @@ void Iova::ReleaseInterrupt(uint16 handle) {
 	FreeInterruptLocked(handle);
 }
 
-#if _MCCA == 0x8664
-bool Iova::PrepareInterruptRemapping(bool extended) {
-	return EnableVtdInterruptRemapping(extended);
+bool Iova::PrepareInterruptRemapping(bool extended, stduint reserved_irq_entries) {
+	return EnableVtdInterruptRemapping(extended, reserved_irq_entries);
 }
 
 bool Iova::CommitExtendedInterruptMode() {
@@ -1316,7 +1364,7 @@ bool Iova::CommitExtendedInterruptMode() {
 			VtdGlobalStatusInterruptRemapping, true)) return false;
 	vtd_state.interrupt_remapping_enabled = true;
 	ploginfo("[IOMMU] Interrupt remapping enabled entries=%u mode=x2APIC",
-		VtdInterruptRemappingTableCapacity);
+		unsigned(vtd_state.interrupt_remapping_capacity));
 	return true;
 }
 
@@ -1353,6 +1401,9 @@ bool Iova::IoApicInterruptSource(uint8 id, uint16& source) {
 				source = (uint16(bus) << 8) | (uint16(path[i].device) << 3) | path[i].function;
 				break;
 			}
+			const uint32 class_code = uni::PCI::read_config_register(unit->segment,
+				bus, path[i].device, path[i].function, 0x08);
+			if ((class_code >> 16) != 0x0604u) return false;
 			const uint32 buses = uni::PCI::read_config_register(unit->segment,
 				bus, path[i].device, path[i].function, 0x18);
 			const uint8 secondary = uint8(buses >> 8);
@@ -1405,7 +1456,6 @@ bool Iova::DisablePciMessageInterrupts(const DeviceNode* device) {
 bool Iova::PreparePciMessageInterrupts(const DeviceNode* device) {
 	return DisablePciMessages(device, true);
 }
-#endif
 
 bool Iova::MapDeviceDma(DeviceNode* device, stduint physical,
 	stduint length, DmaMappingFlag flags, DmaMapping& mapping) {

@@ -959,6 +959,22 @@ IRQ_TRAMPOLINE Handint_TLB_SHOOTDOWN_Entry, 0xF0
 IRQ_TRAMPOLINE Handint_RESCHED_Entry, 0xF1
 IRQ_TRAMPOLINE Handint_WAKE_Entry, 0xF2
 
+; Kernel PCI message vectors 0xD0..0xDF.
+%assign vector 0xD0
+%rep 16
+	IRQ_TRAMPOLINE Handint_DeviceMessage_%+vector, vector
+	%assign vector vector + 1
+%endrep
+
+ALIGN 4
+GLOBAL DeviceMessageInterruptEntries
+DeviceMessageInterruptEntries:
+%assign vector 0xD0
+%rep 16
+	DD Handint_DeviceMessage_%+vector
+	%assign vector vector + 1
+%endrep
+
 GLOBAL RefreshGDT
 RefreshGDT:
 	LoadDataSegs SegData

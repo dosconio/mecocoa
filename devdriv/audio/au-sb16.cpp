@@ -1523,9 +1523,7 @@ void R_SB16_INIT() {
 		return;
 	}
 	#if _MCCA == 0x8632
-	IC[IRQ_SB16].setRange(mglb(Handint_SB16_Entry), SegCo32);
-	register_interrupt_handler(IRQ_SB16, Handint_SB16);
-	if (IC.getType() == 0) i8259Master_Enable(DEV_MAS_SB16);
+	if (!Devsman::EnableInterrupt(InterruptSource::Fixed(IRQ_SB16), Handint_SB16)) return;
 	#endif
 	if (!Devsman::RegisterDriverStarter("sb16", StartSoundBlaster)) {
 		plogwarn("[SB16] Failed to register driver starter");

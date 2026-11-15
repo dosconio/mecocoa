@@ -100,9 +100,7 @@ namespace {
 		uni::Atomic<byte> io_wait_active{0};
 		Devs::StorageWaitContext completion_wait;
 		bool msi_enabled = false;
-		#if _MCCA == 0x8664
 		uint16 interrupt_remapping_handle = 0;
-		#endif
 		bool irq_log_once = false;
 		bool io_submit_log_once = false;
 		bool faulted = false, started = false;
@@ -130,19 +128,13 @@ namespace {
 			if (!node || !regs) return false;
 			const stduint cpu_id = Taskman::getID();
 			auto* percore = (cpu_id < PCU_CORES_MAX) ? Taskman::PCU_CORES_PERCORE[cpu_id] : nullptr;
-			#if _MCCA == 0x8664
 			const bool extended = Iova::ExtendedInterruptMode();
-			#else
-			constexpr bool extended = false;
-			#endif
 			if (!percore || percore->lapic_id == CORE_ID_INVALID || (!extended && percore->lapic_id >= 0xFFu)) {
 				plogwarn("[NVMe] MSI setup skipped: no valid LAPIC on cpu%u", (unsigned)cpu_id);
 				return false;
 			}
 			Iova::InterruptMessage message{};
-			#if _MCCA == 0x8664
 			if (extended && !Iova::PreparePciMessageInterrupts(node)) return false;
-			#endif
 			if (extended && !Iova::AllocatePciInterrupt(node, percore->lapic_id, IRQ_NVME, message))
 				return false;
 			const auto result = extended ?
@@ -150,16 +142,12 @@ namespace {
 				pci.configure_MSI_fixed_destination(dev, uint8(percore->lapic_id),
 					uni::PCI::MSITriggerMode::Edge, uni::PCI::MSIDeliveryMode::Fixed, IRQ_NVME, 0);
 			if (result) {
-				#if _MCCA == 0x8664
 				if (message.handle && Iova::DisablePciMessageInterrupts(node))
 					Iova::ReleaseInterrupt(message.handle);
-				#endif
 				plogwarn("[NVMe] MSI setup failed: %s", result.Name());
 				return false;
 			}
-			#if _MCCA == 0x8664
 			interrupt_remapping_handle = message.handle;
-			#endif
 			irq_vector = IRQ_NVME;
 			msi_enabled = true;
 			irq_count = 0;
@@ -308,12 +296,10 @@ namespace {
 			regs->intms = 0xFFFFFFFFu;
 			// A failed stop leaves all active DMA storage retained and forbids subsequent submissions.
 			const bool stopped = DisableController();
-			#if _MCCA == 0x8664
 			if (stopped && interrupt_remapping_handle && Iova::DisablePciMessageInterrupts(node)) {
 				Iova::ReleaseInterrupt(interrupt_remapping_handle);
 				interrupt_remapping_handle = 0;
 			}
-			#endif
 			return {false, stopped, stopped};
 		}
 

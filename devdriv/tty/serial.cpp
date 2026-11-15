@@ -245,25 +245,12 @@ void R_COM1_INIT() {
 		#endif
 	}
 	// Ensure IRQ_COM13_RS232_P1 maps to IRQ 4 (IDT index 0x24 if base is 0x20) [cite: 282]
-	#if _MCCA == 0x8664
 	if (serial_irq_has_available_port(IRQ_COM13_RS232_P1)) {
-		IC[IRQ_COM13_RS232_P1].setModeRupt(mglb(Handint_COM1_Entry), SegCo64);
-		register_interrupt_handler(IRQ_COM13_RS232_P1, Handint_COM1);
+		(void)Devsman::EnableInterrupt(InterruptSource::Fixed(IRQ_COM13_RS232_P1), Handint_COM1);
 	}
 	if (serial_irq_has_available_port(IRQ_COM24_Serial)) {
-		IC[IRQ_COM24_Serial].setModeRupt(mglb(Handint_COM2_Entry), SegCo64);
-		register_interrupt_handler(IRQ_COM24_Serial, Handint_COM2);
+		(void)Devsman::EnableInterrupt(InterruptSource::Fixed(IRQ_COM24_Serial), Handint_COM2);
 	}
-	#else
-	if (serial_irq_has_available_port(IRQ_COM13_RS232_P1)) {
-		IC[IRQ_COM13_RS232_P1].setRange(mglb(Handint_COM1_Entry), SegCo32);
-		register_interrupt_handler(IRQ_COM13_RS232_P1, Handint_COM1);
-	}
-	if (serial_irq_has_available_port(IRQ_COM24_Serial)) {
-		IC[IRQ_COM24_Serial].setRange(mglb(Handint_COM2_Entry), SegCo32);
-		register_interrupt_handler(IRQ_COM24_Serial, Handint_COM2);
-	}
-	#endif
 	// flap32 prehost calls R_COM1_INIT() before Memory::initialize().
 	// Register into device tree only after Devsman has created the tree.
 	register_available_legacy_com_ports();

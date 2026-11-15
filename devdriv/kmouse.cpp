@@ -17,13 +17,7 @@ RMOD_LIST RMOD_LIST_MOU{
 #endif
 
 void R_MOU_INIT() {
-	#if _MCCA == 0x8664
-	IC[IRQ_PS2_Mouse].setModeRupt(mglb(Handint_MOU_Entry), SegCo64);
-	#else
-	IC[IRQ_PS2_Mouse].setRange(mglb(Handint_MOU_Entry), SegCo32);
-	#endif
-	register_interrupt_handler(IRQ_PS2_Mouse, Handint_MOU);
-	Mouse_Init();
+	if (!Devsman::EnableInterrupt(InterruptSource::Fixed(IRQ_PS2_Mouse), Handint_MOU, Mouse_Init)) return;
 	auto* i8042 = Devsman::RegisterSerioController("i8042");
 	if (i8042) {
 		Devsman::AddIoPortResource(i8042, 0, PORT_KEYBOARD_DAT, 1);

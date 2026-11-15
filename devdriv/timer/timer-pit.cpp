@@ -36,9 +36,8 @@ RMOD_LIST RMOD_LIST_PIT{
 #endif
 
 void R_PIT_INIT() {
-	IC[IRQ_PIT].setRange(mglb(Handint_PIT_Entry), SegCo32);
-	register_interrupt_handler(IRQ_PIT, Handint_PIT);
-	PIT_Init();
+	if (!Devsman::EnableInterrupt(InterruptSource::Fixed(IRQ_PIT), Handint_PIT, PIT_Init))
+		plogerro("[PIT] Cannot enable the timer interrupt");
 	if (auto* node = Devsman::RegisterPlatformDevice("pit@8254", "pit-8254")) {
 		Devsman::AddIoPortResource(node, 0, 0x40, 4);
 		Devsman::AddIrqResource(node, IRQ_PIT);

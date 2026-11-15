@@ -25,6 +25,7 @@ struct ACPIGSIConfiguration {
 	bool level_triggered;
 	bool active_low;
 	bool shareable;
+	bool pci_intx = false;
 };
 
 using ACPIGSIFilter = bool (*)(void* context);

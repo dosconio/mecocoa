@@ -643,3 +643,19 @@ IRQ_TRAMPOLINE_64 Handint_PWDEV28_Entry, 0x96
 IRQ_TRAMPOLINE_64 Handint_PWDEV29_Entry, 0x97
 IRQ_TRAMPOLINE_64 Handint_PWDEV30_Entry, 0x98
 IRQ_TRAMPOLINE_64 Handint_PWDEV31_Entry, 0x99
+
+; Kernel PCI message vectors 0xD0..0xDF.
+%assign vector 0xD0
+%rep 16
+	IRQ_TRAMPOLINE_64 Handint_DeviceMessage_%+vector, vector
+	%assign vector vector + 1
+%endrep
+
+ALIGN 8
+GLOBAL DeviceMessageInterruptEntries
+DeviceMessageInterruptEntries:
+%assign vector 0xD0
+%rep 16
+	DQ Handint_DeviceMessage_%+vector
+	%assign vector vector + 1
+%endrep

@@ -992,8 +992,14 @@ static bool start_pata_driver(DeviceNode* pata_node) {
 		}
 	}
 	#if _MCCA == 0x8632
-	if (disks[0] || disks[1]) (disks[0] ? disks[0] : disks[1])->setInterrupt(NULL);
-	if (disks[2] || disks[3]) (disks[2] ? disks[2] : disks[3])->setInterrupt(NULL);
+	if ((disks[0] || disks[1]) && !Devsman::EnableInterrupt(InterruptSource::Fixed(IRQ_ATA_DISK0), Handint_HDD)) {
+		for (stduint i = 0; i < 2; ++i)
+			if (disks[i]) disks[i]->react_type = Harddisk_PATA::ReactType::Loop;
+	}
+	if ((disks[2] || disks[3]) && !Devsman::EnableInterrupt(InterruptSource::Fixed(IRQ_ATA_DISK1), Handint_HDD1)) {
+		for (stduint i = 2; i < 4; ++i)
+			if (disks[i]) disks[i]->react_type = Harddisk_PATA::ReactType::Loop;
+	}
 
 	#else
 	for0(channel, numsof(g_ide_channels)) {
@@ -1076,12 +1082,6 @@ static bool start_pata_driver(DeviceNode* pata_node) {
 }
 
 void R_HDD_INIT() {
-	#if _MCCA == 0x8632
-	IC[IRQ_ATA_DISK0].setRange(mglb(Handint_HDD_Entry), SegCo32);
-	register_interrupt_handler(IRQ_ATA_DISK0, Handint_HDD);
-	IC[IRQ_ATA_DISK1].setRange(mglb(Handint_HDD1_Entry), SegCo32);
-	register_interrupt_handler(IRQ_ATA_DISK1, Handint_HDD1);
-	#endif
 	Devsman::RegisterDriverStarter("pata", start_pata_driver);
 	Devsman::StartKnownDrivers();
 }

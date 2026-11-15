@@ -124,7 +124,7 @@ namespace {
 				plogwarn("[SCSI] no PCI INTx route; polling fallback");
 				return;
 			}
-			const ACPIGSIConfiguration configuration{uint32(irq->start), true, true, true};
+			const ACPIGSIConfiguration configuration{uint32(irq->start), true, true, true, true};
 			const auto status = Devs::BindACPIGSI(configuration, DispatchInterrupt, &controller, controller.async.interrupt);
 			if (status != ACPIGSIStatus::Success) {
 				plogwarn("[SCSI] PCI INTx GSI%u binding failed status=%u; polling fallback", (unsigned)irq->start, unsigned(status));

@@ -25,9 +25,8 @@ namespace {
 	constexpr uint32 XHCIEventHandle = 0x58484349u;
 	constexpr uint32 XHCIEventSource = IRQ_xHCI;
 	constexpr uint8 XHCIInterruptVectors[] = { IRQ_xHCI, 0x42, 0x43, 0x44 };
-	constexpr uint16 XHCIMaxConfiguredInterrupters =
-		_OPT_BUS_USB_xHCI_MultiInterrupter
-		? static_cast<uint16>(numsof(XHCIInterruptVectors)) : 1;
+	using Devs::XHCIMaxConfiguredInterrupters;
+	static_assert(XHCIMaxConfiguredInterrupters <= numsof(XHCIInterruptVectors));
 	constexpr stduint XHCIEventWatchdogTicks = CONFIG_SysTickFreq >= 10 ?
 		CONFIG_SysTickFreq / 10 : 1;
 	constexpr uint8 XHCIEventStallPolls = 10;
@@ -71,36 +70,25 @@ namespace {
 }
 
 static void release_xhci_interrupts(const DeviceNode* node, uint16* handles) {
-	#if _MCCA == 0x8664
 	if (!handles[0]) return;
 	if (!Iova::DisablePciMessageInterrupts(node)) return;
 	for0(index, XHCIMaxConfiguredInterrupters) {
 		Iova::ReleaseInterrupt(handles[index]);
 		handles[index] = 0;
 	}
-	#else
-	(void)node;
-	(void)handles;
-	#endif
 }
 
 static uint16 configure_xhci_interrupts(uni::PCI::Device& xhc_dev, DeviceNode* node,
 	uint32 bsp_local_apic_id, uint8 irq_line, uint8 irq_pin,
 	uint16 controller_limit, uint16* handles) {
 	using namespace uni;
-	#if _MCCA == 0x8664
 	const bool extended = Iova::ExtendedInterruptMode();
-	#else
-	constexpr bool extended = false;
-	#endif
 	if (bsp_local_apic_id == CORE_ID_INVALID || (!extended && bsp_local_apic_id >= 0xFFu)) {
 		plogerro("xHCI interrupt target LAPIC ID=%u requires interrupt remapping",
 			(unsigned)bsp_local_apic_id);
 		return 0;
 	}
-	#if _MCCA == 0x8664
 	if (extended && !Iova::PreparePciMessageInterrupts(node)) return 0;
-	#endif
 	#if _OPT_BUS_USB_xHCI_MultiInterrupter
 	const uint16 table_size = pci.MSIXTableSize(xhc_dev);
 	if (table_size != 0 && controller_limit != 0) {

@@ -27,7 +27,7 @@ static constexpr uint8 PwcallPciIrqVectorCount = 32;
 #else
 static constexpr uint8 PwcallPciIrqVectorCount = 8;
 #endif
-static constexpr stduint PwcallIrqBindingCapacity = 32;
+using Devs::PwcallIrqBindingCapacity;
 extern "C" void register_interrupt_vector_handler(stduint irq_id, void (*handler)(stduint));
 #endif
 
@@ -370,13 +370,11 @@ static void PwcallDisablePciMsi(DeviceNode* node, uint8 capability_address) {
 static void PwcallDisablePciInterrupt(DeviceNode* node,
 	PwcallPciInterruptMode mode, uint8 msi_capability,
 	uint16 interrupt_remapping_handle) {
-	#if _MCCA == 0x8664
 	if (interrupt_remapping_handle) {
 		if (Iova::DisablePciMessageInterrupts(node))
 			Iova::ReleaseInterrupt(interrupt_remapping_handle);
 		return;
 	}
-	#endif
 	if (node && DeviceNodeType(node->fields.node_type) == DeviceNodeType::PciDevice) {
 		if (mode == PwcallPciInterruptMode::Msi) {
 			PwcallDisablePciMsi(node, msi_capability);
@@ -611,11 +609,7 @@ static bool PwcallBindDeviceInterrupt(ProcessBlock* process, stduint device_hand
 	const auto* irq = Devsman::FindResource(node, DeviceResourceType::IrqLine, 0);
 	const bool pci = DeviceNodeType(node->fields.node_type) == DeviceNodeType::PciDevice;
 	const bool using_ioapic = IC.getType() != 0;
-	#if _MCCA == 0x8664
 	const bool extended_interrupt_mode = Iova::ExtendedInterruptMode();
-	#else
-	constexpr bool extended_interrupt_mode = false;
-	#endif
 	if (pci && !using_ioapic) return false;
 	uni::PCI::Device pci_device{};
 	uint8 msi_capability = 0;
@@ -655,30 +649,32 @@ static bool PwcallBindDeviceInterrupt(ProcessBlock* process, stduint device_hand
 	const uint8 requested_vector = pci ? 0 : uint8(irq->start);
 	uint32 line = use_message_interrupt ? 0xFFFFFFFFu :
 		(pci ? uint32(irq->start) : uint32(Devs::x86_vector_to_isa_irq(requested_vector)));
-	#if _MCCA == 0x8664
 	bool isa_level_triggered = false;
 	bool isa_active_low = false;
-	if (!pci) {
+	#if _MCCA == 0x8664
+	const bool resolve_isa = !pci;
+	#else
+	const bool resolve_isa = !pci && using_ioapic && Devs::x86_ioapic_uses_madt();
+	#endif
+	if (resolve_isa) {
 		// ACPI MADT supplies the actual GSI and electrical mode for a legacy ISA IRQ.
 		if (!using_ioapic || line >= 16 ||
 			!Devs::x86_resolve_isa_irq(uint8(line), line, isa_level_triggered, isa_active_low)) return false;
 	}
-	#endif
 	if (!use_message_interrupt && !using_ioapic && line >= 16) return false;
 	if (!use_message_interrupt && using_ioapic && !Devs::x86_ioapic_has_gsi(line)) return false;
 	if (!pci && requested_vector < 0x20) return false;
 	bool level_triggered = irq && (irq->flags & DeviceResourceFlag_IrqLevel) != 0;
 	bool active_low = irq && (irq->flags & DeviceResourceFlag_IrqActiveLow) != 0;
 	const bool shareable = irq && (irq->flags & DeviceResourceFlag_IrqShareable) != 0;
-	#if _MCCA == 0x8664
-	if (!pci) {
+	if (resolve_isa) {
 		level_triggered = isa_level_triggered;
 		active_low = isa_active_low;
 	}
-	#endif
-	bool dynamic_vector = pci;
 	#if _MCCA == 0x8664
-	dynamic_vector = true;
+	constexpr bool dynamic_vector = true;
+	#else
+	const bool dynamic_vector = pci || extended_interrupt_mode;
 	#endif
 
 	uint32 generation = 0;
@@ -729,6 +725,8 @@ static bool PwcallBindDeviceInterrupt(ProcessBlock* process, stduint device_hand
 			Devs::X86IoApicRoute route{line, CORE_ID_INVALID, vector, active_low, level_triggered, true, shareable};
 			#if _MCCA == 0x8664
 			if (pci) route.destination = target_lapic_id;
+			#else
+			if (pci && extended_interrupt_mode) route.destination = target_lapic_id;
 			#endif
 			if (Devs::x86_ioapic_acquire_route_locked(Devs::X86IoApicOwner::Ring1, route, pci, entry) !=
 				Devs::X86IoApicStatus::Success) return false;
@@ -781,10 +779,7 @@ static bool PwcallBindDeviceInterrupt(ProcessBlock* process, stduint device_hand
 	if (use_message_interrupt) {
 		uni::PCI pci_bus;
 		Iova::InterruptMessage interrupt_message{};
-		bool prepared = true;
-		#if _MCCA == 0x8664
-		if (extended_interrupt_mode) prepared = Iova::PreparePciMessageInterrupts(node);
-		#endif
+		const bool prepared = !extended_interrupt_mode || Iova::PreparePciMessageInterrupts(node);
 		const bool remapped = prepared && Iova::AllocatePciInterrupt(node,
 			target_lapic_id, vector, interrupt_message);
 		if (!remapped && extended_interrupt_mode) {

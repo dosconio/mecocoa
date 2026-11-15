@@ -30,9 +30,7 @@ namespace {
 	bool GetIOAPICDestination(uint32& destination) {
 		if (!acpi_cpu_count || acpi_cpu_lapic_ids[0] == CORE_ID_INVALID) return false;
 		destination = acpi_cpu_lapic_ids[0];
-		#if _MCCA == 0x8664
 		if (Iova::ExtendedInterruptMode()) return true;
-		#endif
 		return destination < 0xFFu;
 	}
 
@@ -101,7 +99,7 @@ ACPIGSIStatus Devs::BindACPIGSI(const ACPIGSIConfiguration& configuration, ACPIG
 	X86IoApicRoute route{configuration.gsi, destination, ACPIGSIVector, configuration.active_low,
 		configuration.level_triggered, true, configuration.shareable};
 	uint64 entry;
-	switch (x86_ioapic_acquire_route_locked(X86IoApicOwner::Acpi, route, false, entry)) {
+	switch (x86_ioapic_acquire_route_locked(X86IoApicOwner::Acpi, route, configuration.pci_intx, entry)) {
 		case X86IoApicStatus::Unavailable: return ACPIGSIStatus::GSIUnavailable;
 		case X86IoApicStatus::Conflict: return ACPIGSIStatus::ConfigurationConflict;
 		case X86IoApicStatus::Capacity: return ACPIGSIStatus::ResourceUnavailable;

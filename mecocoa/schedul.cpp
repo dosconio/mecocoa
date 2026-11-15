@@ -96,13 +96,8 @@ static void BindCurrentKernelEntryStack(ThreadBlock* th, stduint cpuid) {
 	percore->tss.SS0 = SegData;
 }
 
-static void InitializeLocalApicOnAp() {
-	constexpr uint64 IA32_APIC_BASE__APIC_GLOBAL_ENABLE = (1ull << 11);
-	constexpr uint64 IA32_APIC_BASE__X2APIC_ENABLE = (1ull << 10);
-	uint64 apic_base = getMSR(x86MSR::APIC_BASE);
-	apic_base |= IA32_APIC_BASE__APIC_GLOBAL_ENABLE;
-	if (IC.getType() == 2) apic_base |= IA32_APIC_BASE__X2APIC_ENABLE;
-	setMSR(x86MSR::APIC_BASE, apic_base);
+static bool InitializeLocalApicOnAp() {
+	if (!Devs::x86_set_local_apic_mode(IC.getType())) return false;
 
 	IC.WriteLAPIC(0xF0, 0x1FF);
 	const uint32 mask = 0x10000;
@@ -111,6 +106,7 @@ static void InitializeLocalApicOnAp() {
 	IC.WriteLAPIC(0x360, mask);
 	IC.WriteLAPIC(0x370, mask);
 	IC.SendEOI();
+	return true;
 }
 
 static void HandleTLBShootdownIPI() {
@@ -218,11 +214,14 @@ extern "C" void AP_Main(stduint core_id) {
 		plogerro("[COREMAN] AP core%u missing idle thread", core_id);
 		loop HALT();
 	}
+	if (!InitializeLocalApicOnAp()) {
+		plogerro("[COREMAN] AP core%u could not enter the BSP LAPIC mode", core_id);
+		loop HALT();
+	}
 	idle->processor_id = core_id;
 	idle->state = ThreadBlock::State::Running;
 	Taskman::current_thread(core_id) = idle;
 	BindCurrentKernelEntryStack(idle, core_id);
-	InitializeLocalApicOnAp();
 	#if CONFIG_ENABLE_MMU
 	unsigned pat_a, pat_b, pat_c, pat_d;
 	_IO_CPUID(1, 0, &pat_a, &pat_b, &pat_c, &pat_d);
