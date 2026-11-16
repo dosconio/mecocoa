@@ -1,5 +1,9 @@
 ## 2026-11-16
 
+- 18:44（UTC+8）Rust i686 用户程序同步 LLVM data layout 并链接 Mecocoa `crt0.o`，由 `_start` 完成运行库初始化、调用 Rust `main` 并经 `exit` 退出；构建依赖跟踪启动对象和 `libx86.a`，修复新版 `core` 的 x87 ABI 检查及产物入口为零的问题。
+
+- 17:59（UTC+8）Mecocoa i686 Rust 目标登记为 Unix family，迁移到 2026-11-16 nightly 和 edition 2024，按新版 schema 固定静态重定位；`mcca-rt` 移至 `accmlib/rust`，用户运行库接入 Mempool 带对齐分配并注册 Rust `GlobalAlloc`，示例启用官方 `alloc` 验证 Box、Vec、String 及 64 字节对齐对象。
+
 - 15:42（UTC+8）flap32 和 uefi64 在 PCI 枚举后解析各 DRHD 的设备 Scope，按 Segment 匹配 PCI 端点、桥下游和 include-all 归属，并记录 I/O APIC 的所属单元和 Source ID。该阶段保留单 DRHD 接管路径。
 
 - 15:33（UTC+8）flap32 和 uefi64 按 DMAR 中的 DRHD 数量分配 VT-d 状态。寄存器、DMA 上下文、失效队列、中断重映射表和故障记录归各自单元，DMA 域沿用所属单元执行失效和回退。接管条件仍为单个 include-all DRHD。

@@ -37,6 +37,18 @@ _ESYM_C void* malloc(size_t size) {
 	return user_mempool.allocate(size);
 }
 
+_ESYM_C void* malloc_align(size_t size, size_t alignment) {
+	if (!alignment || (alignment & (alignment - 1))) return nullptr;
+	if (!user_heap_initialized) {
+		user_heap_init();
+	}
+	stduint alignment_exponent = 0;
+	for (size_t value = alignment; value > 1; value >>= 1) {
+		alignment_exponent++;
+	}
+	return user_mempool.allocate(size, alignment_exponent);
+}
+
 _ESYM_C void free(void* ptr) {
 	if (!ptr) return;
 	if (!user_heap_initialized) {

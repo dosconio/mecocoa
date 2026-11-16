@@ -37,7 +37,12 @@ MCCA_LIBM =
 
 include subapps/Makefile.gui
 
-$(BIN_DIR)/_rust: subapps/_hello/rust/src/main.rs subapps/_hello/rust/Cargo.toml
+$(BIN_DIR)/_rust: subapps/_hello/rust/src/main.rs subapps/_hello/rust/Cargo.toml \
+	subapps/_hello/rust/build.rs subapps/_hello/rust/rust-toolchain.toml \
+	subapps/_hello/rust/.cargo/config.toml \
+	accmlib/rust/mcca-rt/src/lib.rs accmlib/rust/mcca-rt/Cargo.toml \
+	$(ulibpath)/rust/unisym/src/lib.rs $(ulibpath)/rust/unisym/Cargo.toml \
+	configs/Rust/target/cargo-i686.json $(MCCA_CRT0) $(LIBNATIVE)
 	@echo "MK hello-rust"
 	@cd subapps/_hello/rust/ && cargo build --release --target ../../../configs/Rust/target/cargo-i686.json
 	cp subapps/_hello/rust/target/cargo-i686/release/rust $@
