@@ -79,7 +79,7 @@ namespace {
 		uint16 delivery_flags = DeviceEventFlag_None;
 		uint8 vector = 0;
 		uint32 irq_line = 0xFFFFFFFFu;
-		uint16 interrupt_remapping_handle = 0;
+		Iommu::InterruptRemappingHandle interrupt_remapping_handle = 0;
 		uint32 destination = CORE_ID_INVALID;
 		PwcallPciInterruptMode pci_interrupt_mode = PwcallPciInterruptMode::None;
 		bool level_triggered = false;
@@ -334,7 +334,7 @@ void Devs::ReapPwcallIrqVectors() {
 		}
 		if (!Handler::IsVectorDrained(binding.vector, binding.destination)) continue;
 		if (binding.pci_interrupt_mode == PwcallPciInterruptMode::MsixEntry)
-			Iova::ReleaseInterruptLocked(binding.interrupt_remapping_handle);
+			Iommu::ReleaseInterruptLocked(binding.interrupt_remapping_handle);
 		Handler::FinishVectorRelease(binding.vector);
 		binding = {};
 	}
@@ -440,7 +440,7 @@ static bool PwcallHasOtherMsixEntry(const PwcallDeviceIrqBinding& binding) {
 
 // Caller must hold the shared I/O APIC route lock.
 static bool PwcallProgramMsixEntry(PwcallDeviceIrqBinding& binding,
-	const Iova::InterruptMessage& message) {
+	const Iommu::MsiMessage& message) {
 	PwcallMsixTable table;
 	const uint32 index = binding.resource_index;
 	if (!PwcallReadMsixTable(binding.node, index, table)) return false;
@@ -455,7 +455,7 @@ static bool PwcallProgramMsixEntry(PwcallDeviceIrqBinding& binding,
 	const bool first = !PwcallHasOtherMsixEntry(binding);
 	auto* entry = table.table + index * (MsixEntrySize / sizeof(uint32));
 	if (first) {
-		if ((control & MsixEnable) || !Iova::PreparePciMessageInterrupts(binding.node)) return false;
+		if ((control & MsixEnable) || !Iommu::PreparePciMessageInterrupts(binding.node)) return false;
 		control |= MsixFunctionMask;
 		uni::PCI::write_config_register(table.device, table.capability, control);
 		for0(i, table.size)
@@ -511,8 +511,8 @@ static bool PwcallRetireMsixEntry(PwcallDeviceIrqBinding& binding, bool force) {
 }
 
 static void PwcallCloseMessageInterrupt(PwcallDeviceIrqBinding binding, bool programmed) {
-	const bool closed = !programmed || Iova::DisablePciMessageInterrupts(binding.node);
-	if (closed) Iova::ReleaseInterrupt(binding.interrupt_remapping_handle);
+	const bool closed = !programmed || Iommu::DisablePciMessageInterrupts(binding.node);
+	if (closed) Iommu::ReleaseInterrupt(binding.interrupt_remapping_handle);
 
 	SpinlockLocal guard(PwcallIrqLock());
 	for (auto& slot : pwcall_irq_bindings) {
@@ -531,7 +531,8 @@ static void PwcallCloseMessageInterrupt(PwcallDeviceIrqBinding binding, bool pro
 	}
 }
 
-static bool PwcallFinishMessageSetup(uint32 generation, uint16 handle, bool success, bool programmed) {
+static bool PwcallFinishMessageSetup(uint32 generation,
+	Iommu::InterruptRemappingHandle handle, bool success, bool programmed) {
 	PwcallDeviceIrqBinding closing;
 	{
 		SpinlockLocal guard(PwcallIrqLock());
@@ -791,7 +792,7 @@ static bool PwcallBindMsixEntry(ProcessBlock* process, stduint device_handle,
 	const stduint cpu_id = Taskman::getID();
 	auto* percore = cpu_id < PCU_CORES_MAX ? Taskman::PCU_CORES_PERCORE[cpu_id] : nullptr;
 	if (!owner_tid || !percore || percore->lapic_id == CORE_ID_INVALID ||
-		(percore->lapic_id > 0xFFu && !Iova::ExtendedInterruptMode()) ||
+		(percore->lapic_id > 0xFFu && !Iommu::ExtendedDestinationMode()) ||
 		!device_event_prepare(Taskman::CurrentTB())) return false;
 	const uint32 destination = percore->lapic_id;
 
@@ -836,10 +837,10 @@ static bool PwcallBindMsixEntry(ProcessBlock* process, stduint device_handle,
 	}
 
 	// A configuring slot remains reserved if device close retires it during IRTE allocation.
-	const bool remap = Iova::InterruptRemappingAvailable();
-	Iova::InterruptMessage message{};
+	const bool remap = Iommu::PciInterruptRemappingAvailable(node);
+	Iommu::MsiMessage message{};
 	const bool prepared = ResolvePwcallDeviceHandle(process, device_handle) == node &&
-		(!remap || Iova::AllocatePciInterrupt(node, destination, vector, message));
+		(remap ? Iommu::AllocatePciInterrupt(node, destination, vector, message) : !Iommu::ExtendedDestinationMode());
 	if (prepared && !remap) {
 		message.address = 0xFEE00000u | (uint64(destination) << 12);
 		message.data = vector;
@@ -859,7 +860,7 @@ static bool PwcallBindDeviceInterrupt(ProcessBlock* process, stduint device_hand
 	const auto* irq = Devsman::FindResource(node, DeviceResourceType::IrqLine, 0);
 	const bool pci = DeviceNodeType(node->fields.node_type) == DeviceNodeType::PciDevice;
 	const bool using_ioapic = IC.getType() != 0;
-	const bool extended_interrupt_mode = Iova::ExtendedInterruptMode();
+	const bool extended_interrupt_mode = Iommu::ExtendedDestinationMode();
 	if (pci && !using_ioapic) return false;
 	uni::PCI::Device pci_device{};
 	uint32 target_lapic_id = 0;
@@ -1026,11 +1027,12 @@ static bool PwcallBindDeviceInterrupt(ProcessBlock* process, stduint device_hand
 	#endif
 	if (use_message_interrupt) {
 		uni::PCI pci_bus;
-		Iova::InterruptMessage interrupt_message{};
-		const bool prepared = !extended_interrupt_mode || Iova::PreparePciMessageInterrupts(node);
-		const bool remapped = prepared && Iova::AllocatePciInterrupt(node,
+		Iommu::MsiMessage interrupt_message{};
+		const bool remap = Iommu::PciInterruptRemappingAvailable(node);
+		const bool prepared = !remap || Iommu::PreparePciMessageInterrupts(node);
+		const bool remapped = remap && prepared && Iommu::AllocatePciInterrupt(node,
 			target_lapic_id, vector, interrupt_message);
-		if (!remapped && extended_interrupt_mode)
+		if (!prepared || (!remapped && extended_interrupt_mode))
 			return PwcallFinishMessageSetup(generation, interrupt_message.handle, false, false);
 		uni::PCI::MSIMessage message{};
 		if (remapped) {

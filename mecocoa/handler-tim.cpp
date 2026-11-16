@@ -207,7 +207,7 @@ void Systimex::CollectExpired() {
 		if (!run_callback) break;
 	}
 	#if (_MCCA & 0xFF00) == 0x8600
-	Iova::NotifyFaultService();
+	Iommu::NotifyFaultService();
 	#endif
 	if (!notify) return;
 

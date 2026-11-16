@@ -59,6 +59,7 @@ cplfile=\
 	$(ulibpath)/c/data/font/font-8x5.c \
 	$(ulibpath)/c/data/font/font-16x8.c \
 
+cppfile+=$(wildcard devdriv/**/**/*.cpp)
 include Makefile.inc
 
 

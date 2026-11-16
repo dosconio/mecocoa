@@ -678,6 +678,86 @@ struct UsbRoleRequest {
 // ---- . ----
 
 #if (_MCCA & 0xFF00) == 0x8600
+namespace Iova {
+	enum class DmaMappingFlag : uint32;
+	struct DmaMapping;
+}
+
+namespace Iommu {
+	enum class DmaState : uint8 { Inactive, Active, Unsafe };
+	DmaState GetDmaState();
+	// The Iova entry points validate requests before calling the active backend.
+	bool MapDeviceDma(DeviceNode* device, stduint physical, stduint length,
+		Iova::DmaMappingFlag flags, Iova::DmaMapping& mapping);
+	bool UnmapDeviceDma(DeviceNode* device, uint64 device_address, stduint length);
+
+	// Zero is invalid. Other values identify an entry owned by the boot-selected backend.
+	using InterruptRemappingHandle = uint32;
+
+	struct IoApicSource {
+		uint32 value;
+	};
+
+	// The device receives address and data. The kernel retains handle for release.
+	struct MsiMessage {
+		uint64 address;
+		uint32 data;
+		InterruptRemappingHandle handle;
+	};
+
+	void Probe(stduint dmar_address, stduint ivrs_address);
+	// False means DMA translation could not be left in a known safe state for driver startup.
+	bool EnableDmaTranslation(DeviceNode* pci_root);
+	void EnableFaultEvents();
+	void NotifyFaultService();
+	void ServiceFaultEvents();
+	bool PciInterruptRemappingAvailable(const DeviceNode* device);
+	// On preparation or commit failure, keep interrupt sources masked and roll back before retrying.
+	bool PrepareInterruptRemapping(bool extended, stduint reserved_irq_entries);
+	bool CommitExtendedInterruptMode();
+	// False means hardware may still reference the tables or reject compatibility-format interrupts.
+	bool DisableInterruptRemapping();
+	bool ExtendedDestinationMode();
+	bool IoApicInterruptSource(uint8 id, IoApicSource& source);
+	// The caller holds the I/O APIC route lock when changing IRTEs for a GSI.
+	bool AllocateIoApicInterruptLocked(const IoApicSource& source, const Devs::X86IoApicRoute& route,
+		uint8 pin, InterruptRemappingHandle& handle, uint64& entry);
+	// The caller holds the I/O APIC route lock.
+	void ReleaseInterruptLocked(InterruptRemappingHandle handle);
+	bool PciMessageSourcesQuiescent(const DeviceNode* root);
+	bool DisablePciMessageInterrupts(const DeviceNode* device);
+	bool PreparePciMessageInterrupts(const DeviceNode* device);
+	bool AllocatePciInterrupt(DeviceNode* device, uint32 target_lapic_id,
+		uint8 vector, MsiMessage& message);
+	void ReleaseInterrupt(InterruptRemappingHandle handle);
+
+	// The backend is selected before device initialization and stays fixed while bindings exist.
+	struct Backend {
+		bool (*enable_dma)(DeviceNode* pci_root);
+		DmaState (*dma_state)();
+		bool (*map_dma)(DeviceNode* device, stduint physical, stduint length,
+			Iova::DmaMappingFlag flags, Iova::DmaMapping& mapping);
+		bool (*unmap_dma)(DeviceNode* device, uint64 device_address, stduint length);
+		void (*enable_faults)();
+		void (*notify_faults)();
+		void (*service_faults)();
+		bool (*remaps_pci)(const DeviceNode* device);
+		bool (*prepare_interrupts)(bool extended, stduint reserved_irq_entries);
+		bool (*commit_extended_mode)();
+		bool (*disable_interrupts)();
+		bool (*extended_destination)();
+		bool (*ioapic_source)(uint8 id, IoApicSource& source);
+		bool (*allocate_ioapic)(const IoApicSource& source, const Devs::X86IoApicRoute& route,
+			uint8 pin, InterruptRemappingHandle& handle, uint64& entry);
+		bool (*allocate_pci)(DeviceNode* device, uint32 target_lapic_id, uint8 vector, MsiMessage& message);
+		void (*release_interrupt)(InterruptRemappingHandle handle);
+	};
+}
+
+namespace VTd {
+	const Iommu::Backend* Probe(stduint dmar_address);
+}
+
 struct InterruptSource {
 	enum class Kind : uint8 { Fixed, PciIntx, Msi, Msix };
 
@@ -721,6 +801,8 @@ public: // Initialization and driver lifecycle
 	static InterruptBinding EnableInterrupt(InterruptSource source,
 		void (*handler)(void*, uint16), void* context, const uint32* targets, uint16 count = 1);
 	static bool DisableInterrupt(InterruptBinding& binding);
+	// Fixed PCI INTx entries are available while compatible APIC delivery is in use.
+	static bool CanUseFixedPciInterrupt();
 #endif
 
 public: // Device tree

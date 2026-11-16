@@ -15,7 +15,7 @@ namespace Handler {
 	constexpr uint8 Ring1LegacyVectorCount = 8;
 	constexpr uint8 Ring1VectorCount = 32;
 	// Reserved for the VT-d unit, outside the device vector pools.
-	constexpr uint8 VtdFaultVector = 0xA1;
+	constexpr uint8 IommuFaultVector = 0xA1;
 	constexpr uint8 DeviceMessageVectorBase = 0xD0;
 	constexpr uint8 DeviceMessageVectorCount = 16;
 

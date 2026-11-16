@@ -30,7 +30,6 @@ static stduint parse_norm(stduint addr);
 stduint acpi_rsdp_addr = 0;
 stduint acpi_madt_addr = 0;
 stduint acpi_mcfg_addr = 0;
-stduint acpi_dmar_addr = 0;
 stduint acpi_cpu_count = 0;
 uint32 acpi_cpu_lapic_ids[PCU_CORES_MAX] = {};
 uint64 acpi_pcie_ecam_base = 0;
@@ -469,6 +468,7 @@ bool ReservedMemoryRegion::Covers(uint64 begin, uint64 end) const {
 // - free (which be with unmap)
 #if (_MCCA & 0xFF00) == 0x8600
 bool Memory::initialize(stduint eax, byte* ebx) {
+	stduint dmar_addr = 0, ivrs_addr = 0;
 	mempool0.expand_only_from_self = true;
 	reserved_regions.Reset();
 	mempool.Reset();
@@ -489,7 +489,8 @@ bool Memory::initialize(stduint eax, byte* ebx) {
 	if (acpi_rsdp_addr) {
 		acpi_madt_addr = find_madt_from_rsdp(acpi_rsdp_addr);
 		acpi_mcfg_addr = find_table_from_rsdp(acpi_rsdp_addr, "MCFG");
-		acpi_dmar_addr = find_table_from_rsdp(acpi_rsdp_addr, "DMAR");
+		dmar_addr = find_table_from_rsdp(acpi_rsdp_addr, "DMAR");
+		ivrs_addr = find_table_from_rsdp(acpi_rsdp_addr, "IVRS");
 		enumerate_madt_cpus(acpi_madt_addr);
 		parse_mcfg(acpi_mcfg_addr);
 		log_acpi_topology(acpi_rsdp_addr);
@@ -621,7 +622,8 @@ bool Memory::initialize(stduint eax, byte* ebx) {
 	if (acpi_rsdp_addr) {
 		acpi_madt_addr = find_madt_from_rsdp(acpi_rsdp_addr);
 		acpi_mcfg_addr = find_table_from_rsdp(acpi_rsdp_addr, "MCFG");
-		acpi_dmar_addr = find_table_from_rsdp(acpi_rsdp_addr, "DMAR");
+		dmar_addr = find_table_from_rsdp(acpi_rsdp_addr, "DMAR");
+		ivrs_addr = find_table_from_rsdp(acpi_rsdp_addr, "IVRS");
 		enumerate_madt_cpus(acpi_madt_addr);
 		parse_mcfg(acpi_mcfg_addr);
 		log_acpi_topology(acpi_rsdp_addr);
@@ -642,7 +644,7 @@ bool Memory::initialize(stduint eax, byte* ebx) {
 	}
 	#endif
 
-	Iova::ProbeVtd(acpi_dmar_addr);
+	Iommu::Probe(dmar_addr, ivrs_addr);
 	// mempool0.dump_available();
 
 	return true;

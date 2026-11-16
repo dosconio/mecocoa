@@ -117,7 +117,6 @@ _PACKED(struct) VideoInfoEntry {
 
 extern stduint acpi_rsdp_addr;
 extern stduint acpi_mcfg_addr;
-extern stduint acpi_dmar_addr;
 extern uint64 acpi_pcie_ecam_base;
 extern uint16 acpi_pcie_segment_group;
 extern uint8 acpi_pcie_start_bus;
@@ -135,31 +134,6 @@ namespace Iova {
 		bool translated;
 	};
 
-	struct InterruptMessage {
-		uint64 address;
-		uint32 data;
-		uint16 handle;
-	};
-
-	bool ProbeVtd(stduint dmar_address);
-	bool EnableVtdPassthrough(DeviceNode* pci_root);
-	void EnableFaultEvents();
-	void NotifyFaultService();
-	void ServiceFaultEvents();
-	bool InterruptRemappingAvailable();
-	bool PrepareInterruptRemapping(bool extended, stduint reserved_irq_entries);
-	bool CommitExtendedInterruptMode();
-	bool DisableInterruptRemapping();
-	bool ExtendedInterruptMode();
-	bool IoApicInterruptSource(uint8 id, uint16& source);
-	// The caller holds the I/O APIC route lock when changing IRTEs for a GSI.
-	bool AllocateIoApicInterruptLocked(uint16 source, uint32 destination, uint8 vector, uint16& handle);
-	void ReleaseInterruptLocked(uint16 handle);
-	bool DisablePciMessageInterrupts(const DeviceNode* device);
-	bool PreparePciMessageInterrupts(const DeviceNode* device);
-	bool AllocatePciInterrupt(DeviceNode* device, uint32 target_lapic_id,
-		uint8 vector, InterruptMessage& message);
-	void ReleaseInterrupt(uint16 handle);
 	bool MapDeviceDma(DeviceNode* device, stduint physical,
 		stduint length, DmaMappingFlag flags, DmaMapping& mapping);
 	bool UnmapDeviceDma(DeviceNode* device, uint64 device_address,

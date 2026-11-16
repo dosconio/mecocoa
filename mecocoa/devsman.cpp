@@ -1191,7 +1191,7 @@ namespace Devs {
 		uint32 gsi_base;
 		uint32 gsi_count;
 		uint8 id;
-		uint16 source = 0;
+		Iommu::IoApicSource source{};
 		uint8 version = 0;
 	};
 
@@ -1273,7 +1273,7 @@ namespace Devs {
 				(gsi_base < existing_end && existing.gsi_base < gsi_end)) return false;
 		}
 		ioapic_topology[ioapic_topology_count++] = {
-			address, gsi_base, gsi_count, id, 0, uint8(version) };
+			address, gsi_base, gsi_count, id, {}, uint8(version) };
 		#if CONFIG_ACPI_BOOT_TEST
 		ploginfo("[ACPI] I/O APIC id=%u MMIO=%[32H] GSI=%u..%u", id, address, gsi_base, gsi_end - 1u);
 		#endif
@@ -1426,8 +1426,8 @@ namespace Devs {
 		uint16 draining;
 		bool boot_route;
 		bool fixed_handler;
-		uint16 irte;
-		uint16 original_irte;
+		Iommu::InterruptRemappingHandle irte;
+		Iommu::InterruptRemappingHandle original_irte;
 		X86IoApicRoute original_route;
 		bool release_pending;
 		bool unmask_pending;
@@ -1444,7 +1444,7 @@ namespace Devs {
 		for0(index, ioapic_topology_count) {
 			auto& chip = ioapic_topology[index];
 			if (chip.version < 0x10 || chip.version == 0xFF ||
-				!Iova::IoApicInterruptSource(chip.id, chip.source)) {
+				!Iommu::IoApicInterruptSource(chip.id, chip.source)) {
 				plogtrac("[DEVIRQ] I/O APIC id=%u version=%02X lacks a usable remapping route",
 					(unsigned)chip.id, (unsigned)chip.version);
 				return false;
@@ -1453,19 +1453,12 @@ namespace Devs {
 		return true;
 	}
 
-	static bool encode_remapped_ioapic_route(const X86IoApicRoute& route, uint16& handle, uint64& entry) {
+	static bool encode_remapped_ioapic_route(const X86IoApicRoute& route,
+		Iommu::InterruptRemappingHandle& handle, uint64& entry) {
 		const auto* chip = find_x86_ioapic(route.gsi);
-		if (!chip || route.destination == CORE_ID_INVALID ||
-			!Iova::AllocateIoApicInterruptLocked(chip->source, route.destination, route.vector, handle))
-			return false;
-		// Intel VT-d: the remappable RTE contains the index and uses the pin as virtual vector.
-		const uint16 index = handle - 1u;
-		entry = uint64(route.gsi - chip->gsi_base) | (uint64(1) << 48) |
-			(uint64(index & 0x7FFFu) << 49) | (uint64(index & 0x8000u) >> 4);
-		if (route.active_low) entry |= uint64(1) << 13;
-		if (route.level_triggered) entry |= uint64(1) << 15;
-		if (route.masked) entry |= uint64(1) << 16;
-		return true;
+		return chip && route.destination != CORE_ID_INVALID &&
+			Iommu::AllocateIoApicInterruptLocked(chip->source, route,
+				uint8(route.gsi - chip->gsi_base), handle, entry);
 	}
 
 	static IoApicRouteState* find_ioapic_route_locked(uint32 gsi) {
@@ -1488,26 +1481,25 @@ namespace Devs {
 		if (!state || state->owner != X86IoApicOwner::None) return false;
 		if (ioapic_remapping && state->boot_route && state->route.vector != route.vector) return false;
 		uint64 entry = x86_ioapic_encode_compatible_route(route, 0, true);
-		uint16 handle = 0;
+		Iommu::InterruptRemappingHandle handle = 0;
 		if (ioapic_remapping) {
 			auto masked_route = route;
 			masked_route.masked = true;
 			if (!encode_remapped_ioapic_route(masked_route, handle, entry)) return false;
 		}
 		if (!x86_ioapic_write_route_locked(route.gsi, entry)) {
-			Iova::ReleaseInterruptLocked(handle);
+			Iommu::ReleaseInterruptLocked(handle);
 			return false;
 		}
 		if (handle) {
 			uint64 readback;
 			if (!x86_ioapic_read_route_locked(route.gsi, readback) ||
 				((readback ^ entry) & IoApicRemappedRouteFields)) {
-				x86_ioapic_write_route_locked(route.gsi, uint64(1) << 16);
-				Iova::ReleaseInterruptLocked(handle);
+				// Keep the IRTE reserved until boot rollback has replaced all remappable RTEs.
 				return false;
 			}
 		}
-		Iova::ReleaseInterruptLocked(state->irte);
+		Iommu::ReleaseInterruptLocked(state->irte);
 		state->irte = handle;
 		state->route = route;
 		state->boot_route = true;
@@ -1620,7 +1612,7 @@ namespace Devs {
 		uni::Atomic<uint32> dispatching;
 		uint32 generation;
 		uint16 index;
-		uint16 irte;
+		Iommu::InterruptRemappingHandle irte;
 		uint32 destination;
 		bool active;
 		bool drained_source;
@@ -1681,7 +1673,7 @@ namespace Devs {
 			auto& slot = device_messages[first + i];
 			while (slot.dispatching.load(uni::MemoryOrder_Acquire))
 				_ASM volatile("pause");
-			if (quiesced) Iova::ReleaseInterrupt(slot.irte);
+			if (quiesced) Iommu::ReleaseInterrupt(slot.irte);
 		}
 		SpinlockLocal guard(x86_ioapic_route_lock());
 		for0(i, count) {
@@ -1772,7 +1764,7 @@ namespace Devs {
 		uint64 fields = IoApicFixedRouteFields;
 		bool verify = acpi;
 		bool masked_for_remapping = false;
-		uint16 handle = 0;
+		Iommu::InterruptRemappingHandle handle = 0;
 		if (ioapic_remapping) {
 			masked_for_remapping = x86_ioapic_set_mask_locked(route.gsi, true);
 			uint64 current;
@@ -1798,7 +1790,7 @@ namespace Devs {
 			(void)x86_ioapic_write_route_locked(route.gsi, previous);
 			if (handle && x86_ioapic_read_route_locked(route.gsi, readback) &&
 				!((readback ^ previous) & IoApicRemappedRouteFields))
-				Iova::ReleaseInterruptLocked(handle);
+				Iommu::ReleaseInterruptLocked(handle);
 			return X86IoApicStatus::RouteFailure;
 		}
 		if (handle) {
@@ -1859,7 +1851,7 @@ namespace Devs {
 		uint64 readback;
 		if (!x86_ioapic_read_route_locked(gsi, readback) ||
 			((readback ^ restore) & IoApicRemappedRouteFields)) return;
-		Iova::ReleaseInterruptLocked(state.irte);
+		Iommu::ReleaseInterruptLocked(state.irte);
 		state.irte = state.original_irte;
 		state.original_irte = 0;
 		state.route = state.original_route;
@@ -3228,6 +3220,61 @@ namespace Devs {
 	}
 	#endif
 
+	// The caller holds the I/O APIC route lock while quiescing firmware routing.
+	static bool mask_boot_ioapic_routes() {
+		for0(chip, ioapic_topology_count) {
+			const auto& ioapic = ioapic_topology[chip];
+			for0(pin, ioapic.gsi_count) {
+				const uint32 gsi = ioapic.gsi_base + uint32(pin);
+				uint64 entry;
+				if (!x86_ioapic_set_mask_locked(gsi, true) ||
+					!x86_ioapic_read_route_locked(gsi, entry) || !(entry & (uint64(1) << 16))) {
+					plogerro("[DEVIRQ] Cannot mask boot I/O APIC route GSI%u", gsi);
+					return false;
+				}
+			}
+		}
+		return true;
+	}
+
+	// The caller holds the I/O APIC route lock while replacing boot RTEs.
+	static bool reset_remapped_boot_routes() {
+		constexpr uint64 masked = uint64(1) << 16;
+		bool safe = true;
+		// Include pins whose RTE write failed before a boot route could be recorded.
+		for0(chip, ioapic_topology_count) {
+			const auto& ioapic = ioapic_topology[chip];
+			for0(pin, ioapic.gsi_count) {
+				const uint32 gsi = ioapic.gsi_base + uint32(pin);
+				uint64 entry;
+				if (!x86_ioapic_write_route_locked(gsi, masked) ||
+					!x86_ioapic_read_route_locked(gsi, entry) ||
+					(entry & IoApicRemappedRouteFields) != masked) {
+					plogerro("[DEVIRQ] Cannot restore masked I/O APIC route GSI%u", gsi);
+					safe = false;
+				}
+			}
+		}
+		if (!safe) return false;
+		for (auto& state : ioapic_routes) state = {};
+		ioapic_remapping = false;
+		return true;
+	}
+
+	// The caller holds the I/O APIC route lock after all relevant IR tables are active.
+	static bool unmask_remapped_boot_routes() {
+		for (const auto& state : ioapic_routes) {
+			if (!state.boot_route || state.route.masked) continue;
+			uint64 entry;
+			if (!x86_ioapic_set_mask_locked(state.route.gsi, false) ||
+				!x86_ioapic_read_route_locked(state.route.gsi, entry) || (entry & (uint64(1) << 16))) {
+				plogerro("[DEVIRQ] Cannot unmask remapped I/O APIC route GSI%u", state.route.gsi);
+				return false;
+			}
+		}
+		return true;
+	}
+
 	static bool initialize_x86_interrupts(DeviceNode* pci_tree) {
 		unsigned a, b, c, d;
 		_IO_CPUID(1, 0, &a, &b, &c, &d);
@@ -3254,62 +3301,71 @@ namespace Devs {
 				x86_ioapic_uses_madt() ? "MADT topology" : "legacy topology");
 			#endif
 		}
-		(void)Iova::EnableVtdPassthrough(pci_tree);
-		const bool can_remap_ioapic = cpuid_x2apic && prepare_ioapic_remapping();
+		if (!Iommu::EnableDmaTranslation(pci_tree)) return false;
+		const bool can_remap_ioapic = apic && prepare_ioapic_remapping();
 		if (can_remap_ioapic) {
 			SpinlockLocal guard(x86_ioapic_route_lock());
-			for0(index, ioapic_topology_count) {
-				const auto& chip = ioapic_topology[index];
-				for0(pin, chip.gsi_count) {
-					const uint8 reg = uint8(0x10u + pin * 2u);
-					const uint32 low = read_x86_ioapic_register_locked(chip.address, reg);
-					write_x86_ioapic_register_locked(chip.address, reg, low | (1u << 16));
-				}
-			}
+			if (!mask_boot_ioapic_routes()) return false;
 		}
 		// Include saved boot routes, runtime I/O APIC routes and Ring1 MSI bindings.
-		if (can_remap_ioapic && Iova::PrepareInterruptRemapping(true,
-			IoApicRouteCapacity + PwcallIrqBindingCapacity)) {
+		if (cpuid_x2apic && can_remap_ioapic && Iommu::PciMessageSourcesQuiescent(pci_tree) &&
+			Iommu::PrepareInterruptRemapping(true,
+				IoApicRouteCapacity + PwcallIrqBindingCapacity + Handler::DeviceMessageVectorCount)) {
 			SpinlockLocal guard(x86_ioapic_route_lock());
 			ioapic_remapping = true;
-			if (program_isa_irq_routes() && Iova::CommitExtendedInterruptMode()) {
-				const uint64 previous_apic_base = getMSR(x86MSR::APIC_BASE);
-				if (x86_set_local_apic_mode(2)) {
-					IC.Initialize(2);
-					for (const auto& state : ioapic_routes) {
-						if (state.boot_route && !state.route.masked)
-							x86_ioapic_set_mask_locked(state.route.gsi, false);
-					}
+			if (program_isa_irq_routes() && Iommu::CommitExtendedInterruptMode() &&
+				x86_set_local_apic_mode(2)) {
+				IC.Initialize(2);
+				if (unmask_remapped_boot_routes()) {
 					ploginfo("[DEVSMAN] IC Using: x2APIC (EIME, firmware EXTD=%u)", unsigned(firmware_x2apic));
 					return true;
 				}
-				if (getMSR(x86MSR::APIC_BASE) != previous_apic_base) {
-					plogerro("[DEVIRQ] Unexpected LAPIC state after x2APIC transition");
-					return false;
-				}
-				plogwarn("[DEVIRQ] x2APIC transition did not take effect; restoring compatible routes");
 			}
-			for (auto& state : ioapic_routes) {
-				if (state.boot_route)
-					x86_ioapic_write_route_locked(state.route.gsi, uint64(1) << 16);
-				state = {};
-			}
-			ioapic_remapping = false;
+			if (!reset_remapped_boot_routes()) return false;
+			plogwarn("[DEVIRQ] EIME setup failed; restoring compatible routes");
 		}
 
-		if (!Iova::DisableInterruptRemapping()) {
+		if (!Iommu::DisableInterruptRemapping()) {
 			plogerro("[IOMMU] Cannot restore interrupt-remapping hardware state");
 			return false;
 		}
-		if (!Iova::PrepareInterruptRemapping(false, PwcallIrqBindingCapacity) &&
-			!Iova::DisableInterruptRemapping()) {
+		bool x2apic_active = false;
+		if (apic) {
+			const uint64 apic_mode = getMSR(x86MSR::APIC_BASE);
+			if (!(apic_mode & ApicEnable)) {
+				plogerro("[DEVIRQ] LAPIC disabled after interrupt-remapping rollback");
+				return false;
+			}
+			// Intel SDM: do not write xAPIC mode over active x2APIC. Keep the actual mode for AP startup.
+			x2apic_active = (apic_mode & X2ApicEnable) != 0;
+			SpinlockLocal guard(x86_ioapic_route_lock());
+			const byte type = x2apic_active ? 2 : 1;
+			if (IC.getType() != type) IC.Initialize(type);
+		}
+		if (apic && GetCurrentLapicId() >= 0xFFu) {
+			plogerro("[DEVIRQ] BSP LAPIC ID cannot receive compatibility-format interrupts");
+			return false;
+		}
+		const bool compatible_ioapic = can_remap_ioapic;
+		const stduint reserved_irtes = PwcallIrqBindingCapacity + Handler::DeviceMessageVectorCount +
+			(compatible_ioapic ? IoApicRouteCapacity : 0);
+		bool prepared = apic && Iommu::PrepareInterruptRemapping(false, reserved_irtes);
+		if (prepared && compatible_ioapic) {
+			SpinlockLocal guard(x86_ioapic_route_lock());
+			ioapic_remapping = true;
+			if (!program_isa_irq_routes() || !unmask_remapped_boot_routes()) {
+				if (!reset_remapped_boot_routes()) return false;
+				prepared = false;
+			}
+		}
+		if (!prepared && !Iommu::DisableInterruptRemapping()) {
 			plogerro("[IOMMU] Cannot restore hardware state after compatibility setup failure");
 			return false;
 		}
 		ploginfo("[DEVSMAN] IC Using: %s (CPUID x2apic=%u HW EXTD=%u)",
-			apic ? (firmware_x2apic ? "x2APIC" : "APIC") : "PIC",
-			unsigned(cpuid_x2apic), unsigned(firmware_x2apic));
-		if (!apic) return true;
+			apic ? (x2apic_active ? "x2APIC" : "APIC") : "PIC",
+			unsigned(cpuid_x2apic), unsigned(x2apic_active));
+		if (!apic || ioapic_remapping) return true;
 		SpinlockLocal guard(x86_ioapic_route_lock());
 		return program_isa_irq_routes();
 	}
@@ -3413,7 +3469,7 @@ InterruptBinding Devsman::EnableInterrupt(InterruptSource source,
 	if ((source.kind != Kind::Msi && source.kind != Kind::Msix) || !device || !handler || !targets ||
 		!count || count > DeviceMessageGroupLimit || (source.kind == Kind::Msi && count != 1) ||
 		DeviceNodeType(device->fields.node_type) != DeviceNodeType::PciDevice || IC.getType() == 0) return {};
-	const bool extended = Iova::ExtendedInterruptMode();
+	const bool extended = Iommu::ExtendedDestinationMode();
 	for0(i, count) {
 		if (targets[i] == CORE_ID_INVALID || (!extended && targets[i] >= 0xFFu)) return {};
 	}
@@ -3442,16 +3498,17 @@ InterruptBinding Devsman::EnableInterrupt(InterruptSource source,
 		}
 	}
 
-	if (extended && !Iova::PreparePciMessageInterrupts(device)) {
+	const bool remap = Iommu::PciInterruptRemappingAvailable(device);
+	if ((extended && !remap) || (remap && !Iommu::PreparePciMessageInterrupts(device))) {
 		RetireDeviceMessages(first, count, true, false);
 		return {};
 	}
 	uni::PCI::MSIMessage messages[DeviceMessageGroupLimit]{};
 	for0(i, count) {
 		const uint8 vector = uint8(Handler::DeviceMessageVectorBase + first + i);
-		if (extended) {
-			Iova::InterruptMessage message{};
-			if (!Iova::AllocatePciInterrupt(device, targets[i], vector, message)) {
+		if (remap) {
+			Iommu::MsiMessage message{};
+			if (!Iommu::AllocatePciInterrupt(device, targets[i], vector, message)) {
 				RetireDeviceMessages(first, count, true, false);
 				return {};
 			}
@@ -3480,15 +3537,19 @@ InterruptBinding Devsman::EnableInterrupt(InterruptSource source,
 	dev.device = device->fields.pci_device;
 	dev.function = device->fields.pci_function;
 	const auto result = source.kind == Kind::Msix ? pci.ConfigureMSIX(dev, messages, count) :
-		(extended ? pci.configure_MSI(dev, uint32(messages[0].address), messages[0].data, 0) :
+		(remap ? pci.configure_MSI(dev, uint32(messages[0].address), messages[0].data, 0) :
 		pci.configure_MSI_fixed_destination(dev, uint8(targets[0]),
 			uni::PCI::MSITriggerMode::Edge, uni::PCI::MSIDeliveryMode::Fixed, uint8(messages[0].data), 0));
 	if (result) {
-		RetireDeviceMessages(first, count, Iova::DisablePciMessageInterrupts(device), true);
+		RetireDeviceMessages(first, count, Iommu::DisablePciMessageInterrupts(device), true);
 		plogwarn("[DEVIRQ] PCI message setup failed: %s", result.Name());
 		return {};
 	}
 	return {generation, first, source.kind};
+}
+
+bool Devsman::CanUseFixedPciInterrupt() {
+	return !Iommu::ExtendedDestinationMode();
 }
 
 bool Devsman::DisableInterrupt(InterruptBinding& binding) {
@@ -3510,7 +3571,7 @@ bool Devsman::DisableInterrupt(InterruptBinding& binding) {
 				++count;
 			}
 		}
-		const bool quiesced = Iova::DisablePciMessageInterrupts(device);
+		const bool quiesced = Iommu::DisablePciMessageInterrupts(device);
 		RetireDeviceMessages(binding.slot, count, quiesced, true);
 		binding = {};
 		return quiesced;
@@ -3735,7 +3796,7 @@ bool Devsman::Initialize() {
 	#if (_MCCA & 0xFF00) == 0x8600
 	Handler::InitializeEntries();
 	if (!initialize_x86_interrupts(PCI_Root())) return false;
-	Iova::EnableFaultEvents();
+	Iommu::EnableFaultEvents();
 	#if _MCCA == 0x8632
 	register_legacy_x86_platform_nodes(IC.getType() != 0);
 	#endif
@@ -4769,8 +4830,8 @@ namespace {
 		switch (DeviceEventKind(event.kind)) {
 		case DeviceEventKind::Fault:
 			#if (_MCCA & 0xFF00) == 0x8600
-			if (!source && !event.device_handle && event.source == Handler::VtdFaultVector) {
-				Iova::ServiceFaultEvents();
+			if (!source && !event.device_handle && event.source == Handler::IommuFaultVector) {
+				Iommu::ServiceFaultEvents();
 				break;
 			}
 			#endif

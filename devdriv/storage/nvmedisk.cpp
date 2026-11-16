@@ -25,7 +25,6 @@ namespace {
 	static constexpr uint16 NVME_IO_DEPTH_LIMIT = 64;
 	// NVMe 1.4c, Read/Write CDW12.NLB: a 16-bit zero-based block count.
 	static constexpr stduint NVME_IO_MAX_BLOCKS = 1u << 16;
-	static constexpr uint8 IRQ_NVME = IRQ_RTC + 3;
 	static constexpr stduint NVME_IRQ_WAIT_SPINS = 100000u;
 
 	#define nvme_fence() _ASM volatile ("mfence":::"memory")
@@ -95,13 +94,9 @@ namespace {
 		byte dstrd = 0;
 		uint32 controller_version = 0;
 		uint32 controller_nn = 0;
-		uint8 irq_vector = 0xFF;
-		volatile uint32 irq_count = 0;
 		uni::Atomic<byte> io_wait_active{0};
 		Devs::StorageWaitContext completion_wait;
-		bool msi_enabled = false;
-		uint16 interrupt_remapping_handle = 0;
-		bool irq_log_once = false;
+		InterruptBinding interrupt{};
 		bool io_submit_log_once = false;
 		bool faulted = false, started = false;
 		Mutex transaction;
@@ -124,37 +119,20 @@ namespace {
 			return regs != nullptr;
 		}
 
-		bool ConfigureInterrupts(const uni::PCI::Device& dev) {
-			if (!node || !regs) return false;
-			const stduint cpu_id = Taskman::getID();
-			auto* percore = (cpu_id < PCU_CORES_MAX) ? Taskman::PCU_CORES_PERCORE[cpu_id] : nullptr;
-			const bool extended = Iova::ExtendedInterruptMode();
-			if (!percore || percore->lapic_id == CORE_ID_INVALID || (!extended && percore->lapic_id >= 0xFFu)) {
-				plogwarn("[NVMe] MSI setup skipped: no valid LAPIC on cpu%u", (unsigned)cpu_id);
-				return false;
-			}
-			Iova::InterruptMessage message{};
-			if (extended && !Iova::PreparePciMessageInterrupts(node)) return false;
-			if (extended && !Iova::AllocatePciInterrupt(node, percore->lapic_id, IRQ_NVME, message))
-				return false;
-			const auto result = extended ?
-				pci.configure_MSI(dev, uint32(message.address), message.data, 0) :
-				pci.configure_MSI_fixed_destination(dev, uint8(percore->lapic_id),
-					uni::PCI::MSITriggerMode::Edge, uni::PCI::MSIDeliveryMode::Fixed, IRQ_NVME, 0);
-			if (result) {
-				if (message.handle && Iova::DisablePciMessageInterrupts(node))
-					Iova::ReleaseInterrupt(message.handle);
-				plogwarn("[NVMe] MSI setup failed: %s", result.Name());
-				return false;
-			}
-			interrupt_remapping_handle = message.handle;
-			irq_vector = IRQ_NVME;
-			msi_enabled = true;
-			irq_count = 0;
-			Devsman::AddIrqResource(node, IRQ_NVME);
-			irq = Devsman::FindResource(node, DeviceResourceType::IrqLine, 0);
-			plogtrac("[NVMe] MSI enabled vector=%u lapic=%u",
-				(unsigned)irq_vector, (unsigned)percore->lapic_id);
+		static void NotifyCompletion(void* context, uint16) {
+			auto& controller = *static_cast<NVMe_Controller*>(context);
+			// The waiter checks its completion queue before accepting the wakeup.
+			if (controller.io_wait_active.load(uni::MemoryOrder_Acquire))
+				Devs::NotifyStorageWait(controller.completion_wait);
+		}
+
+		bool ConfigureInterrupts() {
+			if (!node || !regs || IC.getType() == 0) return false;
+			const uint32 destination = GetCurrentLapicId();
+			interrupt = Devsman::EnableInterrupt(InterruptSource::Msi(node),
+				NotifyCompletion, this, &destination);
+			if (!interrupt) return false;
+			plogtrac("[NVMe] MSI bound lapic=%u", unsigned(destination));
 			return true;
 		}
 
@@ -296,10 +274,7 @@ namespace {
 			regs->intms = 0xFFFFFFFFu;
 			// A failed stop leaves all active DMA storage retained and forbids subsequent submissions.
 			const bool stopped = DisableController();
-			if (stopped && interrupt_remapping_handle && Iova::DisablePciMessageInterrupts(node)) {
-				Iova::ReleaseInterrupt(interrupt_remapping_handle);
-				interrupt_remapping_handle = 0;
-			}
+			if (stopped && interrupt) Devsman::DisableInterrupt(interrupt);
 			return {false, stopped, stopped};
 		}
 
@@ -366,7 +341,7 @@ namespace {
 			sq[sq_tail_ref] = cmd;
 			nvme_fence();
 			sq_tail_ref = uint16((sq_tail_ref + 1) % depth);
-			const bool irq_completion = (qid == NVME_IO_QID) && msi_enabled;
+			const bool irq_completion = (qid == NVME_IO_QID) && bool(interrupt);
 			io_wait_active.store(irq_completion, uni::MemoryOrder_Release);
 			if (recovery) recovery->requests_quiesced = false;
 			*DoorbellSq(qid) = sq_tail_ref;
@@ -600,8 +575,8 @@ namespace {
 			io_workspace.MarkInFlight();
 			cmd.prp1 = io_workspace.device_address + NVME_ADMIN_PAGE_SIZE;
 			cmd.cdw10 = uint32(NVME_IO_QID) | (uint32(io_depth - 1) << 16);
-			cmd.cdw11 = msi_enabled ? 0x00000003u : 0x00000001u;
-			if (msi_enabled) {
+			cmd.cdw11 = bool(interrupt) ? 0x00000003u : 0x00000001u;
+			if (interrupt) {
 				regs->intmc = 0xFFFFFFFFu;
 				nvme_fence();
 			}
@@ -848,25 +823,6 @@ namespace {
 		return nullptr;
 	}
 
-	void Handint_NVME() {
-		// plogerro(">>>");
-		for (auto& owner : nvme_controllers) {
-			if (!owner || !owner->regs || !owner->msi_enabled) continue;
-			if (!owner->io_wait_active.load(uni::MemoryOrder_Acquire)) continue;
-			// Controllers share this MSI vector; each waiter checks its own CQ before accepting completion.
-			Devs::NotifyStorageWait(owner->completion_wait);
-			++owner->irq_count;
-			if (!owner->irq_log_once) {
-				owner->irq_log_once = true;
-				// plogwarn("[NVMe] irq received vector=%u",
-				// 	(unsigned)IRQ_NVME);
-			}
-		}
-		IC.SendEOI(IRQ_NVME);
-	}
-
-	_ESYM_C void Handint_NVME_Entry();
-
 	static uni::PCI::Device make_pci_device(const DeviceNode& node) {
 		uni::PCI::Device dev{};
 		dev.segment_group = node.fields.pci_segment;
@@ -914,7 +870,7 @@ static bool start_nvme_driver(DeviceNode* nvme_node) {
 	const bool namespaces_ready = controller->IdentifyNamespaceList();
 	if (controller->faulted) return false;
 	nvme_node->fields.binding.driver_data = controller;
-	if (!controller->ConfigureInterrupts(dev)) {
+	if (!controller->ConfigureInterrupts()) {
 		plogwarn("[NVMe] keep polling completion");
 	}
 	if (!namespaces_ready) {
@@ -939,12 +895,6 @@ void R_NVME_INIT() {
 	if (!PCI_Init(pci)) {
 		plogwarn("[NVMe] No devices on PCI or PCI init failed.");
 	}
-	#if _MCCA == 0x8664
-	IC[IRQ_NVME].setModeRupt(mglb(Handint_NVME_Entry), SegCo64);
-	#else
-	IC[IRQ_NVME].setRange(mglb(Handint_NVME_Entry), SegCo32);
-	#endif
-	register_interrupt_handler(IRQ_NVME, Handint_NVME);
 	Devsman::RegisterDriverStarter("nvme", start_nvme_driver);
 	Devsman::StartKnownDrivers();
 }

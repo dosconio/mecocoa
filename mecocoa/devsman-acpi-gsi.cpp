@@ -30,7 +30,7 @@ namespace {
 	bool GetIOAPICDestination(uint32& destination) {
 		if (!acpi_cpu_count || acpi_cpu_lapic_ids[0] == CORE_ID_INVALID) return false;
 		destination = acpi_cpu_lapic_ids[0];
-		if (Iova::ExtendedInterruptMode()) return true;
+		if (Iommu::ExtendedDestinationMode()) return true;
 		return destination < 0xFFu;
 	}
 

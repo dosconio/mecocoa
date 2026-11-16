@@ -165,7 +165,7 @@ namespace {
 
 	bool IsGeneratedInterruptVector(uint8 vector) {
 		using namespace Handler;
-		return vector == VtdFaultVector ||
+		return vector == IommuFaultVector ||
 			(vector >= Ring1VectorBase &&
 			vector < Ring1VectorBase + Ring1LegacyVectorCount) ||
 			(vector >= Ring1ExtendedVectorBase &&
@@ -356,7 +356,7 @@ extern "C" void interrupt_dispatcher(HardwareInterruptFrame* frame) {
 		else if (irq_id < 256 && interrupt_handlers[irq_id]) {
 			interrupt_handlers[irq_id]();
 		}
-		if (irq_id < 256 && Iova::ExtendedInterruptMode())
+		if (irq_id < 256)
 			Devs::x86_complete_ioapic_interrupt(uint8(irq_id));
 		Devs::ReapInterruptVectors();
 	}

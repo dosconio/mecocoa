@@ -1,5 +1,15 @@
 ## 2026-11-16
 
+- 22:32（UTC+8）flap32 和 uefi64 在确认 PCI 消息中断静默、I/O APIC 路由已屏蔽后，为相关 DRHD 准备并提交 EIME。部分提交或启动路由解屏蔽失败时先恢复屏蔽，再逆序停用重映射。可安全回退时按 BSP 实际 LAPIC 模式重建兼容路由，硬件状态不明则停止初始化。
+
+- 22:12（UTC+8）x86/x64 内核通过公共 IOMMU 接口分派 DMA、中断重映射和故障事件。NVMe 与 xHCI 通过 Devsman 绑定和释放 MSI/MSI-X，AHCI 的兼容 INTx 判断交给 Devsman。启动识别 DMAR 和 IVRS，当前启用 Intel 硬件后端。
+
+- 21:55（UTC+8）Intel VT-d 实现迁入 devdriv/core/iommu，命名空间统一为 VTd。flap32、uefi64 和 long64 的内核源列表用通配符纳入该层目录。 公共 IOVA 映射和解绑入口保留在 memoman-iova.cpp，VT-d 硬件操作由 Intel 后端负责。
+
+- 21:43（UTC+8）flap32 和 uefi64 按 PCI 设备及 I/O APIC 的 DRHD 归属启用多单元中断重映射。各单元独立分配、失效并回收 IRTE，多单元采用 xAPIC 格式。启动失败时屏蔽受影响的路由，逆序停用单元。VT-d 接口归入 Vtd 命名空间，DMA 映射继续使用 Iova。
+
+- 19:38（UTC+8）flap32 和 uefi64 按设备归属为各 DRHD 准备直通 Context Table，再逐单元启用 DMA 翻译。运行时 DMA 失效和故障检查沿用域所属单元。启用失败时逆序回退，硬件状态无法确认时停止设备驱动启动。
+
 - 18:44（UTC+8）Rust i686 用户程序同步 LLVM data layout 并链接 Mecocoa `crt0.o`，由 `_start` 完成运行库初始化、调用 Rust `main` 并经 `exit` 退出；构建依赖跟踪启动对象和 `libx86.a`，修复新版 `core` 的 x87 ABI 检查及产物入口为零的问题。
 
 - 17:59（UTC+8）Mecocoa i686 Rust 目标登记为 Unix family，迁移到 2026-11-16 nightly 和 edition 2024，按新版 schema 固定静态重定位；`mcca-rt` 移至 `accmlib/rust`，用户运行库接入 Mempool 带对齐分配并注册 Rust `GlobalAlloc`，示例启用官方 `alloc` 验证 Box、Vec、String 及 64 字节对齐对象。

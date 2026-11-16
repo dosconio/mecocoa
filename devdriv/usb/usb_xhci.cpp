@@ -8,25 +8,14 @@
 #include <cpp/Device/Bus/PCI.hpp>
 #include <cpp/Device/USB/xHCI/xHCI.hpp>
 #include <cpp/interrupt>
-#include <c/proctrl/IAx86_64.msr.h>
 
 void hand_kboard(keyboard_event_t event);
-
-#if _OPT_BUS_USB_xHCI_MultiInterrupter
-extern "C" void Handint_XHCI1_Entry();
-extern "C" void Handint_XHCI2_Entry();
-extern "C" void Handint_XHCI3_Entry();
-#endif
-extern "C" void register_interrupt_vector_handler(stduint irq_id,
-	void (*handler)(stduint));
 
 namespace {
 	uni::PCI pci;
 	constexpr uint32 XHCIEventHandle = 0x58484349u;
 	constexpr uint32 XHCIEventSource = IRQ_xHCI;
-	constexpr uint8 XHCIInterruptVectors[] = { IRQ_xHCI, 0x42, 0x43, 0x44 };
 	using Devs::XHCIMaxConfiguredInterrupters;
-	static_assert(XHCIMaxConfiguredInterrupters <= numsof(XHCIInterruptVectors));
 	constexpr stduint XHCIEventWatchdogTicks = CONFIG_SysTickFreq >= 10 ?
 		CONFIG_SysTickFreq / 10 : 1;
 	constexpr uint8 XHCIEventStallPolls = 10;
@@ -55,6 +44,7 @@ namespace {
 		uint8 bus;
 		uint8 device;
 		uint8 function;
+		InterruptBinding interrupt{};
 		volatile stduint acknowledgement_count = 0;
 		uint8 watchdog_pending_polls = 0;
 		bool running = false;
@@ -69,100 +59,20 @@ namespace {
 	uint32 xhci_event_generation = 0;
 }
 
-static void release_xhci_interrupts(const DeviceNode* node, uint16* handles) {
-	if (!handles[0]) return;
-	if (!Iova::DisablePciMessageInterrupts(node)) return;
-	for0(index, XHCIMaxConfiguredInterrupters) {
-		Iova::ReleaseInterrupt(handles[index]);
-		handles[index] = 0;
+#if _OPT_BUS_USB_xHCI_MultiInterrupter
+static uint16 xhci_msix_targets(const uni::PCI::Device& device, uint16 controller_limit, uint32* targets) {
+	uint16 limit = pci.MSIXTableSize(device);
+	if (limit > controller_limit) limit = controller_limit;
+	if (limit > XHCIMaxConfiguredInterrupters) limit = XHCIMaxConfiguredInterrupters;
+	uint16 count = 0;
+	for (stduint core = 0; core < PCU_CORES_MAX && count < limit; ++core) {
+		auto* percore = Taskman::PCU_CORES_PERCORE[core];
+		if (!percore || percore->state != CoreState::Online || percore->lapic_id == CORE_ID_INVALID) continue;
+		targets[count++] = percore->lapic_id;
 	}
+	return count;
 }
-
-static uint16 configure_xhci_interrupts(uni::PCI::Device& xhc_dev, DeviceNode* node,
-	uint32 bsp_local_apic_id, uint8 irq_line, uint8 irq_pin,
-	uint16 controller_limit, uint16* handles) {
-	using namespace uni;
-	const bool extended = Iova::ExtendedInterruptMode();
-	if (bsp_local_apic_id == CORE_ID_INVALID || (!extended && bsp_local_apic_id >= 0xFFu)) {
-		plogerro("xHCI interrupt target LAPIC ID=%u requires interrupt remapping",
-			(unsigned)bsp_local_apic_id);
-		return 0;
-	}
-	if (extended && !Iova::PreparePciMessageInterrupts(node)) return 0;
-	#if _OPT_BUS_USB_xHCI_MultiInterrupter
-	const uint16 table_size = pci.MSIXTableSize(xhc_dev);
-	if (table_size != 0 && controller_limit != 0) {
-		uint16 message_count = table_size < XHCIMaxConfiguredInterrupters
-			? table_size : XHCIMaxConfiguredInterrupters;
-		if (message_count > controller_limit) message_count = controller_limit;
-		PCI::MSIMessage messages[XHCIMaxConfiguredInterrupters]{};
-		uint32 targets[XHCIMaxConfiguredInterrupters]{};
-		uint16 target_count = 0;
-		for (stduint core = 0; core < PCU_CORES_MAX &&
-			target_count < XHCIMaxConfiguredInterrupters; ++core) {
-			auto* percore = Taskman::PCU_CORES_PERCORE[core];
-			if (percore == nullptr || percore->state != CoreState::Online ||
-				percore->lapic_id == CORE_ID_INVALID || (!extended && percore->lapic_id >= 0xFFu)) continue;
-			targets[target_count++] = percore->lapic_id;
-		}
-		if (target_count == 0)
-			targets[target_count++] = bsp_local_apic_id;
-		if (target_count > 1) {
-			if (message_count > target_count) message_count = target_count;
-			uint16 prepared = 0;
-			for (; prepared < message_count; ++prepared) {
-				if (extended) {
-					Iova::InterruptMessage message{};
-					if (!Iova::AllocatePciInterrupt(node, targets[prepared],
-						XHCIInterruptVectors[prepared], message)) break;
-					handles[prepared] = message.handle;
-					messages[prepared] = {message.address, message.data};
-				}
-				else {
-					messages[prepared].address = 0xfee00000u | (targets[prepared] << 12);
-					messages[prepared].data = XHCIInterruptVectors[prepared];
-				}
-			}
-			if (prepared == message_count) {
-				const auto msix_result = pci.ConfigureMSIX(xhc_dev, messages, message_count);
-				if (!msix_result) {
-					ploginfo("xHCI MSI-X enabled vectors=%u cores=%u",
-						(unsigned)message_count, (unsigned)target_count);
-					return message_count;
-				}
-				plogwarn("xHCI MSI-X setup failed: %s; falling back to MSI", msix_result.Name());
-			}
-			release_xhci_interrupts(node, handles);
-			if (handles[0]) return 0;
-		}
-		else {
-			ploginfo("xHCI MSI-X skipped: one online core; using MSI");
-		}
-	}
-	#else
-	(void)controller_limit;
-	#endif
-
-	ploginfo("xHC legacy IRQ line=%u pin=%u; configuring MSI",
-		(unsigned)irq_line, (unsigned)irq_pin);
-	Iova::InterruptMessage message{};
-	if (extended && !Iova::AllocatePciInterrupt(node, bsp_local_apic_id, IRQ_xHCI, message)) return 0;
-	handles[0] = message.handle;
-	const auto msi_result = extended ?
-		pci.configure_MSI(xhc_dev, uint32(message.address), message.data, 0) :
-		pci.configure_MSI_fixed_destination(xhc_dev, static_cast<uint8>(bsp_local_apic_id),
-		PCI::MSITriggerMode::Edge,
-		PCI::MSIDeliveryMode::Fixed,
-		IRQ_xHCI, 0);
-	if (msi_result) {
-		release_xhci_interrupts(node, handles);
-		plogerro("xHCI MSI setup failed: %s", msi_result.Name());
-		return 0;
-	}
-	ploginfo("xHCI MSI enabled vector=%u lapic=%u",
-		(unsigned)IRQ_xHCI, (unsigned)bsp_local_apic_id);
-	return 1;
-}
+#endif
 
 //{TEMP} version
 static bool initialize_xhci_controller(uni::PCI::Device& xhc_dev, uint64 mmio_base,
@@ -218,6 +128,11 @@ static bool acknowledge_xhci_instance(XHCIControllerInstance& instance,
 		operational->USBSTS.Write(clear);
 	}
 	return true;
+}
+
+static void HandleXHCIInterrupt(void* context, uint16 interrupter) {
+	auto& instance = *static_cast<XHCIControllerInstance*>(context);
+	if (acknowledge_xhci_instance(instance, interrupter)) device_interrupt_proc(IRQ_xHCI);
 }
 
 static void signal_pending_xhci_events() {
@@ -355,33 +270,52 @@ static bool start_xhci_driver(DeviceNode* xhc_node) {
 		irq_pin = uint8(irq->extra);
 	}
 	pci.enable_MMIO(xhc_tree_dev);
-	const bool x2mode = (getMSR(x86MSR::APIC_BASE) & (1ULL << 10)) != 0;
-	PortAdapter lapic;
-	lapic.typ = x2mode ? 2 : 1;
-	const uint32 apic_id_value = lapic.ReadLAPIC(0x20);
-	const uint32 bsp_local_apic_id = x2mode ? apic_id_value : apic_id_value >> 24;
-	uint16 handles[XHCIMaxConfiguredInterrupters]{};
-	const uint16 interrupter_count = configure_xhci_interrupts(
-		xhc_tree_dev, xhc_node, bsp_local_apic_id, irq_line, irq_pin,
-		reinterpret_cast<uni::device::SpaceUSB3::CapabilityRegisters*>(
-			stduint(mmio->start))->HCSPARAMS1.Read().bits.max_interrupters, handles);
-	if (interrupter_count == 0) return false;
-	void* instance_storage = uni_hostenv_allocator->allocate(
-		sizeof(XHCIControllerInstance), 6);
+	const uint32 destination = GetCurrentLapicId();
+	void* instance_storage = uni_hostenv_allocator->allocate(sizeof(XHCIControllerInstance), 6);
 	if (!instance_storage) {
-		release_xhci_interrupts(xhc_node, handles);
 		plogerro("xHCI cannot allocate controller instance");
 		return false;
 	}
-	auto* instance = new (instance_storage) XHCIControllerInstance{
-		stduint(mmio->start), xhc_node->fields.pci_bus,
-		xhc_node->fields.pci_device, xhc_node->fields.pci_function,
-		interrupter_count };
+	const auto construct_instance = [&](uint16 interrupter_count) {
+		return new (instance_storage) XHCIControllerInstance{stduint(mmio->start),
+			xhc_node->fields.pci_bus, xhc_node->fields.pci_device,
+			xhc_node->fields.pci_function, interrupter_count};
+	};
+	XHCIControllerInstance* instance = nullptr;
+	#if _OPT_BUS_USB_xHCI_MultiInterrupter
+	uint32 targets[XHCIMaxConfiguredInterrupters]{};
+	auto* caps = reinterpret_cast<uni::device::SpaceUSB3::CapabilityRegisters*>(stduint(mmio->start));
+	const uint16 count = xhci_msix_targets(xhc_tree_dev, caps->HCSPARAMS1.Read().bits.max_interrupters, targets);
+	if (count > 1) {
+		instance = construct_instance(count);
+		instance->interrupt = Devsman::EnableInterrupt(InterruptSource::Msix(xhc_node),
+			HandleXHCIInterrupt, instance, targets, count);
+		if (!instance->interrupt) {
+			instance->~XHCIControllerInstance();
+			instance = nullptr;
+			plogwarn("xHCI MSI-X setup failed; falling back to MSI");
+		}
+		else ploginfo("xHCI MSI-X enabled interrupters=%u", unsigned(count));
+	}
+	#endif
+	if (!instance) {
+		ploginfo("xHC legacy IRQ line=%u pin=%u; configuring MSI", unsigned(irq_line), unsigned(irq_pin));
+		instance = construct_instance(1);
+		instance->interrupt = Devsman::EnableInterrupt(InterruptSource::Msi(xhc_node),
+			HandleXHCIInterrupt, instance, &destination);
+		if (!instance->interrupt) {
+			instance->~XHCIControllerInstance();
+			uni_hostenv_allocator->deallocate(instance_storage);
+			plogerro("xHCI MSI setup failed");
+			return false;
+		}
+		ploginfo("xHCI MSI enabled lapic=%u", unsigned(destination));
+	}
 	auto* xhc = &instance->controller;
 	instance->next = xhci_controllers;
 	xhci_controllers = instance;
 	if (!initialize_xhci_controller(xhc_tree_dev, mmio->start, *instance)) {
-		release_xhci_interrupts(xhc_node, handles);
+		Devsman::DisableInterrupt(instance->interrupt);
 		xhci_controllers = instance->next;
 		instance->~XHCIControllerInstance();
 		uni_hostenv_allocator->deallocate(instance);
@@ -421,15 +355,6 @@ bool Devsman::AcknowledgeXHCIInterrupt() {
 	return acknowledged;
 }
 
-static bool AcknowledgeXHCIInterrupter(uint16 interrupter_index) {
-	bool acknowledged = false;
-	for (auto* instance = xhci_controllers; instance; instance = instance->next) {
-		if (interrupter_index >= instance->controller.InterrupterCount()) continue;
-		if (acknowledge_xhci_instance(*instance, interrupter_index)) acknowledged = true;
-	}
-	return acknowledged;
-}
-
 bool Devsman::ProcessXHCIEvent(const DeviceEvent& event) {
 	if (DeviceEventKind(event.kind) != DeviceEventKind::Interrupt ||
 		event.device_handle != XHCIEventHandle || event.source != XHCIEventSource ||
@@ -451,33 +376,6 @@ bool Devsman::ProcessXHCIEvent(const DeviceEvent& event) {
 	return true;
 }
 
-static stduint XHCIInterruptEntry(uint16 index) {
-	switch (index) {
-	case 0: return mglb(Handint_XHCI_Entry);
-	#if _OPT_BUS_USB_xHCI_MultiInterrupter
-	case 1: return mglb(Handint_XHCI1_Entry);
-	case 2: return mglb(Handint_XHCI2_Entry);
-	case 3: return mglb(Handint_XHCI3_Entry);
-	#endif
-	default: return 0;
-	}
-}
-
-static int XHCIInterrupterForVector(stduint vector) {
-	for (uint16 index = 0; index < XHCIMaxConfiguredInterrupters; ++index) {
-		if (XHCIInterruptVectors[index] == vector) return index;
-	}
-	return -1;
-}
-
-static void HandleXHCIInterruptVector(stduint vector) {
-	const int interrupter = XHCIInterrupterForVector(vector);
-	if (interrupter >= 0 && AcknowledgeXHCIInterrupter(uint16(interrupter))) {
-		device_interrupt_proc(IRQ_xHCI);
-	}
-	IC.SendEOI(vector);
-}
-
 _ESYM_C void R_XHCI_INIT();
 
 __attribute__((section(".init.rmod")))
@@ -489,15 +387,6 @@ RMOD_LIST RMOD_LIST_XHCI{
 void R_XHCI_INIT() {
 	if (!PCI_Init(pci)) {
 		plogwarn("No devices on PCI or PCI init failed.");
-	}
-	for (uint16 index = 0; index < XHCIMaxConfiguredInterrupters; ++index) {
-		const uint8 vector = XHCIInterruptVectors[index];
-		#if _MCCA == 0x8664
-		IC[vector].setModeRupt(XHCIInterruptEntry(index), SegCo64);
-		#else
-		IC[vector].setRange(XHCIInterruptEntry(index), SegCo32);
-		#endif
-		register_interrupt_vector_handler(vector, HandleXHCIInterruptVector);
 	}
 	#if _GUI_ENABLE
 	uni::device::SpaceUSB::HIDMouseDriver::default_observer = hand_mouse_usb;

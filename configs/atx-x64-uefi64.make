@@ -101,6 +101,7 @@ cplfile=\
 	$(ulibpath)/c/data/font/font-16x8.c \
 	$(ulibpath)/c/driver/toki/rtclock.c \
 
+cppfile+=$(wildcard devdriv/**/**/*.cpp)
 include Makefile.inc
 
 elf_kernel=mcca-$(arch).elf

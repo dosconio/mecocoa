@@ -217,7 +217,7 @@ namespace {
 			if (!node || !abar) return;
 			DisableControllerInterrupts();
 			#if _MCCA == 0x8632
-			if (!Iova::ExtendedInterruptMode()) return;
+			if (Devsman::CanUseFixedPciInterrupt()) return;
 			#endif
 
 			const uint32 command_status = uni::PCI::read_config_register(
@@ -235,7 +235,6 @@ namespace {
 			#if _MCCA == 0x8664
 			return false;
 			#else
-			if (Iova::ExtendedInterruptMode()) return false;
 			if (Devs::x86_ioapic_uses_madt()) return bool(interrupt);
 			return irq_line == 10 && bool(ahci_fixed_interrupt);
 			#endif
@@ -567,7 +566,7 @@ namespace {
 
 	#if _MCCA == 0x8632
 	static void BindAhciGSI(AHCI_Controller& controller) {
-		if (Iova::ExtendedInterruptMode() || !Devs::x86_ioapic_uses_madt() ||
+		if (!Devsman::CanUseFixedPciInterrupt() || !Devs::x86_ioapic_uses_madt() ||
 			(controller.active_port < 0 && controller.active_atapi_port < 0)) return;
 		controller.interrupt = Devsman::EnableInterrupt(
 			InterruptSource::PciIntx(controller.node), DispatchAhciInterrupt, &controller);
@@ -693,7 +692,7 @@ void R_AHCI_INIT() {
 		plogwarn("[AHCI] No devices on PCI or PCI init failed.");
 	}
 	#if _MCCA == 0x8632
-	if (!Devs::x86_ioapic_uses_madt() && !Iova::ExtendedInterruptMode())
+	if (!Devs::x86_ioapic_uses_madt() && Devsman::CanUseFixedPciInterrupt())
 		ahci_fixed_interrupt = Devsman::EnableInterrupt(InterruptSource::Fixed(IRQ_AHCI), Handint_AHCI);
 	#endif
 	Devsman::RegisterDriverStarter("ahci", start_ahci_driver);
