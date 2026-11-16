@@ -1026,6 +1026,9 @@ static ProcessBlock* CreateELFImage(BlockTrait* source,
 	stduint kernel_size = _TEMP 0x00400000;
 	#if (_MCCA & 0xFF00) == 0x8600
 	tb->context.CR3 = Taskman::CreatePaging(pb, ring, _IMM(stack_norm));
+	#if CONFIG_ENABLE_MMU
+	if (!tb->context.CR3) return nullptr;
+	#endif
 	#elif _MCCA == 0x1032 || _MCCA == 0x1064
 	tb->context.satp = Taskman::CreatePaging(pb, ring, _IMM(stack_norm));
 	#endif

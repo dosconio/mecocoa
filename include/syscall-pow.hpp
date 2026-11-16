@@ -129,6 +129,8 @@ enum class PwcallDevicePublishCommand : uint32 {
 	None = 0,
 	Started,
 	FramebufferAperture,
+	BindMsix,
+	UnbindMsix,
 };
 
 struct PwcallDeviceFramebufferAperture {
@@ -206,10 +208,23 @@ namespace Powercall {
 		return (stdsint)syscall(syscall_t::POWERCALL_DEV_PUBLISH, dev_handle, _IMM(cmd), _IMM(args));
 	}
 
+	// Publish Started without the Interrupt open flag before binding individual entries.
+	static inline stdsint BindMsix(stduint dev_handle, uint16 table_index) {
+		return (stdsint)syscall(syscall_t::POWERCALL_DEV_PUBLISH, dev_handle,
+			_IMM(PwcallDevicePublishCommand::BindMsix), table_index);
+	}
+
+	// Stop the device interrupt source associated with the entry before unbinding.
+	static inline stdsint UnbindMsix(stduint dev_handle, uint16 table_index) {
+		return (stdsint)syscall(syscall_t::POWERCALL_DEV_PUBLISH, dev_handle,
+			_IMM(PwcallDevicePublishCommand::UnbindMsix), table_index);
+	}
+
 	static inline stdsint DevWait(stduint dev_handle, stduint timeout = 0, stduint flags = 0) {
 		return (stdsint)syscall(syscall_t::POWERCALL_DEV_WAIT, dev_handle, timeout, flags);
 	}
 
+	// For multiple MSI-X bindings, pass the generation to recover one entry.
 	static inline stdsint DevAck(stduint dev_handle, stduint event, uint32 generation) {
 		// A zero event and generation release a lost device-event delivery before recovery.
 		return (stdsint)syscall(syscall_t::POWERCALL_DEV_ACK, dev_handle, event, generation);

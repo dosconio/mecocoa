@@ -1,6 +1,7 @@
 // ASCII g++ TAB4 LF
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 #include "../include/mecocoa.hpp"
+#include "../include/handler.hpp"
 
 #include <cpp/Device/ACPI.hpp>
 #include <cpp/Device/Bus/PCI.hpp>
@@ -13,6 +14,8 @@ namespace {
 	static constexpr uint16 kDmarHardwareUnit = 0;
 	static constexpr uint16 kDmarReservedMemory = 1;
 	static constexpr uint8 kDmarIncludeAll = 1;
+	static constexpr uint8 kDmarScopePciEndpoint = 1;
+	static constexpr uint8 kDmarScopePciBridge = 2;
 	static constexpr uint8 kDmarScopeIoApic = 3;
 
 	static constexpr stduint kVtdVersionRegister = 0x00;
@@ -22,7 +25,22 @@ namespace {
 	static constexpr stduint kVtdGlobalStatusRegister = 0x1C;
 	static constexpr stduint kVtdRootTableAddressRegister = 0x20;
 	static constexpr stduint VtdContextCommandRegister = 0x28;
+	// Intel VT-d specification, section 11.4.7: fault reporting interface.
 	static constexpr stduint kVtdFaultStatusRegister = 0x34;
+	static constexpr stduint VtdFaultEventControlRegister = 0x38;
+	static constexpr stduint VtdFaultEventDataRegister = 0x3C;
+	static constexpr stduint VtdFaultEventAddressRegister = 0x40;
+	static constexpr stduint VtdFaultEventUpperAddressRegister = 0x44;
+	static constexpr uint32 VtdPrimaryFaultOverflow = 1u << 0;
+	static constexpr uint32 VtdPrimaryFaultPending = 1u << 1;
+	static constexpr uint32 VtdFaultEventMask = 1u << 31;
+	static constexpr uint32 VtdFaultRecordValid = 1u << 31;
+	static constexpr uint64 VtdExtendedInterruptModeSupported = uint64(1) << 4;
+	static constexpr uint64 VtdExtendedInterruptModeRequired = uint64(1) << 61;
+	static constexpr uint16 VtdFaultRecordSize = 16;
+	static constexpr uint16 VtdFaultCursorUnset = 0xFFFF;
+	static constexpr uint8 VtdFaultIrqBudget = 4;
+	static constexpr uint8 VtdFaultReportLimit = 4;
 	static constexpr stduint VtdInvalidationQueueHeadRegister = 0x80;
 	static constexpr stduint VtdInvalidationQueueTailRegister = 0x88;
 	static constexpr stduint VtdInvalidationQueueAddressRegister = 0x90;
@@ -49,6 +67,8 @@ namespace {
 	static constexpr uint32 VtdGlobalStatusCompatibilityInterrupts = uint32(1) << 23;
 	static constexpr uint32 VtdInvalidationQueueFaults =
 		(uint32(1) << 4) | (uint32(1) << 5) | (uint32(1) << 6);
+	static constexpr uint32 VtdFaultEventStatus =
+		VtdPrimaryFaultPending | VtdPrimaryFaultOverflow | VtdInvalidationQueueFaults;
 	static constexpr uint64 VtdInterruptRemappingExtendedMode = uint64(1) << 11;
 	static constexpr uint64 VtdInterruptCacheInvalidationType = 4;
 	static constexpr uint64 VtdInterruptCacheInvalidationSelective = uint64(1) << 4;
@@ -151,17 +171,95 @@ namespace {
 		return size;
 	}
 
+	struct RmrrRoute {
+		uint64 base;
+		uint64 limit;
+		uint16 requester;
+		uint8 secondary_bus;
+		uint8 subordinate_bus;
+	};
+
 	struct IovaRange {
 		bool active;
+		bool reserved;
 		uint64 device_address;
 		uint64 physical;
 		stduint length;
 	};
 
+	struct VtdFaultRecord {
+		uint64 info;
+		uint64 detail;
+	};
+
+	struct VtdFaultEvents {
+		VtdFaultRecord records[16];
+		uint16 record_offset;
+		uint16 record_count;
+		uint16 next_record;
+		uint8 head;
+		uint8 count;
+		bool enabled;
+		bool overflow;
+		stduint report_tick;
+		stduint suppressed;
+		uint8 reports;
+		uint32 last_qi_faults;
+	};
+
+	struct ResolvedDmarScope {
+		uint8 type;
+		uint8 enumeration_id;
+		uint16 requester_id;
+		uint8 secondary_bus;
+		uint8 subordinate_bus;
+		bool resolved;
+	};
+
+	// A DRHD owns its registers and all table and queue storage published to that hardware.
+	struct VtdUnit {
+		const DmarHardwareUnit* descriptor;
+		volatile uint8* registers;
+		uint64 capability;
+		uint64 extended_capability;
+
+		uni::UniquePtr<ResolvedDmarScope[]> scopes;
+		stduint scope_count;
+
+		bool passthrough_enabled;
+		VtdRootEntry* root_table;
+		stduint context_table_count;
+		stduint device_count;
+		stduint xhci_extra_interrupts;
+
+		// Resolved RMRR routes use the PCI topology of this unit's segment.
+		uni::UniquePtr<RmrrRoute[]> rmrr_routes;
+		stduint rmrr_route_count;
+		bool rmrr_routes_ready;
+
+		bool interrupt_remapping_enabled;
+		bool extended_interrupt_mode;
+		bool compatibility_interrupts_before;
+		uni::UniquePtr<VtdInterruptRemappingEntry[], VtdInterruptStorageDeleter> interrupt_remapping_table;
+		uni::UniquePtr<byte[], VtdInterruptStorageDeleter> interrupt_remapping_allocated;
+		stduint interrupt_remapping_capacity;
+
+		void* invalidation_queue;
+		uint32* invalidation_completion;
+		stduint invalidation_queue_length;
+		uint8 invalidation_queue_shift;
+		bool invalidation_queue_failed;
+
+		VtdFaultEvents faults;
+	};
+
 	struct IovaDomain {
 		bool active;
 		bool attached;
+		bool restore_failed;
 		DeviceNode* device;
+		// Keep the same unit until hardware can no longer reference the domain tables.
+		VtdUnit* unit;
 		uint16 domain_id;
 		uint64* root;
 		void* tables[IovaTableCapacity];
@@ -169,33 +267,16 @@ namespace {
 		IovaRange mappings[IovaMappingCapacity];
 	};
 
+	// The DMAR header and the probed unit array are shared platform metadata.
 	struct VtdState {
-		bool probe_complete;
-		bool passthrough_enabled;
-		bool interrupt_remapping_enabled;
-		bool extended_interrupt_mode;
-		bool include_all;
+		const DmarTable* dmar_table;
 		uint8 dmar_flags;
 		uint8 host_address_width;
-		uint16 segment;
-		const DmarHardwareUnit* primary_unit;
-		bool compatibility_interrupts_before;
-		bool invalidation_queue_failed;
-		stduint hardware_unit_count;
-		volatile uint8* registers;
-		uint64 capability;
-		uint64 extended_capability;
-		VtdRootEntry* root_table;
-		uni::UniquePtr<VtdInterruptRemappingEntry[], VtdInterruptStorageDeleter> interrupt_remapping_table;
-		uni::UniquePtr<byte[], VtdInterruptStorageDeleter> interrupt_remapping_allocated;
-		stduint interrupt_remapping_capacity;
-		void* invalidation_queue;
-		uint32* invalidation_completion;
-		stduint invalidation_queue_length;
-		uint8 invalidation_queue_shift;
-		stduint context_table_count;
-		stduint device_count;
-		stduint xhci_extra_interrupts;
+		bool probe_complete;
+		stduint rmrr_route_capacity;
+		uni::UniquePtr<VtdUnit[]> units;
+		stduint unit_count;
+		bool scopes_prepared;
 	};
 
 	static_assert(sizeof(DmarTable) == 48);
@@ -212,7 +293,18 @@ namespace {
 	static_assert(SelectInterruptTableSize(256) == 7 && SelectInterruptTableSize(257) == 8);
 
 	VtdState vtd_state{};
+	// One Devsman notification covers pending hardware faults. The records themselves belong to each unit.
+	uni::Atomic<byte> vtd_fault_work{0};
+	uni::Atomic<byte> vtd_fault_event_posted{0};
 	IovaDomain iova_domains[IovaDomainCapacity] = {};
+
+	// Until device ownership is resolved, only a single include-all unit can be used.
+	VtdUnit* SingleVtdUnit() {
+		if (!vtd_state.probe_complete || vtd_state.unit_count != 1) return nullptr;
+		auto& unit = vtd_state.units[0];
+		return unit.descriptor->flags & kDmarIncludeAll ? &unit : nullptr;
+	}
+
 	Spinlock* IovaLock() {
 		// RTE and IRTE changes share the VT-d queue serialization lock.
 		return Devs::x86_ioapic_route_lock();
@@ -275,8 +367,8 @@ namespace {
 		return command;
 	}
 
-	bool SetVtdFeature(uint32 command_bit, uint32 status_bit, bool enabled) {
-		auto registers = vtd_state.registers;
+	bool SetVtdFeature(const VtdUnit& unit, uint32 command_bit, uint32 status_bit, bool enabled) {
+		auto registers = unit.registers;
 		uint32 command = VtdPersistentCommand(ReadRegister32(registers,
 			kVtdGlobalStatusRegister));
 		if (enabled) command |= command_bit;
@@ -295,58 +387,59 @@ namespace {
 		return address < limit && uint64(length) <= limit - address;
 	}
 
-	bool SubmitQueuedInvalidation(uint64 descriptor_low,
+	// The shared I/O APIC route lock serializes access to each unit's queue and wait status.
+	bool SubmitQueuedInvalidation(VtdUnit& unit, uint64 descriptor_low,
 		uint64 descriptor_high = 0) {
-		if (vtd_state.invalidation_queue_failed || !vtd_state.invalidation_queue ||
-			!vtd_state.invalidation_completion ||
-			!(ReadRegister32(vtd_state.registers, kVtdGlobalStatusRegister) &
+		if (unit.invalidation_queue_failed || !unit.invalidation_queue ||
+			!unit.invalidation_completion ||
+			!(ReadRegister32(unit.registers, kVtdGlobalStatusRegister) &
 			VtdGlobalStatusQueuedInvalidation)) return false;
 		const stduint descriptor_length = stduint(1) <<
-			vtd_state.invalidation_queue_shift;
-		const uint32 queue_mask = uint32(vtd_state.invalidation_queue_length - 1);
-		const uint32 tail = ReadRegister32(vtd_state.registers,
+			unit.invalidation_queue_shift;
+		const uint32 queue_mask = uint32(unit.invalidation_queue_length - 1);
+		const uint32 tail = ReadRegister32(unit.registers,
 			VtdInvalidationQueueTailRegister) & queue_mask;
 		if ((tail & (descriptor_length - 1)) ||
-			tail + descriptor_length > vtd_state.invalidation_queue_length)
+			tail + descriptor_length > unit.invalidation_queue_length)
 			return false;
 		const uint32 wait_tail =
 			(tail + uint32(descriptor_length)) & queue_mask;
 		const uint32 next =
 			(wait_tail + uint32(descriptor_length)) & queue_mask;
-		const uint32 head = ReadRegister32(vtd_state.registers,
+		const uint32 head = ReadRegister32(unit.registers,
 			VtdInvalidationQueueHeadRegister) & queue_mask;
 		if (wait_tail == head || next == head) return false;
 		auto* descriptor = reinterpret_cast<uint64*>(
-			reinterpret_cast<uint8*>(vtd_state.invalidation_queue) + tail);
+			reinterpret_cast<uint8*>(unit.invalidation_queue) + tail);
 		MemSet(descriptor, 0, descriptor_length);
 		descriptor[0] = descriptor_low;
 		descriptor[1] = descriptor_high;
 		auto* wait_descriptor = reinterpret_cast<uint64*>(
-			reinterpret_cast<uint8*>(vtd_state.invalidation_queue) + wait_tail);
+			reinterpret_cast<uint8*>(unit.invalidation_queue) + wait_tail);
 		MemSet(wait_descriptor, 0, descriptor_length);
-		*vtd_state.invalidation_completion = VtdInvalidationStatusPending;
+		*unit.invalidation_completion = VtdInvalidationStatusPending;
 		wait_descriptor[0] = VtdInvalidationWaitType |
 			VtdInvalidationWaitStatusWrite |
 			(uint64(VtdInvalidationStatusComplete) << 32);
-		wait_descriptor[1] = uint64(stduint(vtd_state.invalidation_completion));
+		wait_descriptor[1] = uint64(stduint(unit.invalidation_completion));
 		StoreFence();
-		WriteRegister32(vtd_state.registers,
+		WriteRegister32(unit.registers,
 			VtdInvalidationQueueTailRegister, next);
 		for0(spin, VtdCommandTimeoutSpins) {
-			const uint32 faults = ReadRegister32(vtd_state.registers,
+			const uint32 faults = ReadRegister32(unit.registers,
 				kVtdFaultStatusRegister);
 			if (faults & VtdInvalidationQueueFaults) break;
 			if (*reinterpret_cast<volatile uint32*>(
-				vtd_state.invalidation_completion) ==
+				unit.invalidation_completion) ==
 				VtdInvalidationStatusComplete) return true;
 			_ASM volatile ("pause" ::: "memory");
 		}
 		// A late wait descriptor must not complete a later submission.
-		vtd_state.invalidation_queue_failed = true;
+		unit.invalidation_queue_failed = true;
 		return false;
 	}
 
-	bool SubmitInterruptCacheInvalidation(uint16 index = 0,
+	bool SubmitInterruptCacheInvalidation(VtdUnit& unit, uint16 index = 0,
 		uint8 mask = 0, bool selective = false) {
 		uint64 descriptor = VtdInterruptCacheInvalidationType;
 		if (selective) {
@@ -354,63 +447,64 @@ namespace {
 			descriptor |= uint64(mask & 0x1Fu) << 27;
 			descriptor |= uint64(index) << 32;
 		}
-		return SubmitQueuedInvalidation(descriptor);
+		return SubmitQueuedInvalidation(unit, descriptor);
 	}
 
-	void ReleaseInterruptRemappingStorage() {
-		if (vtd_state.invalidation_queue) {
-			mempool.deallocate(vtd_state.invalidation_queue,
-				vtd_state.invalidation_queue_length);
-			vtd_state.invalidation_queue = nullptr;
-			vtd_state.invalidation_queue_length = 0;
+	void ReleaseInterruptRemappingStorage(VtdUnit& unit) {
+		if (unit.invalidation_queue) {
+			mempool.deallocate(unit.invalidation_queue,
+				unit.invalidation_queue_length);
+			unit.invalidation_queue = nullptr;
+			unit.invalidation_queue_length = 0;
 		}
-		if (vtd_state.invalidation_completion) {
-			mempool.deallocate(vtd_state.invalidation_completion, PAGE_SIZE);
-			vtd_state.invalidation_completion = nullptr;
+		if (unit.invalidation_completion) {
+			mempool.deallocate(unit.invalidation_completion, PAGE_SIZE);
+			unit.invalidation_completion = nullptr;
 		}
-		vtd_state.interrupt_remapping_table.reset();
-		vtd_state.interrupt_remapping_allocated.reset();
-		vtd_state.interrupt_remapping_capacity = 0;
-		vtd_state.interrupt_remapping_enabled = false;
-		vtd_state.extended_interrupt_mode = false;
-		vtd_state.invalidation_queue_failed = false;
+		unit.interrupt_remapping_table.reset();
+		unit.interrupt_remapping_allocated.reset();
+		unit.interrupt_remapping_capacity = 0;
+		unit.interrupt_remapping_enabled = false;
+		unit.extended_interrupt_mode = false;
+		unit.invalidation_queue_failed = false;
 	}
 
-	bool DisableInterruptRemappingForRollback(bool compatibility_enabled_before) {
-		const uint32 status = ReadRegister32(vtd_state.registers,
+	// Stop the hardware before returning any queue or interrupt table storage to the allocator.
+	bool DisableInterruptRemappingForRollback(const VtdUnit& unit, bool compatibility_enabled_before) {
+		const uint32 status = ReadRegister32(unit.registers,
 			kVtdGlobalStatusRegister);
 		if (status & VtdGlobalStatusInterruptRemapping) {
-			if (!SetVtdFeature(VtdGlobalCommandEnableInterruptRemapping,
+			if (!SetVtdFeature(unit, VtdGlobalCommandEnableInterruptRemapping,
 				VtdGlobalStatusInterruptRemapping, false)) return false;
 		}
-		if (ReadRegister32(vtd_state.registers, kVtdGlobalStatusRegister) &
+		if (ReadRegister32(unit.registers, kVtdGlobalStatusRegister) &
 			VtdGlobalStatusQueuedInvalidation) {
-			if (!SetVtdFeature(VtdGlobalCommandEnableQueuedInvalidation,
+			if (!SetVtdFeature(unit, VtdGlobalCommandEnableQueuedInvalidation,
 				VtdGlobalStatusQueuedInvalidation, false)) return false;
 		}
 		const bool compatibility_enabled =
-			(ReadRegister32(vtd_state.registers, kVtdGlobalStatusRegister) &
+			(ReadRegister32(unit.registers, kVtdGlobalStatusRegister) &
 			VtdGlobalStatusCompatibilityInterrupts) != 0;
 		if (compatibility_enabled != compatibility_enabled_before &&
-			!SetVtdFeature(VtdGlobalCommandCompatibilityInterrupts,
+			!SetVtdFeature(unit, VtdGlobalCommandCompatibilityInterrupts,
 				VtdGlobalStatusCompatibilityInterrupts,
 				compatibility_enabled_before)) return false;
 		return true;
 	}
 
-	bool EnableVtdInterruptRemapping(bool extended_mode, stduint reserved_irq_entries) {
-		if (!vtd_state.probe_complete || !vtd_state.passthrough_enabled)
+	bool EnableVtdInterruptRemapping(VtdUnit& unit, bool extended_mode, stduint reserved_irq_entries) {
+		if (!vtd_state.probe_complete || !unit.passthrough_enabled)
 			return false;
-		if (vtd_state.interrupt_remapping_enabled)
-			return vtd_state.extended_interrupt_mode == extended_mode;
-		if (vtd_state.invalidation_queue ||
-			vtd_state.interrupt_remapping_table) return false;
+		if (unit.interrupt_remapping_enabled)
+			return unit.extended_interrupt_mode == extended_mode;
+		if (unit.invalidation_queue ||
+			unit.interrupt_remapping_table) return false;
 		if (!(vtd_state.dmar_flags & 1u) ||
-			!(vtd_state.extended_capability & (uint64(1) << 3)) ||
-			!(vtd_state.extended_capability & (uint64(1) << 1)) ||
-			!(vtd_state.extended_capability & 1u)) {
+			!(unit.extended_capability & (uint64(1) << 3)) ||
+			!(unit.extended_capability & (uint64(1) << 1)) ||
+			!(unit.extended_capability & 1u)) {
 			plogtrac("[IOMMU] Interrupt remapping unavailable flags=%02X ecap=%[64H]",
-				vtd_state.dmar_flags, vtd_state.extended_capability);
+				vtd_state.dmar_flags, unit.extended_capability);
 			return false;
 		}
 		// EIME rejects every compatibility-format MSI and I/O APIC message.
@@ -420,13 +514,13 @@ namespace {
 			return false;
 		}
 		if (extended_mode &&
-			!(vtd_state.extended_capability & (uint64(1) << 4))) {
+			!(unit.extended_capability & (uint64(1) << 4))) {
 			plogwarn("[IOMMU] Interrupt remapping lacks extended interrupt mode");
 			return false;
 		}
 		// Allow one base interrupt per PCI requester; xHCI can consume multiple entries in EIME mode.
-		const stduint required_entries = reserved_irq_entries + vtd_state.device_count +
-			(extended_mode ? vtd_state.xhci_extra_interrupts : 0);
+		const stduint required_entries = reserved_irq_entries + unit.device_count +
+			(extended_mode ? unit.xhci_extra_interrupts : 0);
 		const uint8 table_size = SelectInterruptTableSize(required_entries);
 		const stduint capacity = InterruptTableCapacity(table_size);
 		if (required_entries > capacity) {
@@ -449,11 +543,11 @@ namespace {
 			return false;
 		}
 		const bool scalable_queue =
-			(vtd_state.extended_capability & (uint64(1) << 43)) != 0;
+			(unit.extended_capability & (uint64(1) << 43)) != 0;
 		const bool compatibility_enabled_before =
-			(ReadRegister32(vtd_state.registers, kVtdGlobalStatusRegister) &
+			(ReadRegister32(unit.registers, kVtdGlobalStatusRegister) &
 			VtdGlobalStatusCompatibilityInterrupts) != 0;
-		vtd_state.compatibility_interrupts_before = compatibility_enabled_before;
+		unit.compatibility_interrupts_before = compatibility_enabled_before;
 		const uint8 queue_shift = scalable_queue ? 5 : 4;
 		const stduint queue_length = VtdInvalidationQueueLength << queue_shift;
 		auto* queue = mempool.allocate(queue_length, 12);
@@ -475,64 +569,64 @@ namespace {
 		MemSet(allocated.get(), 0, bitmap_bytes);
 		StoreFence();
 
-		vtd_state.invalidation_queue = queue;
-		vtd_state.invalidation_completion = completion;
-		vtd_state.invalidation_queue_length = queue_length;
-		vtd_state.invalidation_queue_shift = queue_shift;
-		vtd_state.interrupt_remapping_table.swap(table);
-		vtd_state.interrupt_remapping_allocated.swap(allocated);
-		vtd_state.interrupt_remapping_capacity = capacity;
-		WriteRegister32(vtd_state.registers,
+		unit.invalidation_queue = queue;
+		unit.invalidation_completion = completion;
+		unit.invalidation_queue_length = queue_length;
+		unit.invalidation_queue_shift = queue_shift;
+		unit.interrupt_remapping_table.swap(table);
+		unit.interrupt_remapping_allocated.swap(allocated);
+		unit.interrupt_remapping_capacity = capacity;
+		WriteRegister32(unit.registers,
 			VtdInvalidationQueueTailRegister, 0);
 		uint64 queue_address = uint64(stduint(queue));
 		if (scalable_queue) queue_address |= uint64(1) << 11;
-		WriteRegister64(vtd_state.registers,
+		WriteRegister64(unit.registers,
 			VtdInvalidationQueueAddressRegister, queue_address);
-		if (!SetVtdFeature(VtdGlobalCommandEnableQueuedInvalidation,
+		if (!SetVtdFeature(unit, VtdGlobalCommandEnableQueuedInvalidation,
 			VtdGlobalStatusQueuedInvalidation, true)) {
 			plogerro("[IOMMU] Queued invalidation enable timed out");
-			if (DisableInterruptRemappingForRollback(
+			if (DisableInterruptRemappingForRollback(unit,
 				compatibility_enabled_before))
-				ReleaseInterruptRemappingStorage();
+				ReleaseInterruptRemappingStorage(unit);
 			return false;
 		}
 
 		uint64 table_address = table_physical | table_size;
 		if (extended_mode) table_address |= VtdInterruptRemappingExtendedMode;
-		WriteRegister64(vtd_state.registers,
+		WriteRegister64(unit.registers,
 			VtdInterruptRemappingTableAddressRegister, table_address);
-		uint32 command = VtdPersistentCommand(ReadRegister32(vtd_state.registers,
+		uint32 command = VtdPersistentCommand(ReadRegister32(unit.registers,
 			kVtdGlobalStatusRegister));
 		command |= VtdGlobalCommandSetInterruptRemappingTable;
 		if (!extended_mode) command |= VtdGlobalCommandCompatibilityInterrupts;
 		else command &= ~VtdGlobalCommandCompatibilityInterrupts;
-		WriteRegister32(vtd_state.registers, VtdGlobalCommandRegister, command);
+		WriteRegister32(unit.registers, VtdGlobalCommandRegister, command);
 		const uint32 required_status = VtdGlobalStatusInterruptRemappingTableSet |
 			(extended_mode ? 0u : VtdGlobalStatusCompatibilityInterrupts);
 		const uint32 status_mask = extended_mode ? VtdGlobalStatusInterruptRemappingTableSet : required_status;
-		if (!WaitRegister32(vtd_state.registers, kVtdGlobalStatusRegister,
+		if (!WaitRegister32(unit.registers, kVtdGlobalStatusRegister,
 			status_mask, required_status) ||
-			!SubmitInterruptCacheInvalidation()) {
+			!SubmitInterruptCacheInvalidation(unit)) {
 			plogerro("[IOMMU] Interrupt-remapping table activation failed");
-			if (DisableInterruptRemappingForRollback(
+			if (DisableInterruptRemappingForRollback(unit,
 				compatibility_enabled_before))
-				ReleaseInterruptRemappingStorage();
+				ReleaseInterruptRemappingStorage(unit);
 			return false;
 		}
-		vtd_state.extended_interrupt_mode = extended_mode;
+		unit.extended_interrupt_mode = extended_mode;
 		ploginfo("[IOMMU] Interrupt table prepared required=%u entries=%u bytes=%u",
 			unsigned(required_entries), unsigned(capacity), unsigned(table_bytes));
 		// Extended mode is committed after Devsman installs masked remappable RTEs.
 		if (extended_mode) return true;
-		if (!SetVtdFeature(VtdGlobalCommandEnableInterruptRemapping,
+		if (!SetVtdFeature(unit, VtdGlobalCommandEnableInterruptRemapping,
 			VtdGlobalStatusInterruptRemapping, true)) {
 			plogerro("[IOMMU] Interrupt remapping enable timed out");
-			if (DisableInterruptRemappingForRollback(
+			if (DisableInterruptRemappingForRollback(unit,
 				compatibility_enabled_before))
-				ReleaseInterruptRemappingStorage();
+				ReleaseInterruptRemappingStorage(unit);
 			return false;
 		}
-		vtd_state.interrupt_remapping_enabled = true;
+		unit.interrupt_remapping_enabled = true;
 		ploginfo("[IOMMU] Interrupt remapping enabled entries=%u mode=xAPIC",
 			unsigned(capacity));
 		return true;
@@ -593,18 +687,18 @@ namespace {
 		return true;
 	}
 
-	bool ProbeHardwareUnit(const DmarHardwareUnit& unit, stduint index) {
+	bool ProbeHardwareUnit(VtdUnit& unit, const DmarHardwareUnit& descriptor, stduint index) {
 		ploginfo("[IOMMU] DRHD%u segment=%u include-all=%u base=%[64H] length=%u",
-			index, unit.segment, unsigned((unit.flags & kDmarIncludeAll) != 0),
-			unit.register_base, unit.header.length);
-		const uint8* entry_begin = reinterpret_cast<const uint8*>(&unit);
+			index, descriptor.segment, unsigned((descriptor.flags & kDmarIncludeAll) != 0),
+			descriptor.register_base, descriptor.header.length);
+		const uint8* entry_begin = reinterpret_cast<const uint8*>(&descriptor);
 		if (!LogDeviceScopes(entry_begin + sizeof(DmarHardwareUnit),
-			entry_begin + unit.header.length, unit.segment, "DRHD", index))
+			entry_begin + descriptor.header.length, descriptor.segment, "DRHD", index))
 			return false;
-		if (!MapRegisterWindow(unit.register_base)) return false;
+		if (!MapRegisterWindow(descriptor.register_base)) return false;
 
 		auto registers = reinterpret_cast<volatile uint8*>(
-			stduint(unit.register_base));
+			stduint(descriptor.register_base));
 		const uint32 version = ReadRegister32(registers, kVtdVersionRegister);
 		const uint64 capability = ReadRegister64(registers,
 			kVtdCapabilityRegister);
@@ -637,14 +731,10 @@ namespace {
 		ploginfo("[IOMMU] DRHD%u gsts=%08X te=%u rtaddr=%[64H] fsts=%08X",
 			index, global_status, unsigned((global_status >> 31) & 1),
 			root_table, fault_status);
-		if (!index) {
-			vtd_state.primary_unit = &unit;
-			vtd_state.include_all = (unit.flags & kDmarIncludeAll) != 0;
-			vtd_state.segment = unit.segment;
-			vtd_state.registers = registers;
-			vtd_state.capability = capability;
-			vtd_state.extended_capability = extended;
-		}
+		unit.descriptor = &descriptor;
+		unit.registers = registers;
+		unit.capability = capability;
+		unit.extended_capability = extended;
 		return true;
 	}
 
@@ -652,12 +742,238 @@ namespace {
 		ploginfo("[IOMMU] RMRR%u segment=%u base=%[64H] end=%[64H] length=%u",
 			index, range.segment, range.base_address, range.end_address,
 			range.header.length);
-		if (range.base_address > range.end_address) {
-			plogwarn("[IOMMU] RMRR%u has an invalid address range", index);
-		}
 		const uint8* entry_begin = reinterpret_cast<const uint8*>(&range);
 		return LogDeviceScopes(entry_begin + sizeof(DmarReservedMemory),
 			entry_begin + range.header.length, range.segment, "RMRR", index);
+	}
+
+	bool ReadBridgeBuses(uint16 segment, uint16 requester, uint8& secondary,
+		uint8& subordinate) {
+		const uint8 bus = uint8(requester >> 8);
+		const uint8 device = uint8(requester >> 3) & 31u;
+		const uint8 function = uint8(requester) & 7u;
+		const uint32 class_code = uni::PCI::read_config_register(segment,
+			bus, device, function, 0x08);
+		if ((class_code >> 16) != 0x0604u) return false;
+		const uint32 buses = uni::PCI::read_config_register(segment,
+			bus, device, function, 0x18);
+		secondary = uint8(buses >> 8);
+		subordinate = uint8(buses >> 16);
+		return secondary && secondary != 0xFFu && uint8(buses) == bus &&
+			secondary != bus && secondary <= subordinate;
+	}
+
+	// Intel VT-d specification, section 8.3.1: resolve Device Scope paths through PCI bridges.
+	bool ResolveScopeRequester(uint16 segment, const DmarDeviceScope& scope,
+		uint16& requester) {
+		const auto* path = reinterpret_cast<const DmarPciPath*>(
+			reinterpret_cast<const uint8*>(&scope) + sizeof(scope));
+		const stduint count = (scope.length - sizeof(scope)) / sizeof(*path);
+		uint8 bus = scope.start_bus;
+		for0(i, count) {
+			if (path[i].device >= 32 || path[i].function >= 8) return false;
+			requester = (uint16(bus) << 8) | (uint16(path[i].device) << 3) |
+				path[i].function;
+			if (i + 1 == count) return true;
+			uint8 subordinate;
+			if (!ReadBridgeBuses(segment, requester, bus, subordinate)) return false;
+		}
+		return false;
+	}
+
+	bool IsPciScope(uint8 type) {
+		return type == kDmarScopePciEndpoint || type == kDmarScopePciBridge;
+	}
+
+	bool PrepareDrhdScopes(VtdUnit& unit, stduint unit_index) {
+		const auto* bytes = reinterpret_cast<const uint8*>(unit.descriptor);
+		const auto* begin = bytes + sizeof(*unit.descriptor);
+		const auto* end = bytes + unit.descriptor->header.length;
+		const uint16 segment = unit.descriptor->segment;
+		stduint count = 0;
+		// ProbeHardwareUnit already checked the lengths of these firmware records.
+		for (auto* cursor = begin; cursor < end;) {
+			const auto* scope = reinterpret_cast<const DmarDeviceScope*>(cursor);
+			cursor += scope->length;
+			if (IsPciScope(scope->type) || scope->type == kDmarScopeIoApic) ++count;
+		}
+		if (!count) return true;
+		uni::UniquePtr<ResolvedDmarScope[]> scopes(new (std::nothrow_t{}) ResolvedDmarScope[count]{});
+		if (!scopes) {
+			plogwarn("[IOMMU] Cannot allocate DRHD%u scopes segment=%04X", unit_index, unsigned(segment));
+			return false;
+		}
+
+		stduint index = 0;
+		for (auto* cursor = begin; cursor < end;) {
+			const auto* scope = reinterpret_cast<const DmarDeviceScope*>(cursor);
+			cursor += scope->length;
+			if (!IsPciScope(scope->type) && scope->type != kDmarScopeIoApic) continue;
+			auto& resolved = scopes[index++];
+			resolved.type = scope->type;
+			resolved.enumeration_id = scope->enumeration_id;
+			resolved.resolved = ResolveScopeRequester(segment, *scope, resolved.requester_id);
+			if (resolved.resolved && scope->type == kDmarScopePciBridge)
+				resolved.resolved = ReadBridgeBuses(segment, resolved.requester_id,
+					resolved.secondary_bus, resolved.subordinate_bus);
+			if (!resolved.resolved)
+				plogwarn("[IOMMU] DRHD%u unresolved scope segment=%04X type=%u id=%u start-bus=%u",
+					unit_index, unsigned(segment), unsigned(scope->type),
+					unsigned(scope->enumeration_id), unsigned(scope->start_bus));
+		}
+		unit.scopes.swap(scopes);
+		unit.scope_count = count;
+		return true;
+	}
+
+	enum class DrhdMatch : uint8 { None, Explicit, IncludeAll, Conflict, Unresolved };
+
+	struct DrhdOwnership {
+		DrhdMatch match = DrhdMatch::None;
+		const VtdUnit* unit = nullptr;
+		uint16 source_id = 0;
+	};
+
+	// Intel VT-d specification, sections 8.3 and 8.3.1: explicit PCI scopes precede INCLUDE_PCI_ALL within a segment.
+	DrhdOwnership FindPciOwner(uint16 segment, uint16 requester_id) {
+		const VtdUnit* explicit_owner = nullptr;
+		const VtdUnit* fallback = nullptr;
+		bool unresolved = false;
+		const uint8 bus = uint8(requester_id >> 8);
+		for0(i, vtd_state.unit_count) {
+			const auto& unit = vtd_state.units[i];
+			if (unit.descriptor->segment != segment) continue;
+			if (unit.descriptor->flags & kDmarIncludeAll) {
+				if (fallback) return {DrhdMatch::Conflict};
+				fallback = &unit;
+			}
+			for0(scope_index, unit.scope_count) {
+				const auto& scope = unit.scopes[scope_index];
+				if (!IsPciScope(scope.type)) continue;
+				if (!scope.resolved) {
+					unresolved = true;
+					continue;
+				}
+				// A bridge scope covers the bridge itself and every downstream bus.
+				const bool downstream = scope.type == kDmarScopePciBridge &&
+					bus >= scope.secondary_bus && bus <= scope.subordinate_bus;
+				if (scope.requester_id != requester_id && !downstream) continue;
+				if (explicit_owner && explicit_owner != &unit) return {DrhdMatch::Conflict};
+				explicit_owner = &unit;
+			}
+		}
+		// An unresolved path may claim this requester, so the segment default is not safe to assume.
+		if (unresolved) return {DrhdMatch::Unresolved};
+		if (explicit_owner) return {DrhdMatch::Explicit, explicit_owner, requester_id};
+		if (fallback) return {DrhdMatch::IncludeAll, fallback, requester_id};
+		return {};
+	}
+
+	DrhdOwnership FindIoApicOwner(uint8 id) {
+		DrhdOwnership owner;
+		for0(i, vtd_state.unit_count) {
+			const auto& unit = vtd_state.units[i];
+			for0(scope_index, unit.scope_count) {
+				const auto& scope = unit.scopes[scope_index];
+				if (scope.type != kDmarScopeIoApic || scope.enumeration_id != id) continue;
+				if (owner.match != DrhdMatch::None) return {DrhdMatch::Conflict};
+				owner = scope.resolved ? DrhdOwnership{DrhdMatch::Explicit, &unit, scope.requester_id} :
+					DrhdOwnership{DrhdMatch::Unresolved};
+			}
+		}
+		return owner;
+	}
+
+	void TracePciDrhdOwners(const DeviceNode* node) {
+		if (node->fields.node_type == uint16(DeviceNodeType::PciDevice)) {
+			const auto& pci = node->fields;
+			const uint16 requester = (uint16(pci.pci_bus) << 8) |
+				(uint16(pci.pci_device) << 3) | pci.pci_function;
+			const auto owner = FindPciOwner(pci.pci_segment, requester);
+			if (owner.unit)
+				plogtrac("[IOMMU] PCI %04X:%02X:%02X.%u -> DRHD%u (%s)",
+					unsigned(pci.pci_segment), unsigned(pci.pci_bus), unsigned(pci.pci_device),
+					unsigned(pci.pci_function), stduint(owner.unit - vtd_state.units.get()),
+					owner.match == DrhdMatch::Explicit ? "scope" : "include-all");
+			else if (owner.match == DrhdMatch::Conflict)
+				plogwarn("[IOMMU] Conflicting DRHD scopes for PCI %04X:%02X:%02X.%u",
+					unsigned(pci.pci_segment), unsigned(pci.pci_bus),
+					unsigned(pci.pci_device), unsigned(pci.pci_function));
+			else
+				plogtrac("[IOMMU] PCI %04X:%02X:%02X.%u DRHD owner %s",
+					unsigned(pci.pci_segment), unsigned(pci.pci_bus), unsigned(pci.pci_device),
+					unsigned(pci.pci_function), owner.match == DrhdMatch::Unresolved ? "unresolved" : "missing");
+		}
+		for (const Nnode* child = node->link.subf; child; child = child->next)
+			TracePciDrhdOwners(reinterpret_cast<const DeviceNode*>(child));
+	}
+
+	void PrepareDrhdOwnership(const DeviceNode* pci_root) {
+		if (vtd_state.scopes_prepared) return;
+		for0(i, vtd_state.unit_count) {
+			if (PrepareDrhdScopes(vtd_state.units[i], i)) continue;
+			// Do not publish a partial index that would miss claims from other units.
+			for (stduint j = 0; j < i; ++j) {
+				vtd_state.units[j].scopes.reset();
+				vtd_state.units[j].scope_count = 0;
+			}
+			return;
+		}
+		vtd_state.scopes_prepared = true;
+		TracePciDrhdOwners(pci_root);
+
+		// Match DMAR's enumeration ID to the MADT I/O APIC ID, with no PCI segment fallback.
+		uint8 reported_ids[32] = {};
+		uni::Bitmap reported(reported_ids, sizeof(reported_ids));
+		for0(i, vtd_state.unit_count) {
+			const auto& unit = vtd_state.units[i];
+			for0(scope_index, unit.scope_count) {
+				const auto& scope = unit.scopes[scope_index];
+				const uint8 id = scope.enumeration_id;
+				if (scope.type != kDmarScopeIoApic || reported[id]) continue;
+				reported.setof(id);
+				const auto owner = FindIoApicOwner(id);
+				if (owner.unit)
+					plogtrac("[IOMMU] I/O APIC id=%u -> DRHD%u segment=%04X source=%04X",
+						unsigned(id), stduint(owner.unit - vtd_state.units.get()),
+						unsigned(owner.unit->descriptor->segment), unsigned(owner.source_id));
+				else if (owner.match == DrhdMatch::Conflict)
+					plogwarn("[IOMMU] Conflicting DRHD scopes for I/O APIC id=%u", unsigned(id));
+			}
+		}
+	}
+
+	bool PrepareRmrrRoutes(VtdUnit& unit) {
+		const stduint capacity = vtd_state.rmrr_route_capacity;
+		if (capacity > __PTRDIFF_MAX__ / sizeof(RmrrRoute)) return false;
+		if (capacity) {
+			unit.rmrr_routes.reset(new (std::nothrow_t{}) RmrrRoute[capacity]);
+			if (!unit.rmrr_routes) return false;
+		}
+		const auto* bytes = reinterpret_cast<const uint8*>(vtd_state.dmar_table);
+		const auto* end = bytes + vtd_state.dmar_table->header.length;
+		for (auto* cursor = bytes + sizeof(DmarTable); cursor < end;) {
+			const auto* header = reinterpret_cast<const DmarEntryHeader*>(cursor);
+			const auto* entry_end = cursor + header->length;
+			cursor = entry_end;
+			if (header->type != kDmarReservedMemory) continue;
+			const auto* range = reinterpret_cast<const DmarReservedMemory*>(header);
+			if (range->segment != unit.descriptor->segment) continue;
+			auto* scope_bytes = reinterpret_cast<const uint8*>(range) + sizeof(*range);
+			if (scope_bytes == entry_end) return false;
+			while (scope_bytes < entry_end) {
+				const auto* scope = reinterpret_cast<const DmarDeviceScope*>(scope_bytes);
+				scope_bytes += scope->length;
+				RmrrRoute route = {range->base_address, range->end_address, 0, 0, 0};
+				if ((scope->type != kDmarScopePciEndpoint && scope->type != kDmarScopePciBridge) ||
+					!ResolveScopeRequester(range->segment, *scope, route.requester)) return false;
+				if (scope->type == kDmarScopePciBridge &&
+					!ReadBridgeBuses(range->segment, route.requester,
+						route.secondary_bus, route.subordinate_bus)) return false;
+				unit.rmrr_routes[unit.rmrr_route_count++] = route;
+			}
+		}
+		return true;
 	}
 
 	VtdContextEntry* GetContextTable(VtdRootEntry* root_table, uint8 bus) {
@@ -691,12 +1007,12 @@ namespace {
 		return table;
 	}
 
-	bool PopulatePassthroughContexts(DeviceNode* node,
+	bool PopulatePassthroughContexts(const VtdUnit& unit, DeviceNode* node,
 		VtdRootEntry* root_table, stduint& table_count,
 		stduint& device_count, stduint& xhci_extra_interrupts) {
 		if (!node) return true;
 		if (node->fields.node_type == uint16(DeviceNodeType::PciDevice)) {
-			if (node->fields.pci_segment != vtd_state.segment) {
+			if (node->fields.pci_segment != unit.descriptor->segment) {
 				plogwarn("[IOMMU] PCI requester outside DRHD segment pci=%02X:%02X.%u segment=%u",
 					node->fields.pci_bus, node->fields.pci_device,
 					node->fields.pci_function, node->fields.pci_segment);
@@ -734,7 +1050,7 @@ namespace {
 			#endif
 		}
 		for (Nnode* child = node->link.subf; child; child = child->next) {
-			if (!PopulatePassthroughContexts(
+			if (!PopulatePassthroughContexts(unit,
 				reinterpret_cast<DeviceNode*>(child), root_table,
 				table_count, device_count, xhci_extra_interrupts)) return false;
 		}
@@ -753,18 +1069,18 @@ namespace {
 		mempool.deallocate(root_table, PAGE_SIZE);
 	}
 
-	bool InvalidateVtdCaches() {
-		auto registers = vtd_state.registers;
+	bool InvalidateVtdCaches(VtdUnit& unit) {
+		auto registers = unit.registers;
 		if (ReadRegister32(registers, kVtdGlobalStatusRegister) &
 			VtdGlobalStatusQueuedInvalidation) {
 			const uint64 context_descriptor = 1u | (uint64(1) << 4);
 			uint64 iotlb_descriptor = 2u | (uint64(1) << 4);
-			if ((vtd_state.capability >> 55) & 1)
+			if ((unit.capability >> 55) & 1)
 				iotlb_descriptor |= uint64(1) << 7;
-			if ((vtd_state.capability >> 54) & 1)
+			if ((unit.capability >> 54) & 1)
 				iotlb_descriptor |= uint64(1) << 6;
-			if (!SubmitQueuedInvalidation(context_descriptor) ||
-				!SubmitQueuedInvalidation(iotlb_descriptor)) {
+			if (!SubmitQueuedInvalidation(unit, context_descriptor) ||
+				!SubmitQueuedInvalidation(unit, iotlb_descriptor)) {
 				plogerro("[IOMMU] Queued context/IOTLB invalidation failed");
 				return false;
 			}
@@ -779,15 +1095,15 @@ namespace {
 		}
 
 		const stduint iotlb_offset = stduint(
-			(vtd_state.extended_capability >> 8) & 0x3FF) * 16;
+			(unit.extended_capability >> 8) & 0x3FF) * 16;
 		if (iotlb_offset + 16 > PAGE_SIZE) {
 			plogerro("[IOMMU] IOTLB register outside mapped window offset=%X",
 				iotlb_offset);
 			return false;
 		}
 		uint64 command = VtdIotlbCommandInvalidate | VtdIotlbCommandGlobal;
-		if ((vtd_state.capability >> 55) & 1) command |= VtdIotlbReadDrain;
-		if ((vtd_state.capability >> 54) & 1) command |= VtdIotlbWriteDrain;
+		if ((unit.capability >> 55) & 1) command |= VtdIotlbReadDrain;
+		if ((unit.capability >> 54) & 1) command |= VtdIotlbWriteDrain;
 		WriteRegister64(registers, iotlb_offset + 8, command);
 		if (!WaitRegister64Clear(registers, iotlb_offset + 8,
 			VtdIotlbCommandInvalidate)) {
@@ -797,14 +1113,69 @@ namespace {
 		return true;
 	}
 
-	void LogVtdFaultState(const char* operation, DeviceNode* device,
+	uint32 ReadFaultStatus(const VtdUnit& unit) {
+		return ReadRegister32(unit.registers, kVtdFaultStatusRegister);
+	}
+
+	bool SetFaultEventMask(const VtdUnit& unit, bool masked) {
+		WriteRegister32(unit.registers, VtdFaultEventControlRegister, masked ? VtdFaultEventMask : 0);
+		return bool(ReadRegister32(unit.registers, VtdFaultEventControlRegister) & VtdFaultEventMask) == masked;
+	}
+
+	// The caller holds IovaLock(). FRI identifies the start of a batch, not its next record.
+	uint32 CaptureFaultRecords(VtdUnit& unit, uint8 budget) {
+		auto& faults = unit.faults;
+		uint32 status = ReadFaultStatus(unit);
+		for (uint8 i = 0; i < budget && (status & VtdPrimaryFaultPending) &&
+			faults.count < numsof(faults.records); ++i) {
+			if (faults.next_record == VtdFaultCursorUnset)
+				faults.next_record = uint16((status >> 8) & 0xFF);
+			if (faults.next_record >= faults.record_count) break;
+			const stduint reg = faults.record_offset + faults.next_record * VtdFaultRecordSize;
+			const uint32 high = ReadRegister32(unit.registers, reg + 12);
+			if (!(high & VtdFaultRecordValid)) break;
+			auto& record = faults.records[
+				(faults.head + faults.count) % numsof(faults.records)];
+			record.info = ReadRegister64(unit.registers, reg);
+			record.detail = (uint64(high) << 32) | ReadRegister32(unit.registers, reg + 8);
+			++faults.count;
+			WriteRegister32(unit.registers, reg + 12, VtdFaultRecordValid);
+			if (++faults.next_record == faults.record_count) faults.next_record = 0;
+			status = ReadFaultStatus(unit);
+		}
+		if (status & VtdPrimaryFaultOverflow) {
+			faults.overflow = true;
+			if (!(status & VtdPrimaryFaultPending)) {
+				WriteRegister32(unit.registers, kVtdFaultStatusRegister, VtdPrimaryFaultOverflow);
+				status = ReadFaultStatus(unit);
+			}
+		}
+		if (!(status & VtdPrimaryFaultPending)) faults.next_record = VtdFaultCursorUnset;
+		return status;
+	}
+
+	void HandleVtdFaultEvent(stduint vector) {
+		if (auto* selected = SingleVtdUnit()) {
+			auto& unit = *selected;
+			SpinlockLocal guard(IovaLock());
+			if (unit.faults.enabled &&
+				(ReadFaultStatus(unit) & VtdFaultEventStatus)) {
+				(void)SetFaultEventMask(unit, true);
+				CaptureFaultRecords(unit, VtdFaultIrqBudget);
+				vtd_fault_work.store(1, uni::MemoryOrder_Release);
+			}
+		}
+		IC.SendEOI(vector);
+	}
+
+	void LogVtdFaultState(const VtdUnit& unit, const char* operation, DeviceNode* device,
 		uint64 device_address) {
-		const uint32 status = ReadRegister32(vtd_state.registers,
+		const uint32 status = ReadRegister32(unit.registers,
 			kVtdFaultStatusRegister);
 		if (!status) return;
 		const stduint record_index = (status >> 8) & 0xFF;
 		const stduint record_offset =
-			stduint((vtd_state.capability >> 24) & 0x3FF) * 16 +
+			stduint((unit.capability >> 24) & 0x3FF) * 16 +
 			record_index * 16;
 		if (record_offset + 16 > PAGE_SIZE) {
 			plogerro("[IOMMU] %s fault pci=%02X:%02X.%u iova=%[64H] fsts=%08X record=%X unavailable",
@@ -813,9 +1184,9 @@ namespace {
 				record_offset);
 			return;
 		}
-		const uint64 record_low = ReadRegister64(vtd_state.registers,
+		const uint64 record_low = ReadRegister64(unit.registers,
 			record_offset);
-		const uint64 record_high = ReadRegister64(vtd_state.registers,
+		const uint64 record_high = ReadRegister64(unit.registers,
 			record_offset + 8);
 		plogerro("[IOMMU] %s fault pci=%02X:%02X.%u iova=%[64H] fsts=%08X record=%[64H]/%[64H]",
 			operation, device->fields.pci_bus, device->fields.pci_device,
@@ -853,13 +1224,14 @@ namespace {
 		return nullptr;
 	}
 
-	IovaDomain* CreateDomain(DeviceNode* device) {
+	IovaDomain* CreateDomain(VtdUnit& unit, DeviceNode* device) {
 		for0(i, IovaDomainCapacity) {
 			auto& domain = iova_domains[i];
 			if (domain.active) continue;
 			domain = {};
 			domain.active = true;
 			domain.device = device;
+			domain.unit = &unit;
 			domain.domain_id = uint16(VtdFirstTranslatedDomain + i);
 			domain.root = AllocateDomainTable(domain);
 			if (!domain.root) {
@@ -977,6 +1349,50 @@ namespace {
 		return true;
 	}
 
+	// A fresh domain contains only the reserved ranges accumulated here.
+	bool ReserveIovaRange(IovaDomain& domain, uint64 begin, uint64 end) {
+		IovaRange* slot = nullptr;
+		for (auto& current : domain.mappings) {
+			if (current.active) {
+				const uint64 current_end = current.device_address + current.length;
+				if (end < current.device_address || begin > current_end) continue;
+				begin = minof(begin, current.device_address);
+				end = maxof(end, current_end);
+				current = {};
+			}
+			if (!slot) slot = &current;
+		}
+		if (!slot || end - begin > ~stduint(0)) return false;
+		*slot = {true, true, begin, begin, stduint(end - begin)};
+		return true;
+	}
+
+	bool MapReservedMemory(IovaDomain& domain) {
+		const auto& unit = *domain.unit;
+		const auto& pci = domain.device->fields;
+		const uint16 requester = (uint16(pci.pci_bus) << 8) |
+			(uint16(pci.pci_device) << 3) | pci.pci_function;
+		for0(i, unit.rmrr_route_count) {
+			const auto& route = unit.rmrr_routes[i];
+			const bool downstream = route.secondary_bus &&
+				pci.pci_bus >= route.secondary_bus && pci.pci_bus <= route.subordinate_bus;
+			if (!downstream && requester != route.requester) continue;
+			const uint64 begin = route.base;
+			const uint64 end = route.limit + 1;
+			// Intel VT-d specification, sections 3.16 and 8.4: reserved ranges are identity-mapped.
+			if (begin >= end || ((begin | end) & (PAGE_SIZE - 1)) ||
+				end > (uint64(1) << 48) || end - begin > ~stduint(0) ||
+				!PhysicalRangeFits(begin, stduint(end - begin), vtd_state.host_address_width) ||
+				!Memory::reserved_regions.Covers(begin, end) ||
+				!ReserveIovaRange(domain, begin, end)) return false;
+		}
+		for (const auto& range : domain.mappings) {
+			if (range.reserved && !PopulateIovaPages(domain, range.device_address,
+				range.physical, range.length)) return false;
+		}
+		return true;
+	}
+
 	void ClearIovaPages(IovaDomain& domain, uint64 device_address,
 		stduint length) {
 		for (stduint offset = 0; offset < length; offset += PAGE_SIZE) {
@@ -986,26 +1402,28 @@ namespace {
 		StoreFence();
 	}
 
-	bool RestorePassthroughContext(VtdContextEntry& context) {
+	// The context entry and both invalidations must refer to the same DRHD.
+	bool RestorePassthroughContext(VtdUnit& unit, VtdContextEntry& context) {
 		context.low = 0;
 		StoreFence();
-		(void)InvalidateVtdCaches();
+		(void)InvalidateVtdCaches(unit);
 		context.high = uint64(VtdPassthroughDomain) << 8 |
 			VtdAddressWidth48;
 		StoreFence();
 		context.low = VtdContextPassthrough | VtdContextPresent;
 		StoreFence();
-		return InvalidateVtdCaches();
+		return InvalidateVtdCaches(unit);
 	}
 
 	bool AttachDomain(IovaDomain& domain) {
+		auto& unit = *domain.unit;
 		auto device = domain.device;
 		if (!device || device->fields.node_type !=
 			uint16(DeviceNodeType::PciDevice) ||
-			device->fields.pci_segment != vtd_state.segment ||
+			device->fields.pci_segment != unit.descriptor->segment ||
 			device->fields.pci_device >= 32 ||
 			device->fields.pci_function >= 8) return false;
-		auto context_table = GetContextTable(vtd_state.root_table,
+		auto context_table = GetContextTable(unit.root_table,
 			device->fields.pci_bus);
 		if (!context_table) return false;
 		const stduint requester = stduint(device->fields.pci_device) * 8 +
@@ -1015,16 +1433,16 @@ namespace {
 
 		context.low = 0;
 		StoreFence();
-		if (!InvalidateVtdCaches()) {
-			(void)RestorePassthroughContext(context);
+		if (!InvalidateVtdCaches(unit)) {
+			(void)RestorePassthroughContext(unit, context);
 			return false;
 		}
 		context.high = uint64(domain.domain_id) << 8 | VtdAddressWidth48;
 		StoreFence();
 		context.low = uint64(stduint(domain.root)) | VtdContextPresent;
 		StoreFence();
-		if (!InvalidateVtdCaches()) {
-			(void)RestorePassthroughContext(context);
+		if (!InvalidateVtdCaches(unit)) {
+			domain.restore_failed = !RestorePassthroughContext(unit, context);
 			return false;
 		}
 		domain.attached = true;
@@ -1037,7 +1455,11 @@ namespace {
 }
 
 bool Iova::ProbeVtd(stduint dmar_address) {
-	if (vtd_state.root_table || vtd_state.interrupt_remapping_table) return false;
+	// A published table can still be live even if the enable command timed out.
+	for0(i, vtd_state.unit_count) {
+		const auto& unit = vtd_state.units[i];
+		if (unit.root_table || unit.interrupt_remapping_table) return false;
+	}
 	vtd_state = {};
 	MemSet(iova_domains, 0, sizeof(iova_domains));
 	if (!dmar_address) {
@@ -1054,16 +1476,14 @@ bool Iova::ProbeVtd(stduint dmar_address) {
 	ploginfo("[IOMMU] DMAR at %[x] length=%u revision=%u host-width=%u flags=%02X",
 		dmar_address, table->header.length, table->header.revision,
 		unsigned(table->host_address_width) + 1, table->flags);
-	vtd_state.dmar_flags = table->flags;
-	vtd_state.host_address_width = table->host_address_width + 1;
-
-	const uint8* cursor = reinterpret_cast<const uint8*>(table) +
-		sizeof(DmarTable);
+	const uint8* entries = reinterpret_cast<const uint8*>(table) + sizeof(DmarTable);
+	const uint8* cursor = entries;
 	const uint8* end = reinterpret_cast<const uint8*>(table) +
 		table->header.length;
 	stduint hardware_unit_count = 0;
 	stduint reserved_memory_count = 0;
-	bool probe_ok = true;
+	stduint rmrr_route_capacity = 0;
+	// Validate entry lengths before allocating an exact-sized array or probing any hardware.
 	while (cursor < end) {
 		const stduint remaining = stduint(end - cursor);
 		if (remaining < sizeof(DmarEntryHeader)) {
@@ -1083,9 +1503,7 @@ bool Iova::ProbeVtd(stduint dmar_address) {
 					hardware_unit_count, header->length);
 				return false;
 			}
-			if (!ProbeHardwareUnit(
-				*reinterpret_cast<const DmarHardwareUnit*>(cursor),
-				hardware_unit_count++)) probe_ok = false;
+			++hardware_unit_count;
 		}
 		else if (header->type == kDmarReservedMemory) {
 			if (header->length < sizeof(DmarReservedMemory)) {
@@ -1093,13 +1511,9 @@ bool Iova::ProbeVtd(stduint dmar_address) {
 					reserved_memory_count, header->length);
 				return false;
 			}
-			if (!ProbeReservedMemory(
-				*reinterpret_cast<const DmarReservedMemory*>(cursor),
-				reserved_memory_count++)) probe_ok = false;
-		}
-		else {
-			ploginfo("[IOMMU] DMAR entry type=%u length=%u",
-				header->type, header->length);
+			++reserved_memory_count;
+			rmrr_route_capacity += (header->length - sizeof(DmarReservedMemory)) /
+				(sizeof(DmarDeviceScope) + sizeof(DmarPciPath));
 		}
 		cursor += header->length;
 	}
@@ -1107,12 +1521,44 @@ bool Iova::ProbeVtd(stduint dmar_address) {
 		plogwarn("[IOMMU] DMAR contains no DRHD units");
 		return false;
 	}
+	if (hardware_unit_count > __PTRDIFF_MAX__ / sizeof(VtdUnit)) return false;
+	uni::UniquePtr<VtdUnit[]> units(new (std::nothrow_t{}) VtdUnit[hardware_unit_count]{});
+	if (!units) {
+		plogwarn("[IOMMU] Cannot allocate state for %u DRHD units", hardware_unit_count);
+		return false;
+	}
+
+	// Keep probed state private until all entries have been read successfully.
+	stduint unit_index = 0;
+	stduint rmrr_index = 0;
+	bool probe_ok = true;
+	for (cursor = entries; cursor < end;) {
+		const auto* header = reinterpret_cast<const DmarEntryHeader*>(cursor);
+		if (header->type == kDmarHardwareUnit) {
+			const auto& descriptor = *reinterpret_cast<const DmarHardwareUnit*>(cursor);
+			if (!ProbeHardwareUnit(units[unit_index], descriptor, unit_index)) probe_ok = false;
+			++unit_index;
+		}
+		else if (header->type == kDmarReservedMemory) {
+			const auto& range = *reinterpret_cast<const DmarReservedMemory*>(cursor);
+			if (!ProbeReservedMemory(range, rmrr_index++)) probe_ok = false;
+		}
+		else {
+			ploginfo("[IOMMU] DMAR entry type=%u length=%u", header->type, header->length);
+		}
+		cursor += header->length;
+	}
 	if (!probe_ok) {
 		plogwarn("[IOMMU] Read-only VT-d probe incomplete: drhd=%u rmrr=%u",
 			hardware_unit_count, reserved_memory_count);
 		return false;
 	}
-	vtd_state.hardware_unit_count = hardware_unit_count;
+	vtd_state.dmar_table = table;
+	vtd_state.dmar_flags = table->flags;
+	vtd_state.host_address_width = table->host_address_width + 1;
+	vtd_state.rmrr_route_capacity = rmrr_route_capacity;
+	vtd_state.units.swap(units);
+	vtd_state.unit_count = hardware_unit_count;
 	vtd_state.probe_complete = true;
 	plogtrac("[IOMMU] Read-only VT-d probe complete: drhd=%u rmrr=%u",
 		hardware_unit_count, reserved_memory_count);
@@ -1120,13 +1566,13 @@ bool Iova::ProbeVtd(stduint dmar_address) {
 }
 
 bool Iova::EnableVtdPassthrough(DeviceNode* pci_root) {
+	auto* selected = SingleVtdUnit();
 	plogtrac("[IOMMU] Pass-through request probed=%u enabled=%u drhd=%u root=%[x]",
-		unsigned(vtd_state.probe_complete),
-		unsigned(vtd_state.passthrough_enabled),
-		vtd_state.hardware_unit_count, stduint(pci_root));
+		unsigned(vtd_state.probe_complete), unsigned(selected && selected->passthrough_enabled),
+		vtd_state.unit_count, stduint(pci_root));
 	if (!vtd_state.probe_complete) return true;
-	if (vtd_state.passthrough_enabled) return true;
-	if (vtd_state.root_table) {
+	if (selected && selected->passthrough_enabled) return true;
+	if (selected && selected->root_table) {
 		plogwarn("[IOMMU] Previous pass-through activation did not complete");
 		return false;
 	}
@@ -1134,32 +1580,35 @@ bool Iova::EnableVtdPassthrough(DeviceNode* pci_root) {
 		plogerro("[IOMMU] Cannot enable pass-through without PCI topology");
 		return false;
 	}
-	if (vtd_state.hardware_unit_count != 1 || !vtd_state.include_all) {
+	// Resolve ownership for every probed unit before checking the current single-unit activation policy.
+	PrepareDrhdOwnership(pci_root);
+	if (!selected) {
 		plogwarn("[IOMMU] Pass-through startup supports one include-all DRHD; drhd=%u include-all=%u",
-			vtd_state.hardware_unit_count, unsigned(vtd_state.include_all));
+			vtd_state.unit_count, unsigned(bool(vtd_state.units[0].descriptor->flags & kDmarIncludeAll)));
 		return false;
 	}
-	if (!(vtd_state.extended_capability & (uint64(1) << 6))) {
+	auto& unit = *selected;
+	if (!(unit.extended_capability & (uint64(1) << 6))) {
 		plogwarn("[IOMMU] DRHD does not support pass-through translation");
 		return false;
 	}
-	if (!(vtd_state.extended_capability & 1)) {
+	if (!(unit.extended_capability & 1)) {
 		plogwarn("[IOMMU] Non-coherent page-table access is not supported yet");
 		return false;
 	}
-	if (!(vtd_state.capability & (uint64(1) << (8 + VtdAddressWidth48)))) {
+	if (!(unit.capability & (uint64(1) << (8 + VtdAddressWidth48)))) {
 		plogwarn("[IOMMU] DRHD does not support 48-bit adjusted address width");
 		return false;
 	}
 	const stduint iotlb_offset = stduint(
-		(vtd_state.extended_capability >> 8) & 0x3FF) * 16;
+		(unit.extended_capability >> 8) & 0x3FF) * 16;
 	if (iotlb_offset + 16 > PAGE_SIZE) {
 		plogwarn("[IOMMU] IOTLB register outside mapped window offset=%X",
 			iotlb_offset);
 		return false;
 	}
 
-	auto registers = vtd_state.registers;
+	auto registers = unit.registers;
 	const uint32 initial_status = ReadRegister32(registers,
 		kVtdGlobalStatusRegister);
 	const uint32 active_features = VtdGlobalStatusTranslationEnabled |
@@ -1196,15 +1645,22 @@ bool Iova::EnableVtdPassthrough(DeviceNode* pci_root) {
 	stduint context_table_count = 0;
 	stduint device_count = 0;
 	stduint xhci_extra_interrupts = 0;
-	if (!PopulatePassthroughContexts(pci_root, root_table,
+	if (!PopulatePassthroughContexts(unit, pci_root, root_table,
 		context_table_count, device_count, xhci_extra_interrupts) || !device_count) {
 		plogerro("[IOMMU] Failed to build pass-through contexts devices=%u",
 			device_count);
 		ReleasePassthroughTables(root_table);
 		return false;
 	}
+	unit.rmrr_routes_ready = PrepareRmrrRoutes(unit);
+	if (!unit.rmrr_routes_ready) {
+		unit.rmrr_routes.reset();
+		unit.rmrr_route_count = 0;
+		plogerro("[IOMMU] Could not prepare RMRR scopes for DMA translation");
+	}
 	StoreFence();
 
+	// Once RTADDR is written, keep the root table if a later hardware command fails.
 	WriteRegister64(registers, kVtdRootTableAddressRegister, root_physical);
 	WriteRegister32(registers, VtdGlobalCommandRegister,
 		VtdGlobalCommandSetRoot);
@@ -1212,7 +1668,7 @@ bool Iova::EnableVtdPassthrough(DeviceNode* pci_root) {
 		VtdGlobalStatusRootSet, VtdGlobalStatusRootSet)) {
 		plogerro("[IOMMU] Set-root-table command timed out gsts=%08X",
 			ReadRegister32(registers, kVtdGlobalStatusRegister));
-		vtd_state.root_table = root_table;
+		unit.root_table = root_table;
 		return false;
 	}
 	const uint64 loaded_root = ReadRegister64(registers,
@@ -1220,11 +1676,11 @@ bool Iova::EnableVtdPassthrough(DeviceNode* pci_root) {
 	if (loaded_root != root_physical) {
 		plogerro("[IOMMU] Root-table readback mismatch expected=%[64H] actual=%[64H]",
 			root_physical, loaded_root);
-		vtd_state.root_table = root_table;
+		unit.root_table = root_table;
 		return false;
 	}
-	if (!InvalidateVtdCaches()) {
-		vtd_state.root_table = root_table;
+	if (!InvalidateVtdCaches(unit)) {
+		unit.root_table = root_table;
 		return false;
 	}
 	const uint32 invalidation_faults = ReadRegister32(registers,
@@ -1232,7 +1688,7 @@ bool Iova::EnableVtdPassthrough(DeviceNode* pci_root) {
 	if (invalidation_faults) {
 		plogerro("[IOMMU] VT-d fault during invalidation fsts=%08X",
 			invalidation_faults);
-		vtd_state.root_table = root_table;
+		unit.root_table = root_table;
 		return false;
 	}
 	WriteRegister32(registers, VtdGlobalCommandRegister,
@@ -1242,7 +1698,7 @@ bool Iova::EnableVtdPassthrough(DeviceNode* pci_root) {
 		VtdGlobalStatusTranslationEnabled)) {
 		plogerro("[IOMMU] Translation-enable command timed out gsts=%08X",
 			ReadRegister32(registers, kVtdGlobalStatusRegister));
-		vtd_state.root_table = root_table;
+		unit.root_table = root_table;
 		return false;
 	}
 
@@ -1255,15 +1711,15 @@ bool Iova::EnableVtdPassthrough(DeviceNode* pci_root) {
 		plogerro("[IOMMU] VT-d fault after enabling pass-through fsts=%08X gsts=%08X",
 			final_faults, ReadRegister32(registers,
 				kVtdGlobalStatusRegister));
-		vtd_state.root_table = root_table;
+		unit.root_table = root_table;
 		return false;
 	}
 
-	vtd_state.root_table = root_table;
-	vtd_state.context_table_count = context_table_count;
-	vtd_state.device_count = device_count;
-	vtd_state.xhci_extra_interrupts = xhci_extra_interrupts;
-	vtd_state.passthrough_enabled = true;
+	unit.root_table = root_table;
+	unit.context_table_count = context_table_count;
+	unit.device_count = device_count;
+	unit.xhci_extra_interrupts = xhci_extra_interrupts;
+	unit.passthrough_enabled = true;
 	ploginfo("[IOMMU] Pass-through enabled root=%[64H] buses=%u devices=%u bytes=%u gsts=%08X fsts=%08X",
 		root_physical, context_table_count, device_count,
 		(context_table_count + 1) * PAGE_SIZE,
@@ -1272,36 +1728,185 @@ bool Iova::EnableVtdPassthrough(DeviceNode* pci_root) {
 	return true;
 }
 
-bool Iova::InterruptRemappingAvailable() {
-	return vtd_state.interrupt_remapping_enabled;
+void Iova::EnableFaultEvents() {
+	auto* selected = SingleVtdUnit();
+	if (!selected || !selected->passthrough_enabled || !IC.getType()) return;
+	auto& unit = *selected;
+	auto& faults = unit.faults;
+	const stduint entry = Handler::GeneratedEntry(Handler::VtdFaultVector);
+	const uint32 lapic = GetCurrentLapicId();
+	const bool extended = IC.getType() == 2 && unit.interrupt_remapping_enabled &&
+		unit.extended_interrupt_mode &&
+		(unit.extended_capability & VtdExtendedInterruptModeSupported);
+	if (!entry || lapic == CORE_ID_INVALID || (!extended && (lapic >= 0xFFu ||
+		(unit.extended_capability & VtdExtendedInterruptModeRequired)))) {
+		plogwarn("[IOMMU] Fault event unavailable for vector=%u LAPIC=%u; using synchronous checks",
+			unsigned(Handler::VtdFaultVector), lapic);
+		return;
+	}
+	const stduint record_offset = stduint((unit.capability >> 24) & 0x3FF) * VtdFaultRecordSize;
+	const uint16 record_count = uint16((unit.capability >> 40) & 0xFF) + 1;
+	if (record_offset < kVtdRegisterWindowLength || record_offset >= PAGE_SIZE ||
+		record_count > (PAGE_SIZE - record_offset) / VtdFaultRecordSize) {
+		plogwarn("[IOMMU] Fault records outside mapped register page offset=%X count=%u",
+			unsigned(record_offset), unsigned(record_count));
+		return;
+	}
+
+	{
+		SpinlockLocal guard(IovaLock());
+		if (faults.enabled) return;
+		if (!SetFaultEventMask(unit, true)) {
+			plogwarn("[IOMMU] Cannot mask fault events during setup; using synchronous checks");
+			return;
+		}
+		auto* regs = unit.registers;
+		// Intel VT-d specification, section 5.1.6: unit events bypass interrupt remapping.
+		const uint32 addr = 0xFEE00000u | ((lapic & 0xFFu) << 12);
+		const uint32 upper_addr = extended ? lapic & 0xFFFFFF00u : 0;
+		if (unit.extended_capability & VtdExtendedInterruptModeSupported)
+			WriteRegister32(regs, VtdFaultEventUpperAddressRegister, upper_addr);
+		WriteRegister32(regs, VtdFaultEventAddressRegister, addr);
+		WriteRegister32(regs, VtdFaultEventDataRegister, Handler::VtdFaultVector);
+		if (ReadRegister32(regs, VtdFaultEventAddressRegister) != addr ||
+			ReadRegister32(regs, VtdFaultEventDataRegister) != Handler::VtdFaultVector ||
+			((unit.extended_capability & VtdExtendedInterruptModeSupported) &&
+			ReadRegister32(regs, VtdFaultEventUpperAddressRegister) != upper_addr)) {
+			plogwarn("[IOMMU] Fault event register readback failed; using synchronous checks");
+			return;
+		}
+		Handler::InstallDispatch(Handler::VtdFaultVector, entry, HandleVtdFaultEvent);
+		faults.record_offset = uint16(record_offset);
+		faults.record_count = record_count;
+		faults.next_record = VtdFaultCursorUnset;
+		faults.enabled = true;
+		if (ReadFaultStatus(unit) & VtdFaultEventStatus)
+			vtd_fault_work.store(1, uni::MemoryOrder_Release);
+		else if (!SetFaultEventMask(unit, false)) {
+			faults.enabled = false;
+			plogwarn("[IOMMU] Fault event stayed masked; using synchronous checks");
+			return;
+		}
+	}
+	ploginfo("[IOMMU] Fault event ready vector=%u lapic=%u records=%u",
+		unsigned(Handler::VtdFaultVector), lapic, unsigned(record_count));
 }
 
-static bool AllocateInterruptLocked(uint16 source_id, uint32 target_lapic_id,
+void Iova::NotifyFaultService() {
+	if (!vtd_fault_work.load(uni::MemoryOrder_Acquire)) return;
+	byte expected = 0;
+	if (!vtd_fault_event_posted.compare_exchange(expected, 1,
+		uni::MemoryOrder_Acq_Rel, uni::MemoryOrder_Relaxed)) return;
+	DeviceEvent event = {};
+	event.kind = _IMM(DeviceEventKind::Fault);
+	event.source = Handler::VtdFaultVector;
+	event.count = 1;
+	if (!device_event_proc(Task_Devsman, event))
+		vtd_fault_event_posted.store(0, uni::MemoryOrder_Release);
+}
+
+void Iova::ServiceFaultEvents() {
+	if (!vtd_fault_event_posted.load(uni::MemoryOrder_Acquire)) return;
+	auto* selected = SingleVtdUnit();
+	if (!selected) return;
+	auto& unit = *selected;
+	auto& faults = unit.faults;
+	const stduint now = tick.load(uni::MemoryOrder_Relaxed);
+	if (now - faults.report_tick >= CONFIG_SysTickFreq) {
+		if (faults.suppressed)
+			plogwarn("[IOMMU] Suppressed %u fault reports", faults.suppressed);
+		faults.report_tick = now;
+		faults.reports = 0;
+		faults.suppressed = 0;
+	}
+
+	uint32 status;
+	bool overflow;
+	{
+		SpinlockLocal guard(IovaLock());
+		status = CaptureFaultRecords(unit, numsof(faults.records));
+		overflow = faults.overflow;
+		faults.overflow = false;
+	}
+	const uint32 qi_faults = status & VtdInvalidationQueueFaults;
+	if (qi_faults && qi_faults != faults.last_qi_faults)
+		plogerro("[IOMMU] Fault event: invalidation queue fsts=%08X", status);
+	faults.last_qi_faults = qi_faults;
+
+	if (overflow) {
+		if (faults.reports < VtdFaultReportLimit) {
+			++faults.reports;
+			plogwarn("[IOMMU] Hardware fault records overflowed");
+		}
+		else ++faults.suppressed;
+	}
+	for0(i, numsof(faults.records)) {
+		VtdFaultRecord record;
+		{
+			SpinlockLocal guard(IovaLock());
+			if (!faults.count) break;
+			record = faults.records[faults.head];
+			faults.head = (faults.head + 1u) % numsof(faults.records);
+			--faults.count;
+		}
+		if (faults.reports >= VtdFaultReportLimit) {
+			++faults.suppressed;
+			continue;
+		}
+		++faults.reports;
+		const uint16 sid = uint16(record.detail);
+		const uint8 reason = uint8(record.detail >> 32);
+		const char* kind = reason >= 0x20u && reason <= 0x2Fu ? "interrupt-remap" : "translation";
+		plogerro("[IOMMU] Fault event %s sid=%04X:%02X:%02X.%u reason=%02X info=%[64H] detail=%[64H]",
+			kind, unsigned(unit.descriptor->segment), unsigned(sid >> 8), unsigned((sid >> 3) & 0x1F),
+			unsigned(sid & 7u), unsigned(reason), record.info, record.detail);
+	}
+
+	bool rearm_failed;
+	{
+		SpinlockLocal guard(IovaLock());
+		// Preserve QI errors for the invalidation wait path. A sticky error can suppress a new message.
+		const bool pending = faults.count || (ReadFaultStatus(unit) & VtdFaultEventStatus);
+		rearm_failed = !pending && !SetFaultEventMask(unit, false);
+		if (rearm_failed) faults.enabled = false;
+		vtd_fault_work.store(!rearm_failed && (pending || faults.suppressed), uni::MemoryOrder_Release);
+	}
+	vtd_fault_event_posted.store(0, uni::MemoryOrder_Release);
+	if (rearm_failed)
+		plogwarn("[IOMMU] Cannot rearm fault events; using synchronous checks");
+}
+
+bool Iova::InterruptRemappingAvailable() {
+	const auto* unit = SingleVtdUnit();
+	return unit && unit->interrupt_remapping_enabled;
+}
+
+static bool AllocateInterruptLocked(VtdUnit& unit, uint16 source_id, uint32 target_lapic_id,
 	uint8 vector, uint16& handle) {
 	handle = 0;
-	if (!vtd_state.interrupt_remapping_table || vector < 0x20 ||
-		(!vtd_state.extended_interrupt_mode && target_lapic_id > 0xFFu))
+	if (!unit.interrupt_remapping_table || vector < 0x20 ||
+		(!unit.extended_interrupt_mode && target_lapic_id > 0xFFu))
 		return false;
-	const stduint capacity = vtd_state.interrupt_remapping_capacity;
-	uni::Bitmap allocated(vtd_state.interrupt_remapping_allocated.get(), capacity / _BYTE_BITS_);
+	const stduint capacity = unit.interrupt_remapping_capacity;
+	uni::Bitmap allocated(unit.interrupt_remapping_allocated.get(), capacity / _BYTE_BITS_);
 	stduint index = 0;
 	while (index < capacity && allocated[index]) ++index;
 	if (index == capacity) {
 		plogwarn("[IOMMU] Interrupt table exhausted entries=%u", unsigned(capacity));
 		return false;
 	}
-	auto& entry = vtd_state.interrupt_remapping_table[index];
+	auto& entry = unit.interrupt_remapping_table[index];
 	entry.high = uint64(source_id) | (uint64(1) << 18);
 	uint64 destination = target_lapic_id;
-	if (!vtd_state.extended_interrupt_mode) destination <<= 8;
+	if (!unit.extended_interrupt_mode) destination <<= 8;
 	entry.low = 1u | (uint64(1) << 3) | (uint64(vector) << 16) |
 		(destination << 32);
 	StoreFence();
-	if (!SubmitInterruptCacheInvalidation(uint16(index), 0, true)) {
+	if (!SubmitInterruptCacheInvalidation(unit, uint16(index), 0, true)) {
 		entry.low = 0;
 		entry.high = 0;
 		StoreFence();
-		if (!SubmitInterruptCacheInvalidation(uint16(index), 0, true))
+		if (!SubmitInterruptCacheInvalidation(unit, uint16(index), 0, true))
 			allocated.setof(index);
 		plogerro("[IOMMU] Interrupt-entry invalidation failed index=%u",
 			index);
@@ -1315,13 +1920,14 @@ static bool AllocateInterruptLocked(uint16 source_id, uint32 target_lapic_id,
 bool Iova::AllocatePciInterrupt(DeviceNode* device, uint32 target_lapic_id,
 	uint8 vector, InterruptMessage& message) {
 	message = {};
-	if (!InterruptRemappingAvailable() || !device ||
+	auto* unit = SingleVtdUnit();
+	if (!unit || !unit->interrupt_remapping_enabled || !device ||
 		DeviceNodeType(device->fields.node_type) != DeviceNodeType::PciDevice ||
-		device->fields.pci_segment != vtd_state.segment) return false;
+		device->fields.pci_segment != unit->descriptor->segment) return false;
 	SpinlockLocal guard(IovaLock());
 	const uint16 source_id = (uint16(device->fields.pci_bus) << 8) |
 		(uint16(device->fields.pci_device) << 3) | device->fields.pci_function;
-	if (!AllocateInterruptLocked(source_id, target_lapic_id, vector, message.handle)) return false;
+	if (!AllocateInterruptLocked(*unit, source_id, target_lapic_id, vector, message.handle)) return false;
 	const uint16 index = message.handle - 1u;
 	message.address = 0xFEE00000u | (uint64(index & 0x7FFFu) << 5) |
 		(uint64(index & 0x8000u) >> 13) | 0x18u;
@@ -1329,18 +1935,18 @@ bool Iova::AllocatePciInterrupt(DeviceNode* device, uint32 target_lapic_id,
 	return true;
 }
 
-static void FreeInterruptLocked(uint16 handle) {
-	if (!handle || !vtd_state.interrupt_remapping_table) return;
+static void FreeInterruptLocked(VtdUnit& unit, uint16 handle) {
+	if (!handle || !unit.interrupt_remapping_table) return;
 	const stduint index = handle - 1u;
-	const stduint capacity = vtd_state.interrupt_remapping_capacity;
+	const stduint capacity = unit.interrupt_remapping_capacity;
 	if (index >= capacity) return;
-	uni::Bitmap allocated(vtd_state.interrupt_remapping_allocated.get(), capacity / _BYTE_BITS_);
+	uni::Bitmap allocated(unit.interrupt_remapping_allocated.get(), capacity / _BYTE_BITS_);
 	if (!allocated[index]) return;
-	auto& entry = vtd_state.interrupt_remapping_table[index];
+	auto& entry = unit.interrupt_remapping_table[index];
 	entry.low = 0;
 	entry.high = 0;
 	StoreFence();
-	if (!SubmitInterruptCacheInvalidation(uint16(index), 0, true)) {
+	if (!SubmitInterruptCacheInvalidation(unit, uint16(index), 0, true)) {
 		plogerro("[IOMMU] Interrupt-entry release invalidation failed index=%u",
 			index);
 		return;
@@ -1351,77 +1957,64 @@ static void FreeInterruptLocked(uint16 handle) {
 void Iova::ReleaseInterrupt(uint16 handle) {
 	if (!handle) return;
 	SpinlockLocal guard(IovaLock());
-	FreeInterruptLocked(handle);
+	ReleaseInterruptLocked(handle);
 }
 
 bool Iova::PrepareInterruptRemapping(bool extended, stduint reserved_irq_entries) {
-	return EnableVtdInterruptRemapping(extended, reserved_irq_entries);
+	auto* unit = SingleVtdUnit();
+	return unit && EnableVtdInterruptRemapping(*unit, extended, reserved_irq_entries);
 }
 
 bool Iova::CommitExtendedInterruptMode() {
-	if (!vtd_state.interrupt_remapping_table || !vtd_state.extended_interrupt_mode ||
-		!SetVtdFeature(VtdGlobalCommandEnableInterruptRemapping,
+	auto* unit = SingleVtdUnit();
+	if (!unit || !unit->interrupt_remapping_table || !unit->extended_interrupt_mode ||
+		!SetVtdFeature(*unit, VtdGlobalCommandEnableInterruptRemapping,
 			VtdGlobalStatusInterruptRemapping, true)) return false;
-	vtd_state.interrupt_remapping_enabled = true;
+	unit->interrupt_remapping_enabled = true;
 	ploginfo("[IOMMU] Interrupt remapping enabled entries=%u mode=x2APIC",
-		unsigned(vtd_state.interrupt_remapping_capacity));
+		unsigned(unit->interrupt_remapping_capacity));
 	return true;
 }
 
 bool Iova::DisableInterruptRemapping() {
-	if (!vtd_state.interrupt_remapping_table) return true;
-	if (!DisableInterruptRemappingForRollback(vtd_state.compatibility_interrupts_before))
+	auto* unit = SingleVtdUnit();
+	if (!unit || !unit->interrupt_remapping_table) return true;
+	if (!DisableInterruptRemappingForRollback(*unit, unit->compatibility_interrupts_before))
 		return false;
-	ReleaseInterruptRemappingStorage();
+	ReleaseInterruptRemappingStorage(*unit);
 	return true;
 }
 
 bool Iova::ExtendedInterruptMode() {
-	return vtd_state.interrupt_remapping_enabled && vtd_state.extended_interrupt_mode;
+	const auto* unit = SingleVtdUnit();
+	return unit && unit->interrupt_remapping_enabled && unit->extended_interrupt_mode;
 }
 
 bool Iova::IoApicInterruptSource(uint8 id, uint16& source) {
-	if (!vtd_state.probe_complete || vtd_state.hardware_unit_count != 1 ||
-		!vtd_state.include_all) return false;
-	const auto* unit = vtd_state.primary_unit;
-	const auto* bytes = reinterpret_cast<const uint8*>(unit);
+	const auto* unit = SingleVtdUnit();
+	if (!unit) return false;
+	const auto* descriptor = unit->descriptor;
+	const auto* bytes = reinterpret_cast<const uint8*>(descriptor);
 	bool found = false;
 	// Intel VT-d, DMAR Device Scope: the last PCI path component supplies the requester ID.
-	for (auto* cursor = bytes + sizeof(*unit); cursor < bytes + unit->header.length;) {
+	for (auto* cursor = bytes + sizeof(*descriptor); cursor < bytes + descriptor->header.length;) {
 		const auto* scope = reinterpret_cast<const DmarDeviceScope*>(cursor);
-		const auto* path = reinterpret_cast<const DmarPciPath*>(cursor + sizeof(*scope));
-		const stduint count = (scope->length - sizeof(*scope)) / sizeof(*path);
 		cursor += scope->length;
 		if (scope->type != kDmarScopeIoApic || scope->enumeration_id != id) continue;
-		if (found || !count) return false;
-		uint8 bus = scope->start_bus;
-		for0(i, count) {
-			if (path[i].device >= 32 || path[i].function >= 8) return false;
-			if (i + 1 == count) {
-				source = (uint16(bus) << 8) | (uint16(path[i].device) << 3) | path[i].function;
-				break;
-			}
-			const uint32 class_code = uni::PCI::read_config_register(unit->segment,
-				bus, path[i].device, path[i].function, 0x08);
-			if ((class_code >> 16) != 0x0604u) return false;
-			const uint32 buses = uni::PCI::read_config_register(unit->segment,
-				bus, path[i].device, path[i].function, 0x18);
-			const uint8 secondary = uint8(buses >> 8);
-			if (!secondary || secondary == 0xFFu || uint8(buses) != bus ||
-				secondary == bus || secondary > uint8(buses >> 16)) return false;
-			bus = secondary;
-		}
+		if (found || !ResolveScopeRequester(descriptor->segment, *scope, source)) return false;
 		found = true;
 	}
 	return found;
 }
 
 bool Iova::AllocateIoApicInterruptLocked(uint16 source, uint32 destination, uint8 vector, uint16& handle) {
-	return AllocateInterruptLocked(source, destination, vector, handle);
+	handle = 0;
+	auto* unit = SingleVtdUnit();
+	return unit && AllocateInterruptLocked(*unit, source, destination, vector, handle);
 }
 
 void Iova::ReleaseInterruptLocked(uint16 handle) {
-	FreeInterruptLocked(handle);
+	if (auto* unit = SingleVtdUnit()) FreeInterruptLocked(*unit, handle);
 }
 
 static bool DisablePciMessages(const DeviceNode* device, bool clear_upper_address) {
@@ -1466,20 +2059,33 @@ bool Iova::MapDeviceDma(DeviceNode* device, stduint physical,
 	if (!device || !physical || !length ||
 		(physical & (PAGE_SIZE - 1)) || (length & (PAGE_SIZE - 1)))
 		return false;
-	if (!vtd_state.passthrough_enabled) return true;
+	auto* selected = SingleVtdUnit();
+	if (!selected || !selected->passthrough_enabled) return true;
 	if (device->fields.node_type != uint16(DeviceNodeType::PciDevice))
 		return true;
 	if (!PhysicalRangeFits(uint64(physical), length,
 		vtd_state.host_address_width)) return false;
 
+	if (!selected->rmrr_routes_ready || device->fields.pci_segment != selected->descriptor->segment)
+		return false;
+
 	SpinlockLocal guard(IovaLock());
 	auto domain = FindDomain(device);
 	const bool new_domain = !domain;
-	if (!domain) domain = CreateDomain(device);
+	if (!domain) domain = CreateDomain(*selected, device);
 	if (!domain) {
 		plogerro("[IOMMU] No translated domain available pci=%02X:%02X.%u",
 			device->fields.pci_bus, device->fields.pci_device,
 			device->fields.pci_function);
+		return false;
+	}
+	if (domain->restore_failed) return false;
+	auto& unit = *domain->unit;
+	if (new_domain && !MapReservedMemory(*domain)) {
+		plogerro("[IOMMU] RMRR mapping failed pci=%02X:%02X.%u",
+			device->fields.pci_bus, device->fields.pci_device,
+			device->fields.pci_function);
+		ReleaseDomainTables(*domain);
 		return false;
 	}
 	IovaRange* range = nullptr;
@@ -1487,41 +2093,44 @@ bool Iova::MapDeviceDma(DeviceNode* device, stduint physical,
 	const uint64 preferred_address = (_IMM(flags) &
 		_IMM(DmaMappingFlag::Identity)) ? uint64(physical) : 0;
 	if (!AllocateIovaRange(*domain, length, preferred_address,
-		device_address, range) ||
-		!PopulateIovaPages(*domain, device_address, physical, length)) {
+		device_address, range)) {
 		plogerro("[IOMMU] Failed to map DMA pci=%02X:%02X.%u phys=%[64H] bytes=%u",
 			device->fields.pci_bus, device->fields.pci_device,
 			device->fields.pci_function, uint64(physical), length);
 		if (new_domain) ReleaseDomainTables(*domain);
 		return false;
 	}
-	if (!domain->attached && !AttachDomain(*domain)) {
-		ClearIovaPages(*domain, device_address, length);
+	if (new_domain && !AttachDomain(*domain)) {
 		plogerro("[IOMMU] Failed to attach translated domain pci=%02X:%02X.%u",
 			device->fields.pci_bus, device->fields.pci_device,
 			device->fields.pci_function);
-		if (new_domain) ReleaseDomainTables(*domain);
+		// Keep tables alive if hardware may still reference the translated context.
+		if (!domain->restore_failed) ReleaseDomainTables(*domain);
 		return false;
 	}
-	if (!new_domain && !InvalidateVtdCaches()) {
+	if (!PopulateIovaPages(*domain, device_address, physical, length)) {
+		plogerro("[IOMMU] Failed to map DMA pages pci=%02X:%02X.%u phys=%[64H] bytes=%u",
+			device->fields.pci_bus, device->fields.pci_device,
+			device->fields.pci_function, uint64(physical), length);
+		return false;
+	}
+	if (!InvalidateVtdCaches(unit)) {
 		ClearIovaPages(*domain, device_address, length);
 		return false;
 	}
-	const uint32 faults = ReadRegister32(vtd_state.registers,
-		kVtdFaultStatusRegister);
-	if (faults) {
-		LogVtdFaultState("DMA map", device, device_address);
+	// Primary faults are unit-wide and may belong to another request or device.
+	// The asynchronous handler owns them when fault events are enabled.
+	const uint32 faults = ReadFaultStatus(unit);
+	if (unit.faults.enabled ? (faults & VtdInvalidationQueueFaults) : faults) {
+		if (!unit.faults.enabled) LogVtdFaultState(unit, "DMA map", device, device_address);
 		ClearIovaPages(*domain, device_address, length);
-		InvalidateVtdCaches();
+		InvalidateVtdCaches(unit);
 		plogerro("[IOMMU] Fault after DMA map pci=%02X:%02X.%u fsts=%08X",
 			device->fields.pci_bus, device->fields.pci_device,
 			device->fields.pci_function, faults);
 		return false;
 	}
-	range->active = true;
-	range->device_address = device_address;
-	range->physical = physical;
-	range->length = length;
+	*range = {true, false, device_address, physical, length};
 	mapping.device_address = device_address;
 	mapping.translated = true;
 	plogtrac("[IOMMU] DMA mapped pci=%02X:%02X.%u iova=%[64H] phys=%[64H] bytes=%u",
@@ -1535,26 +2144,28 @@ bool Iova::UnmapDeviceDma(DeviceNode* device, uint64 device_address,
 	if (!device || !device_address || !length ||
 		(device_address & (PAGE_SIZE - 1)) || (length & (PAGE_SIZE - 1)))
 		return false;
-	if (!vtd_state.passthrough_enabled) return true;
+	const auto* selected = SingleVtdUnit();
+	if (!selected || !selected->passthrough_enabled) return true;
 
 	SpinlockLocal guard(IovaLock());
 	auto domain = FindDomain(device);
 	if (!domain || !domain->attached) return false;
+	auto& unit = *domain->unit;
 	IovaRange* range = nullptr;
 	for0(i, IovaMappingCapacity) {
 		auto& current = domain->mappings[i];
-		if (current.active && current.device_address == device_address &&
-			current.length == length) {
+		if (current.active && !current.reserved &&
+			current.device_address == device_address && current.length == length) {
 			range = &current;
 			break;
 		}
 	}
 	if (!range) return false;
-	LogVtdFaultState("DMA unmap", device, device_address);
+	if (!unit.faults.enabled) LogVtdFaultState(unit, "DMA unmap", device, device_address);
 	ClearIovaPages(*domain, device_address, length);
-	if (!InvalidateVtdCaches()) {
+	if (!InvalidateVtdCaches(unit)) {
 		PopulateIovaPages(*domain, device_address, range->physical, length);
-		InvalidateVtdCaches();
+		InvalidateVtdCaches(unit);
 		return false;
 	}
 	*range = {};

@@ -49,6 +49,7 @@ SECTIONS
 
 	.bss : {
 		BSS_ENTO = .;
+		KEEP(*(.bss.irq_entries))
 		*(.bss)
 		BSS_ENDO = .;
 	} > RAM :bss

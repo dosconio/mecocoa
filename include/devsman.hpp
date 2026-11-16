@@ -597,6 +597,12 @@ namespace Devs {
 
 	#if defined(_MCCA) && (_MCCA & 0xFF00) == 0x8600
 	constexpr stduint PwcallIrqBindingCapacity = 32;
+	// The caller must hold the shared I/O APIC route lock.
+	bool FinishRing1RouteRelease(uint32 gsi);
+	bool IsFixedIrqInUse(uint8 vector);
+	void ReapPwcallIrqVectors();
+	// Call without holding the route lock.
+	void ReapInterruptVectors();
 	#if CONFIG_ENABLE_USB && CONFIG_ENABLE_USB_XHCI
 	constexpr uint16 XHCIMaxConfiguredInterrupters = _OPT_BUS_USB_xHCI_MultiInterrupter ? 4 : 1;
 	#endif

@@ -3,6 +3,7 @@
 // ModuTitle: [Service] Device Management
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 #include "../include/mecocoa.hpp"
+#include "../include/handler.hpp"
 
 #if CONFIG_ACPI_BOOT_TEST
 #define ACPI_DEVMAN_ERROR(...) plogwarn(__VA_ARGS__)
@@ -1519,8 +1520,6 @@ namespace Devs {
 	}
 
 
-	extern "C" void register_interrupt_vector_handler(stduint irq_id, void (*handler)(stduint));
-
 	#if _MCCA == 0x8632
 	extern "C" void Handint_AHCI_Entry();
 	extern "C" void Handint_HDD1_Entry();
@@ -1553,6 +1552,11 @@ namespace Devs {
 
 	static FixedInterruptBinding fixed_interrupts[16]{};
 	static uint32 fixed_interrupt_generation;
+
+	bool IsFixedIrqInUse(uint8 vector) {
+		const uint8 irq = x86_vector_to_isa_irq(vector);
+		return irq < numsof(fixed_interrupts) && fixed_interrupts[irq].generation;
+	}
 
 	static void DispatchFixedInterrupt(stduint vector) {
 		const uint8 irq = x86_vector_to_isa_irq(uint8(vector));
@@ -1606,8 +1610,7 @@ namespace Devs {
 
 	static PciLineBinding pci_line_bindings[16]{};
 
-	extern "C" const stduint DeviceMessageInterruptEntries[16];
-	static constexpr uint8 DeviceMessageVectorBase = 0xD0;
+	extern "C" const stduint DeviceMessageInterruptEntries[Handler::DeviceMessageVectorCount];
 	static constexpr uint16 DeviceMessageGroupLimit = 4;
 
 	struct DeviceMessageBinding {
@@ -1618,14 +1621,16 @@ namespace Devs {
 		uint32 generation;
 		uint16 index;
 		uint16 irte;
+		uint32 destination;
 		bool active;
+		bool drained_source;
 	};
 
 	static DeviceMessageBinding device_messages[numsof(DeviceMessageInterruptEntries)]{};
 	static uint32 device_message_generation;
 
 	static void DispatchDeviceMessage(stduint vector) {
-		auto& slot = device_messages[vector - DeviceMessageVectorBase];
+		auto& slot = device_messages[vector - Handler::DeviceMessageVectorBase];
 		void (*handler)(void*, uint16) = nullptr;
 		void* context = nullptr;
 		uint16 index = 0;
@@ -1645,10 +1650,32 @@ namespace Devs {
 		IC.SendEOI(vector);
 	}
 
-	static bool RetireDeviceMessages(uint16 first, uint16 count, bool quiesced) {
+	static void ReapDeviceMessagesLocked() {
+		for0(i, numsof(device_messages)) {
+			auto& slot = device_messages[i];
+			const uint8 vector = uint8(Handler::DeviceMessageVectorBase + i);
+			if (!slot.drained_source || !Handler::IsVectorDrained(vector, slot.destination)) continue;
+			Handler::FinishVectorRelease(vector);
+			slot.drained_source = false;
+			slot.device = nullptr;
+			slot.generation = 0;
+		}
+	}
+
+	void ReapInterruptVectors() {
+		if (!Handler::HasReleasingVectors()) return;
+		SpinlockLocal guard(x86_ioapic_route_lock());
+		ReapDeviceMessagesLocked();
+		ReapPwcallIrqVectors();
+	}
+
+	static void RetireDeviceMessages(uint16 first, uint16 count, bool quiesced, bool published) {
 		{
 			SpinlockLocal guard(x86_ioapic_route_lock());
-			for0(i, count) device_messages[first + i].active = false;
+			for0(i, count) {
+				device_messages[first + i].active = false;
+				Handler::BeginVectorRelease(uint8(Handler::DeviceMessageVectorBase + first + i));
+			}
 		}
 		for0(i, count) {
 			auto& slot = device_messages[first + i];
@@ -1661,13 +1688,17 @@ namespace Devs {
 			auto& slot = device_messages[first + i];
 			slot.handler = nullptr;
 			slot.context = nullptr;
-			if (quiesced) {
-				slot.device = nullptr;
-				slot.generation = 0;
-				slot.irte = 0;
+			if (quiesced) slot.irte = 0;
+			if (quiesced && published) slot.drained_source = true;
+			else {
+				Handler::FinishVectorRelease(uint8(Handler::DeviceMessageVectorBase + first + i), quiesced);
+				if (quiesced) {
+					slot.device = nullptr;
+					slot.generation = 0;
+				}
 			}
 		}
-		return quiesced;
+		ReapDeviceMessagesLocked();
 	}
 
 	X86IoApicStatus x86_ioapic_acquire_route_locked(X86IoApicOwner owner, X86IoApicRoute& route,
@@ -1721,6 +1752,7 @@ namespace Devs {
 		if (owned) {
 			if (!x86_ioapic_routes_shareable(state->route, route)) return X86IoApicStatus::Conflict;
 			route.vector = state->route.vector;
+			route.destination = state->route.destination;
 			if (acpi || ioapic_remapping) {
 				route = state->route;
 				entry = previous;
@@ -1775,7 +1807,7 @@ namespace Devs {
 			state->original_irte = state->irte;
 			state->irte = handle;
 		}
-		if (!owned && acpi) state->original_entry = previous;
+		if (!owned && !handle) state->original_entry = previous;
 		state->owner = owner;
 		state->route = route;
 		state->eoi_failed = false;
@@ -1881,7 +1913,8 @@ namespace Devs {
 				}
 				continue;
 			}
-			if (state.release_pending) finish_remapped_route_locked(state);
+			if (state.release_pending && state.owner != X86IoApicOwner::Ring1)
+				finish_remapped_route_locked(state);
 			else if (state.unmask_pending)
 				x86_ioapic_set_owned_mask_locked(state.owner, route.gsi, false);
 		}
@@ -1895,11 +1928,27 @@ namespace Devs {
 		(void)x86_ioapic_set_mask_locked(gsi, true);
 		state->route.masked = true;
 		state->unmask_pending = false;
-		if (owner == X86IoApicOwner::Ring1 && state->irte) {
+		if (owner == X86IoApicOwner::Ring1) state->release_pending = true;
+	}
+
+	bool FinishRing1RouteRelease(uint32 gsi) {
+		auto* state = find_ioapic_route_locked(gsi);
+		if (!state || state->owner != X86IoApicOwner::Ring1 ||
+			state->references || !state->release_pending) return false;
+		uint64 current;
+		if (!x86_ioapic_read_route_locked(gsi, current) ||
+			(current & (IoApicRemoteIrr | IoApicDeliveryPending)) ||
+			!(current & (uint64(1) << 16))) return false;
+		if (state->irte) {
 			finish_remapped_route_locked(*state);
-			return;
+			return state->owner == X86IoApicOwner::None;
 		}
-		if (owner == X86IoApicOwner::Ring1) state->owner = X86IoApicOwner::None;
+		const uint64 restore = state->original_entry | (uint64(1) << 16);
+		if (!x86_ioapic_write_route_locked(gsi, restore)) return false;
+		state->route = x86_ioapic_decode_route(gsi, restore);
+		state->owner = X86IoApicOwner::None;
+		state->release_pending = false;
+		return true;
 	}
 
 	void x86_ioapic_finish_acpi_release_locked(uint32 gsi) {
@@ -3289,12 +3338,7 @@ static InterruptBinding EnableFixedInterrupt(InterruptSource source, void (*hand
 		if (!state || !state->boot_route || state->route.vector != vector ||
 			state->owner != X86IoApicOwner::None || state->fixed_handler) return {};
 	}
-	#if _MCCA == 0x8664
-	IC[vector].setModeRupt(entry, SegCo64);
-	#else
-	IC[vector].setRange(entry, SegCo32);
-	#endif
-	register_interrupt_vector_handler(vector, DispatchFixedInterrupt);
+	Handler::InstallDispatch(vector, entry, DispatchFixedInterrupt);
 	binding.handler = handler;
 	if (++fixed_interrupt_generation == 0) ++fixed_interrupt_generation;
 	binding.generation = fixed_interrupt_generation;
@@ -3374,21 +3418,17 @@ InterruptBinding Devsman::EnableInterrupt(InterruptSource source,
 		if (targets[i] == CORE_ID_INVALID || (!extended && targets[i] >= 0xFFu)) return {};
 	}
 
-	uint16 first = numsof(device_messages);
-	uint16 run = 0;
+	uint16 first;
 	uint32 generation;
 	{
 		SpinlockLocal guard(x86_ioapic_route_lock());
+		ReapDeviceMessagesLocked();
 		for (const auto& slot : pci_line_bindings) if (slot.device == device) return {};
 		for (const auto& slot : device_messages) if (slot.device == device) return {};
-		for0(i, numsof(device_messages)) {
-			if (device_messages[i].device) run = 0;
-			else if (++run == count) {
-				first = uint16(i + 1 - count);
-				break;
-			}
-		}
-		if (first == numsof(device_messages)) return {};
+		const uint8 vector = Handler::AllocateVectors(Handler::DeviceMessageVectorBase,
+			Handler::DeviceMessageVectorCount, uint8(count));
+		if (!vector) return {};
+		first = vector - Handler::DeviceMessageVectorBase;
 		if (++device_message_generation == 0) ++device_message_generation;
 		generation = device_message_generation;
 		for0(i, count) {
@@ -3396,22 +3436,23 @@ InterruptBinding Devsman::EnableInterrupt(InterruptSource source,
 			slot.device = device;
 			slot.generation = generation;
 			slot.index = uint16(i);
+			slot.destination = targets[i];
 			slot.context = context;
 			slot.handler = handler;
 		}
 	}
 
 	if (extended && !Iova::PreparePciMessageInterrupts(device)) {
-		(void)RetireDeviceMessages(first, count, true);
+		RetireDeviceMessages(first, count, true, false);
 		return {};
 	}
 	uni::PCI::MSIMessage messages[DeviceMessageGroupLimit]{};
 	for0(i, count) {
-		const uint8 vector = uint8(DeviceMessageVectorBase + first + i);
+		const uint8 vector = uint8(Handler::DeviceMessageVectorBase + first + i);
 		if (extended) {
 			Iova::InterruptMessage message{};
 			if (!Iova::AllocatePciInterrupt(device, targets[i], vector, message)) {
-				(void)RetireDeviceMessages(first, count, true);
+				RetireDeviceMessages(first, count, true, false);
 				return {};
 			}
 			device_messages[first + i].irte = message.handle;
@@ -3424,14 +3465,10 @@ InterruptBinding Devsman::EnableInterrupt(InterruptSource source,
 	{
 		SpinlockLocal guard(x86_ioapic_route_lock());
 		for0(i, count) {
-			const uint8 vector = uint8(DeviceMessageVectorBase + first + i);
-			const stduint entry = mglb(DeviceMessageInterruptEntries[first + i]);
-			#if _MCCA == 0x8664
-			IC[vector].setModeRupt(entry, SegCo64);
-			#else
-			IC[vector].setRange(entry, SegCo32);
-			#endif
-			register_interrupt_vector_handler(vector, DispatchDeviceMessage);
+			const uint8 vector = uint8(Handler::DeviceMessageVectorBase + first + i);
+			stduint entry = Handler::GeneratedEntry(vector);
+			if (!entry) entry = mglb(DeviceMessageInterruptEntries[first + i]);
+			Handler::InstallDispatch(vector, entry, DispatchDeviceMessage);
 			device_messages[first + i].active = true;
 		}
 	}
@@ -3447,7 +3484,7 @@ InterruptBinding Devsman::EnableInterrupt(InterruptSource source,
 		pci.configure_MSI_fixed_destination(dev, uint8(targets[0]),
 			uni::PCI::MSITriggerMode::Edge, uni::PCI::MSIDeliveryMode::Fixed, uint8(messages[0].data), 0));
 	if (result) {
-		(void)RetireDeviceMessages(first, count, Iova::DisablePciMessageInterrupts(device));
+		RetireDeviceMessages(first, count, Iova::DisablePciMessageInterrupts(device), true);
 		plogwarn("[DEVIRQ] PCI message setup failed: %s", result.Name());
 		return {};
 	}
@@ -3474,7 +3511,7 @@ bool Devsman::DisableInterrupt(InterruptBinding& binding) {
 			}
 		}
 		const bool quiesced = Iova::DisablePciMessageInterrupts(device);
-		(void)RetireDeviceMessages(binding.slot, count, quiesced);
+		RetireDeviceMessages(binding.slot, count, quiesced, true);
 		binding = {};
 		return quiesced;
 	}
@@ -3696,7 +3733,9 @@ bool Devsman::Initialize() {
 	IC.Reset(SegCo32, 0x80000000);
 	#endif
 	#if (_MCCA & 0xFF00) == 0x8600
+	Handler::InitializeEntries();
 	if (!initialize_x86_interrupts(PCI_Root())) return false;
+	Iova::EnableFaultEvents();
 	#if _MCCA == 0x8632
 	register_legacy_x86_platform_nodes(IC.getType() != 0);
 	#endif
@@ -4721,14 +4760,22 @@ namespace {
 		(void)LaunchDriverProcess(*record);
 	}
 
-	void DispatchKernelDeviceEvent(const DeviceEvent& event) {
+	void DispatchKernelDeviceEvent(const DeviceEvent& event, stduint source) {
+		(void)source;
 		if (event.version != DeviceEventProtocolVersion) {
 			plogwarn("[Devsman] invalid device event version=%u", event.version);
 			return;
 		}
 		switch (DeviceEventKind(event.kind)) {
-		case DeviceEventKind::Removed:
 		case DeviceEventKind::Fault:
+			#if (_MCCA & 0xFF00) == 0x8600
+			if (!source && !event.device_handle && event.source == Handler::VtdFaultVector) {
+				Iova::ServiceFaultEvents();
+				break;
+			}
+			#endif
+			[[fallthrough]];
+		case DeviceEventKind::Removed:
 		case DeviceEventKind::Shutdown:
 			ploginfo("[Devsman] device event kind=%u handle=%u source=%u count=%u",
 				event.kind, event.device_handle, event.source, event.count);
@@ -4791,7 +4838,7 @@ namespace {
 			else if (type == _IMM(KernelMsg::DeviceEvent)) {
 				DeviceEvent event = {};
 				MemCopyN(&event, payload.data, sizeof(event));
-				DispatchKernelDeviceEvent(event);
+				DispatchKernelDeviceEvent(event, source);
 			}
 			#if (_MCCA & 0xFF00) == 0x8600
 			else if (type == _IMM(StorageDriverMsg::Attach)) {

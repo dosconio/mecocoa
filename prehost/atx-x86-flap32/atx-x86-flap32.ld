@@ -132,6 +132,7 @@ SECTIONS
 	.bss : {
 		. = ALIGN(16);
 		BSS_ENTO = .;
+		KEEP(*(.bss.irq_entries))
 		*(.bss .bss.*)
 		*(COMMON)
 		BSS_ENDO = .;

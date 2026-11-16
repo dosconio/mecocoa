@@ -206,6 +206,9 @@ void Systimex::CollectExpired() {
 		}
 		if (!run_callback) break;
 	}
+	#if (_MCCA & 0xFF00) == 0x8600
+	Iova::NotifyFaultService();
+	#endif
 	if (!notify) return;
 
 	DeviceEvent event = {};

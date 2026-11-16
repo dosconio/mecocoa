@@ -11,20 +11,24 @@
 namespace {
 	static_assert(sizeof(DeviceEvent) <= sizeof(FMT_NetworkMsg_DRV_FRAME));
 	constexpr uint16 E1000VendorId = 0x8086u;
+	constexpr uint16 E1000Device82574L = 0x10D3u;
 	constexpr uint16 E1000DeviceIds[] = {
 		0x100Eu,
 		0x100Fu,
 		0x1010u,
-		0x10D3u,
+		E1000Device82574L,
 	};
 
 	enum class E1000Reg : uint32 {
 		CTRL = 0x0000u / 4,
 		STATUS = 0x0008u / 4,
 		EECD = 0x0010u / 4,
+		CTRL_EXT = 0x0018u / 4,
 		ICR = 0x00C0u / 4,
 		IMS = 0x00D0u / 4,
 		IMC = 0x00D8u / 4,
+		EIAC = 0x00DCu / 4,
+		IVAR = 0x00E4u / 4,
 		RCTL = 0x0100u / 4,
 		TCTL = 0x0400u / 4,
 		TIPG = 0x0410u / 4,
@@ -33,6 +37,7 @@ namespace {
 		RDLEN = 0x2808u / 4,
 		RDH = 0x2810u / 4,
 		RDT = 0x2818u / 4,
+		RFCTL = 0x5008u / 4,
 		TDBAL = 0x3800u / 4,
 		TDBAH = 0x3804u / 4,
 		TDLEN = 0x3808u / 4,
@@ -58,6 +63,21 @@ namespace {
 	constexpr uint32 E1000_ICR_RXDMT0 = 1u << 4;
 	constexpr uint32 E1000_ICR_RXO = 1u << 6;
 	constexpr uint32 E1000_ICR_RXT0 = 1u << 7;
+	// Intel 82574 GbE Controller Family Datasheet, section 7.4: MSI-X interrupt routing and auto-clear.
+	constexpr uint32 E1000_82574_IRQ_RXQ0 = 1u << 20;
+	constexpr uint32 E1000_82574_IRQ_TXQ0 = 1u << 22;
+	constexpr uint32 E1000_82574_IRQ_OTHER = 1u << 24;
+	constexpr uint32 E1000_82574_OTHER_MASK = E1000_82574_IRQ_OTHER | E1000_ICR_LSC | E1000_ICR_RXO;
+	constexpr uint32 E1000_82574_IVAR_VALID = 1u << 3;
+	constexpr uint32 E1000_82574_IVAR_TXQ0_SHIFT = 8;
+	constexpr uint32 E1000_82574_IVAR_OTHER_SHIFT = 16;
+	constexpr uint32 E1000_82574_IVAR_TX_WB = 1u << 31;
+	constexpr uint32 E1000_82574_CTRL_EXT_EIAME = 1u << 24;
+	constexpr uint32 E1000_82574_CTRL_EXT_IAME = 1u << 27;
+	constexpr uint32 E1000_82574_CTRL_EXT_PBA_SUPPORT = 1u << 31;
+	constexpr uint32 E1000_82574_RFCTL_ACK_DIS = 1u << 12;
+	constexpr uint16 E1000_82574_MSIX_RX = 0;
+	constexpr uint16 E1000_82574_MSIX_TX = 1;
 	constexpr uint8 E1000_RXD_STAT_DD = 1u << 0;
 	constexpr uint8 E1000_TXD_STAT_DD = 1u << 0;
 	constexpr uint8 E1000_TXD_CMD_EOP = 1u << 0;
@@ -112,9 +132,7 @@ namespace {
 
 	struct E1000Context {
 		stduint dev_handle = 0;
-		#if _ACCM == 0x8664
 		uint16 device_id = 0;
-		#endif
 		volatile uint32* regs = nullptr;
 		PwcallDeviceResourceInfo mmio = {};
 		DmaRegion rx_desc_dma = {};
@@ -134,6 +152,7 @@ namespace {
 		stduint tx_queue_count = 0;
 		bool rings_ready = false;
 		bool link_up = false;
+		bool msix = false;
 		#if _ACCM == 0x8664
 		bool polling = false;
 		uint32 polling_idle_rounds = 0;
@@ -176,9 +195,32 @@ namespace {
 			write_reg(E1000Reg::CTRL, read_reg(E1000Reg::CTRL) | E1000_CTRL_SLU);
 		}
 
+		void configure_msix() {
+			// Disable ACK frame interrupts to avoid spurious MSI-X notifications on 82574.
+			write_reg(E1000Reg::RFCTL, read_reg(E1000Reg::RFCTL) | E1000_82574_RFCTL_ACK_DIS);
+			write_reg(E1000Reg::IVAR, (E1000_82574_IVAR_VALID | E1000_82574_MSIX_RX) |
+				((E1000_82574_IVAR_VALID | E1000_82574_MSIX_TX) << E1000_82574_IVAR_TXQ0_SHIFT) |
+				((E1000_82574_IVAR_VALID | E1000_82574_MSIX_RX) << E1000_82574_IVAR_OTHER_SHIFT) |
+				E1000_82574_IVAR_TX_WB);
+			const uint32 ctrl_ext = read_reg(E1000Reg::CTRL_EXT) & ~E1000_82574_CTRL_EXT_IAME;
+			write_reg(E1000Reg::CTRL_EXT, ctrl_ext | E1000_82574_CTRL_EXT_EIAME |
+				E1000_82574_CTRL_EXT_PBA_SUPPORT);
+			write_reg(E1000Reg::EIAC, E1000_82574_IRQ_RXQ0 | E1000_82574_IRQ_TXQ0);
+			msix = true;
+		}
+
 		void enable_interrupts() {
 			(void)read_reg(E1000Reg::ICR);
-			write_reg(E1000Reg::IMS, E1000_IRQ_MASK);
+			write_reg(E1000Reg::IMS, msix ? E1000_82574_IRQ_RXQ0 | E1000_82574_IRQ_TXQ0 |
+				E1000_82574_OTHER_MASK : E1000_IRQ_MASK);
+		}
+
+		void disable_msix() {
+			write_reg(E1000Reg::IMC, 0xFFFFFFFFu);
+			write_reg(E1000Reg::EIAC, 0);
+			(void)read_reg(E1000Reg::ICR);
+			(void)Powercall::UnbindMsix(dev_handle, E1000_82574_MSIX_TX);
+			(void)Powercall::UnbindMsix(dev_handle, E1000_82574_MSIX_RX);
 		}
 
 		uint32 service_interrupt() {
@@ -369,13 +411,17 @@ namespace {
 		return true;
 	}
 
+	constexpr stduint DefaultInterruptFlags = _IMM(PwcallDeviceOpenFlag::Interrupt)
+		#if _ACCM == 0x8664
+		| _IMM(PwcallDeviceOpenFlag::MsiOnly)
+		#endif
+		;
+
 	stduint OpenE1000() {
 		for0(i, numsof(E1000DeviceIds)) {
 			const stduint cls = (stduint(E1000VendorId) << 16) | E1000DeviceIds[i];
-			stduint flags = _IMM(PwcallDeviceOpenFlag::Interrupt);
-			#if _ACCM == 0x8664
-			flags |= _IMM(PwcallDeviceOpenFlag::MsiOnly);
-			#endif
+			const stduint flags = E1000DeviceIds[i] == E1000Device82574L ?
+				_IMM(PwcallDeviceOpenFlag::None) : DefaultInterruptFlags;
 			const stdsint opened = Powercall::DevOpen(0, cls, flags);
 			if (opened > 0) return stduint(opened);
 		}
@@ -415,9 +461,7 @@ namespace {
 		PwcallDeviceIdentity identity = {};
 		if (Powercall::DevGetIdentity(g_e1000.dev_handle, &identity) != 0) return false;
 		if (identity.vendor_id != E1000VendorId || !MatchDeviceId(identity.device_id)) return false;
-		#if _ACCM == 0x8664
 		g_e1000.device_id = identity.device_id;
-		#endif
 		if (!FindResource(g_e1000.dev_handle, PwcallDeviceResourceType::PciBarMmio, 0, &g_e1000.mmio)) return false;
 
 		PwcallDeviceMapRequest mmio_req = {};
@@ -445,6 +489,21 @@ namespace {
 		return true;
 	}
 
+	bool Start82574Interrupts() {
+		if (Powercall::DevPublish(g_e1000.dev_handle, PwcallDevicePublishCommand::Started) != 0)
+			return false;
+		if (Powercall::BindMsix(g_e1000.dev_handle, E1000_82574_MSIX_RX) == 0) {
+			if (Powercall::BindMsix(g_e1000.dev_handle, E1000_82574_MSIX_TX) == 0) {
+				g_e1000.configure_msix();
+				return true;
+			}
+			if (Powercall::UnbindMsix(g_e1000.dev_handle, E1000_82574_MSIX_RX) != 0)
+				return false;
+		}
+		const stduint cls = (stduint(E1000VendorId) << 16) | g_e1000.device_id;
+		return Powercall::DevOpen(0, cls, DefaultInterruptFlags) == stdsint(g_e1000.dev_handle);
+	}
+
 	bool ProcessReceivedEvent(CommMsg& recv_msg, FMT_NetworkMsg_DRV_FRAME& frame) {
 		if (recv_msg.type == _IMM(KernelMsg::DeviceEvent)) {
 			if (recv_msg.data.length < sizeof(DeviceEvent)) return false;
@@ -452,7 +511,18 @@ namespace {
 			if (event.version != DeviceEventProtocolVersion ||
 				DeviceEventKind(event.kind) != DeviceEventKind::Interrupt ||
 				event.device_handle != g_e1000.dev_handle) return false;
-			(void)g_e1000.service_interrupt();
+			if (!g_e1000.msix) (void)g_e1000.service_interrupt();
+			else if (event.source == E1000_82574_MSIX_RX) {
+				// Clear only link and other causes; EIAC handles the queue interrupt causes.
+				g_e1000.write_reg(E1000Reg::ICR, E1000_82574_OTHER_MASK);
+				g_e1000.update_link_state();
+				g_e1000.write_reg(E1000Reg::IMS, E1000_82574_IRQ_RXQ0 | E1000_82574_OTHER_MASK);
+			}
+			else if (event.source == E1000_82574_MSIX_TX) {
+				(void)g_e1000.flush_tx_queue();
+				g_e1000.write_reg(E1000Reg::IMS, E1000_82574_IRQ_TXQ0);
+			}
+			else return false;
 			return Powercall::DevAck(g_e1000.dev_handle, stduint(event.sequence), event.generation) == 0;
 		}
 
@@ -523,8 +593,10 @@ int main(int argc, char** argv) {
 	if (Powercall::Hello() != 0) return -1;
 	if (!InitializeE1000()) return -1;
 	if (!PublishAttach()) return -1;
+	if (g_e1000.device_id == E1000Device82574L && !Start82574Interrupts()) return -1;
 	#if _ACCM == 0x8664
-	stdsint publish_result = Powercall::DevPublish(g_e1000.dev_handle, PwcallDevicePublishCommand::Started);
+	stdsint publish_result = g_e1000.msix ? 0 :
+		Powercall::DevPublish(g_e1000.dev_handle, PwcallDevicePublishCommand::Started);
 	if (publish_result != 0) {
 		const stduint cls = (stduint(E1000VendorId) << 16) | g_e1000.device_id;
 		const stdsint reopened = Powercall::DevOpen(0, cls, _IMM(PwcallDeviceOpenFlag::Interrupt));
@@ -548,7 +620,8 @@ int main(int argc, char** argv) {
 	if (publish_result != 0) return -1;
 	if (!g_e1000.polling) g_e1000.enable_interrupts();
 	#else
-	if (Powercall::DevPublish(g_e1000.dev_handle, PwcallDevicePublishCommand::Started) != 0) return -1;
+	if (!g_e1000.msix &&
+		Powercall::DevPublish(g_e1000.dev_handle, PwcallDevicePublishCommand::Started) != 0) return -1;
 	g_e1000.enable_interrupts();
 	#endif
 	(void)PushRxFrames();
@@ -586,7 +659,10 @@ int main(int argc, char** argv) {
 			continue;
 		}
 		#endif
-		if (!ReceiveEvent()) return -1;
+		if (!ReceiveEvent()) {
+			if (g_e1000.msix) g_e1000.disable_msix();
+			return -1;
+		}
 	}
 }
 

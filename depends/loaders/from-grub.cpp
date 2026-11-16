@@ -12,7 +12,9 @@ static uint8 acpi_rsdp_storage[sizeof(uni::ACPI::RSDP)] = {};
 stduint parse_grub(stduint addr)
 {
 	stduint count = 0;
-	stduint size = *(uint32*)addr;
+	const stduint size = *(const uint32*)addr;
+	if (size > ~stduint(0) - addr) return 0;
+	const stduint info_end = addr + size;
 	multiboot_tag* tag = (multiboot_tag*)(addr + 8);
 	multiboot_tag_mmap* mtag = nullptr;
 	while (tag->type != MULTIBOOT_TAG_TYPE_END)
@@ -31,15 +33,35 @@ stduint parse_grub(stduint addr)
 	}
 	
 	if (mtag) {
+		stduint reserved_count = 0;
 		multiboot_mmap_entry* entry = mtag->entries;
 		while ((u32)entry < (u32)mtag + mtag->size)
 		{
 			count++;
 			if (entry->type == MULTIBOOT_MEMORY_AVAILABLE && entry->len > 0)
 			{
-				Memory::AppendAvailableRange(entry->addr, entry->addr + entry->len);
+				const uint64 begin = entry->addr;
+				const uint64 end = begin + entry->len;
+				// Multiboot2 information can lie inside available RAM and is still needed for paging.
+				if (end <= addr || begin >= info_end)
+					Memory::AppendAvailableRange(begin, end);
+				else {
+					if (begin < addr) Memory::AppendAvailableRange(begin, addr);
+					if (end > info_end) Memory::AppendAvailableRange(info_end, end);
+				}
 			}
+			else if (entry->type == MULTIBOOT_MEMORY_RESERVED ||
+				entry->type == MULTIBOOT_MEMORY_NVS)
+				++reserved_count;
 			cast<stduint>(entry) += mtag->entry_size;
+		}
+		if (Memory::reserved_regions.Prepare(reserved_count)) {
+			entry = mtag->entries;
+			for0(i, count) {
+				if (entry->type == MULTIBOOT_MEMORY_RESERVED || entry->type == MULTIBOOT_MEMORY_NVS)
+					Memory::reserved_regions.Record(entry->addr, entry->len);
+				cast<stduint>(entry) += mtag->entry_size;
+			}
 		}
 	}
 	return count;

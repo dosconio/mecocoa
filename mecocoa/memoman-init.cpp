@@ -416,6 +416,53 @@ void Memory::AppendAvailableRange(stduint beg, stduint end) {
 	}
 }
 
+#if (_MCCA & 0xFF00) == 0x8600
+// ReservedMemoryRegion
+
+namespace {
+	// ACPI specification, System Address Map Interfaces: INT 15h E820 range types.
+	constexpr uint32 E820Usable = 1;
+	constexpr uint32 E820Reserved = 2;
+	constexpr uint32 E820Nvs = 4;
+}
+
+ReservedMemoryRegion Memory::reserved_regions{};
+
+void ReservedMemoryRegion::Reset() {
+	ranges.reset();
+	range_count = 0;
+}
+
+// The first pass registers usable RAM and counts reserved ranges, so this snapshot needs one allocation.
+bool ReservedMemoryRegion::Prepare(stduint count) {
+	if (!count || count > __PTRDIFF_MAX__ / sizeof(PhysicalRange)) return false;
+	range_count = 0;
+	ranges.reset(new (std::nothrow_t{}) PhysicalRange[count]);
+	return bool(ranges);
+}
+
+void ReservedMemoryRegion::Record(uint64 begin, uint64 length) {
+	if (!length || length > ~uint64(0) - begin) return;
+	ranges[range_count++] = {begin, length};
+}
+
+bool ReservedMemoryRegion::Covers(uint64 begin, uint64 end) const {
+	while (begin < end) {
+		uint64 covered_end = begin;
+		for0(i, range_count) {
+			const auto& range = ranges[i];
+			const uint64 range_end = range.first + range.second;
+			if (range.first <= begin && range_end > covered_end)
+				covered_end = range_end;
+		}
+		if (covered_end == begin) return false;
+		begin = covered_end;
+	}
+	return true;
+}
+#endif
+
+
 // **initialize**: fill the mempool
 // - init
 // - allocate (which be with pagemap)
@@ -423,6 +470,7 @@ void Memory::AppendAvailableRange(stduint beg, stduint end) {
 #if (_MCCA & 0xFF00) == 0x8600
 bool Memory::initialize(stduint eax, byte* ebx) {
 	mempool0.expand_only_from_self = true;
+	reserved_regions.Reset();
 	mempool.Reset();
 	Memory::total_memsize = 0;
 	isa_dma_pool_base = 0;
@@ -624,13 +672,22 @@ bool Memory::initialize(stduint eax, byte* ebx) {
 static stduint parse_norm(stduint addr) {
 	memory_info_entry* entry = (memory_info_entry*)addr;
 	stduint count = 0;
+	stduint reserved_count = 0;
 	for0(i, numsof(MemoryListData)) {
 		if (!entry->addr && !entry->len) break;
 		count++;
-		if (entry->type == 1 && entry->len > 0) {
+		if (entry->type == E820Usable && entry->len > 0)
 			Memory::AppendAvailableRange(entry->addr, entry->addr + entry->len);
-		}
+		else if (entry->type == E820Reserved || entry->type == E820Nvs)
+			++reserved_count;
 		entry++;
+	}
+	if (Memory::reserved_regions.Prepare(reserved_count)) {
+		entry = reinterpret_cast<memory_info_entry*>(addr);
+		for0(i, count) {
+			if (entry[i].type == E820Reserved || entry[i].type == E820Nvs)
+				Memory::reserved_regions.Record(entry[i].addr, entry[i].len);
+		}
 	}
 	return count;
 }
@@ -701,16 +758,32 @@ static bool parse_uefi(const MemoryMap& memory_map) {
 			(stduint)(framebuffer_pitch * framebuffer_height),
 			reserved[3])) return false;
 	const stduint top = _IMM(memory_map.buffer) + memory_map.map_size;
+	const auto is_reserved = [](uint32 type) {
+		return type == MemoryType::EfiReservedMemoryType ||
+			type == MemoryType::EfiACPIMemoryNVS ||
+			type == MemoryType::EfiRuntimeServicesCode ||
+			type == MemoryType::EfiRuntimeServicesData;
+	};
+	stduint reserved_count = 0;
 	for (stduint iter = _IMM(memory_map.buffer); iter < top;
 		iter += memory_map.descriptor_size) {
 		const auto* desc = reinterpret_cast<const MemoryDescriptor*>(iter);
-		if (MemIsAvailable((MemoryType)desc->type)) {
-			const stduint begin = desc->physical_start;
-			if (desc->number_of_pages > (uint64)(~_IMM0 - begin) / UEFIPageSize)
-				continue;
-			const stduint end = begin +
-				(stduint)desc->number_of_pages * UEFIPageSize;
-			append_uefi_available_range(begin, end, reserved, 0);
+		if (is_reserved(desc->type)) ++reserved_count;
+		if (!MemIsAvailable((MemoryType)desc->type)) continue;
+		const stduint begin = desc->physical_start;
+		if (desc->number_of_pages > (uint64)(~_IMM0 - begin) / UEFIPageSize)
+			continue;
+		const stduint length = (stduint)desc->number_of_pages * UEFIPageSize;
+		append_uefi_available_range(begin, begin + length, reserved, 0);
+	}
+	if (Memory::reserved_regions.Prepare(reserved_count)) {
+		for (stduint iter = _IMM(memory_map.buffer); iter < top;
+			iter += memory_map.descriptor_size) {
+			const auto* desc = reinterpret_cast<const MemoryDescriptor*>(iter);
+			if (is_reserved(desc->type) &&
+				desc->number_of_pages <= (~uint64(0) - desc->physical_start) / UEFIPageSize)
+				Memory::reserved_regions.Record(desc->physical_start,
+					desc->number_of_pages * UEFIPageSize);
 		}
 	}
 	return true;

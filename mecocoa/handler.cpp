@@ -3,11 +3,15 @@
 // ModuTitle: Handler and Soft Timer
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 #include "../include/mecocoa.hpp"
+#include "../include/handler.hpp"
 
 #include <c/delay.h>
 #include <cpp/Device/UART>
 #include <c/driver/mouse.h>
 #include <c/driver/timer.h>
+#if (_MCCA & 0xFF00) == 0x8600
+#include <cpp/ISO_IEC_STD/array>
+#endif
 
 #if _MCCA == 0x8664 && defined(_UEFI)
 #include <cpp/Witch/TextChrome.hpp>
@@ -134,6 +138,192 @@ InterruptVectorHandler interrupt_vector_handlers[256] = { nullptr };
 extern "C" void check_and_deliver_signals(void* context);
 
 #if (_MCCA & 0xFF00) == 0x8600
+
+#if CONFIG_ENABLE_MMU && (_MCCA == 0x8632 || (_MCCA == 0x8664 && defined(_UEFI)))
+#if _MCCA == 0x8632
+extern "C" void Handint_Common_Stub();
+#else
+extern "C" void Handint_Common_Stub_64();
+#endif
+
+namespace {
+	constexpr stduint InterruptEntrySize = 16;
+	using InterruptEntryPage = uni::Array<uni::Array<uint8, InterruptEntrySize>, 256>;
+	static_assert(sizeof(InterruptEntryPage) == PAGE_SIZE);
+	alignas(PAGE_SIZE) static InterruptEntryPage interrupt_entries
+		__attribute__((section(".bss.irq_entries")));
+	stduint interrupt_entries_base;
+
+	stduint InterruptEntryMappingAddress(stduint base) {
+		#if _MCCA == 0x8664
+		// Use the same 48-bit address as the initial kernel mapping plan.
+		return base & 0x0000FFFFFFFFFFFFull;
+		#else
+		return base;
+		#endif
+	}
+
+	bool IsGeneratedInterruptVector(uint8 vector) {
+		using namespace Handler;
+		return vector == VtdFaultVector ||
+			(vector >= Ring1VectorBase &&
+			vector < Ring1VectorBase + Ring1LegacyVectorCount) ||
+			(vector >= Ring1ExtendedVectorBase &&
+			vector < Ring1ExtendedVectorBase + Ring1VectorCount - Ring1LegacyVectorCount) ||
+			(vector >= DeviceMessageVectorBase && vector < DeviceMessageVectorBase + DeviceMessageVectorCount);
+	}
+
+	bool MapInterruptEntryPage(uni::Paging& paging, stduint address) {
+		return Memory::MapPages(paging, address, _IMM(&interrupt_entries), PAGE_SIZE,
+			PAGESIZE_4KB, PGPROP_present | PGTYPE_writeback | PGOPTS_omit_warnings);
+	}
+}
+#endif
+
+static void GenerateInterruptEntries() {
+	#if CONFIG_ENABLE_MMU && (_MCCA == 0x8632 || (_MCCA == 0x8664 && defined(_UEFI)))
+	if (interrupt_entries_base) return;
+	const stduint physical = _IMM(&interrupt_entries);
+	#if _MCCA == 0x8632
+	// The flap32 process page tables map the first 64 MiB in the kernel window.
+	if (physical >= 0x04000000u) return;
+	const stduint target = mglb(Handint_Common_Stub);
+	#else
+	// The uefi64 process kernel window ends two MiB below the end of its first GiB.
+	if (physical >= 0x3FE00000u) return;
+	const stduint target = mglb(Handint_Common_Stub_64);
+	#endif
+	const stduint base = mglb(physical);
+	auto* entries = reinterpret_cast<InterruptEntryPage*>(base);
+	for (stduint vector = 0; vector < entries->size(); ++vector) {
+		if (!IsGeneratedInterruptVector(uint8(vector))) continue;
+		auto& entry = (*entries)[vector];
+		const stduint next = base + vector * InterruptEntrySize + 12;
+		const uint32 displacement = uint32(target - next);
+		#if _MCCA == 0x8664
+		// Intel SDM, JMP rel32: the displacement is sign-extended in 64-bit mode.
+		if (next + stduint(int32(displacement)) != target) return;
+		#endif
+		entry.fill(0xCC);
+		entry[0] = 0x6A;
+		entry[1] = 0; // push dummy error code
+		entry[2] = 0x68;
+		entry[3] = uint8(vector); // push imm32 to preserve vectors above 0x7F
+		entry[4] = entry[5] = entry[6] = 0;
+		entry[7] = 0xE9;
+		for0(i, 4) entry[8 + i] = uint8(displacement >> (8 * i));
+	}
+
+	// Seal both boot aliases before publishing entries to the IDT or starting APs.
+	if (!MapInterruptEntryPage(kernel_paging, physical) ||
+		!MapInterruptEntryPage(kernel_paging, InterruptEntryMappingAddress(base))) {
+		plogwarn("[IRQ] Cannot protect generated entry page; using static entries");
+		return;
+	}
+	RefreshVirtualAddress(physical);
+	RefreshVirtualAddress(base);
+	// Intel SDM, Handling Self- and Cross-Modifying Code.
+	unsigned a, b, c, d;
+	_IO_CPUID(0, 0, &a, &b, &c, &d);
+	interrupt_entries_base = base;
+	plogtrac("[IRQ] Generated device interrupt entries");
+	#endif
+}
+
+stduint Handler::GeneratedEntry(uint8 vector) {
+	#if CONFIG_ENABLE_MMU && (_MCCA == 0x8632 || (_MCCA == 0x8664 && defined(_UEFI)))
+	if (interrupt_entries_base && IsGeneratedInterruptVector(vector))
+		return interrupt_entries_base + stduint(vector) * InterruptEntrySize;
+	#else
+	(void)vector;
+	#endif
+	return 0;
+}
+
+#if CONFIG_ENABLE_MMU
+bool Handler::MapEntries(uni::Paging& paging) {
+	#if _MCCA == 0x8632 || (_MCCA == 0x8664 && defined(_UEFI))
+	if (!interrupt_entries_base) return true;
+	return MapInterruptEntryPage(paging, InterruptEntryMappingAddress(interrupt_entries_base));
+	#else
+	(void)paging;
+	return true;
+	#endif
+}
+#endif
+
+namespace {
+	enum class InterruptVectorState : uint8 { Reserved = 0, Free, Bound, Releasing };
+	static uni::Array<InterruptVectorState, 256> interrupt_vectors __attribute__((section(".bss"))){};
+	static_assert(sizeof(interrupt_vectors) == 256);
+	static uni::Atomic<uint32> releasing_irq_vectors{0};
+}
+
+void Handler::InitializeEntries() {
+	GenerateInterruptEntries();
+	for0(i, Ring1LegacyVectorCount)
+		interrupt_vectors[Ring1VectorBase + i] = InterruptVectorState::Free;
+	for0(i, Ring1VectorCount - Ring1LegacyVectorCount) {
+		const uint8 vector = uint8(Ring1ExtendedVectorBase + i);
+		#if _MCCA == 0x8632
+		if (!GeneratedEntry(vector)) continue;
+		#endif
+		interrupt_vectors[vector] = InterruptVectorState::Free;
+	}
+	for0(i, DeviceMessageVectorCount)
+		interrupt_vectors[DeviceMessageVectorBase + i] = InterruptVectorState::Free;
+}
+
+uint8 Handler::AllocateVectors(uint8 first, uint8 length, uint8 count) {
+	if (!count || uint16(first) + length > interrupt_vectors.size()) return 0;
+	uint8 run = 0;
+	for (uint16 i = first; i < uint16(first) + length; ++i) {
+		if (interrupt_vectors[i] != InterruptVectorState::Free) run = 0;
+		else if (++run == count) {
+			const uint8 start = uint8(i + 1 - count);
+			for0(slot, count) interrupt_vectors[start + slot] = InterruptVectorState::Bound;
+			return start;
+		}
+	}
+	return 0;
+}
+
+void Handler::InstallDispatch(uint8 vector, stduint entry, void (*handler)(stduint)) {
+	if (entry) {
+		#if _MCCA == 0x8664
+		IC[vector].setModeRupt(entry, SegCo64);
+		#else
+		IC[vector].setRange(entry, SegCo32);
+		#endif
+	}
+	interrupt_vector_handlers[vector] = handler;
+}
+
+void Handler::BeginVectorRelease(uint8 vector) {
+	if (interrupt_vectors[vector] != InterruptVectorState::Bound) return;
+	interrupt_vectors[vector] = InterruptVectorState::Releasing;
+	releasing_irq_vectors.fetch_add(1, uni::MemoryOrder_Relaxed);
+}
+
+void Handler::FinishVectorRelease(uint8 vector, bool reusable) {
+	if (interrupt_vectors[vector] == InterruptVectorState::Releasing)
+		releasing_irq_vectors.fetch_sub(1, uni::MemoryOrder_Relaxed);
+	else if (interrupt_vectors[vector] != InterruptVectorState::Bound) return;
+	interrupt_vectors[vector] = reusable ? InterruptVectorState::Free : InterruptVectorState::Reserved;
+}
+
+bool Handler::IsVectorDrained(uint8 vector, uint32 lapic_id) {
+	if (GetCurrentLapicId() != lapic_id) return false;
+	// Intel SDM, Local APIC: inspect both pending and in-service bits on the destination CPU.
+	const uint32 offset = uint32(vector / 32u) * 0x10u;
+	const uint32 mask = 1u << (vector % 32u);
+	return !((IC.ReadLAPIC(0x100u + offset) | IC.ReadLAPIC(0x200u + offset)) & mask);
+}
+
+bool Handler::HasReleasingVectors() {
+	return releasing_irq_vectors.load(uni::MemoryOrder_Relaxed) != 0;
+}
+
 extern "C" void exception_handler(HardwareInterruptFrame* frame);
 
 // Unified interrupt dispatcher called from assembly stubs
@@ -168,6 +358,7 @@ extern "C" void interrupt_dispatcher(HardwareInterruptFrame* frame) {
 		}
 		if (irq_id < 256 && Iova::ExtendedInterruptMode())
 			Devs::x86_complete_ioapic_interrupt(uint8(irq_id));
+		Devs::ReapInterruptVectors();
 	}
 
 	// Check for pending signals if returning to user mode (Ring > 0)

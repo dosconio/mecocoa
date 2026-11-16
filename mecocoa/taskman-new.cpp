@@ -3,6 +3,7 @@
 // ModuTitle: Demonstration - ELF32-C++ x86 Bare-Metal
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 #include "../include/mecocoa.hpp"
+#include "../include/handler.hpp"
 #include <c/format/ELF.h>
 #include "../include/filesys.hpp"
 #if CONFIG_ENABLE_MMU
@@ -265,6 +266,7 @@ stduint Taskman::CreatePaging(ProcessBlock *ppb, byte ring, stduint stack_norm) 
 		}
 		#endif
 
+		if (!Handler::MapEntries(ppb->paging)) return 0;
 		_Mapping_Core_Stack(ppb->paging);
 	}
 	else {
@@ -582,6 +584,7 @@ ProcessBlock* Taskman::CreateFork(ProcessBlock* fo, const CallgateFrame* frame) 
 	tb->context = target_fo_thread->context;
 	//{TEMP} use simple method
 	tb->context.CR3 = Taskman::CreatePaging(pb, ring, _IMM(stack_norm));
+	if (!tb->context.CR3) return discard_child();
 
 	// Copy Heap VMAs and mapped pages
 	pb->heapbtm = fo->heapbtm;

@@ -14,6 +14,11 @@
 #ifndef __MEMOMAN_HPP__
 #define __MEMOMAN_HPP__
 
+#if (_MCCA & 0xFF00) == 0x8600
+#include <cpp/ISO_IEC_STD/memory>
+#include <cpp/ISO_IEC_STD/pair>
+#endif
+
 struct Spinlock;
 struct DeviceNode;
 class ProcessBlock;
@@ -138,6 +143,9 @@ namespace Iova {
 
 	bool ProbeVtd(stduint dmar_address);
 	bool EnableVtdPassthrough(DeviceNode* pci_root);
+	void EnableFaultEvents();
+	void NotifyFaultService();
+	void ServiceFaultEvents();
 	bool InterruptRemappingAvailable();
 	bool PrepareInterruptRemapping(bool extended, stduint reserved_irq_entries);
 	bool CommitExtendedInterruptMode();
@@ -203,6 +211,22 @@ struct ManagedPageInfo {
 };
 #endif
 
+#if (_MCCA & 0xFF00) == 0x8600
+class ReservedMemoryRegion {
+	// Keep both the physical base and byte length 64-bit on flap32, where Slice_T uses stduint fields.
+	using PhysicalRange = uni::Pair<uint64, uint64>;
+	uni::UniquePtr<PhysicalRange[]> ranges;
+	stduint range_count = 0;
+
+public:
+	// Record at most count ranges after a successful prepare.
+	bool Prepare(stduint count);
+	void Record(uint64 begin, uint64 length);
+	bool Covers(uint64 begin, uint64 end) const;
+	void Reset();
+};
+#endif
+
 // class Memory
 #if 1
 // {TEMP} 0x00000000_00000000..0x00000001_00000000
@@ -217,6 +241,9 @@ public: // previously used
 	#endif
 public:
 	static stduint total_memsize;
+	#if (_MCCA & 0xFF00) == 0x8600
+	static ReservedMemoryRegion reserved_regions;
+	#endif
 	public:
 	static void clear_bss();
 	static bool initialize(stduint eax, byte* ebx);
