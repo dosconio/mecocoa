@@ -24,6 +24,12 @@ struct Spinlock;
 struct UsbMSCRequest;
 namespace uni::device::SpaceUSB { class USBHostDevice; }
 
+#if defined(_MCCA) && ((_MCCA & 0xFF00) == 0x8600)
+namespace Powercall {
+	DeviceNode* ResolveOwnedDeviceHandle(stduint sender_tid, stduint handle, stduint* owner_pid);
+}
+#endif
+
 namespace uni {
 	enum class IICTransferStatus : uint8;
 	struct IICMessage;

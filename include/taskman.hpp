@@ -285,12 +285,18 @@ struct VirtualMemoryArea {
 	}
 };
 
+struct ProcessCredentials {
+	uint32 uid = 0;
+	uint32 gid = 0;
+};
+
 class _Comment(Kernel) ProcessBlock {
 public: // Identity / Config
 	stduint pid = 0;
 	stduint parent_id = 0;
 	inline stduint getID() { return pid; }
 	stduint ring = 0;
+	ProcessCredentials credentials{}; // Initialized before publishing the process.
 	enum class InterfaceType : byte {
 		MCCA4,// x86 will only support MCCA4
 		Linux,

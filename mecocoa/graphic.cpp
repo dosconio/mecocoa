@@ -369,6 +369,7 @@ public:
 	stduint owner_tid = 0;
 	stduint dev_handle = 0;
 	uint32 caps = 0;
+	const char* driver_name = nullptr;
 
 	PublishedVideoProxy() : renderer(fb_info) {}
 
@@ -455,6 +456,11 @@ static stdsint GraphicMsg_DRV_ATTACH(FMT_GraphicMsg_DRV_ATTACH* usr_info, Proces
 	proxy->owner_tid = sig_src;
 	proxy->dev_handle = info.dev_handle;
 	proxy->caps = info.caps;
+	proxy->driver_name = nullptr;
+	stduint device_owner_pid = 0;
+	if (auto* node = Powercall::ResolveOwnedDeviceHandle(sig_src, info.dev_handle, &device_owner_pid)) {
+		if (device_owner_pid == pb->pid) proxy->driver_name = node->fields.binding.driver_name;
+	}
 	proxy->fb_info.physical_range = Slice{ physical, (stduint)info.fb_length };
 	proxy->fb_info.screen_size = Size2(info.width, info.height);
 	proxy->fb_info.pitch = info.pitch;
@@ -464,6 +470,15 @@ static stdsint GraphicMsg_DRV_ATTACH(FMT_GraphicMsg_DRV_ATTACH* usr_info, Proces
 	return Consman::AdoptVideoDevice(proxy) ? 0 : -1;
 }
 #endif
+
+const char* Consman::GetPublishedVideoDriverName(const VideoDevice* dev) {
+	#if (_MCCA & 0xFF00) == 0x8600
+	return dev && dev == published_video_proxy ? published_video_proxy->driver_name : nullptr;
+	#else
+	(void)dev;
+	return nullptr;
+	#endif
+}
 
 // hand_mouse - runs only in Graphic thread, no lock needed
 void HandlePointerMessage(MouseGeneralMessage mmsg) {

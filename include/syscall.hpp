@@ -32,7 +32,7 @@ enum
 	TMSG = 0x0F, // trymsg ()->(msg_unsovled) | x86 x64 rv
 	EXEC = 0x10, // spawn  (path,argv,envp)->0| x86 x64
 	EXET = 0x11, // exec   (path,argv,envp)->0| x86 x64
-	PFUN = 0x12, // procfn () |(TODO) | priority ...
+	PFUN, // procfn () |(TODO) | priority ...
 	// [Signals]
 	SIGA = 0x13, // sigaction (sig,&new,&old) | x86
 	KILL = 0x14, // kill      (pid, sig, tid) | x86
@@ -48,7 +48,8 @@ enum
 	SEEK, // lseek  (fd, offset, whence)->pos | x86
 
 	// [Management]
-	GET_CORE_ID, // getcid () | rv
+	GETI, // get id (type) -> id
+	SETI, // set id (type, id) -> status
 	MANA, // manage (func, op1, op2)->?|(TODO)      | shutdown reboot...
 
 	// [Threads]
@@ -75,7 +76,6 @@ enum
 	ACPT, // accept (fd, address, address_length)->fd   | x86 x64
 	SCLS, // socket close direction (fd, how)->status   | x86 x64
 	IOCT, // ioctl  (fd, request, argument)->status     | x86 x64 rv
-
 
 	DBUG = 0xFE, // sysinfo_classic to stdout(func)
 	TEST = 0xFF, // getpid (T,E,S)->0 | x86
@@ -104,6 +104,24 @@ enum
 	POWERCALL__END__
 };// . stand for well for multi-thread
 // Locks usually end with `_lock;`
+
+enum
+	#ifdef _INC_CPP
+	class
+	#endif
+	syscall_id_type_t
+	#ifdef _INC_CPP
+	: stduint
+	#endif
+{
+	Core,
+	Process,
+	Thread,
+	User,
+	UserGroup,
+	EffectiveUser,
+	EffectiveUserGroup,
+};
 
 enum
 	#ifdef _INC_CPP

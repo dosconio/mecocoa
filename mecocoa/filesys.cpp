@@ -237,6 +237,7 @@ namespace uni {
 	// Allocators
 	static vfs_dentry* alloc_dentry(vfs_dentry* parent, const char* name) {
 		vfs_dentry* dentry = new vfs_dentry();
+		if (!dentry) return nullptr;
 		if (name) {
 			StrCopy(dentry->d_name, name);
 		}
@@ -265,7 +266,11 @@ namespace uni {
 		inode->identity = next_inode_identity++;
 		inode->content_version = 1;
 		inode->i_sb = sb;
-		if (sb) inode->mount_state = sb->mount_state;
+		if (sb) {
+			inode->mount_state = sb->mount_state;
+			inode->i_uid = sb->permissions.uid;
+			inode->i_gid = sb->permissions.gid;
+		}
 
 		// Namespace-backed inodes use WeakPtr lookup without extending their lifetime; pipes and sockets are not registered.
 		if (sb) {
@@ -289,6 +294,28 @@ namespace uni {
 			inode_identities[bucket] = identity_entry;
 		}
 		return inode;
+	}
+
+	// Apply mount defaults to files and directories. Device nodes have their own policy.
+	static stduint InodeMode(const vfs_super_block& sb, stduint type, void* handle = nullptr) {
+		if (type == I_DIRECTORY) return type | (sb.permissions.directory_mode & 0777);
+		if (type == I_BLOCK_SPECIAL || type == I_CHAR_SPECIAL)
+			return type | (sb.fs == &global_devfs && handle == (void*)~_IMM0 ? 0666 : 0600);
+		return type | (sb.permissions.file_mode & 0777);
+	}
+
+	static constexpr stduint AccessSearch = 1;
+	static constexpr stduint AccessWrite = 2;
+	static constexpr stduint AccessRead = 4;
+
+	// Require every requested bit from the first matching class (owner, group, or other).
+	static bool MayAccess(const vfs_inode& inode, const ProcessCredentials* credentials,
+		stduint access) {
+		// UID 0 and trusted kernel callers bypass mode bits. Callers enforce read-only mounts separately.
+		if (!credentials || credentials->uid == 0) return true;
+		const unsigned shift = credentials->uid == inode.i_uid ? 6 :
+			credentials->gid == inode.i_gid ? 3 : 0;
+		return ((inode.i_mode >> shift) & access) == access;
 	}
 
 	// Caller holds vfs_lock.
@@ -772,7 +799,7 @@ void Filesys::Initialize() {
 	super_blocks = root_sb;
 	
 	auto root_inode = alloc_inode(root_sb);
-	root_inode->i_mode = I_DIRECTORY;
+	root_inode->i_mode = InodeMode(*root_sb, I_DIRECTORY);
 	root_inode->internal_handler = vfs_root; // RootFs: dir_handler == its own dentry
 	vfs_root->d_inode = root_inode;
 	vfs_root->d_mounted_on = nullptr;
@@ -785,7 +812,7 @@ void Filesys::Initialize() {
 	for (stduint i = 0; i < sizeof(standard_dirs) / sizeof(const char*); i++) {
 		vfs_dentry* dir_dentry = alloc_dentry(vfs_root, standard_dirs[i]);
 		auto dir_inod = alloc_inode(root_sb);
-		dir_inod->i_mode = I_DIRECTORY;
+		dir_inod->i_mode = InodeMode(*root_sb, I_DIRECTORY);
 		dir_inod->internal_handler = dir_dentry; // RootFs: dir_handler == its own dentry
 		dir_dentry->d_inode = dir_inod;
 	}
@@ -801,7 +828,7 @@ void Filesys::Register(file_system_type* fs_type) {
 
 // Helper: find dentry by name within a directory
 static vfs_dentry* lookup_dentry(vfs_dentry* dir, const char* name, int len) {
-	if (!dir) return nullptr;
+	if (!dir || len <= 0 || len >= VFS_MAX_FILENAME) return nullptr;
 	vfs_dentry* child = dir->d_first_child;
 	while(child) {
 		if (StrCompareN(child->d_name, name, len) == 0 && child->d_name[len] == '\0') {
@@ -877,37 +904,51 @@ struct vfs_lookup_ctx {
 	vfs_dentry* current;
 	vfs_super_block* sb;
 	bool found_mount_point;
+	int status = 0; // A backend can return a handle even when this callback stops on error.
 };
 
+// Cache one component reported by the backend while the caller holds vfs_lock.
 static stduint vfs_on_search_segment(void* handle, const char* name, stduint is_dir, stduint size, void* user_data) {
 	vfs_lookup_ctx* ctx = (vfs_lookup_ctx*)user_data;
-	if (!ctx || !ctx->current || !name) return 0;
+	if (!ctx || !ctx->current || ctx->status) return 0;
+	const auto length = name ? StrLength(name) : 0;
+	if (!length || (!handle && is_dir != 2) || length >= VFS_MAX_FILENAME) {
+		ctx->status = length >= VFS_MAX_FILENAME ? -ENAMETOOLONG : -EIO;
+		return 0;
+	}
 
-	vfs_dentry* next_d = lookup_dentry(ctx->current, name, StrLength(name));
+	vfs_dentry* next_d = lookup_dentry(ctx->current, name, int(length));
 	if (!next_d) {
-		next_d = alloc_dentry(ctx->current, name);
-		if (!next_d) return 0;
+		next_d = alloc_dentry(nullptr, name);
+		if (!next_d) {
+			ctx->status = -ENOMEM;
+			return 0;
+		}
 		auto new_inod = alloc_inode(ctx->sb);
-		if (!new_inod) return 0;
 
 		new_inod->i_size = (stduint)size;
-		if (is_dir == 1) new_inod->i_mode = I_DIRECTORY;
-		else if (is_dir == 2 || is_dir == 4) new_inod->i_mode = I_CHAR_SPECIAL;
-		else if (is_dir == 3) new_inod->i_mode = I_BLOCK_SPECIAL;
-		else new_inod->i_mode = I_REGULAR;
+		const stduint type = is_dir == 1 ? I_DIRECTORY :
+			(is_dir == 2 || is_dir == 4) ? I_CHAR_SPECIAL :
+			is_dir == 3 ? I_BLOCK_SPECIAL : I_REGULAR;
+		new_inod->i_mode = InodeMode(*ctx->sb, type, handle);
 		
-		if (is_dir == 2) {
+		// DevFs passes TTY IDs and the pts directory marker as values. Other handles use a scratch buffer.
+		if (is_dir == 2 || (ctx->sb->fs == &global_devfs && type == I_DIRECTORY)) {
 			new_inod->internal_handler = handle;
 		}
 		else {
 			byte* saved_h = new byte[128];
-			if (saved_h) {
-				MemCopyN(saved_h, handle, 128);
-				new_inod->internal_handler = saved_h;
+			if (!saved_h) {
+				delete next_d;
+				ctx->status = -ENOMEM;
+				return 0;
 			}
+			MemCopyN(saved_h, handle, 128);
+			new_inod->internal_handler = saved_h;
 		}
 		
 		next_d->d_inode = new_inod;
+		AppendDentry(ctx->current, next_d);
 	}
 	ctx->current = next_d;
 	// Handle mount point crossing during delegation
@@ -1030,7 +1071,7 @@ static vfs_dentry* _Index_unlocked(const char* pathname, vfs_dentry* base) {
 
 				free(dyn_inner_path);
 
-				if (fs->search(full_remainder.reference(), &args)) {
+				if (fs->search(full_remainder.reference(), &args) && !ctx.status) {
 					// fs->search successfully resolved the path (or partial path) through callbacks
 							// ctx.current already points to the leaf or the mount point root
 					vfs_dentry* final_d = ctx.current;
@@ -1062,10 +1103,89 @@ static vfs_dentry* _Index_unlocked(const char* pathname, vfs_dentry* base) {
 	return (current && current->d_mounts) ? current->d_mounts : current;
 }
 
+// Look up one child of an already authorized directory. Caller holds vfs_lock.
+static int LookupChild(vfs_dentry* parent, const char* name, int length, vfs_dentry*& child) {
+	child = lookup_dentry(parent, name, length);
+	if (child) return 0;
+	auto* sb = parent->d_inode->i_sb;
+	if (!sb || !sb->fs || sb->fs == &global_rootfs_driver) return -ENOENT;
+
+	// Pass only one new component to the backend so VFS checks every parent.
+	struct SearchBuffer {
+		char path[256];
+		alignas(stduint) byte handle[128];
+	};
+	auto buffer = uni::make_unique<SearchBuffer>();
+	if (!buffer) return -ENOMEM;
+	if (!BuildMountRelativeChildPath(parent, name, buffer->path, sizeof(buffer->path)))
+		return -ENAMETOOLONG;
+	vfs_lookup_ctx ctx = { sb->s_root, sb, false };
+	FilesysSearchArgs args = { buffer->handle, nullptr, vfs_on_search_segment, &ctx };
+	// DevFs may report a TTY with ID zero through the callback and return nullptr.
+	sb->fs->search(buffer->path, &args);
+	if (ctx.status) return ctx.status;
+	// Translate a mount root back to its anchor before checking that the result is a direct child.
+	child = ctx.found_mount_point ? ctx.current->d_mounted_on : ctx.current;
+	if (!child || child->d_parent != parent || !child->d_inode) return -ENOENT;
+	return 0;
+}
+
+// Caller holds vfs_lock. The base must remain linked for the duration of the lookup.
+// Check search access on each traversed directory. The operation determines the leaf access.
+static int ResolvePath(const char* pathname, vfs_dentry* base,
+	const ProcessCredentials* credentials, vfs_dentry*& result) {
+	result = nullptr;
+	if (!pathname || !*pathname) return -ENOENT;
+	if (!credentials) {
+		result = _Index_unlocked(pathname, base);
+		return result ? 0 : -ENOENT;
+	}
+
+	auto* current = *pathname == '/' || !base ? vfs_root : base;
+	while (*pathname) {
+		while (*pathname == '/') ++pathname;
+		if (!*pathname) break;
+		if (!current || !current->d_inode ||
+			(current->d_inode->i_mode & I_TYPE_MASK) != I_DIRECTORY) return -ENOTDIR;
+		if (!MayAccess(*current->d_inode, credentials, AccessSearch)) return -EACCES;
+
+		const char* end = pathname;
+		while (*end && *end != '/') ++end;
+		const auto length = end - pathname;
+		if (length >= VFS_MAX_FILENAME) return -ENAMETOOLONG;
+		if (length == 1 && pathname[0] == '.') {
+			// Keep the current directory.
+		}
+		else if (length == 2 && pathname[0] == '.' && pathname[1] == '.') {
+			if (current->d_parent) current = current->d_parent;
+			else if (current->d_mounted_on) {
+				auto* anchor = current->d_mounted_on;
+				current = anchor->d_parent ? anchor->d_parent : anchor;
+			}
+		}
+		else {
+			char name[VFS_MAX_FILENAME];
+			MemCopyN(name, pathname, length);
+			name[length] = '\0';
+			vfs_dentry* child = nullptr;
+			const int status = LookupChild(current, name, int(length), child);
+			if (status < 0) return status;
+			current = child->d_mounts ? child->d_mounts : child;
+		}
+		if (*end && (!current->d_inode ||
+			(current->d_inode->i_mode & I_TYPE_MASK) != I_DIRECTORY))
+			return -ENOTDIR;
+		pathname = end;
+	}
+	result = current;
+	return result ? 0 : -ENOENT;
+}
+
 // Caller holds vfs_lock.
-static bool ResolveParentAndName(const char* pathname, vfs_dentry* base,
-	vfs_dentry** parent, const char** name) {
-	if (!pathname || !*pathname || !parent || !name) return false;
+// Resolve the parent before it is modified. The returned name points into pathname and can name an absent entry.
+static int ResolveParentAndName(const char* pathname, vfs_dentry* base,
+	const ProcessCredentials* credentials, vfs_dentry** parent, const char** name) {
+	if (!pathname || !*pathname) return -ENOENT;
 	const char* separator = StrIndexCharRight(pathname, '/');
 	if (!separator) {
 		*parent = base ? base : vfs_root;
@@ -1073,21 +1193,24 @@ static bool ResolveParentAndName(const char* pathname, vfs_dentry* base,
 	}
 	else {
 		*name = separator + 1;
-		if (!**name) return false;
-		char parent_path[256];
+		if (!**name) return -EINVAL;
 		stduint length = stduint(separator - pathname);
 		if (!length) length = 1;
-		if (length >= sizeof(parent_path)) return false;
-		MemCopyN(parent_path, pathname, length);
+		if (length >= 512) return -ENAMETOOLONG;
+		auto parent_path = uni::make_unique<char[]>(length + 1);
+		if (!parent_path) return -ENOMEM;
+		MemCopyN(parent_path.get(), pathname, length);
 		parent_path[length] = '\0';
-		*parent = _Index_unlocked(parent_path, base);
+		const int status = ResolvePath(parent_path.get(), base, credentials, *parent);
+		if (status < 0) return status;
 	}
 
 	const stduint length = StrLength(*name);
-	if (!*parent || !length || length >= VFS_MAX_FILENAME) return false;
+	if (!*parent || !length) return -ENOENT;
+	if (length >= VFS_MAX_FILENAME) return -ENAMETOOLONG;
 	if ((length == 1 && (*name)[0] == '.') ||
-		(length == 2 && (*name)[0] == '.' && (*name)[1] == '.')) return false;
-	return true;
+		(length == 2 && (*name)[0] == '.' && (*name)[1] == '.')) return -EINVAL;
+	return 0;
 }
 
 vfs_dentry* Filesys::Index(const char* pathname, vfs_dentry* base) {
@@ -1095,9 +1218,9 @@ vfs_dentry* Filesys::Index(const char* pathname, vfs_dentry* base) {
 	return _Index_unlocked(pathname, base);
 }
 
-SharedPtr<vfs_inode> Filesys::FindInode(uint64 identity) {
+// Caller holds vfs_lock.
+static SharedPtr<vfs_inode> FindInodeUnlocked(uint64 identity) {
 	if (!identity) return {};
-	MutexLocal guard(&vfs_lock);
 	// Search only the selected bucket; lock() retains a live inode or returns empty after its last strong owner is gone.
 	const stduint bucket = stduint((identity ^ (identity >> 32)) &
 		(VFSInodeIdentityBucketCount - 1));
@@ -1119,6 +1242,42 @@ SharedPtr<vfs_inode> Filesys::FindInode(uint64 identity) {
 		link = &entry->next;
 	}
 	return {};
+}
+
+SharedPtr<vfs_inode> Filesys::FindInode(uint64 identity) {
+	MutexLocal guard(&vfs_lock);
+	return FindInodeUnlocked(identity);
+}
+
+// Check the inode identity before dereferencing a CWD that may have been unmounted.
+static bool IsLinkedWorkingDirectory(vfs_dentry* cwd, uint64 identity) {
+	if (!identity) return !cwd || cwd == vfs_root;
+	auto inode = FindInodeUnlocked(identity);
+	// Open files can retain detached inodes after pruning clears their superblock pointer.
+	return inode && inode->i_sb && cwd && cwd->d_inode.get() == inode.get();
+}
+
+int Filesys::ChangeDirectory(const char* pathname, vfs_dentry*& cwd,
+	uint64& cwd_identity, const ProcessCredentials& credentials) {
+	MutexLocal guard(&vfs_lock);
+	if (pathname && *pathname != '/' && !IsLinkedWorkingDirectory(cwd, cwd_identity))
+		return -ESTALE;
+	vfs_dentry* next = nullptr;
+	const int status = ResolvePath(pathname, cwd, &credentials, next);
+	if (status < 0) return status;
+	if (!next->d_inode || (next->d_inode->i_mode & I_TYPE_MASK) != I_DIRECTORY)
+		return -ENOTDIR;
+	if (!MayAccess(*next->d_inode, &credentials, AccessSearch)) return -EACCES;
+	cwd = next;
+	cwd_identity = next == vfs_root ? 0 : next->d_inode->identity;
+	return 0;
+}
+
+int Filesys::GetWorkingDirectory(vfs_dentry* cwd, uint64 cwd_identity, String& path) {
+	MutexLocal guard(&vfs_lock);
+	if (!IsLinkedWorkingDirectory(cwd, cwd_identity)) return -ESTALE;
+	path = getAbsolutePath(cwd ? cwd : vfs_root);
+	return 0;
 }
 
 static void _Prune_unlocked(vfs_dentry* dentry) {
@@ -1162,7 +1321,7 @@ static vfs_dentry* _Create_unlocked(const char* pathname, stduint mode, vfs_dent
 			// Create the missing directory entry in the current filesystem (usually rootfs)
 			next_d = alloc_dentry(current, part);
 			auto inod = alloc_inode(current->d_inode->i_sb);
-			inod->i_mode = I_DIRECTORY; // Mount points are always directories
+			inod->i_mode = InodeMode(*current->d_inode->i_sb, I_DIRECTORY); // Mount points are always directories
 			inod->internal_handler = next_d; // RootFs: dir_handler == its own dentry
 			next_d->d_inode = inod;
 		}
@@ -1183,7 +1342,8 @@ vfs_dentry* Filesys::Create(const char* pathname, stduint mode, vfs_dentry* base
 
 
 bool Filesys::MountFilesys(FilesysTrait* fs, file_system_type* type, const char* target_path,
-	DeviceNode* source_device_node, stduint device_id, VFSMountOwnership ownership) {
+	DeviceNode* source_device_node, stduint device_id, VFSMountOwnership ownership,
+	VFSMountPermissions permissions) {
 	if (!fs) return false;
 	auto mount_state = MakeMountState(fs, ownership);
 	if (!mount_state) return false;
@@ -1205,13 +1365,21 @@ bool Filesys::MountFilesys(FilesysTrait* fs, file_system_type* type, const char*
 	sb->type = type;
 	sb->device_id = device_id;
 	sb->source_device_node = source_device_node;
+	#if CONFIG_FILESYS_ISO9660
+	if (type == &fs_iso9660) permissions.read_only = true;
+	#endif
+	#if CONFIG_FILESYS_UDF
+	if (type == &fs_udf) permissions.read_only = true;
+	#endif
+	if (fs == &global_devtreefs_driver) permissions.read_only = true;
+	sb->permissions = permissions;
 	sb->next = super_blocks;
 	super_blocks = sb;
 	
 	// Create new root dentry for this mount
 	vfs_dentry* s_root = alloc_dentry(nullptr, target->d_name);
 	s_root->d_inode = alloc_inode(sb);
-	s_root->d_inode->i_mode = I_DIRECTORY;
+	s_root->d_inode->i_mode = InodeMode(*sb, I_DIRECTORY);
 
 	// Fetch the physical FS root directory handle and heap-copy it for persistence
 	// (same pattern as vfs_on_search_segment: copy 128-byte handle buffer to heap)
@@ -1282,13 +1450,13 @@ bool Filesys::Unmount(const char* target_path) {
 
 
 file_system_type* Filesys::Mount(StorageTrait& storage, stduint dev, const char* target_path,
-	DeviceNode* source_device_node) {
+	DeviceNode* source_device_node, VFSMountPermissions permissions) {
 	for (file_system_type* fs_type = registered_filesystems; fs_type; fs_type = fs_type->next) {
 		// probe() checks sys_id and calls loadfs() internally; non-null means ready to mount
 		FilesysTrait* fs = fs_type->probe(storage, dev);
 		if (fs) {
 			if (!Filesys::MountFilesys(fs, fs_type, target_path, source_device_node,
-				dev, VFSMountOwnership::FilesystemAndStorage)) return nullptr;
+				dev, VFSMountOwnership::FilesystemAndStorage, permissions)) return nullptr;
 			if (Filesys::GetSystemVirtualRootPath().getByteCount() &&
 				Taskman::Locate(Task_Init) && Taskman::Locate(Task_Devsman)) {
 				if (syssend_async(Task_Devsman, nullptr, 0,
@@ -1466,121 +1634,84 @@ void Filesys::Tree(uni::OstreamTrait& os, bool mount_expand) {
 	vfs_tree_node(os, vfs_root, 0, mount_expand);
 }
 
-int Filesys::Open(const char* pathname, int flags, vfs_file** out_file, vfs_dentry* base) {
-	if (!out_file) return -1;
+int Filesys::Open(const char* pathname, int flags, vfs_file** out_file, vfs_dentry* base,
+	const ProcessCredentials* credentials, uint64 cwd_identity) {
+	if (!out_file) return -EINVAL;
+	*out_file = nullptr;
+	const int mode = flags & O_ACCMODE;
+	if (mode == O_ACCMODE) return -EINVAL;
+	const stduint access = mode == O_RDONLY ? AccessRead :
+		mode == O_WRONLY ? AccessWrite : AccessRead | AccessWrite;
+	// Serialize truncation with shared-file copying before taking vfs_lock.
 	OptionalSharedFileCopyLock copy_guard(flags & O_TRUNC);
 	MutexLocal guard(&vfs_lock);
-	vfs_dentry* dentry = _Index_unlocked(pathname, base);
-	if (dentry && dentry->d_inode) {
+	if (credentials && pathname && *pathname != '/' &&
+		!IsLinkedWorkingDirectory(base, cwd_identity)) return -ESTALE;
+	vfs_dentry* dentry = nullptr;
+	const int lookup = ResolvePath(pathname, base, credentials, dentry);
+	// Only an absent entry is eligible for creation.
+	if (lookup < 0 && (lookup != -ENOENT || !(flags & O_CREAT))) return lookup;
+	uni::UniquePtr<vfs_file> file(new vfs_file());
+	if (!file) return -ENOMEM;
+
+	if (lookup == 0) {
+		if (!dentry->d_inode) return -ENOENT;
+		auto& inode = *dentry->d_inode;
+		const stduint type = inode.i_mode & I_TYPE_MASK;
 		// O_DIRECTORY: If pathname refers to a non-directory file, open() shall fail.
-		if ((flags & O_DIRECTORY) && (dentry->d_inode->i_mode & I_TYPE_MASK) != I_DIRECTORY) {
-			return -1;
-		}
-	}
-
-	if (!dentry || !dentry->d_inode) {
-		// File does not exist. Check if we need to create it.
-		if (flags & O_CREAT) {
-			// Extract parent directory path
-			char* dir_path = (char*)malloc(256);
-			MemSet(dir_path, 0, 256);
-			const char* last_slash = pathname;
-
-			for (const char* p = pathname; *p; p++) {
-				if (*p == '/') last_slash = p;
-			}
-
-			vfs_dentry* parent_dentry = nullptr;
-			if (last_slash == pathname && pathname[0] != '/') {
-				parent_dentry = base ? base : vfs_root;
-			}
-			else {
-				if (last_slash == pathname) {
-					StrCopy(dir_path, "/");
-				}
-				else {
-					stduint len = last_slash - pathname;
-					if (len == 0) len = 1; // Preserve root '/'
-					MemCopyN(dir_path, pathname, len);
-					dir_path[len] = '\0';
-				}
-				parent_dentry = _Index_unlocked(dir_path, base);
-			}
-
-			if (!parent_dentry || !parent_dentry->d_inode || !parent_dentry->d_inode->i_sb) {
-				plogwarn("Parent directory not found for creation: %s", dir_path);
-				free(dir_path);
-				return -1;
-			}
-
-			free(dir_path);
-
-			FilesysTrait* fs = parent_dentry->d_inode->i_sb->fs;
-			if (!fs) return -1;
-
-			// Construct the new dentry for the Virtual File System properly
-			const char* fname = last_slash;
-			if (*fname == '/') fname++;
-
-			// Delegate the creation to the physical filesystem
-			// Pass the physical handler of the parent directory
-			void* new_inode_ptr = parent_dentry->d_inode->internal_handler;
-
-			// Strip VFS absolute path: Pass ONLY the pure filename to the physical FS
-			if (!fs->create(fname, flags, &new_inode_ptr, nullptr)) {
-				plogwarn("Physical filesystem failed to create file: %s", pathname);
-				return -1;
-			}
-
-			// Use alloc_dentry to link the new file into the VFS directory tree
-			dentry = alloc_dentry(parent_dentry, fname);
-
-			// Use alloc_inode to create a proper Virtual Inode with a valid Superblock (i_sb)
-			auto new_vfs_inode = alloc_inode(parent_dentry->d_inode->i_sb);
-			new_vfs_inode->i_mode = (flags & O_DIRECTORY) ? I_DIRECTORY : I_REGULAR;
-			new_vfs_inode->i_size = 0;
-
-			// SECURE BRIDGE: Save the physical handler into internal_handler
-			new_vfs_inode->internal_handler = new_inode_ptr;
-
-			dentry->d_inode = new_vfs_inode;
-
-		}
-		else {
-			// File not found and O_CREAT is not specified
-			return -1;
-		}
+		if ((flags & O_DIRECTORY) && type != I_DIRECTORY) return -ENOTDIR;
+		if ((flags & O_CREAT) && (flags & O_EXCL)) return -EEXIST;
+		if ((access & AccessWrite) && type == I_DIRECTORY) return -EISDIR;
+		if ((access & AccessWrite) && inode.i_sb && inode.i_sb->permissions.read_only)
+			return -EROFS;
+		if (!MayAccess(inode, credentials, access)) return -EACCES;
+		// O_TRUNC only applies to regular files, never device nodes or FIFOs.
+		if ((flags & O_TRUNC) && (access & AccessWrite) && type == I_REGULAR &&
+			!TruncateInode(&inode, 0)) return -EIO;
+		file->f_inode = dentry->d_inode;
 	}
 	else {
-		// File already exists
-		if ((flags & O_CREAT) && (flags & O_EXCL)) {
-			ploginfo("file `%s' exists (O_EXCL)", pathname);
-			return -1;
-		}
+		vfs_dentry* parent = nullptr;
+		const char* name = nullptr;
+		const int status = ResolveParentAndName(pathname, base, credentials, &parent, &name);
+		if (status < 0) return status;
+		if (!parent->d_inode || (parent->d_inode->i_mode & I_TYPE_MASK) != I_DIRECTORY)
+			return -ENOTDIR;
+		auto* sb = parent->d_inode->i_sb;
+		if (!sb || !sb->fs) return -ENOENT;
+		if (sb->permissions.read_only) return -EROFS;
+		if (!MayAccess(*parent->d_inode, credentials, AccessWrite | AccessSearch))
+			return -EACCES;
 
-		if ((flags & O_TRUNC) &&
-			(dentry->d_inode->i_mode & I_TYPE_MASK) == I_REGULAR) {
-			// O_TRUNC only applies to regular files, never device nodes or FIFOs.
-			// And requires writability.
-			int mode = flags & O_ACCMODE;
-			if (mode == O_WRONLY || mode == O_RDWR) {
-				if (!TruncateInode(dentry->d_inode.get(), 0)) return -1;
-			}
+		const stduint type = flags & O_DIRECTORY ? I_DIRECTORY : I_REGULAR;
+		if (type == I_DIRECTORY && (access & AccessWrite)) return -EISDIR;
+		auto inode = alloc_inode(sb);
+		// Check the prospective file's mode before creating an entry on disk.
+		inode->i_mode = InodeMode(*sb, type);
+		if (!MayAccess(*inode, credentials, access)) return -EACCES;
+		dentry = alloc_dentry(nullptr, name);
+		if (!dentry) return -ENOMEM;
+
+		// Pass only the leaf name and the parent directory handle to the backend.
+		void* handle = parent->d_inode->internal_handler;
+		if (!sb->fs->create(name, flags, &handle, nullptr)) {
+			delete dentry;
+			return -EIO;
 		}
+		inode->internal_handler = handle;
+		dentry->d_inode = inode;
+		AppendDentry(parent, dentry);
+		file->f_inode = inode;
 	}
-
-	vfs_file* file = new vfs_file();
-	if (!file) return -1;
-	file->f_inode = dentry->d_inode;
 	file->f_mode = flags;
 	
 	// O_APPEND: The file offset shall be set to the end of the file prior to each write.
 	if (flags & O_APPEND) {
-		file->f_pos = dentry->d_inode->i_size;
+		file->f_pos = file->f_inode->i_size;
 	} else {
 		file->f_pos = 0;
 	}
-	*out_file = file;
+	*out_file = file.release();
 	return 0;
 }
 
@@ -1753,6 +1884,8 @@ int Filesys::Enumer(vfs_file* file, void* buf, stduint count, ProcessBlock* pb) 
 		plogwarn("[Enumer] file inode unavailable pid=%u", pb ? pb->pid : 0);
 		return -1;
 	}
+	if ((file->f_inode->i_mode & I_TYPE_MASK) != I_DIRECTORY) return -ENOTDIR;
+	if ((file->f_mode & O_ACCMODE) == O_WRONLY) return -EBADF;
 	if (count == 0) return 0;
 	#if CONFIG_ENABLE_MMU
 	if (!pb || !buf || count > ~_IMM0 / sizeof(dirent_t) ||
@@ -1791,13 +1924,22 @@ int Filesys::Enumer(vfs_file* file, void* buf, stduint count, ProcessBlock* pb) 
 	return g_enum_cxt.copy_failed ? -1 : int(g_enum_cxt.filled_count);
 }
 
-bool Filesys::Remove(const char* pathname, vfs_dentry* base) {
+bool Filesys::Remove(const char* pathname, vfs_dentry* base,
+	const ProcessCredentials* credentials, uint64 cwd_identity) {
 	MutexLocal guard(&vfs_lock);
-	vfs_dentry* dentry = _Index_unlocked(pathname, base);
-	if (!dentry || !dentry->d_inode || !dentry->d_parent || dentry->d_mounts) return false;
+	if (credentials && pathname && *pathname != '/' &&
+		!IsLinkedWorkingDirectory(base, cwd_identity)) return false;
+	vfs_dentry* dentry = nullptr;
+	if (ResolvePath(pathname, base, credentials, dentry) < 0 ||
+		!dentry->d_inode || !dentry->d_parent || dentry->d_mounts) return false;
 	if ((dentry->d_inode->i_mode & I_TYPE_MASK) != I_REGULAR) return false;
+	// Unlink changes the parent directory entry, so its permissions govern removal.
+	if (!dentry->d_parent->d_inode ||
+		!MayAccess(*dentry->d_parent->d_inode, credentials, AccessWrite | AccessSearch))
+		return false;
 
 	auto inode = dentry->d_inode;
+	if (!inode->i_sb || inode->i_sb->permissions.read_only) return false;
 	FilesysTrait* fs = GetInodeFilesystem(inode.get());
 	char relative_path[256];
 	if (!fs || !BuildMountRelativePath(dentry, relative_path,
@@ -1812,24 +1954,36 @@ bool Filesys::Remove(const char* pathname, vfs_dentry* base) {
 	return true;
 }
 
-bool Filesys::Rename(const char* source, const char* destination, vfs_dentry* base) {
+bool Filesys::Rename(const char* source, const char* destination, vfs_dentry* base,
+	const ProcessCredentials* credentials, uint64 cwd_identity) {
 	MutexLocal guard(&vfs_lock);
-	vfs_dentry* source_dentry = _Index_unlocked(source, base);
-	if (!source_dentry || !source_dentry->d_inode || !source_dentry->d_parent ||
+	if (credentials &&
+		((source && *source != '/') || (destination && *destination != '/')) &&
+		!IsLinkedWorkingDirectory(base, cwd_identity)) return false;
+	vfs_dentry* source_dentry = nullptr;
+	if (ResolvePath(source, base, credentials, source_dentry) < 0 ||
+		!source_dentry->d_inode || !source_dentry->d_parent ||
 		source_dentry->d_mounts) return false;
-
-	vfs_dentry* existing_destination = _Index_unlocked(destination, base);
-	if (existing_destination) return existing_destination == source_dentry;
 
 	vfs_dentry* destination_parent = nullptr;
 	const char* destination_name = nullptr;
-	if (!ResolveParentAndName(destination, base, &destination_parent,
-		&destination_name)) return false;
+	if (ResolveParentAndName(destination, base, credentials, &destination_parent,
+		&destination_name) < 0) return false;
 	if (!destination_parent->d_inode || !destination_parent->d_inode->i_sb ||
 		(destination_parent->d_inode->i_mode & I_TYPE_MASK) != I_DIRECTORY) return false;
 	if (source_dentry->d_inode->i_sb != destination_parent->d_inode->i_sb) return false;
-	if (lookup_dentry(destination_parent, destination_name,
-		StrLength(destination_name))) return false;
+	if (destination_parent->d_inode->i_sb->permissions.read_only) return false;
+	// Rename removes an entry from the source directory and adds one to the destination directory.
+	auto* source_parent = source_dentry->d_parent;
+	if (!source_parent->d_inode ||
+		!MayAccess(*source_parent->d_inode, credentials, AccessWrite | AccessSearch) ||
+		!MayAccess(*destination_parent->d_inode, credentials, AccessWrite | AccessSearch))
+		return false;
+
+	vfs_dentry* existing_destination = nullptr;
+	const int destination_lookup = ResolvePath(destination, base, credentials, existing_destination);
+	if (destination_lookup != -ENOENT)
+		return destination_lookup == 0 && existing_destination == source_dentry;
 
 	for (vfs_dentry* ancestor = destination_parent; ancestor;
 		ancestor = ancestor->d_parent) {
@@ -1855,7 +2009,6 @@ bool Filesys::Rename(const char* source, const char* destination, vfs_dentry* ba
 	MemCopyN(source_dentry->d_inode->internal_handler, refreshed_handler,
 		sizeof(refreshed_handler));
 
-	vfs_dentry* source_parent = source_dentry->d_parent;
 	if (source_parent != destination_parent) {
 		KASSERT(DetachDentry(source_dentry));
 		AppendDentry(destination_parent, source_dentry);

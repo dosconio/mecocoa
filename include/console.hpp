@@ -229,6 +229,7 @@ struct Consman {
 	//
 	static bool Initialize();
 	static bool AdoptVideoDevice(VideoDevice* dev);
+	static const char* GetPublishedVideoDriverName(const VideoDevice* dev);
 	static void enable_2buffer();
 	static _RET_CreateVconsole CreateVconsole(const Rectangle& rect, rostr title);
 

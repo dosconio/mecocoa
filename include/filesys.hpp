@@ -13,6 +13,7 @@
 #include <cpp/trait/StorageTrait.hpp>
 
 struct DeviceNode;
+struct ProcessCredentials;
 
 // VFS Layer for Mecocoa
 // Unix-like Virtual File System
@@ -51,6 +52,16 @@ struct file_system_type {
 	file_system_type* next = nullptr;
 };
 
+// Synthetic ownership and permissions for filesystems without per-file metadata.
+struct VFSMountPermissions {
+	uint32 uid = 0;
+	uint32 gid = 0;
+	stduint file_mode = 0644;
+	stduint directory_mode = 0755;
+	// Mount-wide write restriction, including for UID 0.
+	bool read_only = false;
+};
+
 // Represents an active mounted file system
 struct vfs_super_block {
 	FilesysTrait* fs = nullptr;             // The backend file system operations
@@ -59,6 +70,7 @@ struct vfs_super_block {
 	file_system_type* type = nullptr;       // Pointer to the FS type
 	stduint device_id = 0;            // Underlying device id
 	DeviceNode* source_device_node = nullptr; // Source storage/partition node in device tree
+	VFSMountPermissions permissions;
 	
 	vfs_super_block* next = nullptr;
 };
@@ -84,6 +96,8 @@ struct vfs_inode {
 	uint64 content_version = 0;        // Read and advanced while holding vfs_lock
 	stduint i_no = 0;                 // Inode number
 	stduint i_mode = 0;               // File mode (type and permissions)
+	uint32 i_uid = 0;
+	uint32 i_gid = 0;
 	stduint i_size = 0;               // File size in bytes
 	bool is_unlinked = false;          // Backend data remains until the last inode reference is released
 	
@@ -165,18 +179,25 @@ public:
 	// Probe a partition and if successful, mount it at the target path
 	static auto
 		Mount(StorageTrait& storage, stduint dev, const char* target_path,
-			DeviceNode* source_device_node = nullptr) -> file_system_type*;
+			DeviceNode* source_device_node = nullptr,
+			VFSMountPermissions permissions = {}) -> file_system_type*;
 	// Detach a filesystem from the VFS tree and release resources
 	static bool Unmount(const char* target_path);
 	// General path resolution: find dentry for a given path
 	static vfs_dentry* Index(const char* pathname, vfs_dentry* base = nullptr);
+	// Update the CWD and its inode identity together after checking search access.
+	static int ChangeDirectory(const char* pathname, vfs_dentry*& cwd, uint64& cwd_identity,
+		const ProcessCredentials& credentials);
+	// Build the path under vfs_lock. A detached CWD returns -ESTALE.
+	static int GetWorkingDirectory(vfs_dentry* cwd, uint64 cwd_identity, String& path);
 
 public:
 	// Explicitly mount an instantiated FS to a path (used by DevFs and RootFs)
 	// Non-borrowed ownership is transferred on entry, including failure paths.
 	static bool MountFilesys(FilesysTrait* fs, file_system_type* type, const char* target_path,
 		DeviceNode* source_device_node = nullptr, stduint device_id = 0,
-		VFSMountOwnership ownership = VFSMountOwnership::Borrowed);
+		VFSMountOwnership ownership = VFSMountOwnership::Borrowed,
+		VFSMountPermissions permissions = {});
 
 public:
 	static int CreatePipe(vfs_file** out_reader, vfs_file** out_writer);
@@ -208,7 +229,10 @@ public:
 	static int CloseSocket(vfs_file* file);
 
 public:
-	static int Open(const char* pathname, int flags, vfs_file** out_file, vfs_dentry* base = nullptr);
+	// User-originated opens supply the process credentials and saved CWD identity.
+	// Trusted kernel callers may pass null credentials. Returns zero or a negative errno.
+	static int Open(const char* pathname, int flags, vfs_file** out_file, vfs_dentry* base = nullptr,
+		const ProcessCredentials* credentials = nullptr, uint64 cwd_identity = 0);
 	static int Read(vfs_file* file, void* buf, stduint count);
 	static int Write(vfs_file* file, const void* buf, stduint count);
 	static bool Truncate(vfs_file* file, stduint size);
@@ -217,10 +241,15 @@ public:
 	#endif
 	static stdsint Ctrl(vfs_file* file, stduint cmd, void* args);
 	static int Close(vfs_file* file);
+	// Listing names requires a directory opened for reading. Path traversal uses search permission instead.
 	static int Enumer(vfs_file* file, void* buf, stduint count, ProcessBlock* pb);
-	static bool Remove(const char* pathname, vfs_dentry* base = nullptr);
+	// Unlink a regular file. User-originated requests require write and search access on the parent.
+	static bool Remove(const char* pathname, vfs_dentry* base = nullptr,
+		const ProcessCredentials* credentials = nullptr, uint64 cwd_identity = 0);
 	// Rename within one mounted filesystem while retaining the inode identity.
-	static bool Rename(const char* source, const char* destination, vfs_dentry* base = nullptr);
+	// User-originated requests require write and search access on both parents.
+	static bool Rename(const char* source, const char* destination, vfs_dentry* base = nullptr,
+		const ProcessCredentials* credentials = nullptr, uint64 cwd_identity = 0);
 	// Retain an inode only when the weak identity entry still refers to a live object.
 	static SharedPtr<vfs_inode> FindInode(uint64 identity);
 	//

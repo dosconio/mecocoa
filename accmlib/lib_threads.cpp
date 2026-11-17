@@ -153,7 +153,7 @@ extern "C" int pthread_join(pthread_t thread, void** retval) {
 }
 
 extern "C" pthread_t pthread_self(void) {
-	stduint tid = syscall(syscall_t::TGET);
+	stduint tid = syscall(syscall_t::GETI, _IMM(syscall_id_type_t::Thread));
 	return (pthread_t)find_thread(tid);
 }
 

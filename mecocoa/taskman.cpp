@@ -1032,6 +1032,10 @@ __attribute__((optimize("O0")))
 #endif
 void _Comment(R0) serv_task_loop()
 {
+	// Taskman does not deliver POSIX signals or interrupt its receive for them.
+	if (auto* thread = Taskman::CurrentTB())
+		_sigset_raw(&thread->blocked_signals) = ~0ULL;
+
 	volatile stduint to_args[8] = {};// 8*4=32 bytes
 	volatile stduint sig_type = 0, sig_src = 0, ret = 0;
 	ProcessBlock* pb;
@@ -1082,7 +1086,10 @@ void _Comment(R0) serv_task_loop()
 			break;
 		}
 		// plogwarn("TRY TO");
-		sysrecv(ANYPROC, (void*)to_args, byteof(to_args), (stduint*)&sig_type, (stduint*)&sig_src);
+		if (sysrecv(ANYPROC, (void*)to_args, byteof(to_args), (stduint*)&sig_type, (stduint*)&sig_src) != 0) { // 0 is success
+			sig_type = _IMM(TaskmanMsg::TEST);
+			sig_src = 0;
+		}
 		// ploginfo("Taskman recv: %u %u", sig_type, sig_src);
 	}
 }

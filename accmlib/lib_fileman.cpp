@@ -16,8 +16,8 @@ static stdsint PosixIoResult(stdsint result) {
 
 
 int open(const char* path, int oflag, ...) {
-	// Note: mode is ignored for now as Mecocoa filesystem doesn't support complex permissions yet
-	return syscall(syscall_t::OPEN, _IMM(path), oflag, nil);
+	// New files use the mount's default mode.
+	return int(PosixIoResult(stdsint(syscall(syscall_t::OPEN, _IMM(path), oflag, nil))));
 }
 
 int fcntl(int fd, int cmd, ...) {
@@ -110,12 +110,12 @@ off_t lseek(int fd, off_t offset, int whence) {
 
 int chdir(const char* path) {
 	// Invoke the SETD system call
-	return syscall(syscall_t::SETD, _IMM(path), nil, nil);
+	return int(PosixIoResult(stdsint(syscall(syscall_t::SETD, _IMM(path), nil, nil))));
 }
 
 char* getcwd(char* buf, size_t size) {
 	// Invoke the GETD system call
-	int ret = syscall(syscall_t::GETD, _IMM(buf), size, nil);
+	const auto ret = PosixIoResult(stdsint(syscall(syscall_t::GETD, _IMM(buf), size, nil)));
 	if (ret < 0) {
 		return nullptr;
 	}
@@ -251,5 +251,5 @@ int mkdir(const char *path, mode_t mode) {
 int unlink(const char* pathname) {
 	// Call DELF system call: returns 1 for success, 0 for failure
 	int ret = syscall(syscall_t::DELF, _IMM(pathname), nil, nil);
-	return ret ? 0 : -1;
+	return ret > 0 ? 0 : -1;
 }

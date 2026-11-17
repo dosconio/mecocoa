@@ -121,6 +121,7 @@ FileDescriptor* FileDescriptor_Clone(FileDescriptor* src);
 struct ProcFiles {
 	uni::Vector<FileDescriptor*> pfiles;
 	uni::vfs_dentry* cwd = nullptr;  // Current Working Directory
+	uint64 cwd_identity = 0; // Root uses zero; other directories must still belong to a live mount.
 	uni::vfs_dentry* root = nullptr; // Root for chroot
 };
 #endif

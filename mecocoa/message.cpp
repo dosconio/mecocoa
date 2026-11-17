@@ -4,6 +4,8 @@
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 #include "../include/mecocoa.hpp"
 
+#include <c/bitmap.h>
+#include <c/msgface.h>
 #include <c/task.h>
 
 SpinlockBlock<uni::Queue<SysMessage>> message_queue_conv;
@@ -258,6 +260,19 @@ void free_async_msg(pureptr_t ptr) {
 }
 
 Spinlock comm_lock;
+
+static byte user_ipc_service_bits[vaultAlign(_BYTE_BITS_, TaskCount) / _BYTE_BITS_] = {};
+static const uni::Bitmap user_ipc_services = [] {
+	uni::Bitmap allowed(user_ipc_service_bits, sizeof(user_ipc_service_bits));
+	allowed.setof(Task_ConsoleVideo);
+	allowed.setof(Task_Devsman);
+	#if (_MCCA & 0xFF00) == 0x8600
+	allowed.setof(Task_Net_Serv);
+	#endif
+	allowed.setof(Task_Init);
+	return allowed;
+}();
+
 static bool CanCommProcess(ProcessBlock* pb) {
 	return pb && pb->state == ProcessBlock::State::Active;
 }
@@ -351,6 +366,9 @@ int msg_send(ThreadBlock* fo_th, stduint too, _Comment(vaddr) CommMsg* msg, bool
 	{
 		SpinlockLocal guard(&comm_lock);
 		if (!CanCommThread(fo_th) || !CanCommThread(to_th)) return 1;
+		const stduint target_pid = to_th->parent_process->pid;
+		if (!msg_in_kernel && target_pid < TaskCount && !user_ipc_services[target_pid])
+			return -EPERM;
 
 		if (!is_async && msg_send_will_deadlock(fo_th, to_th)) {
 			plogerro("msg_send_will_deadlock");

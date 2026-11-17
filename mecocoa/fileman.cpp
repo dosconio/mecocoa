@@ -4,6 +4,7 @@
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 #include "../include/mecocoa.hpp"
 #include <c/format/filesys/FAT.h>
+#include <c/msgface.h>
 #if (_MCCA & 0xFF00) == 0x8600
 #include "../include/devsman-storage.hpp"
 #endif
@@ -105,12 +106,13 @@ stdsint ProcessBlock::Open(rostr pathname, int flags) {
 	}
 	
 	vfs_file* file = nullptr;
-	int ret = Filesys::Open(pathname, flags, &file, files->cwd);
+	// Use the requesting process's credentials and CWD even when Fileman runs the lookup.
+	int ret = Filesys::Open(pathname, flags, &file, files->cwd, &credentials, files->cwd_identity);
 	
 	if (ret < 0 || !file) {
 		ReleaseGlobalFileDescriptor(pfd);
 		// plogwarn("pathname %s failed to %s", pathname, (flags & O_RDWR) ? "open" : "create");
-		return -1;
+		return ret < 0 ? ret : -1;
 	}
 	
 	AttachProcessFileDescriptor(*files, fd, pfd, file, flags);
@@ -346,10 +348,10 @@ stduint ProcessBlock::Rdwt(bool wr_type, stduint fid, Slice slice)
 		return 0;
 	}
 	if (!pb || fid >= files->pfiles.Count() || !files->pfiles[fid] || !files->pfiles[fid]->vfile) return 0;
-	if (wr_type) {
-		int mode = files->pfiles[fid]->fd_mode & O_ACCMODE;
-		if (mode != O_WRONLY && mode != O_RDWR) return 0;
-	}
+	// I/O uses the access granted at open time, including for inherited descriptors.
+	const int mode = files->pfiles[fid]->fd_mode & O_ACCMODE;
+	if (wr_type ? (mode != O_WRONLY && mode != O_RDWR) : mode == O_WRONLY)
+		return stduint(-EBADF);
 	
 	vfs_file* file = files->pfiles[fid]->vfile;
 	FileDescriptor* fd_entry = files->pfiles[fid];
@@ -970,16 +972,17 @@ void serv_file_loop()// for IDE 0:0, 0:1
 			// ploginfo("[fileman] rdwt %d %d %d", to_args[0], to_args[1], to_args[2]);
 			break;
 		}
-		case FilemanMsg::REMOVE:// --> (pid, filename[7]...) --> (!success)
+		case FilemanMsg::REMOVE:// (pathname, tid) -> 1 on success, 0 on failure
 		{
-			retval[0] = ~_IMM0;
+			retval[0] = 0;
 			ProcessBlock* safe_pb = ProcessBlock::AcquireActive(to_args[1]);
 			if (safe_pb) {
 				const bool valid_path = MccaStrCopyP((char*)pathbuf, pathbuf_size,
 					(rostr)to_args[0], safe_pb) && pathbuf[0];
 				if (valid_path) {
 					auto files = safe_pb->fileman.Lock();
-					retval[0] = Filesys::Remove((rostr)pathbuf, files->cwd);
+					retval[0] = Filesys::Remove((rostr)pathbuf, files->cwd,
+						&safe_pb->credentials, files->cwd_identity);
 				}
 				ProcessBlock::Release(safe_pb);
 			}
@@ -1022,17 +1025,8 @@ void serv_file_loop()// for IDE 0:0, 0:1
 				(rostr)to_args[0], safe_pb) && pathbuf[0];
 			if (valid_path) {
 				auto files = safe_pb->fileman.Lock();
-				vfs_dentry* target_dentry = Filesys::Index((const char*)pathbuf, files->cwd);
-				if (!target_dentry) {
-					reply = err_ret;
-				}
-				else if (!target_dentry->d_inode ||
-					(target_dentry->d_inode->i_mode & I_TYPE_MASK) != I_DIRECTORY) {
-					reply = -2;
-				}
-				else {
-					files->cwd = target_dentry;
-				}
+				reply = Filesys::ChangeDirectory((const char*)pathbuf, files->cwd,
+					files->cwd_identity, safe_pb->credentials);
 			}
 			else reply = err_ret;
 			syssend(sig_src, &reply, sizeof(reply));
@@ -1042,34 +1036,41 @@ void serv_file_loop()// for IDE 0:0, 0:1
 
 		case FilemanMsg::GETD:
 		{
-			stdsint err_ret = -1;
 			ProcessBlock* safe_pb = ProcessBlock::AcquireActive(to_args[2]);
 			if (!safe_pb) {
+				stdsint err_ret = -ESRCH;
 				syssend(sig_src, &err_ret, sizeof(err_ret));
 				break;
 			}
 			stduint usr_buf = to_args[0];
 			stduint size = to_args[1];
 			if (!usr_buf || size == 0) {
+				stdsint err_ret = -EINVAL;
 				syssend(sig_src, &err_ret, sizeof(err_ret));
 				ProcessBlock::Release(safe_pb);
 				break;
 			}
 			String abs_path;
+			stdsint status;
 			{
 				auto files = safe_pb->fileman.Lock();
-				abs_path = Filesys::getAbsolutePath(files->cwd);
+				status = Filesys::GetWorkingDirectory(files->cwd, files->cwd_identity, abs_path);
+			}
+			if (status < 0) {
+				syssend(sig_src, &status, sizeof(status));
+				ProcessBlock::Release(safe_pb);
+				break;
 			}
 			stduint path_len = StrLength(abs_path.reference());
 			if (size < path_len + 1) {
-				stdsint size_err = -2;
+				stdsint size_err = -ERANGE;
 				syssend(sig_src, &size_err, sizeof(size_err));
 				ProcessBlock::Release(safe_pb);
 				break;
 			}
 			stduint copied = MccaMemCopyP((void*)usr_buf, safe_pb, false,
 				abs_path.reference(), nullptr, true, path_len + 1);
-			stdsint get_ret = (copied < path_len + 1) ? -3 : (stdsint)path_len;
+			stdsint get_ret = (copied < path_len + 1) ? -EFAULT : (stdsint)path_len;
 			syssend(sig_src, &get_ret, sizeof(get_ret));
 			ProcessBlock::Release(safe_pb);
 			break;

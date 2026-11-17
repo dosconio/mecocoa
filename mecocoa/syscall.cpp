@@ -7,6 +7,7 @@
 #include <cpp/Device/UART>
 #include <c/driver/timer.h>
 #include <c/driver/keyboard.h>
+#include <c/msgface.h>
 #include <c/ustring.h>
 #include <c/proctrl/IAx86_64.msr.h>
 #include <c/API-POSIX/sys/mman.h>
@@ -28,7 +29,9 @@ namespace uni {
 
 // Kernel Signal Functions
 extern "C" stduint sys_sigaction(int, const struct _POSIX_sigaction*, struct _POSIX_sigaction*);
-extern "C" stduint sys_kill(stduint, int, stduint);
+#if !defined(_MCU_STM32H7x)
+stdsint DeliverProcessSignal(ProcessBlock*, int, stduint);
+#endif
 extern "C" stdsint sysc_SIGR(void* context);
 extern "C" stdsint sysc_TNEW(stduint, stduint, stduint);
 extern "C" stdsint sysc_TEXI(stduint, stduint, stduint);
@@ -54,7 +57,8 @@ extern "C" stdsint sysc_IOCT(stduint, stduint, stduint);
 extern "C" void check_and_deliver_signals(void* context);
 
 // Syscall Wrappers
-extern stduint SYSCALL_TABLE[53];
+constexpr stduint SyscallTableSize = _IMM(syscall_t::IOCT) + 1;
+extern stduint SYSCALL_TABLE[SyscallTableSize];
 
 void Syscall::Initialize() {
 	#if _MCCA == 0x8632
@@ -948,7 +952,7 @@ DEFSYSC sysc_READ(stduint fd, stduint addr, stduint len) {
 			files->pfiles[fd] &&
 			asrtand(files->pfiles[fd])->vfile &&
 			files->pfiles[fd]->vfile->f_inode &&
-			files->pfiles[fd]->vfile->f_inode->i_mode == I_CHAR_SPECIAL) {
+			(files->pfiles[fd]->vfile->f_inode->i_mode & I_TYPE_MASK) == I_CHAR_SPECIAL) {
 			is_char_special = true;
 		}
 	}
@@ -966,7 +970,8 @@ DEFSYSC sysc_READ(stduint fd, stduint addr, stduint len) {
 			stduint r1 = sysrecv(Task_FileSys, open_buf, byteof(open_buf[0]));
 			if ((stdsint)r1 < 0) return r1; // Return -EINTR if interrupted
 
-			stduint bytes_read = open_buf[0];
+			stdsint bytes_read = stdsint(open_buf[0]);
+			if (bytes_read < 0) return total_read ? stdsint(total_read) : bytes_read;
 			if (bytes_read == 0) {
 				syssend(Task_Console, 0, 0, _IMM(ConsoleMsg::INNC));
 				stduint ret;
@@ -1072,9 +1077,10 @@ DEFSYSC sysc_WRIT(stduint fd, stduint addr, stduint len) {
 
 DEFSYSC sysc_DELF(stduint usr_filepath) {
 	stduint open_buf[2]{ usr_filepath, Taskman::CurrentTID() };
-	syssend(Task_FileSys, open_buf, byteof(open_buf), _IMM(FilemanMsg::REMOVE));
-	sysrecv(Task_FileSys, open_buf, byteof(open_buf[0]));
-	return open_buf[0];// 0 for success
+	if (syssend(Task_FileSys, open_buf, byteof(open_buf), _IMM(FilemanMsg::REMOVE))) return 0;
+	stduint removed = 0;
+	if (sysrecv(Task_FileSys, &removed, sizeof(removed))) return 0;
+	return removed; // 1 on success, 0 on failure
 }
 
 DEFSYSC sysc_PORP(stduint fd, stduint usr_proper) {
@@ -1096,7 +1102,7 @@ DEFSYSC sysc_PORP(stduint fd, stduint usr_proper) {
 	file_proper_t prop;
 	MemSet(&prop, 0, sizeof(prop));
 	prop.size = inode->i_size;
-	prop.mode = inode->i_mode & I_TYPE_MASK;
+	prop.mode = inode->i_mode;
 	#ifdef _FILESYS_DATETIME
 	uni::FilesysFileInfo info = {};
 	if (uni::Filesys::GetInfo(vfile, info) && (info.time_valid & uni::FILESYS_TIME_MODIFIED)) {
@@ -1225,6 +1231,59 @@ DEFSYSC sysc_EXET(stduint path, stduint argv, stduint envp) {
 }
 
 
+DEFSYSC sysc_GETI(stduint type, stduint, stduint) {
+	const auto id_type = syscall_id_type_t(type);
+	if (id_type == syscall_id_type_t::Core) {
+		#if (_MCCA & 0xFF00) == 0x1000
+		return getMHARTID();
+		#else
+		return Taskman::getID();
+		#endif
+	}
+
+	auto* th = Taskman::CurrentTB();
+	auto* pb = th ? th->parent_process : nullptr;
+	switch (id_type) {
+	case syscall_id_type_t::Process:
+		return pb ? stdsint(pb->pid) : -ESRCH;
+	case syscall_id_type_t::Thread:
+		return th ? stdsint(th->tid) : -ESRCH;
+	case syscall_id_type_t::User:
+	case syscall_id_type_t::EffectiveUser:
+		return pb ? stdsint(pb->credentials.uid) : -ESRCH;
+	case syscall_id_type_t::UserGroup:
+	case syscall_id_type_t::EffectiveUserGroup:
+		return pb ? stdsint(pb->credentials.gid) : -ESRCH;
+	default:
+		return -EINVAL;
+	}
+}
+
+DEFSYSC sysc_SETI(stduint type, stduint id, stduint) {
+	auto* pb = Taskman::CurrentPB();
+	if (!pb) return -ESRCH;
+	uint32 current;
+	switch (syscall_id_type_t(type)) {
+	case syscall_id_type_t::User:
+		current = pb->credentials.uid;
+		break;
+	case syscall_id_type_t::UserGroup:
+		current = pb->credentials.gid;
+		break;
+	case syscall_id_type_t::Core:
+	case syscall_id_type_t::Process:
+	case syscall_id_type_t::Thread:
+	case syscall_id_type_t::EffectiveUser:
+	case syscall_id_type_t::EffectiveUserGroup:
+		return -EPERM;
+	default:
+		return -EINVAL;
+	}
+	// Keep valid user and group IDs distinct from negative returns.
+	if (id > 0x7FFFFFFFu) return -EINVAL;
+	return id == 0 && current == 0 ? 0 : -EPERM;
+}
+
 DEFSYSC sysc_TEST(stduint t, stduint e, stduint s) {
 	ThreadBlock* caller_th = Taskman::CurrentTB();
 	ProcessBlock* pb = caller_th->parent_process;
@@ -1255,6 +1314,8 @@ DEFSYSC sysc_DBUG(stduint func) {
 					auto files = pb->fileman.Lock();
 					if (1 < files->pfiles.Count() && files->pfiles[1] && files->pfiles[1]->vfile) {
 						FileDescriptor* fd_entry = files->pfiles[1];
+						// Debug output bypasses Fileman, so enforce the descriptor's write access here.
+						if ((fd_entry->fd_mode & O_ACCMODE) == O_RDONLY) return len;
 						vfs_file* file = fd_entry->vfile;
 						const bool is_magic_tty = file->f_inode &&
 							(file->f_inode->i_mode & I_TYPE_MASK) == I_CHAR_SPECIAL &&
@@ -1314,7 +1375,34 @@ DEFSYSC sysc_SIGA(stduint sig, stduint act, stduint oact) {
 }
 
 DEFSYSC sysc_KILL(stduint pid, stduint sig, stduint tid) {
-	return (stdsint)sys_kill(pid, (int)sig, tid);
+	if (sig >= _NSIG) return -EINVAL;
+	auto* caller = Taskman::CurrentPB();
+	if (!caller) return -ESRCH;
+	auto* target = ProcessBlock::AcquireByPID(pid);
+	if (!target) return -ESRCH;
+
+	const auto uid = caller->credentials.uid;
+	// PID 0 is the bootstrap kernel process on every target.
+	const bool kernel_caller = caller->pid == Task_Kernel || caller->ring == RING_M;
+	const bool protected_target = target->pid == Task_Kernel || target->ring != RING_U;
+	stdsint result = 0;
+	if (!kernel_caller &&
+		((target != caller && protected_target) ||
+		 (uid != 0 && uid != target->credentials.uid))) {
+		result = -EPERM;
+	}
+	else if (sig != 0) {
+		if (target->state != ProcessBlock::State::Active) result = -ESRCH;
+		else {
+			#if defined(_MCU_STM32H7x)
+			result = -ENOSYS;
+			#else
+			result = DeliverProcessSignal(target, (int)sig, tid);
+			#endif
+		}
+	}
+	ProcessBlock::Release(target);
+	return result;
 }
 
 #if CONFIG_ENABLE_MMU
@@ -1569,9 +1657,9 @@ stduint SYSCALL_TABLE[] = {
 	mglb(sysc_TMSG),
 	mglb(sysc_EXEC),// 0x10
 	mglb(sysc_EXET),
-	0, //{} mglb(sysc_MALC), // 0x12 unchk
+	0, // PFUN
 	mglb(sysc_SIGA), // 0x13 unchk
-	mglb(sysc_KILL), // 0x14 unchk
+	mglb(sysc_KILL), // 0x14
 	0, // 0x15 unchk (handled manually to pass context frame)
 	mglb(sysc_SETD), // 0x16 (SETD)
 	mglb(sysc_GETD), // 0x17 (GETD)
@@ -1581,7 +1669,8 @@ stduint SYSCALL_TABLE[] = {
 	mglb(sysc_DUP2),
 	mglb(sysc_PIPE),
 	mglb(sysc_SEEK),
-	0, // 0x1D (GET_CORE_ID)
+	mglb(sysc_GETI),
+	mglb(sysc_SETI),
 	mglb(sysc_MANA),
 	mglb(sysc_TNEW),
 	mglb(sysc_TEXI),
@@ -1611,20 +1700,6 @@ stduint SYSCALL_TABLE[] = {
 
 #if (_MCCA & 0xFF00) == 0x1000
 
-static int sysc_GETCID(stduint ptr_hid)
-{
-	auto pid = Taskman::CurrentTB();
-	auto pa = (stduint*)pid->parent_process->paging[_IMM(ptr_hid)];
-	ploginfo("[%s] arg0 = LA %[x] PA %[x]", __FUNCIDEN__, ptr_hid, pa);
-	if (_IMM(pa) == ~_IMM0) return -1;
-	if (ptr_hid == NULL) {
-		return -1;
-	} else {
-		*pa = getMHARTID();
-		return 0;
-	}
-}
-
 void syscall_body(NormalTaskContext* cxt)
 {
 	auto syscall_num = (syscall_t)cxt->a7;
@@ -1648,8 +1723,11 @@ void syscall_body(NormalTaskContext* cxt)
 	case syscall_t::TMSG:
 		cxt->a0 = sysc_TMSG();
 		break;
-	case syscall_t::GET_CORE_ID:
-		cxt->a0 = sysc_GETCID(cxt->a0);
+	case syscall_t::GETI:
+		cxt->a0 = sysc_GETI(cxt->a0, 0, 0);
+		break;
+	case syscall_t::SETI:
+		cxt->a0 = sysc_SETI(cxt->a0, cxt->a1, 0);
 		break;
 	case syscall_t::SIGA:
 		cxt->a0 = sysc_SIGA(cxt->a0, cxt->a1, cxt->a2);

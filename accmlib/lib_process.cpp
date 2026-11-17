@@ -1,4 +1,5 @@
 #include "aaaaa.h"
+#include <c/ISO_IEC_STD/errno.h>
 #include <unistd.h>
 #include <sys/wait.h>
 
@@ -103,8 +104,39 @@ pid_t fork() {
 	return syscall(syscall_t::FORK, nil, nil, nil);
 }
 
+static stdsint ProcessIdResult(stduint result) {
+	const auto status = stdsint(result);
+	if (status >= 0) return status;
+	errno = int(-status);
+	return -1;
+}
+
 pid_t getpid(void) {
-	return syscall(syscall_t::TEST, 'T', 'E', 'S');
+	return ProcessIdResult(syscall(syscall_t::GETI, _IMM(syscall_id_type_t::Process)));
+}
+
+uid_t getuid(void) {
+	return ProcessIdResult(syscall(syscall_t::GETI, _IMM(syscall_id_type_t::User)));
+}
+
+uid_t geteuid(void) {
+	return ProcessIdResult(syscall(syscall_t::GETI, _IMM(syscall_id_type_t::EffectiveUser)));
+}
+
+gid_t getgid(void) {
+	return ProcessIdResult(syscall(syscall_t::GETI, _IMM(syscall_id_type_t::UserGroup)));
+}
+
+gid_t getegid(void) {
+	return ProcessIdResult(syscall(syscall_t::GETI, _IMM(syscall_id_type_t::EffectiveUserGroup)));
+}
+
+int setuid(uid_t uid) {
+	return int(ProcessIdResult(syscall(syscall_t::SETI, _IMM(syscall_id_type_t::User), stduint(uid))));
+}
+
+int setgid(gid_t gid) {
+	return int(ProcessIdResult(syscall(syscall_t::SETI, _IMM(syscall_id_type_t::UserGroup), stduint(gid))));
 }
 
 //

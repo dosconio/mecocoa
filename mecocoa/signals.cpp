@@ -4,6 +4,7 @@
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 
 #include "../include/mecocoa.hpp"
+#include <c/msgface.h>
 
 extern Spinlock scheduler_lock;
 
@@ -458,14 +459,7 @@ static void wakeup_thread_for_signal(ThreadBlock* th, int sig) {
 	}
 }
 
-extern "C" stduint sys_kill(stduint pid, int sig, stduint tid) {
-	if (sig < 0 || sig >= _NSIG) return (stduint)-1;
-	
-	ProcessBlock* pb = Taskman::Locate(pid);
-	if (!pb) return (stduint)-1;
-	
-	if (sig == 0) return 0; // Check existence
-
+stdsint DeliverProcessSignal(ProcessBlock* pb, int sig, stduint tid) {
 	{
 		auto signals = pb->signals.Lock();
 		if (signals->sig_actions[sig].sa_handler == SIG_IGN) {
@@ -507,7 +501,7 @@ extern "C" stduint sys_kill(stduint pid, int sig, stduint tid) {
 	} else {
 		// Send to specific thread
 		ThreadBlock* th = Taskman::LocateThread(tid);
-		if (!th || th->parent_process != pb) return (stduint)-1;
+		if (!th || th->parent_process != pb) return -ESRCH;
 		sigaddset(&th->pending_signals, sig);
 		
 		// Wake up target thread if pended and signal not blocked
@@ -516,6 +510,14 @@ extern "C" stduint sys_kill(stduint pid, int sig, stduint tid) {
 		}
 	}
 	return 0;
+}
+
+extern "C" stduint sys_kill(stduint pid, int sig, stduint tid) {
+	if (sig < 0 || sig >= _NSIG) return (stduint)-1;
+	auto* pb = Taskman::Locate(pid);
+	if (!pb) return (stduint)-1;
+	if (sig == 0) return 0; // Check existence
+	return DeliverProcessSignal(pb, sig, tid) == 0 ? 0 : (stduint)-1;
 }
 
 extern "C" stdsint sysc_SIGR(void* context) {

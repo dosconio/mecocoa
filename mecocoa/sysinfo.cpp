@@ -607,7 +607,9 @@ void dump_screens_and_forms(OstreamTrait& com1) {
 			#if defined(_MCU_STM32H7x)
 			snapshot->layers = RgbLcd_LayerCount();
 			#endif
-			if (auto* name = find_video_driver_name_recursive(Devsman::Root(), device)) snapshot->driver = name;
+			const char* driver_name = find_video_driver_name_recursive(Devsman::Root(), device);
+			if (!driver_name) driver_name = Consman::GetPublishedVideoDriverName(device);
+			if (driver_name) snapshot->driver = driver_name;
 			if (auto* cursor = Cursor::global_cursor) {
 				auto* overlay = cursor->GetDisplayLayer();
 				if (overlay && overlay->screen != device) overlay = nullptr;

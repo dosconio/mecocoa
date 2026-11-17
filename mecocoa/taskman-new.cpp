@@ -488,6 +488,7 @@ ProcessBlock* Taskman::CreateFork(ProcessBlock* fo, const CallgateFrame* frame) 
 	auto ring = fo->ring;
 	pb->ring = ring;
 	pb->parent_id = fo->getID();
+	pb->credentials = fo->credentials;
 	{
 		auto src_focus_tty = fo->focus_tty.Lock();
 		*pb->focus_tty.Lock() = *src_focus_tty;
@@ -496,6 +497,7 @@ ProcessBlock* Taskman::CreateFork(ProcessBlock* fo, const CallgateFrame* frame) 
 		auto src_files = fo->fileman.Lock();
 		auto dst_files = pb->fileman.Lock();
 		dst_files->cwd = src_files->cwd;
+		dst_files->cwd_identity = src_files->cwd_identity;
 		dst_files->root = src_files->root;
 	}
 	auto tb = AllocateThread();
@@ -935,6 +937,7 @@ ProcessBlock* Taskman::CreateFile(const char* path, byte ring, stduint parent, v
 				auto parent_files = pparent->fileman.Lock();
 				auto task_files = task->fileman.Lock();
 				task_files->cwd = parent_files->cwd;
+				task_files->cwd_identity = parent_files->cwd_identity;
 				task_files->root = parent_files->root;
 			}
 			printlog(_LOG_INFO, "Loaded %s from %s", label, path);
@@ -989,6 +992,7 @@ ProcessBlock* Taskman::Exec(stduint parent, rostr usr_fullpath, char** usr_argv,
 
 	auto new_pb = Taskman::CreateFile(buf_fullpath, RING_U, parent, parent_cwd, false);
 	if (!new_pb) return nullptr;
+	new_pb->credentials = parent_pb->credentials;
 
 	vfs_dentry* d = Filesys::Index(buf_fullpath, parent_cwd);
 	if (!d) {
@@ -1041,6 +1045,7 @@ ProcessBlock* Taskman::Exec(stduint parent, rostr usr_fullpath, char** usr_argv,
 		auto parent_files = parent_pb->fileman.Lock();
 		auto new_files = new_pb->fileman.Lock();
 		new_files->cwd = parent_files->cwd;
+		new_files->cwd_identity = parent_files->cwd_identity;
 		new_files->root = parent_files->root;
 	}
 	{
@@ -1129,6 +1134,7 @@ ProcessBlock* Taskman::Exet(stduint parent, rostr usr_fullpath,
 	{
 		MutexLocal mapping_guard(&current_pb->mutex_mapping);
 		// The replacement is complete; this is the only destructive commit point.
+		// The current process keeps its credentials across the image replacement.
 		if (current_pb->ReleaseAllVmas()) {
 			current_pb->ReleaseLoadslices();
 

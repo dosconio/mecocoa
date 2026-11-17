@@ -1,6 +1,7 @@
 #include "aaaaa.h"
 #include "c/ustring.h"
 #include "c/consio.h"
+#include <c/ISO_IEC_STD/errno.h>
 
 volatile static unsigned* const callid = (volatile unsigned*)0x0000500;// 0x80000500;
 
@@ -138,7 +139,11 @@ int sys_removefil(rostr fullpath)
 }
 
 stduint get_core_id(stduint* ptr_hid) {
-	return syscall(syscall_t::GET_CORE_ID, _IMM(ptr_hid), nil, nil);
+	if (!ptr_hid) return ~_IMM0;
+	const stduint id = syscall(syscall_t::GETI, _IMM(syscall_id_type_t::Core));
+	if (stdsint(id) < 0) return ~_IMM0;
+	*ptr_hid = id;
+	return 0;
 }
 
 extern "C" int dup2(int oldfd, int newfd) {
@@ -213,7 +218,10 @@ extern "C" int sigaction(int sig, const struct _POSIX_sigaction* act, struct _PO
 }
 
 extern "C" int kill(pid_t pid, int sig) {
-	return (int)syscall(syscall_t::KILL, pid, sig, 0);
+	const auto result = stdsint(syscall(syscall_t::KILL, stduint(pid), stduint(sig), 0));
+	if (result >= 0) return int(result);
+	errno = int(-result);
+	return -1;
 }
 
 extern "C" int sigemptyset(_POSIX_sigset_t* set) {
