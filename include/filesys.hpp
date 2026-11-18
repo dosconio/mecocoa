@@ -14,6 +14,8 @@
 
 struct DeviceNode;
 struct ProcessCredentials;
+struct file_status_t;
+struct file_permission_request_t;
 
 // VFS Layer for Mecocoa
 // Unix-like Virtual File System
@@ -36,6 +38,9 @@ struct VFSMountState {
 	StorageTrait* storage = nullptr;
 	VFSMountOwnership ownership = VFSMountOwnership::Borrowed;
 	bool detached = false;
+	// Immutable mount restrictions remain available after namespace detachment.
+	bool read_only = false;
+	bool no_execute = false;
 
 	VFSMountState(FilesysTrait* filesystem, VFSMountOwnership ownership);
 	VFSMountState(const VFSMountState&) = delete;
@@ -60,6 +65,7 @@ struct VFSMountPermissions {
 	stduint directory_mode = 0755;
 	// Mount-wide write restriction, including for UID 0.
 	bool read_only = false;
+	bool no_execute = false;
 };
 
 // Represents an active mounted file system
@@ -190,6 +196,13 @@ public:
 		const ProcessCredentials& credentials);
 	// Build the path under vfs_lock. A detached CWD returns -ESTALE.
 	static int GetWorkingDirectory(vfs_dentry* cwd, uint64 cwd_identity, String& path);
+	// Path lookup checks directory search access and snapshots metadata under the same VFS lock.
+	static int StatPath(const char* path, const ProcessCredentials& credentials,
+		vfs_dentry* cwd, uint64 cwd_identity, file_status_t& result);
+	// The caller retains the inode independently of the descriptor and namespace lifetime.
+	static int StatInode(const SharedPtr<vfs_inode>& inode, file_status_t& result);
+	static int SetPermissionsPath(const char* path, const ProcessCredentials& credentials, vfs_dentry* cwd, uint64 cwd_identity, const file_permission_request_t& request, bool mode_change);
+	static int SetPermissionsInode(const SharedPtr<vfs_inode>& inode, const ProcessCredentials& credentials, const file_permission_request_t& request, bool mode_change);
 
 public:
 	// Explicitly mount an instantiated FS to a path (used by DevFs and RootFs)
@@ -233,6 +246,11 @@ public:
 	// Trusted kernel callers may pass null credentials. Returns zero or a negative errno.
 	static int Open(const char* pathname, int flags, vfs_file** out_file, vfs_dentry* base = nullptr,
 		const ProcessCredentials* credentials = nullptr, uint64 cwd_identity = 0);
+	// Authorize execution and retain the file; the ELF loader parses and installs the authorized image.
+	static int OpenExecutable(const char* pathname, vfs_file** out_file,
+		const ProcessCredentials& credentials, vfs_dentry* base = nullptr, uint64 cwd_identity = 0);
+	// POSIX mmap() requires readable files and writable access for shared writes (https://pubs.opengroup.org/onlinepubs/9799919799/functions/mmap.html).
+	static int GetMappingPermissions(vfs_file* file, int open_mode, bool shared, stduint& allowed);
 	static int Read(vfs_file* file, void* buf, stduint count);
 	static int Write(vfs_file* file, const void* buf, stduint count);
 	static bool Truncate(vfs_file* file, stduint size);
@@ -274,6 +292,7 @@ public:
 
 class DevFs : public FilesysTrait {
 public:
+	virtual bool permit(void* handler, FilesysPermissionResult& result, bool set_or_get = false) override;
 	virtual bool makefs(rostr vol_label, void* moreinfo = 0) override;
 	virtual bool loadfs(void* moreinfo = 0) override;
 	virtual bool create(rostr fullpath, stduint flags, void* exinfo, rostr linkdest = 0) override;

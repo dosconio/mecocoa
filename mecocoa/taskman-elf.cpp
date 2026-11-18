@@ -12,9 +12,10 @@ struct ELFInterpreterFileCloser {
 	}
 };
 
+namespace uni { extern Mutex vfs_lock; }
+
 #if CONFIG_ENABLE_MMU
 namespace uni {
-	extern Mutex vfs_lock;
 	bool PinExecutableImage(ProcessBlock* process, vfs_file* file,
 		uint64 expected_version);
 	void UnpinExecutableImage(ProcessBlock* process);
@@ -94,6 +95,7 @@ enum class ELFLoadPageKind : byte {
 struct ELFLoadPagePlan {
 	stduint address = 0;
 	stduint flags = 0;
+	stduint prot = PROT_NONE;
 	stduint file_offset = 0;
 	ELFLoadPageKind kind = ELFLoadPageKind::Zero;
 };
@@ -158,6 +160,7 @@ static bool DescribeELFLoadPage(const ELF_PHT_t* headers, stduint count,
 	if (!covered) return false;
 	result.address = page;
 	result.flags = PGPROP_present | PGPROP_user_access;
+	result.prot = PROT_READ | (writable ? PROT_WRITE : 0) | (executable ? PROT_EXEC : 0);
 	if (writable) result.flags |= PGPROP_writable;
 	#if _MCCA != 0x8632
 	if (!executable) result.flags |= PGPROP_nonexecutable;
@@ -175,7 +178,7 @@ static bool DescribeELFLoadPage(const ELF_PHT_t* headers, stduint count,
 
 static bool SameELFLoadVma(const ELFLoadPagePlan& left,
 	const ELFLoadPagePlan& right) {
-	if (left.flags != right.flags) return false;
+	if (left.flags != right.flags || left.prot != right.prot) return false;
 	const bool left_file = left.kind == ELFLoadPageKind::File;
 	const bool right_file = right.kind == ELFLoadPageKind::File;
 	if (left_file != right_file) return false;
@@ -186,6 +189,8 @@ static bool SameELFLoadVma(const ELFLoadPagePlan& left,
 static bool InsertELFLoadVma(ProcessBlock* pb, uni::vfs_file* file,
 	const ELFLoadPagePlan& plan, stduint end) {
 	VirtualMemoryArea vma(plan.address, end, plan.flags);
+	// The executable was authorized before loading; private segment writes continue through COW.
+	vma.vm_prot = plan.prot;
 	if (plan.kind == ELFLoadPageKind::File) {
 		vma.vm_type = VirtualMemoryAreaType::File;
 		vma.vfile = new uni::vfs_file(*file);
@@ -506,6 +511,7 @@ static bool ProtectELFVmaRange(ProcessBlock* pb, stduint begin,
 				if (page < vma.vm_start || page >= vma.vm_end) continue;
 				covered = true;
 				vma.vm_flags &= ~_IMM(PGPROP_writable);
+				vma.vm_prot &= ~_IMM(PROT_WRITE);
 				pageint index = page;
 				PageEntry* entry = pb->paging.getEntry(index);
 				stduint properties;
@@ -782,7 +788,7 @@ bool _Taskman_Relocate_PIE_Flat(BlockTrait* source, const ELF_Header_t& header, 
 
 // Resolve PT_INTERP to an opened file, so its inode survives namespace changes.
 static bool _Taskman_Resolve_Interp(BlockTrait* source, const ELF_Header_t& header,
-	stduint file_size, byte* block_buffer, vfs_dentry* cwd,
+	stduint file_size, byte* block_buffer, const ProcessCredentials& credentials,
 	uni::vfs_file** out_interp) {
 	*out_interp = nullptr;
 	if (!header.e_phnum || header.e_phentsize != sizeof(ELF_PHT_t) ||
@@ -816,14 +822,14 @@ static bool _Taskman_Resolve_Interp(BlockTrait* source, const ELF_Header_t& head
 	ploginfo("%s: ELF interpreter mapped to: %s", __FUNCIDEN__,
 		real_interp_path.reference());
 	uni::vfs_file* file = nullptr;
-	if (Filesys::Open(real_interp_path.reference(), O_RDONLY, &file, cwd) ||
+	if (Filesys::OpenExecutable(real_interp_path.reference(), &file, credentials) ||
 		!file) {
 		plogerro("%s: Interpreter not found at %s", __FUNCIDEN__,
 			real_interp_path.reference());
 		return false;
 	}
 	if (!file->f_inode || (file->f_inode->i_mode & I_TYPE_MASK) != I_REGULAR ||
-		!file->f_inode->i_sb || !file->f_inode->i_sb->fs) {
+		!file->f_inode->mount_state || !file->f_inode->mount_state->filesystem) {
 		Filesys::Close(file);
 		return false;
 	}
@@ -882,7 +888,7 @@ static bool _Taskman_Load_Interp(uni::vfs_file* file, ProcessBlock* pb,
 		MutexLocal guard(&uni::vfs_lock);
 		file_size = file->f_inode->i_size;
 		file_version = file->f_inode->content_version;
-		filesystem = file->f_inode->i_sb->fs;
+		filesystem = file->f_inode->mount_state->filesystem;
 		file_handler = file->f_inode->internal_handler;
 	}
 	// Pin outside vfs_lock before reading the interpreter image.
@@ -945,7 +951,8 @@ static bool _Taskman_Load_Interp(uni::vfs_file* file, ProcessBlock* pb,
 }
 
 static ProcessBlock* CreateELFImage(BlockTrait* source,
-	uni::vfs_file* image_file, byte ring, bool append) {
+	uni::vfs_file* image_file, byte ring, bool append,
+	const ProcessCredentials& credentials, ELFLoadInfo* info) {
 	#if (_MCCA & 0xFF00) == 0x8600 || (_MCCA & 0xFF00) == 0x1000
 	#if CONFIG_ENABLE_MMU
 	uint64 image_version = 0;
@@ -997,6 +1004,7 @@ static ProcessBlock* CreateELFImage(BlockTrait* source,
 	}
 	#endif
 	pb->ring = ring;
+	pb->credentials = credentials;
 	pb->parent_id = Task_Kernel;
 	*pb->focus_tty.Lock() = nullptr;
 	
@@ -1038,7 +1046,7 @@ static ProcessBlock* CreateELFImage(BlockTrait* source,
 
 	uni::vfs_file* opened_interp = nullptr;
 	if (!_Taskman_Resolve_Interp(source, header, source_size,
-		(byte*)block_buffer.reflect(), nullptr, &opened_interp)) {
+		(byte*)block_buffer.reflect(), credentials, &opened_interp)) {
 		return nullptr;
 	}
 	uni::UniquePtr<uni::vfs_file, ELFInterpreterFileCloser> interp_file(opened_interp);
@@ -1105,6 +1113,13 @@ static ProcessBlock* CreateELFImage(BlockTrait* source,
 
 	// ---- Stack and Gen.Regis ---- //
 	const stduint stack_loc_top = _IMM(tb->stack_lineaddr) + tb->stack_size;
+	// Return metadata from the main image even when the interpreter supplies the thread entry point.
+	if (info) {
+		info->entry = (stduint)header.e_entry + load_bias;
+		info->phdr = phdr_addr;
+		info->phnum = header.e_phnum;
+		info->phent = header.e_phentsize;
+	}
 	const stduint initial_sp = Taskman::SetupStack(pb, pb, nullptr, nullptr,
 		(stduint)header.e_entry + load_bias, phdr_addr, header.e_phnum, header.e_phentsize);
 
@@ -1154,7 +1169,7 @@ static ProcessBlock* CreateELFImage(BlockTrait* source,
 	// NoMMU: one contiguous flat region holds the whole image, relocations are applied in place
 	String block_buffer(String::Charset::Memory, 512);
 	struct ELF_Header_t header;
-	source->Read(0, &header, sizeof(header), (byte*)block_buffer.reflect());
+	if (source->Read(0, &header, sizeof(header), (byte*)block_buffer.reflect()) != sizeof(header)) return nullptr;
 	if (MemCompare((const char*)header.e_ident, "\x7F""ELF", 4)) {
 		plogerro("%s: Invalid ELF File Magic Number", __FUNCIDEN__);
 		return nullptr;
@@ -1163,10 +1178,26 @@ static ProcessBlock* CreateELFImage(BlockTrait* source,
 		plogerro("%s: only ET_DYN (static PIE) is loadable without MMU", __FUNCIDEN__);
 		return nullptr;
 	}
+	stduint file_size;
+	if (image_file) {
+		MutexLocal guard(&uni::vfs_lock);
+		file_size = image_file->f_inode->i_size;
+	}
+	else {
+		if (!source->Block_Size || source->getUnits() > ~_IMM0 / source->Block_Size) return nullptr;
+		file_size = source->getUnits() * source->Block_Size;
+	}
+	if (header.e_phentsize != sizeof(ELF_PHT_t) || header.e_phoff > file_size ||
+		stduint(header.e_phnum) > (file_size - header.e_phoff) / sizeof(ELF_PHT_t)) return nullptr;
 	stduint image_span = 0, image_align = 0x1000;
 	for0(i, header.e_phnum) {
 		struct ELF_PHT_t ph;
-		source->Read(header.e_phoff + i * header.e_phentsize, &ph, sizeof(ph), (byte*)block_buffer.reflect());
+		if (source->Read(header.e_phoff + i * header.e_phentsize, &ph, sizeof(ph), (byte*)block_buffer.reflect()) != sizeof(ph)) return nullptr;
+		// NoMMU loads a static PIE into one allocation and cannot install a PT_INTERP interpreter.
+		if (ph.p_type == PT_INTERP) return nullptr;
+		if (ph.p_type == PT_LOAD && (ph.p_filesz > ph.p_memsz ||
+			ph.p_offset > file_size || ph.p_filesz > file_size - ph.p_offset ||
+			ph.p_memsz > ~_IMM0 - ph.p_vaddr)) return nullptr;
 		if (ph.p_type != PT_LOAD || !ph.p_memsz) continue;
 		if (ph.p_vaddr + ph.p_memsz > image_span) image_span = ph.p_vaddr + ph.p_memsz;
 		if (ph.p_align > image_align) image_align = ph.p_align;
@@ -1180,16 +1211,24 @@ static ProcessBlock* CreateELFImage(BlockTrait* source,
 	constexpr stduint flat_heap_reserve = 7u << 20;// the block owns the process heap too, so its MPU region covers malloc
 	while ((1u << align_expo) < image_span + flat_heap_reserve && align_expo < 24) align_expo++;// the block is its own MPU region, so it owns a whole power of two
 	const stduint image_block = 1u << align_expo;
+	if (image_span > image_block || flat_heap_reserve > image_block - image_span) return nullptr;
 	byte* image = (byte*)mempool.allocate(image_block, align_expo);
 	if (!image) {
 		plogerro("%s: no memory for the image (%u bytes)", __FUNCIDEN__, image_block);
 		return nullptr;
 	}
+	// Release the flat allocation on any loading failure until the process takes ownership.
+	struct FlatImageScope {
+		byte* image;
+		stduint size;
+		~FlatImageScope() { if (image) mempool.deallocate(image, size); }
+	} image_scope { image, image_block };
 	MemSet(image, 0, image_block);// zeroing keeps the BSS tail of every segment
 	const stduint load_bias = _IMM(image);// a PIE links from vaddr 0, so the image base is vaddr 0
 	for0(i, header.e_phnum) {
 		struct ELF_PHT_t ph;
-		source->Read(header.e_phoff + i * header.e_phentsize, &ph, sizeof(ph), (byte*)block_buffer.reflect());
+		if (source->Read(header.e_phoff + i * header.e_phentsize, &ph, sizeof(ph), (byte*)block_buffer.reflect()) != sizeof(ph)) return nullptr;
+		if (ph.p_type == PT_LOAD && (ph.p_vaddr > image_block || ph.p_filesz > image_block - ph.p_vaddr)) return nullptr;
 		if (ph.p_type != PT_LOAD || !ph.p_filesz) continue;
 		byte* dest = image + ph.p_vaddr;
 		stduint done = 0;
@@ -1217,6 +1256,7 @@ static ProcessBlock* CreateELFImage(BlockTrait* source,
 	#endif
 	ProcessBlock* pb = Taskman::Create((void*)((load_bias + header.e_entry) | 1), ring, false);
 	if (!pb) return nullptr;
+	pb->credentials = credentials;
 	const stduint arg_sp = Taskman::SetupStack(pb, pb, nullptr, nullptr,
 		load_bias + header.e_entry, 0, header.e_phnum, header.e_phentsize);
 	if (arg_sp) {
@@ -1237,6 +1277,7 @@ static ProcessBlock* CreateELFImage(BlockTrait* source,
 		#endif
 	}
 	pb->load_slices[0].address = load_bias;
+	image_scope.image = nullptr;
 	pb->load_slices[0].length = image_block;// the release and the MPU region cover the same range
 	pb->heapbtm = (load_bias + image_span + 0xFFF) & ~_IMM(0xFFF);// the heap shares the image block, so its MPU region covers it
 	pb->heaptop = pb->heapbtm;
@@ -1251,15 +1292,13 @@ static ProcessBlock* CreateELFImage(BlockTrait* source,
 }
 
 ProcessBlock* Taskman::CreateELF(BlockTrait* source, byte ring, bool append) {
-	return CreateELFImage(source, nullptr, ring, append);
+	return CreateELFImage(source, nullptr, ring, append, ProcessCredentials{}, nullptr);
 }
 
-#if CONFIG_ENABLE_MMU
+// The caller retains the authorized file while this loader parses and installs its image on either memory model.
 ProcessBlock* Taskman_CreateELF_File(BlockTrait* source,
-	uni::vfs_file* image_file, byte ring, bool append) {
-	return CreateELFImage(source, image_file, ring, append);
+	uni::vfs_file* image_file, byte ring, const ProcessCredentials& credentials, ELFLoadInfo* info) {
+	return CreateELFImage(source, image_file, ring, false, credentials, info);
 }
-
-#endif
 
 

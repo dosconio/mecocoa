@@ -1035,7 +1035,7 @@ namespace uni {
 	// The page lock and VMA spinlock publish the PTE and its alias together.
 	// A first write faults so ResolveSharedFileWrite can pin and dirty the page.
 	void* MapSharedFileVmaPage(ProcessBlock* process, stduint address,
-		VirtualMemoryAccess access, stduint expected_flags,
+		VirtualMemoryAccess access, stduint expected_flags, stduint expected_prot,
 		stduint file_offset, vfs_inode* inode) {
 		stduint physical = 0;
 		if (!AcquireSharedFileMappingPage(inode, file_offset, physical))
@@ -1053,7 +1053,8 @@ namespace uni {
 				if (address < vma.vm_start || address >= vma.vm_end) continue;
 				if (vma.vm_type != VirtualMemoryAreaType::File ||
 					vma.vm_mode != VirtualMemoryAreaMode::Shared ||
-					vma.vm_flags != expected_flags || !vma.vfile ||
+					vma.vm_flags != expected_flags || vma.vm_prot != expected_prot ||
+					!vma.vfile ||
 					vma.vfile->f_inode.get() != inode ||
 					uint64(vma.file_offset) + uint64(address - vma.vm_start) !=
 						uint64(file_offset)) break;

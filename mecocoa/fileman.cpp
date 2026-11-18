@@ -1012,6 +1012,53 @@ void serv_file_loop()// for IDE 0:0, 0:1
 		}
 
 
+		case FilemanMsg::PERMIT:
+		{
+			stdsint status = -ESRCH;
+			auto* caller = ProcessBlock::AcquireActive(to_args[0]);
+			if (caller) {
+				const bool copied = MccaStrCopyP((char*)pathbuf, pathbuf_size, (rostr)to_args[1], caller, nullptr, &status);
+				if (copied) {
+					file_permission_request_t change;
+					change.mode = to_args[3];
+					change.uid = stdsint(to_args[4]);
+					change.gid = stdsint(to_args[5]);
+					auto files = caller->fileman.Lock();
+					status = Filesys::SetPermissionsPath((const char*)pathbuf, caller->credentials, files->cwd, files->cwd_identity, change, to_args[2] != 0);
+				}
+			}
+			syssend(sig_src, &status, sizeof(status));
+			if (caller) ProcessBlock::Release(caller);
+			break;
+		}
+		case FilemanMsg::STAT:
+		{
+			stdsint status = -ESRCH;
+			auto* caller = ProcessBlock::AcquireActive(to_args[0]);
+			if (caller) {
+				// Copy user paths before entering VFS; user memory preparation can fault.
+				const bool copied = MccaStrCopyP((char*)pathbuf, pathbuf_size,
+					(rostr)to_args[1], caller, nullptr, &status);
+				file_status_t result{};
+				if (copied) {
+					{
+						auto files = caller->fileman.Lock();
+						status = Filesys::StatPath((const char*)pathbuf, caller->credentials,
+							files->cwd, files->cwd_identity, result);
+					}
+					if (!status) {
+						const bool kernel_output = caller->ring == RING_M;
+						if (!to_args[2] || to_args[2] > ~_IMM0 - sizeof(result) ||
+							MccaMemCopyP((void*)to_args[2],
+							kernel_output ? nullptr : caller, kernel_output, &result,
+							nullptr, true, sizeof(result)) != sizeof(result)) status = -EFAULT;
+					}
+				}
+			}
+			syssend(sig_src, &status, sizeof(status));
+			if (caller) ProcessBlock::Release(caller);
+			break;
+		}
 		case FilemanMsg::SETD:
 		{
 			stdsint err_ret = -1;

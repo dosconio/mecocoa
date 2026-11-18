@@ -11,6 +11,7 @@
 #include <cpp/queue>
 #include <cpp/vector>
 #include <cpp/atomic>
+#include <c/API-POSIX/sys/mman.h>
 
 #include "fileman.hpp"
 #include "syscall.hpp"
@@ -266,6 +267,8 @@ struct VirtualMemoryArea {
 	stduint vm_start;	// Align by 4KB page size
 	stduint vm_end;		// Align by 4KB page size
 	stduint vm_flags;	// Attributes (e.g. PGPROP_writable, PGPROP_user_access)
+	stduint vm_prot = PROT_NONE; // Logical access is independent of hardware NX support.
+	stduint vm_max_prot = PROT_READ | PROT_WRITE | PROT_EXEC; // Mapping-time grant survives protection changes and fork.
 	bool vm_reservation = false; // Only a reserved span may be replaced by user MAP_FIXED.
 	
 	// File backing extensions
@@ -276,9 +279,16 @@ struct VirtualMemoryArea {
 
 	VirtualMemoryArea() : vm_start(0), vm_end(0), vm_flags(0), vm_type(VirtualMemoryAreaType::Anonymous), vm_mode(VirtualMemoryAreaMode::Private), vfile(nullptr), file_offset(0) {}
 	VirtualMemoryArea(stduint start, stduint end, stduint flags)
-		: vm_start(start), vm_end(end), vm_flags(flags), vm_type(VirtualMemoryAreaType::Anonymous), vm_mode(VirtualMemoryAreaMode::Private), vfile(nullptr), file_offset(0) {}
+		: vm_start(start), vm_end(end), vm_flags(flags), vm_type(VirtualMemoryAreaType::Anonymous), vm_mode(VirtualMemoryAreaMode::Private), vfile(nullptr), file_offset(0) {
+		if (flags & PGPROP_present) {
+			vm_prot = PROT_READ;
+			if (flags & PGPROP_writable) vm_prot |= PROT_WRITE;
+			if (!(flags & PGPROP_nonexecutable)) vm_prot |= PROT_EXEC;
+		}
+	}
 	bool operator==(const VirtualMemoryArea& other) const {
 		return vm_start == other.vm_start && vm_end == other.vm_end && vm_flags == other.vm_flags &&
+			vm_prot == other.vm_prot && vm_max_prot == other.vm_max_prot &&
 			vm_type == other.vm_type && vm_mode == other.vm_mode &&
 			vm_reservation == other.vm_reservation &&
 			vfile == other.vfile && file_offset == other.file_offset;
@@ -288,6 +298,14 @@ struct VirtualMemoryArea {
 struct ProcessCredentials {
 	uint32 uid = 0;
 	uint32 gid = 0;
+};
+
+// Stack metadata from the main ELF that was actually loaded, including when PT_INTERP overrides IP.
+struct ELFLoadInfo {
+	stduint entry = 0;
+	stduint phdr = 0;
+	stduint phnum = 0;
+	stduint phent = 0;
 };
 
 class _Comment(Kernel) ProcessBlock {
@@ -344,7 +362,9 @@ public: // VirtualMemory Operations
 	bool InsertVmaSorted(const VirtualMemoryArea& vma);
 	// Caller holds mutex_mapping; these methods acquire vma_lock internally.
 	bool ReplaceReservedVmaRange(const VirtualMemoryArea& vma);
-	bool ProtectVmaRange(stduint address, stduint length, stduint flags);
+	// Caller holds mutex_mapping; authorization finishes before executable pins or page-table changes.
+	bool CanProtectVmaRange(stduint address, stduint length, stduint prot);
+	bool ProtectVmaRange(stduint address, stduint length, stduint flags, stduint prot);
 	bool UnmapVmaRange(stduint address, stduint length);
 	bool ReleaseAllVmas();
 	// ResolveVmaFault may acquire mutex_mapping; both methods acquire vma_lock internally. File I/O and page copying are performed without the spinlock.
@@ -648,9 +668,9 @@ public:// taskman
 		Exit(ProcessBlock* pb, stdsint exit_code);
 	static stdsint Wait(ProcessBlock* pb, stduint target_pid = 0);// 0 for any child
 	static auto
-		Exec(stduint parent, rostr usr_fullpath, char** usr_argv, char** usr_envp) -> ProcessBlock*;
+		Exec(ProcessBlock* caller, rostr usr_fullpath, char** usr_argv, char** usr_envp) -> ProcessBlock*;
 	static auto// aka POSIX-EXECV
-		Exet(stduint parent, rostr usr_fullpath, char** usr_argv, char** usr_envp) -> ProcessBlock*;
+		Exet(ProcessBlock* caller, rostr usr_fullpath, char** usr_argv, char** usr_envp) -> ProcessBlock*;
 public:// threads
 	static stdsint CreateThread(ProcessBlock* pb, stduint entry, stduint arg, stduint stack_top);
 	static stduint CurrentThreadId();
@@ -847,8 +867,9 @@ static inline stduint MccaMemCopyP(
 	#endif
 }
 
-// Capacity includes NUL; empty strings succeed. A null destination measures. May fault; call without a spinlock or vfs_lock.
-bool MccaStrCopyP(char* destination, stduint capacity, const char* source, ProcessBlock* process, stduint* length = nullptr);
+// Capacity includes NUL; empty strings succeed. A null destination measures. May fault; call without a spinlock or vfs_lock; error reports a negative errno.
+bool MccaStrCopyP(char* destination, stduint capacity, const char* source, ProcessBlock* process,
+	stduint* length = nullptr, stdsint* error = nullptr);
 
 
 #endif

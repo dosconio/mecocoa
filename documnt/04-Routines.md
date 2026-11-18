@@ -38,7 +38,7 @@ Rule
 | 08 | READ | | (fd, adr, len)→len | 读文件或 tty |
 | 09 | WRIT |  | (fd, adr, len)→len | 写文件或 tty |
 | 0A | DELF | sys_removefil | (pathname)→0 | 删除文件 |
-| 0B | PORP | | (fd, &proper)→0 | 查询与设置文件属性 |
+| 0B | PROP | | (fd/path, &result, query)→status | 查询文件属性，query 为 0 时保留旧 fd 结果布局 |
 | 0C | ENUM | | (fd, &kde, cnt)→cnt | 枚举目录项 |
 | 0D | WAIT | | (pid, &status)→pid | 等待进程，pid 传 0 表示任意 |
 | 0E | FORK | | ()→pid | 创建进程 |

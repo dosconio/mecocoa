@@ -305,6 +305,7 @@ namespace uni {
 	}
 
 	static constexpr stduint AccessSearch = 1;
+	static constexpr stduint AccessExecute = 1;
 	static constexpr stduint AccessWrite = 2;
 	static constexpr stduint AccessRead = 4;
 
@@ -376,6 +377,28 @@ namespace uni {
 	// A Pseudo Memory Filesystem to serve as Rootfs
 	class RootFs : public FilesysTrait {
 	public:
+		// RootFs owns its in-memory inode metadata; callers hold vfs_lock before reading or updating it.
+		virtual bool permit(void* handler, FilesysPermissionResult& result, bool set_or_get = false) override {
+			if (!set_or_get) result = {};
+			auto* entry = static_cast<vfs_dentry*>(handler);
+			result.status = FilesysPermissionStatus::InvalidArgument;
+			if (!entry || !entry->d_inode) return false;
+			auto& inode = *entry->d_inode;
+			if (set_or_get) {
+				if ((!result.fields.uid && !result.fields.gid && !result.fields.mode) ||
+					(result.fields.mode && ((result.mode | result.mode_mask) & ~stduint(07777)))) return false;
+				if (result.fields.uid) inode.i_uid = result.uid;
+				if (result.fields.gid) inode.i_gid = result.gid;
+				if (result.fields.mode) inode.i_mode = (inode.i_mode & ~result.mode_mask) | (result.mode & result.mode_mask);
+			}
+			result.uid = inode.i_uid;
+			result.gid = inode.i_gid;
+			result.mode = inode.i_mode & 07777;
+			result.mode_mask = 07777;
+			result.fields.uid = result.fields.gid = result.fields.mode = true;
+			result.status = FilesysPermissionStatus::Success;
+			return true;
+		}
 		virtual bool makefs(rostr vol_label, void* moreinfo = 0) override { return true; }
 		virtual bool loadfs(void* moreinfo = 0) override { return true; }
 		virtual bool create(rostr fullpath, stduint flags, void* exinfo, rostr linkdest = 0) override { return false; }
@@ -626,6 +649,13 @@ namespace uni {
 
 	class DeviceTreeFs : public FilesysTrait {
 	public:
+		// Device-tree properties have no native owner/group/mode storage.
+		virtual bool permit(void* handler, FilesysPermissionResult& result, bool set_or_get = false) override {
+			if (!set_or_get) result = {};
+			result.status = set_or_get ? FilesysPermissionStatus::ReadOnly : FilesysPermissionStatus::Unsupported;
+			if (!handler) result.status = FilesysPermissionStatus::InvalidArgument;
+			return false;
+		}
 		virtual bool makefs(rostr vol_label, void* moreinfo = 0) override { return true; }
 		virtual bool loadfs(void* moreinfo = 0) override { return true; }
 		virtual bool create(rostr fullpath, stduint flags, void* exinfo, rostr linkdest = 0) override { return false; }
@@ -1103,6 +1133,38 @@ static vfs_dentry* _Index_unlocked(const char* pathname, vfs_dentry* base) {
 	return (current && current->d_mounts) ? current->d_mounts : current;
 }
 
+// Translate each call's backend status without relying on shared error_number state.
+static int PermissionError(FilesysPermissionStatus status) {
+	switch (status) {
+	case FilesysPermissionStatus::Unsupported: return -ENOTSUP;
+	case FilesysPermissionStatus::ReadOnly: return -EROFS;
+	case FilesysPermissionStatus::InvalidArgument: return -EINVAL;
+	case FilesysPermissionStatus::NoMemory: return -ENOMEM;
+	default: return -EIO;
+	}
+}
+
+// Caller holds vfs_lock; unsupported native fields keep their mount or device defaults.
+static int RefreshPermissionsUnlocked(vfs_inode& inode) {
+	if (!inode.i_sb || inode.is_unlinked) return 0;
+	auto* fs = GetInodeFilesystem(&inode);
+	if (!fs || !inode.internal_handler) return 0;
+	FilesysPermissionResult native;
+	if (!fs->permit(inode.internal_handler, native))
+		return native.status == FilesysPermissionStatus::Unsupported ? 0 : PermissionError(native.status);
+	if (native.fields.mode && ((native.mode_mask | native.mode) & ~stduint(07777))) return -EIO;
+	const stduint type = inode.i_mode & I_TYPE_MASK;
+	const stduint fallback = InodeMode(*inode.i_sb, type, inode.internal_handler);
+	if (native.fields.uid) inode.i_uid = native.uid;
+	if (native.fields.gid) inode.i_gid = native.gid;
+	if (native.fields.mode) {
+		// Partial native masks restrict mount defaults; FAT's writable attribute cannot grant extra write bits.
+		const stduint value = native.mode_mask == 07777 ? native.mode : native.mode & fallback;
+		inode.i_mode = (fallback & ~native.mode_mask) | (value & native.mode_mask);
+	}
+	return 0;
+}
+
 // Look up one child of an already authorized directory. Caller holds vfs_lock.
 static int LookupChild(vfs_dentry* parent, const char* name, int length, vfs_dentry*& child) {
 	child = lookup_dentry(parent, name, length);
@@ -1147,6 +1209,8 @@ static int ResolvePath(const char* pathname, vfs_dentry* base,
 		if (!*pathname) break;
 		if (!current || !current->d_inode ||
 			(current->d_inode->i_mode & I_TYPE_MASK) != I_DIRECTORY) return -ENOTDIR;
+		const int permission_status = RefreshPermissionsUnlocked(*current->d_inode);
+		if (permission_status < 0) return permission_status;
 		if (!MayAccess(*current->d_inode, credentials, AccessSearch)) return -EACCES;
 
 		const char* end = pathname;
@@ -1176,6 +1240,10 @@ static int ResolvePath(const char* pathname, vfs_dentry* base,
 			(current->d_inode->i_mode & I_TYPE_MASK) != I_DIRECTORY))
 			return -ENOTDIR;
 		pathname = end;
+	}
+	if (current && current->d_inode) {
+		const int permission_status = RefreshPermissionsUnlocked(*current->d_inode);
+		if (permission_status < 0) return permission_status;
 	}
 	result = current;
 	return result ? 0 : -ENOENT;
@@ -1280,6 +1348,104 @@ int Filesys::GetWorkingDirectory(vfs_dentry* cwd, uint64 cwd_identity, String& p
 	return 0;
 }
 
+// Caller holds vfs_lock; optional backend timestamps never invalidate the basic inode snapshot.
+static int FillStatUnlocked(const SharedPtr<vfs_inode>& inode, file_status_t& result) {
+	if (!inode) return -EBADF;
+	const int permission_status = RefreshPermissionsUnlocked(*inode);
+	if (permission_status < 0) return permission_status;
+	MemSet(&result, 0, sizeof(result));
+	result.basic.size = inode->i_size;
+	result.basic.mode = inode->i_mode;
+	result.uid = inode->i_uid;
+	result.gid = inode->i_gid;
+	#ifdef _FILESYS_DATETIME
+	const stduint type = inode->i_mode & I_TYPE_MASK;
+	auto* fs = GetInodeFilesystem(inode.get());
+	if (fs && inode->internal_handler && (type == I_REGULAR || type == I_DIRECTORY)) {
+		FilesysFileInfo info = {};
+		if (fs->proper(inode->internal_handler, (stduint)FilesysCmd::FS_CMD_GET_INFO, &info) &&
+			(info.time_valid & FILESYS_TIME_MODIFIED)) {
+			result.basic.modified = info.modified;
+			result.basic.modified_valid = 1;
+		}
+	}
+	#endif
+	return 0;
+}
+
+int Filesys::StatPath(const char* path, const ProcessCredentials& credentials,
+	vfs_dentry* cwd, uint64 cwd_identity, file_status_t& result) {
+	if (!path || !*path) return -ENOENT;
+	MutexLocal guard(&vfs_lock);
+	if (*path != '/' && !IsLinkedWorkingDirectory(cwd, cwd_identity)) return -ESTALE;
+	vfs_dentry* entry = nullptr;
+	const int status = ResolvePath(path, cwd, &credentials, entry);
+	if (status < 0) return status;
+	// POSIX.1 stat() requires directory search access only (https://pubs.opengroup.org/onlinepubs/9799919799/functions/fstatat.html).
+	return FillStatUnlocked(entry->d_inode, result);
+}
+
+int Filesys::StatInode(const SharedPtr<vfs_inode>& inode, file_status_t& result) {
+	MutexLocal guard(&vfs_lock);
+	return FillStatUnlocked(inode, result);
+}
+
+// Authorize first and update cached metadata only after the backend commits all selected fields.
+static int SetPermissionsUnlocked(const SharedPtr<vfs_inode>& inode, const ProcessCredentials& credentials, const file_permission_request_t& request, bool mode_change) {
+	if (!inode) return -EBADF;
+	if (mode_change && (request.mode & ~stduint(07777))) return -EINVAL;
+	if (!mode_change && (request.uid < -1 || request.gid < -1 ||
+		(request.uid != -1 && uint64(request.uid) > 0x7FFFFFFFu) ||
+		(request.gid != -1 && uint64(request.gid) > 0x7FFFFFFFu))) return -EINVAL;
+	const int status = RefreshPermissionsUnlocked(*inode);
+	if (status < 0) return status;
+	if (inode->mount_state && inode->mount_state->read_only) return -EROFS;
+	if (credentials.uid != 0 && credentials.uid != inode->i_uid) return -EPERM;
+	if (!mode_change && credentials.uid != 0 &&
+		((request.uid != -1 && uint32(request.uid) != inode->i_uid) ||
+		(request.gid != -1 && uint32(request.gid) != credentials.gid))) return -EPERM;
+	if (!mode_change && request.uid == -1 && request.gid == -1) return 0;
+	auto* fs = GetInodeFilesystem(inode.get());
+	if (!fs || !inode->internal_handler) return -ENOTSUP;
+	FilesysPermissionResult update;
+	if (mode_change) {
+		update.fields.mode = true;
+		update.mode = request.mode;
+		if (credentials.uid != 0 && inode->i_gid != credentials.gid) update.mode &= ~stduint(02000);
+	}
+	else {
+		update.fields.uid = request.uid != -1;
+		update.fields.gid = request.gid != -1;
+		update.uid = uint32(request.uid);
+		update.gid = uint32(request.gid);
+		// Ownership changes remove set-ID bits before any future set-ID execution support is enabled.
+		if (inode->i_mode & 06000) {
+			update.fields.mode = true;
+			update.mode_mask = 06000;
+		}
+	}
+	const auto applied = update;
+	if (!fs->permit(inode->internal_handler, update, true)) return PermissionError(update.status);
+	if (applied.fields.uid) inode->i_uid = applied.uid;
+	if (applied.fields.gid) inode->i_gid = applied.gid;
+	if (applied.fields.mode) inode->i_mode = (inode->i_mode & ~applied.mode_mask) | (applied.mode & applied.mode_mask);
+	return 0;
+}
+
+int Filesys::SetPermissionsPath(const char* path, const ProcessCredentials& credentials, vfs_dentry* cwd, uint64 cwd_identity, const file_permission_request_t& request, bool mode_change) {
+	if (!path || !*path) return -ENOENT;
+	MutexLocal guard(&vfs_lock);
+	if (*path != '/' && !IsLinkedWorkingDirectory(cwd, cwd_identity)) return -ESTALE;
+	vfs_dentry* entry = nullptr;
+	const int status = ResolvePath(path, cwd, &credentials, entry);
+	return status < 0 ? status : SetPermissionsUnlocked(entry->d_inode, credentials, request, mode_change);
+}
+
+int Filesys::SetPermissionsInode(const SharedPtr<vfs_inode>& inode, const ProcessCredentials& credentials, const file_permission_request_t& request, bool mode_change) {
+	MutexLocal guard(&vfs_lock);
+	return SetPermissionsUnlocked(inode, credentials, request, mode_change);
+}
+
 static void _Prune_unlocked(vfs_dentry* dentry) {
 	if (!dentry) return;
 	vfs_dentry* child = dentry->d_first_child;
@@ -1373,6 +1539,8 @@ bool Filesys::MountFilesys(FilesysTrait* fs, file_system_type* type, const char*
 	#endif
 	if (fs == &global_devtreefs_driver) permissions.read_only = true;
 	sb->permissions = permissions;
+	mount_state->read_only = permissions.read_only;
+	mount_state->no_execute = permissions.no_execute;
 	sb->next = super_blocks;
 	super_blocks = sb;
 	
@@ -1632,6 +1800,47 @@ void Filesys::Tree(uni::OstreamTrait& os, bool mount_expand) {
 	MutexLocal guard(&vfs_lock);
 	os.OutFormat("VFS Virtual Tree Structure:\n\r");
 	vfs_tree_node(os, vfs_root, 0, mount_expand);
+}
+
+// Hold vfs_lock until the authorized inode is retained, so later loading uses the same file.
+int Filesys::OpenExecutable(const char* pathname, vfs_file** out_file,
+	const ProcessCredentials& credentials, vfs_dentry* base, uint64 cwd_identity) {
+	if (!out_file) return -EINVAL;
+	*out_file = nullptr;
+	MutexLocal guard(&vfs_lock);
+	if (pathname && *pathname != '/' && !IsLinkedWorkingDirectory(base, cwd_identity))
+		return -ESTALE;
+	vfs_dentry* entry = nullptr;
+	const int status = ResolvePath(pathname, base, &credentials, entry);
+	if (status < 0) return status;
+	if (!entry->d_inode || (entry->d_inode->i_mode & I_TYPE_MASK) != I_REGULAR)
+		return -EACCES;
+	if (entry->d_inode->mount_state && entry->d_inode->mount_state->no_execute) return -EACCES;
+	// Execution requires x; the kernel's ELF reader does not require the caller to have r.
+	if (!MayAccess(*entry->d_inode, &credentials, AccessExecute)) return -EACCES;
+	if (!GetInodeFilesystem(entry->d_inode.get())) return -ENOENT;
+	auto* file = new vfs_file();
+	if (!file) return -ENOMEM;
+	file->f_inode = entry->d_inode;
+	file->f_mode = O_RDONLY;
+	*out_file = file;
+	return 0;
+}
+
+// Compute a retained-file grant without repeating pathname or UID checks for an already opened descriptor.
+int Filesys::GetMappingPermissions(vfs_file* file, int open_mode, bool shared, stduint& allowed) {
+	allowed = 0;
+	MutexLocal guard(&vfs_lock);
+	if (!file || !file->f_inode) return -EBADF;
+	const int access = open_mode & O_ACCMODE;
+	if (access != O_RDONLY && access != O_RDWR) return -EACCES;
+	auto& inode = *file->f_inode;
+	if ((inode.i_mode & I_TYPE_MASK) != I_REGULAR) return -ENODEV;
+	if (!inode.mount_state || !inode.mount_state->filesystem) return -ENODEV;
+	allowed = PROT_READ;
+	if (!shared || (access == O_RDWR && !inode.mount_state->read_only)) allowed |= PROT_WRITE;
+	if (!inode.mount_state->no_execute) allowed |= PROT_EXEC;
+	return 0;
 }
 
 int Filesys::Open(const char* pathname, int flags, vfs_file** out_file, vfs_dentry* base,
@@ -2176,6 +2385,11 @@ void* DevFs::search(rostr fullpath, FilesysSearchArgs* args) {
 
 DeviceNode* DevFs::GetDeviceNode(void* handler) {
 	return devfs_device_node(handler);
+}
+
+// Device permissions are synthesized by VFS policy and have no backing filesystem metadata.
+bool DevFs::permit(void* handler, FilesysPermissionResult& result, bool set_or_get) {
+	return FilesysTrait::permit(handler, result, set_or_get);
 }
 
 bool DevFs::proper(void* handler, stduint cmd, const void* moreinfo) {

@@ -1068,17 +1068,28 @@ void _Comment(R0) serv_task_loop()
 			Taskman::Wait(Taskman::Locate(to_args[0]), to_args[1]);// send back { pid, taski->exit_status }
 			break;
 		case TaskmanMsg::EXEC:// (pid, &usr:fullpath, &usr:argv, &usr:envp) -> 0(success)
-			pb = Taskman::Exec(to_args[0], (rostr)to_args[1], (char**)to_args[2], (char**)to_args[3]);
+		{
+			// IPC supplies the sender TID; retain its process and validate the requested PID before reading user pointers.
+			auto* caller = ProcessBlock::AcquireActive(sig_src);
+			pb = caller && caller->pid == to_args[0] ?
+				Taskman::Exec(caller, (rostr)to_args[1], (char**)to_args[2], (char**)to_args[3]) : nullptr;
+			if (caller) ProcessBlock::Release(caller);
 			ret = pb ? pb->getID() : 0;
 			syssend_async(sig_src, (void*)&ret, sizeof(ret));
 			break;
+		}
 		case TaskmanMsg::EXET:// (pid, &usr:fullpath, &usr:argv, &usr:envp)
-			pb = Taskman::Exet(to_args[0], (rostr)to_args[1], (char**)to_args[2], (char**)to_args[3]);
+		{
+			auto* caller = ProcessBlock::AcquireActive(sig_src);
+			pb = caller && caller->pid == to_args[0] ?
+				Taskman::Exet(caller, (rostr)to_args[1], (char**)to_args[2], (char**)to_args[3]) : nullptr;
+			if (caller) ProcessBlock::Release(caller);
 			if (!pb || sig_src != to_args[0]) {
 				ret = pb ? 0 : ~_IMM0;
 				syssend_async(sig_src, (void*)&ret, sizeof(ret));
 			}
 			break;
+		}
 			#endif
 
 		default:

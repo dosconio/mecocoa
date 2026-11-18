@@ -97,12 +97,15 @@ static bool read(stduint diskno, stduint lba, void* buffer) {
 }
 
 void R_MEMDISK_INIT() {
+	// The bundled program volume grants execute permission to its regular files.
+	uni::VFSMountPermissions permissions;
+	permissions.file_mode = 0755;
 	#if (_MCCA & 0xFF00) == 0x1000 || _MCCA == 0x8632
 	ploginfo("[Memdisk] Default FATVHD Size: %[x]", sizeof(_FOLLOW_VHD));
 	stduint sectype = (stduint)ClassicFilesysType::FAT32_LBA;
 	auto dev0 = open(sliceof(_FOLLOW_VHD), sectype);
 	printlog(dev0 >= 0 ? _LOG_INFO : _LOG_ERROR, "[Memdisk] Created Memdisk %u, trying FAT", dev0);
-	if (auto fs = Filesys::Mount(*locate(0), 0, "/md0")) {
+	if (auto fs = Filesys::Mount(*locate(0), 0, "/md0", nullptr, permissions)) {
 		ploginfo("[Memdisk] Loaded %s", fs->name);
 	}
 	#elif _MCCA == 0x8664 && defined(_UEFI)
@@ -114,7 +117,7 @@ void R_MEMDISK_INIT() {
 	auto dev0 = open(uefi_data.fatvhd_addr, uefi_data.fatvhd_size, (stduint)ClassicFilesysType::FAT32_LBA);
 	printlog(dev0 >= 0 ? _LOG_INFO : _LOG_ERROR, "[Memdisk] Created Memdisk %u, trying FAT32", dev0);
 	if (dev0 < 0) return;
-	if (auto fs = Filesys::Mount(*locate(0), 0, "/md0")) {
+	if (auto fs = Filesys::Mount(*locate(0), 0, "/md0", nullptr, permissions)) {
 		ploginfo("[Memdisk] Loaded %s", fs->name);
 	}
 	#endif

@@ -24,7 +24,7 @@ enum
 	READ = 0x08, // read   (fd, adr, len)->len| x86 x64
 	WRIT = 0x09, // write  (fd, adr, len)->len| x86 x64
 	DELF = 0x0A, // remove (pathname)->?      | x86 x64
-	PORP = 0x0B, // proper (fd, &proper)->0   | x86
+	PROP, // properties (fd/path, &result, query)->status
 	ENUM = 0x0C, // enumer (fd,&kde,cnt)->cnt | x86
 	// [Process]
 	WAIT = 0x0D, // wait   (pid, &status)->pid| x86 x64    | pid 0 for any
@@ -158,6 +158,29 @@ struct file_proper_t {
 	stduint mode = 0;					// File mode (type and permissions)
 	datime_t modified = {};
 	byte modified_valid = 0;
+};
+
+enum class file_property_query_t : stduint {
+	LegacyDescriptor,
+	Descriptor,
+	Path,
+	ChangeModeDescriptor,
+	ChangeModePath,
+	ChangeOwnerDescriptor,
+	ChangeOwnerPath,
+};
+
+struct file_permission_request_t {
+	stduint mode = 0;
+	stdsint uid = -1;
+	stdsint gid = -1;
+};
+
+// Extended PROP queries use this layout; legacy descriptor queries retain file_proper_t.
+struct file_status_t {
+	file_proper_t basic;
+	uint32 uid = 0;
+	uint32 gid = 0;
 };
 
 struct syscall_mmap_request_t {

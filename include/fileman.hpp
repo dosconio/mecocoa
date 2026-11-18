@@ -91,6 +91,8 @@ enum class FilemanMsg {
 	USB_MSC_MOUNT,
 	USB_MSC_UNMOUNT,
 	LOAD_DRIVER_FILE,
+	STAT,
+	PERMIT,
 };
 
 #include <c/API-POSIX/fcntl.h>

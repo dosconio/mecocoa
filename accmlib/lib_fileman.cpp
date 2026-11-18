@@ -5,6 +5,7 @@
 #include <sys/select.h>
 #include <sys/ioctl.h>
 #include <stdarg.h>
+#include <c/ISO_IEC_STD/errno.h>
 
 static stdsint PosixIoResult(stdsint result) {
 	if (result < -1) {
@@ -125,34 +126,87 @@ char* getcwd(char* buf, size_t size) {
 #include <sys/stat.h>
 #include <dirent.h>
 
-int fstat(int fd, struct stat *buf) {
-	if (!buf) return -1;
-	file_proper_t prop;
-	int ret = syscall(syscall_t::PORP, fd, _IMM(&prop), nil);
-	if (ret < 0) return ret;
-	buf->st_size = prop.size;
-	buf->st_mode = prop.mode;
-	buf->st_mtime = 0;
-	if (prop.modified_valid) {
+// Both stat entry points translate the same PROP snapshot and leave the caller's output untouched on failure.
+static int QueryFileStatus(stduint object, file_property_query_t query, struct stat* buf) {
+	if (!buf) {
+		errno = EFAULT;
+		return -1;
+	}
+	file_status_t result{};
+	const auto status = stdsint(syscall(syscall_t::PROP, object, _IMM(&result), _IMM(query)));
+	if (status < 0) {
+		errno = int(-status);
+		return -1;
+	}
+	const uid_t owner = uid_t(result.uid);
+	const gid_t group = gid_t(result.gid);
+	if (owner < 0 || group < 0 || uint64(owner) != uint64(result.uid) ||
+		uint64(group) != uint64(result.gid)) {
+		errno = EOVERFLOW;
+		return -1;
+	}
+	struct stat converted = {};
+	converted.st_size = result.basic.size;
+	converted.st_mode = result.basic.mode;
+	converted.st_uid = owner;
+	converted.st_gid = group;
+	if (result.basic.modified_valid) {
 		struct tm date = {};
-		date.tm_year = prop.modified.year;
-		date.tm_mon = prop.modified.month;
-		date.tm_mday = prop.modified.mday;
-		date.tm_hour = prop.modified.hour;
-		date.tm_min = prop.modified.minute;
-		date.tm_sec = prop.modified.second;
+		date.tm_year = result.basic.modified.year;
+		date.tm_mon = result.basic.modified.month;
+		date.tm_mday = result.basic.modified.mday;
+		date.tm_hour = result.basic.modified.hour;
+		date.tm_min = result.basic.modified.minute;
+		date.tm_sec = result.basic.modified.second;
 		date.tm_isdst = 0;
-		buf->st_mtime = mktime(&date);
+		converted.st_mtime = mktime(&date);
+	}
+	*buf = converted;
+	return 0;
+}
+
+int fstat(int fd, struct stat* buf) {
+	return QueryFileStatus(stduint(fd), file_property_query_t::Descriptor, buf);
+}
+
+int stat(const char* path, struct stat* buf) {
+	return QueryFileStatus(_IMM(path), file_property_query_t::Path, buf);
+}
+
+// PROP returns negative errno values for every permission update failure.
+static int SetFilePermissions(stduint object, file_property_query_t query, const file_permission_request_t& request) {
+	const auto status = stdsint(syscall(syscall_t::PROP, object, _IMM(&request), _IMM(query)));
+	if (status < 0) {
+		errno = int(-status);
+		return -1;
 	}
 	return 0;
 }
 
-int stat(const char *path, struct stat *buf) {
-	int fd = open(path, O_RDONLY);
-	if (fd < 0) return fd;
-	int ret = fstat(fd, buf);
-	close(fd);
-	return ret;
+int chmod(const char* path, mode_t mode) {
+	file_permission_request_t request;
+	request.mode = mode;
+	return SetFilePermissions(_IMM(path), file_property_query_t::ChangeModePath, request);
+}
+
+int fchmod(int fd, mode_t mode) {
+	file_permission_request_t request;
+	request.mode = mode;
+	return SetFilePermissions(stduint(fd), file_property_query_t::ChangeModeDescriptor, request);
+}
+
+int chown(const char* path, uid_t owner, gid_t group) {
+	file_permission_request_t request;
+	request.uid = owner;
+	request.gid = group;
+	return SetFilePermissions(_IMM(path), file_property_query_t::ChangeOwnerPath, request);
+}
+
+int fchown(int fd, uid_t owner, gid_t group) {
+	file_permission_request_t request;
+	request.uid = owner;
+	request.gid = group;
+	return SetFilePermissions(stduint(fd), file_property_query_t::ChangeOwnerDescriptor, request);
 }
 
 #define MAX_DIR_STREAMS 8

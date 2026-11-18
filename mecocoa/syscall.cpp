@@ -1083,39 +1083,66 @@ DEFSYSC sysc_DELF(stduint usr_filepath) {
 	return removed; // 1 on success, 0 on failure
 }
 
-DEFSYSC sysc_PORP(stduint fd, stduint usr_proper) {
-	ThreadBlock* th = Taskman::CurrentTB();
-	ProcessBlock* pb = th->parent_process;
-	auto files = pb->fileman.Lock();
-
-	// Check if fd is valid
-	if (fd >= files->pfiles.Count() || !files->pfiles[fd] || !files->pfiles[fd]->vfile) {
-		return -1; // Invalid file descriptor
+// PROP keeps the old result size for query zero and uses retained inode snapshots for extended queries.
+DEFSYSC sysc_PROP(stduint object, stduint usr_proper, stduint query) {
+	auto* th = Taskman::CurrentTB();
+	auto* pb = th ? th->parent_process : nullptr;
+	if (!pb) return -ESRCH;
+	const auto type = file_property_query_t(query);
+	const bool mode_change = type == file_property_query_t::ChangeModeDescriptor || type == file_property_query_t::ChangeModePath;
+	const bool owner_change = type == file_property_query_t::ChangeOwnerDescriptor || type == file_property_query_t::ChangeOwnerPath;
+	if (mode_change || owner_change) {
+		file_permission_request_t change;
+		const bool kernel_input = pb->ring == RING_M;
+		if (!usr_proper || usr_proper > ~_IMM0 - sizeof(change) ||
+			MccaMemCopyP(&change, nullptr, true, (void*)usr_proper,
+				kernel_input ? nullptr : pb, kernel_input, sizeof(change)) != sizeof(change)) return -EFAULT;
+		if (type == file_property_query_t::ChangeModePath || type == file_property_query_t::ChangeOwnerPath) {
+			// Carry values in the IPC payload so an interrupted caller cannot leave Fileman with a stack pointer.
+			stduint message[6] = { th->getID(), object, stduint(mode_change), change.mode, stduint(change.uid), stduint(change.gid) };
+			const auto sent = stdsint(syssend(Task_FileSys, message, sizeof(message), _IMM(FilemanMsg::PERMIT)));
+			if (sent) return sent < 0 ? sent : -EIO;
+			stdsint status = -EIO;
+			const auto received = stdsint(sysrecv(Task_FileSys, &status, sizeof(status)));
+			return received ? (received < 0 ? received : -EIO) : status;
+		}
+		uni::SharedPtr<uni::vfs_inode> inode;
+		{
+			auto files = pb->fileman.Lock();
+			if (object >= files->pfiles.Count() || !files->pfiles[object] || !files->pfiles[object]->vfile) return -EBADF;
+			inode = files->pfiles[object]->vfile->f_inode;
+		}
+		return Filesys::SetPermissionsInode(inode, pb->credentials, change, mode_change);
 	}
-
-	auto* vfile = files->pfiles[fd]->vfile;
-	auto* inode = vfile->f_inode.get();
-	if (!inode) {
-		return -1;
+	if (type != file_property_query_t::LegacyDescriptor &&
+		type != file_property_query_t::Descriptor && type != file_property_query_t::Path) return -EINVAL;
+	if (!usr_proper) return -EFAULT;
+	if (type == file_property_query_t::Path) {
+		stduint request[3] = { th->getID(), object, usr_proper };
+		const auto sent = stdsint(syssend(Task_FileSys, request, sizeof(request), _IMM(FilemanMsg::STAT)));
+		if (sent) return sent < 0 ? sent : -EIO;
+		stdsint status = -EIO;
+		const auto received = stdsint(sysrecv(Task_FileSys, &status, sizeof(status)));
+		return received ? (received < 0 ? received : -EIO) : status;
 	}
-
-	file_proper_t prop;
-	MemSet(&prop, 0, sizeof(prop));
-	prop.size = inode->i_size;
-	prop.mode = inode->i_mode;
-	#ifdef _FILESYS_DATETIME
-	uni::FilesysFileInfo info = {};
-	if (uni::Filesys::GetInfo(vfile, info) && (info.time_valid & uni::FILESYS_TIME_MODIFIED)) {
-		prop.modified = info.modified;
-		prop.modified_valid = 1;
+	uni::SharedPtr<uni::vfs_inode> inode;
+	{
+		auto files = pb->fileman.Lock();
+		// Retain the inode before another thread can close or reuse this descriptor.
+		if (object >= files->pfiles.Count() || !files->pfiles[object] ||
+			!files->pfiles[object]->vfile || !files->pfiles[object]->vfile->f_inode) return -EBADF;
+		inode = files->pfiles[object]->vfile->f_inode;
 	}
-	#endif
-
-	MccaMemCopyP(
-		(void*)usr_proper, pb, false,
-		&prop, nullptr, true,
-		sizeof(prop));
-	return 0; // Success
+	file_status_t result{};
+	const int status = Filesys::StatInode(inode, result);
+	if (status < 0) return status;
+	const stduint size = type == file_property_query_t::LegacyDescriptor ?
+		sizeof(file_proper_t) : sizeof(file_status_t);
+	if (usr_proper > ~_IMM0 - size) return -EFAULT;
+	const bool kernel_output = pb->ring == RING_M;
+	// User output may fault through a file mapping, so copy after releasing fileman and VFS.
+	return MccaMemCopyP((void*)usr_proper, kernel_output ? nullptr : pb, kernel_output,
+		&result, nullptr, true, size) == size ? 0 : -EFAULT;
 }
 
 DEFSYSC sysc_IOCT(stduint fd, stduint cmd, stduint usr_arg) {
@@ -1413,12 +1440,12 @@ DEFSYSC sysc_MMAP(stduint len, stduint flag, stduint fd) {
 		return ~_IMM0; // Reject kernel page table
 	}
 	stduint offset = 0;
+	stduint requested_prot = PROT_NONE;
 	VirtualMemoryAreaMode requested_mode = VirtualMemoryAreaMode::Shared;
 	stduint requested_address = 0;
 	bool fixed = false;
 	bool anonymous = false;
 	bool reservation = false;
-	bool executable_file = false;
 	if (flag == ~_IMM0) {
 		const stduint usr_req = fd;
 		if (usr_req < 0x1000 ||
@@ -1445,11 +1472,9 @@ DEFSYSC sysc_MMAP(stduint len, stduint flag, stduint fd) {
 			VirtualMemoryAreaMode::Private : VirtualMemoryAreaMode::Shared;
 		fixed = !!(req.flags & MAP_FIXED);
 		anonymous = !!(req.flags & MAP_ANONYMOUS);
-		// Preserve legacy writable shared mappings; loader images use MAP_PRIVATE.
-		executable_file = !anonymous && !!(req.prot & PROT_EXEC) &&
-			!(mode == MAP_SHARED && (req.prot & PROT_WRITE));
 		reservation = anonymous && !fixed && req.prot == PROT_NONE;
 		requested_address = req.address;
+		requested_prot = req.prot;
 		flag = req.prot ? PGPROP_present | PGPROP_user_access : 0;
 		if (req.prot & PROT_WRITE) flag |= PGPROP_writable;
 		#if _MCCA != 0x8632
@@ -1470,6 +1495,9 @@ DEFSYSC sysc_MMAP(stduint len, stduint flag, stduint fd) {
 		#endif
 		if ((flag & ~allowed) || !(flag & PGPROP_present) ||
 			!(flag & PGPROP_user_access)) return ~_IMM0;
+		requested_prot = PROT_READ;
+		if (flag & PGPROP_writable) requested_prot |= PROT_WRITE;
+		if (!(flag & PGPROP_nonexecutable)) requested_prot |= PROT_EXEC;
 	}
 	if (!len || len > ~_IMM0 - 0xFFF) return ~_IMM0;
 	len = (len + 0xFFF) & ~_IMM(0xFFF); // Align to 4KB page size
@@ -1485,18 +1513,39 @@ DEFSYSC sysc_MMAP(stduint len, stduint flag, stduint fd) {
 	MutexLocal mapping_guard(&pb->mutex_mapping);
 	VirtualMemoryArea vma(0, 0, flag);
 	vma.vm_reservation = reservation;
+	vma.vm_prot = requested_prot;
 	if (fd != ~_IMM0) {
-		auto files = pb->fileman.Lock();
-		if (fd >= files->pfiles.Count() || !files->pfiles[fd] ||
-			!files->pfiles[fd]->vfile) return ~_IMM0;
-		uni::vfs_file* parent_vfile = files->pfiles[fd]->vfile;
-		uni::vfs_file* nvfile = new uni::vfs_file(*parent_vfile);
-		if (!nvfile) return ~_IMM0;
+		int open_mode;
+		{
+			auto files = pb->fileman.Lock();
+			if (fd >= files->pfiles.Count() || !files->pfiles[fd] ||
+				!files->pfiles[fd]->vfile) return ~_IMM0;
+			open_mode = files->pfiles[fd]->fd_mode;
+			vma.vfile = new uni::vfs_file(*files->pfiles[fd]->vfile);
+			if (!vma.vfile) return ~_IMM0;
+			vma.vfile->f_mode = open_mode;
+		}
+		// Retain the file before dropping fileman, then query VFS without holding a spinlock.
+		const int status = Filesys::GetMappingPermissions(vma.vfile, open_mode,
+			requested_mode == VirtualMemoryAreaMode::Shared, vma.vm_max_prot);
+		if (status < 0 || (requested_prot & ~vma.vm_max_prot)) {
+			Filesys::Close(vma.vfile);
+			return ~_IMM0;
+		}
+		#if _MCCA == 0x8632
+		// This page-table format cannot prevent execution of a present noexec file mapping.
+		if (requested_prot && !(vma.vm_max_prot & PROT_EXEC)) {
+			Filesys::Close(vma.vfile);
+			return ~_IMM0;
+		}
+		#endif
 		vma.vm_type = VirtualMemoryAreaType::File;
 		vma.vm_mode = requested_mode;
-		vma.vfile = nvfile;
 		vma.file_offset = offset;
 	}
+	// Preserve legacy writable shared mappings; loader images use MAP_PRIVATE.
+	const bool executable_file = vma.vfile && (requested_prot & PROT_EXEC) &&
+		!(requested_mode == VirtualMemoryAreaMode::Shared && (requested_prot & PROT_WRITE));
 	bool mapped_pin_added = false;
 	if (executable_file &&
 		!uni::PinMappedExecutableImage(pb, vma.vfile, mapped_pin_added)) {
@@ -1553,6 +1602,7 @@ DEFSYSC sysc_SMAP(stduint addr, stduint len, stduint prot) {
 	if (prot && !(prot & PROT_EXEC)) flags |= PGPROP_nonexecutable;
 	#endif
 	MutexLocal mapping_guard(&pb->mutex_mapping);
+	if (!pb->CanProtectVmaRange(addr, len, prot)) return ~_IMM0;
 	struct ExecutableFilePinPlan {
 		uni::vfs_file* file = nullptr;
 		bool created = false;
@@ -1585,7 +1635,7 @@ DEFSYSC sysc_SMAP(stduint addr, stduint len, stduint prot) {
 					pins[j].file->f_inode.get());
 		return ~_IMM0;
 	}
-	const bool protected_range = pb->ProtectVmaRange(addr, len, flags);
+	const bool protected_range = pb->ProtectVmaRange(addr, len, flags, prot);
 	if (!protected_range)
 		for (stduint i = 0; i < pin_count; i++)
 			if (pins[i].created)
@@ -1595,14 +1645,17 @@ DEFSYSC sysc_SMAP(stduint addr, stduint len, stduint prot) {
 }
 #else
 DEFSYSC sysc_MMAP(stduint len, stduint flag, stduint fd) {
-	(void)flag; (void)fd;
+	// NoMMU only serves the legacy anonymous RW heap request; file and structured mappings are unsupported.
+	const stduint heap_flags = PGPROP_present | PGPROP_writable | PGPROP_user_access;
+	if (fd != ~_IMM0 || flag != heap_flags) return ~_IMM0;
 	auto* th = Taskman::CurrentTB();
 	ProcessBlock* pb = th ? th->parent_process : nullptr;
-	if (!pb || !len) return ~_IMM0;
+	if (!pb || !len || len > ~_IMM0 - 0xFFF) return ~_IMM0;
 	len = (len + 0xFFF) & ~_IMM(0xFFF);
 	const stduint block_btm = pb->load_slices[0].address;
+	if (pb->load_slices[0].length > ~_IMM0 - block_btm) return ~_IMM0;
 	const stduint block_end = block_btm + pb->load_slices[0].length;
-	if (!block_btm || pb->heaptop < block_btm || pb->heaptop + len > block_end) {
+	if (!block_btm || pb->heaptop < block_btm || pb->heaptop > block_end || len > block_end - pb->heaptop) {
 		plogerro("%s: bad user heap at %[x] in [%[x], %[x])", __FUNCIDEN__, pb->heaptop, block_btm, block_end);
 		return ~_IMM0;
 	}
@@ -1650,7 +1703,7 @@ stduint SYSCALL_TABLE[] = {
 	mglb(sysc_READ),
 	mglb(sysc_WRIT),
 	mglb(sysc_DELF),
-	mglb(sysc_PORP),
+	mglb(sysc_PROP),
 	mglb(sysc_ENUM),// U-only
 	mglb(sysc_WAIT),
 	mglb(sysx_FORK) & 0,// Fork need frame, process it other way
@@ -1744,8 +1797,8 @@ void syscall_body(NormalTaskContext* cxt)
 	case syscall_t::GETD:
 		cxt->a0 = sysc_GETD(cxt->a0, cxt->a1);
 		break;
-	case syscall_t::PORP:
-		cxt->a0 = sysc_PORP(cxt->a0, cxt->a1);
+	case syscall_t::PROP:
+		cxt->a0 = sysc_PROP(cxt->a0, cxt->a1, cxt->a2);
 		break;
 	case syscall_t::ENUM:
 		cxt->a0 = sysc_ENUM(cxt->a0, cxt->a1, cxt->a2);

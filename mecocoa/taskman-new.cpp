@@ -591,6 +591,7 @@ ProcessBlock* Taskman::CreateFork(ProcessBlock* fo, const CallgateFrame* frame) 
 	// Copy Heap VMAs and mapped pages
 	pb->heapbtm = fo->heapbtm;
 	pb->heaptop = fo->heaptop;
+	// Copy current protection and its mapping-time ceiling before cloning backing-file references.
 	pb->vmas = fo->vmas;
 	for (stduint i = 0; i < pb->vmas.Count(); i++) {
 		if (pb->vmas[i].vm_type == VirtualMemoryAreaType::File)
@@ -889,8 +890,10 @@ namespace uni {
 	bool TransferExecutableImagePin(ProcessBlock* source,
 		ProcessBlock* destination);
 }
+#endif
+
 ProcessBlock* Taskman_CreateELF_File(BlockTrait* source,
-	uni::vfs_file* image_file, byte ring, bool append);
+	uni::vfs_file* image_file, byte ring, const ProcessCredentials& credentials, ELFLoadInfo* info);
 
 // File reads release vfs_lock before the ELF loader acquires other locks.
 class LockedFileBlockBridge : public FileBlockBridge {
@@ -903,51 +906,62 @@ public:
 	}
 };
 
-#endif
-
-//
-ProcessBlock* Taskman::CreateFile(const char* path, byte ring, stduint parent, vfs_dentry* base, bool append) {
-	//{} ELF
-	auto label = StrIndexCharRight(path, '/');
-	if (!label) label = path; else label++;
-	vfs_dentry* d = Filesys::Index(path, base);
-	if (d && d->d_inode && d->d_inode->i_sb && d->d_inode->i_sb->fs) {
-		ProcessBlock* task = nullptr;
-		#if CONFIG_ENABLE_MMU
-		LockedFileBlockBridge loop_device(d->d_inode->i_sb->fs,
-			d->d_inode->internal_handler, d->d_inode->i_size, 512);
-		uni::vfs_file image_file;
-		image_file.f_inode = d->d_inode;
-		image_file.f_mode = O_RDONLY;
-		task = (image_file.f_inode->i_mode & I_TYPE_MASK) == I_REGULAR ?
-			Taskman_CreateELF_File(&loop_device, &image_file, ring, append) :
-			Taskman::CreateELF(&loop_device, ring, append);
-		#else
-		FileBlockBridge loop_device(d->d_inode->i_sb->fs,
-			d->d_inode->internal_handler, d->d_inode->i_size, 512);
+// Authorize before loading on MMU and noMMU, and retain the opened inode until all image reads finish.
+static ProcessBlock* LoadProgramFile(const char* path, byte ring,
+	const ProcessCredentials& credentials, vfs_dentry* cwd, uint64 cwd_identity, ELFLoadInfo* info) {
+	vfs_file* opened = nullptr;
+	if (Filesys::OpenExecutable(path, &opened, credentials, cwd, cwd_identity)) return nullptr;
+	ProcessBlock* task;
+	{
+		auto inode = opened->f_inode;
+		FilesysTrait* fs;
+		void* handler;
+		stduint size;
 		{
-			MutexLocal guard(&vfs_lock);// the loader reads through the same FAT buffers as the VFS: one reader at a time
-			task = Taskman::CreateELF(&loop_device, ring, append);
+			MutexLocal guard(&vfs_lock);
+			fs = inode->mount_state->filesystem;
+			handler = inode->internal_handler;
+			size = inode->i_size;
 		}
-		#endif
-		if (task) {
-			task->parent_id = parent;
-			ProcessBlock* pparent = Taskman::Locate(parent);
-			if (pparent) {
-				auto parent_files = pparent->fileman.Lock();
-				auto task_files = task->fileman.Lock();
-				task_files->cwd = parent_files->cwd;
-				task_files->cwd_identity = parent_files->cwd_identity;
-				task_files->root = parent_files->root;
-			}
-			printlog(_LOG_INFO, "Loaded %s from %s", label, path);
-			return task;
-		}
-		else plogerro("%s: ELF Load Fail", label);
+		LockedFileBlockBridge source(fs, handler, size, 512);
+		// Each read releases vfs_lock before the loader takes mapping, allocation, or scheduler locks.
+		task = Taskman_CreateELF_File(&source, opened, ring, credentials, info);
 	}
-	else plogwarn("%s: Not found at %s", label, path);
-	return nullptr;
-};
+	Filesys::Close(opened);
+	return task;
+}
+
+// Trusted boot and driver loaders explicitly authorize with root credentials before publishing the task.
+ProcessBlock* Taskman::CreateFile(const char* path, byte ring, stduint parent, vfs_dentry* base, bool append) {
+	const ProcessCredentials credentials{};
+	uint64 cwd_identity = 0;
+	if (base) {
+		// Trusted callers supply a live base; retain its identity for the subsequent checked lookup.
+		MutexLocal guard(&vfs_lock);
+		if (!base->d_inode) return nullptr;
+		cwd_identity = base->d_inode->identity;
+	}
+	auto* task = LoadProgramFile(path, ring, credentials, base, cwd_identity, nullptr);
+	if (!task) return nullptr;
+	task->parent_id = parent;
+	auto* pparent = ProcessBlock::AcquireActiveByPID(parent);
+	if (pparent) {
+		{
+			auto parent_files = pparent->fileman.Lock();
+			auto task_files = task->fileman.Lock();
+			task_files->cwd = parent_files->cwd;
+			task_files->cwd_identity = parent_files->cwd_identity;
+			task_files->root = parent_files->root;
+		}
+		ProcessBlock::Release(pparent);
+	}
+	if (append) {
+		Taskman::Append(task);
+		Taskman::AppendThread(task->main_thread);
+	}
+	printlog(_LOG_INFO, "Loaded %s", path);
+	return task;
+}
 
 #if CONFIG_ENABLE_MMU
 
@@ -978,45 +992,26 @@ static void DiscardUnstartedImage(ProcessBlock* process) {
 }
 
 //
-ProcessBlock* Taskman::Exec(stduint parent, rostr usr_fullpath, char** usr_argv, char** usr_envp)
+ProcessBlock* Taskman::Exec(ProcessBlock* parent_pb, rostr usr_fullpath, char** usr_argv, char** usr_envp)
 {
 	static char buf_fullpath[_TEMP 512];
-	auto parent_pb = Locate(parent);
+	const stduint parent = parent_pb ? parent_pb->pid : 0;
 	if (!parent_pb || !MccaStrCopyP(buf_fullpath, sizeof(buf_fullpath),
 		usr_fullpath, parent_pb) || !buf_fullpath[0]) return nullptr;
-	vfs_dentry* parent_cwd = nullptr;
+	ELFLoadInfo info;
+	vfs_dentry* parent_cwd;
+	uint64 cwd_identity;
 	{
-		auto parent_files = parent_pb->fileman.Lock();
-		parent_cwd = parent_files->cwd;
+		auto files = parent_pb->fileman.Lock();
+		parent_cwd = files->cwd;
+		cwd_identity = files->cwd_identity;
 	}
-
-	auto new_pb = Taskman::CreateFile(buf_fullpath, RING_U, parent, parent_cwd, false);
+	auto* new_pb = LoadProgramFile(buf_fullpath, RING_U, parent_pb->credentials,
+		parent_cwd, cwd_identity, &info);
 	if (!new_pb) return nullptr;
-	new_pb->credentials = parent_pb->credentials;
-
-	vfs_dentry* d = Filesys::Index(buf_fullpath, parent_cwd);
-	if (!d) {
-		DiscardUnstartedImage(new_pb);
-		return nullptr;
-	}
-	FileBlockBridge loop_device(d->d_inode->i_sb->fs, d->d_inode->internal_handler, d->d_inode->i_size, 512);
-	ELF_Header_t header;
-	String block_buffer(String::Charset::Memory, 512);
-	loop_device.Read(0, &header, sizeof(header), (byte*)block_buffer.reflect());
-
-	stduint load_bias = (header.e_type == ET_DYN) ? 0x400000 : 0;
-	stduint phdr_addr = 0;
-	for (stduint i = 0; i < header.e_phnum; i++) {
-		struct ELF_PHT_t ph;
-		loop_device.Read(header.e_phoff + i * header.e_phentsize, &ph, sizeof(ph), (byte*)block_buffer.reflect());
-		if (ph.p_type == PT_DYNAMIC) {
-			// PIE STATIC will have PT_DYNAMIC, do not abort; the interpreter is handled in CreateELF and AT_ENTRY stays the main entry
-		}
-		if (ph.p_type == PT_PHDR) phdr_addr = ph.p_vaddr + load_bias;
-		if (ph.p_type == PT_LOAD && ph.p_offset == 0 && !phdr_addr) phdr_addr = ph.p_vaddr + load_bias + header.e_phoff;
-	}
-
-	stduint new_sp = Taskman::SetupStack(new_pb, parent_pb, usr_argv, usr_envp, (stduint)header.e_entry + load_bias, phdr_addr, header.e_phnum, header.e_phentsize);
+	new_pb->parent_id = parent;
+	stduint new_sp = Taskman::SetupStack(new_pb, parent_pb, usr_argv, usr_envp,
+		info.entry, info.phdr, info.phnum, info.phent);
 	if (!new_sp) {
 		DiscardUnstartedImage(new_pb);
 		return nullptr;
@@ -1068,11 +1063,11 @@ ProcessBlock* Taskman::Exec(stduint parent, rostr usr_fullpath, char** usr_argv,
 }
 
 //
-ProcessBlock* Taskman::Exet(stduint parent, rostr usr_fullpath,
+ProcessBlock* Taskman::Exet(ProcessBlock* current_pb, rostr usr_fullpath,
 	char** usr_argv, char** usr_envp)
 {
 	static char buf_fullpath[512];
-	auto current_pb = Locate(parent);
+
 	if (!current_pb || !current_pb->main_thread) return nullptr;
 	if (current_pb->thread_list_head != current_pb->main_thread ||
 		current_pb->main_thread->process_thread_next) {
@@ -1081,44 +1076,20 @@ ProcessBlock* Taskman::Exet(stduint parent, rostr usr_fullpath,
 	}
 	if (!MccaStrCopyP(buf_fullpath, sizeof(buf_fullpath),
 		usr_fullpath, current_pb) || !buf_fullpath[0]) return nullptr;
-	vfs_dentry* current_cwd = nullptr;
+	ELFLoadInfo info;
+	vfs_dentry* current_cwd;
+	uint64 cwd_identity;
 	{
-		auto current_files = current_pb->fileman.Lock();
-		current_cwd = current_files->cwd;
+		auto files = current_pb->fileman.Lock();
+		current_cwd = files->cwd;
+		cwd_identity = files->cwd_identity;
 	}
-
-	vfs_dentry* d = Filesys::Index(buf_fullpath, current_cwd);
-	if (!d || !d->d_inode || !d->d_inode->i_sb ||
-		!d->d_inode->i_sb->fs) return nullptr;
-	LockedFileBlockBridge loop_device(d->d_inode->i_sb->fs,
-		d->d_inode->internal_handler, d->d_inode->i_size, 512);
-	String block_buffer(String::Charset::Memory, 512);
-	ELF_Header_t header;
-	auto replacement = Taskman::CreateFile(buf_fullpath, current_pb->ring,
-		current_pb->parent_id, current_cwd, false);
+	// Prepare using the current process credentials before entering the destructive image commit.
+	auto* replacement = LoadProgramFile(buf_fullpath, current_pb->ring,
+		current_pb->credentials, current_cwd, cwd_identity, &info);
 	if (!replacement) return nullptr;
-	if (loop_device.Read(0, &header, sizeof(header),
-		(byte*)block_buffer.reflect()) != sizeof(header)) {
-		DiscardUnstartedImage(replacement);
-		return nullptr;
-	}
-	const stduint load_bias = header.e_type == ET_DYN ? 0x400000 : 0;
-	stduint phdr_addr = 0;
-	for (stduint i = 0; i < header.e_phnum; i++) {
-		ELF_PHT_t ph;
-		if (loop_device.Read(header.e_phoff + i * header.e_phentsize,
-			&ph, sizeof(ph), (byte*)block_buffer.reflect()) != sizeof(ph)) {
-			DiscardUnstartedImage(replacement);
-			return nullptr;
-		}
-		if (ph.p_type == PT_PHDR) phdr_addr = ph.p_vaddr + load_bias;
-		if (ph.p_type == PT_LOAD && !ph.p_offset && !phdr_addr)
-			phdr_addr = ph.p_vaddr + load_bias + header.e_phoff;
-	}
-
 	const stduint new_sp = Taskman::SetupStack(replacement, current_pb,
-		usr_argv, usr_envp, (stduint)header.e_entry + load_bias,
-		phdr_addr, header.e_phnum, header.e_phentsize);
+		usr_argv, usr_envp, info.entry, info.phdr, info.phnum, info.phent);
 	if (!new_sp) {
 		DiscardUnstartedImage(replacement);
 		return nullptr;

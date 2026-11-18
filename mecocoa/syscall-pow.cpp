@@ -1439,6 +1439,7 @@ static stduint MapPwcallPhysicalRange(ProcessBlock* pb, stduint phys_begin,
 	}
 	VirtualMemoryArea vma(vaddr, vaddr + map_size, page_flags);
 	vma.vm_type = VirtualMemoryAreaType::Device;
+	vma.vm_max_prot = vma.vm_prot; // Device mappings retain their creation-time grant.
 	{
 		SpinlockLocal guard(&pb->vma_lock);
 		if (!pb->InsertVmaSorted(vma)) return 0;

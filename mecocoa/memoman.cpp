@@ -4,6 +4,7 @@
 #include "../include/mecocoa.hpp"
 #include "c/arith.h"
 #include <c/API-POSIX/fcntl.h>
+#include <c/msgface.h>
 // for x86, one slice should begin with 0x100000 (above F000:FFFF)
 
 #if CONFIG_ENABLE_MMU
@@ -18,7 +19,7 @@ namespace uni {
 		uint64& version, stduint& physical_address);
 	void UnpinMappedExecutableImage(ProcessBlock* process, vfs_inode* inode);
 	void* MapSharedFileVmaPage(ProcessBlock* process, stduint address,
-		VirtualMemoryAccess access, stduint expected_flags,
+		VirtualMemoryAccess access, stduint expected_flags, stduint expected_prot,
 		stduint file_offset, vfs_inode* inode);
 	void* ResolveSharedFileWrite(ProcessBlock* process, stduint address);
 	bool UnregisterSharedFileAlias(uint64 identity, stduint file_offset,
@@ -68,17 +69,20 @@ stduint MccaMemCopyPPrepared(
 }
 
 bool MccaStrCopyP(char* destination, stduint capacity,
-	const char* source, ProcessBlock* process, stduint* length) {
+	const char* source, ProcessBlock* process, stduint* length, stdsint* error) {
+	if (error) *error = -EFAULT;
 	if (length) *length = 0;
 	if (destination && capacity) destination[0] = '\0';
 	if (!capacity || !source || !process || (!destination && !length))
 		return false;
 	#if !CONFIG_ENABLE_MMU
 	for (stduint copied = 0; copied < capacity; copied++) {
+		if ((stduint)source > ~_IMM0 - copied) return false;
 		const char value = source[copied];
 		if (destination) destination[copied] = value;
 		if (value) continue;
 		if (length) *length = copied;
+		if (error) *error = 0;
 		return true;
 	}
 	#else
@@ -101,12 +105,14 @@ bool MccaStrCopyP(char* destination, stduint capacity,
 		for (stduint i = 0; i < chunk; i++) {
 			if (target[i]) continue;
 			if (length) *length = copied + i;
+			if (error) *error = 0;
 			return true;
 		}
 		copied += chunk;
 	}
 	#endif
 	if (destination) destination[0] = '\0';
+	if (error) *error = -ENAMETOOLONG;
 	return false;
 }
 
@@ -491,14 +497,37 @@ static bool SplitProtectedVmaAt(ProcessBlock* pb, stduint boundary,
 	return true;
 }
 
+// Caller holds mutex_mapping; only inspect VMA metadata while holding vma_lock.
+bool ProcessBlock::CanProtectVmaRange(stduint address, stduint length, stduint prot) {
+	if (!length || ((address | length) & (PAGE_SIZE - 1)) || length > ~_IMM0 - address ||
+		(prot & ~(PROT_READ | PROT_WRITE | PROT_EXEC)) || (prot && !(prot & PROT_READ))) return false;
+	const stduint end = address + length;
+	SpinlockLocal guard(&vma_lock);
+	stduint covered = address;
+	for (stduint i = 0; i < vmas.Count() && covered < end; i++) {
+		const auto& vma = vmas[i];
+		if (vma.vm_end <= covered) continue;
+		if (vma.vm_start > covered || vma.vm_type == VirtualMemoryAreaType::Device ||
+			(prot & ~vma.vm_max_prot)) return false;
+		#if _MCCA == 0x8632
+		if (prot && vma.vm_type == VirtualMemoryAreaType::File &&
+			!(vma.vm_max_prot & PROT_EXEC)) return false;
+		#endif
+		covered = minof(end, vma.vm_end);
+	}
+	return covered == end;
+}
+
 bool ProcessBlock::ProtectVmaRange(stduint address, stduint length,
-	stduint flags) {
-	if (!length || ((address | length) & (PAGE_SIZE - 1)) ||
-		length > ~_IMM0 - address ||
-		(flags & ~(PGPROP_present | PGPROP_user_access |
-			PGPROP_writable | PGPROP_nonexecutable)) ||
-		!!(flags & PGPROP_present) != !!(flags & PGPROP_user_access))
-		return false;
+	stduint flags, stduint prot) {
+	if (!CanProtectVmaRange(address, length, prot)) return false;
+	// Logical and hardware permissions must describe the same request before either is committed.
+	stduint expected_flags = prot ? PGPROP_present | PGPROP_user_access : 0;
+	if (prot & PROT_WRITE) expected_flags |= PGPROP_writable;
+	#if _MCCA != 0x8632
+	if (prot && !(prot & PROT_EXEC)) expected_flags |= PGPROP_nonexecutable;
+	#endif
+	if (flags != expected_flags) return false;
 	const stduint end = address + length;
 	struct ProtectionPage {
 		PageEntry* leaf = nullptr;
@@ -589,6 +618,7 @@ bool ProcessBlock::ProtectVmaRange(stduint address, stduint length,
 			auto& vma = vmas[i];
 			if (vma.vm_start >= address && vma.vm_end <= end) {
 				vma.vm_flags = flags;
+				vma.vm_prot = prot;
 				if (flags) vma.vm_reservation = false;
 			}
 		}
@@ -612,6 +642,7 @@ static void MergeAdjacentAnonymousVmas(ProcessBlock* pb) {
 			right.vm_type == VirtualMemoryAreaType::Anonymous &&
 			left.vm_end == right.vm_start && left.vm_flags == right.vm_flags &&
 			left.vm_mode == right.vm_mode &&
+			left.vm_prot == right.vm_prot && left.vm_max_prot == right.vm_max_prot &&
 			left.vm_reservation == right.vm_reservation) {
 			left.vm_end = right.vm_end;
 			pb->vmas.Remove(i + 1, 1);
@@ -865,9 +896,9 @@ static bool VmaAllowsAccess(const VirtualMemoryArea& vma,
 	if (!(vma.vm_flags & PGPROP_present) ||
 		!(vma.vm_flags & PGPROP_user_access)) return false;
 	if (access == VirtualMemoryAccess::Write)
-		return !!(vma.vm_flags & PGPROP_writable);
+		return !!(vma.vm_prot & PROT_WRITE) && !!(vma.vm_flags & PGPROP_writable);
 	if (access == VirtualMemoryAccess::Execute)
-		return !(vma.vm_flags & PGPROP_nonexecutable);
+		return !!(vma.vm_prot & PROT_EXEC) && !(vma.vm_flags & PGPROP_nonexecutable);
 	return true;
 }
 
@@ -893,7 +924,7 @@ static void ReleaseVmaReadFile(uni::vfs_file* file) {
 }
 
 static void* MapCachedFileVmaPage(ProcessBlock* pb, stduint address,
-	VirtualMemoryAccess access, stduint expected_flags,
+	VirtualMemoryAccess access, stduint expected_flags, stduint expected_prot,
 	VirtualMemoryAreaMode expected_mode, stduint file_offset,
 	uni::vfs_file* read_file) {
 	uni::vfs_inode* inode = read_file->f_inode.get();
@@ -929,6 +960,7 @@ static void* MapCachedFileVmaPage(ProcessBlock* pb, stduint address,
 					if (address < vma.vm_start || address >= vma.vm_end) continue;
 					if (vma.vm_type != VirtualMemoryAreaType::File ||
 						vma.vm_mode != expected_mode || vma.vm_flags != expected_flags ||
+						vma.vm_prot != expected_prot ||
 						((vma.vm_flags & PGPROP_writable) &&
 							vma.vm_mode != VirtualMemoryAreaMode::Private) ||
 						!VmaAllowsAccess(vma, access) || !vma.vfile ||
@@ -966,6 +998,7 @@ void* ProcessBlock::EnsureVmaPage(stduint address, VirtualMemoryAccess access) {
 	VirtualMemoryAreaType expected_type = VirtualMemoryAreaType::Anonymous;
 	VirtualMemoryAreaMode expected_mode = VirtualMemoryAreaMode::Private;
 	stduint expected_flags = 0;
+	stduint expected_prot = PROT_NONE;
 	stduint expected_file_offset = 0;
 	bool file_backed = false;
 	bool found = false;
@@ -982,6 +1015,7 @@ void* ProcessBlock::EnsureVmaPage(stduint address, VirtualMemoryAccess access) {
 			expected_type = vma.vm_type;
 			expected_mode = vma.vm_mode;
 			expected_flags = vma.vm_flags;
+			expected_prot = vma.vm_prot;
 			found = true;
 			file_backed = vma.vm_type == VirtualMemoryAreaType::File;
 			if (file_backed) {
@@ -1009,12 +1043,13 @@ void* ProcessBlock::EnsureVmaPage(stduint address, VirtualMemoryAccess access) {
 				void* physical = nullptr;
 				if (_IMM(paging[address]) != ~_IMM0) {
 					raced = true;
-					raced_allowed = PageAllowsAccess(this, address, access, physical);
+					raced_allowed = VmaAllowsAccess(vma, access) && PageAllowsAccess(this, address, access, physical);
 					raced_physical = physical;
 					break;
 				}
 				if (vma.vm_type != expected_type || vma.vm_mode != expected_mode ||
-					vma.vm_flags != expected_flags || !VmaAllowsAccess(vma, access) ||
+					vma.vm_flags != expected_flags || vma.vm_prot != expected_prot ||
+					!VmaAllowsAccess(vma, access) ||
 					!vma.vfile || address - vma.vm_start + vma.file_offset !=
 						expected_file_offset) break;
 				*read_file = *vma.vfile;
@@ -1033,13 +1068,13 @@ void* ProcessBlock::EnsureVmaPage(stduint address, VirtualMemoryAccess access) {
 	}
 	if (file_backed && expected_mode == VirtualMemoryAreaMode::Private) {
 		void* result = MapCachedFileVmaPage(this, address, access,
-			expected_flags, expected_mode, expected_file_offset, read_file);
+			expected_flags, expected_prot, expected_mode, expected_file_offset, read_file);
 		ReleaseVmaReadFile(read_file);
 		return result;
 	}
 	if (file_backed && expected_mode == VirtualMemoryAreaMode::Shared) {
 		void* result = uni::MapSharedFileVmaPage(this, address, access,
-			expected_flags, expected_file_offset, read_file->f_inode.get());
+			expected_flags, expected_prot, expected_file_offset, read_file->f_inode.get());
 		ReleaseVmaReadFile(read_file);
 		return result;
 	}
@@ -1080,7 +1115,7 @@ void* ProcessBlock::EnsureVmaPage(stduint address, VirtualMemoryAccess access) {
 				break;
 			}
 			if (vma.vm_type != expected_type || vma.vm_mode != expected_mode ||
-				vma.vm_flags != expected_flags) break;
+				vma.vm_flags != expected_flags || vma.vm_prot != expected_prot) break;
 			if (file_backed && (!vma.vfile || !read_file ||
 				vma.vfile->f_inode.get() != read_file->f_inode.get() ||
 				address - vma.vm_start + vma.file_offset != expected_file_offset)) break;

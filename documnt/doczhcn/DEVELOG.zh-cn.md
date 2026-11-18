@@ -1,3 +1,15 @@
+## 2026-11-18
+
+- 15:38（UTC+8）PROP 接入 chmod/fchmod/chown/fchown，VFS 统一检查属主、root、只读挂载和后端能力，并在设置成功后更新 inode。路径授权和 stat 合并 permit 原生权限，FAT 部分写权限限制保留挂载默认值。Unisym chmod/chown 命令接入八进制 mode、数字 UID/GID、多路径处理和错误输出，中文文件系统文档补充用法与支持范围。
+
+- 15:05（UTC+8）共享 FilesysTrait 增加 permit 原生权限 get/set 接口，结果包含有效字段、mode 位掩码和错误状态。FAT 接入普通文件只读属性读写，UDF 接入磁盘 UID/GID/mode 读取；RootFs 接入内存权限读写，ISO9660、DevFs 和设备树明确返回当前支持范围。中文 FILESYS 文档补充后端能力表和调用约定。
+
+- 13:57（UTC+8）PROP 第三参数区分旧 fd、新 fd 和路径属性查询，旧结果长度保留。VFS 在同一次持锁期间取得大小、mode、UID/GID 和可选修改时间；stat 经 Fileman 直接查路径，fstat 保留 inode 后查询，用户拷贝失败返回 EFAULT。共享 Unisym stat 头补充属主和属组，中文 FILESYS 文档补充权限表、字段及兼容说明。
+
+- 13:09（UTC+8）普通文件 mmap 按 fd 打开方式和挂载限制保存权限上限，mprotect 在执行 pin 前检查整个区间。VMA 逻辑权限随拆分、合并、fork 和缺页重检查保留，ELF 与 RELRO 同步维护。新增持久 no_execute 挂载策略，覆盖启动和文件执行映射；noMMU 明确拒绝文件及结构体映射请求。MEMOMAN 中文文档补充权限表与平台限制。
+
+- 11:34（UTC+8）ELF 主程序和 PT_INTERP 解释器统一经 OpenExecutable 按请求进程凭据检查目录搜索与文件执行权限，持有同一 inode 加载并返回建栈信息。EXEC/EXET 按消息发送线程核对调用进程。noMMU 静态 PIE 共用授权入口，逐次读取时持有 VFS 锁，拒绝 PT_INTERP 并回收加载失败的映像内存。内置 /md0 程序卷普通文件合成权限设为 0755。
+
 ## 2026-11-17
 
 - 18:47（UTC+8）屏幕信息通过 Ring1 发布显示代理保存的设备句柄关联显示驱动名；保留内核显示驱动原有的 `driver_data` 查找路径，修复 Bochs 已接管但显示 `(unregistered)`。
