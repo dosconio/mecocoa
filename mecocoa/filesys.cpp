@@ -80,6 +80,7 @@ namespace uni {
 		if (identity && (i_mode & I_TYPE_MASK) == I_REGULAR)
 			ForgetFileCacheInode(identity);
 		#endif
+		if (destroy_handler) { destroy_handler(internal_handler); return; }
 		if (!is_unlinked || !internal_handler || !mount_state ||
 			!mount_state->filesystem) return;
 		mount_state->filesystem->reclaim(internal_handler);
@@ -374,26 +375,71 @@ namespace uni {
 	}
 
 
+	// RootFs handles own data independently of directory entries, preserving open files across unlink.
+	struct RootFsNode {
+		uint32 uid = 0;
+		uint32 gid = 0;
+		stduint mode = 0;
+		vfs_dentry* entry = nullptr;
+		byte* data = nullptr;
+		stduint size = 0;
+		stduint capacity = 0;
+		~RootFsNode() { delete[] data; }
+	};
+
+	static void DestroyRootFsNode(void* handler) { delete static_cast<RootFsNode*>(handler); }
+
+	// Caller holds vfs_lock; zero new storage so holes and truncate expansion never expose old data.
+	static bool ReserveRootFs(RootFsNode& node, stduint size) {
+		if (size <= node.capacity) return true;
+		stduint capacity = node.capacity ? node.capacity : 64;
+		while (capacity < size) {
+			if (capacity > ~stduint(0) / 2) { capacity = size; break; }
+			capacity *= 2;
+		}
+		auto* data = new byte[capacity];
+		if (!data) return false;
+		MemSet(data, 0, capacity);
+		if (node.size) MemCopyN(data, node.data, node.size);
+		delete[] node.data;
+		node.data = data;
+		node.capacity = capacity;
+		return true;
+	}
+
+	// Bind synthetic directory metadata to an inode-owned handle before publishing the inode.
+	static bool InitializeRootFsInode(vfs_inode& inode, vfs_dentry* entry) {
+		auto* node = new RootFsNode();
+		if (!node) return false;
+		node->uid = inode.i_uid;
+		node->gid = inode.i_gid;
+		node->mode = inode.i_mode;
+		node->entry = entry;
+		inode.internal_handler = node;
+		inode.destroy_handler = DestroyRootFsNode;
+		return true;
+	}
+
 	// A Pseudo Memory Filesystem to serve as Rootfs
 	class RootFs : public FilesysTrait {
 	public:
 		// RootFs owns its in-memory inode metadata; callers hold vfs_lock before reading or updating it.
 		virtual bool permit(void* handler, FilesysPermissionResult& result, bool set_or_get = false) override {
 			if (!set_or_get) result = {};
-			auto* entry = static_cast<vfs_dentry*>(handler);
+			auto* node = static_cast<RootFsNode*>(handler);
 			result.status = FilesysPermissionStatus::InvalidArgument;
-			if (!entry || !entry->d_inode) return false;
-			auto& inode = *entry->d_inode;
+			if (!node) return false;
+			auto& inode = *node;
 			if (set_or_get) {
 				if ((!result.fields.uid && !result.fields.gid && !result.fields.mode) ||
 					(result.fields.mode && ((result.mode | result.mode_mask) & ~stduint(07777)))) return false;
-				if (result.fields.uid) inode.i_uid = result.uid;
-				if (result.fields.gid) inode.i_gid = result.gid;
-				if (result.fields.mode) inode.i_mode = (inode.i_mode & ~result.mode_mask) | (result.mode & result.mode_mask);
+				if (result.fields.uid) inode.uid = result.uid;
+				if (result.fields.gid) inode.gid = result.gid;
+				if (result.fields.mode) inode.mode = (inode.mode & ~result.mode_mask) | (result.mode & result.mode_mask);
 			}
-			result.uid = inode.i_uid;
-			result.gid = inode.i_gid;
-			result.mode = inode.i_mode & 07777;
+			result.uid = inode.uid;
+			result.gid = inode.gid;
+			result.mode = inode.mode & 07777;
 			result.mode_mask = 07777;
 			result.fields.uid = result.fields.gid = result.fields.mode = true;
 			result.status = FilesysPermissionStatus::Success;
@@ -401,13 +447,27 @@ namespace uni {
 		}
 		virtual bool makefs(rostr vol_label, void* moreinfo = 0) override { return true; }
 		virtual bool loadfs(void* moreinfo = 0) override { return true; }
-		virtual bool create(rostr fullpath, stduint flags, void* exinfo, rostr linkdest = 0) override { return false; }
+		// Commit initial metadata before VFS makes the new name visible.
+		virtual bool create(rostr fullpath, stduint flags, FilesysCreateParameter& parameter) override {
+			const auto* attributes = parameter.attributes;
+			if (!attributes || parameter.linkdest) return false;
+			auto* parent = static_cast<RootFsNode*>(parameter.handler);
+			if (!parent || (parent->mode & I_TYPE_MASK) != I_DIRECTORY) return false;
+			auto* node = new RootFsNode();
+			if (!node) return false;
+			node->uid = attributes->uid;
+			node->gid = attributes->gid;
+			node->mode = (flags & O_DIRECTORY ? I_DIRECTORY : I_REGULAR) | attributes->mode;
+			parameter.handler = node;
+			return true;
+		}
 		virtual bool remove(rostr pathname) override { return false; }
 		virtual void* search(rostr fullpath, FilesysSearchArgs* args) override { return nullptr; }
 		virtual bool proper(void* handler, stduint cmd, const void* moreinfo = 0) override { return false; }
 		virtual bool enumer(void* dir_handler, _tocall_ft _fn, FilesysEnumState* state = nullptr) override {
-			// dir_handler is the vfs_dentry* of this directory (set at inode creation)
-			vfs_dentry* dir = (vfs_dentry*)dir_handler;
+			// The inode-owned handle links to its directory entry for namespace enumeration.
+			auto* node = static_cast<RootFsNode*>(dir_handler);
+			vfs_dentry* dir = node ? node->entry : nullptr;
 			if (!dir || !_fn) return false;
 			if (state && (state->finished || state->full())) return true;
 			vfs_dentry* child = dir->d_first_child;
@@ -420,8 +480,37 @@ namespace uni {
 			if (state && !state->full()) state->mark_finished();
 			return true;
 		}
-		virtual stduint readfl(void* fil_handler, Slice file_slice, byte* dst) override { return 0; }
-		virtual stduint writfl(void* fil_handler, Slice file_slice, const byte* src) override { return 0; }
+		// VFS holds vfs_lock and owns permission, file-size, executable-pin and page-cache checks.
+		virtual stduint readfl(void* handler, Slice range, byte* dst) override {
+			auto* node = static_cast<RootFsNode*>(handler);
+			if (!node || (node->mode & I_TYPE_MASK) != I_REGULAR || range.address >= node->size) return 0;
+			const stduint count = minof(range.length, node->size - range.address);
+			if (count) MemCopyN(dst, node->data + range.address, count);
+			return count;
+		}
+		virtual stduint writfl(void* handler, Slice range, const byte* src) override {
+			auto* node = static_cast<RootFsNode*>(handler);
+			if (!node || (node->mode & I_TYPE_MASK) != I_REGULAR || !range.length || range.address > ~stduint(0) - range.length) return 0;
+			const stduint end = range.address + range.length;
+			if (!ReserveRootFs(*node, end)) return 0;
+			MemCopyN(node->data + range.address, src, range.length);
+			if (end > node->size) node->size = end;
+			return range.length;
+		}
+		virtual bool truncate(void* handler, stduint size) override {
+			auto* node = static_cast<RootFsNode*>(handler);
+			if (!node || (node->mode & I_TYPE_MASK) != I_REGULAR || !ReserveRootFs(*node, size)) return false;
+			if (size < node->size) MemSet(node->data + size, 0, node->size - size);
+			node->size = size;
+			return true;
+		}
+		// Remove only the namespace association; inode destruction releases the backing bytes.
+		virtual bool unlink(rostr pathname, void* handler) override {
+			auto* node = static_cast<RootFsNode*>(handler);
+			if (!node || (node->mode & I_TYPE_MASK) != I_REGULAR) return false;
+			node->entry = nullptr;
+			return true;
+		}
 	};
 
 	static constexpr stduint kDeviceTreeRootMarker = 0x2000u;
@@ -658,7 +747,7 @@ namespace uni {
 		}
 		virtual bool makefs(rostr vol_label, void* moreinfo = 0) override { return true; }
 		virtual bool loadfs(void* moreinfo = 0) override { return true; }
-		virtual bool create(rostr fullpath, stduint flags, void* exinfo, rostr linkdest = 0) override { return false; }
+		virtual bool create(rostr fullpath, stduint flags, FilesysCreateParameter& parameter) override { return false; }
 		virtual bool remove(rostr pathname) override { return false; }
 		virtual void* search(rostr fullpath, FilesysSearchArgs* args) override {
 			if (!fullpath || !*fullpath) return nullptr;
@@ -830,7 +919,7 @@ void Filesys::Initialize() {
 	
 	auto root_inode = alloc_inode(root_sb);
 	root_inode->i_mode = InodeMode(*root_sb, I_DIRECTORY);
-	root_inode->internal_handler = vfs_root; // RootFs: dir_handler == its own dentry
+	if (!InitializeRootFsInode(*root_inode, vfs_root)) { plogerro("[RootFs] root allocation failed"); return; } // RootFs: retain the directory entry through its handle.
 	vfs_root->d_inode = root_inode;
 	vfs_root->d_mounted_on = nullptr;
 	
@@ -843,7 +932,7 @@ void Filesys::Initialize() {
 		vfs_dentry* dir_dentry = alloc_dentry(vfs_root, standard_dirs[i]);
 		auto dir_inod = alloc_inode(root_sb);
 		dir_inod->i_mode = InodeMode(*root_sb, I_DIRECTORY);
-		dir_inod->internal_handler = dir_dentry; // RootFs: dir_handler == its own dentry
+		if (!InitializeRootFsInode(*dir_inod, dir_dentry)) { plogerro("[RootFs] directory allocation failed"); return; } // RootFs: retain the directory entry through its handle.
 		dir_dentry->d_inode = dir_inod;
 	}
 
@@ -1485,10 +1574,11 @@ static vfs_dentry* _Create_unlocked(const char* pathname, stduint mode, vfs_dent
 		vfs_dentry* next_d = lookup_dentry(current, part, len);
 		if (!next_d) {
 			// Create the missing directory entry in the current filesystem (usually rootfs)
+			if (!current->d_inode || !current->d_inode->i_sb || current->d_inode->i_sb->fs != &global_rootfs_driver) return nullptr;
 			next_d = alloc_dentry(current, part);
 			auto inod = alloc_inode(current->d_inode->i_sb);
 			inod->i_mode = InodeMode(*current->d_inode->i_sb, I_DIRECTORY); // Mount points are always directories
-			inod->internal_handler = next_d; // RootFs: dir_handler == its own dentry
+			if (!InitializeRootFsInode(*inod, next_d)) { KASSERT(DetachDentry(next_d)); delete next_d; return nullptr; } // RootFs: retain the directory entry through its handle.
 			next_d->d_inode = inod;
 		}
 
@@ -1568,6 +1658,8 @@ bool Filesys::MountFilesys(FilesysTrait* fs, file_system_type* type, const char*
 	if (!system_virtual_root_path.getByteCount() && target_path) {
 		String check_path = String::newFormat("%s/.mcca.root", target_path);
 		if (_Index_unlocked(check_path.reference(), nullptr) != nullptr) {
+			// The system program volume needs synthetic execute bits for applications and ELF interpreters; native modes still override them.
+			if (sb->permissions.file_mode == 0644) sb->permissions.file_mode = 0755;
 			system_virtual_root_path = target_path;
 			#ifdef ARCH_NAME
 			system_runtime_root_path = String::newFormat("%s/" ARCH_NAME, target_path);
@@ -1844,7 +1936,7 @@ int Filesys::GetMappingPermissions(vfs_file* file, int open_mode, bool shared, s
 }
 
 int Filesys::Open(const char* pathname, int flags, vfs_file** out_file, vfs_dentry* base,
-	const ProcessCredentials* credentials, uint64 cwd_identity) {
+	const ProcessCredentials* credentials, uint64 cwd_identity, const FilesysCreateAttributes* creation) {
 	if (!out_file) return -EINVAL;
 	*out_file = nullptr;
 	const int mode = flags & O_ACCMODE;
@@ -1867,9 +1959,9 @@ int Filesys::Open(const char* pathname, int flags, vfs_file** out_file, vfs_dent
 		if (!dentry->d_inode) return -ENOENT;
 		auto& inode = *dentry->d_inode;
 		const stduint type = inode.i_mode & I_TYPE_MASK;
+		if ((flags & O_CREAT) && (flags & O_EXCL)) return -EEXIST;
 		// O_DIRECTORY: If pathname refers to a non-directory file, open() shall fail.
 		if ((flags & O_DIRECTORY) && type != I_DIRECTORY) return -ENOTDIR;
-		if ((flags & O_CREAT) && (flags & O_EXCL)) return -EEXIST;
 		if ((access & AccessWrite) && type == I_DIRECTORY) return -EISDIR;
 		if ((access & AccessWrite) && inode.i_sb && inode.i_sb->permissions.read_only)
 			return -EROFS;
@@ -1895,19 +1987,36 @@ int Filesys::Open(const char* pathname, int flags, vfs_file** out_file, vfs_dent
 		const stduint type = flags & O_DIRECTORY ? I_DIRECTORY : I_REGULAR;
 		if (type == I_DIRECTORY && (access & AccessWrite)) return -EISDIR;
 		auto inode = alloc_inode(sb);
-		// Check the prospective file's mode before creating an entry on disk.
+		// Parent permissions authorize creation; the new mode applies to later opens, not the initial fd.
+		FilesysCreateAttributes attributes;
+		attributes.uid = credentials ? credentials->uid : sb->permissions.uid;
+		attributes.gid = credentials ? credentials->gid : sb->permissions.gid;
+		attributes.mode = creation ? creation->mode & 0777 : InodeMode(*sb, type) & 0777;
+		if (parent->d_inode->i_mode & 02000) {
+			attributes.gid = parent->d_inode->i_gid;
+			if (type == I_DIRECTORY) attributes.mode |= 02000;
+		}
 		inode->i_mode = InodeMode(*sb, type);
-		if (!MayAccess(*inode, credentials, access)) return -EACCES;
 		dentry = alloc_dentry(nullptr, name);
 		if (!dentry) return -ENOMEM;
 
 		// Pass only the leaf name and the parent directory handle to the backend.
-		void* handle = parent->d_inode->internal_handler;
-		if (!sb->fs->create(name, flags, &handle, nullptr)) {
+		FilesysCreateParameter parameter;
+		parameter.handler = parent->d_inode->internal_handler;
+		parameter.attributes = &attributes;
+		if (!sb->fs->create(name, flags, parameter)) {
 			delete dentry;
 			return -EIO;
 		}
-		inode->internal_handler = handle;
+		inode->internal_handler = parameter.handler;
+		if (sb->fs == &global_rootfs_driver) {
+			auto* node = static_cast<RootFsNode*>(parameter.handler);
+			node->entry = dentry;
+			inode->destroy_handler = DestroyRootFsNode;
+			inode->i_uid = attributes.uid;
+			inode->i_gid = attributes.gid;
+			inode->i_mode = type | attributes.mode;
+		}
 		dentry->d_inode = inode;
 		AppendDentry(parent, dentry);
 		file->f_inode = inode;
@@ -2206,17 +2315,18 @@ bool Filesys::Rename(const char* source, const char* destination, vfs_dentry* ba
 			destination_path, sizeof(destination_path))) return false;
 
 	FilesysTrait* fs = GetInodeFilesystem(source_dentry->d_inode.get());
-	if (!fs || !source_dentry->d_inode->internal_handler ||
-		!fs->rename(source_path, destination_path)) return false;
-
-	byte refreshed_handler[128];
-	FilesysSearchArgs search_args = { refreshed_handler, nullptr, nullptr, nullptr };
-	if (!fs->search(destination_path, &search_args)) {
-		fs->rename(destination_path, source_path);
-		return false;
+	if (!fs || !source_dentry->d_inode->internal_handler) return false;
+	// RootFs namespace changes live entirely in VFS; its inode-owned handle must never be overwritten.
+	if (fs != &global_rootfs_driver) {
+		if (!fs->rename(source_path, destination_path)) return false;
+		byte refreshed_handler[128];
+		FilesysSearchArgs search_args = { refreshed_handler, nullptr, nullptr, nullptr };
+		if (!fs->search(destination_path, &search_args)) {
+			fs->rename(destination_path, source_path);
+			return false;
+		}
+		MemCopyN(source_dentry->d_inode->internal_handler, refreshed_handler, sizeof(refreshed_handler));
 	}
-	MemCopyN(source_dentry->d_inode->internal_handler, refreshed_handler,
-		sizeof(refreshed_handler));
 
 	if (source_parent != destination_parent) {
 		KASSERT(DetachDentry(source_dentry));
@@ -2333,7 +2443,7 @@ void DevFs::free_tty_id(int id) {
 
 bool DevFs::makefs(rostr vol_label, void* moreinfo) { return true; }
 bool DevFs::loadfs(void* moreinfo) { return true; }
-bool DevFs::create(rostr fullpath, stduint flags, void* exinfo, rostr linkdest) { return false; }
+bool DevFs::create(rostr fullpath, stduint flags, FilesysCreateParameter& parameter) { return false; }
 bool DevFs::remove(rostr pathname) { return false; }
 
 void* DevFs::search(rostr fullpath, FilesysSearchArgs* args) {

@@ -118,7 +118,7 @@ void sysdelay(unsigned dword) {
 
 int sys_createfil(rostr fullpath)
 {
-	stduint r = syscall(syscall_t::OPEN, _IMM(fullpath), O_CREAT | O_RDWR, nil);// open -> desc
+	stduint r = syscall(syscall_t::OPEN, _IMM(fullpath), O_CREAT | O_RDWR, 0666);// open -> desc
 	return *(int*)&r;
 }
 /*

@@ -488,7 +488,7 @@ ProcessBlock* Taskman::CreateFork(ProcessBlock* fo, const CallgateFrame* frame) 
 	auto ring = fo->ring;
 	pb->ring = ring;
 	pb->parent_id = fo->getID();
-	pb->credentials = fo->credentials;
+	Userman::InheritCredentials(*pb, *fo);
 	{
 		auto src_focus_tty = fo->focus_tty.Lock();
 		*pb->focus_tty.Lock() = *src_focus_tty;
@@ -910,7 +910,11 @@ public:
 static ProcessBlock* LoadProgramFile(const char* path, byte ring,
 	const ProcessCredentials& credentials, vfs_dentry* cwd, uint64 cwd_identity, ELFLoadInfo* info) {
 	vfs_file* opened = nullptr;
-	if (Filesys::OpenExecutable(path, &opened, credentials, cwd, cwd_identity)) return nullptr;
+	const int status = Filesys::OpenExecutable(path, &opened, credentials, cwd, cwd_identity);
+	if (status) {
+		plogwarn("[exec] authorization failed path=%s uid=%u gid=%u error=%d", path, credentials.uid, credentials.gid, status);
+		return nullptr;
+	}
 	ProcessBlock* task;
 	{
 		auto inode = opened->f_inode;
@@ -1006,9 +1010,12 @@ ProcessBlock* Taskman::Exec(ProcessBlock* parent_pb, rostr usr_fullpath, char** 
 		parent_cwd = files->cwd;
 		cwd_identity = files->cwd_identity;
 	}
-	auto* new_pb = LoadProgramFile(buf_fullpath, RING_U, parent_pb->credentials,
+	const auto context = Userman::GetCreationContext(*parent_pb);
+	const auto& credentials = context.credentials;
+	auto* new_pb = LoadProgramFile(buf_fullpath, RING_U, credentials,
 		parent_cwd, cwd_identity, &info);
 	if (!new_pb) return nullptr;
+	Userman::InitializeCreationMask(*new_pb, context.mask);
 	new_pb->parent_id = parent;
 	stduint new_sp = Taskman::SetupStack(new_pb, parent_pb, usr_argv, usr_envp,
 		info.entry, info.phdr, info.phnum, info.phent);
@@ -1085,8 +1092,9 @@ ProcessBlock* Taskman::Exet(ProcessBlock* current_pb, rostr usr_fullpath,
 		cwd_identity = files->cwd_identity;
 	}
 	// Prepare using the current process credentials before entering the destructive image commit.
+	const auto credentials = Userman::GetCredentials(*current_pb);
 	auto* replacement = LoadProgramFile(buf_fullpath, current_pb->ring,
-		current_pb->credentials, current_cwd, cwd_identity, &info);
+		credentials, current_cwd, cwd_identity, &info);
 	if (!replacement) return nullptr;
 	const stduint new_sp = Taskman::SetupStack(replacement, current_pb,
 		usr_argv, usr_envp, info.entry, info.phdr, info.phnum, info.phent);

@@ -33,7 +33,7 @@ Rule
 | 03 | TIME | syssecond<br>sysdate<br>systime | (0/1/0x10/0x11)→val | 0: 运行秒数<br>1: 运行毫秒数<br>0x10: BCD 日期 0xYYYYMMDD<br>0x11: BCD 时间 0x00HHMMSS |
 | 04 | REST | sysrest | (unit, time) | 停机直到下一次中断 |
 | 05 | COMM | syscomm | (mod, obj, &msg) | 同步（阻塞）收发消息 |
-| 06 | OPEN | sysopen<br>sys_createfil | (path, flags)→fd | 打开或创建文件 |
+| 06 | OPEN | open<br>sysopen<br>sys_createfil | (path, flags, mode)→fd | 打开或创建文件，O_CREAT 时使用 mode |
 | 07 | CLOS | | (fd)→0 | 关闭文件 |
 | 08 | READ | | (fd, adr, len)→len | 读文件或 tty |
 | 09 | WRIT |  | (fd, adr, len)→len | 写文件或 tty |
@@ -58,8 +58,8 @@ Rule
 | 1C | PIPE | | (pipefd)→0 | 创建管道 |
 | 1D | SEEK | | (fd, offset, whence)→pos | 移动读写位置 |
 | 1E | GETI | get_core_id<br>getpid<br>pthread_self<br>getuid / geteuid<br>getgid / getegid | (type)→id | 查询当前核心、进程、线程或用户身份 |
-| 1F | SETI | setuid<br>setgid | (type, id)→status | 设置当前进程的 UID/GID，单 root 阶段只允许设为 0 |
-| 20 | MANA | sysshutdown<br>sysreboot | (func, op1, op2) | 关机与重启 |
+| 1F | SETI | setuid<br>setgid | (type, id)→status | 设置当前进程的 UID/GID；root 可设置合法数字身份，普通用户只能保持当前值 |
+| 20 | MANA | sysshutdown<br>sysreboot | (func, op1, op2) | 关机与重启，要求当前 UID 为 0 |
 | 21 | TNEW | | (entry, arg, stack_top)→tid | 创建线程 |
 | 22 | TEXI | | (exit_code) | 结束线程 |
 | 23 | TJOI | | (tid, &exit_code)→status | 等待线程 |
@@ -81,6 +81,8 @@ Rule
 | 33 | ACPT | | (fd, addr, addr_len)→fd | 接受连接 |
 | 34 | SCLS | | (fd, how)→status | 关闭套接字方向 |
 | 35 | IOCT | | (fd, request, arg)→status | 设备控制 |
+| 36 | USER | getpwnam_r / getpwuid_r<br>getgrnam_r / getgrgid_r<br>UserLogin | (query, key, argument)→status | 查询公开账户、组资料，或认证并切换当前进程身份 |
+| 37 | UMSK | umask | (mask, unused, unused)→old_mask | 原子替换当前进程创建掩码，保存 mask 的 0777 位并返回旧值 |
 | FE | DBUG | | (func) | 内核信息输出到 stdout |
 | FF | TEST | | ('T','E','S')→pid | 输入 TES 则反馈成功，并标注是哪个进程导致的 |
 

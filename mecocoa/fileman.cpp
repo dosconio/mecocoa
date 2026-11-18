@@ -92,7 +92,13 @@ static bool CloseFileSlotUnlocked(ProcFiles& files, int fd) {
 //// ---- ---- SYSCALL ---- ---- ////
 
 //{TODO} relative path
-stdsint ProcessBlock::Open(rostr pathname, int flags) {
+stdsint ProcessBlock::Open(rostr pathname, int flags, stduint mode) {
+	const auto context = Userman::GetCreationContext(*this);
+	const auto& credentials = context.credentials;
+	FilesysCreateAttributes creation;
+	creation.uid = credentials.uid;
+	creation.gid = credentials.gid;
+	creation.mode = (mode & 0777) & ~context.mask;
 	auto files = this->fileman.Lock();
 	int fd = AllocateProcessFdSlot(*files);
 	if (fd == -1) {
@@ -107,7 +113,7 @@ stdsint ProcessBlock::Open(rostr pathname, int flags) {
 	
 	vfs_file* file = nullptr;
 	// Use the requesting process's credentials and CWD even when Fileman runs the lookup.
-	int ret = Filesys::Open(pathname, flags, &file, files->cwd, &credentials, files->cwd_identity);
+	int ret = Filesys::Open(pathname, flags, &file, files->cwd, &credentials, files->cwd_identity, &creation);
 	
 	if (ret < 0 || !file) {
 		ReleaseGlobalFileDescriptor(pfd);
@@ -926,7 +932,7 @@ void serv_file_loop()// for IDE 0:0, 0:1
 		}
 		case FilemanMsg::RUPT:// (usercall-forbidden&meaningless)
 			break;
-		case FilemanMsg::OPEN://(flags, thid, usr_filename) | open a file and return the file descriptor
+		case FilemanMsg::OPEN://(flags, thid, usr_filename, mode) | open a file and return the file descriptor
 		{
 			stduint retval = ~_IMM0;
 			ProcessBlock* safe_pb = ProcessBlock::AcquireActive(to_args[1]);
@@ -935,7 +941,7 @@ void serv_file_loop()// for IDE 0:0, 0:1
 					(rostr)to_args[2], safe_pb) && pathbuf[0];
 				// ploginfo("[fileman] TID %u open %s with %[32H]", to_args[1], pathbuf, to_args[0]);
 				if (valid_path)
-					retval = static_cast<stduint>(safe_pb->Open((rostr)pathbuf, to_args[0]));
+					retval = static_cast<stduint>(safe_pb->Open((rostr)pathbuf, to_args[0], to_args[3]));
 				ProcessBlock::Release(safe_pb);
 			}
 			syssend(sig_src, &retval, sizeof(retval), 0);
@@ -980,9 +986,10 @@ void serv_file_loop()// for IDE 0:0, 0:1
 				const bool valid_path = MccaStrCopyP((char*)pathbuf, pathbuf_size,
 					(rostr)to_args[0], safe_pb) && pathbuf[0];
 				if (valid_path) {
+					const auto credentials = Userman::GetCredentials(*safe_pb);
 					auto files = safe_pb->fileman.Lock();
 					retval[0] = Filesys::Remove((rostr)pathbuf, files->cwd,
-						&safe_pb->credentials, files->cwd_identity);
+						&credentials, files->cwd_identity);
 				}
 				ProcessBlock::Release(safe_pb);
 			}
@@ -1023,8 +1030,9 @@ void serv_file_loop()// for IDE 0:0, 0:1
 					change.mode = to_args[3];
 					change.uid = stdsint(to_args[4]);
 					change.gid = stdsint(to_args[5]);
+					const auto credentials = Userman::GetCredentials(*caller);
 					auto files = caller->fileman.Lock();
-					status = Filesys::SetPermissionsPath((const char*)pathbuf, caller->credentials, files->cwd, files->cwd_identity, change, to_args[2] != 0);
+					status = Filesys::SetPermissionsPath((const char*)pathbuf, credentials, files->cwd, files->cwd_identity, change, to_args[2] != 0);
 				}
 			}
 			syssend(sig_src, &status, sizeof(status));
@@ -1040,10 +1048,11 @@ void serv_file_loop()// for IDE 0:0, 0:1
 				const bool copied = MccaStrCopyP((char*)pathbuf, pathbuf_size,
 					(rostr)to_args[1], caller, nullptr, &status);
 				file_status_t result{};
+				const auto credentials = Userman::GetCredentials(*caller);
 				if (copied) {
 					{
 						auto files = caller->fileman.Lock();
-						status = Filesys::StatPath((const char*)pathbuf, caller->credentials,
+						status = Filesys::StatPath((const char*)pathbuf, credentials,
 							files->cwd, files->cwd_identity, result);
 					}
 					if (!status) {
@@ -1071,9 +1080,10 @@ void serv_file_loop()// for IDE 0:0, 0:1
 			const bool valid_path = MccaStrCopyP((char*)pathbuf, pathbuf_size,
 				(rostr)to_args[0], safe_pb) && pathbuf[0];
 			if (valid_path) {
+				const auto credentials = Userman::GetCredentials(*safe_pb);
 				auto files = safe_pb->fileman.Lock();
 				reply = Filesys::ChangeDirectory((const char*)pathbuf, files->cwd,
-					files->cwd_identity, safe_pb->credentials);
+					files->cwd_identity, credentials);
 			}
 			else reply = err_ret;
 			syssend(sig_src, &reply, sizeof(reply));

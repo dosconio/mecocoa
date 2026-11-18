@@ -97,8 +97,88 @@ libc 提供 `chmod(path, mode)`、`fchmod(fd, mode)`、`chown(path, owner, group
 | ISO9660、UDF、设备树 | 返回 `EROFS` | 返回 `EROFS` |
 | DevFs | 返回 `ENOTSUP` | 返回 `ENOTSUP` |
 
-命令 `chmod [--] OCTAL_MODE FILE...` 接受八进制权限，例如 `chmod 0755 /home`。命令 `chown [--] UID[:GID] FILE...` 接受数字身份，例如 `chown 1000:1000 /home`；`:GID` 形式只设置属组。命令支持多个路径，逐项输出失败及 errno，任一项失败时退出状态为 1。当前命令使用数字身份和八进制 mode。
+命令 `chmod [--] OCTAL_MODE FILE...` 接受八进制权限，例如 `chmod 0755 /home`。命令 `chown [--] OWNER[:GROUP] FILE...` 接受用户名、组名及十进制数字身份，例如 `chown user:user /home`、`chown user:1000 /home`；`:GROUP` 形式只设置属组。全数字 ID 无需存在账户记录，未知名称或格式错误在修改任何文件前报错。命令支持多个路径，逐项输出失败及 errno，任一项失败时退出状态为 1。ls 长格式优先显示用户名和组名，查无记录或查询失败时回退为数字。
 
 PROP 的查询类型追加 `ChangeModeDescriptor`、`ChangeModePath`、`ChangeOwnerDescriptor`、`ChangeOwnerPath`。第二参数指向 `file_permission_request_t` 输入，包含 mode、uid、gid，原有三种属性查询布局保持有效。
 
 授权和 `-1` 语义参考 [POSIX chmod](https://man7.org/linux/man-pages/man3/chmod.3p.html) 与 [POSIX chown](https://man7.org/linux/man-pages/man3/chown.3p.html)。当前文件状态查询尚未提供 ctime。
+
+## 创建属性与 umask
+
+open 在 O_CREAT 时读取第三参数 mode，mkdir 使用传入的目录 mode。用户库、OPEN syscall 和 Fileman 将它传到 VFS；调用者必须提供 mode，不能再使用省略第三参数的 O_CREAT 调用。当前创建接口接受基础 rwx 位，初始权限为 `(mode & 0777) & ~umask`，特殊位不通过请求 mode 设置；setgid 父目录的继承由 VFS 单独处理。
+
+进程默认 umask 为 0022，fork 和 EXEC 继承，EXET 与 su 保留。umask(mask) 返回旧值，只保留 mask 的 0777 位，不影响已有文件及 chmod。COTLAB 提供单独命令形式的内建 umask：无参数显示当前八进制掩码，带参数设置 000..777；不提供管道或重定向形式。
+
+| 创建请求 | umask | RootFs 初始权限 |
+| --- | --- | --- |
+| 普通文件 0666 | 0022 | 0644 |
+| 普通文件 0666 | 0077 | 0600 |
+| 目录 0777 | 0022 | 0755 |
+| 目录 0777 | 0077 | 0700 |
+
+VFS 检查路径逐级搜索、父目录写入和搜索权限及只读挂载。RootFs 新对象的 UID 为创建者 UID，GID 通常为创建者主 GID；父目录有 setgid 时继承父目录 GID，新子目录同时继承 setgid 位。创建时先提交初始属性，再发布目录项，不通过创建后的 chmod/chown 补写。新对象的最终 mode 不反过来拒绝本次创建所获得的 fd，例如 O_WRONLY 创建 0400 文件仍可通过初始 fd 写入，关闭后再次打开则按 0400 检查。已存在文件忽略创建 mode，O_CREAT|O_EXCL 则返回 EEXIST。
+
+`FilesysTrait::create(rostr fullpath, stduint flags, FilesysCreateParameter& parameter)` 将创建相关参数收拢为一个结构引用。成员按 handler、linkdest、attributes、exinfo 排列；exinfo 保留为可选通用扩展信息，不定义为父目录信息。
+
+| 成员 | 约定 |
+| --- | --- |
+| handler | 调用前是父目录句柄；成功后替换为新对象句柄；失败时保留输入值 |
+| linkdest | 可选链接目标，借用输入字符串，支持情况由后端决定 |
+| attributes | 可选初始 UID/GID/mode，借用输入指针；需要保存的值由后端复制 |
+| exinfo | 放在结构最后的可选通用扩展信息，具体含义和方向由后端约定；当前这些后端未使用 |
+
+VFS 将父目录句柄放进 parameter.handler，将创建属性放进 parameter.attributes，成功后将 parameter.handler 保存到 inode，不再通过 void** 或 exinfo 传递父目录/结果句柄。FAT 在修改磁盘前分配输出句柄，失败路径释放该临时句柄且不改写输入 handler；这项约定不等于新增了 FAT 磁盘事务或崩溃恢复能力。
+
+RootFs 接收并保存完整初始属性；FAT 不能保存逐文件 Unix 属性，保留挂载合成的 UID/GID/mode 与原生只读属性，不伪造逐文件权限缓存。只读文件系统仍拒绝创建。接口迁移同步覆盖 FAT、ISO9660/UDF、RootFs、DevFs、设备树和 x86 引导加载器中的 FAT 桩实现；这是原生 C++ 文件系统接口变化，不改变 OPEN/UMSK 的用户态 syscall ABI。
+
+RootFs 支持内存文件和目录创建、文件读写、截断、稀疏写入零填充、普通文件 unlink，以及现有 VFS 规则下的改名。文件内容和元数据由 inode 所有的句柄保存，删除名称后打开的 fd/映射仍保留原对象，最后一个 inode 引用释放时回收内存；同名重建得到独立对象。目录删除、符号链接、覆盖目标的 rename 尚未增加。所有数据随本次启动结束而丢失。
+
+这批修改需要重新构建内核、Unisym 文件系统代码、用户库、COTLAB 和应用（包括 Rust mcca-rt 的创建调用）；仅更新内核会使旧创建调用继续传入空 mode，不能据此验证新权限语义。MMU/noMMU 共用创建与掩码逻辑，noMMU 原本未实现的进程启动能力保持其现有范围。
+
+### OPEN 参数与 Fileman 请求
+
+OPEN 的三个参数依次为路径指针、flags、mode；编号仍以 include/syscall.hpp 为准。没有 O_CREAT 时第三参数忽略，可以传 0；有 O_CREAT 时必须传入 mode，0 表示请求 0000 权限，不能作为缺省权限标记。
+
+用户库 open(path, flags, ...) 只在 O_CREAT 时读取可变参数 mode。当前 mode_t 为机器字宽，直接编写可变参数调用时应使用 mode_t 类型，例如 C++ 的 `mode_t(0666)` 或 C 的 `(mode_t)0666`。mkdir(path, mode) 经 O_CREAT|O_EXCL|O_DIRECTORY 传递目录 mode。fopen、shell 输出重定向和文件复制使用普通文件请求权限 0666，mkdir 通常请求 0777。
+
+FilemanMsg::OPEN 的消息布局为四个机器字：flags、调用线程 TID、路径指针、mode。syscall 与 Devsman 的内部打开请求均使用此布局，mode 不是用户缓冲区指针。Fileman 按调用进程取得 UID/GID 和 umask 的一致快照；创建父目录的搜索、写入权限及只读挂载由 VFS 检查。
+
+成功返回非负 fd，失败返回负 errno，用户库转换为 -1 并设置 errno。OPEN 第三参数已启用，依赖此前省略 mode 或传 0 表示默认权限的创建调用必须迁移。需要同步重建内核、Unisym、用户库、COTLAB 和应用；不能只替换内核后继续使用旧创建调用验证。
+
+### UMSK 参数
+
+UMSK 第一参数为新 mask，第二、第三参数不使用，建议传 0。保存值为 mask&0777，成功返回修改前的掩码；调用时没有当前进程则返回 -ESRCH。正常用户程序不需要特权即可修改自己的 umask。libc 声明为 `mode_t umask(mode_t mask)`，位于 sys/stat.h。
+
+COTLAB 无参数显示 umask 时使用 umask(0) 后恢复旧值，是两个调用，不能当作多线程程序的原子查询接口。独立子程序调用 umask 不会修改父 shell。
+
+建议在重新打包并启动的新内核下，以 root 创建独立测试目录，避免修改整个 /home 的属性。以下命令中的 permcheck 应使用本次启动尚未存在的目录名：
+
+```sh
+mkdir /home/permcheck
+chown user:user /home/permcheck
+chmod 0700 /home/permcheck
+su user
+cd /home/permcheck
+whoami
+id
+umask
+```
+
+预期 whoami 为 user，UID/GID 为 1000，尚未调整过的默认 umask 为 0022。后续创建和权限拒绝检查都在这个普通用户 shell 中进行；root 会绕过普通 mode 检查，不能用 root 验证拒绝访问。
+
+再执行：
+
+```sh
+umask 0077
+echo private > private.txt
+mkdir private-dir
+umask 0022
+echo shared > public.txt
+mkdir public-dir
+echo more >> private.txt
+ls -l .
+```
+
+RootFs 上 private.txt 应为 user:user、0600，private-dir 应为 user:user、0700，public.txt 应为 user:user、0644，public-dir 应为 user:user、0755；改变 umask 并追加写入后，原有 private.txt 权限仍为 0600。进一步验证初始只读 mode 的可写创建 fd、关闭后重开授权、已有文件 O_EXCL、普通文件删除后持有 fd 的读取，以及 setgid 目录的组继承。以上为待运行验证项，不代表已完成运行测试。
+
+普通用户下再执行 `chmod 0400 public.txt`、`echo denied > public.txt`、`cat public.txt`：重定向应报打开失败，cat 仍能读取原内容，说明已有文件没有被 O_CREAT 的 mode 重新授权或截断。之后用 `chmod 0600 public.txt` 恢复。再次执行 `mkdir private-dir` 应报已存在，原目录保持不变。上述失败是预期的负面检查。

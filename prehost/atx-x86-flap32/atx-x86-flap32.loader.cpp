@@ -128,7 +128,7 @@ PartitionSlice Harddisk_PATA::getSlice(stduint dev) {
 // to be thin, redefine to avoid including unisym's version:
 stduint FilesysFAT::writfl(void* fil_handler, Slice file_slice, const byte* sors) { return nil; }
 bool FilesysFAT::remove(rostr pathname) { return false; }
-bool FilesysFAT::create(rostr fullpath, stduint flags, void* exinfo, rostr linkdest) { return false; }
+bool FilesysFAT::create(rostr fullpath, stduint flags, FilesysCreateParameter& parameter) { return false; }
 bool FilesysFAT::truncate(void* fil_handler, stduint size) { return false; }
 bool FilesysFAT::rename(rostr src_path, rostr dst_path) { return false; }
 

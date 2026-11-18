@@ -1,6 +1,7 @@
 #include "aaaaa.h"
 #include <unistd.h>
 #include <fcntl.h>
+#include <sys/stat.h>
 #include <poll.h>
 #include <sys/select.h>
 #include <sys/ioctl.h>
@@ -17,8 +18,14 @@ static stdsint PosixIoResult(stdsint result) {
 
 
 int open(const char* path, int oflag, ...) {
-	// New files use the mount's default mode.
-	return int(PosixIoResult(stdsint(syscall(syscall_t::OPEN, _IMM(path), oflag, nil))));
+	mode_t mode = 0;
+	if (oflag & O_CREAT) {
+		va_list arguments;
+		va_start(arguments, oflag);
+		mode = va_arg(arguments, mode_t);
+		va_end(arguments);
+	}
+	return int(PosixIoResult(stdsint(syscall(syscall_t::OPEN, _IMM(path), oflag, mode))));
 }
 
 int fcntl(int fd, int cmd, ...) {
@@ -123,7 +130,6 @@ char* getcwd(char* buf, size_t size) {
 	return buf;
 }
 
-#include <sys/stat.h>
 #include <dirent.h>
 
 // Both stat entry points translate the same PROP snapshot and leave the caller's output untouched on failure.
@@ -294,9 +300,14 @@ int closedir(DIR *dirp) {
 	return -1;
 }
 
+// POSIX.1-2024 umask exchanges the creation mask: https://pubs.opengroup.org/onlinepubs/9799919799/functions/umask.html.
+mode_t umask(mode_t mask) {
+	return mode_t(syscall(syscall_t::UMSK, mask, 0, 0));
+}
+
 int mkdir(const char *path, mode_t mode) {
 	// Create directory using open with O_CREAT and O_DIRECTORY flags
-	int fd = open(path, O_CREAT | O_DIRECTORY | O_RDONLY);
+	int fd = open(path, O_CREAT | O_EXCL | O_DIRECTORY | O_RDONLY, mode);
 	if (fd < 0) return -1;
 	close(fd);
 	return 0;

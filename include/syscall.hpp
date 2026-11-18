@@ -19,7 +19,7 @@ enum
 	REST = 0x04, // halt   (unit, time)       | x86 x64
 	COMM = 0x05, // syncom (mod, obj, &msg)   | x86 x64 rv
 	// [Fileops]
-	OPEN = 0x06, // open   (path,flags)>=0    | x86 x64
+	OPEN = 0x06, // open   (path,flags,mode)>=0 | x86 x64 rv ARM
 	CLOS = 0x07, // close  (fd)->0            | x86 x64
 	READ = 0x08, // read   (fd, adr, len)->len| x86 x64
 	WRIT = 0x09, // write  (fd, adr, len)->len| x86 x64
@@ -77,6 +77,10 @@ enum
 	SCLS, // socket close direction (fd, how)->status   | x86 x64
 	IOCT, // ioctl  (fd, request, argument)->status     | x86 x64 rv
 
+	// [Management Extend]
+	USER, // account lookup or authenticated identity switch
+	UMSK, // replace process creation mask and return its previous value
+
 	DBUG = 0xFE, // sysinfo_classic to stdout(func)
 	TEST = 0xFF, // getpid (T,E,S)->0 | x86
 
@@ -122,6 +126,30 @@ enum
 	EffectiveUser,
 	EffectiveUserGroup,
 };
+
+enum
+	#ifdef _INC_CPP
+	class
+	#endif
+	syscall_user_query_t
+	#ifdef _INC_CPP
+	: stduint
+	#endif
+{
+	UserByName,
+	UserByID,
+	GroupByName,
+	GroupByID,
+	Login,
+};
+
+// USER returns NUL-separated strings in caller storage; size becomes the required byte count.
+typedef struct syscall_account_buffer_t {
+	char* data;
+	stduint size;
+	uint32 uid;
+	uint32 gid;
+} syscall_account_buffer_t;
 
 enum
 	#ifdef _INC_CPP

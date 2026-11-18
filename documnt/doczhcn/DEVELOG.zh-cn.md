@@ -1,5 +1,15 @@
 ## 2026-11-18
 
+- 22:38（UTC+8）FilesysTrait::create 收拢为 FilesysCreateParameter，handler 输入父目录句柄并在成功时返回新对象句柄，linkdest/attributes 保留输入用途，exinfo 放最后作为通用扩展。迁移 VFS、FAT、ISO/UDF、RootFs、DevFs、设备树及 x86 loader FAT 桩；FAT 预分配结果句柄并在失败时释放，保持失败时输入 handler 不变。同步 FILESYS 文档，syscall ABI 不变。
+
+- 21:21（UTC+8）创建链路接通 open/mkdir 的 mode、进程 umask 及 UID/GID，fork/EXEC 继承掩码、EXET 保留；FilesysTrait 创建接口增加初始属性，RootFs 支持内存文件/目录创建及 inode 生命周期内的数据读写、截断、unlink 和 VFS 改名，FAT 保留挂载合成权限。COTLAB 增加 umask 内建命令，迁移重定向、fopen、cp/mv 等创建调用，中文文档补充支持范围与待运行验证项。
+
+- 20:46（UTC+8）Unisym ls 长格式接入用户名和组名查询，未知身份及查询失败回退为数字，复用堆缓冲避免增加大块栈变量；chown 支持名称、数字混用和仅修改属组，完整解析后再修改目标文件，保留数字范围、多路径及原有内核授权。同步中文文件系统与用户管理文档。
+
+- 19:03（UTC+8）新增 Userman 头文件及内置 root/user 账户与组，固定原型密码 p；进程凭据改为私有保存，经统一接口读取、继承、设置与认证切换。USER 追加查询和当前进程身份切换 ABI，用户库补充 pwd/grp 可重入查询及 id/whoami/su 命令。关机重启增加 root 授权，noMMU 的未实现 EXEC/EXET 明确返回 ENOSYS，中文用户管理文档补充接口、使用方式与平台范围。
+
+- 18:36（UTC+8）STM32H7 板级时钟配置改用显式供电和电压档位，H743 选择 LDO 与 Scale 1；公共时钟初始化现可通过 Unisym 的供电及 Scale 0 状态转换接口支持 H750 超频档位。
+
 - 18:16（UTC+8）H743 OpenEdv 的 GCC 构建入口迁入板级目录，可直接在该目录构建；板级目录加入头文件搜索路径，并补充 Unisym、环境变量及 Mecocoa 配置准备步骤。
 
 - 15:38（UTC+8）PROP 接入 chmod/fchmod/chown/fchown，VFS 统一检查属主、root、只读挂载和后端能力，并在设置成功后更新 inode。路径授权和 stat 合并 permit 原生权限，FAT 部分写权限限制保留挂载默认值。Unisym chmod/chown 命令接入八进制 mode、数字 UID/GID、多路径处理和错误输出，中文文件系统文档补充用法与支持范围。

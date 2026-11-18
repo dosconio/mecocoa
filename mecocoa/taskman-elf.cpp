@@ -4,6 +4,7 @@
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 #include "../include/mecocoa.hpp"
 #include <c/format/ELF.h>
+#include <c/ISO_IEC_STD/errno.h>
 #include "../include/filesys.hpp"
 
 struct ELFInterpreterFileCloser {
@@ -822,10 +823,9 @@ static bool _Taskman_Resolve_Interp(BlockTrait* source, const ELF_Header_t& head
 	ploginfo("%s: ELF interpreter mapped to: %s", __FUNCIDEN__,
 		real_interp_path.reference());
 	uni::vfs_file* file = nullptr;
-	if (Filesys::OpenExecutable(real_interp_path.reference(), &file, credentials) ||
-		!file) {
-		plogerro("%s: Interpreter not found at %s", __FUNCIDEN__,
-			real_interp_path.reference());
+	const int status = Filesys::OpenExecutable(real_interp_path.reference(), &file, credentials);
+	if (status || !file) {
+		plogerro("%s: Interpreter open failed path=%s uid=%u gid=%u error=%d", __FUNCIDEN__, real_interp_path.reference(), credentials.uid, credentials.gid, status ? status : -EIO);
 		return false;
 	}
 	if (!file->f_inode || (file->f_inode->i_mode & I_TYPE_MASK) != I_REGULAR ||
@@ -1004,7 +1004,7 @@ static ProcessBlock* CreateELFImage(BlockTrait* source,
 	}
 	#endif
 	pb->ring = ring;
-	pb->credentials = credentials;
+	Userman::InitializeCredentials(*pb, credentials);
 	pb->parent_id = Task_Kernel;
 	*pb->focus_tty.Lock() = nullptr;
 	
@@ -1256,7 +1256,7 @@ static ProcessBlock* CreateELFImage(BlockTrait* source,
 	#endif
 	ProcessBlock* pb = Taskman::Create((void*)((load_bias + header.e_entry) | 1), ring, false);
 	if (!pb) return nullptr;
-	pb->credentials = credentials;
+	Userman::InitializeCredentials(*pb, credentials);
 	const stduint arg_sp = Taskman::SetupStack(pb, pb, nullptr, nullptr,
 		load_bias + header.e_entry, 0, header.e_phnum, header.e_phentsize);
 	if (arg_sp) {

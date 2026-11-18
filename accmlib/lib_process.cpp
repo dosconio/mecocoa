@@ -161,7 +161,7 @@ int waitid(idtype_t idtype, id_t id, siginfo_t* infop, int options)
 }
 
 int execve(const char* path, char* const argv[], char* const envp[]) {
-	return syscall(syscall_t::EXET, _IMM(path), _IMM(argv), _IMM(envp));
+	return int(ProcessIdResult(syscall(syscall_t::EXET, _IMM(path), _IMM(argv), _IMM(envp))));
 }
 
 extern "C" char** environ;

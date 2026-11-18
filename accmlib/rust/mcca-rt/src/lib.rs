@@ -444,7 +444,7 @@ pub mod fs {
 	impl File {
 		fn open_with_flags(path: &CStr, flags: i32) -> Result<Self> {
 			io::prepare_os_call();
-			let raw = unsafe { open(path.as_ptr(), flags, 0i32) };
+			let raw = unsafe { open(path.as_ptr(), flags, 0o666usize) };
 			if raw < 0 {
 				return Err(io::os_call_error());
 			}

@@ -57,7 +57,7 @@ extern "C" stdsint sysc_IOCT(stduint, stduint, stduint);
 extern "C" void check_and_deliver_signals(void* context);
 
 // Syscall Wrappers
-constexpr stduint SyscallTableSize = _IMM(syscall_t::IOCT) + 1;
+constexpr stduint SyscallTableSize = _IMM(syscall_t::UMSK) + 1;
 extern stduint SYSCALL_TABLE[SyscallTableSize];
 
 void Syscall::Initialize() {
@@ -309,13 +309,14 @@ DEFSYSC sysc_COMM(stduint op, stduint to, stduint msg) {
 	return ret;
 }
 
-DEFSYSC sysc_OPEN(stduint usr_filepath, stduint flag)
+DEFSYSC sysc_OPEN(stduint usr_filepath, stduint flag, stduint mode)
 {
 	ThreadBlock* th = Taskman::CurrentTB();
 	stdsint open_buf[1];
 	ProcessBlock* pb = th->parent_process;
-	struct { stduint flag;stduint pid;rostr usr_filepath; } open_msg;
+	struct { stduint flag;stduint pid;rostr usr_filepath; stduint mode; } open_msg;
 	open_msg.flag = flag;
+	open_msg.mode = mode;
 	open_msg.pid = th->getID();
 	open_msg.usr_filepath = (rostr)usr_filepath;
 	syssend(Task_FileSys, &open_msg, sizeof(open_msg), _IMM(FilemanMsg::OPEN));
@@ -333,6 +334,10 @@ DEFSYSC sysc_CLOS(stduint fd) {
 }
 
 DEFSYSC sysc_MANA(stduint func, stduint arg1, stduint arg2) {
+	if (func > 1) return -EINVAL;
+	auto* pb = Taskman::CurrentPB();
+	if (!pb) return -ESRCH;
+	if (!Userman::IsRoot(*pb)) return -EPERM;
 	switch (func)
 	{
 	case 0:// shutdown
@@ -1112,7 +1117,8 @@ DEFSYSC sysc_PROP(stduint object, stduint usr_proper, stduint query) {
 			if (object >= files->pfiles.Count() || !files->pfiles[object] || !files->pfiles[object]->vfile) return -EBADF;
 			inode = files->pfiles[object]->vfile->f_inode;
 		}
-		return Filesys::SetPermissionsInode(inode, pb->credentials, change, mode_change);
+		const auto credentials = Userman::GetCredentials(*pb);
+		return Filesys::SetPermissionsInode(inode, credentials, change, mode_change);
 	}
 	if (type != file_property_query_t::LegacyDescriptor &&
 		type != file_property_query_t::Descriptor && type != file_property_query_t::Path) return -EINVAL;
@@ -1245,16 +1251,26 @@ DEFSYSC sysc_TMSG() {
 }
 
 DEFSYSC sysc_EXEC(stduint path, stduint argv, stduint envp) {
+	#if !CONFIG_ENABLE_MMU
+	// Taskman does not handle image replacement or spawn requests on the flat-image path yet.
+	return -ENOSYS;
+	#else
 	stduint msgbuf[4] = { Taskman::CurrentPID(), path, argv, envp };
 	syssend(Task_TaskMan, sliceof(msgbuf), _IMM(TaskmanMsg::EXEC));
 	sysrecv(Task_TaskMan, &msgbuf, byteof(msgbuf[0]));
 	return msgbuf[0];
+	#endif
 }
 DEFSYSC sysc_EXET(stduint path, stduint argv, stduint envp) {
+	#if !CONFIG_ENABLE_MMU
+	// Taskman does not handle image replacement or spawn requests on the flat-image path yet.
+	return -ENOSYS;
+	#else
 	stduint msgbuf[4] = { Taskman::CurrentPID(), path, argv, envp };
 	syssend(Task_TaskMan, sliceof(msgbuf), _IMM(TaskmanMsg::EXET));
 	sysrecv(Task_TaskMan, &msgbuf, byteof(msgbuf[0]));
 	return msgbuf[0];
+	#endif
 }
 
 
@@ -1277,10 +1293,10 @@ DEFSYSC sysc_GETI(stduint type, stduint, stduint) {
 		return th ? stdsint(th->tid) : -ESRCH;
 	case syscall_id_type_t::User:
 	case syscall_id_type_t::EffectiveUser:
-		return pb ? stdsint(pb->credentials.uid) : -ESRCH;
+		return pb ? stdsint(Userman::GetCredentials(*pb).uid) : -ESRCH;
 	case syscall_id_type_t::UserGroup:
 	case syscall_id_type_t::EffectiveUserGroup:
-		return pb ? stdsint(pb->credentials.gid) : -ESRCH;
+		return pb ? stdsint(Userman::GetCredentials(*pb).gid) : -ESRCH;
 	default:
 		return -EINVAL;
 	}
@@ -1289,14 +1305,13 @@ DEFSYSC sysc_GETI(stduint type, stduint, stduint) {
 DEFSYSC sysc_SETI(stduint type, stduint id, stduint) {
 	auto* pb = Taskman::CurrentPB();
 	if (!pb) return -ESRCH;
-	uint32 current;
+	// Validate the full syscall word before narrowing it on 64-bit targets.
+	if (id > 0x7FFFFFFFu) return -EINVAL;
 	switch (syscall_id_type_t(type)) {
 	case syscall_id_type_t::User:
-		current = pb->credentials.uid;
-		break;
+		return Userman::SetUserID(*pb, uint32(id));
 	case syscall_id_type_t::UserGroup:
-		current = pb->credentials.gid;
-		break;
+		return Userman::SetGroupID(*pb, uint32(id));
 	case syscall_id_type_t::Core:
 	case syscall_id_type_t::Process:
 	case syscall_id_type_t::Thread:
@@ -1306,9 +1321,69 @@ DEFSYSC sysc_SETI(stduint type, stduint id, stduint) {
 	default:
 		return -EINVAL;
 	}
-	// Keep valid user and group IDs distinct from negative returns.
-	if (id > 0x7FFFFFFFu) return -EINVAL;
-	return id == 0 && current == 0 ? 0 : -EPERM;
+}
+
+// POSIX umask replaces only the current process creation mask.
+DEFSYSC sysc_UMSK(stduint mask, stduint, stduint) {
+	auto* process = Taskman::CurrentPB();
+	return process ? stdsint(Userman::ExchangeCreationMask(*process, uint32(mask & 0777))) : -ESRCH;
+}
+
+// Copy public account data after releasing all identity locks; no kernel pointers cross the ABI.
+DEFSYSC sysc_USER(stduint operation, stduint key, stduint argument) {
+	auto* pb = Taskman::CurrentPB();
+	if (!pb) return -ESRCH;
+	const auto query = syscall_user_query_t(operation);
+	char name[32]{};
+	stdsint error = -EFAULT;
+	if (query == syscall_user_query_t::UserByName || query == syscall_user_query_t::GroupByName || query == syscall_user_query_t::Login) {
+		if (!MccaStrCopyP(name, sizeof(name), (const char*)key, pb, nullptr, &error)) return error;
+	}
+	if (query == syscall_user_query_t::Login) {
+		char password[3]{};
+		if (!Userman::IsRoot(*pb) && !MccaStrCopyP(password, sizeof(password), (const char*)argument, pb, nullptr, &error)) return error == -ENAMETOOLONG ? -EACCES : error;
+		const int status = Userman::Login(*pb, name, password);
+		// Do not leave the prototype password in the syscall stack after the credential commit.
+		for (volatile char* p = password; p != password + sizeof(password); ++p) *p = 0;
+		return status;
+	}
+	const UserRecord* user = nullptr;
+	const GroupRecord* group = nullptr;
+	switch (query) {
+	case syscall_user_query_t::UserByName: user = Userman::FindUser(name); break;
+	case syscall_user_query_t::GroupByName: group = Userman::FindGroup(name); break;
+	case syscall_user_query_t::UserByID:
+		if (key > 0x7FFFFFFFu) return -EINVAL;
+		user = Userman::FindUser(uint32(key));
+		break;
+	case syscall_user_query_t::GroupByID:
+		if (key > 0x7FFFFFFFu) return -EINVAL;
+		group = Userman::FindGroup(uint32(key));
+		break;
+	default: return -EINVAL;
+	}
+	if (!user && !group) return -ENOENT;
+	syscall_account_buffer_t output{};
+	const bool kernel = pb->ring == RING_M;
+	if (!argument || argument > ~_IMM0 - sizeof(output) || MccaMemCopyP(&output, nullptr, true, (void*)argument, kernel ? nullptr : pb, kernel, sizeof(output)) != sizeof(output)) return -EFAULT;
+	const char* strings[] = { user ? user->name : group->name, "x", "", user ? user->home : "", user ? user->shell : "" };
+	const stduint count = user ? numsof(strings) : 2;
+	stduint required = 0;
+	for (stduint i = 0; i < count; i++) required += StrLength(strings[i]) + 1;
+	const stduint capacity = output.size;
+	output.size = required;
+	output.uid = user ? user->uid : 0;
+	output.gid = user ? user->gid : group->gid;
+	if (MccaMemCopyP((void*)argument, kernel ? nullptr : pb, kernel, &output, nullptr, true, sizeof(output)) != sizeof(output)) return -EFAULT;
+	if (capacity < required) return -ERANGE;
+	if (!output.data || (stduint)output.data > ~_IMM0 - required) return -EFAULT;
+	stduint offset = 0;
+	for (stduint i = 0; i < count; i++) {
+		const stduint size = StrLength(strings[i]) + 1;
+		if (MccaMemCopyP(output.data + offset, kernel ? nullptr : pb, kernel, strings[i], nullptr, true, size) != size) return -EFAULT;
+		offset += size;
+	}
+	return 0;
 }
 
 DEFSYSC sysc_TEST(stduint t, stduint e, stduint s) {
@@ -1408,14 +1483,13 @@ DEFSYSC sysc_KILL(stduint pid, stduint sig, stduint tid) {
 	auto* target = ProcessBlock::AcquireByPID(pid);
 	if (!target) return -ESRCH;
 
-	const auto uid = caller->credentials.uid;
 	// PID 0 is the bootstrap kernel process on every target.
 	const bool kernel_caller = caller->pid == Task_Kernel || caller->ring == RING_M;
 	const bool protected_target = target->pid == Task_Kernel || target->ring != RING_U;
 	stdsint result = 0;
 	if (!kernel_caller &&
 		((target != caller && protected_target) ||
-		 (uid != 0 && uid != target->credentials.uid))) {
+		 !Userman::MayControl(*caller, *target))) {
 		result = -EPERM;
 	}
 	else if (sig != 0) {
@@ -1746,6 +1820,8 @@ stduint SYSCALL_TABLE[] = {
 	mglb(sysc_ACPT),
 	mglb(sysc_SCLS),
 	mglb(sysc_IOCT),
+	mglb(sysc_USER),
+	mglb(sysc_UMSK),
 };
 #endif
 
@@ -1778,6 +1854,18 @@ void syscall_body(NormalTaskContext* cxt)
 		break;
 	case syscall_t::GETI:
 		cxt->a0 = sysc_GETI(cxt->a0, 0, 0);
+		break;
+	case syscall_t::OPEN:
+		cxt->a0 = sysc_OPEN(cxt->a0, cxt->a1, cxt->a2);
+		break;
+	case syscall_t::UMSK:
+		cxt->a0 = sysc_UMSK(cxt->a0, 0, 0);
+		break;
+	case syscall_t::USER:
+		cxt->a0 = sysc_USER(cxt->a0, cxt->a1, cxt->a2);
+		break;
+	case syscall_t::MANA:
+		cxt->a0 = sysc_MANA(cxt->a0, cxt->a1, cxt->a2);
 		break;
 	case syscall_t::SETI:
 		cxt->a0 = sysc_SETI(cxt->a0, cxt->a1, 0);

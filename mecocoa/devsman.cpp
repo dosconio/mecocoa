@@ -4706,7 +4706,8 @@ namespace {
 			stduint flag;
 			stduint tid;
 			rostr usr_filepath;
-		} open_msg = { O_RDONLY | O_DIRECTORY, current->getID(), drv_dir };
+			stduint mode;
+		} open_msg = { O_RDONLY | O_DIRECTORY, current->getID(), drv_dir, 0 };
 		syssend(Task_FileSys, &open_msg, sizeof(open_msg), _IMM(FilemanMsg::OPEN));
 		sysrecv(Task_FileSys, &fd, sizeof(fd));
 		if (fd < 0) {

@@ -505,6 +505,11 @@
               <FileType>8</FileType>
               <FilePath>..\..\..\..\mecocoa\graphic-touch.cpp</FilePath>
             </File>
+            <File>
+              <FileName>userman.cpp</FileName>
+              <FileType>8</FileType>
+              <FilePath>..\..\..\..\mecocoa\userman.cpp</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>

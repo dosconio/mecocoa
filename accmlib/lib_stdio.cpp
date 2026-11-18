@@ -122,7 +122,7 @@ extern "C" FILE* fopen(const char* filename, const char* mode)
 		return nullptr;
 	}
 
-	int fd = open(filename, oflag, 0);
+	int fd = open(filename, oflag, mode_t(0666));
 	if (fd < 0) return nullptr;
 
 	FILE* stream = (FILE*)malloc(sizeof(*stream));

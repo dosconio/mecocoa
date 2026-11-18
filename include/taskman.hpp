@@ -15,6 +15,7 @@
 
 #include "fileman.hpp"
 #include "syscall.hpp"
+#include "userman.hpp"
 #include "taskman.com.hpp"
 #include <c/ISO_IEC_STD/signal.h>
 #include <c/system/memory.h>
@@ -295,11 +296,6 @@ struct VirtualMemoryArea {
 	}
 };
 
-struct ProcessCredentials {
-	uint32 uid = 0;
-	uint32 gid = 0;
-};
-
 // Stack metadata from the main ELF that was actually loaded, including when PT_INTERP overrides IP.
 struct ELFLoadInfo {
 	stduint entry = 0;
@@ -314,7 +310,12 @@ public: // Identity / Config
 	stduint parent_id = 0;
 	inline stduint getID() { return pid; }
 	stduint ring = 0;
+private:
+	friend class Userman;
 	ProcessCredentials credentials{}; // Initialized before publishing the process.
+	Mutex mutex_credentials;
+	uint32 creation_mask = 0022;
+public:
 	enum class InterfaceType : byte {
 		MCCA4,// x86 will only support MCCA4
 		Linux,
@@ -385,7 +386,7 @@ public: // Signals
 
 public:
 	ProcessBlock() = default;
-	auto Open(rostr pathname, int flags) -> stdsint;
+	auto Open(rostr pathname, int flags, stduint mode = 0666) -> stdsint;
 	auto OpenStandards(uni::Dnode* vtty = nullptr) -> bool;	
 	auto Socket(stduint domain, stduint type, stduint protocol) -> stdsint;
 	auto BindSocket(int fd, const uni::Network::SocketAddress* address, stduint length) -> stdsint;

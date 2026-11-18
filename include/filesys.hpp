@@ -107,6 +107,7 @@ struct vfs_inode {
 	stduint i_size = 0;               // File size in bytes
 	bool is_unlinked = false;          // Backend data remains until the last inode reference is released
 	
+	void (*destroy_handler)(void*) = nullptr; // Optional inode-owned backend handle cleanup.
 	void* internal_handler = nullptr;       // e.g. FAT_FileHandle* or internal inode* from specific FS
 };
 
@@ -245,7 +246,7 @@ public:
 	// User-originated opens supply the process credentials and saved CWD identity.
 	// Trusted kernel callers may pass null credentials. Returns zero or a negative errno.
 	static int Open(const char* pathname, int flags, vfs_file** out_file, vfs_dentry* base = nullptr,
-		const ProcessCredentials* credentials = nullptr, uint64 cwd_identity = 0);
+		const ProcessCredentials* credentials = nullptr, uint64 cwd_identity = 0, const FilesysCreateAttributes* creation = nullptr);
 	// Authorize execution and retain the file; the ELF loader parses and installs the authorized image.
 	static int OpenExecutable(const char* pathname, vfs_file** out_file,
 		const ProcessCredentials& credentials, vfs_dentry* base = nullptr, uint64 cwd_identity = 0);
@@ -295,7 +296,7 @@ public:
 	virtual bool permit(void* handler, FilesysPermissionResult& result, bool set_or_get = false) override;
 	virtual bool makefs(rostr vol_label, void* moreinfo = 0) override;
 	virtual bool loadfs(void* moreinfo = 0) override;
-	virtual bool create(rostr fullpath, stduint flags, void* exinfo, rostr linkdest = 0) override;
+	virtual bool create(rostr fullpath, stduint flags, FilesysCreateParameter& parameter) override;
 	virtual bool remove(rostr pathname) override;
 	virtual void* search(rostr fullpath, FilesysSearchArgs* args) override;
 	virtual bool proper(void* handler, stduint cmd, const void* moreinfo = 0) override;
