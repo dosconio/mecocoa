@@ -1,24 +1,26 @@
 # ASCII Makefile TAB4 LF
 # GNU Arm Embedded GCC build for Mecocoa STM32H743, not the Keil project.
-# Run from the repository root; uincpath/ulibpath/uobjpath/ubinpath are explicit inputs.
+# Run from this board directory; uincpath/uobjpath/ubinpath are explicit inputs.
 .DEFAULT_GOAL := build
 .DELETE_ON_ERROR:
 
 arch := stm32h743X-ac7m
-H7_MAKEFILE := $(lastword $(MAKEFILE_LIST))
-H7_DIR := prehost/$(arch)
+H7_MAKEFILE := $(abspath $(lastword $(MAKEFILE_LIST)))
+BOARD_DIR := $(abspath $(dir $(H7_MAKEFILE)))
+REPO_ROOT := $(abspath $(BOARD_DIR)/../../../..)
 
 ifndef uincpath
 $(error Set uincpath to the Unisym include directory)
-endif
-ifndef ulibpath
-$(error Set ulibpath to the Unisym source library directory)
 endif
 ifndef uobjpath
 $(error Set uobjpath to the object output directory)
 endif
 ifndef ubinpath
 $(error Set ubinpath to the binary output directory)
+endif
+
+ifeq ($(strip $(ulibpath)),)
+ulibpath := $(abspath $(uincpath)/../lib)
 endif
 
 CROSS_COMPILE ?= arm-none-eabi-
@@ -35,11 +37,11 @@ ELF := $(OUTPUT).elf
 BIN := $(OUTPUT).bin
 HEX := $(OUTPUT).hex
 MAP := $(OUTPUT).map
-LD_SCRIPT := $(H7_DIR)/mcca.ld
+LD_SCRIPT := $(BOARD_DIR)/mcca.ld
 
 CPUFLAGS := -mcpu=cortex-m7 -mthumb -mfpu=fpv5-d16 -mfloat-abi=hard
 OPT ?= -O1
-CPPFLAGS += -I$(uincpath) -D_MCU_STM32H7x -D_HIS_IMPLEMENT -D_MCCA=0x1A072032 -D_OPT_ARM32 -D_DEBUG
+CPPFLAGS += -I. -I$(uincpath) -D_MCU_STM32H7x -D_HIS_IMPLEMENT -D_MCCA=0x1A072032 -D_OPT_ARM32 -D_DEBUG
 CXXFLAGS += $(CPUFLAGS) $(OPT) -g3 -std=gnu++20 -ffreestanding -nostdinc++
 CXXFLAGS += -fno-builtin -fno-strict-aliasing -fno-stack-protector -fno-pic -fno-pie
 CXXFLAGS += -fno-exceptions -fno-rtti -fno-use-cxa-atexit -ffunction-sections -fdata-sections
@@ -48,7 +50,7 @@ CXXFLAGS += -Wall -Wextra -Wno-unused-variable -Wno-unused-function -Wno-unused-
 CXXFLAGS += -Wno-old-style-cast -Wno-extra-semi -Wno-deprecated-copy -Wno-empty-body
 # GCC diagnoses always-true address tests and nonnull argument comparisons separately.
 CXXFLAGS += -Wno-address -Wno-nonnull-compare
-CXXFLAGS +=   -fno-threadsafe-statics
+CXXFLAGS += -fno-threadsafe-statics
 ASFLAGS += $(CPUFLAGS) -g3 -x assembler-with-cpp
 LDFLAGS += $(CPUFLAGS) -nostdlib -static -T$(LD_SCRIPT)
 LDFLAGS += -Wl,--gc-sections -Wl,--build-id=none -Wl,-Map=$(MAP)
@@ -80,8 +82,8 @@ CPP_SOURCES := \
 	mecocoa/threads.cpp \
 	mecocoa/graphic-touch.cpp \
 	prehost/prehost.cpp \
-	prehost/stm32h743X-ac7m/main.cpp \
-	prehost/stm32h743X-ac7m/mem.cpp \
+	prehost/stm32h7-ac7m/main.cpp \
+	prehost/stm32h7-ac7m/mem.cpp \
 	devdriv/storage/sdcard.cpp \
 	devdriv/tty/serial.cpp \
 	devdriv/video/video-ltdc.cpp \
@@ -95,9 +97,9 @@ CPP_SOURCES := \
 	devdriv/video/video-classic.cpp \
 	prehost/_auxiliary.cpp
 
-ASM_SOURCES := $(H7_DIR)/stm32h743.gcc.S $(H7_DIR)/stm32h743.startup.gcc.S
+ASM_SOURCES := stm32h743.gcc.S stm32h743.startup.gcc.S
 CPP_OBJECTS := $(addprefix $(BUILD_DIR)/,$(CPP_SOURCES:.cpp=.o))
-ASM_OBJECTS := $(addprefix $(BUILD_DIR)/,$(ASM_SOURCES:.S=.o))
+ASM_OBJECTS := $(addprefix $(BUILD_DIR)/board/,$(ASM_SOURCES:.S=.o))
 VIDEO_OBJECT := $(BUILD_DIR)/unisym/Video-VideoConsole2.o
 OBJECTS := $(CPP_OBJECTS) $(ASM_OBJECTS) $(VIDEO_OBJECT)
 DEPS := $(OBJECTS:.o=.d)
@@ -123,12 +125,12 @@ $(BIN): $(ELF)
 $(HEX): $(ELF)
 	$(OBJCOPY) -O ihex $< $@
 
-$(BUILD_DIR)/%.o: %.cpp $(H7_MAKEFILE)
+$(BUILD_DIR)/%.o: $(REPO_ROOT)/%.cpp $(H7_MAKEFILE)
 	@mkdir -p $(dir $@)
 	@echo "CX $<"
 	@$(CXX) $(CPPFLAGS) $(CXXFLAGS) -MMD -MP -MF $(@:.o=.d) -MT $@ -c $< -o $@
 
-$(BUILD_DIR)/%.o: %.S $(H7_MAKEFILE)
+$(BUILD_DIR)/board/%.o: %.S $(H7_MAKEFILE)
 	@mkdir -p $(dir $@)
 	@echo "AS $<"
 	@$(CC) $(CPPFLAGS) $(ASFLAGS) -MMD -MP -MF $(@:.o=.d) -MT $@ -c $< -o $@

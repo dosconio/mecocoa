@@ -71,7 +71,7 @@ Format $board-architecture(-mode)$
 |0x    1032|qemuvirt-r32   |riscv|/           |/          |QEMU-virt  |
 |0x    1064|qemuvirt-r64   |riscv|/           |/          |QEMU-virt  |
 |0x10532064|raspi3-ac53    |armv7|cortex-a53  |BCM2837    |RasPi3-B   |
-|0x1A072032|stm32h743X-ac7m|armv7|cortex-m7   |STM32H743x |?          |
+|0x1A072032|stm32h7-ac7m   |armv7|cortex-m7   |STM32H7xxx |Openedv,...|
 |0x10072032|stm32mp13X-ac7 |armv7|cortex-a7   |STM32MP13x |ATK-DLMP135|
 
 

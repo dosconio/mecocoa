@@ -7,7 +7,11 @@
 #include <cpp/MCU/ST/STM32H7>
 #include <cpp/Device/IIC>
 #include "touch-gtxxx.hpp"
-#include "../../prehost/stm32h743X-ac7m/unicfg.hpp"
+#if __has_include("unicfg.hpp")
+#include "unicfg.hpp"
+#else
+#error "BoardConfig is not defined"
+#endif
 
 namespace {
 	stduint TouchTicks(stduint ms) {

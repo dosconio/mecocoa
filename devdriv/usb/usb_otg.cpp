@@ -17,7 +17,11 @@
 #include <c/driver/keyboard.h>
 #endif
 #include <c/driver/_predefine/predef.usbperi.hpp>
-#include "../../prehost/stm32h743X-ac7m/unicfg.hpp"
+#if __has_include("unicfg.hpp")
+#include "unicfg.hpp"
+#else
+#error "BoardConfig is not defined"
+#endif
 
 namespace Devs {
 	void prepare_usb_msc_disconnect(uni::device::SpaceUSB::USBHostDevice& device);

@@ -11,7 +11,12 @@
 #include <c/data.h>
 #include "../touch/touch-gtxxx.hpp"
 #include "../../depends/desktop.hpp"
-#include "../../prehost/stm32h743X-ac7m/unicfg.hpp"
+
+#if __has_include("unicfg.hpp")
+#include "unicfg.hpp"
+#else
+#error "BoardConfig is not defined"
+#endif
 
 extern byte _BUF_cursor[byteof(Cursor)];
 

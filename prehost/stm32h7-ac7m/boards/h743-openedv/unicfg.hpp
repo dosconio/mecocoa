@@ -1,7 +1,9 @@
+// If you use this file, add current directory to include path.
+
 #ifndef _MCCA_H7_UNICFG_HPP_
 #define _MCCA_H7_UNICFG_HPP_
 
-#include "../../include/mecocoa.hpp"
+#include "../../../../include/mecocoa.hpp"
 #include <cpp/Device/GPIO>
 #include <cpp/Device/RCC/RCC>
 #include <cpp/Device/FMC>

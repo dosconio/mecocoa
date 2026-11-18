@@ -341,7 +341,7 @@
               <MiscControls>-fno-strict-aliasing -Wno-c++98-compat -Wno-old-style-cast -Wno-c++98-c++11-compat-binary-literal -Wno-extra-semi-stmt -Wno-deprecated-copy-with-user-provided-copy -Wno-c++98-compat-pedantic -Wno-keyword-macro -Wno-invalid-constexpr -Wno-empty-body -Wno-undefined-bool-conversion</MiscControls>
               <Define>_MCU_STM32H7x, _HIS_IMPLEMENT, _MCCA=0x1A072032, _DEBUG</Define>
               <Undefine></Undefine>
-              <IncludePath>D:\her\unisym\inc</IncludePath>
+              <IncludePath>D:\her\unisym\inc;..\h743-openedv</IncludePath>
             </VariousControls>
           </Cads>
           <Aads>
@@ -388,122 +388,122 @@
             <File>
               <FileName>memoman.cpp</FileName>
               <FileType>8</FileType>
-              <FilePath>..\..\mecocoa\memoman.cpp</FilePath>
+              <FilePath>..\..\..\..\mecocoa\memoman.cpp</FilePath>
             </File>
             <File>
               <FileName>memoman-init.cpp</FileName>
               <FileType>8</FileType>
-              <FilePath>..\..\mecocoa\memoman-init.cpp</FilePath>
+              <FilePath>..\..\..\..\mecocoa\memoman-init.cpp</FilePath>
             </File>
             <File>
               <FileName>memoman-swap.cpp</FileName>
               <FileType>8</FileType>
-              <FilePath>..\..\mecocoa\memoman-swap.cpp</FilePath>
+              <FilePath>..\..\..\..\mecocoa\memoman-swap.cpp</FilePath>
             </File>
             <File>
               <FileName>message.cpp</FileName>
               <FileType>8</FileType>
-              <FilePath>..\..\mecocoa\message.cpp</FilePath>
+              <FilePath>..\..\..\..\mecocoa\message.cpp</FilePath>
             </File>
             <File>
               <FileName>taskman.cpp</FileName>
               <FileType>8</FileType>
-              <FilePath>..\..\mecocoa\taskman.cpp</FilePath>
+              <FilePath>..\..\..\..\mecocoa\taskman.cpp</FilePath>
             </File>
             <File>
               <FileName>taskman-new.cpp</FileName>
               <FileType>8</FileType>
-              <FilePath>..\..\mecocoa\taskman-new.cpp</FilePath>
+              <FilePath>..\..\..\..\mecocoa\taskman-new.cpp</FilePath>
             </File>
             <File>
               <FileName>taskman-elf.cpp</FileName>
               <FileType>8</FileType>
-              <FilePath>..\..\mecocoa\taskman-elf.cpp</FilePath>
+              <FilePath>..\..\..\..\mecocoa\taskman-elf.cpp</FilePath>
             </File>
             <File>
               <FileName>taskman-lock.cpp</FileName>
               <FileType>8</FileType>
-              <FilePath>..\..\mecocoa\taskman-lock.cpp</FilePath>
+              <FilePath>..\..\..\..\mecocoa\taskman-lock.cpp</FilePath>
             </File>
             <File>
               <FileName>handler.cpp</FileName>
               <FileType>8</FileType>
-              <FilePath>..\..\mecocoa\handler.cpp</FilePath>
+              <FilePath>..\..\..\..\mecocoa\handler.cpp</FilePath>
             </File>
             <File>
               <FileName>handler-tim.cpp</FileName>
               <FileType>8</FileType>
-              <FilePath>..\..\mecocoa\handler-tim.cpp</FilePath>
+              <FilePath>..\..\..\..\mecocoa\handler-tim.cpp</FilePath>
             </File>
             <File>
               <FileName>console.cpp</FileName>
               <FileType>8</FileType>
-              <FilePath>..\..\mecocoa\console.cpp</FilePath>
+              <FilePath>..\..\..\..\mecocoa\console.cpp</FilePath>
             </File>
             <File>
               <FileName>console-bcon.cpp</FileName>
               <FileType>8</FileType>
-              <FilePath>..\..\mecocoa\console-bcon.cpp</FilePath>
+              <FilePath>..\..\..\..\mecocoa\console-bcon.cpp</FilePath>
             </File>
             <File>
               <FileName>console-init.cpp</FileName>
               <FileType>8</FileType>
-              <FilePath>..\..\mecocoa\console-init.cpp</FilePath>
+              <FilePath>..\..\..\..\mecocoa\console-init.cpp</FilePath>
             </File>
             <File>
               <FileName>fileman.cpp</FileName>
               <FileType>8</FileType>
-              <FilePath>..\..\mecocoa\fileman.cpp</FilePath>
+              <FilePath>..\..\..\..\mecocoa\fileman.cpp</FilePath>
             </File>
             <File>
               <FileName>filesys.cpp</FileName>
               <FileType>8</FileType>
-              <FilePath>..\..\mecocoa\filesys.cpp</FilePath>
+              <FilePath>..\..\..\..\mecocoa\filesys.cpp</FilePath>
             </File>
             <File>
               <FileName>graphic.cpp</FileName>
               <FileType>8</FileType>
-              <FilePath>..\..\mecocoa\graphic.cpp</FilePath>
+              <FilePath>..\..\..\..\mecocoa\graphic.cpp</FilePath>
             </File>
             <File>
               <FileName>schedul.cpp</FileName>
               <FileType>8</FileType>
-              <FilePath>..\..\mecocoa\schedul.cpp</FilePath>
+              <FilePath>..\..\..\..\mecocoa\schedul.cpp</FilePath>
             </File>
             <File>
               <FileName>syscall.cpp</FileName>
               <FileType>8</FileType>
-              <FilePath>..\..\mecocoa\syscall.cpp</FilePath>
+              <FilePath>..\..\..\..\mecocoa\syscall.cpp</FilePath>
             </File>
             <File>
               <FileName>sysinfo.cpp</FileName>
               <FileType>8</FileType>
-              <FilePath>..\..\mecocoa\sysinfo.cpp</FilePath>
+              <FilePath>..\..\..\..\mecocoa\sysinfo.cpp</FilePath>
             </File>
             <File>
               <FileName>sysinfo-dev.cpp</FileName>
               <FileType>8</FileType>
-              <FilePath>..\..\mecocoa\sysinfo-dev.cpp</FilePath>
+              <FilePath>..\..\..\..\mecocoa\sysinfo-dev.cpp</FilePath>
             </File>
             <File>
               <FileName>devsman.cpp</FileName>
               <FileType>8</FileType>
-              <FilePath>..\..\mecocoa\devsman.cpp</FilePath>
+              <FilePath>..\..\..\..\mecocoa\devsman.cpp</FilePath>
             </File>
             <File>
               <FileName>devsman-usb.cpp</FileName>
               <FileType>8</FileType>
-              <FilePath>..\..\mecocoa\devsman-usb.cpp</FilePath>
+              <FilePath>..\..\..\..\mecocoa\devsman-usb.cpp</FilePath>
             </File>
             <File>
               <FileName>threads.cpp</FileName>
               <FileType>8</FileType>
-              <FilePath>..\..\mecocoa\threads.cpp</FilePath>
+              <FilePath>..\..\..\..\mecocoa\threads.cpp</FilePath>
             </File>
             <File>
               <FileName>graphic-touch.cpp</FileName>
               <FileType>8</FileType>
-              <FilePath>..\..\mecocoa\graphic-touch.cpp</FilePath>
+              <FilePath>..\..\..\..\mecocoa\graphic-touch.cpp</FilePath>
             </File>
           </Files>
         </Group>
@@ -518,7 +518,7 @@
             <File>
               <FileName>prehost.cpp</FileName>
               <FileType>8</FileType>
-              <FilePath>..\prehost.cpp</FilePath>
+              <FilePath>..\..\..\prehost.cpp</FilePath>
             </File>
             <File>
               <FileName>stm32h743.S</FileName>
@@ -533,12 +533,12 @@
             <File>
               <FileName>main.cpp</FileName>
               <FileType>8</FileType>
-              <FilePath>.\main.cpp</FilePath>
+              <FilePath>..\..\main.cpp</FilePath>
             </File>
             <File>
               <FileName>mem.cpp</FileName>
               <FileType>8</FileType>
-              <FilePath>.\mem.cpp</FilePath>
+              <FilePath>..\..\mem.cpp</FilePath>
             </File>
           </Files>
         </Group>
@@ -551,47 +551,47 @@
             <File>
               <FileName>sdcard.cpp</FileName>
               <FileType>8</FileType>
-              <FilePath>..\..\devdriv\storage\sdcard.cpp</FilePath>
+              <FilePath>..\..\..\..\devdriv\storage\sdcard.cpp</FilePath>
             </File>
             <File>
               <FileName>serial.cpp</FileName>
               <FileType>8</FileType>
-              <FilePath>..\..\devdriv\tty\serial.cpp</FilePath>
+              <FilePath>..\..\..\..\devdriv\tty\serial.cpp</FilePath>
             </File>
             <File>
               <FileName>video-ltdc.cpp</FileName>
               <FileType>8</FileType>
-              <FilePath>..\..\devdriv\video\video-ltdc.cpp</FilePath>
+              <FilePath>..\..\..\..\devdriv\video\video-ltdc.cpp</FilePath>
             </File>
             <File>
               <FileName>touch-gtxxx.cpp</FileName>
               <FileType>8</FileType>
-              <FilePath>..\..\devdriv\touch\touch-gtxxx.cpp</FilePath>
+              <FilePath>..\..\..\..\devdriv\touch\touch-gtxxx.cpp</FilePath>
             </File>
             <File>
               <FileName>kboard.cpp</FileName>
               <FileType>8</FileType>
-              <FilePath>..\..\devdriv\kboard.cpp</FilePath>
+              <FilePath>..\..\..\..\devdriv\kboard.cpp</FilePath>
             </File>
             <File>
               <FileName>usb_otg.cpp</FileName>
               <FileType>8</FileType>
-              <FilePath>..\..\devdriv\usb\usb_otg.cpp</FilePath>
+              <FilePath>..\..\..\..\devdriv\usb\usb_otg.cpp</FilePath>
             </File>
             <File>
               <FileName>usb_storage.cpp</FileName>
               <FileType>8</FileType>
-              <FilePath>..\..\devdriv\usb\usb_storage.cpp</FilePath>
+              <FilePath>..\..\..\..\devdriv\usb\usb_storage.cpp</FilePath>
             </File>
             <File>
               <FileName>bus-gpio.cpp</FileName>
               <FileType>8</FileType>
-              <FilePath>..\..\devdriv\bus\bus-gpio.cpp</FilePath>
+              <FilePath>..\..\..\..\devdriv\bus\bus-gpio.cpp</FilePath>
             </File>
             <File>
               <FileName>fmc-sdram.cpp</FileName>
               <FileType>8</FileType>
-              <FilePath>..\..\devdriv\mem\fmc-sdram.cpp</FilePath>
+              <FilePath>..\..\..\..\devdriv\mem\fmc-sdram.cpp</FilePath>
             </File>
           </Files>
         </Group>
@@ -601,17 +601,17 @@
             <File>
               <FileName>Video-VideoConsole2.cpp</FileName>
               <FileType>8</FileType>
-              <FilePath>..\..\..\unisym\lib\cpp\Device\Video-VideoConsole2.cpp</FilePath>
+              <FilePath>..\..\..\..\..\unisym\lib\cpp\Device\Video-VideoConsole2.cpp</FilePath>
             </File>
             <File>
               <FileName>desktop.cpp</FileName>
               <FileType>8</FileType>
-              <FilePath>..\..\depends\desktop.cpp</FilePath>
+              <FilePath>..\..\..\..\depends\desktop.cpp</FilePath>
             </File>
             <File>
               <FileName>video-classic.cpp</FileName>
               <FileType>8</FileType>
-              <FilePath>..\..\devdriv\video\video-classic.cpp</FilePath>
+              <FilePath>..\..\..\..\devdriv\video\video-classic.cpp</FilePath>
             </File>
           </Files>
         </Group>

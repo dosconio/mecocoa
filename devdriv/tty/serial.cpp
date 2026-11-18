@@ -18,7 +18,11 @@ Send 0x3FA (FCR) 0xC7（Enable and Clear FIFO）,  Read 0x3FA MS2B (IIR)。
 #include "../../include/mecocoa.hpp"
 #include "c/driver/UART.h"
 #if defined(_MCU_STM32H7x)
-#include "../../prehost/stm32h743X-ac7m/unicfg.hpp"
+#if __has_include("unicfg.hpp")
+#include "unicfg.hpp"
+#else
+#error "BoardConfig is not defined"
+#endif
 #endif
 
 _ESYM_C void R_COM1_INIT();

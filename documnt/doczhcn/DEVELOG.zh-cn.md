@@ -1,5 +1,7 @@
 ## 2026-11-18
 
+- 18:16（UTC+8）H743 OpenEdv 的 GCC 构建入口迁入板级目录，可直接在该目录构建；板级目录加入头文件搜索路径，并补充 Unisym、环境变量及 Mecocoa 配置准备步骤。
+
 - 15:38（UTC+8）PROP 接入 chmod/fchmod/chown/fchown，VFS 统一检查属主、root、只读挂载和后端能力，并在设置成功后更新 inode。路径授权和 stat 合并 permit 原生权限，FAT 部分写权限限制保留挂载默认值。Unisym chmod/chown 命令接入八进制 mode、数字 UID/GID、多路径处理和错误输出，中文文件系统文档补充用法与支持范围。
 
 - 15:05（UTC+8）共享 FilesysTrait 增加 permit 原生权限 get/set 接口，结果包含有效字段、mode 位掩码和错误状态。FAT 接入普通文件只读属性读写，UDF 接入磁盘 UID/GID/mode 读取；RootFs 接入内存权限读写，ISO9660、DevFs 和设备树明确返回当前支持范围。中文 FILESYS 文档补充后端能力表和调用约定。

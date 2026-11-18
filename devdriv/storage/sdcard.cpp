@@ -8,7 +8,11 @@
 #include <cpp/Device/SD.hpp>
 #include <c/format/filesys/FAT.h>
 #if defined(_MCU_STM32H7x)
-#include "../../prehost/stm32h743X-ac7m/unicfg.hpp"
+#if __has_include("unicfg.hpp")
+#include "unicfg.hpp"
+#else
+#error "BoardConfig is not defined"
+#endif
 #endif
 
 _ESYM_C void R_SDCARD_INIT();
