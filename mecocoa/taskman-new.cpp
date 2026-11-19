@@ -302,6 +302,10 @@ void Taskman::Initialize(stduint cpuid) {
 	// register kernel as pid 0
 	auto kernel_task = AllocateTask();
 	auto kernel_thread = AllocateThread();
+	if (!kernel_task || !kernel_thread) {
+		printlog(_LOG_FATAL, "Taskman: cannot allocate bootstrap task or thread");
+		while (true) HALT();
+	}
 	kernel_task->main_thread = kernel_thread;
 	kernel_task->thread_list_head = kernel_thread;
 	kernel_thread->parent_process = kernel_task;
@@ -406,6 +410,10 @@ ProcessBlock* Taskman::Create(void* entry, byte ring, bool append)
 	}
 	
 	auto tb = AllocateThread();
+	if (!tb) {
+		ProcessBlock::Release(ppb);
+		return nullptr;
+	}
 	ppb->main_thread = tb;
 	ppb->thread_list_head = tb;
 	tb->parent_process = ppb;

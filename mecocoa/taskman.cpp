@@ -328,6 +328,12 @@ auto Taskman::AllocateThread() -> ThreadBlock* {
 	}
 	MemSet(tb, 0, sizeof(ThreadBlock));
 	new (tb) ThreadBlock();
+	tb->timer_state = uni::make_shared<ThreadTimerState>();
+	if (!tb->timer_state) {
+		tb->~ThreadBlock();
+		mempool.deallocate(tb, sizeof(ThreadBlock));
+		return nullptr;
+	}
 	tb->processor_id = CORE_ID_INVALID;
 	tb->async_messages.func_free = free_async_msg;
 	return tb;
@@ -335,6 +341,8 @@ auto Taskman::AllocateThread() -> ThreadBlock* {
 
 void Taskman::DestroyThread(ThreadBlock* th) {
 	if (!th) return;
+	// Final reclamation also closes timers for threads reaching this path directly.
+	Systimex::CancelThreadTimers(th->timer_state);
 	extern void CleanupPwcallThreadInterrupts(stduint tid);
 	// [HYP-C] Verify thread is not still running on any CPU before freeing its stack
 	while (true) {
@@ -353,7 +361,6 @@ void Taskman::DestroyThread(ThreadBlock* th) {
 			break;
 		}
 	}
-	Systimex::CancelThreadWake(th->tid);
 	CleanupPwcallThreadInterrupts(th->tid);
 	device_event_release(th);
 	ProcessBlock* ppb = th->parent_process;
@@ -456,6 +463,8 @@ bool Taskman::ExitCurrent(stduint code) {
 	// __asm("mov %0, %%eax" : : "m"(para[0])); TaskReturn();
 
 	stduint para[2] = { pid, code };
+	// Stop this thread's timers before requesting asynchronous process termination.
+	if (auto* th = CurrentTB()) Systimex::CancelThreadTimers(th->timer_state);
 	syssend_async(Task_TaskMan, sliceof(para), _IMM(TaskmanMsg::EXIT));
 
 	if (auto th = CurrentTB()) {
@@ -815,8 +824,16 @@ static void NotifyTaskLifecycle(stduint parent_pid, stduint pid, stdsint exit_st
 bool Taskman::Exit(ProcessBlock* p, stdsint exit_code)
 {
 	extern Spinlock scheduler_lock;
-	if (!p || p->state != ProcessBlock::State::Active) return false;
-	p->state = ProcessBlock::State::Expiring; // Mark as terminating immediately
+	if (!p) return false;
+	{
+		SpinlockLocal guard(&scheduler_lock);
+		if (p->state != ProcessBlock::State::Active) return false;
+		p->state = ProcessBlock::State::Expiring; // Mark as terminating immediately
+		// Close every target state before process teardown can wait for other resources.
+		for (auto* th = p->thread_list_head; th; th = th->process_thread_next) {
+			Systimex::CancelThreadTimers(th->timer_state);
+		}
+	}
 
 	const auto pid = p->getID();
 	auto parent_pid = p->parent_id;

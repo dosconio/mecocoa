@@ -693,6 +693,21 @@ ThreadBlock* Taskman::LocateThread(stduint tid) {
 	return nullptr;
 }
 
+// Called by kernel timer registration; retain state before releasing scheduler_lock.
+uni::SharedPtr<ThreadTimerState> Taskman::AcquireThreadTimerState(stduint tid) {
+	SpinlockLocal guard(&scheduler_lock);
+	for (auto* node = thchain.Root(); node; node = node->next) {
+		auto* th = cast<ThreadBlock*>(node->offs);
+		if (th->tid != tid) continue;
+		if (!th->parent_process || th->parent_process->state != ProcessBlock::State::Active) return {};
+		if (th->state != ThreadBlock::State::Running && th->state != ThreadBlock::State::Ready && th->state != ThreadBlock::State::Pended) return {};
+		if (_IMM(th->block_reason) & _IMM(ThreadBlock::BlockReason::BR_Exiting)) return {};
+		if (!th->timer_state || th->timer_state->closed.load(uni::MemoryOrder_Acquire)) return {};
+		return th->timer_state;
+	}
+	return {};
+}
+
 static auto
 ifContinueProcess(ThreadBlock* old_pb) -> bool {
 	using TBS = ThreadBlock::State;

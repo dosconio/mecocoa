@@ -24,6 +24,10 @@
 namespace uni { struct PipeChannel; }
 namespace Devs { struct StorageWaitContext; struct StorageWaiter; }
 
+struct ThreadTimerState {
+	uni::Atomic<bool> closed{false};
+};
+
 struct Systimex {
 	static void
 		CollectExpired();
@@ -40,6 +44,8 @@ struct Systimex {
 	static stduint CancelDeferredCallback(stduint iden, _tocall_ft hand = nullptr);
 	static void
 		CancelThreadWake(stduint tid);
+	// Called by kernel exit and reclamation paths; safe while scheduler_lock is held.
+	static void CancelThreadTimers(const uni::SharedPtr<ThreadTimerState>& owner);
 };
 struct MccaRectangle {
 	stduint x = 0, y = 0, w = 0, h = 0;
@@ -536,6 +542,9 @@ public: // _Comment(Signals)
 	_POSIX_sigset_t blocked_signals; // Bitmask of masked signals
 	stduint sas_sp = 0;       // Alternate signal stack pointer
 	stduint sas_size = 0;     // Alternate signal stack size
+public: // Systime
+	// Assigned before publication and retained independently by thread-targeted timers.
+	uni::SharedPtr<ThreadTimerState> timer_state;
 };
 
 #include "taskman/context.hpp"
@@ -634,6 +643,8 @@ public:
 		Locate(stduint taskid) -> ProcessBlock*;
 	static auto
 		LocateThread(stduint tid) -> ThreadBlock*;
+	// Called by kernel timer registration without holding another spinlock.
+	static uni::SharedPtr<ThreadTimerState> AcquireThreadTimerState(stduint tid);
 	static bool UnblockThread(stduint tid, ThreadBlock::BlockReason reason);
 	#if (_MCCA & 0xFF00) == 0x8600
 	// Register/block and validate/wake under scheduler_lock; timer callbacks carry no stack pointers.

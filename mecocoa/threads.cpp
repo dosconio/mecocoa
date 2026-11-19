@@ -191,6 +191,9 @@ bool Taskman::ExitThread(stduint code) {
 		return ExitCurrent(code);
 	}
 
+	// Close worker timers before publishing completion to a joining thread.
+	Systimex::CancelThreadTimers(th->timer_state);
+
 	ThreadBlock* joiner = nullptr;
 	{
 		SpinlockLocal guard(&scheduler_lock);

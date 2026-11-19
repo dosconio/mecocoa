@@ -11,6 +11,17 @@
 volatile timeval_t system_time = {};
 uni::Atomic<stduint> tick = 0;
 
+namespace {
+	uni::Atomic<bool> timer_cleanup_pending{false};
+}
+
+// Called by kernel exit paths; never acquire timer_lock or wait for dispatch.
+void Systimex::CancelThreadTimers(const uni::SharedPtr<ThreadTimerState>& owner) {
+	if (!owner) return;
+	owner->closed.store(true, uni::MemoryOrder_Release);
+	timer_cleanup_pending.store(true, uni::MemoryOrder_Release);
+}
+
 #if !defined (_MPU_STM32MP13) //{TEMP}
 
 namespace {
@@ -31,6 +42,7 @@ namespace {
 		stduint retry_after = 0;
 		stduint serial = 0;
 		byte dispatch_attempts = 0;
+		uni::SharedPtr<ThreadTimerState> owner;
 	};
 
 	static constexpr byte TimerDispatchAttemptLimit = 5;
@@ -45,17 +57,38 @@ static int TimerRetryCmp(pureptr_t a, pureptr_t b) {
 	return treat<MsgTimer>(((Dnode*)a)->offs).retry_after -
 		treat<MsgTimer>(((Dnode*)b)->offs).retry_after;
 }
+// Dchain releases the node itself after this callback destroys its payload.
+static void FreeMsgTimer(pureptr_t value) {
+	auto* node = static_cast<Dnode*>(value);
+	delete static_cast<MsgTimer*>(node->offs);
+}
+
 // Timer management
-Dchain TimerManager = { DnodeHeapFreeSimple };
-Dchain TimerRetryManager = { DnodeHeapFreeSimple };
+Dchain TimerManager = { FreeMsgTimer };
+Dchain TimerRetryManager = { FreeMsgTimer };
 Spinlock timer_lock;
 
 namespace {
 	bool timer_dispatch_pending = false;
 	stduint timer_serial = 0;
 
+	// Only thread-targeted timers depend on the target's lifetime state.
+	bool IsClosedThreadTimer(const MsgTimer& timer) {
+		if (timer.action != TimerAction::ThreadWake && timer.action != TimerAction::DriverMessage) return false;
+		return !timer.owner || timer.owner->closed.load(uni::MemoryOrder_Acquire);
+	}
+
+	// Called by the Devsman timer service while holding timer_lock.
+	void RemoveClosedThreadTimers(Dchain& timers) {
+		for (auto* node = timers.Root(); node; ) {
+			auto* next = node->next;
+			if (IsClosedThreadTimer(treat<MsgTimer>(node->offs))) timers.Remove(node);
+			node = next;
+		}
+	}
+
 	bool CopyTimerToChain(Dchain& destination, const MsgTimer& timer) {
-		auto* copy = new MsgTimer(timer);
+		auto* copy = ::new (std::nothrow_t{}) MsgTimer(timer);
 		if (!copy) return false;
 		if (destination.Append(copy)) return true;
 		delete copy;
@@ -98,6 +131,7 @@ namespace {
 
 	bool AppendTimer(stduint timeout, MsgTimer timer) {
 		SpinlockLocal guard(&timer_lock);
+		if (IsClosedThreadTimer(timer)) return false;
 		timer.timeout = tick + timeout;
 		timer.serial = ++timer_serial;
 		if (!timer.serial) timer.serial = ++timer_serial;
@@ -125,14 +159,17 @@ void SysTimer::Append(stduint timeout, stduint iden, _tocall_ft hand) {
 
 bool Systimex::AppendThreadWake(stduint timeout, stduint tid) {
 	MsgTimer timer = {};
+	timer.owner = Taskman::AcquireThreadTimerState(tid);
+	if (!timer.owner) return false;
 	timer.action = TimerAction::ThreadWake;
 	timer.target = tid;
 	return AppendTimer(timeout, timer);
 }
 
-bool Systimex::AppendDriverMessage(stduint timeout, stduint target_tid,
-	stduint message_type, stduint value) {
+bool Systimex::AppendDriverMessage(stduint timeout, stduint target_tid, stduint message_type, stduint value) {
 	MsgTimer timer = {};
+	timer.owner = Taskman::AcquireThreadTimerState(target_tid);
+	if (!timer.owner) return false;
 	timer.iden = value;
 	timer.action = TimerAction::DriverMessage;
 	timer.target = target_tid;
@@ -195,8 +232,9 @@ void Systimex::CollectExpired() {
 					dispatch = node;
 				}
 			}
-			if (!run_callback && dispatch) {
-				notify_serial = treat<MsgTimer>(dispatch->offs).serial;
+			// Cleanup must reach Devsman even when no timer has expired yet.
+			if (!run_callback && !timer_dispatch_pending && (dispatch || timer_cleanup_pending.load(uni::MemoryOrder_Acquire))) {
+				notify_serial = dispatch ? treat<MsgTimer>(dispatch->offs).serial : 0;
 				timer_dispatch_pending = true;
 				notify = true;
 			}
@@ -222,7 +260,12 @@ void Systimex::CollectExpired() {
 	{
 		SpinlockLocal guard(&timer_lock);
 		timer_dispatch_pending = false;
-		auto* node = FindTimerBySerial(TimerManager, notify_serial);
+		// Keep cleanup pending on notification failure so a later tick retries it.
+		auto* node = notify_serial ? FindTimerBySerial(TimerManager, notify_serial) : nullptr;
+		if (node && IsClosedThreadTimer(treat<MsgTimer>(node->offs))) {
+			TimerManager.Remove(node);
+			node = nullptr;
+		}
 		if (node) {
 			MsgTimer retry = treat<MsgTimer>(node->offs);
 			retry.dispatch_attempts++;
@@ -244,7 +287,7 @@ void Systimex::CollectExpired() {
 			}
 		}
 	}
-	if (drop) {
+	if (drop && !IsClosedThreadTimer(dropped)) {
 		plogerro("SysTimer: drop undeliverable timer action=%u target=%u type=%u timeout=%u attempts=%u",
 			(stduint)dropped.action, dropped.target, dropped.message_type,
 			dropped.timeout, dropped.dispatch_attempts);
@@ -259,6 +302,10 @@ void Systimex::DispatchExpired() {
 		MsgTimer expired = {};
 		{
 			SpinlockLocal guard(&timer_lock);
+			if (timer_cleanup_pending.exchange(false, uni::MemoryOrder_Acq_Rel)) {
+				RemoveClosedThreadTimers(TimerManager);
+				RemoveClosedThreadTimers(TimerRetryManager);
+			}
 			Dnode* dispatch = nullptr;
 			for (auto* node = TimerManager.Root(); node; node = node->next) {
 				auto& timer = treat<MsgTimer>(node->offs);
@@ -275,6 +322,9 @@ void Systimex::DispatchExpired() {
 			expired = treat<MsgTimer>(dispatch->offs);
 			TimerManager.Remove(dispatch);
 		}
+
+		// The target may have closed after this timer was copied out of the queue.
+		if (IsClosedThreadTimer(expired)) continue;
 
 		switch (expired.action) {
 		// Realtime
@@ -293,6 +343,7 @@ void Systimex::DispatchExpired() {
 		case TimerAction::DriverMessage: {
 			if (!syssend_async(expired.target, &expired.iden, sizeof(expired.iden),
 				expired.message_type)) break;
+			if (IsClosedThreadTimer(expired)) break;
 			expired.dispatch_attempts++;
 			if (expired.dispatch_attempts >= TimerDispatchAttemptLimit) {
 				plogerro("SysTimer: drop undeliverable driver message target=%u type=%u attempts=%u",
