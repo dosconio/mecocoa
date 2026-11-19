@@ -93,6 +93,7 @@ enum class FilemanMsg {
 	LOAD_DRIVER_FILE,
 	STAT,
 	PERMIT,
+	RENAME,
 };
 
 #include <c/API-POSIX/fcntl.h>

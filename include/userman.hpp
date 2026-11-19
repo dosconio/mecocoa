@@ -2,11 +2,24 @@
 #define USERMAN_HPP_
 
 #include <c/stdinc.h>
+#include <cpp/vector>
+#include <cpp/ISO_IEC_STD/memory>
+
+// Published sets expose values only; Userman builds and normalizes replacements before publication.
+class SupplementaryGroups {
+	friend class Userman;
+	uni::Vector<uint32> ids;
+public:
+	stduint Count() const { return ids.Count(); }
+	uint32 At(stduint index) const { return *static_cast<const uint32*>(ids.Locate(index)); }
+	bool Contains(uint32 gid) const;
+};
 
 // Numeric credentials are independent of account names, storage, and authentication.
 struct ProcessCredentials {
 	uint32 uid = 0;
 	uint32 gid = 0;
+	uni::SharedPtr<const SupplementaryGroups> groups;
 };
 
 struct ProcessCreationContext {
@@ -27,6 +40,8 @@ struct UserRecord {
 struct GroupRecord {
 	uint32 gid;
 	const char* name;
+	const uint32* members;
+	stduint member_count;
 };
 
 class Userman {
@@ -48,10 +63,18 @@ public:
 	// Root may change numeric IDs; an unprivileged process may only retain its current ID.
 	static int SetUserID(ProcessBlock& process, uint32 uid);
 	static int SetGroupID(ProcessBlock& process, uint32 gid);
+	// User arrays are copied before entry; only root may replace its current process group set.
+	static int SetGroups(ProcessBlock& process, const stdsint* groups, stduint count);
+	// Resolve explicit account memberships plus the supplied base GID without changing any process.
+	static int AccountGroups(const char* name, uint32 base, uni::SharedPtr<const SupplementaryGroups>& result);
+	// Permission checks match the primary GID or a member of the immutable supplementary set.
+	static bool HasGroup(const ProcessCredentials& credentials, uint32 gid);
 	static bool IsRoot(ProcessBlock& process);
 	static bool MayControl(ProcessBlock& caller, ProcessBlock& target);
-	// Authenticate and replace both IDs together; the prototype password is deliberately fixed to p.
+	// Authenticate and replace both IDs and the account group set together; the prototype password is deliberately fixed to p.
 	static int Login(ProcessBlock& process, const char* name, const char* password);
+private:
+	static void NormalizeGroups(SupplementaryGroups& groups);
 };
 
 #endif

@@ -130,7 +130,7 @@ stduint FilesysFAT::writfl(void* fil_handler, Slice file_slice, const byte* sors
 bool FilesysFAT::remove(rostr pathname) { return false; }
 bool FilesysFAT::create(rostr fullpath, stduint flags, FilesysCreateParameter& parameter) { return false; }
 bool FilesysFAT::truncate(void* fil_handler, stduint size) { return false; }
-bool FilesysFAT::rename(rostr src_path, rostr dst_path) { return false; }
+bool FilesysFAT::rename(rostr src_path, rostr dst_path, void* handler) { return false; }
 
 void* operator new[](size_t size) { return 0; }
 void* operator new(size_t, const std::nothrow_t&) noexcept { return nullptr; }

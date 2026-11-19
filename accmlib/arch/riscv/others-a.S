@@ -40,5 +40,5 @@ _start:
 
 .global __sigrestorer
 __sigrestorer:
-	li a7, 0x15 /* syscall_t::SIGR */
+	li a7, 0x16 /* syscall_t::SIGR */
 	ecall

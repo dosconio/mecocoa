@@ -1,5 +1,6 @@
 #include "aaaaa.h"
 #include <unistd.h>
+#include <stdio.h>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <poll.h>
@@ -317,4 +318,12 @@ int unlink(const char* pathname) {
 	// Call DELF system call: returns 1 for success, 0 for failure
 	int ret = syscall(syscall_t::DELF, _IMM(pathname), nil, nil);
 	return ret > 0 ? 0 : -1;
+}
+
+// Convert the kernel's negative errno result to the public rename convention.
+int rename(const char* oldpath, const char* newpath) {
+	const auto status = stdsint(syscall(syscall_t::MOVE, _IMM(oldpath), _IMM(newpath), 0));
+	if (status >= 0) return int(status);
+	errno = int(-status);
+	return -1;
 }

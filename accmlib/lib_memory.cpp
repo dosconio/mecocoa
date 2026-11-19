@@ -2,6 +2,7 @@
 #include "c/ustring.h"
 #include "c/consio.h"
 #include "c/mempool.h"
+#include "c/arith.h"
 #include "c/system/paging.h"
 #include <sys/mman.h>
 
@@ -30,11 +31,20 @@ void user_heap_init() {
 	user_heap_initialized = true;
 }
 
+// Match the kernel allocation policy: derive alignment from size and cap it at the compiler default.
+static size_t GetDefaultAllocationAlignment(size_t size) {
+	if (!size) return 1;
+	const size_t natural_alignment = size & (~size + 1);
+	constexpr size_t maximum_alignment = __STDCPP_DEFAULT_NEW_ALIGNMENT__;
+	return minof(natural_alignment, maximum_alignment);
+}
+
 _ESYM_C void* malloc(size_t size) {
 	if (!user_heap_initialized) {
 		user_heap_init();
 	}
-	return user_mempool.allocate(size);
+	const size_t alignment = GetDefaultAllocationAlignment(size);
+	return user_mempool.allocate(size, intlog2_iexpo(alignment));
 }
 
 _ESYM_C void* malloc_align(size_t size, size_t alignment) {

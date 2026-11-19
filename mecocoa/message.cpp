@@ -367,7 +367,9 @@ int msg_send(ThreadBlock* fo_th, stduint too, _Comment(vaddr) CommMsg* msg, bool
 		SpinlockLocal guard(&comm_lock);
 		if (!CanCommThread(fo_th) || !CanCommThread(to_th)) return 1;
 		const stduint target_pid = to_th->parent_process->pid;
-		if (!msg_in_kernel && target_pid < TaskCount && !user_ipc_services[target_pid])
+		// Buffer location does not imply privilege; apply the user service allowlist only to Ring3 senders.
+		const bool from_user = fo_th->parent_process->ring == RING_U;
+		if (!msg_in_kernel && from_user && target_pid < TaskCount && !user_ipc_services[target_pid])
 			return -EPERM;
 
 		if (!is_async && msg_send_will_deadlock(fo_th, to_th)) {

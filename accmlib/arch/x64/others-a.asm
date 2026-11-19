@@ -14,5 +14,5 @@ syscall:
 RET
 
 __sigrestorer:
-	MOV RAX, 0x15 ; syscall_t::SIGR (0x15)
+	MOV RAX, 0x16 ; syscall_t::SIGR (0x16)
 	SYSCALL

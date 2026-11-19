@@ -60,7 +60,7 @@ syscall_callgate:
 RET
 
 __sigrestorer:
-	MOV EAX, 0x15 ; syscall_t::SIGR (0x15)
+	MOV EAX, 0x16 ; syscall_t::SIGR (0x16)
 	INT 0x81
 
 section .note.GNU-stack noalloc noexec nowrite progbits

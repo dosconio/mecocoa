@@ -1088,6 +1088,17 @@ DEFSYSC sysc_DELF(stduint usr_filepath) {
 	return removed; // 1 on success, 0 on failure
 }
 
+// Fileman copies both user paths before acquiring filesystem locks; the third argument is reserved.
+DEFSYSC sysc_MOVE(stduint oldpath, stduint newpath, stduint unused) {
+	(void)unused;
+	stduint request[2] = { oldpath, newpath };
+	const auto sent = stdsint(syssend(Task_FileSys, request, sizeof(request), _IMM(FilemanMsg::RENAME)));
+	if (sent) return sent < 0 ? sent : -EIO;
+	stdsint status = -EIO;
+	const auto received = stdsint(sysrecv(Task_FileSys, &status, sizeof(status)));
+	return received ? (received < 0 ? received : -EIO) : status;
+}
+
 // PROP keeps the old result size for query zero and uses retained inode snapshots for extended queries.
 DEFSYSC sysc_PROP(stduint object, stduint usr_proper, stduint query) {
 	auto* th = Taskman::CurrentTB();
@@ -1329,15 +1340,60 @@ DEFSYSC sysc_UMSK(stduint mask, stduint, stduint) {
 	return process ? stdsint(Userman::ExchangeCreationMask(*process, uint32(mask & 0777))) : -ESRCH;
 }
 
+// Snapshot ownership remains with the caller; copy native-width ABI GIDs without holding identity locks.
+static stdsint CopySupplementaryGroups(ProcessBlock& process, const uni::SharedPtr<const SupplementaryGroups>& groups, stduint capacity, stduint address) {
+	const stduint count = groups ? groups->Count() : 0;
+	if (!capacity) return count;
+	if (capacity < count) return -EINVAL;
+	if (!count) return 0;
+	if (!address || count > ~stduint(0) / sizeof(stdsint) || address > ~stduint(0) - count * sizeof(stdsint)) return -EFAULT;
+	auto output = uni::make_unique<stdsint[]>(count);
+	if (!output) return -ENOMEM;
+	for (stduint i = 0; i < count; i++) output[i] = groups->At(i);
+	const bool kernel = process.ring == RING_M;
+	const stduint bytes = count * sizeof(stdsint);
+	return MccaMemCopyP((void*)address, kernel ? nullptr : &process, kernel, output.get(), nullptr, true, bytes) == bytes ? stdsint(count) : -EFAULT;
+}
+
 // Copy public account data after releasing all identity locks; no kernel pointers cross the ABI.
 DEFSYSC sysc_USER(stduint operation, stduint key, stduint argument) {
 	auto* pb = Taskman::CurrentPB();
 	if (!pb) return -ESRCH;
 	const auto query = syscall_user_query_t(operation);
+	if (query == syscall_user_query_t::GetGroups) {
+		if (key > 0x7FFFFFFFu) return -EINVAL;
+		const auto credentials = Userman::GetCredentials(*pb);
+		return CopySupplementaryGroups(*pb, credentials.groups, key, argument);
+	}
+	if (query == syscall_user_query_t::SetGroups) {
+		if (!Userman::IsRoot(*pb)) return -EPERM;
+		if (key > 0x7FFFFFFFu || key > ~stduint(0) / sizeof(stdsint)) return -EINVAL;
+		if (!key) return Userman::SetGroups(*pb, nullptr, 0);
+		const stduint bytes = key * sizeof(stdsint);
+		if (!argument || argument > ~stduint(0) - bytes) return -EFAULT;
+		auto input = uni::make_unique<stdsint[]>(key);
+		if (!input) return -ENOMEM;
+		const bool kernel = pb->ring == RING_M;
+		if (MccaMemCopyP(input.get(), nullptr, true, (void*)argument, kernel ? nullptr : pb, kernel, bytes) != bytes) return -EFAULT;
+		return Userman::SetGroups(*pb, input.get(), key);
+	}
 	char name[32]{};
 	stdsint error = -EFAULT;
-	if (query == syscall_user_query_t::UserByName || query == syscall_user_query_t::GroupByName || query == syscall_user_query_t::Login) {
+	if (query == syscall_user_query_t::UserByName || query == syscall_user_query_t::GroupByName || query == syscall_user_query_t::GroupByNameMembers || query == syscall_user_query_t::AccountGroups || query == syscall_user_query_t::Login) {
 		if (!MccaStrCopyP(name, sizeof(name), (const char*)key, pb, nullptr, &error)) return error;
+	}
+	if (query == syscall_user_query_t::AccountGroups) {
+		syscall_group_list_t request{};
+		const bool kernel = pb->ring == RING_M;
+		if (!argument || argument > ~stduint(0) - sizeof(request) || MccaMemCopyP(&request, nullptr, true, (void*)argument, kernel ? nullptr : pb, kernel, sizeof(request)) != sizeof(request)) return -EFAULT;
+		uni::SharedPtr<const SupplementaryGroups> groups;
+		const int status = Userman::AccountGroups(name, request.base, groups);
+		if (status) return status;
+		request.count = groups->Count();
+		if (MccaMemCopyP((void*)argument, kernel ? nullptr : pb, kernel, &request, nullptr, true, sizeof(request)) != sizeof(request)) return -EFAULT;
+		if (request.size < request.count) return -ERANGE;
+		const auto copied = CopySupplementaryGroups(*pb, groups, request.size, (stduint)request.data);
+		return copied < 0 ? copied : 0;
 	}
 	if (query == syscall_user_query_t::Login) {
 		char password[3]{};
@@ -1351,11 +1407,13 @@ DEFSYSC sysc_USER(stduint operation, stduint key, stduint argument) {
 	const GroupRecord* group = nullptr;
 	switch (query) {
 	case syscall_user_query_t::UserByName: user = Userman::FindUser(name); break;
-	case syscall_user_query_t::GroupByName: group = Userman::FindGroup(name); break;
+	case syscall_user_query_t::GroupByName:
+	case syscall_user_query_t::GroupByNameMembers: group = Userman::FindGroup(name); break;
 	case syscall_user_query_t::UserByID:
 		if (key > 0x7FFFFFFFu) return -EINVAL;
 		user = Userman::FindUser(uint32(key));
 		break;
+	case syscall_user_query_t::GroupByIDMembers:
 	case syscall_user_query_t::GroupByID:
 		if (key > 0x7FFFFFFFu) return -EINVAL;
 		group = Userman::FindGroup(uint32(key));
@@ -1367,9 +1425,22 @@ DEFSYSC sysc_USER(stduint operation, stduint key, stduint argument) {
 	const bool kernel = pb->ring == RING_M;
 	if (!argument || argument > ~_IMM0 - sizeof(output) || MccaMemCopyP(&output, nullptr, true, (void*)argument, kernel ? nullptr : pb, kernel, sizeof(output)) != sizeof(output)) return -EFAULT;
 	const char* strings[] = { user ? user->name : group->name, "x", "", user ? user->home : "", user ? user->shell : "" };
-	const stduint count = user ? numsof(strings) : 2;
+	const bool members = query == syscall_user_query_t::GroupByNameMembers || query == syscall_user_query_t::GroupByIDMembers;
+	if (members && group->member_count > ~stduint(0) - 2) return -EOVERFLOW;
+	const stduint count = user ? numsof(strings) : members ? 2 + group->member_count : 2;
+	auto field = [&](stduint index) -> const char* {
+		if (!members || index < 2) return strings[index];
+		const auto* member = Userman::FindUser(group->members[index - 2]);
+		return member ? member->name : nullptr;
+	};
 	stduint required = 0;
-	for (stduint i = 0; i < count; i++) required += StrLength(strings[i]) + 1;
+	for (stduint i = 0; i < count; i++) {
+		const char* value = field(i);
+		if (!value) return -EIO;
+		const stduint size = StrLength(value) + 1;
+		if (size > ~stduint(0) - required) return -EOVERFLOW;
+		required += size;
+	}
 	const stduint capacity = output.size;
 	output.size = required;
 	output.uid = user ? user->uid : 0;
@@ -1379,8 +1450,9 @@ DEFSYSC sysc_USER(stduint operation, stduint key, stduint argument) {
 	if (!output.data || (stduint)output.data > ~_IMM0 - required) return -EFAULT;
 	stduint offset = 0;
 	for (stduint i = 0; i < count; i++) {
-		const stduint size = StrLength(strings[i]) + 1;
-		if (MccaMemCopyP(output.data + offset, kernel ? nullptr : pb, kernel, strings[i], nullptr, true, size) != size) return -EFAULT;
+		const char* value = field(i);
+		const stduint size = StrLength(value) + 1;
+		if (MccaMemCopyP(output.data + offset, kernel ? nullptr : pb, kernel, value, nullptr, true, size) != size) return -EFAULT;
 		offset += size;
 	}
 	return 0;
@@ -1777,21 +1849,22 @@ stduint SYSCALL_TABLE[] = {
 	mglb(sysc_READ),
 	mglb(sysc_WRIT),
 	mglb(sysc_DELF),
+	mglb(sysc_MOVE),
 	mglb(sysc_PROP),
 	mglb(sysc_ENUM),// U-only
 	mglb(sysc_WAIT),
 	mglb(sysx_FORK) & 0,// Fork need frame, process it other way
 	mglb(sysc_TMSG),
-	mglb(sysc_EXEC),// 0x10
+	mglb(sysc_EXEC),
 	mglb(sysc_EXET),
 	0, // PFUN
-	mglb(sysc_SIGA), // 0x13 unchk
-	mglb(sysc_KILL), // 0x14
-	0, // 0x15 unchk (handled manually to pass context frame)
-	mglb(sysc_SETD), // 0x16 (SETD)
-	mglb(sysc_GETD), // 0x17 (GETD)
-	mglb(sysc_MMAP), // 0x18 (MMAP)
-	mglb(sysc_UMAP), // 0x19 (UMAP)
+	mglb(sysc_SIGA),
+	mglb(sysc_KILL),
+	0, // SIGR is handled manually to pass the context frame
+	mglb(sysc_SETD),
+	mglb(sysc_GETD),
+	mglb(sysc_MMAP),
+	mglb(sysc_UMAP),
 	mglb(sysc_SMAP),
 	mglb(sysc_DUP2),
 	mglb(sysc_PIPE),
@@ -1857,6 +1930,9 @@ void syscall_body(NormalTaskContext* cxt)
 		break;
 	case syscall_t::OPEN:
 		cxt->a0 = sysc_OPEN(cxt->a0, cxt->a1, cxt->a2);
+		break;
+	case syscall_t::MOVE:
+		cxt->a0 = sysc_MOVE(cxt->a0, cxt->a1, 0);
 		break;
 	case syscall_t::UMSK:
 		cxt->a0 = sysc_UMSK(cxt->a0, 0, 0);

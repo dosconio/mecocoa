@@ -12,37 +12,38 @@ enum
 	: stduint
 	#endif
 {
-	OUTC = 0x00, // outstr (chr/str, len)->0  |.x86 x64 rv
-	INNC = 0x01, // innstr (blk,&kc,&prop)->ch| x86 x64 rv
-	EXIT = 0x02, // exit   (code)             | x86 x64 rv
-	TIME = 0x03, // getsec (0sec/1ms)->second | x86 x64
-	REST = 0x04, // halt   (unit, time)       | x86 x64
-	COMM = 0x05, // syncom (mod, obj, &msg)   | x86 x64 rv
+	OUTC, // outstr (chr/str, len)->0  |.x86 x64 rv
+	INNC, // innstr (blk,&kc,&prop)->ch| x86 x64 rv
+	EXIT, // exit   (code)             | x86 x64 rv
+	TIME, // getsec (0sec/1ms)->second | x86 x64
+	REST, // halt   (unit, time)       | x86 x64
+	COMM, // syncom (mod, obj, &msg)   | x86 x64 rv
 	// [Fileops]
-	OPEN = 0x06, // open   (path,flags,mode)>=0 | x86 x64 rv ARM
-	CLOS = 0x07, // close  (fd)->0            | x86 x64
-	READ = 0x08, // read   (fd, adr, len)->len| x86 x64
-	WRIT = 0x09, // write  (fd, adr, len)->len| x86 x64
-	DELF = 0x0A, // remove (pathname)->?      | x86 x64
+	OPEN, // open   (path,flags,mode)>=0 | x86 x64 rv ARM
+	CLOS, // close  (fd)->0            | x86 x64
+	READ, // read   (fd, adr, len)->len| x86 x64
+	WRIT, // write  (fd, adr, len)->len| x86 x64
+	DELF, // remove (pathname)->?      | x86 x64
+	MOVE, // rename (oldpath,newpath)->status
 	PROP, // properties (fd/path, &result, query)->status
-	ENUM = 0x0C, // enumer (fd,&kde,cnt)->cnt | x86
+	ENUM, // enumer (fd,&kde,cnt)->cnt | x86
 	// [Process]
-	WAIT = 0x0D, // wait   (pid, &status)->pid| x86 x64    | pid 0 for any
-	FORK = 0x0E, // fork   ()->pid            | x86 x64
-	TMSG = 0x0F, // trymsg ()->(msg_unsovled) | x86 x64 rv
-	EXEC = 0x10, // spawn  (path,argv,envp)->0| x86 x64
-	EXET = 0x11, // exec   (path,argv,envp)->0| x86 x64
+	WAIT, // wait   (pid, &status)->pid| x86 x64    | pid 0 for any
+	FORK, // fork   ()->pid            | x86 x64
+	TMSG, // trymsg ()->(msg_unsovled) | x86 x64 rv
+	EXEC, // spawn  (path,argv,envp)->0| x86 x64
+	EXET, // exec   (path,argv,envp)->0| x86 x64
 	PFUN, // procfn () |(TODO) | priority ...
 	// [Signals]
-	SIGA = 0x13, // sigaction (sig,&new,&old) | x86
-	KILL = 0x14, // kill      (pid, sig, tid) | x86
-	SIGR = 0x15, // sigreturn ()              | -
+	SIGA, // sigaction (sig,&new,&old) | x86
+	KILL, // kill      (pid, sig, tid) | x86
+	SIGR, // sigreturn ()              | -
 	// [Fileops Extend]
-	SETD = 0x16, // chdir  (path)->status     | x86
-	GETD = 0x17, // getcwd (buf, size)->len   | x86
-	MMAP = 0x18, // mmap   (size,fl,fd)->addr | x86
-	UMAP = 0x19, // munmap (addr,size) ->0    | x86
-	SMAP = 0x1A, // setmap (addr,size,prot)->0| x86 x64 rv
+	SETD, // chdir  (path)->status     | x86
+	GETD, // getcwd (buf, size)->len   | x86
+	MMAP, // mmap   (size,fl,fd)->addr | x86
+	UMAP, // munmap (addr,size) ->0    | x86
+	SMAP, // setmap (addr,size,prot)->0| x86 x64 rv
 	DUP2, // dup2   (oldfd, newfd)->newfd | x86
 	PIPE, // pipe   (pipefd)->0           | x86
 	SEEK, // lseek  (fd, offset, whence)->pos | x86
@@ -141,7 +142,20 @@ enum
 	GroupByName,
 	GroupByID,
 	Login,
+	GetGroups,
+	SetGroups,
+	AccountGroups,
+	GroupByNameMembers,
+	GroupByIDMembers,
 };
+
+// AccountGroups counts native signed-word GIDs; size is capacity and count reports the required entries.
+typedef struct syscall_group_list_t {
+	stdsint* data;
+	stduint size;
+	uint32 base;
+	stduint count;
+} syscall_group_list_t;
 
 // USER returns NUL-separated strings in caller storage; size becomes the required byte count.
 typedef struct syscall_account_buffer_t {

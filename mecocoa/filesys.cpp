@@ -316,8 +316,14 @@ namespace uni {
 		// UID 0 and trusted kernel callers bypass mode bits. Callers enforce read-only mounts separately.
 		if (!credentials || credentials->uid == 0) return true;
 		const unsigned shift = credentials->uid == inode.i_uid ? 6 :
-			credentials->gid == inode.i_gid ? 3 : 0;
+			Userman::HasGroup(*credentials, inode.i_gid) ? 3 : 0;
 		return ((inode.i_mode >> shift) & access) == access;
+	}
+
+	// POSIX unlink/rename: with vfs_lock held, sticky removal requires root or ownership of the directory or entry.
+	static bool MayRemoveStickyEntry(const vfs_inode& parent, const vfs_inode& entry, const ProcessCredentials* credentials) {
+		if (!credentials || credentials->uid == 0 || !(parent.i_mode & 01000)) return true;
+		return credentials->uid == parent.i_uid || credentials->uid == entry.i_uid;
 	}
 
 	// Caller holds vfs_lock.
@@ -1492,7 +1498,7 @@ static int SetPermissionsUnlocked(const SharedPtr<vfs_inode>& inode, const Proce
 	if (credentials.uid != 0 && credentials.uid != inode->i_uid) return -EPERM;
 	if (!mode_change && credentials.uid != 0 &&
 		((request.uid != -1 && uint32(request.uid) != inode->i_uid) ||
-		(request.gid != -1 && uint32(request.gid) != credentials.gid))) return -EPERM;
+		(request.gid != -1 && uint32(request.gid) != inode->i_gid && !Userman::HasGroup(credentials, uint32(request.gid))))) return -EPERM;
 	if (!mode_change && request.uid == -1 && request.gid == -1) return 0;
 	auto* fs = GetInodeFilesystem(inode.get());
 	if (!fs || !inode->internal_handler) return -ENOTSUP;
@@ -1500,7 +1506,7 @@ static int SetPermissionsUnlocked(const SharedPtr<vfs_inode>& inode, const Proce
 	if (mode_change) {
 		update.fields.mode = true;
 		update.mode = request.mode;
-		if (credentials.uid != 0 && inode->i_gid != credentials.gid) update.mode &= ~stduint(02000);
+		if (credentials.uid != 0 && !Userman::HasGroup(credentials, inode->i_gid)) update.mode &= ~stduint(02000);
 	}
 	else {
 		update.fields.uid = request.uid != -1;
@@ -2255,6 +2261,8 @@ bool Filesys::Remove(const char* pathname, vfs_dentry* base,
 	if (!dentry->d_parent->d_inode ||
 		!MayAccess(*dentry->d_parent->d_inode, credentials, AccessWrite | AccessSearch))
 		return false;
+	if (!MayRemoveStickyEntry(*dentry->d_parent->d_inode, *dentry->d_inode, credentials))
+		return false;
 
 	auto inode = dentry->d_inode;
 	if (!inode->i_sb || inode->i_sb->permissions.read_only) return false;
@@ -2272,61 +2280,69 @@ bool Filesys::Remove(const char* pathname, vfs_dentry* base,
 	return true;
 }
 
-bool Filesys::Rename(const char* source, const char* destination, vfs_dentry* base,
-	const ProcessCredentials* credentials, uint64 cwd_identity) {
+int Filesys::Rename(const char* source, const char* destination, vfs_dentry* base, const ProcessCredentials* credentials, uint64 cwd_identity) {
+	if (!source || !*source || !destination || !*destination) return -ENOENT;
 	MutexLocal guard(&vfs_lock);
 	if (credentials &&
 		((source && *source != '/') || (destination && *destination != '/')) &&
-		!IsLinkedWorkingDirectory(base, cwd_identity)) return false;
+		!IsLinkedWorkingDirectory(base, cwd_identity)) return -ESTALE;
 	vfs_dentry* source_dentry = nullptr;
-	if (ResolvePath(source, base, credentials, source_dentry) < 0 ||
-		!source_dentry->d_inode || !source_dentry->d_parent ||
-		source_dentry->d_mounts) return false;
+	const int source_lookup = ResolvePath(source, base, credentials, source_dentry);
+	if (source_lookup < 0) return source_lookup;
+	if (!source_dentry->d_inode || !source_dentry->d_parent || source_dentry->d_mounts) return -EBUSY;
+	const char* source_end = source + StrLength(source);
+	while (source_end > source && source_end[-1] == '/') --source_end;
+	const char* source_name = source_end;
+	while (source_name > source && source_name[-1] != '/') --source_name;
+	const stduint source_length = source_end - source_name;
+	if ((source_length == 1 && source_name[0] == '.') ||
+		(source_length == 2 && source_name[0] == '.' && source_name[1] == '.')) return -EINVAL;
 
 	vfs_dentry* destination_parent = nullptr;
 	const char* destination_name = nullptr;
-	if (ResolveParentAndName(destination, base, credentials, &destination_parent,
-		&destination_name) < 0) return false;
+	const int parent_lookup = ResolveParentAndName(destination, base, credentials, &destination_parent, &destination_name);
+	if (parent_lookup < 0) return parent_lookup;
 	if (!destination_parent->d_inode || !destination_parent->d_inode->i_sb ||
-		(destination_parent->d_inode->i_mode & I_TYPE_MASK) != I_DIRECTORY) return false;
-	if (source_dentry->d_inode->i_sb != destination_parent->d_inode->i_sb) return false;
-	if (destination_parent->d_inode->i_sb->permissions.read_only) return false;
+		(destination_parent->d_inode->i_mode & I_TYPE_MASK) != I_DIRECTORY) return -ENOTDIR;
+	if (source_dentry->d_inode->i_sb != destination_parent->d_inode->i_sb) return -EXDEV;
+	if (destination_parent->d_inode->i_sb->permissions.read_only) return -EROFS;
 	// Rename removes an entry from the source directory and adds one to the destination directory.
 	auto* source_parent = source_dentry->d_parent;
-	if (!source_parent->d_inode ||
-		!MayAccess(*source_parent->d_inode, credentials, AccessWrite | AccessSearch) ||
+	if (!source_parent->d_inode) return -ENOENT;
+	const int source_permissions = RefreshPermissionsUnlocked(*source_parent->d_inode);
+	if (source_permissions < 0) return source_permissions;
+	const int destination_permissions = RefreshPermissionsUnlocked(*destination_parent->d_inode);
+	if (destination_permissions < 0) return destination_permissions;
+	if (!MayAccess(*source_parent->d_inode, credentials, AccessWrite | AccessSearch) ||
 		!MayAccess(*destination_parent->d_inode, credentials, AccessWrite | AccessSearch))
-		return false;
+		return -EACCES;
 
 	vfs_dentry* existing_destination = nullptr;
 	const int destination_lookup = ResolvePath(destination, base, credentials, existing_destination);
-	if (destination_lookup != -ENOENT)
-		return destination_lookup == 0 && existing_destination == source_dentry;
+	if (destination_lookup == 0) return existing_destination == source_dentry ? 0 : -EEXIST;
+	if (destination_lookup != -ENOENT) return destination_lookup;
+	if (!MayRemoveStickyEntry(*source_parent->d_inode, *source_dentry->d_inode, credentials))
+		return -EPERM;
 
 	for (vfs_dentry* ancestor = destination_parent; ancestor;
 		ancestor = ancestor->d_parent) {
-		if (ancestor == source_dentry) return false;
+		if (ancestor == source_dentry) return -EINVAL;
 	}
 
-	char source_path[256];
-	char destination_path[256];
-	if (!BuildMountRelativePath(source_dentry, source_path, sizeof(source_path)) ||
+	// Keep mount-relative path scratch space off the service stack.
+	auto scratch = uni::make_unique<char[]>(256 + 256);
+	if (!scratch) return -ENOMEM;
+	char* source_path = scratch.get();
+	char* destination_path = source_path + 256;
+	if (!BuildMountRelativePath(source_dentry, source_path, 256) ||
 		!BuildMountRelativeChildPath(destination_parent, destination_name,
-			destination_path, sizeof(destination_path))) return false;
+			destination_path, 256)) return -ENAMETOOLONG;
 
 	FilesysTrait* fs = GetInodeFilesystem(source_dentry->d_inode.get());
-	if (!fs || !source_dentry->d_inode->internal_handler) return false;
+	if (!fs || fs == &global_devfs || !source_dentry->d_inode->internal_handler) return -ENOTSUP;
 	// RootFs namespace changes live entirely in VFS; its inode-owned handle must never be overwritten.
-	if (fs != &global_rootfs_driver) {
-		if (!fs->rename(source_path, destination_path)) return false;
-		byte refreshed_handler[128];
-		FilesysSearchArgs search_args = { refreshed_handler, nullptr, nullptr, nullptr };
-		if (!fs->search(destination_path, &search_args)) {
-			fs->rename(destination_path, source_path);
-			return false;
-		}
-		MemCopyN(source_dentry->d_inode->internal_handler, refreshed_handler, sizeof(refreshed_handler));
-	}
+	if (fs != &global_rootfs_driver &&
+		!fs->rename(source_path, destination_path, source_dentry->d_inode->internal_handler)) return -EIO;
 
 	if (source_parent != destination_parent) {
 		KASSERT(DetachDentry(source_dentry));
@@ -2335,7 +2351,7 @@ bool Filesys::Rename(const char* source, const char* destination, vfs_dentry* ba
 	const stduint name_length = StrLength(destination_name);
 	MemCopyN(source_dentry->d_name, destination_name, name_length);
 	source_dentry->d_name[name_length] = '\0';
-	return true;
+	return 0;
 }
 
 //{} single mount level only

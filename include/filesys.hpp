@@ -262,13 +262,11 @@ public:
 	static int Close(vfs_file* file);
 	// Listing names requires a directory opened for reading. Path traversal uses search permission instead.
 	static int Enumer(vfs_file* file, void* buf, stduint count, ProcessBlock* pb);
-	// Unlink a regular file. User-originated requests require write and search access on the parent.
+	// Unlink a regular file; user requests require parent write/search access and sticky ownership checks.
 	static bool Remove(const char* pathname, vfs_dentry* base = nullptr,
 		const ProcessCredentials* credentials = nullptr, uint64 cwd_identity = 0);
-	// Rename within one mounted filesystem while retaining the inode identity.
-	// User-originated requests require write and search access on both parents.
-	static bool Rename(const char* source, const char* destination, vfs_dentry* base = nullptr,
-		const ProcessCredentials* credentials = nullptr, uint64 cwd_identity = 0);
+	// Rename without replacement; require write/search on both parents and source sticky ownership; return zero or a negative errno.
+	static int Rename(const char* source, const char* destination, vfs_dentry* base = nullptr, const ProcessCredentials* credentials = nullptr, uint64 cwd_identity = 0);
 	// Retain an inode only when the weak identity entry still refers to a live object.
 	static SharedPtr<vfs_inode> FindInode(uint64 identity);
 	//

@@ -1,3 +1,11 @@
+## 2026-11-19
+
+- 12:40（UTC+8）VFS 删除和改名增加 sticky 目录属主检查，普通父目录权限检查保持有效；MOVE 拒绝时返回 EPERM，Remove 保留 bool 返回约定，MMU/noMMU 共用规则。补充接口注释和简短用户说明。
+
+- 11:51（UTC+8）接通 MOVE、Fileman RENAME、libc rename 和 mv，调用者按实际发送线程授权；VFS 返回明确错误码并保留同挂载不覆盖规则。同步 syscall 表、RISC-V 分派、x86/x64/RISC-V 信号返回固定编号及接口表，临时路径改用堆缓冲；FILESYS 仅保留改名规则与支持范围。
+
+- 10:51（UTC+8）进程凭据增加 Vector 与只读 SharedPtr 保存的动态附加组，USER 追加组查询和替换操作，用户库接通 getgroups/setgroups/initgroups/getgrouplist 及 gr_mem；su 原子替换账户 UID/GID 和组集合，fork/EXEC 继承，EXET 保留。VFS 权限、chown 与 chmod setgid 检查统一匹配主组及附加组，id 显示完整组列表；内置 shared 组供 user 使用，同步中文接口、权限与手动检查文档。
+
 ## 2026-11-18
 
 - 22:38（UTC+8）FilesysTrait::create 收拢为 FilesysCreateParameter，handler 输入父目录句柄并在成功时返回新对象句柄，linkdest/attributes 保留输入用途，exinfo 放最后作为通用扩展。迁移 VFS、FAT、ISO/UDF、RootFs、DevFs、设备树及 x86 loader FAT 桩；FAT 预分配结果句柄并在失败时释放，保持失败时输入 handler 不变。同步 FILESYS 文档，syscall ABI 不变。

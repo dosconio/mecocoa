@@ -1039,6 +1039,25 @@ void serv_file_loop()// for IDE 0:0, 0:1
 			if (caller) ProcessBlock::Release(caller);
 			break;
 		}
+		case FilemanMsg::RENAME:
+		{
+			stdsint status = -ESRCH;
+			// Resolve identity from the actual sending thread, never from a PID supplied in the request.
+			auto* caller = ProcessBlock::AcquireActive(sig_src);
+			if (caller) {
+				auto destination = uni::make_unique<char[]>(pathbuf_size);
+				if (!destination) status = -ENOMEM;
+				else if (MccaStrCopyP((char*)pathbuf, pathbuf_size, (rostr)to_args[0], caller, nullptr, &status) &&
+					MccaStrCopyP(destination.get(), pathbuf_size, (rostr)to_args[1], caller, nullptr, &status)) {
+					const auto credentials = Userman::GetCredentials(*caller);
+					auto files = caller->fileman.Lock();
+					status = Filesys::Rename((const char*)pathbuf, destination.get(), files->cwd, &credentials, files->cwd_identity);
+				}
+			}
+			syssend(sig_src, &status, sizeof(status));
+			if (caller) ProcessBlock::Release(caller);
+			break;
+		}
 		case FilemanMsg::STAT:
 		{
 			stdsint status = -ESRCH;
