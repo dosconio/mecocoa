@@ -1,5 +1,7 @@
 ## 2026-11-20
 
+- 14:07（UTC+8）接通 NoMMU 的现有 EXEC/WAIT：flat-PIE 子进程复制 argv/envp、构造 M-profile 初始帧并返回 pid，退出后接入等待唤醒和僵尸回收。EXEC 启动时复制调用者的标准描述符；STM32H7 子程序构建加入 COTLAB、ls、echo 和 cat，Shell 预建管道并逐段设置标准输入、输出和错误，支持外部命令管道及 `<`、`>`、`>>`、`2>`，启动后统一 WAIT 回收；ARM NoMMU 子程序构建自动定位 COTLAB 源码并链接 Cortex-M7 hard-float 运行库，ac7m 使用统一架构运行目录和 PATH，存储就绪后启动 ribbon 和 cot；系统输出串口由 cot 接管时隐藏应用装载、退出、清理和释放的生命周期 INFO，GPIO LED 设备兼容二进制及带空白的文本 0/1 写入，LED/KEY 状态读取返回带换行的 ASCII 状态且 DeviceNode 字符设备保留 EOF 语义，串口 Ctrl+C 在任务上下文中中断前台程序。补齐 x86 用户态音频服务 IPC 白名单，HostMusic/HostVideo 检查收发结果，发送失败立即报错且不再接收，接收及服务错误输出消息类型、目标和错误码；视频启动/写音频失败向上返回，暂停/恢复失败保持状态与计时，不改变公共 syscall 和 syscomm 接口。
+
 - 11:48（UTC+8）MOVE 接入同挂载覆盖改名，VFS 检查类型、空目录、双方 sticky 及挂载保护，提交后更新目录树并延迟回收旧目标。FAT 保留目标名字/LFN，目录项替换、源删除和父链接共用块恢复；RootFs 同步保留旧 inode，proper 增加 handle 比较以合并 FAT 大小写缓存别名；同步 loader 桩与中文规则，fileop 增加可选覆盖回归入口，并在 x86 Clang 子程序清单接入 test_fileop，MMU/noMMU 共用流程，无新增 syscall。
 
 - 10:54（UTC+8）FilesysTrait 增加不可自动清除的写故障状态；公共 BlockChangeSet 按阶段暂存块修改，提交失败逆序恢复并报告恢复失败。FAT 改名、创建、unlink/rmdir 和 FAT 项多副本更新接入恢复，提交后更新 handle，簇回收保持分段；补齐写入与截断错误检查，VFS、共享映射授权及脏页回写拒绝故障后的修改。MMU/noMMU 共用后端，不增加虚函数或 syscall。修正多架构对象命名：Mecocoa 使用 _c_/_x_，Unisym 保持 _cc_/_cx_，依赖同步新对象名且仅包含已存在的 .d 文件，保留原有通配符链接方式，避免 HGFS 大小写冲突。

@@ -218,6 +218,7 @@ struct Consman {
 	static unsigned current_screen_TTY;// focus
 	static void WakeBlockedWaiters();
 	static void WakeBlockedWaitersDeferred();
+	static void InterruptForeground(Dnode* tty, bool deferred);
 	static void DispatchDeferredWake();
 
 	// GUI

@@ -155,6 +155,8 @@ extern "C" void register_interrupt_handler(stduint irq_id, Handler_t handler);
 #define ARCH_NAME "x86"
 #elif _MCCA == 0x8664
 #define ARCH_NAME "x64"
+#elif defined(_ARCH_ARM_ProfileM) && (_MCCA == 0x1A072032)
+#define ARCH_NAME "ac7m"
 #endif
 
 //

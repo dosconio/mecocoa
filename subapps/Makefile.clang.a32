@@ -8,22 +8,40 @@ BIN_DIR = $(uobjpath)/sapp-a32-pi
 # the user libraries come from the sysroot, published by accma32.clang.make's install target
 MCCA_SYSROOT ?= accmlib/sysroot
 MCCA_TRIPLE ?= armv7em-mcca-eabihf
+MCCA_REPO_ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/..)
+COTLAB_DIR ?= $(if $(strip $(uherpath)),$(abspath $(uherpath)/COTLAB),$(abspath $(MCCA_REPO_ROOT)/../COTLAB))
+COTLAB_SOURCES := $(wildcard $(COTLAB_DIR)/src/*.cpp)
+UNISYM_ROOT ?= $(abspath $(uincpath)/..)
+UNISYM_UTILITIES_DIR ?= $(UNISYM_ROOT)/demo/utilities
+MCCA_GCC ?= arm-none-eabi-gcc
+MCCA_BUILTINS ?= $(shell $(MCCA_GCC) -mcpu=cortex-m7 -mthumb -mfloat-abi=hard -mfpu=fpv5-d16 -print-libgcc-file-name)
 
+MCCA_CC ?= clang --target=armv7em-none-eabihf
 MCCA_CXX ?= clang++ --target=armv7em-none-eabihf
 MCCA_CRT0 = $(MCCA_SYSROOT)/usr/lib/$(MCCA_TRIPLE)/crt0.o
 MCCA_LIBC_PIC = $(MCCA_SYSROOT)/usr/lib/$(MCCA_TRIPLE)/libc-pic.a
 # the POSIX API layer names id_t/pid_t/uid_t as macros, so the C library must not typedef them
 MCCA_COMFLAGS = -D_ACCM=0x2032 -D_OPT_ARM32 -D_DEBUG -D_ID_T_DECLARED -D_PID_T_DECLARED -D_UID_T_DECLARED -I$(uincpath) -I$(uincpath)/c/ISO_IEC_STD -I$(uincpath)/c/API-POSIX -Iaccmlib/sysroot/usr/include
+MCCA_CFLAGS_PIE = $(MCCA_COMFLAGS) -O2 -mcpu=cortex-m7 -mthumb -mfloat-abi=hard -mfpu=fpv5-d16 \
+	-fno-builtin -nostdlib -fno-stack-protector -fno-strict-aliasing -ffunction-sections -fdata-sections \
+	-fPIC -Wno-incompatible-library-redeclaration -Wno-unknown-warning-option
 MCCA_CXXFLAGS_PIE = $(MCCA_COMFLAGS) -O2 -mcpu=cortex-m7 -mthumb -mfloat-abi=hard -mfpu=fpv5-d16 \
 	-fno-builtin -nostdlib -nostdinc++ -fno-stack-protector -fno-strict-aliasing -ffunction-sections -fdata-sections \
 	-fPIC -fno-exceptions -fno-rtti -fno-use-cxa-atexit \
 	-Wno-incompatible-library-redeclaration -Wno-invalid-constexpr -Wno-empty-body -Wno-unknown-warning-option
-MCCA_LDLIBS_PIE = -Wl,-pie $(MCCA_CRT0) $(MCCA_LIBC_PIC) -fuse-ld=lld -Wl,--gc-sections -Wl,--no-dynamic-linker -Wl,-e,_start -Wl,--build-id=none -Wl,-s
+MCCA_LDLIBS_PIE = -Wl,-pie $(MCCA_CRT0) $(MCCA_LIBC_PIC) $(MCCA_BUILTINS) -fuse-ld=lld -Wl,--gc-sections -Wl,--no-dynamic-linker -Wl,-e,_start -Wl,--build-id=none -Wl,-s
+
+# [useless]
+# apps=\
+# 	$(BIN_DIR)/testpie \
+# 	$(BIN_DIR)/fault \
+# 	$(BIN_DIR)/loop_echo \
 
 apps=\
-	$(BIN_DIR)/testpie \
-	$(BIN_DIR)/fault \
-	$(BIN_DIR)/loop_echo \
+	$(BIN_DIR)/cot \
+	$(BIN_DIR)/ls \
+	$(BIN_DIR)/echo \
+	$(BIN_DIR)/cat \
 	$(BIN_DIR)/ribbon
 
 .PHONY: all clean
@@ -41,6 +59,28 @@ $(BIN_DIR)/fault: subapps/fault.cpp $(MCCA_CRT0) $(MCCA_LIBC_PIC)
 
 $(BIN_DIR)/loop_echo: subapps/_basic/loop_echo.cpp $(MCCA_CRT0) $(MCCA_LIBC_PIC)
 	@echo "MK loop_echo (NoMMU PIE)"
+	@mkdir -p $(BIN_DIR)
+	@$(MCCA_CXX) $(MCCA_CXXFLAGS_PIE) -o $@ $< $(MCCA_LDLIBS_PIE)
+
+$(BIN_DIR)/cot: $(COTLAB_SOURCES) $(MCCA_CRT0) $(MCCA_LIBC_PIC)
+	@echo "MK cot (NoMMU PIE)"
+	@mkdir -p $(BIN_DIR)
+	@test -n "$(strip $(COTLAB_SOURCES))" || { echo "COTLAB sources not found under $(COTLAB_DIR)/src" >&2; exit 1; }
+	@$(MCCA_CXX) $(MCCA_CXXFLAGS_PIE) -D_NOMMU -o $@ \
+		$(COTLAB_SOURCES) $(MCCA_LDLIBS_PIE)
+
+$(BIN_DIR)/ls: $(UNISYM_UTILITIES_DIR)/ls.cpp $(MCCA_CRT0) $(MCCA_LIBC_PIC)
+	@echo "MK ls (NoMMU PIE)"
+	@mkdir -p $(BIN_DIR)
+	@$(MCCA_CXX) $(MCCA_CXXFLAGS_PIE) -o $@ $< $(MCCA_LDLIBS_PIE)
+
+$(BIN_DIR)/echo: $(UNISYM_UTILITIES_DIR)/echo.c $(MCCA_CRT0) $(MCCA_LIBC_PIC)
+	@echo "MK echo (NoMMU PIE)"
+	@mkdir -p $(BIN_DIR)
+	@$(MCCA_CC) $(MCCA_CFLAGS_PIE) -o $@ $< $(MCCA_LDLIBS_PIE)
+
+$(BIN_DIR)/cat: $(UNISYM_UTILITIES_DIR)/cat.cpp $(MCCA_CRT0) $(MCCA_LIBC_PIC)
+	@echo "MK cat (NoMMU PIE)"
 	@mkdir -p $(BIN_DIR)
 	@$(MCCA_CXX) $(MCCA_CXXFLAGS_PIE) -o $@ $< $(MCCA_LDLIBS_PIE)
 

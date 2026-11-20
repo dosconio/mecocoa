@@ -3,6 +3,7 @@
 // ModuTitle: Demonstration - ELF32-C++ x86 Bare-Metal
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 #include "../include/mecocoa.hpp"
+#include "../include/sysinfo.hpp"
 #include "../include/filesys.hpp"
 
 #if CONFIG_ENABLE_MMU
@@ -246,7 +247,8 @@ void ProcessBlock::Release(ProcessBlock* pb) {
 	if (!pb) return;
 	KASSERT(pb->ref_count > 0);
 	if (--pb->ref_count == 0) {
-		ploginfo("ProcessBlock::Release() [%d] [%p]", pb->getID(), pb);
+		if (Sysinfo::echo_applife_trace())
+			ploginfo("ProcessBlock::Release() [%d] [%p]", pb->getID(), pb);
 		#if CONFIG_ENABLE_MMU
 		Memory::ReleasePagingMappings(pb->paging);
 		#endif
@@ -570,7 +572,8 @@ static void _Exit_Cleanup(stduint pid)
 		}
 	}
 
-	ploginfo("cleaning %u, now exist %u tasks", pid, Taskman::chain.Count());
+	if (Sysinfo::echo_applife_trace())
+		ploginfo("cleaning %u, now exist %u tasks", pid, Taskman::chain.Count());
 
 	// Hierarchical Process Tree: Deep Reap children
 	while (ppb->child_list_head) {
@@ -843,7 +846,8 @@ bool Taskman::Exit(ProcessBlock* p, stdsint exit_code)
 	ProcessBlock* pparent = Taskman::Locate(parent_pid);
 	stduint args[2] = { pid, _IMM(exit_code) };
 
-	ploginfo("Process %u exited with code %[x]", pid, exit_code);
+	if (Sysinfo::echo_applife_trace())
+		ploginfo("Process %u exited with code %[x]", pid, exit_code);
 
 	// [Canceled] Hierarchical Process Tree: Recursive Kill
 
@@ -1074,7 +1078,7 @@ void _Comment(R0) serv_task_loop()
 			}
 			Taskman::Exit(Taskman::Locate(to_args[0]), to_args[1]);
 			break;
-			#if CONFIG_ENABLE_MMU // NoMMU keeps the exit-only behaviour
+			#if CONFIG_ENABLE_MMU
 		case TaskmanMsg::FORK: // (pid, cframe)
 			// ploginfo("Taskman fork: %u", to_args[0]);
 			if (1) {
@@ -1083,6 +1087,7 @@ void _Comment(R0) serv_task_loop()
 			}
 			syssend_async(sig_src, (void*)&ret, sizeof(ret));
 			break;
+			#endif
 		case TaskmanMsg::WAIT: // (parent_pid, target_pid) -> (*)
 			// ploginfo("Taskman wait: %u %x", to_args[0], to_args[1]);
 			Taskman::Wait(Taskman::Locate(to_args[0]), to_args[1]);// send back { pid, taski->exit_status }
@@ -1098,6 +1103,7 @@ void _Comment(R0) serv_task_loop()
 			syssend_async(sig_src, (void*)&ret, sizeof(ret));
 			break;
 		}
+			#if CONFIG_ENABLE_MMU
 		case TaskmanMsg::EXET:// (pid, &usr:fullpath, &usr:argv, &usr:envp)
 		{
 			auto* caller = ProcessBlock::AcquireActive(sig_src);

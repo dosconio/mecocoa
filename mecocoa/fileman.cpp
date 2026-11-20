@@ -738,6 +738,25 @@ static constexpr stduint _usr_app_retry_delay = CONFIG_SysTickFreq / 5;
 static constexpr stduint _usr_app_retry_limit = 25;
 static stduint _usr_app_retry_count = 0;
 
+static bool _StartUserApp(const String& runtime_root, const char* name, bool tty_master) {
+	String path = String::newFormat("%s/apps/%s", runtime_root.reference(), name);
+	ProcessBlock* pb = Taskman::CreateFile(path.reference(), RING_U, Task_Init, nullptr, false);
+	if (!pb) {
+		plogwarn("[Fileman] Failed to start %s.", name);
+		return false;
+	}
+	pb->main_thread->name.reset(StrHeap(name));
+	pb->OpenStandards(vttys[0]);
+	Taskman::Append(pb);
+	Taskman::AppendThread(pb->main_thread);
+	if (tty_master && vttys[0] && vttys[0]->type) {
+		auto tty = (vtty_type_t*)vttys[0]->type;
+		tty->master_pid = pb->pid;
+		tty->proc_group.Append(pb->pid);
+	}
+	return true;
+}
+
 static void _TryStartUserApp() {
 	const auto& runtime_root = Filesys::GetSystemRuntimeRootPath();
 	if (!runtime_root.getByteCount()) {
@@ -747,16 +766,8 @@ static void _TryStartUserApp() {
 		else plogerro("[Fileman] no runtime root, the user app is not started");
 		return;
 	}
-	String path = String::newFormat("%s/ac7m/apps/ribbon", runtime_root.reference());
-	ProcessBlock* pb = Taskman::CreateFile(path.reference(), RING_U, Task_Init, nullptr, false);
-	if (!pb) {
-		plogwarn("[Fileman] Failed to start ribbon.");
-		return;
-	}
-	pb->main_thread->name.reset(StrHeap("ribbon"));
-	pb->OpenStandards(vttys[0]);
-	Taskman::Append(pb);
-	Taskman::AppendThread(pb->main_thread);
+	_StartUserApp(runtime_root, "ribbon", false);
+	_StartUserApp(runtime_root, "cot", true);
 }
 #endif
 

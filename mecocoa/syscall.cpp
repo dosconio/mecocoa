@@ -941,7 +941,7 @@ DEFSYSC sysc_READ(stduint fd, stduint addr, stduint len) {
 	ThreadBlock* th = Taskman::CurrentTB();
 	ProcessBlock* pb = th->parent_process;
 	bool is_named_pipe = false;
-	bool is_char_special = false;
+	bool is_tty = false;
 
 	// Intercept named pipes to bypass Task_FileSys server and execute in current thread's context to avoid deadlocks.
 	{
@@ -958,7 +958,9 @@ DEFSYSC sysc_READ(stduint fd, stduint addr, stduint len) {
 			asrtand(files->pfiles[fd])->vfile &&
 			files->pfiles[fd]->vfile->f_inode &&
 			(files->pfiles[fd]->vfile->f_inode->i_mode & I_TYPE_MASK) == I_CHAR_SPECIAL) {
-			is_char_special = true;
+			// DeviceNode character devices return zero as EOF; only TTY handlers wait for console input.
+			is_tty = !DevFs::GetDeviceNode(
+				files->pfiles[fd]->vfile->f_inode->internal_handler);
 		}
 	}
 	if (is_named_pipe) {
@@ -966,7 +968,7 @@ DEFSYSC sysc_READ(stduint fd, stduint addr, stduint len) {
 	}
 
 	// TTY device
-	if (is_char_special) {
+	if (is_tty) {
 		// char device, read blockedly
 		stduint total_read = 0;
 		while (total_read < len) {
@@ -1269,15 +1271,10 @@ DEFSYSC sysc_TMSG() {
 }
 
 DEFSYSC sysc_EXEC(stduint path, stduint argv, stduint envp) {
-	#if !CONFIG_ENABLE_MMU
-	// Taskman does not handle image replacement or spawn requests on the flat-image path yet.
-	return -ENOSYS;
-	#else
 	stduint msgbuf[4] = { Taskman::CurrentPID(), path, argv, envp };
 	syssend(Task_TaskMan, sliceof(msgbuf), _IMM(TaskmanMsg::EXEC));
 	sysrecv(Task_TaskMan, &msgbuf, byteof(msgbuf[0]));
 	return msgbuf[0];
-	#endif
 }
 DEFSYSC sysc_EXET(stduint path, stduint argv, stduint envp) {
 	#if !CONFIG_ENABLE_MMU

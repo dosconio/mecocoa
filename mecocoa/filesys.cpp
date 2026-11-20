@@ -2899,7 +2899,6 @@ file_system_type fs_fat = { "fat", [](StorageTrait& storage, stduint dev) -> Fil
 
 // ---- VFS Pipe Implementation ----
 
-extern "C" stduint sys_kill(stduint pid, int sig, stduint tid);
 static Spinlock pipe_channel_list_lock;
 static PipeChannel* pipe_channel_list = nullptr;
 static void PipeAddWaiter(ThreadBlock*& head, PipeChannel* chan, ThreadBlock* th);

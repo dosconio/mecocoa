@@ -6,8 +6,6 @@
 #include "../include/mecocoa.hpp"
 #include <c/driver/keyboard.h>
 
-extern "C" stduint sys_kill(stduint pid, int sig, stduint tid);
-
 _ESYM_C void R_KBD_INIT();
 
 #if (_MCCA & 0xFF00) == 0x8600
@@ -187,15 +185,7 @@ void sysmsg_kbd(keyboard_event_t kbd_event) {
 			// Check for Ctrl+C to trigger SIGINT (Non-GUI Mode, exclude Shift)
 			#if !_GUI_ENABLE
 			if ((kbd_state.mod.l_ctrl || kbd_state.mod.r_ctrl) && !kbd_state.mod.l_shift && !kbd_state.mod.r_shift && ch == 'c') {
-				if (p_vtty && p_vtty->type) {
-					auto pblock = (vtty_type_t*)p_vtty->type;
-					for (stduint idx = 0; idx < pblock->proc_group.Count(); idx++) {
-						stduint target_pid = pblock->proc_group[idx];
-						if (target_pid >= TaskCount && target_pid != pblock->master_pid) {
-							sys_kill(target_pid, SIGINT, 0);
-						}
-					}
-				}
+				Consman::InterruptForeground(p_vtty, false);
 				return;
 			}
 			#endif

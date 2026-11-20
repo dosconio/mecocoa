@@ -353,14 +353,19 @@ namespace {
 // Runs from the USART1 vector, which calls the handler installed by XART1.setInterrupt.
 void Handint_XART1() {
 	// USART_ISR_RXNE; reading RDR is what clears it, so drain until it is empty
+	bool interrupt_foreground = false;
 	while (XART1[XARTReg::ISR].bitof(5)) {
 		byte data = (byte)((uint16)XART1[XARTReg::RDR] & 0xFF);
 		if (!g_xart1_vtty) continue;// no TTY yet: drop it, but keep RXNE cleared
+		if (data == 0x03) {
+			interrupt_foreground = true;
+			continue;
+		}
 		byte queued = (data == '\r') ? '\n' : data;// CR is the terminal's newline
 		if (auto* q = VTTY_INNQ(g_xart1_vtty)) q->Enqueue({queued, 0});
 	}
 	if (!g_xart1_vtty) return;
-	// No cot on ARM: the reader drains the queue through /dev/tty
+	if (interrupt_foreground) Consman::InterruptForeground(g_xart1_vtty, true);
 	Consman::WakeBlockedWaitersDeferred();
 }
 

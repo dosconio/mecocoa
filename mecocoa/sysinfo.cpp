@@ -3,6 +3,7 @@
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 // #pragma GCC optimize("O2")
 #include "../include/mecocoa.hpp"
+#include "../include/sysinfo.hpp"
 
 #include <c/cpuid.h>
 #include <c/driver/mouse.h>
@@ -21,6 +22,17 @@ rostr text_cpu_factory();
 Procontroller_t cpu_type = PCU_Unknown;
 
 loglevel_t _log_limit = _LOG_INFO;
+
+bool Sysinfo::echo_applife_trace() {
+	if (!con0_out) return true;
+	for (auto* node = vttys.Root(); node; node = node->next) {
+		auto* console = static_cast<Console_t*>(node->offs);
+		if (static_cast<OstreamTrait*>(console) != con0_out || !node->type) continue;
+		auto* tty = reinterpret_cast<vtty_type_t*>(node->type);
+		return tty->master_pid == 0;
+	}
+	return true;
+}
 
 void mecfetch() {
 	#if ((_MCCA & 0xFF00) == 0x8600)

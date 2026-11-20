@@ -979,12 +979,11 @@ ProcessBlock* Taskman::CreateFile(const char* path, byte ring, stduint parent, v
 	return task;
 }
 
-#if CONFIG_ENABLE_MMU
-
 // The new image is not yet on the task or thread chain.
 static void DiscardUnstartedImage(ProcessBlock* process) {
 	if (!process) return;
 	ThreadBlock* thread = process->main_thread;
+	#if CONFIG_ENABLE_MMU
 	void* user_stack = thread ?
 		process->paging[_IMM(thread->stack_lineaddr) & ~_IMM(PAGE_SIZE - 1)] :
 		(void*)~_IMM0;
@@ -1004,6 +1003,20 @@ static void DiscardUnstartedImage(ProcessBlock* process) {
 		process->main_thread = nullptr;
 		process->thread_list_head = nullptr;
 	}
+	#else
+	process->ReleaseLoadslices();
+	if (thread) {
+		if (thread->stack_levladdr &&
+			thread->stack_levladdr != thread->stack_lineaddr)
+			mempool.deallocate(thread->stack_levladdr, thread->stack_size);
+		if (thread->stack_lineaddr)
+			mempool.deallocate(thread->stack_lineaddr, thread->stack_size);
+		thread->~ThreadBlock();
+		mempool.deallocate(thread, sizeof(ThreadBlock));
+		process->main_thread = nullptr;
+		process->thread_list_head = nullptr;
+	}
+	#endif
 	ProcessBlock::Release(process);
 }
 
@@ -1014,7 +1027,7 @@ ProcessBlock* Taskman::Exec(ProcessBlock* parent_pb, rostr usr_fullpath, char** 
 	const stduint parent = parent_pb ? parent_pb->pid : 0;
 	if (!parent_pb || !MccaStrCopyP(buf_fullpath, sizeof(buf_fullpath),
 		usr_fullpath, parent_pb) || !buf_fullpath[0]) return nullptr;
-	ELFLoadInfo info;
+	ELFLoadInfo info{};
 	vfs_dentry* parent_cwd;
 	uint64 cwd_identity;
 	{
@@ -1050,6 +1063,17 @@ ProcessBlock* Taskman::Exec(ProcessBlock* parent_pb, rostr usr_fullpath, char** 
 	SetSegment(&new_pb->main_thread->context);
 	#elif (_MCCA & 0xFF00) == 0x1000
 	new_pb->main_thread->context.sp = new_sp;
+	#elif defined(_ARCH_ARM_ProfileM)
+	stduint* frame = (stduint*)(new_sp - 0x20);
+	frame[0] = *(const stduint*)new_sp;
+	frame[1] = new_sp + sizeof(stduint);
+	frame[2] = new_sp + (frame[0] + 2) * sizeof(stduint);
+	frame[3] = 0;
+	frame[4] = 0;
+	frame[5] = 0;
+	frame[6] = info.entry | 1;
+	frame[7] = 0x01000000;
+	new_pb->main_thread->context.sp = _IMM(frame);
 	#endif
 
 	new_pb->main_thread->unsolved_msg = nullptr;
@@ -1067,12 +1091,45 @@ ProcessBlock* Taskman::Exec(ProcessBlock* parent_pb, rostr usr_fullpath, char** 
 		auto parent_focus_tty = parent_pb->focus_tty.Lock();
 		*new_pb->focus_tty.Lock() = *parent_focus_tty;
 	}
+
+	#if !CONFIG_ENABLE_MMU
+	bool standard_cloned[3] = {};
+	bool standards_ready = true;
+	{
+		auto parent_files = parent_pb->fileman.Lock();
+		auto new_files = new_pb->fileman.Lock();
+		new_files->pfiles.Clear();
+		for (stduint fd = 0; fd < numsof(standard_cloned); fd++) {
+			FileDescriptor* clone = nullptr;
+			if (fd < parent_files->pfiles.Count() && parent_files->pfiles[fd]) {
+				clone = FileDescriptor_Clone(parent_files->pfiles[fd]);
+				if (!clone) {
+					standards_ready = false;
+					break;
+				}
+				standard_cloned[fd] = true;
+			}
+			new_files->pfiles.Append(clone);
+		}
+	}
+	if (!standards_ready) {
+		for (stduint fd = 0; fd < numsof(standard_cloned); fd++) {
+			if (standard_cloned[fd]) new_pb->Close(fd);
+		}
+		DiscardUnstartedImage(new_pb);
+		return nullptr;
+	}
+	#endif
+
 	auto new_focus_tty = new_pb->focus_tty.Lock();
+	#if CONFIG_ENABLE_MMU
 	if (*new_focus_tty) {
 		new_pb->Open("/dev/tty", O_RDWR); // stdin
 		new_pb->Open("/dev/tty", O_RDWR); // stdout
 		new_pb->Open("/dev/tty", O_RDWR); // stderr
 	}
+	#endif
+
 	Taskman::Append(new_pb);
 	Taskman::AppendThread(new_pb->main_thread);
 	if (*new_focus_tty && (*new_focus_tty)->type) {
@@ -1081,6 +1138,8 @@ ProcessBlock* Taskman::Exec(ProcessBlock* parent_pb, rostr usr_fullpath, char** 
 	}
 	return new_pb;
 }
+
+#if CONFIG_ENABLE_MMU
 
 //
 ProcessBlock* Taskman::Exet(ProcessBlock* current_pb, rostr usr_fullpath,

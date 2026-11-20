@@ -1012,29 +1012,46 @@ namespace {
 		return runtime->node == node ? runtime : nullptr;
 	}
 
-	stdsint STM32BoardGPIORead(DeviceNode* node, void* buffer, stduint count, stduint, stduint) {
-		if (!count) return 0;
+	stdsint STM32BoardGPIORead(DeviceNode* node, void* buffer, stduint count, stduint index, stduint) {
+		if (!count || index >= 2) return 0;
 		auto* runtime = STM32BoardGPIORuntime(node);
 		if (!runtime || !buffer) return -1;
 		bool level = false;
 		if (!STM32GPIOReadPin(runtime->port, runtime->pin, level)) return -1;
-		static_cast<byte*>(buffer)[0] = byte(level == runtime->active_high);
-		return 1;
+		byte state[] = { level == runtime->active_high ? byte('1') : byte('0'), byte('\n') };
+		const stduint length = minof(count, stduint(2 - index));
+		MemCopyN(buffer, state + index, length);
+		return length;
 	}
 
 	stdsint STM32BoardLEDWrite(DeviceNode* node, const void* buffer, stduint count, stduint, stduint) {
 		auto* runtime = STM32BoardGPIORuntime(node);
-		if (!runtime || runtime->kind != STM32BoardGPIODeviceKind::Led || !buffer || count != 1) return -1;
-		const byte value = static_cast<const byte*>(buffer)[0];
-		if (value > 1) return -1;
+		if (!runtime || runtime->kind != STM32BoardGPIODeviceKind::Led) return -1;
+		if (!count) return 0;
+		if (!buffer) return -1;
+		const byte* bytes = static_cast<const byte*>(buffer);
+		byte value = 0;
+		bool has_value = false;
+		if (count == 1 && bytes[0] <= 1) {
+			value = bytes[0];
+			has_value = true;
+		}
+		else for0(index, count) {
+			const byte character = bytes[index];
+			if (character == ' ' || character == '\t' || character == '\r' || character == '\n') continue;
+			if (has_value || (character != '0' && character != '1')) return -1;
+			value = character - '0';
+			has_value = true;
+		}
+		if (!has_value) return count;
 		const bool level = value ? runtime->active_high : !runtime->active_high;
-		return STM32GPIOWritePin(runtime->port, runtime->pin, level) ? 1 : -1;
+		return STM32GPIOWritePin(runtime->port, runtime->pin, level) ? count : -1;
 	}
 
 	stdsint STM32BoardGPIOCtrl(DeviceNode* node, stduint command, void* args, stduint) {
 		if (!STM32BoardGPIORuntime(node)) return -1;
 		if (command == stduint(DeviceCtrlCommand::GetByteSize) && args) {
-			*static_cast<uint64*>(args) = 1;
+			*static_cast<uint64*>(args) = 2;
 			return 0;
 		}
 		return -1;

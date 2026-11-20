@@ -852,6 +852,7 @@ static inline void* SeekAddress(ProcessBlock* pb, stduint addr, bool from_kernel
 #endif
 
 extern "C" void* kernel_prefault_page(ProcessBlock* pb, stduint addr, bool write = false);
+extern "C" stduint sys_kill(stduint pid, int sig, stduint tid);
 
 // Callers preflight user pages before entering a spinlock or vfs_lock.
 // The prepared variant only checks already-present PTEs before copying.

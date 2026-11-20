@@ -3,6 +3,7 @@
 // ModuTitle: Demonstration - ELF32-C++ x86 Bare-Metal
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 #include "../include/mecocoa.hpp"
+#include "../include/sysinfo.hpp"
 #include <c/format/ELF.h>
 #include <c/ISO_IEC_STD/errno.h>
 #include "../include/filesys.hpp"
@@ -1261,6 +1262,12 @@ static ProcessBlock* CreateELFImage(BlockTrait* source,
 	ProcessBlock* pb = Taskman::Create((void*)((load_bias + header.e_entry) | 1), ring, false);
 	if (!pb) return nullptr;
 	Userman::InitializeCredentials(*pb, credentials);
+	if (info) {
+		info->entry = load_bias + header.e_entry;
+		info->phdr = 0;
+		info->phnum = header.e_phnum;
+		info->phent = header.e_phentsize;
+	}
 	const stduint arg_sp = Taskman::SetupStack(pb, pb, nullptr, nullptr,
 		load_bias + header.e_entry, 0, header.e_phnum, header.e_phentsize);
 	if (arg_sp) {
@@ -1285,7 +1292,8 @@ static ProcessBlock* CreateELFImage(BlockTrait* source,
 	pb->load_slices[0].length = image_block;// the release and the MPU region cover the same range
 	pb->heapbtm = load_bias + heap_offset;// the heap shares the image block, so its MPU region covers it
 	pb->heaptop = pb->heapbtm;
-	ploginfo("[ELF] flat base=%[x] span=%u entry=%[x]", load_bias, image_span, load_bias + header.e_entry);
+	if (Sysinfo::echo_applife_trace())
+		ploginfo("[ELF] flat base=%[x] span=%u entry=%[x]", load_bias, image_span, load_bias + header.e_entry);
 	if (append) {
 		Taskman::Append(pb);
 		Taskman::AppendThread(pb->main_thread);

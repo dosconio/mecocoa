@@ -74,6 +74,7 @@ Vector<BlockedFormMsg> blocked_form_msgs;
 Mutex console_waiters_mutex;
 static Atomic<byte> console_has_blocked_waiters = 0;
 static Atomic<byte> console_wake_pending = 0;
+static Atomic<stduint> console_interrupt_tty = 0;
 
 void RefreshConsoleBlockedStateUnlocked() {
 	byte has_waiters = blocked_vtty_pid.Count() || blocked_form_msgs.Count();
@@ -96,8 +97,38 @@ void Consman::WakeBlockedWaitersDeferred() {
 	}
 }
 
+void Consman::InterruptForeground(Dnode* tty, bool deferred) {
+	if (!tty) return;
+	if (deferred) {
+		console_interrupt_tty.store(_IMM(tty), MemoryOrder_Release);
+		if (console_wake_pending.exchange(1, MemoryOrder_Acq_Rel)) return;
+		DeviceEvent event = {};
+		event.kind = _IMM(DeviceEventKind::ConsoleWake);
+		event.count = 1;
+		if (!device_event_proc(Task_Devsman, event)) {
+			console_wake_pending.store(0, MemoryOrder_Release);
+			console_interrupt_tty.store(0, MemoryOrder_Release);
+		}
+		return;
+	}
+	if (!tty->type) return;
+	auto* terminal = reinterpret_cast<vtty_type_t*>(tty->type);
+	for (stduint index = terminal->proc_group.Count(); index > 0; index--) {
+		const stduint pid = terminal->proc_group[index - 1];
+		if (pid < TaskCount || pid == terminal->master_pid) continue;
+		#if defined(_ARCH_ARM_ProfileM) && !CONFIG_ENABLE_MMU
+		// M-profile NoMMU cannot construct a user signal frame yet, so apply SIGINT's default action here.
+		Taskman::Exit(Taskman::Locate(pid), 128 + SIGINT);
+		#else
+		sys_kill(pid, SIGINT, 0);
+		#endif
+	}
+}
+
 void Consman::DispatchDeferredWake() {
 	console_wake_pending.store(0, MemoryOrder_Release);
+	Dnode* tty = (Dnode*)console_interrupt_tty.exchange(0, MemoryOrder_Acq_Rel);
+	if (tty) InterruptForeground(tty, false);
 	if (!console_has_blocked_waiters.load(MemoryOrder_Acquire)) return;
 	(void)syssend_async(Task_Console, nullptr, 0, (stduint)ConsoleMsg::TEST);
 }

@@ -8,7 +8,7 @@ STM32H743 OpenEdv board build steps
 
 4. 在 Mecocoa 根目录执行以下命令，产生配置文件（与 Linux 平台相同）：
 
-   make config
+   make config # 如果没有 include/autoconf.h 文件，必须执行此命令
    make -f accmlib/accma32.clang.make # 生成 stm32h7 应用链接库
    make -f subapps/Makefile.clang.a32 # 生成 stm32h7 实用应用
 

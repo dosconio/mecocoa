@@ -154,7 +154,13 @@ int main(int argc, char** argv)
 	sys_set_form_buffer(form_id, canvas);
 	sys_update_form(form_id, nullptr);
 
-	video.Play();
+	if (!video.Play()) {
+		outsfmt("playmov: failed to start playback\n\r");
+		video.Close();
+		sys_close_form(form_id);
+		free(canvas);
+		return -1;
+	}
 
 	uint32 last_title_sec = (uint32)-1;
 	char title_buf[128];
@@ -233,7 +239,13 @@ int main(int argc, char** argv)
 
 		bool rendered = false;
 		if (video.isPlaying()) {
-			video.Update();
+			if (!video.Update() && video.GetState() == HostVideoState::Error) {
+				outsfmt("playmov: playback failed\n\r");
+				video.Close();
+				sys_close_form(form_id);
+				free(canvas);
+				return -1;
+			}
 
 			uint32 frame_pts = 0;
 			if (video.UpdateFrame(canvas, frame_pts)) {
