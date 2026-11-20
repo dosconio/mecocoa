@@ -4,6 +4,7 @@
 #include "../include/mecocoa.hpp"
 
 #include <cpp/string>
+#include <cpp/System/Filesys.hpp>
 #include <c/bitmap.h>
 #include <c/msgface.h>
 using namespace uni;
@@ -83,7 +84,8 @@ namespace uni {
 		if (destroy_handler) { destroy_handler(internal_handler); return; }
 		if (!is_unlinked || !internal_handler || !mount_state ||
 			!mount_state->filesystem) return;
-		mount_state->filesystem->reclaim(internal_handler);
+		if (mount_state->filesystem->getFaultState() == FilesysFaultState::Healthy)
+			mount_state->filesystem->reclaim(internal_handler);
 	}
 
 	static SharedPtr<VFSMountState> MakeMountState(FilesysTrait* filesystem,
@@ -355,28 +357,12 @@ namespace uni {
 		if (!PrepareSharedFileTruncate(inode)) return false;
 		const stduint old_size = inode->i_size;
 		#endif
-		if (!fs->truncate(inode->internal_handler, size)) return false;
+		if (fs->getFaultState() != FilesysFaultState::Healthy || !fs->truncate(inode->internal_handler, size)) return false;
 		inode->i_size = size;
 		#if CONFIG_ENABLE_MMU
 		CompleteSharedFileTruncate(inode, old_size, size);
 		#endif
 		AdvanceContentVersion(inode);
-		return true;
-	}
-
-	static bool vfs_enum_emit(FilesysEnumState* state, _tocall_ft callback, void* is_dir, void* name) {
-		if (!callback) return false;
-		if (!state) {
-			callback(is_dir, name);
-			return true;
-		}
-		if (state->finished || state->full()) return false;
-		if (state->should_emit()) {
-			callback(is_dir, name);
-			state->emit_one();
-			return !state->full();
-		}
-		state->skip_one();
 		return true;
 	}
 
@@ -469,7 +455,15 @@ namespace uni {
 		}
 		virtual bool remove(rostr pathname) override { return false; }
 		virtual void* search(rostr fullpath, FilesysSearchArgs* args) override { return nullptr; }
-		virtual bool proper(void* handler, stduint cmd, const void* moreinfo = 0) override { return false; }
+		// Inspection is read-only; callers retain the directory and serialize access through VFS.
+		virtual bool proper(void* handler, stduint cmd, const void* moreinfo = 0) override {
+			if (cmd != stduint(FilesysCmd::FS_CMD_INSPECT_DIRECTORY) || !moreinfo) return false;
+			auto* node = static_cast<RootFsNode*>(handler);
+			auto& result = *static_cast<FilesysDirectoryState*>(const_cast<void*>(moreinfo));
+			if (!node || (node->mode & I_TYPE_MASK) != I_DIRECTORY || !node->entry) result = FilesysDirectoryState::Invalid;
+			else result = node->entry->d_first_child ? FilesysDirectoryState::NotEmpty : FilesysDirectoryState::Empty;
+			return true;
+		}
 		virtual bool enumer(void* dir_handler, _tocall_ft _fn, FilesysEnumState* state = nullptr) override {
 			// The inode-owned handle links to its directory entry for namespace enumeration.
 			auto* node = static_cast<RootFsNode*>(dir_handler);
@@ -480,7 +474,7 @@ namespace uni {
 			while (child) {
 				bool is_dir = child->d_inode &&
 					(child->d_inode->i_mode & I_TYPE_MASK) == I_DIRECTORY;
-				if (!vfs_enum_emit(state, _fn, (void*)(stduint)is_dir, (void*)child->d_name)) break;
+				if (!uni::EmitDirectoryEntry(state, _fn, is_dir, child->d_name)) break;
 				child = child->d_next_sibling;
 			}
 			if (state && !state->full()) state->mark_finished();
@@ -509,6 +503,34 @@ namespace uni {
 			if (size < node->size) MemSet(node->data + size, 0, node->size - size);
 			node->size = size;
 			return true;
+		}
+		// VFS publishes links after validation; the replaced node retains its inode-owned data.
+		virtual bool rename(rostr source, rostr destination, FilesysRenameParameter& parameter) override {
+			(void)source;
+			(void)destination;
+			if (getFaultState() != FilesysFaultState::Healthy) return false;
+			auto* node = static_cast<RootFsNode*>(parameter.handler);
+			auto* target = static_cast<RootFsNode*>(parameter.replaced_handler);
+			if (!node || !node->entry) return false;
+			if (node == target) return true;
+			if (target) {
+				if (!target->entry || (node->mode & I_TYPE_MASK) != (target->mode & I_TYPE_MASK)) return false;
+				if ((target->mode & I_TYPE_MASK) == I_DIRECTORY && InspectDirectory(target) != FilesysDirectoryState::Empty) return false;
+				target->entry = nullptr;
+			}
+			return true;
+		}
+		// RootFs child entries are authoritative while the caller holds vfs_lock.
+		virtual FilesysDirectoryRemoveResult rmdir(rostr pathname, void* handler) override {
+			switch (InspectDirectory(handler)) {
+			case FilesysDirectoryState::Empty: break;
+			case FilesysDirectoryState::NotEmpty: return FilesysDirectoryRemoveResult::NotEmpty;
+			case FilesysDirectoryState::Unsupported: return FilesysDirectoryRemoveResult::Unsupported;
+			case FilesysDirectoryState::IoError: return FilesysDirectoryRemoveResult::IoError;
+			default: return FilesysDirectoryRemoveResult::Invalid;
+			}
+			static_cast<RootFsNode*>(handler)->entry = nullptr;
+			return FilesysDirectoryRemoveResult::Success;
 		}
 		// Remove only the namespace association; inode destruction releases the backing bytes.
 		virtual bool unlink(rostr pathname, void* handler) override {
@@ -841,7 +863,7 @@ namespace uni {
 					for (auto* child = reinterpret_cast<DeviceNode*>(root->link.subf);
 						child; child = reinterpret_cast<DeviceNode*>(child->link.next)) {
 						if (!child->link.addr) continue;
-						if (!vfs_enum_emit(state, _fn, (void*)1, (void*)child->link.addr)) break;
+						if (!uni::EmitDirectoryEntry(state, _fn, true, child->link.addr)) break;
 					}
 				}
 				if (state && !state->full()) state->mark_finished();
@@ -852,26 +874,26 @@ namespace uni {
 			for (auto* child = reinterpret_cast<DeviceNode*>(node->link.subf);
 				child; child = reinterpret_cast<DeviceNode*>(child->link.next)) {
 				if (!child->link.addr) continue;
-				if (!vfs_enum_emit(state, _fn, (void*)1, (void*)child->link.addr)) return true;
+				if (!uni::EmitDirectoryEntry(state, _fn, true, child->link.addr)) return true;
 			}
 			if (device_tree_property_available(node, kDeviceTreeNodeTypeMarker) &&
-				!vfs_enum_emit(state, _fn, (void*)0, (void*)kDeviceTreeNodeTypeName)) return true;
+				!uni::EmitDirectoryEntry(state, _fn, false, kDeviceTreeNodeTypeName)) return true;
 			if (device_tree_property_available(node, kDeviceTreeNodeNameMarker) &&
-				!vfs_enum_emit(state, _fn, (void*)0, (void*)kDeviceTreeNodeNameName)) return true;
+				!uni::EmitDirectoryEntry(state, _fn, false, kDeviceTreeNodeNameName)) return true;
 			if (device_tree_property_available(node, kDeviceTreeDriverNameMarker) &&
-				!vfs_enum_emit(state, _fn, (void*)0, (void*)kDeviceTreeDriverNameName)) return true;
+				!uni::EmitDirectoryEntry(state, _fn, false, kDeviceTreeDriverNameName)) return true;
 			if (device_tree_property_available(node, kDeviceTreeBindingStateMarker) &&
-				!vfs_enum_emit(state, _fn, (void*)0, (void*)kDeviceTreeBindingStateName)) return true;
+				!uni::EmitDirectoryEntry(state, _fn, false, kDeviceTreeBindingStateName)) return true;
 			if (device_tree_property_available(node, kDeviceTreeBlockSizeMarker) &&
-				!vfs_enum_emit(state, _fn, (void*)0, (void*)kDeviceTreeBlockSizeName)) return true;
+				!uni::EmitDirectoryEntry(state, _fn, false, kDeviceTreeBlockSizeName)) return true;
 			if (device_tree_property_available(node, kDeviceTreeUnitCountMarker) &&
-				!vfs_enum_emit(state, _fn, (void*)0, (void*)kDeviceTreeUnitCountName)) return true;
+				!uni::EmitDirectoryEntry(state, _fn, false, kDeviceTreeUnitCountName)) return true;
 			if (device_tree_property_available(node, kDeviceTreeByteSizeMarker) &&
-				!vfs_enum_emit(state, _fn, (void*)0, (void*)kDeviceTreeByteSizeName)) return true;
+				!uni::EmitDirectoryEntry(state, _fn, false, kDeviceTreeByteSizeName)) return true;
 			if (device_tree_property_available(node, kDeviceTreeMountCountMarker) &&
-				!vfs_enum_emit(state, _fn, (void*)0, (void*)kDeviceTreeMountCountName)) return true;
+				!uni::EmitDirectoryEntry(state, _fn, false, kDeviceTreeMountCountName)) return true;
 			if (device_tree_property_available(node, kDeviceTreeMountPathMarker) &&
-				!vfs_enum_emit(state, _fn, (void*)0, (void*)kDeviceTreeMountPathName)) return true;
+				!uni::EmitDirectoryEntry(state, _fn, false, kDeviceTreeMountPathName)) return true;
 			if (state) state->mark_finished();
 			return true;
 		}
@@ -1043,6 +1065,19 @@ static stduint vfs_on_search_segment(void* handle, const char* name, stduint is_
 	}
 
 	vfs_dentry* next_d = lookup_dentry(ctx->current, name, int(length));
+	// Case-insensitive backends may report an already cached object under another spelling.
+	if (!next_d && handle && (is_dir == 0 || is_dir == 1)) {
+		for (auto* cached = ctx->current->d_first_child; cached; cached = cached->d_next_sibling) {
+			const auto& inode = cached->d_inode;
+			if (!inode || inode->is_unlinked || inode->i_sb != ctx->sb || !inode->internal_handler) continue;
+			FilesysHandleComparison comparison;
+			comparison.other = handle;
+			if (ctx->sb->fs->proper(inode->internal_handler, stduint(FilesysCmd::FS_CMD_COMPARE_HANDLE), &comparison) && comparison.same) {
+				next_d = cached;
+				break;
+			}
+		}
+	}
 	if (!next_d) {
 		next_d = alloc_dentry(nullptr, name);
 		if (!next_d) {
@@ -1420,8 +1455,7 @@ static bool IsLinkedWorkingDirectory(vfs_dentry* cwd, uint64 identity) {
 	return inode && inode->i_sb && cwd && cwd->d_inode.get() == inode.get();
 }
 
-int Filesys::ChangeDirectory(const char* pathname, vfs_dentry*& cwd,
-	uint64& cwd_identity, const ProcessCredentials& credentials) {
+int Filesys::ChangeDirectory(const char* pathname, vfs_dentry*& cwd, uint64& cwd_identity, SharedPtr<vfs_inode>& cwd_inode, const ProcessCredentials& credentials) {
 	MutexLocal guard(&vfs_lock);
 	if (pathname && *pathname != '/' && !IsLinkedWorkingDirectory(cwd, cwd_identity))
 		return -ESTALE;
@@ -1431,6 +1465,7 @@ int Filesys::ChangeDirectory(const char* pathname, vfs_dentry*& cwd,
 	if (!next->d_inode || (next->d_inode->i_mode & I_TYPE_MASK) != I_DIRECTORY)
 		return -ENOTDIR;
 	if (!MayAccess(*next->d_inode, &credentials, AccessSearch)) return -EACCES;
+	cwd_inode = next->d_inode;
 	cwd = next;
 	cwd_identity = next == vfs_root ? 0 : next->d_inode->identity;
 	return 0;
@@ -1456,7 +1491,7 @@ static int FillStatUnlocked(const SharedPtr<vfs_inode>& inode, file_status_t& re
 	#ifdef _FILESYS_DATETIME
 	const stduint type = inode->i_mode & I_TYPE_MASK;
 	auto* fs = GetInodeFilesystem(inode.get());
-	if (fs && inode->internal_handler && (type == I_REGULAR || type == I_DIRECTORY)) {
+	if (fs && !inode->is_unlinked && inode->internal_handler && (type == I_REGULAR || type == I_DIRECTORY)) {
 		FilesysFileInfo info = {};
 		if (fs->proper(inode->internal_handler, (stduint)FilesysCmd::FS_CMD_GET_INFO, &info) &&
 			(info.time_valid & FILESYS_TIME_MODIFIED)) {
@@ -1502,6 +1537,7 @@ static int SetPermissionsUnlocked(const SharedPtr<vfs_inode>& inode, const Proce
 	if (!mode_change && request.uid == -1 && request.gid == -1) return 0;
 	auto* fs = GetInodeFilesystem(inode.get());
 	if (!fs || !inode->internal_handler) return -ENOTSUP;
+	if (fs->getFaultState() != FilesysFaultState::Healthy) return -EIO;
 	FilesysPermissionResult update;
 	if (mode_change) {
 		update.fields.mode = true;
@@ -1936,7 +1972,8 @@ int Filesys::GetMappingPermissions(vfs_file* file, int open_mode, bool shared, s
 	if ((inode.i_mode & I_TYPE_MASK) != I_REGULAR) return -ENODEV;
 	if (!inode.mount_state || !inode.mount_state->filesystem) return -ENODEV;
 	allowed = PROT_READ;
-	if (!shared || (access == O_RDWR && !inode.mount_state->read_only)) allowed |= PROT_WRITE;
+	if (!shared || (access == O_RDWR && !inode.mount_state->read_only &&
+		inode.mount_state->filesystem->getFaultState() == FilesysFaultState::Healthy)) allowed |= PROT_WRITE;
 	if (!inode.mount_state->no_execute) allowed |= PROT_EXEC;
 	return 0;
 }
@@ -1971,6 +2008,10 @@ int Filesys::Open(const char* pathname, int flags, vfs_file** out_file, vfs_dent
 		if ((access & AccessWrite) && type == I_DIRECTORY) return -EISDIR;
 		if ((access & AccessWrite) && inode.i_sb && inode.i_sb->permissions.read_only)
 			return -EROFS;
+		if ((access & AccessWrite) && type == I_REGULAR) {
+			auto* fs = GetInodeFilesystem(&inode);
+			if (fs && fs->getFaultState() != FilesysFaultState::Healthy) return -EIO;
+		}
 		if (!MayAccess(inode, credentials, access)) return -EACCES;
 		// O_TRUNC only applies to regular files, never device nodes or FIFOs.
 		if ((flags & O_TRUNC) && (access & AccessWrite) && type == I_REGULAR &&
@@ -1987,6 +2028,7 @@ int Filesys::Open(const char* pathname, int flags, vfs_file** out_file, vfs_dent
 		auto* sb = parent->d_inode->i_sb;
 		if (!sb || !sb->fs) return -ENOENT;
 		if (sb->permissions.read_only) return -EROFS;
+		if (sb->fs->getFaultState() != FilesysFaultState::Healthy) return -EIO;
 		if (!MayAccess(*parent->d_inode, credentials, AccessWrite | AccessSearch))
 			return -EACCES;
 
@@ -2090,6 +2132,7 @@ int Filesys::Write(vfs_file* file, const void* buf, stduint count) {
 	FilesysTrait* fs = GetInodeFilesystem(file->f_inode.get());
 	if (!fs) return -1;
 	if (regular && !count) return 0;
+	if (regular && fs->getFaultState() != FilesysFaultState::Healthy) return -EIO;
 	if (fs == &global_devfs) {
 		if (auto* node = DevFs::GetDeviceNode(file->f_inode->internal_handler)) {
 			const stdsint bytes = Devsman::Send(node, buf, count, file->f_pos);
@@ -2136,6 +2179,10 @@ int Filesys::Write(vfs_file* file, const void* buf, stduint count) {
 		file->f_inode->i_size = write_position;
 	}
 	stduint bytes = fs->writfl(file->f_inode->internal_handler, Slice{ file->f_pos, count }, (const byte*)buf);
+	if (!bytes && fs->getFaultState() != FilesysFaultState::Healthy) {
+		if (fill_gap) AdvanceContentVersion(file->f_inode.get());
+		return -EIO;
+	}
 	if (bytes > count || bytes > ~_IMM0 - write_position) {
 		if (fill_gap) AdvanceContentVersion(file->f_inode.get());
 		return -1;
@@ -2173,7 +2220,7 @@ bool Filesys::GetInfo(vfs_file* file, FilesysFileInfo& info) {
 	if (!file || !file->f_inode) return false;
 	MutexLocal guard(&vfs_lock);
 	FilesysTrait* fs = GetInodeFilesystem(file->f_inode.get());
-	if (!fs) return false;
+	if (!fs || file->f_inode->is_unlinked) return false;
 	return fs->proper(file->f_inode->internal_handler, (stduint)FilesysCmd::FS_CMD_GET_INFO, &info);
 }
 #endif
@@ -2198,6 +2245,7 @@ int Filesys::Close(vfs_file* file) {
 	{
 		MutexLocal guard(&vfs_lock);
 		inode = static_cast<SharedPtr<vfs_inode>&&>(file->f_inode);
+		inode.reset();
 	}
 	delete file;
 	return 0;
@@ -2227,6 +2275,7 @@ int Filesys::Enumer(vfs_file* file, void* buf, stduint count, ProcessBlock* pb) 
 		plogwarn("[Enumer] filesystem unavailable pid=%u", pb ? pb->pid : 0);
 		return -1;
 	}
+	if (file->f_inode->is_unlinked) { file->f_enum_state.mark_finished(); return 0; }
 	file->f_enum_state.begin(count);
 
 	g_enum_cxt.pb = pb;
@@ -2270,7 +2319,7 @@ bool Filesys::Remove(const char* pathname, vfs_dentry* base,
 	char relative_path[256];
 	if (!fs || !BuildMountRelativePath(dentry, relative_path,
 		sizeof(relative_path))) return false;
-	if (!fs->unlink(relative_path, inode->internal_handler)) return false;
+	if (fs->getFaultState() != FilesysFaultState::Healthy || !fs->unlink(relative_path, inode->internal_handler)) return false;
 
 	KASSERT(DetachDentry(dentry));
 	inode->is_unlinked = true;
@@ -2280,33 +2329,100 @@ bool Filesys::Remove(const char* pathname, vfs_dentry* base,
 	return true;
 }
 
+// Serialize final inode destruction with namespace and allocation updates.
+void Filesys::ReleaseInode(SharedPtr<vfs_inode>& inode) {
+	if (!inode) return;
+	MutexLocal guard(&vfs_lock);
+	inode.reset();
+}
+
+// Remove a directory name only after its backend has verified emptiness without dropping vfs_lock.
+int Filesys::RemoveDirectory(const char* pathname, vfs_dentry* base, const ProcessCredentials* credentials, uint64 cwd_identity) {
+	if (!pathname || !*pathname) return -ENOENT;
+	const char* end = pathname + StrLength(pathname);
+	while (end > pathname && end[-1] == '/') --end;
+	const char* leaf = end;
+	while (leaf > pathname && leaf[-1] != '/') --leaf;
+	const auto length = end - leaf;
+	// Inspect the original leaf before ResolvePath folds dot components.
+	if (length == 1 && leaf[0] == '.') return -EINVAL;
+	if (length == 2 && leaf[0] == '.' && leaf[1] == '.') return -EINVAL;
+
+	MutexLocal guard(&vfs_lock);
+	if (*pathname != '/' && !IsLinkedWorkingDirectory(base, cwd_identity)) return -ESTALE;
+	vfs_dentry* entry = nullptr;
+	const int status = ResolvePath(pathname, base, credentials, entry);
+	if (status < 0) return status;
+	if (!entry->d_inode || (entry->d_inode->i_mode & I_TYPE_MASK) != I_DIRECTORY) return -ENOTDIR;
+	if (entry == vfs_root || !entry->d_parent || entry->d_mounts || entry->d_mounted_on) return -EBUSY;
+	auto* parent = entry->d_parent;
+	if (!parent->d_inode) return -EIO;
+	const int refreshed = RefreshPermissionsUnlocked(*parent->d_inode);
+	if (refreshed < 0) return refreshed;
+	if (!MayAccess(*parent->d_inode, credentials, AccessWrite | AccessSearch)) return -EACCES;
+	if (!MayRemoveStickyEntry(*parent->d_inode, *entry->d_inode, credentials)) return -EPERM;
+	auto inode = entry->d_inode;
+	if (!inode->i_sb) return -ESTALE;
+	if (inode->i_sb->permissions.read_only) return -EROFS;
+	if (entry->d_first_child) return -ENOTEMPTY;
+	auto* fs = GetInodeFilesystem(inode.get());
+	if (!fs) return -EIO;
+	auto relative = uni::make_unique<char[]>(256);
+	if (!relative) return -ENOMEM;
+	if (!BuildMountRelativePath(entry, relative.get(), 256)) return -ENAMETOOLONG;
+	if (fs->getFaultState() != FilesysFaultState::Healthy) return -EIO;
+	switch (fs->rmdir(relative.get(), inode->internal_handler)) {
+	case FilesysDirectoryRemoveResult::Success: break;
+	case FilesysDirectoryRemoveResult::NotEmpty: return -ENOTEMPTY;
+	case FilesysDirectoryRemoveResult::Unsupported: return -EOPNOTSUPP;
+	default: return -EIO;
+	}
+	KASSERT(DetachDentry(entry));
+	inode->is_unlinked = true;
+	inode->i_sb = nullptr;
+	entry->d_inode.reset();
+	delete entry;
+	return 0;
+}
+
 int Filesys::Rename(const char* source, const char* destination, vfs_dentry* base, const ProcessCredentials* credentials, uint64 cwd_identity) {
 	if (!source || !*source || !destination || !*destination) return -ENOENT;
 	MutexLocal guard(&vfs_lock);
-	if (credentials &&
-		((source && *source != '/') || (destination && *destination != '/')) &&
-		!IsLinkedWorkingDirectory(base, cwd_identity)) return -ESTALE;
+	if (credentials && (*source != '/' || *destination != '/') && !IsLinkedWorkingDirectory(base, cwd_identity)) return -ESTALE;
 	vfs_dentry* source_dentry = nullptr;
 	const int source_lookup = ResolvePath(source, base, credentials, source_dentry);
 	if (source_lookup < 0) return source_lookup;
-	if (!source_dentry->d_inode || !source_dentry->d_parent || source_dentry->d_mounts) return -EBUSY;
+	if (!source_dentry->d_inode || source_dentry == vfs_root || !source_dentry->d_parent ||
+		source_dentry->d_mounts || source_dentry->d_mounted_on) return -EBUSY;
 	const char* source_end = source + StrLength(source);
 	while (source_end > source && source_end[-1] == '/') --source_end;
 	const char* source_name = source_end;
 	while (source_name > source && source_name[-1] != '/') --source_name;
 	const stduint source_length = source_end - source_name;
-	if ((source_length == 1 && source_name[0] == '.') ||
-		(source_length == 2 && source_name[0] == '.' && source_name[1] == '.')) return -EINVAL;
-
+	if ((source_length == 1 && source_name[0] == '.') || (source_length == 2 && source_name[0] == '.' && source_name[1] == '.')) return -EINVAL;
 	vfs_dentry* destination_parent = nullptr;
 	const char* destination_name = nullptr;
 	const int parent_lookup = ResolveParentAndName(destination, base, credentials, &destination_parent, &destination_name);
 	if (parent_lookup < 0) return parent_lookup;
 	if (!destination_parent->d_inode || !destination_parent->d_inode->i_sb ||
 		(destination_parent->d_inode->i_mode & I_TYPE_MASK) != I_DIRECTORY) return -ENOTDIR;
-	if (source_dentry->d_inode->i_sb != destination_parent->d_inode->i_sb) return -EXDEV;
-	if (destination_parent->d_inode->i_sb->permissions.read_only) return -EROFS;
-	// Rename removes an entry from the source directory and adds one to the destination directory.
+	vfs_dentry* existing_destination = nullptr;
+	const int destination_lookup = ResolvePath(destination, base, credentials, existing_destination);
+	if (destination_lookup < 0 && destination_lookup != -ENOENT) return destination_lookup;
+	// Keep references inside the lock's lifetime so final reclamation cannot race namespace updates.
+	auto source_inode = source_dentry->d_inode;
+	SharedPtr<vfs_inode> target_inode;
+	if (destination_lookup == 0) {
+		if (!existing_destination->d_inode) return -EIO;
+		if (existing_destination == source_dentry || existing_destination->d_inode.get() == source_inode.get()) return 0;
+		if (existing_destination == vfs_root || !existing_destination->d_parent ||
+			existing_destination->d_mounts || existing_destination->d_mounted_on) return -EBUSY;
+		if (existing_destination->d_parent != destination_parent) return -EIO;
+		target_inode = existing_destination->d_inode;
+	}
+	if (!source_inode->i_sb || source_inode->i_sb != destination_parent->d_inode->i_sb ||
+		(target_inode && target_inode->i_sb != source_inode->i_sb)) return -EXDEV;
+	if (source_inode->i_sb->permissions.read_only) return -EROFS;
 	auto* source_parent = source_dentry->d_parent;
 	if (!source_parent->d_inode) return -ENOENT;
 	const int source_permissions = RefreshPermissionsUnlocked(*source_parent->d_inode);
@@ -2314,43 +2430,62 @@ int Filesys::Rename(const char* source, const char* destination, vfs_dentry* bas
 	const int destination_permissions = RefreshPermissionsUnlocked(*destination_parent->d_inode);
 	if (destination_permissions < 0) return destination_permissions;
 	if (!MayAccess(*source_parent->d_inode, credentials, AccessWrite | AccessSearch) ||
-		!MayAccess(*destination_parent->d_inode, credentials, AccessWrite | AccessSearch))
-		return -EACCES;
-
-	vfs_dentry* existing_destination = nullptr;
-	const int destination_lookup = ResolvePath(destination, base, credentials, existing_destination);
-	if (destination_lookup == 0) return existing_destination == source_dentry ? 0 : -EEXIST;
-	if (destination_lookup != -ENOENT) return destination_lookup;
-	if (!MayRemoveStickyEntry(*source_parent->d_inode, *source_dentry->d_inode, credentials))
-		return -EPERM;
-
-	for (vfs_dentry* ancestor = destination_parent; ancestor;
-		ancestor = ancestor->d_parent) {
-		if (ancestor == source_dentry) return -EINVAL;
+		!MayAccess(*destination_parent->d_inode, credentials, AccessWrite | AccessSearch)) return -EACCES;
+	const int source_attributes = RefreshPermissionsUnlocked(*source_inode);
+	if (source_attributes < 0) return source_attributes;
+	if (!MayRemoveStickyEntry(*source_parent->d_inode, *source_inode, credentials)) return -EPERM;
+	const stduint source_type = source_inode->i_mode & I_TYPE_MASK;
+	if (source_type != I_REGULAR && source_type != I_DIRECTORY) return -ENOTSUP;
+	FilesysTrait* fs = GetInodeFilesystem(source_inode.get());
+	if (!fs || fs == &global_devfs || !source_inode->internal_handler) return -ENOTSUP;
+	if (fs->getFaultState() != FilesysFaultState::Healthy) return -EIO;
+	if (target_inode) {
+		const int target_attributes = RefreshPermissionsUnlocked(*target_inode);
+		if (target_attributes < 0) return target_attributes;
+		if (!MayRemoveStickyEntry(*destination_parent->d_inode, *target_inode, credentials)) return -EPERM;
+		const stduint target_type = target_inode->i_mode & I_TYPE_MASK;
+		if (source_type == I_DIRECTORY && target_type != I_DIRECTORY) return -ENOTDIR;
+		if (source_type != I_DIRECTORY && target_type == I_DIRECTORY) return -EISDIR;
+		if (target_type != I_REGULAR && target_type != I_DIRECTORY) return -ENOTSUP;
+		if (!target_inode->internal_handler) return -EIO;
+		if (target_type == I_DIRECTORY) {
+			if (existing_destination->d_first_child) return -ENOTEMPTY;
+			switch (fs->InspectDirectory(target_inode->internal_handler)) {
+			case FilesysDirectoryState::Empty: break;
+			case FilesysDirectoryState::NotEmpty: return -ENOTEMPTY;
+			case FilesysDirectoryState::Unsupported: return -EOPNOTSUPP;
+			default: return -EIO;
+			}
+		}
 	}
-
-	// Keep mount-relative path scratch space off the service stack.
-	auto scratch = uni::make_unique<char[]>(256 + 256);
+	for (auto* ancestor = destination_parent; ancestor; ancestor = ancestor->d_parent)
+		if (ancestor == source_dentry) return -EINVAL;
+	// Copy the destination name before retiring its dentry, and prepare all fallible memory before disk commit.
+	auto scratch = uni::make_unique<char[]>(512 + VFS_MAX_FILENAME);
 	if (!scratch) return -ENOMEM;
 	char* source_path = scratch.get();
 	char* destination_path = source_path + 256;
+	char* final_name = destination_path + 256;
+	StrCopy(final_name, existing_destination ? existing_destination->d_name : destination_name);
 	if (!BuildMountRelativePath(source_dentry, source_path, 256) ||
-		!BuildMountRelativeChildPath(destination_parent, destination_name,
-			destination_path, 256)) return -ENAMETOOLONG;
-
-	FilesysTrait* fs = GetInodeFilesystem(source_dentry->d_inode.get());
-	if (!fs || fs == &global_devfs || !source_dentry->d_inode->internal_handler) return -ENOTSUP;
-	// RootFs namespace changes live entirely in VFS; its inode-owned handle must never be overwritten.
-	if (fs != &global_rootfs_driver &&
-		!fs->rename(source_path, destination_path, source_dentry->d_inode->internal_handler)) return -EIO;
-
+		!BuildMountRelativeChildPath(destination_parent, final_name, destination_path, 256)) return -ENAMETOOLONG;
+	FilesysRenameParameter parameter;
+	parameter.handler = source_inode->internal_handler;
+	parameter.replaced_handler = target_inode ? target_inode->internal_handler : nullptr;
+	if (!fs->rename(source_path, destination_path, parameter)) return -EIO;
+	// Backend commit is complete; publish links without reallocating or transferring either inode's identity.
+	if (target_inode) {
+		KASSERT(DetachDentry(existing_destination));
+		target_inode->is_unlinked = true;
+		target_inode->i_sb = nullptr;
+		existing_destination->d_inode.reset();
+		delete existing_destination;
+	}
 	if (source_parent != destination_parent) {
 		KASSERT(DetachDentry(source_dentry));
 		AppendDentry(destination_parent, source_dentry);
 	}
-	const stduint name_length = StrLength(destination_name);
-	MemCopyN(source_dentry->d_name, destination_name, name_length);
-	source_dentry->d_name[name_length] = '\0';
+	StrCopy(source_dentry->d_name, final_name);
 	return 0;
 }
 
@@ -2429,7 +2564,7 @@ namespace {
 	bool devfs_enumerate_aliases(DeviceNode* node, _tocall_ft callback, FilesysEnumState* state) {
 		for (auto* crt = node; crt; crt = reinterpret_cast<DeviceNode*>(crt->link.next)) {
 			if (const char* alias = Devsman::GetDevAlias(crt)) {
-				if (!vfs_enum_emit(state, callback, (void*)0, (void*)alias)) return false;
+				if (!uni::EmitDirectoryEntry(state, callback, false, alias)) return false;
 			}
 			if (crt->link.subf && !devfs_enumerate_aliases(
 				reinterpret_cast<DeviceNode*>(crt->link.subf), callback, state)) return false;
@@ -2538,8 +2673,8 @@ bool DevFs::enumer(void* dir_handler, _tocall_ft _fn, FilesysEnumState* state) {
 	if (!_fn) return false;
 	if (state && (state->finished || state->full())) return true;
 	if (dir_handler == (void*)~0 || dir_handler == nullptr) { // Root of /dev
-		if (!uni::vfs_enum_emit(state, _fn, (void*)0, (void*)"tty")) return true;
-		if (!uni::vfs_enum_emit(state, _fn, (void*)1, (void*)"pts")) return true;
+		if (!uni::EmitDirectoryEntry(state, _fn, false, "tty")) return true;
+		if (!uni::EmitDirectoryEntry(state, _fn, true, "pts")) return true;
 		if (!devfs_enumerate_aliases(Devsman::Root(), _fn, state)) return true;
 		if (state) state->mark_finished();
 		return true;
@@ -2548,7 +2683,7 @@ bool DevFs::enumer(void* dir_handler, _tocall_ft _fn, FilesysEnumState* state) {
 		for (auto nod = vttys.Root(); nod; nod = nod->next) {
 			char name[16];
 			String(name, 16).Format("%u", ((vtty_type_t*)nod->type)->id);
-			if (!uni::vfs_enum_emit(state, _fn, (void*)0, (void*)name)) return true;
+			if (!uni::EmitDirectoryEntry(state, _fn, false, name)) return true;
 		}
 		if (state) state->mark_finished();
 		return true;

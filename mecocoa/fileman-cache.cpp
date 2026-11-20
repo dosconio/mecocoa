@@ -1173,6 +1173,8 @@ namespace uni {
 		auto page = FindReadySharedFilePage(key);
 		if (!page) return nullptr;
 		MutexLocal file_guard(&vfs_lock);
+		FilesysTrait* fs = inode->mount_state ? inode->mount_state->filesystem : (inode->i_sb ? inode->i_sb->fs : nullptr);
+		if (!fs || fs->getFaultState() != FilesysFaultState::Healthy) return nullptr;
 		if (ExecutableFilePinned(inode.get())) return nullptr;
 		if (key.file_offset >= inode->i_size) return nullptr;
 		{
@@ -1221,7 +1223,7 @@ namespace uni {
 			FilesysTrait* fs = inode->mount_state ?
 				inode->mount_state->filesystem :
 				(inode->i_sb ? inode->i_sb->fs : nullptr);
-			if (!fs) return false;
+			if (!fs || fs->getFaultState() != FilesysFaultState::Healthy) return false;
 			const stduint written = fs->writfl(inode->internal_handler,
 				Slice { file_offset, length },
 				(const byte*)page->physical_address);

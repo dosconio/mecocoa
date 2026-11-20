@@ -192,9 +192,8 @@ public:
 	static bool Unmount(const char* target_path);
 	// General path resolution: find dentry for a given path
 	static vfs_dentry* Index(const char* pathname, vfs_dentry* base = nullptr);
-	// Update the CWD and its inode identity together after checking search access.
-	static int ChangeDirectory(const char* pathname, vfs_dentry*& cwd, uint64& cwd_identity,
-		const ProcessCredentials& credentials);
+	// Update CWD, identity and storage ownership together after checking search access.
+	static int ChangeDirectory(const char* pathname, vfs_dentry*& cwd, uint64& cwd_identity, SharedPtr<vfs_inode>& cwd_inode, const ProcessCredentials& credentials);
 	// Build the path under vfs_lock. A detached CWD returns -ESTALE.
 	static int GetWorkingDirectory(vfs_dentry* cwd, uint64 cwd_identity, String& path);
 	// Path lookup checks directory search access and snapshots metadata under the same VFS lock.
@@ -265,7 +264,11 @@ public:
 	// Unlink a regular file; user requests require parent write/search access and sticky ownership checks.
 	static bool Remove(const char* pathname, vfs_dentry* base = nullptr,
 		const ProcessCredentials* credentials = nullptr, uint64 cwd_identity = 0);
-	// Rename without replacement; require write/search on both parents and source sticky ownership; return zero or a negative errno.
+	// Remove only empty directories, protecting mount roots and enforcing parent and sticky permissions.
+	static int RemoveDirectory(const char* pathname, vfs_dentry* base, const ProcessCredentials* credentials, uint64 cwd_identity);
+	// Drop a retained inode under VFS serialization, including backend storage reclamation.
+	static void ReleaseInode(SharedPtr<vfs_inode>& inode);
+	// Rename with replacement; check both parents and sticky ownership, retaining the replaced inode until its last reference; return zero or a negative errno.
 	static int Rename(const char* source, const char* destination, vfs_dentry* base = nullptr, const ProcessCredentials* credentials = nullptr, uint64 cwd_identity = 0);
 	// Retain an inode only when the weak identity entry still refers to a live object.
 	static SharedPtr<vfs_inode> FindInode(uint64 identity);

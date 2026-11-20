@@ -35,17 +35,22 @@ LDFLAGS = -T $(LDFILE)
 
 #
 asmpref=_ag_
-cplpref=_cc_
-cpppref=_cx_
+cplpref=_c_
+cpppref=_x_
+unicplpref=_cc_
+unicpppref=_cx_
+# Keep source-to-object mapping identical for prerequisites and linker inputs.
+c_object=$(dest_obj)/$(if $(filter $(abspath $(ulibpath))/%,$(abspath $(1))),$(unicplpref),$(cplpref))$(notdir $(1:.c=.o))
+cpp_object=$(dest_obj)/$(if $(filter $(abspath $(ulibpath))/%,$(abspath $(1))),$(unicpppref),$(cpppref))$(notdir $(1:.cpp=.o))
 dest_obj=$(uobjpath)/mcca-$(arch)
 define asm_to_o
 $(dest_obj)/$(asmpref)$(notdir $(1:.S=.o)): $(1)
 endef
 define c_to_o
-$(dest_obj)/$(cplpref)$(notdir $(1:.c=.o)): $(1)
+$(call c_object,$(1)): $(1) configs/raspi3-ac53.make
 endef
 define cpp_to_o
-$(dest_obj)/$(cpppref)$(notdir $(1:.cpp=.o)): $(1)
+$(call cpp_object,$(1)): $(1) configs/raspi3-ac53.make
 endef
 
 #
@@ -59,8 +64,8 @@ cplfile=# $(ulibpath)/c/mcore.c \
 
 
 asmobjs=$(addprefix $(dest_obj)/$(asmpref),$(patsubst %S,%o,$(notdir $(asmfile))))
-cppobjs=$(addprefix $(dest_obj)/$(cpppref),$(patsubst %cpp,%o,$(notdir $(cppfile))))
-cplobjs=$(addprefix $(dest_obj)/$(cplpref),$(patsubst %c,%o,$(notdir $(cplfile))))
+cppobjs=$(sort $(foreach src,$(cppfile),$(call cpp_object,$(src))))
+cplobjs=$(sort $(foreach src,$(cplfile),$(call c_object,$(src))))
 
 elf_kernel=mcca-$(arch).elf
 
@@ -98,12 +103,20 @@ _ag_%.o:
 	echo AS $(notdir $<)
 	${CC} ${CFLAGS} -c -o $@ $< -MMD -MF $(patsubst %.o,%.d,$@) -MT $@ -D_DEV_GNU_AS -D__BITS__=64
 
+_c_%.o:
+	echo CC $(notdir $<)
+	${CC} ${CFLAGS} -c -o $@ $< -MMD -MF $(patsubst %.o,%.d,$@) -MT $@
+
 _cc_%.o:
 	echo CC $(notdir $<)
 	${CC} ${CFLAGS} -c -o $@ $< -MMD -MF $(patsubst %.o,%.d,$@) -MT $@
+
+_x_%.o:
+	echo CX $(notdir $<)
+	${CX} ${XFLAGS} -c -o $@ $< -MMD -MF $(patsubst %.o,%.d,$@) -MT $@
 
 _cx_%.o:
 	echo CX $(notdir $<)
 	${CX} ${XFLAGS} -c -o $@ $< -MMD -MF $(patsubst %.o,%.d,$@) -MT $@
 
--include $(dest_obj)/*.d
+-include $(wildcard $(asmobjs:.o=.d) $(gasobjs:.o=.d) $(cppobjs:.o=.d) $(cplobjs:.o=.d))

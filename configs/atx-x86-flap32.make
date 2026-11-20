@@ -30,7 +30,7 @@ ker_mod=$(uobjpath)/mcca-$(arch)/*.o
 
 kernel_excluded_cpp=devdriv/video/video-bochs.cpp devdriv/net/e1000.cpp devdriv/net/lance.cpp devdriv/vmhost/vmci.cpp
 cppfile=$(filter-out $(kernel_excluded_cpp),$(wildcard archits/x86and64/*.cpp) $(wildcard mecocoa/*.cpp) $(wildcard devdriv/*.cpp) $(wildcard devdriv/**/*.cpp) $(wildcard devdriv/**/**/*.cpp) $(wildcard depends/*.cpp) $(wildcard depends/loaders/*.cpp) )
-cppobjs=$(patsubst %.cpp, $(uobjpath)/mcca-$(arch)/%.o, $(notdir $(cppfile)))
+cppobjs=$(patsubst %.cpp, $(uobjpath)/mcca-$(arch)/_x_%.o, $(notdir $(cppfile)))
 VPATH = $(sort $(dir $(cppfile)))
 
 sudokey=k
@@ -194,7 +194,7 @@ prehost/$(arch)/fatvhd.ignore: $(wildcard $(uobjpath)/sapp-$(arch)/*) $(wildcard
 	@echo $(sudokey) | sudo -S cp $(uobjpath)/sapp-$(arch)/ribbon $(mntdir)/ribbon
 	@echo $(sudokey) | sudo -S umount $(mntdir)
 
-$(uobjpath)/mcca-$(arch)/memodisk.o: prehost/$(arch)/fatvhd.ignore
+$(uobjpath)/mcca-$(arch)/_x_memodisk.o: prehost/$(arch)/fatvhd.ignore
 
 qemu_args=-smp 4,cores=2,threads=2 -M pc \
 	-cdrom $(iso_kernel) \
@@ -238,10 +238,10 @@ clean:
 clean-app:
 	@-rm -r $(uobjpath)/sapp-$(arch)/*
 
-$(uobjpath)/mcca-$(arch)/%.o: %.cpp
+$(uobjpath)/mcca-$(arch)/_x_%.o: %.cpp
 	@mkdir $(uobjpath)/mcca-$(arch) -p
 	@echo "CX $(notdir $<)"
 	@$(CX) $< -o $@ -O0 -MMD -MF $(patsubst %.o,%.d,$@) -MT $@
 	@if [ "$(notdir $<)" = "freetype.cpp" ]; then objcopy --rename-section .text=.ext.freetype --rename-section .rodata=.ext.freetype --rename-section .data=.ext.freetype $@; fi
 
--include $(uobjpath)/mcca-$(arch)/*.d
+-include $(wildcard $(cppobjs:.o=.d))

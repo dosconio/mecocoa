@@ -3,6 +3,20 @@
 
 #include <c/datime.h>
 
+// DELF keeps the legacy unlink result and returns zero or negative errno for directory removal.
+enum
+	#ifdef _INC_CPP
+	class
+	#endif
+	file_remove_operation_t
+	#ifdef _INC_CPP
+	: stduint
+	#endif
+{
+	Unlink,
+	RemoveDirectory,
+};
+
 enum
 	#ifdef _INC_CPP
 	class
@@ -23,7 +37,7 @@ enum
 	CLOS, // close  (fd)->0            | x86 x64
 	READ, // read   (fd, adr, len)->len| x86 x64
 	WRIT, // write  (fd, adr, len)->len| x86 x64
-	DELF, // remove (pathname)->?      | x86 x64
+	DELF, // remove (pathname,operation)->result | x86 x64
 	MOVE, // rename (oldpath,newpath)->status
 	PROP, // properties (fd/path, &result, query)->status
 	ENUM, // enumer (fd,&kde,cnt)->cnt | x86
@@ -593,5 +607,7 @@ _ESYM_C stduint syscall(syscall_t callid, stduint p1 = 0, stduint p2 = 0, stduin
 struct Syscall {
 	static void Initialize();
 };
+
+constexpr stduint syscall_exec_spawn_request_tag = 1;
 
 #endif

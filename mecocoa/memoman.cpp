@@ -509,6 +509,13 @@ bool ProcessBlock::CanProtectVmaRange(stduint address, stduint length, stduint p
 		if (vma.vm_end <= covered) continue;
 		if (vma.vm_start > covered || vma.vm_type == VirtualMemoryAreaType::Device ||
 			(prot & ~vma.vm_max_prot)) return false;
+		// Retained mapping grants cannot authorize new shared writes after a filesystem fault.
+		if ((prot & PROT_WRITE) && vma.vm_type == VirtualMemoryAreaType::File &&
+			vma.vm_mode == VirtualMemoryAreaMode::Shared) {
+			if (!vma.vfile || !vma.vfile->f_inode || !vma.vfile->f_inode->mount_state) return false;
+			auto* fs = vma.vfile->f_inode->mount_state->filesystem;
+			if (!fs || fs->getFaultState() != uni::FilesysFaultState::Healthy) return false;
+		}
 		#if _MCCA == 0x8632
 		if (prot && vma.vm_type == VirtualMemoryAreaType::File &&
 			!(vma.vm_max_prot & PROT_EXEC)) return false;

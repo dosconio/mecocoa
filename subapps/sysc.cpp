@@ -4,7 +4,7 @@
 
 int main(int argc, char** argv) {
 	// Initialize default arguments with zeros
-	stduint args[4] = {0, 0, 0, 0};
+	stduint args[4] = { 0, 0, 0, 0 }; int ptr = 0;
 	
 	// argv[0] is typically the executable name, so actual arguments start from argv[1].
 	// Limit the maximum number of processed arguments to 4.
@@ -15,10 +15,15 @@ int main(int argc, char** argv) {
 	if (num_args < 0) {
 		num_args = 0;
 	}
-	
+
+	if (num_args == 1) {
+		args[ptr++] = _IMM(syscall_t::DBUG);
+	}
+
+
 	// Parse each provided argument from string to integer
 	for (int i = 0; i < num_args; i++) {
-		args[i] = atoins(argv[i + 1]);
+		args[ptr++] = atoins(argv[i + 1]);
 	}
 	
 	// Sequentially pass the integers to syscall.

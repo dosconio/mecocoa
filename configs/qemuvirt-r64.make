@@ -83,16 +83,25 @@ _ag_%.o:
 	echo AS $(notdir $<)
 	${CC} ${CFLAGS} -c -o $@ $< -MMD -MF $(patsubst %.o,%.d,$@) -MT $@ -D_DEV_GNU_AS -D__BITS__=64
 
+_c_%.o:
+	echo CC $(notdir $<)
+	${CC} ${CFLAGS} -c -o $@ $< -MMD -MF $(patsubst %.o,%.d,$@) -MT $@
+
 _cc_%.o:
 	echo CC $(notdir $<)
 	${CC} ${CFLAGS} -c -o $@ $< -MMD -MF $(patsubst %.o,%.d,$@) -MT $@
+
+_x_%.o:
+	echo CX $(notdir $<)
+	${CX} ${XFLAGS} -c -o $@ $< -MMD -MF $(patsubst %.o,%.d,$@) -MT $@ \
+		-fno-rtti
 
 _cx_%.o:
 	echo CX $(notdir $<)
 	${CX} ${XFLAGS} -c -o $@ $< -MMD -MF $(patsubst %.o,%.d,$@) -MT $@ \
 		-fno-rtti
 
--include $(dest_obj)/*.d
+-include $(wildcard $(asmobjs:.o=.d) $(gasobjs:.o=.d) $(cppobjs:.o=.d) $(cplobjs:.o=.d))
 
 
 

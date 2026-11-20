@@ -8,9 +8,8 @@ make -f accmlib/accma32.clang.make all
 make -f subapps/Makefile.clang.a32 all
 */
 
-extern "C" char _IDN_BOARD[16]{ "STM32H743IIT6" };
-
 _ESYM_C void mecocoa();
+void BoardInitialize();
 
 void _idle() {
 	GPIN& LEDB = GPIO[BoardConfig::Gpio::LedBlue::Port][BoardConfig::Gpio::LedBlue::Pin];
@@ -36,18 +35,6 @@ void _test() {
 	}
 }
 #endif
-
-void sysinfo_classic(OstreamTrait& com1, byte func);
-void key_isr_up() {
-	void dump_processors(OstreamTrait & com1);
-	sysinfo_classic(XART1, 'w');
-	dump_processors(XART1);// sysinfo_classic(XART1, 's');
-	sysinfo_classic(XART1, 'f');
-	sysinfo_classic(XART1, 'H');
-}
-void key_isr_dn() {
-    erro();
-}
 
 // ASPEN=0 and boot FPCA cleared: the hardware frame is the plain 8 words.
 _ESYM_C stduint* _arm_frame(stduint lr, stduint sp) {
@@ -181,16 +168,7 @@ int main()
 	XART1.setMode(115200);
 	SysTick::enClock(CONFIG_SysTickFreq);
 	SCB->FPCCR = SCB->FPCCR & ~(1u << 31);// ASPEN=0; boot FPCA is cleared below to establish the plain 8-word frame used by the asm, handler.cpp and _arm_frame
-	GPIN& KEYU = GPIO[BoardConfig::Gpio::KeyUp::Port][BoardConfig::Gpio::KeyUp::Pin];// Up
-	GPIN& KEYD = GPIO[BoardConfig::Gpio::KeyDown::Port][BoardConfig::Gpio::KeyDown::Pin];// Down
-	KEYU.setMode(BoardConfig::Gpio::KeyUp::Mode).setPull(BoardConfig::Gpio::KeyUp::PullUp);
-	KEYU.setMode(BoardConfig::Gpio::KeyUp::Edge);
-	KEYU.setInterrupt(key_isr_up);
-	KEYU.enInterrupt();
-	KEYD.setMode(BoardConfig::Gpio::KeyDown::Mode).setPull(BoardConfig::Gpio::KeyDown::PullUp);
-	KEYD.setMode(BoardConfig::Gpio::KeyDown::Edge);
-	KEYD.setInterrupt(key_isr_dn);
-	KEYD.enInterrupt();
+	BoardInitialize();
 	IC.enInterrupt(false);
 	_ASM volatile("msr psp, %0" :: "r"((stduint)(_boot_stack + sizeof(_boot_stack))));
 	// PM0253 CONTROL/FPCCR: disabling ASPEN does not clear an already active FPCA.

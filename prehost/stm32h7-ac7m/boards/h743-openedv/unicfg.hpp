@@ -8,30 +8,71 @@
 #include <cpp/Device/RCC/RCC>
 #include <cpp/Device/FMC>
 
+#define BOARD_CONFIG_GPIO_DEVICES 1
+
 // An example of STM32H743 openedv board configuration.
 #if 1
 namespace BoardConfig {
 	namespace Gpio {
-		namespace LedBlue {
+		struct LedConfig {
+			const char* Identifier;
+			uni::Color Color;
+			unsigned Port, Pin;
+			bool ActiveHigh;
+		};
+		struct KeyConfig {
+			const char* Identifier;
+			unsigned Port, Pin;
+			bool ActiveHigh, PullUp;
+		};
+
+		struct LedBlue {
 			enum : unsigned { Port = 'B', Pin = 0 };
-			constexpr uni::GPIOMode Mode = uni::GPIOMode::OUT;
-		}
-		namespace LedRed {
+			static constexpr uni::GPIOMode Mode = uni::GPIOMode::OUT;
+			static constexpr bool ActiveHigh = false;
+		};
+		struct LedRed {
 			enum : unsigned { Port = 'B', Pin = 1 };
-			constexpr uni::GPIOMode Mode = uni::GPIOMode::OUT;
-		}
-		namespace KeyUp {
+			static constexpr uni::GPIOMode Mode = uni::GPIOMode::OUT;
+			static constexpr bool ActiveHigh = false;
+		};
+		struct KeyUp {
 			enum : unsigned { Port = 'A', Pin = 0 };
-			constexpr uni::GPIOMode Mode = uni::GPIOMode::IN_Pull;
-			constexpr bool PullUp = false;
-			constexpr uni::GPIORupt::RuptEdge Edge = uni::GPIORupt::Posedge;
-		}
-		namespace KeyDown {
+			static constexpr uni::GPIOMode Mode = uni::GPIOMode::IN_Pull;
+			static constexpr bool ActiveHigh = true, PullUp = false;
+			static constexpr uni::GPIORupt::RuptEdge Edge = uni::GPIORupt::Posedge;
+		};
+		struct KeyLeft {
+			enum : unsigned { Port = 'C', Pin = 13 };
+			static constexpr uni::GPIOMode Mode = uni::GPIOMode::IN_Pull;
+			static constexpr bool ActiveHigh = false, PullUp = true;
+			static constexpr uni::GPIORupt::RuptEdge Edge = uni::GPIORupt::Negedge;
+		};
+		struct KeyDown {
 			enum : unsigned { Port = 'H', Pin = 2 };
-			constexpr uni::GPIOMode Mode = uni::GPIOMode::IN_Pull;
-			constexpr bool PullUp = true;
-			constexpr uni::GPIORupt::RuptEdge Edge = uni::GPIORupt::Negedge;
-		}
+			static constexpr uni::GPIOMode Mode = uni::GPIOMode::IN_Pull;
+			static constexpr bool ActiveHigh = false, PullUp = true;
+			static constexpr uni::GPIORupt::RuptEdge Edge = uni::GPIORupt::Negedge;
+		};
+		struct KeyRight {
+			enum : unsigned { Port = 'H', Pin = 3 };
+			static constexpr uni::GPIOMode Mode = uni::GPIOMode::IN_Pull;
+			static constexpr bool ActiveHigh = false, PullUp = true;
+			static constexpr uni::GPIORupt::RuptEdge Edge = uni::GPIORupt::Negedge;
+		};
+
+		inline const LedConfig Leds[] = {
+			{ "blue", uni::Color::Blue, LedBlue::Port, LedBlue::Pin, LedBlue::ActiveHigh },
+			{ "red", uni::Color::Red, LedRed::Port, LedRed::Pin, LedRed::ActiveHigh },
+		};
+		constexpr stduint LedCount = numsof(Leds);
+		constexpr KeyConfig Keys[] = {
+			{ "up", KeyUp::Port, KeyUp::Pin, KeyUp::ActiveHigh, KeyUp::PullUp },
+			{ "left", KeyLeft::Port, KeyLeft::Pin, KeyLeft::ActiveHigh, KeyLeft::PullUp },
+			{ "down", KeyDown::Port, KeyDown::Pin, KeyDown::ActiveHigh, KeyDown::PullUp },
+			{ "right", KeyRight::Port, KeyRight::Pin, KeyRight::ActiveHigh, KeyRight::PullUp },
+		};
+		constexpr stduint KeyCount = numsof(Keys);
 	}
 	namespace Xart1 {
 		enum : unsigned {

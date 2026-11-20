@@ -30,6 +30,10 @@ menu "Parameter"
 		int "Max Locale Logic Core"
 		default 32
 
+	config NommuHeapSize
+		int "Nommu Heap Size (unit: 4KB)"
+		default 512
+
 	config LOG_LEVEL
 		int "(TODO) Kernel Log Level (0-4)"
 		range 0 4

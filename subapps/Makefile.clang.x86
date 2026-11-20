@@ -30,6 +30,7 @@ apps=\
 	$(BIN_DIR)/testso \
 	$(BIN_DIR)/testpie \
 	$(BIN_DIR)/test_mmapfile \
+	$(BIN_DIR)/test_fileop \
 	$(ubinpath)/mecocoa/x86/lib/ld-mcca.so
 
 # x86 has no separate libm: the math bridge is part of libc.a
@@ -75,4 +76,8 @@ $(BIN_DIR)/testpie: subapps/testpie.cpp $(MCCA_CRT0) $(MCCA_LIBC_PIC)
 
 $(BIN_DIR)/test_mmapfile: subapps/_test/mmapfile.cpp $(MCCA_CRT0) $(MCCA_LIBC)
 	@echo "MK test_mmapfile"
+	$(MCCA_CXX) $(MCCA_CXXFLAGS) -o $@ $< $(MCCA_LDLIBS)
+
+$(BIN_DIR)/test_fileop: subapps/_test/fileop.cpp $(MCCA_CRT0) $(MCCA_LIBC)
+	@echo "MK test_fileop"
 	$(MCCA_CXX) $(MCCA_CXXFLAGS) -o $@ $< $(MCCA_LDLIBS)

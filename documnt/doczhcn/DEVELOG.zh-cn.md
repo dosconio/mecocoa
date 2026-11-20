@@ -1,4 +1,18 @@
+## 2026-11-20
+
+- 11:48（UTC+8）MOVE 接入同挂载覆盖改名，VFS 检查类型、空目录、双方 sticky 及挂载保护，提交后更新目录树并延迟回收旧目标。FAT 保留目标名字/LFN，目录项替换、源删除和父链接共用块恢复；RootFs 同步保留旧 inode，proper 增加 handle 比较以合并 FAT 大小写缓存别名；同步 loader 桩与中文规则，fileop 增加可选覆盖回归入口，并在 x86 Clang 子程序清单接入 test_fileop，MMU/noMMU 共用流程，无新增 syscall。
+
+- 10:54（UTC+8）FilesysTrait 增加不可自动清除的写故障状态；公共 BlockChangeSet 按阶段暂存块修改，提交失败逆序恢复并报告恢复失败。FAT 改名、创建、unlink/rmdir 和 FAT 项多副本更新接入恢复，提交后更新 handle，簇回收保持分段；补齐写入与截断错误检查，VFS、共享映射授权及脏页回写拒绝故障后的修改。MMU/noMMU 共用后端，不增加虚函数或 syscall。修正多架构对象命名：Mecocoa 使用 _c_/_x_，Unisym 保持 _cc_/_cx_，依赖同步新对象名且仅包含已存在的 .d 文件，保留原有通配符链接方式，避免 HGFS 大小写冲突。
+
 ## 2026-11-19
+
+- 22:24（UTC+8）PATA 探测检查复位和选盘的忙状态超时，等待设备状态可用，并对 IDE0:0 增加一次重试和失败诊断。
+
+- 21:35（UTC+8）FilesysTrait 通过 proper 命令和非虚包装统一目录只读检查，FAT、RootFs 的 rmdir 复用判空；公共静态辅助方法统一 FAT、ISO/UDF、RootFs、DevFs 和设备树的枚举输出及分页计数，保留后端游标与既有删除规则，不增加虚函数或 syscall。
+
+- 20:19（UTC+8）DELF 第二参数接通 rmdir，保留普通文件删除返回约定；VFS、RootFs/FAT 支持空目录删除及挂载、权限和 sticky 保护。cwd 和目录 fd 保留原 inode，最后引用释放时串行回收；FAT 增加可靠判空、簇链读取和写入错误检查，rm 接入目录删除，更新接口和简短用户说明。
+
+- 16:37（UTC+8）STM32H7 GPIO 驱动按板级配置登记 LED/KEY 子设备及 `/dev/ledN`、`/dev/keyN` 别名；LED 提供单字节逻辑亮灭读写，按键提供有效电平归一化读取，设备节点只登记物理 GPIO 资源。H743 板号、Up/Down 按键中断实现及注册迁入板级源文件，故障闪灯保留直接 GPIO 旁路。
 
 - 15:41（UTC+8）线程定时器增加共享生命周期状态，退出时原子关闭，Devsman 延后清理唤醒和驱动消息定时器及其重试队列；清理通知失败保留请求并重试，补齐状态析构和线程分配失败处理，沿用现有驱动定时器 ABI。
 

@@ -1080,12 +1080,16 @@ DEFSYSC sysc_WRIT(stduint fd, stduint addr, stduint len) {
 	return open_buf[0];
 }
 
-DEFSYSC sysc_DELF(stduint usr_filepath) {
-	stduint open_buf[2]{ usr_filepath, Taskman::CurrentTID() };
-	if (syssend(Task_FileSys, open_buf, byteof(open_buf), _IMM(FilemanMsg::REMOVE))) return 0;
-	stduint removed = 0;
-	if (sysrecv(Task_FileSys, &removed, sizeof(removed))) return 0;
-	return removed; // 1 on success, 0 on failure
+// Directory removal uses negative errno while operation zero preserves the legacy unlink ABI.
+DEFSYSC sysc_DELF(stduint usr_filepath, stduint operation) {
+	const bool legacy = operation == _IMM(file_remove_operation_t::Unlink);
+	if (!legacy && operation != _IMM(file_remove_operation_t::RemoveDirectory)) return -EINVAL;
+	stduint request[2] = { usr_filepath, operation };
+	const auto sent = stdsint(syssend(Task_FileSys, request, sizeof(request), _IMM(FilemanMsg::REMOVE)));
+	if (sent) return legacy ? 0 : (sent < 0 ? sent : -EIO);
+	stdsint status = legacy ? 0 : -EIO;
+	const auto received = stdsint(sysrecv(Task_FileSys, &status, sizeof(status)));
+	return received ? (legacy ? 0 : (received < 0 ? received : -EIO)) : status;
 }
 
 // Fileman copies both user paths before acquiring filesystem locks; the third argument is reserved.
@@ -1129,7 +1133,9 @@ DEFSYSC sysc_PROP(stduint object, stduint usr_proper, stduint query) {
 			inode = files->pfiles[object]->vfile->f_inode;
 		}
 		const auto credentials = Userman::GetCredentials(*pb);
-		return Filesys::SetPermissionsInode(inode, credentials, change, mode_change);
+		const int status = Filesys::SetPermissionsInode(inode, credentials, change, mode_change);
+		Filesys::ReleaseInode(inode);
+		return status;
 	}
 	if (type != file_property_query_t::LegacyDescriptor &&
 		type != file_property_query_t::Descriptor && type != file_property_query_t::Path) return -EINVAL;
@@ -1152,6 +1158,7 @@ DEFSYSC sysc_PROP(stduint object, stduint usr_proper, stduint query) {
 	}
 	file_status_t result{};
 	const int status = Filesys::StatInode(inode, result);
+	Filesys::ReleaseInode(inode);
 	if (status < 0) return status;
 	const stduint size = type == file_property_query_t::LegacyDescriptor ?
 		sizeof(file_proper_t) : sizeof(file_status_t);

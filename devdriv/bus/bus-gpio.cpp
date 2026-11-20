@@ -4,6 +4,12 @@
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 #include "../../include/mecocoa.hpp"
 #include <cpp/Device/GPIO>
+#if defined(_MCU_STM32H7x)
+#include "unicfg.hpp"
+#ifndef BOARD_CONFIG_GPIO_DEVICES
+#define BOARD_CONFIG_GPIO_DEVICES 0
+#endif
+#endif
 #if defined(_MCCA) && ((_MCCA & 0xFF00) == 0x8600)
 #include "../../mecocoa/devsman-acpi-gsi.h"
 #endif
@@ -875,10 +881,32 @@ DeviceGPIOStatus Devs::UnregisterGPIOController(DeviceNode* controller) {
 namespace {
 	struct STM32GPIOPort {
 		unsigned name;
+		DeviceNode* node;
 	};
+
+	#if BOARD_CONFIG_GPIO_DEVICES
+	enum class STM32BoardGPIODeviceKind : uint8 {
+		Led,
+		Key,
+	};
+
+	struct STM32BoardGPIODeviceRuntime {
+		STM32GPIOPort* port;
+		DeviceNode* node;
+		const char* identifier;
+		stduint pin;
+		STM32BoardGPIODeviceKind kind;
+		bool active_high;
+		bool pull_up;
+	};
+	#endif
 
 	STM32GPIOPort* stm32_gpio_ports = nullptr;
 	stduint stm32_gpio_port_count = 0;
+	#if BOARD_CONFIG_GPIO_DEVICES
+	STM32BoardGPIODeviceRuntime* stm32_board_leds = nullptr;
+	STM32BoardGPIODeviceRuntime* stm32_board_keys = nullptr;
+	#endif
 	constexpr stduint STM32GPIOPinSlots = 16;// Register slots, not package bonding information.
 
 	uni::GPORT& STM32Port(void* context) {
@@ -976,6 +1004,134 @@ namespace {
 		backend.get_state = STM32GPIOGetState;
 		return backend;
 	}
+
+	#if BOARD_CONFIG_GPIO_DEVICES
+	STM32BoardGPIODeviceRuntime* STM32BoardGPIORuntime(DeviceNode* node) {
+		if (!node || !node->fields.binding.driver_data) return nullptr;
+		auto* runtime = static_cast<STM32BoardGPIODeviceRuntime*>(node->fields.binding.driver_data);
+		return runtime->node == node ? runtime : nullptr;
+	}
+
+	stdsint STM32BoardGPIORead(DeviceNode* node, void* buffer, stduint count, stduint, stduint) {
+		if (!count) return 0;
+		auto* runtime = STM32BoardGPIORuntime(node);
+		if (!runtime || !buffer) return -1;
+		bool level = false;
+		if (!STM32GPIOReadPin(runtime->port, runtime->pin, level)) return -1;
+		static_cast<byte*>(buffer)[0] = byte(level == runtime->active_high);
+		return 1;
+	}
+
+	stdsint STM32BoardLEDWrite(DeviceNode* node, const void* buffer, stduint count, stduint, stduint) {
+		auto* runtime = STM32BoardGPIORuntime(node);
+		if (!runtime || runtime->kind != STM32BoardGPIODeviceKind::Led || !buffer || count != 1) return -1;
+		const byte value = static_cast<const byte*>(buffer)[0];
+		if (value > 1) return -1;
+		const bool level = value ? runtime->active_high : !runtime->active_high;
+		return STM32GPIOWritePin(runtime->port, runtime->pin, level) ? 1 : -1;
+	}
+
+	stdsint STM32BoardGPIOCtrl(DeviceNode* node, stduint command, void* args, stduint) {
+		if (!STM32BoardGPIORuntime(node)) return -1;
+		if (command == stduint(DeviceCtrlCommand::GetByteSize) && args) {
+			*static_cast<uint64*>(args) = 1;
+			return 0;
+		}
+		return -1;
+	}
+
+	const DeviceNodeOps STM32BoardLEDOps{
+		STM32BoardGPIORead,
+		STM32BoardLEDWrite,
+		STM32BoardGPIOCtrl,
+	};
+
+	const DeviceNodeOps STM32BoardKeyOps{
+		STM32BoardGPIORead,
+		nullptr,
+		STM32BoardGPIOCtrl,
+	};
+
+	STM32GPIOPort* STM32BoardGPIOPort(unsigned name) {
+		if (name < 'A') return nullptr;
+		const stduint index = stduint(name - 'A');
+		if (index >= stm32_gpio_port_count || !stm32_gpio_ports[index].node) return nullptr;
+		return &stm32_gpio_ports[index];
+	}
+
+	bool RegisterSTM32BoardGPIODevice(STM32BoardGPIODeviceRuntime& runtime, stduint unit) {
+		if (!runtime.port || !runtime.identifier || !runtime.identifier[0] || runtime.pin >= STM32GPIOPinSlots) return false;
+		auto& port = STM32Port(runtime.port);
+		port.enClock();
+		bool configured = false;
+		if (runtime.kind == STM32BoardGPIODeviceKind::Led) {
+			configured = STM32GPIOWritePin(runtime.port, runtime.pin, !runtime.active_high) &&
+				STM32GPIOConfigurePin(runtime.port, runtime.pin, uni::GPIOMode::OUT_PushPull, uni::GPIOSpeed::Low);
+		}
+		else {
+			configured = STM32GPIOConfigurePin(runtime.port, runtime.pin, uni::GPIOMode::IN_Pull, uni::GPIOSpeed::Low) &&
+				STM32GPIOSetPull(runtime.port, runtime.pin, runtime.pull_up);
+		}
+		if (!configured) return false;
+
+		const bool is_led = runtime.kind == STM32BoardGPIODeviceKind::Led;
+		const auto node_name = String::newFormat(is_led ? "led-%s" : "key-%s", runtime.identifier);
+		const char* driver_name = is_led ? "gpio-led" : "gpio-key";
+		bool created = false;
+		auto* node = Devsman::RegisterDevice(runtime.port->node, DeviceNodeType::PlatformDevice,
+			DeviceBusType::Platform, node_name.reference(), driver_name, &runtime, &created);
+		if (!node) return false;
+		runtime.node = node;
+		if (!node->fields.text_product) node->fields.text_product = StrHeap(runtime.identifier);
+		bool ready = node->fields.text_product && StrCompare(node->fields.text_product, runtime.identifier) == 0 &&
+			Devsman::AddPinResource(node, 0, "GPIO", runtime.port->name, runtime.pin);
+		if (ready) ready = Devsman::SetOps(node, is_led ? &STM32BoardLEDOps : &STM32BoardKeyOps);
+		const auto alias = String::newFormat(is_led ? "led%u" : "key%u", (unsigned)unit);
+		if (ready) ready = Devsman::RegisterDevAlias(node, alias.reference());
+		if (!ready) {
+			runtime.node = nullptr;
+			if (created && !Devsman::UnregisterDevice(node))
+				node->fields.binding.state = uint32(DriverBindingState::Failed);
+			return false;
+		}
+		return true;
+	}
+
+	void RegisterSTM32BoardGPIODevices() {
+		if (!stm32_board_leds && BoardConfig::Gpio::LedCount) {
+			stm32_board_leds = new STM32BoardGPIODeviceRuntime[BoardConfig::Gpio::LedCount]{};
+			if (!stm32_board_leds) plogerro("[GPIO] cannot allocate board LED contexts");
+		}
+		if (stm32_board_leds) for0(index, BoardConfig::Gpio::LedCount) {
+			const auto& config = BoardConfig::Gpio::Leds[index];
+			auto& runtime = stm32_board_leds[index];
+			runtime.port = STM32BoardGPIOPort(config.Port);
+			runtime.identifier = config.Identifier;
+			runtime.pin = config.Pin;
+			runtime.kind = STM32BoardGPIODeviceKind::Led;
+			runtime.active_high = config.ActiveHigh;
+			if (!RegisterSTM32BoardGPIODevice(runtime, index))
+				plogerro("[GPIO] board LED registration failed: %s", config.Identifier ? config.Identifier : "(null)");
+		}
+
+		if (!stm32_board_keys && BoardConfig::Gpio::KeyCount) {
+			stm32_board_keys = new STM32BoardGPIODeviceRuntime[BoardConfig::Gpio::KeyCount]{};
+			if (!stm32_board_keys) plogerro("[GPIO] cannot allocate board KEY contexts");
+		}
+		if (stm32_board_keys) for0(index, BoardConfig::Gpio::KeyCount) {
+			const auto& config = BoardConfig::Gpio::Keys[index];
+			auto& runtime = stm32_board_keys[index];
+			runtime.port = STM32BoardGPIOPort(config.Port);
+			runtime.identifier = config.Identifier;
+			runtime.pin = config.Pin;
+			runtime.kind = STM32BoardGPIODeviceKind::Key;
+			runtime.active_high = config.ActiveHigh;
+			runtime.pull_up = config.PullUp;
+			if (!RegisterSTM32BoardGPIODevice(runtime, index))
+				plogerro("[GPIO] board KEY registration failed: %s", config.Identifier ? config.Identifier : "(null)");
+		}
+	}
+	#endif
 }
 
 _ESYM_C void R_GPIO_INIT();
@@ -1001,6 +1157,7 @@ void R_GPIO_INIT() {
 	for0(index, count) {
 		auto& context = stm32_gpio_ports[index];
 		context.name = unsigned('A' + index);
+		context.node = nullptr;
 		const auto& port = uni::GPIO[context.name];
 		const auto name = String::newFormat("gpio%c", int('a' + index));
 		const bool restore_interrupts = IC.TryMaskInterrupt();
@@ -1020,6 +1177,7 @@ void R_GPIO_INIT() {
 			const auto status = Devs::RegisterGPIOController(node, backend, port.getID(), STM32GPIOClock);
 			ready = status == DeviceGPIOStatus::Success || status == DeviceGPIOStatus::AlreadyClaimed;
 		}
+		if (ready) context.node = node;
 		if (!ready && node) {
 			if (GPIOControllerRuntime(node) || !Devsman::UnregisterDevice(node))
 				node->fields.binding.state = uint32(DriverBindingState::Failed);
@@ -1027,6 +1185,9 @@ void R_GPIO_INIT() {
 		if (restore_interrupts) IC.enInterrupt(true);
 		if (!ready) plogerro("[GPIO] port registration failed: %s", name.reference());
 	}
+	#if BOARD_CONFIG_GPIO_DEVICES
+	RegisterSTM32BoardGPIODevices();
+	#endif
 }
 #endif
 

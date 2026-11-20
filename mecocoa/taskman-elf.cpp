@@ -1208,10 +1208,14 @@ static ProcessBlock* CreateELFImage(BlockTrait* source,
 	}
 	stduint align_expo = 12;// 4KB meets the usual p_align, mempool alignment is a power-of-two exponent
 	while ((1u << align_expo) < image_align && align_expo < 20) align_expo++;
-	constexpr stduint flat_heap_reserve = 7u << 20;// the block owns the process heap too, so its MPU region covers malloc
-	while ((1u << align_expo) < image_span + flat_heap_reserve && align_expo < 24) align_expo++;// the block is its own MPU region, so it owns a whole power of two
+	if (image_span > ~_IMM0 - 0xFFF || stduint(CONFIG_NommuHeapSize) > (~_IMM0 >> 12)) return nullptr;
+	const stduint heap_offset = (image_span + 0xFFF) & ~_IMM(0xFFF);
+	const stduint flat_heap_reserve = ring == RING_U ? stduint(CONFIG_NommuHeapSize) << 12 : 0;
+	if (flat_heap_reserve > ~_IMM0 - heap_offset) return nullptr;
+	const stduint image_required = heap_offset + flat_heap_reserve;
+	while ((1u << align_expo) < image_required && align_expo < 24) align_expo++;// the block is its own MPU region, so it owns a whole power of two
 	const stduint image_block = 1u << align_expo;
-	if (image_span > image_block || flat_heap_reserve > image_block - image_span) return nullptr;
+	if (image_required > image_block) return nullptr;
 	byte* image = (byte*)mempool.allocate(image_block, align_expo);
 	if (!image) {
 		plogerro("%s: no memory for the image (%u bytes)", __FUNCIDEN__, image_block);
@@ -1279,7 +1283,7 @@ static ProcessBlock* CreateELFImage(BlockTrait* source,
 	pb->load_slices[0].address = load_bias;
 	image_scope.image = nullptr;
 	pb->load_slices[0].length = image_block;// the release and the MPU region cover the same range
-	pb->heapbtm = (load_bias + image_span + 0xFFF) & ~_IMM(0xFFF);// the heap shares the image block, so its MPU region covers it
+	pb->heapbtm = load_bias + heap_offset;// the heap shares the image block, so its MPU region covers it
 	pb->heaptop = pb->heapbtm;
 	ploginfo("[ELF] flat base=%[x] span=%u entry=%[x]", load_bias, image_span, load_bias + header.e_entry);
 	if (append) {

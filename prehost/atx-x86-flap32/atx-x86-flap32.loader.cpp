@@ -128,9 +128,12 @@ PartitionSlice Harddisk_PATA::getSlice(stduint dev) {
 // to be thin, redefine to avoid including unisym's version:
 stduint FilesysFAT::writfl(void* fil_handler, Slice file_slice, const byte* sors) { return nil; }
 bool FilesysFAT::remove(rostr pathname) { return false; }
+FilesysDirectoryRemoveResult FilesysFAT::rmdir(rostr pathname, void* handler) { return FilesysDirectoryRemoveResult::Unsupported; }
+// The loader has no mutation backend or directory inspection workspace.
+FilesysDirectoryState FilesysFAT::CheckDirectoryContents(void* handler, byte* sector, FAT_TableScratch* fat_cache) { return FilesysDirectoryState::Unsupported; }
 bool FilesysFAT::create(rostr fullpath, stduint flags, FilesysCreateParameter& parameter) { return false; }
 bool FilesysFAT::truncate(void* fil_handler, stduint size) { return false; }
-bool FilesysFAT::rename(rostr src_path, rostr dst_path, void* handler) { return false; }
+bool FilesysFAT::rename(rostr src_path, rostr dst_path, FilesysRenameParameter& parameter) { return false; }
 
 void* operator new[](size_t size) { return 0; }
 void* operator new(size_t, const std::nothrow_t&) noexcept { return nullptr; }

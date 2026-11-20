@@ -9,6 +9,11 @@
 #include "../include/devsman-storage.hpp"
 #endif
 
+// Failed image construction and normal process destruction must release CWD storage under VFS.
+ProcFiles::~ProcFiles() {
+	Filesys::ReleaseInode(cwd_inode);
+}
+
 extern void Consman_InitializeFreeType();
 
 #if !CONFIG_ENABLE_MMU
@@ -978,22 +983,24 @@ void serv_file_loop()// for IDE 0:0, 0:1
 			// ploginfo("[fileman] rdwt %d %d %d", to_args[0], to_args[1], to_args[2]);
 			break;
 		}
-		case FilemanMsg::REMOVE:// (pathname, tid) -> 1 on success, 0 on failure
+		case FilemanMsg::REMOVE: // (pathname, operation), identity comes from the sending thread
 		{
-			retval[0] = 0;
-			ProcessBlock* safe_pb = ProcessBlock::AcquireActive(to_args[1]);
-			if (safe_pb) {
-				const bool valid_path = MccaStrCopyP((char*)pathbuf, pathbuf_size,
-					(rostr)to_args[0], safe_pb) && pathbuf[0];
-				if (valid_path) {
-					const auto credentials = Userman::GetCredentials(*safe_pb);
-					auto files = safe_pb->fileman.Lock();
-					retval[0] = Filesys::Remove((rostr)pathbuf, files->cwd,
-						&credentials, files->cwd_identity);
+			const auto operation = file_remove_operation_t(to_args[1]);
+			const bool legacy = operation == file_remove_operation_t::Unlink;
+			stdsint status = -ESRCH;
+			auto* caller = ProcessBlock::AcquireActive(sig_src);
+			if (caller) {
+				if (!legacy && operation != file_remove_operation_t::RemoveDirectory) status = -EINVAL;
+				else if (MccaStrCopyP((char*)pathbuf, pathbuf_size, (rostr)to_args[0], caller, nullptr, &status)) {
+					const auto credentials = Userman::GetCredentials(*caller);
+					auto files = caller->fileman.Lock();
+					if (legacy) status = Filesys::Remove((rostr)pathbuf, files->cwd, &credentials, files->cwd_identity) ? 1 : 0;
+					else status = Filesys::RemoveDirectory((rostr)pathbuf, files->cwd, &credentials, files->cwd_identity);
 				}
-				ProcessBlock::Release(safe_pb);
 			}
-			syssend(sig_src, &retval, sizeof(retval[0]));
+			if (legacy && status < 0) status = 0;
+			syssend(sig_src, &status, sizeof(status));
+			if (caller) ProcessBlock::Release(caller);
 			break;
 		}
 		case FilemanMsg::ENUMER:
@@ -1102,7 +1109,7 @@ void serv_file_loop()// for IDE 0:0, 0:1
 				const auto credentials = Userman::GetCredentials(*safe_pb);
 				auto files = safe_pb->fileman.Lock();
 				reply = Filesys::ChangeDirectory((const char*)pathbuf, files->cwd,
-					files->cwd_identity, credentials);
+					files->cwd_identity, files->cwd_inode, credentials);
 			}
 			else reply = err_ret;
 			syssend(sig_src, &reply, sizeof(reply));

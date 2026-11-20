@@ -2,6 +2,7 @@
 #define FILEMAN_HPP_
 
 #include <cpp/vector>
+#include <cpp/ISO_IEC_STD/memory>
 #include <cpp/trait/StorageTrait.hpp>
 #include <c/storage/harddisk.h>
 // The version just consider primary IDE
@@ -99,7 +100,7 @@ enum class FilemanMsg {
 #include <c/API-POSIX/fcntl.h>
 
 struct inode;
-namespace uni { struct vfs_dentry; }
+namespace uni { struct vfs_dentry; struct vfs_inode; }
 namespace uni { struct vfs_file; }
 struct FileDescriptor {
 	int fd_mode = 0; /**< R or W */
@@ -122,8 +123,11 @@ FileDescriptor* FileDescriptor_Clone(FileDescriptor* src);
 
 #ifndef _ACCM
 struct ProcFiles {
+	~ProcFiles();
 	uni::Vector<FileDescriptor*> pfiles;
 	uni::vfs_dentry* cwd = nullptr;  // Current Working Directory
+	// Retain directory storage after its namespace entry has been removed.
+	uni::SharedPtr<uni::vfs_inode> cwd_inode;
 	uint64 cwd_identity = 0; // Root uses zero; other directories must still belong to a live mount.
 	uni::vfs_dentry* root = nullptr; // Root for chroot
 };

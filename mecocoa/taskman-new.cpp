@@ -357,6 +357,7 @@ void Taskman::Initialize(stduint cpuid) {
 	{
 		auto files = kernel_task->fileman.Lock();
 		files->cwd = Filesys::getRoot(); // Set kernel CWD
+		files->cwd_inode = files->cwd ? files->cwd->d_inode : uni::SharedPtr<uni::vfs_inode>();
 		files->root = Filesys::getRoot();
 	}
 
@@ -406,6 +407,7 @@ ProcessBlock* Taskman::Create(void* entry, byte ring, bool append)
 	{
 		auto files = ppb->fileman.Lock();
 		files->cwd = Filesys::getRoot(); // Default to root
+		files->cwd_inode = files->cwd ? files->cwd->d_inode : uni::SharedPtr<uni::vfs_inode>();
 		files->root = Filesys::getRoot();
 	}
 	
@@ -505,6 +507,7 @@ ProcessBlock* Taskman::CreateFork(ProcessBlock* fo, const CallgateFrame* frame) 
 		auto src_files = fo->fileman.Lock();
 		auto dst_files = pb->fileman.Lock();
 		dst_files->cwd = src_files->cwd;
+		dst_files->cwd_inode = src_files->cwd_inode;
 		dst_files->cwd_identity = src_files->cwd_identity;
 		dst_files->root = src_files->root;
 	}
@@ -962,6 +965,7 @@ ProcessBlock* Taskman::CreateFile(const char* path, byte ring, stduint parent, v
 			auto parent_files = pparent->fileman.Lock();
 			auto task_files = task->fileman.Lock();
 			task_files->cwd = parent_files->cwd;
+			task_files->cwd_inode = parent_files->cwd_inode;
 			task_files->cwd_identity = parent_files->cwd_identity;
 			task_files->root = parent_files->root;
 		}
@@ -1055,6 +1059,7 @@ ProcessBlock* Taskman::Exec(ProcessBlock* parent_pb, rostr usr_fullpath, char** 
 		auto parent_files = parent_pb->fileman.Lock();
 		auto new_files = new_pb->fileman.Lock();
 		new_files->cwd = parent_files->cwd;
+		new_files->cwd_inode = parent_files->cwd_inode;
 		new_files->cwd_identity = parent_files->cwd_identity;
 		new_files->root = parent_files->root;
 	}

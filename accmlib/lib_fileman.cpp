@@ -314,6 +314,16 @@ int mkdir(const char *path, mode_t mode) {
 	return 0;
 }
 
+// Remove an empty directory and expose the kernel's specific failure through errno.
+int rmdir(const char* pathname) {
+	const auto status = stdsint(syscall(syscall_t::DELF, _IMM(pathname), _IMM(file_remove_operation_t::RemoveDirectory), nil));
+	if (status < 0) {
+		errno = int(-status);
+		return -1;
+	}
+	return 0;
+}
+
 int unlink(const char* pathname) {
 	// Call DELF system call: returns 1 for success, 0 for failure
 	int ret = syscall(syscall_t::DELF, _IMM(pathname), nil, nil);

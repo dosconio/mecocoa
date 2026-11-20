@@ -160,6 +160,32 @@ static constexpr uint32 NetworkDriverProtocolVersion = 1;
 static constexpr uint32 NetworkDriverNameCapacity = 16;
 static constexpr uint32 NetworkDriverFrameCapacity = 2048;
 
+// ---- Syscall ---- //
+
+// Shared spawn request payload between ACCM libc and Taskman.
+enum class TaskmanExecActionType : stduint {
+	Open,
+	Close,
+	Dup2,
+};
+
+struct TaskmanExecAction {
+	TaskmanExecActionType type;
+	stdsint fd;
+	stdsint newfd;
+	stduint flags;
+	stduint mode;
+	const char* path;
+};
+
+struct TaskmanSpawnRequest {
+	char* const* envp;
+	const TaskmanExecAction* actions;
+	stduint action_count;
+};
+
+// ---- Message ---- //
+
 _PACKED(struct) FMT_NetworkMsg_DRV_ATTACH {
 	uint32 version;
 	uint32 caps;

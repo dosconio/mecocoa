@@ -83,6 +83,7 @@ CPP_SOURCES := \
 	mecocoa/graphic-touch.cpp \
 	prehost/prehost.cpp \
 	prehost/stm32h7-ac7m/main.cpp \
+	prehost/stm32h7-ac7m/boards/h743-openedv/h743-openedv.cpp \
 	prehost/stm32h7-ac7m/mem.cpp \
 	devdriv/storage/sdcard.cpp \
 	devdriv/tty/serial.cpp \
@@ -98,9 +99,9 @@ CPP_SOURCES := \
 	prehost/_auxiliary.cpp
 
 ASM_SOURCES := stm32h743.gcc.S stm32h743.startup.gcc.S
-CPP_OBJECTS := $(addprefix $(BUILD_DIR)/,$(CPP_SOURCES:.cpp=.o))
+CPP_OBJECTS := $(foreach src,$(CPP_SOURCES),$(BUILD_DIR)/$(dir $(src))_x_$(notdir $(src:.cpp=.o)))
 ASM_OBJECTS := $(addprefix $(BUILD_DIR)/board/,$(ASM_SOURCES:.S=.o))
-VIDEO_OBJECT := $(BUILD_DIR)/unisym/Video-VideoConsole2.o
+VIDEO_OBJECT := $(BUILD_DIR)/unisym/_cx_Video-VideoConsole2.o
 OBJECTS := $(CPP_OBJECTS) $(ASM_OBJECTS) $(VIDEO_OBJECT)
 DEPS := $(OBJECTS:.o=.d)
 
@@ -125,10 +126,14 @@ $(BIN): $(ELF)
 $(HEX): $(ELF)
 	$(OBJCOPY) -O ihex $< $@
 
-$(BUILD_DIR)/%.o: $(REPO_ROOT)/%.cpp $(H7_MAKEFILE)
-	@mkdir -p $(dir $@)
-	@echo "CX $<"
-	@$(CXX) $(CPPFLAGS) $(CXXFLAGS) -MMD -MP -MF $(@:.o=.d) -MT $@ -c $< -o $@
+# Preserve source directories while applying the Mecocoa C++ object prefix.
+define h7_cpp_to_o
+$(BUILD_DIR)/$(dir $(1))_x_$(notdir $(1:.cpp=.o)): $(REPO_ROOT)/$(1) $(H7_MAKEFILE)
+	@mkdir -p $$(dir $$@)
+	@echo "CX $$<"
+	@$$(CXX) $$(CPPFLAGS) $$(CXXFLAGS) -MMD -MP -MF $$(@:.o=.d) -MT $$@ -c $$< -o $$@
+endef
+$(foreach src,$(CPP_SOURCES),$(eval $(call h7_cpp_to_o,$(src))))
 
 $(BUILD_DIR)/board/%.o: %.S $(H7_MAKEFILE)
 	@mkdir -p $(dir $@)

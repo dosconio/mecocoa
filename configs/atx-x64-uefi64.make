@@ -296,12 +296,20 @@ _ae_%.o:
 	echo AS $(notdir $<)
 	aasm -f elf64      -o $@ $< -D_MCCA=0x8664 -D_UEFI -MD $(patsubst %.o,%.d,$@)
 
+_c_%.o:
+	echo CC $(notdir $<)
+	${CC} ${CFLAGS} -c -o $@ $< -MMD -MF $(patsubst %.o,%.d,$@) -MT $@
+
 _cc_%.o:
 	echo CC $(notdir $<)
 	${CC} ${CFLAGS} -c -o $@ $< -MMD -MF $(patsubst %.o,%.d,$@) -MT $@
+
+_x_%.o:
+	echo CX $(notdir $<)
+	${CX} ${XFLAGS} -c -o $@ $< -MMD -MF $(patsubst %.o,%.d,$@) -MT $@
 
 _cx_%.o:
 	echo CX $(notdir $<)
 	${CX} ${XFLAGS} -c -o $@ $< -MMD -MF $(patsubst %.o,%.d,$@) -MT $@
 
--include $(dest_obj)/*.d
+-include $(wildcard $(asmobjs:.o=.d) $(gasobjs:.o=.d) $(cppobjs:.o=.d) $(cplobjs:.o=.d))

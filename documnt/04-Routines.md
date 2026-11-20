@@ -37,7 +37,7 @@ Rule
 | 07 | CLOS | | (fd)→0 | 关闭文件 |
 | 08 | READ | | (fd, adr, len)→len | 读文件或 tty |
 | 09 | WRIT |  | (fd, adr, len)→len | 写文件或 tty |
-| 0A | DELF | sys_removefil | (pathname)→0 | 删除文件 |
+| 0A | DELF | unlink / rmdir | (pathname, operation)→result | operation=0：普通文件删除，成功 1、失败 0；operation=1：空目录删除，成功 0、失败负 errno |
 | 0B | MOVE | rename | (oldpath, newpath, unused)→status | 同一挂载内改名；成功为 0，失败为负 errno |
 | 0C | PROP | | (fd/path, &result, query)→status | 查询文件属性，query 为 0 时保留旧 fd 结果布局 |
 | 0D | ENUM | | (fd, &kde, cnt)→cnt | 枚举目录项 |

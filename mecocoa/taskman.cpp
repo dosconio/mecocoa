@@ -637,6 +637,9 @@ static void _Exit_Cleanup(stduint pid)
 	{
 		auto files = ppb->fileman.Lock();
 		files->pfiles.Clear();
+		Filesys::ReleaseInode(files->cwd_inode);
+		files->cwd = nullptr;
+		files->cwd_identity = 0;
 	}
 
 	// Wait until all external ProcessBlock holders have released their refs

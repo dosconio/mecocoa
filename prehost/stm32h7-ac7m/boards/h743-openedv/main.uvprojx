@@ -549,6 +549,13 @@
         </Group>
         <Group>
           <GroupName>Group Board</GroupName>
+          <Files>
+            <File>
+              <FileName>h743-openedv.cpp</FileName>
+              <FileType>8</FileType>
+              <FilePath>.\h743-openedv.cpp</FilePath>
+            </File>
+          </Files>
         </Group>
         <Group>
           <GroupName>Group Driv</GroupName>
