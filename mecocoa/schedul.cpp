@@ -64,6 +64,10 @@ static void ReleaseSchedulerLockForSwitch() {
 	scheduler_lock.locked.store(0, uni::MemoryOrder_Release);
 }
 
+#if defined(_ARCH_ARM_ProfileM)
+static ThreadBlock* cortexm_retired_threads = nullptr;
+#endif
+
 
 #if _MCCA == 0x8632
 static bool ThreadHasSchedulableKernelStackMetadata(const ThreadBlock* th) {
@@ -750,13 +754,44 @@ ifContinueProcess(ThreadBlock* old_pb) -> bool {
 static void SettleSwitchingOutThread(stduint cpuid) {
 	if (Taskman::switching_out_threads(cpuid) != nullptr) {
 		auto completed_th = Taskman::switching_out_threads(cpuid);
+		#if defined(_ARCH_ARM_ProfileM)
+		if (cortexm_switch_control.phase != CortexMSwitchPhase::Idle ||
+			completed_th->just_schedule) return;
+		Taskman::switching_out_threads(cpuid) = nullptr;
+		if (completed_th->state == ThreadBlock::State::Hanging && completed_th->is_detached) {
+			completed_th->cortexm_retire_next = cortexm_retired_threads;
+			cortexm_retired_threads = completed_th;
+		}
+		#else
 		if (completed_th->state == ThreadBlock::State::Hanging && completed_th->is_detached) {
 			Taskman::DestroyThread(completed_th);
 		}
 		completed_th->just_schedule = 0;
 		Taskman::switching_out_threads(cpuid) = nullptr;
+		#endif
 	}
 }
+
+#if defined(_ARCH_ARM_ProfileM)
+void Taskman::ReapRetiredCortexMThreads() {
+	if (!CortexMInThreadMode()) return;
+	while (true) {
+		ThreadBlock* retired = nullptr;
+		bool old_if = scheduler_lock.Acquire();
+		if (cortexm_switch_control.phase == CortexMSwitchPhase::Idle) {
+			SettleSwitchingOutThread(getID());
+			retired = cortexm_retired_threads;
+			if (retired) {
+				cortexm_retired_threads = retired->cortexm_retire_next;
+				retired->cortexm_retire_next = nullptr;
+			}
+		}
+		scheduler_lock.Release(old_if);
+		if (!retired) return;
+		DestroyThread(retired);
+	}
+}
+#endif
 
 
 /**
@@ -781,9 +816,19 @@ static void SettleSwitchingOutThread(stduint cpuid) {
 extern "C" void* ring3_iret_stacks[PCU_CORES_MAX];
 auto Taskman::Schedule(bool omit_slice)->decltype(Schedule())
 {
+	#if defined(_ARCH_ARM_ProfileM)
+	if (CortexMInThreadMode()) ReapRetiredCortexMThreads();
+	#endif
 	bool old_if = scheduler_lock.Acquire();
 	using TBS = ThreadBlock::State;
 	stduint cpuid = getID();
+	#if defined(_ARCH_ARM_ProfileM)
+	if (cortexm_switch_control.phase != CortexMSwitchPhase::Idle) {
+		cortexm_switch_control.deferred_schedule = 1;
+		scheduler_lock.Release(old_if);
+		return;
+	}
+	#endif
 
 	// Release the CPU's hold on switching output thread in clock cycle.
 	SettleSwitchingOutThread(cpuid);
@@ -803,6 +848,10 @@ auto Taskman::Schedule(bool omit_slice)->decltype(Schedule())
 	#endif
 	#if defined(_ARCH_ARM_ProfileM)
 	if (_in_svc_handler()) { scheduler_lock.Release(old_if); return; }// a tick inside a syscall must not re-map or switch; abort before touching any state
+	if (cortexm_switch_control.deferred_schedule) {
+		cortexm_switch_control.deferred_schedule = 0;
+		omit_slice = true;
+	}
 	#endif
 	bool is_idle = (old_tb == idle_thread(cpuid));
 	if (!omit_slice) {
@@ -875,10 +924,12 @@ auto Taskman::Schedule(bool omit_slice)->decltype(Schedule())
 		printlog(_LOG_FATAL, "task switch error state (TID%u, State%u)", new_tb->tid, _IMM(new_tb->state));
 	}
 
-	current_thread(cpuid) = new_tb;
 	new_tb->processor_id = cpuid;
+	#if !defined(_ARCH_ARM_ProfileM)
+	current_thread(cpuid) = new_tb;
 	#if (_MCCA & 0xFF00) == 0x8600
 	BindCurrentKernelEntryStack(new_tb, cpuid);
+	#endif
 	#endif
 
 	// [DIAG] Check stack canary for old_tb
@@ -899,8 +950,16 @@ auto Taskman::Schedule(bool omit_slice)->decltype(Schedule())
 
 	old_tb->just_schedule = 1;
 	switching_out_threads(cpuid) = old_tb;
+	#if defined(_ARCH_ARM_ProfileM)
+	cortexm_switch_control.outgoing = old_tb;
+	cortexm_switch_control.incoming = new_tb;
+	cortexm_switch_control.cpu_id = cpuid;
+	CortexMSwitchBarrier();
+	cortexm_switch_control.phase = CortexMSwitchPhase::Pending;
+	CortexMSwitchBarrier();
+	#endif
 
-	#if _MCCA == 0x8632 || _MCCA == 0x8664
+	#if _MCCA == 0x8632 || _MCCA == 0x8664 || defined(_ARCH_ARM_ProfileM)
 	ReleaseSchedulerLockForSwitch();
 	#else
 	scheduler_lock.Release(old_if);
@@ -909,10 +968,10 @@ auto Taskman::Schedule(bool omit_slice)->decltype(Schedule())
 		ploginfo("[CPU%u]SCH: Th%u -> Th%u", cpuid, old_tb->tid, new_tb->tid);
 	}
 	#if defined(_ARCH_ARM_ProfileM)
-	const bool mpu_if = IC.TryMaskInterrupt();// the region write and the pending switch must stay one unit
-	mpumap_task(new_tb);
-	#endif
-	#if _MCCA == 0x8664
+	((void(*)(NormalTaskContext*, NormalTaskContext*, bool))SwitchTaskContext)(
+		&new_tb->context, &old_tb->context, old_if);
+	if (CortexMInThreadMode()) ReapRetiredCortexMThreads();
+	#elif _MCCA == 0x8664
 	if (_IMM(&new_tb->context) & 0xF) plogerro("Sch1(%p)", &new_tb->context);
 	((void(*)(NormalTaskContext*, NormalTaskContext*, bool))mglb(SwitchTaskContext))(&new_tb->context, &old_tb->context, old_if);
 	#elif _MCCA == 0x8632
@@ -920,9 +979,6 @@ auto Taskman::Schedule(bool omit_slice)->decltype(Schedule())
 	((void(*)(NormalTaskContext*, NormalTaskContext*))mglb(SwitchTaskContext))(&new_tb->context, &old_tb->context);
 	#else
 	SwitchTaskContext(&new_tb->context, &old_tb->context);
-	#endif
-	#if defined(_ARCH_ARM_ProfileM)
-	if (mpu_if) IC.enInterrupt(true);// PendSV is taken here, with the regions of the task it restores
 	#endif
 }
 #else
@@ -959,10 +1015,12 @@ void Taskman::SleepAndRelease(Spinlock* lk) {
 		}
 	}
 
-	current_thread(cpuid) = new_tb;
 	new_tb->processor_id = cpuid;
+	#if !defined(_ARCH_ARM_ProfileM)
+	current_thread(cpuid) = new_tb;
 	#if (_MCCA & 0xFF00) == 0x8600
 	BindCurrentKernelEntryStack(new_tb, cpuid);
+	#endif
 	#endif
 	if (new_tb != idle_thread(cpuid)) {
 		DequeueReady(new_tb, false);
@@ -971,18 +1029,26 @@ void Taskman::SleepAndRelease(Spinlock* lk) {
 
 	old_tb->just_schedule = 1;
 	switching_out_threads(cpuid) = old_tb;
+	#if defined(_ARCH_ARM_ProfileM)
+	cortexm_switch_control.outgoing = old_tb;
+	cortexm_switch_control.incoming = new_tb;
+	cortexm_switch_control.cpu_id = cpuid;
+	CortexMSwitchBarrier();
+	cortexm_switch_control.phase = CortexMSwitchPhase::Pending;
+	CortexMSwitchBarrier();
+	#endif
 
-	#if _MCCA == 0x8632 || _MCCA == 0x8664
+	#if _MCCA == 0x8632 || _MCCA == 0x8664 || defined(_ARCH_ARM_ProfileM)
 	ReleaseSchedulerLockForSwitch();
 	#else
 	scheduler_lock.Release(old_if);
 	#endif
 	// No explicit unlock of scheduler_lock here, because earlier we unlock lk, but wait!
 	#if defined(_ARCH_ARM_ProfileM)
-	const bool mpu_if = IC.TryMaskInterrupt();// the region write and the pending switch must stay one unit
-	mpumap_task(new_tb);
-	#endif
-	#if _MCCA == 0x8664
+	((void(*)(NormalTaskContext*, NormalTaskContext*, bool))SwitchTaskContext)(
+		&new_tb->context, &old_tb->context, old_if);
+	if (CortexMInThreadMode()) ReapRetiredCortexMThreads();
+	#elif _MCCA == 0x8664
 	if (_IMM(&new_tb->context) & 0xF) plogerro("Sch2(%p)", &new_tb->context);
 	((void(*)(NormalTaskContext*, NormalTaskContext*, bool))mglb(SwitchTaskContext))(&new_tb->context, &old_tb->context, old_if);
 	#elif _MCCA == 0x8632
@@ -990,8 +1056,5 @@ void Taskman::SleepAndRelease(Spinlock* lk) {
 	((void(*)(NormalTaskContext*, NormalTaskContext*))mglb(SwitchTaskContext))(&new_tb->context, &old_tb->context);
 	#else
 	SwitchTaskContext(&new_tb->context, &old_tb->context);
-	#endif
-	#if defined(_ARCH_ARM_ProfileM)
-	if (mpu_if) IC.enInterrupt(true);// PendSV is taken here, with the regions of the task it restores
 	#endif
 }

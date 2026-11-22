@@ -221,7 +221,9 @@ static int SdCardInit() {
 #if defined(_MCU_STM32H7x)
 	if (!ConfigDeviceGPIN(DeviceType::Sdmmc1)) return 0;
 	SDCard1.auto_setmode_apio = false;
-	const bool ready = SDCard1.setMode();
+	const bool ready = SDCard1.setMode(BoardConfig::Sdmmc1::ClockSource,
+		BoardConfig::Sdmmc1::ClockOnRisingEdge, false,
+		SDMMC_BusWidth::Bits4, false);
 	SdmmcUpdateClock(sd_host_node, SDCard1);
 	if (!ready) return 0;
 #else

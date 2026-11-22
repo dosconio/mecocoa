@@ -28,6 +28,13 @@ void _Comment(R1) serv_shell_process() {
 		}
 		tty_target = vcon_ret.tty_node;
 		p = Taskman::CreateFile(("/md0/cot"), RING_U, Taskman::CurrentPID(), nullptr, false);
+		if (!p) {
+			const auto& root = uni::Filesys::GetSystemRuntimeRootPath();
+			if (root.getByteCount()) {
+				uni::String path = uni::String::newFormat("%s/apps/cot", root.reference());
+				p = Taskman::CreateFile(path.reference(), RING_U, Taskman::CurrentPID(), nullptr, false);
+			}
+		}
 	}
 
 	if (p) {
@@ -70,10 +77,12 @@ void _Comment(R1) serv_shell_process() {
 	while (true) {
 		bool processed_any = false;
 		if (pf_ptr) {
-			if (uint32(_IMM(pf_ptr)) == 0xDDDDDDDD || uint32(_IMM(pf_ptr)) > 0x10000000) {
+
+			if (uint32(_IMM(pf_ptr)) == 0xDDDDDDDD) {
 				plogerro("A");
 				break;
 			}
+			
 			while (pf_ptr->msg_queue.Count()) {
 				processed_any = true;
 				SheetMessage smsg;

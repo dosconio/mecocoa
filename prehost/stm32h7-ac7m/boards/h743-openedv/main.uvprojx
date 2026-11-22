@@ -357,7 +357,7 @@
             <ClangAsOpt>1</ClangAsOpt>
             <VariousControls>
               <MiscControls></MiscControls>
-              <Define></Define>
+              <Define>_DEBUG</Define>
               <Undefine></Undefine>
               <IncludePath></IncludePath>
             </VariousControls>
@@ -624,6 +624,21 @@
               <FileName>video-classic.cpp</FileName>
               <FileType>8</FileType>
               <FilePath>..\..\..\..\devdriv\video\video-classic.cpp</FilePath>
+            </File>
+            <File>
+              <FileName>cotlabx.cpp</FileName>
+              <FileType>8</FileType>
+              <FilePath>..\..\..\..\depends\cotlabx.cpp</FilePath>
+            </File>
+          </Files>
+        </Group>
+        <Group>
+          <GroupName>Group Arch</GroupName>
+          <Files>
+            <File>
+              <FileName>arch-schedul.cpp</FileName>
+              <FileType>8</FileType>
+              <FilePath>..\..\..\..\archits\arm32\cortex-m\arch-schedul.cpp</FilePath>
             </File>
           </Files>
         </Group>

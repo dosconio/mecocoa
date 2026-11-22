@@ -115,6 +115,7 @@ using namespace uni::witch::control;
 static Button start_btn("Start");
 static Button btn_shutdown("Shut down");
 static Button btn_reboot("Reboot");
+static Button btn_terminal("Terminal");
 static Label time_label("");
 static char cached_time_str[32] = "";
 
@@ -124,16 +125,19 @@ static void ApplyLango(Lango lang) {
 		start_btn.text = "開始";
 		btn_shutdown.text = "電源切";
 		btn_reboot.text = "再起動";
+		btn_terminal.text = "端末";
 		break;
 	case Lango_Chinese:
 		start_btn.text = "开始";
 		btn_shutdown.text = "关机";
 		btn_reboot.text = "重启";
+		btn_terminal.text = "终端";
 		break;
 	default:
 		start_btn.text = "Start";
 		btn_shutdown.text = "Shut down";
 		btn_reboot.text = "Reboot";
+		btn_terminal.text = "Terminal";
 		break;
 	}
 }
@@ -141,12 +145,12 @@ static void ApplyLango(Lango lang) {
 static void TryLoadConfigLango() {
 	const char* vroot = getenv("VOLUMEPATH");
 	if (!vroot || !*vroot) vroot = getenv("VRPATH");
-	char vroot_conf[256];
+	String vroot_conf;
 	rostr kConfPaths[3];
 	stduint path_count = 0;
 	if (vroot && *vroot) {
-		sprintf(vroot_conf, "%s/.mcca.toml", vroot);
-		kConfPaths[path_count++] = vroot_conf;
+		vroot_conf = String::newFormat("%s/.mcca.toml", vroot);
+		kConfPaths[path_count++] = vroot_conf.reference();
 	}
 	kConfPaths[path_count++] = "/mnt/ide2.0/.mcca.toml";
 	kConfPaths[path_count++] = "/mnt/ahci1.0/.mcca.toml";
@@ -169,6 +173,17 @@ static void TryLoadConfigLango() {
 	}
 
 	ApplyLango(lang);
+}
+
+static stdsint RequestNewTerminal() {
+	stduint buf[1] = { 0 };
+	CommMsg msg;
+	msg.data.address = _IMM(buf);
+	msg.data.length = sizeof(buf);
+	msg.type = _IMM(GraphicMsg::NEW_TERM);
+	syscomm(1, Task_ConsoleVideo, &msg);
+	syscomm(0, Task_ConsoleVideo, &msg);
+	return (stdsint)buf[0];
 }
 
 static bool HasNonAscii(rostr s) {
@@ -344,6 +359,7 @@ static void FlushStartMenu(stdsint sm_id) {
 	sys_update_form(sm_id, nullptr);
 	DrawButtonTextIfNonAscii(sm_id, btn_shutdown);
 	DrawButtonTextIfNonAscii(sm_id, btn_reboot);
+	DrawButtonTextIfNonAscii(sm_id, btn_terminal);
 }
 
 static Size2 GetScreenSize()
@@ -380,6 +396,17 @@ static void DrawStartMenu(Color* buffer, stduint menu_w, stduint menu_h) {
 			for0(x, btn_reboot.sheet_area.width) {
 				buffer[(btn_reboot.sheet_area.y + y) * menu_w + btn_reboot.sheet_area.x + x] =
 					btn_reboot.sheet_buffer[y * btn_reboot.sheet_area.width + x];
+			}
+		}
+	}
+
+	btn_terminal.sheet_area = Rectangle(Point(5, 75), Size2(190, 30));
+	btn_terminal.doshow(nullptr);
+	if (btn_terminal.sheet_buffer) {
+		for0(y, btn_terminal.sheet_area.height) {
+			for0(x, btn_terminal.sheet_area.width) {
+				buffer[(btn_terminal.sheet_area.y + y) * menu_w + btn_terminal.sheet_area.x + x] =
+					btn_terminal.sheet_buffer[y * btn_terminal.sheet_area.width + x];
 			}
 		}
 	}
@@ -569,7 +596,16 @@ int main(int argc, char** argv)
 										btn_reboot.onrupt(SheetEvent::onLeave, rel_p, 1);
 									}
 
-									if (sd_was_pressed != btn_shutdown.pressed || rb_was_pressed != btn_reboot.pressed) {
+									bool tm_was_pressed = btn_terminal.pressed;
+									if (btn_terminal.sheet_area.ifContain(rel_p)) {
+										btn_terminal.onrupt(mmsg.event, rel_p - btn_terminal.sheet_area.getVertex(), para1);
+									} else {
+										btn_terminal.onrupt(SheetEvent::onLeave, rel_p, 1);
+									}
+
+									if (sd_was_pressed != btn_shutdown.pressed ||
+										rb_was_pressed != btn_reboot.pressed ||
+										tm_was_pressed != btn_terminal.pressed) {
 										DrawStartMenu(sm_buf, menu_w, menu_h);
 										FlushStartMenu(sm_id);
 									}
@@ -579,6 +615,9 @@ int main(int argc, char** argv)
 										menu_open = false;
 									} else if (rb_was_pressed && !btn_reboot.pressed && mmsg.event == SheetEvent::onClick && btn_reboot.sheet_area.ifContain(rel_p)) {
 										sysreboot();
+										menu_open = false;
+									} else if (tm_was_pressed && !btn_terminal.pressed && mmsg.event == SheetEvent::onClick && btn_terminal.sheet_area.ifContain(rel_p)) {
+										RequestNewTerminal();
 										menu_open = false;
 									}
 								}
@@ -595,6 +634,7 @@ int main(int argc, char** argv)
 						start_btn.pressed = false;
 						btn_shutdown.pressed = false;
 						btn_reboot.pressed = false;
+						btn_terminal.pressed = false;
 						DrawRibbon(buffer, screen.x, kRibbonClientHeight);
 						FlushRibbon(form_id);
 					}

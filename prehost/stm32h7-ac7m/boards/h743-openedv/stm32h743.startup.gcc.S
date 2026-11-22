@@ -209,6 +209,13 @@ __Vectors_End:
 	.type Reset_Handler, %function
 	.thumb_func
 Reset_Handler:
+	#ifdef _DEBUG
+	ldr	r0, =0x5C001004 // DBGMCU_CR
+	ldr	r1, [r0]
+	ldr	r2, =0x00600007 // Keep D1/D3 debug clocks active through low-power modes.
+	orrs	r1, r1, r2
+	str	r1, [r0]
+	#endif
 	bl	SystemInit
 	dsb
 	isb
@@ -256,7 +263,6 @@ Reset_Handler:
 	bl	main
 .Lmain_returned:
 	cpsid	i
-	wfi
 	b	.Lmain_returned
 	.size Reset_Handler, .-Reset_Handler
 	.ltorg

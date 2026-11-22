@@ -12,8 +12,8 @@ _ESYM_C void mecocoa();
 void BoardInitialize();
 
 void _idle() {
-	GPIN& LEDB = GPIO[BoardConfig::Gpio::LedBlue::Port][BoardConfig::Gpio::LedBlue::Pin];
-	LEDB.setMode(BoardConfig::Gpio::LedBlue::Mode);
+	GPIN& LEDB = GPIO[BoardConfig::Gpio::StatusLed::Port][BoardConfig::Gpio::StatusLed::Pin];
+	LEDB.setMode(BoardConfig::Gpio::StatusLed::Mode);
 	while (true) {
 		// LEDB.Toggle();
 		SysDelay_ms(2000, true);
@@ -22,8 +22,8 @@ void _idle() {
 
 #if 0
 void _test() {
-	GPIN& LEDR = GPIO[BoardConfig::Gpio::LedRed::Port][BoardConfig::Gpio::LedRed::Pin];
-	LEDR.setMode(BoardConfig::Gpio::LedRed::Mode);
+	GPIN& LEDR = GPIO[BoardConfig::Gpio::ErrorLed::Port][BoardConfig::Gpio::ErrorLed::Pin];
+	LEDR.setMode(BoardConfig::Gpio::ErrorLed::Mode);
 	while (true) {
 		LEDR.Toggle();
 		auto th = Taskman::CurrentTB();
@@ -187,8 +187,8 @@ int main()
 }
 
 void erro(const char* str) {
-	GPIN& LEDR = GPIO[BoardConfig::Gpio::LedRed::Port][BoardConfig::Gpio::LedRed::Pin];
-	LEDR.setMode(BoardConfig::Gpio::LedRed::Mode);
+	GPIN& LEDR = GPIO[BoardConfig::Gpio::ErrorLed::Port][BoardConfig::Gpio::ErrorLed::Pin];
+	LEDR.setMode(BoardConfig::Gpio::ErrorLed::Mode);
 	while (true) {
 		LEDR.Toggle();
 		for(volatile unsigned i{0}; i < 4000000; i++){}
@@ -198,12 +198,12 @@ void erro(const char* str) {
 // Handler
 
 _ESYM_C void SysTick_Handler();
-_ESYM_C void SysTick_Handler_Mcca() {
+_ESYM_C void SysTick_Handler_Mcca(stduint returns_to_thread) {
 	SysTick_Handler();
 	if (inited) {
 		tick++;
 		Systimex::CollectExpired();
-		Taskman::Schedule();
+		if (returns_to_thread) Taskman::Schedule();
 	}
 }
 

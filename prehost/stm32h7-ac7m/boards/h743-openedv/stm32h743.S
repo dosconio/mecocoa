@@ -11,6 +11,8 @@
 	IMPORT	syscall
 	IMPORT	interrupt_dispatcher
 	IMPORT	C_SvcReturn
+	IMPORT	CortexMTaskSwitchEnter
+	IMPORT	CortexMTaskSwitchCommit
 	IMPORT	|Image$$ER_RMOD$$Base|
 	IMPORT	|Image$$ER_RMOD$$Limit|
 
@@ -23,9 +25,11 @@ SysTick_Entry	PROC
 	MOV	R4, #0	; 0: nothing was saved
 	TST	LR, #0x8	; bit3 clear: nested in another handler, keep the last task EXC_RETURN
 	BEQ	SysTick_Stashed
+	MOV	R4, #1	; the interrupted exception returns to thread mode
 	LDR	R6, =C_SysTickLR
 	STR	LR, [R6]
 SysTick_Stashed
+	MOV	R0, R4
 	BL	SysTick_Handler_Mcca
 SysTick_Done
 	POP	{R4, R5, R6, LR}
@@ -82,7 +86,7 @@ SVC_NoRewind
 
 SwitchTaskContext	PROC
 	EXPORT	SwitchTaskContext
-	MRS	R12, PRIMASK	; the pair below and the PendSV trigger must be seen as one update
+	MOV	R12, R2	; restore interrupts only when scheduler_lock acquired them enabled
 	CPSID	i
 	MOV32	R2, #0xE000ED22	; SHPR3 bytes 2 and 3: PendSV and SysTick priority
 	MOV32	R3, #0x000040F0	; SysTick 4, PendSV 15: the swap waits for a thread boundary
@@ -96,9 +100,13 @@ SwitchTaskContext	PROC
 	MOV32	R2, #0xE000ED04	; ICSR
 	MOV32	R3, #0x10000000	; PENDSVSET
 	STR	R3, [R2]
-	MSR	PRIMASK, R12	; PendSV is taken here, on a complete pair
 	DSB
 	ISB
+	CMP	R12, #0
+	BEQ	SwitchTaskContext_Done
+	CPSIE	i	; PendSV is taken here, on a complete published switch
+	ISB
+SwitchTaskContext_Done
 	BX	LR
 	ENDP
 	ALIGN
@@ -106,6 +114,7 @@ SwitchTaskContext	PROC
 
 PendSV_Handler	PROC
 	EXPORT	PendSV_Handler
+	CPSID	i
 	MRS	R0, PSP	; the thread frame of the outgoing task, wherever it was interrupted
 	; Boot disables ASPEN and clears FPCA, so every thread frame is the basic 8 words on the PSP.
 	MOV32	LR, #0xFFFFFFFD
@@ -130,38 +139,43 @@ PendSV_LRReady
 	VMRS	R3, FPSCR
 	STR	R3, [R1, #0x1A0]
 PendSV_FPSkipSav
-	MOVS	R2, #0
-	STR	R2, [R1, #0x1BC]	; ThreadBlock::just_schedule: context saved, may be picked again
+	BL	CortexMTaskSwitchEnter
 	;
 	LDR	R0, =C_SwitchNext
 	LDR	R0, [R0]
-	LDR	LR, [R0, #0x38]	; exc_return of the incoming task
-	LDR	R1, [R0, #0x34]	; its stack
 	ADD	R2, R0, #0x10
 	LDMIA	R2, {R4-R11}
-	LDR	R3, [R0, #0x48]	; ctx->CONTROL: nPRIV plus FPCA
-	TST	R3, #4	; restore FP only if this thread had FP CA before it was swapped out
-	BEQ	PendSV_FPSkipRes
-	ADD	R2, R0, #0xA0
-	VLDMIA	R2, {S16-S31}
-	ADD	R2, R0, #0xE0
-	VLDMIA	R2, {S0-S15}
-	LDR	R3, [R0, #0x1A0]
-	VMSR	FPSCR, R3
-	LDR	R3, [R0, #0x48]
-PendSV_FPSkipRes
-	AND	R3, R3, #0x5
 	LDR	R2, [R0, #0x34]	; PSP of the incoming task
 	LDR	R1, [R0, #0x4C]	; this task's handler stack
 	MSR	PSP, R2
 	MSR	MSP, R1
+	LDR	R2, =C_CurrentCtx
+	STR	R0, [R2]	; the hardware context now belongs to the incoming task
+	MOV	R1, R0
+	LDR	R0, [R1, #0x38]	; preserve EXC_RETURN across the C commit
+	PUSH	{R0, R1}
+	BL	CortexMTaskSwitchCommit
+	POP	{R0, R1}
+	LDR	R3, [R1, #0x48]	; ctx->CONTROL: nPRIV plus FPCA
+	TST	R3, #4	; restore FP only if this thread had FP CA before it was swapped out
+	BEQ	PendSV_FPSkipRes
+	ADD	R2, R1, #0xA0
+	VLDMIA	R2, {S16-S31}
+	ADD	R2, R1, #0xE0
+	VLDMIA	R2, {S0-S15}
+	LDR	R3, [R1, #0x1A0]
+	VMSR	FPSCR, R3
+	LDR	R3, [R1, #0x48]
+PendSV_FPSkipRes
+	AND	R3, R3, #0x5
 	MRS	R2, CONTROL
 	BIC	R2, R2, #0x5
 	ORR	R3, R3, R2
 	MSR	CONTROL, R3
 	ISB
-	LDR	R2, =C_CurrentCtx
-	STR	R0, [R2]	; the thread that is running now
+	MOV	LR, R0
+	CPSIE	i
+	ISB
 	BX	LR	; exception return pops the frame of the incoming task
 	ENDP
 	ALIGN

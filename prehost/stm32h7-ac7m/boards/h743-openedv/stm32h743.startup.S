@@ -218,6 +218,13 @@ Reset_Handler    PROC
         IMPORT  SystemInit
         IMPORT  __main
 
+#ifdef _DEBUG
+                 LDR     R0, =0x5C001004                  ; DBGMCU_CR
+                 LDR     R1, [R0]
+                 LDR     R2, =0x00600007                  ; Keep D1/D3 debug clocks active through low-power modes.
+                 ORR     R1, R1, R2
+                 STR     R1, [R0]
+#endif
                  LDR     R0, =SystemInit
                  BLX     R0
                  LDR     R0, =__main

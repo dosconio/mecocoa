@@ -21,6 +21,10 @@
 #include <c/system/memory.h>
 #include <cpp/ISO_IEC_STD/memory>
 
+#if defined(_ARCH_ARM_ProfileM)
+#include "../archits/arm32/cortex-m/arch-schedul.hpp"
+#endif
+
 namespace uni { struct PipeChannel; }
 namespace Devs { struct StorageWaitContext; struct StorageWaiter; }
 
@@ -449,6 +453,9 @@ public:
     ProcessBlock* parent_process = nullptr; 
 	ThreadBlock* process_thread_next = nullptr;
 	volatile stduint just_schedule = 0;// in fact a bool
+	#if defined(_ARCH_ARM_ProfileM)
+	ThreadBlock* cortexm_retire_next = nullptr;
+	#endif
 public:
 	stduint stack_size = 0;
 	byte* stack_lineaddr = nullptr;// [linear] ring3 bottom of stack
@@ -706,6 +713,9 @@ public:// schedule
 	static void EnqueueExpired(ThreadBlock* pb, bool lock = true);
 	static ThreadBlock* PickNext();
 	static void SleepAndRelease(Spinlock* lk);
+	#if defined(_ARCH_ARM_ProfileM)
+	static void ReapRetiredCortexMThreads();
+	#endif
 	#if _MCCA == 0x8632
 	static void SendTLBShootdownIPI(stduint core_id);
 	static void SendRescheduleIPI(stduint core_id);

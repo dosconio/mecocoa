@@ -74,9 +74,11 @@ CPP_SOURCES := \
 	mecocoa/filesys.cpp \
 	mecocoa/graphic.cpp \
 	mecocoa/schedul.cpp \
+	archits/arm32/cortex-m/arch-schedul.cpp \
 	mecocoa/syscall.cpp \
 	mecocoa/sysinfo.cpp \
 	mecocoa/sysinfo-dev.cpp \
+	mecocoa/userman.cpp \
 	mecocoa/devsman.cpp \
 	mecocoa/devsman-usb.cpp \
 	mecocoa/threads.cpp \

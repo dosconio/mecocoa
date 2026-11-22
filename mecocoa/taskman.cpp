@@ -1065,6 +1065,9 @@ void _Comment(R0) serv_task_loop()
 	ProcessBlock* pb;
 	ploginfo("Taskman Service Start");
 	while (true) {
+		#if defined(_ARCH_ARM_ProfileM)
+		Taskman::ReapRetiredCortexMThreads();
+		#endif
 		switch (static_cast<TaskmanMsg>(sig_type))
 		{
 		case TaskmanMsg::TEST:

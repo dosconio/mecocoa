@@ -1,3 +1,9 @@
+## 2026-11-22
+
+- 13:32（UTC+8）H750 Fanke 外部 QSPI 构建接入 Mecocoa/RTOS 核心、GCC 上下文切换和 SysTick 包装入口；板级单 LED 纳入 GPIO 配置，并按参考工程接入 Bank1、32 位、32 MiB SDRAM 的完整 FMC 引脚、时序和初始化参数；未接入的图形/LTDC 与 USB OTG/MSC 暂由板级空实现闭合链接，保持 H743 SDRAM 路径不变。
+
+- 10:53（UTC+8）ribbon 开始菜单第 3 项增加“终端”按钮以拉起新终端窗口。
+
 ## 2026-11-20
 
 - 14:07（UTC+8）接通 NoMMU 的现有 EXEC/WAIT：flat-PIE 子进程复制 argv/envp、构造 M-profile 初始帧并返回 pid，退出后接入等待唤醒和僵尸回收。EXEC 启动时复制调用者的标准描述符；STM32H7 子程序构建加入 COTLAB、ls、echo 和 cat，Shell 预建管道并逐段设置标准输入、输出和错误，支持外部命令管道及 `<`、`>`、`>>`、`2>`，启动后统一 WAIT 回收；ARM NoMMU 子程序构建自动定位 COTLAB 源码并链接 Cortex-M7 hard-float 运行库，ac7m 使用统一架构运行目录和 PATH，存储就绪后启动 ribbon 和 cot；系统输出串口由 cot 接管时隐藏应用装载、退出、清理和释放的生命周期 INFO，GPIO LED 设备兼容二进制及带空白的文本 0/1 写入，LED/KEY 状态读取返回带换行的 ASCII 状态且 DeviceNode 字符设备保留 EOF 语义，串口 Ctrl+C 在任务上下文中中断前台程序。补齐 x86 用户态音频服务 IPC 白名单，HostMusic/HostVideo 检查收发结果，发送失败立即报错且不再接收，接收及服务错误输出消息类型、目标和错误码；视频启动/写音频失败向上返回，暂停/恢复失败保持状态与计时，不改变公共 syscall 和 syscomm 接口。

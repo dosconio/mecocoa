@@ -7,10 +7,12 @@
 #include <cpp/Device/GPIO>
 #include <cpp/Device/RCC/RCC>
 #include <cpp/Device/FMC>
+#include <cpp/Device/SD.hpp>
 
 #define BOARD_CONFIG_GPIO_DEVICES 1
 
 // An example of STM32H743 openedv board configuration.
+// - 由于 DCmI 与SD/JTAG冲突，所以本配置不考虑 DCMI
 #if 1
 namespace BoardConfig {
 	namespace Gpio {
@@ -36,6 +38,8 @@ namespace BoardConfig {
 			static constexpr uni::GPIOMode Mode = uni::GPIOMode::OUT;
 			static constexpr bool ActiveHigh = false;
 		};
+		using StatusLed = LedBlue;
+		using ErrorLed = LedRed;
 		struct KeyUp {
 			enum : unsigned { Port = 'A', Pin = 0 };
 			static constexpr uni::GPIOMode Mode = uni::GPIOMode::IN_Pull;
@@ -186,6 +190,7 @@ namespace BoardConfig {
 	}
 	namespace Touch {
 		// GT9xx on the RGB panel; GPIO port names are ASCII letters.
+		constexpr bool Enabled = true;
 		enum : unsigned {
 			SclPort = 'H', SclPin = 6,
 			SdaPort = 'I', SdaPin = 3,
@@ -204,6 +209,8 @@ namespace BoardConfig {
 	}
 
 	namespace Sdmmc1 {
+		constexpr uni::SDMMC1_CLKSRC ClockSource = uni::SDMMC1_CLKSRC::PLL1Q;
+		constexpr bool ClockOnRisingEdge = false;
 		struct PinConfig {
 			const char* Signal;
 			unsigned Port, Pin, AlternateFunction;

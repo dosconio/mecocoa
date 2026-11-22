@@ -429,17 +429,19 @@ namespace {
 
 	void RgbLcdDeviceLoop() {
 		ploginfo("[LTDC] device ready tid=%u", (unsigned)Taskman::CurrentTB()->tid);
-		if (auto touch = TouchGt1xx::Initialize(rgb_lcd->GetFramebuffer().screen_size)) {
-			rgb_lcd->AttachTouchDevice(touch);
-			auto* control = TouchGt1xx::GetControlBlock();
-			if (Consman::RegisterTouchDevice(control)) {
-				while (TouchGt1xx::Process()) {}
-				Consman::UnregisterTouchDevice(control);
-				while (Consman::IsTouchDeviceRegistered(control)) syscall(syscall_t::REST, 1, 2);
+		if constexpr (BoardConfig::Touch::Enabled) {
+			if (auto touch = TouchGt1xx::Initialize(rgb_lcd->GetFramebuffer().screen_size)) {
+				rgb_lcd->AttachTouchDevice(touch);
+				auto* control = TouchGt1xx::GetControlBlock();
+				if (Consman::RegisterTouchDevice(control)) {
+					while (TouchGt1xx::Process()) {}
+					Consman::UnregisterTouchDevice(control);
+					while (Consman::IsTouchDeviceRegistered(control)) syscall(syscall_t::REST, 1, 2);
+				}
+				else plogerro("[TOUCH] cannot register the touch consumer");
+				rgb_lcd->AttachTouchDevice(nullptr);
+				TouchGt1xx::Shutdown();
 			}
-			else plogerro("[TOUCH] cannot register the touch consumer");
-			rgb_lcd->AttachTouchDevice(nullptr);
-			TouchGt1xx::Shutdown();
 		}
 		ParkLcdThread();
 	}

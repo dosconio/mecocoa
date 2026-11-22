@@ -2475,6 +2475,19 @@ void serv_graf_loop() {
 			syssend_async(sig_src, (void*)&ret, sizeof(ret));
 			break;
 		}
+		case GraphicMsg::NEW_TERM:
+		{
+			ProcessBlock* shell_p = Taskman::Create((void*)&serv_shell_process, RING_M);
+			if (shell_p) {
+				shell_p->main_thread->name.reset(StrHeap("shell"));
+				ploginfo("Create new shell-form: pid%u", shell_p->pid);
+				ret = shell_p->pid;
+			} else {
+				ret = (stduint)-1;
+			}
+			syssend_async(sig_src, (void*)&ret, sizeof(ret));
+			break;
+		}
 		default:
 			plogerro("%s Unknown GraphicMsg type: %d", __FUNCIDEN__, sig_type);
 			break;
