@@ -13,6 +13,7 @@ void _Comment(R1) serv_shell_process() {
 	::uni::Witch::Form* pf_ptr = nullptr;
 	uni::VideoConsole2* pcon = nullptr;
 	ProcessBlock* p = nullptr;
+	stduint child_pid = 0;
 
 	if (Consman::ento_gui) {
 		Rectangle rect{ Point(250, 160), Size2(480, 320) };
@@ -40,6 +41,7 @@ void _Comment(R1) serv_shell_process() {
 	if (p) {
 		// Register the process globally to get a valid PID
 		Taskman::Append(p);
+		child_pid = p->pid;
 		// Lock the process state during complex environment setup
 		p->state = ProcessBlock::State::Hanging;
 		
@@ -196,7 +198,7 @@ void _Comment(R1) serv_shell_process() {
 
 		if (auto nod = tty_target) {
 			auto pblock = (vtty_type_t*)nod->type;
-			if (p && pblock->proc_group.Count() == 0) {
+			if (!p || pblock->proc_group.Count() == 0) {
 				goto shell_exit;
 			}
 		}
@@ -212,7 +214,7 @@ void _Comment(R1) serv_shell_process() {
 	}
 
 shell_exit:
-	if (Consman::ento_gui) {
+	if (Consman::ento_gui && tty_target && tty_target->type) {
 		auto pblock = (vtty_type_t*)tty_target->type;
 		stduint self_pid = Taskman::CurrentPID();
 		for (stdsint i = pblock->proc_group.Count() - 1; i >= 0; --i) {
@@ -227,6 +229,11 @@ shell_exit:
 				}
 			}
 		}
+	}
+	if (child_pid) {
+		stduint exit_para[2] = { child_pid, 128 + SIGKILL };
+		syssend(Task_TaskMan, exit_para, sizeof(exit_para), _IMM(TaskmanMsg::EXIT));
+		syscall(syscall_t::WAIT, child_pid, 0);
 	}
 
 	Taskman::ExitCurrent(0);

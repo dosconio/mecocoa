@@ -15,6 +15,7 @@ CFLAGS += -nostdlib -fno-builtin -z norelro
 CFLAGS += --static -mno-red-zone -m64  -mno-sse -mno-sse2 -mno-avx -mno-avx2
 # -msoft-float
 CFLAGS += -I$(uincpath) -D_MCCA=0x8664 -D_UEFI -D_DEBUG
+CFLAGS += -Idepends/freetype/x86/include
 CFLAGS += -fno-strict-aliasing -fno-exceptions -fno-stack-protector -ffreestanding
 CFLAGS += -Wextra -Wno-multichar
 XFLAGS  = $(CFLAGS) -fno-rtti -fno-use-cxa-atexit
@@ -33,6 +34,7 @@ QFLAGS = -drive file=$(ubinpath)/AMD64/OVMF/OVMF_CODE.fd,format=raw,if=pflash -d
 #
 LDFILE  = prehost/$(arch)/$(arch).ld
 LDFLAGS = -T $(LDFILE)
+FREETYPE_X64_LIB = depends/freetype/x86/libfreetype-x64.a
 
 
 archdir=$(ubinpath)/AMD64/mecocoa
@@ -40,6 +42,7 @@ archdir=$(ubinpath)/AMD64/mecocoa
 #
 asmfile=prehost/$(arch)/atx-x64.asm\
 	$(ulibpath)/asm/x64/task.asm \
+	$(ulibpath)/asm/x64/jump.asm \
 	$(ulibpath)/asm/x64/cpuid.asm \
 	$(ulibpath)/asm/x64/sysman.asm \
 	$(ulibpath)/asm/x64/inst/ioport.asm \
@@ -91,6 +94,7 @@ cppfile=\
 	$(ulibpath)/cpp/Device/Video.cpp $(ulibpath)/cpp/Device/Video-VideoConsole2.cpp \
 	$(ulibpath)/cpp/System/Audiosys/AudioManager.cpp \
 	$(ulibpath)/cpp/System/Picture.cpp \
+	depends/freetype.cpp \
 	depends/cotlabx.cpp \
 	depends/desktop.cpp \
 
@@ -113,13 +117,14 @@ uherpath=/her
 loader=$(ubinpath)/AMD64/loader.efi
 
 .PHONY : build user accm build_util build_drvs
-build: clean $(archdir)/kdiskx64.fat $(ubinpath)/$(arch).img $(asmobjs) $(cppobjs) $(cplobjs)
+build: clean $(archdir)/kdiskx64.fat $(ubinpath)/$(arch).img $(FREETYPE_X64_LIB) $(asmobjs) $(cppobjs) $(cplobjs)
 	@echo MK $(elf_kernel)
 	$(CX) $(XFLAGS) \
 		-T prehost/$(arch)/$(arch).ld -o $(ubinpath)/$(elf_kernel) \
 		-Wl,-Map=$(ubinpath)/$(elf_kernel).map \
 		prehost/$(arch)/$(arch).cpp \
 		$(uobjpath)/mcca-$(arch)/*.o \
+		$(FREETYPE_X64_LIB) \
 	# OUTDATED # prehost/$(arch)/script-adapt.sh ~/_obj/$(elf_kernel) $(ubinpath)/$(elf_kernel)
 	${MKDIR} $(ubinpath)/mecocoa/x64/{apps,drvs,lib}
 	cp $(uobjpath)/sapp-$(arch)/* $(ubinpath)/mecocoa/x64/apps/

@@ -25,6 +25,7 @@ OBJCOPY = $(CROSS_COMPILE)objcopy
 SIZE = $(CROSS_COMPILE)size
 
 UNISYM_H7_LIB ?= $(ubinpath)/libSTM32H7.a
+FREETYPE_AC7M_LIB ?= $(REPO_ROOT)/depends/freetype/x86/libfreetype-ac7m-gcc.a
 BUILD_DIR := $(uobjpath)/mcca-$(arch)-gcc
 OUTPUT := $(ubinpath)/mcca-$(arch)-gcc
 ELF := $(OUTPUT).elf
@@ -35,7 +36,8 @@ LD_SCRIPT := $(BOARD_DIR)/mcca.ld
 
 CPUFLAGS := -mcpu=cortex-m7 -mthumb -mfpu=fpv5-d16 -mfloat-abi=hard
 OPT ?= -O1
-CPPFLAGS += -I. -I$(uincpath) -D_MCU_STM32H7x -D_HIS_IMPLEMENT -D_MCCA=0x1A072032 -D_OPT_ARM32 -D_DEBUG
+CPPFLAGS += -I. -I$(uincpath) -I$(REPO_ROOT)/depends/freetype/x86/include
+CPPFLAGS += -D_MCU_STM32H7x -D_HIS_IMPLEMENT -D_MCCA=0x1A072032 -D_OPT_ARM32 -D_DEBUG
 CXXFLAGS += $(CPUFLAGS) $(OPT) -g3 -std=gnu++20 -ffreestanding -nostdinc++
 CXXFLAGS += -fno-builtin -fno-strict-aliasing -fno-stack-protector -fno-pic -fno-pie
 CXXFLAGS += -fno-exceptions -fno-rtti -fno-use-cxa-atexit -ffunction-sections -fdata-sections
@@ -85,6 +87,7 @@ CPP_SOURCES := \
 	devdriv/bus/bus-gpio.cpp \
 	devdriv/mem/fmc-sdram.cpp \
 	depends/desktop.cpp \
+	depends/freetype.cpp \
 	depends/cotlabx.cpp \
 	prehost/_auxiliary.cpp
 ASM_SOURCES := stm32h750.gcc.S stm32h750.startup.gcc.S
@@ -102,10 +105,16 @@ $(UNISYM_H7_LIB):
 	@echo "Build Unisym's H7 GCC library first, or set UNISYM_H7_LIB." >&2
 	@exit 1
 
-$(ELF): $(OBJECTS) $(UNISYM_H7_LIB) $(LD_SCRIPT) $(H750_MAKEFILE)
+$(FREETYPE_AC7M_LIB):
+	@echo "Missing FreeType Cortex-M7 library: $@" >&2
+	@echo "Build depends/freetype/x86/libfreetype-ac7m-gcc.a first, or set FREETYPE_AC7M_LIB." >&2
+	@exit 1
+
+$(ELF): $(OBJECTS) $(FREETYPE_AC7M_LIB) $(UNISYM_H7_LIB) $(LD_SCRIPT) $(H750_MAKEFILE)
 	@mkdir -p $(dir $@)
 	@echo "LD $@"
-	@$(CXX) $(LDFLAGS) -o $@ $(OBJECTS) -Wl,--start-group $(UNISYM_H7_LIB) -lgcc -Wl,--end-group
+	@$(CXX) $(LDFLAGS) -o $@ $(OBJECTS) -Wl,--start-group \
+		$(FREETYPE_AC7M_LIB) $(UNISYM_H7_LIB) -lgcc -Wl,--end-group
 
 $(BIN): $(ELF)
 	$(OBJCOPY) -O binary $< $@

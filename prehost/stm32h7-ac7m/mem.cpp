@@ -219,6 +219,7 @@ void mpumap_task(ThreadBlock* tb) {
 bool sdram_init();
 bool Memory::initialize(stduint eax, byte* ebx) {
 	if (!sdram_init()) return false;
+	mempool0.expand_only_from_self = true;
 	mempool0.Append(Slice{ memreg[0].base, memreg[0].size });
 	mempool0.Append(Slice{ memreg[1].base, memreg[1].size });
 	mempool_bdma.enable_auto_expand = false;

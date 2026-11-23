@@ -1,6 +1,9 @@
 #ifndef _MCCA_H750_FANKE_UNICFG_HPP_
 #define _MCCA_H750_FANKE_UNICFG_HPP_
 
+// LIMIT
+// - OTG only support Device mode 「CC1/CC2 均为 5.1 kΩ 下拉，硬件声明为 Device/受电端」
+
 #include "../../../../include/mecocoa.hpp"
 #include <cpp/Device/GPIO>
 #include <cpp/Device/RCC/RCC>

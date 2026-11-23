@@ -62,6 +62,7 @@ enum class GraphicMsg {
 	SET_WALLPAPER,// set desktop wallpaper (usrp_buffer, width, height)
 	HOST_SET_RESOLUTION,// trusted host integration requests a display mode
 	NEW_TERM,// spawn new terminal window
+	APPLY_TRUETYPE,// apply the initialized font engine in the Graphic thread
 };
 
 enum GraphicFormStyle {

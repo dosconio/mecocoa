@@ -52,6 +52,12 @@ testudp 10.0.2.1 7777 mecocoa
 ```
 
 
+### 字体
+
+```
+make -C depends/freetype x86
+make -C depends/freetype x64
+```
 
 
 ### 调试方式

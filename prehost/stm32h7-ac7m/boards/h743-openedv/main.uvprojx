@@ -341,7 +341,7 @@
               <MiscControls>-fno-strict-aliasing -Wno-c++98-compat -Wno-old-style-cast -Wno-c++98-c++11-compat-binary-literal -Wno-extra-semi-stmt -Wno-deprecated-copy-with-user-provided-copy -Wno-c++98-compat-pedantic -Wno-keyword-macro -Wno-invalid-constexpr -Wno-empty-body -Wno-undefined-bool-conversion</MiscControls>
               <Define>_MCU_STM32H7x, _HIS_IMPLEMENT, _MCCA=0x1A072032, _DEBUG</Define>
               <Undefine></Undefine>
-              <IncludePath>D:\her\unisym\inc;..\h743-openedv</IncludePath>
+              <IncludePath>D:\her\unisym\inc;..\h743-openedv;..\..\..\..\depends\freetype\x86\include</IncludePath>
             </VariousControls>
           </Cads>
           <Aads>
@@ -545,6 +545,11 @@
               <FileType>8</FileType>
               <FilePath>..\..\mem.cpp</FilePath>
             </File>
+            <File>
+              <FileName>libfreetype-ac7m.a</FileName>
+              <FileType>4</FileType>
+              <FilePath>..\..\..\..\depends\freetype\x86\libfreetype-ac7m.a</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>
@@ -629,6 +634,11 @@
               <FileName>cotlabx.cpp</FileName>
               <FileType>8</FileType>
               <FilePath>..\..\..\..\depends\cotlabx.cpp</FilePath>
+            </File>
+            <File>
+              <FileName>freetype.cpp</FileName>
+              <FileType>8</FileType>
+              <FilePath>..\..\..\..\depends\freetype.cpp</FilePath>
             </File>
           </Files>
         </Group>

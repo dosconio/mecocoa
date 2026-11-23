@@ -1,6 +1,12 @@
 #include "../include/mecocoa.hpp"
 
-#if _MCCA == 0x8632 && _GUI_ENABLE && _GUI_FREETYPE
+#if _GUI_ENABLE && _GUI_FREETYPE
+
+#if _MCCA == 0x8632
+#define MCCA_FREETYPE_SECTION(name) __attribute__((section(name)))
+#else
+#define MCCA_FREETYPE_SECTION(name)
+#endif
 
 #include "freetype/x86/include/ft2build.h"
 #include "freetype/x86/include/freetype/freetype.h"
@@ -35,7 +41,7 @@ static uint32_t  ft_cache_next = 0;              // round-robin replacement slot
 static uint8_t*  ft_table_buf = nullptr;          // malloc'd prefetch buffer
 static uint32_t  ft_table_valid = 0;              // bytes actually prefetched
 
-__attribute__((section(".ext.freetype")))
+MCCA_FREETYPE_SECTION(".ext.freetype")
 static uint8 ascii_glyph_cache[128][16];
 
 static bool ascii_glyph_cache_valid[128] = { false };
@@ -56,7 +62,7 @@ struct CJKCacheEntry {
 };
 
 #define CJK_CACHE_SIZE 512
-__attribute__((section(".ext.freetype")))
+MCCA_FREETYPE_SECTION(".ext.freetype")
 static CJKCacheEntry cjk_cache[CJK_CACHE_SIZE];
 
 class FreeTypeFontEngine : public uni::FontEngine {
@@ -78,7 +84,7 @@ public:
 		return m_cell_size;
 	}
 
-	__attribute__((section(".ext.freetype.vcode")))
+	MCCA_FREETYPE_SECTION(".ext.freetype.vcode")
 	bool DrawStringSized(Color* pixel_buffer, stduint pitch_pixels, const Size2& buffer_size, const Point& vertex,
 		const String& str, Color color, stduint pixel_size, Rectangle& dirty_rect) const {
 		dirty_rect = Rectangle(vertex, Size2(0, 0));
@@ -177,7 +183,7 @@ public:
 		return true;
 	}
 
-	__attribute__((section(".ext.freetype.vcode")))
+	MCCA_FREETYPE_SECTION(".ext.freetype.vcode")
 	virtual void DrawChar(
 		Color* pixel_buffer,
 		stduint pitch_pixels,
@@ -297,7 +303,7 @@ public:
 		}
 	}
 
-	__attribute__((section(".ext.freetype.vcode")))
+	MCCA_FREETYPE_SECTION(".ext.freetype.vcode")
 	virtual Color GetPixel(
 		uint32 unicode_char,
 		stduint gx,
@@ -357,7 +363,7 @@ public:
 
 uni::FontEngine* global_ft_engine = nullptr;
 
-__attribute__((section(".ext.freetype.code")))
+MCCA_FREETYPE_SECTION(".ext.freetype.code")
 bool DrawFreeTypeString(Color* pixel_buffer, stduint pitch_pixels, const Size2& buffer_size, const Point& vertex,
 	const String& str, Color color, stduint pixel_size, Rectangle& dirty_rect) {
 	if (!global_ft_engine) return false;
@@ -501,8 +507,9 @@ static int OpenFontPath(const char* path, vfs_file** file) {
 	return -1;
 }
 
-__attribute__((section(".ext.freetype.code")))
+MCCA_FREETYPE_SECTION(".ext.freetype.code")
 bool InitializeFont() {
+	if (global_ft_engine) return true;
 	ploginfo("InitializeFont: [Start] (Stream-based Lazy Loading Mode)");
 
 	// Allocate the 32KB block cache once (64 x 512-byte blocks).
@@ -709,9 +716,11 @@ bool InitializeFont() {
 	return true;
 }
 
+#undef MCCA_FREETYPE_SECTION
+
 #endif
 
-#if !(_MCCA == 0x8632 && _GUI_ENABLE && _GUI_FREETYPE)
+#if !(_GUI_ENABLE && _GUI_FREETYPE)
 // Stubs to avoid link-time errors when FreeType is disabled, falling back to default 16x8 font
 #include "../include/mecocoa.hpp"
 #include <cpp/Device/_Video.hpp>

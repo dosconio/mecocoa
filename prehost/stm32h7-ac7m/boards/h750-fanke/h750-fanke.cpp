@@ -3,7 +3,9 @@
 #include <cpp/Device/USB/USBHost-MSC.hpp>
 #include "unicfg.hpp"
 
-extern "C" char _IDN_BOARD[16]{ "STM32H750XBH6" };
+_ESYM_C {
+	char _IDN_BOARD[16]{ "STM32H750XBH6" };
+}
 
 #if !_GUI_ENABLE
 OstreamTrait* con0_out;

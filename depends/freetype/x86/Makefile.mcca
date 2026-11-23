@@ -1,17 +1,58 @@
-# 用于 Mecocoa x86 独立环境的 FreeType 编译配置文件
+# 用于 Mecocoa x86/x64 独立环境的 FreeType 编译配置文件
 # 路径：depends/freetype/x86/Makefile.mcca
 
-override arch=x86
+target_arch?=x86
 uincpath?=../../../unisym/inc
 uobjpath?=../../../_obj
 
-# 编译工具定义
-CC=gcc
-AR=ar
+ifeq ($(target_arch),x86)
+CC = gcc
+AR = ar
+OBJCOPY = objcopy
+MCCA_FLAGS = -D_MCCA=0x8632 -D_ARC_x86=5 -D_DEBUG
+ARCH_FLAGS = -m32 -mno-red-zone -mno-sse -mno-sse2 -mno-sse3 -mno-ssse3 -mno-sse4
+OBJECT_DIR = $(uobjpath)/freetype-x86
+TARGET = libfreetype.a
+RENAME_SECTIONS = 1
+else ifeq ($(target_arch),x64)
+X64_PREFIX ?= x86_64-linux-gnu-
+CC = $(X64_PREFIX)gcc
+AR = ar
+OBJCOPY = objcopy
+MCCA_FLAGS = -D_MCCA=0x8664 -D_UEFI -D_DEBUG
+ARCH_FLAGS = -m64 -mno-red-zone -mno-sse -mno-sse2 -mno-avx -mno-avx2
+OBJECT_DIR = $(uobjpath)/freetype-x64
+TARGET = libfreetype-x64.a
+RENAME_SECTIONS = 0
+else ifeq ($(target_arch),ac7m)
+AC7M_PREFIX ?= arm-none-eabi-
+CC = $(AC7M_PREFIX)gcc
+AR = $(AC7M_PREFIX)ar
+OBJCOPY = $(AC7M_PREFIX)objcopy
+MCCA_FLAGS = -D_MCCA=0x1A072032 -D_OPT_ARM32 -D_MCU_STM32H7x -D_HIS_IMPLEMENT -D_DEBUG
+ARCH_FLAGS = -mcpu=cortex-m7 -mthumb -mfpu=fpv5-d16 -mfloat-abi=hard -fshort-enums -fshort-wchar \
+             -ffunction-sections -fdata-sections
+OBJECT_DIR = $(uobjpath)/freetype-ac7m
+TARGET = libfreetype-ac7m.a
+RENAME_SECTIONS = 0
+else ifeq ($(target_arch),ac7m-gcc)
+AC7M_PREFIX ?= arm-none-eabi-
+CC = $(AC7M_PREFIX)gcc
+AR = $(AC7M_PREFIX)ar
+OBJCOPY = $(AC7M_PREFIX)objcopy
+MCCA_FLAGS = -D_MCCA=0x1A072032 -D_OPT_ARM32 -D_MCU_STM32H7x -D_HIS_IMPLEMENT -D_DEBUG
+ARCH_FLAGS = -mcpu=cortex-m7 -mthumb -mfpu=fpv5-d16 -mfloat-abi=hard -fshort-enums \
+             -ffunction-sections -fdata-sections
+OBJECT_DIR = $(uobjpath)/freetype-ac7m-gcc
+TARGET = libfreetype-ac7m-gcc.a
+RENAME_SECTIONS = 0
+else
+$(error Unsupported target_arch '$(target_arch)'; expected x86, x64, ac7m or ac7m-gcc)
+endif
 
 # 桥接 setjmp/longjmp 宏定义，并配置 FreeType 特性
 BRIDGE_FLAGS = -DFT2_BUILD_LIBRARY \
-               -D_MCCA=0x8632 -D_ARC_x86=5 -D_DEBUG
+               $(MCCA_FLAGS)
 
 # FreeType 本身头文件路径 + Unisym 独立库头文件路径
 INCLUDES = -Iinclude \
@@ -19,8 +60,7 @@ INCLUDES = -Iinclude \
            -I$(uincpath)/c/ISO_IEC_STD
 
 # 独立环境 C 编译参数（禁用 SSE、红色区域、堆栈保护以及标准宿主库）
-CFLAGS = -m32 -static -fno-builtin -nostdlib -fno-stack-protector -O2 \
-         -mno-red-zone -mno-sse -mno-sse2 -mno-sse3 -mno-ssse3 -mno-sse4 \
+CFLAGS = $(ARCH_FLAGS) -static -fno-builtin -nostdlib -fno-stack-protector -O2 \
          -ffreestanding -fno-exceptions -fno-unwind-tables -fno-asynchronous-unwind-tables \
          $(INCLUDES) $(BRIDGE_FLAGS)
 
@@ -44,10 +84,7 @@ SRCS = src/base/ftsystem.c \
        src/gzip/ftgzip.c \
        src/psnames/psnames.c
 
-OBJS = $(patsubst %.c, $(uobjpath)/freetype-x86/%.o, $(SRCS))
-
-# 目标输出位置，为当前编译目录下的 libfreetype.a
-TARGET = libfreetype.a
+OBJS = $(patsubst %.c, $(OBJECT_DIR)/%.o, $(SRCS))
 
 .PHONY: all clean
 
@@ -57,15 +94,17 @@ $(TARGET): $(OBJS)
 	@mkdir -p $(dir $@)
 	@echo "AR $@"
 	@$(AR) rcs $@ $^
-	@objcopy --rename-section .text=.ext.freetype --rename-section .rodata=.ext.freetype --rename-section .data=.ext.freetype $@
+	@if [ "$(RENAME_SECTIONS)" = "1" ]; then \
+		$(OBJCOPY) --rename-section .text=.ext.freetype --rename-section .rodata=.ext.freetype --rename-section .data=.ext.freetype $@; \
+	fi
 	@echo "Cleaning up intermediate object files..."
-	@rm -rf $(uobjpath)/freetype-x86
+	@rm -rf $(OBJECT_DIR)
 
-$(uobjpath)/freetype-x86/%.o: %.c
+$(OBJECT_DIR)/%.o: %.c
 	@mkdir -p $(dir $@)
 	@echo "CC $<"
 	@$(CC) $(CFLAGS) -c $< -o $@
 
 clean:
-	rm -rf $(uobjpath)/freetype-x86
+	rm -rf $(OBJECT_DIR)
 	rm -f $(TARGET)

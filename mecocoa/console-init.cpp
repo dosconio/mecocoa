@@ -48,6 +48,20 @@ FramebufferInfo sys_framebuffer;
 
 uni::VideoConsole2* global_vcon0 = nullptr;
 
+#if _GUI_ENABLE && _GUI_FREETYPE
+// Keep configurations without a linked FreeType provider functional; strong definitions override these.
+_WEAK uni::FontEngine* global_ft_engine = nullptr;
+
+_WEAK bool InitializeFont() {
+	return false;
+}
+
+_WEAK bool DrawFreeTypeString(Color*, stduint, const Size2&, const Point&,
+	const String&, Color, stduint, Rectangle&) {
+	return false;
+}
+#endif
+
 
 //// ---- ---- STATIC CORE ---- ---- ////
 #if _GUI_ENABLE
@@ -211,21 +225,27 @@ _WEAK bool Consman::Initialize() {
 }
 
 void Consman_InitializeFreeType() {
-#if _MCCA == 0x8632
+#if _GUI_ENABLE && _GUI_FREETYPE
+	static bool apply_queued = false;
+	if (apply_queued) return;
 	ploginfo("Consman_InitializeFreeType: [Start]");
-	extern bool InitializeFont();
-	extern uni::FontEngine* global_ft_engine;
+	if (!Filesys::GetSystemVirtualRootPath().getByteCount()) {
+		plogwarn("Consman_InitializeFreeType: system virtual root is unavailable, initialization deferred");
+		return;
+	}
 	bool success = InitializeFont();
 	ploginfo("Consman_InitializeFreeType: InitializeFont returned %d", success);
-	ploginfo("Consman_InitializeFreeType: global_ft_engine = %p, global_vcon0 = %p", global_ft_engine, global_vcon0);
-	if (global_ft_engine && global_vcon0) {
-		ploginfo("Consman_InitializeFreeType: Setting font engine...");
-		global_vcon0->setFontEngine(global_ft_engine);
-		ploginfo("Consman_InitializeFreeType: Clearing screen...");
-		global_vcon0->Clear();
-		ploginfo("Consman_InitializeFreeType: [Successful End]");
-	} else {
-		ploginfo("Consman_InitializeFreeType: Deferring check failed (missing engine or vcon0)");
+	if (!success || !global_ft_engine) return;
+	if (!Taskman::Locate(Task_ConsoleVideo)) {
+		plogwarn("Consman_InitializeFreeType: Graphic service is unavailable, application deferred");
+		return;
 	}
+	if (syssend_async(Task_ConsoleVideo, nullptr, 0,
+		_IMM(GraphicMsg::APPLY_TRUETYPE))) {
+		plogwarn("Consman_InitializeFreeType: failed to queue font application");
+		return;
+	}
+	apply_queued = true;
+	ploginfo("Consman_InitializeFreeType: font application queued");
 #endif
 }

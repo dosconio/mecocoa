@@ -95,6 +95,7 @@ enum class FilemanMsg {
 	STAT,
 	PERMIT,
 	RENAME,
+	INITIALIZE_FREETYPE,
 };
 
 #include <c/API-POSIX/fcntl.h>

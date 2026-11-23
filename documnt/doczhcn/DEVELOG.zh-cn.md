@@ -1,3 +1,7 @@
+## 2026-11-23
+
+- 15:30（UTC+8）FreeType 独立构建增加 ac7m 目标，使用 Cortex-M7 Thumb、FPv5-D16 hard-float ABI 生成按函数和数据拆分 ELF section 的静态库；分别提供适配 Keil 2-byte `wchar_t` 的 `libfreetype-ac7m.a` 与适配 GCC 4-byte `wchar_t` 的 `libfreetype-ac7m-gcc.a` 及清理入口，H7 GNU 构建使用 GCC 版本以保持对象 ABI 一致。
+
 ## 2026-11-22
 
 - 13:32（UTC+8）H750 Fanke 外部 QSPI 构建接入 Mecocoa/RTOS 核心、GCC 上下文切换和 SysTick 包装入口；板级单 LED 纳入 GPIO 配置，并按参考工程接入 Bank1、32 位、32 MiB SDRAM 的完整 FMC 引脚、时序和初始化参数；未接入的图形/LTDC 与 USB OTG/MSC 暂由板级空实现闭合链接，保持 H743 SDRAM 路径不变。

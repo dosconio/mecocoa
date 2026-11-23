@@ -766,6 +766,7 @@ static void _TryStartUserApp() {
 		else plogerro("[Fileman] no runtime root, the user app is not started");
 		return;
 	}
+	Consman_InitializeFreeType();
 	_StartUserApp(runtime_root, "ribbon", false);
 	_StartUserApp(runtime_root, "cot", true);
 }
@@ -855,6 +856,11 @@ void serv_file_loop()// for IDE 0:0, 0:1
 					Task_Devsman, nullptr, false);
 				syssend(sig_src, &driver, sizeof(driver));
 			}
+			break;
+		#endif
+		#if (_MCCA & 0xFF00) == 0x8600
+		case FilemanMsg::INITIALIZE_FREETYPE:
+			Consman_InitializeFreeType();
 			break;
 		#endif
 		case FilemanMsg::TEST:// (no-feedback)

@@ -128,7 +128,7 @@ _PACKED(struct) FMT_ConsoleMsg_FSET {
 };
 
 #if _GUI_ENABLE
-#if _GUI_FREETYPE && _MCCA == 0x8632
+#if _GUI_FREETYPE
 bool DrawFreeTypeString(Color* pixel_buffer, stduint pitch_pixels, const Size2& buffer_size, const Point& vertex,
 	const String& str, Color color, stduint pixel_size, Rectangle& dirty_rect);
 #endif

@@ -4,6 +4,7 @@
 快速验证只需要拷贝SD卡和烧录elf即可。如果内部flash没有加载器也需要烧录官方的hex文件。
 
 构建依赖
+- UNISYM ASM, 用于汇编（由于编译 aasm 需要的库也需要 aasm 生成，所以发布包附赠一份 Linux ABI 静态链接版本的 aasm）
 - LLVM, 用于用户程序构建
 - ARM GCC 或 Keil MDK-ARM
 - Linux 同款的 menuconfig
@@ -22,8 +23,9 @@ make list cgstm32h7
 
 ```
 make config # 如果没有 include/autoconf.h 文件，必须执行此命令
-make -f accmlib/accma32.clang.make # 生成 stm32h7 应用链接库
-make -f subapps/Makefile.clang.a32 # 生成 stm32h7 实用应用
+make -C depends/freetype clean-ac7m-gcc ac7m-gcc # 编译GCC版TTF字体支持库
+make -f accmlib/accma32.clang.make       # 生成 stm32h7 应用链接库
+make -f subapps/Makefile.clang.a32       # 生成 stm32h7 实用应用
 ```
 
    应用ELF生成在  $uobjpth/sapp-a32-pi 目录下。可以复制到SD卡的 X:\ac7m\apps

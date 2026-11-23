@@ -1759,11 +1759,20 @@ file_system_type* Filesys::Mount(StorageTrait& storage, stduint dev, const char*
 		if (fs) {
 			if (!Filesys::MountFilesys(fs, fs_type, target_path, source_device_node,
 				dev, VFSMountOwnership::FilesystemAndStorage, permissions)) return nullptr;
-			if (Filesys::GetSystemVirtualRootPath().getByteCount() &&
-				Taskman::Locate(Task_Init) && Taskman::Locate(Task_Devsman)) {
-				if (syssend_async(Task_Devsman, nullptr, 0,
-					_IMM(DevsmanMsg::LOAD_DRIVER_DIRECTORY))) {
-					plogwarn("[VFS] failed to queue driver directory scan");
+			if (Filesys::GetSystemVirtualRootPath().getByteCount()) {
+				#if (_MCCA & 0xFF00) == 0x8600
+				if (Taskman::Locate(Task_FileSys)) {
+					if (syssend_async(Task_FileSys, nullptr, 0,
+						_IMM(FilemanMsg::INITIALIZE_FREETYPE))) {
+						plogwarn("[VFS] failed to queue FreeType initialization");
+					}
+				}
+				#endif
+				if (Taskman::Locate(Task_Init) && Taskman::Locate(Task_Devsman)) {
+					if (syssend_async(Task_Devsman, nullptr, 0,
+						_IMM(DevsmanMsg::LOAD_DRIVER_DIRECTORY))) {
+						plogwarn("[VFS] failed to queue driver directory scan");
+					}
 				}
 			}
 			return fs_type;

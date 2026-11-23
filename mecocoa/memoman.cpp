@@ -1509,10 +1509,21 @@ bool MempoolLowdma::Deallocate(void* ptr, stduint bytes) {
 // ---- STDLIB ----
 
 #if 1
+static size_t GetDefaultAllocationAlignment(size_t size) {
+	if (!size) return 1;
+	const size_t natural_alignment = size & (~size + 1);
+	constexpr size_t maximum_alignment = __STDCPP_DEFAULT_NEW_ALIGNMENT__;
+	return minof(natural_alignment, maximum_alignment);
+}
 
 // linear allocator
 _ESYM_C void* malloc(size_t size) {
+	#if (_MCCA & 0xFF00) == 0x2000 // ARM, TODO RV
+	const size_t alignment = GetDefaultAllocationAlignment(size);
+	auto ret = (mempool.allocate(size, intlog2_iexpo(alignment)));
+	#else
 	auto ret = (mempool.allocate(size));
+	#endif
 	if (!ret)
 		printlog(ret ? _LOG_INFO : _LOG_ERROR, "malloc %u at 0x%[x]", size, ret);
 	else
@@ -1525,12 +1536,7 @@ _ESYM_C void* calloc(size_t nmemb, size_t size) {
 	if (ret) MemSet(ret, 0, nmemb * size);
 	return ret;
 }
-static size_t GetDefaultAllocationAlignment(size_t size) {
-	if (!size) return 1;
-	const size_t natural_alignment = size & (~size + 1);
-	constexpr size_t maximum_alignment = __STDCPP_DEFAULT_NEW_ALIGNMENT__;
-	return minof(natural_alignment, maximum_alignment);
-}
+
 void* operator new(size_t size) {
 	const size_t alignment = GetDefaultAllocationAlignment(size);
 	return mempool.allocate(size, intlog2_iexpo(alignment));

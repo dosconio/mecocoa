@@ -1677,10 +1677,10 @@ static stdsint GraphicMsg_FCHR(const FMT_ConsoleMsg_FCHR* data, ProcessBlock* pb
 	buf.Refresh();
 	const stduint pixel_size = data->pixel_size ? data->pixel_size : 16;
 
-	#if _GUI_FREETYPE && _MCCA == 0x8632
+	#if _GUI_FREETYPE
 	extern uni::FontEngine* global_ft_engine;
-	if (!global_ft_engine || !pfrm->sheet_buffer) return -1;
-	if (pixel_size != 16) {
+	if (global_ft_engine && pixel_size != 16) {
+		if (!pfrm->sheet_buffer) return -1;
 		Rectangle dirty_rect;
 		const bool success = DrawFreeTypeString(surface.GetBuffer(), surface.GetPitch(), surface.GetSize(), vertex,
 			buf, data->color, pixel_size, dirty_rect);
@@ -1688,7 +1688,9 @@ static stdsint GraphicMsg_FCHR(const FMT_ConsoleMsg_FCHR* data, ProcessBlock* pb
 		surface.Refresh();
 		return success ? 0 : -1;
 	}
-	const uni::FontEngine* font_engine = global_ft_engine;
+	if (pixel_size != 16) return -1;
+	uni::BitmapFontEngine bitmap_engine(1);
+	const uni::FontEngine* font_engine = global_ft_engine ? global_ft_engine : &bitmap_engine;
 	#else
 	if (pixel_size != 16) return -1;
 	uni::BitmapFontEngine bitmap_engine(1);
@@ -1698,7 +1700,9 @@ static stdsint GraphicMsg_FCHR(const FMT_ConsoleMsg_FCHR* data, ProcessBlock* pb
 	Size2 cell_size = font_engine->GetCellSize();
 	stduint text_width = 0;
 	for (auto unicode_char : buf.chars()) {
-		#if !(_GUI_FREETYPE && _MCCA == 0x8632)
+		#if _GUI_FREETYPE
+		if (!global_ft_engine && (unicode_char < 32 || unicode_char >= 127)) continue;
+		#else
 		if (unicode_char < 32 || unicode_char >= 127) continue;
 		#endif
 		text_width += GraphicGlyphCellWidth(font_engine, (uint32)unicode_char);
@@ -1712,7 +1716,9 @@ static stdsint GraphicMsg_FCHR(const FMT_ConsoleMsg_FCHR* data, ProcessBlock* pb
 	Color transparent_bg = {};
 	stduint x = vertex.x;
 	for (auto unicode_char : buf.chars()) {
-		#if !(_GUI_FREETYPE && _MCCA == 0x8632)
+		#if _GUI_FREETYPE
+		if (!global_ft_engine && (unicode_char < 32 || unicode_char >= 127)) continue;
+		#else
 		if (unicode_char < 32 || unicode_char >= 127) continue;
 		#endif
 		const stduint width = GraphicGlyphCellWidth(font_engine, (uint32)unicode_char);
@@ -1803,11 +1809,15 @@ static stdsint GraphicMsg_FSET(const FMT_ConsoleMsg_FSET* data, ProcessBlock* pb
 }
 
 // CreateVconsole - runs only in Graphic thread, no lock needed.
-#if _MCCA == 0x8632
 static uni::BitmapFontEngine fallback_engine(1);
-#else
-static uni::BitmapFontEngine gui_font_engine(1);
-#endif
+
+static const uni::FontEngine* GetGuiFontEngine() {
+	#if _GUI_FREETYPE
+	extern uni::FontEngine* global_ft_engine;
+	if (global_ft_engine) return global_ft_engine;
+	#endif
+	return &fallback_engine;
+}
 
 _RET_CreateVconsole Consman::CreateVconsole(const Rectangle& rect, rostr title) {
 	_RET_CreateVconsole ret;
@@ -1819,17 +1829,7 @@ _RET_CreateVconsole Consman::CreateVconsole(const Rectangle& rect, rostr title) 
 	pcon->setBellHandler(BuzzerBell);
 	#endif
 
-	#if _MCCA == 0x8632
-	extern uni::FontEngine* global_ft_engine;
-	if (global_ft_engine) {
-		pcon->setFontEngine(global_ft_engine);
-	}
-	else {
-		pcon->setFontEngine(&fallback_engine);
-	}
-	#else
-	pcon->setFontEngine(&gui_font_engine);
-	#endif
+	pcon->setFontEngine(GetGuiFontEngine());
 
 	ret.pcon = pcon;
 	auto text_buf = new BufferChar[pcon->getCols() * pcon->getRows()];
@@ -2488,6 +2488,22 @@ void serv_graf_loop() {
 			syssend_async(sig_src, (void*)&ret, sizeof(ret));
 			break;
 		}
+		case GraphicMsg::APPLY_TRUETYPE:
+			#if _GUI_FREETYPE
+			if (sig_src != Task_FileSys) {
+				plogwarn("[Graphic] rejected FreeType application source=%u", sig_src);
+				break;
+			}
+			{
+				extern uni::FontEngine* global_ft_engine;
+				if (global_ft_engine && global_vcon0) {
+					global_vcon0->setFontEngine(global_ft_engine);
+					global_vcon0->Clear();
+					ploginfo("[Graphic] FreeType font engine applied");
+				}
+			}
+			#endif
+			break;
 		default:
 			plogerro("%s Unknown GraphicMsg type: %d", __FUNCIDEN__, sig_type);
 			break;

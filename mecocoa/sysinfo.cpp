@@ -450,8 +450,8 @@ void dump_lock(OstreamTrait& com1) {
 
 	// Declare the external global mutexes
 	extern Mutex outc_mutex;
-	#if _MCCA == 0x8632 && _GUI_ENABLE && _GUI_FREETYPE
-	extern Mutex ft_lock;
+	#if _GUI_ENABLE && _GUI_FREETYPE
+	extern Mutex ft_lock __attribute__((weak));
 	#endif
 
 	com1.OutFormat("=== Global Spinlocks ===\n\r");
@@ -466,8 +466,11 @@ void dump_lock(OstreamTrait& com1) {
 	com1.OutFormat("Address             Locked  Waiters Name\n\r");
 	com1.OutFormat("%p  %s     %[u]       outc_mutex\n\r", &outc_mutex, outc_mutex.locked ? "Yes" : "No ", outc_mutex.wait_queue.Count());
 	com1.OutFormat("%p  %s     %[u]       vfs_lock\n\r", &uni::vfs_lock, uni::vfs_lock.locked ? "Yes" : "No ", uni::vfs_lock.wait_queue.Count());
-	#if _MCCA == 0x8632 && _GUI_ENABLE && _GUI_FREETYPE
-	com1.OutFormat("%p  %s     %[u]       ft_lock\n\r", &ft_lock, ft_lock.locked ? "Yes" : "No ", ft_lock.wait_queue.Count());
+	#if _GUI_ENABLE && _GUI_FREETYPE
+	if (&ft_lock) {
+		com1.OutFormat("%p  %s     %[u]       ft_lock\n\r", &ft_lock,
+			ft_lock.locked ? "Yes" : "No ", ft_lock.wait_queue.Count());
+	}
 	#endif
 	com1.OutFormat("\n\r=== Per-Process Locks ===\n\r");
 	com1.OutFormat("PID  Process Name        VMA Lock (Spinlock)    Sys Lock (Mutex)\n\r");
