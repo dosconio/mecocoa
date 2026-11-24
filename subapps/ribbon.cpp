@@ -154,7 +154,10 @@ static void ApplyLango(Lango lang) {
 	}
 }
 
+static sint32 ribbon_utc_offset_minutes = 0;
+
 static void TryLoadConfigLango() {
+	ribbon_utc_offset_minutes = 0;
 	const char* vroot = getenv("VOLUMEPATH");
 	if (!vroot || !*vroot) vroot = getenv("VRPATH");
 	String vroot_conf;
@@ -176,6 +179,8 @@ static void TryLoadConfigLango() {
 				if (toml.Probe()) {
 					String lang_val = toml.get("root/lango");
 					lang = ParseLango(lang_val.reference());
+					const stdsint hours = toml.getNumber("root/utc");
+					if (hours >= -24 && hours <= 24) ribbon_utc_offset_minutes = sint32(hours * 60);
 				}
 				ApplyLango(lang);
 				return;
@@ -235,10 +240,10 @@ static void FillRect(Color* buffer, stduint pitch, stduint width, stduint height
 }
 
 static struct tm* ReadRibbonDateTime() {
-	// Check raw syscall failure before a C library can normalize it into a date.
-	if (sysdate() == uint32(-1) || systime() == uint32(-1)) return nullptr;
-	time_t now = time(nullptr);
-	return now != time_t(-1) ? localtime(&now) : nullptr;
+	timeval_t now{};
+	if (sysgettime(&now) < 0) return nullptr;
+	const time_t seconds = now.sec + sint64(ribbon_utc_offset_minutes) * 60;
+	return gmtime(&seconds);
 }
 
 static constexpr stduint kMaxTaskbarWindows = 16;

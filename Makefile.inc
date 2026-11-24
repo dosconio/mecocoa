@@ -56,9 +56,9 @@ cppfile:=$(filter-out $(kernel_excluded_cpp),$(cppfile))
 cplfile+= \
 	$(ulibpath)/c/mcore.c \
 	$(ulibpath)/c/debug.c \
-	$(ulibpath)/c/datime/weekday.c \
 	$(wildcard $(ulibpath)/c/dnode/*.c) \
 	$(wildcard $(ulibpath)/c/nnode/*.c) \
+	$(wildcard $(ulibpath)/c/datime/*.c) \
 	$(ulibpath)/c/ustring/astring/salc.c \
 	$(ulibpath)/c/ustring/astring/StrHeap.c $(ulibpath)/c/ustring/astring/StrHeapN.c \
 

@@ -8,6 +8,8 @@
 #include <cpp/Device/RCC/RCC>
 #include <cpp/Device/FMC>
 #include <cpp/Device/SD.hpp>
+#include <c/driver/RealtimeClock.h>
+#include <cpp/MCU/_DEVLIST/DEVL-STM32.h>
 
 #define BOARD_CONFIG_GPIO_DEVICES 1
 
@@ -319,6 +321,8 @@ namespace BoardConfig {
 	namespace Clock {
 		constexpr unsigned HSEHz = 25000000;
 		constexpr bool HSEBypass = false;
+		constexpr unsigned LSEHz = 32768;
+		constexpr bool LSEBypass = false;
 
 		constexpr uni::SysclkSource::RCCSysclockSource PLL1InputSource = uni::SysclkSource::HSE;
 		constexpr uni::RCCClockConfig_t SystemConfig = {
@@ -346,23 +350,21 @@ namespace BoardConfig {
 		constexpr unsigned LTDC_PLL3InputRange = 2;
 		constexpr unsigned LTDC_PLL3VcoSelect = 0;
 	}
+	namespace Rtc {
+		constexpr bool Enabled = true;
+		constexpr uni::RTCClockSource ClockSource = uni::RTCClockSource::LSE;
+		constexpr uni::RTCHourFormat HourFormat = uni::RTCHourFormat::Hour24;
+		constexpr stduint AsynchPrediv = 127;
+		constexpr stduint SynchPrediv = 255;
+	}
 }
 
-/* Easy-config Devices
-* GPIO
-* XART
-*/
 
-enum class DeviceType {
-	LTDC,
-	FmcSDRAM,
-	Sdmmc1,
-	DeviceCount
-};
 
-inline static bool ConfigDeviceGPIN(DeviceType dev) {
+inline static bool ConfigDeviceGPIN(uni::QrsDeviceList dev) {
+	using namespace uni;
 	switch (dev) {
-	case DeviceType::LTDC:
+	case QrsDeviceList::LTDC:
 		for (unsigned i = 0; i < sizeof(BoardConfig::Ltdc::Pins::All) / sizeof(BoardConfig::Ltdc::Pins::All[0]); ++i) {
 			const auto& pin = BoardConfig::Ltdc::Pins::All[i];
 			const auto& gpio = uni::GPIO[pin.Port][pin.Pin];
@@ -376,14 +378,14 @@ inline static bool ConfigDeviceGPIN(DeviceType dev) {
 			backlight = BoardConfig::Ltdc::Backlight::ActiveHigh;
 		}
 		return true;
-	case DeviceType::Sdmmc1:
+	case QrsDeviceList::Sdmmc1:
 		for (const auto& pin : BoardConfig::Sdmmc1::Pins) {
 			const auto& gpio = uni::GPIO[pin.Port][pin.Pin];
 			gpio.setMode(uni::GPIOMode::OUT_AF_PushPull, uni::GPIOSpeed::High);
 			if (!gpio._set_alternate((byte)pin.AlternateFunction)) return false;
 		}
 		return true;
-	case DeviceType::FmcSDRAM:
+	case QrsDeviceList::FmcSDRAM:
 		for (unsigned i = 0; i < sizeof(BoardConfig::Sdram::All) / sizeof(BoardConfig::Sdram::All[0]); ++i) {
 			const auto& pin = BoardConfig::Sdram::All[i];
 			const auto& gpio = uni::GPIO[pin.Port][pin.Pin];
@@ -396,9 +398,10 @@ inline static bool ConfigDeviceGPIN(DeviceType dev) {
 		return false;
 	}
 }
-inline static bool ConfigDeviceClock(DeviceType dev) {
+inline static bool ConfigDeviceClock(uni::QrsDeviceList dev) {
+	using namespace uni;
 	switch (dev) {
-	case DeviceType::LTDC:
+	case QrsDeviceList::LTDC:
 		if (!uni::RCC.PLL3.setMode(
 			BoardConfig::Clock::LTDC_PLL3Source,
 			BoardConfig::Clock::LTDC_PLL3InputRange,
@@ -406,6 +409,10 @@ inline static bool ConfigDeviceClock(DeviceType dev) {
 			BoardConfig::Clock::LTDC_PLL3))
 			return false;
 		break;
+	case QrsDeviceList::RTC:
+		if (BoardConfig::Rtc::ClockSource != RTCClockSource::LSE) return true;
+		LSE_VALUE = BoardConfig::Clock::LSEHz;
+		return RCC.LSE.setMode(true, BoardConfig::Clock::LSEBypass);
 	default:
 		return false;
 	}

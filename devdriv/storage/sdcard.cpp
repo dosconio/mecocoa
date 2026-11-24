@@ -219,7 +219,7 @@ static void SdCardOnline(bool up) {
 static int SdCardInit() {
 	MutexLocal guard(&sd_lock);
 #if defined(_MCU_STM32H7x)
-	if (!ConfigDeviceGPIN(DeviceType::Sdmmc1)) return 0;
+	if (!ConfigDeviceGPIN(uni::QrsDeviceList::Sdmmc1)) return 0;
 	SDCard1.auto_setmode_apio = false;
 	const bool ready = SDCard1.setMode(BoardConfig::Sdmmc1::ClockSource,
 		BoardConfig::Sdmmc1::ClockOnRisingEdge, false,

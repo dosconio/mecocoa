@@ -58,6 +58,218 @@ namespace {
 	}
 }
 
+// ---- ---- ---- ---- SYSTEM DATE AND TIME ---- ---- ---- ---- //
+
+namespace {
+	constexpr sint64 EpochDay = herspan(1970, 1, 1);
+	constexpr sint64 FirstSystemSecond = (sint64(herspan(0, 1, 1)) - EpochDay) * 86400;
+	constexpr sint64 LastSystemSecond = (sint64(herspan(9999, 12, 31)) - EpochDay) * 86400 + 86399;
+	static_assert(CONFIG_SysTickFreq > 0, "System tick frequency must be positive");
+
+	struct ClockSnapshot {
+		timeval_t time{};
+		DateTimeConfig config;
+		SystemTimeOrigin origin = SystemTimeOrigin::Unset;
+		bool valid = false;
+		uint32 revision = 0;
+	};
+
+	Spinlock clock_lock;
+	ClockSnapshot clock_state;
+	uint64 clock_fraction = 0;
+
+	// Writers hold clock_lock. Readers use native-width atomics, including on 32-bit targets.
+	struct PublishedClock {
+		uni::Atomic<uint32> sequence{0}, seconds_low{0}, seconds_high{0};
+		uni::Atomic<sint32> microseconds{0}, offset_minutes{0};
+		uni::Atomic<uint32> basis{uint32(TimeBasis::Unknown)}, origin{uint32(SystemTimeOrigin::Unset)};
+		uni::Atomic<uint32> valid{0}, revision{0};
+	} published_clock;
+
+	void PublishClock() {
+		published_clock.sequence.fetch_add(1);
+		const uint64 seconds = uint64(clock_state.time.sec);
+		published_clock.seconds_low.store(uint32(seconds));
+		published_clock.seconds_high.store(uint32(seconds >> 32));
+		published_clock.microseconds.store(clock_state.time.mic);
+		published_clock.offset_minutes.store(clock_state.config.utc_offset_minutes);
+		published_clock.basis.store(uint32(clock_state.config.unknown_device_basis));
+		published_clock.origin.store(uint32(clock_state.origin));
+		published_clock.valid.store(clock_state.valid ? 1 : 0);
+		published_clock.revision.store(clock_state.revision);
+		published_clock.sequence.fetch_add(1);
+	}
+
+	ClockSnapshot ReadClockSnapshot() {
+		ClockSnapshot result;
+		for (;;) {
+			const uint32 sequence = published_clock.sequence.load();
+			if (sequence & 1) continue;
+			const uint64 low = published_clock.seconds_low.load();
+			const uint64 seconds = (uint64(published_clock.seconds_high.load()) << 32) | low;
+			result.time.sec = (seconds >> 63) ? -1 - sint64(~seconds) : sint64(seconds);
+			result.time.mic = published_clock.microseconds.load();
+			result.config.utc_offset_minutes = published_clock.offset_minutes.load();
+			result.config.unknown_device_basis = TimeBasis(published_clock.basis.load());
+			result.origin = SystemTimeOrigin(published_clock.origin.load());
+			result.valid = published_clock.valid.load() != 0;
+			result.revision = published_clock.revision.load();
+			if (sequence == published_clock.sequence.load()) return result;
+		}
+	}
+
+	bool ValidSystemTime(const timeval_t& value, sint32 offset_minutes) {
+		if (value.mic < 0 || value.mic >= 1000000 ||
+			value.sec < FirstSystemSecond || value.sec > LastSystemSecond) return false;
+		const sint64 local = value.sec + sint64(offset_minutes) * 60;
+		return local >= FirstSystemSecond && local <= LastSystemSecond;
+	}
+
+	bool DateToSystemTime(const datime_t& date, sint32 offset_minutes, timeval_t& result) {
+		if (!ValidDeviceDate(date)) return false;
+		timeval_t converted{};
+		converted.sec = (sint64(date.getHerspan()) - EpochDay) * 86400 +
+			(sint64(date.hour) * 60 + date.minute) * 60 + date.second - sint64(offset_minutes) * 60;
+		if (!ValidSystemTime(converted, 0)) return false;
+		result = converted;
+		return true;
+	}
+
+	bool SystemTimeToDate(const timeval_t& value, sint32 offset_minutes, datime_t& result) {
+		if (!ValidSystemTime(value, offset_minutes)) return false;
+		const sint64 local = value.sec + sint64(offset_minutes) * 60;
+		sint64 days = local / 86400;
+		sint64 seconds = local % 86400;
+		if (seconds < 0) { seconds += 86400; --days; }
+		word year, month, day;
+		fromherp(stdint(days + EpochDay), &year, &month, &day);
+		datime_t converted{};
+		converted.year = year; converted.month = byte(month - 1); converted.mday = byte(day);
+		converted.hour = byte(seconds / 3600);
+		converted.minute = byte((seconds % 3600) / 60);
+		converted.second = byte(seconds % 60);
+		if (!ValidDeviceDate(converted)) return false;
+		result = converted;
+		return true;
+	}
+
+	bool CommitSystemTime(const timeval_t& value, SystemTimeOrigin origin, const uint32* revision = nullptr) {
+		SpinlockLocal guard(&clock_lock);
+		if ((revision && *revision != clock_state.revision) ||
+			!ValidSystemTime(value, clock_state.config.utc_offset_minutes)) return false;
+		clock_state.time = value;
+		clock_state.origin = origin;
+		clock_state.valid = true;
+		++clock_state.revision;
+		clock_fraction = 0;
+		PublishClock();
+		return true;
+	}
+
+	void AdvanceSystemTime() {
+		SpinlockLocal guard(&clock_lock);
+		if (!clock_state.valid) return;
+		clock_fraction += 1000000;
+		clock_state.time.mic += sint32(clock_fraction / CONFIG_SysTickFreq);
+		clock_fraction %= CONFIG_SysTickFreq;
+		clock_state.time.sec += clock_state.time.mic / 1000000;
+		clock_state.time.mic %= 1000000;
+		if (!ValidSystemTime(clock_state.time, clock_state.config.utc_offset_minutes)) {
+			clock_state.valid = false;
+			++clock_state.revision;
+		}
+		PublishClock();
+	}
+
+	TimeBasis ResolveDeviceBasis(TimeBasis basis, const DateTimeConfig& config) {
+		return basis == TimeBasis::Unknown ? config.unknown_device_basis : basis;
+	}
+
+	bool ReadDateCandidate(TimeDeviceBinding* entry, datime_t& date, const DateTimeConfig* config) {
+		if (!ReadTimeDevice(entry, date)) return false;
+		if (!config) return true;
+		const TimeBasis basis = ResolveDeviceBasis(entry->device.info.basis, *config);
+		if (basis != TimeBasis::UTC && basis != TimeBasis::Local) return false;
+		timeval_t converted{};
+		return DateToSystemTime(date, basis == TimeBasis::Local ? config->utc_offset_minutes : 0, converted) &&
+			ValidSystemTime(converted, config->utc_offset_minutes);
+	}
+
+	bool ReadDateSource(datime_t& result, TimeBasis& basis, DeviceNode* node, const DateTimeConfig* config = nullptr);
+}
+
+bool Systime::ConfigureDateTime(const DateTimeConfig& config) {
+	if (config.utc_offset_minutes < -1440 || config.utc_offset_minutes > 1440 ||
+		(config.unknown_device_basis != TimeBasis::Unknown &&
+			config.unknown_device_basis != TimeBasis::UTC && config.unknown_device_basis != TimeBasis::Local)) return false;
+	SpinlockLocal guard(&clock_lock);
+	if (clock_state.valid && !ValidSystemTime(clock_state.time, config.utc_offset_minutes)) return false;
+	clock_state.config = config;
+	++clock_state.revision;
+	PublishClock();
+	return true;
+}
+
+bool Systime::GetSystemTime(timeval_t& result) {
+	const auto snapshot = ReadClockSnapshot();
+	if (!snapshot.valid) return false;
+	result = snapshot.time;
+	return true;
+}
+
+bool Systime::SetSystemTime(const timeval_t& value) {
+	return CommitSystemTime(value, SystemTimeOrigin::Manual);
+}
+
+bool Systime::GetDateTime(datime_t& result) {
+	const auto snapshot = ReadClockSnapshot();
+	return snapshot.valid && SystemTimeToDate(snapshot.time, snapshot.config.utc_offset_minutes, result);
+}
+
+bool Systime::SetDateTime(const datime_t& value) {
+	const auto snapshot = ReadClockSnapshot();
+	timeval_t converted{};
+	return DateToSystemTime(value, snapshot.config.utc_offset_minutes, converted) &&
+		CommitSystemTime(converted, SystemTimeOrigin::Manual, &snapshot.revision);
+}
+
+bool Systime::SyncFromDevice(DeviceNode* node) {
+	const auto snapshot = ReadClockSnapshot();
+	datime_t date{};
+	TimeBasis basis;
+	if (!ReadDateSource(date, basis, node, &snapshot.config)) return false;
+	basis = ResolveDeviceBasis(basis, snapshot.config);
+	if (basis != TimeBasis::UTC && basis != TimeBasis::Local) return false;
+	timeval_t converted{};
+	return DateToSystemTime(date, basis == TimeBasis::Local ? snapshot.config.utc_offset_minutes : 0, converted) &&
+		CommitSystemTime(converted, SystemTimeOrigin::Device, &snapshot.revision);
+}
+
+bool Systime::SyncToDevice(DeviceNode* node) {
+	const auto snapshot = ReadClockSnapshot();
+	if (!snapshot.valid) return false;
+	auto* entry = AcquireTimeDevice(node);
+	if (!entry) return false;
+	const TimeBasis basis = ResolveDeviceBasis(entry->device.info.basis, snapshot.config);
+	datime_t date{};
+	const bool ok = (basis == TimeBasis::UTC || basis == TimeBasis::Local) &&
+		SystemTimeToDate(snapshot.time, basis == TimeBasis::Local ? snapshot.config.utc_offset_minutes : 0, date) &&
+		entry->device.WriteDate && entry->device.WriteDate(entry->device.context, date);
+	{
+		SpinlockLocal guard(&time_device_lock);
+		--entry->users;
+	}
+	return ok;
+}
+
+void Systime::GetSystemTimeInfo(SystemTimeInfo& result) {
+	const auto snapshot = ReadClockSnapshot();
+	result.valid = snapshot.valid;
+	result.origin = snapshot.origin;
+	result.config = snapshot.config;
+	result.resolution_us = uint32(1000000 / CONFIG_SysTickFreq + (1000000 % CONFIG_SysTickFreq != 0));
+}
+
 bool Systime::AttachDevice(DeviceNode* node, const TimeDevice& device) {
 	if (!node || device.info.readable_date != bool(device.ReadDate) ||
 		device.info.writable_date != bool(device.WriteDate) ||
@@ -147,47 +359,56 @@ bool Systime::BindTickDevice(DeviceNode* node) {
 	return true;
 }
 
+namespace {
+	bool ReadDateSource(datime_t& result, TimeBasis& basis, DeviceNode* node, const DateTimeConfig* config) {
+		auto* preferred = AcquireTimeDevice(node);
+		if (preferred) {
+			datime_t date{};
+			const bool ok = ReadDateCandidate(preferred, date, config);
+			{
+				SpinlockLocal guard(&time_device_lock);
+				preferred->last_read_ok = ok;
+				if (!node) date_device = ok ? preferred : nullptr;
+				if (ok) basis = preferred->device.info.basis;
+				if (ok || node) --preferred->users;
+			}
+			if (ok) { result = date; return true; }
+		}
+		if (node) return false;
+		TimeDeviceBinding* entry;
+		{
+			SpinlockLocal guard(&time_device_lock);
+			entry = time_devices;
+			if (entry) ++entry->users;
+		}
+		while (entry) {
+			datime_t date{};
+			const bool ok = entry != preferred && ReadDateCandidate(entry, date, config);
+			TimeDeviceBinding* next;
+			{
+				SpinlockLocal guard(&time_device_lock);
+				if (entry != preferred) entry->last_read_ok = ok;
+				next = ok ? nullptr : entry->next;
+				if (next) ++next->users;
+				if (ok) { date_device = entry; basis = entry->device.info.basis; }
+				--entry->users;
+				if (ok && preferred) --preferred->users;
+			}
+			if (ok) { result = date; return true; }
+			entry = next;
+		}
+		if (preferred) {
+			SpinlockLocal guard(&time_device_lock);
+			--preferred->users;
+		}
+		return false;
+	}
+
+}
+
 bool Systime::ReadDeviceDateTime(datime_t& result, DeviceNode* node) {
-	auto* preferred = AcquireTimeDevice(node);
-	if (preferred) {
-		datime_t date{};
-		const bool ok = ReadTimeDevice(preferred, date);
-		{
-			SpinlockLocal guard(&time_device_lock);
-			preferred->last_read_ok = ok;
-			if (!node) date_device = ok ? preferred : nullptr;
-			if (ok || node) --preferred->users;
-		}
-		if (ok) { result = date; return true; }
-	}
-	if (node) return false;
-	TimeDeviceBinding* entry;
-	{
-		SpinlockLocal guard(&time_device_lock);
-		entry = time_devices;
-		if (entry) ++entry->users;
-	}
-	while (entry) {
-		datime_t date{};
-		const bool ok = entry != preferred && ReadTimeDevice(entry, date);
-		TimeDeviceBinding* next;
-		{
-			SpinlockLocal guard(&time_device_lock);
-			if (entry != preferred) entry->last_read_ok = ok;
-			next = ok ? nullptr : entry->next;
-			if (next) ++next->users;
-			if (ok) date_device = entry;
-			--entry->users;
-			if (ok && preferred) --preferred->users;
-		}
-		if (ok) { result = date; return true; }
-		entry = next;
-	}
-	if (preferred) {
-		SpinlockLocal guard(&time_device_lock);
-		--preferred->users;
-	}
-	return false;
+	TimeBasis basis;
+	return ReadDateSource(result, basis, node);
 }
 
 bool Systime::WriteDeviceDateTime(const datime_t& date, DeviceNode* node) {
@@ -630,6 +851,7 @@ namespace Devs {
 
 void Systime::OnTick() {
 	tick.fetch_add(1, uni::MemoryOrder_Relaxed);
+	AdvanceSystemTime();
 #if !defined(_MPU_STM32MP13)
 	CollectExpired();
 #endif

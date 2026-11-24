@@ -37,6 +37,8 @@ extern "C" {
 	stduint syssecond();// 03
 	uint32 sysdate();// 03 (0x10) BCD: 0xYYYYMMDD
 	uint32 systime();// 03 (0x11) BCD: 0x00HHMMSS
+	int sysgettime(timeval_t* result);
+	sint32 systimeoffset();
 	void sysrest(stduint unit, stduint num);// 04
 	void sysshutdown();
 	void sysreboot();

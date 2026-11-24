@@ -11,6 +11,7 @@ using namespace uni;
 #include "../include/filesys.hpp"
 #include "../include/fileman.hpp" // for DEV_TTY etc
 #include "../include/console.hpp" // for VTTY_OUTQ, SysMessage, vtty_type_t
+
 // VFS and DevFs Implementation
 
 #if !CONFIG_ENABLE_MMU
@@ -1643,6 +1644,14 @@ bool Filesys::MountFilesys(FilesysTrait* fs, file_system_type* type, const char*
 	DeviceNode* source_device_node, stduint device_id, VFSMountOwnership ownership,
 	VFSMountPermissions permissions) {
 	if (!fs) return false;
+#ifdef _FILESYS_DATETIME
+	fs->setTimeSource({
+		[](datime_t& result, void*) -> bool {
+			return Systime::GetDateTime(result);
+		},
+		nullptr
+	});
+#endif
 	auto mount_state = MakeMountState(fs, ownership);
 	if (!mount_state) return false;
 	MutexLocal guard(&vfs_lock);
@@ -2778,16 +2787,7 @@ stduint DevFs::writfl(void* fil_handler, Slice file_slice, const byte* src) {
 // FS
 #include <c/format/filesys/FAT.h>
 #include <c/format/filesys/CD.h>
-#if defined(_FILESYS_DATETIME) && ((_MCCA & 0xFF00) == 0x8600)
-#include <c/driver/RealtimeClock.h>
 
-static bool ReadFatDateTime(datime_t& result, void*) {
-	datime_t date{};
-	if (!Systime::ReadDeviceDateTime(date) || date.year < 1980 || date.year > 2107) return false;
-	result = date;
-	return true;
-}
-#endif
 
 #if CONFIG_FILESYS_UDF
 file_system_type fs_udf = { "udf", [](StorageTrait& storage, stduint dev) -> FilesysTrait* {
@@ -2864,9 +2864,6 @@ file_system_type fs_fat = { "fat", [](StorageTrait& storage, stduint dev) -> Fil
 			byte* fat_buf = new byte[0x1000];
 			FilesysFAT* fs = new FilesysFAT(fat_ver, *p_part, fat_sec_buf, fat_buf);
 			fs->allow_allocate = true;
-#if defined(_FILESYS_DATETIME) && ((_MCCA & 0xFF00) == 0x8600)
-			fs->setTimeSource({ ReadFatDateTime, nullptr });
-#endif
 
 			if (fs->loadfs()) {
 				return fs;

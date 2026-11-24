@@ -267,8 +267,8 @@ public:
 	bool Initialize(pureptr_t fb_addr) {
 		if (layers.Root()) return fb_info.physical_range.address == _IMM(fb_addr);
 		if (!BoardConfig::Ltdc::Panel::Width || !BoardConfig::Ltdc::Panel::Height || !fb_addr) return false;
-		if (!ConfigDeviceGPIN(DeviceType::LTDC)) return false;
-		if (!ConfigDeviceClock(DeviceType::LTDC)) return false;
+		if (!ConfigDeviceGPIN(uni::QrsDeviceList::LTDC)) return false;
+		if (!ConfigDeviceClock(uni::QrsDeviceList::LTDC)) return false;
 		auto& h = uni::LTDC.refHorizontal();
 		h.sync_len = BoardConfig::Ltdc::Panel::HorizontalSyncLength;
 		h.back_porch = BoardConfig::Ltdc::Panel::HorizontalBackPorch;

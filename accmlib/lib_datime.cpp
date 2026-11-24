@@ -23,6 +23,7 @@
 #include "aaaaa.h"
 #include <time.h>
 #include "c/ustring.h"
+#include <c/ISO_IEC_STD/errno.h>
 
 static struct tm g_tm_buf;
 static char g_asctime_buf[26];
@@ -136,6 +137,7 @@ extern "C" double difftime(time_t time1, time_t time0)
 extern "C" time_t mktime(struct tm* timeptr)
 {
 	if (!timeptr) return (time_t)(-1);
+	const sint32 offset_minutes = systimeoffset();
 
 	int year = timeptr->tm_year + 1900;
 	int mon = timeptr->tm_mon;
@@ -226,40 +228,20 @@ extern "C" time_t mktime(struct tm* timeptr)
 	timeptr->tm_yday = yday;
 
 	sint64 total_sec = days * 86400 + (sint64)hour * 3600 + (sint64)min * 60 + sec;
-	return (time_t)total_sec;
+	return (time_t)(total_sec - sint64(offset_minutes) * 60);
 }
 
 extern "C" time_t time(time_t* timer)
 {
-	uint32 d = sysdate();
-	uint32 t = systime();
-	if (d == uint32(-1) || t == uint32(-1)) {
+	timeval_t value{};
+	const int status = sysgettime(&value);
+	if (status < 0) {
+		errno = -status;
 		if (timer) *timer = time_t(-1);
 		return time_t(-1);
 	}
-
-	int year = (int)(((d >> 28) & 0xF) * 1000 + ((d >> 24) & 0xF) * 100 + ((d >> 20) & 0xF) * 10 + ((d >> 16) & 0xF));
-	int month = (int)(((d >> 12) & 0xF) * 10 + ((d >> 8) & 0xF));
-	int day = (int)(((d >> 4) & 0xF) * 10 + (d & 0xF));
-
-	int hour = (int)(((t >> 20) & 0xF) * 10 + ((t >> 16) & 0xF));
-	int min = (int)(((t >> 12) & 0xF) * 10 + ((t >> 8) & 0xF));
-	int sec = (int)(((t >> 4) & 0xF) * 10 + (t & 0xF));
-
-	struct tm tm_curr;
-	tm_curr.tm_sec = sec;
-	tm_curr.tm_min = min;
-	tm_curr.tm_hour = hour;
-	tm_curr.tm_mday = (day >= 1 && day <= 31) ? day : 1;
-	tm_curr.tm_mon = (month >= 1 && month <= 12) ? (month - 1) : 0;
-	tm_curr.tm_year = (year >= 1900) ? (year - 1900) : 70;
-	tm_curr.tm_isdst = 0;
-
-	time_t result = mktime(&tm_curr);
-	if (timer) {
-		*timer = result;
-	}
-	return result;
+	if (timer) *timer = time_t(value.sec);
+	return time_t(value.sec);
 }
 
 extern "C" struct tm* gmtime(const time_t* timer)
@@ -269,7 +251,14 @@ extern "C" struct tm* gmtime(const time_t* timer)
 
 extern "C" struct tm* localtime(const time_t* timer)
 {
-	return time_to_tm(timer, &g_tm_buf);
+	if (!timer) return nullptr;
+	const sint32 offset_minutes = systimeoffset();
+	const sint64 offset = sint64(offset_minutes) * 60;
+	const sint64 maximum = sint64(~uint64(0) >> 1);
+	const sint64 minimum = -maximum - 1;
+	if ((offset > 0 && *timer > maximum - offset) || (offset < 0 && *timer < minimum - offset)) return nullptr;
+	const time_t local = *timer + offset;
+	return time_to_tm(&local, &g_tm_buf);
 }
 
 extern "C" char* asctime(const struct tm* timeptr)

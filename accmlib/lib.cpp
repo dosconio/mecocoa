@@ -58,6 +58,19 @@ uint32 systime()
 	return (uint32)syscall(syscall_t::TIME, 0x11, nil, nil);
 }
 
+_ESYM_C int sysgettime(timeval_t* result) {
+	if (!result) return -EINVAL;
+	if (!syscall(syscall_t::TIME, stduint(syscall_time_operation_t::IsValid), 0, 0)) return -ENODATA;
+	timeval_t value{};
+	value.sec = stdsint(syscall(syscall_t::TIME, stduint(syscall_time_operation_t::GetSystemTime), 0, 0));
+	if (!syscall(syscall_t::TIME, stduint(syscall_time_operation_t::IsValid), 0, 0)) return -ENODATA;
+	*result = value;
+	return 0;
+}
+_ESYM_C sint32 systimeoffset() {
+	return sint32(syscall(syscall_t::TIME, stduint(syscall_time_operation_t::GetUtcOffset), 0, 0));
+}
+
 void sysrest(stduint unit, stduint num)// 4
 {
 	syscall(syscall_t::REST, unit, num, nil);

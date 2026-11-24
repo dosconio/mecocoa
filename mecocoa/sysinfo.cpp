@@ -62,7 +62,7 @@ void mecfetch() {
 	ploginfo("CPU Brand: %s", text_brand());
 
 	datime_t date{};
-	if (Systime::ReadDeviceDateTime(date)) {
+	if (Systime::GetDateTime(date)) {
 		Console.OutFormat("Date Time: %d/%d/%d %d:%d:%d\n\r",
 			date.year, date.month + 1, date.mday, date.hour, date.minute, date.second);
 	}

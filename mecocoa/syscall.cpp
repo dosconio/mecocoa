@@ -218,7 +218,7 @@ DEFSYSC sysc_TIME(stduint unit) {
 		return stduint(Systime::TicksToMilliseconds(Systime::GetTick()));
 	case 0x10: { // Date in BCD: 0xYYYYMMDD
 		datime_t date{};
-		if (!Systime::ReadDeviceDateTime(date)) return stduint(-1);
+		if (!Systime::GetDateTime(date)) return stduint(-1);
 		uint32 bcd_year = ((date.year / 1000) << 12) | (((date.year / 100) % 10) << 8) | (((date.year / 10) % 10) << 4) | (date.year % 10);
 		uint32 bcd_mon = (((date.month + 1) / 10) << 4) | ((date.month + 1) % 10);
 		uint32 bcd_mday = ((date.mday / 10) << 4) | (date.mday % 10);
@@ -226,11 +226,25 @@ DEFSYSC sysc_TIME(stduint unit) {
 	}
 	case 0x11: { // Time in BCD: 0x00HHMMSS
 		datime_t date{};
-		if (!Systime::ReadDeviceDateTime(date)) return stduint(-1);
+		if (!Systime::GetDateTime(date)) return stduint(-1);
 		uint32 bcd_hour = ((date.hour / 10) << 4) | (date.hour % 10);
 		uint32 bcd_min = ((date.minute / 10) << 4) | (date.minute % 10);
 		uint32 bcd_sec = ((date.second / 10) << 4) | (date.second % 10);
 		return (bcd_hour << 16) | (bcd_min << 8) | bcd_sec;
+	}
+	case stduint(syscall_time_operation_t::GetSystemTime): {
+		timeval_t value{};
+		return Systime::GetSystemTime(value) ? stdsint(value.sec) : -1;
+	}
+	case stduint(syscall_time_operation_t::IsValid): {
+		SystemTimeInfo info{};
+		Systime::GetSystemTimeInfo(info);
+		return info.valid ? 1 : 0;
+	}
+	case stduint(syscall_time_operation_t::GetUtcOffset): {
+		SystemTimeInfo info{};
+		Systime::GetSystemTimeInfo(info);
+		return info.config.utc_offset_minutes;
 	}
 	default:
 		plogwarn("Invalid time unit: %u", unit);

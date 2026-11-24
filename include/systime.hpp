@@ -37,6 +37,20 @@ struct TimeDevice {
 	bool (*ReadCounter)(void*, uint64&) = nullptr;
 };
 
+struct DateTimeConfig {
+	sint32 utc_offset_minutes = 0;
+	TimeBasis unknown_device_basis = TimeBasis::Unknown;
+};
+
+enum class SystemTimeOrigin : byte { Unset, Manual, Device };
+
+struct SystemTimeInfo {
+	bool valid = false;
+	SystemTimeOrigin origin = SystemTimeOrigin::Unset;
+	DateTimeConfig config;
+	uint32 resolution_us = 0;
+};
+
 struct ThreadTimerState {
 	uni::Atomic<bool> closed{ false };
 };
@@ -46,6 +60,29 @@ public:
 	static bool Initialize() { SysTimer::Initialize(); return true; }
 	
 public: // system date and time
+
+	// Thread-context calls. Fixed offsets are minutes east of UTC, within -1440..1440.
+	static bool
+		ConfigureDateTime(const DateTimeConfig& config);
+	// UTC seconds since 1970-01-01, with 0 <= mic < 1000000. Failure preserves output.
+	static bool
+		GetSystemTime(timeval_t& result);
+	static bool
+		SetSystemTime(const timeval_t& value);
+	// Calendar dates use the configured local offset, full years 0..9999, and zero-based months.
+	static bool
+		GetDateTime(datime_t& result);
+	static bool
+		SetDateTime(const datime_t& value);
+	// Reads the selected source, then falls back by priority. A concurrent setting cancels the import.
+	static bool
+		SyncFromDevice(DeviceNode* node = nullptr);
+	// Writes a snapshot; the system clock keeps running if the backend is absent or fails.
+	static bool
+		SyncToDevice(DeviceNode* node = nullptr);
+	// Available even before the date has been set; inspect result.valid.
+	static void
+		GetSystemTimeInfo(SystemTimeInfo& result);
 
 public: // manage devices of timers(RTC, vmware-datime...) and datetimes
 

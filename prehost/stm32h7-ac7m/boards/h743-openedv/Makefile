@@ -90,6 +90,7 @@ CPP_SOURCES := \
 	prehost/stm32h7-ac7m/boards/h743-openedv/h743-openedv.cpp \
 	prehost/stm32h7-ac7m/mem.cpp \
 	devdriv/storage/sdcard.cpp \
+	devdriv/timer/timer-rtc.cpp \
 	devdriv/tty/serial.cpp \
 	devdriv/video/video-ltdc.cpp \
 	devdriv/touch/touch-gtxxx.cpp \

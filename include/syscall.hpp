@@ -3,6 +3,19 @@
 
 #include <c/datime.h>
 
+// Single-unit TIME reads; UTC seconds are truncated to the native signed width.
+enum
+	#ifdef _INC_CPP
+	class
+	#endif
+	syscall_time_operation_t
+	#ifdef _INC_CPP
+	: stduint
+	#endif
+{
+	GetSystemTime = 0x20, IsValid, GetUtcOffset
+};
+
 // DELF keeps the legacy unlink result and returns zero or negative errno for directory removal.
 enum
 	#ifdef _INC_CPP
@@ -29,7 +42,7 @@ enum
 	OUTC, // outstr (chr/str, len)->0  |.x86 x64 rv
 	INNC, // innstr (blk,&kc,&prop)->ch| x86 x64 rv
 	EXIT, // exit   (code)             | x86 x64 rv
-	TIME, // getsec (0sec/1ms)->second | x86 x64
+	TIME, // uptime (0/1), local BCD (0x10/0x11), system clock (0x20..0x22)
 	REST, // halt   (unit, time)       | x86 x64
 	COMM, // syncom (mod, obj, &msg)   | x86 x64 rv
 	// [Fileops]

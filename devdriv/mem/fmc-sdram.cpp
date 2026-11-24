@@ -25,7 +25,7 @@ extern const RMOD_LIST RMOD_LIST_FMC_SDRAM{
 
 // SDRAM initialization: controller setup, clock enable, precharge, auto-refresh, mode register, and refresh rate.
 bool sdram_init() {
-	if (!ConfigDeviceGPIN(DeviceType::FmcSDRAM)) return false;
+	if (!ConfigDeviceGPIN(uni::QrsDeviceList::FmcSDRAM)) return false;
 	if (!FMC.SDRAM.setMode(BoardConfig::Sdram::ControllerConfig, BoardConfig::Sdram::Timing)) return false;
 
 	SDRAMCommand cmd;
