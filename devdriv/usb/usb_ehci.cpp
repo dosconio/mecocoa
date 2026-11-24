@@ -674,7 +674,7 @@ namespace {
 			}
 		}
 		if (have_running_controller) {
-			ehci_poll_armed = Systimex::AppendDeferredCallback(
+			ehci_poll_armed = Systime::AppendDeferredCallback(
 				EhciPollIntervalTicks, 0, (_tocall_ft)PollEhciControllers);
 			if (!ehci_poll_armed) {
 				plogerro("[EHCI] cannot re-arm deferred polling");
@@ -684,7 +684,7 @@ namespace {
 
 	bool ArmEhciPolling() {
 		if (ehci_poll_armed) return true;
-		ehci_poll_armed = Systimex::AppendDeferredCallback(
+		ehci_poll_armed = Systime::AppendDeferredCallback(
 			EhciPollIntervalTicks, 0, (_tocall_ft)PollEhciControllers);
 		if (!ehci_poll_armed) {
 			plogerro("[EHCI] cannot arm deferred polling");

@@ -164,7 +164,7 @@ static void poll_xhci_policy(pureptr_t, stduint) {
 			instance->policy_error_reported = false;
 		}
 	}
-	xhci_policy_tick_armed = Systimex::AppendDeferredCallback(
+	xhci_policy_tick_armed = Systime::AppendDeferredCallback(
 		XHCIPolicyTicks, 0, (_tocall_ft)poll_xhci_policy);
 	if (!xhci_policy_tick_armed) {
 		plogerro("xHCI cannot re-arm delayed policy tick");
@@ -173,7 +173,7 @@ static void poll_xhci_policy(pureptr_t, stduint) {
 
 static bool arm_xhci_policy_tick() {
 	if (xhci_policy_tick_armed) return true;
-	xhci_policy_tick_armed = Systimex::AppendDeferredCallback(
+	xhci_policy_tick_armed = Systime::AppendDeferredCallback(
 		XHCIPolicyTicks, 0, (_tocall_ft)poll_xhci_policy);
 	if (!xhci_policy_tick_armed) {
 		plogerro("xHCI cannot arm delayed policy tick");
@@ -222,7 +222,7 @@ static void poll_xhci_events(pureptr_t, stduint) {
 		(void)device_interrupt_retry(IRQ_xHCI);
 	}
 	(void)arm_xhci_policy_tick();
-	xhci_event_watchdog_armed = Systimex::AppendDeferredCallback(
+	xhci_event_watchdog_armed = Systime::AppendDeferredCallback(
 		XHCIEventWatchdogTicks, 0, (_tocall_ft)poll_xhci_events);
 	if (!xhci_event_watchdog_armed) {
 		plogerro("xHCI cannot re-arm event watchdog");
@@ -231,7 +231,7 @@ static void poll_xhci_events(pureptr_t, stduint) {
 
 static bool arm_xhci_event_watchdog() {
 	if (xhci_event_watchdog_armed) return true;
-	xhci_event_watchdog_armed = Systimex::AppendDeferredCallback(
+	xhci_event_watchdog_armed = Systime::AppendDeferredCallback(
 		XHCIEventWatchdogTicks, 0, (_tocall_ft)poll_xhci_events);
 	if (!xhci_event_watchdog_armed) {
 		plogerro("xHCI cannot arm event watchdog");

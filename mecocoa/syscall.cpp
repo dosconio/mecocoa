@@ -268,7 +268,7 @@ DEFSYSC sysc_REST(stduint unit, stduint time) {
 	bool state_rupt = IC.TryMaskInterrupt();
 
 	th->Block(ThreadBlock::BlockReason::BR_Resting); // Block the thread to wait for timer
-	if (!Systimex::AppendThreadWake(timeout, th->tid)) {
+	if (!Systime::AppendThreadWake(timeout, th->tid)) {
 		th->Unblock(ThreadBlock::BlockReason::BR_Resting);
 		if (state_rupt) IC.enInterrupt(true);
 		Taskman::Schedule(true);

@@ -218,7 +218,7 @@ namespace Devs {
 					service_state_.compare_exchange(expected, byte(USBMSCServiceState::Finished),
 					uni::MemoryOrder_Acq_Rel, uni::MemoryOrder_Acquire)) {
 					if (wait_armed_.load(uni::MemoryOrder_Acquire)) {
-						Systimex::CancelThreadWake(service_source_);
+						Systime::CancelThreadWake(service_source_);
 						(void)Taskman::UnblockThread(service_source_, ThreadBlock::BlockReason::BR_Resting);
 					}
 					Release(); // The service releases the reference acquired before enqueueing.
@@ -242,7 +242,7 @@ namespace Devs {
 					return false;
 				}
 				const stduint start = tick;
-				if (!Systimex::AppendThreadWake(USBMSCCommandTimeoutTicks, thread->tid)) {
+				if (!Systime::AppendThreadWake(USBMSCCommandTimeoutTicks, thread->tid)) {
 					IC.enInterrupt(true);
 					return false;
 				}
@@ -270,7 +270,7 @@ namespace Devs {
 					service_state_.store(byte(USBMSCServiceState::Idle), uni::MemoryOrder_Release);
 					wait_state_.store(byte(USBMSCWaitState::Idle), uni::MemoryOrder_Release);
 					wait_armed_.store(0, uni::MemoryOrder_Release);
-					Systimex::CancelThreadWake(thread->tid);
+					Systime::CancelThreadWake(thread->tid);
 					Release();
 					Release();
 					IC.enInterrupt(true);
@@ -304,7 +304,7 @@ namespace Devs {
 
 				const bool cleanup = IC.TryMaskInterrupt();
 				wait_armed_.store(0, uni::MemoryOrder_Release);
-				Systimex::CancelThreadWake(thread->tid);
+				Systime::CancelThreadWake(thread->tid);
 				const bool success = service_state_.load(uni::MemoryOrder_Acquire) == byte(USBMSCServiceState::Finished) &&
 					wait_state_.load(uni::MemoryOrder_Acquire) == byte(USBMSCWaitState::Completed) &&
 					pending_command_id_.load(uni::MemoryOrder_Acquire) == completed_command_id_.load(uni::MemoryOrder_Acquire) &&
@@ -354,7 +354,7 @@ namespace Devs {
 				wait_armed_.store(1, uni::MemoryOrder_Release);
 				bool timer_added = false;
 				if (wait_state_.load(uni::MemoryOrder_Acquire) == byte(USBMSCWaitState::Pending)) {
-					timer_added = Systimex::AppendThreadWake(USBMSCCommandTimeoutTicks, thread->tid);
+					timer_added = Systime::AppendThreadWake(USBMSCCommandTimeoutTicks, thread->tid);
 					if (!timer_added) {
 						byte expected = byte(USBMSCWaitState::Pending);
 						(void)wait_state_.compare_exchange(expected, byte(USBMSCWaitState::TimedOut),
@@ -368,7 +368,7 @@ namespace Devs {
 				}
 
 				wait_armed_.store(0, uni::MemoryOrder_Release);
-				if (timer_added) Systimex::CancelThreadWake(thread->tid);
+				if (timer_added) Systime::CancelThreadWake(thread->tid);
 				byte expected = byte(USBMSCWaitState::Pending);
 				(void)wait_state_.compare_exchange(expected,
 					byte(USBMSCWaitState::TimedOut), uni::MemoryOrder_Acq_Rel,
@@ -496,7 +496,7 @@ namespace Devs {
 					const bool restore = IC.TryMaskInterrupt();
 					service_state_.store(byte(USBMSCServiceState::Quarantined), uni::MemoryOrder_Release);
 					if (wait_armed_.load(uni::MemoryOrder_Acquire)) {
-						Systimex::CancelThreadWake(service_source_);
+						Systime::CancelThreadWake(service_source_);
 						(void)Taskman::UnblockThread(service_source_, ThreadBlock::BlockReason::BR_Resting);
 					}
 					if (restore) IC.enInterrupt(true);
@@ -561,7 +561,7 @@ namespace Devs {
 				if (!wait_armed_.load(uni::MemoryOrder_Acquire)) return;
 				auto* waiter = waiter_.load(uni::MemoryOrder_Acquire);
 				if (!waiter) return;
-				Systimex::CancelThreadWake(waiter->tid);
+				Systime::CancelThreadWake(waiter->tid);
 				waiter->Unblock(ThreadBlock::BlockReason::BR_Resting);
 				#endif
 			}
@@ -580,7 +580,7 @@ namespace Devs {
 				if (!wait_armed_.load(uni::MemoryOrder_Acquire)) return;
 				auto* waiter = waiter_.load(uni::MemoryOrder_Acquire);
 				if (!waiter) return;
-				Systimex::CancelThreadWake(waiter->tid);
+				Systime::CancelThreadWake(waiter->tid);
 				waiter->Unblock(ThreadBlock::BlockReason::BR_Resting);
 			}
 
@@ -616,7 +616,7 @@ namespace Devs {
 			bool QueueProbe(stduint delay = 0) {
 				Retain();
 				if (delay) {
-					if (Systimex::AppendDriverMessage(delay, Task_FileSys,
+					if (Systime::AppendDriverMessage(delay, Task_FileSys,
 						_IMM(FilemanMsg::USB_MSC_PROBE), reinterpret_cast<stduint>(this))) return true;
 					Release();
 					return false;
@@ -1097,7 +1097,7 @@ namespace Devs {
 		USBMSCDisconnectContext* message = context;
 		if (!syssend_async(Task_FileSys, &message, sizeof(message),
 			_IMM(FilemanMsg::USB_MSC_UNMOUNT))) return true;
-		if (Systimex::AppendDriverMessage(USBMSCDisconnectRetryTicks, Task_FileSys,
+		if (Systime::AppendDriverMessage(USBMSCDisconnectRetryTicks, Task_FileSys,
 			_IMM(FilemanMsg::USB_MSC_UNMOUNT), reinterpret_cast<stduint>(context))) {
 			plogwarn("USB MSC unmount queue delayed controller node=%s",
 				context->device_node && context->device_node->link.addr ?
@@ -1196,7 +1196,7 @@ void Devsman::UnmountUSBMSCStorage(void* context) {
 				plogwarn("USB MSC disconnected storage waiting for unmount attempt=%u",
 					(stduint)disconnect->unmount_attempts);
 			}
-			if (!Systimex::AppendDriverMessage(Devs::USBMSCDisconnectRetryTicks, Task_FileSys,
+			if (!Systime::AppendDriverMessage(Devs::USBMSCDisconnectRetryTicks, Task_FileSys,
 				_IMM(FilemanMsg::USB_MSC_UNMOUNT), reinterpret_cast<stduint>(disconnect))) {
 				plogerro("USB MSC cannot schedule unmount retry");
 			}
@@ -1206,7 +1206,7 @@ void Devsman::UnmountUSBMSCStorage(void* context) {
 	Devs::USBMSCDisconnectContext* message = disconnect;
 	if (!syssend_async(Task_Devsman, &message, sizeof(message),
 		_IMM(DevsmanMsg::USB_MSC_REMOVE))) return;
-	if (!Systimex::AppendDriverMessage(Devs::USBMSCDisconnectRetryTicks, Task_Devsman,
+	if (!Systime::AppendDriverMessage(Devs::USBMSCDisconnectRetryTicks, Task_Devsman,
 		_IMM(DevsmanMsg::USB_MSC_REMOVE), reinterpret_cast<stduint>(disconnect))) {
 		plogerro("USB MSC removal queue failed");
 	}

@@ -3357,7 +3357,7 @@ enum class NetIPv4ConfigSource : uint8 {
 		if (net_timer_armed && net_timer_deadline <= deadline) return;
 		const stduint delay = deadline > tick ? deadline - tick : 1;
 		const stduint generation = ++net_timer_generation;
-		if (!Systimex::AppendDriverMessage(delay, Task_Net_Serv,
+		if (!Systime::AppendDriverMessage(delay, Task_Net_Serv,
 			_IMM(NetworkMsg::TIMER_EXPIRED), generation)) {
 			net_timer_armed = false;
 			net_timer_deadline = 0;
@@ -3372,7 +3372,7 @@ enum class NetIPv4ConfigSource : uint8 {
 		const stduint value = 0;
 		if (!syssend_async(Task_Net_Serv, &value, sizeof(value),
 			_IMM(NetworkMsg::TIMER_REFRESH))) return;
-		(void)Systimex::AppendDriverMessage(1, Task_Net_Serv,
+		(void)Systime::AppendDriverMessage(1, Task_Net_Serv,
 			_IMM(NetworkMsg::TIMER_REFRESH), 0);
 	}
 

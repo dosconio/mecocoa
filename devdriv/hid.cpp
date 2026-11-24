@@ -1487,10 +1487,10 @@ namespace {
 
 	void CancelHidI2cDeferredCallbacks(HidInputRuntime& runtime) {
 		const stduint context = reinterpret_cast<stduint>(&runtime);
-		(void)Systimex::CancelDeferredCallback(context, (_tocall_ft)ContinueHidI2cInput);
-		(void)Systimex::CancelDeferredCallback(context, (_tocall_ft)ActivateHidI2c);
-		(void)Systimex::CancelDeferredCallback(context, (_tocall_ft)ExpireHidI2cReset);
-		(void)Systimex::CancelDeferredCallback(context, (_tocall_ft)RecoverHidI2c);
+		(void)Systime::CancelDeferredCallback(context, (_tocall_ft)ContinueHidI2cInput);
+		(void)Systime::CancelDeferredCallback(context, (_tocall_ft)ActivateHidI2c);
+		(void)Systime::CancelDeferredCallback(context, (_tocall_ft)ExpireHidI2cReset);
+		(void)Systime::CancelDeferredCallback(context, (_tocall_ft)RecoverHidI2c);
 		runtime.input_continuation_scheduled = false;
 		runtime.recovery_scheduled = false;
 	}
@@ -1567,7 +1567,7 @@ namespace {
 
 	bool ScheduleHidI2cInput(HidInputRuntime& runtime, stduint delay) {
 		if (runtime.input_continuation_scheduled) return true;
-		if (!Systimex::AppendDeferredCallback(delay, reinterpret_cast<stduint>(&runtime), (_tocall_ft)ContinueHidI2cInput)) return false;
+		if (!Systime::AppendDeferredCallback(delay, reinterpret_cast<stduint>(&runtime), (_tocall_ft)ContinueHidI2cInput)) return false;
 		runtime.input_continuation_scheduled = true;
 		return true;
 	}
@@ -1576,9 +1576,9 @@ namespace {
 		if (runtime.activation_state == HidI2cActivationState::Stopping || runtime.activation_state == HidI2cActivationState::Failed) return false;
 		if (runtime.activation_state != HidI2cActivationState::Recovering) {
 			const stduint context = reinterpret_cast<stduint>(&runtime);
-			(void)Systimex::CancelDeferredCallback(context, (_tocall_ft)ContinueHidI2cInput);
-			(void)Systimex::CancelDeferredCallback(context, (_tocall_ft)ActivateHidI2c);
-			(void)Systimex::CancelDeferredCallback(context, (_tocall_ft)ExpireHidI2cReset);
+			(void)Systime::CancelDeferredCallback(context, (_tocall_ft)ContinueHidI2cInput);
+			(void)Systime::CancelDeferredCallback(context, (_tocall_ft)ActivateHidI2c);
+			(void)Systime::CancelDeferredCallback(context, (_tocall_ft)ExpireHidI2cReset);
 			runtime.input_continuation_scheduled = false;
 			ReleaseHidInputState(runtime);
 			runtime.pending_report_count = 0;
@@ -1587,7 +1587,7 @@ namespace {
 		}
 		runtime.recovery_failure = failure;
 		if (runtime.recovery_scheduled) return true;
-		if (!Systimex::AppendDeferredCallback(HidI2cRecoveryDelay, reinterpret_cast<stduint>(&runtime), (_tocall_ft)RecoverHidI2c)) return false;
+		if (!Systime::AppendDeferredCallback(HidI2cRecoveryDelay, reinterpret_cast<stduint>(&runtime), (_tocall_ft)RecoverHidI2c)) return false;
 		runtime.recovery_scheduled = true;
 		return true;
 	}
@@ -1621,7 +1621,7 @@ namespace {
 		}
 		runtime.ALPS_initialized = false;
 		runtime.activation_state = HidI2cActivationState::ResetPending;
-		(void)Systimex::CancelDeferredCallback(reinterpret_cast<stduint>(&runtime), (_tocall_ft)ExpireHidI2cReset);
+		(void)Systime::CancelDeferredCallback(reinterpret_cast<stduint>(&runtime), (_tocall_ft)ExpireHidI2cReset);
 		runtime.pending_report_count = 0;
 		runtime.input_retry_count = 0;
 		runtime.empty_interrupt_count = 0;
@@ -1631,7 +1631,7 @@ namespace {
 			failure = HidI2cFailure::GPIOCompletion;
 			return false;
 		}
-		if (!Systimex::AppendDeferredCallback(HidI2cResetTimeout, reinterpret_cast<stduint>(&runtime), (_tocall_ft)ExpireHidI2cReset)) {
+		if (!Systime::AppendDeferredCallback(HidI2cResetTimeout, reinterpret_cast<stduint>(&runtime), (_tocall_ft)ExpireHidI2cReset)) {
 			(void)runtime.device->ExpireReset(result);
 			failure = HidI2cFailure::ResetSchedule;
 			return false;
@@ -1677,7 +1677,7 @@ namespace {
 		if (RetryableHidI2cInputStatus(result)) return HidI2cInputDisposition::Retry;
 		if (status == uni::HIDI2CStatus::ResetComplete) {
 			if (!InitializeHidInputProtocol(runtime)) return runtime.activation_state == HidI2cActivationState::Failed ? HidI2cInputDisposition::Fatal : HidI2cInputDisposition::Ignored;
-			(void)Systimex::CancelDeferredCallback(reinterpret_cast<stduint>(&runtime), (_tocall_ft)ExpireHidI2cReset);
+			(void)Systime::CancelDeferredCallback(reinterpret_cast<stduint>(&runtime), (_tocall_ft)ExpireHidI2cReset);
 			runtime.activation_state = HidI2cActivationState::Running;
 			runtime.recovery_attempts = 0;
 			runtime.empty_interrupt_count = 0;
@@ -1849,7 +1849,7 @@ namespace {
 	}
 	#endif
 	bool ScheduleHidI2cActivation(HidInputRuntime& runtime) {
-		return Systimex::AppendDeferredCallback(HidI2cActivationDelay, reinterpret_cast<stduint>(&runtime), (_tocall_ft)ActivateHidI2c);
+		return Systime::AppendDeferredCallback(HidI2cActivationDelay, reinterpret_cast<stduint>(&runtime), (_tocall_ft)ActivateHidI2c);
 	}
 
 	void ExpireHidI2cReset(pureptr_t, stduint context) {

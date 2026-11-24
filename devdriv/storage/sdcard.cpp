@@ -363,7 +363,7 @@ static void SdCardPoll(void*, ...) {
 			sd_offline_wait = SD_OFFLINE_WAIT;
 		}
 	}
-	sd_poll_armed = Systimex::AppendDeferredCallback(SD_POLL_INTERVAL, 0, (_tocall_ft)SdCardPoll);
+	sd_poll_armed = Systime::AppendDeferredCallback(SD_POLL_INTERVAL, 0, (_tocall_ft)SdCardPoll);
 	if (!sd_poll_armed) plogerro("[SD] cannot re-arm the card polling");
 }
 
@@ -373,7 +373,7 @@ void R_SDCARD_INIT() {
 	if (!sd_host_node) plogwarn("[SD] SDMMC1 node registration failed");
 	if (!SdmmcRegisterHost("sdmmc2", SDCard2, false)) plogwarn("[SD] SDMMC2 node registration failed");
 #endif
-	if (!Systimex::AppendDeferredCallback(10, 0, (_tocall_ft)SdCardPoll)) {
+	if (!Systime::AppendDeferredCallback(10, 0, (_tocall_ft)SdCardPoll)) {
 		plogerro("[SD] cannot append the bring-up action");
 	}
 }

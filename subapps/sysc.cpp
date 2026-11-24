@@ -18,6 +18,10 @@ int main(int argc, char** argv) {
 
 	if (num_args == 1) {
 		args[ptr++] = _IMM(syscall_t::DBUG);
+		if (ascii_isalpha(argv[1][0])) {
+			args[ptr++] = argv[1][0];
+			num_args = 0;// sysc s
+		}
 	}
 
 

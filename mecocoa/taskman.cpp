@@ -344,7 +344,7 @@ auto Taskman::AllocateThread() -> ThreadBlock* {
 void Taskman::DestroyThread(ThreadBlock* th) {
 	if (!th) return;
 	// Final reclamation also closes timers for threads reaching this path directly.
-	Systimex::CancelThreadTimers(th->timer_state);
+	Systime::CancelThreadTimers(th->timer_state);
 	extern void CleanupPwcallThreadInterrupts(stduint tid);
 	// [HYP-C] Verify thread is not still running on any CPU before freeing its stack
 	while (true) {
@@ -466,7 +466,7 @@ bool Taskman::ExitCurrent(stduint code) {
 
 	stduint para[2] = { pid, code };
 	// Stop this thread's timers before requesting asynchronous process termination.
-	if (auto* th = CurrentTB()) Systimex::CancelThreadTimers(th->timer_state);
+	if (auto* th = CurrentTB()) Systime::CancelThreadTimers(th->timer_state);
 	syssend_async(Task_TaskMan, sliceof(para), _IMM(TaskmanMsg::EXIT));
 
 	if (auto th = CurrentTB()) {
@@ -837,7 +837,7 @@ bool Taskman::Exit(ProcessBlock* p, stdsint exit_code)
 		p->state = ProcessBlock::State::Expiring; // Mark as terminating immediately
 		// Close every target state before process teardown can wait for other resources.
 		for (auto* th = p->thread_list_head; th; th = th->process_thread_next) {
-			Systimex::CancelThreadTimers(th->timer_state);
+			Systime::CancelThreadTimers(th->timer_state);
 		}
 	}
 

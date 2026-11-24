@@ -4846,7 +4846,7 @@ namespace {
 			Consman::DispatchDeferredWake();
 			break;
 		case DeviceEventKind::TimerExpired:
-			Systimex::DispatchExpired();
+			Systime::DispatchExpired();
 			break;
 		case DeviceEventKind::Interrupt:
 			#if (_MCCA & 0xFF00) == 0x8600

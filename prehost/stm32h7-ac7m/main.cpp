@@ -29,7 +29,7 @@ void _test() {
 		auto th = Taskman::CurrentTB();
 		bool state_rupt = IC.TryMaskInterrupt();
 		th->Block(ThreadBlock::BlockReason::BR_Resting);
-		Systimex::AppendThreadWake(100, th->tid);// 100 ticks = 1s @ CONFIG_SysTickFreq
+		Systime::AppendThreadWake(100, th->tid);// 100 ticks = 1s @ CONFIG_SysTickFreq
 		if (state_rupt) IC.enInterrupt(true);
 		Taskman::Schedule(true);
 	}
@@ -202,7 +202,7 @@ _ESYM_C void SysTick_Handler_Mcca(stduint returns_to_thread) {
 	SysTick_Handler();
 	if (inited) {
 		tick++;
-		Systimex::CollectExpired();
+		Systime::CollectExpired();
 		if (returns_to_thread) Taskman::Schedule();
 	}
 }

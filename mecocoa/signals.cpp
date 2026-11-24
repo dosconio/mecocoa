@@ -428,7 +428,7 @@ static void wakeup_thread_for_signal(ThreadBlock* th, int sig) {
 		if (_IMM(th->block_reason) & ThreadBlock::BR_Interruptible) {
 			// 1. Sleep Timer Cleanup
 			if (th->block_reason & ThreadBlock::BlockReason::BR_Resting) {
-				Systimex::CancelThreadWake(th->tid);
+				Systime::CancelThreadWake(th->tid);
 			}
 
 			// 2. IPC Message Cleanup

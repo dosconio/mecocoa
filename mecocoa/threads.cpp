@@ -192,7 +192,7 @@ bool Taskman::ExitThread(stduint code) {
 	}
 
 	// Close worker timers before publishing completion to a joining thread.
-	Systimex::CancelThreadTimers(th->timer_state);
+	Systime::CancelThreadTimers(th->timer_state);
 
 	ThreadBlock* joiner = nullptr;
 	{

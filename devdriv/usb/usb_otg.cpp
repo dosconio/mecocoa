@@ -369,7 +369,7 @@ namespace {
 		const bool armed = runtime.timer_armed;
 		runtime.timer_armed = runtime.timer_due = false;
 		if (!++runtime.timer_serial) ++runtime.timer_serial;
-		if (armed) Systimex::CancelDeferredCallback(serial, (_tocall_ft)TimerReady);
+		if (armed) Systime::CancelDeferredCallback(serial, (_tocall_ft)TimerReady);
 		if (restore) IC.enInterrupt(true);
 	}
 
@@ -377,7 +377,7 @@ namespace {
 		CancelTimer(runtime);
 		const bool restore = IC.TryMaskInterrupt();
 		runtime.timer_armed = true;
-		const bool armed = Systimex::AppendDeferredCallback(
+		const bool armed = Systime::AppendDeferredCallback(
 			OtgTicks(milliseconds), runtime.timer_serial, (_tocall_ft)TimerReady);
 		if (!armed) runtime.timer_armed = false;
 		if (restore) IC.enInterrupt(true);

@@ -761,7 +761,7 @@ static void _TryStartUserApp() {
 	const auto& runtime_root = Filesys::GetSystemRuntimeRootPath();
 	if (!runtime_root.getByteCount()) {
 		if (++_usr_app_retry_count <= _usr_app_retry_limit) {
-			(void)Systimex::AppendDriverMessage(_usr_app_retry_delay, Task_FileSys, _IMM(FilemanMsg::TEST));
+			(void)Systime::AppendDriverMessage(_usr_app_retry_delay, Task_FileSys, _IMM(FilemanMsg::TEST));
 		}
 		else plogerro("[Fileman] no runtime root, the user app is not started");
 		return;

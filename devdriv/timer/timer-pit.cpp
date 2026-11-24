@@ -59,7 +59,7 @@ void Handint_PIT()
 	time++;
 	if (time % (1000 / CONFIG_SysTickFreq) == 0) {
 		tick++;
-		Systimex::CollectExpired();
+		Systime::CollectExpired();
 	}
 	static_assert(1000 / CONFIG_SysTickFreq > 0, "SysTickFreq must be greater than 0");
 	if (time >= 1000) {

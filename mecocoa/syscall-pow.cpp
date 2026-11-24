@@ -2150,7 +2150,7 @@ stdsint HandlePwcall(syscall_t callid, stduint p1, stduint p2, stduint p3) {
 	case syscall_t::POWERCALL_DEV_TIMER:
 		#if (_MCCA & 0xFF00) == 0x8600
 		if (!ResolvePwcallDeviceHandle(pb, p1) || !p2) return -1;
-		return Systimex::AppendDriverMessage(p2, Taskman::CurrentTID(),
+		return Systime::AppendDriverMessage(p2, Taskman::CurrentTID(),
 			_IMM(KernelMsg::DeviceTimeout), p3) ? 0 : -1;
 		#else
 		return -1;

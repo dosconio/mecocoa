@@ -6,19 +6,17 @@
 #include <cpp/lock>
 #include <c/driver/mouse.h>
 #include <c/system/paging.h>
-#include <cpp/Device/_Timer.hpp>
 #include <cpp/trait/BlockTrait.hpp>
 #include <cpp/queue>
 #include <cpp/vector>
 #include <cpp/atomic>
-#include <c/API-POSIX/sys/mman.h>
 
 #include "fileman.hpp"
 #include "syscall.hpp"
 #include "userman.hpp"
 #include "taskman.com.hpp"
+#include <c/API-POSIX/sys/mman.h>
 #include <c/ISO_IEC_STD/signal.h>
-#include <c/system/memory.h>
 #include <cpp/ISO_IEC_STD/memory>
 
 #if defined(_ARCH_ARM_ProfileM)
@@ -28,29 +26,6 @@
 namespace uni { struct PipeChannel; }
 namespace Devs { struct StorageWaitContext; struct StorageWaiter; }
 
-struct ThreadTimerState {
-	uni::Atomic<bool> closed{false};
-};
-
-struct Systimex {
-	static void
-		CollectExpired();
-	static void
-		DispatchExpired();
-	static bool
-		AppendThreadWake(stduint timeout, stduint tid);
-	static bool
-		AppendDriverMessage(stduint timeout, stduint target_tid,
-			stduint message_type, stduint value = 0);
-	static bool
-		AppendDeferredCallback(stduint timeout, stduint iden,
-			_tocall_ft hand);
-	static stduint CancelDeferredCallback(stduint iden, _tocall_ft hand = nullptr);
-	static void
-		CancelThreadWake(stduint tid);
-	// Called by kernel exit and reclamation paths; safe while scheduler_lock is held.
-	static void CancelThreadTimers(const uni::SharedPtr<ThreadTimerState>& owner);
-};
 struct MccaRectangle {
 	stduint x = 0, y = 0, w = 0, h = 0;
 	auto toRectangle() -> uni::Rectangle { return Rectangle(Point2(x, y), Size2(w, h)); }

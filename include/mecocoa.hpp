@@ -43,7 +43,7 @@
 #undef  CONFIG_FILESYS_UDF
 #define CONFIG_FILESYS_UDF 0
 #endif
-#define Systime SysTimer
+
 
 #if (_MCCA & 0xFF00) == 0x1000
 #undef _GUI_ENABLE
@@ -113,6 +113,7 @@ extern uni::Atomic<stduint> tick;
 
 #include "memoman.hpp"
 #include "syscall.hpp"
+#include "systime.hpp"
 #include "taskman.hpp"
 void serv_task_loop();
 #include "console.hpp"

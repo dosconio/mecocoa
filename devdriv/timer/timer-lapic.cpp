@@ -34,7 +34,7 @@ __attribute__((/*interrupt, */target("general-regs-only")))// the stack is ready
 void Handint_LAPICT(/*InterruptFrame* frame*/) {
 	tick = tick + 1;// mecocoa_global->system_time.mic++
 	IC.SendEOI(IRQ_LAPICTimer);
-	Systimex::CollectExpired();
+	Systime::CollectExpired();
 
 	#if _GUI_DOUBLE_BUFFER
 	RenderFrameFlush();

@@ -418,7 +418,7 @@ namespace {
 			PollUhciKeyboard(controller);
 		}
 		if (have_running_controller) {
-			uhci_poll_armed = Systimex::AppendDeferredCallback(
+			uhci_poll_armed = Systime::AppendDeferredCallback(
 				UhciPollIntervalTicks, 0, (_tocall_ft)PollUhciControllers);
 			if (!uhci_poll_armed) {
 				plogerro("[UHCI] cannot re-arm deferred polling");
@@ -428,7 +428,7 @@ namespace {
 
 	bool ArmUhciPolling() {
 		if (uhci_poll_armed) return true;
-		uhci_poll_armed = Systimex::AppendDeferredCallback(
+		uhci_poll_armed = Systime::AppendDeferredCallback(
 			UhciPollIntervalTicks, 0, (_tocall_ft)PollUhciControllers);
 		if (!uhci_poll_armed) {
 			plogerro("[UHCI] cannot arm deferred polling");

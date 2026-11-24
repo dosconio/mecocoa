@@ -493,7 +493,7 @@ void R_LTDC_INIT() {
 	rgb_lcd->EnableVBlank();
 	rgb_lcd_initialized = true;
 	// Devsman dispatches this callback after the fixed service IDs have been allocated.
-	if (!Systimex::AppendDeferredCallback(1, 0, (_tocall_ft)StartLcdDeviceThread)) {
+	if (!Systime::AppendDeferredCallback(1, 0, (_tocall_ft)StartLcdDeviceThread)) {
 		plogerro("[LTDC] cannot append the device thread start action");
 	}
 }

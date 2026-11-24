@@ -369,7 +369,7 @@ namespace Devs {
 		target = context;
 		callback = handler;
 		deadline = next;
-		armed = Systimex::AppendDeferredCallback(delay, context, handler);
+		armed = Systime::AppendDeferredCallback(delay, context, handler);
 		return armed;
 	}
 

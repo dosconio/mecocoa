@@ -22,7 +22,7 @@ namespace {
 		auto thread = Taskman::CurrentTB();
 		const bool restore_interrupts = IC.TryMaskInterrupt();
 		// Arm before blocking, under the same interrupt mask: no lost timer wakeup.
-		const bool armed = Systimex::AppendThreadWake(ticks, thread->tid);
+		const bool armed = Systime::AppendThreadWake(ticks, thread->tid);
 		if (armed) thread->Block(ThreadBlock::BlockReason::BR_Resting);
 		if (restore_interrupts) IC.enInterrupt(true);
 		if (armed) Taskman::Schedule(true);
@@ -369,7 +369,7 @@ namespace {
 		runtime.retry_due = false;
 		if (!++touch_retry_serial) ++touch_retry_serial;
 		runtime.retry_token = touch_retry_serial;
-		if (armed) (void)Systimex::CancelDeferredCallback(token, (_tocall_ft)TouchRetryWake);
+		if (armed) (void)Systime::CancelDeferredCallback(token, (_tocall_ft)TouchRetryWake);
 		if (restore_interrupts) IC.enInterrupt(true);
 	}
 
@@ -377,7 +377,7 @@ namespace {
 		CancelTouchRetry(runtime);
 		const bool restore_interrupts = IC.TryMaskInterrupt();
 		runtime.retry_armed = true;
-		const bool armed = Systimex::AppendDeferredCallback(delay, runtime.retry_token, (_tocall_ft)TouchRetryWake);
+		const bool armed = Systime::AppendDeferredCallback(delay, runtime.retry_token, (_tocall_ft)TouchRetryWake);
 		if (!armed) runtime.retry_armed = false;
 		if (restore_interrupts) IC.enInterrupt(true);
 		if (!armed) plogerro("[TOUCH B] cannot arm the finite retry; touch stopped");

@@ -68,7 +68,6 @@ CPP_SOURCES := \
 	mecocoa/taskman-elf.cpp \
 	mecocoa/taskman-lock.cpp \
 	mecocoa/handler.cpp \
-	mecocoa/handler-tim.cpp \
 	mecocoa/console.cpp \
 	mecocoa/console-bcon.cpp \
 	mecocoa/console-init.cpp \
@@ -80,6 +79,7 @@ CPP_SOURCES := \
 	mecocoa/syscall.cpp \
 	mecocoa/sysinfo.cpp \
 	mecocoa/sysinfo-dev.cpp \
+	mecocoa/systime.cpp \
 	mecocoa/userman.cpp \
 	mecocoa/devsman.cpp \
 	mecocoa/devsman-usb.cpp \
