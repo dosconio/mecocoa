@@ -212,7 +212,7 @@ void syscall(NormalTaskContext* cxt);
 struct file_proper_t {
 	stduint size = 0;					// File size in bytes
 	stduint mode = 0;					// File mode (type and permissions)
-	datime_t modified = {};
+	datime_t modified = {};			// Full calendar year in modified.year
 	byte modified_valid = 0;
 };
 

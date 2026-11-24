@@ -8,7 +8,15 @@
 
 _ESYM_C void R_RTC_INIT();
 
-#if _MCCA == 0x8632
+#if (_MCCA & 0xFF00) == 0x8600
+namespace {
+	Spinlock cmos_time_lock;
+	bool ReadCmosDate(void*, datime_t& date) {
+		SpinlockLocal guard(&cmos_time_lock);
+		return CMOS_ReadDateTime(&date) != 0;
+	}
+}
+
 #if 1
 __attribute__((section(".init.rmod")))
 RMOD_LIST RMOD_LIST_RTC{
@@ -18,21 +26,38 @@ RMOD_LIST RMOD_LIST_RTC{
 #endif
 
 void R_RTC_INIT() {
-	if (!Devsman::EnableInterrupt(InterruptSource::Fixed(IRQ_RTC), Handint_RTC, RTC_Init))
-		return;
-	if (auto* node = Devsman::RegisterPlatformDevice("rtc@cmos")) {
+	#if _MCCA == 0x8632
+	const bool interrupt_ready = bool(Devsman::EnableInterrupt(
+		InterruptSource::Fixed(IRQ_RTC), Handint_RTC, RTC_Init));
+	#endif
+	if (auto* node = Devsman::RegisterPlatformDevice("rtc@cmos", "cmos-rtc")) {
 		Devsman::AddIoPortResource(node, 0, PORT_CMOS_ADDR, 2);
-		Devsman::AddIrqResource(node, IRQ_RTC);
+		#if _MCCA == 0x8632
+		if (interrupt_ready) Devsman::AddIrqResource(node, IRQ_RTC);
+		#endif
+		TimeDevice device{};
+		device.info.readable_date = true;
+		device.info.date_resolution_ms = 1000;
+		device.info.priority = 100;
+		device.ReadDate = ReadCmosDate;
+		if (!Systime::AttachDevice(node, device)) plogerro("[RTC] cannot attach time capability");
+		else (void)Systime::SelectDateTimeDevice(node);
 	}
 }
 
+#if _MCCA == 0x8632
 void Handint_RTC()
 {
 	// 1Hz
 	// auto push flag by interrupt module
 	// OPEN NMI AFTER READ REG-C, OR ONLY INT ONCE
-	outpb(IRQ_RTC, 0x0C);
-	innpb(0x71);
+	{
+		SpinlockLocal guard(&cmos_time_lock);
+		const byte saved_index = innpb(PORT_CMOS_ADDR);
+		outpb(PORT_CMOS_ADDR, CMOS_STATUS_C | CMOS_NMI);
+		innpb(PORT_CMOS_DATA);
+		outpb(PORT_CMOS_ADDR, saved_index);
+	}
 	mecocoa_global->system_time.sec++;
 
 	if (!Consman::ento_gui) {
@@ -42,5 +67,6 @@ void Handint_RTC()
 
 	IC.SendEOI(IRQ_RTC); // Acknowledge interrupt
 }
+#endif
 
 #endif

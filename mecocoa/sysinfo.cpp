@@ -61,14 +61,12 @@ void mecfetch() {
 	printlog(cpu_type ? _LOG_GOOD : _LOG_WARN, "CPU Factory: %s", text_cpu_factory());
 	ploginfo("CPU Brand: %s", text_brand());
 
-	tm datime = {};
-	#if _MCCA == 0x8632 //((_MCCA & 0xFF00) == 0x8600)
-	CMOS_Readtime(&datime);
-	#endif
-	Console.OutFormat("Date Time: %d/%d/%d %d:%d:%d\n\r",
-		datime.tm_year, datime.tm_mon, datime.tm_mday,
-		datime.tm_hour, datime.tm_min, datime.tm_sec
-	);
+	datime_t date{};
+	if (Systime::ReadDeviceDateTime(date)) {
+		Console.OutFormat("Date Time: %d/%d/%d %d:%d:%d\n\r",
+			date.year, date.month + 1, date.mday, date.hour, date.minute, date.second);
+	}
+	else Console.OutFormat("Date Time: unavailable\n\r");
 	#endif
 
 	Console.OutFormat("Avail Mem: %s\n\r", dump_availmem().reference());

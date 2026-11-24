@@ -2782,21 +2782,9 @@ stduint DevFs::writfl(void* fil_handler, Slice file_slice, const byte* src) {
 #include <c/driver/RealtimeClock.h>
 
 static bool ReadFatDateTime(datime_t& result, void*) {
-	tm clock = {};
-	CMOS_Readtime(&clock);
-	if (clock.tm_year < 1980 || clock.tm_year > 2107 ||
-		clock.tm_mon < 1 || clock.tm_mon > 12 ||
-		clock.tm_mday < 1 || clock.tm_mday > 31 ||
-		clock.tm_hour < 0 || clock.tm_hour > 23 ||
-		clock.tm_min < 0 || clock.tm_min > 59 ||
-		clock.tm_sec < 0 || clock.tm_sec > 59) return false;
-	result = {};
-	result.year = clock.tm_year - 1900;
-	result.month = (byte)(clock.tm_mon - 1);
-	result.mday = (byte)clock.tm_mday;
-	result.hour = (byte)clock.tm_hour;
-	result.minute = (byte)clock.tm_min;
-	result.second = (byte)clock.tm_sec;
+	datime_t date{};
+	if (!Systime::ReadDeviceDateTime(date) || date.year < 1980 || date.year > 2107) return false;
+	result = date;
 	return true;
 }
 #endif

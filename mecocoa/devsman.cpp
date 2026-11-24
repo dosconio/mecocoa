@@ -51,7 +51,7 @@ namespace Devs {
 
 	DeviceTree device_tree;
 	DeviceNode* device_root = nullptr;
-	#if (_MCCA & 0xFF00) == 0x8600 || defined(_MCU_STM32H7x)
+	#if (_MCCA & 0xFF00) == 0x8600 || defined(_MCU_STM32H7x) || (_MCCA & 0xFF00) == 0x1000
 	DeviceNode* bus_roots[static_cast<stduint>(DeviceBusType::Count)]{};
 	#endif
 	#if (_MCCA & 0xFF00) == 0x8600
@@ -337,7 +337,7 @@ namespace Devs {
 
 
 	#endif
-	#if ((_MCCA & 0xFF00) == 0x8600 || defined(_MCU_STM32H7x))
+	#if ((_MCCA & 0xFF00) == 0x8600 || defined(_MCU_STM32H7x) || (_MCCA & 0xFF00) == 0x1000)
 
 	uni::StorageTrait* storage_trait_from_node(DeviceNode* node) {
 		if (!node) return nullptr;
@@ -449,7 +449,7 @@ namespace Devs {
 	}
 
 	#endif
-	#if (_MCCA & 0xFF00) == 0x8600 || defined(_MCU_STM32H7x)
+	#if (_MCCA & 0xFF00) == 0x8600 || defined(_MCU_STM32H7x) || (_MCCA & 0xFF00) == 0x1000
 
 	void init_node(DeviceNode* node, DeviceNodeType node_type, DeviceBusType bus_type, const char* name) {
 		MemSet(node, 0, sizeof(DeviceNode));
@@ -496,7 +496,7 @@ namespace Devs {
 	}
 
 	#endif
-	#if ((_MCCA & 0xFF00) == 0x8600 || defined(_MCU_STM32H7x))
+	#if ((_MCCA & 0xFF00) == 0x8600 || defined(_MCU_STM32H7x) || (_MCCA & 0xFF00) == 0x1000)
 
 	bool detach_child(DeviceNode* parent, DeviceNode* child) {
 		if (!parent || !child || !parent->link.subf) return false;
@@ -576,7 +576,7 @@ namespace Devs {
 	}
 
 	#endif
-	#if (_MCCA & 0xFF00) == 0x8600 || defined(_MCU_STM32H7x)
+	#if (_MCCA & 0xFF00) == 0x8600 || defined(_MCU_STM32H7x) || (_MCCA & 0xFF00) == 0x1000
 
 	DeviceNode* create_bus_root(DeviceBusType bus_type, const char* name = nullptr) {
 		const stduint idx = bus_root_index(bus_type);
@@ -611,7 +611,7 @@ namespace Devs {
 	}
 
 	#endif
-	#if (_MCCA & 0xFF00) == 0x8600 || defined(_MCU_STM32H7x)
+	#if (_MCCA & 0xFF00) == 0x8600 || defined(_MCU_STM32H7x) || (_MCCA & 0xFF00) == 0x1000
 
 	DeviceNode* resolve_default_platform_parent(const char* name) {
 		#if (_MCCA & 0xFF00) == 0x8600
@@ -631,7 +631,7 @@ namespace Devs {
 	}
 
 	#endif
-	#if ((_MCCA & 0xFF00) == 0x8600 || defined(_MCU_STM32H7x))
+	#if ((_MCCA & 0xFF00) == 0x8600 || defined(_MCU_STM32H7x) || (_MCCA & 0xFF00) == 0x1000)
 
 	bool append_resource(DeviceNode* node, DeviceResourceType type, uint16 flags, uint32 index, uint64 start, uint64 length, uint64 extra) {
 		if (!node->fields.resources || node->fields.resource_count >= node->fields.resource_capacity) {
@@ -648,7 +648,7 @@ namespace Devs {
 	}
 
 	#endif
-	#if (_MCCA & 0xFF00) == 0x8600 || defined(_MCU_STM32H7x)
+	#if (_MCCA & 0xFF00) == 0x8600 || defined(_MCU_STM32H7x) || (_MCCA & 0xFF00) == 0x1000
 
 	DeviceNode* append_plain_device(DeviceNode* parent, DeviceNodeType node_type, DeviceBusType bus_type, const char* name) {
 		if (!name) return nullptr;
@@ -673,7 +673,7 @@ namespace Devs {
 	}
 
 	#endif
-	#if (_MCCA & 0xFF00) == 0x8600 || defined(_MCU_STM32H7x)
+	#if (_MCCA & 0xFF00) == 0x8600 || defined(_MCU_STM32H7x) || (_MCCA & 0xFF00) == 0x1000
 
 	DeviceNode* find_named_node_in_subtree(DeviceNode* node, DeviceNodeType node_type, const char* name) {
 		for (auto* crt = node; crt; crt = reinterpret_cast<DeviceNode*>(crt->link.next)) {
@@ -692,7 +692,7 @@ namespace Devs {
 	}
 
 	#endif
-	#if ((_MCCA & 0xFF00) == 0x8600 || defined(_MCU_STM32H7x))
+	#if ((_MCCA & 0xFF00) == 0x8600 || defined(_MCU_STM32H7x) || (_MCCA & 0xFF00) == 0x1000)
 
 	bool set_driver_binding(DeviceNode* node, const char* driver_name) {
 		if (!node || !driver_name) return false;
@@ -726,7 +726,7 @@ namespace Devs {
 	}
 
 	#endif
-	#if (_MCCA & 0xFF00) == 0x8600 || defined(_MCU_STM32H7x)
+	#if (_MCCA & 0xFF00) == 0x8600 || defined(_MCU_STM32H7x) || (_MCCA & 0xFF00) == 0x1000
 
 	void set_driver_started(DeviceNode* node, const char* driver_name, void* driver_data = nullptr) {
 		if (!node || !driver_name) return;
@@ -1028,7 +1028,7 @@ namespace Devs {
 	}
 
 	#endif
-	#if (_MCCA & 0xFF00) == 0x8600 || defined(_MCU_STM32H7x)
+	#if (_MCCA & 0xFF00) == 0x8600 || defined(_MCU_STM32H7x) || (_MCCA & 0xFF00) == 0x1000
 
 	void initialize_device_tree() {
 		if (device_root) return;
@@ -1089,7 +1089,7 @@ namespace Devs {
 
 
 	#endif
-	#if ((_MCCA & 0xFF00) == 0x8600 || defined(_MCU_STM32H7x))
+	#if ((_MCCA & 0xFF00) == 0x8600 || defined(_MCU_STM32H7x) || (_MCCA & 0xFF00) == 0x1000)
 
 	const DeviceResource* find_resource(const DeviceNode* node, DeviceResourceType type, uint32 index) {
 		if (!node || !node->fields.resources) return nullptr;
@@ -3766,9 +3766,9 @@ const char* Devsman::DriverMatchResultName(DriverMatchResult result) {
 }
 
 bool Devsman::Initialize() {
-	#if ((_MCCA & 0xFF00) == 0x8600 || defined(_MCU_STM32H7x))
+	#if ((_MCCA & 0xFF00) == 0x8600 || defined(_MCU_STM32H7x) || (_MCCA & 0xFF00) == 0x1000)
 	initialize_device_tree();
-	#if CONFIG_ENABLE_USB
+	#if CONFIG_ENABLE_USB && ((_MCCA & 0xFF00) == 0x8600 || defined(_MCU_STM32H7x))
 	// Install shared enumeration hooks before any host controller starts probing.
 	RegisterUSBDeviceTreeHooks();
 	#endif
@@ -3871,7 +3871,7 @@ bool Devsman::RegisterDriverStarter(const char* driver_name, DriverStartRoutine 
 
 
 
-#if (_MCCA & 0xFF00) == 0x8600 || defined(_MCU_STM32H7x)
+#if (_MCCA & 0xFF00) == 0x8600 || defined(_MCU_STM32H7x) || (_MCCA & 0xFF00) == 0x1000
 
 DeviceNode* Devsman::RegisterPlatformDevice(const char* name, const char* driver_name, void* driver_data) {
 	initialize_device_tree();
@@ -3929,7 +3929,7 @@ DeviceNode* Devsman::RegisterPlatformDevice(DeviceNode* parent, const char* name
 
 #endif
 
-#if ((_MCCA & 0xFF00) == 0x8600 || defined(_MCU_STM32H7x))
+#if ((_MCCA & 0xFF00) == 0x8600 || defined(_MCU_STM32H7x) || (_MCCA & 0xFF00) == 0x1000)
 
 DeviceNode* Devsman::RegisterStorageDevice(DeviceNode* parent, const char* name,
 	DeviceBusType bus_type, const char* driver_name, void* driver_data) {
@@ -4009,7 +4009,7 @@ bool Devsman::AddDmaResource(DeviceNode* node, uint32 index, uint8 channel, uint
 
 #endif
 
-#if (_MCCA & 0xFF00) == 0x8600 || defined(_MCU_STM32H7x)
+#if (_MCCA & 0xFF00) == 0x8600 || defined(_MCU_STM32H7x) || (_MCCA & 0xFF00) == 0x1000
 
 DeviceNode* Devsman::FindNamedNode(DeviceNodeType node_type, const char* name) {
 	if (!device_root || !name) return nullptr;
@@ -4106,7 +4106,7 @@ const char* Devsman::GetResourceName(const DeviceResource& resource) {
 		? reinterpret_cast<const char*>(stduint(resource.extra)) : "";
 }
 
-#if ((_MCCA & 0xFF00) == 0x8600 || defined(_MCU_STM32H7x))
+#if ((_MCCA & 0xFF00) == 0x8600 || defined(_MCU_STM32H7x) || (_MCCA & 0xFF00) == 0x1000)
 
 
 
@@ -4174,7 +4174,7 @@ namespace {
 
 bool Devsman::UnregisterDevice(DeviceNode* node) {
 	if (!node || !DeviceSubtreeContains(device_root, node) || node == device_root ||
-		node->link.subf || node->fields.binding.owner_pid || DeviceControllerReferenced(device_root, node)) return false;
+		node->link.subf || node->fields.binding.owner_pid || node->fields.time_device || DeviceControllerReferenced(device_root, node)) return false;
 	// Firmware discovery retains node pointers until its own detach path removes them.
 	if (node->fields.acpi_info) return false;
 	auto* parent = reinterpret_cast<DeviceNode*>(node->link.getParent());
@@ -4405,7 +4405,7 @@ stdsint Devsman::Ctrl(DeviceNode* node, stduint cmd, void* args, stduint flags) 
 	return node->fields.ops->ctrl(node, cmd, args, flags);
 }
 
-#if ((_MCCA & 0xFF00) == 0x8600 || defined(_MCU_STM32H7x))
+#if ((_MCCA & 0xFF00) == 0x8600 || defined(_MCU_STM32H7x) || (_MCCA & 0xFF00) == 0x1000)
 
 namespace {
 	void RegisterStoragePartitionAlias(DeviceNode* parent, DeviceNode* partition, stduint part_dev) {

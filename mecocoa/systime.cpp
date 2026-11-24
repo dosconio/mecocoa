@@ -15,6 +15,207 @@
 */
 
 
+// ---- ---- ---- ---- TIME DEVICES ---- ---- ---- ---- //
+
+struct TimeDeviceBinding {
+	DeviceNode* node;
+	TimeDevice device;
+	TimeDeviceBinding* next = nullptr;
+	stduint users = 0;
+	bool last_read_ok = false;
+
+	TimeDeviceBinding(DeviceNode* node, const TimeDevice& device) : node(node), device(device) {}
+};
+
+namespace {
+	Spinlock time_device_lock;
+	TimeDeviceBinding* time_devices = nullptr;
+	TimeDeviceBinding* date_device = nullptr;
+	TimeDeviceBinding* tick_device = nullptr;
+
+	bool ValidDeviceDate(const datime_t& date) {
+		return date.year >= 0 && date.year <= 9999 && date.month < 12 &&
+			date.mday >= 1 && date.mday <= moondays(date.year, int(date.month) + 1) &&
+			date.hour < 24 && date.minute < 60 && date.second < 60;
+	}
+
+	TimeDeviceBinding* FindTimeDevice(DeviceNode* node) {
+		for (auto* entry = time_devices; entry; entry = entry->next)
+			if (entry->node == node) return entry;
+		return nullptr;
+	}
+
+	TimeDeviceBinding* AcquireTimeDevice(DeviceNode* node) {
+		SpinlockLocal guard(&time_device_lock);
+		auto* entry = node ? FindTimeDevice(node) : date_device;
+		if (entry) ++entry->users;
+		return entry;
+	}
+
+	bool ReadTimeDevice(TimeDeviceBinding* entry, datime_t& date) {
+		return entry->device.ReadDate &&
+			entry->device.ReadDate(entry->device.context, date) && ValidDeviceDate(date);
+	}
+}
+
+bool Systime::AttachDevice(DeviceNode* node, const TimeDevice& device) {
+	if (!node || device.info.readable_date != bool(device.ReadDate) ||
+		device.info.writable_date != bool(device.WriteDate) ||
+		device.info.readable_counter != bool(device.ReadCounter) ||
+		(device.ReadDate && !device.info.date_resolution_ms) ||
+		(device.ReadCounter && (!device.info.counter_frequency ||
+			!device.info.counter_bits || device.info.counter_bits > 64)) ||
+		(device.info.periodic_event && !device.info.event_frequency) ||
+		(!device.ReadDate && !device.WriteDate && !device.ReadCounter && !device.info.periodic_event))
+		return false;
+	auto* prepared = new (std::nothrow_t{}) TimeDeviceBinding(node, device);
+	if (!prepared) return false;
+	bool attached = false;
+	{
+		SpinlockLocal guard(&time_device_lock);
+		if (!node->fields.time_device) {
+			auto** slot = &time_devices;
+			while (*slot && (*slot)->device.info.priority >= device.info.priority) slot = &(*slot)->next;
+			prepared->next = *slot;
+			*slot = prepared;
+			node->fields.time_device = prepared;
+			attached = true;
+		}
+	}
+	if (!attached) delete prepared;
+	return attached;
+}
+
+bool Systime::DetachDevice(DeviceNode* node) {
+	TimeDeviceBinding* removed = nullptr;
+	{
+		SpinlockLocal guard(&time_device_lock);
+		auto** slot = &time_devices;
+		while (*slot && (*slot)->node != node) slot = &(*slot)->next;
+		if (!*slot) return true;
+		if ((*slot)->users || *slot == tick_device) return false;
+		removed = *slot;
+		*slot = removed->next;
+		if (date_device == removed) date_device = nullptr;
+		node->fields.time_device = nullptr;
+	}
+	delete removed;
+	return true;
+}
+
+bool Systime::GetTimeDeviceInfo(DeviceNode* node, TimeDeviceInfo& result) {
+	SpinlockLocal guard(&time_device_lock);
+	auto* entry = FindTimeDevice(node);
+	if (!entry) return false;
+	result = entry->device.info;
+	result.selected_date = entry == date_device;
+	result.selected_tick = entry == tick_device;
+	result.last_read_ok = entry->last_read_ok;
+	return true;
+}
+
+bool Systime::SelectDateTimeDevice(DeviceNode* node) {
+	if (!node) {
+		SpinlockLocal guard(&time_device_lock);
+		date_device = nullptr;
+		return true;
+	}
+	auto* entry = AcquireTimeDevice(node);
+	if (!entry) return false;
+	datime_t date{};
+	const bool ok = ReadTimeDevice(entry, date);
+	{
+		SpinlockLocal guard(&time_device_lock);
+		entry->last_read_ok = ok;
+		if (ok) date_device = entry;
+		--entry->users;
+	}
+	return ok;
+}
+
+DeviceNode* Systime::GetDateTimeDevice() {
+	SpinlockLocal guard(&time_device_lock);
+	return date_device ? date_device->node : nullptr;
+}
+
+bool Systime::BindTickDevice(DeviceNode* node) {
+	SpinlockLocal guard(&time_device_lock);
+	auto* entry = node ? FindTimeDevice(node) : nullptr;
+	if (node && (!entry || !entry->device.info.periodic_event ||
+		entry->device.info.event_frequency != GetTickFrequency())) return false;
+	tick_device = entry;
+	return true;
+}
+
+bool Systime::ReadDeviceDateTime(datime_t& result, DeviceNode* node) {
+	auto* preferred = AcquireTimeDevice(node);
+	if (preferred) {
+		datime_t date{};
+		const bool ok = ReadTimeDevice(preferred, date);
+		{
+			SpinlockLocal guard(&time_device_lock);
+			preferred->last_read_ok = ok;
+			if (!node) date_device = ok ? preferred : nullptr;
+			if (ok || node) --preferred->users;
+		}
+		if (ok) { result = date; return true; }
+	}
+	if (node) return false;
+	TimeDeviceBinding* entry;
+	{
+		SpinlockLocal guard(&time_device_lock);
+		entry = time_devices;
+		if (entry) ++entry->users;
+	}
+	while (entry) {
+		datime_t date{};
+		const bool ok = entry != preferred && ReadTimeDevice(entry, date);
+		TimeDeviceBinding* next;
+		{
+			SpinlockLocal guard(&time_device_lock);
+			if (entry != preferred) entry->last_read_ok = ok;
+			next = ok ? nullptr : entry->next;
+			if (next) ++next->users;
+			if (ok) date_device = entry;
+			--entry->users;
+			if (ok && preferred) --preferred->users;
+		}
+		if (ok) { result = date; return true; }
+		entry = next;
+	}
+	if (preferred) {
+		SpinlockLocal guard(&time_device_lock);
+		--preferred->users;
+	}
+	return false;
+}
+
+bool Systime::WriteDeviceDateTime(const datime_t& date, DeviceNode* node) {
+	if (!ValidDeviceDate(date)) return false;
+	auto* entry = AcquireTimeDevice(node);
+	if (!entry) return false;
+	const bool ok = entry->device.WriteDate && entry->device.WriteDate(entry->device.context, date);
+	{
+		SpinlockLocal guard(&time_device_lock);
+		--entry->users;
+	}
+	return ok;
+}
+
+bool Systime::ReadDeviceCounter(DeviceNode* node, uint64& result) {
+	if (!node) return false;
+	auto* entry = AcquireTimeDevice(node);
+	if (!entry) return false;
+	uint64 value = 0;
+	const bool ok = entry->device.ReadCounter && entry->device.ReadCounter(entry->device.context, value);
+	{
+		SpinlockLocal guard(&time_device_lock);
+		--entry->users;
+	}
+	if (ok) result = value;
+	return ok;
+}
+
 // ---- ---- ---- ---- SOFT-TIM ---- ---- ---- ---- //
 
 volatile timeval_t system_time = {};
@@ -56,15 +257,29 @@ namespace {
 
 	static constexpr byte TimerDispatchAttemptLimit = 5;
 	static constexpr stduint TimerDispatchRetryDelay = 2;
+	static constexpr stduint MaxTimerDelay = ~stduint(0) >> 1;
+
+	bool HasReached(stduint now, stduint deadline) {
+		return stdsint(now - deadline) >= 0;
+	}
+
+	int CompareDeadlines(stduint left, stduint right) {
+		// Order overdue entries before future entries using the same tick snapshot.
+		const stduint now = Systime::GetTick();
+		const stdsint left_delay = stdsint(left - now);
+		const stdsint right_delay = stdsint(right - now);
+		if (left_delay < right_delay) return -1;
+		return left_delay > right_delay ? 1 : 0;
+	}
 }
 
 static int TimerCmp(pureptr_t a, pureptr_t b) {
-	return treat<MsgTimer>(((Dnode*)a)->offs).timeout -
-		treat<MsgTimer>(((Dnode*)b)->offs).timeout;
+	return CompareDeadlines(treat<MsgTimer>(((Dnode*)a)->offs).timeout,
+		treat<MsgTimer>(((Dnode*)b)->offs).timeout);
 }
 static int TimerRetryCmp(pureptr_t a, pureptr_t b) {
-	return treat<MsgTimer>(((Dnode*)a)->offs).retry_after -
-		treat<MsgTimer>(((Dnode*)b)->offs).retry_after;
+	return CompareDeadlines(treat<MsgTimer>(((Dnode*)a)->offs).retry_after,
+		treat<MsgTimer>(((Dnode*)b)->offs).retry_after);
 }
 // Dchain releases the node itself after this callback destroys its payload.
 static void FreeMsgTimer(pureptr_t value) {
@@ -139,9 +354,14 @@ namespace {
 	}
 
 	bool AppendTimer(stduint timeout, MsgTimer timer) {
+		if (timeout > MaxTimerDelay) {
+			plogerro("SysTimer: delay exceeds half the tick range");
+			return false;
+		}
 		SpinlockLocal guard(&timer_lock);
 		if (IsClosedThreadTimer(timer)) return false;
-		timer.timeout = tick + timeout;
+		timer.timeout = Systime::GetTick() + timeout;
+		timer.retry_after = timer.timeout;
 		timer.serial = ++timer_serial;
 		if (!timer.serial) timer.serial = ++timer_serial;
 		const bool appended = CopyTimerToChain(TimerManager, timer);
@@ -216,11 +436,12 @@ void Systime::CollectExpired() {
 		bool run_callback = false;
 		{
 			SpinlockLocal guard(&timer_lock);
+			const stduint now = GetTick();
 			if (!timer_dispatch_pending) {
 				auto* retry = TimerRetryManager.Root();
-				if (retry && tick >= treat<MsgTimer>(retry->offs).retry_after) {
+				if (retry && HasReached(now, treat<MsgTimer>(retry->offs).retry_after)) {
 					MsgTimer timer = treat<MsgTimer>(retry->offs);
-					timer.retry_after = 0;
+					timer.retry_after = now;
 					if (CopyTimerToChain(TimerManager, timer)) {
 						TimerRetryManager.Remove(retry);
 					}
@@ -230,14 +451,15 @@ void Systime::CollectExpired() {
 			Dnode* dispatch = nullptr;
 			for (auto* node = TimerManager.Root(); node; node = node->next) {
 				auto& timer = treat<MsgTimer>(node->offs);
-				if (tick < timer.timeout) break;
+				if (!HasReached(now, timer.timeout)) break;
 				if (timer.action == TimerAction::Callback) {
 					callback = timer;
 					TimerManager.Remove(node);
 					run_callback = true;
 					break;
 				}
-				if (!timer_dispatch_pending && !dispatch && tick >= timer.retry_after) {
+				if (!timer_dispatch_pending && !dispatch &&
+					(!timer.dispatch_attempts || HasReached(now, timer.retry_after))) {
 					dispatch = node;
 				}
 			}
@@ -284,7 +506,7 @@ void Systime::CollectExpired() {
 				drop = true;
 			}
 			else {
-				retry.retry_after = tick + TimerDispatchRetryDelay;
+				retry.retry_after = GetTick() + TimerDispatchRetryDelay;
 				if (CopyTimerToChain(TimerRetryManager, retry)) {
 					TimerManager.Remove(node);
 				}
@@ -315,11 +537,13 @@ void Systime::DispatchExpired() {
 				RemoveClosedThreadTimers(TimerManager);
 				RemoveClosedThreadTimers(TimerRetryManager);
 			}
+			const stduint now = GetTick();
 			Dnode* dispatch = nullptr;
 			for (auto* node = TimerManager.Root(); node; node = node->next) {
 				auto& timer = treat<MsgTimer>(node->offs);
-				if (tick < timer.timeout) break;
-				if (timer.action != TimerAction::Callback) {
+				if (!HasReached(now, timer.timeout)) break;
+				if (timer.action != TimerAction::Callback &&
+					(!timer.dispatch_attempts || HasReached(now, timer.retry_after))) {
 					dispatch = node;
 					break;
 				}
@@ -372,12 +596,12 @@ void Systime::DispatchExpired() {
 namespace Devs {
 	// Keep the storage adapter here to use the fallible timer backend without adding storage-specific entry points to Systime or changing ordinary ThreadWake dispatch.
 	bool StorageTimer::ArmWake(stduint delay, stduint tid, stduint generation) {
-		if (!delay || tid == ~stduint(0) || !generation) return false;
+		if (!delay || delay > MaxTimerDelay || tid == ~stduint(0) || !generation) return false;
 		Cancel();
 		target = tid;
 		callback = nullptr;
 		wake_generation = generation;
-		deadline = stduint(tick) + delay;
+		deadline = Systime::GetTick() + delay;
 		MsgTimer timer{};
 		timer.action = TimerAction::Callback;
 		timer.iden = generation;
@@ -401,5 +625,26 @@ namespace Devs {
 
 #endif
 
+// ---- ---- ---- ---- TICK ---- ---- ---- ---- //
 
+
+void Systime::OnTick() {
+	tick.fetch_add(1, uni::MemoryOrder_Relaxed);
+#if !defined(_MPU_STM32MP13)
+	CollectExpired();
+#endif
+}
+
+stduint Systime::GetTick() {
+	return tick.load(uni::MemoryOrder_Relaxed);
+}
+
+stduint Systime::GetTickFrequency() {
+	return CONFIG_SysTickFreq;
+}
+
+uint64 Systime::TicksToMilliseconds(stduint ticks) {
+	const uint64 hz = GetTickFrequency();
+	return (ticks / hz) * 1000 + (ticks % hz) * 1000 / hz;
+}
 

@@ -159,7 +159,7 @@ static int QueryFileStatus(stduint object, file_property_query_t query, struct s
 	converted.st_gid = group;
 	if (result.basic.modified_valid) {
 		struct tm date = {};
-		date.tm_year = result.basic.modified.year;
+		date.tm_year = result.basic.modified.year - 1900;
 		date.tm_mon = result.basic.modified.month;
 		date.tm_mday = result.basic.modified.mday;
 		date.tm_hour = result.basic.modified.hour;

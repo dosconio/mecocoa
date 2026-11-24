@@ -213,27 +213,23 @@ DEFSYSC sysc_EXIT(stduint code) {
 DEFSYSC sysc_TIME(stduint unit) {
 	switch (unit) {
 	case 0:// second
-		return tick / CONFIG_SysTickFreq;// mecocoa_global->system_time.sec;
+		return Systime::GetTick() / Systime::GetTickFrequency();// mecocoa_global->system_time.sec;
 	case 1:// ms
-		return tick * 1000 / CONFIG_SysTickFreq;
+		return stduint(Systime::TicksToMilliseconds(Systime::GetTick()));
 	case 0x10: { // Date in BCD: 0xYYYYMMDD
-		tm datime = {};
-		#if ((_MCCA & 0xFF00) == 0x8600)
-		CMOS_Readtime(&datime);
-		#endif
-		uint32 bcd_year = ((datime.tm_year / 1000) << 12) | (((datime.tm_year / 100) % 10) << 8) | (((datime.tm_year / 10) % 10) << 4) | (datime.tm_year % 10);
-		uint32 bcd_mon = ((datime.tm_mon / 10) << 4) | (datime.tm_mon % 10);
-		uint32 bcd_mday = ((datime.tm_mday / 10) << 4) | (datime.tm_mday % 10);
+		datime_t date{};
+		if (!Systime::ReadDeviceDateTime(date)) return stduint(-1);
+		uint32 bcd_year = ((date.year / 1000) << 12) | (((date.year / 100) % 10) << 8) | (((date.year / 10) % 10) << 4) | (date.year % 10);
+		uint32 bcd_mon = (((date.month + 1) / 10) << 4) | ((date.month + 1) % 10);
+		uint32 bcd_mday = ((date.mday / 10) << 4) | (date.mday % 10);
 		return (bcd_year << 16) | (bcd_mon << 8) | bcd_mday;
 	}
 	case 0x11: { // Time in BCD: 0x00HHMMSS
-		tm datime = {};
-		#if _MCCA == 0x8632 || ((_MCCA & 0xFF00) == 0x8600)
-		CMOS_Readtime(&datime);
-		#endif
-		uint32 bcd_hour = ((datime.tm_hour / 10) << 4) | (datime.tm_hour % 10);
-		uint32 bcd_min = ((datime.tm_min / 10) << 4) | (datime.tm_min % 10);
-		uint32 bcd_sec = ((datime.tm_sec / 10) << 4) | (datime.tm_sec % 10);
+		datime_t date{};
+		if (!Systime::ReadDeviceDateTime(date)) return stduint(-1);
+		uint32 bcd_hour = ((date.hour / 10) << 4) | (date.hour % 10);
+		uint32 bcd_min = ((date.minute / 10) << 4) | (date.minute % 10);
+		uint32 bcd_sec = ((date.second / 10) << 4) | (date.second % 10);
 		return (bcd_hour << 16) | (bcd_min << 8) | bcd_sec;
 	}
 	default:

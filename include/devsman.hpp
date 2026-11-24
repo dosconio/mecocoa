@@ -19,6 +19,7 @@ enum class SysinfoDumpDevsType {
 };
 
 struct DeviceNode;
+struct TimeDeviceBinding;
 struct DeviceEvent;
 struct Spinlock;
 struct UsbMSCRequest;
@@ -551,6 +552,7 @@ struct DevExt {
 	uint16 resource_capacity;
 	DeviceResource* resources;
 	const DeviceNodeOps* ops;
+	TimeDeviceBinding* time_device = nullptr;// Owned by Systime, detached before node removal.
 	const char* dev_alias;
 
 	void* acpi_handle;

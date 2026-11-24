@@ -197,12 +197,26 @@ void erro(const char* str) {
 
 // Handler
 
+//{TODO} move to timer-systick.cpp
+
+static void R_SYSTICK_INIT() {
+	auto* node = Devsman::RegisterPlatformDevice("systick@cortex-m", "cortex-m-systick");
+	if (!node) return;
+	Devsman::AddMemoryResource(node, 0, ADDR_SysTick_Map, sizeof(uni::SysTick_Map));
+	TimeDevice device{};
+	device.info.periodic_event = true;
+	device.info.event_frequency = SysTick::getFreq();
+	if (!Systime::AttachDevice(node, device) || !Systime::BindTickDevice(node))
+		plogerro("[SYSTICK] cannot attach system tick capability");
+}
+__attribute__((section(".init.rmod")))
+extern const RMOD_LIST RMOD_LIST_SYSTICK{ R_SYSTICK_INIT, "SYSTICK", {} };
+
 _ESYM_C void SysTick_Handler();
 _ESYM_C void SysTick_Handler_Mcca(stduint returns_to_thread) {
 	SysTick_Handler();
 	if (inited) {
-		tick++;
-		Systime::CollectExpired();
+		Systime::OnTick();
 		if (returns_to_thread) Taskman::Schedule();
 	}
 }

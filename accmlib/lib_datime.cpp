@@ -233,6 +233,10 @@ extern "C" time_t time(time_t* timer)
 {
 	uint32 d = sysdate();
 	uint32 t = systime();
+	if (d == uint32(-1) || t == uint32(-1)) {
+		if (timer) *timer = time_t(-1);
+		return time_t(-1);
+	}
 
 	int year = (int)(((d >> 28) & 0xF) * 1000 + ((d >> 24) & 0xF) * 100 + ((d >> 20) & 0xF) * 10 + ((d >> 16) & 0xF));
 	int month = (int)(((d >> 12) & 0xF) * 10 + ((d >> 8) & 0xF));

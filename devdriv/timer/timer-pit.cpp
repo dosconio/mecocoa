@@ -36,11 +36,19 @@ RMOD_LIST RMOD_LIST_PIT{
 #endif
 
 void R_PIT_INIT() {
-	if (!Devsman::EnableInterrupt(InterruptSource::Fixed(IRQ_PIT), Handint_PIT, PIT_Init))
+	const bool interrupt_ready = bool(Devsman::EnableInterrupt(InterruptSource::Fixed(IRQ_PIT), Handint_PIT, PIT_Init));
+	if (!interrupt_ready)
 		plogerro("[PIT] Cannot enable the timer interrupt");
 	if (auto* node = Devsman::RegisterPlatformDevice("pit@8254", "pit-8254")) {
 		Devsman::AddIoPortResource(node, 0, 0x40, 4);
 		Devsman::AddIrqResource(node, IRQ_PIT);
+		if (interrupt_ready) {
+			TimeDevice device{};
+			device.info.periodic_event = true;
+			device.info.event_frequency = Systime::GetTickFrequency();
+			if (!Systime::AttachDevice(node, device) || !Systime::BindTickDevice(node))
+				plogerro("[PIT] cannot attach system tick capability");
+		}
 	}
 }
 
@@ -57,11 +65,12 @@ void Handint_PIT()
 	}
 	static unsigned time = 0;
 	time++;
-	if (time % (1000 / CONFIG_SysTickFreq) == 0) {
-		tick++;
-		Systime::CollectExpired();
+	static unsigned tick_fraction = 0;
+	tick_fraction += CONFIG_SysTickFreq;
+	if (tick_fraction >= 1000) {
+		tick_fraction -= 1000;
+		Systime::OnTick();
 	}
-	static_assert(1000 / CONFIG_SysTickFreq > 0, "SysTickFreq must be greater than 0");
 	if (time >= 1000) {
 		time = 0;
 		// mecocoa_global->system_time.sec++;//{TEMP} help RTC	

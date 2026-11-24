@@ -851,7 +851,7 @@ void exception_handler(HardwareInterruptFrame* frame) {
 
 #elif (_MCCA & 0xFF00) == 0x1000// RV
 
-#define TIMER_INTERVAL (CLINT_TIMEBASE_FREQ/100) // 100Hz
+#define TIMER_INTERVAL (CLINT_TIMEBASE_FREQ / CONFIG_SysTickFreq)
 
 uint64 last_schepoint;
 
@@ -873,9 +873,9 @@ stduint trap_handler(stduint epc, stduint cause, NormalTaskContext* cxt)
 			break;
 		case 7:
 			// ploginfo("timer interruption!"); // timer_handler();
-			tick++;
 			last_schepoint += TIMER_INTERVAL;
 			clint.Load(getMHARTID(), last_schepoint);
+			Systime::OnTick();
 			Taskman::Schedule();
 			break;
 		case 11:

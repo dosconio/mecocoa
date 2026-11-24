@@ -13,6 +13,10 @@ extern UefiData uefi_data;
 void RenderFrameFlush();
 _ESYM_C void R_LAPICT_INIT();
 
+namespace {
+	uint32 system_tick_lapic_id = 0;
+}
+
 __attribute__((section(".init.rmod")))
 RMOD_LIST RMOD_LIST_LAPICT{
 	.init = R_LAPICT_INIT,
@@ -23,18 +27,24 @@ void R_LAPICT_INIT() {
 	ACPI::Assert(*(const ACPI::RSDP*)uefi_data.acpi_table);
 	IC[IRQ_LAPICTimer].setModeRupt(mglb(Handint_LAPICT_Entry), SegCo64);
 	register_interrupt_handler(IRQ_LAPICTimer, Handint_LAPICT);
+	system_tick_lapic_id = GetCurrentLapicId();
 	lapic_timer.Reset();
 	lapic_timer.Reset(lapic_timer.Frequency / CONFIG_SysTickFreq);
 	if (auto* node = Devsman::RegisterPlatformDevice("lapic-timer@0", "lapic-timer")) {
 		Devsman::AddIrqResource(node, IRQ_LAPICTimer);
+		TimeDevice device{};
+		device.info.periodic_event = true;
+		device.info.event_frequency = Systime::GetTickFrequency();
+		if (!Systime::AttachDevice(node, device) || !Systime::BindTickDevice(node))
+			plogerro("[LAPIC] cannot attach system tick capability");
 	}
 }
 
 __attribute__((/*interrupt, */target("general-regs-only")))// the stack is ready
 void Handint_LAPICT(/*InterruptFrame* frame*/) {
-	tick = tick + 1;// mecocoa_global->system_time.mic++
 	IC.SendEOI(IRQ_LAPICTimer);
-	Systime::CollectExpired();
+	// Other cores may use local timer interrupts for scheduling.
+	if (GetCurrentLapicId() == system_tick_lapic_id) Systime::OnTick();
 
 	#if _GUI_DOUBLE_BUFFER
 	RenderFrameFlush();

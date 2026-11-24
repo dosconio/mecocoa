@@ -1,3 +1,9 @@
+## 2026-11-24
+
+- 13:46（UTC+8）Systime 在 Devsman 设备节点上附加时间能力，增加日期源选择、优先级回退、计数读取及回调期间的卸载保护；接入 x86/x64 CMOS 日期时间和 PIT、LAPIC、STM32H7 SysTick、RISC-V CLINT 系统嘀嗒，CLINT 同时提供原始计数；CMOS 使用有界一致快照并校验日期，日期系统调用、FAT 时间源及系统信息统一经 Systime 读取；ribbon 统一在日期换算前检查原始日期/时间系统调用的失败值，无日期源时显示 0/0/0 0:0:0，阻止失败值进入日期及农历换算。
+
+- 10:47（UTC+8）datime_t.year 统一保存完整公历年份，接通 Unisym FAT、ISO9660/UDF 与 STM32 RTC 的年份换算，Mecocoa 文件系统时间源直接提供完整年份，stat 转换到 struct tm 时减去 1900，同步文件属性接口注释。
+
 ## 2026-11-23
 
 - 15:30（UTC+8）FreeType 独立构建增加 ac7m 目标，使用 Cortex-M7 Thumb、FPv5-D16 hard-float ABI 生成按函数和数据拆分 ELF section 的静态库；分别提供适配 Keil 2-byte `wchar_t` 的 `libfreetype-ac7m.a` 与适配 GCC 4-byte `wchar_t` 的 `libfreetype-ac7m-gcc.a` 及清理入口，H7 GNU 构建使用 GCC 版本以保持对象 ABI 一致。

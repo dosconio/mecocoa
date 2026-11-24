@@ -12,7 +12,7 @@ OstreamTrait* con0_out = &UART0;
 
 constexpr inline static stduint operator ""_Baud(unsigned long long i) { return i; }
 
-#define TIMER_INTERVAL (CLINT_TIMEBASE_FREQ/100) // 100Hz
+#define TIMER_INTERVAL (CLINT_TIMEBASE_FREQ / CONFIG_SysTickFreq)
 
 
 extern uint64 last_schepoint;
@@ -28,9 +28,11 @@ void _entry()
 		loop HALT();
 	}
 	//{} Cache_t::enAble();
+	Systime::Initialize();
 	Filesys::Initialize();
 	R_MEMDISK_INIT();
 	Taskman::Initialize();
+	Devsman::Initialize();
 
 	IC.Reset();
 	// UART0
@@ -56,6 +58,28 @@ void _entry()
 	last_schepoint = clint.Read() + TIMER_INTERVAL;
 	clint.Load(getMHARTID(), last_schepoint);
 	clint.enInterrupt();
+
+	//{TODO} move to timer-systick.cpp
+	if (auto* node = Devsman::RegisterPlatformDevice("clint@2000000", "riscv-clint")) {
+		Devsman::AddMemoryResource(node, 0, ADDR_CLINT_BASE, 0x10000);
+		TimeDevice device{};
+		device.info.periodic_event = true;
+		device.info.event_frequency = Systime::GetTickFrequency();
+		device.info.readable_counter = true;
+		device.info.counter_frequency = CLINT_TIMEBASE_FREQ;
+		device.info.counter_bits = 64;
+		device.ReadCounter = [](void*, uint64& value) -> bool {
+			// RISC-V Privileged Architecture: mtime needs a consistent high/low snapshot on RV32.
+			auto* counter = reinterpret_cast<volatile uint32*>(ADDR_CLINT_MTIME);
+			uint32 high, low;
+			do { high = counter[1]; low = counter[0]; } while (high != counter[1]);
+			value = (uint64(high) << 32) | low;
+			return true;
+		};
+		if (!Systime::AttachDevice(node, device) || !Systime::BindTickDevice(node))
+			plogerro("[CLINT] cannot attach time capability");
+	}
+
 	while (1) {
 		// UART0.OutFormat("Task K: Running...\n");
 		clint.MSIP(getMHARTID(), MSIP_Type::SofRupt);// Bad Method: Taskman::Schedule(true)
