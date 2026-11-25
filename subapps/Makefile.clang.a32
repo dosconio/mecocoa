@@ -84,10 +84,10 @@ $(BIN_DIR)/cat: $(UNISYM_UTILITIES_DIR)/cat.cpp $(MCCA_CRT0) $(MCCA_LIBC_PIC)
 	@mkdir -p $(BIN_DIR)
 	@$(MCCA_CXX) $(MCCA_CXXFLAGS_PIE) -o $@ $< $(MCCA_LDLIBS_PIE)
 
-$(BIN_DIR)/ribbon: subapps/ribbon.cpp $(MCCA_CRT0) $(MCCA_LIBC_PIC)
+$(BIN_DIR)/ribbon: $(wildcard subapps/ribbon/*.cpp) subapps/ribbon/ribbon.hpp $(MCCA_CRT0) $(MCCA_LIBC_PIC)
 	@echo "MK ribbon (NoMMU PIE)"
 	@mkdir -p $(BIN_DIR)
-	@$(MCCA_CXX) $(MCCA_CXXFLAGS_PIE) -o $@ $< $(MCCA_LDLIBS_PIE)
+	@$(MCCA_CXX) $(MCCA_CXXFLAGS_PIE) -o $@ $(wildcard subapps/ribbon/*.cpp) $(MCCA_LDLIBS_PIE)
 
 clean:
 	@rm -rf $(BIN_DIR)

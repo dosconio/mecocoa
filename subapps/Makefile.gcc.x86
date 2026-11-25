@@ -126,9 +126,9 @@ $(BIN_DIR)/playmov: subapps/playmov.cpp $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
 	$(MCCA_X86_CXX) $(MCCA_X86_CXXFLAGS) -o $@ subapps/playmov.cpp $(MCCA_X86_LDLIBS)
 
 
-$(BIN_DIR)/ribbon: subapps/ribbon.cpp $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
+$(BIN_DIR)/ribbon: $(wildcard subapps/ribbon/*.cpp) subapps/ribbon/ribbon.hpp $(MCCA_X86_CRT0) $(MCCA_X86_LIBC)
 	@echo "MK ribbon"
-	$(MCCA_X86_CXX) $(MCCA_X86_CXXFLAGS) -o $@ subapps/ribbon.cpp $(MCCA_X86_LDLIBS)
+	$(MCCA_X86_CXX) $(MCCA_X86_CXXFLAGS) -o $@ $(wildcard subapps/ribbon/*.cpp) $(MCCA_X86_LDLIBS)
 
 clean:
 	@echo "RM $(BIN_DIR)"
