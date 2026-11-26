@@ -3986,6 +3986,10 @@ DeviceNode* Devsman::RegisterSerioDevice(DeviceNode* parent, const char* name) {
 	return node;
 }
 
+#endif
+
+#if ((_MCCA & 0xFF00) == 0x8600 || defined(_MCU_STM32H7x) || (_MCCA & 0xFF00) == 0x1000)
+
 bool Devsman::AddIoPortResource(DeviceNode* node, uint32 index, uint64 base, uint64 length) {
 	if (!node) return false;
 	if (find_resource(node, DeviceResourceType::IoPortRange, index)) return true;
@@ -4003,6 +4007,60 @@ bool Devsman::AddDmaResource(DeviceNode* node, uint32 index, uint8 channel, uint
 	if (find_resource(node, DeviceResourceType::DmaChannel, index)) return true;
 	return append_resource(node, DeviceResourceType::DmaChannel,
 		DeviceResourceFlag_None, index, channel, 1, width_bits);
+}
+
+namespace {
+	bool DeviceSubtreeContains(DeviceNode* node, const DeviceNode* target);
+
+	bool FindDmaStreamNode(DeviceNode* node, uint64 controller_base, uint32 stream) {
+		for (auto* crt = node; crt; crt = reinterpret_cast<DeviceNode*>(crt->link.next)) {
+			const auto* resource = find_resource(crt, DeviceResourceType::DmaStream, 0);
+			if (resource && resource->start == controller_base && resource->length == stream) return true;
+			if (crt->link.subf && FindDmaStreamNode(
+				reinterpret_cast<DeviceNode*>(crt->link.subf), controller_base, stream)) return true;
+		}
+		return false;
+	}
+
+	bool DmaStreamRouteAvailable(DeviceNode* node, uint64 controller_base, uint32 stream) {
+		for (auto* crt = node; crt; crt = reinterpret_cast<DeviceNode*>(crt->link.next)) {
+			for0(index, crt->fields.resource_count) {
+				const auto& resource = crt->fields.resources[index];
+				if (resource.type == uint16(DeviceResourceType::DmaRoute) &&
+					resource.start == controller_base && resource.length == stream)
+					return false;
+			}
+			if (crt->link.subf && !DmaStreamRouteAvailable(
+				reinterpret_cast<DeviceNode*>(crt->link.subf), controller_base, stream)) return false;
+		}
+		return true;
+	}
+}
+
+bool Devsman::AddDmaStreamResource(DeviceNode* node, uint64 controller_base, uint32 stream) {
+	if (!node || !controller_base || stream >= DeviceDmaStreamCount ||
+		!DeviceSubtreeContains(device_root, node)) return false;
+	return AddResource(node, DeviceResource{uint16(DeviceResourceType::DmaStream),
+		DeviceResourceFlag_None, 0, controller_base, stream, 0});
+}
+
+#if defined(__clang__)
+__attribute__((optnone, noinline))
+#elif defined(__GNUC__)
+__attribute__((optimize("O0"), noinline))
+#endif
+bool Devsman::AddDmaRouteResource(DeviceNode* node, uint32 index, uint64 controller_base,
+	uint32 stream, uint64 request, bool transmit) {
+	if (!node || !controller_base || stream >= DeviceDmaStreamCount ||
+		!DeviceSubtreeContains(device_root, node) ||
+		!FindDmaStreamNode(device_root, controller_base, stream)) return false;
+	const uint16 flags = transmit ? DeviceResourceFlag_DmaTransmit : DeviceResourceFlag_DmaReceive;
+	if (find_resource(node, DeviceResourceType::DmaRoute, index))
+		return AddResource(node, DeviceResource{uint16(DeviceResourceType::DmaRoute),
+			flags, index, controller_base, stream, request});
+	if (!DmaStreamRouteAvailable(device_root, controller_base, stream)) return false;
+	return AddResource(node, DeviceResource{uint16(DeviceResourceType::DmaRoute),
+		flags, index, controller_base, stream, request});
 }
 
 
@@ -5023,6 +5081,6 @@ void serv_devs_loop() {
 	RunDevsmanMessageLoop();
 }
 
-#if (_MCCA & 0xFF00) == 0x8600
+#if CONFIG_ENABLE_AUDIOSYS
 uni::AudioManager audio_manager;
 #endif

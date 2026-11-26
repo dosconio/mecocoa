@@ -100,6 +100,8 @@ static rostr text_device_resource_type(uint16 type) {
 	case DeviceResourceType::UsbLocation:       return "USB-LOC";
 	case DeviceResourceType::UsbEndpoint:       return "USB-EP";
 	case DeviceResourceType::DmaChannel:        return "DMA";
+	case DeviceResourceType::DmaStream:         return "DMA-STREAM";
+	case DeviceResourceType::DmaRoute:          return "DMA-ROUTE";
 	case DeviceResourceType::MemoryRange:       return "MMIO";
 	case DeviceResourceType::GpioPin:           return "GPIN";
 	case DeviceResourceType::BusAddress:        return "BUS-ADDR";
@@ -244,6 +246,24 @@ static void dump_device_tree_pci_description(OstreamTrait& com1, const DeviceNod
 	#endif
 }
 
+static void dump_dma_stream_users(OstreamTrait& com1, const DeviceNode* node,
+	uint64 controller_base, uint32 stream, stduint depth) {
+	for (auto crt = node; crt; crt = cast<DeviceNode*>(crt->link.next)) {
+		for0(index, crt->fields.resource_count) {
+			const auto& resource = crt->fields.resources[index];
+			if (resource.type != uint16(DeviceResourceType::DmaRoute) ||
+				resource.start != controller_base || resource.length != stream) continue;
+			dump_device_tree_indent(com1, depth);
+			com1.OutFormat("- USED-BY %s %s request=%[u]\n\r",
+				crt->link.addr ? crt->link.addr : "(unnamed)",
+				(resource.flags & DeviceResourceFlag_DmaTransmit) ? "TX" : "RX",
+				(stduint)resource.extra);
+		}
+		if (crt->link.subf) dump_dma_stream_users(com1,
+			cast<DeviceNode*>(crt->link.subf), controller_base, stream, depth);
+	}
+}
+
 static void dump_device_tree_resources(OstreamTrait& com1, const DeviceNode& node, stduint depth) {
 	for0(i, node.fields.resource_count) {
 		const auto& res = node.fields.resources[i];
@@ -311,6 +331,18 @@ static void dump_device_tree_resources(OstreamTrait& com1, const DeviceNode& nod
 			com1.OutFormat("- %s[%[u]] channel=%[u] width=%[u]\n\r",
 				text_device_resource_type(res.type), res.index,
 				(stduint)res.start, (stduint)res.extra);
+			break;
+		case DeviceResourceType::DmaStream:
+			com1.OutFormat("- DMA-STREAM controller=0x%[64H] stream@%[u]\n\r",
+				res.start, (stduint)res.length);
+			dump_dma_stream_users(com1, Devsman::Root(), res.start,
+				uint32(res.length), depth);
+			break;
+		case DeviceResourceType::DmaRoute:
+			com1.OutFormat("- DMA-ROUTE[%[u]] %s controller=0x%[64H] stream@%[u] request=%[u]\n\r",
+				res.index,
+				(res.flags & DeviceResourceFlag_DmaTransmit) ? "TX" : "RX",
+				res.start, (stduint)res.length, (stduint)res.extra);
 			break;
 		default:
 			com1.OutFormat("- %s[%[u]] start=%p len=%p extra=%p\n\r",
@@ -805,7 +837,7 @@ static void collect_bound_driver_names(DeviceNode* node, DriverNameSet& set) {
 
 static void dump_audio_backends(OstreamTrait& com1) {
 	com1.OutFormat("=== Audio Backends ===\n\r");
-	#if (_MCCA & 0xFF00) == 0x8600
+	#if CONFIG_ENABLE_AUDIOSYS
 	const stduint count = audio_manager.getCardCount();
 	const stduint selected = audio_manager.getSelected();
 	if (!count) {
@@ -824,7 +856,7 @@ static void dump_audio_backends(OstreamTrait& com1) {
 
 static void dump_driver_backends(OstreamTrait& com1) {
 	DriverNameSet set;
-	#if (_MCCA & 0xFF00) == 0x8600
+	#if CONFIG_ENABLE_AUDIOSYS
 	for (stduint i = 0; i < audio_manager.getCardCount(); i++) set.Add(audio_manager.getCardName(i));
 	#endif
 	for (stduint i = 0; i < Devsman::GetDriverStartHookCount(); i++) set.Add(Devsman::GetDriverStartHookName(i));

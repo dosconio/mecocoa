@@ -4,10 +4,12 @@
 // Copyright: Dosconio Mecocoa, BSD 3-Clause License
 
 #include "../include/mecocoa.hpp"
+#if (_MCCA & 0xFF00) == 0x8600
 #include "../devdriv/audio/au-sb16.hpp"
+#endif
 #include <c/format/audio/WAV.h>
 
-#if (_MCCA & 0xFF00) == 0x8600
+#if CONFIG_ENABLE_AUDIOSYS
 
 namespace {
 	constexpr uint32 AudioMaxTracks = 8;
@@ -20,7 +22,7 @@ namespace {
 	constexpr uint8 AudioMasterChannels = 2; // Stereo
 
 	struct AudioTrackState {
-		uint8 ring[AudioStreamRingBytes];
+		uint8* ring;
 		uint32 read_pos;
 		uint32 write_pos;
 		uint32 used;
@@ -106,6 +108,10 @@ namespace {
 	AudioTrackState* AllocateTrack(stduint owner_tid, bool is_temporary = false) {
 		AudioTrackState* existing = FindTrackByOwner(owner_tid);
 		if (existing) {
+			if (!existing->ring) {
+				existing->ring = new (std::align_val_t{ 32 }) uint8[AudioStreamRingBytes];
+				if (!existing->ring) return nullptr;
+			}
 			ResetTrackState(*existing);
 			existing->owner_tid = owner_tid;
 			existing->open = true;
@@ -114,6 +120,10 @@ namespace {
 		}
 		for (uint32 i = 0; i < AudioMaxTracks; ++i) {
 			if (!audio_tracks[i].open) {
+				if (!audio_tracks[i].ring) {
+					audio_tracks[i].ring = new (std::align_val_t{ 32 }) uint8[AudioStreamRingBytes];
+					if (!audio_tracks[i].ring) return nullptr;
+				}
 				ResetTrackState(audio_tracks[i]);
 				audio_tracks[i].owner_tid = owner_tid;
 				audio_tracks[i].open = true;
@@ -126,6 +136,8 @@ namespace {
 
 	void FreeTrack(AudioTrackState& track) {
 		ResetTrackState(track);
+		if (track.ring) ::operator delete[](track.ring, std::align_val_t{ 32 });
+		track.ring = nullptr;
 	}
 
 	uint32 CountActiveTracks() {
@@ -307,9 +319,11 @@ namespace {
 			auto* backend = audio_manager.getSelectedCard();
 			if (active_tracks > 0) {
 				master_last_active_tick = tick;
+				#if (_MCCA & 0xFF00) == 0x8600
 				if (!SoundBlasterWatchdogCheck()) {
 					plogwarn("[Audio] Watchdog: device recovery failed");
 				}
+				#endif
 			} else if (CountActiveTracks() == 0) {
 				if (tick - master_last_active_tick > (CONFIG_SysTickFreq / 4)) {
 					// Stop hardware DMA stream when completely idle to save CPU/DMA cycles and prevent loop residue
@@ -330,6 +344,16 @@ namespace {
 		return syscall(syscall_t::TMSG) != 0;
 	}
 
+	void AudioServiceProbeHardware() {
+		#if defined(_MCU_STM32H7x) && ((_MCCA & 0xFFFF) == 0x2032)
+		for (stduint retry = 0; retry < CONFIG_SysTickFreq; ++retry) {
+			if (AudioBackendProbeHardware() != AudioHardwareProbeResult::Deferred)
+				break;
+			AudioServiceIdleWait();
+		}
+		#endif
+	}
+
 	bool AudioStreamBegin(const uni::AudioPlayRequest& request, stduint owner_tid) {
 		if (!IsSupportedPcmFormat(request)) return false;
 		AudioTrackState* track = AllocateTrack(owner_tid, false);
@@ -343,7 +367,9 @@ namespace {
 		track->open = true;
 		track->paused = false;
 
-		return AudioMasterEnsureRunning();
+		if (AudioMasterEnsureRunning()) return true;
+		FreeTrack(*track);
+		return false;
 	}
 
 	stduint CopyPcmToTrackRing(AudioTrackState& track, const void* source,
@@ -463,12 +489,16 @@ namespace {
 			}
 		}
 
+		#if (_MCCA & 0xFF00) == 0x8600
 		const bool ok = SoundBlasterPlayPcmImmediate(
 			pcm_data,
 			request.buffer.byte_count,
 			uint16(request.format.sample_rate),
 			request.format.sample_format,
 			request.format.channels ? request.format.channels : 1);
+		#else
+		const bool ok = false;
+		#endif
 		delete[] copied_pcm;
 		return ok;
 	}
@@ -579,6 +609,7 @@ bool SoundBlasterPlayPcmU8Mono(const uint8* data, uint32 byte_count,
 
 void serv_dev_audio_loop() {
 	ploginfo("[Audio] Service thread start pid=%u", Taskman::CurrentPID());
+	AudioServiceProbeHardware();
 
 	stduint sig_type = 0;
 	stduint sig_src = 0;
@@ -593,7 +624,11 @@ void serv_dev_audio_loop() {
 		switch ((AudioMsg)sig_type) {
 		case AudioMsg::TEST:
 		{
+			#if (_MCCA & 0xFF00) == 0x8600
 			stdsint result = SoundBlasterRunAutoInitSmokeTest() ? 0 : -1;
+			#else
+			stdsint result = -1;
+			#endif
 			if (sig_src) syssend(sig_src, &result, sizeof(result));
 			break;
 		}
@@ -695,10 +730,15 @@ void serv_dev_audio_loop() {
 				if (vol_req->mute) {
 					backend->setMute(true);
 				} else {
+					#if (_MCCA & 0xFF00) == 0x8600
 					// Requests carry the mixer's raw 0..255 scale, so decode via the shared dB-aware table.
 					SoundBlasterSetMute(uni::SoundBlasterMixerChannel::MasterVolume, false);
 					const uint32 vl = uni::SoundBlasterRawToPercent(vol_req->left);
 					const uint32 vr = uni::SoundBlasterRawToPercent(vol_req->right);
+					#else
+					const uint32 vl = uint32(vol_req->left) * 100 / 255;
+					const uint32 vr = uint32(vol_req->right) * 100 / 255;
+					#endif
 					backend->setVolume(vl, vr);
 				}
 				result = 0;
@@ -712,7 +752,11 @@ void serv_dev_audio_loop() {
 			auto* backend = audio_manager.getSelectedCard();
 			AudioVolumeRequest resp = *in_req;
 			if (backend) {
+				#if (_MCCA & 0xFF00) == 0x8600
 				const uint8 raw = uni::SoundBlasterPercentToRaw(backend->getVolume());
+				#else
+				const uint8 raw = uint8(backend->getVolume() * 255 / 100);
+				#endif
 				resp.left = resp.right = raw;
 			} else {
 				resp.left = resp.right = 0;

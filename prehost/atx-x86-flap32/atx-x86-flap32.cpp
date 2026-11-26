@@ -48,7 +48,9 @@ _sign_entry() {
 	#if CONFIG_ENABLE_USB
 	Taskman::Create((void*)&serv_usb_loop, RING_M)->main_thread->name.reset(StrHeap("serv_usb_loop"));
 	#endif
+	#if CONFIG_ENABLE_AUDIOSYS
 	Taskman::Create((void*)&serv_dev_audio_loop, RING_M)->main_thread->name.reset(StrHeap("serv_dev_audio_loop"));
+	#endif
 
 	IC.enInterrupt();
 	// syscall(syscall_t::OUTC, 'O', 0);

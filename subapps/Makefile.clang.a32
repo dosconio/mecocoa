@@ -42,6 +42,9 @@ apps=\
 	$(BIN_DIR)/ls \
 	$(BIN_DIR)/echo \
 	$(BIN_DIR)/cat \
+	$(BIN_DIR)/sysc \
+	$(BIN_DIR)/playmzk \
+	$(BIN_DIR)/playmov \
 	$(BIN_DIR)/ribbon
 
 .PHONY: all clean
@@ -81,6 +84,21 @@ $(BIN_DIR)/echo: $(UNISYM_UTILITIES_DIR)/echo.c $(MCCA_CRT0) $(MCCA_LIBC_PIC)
 
 $(BIN_DIR)/cat: $(UNISYM_UTILITIES_DIR)/cat.cpp $(MCCA_CRT0) $(MCCA_LIBC_PIC)
 	@echo "MK cat (NoMMU PIE)"
+	@mkdir -p $(BIN_DIR)
+	@$(MCCA_CXX) $(MCCA_CXXFLAGS_PIE) -o $@ $< $(MCCA_LDLIBS_PIE)
+
+$(BIN_DIR)/sysc: subapps/sysc.cpp $(MCCA_CRT0) $(MCCA_LIBC_PIC)
+	@echo "MK sysc (NoMMU PIE)"
+	@mkdir -p $(BIN_DIR)
+	@$(MCCA_CXX) $(MCCA_CXXFLAGS_PIE) -o $@ $< $(MCCA_LDLIBS_PIE)
+
+$(BIN_DIR)/playmzk: subapps/playmzk.cpp $(MCCA_CRT0) $(MCCA_LIBC_PIC)
+	@echo "MK playmzk (NoMMU PIE)"
+	@mkdir -p $(BIN_DIR)
+	@$(MCCA_CXX) $(MCCA_CXXFLAGS_PIE) -o $@ $< $(MCCA_LDLIBS_PIE)
+
+$(BIN_DIR)/playmov: subapps/playmov.cpp $(MCCA_CRT0) $(MCCA_LIBC_PIC)
+	@echo "MK playmov (NoMMU PIE)"
 	@mkdir -p $(BIN_DIR)
 	@$(MCCA_CXX) $(MCCA_CXXFLAGS_PIE) -o $@ $< $(MCCA_LDLIBS_PIE)
 

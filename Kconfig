@@ -53,6 +53,10 @@ menu "Function"
 		bool "Enable Graphic Support"
 		default y
 		
+	config ENABLE_AUDIOSYS
+		bool "Enable Audio Support"
+		default y
+
 	config ENABLE_NETWORK
 		bool "(TODO) Enable Network Support"
 		default y

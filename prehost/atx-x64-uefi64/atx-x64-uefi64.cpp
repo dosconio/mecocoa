@@ -75,7 +75,9 @@ void mecocoa(const UefiData& uefi_data_ref)
 	#if CONFIG_ENABLE_USB
 	Taskman::Create((void*)&serv_usb_loop, RING_M);
 	#endif
+	#if CONFIG_ENABLE_AUDIOSYS
 	Taskman::Create((void*)&serv_dev_audio_loop, RING_M)->main_thread->name.reset(StrHeap("serv_dev_audio_loop"));
+	#endif
 
 	// try priority_queue Dchain
 	SysTimer::Append(250, 1);

@@ -73,6 +73,7 @@ CPP_SOURCES := \
 	mecocoa/systime.cpp \
 	mecocoa/userman.cpp \
 	mecocoa/devsman.cpp \
+	mecocoa/devsman-au.cpp \
 	mecocoa/devsman-usb.cpp \
 	mecocoa/threads.cpp \
 	mecocoa/graphic-touch.cpp \
@@ -81,6 +82,8 @@ CPP_SOURCES := \
 	prehost/stm32h7-ac7m/boards/h750-fanke/h750-fanke.cpp \
 	prehost/stm32h7-ac7m/mem.cpp \
 	devdriv/storage/sdcard.cpp \
+	devdriv/dma/dma-mcu.cpp \
+	devdriv/audio/au-sai.cpp \
 	devdriv/timer/timer-rtc.cpp \
 	devdriv/tty/serial.cpp \
 	devdriv/video/video-ltdc.cpp \

@@ -268,6 +268,8 @@ static const uni::Bitmap user_ipc_services = [] {
 	allowed.setof(Task_Devsman);
 	#if (_MCCA & 0xFF00) == 0x8600
 	allowed.setof(Task_Net_Serv);
+	#endif
+	#if CONFIG_ENABLE_AUDIOSYS
 	allowed.setof(Task_Audio_Serv);
 	#endif
 	allowed.setof(Task_Init);

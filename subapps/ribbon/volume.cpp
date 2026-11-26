@@ -2,9 +2,9 @@
 #include "cpp/Witch/Control/Control-TrackBar.hpp"
 #include <stdio.h>
 #include <stdlib.h>
-
-#if (_ACCM & 0xFF00) == 0x8600
 #include "../../include/syscall.hpp"
+
+#if CONFIG_ENABLE_AUDIOSYS
 #include "../../include/devsman.com.hpp"
 #endif
 
@@ -47,7 +47,23 @@ static rostr GetVolumeTitleText() {
 	return "Volume";
 }
 
-#if (_ACCM & 0xFF00) == 0x8600
+#if CONFIG_ENABLE_AUDIOSYS
+static uint8 EncodeAudioVolume(uint32 percent) {
+	#if (_ACCM & 0xFF00) == 0x8600
+	return SoundBlasterPercentToRaw(percent);
+	#else
+	return uint8(percent * 255 / 100);
+	#endif
+}
+
+static uint32 DecodeAudioVolume(uint8 raw) {
+	#if (_ACCM & 0xFF00) == 0x8600
+	return SoundBlasterRawToPercent(raw);
+	#else
+	return uint32(raw) * 100 / 255;
+	#endif
+}
+
 static stdsint ExchangeAudioMsg(AudioMsg type, const void* payload, stduint length, void* response, stduint capacity) {
 	CommMsg message{};
 	message.data.address = (stduint)payload;
@@ -66,14 +82,13 @@ static stdsint ExchangeAudioMsg(AudioMsg type, const void* payload, stduint leng
 #endif
 
 void InitVolumeState() {
-	has_audio_service = false;
-#if (_ACCM & 0xFF00) == 0x8600
+	has_audio_service = syscall(syscall_t::TEST, 'T', 'F', TestFeature_Audio) == 1;
+#if CONFIG_ENABLE_AUDIOSYS
 	AudioVolumeRequest req{};
 	req.channel = SoundBlasterMixerChannel::MasterVolume;
 	AudioVolumeRequest resp{};
-	if (ExchangeAudioMsg(AudioMsg::GET_VOLUME, &req, sizeof(req), &resp, sizeof(resp)) == 0) {
-		has_audio_service = true;
-		uint8 pct = SoundBlasterRawToPercent(resp.left);
+	if (has_audio_service && ExchangeAudioMsg(AudioMsg::GET_VOLUME, &req, sizeof(req), &resp, sizeof(resp)) == 0) {
+		uint8 pct = uint8(DecodeAudioVolume(resp.left));
 		if (pct > 0 || resp.mute) {
 			current_volume = (stdsint)pct;
 			current_muted = resp.mute && (pct == 0);
@@ -85,10 +100,10 @@ void InitVolumeState() {
 }
 
 static void CommitHardwareVolume(stdsint percent, bool muted) {
-#if (_ACCM & 0xFF00) == 0x8600
+#if CONFIG_ENABLE_AUDIOSYS
 	if (percent < 0) percent = 0;
 	if (percent > 100) percent = 100;
-	uint8 raw = SoundBlasterPercentToRaw((uint32)percent);
+	uint8 raw = EncodeAudioVolume((uint32)percent);
 	AudioVolumeRequest req{};
 	req.channel = SoundBlasterMixerChannel::MasterVolume;
 	req.left = raw;

@@ -82,6 +82,7 @@ CPP_SOURCES := \
 	mecocoa/systime.cpp \
 	mecocoa/userman.cpp \
 	mecocoa/devsman.cpp \
+	mecocoa/devsman-au.cpp \
 	mecocoa/devsman-usb.cpp \
 	mecocoa/threads.cpp \
 	mecocoa/graphic-touch.cpp \
@@ -90,6 +91,10 @@ CPP_SOURCES := \
 	prehost/stm32h7-ac7m/boards/h743-openedv/h743-openedv.cpp \
 	prehost/stm32h7-ac7m/mem.cpp \
 	devdriv/storage/sdcard.cpp \
+	devdriv/dma/dma-mcu.cpp \
+	devdriv/audio/au-sai.cpp \
+	devdriv/audio/aucoder-es8388.cpp \
+	devdriv/audio/aucoder-wm8978.cpp \
 	devdriv/timer/timer-rtc.cpp \
 	devdriv/tty/serial.cpp \
 	devdriv/video/video-ltdc.cpp \

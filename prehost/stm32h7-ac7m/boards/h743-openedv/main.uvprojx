@@ -496,6 +496,11 @@
               <FilePath>..\..\..\..\mecocoa\devsman-usb.cpp</FilePath>
             </File>
             <File>
+              <FileName>devsman-au.cpp</FileName>
+              <FileType>8</FileType>
+              <FilePath>..\..\..\..\mecocoa\devsman-au.cpp</FilePath>
+            </File>
+            <File>
               <FileName>threads.cpp</FileName>
               <FileType>8</FileType>
               <FilePath>..\..\..\..\mecocoa\threads.cpp</FilePath>
@@ -614,6 +619,26 @@
               <FileName>fmc-sdram.cpp</FileName>
               <FileType>8</FileType>
               <FilePath>..\..\..\..\devdriv\mem\fmc-sdram.cpp</FilePath>
+            </File>
+            <File>
+              <FileName>dma-mcu.cpp</FileName>
+              <FileType>8</FileType>
+              <FilePath>..\..\..\..\devdriv\dma\dma-mcu.cpp</FilePath>
+            </File>
+            <File>
+              <FileName>au-sai.cpp</FileName>
+              <FileType>8</FileType>
+              <FilePath>..\..\..\..\devdriv\audio\au-sai.cpp</FilePath>
+            </File>
+            <File>
+              <FileName>aucoder-es8388.cpp</FileName>
+              <FileType>8</FileType>
+              <FilePath>..\..\..\..\devdriv\audio\aucoder-es8388.cpp</FilePath>
+            </File>
+            <File>
+              <FileName>aucoder-wm8978.cpp</FileName>
+              <FileType>8</FileType>
+              <FilePath>..\..\..\..\devdriv\audio\aucoder-wm8978.cpp</FilePath>
             </File>
           </Files>
         </Group>

@@ -11,11 +11,55 @@
 #include <cpp/Device/SD.hpp>
 #include <c/driver/RealtimeClock.h>
 #include <cpp/MCU/_DEVLIST/DEVL-STM32.h>
+#include "../../../../devdriv/audio/aucoder.hpp"
 
 
 #define BOARD_CONFIG_GPIO_DEVICES 1
 
 namespace BoardConfig {
+	namespace Dma {
+		constexpr bool Dma1Enabled = false;
+		constexpr bool Dma2Enabled = false;
+	}
+	namespace AudioCodec {
+		constexpr bool Enabled = false;
+		constexpr const char* ControlBus = nullptr;
+		constexpr unsigned InitialVolumePercent = 40;
+		inline constexpr const AudioCodecCandidate* Candidates = nullptr;
+		constexpr stduint CandidateCount = 0;
+	}
+	namespace Sai {
+		constexpr bool SAI1Enabled = false;
+		constexpr bool SAI2Enabled = false;
+		constexpr unsigned SAI1TxDmaController = 0;
+		constexpr unsigned SAI1TxDmaStream = 0;
+		constexpr unsigned SAI1RxDmaController = 0;
+		constexpr unsigned SAI1RxDmaStream = 0;
+		constexpr unsigned SAI2TxDmaController = 0;
+		constexpr unsigned SAI2TxDmaStream = 0;
+		constexpr unsigned SAI2RxDmaController = 0;
+		constexpr unsigned SAI2RxDmaStream = 0;
+		struct PinConfig {
+			const char* Name;
+			unsigned Port, Pin, AlternateFunction;
+		};
+		struct PinSet {
+			const PinConfig* Pins;
+			stduint Count;
+		};
+		constexpr PinSet SAI1Pins = { nullptr, 0 };
+		constexpr PinSet SAI2Pins = { nullptr, 0 };
+		constexpr uni::ClockSource SAI1ClockSource = uni::ClockSource::PLL1;
+		constexpr uni::ClockSource SAI2ClockSource = uni::ClockSource::PLL1;
+		constexpr unsigned OutputSampleRate = 44100;
+		constexpr unsigned OutputMckDivider = 12;
+		constexpr byte OutputBlock = 1;
+		constexpr stduint DmaBufferBase = 0x30000000;
+		constexpr stduint DmaBufferBytes = 8192;
+		constexpr unsigned DmaBufferCount = 2;
+		constexpr stduint DmaReservedBytes = 0;
+	}
+
 	namespace Gpio {
 		struct LedConfig {
 			const char* Identifier;
@@ -315,6 +359,19 @@ namespace BoardConfig {
 	}
 }
 
+inline static bool ConfigSaiPins(const BoardConfig::Sai::PinSet& pin_set) {
+	if (!pin_set.Pins || !pin_set.Count) return false;
+	for (stduint i = 0; i < pin_set.Count; ++i) {
+		const auto& pin = pin_set.Pins[i];
+		uni::GPIO[pin.Port].enClock(true);
+		const auto& gpio = uni::GPIO[pin.Port][pin.Pin];
+		gpio.setMode(uni::GPIOMode::OUT_AF_PushPull, uni::GPIOSpeed::Veryhigh);
+		gpio.setPull(true);
+		if (!gpio._set_alternate((byte)pin.AlternateFunction)) return false;
+	}
+	return true;
+}
+
 inline static bool ConfigDeviceGPIN(uni::QrsDeviceList device) {
 	using namespace uni;
 	switch (device) {
@@ -330,6 +387,10 @@ inline static bool ConfigDeviceGPIN(uni::QrsDeviceList device) {
 			backlight = BoardConfig::Ltdc::Backlight::ActiveHigh;
 		}
 		return true;
+	case QrsDeviceList::SAI1:
+		return ConfigSaiPins(BoardConfig::Sai::SAI1Pins);
+	case QrsDeviceList::SAI2:
+		return ConfigSaiPins(BoardConfig::Sai::SAI2Pins);
 	case QrsDeviceList::FmcSDRAM:
 		for (const auto& pin : BoardConfig::Sdram::All) {
 			const auto& gpio = uni::GPIO[pin.Port][pin.Pin];
@@ -358,6 +419,12 @@ inline static bool ConfigDeviceClock(uni::QrsDeviceList device) {
 			BoardConfig::Clock::LtdcPLL3InputRange,
 			BoardConfig::Clock::LtdcPLL3VcoSelect,
 			BoardConfig::Clock::LtdcPLL3);
+	case QrsDeviceList::SAI1:
+		return RCC.setPeriphClock(PeriphClock::SAI1,
+			BoardConfig::Sai::SAI1ClockSource);
+	case QrsDeviceList::SAI2:
+		return RCC.setPeriphClock(PeriphClock::SAI23,
+			BoardConfig::Sai::SAI2ClockSource);
 	case QrsDeviceList::RTC:
 		if (BoardConfig::Rtc::ClockSource != RTCClockSource::LSE) return true;
 		LSE_VALUE = BoardConfig::Clock::LSEHz;

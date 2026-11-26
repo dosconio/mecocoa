@@ -54,6 +54,8 @@ extern "C" stdsint sysc_LIST(stduint, stduint, stduint);
 extern "C" stdsint sysc_ACPT(stduint, stduint, stduint);
 extern "C" stdsint sysc_SCLS(stduint, stduint, stduint);
 extern "C" stdsint sysc_IOCT(stduint, stduint, stduint);
+extern "C" stdsint sysc_TEST(stduint, stduint, stduint);
+extern "C" stdsint sysc_DBUG(stduint);
 extern "C" void check_and_deliver_signals(void* context);
 
 // Syscall Wrappers
@@ -119,11 +121,18 @@ stduint syscall(syscall_t callid, stduint para1, stduint para2, stduint para3) {
 	ret = th->context.a0;
 
 	#elif defined(_ARCH_ARM_ProfileM)
-	if (_IMM(callid) >= numsof(SYSCALL_TABLE) || !SYSCALL_TABLE[_IMM(callid)]) {
+	if (callid == syscall_t::TEST) {
+		ret = sysc_TEST(para1, para2, para3);
+	}
+	else if (callid == syscall_t::DBUG) {
+		ret = sysc_DBUG(para1);
+	}
+	else if (_IMM(callid) >= numsof(SYSCALL_TABLE) || !SYSCALL_TABLE[_IMM(callid)]) {
 		plogerro("syscall: callid %u is not built for ARM", _IMM(callid));
 		return ~_IMM0;
+	} else {
+		ret = reinterpret_cast<stdsint(*)(stduint, stduint, stduint)>(SYSCALL_TABLE[_IMM(callid)])(para1, para2, para3);
 	}
-	ret = reinterpret_cast<stdsint(*)(stduint, stduint, stduint)>(SYSCALL_TABLE[_IMM(callid)])(para1, para2, para3);
 	#endif
 	return ret;
 }
@@ -1480,6 +1489,24 @@ DEFSYSC sysc_TEST(stduint t, stduint e, stduint s) {
 		Console.OutFormat("[Mecocoa] PID");
 		Console.OutInteger(pb->pid, +10);
 		Console.OutFormat(": %s\n\r", test_msg);
+	}
+	else if (t == 'T' && e == 'F') {
+		ProcessBlock* service = nullptr;
+		switch (s) {
+		case TestFeature_Audio:
+			#if CONFIG_ENABLE_AUDIOSYS
+			service = Taskman::Locate(Task_Audio_Serv);
+			#endif
+			break;
+		case TestFeature_Network:
+			#if (_MCCA & 0xFF00) == 0x8600
+			service = Taskman::Locate(Task_Net_Serv);
+			#endif
+			break;
+		default:
+			break;
+		}
+		return service && service->state == ProcessBlock::State::Active ? 1 : 0;
 	}
 	else {
 		rostr test_msg = "[Mecocoa] Syscalls Test FAIL!";

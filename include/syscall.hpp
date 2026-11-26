@@ -137,6 +137,11 @@ enum
 };// . stand for well for multi-thread
 // Locks usually end with `_lock;`
 
+enum TestFeature {
+	TestFeature_Audio,
+	TestFeature_Network,
+};// syscall('T', 'F', TestFeature) -> 1 for available
+
 enum
 	#ifdef _INC_CPP
 	class

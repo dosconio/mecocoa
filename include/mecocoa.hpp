@@ -8,6 +8,7 @@
 #define CONFIG_SysTickFreq 100 // 100Hz
 #define CONFIG_ECHO_LOGO 1 // print logo 🏳️‍⚧️
 #define CONFIG_ENABLE_MMU 1
+#define CONFIG_ENABLE_AUDIOSYS 0
 
 #endif
 
@@ -48,6 +49,8 @@
 #if (_MCCA & 0xFF00) == 0x1000
 #undef _GUI_ENABLE
 #define _GUI_ENABLE 0
+#undef ENABLE_AUDIOSYS
+#define ENABLE_AUDIOSYS 0
 #endif
 
 // _MCCA MAGIC byte3: 0x10..0x19 Cortex-A, 0x1A Cortex-M, 0x1B Cortex-R, 0x00 means no MAGIC

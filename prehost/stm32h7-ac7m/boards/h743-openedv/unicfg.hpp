@@ -10,13 +10,69 @@
 #include <cpp/Device/SD.hpp>
 #include <c/driver/RealtimeClock.h>
 #include <cpp/MCU/_DEVLIST/DEVL-STM32.h>
+#include "../../../../devdriv/audio/aucoder.hpp"
 
 #define BOARD_CONFIG_GPIO_DEVICES 1
 
 // An example of STM32H743 openedv board configuration.
 // - 由于 DCmI 与SD/JTAG冲突，所以本配置不考虑 DCMI
+// - H4 H5 IIC-Bus同时驱动：24C02(EEPROM)、PCF8574、MPU9250、AP3216C、WM8978(音频)
 #if 1
 namespace BoardConfig {
+	namespace Dma {
+		constexpr bool Dma1Enabled = true;
+		constexpr bool Dma2Enabled = false;
+	}
+	namespace AudioCodec {
+		constexpr bool Enabled = true;
+		constexpr const char* ControlBus = "i2c-soft@PH4-PH5";
+		constexpr unsigned InitialVolumePercent = 40;
+		inline constexpr AudioCodecCandidate Candidates[] = {
+			{ &AudioCodecES8388, 0x10 },
+			{ &AudioCodecWM8978, 0x1A },
+		};
+		constexpr stduint CandidateCount = numsof(Candidates);
+	}
+	namespace Sai {
+		constexpr bool SAI1Enabled = true;
+		constexpr bool SAI2Enabled = false;
+		constexpr unsigned SAI1TxDmaController = 1;
+		constexpr unsigned SAI1TxDmaStream = 5;
+		constexpr unsigned SAI1RxDmaController = 0;
+		constexpr unsigned SAI1RxDmaStream = 0;
+		constexpr unsigned SAI2TxDmaController = 0;
+		constexpr unsigned SAI2TxDmaStream = 0;
+		constexpr unsigned SAI2RxDmaController = 0;
+		constexpr unsigned SAI2RxDmaStream = 0;
+		struct PinConfig {
+			const char* Name;
+			unsigned Port, Pin, AlternateFunction;
+		};
+		struct PinSet {
+			const PinConfig* Pins;
+			stduint Count;
+		};
+		constexpr PinConfig SAI1PinMap[] = {
+			{ "MCLK", 'E', 2, 6 }, { "FS", 'E', 4, 6 },
+			{ "SCK", 'E', 5, 6 }, { "SD", 'E', 6, 6 },
+		};
+		constexpr PinSet SAI1Pins = { SAI1PinMap, numsof(SAI1PinMap) };
+		constexpr PinSet SAI2Pins = { nullptr, 0 };
+		constexpr uni::ClockSource SAI1ClockSource = uni::ClockSource::PLL2;
+		constexpr uni::ClockSource SAI2ClockSource = uni::ClockSource::PLL2;
+		constexpr unsigned OutputSampleRate = 44100;
+		constexpr unsigned OutputMckDivider = 12;
+		constexpr byte OutputBlock = 1;
+		constexpr stduint DmaBufferBase = 0x30000000;
+		constexpr stduint DmaBufferBytes = 8192;
+		constexpr unsigned DmaBufferCount = 2;
+		constexpr stduint DmaReservedBytes = DmaBufferBytes * DmaBufferCount;
+		constexpr uni::PLLPara_t SAI1PLL2 = { 25, 271, 2, 2, 2, 0 };
+		constexpr uni::PLLSource::PLLSource SAI1PLL2Source = uni::PLLSource::HSE;
+		constexpr unsigned SAI1PLL2InputRange = 0;
+		constexpr unsigned SAI1PLL2VcoSelect = 0;
+	}
+
 	namespace Gpio {
 		struct LedConfig {
 			const char* Identifier;
@@ -361,6 +417,19 @@ namespace BoardConfig {
 
 
 
+inline static bool ConfigSaiPins(const BoardConfig::Sai::PinSet& pin_set) {
+	if (!pin_set.Pins || !pin_set.Count) return false;
+	for (stduint i = 0; i < pin_set.Count; ++i) {
+		const auto& pin = pin_set.Pins[i];
+		uni::GPIO[pin.Port].enClock(true);
+		const auto& gpio = uni::GPIO[pin.Port][pin.Pin];
+		gpio.setMode(uni::GPIOMode::OUT_AF_PushPull, uni::GPIOSpeed::Veryhigh);
+		gpio.setPull(true);
+		if (!gpio._set_alternate((byte)pin.AlternateFunction)) return false;
+	}
+	return true;
+}
+
 inline static bool ConfigDeviceGPIN(uni::QrsDeviceList dev) {
 	using namespace uni;
 	switch (dev) {
@@ -378,6 +447,10 @@ inline static bool ConfigDeviceGPIN(uni::QrsDeviceList dev) {
 			backlight = BoardConfig::Ltdc::Backlight::ActiveHigh;
 		}
 		return true;
+	case QrsDeviceList::SAI1:
+		return ConfigSaiPins(BoardConfig::Sai::SAI1Pins);
+	case QrsDeviceList::SAI2:
+		return ConfigSaiPins(BoardConfig::Sai::SAI2Pins);
 	case QrsDeviceList::Sdmmc1:
 		for (const auto& pin : BoardConfig::Sdmmc1::Pins) {
 			const auto& gpio = uni::GPIO[pin.Port][pin.Pin];
@@ -409,6 +482,18 @@ inline static bool ConfigDeviceClock(uni::QrsDeviceList dev) {
 			BoardConfig::Clock::LTDC_PLL3))
 			return false;
 		break;
+	case QrsDeviceList::SAI1:
+		if (!RCC.PLL2.setMode(
+			BoardConfig::Sai::SAI1PLL2Source,
+			BoardConfig::Sai::SAI1PLL2InputRange,
+			BoardConfig::Sai::SAI1PLL2VcoSelect,
+			BoardConfig::Sai::SAI1PLL2))
+			return false;
+		return RCC.setPeriphClock(PeriphClock::SAI1,
+			BoardConfig::Sai::SAI1ClockSource);
+	case QrsDeviceList::SAI2:
+		return RCC.setPeriphClock(PeriphClock::SAI23,
+			BoardConfig::Sai::SAI2ClockSource);
 	case QrsDeviceList::RTC:
 		if (BoardConfig::Rtc::ClockSource != RTCClockSource::LSE) return true;
 		LSE_VALUE = BoardConfig::Clock::LSEHz;

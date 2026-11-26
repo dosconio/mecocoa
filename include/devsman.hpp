@@ -13,6 +13,14 @@
 
 extern uni::AudioManager audio_manager;
 
+enum class AudioHardwareProbeResult : uint8 {
+	Deferred,
+	Ready,
+	Unavailable,
+};
+
+AudioHardwareProbeResult AudioBackendProbeHardware();
+
 enum class SysinfoDumpDevsType {
 	General,
 	Audio,
@@ -127,6 +135,8 @@ enum class DeviceResourceType : uint16 {
 	UsbLocation,
 	UsbEndpoint,
 	DmaChannel,
+	DmaStream,
+	DmaRoute,
 	MemoryRange,
 	GpioPin,
 	BusAddress,
@@ -143,9 +153,12 @@ enum DeviceResourceFlags : uint16 {
 	DeviceResourceFlag_IrqLevel = 1 << 3,
 	DeviceResourceFlag_IrqActiveLow = 1 << 4,
 	DeviceResourceFlag_IrqShareable = 1 << 5,
+	DeviceResourceFlag_DmaTransmit = 1 << 6,
+	DeviceResourceFlag_DmaReceive = 1 << 7,
 };
 
 constexpr uint16 DeviceNodeInlineResourceCapacity = 8;
+constexpr uint32 DeviceDmaStreamCount = 8;
 constexpr stduint DeviceAliasNameCapacity = 64;
 constexpr stduint DeviceAcpiPathCapacity = 160;
 constexpr stduint DeviceAcpiIdCapacity = 48;
@@ -153,6 +166,8 @@ constexpr stduint DeviceAcpiUidCapacity = 32;
 
 /* Resource indices are caller-assigned, independently of names and signal functions.
  * MemoryRange: start=base, length=byte count, extra=0.
+ * DmaStream: start=controller base, length=stream index, extra=0.
+ * DmaRoute: start=controller base, length=stream index, extra=request; flags select TX or RX.
  * GpioPin: start=(uint64(port ID)<<32)|pin, length=alternate function or DevicePinNoAlternateFunction.
  * BusAddress: start=address, length=address bits (0 for a controller-defined selector), extra=0.
  * Configuration: start=value, length=0. The key and value interpretation belong to the driver.
@@ -847,6 +862,10 @@ public: // Resources
 	static bool AddIoPortResource(DeviceNode* node, uint32 index, uint64 base, uint64 length);
 	static bool AddIrqResource(DeviceNode* node, uint64 vector, uint64 pin = 0);
 	static bool AddDmaResource(DeviceNode* node, uint32 index, uint8 channel, uint8 width_bits);
+	// DmaStream: start=controller base, length=stream index; DmaRoute adds request and direction.
+	static bool AddDmaStreamResource(DeviceNode* node, uint64 controller_base, uint32 stream);
+	static bool AddDmaRouteResource(DeviceNode* node, uint32 index, uint64 controller_base,
+		uint32 stream, uint64 request, bool transmit);
 	static bool AddPinResource(DeviceNode* node, uint32 index, const char* name,
 		uint32 port, uint32 pin, uint32 alternate = DevicePinNoAlternateFunction);
 	static bool AddAddressResource(DeviceNode* node, uint32 index, uint64 address, uint32 address_bits = 0);

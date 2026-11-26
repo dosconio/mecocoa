@@ -1,5 +1,14 @@
+## 2026-11-26
+
+- 21:01（UTC+8）STM32H7 音频服务启动时等待板级 I2C 控制总线并主动探测配置的 Codec，将识别到的 ES8388/WM8978 注册为现有总线的子设备；总线未就绪时有限延后，播放路径保留探测兜底。
+
+- 18:53（UTC+8）STM32H7 SAI1 增加 44.1 kHz U8 立体声到 16 位 I2S 的 DMA 双缓冲播放后端，按 stream 分派 DMA 完成与错误回调；H743 为音频 DMA 保留 D2 SRAM 并注册音频卡。
+
 ## 2026-11-25
 
+- 22:37（UTC+8）设备树新增 DMA stream 身份与 DMA route 双向关系，显示 SAI TX/RX 绑定的控制器、stream、request 及 stream 使用者。
+- 19:55（UTC+8）新增 STM32H7 SAI 平台设备注册；H743 按配置启用 SAI1 与 DMA1，H750 保留驱动入口但不启用 SAI。
+- 18:29（UTC+8）STM32H7 普通 DMA 接入设备树
 - 12:46（UTC+8）`ribbon` 右下角托盘新增内联彩色点阵喇叭图标与音量控制弹窗（多语言标题/静音切换、松手发送 `AudioMsg::SET_VOLUME`，无 `Task_Audio_Serv` 时自动隐藏喇叭图标）。
 
 ## 2026-11-24

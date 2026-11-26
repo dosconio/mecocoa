@@ -10,6 +10,9 @@
 #include "autoconf.h"
 #endif
 #endif
+#ifndef CONFIG_ENABLE_AUDIOSYS
+#define CONFIG_ENABLE_AUDIOSYS 0
+#endif
 
 enum {
 	Task_Kernel,
@@ -25,7 +28,7 @@ enum {
 		((_ACCM & 0xFF00) == 0x8600) || _ACCM == 0x2032)
 	Task_Usb_Serv,
 	#endif
-	#if (_MCCA & 0xFF00) == 0x8600 || (_ACCM & 0xFF00) == 0x8600
+	#if CONFIG_ENABLE_AUDIOSYS
 	Task_Audio_Serv,
 	#endif
 	Task_Init,

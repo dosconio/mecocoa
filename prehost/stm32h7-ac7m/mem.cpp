@@ -8,6 +8,10 @@
 #define SRAM4_ADDR  ((stduint)0x38000000)
 #define ITCM_ADDR   ((stduint)0x00000000)
 
+constexpr stduint SAI_DMA_RESERVED =
+	CONFIG_ENABLE_AUDIOSYS && BoardConfig::Sai::SAI1Enabled
+		? BoardConfig::Sai::DmaReservedBytes : 0;
+static_assert(SAI_DMA_RESERVED <= 64U * 1024U);
 
 struct MemRegion {
 	const char* name;
@@ -17,7 +21,7 @@ struct MemRegion {
 static const MemRegion memreg[] = {
 	{ "SDRAM", BoardConfig::Sdram::Base + BoardConfig::Sdram::ReservedSize,
 		BoardConfig::Sdram::Size - BoardConfig::Sdram::ReservedSize },
-	{ "SRAM12",SRAM12_ADDR,                       64U * 1024U },
+	{ "SRAM12",SRAM12_ADDR + SAI_DMA_RESERVED,    64U * 1024U - SAI_DMA_RESERVED },
 	{ "SRAM4", SRAM4_ADDR,                        32U * 1024U },
 };
 
